@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/stretchr/testify/require"
 )
@@ -226,4 +227,38 @@ func TestReduceOnlyWarningOnlyWhenTheTruncatedBuyWouldHaveBeenPlaced(t *testing.
 		require.Empty(t, f.orders.specs, "目标 %s：加仓都被截掉", c.target)
 		require.Equal(t, c.warns, reduceOnlyWarnings(executor), "目标 %s", c.target)
 	}
+}
+
+type countingPrices struct {
+	inner PriceSource
+	calls *int
+}
+
+func (c countingPrices) LatestPrice(ctx context.Context, accountID string, key exchange.SymbolKey) (Quote, error) {
+	*c.calls++
+	return c.inner.LatestPrice(ctx, accountID, key)
+}
+
+// 当天已经告警过的标的，之后每一轮都不再为了判断“要不要告警”去取报价。
+func TestReduceOnlyWarningChecksDedupeBeforeFetchingAQuote(t *testing.T) {
+	f := newMixedExecutorFixture(t)
+	f.setSwapPosition("BTCUSDT", "5")
+	f.block(t, "SWAP", "BTCUSDT")
+	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "20"}})
+	f.now = time.Now().UTC()
+	calls := 0
+	executor := f.executor()
+	executor.MinBatchInterval = 0
+	executor.Prices = countingPrices{inner: executor.Prices, calls: &calls}
+
+	_, err := executor.Converge(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Equal(t, 1, reduceOnlyWarnings(executor))
+	require.Equal(t, 1, calls, "第一次判断取一次报价")
+
+	for i := 0; i < 3; i++ {
+		_, err = executor.Converge(context.Background(), "space-1", "logical-1")
+		require.NoError(t, err)
+	}
+	require.Equal(t, 1, calls, "已经告警过，之后不再取报价")
 }

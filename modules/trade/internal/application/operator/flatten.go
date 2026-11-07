@@ -87,6 +87,8 @@ type FlattenAccountResult struct {
 	// decided 为真时由 retry 决定动作是否继续；否则按 cause 是否只有业务错误判断。
 	decided bool
 	retry   bool
+	// pacingUntil 是下架清仓因两笔 IOC 间隔未到而要等到的时间（零值表示没有）。
+	pacingUntil time.Time
 	// quotes 是本轮现货清仓拿到的报价（按资产），收尾判断零头时复用，不再逐个请求。
 	quotes map[string]shared.Decimal
 }
@@ -409,7 +411,7 @@ func (s *Service) FlattenLogicalAccount(
 	if retry {
 		status = "RUNNING"
 		// 账户一直异常时清仓不能永远运行，否则恢复自动执行会被挡住。剩余持仓已写入结果，要继续就重新发起。
-		if s.actionOlderThan(result.Action, flattenActionTimeout) {
+		if s.roundOlderThan(result, flattenActionTimeout) {
 			status = "PARTIAL"
 		}
 	}
@@ -426,6 +428,19 @@ func (s *Service) FlattenLogicalAccount(
 
 // reasonArbitrageHedgeLeg 是只平一个标的而它正是套利底仓对冲腿时的剩余原因。
 const reasonArbitrageHedgeLeg = "套利底仓的永续对冲腿，不自动平仓，需要人工处理"
+
+// roundOlderThan 判断这一轮执行（从 AttemptStartedAt 起）是否已经超过期限：同一个动作号在 FAILED、PARTIAL 之后重试要重新计时，
+// 不能按动作创建时间算（创建很久之后的重试一次只跑一轮就记 PARTIAL）；没有起点（旧记录）时按动作创建时间。
+func (s *Service) roundOlderThan(result FlattenResult, age time.Duration) bool {
+	if result.AttemptStartedAt <= 0 {
+		return s.actionOlderThan(result.Action, age)
+	}
+	now := time.Now()
+	if s.Now != nil {
+		now = s.Now()
+	}
+	return now.Sub(time.UnixMilli(result.AttemptStartedAt)) >= age
+}
 
 // errWaitingBalance：账户在等余额确认，本轮暂停下单，属可重试。
 var errWaitingBalance = errors.New("账户等待余额确认，本轮暂停下单")
@@ -636,6 +651,18 @@ func (s *Service) flattenAccount(
 		}
 		if attempt > 0 && s.stopIfUnblocked(ctx, command, scope, tradingAccountID, &result) {
 			return result, true
+		}
+		// 上一轮只被“IOC 间隔未到”挡住：直接睡到间隔结束再往下做，中间不同步；等不到（超过本账户的预算）就结束这一轮，下一次调用接着来。
+		if until := result.pacingUntil; attempt > 0 && !until.IsZero() {
+			result.pacingUntil = time.Time{}
+			if until.After(deadline) {
+				break
+			}
+			if err := sleepUntil(ctx, until); err != nil {
+				result.Error = err.Error()
+				result.cause = errors.Join(result.cause, &orderapp.AccountExecutionError{TradingAccountID: tradingAccountID, Operation: "flatten_wait", Err: err})
+				break
+			}
 		}
 		if attempt > 0 {
 			if err := s.waitFlattenRetry(ctx); err != nil {
@@ -986,7 +1013,7 @@ func (s *Service) flattenSwap(
 			ctx, command, account, instrument, side, quantity.Abs(), result,
 		); err != nil {
 			reasons[key] = flattenReason{text: err.Error(), final: isFlattenFinal(err)}
-			if !errors.Is(err, errDelistPacing) { // 间隔未到只是等一等，不是错误
+			if !result.notePacing(err) { // 间隔未到只是等一等，不是错误
 				result.addError(err)
 			}
 		}
@@ -1098,7 +1125,7 @@ func (s *Service) flattenSpot(
 			exchange.SideSell, quantity, quote, result,
 		); err != nil {
 			reasons[key] = flattenReason{text: err.Error(), final: isFlattenFinal(err)}
-			if !errors.Is(err, errDelistPacing) {
+			if !result.notePacing(err) {
 				result.addError(err)
 			}
 		}
@@ -1410,6 +1437,18 @@ func (s *Service) remainingForAccount(
 	return remaining
 }
 
+// notePacing 记下“间隔未到”要等到的时间；err 不是这个情况返回 false。
+func (r *FlattenAccountResult) notePacing(err error) bool {
+	var pacing delistPacingError
+	if !errors.As(err, &pacing) {
+		return false
+	}
+	if pacing.until.After(r.pacingUntil) {
+		r.pacingUntil = pacing.until
+	}
+	return true
+}
+
 func (r *FlattenAccountResult) addError(err error) {
 	r.Error = joinError(r.Error, err.Error())
 	r.cause = errors.Join(r.cause, err)
@@ -1646,8 +1685,13 @@ func delistLimitPrice(reference shared.Decimal, side exchange.Side, priceTick st
 	return price
 }
 
-// errDelistPacing 表示离上一笔 IOC 单结束太近，稍后再下：不算终结，下一轮继续。
-var errDelistPacing = errors.New("下架清仓的限价单刚结束，间隔几秒再下下一笔")
+// delistPacingError 表示离上一笔 IOC 单结束太近，要等到 until 才能下下一笔：不算终结，也不是错误。
+// 轮内循环见到它不能空转同步（每轮两次轻量同步，对币安现货加永续要发 3 个接口，会打满 IP 限频），直接睡到 until 再继续。
+type delistPacingError struct{ until time.Time }
+
+func (e delistPacingError) Error() string {
+	return "下架清仓的限价单刚结束，间隔几秒再下下一笔"
+}
 
 // delistHistory 是下架清仓在一个标的上的子单历史。
 type delistHistory struct {
@@ -1691,6 +1735,8 @@ func (s *Service) loadDelistHistory(ctx context.Context, command FlattenCommand,
 		if at.After(history.lastFinishedAt) {
 			history.lastFinishedAt = at
 		}
+		// 起点取到秒、订单创建时间也只到秒（向下取整）：同一秒内创建的子单算这一轮的，否则这一轮刚下的单会被漏数。
+		// 代价是上一轮结束后不到一秒就用同一个动作号重试，会看到上一轮同一秒的被拒单（事件中心至少隔 30 秒才重试，碰不到）。
 		if current.CreatedAt.UnixMilli() >= command.attemptStart {
 			thisRound = append(thisRound, current)
 		}
@@ -1718,7 +1764,7 @@ func (s *Service) checkDelistAttempt(history delistHistory) error {
 		return flattenFinal{fmt.Errorf("下架清仓连续 %d 次限价单（滑点 3%%）一股都没成交，需要人工处理", history.unfilled)}
 	}
 	if interval := s.delistAttemptInterval(); interval > 0 && !history.lastFinishedAt.IsZero() && time.Since(history.lastFinishedAt) < interval {
-		return errDelistPacing
+		return delistPacingError{until: history.lastFinishedAt.Add(interval)}
 	}
 	return nil
 }
@@ -1734,4 +1780,20 @@ func (s *Service) delistAttemptInterval() time.Duration {
 		return defaultDelistAttemptInterval
 	}
 	return s.DelistAttemptInterval
+}
+
+// sleepUntil 睡到指定时间，ctx 结束时提前返回。
+func sleepUntil(ctx context.Context, until time.Time) error {
+	wait := time.Until(until)
+	if wait <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
