@@ -45,7 +45,7 @@ export interface HoldersPreview {
   verified: boolean;
   /** Trade 没有这个标的（没开通对应市场的账户），自然没有策略持有。 */
   instrumentUnknown: boolean;
-  /** 出错没能判断的账户；非空时 verified 为 false。 */
+  /** 出错没能判断的账户：不能当作没有持有，要单独列出、二次确认；不影响已返回的持有者照常展示。 */
   skippedAccounts: SkippedAccount[];
   /** 明确不算持有的说明（例如标的计价币不是账户的结算币）。 */
   notes: string[];
@@ -119,7 +119,7 @@ export async function listInstrumentHolders(input: Parameters<typeof buildHolder
   const violated = (input.paper_only && holders.some(item => !item.paper)) || (instrumentUnknown && holders.length > 0);
   return {
     holders,
-    verified: (Array.isArray(rsp.holders) || instrumentUnknown) && !violated && skippedAccounts.length === 0,
+    verified: (Array.isArray(rsp.holders) || instrumentUnknown) && !violated,
     instrumentUnknown,
     skippedAccounts,
     notes: rsp.notes ?? []

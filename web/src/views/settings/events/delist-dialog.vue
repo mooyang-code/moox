@@ -62,8 +62,8 @@
         <p v-if="instrumentUnknown" class="muted">
           交易服务里没有这个标的（还没开通对应市场的账户），没有策略持有。{{ noHolderEffect }}
         </p>
-        <p v-else-if="!holders.length" class="muted">没有策略持有这个标的。{{ noHolderEffect }}</p>
-        <template v-else>
+        <p v-else-if="!holders.length && !skippedAccounts.length" class="muted">没有策略持有这个标的。{{ noHolderEffect }}</p>
+        <template v-else-if="holders.length">
           <p v-if="willProcess">下面这些组合持有这个标的，下架前 24 小时会被平仓：</p>
           <p v-else>下面这些组合持有这个标的：</p>
           <ul class="holder-list">
@@ -77,8 +77,23 @@
             </ul>
           </template>
         </template>
+        <template v-if="skippedAccounts.length">
+          <a-alert type="warning" class="block-alert">
+            下面这些账户没能判断是否持有这个标的，不能当作没有持有，登记前请先确认：
+          </a-alert>
+          <ul class="holder-list">
+            <li v-for="account in skippedAccounts" :key="account.trading_account_id">{{ skippedLine(account) }}</li>
+          </ul>
+        </template>
+        <template v-if="notes.length">
+          <p class="muted">Trade 的说明：</p>
+          <ul class="holder-list muted">
+            <li v-for="note in notes" :key="note">{{ note }}</li>
+          </ul>
+        </template>
       </template>
       <a-checkbox v-if="previewFailed || !verified" v-model="confirmed">我知道无法确认持有情况，仍然登记</a-checkbox>
+      <a-checkbox v-else-if="skippedAccounts.length" v-model="confirmed">我知道有账户没能判断持有情况，仍然登记</a-checkbox>
       <a-checkbox v-else-if="summary.live.length" v-model="confirmed">
         {{ willProcess ? "我确认有生产组合会被平仓，仍然登记" : "我确认有生产组合持有这个标的，仍然登记" }}
       </a-checkbox>
@@ -112,7 +127,8 @@ import {
   registerDelistNotice,
   type DelistExchange,
   type DelistMarket,
-  type InstrumentHolder
+  type InstrumentHolder,
+  type SkippedAccount
 } from "@/api/callback-dispatcher/delist";
 import { reportControlError } from "@/api/admin/http";
 import {
@@ -123,6 +139,7 @@ import {
   holderLine,
   isPastDelistTime,
   pickerValueToMs,
+  skippedLine,
   summarizeHolders,
   systemActionNotice
 } from "./event-center-utils";
@@ -143,6 +160,8 @@ const phase = ref<"form" | "confirm">("form");
 const previewing = ref(false);
 const submitting = ref(false);
 const holders = ref<InstrumentHolder[]>([]);
+const skippedAccounts = ref<SkippedAccount[]>([]);
+const notes = ref<string[]>([]);
 const verified = ref(true);
 const instrumentUnknown = ref(false);
 const previewFailed = ref(false);
@@ -152,7 +171,9 @@ const confirmed = ref(false);
 const delistAtMs = computed(() => pickerValueToMs(form.delist_at));
 const pastTime = computed(() => isPastDelistTime(delistAtMs.value, Date.now()));
 const summary = computed(() => summarizeHolders(holders.value));
-const needConfirm = computed(() => previewFailed.value || !verified.value || summary.value.live.length > 0);
+const needConfirm = computed(
+  () => previewFailed.value || !verified.value || skippedAccounts.value.length > 0 || summary.value.live.length > 0
+);
 // 系统动作已启用并且系统规则没有停用，登记的下架才会真的被处理。
 const willProcess = computed(() => props.systemActionEnabled === true && props.systemRuleEnabled !== false);
 const noHolderEffect = computed(() => (willProcess.value ? "登记后只会禁止买入。" : ""));
@@ -168,6 +189,8 @@ watch(
     Object.assign(form, { exchange: "binance", market: "SPOT", exchange_symbol: "", delist_at: "", paper_only: false });
     phase.value = "form";
     holders.value = [];
+    skippedAccounts.value = [];
+    notes.value = [];
     verified.value = true;
     instrumentUnknown.value = false;
     previewFailed.value = false;
@@ -195,11 +218,15 @@ async function preview() {
       paper_only: form.paper_only
     });
     holders.value = result.holders;
+    skippedAccounts.value = result.skippedAccounts;
+    notes.value = result.notes;
     verified.value = result.verified;
     instrumentUnknown.value = result.instrumentUnknown;
     previewFailed.value = false;
   } catch (error) {
     holders.value = [];
+    skippedAccounts.value = [];
+    notes.value = [];
     verified.value = true;
     instrumentUnknown.value = false;
     previewFailed.value = true;

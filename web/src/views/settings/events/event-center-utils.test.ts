@@ -24,7 +24,9 @@ import {
   signatureExamples,
   statusText,
   statusTone,
-  summarizeHolders
+  holderLine,
+  summarizeHolders,
+  skippedLine
 } from "./event-center-utils";
 
 const fields: ScopeField[] = [
@@ -184,6 +186,8 @@ describe("手工登记下架", () => {
     quantity: "1",
     dust: false,
     paper: false,
+    status: "ENABLED",
+    note: "",
     ...patch
   });
 
@@ -197,6 +201,15 @@ describe("手工登记下架", () => {
     expect(summary.live.map(item => item.logical_account_id)).toEqual(["live"]);
     expect(summary.paper.map(item => item.logical_account_id)).toEqual(["paper"]);
     expect(summary.dust.map(item => item.logical_account_id)).toEqual(["dust", "paper-dust"]);
+  });
+
+  it("持有者一行带上停用、出错的状态和标注；没能判断的账户单独成行", () => {
+    expect(holderLine(holder({ quantity: "2" }))).toBe("crypto / la-1（执行账户 ta-1）数量 2");
+    expect(holderLine(holder({ status: "DISABLED", note: "取不到报价" }))).toContain(
+      "账户已停用，平仓会失败，需要人工处理；取不到报价"
+    );
+    expect(holderLine(holder({ status: "ERROR" }))).toContain("账户出错");
+    expect(skippedLine({ trading_account_id: "ta-9", reason: "资金设置读不出来" })).toBe("执行账户 ta-9：资金设置读不出来");
   });
 
   it("下架时间必须填，允许补录过去的时间", () => {

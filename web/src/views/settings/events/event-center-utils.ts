@@ -7,7 +7,7 @@ import type {
   ScopeFilter,
   SubscribableEvent
 } from "@/api/callback-dispatcher";
-import type { InstrumentHolder } from "@/api/callback-dispatcher/delist";
+import type { InstrumentHolder, SkippedAccount } from "@/api/callback-dispatcher/delist";
 
 export type StatusTone = "wait" | "run" | "ok" | "fail" | "cancel";
 
@@ -247,8 +247,21 @@ export function summarizeHolders(holders: InstrumentHolder[]): HolderSummary {
   return summary;
 }
 
+const HOLDER_STATUS_TEXT: Record<string, string> = {
+  DISABLED: "账户已停用，平仓会失败，需要人工处理",
+  ERROR: "账户出错，平仓可能失败，需要人工处理"
+};
+
+/** 持有者一行：数量之外，停用或出错的账户和 Trade 的标注也要写出来，这是破坏性操作的确认依据。 */
 export function holderLine(holder: InstrumentHolder): string {
-  return `${holder.space_id} / ${holder.logical_account_id}（执行账户 ${holder.trading_account_id}）数量 ${holder.quantity}`;
+  const extras = [HOLDER_STATUS_TEXT[holder.status], holder.note].filter(Boolean);
+  const tail = extras.length ? `（${extras.join("；")}）` : "";
+  return `${holder.space_id} / ${holder.logical_account_id}（执行账户 ${holder.trading_account_id}）数量 ${holder.quantity}${tail}`;
+}
+
+/** 没能判断的账户一行。 */
+export function skippedLine(account: SkippedAccount): string {
+  return `执行账户 ${account.trading_account_id}：${account.reason || "原因未知"}`;
 }
 
 /** 手工登记时可能出现的取值。 */
