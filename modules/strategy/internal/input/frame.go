@@ -358,15 +358,16 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 			}
 		}
 	}
-	// 多个市场时，某个因子在一个市场本期失败的币占比超过 max_missing（含每个币都失败，例如时序因子在永续整体晚到），与这个市场的因子被整体
-	// 跳过没有区别：按这个市场不可用处理，已持仓的冻结。否则逐币的 factor_failed 不冻结，缺数比例又被另一个市场的行摊薄，持有的永续会被卖成现货。
-	// 放在读完行之后：只看这个市场里有行（失败序列写的是 NULL 行）或在失败名单里的标的，因子没有期望的序列（没有行也不在失败名单里）不参与，
-	// 方式 B 里两个市场共用事件名单，这类标的会混进基础集合。认定不可用的市场清掉已读的行，之后不再探针。单市场策略保持原来的缺数处理。
+	// 多个市场时，某个因子在一个市场本期的标的上全部失败（例如时序因子在永续整体晚到），与这个市场的因子被整体跳过没有区别：按这个市场
+	// 不可用处理，已持仓的冻结。否则逐币的 factor_failed 不冻结，缺数比例又被另一个市场的行摊薄，持有的永续会被卖成现货。
+	// 放在读完行之后、年龄探针之前（整体失败的市场不做探针）：只统计本次实际读行的标的（instruments ∩ 这个市场的基础集合：策略池被收窄、
+	// 排除名单里的标的没读行，它们的失败不能算进来），并且只看有行（失败序列写的是 NULL 行）或在失败名单里的标的，因子没有期望的序列
+	// （没有行也不在失败名单里）不参与，方式 B 里两个市场共用事件名单，这类标的会混进基础集合。单市场策略保持原来的缺数处理。
 	if len(loads) > 1 {
 		for _, load := range loads {
 			if load.unavailable == "" {
-				if detail := wholeMarketFailure(load, bar.Readiness[load.market], program.Strategy.Portfolio.MaxMissing); detail != "" {
-					load.unavailable, load.current, load.previous = detail, nil, nil
+				if detail := wholeMarketFailure(load, bar.Readiness[load.market], instruments, nil, quant.Decimal{}, false); detail != "" {
+					markUnavailable(load, detail)
 				}
 			}
 		}
@@ -419,6 +420,32 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 	if err != nil {
 		return Loaded{}, err
 	}
+	// 失败的标的占比超过 max_missing 也按这个市场不可用处理：多市场策略里，逐币的 factor_failed 不冻结，没持仓的币又会退回另一个市场的行，
+	// 缺数分母被摊薄，持有的永续照样被卖。分母与单市场守门尽量一致：只统计本次读行的标的，并扣掉在这个市场年龄不够的（年龄剔除的标的不算缺数）；
+	// LoadBar 看不到上期持仓，所以“年龄剔除只拦新进入的标的”的豁免在这里取不到：在这个市场年龄没通过的持仓失败时不计入。
+	// 判为不可用的市场清掉已读的行和年龄剔除记录。
+	if len(loads) > 1 {
+		for _, load := range loads {
+			if load.unavailable != "" {
+				continue
+			}
+			passed, probed := agePassed[load.market]
+			include := func(id string) bool {
+				if !probed {
+					return true
+				}
+				_, ok := passed[id]
+				return ok
+			}
+			if detail := wholeMarketFailure(load, bar.Readiness[load.market], instruments, include, program.Strategy.Portfolio.MaxMissing, true); detail != "" {
+				markUnavailable(load, detail)
+				delete(agePassed, load.market)
+			}
+		}
+		if err := skipWhenSelectionUnavailable(resolved, loads); err != nil {
+			return Loaded{}, err
+		}
+	}
 	frame := engine.Frame{BarEnd: boundary.BarEnd, BarIndex: boundary.BarIndex, Markets: make(map[string]engine.MarketInput, len(loads)), Universe: sets.Universe, Expected: sets.Expected, AgedOut: sets.AgedOut}
 	for _, load := range loads {
 		input := engine.MarketInput{Rows: make(map[string]engine.Row, len(load.current))}
@@ -454,16 +481,28 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 	return Loaded{Frame: frame, Sets: sets, Boundary: boundary, Steps: steps}, nil
 }
 
-// wholeMarketFailure 判断一个市场本期是否整体失败：某个因子成员在这个市场里失败的标的占比超过 max_missing（与单市场的缺数守门同口径，
-// 严格大于），或每个标的都失败（max_missing 为 1 时也成立）。只统计有行或在失败名单里的标的。返回说明，空串表示不是整体失败。
-func wholeMarketFailure(load *marketLoad, result readiness.Result, maxMissing quant.Decimal) string {
+// markUnavailable 把一个市场记为本期不可用，并清掉已读的行（不可用的市场不再用它的行；去掉这句用例也过，留着是为了不留半截数据）。
+func markUnavailable(load *marketLoad, detail string) {
+	load.unavailable, load.current, load.previous = detail, nil, nil
+}
+
+// wholeMarketFailure 判断一个市场本期是否整体失败：某个因子成员在这个市场里失败的标的每个都失败（ratioCheck 为假），或占比严格大于 max_missing
+// （ratioCheck 为真，含全部失败）。只统计 instruments 里属于这个市场基础集合、并且有行或在失败名单里的标的（include 非空时还要满足它）；
+// 每个因子成员各自统计，只看它自己的失败名单。返回说明，空串表示不是整体失败。
+func wholeMarketFailure(load *marketLoad, result readiness.Result, instruments []string, include func(id string) bool, maxMissing quant.Decimal, ratioCheck bool) string {
 	for _, factorID := range sortedKeys(result.FailedByFactor) {
 		failed := make(map[string]struct{}, len(result.FailedByFactor[factorID]))
 		for _, id := range result.FailedByFactor[factorID] {
 			failed[id] = struct{}{}
 		}
 		relevant, failedCount := 0, 0
-		for id := range load.universe {
+		for _, id := range instruments {
+			if _, ok := load.universe[id]; !ok {
+				continue // 没有为这个市场读行的标的
+			}
+			if include != nil && !include(id) {
+				continue
+			}
 			_, isFailed := failed[id]
 			_, hasRow := load.current[id]
 			if !isFailed && !hasRow {
@@ -477,8 +516,14 @@ func wholeMarketFailure(load *marketLoad, result readiness.Result, maxMissing qu
 		if relevant == 0 || failedCount == 0 {
 			continue
 		}
+		if failedCount == relevant {
+			return fmt.Sprintf("成员 %s 在%s市场本期读取的标的全部失败（%d 个），按这个市场不可用处理", factorID, load.market, failedCount)
+		}
+		if !ratioCheck {
+			continue
+		}
 		ratio := quant.Must(fmt.Sprint(failedCount)).Div(quant.Must(fmt.Sprint(relevant)))
-		if failedCount == relevant || ratio.Cmp(maxMissing) > 0 {
+		if ratio.Cmp(maxMissing) > 0 {
 			return fmt.Sprintf("成员 %s 在%s市场本期失败的标的占 %d/%d，超过缺数上限 %s，按这个市场不可用处理", factorID, load.market, failedCount, relevant, maxMissing.String())
 		}
 	}
@@ -486,19 +531,21 @@ func wholeMarketFailure(load *marketLoad, result readiness.Result, maxMissing qu
 }
 
 // skipWhenSelectionUnavailable 在没有可用的市场、或选币市场不可用（没有候选池）时整期跳过，原因是 market_failed（数据类原因，不计实例故障，不归入“积累中”）；
-// 只有下单市场不可用时选币照常。
+// 只有下单市场不可用时选币照常。说明里列出每个不可用市场各自的原因（有的来自因子被跳过，有的来自整体失败）。
 func skipWhenSelectionUnavailable(resolved Resolved, loads []*marketLoad) error {
-	down := 0
+	var details []string
+	selectDown := false
 	for _, load := range loads {
-		if load.unavailable != "" {
-			down++
-			if selectMarket := resolved.Market.Select; selectMarket != dsl.MarketBoth && load.market == selectMarket {
-				return &SkipError{Reason: SkipMarketFailed, Detail: load.unavailable}
-			}
+		if load.unavailable == "" {
+			continue
+		}
+		details = append(details, fmt.Sprintf("%s市场：%s", load.market, load.unavailable))
+		if selectMarket := resolved.Market.Select; selectMarket != dsl.MarketBoth && load.market == selectMarket {
+			selectDown = true
 		}
 	}
-	if down == len(loads) {
-		return &SkipError{Reason: SkipMarketFailed, Detail: loads[0].unavailable}
+	if selectDown || (len(details) > 0 && len(details) == len(loads)) {
+		return &SkipError{Reason: SkipMarketFailed, Detail: strings.Join(details, "；")}
 	}
 	return nil
 }

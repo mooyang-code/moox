@@ -323,7 +323,7 @@ func (w ucWorld) run(t *testing.T, unified bool) engine.Decision {
 	if err != nil {
 		var skip *input.SkipError
 		if asSkip(err, &skip) {
-			return engine.Decision{Status: engine.StatusSkipped, SkipReason: skip.Reason}
+			return engine.Decision{Status: engine.StatusSkipped, SkipReason: skip.Reason, Summary: engine.Summary{Notes: []string{skip.Detail}}}
 		}
 		t.Fatalf("装配失败（unified=%v）：%v", unified, err)
 	}
@@ -644,5 +644,158 @@ func TestUnifiedMatchesDualTasksWhenMostSwapSeriesFailed(t *testing.T) {
 	decision, _ := requireSame(t, single)
 	if decision.Status != engine.StatusSkipped || decision.SkipReason != engine.SkipTooManyMissing {
 		t.Fatalf("纯永续（单市场）大面积失败仍整期 too_many_missing：%+v", decision)
+	}
+}
+
+// ucDSLWith 是带 universe 片段与 max_missing 的 rank 策略。
+func ucDSLWith(mode, universe, maxMissing string) string {
+	return "name: compare\nmarket: " + mode + "\n" + universe + "rules:\n  - id: r\n    type: rank\n    score: \"m\"\n    select: {top: 2}\n    weight: {total: 1}\nportfolio: {max_missing: " + maxMissing + "}\n"
+}
+
+// ucHeld 让策略上期持有永续：D、X（选币只看现货时 D 不会是持仓，只有 X）；返回持有的目标键。
+func ucHeld(world *ucWorld, mode string) []string {
+	held, keys := []string{"D", "X"}, []string{"D|swap", "X|swap"}
+	if mode == "{select: spot, prefer: swap}" {
+		held, keys = []string{"X"}, []string{"X|swap"}
+	}
+	world.state = engine.State{Rules: map[string]engine.RuleState{"r": {Held: held}}, Targets: map[string]string{}}
+	for _, key := range keys {
+		world.state.Targets[key] = "0.5"
+	}
+	return keys
+}
+
+// 策略的范围被收窄时（universe.exclude、固定池），范围之外的币失败不能让整个永续被判不可用：整体失败的统计只看本次实际读行的标的，
+// 与单市场守门只看规则的预期集合一致。
+func TestUnifiedMatchesDualTasksIgnoresFailuresOutsideThePool(t *testing.T) {
+	for _, mode := range []string{"{select: both, prefer: swap}", "{select: both, prefer: spot}", "{select: spot, prefer: swap}", "{select: swap, prefer: swap}"} {
+		t.Run("排除名单"+mode, func(t *testing.T) {
+			world := ucBase(mode)
+			world.dsl = ucDSLWith(mode, "universe: {exclude: [P, Q]}\n", "0.2")
+			world.members["swap"] = []string{"B", "C", "D", "X", "P", "Q"}
+			world.failed["swap"] = []string{"P", "Q"}
+			keys := ucHeld(&world, mode)
+			decision, targets := requireSame(t, world)
+			if decision.Status != engine.StatusOK {
+				t.Fatalf("排除名单之外的失败不应影响池内：%+v", decision)
+			}
+			for _, key := range keys {
+				if strings.HasSuffix(targets[key], "(hold)") {
+					t.Fatalf("%s 不应被冻结：%v", key, targets)
+				}
+			}
+		})
+	}
+	signalPool := "name: compare\nmarket: {select: both, prefer: swap}\nrules:\n  - id: r\n    type: signal\n    pool: [D, X]\n    entry: \"m > 0\"\n    exit: \"m < 0\"\n    weight: {total: 1}\nportfolio: {max_missing: 0.2}\n"
+	for _, failed := range [][]string{{"B"}, {"B", "C"}} {
+		t.Run("固定池"+strings.Join(failed, ""), func(t *testing.T) {
+			world := ucBase("{select: both, prefer: swap}")
+			world.dsl = signalPool
+			world.failed["swap"] = failed
+			for _, id := range failed {
+				delete(world.rows["swap"], id)
+			}
+			ucHeld(&world, "{select: both, prefer: swap}")
+			decision, targets := requireSame(t, world)
+			if decision.Status != engine.StatusOK || targets["D|swap"] != "0.5" || targets["X|swap"] != "0.5" {
+				t.Fatalf("固定池之外的失败不应冻结池里的持仓或让整期跳过：%+v %v", decision, targets)
+			}
+		})
+	}
+}
+
+// 年龄会剔除的新上市币（窗口里没有历史）即使因子失败，也不计入整体失败的比例：与单市场守门“预期集合减年龄剔除”的分母一致。
+func TestUnifiedMatchesDualTasksIgnoresFailuresOfAgedOutListings(t *testing.T) {
+	for _, mode := range []string{"{select: both, prefer: swap}", "{select: swap, prefer: swap}"} {
+		t.Run(mode, func(t *testing.T) {
+			world := ucBase(mode)
+			world.dsl = ucDSLWith(mode, "universe: {min_age_bars: 24}\n", "0.2")
+			world.members["swap"] = []string{"B", "C", "D", "X", "N1", "N2"}
+			world.failed["swap"] = []string{"N1", "N2"}
+			world.history = map[string][]string{"spot": {"A", "B", "C", "X"}, "swap": {"B", "C", "D", "X"}}
+			ucHeld(&world, mode)
+			decision, _ := requireSame(t, world)
+			if decision.Status != engine.StatusOK {
+				t.Fatalf("年龄剔除的新上市币失败不应让整期跳过或冻结：%+v", decision)
+			}
+		})
+	}
+}
+
+// 失败占比的边界：严格大于 max_missing 才算超过（与守门一致）：1/4 对 0.25 仍可用，对 0.24 不可用；max_missing 为 1 时只有全部失败才不可用。
+func TestUnifiedMatchesDualTasksMaxMissingBoundaries(t *testing.T) {
+	cases := []struct {
+		name, maxMissing string
+		failed           []string
+		unavailable      bool
+	}{
+		{"0 时一个失败即不可用", "0", []string{"C"}, true},
+		{"0 时没有失败", "0", nil, false},
+		{"1 时三个失败仍可用", "1", []string{"B", "C", "D"}, false},
+		{"1 时全部失败不可用", "1", []string{"B", "C", "D", "X"}, true},
+		{"0.25 时 1/4 恰好等于上限，仍可用", "0.25", []string{"C"}, false},
+		{"0.24 时 1/4 略超，不可用", "0.24", []string{"C"}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mode := "{select: both, prefer: swap}"
+			world := ucBase(mode)
+			world.dsl = ucDSLWith(mode, "", tc.maxMissing)
+			world.failed["swap"] = tc.failed
+			for _, id := range tc.failed {
+				delete(world.rows["swap"], id)
+			}
+			ucHeld(&world, mode)
+			decision, targets := requireSame(t, world)
+			// 不可用时冻结的持仓计入缺数：要么保持（hold），要么整期跳过；可用时 X 照常带目标、不是 hold。
+			frozen := strings.HasSuffix(targets["X|swap"], "(hold)") || decision.Status == engine.StatusSkipped
+			if frozen != tc.unavailable {
+				t.Fatalf("永续不可用=%v，期望 %v：%+v %v", frozen, tc.unavailable, decision, targets)
+			}
+		})
+	}
+}
+
+// 一个市场的因子被跳过（汇合时判不可用）、另一个市场整体失败：整期 market_failed，说明里两个市场各自的原因都有，不是只取第一个。
+func TestUnifiedSkipDetailListsEveryUnavailableMarket(t *testing.T) {
+	world := ucBase("{select: both, prefer: swap}")
+	world.skipped["spot"] = true
+	world.failed["swap"] = world.members["swap"]
+	world.rows["swap"] = map[string]float64{}
+	for _, unified := range []bool{false, true} {
+		decision := world.run(t, unified)
+		if decision.SkipReason != input.SkipMarketFailed {
+			t.Fatalf("unified=%v：应整期 market_failed：%+v", unified, decision)
+		}
+		detail := strings.Join(decision.Summary.Notes, "")
+		if !strings.Contains(detail, "spot市场：") || !strings.Contains(detail, "swap市场：") {
+			t.Fatalf("unified=%v：说明里应有两个市场各自的原因：%q", unified, detail)
+		}
+	}
+}
+
+// 整体失败的市场不做年龄探针（先判不可用、持仓冻结），而只是部分失败的市场照常探针：永续窗口里没有历史时仍 history_insufficient。
+func TestUnifiedMatchesDualTasksSkipsProbeForWhollyFailedMarket(t *testing.T) {
+	for _, mode := range []string{"{select: both, prefer: swap}", "{select: both, prefer: spot}", "{select: spot, prefer: swap}"} {
+		t.Run(mode, func(t *testing.T) {
+			world := ucBase(mode)
+			world.dsl = ucDSLWith(mode, "universe: {min_age_bars: 24}\n", "1")
+			world.history = map[string][]string{"spot": {"A", "B", "C", "X"}}
+			world.failed["swap"] = world.members["swap"]
+			world.rows["swap"] = map[string]float64{}
+			keys := ucHeld(&world, mode)
+			_, targets := requireSame(t, world)
+			for _, key := range keys {
+				if !strings.HasSuffix(targets[key], "(hold)") {
+					t.Fatalf("永续整体失败应先判不可用、持仓冻结（不探针）：%v", targets)
+				}
+			}
+			world.failed["swap"] = []string{"B"}
+			world.rows["swap"] = map[string]float64{"C": 6, "D": 7, "X": 8}
+			decision, _ := requireSame(t, world)
+			if decision.SkipReason != input.SkipHistoryInsufficient {
+				t.Fatalf("永续只是部分失败时仍要探针：%+v", decision)
+			}
+		})
 	}
 }
