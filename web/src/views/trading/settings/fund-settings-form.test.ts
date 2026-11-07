@@ -1,14 +1,19 @@
 import { describe, expect, it } from "vitest";
+import type { FundSettings } from "@/api/trade/settings";
 import {
   buildFundSettingsRequest,
   defaultFundSettings,
   fundSettingsToModel,
   marginMonitorHiddenNote,
+  marginMonitorMixedNote,
   parseAssetList,
   showsLiveOnlyFields,
   showsMarginMonitor,
   sumDecimals,
-  validateFundSettingsModel
+  validateFundSettingsModel,
+  withStoredMarginMonitor,
+  type FundFormScope,
+  type FundSettingsModel
 } from "./fund-settings-form";
 
 describe("fund settings form", () => {
@@ -235,26 +240,39 @@ describe("fund settings form", () => {
       );
     });
 
-    it("只对生产环境的币安实盘显示：模拟盘、测试网、含 OKX 的组合都隐藏", () => {
+    it("显示条件：模拟盘、测试网、没有币安生产实盘成员隐藏；混合组合和纯币安组合显示", () => {
       expect(showsMarginMonitor()).toBe(true);
-      expect(showsMarginMonitor({ nonBinance: false, testnet: false, hasOkx: false })).toBe(true);
-      expect(showsMarginMonitor({ paper: true })).toBe(false);
-      expect(showsMarginMonitor({ testnet: true })).toBe(false);
-      expect(showsMarginMonitor({ hasOkx: true })).toBe(false);
-      expect(showsMarginMonitor({ hasOkx: true, nonBinance: true, testnet: true, paper: true })).toBe(false);
+      expect(showsMarginMonitor({ nonBinance: false, testnet: false, hasBinanceLive: true })).toBe(true);
+      // 混合组合：有币安生产实盘成员，也有 OKX 成员
+      expect(showsMarginMonitor({ nonBinance: true, hasBinanceLive: true })).toBe(true);
+      expect(showsMarginMonitor({ paper: true, hasBinanceLive: true })).toBe(false);
+      expect(showsMarginMonitor({ testnet: true, hasBinanceLive: true })).toBe(false);
+      // 全是 OKX 等不被监控的成员
+      expect(showsMarginMonitor({ nonBinance: true, hasBinanceLive: false })).toBe(false);
+      expect(showsMarginMonitor({ paper: true, testnet: true, nonBinance: true, hasBinanceLive: false })).toBe(false);
+    });
+
+    it("校验：隐藏时不拦截保存，显示时照常拦截", () => {
       const bad = withMargin({ margin_reduce_ratio: "1" });
-      expect(validateFundSettingsModel(bad)).toContain("触发后减仓比例");
-      for (const scope of [{ paper: true }, { testnet: true }, { hasOkx: true }]) {
+      expect(validateFundSettingsModel(bad, { hasBinanceLive: true, nonBinance: true })).toContain("触发后减仓比例");
+      for (const scope of [{ paper: true }, { testnet: true }, { nonBinance: true, hasBinanceLive: false }]) {
         expect(validateFundSettingsModel(bad, scope)).toBe("");
       }
     });
 
-    it("隐藏时的说明：含 OKX 要说明没有保护，测试网说明只对生产生效，模拟盘由整体说明负责", () => {
+    it("隐藏时的说明按原因分别写；模拟盘由整体说明负责；混合组合在区块里另有说明", () => {
       expect(marginMonitorHiddenNote()).toBe("");
       expect(marginMonitorHiddenNote({ paper: true })).toBe("");
-      expect(marginMonitorHiddenNote({ hasOkx: true })).toContain("OKX 账户的保证金率监控暂未接入");
-      expect(marginMonitorHiddenNote({ hasOkx: true, testnet: true })).toContain("没有保证金率保护");
-      expect(marginMonitorHiddenNote({ testnet: true })).toContain("生产环境");
+      expect(marginMonitorHiddenNote({ hasBinanceLive: true, nonBinance: true })).toBe("");
+      expect(marginMonitorHiddenNote({ testnet: true, hasBinanceLive: true })).toContain("只对生产环境的币安实盘组合生效");
+      expect(marginMonitorHiddenNote({ testnet: true, hasBinanceLive: false })).toContain("只对生产环境");
+      expect(marginMonitorHiddenNote({ nonBinance: true, hasBinanceLive: false })).toContain(
+        "没有币安生产实盘成员，保证金率监控不生效"
+      );
+      expect(marginMonitorMixedNote({ nonBinance: true, hasBinanceLive: true })).toContain("对整组减仓（含 OKX 成员）");
+      expect(marginMonitorMixedNote({ hasBinanceLive: true })).toBe("");
+      expect(marginMonitorMixedNote({ nonBinance: true, hasBinanceLive: false })).toBe("");
+      expect(marginMonitorMixedNote({ nonBinance: true, testnet: true, hasBinanceLive: true })).toBe("");
     });
 
     it("提交时去掉空白，空值不带字段；开关按所填提交", () => {
@@ -274,20 +292,55 @@ describe("fund settings form", () => {
       expect(request.unified_mmr_threshold).toBeUndefined();
     });
 
-    it("模拟盘、测试网、含 OKX 的组合按默认值提交，不带过期的旧值", () => {
-      const stale = withMargin({
-        margin_ratio_threshold: "0.4",
+    const stored: FundSettings = {
+      ...defaultFundSettings(),
+      margin_ratio_threshold: "0.2",
+      unified_mmr_threshold: "1.3",
+      margin_reduce_ratio: "0.3",
+      margin_monitor_disabled: true
+    };
+    const submitWith = (scope: FundFormScope, edited?: FundSettingsModel) =>
+      buildFundSettingsRequest(withStoredMarginMonitor(edited ?? fundSettingsToModel(stored), stored, scope), scope);
+
+    it("隐藏时提交库里已存的值，不重置为默认值", () => {
+      const scopes: FundFormScope[] = [{ paper: true }, { testnet: true }, { nonBinance: true, hasBinanceLive: false }];
+      for (const scope of scopes) {
+        expect(submitWith(scope)).toMatchObject({
+          margin_ratio_threshold: "0.2",
+          unified_mmr_threshold: "1.3",
+          margin_reduce_ratio: "0.3",
+          margin_monitor_disabled: true
+        });
+      }
+    });
+
+    it("隐藏时即使表单里的值被改过（显示状态切到隐藏），也只提交库里已存的值", () => {
+      const edited = { ...fundSettingsToModel(stored), margin_ratio_threshold: "9", margin_monitor_disabled: false };
+      const request = submitWith({ testnet: true }, edited);
+      expect(request.margin_ratio_threshold).toBe("0.2");
+      expect(request.margin_monitor_disabled).toBe(true);
+    });
+
+    it("库里没存阈值时隐藏也不带字段，开关保持开启监控", () => {
+      const request = buildFundSettingsRequest(
+        withStoredMarginMonitor(fundSettingsToModel(), defaultFundSettings(), { paper: true }),
+        { paper: true }
+      );
+      expect(request.margin_ratio_threshold).toBeUndefined();
+      expect(request.margin_monitor_disabled).toBe(false);
+    });
+
+    it("混合组合保存不重置阈值：已存 0.2 且关闭监控，改别的项保存后原样提交", () => {
+      const scope: FundFormScope = { nonBinance: true, hasBinanceLive: true };
+      const model = { ...fundSettingsToModel({ ...stored, margin_ratio_threshold: "0.2" }), reserve_ratio: "0.1" };
+      expect(validateFundSettingsModel(model, scope)).toBe("");
+      expect(submitWith(scope, model)).toMatchObject({
+        reserve_ratio: "0.1",
+        margin_ratio_threshold: "0.2",
         unified_mmr_threshold: "1.3",
-        margin_reduce_ratio: "0.2",
+        margin_reduce_ratio: "0.3",
         margin_monitor_disabled: true
       });
-      for (const scope of [{ paper: true }, { testnet: true }, { hasOkx: true }]) {
-        const request = buildFundSettingsRequest(stale, scope);
-        expect(request.margin_ratio_threshold).toBeUndefined();
-        expect(request.unified_mmr_threshold).toBeUndefined();
-        expect(request.margin_reduce_ratio).toBeUndefined();
-        expect(request.margin_monitor_disabled).toBe(false);
-      }
     });
 
     it("读不出来时按默认值重置：监控开着、阈值都用默认", () => {

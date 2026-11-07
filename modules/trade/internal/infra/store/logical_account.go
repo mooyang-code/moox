@@ -30,8 +30,10 @@ type LogicalAccountRecord struct {
 	FundSettingsJSON  string
 	AutomationState   string
 	PauseReason       string
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
+	// ResumedAt 是最近一次从暂停恢复自动执行的时间（毫秒），没恢复过为 0。
+	ResumedAt int64
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 type LogicalAccountMemberRecord struct {
@@ -59,6 +61,7 @@ type logicalAccountRow struct {
 	FundSettingsJSON  string    `gorm:"column:c_fund_settings_json"`
 	AutomationState   string    `gorm:"column:c_automation_state"`
 	PauseReason       string    `gorm:"column:c_pause_reason"`
+	ResumedAt         int64     `gorm:"column:c_resumed_at"`
 	CreatedAt         time.Time `gorm:"column:c_ctime"`
 	UpdatedAt         time.Time `gorm:"column:c_mtime"`
 }
@@ -363,12 +366,21 @@ func AutoPauseReason(reason string) string {
 // 带变化的数字会让每次触发都产生新的指标序列。
 const marginPauseText = "保证金率过低"
 
-// MarginPauseReason 是保证金率风控暂停组合的原因（固定文字）。
+// MarginPauseReason 是保证金率风控暂停组合并已发起减仓的原因（固定文字）。
 func MarginPauseReason() string {
 	return AutoPauseReason(marginPauseText + "，组合已暂停并按设置的比例减仓，等待确认安全后手动恢复")
 }
 
-// IsMarginPauseReason 判断暂停原因是否来自保证金率风控。
+// MarginPausePendingReason 是保证金率风控先把组合暂停、减仓还排不进去（有下架清仓在跑）时的原因：
+// 不能写“已减仓”，用户会以为已经减过。减仓补上之后原因换成 MarginPauseReason。
+func MarginPausePendingReason() string {
+	return AutoPauseReason(marginPauseText + "，组合已暂停，减仓待执行（等待进行中的清仓结束）")
+}
+
+// IsMarginPausePending 判断暂停原因是否是“已暂停、减仓待执行”。
+func IsMarginPausePending(reason string) bool { return reason == MarginPausePendingReason() }
+
+// IsMarginPauseReason 判断暂停原因是否来自保证金率风控（已减仓或减仓待执行）。
 func IsMarginPauseReason(reason string) bool {
 	return strings.HasPrefix(reason, autoPausePrefix+marginPauseText)
 }
@@ -394,11 +406,12 @@ func (tx *Tx) SetLogicalAccountAutomation(
 	}
 	result := tx.db.Exec(`
 		UPDATE t_logical_accounts
-		SET c_automation_state = ?, c_pause_reason = ?,
+		SET c_resumed_at = CASE WHEN ? = 'ACTIVE' AND c_automation_state <> 'ACTIVE' THEN ? ELSE c_resumed_at END,
+			c_automation_state = ?, c_pause_reason = ?,
 			c_mtime = CURRENT_TIMESTAMP
 		WHERE c_space_id = ? AND c_logical_account_id = ?
 		  AND (? <> 'ACTIVE' OR c_control_mode = 'STRATEGY')
-	`, state, reason, spaceID, logicalAccountID, state)
+	`, state, time.Now().UnixMilli(), state, reason, spaceID, logicalAccountID, state)
 	return requireUpdated(result.Error, result.RowsAffected, "logical account automation")
 }
 
@@ -618,7 +631,7 @@ func logicalAccountRecord(row logicalAccountRow) LogicalAccountRecord {
 		ExecutionMode:     row.ExecutionMode,
 		SettlementAsset:   row.SettlementAsset,
 		OrderSettingsJSON: row.OrderSettingsJSON, FundSettingsJSON: row.FundSettingsJSON,
-		AutomationState: row.AutomationState, PauseReason: row.PauseReason,
+		AutomationState: row.AutomationState, PauseReason: row.PauseReason, ResumedAt: row.ResumedAt,
 		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 	}
 }
