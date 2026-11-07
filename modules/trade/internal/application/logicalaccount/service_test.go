@@ -102,7 +102,7 @@ func TestRemoveMemberWhenSyncFailsUsesLocalRecords(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, UnverifiedRemovalWarning, warning)
 
-	// 本地还有持仓：同步失败时不能移除，返回同步错误。
+	// 本地还有持仓：同步失败时不能移除，按“有持仓不能移出”报，同步失败的原因附在后面。
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", TradingAccountID: "account-b", Enabled: true,
@@ -116,7 +116,9 @@ func TestRemoveMemberWhenSyncFailsUsesLocalRecords(t *testing.T) {
 		})
 	}))
 	_, err = service.RemoveMember(context.Background(), "space-1", "logical-1", "account-b")
-	require.ErrorContains(t, err, "invalid api key")
+	require.ErrorIs(t, err, ErrRemovalHasExposure)
+	require.ErrorContains(t, err, "凭证失效")
+	require.NotContains(t, err.Error(), "invalid api key", "给前端的原因不带交易所英文原文")
 }
 
 func TestDisableMemberCannotAdoptAwayExistingExposure(t *testing.T) {

@@ -3,10 +3,12 @@ package rpc
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	logicalapp "github.com/mooyang-code/moox/modules/trade/internal/application/logicalaccount"
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/runtime"
 	"github.com/mooyang-code/moox/modules/trade/internal/spacecontext"
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
@@ -64,5 +66,55 @@ func TestAddLogicalAccountMemberReportsSessionNotReady(t *testing.T) {
 	}
 	if rsp.GetRetInfo().GetCode() != tradepb.ErrorCode_TRADE_SESSION_NOT_READY {
 		t.Fatalf("ret_info = %+v", rsp.GetRetInfo())
+	}
+}
+
+// 移出成员时没有会话、本地还有受管持仓：返回 INVALID_PARAM 并说明有持仓，不能落成“会话还没启动，请稍后重试”（重试永远不会成功）。
+func TestRemoveMemberWithoutSessionReportsExposure(t *testing.T) {
+	tradeStore := openRPCStore(t)
+	service := &logicalapp.Service{Store: tradeStore, Syncer: sessionNotReadySyncer{}}
+	ctx := context.Background()
+	seedRemovalExposure(t, tradeStore)
+
+	_, err := service.RemoveMember(ctx, "space-1", "logical-1", "account-1")
+	info := errorInfo(err)
+	if info.GetCode() != tradepb.ErrorCode_INVALID_PARAM {
+		t.Fatalf("ret_info = %+v", info)
+	}
+	if !strings.Contains(info.GetMsg(), "持仓") || !strings.Contains(info.GetMsg(), "同步失败：账户会话没有启动") {
+		t.Fatalf("msg = %q", info.GetMsg())
+	}
+}
+
+// seedRemovalExposure 建一个在组合里、本地还有永续持仓的执行账户。
+func seedRemovalExposure(t *testing.T, tradeStore *store.Store) {
+	t.Helper()
+	if err := tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
+			SpaceID: "space-1", TradingAccountID: "account-1", Name: "account-1",
+			Exchange: "BINANCE", Markets: []string{"SWAP"}, ExecutionMode: "LIVE",
+			Environment: "TESTNET", CredentialSecretID: "secret-account-1",
+			SettlementAsset: "USDT", Status: "ENABLED", MarginMode: "CROSS",
+		}); err != nil {
+			return err
+		}
+		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
+			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
+			ExecutionMode: "LIVE", SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "configure",
+		}); err != nil {
+			return err
+		}
+		if err := tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
+			SpaceID: "space-1", LogicalAccountID: "logical-1", TradingAccountID: "account-1", Enabled: true, Priority: 1,
+		}); err != nil {
+			return err
+		}
+		return tx.UpsertPosition(store.PositionRecord{
+			SpaceID: "space-1", TradingAccountID: "account-1", MarketType: "SWAP",
+			ExchangeSymbol: "BTCUSDT", PositionSide: "NET", SignedQuantity: "1",
+			Leverage: "5", MarginMode: "CROSS", ExchangeUpdatedAt: 1_900,
+		})
+	}); err != nil {
+		t.Fatal(err)
 	}
 }

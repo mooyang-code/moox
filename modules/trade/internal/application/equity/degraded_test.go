@@ -123,7 +123,7 @@ func haltFill(t *testing.T, tradeStore *store.Store) {
 //   - 标的停止交易（BREAK）：不发取价请求，没有最后已知价就按本账户最近一笔成交价计；
 //   - 交易所确认标的不存在（-1121）：沿用不超龄的最后已知价，没有就按 0 计。
 //
-// 这里原来的预期是 BREAK 按 0 计；现在按 0 计只留给“标的表里没有、在下架名单里、交易所确认不存在”三种情况，
+// 这里原来的预期是 BREAK 按 0 计；现在按 0 计只留给“标的表里没有、交易所确认不存在、不在交易又在下架名单里”三种情况，
 // 停止交易可能恢复，按 0 计会让权益骤降、目标换算去缩仓，所以改成按最近成交价计（没有成交就报错，见下一个用例）。
 func TestSampleAccountDegradesUnvaluableManagedAssets(t *testing.T) {
 	tradeStore := seedDelistingAccount(t, "BREAK")
@@ -174,6 +174,20 @@ func TestSampleAccountZeroesBlockedHaltedAsset(t *testing.T) {
 	require.NoError(t, service.SampleAccount(context.Background(), "account-1"))
 	account, _ := latestEquity(t, tradeStore)
 	require.Equal(t, "1006", account, "HALT 在下架名单里按 0 计")
+}
+
+// 在下架名单里但还在交易（状态 TRADING）、这次取价被限流、没有最后已知价：照旧报错，不因为在名单里就按 0 计
+// （下架之前它仍有市价，按 0 计会让权益骤降）。
+func TestSampleAccountFailsOnBlockedTradingAssetQuoteFailure(t *testing.T) {
+	tradeStore := seedDelistingAccount(t, "TRADING")
+	_, err := tradeStore.BlockInstrument(context.Background(), store.BlockedInstrumentRecord{
+		Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "HALTUSDT", Reason: "下架", BlockedAt: 1,
+	})
+	require.NoError(t, err)
+	adapter := &delistingPriceAdapter{at: time.UnixMilli(sourceMillisDegraded + 1), throttled: true}
+	service := &Service{Store: tradeStore, Adapters: equityTestAdapters{adapter: adapter}, Now: func() time.Time { return time.UnixMilli(sourceMillisDegraded + 2) }}
+	err = service.SampleAccount(context.Background(), "account-1")
+	require.True(t, exchange.IsKind(err, exchange.ErrorRateLimited), "err = %v", err)
 }
 
 // 最后已知价超过保留时间（权益过期阈值）就不再使用：标的仍在交易时照旧报错，交易所确认不存在时按 0 计。

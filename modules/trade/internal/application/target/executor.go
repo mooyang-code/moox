@@ -1853,9 +1853,11 @@ func (e *Executor) releaseExpiredTargetOrders(
 	return e.releaseTargetOrders(ctx, spaceID, target.LogicalAccountID, false)
 }
 
-// ReleaseTargetOrders 在策略会话释放、重绑、认领（随后删掉目标）之前撤掉组合里所有还没结束的目标单，调用方持有组合锁：
-// 待提交的丢弃；限价 GTC 单结果未知的先解析；簿上的挂单撤掉；市价、IOC 单和撤单中的单等它们自己结束（撤单结果由同步确认）。
-// 挂单没撤下来（撤单失败、结果解析不出来）时返回错误，调用方稍后重试，不能把挂单留在簿上没人管。
+// ReleaseTargetOrders 在策略会话释放、重绑、认领（删掉目标）时撤掉组合里所有还没结束的目标单，调用方持有组合锁：
+// 待提交的丢弃；结果未知的（限价 GTC、市价、IOC 都算）先解析一次，退回待提交的丢弃；簿上的挂单撤掉；撤单中的等它自己结束。
+// 撤完之后每个撤过单的账户同步一次确认撤单结果（不是每笔都同步）。
+// 限价 GTC 单没撤下来（撤单失败、结果解析不出来）时返回错误，调用方稍后重试，不能把挂单留在簿上没人管；
+// 市价、IOC 单解析不出来不挡释放，它们提交出去也会自己结束。
 func (e *Executor) ReleaseTargetOrders(ctx context.Context, spaceID, logicalAccountID string) error {
 	if e == nil || e.Store == nil || e.Orders == nil {
 		return ErrExecutorConfig
@@ -1886,23 +1888,62 @@ func (e *Executor) releaseTargetOrders(ctx context.Context, spaceID, logicalAcco
 		}
 	}
 	var releaseErrs []error
+	// canceled 是撤过单、要在最后同步一次的账户。
+	canceled := make(map[string]struct{})
 	for _, current := range open {
-		if err := e.releaseTargetOrder(ctx, current, resolveUnknown); err != nil {
+		if err := e.releaseTargetOrder(ctx, current, resolveUnknown, canceled); err != nil {
 			releaseErrs = append(releaseErrs, fmt.Errorf("目标单 %s：%w", current.OrderID, err))
+		}
+	}
+	if syncer, ok := e.Orders.(deferredCanceler); ok {
+		accounts := make([]string, 0, len(canceled))
+		for accountID := range canceled {
+			accounts = append(accounts, accountID)
+		}
+		sort.Strings(accounts)
+		for _, accountID := range accounts {
+			if err := syncer.SyncAfterCancel(ctx, accountID); err != nil {
+				releaseErrs = append(releaseErrs, fmt.Errorf("撤单后同步账户 %s：%w", accountID, err))
+			}
 		}
 	}
 	return errors.Join(releaseErrs...)
 }
 
-func (e *Executor) releaseTargetOrder(ctx context.Context, current store.OrderRecord, resolveUnknown bool) error {
+// deferredCanceler 是能撤单而不立刻同步、撤完一批再同步一次的订单服务（orderapp.Service 实现）。
+type deferredCanceler interface {
+	CancelWithoutSync(context.Context, string, string) (orderdomain.Order, error)
+	SyncAfterCancel(context.Context, string) error
+}
+
+// cancelForRelease 撤一笔目标单：订单服务支持时不在每笔之后同步，把账户记进 canceled，由调用方最后同步一次。
+func (e *Executor) cancelForRelease(ctx context.Context, current store.OrderRecord, canceled map[string]struct{}) error {
+	deferred, ok := e.Orders.(deferredCanceler)
+	if !ok {
+		_, err := e.Orders.Cancel(ctx, current.SpaceID, current.OrderID)
+		return err
+	}
+	_, err := deferred.CancelWithoutSync(ctx, current.SpaceID, current.OrderID)
+	if err == nil {
+		canceled[current.TradingAccountID] = struct{}{}
+	}
+	return err
+}
+
+func (e *Executor) releaseTargetOrder(ctx context.Context, current store.OrderRecord, resolveUnknown bool, canceled map[string]struct{}) error {
 	state := orderdomain.State(current.State)
+	resting := current.OrderType == string(exchange.OrderTypeLimit) && current.TimeInForce == string(exchange.TimeInForceGTC)
 	if state == orderdomain.Submitting || state == orderdomain.SubmitUnknown {
-		// 市价、IOC 单提交出去也会自己结束；只有限价 GTC 单可能一直挂着，要先弄清楚它在不在簿上。
-		if !resolveUnknown || current.OrderType != string(exchange.OrderTypeLimit) || current.TimeInForce != string(exchange.TimeInForceGTC) {
+		if !resolveUnknown {
 			return nil
 		}
+		// 每笔结果未知的单都解析一次：查无此单退回待提交的要丢弃，否则目标删掉之后没人再管它。
+		// 只有限价 GTC 单可能一直挂在簿上，解析不出来就报错让调用方重试；市价、IOC 单提交出去也会自己结束，解析不出来不挡释放。
 		if _, err := e.Orders.ResolveUnknown(ctx, current.SpaceID, current.OrderID); err != nil {
-			return err
+			if resting {
+				return err
+			}
+			return nil
 		}
 		resolved, err := e.Store.GetOrder(ctx, current.SpaceID, current.OrderID)
 		if err != nil {
@@ -1910,7 +1951,10 @@ func (e *Executor) releaseTargetOrder(ctx context.Context, current store.OrderRe
 		}
 		current, state = resolved, orderdomain.State(resolved.State)
 		if state == orderdomain.Submitting || state == orderdomain.SubmitUnknown {
-			return errTargetOrderUnresolved
+			if resting {
+				return errTargetOrderUnresolved
+			}
+			return nil
 		}
 	}
 	switch {
@@ -1918,13 +1962,11 @@ func (e *Executor) releaseTargetOrder(ctx context.Context, current store.OrderRe
 		_, err := e.Orders.DiscardPending(ctx, current.SpaceID, current.OrderID)
 		return err
 	case restingOrder(current):
-		_, err := e.Orders.Cancel(ctx, current.SpaceID, current.OrderID)
-		return err
-	case resolveUnknown && state == orderdomain.CancelUnknown &&
-		current.OrderType == string(exchange.OrderTypeLimit) && current.TimeInForce == string(exchange.TimeInForceGTC):
+		return e.cancelForRelease(ctx, current, canceled)
+	case resolveUnknown && state == orderdomain.CancelUnknown && resting:
 		// 上一次撤单结果未知：撤单可能没到交易所，同步之后会改回挂单中，而那时已经没有目标管它。先确认撤单结果，
 		// 确认不了就报错，让调用方稍后重试；撤单中（交易所已受理）的会自己结束，不用管。
-		return e.recoverTargetCancel(ctx, current)
+		return e.recoverTargetCancel(ctx, current, canceled)
 	}
 	return nil
 }
@@ -1934,7 +1976,7 @@ type cancelRecoverer interface {
 	RecoverCancel(context.Context, string, string) (orderdomain.Order, error)
 }
 
-func (e *Executor) recoverTargetCancel(ctx context.Context, current store.OrderRecord) error {
+func (e *Executor) recoverTargetCancel(ctx context.Context, current store.OrderRecord, canceled map[string]struct{}) error {
 	recoverer, ok := e.Orders.(cancelRecoverer)
 	if !ok {
 		return errTargetOrderUnresolved
@@ -1951,8 +1993,7 @@ func (e *Executor) recoverTargetCancel(ctx context.Context, current store.OrderR
 		return nil
 	case restingOrder(latest):
 		// 确认下来撤单没生效、订单还挂着：再撤一次。
-		_, err := e.Orders.Cancel(ctx, latest.SpaceID, latest.OrderID)
-		return err
+		return e.cancelForRelease(ctx, latest, canceled)
 	}
 	return errTargetOrderUnresolved
 }

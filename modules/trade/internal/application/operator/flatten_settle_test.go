@@ -2,11 +2,16 @@ package operator
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"testing"
 	"time"
 
+	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 	"github.com/stretchr/testify/require"
 )
 
@@ -225,4 +230,144 @@ func TestDelistLimitPriceIsClampedToPriceBand(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, fixture.orders.specs, 1)
 	require.Equal(t, "98.2", fixture.orders.specs[0].LimitPrice.String())
+}
+
+// failResolveOrders 让指定子单的解析一直报 resolveErr（模拟查单一直失败）。
+type failResolveOrders struct {
+	keepPendingOrders
+	resolveErr map[string]error
+}
+
+func (o failResolveOrders) ResolveUnknown(ctx context.Context, spaceID, orderID string) (orderdomain.Order, error) {
+	if err := o.resolveErr[orderID]; err != nil {
+		return orderdomain.Order{}, err
+	}
+	return o.keepPendingOrders.ResolveUnknown(ctx, spaceID, orderID)
+}
+
+// startFinishingWithUnknownChild 让下架清仓留下一笔结果未知的子单并过截止时间，返回带着这笔子单解析错误的服务。
+func startFinishingWithUnknownChild(t *testing.T, fixture *operatorFixture, actionID, childID string, resolveErr error) (*Service, FlattenCommand) {
+	t.Helper()
+	fixture.block(t, "SWAP", "BTCUSDT")
+	command := delistCommand(actionID, "BTC-USDT-SWAP")
+	command.DeadlineAt = fixture.now.Add(time.Hour).UnixMilli()
+	fixture.orders.nextID = childID
+	keep := keepPendingOrders{operatorOrderStub: fixture.orders, keep: map[string]bool{childID: true}}
+	service := fixture.service()
+	service.Orders = keep
+	_, err := service.FlattenLogicalAccount(context.Background(), command)
+	require.NoError(t, err)
+	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_trade_orders SET c_state = 'SUBMIT_UNKNOWN', c_submitted_at = 1 WHERE c_order_id = ?`, childID).Error)
+	service.Orders = failResolveOrders{keepPendingOrders: keep, resolveErr: map[string]error{childID: resolveErr}}
+	fixture.now = fixture.now.Add(2 * time.Hour)
+	fixture.orders.specs = nil
+	return service, command
+}
+
+func resumeStored(t *testing.T, fixture *operatorFixture, service *Service, actionID string) FlattenResult {
+	t.Helper()
+	stored, err := fixture.store.GetOperatorAction(context.Background(), "space-1", actionID)
+	require.NoError(t, err)
+	require.NoError(t, service.ResumeOperatorAction(context.Background(), stored), "子单解析失败是本动作的账户问题，不能让工作线程报错")
+	stored, err = fixture.store.GetOperatorAction(context.Background(), "space-1", actionID)
+	require.NoError(t, err)
+	decoded, err := decodeFlattenResult(stored)
+	require.NoError(t, err)
+	return decoded
+}
+
+// 收尾时子单解析一直报错（例如凭证失效）：动作保持运行最多 30 分钟（从进入收尾算起，重启后照样算），
+// 到点后照常落成记下的 PARTIAL，没收拾掉的子单写进结果，要人工核对；期间不再下单。
+func TestFlattenFinishingGivesUpAfterTimeout(t *testing.T) {
+	fixture := newMixedFlattenFixture(t)
+	authErr := &orderapp.AccountExecutionError{TradingAccountID: "account-a", Operation: "get_order",
+		Err: &exchange.Error{Kind: exchange.ErrorAuthentication, Code: "-2015"}}
+	service, command := startFinishingWithUnknownChild(t, fixture, "delist-stuck", "child-stuck", authErr)
+	enteredAt := fixture.now
+
+	result, err := service.FlattenLogicalAccount(context.Background(), command)
+	require.NoError(t, err, "解析失败不作为调用错误返回")
+	require.Equal(t, "RUNNING", result.Action.Status)
+	require.Equal(t, "PARTIAL", result.FinishingStatus)
+	require.Equal(t, enteredAt.UnixMilli(), result.FinishingSince)
+	require.Contains(t, result.Action.LastError, "child-stuck")
+
+	// 29 分钟后（换一个服务实例，模拟重启）：进入收尾的时间从库里读出，还没到上限。
+	fixture.now = enteredAt.Add(29 * time.Minute)
+	restarted := fixture.service()
+	restarted.Orders = service.Orders
+	decoded := resumeStored(t, fixture, restarted, "delist-stuck")
+	require.Equal(t, "RUNNING", decoded.Action.Status)
+	require.Equal(t, enteredAt.UnixMilli(), decoded.FinishingSince, "重启后不重新计时")
+
+	// 满 30 分钟：落成 PARTIAL，子单号写进结果。
+	fixture.now = enteredAt.Add(30 * time.Minute)
+	decoded = resumeStored(t, fixture, restarted, "delist-stuck")
+	require.Equal(t, "PARTIAL", decoded.Action.Status)
+	require.Equal(t, []string{"child-stuck"}, decoded.ManualCheckOrderIDs)
+	require.Empty(t, decoded.FinishingStatus)
+	require.Zero(t, decoded.FinishingSince)
+	require.Equal(t, "SUBMIT_UNKNOWN", childState(t, fixture, "child-stuck"), "收拾不了的子单原样留着，等人工核对")
+	require.Empty(t, fixture.orders.specs, "收尾期间不下单")
+	require.NotEmpty(t, telemetry.Recent(telemetry.AttentionFlattenOrdersUnsettled, fixture.now, time.Minute))
+}
+
+// 交易所确认标的不存在（币安 -1121、OKX 51001）或取不到账户会话：这笔子单等多久都收拾不了，不阻塞收尾，
+// 动作当场落成 PARTIAL，子单记为需人工核对。
+func TestFlattenFinishingReleasesUnsettleableChild(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{"币安标的不存在", &orderapp.AccountExecutionError{TradingAccountID: "account-a", Operation: "get_order",
+			Err: &exchange.Error{Kind: exchange.ErrorRejected, Code: exchange.CodeBinanceInvalidSymbol}}},
+		{"OKX 标的不存在", &orderapp.AccountExecutionError{TradingAccountID: "account-a", Operation: "get_order",
+			Err: &exchange.Error{Kind: exchange.ErrorRejected, Code: exchange.CodeOKXInstrumentNotFound}}},
+		{"没有会话", &orderapp.AccountExecutionError{TradingAccountID: "account-a", Operation: "adapter",
+			Err: errors.New("交易账户会话还没有启动，请稍后重试")}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := newMixedFlattenFixture(t)
+			service, command := startFinishingWithUnknownChild(t, fixture, "delist-gone", "child-gone", tc.err)
+
+			result, err := service.FlattenLogicalAccount(context.Background(), command)
+			require.NoError(t, err)
+			require.Equal(t, "PARTIAL", result.Action.Status)
+			require.Equal(t, []string{"child-gone"}, result.ManualCheckOrderIDs)
+			require.Empty(t, result.FinishingStatus)
+			require.Empty(t, fixture.orders.specs)
+		})
+	}
+}
+
+// 工作线程按 ActionScopedError 隔离单个动作的失败：账户、交易所侧的错误只记在这个动作上；掺着共享故障的不算。
+func TestActionScopedErrorClassifiesAccountErrors(t *testing.T) {
+	account := &orderapp.AccountExecutionError{TradingAccountID: "account-a", Operation: "get_order",
+		Err: &exchange.Error{Kind: exchange.ErrorAuthentication}}
+	require.True(t, ActionScopedError(fmt.Errorf("解析子单 c1：%w", account)))
+	require.True(t, ActionScopedError(errors.Join(account, ErrCancelUnconfirmed)))
+	require.False(t, ActionScopedError(errors.Join(account, errors.New("database is locked"))))
+	require.False(t, ActionScopedError(nil))
+}
+
+// 上一个动作留下、标为需人工核对的子单（结果未知、标的已不存在）：之后的整组清仓撤单确认时跳过它，照常下单，不被它挡成一直运行。
+func TestLaterFlattenSkipsUnreachableLeftoverChild(t *testing.T) {
+	fixture := newMixedFlattenFixture(t)
+	gone := &orderapp.AccountExecutionError{TradingAccountID: "account-a", Operation: "get_order",
+		Err: &exchange.Error{Kind: exchange.ErrorRejected, Code: exchange.CodeBinanceInvalidSymbol}}
+	service, command := startFinishingWithUnknownChild(t, fixture, "delist-gone", "child-gone", gone)
+	result, err := service.FlattenLogicalAccount(context.Background(), command)
+	require.NoError(t, err)
+	require.Equal(t, "PARTIAL", result.Action.Status)
+	require.Equal(t, "SUBMIT_UNKNOWN", childState(t, fixture, "child-gone"))
+
+	fixture.orders.nextID = ""
+	later, err := service.FlattenLogicalAccount(context.Background(), flattenCommand("flatten-later"))
+	require.NoError(t, err)
+	require.NotEmpty(t, fixture.orders.specs, "遗留单不能挡住撤单确认，清仓要照常下单")
+	require.Equal(t, "account-a", later.Accounts[0].TradingAccountID)
+	require.Equal(t, []string{"child-gone"}, later.Accounts[0].ManualCheckOrderIDs)
+	require.NotEmpty(t, later.Accounts[0].ChildOrderIDs)
+	require.NotContains(t, later.Accounts[0].Error, ErrCancelUnconfirmed.Error())
+	require.Empty(t, later.Accounts[1].ManualCheckOrderIDs, "别的账户不带这笔单")
 }

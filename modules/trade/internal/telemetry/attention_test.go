@@ -10,7 +10,8 @@ import (
 
 func TestPublishAttentionKeepsDetailWithinMonitorLimit(t *testing.T) {
 	PublishAttention(map[string][]string{AttentionAutoPaused: {strings.Repeat("组合账户暂停", 200)}})
-	series := make(chan prometheus.Metric, 16)
+	// 缓冲按 kind 个数开：Collect 是同步写入，缓冲不够会一直阻塞。
+	series := make(chan prometheus.Metric, len(attentionKinds))
 	Attention.Collect(series)
 	close(series)
 	count := 0

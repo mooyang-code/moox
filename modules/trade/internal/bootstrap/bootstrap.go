@@ -254,6 +254,7 @@ func initialize(
 	marginWorker := &traderuntime.FundWorker{Maintainer: marginService, Interval: time.Minute, Gate: lifeGate.Open, Name: "保证金率监控"}
 	operatorWorker := &traderuntime.OperatorWorker{
 		Actions: tradeStore, Resumer: operatorService, Interval: time.Second,
+		ActionScoped: operatorapp.ActionScopedError,
 	}
 	manager.NewSession = func(record store.TradingAccountRecord) (traderuntime.ManagedSession, error) {
 		credential := exchange.Credential{}

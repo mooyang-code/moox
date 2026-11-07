@@ -240,3 +240,88 @@ func TestPseudoMarketAttemptsSkipNeverSentChildren(t *testing.T) {
 	require.Equal(t, 1, pseudoMarketAttempts([]store.TargetChildOrder{sent, phantom}))
 	require.Equal(t, 2, pseudoMarketAttempts([]store.TargetChildOrder{sent, phantom, rejected}), "交易所拒绝的单算一次尝试")
 }
+
+// resolvingOrders 解析结果未知的单：toPending 里的按“查无此单、退回待提交”改库，其余保持结果未知。
+type resolvingOrders struct {
+	*targetOrderServiceStub
+	toPending map[string]bool
+}
+
+func (o resolvingOrders) ResolveUnknown(ctx context.Context, spaceID, orderID string) (orderdomain.Order, error) {
+	o.resolved = append(o.resolved, orderID)
+	if !o.toPending[orderID] {
+		return orderdomain.Order{ID: shared.OrderID(orderID), State: orderdomain.SubmitUnknown}, nil
+	}
+	record, err := o.store.GetOrder(ctx, spaceID, orderID)
+	if err != nil {
+		return orderdomain.Order{}, err
+	}
+	expected := record.Version
+	record.State, record.Version = string(orderdomain.Pending), record.Version+1
+	return orderdomain.Order{ID: shared.OrderID(orderID), State: orderdomain.Pending}, o.store.Transaction(ctx, func(tx *store.Tx) error {
+		return tx.UpdateOrder(record, expected)
+	})
+}
+
+// 释放时市价、IOC 单结果未知也要解析一次：退回待提交的丢弃（否则目标删掉后没人管）；仍解析不出来的不挡释放，它们自己会结束。
+func TestReleaseTargetOrdersResolvesEveryUnknownOrder(t *testing.T) {
+	f := swapPolicyFixture(t, restingSettings)
+	f.now = time.Now().UTC()
+	base := store.OrderRecord{
+		SpaceID: "space-1", TradingAccountID: "account-a", LogicalAccountID: "logical-1", RunnerID: "runner-1",
+		Exchange: "BINANCE", MarketType: "SWAP", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
+		Side: "BUY", Quantity: "1", ReferencePrice: "100", OwnerType: "TARGET", OwnerID: "target-old",
+		State: "SUBMIT_UNKNOWN", SubmittedAt: f.now.UnixMilli(), Version: 1,
+	}
+	market := base
+	market.OrderID, market.ClientOrderID, market.OrderType = "market-unknown", "market-unknown", "MARKET"
+	f.order(t, market)
+	ioc := base
+	ioc.OrderID, ioc.ClientOrderID, ioc.OrderType, ioc.TimeInForce, ioc.LimitPrice = "ioc-unknown", "ioc-unknown", "LIMIT", "IOC", strPtr("99")
+	f.order(t, ioc)
+	f.orders.store = f.store
+	executor := f.restingExecutor()
+	executor.Orders = resolvingOrders{targetOrderServiceStub: f.orders, toPending: map[string]bool{"market-unknown": true}}
+
+	require.NoError(t, executor.ReleaseTargetOrders(context.Background(), "space-1", "logical-1"), "IOC 仍解析不出来也不挡释放")
+	require.ElementsMatch(t, []string{"market-unknown", "ioc-unknown"}, f.orders.resolved)
+	require.Equal(t, []string{"market-unknown"}, f.orders.discarded, "退回待提交的丢弃")
+	order, err := f.store.GetOrder(context.Background(), "space-1", "market-unknown")
+	require.NoError(t, err)
+	require.Equal(t, "CANCELED", order.State)
+}
+
+// deferredSyncOrders 支持撤单后不立刻同步，记下每次同步的账户。
+type deferredSyncOrders struct {
+	*targetOrderServiceStub
+	syncs *[]string
+}
+
+func (o deferredSyncOrders) Cancel(context.Context, string, string) (orderdomain.Order, error) {
+	panic("释放时应该用不带同步的撤单")
+}
+
+func (o deferredSyncOrders) CancelWithoutSync(ctx context.Context, spaceID, orderID string) (orderdomain.Order, error) {
+	return o.targetOrderServiceStub.Cancel(ctx, spaceID, orderID)
+}
+
+func (o deferredSyncOrders) SyncAfterCancel(_ context.Context, tradingAccountID string) error {
+	*o.syncs = append(*o.syncs, tradingAccountID)
+	return nil
+}
+
+// 释放时撤 N 笔挂单只在最后按账户同步一次，不是每笔撤单都做一次全量同步。
+func TestReleaseTargetOrdersSyncsOncePerAccount(t *testing.T) {
+	f := swapPolicyFixture(t, restingSettings)
+	f.now = time.Now().UTC()
+	f.restingOrder(t, "resting-1", "BUY", "10", "0", f.now)
+	f.restingOrder(t, "resting-2", "BUY", "5", "0", f.now)
+	f.restingOrder(t, "resting-3", "BUY", "5", "0", f.now)
+	var syncs []string
+	executor := f.restingExecutor()
+	executor.Orders = deferredSyncOrders{targetOrderServiceStub: f.orders, syncs: &syncs}
+
+	require.NoError(t, executor.ReleaseTargetOrders(context.Background(), "space-1", "logical-1"))
+	require.ElementsMatch(t, []string{"resting-1", "resting-2", "resting-3"}, f.orders.canceled)
+	require.Equal(t, []string{"account-a"}, syncs)
+}
