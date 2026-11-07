@@ -94,6 +94,12 @@ func (r *CreatePaperSimulationReq) Validate() error {
 	if !validCreationControlMode(r.ControlMode) {
 		return fmt.Errorf("control_mode is invalid")
 	}
+	if strings.TrimSpace(r.LogicalAccountId) != "" && strings.TrimSpace(r.LogicalAccountName) != "" {
+		return fmt.Errorf("logical_account_id 和 logical_account_name 只能给一个：加入已有组合，或新建组合")
+	}
+	if r.Priority < 0 {
+		return fmt.Errorf("priority must not be negative")
+	}
 	if !isCanonicalPositiveDecimal(r.InitialBalance) || !canonicalUnsignedDecimalPattern.MatchString(r.MakerFeeRate) ||
 		!canonicalUnsignedDecimalPattern.MatchString(r.TakerFeeRate) || !canonicalUnsignedDecimalPattern.MatchString(r.SlippageBps) {
 		return fmt.Errorf("paper configuration decimals are invalid")

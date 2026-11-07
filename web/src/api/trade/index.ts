@@ -161,6 +161,15 @@ export function listLogicalAccounts(page: Page = {}) {
   );
 }
 
+export function updateLogicalAccount(logical_account_id: string, name: string) {
+  return callTrade<{ logical_account_id: string; name: string }, LogicalAccountResponse>(
+    "console",
+    "UpdateLogicalAccount",
+    { logical_account_id, name },
+    { silent: true }
+  );
+}
+
 export function addLogicalAccountMember(req: AddLogicalAccountMemberReq) {
   return callTrade<AddLogicalAccountMemberReq, LogicalAccountResponse>("console", "AddLogicalAccountMember", req, {
     silent: true
@@ -255,7 +264,7 @@ export function listPositions(req: ListPositionsReq) {
 }
 
 export const exchangeLabels: Record<number, string> = { 0: "-", 1: "Binance", 2: "OKX" };
-export const marketTypeLabels: Record<number, string> = { 0: "-", 1: "SPOT", 2: "SWAP" };
+export const marketTypeLabels: Record<number, string> = { 0: "-", 1: "现货", 2: "永续", 3: "股票" };
 export const orderSideLabels: Record<number, string> = { 0: "-", 1: "买入", 2: "卖出" };
 export const orderSideColors: Record<number, string> = { 0: "gray", 1: "red", 2: "green" };
 export const logicalAutomationStateLabels: Record<string, string> = {

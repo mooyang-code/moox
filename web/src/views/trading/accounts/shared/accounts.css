@@ -1,0 +1,101 @@
+/* 账户页共用的样式，类名统一加 tx- 前缀，不影响其他页面。 */
+.tx-pos {
+  color: rgb(var(--green-6));
+}
+
+.tx-neg {
+  color: rgb(var(--red-6));
+}
+
+.tx-muted {
+  color: var(--color-text-3);
+}
+
+.tx-mono {
+  font-family: var(--moox-font-mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 12px;
+}
+
+.tx-num {
+  font-variant-numeric: tabular-nums;
+}
+
+.tx-nowrap {
+  white-space: nowrap;
+}
+
+/* 环境标记：小方块加文字，不用胶囊 */
+.tx-env {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.tx-env::before {
+  width: 8px;
+  height: 8px;
+  border-radius: 1px;
+  background: currentcolor;
+  content: "";
+}
+
+.tx-env--paper {
+  color: var(--color-text-2);
+}
+
+.tx-env--testnet {
+  color: rgb(var(--orange-6));
+}
+
+.tx-env--prod {
+  color: rgb(var(--red-6));
+  font-weight: 600;
+}
+
+/* 状态：圆点加文字 */
+.tx-st {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.tx-st::before {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--color-text-4);
+  content: "";
+}
+
+.tx-st--ok::before {
+  background: rgb(var(--green-6));
+}
+
+.tx-st--warn::before {
+  background: rgb(var(--orange-6));
+}
+
+.tx-st--bad::before {
+  background: rgb(var(--red-6));
+}
+
+.tx-st--run::before {
+  background: rgb(var(--arcoblue-6));
+}
+
+/* 确认对话框顶部的环境色条 */
+.tx-confirm--testnet .arco-modal-header {
+  border-top: 3px solid rgb(var(--orange-6));
+}
+
+.tx-confirm--prod .arco-modal-header {
+  border-top: 3px solid rgb(var(--red-6));
+}
+
+/* 数字后面的单位 */
+.tx-unit {
+  margin-left: 4px;
+}

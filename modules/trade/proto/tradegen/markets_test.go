@@ -55,3 +55,25 @@ func TestCreatePaperSimulationMarginRulesFollowSwapInMarkets(t *testing.T) {
 		}
 	}
 }
+
+func TestCreatePaperSimulationJoinExistingLogicalAccount(t *testing.T) {
+	req := func(id, name string, priority int32) *CreatePaperSimulationReq {
+		return &CreatePaperSimulationReq{
+			AccountName: "paper", Exchange: Exchange_EXCHANGE_BINANCE, Markets: []MarketType{MarketType_MARKET_TYPE_SPOT},
+			SettlementAsset: "USDT", InitialBalance: "1000", MakerFeeRate: "0", TakerFeeRate: "0", SlippageBps: "0",
+			LogicalAccountId: id, LogicalAccountName: name, Priority: priority,
+		}
+	}
+	if err := req("la-1", "", 3).Validate(); err != nil {
+		t.Fatalf("加入已有组合应合法：%v", err)
+	}
+	if err := req("", "新组合", 0).Validate(); err != nil {
+		t.Fatalf("新建组合应合法：%v", err)
+	}
+	if err := req("la-1", "新组合", 0).Validate(); err == nil {
+		t.Error("同时给组合编号和组合名称应被拒绝")
+	}
+	if err := req("la-1", "", -1).Validate(); err == nil {
+		t.Error("负的优先级应被拒绝")
+	}
+}

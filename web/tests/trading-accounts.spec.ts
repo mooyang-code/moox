@@ -1,275 +1,284 @@
-import { expect, test, type Route } from "@playwright/test";
-import { installE2ESession } from "./e2e-session";
+import { expect, test, type Locator, type Page } from "@playwright/test";
+import { installTradingMock, type Calls } from "./trading-accounts-mock";
 
-const ok = (data: Record<string, unknown> = {}) => ({ ret_info: { code: 0, msg: "success" }, ...data });
-const paperRequests: Record<string, unknown>[] = [];
-const liveRequests: Record<string, unknown>[] = [];
-const closeRequests: Record<string, unknown>[] = [];
-const accountListRequests: Record<string, unknown>[] = [];
-
-const paperAccount = {
-  trading_account_id: "ta-paper-1",
-  space_id: "space-1",
-  name: "Paper Demo",
-  exchange: 1,
-  market_type: 1,
-  execution_mode: 1,
-  settlement_asset: "USDT",
-  margin_mode: "CROSS",
-  status: "ENABLED",
-  ready: true,
-  leverage_settings: {},
-  paper: { initial_balance: "100000", maker_fee_rate: "0", taker_fee_rate: "0", slippage_bps: "0" },
-  snapshot: {
-    balances: [],
-    equity: "100000",
-    available_funds: "100000",
-    used_margin: "0",
-    maintenance_margin: "0",
-    unrealized_pnl: "0",
-    exchange_updated_at: "1"
-  },
-  last_sync_at: "1",
-  last_ready_at: "1",
-  last_error: "",
-  created_at: "1",
-  updated_at: "1"
-};
-
-const { paper: _paperConfig, ...liveBase } = paperAccount;
-const liveAccount = {
-  ...liveBase,
-  trading_account_id: "ta-live-1",
-  name: "Live Testnet",
-  execution_mode: 2,
-  ready: false,
-  live: { environment: 1, credential_secret_id: "secret-1" },
-  last_error: "symbol not found"
-};
-
-async function mockTradeGateway(route: Route) {
-  const method = route.request().url().split("/").pop();
-  if (method === "GetUserInfo") {
-    return route.fulfill({
-      json: ok({ user_info: { user_id: "e2e", username: "reviewer", nickname: "Reviewer", role: 3, status: 1 } })
-    });
-  }
-  if (method === "ListSpaces") {
-    return route.fulfill({
-      json: ok({
-        spaces: [{ space_id: "space-1", name: "Crypto", owner: "e2e", status: "active" }],
-        page_result: { page: 1, size: 20, total: 1 }
-      })
-    });
-  }
-  if (method === "ListTradingAccounts") {
-    const request = (route.request().postDataJSON?.() || {}) as Record<string, unknown>;
-    accountListRequests.push(request);
-    const executionMode = request.execution_mode;
-    const accounts = executionMode === 1 ? [paperAccount] : executionMode === 2 ? [liveAccount] : [paperAccount, liveAccount];
-    return route.fulfill({ json: ok({ accounts, page_result: { page: 1, size: 20, total: accounts.length } }) });
-  }
-  if (method === "ListLogicalAccounts") {
-    return route.fulfill({
-      json: ok({
-        logical_accounts: [
-          {
-            logical_account_id: "la-paper-1",
-            name: "动量组合",
-            execution_mode: 1,
-            market_type: 1,
-            settlement_asset: "USDT",
-            automation_state: "ACTIVE",
-            ready: true,
-            members: [{ trading_account_id: "ta-paper-1" }]
-          }
-        ],
-        page_result: { page: 1, size: 200, total: 1 }
-      })
-    });
-  }
-  if (method === "GetExecutionCapabilities") {
-    return route.fulfill({
-      json: ok({
-        capabilities: {
-          can_place_order: false,
-          unavailable_reason: "not ready",
-          order_types: [],
-          fill_policies: [],
-          can_close_paper_simulation: true
-        }
-      })
-    });
-  }
-  if (method === "SyncTradingAccount") {
-    return route.fulfill({
-      json: ok({ fills_ingested: 1, orders_updated: 2, positions_updated: 1, ready: false, warnings: ["symbol not found"] })
-    });
-  }
-  if (method === "CreatePaperSimulation") {
-    paperRequests.push(route.request().postDataJSON?.() || {});
-    return route.fulfill({
-      json: ok({
-        account: paperAccount,
-        logical_account: { logical_account_id: "la-paper-1", name: "Paper Logical", members: [] }
-      })
-    });
-  }
-  if (method === "CreateTradingAccount") {
-    liveRequests.push(route.request().postDataJSON?.() || {});
-    return route.fulfill({ json: ok({ account: liveAccount }) });
-  }
-  if (method === "ClosePaperSimulation") {
-    closeRequests.push(route.request().postDataJSON?.() || {});
-    return route.fulfill({
-      json: ok({
-        account: { ...paperAccount, status: "CLOSED" },
-        logical_account: { logical_account_id: "la-paper-1", name: "Paper Logical", members: [] }
-      })
-    });
-  }
-  return route.fulfill({ json: ok() });
-}
+// 交易账户页的浏览器契约测试，数据来自 trading-accounts-mock.ts。
+let calls: Calls;
 
 test.beforeEach(async ({ page }) => {
-  paperRequests.length = 0;
-  liveRequests.length = 0;
-  closeRequests.length = 0;
-  accountListRequests.length = 0;
-  await installE2ESession(page, "space-1");
-  await page.route(/\/api\/admin\/[^/]+\/[^/?#]+(?:\?|$)/, mockTradeGateway);
+  calls = await installTradingMock(page);
 });
 
-test("renders Paper and Live accounts and keeps their fields isolated", async ({ page }) => {
+// 按标签文字完全相等定位表单项（“数量”不会命中“交易标的”里的“数量步长…”提示）
+const field = (scope: Locator, label: string) =>
+  scope
+    .locator(".arco-form-item")
+    .filter({ has: scope.page().locator(".arco-form-item-label", { hasText: new RegExp(`^\\s*${label}\\s*$`) }) })
+    .locator("input")
+    .first();
+
+const detailTab = (page: Page, label: string) =>
+  page.locator(".detail-tabs .arco-tabs-tab").filter({ hasText: new RegExp(`^${label}$`) });
+
+async function openDetail(page: Page, id: string, tab = "") {
+  await page.goto(`/#/trading/accounts/${id}${tab ? `?tab=${tab}` : ""}`);
+}
+
+test("列表按环境分页签，只列组合账户，三角展开执行账户并显示市场", async ({ page }) => {
   await page.goto("/#/trading/accounts");
-  await expect(page.getByRole("tab", { name: "执行账户", exact: true })).toHaveAttribute("aria-selected", "true");
-  await expect(page.getByText("Paper Demo", { exact: true })).toBeVisible();
-  await expect(page.getByText("Live Testnet", { exact: true })).toBeVisible();
-  await expect(page.getByRole("columnheader", { name: "账户类型" })).toBeVisible();
-  await expect(page.getByText("模拟账户", { exact: true }).first()).toBeVisible();
-  await page.getByRole("button", { name: "创建账户" }).click();
-  await expect(page.getByText("创建模拟账户", { exact: true })).toBeVisible();
-  await expect(page.getByText("初始资金", { exact: true })).toBeVisible();
-  await expect(page.getByText("真实账户密钥标识", { exact: true })).toHaveCount(0);
-  await page.locator('[data-test="execution-mode"]').getByText("真实账户", { exact: true }).click();
-  await expect(page.getByText("真实账户密钥标识", { exact: true })).toBeVisible();
-  await expect(page.getByText("交易标的", { exact: true })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "模拟盘" })).toHaveAttribute("aria-selected", "true");
+  for (const title of ["组合账户", "交易所", "关联策略", "自动执行", "权益", "近 24 小时", "持仓", "就绪"]) {
+    await expect(page.getByRole("columnheader", { name: title, exact: true })).toBeVisible();
+  }
+  await expect(page.getByText("默认策略模拟组合")).toBeVisible();
+  await expect(page.getByText("动量轮动")).toBeVisible();
+  await expect(page.getByText("币安测试网")).toHaveCount(0);
+  // 未加入组合的执行账户不在列表里，收进右上角链接
+  await expect(page.getByText("OKX 模拟（未加入）")).toHaveCount(0);
+  await expect(page.getByText("未加入组合的执行账户 1 个")).toBeVisible();
+  await page.locator(".arco-table-expand-btn").first().click();
+  await expect(page.getByText("币安模拟").first()).toBeVisible();
+  await expect(page.getByText("Binance · 现货、永续")).toBeVisible();
+  await expect(page).toHaveURL(/#\/trading\/accounts$/);
+
+  await page.getByRole("tab", { name: "测试网" }).click();
+  await expect(page).toHaveURL(/env=testnet/);
+  await expect(page.getByText("测试网组合")).toBeVisible();
+  await expect(page.getByText("默认策略模拟组合")).toHaveCount(0);
+  await page.getByRole("tab", { name: "生产环境" }).click();
+  await expect(page.getByText("生产组合")).toBeVisible();
 });
 
-test("uses account type tabs and server-side execution mode filters", async ({ page }) => {
+test("未加入组合的执行账户在弹窗里加入组合", async ({ page }) => {
   await page.goto("/#/trading/accounts");
-  await expect.poll(() => accountListRequests.length).toBe(1);
-  expect(accountListRequests[0]).not.toHaveProperty("execution_mode");
-
-  const modeFilter = page.locator(".account-mode-filter");
-  await modeFilter.getByText("真实账户", { exact: true }).click();
-  await expect(page).toHaveURL(/trading\/accounts\?mode=live/);
-  await expect.poll(() => accountListRequests.length).toBe(2);
-  expect(accountListRequests[1]).toMatchObject({ execution_mode: 2 });
-  await expect(page.getByText("Live Testnet", { exact: true })).toBeVisible();
-  await expect(page.getByText("Paper Demo", { exact: true })).toHaveCount(0);
-
-  await modeFilter.getByText("模拟账户", { exact: true }).click();
-  await expect(page).toHaveURL(/trading\/accounts\?mode=paper/);
-  await expect.poll(() => accountListRequests.length).toBe(3);
-  expect(accountListRequests[2]).toMatchObject({ execution_mode: 1 });
-  await expect(page.getByText("Paper Demo", { exact: true })).toBeVisible();
-  await expect(page.getByText("Live Testnet", { exact: true })).toHaveCount(0);
-});
-
-test("supports a simulated account deep link and preselects the matching creation mode", async ({ page }) => {
-  await page.goto("/#/trading/accounts?mode=paper");
-  await expect(page.locator('.account-mode-filter input[type="radio"][value="paper"]')).toBeChecked();
-  await expect.poll(() => accountListRequests.length).toBe(1);
-  expect(accountListRequests[0]).toMatchObject({ execution_mode: 1 });
-  await page.getByRole("button", { name: "创建账户" }).click();
-  await expect(page.getByText("创建模拟账户", { exact: true })).toBeVisible();
-});
-
-test("surfaces sync warnings and canonical navigation without real orders", async ({ page }) => {
-  await page.goto("/#/trading/accounts");
-  await page.getByRole("button", { name: "同步" }).last().click();
-  await expect(page.getByRole("alert").getByText("symbol not found", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "详情" }).last().click();
-  await page.getByRole("button", { name: "查看持仓" }).click();
-  await expect(page).toHaveURL(/trading\/positions.*trading_account_id=ta-live-1/);
-  await page.goBack();
-  await page.getByRole("button", { name: "详情" }).last().click();
-  await page.getByRole("button", { name: "查看订单" }).click();
-  await expect(page).toHaveURL(/trading\/orders.*trading_account_id=ta-live-1/);
-});
-
-test("执行账户详情可进入组合账户工作台", async ({ page }) => {
-  await page.goto("/#/trading/accounts");
-  await page.getByRole("button", { name: "详情" }).first().click();
-  const strategyLink = page.getByRole("button", { name: /动量组合/ });
-  await expect(strategyLink).toBeVisible();
-  await strategyLink.click();
-  await expect(page).toHaveURL(/trading\/accounts\?view=strategy&logical_account_id=la-paper-1/);
-  await expect(page.getByRole("tab", { name: "组合账户", exact: true })).toHaveAttribute("aria-selected", "true");
-});
-
-test("requires production confirmation and exposes the simulated account close capability", async ({ page }) => {
-  await page.goto("/#/trading/accounts");
-  await page.getByRole("button", { name: "创建账户" }).click();
-  await page.locator('[data-test="execution-mode"]').getByText("真实账户", { exact: true }).click();
-  await page.getByText("生产环境", { exact: true }).click();
-  await page.getByRole("button", { name: "创建生产账户" }).click();
-  await expect(page.getByText("确认创建生产账户", { exact: true })).toBeVisible();
-  await page.keyboard.press("Escape");
-  const createModal = page.locator(".arco-modal").filter({ hasText: "创建真实账户" });
-  await createModal.getByRole("button", { name: "取消" }).click({ force: true });
-  await expect(createModal).toBeHidden();
-
-  await page.getByRole("button", { name: "详情" }).first().click();
-  await expect(page.getByRole("button", { name: "关闭模拟账户" }).last()).toBeEnabled();
-});
-
-test("submits a Paper request without Live-only fields and shows both IDs", async ({ page }) => {
-  await page.goto("/#/trading/accounts");
-  await page.getByRole("button", { name: "创建账户" }).click();
-  await page.locator('input[name="account_name"]').fill("Paper Created");
-  await page.locator(".arco-modal").getByRole("button", { name: "创建账户" }).click();
-  await expect.poll(() => paperRequests.length).toBe(1);
-  expect(paperRequests[0]).toMatchObject({ account_name: "Paper Created", settlement_asset: "USDT" });
-  expect(paperRequests[0]).not.toHaveProperty("live");
-  expect(paperRequests[0]).not.toHaveProperty("credential_secret_id");
-  await expect(page.getByText("la-paper-1", { exact: false })).toBeVisible();
-});
-
-test("submits real account configuration, syncs it, and shows readiness feedback", async ({ page }) => {
-  await page.goto("/#/trading/accounts");
-  await page.getByRole("button", { name: "创建账户" }).click();
-  await page.locator('[data-test="execution-mode"]').getByText("真实账户", { exact: true }).click();
-  await page.locator('input[name="account_name"]').fill("Live Created");
-  await page.locator('input[name="credential_secret_id"]').fill("secret-live");
-  await page.locator(".arco-modal").getByRole("button", { name: "创建账户" }).click();
-  await expect.poll(() => liveRequests.length).toBe(1);
-  expect(liveRequests[0]).toMatchObject({
-    name: "Live Created",
-    live: { environment: 1, credential_secret_id: "secret-live" }
+  await page.getByText("未加入组合的执行账户 1 个").click();
+  const dialog = page.locator(".arco-modal:visible");
+  await expect(dialog.getByText("OKX 模拟（未加入）")).toBeVisible();
+  await dialog.getByRole("button", { name: "加入组合" }).first().click();
+  await expect(dialog.getByText("把「OKX 模拟（未加入）」加入组合")).toBeVisible();
+  // 运行中的组合不能加成员，只剩已暂停的手动组合
+  await dialog.locator(".arco-select").first().click();
+  const options = page.locator(".arco-select-option");
+  await expect(options.filter({ hasText: "手动模拟组合" })).toBeVisible();
+  await expect(options.filter({ hasText: "默认策略模拟组合" })).toHaveCount(0);
+  await options.filter({ hasText: "手动模拟组合" }).click();
+  await dialog.getByRole("button", { name: "加入", exact: true }).click();
+  await expect.poll(() => calls.members.length).toBe(1);
+  expect(calls.members[0]).toMatchObject({
+    logical_account_id: "la-paper-manual",
+    trading_account_id: "ta-paper-free",
+    enabled: true
   });
-  expect(liveRequests[0]).not.toHaveProperty("initial_balance");
-  await expect(page.getByText("真实账户已创建", { exact: false })).toBeVisible();
-  await expect(page.getByText("未就绪", { exact: false }).last()).toBeVisible();
 });
 
-test("closes simulated account only after capability confirmation and sends canonical ID", async ({ page }) => {
+test("新建模拟账户四步，只开放模拟盘，请求带市场集合", async ({ page }) => {
   await page.goto("/#/trading/accounts");
-  await page.getByRole("button", { name: "详情" }).first().click();
-  await page.getByRole("button", { name: "关闭模拟账户" }).last().click();
-  await expect(page.getByText("关闭模拟账户", { exact: true }).last()).toBeVisible();
-  await page.getByRole("button", { name: "确定" }).last().click();
-  await expect.poll(() => closeRequests.length).toBe(1);
-  expect(closeRequests[0]).toEqual({ trading_account_id: "ta-paper-1" });
+  await page.getByRole("button", { name: "新建账户" }).click();
+  const dialog = page.locator(".arco-modal:visible");
+  await expect(dialog.getByText("1 类型").or(dialog.getByText("类型", { exact: true }))).toBeVisible();
+  await expect(dialog.locator('input[value="testnet"]')).toBeDisabled();
+  await expect(dialog.locator('input[value="prod"]')).toBeDisabled();
+  await expect(dialog.getByText("即将开放")).toHaveCount(2);
+  await dialog.getByRole("button", { name: "下一步" }).click();
+  await field(dialog, "账户名称").fill("演示账户");
+  await dialog.getByRole("button", { name: "下一步" }).click();
+  // 默认只开永续；再勾现货
+  await dialog.getByText("现货", { exact: true }).click();
+  await dialog.getByRole("button", { name: "下一步" }).click();
+  await field(dialog, "组合名称").fill("演示组合");
+  await dialog.getByRole("button", { name: "创建" }).click();
+  await expect.poll(() => calls.paper.length).toBe(1);
+  expect(calls.paper[0]).toMatchObject({
+    account_name: "演示账户",
+    logical_account_name: "演示组合",
+    exchange: 1,
+    markets: [1, 2],
+    margin_mode: "CROSS",
+    settlement_asset: "USDT"
+  });
 });
 
-test("rejects invalid account deep links instead of querying an unknown account", async ({ page }) => {
-  await page.goto("/#/trading/positions?trading_account_id=missing");
-  await expect(page).not.toHaveURL(/trading_account_id=missing/);
-  await expect(page.getByText("账户不存在或无权限", { exact: true }).last()).toBeVisible();
+test("详情页六个页签用 ?tab= 直达，切换页签不重建页面", async ({ page }) => {
+  await openDetail(page, "la-paper-1");
+  await expect(page.getByRole("heading", { name: "默认策略模拟组合" })).toBeVisible();
+  await expect(page.getByText("动量轮动").first()).toBeVisible();
+  await page.evaluate(() => document.querySelector(".tx-detail")?.setAttribute("data-marker", "kept"));
+  for (const [tab, label] of [
+    ["positions", "持仓与目标"],
+    ["orders", "订单"],
+    ["fills", "成交"],
+    ["ledger", "资金流水"],
+    ["settings", "执行账户与设置"]
+  ]) {
+    await detailTab(page, label).click();
+    await expect(page).toHaveURL(new RegExp(`tab=${tab}`));
+  }
+  await expect(page.locator(".tx-detail")).toHaveAttribute("data-marker", "kept");
 
-  await page.goto("/#/trading/orders?trading_account_id=missing");
-  await expect(page).not.toHaveURL(/trading_account_id=missing/);
-  await expect(page.getByText("账户不存在或无权限", { exact: true }).last()).toBeVisible();
+  await openDetail(page, "la-paper-1", "positions");
+  await expect(detailTab(page, "持仓与目标")).toHaveClass(/arco-tabs-tab-active/);
+  // 按币一行：BTC 同时有现货和永续目标
+  const btc = page.getByRole("row", { name: /BTC/ }).first();
+  await expect(btc).toBeVisible();
+  await expect(page.getByText("已拦下：低于最小下单额")).toBeVisible();
+  await expect(page.getByText("目标外")).toBeVisible();
+});
+
+test("生产环境清仓要输入组合名称，其他环境不用", async ({ page }) => {
+  await openDetail(page, "la-prod-1", "settings");
+  await expect(page.locator(".tx-env--prod").first()).toBeVisible();
+  await page.getByRole("button", { name: "清仓", exact: true }).first().click();
+  const dialog = page.locator(".arco-modal:visible");
+  await expect(dialog.getByText("这是生产环境，会使用真实资金。")).toBeVisible();
+  await field(dialog, "原因（必填）").fill("人工检查");
+  const confirm = dialog.getByRole("button", { name: "开始清仓" });
+  await expect(confirm).toBeDisabled();
+  await field(dialog, "输入组合名称「生产组合」确认").fill("生产组");
+  await expect(confirm).toBeDisabled();
+  await field(dialog, "输入组合名称「生产组合」确认").fill("生产组合");
+  await expect(confirm).toBeEnabled();
+  await confirm.click();
+  await expect.poll(() => calls.flatten.length).toBe(1);
+  expect(calls.flatten[0]).toMatchObject({ logical_account_id: "la-prod-1", reason: "人工检查" });
+  await expect(page.getByText("清仓进行中")).toBeVisible();
+});
+
+test("模拟盘清仓不要输入组合名称", async ({ page }) => {
+  await openDetail(page, "la-paper-1");
+  await page.getByRole("button", { name: "清仓", exact: true }).click();
+  const dialog = page.locator(".arco-modal:visible");
+  await expect(dialog.getByText("输入组合名称")).toHaveCount(0);
+  await field(dialog, "原因（必填）").fill("风险处理");
+  await expect(dialog.getByRole("button", { name: "开始清仓" })).toBeEnabled();
+});
+
+test("订单、成交、资金流水页签读数据，订单行点开看详情", async ({ page }) => {
+  await openDetail(page, "la-paper-1", "orders");
+  await expect(page.getByText("ETH-USDT").first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "撤单" })).toHaveCount(1);
+  await page.getByText("BTC-USDT").first().click();
+  await expect(page.locator(".arco-drawer:visible").getByText("成交明细")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await openDetail(page, "la-paper-1", "fills");
+  await expect(page.getByText("0.016 USDT")).toBeVisible();
+  await openDetail(page, "la-paper-1", "ledger");
+  await expect(page.getByText("手续费").first()).toBeVisible();
+});
+
+test("从详情页返回列表时重新读取，不显示缓存的旧数据", async ({ page }) => {
+  await page.goto("/#/trading/accounts");
+  await expect(page.getByText("默认策略模拟组合")).toBeVisible();
+  const before = calls.listLogicals;
+  await page.getByText("默认策略模拟组合").click();
+  await expect(page.getByRole("heading", { name: "默认策略模拟组合" })).toBeVisible();
+  await page.getByRole("button", { name: "模拟盘" }).first().click();
+  await expect(page.getByText("未加入组合的执行账户 1 个")).toBeVisible();
+  await expect.poll(() => calls.listLogicals).toBeGreaterThan(before);
+});
+
+test("1280 宽时列表和成员表的每一列都保持自己的宽度，数字不折行", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto("/#/trading/accounts");
+  await expect(page.getByText("默认策略模拟组合")).toBeVisible();
+  const widths = await page
+    .locator(".tx-accounts th.arco-table-th")
+    .evaluateAll(items => items.map(item => item.getBoundingClientRect().width));
+  expect(widths.length).toBeGreaterThanOrEqual(8);
+  // 每一列至少 60 像素；关联策略列有自己的宽度
+  for (const width of widths) expect(width).toBeGreaterThanOrEqual(60);
+  const strategy = await page.getByRole("columnheader", { name: "关联策略", exact: true }).boundingBox();
+  expect(strategy?.width).toBeGreaterThanOrEqual(190);
+  await expect(page.getByText("动量轮动")).toBeVisible();
+
+  await openDetail(page, "la-paper-1", "settings");
+  const equity = page.locator(".tx-detail .arco-table-td .tx-num").first();
+  await expect(equity).toBeVisible();
+  expect((await equity.boundingBox())?.height).toBeLessThan(28);
+});
+
+test("390 窄屏下列表、详情和订单抽屉不产生页面横向溢出", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 800 });
+  const overflow = () => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+  await page.goto("/#/trading/accounts");
+  await expect(page.getByText("默认策略模拟组合")).toBeVisible();
+  expect(await overflow()).toBeLessThanOrEqual(1);
+  await openDetail(page, "la-paper-1");
+  await expect(page.getByRole("heading", { name: "默认策略模拟组合" })).toBeVisible();
+  expect(await overflow()).toBeLessThanOrEqual(1);
+  await openDetail(page, "la-paper-1", "orders");
+  await page.getByText("BTC-USDT").first().click();
+  const drawer = page.locator(".arco-drawer:visible");
+  await expect(drawer.getByText("成交明细")).toBeVisible();
+  expect((await drawer.boundingBox())?.width).toBeLessThanOrEqual(390);
+  expect(await overflow()).toBeLessThanOrEqual(1);
+});
+
+test("资金流水：模拟盘没有市场下拉；交易所没有流水接口时直接说明", async ({ page }) => {
+  await openDetail(page, "la-paper-1", "ledger");
+  await expect(page.getByText("手续费").first()).toBeVisible();
+  // 账户开通了现货和永续，但模拟盘后端不看市场，不显示下拉
+  await expect(page.locator(".tx-detail .arco-select")).toHaveCount(1);
+  await openDetail(page, "la-prod-1", "ledger");
+  await expect(page.getByText("没有资金流水接口")).toBeVisible();
+});
+
+test("订单的市场下拉在没输入币时置灰", async ({ page }) => {
+  await openDetail(page, "la-paper-1", "orders");
+  const disabled = page.locator(".tx-detail .arco-select-view-disabled");
+  await expect(disabled).toHaveCount(1);
+  await page.getByPlaceholder("币，如 BTC").fill("BTC");
+  await expect(disabled).toHaveCount(0);
+});
+
+test("持仓行下单：现货、永续各一个入口，预填方向和与目标的差额", async ({ page }) => {
+  await openDetail(page, "la-paper-1", "positions");
+  await expect(page.getByRole("button", { name: "下单·现货" }).first()).toBeVisible();
+  await page.getByRole("row", { name: /BTC/ }).getByRole("button", { name: "下单·永续" }).click();
+  const dialog = page.locator(".arco-modal:visible");
+  // BTC 永续目标 1、实际 0.5：买入 0.5
+  await expect(field(dialog, "数量")).toHaveValue("0.5");
+  await expect(dialog.locator(".arco-radio-checked").filter({ hasText: "买入" })).toBeVisible();
+});
+
+test("新建模拟账户加入已有组合：一次请求带组合编号，不再单独加成员", async ({ page }) => {
+  await page.goto("/#/trading/accounts");
+  await page.getByRole("button", { name: "新建账户" }).click();
+  const dialog = page.locator(".arco-modal:visible");
+  await dialog.getByRole("button", { name: "下一步" }).click();
+  await field(dialog, "账户名称").fill("加入用账户");
+  await dialog.getByRole("button", { name: "下一步" }).click();
+  await dialog.getByRole("button", { name: "下一步" }).click();
+  await dialog.getByText("加入已有组合", { exact: true }).click();
+  await dialog.locator(".arco-select").first().click();
+  await page.locator(".arco-select-option").filter({ hasText: "手动模拟组合" }).click();
+  await dialog.getByRole("button", { name: "创建" }).click();
+  await expect.poll(() => calls.paper.length).toBe(1);
+  expect(calls.paper[0]).toMatchObject({ logical_account_id: "la-paper-manual", logical_account_name: "" });
+  expect(calls.members).toHaveLength(0);
+});
+
+test("资金流水、关闭模拟账户对话框的提示不超出外框，成员表交易所·市场不折行", async ({ page }) => {
+  await openDetail(page, "la-prod-1", "ledger");
+  const alertText = "没有资金流水接口";
+  const alert = page.locator(".tx-detail .arco-alert").filter({ hasText: alertText });
+  await expect(alert).toBeVisible();
+  const section = page.locator(".tx-detail .tx-section", { has: page.locator(".arco-alert", { hasText: alertText }) });
+  const [a, b] = [await alert.boundingBox(), await section.boundingBox()];
+  expect((a?.x ?? 0) + (a?.width ?? 0)).toBeLessThanOrEqual((b?.x ?? 0) + (b?.width ?? 0) + 0.5);
+
+  await openDetail(page, "la-paper-1", "settings");
+  const cell = page.locator(".tx-detail .arco-table-td .tx-nowrap").filter({ hasText: "Binance" }).first();
+  expect((await cell.boundingBox())?.height).toBeLessThan(26);
+  await page.getByRole("button", { name: "关闭模拟账户" }).click();
+  const dialog = page.locator(".arco-modal:visible");
+  // 红色提示里写明会暂停整个组合账户，不再另叠一条橙色；唯一成员时再多一条蓝色说明
+  await expect(dialog.locator(".arco-alert-error")).toHaveCount(1);
+  await expect(dialog.locator(".arco-alert-warning")).toHaveCount(0);
+  await expect(dialog.getByText("暂停整个组合账户的自动执行")).toBeVisible();
+});
+
+test("390 窄屏下持仓页右侧操作列不固定，不会盖住数据列", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 800 });
+  await openDetail(page, "la-paper-1", "positions");
+  await expect(page.getByRole("row", { name: /BTC/ })).toBeVisible();
+  expect(await page.locator(".tx-detail .arco-table-col-fixed-right").count()).toBe(0);
 });

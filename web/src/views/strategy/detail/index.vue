@@ -30,8 +30,7 @@
             size="small"
             @click="
               router.push({
-                path: '/trading/accounts',
-                query: { view: 'strategy', logical_account_id: logicalAccount?.logical_account_id }
+                path: `/trading/accounts/${logicalAccount?.logical_account_id}`
               })
             "
             >去恢复</a-button
@@ -63,8 +62,7 @@
               v-if="store.instance.logical_account_id"
               @click="
                 router.push({
-                  path: '/trading/accounts',
-                  query: { view: 'strategy', logical_account_id: store.instance.logical_account_id }
+                  path: `/trading/accounts/${store.instance.logical_account_id}`
                 })
               "
               >{{ logicalAccount?.name || store.instance.logical_account_id }}</a-link
