@@ -228,3 +228,37 @@ func TestResumeOperatorActionContinuesDelistFlattenAndReduce(t *testing.T) {
 	require.Equal(t, "COMPLETED", action.Status)
 
 }
+
+// 组合同时持有其他标的且有挂单时，下架清仓也能完成：清仓只看自己的标的，别的标的的挂单不撤、不算剩余。
+func TestDelistFlattenCompletesWhileOtherInstrumentsHaveOpenOrders(t *testing.T) {
+	fixture := newMixedFlattenFixture(t)
+	fixture.block(t, "SWAP", "BTCUSDT")
+	other := activeOrder(fixture, "spot-open", "TARGET")
+	other.MarketType, other.InstrumentID = "SPOT", "BTC-USDT-SPOT"
+	fixture.order(t, other)
+	// 平仓单发出后，持仓同步到位（永续持仓归零）。
+	fixture.syncer.onSync = func(ctx context.Context, accountID string, _ int) error {
+		for _, entry := range fixture.trace {
+			if len(entry) > 6 && entry[:6] == "place:" {
+				return fixture.store.Transaction(ctx, func(tx *store.Tx) error {
+					return tx.UpsertPosition(store.PositionRecord{
+						SpaceID: "space-1", TradingAccountID: "account-a", MarketType: "SWAP", ExchangeSymbol: "BTCUSDT", PositionSide: "NET",
+						SignedQuantity: "0", EntryPrice: "100", MarkPrice: "100", Leverage: "5", MarginMode: "CROSS", ExchangeUpdatedAt: fixture.now.UnixMilli() + 1000,
+					})
+				})
+			}
+		}
+		return nil
+	}
+
+	result, err := fixture.service().FlattenLogicalAccount(context.Background(), delistCommand("delist-with-open", "BTC-USDT-SWAP"))
+
+	require.NoError(t, err)
+	require.Equal(t, "COMPLETED", result.Action.Status, "result=%+v", result.Accounts)
+	for _, entry := range fixture.trace {
+		require.NotContains(t, entry, "cancel:", "别的标的的挂单不撤")
+	}
+	logical, err := fixture.store.GetLogicalAccount(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Equal(t, "ACTIVE", logical.AutomationState)
+}
