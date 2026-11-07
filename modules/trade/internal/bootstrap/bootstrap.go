@@ -127,7 +127,7 @@ func initialize(
 	fillReducer := &consumer.Reducer{Store: tradeStore, Enqueue: equitySampler.Enqueue}
 	syncService := &accountsync.Service{
 		Store: tradeStore, Adapters: manager, SessionState: manager,
-		Fills: fillReducer, Orders: orderService, Metrics: balanceMetrics,
+		Fills: fillReducer, Orders: orderService, Metrics: balanceMetrics, Equity: equityService,
 	}
 	paperMatcher := &executionpaper.Matcher{
 		Store:   tradeStore,
@@ -147,6 +147,11 @@ func initialize(
 		if accountErr != nil {
 			return executionpaper.InfrastructureError{Err: accountErr}
 		}
+		// 模拟盘快照的权益同样按统一公式落库（与实盘同步、权益采样一致）；估值失败保留适配器的值。
+		refreshed := store.SnapshotFromExchange(snapshot)
+		if equity, equityErr := equityService.ValueEquity(refreshCtx, account, refreshed, adapter); equityErr == nil {
+			refreshed.Equity = equity
+		}
 		err := tradeStore.Transaction(refreshCtx, func(tx *store.Tx) error {
 			// The paper snapshot is reconstructed from the same SQLite facts that
 			// back reservations. Advance the sync watermark together with it so
@@ -158,7 +163,7 @@ func initialize(
 				account.SpaceID,
 				tradingAccountID,
 				account.FillCursors,
-				store.SnapshotFromExchange(snapshot),
+				refreshed,
 				at,
 				at,
 			)

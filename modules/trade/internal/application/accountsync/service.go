@@ -19,6 +19,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"gorm.io/gorm"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 var ErrServiceConfig = errors.New("trade account sync: service is not configured")
@@ -35,6 +36,12 @@ type SessionState interface {
 
 type Metrics interface {
 	Observe(tradingAccountID string, now time.Time, maxDifference float64, err error)
+}
+
+// EquityValuer 按统一权益公式（与权益采样同一个实现）算账户快照的权益。适配器给的 Equity 各按各的口径
+// （币安现货没有、合约是 totalMarginBalance、统一账户是 accountEquity、OKX 只有结算币 cashBal），不能直接落库展示。
+type EquityValuer interface {
+	ValueEquity(ctx context.Context, account store.TradingAccountRecord, snapshot store.TradingAccountSnapshot, prices execution.ReferencePriceSource) (string, error)
 }
 
 type Result struct {
@@ -62,6 +69,8 @@ type Snapshot struct {
 	PositionsReadAt time.Time
 	FillCursors     store.FillCursors
 	Ready           bool
+	// Prices 是读这份快照的适配器，按统一公式估权益时用它取受管现货的参考价；为空时不重算权益。
+	Prices execution.ReferencePriceSource
 }
 
 // positionLagGrace 是持仓滞后保护期：持仓接口可能比成交落后数秒，这段时间内的本地持仓不删、不被更旧的 REST 覆盖，
@@ -92,6 +101,7 @@ type Service struct {
 	Fills          *consumer.Reducer
 	Orders         *orderapp.Service
 	Metrics        Metrics
+	Equity         EquityValuer
 	Wake           func()
 	Now            func() time.Time
 	LateFillWindow time.Duration
@@ -302,7 +312,7 @@ func (s *Service) syncAccountLocked(
 	result, err := s.applySnapshot(ctx, account.TradingAccountID, Snapshot{
 		Fills: fills, Orders: orders, Positions: positions,
 		Account: accountSnapshot, AccountReadAt: accountReadAt, PositionsReadAt: positionsReadAt,
-		FillCursors: cursors, Ready: ready,
+		FillCursors: cursors, Ready: ready, Prices: adapter,
 	})
 	if err != nil {
 		return result, maxDifference, err
@@ -406,6 +416,23 @@ func (s *Service) ApplySnapshot(
 	}
 	s.wakeTargets()
 	return result, nil
+}
+
+// unifiedEquity 用统一公式重算刚采用的完整快照的权益。估值失败（例如受管现货暂时取不到价）不让同步失败：
+// 沿用上一次落库的权益，没有就保留适配器给的值，并写日志；下一轮同步再算。
+func (s *Service) unifiedEquity(ctx context.Context, account store.TradingAccountRecord, previous string, prices execution.ReferencePriceSource) string {
+	if s.Equity == nil || prices == nil {
+		return account.Snapshot.Equity
+	}
+	equity, err := s.Equity.ValueEquity(ctx, account, account.Snapshot, prices)
+	if err == nil {
+		return equity
+	}
+	log.WarnContextf(ctx, "账户 %s 按统一公式估算权益失败，沿用上一次的值：%v", account.TradingAccountID, err)
+	if previous != "" {
+		return previous
+	}
+	return account.Snapshot.Equity
 }
 
 func (s *Service) applySnapshot(
@@ -522,7 +549,9 @@ func (s *Service) applySnapshot(
 		freshness = account.Snapshot.ExchangeUpdatedAt
 	}
 	if snapshotTime >= freshness {
+		previousEquity := account.Snapshot.Equity
 		account.Snapshot = store.SnapshotFromExchange(snapshot.Account)
+		account.Snapshot.Equity = s.unifiedEquity(ctx, account, previousEquity, snapshot.Prices)
 		account.SnapshotSourceTime = snapshotTime
 		result.AccountSnapshotUpdated = true
 	} else {
@@ -1528,12 +1557,12 @@ func mergePrivateSnapshot(
 			current.Balances = append(current.Balances, balances[key])
 		}
 	}
+	// 权益不跟私有推送：推送里的 Equity 是适配器口径，统一权益由随后的完整同步按公式重算。
 	for _, field := range []struct {
 		present     bool
 		destination *string
 		source      string
 	}{
-		{update.Present.Equity, &current.Equity, incoming.Equity},
 		{update.Present.AvailableFunds, &current.AvailableFunds, incoming.AvailableFunds},
 		{update.Present.UsedMargin, &current.UsedMargin, incoming.UsedMargin},
 		{

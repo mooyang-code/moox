@@ -238,6 +238,7 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 	_, err = s.Sync.ApplySnapshot(ctx, s.Account.TradingAccountID, accountsync.Snapshot{
 		Fills: fills, Orders: orders, Positions: positions,
 		Account: accountSnapshot, AccountReadAt: accountReadAt, FillCursors: cursors, Ready: false,
+		Prices: s.Adapter,
 	})
 	s.opMu.Unlock()
 	if err != nil {
