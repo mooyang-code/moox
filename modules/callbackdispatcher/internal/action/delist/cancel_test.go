@@ -243,7 +243,7 @@ func TestStaleAndFreshThreadsUseSameActionID(t *testing.T) {
 	for _, request := range h.trade.flattens {
 		require.False(t, seen[request.ActionID])
 		seen[request.ActionID] = true
-		require.Equal(t, operatorActionID("e1", RoundFlatten, request.SpaceID, request.LogicalAccountID), request.ActionID)
+		require.Equal(t, operatorActionID("e1", RoundFlatten, request.SpaceID, request.LogicalAccountID, delistAt.UnixMilli()), request.ActionID)
 		require.Equal(t, flattenReason(h.execution("e1"), target{Instrument: foo}, RoundFlatten), request.Reason)
 	}
 }

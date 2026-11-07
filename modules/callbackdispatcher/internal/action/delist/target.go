@@ -100,10 +100,11 @@ func flattenReason(execution store.Execution, t target, round int) string {
 // operatorNamespace 是 Trade 操作号的命名空间。
 var operatorNamespace = uuid.MustParse("6f1c3a52-7d1e-4a55-9d0b-0c6d6f6b7c01")
 
-// operatorActionID 由（执行记录、轮次、空间、组合账户）确定地生成：卡住后被放回的旧线程和新线程即使同时发起平仓，
-// 用的也是同一个操作号，由 Trade 的幂等挡住重复。每一轮的号不同，所以复查（包括上一轮 PARTIAL 之后）总是换新号。
-func operatorActionID(executionID string, round int, spaceID, logicalAccountID string) string {
-	return uuid.NewSHA1(operatorNamespace, []byte(fmt.Sprintf("%s|%d|%s|%s", executionID, round, spaceID, logicalAccountID))).String()
+// operatorActionID 由（执行记录、轮次、空间、组合账户、这一轮规划时依据的下架时间）确定地生成：卡住后被放回的旧线程和新线程即使同时发起平仓，
+// 用的也是同一个操作号，由 Trade 的幂等挡住重复。每一轮的号不同，所以复查（包括上一轮 PARTIAL 之后）总是换新号；
+// 改期之后这一轮按新时间重开时，号也跟着换（旧号对应的清仓已经以失败或只完成一部分结束）。
+func operatorActionID(executionID string, round int, spaceID, logicalAccountID string, plannedAt int64) string {
+	return uuid.NewSHA1(operatorNamespace, []byte(fmt.Sprintf("%s|%d|%s|%s|%d", executionID, round, spaceID, logicalAccountID, plannedAt))).String()
 }
 
 // stepKey 是下架步骤的唯一键，与 t_delist_actions 的主键一致。

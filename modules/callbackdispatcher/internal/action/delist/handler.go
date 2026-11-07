@@ -494,15 +494,36 @@ func (r *run) lowBudget(ctx context.Context) bool {
 	return (ok && time.Until(deadline) < minStepBudget) || ctx.Err() != nil
 }
 
+// roundRows 返回一轮里按 plannedAt 规划的各组合的行（不含汇总行），按名字排序。改期重开之前留下的旧行不算。
+func (r *run) roundRows(round int, plannedAt int64) []store.DelistAction {
+	var rows []store.DelistAction
+	for key, step := range r.steps {
+		if key.Round == round && key.Kind == store.DelistKindFlatten && (key.SpaceID != "" || key.LogicalAccountID != "") && step.PlannedDelistAt == plannedAt {
+			rows = append(rows, step)
+		}
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].SpaceID != rows[j].SpaceID {
+			return rows[i].SpaceID < rows[j].SpaceID
+		}
+		return rows[i].LogicalAccountID < rows[j].LogicalAccountID
+	})
+	return rows
+}
+
 // flattenRound 推进一轮平仓：到点后找持有者、给每个组合建一行（先存下操作号），再逐个发起并查结果。
+// 汇总行记下这一轮是按哪个下架时间规划的：改期之后下架时间变了，而这一轮已经以失败或只完成一部分结束（用完重试、到了旧的下架时间被停下），
+// 就按新时间重开，每个仍持有的组合换新的操作号再平；已经成功的一轮不重开。
 func (r *run) flattenRound(ctx context.Context, round int, due time.Time) error {
 	if r.now.Before(due) {
 		r.wakeAt(due)
 		return nil
 	}
+	plannedAt := r.target.DelistAt.UnixMilli()
 	summaryKey := stepKey{Round: round, Kind: store.DelistKindFlatten}
 	summary, started := r.steps[summaryKey]
-	if !started {
+	reopen := started && summary.PlannedDelistAt != plannedAt && terminal(summary.Status) && summary.Status != store.DelistSucceeded
+	if !started || reopen {
 		if r.lowBudget(ctx) {
 			r.wakeAt(r.now.Add(5 * time.Second))
 			return nil
@@ -518,25 +539,25 @@ func (r *run) flattenRound(ctx context.Context, round int, due time.Time) error 
 			row := store.DelistAction{
 				Round: round, Kind: store.DelistKindFlatten, SpaceID: item.SpaceID, LogicalAccountID: item.LogicalAccountID,
 				Exchange:         r.target.Instrument.Exchange,
-				OperatorActionID: operatorActionID(r.execution.ExecutionID, round, item.SpaceID, item.LogicalAccountID),
+				OperatorActionID: operatorActionID(r.execution.ExecutionID, round, item.SpaceID, item.LogicalAccountID, plannedAt),
 				Reason:           flattenReason(r.execution, r.target, round),
-				Status:           store.DelistPending,
+				Status:           store.DelistPending, PlannedDelistAt: plannedAt,
 			}
-			// 重入时已存的行（含操作号、状态）不能被重置。
-			if _, exists := r.steps[keyOf(row)]; exists {
+			// 重入时已按这个下架时间存下的行（含操作号、状态）不能被重置；改期前的旧行换成新的。
+			if existing, exists := r.steps[keyOf(row)]; exists && existing.PlannedDelistAt == plannedAt {
 				continue
 			}
 			if err := r.save(ctx, row); err != nil {
 				return err
 			}
 		}
-		summary = store.DelistAction{Round: round, Kind: store.DelistKindFlatten, Exchange: r.target.Instrument.Exchange, Status: store.DelistRunning}
+		summary = store.DelistAction{Round: round, Kind: store.DelistKindFlatten, Exchange: r.target.Instrument.Exchange, Status: store.DelistRunning, PlannedDelistAt: plannedAt}
 		summary.Result = joinLines(nonEmpty(fmt.Sprintf("持有的组合 %d 个", len(accounts)), describeDust(holders)))
 		if len(accounts) == 0 {
 			summary.Status = store.DelistSucceeded
 			summary.Result = joinLines(nonEmpty("没有策略持有，无需平仓", describeDust(holders)))
 		}
-		// 汇总行最后写：它存在，说明这一轮的各组合行都已存好。
+		// 汇总行最后写：它按这个下架时间存在，说明这一轮的各组合行都已存好。
 		if err := r.save(ctx, summary); err != nil {
 			return err
 		}
@@ -547,18 +568,7 @@ func (r *run) flattenRound(ctx context.Context, round int, due time.Time) error 
 	if terminal(summary.Status) {
 		return nil
 	}
-	var rows []store.DelistAction
-	for key, step := range r.steps {
-		if key.Round == round && key.Kind == store.DelistKindFlatten && (key.SpaceID != "" || key.LogicalAccountID != "") {
-			rows = append(rows, step)
-		}
-	}
-	sort.Slice(rows, func(i, j int) bool {
-		if rows[i].SpaceID != rows[j].SpaceID {
-			return rows[i].SpaceID < rows[j].SpaceID
-		}
-		return rows[i].LogicalAccountID < rows[j].LogicalAccountID
-	})
+	rows := r.roundRows(round, summary.PlannedDelistAt)
 	for _, row := range rows {
 		if r.stopped {
 			return nil
@@ -657,6 +667,13 @@ func (r *run) launch(ctx context.Context, row store.DelistAction) error {
 		return r.save(ctx, row)
 	case err != nil:
 		return r.failed(ctx, row, "发起平仓失败: "+err.Error())
+	case result.ActionID != "" && result.ActionID != row.OperatorActionID:
+		// Trade 返回的是同组合同标的别的操作（别的记录的平仓还在跑）：不能把它当成自己的，更不能覆盖自己存下的操作号，
+		// 否则这个号之后带着自己的说明重发会被判幂等冲突。按忙处理：稍后再试，不计重试次数。
+		row.Error = "Trade 上同一个组合的同一个标的已有别的平仓在进行，稍后再试"
+		row.NextCheckAt = r.now.Add(pollInterval).UnixMilli()
+		r.wakeAt(r.now.Add(pollInterval))
+		return r.save(ctx, row)
 	}
 	return r.apply(ctx, row, result)
 }
@@ -677,9 +694,6 @@ func (r *run) poll(ctx context.Context, row store.DelistAction) error {
 
 // apply 按 Trade 报告的操作状态更新步骤。
 func (r *run) apply(ctx context.Context, row store.DelistAction, result action.OperatorAction) error {
-	if result.ActionID != "" {
-		row.OperatorActionID = result.ActionID
-	}
 	switch {
 	case result.Unblocked:
 		// Trade 发现标的已被解除禁止而提前结束了清仓：不是失败，也不要重试；下一次推进前查名单会把记录置为已取消。
@@ -740,12 +754,7 @@ func (r *run) afterDelist(ctx context.Context) (action.Outcome, error) {
 		if !ok || terminal(summary.Status) {
 			continue
 		}
-		var rows []store.DelistAction
-		for key, step := range r.steps {
-			if key.Round == round && key.Kind == store.DelistKindFlatten && (key.SpaceID != "" || key.LogicalAccountID != "") {
-				rows = append(rows, step)
-			}
-		}
+		rows := r.roundRows(round, summary.PlannedDelistAt)
 		if err := r.settleSummary(ctx, summary, rows); err != nil {
 			return action.Outcome{}, err
 		}

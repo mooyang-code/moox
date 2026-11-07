@@ -194,3 +194,115 @@ func (i interleavedHandler) OnCancel(ctx context.Context, execution store.Execut
 	i.onCancelDone()
 	return err
 }
+
+// R5：Trade 把同组合同标的运行中的另一条动作返回给后来者：不能把别人的操作号记成自己的，按忙处理，不计重试次数、不发生幂等冲突。
+type adoptTrade struct{ *fakeTrade }
+
+func (a *adoptTrade) FlattenInstrument(ctx context.Context, request action.FlattenRequest) (action.OperatorAction, error) {
+	a.mu.Lock()
+	if op, ok := a.ops[request.ActionID]; ok && op.request.Reason != request.Reason {
+		a.calls["Conflict"]++
+		a.mu.Unlock()
+		return action.OperatorAction{}, errors.New("Trade 返回 CONFLICT：conflict")
+	}
+	for id, op := range a.ops {
+		if id != request.ActionID && op.status == action.OperatorRunning && op.request.SpaceID == request.SpaceID && op.request.LogicalAccountID == request.LogicalAccountID {
+			a.mu.Unlock()
+			return action.OperatorAction{ActionID: id, Status: action.OperatorRunning}, nil
+		}
+	}
+	a.mu.Unlock()
+	return a.fakeTrade.FlattenInstrument(ctx, request)
+}
+
+func TestForeignActionIDIsTreatedAsBusy(t *testing.T) {
+	h := newHarness(t)
+	trade := &adoptTrade{h.trade}
+	h.handler.Trade = trade
+	delistAt := baseTime.Add(20 * time.Hour)
+	h.trade.setHolders(paper("crypto", "la-paper"))
+	h.trade.finalFor = func(action.FlattenRequest) (string, string) { return action.OperatorFailed, "交易所拒绝" }
+	h.addExecution("real", delistAt, "ALL")
+	h.addExecution("drill", delistAt, "PAPER_ONLY")
+	h.step("real", baseTime)
+	h.step("drill", baseTime)
+	realRow := h.steps("real")[flattenKey(RoundFlatten, "crypto", "la-paper")]
+	drillRow := h.steps("drill")[flattenKey(RoundFlatten, "crypto", "la-paper")]
+	require.NotEqual(t, realRow.OperatorActionID, drillRow.OperatorActionID, "不能记成别人的操作号")
+	require.Equal(t, operatorActionID("drill", RoundFlatten, "crypto", "la-paper", delistAt.UnixMilli()), drillRow.OperatorActionID)
+	require.Zero(t, drillRow.Attempts, "忙不计次数")
+	require.Equal(t, store.DelistPending, drillRow.Status)
+	require.Contains(t, drillRow.Error, "已有别的平仓")
+
+	// 真实那条的平仓失败结束之后，演练用自己的号发起，不会发生幂等冲突。
+	now := baseTime
+	for i := 0; i < 6; i++ {
+		now = now.Add(31 * time.Minute)
+		h.step("real", now)
+		h.step("drill", now)
+	}
+	require.Zero(t, trade.callCount("Conflict"))
+	require.Equal(t, drillRow.OperatorActionID, h.steps("drill")[flattenKey(RoundFlatten, "crypto", "la-paper")].OperatorActionID)
+}
+
+// R6：复查之后、核对之前改期到一周后：这两轮都已以只完成一部分结束，按新时间重开，换新的操作号再平，而不是到新时间直接核对失败。
+func TestPostponedAfterRoundsFinishedReopensRounds(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	oldT := baseTime.Add(20 * time.Hour)
+	h.trade.setHolders(live("crypto", "la-1"))
+	h.trade.finalFor = func(action.FlattenRequest) (string, string) { return action.OperatorPartial, "连续未成交" }
+	h.addExecution("e1", oldT, "ALL")
+	h.step("e1", baseTime)
+	h.step("e1", baseTime.Add(31*time.Second))
+	h.step("e1", oldT.Add(-2*time.Hour))
+	h.step("e1", oldT.Add(-2*time.Hour+31*time.Second))
+	h.step("e1", oldT.Add(time.Minute))
+	oldIDs := map[int]string{
+		RoundFlatten: h.steps("e1")[flattenKey(RoundFlatten, "crypto", "la-1")].OperatorActionID,
+		RoundReview:  h.steps("e1")[flattenKey(RoundReview, "crypto", "la-1")].OperatorActionID,
+	}
+	require.Equal(t, store.DelistPartial, h.steps("e1")[summaryKey(RoundFlatten)].Status)
+	require.Equal(t, store.DelistPartial, h.steps("e1")[summaryKey(RoundReview)].Status)
+
+	newT := oldT.Add(7 * 24 * time.Hour)
+	require.NoError(t, h.store.InTx(ctx, func(tx *store.Tx) error {
+		return tx.ReplaceExecutionEvent("e1", "event-2", payloadAt(newT, "ALL"), baseTime.UnixMilli()+1, baseTime.UnixMilli())
+	}))
+	h.trade.finalFor = nil // 之后 Trade 能平掉
+	before := h.trade.flattenCount()
+	h.step("e1", newT.Add(-24*time.Hour))
+	h.step("e1", newT.Add(-24*time.Hour+31*time.Second))
+	require.Equal(t, before+1, h.trade.flattenCount(), "按新时间重开第 1 轮，再平一次")
+	row := h.steps("e1")[flattenKey(RoundFlatten, "crypto", "la-1")]
+	require.Equal(t, store.DelistSucceeded, row.Status)
+	require.NotEqual(t, oldIDs[RoundFlatten], row.OperatorActionID, "重开用新的操作号")
+	require.Equal(t, store.DelistSucceeded, h.steps("e1")[summaryKey(RoundFlatten)].Status)
+	require.Equal(t, newT.UnixMilli(), h.steps("e1")[summaryKey(RoundFlatten)].PlannedDelistAt)
+
+	// 持有者已经平掉：第 2 轮重开后没有持有者，不再下单；核对通过。
+	h.step("e1", newT.Add(-2*time.Hour))
+	require.Equal(t, before+1, h.trade.flattenCount())
+	require.Equal(t, store.DelistSucceeded, h.steps("e1")[summaryKey(RoundReview)].Status)
+	require.Equal(t, store.StatusSucceeded, h.step("e1", newT.Add(11*time.Minute)).Status)
+}
+
+// 已经成功的一轮，改期后不重开。
+func TestPostponedDoesNotReopenSucceededRound(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	oldT := baseTime.Add(20 * time.Hour)
+	h.trade.setHolders(live("crypto", "la-1"))
+	h.addExecution("e1", oldT, "ALL")
+	h.step("e1", baseTime)
+	h.step("e1", baseTime.Add(31*time.Second))
+	require.Equal(t, store.DelistSucceeded, h.steps("e1")[summaryKey(RoundFlatten)].Status)
+	h.trade.setHolders(live("crypto", "la-1")) // 又出现了持仓
+	newT := oldT.Add(72 * time.Hour)
+	require.NoError(t, h.store.InTx(ctx, func(tx *store.Tx) error {
+		return tx.ReplaceExecutionEvent("e1", "event-2", payloadAt(newT, "ALL"), baseTime.UnixMilli()+1, baseTime.UnixMilli())
+	}))
+	before := h.trade.flattenCount()
+	h.step("e1", newT.Add(-24*time.Hour))
+	require.Equal(t, before, h.trade.flattenCount(), "成功的一轮不重开，新持仓留给复查")
+}

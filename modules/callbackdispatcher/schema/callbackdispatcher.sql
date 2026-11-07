@@ -127,6 +127,8 @@ CREATE TABLE IF NOT EXISTS t_delist_actions (
     c_next_check_at INTEGER NOT NULL DEFAULT 0,
     -- 只用于禁止买入那一行：1 表示标的是这条记录自己写进名单的（Trade 返回 created），演练结束或取消时只解除自己写的那一条。
     c_owns_block INTEGER NOT NULL DEFAULT 0,
+    -- 平仓各行和汇总行：这一轮是按哪个下架时间（Unix 毫秒）规划的。改期后这一轮没成功就按新时间重开（换新操作号）。
+    c_planned_delist_at INTEGER NOT NULL DEFAULT 0,
     c_updated_at INTEGER NOT NULL,
     PRIMARY KEY (c_execution_id, c_round, c_kind, c_space_id, c_logical_account_id),
     FOREIGN KEY (c_execution_id)

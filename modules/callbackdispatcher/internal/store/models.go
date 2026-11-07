@@ -98,7 +98,9 @@ type DelistAction struct {
 	NextCheckAt      int64
 	// OwnsBlock 只用于禁止买入那一行：标的是这条记录自己写进名单的。
 	OwnsBlock bool
-	UpdatedAt int64
+	// PlannedDelistAt 是平仓各行和汇总行规划时依据的下架时间（Unix 毫秒）。
+	PlannedDelistAt int64
+	UpdatedAt       int64
 }
 
 // 下架处理的步骤种类与状态。
@@ -191,6 +193,7 @@ type delistRow struct {
 	Error            string `gorm:"column:c_error"`
 	NextCheckAt      int64  `gorm:"column:c_next_check_at"`
 	OwnsBlock        bool   `gorm:"column:c_owns_block"`
+	PlannedDelistAt  int64  `gorm:"column:c_planned_delist_at"`
 	UpdatedAt        int64  `gorm:"column:c_updated_at;autoUpdateTime:false"`
 }
 
