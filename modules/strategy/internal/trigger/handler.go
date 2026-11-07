@@ -184,6 +184,8 @@ type period struct {
 	instance store.Instance
 	runtime  *runtime
 	eventID  string
+	// after 是处理本期时实例已处理到的那一期（零值表示没有）：补记与补处理只看它之后的期。
+	after time.Time
 	// events 是本期各市场 View 的就绪事件（市场 → 事件）：只绑一个任务的实例就是到达的这一条，绑定两个任务的实例是汇合后的两条。
 	events     map[string]*storagepb.ViewDataReady
 	boundary   input.PeriodBoundaries
@@ -284,6 +286,23 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 			return nil
 		}
 		return h.commitSkipped(ctx, p, store.SkipOutOfOrder, fmt.Sprintf("已处理到 %s", input.BarEndLabel(calendar, bar, latest.BarEndTime)))
+	}
+	if len(rt.resolved.Tasks) > 1 {
+		// 更早的期两个 View 都已记下、只是还没求值（例如门禁等待期间都被记下，放行后先重投了较晚的一期）：按 bar 顺序先把它们求值，
+		// 再处理当期。之后再读上一条结果，当期提交的比较交换才不会因为补处理而冲突。
+		after := time.Time{}
+		if hasLatest {
+			after = latest.BarEndTime
+		}
+		if err := h.processPending(ctx, loader, instance, rt, after, boundary.BarEnd); err != nil {
+			return err
+		}
+		if latest, hasLatest, err = h.Store.LatestProcessed(ctx, instance.InstanceID, rt.sessionID); err != nil {
+			return err
+		}
+	}
+	if hasLatest {
+		p.after = latest.BarEndTime
 	}
 	// 汇合：绑定两个因子任务的实例等两个 View 的事件都到齐再求值（见 gather）。
 	events, complete, err := h.gather(ctx, p, payload, market, periodTime)

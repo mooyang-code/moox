@@ -214,3 +214,42 @@ func TestGatherWaitModeKeepsArrivalRecord(t *testing.T) {
 }
 
 func jsonUnmarshal(raw []byte, out any) error { return json.Unmarshal(raw, out) }
+
+// 门禁等待期间第 1、2 期的事件都已记下；放行后先重投第 2 期：第 1 期两个 View 都到齐了，只是还没求值，
+// 必须先按 bar 顺序求值，不能被补记成 market_missing。
+func TestGatherProcessesCompletePendingPeriodsBeforeLaterOne(t *testing.T) {
+	h := newDualHarness(t)
+	h.handler.Gate = func(string) Mode { return ModeWait }
+	for _, n := range []int{1, 2} {
+		for _, view := range []string{spotView, swapView} {
+			message, payload := h.viewEvent(view, n, "complete", "h1")
+			if err := h.handler.Handle(context.Background(), message, payload); !errors.Is(err, ErrModuleNotReady) {
+				t.Fatalf("等待应返回重投：%v", err)
+			}
+		}
+	}
+	h.handler.Gate = nil
+	// 放行后先重投第 2 期。
+	expectAck(t, h.deliverView(spotView, 2))
+	first, second := h.resultAt(1), h.resultAt(2)
+	if first.Status != store.StatusOK || first.SkipReason != "" {
+		t.Fatalf("第 1 期应按顺序求值出目标，而不是补记：%+v", first)
+	}
+	if second.Status != store.StatusOK {
+		t.Fatalf("第 2 期应出目标：%+v", second)
+	}
+	if h.loader.calls != 2 || h.resultCount() != 2 {
+		t.Fatalf("两期各求值一次：calls=%d results=%d", h.loader.calls, h.resultCount())
+	}
+	if !first.BarEndTime.Before(second.BarEndTime) || first.CreatedAt.After(second.CreatedAt) {
+		t.Fatalf("应先提交第 1 期再提交第 2 期：%v %v", first.CreatedAt, second.CreatedAt)
+	}
+	// 其余重投的事件都只是确认。
+	for _, view := range []string{swapView, spotView} {
+		expectAck(t, h.deliverView(view, 1))
+	}
+	expectAck(t, h.deliverView(swapView, 2))
+	if h.resultCount() != 2 || h.loader.calls != 2 {
+		t.Fatalf("重复投递不应重复求值：results=%d calls=%d", h.resultCount(), h.loader.calls)
+	}
+}

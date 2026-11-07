@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"math"
 	"strings"
 	"time"
 )
@@ -58,21 +59,22 @@ func (s *Store) ReadyEventsAt(ctx context.Context, instanceID, sessionID string,
 	return events, nil
 }
 
-// UnprocessedReadyPeriods 返回本会话早于 before、有到达记录但还没有结果的周期（升序），以及每个周期已到达的 View。
-func (s *Store) UnprocessedReadyPeriods(ctx context.Context, instanceID, sessionID string, before time.Time) (map[time.Time][]string, []time.Time, error) {
+// UnprocessedReadyPeriods 返回本会话晚于 after（已处理到的那一期，零值表示没有）、早于 before、有到达记录但还没有结果的周期（升序），
+// 以及每个周期已到达的 View。
+func (s *Store) UnprocessedReadyPeriods(ctx context.Context, instanceID, sessionID string, after, before time.Time) (map[time.Time][]string, []time.Time, error) {
 	var rows []struct {
 		ViewID string `gorm:"column:c_view_id"`
 		BarEnd int64  `gorm:"column:c_bar_end_time"`
 	}
 	if err := s.db.WithContext(ctx).Raw(`
 		SELECT e.c_view_id, e.c_bar_end_time FROM t_strategy_ready_events e
-		WHERE e.c_instance_id = ? AND e.c_session_id = ? AND e.c_bar_end_time < ?
+		WHERE e.c_instance_id = ? AND e.c_session_id = ? AND e.c_bar_end_time > ? AND e.c_bar_end_time < ?
 		AND NOT EXISTS (
 			SELECT 1 FROM t_strategy_results r
 			WHERE r.c_instance_id = e.c_instance_id AND r.c_session_id = e.c_session_id AND r.c_bar_end_time = e.c_bar_end_time
 		)
 		ORDER BY e.c_bar_end_time, e.c_view_id
-	`, instanceID, sessionID, millis(before)).Scan(&rows).Error; err != nil {
+	`, instanceID, sessionID, afterMillis(after), millis(before)).Scan(&rows).Error; err != nil {
 		return nil, nil, err
 	}
 	views := map[time.Time][]string{}
@@ -122,4 +124,12 @@ func (s *Store) DeleteReadyEventsBefore(ctx context.Context, cutoff time.Time) (
 			return total, nil
 		}
 	}
+}
+
+// afterMillis 是“晚于 after”查询的下界；零值时间不限下界。
+func afterMillis(after time.Time) int64 {
+	if after.IsZero() {
+		return math.MinInt64
+	}
+	return millis(after)
 }

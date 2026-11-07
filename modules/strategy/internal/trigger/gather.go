@@ -139,6 +139,32 @@ func (h *Handler) recordArrival(ctx context.Context, instance store.Instance, rt
 	}
 }
 
+// processPending 把早于 before、晚于 after（已处理到的那一期）、两个 View 都已记下但还没有结果的期，按 bar 顺序用已存的原始事件求值。
+func (h *Handler) processPending(ctx context.Context, loader Loader, instance store.Instance, rt *runtime, after, before time.Time) error {
+	arrived, periods, err := h.Store.UnprocessedReadyPeriods(ctx, instance.InstanceID, rt.sessionID, after, before)
+	if err != nil {
+		return err
+	}
+	for _, barEnd := range periods {
+		if len(arrived[barEnd]) < len(rt.resolved.Tasks) {
+			continue
+		}
+		records, err := h.Store.ReadyEventsAt(ctx, instance.InstanceID, rt.sessionID, barEnd)
+		if err != nil || len(records) == 0 {
+			return err
+		}
+		event := &storagepb.ViewDataReady{}
+		if err := proto.Unmarshal(records[0].Payload, event); err != nil {
+			return fmt.Errorf("解析 View %s 的到达记录：%w", records[0].ViewID, err)
+		}
+		message := &eventpb.EventMessage{EventId: records[0].EventID, SpaceId: instance.SpaceID}
+		if err := h.process(ctx, loader, instance, message, event); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // sweepStale 把更早还没有结果、也不会再等到齐的期补记为 skipped(market_missing)（设计 3.2.1 第 4 步）。补记必须在提交
 // 更晚一期的结果之前完成，否则会被当成乱序。只在两种情况下补记：
 //   - 缺的那个 View 本身已经到了更晚的一期，说明它跳过了这一期，不会再来；
@@ -147,7 +173,7 @@ func (h *Handler) recordArrival(ctx context.Context, instance store.Instance, rt
 // 只是“另一个 View 先到了下一期”不补记：两个 View 稳定相差一根以上是正常情况。
 func (h *Handler) sweepStale(ctx context.Context, p *period, complete bool) error {
 	instanceID, sessionID := p.instance.InstanceID, p.runtime.sessionID
-	arrived, periods, err := h.Store.UnprocessedReadyPeriods(ctx, instanceID, sessionID, p.boundary.BarEnd)
+	arrived, periods, err := h.Store.UnprocessedReadyPeriods(ctx, instanceID, sessionID, p.after, p.boundary.BarEnd)
 	if err != nil || len(periods) == 0 {
 		return err
 	}
@@ -162,7 +188,7 @@ func (h *Handler) sweepStale(ctx context.Context, p *period, complete bool) erro
 			have[viewID] = true
 		}
 		var missing []string
-		stale := complete
+		moved := false
 		for _, market := range resolved.Markets() {
 			viewID := resolved.Tasks[market].ViewID
 			if have[viewID] {
@@ -170,10 +196,11 @@ func (h *Handler) sweepStale(ctx context.Context, p *period, complete bool) erro
 			}
 			missing = append(missing, market)
 			if latest[viewID].After(barEnd) {
-				stale = true
+				moved = true
 			}
 		}
-		if !stale {
+		// 两个 View 都已记下的期不是缺数据，只是还没求值：不补记，由 processPending 按 bar 顺序求值。
+		if len(missing) == 0 || !(complete || moved) {
 			continue
 		}
 		boundary, err := input.FromBarEnd(resolved.Calendar, resolved.Bar, barEnd)

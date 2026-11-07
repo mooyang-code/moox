@@ -106,7 +106,7 @@ ON t_strategy_results (c_instance_id, c_session_id, c_bar_end_time)
 WHERE c_next_params_json <> '' AND c_params_delivered_at IS NULL AND c_params_error = '';
 
 -- 汇合求值用的到达记录：绑定两个因子任务的实例要等两个 View 的就绪事件都到齐才求值，每个 View 的原始 ViewDataReady 事件
--- 按字节保存（就绪判断要用整条事件）；(实例, 会话, View, bar_end) 唯一，重复投递幂等。c_ctime 是到达时间，按天数清理
+-- 按字节保存（就绪判断要用整条事件）；(实例, 会话, bar_end, View) 唯一，重复投递幂等。c_ctime 是到达时间，按天数清理
 CREATE TABLE IF NOT EXISTS t_strategy_ready_events (
     c_instance_id TEXT NOT NULL,
     c_session_id TEXT NOT NULL,
@@ -115,7 +115,7 @@ CREATE TABLE IF NOT EXISTS t_strategy_ready_events (
     c_event_id TEXT NOT NULL,
     c_event_bytes BLOB NOT NULL,
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (c_instance_id, c_session_id, c_view_id, c_bar_end_time),
+    PRIMARY KEY (c_instance_id, c_session_id, c_bar_end_time, c_view_id),
     FOREIGN KEY (c_session_id) REFERENCES t_strategy_sessions (c_session_id)
 );
 
