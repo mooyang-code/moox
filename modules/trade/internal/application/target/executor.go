@@ -105,6 +105,7 @@ const (
 	positionReflectWindow     = 10 * time.Minute
 	reasonPositionUnreflected = "持仓未反映已成交子单"
 	reasonTargetReversal      = "同一目标内来回下单"
+	reasonHourlyCapDeferred   = "单币每小时上限已用完，顺延到下一个整点继续"
 )
 
 type Result struct {
@@ -482,6 +483,9 @@ func (e *Executor) Converge(
 	var placedIDs []string
 	deferred := false
 	capDeferred := false
+	// deferredItems 是被每小时上限顺延的标的：写进 blocked_targets 让界面看得到原因，但不算阻塞——
+	// 全是顺延时目标定为 CONVERGED（计划 4.4），不触发“目标持续阻塞”告警；有真实阻塞时真实原因排在前面。
+	var deferredItems []store.BlockedTarget
 	for _, stage := range []int{stageReduce, stageSwapAdd, stageSpotBuy} {
 		if len(placedIDs) > 0 || deferred {
 			break
@@ -571,10 +575,8 @@ func (e *Executor) Converge(
 				// 每小时额度用完：这个标的在本阶段视为已处理，不卡后面的阶段，留到下一个整点；
 				// 原因写进目标的 blocked_targets，界面看得到为什么没下单。
 				capDeferred = true
-				_, next := hourWindow(e.now())
-				blocked = append(blocked, store.BlockedTarget{
-					InstrumentID: instrumentID, Quantity: action.delta.String(),
-					Reason: fmt.Sprintf("单币每小时上限已用完，顺延到 %s（UTC）继续", next.UTC().Format("15:04")),
+				deferredItems = append(deferredItems, store.BlockedTarget{
+					InstrumentID: instrumentID, Quantity: action.delta.String(), Reason: reasonHourlyCapDeferred,
 				})
 				continue
 			}
@@ -603,7 +605,7 @@ func (e *Executor) Converge(
 		if batchErr != nil && len(results) == 0 {
 			return Result{}, batchErr
 		}
-		target.BlockedTargets = blocked
+		target.BlockedTargets = listedBlocked(blocked, deferredItems)
 		target.LastError = ""
 		if err := e.updateTarget(ctx, &target, StatusConverging); err != nil {
 			return Result{}, errors.Join(batchErr, err)
@@ -611,7 +613,7 @@ func (e *Executor) Converge(
 		return Result{Status: StatusConverging, Action: "place"}, batchErr
 	}
 	if deferred {
-		target.BlockedTargets = blocked
+		target.BlockedTargets = listedBlocked(blocked, deferredItems)
 		if err := e.updateTarget(ctx, &target, StatusConverging); err != nil {
 			return Result{}, err
 		}
@@ -621,13 +623,13 @@ func (e *Executor) Converge(
 	if collecting, err := e.walletCollect(ctx, spaceID, target, members); err != nil {
 		return Result{}, err
 	} else if collecting {
-		target.BlockedTargets = blocked
+		target.BlockedTargets = listedBlocked(blocked, deferredItems)
 		if err := e.updateTarget(ctx, &target, StatusConverging); err != nil {
 			return Result{}, err
 		}
 		return Result{Status: StatusConverging, Action: "collect", RetryAfter: transferPollInterval}, nil
 	}
-	target.BlockedTargets = blocked
+	target.BlockedTargets = listedBlocked(blocked, deferredItems)
 	target.LastError = ""
 	// 只剩挂单（或阻塞加挂单）时，定时器不再扫这个目标：挂单成交会唤醒目标，下一份目标到达时在阶段 1 撤掉旧挂单，
 	// 一直没有成交也没有新目标则到有效期末被唤醒，走过期分支撤掉本目标的挂单，所以都要设唤醒时间。
@@ -2001,4 +2003,12 @@ func (e *Executor) waitingOnChildren(
 		}
 	}
 	return waiting, nil
+}
+
+// listedBlocked 返回写进目标 blocked_targets 的列表：真实阻塞在前（监控关注项只取第一条），顺延的在后。
+func listedBlocked(blocked, deferred []store.BlockedTarget) []store.BlockedTarget {
+	if len(deferred) == 0 {
+		return blocked
+	}
+	return append(append(make([]store.BlockedTarget, 0, len(blocked)+len(deferred)), blocked...), deferred...)
 }

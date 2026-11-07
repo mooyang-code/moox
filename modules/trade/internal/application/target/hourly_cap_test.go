@@ -73,14 +73,15 @@ func TestHourlyCapExhaustedDefersToNextHour(t *testing.T) {
 	f.submittedChild(t, "used", "FILLED", "10", "10", "100", f.now.Truncate(time.Hour).Add(time.Second))
 	result := f.converge(t)
 	require.Empty(t, f.orders.specs)
-	require.Equal(t, StatusBlocked, result.Status, "顺延的标的和原因写进 blocked_targets，界面看得到")
+	require.Equal(t, StatusConverged, result.Status, "全是顺延：按计划 4.4 定为已收敛，不是阻塞")
 	require.Greater(t, result.RetryAfter, time.Duration(0))
 	require.LessOrEqual(t, result.RetryAfter, time.Hour+time.Second)
 	target, err := f.store.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
 	require.Len(t, target.BlockedTargets, 1)
 	require.Equal(t, "BTC-USDT-SWAP", target.BlockedTargets[0].InstrumentID)
-	require.Contains(t, target.BlockedTargets[0].Reason, "每小时上限")
+	require.Equal(t, reasonHourlyCapDeferred, target.BlockedTargets[0].Reason, "原因写进 blocked_targets 让界面看得到，文案不带具体时刻")
+	require.NotContains(t, target.BlockedTargets[0].Reason, ":")
 	require.Equal(t, nextHourRetryDelay(f.now).Round(time.Minute), result.RetryAfter.Round(time.Minute))
 }
 
@@ -107,7 +108,7 @@ func TestHourlyCapRemainderBelowMinimumIsDeferredNotBlocked(t *testing.T) {
 	f.submittedChild(t, "used", "FILLED", "9.7", "9.7", "100", f.now.Truncate(time.Hour).Add(time.Second))
 	result := f.converge(t)
 	require.Empty(t, f.orders.specs)
-	require.Equal(t, StatusBlocked, result.Status, "剩余额度 30 低于最小下单额 50：顺延，原因写进 blocked_targets")
+	require.Equal(t, StatusConverged, result.Status, "剩余额度 30 低于最小下单额 50：顺延，不算阻塞")
 	require.Greater(t, result.RetryAfter, time.Duration(0))
 }
 
@@ -173,4 +174,26 @@ func TestHourlyCapStillCountsReductionNotional(t *testing.T) {
 	f.converge(t)
 	require.Len(t, f.orders.specs, 1)
 	require.Equal(t, "6", f.orders.specs[0].Quantity.String(), "额度 1000 − 已提交 400 = 600")
+}
+
+// 有真实阻塞又有顺延：目标定为 BLOCKED，真实原因排在前面（监控关注项只取第一条），顺延的在后。
+func TestHourlyCapDeferralAfterARealBlockKeepsTheRealReasonFirst(t *testing.T) {
+	f := newMixedExecutorFixture(t)
+	f.setOrderSettings(t, `{"order_mode":"MARKET","min_notional_spot":"0","min_notional_swap":"0","hourly_cap_swap":{"*":"1000"}}`)
+	f.now = time.Now().UTC()
+	// BTC 现货买单金额低于交易所最小名义金额，下不了单（真实阻塞）；BTC 合约额度用满（顺延）。
+	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_trade_instruments SET c_min_notional = '100000' WHERE c_instrument_id = 'BTC-USDT-SPOT'").Error)
+	f.target(t, []store.InstrumentTarget{
+		{InstrumentID: "BTC-USDT-SWAP", Quantity: "100"},
+		{InstrumentID: "BTC-USDT-SPOT", Quantity: "1"},
+	})
+	f.submittedChild(t, "used", "FILLED", "10", "10", "100", f.now.Truncate(time.Hour).Add(time.Second))
+	result := f.converge(t)
+	require.Equal(t, StatusBlocked, result.Status)
+	require.Greater(t, result.RetryAfter, time.Duration(0), "顺延的唤醒时间照常")
+	target, err := f.store.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Len(t, target.BlockedTargets, 2)
+	require.Equal(t, "BTC-USDT-SPOT", target.BlockedTargets[0].InstrumentID, "真实阻塞排前面")
+	require.Equal(t, reasonHourlyCapDeferred, target.BlockedTargets[1].Reason)
 }
