@@ -15,6 +15,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/application/accountsync"
 	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
 	equityapp "github.com/mooyang-code/moox/modules/trade/internal/application/equity"
+	"github.com/mooyang-code/moox/modules/trade/internal/application/fundmaint"
 	logicalapp "github.com/mooyang-code/moox/modules/trade/internal/application/logicalaccount"
 	operatorapp "github.com/mooyang-code/moox/modules/trade/internal/application/operator"
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
@@ -197,6 +198,13 @@ func initialize(
 		Store: tradeStore, Syncer: accountSyncer{service: syncService},
 		Prices: targetapp.ExchangePriceSource{Adapters: manager},
 	}
+	// 资金维护（BNB 抵扣与补买、小额兑 BNB、稳定币调平）：每小时一次，资金设置变更后马上一次。
+	fundService := &fundmaint.Service{Store: tradeStore, Adapters: manager, Orders: orderService}
+	fundWorker := &traderuntime.FundWorker{Maintainer: fundService, Interval: time.Hour, Gate: lifeGate.Open}
+	logicalAccounts.OnFundSettingsChanged = func(spaceID, logicalAccountID string) {
+		fundService.Invalidate(context.Background(), spaceID, logicalAccountID)
+		fundWorker.Wake(spaceID, logicalAccountID)
+	}
 	operatorService := &operatorapp.Service{
 		Exchanges: registry,
 		Store:     tradeStore, Orders: orderService,
@@ -301,6 +309,7 @@ func initialize(
 	runWorker(operatorWorker.Run)
 	runWorker(paperMatcherWorker.Run)
 	runWorker(equitySampler.Run)
+	runWorker(fundWorker.Run)
 	runWorker((&traderuntime.AttentionWorker{Store: tradeStore, Executor: targetExecutor}).Run)
 	if eventBus != nil {
 		client := eventBus

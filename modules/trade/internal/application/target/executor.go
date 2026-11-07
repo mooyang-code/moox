@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math/big"
 	"sort"
 	"strings"
 	"sync"
@@ -1575,20 +1574,7 @@ func mustBaseStep(instrument store.InstrumentRecord) shared.Decimal {
 }
 
 func floorToStep(value, step shared.Decimal) shared.Decimal {
-	if value.Cmp(shared.Zero()) <= 0 || step.Cmp(shared.Zero()) <= 0 {
-		return shared.Zero()
-	}
-	units := value.Div(step)
-	ratio := new(big.Rat)
-	if _, ok := ratio.SetString(units.String()); !ok {
-		return shared.Zero()
-	}
-	integer := new(big.Int).Quo(ratio.Num(), ratio.Denom())
-	raw, err := shared.ParseDecimal(integer.String())
-	if err != nil {
-		return shared.Zero()
-	}
-	return raw.Mul(step)
+	return shared.FloorToStep(value, step)
 }
 
 func sameSign(left, right shared.Decimal) bool {

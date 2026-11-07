@@ -283,3 +283,25 @@ func TestRestingEligibleExcludesOpeningClosingAndReversal(t *testing.T) {
 	action.hasResting = true
 	require.False(t, restingEligible(action, target("10"), members("5")), "已有挂单")
 }
+
+// 系统单（BNB 补买、稳定币调平）不是外部单也不是人工单：不会暂停组合，也不会被当成本目标的子单。
+func TestSystemOrdersDoNotPauseTheLogicalAccountOrBlockTheTarget(t *testing.T) {
+	f := swapPolicyFixture(t, restingSettings)
+	f.now = time.Now().UTC()
+	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "10"}})
+	f.order(t, store.OrderRecord{
+		SpaceID: "space-1", OrderID: "system-1", TradingAccountID: "account-a", LogicalAccountID: "logical-1",
+		ClientOrderID: "system-1", Exchange: "BINANCE", MarketType: "SWAP", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
+		OrderType: "LIMIT", TimeInForce: "GTC", Side: "BUY", Quantity: "1", LimitPrice: strPtr("90"), ReferencePrice: "100",
+		OwnerType: "SYSTEM", OwnerID: "bnb-reserve", State: "OPEN", SubmittedAt: f.now.UnixMilli(), Version: 1,
+	})
+	result, err := f.restingExecutor().Converge(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Equal(t, StatusConverging, result.Status)
+	require.Equal(t, "place", result.Action)
+	require.Len(t, f.orders.specs, 1, "系统单不影响目标下单")
+	require.Empty(t, f.orders.canceled, "也不会被当成本目标的挂单撤掉")
+	logical, err := f.store.GetLogicalAccount(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Equal(t, "ACTIVE", logical.AutomationState)
+}
