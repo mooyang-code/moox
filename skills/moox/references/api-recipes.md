@@ -49,7 +49,7 @@
 # 策略：校验 DSL、创建定义与实例（实例新建后停用，确认无误再启用）
 ./bin/moox-cli strategy validate --dsl-file s.yaml --factor-task spot=<任务>
 ./bin/moox-cli strategy create --dsl-file s.yaml
-./bin/moox-cli strategy instance create --strategy-id <ID> --factor-task spot=<任务>   # 混合市场再加 --factor-task swap=<任务>
+./bin/moox-cli strategy instance create --strategy-id <ID> --factor-task spot=<任务>   # 混合市场再加 --factor-task swap=<任务>；统一数据集上的任务写 --factor-task multi=<任务>
 ./bin/moox-cli strategy instance enable --instance-id <ID>        # 先预览，确认后加 --yes
 
 # 破坏性：先预览，给用户确认后再加 --yes

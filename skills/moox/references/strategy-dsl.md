@@ -45,6 +45,7 @@ market:
 - 同一个币的现货和永续是两个独立的目标，不互相抵消；空头一律在永续。
 - 上期已持有正权重目标的币，本期沿用它所在的市场（避免永续偶尔缺数时来回倒仓），直到权重归零。
 - 一个市场的因子本期被跳过时，这个市场的币本期不可用：已持仓的保持不动，新开仓用另一个市场。
+- **两种输入方式**：同样的五种模式，因子数据可以是现货、永续各一个任务（`--factor-task spot=… --factor-task swap=…`），也可以是**统一数据集上的一个任务**（同一个数据集里放现货、永续两条序列，用 `series_tag` 区分；一个任务一个 View，`--factor-task multi=…`）。统一数据集上的任务必须显式写 `market`（没有可当默认值的市场），五种模式都能用，只绑这一个任务，不支持 `factor_params`、不能进策略池、不支持闭环回放（研究回放可以）；建实例时要把任务登记为 `multi`。两种方式的目标一致：现货、永续两条序列并存不算歧义，永续上失败的币现货照常，永续的因子被跳过时永续不可用、已持仓的永续保持不动。
 - tranche 只能用在单市场模式（`spot/spot`、`swap/swap`）；纯现货的 tranche 不能做空且必须 `sizing.method: weight`；双市场模式（`both`、`spot/swap`）不支持 tranche。绑定两个任务的策略不支持 `factor_params`。
 - 行为变化：现货权重之和超过 1、总敞口超过 `leverage` 时，现在按比例缩小并在摘要注明，不再整期跳过。
 
@@ -236,7 +237,7 @@ stop:
    ```
 
 2. **创建定义**：`moox-cli strategy create --dsl-file s.yaml`；已有定义用 `strategy update --strategy-id <ID> --dsl-file s.yaml` 修改；删除用 `strategy delete`（默认只预览）。创建后用 `strategy show --strategy-id <ID>` 读回 DSL 核对。
-3. **创建实例**：`strategy instance create --strategy-id <ID> --factor-task <市场>=<因子任务>`（可重复：市场模式含现货和永续时 `spot=…` 与 `swap=…` 两个都要给，股票策略 `equity=…`；默认停用；加 `--enable` 创建即启用）。市场必须是任务源数据集真实的市场。因子任务只能选本空间里运行中、还没被别的实例关联的任务，**创建后不能改，实例也不能删，只能启用或停止**；停用期间可以用 `strategy instance update` 改绑策略定义与账户。
+3. **创建实例**：`strategy instance create --strategy-id <ID> --factor-task <市场>=<因子任务>`（可重复：市场模式含现货和永续时 `spot=…` 与 `swap=…` 两个都要给，或统一数据集上的一个任务 `multi=…`；股票策略 `equity=…`；默认停用；加 `--enable` 创建即启用）。市场必须是任务源数据集真实的市场。因子任务只能选本空间里运行中、还没被别的实例关联的任务，**创建后不能改，实例也不能删，只能启用或停止**；停用期间可以用 `strategy instance update` 改绑策略定义与账户。
    不挂账户的是观察实例：只计算目标权重、不投递，适合先验证。
 4. **启用**：`strategy instance enable --instance-id <ID>`（`disable` 停用；两者不带 `--yes` 只预览，确认后加 `--yes`）。启用时才解析列、成员契约和市场类型，列不存在或现货做空等问题在这一步被拒绝；
    任务刚建、结果 View 还没数据时可能因“还没有数据（覆盖范围未知）”被拒，等任务算出几个周期后再启用。
