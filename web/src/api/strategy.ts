@@ -90,11 +90,16 @@ function normalizeReplay(value: any): Replay {
     strategy_id: value?.strategy_id ?? "",
     dsl_yaml: value?.dsl_yaml ?? "",
     space_id: value?.space_id ?? "",
-    factor_task_id: value?.factor_task_id ?? "",
-    view_id: value?.view_id ?? "",
+    tasks: Object.fromEntries(
+      Object.entries(value?.tasks ?? {}).map(([market, task]: [string, any]) => [
+        market,
+        { factor_task_id: task?.factor_task_id ?? "", view_id: task?.view_id ?? "" }
+      ])
+    ),
     start_time: value?.start_time ?? "",
     end_time: value?.end_time ?? "",
-    fee_bps: Number(value?.fee_bps ?? 0),
+    spot_fee_bps: Number(value?.spot_fee_bps ?? 0),
+    swap_fee_bps: Number(value?.swap_fee_bps ?? 0),
     status: value?.status ?? "",
     progress_time: value?.progress_time ?? "",
     metrics_json: value?.metrics_json || "{}",
@@ -119,6 +124,8 @@ function normalizeReplayBar(value: any): ReplayBar {
     equity: Number(value?.equity ?? 0),
     turnover: Number(value?.turnover ?? 0),
     fee: Number(value?.fee ?? 0),
+    spot_value: Number(value?.spot_value ?? 0),
+    swap_value: Number(value?.swap_value ?? 0),
     holdings: Number(value?.holdings ?? 0),
     frozen: Number(value?.frozen ?? 0),
     skip_reason: value?.skip_reason ?? "",

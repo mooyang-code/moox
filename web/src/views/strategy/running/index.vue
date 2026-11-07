@@ -118,7 +118,7 @@
 </template>
 
 <script setup lang="ts">
-import { singleTaskId, tasksText } from "@/views/strategy/market-mode";
+import { tasksText } from "@/views/strategy/market-mode";
 import { listLogicalAccounts } from "@/api/trade";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
@@ -225,7 +225,7 @@ function openResults(instanceId: string) {
   router.push(resultsLink(instanceId));
 }
 function goReplay(instance: StrategyInstance) {
-  router.push(replayLink({ instanceId: instance.instance_id, factorTaskId: singleTaskId(instance.factor_tasks) }));
+  router.push(replayLink({ instanceId: instance.instance_id, factorTasks: instance.factor_tasks }));
 }
 /** 本 Tab 是否是当前页面：离开工作台或切到其它 Tab 后不再响应 URL。 */
 function isCurrentTab() {

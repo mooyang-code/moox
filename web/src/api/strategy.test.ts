@@ -149,7 +149,13 @@ describe("strategy API", () => {
 
   it("starts a replay with the requested window and fee", async () => {
     callControl.mockResolvedValueOnce({
-      replay: { replay_id: "p1", status: "pending", fee_bps: 10, dsl_hash: "sha256:x" },
+      replay: {
+        replay_id: "p1",
+        status: "pending",
+        spot_fee_bps: 10,
+        tasks: { spot: { factor_task_id: "ftask_a", view_id: "view_factor_a" } },
+        dsl_hash: "sha256:x"
+      },
       bar_count: 30,
       first_bar_end: "2026-09-01T01:00:00Z",
       last_bar_end: "2026-09-02T06:00:00Z"
@@ -157,13 +163,20 @@ describe("strategy API", () => {
     await expect(
       startReplay({
         instance_id: "i-1",
-        factor_task_id: "ftask_a",
+        factor_tasks: { spot: "ftask_a" },
         start_time: "2026-09-01T00:00:00Z",
         end_time: "2026-09-30T00:00:00Z",
-        fee_bps: 10
+        spot_fee_bps: 10,
+        swap_fee_bps: 0
       })
     ).resolves.toMatchObject({
-      replay: { replay_id: "p1", status: "pending", fee_bps: 10, dsl_hash: "sha256:x" },
+      replay: {
+        replay_id: "p1",
+        status: "pending",
+        spot_fee_bps: 10,
+        tasks: { spot: { factor_task_id: "ftask_a" } },
+        dsl_hash: "sha256:x"
+      },
       bar_count: 30,
       last_bar_end: "2026-09-02T06:00:00Z"
     });

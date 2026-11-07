@@ -61,10 +61,7 @@
               </a-space>
               <a-space :size="16">
                 <a-link @click="router.push(detailLink(current.instance_id))">实例详情与启停</a-link>
-                <a-link
-                  @click="
-                    router.push(replayLink({ instanceId: current.instance_id, factorTaskId: singleTaskId(current.factor_tasks) }))
-                  "
+                <a-link @click="router.push(replayLink({ instanceId: current.instance_id, factorTasks: current.factor_tasks }))"
                   >按会话回放</a-link
                 >
               </a-space>
@@ -93,7 +90,7 @@
 </template>
 
 <script setup lang="ts">
-import { singleTaskId, tasksText } from "@/views/strategy/market-mode";
+import { tasksText } from "@/views/strategy/market-mode";
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { StaleSpaceRequestError } from "@/api/admin/stale-space";

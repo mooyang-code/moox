@@ -39,17 +39,34 @@ export function instanceTasks(tasks: Record<string, string> | undefined): { mark
   return MARKET_ORDER.filter(market => tasks?.[market]).map(market => ({ market, taskId: tasks![market] }));
 }
 
-/** 只绑一个任务的实例的因子任务 ID（回放等只读一个 View 的地方使用）；绑了多个返回空串。 */
-export function singleTaskId(tasks: Record<string, string> | undefined): string {
-  const items = instanceTasks(tasks);
-  return items.length === 1 ? items[0].taskId : "";
-}
-
 /** 因子任务的展示文本：单任务只写 ID，多任务写成 现货 xxx、永续 yyy。 */
 export function tasksText(tasks: Record<string, string> | undefined): string {
   const items = instanceTasks(tasks);
   if (items.length <= 1) return items[0]?.taskId ?? "";
   return items.map(item => `${marketLabel(item.market)} ${item.taskId}`).join("、");
+}
+
+/** 因子任务写进 URL 的格式：spot=ftask_a,swap=ftask_b（按现货、永续、股票先后）；没有任务返回空串。 */
+export function formatFactorTasks(tasks: Record<string, string> | undefined): string {
+  return instanceTasks(tasks)
+    .map(item => `${item.market}=${item.taskId}`)
+    .join(",");
+}
+
+/** 解析 URL 里的因子任务；只认现货、永续、股票三个市场，其余与格式不对的项忽略。 */
+export function parseFactorTasks(raw: string): Record<string, string> {
+  const tasks: Record<string, string> = {};
+  for (const part of raw.split(",")) {
+    const [market, taskId] = part.split("=").map(item => item.trim());
+    if (taskId && (MARKET_ORDER as readonly string[]).includes(market)) tasks[market] = taskId;
+  }
+  return tasks;
+}
+
+/** 持仓键（标的|市场）的展示文本：写成 BTC-USDT（永续）；没有市场后缀的键原样返回。 */
+export function positionLabel(key: string): string {
+  const at = key.lastIndexOf("|");
+  return at < 0 ? key : `${key.slice(0, at)}（${marketLabel(key.slice(at + 1))}）`;
 }
 
 /** 目标在表格里的市场标记（现货、永续、股票）；旧数据没有市场时为空。 */

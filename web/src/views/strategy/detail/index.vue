@@ -112,7 +112,7 @@
 </template>
 
 <script setup lang="ts">
-import { singleTaskId, tasksText } from "@/views/strategy/market-mode";
+import { tasksText } from "@/views/strategy/market-mode";
 import { useLogicalAccount } from "@/views/strategy/components/use-logical-account";
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
@@ -198,7 +198,7 @@ function handleControlFailed() {
 }
 function openReplay() {
   if (store.instance)
-    router.push(replayLink({ instanceId: store.instance.instance_id, factorTaskId: singleTaskId(store.instance.factor_tasks) }));
+    router.push(replayLink({ instanceId: store.instance.instance_id, factorTasks: store.instance.factor_tasks }));
 }
 onMounted(start);
 watch(

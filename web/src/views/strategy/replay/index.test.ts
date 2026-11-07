@@ -72,11 +72,11 @@ function replay(id: string, status: string, metrics = "{}", extra: Record<string
     strategy_id: "s1",
     dsl_yaml: "name: demo",
     space_id: "crypto",
-    view_id: "view_factor_a",
-    factor_task_id: "ftask_a",
+    tasks: { spot: { factor_task_id: "ftask_a", view_id: "view_factor_a" } },
     start_time: "2026-09-01T00:00:00Z",
     end_time: "2026-09-02T00:00:00Z",
-    fee_bps: 10,
+    spot_fee_bps: 10,
+    swap_fee_bps: 0,
     status,
     progress_time: "",
     metrics_json: metrics,
@@ -344,7 +344,7 @@ describe("strategy replay page", () => {
     api.listReplays.mockImplementationOnce(() => slow.promise);
     await vi.advanceTimersByTimeAsync(5000);
     api.listReplays.mockResolvedValueOnce({
-      items: [replay("r21", "done", "{}", { factor_task_id: "ftask_page2" })],
+      items: [replay("r21", "done", "{}", { tasks: { spot: { factor_task_id: "ftask_page2", view_id: "view_factor_a" } } })],
       page: { total: 30 }
     });
     (wrapper.vm as any).changeReplayPage(2);
@@ -410,15 +410,88 @@ describe("strategy replay page", () => {
     const vm = wrapper.vm as any;
     vm.form.source = "dsl";
     vm.form.dsl_yaml = "name: draft\n";
-    vm.form.factor_task_id = "ftask_a";
+    vm.form.single_market = "spot";
+    vm.form.tasks = { spot: "ftask_a" };
     await nextTick();
     const startButton = wrapper.findAll("button").find(button => button.text() === "开始回放");
     await startButton!.trigger("click");
     await flushPromises();
     const request = api.startReplay.mock.calls[0][0];
-    expect(request).toMatchObject({ dsl_yaml: "name: draft\n", factor_task_id: "ftask_a" });
+    expect(request).toMatchObject({ dsl_yaml: "name: draft\n", factor_tasks: { spot: "ftask_a" } });
     expect(request.strategy_id).toBeUndefined();
     expect(request.instance_id).toBeUndefined();
+  });
+
+  it("starts a mixed-market replay with one task per market and both fees", async () => {
+    api.listReplays.mockResolvedValue({ items: [], page: { total: 0 } });
+    api.startReplay.mockResolvedValue({ replay: replay("r6", "pending"), bar_count: 3, first_bar_end: "", last_bar_end: "" });
+    api.getReplay.mockResolvedValue(replay("r6", "pending"));
+    const wrapper = mountPage();
+    await flushPromises();
+    const vm = wrapper.vm as any;
+    vm.form.source = "dsl";
+    vm.form.dsl_yaml = "name: mix\nmarket: {select: both, prefer: swap}\n";
+    vm.form.tasks = { spot: "ftask_a", swap: "ftask_b", equity: "stale" };
+    vm.form.spot_fee_bps = 10;
+    vm.form.swap_fee_bps = 5;
+    await nextTick();
+    const startButton = wrapper.findAll("button").find(button => button.text() === "开始回放");
+    await startButton!.trigger("click");
+    await flushPromises();
+    expect(api.startReplay.mock.calls[0][0]).toMatchObject({
+      factor_tasks: { spot: "ftask_a", swap: "ftask_b" },
+      spot_fee_bps: 10,
+      swap_fee_bps: 5
+    });
+    expect(Object.keys(api.startReplay.mock.calls[0][0].factor_tasks)).toEqual(["spot", "swap"]);
+  });
+
+  it("rejects a replay that misses the task of a market the strategy uses", async () => {
+    api.listReplays.mockResolvedValue({ items: [], page: { total: 0 } });
+    const wrapper = mountPage();
+    await flushPromises();
+    const vm = wrapper.vm as any;
+    vm.form.source = "dsl";
+    vm.form.dsl_yaml = "name: mix\nmarket: {select: both, prefer: swap}\n";
+    vm.form.tasks = { spot: "ftask_a" };
+    await nextTick();
+    const startButton = wrapper.findAll("button").find(button => button.text() === "开始回放");
+    await startButton!.trigger("click");
+    await flushPromises();
+    expect(api.startReplay).not.toHaveBeenCalled();
+    expect(wrapper.text()).toContain("请为策略用到的每个市场选择因子任务");
+  });
+
+  it("shows the per-market values, the tasks, the fees and the no-funding-fee warning for a swap replay", async () => {
+    const mixed = replay("r7", "done", '{"bars":1,"ok_bars":1,"limitations":[]}', {
+      tasks: {
+        spot: { factor_task_id: "ftask_a", view_id: "view_factor_a" },
+        swap: { factor_task_id: "ftask_b", view_id: "view_factor_b" }
+      },
+      swap_fee_bps: 5
+    });
+    api.listReplays.mockResolvedValue({ items: [mixed], page: { total: 1 } });
+    api.getReplay.mockResolvedValue(mixed);
+    api.listReplayBars.mockResolvedValue({
+      items: [
+        {
+          ...bar('{"ledger":{"traded":0.5,"fee":0.001}}'),
+          positions_json:
+            '{"cash":0.5,"positions":{"A|spot":{"quantity":1,"last_price":10,"value":10},"B|swap":{"quantity":-5,"last_price":20,"value":-100}}}',
+          spot_value: 10,
+          swap_value: -100
+        }
+      ],
+      page: { total: 1 }
+    });
+    const wrapper = mountPage();
+    await flushPromises();
+    const text = wrapper.text();
+    expect(text).toContain("现货 ftask_a、永续 ftask_b");
+    expect(text).toContain("现货 10 bps、永续 5 bps");
+    expect(text).toContain("模拟曲线未计资金费与强平");
+    expect(text).toContain("永续净名义价值");
+    expect(text).toContain("现货市值 10.0000 · 永续净名义价值 -100.0000");
   });
 
   it("shows the bar detail with the buy scale and describes the curve in text", async () => {
@@ -491,14 +564,17 @@ describe("strategy replay page", () => {
     api.listReplays.mockImplementationOnce(() => slow.promise);
     await wrapper.find('[aria-label="刷新回放"]').trigger("click");
     api.listReplays.mockResolvedValueOnce({
-      items: [replay("r1", "running", "{}", { factor_task_id: "ftask_newer" })],
+      items: [replay("r1", "running", "{}", { tasks: { spot: { factor_task_id: "ftask_newer", view_id: "view_factor_a" } } })],
       page: { total: 1 }
     });
     await pollOnce();
     expect(listText(wrapper)).toContain("ftask_newer");
     // 手动加载仍在进行：加载态只跟踪手动加载，轮询应用了更新的结果也不结束它。
     expect(wrapper.find('[aria-label="刷新回放"]').attributes("loading")).toBe("true");
-    slow.resolve({ items: [replay("r1", "running", "{}", { factor_task_id: "ftask_older" })], page: { total: 1 } });
+    slow.resolve({
+      items: [replay("r1", "running", "{}", { tasks: { spot: { factor_task_id: "ftask_older", view_id: "view_factor_a" } } })],
+      page: { total: 1 }
+    });
     await flushPromises();
     expect(listText(wrapper)).toContain("ftask_newer");
     expect(wrapper.find('[aria-label="刷新回放"]').attributes("loading")).not.toBe("true");
@@ -602,8 +678,13 @@ describe("strategy replay page", () => {
     await flushPromises();
     expect((wrapper.vm as any).pollFailures).toBe(0);
     expect((wrapper.vm as any).awaitingMetrics).toBeNull();
-    nextList.resolve({ items: [replay("s1", "done", "{}", { factor_task_id: "ftask_stock" })], page: { total: 1 } });
-    api.getReplay.mockResolvedValue(replay("s1", "done", "{}", { factor_task_id: "ftask_stock" }));
+    nextList.resolve({
+      items: [replay("s1", "done", "{}", { tasks: { spot: { factor_task_id: "ftask_stock", view_id: "view_factor_a" } } })],
+      page: { total: 1 }
+    });
+    api.getReplay.mockResolvedValue(
+      replay("s1", "done", "{}", { tasks: { spot: { factor_task_id: "ftask_stock", view_id: "view_factor_a" } } })
+    );
     await flushPromises();
     expect(listText(wrapper)).toContain("ftask_stock");
     expect(api.getReplay.mock.calls.at(-1)?.[0]).toBe("s1");
@@ -668,7 +749,8 @@ describe("strategy replay page", () => {
     await flushPromises();
     const vm = wrapper.vm as any;
     vm.form.strategy_id = "s1";
-    vm.form.factor_task_id = "ftask_a";
+    vm.form.single_market = "spot";
+    vm.form.tasks = { spot: "ftask_a" };
     await nextTick();
     const list = deferred<unknown>();
     api.listReplays.mockImplementationOnce(() => list.promise);
@@ -1184,7 +1266,8 @@ describe("strategy replay page", () => {
     await flushPromises();
     const vm = wrapper.vm as any;
     vm.form.strategy_id = "s1";
-    vm.form.factor_task_id = "ftask_a";
+    vm.form.single_market = "spot";
+    vm.form.tasks = { spot: "ftask_a" };
     await nextTick();
     api.listReplays.mockResolvedValue({ items: [replay("r9", "pending")], page: { total: 1 } });
     await wrapper
@@ -1342,20 +1425,22 @@ describe("strategy replay page URL state and create drawer", () => {
     const wrapper = mountPage();
     await flushPromises();
     const vm = wrapper.vm as any;
-    vm.form.factor_task_id = "ftask_a";
-    vm.form.fee_bps = 25;
+    vm.form.single_market = "spot";
+    vm.form.tasks = { spot: "ftask_a" };
+    vm.form.spot_fee_bps = 25;
     await click(wrapper, "发起回放");
     await click(wrapper, "关闭");
     await click(wrapper, "发起回放");
-    expect(vm.form.factor_task_id).toBe("ftask_a");
-    expect(vm.form.fee_bps).toBe(25);
+    expect(vm.form.tasks.spot).toBe("ftask_a");
+    expect(vm.form.spot_fee_bps).toBe(25);
   });
 
   it("rejects an end time that is not after the start without calling the API", async () => {
     const wrapper = mountPage();
     await flushPromises();
     const vm = wrapper.vm as any;
-    vm.form.factor_task_id = "ftask_a";
+    vm.form.single_market = "spot";
+    vm.form.tasks = { spot: "ftask_a" };
     vm.form.strategy_id = "s1";
     vm.form.start = "2026-09-02 00:00";
     vm.form.end = "2026-09-01 00:00";
@@ -1372,7 +1457,8 @@ describe("strategy replay page URL state and create drawer", () => {
     const wrapper = mountPage();
     await flushPromises();
     const vm = wrapper.vm as any;
-    vm.form.factor_task_id = "ftask_a";
+    vm.form.single_market = "spot";
+    vm.form.tasks = { spot: "ftask_a" };
     vm.form.strategy_id = "s1";
     await click(wrapper, "开始回放");
     expect(api.startReplay).toHaveBeenCalledTimes(1);
@@ -1454,7 +1540,8 @@ describe("strategy replay page URL state and create drawer", () => {
     const wrapper = mountPage();
     await flushPromises();
     const vm = wrapper.vm as any;
-    vm.form.factor_task_id = "ftask_a";
+    vm.form.single_market = "spot";
+    vm.form.tasks = { spot: "ftask_a" };
     vm.form.strategy_id = "s1";
     await click(wrapper, "开始回放");
     nav.route.query = { tab: "replay", replay_id: "r2" };

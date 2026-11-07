@@ -100,18 +100,25 @@ export interface ValidateStrategyResult {
   trial_items: StrategyResultItem[];
 }
 
+/** 回放在一个市场读取的因子任务与它的结果 View。 */
+export interface ReplayTask {
+  factor_task_id: string;
+  view_id: string;
+}
+
 /** 基于 View 的研究回放任务。 */
 export interface Replay {
   replay_id: string;
   strategy_id: string;
   dsl_yaml: string;
   space_id: string;
-  /** 回放读取的因子任务；view_id 是它的结果 View。 */
-  factor_task_id: string;
-  view_id: string;
+  /** 各市场（spot | swap | equity）读取的因子任务与结果 View。 */
+  tasks: Record<string, ReplayTask>;
   start_time: string;
   end_time: string;
-  fee_bps: number;
+  /** 现货与股票的单边手续费、永续的单边手续费（bps）。 */
+  spot_fee_bps: number;
+  swap_fee_bps: number;
   status: "pending" | "running" | "done" | "failed" | "cancelled" | string;
   progress_time: string;
   metrics_json: string;
@@ -138,6 +145,9 @@ export interface ReplayBar {
   equity: number;
   turnover: number;
   fee: number;
+  /** 期末现货类持仓的市值之和；永续持仓的净名义价值（多头为正、空头为负）。 */
+  spot_value: number;
+  swap_value: number;
   holdings: number;
   frozen: number;
   skip_reason: string;
@@ -150,11 +160,12 @@ export interface StartReplayRequest {
   strategy_id?: string;
   dsl_yaml?: string;
   instance_id?: string;
-  /** 回放读取的因子任务；从实例发起时必须与实例关联的任务一致。 */
-  factor_task_id: string;
+  /** 市场 → 回放读取的因子任务；从实例发起时可省略（读实例关联的任务），给了必须一致。 */
+  factor_tasks: Record<string, string>;
   start_time: string;
   end_time: string;
-  fee_bps: number;
+  spot_fee_bps: number;
+  swap_fee_bps: number;
 }
 
 /** 发起回放的结果：任务与实际回放的根数、首末根 bar_end。 */
