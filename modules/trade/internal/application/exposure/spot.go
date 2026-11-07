@@ -53,7 +53,11 @@ func SpotDust(total, price shared.Decimal, instrument store.InstrumentRecord) bo
 	if price.Cmp(shared.Zero()) <= 0 {
 		return false
 	}
-	minNotional, err := decimalOrZero(instrument.MinNotional)
+	rawMinNotional, err := instrument.MinNotionalAt(price)
+	if err != nil {
+		return false
+	}
+	minNotional, err := decimalOrZero(rawMinNotional)
 	if err != nil {
 		return false
 	}

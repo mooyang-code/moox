@@ -1071,7 +1071,11 @@ func (e *Executor) placeAction(
 		if quote.Price.Cmp(shared.Zero()) <= 0 {
 			return placement{}, &AccountError{TradingAccountID: candidate.member.account.TradingAccountID, Err: orderdomain.ErrInvalidSpec}
 		}
-		belowMinimum, err := belowMinimumNotional(quantity, quote.Price, candidate.instrument.MinNotional)
+		minNotional, err := candidate.instrument.MinNotionalAt(quote.Price)
+		if err != nil {
+			return placement{}, fmt.Errorf("%w: minimum notional", ErrInvalidTarget)
+		}
+		belowMinimum, err := belowMinimumNotional(quantity, quote.Price, minNotional)
 		if err != nil {
 			return placement{}, err
 		}
@@ -1095,7 +1099,7 @@ func (e *Executor) placeAction(
 			}
 			quantity = floorToStep(quantity, mustBaseStep(candidate.instrument))
 			// 截断到可卖量后数量可能低于最小值或最小名义金额，交易所会拒单。
-			tooSmallNotional, notionalErr := belowMinimumNotional(quantity, quote.Price, candidate.instrument.MinNotional)
+			tooSmallNotional, notionalErr := belowMinimumNotional(quantity, quote.Price, minNotional)
 			if notionalErr != nil {
 				return placement{}, notionalErr
 			}
