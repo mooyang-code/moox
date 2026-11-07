@@ -317,7 +317,8 @@ func marketUnavailable(frame Frame, market string) bool {
 // waivesShortGuard 报告这条规则本期不做守门：多市场模式下永续本期整体不可用时的空头规则（设计 3.2.1：只有一部分市场不可用时不整期跳过），
 // 并且规则本期的可用集合与缺数都为空。空头只走永续，永续整体不可用时空头候选过滤之后它的预期集合只剩上期持有的空头，证据齐全时全部按市场不可用冻结，
 // 守门必然判 universe_too_small 或 too_many_missing，把多头腿也一起整期跳过；冻结的空头由 holdTargets 单独产出保持目标，规则本身没有可用候选、不配权。
-// 可用或缺数不为空说明有持有的空头没被冻结（例如证据没覆盖到、借用了现货行），这时照常守门，不能放它在现货行上重新排名或被平掉。
+// 可用或缺数不为空说明有持有的空头没被冻结（例如证据没覆盖到、借用了现货行），这时不放开、照常守门：缺数比例超过 max_missing 才整期跳过，
+// 没超过时它仍会在现货行上重新排名。真正的保护在输入层：不可用市场的证据覆盖上期在这个市场的全部持仓（input.marketUnavailable）。
 func waivesShortGuard(mode dsl.Market, rule dsl.Rule, frame Frame, sets ruleSets) bool {
 	return filtersShortCandidates(mode, rule) && marketUnavailable(frame, dsl.MarketSwap) && len(sets.available) == 0 && len(sets.missing) == 0
 }
