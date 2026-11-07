@@ -367,6 +367,7 @@ func TestShellHarnessUsesSecretIDsAndTwoRestartPhases(t *testing.T) {
 		"run_exchange OKX SPOT",
 		"run_exchange OKX SWAP",
 		"--market",
+		"okx.db",
 		"--phase submit",
 		"--phase recover",
 		"BINANCE PASS submit/query/stream/sync/restart/cleanup",
@@ -462,7 +463,13 @@ func TestSeedSmokeStoreCreatesSeparateAccountPerMarket(t *testing.T) {
 	swap := seed(exchange.ExchangeBinance, exchange.MarketTypeSwap, "binance-swap-testnet")
 	okxSwap := seed(exchange.ExchangeOKX, exchange.MarketTypeSwap, "okx-demo")
 	if spot.TradingAccountID == swap.TradingAccountID || swap.TradingAccountID == okxSwap.TradingAccountID {
-		t.Fatal("每个（交易所、市场）要有独立的账户")
+		t.Fatal("币安每个市场要有独立的账户")
+	}
+	// OKX 模拟盘一个账户同时开通两个市场：现货、永续两次演练用的是同一个账户。
+	okxSpot := seed(exchange.ExchangeOKX, exchange.MarketTypeSpot, "okx-demo")
+	if okxSpot.TradingAccountID != okxSwap.TradingAccountID || !slices.Equal(okxSwap.Markets, []string{"SPOT", "SWAP"}) ||
+		okxSwap.MarginMode != "CROSS" || okxSwap.LeverageSettings[store.DefaultLeverageKey] != "1" {
+		t.Fatalf("OKX 应是一个同时开通现货和永续的账户：%+v / %+v", okxSpot, okxSwap)
 	}
 	if !slices.Equal(spot.Markets, []string{"SPOT"}) || spot.MarginMode != "" || spot.CredentialSecretID != "binance-spot-testnet" ||
 		spot.AccountMode != "BINANCE_STANDARD" {
@@ -480,6 +487,57 @@ func TestSeedSmokeStoreCreatesSeparateAccountPerMarket(t *testing.T) {
 		Exchange: exchange.ExchangeBinance, Environment: exchange.AccountEnvironmentTestnet, SecretID: "other", MarketType: exchange.MarketTypeSwap,
 	}); err == nil {
 		t.Fatal("已有冒烟账户换了密钥应被拒绝，不能悄悄改")
+	}
+}
+
+func TestParseOptionsFactsRejectsUnknownEnvironment(t *testing.T) {
+	base := []string{"--phase", "facts", "--exchange", "BINANCE", "--secret-id", "s"}
+	if _, err := parseOptions(append([]string{"--environment", "TESTNEt"}, base...), nil); err != nil {
+		t.Fatalf("大小写不敏感：%v", err)
+	}
+	for _, environment := range []string{"PROD", "STAGING", ""} {
+		if _, err := parseOptions(append([]string{"--environment", environment}, base...), nil); err == nil {
+			t.Fatalf("环境 %q 应被拒绝，不能悄悄走生产端点", environment)
+		}
+	}
+	options, err := parseOptions(append([]string{"--environment", "production"}, base...), nil)
+	if err != nil || options.Environment != exchange.AccountEnvironmentProduction {
+		t.Fatalf("只读核对可以用生产环境：%+v %v", options, err)
+	}
+}
+
+// 清理只回收测试单自己成交的部分，不动别人的仓位。
+func TestPlanCleanupNeverTouchesOthersExposure(t *testing.T) {
+	d := shared.MustDecimal
+	// 现货：多出来的部分按成交量清理，不超过成交量。
+	if q, err := planCleanup(false, d("1"), d("1.5"), d("0.5")); err != nil || q.String() != "0.5" {
+		t.Fatalf("现货清理 = %s %v", q, err)
+	}
+	if q, err := planCleanup(false, d("1"), d("3"), d("0.5")); err != nil || q.String() != "0.5" {
+		t.Fatalf("多出来的比成交量多，只清成交量：%s %v", q, err)
+	}
+	// 没有变化：不清理。
+	if q, err := planCleanup(true, d("2"), d("2"), d("0")); err != nil || !q.IsZero() {
+		t.Fatalf("没有变化不清理：%s %v", q, err)
+	}
+	// 合约持仓低于基线：拒绝（像现货一样），不反向买回。
+	if _, err := planCleanup(true, d("2"), d("1"), d("0.5")); err == nil {
+		t.Fatal("合约持仓低于基线必须拒绝")
+	}
+	if _, err := planCleanup(false, d("2"), d("1"), d("0.5")); err == nil {
+		t.Fatal("现货余额低于基线必须拒绝")
+	}
+	// 合约清理只减多头：基线是空头、成交后仍是空头，不能再卖出（会加空）。
+	if _, err := planCleanup(true, d("-5"), d("-4"), d("1")); err == nil {
+		t.Fatal("合约持仓不是多头时不清理")
+	}
+	// 数量不超过当前持仓。
+	if q, err := planCleanup(true, d("-1"), d("0.3"), d("1.3")); err != nil || q.String() != "0.3" {
+		t.Fatalf("合约清理数量不超过当前多头持仓：%s %v", q, err)
+	}
+	// 持仓变了却没有测试单成交：拒绝。
+	if _, err := planCleanup(false, d("1"), d("2"), d("0")); err == nil {
+		t.Fatal("没有成交记录却有变化必须拒绝")
 	}
 }
 

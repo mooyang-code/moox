@@ -47,7 +47,11 @@ run_exchange() {
   local symbol=$4
   local lower
   lower=$(printf '%s-%s' "$exchange_name" "$market" | tr '[:upper:]' '[:lower:]')
+  # 币安现货、合约测试网是两套账户，各用各的库；OKX 模拟盘一个账户同时做两个市场，两次演练共用一个库。
   local database="$work_dir/${lower}.db"
+  if [[ "$exchange_name" == "OKX" ]]; then
+    database="$work_dir/okx.db"
+  fi
   local state="$work_dir/${lower}.json"
   local common=(
     --exchange "$exchange_name"

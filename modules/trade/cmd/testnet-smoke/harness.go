@@ -90,28 +90,23 @@ func openLiveHarness(
 	manager.NewSession = func(record store.TradingAccountRecord) (traderuntime.ManagedSession, error) {
 		if record.Environment != string(exchange.AccountEnvironmentTestnet) ||
 			record.ExecutionMode != string(exchange.ExecutionModeLive) ||
-			!slices.Equal(record.Markets, []string{string(options.MarketType)}) ||
+			!slices.Equal(record.Markets, smokeMarketStrings(options.Exchange, options.MarketType)) ||
 			record.Exchange != string(options.Exchange) {
-			return nil, errors.New("testnet smoke session configuration escaped the TESTNET LIVE single-market account")
+			return nil, errors.New("testnet smoke session configuration escaped the expected TESTNET LIVE account")
 		}
 		config := exchange.AccountConfig{
 			TradingAccountID: record.TradingAccountID,
 			Exchange:         exchange.Exchange(record.Exchange),
-			Markets:          []exchange.MarketType{options.MarketType},
+			Markets:          smokeMarkets(options.Exchange, options.MarketType),
 			ExecutionMode:    exchange.ExecutionMode(record.ExecutionMode),
 			AccountMode:      exchange.AccountMode(record.AccountMode),
 			Environment:      exchange.AccountEnvironmentTestnet,
 			SettlementAsset:  record.SettlementAsset,
 			MarginMode:       exchange.MarginMode(record.MarginMode),
 		}
-		var adapter execution.ExecutionAdapter
-		switch options.Exchange {
-		case exchange.ExchangeBinance:
-			adapter = binance.New(config, credential)
-		case exchange.ExchangeOKX:
-			adapter = okx.New(config, credential)
-		default:
-			return nil, errors.New("unsupported testnet Exchange")
+		adapter, err := newSmokeAdapter(options.Exchange, config, credential)
+		if err != nil {
+			return nil, err
 		}
 		adapter = newProbingAdapter(adapter, probe)
 		marketData, ok := adapter.(execution.MarketDataSource)
@@ -147,6 +142,30 @@ func openLiveHarness(
 		cancel: cancel, done: done,
 	}
 	return harness, nil
+}
+
+// newSmokeAdapter 按账户开通的市场建适配器：一个市场直接用单市场适配器，OKX 两个市场用 MultiMarket 合成（与生产一致）。
+func newSmokeAdapter(name exchange.Exchange, config exchange.AccountConfig, credential exchange.Credential) (execution.ExecutionAdapter, error) {
+	adapters := make(map[exchange.MarketType]execution.ExecutionAdapter, len(config.Markets))
+	for _, market := range config.Markets {
+		single := config
+		single.Markets = []exchange.MarketType{market}
+		if !exchange.RuleFor(market).Leverage {
+			single.MarginMode = exchange.MarginModeUnspecified
+		}
+		switch name {
+		case exchange.ExchangeBinance:
+			adapters[market] = binance.New(single, credential)
+		case exchange.ExchangeOKX:
+			adapters[market] = okx.New(single, credential)
+		default:
+			return nil, errors.New("unsupported testnet Exchange")
+		}
+	}
+	if len(config.Markets) == 1 {
+		return adapters[config.Markets[0]], nil
+	}
+	return execution.NewMultiMarket(name, config.Markets, adapters)
 }
 
 func (h *liveHarness) Close() error {
@@ -610,26 +629,18 @@ func cleanupTestExposure(
 	}
 	delta := total.Sub(baseline)
 	swap := state.MarketType == exchange.MarketTypeSwap
-	// 现货余额不能低于基线（不知道少的是谁卖的，不猜）；合约持仓可以是负的（比基线少），反向买回即可。
-	if delta.IsNegative() && !swap {
-		return delta, errors.New("base balance fell below pre-smoke baseline; refusing to guess cleanup")
-	}
-	if delta.IsZero() {
-		return shared.Zero(), nil
-	}
 	original, err := harness.store.GetOrder(ctx, smokeSpaceID, state.OrderID)
 	if err != nil {
 		return delta, err
 	}
-	filled := mustDecimal(original.FilledQuantity)
-	if filled.IsZero() {
-		return delta, errors.New("base balance changed without a recorded test fill; refusing cleanup")
+	quantity, err := planCleanup(swap, baseline, total, mustDecimal(original.FilledQuantity))
+	if err != nil {
+		return delta, err
+	}
+	if quantity.IsZero() {
+		return shared.Zero(), nil
 	}
 	instrument := instrumentRecord
-	quantity := delta.Abs()
-	if quantity.Cmp(filled) > 0 {
-		quantity = filled
-	}
 	// 数量步长和最小下单量是交易所单位（OKX 永续是张），换算成基础资产数量后再和基础资产数量比。
 	contractValue := mustDecimal(instrument.ContractValue)
 	if contractValue.Cmp(shared.Zero()) <= 0 {
@@ -641,9 +652,6 @@ func cleanupTestExposure(
 		return delta, errors.New("test fill is below the Exchange cleanup minimum")
 	}
 	reverseSide := exchange.SideSell
-	if delta.IsNegative() {
-		reverseSide = exchange.SideBuy
-	}
 	reversePositionSide := exchange.PositionSideUnspecified
 	if swap {
 		reversePositionSide = exchange.PositionSideNet
@@ -669,7 +677,7 @@ func cleanupTestExposure(
 		return delta, err
 	}
 	remaining := total.Sub(baseline)
-	if remaining.IsNegative() && !swap {
+	if remaining.IsNegative() {
 		return remaining, errors.New("reverse cleanup sold below pre-smoke baseline")
 	}
 	if remaining.Abs().Cmp(step) >= 0 {
@@ -696,6 +704,34 @@ func (h *liveHarness) exposure(ctx context.Context, accountID string, instrument
 		return shared.Zero(), err
 	}
 	return shared.ParseDecimal(record.SignedQuantity)
+}
+
+// planCleanup 决定清理单的数量（基础资产数量，零表示不需要清理）。清理只回收测试买单自己成交的部分：
+//   - 现货余额和合约持仓都不能低于基线：不知道少的是谁卖的、谁平的，不猜，拒绝清理，不去动别人的仓位；
+//   - 余额或持仓变了却没有测试单的成交记录，拒绝；
+//   - 合约清理只减多头：当前持仓必须是多头，数量不超过当前持仓，不会反手开空。
+func planCleanup(swap bool, baseline, total, filled shared.Decimal) (shared.Decimal, error) {
+	delta := total.Sub(baseline)
+	if delta.IsNegative() {
+		return shared.Zero(), errors.New("exposure fell below pre-smoke baseline; refusing to guess cleanup")
+	}
+	if delta.IsZero() {
+		return shared.Zero(), nil
+	}
+	if swap && total.Cmp(shared.Zero()) <= 0 {
+		return shared.Zero(), errors.New("swap position is not long after the test fill; refusing to open a short during cleanup")
+	}
+	if filled.IsZero() {
+		return shared.Zero(), errors.New("exposure changed without a recorded test fill; refusing cleanup")
+	}
+	quantity := delta
+	if quantity.Cmp(filled) > 0 {
+		quantity = filled
+	}
+	if swap && quantity.Cmp(total) > 0 {
+		quantity = total
+	}
+	return quantity, nil
 }
 
 func terminalExchangeStatus(status exchange.OrderStatus) bool {

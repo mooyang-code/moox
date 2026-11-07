@@ -73,8 +73,11 @@ func parseOptions(args []string, getenv func(string) string) (smokeOptions, erro
 		return options, errors.New("SKIP: Exchange Testnet secret ID is required")
 	}
 	if readOnly {
-		// 只读阶段不写库也不下单，可以用生产密钥核对真实接口。
+		// 只读阶段不写库也不下单，可以用生产密钥核对真实接口；环境写错不能悄悄落到生产端点，必须是 TESTNET 或 PRODUCTION。
 		options.Environment = exchange.AccountEnvironment(strings.ToUpper(strings.TrimSpace(environment)))
+		if options.Environment != exchange.AccountEnvironmentTestnet && options.Environment != exchange.AccountEnvironmentProduction {
+			return options, errors.New("environment must be TESTNET or PRODUCTION")
+		}
 		return options, nil
 	}
 	if strings.TrimSpace(options.Database) == "" {
