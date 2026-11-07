@@ -450,11 +450,29 @@ func TestActionScopedErrorCoversMemberRemovalAndConflict(t *testing.T) {
 	require.False(t, ActionScopedError(errors.Join(ErrNotInLogicalAccount, errors.New("database is locked"))))
 	require.False(t, submissionBusinessError(store.ErrConflict), "版本冲突仍要重试，不算业务错误")
 
-	// 指定的执行账户在发起之后被移出组合：动作按失败结束，返回的错误只关乎这个动作。
-	fixture := newMixedFlattenFixture(t)
-	command := flattenCommand("flatten-removed")
-	command.TradingAccountID = "account-gone"
-	_, err := fixture.service().FlattenLogicalAccount(context.Background(), command)
-	require.ErrorIs(t, err, ErrNotInLogicalAccount)
-	require.True(t, ActionScopedError(err))
+	// 指定的执行账户、交易所在发起之后被移出组合（动作已创建，走成员筛选那两处）：动作按失败结束，返回的错误只关乎这个动作；
+	// 工作线程恢复运行中的动作拿到的也是这个错误形状。
+	for _, tc := range []struct{ name, account, exchange, instrument string }{
+		{"执行账户被移出", "account-gone", "", ""},
+		{"交易所没有成员", "", "BYBIT", "BTC-USDT-SWAP"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := newMixedFlattenFixture(t)
+			command := flattenCommand("flatten-removed")
+			command.TradingAccountID, command.Exchange, command.InstrumentID = tc.account, tc.exchange, tc.instrument
+			_, err := fixture.service().FlattenLogicalAccount(context.Background(), command)
+			require.ErrorIs(t, err, ErrNotInLogicalAccount)
+			require.True(t, ActionScopedError(err))
+			stored, getErr := fixture.store.GetOperatorAction(context.Background(), "space-1", "flatten-removed")
+			require.NoError(t, getErr)
+			require.Equal(t, "FAILED", stored.Status)
+
+			require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_operator_actions SET c_status = 'RUNNING' WHERE c_action_id = 'flatten-removed'`).Error)
+			stored, getErr = fixture.store.GetOperatorAction(context.Background(), "space-1", "flatten-removed")
+			require.NoError(t, getErr)
+			err = fixture.service().ResumeOperatorAction(context.Background(), stored)
+			require.Error(t, err)
+			require.True(t, ActionScopedError(err), "工作线程恢复时拿到的错误不能拖垮就绪：%v", err)
+		})
+	}
 }

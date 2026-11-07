@@ -131,13 +131,14 @@ func TestSyncClosesOrdersOfDelistedInstrument(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	for name, sync := range map[string]func(context.Context, string) (Result, error){
-		"轻量同步": service.SyncAccountLight, "对账": service.SyncAccountReconcile,
-	} {
-		_, err := sync(ctx, "account-1")
-		require.NoError(t, err, name)
-	}
-	require.Contains(t, adapter.fillQueries, delistedSymbol, "本地持仓与交易所不一致、游标都会带进下架标的，要实际查过")
+	// 轻量同步先跑：本地持仓和交易所不一致，会去查下架标的的成交。
+	_, err := service.SyncAccountLight(ctx, "account-1")
+	require.NoError(t, err, "轻量同步")
+	require.Contains(t, adapter.fillQueries, delistedSymbol, "本地持仓与交易所不一致会带进下架标的，要实际查过")
+	adapter.fillQueries = nil
+	_, err = service.SyncAccountReconcile(ctx, "account-1")
+	require.NoError(t, err, "对账")
+	require.Contains(t, adapter.fillQueries, delistedSymbol, "未结束的单会带进下架标的，要实际查过")
 
 	result, err := service.SyncAccount(ctx, "account-1")
 	require.NoError(t, err)
