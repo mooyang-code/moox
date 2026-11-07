@@ -221,3 +221,5 @@ func mustSettings(t *testing.T, raw string) ordersettings.Settings {
 }
 
 func mustDecimal(raw string) shared.Decimal { return shared.MustDecimal(raw) }
+
+func testContext() context.Context { return context.Background() }

@@ -12,6 +12,7 @@ import (
 
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/ordersettings"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
@@ -436,7 +437,7 @@ func (e *Executor) Converge(
 	}
 	resting := len(restingLanes) > 0
 	if len(actions) > 0 {
-		if allowed, retryAfter := e.batchAllowed(logicalAccount.LogicalAccountID, members); !allowed {
+		if allowed, retryAfter := e.batchAllowed(logicalAccount.LogicalAccountID, members, env.settings); !allowed {
 			// 批间隔未到，或交易所接口限流暂停、权重用到 90%：本轮不发新批，也不算阻塞。
 			target.BlockedTargets = blocked
 			if err := e.updateTarget(ctx, &target, StatusConverging); err != nil {
@@ -1130,8 +1131,13 @@ func (e *Executor) placeAction(
 				return placement{}, err
 			}
 		}
-		// 单笔上限：拆单时每笔的名义金额不超过设置的上限。
-		if maxQuantity := floorToStep(env.settings.MaxChildNotional.Div(quote.Price), mustBaseStep(candidate.instrument)); quantity.Cmp(maxQuantity) > 0 {
+		// 单笔上限：拆单时每笔的名义金额不超过设置的上限；开了随机化，每笔取上限的 50%～100%。
+		sides, sidesErr := e.targetChildSides(ctx, spaceID, target, candidate)
+		if sidesErr != nil {
+			return placement{}, sidesErr
+		}
+		sliceLimit := env.sliceNotionalLimit(target, candidate.instrument.InstrumentID, len(sides))
+		if maxQuantity := floorToStep(sliceLimit.Div(quote.Price), mustBaseStep(candidate.instrument)); quantity.Cmp(maxQuantity) > 0 {
 			quantity = maxQuantity
 		}
 		_, minimum, err := baseQuantityRules(candidate.instrument)
@@ -1142,10 +1148,7 @@ func (e *Executor) placeAction(
 			capacityErrors = append(capacityErrors, candidate.member.account.TradingAccountID+": 单笔子单上限低于交易所最小数量")
 			continue
 		}
-		reversal, reversalErr := e.reversalCount(ctx, spaceID, target, candidate)
-		if reversalErr != nil {
-			return placement{}, reversalErr
-		}
+		reversal := reversalCount(sides, candidate)
 		if reversal >= 2 {
 			// 同一目标内第二次反向：整条标的本目标内不再下单，新目标到达时自然清零。
 			if e.Observe != nil {
@@ -1590,26 +1593,27 @@ func (e *Executor) positionUnreflected(
 	return false, nil
 }
 
-// reversalCount 返回同一目标、同一执行账户、同一标的已发出子单（含这次将发的）的方向切换次数。
-func (e *Executor) reversalCount(
+// targetChildSides 返回同一目标、同一执行账户、同一标的已发出子单的方向，按提交先后；拆单随机化和反向熔断共用。
+func (e *Executor) targetChildSides(
 	ctx context.Context,
 	spaceID string,
 	target store.LogicalAccountTargetRecord,
 	candidate laneAction,
-) (int, error) {
-	sides, err := e.Store.TargetChildSides(ctx, spaceID, target.LogicalAccountID, target.TargetID,
+) ([]string, error) {
+	return e.Store.TargetChildSides(ctx, spaceID, target.LogicalAccountID, target.TargetID,
 		candidate.member.account.TradingAccountID, candidate.instrument.InstrumentID)
-	if err != nil {
-		return 0, err
-	}
-	sides = append(sides, string(sideForDelta(candidate.delta)))
+}
+
+// reversalCount 返回已发出子单（含这次将发的）的方向切换次数。
+func reversalCount(sides []string, candidate laneAction) int {
+	sides = append(append([]string(nil), sides...), string(sideForDelta(candidate.delta)))
 	switches := 0
 	for index := 1; index < len(sides); index++ {
 		if sides[index] != sides[index-1] {
 			switches++
 		}
 	}
-	return switches, nil
+	return switches
 }
 
 // crossTargetReversal 判断这笔子单是否和 5 分钟内上一个目标在同一标的上的成交方向相反，只用于计数。
@@ -1668,9 +1672,9 @@ func (e *Executor) batchQuota(members []memberState) map[string]int {
 
 // batchAllowed 判断现在能否发新批：批间隔已到，成员接口没有限流暂停，权重用量低于 90%。
 // 只因批间隔未到而不能发时，retryAfter 是还要等的时间；限流原因由定时器重试。
-func (e *Executor) batchAllowed(logicalAccountID string, members []memberState) (bool, time.Duration) {
+func (e *Executor) batchAllowed(logicalAccountID string, members []memberState, settings ordersettings.Settings) (bool, time.Duration) {
 	now := e.now()
-	if interval := e.batchInterval(members); interval > 0 {
+	if interval := e.batchInterval(members, settings); interval > 0 {
 		e.batchMu.Lock()
 		last := e.lastBatch[logicalAccountID]
 		e.batchMu.Unlock()
@@ -1693,8 +1697,12 @@ func (e *Executor) batchAllowed(logicalAccountID string, members []memberState) 
 	return true, 0
 }
 
-// batchInterval 返回这个组合账户的批间隔：成员全部是模拟盘时用模拟盘间隔。
-func (e *Executor) batchInterval(members []memberState) time.Duration {
+// batchInterval 返回这个组合账户的批间隔：下单设置里写了就用设置的（实盘、模拟盘都一样），
+// 没写时取执行器的默认值，成员全部是模拟盘时用模拟盘的默认值。
+func (e *Executor) batchInterval(members []memberState, settings ordersettings.Settings) time.Duration {
+	if settings.BatchIntervalSet {
+		return settings.BatchInterval
+	}
 	if e.PaperMinBatchInterval <= 0 || len(members) == 0 {
 		return e.MinBatchInterval
 	}

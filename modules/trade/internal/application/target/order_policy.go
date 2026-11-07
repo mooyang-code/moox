@@ -2,6 +2,8 @@ package target
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"time"
@@ -249,4 +251,21 @@ func (env *laneEnv) tooSmallToPlace(candidate laneAction, quantity, price shared
 		return true
 	}
 	return env.belowConfiguredMinimum(candidate, quantity, price)
+}
+
+// splitFraction 由种子算出 [0.5, 1] 之间的比例（精确小数，千分位）。同一个种子永远得到同一个比例，结果可复现。
+func splitFraction(seed string) shared.Decimal {
+	sum := sha256.Sum256([]byte(seed))
+	thousandths := binary.BigEndian.Uint64(sum[:8]) % 501 // 0..500
+	return shared.MustDecimal("0.5").Add(shared.MustDecimal(fmt.Sprint(thousandths)).Div(shared.MustDecimal("1000")))
+}
+
+// sliceNotionalLimit 是这一笔子单的名义金额上限：单笔上限；开了随机化时取其中随机的一部分（50%～100%），
+// 种子是组合、目标、标的和这个标的本目标已发出的子单数，所以逐笔变化、整体可复现。
+func (env *laneEnv) sliceNotionalLimit(target store.LogicalAccountTargetRecord, instrumentID string, sent int) shared.Decimal {
+	limit := env.settings.MaxChildNotional
+	if !env.settings.RandomizeSplit {
+		return limit
+	}
+	return limit.Mul(splitFraction(fmt.Sprintf("%s|%s|%s|%d", target.LogicalAccountID, target.TargetID, instrumentID, sent)))
 }
