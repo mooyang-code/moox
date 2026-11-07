@@ -78,12 +78,12 @@
                     >编辑</a-button
                   >
                 </a-tooltip>
-                <a-tooltip content="先暂停自动执行" :disabled="membersEditable">
+                <a-tooltip :content="removeBlockedReason(record.account)" :disabled="!removeBlockedReason(record.account)">
                   <a-button
                     size="mini"
                     type="text"
                     status="danger"
-                    :disabled="!membersEditable"
+                    :disabled="Boolean(removeBlockedReason(record.account))"
                     @click="openRemove(record.account)"
                     >移出</a-button
                   >
@@ -115,6 +115,8 @@
         :settings="settingsOf.fund_settings"
         :error="settingsOf.fund_settings_error"
         :paper="logical.execution_mode === 1"
+        :testnet="env === 'testnet'"
+        :has-binance-live="hasBinanceLive"
         :non-binance="nonBinance"
         :settlement-asset="logical.settlement_asset"
         :saving="savingFund"
@@ -180,7 +182,9 @@
       confirm-text="移出"
       :submit="submitRemove"
     >
-      <p class="dialog-text">移出后它的持仓留在交易所账户里不动，也不再算进这个组合。需要的话先平仓再移出。</p>
+      <p class="dialog-text">
+        移出后这个执行账户不再算进组合，也不再被策略使用。有持仓时要先平仓才能移出；交易所账户里其他资产不动。
+      </p>
       <a-descriptions :column="1" size="small">
         <a-descriptions-item label="当前持仓"
           >{{ removeTarget ? positionCountOf(removeTarget.trading_account_id) : 0 }} 个</a-descriptions-item
@@ -206,6 +210,7 @@ import {
 import FundSettingsForm from "../../settings/fund-settings-form.vue";
 import OrderSettingsForm from "../../settings/order-settings-form.vue";
 import ConfirmDialog from "../shared/confirm-dialog.vue";
+import { accountEnvironment } from "../shared/environment";
 import { fmtClock, fmtMoney } from "../shared/format";
 import { marketsText } from "../shared/markets";
 import MemberSettings from "../shared/member-settings.vue";
@@ -256,6 +261,19 @@ const settingsOf = computed(() => logical.value as LogicalAccountWithSettings);
 const nonBinance = computed(() =>
   (logical.value.members || []).some(member => (accounts.value.get(member.trading_account_id)?.exchange ?? 0) !== 1)
 );
+// 资金设置里“币安生产账户”相关的选项：有已启用的币安生产成员，开通了永续，并且账户本身是启用状态
+const hasBinanceLive = computed(() =>
+  (logical.value.members || []).some(member => {
+    const account = accounts.value.get(member.trading_account_id);
+    return (
+      member.enabled &&
+      account?.exchange === 1 &&
+      accountEnvironment(account) === "prod" &&
+      Boolean(account.markets?.includes(2)) &&
+      account.status === "ENABLED"
+    );
+  })
+);
 const candidates = computed(() => eligibleAccounts(allAccounts.value, allLogicals.value, logical.value, env.value));
 const hasPositions = computed(
   () => snapshot.value.swapPositions.length > 0 || snapshot.value.spotHoldings.some(item => item.instrument_id)
@@ -278,11 +296,21 @@ watch(
   }
 );
 
+// 受管持仓：永续仓位和有标的的现货余额（结算资产这类没有标的的余额不算）
 function positionCountOf(accountId: string): number {
   return (
     snapshot.value.swapPositions.filter(item => item.trading_account_id === accountId).length +
-    snapshot.value.spotHoldings.filter(item => item.trading_account_id === accountId && item.instrument_id).length
+    snapshot.value.spotHoldings.filter(
+      item => item.trading_account_id === accountId && item.instrument_id && Number(item.quantity) !== 0
+    ).length
   );
+}
+
+/** 不能移出的原因：没暂停自动执行，或者还有受管持仓（后端会拒绝）；可以移出时返回空串。 */
+function removeBlockedReason(account: TradingAccount): string {
+  if (!membersEditable.value) return "先暂停自动执行";
+  if (positionCountOf(account.trading_account_id) > 0) return "有持仓时要先平仓";
+  return "";
 }
 
 function openRemove(account: TradingAccount) {

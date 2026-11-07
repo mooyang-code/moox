@@ -1,6 +1,6 @@
 import type { EquityPoint, LogicalAccount, TradingAccount } from "@/api/trade/types";
 import { exchangeLabels } from "@/api/trade";
-import { logicalEnvironment, accountEnvironment, type Environment } from "./shared/environment";
+import { logicalInEnvironment, accountEnvironment, type Environment } from "./shared/environment";
 
 export function accountMapOf(accounts: readonly TradingAccount[]): Map<string, TradingAccount> {
   return new Map(accounts.map(account => [account.trading_account_id, account]));
@@ -68,7 +68,7 @@ export function comboRows(
   env: Environment
 ): ComboRow[] {
   return logicals
-    .filter(logical => logicalEnvironment(logical, accounts) === env)
+    .filter(logical => logicalInEnvironment(logical, accounts, env))
     .map(logical => {
       const children: MemberRow[] = [];
       for (const member of logical.members || []) {

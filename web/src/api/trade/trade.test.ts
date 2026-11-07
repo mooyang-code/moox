@@ -31,9 +31,13 @@ describe("Trade public API", () => {
       },
       { silent: true }
     );
-    expect(callTrade).toHaveBeenNthCalledWith(3, "console", "ResumeLogicalAccount", {
-      logical_account_id: "logical-1"
-    });
+    expect(callTrade).toHaveBeenNthCalledWith(
+      3,
+      "console",
+      "ResumeLogicalAccount",
+      { logical_account_id: "logical-1" },
+      { silent: true }
+    );
     expect(callTrade).toHaveBeenNthCalledWith(
       4,
       "console",

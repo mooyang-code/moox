@@ -1,7 +1,7 @@
 import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
 import ArcoVue from "@arco-design/web-vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { LogicalAccount } from "@/api/trade";
+import { TradeResponseError, type LogicalAccount } from "@/api/trade";
 
 const mocks = vi.hoisted(() => ({
   createPaperSimulation: vi.fn(),
@@ -51,6 +51,7 @@ async function openDialog(logicals: LogicalAccount[] = [existing]) {
 beforeEach(() => {
   mocks.createLogicalAccount.mockReset().mockResolvedValue({ logical_account: { logical_account_id: "la-made" } });
   mocks.createPaperSimulation.mockReset().mockResolvedValue({ account: { trading_account_id: "ta-new" } });
+  mocks.createTradingAccount.mockReset();
   mocks.addLogicalAccountMember.mockReset().mockResolvedValue({});
   mocks.inspectExchangeCredential.mockReset();
 });
@@ -255,6 +256,27 @@ describe("新建账户提交", () => {
       await vm.submit();
       expect(mocks.createTradingAccount).toHaveBeenCalledTimes(1);
       expect(mocks.addLogicalAccountMember).toHaveBeenCalledTimes(2);
+    });
+
+    it("账户里有非结算币时加入组合要接管：没勾时提示勾选后重试，勾上后重试带上接管", async () => {
+      mocks.createTradingAccount.mockResolvedValue({ account: { trading_account_id: "ta-live" } });
+      const vm = await openDialog();
+      Object.assign(vm.form, { ...liveForm, join: "new", logicalName: "实盘组合", step: 3 });
+      await flushPromises();
+      expect(document.body.textContent).toContain("接管账户里已有的持仓");
+      mocks.addLogicalAccountMember.mockRejectedValueOnce(
+        new TradeResponseError({ ret_info: { code: 1, msg: "trade logical account: adoption is required" } })
+      );
+      await vm.submit();
+      await flushPromises();
+      expect(mocks.addLogicalAccountMember).toHaveBeenLastCalledWith(expect.objectContaining({ adopt_existing_exposure: false }));
+      expect(document.body.textContent).toContain("勾选下方“接管账户里已有的持仓”后再点一次");
+      vm.form.adoptExisting = true;
+      await vm.submit();
+      expect(mocks.createTradingAccount).toHaveBeenCalledTimes(1);
+      expect(mocks.addLogicalAccountMember).toHaveBeenLastCalledWith(
+        expect.objectContaining({ logical_account_id: "la-made", adopt_existing_exposure: true })
+      );
     });
 
     it("新建组合的执行模式是 2；组合建好后组合名称、运行方式置灰，重试不再重复建组合", async () => {

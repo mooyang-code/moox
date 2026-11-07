@@ -1,6 +1,6 @@
 import type { LogicalAccount, TradingAccount } from "@/api/trade/types";
 import { joinedAccountIds } from "../account-list";
-import { accountEnvironment, logicalEnvironment, type Environment } from "./environment";
+import { accountEnvironment, logicalInEnvironment, type Environment } from "./environment";
 
 /**
  * 能加入这个组合的执行账户：环境、模拟或实盘、结算资产都和组合一致（后端的校验），
@@ -35,7 +35,7 @@ export function joinableLogicals(
 ): LogicalAccount[] {
   const asset = settlementAsset.trim().toUpperCase();
   return logicals.filter(
-    item => logicalEnvironment(item, accounts) === env && item.settlement_asset === asset && item.automation_state === "PAUSED"
+    item => logicalInEnvironment(item, accounts, env) && item.settlement_asset === asset && item.automation_state === "PAUSED"
   );
 }
 

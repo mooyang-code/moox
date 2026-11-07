@@ -119,7 +119,7 @@ onMounted(async () => {
   if (props.account.execution_mode !== 2) return;
   secretsLoading.value = true;
   try {
-    secrets.value = await loadExchangeSecrets(props.account.exchange);
+    secrets.value = await loadExchangeSecrets(props.account.exchange, props.account.live?.environment === 1 ? 1 : 2);
   } catch {
     secrets.value = [];
   } finally {

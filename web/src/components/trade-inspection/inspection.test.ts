@@ -7,7 +7,13 @@ import {
   inspectionRows,
   inspectionVerdict
 } from "./inspection";
-import { canTestConnection, exchangeFromProvider, inspectionRequest } from "./inspection-request";
+import {
+  canTestConnection,
+  exchangeFromProvider,
+  inspectionRequest,
+  isReadonlySecret,
+  secretEnvironmentOf
+} from "./inspection-request";
 
 describe("检测结果的展示模型", () => {
   it("RPC 返回按枚举转市场、读取阻断项", () => {
@@ -91,5 +97,21 @@ describe("测试连接请求", () => {
     expect(canTestConnection({ category: "exchange", provider: "binance", status: "inactive" })).toBe(false);
     expect(canTestConnection({ category: "database", provider: "binance", status: "active" })).toBe(false);
     expect(canTestConnection({ category: "exchange", provider: "kraken", status: "active" })).toBe(false);
+  });
+});
+
+describe("密钥 ID 的环境段与只读标记", () => {
+  it("exchange-<交易所>-<环境>-<名称> 读出环境，其他格式看不出来", () => {
+    expect(secretEnvironmentOf("exchange-binance-testnet-main")).toBe(1);
+    expect(secretEnvironmentOf("exchange-okx-production-a")).toBe(2);
+    expect(secretEnvironmentOf("sec_8f2c")).toBe(0);
+    expect(secretEnvironmentOf(undefined)).toBe(0);
+  });
+
+  it("extra_config 里 readonly 为 true 的是只读密钥，解析不了按普通密钥", () => {
+    expect(isReadonlySecret('{"readonly":"true"}')).toBe(true);
+    expect(isReadonlySecret('{"passphrase":"***"}')).toBe(false);
+    expect(isReadonlySecret("not json")).toBe(false);
+    expect(isReadonlySecret(undefined)).toBe(false);
   });
 });
