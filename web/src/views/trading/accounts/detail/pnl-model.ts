@@ -2,7 +2,7 @@ import type { PnlAmount, SummarizeAccountPnlReq, SummarizeAccountPnlRsp } from "
 import { fmtClock, pnlClass } from "../shared/format";
 import { rangeParams, recordRanges, type RecordRange } from "./record-range";
 
-/** 收益拆解可选的时间范围：不含“全部”（不带时间时后端只算近 7 天，界面写“全部”会误导），资金费最长 90 天。 */
+/** 收益拆解可选的时间范围：不含“全部”（不带时间时后端只算近 7 天，界面写“全部”会误导）；后端拒绝超过 90 天的范围，选项都不能超过。 */
 export const pnlRanges = recordRanges.filter(item => item.ms > 0);
 export type PnlRange = Exclude<RecordRange, "all">;
 
@@ -75,7 +75,7 @@ export function buildPnlView(rsp: SummarizeAccountPnlRsp): PnlView {
       {
         key: "realized",
         label: "已实现盈亏",
-        hint: "",
+        hint: "只来自合约成交，现货成交不计",
         amounts: amountViews(rsp.realized_pnl, true, true),
         empty: "无"
       },

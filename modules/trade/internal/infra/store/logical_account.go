@@ -359,6 +359,20 @@ func AutoPauseReason(reason string) string {
 	return autoPausePrefix + reason
 }
 
+// marginPauseText 是保证金率风控暂停原因的开头：原因文字固定、不带比值，因为暂停原因会作为 auto_paused 告警的详情上报，
+// 带变化的数字会让每次触发都产生新的指标序列。
+const marginPauseText = "保证金率过低"
+
+// MarginPauseReason 是保证金率风控暂停组合的原因（固定文字）。
+func MarginPauseReason() string {
+	return AutoPauseReason(marginPauseText + "，组合已暂停并按设置的比例减仓，等待确认安全后手动恢复")
+}
+
+// IsMarginPauseReason 判断暂停原因是否来自保证金率风控。
+func IsMarginPauseReason(reason string) bool {
+	return strings.HasPrefix(reason, autoPausePrefix+marginPauseText)
+}
+
 // IsAutoPauseReason 判断暂停原因是否来自系统自动暂停。
 func IsAutoPauseReason(reason string) bool {
 	return strings.HasPrefix(reason, autoPausePrefix)

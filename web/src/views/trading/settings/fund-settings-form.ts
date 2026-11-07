@@ -23,12 +23,16 @@ export interface FundSettingsModel {
   margin_monitor_disabled: boolean;
 }
 
-/** 哪些项在表单里显示：BNB、小额兑换、稳定币保证金只对币安实盘组合生效，模拟盘和含非币安成员的组合不显示；保证金率监控不分交易所，只有模拟盘不显示。 */
+/** 哪些项在表单里显示：BNB、小额兑换、稳定币保证金只对币安实盘组合生效，模拟盘和含非币安成员的组合不显示；保证金率监控只对生产环境的币安实盘生效，模拟盘、测试网和含 OKX 成员的组合不显示。 */
 export interface FundFormScope {
   /** 模拟盘组合没有资金维护任务 */
   paper?: boolean;
   /** 含非币安成员：BNB 与稳定币相关项只适用于币安 */
   nonBinance?: boolean;
+  /** 测试网组合：保证金率监控不监控测试网 */
+  testnet?: boolean;
+  /** 含 OKX 成员（包括停用的）：OKX 的保证金率监控还没接入 */
+  hasOkx?: boolean;
   /** 组合的结算币，默认 USDT：稳定币保证金必须含它，保证金币和套利底仓不能写它 */
   settlementAsset?: string;
 }
@@ -40,9 +44,16 @@ export function showsLiveOnlyFields(scope: FundFormScope = {}): boolean {
   return !scope.paper && !scope.nonBinance;
 }
 
-/** 保证金率监控只对实盘账户生效，币安、OKX 都适用，所以不跟 nonBinance 走。 */
+/** 保证金率监控只对生产环境的币安实盘生效：模拟盘、测试网不监控，OKX 暂未接入，含 OKX 成员的组合也不显示。 */
 export function showsMarginMonitor(scope: FundFormScope = {}): boolean {
-  return !scope.paper;
+  return !scope.paper && !scope.testnet && !scope.hasOkx;
+}
+
+/** 保证金率监控不显示时给用户的说明；显示时返回空串。模拟盘的整体说明由表单另给，这里也返回空串。 */
+export function marginMonitorHiddenNote(scope: FundFormScope = {}): string {
+  if (showsMarginMonitor(scope) || scope.paper) return "";
+  if (scope.hasOkx) return "OKX 账户的保证金率监控暂未接入，这个组合没有保证金率保护";
+  return "保证金率监控只对生产环境的实盘组合生效，测试网组合不显示";
 }
 
 export function defaultFundSettings(): FundSettings {
@@ -211,7 +222,7 @@ function recordOf(list: AssetRow[]): Record<string, string> | undefined {
 /** 空串按“用默认值”提交：不带这个字段。 */
 const orUndefined = (value: string): string | undefined => value.trim() || undefined;
 
-/** 不显示的项（模拟盘、含非币安成员）一律按默认值提交，不带过期的旧值。 */
+/** 不显示的项（模拟盘、测试网、含 OKX 或非币安成员）一律按默认值提交，不带过期的旧值。 */
 export function buildFundSettingsRequest(model: FundSettingsModel, scope: FundFormScope = {}): FundSettings {
   const base = parseAssetList(model.arbitrage_base_assets);
   const liveOnly = showsLiveOnlyFields(scope);

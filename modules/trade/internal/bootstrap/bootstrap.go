@@ -231,11 +231,16 @@ func initialize(
 			if targetExecutor.Transfers == nil {
 				return false, marginmonitor.ErrTransferUnavailable
 			}
+			// 风控划转没有目标：TargetID 为空串（见 wallet_transfer.sql）。
 			return targetExecutor.Transfers.Collect(callCtx, spaceID,
-				store.LogicalAccountTargetRecord{SpaceID: spaceID, LogicalAccountID: logicalAccountID, TargetID: actionID}, accounts)
+				store.LogicalAccountTargetRecord{SpaceID: spaceID, LogicalAccountID: logicalAccountID}, accounts)
+		},
+		Pause: func(callCtx context.Context, spaceID, logicalAccountID, reason string) error {
+			_, pauseErr := logicalAccounts.Pause(callCtx, spaceID, logicalAccountID, reason)
+			return pauseErr
 		},
 	}
-	marginWorker := &traderuntime.FundWorker{Maintainer: marginService, Interval: time.Minute, Gate: lifeGate.Open}
+	marginWorker := &traderuntime.FundWorker{Maintainer: marginService, Interval: time.Minute, Gate: lifeGate.Open, Name: "保证金率监控"}
 	operatorWorker := &traderuntime.OperatorWorker{
 		Actions: tradeStore, Resumer: operatorService, Interval: time.Second,
 	}

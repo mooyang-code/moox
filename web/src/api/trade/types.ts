@@ -445,32 +445,6 @@ export interface ListAccountLedgerReq {
   limit?: number;
 }
 
-/** 下架名单里的一个标的；JSON 里枚举是数字，查不到内部标的时 instrument_id、base_asset 为空 */
-export interface BlockedInstrument {
-  exchange: Exchange;
-  market_type: MarketType;
-  exchange_symbol: string;
-  instrument_id?: string;
-  base_asset?: string;
-  reason: string;
-  source_event_id?: string;
-  blocked_at: string;
-}
-
-export interface UnblockInstrumentReq {
-  exchange: Exchange;
-  market_type: MarketType;
-  exchange_symbol: string;
-}
-
-export interface ReduceLogicalAccountReq {
-  action_id: string;
-  logical_account_id: string;
-  /** 大于 0 小于 1 的比例，例如 0.1 */
-  reduce_ratio: string;
-  reason: string;
-}
-
 /** 一个资产加一个金额；金额是字符串小数 */
 export interface PnlAmount {
   asset: string;
@@ -497,7 +471,7 @@ export interface SummarizeAccountPnlRsp {
   fill_count?: string;
   /** false 表示没取到资金费（模拟盘、现货、交易所不支持），原因见 funding_note */
   funding_available?: boolean;
-  /** true 表示资金费只是一部分：窗口超过 90 天或流水太多没取完 */
+  /** true 表示资金费只是一部分：流水太多没取完 */
   funding_truncated?: boolean;
   funding_note?: string;
   /** 资金费实际统计的起点（毫秒时间戳） */

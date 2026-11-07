@@ -55,6 +55,7 @@ describe("收益拆解视图", () => {
       { asset: "USDT", text: "1.50", tone: "" },
       { asset: "BNB", text: "0.002", tone: "" }
     ]);
+    expect(realized.hint).toContain("合约成交");
     expect(realized.amounts).toEqual([
       { asset: "USDT", text: "+20.00", tone: "tx-pos" },
       { asset: "USDC", text: "-3.00", tone: "tx-neg" }
@@ -86,7 +87,7 @@ describe("收益拆解视图", () => {
         funding_available: true,
         funding_truncated: true,
         funding_from: String(new Date(2026, 9, 1, 8, 30, 15).getTime()),
-        funding_note: "时间窗超过 90 天，只统计最近 90 天",
+        funding_note: "流水太多，只取到最近一部分",
         funding_fees: [{ asset: "USDT", amount: "1" }]
       })
     );
@@ -94,7 +95,7 @@ describe("收益拆解视图", () => {
     expect(view.notice?.level).toBe("warn");
     expect(view.notice?.text).toContain("10-01 08:30:15 起");
     expect(view.notice?.text).toContain("不是所选时间范围的完整合计");
-    expect(view.notice?.text).toContain("时间窗超过 90 天，只统计最近 90 天");
+    expect(view.notice?.text).toContain("流水太多，只取到最近一部分");
   });
 
   it("截断但没给起点时也要警告", () => {
