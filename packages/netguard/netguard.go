@@ -15,7 +15,8 @@ import (
 type Class int
 
 const (
-	// Blocked 一律拒绝：回环、链路本地（含云元数据 169.254.169.254）、组播、未指定、保留与文档地址。
+	// Blocked 一律拒绝：回环、链路本地（含云元数据 169.254.169.254）、组播、未指定、保留与文档地址，
+	// 以及落在内网段里的云元数据地址（阿里云 100.100.100.200、AWS IPv6 fd00:ec2::254），即使允许内网也不放行。
 	Blocked Class = iota
 	// Private 是内网地址：10/8、172.16/12、192.168/16、100.64/10 以及 IPv6 的 ULA。默认拒绝，调用方明确允许才放行。
 	Private
@@ -44,10 +45,16 @@ var (
 		netip.MustParsePrefix("3fff::/20"),
 	}
 	ipv6ULA = netip.MustParsePrefix("fc00::/7")
+
+	// 落在内网段里的云元数据地址：允许内网时也不能访问，否则能从通知地址或代理偷到实例凭据。
+	metadataAddresses = []netip.Addr{netip.MustParseAddr("100.100.100.200"), netip.MustParseAddr("fd00:ec2::254")}
 )
 
 // Classify 返回 ip 的分类。IPv4 映射的 IPv6 地址按 IPv4 处理。
 func Classify(ip net.IP) Class {
+	if address, ok := netip.AddrFromSlice(ip); ok && slices.Contains(metadataAddresses, address.Unmap()) {
+		return Blocked
+	}
 	if ip4 := ip.To4(); ip4 != nil {
 		return classifyIPv4(ip4)
 	}
