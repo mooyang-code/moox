@@ -124,8 +124,9 @@ func (tx *Tx) refreshClosedPaperBalances(account TradingAccountRecord) error {
 		if unrealized.IsNegative() {
 			spotAvailable = spotAvailable.Add(unrealized)
 		}
+		// 只合约的账户没有现货买单，这一行保持原样（总额），不改显示。
 		for i := range snapshot.Balances {
-			if snapshot.Balances[i].Asset == account.SettlementAsset {
+			if account.HasBalanceMarket() && snapshot.Balances[i].Asset == account.SettlementAsset {
 				snapshot.Balances[i].Available = spotAvailable.String()
 			}
 		}
