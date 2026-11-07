@@ -194,3 +194,43 @@ func TestReinspectRejectsPaperAccount(t *testing.T) {
 	_, err := inspectingService(store, &fakeInspector{}, validSecret()).Reinspect(context.Background(), value.ID)
 	require.ErrorIs(t, err, tradingaccount.ErrInvalidAccount)
 }
+
+// 交易所拒绝了密钥（鉴权类错误）时没能读出账户类型：已有账户的类型沿用，不能被清空，也不算类型变化；阻断项照常生效。
+func TestReinspectKeepsAccountModeWhenCredentialIsRejected(t *testing.T) {
+	store := newMemoryStore()
+	value := liveProductionAccount()
+	value.AccountMode = exchange.AccountModeBinancePortfolioMargin
+	store.accounts[value.ID] = value
+
+	rejected := &fakeInspector{result: &exchange.Inspection{
+		Exchange: exchange.ExchangeBinance, CredentialRejected: "交易所返回鉴权类错误 -2015", InspectedAt: time.Now().UTC(),
+	}}
+	result, err := inspectingService(store, rejected, validSecret()).Reinspect(context.Background(), value.ID)
+	require.NoError(t, err)
+	require.True(t, result.Blocked, "密钥被拒绝是阻断项")
+	require.False(t, result.ModeChanged)
+	require.Equal(t, exchange.AccountModeBinancePortfolioMargin, store.accounts[value.ID].AccountMode)
+	stored, err := exchange.ParseInspection(store.accounts[value.ID].InspectionJSON)
+	require.NoError(t, err)
+	require.Equal(t, exchange.AccountModeBinancePortfolioMargin, stored.AccountMode, "检测结果里的类型也要沿用")
+
+	// 已有统一账户在 papi、fapi 都被拒绝时会被判成“疑似统一账户旧密钥”（类型记作普通账户）：同样沿用原类型。
+	suspected := &fakeInspector{result: &exchange.Inspection{
+		Exchange: exchange.ExchangeBinance, AccountMode: exchange.AccountModeBinanceStandard,
+		PortfolioMarginSuspected: true, CanTradeSpot: true, CanTradeSwap: true, InspectedAt: time.Now().UTC(),
+	}}
+	result, err = inspectingService(store, suspected, validSecret()).Reinspect(context.Background(), value.ID)
+	require.NoError(t, err)
+	require.True(t, result.Blocked)
+	require.False(t, result.ModeChanged)
+	require.Equal(t, exchange.AccountModeBinancePortfolioMargin, store.accounts[value.ID].AccountMode)
+
+	// 第一次检测（账户还没有类型）：照常写入检测出的类型，不是“变化”。
+	fresh := liveProductionAccount()
+	fresh.ID = "account-2"
+	store.accounts[fresh.ID] = fresh
+	result, err = inspectingService(store, &fakeInspector{}, validSecret()).Reinspect(context.Background(), fresh.ID)
+	require.NoError(t, err)
+	require.False(t, result.ModeChanged)
+	require.Equal(t, exchange.AccountModeBinanceStandard, store.accounts[fresh.ID].AccountMode)
+}

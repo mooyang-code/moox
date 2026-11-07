@@ -142,6 +142,8 @@ func TestInspectTransportErrorsAreInconclusive(t *testing.T) {
 		"系统繁忙 50001":  {http.StatusOK, `{"code":"50001","msg":"Service temporarily unavailable","data":[]}`},
 		"超时 50004":    {http.StatusOK, `{"code":"50004","msg":"Endpoint request timeout","data":[]}`},
 		"无法识别的错误码":    {http.StatusOK, `{"code":"59999","msg":"unknown","data":[]}`},
+		"时间戳相关 50112": {http.StatusOK, `{"code":"50112","msg":"Invalid OK-ACCESS-TIMESTAMP","data":[]}`},
+		"时间戳过期 50102": {http.StatusOK, `{"code":"50102","msg":"Timestamp request expired","data":[]}`},
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {

@@ -194,6 +194,12 @@ func (s *Service) Reinspect(ctx context.Context, accountID string) (ReinspectRes
 		result.Blocked = previous.Blocked(current.Markets)
 		return result, nil
 	}
+	// 交易所拒绝了密钥，或疑似统一账户旧密钥（papi、fapi 都被拒）：这次检测的结论是“密钥有问题”，不是“账户类型变了”，
+	// 也没能读出账户类型。已有账户的类型沿用，否则会话会被换成另一种适配器、账户类型被清空；阻断项照常生效。
+	if current.AccountMode != exchange.AccountModeUnspecified &&
+		(inspection.CredentialRejected != "" || inspection.PortfolioMarginSuspected || inspection.AccountMode == exchange.AccountModeUnspecified) {
+		inspection.AccountMode = current.AccountMode
+	}
 	encoded, err := inspection.Encode()
 	if err != nil {
 		return ReinspectResult{}, err

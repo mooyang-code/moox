@@ -15,7 +15,8 @@ import (
 
 const (
 	productionPapiURL = "https://papi.binance.com"
-	// 统一账户接口每分钟 IP 权重额度（官方 Portfolio Margin API 文档：IP 限制 6000/分钟）。
+	// 统一账户接口每分钟 IP 权重额度。未核对：官方 SDK 只给了各接口的权重（balance、account 为 20 等），
+	// 没有找到整体额度的原文，这里按 6000 估计，只用来计算用量比例；真实限频以响应头 X-MBX-USED-WEIGHT-1M 和 -1003 为准。
 	papiWeightLimit = 6000
 )
 
