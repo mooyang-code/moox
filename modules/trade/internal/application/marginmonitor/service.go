@@ -38,7 +38,9 @@ type Reduce func(ctx context.Context, spaceID, actionID, logicalAccountID string
 type Pause func(ctx context.Context, spaceID, logicalAccountID, reason string) error
 
 // Collect 把普通账户现货钱包里的资金归集回合约钱包；pending 为真表示还没完成，下一轮再调（实现须幂等）。
-type Collect func(ctx context.Context, spaceID, logicalAccountID, actionID string, accounts []store.TradingAccountRecord) (pending bool, err error)
+// idempotencyKey 是这次风控事件的幂等键（风控减仓的动作号，形如 margin-<组合>-<时间>）：风控划转没有目标（target_id 为空串），
+// 实现必须按它做幂等，不能只按（组合、空目标、方向）判断，否则第二次风控事件的归集会被当成已经做过。
+type Collect func(ctx context.Context, spaceID, logicalAccountID, idempotencyKey string, accounts []store.TradingAccountRecord) (pending bool, err error)
 
 // ErrTransferUnavailable 表示还没有接入钱包划转：监控只告警一次，请用户手动把现货钱包的资金划回合约钱包。
 var ErrTransferUnavailable = errors.New("钱包划转还没有接入")
@@ -49,8 +51,8 @@ const ActionIDPrefix = "margin-"
 // 默认的快照最长允许年龄：账户同步间隔是 30 秒，超过这个时间没更新说明数据不可信，不据此减仓。
 const defaultMaxSnapshotAge = 3 * time.Minute
 
-// activeSlack 是“监控看到组合在运行”要晚于上一次风控减仓多久才算用户恢复过：操作记录的创建时间只精确到秒。
-const activeSlack = 2 * time.Second
+// createdAtSlackMillis：操作记录的创建时间只精确到秒（向下取整），组合“恢复过”要比它晚一秒以上才算。
+const createdAtSlackMillis = 1000
 
 type Service struct {
 	Store   *store.Store
@@ -64,9 +66,6 @@ type Service struct {
 	mu        sync.Mutex
 	collected map[string]struct{}
 	warned    map[string]struct{}
-	// lastActive 是监控最近一次看到组合处于运行状态的时间（进程内）：风控减仓之后，要看到组合又运行过才会再次触发，
-	// 用户人工操作改写暂停原因也不会让监控再减一次。进程重启后清零，对“暂停着且减过仓”的组合偏保守（不触发，等用户恢复）。
-	lastActive map[string]time.Time
 }
 
 func (s *Service) now() time.Time {
@@ -267,9 +266,6 @@ func (s *Service) RunLogicalAccount(ctx context.Context, logical store.LogicalAc
 	if err := s.collectAfterReduce(ctx, logical, accounts); err != nil {
 		log.Warnf("交易关注项：组合 %s 触发风控后的资金归集失败，下一轮重试：%v", logical.LogicalAccountID, err)
 	}
-	if logical.AutomationState == "ACTIVE" {
-		s.markActive(logical.LogicalAccountID)
-	}
 	// 整组清仓和减仓在跑时，它们自己会暂停组合，这一轮不叠加；下架清仓不暂停组合，下面照常触发（减仓排不进去时先暂停）。
 	running, err := s.Store.ListRunningOperatorActions(ctx, logical.SpaceID, logical.LogicalAccountID)
 	if err != nil {
@@ -280,13 +276,13 @@ func (s *Service) RunLogicalAccount(ctx context.Context, logical store.LogicalAc
 			return nil
 		}
 	}
-	// 上一次风控减仓之后，要看到组合又运行过（用户确认安全后恢复）才会再触发：用户在暂停期间人工下单、撤单、清仓改写了暂停原因，
-	// 比值仍低也不会再自动减一次。
+	// 上一次风控减仓之后，组合要恢复过（用户确认安全后手动恢复，时间记在库里，重启不丢）才会再触发：用户在暂停期间人工下单、撤单、
+	// 清仓改写了暂停原因，比值仍低也不会再自动减一次。例外：风控先把组合暂停、减仓还没排进去（暂停原因是“减仓待执行”）时要补减仓。
 	last, err := s.lastMarginAction(ctx, logical)
 	if err != nil {
 		return err
 	}
-	if last != nil && !s.activeSince(logical.LogicalAccountID, last.CreatedAt.Add(activeSlack)) {
+	if last != nil && !store.IsMarginPausePending(logical.PauseReason) && logical.ResumedAt <= last.CreatedAt.UnixMilli()+createdAtSlackMillis {
 		return nil
 	}
 	var triggered []Reading
@@ -310,21 +306,6 @@ func (s *Service) RunLogicalAccount(ctx context.Context, logical store.LogicalAc
 		return nil
 	}
 	return s.trigger(ctx, logical, settings, triggered)
-}
-
-func (s *Service) markActive(logicalAccountID string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.lastActive == nil {
-		s.lastActive = make(map[string]time.Time)
-	}
-	s.lastActive[logicalAccountID] = s.now()
-}
-
-func (s *Service) activeSince(logicalAccountID string, at time.Time) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.lastActive[logicalAccountID].After(at)
 }
 
 // lastMarginAction 返回组合最近一次风控发起的减仓动作，没有则为 nil。
@@ -351,13 +332,12 @@ func (s *Service) trigger(ctx context.Context, logical store.LogicalAccountRecor
 		}
 		detail += reading.Describe()
 	}
-	reason := store.MarginPauseReason()
 	actionID := ActionIDPrefix + logical.LogicalAccountID + "-" + s.now().UTC().Format("20060102T150405")
-	_, err := s.Reduce(ctx, logical.SpaceID, actionID, logical.LogicalAccountID, settings.MarginReduceRatio, reason)
+	_, err := s.Reduce(ctx, logical.SpaceID, actionID, logical.LogicalAccountID, settings.MarginReduceRatio, store.MarginPauseReason())
 	if errors.Is(err, operatorapp.ErrLogicalAccountBusy) {
 		// 减仓排不进去（有下架清仓在跑，或拿不到组合锁）：先把组合暂停停住，下一轮再试减仓。
 		if logical.AutomationState == "ACTIVE" && s.Pause != nil {
-			if pauseErr := s.Pause(ctx, logical.SpaceID, logical.LogicalAccountID, reason); pauseErr != nil {
+			if pauseErr := s.Pause(ctx, logical.SpaceID, logical.LogicalAccountID, store.MarginPausePendingReason()); pauseErr != nil {
 				return pauseErr
 			}
 			log.Warnf("交易关注项：组合 %s 保证金率过低（%s），已暂停；组合忙，减仓下一轮再做", logical.LogicalAccountID, detail)
@@ -376,7 +356,8 @@ func (s *Service) trigger(ctx context.Context, logical store.LogicalAccountRecor
 // 只处理由保证金风控暂停的组合的最近一次风控减仓；减仓还在跑就等，已处理过的记在进程内（重启后会再调一次，归集实现是幂等的）。
 // 归集的账户有一个没就绪就先不记完成，下一轮再来。
 func (s *Service) collectAfterReduce(ctx context.Context, logical store.LogicalAccountRecord, accounts []store.TradingAccountRecord) error {
-	if !store.IsMarginPauseReason(logical.PauseReason) {
+	// 只跟随“已发起减仓”的风控暂停；减仓还没排进去（待执行）时没有要归集的。
+	if !store.IsMarginPauseReason(logical.PauseReason) || store.IsMarginPausePending(logical.PauseReason) {
 		return nil
 	}
 	action, err := s.lastMarginAction(ctx, logical)

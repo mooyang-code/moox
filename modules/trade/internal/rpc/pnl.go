@@ -92,8 +92,8 @@ func pnlAmountsToPB(values []store.AssetAmount) []*tradepb.PnlAmount {
 // summarizeFunding 从各个有永续市场的执行账户的交易所流水里汇总资金费。
 func (s *ConsoleServer) summarizeFunding(ctx context.Context, accounts []store.TradingAccountRecord, start, end time.Time, rsp *tradepb.SummarizeAccountPnlRsp) {
 	truncated := false
-	totals := map[string]shared.Decimal{}
-	var assets []string
+	// 先把各账户取到的流水都收齐，算出统计起点之后再合计：起点之前只有部分账户取到的流水不能计入，否则合计和起点对不上。
+	var collected []exchange.LedgerEntry
 	var notes []string
 	queried := 0
 	// reached 是各个没取完的账户已经取到的最老时间里最晚的一个：只有这个时间之后的资金费，所有账户都取全了。
@@ -124,12 +124,7 @@ func (s *ConsoleServer) summarizeFunding(ctx context.Context, accounts []store.T
 				reached = oldest
 			}
 		}
-		for _, entry := range entries {
-			if _, seen := totals[entry.Asset]; !seen {
-				assets = append(assets, entry.Asset)
-			}
-			totals[entry.Asset] = totals[entry.Asset].Add(entry.Amount)
-		}
+		collected = append(collected, entries...)
 	}
 	if queried == 0 {
 		rsp.FundingAvailable = false
@@ -146,6 +141,17 @@ func (s *ConsoleServer) summarizeFunding(ctx context.Context, accounts []store.T
 	}
 	rsp.FundingFrom = from.UnixMilli()
 	rsp.FundingTruncated = truncated
+	totals := map[string]shared.Decimal{}
+	var assets []string
+	for _, entry := range collected {
+		if entry.Time.Before(from) {
+			continue
+		}
+		if _, seen := totals[entry.Asset]; !seen {
+			assets = append(assets, entry.Asset)
+		}
+		totals[entry.Asset] = totals[entry.Asset].Add(entry.Amount)
+	}
 	sort.Strings(assets)
 	for _, asset := range assets {
 		rsp.FundingFees = append(rsp.FundingFees, &tradepb.PnlAmount{Asset: asset, Amount: totals[asset].String()})

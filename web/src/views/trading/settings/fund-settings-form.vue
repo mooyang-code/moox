@@ -67,6 +67,7 @@
         只对生产环境的币安实盘组合生效。触发后会暂停这个组合的自动执行，并把每个持仓按“触发后减仓比例”同比例减掉；普通账户的钱包划转还没有接入，只会提示你手动把现货钱包里的
         {{ unit }} 划回合约钱包。触发后组合保持暂停，需要你确认账户安全后手动恢复。
       </p>
+      <p v-if="mixedNote" class="settings-hint">{{ mixedNote }}</p>
       <a-form-item label="关闭保证金率监控" extra="开启后不再监控，触发条件满足也不会暂停组合或减仓">
         <a-switch v-model="model.margin_monitor_disabled" />
       </a-form-item>
@@ -120,16 +121,18 @@ import {
   defaultFundSettings,
   fundSettingsToModel,
   marginMonitorHiddenNote,
+  marginMonitorMixedNote,
   showsLiveOnlyFields,
   showsMarginMonitor,
-  validateFundSettingsModel
+  validateFundSettingsModel,
+  withStoredMarginMonitor
 } from "./fund-settings-form";
 
 /**
  * 资金设置表单，可以独立挂载：当前设置由父组件传入，点保存只发出 save 事件（带校验过的设置），
  * 由父组件调用 updateLogicalAccountFundSettings 并重新取组合账户；点还原发出 refresh，让父组件重新取数。
  * paper、nonBinance 为真时不显示仅币安实盘生效的项；保证金率监控只对生产环境的币安实盘生效，
- * paper、testnet、hasOkx 任一为真时不显示（不校验，提交按默认值）。
+ * paper、testnet 为真或 hasBinanceLive 为 false 时不显示（不校验，提交库里已存的值，不重置）。
  */
 const props = defineProps<{
   settings?: FundSettings;
@@ -142,8 +145,8 @@ const props = defineProps<{
   nonBinance?: boolean;
   /** 测试网组合（不监控保证金率）。父组件按交易账户的环境传入 */
   testnet?: boolean;
-  /** 组合里有 OKX 成员（OKX 保证金率监控未接入）。父组件要把停用成员也算上 */
-  hasOkx?: boolean;
+  /** 组合里有币安生产实盘成员（后端只要有就监控保证金率）。父组件要把停用成员也算上；不传按有处理 */
+  hasBinanceLive?: boolean;
   /** 组合的结算币，默认 USDT：稳定币保证金必须含它，保证金币和底仓不能写它 */
   settlementAsset?: string;
 }>();
@@ -153,12 +156,13 @@ const scope = computed(() => ({
   paper: props.paper,
   nonBinance: props.nonBinance,
   testnet: props.testnet,
-  hasOkx: props.hasOkx,
+  hasBinanceLive: props.hasBinanceLive,
   settlementAsset: props.settlementAsset
 }));
 const liveOnly = computed(() => showsLiveOnlyFields(scope.value));
 const marginMonitor = computed(() => showsMarginMonitor(scope.value));
 const marginNote = computed(() => marginMonitorHiddenNote(scope.value));
+const mixedNote = computed(() => marginMonitorMixedNote(scope.value));
 const unit = computed(() => (props.settlementAsset || "USDT").toUpperCase());
 
 const model = reactive(fundSettingsToModel(props.settings));
@@ -184,7 +188,8 @@ function restore() {
 function submit() {
   formError.value = validateFundSettingsModel(model, scope.value);
   if (formError.value) return;
-  emit("save", buildFundSettingsRequest(model, scope.value));
+  // 监控区块不显示时，这四项沿用库里已存的值，不能被默认值重置
+  emit("save", buildFundSettingsRequest(withStoredMarginMonitor(model, props.settings, scope.value), scope.value));
 }
 </script>
 

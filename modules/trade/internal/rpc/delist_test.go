@@ -269,6 +269,9 @@ func TestSummarizeAccountPnlFundingFromIsTheLatestOfTheOldestTimes(t *testing.T)
 	require.NoError(t, err)
 	require.True(t, rsp.GetFundingTruncated())
 	require.Equal(t, newer, rsp.GetFundingFrom())
+	// 合计只算统计起点之后的流水：10 小时前那一条（只有一个账户取到）不计入，否则合计和起点对不上。
+	require.Len(t, rsp.GetFundingFees(), 1)
+	require.Equal(t, "1", rsp.GetFundingFees()[0].GetAmount())
 }
 
 func TestSummarizeAccountPnlWithoutLedgerExplainsWhy(t *testing.T) {
