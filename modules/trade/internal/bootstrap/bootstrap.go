@@ -461,6 +461,7 @@ func initialize(
 				result, flattenErr := operatorService.FlattenLogicalAccount(callCtx, operatorapp.FlattenCommand{
 					SpaceID: command.SpaceID, ActionID: command.ActionID, LogicalAccountID: command.LogicalAccountID,
 					Reason: command.Reason, InstrumentID: command.InstrumentID, Exchange: command.Exchange,
+					DeadlineAt: command.DeadlineAt,
 				})
 				return result.Action, result.Unblocked, flattenErr
 			},
