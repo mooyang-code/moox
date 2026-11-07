@@ -30,6 +30,13 @@ describe("市场模式", () => {
     expect(marketRequirement("name: a\nmarket: spot\n")).toEqual({ declared: false, markets: [] });
   });
 
+  it("统一数据集上的任务键 multi 排在最后，URL 里照常往返", () => {
+    expect(instanceTasks({ multi: "ftask_u" })).toEqual([{ market: "multi", taskId: "ftask_u" }]);
+    expect(tasksText({ multi: "ftask_u" })).toBe("ftask_u");
+    expect(formatFactorTasks({ multi: "ftask_u" })).toBe("multi=ftask_u");
+    expect(parseFactorTasks("multi=ftask_u")).toEqual({ multi: "ftask_u" });
+  });
+
   it("因子任务在 URL 里往返：只认三个市场，坏项忽略", () => {
     expect(formatFactorTasks({ swap: "ftask_b", spot: "ftask_a" })).toBe("spot=ftask_a,swap=ftask_b");
     expect(formatFactorTasks(undefined)).toBe("");

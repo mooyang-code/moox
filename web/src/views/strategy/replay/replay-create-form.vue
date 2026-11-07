@@ -100,7 +100,8 @@ const props = defineProps<{ strategies: Strategy[]; tasks: FactorTask[]; tasksLo
 // 策略的 market 决定要读哪些市场的任务；没写 market 时只读一个，市场由用户选。
 const declared = computed(() => marketRequirement(replayDslText(form.value, props.strategies)).declared);
 const markets = computed(() => replayMarkets(form.value, props.strategies));
-const usesSwap = computed(() => markets.value.includes("swap"));
+// 统一数据集上的任务同时覆盖现货与永续，永续费率也要填。
+const usesSwap = computed(() => markets.value.includes("swap") || markets.value.includes("multi"));
 
 /** 一个市场可选的任务：已被别的市场选走的不再出现。 */
 function taskChoices(market: string) {

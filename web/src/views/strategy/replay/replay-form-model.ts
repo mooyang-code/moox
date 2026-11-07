@@ -1,5 +1,5 @@
 import type { Strategy } from "@/api/strategy-types";
-import { MARKET_ORDER, marketRequirement } from "@/views/strategy/market-mode";
+import { TASK_KEY_ORDER, marketRequirement } from "@/views/strategy/market-mode";
 
 /** 回放表单的状态：来源三选一（实例会话 / 已保存定义 / DSL 草稿），其余为各市场的因子任务、区间与两个手续费。 */
 export interface ReplayFormState {
@@ -34,11 +34,11 @@ export function replayDslText(form: ReplayFormState, strategies: Strategy[]): st
 }
 
 /**
- * 回放要读取任务的市场（现货、永续、股票先后）：从实例发起时就是预填的实例任务的市场；否则按策略 DSL 的 market 读出，
+ * 回放要读取任务的市场（现货、永续、股票先后，统一数据集上的任务键是 multi）：从实例发起时就是预填的实例任务的键；否则按策略 DSL 的 market 读出，
  * 没写 market 时只读一个任务，市场取用户选的。
  */
 export function replayMarkets(form: ReplayFormState, strategies: Strategy[]): string[] {
-  if (form.instance_id) return MARKET_ORDER.filter(market => form.tasks[market]);
+  if (form.instance_id) return TASK_KEY_ORDER.filter(market => form.tasks[market]);
   const requirement = marketRequirement(replayDslText(form, strategies));
   if (requirement.declared) return requirement.markets;
   return form.single_market ? [form.single_market] : [];
