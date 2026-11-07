@@ -26,3 +26,7 @@ func (b walletBridge) BeforeSpotBuy(ctx context.Context, spaceID string, record 
 func (b walletBridge) Collect(ctx context.Context, spaceID string, record store.LogicalAccountTargetRecord, accounts []store.TradingAccountRecord) (bool, error) {
 	return b.service.Collect(ctx, spaceID, record, accounts)
 }
+
+func (b walletBridge) CollectForRisk(ctx context.Context, spaceID, logicalAccountID, idempotencyKey string, accounts []store.TradingAccountRecord) (bool, error) {
+	return b.service.CollectForRisk(ctx, spaceID, logicalAccountID, idempotencyKey, accounts)
+}

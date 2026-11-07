@@ -246,6 +246,10 @@ func (f *fakeTransfer) BeforeSpotBuy(_ context.Context, _ string, _ store.Logica
 	return outcome, nil
 }
 
+func (f *fakeTransfer) CollectForRisk(_ context.Context, _, _, _ string, _ []store.TradingAccountRecord) (bool, error) {
+	return f.collectPending, nil
+}
+
 func (f *fakeTransfer) Collect(_ context.Context, _ string, _ store.LogicalAccountTargetRecord, accounts []store.TradingAccountRecord) (bool, error) {
 	f.collectCalls++
 	for _, account := range accounts {

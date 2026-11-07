@@ -795,5 +795,62 @@ func TestTinyShortfallBelowMinimumTransfer(t *testing.T) {
 	require.Equal(t, "1", short.exchange.Calls()[0].Amount.String())
 }
 
+// 风控归集没有目标（target_id 为空串），由幂等键区分风控事件：同一个幂等键只归集一次（重复调用不重复划转），
+// 不同幂等键是不同的风控事件，各自归集，不会被上一次的记录当成“已经做过”；本地引用号带着幂等键，唯一约束不冲突。
+func TestRiskCollectIsIdempotentPerKeyAndSeparatesRiskEvents(t *testing.T) {
+	e := newEnv(t, "500", "50")
+	ctx := context.Background()
+	accounts := []store.TradingAccountRecord{e.account}
+	const first, second = "margin-logical-1-1000", "margin-logical-1-2000"
+
+	_, err := e.service.CollectForRisk(ctx, "space-1", "logical-1", "", accounts)
+	require.Error(t, err, "没有幂等键不能做风控归集")
+
+	pending, err := e.service.CollectForRisk(ctx, "space-1", "logical-1", first, accounts)
+	require.NoError(t, err)
+	require.True(t, pending)
+	require.Len(t, e.exchange.Calls(), 1)
+	require.Equal(t, exchange.WalletSpot, e.exchange.Calls()[0].From)
+	require.Equal(t, "499", e.exchange.Calls()[0].Amount.String())
+	rows, err := e.store.ListWalletTransfersByAccount(ctx, "space-1", "account-1", 0, e.now.Add(time.Hour).UnixMilli())
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Empty(t, rows[0].TargetID, "风控归集没有目标")
+	require.Equal(t, first+":TO_FUTURES:1", rows[0].ClientRef)
+
+	// 同一个幂等键重复调用：还没到账继续等，不重复划转；到账后完成，也不再划。
+	for range 2 {
+		pending, err = e.service.CollectForRisk(ctx, "space-1", "logical-1", first, accounts)
+		require.NoError(t, err)
+		require.True(t, pending)
+	}
+	require.Len(t, e.exchange.Calls(), 1)
+	e.exchange.ConfirmAll()
+	e.now = e.now.Add(time.Second)
+	for range 2 {
+		pending, err = e.service.CollectForRisk(ctx, "space-1", "logical-1", first, accounts)
+		require.NoError(t, err)
+		require.False(t, pending)
+	}
+	require.Len(t, e.exchange.Calls(), 1, "同一个幂等键不重复归集")
+
+	// 第二次风控事件：用户恢复后现货钱包又有了资金，另一个幂等键各自归集，唯一约束不冲突。
+	e.exchange.Set(func(f *wallettest.Exchange) { f.Spot = "700"; f.Futures = "50" })
+	pending, err = e.service.CollectForRisk(ctx, "space-1", "logical-1", second, accounts)
+	require.NoError(t, err)
+	require.True(t, pending)
+	require.Len(t, e.exchange.Calls(), 2, "第二次风控事件不会被第一次的记录当成已经做过")
+	require.Equal(t, "699", e.exchange.Calls()[1].Amount.String())
+
+	// 风控归集的记录不影响目标归集（目标的归集按 TargetID）。
+	e.exchange.ConfirmAll()
+	e.now = e.now.Add(time.Second)
+	e.exchange.Set(func(f *wallettest.Exchange) { f.Spot = "700"; f.Futures = "50" })
+	pending, err = e.service.Collect(ctx, "space-1", e.target, accounts)
+	require.NoError(t, err)
+	require.True(t, pending)
+	require.Len(t, e.exchange.Calls(), 3)
+}
+
 // waiting 报告本轮有没有账户在等（划转、对账、等快照或退避）。
 func waiting(outcome Outcome) bool { return len(outcome.Waiting) > 0 }

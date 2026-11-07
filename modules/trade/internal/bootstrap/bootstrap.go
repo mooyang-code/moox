@@ -239,9 +239,8 @@ func initialize(
 				return false, marginmonitor.ErrTransferUnavailable
 			}
 			// 风控划转没有目标：TargetID 为空串（见 wallet_transfer.sql）。idempotencyKey（风控减仓的动作号 margin-<组合>-<时间>）
-			// 是这次风控事件的幂等键：接入钱包划转时必须按它做幂等，不能只按（组合、空目标、方向），否则第二次风控事件的归集会被当成已经做过。
-			return targetExecutor.Transfers.Collect(callCtx, spaceID,
-				store.LogicalAccountTargetRecord{SpaceID: spaceID, LogicalAccountID: logicalAccountID}, accounts)
+			// 是这次风控事件的幂等键：钱包按它做幂等（划转记录的本地引用号带着它），不同风控事件的归集互不影响。
+			return targetExecutor.Transfers.CollectForRisk(callCtx, spaceID, logicalAccountID, idempotencyKey, accounts)
 		},
 		Pause: func(callCtx context.Context, spaceID, logicalAccountID, reason string) error {
 			_, pauseErr := logicalAccounts.Pause(callCtx, spaceID, logicalAccountID, reason)

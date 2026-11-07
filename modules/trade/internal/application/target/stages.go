@@ -52,6 +52,9 @@ type WalletTransfer interface {
 	// Collect 在目标执行完毕后把现货钱包多出来的资金归集回合约钱包，pending 为真表示归集还没完成。
 	// 同样每一轮都会调用，实现须保证幂等。
 	Collect(ctx context.Context, spaceID string, target store.LogicalAccountTargetRecord, accounts []store.TradingAccountRecord) (pending bool, err error)
+	// CollectForRisk 是保证金率风控触发后的归集：没有目标（划转记录的 target_id 为空串），一次风控事件由幂等键标识
+	// （风控减仓的动作号 margin-<组合>-<时间>）。同一个幂等键最多归集一次，不同幂等键各自归集；每一轮都会调用，实现须幂等。
+	CollectForRisk(ctx context.Context, spaceID, logicalAccountID, idempotencyKey string, accounts []store.TradingAccountRecord) (pending bool, err error)
 }
 
 // TransferOutcome 是第 4 阶段一次划转检查的结果。
