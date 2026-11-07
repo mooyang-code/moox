@@ -161,6 +161,12 @@ var errUnsupported = errors.New("适配器不支持钱包划转")
 
 // alertOnce 同一个（目标、账户、原因）只告警一次。
 func (s *Service) alertOnce(kind, targetID, accountID, detail string) {
+	s.alertOnceWithLabel(kind, targetID, accountID, detail, detail)
+}
+
+// alertOnceWithLabel 同上；detail 写日志（可以带数字），label 进关注项（Monitor 的标签值）：
+// 必须是固定文字，带着会变的数字每份目标都会产生新的标签值，告警恢复不了。
+func (s *Service) alertOnceWithLabel(kind, targetID, accountID, detail, label string) {
 	key := kind + "|" + targetID + "|" + accountID
 	s.mu.Lock()
 	if s.alerted == nil || len(s.alerted) > 10000 {
@@ -173,7 +179,7 @@ func (s *Service) alertOnce(kind, targetID, accountID, detail string) {
 		return
 	}
 	log.Warnf("交易划转：%s", detail)
-	telemetry.Note(kind, detail, s.now())
+	telemetry.Note(kind, label, s.now())
 }
 
 // accountBackoff 是一个账户的重试状态：查询失败和划转软失败各自连续计数，next 之前不再请求交易所。
@@ -234,8 +240,8 @@ func (s *Service) queryFailed(account store.TradingAccountRecord, err error) acc
 	wait, count := s.scheduleRetry(account.TradingAccountID, reason, false)
 	if count >= queryFailureAlert {
 		log.Warnf("交易划转：账户 %s 连续 %d 次查询失败：%v", account.Name, count, err)
-		telemetry.Note(telemetry.AttentionTransferFailing,
-			fmt.Sprintf("%s：划转前的余额或划转记录连续 %d 次查询失败（%s）", account.Name, count, summary), s.now())
+		// 关注项用固定文字（次数和失败说明会变，只写日志）。
+		telemetry.Note(telemetry.AttentionTransferFailing, account.Name+"：划转前的余额或划转记录连续多次查询失败", s.now())
 	}
 	return accountResult{waiting: true, reason: reason, retryAfter: wait}
 }
@@ -500,7 +506,9 @@ func walletTransferable(snapshot exchange.AccountSnapshot, wallet exchange.Walle
 
 func (s *Service) alertShortfallOnce(account store.TradingAccountRecord, targetID string, requirement, usable shared.Decimal) {
 	detail := fmt.Sprintf("%s：现货买入需要 %s，合约钱包可划转的资金不足，只能用 %s，买单按比例缩小", account.Name, requirement.String(), usable.String())
-	s.alertOnce(telemetry.AttentionTransferShortfall, targetID, account.TradingAccountID, detail)
+	// 关注项用固定文字，需要多少、能用多少只写日志。
+	s.alertOnceWithLabel(telemetry.AttentionTransferShortfall, targetID, account.TradingAccountID, detail,
+		account.Name+"：合约钱包可划转的资金不足，现货买入被缩小或挡下")
 }
 
 // settleAccountPending 把这个账户未结（PENDING）的划转记录全部对账一遍，不论属于哪个目标、哪个方向。

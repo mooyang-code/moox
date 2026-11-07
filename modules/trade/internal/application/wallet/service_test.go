@@ -933,5 +933,31 @@ func TestRiskCollectRetriesAfterFailuresInsteadOfLookingDone(t *testing.T) {
 	})
 }
 
+// 资金缺口、查询失败的关注项标签是固定文字：需要多少、能用多少、失败次数这些会变的数字只写日志，
+// 否则每份目标都会产生新的标签值，Monitor 里的告警恢复不了。
+func TestAttentionLabelsDoNotCarryChangingNumbers(t *testing.T) {
+	labels := func(mutate func(e *env)) []string {
+		e := newEnv(t, "10", "100")
+		e.now = time.Now().UTC()
+		mutate(e)
+		var out []string
+		for _, item := range telemetry.Recent(telemetry.AttentionTransferShortfall, e.now, time.Minute) {
+			out = append(out, item)
+		}
+		return out
+	}
+	first := labels(func(e *env) { e.before("0.01") })
+	second := labels(func(e *env) { e.target.TargetID = "target-2"; e.before("0.02") })
+	require.NotEmpty(t, first)
+	unique := map[string]struct{}{}
+	for _, item := range append(first, second...) {
+		if strings.Contains(item, "main") {
+			unique[item] = struct{}{}
+			require.NotRegexp(t, `\d`, item, "标签里不能有会变的数字")
+		}
+	}
+	require.Len(t, unique, 1, "不同目标、不同金额的资金缺口是同一个标签值")
+}
+
 // waiting 报告本轮有没有账户在等（划转、对账、等快照或退避）。
 func waiting(outcome Outcome) bool { return len(outcome.Waiting) > 0 }
