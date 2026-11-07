@@ -2,10 +2,10 @@
   <div class="member-settings">
     <div class="block">
       <a-form :model="{}" layout="vertical">
-        <a-form-item label="名称">
+        <a-form-item v-if="!paper" label="名称">
           <a-input v-model="name" :max-length="64" />
         </a-form-item>
-        <template v-if="account.execution_mode === 2">
+        <template v-if="!paper">
           <a-form-item label="交易所密钥" extra="从「系统设置 / 秘钥管理」里选，不在这里填密钥原文">
             <a-select v-model="secretId" :loading="secretsLoading" placeholder="选择密钥">
               <a-option v-for="item in secrets" :key="item.secretId" :value="item.secretId">{{ item.name }}</a-option>
@@ -15,18 +15,22 @@
             </a-select>
           </a-form-item>
         </template>
-        <a-descriptions v-else-if="account.paper" :column="1" size="small" :label-style="{ width: '80px' }">
-          <a-descriptions-item label="初始资金"
-            >{{ fmtMoney(account.paper.initial_balance, 0) }} {{ account.settlement_asset }}</a-descriptions-item
-          >
-          <a-descriptions-item label="挂单费率">{{ account.paper.maker_fee_rate }}</a-descriptions-item>
-          <a-descriptions-item label="吃单费率">{{ account.paper.taker_fee_rate }}</a-descriptions-item>
-          <a-descriptions-item label="滑点">{{ account.paper.slippage_bps }} 基点</a-descriptions-item>
+        <!-- 后端不允许改模拟账户的名称、杠杆和启停，只读展示 -->
+        <a-descriptions v-else :column="1" size="small" :label-style="{ width: '80px' }">
+          <a-descriptions-item label="名称">{{ account.name }}</a-descriptions-item>
+          <template v-if="account.paper">
+            <a-descriptions-item label="初始资金"
+              >{{ fmtMoney(account.paper.initial_balance, 0) }} {{ account.settlement_asset }}</a-descriptions-item
+            >
+            <a-descriptions-item label="挂单费率">{{ account.paper.maker_fee_rate }}</a-descriptions-item>
+            <a-descriptions-item label="吃单费率">{{ account.paper.taker_fee_rate }}</a-descriptions-item>
+            <a-descriptions-item label="滑点">{{ account.paper.slippage_bps }} 基点</a-descriptions-item>
+          </template>
         </a-descriptions>
-        <p v-if="account.execution_mode === 1" class="hint">模拟参数在创建时确定，之后不能改；要换参数就新建一个模拟账户。</p>
+        <p v-if="paper" class="hint">模拟账户的名称、费率、滑点、杠杆创建后都不能改；要换参数就新建一个模拟账户。</p>
       </a-form>
       <a-space>
-        <a-button type="primary" size="small" :loading="saving" :disabled="!dirty" @click="save">保存</a-button>
+        <a-button v-if="!paper" type="primary" size="small" :loading="saving" :disabled="!dirty" @click="save">保存</a-button>
         <slot name="actions" />
       </a-space>
     </div>
@@ -44,15 +48,17 @@
             >
           </template>
         </a-table>
-        <div class="leverage-form">
+        <div v-if="!paper" class="leverage-form">
           <a-input v-model="leverageInstrument" placeholder="标的，如 BTC-USDT-SWAP" />
           <a-input v-model="leverageValue" placeholder="倍数" class="leverage-value" />
           <a-button size="small" :loading="leverageSaving" @click="saveLeverage">设置</a-button>
         </div>
       </div>
-      <!-- 挂载点：账户类型与检测结果、重新检测（T5）。接入时替换下面这一行。 -->
-      <div class="block-title">检测</div>
-      <p class="hint">暂未提供。</p>
+      <!-- 挂载点：账户类型与检测结果、重新检测（T5）。接入时替换下面这一块；模拟账户没有检测。 -->
+      <template v-if="!paper">
+        <div class="block-title">检测</div>
+        <p class="hint">暂未提供。</p>
+      </template>
     </div>
   </div>
 </template>
@@ -68,6 +74,7 @@ import { loadExchangeSecrets, type ExchangeSecretOption } from "./exchange-secre
 const props = defineProps<{ account: TradingAccount }>();
 const emit = defineEmits<{ changed: [] }>();
 
+const paper = computed(() => props.account.execution_mode === 1);
 const name = ref(props.account.name);
 const secretId = ref(props.account.live?.credential_secret_id ?? "");
 const secrets = ref<ExchangeSecretOption[]>([]);
@@ -91,11 +98,17 @@ const leverageRows = computed(() =>
   }))
 );
 
+// 详情页每 5 秒整组换一次账户对象：只有名称、密钥的值真的变了才回填，否则正在改的内容会被冲掉。
 watch(
-  () => props.account,
-  account => {
-    name.value = account.name;
-    secretId.value = account.live?.credential_secret_id ?? "";
+  () => props.account.name,
+  value => {
+    name.value = value;
+  }
+);
+watch(
+  () => props.account.live?.credential_secret_id ?? "",
+  value => {
+    secretId.value = value;
   }
 );
 
