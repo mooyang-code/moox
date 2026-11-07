@@ -169,6 +169,8 @@ func (h *Handler) processPending(ctx context.Context, loader Loader, instance st
 		if err := h.process(ctx, loader, instance, message, event); err != nil {
 			return err
 		}
+		// 补处理用的是这一期已存事件的 ID，不会经过 Handle 的收尾：成功后在这里清掉它的尝试计数，内存里不留条目。
+		h.forget(records[0].EventID)
 	}
 	return nil
 }
@@ -185,11 +187,11 @@ func (h *Handler) sweepStale(ctx context.Context, p *period, complete bool) erro
 	if err != nil || len(periods) == 0 {
 		return err
 	}
-	latest, err := h.Store.LatestReadyByView(ctx, instanceID, sessionID)
+	resolved := p.runtime.resolved
+	latest, err := h.Store.LatestReadyByView(ctx, instanceID, sessionID, resolved.ViewIDs())
 	if err != nil {
 		return err
 	}
-	resolved := p.runtime.resolved
 	for _, barEnd := range periods {
 		have := make(map[string]bool, len(arrived[barEnd]))
 		for _, viewID := range arrived[barEnd] {

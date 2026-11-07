@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -276,5 +277,54 @@ func TestGatherSelectMarketUnavailableSkipsWholePeriod(t *testing.T) {
 	expectAck(t, h.deliverStatus(swapView, 2, "skipped", "h1"))
 	if second := h.resultAt(2); second.Status != store.StatusOK {
 		t.Fatalf("只有下单市场被跳过时现货照常出目标：%+v", second)
+	}
+}
+
+// 第 1 期齐、第 2 期缺（永续跳过了）、第 3 期齐：第 2 期补记 market_missing，第 1、3 期各装配一次，当期提交不因补记冲突而多求值。
+func TestGatherDoesNotReevaluateAfterStaleSweep(t *testing.T) {
+	h := newDualHarness(t)
+	h.frame(3, map[string]map[string]float64{"A": {"m": 3}, "B": {"m": 1}})
+	for _, step := range []struct {
+		view string
+		n    int
+	}{{spotView, 1}, {swapView, 1}, {spotView, 2}, {spotView, 3}, {swapView, 3}} {
+		expectAck(t, h.deliverView(step.view, step.n))
+	}
+	if first := h.resultAt(1); first.Status != store.StatusOK {
+		t.Fatalf("第 1 期应出目标：%+v", first)
+	}
+	if second := h.resultAt(2); second.SkipReason != store.SkipMarketMissing {
+		t.Fatalf("第 2 期应补记 market_missing：%+v", second)
+	}
+	if third := h.resultAt(3); third.Status != store.StatusOK {
+		t.Fatalf("第 3 期应出目标：%+v", third)
+	}
+	if h.loader.calls != 2 {
+		t.Fatalf("应只装配 2 次（第 1、3 期），实际 %d 次", h.loader.calls)
+	}
+}
+
+// 补处理成功后，补处理用的事件 ID 的尝试计数被清掉，不在内存里累积。
+func TestGatherPendingForgetsAttemptCounters(t *testing.T) {
+	h := newDualHarness(t)
+	h.handler.Gate = func(string) Mode { return ModeWait }
+	for _, n := range []int{1, 2} {
+		for _, view := range []string{spotView, swapView} {
+			message, payload := h.viewEvent(view, n, "complete", "h1")
+			_ = h.handler.Handle(context.Background(), message, payload)
+		}
+	}
+	h.handler.Gate = nil
+	// 第 1 期补处理的事件是 ReadyEventsAt 的第一条（按 View 排序），给它预置一个尝试计数，成功后应被清掉。
+	records, err := h.repo.ReadyEventsAt(context.Background(), "i1", h.session, barStart(1).Add(time.Hour))
+	if err != nil || len(records) == 0 {
+		t.Fatalf("应有第 1 期的记录：%v", err)
+	}
+	h.handler.attempts = map[string]int{records[0].EventID + "\x00i1": 1}
+	expectAck(t, h.deliverView(spotView, 2))
+	for key := range h.handler.attempts {
+		if strings.HasPrefix(key, records[0].EventID+"\x00") {
+			t.Fatalf("补处理成功后应清掉尝试计数：%v", h.handler.attempts)
+		}
 	}
 }

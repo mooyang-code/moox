@@ -144,22 +144,28 @@ func (h *Handler) Handle(ctx context.Context, message *eventpb.EventMessage, pay
 	if len(retry) > 0 {
 		return errors.Join(retry...)
 	}
+	h.forget(message.GetEventId())
+	return nil
+}
+
+// forget 清掉一条事件在所有实例上的尝试计数、已耗尽记录与丢弃标记（调用方持有 h.mu）：事件处理成功后不再需要。
+func (h *Handler) forget(eventID string) {
+	prefix := eventID + "\x00"
 	for key := range h.attempts {
-		if strings.HasPrefix(key, message.GetEventId()+"\x00") {
+		if strings.HasPrefix(key, prefix) {
 			delete(h.attempts, key)
 		}
 	}
 	for key := range h.exhausted {
-		if strings.HasPrefix(key, message.GetEventId()+"\x00") {
+		if strings.HasPrefix(key, prefix) {
 			delete(h.exhausted, key)
 		}
 	}
 	for key := range h.dropped {
-		if strings.HasPrefix(key, message.GetEventId()+"\x00") {
+		if strings.HasPrefix(key, prefix) {
 			delete(h.dropped, key)
 		}
 	}
-	return nil
 }
 
 // firstDrop 报告这条事件对这个实例的丢弃是否第一次发生（调用方持有 h.mu）。丢弃不落记录，没有别的依据去重：
@@ -289,7 +295,7 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 	}
 	if len(rt.resolved.Tasks) > 1 {
 		// 更早的期两个 View 都已记下、只是还没求值（例如门禁等待期间都被记下，放行后先重投了较晚的一期）：按 bar 顺序先把它们求值，
-		// 再处理当期。之后再读上一条结果，当期提交的比较交换才不会因为补处理而冲突。
+		// 再处理当期。
 		after := time.Time{}
 		if hasLatest {
 			after = latest.BarEndTime
@@ -297,10 +303,8 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 		if err := h.processPending(ctx, loader, instance, rt, after, boundary.BarEnd); err != nil {
 			return err
 		}
-		if latest, hasLatest, err = h.Store.LatestProcessed(ctx, instance.InstanceID, rt.sessionID); err != nil {
-			return err
-		}
 	}
+	// 补记与补处理只看已处理到的那一期之后的期（补处理完的期已有结果，不会再被查到）。
 	if hasLatest {
 		p.after = latest.BarEndTime
 	}
@@ -313,6 +317,13 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 		return nil
 	}
 	p.events = events
+	if len(rt.resolved.Tasks) > 1 {
+		// 汇合之后再取上一条结果：补处理更早的期、补记 market_missing 都发生在汇合里，当期提交的比较交换要对着它们之后的状态，
+		// 否则会冲突并把当期多求值一次（例如“第 1 期齐、第 2 期缺、第 3 期齐”应只装配 2 次）。
+		if latest, hasLatest, err = h.Store.LatestProcessed(ctx, instance.InstanceID, rt.sessionID); err != nil {
+			return err
+		}
+	}
 	expired := mode != ModeCatchup && !validUntil.After(h.now())
 	var adjacent *store.InputRecord
 	if len(rt.resolved.PreviousFactors) > 0 {

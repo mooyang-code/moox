@@ -19,7 +19,7 @@ type ReadyEvent struct {
 	ArrivedAt  time.Time
 }
 
-// PutReadyEvent 记录一个 View 的就绪事件；(实例, 会话, View, bar_end) 重复时保留先到的那条，返回是否新写入。
+// PutReadyEvent 记录一个 View 的就绪事件；(实例, 会话, bar_end, View) 重复时保留先到的那条，返回是否新写入。
 func (s *Store) PutReadyEvent(ctx context.Context, event ReadyEvent) (bool, error) {
 	if strings.TrimSpace(event.InstanceID) == "" || strings.TrimSpace(event.SessionID) == "" || strings.TrimSpace(event.ViewID) == "" || len(event.Payload) == 0 {
 		return false, errors.New("就绪事件缺少实例、会话、View 或内容")
@@ -89,21 +89,22 @@ func (s *Store) UnprocessedReadyPeriods(ctx context.Context, instanceID, session
 	return views, periods, nil
 }
 
-// LatestReadyByView 返回本会话每个 View 已到达的最晚一期。
-func (s *Store) LatestReadyByView(ctx context.Context, instanceID, sessionID string) (map[string]time.Time, error) {
-	var rows []struct {
-		ViewID string `gorm:"column:c_view_id"`
-		BarEnd int64  `gorm:"column:latest"`
-	}
-	if err := s.db.WithContext(ctx).Raw(`
-		SELECT c_view_id, MAX(c_bar_end_time) AS latest FROM t_strategy_ready_events
-		WHERE c_instance_id = ? AND c_session_id = ? GROUP BY c_view_id
-	`, instanceID, sessionID).Scan(&rows).Error; err != nil {
-		return nil, err
-	}
-	latest := make(map[string]time.Time, len(rows))
-	for _, row := range rows {
-		latest[row.ViewID] = fromMillis(row.BarEnd)
+// LatestReadyByView 返回本会话给定的每个 View 已到达的最晚一期；没有记录的 View 不出现在结果里。
+// 每个 View 各查一次“按 bar_end 倒序取一行”：沿主键（实例, 会话, bar_end, View）从最新一期往回找，命中即停，不扫整个会话的记录。
+func (s *Store) LatestReadyByView(ctx context.Context, instanceID, sessionID string, viewIDs []string) (map[string]time.Time, error) {
+	latest := make(map[string]time.Time, len(viewIDs))
+	for _, viewID := range viewIDs {
+		var barEnds []int64
+		if err := s.db.WithContext(ctx).Raw(`
+			SELECT c_bar_end_time FROM t_strategy_ready_events
+			WHERE c_instance_id = ? AND c_session_id = ? AND c_view_id = ?
+			ORDER BY c_bar_end_time DESC LIMIT 1
+		`, instanceID, sessionID, viewID).Scan(&barEnds).Error; err != nil {
+			return nil, err
+		}
+		if len(barEnds) > 0 {
+			latest[viewID] = fromMillis(barEnds[0])
+		}
 	}
 	return latest, nil
 }
