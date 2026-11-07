@@ -173,12 +173,17 @@ func TestInspectWithdrawPermissionBlocks(t *testing.T) {
 func TestInspectHedgeModeBlocks(t *testing.T) {
 	// 官方样例 fapi_position_dual.json 的 dualSidePosition 就是 true。
 	_, clients := newInspectServer(t, standardRoutes(t, string(sample(t, "fapi_position_dual.json")), nil))
-	result, err := inspectWith(context.Background(), exchange.InspectRequest{Environment: exchange.AccountEnvironmentProduction}, clients)
+	swapOnly := []exchange.MarketType{exchange.MarketTypeSwap}
+	result, err := inspectWith(context.Background(), exchange.InspectRequest{Environment: exchange.AccountEnvironmentProduction, Markets: swapOnly}, clients)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if result.PositionMode != exchange.PositionModeHedge || !hasFinding(result.Blockers, exchange.FindingHedgeMode) {
 		t.Fatalf("双向持仓应阻断：%+v", result)
+	}
+	// 预览（还没选市场）只给和市场无关的阻断项：双向持仓要等选了合约才判。
+	if findings := result.BlockersFor(nil); hasFinding(findings, exchange.FindingHedgeMode) {
+		t.Fatalf("没选市场时不应因持仓模式阻断：%+v", findings)
 	}
 	// 只开现货时持仓模式不相关。
 	if findings := result.BlockersFor([]exchange.MarketType{exchange.MarketTypeSpot}); hasFinding(findings, exchange.FindingHedgeMode) {

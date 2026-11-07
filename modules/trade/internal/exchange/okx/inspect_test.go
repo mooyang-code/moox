@@ -69,7 +69,9 @@ func hasFinding(findings []exchange.InspectionFinding, code string) bool {
 }
 
 func TestInspectOfficialSampleHasWithdrawPermissionAndHedgeMode(t *testing.T) {
-	result, err := inspectAgainst(t, http.StatusOK, string(readSample(t, "account_config.json")), exchange.InspectRequest{Environment: exchange.AccountEnvironmentProduction})
+	result, err := inspectAgainst(t, http.StatusOK, string(readSample(t, "account_config.json")), exchange.InspectRequest{
+		Environment: exchange.AccountEnvironmentProduction, Markets: []exchange.MarketType{exchange.MarketTypeSpot, exchange.MarketTypeSwap},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,6 +81,11 @@ func TestInspectOfficialSampleHasWithdrawPermissionAndHedgeMode(t *testing.T) {
 	}
 	if !hasFinding(result.Blockers, exchange.FindingWithdrawPermission) || !hasFinding(result.Blockers, exchange.FindingHedgeMode) {
 		t.Fatalf("官方样例应同时阻断提现权限和双向持仓：%+v", result.Blockers)
+	}
+	// 预览（还没选市场）只给和市场无关的阻断项：提现权限照样阻断，双向持仓要等选了永续才判。
+	preview := result.BlockersFor(nil)
+	if !hasFinding(preview, exchange.FindingWithdrawPermission) || hasFinding(preview, exchange.FindingHedgeMode) {
+		t.Fatalf("预览只拦和市场无关的阻断项：%+v", preview)
 	}
 }
 

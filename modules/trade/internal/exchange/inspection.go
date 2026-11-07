@@ -91,14 +91,13 @@ type Inspection struct {
 	LastFailureAt       time.Time `json:"last_failure_at,omitzero"`
 }
 
-// BlockersFor 按账户开通的市场推出阻断项。markets 为空时按“这把密钥能开通的全部市场”推出，用于预览。
+// BlockersFor 按账户开通的市场推出阻断项。markets 为空（预览时还没选市场）只给和市场无关的阻断项：
+// 密钥被拒绝、带提现权限、疑似统一账户旧密钥；和市场有关的（万向划转、双向持仓、OKX 现货模式、市场交易权限）
+// 要等选定市场后再判断，否则只想开现货的账户会被合约才有的问题挡住。
 func (i Inspection) BlockersFor(markets []MarketType) []InspectionFinding {
 	// 没有检测过（零值）和测试网跳过检测的，没有阻断项。
 	if i.Skipped || i.InspectedAt.IsZero() {
 		return nil
-	}
-	if len(markets) == 0 {
-		markets = i.AvailableMarkets
 	}
 	var findings []InspectionFinding
 	add := func(code, message string) {
