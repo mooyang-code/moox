@@ -32,9 +32,22 @@ func (s Service) ResolveInstance(ctx context.Context, instanceID, spaceID string
 		return Resolved{}, nil, err
 	}
 	taskIDs := TaskIDs(tasks)
-	// 关联是永久的：先核对市场，填错的任务不能被关联占住。
-	if err := CheckTasksMarkets(ctx, tasks, func(ctx context.Context, taskID string) (string, error) { return s.TaskMarket(ctx, spaceID, taskID) }); err != nil {
-		return Resolved{}, nil, err
+	deadline := time.Now().Add(s.ReadyWait)
+	// 关联是永久的：先核对市场，填错的任务不能被关联占住。任务刚建、结果 View 或数据集还没建出时在限定时间内重试，
+	// 其他错误（包括市场对不上）立即返回；关联只在核对通过之后。
+	for {
+		err := CheckRegisteredMarkets(ctx, tasks, func(ctx context.Context, taskID string) (string, error) { return s.TaskMarket(ctx, spaceID, taskID) })
+		if err == nil {
+			break
+		}
+		if !waitingForColumns(err) || !time.Now().Add(s.ReadyStep).Before(deadline) {
+			return Resolved{}, nil, err
+		}
+		select {
+		case <-ctx.Done():
+			return Resolved{}, nil, ctx.Err()
+		case <-time.After(s.ReadyStep):
+		}
 	}
 	for _, taskID := range taskIDs {
 		bound, err := s.Sets.BindFactorTask(ctx, taskID, instanceID)
@@ -48,11 +61,10 @@ func (s Service) ResolveInstance(ctx context.Context, instanceID, spaceID string
 			return Resolved{}, nil, fmt.Errorf("因子任务 %s 的状态是 %q，只有已启用的任务才能启用实例", taskID, bound.Status)
 		}
 	}
-	deadline := time.Now().Add(s.ReadyWait)
 	for {
 		resolved, program, err := Resolve(ctx, s.Client, spaceID, taskIDs, strategy)
 		if err == nil {
-			err = CheckTaskMarkets(resolved, tasks)
+			err = CheckResolvedMarkets(resolved, tasks)
 		}
 		if err == nil {
 			return resolved, program, nil
@@ -80,9 +92,9 @@ func (s Service) TaskMarket(ctx context.Context, spaceID, taskID string) (string
 	return item.market, nil
 }
 
-// CheckTasksMarkets 核对实例登记的“市场 → 任务”：每个任务的源数据集市场必须就是登记的市场。填错会让任务被永久占住、实例又启用不了，
-// 所以创建实例时就要核对，启用时也要在关联任务之前再核对一次。
-func CheckTasksMarkets(ctx context.Context, tasks map[string]string, marketOf func(ctx context.Context, taskID string) (string, error)) error {
+// CheckRegisteredMarkets 核对实例登记的“市场 → 任务”：每个任务的源数据集市场（由 marketOf 查询）必须就是登记的市场。填错会让任务被永久占住、
+// 实例又启用不了，所以创建实例时就要核对，启用时也要在关联任务之前再核对一次。
+func CheckRegisteredMarkets(ctx context.Context, tasks map[string]string, marketOf func(ctx context.Context, taskID string) (string, error)) error {
 	for _, taskID := range TaskIDs(tasks) {
 		market := ""
 		for registered, id := range tasks {
@@ -112,8 +124,8 @@ func TaskIDs(tasks map[string]string) []string {
 	return ids
 }
 
-// CheckTaskMarkets 核对解析出的市场与实例登记的一致：登记 factor_tasks 时写的市场必须是任务源数据集真实的市场。
-func CheckTaskMarkets(resolved Resolved, tasks map[string]string) error {
+// CheckResolvedMarkets 核对解析结果里的市场与实例登记的一致（解析之后的最后一道核对，不查 Storage）。
+func CheckResolvedMarkets(resolved Resolved, tasks map[string]string) error {
 	if len(resolved.Tasks) != len(tasks) {
 		return fmt.Errorf("实例登记了 %d 个因子任务，解析出 %d 个", len(tasks), len(resolved.Tasks))
 	}

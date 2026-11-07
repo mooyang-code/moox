@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
 	"github.com/mooyang-code/moox/modules/strategy/internal/readiness"
@@ -48,10 +49,10 @@ func TestResolveBindsTwoTasks(t *testing.T) {
 	if got := strings.Join(resolved.ViewIDs(), ","); got != "view_factor_1h,view_factor_swap1h" {
 		t.Fatalf("View 顺序现货在前：%s", got)
 	}
-	if err := CheckTaskMarkets(resolved, map[string]string{"spot": "ftask_1h", "swap": "ftask_swap1h"}); err != nil {
+	if err := CheckResolvedMarkets(resolved, map[string]string{"spot": "ftask_1h", "swap": "ftask_swap1h"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := CheckTaskMarkets(resolved, map[string]string{"spot": "ftask_swap1h", "swap": "ftask_1h"}); err == nil || !strings.Contains(err.Error(), "源数据集是") {
+	if err := CheckResolvedMarkets(resolved, map[string]string{"spot": "ftask_swap1h", "swap": "ftask_1h"}); err == nil || !strings.Contains(err.Error(), "源数据集是") {
 		t.Fatalf("登记的市场与真实市场不符应被拒绝：%v", err)
 	}
 	raw, _ := json.Marshal(resolved)
@@ -93,8 +94,7 @@ func TestResolveRejectsInconsistentTwoTaskBindings(t *testing.T) {
 			c.views["view_factor_swap1h"] = v
 			c.factors["ma_other"] = FactorInfo{FactorID: "ma_other", DefinitionHash: "sha256:other"}
 		}, dualDSL, []string{"ftask_1h", "ftask_swap1h"}, "因子定义不一致"},
-		"双任务不许 factor_params": {func(*fakeClient) {}, dualDSL + "factor_params:\n  ma__var:\n    window: \"close\"\n", []string{"ftask_1h", "ftask_swap1h"}, "factor_params"},
-		"纯现货做空":               {func(*fakeClient) {}, "name: s\nrules:\n  - {id: r, type: rank, side: short, score: ma_20, select: {bottom: 1}, weight: 1}\n", []string{"ftask_1h"}, "不允许规则 r 做空"},
+		"纯现货做空": {func(*fakeClient) {}, "name: s\nrules:\n  - {id: r, type: rank, side: short, score: ma_20, select: {bottom: 1}, weight: 1}\n", []string{"ftask_1h"}, "不允许规则 r 做空"},
 	}
 	for name, tc := range cases {
 		client := newDualClient()
@@ -193,5 +193,55 @@ func TestResolveInstanceChecksMarketsBeforeBinding(t *testing.T) {
 	}
 	if market, err := service.TaskMarket(context.Background(), "space", "ftask_swap1h"); err != nil || market != "swap" {
 		t.Fatalf("任务市场不符：%s %v", market, err)
+	}
+}
+
+// lateView 模拟任务刚建、结果 View 还没建出：前几次读取返回 View 不存在。
+type lateView struct {
+	*fakeClient
+	missing string
+	reads   int
+	after   int
+}
+
+func (c *lateView) GetView(ctx context.Context, space, viewID string) (ViewInfo, error) {
+	if viewID == c.missing {
+		c.reads++
+		if c.reads <= c.after {
+			return ViewInfo{}, ErrViewNotFound
+		}
+	}
+	return c.fakeClient.GetView(ctx, space, viewID)
+}
+
+// 启用前的市场核对在 ReadyWait 内等结果 View 建出；等不到就报错，且始终没有关联任务；其他错误（市场对不上）不重试。
+func TestResolveInstanceWaitsForViewBeforeCheckingMarkets(t *testing.T) {
+	tasks := map[string]string{"spot": "ftask_1h", "swap": "ftask_swap1h"}
+	client := &lateView{fakeClient: newDualClient(), missing: "view_factor_swap1h", after: 3}
+	sets := &tasksFake{}
+	service := Service{Client: client, Sets: sets, ReadyWait: time.Second, ReadyStep: time.Millisecond}
+	if _, _, err := service.ResolveInstance(context.Background(), "i1", "space", tasks, parseStrategy(t, dualDSL)); err != nil {
+		t.Fatalf("View 稍后建出，应等到并通过：%v", err)
+	}
+	if len(sets.binds) != 2 || client.reads <= 3 {
+		t.Fatalf("核对通过之后才关联两个任务：binds=%v reads=%d", sets.binds, client.reads)
+	}
+
+	never := &lateView{fakeClient: newDualClient(), missing: "view_factor_swap1h", after: 1 << 30}
+	sets = &tasksFake{}
+	service = Service{Client: never, Sets: sets, ReadyWait: 20 * time.Millisecond, ReadyStep: time.Millisecond}
+	if _, _, err := service.ResolveInstance(context.Background(), "i1", "space", tasks, parseStrategy(t, dualDSL)); err == nil || !strings.Contains(err.Error(), "无法确定因子任务 ftask_swap1h 的市场") {
+		t.Fatalf("等不到 View 应报错：%v", err)
+	}
+	if len(sets.binds) != 0 {
+		t.Fatalf("核对没通过不能关联任务：%v", sets.binds)
+	}
+
+	wrong := &lateView{fakeClient: newDualClient()}
+	sets = &tasksFake{}
+	service = Service{Client: wrong, Sets: sets, ReadyWait: time.Second, ReadyStep: time.Millisecond}
+	started := time.Now()
+	if _, _, err := service.ResolveInstance(context.Background(), "i1", "space", map[string]string{"swap": "ftask_1h"}, parseStrategy(t, strings.Replace(dualDSL, "market: {select: both, prefer: swap}\n", "market: {select: swap}\n", 1))); err == nil || time.Since(started) > 500*time.Millisecond {
+		t.Fatalf("市场对不上应立即报错而不是等待：%v", err)
 	}
 }

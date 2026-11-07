@@ -71,7 +71,7 @@ func (s *Service) CreateStrategyInstance(ctx context.Context, req *strategypb.Cr
 	if s.Resolver == nil {
 		return &strategypb.CreateStrategyInstanceRsp{RetInfo: invalid(errDependenciesUnavailable)}, nil
 	}
-	if err := input.CheckTasksMarkets(ctx, factorTasks, func(ctx context.Context, taskID string) (string, error) {
+	if err := input.CheckRegisteredMarkets(ctx, factorTasks, func(ctx context.Context, taskID string) (string, error) {
 		return s.Resolver.TaskMarket(ctx, scoped, taskID)
 	}); err != nil {
 		return &strategypb.CreateStrategyInstanceRsp{RetInfo: invalid(err)}, nil

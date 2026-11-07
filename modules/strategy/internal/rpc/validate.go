@@ -39,7 +39,7 @@ func (s *Service) ValidateStrategy(ctx context.Context, req *strategypb.Validate
 	if err != nil {
 		return &strategypb.ValidateStrategyRsp{RetInfo: invalid(err), Diagnostics: []string{err.Error()}}, nil
 	}
-	if err := input.CheckTaskMarkets(resolved, tasks); err != nil {
+	if err := input.CheckResolvedMarkets(resolved, tasks); err != nil {
 		return &strategypb.ValidateStrategyRsp{RetInfo: invalid(err), Diagnostics: []string{err.Error()}}, nil
 	}
 	resolvedJSON, _ := json.Marshal(resolved)
