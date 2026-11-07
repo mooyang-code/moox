@@ -53,6 +53,9 @@ func validateInstrumentDelistScheduled(message *eventpb.EventMessage, value prot
 	if payload.GetExchange() != strings.ToLower(payload.GetExchange()) {
 		return fmt.Errorf("instrument delist scheduled exchange %q must be lower case", payload.GetExchange())
 	}
+	if payload.GetExchangeSymbol() != strings.ToUpper(payload.GetExchangeSymbol()) {
+		return fmt.Errorf("instrument delist scheduled exchange_symbol %q must be upper case", payload.GetExchangeSymbol())
+	}
 	switch payload.GetMarket() {
 	case DelistMarketSpot, DelistMarketSwap:
 	default:

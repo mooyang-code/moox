@@ -29,7 +29,7 @@ func (s *Service) RegisterDelistNotice(ctx context.Context, req *pb.RegisterDeli
 		scope = events.DelistScopePaperOnly
 	}
 	notice := delist.Notice{
-		Exchange: strings.TrimSpace(req.GetExchange()), Market: strings.TrimSpace(req.GetMarket()), Symbol: strings.TrimSpace(req.GetExchangeSymbol()),
+		Exchange: strings.TrimSpace(req.GetExchange()), Market: strings.TrimSpace(req.GetMarket()), Symbol: strings.ToUpper(strings.TrimSpace(req.GetExchangeSymbol())),
 		DelistAt: time.UnixMilli(req.GetDelistAtMs()).UTC(), Source: events.DelistSourceManual, Scope: scope,
 	}
 	if req.GetDelistAtMs() <= 0 {

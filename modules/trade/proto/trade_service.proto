@@ -983,7 +983,8 @@ message BlockInstrumentRsp {
   common.RetInfo ret_info = 1;
   // true 表示 Trade 无此标的（用户没开通对应市场的账户）：照常写入名单，不算失败。
   bool instrument_unknown = 2;
-  // false 表示标的已经在名单里，没有改动。
+  // false 表示标的已经在名单里，没有改动：已在名单里时保留第一个写入者的原因（事件中心依赖这个跨模块约定，
+  // 演练按名单原因里带的执行记录 ID 判断这一项是不是自己写的，不能靠 created——写名单的响应丢了再重试拿到的就是 false）。
   bool created = 3;
 }
 
@@ -1005,6 +1006,8 @@ message BlockedInstrument {
   // 写入时能从标的表查到的内部标的 ID 和基础资产，只用于展示和审计，查不到为空。
   string instrument_id = 4;
   string base_asset = 5;
+  // 写入名单时的原因。同一个标的重复写入时保留第一个写入者的原因，不会被后来者覆盖（事件中心依赖这个跨模块约定：
+  // 原因里带着写入者的执行记录 ID，据此判断这一项是谁写的）。
   string reason = 6;
   string source_event_id = 7;
   int64 blocked_at = 8;

@@ -77,7 +77,9 @@
                   {{ record.logical_account_id ? `${record.space_id} / ${record.logical_account_id}` : "-" }}
                 </template>
               </a-table-column>
-              <a-table-column title="状态" data-index="status" :width="100" />
+              <a-table-column title="状态" :width="110">
+                <template #cell="{ record }">{{ stepStatusText(record.status) }}</template>
+              </a-table-column>
               <a-table-column title="次数" data-index="attempts" :width="70" />
               <a-table-column title="结果 / 零头 / 失败原因" :width="260" :ellipsis="true" :tooltip="true">
                 <template #cell="{ record }">{{ record.error || record.result || "-" }}</template>
@@ -119,6 +121,7 @@ import {
   prettyPayload,
   roundText,
   statusText,
+  stepStatusText,
   statusTone,
   stepKindText
 } from "./event-center-utils";

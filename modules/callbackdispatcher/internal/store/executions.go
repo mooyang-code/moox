@@ -293,16 +293,18 @@ func (s *Store) CancelExecution(ctx context.Context, executionID string, now int
 		return tx.Model(&executionRow{}).Where("c_execution_id = ?", executionID).
 			Updates(map[string]any{
 				"c_status": StatusCanceled, "c_next_run_at": 0, "c_finished_at": now, "c_updated_at": now,
-				"c_cleanup_pending": row.ActionType == ActionSystem,
+				"c_cleanup_pending": row.ActionType == ActionSystem, "c_cleanup_seq": gorm.Expr("c_cleanup_seq + 1"),
 			}).Error
 	})
 	return before, err
 }
 
-// FinishCleanup 记下取消后的善后已经做完：清除“善后未完成”标记和失败说明。
-func (s *Store) FinishCleanup(ctx context.Context, executionID string, now int64) error {
-	return s.db.WithContext(ctx).Model(&executionRow{}).Where("c_execution_id = ?", executionID).
-		Updates(map[string]any{"c_cleanup_pending": false, "c_last_error": "", "c_updated_at": now}).Error
+// FinishCleanup 记下取消后的善后已经做完：清除“善后未完成”标记和失败说明。seq 是开始善后时读到的 CleanupSeq，
+// 只有序号没变才清除：善后期间别处又把标记置了位（Step 写名单后补解除失败），说明还有善后没做完，不能被吞掉。返回是否清除。
+func (s *Store) FinishCleanup(ctx context.Context, executionID string, seq, now int64) (bool, error) {
+	result := s.db.WithContext(ctx).Model(&executionRow{}).Where("c_execution_id = ? AND c_cleanup_seq = ?", executionID, seq).
+		Updates(map[string]any{"c_cleanup_pending": false, "c_last_error": "", "c_updated_at": now})
+	return result.RowsAffected > 0, result.Error
 }
 
 // SetCleanupError 记下取消后的善后失败的原因。只在善后仍未完成时才写：两次取消交错、其中一次已经做完善后时，
@@ -325,6 +327,27 @@ func (s *Store) ListPendingCleanups(ctx context.Context) ([]Execution, error) {
 	return executions, nil
 }
 
+// MarkCleanupPendingIfCanceled 在记录已是已取消时，把“善后未完成”标记重新置 1 并写失败说明；记录不是已取消就什么也不做。
+// 处理器在 Step 写名单后复查发现已取消、补解除又失败时用它：这时记录不是执行中，SaveResult 会丢掉结果，
+// 只有靠它用户才能看到“重试善后”，关注项也才会提醒。返回是否写入。
+func (s *Store) MarkCleanupPendingIfCanceled(ctx context.Context, executionID, message string, now int64) (bool, error) {
+	result := s.db.WithContext(ctx).Model(&executionRow{}).Where("c_execution_id = ? AND c_status = ?", executionID, StatusCanceled).
+		Updates(map[string]any{"c_cleanup_pending": true, "c_cleanup_seq": gorm.Expr("c_cleanup_seq + 1"), "c_last_error": message, "c_updated_at": now})
+	return result.RowsAffected > 0, result.Error
+}
+
+// countNonCanceledAllBySubject 统计同一标的上除自己以外、范围不是 PAPER_ONLY（真实下架）、没有被取消的系统动作记录，已结束的也算：
+// 真实下架结束后（成功或失败）禁止名单按设计保留，演练的结束或取消不能把它解除。
+const countNonCanceledAllBySubject = `c_action_type = 'SYSTEM' AND c_subject_id = ? AND c_status <> 'CANCELED' AND c_execution_id <> ?
+AND COALESCE(json_extract(c_payload_json, '$.scope'), '') <> 'PAPER_ONLY'`
+
+// CountNonCanceledAllBySubject 见 countNonCanceledAllBySubject。subjectID 是统一后的标的名（交易所:市场:代码）。
+func (s *Store) CountNonCanceledAllBySubject(ctx context.Context, subjectID, exceptExecutionID string) (int64, error) {
+	var count int64
+	err := s.db.WithContext(ctx).Model(&executionRow{}).Where(countNonCanceledAllBySubject, subjectID, exceptExecutionID).Count(&count).Error
+	return count, err
+}
+
 // AcknowledgeExecution 确认失败的记录已处理，清除它引起的告警。
 func (s *Store) AcknowledgeExecution(ctx context.Context, executionID string, now int64) error {
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -344,6 +367,29 @@ func (s *Store) AcknowledgeExecution(ctx context.Context, executionID string, no
 func (s *Store) ListUnacknowledgedFailures(ctx context.Context) ([]Execution, error) {
 	var rows []executionRow
 	if err := s.db.WithContext(ctx).Where("c_status = ? AND c_acknowledged = 0", StatusFailed).Order("c_created_at ASC").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	executions := make([]Execution, 0, len(rows))
+	for _, row := range rows {
+		executions = append(executions, executionFromRow(row))
+	}
+	return executions, nil
+}
+
+// listUnfinishedWithFailedSteps 查还没结束、但已有下架步骤失败的系统动作记录。整条记录的成败只在下架后核对时决定，
+// 某个组合的某一轮平仓用完重试不会让记录失败（后面的轮次还要继续），所以单独靠它提醒用户。
+const listUnfinishedWithFailedSteps = `SELECT * FROM t_event_executions AS e
+WHERE e.c_action_type = 'SYSTEM' AND e.c_status IN ('PENDING', 'RUNNING')
+AND EXISTS (
+    SELECT 1 FROM t_delist_actions AS a
+    WHERE a.c_execution_id = e.c_execution_id AND a.c_status IN ('FAILED', 'PARTIAL')
+)
+ORDER BY e.c_created_at ASC`
+
+// ListUnfinishedWithFailedSteps 返回还没结束、但已有下架步骤失败（用完重试、已到下架时间仍没平完，或平仓只完成了一部分）的系统动作记录，用于计算告警关注项。
+func (s *Store) ListUnfinishedWithFailedSteps(ctx context.Context) ([]Execution, error) {
+	var rows []executionRow
+	if err := s.db.WithContext(ctx).Raw(listUnfinishedWithFailedSteps).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
 	executions := make([]Execution, 0, len(rows))

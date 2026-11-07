@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/mooyang-code/moox/packages/gatewayclient"
@@ -21,6 +22,8 @@ type Config struct {
 	Health        HealthConfig             `yaml:"health"`
 	Delivery      DeliveryConfig           `yaml:"delivery"`
 	Retention     RetentionConfig          `yaml:"retention"`
+
+	sourcePath string `yaml:"-"`
 }
 
 // DatabaseConfig 是 SQLite 库的位置。
@@ -86,6 +89,7 @@ func Load(path string) (*Config, error) {
 	if err := decoder.Decode(&trailing); err != io.EOF {
 		return nil, fmt.Errorf("事件中心配置只能包含一个 YAML 文档")
 	}
+	cfg.sourcePath = path
 	if v := os.Getenv("MOOX_CALLBACK_DISPATCHER_DB_PATH"); v != "" {
 		cfg.Database.Path = v
 	}
@@ -132,4 +136,12 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("retention.execution_days 必须大于 0")
 	}
 	return nil
+}
+
+// OpenGateway 打开系统动作调用 Trade 用的网关客户端；密钥路径相对于配置文件，目录缓存放在数据库所在的目录。
+func (c *Config) OpenGateway(onRefreshError func(error)) (*gatewayclient.Client, error) {
+	if c == nil || c.sourcePath == "" {
+		return nil, fmt.Errorf("事件中心的网关客户端需要先加载配置文件")
+	}
+	return c.GatewayClient.OpenInternal(c.sourcePath, filepath.Dir(c.Database.Path), onRefreshError)
 }

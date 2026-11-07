@@ -366,7 +366,7 @@ func TestCancelMarksCleanupPendingAndPurgeKeepsIt(t *testing.T) {
 	_, err = s.GetExecution(ctx, "note")
 	require.ErrorIs(t, err, ErrNotFound)
 
-	require.NoError(t, s.FinishCleanup(ctx, "sys", 101))
+	finishCleanup(t, s, "sys", 101)
 	require.NoError(t, s.PurgeBefore(ctx, 1000))
 	_, err = s.GetExecution(ctx, "sys")
 	require.ErrorIs(t, err, ErrNotFound, "善后做完后照常清理")
@@ -387,7 +387,7 @@ func TestSetCleanupErrorOnlyWhileCleanupPending(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "取消后的善后失败：Trade 不可达", got.LastError)
 
-	require.NoError(t, s.FinishCleanup(ctx, "sys", 102))
+	finishCleanup(t, s, "sys", 102)
 	require.NoError(t, s.SetCleanupError(ctx, "sys", "迟到的失败说明", 103))
 	got, err = s.GetExecution(ctx, "sys")
 	require.NoError(t, err)
@@ -452,4 +452,181 @@ func TestDelistActionsUpsert(t *testing.T) {
 	actions, err := s.ListDelistActions(ctx, "s1")
 	require.NoError(t, err)
 	require.Equal(t, []DelistAction{action}, actions)
+}
+
+// 只在记录已取消时才把“善后未完成”重新置 1；其余状态不动。
+func TestMarkCleanupPendingIfCanceled(t *testing.T) {
+	ctx := context.Background()
+	s := openTest(t)
+	require.NoError(t, s.CreateRule(ctx, systemRule()))
+	require.NoError(t, s.InTx(ctx, func(tx *Tx) error {
+		return tx.InsertExecution(execution("sys", "sys-1", ActionSystem, "sys-1|x", 5))
+	}))
+	applied, err := s.MarkCleanupPendingIfCanceled(ctx, "sys", "补解除失败", 50)
+	require.NoError(t, err)
+	require.False(t, applied, "记录还没取消")
+	got, err := s.GetExecution(ctx, "sys")
+	require.NoError(t, err)
+	require.False(t, got.CleanupPending)
+	require.Empty(t, got.LastError)
+
+	_, err = s.CancelExecution(ctx, "sys", 100)
+	require.NoError(t, err)
+	finishCleanup(t, s, "sys", 101)
+	applied, err = s.MarkCleanupPendingIfCanceled(ctx, "sys", "补解除失败：Trade 不可达", 102)
+	require.NoError(t, err)
+	require.True(t, applied)
+	got, err = s.GetExecution(ctx, "sys")
+	require.NoError(t, err)
+	require.True(t, got.CleanupPending)
+	require.Equal(t, "补解除失败：Trade 不可达", got.LastError)
+	pending, err := s.ListPendingCleanups(ctx)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+}
+
+// 同一标的上别的、未被取消的真实下架（ALL）记录：已结束的也算（真实下架结束后名单按设计保留），演练、通知类、别的标的、已取消的都不算。
+func TestCountNonCanceledAllBySubject(t *testing.T) {
+	ctx := context.Background()
+	s := openTest(t)
+	require.NoError(t, s.CreateRule(ctx, systemRule()))
+	require.NoError(t, s.CreateRule(ctx, notifyRule("r1")))
+	allPayload := `{"scope":"ALL","delist_at":"2026-11-11T08:00:00Z"}`
+	require.NoError(t, s.InTx(ctx, func(tx *Tx) error {
+		real := execution("real", "sys-1", ActionSystem, "sys-1|binance:SPOT:FOOUSDT|ALL", 5)
+		real.PayloadJSON = allPayload
+		drill := execution("drill", "sys-1", ActionSystem, "sys-1|binance:SPOT:FOOUSDT|PAPER_ONLY", 5)
+		drill.PayloadJSON = `{"scope":"PAPER_ONLY","delist_at":"2026-11-11T08:00:00Z"}`
+		other := execution("other", "sys-1", ActionSystem, "sys-1|binance:SPOT:BARUSDT|ALL", 5)
+		other.SubjectID, other.PayloadJSON = "binance:SPOT:BARUSDT", allPayload
+		for _, item := range []Execution{real, drill, execution("note", "r1", ActionNotifyURL, "", 5), other} {
+			if err := tx.InsertExecution(item); err != nil {
+				return err
+			}
+		}
+		return nil
+	}))
+	count, err := s.CountNonCanceledAllBySubject(ctx, "binance:SPOT:FOOUSDT", "drill")
+	require.NoError(t, err)
+	require.EqualValues(t, 1, count, "只有真实那条，通知类和别的标的不算")
+	count, err = s.CountNonCanceledAllBySubject(ctx, "binance:SPOT:FOOUSDT", "real")
+	require.NoError(t, err)
+	require.Zero(t, count, "演练不算，自己不算")
+
+	claimed, err := s.ClaimDue(ctx, 1000, 10, []string{SystemActionSellDelistedHoldings})
+	require.NoError(t, err)
+	for _, item := range claimed {
+		result := Result{Status: StatusPending, NextRunAt: 5}
+		if item.ExecutionID == "real" {
+			result = Result{Status: StatusSucceeded, FinishedAt: 1}
+		}
+		_, err := s.SaveResult(ctx, item.ExecutionID, item.ClaimedAt, result, 1)
+		require.NoError(t, err)
+	}
+	count, err = s.CountNonCanceledAllBySubject(ctx, "binance:SPOT:FOOUSDT", "drill")
+	require.NoError(t, err)
+	require.EqualValues(t, 1, count, "已结束的真实下架也算：名单按设计保留")
+
+	_, err = s.CancelExecution(ctx, "drill", 100)
+	require.NoError(t, err)
+	got, err := s.GetExecution(ctx, "real")
+	require.NoError(t, err)
+	require.Equal(t, StatusSucceeded, got.Status)
+}
+
+func TestListUnfinishedWithFailedSteps(t *testing.T) {
+	ctx := context.Background()
+	s := openTest(t)
+	require.NoError(t, s.CreateRule(ctx, systemRule()))
+	require.NoError(t, s.InTx(ctx, func(tx *Tx) error {
+		for _, id := range []string{"ok", "failed-step", "partial-step", "finished"} {
+			if err := tx.InsertExecution(execution(id, "sys-1", ActionSystem, "sys-1|"+id, 5)); err != nil {
+				return err
+			}
+		}
+		return nil
+	}))
+	step := func(id, status string) DelistAction {
+		return DelistAction{ExecutionID: id, Round: 1, Kind: DelistKindFlatten, SpaceID: "crypto", LogicalAccountID: "la", Status: status, UpdatedAt: 1}
+	}
+	for _, action := range []DelistAction{
+		step("ok", DelistSucceeded), step("failed-step", DelistFailed), step("partial-step", DelistPartial), step("finished", DelistFailed),
+	} {
+		require.NoError(t, s.UpsertDelistAction(ctx, action))
+	}
+	_, err := s.CancelExecution(ctx, "finished", 10)
+	require.NoError(t, err)
+
+	got, err := s.ListUnfinishedWithFailedSteps(ctx)
+	require.NoError(t, err)
+	ids := []string{}
+	for _, item := range got {
+		ids = append(ids, item.ExecutionID)
+	}
+	require.ElementsMatch(t, []string{"failed-step", "partial-step"}, ids)
+}
+
+// finishCleanup 按当前序号记下善后做完（测试里没有并发的重新置位）。
+func finishCleanup(t *testing.T, s *Store, id string, now int64) {
+	t.Helper()
+	current, err := s.GetExecution(context.Background(), id)
+	require.NoError(t, err)
+	applied, err := s.FinishCleanup(context.Background(), id, current.CleanupSeq, now)
+	require.NoError(t, err)
+	require.True(t, applied)
+}
+
+// 善后期间标记被重新置位（序号变了）：FinishCleanup 不清除它。
+func TestFinishCleanupKeepsMarkSetAfterSeqRead(t *testing.T) {
+	ctx := context.Background()
+	s := openTest(t)
+	require.NoError(t, s.CreateRule(ctx, systemRule()))
+	require.NoError(t, s.InTx(ctx, func(tx *Tx) error {
+		return tx.InsertExecution(execution("sys", "sys-1", ActionSystem, "sys-1|x", 5))
+	}))
+	_, err := s.CancelExecution(ctx, "sys", 100)
+	require.NoError(t, err)
+	before, err := s.GetExecution(ctx, "sys")
+	require.NoError(t, err)
+
+	applied, err := s.MarkCleanupPendingIfCanceled(ctx, "sys", "补解除失败", 101)
+	require.NoError(t, err)
+	require.True(t, applied)
+	applied, err = s.FinishCleanup(ctx, "sys", before.CleanupSeq, 102)
+	require.NoError(t, err)
+	require.False(t, applied, "序号变了，说明还有善后没做完")
+	got, err := s.GetExecution(ctx, "sys")
+	require.NoError(t, err)
+	require.True(t, got.CleanupPending)
+	require.Equal(t, "补解除失败", got.LastError)
+
+	finishCleanup(t, s, "sys", 103)
+	got, err = s.GetExecution(ctx, "sys")
+	require.NoError(t, err)
+	require.False(t, got.CleanupPending)
+}
+
+// 当前 schema 通过检查；旧库（缺列、状态约束里没有 PARTIAL）被拒绝，并给出中文提示。
+func TestCheckSchemaRejectsOldDatabase(t *testing.T) {
+	ctx := context.Background()
+	require.NoError(t, openTest(t).CheckSchema(ctx))
+
+	old, err := Open(filepath.Join(t.TempDir(), "old.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = old.Close() })
+	require.NoError(t, old.ApplySchema(`
+CREATE TABLE t_event_executions (
+    c_execution_id TEXT NOT NULL PRIMARY KEY,
+    c_cleanup_pending INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE t_delist_actions (
+    c_execution_id TEXT NOT NULL,
+    c_status TEXT NOT NULL DEFAULT 'PENDING',
+    CHECK (c_status IN ('PENDING', 'RUNNING', 'SUCCEEDED', 'FAILED'))
+);`))
+	err = old.CheckSchema(ctx)
+	require.Error(t, err)
+	for _, want := range []string{"c_claimed_at", "c_cleanup_seq", "c_planned_delist_at", "c_release_verdict", "没有 PARTIAL", "删除库文件"} {
+		require.Contains(t, err.Error(), want)
+	}
 }

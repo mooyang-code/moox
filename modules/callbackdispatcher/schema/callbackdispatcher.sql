@@ -74,6 +74,8 @@ CREATE TABLE IF NOT EXISTS t_event_executions (
     c_acknowledged INTEGER NOT NULL DEFAULT 0,
     -- 系统动作记录已取消但善后（解除禁止买入）还没做成：1 时可以再取消一次重做，善后成功后清 0；清理旧记录时跳过。
     c_cleanup_pending INTEGER NOT NULL DEFAULT 0,
+    -- 每次置位“善后未完成”加一。善后做完只在序号没变时才清除标记：做善后期间别处（Step 写名单后补解除失败）又置了位，它不会被吞掉。
+    c_cleanup_seq INTEGER NOT NULL DEFAULT 0,
     c_created_at INTEGER NOT NULL,
     c_updated_at INTEGER NOT NULL,
     c_finished_at INTEGER NOT NULL DEFAULT 0,
@@ -108,6 +110,7 @@ CREATE TABLE IF NOT EXISTS t_event_attempts (
 
 -- ************ 下架处理的各轮步骤 ************
 -- 轮次 0 是发现即禁止，1 是下架前 24 小时平仓，2 是下架前 2 小时复查平仓，3 是下架后核对。
+-- 平仓轮次里空间和组合账户都为空的一行是这一轮的汇总（查到几个持有者、零头），每个持有的组合另有一行。
 CREATE TABLE IF NOT EXISTS t_delist_actions (
     c_execution_id TEXT NOT NULL,
     c_round INTEGER NOT NULL,
@@ -122,11 +125,17 @@ CREATE TABLE IF NOT EXISTS t_delist_actions (
     c_result TEXT NOT NULL DEFAULT '',
     c_error TEXT NOT NULL DEFAULT '',
     c_next_check_at INTEGER NOT NULL DEFAULT 0,
+    -- 只用于禁止买入那一行：演练（PAPER_ONLY）核对已有结论（SUCCEEDED 或 FAILED，说明在 c_error）而解除禁止没做成时记下结论，
+    -- 之后只重试解除，结论不会因为名单里已经没有这个标的（解除其实已在 Trade 上生效、响应丢了）而丢掉；解除成功后清空。
+    c_release_verdict TEXT NOT NULL DEFAULT '',
+    -- 平仓各行和汇总行：这一轮是按哪个下架时间（Unix 毫秒）规划的。改期后这一轮没成功就按新时间重开（换新操作号）。
+    c_planned_delist_at INTEGER NOT NULL DEFAULT 0,
     c_updated_at INTEGER NOT NULL,
     PRIMARY KEY (c_execution_id, c_round, c_kind, c_space_id, c_logical_account_id),
     FOREIGN KEY (c_execution_id)
         REFERENCES t_event_executions (c_execution_id)
         ON DELETE CASCADE,
+    CHECK (c_release_verdict IN ('', 'SUCCEEDED', 'FAILED')),
     CHECK (c_kind IN ('BLOCK', 'FLATTEN', 'VERIFY')),
-    CHECK (c_status IN ('PENDING', 'RUNNING', 'SUCCEEDED', 'FAILED'))
+    CHECK (c_status IN ('PENDING', 'RUNNING', 'SUCCEEDED', 'FAILED', 'PARTIAL'))
 );

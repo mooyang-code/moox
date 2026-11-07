@@ -1,15 +1,10 @@
 // Package action 是系统动作的框架：处理器的注册点，以及系统动作调用 Trade 用的客户端接口。
 //
-// 第一版的系统动作“卖出策略持有的下架币”（执行计划第 5 节，任务 C6）依赖交易计划 T27 的 Trade 接口，本轮没有实现：
-// 这里只定义好接口。C6 的做法是：
-//  1. 在 trade.go 的 TradeClient 之上实现处理器，经网关（配置里的 gateway_client）调用 Trade 的 BlockInstrument、
-//     UnblockInstrument、ListBlockedInstruments、ListInstrumentHolders、FlattenInstrument、GetOperatorAction；
-//  2. 在 bootstrap 里用 Registry.Register(store.SystemActionSellDelistedHoldings, handler) 注册；
-//  3. 处理器的 Step 每次推进一步，用 Outcome.NextRunAt 记下下一次该推进的时间（等到下架前 24 小时、2 小时、下架后核对），
-//     轮次和步骤存在 t_delist_actions（Store.UpsertDelistAction）；
-//  4. 发现“当前有策略持有”时调用 telemetry.NoteDelistDetected，产生 delist_detected 关注项。
+// 第一版唯一的系统动作“卖出策略持有的下架币”（执行计划第 5 节）由 internal/action/delist 实现，经 internal/tradegateway
+// 里的 TradeClient 适配器调用 Trade，在 bootstrap 里注册。处理器的 Step 每次推进一步，用 Outcome.NextRunAt 记下下一次该推进的时间，
+// 轮次和步骤存在 t_delist_actions。
 //
-// C6 处理器必须遵守（执行计划第 5 节第 12 条）：
+// 处理器必须遵守（执行计划第 5 节第 12 条）：
 //   - 按标的（交易所、市场、代码）加进程内互斥锁，让 Step 里的“写名单 + 复查记录状态”与 OnCancel 里的
 //     “查同一标的有没有别的未结束执行 + 解除禁止”串行，否则演练取消会和同标的真实下架竞态；
 //   - 写名单后复查记录状态，已是已取消就补解除；解除前同一标的只要还有别的未结束执行（真实与演练都算）就不解除；
@@ -17,12 +12,10 @@
 //   - 范围是 PAPER_ONLY 时，自己过滤 ListInstrumentHolders 返回里非模拟盘的持有者，不依赖 Trade 守约；
 //   - OnCancel 幂等：取消后善后没做成的记录带 cleanup_pending，用户会再取消一次重做善后；快速连点两次取消时两路 OnCancel
 //     会同时执行，要靠上面的按标的锁挡住；服务层传给 OnCancel 的 ctx 没有截止时间，调 Trade 要自己加时限；
-//   - Step 写名单后复查发现已取消、补解除又失败时，记录不是执行中，SaveResult 会丢掉结果，也没法把 cleanup_pending 重新置 1：
-//     C6 要在 Store 里加“只在已取消时置 cleanup_pending=1 并写失败说明”的方法；
-//   - 判断“同一标的还有没有别的未结束执行”要跨 ALL 与 PAPER_ONLY 两种范围（按 c_subject_id 查除自己以外的），
-//     合并键带了范围，不能直接用，C6 要在 Store 里加这个查询；
-//   - UpsertDelistAction 不校验领取凭证，卡住后被放回的旧线程迟到仍可写入：“操作号先存下再发起”必须可重入（先读已存的操作号，有就复用）；
-//   - 本版给 t_event_executions 加了 c_cleanup_pending、c_claimed_at，没有迁移：已有的事件中心库文件套新 schema 会报 no such column，必须先删库。
+//   - Step 写名单后复查发现已取消、补解除又失败时，记录不是执行中，SaveResult 会丢掉结果：用
+//     Store.MarkCleanupPendingIfCanceled 把 cleanup_pending 重新置 1；
+//   - UpsertDelistAction 不校验领取凭证，卡住后被放回的旧线程迟到仍可写入：操作号由（执行记录、轮次、空间、组合账户）确定地生成，
+//     新旧线程用的是同一个号，由 Trade 的幂等挡住重复。
 //
 // 没有注册处理器的系统动作，工作线程不会领取对应的执行记录（Store.ClaimDue 按已注册的动作过滤），
 // 记录停在待处理，处理器注册之后立即被处理，不会丢，也不会空转。

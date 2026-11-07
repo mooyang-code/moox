@@ -7,7 +7,7 @@ import type {
   ScopeFilter,
   SubscribableEvent
 } from "@/api/callback-dispatcher";
-import type { InstrumentHolder } from "@/api/callback-dispatcher/delist";
+import type { InstrumentHolder, SkippedAccount } from "@/api/callback-dispatcher/delist";
 
 export type StatusTone = "wait" | "run" | "ok" | "fail" | "cancel";
 
@@ -47,6 +47,19 @@ const STEP_KIND_TEXT: Record<DelistStepKind, string> = {
 
 export function stepKindText(kind: DelistStepKind): string {
   return STEP_KIND_TEXT[kind] ?? "未知";
+}
+
+const STEP_STATUS_TEXT: Record<string, string> = {
+  PENDING: "等待",
+  RUNNING: "进行中",
+  SUCCEEDED: "成功",
+  FAILED: "失败",
+  PARTIAL: "只平了一部分"
+};
+
+/** 下架步骤的状态：Trade 报“只平了一部分”的组合，这一轮不再重试，下一轮复查会换新的操作再平。 */
+export function stepStatusText(status: string): string {
+  return STEP_STATUS_TEXT[status] ?? status;
 }
 
 /** 下架处理各轮的说明：第 0 轮发现即禁止买入，之后是下架前 24 小时平仓、2 小时复查、下架后核对。 */
@@ -111,29 +124,16 @@ export function scopeToForm(scope: ScopeFilter[]): Record<string, string[]> {
   return values;
 }
 
-/** 系统动作的处理器还没上线时，所有系统动作只留执行记录，不会真的动 Trade。 */
-export const SYSTEM_ACTION_DISABLED_TEXT = "系统动作尚未启用，现在只记录；启用后，还没结束的记录会接着处理。";
-
-/** 事件目录没读到时，不知道系统动作有没有启用：什么都不能断言。 */
+/** 服务启动时一定注册系统动作的处理器；事件目录里没读到“系统动作已启用”（还在加载或加载失败）时，什么都不能断言。 */
 export const SYSTEM_ACTION_UNKNOWN_TEXT = "无法确认系统动作是否启用（没有读到事件目录），下面的处理结果以执行记录为准。";
 
-/**
- * 系统动作是否启用的三态：true 已启用，false 尚未启用，null 还在加载或加载失败（未知）。
- * 返回要给用户看的提示；已启用时为空。
- */
+/** 系统动作是否已启用：true 已启用，null 还不知道。返回要给用户看的提示；已启用时为空。 */
 export function systemActionNotice(enabled: boolean | null): string {
-  if (enabled === null) return SYSTEM_ACTION_UNKNOWN_TEXT;
-  return enabled ? "" : SYSTEM_ACTION_DISABLED_TEXT;
+  return enabled === true ? "" : SYSTEM_ACTION_UNKNOWN_TEXT;
 }
 
-export function actionText(
-  rule: Pick<EventRule, "action_type" | "notify_url" | "system_action">,
-  systemActionEnabled: boolean | null = true
-): string {
-  if (rule.action_type === "ACTION_TYPE_SYSTEM") {
-    return systemActionEnabled === false ? "系统：卖出策略持有的下架币（尚未启用，只记录）" : "系统：卖出策略持有的下架币";
-  }
-  return `通知地址：${rule.notify_url}`;
+export function actionText(rule: Pick<EventRule, "action_type" | "notify_url" | "system_action">): string {
+  return rule.action_type === "ACTION_TYPE_SYSTEM" ? "系统：卖出策略持有的下架币" : `通知地址：${rule.notify_url}`;
 }
 
 /** 通知地址只允许 http、https。返回错误说明，合法时返回空串。 */
@@ -159,7 +159,10 @@ export const canCancel = (item: EventExecution) =>
   item.status === "EXECUTION_STATUS_RUNNING" ||
   (item.status === "EXECUTION_STATUS_CANCELED" && item.cleanup_pending);
 
-export const cancelLabel = (item: EventExecution) => (item.cleanup_pending ? "重试善后" : "取消");
+export function cancelLabel(item: EventExecution): string {
+  if (item.cleanup_pending) return "重试善后";
+  return item.action_type === "ACTION_TYPE_SYSTEM" ? "取消并解除禁止" : "取消";
+}
 
 export function cancelConfirmText(item: EventExecution): string {
   if (item.cleanup_pending) return "这条记录已经取消，但解除禁止买入没做成。确认重试？";
@@ -244,8 +247,40 @@ export function summarizeHolders(holders: InstrumentHolder[]): HolderSummary {
   return summary;
 }
 
+const HOLDER_STATUS_TEXT: Record<string, string> = {
+  DISABLED: "账户已停用，平仓会失败，需要人工处理",
+  ERROR: "账户出错，平仓可能失败，需要人工处理"
+};
+
+/** 持有者一行：数量之外，停用或出错的账户和 Trade 的标注也要写出来，这是破坏性操作的确认依据。 */
 export function holderLine(holder: InstrumentHolder): string {
-  return `${holder.space_id} / ${holder.logical_account_id}（执行账户 ${holder.trading_account_id}）数量 ${holder.quantity}`;
+  const extras = [HOLDER_STATUS_TEXT[holder.status], holder.note].filter(Boolean);
+  const tail = extras.length ? `（${extras.join("；")}）` : "";
+  return `${holder.space_id} / ${holder.logical_account_id}（执行账户 ${holder.trading_account_id}）数量 ${holder.quantity}${tail}`;
+}
+
+/** 没能判断的账户一行。 */
+export function skippedLine(account: SkippedAccount): string {
+  return `执行账户 ${account.trading_account_id}：${account.reason || "原因未知"}`;
+}
+
+/**
+ * 登记前二次确认的勾选框文字；不需要确认时为空。几种情况同时出现时合并成一句，每件要确认的事都写出来：
+ * “会平仓生产组合”是破坏性操作的确认依据，不能因为同时有没能判断的账户就被吞掉。
+ */
+export function confirmCheckboxText(input: {
+  previewFailed: boolean;
+  verified: boolean;
+  skipped: number;
+  live: number;
+  willProcess: boolean;
+}): string {
+  if (input.previewFailed || !input.verified) return "我知道无法确认持有情况，仍然登记";
+  const parts: string[] = [];
+  if (input.live > 0) parts.push(input.willProcess ? "有生产组合会被平仓" : "有生产组合持有这个标的");
+  if (input.skipped > 0) parts.push("有账户没能判断持有情况");
+  if (!parts.length) return "";
+  return `我确认${parts.join("，并且")}，仍然登记`;
 }
 
 /** 手工登记时可能出现的取值。 */

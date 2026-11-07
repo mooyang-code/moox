@@ -7,7 +7,10 @@
     @update:visible="(value: boolean) => emit('update:visible', value)"
   >
     <template v-if="phase === 'form'">
-      <a-alert v-if="systemActionEnabled === true" class="block-alert">
+      <a-alert v-if="systemRuleEnabled === false" type="warning" class="block-alert">
+        系统规则“标的即将下架时，卖出策略持有的这个币”已停用：新登记的下架不会被处理，不会禁止买入，也不会平仓。同一个标的已经在处理的下架照常处理，登记新的下架时间会照常改期。
+      </a-alert>
+      <a-alert v-else-if="systemActionEnabled === true" class="block-alert">
         用来补录漏报的下架，或做演练。登记后，系统会立即禁止买入这个标的，下架前 24 小时平掉策略持有的部分。
       </a-alert>
       <a-alert v-else type="warning" class="block-alert">
@@ -46,7 +49,7 @@
 
     <template v-else>
       <p class="summary-title">
-        {{ exchangeLabel }} {{ marketLabel }} {{ form.exchange_symbol.trim() }}，下架时间 {{ formatMs(delistAtMs) }}
+        {{ exchangeLabel }} {{ marketLabel }} {{ form.exchange_symbol.trim().toUpperCase() }}，下架时间 {{ formatMs(delistAtMs) }}
       </p>
       <a-alert v-if="pastTime" type="warning" class="block-alert">这个时间已经过去，只做核对，不会下单。</a-alert>
       <a-alert v-if="previewFailed" type="warning" class="block-alert">
@@ -59,9 +62,9 @@
         <p v-if="instrumentUnknown" class="muted">
           交易服务里没有这个标的（还没开通对应市场的账户），没有策略持有。{{ noHolderEffect }}
         </p>
-        <p v-else-if="!holders.length" class="muted">没有策略持有这个标的。{{ noHolderEffect }}</p>
-        <template v-else>
-          <p v-if="systemActionEnabled === true">下面这些组合持有这个标的，下架前 24 小时会被平仓：</p>
+        <p v-else-if="!holders.length && !skippedAccounts.length" class="muted">没有策略持有这个标的。{{ noHolderEffect }}</p>
+        <template v-else-if="holders.length">
+          <p v-if="willProcess">下面这些组合持有这个标的，下架前 24 小时会被平仓：</p>
           <p v-else>下面这些组合持有这个标的：</p>
           <ul class="holder-list">
             <li v-for="holder in summary.live" :key="holderKey(holder)">生产　{{ holderLine(holder) }}</li>
@@ -74,11 +77,22 @@
             </ul>
           </template>
         </template>
+        <template v-if="skippedAccounts.length">
+          <a-alert type="warning" class="block-alert">
+            下面这些账户没能判断是否持有这个标的，不能当作没有持有，登记前请先确认：
+          </a-alert>
+          <ul class="holder-list">
+            <li v-for="account in skippedAccounts" :key="account.trading_account_id">{{ skippedLine(account) }}</li>
+          </ul>
+        </template>
+        <template v-if="notes.length">
+          <p class="muted">Trade 的说明：</p>
+          <ul class="holder-list muted">
+            <li v-for="note in notes" :key="note">{{ note }}</li>
+          </ul>
+        </template>
       </template>
-      <a-checkbox v-if="previewFailed || !verified" v-model="confirmed">我知道无法确认持有情况，仍然登记</a-checkbox>
-      <a-checkbox v-else-if="summary.live.length" v-model="confirmed">
-        {{ systemActionEnabled === true ? "我确认有生产组合会被平仓，仍然登记" : "我确认有生产组合持有这个标的，仍然登记" }}
-      </a-checkbox>
+      <a-checkbox v-if="confirmText" v-model="confirmed">{{ confirmText }}</a-checkbox>
     </template>
 
     <template #footer>
@@ -109,24 +123,27 @@ import {
   registerDelistNotice,
   type DelistExchange,
   type DelistMarket,
-  type InstrumentHolder
+  type InstrumentHolder,
+  type SkippedAccount
 } from "@/api/callback-dispatcher/delist";
 import { reportControlError } from "@/api/admin/http";
 import {
   DELIST_EXCHANGES,
   DELIST_MARKETS,
+  confirmCheckboxText,
   delistTimeError,
   formatMs,
   holderLine,
   isPastDelistTime,
   pickerValueToMs,
+  skippedLine,
   summarizeHolders,
   systemActionNotice
 } from "./event-center-utils";
 
 defineOptions({ name: "EventDelistDialog" });
 
-const props = defineProps<{ visible: boolean; systemActionEnabled: boolean | null }>();
+const props = defineProps<{ visible: boolean; systemActionEnabled: boolean | null; systemRuleEnabled: boolean | null }>();
 const emit = defineEmits<{ "update:visible": [value: boolean] }>();
 
 const form = reactive({
@@ -140,6 +157,8 @@ const phase = ref<"form" | "confirm">("form");
 const previewing = ref(false);
 const submitting = ref(false);
 const holders = ref<InstrumentHolder[]>([]);
+const skippedAccounts = ref<SkippedAccount[]>([]);
+const notes = ref<string[]>([]);
 const verified = ref(true);
 const instrumentUnknown = ref(false);
 const previewFailed = ref(false);
@@ -149,10 +168,21 @@ const confirmed = ref(false);
 const delistAtMs = computed(() => pickerValueToMs(form.delist_at));
 const pastTime = computed(() => isPastDelistTime(delistAtMs.value, Date.now()));
 const summary = computed(() => summarizeHolders(holders.value));
-const needConfirm = computed(() => previewFailed.value || !verified.value || summary.value.live.length > 0);
-const noHolderEffect = computed(() =>
-  props.systemActionEnabled ? "登记后只会禁止买入。" : "登记后现在只记录，启用后才会处理。"
+const confirmText = computed(() =>
+  confirmCheckboxText({
+    previewFailed: previewFailed.value,
+    verified: verified.value,
+    skipped: skippedAccounts.value.length,
+    live: summary.value.live.length,
+    willProcess: willProcess.value
+  })
 );
+const needConfirm = computed(
+  () => previewFailed.value || !verified.value || skippedAccounts.value.length > 0 || summary.value.live.length > 0
+);
+// 系统动作已启用并且系统规则没有停用，登记的下架才会真的被处理。
+const willProcess = computed(() => props.systemActionEnabled === true && props.systemRuleEnabled !== false);
+const noHolderEffect = computed(() => (willProcess.value ? "登记后只会禁止买入。" : ""));
 const exchangeLabel = computed(() => DELIST_EXCHANGES.find(item => item.value === form.exchange)?.label ?? form.exchange);
 const marketLabel = computed(() => DELIST_MARKETS.find(item => item.value === form.market)?.label ?? form.market);
 
@@ -165,6 +195,8 @@ watch(
     Object.assign(form, { exchange: "binance", market: "SPOT", exchange_symbol: "", delist_at: "", paper_only: false });
     phase.value = "form";
     holders.value = [];
+    skippedAccounts.value = [];
+    notes.value = [];
     verified.value = true;
     instrumentUnknown.value = false;
     previewFailed.value = false;
@@ -192,11 +224,15 @@ async function preview() {
       paper_only: form.paper_only
     });
     holders.value = result.holders;
+    skippedAccounts.value = result.skippedAccounts;
+    notes.value = result.notes;
     verified.value = result.verified;
     instrumentUnknown.value = result.instrumentUnknown;
     previewFailed.value = false;
   } catch (error) {
     holders.value = [];
+    skippedAccounts.value = [];
+    notes.value = [];
     verified.value = true;
     instrumentUnknown.value = false;
     previewFailed.value = true;
@@ -213,7 +249,7 @@ async function submit() {
     const result = await registerDelistNotice({
       exchange: form.exchange,
       market: form.market,
-      exchange_symbol: form.exchange_symbol.trim(),
+      exchange_symbol: form.exchange_symbol.trim().toUpperCase(),
       delist_at_ms: delistAtMs.value,
       paper_only: form.paper_only
     });

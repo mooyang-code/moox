@@ -91,7 +91,7 @@ func pageResult(page, size int, total int64) *pb.PageResult {
 	return &pb.PageResult{Page: uint32(page), Size: uint32(size), Total: uint32(total), HasMore: int64(page*size) < total}
 }
 
-// ListSubscribableEvents 返回可配置规则的事件目录，以及已经上线的系统动作（没上线的只记录，不真的执行）。
+// ListSubscribableEvents 返回可配置规则的事件目录，以及已经注册了处理器的系统动作。
 func (s *Service) ListSubscribableEvents(_ context.Context, _ *pb.ListSubscribableEventsReq) (*pb.ListSubscribableEventsRsp, error) {
 	rsp := &pb.ListSubscribableEventsRsp{RetInfo: okRet()}
 	for _, name := range s.Actions.Actions() {
@@ -196,6 +196,10 @@ func normalizeScope(entry catalog.Entry, scope []*pb.ScopeFilter) ([]store.Scope
 			value := strings.TrimSpace(raw)
 			if value == "" || len(value) > 256 {
 				return nil, fmt.Errorf("%s 的取值不能为空，也不能太长", definition.Title)
+			}
+			if field == catalog.FieldExchangeSymbol {
+				// 事件里的交易所代码一律是大写（入口统一）：填小写的规则永远匹配不上，所以保存时统一成大写。
+				value = strings.ToUpper(value)
 			}
 			if len(definition.Options) != 0 && !contains(definition.Options, value) {
 				return nil, fmt.Errorf("%s 的取值 %q 不在可选范围 %s 内", definition.Title, value, strings.Join(definition.Options, "、"))
@@ -488,6 +492,12 @@ func (s *Service) CancelEventExecution(ctx context.Context, req *pb.CancelEventE
 	if execution.ActionType == store.ActionSystem {
 		// 善后和记状态都不跟请求一起取消：请求超时不能让记录停在“已取消但没人知道善后没做”。
 		cleanupCtx := context.WithoutCancel(ctx)
+		// 开始善后前读下标记的序号：善后期间标记被重新置位（序号变了），FinishCleanup 就不清除它。
+		current, err := s.Store.GetExecution(cleanupCtx, execution.ExecutionID)
+		if err != nil {
+			return fail(internalRet(ctx, "记录已取消，但读取执行记录失败，请点“重试善后”", err))
+		}
+		cleanupSeq := current.CleanupSeq
 		rule, err := s.Store.GetRule(cleanupCtx, execution.RuleID)
 		if err != nil && !errors.Is(err, store.ErrNotFound) {
 			return fail(internalRet(ctx, "记录已取消，但读取事件规则失败，请点“重试善后”", err))
@@ -501,7 +511,7 @@ func (s *Service) CancelEventExecution(ctx context.Context, req *pb.CancelEventE
 				return fail(failRet(pb.ErrorCode_INNER_ERR, "记录已取消，但解除禁止买入失败，请点“重试善后”"))
 			}
 		}
-		if err := s.Store.FinishCleanup(cleanupCtx, execution.ExecutionID, s.now().UnixMilli()); err != nil {
+		if _, err := s.Store.FinishCleanup(cleanupCtx, execution.ExecutionID, cleanupSeq, s.now().UnixMilli()); err != nil {
 			return fail(internalRet(ctx, "记录已取消，但记下善后完成失败，请点“重试善后”", err))
 		}
 	}

@@ -157,6 +157,13 @@ describe("手工登记下架的外部接口", () => {
     });
   });
 
+  it("交易所代码统一成大写：预览和登记都按同一个写法", () => {
+    expect(
+      buildHoldersRequest({ exchange: "binance", market: "SPOT", exchange_symbol: " foousdt ", paper_only: false })
+        .exchange_symbol
+    ).toBe("FOOUSDT");
+  });
+
   it("预览持有者：静默调用，缺省字段补默认值", async () => {
     mocks.callTrade.mockResolvedValue({
       ret_info: { code: 0 },
@@ -218,10 +225,10 @@ describe("手工登记下架的外部接口", () => {
     expect((await listInstrumentHolders({ ...paperOnly, paper_only: false })).verified).toBe(false);
   });
 
-  it("有账户出错没能判断时不能当成确认了持有情况", async () => {
+  it("有账户没能判断时：持有者照常返回，没能判断的账户单独带回", async () => {
     mocks.callTrade.mockResolvedValue({
       ret_info: { code: 0 },
-      holders: [],
+      holders: [{ space_id: "crypto", logical_account_id: "la-1", quantity: "2", status: "DISABLED", note: "取不到报价" }],
       skipped_accounts: [{ trading_account_id: "ta-9", reason: "资金设置读不出来" }]
     });
     const result = await listInstrumentHolders({
@@ -230,7 +237,9 @@ describe("手工登记下架的外部接口", () => {
       exchange_symbol: "FOOUSDT",
       paper_only: false
     });
-    expect(result.verified).toBe(false);
+    expect(result.verified).toBe(true);
+    expect(result.holders).toHaveLength(1);
+    expect(result.holders[0]).toMatchObject({ status: "DISABLED", note: "取不到报价" });
     expect(result.skippedAccounts).toEqual([{ trading_account_id: "ta-9", reason: "资金设置读不出来" }]);
   });
 

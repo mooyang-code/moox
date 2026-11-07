@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -31,6 +32,8 @@ type Detector struct {
 	failures map[string]int
 	lastErr  map[string]string
 	keyGone  map[string]bool
+	// rejected 是各来源这一轮被校验拒绝的条目：拒绝等于漏报，所以按关注项报出来，下一轮不再被拒就恢复。
+	rejected map[string]string
 }
 
 // Run 一直轮询到 ctx 结束。第一轮在启动后马上进行。
@@ -56,7 +59,7 @@ func (d *Detector) RunOnce(ctx context.Context) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.failures == nil {
-		d.failures, d.lastErr, d.keyGone = map[string]int{}, map[string]string{}, map[string]bool{}
+		d.failures, d.lastErr, d.keyGone, d.rejected = map[string]int{}, map[string]string{}, map[string]bool{}, map[string]string{}
 	}
 	timeout := d.FetchTimeout
 	if timeout <= 0 {
@@ -86,8 +89,12 @@ func (d *Detector) RunOnce(ctx context.Context) {
 		}
 		d.keyGone[name] = false
 		d.failures[name] = 0
+		rejected := false
 		for _, notice := range earliestPerInstrument(notices) {
 			created, eventID, err := d.Registrar.Register(ctx, notice)
+			if errors.Is(err, ErrInvalidNotice) {
+				rejected = true
+			}
 			if err != nil {
 				log.ErrorContextf(ctx, "[Collector] 登记下架通知 %s:%s:%s 失败: %v", notice.Exchange, notice.Market, notice.Symbol, err)
 				continue
@@ -95,6 +102,12 @@ func (d *Detector) RunOnce(ctx context.Context) {
 			if created {
 				log.InfoContextf(ctx, "[Collector] 发现标的即将下架 %s:%s:%s 下架时间 %s 来源 %s 事件 %s", notice.Exchange, notice.Market, notice.Symbol, notice.DelistAt.Format(time.RFC3339), name, eventID)
 			}
+		}
+		if rejected {
+			// 每个来源一段固定文字：detail 带条数、第一个被拒的条目之类会变的内容，每变一次 Monitor 就多一条新序列；具体条目看日志。
+			d.rejected[name] = name + " 有下架条目被校验拒绝、没有发布（可能漏报），详见 Collector 日志"
+		} else {
+			delete(d.rejected, name)
 		}
 	}
 	d.publishLocked()
@@ -107,6 +120,8 @@ func earliestPerInstrument(notices []Notice) []Notice {
 	index := map[key]int{}
 	var out []Notice
 	for _, notice := range notices {
+		// 交易所代码在去重之前先统一成大写（Register 也会再统一一次）：同一个币的不同写法是同一个标的，只保留下架时间最早的一条。
+		notice.Symbol = strings.ToUpper(strings.TrimSpace(notice.Symbol))
 		scope := notice.Scope
 		if scope == "" {
 			scope = events.DelistScopeAll
@@ -133,6 +148,9 @@ func (d *Detector) publishLocked() {
 		if count >= SourceFailureThreshold {
 			items[attention.KindSourceFailed] = append(items[attention.KindSourceFailed], fmt.Sprintf("%s 连续 %d 次以上失败：%s", name, SourceFailureThreshold, stable(d.lastErr[name])))
 		}
+	}
+	for _, reason := range d.rejected {
+		items[attention.KindSourceFailed] = append(items[attention.KindSourceFailed], reason)
 	}
 	for name, missing := range d.keyGone {
 		if missing {

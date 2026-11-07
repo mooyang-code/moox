@@ -50,4 +50,12 @@ func TestInstrumentDelistScheduledRoundTripAndValidation(t *testing.T) {
 		_, err := registry.Encode(InstrumentDelistScheduled, broken, opts)
 		require.Error(t, err, name)
 	}
+
+	// 交易所代码必须是大写：subject 也一起改成小写，这样只有大写校验能拦住它（不是靠 subject 对不上）。
+	lower := proto.Clone(payload).(*storagepb.InstrumentDelistScheduled)
+	lower.ExchangeSymbol = "foousdt"
+	lowerOpts := opts
+	lowerOpts.SubjectID = InstrumentDelistSubjectID("binance", DelistMarketSpot, "foousdt")
+	_, err = registry.Encode(InstrumentDelistScheduled, lower, lowerOpts)
+	require.ErrorContains(t, err, "upper case")
 }

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/callbackdispatcher/internal/action"
+	"github.com/mooyang-code/moox/modules/callbackdispatcher/internal/action/delist"
 	"github.com/mooyang-code/moox/modules/callbackdispatcher/internal/config"
 	"github.com/mooyang-code/moox/modules/callbackdispatcher/internal/delivery"
 	"github.com/mooyang-code/moox/modules/callbackdispatcher/internal/dispatch"
@@ -16,9 +17,11 @@ import (
 	"github.com/mooyang-code/moox/modules/callbackdispatcher/internal/health"
 	"github.com/mooyang-code/moox/modules/callbackdispatcher/internal/rpc"
 	"github.com/mooyang-code/moox/modules/callbackdispatcher/internal/store"
+	"github.com/mooyang-code/moox/modules/callbackdispatcher/internal/tradegateway"
 	pb "github.com/mooyang-code/moox/modules/callbackdispatcher/proto/callbackdispatchergen"
 	"github.com/mooyang-code/moox/modules/callbackdispatcher/schema"
 	"github.com/mooyang-code/moox/packages/events"
+	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/report"
@@ -39,13 +42,14 @@ const (
 // Runtime 持有进程资源并决定关闭顺序：先停后台循环，再关库。
 type Runtime struct {
 	Store     *store.Store
+	Gateway   *gatewayclient.Client
 	cancel    context.CancelFunc
 	workers   sync.WaitGroup
 	closeOnce sync.Once
 	closeErr  error
 }
 
-// Close 停止后台循环并关闭数据库。
+// Close 停止后台循环并关闭网关客户端和数据库。
 func (r *Runtime) Close() error {
 	if r == nil {
 		return nil
@@ -55,8 +59,13 @@ func (r *Runtime) Close() error {
 			r.cancel()
 		}
 		r.workers.Wait()
+		if r.Gateway != nil {
+			r.closeErr = r.Gateway.Close()
+		}
 		if r.Store != nil {
-			r.closeErr = r.Store.Close()
+			if err := r.Store.Close(); err != nil && r.closeErr == nil {
+				r.closeErr = err
+			}
 		}
 	})
 	return r.closeErr
@@ -99,13 +108,21 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	if err := dbStore.ApplySchema(schema.AllSQL()); err != nil {
 		return nil, fmt.Errorf("初始化数据库结构失败: %w", err)
 	}
+	if err := dbStore.CheckSchema(ctx); err != nil {
+		return nil, fmt.Errorf("%w（库文件 %s）", err, cfg.Database.Path)
+	}
 	// 服务自带的系统规则：首次启动时创建，默认启用；用户停用过的不会被改回来。
 	if err := dbStore.EnsureSystemRule(ctx, rpc.SystemRule(time.Now())); err != nil {
 		return nil, fmt.Errorf("创建系统规则失败: %w", err)
 	}
 
-	// 系统动作的处理器在这里注册（任务 C6，依赖 Trade 的下架接口）；没有注册的动作，其执行记录停在待处理。
+	// 系统动作经网关调用 Trade：网关打不开（没有安装身份、目录读不到）就不能启动，不静默退化成只记录。
+	runtime.Gateway, err = cfg.OpenGateway(func(err error) { log.WarnContextf(ctx, "事件中心网关目录刷新失败: %v", err) })
+	if err != nil {
+		return nil, fmt.Errorf("打开网关客户端失败: %w", err)
+	}
 	actions := action.NewRegistry()
+	actions.Register(store.SystemActionSellDelistedHoldings, &delist.Handler{Store: dbStore, Trade: tradegateway.New(runtime.Gateway)})
 	sender := delivery.NewSender(delivery.Config{ConnectTimeout: cfg.Delivery.ConnectTimeout, RequestTimeout: cfg.Delivery.RequestTimeout})
 	intake := &dispatch.Intake{Store: dbStore, Registry: registry}
 	worker := &dispatch.Worker{

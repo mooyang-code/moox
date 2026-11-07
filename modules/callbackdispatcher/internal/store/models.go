@@ -63,9 +63,11 @@ type Execution struct {
 	Acknowledged bool
 	// CleanupPending 表示系统动作记录已取消，但取消后的善后（解除禁止买入）还没做成；做成之前可以再取消一次重做。
 	CleanupPending bool
-	CreatedAt      int64
-	UpdatedAt      int64
-	FinishedAt     int64
+	// CleanupSeq 是“善后未完成”标记每次置位时加一的序号，FinishCleanup 凭它判断善后期间标记有没有被重新置位。
+	CleanupSeq int64
+	CreatedAt  int64
+	UpdatedAt  int64
+	FinishedAt int64
 }
 
 // Attempt 是通知地址的一次尝试。
@@ -94,7 +96,11 @@ type DelistAction struct {
 	Result           string
 	Error            string
 	NextCheckAt      int64
-	UpdatedAt        int64
+	// PlannedDelistAt 是平仓各行和汇总行规划时依据的下架时间（Unix 毫秒）。
+	PlannedDelistAt int64
+	// ReleaseVerdict 只用于禁止买入那一行：演练核对已有结论、解除禁止没做成时的结论（SUCCEEDED、FAILED），否则为空。
+	ReleaseVerdict string
+	UpdatedAt      int64
 }
 
 // 下架处理的步骤种类与状态。
@@ -107,6 +113,8 @@ const (
 	DelistRunning   = "RUNNING"
 	DelistSucceeded = "SUCCEEDED"
 	DelistFailed    = "FAILED"
+	// DelistPartial 是平仓只完成了一部分：Trade 报 PARTIAL（最近一笔被交易所拒绝、连续多笔没成交等），这一轮不再重试，由下一轮复查换新操作号再平。
+	DelistPartial = "PARTIAL"
 )
 
 // 数据库行：列名与 schema 一一对应。
@@ -150,6 +158,7 @@ type executionRow struct {
 	DurationMS     int64  `gorm:"column:c_duration_ms"`
 	Acknowledged   bool   `gorm:"column:c_acknowledged"`
 	CleanupPending bool   `gorm:"column:c_cleanup_pending"`
+	CleanupSeq     int64  `gorm:"column:c_cleanup_seq"`
 	CreatedAt      int64  `gorm:"column:c_created_at;autoCreateTime:false"`
 	UpdatedAt      int64  `gorm:"column:c_updated_at;autoUpdateTime:false"`
 	FinishedAt     int64  `gorm:"column:c_finished_at"`
@@ -183,6 +192,8 @@ type delistRow struct {
 	Result           string `gorm:"column:c_result"`
 	Error            string `gorm:"column:c_error"`
 	NextCheckAt      int64  `gorm:"column:c_next_check_at"`
+	PlannedDelistAt  int64  `gorm:"column:c_planned_delist_at"`
+	ReleaseVerdict   string `gorm:"column:c_release_verdict"`
 	UpdatedAt        int64  `gorm:"column:c_updated_at;autoUpdateTime:false"`
 }
 

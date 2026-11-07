@@ -467,3 +467,21 @@ func TestDeleteRuleCancelsItsPendingExecutions(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_NOT_FOUND, again.RetInfo.Code)
 }
+
+// 事件里的交易所代码一律大写：规则里填小写的代码，保存时统一成大写，创建和更新都一样，不会永远匹配不上。
+func TestRuleScopeUppercasesExchangeSymbol(t *testing.T) {
+	s, _ := newService(t)
+	ctx := context.Background()
+	created := createRule(t, s, func(r *pb.CreateEventRuleReq) {
+		r.Scope = []*pb.ScopeFilter{{Field: "exchange_symbol", Values: []string{" foousdt ", "FOOUSDT", "bar-usdt-swap"}}}
+	})
+	require.Equal(t, pb.ErrorCode_SUCCESS, created.RetInfo.Code, created.RetInfo.Msg)
+	require.Equal(t, []string{"FOOUSDT", "BAR-USDT-SWAP"}, created.Rule.Scope[0].Values)
+
+	updated, err := s.UpdateEventRule(ctx, &pb.UpdateEventRuleReq{
+		RuleId: created.Rule.RuleId, Scope: &pb.ScopeFilters{Items: []*pb.ScopeFilter{{Field: "exchange_symbol", Values: []string{"bazusdt"}}}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, updated.RetInfo.Code, updated.RetInfo.Msg)
+	require.Equal(t, []string{"BAZUSDT"}, updated.Rule.Scope[0].Values)
+}
