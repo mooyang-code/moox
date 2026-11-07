@@ -29,7 +29,7 @@ func (h *ExecutionServer) SubmitOrder(ctx context.Context, req *tradepb.SubmitOr
 		}
 		limitPrice = &value
 	}
-	instrumentID, err := h.accountInstrumentID(ctx, spaceID, req.GetTradingAccountId(), req.GetInstrumentId())
+	instrumentID, err := h.requestInstrumentID(ctx, spaceID, req.GetTradingAccountId(), req.GetInstrumentId(), req.GetMarketType())
 	if err != nil {
 		return &tradepb.SubmitOrderRsp{RetInfo: instrumentErrorInfo(err)}, nil
 	}

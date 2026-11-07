@@ -791,6 +791,7 @@ func (s *operatorOrderStub) Place(
 		SpaceID: spaceID, OrderID: id,
 		TradingAccountID: spec.TradingAccountID,
 		ClientOrderID:    spec.ClientOrderID, ExchangeSymbol: spec.InstrumentID,
+		MarketType: string(exchange.MarketOfInstrumentID(spec.InstrumentID)), InstrumentID: spec.InstrumentID,
 		OrderType: string(spec.Type), TimeInForce: string(spec.FillPolicy),
 		Side: string(spec.Side), PositionSide: string(spec.PositionSide),
 		Quantity: spec.Quantity.String(), ReferencePrice: spec.ReferencePrice.String(),

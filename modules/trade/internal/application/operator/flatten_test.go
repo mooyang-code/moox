@@ -136,7 +136,7 @@ func TestFlattenAttemptsEveryCancellationForOneAccount(t *testing.T) {
 	}
 
 	err := fixture.service().cancelAccountOrders(
-		context.Background(), "space-1", "account-a", "flatten-1",
+		context.Background(), "space-1", "account-a", "flatten-1", flattenScope{},
 	)
 
 	require.ErrorContains(t, err, "first cancel failed")

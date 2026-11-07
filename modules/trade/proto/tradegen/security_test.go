@@ -131,6 +131,7 @@ func TestManualOrderRequestHasExactApprovedShape(t *testing.T) {
 		"limit_price":        10,
 		"reason":             11,
 		"deadline_at":        12,
+		"market_type":        13,
 	}
 	fields := (&PlaceManualOrderReq{}).ProtoReflect().Descriptor().Fields()
 	if fields.Len() != len(want) {

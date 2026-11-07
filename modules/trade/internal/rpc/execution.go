@@ -76,7 +76,7 @@ func (h *ExecutionServer) PlaceManualOrder(
 		}
 		limitPrice = &value
 	}
-	instrumentID, err := h.accountInstrumentID(ctx, spaceID, req.GetTradingAccountId(), req.GetInstrumentId())
+	instrumentID, err := h.requestInstrumentID(ctx, spaceID, req.GetTradingAccountId(), req.GetInstrumentId(), req.GetMarketType())
 	if err != nil {
 		return &tradepb.PlaceManualOrderRsp{RetInfo: instrumentErrorInfo(err)}, nil
 	}
@@ -392,6 +392,25 @@ func normalizeForMarkets(raw string, markets []string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("%w: 开通了多个市场 %v，标的 %q 必须带市场后缀", exchange.ErrInvalidInstrumentID, markets, raw)
+}
+
+// requestInstrumentID 按请求显式给的市场标准化标的 ID：账户必须开通了这个市场。没给市场时回到账户开通的市场
+// （只开通一个时按它，开通多个时标的 ID 必须自带后缀）。
+func (h *ExecutionServer) requestInstrumentID(
+	ctx context.Context, spaceID, tradingAccountID, raw string, market tradepb.MarketType,
+) (string, error) {
+	if market == tradepb.MarketType_MARKET_TYPE_UNSPECIFIED || raw == "" {
+		return h.accountInstrumentID(ctx, spaceID, tradingAccountID, raw)
+	}
+	account, err := h.Store.GetTradingAccount(ctx, spaceID, tradingAccountID)
+	if err != nil {
+		return "", err
+	}
+	explicit := marketFromPB(market)
+	if !account.SupportsMarket(string(explicit)) {
+		return "", fmt.Errorf("%w: 账户没有开通市场 %s", exchange.ErrInvalidInstrumentID, explicit)
+	}
+	return exchange.NormalizeInstrumentID(raw, explicit)
 }
 
 // accountInstrumentID 按执行账户已开通的市场标准化上游传入的标的 ID。

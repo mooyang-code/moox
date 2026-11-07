@@ -85,7 +85,7 @@ func (s *ConsoleServer) ListAccountLedger(
 	}
 	queryCtx, cancel := context.WithTimeout(ctx, ledgerQueryTimeout)
 	defer cancel()
-	page, err := source.ListLedger(queryCtx, exchange.LedgerQuery{Start: start, End: end, Limit: limit})
+	page, err := source.ListLedger(queryCtx, exchange.LedgerQuery{Market: marketFromPB(req.GetMarketType()), Start: start, End: end, Limit: limit})
 	if err != nil {
 		return &tradepb.ListAccountLedgerRsp{RetInfo: errorInfo(err)}, nil
 	}
@@ -94,7 +94,7 @@ func (s *ConsoleServer) ListAccountLedger(
 		rsp.Entries = append(rsp.Entries, &tradepb.LedgerEntry{
 			Id: entry.ID, Time: entry.Time.UnixMilli(), Type: string(entry.Type), ExchangeType: entry.ExchangeType,
 			Asset: entry.Asset, Amount: entry.Amount.String(), ExchangeSymbol: entry.ExchangeSymbol,
-			TradeId: entry.TradeID, Info: entry.Info,
+			TradeId: entry.TradeID, Info: entry.Info, MarketType: marketToPB(string(entry.Market)),
 		})
 	}
 	return rsp, nil

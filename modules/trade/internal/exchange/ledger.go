@@ -31,7 +31,9 @@ type LedgerEntry struct {
 	ExchangeType string
 	Asset        string
 	// Amount 是余额变动，正数为增加。
-	Amount         shared.Decimal
+	Amount shared.Decimal
+	// Market 是流水所属的市场；账户级的流水（例如划转）为空。
+	Market         MarketType
 	ExchangeSymbol string
 	TradeID        string
 	Info           string

@@ -258,7 +258,18 @@ func (m *MultiMarket) ListLedger(ctx context.Context, query exchange.LedgerQuery
 	if !ok || !source.LedgerSupported() {
 		return exchange.LedgerPage{}, &exchange.Error{Kind: exchange.ErrorRejected, Err: fmt.Errorf("市场 %s 不支持资金流水", market)}
 	}
-	return source.ListLedger(ctx, query)
+	query.Market = market
+	page, err := source.ListLedger(ctx, query)
+	if err != nil {
+		return exchange.LedgerPage{}, err
+	}
+	// 流水带上所属市场，同名的现货和合约代码不会混淆。
+	for i := range page.Entries {
+		if page.Entries[i].Market == exchange.MarketTypeUnspecified {
+			page.Entries[i].Market = market
+		}
+	}
+	return page, nil
 }
 
 // Subscribe 同时订阅各市场的私有流，任何一路断开都整体结束并上报，由会话重连；

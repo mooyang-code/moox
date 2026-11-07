@@ -406,7 +406,7 @@ func (s *Service) ResumeOperatorAction(
 		return nil
 	}
 	switch action.ActionType {
-	case "FLATTEN":
+	case "FLATTEN", "REDUCE", "DELIST_FLATTEN":
 		command, err := decodeFlattenRequest(action)
 		if err != nil {
 			return err

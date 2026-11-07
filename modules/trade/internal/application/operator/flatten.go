@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -31,6 +32,10 @@ type FlattenCommand struct {
 	// TradingAccountID 非空时只平组合里的这一个执行账户，其他成员的单和仓不动。
 	TradingAccountID string
 	Reason           string
+	// InstrumentID 非空时只处理这个标的（内部标的 ID）：撤单、平仓、剩余统计都只看它，不暂停组合账户。
+	InstrumentID string
+	// ReduceRatio 在 0 到 1 之间时只减掉这个比例的持仓；为零或 1 表示全部清掉。
+	ReduceRatio shared.Decimal
 }
 
 type RemainingPosition struct {
@@ -78,11 +83,15 @@ type FlattenAccountResult struct {
 type FlattenResult struct {
 	Action   store.OperatorActionRecord `json:"-"`
 	Accounts []FlattenAccountResult     `json:"accounts"`
+	// ReduceTargets 是减仓发起时写定的各持仓目标数量（键：执行账户|标的 ID），之后各轮都收敛到它。
+	ReduceTargets map[string]string `json:"reduce_targets,omitempty"`
 }
 
 type flattenRequest struct {
 	LogicalAccountID string `json:"logical_account_id"`
 	TradingAccountID string `json:"trading_account_id,omitempty"`
+	InstrumentID     string `json:"instrument_id,omitempty"`
+	ReduceRatio      string `json:"reduce_ratio,omitempty"`
 }
 
 // ErrNotInLogicalAccount 表示执行账户不属于任何组合账户：MooX 只通过组合账户交易，这样的账户没有可平的仓。
@@ -114,11 +123,19 @@ func decodeFlattenRequest(action store.OperatorActionRecord) (FlattenCommand, er
 	if err := json.Unmarshal([]byte(action.RequestJSON), &request); err != nil {
 		return FlattenCommand{}, err
 	}
-	return FlattenCommand{
+	command := FlattenCommand{
 		SpaceID: action.SpaceID, ActionID: action.ActionID,
 		LogicalAccountID: action.LogicalAccountID, TradingAccountID: request.TradingAccountID,
-		Reason: action.Reason,
-	}, nil
+		InstrumentID: request.InstrumentID, Reason: action.Reason,
+	}
+	if request.ReduceRatio != "" {
+		ratio, err := shared.ParseDecimal(request.ReduceRatio)
+		if err != nil {
+			return FlattenCommand{}, err
+		}
+		command.ReduceRatio = ratio
+	}
+	return command, nil
 }
 
 func (s *Service) FlattenLogicalAccount(
@@ -126,6 +143,9 @@ func (s *Service) FlattenLogicalAccount(
 	command FlattenCommand,
 ) (FlattenResult, error) {
 	if err := s.validate(); err != nil {
+		return FlattenResult{}, err
+	}
+	if err := command.validateScope(); err != nil {
 		return FlattenResult{}, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, s.flattenTimeout())
@@ -137,7 +157,7 @@ func (s *Service) FlattenLogicalAccount(
 	expectedAction := store.OperatorActionRecord{
 		SpaceID: command.SpaceID, ActionID: command.ActionID,
 		LogicalAccountID: command.LogicalAccountID,
-		ActionType:       "FLATTEN", Reason: strings.TrimSpace(command.Reason),
+		ActionType:       string(command.actionType()), Reason: strings.TrimSpace(command.Reason),
 		RequestJSON: requestJSON, Status: "RUNNING",
 	}
 	existing, found, err := s.existingAction(ctx, expectedAction)
@@ -182,24 +202,29 @@ func (s *Service) FlattenLogicalAccount(
 	err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		// 锁内再查一次，防止两个请求同时通过锁前的检查；恢复自身动作时同样不查。
 		if !resuming {
-			running, err := tx.RunningOperatorActionsOfType(command.SpaceID, command.LogicalAccountID, "FLATTEN")
-			if err != nil {
-				return err
-			}
-			for index := range running {
-				if running[index].ActionID != command.ActionID {
-					other = &running[index]
-					return nil
+			for _, actionType := range flattenActionTypes {
+				running, err := tx.RunningOperatorActionsOfType(command.SpaceID, command.LogicalAccountID, actionType)
+				if err != nil {
+					return err
+				}
+				for index := range running {
+					if running[index].ActionID != command.ActionID && flattenConflict(running[index], command) {
+						other = &running[index]
+						return nil
+					}
 				}
 			}
 		}
-		if err := tx.SetLogicalAccountAutomation(
-			command.SpaceID,
-			command.LogicalAccountID,
-			"PAUSED",
-			strings.TrimSpace(command.Reason),
-		); err != nil {
-			return err
+		// 整组清仓和减仓先暂停组合；只平一个标的不动组合的自动执行状态。
+		if command.pausesLogicalAccount() {
+			if err := tx.SetLogicalAccountAutomation(
+				command.SpaceID,
+				command.LogicalAccountID,
+				"PAUSED",
+				strings.TrimSpace(command.Reason),
+			); err != nil {
+				return err
+			}
 		}
 		var ensureErr error
 		action, _, ensureErr = tx.EnsureOperatorAction(expectedAction)
@@ -244,6 +269,31 @@ func (s *Service) FlattenLogicalAccount(
 		Action:   action,
 		Accounts: make([]FlattenAccountResult, 0, len(members)),
 	}
+	scope := flattenScope{instrumentID: strings.TrimSpace(command.InstrumentID), reducing: command.reducing()}
+	if scope.reducing {
+		// 减仓的目标数量发起时写定，之后各轮（包括重试和重启恢复）都收敛到它，不会再减一次。
+		var resumed FlattenResult
+		if resuming {
+			resumed, _ = decodeFlattenResult(existing)
+		}
+		if len(resumed.ReduceTargets) > 0 {
+			result.ReduceTargets = resumed.ReduceTargets
+		} else {
+			targets, targetErr := s.reduceTargets(ctx, command, members)
+			if targetErr != nil {
+				return result, errors.Join(targetErr, s.persistFlattenProgress(ctx, &result, string(operatordomain.StatusFailed)))
+			}
+			result.ReduceTargets = encodeTargets(targets)
+			if err := s.persistFlattenProgress(ctx, &result, "RUNNING"); err != nil {
+				return result, err
+			}
+		}
+		decoded, decodeErr := decodeTargets(result.ReduceTargets)
+		if decodeErr != nil {
+			return result, decodeErr
+		}
+		scope.targets = decoded
+	}
 	// 预算从收到请求算起，等锁用掉的时间要扣除，加上收尾不能超过网关的调用超时。
 	budgetEnd, _ := ctx.Deadline()
 	executable := 0
@@ -253,7 +303,7 @@ func (s *Service) FlattenLogicalAccount(
 		// 每个账户分到剩余时间的一份，前面的账户耗尽预算时后面的账户仍能执行。
 		deadline := time.Now().Add(time.Until(budgetEnd) / time.Duration(len(members)-index))
 		accountResult, wasExecutable := s.flattenAccount(
-			ctx, command, member.TradingAccountID, deadline,
+			ctx, command, scope, member.TradingAccountID, deadline,
 		)
 		if wasExecutable {
 			executable++
@@ -313,11 +363,30 @@ func (s *Service) otherRunningFlatten(ctx context.Context, command FlattenComman
 		return FlattenResult{}, false, err
 	}
 	for _, action := range running {
-		if action.ActionType == "FLATTEN" && action.ActionID != command.ActionID {
+		if action.ActionID != command.ActionID && flattenConflict(action, command) {
 			return runningFlattenFor(action, command)
 		}
 	}
 	return FlattenResult{}, false, nil
+}
+
+// flattenActionTypes 是清仓这一族动作：整组清仓、按比例减仓、单标的下架清仓。
+var flattenActionTypes = []string{
+	string(operatordomain.ActionFlatten), string(operatordomain.ActionReduce), string(operatordomain.ActionDelistFlatten),
+}
+
+// flattenConflict 报告另一个运行中的动作是否和这次请求冲突：整组清仓和减仓与这一族的任何运行中动作冲突；
+// 单标的清仓只和整组动作、同一标的的单标的清仓冲突，不同标的的单标的清仓不互相冲突。
+func flattenConflict(other store.OperatorActionRecord, command FlattenCommand) bool {
+	if !slices.Contains(flattenActionTypes, other.ActionType) {
+		return false
+	}
+	if command.actionType() != operatordomain.ActionDelistFlatten || other.ActionType != string(operatordomain.ActionDelistFlatten) {
+		return true
+	}
+	var request flattenRequest
+	_ = json.Unmarshal([]byte(other.RequestJSON), &request)
+	return request.InstrumentID == strings.TrimSpace(command.InstrumentID)
 }
 
 // runningFlattenFor 决定另一个运行中清仓能不能代表这次请求：整组清仓覆盖所有成员，同一账户的清仓覆盖这个账户，
@@ -325,7 +394,8 @@ func (s *Service) otherRunningFlatten(ctx context.Context, command FlattenComman
 func runningFlattenFor(other store.OperatorActionRecord, command FlattenCommand) (FlattenResult, bool, error) {
 	var request flattenRequest
 	_ = json.Unmarshal([]byte(other.RequestJSON), &request)
-	if request.TradingAccountID == "" || request.TradingAccountID == strings.TrimSpace(command.TradingAccountID) {
+	sameKind := other.ActionType == string(command.actionType()) && request.InstrumentID == strings.TrimSpace(command.InstrumentID)
+	if sameKind && (request.TradingAccountID == "" || request.TradingAccountID == strings.TrimSpace(command.TradingAccountID)) {
 		return runningFlattenResult(other), true, nil
 	}
 	return FlattenResult{Action: other}, true, ErrLogicalAccountBusy
@@ -343,16 +413,22 @@ func flattenRequestJSON(command FlattenCommand) (string, error) {
 		blank(command.LogicalAccountID) || blank(command.Reason) {
 		return "", ErrInvalidCommand
 	}
-	data, err := json.Marshal(flattenRequest{
+	request := flattenRequest{
 		LogicalAccountID: command.LogicalAccountID,
 		TradingAccountID: strings.TrimSpace(command.TradingAccountID),
-	})
+		InstrumentID:     strings.TrimSpace(command.InstrumentID),
+	}
+	if command.reducing() {
+		request.ReduceRatio = command.ReduceRatio.String()
+	}
+	data, err := json.Marshal(request)
 	return string(data), err
 }
 
 func (s *Service) flattenAccount(
 	ctx context.Context,
 	command FlattenCommand,
+	scope flattenScope,
 	tradingAccountID string,
 	deadline time.Time,
 ) (FlattenAccountResult, bool) {
@@ -373,7 +449,7 @@ func (s *Service) flattenAccount(
 		result.cause = err
 		return result, false
 	}
-	canceling, err := s.hasCancelableOrders(ctx, command.SpaceID, tradingAccountID, command.ActionID)
+	canceling, err := s.hasCancelableOrders(ctx, command.SpaceID, tradingAccountID, command.ActionID, scope)
 	if err != nil {
 		result.Status = "FAILED"
 		result.Error = err.Error()
@@ -385,12 +461,13 @@ func (s *Service) flattenAccount(
 		command.SpaceID,
 		tradingAccountID,
 		command.ActionID,
+		scope,
 	); err != nil {
 		result.Status = "PARTIAL"
 		result.Error = err.Error()
 		result.cause = err
 		result.Remaining = s.remainingForAccount(
-			ctx, command.SpaceID, tradingAccountID, nil, &result,
+			ctx, command.SpaceID, tradingAccountID, nil, &result, scope,
 		)
 		return result, false
 	}
@@ -399,24 +476,24 @@ func (s *Service) flattenAccount(
 		result.Error = err.Error()
 		result.cause = err
 		result.Remaining = s.remainingForAccount(
-			ctx, command.SpaceID, tradingAccountID, nil, &result,
+			ctx, command.SpaceID, tradingAccountID, nil, &result, scope,
 		)
 		return result, false
 	}
 	if err := s.confirmAccountCancellations(
-		ctx, command.SpaceID, tradingAccountID, command.ActionID,
+		ctx, command.SpaceID, tradingAccountID, command.ActionID, scope,
 	); err != nil {
 		result.Status = "PARTIAL"
 		result.Error = err.Error()
 		result.cause = err
 		result.Remaining = s.remainingForAccount(
-			ctx, command.SpaceID, tradingAccountID, nil, &result,
+			ctx, command.SpaceID, tradingAccountID, nil, &result, scope,
 		)
 		return result, false
 	}
 	if err := s.recoverFlattenChildren(ctx, command, tradingAccountID, &result); err != nil {
 		result.addError(err)
-		result.Remaining = s.remainingForAccount(ctx, command.SpaceID, tradingAccountID, nil, &result)
+		result.Remaining = s.remainingForAccount(ctx, command.SpaceID, tradingAccountID, nil, &result, scope)
 		return result, false
 	}
 	account, err := s.Store.GetTradingAccount(
@@ -449,14 +526,14 @@ func (s *Service) flattenAccount(
 				result.cause = errors.Join(result.cause, err)
 				break
 			}
-			canceling, err := s.hasCancelableOrders(ctx, command.SpaceID, tradingAccountID, command.ActionID)
+			canceling, err := s.hasCancelableOrders(ctx, command.SpaceID, tradingAccountID, command.ActionID, scope)
 			if err != nil {
 				result.Error = err.Error()
 				result.cause = errors.Join(result.cause, err)
 				break
 			}
 			if err := s.cancelAccountOrders(
-				ctx, command.SpaceID, tradingAccountID, command.ActionID,
+				ctx, command.SpaceID, tradingAccountID, command.ActionID, scope,
 			); err != nil {
 				result.Error = err.Error()
 				result.cause = errors.Join(result.cause, err)
@@ -468,7 +545,7 @@ func (s *Service) flattenAccount(
 				break
 			}
 			if err := s.confirmAccountCancellations(
-				ctx, command.SpaceID, tradingAccountID, command.ActionID,
+				ctx, command.SpaceID, tradingAccountID, command.ActionID, scope,
 			); err != nil {
 				result.Error = err.Error()
 				result.cause = errors.Join(result.cause, err)
@@ -497,10 +574,10 @@ func (s *Service) flattenAccount(
 		default:
 			// 持仓来自余额的市场（现货、股票）和来自持仓表的市场（合约）各清各的。
 			if account.HasBalanceMarket() {
-				s.flattenSpot(ctx, command, account, &result, reasons)
+				s.flattenSpot(ctx, command, scope, account, &result, reasons)
 			}
 			if account.HasPositionMarket() {
-				s.flattenSwap(ctx, command, account, &result, reasons)
+				s.flattenSwap(ctx, command, scope, account, &result, reasons)
 			}
 		}
 		if ctx.Err() != nil {
@@ -512,7 +589,7 @@ func (s *Service) flattenAccount(
 			result.cause = errors.Join(result.cause, err)
 		}
 		result.Remaining = s.remainingForAccount(
-			ctx, command.SpaceID, tradingAccountID, reasons, &result,
+			ctx, command.SpaceID, tradingAccountID, reasons, &result, scope,
 		)
 		if err := s.confirmFlattenChildren(ctx, command, tradingAccountID, &result); err != nil {
 			result.addError(err)
@@ -595,13 +672,14 @@ func (s *Service) hasCancelableOrders(
 	spaceID string,
 	tradingAccountID string,
 	actionID string,
+	scope flattenScope,
 ) (bool, error) {
 	records, err := s.Store.ListActiveOrdersForAccount(ctx, spaceID, tradingAccountID)
 	if err != nil {
 		return false, err
 	}
 	for _, current := range records {
-		if orderdomain.State(current.State).Terminal() ||
+		if orderdomain.State(current.State).Terminal() || !scope.orderInScope(current) ||
 			current.OwnerType == string(orderdomain.OwnerOperator) && current.OwnerID == actionID {
 			continue
 		}
@@ -650,6 +728,7 @@ func (s *Service) cancelAccountOrders(
 	spaceID string,
 	tradingAccountID string,
 	actionID string,
+	scope flattenScope,
 ) error {
 	records, err := s.Store.ListActiveOrdersForAccount(ctx, spaceID, tradingAccountID)
 	if err != nil {
@@ -657,7 +736,7 @@ func (s *Service) cancelAccountOrders(
 	}
 	var cancelErrors []error
 	for _, current := range records {
-		if orderdomain.State(current.State).Terminal() ||
+		if orderdomain.State(current.State).Terminal() || !scope.orderInScope(current) ||
 			current.OwnerType == string(orderdomain.OwnerOperator) &&
 				current.OwnerID == actionID {
 			continue
@@ -678,13 +757,14 @@ func (s *Service) confirmAccountCancellations(
 	spaceID string,
 	tradingAccountID string,
 	actionID string,
+	scope flattenScope,
 ) error {
 	records, err := s.Store.ListActiveOrdersForAccount(ctx, spaceID, tradingAccountID)
 	if err != nil {
 		return err
 	}
 	for _, current := range records {
-		if orderdomain.State(current.State).Terminal() ||
+		if orderdomain.State(current.State).Terminal() || !scope.orderInScope(current) ||
 			current.OwnerType == string(orderdomain.OwnerOperator) &&
 				current.OwnerID == actionID {
 			continue
@@ -702,6 +782,7 @@ func (s *Service) confirmAccountCancellations(
 func (s *Service) flattenSwap(
 	ctx context.Context,
 	command FlattenCommand,
+	scope flattenScope,
 	account store.TradingAccountRecord,
 	result *FlattenAccountResult,
 	reasons map[string]flattenReason,
@@ -733,14 +814,29 @@ func (s *Service) flattenSwap(
 		if quantity.IsZero() {
 			continue
 		}
+		key := exchange.NewSymbolKey(position.MarketType, position.ExchangeSymbol).String()
 		instrument, found := bySymbol[exchange.NewSymbolKey(position.MarketType, position.ExchangeSymbol)]
 		if !found {
-			reasons[position.ExchangeSymbol] = flattenReason{text: "持仓没有对应的可交易标的", final: true}
+			if scope.instrumentID == "" {
+				reasons[key] = flattenReason{text: "持仓没有对应的可交易标的", final: true}
+			}
+			continue
+		}
+		if !scope.includes(instrument.InstrumentID) {
+			continue
+		}
+		// 减仓只处理发起时登记的持仓，并只减到目标数量；整组清仓的目标是零。
+		target, inScope := scope.target(account.TradingAccountID, instrument.InstrumentID)
+		if !inScope {
+			continue
+		}
+		quantity = excess(quantity, target)
+		if quantity.IsZero() {
 			continue
 		}
 		// 永续平仓单 reduceOnly，不查最小名义金额，只有数量不符合交易所规则才平不掉。
 		if reason := quantityRuleReason(quantity.Abs(), instrument); reason != "" {
-			reasons[position.ExchangeSymbol] = flattenReason{text: reason, final: true}
+			reasons[key] = flattenReason{text: reason, final: true}
 			continue
 		}
 		side := exchange.SideSell
@@ -754,7 +850,7 @@ func (s *Service) flattenSwap(
 		if err := s.placeOrContinueFlattenChild(
 			ctx, command, account, instrument, side, quantity.Abs(), result,
 		); err != nil {
-			reasons[position.ExchangeSymbol] = flattenReason{text: err.Error(), final: isFlattenFinal(err)}
+			reasons[key] = flattenReason{text: err.Error(), final: isFlattenFinal(err)}
 			result.addError(err)
 		}
 	}
@@ -763,6 +859,7 @@ func (s *Service) flattenSwap(
 func (s *Service) flattenSpot(
 	ctx context.Context,
 	command FlattenCommand,
+	scope flattenScope,
 	account store.TradingAccountRecord,
 	result *FlattenAccountResult,
 	reasons map[string]flattenReason,
@@ -793,7 +890,21 @@ func (s *Service) flattenSpot(
 		}
 		instrument, found := byAsset[balance.Asset]
 		if !found {
-			reasons[key] = flattenReason{text: "资产没有对应结算资产的标的", final: true}
+			if scope.instrumentID == "" {
+				reasons[key] = flattenReason{text: "资产没有对应结算资产的标的", final: true}
+			}
+			continue
+		}
+		if !scope.includes(instrument.InstrumentID) {
+			continue
+		}
+		// 减仓只卖出超出目标数量的部分，整组清仓的目标是零。
+		target, inScope := scope.target(account.TradingAccountID, instrument.InstrumentID)
+		if !inScope {
+			continue
+		}
+		total = excess(total, target)
+		if total.Cmp(shared.Zero()) <= 0 {
 			continue
 		}
 		quote, quoteErr := s.Prices.LatestPrice(
@@ -828,6 +939,10 @@ func (s *Service) flattenSpot(
 			continue
 		}
 		// 总量不是零头而可用余额卖不出去，说明还有余额被挂单占着，下一轮再试。
+		// 减仓只卖超出目标数量的部分（此时 total 已经是超出部分）。
+		if available.Cmp(total) > 0 {
+			available = total
+		}
 		quantity := exposure.FloorToStep(available, step)
 		if quantityRuleReason(quantity, instrument) != "" || exposure.SpotDust(quantity, price, instrument) {
 			reasons[key] = flattenReason{text: "可用余额不足，部分余额仍被挂单占用"}
@@ -995,6 +1110,7 @@ func (s *Service) remainingForAccount(
 	tradingAccountID string,
 	reasons map[string]flattenReason,
 	result *FlattenAccountResult,
+	scope flattenScope,
 ) []RemainingPosition {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
@@ -1025,11 +1141,23 @@ func (s *Service) remainingForAccount(
 			if quantity.IsZero() {
 				continue
 			}
-			reason := reasonFor(reasons, position.ExchangeSymbol, "position remains after final sync")
 			instrumentID := position.InstrumentID
 			if instrumentID == "" {
 				instrumentID = position.ExchangeSymbol
 			}
+			if !scope.includes(instrumentID) {
+				continue
+			}
+			target, inScope := scope.target(tradingAccountID, instrumentID)
+			if !inScope {
+				continue
+			}
+			// 减仓时剩余指超出目标数量的部分。
+			quantity = excess(quantity, target)
+			if quantity.IsZero() {
+				continue
+			}
+			reason := reasonFor(reasons, exchange.NewSymbolKey(position.MarketType, position.ExchangeSymbol).String(), "position remains after final sync")
 			remaining = append(remaining, RemainingPosition{
 				InstrumentID: instrumentID, Quantity: quantity.String(), Reason: reason.text, final: reason.final,
 			})
@@ -1061,6 +1189,17 @@ func (s *Service) remainingForAccount(
 				continue
 			}
 			if instrument, found := byAsset[balance.Asset]; found {
+				if !scope.includes(instrument.InstrumentID) {
+					continue
+				}
+				target, inScope := scope.target(tradingAccountID, instrument.InstrumentID)
+				if !inScope {
+					continue
+				}
+				quantity = excess(quantity, target)
+				if quantity.Cmp(shared.Zero()) <= 0 {
+					continue
+				}
 				// 只用本轮已拿到的报价；没有报价时只按最小数量判断，收尾不再发请求。
 				if exposure.SpotDust(quantity, result.quotes[balance.Asset], instrument) {
 					result.Dust = append(result.Dust, RemainingPosition{
@@ -1097,8 +1236,9 @@ func (s *Service) persistFlattenProgress(
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	data, err := json.Marshal(struct {
-		Accounts []FlattenAccountResult `json:"accounts"`
-	}{Accounts: result.Accounts})
+		Accounts      []FlattenAccountResult `json:"accounts"`
+		ReduceTargets map[string]string      `json:"reduce_targets,omitempty"`
+	}{Accounts: result.Accounts, ReduceTargets: result.ReduceTargets})
 	if err != nil {
 		return err
 	}
@@ -1131,12 +1271,14 @@ func decodeFlattenResult(action store.OperatorActionRecord) (FlattenResult, erro
 		return result, errors.New(action.LastError)
 	}
 	var persisted struct {
-		Accounts []FlattenAccountResult `json:"accounts"`
+		Accounts      []FlattenAccountResult `json:"accounts"`
+		ReduceTargets map[string]string      `json:"reduce_targets,omitempty"`
 	}
 	if err := json.Unmarshal([]byte(*action.ResultJSON), &persisted); err != nil {
 		return result, err
 	}
 	result.Accounts = persisted.Accounts
+	result.ReduceTargets = persisted.ReduceTargets
 	return result, nil
 }
 

@@ -501,6 +501,8 @@ message PlaceManualOrderReq {
   string reason = 11;
   // Unix milliseconds; zero freezes the server default at first acceptance.
   int64 deadline_at = 12;
+  // 订单所在市场。账户开通了多个市场时必填；只开通一个市场时可省略，按它处理。
+  MarketType market_type = 13;
 }
 message PlaceManualOrderRsp {
   common.RetInfo ret_info = 1;
@@ -525,6 +527,8 @@ message SubmitOrderReq {
   string reason = 12;
   // Unix milliseconds; zero freezes the server default at first acceptance.
   int64 deadline_at = 13;
+  // 订单所在市场。账户开通了多个市场时必填；只开通一个市场时可省略，按它处理。
+  MarketType market_type = 14;
 }
 message SubmitOrderRsp {
   common.RetInfo ret_info = 1;
@@ -766,6 +770,8 @@ message ListAccountLedgerReq {
   int64 end_time = 3;
   // 默认 200，最多 1000。
   int32 limit = 4;
+  // 要查流水的市场；账户只有一个市场支持流水时可省略。
+  MarketType market_type = 5;
 }
 
 message LedgerEntry {
@@ -779,6 +785,8 @@ message LedgerEntry {
   string exchange_symbol = 7;
   string trade_id = 8;
   string info = 9;
+  // 流水所属市场。
+  MarketType market_type = 10;
 }
 
 message ListAccountLedgerRsp {
