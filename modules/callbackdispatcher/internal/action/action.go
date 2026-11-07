@@ -15,7 +15,14 @@
 //   - 写名单后复查记录状态，已是已取消就补解除；解除前同一标的只要还有别的未结束执行（真实与演练都算）就不解除；
 //   - 一次 Step 远小于 10 分钟：工作线程给一次处理的时限是 5 分钟，ctx 超时后要尽快返回，步骤必须能被重复推进；
 //   - 范围是 PAPER_ONLY 时，自己过滤 ListInstrumentHolders 返回里非模拟盘的持有者，不依赖 Trade 守约；
-//   - OnCancel 幂等：取消后善后没做成的记录带 cleanup_pending，用户会再取消一次重做善后。
+//   - OnCancel 幂等：取消后善后没做成的记录带 cleanup_pending，用户会再取消一次重做善后；快速连点两次取消时两路 OnCancel
+//     会同时执行，要靠上面的按标的锁挡住；服务层传给 OnCancel 的 ctx 没有截止时间，调 Trade 要自己加时限；
+//   - Step 写名单后复查发现已取消、补解除又失败时，记录不是执行中，SaveResult 会丢掉结果，也没法把 cleanup_pending 重新置 1：
+//     C6 要在 Store 里加“只在已取消时置 cleanup_pending=1 并写失败说明”的方法；
+//   - 判断“同一标的还有没有别的未结束执行”要跨 ALL 与 PAPER_ONLY 两种范围（按 c_subject_id 查除自己以外的），
+//     合并键带了范围，不能直接用，C6 要在 Store 里加这个查询；
+//   - UpsertDelistAction 不校验领取凭证，卡住后被放回的旧线程迟到仍可写入：“操作号先存下再发起”必须可重入（先读已存的操作号，有就复用）；
+//   - 本版给 t_event_executions 加了 c_cleanup_pending、c_claimed_at，没有迁移：已有的事件中心库文件套新 schema 会报 no such column，必须先删库。
 //
 // 没有注册处理器的系统动作，工作线程不会领取对应的执行记录（Store.ClaimDue 按已注册的动作过滤），
 // 记录停在待处理，处理器注册之后立即被处理，不会丢，也不会空转。
