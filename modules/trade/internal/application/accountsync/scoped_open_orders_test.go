@@ -75,12 +75,32 @@ func TestReconcileReadsOpenOrdersPerSymbolWhileOtherModesReadAll(t *testing.T) {
 		exchange.NewSymbolKey(exchange.MarketTypeSpot, "ETHUSDT"),
 	}, adapter.scoped[0], "持有的 BNB 和目标里的 ETH；没有持有、不在目标里的 DOGE 不查")
 
+	// 本地有一笔未结束的现货订单（老订单，早于迟到成交窗口），标的既没持有、也不在目标里：必须被查到，
+	// 否则它在交易所的真实状态（挂着、成交、撤销）对账不到。
+	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.CreateOrder(store.OrderRecord{
+			SpaceID: "space-1", OrderID: "old-resting", TradingAccountID: "account-1", ClientOrderID: "old-resting-client",
+			ExchangeOrderID: "77", MarketType: "SPOT", InstrumentID: "DOGE-USDT-SPOT", ExchangeSymbol: "DOGEUSDT",
+			OrderType: "MARKET", Side: "BUY", Quantity: "10", ReferencePrice: "0.1", ReferencePriceAt: 1,
+			OwnerType: "EXTERNAL", OwnerID: "external-77", LogicalAccountID: "logical-1", State: "OPEN", FilledQuantity: "0",
+			Version: 1, SubmittedAt: 1,
+		})
+	}))
+	_, err = service.listOpenOrders(context.Background(), adapter, account, syncReconcile)
+	require.NoError(t, err)
+	require.Len(t, adapter.scoped, 2)
+	require.Equal(t, []exchange.SymbolKey{
+		exchange.NewSymbolKey(exchange.MarketTypeSpot, "BNBUSDT"),
+		exchange.NewSymbolKey(exchange.MarketTypeSpot, "DOGEUSDT"),
+		exchange.NewSymbolKey(exchange.MarketTypeSpot, "ETHUSDT"),
+	}, adapter.scoped[1], "未结束的本地订单不受迟到成交窗口限制，它的标的一定会查")
+
 	for _, mode := range []syncMode{syncIncremental, syncFull} {
 		_, err = service.listOpenOrders(context.Background(), adapter, account, mode)
 		require.NoError(t, err)
 	}
 	require.Equal(t, 2, adapter.fullCalls, "增量同步、手动全量同步读全部挂单")
-	require.Len(t, adapter.scoped, 1)
+	require.Len(t, adapter.scoped, 2)
 
 	plain := &syncAdapter{order: exchange.Order{ExchangeSymbol: "BTC-USDT"}}
 	orders, err := service.listOpenOrders(context.Background(), plain, account, syncReconcile)
