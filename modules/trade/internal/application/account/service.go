@@ -15,12 +15,12 @@ import (
 )
 
 var (
-	ErrAccountNotFound       = errors.New("trade account: not found")
-	ErrAccountConflict       = errors.New("trade account: conflict")
-	ErrInvalidCredential     = errors.New("trade account: invalid Exchange credential")
-	ErrLiveTradingDisabled   = errors.New("trade account: production trading is disabled")
+	ErrAccountNotFound       = errors.New("交易账户不存在")
+	ErrAccountConflict       = errors.New("交易账户已存在或正被修改")
+	ErrInvalidCredential     = errors.New("交易所密钥不正确")
+	ErrLiveTradingDisabled   = errors.New("生产环境实盘交易未开启")
 	ErrPaperAccountImmutable = errors.New("模拟账户的名称、杠杆、启停等配置创建后不能修改；要换参数请新建一个模拟账户")
-	ErrServiceNotConfigured  = errors.New("trade account: service is not configured")
+	ErrServiceNotConfigured  = errors.New("交易账户服务未配置")
 	// ErrAccountInLogicalAccount：停用后没有会话、同步必然失败，账户就移不出组合了，所以要先移出再停用。
 	ErrAccountInLogicalAccount = errors.New("执行账户还在组合账户里，先把它移出组合账户再停用")
 )

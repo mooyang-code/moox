@@ -74,12 +74,13 @@ func (tx *Tx) InsertWalletTransfer(record WalletTransferRecord) error {
 
 const updateWalletTransferSQL = `
 	UPDATE t_trade_wallet_transfers
-	SET c_exchange_transfer_id = ?, c_state = ?, c_last_error = ?, c_completed_at = ?, c_mtime = CURRENT_TIMESTAMP
+	SET c_exchange_transfer_id = COALESCE(NULLIF(?, ''), c_exchange_transfer_id),
+		c_state = ?, c_last_error = ?, c_completed_at = ?, c_mtime = CURRENT_TIMESTAMP
 	WHERE c_space_id = ? AND c_transfer_id = ? AND c_state = ?
 `
 
 // UpdateWalletTransfer 把一条 PENDING 的划转记录推进到新状态（写入交易所流水号、完成或失败）；
-// 已经是终态的记录不再改动，更新不到返回 ErrNotPending。
+// 流水号传空串时保留已记下的流水号（例如结果不明后人工结束、对账失败收尾）；已经是终态的记录不再改动，更新不到返回 ErrNotPending。
 func (tx *Tx) UpdateWalletTransfer(spaceID, transferID, exchangeTransferID, state, lastError string, completedAt int64) error {
 	if blank(spaceID) || blank(transferID) ||
 		(state != TransferStatePending && state != TransferStateCompleted && state != TransferStateFailed) {
@@ -93,6 +94,27 @@ func (tx *Tx) UpdateWalletTransfer(spaceID, transferID, exchangeTransferID, stat
 		return ErrNotPending
 	}
 	return nil
+}
+
+// queryNextWalletTransferAttempt 取某个引用号前缀（“幂等键:方向:”）下已用过的最大尝试序号，不限时间窗口：
+// 唯一约束（空间、执行账户、引用号）没有时间限制，按窗口内计数会和窗口外的旧记录撞号。参数依次是前缀、空间、执行账户、前缀、前缀。
+const queryNextWalletTransferAttempt = `
+	SELECT COALESCE(MAX(CAST(substr(c_client_ref, length(?) + 1) AS INTEGER)), 0)
+	FROM t_trade_wallet_transfers
+	WHERE c_space_id = ? AND c_trading_account_id = ? AND substr(c_client_ref, 1, length(?)) = ?
+`
+
+// NextWalletTransferAttempt 返回这个引用号前缀下一次尝试的序号（从 1 开始）。和插入同一个事务调用，
+// 并发的两次发起会拿到同一个序号，由唯一约束挡住后一笔。
+func (tx *Tx) NextWalletTransferAttempt(spaceID, tradingAccountID, prefix string) (int, error) {
+	if blank(spaceID) || blank(tradingAccountID) || blank(prefix) {
+		return 0, fmt.Errorf("%w: incomplete wallet transfer reference", ErrInvalidRecord)
+	}
+	var used int
+	if err := tx.db.Raw(queryNextWalletTransferAttempt, prefix, spaceID, tradingAccountID, prefix, prefix).Scan(&used).Error; err != nil {
+		return 0, err
+	}
+	return used + 1, nil
 }
 
 type walletTransferRow struct {

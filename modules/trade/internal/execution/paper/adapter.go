@@ -14,6 +14,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 	"gorm.io/gorm"
 )
 
@@ -35,6 +36,13 @@ type PublicMarketData interface {
 	execution.ReferencePriceSource
 }
 
+// 编译期确认模拟盘适配器实现了会话按类型断言使用的可选能力。
+var (
+	_ execution.ExecutionAdapter = (*Adapter)(nil)
+	_ execution.SymbolConfigurer = (*Adapter)(nil)
+	_ execution.LedgerSource     = (*Adapter)(nil)
+)
+
 type Adapter struct {
 	Account store.TradingAccountRecord
 	Store   FactStore
@@ -46,6 +54,9 @@ type Adapter struct {
 	Now         func() time.Time
 	mu          sync.RWMutex
 	instruments map[exchange.SymbolKey]string
+	// lastPrices 是现货持仓最近一次取到的估值价（资产 -> 价格），取不到价时用它估值。
+	priceMu    sync.Mutex
+	lastPrices map[string]shared.Decimal
 }
 
 func (a *Adapter) now() time.Time {
@@ -96,15 +107,11 @@ func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnaps
 			if asset == account.SettlementAsset || balance.IsZero() {
 				continue
 			}
-			instrument, found := byBase[asset]
-			if !found {
-				return exchange.AccountSnapshot{}, fmt.Errorf("paper: no valuation instrument for %s", asset)
+			price, priceErr := a.balancePrice(ctx, account, byBase, asset)
+			if priceErr != nil {
+				return exchange.AccountSnapshot{}, priceErr
 			}
-			quote, quoteErr := a.valuationQuote(ctx, exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol))
-			if quoteErr != nil {
-				return exchange.AccountSnapshot{}, quoteErr
-			}
-			equity = equity.Add(balance.Mul(quote))
+			equity = equity.Add(balance.Mul(price))
 		}
 	}
 	if account.HasPositionMarket() {
@@ -160,6 +167,50 @@ func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnaps
 		Balances: paperRows, Equity: equity, AvailableFunds: available, UsedMargin: usedMargin,
 		UnrealizedPnL: unrealizedPnL, ExchangeUpdatedAt: a.now(), Present: exchange.AccountSnapshotPresence{Balances: true, Equity: true, AvailableFunds: true, UsedMargin: true, UnrealizedPnL: true},
 	}, nil
+}
+
+// balancePrice 给现货持有的一个币取估值价，规则与实盘权益采样一致：没有估值标的、标的状态不可交易、
+// 交易所确认标的不存在时用最后已知价，没有就按 0 计并记关注项，不让一个下架零头拖垮整个模拟账户的快照；
+// 其余取价失败有最后已知价就用，没有照旧报错。
+func (a *Adapter) balancePrice(ctx context.Context, account store.TradingAccountRecord, byBase map[string]store.InstrumentRecord, asset string) (shared.Decimal, error) {
+	degrade := func() (shared.Decimal, error) {
+		last, ok := a.lastPrice(asset)
+		how := "按 0 计"
+		if ok {
+			how = "按最后已知价计"
+		}
+		telemetry.Note(telemetry.AttentionValuationDegraded, account.Name+"："+asset+" 取不到价，权益"+how, a.now())
+		return last, nil
+	}
+	instrument, found := byBase[asset]
+	// 状态为空表示标的列表没有给出状态，照常取价；明确不可交易的不发请求。
+	if !found || (instrument.Status != "" && !exchange.StatusTradable(instrument.Status)) {
+		return degrade()
+	}
+	price, err := a.valuationQuote(ctx, exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol))
+	if err != nil {
+		if _, ok := a.lastPrice(asset); ok || exchange.IsInstrumentNotFound(err) {
+			return degrade()
+		}
+		return shared.Zero(), err
+	}
+	a.priceMu.Lock()
+	if a.lastPrices == nil {
+		a.lastPrices = make(map[string]shared.Decimal)
+	}
+	a.lastPrices[asset] = price
+	a.priceMu.Unlock()
+	return price, nil
+}
+
+func (a *Adapter) lastPrice(asset string) (shared.Decimal, bool) {
+	a.priceMu.Lock()
+	defer a.priceMu.Unlock()
+	price, ok := a.lastPrices[asset]
+	if !ok {
+		return shared.Zero(), false
+	}
+	return price, true
 }
 
 // valuationQuote 用参考价估值：一笔子单要算多次快照，逐持仓请求盘口会让子单间隔随持仓数变长。

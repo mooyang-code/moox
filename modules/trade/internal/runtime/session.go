@@ -18,7 +18,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 )
 
-var ErrSessionConfig = errors.New("trade runtime: ExchangeSession is not configured")
+var ErrSessionConfig = errors.New("交易账户会话还没有启动（ExchangeSession is not configured），请稍后重试")
 
 const (
 	sessionOrderWindow        = 5 * time.Minute
@@ -238,6 +238,7 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 	_, err = s.Sync.ApplySnapshot(ctx, s.Account.TradingAccountID, accountsync.Snapshot{
 		Fills: fills, Orders: orders, Positions: positions,
 		Account: accountSnapshot, AccountReadAt: accountReadAt, FillCursors: cursors, Ready: false,
+		Prices: s.Adapter,
 	})
 	s.opMu.Unlock()
 	if err != nil {
@@ -677,6 +678,8 @@ func (s *ExchangeSession) persistInstruments(
 				MinExchangeQuantity:  instrument.MinExchangeQuantity.String(),
 				PriceTick:            instrument.PriceTick.String(),
 				MinNotional:          instrument.MinNotional.String(), Status: instrument.Status,
+				MaxBuyPriceRatio:  instrument.MaxBuyPriceRatio.String(),
+				MinSellPriceRatio: instrument.MinSellPriceRatio.String(),
 				ExchangeUpdatedAt: instrument.ExchangeUpdatedAt.UnixMilli(),
 			}); err != nil {
 				return err
@@ -911,4 +914,13 @@ func cloneFillCursors(current store.FillCursors) store.FillCursors {
 	return result
 }
 
-var _ execution.AccountEventHandler = (*sessionHandler)(nil)
+// 编译期确认会话实现了 Manager 按类型断言使用的方法集。
+var (
+	_ execution.AccountEventHandler   = (*sessionHandler)(nil)
+	_ ManagedSession                  = (*ExchangeSession)(nil)
+	_ symbolConfigSession             = (*ExchangeSession)(nil)
+	_ interface{ RequestSync() bool } = (*ExchangeSession)(nil)
+	_ interface {
+		ExecutionAdapter() execution.ExecutionAdapter
+	} = (*ExchangeSession)(nil)
+)

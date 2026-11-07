@@ -72,6 +72,7 @@ func (w *AttentionWorker) Scan(ctx context.Context) error {
 		// 划转额度不足每份目标记一次，保留窗口内持续上报。
 		telemetry.AttentionTransferShortfall: telemetry.Recent(telemetry.AttentionTransferShortfall, now, rejectionWindow),
 		telemetry.AttentionTransferFailing:   telemetry.Recent(telemetry.AttentionTransferFailing, now, rejectionWindow),
+		telemetry.AttentionValuationDegraded: telemetry.Recent(telemetry.AttentionValuationDegraded, now, rejectionWindow),
 	}
 	names := make(map[string]string)
 	accounts, err := w.Store.ListAllTradingAccounts(ctx)
@@ -147,7 +148,7 @@ func (w *AttentionWorker) scanLogicalAccount(
 	// 保证金率风控暂停的组合在用户确认恢复之前一直上报，按库里的状态推出（不用带时间窗口的记录，窗口过了告警就丢了）；
 	// 详情是固定文字，不带比值，不会每次触发产生新的指标序列。
 	if store.IsMarginPauseReason(logical.PauseReason) {
-		items[telemetry.AttentionMarginRatioLow] = append(items[telemetry.AttentionMarginRatioLow], logical.Name+"：保证金率风控已暂停，等待确认后恢复")
+		items[telemetry.AttentionMarginRatioLow] = append(items[telemetry.AttentionMarginRatioLow], logical.Name+"："+store.MarginAttentionDetail(logical.PauseReason))
 	}
 	// 换手检查出错只记日志，不能挡住后面的过期、被挡检查。
 	if high, err := w.turnoverHigh(ctx, logical, now); err != nil {

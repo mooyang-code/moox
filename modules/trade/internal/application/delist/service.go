@@ -19,8 +19,8 @@ import (
 )
 
 var (
-	ErrServiceConfig  = errors.New("trade delist: service is not configured")
-	ErrInvalidRequest = errors.New("trade delist: invalid request")
+	ErrServiceConfig  = errors.New("下架处理服务未配置")
+	ErrInvalidRequest = errors.New("下架处理请求不合法")
 	// ErrNoMemberOfExchange 表示组合里没有属于这个交易所的成员：没有可清仓的对象。
 	ErrNoMemberOfExchange = errors.New("组合里没有属于该交易所的成员")
 )

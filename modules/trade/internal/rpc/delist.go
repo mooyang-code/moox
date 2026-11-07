@@ -20,6 +20,8 @@ type FlattenInstrumentCommand struct {
 	Exchange         string
 	InstrumentID     string
 	Reason           string
+	// DeadlineAt 是截止时间（毫秒，下架时间）；0 表示不限。
+	DeadlineAt int64
 }
 
 // FlattenInstrumentFunc 发起下架清仓。unblocked 为真表示标的已被解除禁止而提前结束。
@@ -135,7 +137,7 @@ func (s *ConsoleServer) FlattenInstrument(ctx context.Context, req *tradepb.Flat
 	}
 	action, unblocked, err := s.FlattenInstrumentAction(ctx, FlattenInstrumentCommand{
 		SpaceID: spaceID, ActionID: req.GetActionId(), LogicalAccountID: req.GetLogicalAccountId(),
-		Exchange: key.Exchange, InstrumentID: instrumentID, Reason: req.GetReason(),
+		Exchange: key.Exchange, InstrumentID: instrumentID, Reason: req.GetReason(), DeadlineAt: req.GetDeadlineAt(),
 	})
 	if errors.Is(err, operatorapp.ErrLogicalAccountBusy) {
 		// 忙：别的清仓在跑或拿不到组合锁。不返回动作（返回的可能是别人的），事件中心稍后再试，不计入重试次数。

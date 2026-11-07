@@ -42,7 +42,7 @@ func (tx *Tx) LoadReservationFacts(account TradingAccountRecord, instrument Inst
 		var row struct {
 			Quantity string `gorm:"column:c_signed_quantity"`
 		}
-		if err := tx.db.Raw("SELECT c_signed_quantity FROM t_trading_positions WHERE c_space_id=? AND c_trading_account_id=? AND c_market_type=? AND c_exchange_symbol=? AND c_position_side='NET'", account.SpaceID, account.TradingAccountID, instrument.MarketType, instrument.ExchangeSymbol).Scan(&row).Error; err != nil {
+		if err := tx.db.Raw(queryNetPositionQuantity, account.SpaceID, account.TradingAccountID, instrument.MarketType, instrument.ExchangeSymbol).Scan(&row).Error; err != nil {
 			return facts, err
 		}
 		if row.Quantity != "" {
@@ -56,7 +56,7 @@ func (tx *Tx) LoadReservationFacts(account TradingAccountRecord, instrument Inst
 			ReduceOnly bool   `gorm:"column:c_reduce_only"`
 			State      string `gorm:"column:c_state"`
 		}
-		if err := tx.db.Raw("SELECT c_quantity,c_filled_quantity,c_side,c_reduce_only,c_state FROM t_trade_orders WHERE c_space_id=? AND c_trading_account_id=? AND c_market_type=? AND c_exchange_symbol=? AND c_reduce_only=1 AND c_state IN ?", account.SpaceID, account.TradingAccountID, instrument.MarketType, instrument.ExchangeSymbol, activeOrderStates).Scan(&rows).Error; err != nil {
+		if err := tx.db.Raw(queryActiveReduceOnlyOrders, account.SpaceID, account.TradingAccountID, instrument.MarketType, instrument.ExchangeSymbol, activeOrderStatesJSON).Scan(&rows).Error; err != nil {
 			return facts, err
 		}
 		for _, row := range rows {
@@ -97,3 +97,13 @@ func (tx *Tx) LoadReservationFacts(account TradingAccountRecord, instrument Inst
 	}
 	return facts, nil
 }
+
+// 以下 SQL 整条写成常量，不在调用处拼接或内联。
+const (
+	queryNetPositionQuantity = `SELECT c_signed_quantity FROM t_trading_positions
+		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_market_type = ? AND c_exchange_symbol = ? AND c_position_side = 'NET'`
+	// 订单状态列表经 json_each(?) 传入（activeOrderStatesJSON）。
+	queryActiveReduceOnlyOrders = `SELECT c_quantity, c_filled_quantity, c_side, c_reduce_only, c_state FROM t_trade_orders
+		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_market_type = ? AND c_exchange_symbol = ?
+			AND c_reduce_only = 1 AND c_state IN (SELECT value FROM json_each(?))`
+)

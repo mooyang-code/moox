@@ -33,6 +33,9 @@ const (
 	AttentionTransferFailing = "transfer_failing"
 	// AttentionMarginRatioLow 是实盘账户保证金率跌到阈值以下，风控已暂停组合并减仓，等用户确认安全后手动恢复。
 	AttentionMarginRatioLow = "margin_ratio_low"
+	// AttentionValuationDegraded 是受管资产取不到价（已下架、停止交易、交易所确认标的不存在或暂时取价失败），
+	// 权益按最后已知价或 0 计，没有阻断采样。
+	AttentionValuationDegraded = "valuation_degraded"
 )
 
 // attentionKinds 里每种情况都要上报，恢复后 Monitor 才能看到值回到 0。
@@ -41,6 +44,7 @@ var attentionKinds = []string{
 	AttentionAccountNotReady, AttentionTargetExpired, AttentionTargetReversal,
 	AttentionRateLimited, AttentionTurnoverHigh, AttentionUnknownResults, AttentionMarginRatioLow,
 	AttentionInspectionBlocked, AttentionInspectionFailing, AttentionTransferShortfall, AttentionTransferFailing,
+	AttentionValuationDegraded,
 }
 
 // maxAttentionDetail 是标签的字节上限：Monitor 超过 512 字节会拒收整份上报。

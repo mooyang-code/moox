@@ -122,7 +122,7 @@ func TestFlattenWaitsForCancellationConfirmation(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, fixture.orders.specs)
 	require.Equal(t, "RUNNING", result.Action.Status)
-	require.Contains(t, result.Accounts[0].Error, "cancellation is not confirmed")
+	require.Contains(t, result.Accounts[0].Error, "撤单还没有得到交易所确认")
 }
 
 func TestFlattenAttemptsEveryCancellationForOneAccount(t *testing.T) {

@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 )
 
@@ -49,6 +50,14 @@ func TestRecordedExchangeInfoFilters(t *testing.T) {
 			if instrument.MinNotional.IsZero() || instrument.ExchangeQuantityStep.IsZero() ||
 				instrument.MinExchangeQuantity.IsZero() || instrument.PriceTick.IsZero() {
 				t.Fatalf("%s: BTCUSDT rules = %+v", test.file, instrument)
+			}
+			// 价格偏离限制：合约 PERCENT_PRICE（1.05 / 0.95），现货 PERCENT_PRICE_BY_SIDE（买看 bidMultiplierUp、卖看 askMultiplierDown）。
+			if instrument.MaxBuyPriceRatio.Cmp(shared.MustDecimal("1")) <= 0 || instrument.MinSellPriceRatio.IsZero() ||
+				instrument.MinSellPriceRatio.Cmp(shared.MustDecimal("1")) >= 0 {
+				t.Fatalf("%s: BTCUSDT price band = %s / %s", test.file, instrument.MaxBuyPriceRatio, instrument.MinSellPriceRatio)
+			}
+			if test.market == exchange.MarketTypeSwap && (instrument.MaxBuyPriceRatio.String() != "1.05" || instrument.MinSellPriceRatio.String() != "0.95") {
+				t.Fatalf("futures price band = %s / %s", instrument.MaxBuyPriceRatio, instrument.MinSellPriceRatio)
 			}
 		}
 		if !found {

@@ -23,6 +23,8 @@ const (
 // InspectionReinspector 重新检测一个账户并写回结果。
 type InspectionReinspector interface {
 	Reinspect(context.Context, string) (accountapp.ReinspectResult, error)
+	// ReinspectUncounted 没检测成功时不计入连续失败次数（会话绑定时的立即复查用）。
+	ReinspectUncounted(context.Context, string) (accountapp.ReinspectResult, error)
 }
 
 // LogicalAccountPauser 暂停组合账户。
@@ -68,8 +70,9 @@ func inspectable(account store.TradingAccountRecord) bool {
 }
 
 // CheckAccount 立即复查一个账户并处理结果（会话绑定时发现密钥内容与检测时不一致用）。
+// 这次复查是额外的，没检测成功不计入连续失败次数。
 func (w *InspectionWorker) CheckAccount(ctx context.Context, spaceID, accountID string) error {
-	result, err := w.Accounts.Reinspect(ctx, accountID)
+	result, err := w.Accounts.ReinspectUncounted(ctx, accountID)
 	if err != nil {
 		return err
 	}

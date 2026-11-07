@@ -13,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -26,8 +27,12 @@ type Service struct {
 	SourceMaxAge time.Duration
 
 	// missingSettlementWarned 记录缺结算币明细告警的时间（执行账户 -> 毫秒），同一个账户一小时只告警一次。
+	// degradedWarned 记录受管资产估值降级告警的时间（执行账户 + 资产 -> 毫秒），同样一小时一次。
+	// lastPrices 是受管现货最近一次取到的新鲜报价（执行账户 + 资产 -> 价格），取不到价时用它估值。
 	warnMu                  sync.Mutex
 	missingSettlementWarned map[string]int64
+	degradedWarned          map[string]int64
+	lastPrices              map[string]shared.Decimal
 }
 
 func (s *Service) ListSampleAccounts(ctx context.Context) ([]string, error) {
@@ -139,17 +144,58 @@ func (s *Service) SampleAccount(ctx context.Context, accountID string) error {
 
 // shouldWarnMissingSettlement 限频：同一个账户一小时只告警一次（权益采样每 20 秒一次，不能刷屏）。
 func (s *Service) shouldWarnMissingSettlement(accountID string) bool {
-	now := s.now().UnixMilli()
 	s.warnMu.Lock()
 	defer s.warnMu.Unlock()
 	if s.missingSettlementWarned == nil {
 		s.missingSettlementWarned = make(map[string]int64)
 	}
-	if last, ok := s.missingSettlementWarned[accountID]; ok && now-last < int64(time.Hour/time.Millisecond) {
+	return s.hourlyLocked(s.missingSettlementWarned, accountID)
+}
+
+// hourlyLocked 在 warnMu 内判断某个键这一小时是否已经告警过，没有就记下现在。
+func (s *Service) hourlyLocked(seen map[string]int64, key string) bool {
+	now := s.now().UnixMilli()
+	if last, ok := seen[key]; ok && now-last < int64(time.Hour/time.Millisecond) {
 		return false
 	}
-	s.missingSettlementWarned[accountID] = now
+	seen[key] = now
 	return true
+}
+
+func priceKey(accountID, asset string) string { return accountID + "\x00" + strings.ToUpper(asset) }
+
+func (s *Service) rememberPrice(accountID, asset string, price shared.Decimal) {
+	s.warnMu.Lock()
+	defer s.warnMu.Unlock()
+	if s.lastPrices == nil {
+		s.lastPrices = make(map[string]shared.Decimal)
+	}
+	s.lastPrices[priceKey(accountID, asset)] = price
+}
+
+func (s *Service) lastPrice(accountID, asset string) (shared.Decimal, bool) {
+	s.warnMu.Lock()
+	defer s.warnMu.Unlock()
+	price, ok := s.lastPrices[priceKey(accountID, asset)]
+	return price, ok
+}
+
+// noteDegraded 记一条估值降级的关注项并限频写日志。关注项标签只带账户和资产，不带数量和价格（带变化的数字会让指标序列不断增长）。
+func (s *Service) noteDegraded(ctx context.Context, account store.TradingAccountRecord, asset, reason string, usedLast bool) {
+	how := "按 0 计"
+	if usedLast {
+		how = "按最后已知价计"
+	}
+	telemetry.Note(telemetry.AttentionValuationDegraded, account.Name+"："+strings.ToUpper(asset)+" 取不到价，权益"+how, s.now())
+	s.warnMu.Lock()
+	if s.degradedWarned == nil {
+		s.degradedWarned = make(map[string]int64)
+	}
+	warn := s.hourlyLocked(s.degradedWarned, priceKey(account.TradingAccountID, asset))
+	s.warnMu.Unlock()
+	if warn {
+		log.WarnContextf(ctx, "交易关注项：执行账户 %s 的受管资产 %s %s，权益里这部分%s，不阻断采样", account.TradingAccountID, asset, reason, how)
+	}
 }
 
 // fundSettings 读取执行账户所属组合的资金设置；不在任何组合里时取默认值。
@@ -176,6 +222,24 @@ func (s *Service) valueSnapshot(ctx context.Context, account store.TradingAccoun
 	if account.HasBalanceMarket() && !s.sourceFresh(snapshot.ExchangeUpdatedAt) {
 		return store.TradingAccountSnapshot{}, fmt.Errorf("equity: stale Spot balance snapshot")
 	}
+	return s.unifiedSnapshot(ctx, account, snapshot, nil)
+}
+
+// ValueEquity 按统一公式算执行账户快照的权益，给账户同步写库用：不做新鲜度检查（币安现货余额的时间是最后变更时间，
+// 可能很旧），只返回权益，快照的时间和可用资金由同步自己决定。prices 为空时按执行账户取适配器。
+func (s *Service) ValueEquity(ctx context.Context, account store.TradingAccountRecord, snapshot store.TradingAccountSnapshot, prices execution.ReferencePriceSource) (string, error) {
+	if s == nil || s.Store == nil {
+		return "", fmt.Errorf("equity: store is not configured")
+	}
+	valued, err := s.unifiedSnapshot(ctx, account, snapshot, prices)
+	if err != nil {
+		return "", err
+	}
+	return valued.Equity, nil
+}
+
+// unifiedSnapshot 是统一权益公式本身（见 valueSnapshot），不检查余额新鲜度。
+func (s *Service) unifiedSnapshot(ctx context.Context, account store.TradingAccountRecord, snapshot store.TradingAccountSnapshot, prices execution.ReferencePriceSource) (store.TradingAccountSnapshot, error) {
 	settlement := account.SettlementAsset
 	settings, err := s.fundSettings(ctx, account)
 	if err != nil {
@@ -202,7 +266,7 @@ func (s *Service) valueSnapshot(ctx context.Context, account store.TradingAccoun
 		// 多稳定币保证金：除结算币外的稳定币按市价折成结算币计入权益，不然调平时权益会凭空少一块。
 		if _, isStable := settings.StablecoinTargets[strings.ToUpper(balance.Asset)]; isStable {
 			if !quantity.IsZero() {
-				stableValue = stableValue.Add(quantity.Mul(s.stablecoinPrice(ctx, account, balance.Asset)))
+				stableValue = stableValue.Add(quantity.Mul(s.stablecoinPrice(ctx, account, balance.Asset, prices)))
 			}
 			continue
 		}
@@ -221,12 +285,15 @@ func (s *Service) valueSnapshot(ctx context.Context, account store.TradingAccoun
 	// 保证金币的配置值是组合层的数，在组合层只加一次，不在每个成员里各加一遍。
 	equity := settlementNet.Add(unrealized).Add(stableValue)
 	if len(held) > 0 {
-		if s.Adapters == nil {
-			return store.TradingAccountSnapshot{}, fmt.Errorf("equity: spot quote adapter is not configured")
-		}
-		adapter, err := s.Adapters.Adapter(account.TradingAccountID)
-		if err != nil {
-			return store.TradingAccountSnapshot{}, err
+		if prices == nil {
+			if s.Adapters == nil {
+				return store.TradingAccountSnapshot{}, fmt.Errorf("equity: spot quote adapter is not configured")
+			}
+			adapter, err := s.Adapters.Adapter(account.TradingAccountID)
+			if err != nil {
+				return store.TradingAccountSnapshot{}, err
+			}
+			prices = adapter
 		}
 		instruments, err := s.Store.ListInstrumentsForAccount(ctx, account.TradingAccountID)
 		if err != nil {
@@ -240,22 +307,14 @@ func (s *Service) valueSnapshot(ctx context.Context, account store.TradingAccoun
 			}
 		}
 		for _, balance := range held {
-			instrument, found := byAsset[strings.ToUpper(balance.Asset)]
-			if !found {
-				return store.TradingAccountSnapshot{}, fmt.Errorf("equity: no %s/%s Spot instrument", balance.Asset, settlement)
+			price, quoteTime, err := s.heldPrice(ctx, prices, account, byAsset, balance.Asset)
+			if err != nil {
+				return store.TradingAccountSnapshot{}, err
 			}
-			symbol := instrument.ExchangeSymbol
-			quote, quoteErr := adapter.GetReferencePrice(ctx, exchange.NewSymbolKey(instrument.MarketType, symbol))
-			if quoteErr != nil {
-				return store.TradingAccountSnapshot{}, quoteErr
-			}
-			if !s.sourceFresh(quote.UpdatedAt.UnixMilli()) {
-				return store.TradingAccountSnapshot{}, fmt.Errorf("equity: stale Spot quote for %s", symbol)
-			}
-			equity = equity.Add(decimal(balance.Total).Mul(quote.Price))
-			// 新鲜度取决于最旧的输入：新报价不能让旧余额看起来是最新的。
-			quoteTime := quote.UpdatedAt.UnixMilli()
-			if snapshot.ExchangeUpdatedAt <= 0 || quoteTime < snapshot.ExchangeUpdatedAt {
+			equity = equity.Add(decimal(balance.Total).Mul(price))
+			// 新鲜度取决于最旧的输入：新报价不能让旧余额看起来是最新的。降级估值（quoteTime 为 0）不参与，
+			// 否则一个下架零头会让整个组合的权益一直判为过期。
+			if quoteTime > 0 && (snapshot.ExchangeUpdatedAt <= 0 || quoteTime < snapshot.ExchangeUpdatedAt) {
 				snapshot.ExchangeUpdatedAt = quoteTime
 			}
 		}
@@ -267,11 +326,60 @@ func (s *Service) valueSnapshot(ctx context.Context, account store.TradingAccoun
 	return snapshot, nil
 }
 
+// heldPrice 给一笔受管现货余额取估值价格，quoteTime 是报价时间（降级估值时为 0）。
+//
+// 标的已不在库里、状态不是可交易（不发取价请求）、交易所确认标的不存在时，这笔余额不能让整个权益采样失败：
+// 用最后已知价，没有就按 0 计，并记关注项。其余取价失败（限流、网络、报价过期）且标的仍在交易时，
+// 有最后已知价就用它，没有就照旧报错——一次限流就把真实持仓按 0 计，权益骤降会让目标换算去缩仓。
+func (s *Service) heldPrice(
+	ctx context.Context,
+	prices execution.ReferencePriceSource,
+	account store.TradingAccountRecord,
+	byAsset map[string]store.InstrumentRecord,
+	asset string,
+) (shared.Decimal, int64, error) {
+	degrade := func(reason string) (shared.Decimal, int64, error) {
+		last, ok := s.lastPrice(account.TradingAccountID, asset)
+		s.noteDegraded(ctx, account, asset, reason, ok)
+		if !ok {
+			return shared.Zero(), 0, nil
+		}
+		return last, 0, nil
+	}
+	instrument, found := byAsset[strings.ToUpper(asset)]
+	if !found {
+		return degrade(fmt.Sprintf("没有 %s/%s 现货标的", asset, account.SettlementAsset))
+	}
+	if instrument.Status != "" && !exchange.StatusTradable(instrument.Status) {
+		return degrade("所在标的 " + instrument.ExchangeSymbol + " 状态为 " + instrument.Status)
+	}
+	symbol := instrument.ExchangeSymbol
+	quote, quoteErr := prices.GetReferencePrice(ctx, exchange.NewSymbolKey(instrument.MarketType, symbol))
+	if quoteErr == nil && !s.sourceFresh(quote.UpdatedAt.UnixMilli()) {
+		quoteErr = fmt.Errorf("equity: stale Spot quote for %s", symbol)
+	}
+	if quoteErr == nil && quote.Price.Cmp(shared.Zero()) <= 0 {
+		quoteErr = fmt.Errorf("equity: empty Spot quote for %s", symbol)
+	}
+	if quoteErr != nil {
+		if exchange.IsInstrumentNotFound(quoteErr) {
+			return degrade("交易所确认标的 " + symbol + " 不存在")
+		}
+		if _, ok := s.lastPrice(account.TradingAccountID, asset); ok {
+			return degrade("取价失败：" + exchange.FailureSummary(quoteErr))
+		}
+		return shared.Zero(), 0, quoteErr
+	}
+	s.rememberPrice(account.TradingAccountID, asset, quote.Price)
+	return quote.Price, quote.UpdatedAt.UnixMilli(), nil
+}
+
 // stablecoinPrice 返回稳定币折成结算币的价格：取它对结算币的现货标的参考价；
 // 没有标的、取不到报价时按 1 计（稳定币锚定结算币，估值不能因为一时没有报价就中断权益采样）。
-func (s *Service) stablecoinPrice(ctx context.Context, account store.TradingAccountRecord, asset string) shared.Decimal {
+// prices 非空时直接用它取价（同步路径传入读快照的适配器，不再经 Manager 取适配器）。
+func (s *Service) stablecoinPrice(ctx context.Context, account store.TradingAccountRecord, asset string, prices execution.ReferencePriceSource) shared.Decimal {
 	one := shared.MustDecimal("1")
-	if s.Adapters == nil {
+	if prices == nil && s.Adapters == nil {
 		return one
 	}
 	instruments, err := s.Store.ListInstrumentsForAccount(ctx, account.TradingAccountID)
@@ -283,11 +391,14 @@ func (s *Service) stablecoinPrice(ctx context.Context, account store.TradingAcco
 			!strings.EqualFold(instrument.BaseAsset, asset) || !strings.EqualFold(instrument.QuoteAsset, account.SettlementAsset) {
 			continue
 		}
-		adapter, adapterErr := s.Adapters.Adapter(account.TradingAccountID)
-		if adapterErr != nil {
-			return one
+		if prices == nil {
+			adapter, adapterErr := s.Adapters.Adapter(account.TradingAccountID)
+			if adapterErr != nil {
+				return one
+			}
+			prices = adapter
 		}
-		quote, quoteErr := adapter.GetReferencePrice(ctx, exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol))
+		quote, quoteErr := prices.GetReferencePrice(ctx, exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol))
 		if quoteErr != nil || quote.Price.Cmp(shared.Zero()) <= 0 || !s.sourceFresh(quote.UpdatedAt.UnixMilli()) {
 			return one
 		}

@@ -388,19 +388,7 @@ func (tx *Tx) CreateTradingAccount(record TradingAccountRecord) error {
 	if createdAt.IsZero() {
 		createdAt = time.Now().UTC()
 	}
-	err = tx.db.Exec(`
-		INSERT INTO t_trading_accounts (
-			c_space_id, c_trading_account_id, c_name, c_exchange, c_markets,
-			c_execution_mode, c_account_mode, c_inspection_json,
-			c_live_environment, c_credential_secret_id,
-			c_settlement_asset, c_margin_mode,
-			c_status, c_ready,
-			c_leverage_settings_json,
-			c_fill_cursors_json, c_snapshot_json, c_snapshot_source_time,
-			c_last_sync_at, c_last_ready_at,
-			c_last_error, c_ctime
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`,
+	err = tx.db.Exec(execInsertTradingAccount,
 		row.SpaceID, row.TradingAccountID, row.Name, row.Exchange, row.Markets,
 		row.ExecutionMode, row.AccountMode, row.InspectionJSON,
 		row.Environment, row.CredentialSecretID,
@@ -643,15 +631,7 @@ func (tx *Tx) RaiseBalancePending(spaceID, tradingAccountID string, wallet excha
 		return fmt.Errorf("%w: incomplete balance pending watermark", ErrInvalidRecord)
 	}
 	path := "$." + string(wallet)
-	result := tx.db.Exec(`
-		UPDATE t_trading_accounts
-		SET c_balance_pending_json = json_set(
-				c_balance_pending_json, ?,
-				MAX(COALESCE(json_extract(c_balance_pending_json, ?), 0), ?)
-			),
-			c_mtime = CURRENT_TIMESTAMP
-		WHERE c_space_id = ? AND c_trading_account_id = ?
-	`, path, path, until, spaceID, tradingAccountID)
+	result := tx.db.Exec(execRaiseBalancePending, path, path, until, spaceID, tradingAccountID)
 	return requireUpdated(result.Error, result.RowsAffected, "balance pending watermark")
 }
 
@@ -661,12 +641,7 @@ func (tx *Tx) ClearBalancePendingThrough(spaceID, tradingAccountID string, walle
 		return fmt.Errorf("%w: incomplete balance pending watermark", ErrInvalidRecord)
 	}
 	path := "$." + string(wallet)
-	result := tx.db.Exec(`
-		UPDATE t_trading_accounts
-		SET c_balance_pending_json = json_remove(c_balance_pending_json, ?), c_mtime = CURRENT_TIMESTAMP
-		WHERE c_space_id = ? AND c_trading_account_id = ?
-			AND COALESCE(json_extract(c_balance_pending_json, ?), 0) <= ?
-	`, path, spaceID, tradingAccountID, path, coveredUntil)
+	result := tx.db.Exec(execClearBalancePendingThrough, path, spaceID, tradingAccountID, path, coveredUntil)
 	if result.Error != nil {
 		return writeError(result.Error)
 	}
@@ -678,11 +653,7 @@ func (tx *Tx) SetLastDustConvertAt(spaceID, tradingAccountID string, at int64) e
 	if blank(spaceID) || blank(tradingAccountID) || at <= 0 {
 		return fmt.Errorf("%w: incomplete dust convert time", ErrInvalidRecord)
 	}
-	result := tx.db.Exec(`
-		UPDATE t_trading_accounts
-		SET c_last_dust_convert_at = ?, c_mtime = CURRENT_TIMESTAMP
-		WHERE c_space_id = ? AND c_trading_account_id = ?
-	`, at, spaceID, tradingAccountID)
+	result := tx.db.Exec(execSetLastDustConvertAt, at, spaceID, tradingAccountID)
 	return requireUpdated(result.Error, result.RowsAffected, "dust convert time")
 }
 
@@ -1056,3 +1027,33 @@ func canonicalOptionalDecimal(raw string) (string, error) {
 	}
 	return value.String(), nil
 }
+
+// 以下 SQL 整条写成常量，不在调用处拼接或内联。
+const (
+	execInsertTradingAccount = `INSERT INTO t_trading_accounts (
+			c_space_id, c_trading_account_id, c_name, c_exchange, c_markets,
+			c_execution_mode, c_account_mode, c_inspection_json,
+			c_live_environment, c_credential_secret_id,
+			c_settlement_asset, c_margin_mode,
+			c_status, c_ready,
+			c_leverage_settings_json,
+			c_fill_cursors_json, c_snapshot_json, c_snapshot_source_time,
+			c_last_sync_at, c_last_ready_at,
+			c_last_error, c_ctime
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	// 钱包待余额确认水位只升不降；参数依次是 JSON 路径、JSON 路径、水位、空间、执行账户。
+	execRaiseBalancePending = `UPDATE t_trading_accounts
+		SET c_balance_pending_json = json_set(
+				c_balance_pending_json, ?,
+				MAX(COALESCE(json_extract(c_balance_pending_json, ?), 0), ?)
+			),
+			c_mtime = CURRENT_TIMESTAMP
+		WHERE c_space_id = ? AND c_trading_account_id = ?`
+	execClearBalancePendingThrough = `UPDATE t_trading_accounts
+		SET c_balance_pending_json = json_remove(c_balance_pending_json, ?), c_mtime = CURRENT_TIMESTAMP
+		WHERE c_space_id = ? AND c_trading_account_id = ?
+			AND COALESCE(json_extract(c_balance_pending_json, ?), 0) <= ?`
+	execSetLastDustConvertAt = `UPDATE t_trading_accounts
+		SET c_last_dust_convert_at = ?, c_mtime = CURRENT_TIMESTAMP
+		WHERE c_space_id = ? AND c_trading_account_id = ?`
+)

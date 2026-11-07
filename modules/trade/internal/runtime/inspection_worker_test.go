@@ -30,6 +30,10 @@ func (s *scriptedReinspector) Reinspect(_ context.Context, id string) (accountap
 	return s.results[id], s.err[id]
 }
 
+func (s *scriptedReinspector) ReinspectUncounted(ctx context.Context, id string) (accountapp.ReinspectResult, error) {
+	return s.Reinspect(ctx, id)
+}
+
 // seedInspectionLogical 把 account-1 放进一个启用的组合账户。
 func seedInspectionLogical(t *testing.T, tradeStore *store.Store, automation string) {
 	t.Helper()

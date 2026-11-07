@@ -14,6 +14,8 @@ CREATE TABLE IF NOT EXISTS t_trade_instruments (
     c_min_exchange_quantity TEXT NOT NULL DEFAULT '0',
     c_price_tick TEXT NOT NULL,
     c_min_notional TEXT NOT NULL DEFAULT '0',
+    c_max_buy_price_ratio TEXT NOT NULL DEFAULT '0',
+    c_min_sell_price_ratio TEXT NOT NULL DEFAULT '0',
     c_status TEXT NOT NULL,
     c_exchange_updated_at INTEGER NOT NULL DEFAULT 0,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,

@@ -128,7 +128,9 @@ func (d *Decider) Decide(ctx context.Context, candidate store.OrderRecord) (Deci
 	} else if account.SettlementAsset != "" {
 		feeAsset = account.SettlementAsset
 	}
-	if !candidate.ReduceOnly {
+	// 现货卖单卖的是冻结的币本身，撮合时不用再看资金，不读快照：账户里别的币估值失败不能连累卖单。
+	spotSell := candidate.MarketType == string(exchange.MarketTypeSpot) && candidate.Side != string(exchange.SideBuy)
+	if !candidate.ReduceOnly && !spotSell {
 		snapshot, snapshotErr := adapter.GetAccountSnapshot(ctx)
 		if snapshotErr != nil {
 			return Decision{}, snapshotErr

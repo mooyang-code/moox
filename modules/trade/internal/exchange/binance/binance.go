@@ -34,6 +34,32 @@ const (
 	swapWeightLimit = 2400
 )
 
+// 编译期确认币安适配器（普通账户与统一账户）实现了会话按类型断言使用的各个可选能力：
+// 签名一旦漂移就编译失败，不会在运行时悄悄退化成“不支持”。
+var (
+	_ execution.ExecutionAdapter      = (*Adapter)(nil)
+	_ execution.ExchangeIdentity      = (*Adapter)(nil)
+	_ execution.SymbolConfigurer      = (*Adapter)(nil)
+	_ execution.AccountEventSource    = (*Adapter)(nil)
+	_ execution.LedgerSource          = (*Adapter)(nil)
+	_ execution.CapabilityProbe       = (*Adapter)(nil)
+	_ execution.WalletTransferer      = (*Adapter)(nil)
+	_ execution.FeeDiscountConfigurer = (*Adapter)(nil)
+	_ execution.DustConverter         = (*Adapter)(nil)
+	_ exchange.RateStatusSource       = (*Adapter)(nil)
+
+	_ execution.ExecutionAdapter      = (*PortfolioMargin)(nil)
+	_ execution.ExchangeIdentity      = (*PortfolioMargin)(nil)
+	_ execution.SymbolConfigurer      = (*PortfolioMargin)(nil)
+	_ execution.AccountEventSource    = (*PortfolioMargin)(nil)
+	_ execution.LedgerSource          = (*PortfolioMargin)(nil)
+	_ execution.ScopedOpenOrderSource = (*PortfolioMargin)(nil)
+	_ execution.CapabilityProbe       = (*PortfolioMargin)(nil)
+	_ execution.FeeDiscountConfigurer = (*PortfolioMargin)(nil)
+	_ execution.DustConverter         = (*PortfolioMargin)(nil)
+	_ exchange.RateStatusSource       = (*PortfolioMargin)(nil)
+)
+
 type Adapter struct {
 	config     exchange.AccountConfig
 	credential exchange.Credential
@@ -240,6 +266,11 @@ type exchangeInfo struct {
 			MinQty      string `json:"minQty"`
 			Notional    string `json:"notional"`
 			MinNotional string `json:"minNotional"`
+			// PERCENT_PRICE（合约、现货）与 PERCENT_PRICE_BY_SIDE（现货）的偏离倍数。
+			MultiplierUp      string `json:"multiplierUp"`
+			MultiplierDown    string `json:"multiplierDown"`
+			BidMultiplierUp   string `json:"bidMultiplierUp"`
+			AskMultiplierDown string `json:"askMultiplierDown"`
 		} `json:"filters"`
 	} `json:"symbols"`
 }
@@ -309,6 +340,11 @@ func (a *Adapter) LoadInstruments(ctx context.Context) ([]exchange.Instrument, e
 					rawNotional = filter.MinNotional
 				}
 				instrument.MinNotional, err = decimalOrZero(rawNotional)
+			case "PERCENT_PRICE":
+				err = tightenPriceBand(&instrument, filter.MultiplierUp, filter.MultiplierDown)
+			case "PERCENT_PRICE_BY_SIDE":
+				// 买单受 bid 一侧的上限约束，卖单受 ask 一侧的下限约束。
+				err = tightenPriceBand(&instrument, filter.BidMultiplierUp, filter.AskMultiplierDown)
 			}
 			if err != nil {
 				return nil, typedRejected("decode instrument decimal", err)
@@ -330,6 +366,25 @@ func (a *Adapter) LoadInstruments(ctx context.Context) ([]exchange.Instrument, e
 	return out, nil
 }
 
+// tightenPriceBand 记下价格偏离限制；两个过滤器都有时取更严的一个。
+func tightenPriceBand(instrument *exchange.Instrument, up, down string) error {
+	upValue, err := decimalOrZero(up)
+	if err != nil {
+		return err
+	}
+	downValue, err := decimalOrZero(down)
+	if err != nil {
+		return err
+	}
+	if upValue.Cmp(shared.Zero()) > 0 && (instrument.MaxBuyPriceRatio.IsZero() || upValue.Cmp(instrument.MaxBuyPriceRatio) < 0) {
+		instrument.MaxBuyPriceRatio = upValue
+	}
+	if downValue.Cmp(shared.Zero()) > 0 && downValue.Cmp(instrument.MinSellPriceRatio) > 0 {
+		instrument.MinSellPriceRatio = downValue
+	}
+	return nil
+}
+
 func (a *Adapter) GetReferencePrice(
 	ctx context.Context,
 	key exchange.SymbolKey,
@@ -347,7 +402,8 @@ func (a *Adapter) GetReferencePrice(
 		Query:  url.Values{"symbol": []string{symbol}},
 	})
 	if err != nil {
-		return exchange.ReferencePrice{}, err
+		// 带上错误码：标的已下架时是 -1121，估值据此识别（exchange.IsInstrumentNotFound）。
+		return exchange.ReferencePrice{}, classifyAPIError(err, raw)
 	}
 	var payload struct {
 		Price string `json:"price"`
@@ -862,7 +918,8 @@ func (a *Adapter) PlaceOrder(
 	}
 	order, err := a.orderFromPayload(payload)
 	if err != nil {
-		return exchange.Order{}, err
+		// HTTP 200 说明交易所已经受理：回执字段解析不了不能当确定拒单，按结果不明走查询恢复。
+		return exchange.Order{}, transportUnknown("decode placed order fields", err)
 	}
 	// Some Binance acknowledgements omit these echoed fields.
 	order.ClientOrderID = request.ClientOrderID
@@ -898,7 +955,12 @@ func (a *Adapter) CancelOrder(
 	}
 	// 现货撤单回执的 clientOrderId 是撤单请求自己的单号（原单号在 origClientOrderId），统一用被撤订单的单号。
 	payload.ClientOrderID = clientOrderID
-	return a.orderFromPayload(payload)
+	order, err := a.orderFromPayload(payload)
+	if err != nil {
+		// 撤单已被受理（HTTP 200），回执字段解析不了按结果不明处理，由查询确认订单状态。
+		return exchange.Order{}, transportUnknown("decode canceled order fields", err)
+	}
+	return order, nil
 }
 
 type tradePayload struct {

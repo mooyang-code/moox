@@ -1066,6 +1066,8 @@ message FlattenInstrumentReq {
   MarketType market_type = 4;
   string exchange_symbol = 5;
   string reason = 6;
+  // 截止时间（毫秒，传下架时间）：大于 0 时到点 Trade 不再下单，动作记 PARTIAL（剩余持仓写在结果里）；0 表示不限，只受 30 分钟期限约束。
+  int64 deadline_at = 7;
 }
 message FlattenInstrumentRsp {
   common.RetInfo ret_info = 1;

@@ -269,7 +269,8 @@ type pmAccount struct {
 //	UNIFIED 钱包（UM 合约）：Total = umWalletBalance，不含未实现盈亏。
 //
 // 未实现盈亏只取 UM 持仓接口的 unRealizedProfit 之和，不取余额行里的 umUnrealizedPNL。
-// UM 钱包的余额不能直接给杠杆账户的现货买单用（需要先归集，未核对），所以它的 Available 记 0，
+// UM 钱包的余额不能直接给杠杆账户的现货买单用（需要先归集；未核对，实盘前 V3 实测确认：官方文档只有
+// POST /papi/v1/asset-collection “从期货账户转到杠杆账户”，没有写明杠杆下单不能用 UM 钱包），所以它的 Available 记 0，
 // 账户级可用资金放在快照的 AvailableFunds 里，合约保证金按它校验。
 func (p *PortfolioMargin) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnapshot, error) {
 	if p.hasMarket(exchange.MarketTypeSwap) && !p.modeChecked.Load() {
@@ -630,8 +631,12 @@ func (p *PortfolioMargin) dispatchMarginAccount(ctx context.Context, root fields
 		Present:           exchange.AccountSnapshotPresence{Balances: true},
 		RequiresSync:      true,
 	}
+	// 只在锁内取出借款表的引用（GetAccountSnapshot 整表替换、不原地修改），解锁后再组装快照、回调会话：
+	// 会话的 OnAccountSnapshot 要拿 opMu，而同步线程持着 opMu 调 GetAccountSnapshot 时末尾要拿 borrowMu，
+	// 持 borrowMu 回调会和同步线程互相等死。
 	p.borrowMu.Lock()
-	defer p.borrowMu.Unlock()
+	borrowed := p.borrowed
+	p.borrowMu.Unlock()
 	for _, row := range rows {
 		var asset, free, locked string
 		for key, target := range map[string]*string{"a": &asset, "f": &free, "l": &locked} {
@@ -649,7 +654,7 @@ func (p *PortfolioMargin) dispatchMarginAccount(ctx context.Context, root fields
 		}
 		snapshot.Balances = append(snapshot.Balances, exchange.AssetBalance{
 			Wallet: exchange.WalletMargin, Asset: asset, Available: available, Locked: lockedValue,
-			Total: available.Add(lockedValue), Borrowed: p.borrowed[asset],
+			Total: available.Add(lockedValue), Borrowed: borrowed[asset],
 		})
 	}
 	return handler.OnAccountSnapshot(ctx, snapshot)

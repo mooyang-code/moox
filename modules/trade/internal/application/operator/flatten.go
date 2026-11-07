@@ -42,6 +42,8 @@ type FlattenCommand struct {
 	Exchange string
 	// ReduceRatio 在 0 到 1 之间时只减掉这个比例的持仓；为零或 1 表示全部清掉。
 	ReduceRatio shared.Decimal
+	// DeadlineAt 是下架清仓的截止时间（毫秒，事件中心按下架时间传入）；大于 0 时到点不再下单，动作记 PARTIAL。
+	DeadlineAt int64
 
 	// attemptStart 是这一轮执行的起点（毫秒，精确到秒）：动作每次重新进入运行都重新记，下架清仓只统计起点之后的子单是否被拒、是否连续没成交。
 	attemptStart int64
@@ -115,6 +117,7 @@ type flattenRequest struct {
 	InstrumentID     string `json:"instrument_id,omitempty"`
 	Exchange         string `json:"exchange,omitempty"`
 	ReduceRatio      string `json:"reduce_ratio,omitempty"`
+	DeadlineAt       int64  `json:"deadline_at,omitempty"`
 }
 
 // ErrNotInLogicalAccount 表示执行账户不属于任何组合账户：MooX 只通过组合账户交易，这样的账户没有可平的仓。
@@ -150,6 +153,7 @@ func decodeFlattenRequest(action store.OperatorActionRecord) (FlattenCommand, er
 		SpaceID: action.SpaceID, ActionID: action.ActionID,
 		LogicalAccountID: action.LogicalAccountID, TradingAccountID: request.TradingAccountID,
 		InstrumentID: request.InstrumentID, Exchange: request.Exchange, Reason: action.Reason,
+		DeadlineAt: request.DeadlineAt,
 	}
 	if request.ReduceRatio != "" {
 		ratio, err := shared.ParseDecimal(request.ReduceRatio)
@@ -369,6 +373,21 @@ func (s *Service) FlattenLogicalAccount(
 			return s.persistFlattenProgress(ctx, &result, "RUNNING")
 		}
 	}
+	// 过了截止时间（下架时间）：标的已经下架，不再下单，把动作按部分完成收尾；上一轮记下的各账户进度保留。
+	if s.pastDeadline(command) {
+		if resuming {
+			if previous, _ := decodeFlattenResult(existing); len(previous.Accounts) > 0 {
+				result.Accounts = previous.Accounts
+			}
+		}
+		if err := s.persistFlattenProgress(ctx, &result, string(operatordomain.StatusPartial)); err != nil {
+			return result, err
+		}
+		if command.actionType() == operatordomain.ActionDelistFlatten && s.Wake != nil {
+			s.Wake()
+		}
+		return result, nil
+	}
 	// 预算从收到请求算起，等锁用掉的时间要扣除，加上收尾不能超过网关的调用超时。
 	budgetEnd, _ := ctx.Deadline()
 	executable := 0
@@ -418,7 +437,7 @@ func (s *Service) FlattenLogicalAccount(
 	if retry {
 		status = "RUNNING"
 		// 账户一直异常时清仓不能永远运行，否则恢复自动执行会被挡住。剩余持仓已写入结果，要继续就重新发起。
-		if s.roundOlderThan(result, flattenActionTimeout) {
+		if s.roundOlderThan(result, flattenActionTimeout) || s.pastDeadline(command) {
 			status = "PARTIAL"
 		}
 	}
@@ -435,6 +454,18 @@ func (s *Service) FlattenLogicalAccount(
 
 // reasonArbitrageHedgeLeg 是只平一个标的而它正是套利底仓对冲腿时的剩余原因。
 const reasonArbitrageHedgeLeg = "套利底仓的永续对冲腿，不自动平仓，需要人工处理"
+
+// pastDeadline 报告下架清仓是否已过截止时间（下架时间）。
+func (s *Service) pastDeadline(command FlattenCommand) bool {
+	if command.DeadlineAt <= 0 {
+		return false
+	}
+	now := time.Now()
+	if s.Now != nil {
+		now = s.Now()
+	}
+	return now.UnixMilli() >= command.DeadlineAt
+}
 
 // roundOlderThan 判断这一轮执行（从 AttemptStartedAt 起）是否已经超过期限：同一个动作号在 FAILED、PARTIAL 之后重试要重新计时，
 // 不能按动作创建时间算（创建很久之后的重试一次只跑一轮就记 PARTIAL）；没有起点（旧记录）时按动作创建时间。
@@ -534,6 +565,7 @@ func flattenRequestJSON(command FlattenCommand) (string, error) {
 		TradingAccountID: strings.TrimSpace(command.TradingAccountID),
 		InstrumentID:     strings.TrimSpace(command.InstrumentID),
 		Exchange:         strings.TrimSpace(command.Exchange),
+		DeadlineAt:       command.DeadlineAt,
 	}
 	request.ReduceRatio = reduceRatioText(command)
 	data, err := json.Marshal(request)

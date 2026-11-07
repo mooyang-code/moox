@@ -140,6 +140,11 @@ func TestReinspectKeepsLastResultOnTransportErrorAndCountsFailures(t *testing.T)
 		require.False(t, result.ModeChanged)
 		require.Equal(t, i, result.Inspection.ConsecutiveFailures)
 	}
+	// 会话绑定时的立即复查失败不计入连续失败次数。
+	uncounted, err := service.ReinspectUncounted(context.Background(), value.ID)
+	require.NoError(t, err)
+	require.True(t, uncounted.Inconclusive)
+	require.Equal(t, 6, uncounted.Inspection.ConsecutiveFailures)
 	kept, err := exchange.ParseInspection(store.accounts[value.ID].InspectionJSON)
 	require.NoError(t, err)
 	require.Equal(t, 6, kept.ConsecutiveFailures)

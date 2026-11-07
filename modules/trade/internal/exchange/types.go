@@ -313,8 +313,12 @@ type Instrument struct {
 	MinExchangeQuantity  shared.Decimal
 	PriceTick            shared.Decimal
 	MinNotional          shared.Decimal
-	Status               string
-	ExchangeUpdatedAt    time.Time
+	// MaxBuyPriceRatio、MinSellPriceRatio 是交易所的价格偏离限制（币安 PERCENT_PRICE / PERCENT_PRICE_BY_SIDE）：
+	// 买单限价不得高于参考价 × MaxBuyPriceRatio，卖单不得低于参考价 × MinSellPriceRatio；为 0 表示交易所没有给出。
+	MaxBuyPriceRatio  shared.Decimal
+	MinSellPriceRatio shared.Decimal
+	Status            string
+	ExchangeUpdatedAt time.Time
 }
 
 // MinNotionalAt 返回在某个价格下的最小下单名义金额：交易所给了最小名义金额（币安）就用它；

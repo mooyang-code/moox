@@ -269,6 +269,7 @@ func TestExchangeInstrumentSwapFieldsRoundTrip(t *testing.T) {
 		SettlementAsset: "USDT", Linear: true, ContractValue: "0.01",
 		ContractValueAsset: "BTC", ExchangeQuantityStep: "1",
 		MinExchangeQuantity: "1", PriceTick: "0.1", MinNotional: "10",
+		MaxBuyPriceRatio: "1.05", MinSellPriceRatio: "0.95",
 		Status: "TRADING", ExchangeUpdatedAt: 123,
 	}
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {

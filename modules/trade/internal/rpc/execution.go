@@ -81,7 +81,7 @@ func (h *ExecutionServer) PlaceManualOrder(
 		return &tradepb.PlaceManualOrderRsp{RetInfo: instrumentErrorInfo(err)}, nil
 	}
 	if h.PlaceManual == nil {
-		err = fmt.Errorf("trade RPC: manual order service is not configured")
+		err = fmt.Errorf("人工下单服务未配置")
 	}
 	var action store.OperatorActionRecord
 	var order store.OrderRecord
@@ -116,7 +116,7 @@ func (h *ExecutionServer) CancelOrder(
 		return &tradepb.CancelOrderRsp{RetInfo: invalidOrErrorInfo(err)}, nil
 	}
 	if h.Cancel == nil {
-		err = fmt.Errorf("trade RPC: cancel service is not configured")
+		err = fmt.Errorf("撤单服务未配置")
 	}
 	var action store.OperatorActionRecord
 	var order store.OrderRecord

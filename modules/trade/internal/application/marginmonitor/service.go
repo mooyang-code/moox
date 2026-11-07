@@ -10,6 +10,8 @@
 //     维持保证金取快照里的 MaintenanceMargin；交易所给了 uniMMR（快照的 UniMMR）就直接用它比阈值（分子计入抵押率并扣掉挂单浮亏，
 //     比自己算的更准），只有它为空才退回总权益 ÷ 维持保证金。
 //   - 分母为零或数据缺失（没有持仓、维持保证金或总权益没填、快照太久没更新）一律不触发：数据不全时不能凭空减仓。
+//     普通账户的总权益填了但不大于 0（亏光甚至穿仓）是最危险的情况，有合约持仓就触发。
+//   - 没就绪的账户这一轮不判断，但快照太久没更新的告警照发。
 //   - OKX 暂不接入：官方样例里账户级的维持保证金在 mmr、adjEq，币种明细里的 mmr 和 mgnRatio 是空串，现有快照读不对，先不监控、告警一次；
 //     账户类型还没有检测写入（依赖交易所检测任务 T5）的实盘永续账户同样不监控、告警一次。
 //   - 测试网和模拟盘不监控。
@@ -20,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -35,8 +38,9 @@ import (
 // Reduce 发起按比例减仓（先暂停组合、撤全部订单，再把现货和合约同比例减掉）。
 type Reduce func(ctx context.Context, spaceID, actionID, logicalAccountID string, ratio shared.Decimal, reason string) (store.OperatorActionRecord, error)
 
-// Pause 只暂停组合（有下架清仓在跑时减仓排不进去，先把组合停住）。
-type Pause func(ctx context.Context, spaceID, logicalAccountID, reason string) error
+// Pause 只暂停组合（有下架清仓在跑时减仓排不进去，先把组合停住；或改写“减仓待执行”的原因）。
+// 条件更新：只有组合当前的状态和暂停原因仍是 expectedState、expectedReason 时才改，返回是否改了。
+type Pause func(ctx context.Context, spaceID, logicalAccountID, expectedState, expectedReason, reason string) (bool, error)
 
 // Collect 把普通账户现货钱包里的资金归集回合约钱包；pending 为真表示还没完成，下一轮再调（实现须幂等）。
 // idempotencyKey 是这次风控事件的幂等键（风控减仓的动作号，形如 margin-<组合>-<时间>）：风控划转没有目标（target_id 为空串），
@@ -130,7 +134,13 @@ func inScope(account store.TradingAccountRecord) bool {
 
 // Applies 报告账户是否在监控范围内：币安的普通账户和统一账户，已就绪。
 func Applies(account store.TradingAccountRecord) bool {
-	if !inScope(account) || !account.Ready {
+	return monitored(account) && account.Ready
+}
+
+// monitored 报告账户是否是被监控的类型（币安普通账户、统一账户），不管是否就绪：
+// 没就绪的账户虽然这一轮不判断，快照太久没更新的告警照发。
+func monitored(account store.TradingAccountRecord) bool {
+	if !inScope(account) {
 		return false
 	}
 	switch exchange.AccountMode(account.AccountMode) {
@@ -176,7 +186,8 @@ func Evaluate(account store.TradingAccountRecord, positions []store.PositionReco
 		reading.Triggered = reading.Value.Cmp(reading.Threshold) < 0
 		return reading, true
 	}
-	if equity.Cmp(shared.Zero()) <= 0 {
+	// 总权益没填不判断；填了但不大于 0（亏光甚至穿仓）是最危险的情况，有合约持仓就要触发。
+	if strings.TrimSpace(account.Snapshot.ExchangeEquity) == "" {
 		return reading, false
 	}
 	reading.Threshold = settings.MarginRatioThreshold
@@ -283,6 +294,9 @@ func (s *Service) RunLogicalAccount(ctx context.Context, logical store.LogicalAc
 	if err := s.collectAfterReduce(ctx, logical, accounts); err != nil {
 		log.Warnf("交易关注项：组合 %s 触发风控后的资金归集失败，下一轮重试：%v", logical.LogicalAccountID, err)
 	}
+	if err := s.noteReduceOutcome(ctx, logical); err != nil {
+		return err
+	}
 	// 整组清仓和减仓在跑时，它们自己会暂停组合，这一轮不叠加；下架清仓不暂停组合，下面照常触发（减仓排不进去时先暂停）。
 	running, err := s.Store.ListRunningOperatorActions(ctx, logical.SpaceID, logical.LogicalAccountID)
 	if err != nil {
@@ -305,11 +319,14 @@ func (s *Service) RunLogicalAccount(ctx context.Context, logical store.LogicalAc
 	var triggered []Reading
 	safe := false // 有账户读出了数、且没跌破阈值
 	for _, account := range accounts {
-		if !Applies(account) {
+		if !monitored(account) {
 			continue
 		}
 		if age := s.now().Sub(time.UnixMilli(account.LastSyncAt)); account.LastSyncAt <= 0 || age > s.maxSnapshotAge() {
 			s.warnOnce("stale|"+account.TradingAccountID, fmt.Sprintf("执行账户 %s 的快照太久没有更新，保证金率监控这一轮跳过", account.Name))
+			continue
+		}
+		if !account.Ready {
 			continue
 		}
 		positions, err := s.Store.ListPositions(ctx, account.SpaceID, account.TradingAccountID, exchange.SymbolKey{})
@@ -329,11 +346,38 @@ func (s *Service) RunLogicalAccount(ctx context.Context, logical store.LogicalAc
 	if len(triggered) == 0 {
 		// “减仓待执行”期间保证金率又回到了安全线：减仓不会再做，原因不能一直写“待执行”，改成“没有减仓、等待确认后恢复”。
 		if safe && store.IsMarginPausePending(logical.PauseReason) && s.Pause != nil {
-			return s.Pause(ctx, logical.SpaceID, logical.LogicalAccountID, store.MarginPauseUnreducedReason())
+			// 只有原因仍是“减仓待执行”时才改写：读到组合之后用户可能已经恢复或改了原因。
+			_, err := s.Pause(ctx, logical.SpaceID, logical.LogicalAccountID, "PAUSED", store.MarginPausePendingReason(), store.MarginPauseUnreducedReason())
+			return err
 		}
 		return nil
 	}
 	return s.trigger(ctx, logical, settings, triggered)
+}
+
+// noteReduceOutcome 风控减仓结束但没有做完（FAILED、PARTIAL）时，把暂停原因如实改写：只在原因仍是“已按比例减仓”时改。
+func (s *Service) noteReduceOutcome(ctx context.Context, logical store.LogicalAccountRecord) error {
+	if logical.PauseReason != store.MarginPauseReason() || s.Pause == nil {
+		return nil
+	}
+	action, err := s.lastMarginAction(ctx, logical)
+	if err != nil || action == nil {
+		return err
+	}
+	reason := ""
+	switch action.Status {
+	case string(operatordomain.StatusFailed):
+		reason = store.MarginPauseReduceFailedReason()
+	case string(operatordomain.StatusPartial):
+		reason = store.MarginPauseReducePartialReason()
+	default:
+		return nil
+	}
+	changed, err := s.Pause(ctx, logical.SpaceID, logical.LogicalAccountID, "PAUSED", store.MarginPauseReason(), reason)
+	if changed {
+		log.Warnf("交易关注项：组合 %s 的风控减仓 %s 结束状态为 %s，暂停原因已改写", logical.LogicalAccountID, action.ActionID, action.Status)
+	}
+	return err
 }
 
 // lastMarginAction 返回组合最近一次风控发起的减仓动作，没有则为 nil。
@@ -365,7 +409,9 @@ func (s *Service) trigger(ctx context.Context, logical store.LogicalAccountRecor
 	if errors.Is(err, operatorapp.ErrLogicalAccountBusy) {
 		// 减仓排不进去（有下架清仓在跑，或拿不到组合锁）：先把组合暂停停住，下一轮再试减仓。
 		if logical.AutomationState == "ACTIVE" && s.Pause != nil {
-			if pauseErr := s.Pause(ctx, logical.SpaceID, logical.LogicalAccountID, store.MarginPausePendingReason()); pauseErr != nil {
+			// 只在组合仍在自动执行时暂停：读到组合之后用户可能已经人工暂停，不覆盖人工原因。
+			paused, pauseErr := s.Pause(ctx, logical.SpaceID, logical.LogicalAccountID, "ACTIVE", "", store.MarginPausePendingReason())
+			if pauseErr != nil || !paused {
 				return pauseErr
 			}
 			log.Warnf("交易关注项：组合 %s 保证金率过低（%s），已暂停；组合忙，减仓下一轮再做", logical.LogicalAccountID, detail)
@@ -385,7 +431,7 @@ func (s *Service) trigger(ctx context.Context, logical store.LogicalAccountRecor
 // 归集的账户有一个没就绪就先不记完成，下一轮再来。
 func (s *Service) collectAfterReduce(ctx context.Context, logical store.LogicalAccountRecord, accounts []store.TradingAccountRecord) error {
 	// 只跟随“已发起减仓”的风控暂停；减仓待执行、或待执行期间回到安全线而没有减仓时，没有要归集的。
-	if logical.PauseReason != store.MarginPauseReason() {
+	if !store.IsMarginPauseReduced(logical.PauseReason) {
 		return nil
 	}
 	action, err := s.lastMarginAction(ctx, logical)

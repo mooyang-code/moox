@@ -23,6 +23,17 @@ import (
 
 const defaultBaseURL = "https://openapi.okx.com"
 
+// 编译期确认 OKX 适配器实现了会话按类型断言使用的各个可选能力：签名一旦漂移就编译失败，
+// 不会在运行时悄悄退化成“不支持”。
+var (
+	_ execution.ExecutionAdapter   = (*Adapter)(nil)
+	_ execution.ExchangeIdentity   = (*Adapter)(nil)
+	_ execution.SymbolConfigurer   = (*Adapter)(nil)
+	_ execution.AccountEventSource = (*Adapter)(nil)
+	_ execution.LedgerSource       = (*Adapter)(nil)
+	_ exchange.RateStatusSource    = (*Adapter)(nil)
+)
+
 type Adapter struct {
 	config     exchange.AccountConfig
 	credential exchange.Credential
@@ -308,8 +319,18 @@ func (a *Adapter) GetReferencePrice(
 	var rows []struct {
 		Last string `json:"last"`
 	}
-	if err := json.Unmarshal(data, &rows); err != nil || len(rows) != 1 {
+	if err := json.Unmarshal(data, &rows); err != nil {
 		return exchange.ReferencePrice{}, rejected("decode reference price", err)
+	}
+	if len(rows) == 0 {
+		// 成功响应但没有行：标的已不在交易所，和 51001 一样按“标的不存在”返回，估值据此识别。
+		return exchange.ReferencePrice{}, &exchange.Error{
+			Kind: exchange.ErrorRejected, Code: exchange.CodeOKXInstrumentNotFound,
+			Err: fmt.Errorf("标的 %s 没有行情", symbol),
+		}
+	}
+	if len(rows) != 1 {
+		return exchange.ReferencePrice{}, rejected("decode reference price", nil)
 	}
 	price, err := shared.ParseDecimal(rows[0].Last)
 	if err != nil || price.Cmp(shared.Zero()) <= 0 {
@@ -948,14 +969,17 @@ func (a *Adapter) SetLeverage(
 
 func (a *Adapter) SetMarginMode(
 	_ context.Context,
-	_ shared.ExchangeSymbol,
+	key exchange.SymbolKey,
 	mode exchange.MarginMode,
 ) error {
-	if a.config.Market() != exchange.MarketTypeSwap || mode != exchange.MarginModeCross {
+	if err := a.ownMarket(key); err != nil {
+		return err
+	}
+	if a.config.Market() != exchange.MarketTypeSwap || mode != exchange.MarginModeCross ||
+		strings.TrimSpace(key.Symbol) == "" {
 		return rejected("only CROSS SWAP margin mode is supported", nil)
 	}
-	// OKX applies tdMode=cross per order and leverage setting; there is no
-	// separate account-wide margin-mode mutation for this v1 scope.
+	// OKX 的全仓由每笔订单的 tdMode=cross 和设杠杆时的 mgnMode=cross 决定，没有单独切换保证金模式的接口。
 	return nil
 }
 

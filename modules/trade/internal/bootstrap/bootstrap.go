@@ -127,7 +127,7 @@ func initialize(
 	fillReducer := &consumer.Reducer{Store: tradeStore, Enqueue: equitySampler.Enqueue}
 	syncService := &accountsync.Service{
 		Store: tradeStore, Adapters: manager, SessionState: manager,
-		Fills: fillReducer, Orders: orderService, Metrics: balanceMetrics,
+		Fills: fillReducer, Orders: orderService, Metrics: balanceMetrics, Equity: equityService,
 	}
 	paperMatcher := &executionpaper.Matcher{
 		Store:   tradeStore,
@@ -147,6 +147,11 @@ func initialize(
 		if accountErr != nil {
 			return executionpaper.InfrastructureError{Err: accountErr}
 		}
+		// 模拟盘快照的权益同样按统一公式落库（与实盘同步、权益采样一致）；估值失败保留适配器的值。
+		refreshed := store.SnapshotFromExchange(snapshot)
+		if equity, equityErr := equityService.ValueEquity(refreshCtx, account, refreshed, adapter); equityErr == nil {
+			refreshed.Equity = equity
+		}
 		err := tradeStore.Transaction(refreshCtx, func(tx *store.Tx) error {
 			// The paper snapshot is reconstructed from the same SQLite facts that
 			// back reservations. Advance the sync watermark together with it so
@@ -158,7 +163,7 @@ func initialize(
 				account.SpaceID,
 				tradingAccountID,
 				account.FillCursors,
-				store.SnapshotFromExchange(snapshot),
+				refreshed,
 				at,
 				at,
 			)
@@ -242,10 +247,7 @@ func initialize(
 			// 是这次风控事件的幂等键：钱包按它做幂等（划转记录的本地引用号带着它），不同风控事件的归集互不影响。
 			return targetExecutor.Transfers.CollectForRisk(callCtx, spaceID, logicalAccountID, idempotencyKey, accounts)
 		},
-		Pause: func(callCtx context.Context, spaceID, logicalAccountID, reason string) error {
-			_, pauseErr := logicalAccounts.Pause(callCtx, spaceID, logicalAccountID, reason)
-			return pauseErr
-		},
+		Pause: logicalAccounts.PauseIf,
 	}
 	marginWorker := &traderuntime.FundWorker{Maintainer: marginService, Interval: time.Minute, Gate: lifeGate.Open, Name: "保证金率监控"}
 	operatorWorker := &traderuntime.OperatorWorker{
@@ -459,6 +461,7 @@ func initialize(
 				result, flattenErr := operatorService.FlattenLogicalAccount(callCtx, operatorapp.FlattenCommand{
 					SpaceID: command.SpaceID, ActionID: command.ActionID, LogicalAccountID: command.LogicalAccountID,
 					Reason: command.Reason, InstrumentID: command.InstrumentID, Exchange: command.Exchange,
+					DeadlineAt: command.DeadlineAt,
 				})
 				return result.Action, result.Unblocked, flattenErr
 			},
@@ -713,6 +716,7 @@ func instrumentFromRecord(exchangeName exchange.Exchange, market exchange.Market
 		ExchangeQuantityStep: decimal(record.ExchangeQuantityStep),
 		MinExchangeQuantity:  decimal(record.MinExchangeQuantity),
 		PriceTick:            decimal(record.PriceTick), MinNotional: decimal(record.MinNotional),
+		MaxBuyPriceRatio: decimal(record.MaxBuyPriceRatio), MinSellPriceRatio: decimal(record.MinSellPriceRatio),
 		Status: record.Status, ExchangeUpdatedAt: time.UnixMilli(record.ExchangeUpdatedAt),
 	}
 }

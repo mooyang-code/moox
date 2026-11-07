@@ -116,14 +116,9 @@ ON t_trade_orders (
 CREATE INDEX IF NOT EXISTS idx_trade_orders_logical_state
 ON t_trade_orders (c_space_id, c_logical_account_id, c_state);
 
--- 单币每小时上限：按（组合、内部标的 ID、提交时间所在的自然小时）汇总策略已提交子单的名义金额。
+-- 单币每小时上限：按组合和提交时间范围取策略已提交的子单，再按内部标的 ID 汇总名义金额（查询不带标的条件）。
 CREATE INDEX IF NOT EXISTS idx_trade_orders_target_hourly
-ON t_trade_orders (
-    c_space_id,
-    c_logical_account_id,
-    c_instrument_id,
-    c_submitted_at
-)
+ON t_trade_orders (c_space_id, c_logical_account_id, c_submitted_at)
 WHERE c_owner_type = 'TARGET';
 
 -- 模拟撮合只扫 OPEN 订单，部分索引不随历史订单增长。

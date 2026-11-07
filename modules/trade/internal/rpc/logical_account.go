@@ -336,7 +336,7 @@ func (h *LogicalAccountServer) FlattenLogicalAccount(
 	}
 	if h.Flatten == nil {
 		return &tradepb.FlattenLogicalAccountRsp{
-			RetInfo: errorInfo(fmt.Errorf("trade RPC: flatten service is not configured")),
+			RetInfo: errorInfo(fmt.Errorf("清仓服务未配置")),
 		}, nil
 	}
 	action, err := h.Flatten(

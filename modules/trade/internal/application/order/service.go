@@ -21,13 +21,13 @@ import (
 )
 
 var (
-	ErrIdempotencyConflict = errors.New("trade order: idempotency conflict")
-	ErrServiceConfig       = errors.New("trade order: service is not configured")
+	ErrIdempotencyConflict = errors.New("同一个幂等键已经用于内容不同的订单")
+	ErrServiceConfig       = errors.New("下单服务未配置")
 	ErrCrossZero           = errors.New("订单不能跨过零持仓")
 	ErrExternalConflict    = errors.New("存在外部活动订单")
 	ErrAutomationPaused    = errors.New("组合账户自动执行已暂停")
-	ErrTargetOwnerConflict = errors.New("trade order: target runner no longer owns logical account")
-	ErrTargetExpired       = errors.New("trade order: target validity window elapsed")
+	ErrTargetOwnerConflict = errors.New("目标所属的策略会话已不再持有组合账户")
+	ErrTargetExpired       = errors.New("目标已过有效期")
 	ErrAccountNotReady     = errors.New("账户未就绪")
 )
 
