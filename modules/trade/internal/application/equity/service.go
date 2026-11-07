@@ -28,11 +28,11 @@ type Service struct {
 
 	// missingSettlementWarned 记录缺结算币明细告警的时间（执行账户 -> 毫秒），同一个账户一小时只告警一次。
 	// degradedWarned 记录受管资产估值降级告警的时间（执行账户 + 资产 -> 毫秒），同样一小时一次。
-	// lastPrices 是受管现货最近一次取到的新鲜报价（执行账户 + 资产 -> 价格），取不到价时用它估值。
+	// lastPrices 是受管现货最近一次取到的新鲜报价和取价时间（执行账户 + 资产 -> 价格），取不到价时在保留时间内用它估值。
 	warnMu                  sync.Mutex
 	missingSettlementWarned map[string]int64
 	degradedWarned          map[string]int64
-	lastPrices              map[string]shared.Decimal
+	lastPrices              map[string]execution.LastPrice
 }
 
 func (s *Service) ListSampleAccounts(ctx context.Context) ([]string, error) {
@@ -164,28 +164,23 @@ func (s *Service) hourlyLocked(seen map[string]int64, key string) bool {
 
 func priceKey(accountID, asset string) string { return accountID + "\x00" + strings.ToUpper(asset) }
 
-func (s *Service) rememberPrice(accountID, asset string, price shared.Decimal) {
+func (s *Service) rememberPrice(accountID, asset string, price shared.Decimal, at time.Time) {
 	s.warnMu.Lock()
 	defer s.warnMu.Unlock()
 	if s.lastPrices == nil {
-		s.lastPrices = make(map[string]shared.Decimal)
+		s.lastPrices = make(map[string]execution.LastPrice)
 	}
-	s.lastPrices[priceKey(accountID, asset)] = price
+	s.lastPrices[priceKey(accountID, asset)] = execution.LastPrice{Price: price, At: at}
 }
 
-func (s *Service) lastPrice(accountID, asset string) (shared.Decimal, bool) {
+func (s *Service) lastPrice(accountID, asset string) execution.LastPrice {
 	s.warnMu.Lock()
 	defer s.warnMu.Unlock()
-	price, ok := s.lastPrices[priceKey(accountID, asset)]
-	return price, ok
+	return s.lastPrices[priceKey(accountID, asset)]
 }
 
 // noteDegraded 记一条估值降级的关注项并限频写日志。关注项标签只带账户和资产，不带数量和价格（带变化的数字会让指标序列不断增长）。
-func (s *Service) noteDegraded(ctx context.Context, account store.TradingAccountRecord, asset, reason string, usedLast bool) {
-	how := "按 0 计"
-	if usedLast {
-		how = "按最后已知价计"
-	}
+func (s *Service) noteDegraded(ctx context.Context, account store.TradingAccountRecord, asset, reason, how string) {
 	telemetry.Note(telemetry.AttentionValuationDegraded, account.Name+"："+strings.ToUpper(asset)+" 取不到价，权益"+how, s.now())
 	s.warnMu.Lock()
 	if s.degradedWarned == nil {
@@ -328,9 +323,9 @@ func (s *Service) unifiedSnapshot(ctx context.Context, account store.TradingAcco
 
 // heldPrice 给一笔受管现货余额取估值价格，quoteTime 是报价时间（降级估值时为 0）。
 //
-// 标的已不在库里、状态不是可交易（不发取价请求）、交易所确认标的不存在时，这笔余额不能让整个权益采样失败：
-// 用最后已知价，没有就按 0 计，并记关注项。其余取价失败（限流、网络、报价过期）且标的仍在交易时，
-// 有最后已知价就用它，没有就照旧报错——一次限流就把真实持仓按 0 计，权益骤降会让目标换算去缩仓。
+// 取不到新鲜报价时按 execution.DegradedPrice 的统一规则降级：不超龄的最后已知价；标的表里没有、在下架名单里、
+// 交易所确认不存在的按 0 计；其余不在交易状态的退回最近一笔成交价；标的仍在交易只是暂时取价失败的照旧报错。
+// 降级估值不拉低权益的来源时间：一个下架零头不能让整个组合的权益一直判为过期；最后已知价超过保留时间（SourceMaxAge）就不再使用。
 func (s *Service) heldPrice(
 	ctx context.Context,
 	prices execution.ReferencePriceSource,
@@ -338,20 +333,14 @@ func (s *Service) heldPrice(
 	byAsset map[string]store.InstrumentRecord,
 	asset string,
 ) (shared.Decimal, int64, error) {
-	degrade := func(reason string) (shared.Decimal, int64, error) {
-		last, ok := s.lastPrice(account.TradingAccountID, asset)
-		s.noteDegraded(ctx, account, asset, reason, ok)
-		if !ok {
-			return shared.Zero(), 0, nil
-		}
-		return last, 0, nil
-	}
 	instrument, found := byAsset[strings.ToUpper(asset)]
 	if !found {
-		return degrade(fmt.Sprintf("没有 %s/%s 现货标的", asset, account.SettlementAsset))
+		return s.degradedPrice(ctx, account, asset, nil, execution.ValuationMissingInstrument,
+			fmt.Errorf("没有 %s/%s 现货标的", asset, account.SettlementAsset))
 	}
 	if instrument.Status != "" && !exchange.StatusTradable(instrument.Status) {
-		return degrade("所在标的 " + instrument.ExchangeSymbol + " 状态为 " + instrument.Status)
+		return s.degradedPrice(ctx, account, asset, &instrument, execution.ValuationNotTrading,
+			fmt.Errorf("所在标的 %s 状态为 %s", instrument.ExchangeSymbol, instrument.Status))
 	}
 	symbol := instrument.ExchangeSymbol
 	quote, quoteErr := prices.GetReferencePrice(ctx, exchange.NewSymbolKey(instrument.MarketType, symbol))
@@ -362,16 +351,76 @@ func (s *Service) heldPrice(
 		quoteErr = fmt.Errorf("equity: empty Spot quote for %s", symbol)
 	}
 	if quoteErr != nil {
+		failure := execution.ValuationQuoteFailed
 		if exchange.IsInstrumentNotFound(quoteErr) {
-			return degrade("交易所确认标的 " + symbol + " 不存在")
+			failure = execution.ValuationInstrumentGone
 		}
-		if _, ok := s.lastPrice(account.TradingAccountID, asset); ok {
-			return degrade("取价失败：" + exchange.FailureSummary(quoteErr))
-		}
-		return shared.Zero(), 0, quoteErr
+		return s.degradedPrice(ctx, account, asset, &instrument, failure, quoteErr)
 	}
-	s.rememberPrice(account.TradingAccountID, asset, quote.Price)
+	s.rememberPrice(account.TradingAccountID, asset, quote.Price, quote.UpdatedAt)
 	return quote.Price, quote.UpdatedAt.UnixMilli(), nil
+}
+
+// degradedPrice 按统一规则给取不到新鲜报价的受管现货定价，用上降级估值时记关注项。标的在下架名单里时按“下架”处理（可以按 0 计）。
+func (s *Service) degradedPrice(
+	ctx context.Context,
+	account store.TradingAccountRecord,
+	asset string,
+	instrument *store.InstrumentRecord,
+	failure execution.ValuationFailure,
+	cause error,
+) (shared.Decimal, int64, error) {
+	reason := degradeReason(cause)
+	if instrument != nil && failure != execution.ValuationInstrumentGone {
+		blocked, err := s.Store.LoadBlockedSet(ctx)
+		if err != nil {
+			return shared.Zero(), 0, err
+		}
+		if blocked.ContainsInstrument(account.Exchange, *instrument) {
+			failure, reason = execution.ValuationDelisted, "所在标的 "+instrument.ExchangeSymbol+" 在下架名单里"
+		}
+	}
+	var lastFill execution.LastFillPrice
+	if instrument != nil {
+		lastFill = func(ctx context.Context) (shared.Decimal, bool, error) {
+			return latestFillPrice(ctx, s.Store, account, *instrument)
+		}
+	}
+	value, err := execution.DegradedPrice(ctx, failure, s.lastPrice(account.TradingAccountID, asset), s.now(), s.sourceMaxAge(), lastFill, cause)
+	if err != nil {
+		return shared.Zero(), 0, err
+	}
+	s.noteDegraded(ctx, account, asset, reason, value.How)
+	return value.Price, 0, nil
+}
+
+// degradeReason 是写进日志的取不到价的原因：交易所错误只给类别和错误码（原文可能带请求串），本地的原因原样给出。
+func degradeReason(err error) string {
+	var typed *exchange.Error
+	if errors.As(err, &typed) {
+		if exchange.IsInstrumentNotFound(err) {
+			return "交易所确认标的不存在"
+		}
+		return "取价失败：" + exchange.FailureSummary(err)
+	}
+	return err.Error()
+}
+
+// latestFillPrice 取这个标的在本账户最近一笔成交的价格。
+func latestFillPrice(ctx context.Context, fills interface {
+	ListFills(context.Context, string, store.FillQuery) ([]store.FillRecord, int64, error)
+}, account store.TradingAccountRecord, instrument store.InstrumentRecord) (shared.Decimal, bool, error) {
+	records, _, err := fills.ListFills(ctx, account.SpaceID, store.FillQuery{
+		TradingAccountID: account.TradingAccountID, Market: instrument.MarketType, ExchangeSymbol: instrument.ExchangeSymbol, Limit: 1,
+	})
+	if err != nil || len(records) == 0 {
+		return shared.Zero(), false, err
+	}
+	price, err := shared.ParseDecimal(records[0].Price)
+	if err != nil {
+		return shared.Zero(), false, nil
+	}
+	return price, true, nil
 }
 
 // stablecoinPrice 返回稳定币折成结算币的价格：取它对结算币的现货标的参考价；

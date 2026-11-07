@@ -157,6 +157,8 @@ type laneAction struct {
 	// resting 表示这一片改成挂单（限价 + GTC，挂买一、卖一价）；hasResting 表示这个标的已经有挂单，差额里扣过它的剩余量。
 	resting    bool
 	hasResting bool
+	// rested 表示本目标在这个标的上挂过单、挂单已经结束：不再挂单。
+	rested bool
 	// scaled 表示现货买入被划转额度缩小过：delta 是缩小后的数量，fullDelta 是缩小前的原始差额，
 	// scaleReason 是缩小的原因。blocked_targets 记原始差额；缩小后太小下不了单也要记原因，不能当“已满足”悄悄跳过。
 	scaled      bool
@@ -336,15 +338,26 @@ func (e *Executor) Converge(
 	if err != nil {
 		return Result{}, err
 	}
+	flattenChildren := flattenChildCache{}
 	for _, current := range orders {
+		if current.OwnerType == string(orderdomain.OwnerOperator) {
+			// 清仓一族（下架清仓、整组清仓、减仓）的子单不算冲突，不管动作是否还在运行：运行中的下架清仓执行器不碰那个标的
+			// （loadMembers 里已跳过）；结束了的动作已经收拾过待提交、结果未知的子单，剩下的挂单中、撤单中的单会自己结束。
+			exempt, err := e.flattenChild(ctx, spaceID, current.OwnerID, flattens, flattenChildren)
+			if err != nil {
+				return Result{}, err
+			}
+			if exempt {
+				continue
+			}
+		}
 		switch {
-		// 下架清仓的单不算冲突，不暂停组合：执行器只是不碰那个标的（loadMembers 里已跳过）。
-		case current.OwnerType == string(orderdomain.OwnerOperator) && flattens.owns(current.OwnerID):
-			continue
 		case current.OwnerType == string(orderdomain.OwnerExternal),
 			current.OwnerType == string(orderdomain.OwnerOperator),
+			// 别的组合的目标单出现在成员账户上，或者本目标号却不是本实例下的：说不清来历，暂停。
 			current.OwnerType == string(orderdomain.OwnerTarget) &&
-				current.RunnerID != target.RunnerID:
+				(current.LogicalAccountID != logicalAccountID ||
+					current.OwnerID == target.TargetID && current.RunnerID != target.RunnerID):
 			reason := fmt.Sprintf(
 				"%s 订单 %s 与自动执行冲突",
 				current.OwnerType, current.OrderID,
@@ -353,6 +366,7 @@ func (e *Executor) Converge(
 				return Result{}, err
 			}
 			return Result{Status: StatusPaused, Action: "pause"}, nil
+		// 上一份目标（包括上一个策略实例、上一个会话）留下的单按第 1 阶段处理：挂单撤掉，待提交的丢弃，市价单等它结束。
 		case current.OwnerType == string(orderdomain.OwnerTarget) &&
 			current.OwnerID != target.TargetID:
 			if err := e.stopOrder(ctx, target, current); err != nil {
@@ -500,6 +514,14 @@ func (e *Executor) Converge(
 	hasResting := len(resting) > 0
 	// 按方向的金额预算挑出这一轮改成挂单的标的。
 	if !orderSettings.RestingRatio.IsZero() && len(actions) > 0 {
+		// 本目标在某个标的上挂过单、挂单已经结束（到期被撤、超出差额被撤）：这个标的不再挂单，改吃单。
+		rested, err := e.Store.TargetEndedRestingInstruments(ctx, spaceID, logicalAccountID, target.TargetID)
+		if err != nil {
+			return Result{}, err
+		}
+		for index := range actions {
+			_, actions[index].rested = rested[actions[index].instrument.InstrumentID]
+		}
 		picked := pickResting(env, target, actions, desired, members, e.restingNotional(ctx))
 		for index := range actions {
 			_, actions[index].resting = picked[actions[index].instrument.InstrumentID]
@@ -1556,7 +1578,7 @@ func (e *Executor) placeActionMode(
 			// 限价 + IOC：价格 = 参考价 ×（1 ± 滑点），部分成交的剩余量下一轮按新的滑点再来。
 			// 默认最多 6% 的滑点比币安合约的价格过滤器（约 ±5%）宽，按标的的价格偏离限制夹住，避免最后几次被交易所拒单。
 			limit := pseudoMarketPrice(quote.Price, spec.Side, env.settings, attempt, candidate.instrument.PriceTick)
-			limit = clampToPriceBand(limit, quote.Price, spec.Side, candidate.instrument)
+			limit = ClampToPriceBand(limit, quote.Price, spec.Side, candidate.instrument)
 			spec.Type, spec.FillPolicy, spec.LimitPrice = exchange.OrderTypeLimit, exchange.FillPolicyIOC, &limit
 		}
 		if !candidate.reducing {
@@ -1817,7 +1839,9 @@ func (e *Executor) discardPendingOnTargetInvalidation(
 	return err
 }
 
-// releaseExpiredTargetOrders 在目标过期时释放本目标的订单：待提交的丢弃，簿上的挂单撤掉。
+// releaseExpiredTargetOrders 在目标过期时释放组合里还没结束的目标单：待提交的丢弃，簿上的挂单撤掉。
+// 不只看过期的这一份目标：新目标在第 1 阶段之前就过期（例如成员一直未就绪）时，上一份目标留下的挂单也要撤掉，
+// 否则它们一直挂在簿上，等下一份目标到来才被处理。结果未知的单不在这里解析（这条路径只有几秒）。
 func (e *Executor) releaseExpiredTargetOrders(
 	ctx context.Context,
 	spaceID string,
@@ -1826,11 +1850,29 @@ func (e *Executor) releaseExpiredTargetOrders(
 	if target.LogicalAccountID == "" || target.TargetID == "" {
 		return nil
 	}
-	var pending, restingOrders []store.OrderRecord
+	return e.releaseTargetOrders(ctx, spaceID, target.LogicalAccountID, false)
+}
+
+// ReleaseTargetOrders 在策略会话释放、重绑、认领（随后删掉目标）之前撤掉组合里所有还没结束的目标单，调用方持有组合锁：
+// 待提交的丢弃；限价 GTC 单结果未知的先解析；簿上的挂单撤掉；市价、IOC 单和撤单中的单等它们自己结束（撤单结果由同步确认）。
+// 挂单没撤下来（撤单失败、结果解析不出来）时返回错误，调用方稍后重试，不能把挂单留在簿上没人管。
+func (e *Executor) ReleaseTargetOrders(ctx context.Context, spaceID, logicalAccountID string) error {
+	if e == nil || e.Store == nil || e.Orders == nil {
+		return ErrExecutorConfig
+	}
+	return e.releaseTargetOrders(ctx, spaceID, logicalAccountID, true)
+}
+
+// errTargetOrderUnresolved 表示目标挂单的提交结果还不知道，撤不了，稍后再试。
+var errTargetOrderUnresolved = errors.New("挂单的提交结果还不知道，稍后再撤")
+
+func (e *Executor) releaseTargetOrders(ctx context.Context, spaceID, logicalAccountID string, resolveUnknown bool) error {
+	var open []store.OrderRecord
 	const pageSize = 1000
 	for offset := 0; ; offset += pageSize {
 		orders, total, err := e.Store.ListOrders(ctx, spaceID, store.OrderQuery{
-			LogicalAccountID: target.LogicalAccountID,
+			LogicalAccountID: logicalAccountID,
+			OwnerType:        string(orderdomain.OwnerTarget),
 			OnlyOpen:         true,
 			Offset:           offset,
 			Limit:            pageSize,
@@ -1838,33 +1880,81 @@ func (e *Executor) releaseExpiredTargetOrders(
 		if err != nil {
 			return err
 		}
-		for _, current := range orders {
-			if current.OwnerType != string(orderdomain.OwnerTarget) || current.OwnerID != target.TargetID {
-				continue
-			}
-			switch {
-			case orderdomain.State(current.State) == orderdomain.Pending:
-				pending = append(pending, current)
-			case restingOrder(current):
-				restingOrders = append(restingOrders, current)
-			}
-		}
+		open = append(open, orders...)
 		if int64(offset+len(orders)) >= total || len(orders) == 0 {
 			break
 		}
 	}
-	var discardErrs []error
-	for _, current := range pending {
-		if _, err := e.Orders.DiscardPending(ctx, spaceID, current.OrderID); err != nil {
-			discardErrs = append(discardErrs, err)
+	var releaseErrs []error
+	for _, current := range open {
+		if err := e.releaseTargetOrder(ctx, current, resolveUnknown); err != nil {
+			releaseErrs = append(releaseErrs, fmt.Errorf("目标单 %s：%w", current.OrderID, err))
 		}
 	}
-	for _, current := range restingOrders {
-		if _, err := e.Orders.Cancel(ctx, spaceID, current.OrderID); err != nil {
-			discardErrs = append(discardErrs, err)
+	return errors.Join(releaseErrs...)
+}
+
+func (e *Executor) releaseTargetOrder(ctx context.Context, current store.OrderRecord, resolveUnknown bool) error {
+	state := orderdomain.State(current.State)
+	if state == orderdomain.Submitting || state == orderdomain.SubmitUnknown {
+		// 市价、IOC 单提交出去也会自己结束；只有限价 GTC 单可能一直挂着，要先弄清楚它在不在簿上。
+		if !resolveUnknown || current.OrderType != string(exchange.OrderTypeLimit) || current.TimeInForce != string(exchange.TimeInForceGTC) {
+			return nil
+		}
+		if _, err := e.Orders.ResolveUnknown(ctx, current.SpaceID, current.OrderID); err != nil {
+			return err
+		}
+		resolved, err := e.Store.GetOrder(ctx, current.SpaceID, current.OrderID)
+		if err != nil {
+			return err
+		}
+		current, state = resolved, orderdomain.State(resolved.State)
+		if state == orderdomain.Submitting || state == orderdomain.SubmitUnknown {
+			return errTargetOrderUnresolved
 		}
 	}
-	return errors.Join(discardErrs...)
+	switch {
+	case state == orderdomain.Pending:
+		_, err := e.Orders.DiscardPending(ctx, current.SpaceID, current.OrderID)
+		return err
+	case restingOrder(current):
+		_, err := e.Orders.Cancel(ctx, current.SpaceID, current.OrderID)
+		return err
+	case resolveUnknown && state == orderdomain.CancelUnknown &&
+		current.OrderType == string(exchange.OrderTypeLimit) && current.TimeInForce == string(exchange.TimeInForceGTC):
+		// 上一次撤单结果未知：撤单可能没到交易所，同步之后会改回挂单中，而那时已经没有目标管它。先确认撤单结果，
+		// 确认不了就报错，让调用方稍后重试；撤单中（交易所已受理）的会自己结束，不用管。
+		return e.recoverTargetCancel(ctx, current)
+	}
+	return nil
+}
+
+// cancelRecoverer 是能确认撤单结果的订单服务（orderapp.Service 实现）。
+type cancelRecoverer interface {
+	RecoverCancel(context.Context, string, string) (orderdomain.Order, error)
+}
+
+func (e *Executor) recoverTargetCancel(ctx context.Context, current store.OrderRecord) error {
+	recoverer, ok := e.Orders.(cancelRecoverer)
+	if !ok {
+		return errTargetOrderUnresolved
+	}
+	if _, err := recoverer.RecoverCancel(ctx, current.SpaceID, current.OrderID); err != nil {
+		return err
+	}
+	latest, err := e.Store.GetOrder(ctx, current.SpaceID, current.OrderID)
+	if err != nil {
+		return err
+	}
+	switch state := orderdomain.State(latest.State); {
+	case state.Terminal(), state == orderdomain.Canceling:
+		return nil
+	case restingOrder(latest):
+		// 确认下来撤单没生效、订单还挂着：再撤一次。
+		_, err := e.Orders.Cancel(ctx, latest.SpaceID, latest.OrderID)
+		return err
+	}
+	return errTargetOrderUnresolved
 }
 
 func baseQuantityRules(

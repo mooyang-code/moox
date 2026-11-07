@@ -18,6 +18,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"gorm.io/gorm"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 var (
@@ -51,6 +52,36 @@ type Service struct {
 	MaxSnapshotAge time.Duration
 	// OnFundSettingsChanged 在资金设置保存后调用，通知资金维护任务重新检查；为空时不通知。
 	OnFundSettingsChanged func(spaceID, logicalAccountID string)
+	// TargetOrders 在策略会话释放、重绑、认领删掉目标之前撤掉组合里还没结束的目标挂单；为空时不撤（测试用）。
+	TargetOrders TargetOrderReleaser
+}
+
+// TargetOrderReleaser 撤掉组合里还没结束的目标单，调用方持有组合锁（目标执行器实现）。
+type TargetOrderReleaser interface {
+	ReleaseTargetOrders(ctx context.Context, spaceID, logicalAccountID string) error
+}
+
+// ErrTargetOrdersNotReleased 表示释放会话前目标挂单没撤下来，会话没有释放，稍后重试。
+// 它不包住撤单的原始错误（原始错误可能是版本冲突、记录不存在，会被当成“所有权冲突”“账户不存在”，策略就不再重试了），只把原因写进文案。
+var ErrTargetOrdersNotReleased = errors.New("目标挂单还没撤下来，会话没有释放，稍后重试")
+
+type targetOrdersNotReleased struct{ cause error }
+
+func (e targetOrdersNotReleased) Error() string {
+	return ErrTargetOrdersNotReleased.Error() + "：" + e.cause.Error()
+}
+
+func (e targetOrdersNotReleased) Unwrap() error { return ErrTargetOrdersNotReleased }
+
+// releaseTargetOrders 在删掉目标之前撤掉组合里还没结束的目标单（调用方持有组合锁）。
+func (s *Service) releaseTargetOrders(ctx context.Context, spaceID, logicalAccountID string) error {
+	if s.TargetOrders == nil {
+		return nil
+	}
+	if err := s.TargetOrders.ReleaseTargetOrders(ctx, spaceID, logicalAccountID); err != nil {
+		return targetOrdersNotReleased{cause: err}
+	}
+	return nil
 }
 
 type AccountSyncer interface {
@@ -397,6 +428,12 @@ func (s *Service) ClaimSession(
 		return store.LogicalAccountRecord{}, "", lockErr
 	}
 	defer unlock()
+	// 认领会删掉目标：先撤掉上一个会话可能留下的挂单。撤不下来也照常认领，新会话的第一份目标在第 1 阶段会再撤（executor.go）。
+	if current, err := s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID); err == nil && claimChanges(current, instanceID, sessionID, expectedFence) {
+		if err := s.releaseTargetOrders(ctx, spaceID, logicalAccountID); err != nil {
+			log.WarnContextf(ctx, "交易关注项：组合 %s 认领会话前撤目标挂单失败，交给新目标的第 1 阶段处理：%v", logicalAccountID, err)
+		}
+	}
 	var fence string
 	err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		var err error
@@ -430,6 +467,13 @@ func (s *Service) RebindSession(
 		return store.LogicalAccountRecord{}, "", lockErr
 	}
 	defer unlock()
+	// 重绑会删掉旧会话的目标：先撤掉它的挂单。撤不下来也照常重绑，新会话的第一份目标在第 1 阶段会再撤（executor.go）。
+	if current, err := s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID); err == nil &&
+		rebindChanges(current, oldInstanceID, oldSessionID, expectedFence, newInstanceID, newSessionID) {
+		if err := s.releaseTargetOrders(ctx, spaceID, logicalAccountID); err != nil {
+			log.WarnContextf(ctx, "交易关注项：组合 %s 重绑会话前撤目标挂单失败，交给新目标的第 1 阶段处理：%v", logicalAccountID, err)
+		}
+	}
 	var fence string
 	err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		var err error
@@ -461,12 +505,46 @@ func (s *Service) ReleaseSession(
 		return lockErr
 	}
 	defer unlock()
+	// 释放会删掉目标，之后没有人再管这个组合的目标单：先撤掉挂单，撤不下来就不释放、返回错误，由策略稍后重试释放。
+	current, err := s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
+	if err != nil {
+		return err
+	}
+	if releaseChanges(current, instanceID, sessionID, expectedFence) {
+		if err := s.releaseTargetOrders(ctx, spaceID, logicalAccountID); err != nil {
+			return err
+		}
+	}
 	return s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		if err := tx.ReleaseLogicalAccountSession(spaceID, logicalAccountID, instanceID, sessionID, expectedFence); err != nil {
 			return err
 		}
 		return tx.DeleteLogicalAccountTarget(spaceID, logicalAccountID)
 	})
+}
+
+// claimChanges、rebindChanges、releaseChanges 按 store 里会话 CAS 的同样条件预判这次操作会不会换掉所有者、删掉目标：
+// 只有会删目标时才撤目标挂单。幂等的重复请求、过期的围栏、被别的会话占用时都不撤，否则会撤掉当前所有者正在用的挂单。
+// 调用方持有组合锁，会话字段只在这把锁下改，预判和随后的 CAS 之间不会变。
+func claimChanges(account store.LogicalAccountRecord, instanceID, sessionID, expectedFence string) bool {
+	// 认领只在组合空闲时生效（同一会话重复认领时所有者非空，不会走到这里）。
+	return account.ControlMode == "STRATEGY" && account.AuthFence == expectedFence &&
+		account.OwnerInstanceID == "" && account.OwnerSessionID == "" && instanceID != "" && sessionID != ""
+}
+
+func rebindChanges(account store.LogicalAccountRecord, oldInstanceID, oldSessionID, expectedFence, newInstanceID, newSessionID string) bool {
+	return account.ControlMode == "STRATEGY" && account.AuthFence == expectedFence &&
+		!(account.OwnerInstanceID == newInstanceID && account.OwnerSessionID == newSessionID) &&
+		account.OwnerInstanceID == oldInstanceID && account.OwnerSessionID == oldSessionID
+}
+
+// releaseChanges 对已经空闲的组合也返回真：释放照样删目标，重试释放时要接着撤上一次没撤下来的挂单。
+func releaseChanges(account store.LogicalAccountRecord, instanceID, sessionID, expectedFence string) bool {
+	if account.AuthFence != expectedFence {
+		return false
+	}
+	idle := account.OwnerInstanceID == "" && account.OwnerSessionID == ""
+	return idle || account.OwnerInstanceID == instanceID && account.OwnerSessionID == sessionID
 }
 
 func (s *Service) Pause(

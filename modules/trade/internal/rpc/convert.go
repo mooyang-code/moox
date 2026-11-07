@@ -34,7 +34,9 @@ func errorInfo(err error) *tradepb.RetInfo {
 	}
 	code := tradepb.ErrorCode_INNER_ERR
 	switch {
-	case errors.Is(err, operatorapp.ErrInvalidActionResult):
+	case errors.Is(err, operatorapp.ErrInvalidActionResult),
+		// 释放会话前目标挂单没撤下来：不能落到“冲突”“不存在”（策略把这两种当成已了结、不再重试）。
+		errors.Is(err, logicalapp.ErrTargetOrdersNotReleased):
 		code = tradepb.ErrorCode_INNER_ERR
 	case errors.Is(err, runtime.ErrSessionConfig):
 		// 会话还没建起来：请求没有发到交易所，稍后重试即可；前端据此等几秒重试。

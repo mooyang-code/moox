@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/ordersettings"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
@@ -19,6 +20,8 @@ import (
 // 这个标的本目标里（所有执行账户，换成员不重新计数）最近连续的、没有全部成交的 IOC 限价子单的笔数。
 // 一笔 IOC 子单全部成交就清零，所以拆单时每一片都从首次滑点开始，不会因为前面的片耗掉重试次数；
 // 非 IOC 的子单（撤掉的挂单、市价单）跳过，不打断计数，挂单和伪市价交替出现时次数不会被清零。
+// 从没发到交易所的子单也跳过：提交结果未知、过了未知窗口查无此单退回待提交、随后被丢弃的单（已撤销、零成交、没有交易所单号），
+// 不是一次真正的尝试，不能耗掉滑点次数。
 func pseudoMarketAttempts(children []store.TargetChildOrder) int {
 	attempts := 0
 	for index := len(children) - 1; index >= 0; index-- {
@@ -30,6 +33,9 @@ func pseudoMarketAttempts(children []store.TargetChildOrder) int {
 		filled, filledErr := shared.ParseDecimal(child.FilledQuantity)
 		if quantityErr == nil && filledErr == nil && filled.Cmp(quantity) >= 0 {
 			break
+		}
+		if child.State == string(orderdomain.Canceled) && child.ExchangeOrderID == "" && filledErr == nil && filled.IsZero() {
+			continue
 		}
 		attempts++
 	}
@@ -60,10 +66,10 @@ func pseudoMarketPrice(reference shared.Decimal, side exchange.Side, settings or
 // 和这里用的最新成交价有差距，只用允许偏离的 90%，避免贴着边界被拒单。
 var priceBandHeadroom = shared.MustDecimal("0.9")
 
-// clampToPriceBand 把伪市价单的限价夹在交易所的价格偏离限制里（币安 PERCENT_PRICE / PERCENT_PRICE_BY_SIDE）：
+// ClampToPriceBand 把伪市价单的限价夹在交易所的价格偏离限制里（币安 PERCENT_PRICE / PERCENT_PRICE_BY_SIDE）：
 // 买单不高于 参考价 ×（1 + (上限倍数 − 1) × 90%），卖单不低于 参考价 ×（1 − (1 − 下限倍数) × 90%），向内取整到价格精度。
 // 标的没有给出限制（倍数为 0 或读不出来）时原样返回。
-func clampToPriceBand(price, reference shared.Decimal, side exchange.Side, instrument store.InstrumentRecord) shared.Decimal {
+func ClampToPriceBand(price, reference shared.Decimal, side exchange.Side, instrument store.InstrumentRecord) shared.Decimal {
 	one := shared.MustDecimal("1")
 	tick, tickErr := shared.ParseDecimal(instrument.PriceTick)
 	validTick := tickErr == nil && tick.Cmp(shared.Zero()) > 0

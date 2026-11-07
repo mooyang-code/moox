@@ -15,6 +15,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/trade/internal/application/exposure"
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
+	targetapp "github.com/mooyang-code/moox/modules/trade/internal/application/target"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/fundsettings"
 	operatordomain "github.com/mooyang-code/moox/modules/trade/internal/domain/operator"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
@@ -95,6 +96,8 @@ type FlattenAccountResult struct {
 	pacedOnly bool
 	// quotes 是本轮现货清仓拿到的报价（按资产），收尾判断零头时复用，不再逐个请求。
 	quotes map[string]shared.Decimal
+	// unblocking 为真表示下架清仓发现标的已解除禁止，正在等本动作的撤单确认：过了截止时间也不能把它压成 PARTIAL。
+	unblocking bool
 }
 
 type FlattenResult struct {
@@ -109,6 +112,9 @@ type FlattenResult struct {
 	ReduceTargets map[string]string `json:"reduce_targets,omitempty"`
 	// ReduceDone 是已经算过减仓目标的执行账户：每个账户的目标只在第一次算，之后沿用。
 	ReduceDone []string `json:"reduce_done_accounts,omitempty"`
+	// FinishingStatus 非空表示动作已经定了要以这个状态结束（PARTIAL、FAILED 等），只是本动作还有子单在解析或丢弃失败：
+	// 动作先保持运行，之后每次恢复只收拾子单、不再下单，收拾完才落成这个状态。
+	FinishingStatus string `json:"finishing_status,omitempty"`
 }
 
 type flattenRequest struct {
@@ -373,26 +379,32 @@ func (s *Service) FlattenLogicalAccount(
 			return s.persistFlattenProgress(ctx, &result, "RUNNING")
 		}
 	}
-	// 过了截止时间（下架时间）：标的已经下架，不再下单，把动作按部分完成收尾；上一轮记下的各账户进度保留。
-	if s.pastDeadline(command) {
-		if resuming {
-			if previous, _ := decodeFlattenResult(existing); len(previous.Accounts) > 0 {
-				result.Accounts = previous.Accounts
-			}
+	var previous FlattenResult
+	if found {
+		previous, _ = decodeFlattenResult(existing)
+	}
+	// 上一次已经定了结局、只差收拾子单：这次只收拾，不再下单。上一轮记下的各账户进度保留。
+	if resuming && previous.FinishingStatus != "" {
+		result.Accounts, result.Unblocked = previous.Accounts, previous.Unblocked
+		_, err := s.finishFlatten(ctx, command, members, &result, previous.FinishingStatus)
+		return result, err
+	}
+	// 过了截止时间（下架时间）：标的已经下架，不再下单，把动作按部分完成收尾；上一轮记下的各账户进度保留（同一个动作号重试也保留）。
+	// 先看是否已解除禁止：解除了就走正常流程，由 stopIfUnblocked 撤单后记 COMPLETED 并带“已解除禁止”标记。
+	if s.pastDeadline(command) && !s.unblockedEverywhere(ctx, command, scope, members) {
+		if len(previous.Accounts) > 0 {
+			result.Accounts = previous.Accounts
 		}
-		if err := s.persistFlattenProgress(ctx, &result, string(operatordomain.StatusPartial)); err != nil {
-			return result, err
-		}
-		if command.actionType() == operatordomain.ActionDelistFlatten && s.Wake != nil {
-			s.Wake()
-		}
-		return result, nil
+		_, err := s.finishFlatten(ctx, command, members, &result, string(operatordomain.StatusPartial))
+		return result, err
 	}
 	// 预算从收到请求算起，等锁用掉的时间要扣除，加上收尾不能超过网关的调用超时。
 	budgetEnd, _ := ctx.Deadline()
 	executable := 0
 	var sharedErrors []error
 	retry := false
+	// stillRetrying 为真表示有账户要重试、而且不是“已解除禁止、等撤单确认”的：过了截止时间就该停了。
+	stillRetrying := false
 	for index, member := range members {
 		// 每个账户分到剩余时间的一份，前面的账户耗尽预算时后面的账户仍能执行。
 		deadline := time.Now().Add(time.Until(budgetEnd) / time.Duration(len(members)-index))
@@ -423,6 +435,7 @@ func (s *Service) FlattenLogicalAccount(
 		}
 		if needsRetry {
 			retry = true
+			stillRetrying = stillRetrying || !accountResult.unblocking
 			if accountResult.Status == "COMPLETED" {
 				accountResult.Status = "RUNNING"
 			}
@@ -437,19 +450,107 @@ func (s *Service) FlattenLogicalAccount(
 	if retry {
 		status = "RUNNING"
 		// 账户一直异常时清仓不能永远运行，否则恢复自动执行会被挡住。剩余持仓已写入结果，要继续就重新发起。
-		if s.roundOlderThan(result, flattenActionTimeout) || s.pastDeadline(command) {
+		// 过了截止时间也停，但只剩“已解除禁止、等撤单确认”的账户时不停，让它们记 COMPLETED。
+		if s.roundOlderThan(result, flattenActionTimeout) || s.pastDeadline(command) && stillRetrying {
 			status = "PARTIAL"
 		}
 	}
-	if err := s.persistFlattenProgress(ctx, &result, status); err != nil {
+	if _, err := s.finishFlatten(ctx, command, members, &result, status); err != nil {
 		return result, errors.Join(errors.Join(sharedErrors...), err)
+	}
+	return result, errors.Join(sharedErrors...)
+}
+
+// unblockedEverywhere 报告下架清仓的标的是否已解除禁止：标的表里有这个标的的成员上都不在名单里了（至少有一个这样的成员）。
+// 不是下架清仓、查名单失败都算没解除。
+func (s *Service) unblockedEverywhere(ctx context.Context, command FlattenCommand, scope flattenScope, members []store.LogicalAccountMemberRecord) bool {
+	if scope.stillBlocked == nil {
+		return false
+	}
+	present := 0
+	for _, member := range members {
+		blocked, found, err := s.delistBlockState(ctx, command.SpaceID, member.TradingAccountID, scope.instrumentID)
+		if err != nil || found && blocked {
+			return false
+		}
+		if found {
+			present++
+		}
+	}
+	return present > 0
+}
+
+// finishFlatten 把清仓进度落成 status。动作要离开运行（完成、部分完成、失败）时先收拾本动作还没结束的子单：
+// 收拾不完（子单还在解析、丢弃失败）就先保持运行并记下要结束成什么，之后每次恢复只收拾、不下单，收拾完才落成 status。
+// 返回实际落库的状态。
+func (s *Service) finishFlatten(
+	ctx context.Context,
+	command FlattenCommand,
+	members []store.LogicalAccountMemberRecord,
+	result *FlattenResult,
+	status string,
+) (string, error) {
+	if status != string(operatordomain.StatusRunning) {
+		settled, settleErr := s.settleFlattenChildren(ctx, command, members)
+		if settleErr != nil || !settled {
+			result.FinishingStatus = status
+			running := string(operatordomain.StatusRunning)
+			return running, errors.Join(settleErr, s.persistFlattenProgress(ctx, result, running))
+		}
+		result.FinishingStatus = ""
+	}
+	if err := s.persistFlattenProgress(ctx, result, status); err != nil {
+		return status, err
 	}
 	// 下架清仓结束（完成、部分完成、失败）后唤醒目标：已收敛、已阻塞的目标不被定时器扫描，
 	// 不唤醒的话周期长的策略要等下一份目标才恢复（解除禁止提前结束时尤其如此）。
 	if status != string(operatordomain.StatusRunning) && command.actionType() == operatordomain.ActionDelistFlatten && s.Wake != nil {
 		s.Wake()
 	}
-	return result, errors.Join(sharedErrors...)
+	return status, nil
+}
+
+// settleFlattenChildren 在动作结束前收拾本动作还没结束的子单，不让它们在动作结束后没人管：
+//   - 待提交的直接丢弃（记为已撤销，从没发到交易所）；
+//   - 提交中、结果未知的先同步解析，解析后退回待提交的同样丢弃；
+//   - 挂单中、撤单中的不动，它们自己会结束。
+//
+// 还有子单解析不出结果时返回 false（通常在未知窗口内），由下一次恢复接着收拾。
+func (s *Service) settleFlattenChildren(ctx context.Context, command FlattenCommand, members []store.LogicalAccountMemberRecord) (bool, error) {
+	settled := true
+	var settleErrors []error
+	for _, member := range members {
+		records, err := s.Store.ListActiveOrdersForAccount(ctx, command.SpaceID, member.TradingAccountID)
+		if err != nil {
+			return false, err
+		}
+		for _, child := range records {
+			if child.OwnerType != string(orderdomain.OwnerOperator) || child.OwnerID != command.ActionID {
+				continue
+			}
+			state := orderdomain.State(child.State)
+			if state == orderdomain.Submitting || state == orderdomain.SubmitUnknown {
+				resolved, resolveErr := s.Orders.ResolveUnknown(ctx, command.SpaceID, child.OrderID)
+				if resolveErr != nil {
+					settleErrors = append(settleErrors, fmt.Errorf("解析子单 %s：%w", child.OrderID, resolveErr))
+					continue
+				}
+				state = resolved.State
+			}
+			switch state {
+			case orderdomain.Pending:
+				if _, discardErr := s.Orders.DiscardPending(ctx, command.SpaceID, child.OrderID); discardErr != nil {
+					settleErrors = append(settleErrors, fmt.Errorf("丢弃子单 %s：%w", child.OrderID, discardErr))
+				}
+			case orderdomain.Submitting, orderdomain.SubmitUnknown:
+				settled = false
+			}
+		}
+	}
+	if len(settleErrors) > 0 {
+		return false, errors.Join(settleErrors...)
+	}
+	return settled, nil
 }
 
 // reasonArbitrageHedgeLeg 是只平一个标的而它正是套利底仓对冲腿时的剩余原因。
@@ -482,6 +583,9 @@ func (s *Service) roundOlderThan(result FlattenResult, age time.Duration) bool {
 
 // errWaitingBalance：账户在等余额确认，本轮暂停下单，属可重试。
 var errWaitingBalance = errors.New("账户等待余额确认，本轮暂停下单")
+
+// errDelistDeadlinePassed：已过下架时间（截止时间），不再下单也不再提交待提交的子单，属终结原因。
+var errDelistDeadlinePassed = errors.New("已过下架时间，不再下单")
 
 // flattenLockWait 是清仓等组合账户锁的时长。锁是轮询抢占，目标执行器一整轮都持锁，太短实盘下容易报“正忙”。
 const flattenLockWait = 2500 * time.Millisecond
@@ -833,6 +937,11 @@ func (s *Service) recoverFlattenChildren(ctx context.Context, command FlattenCom
 		result.ChildOrderIDs = appendUnique(result.ChildOrderIDs, child.OrderID)
 		switch orderdomain.State(child.State) {
 		case orderdomain.Pending:
+			// 过了下架时间，待提交的子单不再发出，直接丢弃。
+			if s.pastDeadline(command) {
+				_, err = s.Orders.DiscardPending(ctx, command.SpaceID, child.OrderID)
+				break
+			}
 			_, err = s.Orders.Submit(ctx, command.SpaceID, child.OrderID)
 		case orderdomain.Submitting, orderdomain.SubmitUnknown:
 			_, err = s.Orders.ResolveUnknown(ctx, command.SpaceID, child.OrderID)
@@ -1243,6 +1352,12 @@ func (s *Service) placeOrContinueFlattenChildWithQuote(
 		)
 		switch orderdomain.State(existing.State) {
 		case orderdomain.Pending:
+			if s.pastDeadline(command) {
+				if _, err = s.Orders.DiscardPending(ctx, command.SpaceID, existing.OrderID); err != nil {
+					return err
+				}
+				return flattenFinal{errDelistDeadlinePassed}
+			}
 			_, err = s.Orders.Submit(ctx, command.SpaceID, existing.OrderID)
 			return err
 		case orderdomain.Submitting, orderdomain.SubmitUnknown:
@@ -1262,6 +1377,10 @@ func (s *Service) placeOrContinueFlattenChildWithQuote(
 		default:
 			return nil
 		}
+	}
+	// 每笔新单之前都看截止时间：一轮里前面的单耗掉时间，过了下架时间后面的就不再下。
+	if s.pastDeadline(command) {
+		return flattenFinal{errDelistDeadlinePassed}
 	}
 	if delist {
 		// 要下新的一笔了：被拒绝、连续没成交封顶、离上一笔结束太近都先不下。
@@ -1285,7 +1404,8 @@ func (s *Service) placeOrContinueFlattenChildWithQuote(
 	}
 	spec.PositionSide = exchange.RuleFor(instrument.MarketType).PositionSide
 	if delist {
-		limit := delistLimitPrice(quote.Price, side, instrument.PriceTick)
+		// 3% 滑点可能超出交易所的价格偏离限制（币安 PERCENT_PRICE），和目标执行器的伪市价单用同一个夹价函数，免得被拒。
+		limit := targetapp.ClampToPriceBand(delistLimitPrice(quote.Price, side, instrument.PriceTick), quote.Price, side, instrument)
 		spec.Type, spec.FillPolicy, spec.LimitPrice = exchange.OrderTypeLimit, exchange.FillPolicyIOC, &limit
 	}
 	placed, err := s.Orders.Place(ctx, command.SpaceID, spec)
@@ -1524,7 +1644,11 @@ func (s *Service) persistFlattenProgress(
 		AttemptStartedAt int64                  `json:"attempt_started_at,omitempty"`
 		ReduceTargets    map[string]string      `json:"reduce_targets,omitempty"`
 		ReduceDone       []string               `json:"reduce_done_accounts,omitempty"`
-	}{Accounts: result.Accounts, Unblocked: result.Unblocked, AttemptStartedAt: result.AttemptStartedAt, ReduceTargets: result.ReduceTargets, ReduceDone: result.ReduceDone})
+		FinishingStatus  string                 `json:"finishing_status,omitempty"`
+	}{
+		Accounts: result.Accounts, Unblocked: result.Unblocked, AttemptStartedAt: result.AttemptStartedAt,
+		ReduceTargets: result.ReduceTargets, ReduceDone: result.ReduceDone, FinishingStatus: result.FinishingStatus,
+	})
 	if err != nil {
 		return err
 	}
@@ -1562,12 +1686,14 @@ func decodeFlattenResult(action store.OperatorActionRecord) (FlattenResult, erro
 		AttemptStartedAt int64                  `json:"attempt_started_at,omitempty"`
 		ReduceTargets    map[string]string      `json:"reduce_targets,omitempty"`
 		ReduceDone       []string               `json:"reduce_done_accounts,omitempty"`
+		FinishingStatus  string                 `json:"finishing_status,omitempty"`
 	}
 	if err := json.Unmarshal([]byte(*action.ResultJSON), &persisted); err != nil {
 		return result, err
 	}
 	result.Accounts, result.Unblocked, result.AttemptStartedAt = persisted.Accounts, persisted.Unblocked, persisted.AttemptStartedAt
 	result.ReduceTargets, result.ReduceDone = persisted.ReduceTargets, persisted.ReduceDone
+	result.FinishingStatus = persisted.FinishingStatus
 	return result, nil
 }
 

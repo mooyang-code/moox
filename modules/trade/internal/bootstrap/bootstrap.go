@@ -210,6 +210,8 @@ func initialize(
 	logicalAccounts := &logicalapp.Service{
 		Store: tradeStore, Syncer: accountSyncer{service: syncService},
 		Prices: targetapp.ExchangePriceSource{Adapters: manager},
+		// 策略会话释放、重绑、认领删掉目标前，由执行器撤掉组合里还没结束的目标挂单。
+		TargetOrders: targetExecutor,
 	}
 	inspectionWorker := &traderuntime.InspectionWorker{Store: tradeStore, Accounts: accounts, Logical: logicalAccounts}
 	// 资金维护（BNB 抵扣与补买、小额兑 BNB、稳定币调平）：每小时一次，资金设置变更后马上一次。

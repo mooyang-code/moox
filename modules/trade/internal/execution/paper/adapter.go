@@ -54,9 +54,14 @@ type Adapter struct {
 	Now         func() time.Time
 	mu          sync.RWMutex
 	instruments map[exchange.SymbolKey]string
-	// lastPrices 是现货持仓最近一次取到的估值价（资产 -> 价格），取不到价时用它估值。
+	// lastPrices 是现货持仓最近一次取到的估值价和取价时间（资产 -> 价格），取不到价时在保留时间内用它估值。
 	priceMu    sync.Mutex
-	lastPrices map[string]shared.Decimal
+	lastPrices map[string]execution.LastPrice
+}
+
+// blockedSetSource 是能读下架名单的事实存储（*store.Store 实现）；测试替身没有实现时当作名单为空。
+type blockedSetSource interface {
+	LoadBlockedSet(context.Context) (store.BlockedSet, error)
 }
 
 func (a *Adapter) now() time.Time {
@@ -169,48 +174,83 @@ func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnaps
 	}, nil
 }
 
-// balancePrice 给现货持有的一个币取估值价，规则与实盘权益采样一致：没有估值标的、标的状态不可交易、
-// 交易所确认标的不存在时用最后已知价，没有就按 0 计并记关注项，不让一个下架零头拖垮整个模拟账户的快照；
-// 其余取价失败有最后已知价就用，没有照旧报错。
+// balancePrice 给现货持有的一个币取估值价，取不到新鲜报价时和实盘权益采样用同一套降级规则（execution.DegradedPrice）：
+// 不超龄的最后已知价；没有估值标的、在下架名单里、交易所确认标的不存在的按 0 计；其余不在交易状态的按本账户最近一笔成交价计；
+// 标的仍在交易只是暂时取价失败的照旧报错。用上降级估值时记关注项。
 func (a *Adapter) balancePrice(ctx context.Context, account store.TradingAccountRecord, byBase map[string]store.InstrumentRecord, asset string) (shared.Decimal, error) {
-	degrade := func() (shared.Decimal, error) {
-		last, ok := a.lastPrice(asset)
-		how := "按 0 计"
-		if ok {
-			how = "按最后已知价计"
-		}
-		telemetry.Note(telemetry.AttentionValuationDegraded, account.Name+"："+asset+" 取不到价，权益"+how, a.now())
-		return last, nil
-	}
 	instrument, found := byBase[asset]
+	if !found {
+		return a.degradedPrice(ctx, account, asset, nil, execution.ValuationMissingInstrument, fmt.Errorf("paper: 没有 %s/%s 现货标的", asset, account.SettlementAsset))
+	}
 	// 状态为空表示标的列表没有给出状态，照常取价；明确不可交易的不发请求。
-	if !found || (instrument.Status != "" && !exchange.StatusTradable(instrument.Status)) {
-		return degrade()
+	if instrument.Status != "" && !exchange.StatusTradable(instrument.Status) {
+		return a.degradedPrice(ctx, account, asset, &instrument, execution.ValuationNotTrading,
+			fmt.Errorf("paper: 标的 %s 状态为 %s", instrument.ExchangeSymbol, instrument.Status))
 	}
 	price, err := a.valuationQuote(ctx, exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol))
 	if err != nil {
-		if _, ok := a.lastPrice(asset); ok || exchange.IsInstrumentNotFound(err) {
-			return degrade()
+		failure := execution.ValuationQuoteFailed
+		if exchange.IsInstrumentNotFound(err) {
+			failure = execution.ValuationInstrumentGone
 		}
-		return shared.Zero(), err
+		return a.degradedPrice(ctx, account, asset, &instrument, failure, err)
 	}
 	a.priceMu.Lock()
 	if a.lastPrices == nil {
-		a.lastPrices = make(map[string]shared.Decimal)
+		a.lastPrices = make(map[string]execution.LastPrice)
 	}
-	a.lastPrices[asset] = price
+	a.lastPrices[asset] = execution.LastPrice{Price: price, At: a.now()}
 	a.priceMu.Unlock()
 	return price, nil
 }
 
-func (a *Adapter) lastPrice(asset string) (shared.Decimal, bool) {
+func (a *Adapter) degradedPrice(
+	ctx context.Context,
+	account store.TradingAccountRecord,
+	asset string,
+	instrument *store.InstrumentRecord,
+	failure execution.ValuationFailure,
+	cause error,
+) (shared.Decimal, error) {
+	if instrument != nil && failure != execution.ValuationInstrumentGone {
+		if source, ok := a.Store.(blockedSetSource); ok {
+			blocked, err := source.LoadBlockedSet(ctx)
+			if err != nil {
+				return shared.Zero(), storageError(err)
+			}
+			if blocked.ContainsInstrument(account.Exchange, *instrument) {
+				failure = execution.ValuationDelisted
+			}
+		}
+	}
+	var lastFill execution.LastFillPrice
+	if instrument != nil && a.Store != nil {
+		lastFill = func(ctx context.Context) (shared.Decimal, bool, error) {
+			records, _, err := a.Store.ListFills(ctx, account.SpaceID, store.FillQuery{
+				TradingAccountID: account.TradingAccountID, Market: instrument.MarketType, ExchangeSymbol: instrument.ExchangeSymbol, Limit: 1,
+			})
+			if err != nil {
+				return shared.Zero(), false, storageError(err)
+			}
+			if len(records) == 0 {
+				return shared.Zero(), false, nil
+			}
+			price, parseErr := shared.ParseDecimal(records[0].Price)
+			return price, parseErr == nil, nil
+		}
+	}
+	value, err := execution.DegradedPrice(ctx, failure, a.lastPrice(asset), a.now(), execution.LastPriceMaxAge, lastFill, cause)
+	if err != nil {
+		return shared.Zero(), err
+	}
+	telemetry.Note(telemetry.AttentionValuationDegraded, account.Name+"："+asset+" 取不到价，权益"+value.How, a.now())
+	return value.Price, nil
+}
+
+func (a *Adapter) lastPrice(asset string) execution.LastPrice {
 	a.priceMu.Lock()
 	defer a.priceMu.Unlock()
-	price, ok := a.lastPrices[asset]
-	if !ok {
-		return shared.Zero(), false
-	}
-	return price, true
+	return a.lastPrices[asset]
 }
 
 // valuationQuote 用参考价估值：一笔子单要算多次快照，逐持仓请求盘口会让子单间隔随持仓数变长。

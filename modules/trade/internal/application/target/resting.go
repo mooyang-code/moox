@@ -17,7 +17,7 @@ import (
 // 挂单：限价 + GTC，买单挂买一价，卖单挂卖一价。
 //   - 挑选：每轮按每个方向（买、卖）的金额预算挑选标的，每个标的每轮最多一片，用“组合 ID + 目标 ID”做种子，结果可复现；
 //   - 不阻塞：本目标的挂单不让其他标的等待；挂单的剩余量当作“已在路上”，从差额里扣掉，避免再下一笔吃单造成超买；
-//   - 到期撤单：超过挂单寿命的挂单撤掉，剩余量重新计入差额；寿命为 0 时保留到下一份目标到达或目标过期；
+//   - 到期撤单：超过挂单寿命的挂单撤掉，剩余量重新计入差额，同一目标里这个标的之后改吃单；寿命为 0 时保留到下一份目标到达或目标过期；
 //   - 建仓、清仓不挂单。
 
 // BookSource 是能给出买一价、卖一价的报价来源。挂单要用；报价来源没有实现它时，挂单退回普通下单。
@@ -136,9 +136,9 @@ func reconcileResting(
 }
 
 // restingEligible 判断动作能不能改成挂单：只有加仓、减仓、调仓（持仓和目标同向且目标不为 0）才挂，
-// 建仓（持仓为 0）、清仓（目标为 0）、反向开仓不挂；这个标的已经有挂单的也不再挂。
+// 建仓（持仓为 0）、清仓（目标为 0）、反向开仓不挂；这个标的已经有挂单的、本目标在它上面挂过单而且挂单已结束的也不再挂。
 func restingEligible(action laneAction, desired map[string]desiredTarget, members []memberState) bool {
-	if action.hasResting {
+	if action.hasResting || action.rested {
 		return false
 	}
 	instrumentID := action.instrument.InstrumentID
