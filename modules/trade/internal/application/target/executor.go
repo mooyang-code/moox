@@ -80,6 +80,8 @@ type Executor struct {
 	PaperMinBatchInterval time.Duration
 	// RateStatus 返回执行账户所在接口的限流状态，模拟盘没有。
 	RateStatus func(tradingAccountID string) (exchange.RateStatus, bool)
+	// Transfers 执行普通账户第 4、6 阶段的钱包划转，为空时跳过这两个阶段。
+	Transfers WalletTransfer
 
 	batchMu   sync.Mutex
 	lastBatch map[string]time.Time
@@ -178,7 +180,7 @@ func (e *Executor) Converge(
 			persistCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 			defer cancel()
 			// 先释放待提交子单再置为过期：释放失败时目标不变，下一轮重试。
-			if err := e.discardExpiredPendingOrders(persistCtx, spaceID, target); err != nil {
+			if err := e.releaseExpiredTargetOrders(persistCtx, spaceID, target); err != nil {
 				result, resultErr = Result{}, err
 				return
 			}
@@ -339,6 +341,8 @@ func (e *Executor) Converge(
 	}
 	// 规则：有在途子单（待提交、提交中、结果未知、挂单中）时本轮只处理这些单，不发新批。
 	inFlight := false
+	// resting 表示本目标有限价 GTC 挂单在簿上：挂单不阻塞收敛，也不让定时器每秒重算。
+	resting := false
 	var unknown []string
 	for _, current := range orders {
 		if current.OwnerType != string(orderdomain.OwnerTarget) ||
@@ -359,7 +363,11 @@ func (e *Executor) Converge(
 			unknown = append(unknown, current.OrderID)
 			inFlight = true
 		default:
-			inFlight = true
+			if restingOrder(current) {
+				resting = true
+			} else {
+				inFlight = true
+			}
 		}
 	}
 	if len(unknown) > 0 {
@@ -396,6 +404,14 @@ func (e *Executor) Converge(
 			actions = append(actions, action)
 		}
 	}
+	if resting && len(actions) > 0 {
+		// 还有挂单没成交时不再追加新单：挂单剩余量从差额里扣除由挂单任务实现，在那之前保守等待。
+		target.BlockedTargets = blocked
+		if err := e.updateTarget(ctx, &target, StatusConverging); err != nil {
+			return Result{}, err
+		}
+		return Result{Status: StatusConverging, Action: "wait"}, nil
+	}
 	if len(actions) > 0 {
 		if allowed, retryAfter := e.batchAllowed(logicalAccount.LogicalAccountID, members); !allowed {
 			// 批间隔未到，或交易所接口限流暂停、权重用到 90%：本轮不发新批，也不算阻塞。
@@ -406,21 +422,40 @@ func (e *Executor) Converge(
 			return Result{Status: StatusConverging, Action: "pace", RetryAfter: retryAfter}, nil
 		}
 	}
-	// 先减后加：减仓批的结果回来、资金释放之后才发加仓。本批有减仓成功下单时不加仓；
-	// 减仓全部下不了时才加仓，能否加仓由资金检查决定。
+	// 执行阶段（阶段 1 撤旧单在上面已做）：2 减仓、3 合约加仓、4 划转、5 现货买入、6 归集。
+	// 阶段不单独存储，每轮从当前差额推出：前一阶段还有能下的单就只做它，没有了才进入下一阶段。
+	// 被阻塞、下不了单的标的在本阶段视为已处理，不卡住后面的阶段；批额度顺延的标的留在本阶段，后面的阶段不能插队。
 	quota := e.batchQuota(members)
 	// 本轮建子单时同一执行账户的模拟盘保证金估值只算一次快照；发送阶段仍用原 ctx。
 	placeCtx := orderapp.WithSnapshotReuse(ctx)
 	var placedIDs []string
 	deferred := false
-	for _, reducing := range []bool{true, false} {
-		if !reducing && len(placedIDs) > 0 {
+	for _, stage := range []int{stageReduce, stageSwapAdd, stageSpotBuy} {
+		if len(placedIDs) > 0 || deferred {
 			break
 		}
+		var stageActions []laneAction
 		for _, action := range actions {
-			if action.reducing != reducing {
-				continue
+			if actionStage(action) == stage {
+				stageActions = append(stageActions, action)
 			}
+		}
+		if len(stageActions) == 0 {
+			continue
+		}
+		if stage == stageSpotBuy {
+			// 阶段 4：普通账户把资金划进现货钱包，划转完成后才买入。统一账户、OKX、模拟盘没有这一步。
+			if transferring, err := e.walletTransferBeforeSpotBuy(ctx, spaceID, target, members, stageActions); err != nil {
+				return Result{}, err
+			} else if transferring {
+				target.BlockedTargets = blocked
+				if err := e.updateTarget(ctx, &target, StatusConverging); err != nil {
+					return Result{}, err
+				}
+				return Result{Status: StatusConverging, Action: "transfer", RetryAfter: transferPollInterval}, nil
+			}
+		}
+		for _, action := range stageActions {
 			if quotaExhausted(quota) {
 				// 所有执行账户的本批额度都用完：剩下的标的留到下一批，不再逐个查询。
 				deferred = true
@@ -501,6 +536,16 @@ func (e *Executor) Converge(
 		}
 		return Result{Status: StatusConverging, Action: "pace"}, nil
 	}
+	// 阶段 6：普通账户把现货钱包里多出来的资金归集回合约钱包，归集完成才定终态。
+	if collecting, err := e.walletCollect(ctx, spaceID, target, members); err != nil {
+		return Result{}, err
+	} else if collecting {
+		target.BlockedTargets = blocked
+		if err := e.updateTarget(ctx, &target, StatusConverging); err != nil {
+			return Result{}, err
+		}
+		return Result{Status: StatusConverging, Action: "collect", RetryAfter: transferPollInterval}, nil
+	}
 	target.BlockedTargets = blocked
 	target.LastError = ""
 	if len(blocked) > 0 {
@@ -512,7 +557,13 @@ func (e *Executor) Converge(
 	if err := e.updateTarget(ctx, &target, StatusConverged); err != nil {
 		return Result{}, err
 	}
-	return Result{Status: StatusConverged}, nil
+	result = Result{Status: StatusConverged}
+	if resting {
+		// 只剩挂单：目标定为已收敛，不再每秒重算。挂单成交会唤醒目标，下一份目标到达时在阶段 1 撤掉旧挂单，
+		// 一直没有成交也没有新目标则到有效期末被唤醒，走过期分支撤掉本目标的挂单。
+		result.RetryAfter = e.restingRetryAfter(target)
+	}
+	return result, nil
 }
 
 // HasDifference 判断目标和实际持仓是否还有能下单的差额，用于过期目标的告警。
@@ -583,7 +634,7 @@ func (e *Executor) loadMembers(
 			if managedErr != nil {
 				return nil, managedErr
 			}
-			for _, balance := range account.Snapshot.Balances {
+			for _, balance := range account.SpotBalances() {
 				if _, ok := managed[balance.Asset]; !ok || balance.Asset == account.SettlementAsset {
 					continue
 				}
@@ -1224,6 +1275,11 @@ func (e *Executor) stopOrder(
 		_, err := e.Orders.ResolveUnknown(ctx, current.SpaceID, current.OrderID)
 		return err
 	default:
+		if restingOrder(current) {
+			// 上一份目标留下的挂单在阶段 1 撤掉，不带进新目标的差额。
+			_, err := e.Orders.Cancel(ctx, current.SpaceID, current.OrderID)
+			return err
+		}
 		// 挂单中、部分成交、撤单中的目标市价单都等它自己结束：撤单只会和成交赛跑，
 		// 结束后再按最新持仓重算，避免买了又撤、撤了又买。
 		return nil
@@ -1307,7 +1363,8 @@ func (e *Executor) discardPendingOnTargetInvalidation(
 	return err
 }
 
-func (e *Executor) discardExpiredPendingOrders(
+// releaseExpiredTargetOrders 在目标过期时释放本目标的订单：待提交的丢弃，簿上的挂单撤掉。
+func (e *Executor) releaseExpiredTargetOrders(
 	ctx context.Context,
 	spaceID string,
 	target store.LogicalAccountTargetRecord,
@@ -1315,7 +1372,7 @@ func (e *Executor) discardExpiredPendingOrders(
 	if target.LogicalAccountID == "" || target.TargetID == "" {
 		return nil
 	}
-	var pending []store.OrderRecord
+	var pending, restingOrders []store.OrderRecord
 	const pageSize = 1000
 	for offset := 0; ; offset += pageSize {
 		orders, total, err := e.Store.ListOrders(ctx, spaceID, store.OrderQuery{
@@ -1328,12 +1385,15 @@ func (e *Executor) discardExpiredPendingOrders(
 			return err
 		}
 		for _, current := range orders {
-			if current.OwnerType != string(orderdomain.OwnerTarget) ||
-				current.OwnerID != target.TargetID ||
-				orderdomain.State(current.State) != orderdomain.Pending {
+			if current.OwnerType != string(orderdomain.OwnerTarget) || current.OwnerID != target.TargetID {
 				continue
 			}
-			pending = append(pending, current)
+			switch {
+			case orderdomain.State(current.State) == orderdomain.Pending:
+				pending = append(pending, current)
+			case restingOrder(current):
+				restingOrders = append(restingOrders, current)
+			}
 		}
 		if int64(offset+len(orders)) >= total || len(orders) == 0 {
 			break
@@ -1342,6 +1402,11 @@ func (e *Executor) discardExpiredPendingOrders(
 	var discardErrs []error
 	for _, current := range pending {
 		if _, err := e.Orders.DiscardPending(ctx, spaceID, current.OrderID); err != nil {
+			discardErrs = append(discardErrs, err)
+		}
+	}
+	for _, current := range restingOrders {
+		if _, err := e.Orders.Cancel(ctx, spaceID, current.OrderID); err != nil {
 			discardErrs = append(discardErrs, err)
 		}
 	}
@@ -1770,6 +1835,10 @@ func (e *Executor) waitingOnChildren(
 		}
 		if record.OwnerType != string(orderdomain.OwnerTarget) || record.OwnerID != target.TargetID {
 			return false, nil
+		}
+		if restingOrder(record) {
+			// 挂单不阻塞：交给完整流程判断是否只剩挂单。
+			continue
 		}
 		switch state {
 		case orderdomain.Pending, orderdomain.Submitting, orderdomain.SubmitUnknown:

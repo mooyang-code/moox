@@ -268,7 +268,7 @@ func (r *WeightResolver) bnbMarketValue(ctx context.Context, members []store.Log
 			return shared.Zero(), err
 		}
 		quantity := shared.Zero()
-		for _, balance := range account.Snapshot.Balances {
+		for _, balance := range account.SpotBalances() {
 			if strings.EqualFold(balance.Asset, fundsettings.BNBAsset) {
 				held, err := shared.ParseDecimal(balance.Total)
 				if err != nil {
@@ -335,7 +335,7 @@ func (r *WeightResolver) unmanagedTargetValue(
 				continue
 			}
 			counted[resolved.instrument.BaseAsset] = struct{}{}
-			for _, balance := range account.Snapshot.Balances {
+			for _, balance := range account.SpotBalances() {
 				if balance.Asset != resolved.instrument.BaseAsset {
 					continue
 				}

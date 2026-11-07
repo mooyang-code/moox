@@ -176,7 +176,7 @@ func (s *Service) valueSnapshot(ctx context.Context, account store.TradingAccoun
 			continue
 		}
 		_, isManaged := managed[balance.Asset]
-		if (isManaged || settings.IsArbitrageBase(balance.Asset)) && !quantity.IsZero() {
+		if (isManaged || settings.IsArbitrageBase(balance.Asset)) && !quantity.IsZero() && account.IsSpotWallet(balance.Wallet) {
 			balance.Total = quantity.String()
 			held = append(held, balance)
 		}

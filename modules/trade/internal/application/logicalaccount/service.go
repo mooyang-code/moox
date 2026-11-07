@@ -606,7 +606,7 @@ func (s *Service) exposure(
 		}
 	}
 	if account.HasBalanceMarket() {
-		for _, balance := range account.Snapshot.Balances {
+		for _, balance := range account.SpotBalances() {
 			if balance.Asset == account.SettlementAsset {
 				continue
 			}
@@ -667,7 +667,7 @@ func (s *Service) managedExposure(ctx context.Context, spaceID, tradingAccountID
 	}
 	// 与清仓同一套规则：按总量判断，卖出后留下的零头下不了单，不挡移除。
 	byAsset := exposure.SpotInstruments(instruments, account.SettlementAsset)
-	for _, balance := range account.Snapshot.Balances {
+	for _, balance := range account.SpotBalances() {
 		total, parseErr := shared.ParseDecimal(balance.Total)
 		if parseErr != nil {
 			return false, parseErr

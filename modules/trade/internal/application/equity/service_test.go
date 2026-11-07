@@ -49,8 +49,8 @@ func TestSampleAccountValuesLiveSpotBalancesWhenSnapshotHasNoEquity(t *testing.T
 			ExecutionMode: string(exchange.ExecutionModeLive), Environment: string(exchange.AccountEnvironmentTestnet), CredentialSecretID: "secret-1", SettlementAsset: "USDT",
 			Status: string(exchange.AccountStatusEnabled), Ready: true, Snapshot: store.TradingAccountSnapshot{
 				Balances: []store.AssetBalance{
-					{Wallet: "UNIFIED", Asset: "USDT", Available: "500", Total: "500"},
-					{Wallet: "UNIFIED", Asset: "BTC", Available: "0.01", Total: "0.01"},
+					{Wallet: "SPOT", Asset: "USDT", Available: "500", Total: "500"},
+					{Wallet: "SPOT", Asset: "BTC", Available: "0.01", Total: "0.01"},
 				}, ExchangeUpdatedAt: sourceMillis,
 			},
 		}); err != nil {
@@ -131,7 +131,7 @@ func TestEquityFreshnessFollowsConfirmedSyncNotBalanceChangeTime(t *testing.T) {
 			ExecutionMode: string(exchange.ExecutionModeLive), Environment: string(exchange.AccountEnvironmentTestnet), CredentialSecretID: "secret-1", SettlementAsset: "USDT",
 			Status: string(exchange.AccountStatusEnabled), Ready: true, LastSyncAt: syncedAt,
 			Snapshot: store.TradingAccountSnapshot{
-				Balances:          []store.AssetBalance{{Wallet: "UNIFIED", Asset: "USDT", Available: "500", Total: "500"}},
+				Balances:          []store.AssetBalance{{Wallet: "SPOT", Asset: "USDT", Available: "500", Total: "500"}},
 				ExchangeUpdatedAt: changedAt,
 			},
 		}); err != nil {

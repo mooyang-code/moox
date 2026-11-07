@@ -252,6 +252,30 @@ func (r TradingAccountRecord) WalletFor(market string) exchange.Wallet {
 	return exchange.WalletFor(exchange.Exchange(r.Exchange), exchange.AccountMode(r.AccountMode), exchange.MarketType(market))
 }
 
+// IsSpotWallet 报告钱包里是否放着现货（持仓来自余额的市场）；空钱包（快照没有钱包信息）当作现货。
+func (r TradingAccountRecord) IsSpotWallet(wallet string) bool {
+	if wallet == "" {
+		return true
+	}
+	for _, market := range r.Markets {
+		if exchange.RuleFor(market).PositionFromBalance && string(r.WalletFor(market)) == wallet {
+			return true
+		}
+	}
+	return false
+}
+
+// SpotBalances 返回放着现货的钱包里的余额。普通账户的合约钱包里的非结算资产不是现货持仓，不在其中。
+func (r TradingAccountRecord) SpotBalances() []AssetBalance {
+	var result []AssetBalance
+	for _, balance := range r.Snapshot.Balances {
+		if r.IsSpotWallet(balance.Wallet) {
+			result = append(result, balance)
+		}
+	}
+	return result
+}
+
 // HasBalancePending 报告是否有任何钱包还在等余额确认。
 func (r TradingAccountRecord) HasBalancePending() bool {
 	return len(r.BalancePending) > 0

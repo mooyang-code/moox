@@ -778,7 +778,7 @@ func (s *Service) flattenSpot(
 		return
 	}
 	byAsset := exposure.SpotInstruments(instruments, account.SettlementAsset)
-	for _, balance := range account.Snapshot.Balances {
+	for _, balance := range account.SpotBalances() {
 		if _, ok := managed[balance.Asset]; !ok || balance.Asset == account.SettlementAsset {
 			continue
 		}
@@ -1048,7 +1048,7 @@ func (s *Service) remainingForAccount(
 		}
 		byAsset := exposure.SpotInstruments(instruments, account.SettlementAsset)
 		result.Dust = nil
-		for _, balance := range account.Snapshot.Balances {
+		for _, balance := range account.SpotBalances() {
 			if _, ok := managed[balance.Asset]; !ok || balance.Asset == account.SettlementAsset {
 				continue
 			}
