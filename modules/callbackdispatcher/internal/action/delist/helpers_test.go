@@ -56,6 +56,8 @@ type fakeTrade struct {
 	unblockHook func(ctx context.Context) error
 	errs        map[string]error
 	busyLeft    map[string]int
+	// loseFlattenResponses 大于 0 时，下这么多次新的清仓会建好操作、却返回错误（响应丢失）。
+	loseFlattenResponses int
 	// finalFor 决定一次清仓最终的状态，默认 COMPLETED；key 是 空间/组合。
 	finalFor func(request action.FlattenRequest) (status, message string)
 
@@ -226,6 +228,11 @@ func (f *fakeTrade) FlattenInstrument(_ context.Context, request action.FlattenR
 	}
 	op := &fakeOp{request: request, status: action.OperatorRunning}
 	f.ops[request.ActionID] = op
+	if f.loseFlattenResponses > 0 {
+		// 模拟响应丢失：Trade 已经建了操作、开始卖，调用方只拿到错误。
+		f.loseFlattenResponses--
+		return action.OperatorAction{}, errors.New("调用超时")
+	}
 	return action.OperatorAction{ActionID: request.ActionID, Status: op.status}, nil
 }
 
@@ -237,7 +244,7 @@ func (f *fakeTrade) GetOperatorAction(_ context.Context, spaceID, operatorAction
 	}
 	op, ok := f.ops[operatorActionID]
 	if !ok || op.request.SpaceID != spaceID {
-		return action.OperatorAction{}, errors.New("操作不存在")
+		return action.OperatorAction{}, action.ErrOperatorNotFound
 	}
 	if op.status == action.OperatorRunning {
 		op.polls++

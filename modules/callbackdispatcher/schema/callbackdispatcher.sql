@@ -138,6 +138,9 @@ CREATE TABLE IF NOT EXISTS t_delist_actions (
     c_planned_delist_at INTEGER NOT NULL DEFAULT 0,
     -- 只用于平仓各行：从第一次遇到 Trade 正忙起的时间（Unix 毫秒），能发起或失败后清 0；持续 30 分钟还没能发起就算暂时失败。
     c_busy_since INTEGER NOT NULL DEFAULT 0,
+    -- 只用于平仓各行和汇总行：这一行所属计划的重开序号，参与生成操作号。一轮第一次规划为 0，每按新的下架时间重开一次加 1；
+    -- 下架时间 A→B→A 改回原值后重开的一轮，操作号因此不会与第一次相同（同号请求 Trade 直接返回旧操作已结束的结果）。同一行重发沿用存下的操作号。
+    c_reopen_seq INTEGER NOT NULL DEFAULT 0,
     c_updated_at INTEGER NOT NULL,
     PRIMARY KEY (c_execution_id, c_round, c_kind, c_space_id, c_logical_account_id),
     FOREIGN KEY (c_execution_id)

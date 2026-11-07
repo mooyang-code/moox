@@ -108,7 +108,7 @@ const (
 // requiredColumns 是当前代码依赖的、后来加进去的列：schema 只有 CREATE TABLE IF NOT EXISTS，没有迁移，旧库文件缺这些列时运行时才会报 no such column。
 var requiredColumns = map[string][]string{
 	"t_event_executions": {"c_claimed_at", "c_cleanup_pending", "c_cleanup_seq"},
-	"t_delist_actions":   {"c_busy_since", "c_planned_delist_at", "c_release_verdict", "c_self_released"},
+	"t_delist_actions":   {"c_busy_since", "c_planned_delist_at", "c_release_verdict", "c_reopen_seq", "c_self_released"},
 }
 
 // CheckSchema 检查库里的表结构是不是当前版本：缺列，或者 t_delist_actions 的状态约束里没有 PARTIAL，说明是旧库。

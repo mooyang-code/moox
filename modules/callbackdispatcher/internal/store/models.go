@@ -104,6 +104,8 @@ type DelistAction struct {
 	SelfReleased bool
 	// BusySince 只用于平仓各行：从第一次遇到 Trade 正忙（含同组合同标的有别的平仓在进行）起的时间（Unix 毫秒），发起成功或失败后清 0。
 	BusySince int64
+	// ReopenSeq 是重开序号，参与生成操作号（含义见 schema 的 c_reopen_seq）。
+	ReopenSeq int
 	UpdatedAt int64
 }
 
@@ -200,6 +202,7 @@ type delistRow struct {
 	ReleaseVerdict   string `gorm:"column:c_release_verdict"`
 	SelfReleased     bool   `gorm:"column:c_self_released"`
 	BusySince        int64  `gorm:"column:c_busy_since"`
+	ReopenSeq        int    `gorm:"column:c_reopen_seq"`
 	UpdatedAt        int64  `gorm:"column:c_updated_at;autoUpdateTime:false"`
 }
 

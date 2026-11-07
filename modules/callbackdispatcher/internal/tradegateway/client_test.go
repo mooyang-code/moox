@@ -183,3 +183,18 @@ func TestUnconfiguredClient(t *testing.T) {
 	_, err := New(nil).ListBlockedInstruments(context.Background())
 	require.ErrorContains(t, err, "未配置")
 }
+
+// 查操作时 Trade 返回 NOT_FOUND：翻译成 ErrOperatorNotFound（从没建过），其他错误码不是。
+func TestGetOperatorActionNotFound(t *testing.T) {
+	gateway := &fakeGateway{responses: map[string]any{
+		"GetOperatorAction": &tradepb.GetOperatorActionRsp{RetInfo: &tradepb.RetInfo{Code: tradepb.ErrorCode_NOT_FOUND, Msg: "record not found"}},
+	}}
+	client := New(gateway)
+	_, err := client.GetOperatorAction(context.Background(), "crypto", "a1")
+	require.ErrorIs(t, err, action.ErrOperatorNotFound)
+
+	gateway.responses["GetOperatorAction"] = &tradepb.GetOperatorActionRsp{RetInfo: &tradepb.RetInfo{Code: tradepb.ErrorCode_INNER_ERR, Msg: "db locked"}}
+	_, err = client.GetOperatorAction(context.Background(), "crypto", "a1")
+	require.Error(t, err)
+	require.NotErrorIs(t, err, action.ErrOperatorNotFound)
+}
