@@ -76,6 +76,8 @@ const (
 	// ReasonShortfallScaled 是资金不足、买单按现有资金缩小的说明。
 	ReasonShortfallScaled = FundsShortagePrefix + "不足，现货买入按现有资金缩小"
 	reasonCapacityUsedUp  = FundsShortagePrefix + "已经划完，现货买入按现有资金缩小"
+	// reasonAlreadyCollected 不是资金不足：这个目标已经把现货钱包多出来的资金归集回合约钱包，不再追加划转。
+	reasonAlreadyCollected = "这个目标已经把现货钱包多出来的资金归集回合约钱包，不再追加划转，现货买入按现有资金缩小"
 )
 
 // IsFundsShortage 报告 blocked_targets 的原因是不是合约钱包可划转资金不足。
@@ -341,9 +343,25 @@ func (s *Service) beforeSpotBuyForAccount(ctx context.Context, spaceID string, t
 	}
 	need := requirement.Sub(spotAvailable)
 	if need.Cmp(dec(minTransferAmount)) < 0 {
-		return accountResult{scale: scaleFor(spotAvailable, requirement)}
+		// 缺口不到起划额：现货钱包已经够付买单的名义金额（不含 2% 的手续费、报价余量）就不缩小；
+		// 够不上名义金额，只缺一点点，按起划额划转（不超过可划转额度），不能为了不到 1U 的缺口把买单缩得下不了单。
+		notional := requirement.Div(dec(buyMarginRatio))
+		if need.Cmp(shared.Zero()) <= 0 || spotAvailable.Cmp(notional) >= 0 {
+			return accountResult{}
+		}
+		need = dec(minTransferAmount)
 	}
-	// 4. 需要划转。
+	// 4. 需要划转。这个目标已经把现货钱包多出来的资金归集回合约钱包过：不再往现货钱包划
+	// （买单因为非资金原因下不了单时，归集了又划进来会让钱停在现货钱包），只按现有资金缩小。
+	collected, err := s.Store.ListWalletTransfersForTarget(ctx, spaceID, targetRecord.LogicalAccountID, targetRecord.TargetID, account.TradingAccountID, store.TransferToFutures)
+	if err != nil {
+		return s.queryFailed(account, err)
+	}
+	for _, row := range collected {
+		if row.State != store.TransferStateFailed {
+			return accountResult{scale: scaleFor(spotAvailable, requirement), reason: reasonAlreadyCollected}
+		}
+	}
 	history, err := s.Store.ListWalletTransfersForTarget(ctx, spaceID, targetRecord.LogicalAccountID, targetRecord.TargetID, account.TradingAccountID, store.TransferToSpot)
 	if err != nil {
 		return s.queryFailed(account, err)

@@ -749,5 +749,51 @@ func TestResolveAsCompletedUnblocksAccountAndKeepsAmount(t *testing.T) {
 	require.Empty(t, stored.LastError)
 }
 
+// 这个目标已经把现货钱包多出来的资金归集回合约钱包：不再往现货钱包划（买单因为非资金原因下不了单时，
+// 归集了又划进来，钱会一直停在现货钱包），只按现有资金缩小；归集失败的记录不算。
+func TestNoTransferToSpotAfterTheTargetAlreadyCollected(t *testing.T) {
+	e := newEnv(t, "10", "1000")
+	ctx := context.Background()
+	require.NoError(t, e.store.Transaction(ctx, func(tx *store.Tx) error {
+		return tx.InsertWalletTransfer(store.WalletTransferRecord{
+			SpaceID: "space-1", TransferID: "collect-1", TradingAccountID: "account-1", LogicalAccountID: "logical-1", TargetID: "target-1",
+			Direction: store.TransferToFutures, Asset: "USDT", Amount: "509", ClientRef: "target-1:TO_FUTURES:1",
+			State: store.TransferStateCompleted, RequestedAt: e.now.UnixMilli(), CompletedAt: e.now.UnixMilli(),
+		})
+	}))
+	outcome := e.before("0.01")
+	require.False(t, waiting(outcome))
+	require.Empty(t, e.exchange.Calls(), "不再往现货钱包划")
+	require.NotEmpty(t, outcome.BuyScale["account-1"])
+	require.Contains(t, outcome.Reasons["account-1"], "归集")
+	require.False(t, IsFundsShortage(outcome.Reasons["account-1"]), "不是资金不足")
+
+	// 归集失败（没成功）的记录不算归集过。
+	failed := newEnv(t, "10", "1000")
+	require.NoError(t, failed.store.Transaction(ctx, func(tx *store.Tx) error {
+		return tx.InsertWalletTransfer(store.WalletTransferRecord{
+			SpaceID: "space-1", TransferID: "collect-1", TradingAccountID: "account-1", LogicalAccountID: "logical-1", TargetID: "target-1",
+			Direction: store.TransferToFutures, Asset: "USDT", Amount: "509", ClientRef: "target-1:TO_FUTURES:1",
+			State: store.TransferStateFailed, LastError: "被交易所拒绝", RequestedAt: failed.now.UnixMilli(),
+		})
+	}))
+	require.True(t, waiting(failed.before("0.01")))
+	require.Len(t, failed.exchange.Calls(), 1)
+}
+
+// 缺口不到起划额（买 0.0002 BTC @ 50000 = 10U，需要 10.2U）：现货够付名义金额就不缩小；不够只缺一点，按起划额 1U 划转。
+func TestTinyShortfallBelowMinimumTransfer(t *testing.T) {
+	covered := newEnv(t, "10.1", "1000")
+	outcome := covered.before("0.0002")
+	require.False(t, waiting(outcome))
+	require.Empty(t, outcome.BuyScale, "10.1 够付 10 的名义金额：不缩小")
+	require.Empty(t, outcome.Reasons)
+	require.Empty(t, covered.exchange.Calls())
+
+	short := newEnv(t, "9.5", "1000")
+	require.True(t, waiting(short.before("0.0002")), "9.5 不够付 10 的名义金额：按起划额划转，不把买单缩小")
+	require.Equal(t, "1", short.exchange.Calls()[0].Amount.String())
+}
+
 // waiting 报告本轮有没有账户在等（划转、对账、等快照或退避）。
 func waiting(outcome Outcome) bool { return len(outcome.Waiting) > 0 }

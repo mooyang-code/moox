@@ -137,6 +137,9 @@ type placement struct {
 	deferred bool
 	// capDeferred 表示单币每小时上限的剩余额度不够下一单，这个标的顺延到下一个整点。
 	capDeferred bool
+	// viable 只在试算（dryRun）时出现：这一笔单会被接受下单（通过了交易规则、拒单排除、伪市价次数、反向次数等检查），
+	// 还没检查的只有资金容量和真正落库。
+	viable bool
 	// belowConfiguredMin 表示差额低于设置的最小下单额，视为已满足：跳过这个标的，不阻塞，blocked_targets 不记
 	// （和调仓阈值同口径；合约减仓、清仓不受这个门槛限制，照常下）。
 	belowConfiguredMin bool
@@ -531,16 +534,22 @@ func (e *Executor) Converge(
 			continue
 		}
 		if stage == stageSpotBuy {
-			// 缩小前的原始差额就够不上最小下单额（或交易规则下下不了单且已有同向持仓）的买单视为已满足：
-			// 不下单，也不计入划转需求，否则会为一笔不会下的单划转资金，或在缺钱时把本来已满足的差额判成 BLOCKED。
+			// 缩小前的原始差额就够不上最小下单额（或交易规则下下不了单且已有同向持仓）的买单视为已满足；因为非资金原因注定下不了的买单
+			// 直接记 BLOCKED：都不下单、不计入划转需求，否则会为不会下的单划转资金，或把本来已满足的差额判成 BLOCKED。
 			needed := stageActions[:0:0]
 			for _, action := range stageActions {
 				if needsWalletTransfer(action.member.account) {
-					satisfied, err := e.spotBuyAlreadySatisfied(ctx, env, action, desired, members)
+					satisfied, reason, err := e.spotBuyPrecheck(ctx, env, spaceID, target, action, desired, members)
 					if err != nil {
 						return Result{}, err
 					}
 					if satisfied {
+						continue
+					}
+					if reason != "" {
+						blocked = append(blocked, store.BlockedTarget{
+							InstrumentID: action.instrument.InstrumentID, Quantity: action.delta.String(), Reason: reason,
+						})
 						continue
 					}
 				}
@@ -779,32 +788,58 @@ func (e *Executor) HasDifference(ctx context.Context, target store.LogicalAccoun
 	return false, nil
 }
 
-// spotBuyAlreadySatisfied 按缩小前的原始差额判断一笔现货买入是否视为已满足：低于设置的最小下单额，
-// 或交易规则下下不了单且已有同向持仓（零头）。取不到报价时按“没满足”交给后面的流程处理。
-func (e *Executor) spotBuyAlreadySatisfied(
+// spotBuyPrecheck 在向钱包要资金之前，按缩小前的原始差额判断一笔现货买入还要不要划转：
+//   - satisfied：视为已满足（低于设置的最小下单额，或交易规则下下不了单且已有同向持仓的零头），不下单、不划转；
+//   - blockedReason 非空：因为非资金原因下不了单（交易规则、所有成员在本目标都拒过单、反向次数已满、伪市价次数用满等），
+//     直接记 BLOCKED，不划转：为一笔注定下不了的单划转，会先划进来、再被归集回去、再划进来，最后钱停在现货钱包；
+//   - 都不是：交给钱包算资金需求。
+//
+// 取不到报价等账户级问题按“没满足”交给后面的流程处理。
+func (e *Executor) spotBuyPrecheck(
 	ctx context.Context,
 	env *laneEnv,
+	spaceID string,
+	target store.LogicalAccountTargetRecord,
 	action laneAction,
 	desired map[string]desiredTarget,
 	members []memberState,
-) (bool, error) {
+) (satisfied bool, blockedReason string, err error) {
 	quote, err := e.Prices.LatestPrice(ctx, action.member.account.TradingAccountID,
 		exchange.NewSymbolKey(action.instrument.MarketType, action.instrument.ExchangeSymbol))
 	if err != nil {
 		if paper.IsInfrastructureError(err) {
-			return false, err
+			return false, "", err
 		}
-		return false, nil
+		return false, "", nil
 	}
 	if quote.Price.Cmp(shared.Zero()) <= 0 {
-		return false, nil
+		return false, "", nil
 	}
 	quantity := floorToStep(action.delta.Abs(), mustBaseStep(action.instrument))
 	if env.belowConfiguredMinimum(action, quantity, quote.Price) {
-		return true, nil
+		return true, "", nil
 	}
 	instrumentID := action.instrument.InstrumentID
-	return laneFinished(desired[instrumentID], members, instrumentID) && env.tooSmallToPlace(action, quantity, quote.Price), nil
+	finished := laneFinished(desired[instrumentID], members, instrumentID)
+	if finished && env.tooSmallToPlace(action, quantity, quote.Price) {
+		return true, "", nil
+	}
+	// 试算：走一遍下单前所有“下不了单”的检查，但不看资金容量、不落库。
+	probe, err := e.placeActionMode(ctx, spaceID, target, action, members, nil, env, true)
+	if err != nil {
+		if paper.IsInfrastructureError(err) || errors.Is(err, ErrInvalidTarget) {
+			return false, "", err
+		}
+		return false, "", nil
+	}
+	if probe.viable || probe.deferred || probe.capDeferred || probe.placed {
+		return false, "", nil
+	}
+	switch {
+	case probe.belowConfiguredMin, probe.tooSmall && finished:
+		return true, "", nil
+	}
+	return false, probe.reason, nil
 }
 
 // belowConfiguredMinimumNow 判断一个动作的差额（按步长取整后）是否低于设置的最小下单额；取不到报价时按“不低于”处理。
@@ -1205,6 +1240,22 @@ func (e *Executor) placeAction(
 	quota map[string]int,
 	env *laneEnv,
 ) (placement, error) {
+	return e.placeActionMode(ctx, spaceID, target, action, members, quota, env, false)
+}
+
+// placeActionMode 是 placeAction 的实现；dryRun 为真只试算：走完交易规则、拒单排除、伪市价次数、反向次数等所有“下不了单”的检查，
+// 不看批额度、不查资金容量、不落库，能下就返回 viable。现货买入在向钱包要资金之前用它排除下不了的单：
+// 为一笔注定下不了的单划转资金，会先划进来、再被归集回去、再划进来。
+func (e *Executor) placeActionMode(
+	ctx context.Context,
+	spaceID string,
+	target store.LogicalAccountTargetRecord,
+	action laneAction,
+	members []memberState,
+	quota map[string]int,
+	env *laneEnv,
+	dryRun bool,
+) (placement, error) {
 	rejected, err := e.Store.RejectedTargetAccounts(ctx, spaceID, target.LogicalAccountID, target.TargetID, action.instrument.InstrumentID)
 	if err != nil {
 		return placement{}, err
@@ -1221,7 +1272,7 @@ func (e *Executor) placeAction(
 	for _, candidate := range candidates {
 		accountID := candidate.member.account.TradingAccountID
 		// 额度按执行账户计：用完算本轮跳过，不换到下一个成员，也不写阻塞原因。
-		if quota[accountID] <= 0 {
+		if !dryRun && quota[accountID] <= 0 {
 			return placement{deferred: true}, nil
 		}
 		quantity, reason, err := e.childQuantity(ctx, candidate)
@@ -1354,6 +1405,9 @@ func (e *Executor) placeAction(
 				e.Observe.Blocked(candidate.member.account.TradingAccountID, "reversal_blocked")
 			}
 			return placement{reason: reasonTargetReversal}, nil
+		}
+		if dryRun {
+			return placement{viable: true}, nil
 		}
 		runnerID := target.RunnerID
 		spec := orderdomain.OrderSpec{
