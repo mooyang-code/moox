@@ -4,10 +4,16 @@
     width="640px"
     :title="rule ? '编辑规则' : '新建规则'"
     :ok-loading="saving"
+    :ok-button-props="{ disabled: !catalogReady }"
     @update:visible="(value: boolean) => emit('update:visible', value)"
     @before-ok="submit"
   >
-    <a-form :model="form" auto-label-width>
+    <a-alert v-if="!catalogReady" type="warning" class="catalog-alert">
+      没有读到事件目录，暂时不能{{
+        rule ? "编辑" : "新建"
+      }}规则：不知道这个事件能按哪些字段限定范围，保存会把已有的范围清掉。请关闭后刷新页面再试。
+    </a-alert>
+    <a-form :model="form" auto-label-width :disabled="!catalogReady">
       <a-form-item field="name" label="名称" required>
         <a-input v-model="form.name" placeholder="例如：下架通知到交易群" :max-length="64" />
       </a-form-item>
@@ -29,7 +35,10 @@
         <a-input v-model="form.notify_url" placeholder="https://example.com/hooks/moox" />
         <template #extra
           >事件发生时，向这个地址发一条 POST 请求。只支持 http 和
-          https。地址会显示在规则列表和执行记录里，不要把令牌放进地址，接收方用验证密钥验签即可。</template
+          https。地址会显示在规则列表和执行记录里，不要把令牌放进地址，接收方用验证密钥验签即可。<template
+            v-if="rule?.secret_hint"
+            >这条规则的验证密钥末 4 位是 {{ rule.secret_hint }}。</template
+          ></template
         >
       </a-form-item>
       <a-form-item field="allow_private_address" label="允许内网地址">
@@ -50,7 +59,7 @@ import { computed, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { createEventRule, updateEventRule, type EventRule, type SubscribableEvent } from "@/api/callback-dispatcher";
 import { reportControlError } from "@/api/admin/http";
-import { notifyUrlError, scopeFromForm, scopeToForm } from "./event-center-utils";
+import { notifyUrlError, sameScope, scopeFromForm, scopeToForm } from "./event-center-utils";
 
 defineOptions({ name: "EventRuleDialog" });
 
@@ -65,6 +74,8 @@ const scopeValues = reactive<Record<string, string[]>>({});
 const saving = ref(false);
 
 const currentEvent = computed(() => props.events.find(event => event.event_name === form.event_name));
+// 事件目录没读到（或编辑的规则的事件不在目录里）时不知道能限定哪些字段：此时保存会把范围清空，所以整个表单禁用。
+const catalogReady = computed(() => props.events.length > 0 && (!props.rule || Boolean(currentEvent.value)));
 
 function resetScope(values: Record<string, string[]> = {}) {
   for (const key of Object.keys(scopeValues)) delete scopeValues[key];
@@ -75,23 +86,32 @@ function onEventChange() {
   resetScope();
 }
 
+function init() {
+  const rule = props.rule;
+  Object.assign(form, {
+    name: rule?.name ?? "",
+    event_name: rule?.event_name ?? props.events[0]?.event_name ?? "",
+    notify_url: rule?.notify_url ?? "",
+    allow_private_address: rule?.allow_private_address ?? false,
+    enabled: rule?.enabled ?? true
+  });
+  resetScope(rule ? scopeToForm(rule.scope) : {});
+}
+
 watch(
   () => props.visible,
   visible => {
-    if (!visible) return;
-    const rule = props.rule;
-    Object.assign(form, {
-      name: rule?.name ?? "",
-      event_name: rule?.event_name ?? props.events[0]?.event_name ?? "",
-      notify_url: rule?.notify_url ?? "",
-      allow_private_address: rule?.allow_private_address ?? false,
-      enabled: rule?.enabled ?? true
-    });
-    resetScope(rule ? scopeToForm(rule.scope) : {});
+    if (visible) init();
   }
 );
 
+// 打开时事件目录还没读到，之后读到了：表单此前是禁用的，没有可丢的改动，按目录重新填一次。
+watch(catalogReady, (ready, wasReady) => {
+  if (props.visible && ready && !wasReady) init();
+});
+
 async function submit(): Promise<boolean> {
+  if (!catalogReady.value) return false;
   if (!form.name.trim()) {
     Message.warning("请填写规则名称");
     return false;
@@ -109,10 +129,11 @@ async function submit(): Promise<boolean> {
   saving.value = true;
   try {
     if (props.rule) {
+      // 范围带上就整体替换：只在范围真的改了时才带，避免把没改的范围按表单重写一遍。
       const rule = await updateEventRule({
         rule_id: props.rule.rule_id,
         name: form.name.trim(),
-        scope: { items: scope },
+        ...(sameScope(scope, props.rule.scope) ? {} : { scope: { items: scope } }),
         notify_url: form.notify_url.trim(),
         allow_private_address: form.allow_private_address,
         enabled: form.enabled
@@ -139,3 +160,9 @@ async function submit(): Promise<boolean> {
   }
 }
 </script>
+
+<style scoped>
+.catalog-alert {
+  margin-bottom: 12px;
+}
+</style>

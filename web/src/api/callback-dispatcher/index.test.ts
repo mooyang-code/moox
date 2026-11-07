@@ -8,6 +8,7 @@ import {
   createEventRule,
   enumName,
   getEventExecution,
+  listAllEventRules,
   listEventExecutions,
   listEventRules,
   listSubscribableEvents,
@@ -137,6 +138,19 @@ describe("事件中心接口", () => {
     const result = await retryEventExecution("x1");
     expect(mocks.callControl).toHaveBeenCalledWith("callback-dispatcher", "RetryEventExecution", { execution_id: "x1" });
     expect(result.status).toBe("EXECUTION_STATUS_PENDING");
+  });
+
+  it("读全部规则时翻完所有页", async () => {
+    const rule = (id: string) => ({ rule_id: id, name: id, event_name: "e", scope: [], system: id === "sys" });
+    mocks.callControl
+      .mockResolvedValueOnce({ rules: [rule("sys"), rule("a")], page_result: { total: 3, has_more: true } })
+      .mockResolvedValueOnce({ rules: [rule("b")], page_result: { total: 3 } });
+    const rules = await listAllEventRules();
+    expect(rules.map(item => item.rule_id)).toEqual(["sys", "a", "b"]);
+    expect(mocks.callControl.mock.calls.map(call => call[2].page)).toEqual([
+      { page: 1, size: 200 },
+      { page: 2, size: 200 }
+    ]);
   });
 });
 

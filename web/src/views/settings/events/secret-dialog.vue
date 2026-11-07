@@ -1,10 +1,13 @@
 <template>
+  <!-- 密钥只显示这一次：不许按 Esc 或点遮罩误关，只能点“我已保存密钥”或右上角关闭 -->
   <a-modal
     :visible="visible"
     width="720px"
     title="验证密钥"
     :mask-closable="false"
+    :esc-to-close="false"
     :footer="false"
+    unmount-on-close
     @update:visible="(value: boolean) => emit('update:visible', value)"
   >
     <a-alert type="warning" class="secret-alert">
@@ -13,22 +16,11 @@
     </a-alert>
     <div class="secret-row">
       <code class="secret-value">{{ secret }}</code>
-      <a-button size="small" @click="copySecret">复制</a-button>
+      <a-button size="small" :loading="copying" @click="copySecret">复制</a-button>
     </div>
 
-    <h4 class="section-title">怎样确认请求来自 MooX</h4>
-    <p class="hint">
-      每个请求都带有 X-MooX-Timestamp（发送时的毫秒时间戳）和 X-MooX-Signature。签名是对「时间戳 + 英文句号 +
-      请求体」用上面的密钥做 HMAC-SHA256，取十六进制，前面加 sha256=。
-    </p>
-    <a-tabs size="small">
-      <a-tab-pane v-for="example in examples" :key="example.language" :title="example.language">
-        <CodeBlock :code="example.code" :language="example.language" />
-      </a-tab-pane>
-    </a-tabs>
-    <ul class="notes">
-      <li v-for="note in notes" :key="note">{{ note }}</li>
-    </ul>
+    <ReceiverGuide />
+    <p class="hint">请求头、请求体字段和这些说明在事件中心的「接收说明」页签里随时能看到。</p>
     <div class="actions">
       <a-button type="primary" @click="emit('update:visible', false)">我已保存密钥</a-button>
     </div>
@@ -36,25 +28,31 @@
 </template>
 
 <script setup lang="ts">
+import { ref } from "vue";
 import { Message } from "@arco-design/web-vue";
-import CodeBlock from "@/components/code-block/index.vue";
-import { RECEIVER_NOTES, signatureExamples } from "./event-center-utils";
+import ReceiverGuide from "./receiver-guide.vue";
 
 defineOptions({ name: "EventSecretDialog" });
 
 const props = defineProps<{ visible: boolean; ruleName: string; secret: string }>();
 const emit = defineEmits<{ "update:visible": [value: boolean] }>();
 
-const examples = signatureExamples();
-const notes = RECEIVER_NOTES;
+const copying = ref(false);
 
 async function copySecret() {
   if (!navigator.clipboard) {
     Message.warning("当前浏览器不支持复制，请手动选中密钥复制");
     return;
   }
-  await navigator.clipboard.writeText(props.secret);
-  Message.success("已复制");
+  copying.value = true;
+  try {
+    await navigator.clipboard.writeText(props.secret);
+    Message.success("已复制");
+  } catch {
+    Message.error("复制失败，请手动选中密钥复制");
+  } finally {
+    copying.value = false;
+  }
 }
 </script>
 
@@ -79,24 +77,10 @@ async function copySecret() {
   user-select: all;
 }
 
-.section-title {
-  margin: 8px 0;
-  font-size: 14px;
-  font-weight: 600;
-}
-
 .hint {
-  margin: 0 0 8px;
-  color: var(--color-text-2);
-  font-size: 13px;
-}
-
-.notes {
   margin: 8px 0 0;
-  padding-left: 18px;
   color: var(--color-text-3);
   font-size: 13px;
-  line-height: 1.8;
 }
 
 .actions {

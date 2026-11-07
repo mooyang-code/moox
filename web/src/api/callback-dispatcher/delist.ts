@@ -2,10 +2,9 @@ import { callControl } from "@/api/admin/http";
 import { callTrade } from "@/api/trade/http";
 import type { RetInfo } from "@/api/trade/types";
 
-// 手工登记下架用到的两个外部接口，字段按执行计划写成，待对方的 proto 落地后核对：
-//  - Trade 的 ListInstrumentHolders：交易计划 4.7，只读，用来预览会被平仓的组合；
-//  - Collector 的 RegisterDelistNotice：事件中心计划 7.2，登记后由 Collector 发布“标的即将下架”。
-// 两处的字段名、枚举取值以各自的 proto 为准。
+// 手工登记下架用到的两个外部接口：
+//  - Trade 的 ListInstrumentHolders：只读，用来预览会被平仓的组合；
+//  - Collector 的 RegisterDelistNotice：登记后由 Collector 发布“标的即将下架”。
 
 export type DelistExchange = "binance" | "okx";
 export type DelistMarket = "SPOT" | "SWAP";

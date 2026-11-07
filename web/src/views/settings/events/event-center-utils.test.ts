@@ -27,7 +27,14 @@ import {
   statusTone,
   holderLine,
   summarizeHolders,
-  skippedLine
+  skippedLine,
+  RECEIVER_NOTES,
+  REQUEST_HEADERS,
+  executionStatusText,
+  executionStatusTone,
+  requestErrorText,
+  sameScope,
+  secretHintText
 } from "./event-center-utils";
 
 const fields: ScopeField[] = [
@@ -240,5 +247,54 @@ describe("手工登记下架", () => {
     expect(pickerValueToMs("")).toBe(0);
     expect(pickerValueToMs(null)).toBe(0);
     expect(pickerValueToMs("不是时间")).toBe(0);
+  });
+
+  it("限定范围比较不看先后，空字段等于不限", () => {
+    const a = [
+      { field: "exchange", values: ["okx", "binance"] },
+      { field: "market", values: ["SPOT"] }
+    ];
+    const b = [
+      { field: "market", values: ["SPOT"] },
+      { field: "exchange", values: ["binance", "okx"] },
+      { field: "exchange_symbol", values: [] }
+    ];
+    expect(sameScope(a, b)).toBe(true);
+    expect(sameScope(a, [{ field: "exchange", values: ["binance"] }])).toBe(false);
+    expect(sameScope([], [])).toBe(true);
+  });
+
+  it("执行状态写清楚善后未完成和已确认处理", () => {
+    expect(executionStatusText(execution("EXECUTION_STATUS_CANCELED", false, true))).toBe("已取消，解除禁止买入未完成");
+    expect(executionStatusTone(execution("EXECUTION_STATUS_CANCELED", false, true))).toBe("fail");
+    expect(executionStatusText(execution("EXECUTION_STATUS_FAILED", true))).toBe("失败，已确认处理");
+    expect(executionStatusText(execution("EXECUTION_STATUS_CANCELED"))).toBe("已取消");
+    expect(executionStatusTone(execution("EXECUTION_STATUS_CANCELED"))).toBe("cancel");
+  });
+
+  it("通知地址规则显示密钥末 4 位，系统规则不显示", () => {
+    expect(secretHintText({ action_type: "ACTION_TYPE_NOTIFY_URL", secret_hint: "ab12" })).toBe("密钥末 4 位 ab12");
+    expect(secretHintText({ action_type: "ACTION_TYPE_SYSTEM", secret_hint: "" })).toBe("");
+  });
+
+  it("接收说明：跳转和防护拒绝不重试，请求头列出事件名", () => {
+    expect(RECEIVER_NOTES[0]).toContain("3xx");
+    expect(RECEIVER_NOTES[0]).toContain("出站防护");
+    expect(REQUEST_HEADERS.map(item => item.name)).toEqual([
+      "Content-Type",
+      "X-MooX-Event-Id",
+      "X-MooX-Event",
+      "X-MooX-Timestamp",
+      "X-MooX-Signature"
+    ]);
+  });
+
+  it("请求失败的原因：网络、超时换成中文，服务端错误原样显示", () => {
+    expect(requestErrorText({ code: "ERR_NETWORK", message: "Network Error" })).toContain("无法连接管理台");
+    expect(requestErrorText({ code: "ECONNABORTED", message: "timeout of 30000ms exceeded" })).toBe(
+      "请求超时，交易服务没有及时响应"
+    );
+    expect(requestErrorText(new Error("交易服务暂时不可用"))).toBe("交易服务暂时不可用");
+    expect(requestErrorText(null)).toBe("未知原因");
   });
 });

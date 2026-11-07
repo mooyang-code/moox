@@ -32,9 +32,9 @@
         <a-table-column title="事件" :width="240" :ellipsis="true" :tooltip="true">
           <template #cell="{ record }">{{ eventTitle(events, record.event_name) }}　{{ record.subject_id }}</template>
         </a-table-column>
-        <a-table-column title="状态" :width="90">
+        <a-table-column title="状态" :width="120">
           <template #cell="{ record }">
-            <span :class="['status', `status-${statusTone(record.status)}`]">{{ statusText(record.status) }}</span>
+            <span :class="['status', `status-${executionStatusTone(record)}`]">{{ executionStatusText(record) }}</span>
           </template>
         </a-table-column>
         <a-table-column title="耗时" :width="100">
@@ -47,11 +47,37 @@
           <template #cell="{ record }">
             <a-space>
               <a-button size="mini" type="text" @click="openDetail(record)">详情</a-button>
-              <a-button v-if="canRetry(record)" size="mini" type="text" @click="act('retry', record)">重新执行</a-button>
+              <a-button
+                v-if="canRetry(record)"
+                size="mini"
+                type="text"
+                :disabled="Boolean(acting)"
+                :loading="acting === `retry/${record.execution_id}`"
+                @click="act('retry', record)"
+              >
+                重新执行
+              </a-button>
               <a-popconfirm v-if="canCancel(record)" :content="cancelConfirmText(record)" @ok="act('cancel', record)">
-                <a-button size="mini" type="text" status="danger">{{ cancelLabel(record) }}</a-button>
+                <a-button
+                  size="mini"
+                  type="text"
+                  status="danger"
+                  :disabled="Boolean(acting)"
+                  :loading="acting === `cancel/${record.execution_id}`"
+                >
+                  {{ cancelLabel(record) }}
+                </a-button>
               </a-popconfirm>
-              <a-button v-if="canAcknowledge(record)" size="mini" type="text" @click="act('ack', record)"> 确认已处理 </a-button>
+              <a-button
+                v-if="canAcknowledge(record)"
+                size="mini"
+                type="text"
+                :disabled="Boolean(acting)"
+                :loading="acting === `ack/${record.execution_id}`"
+                @click="act('ack', record)"
+              >
+                确认已处理
+              </a-button>
             </a-space>
           </template>
         </a-table-column>
@@ -63,19 +89,20 @@
       :execution-id="detailId"
       :refresh-token="refreshToken"
       :events="events"
+      :busy="Boolean(acting)"
       @action="(kind, item) => act(kind, item)"
     />
   </section>
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from "vue";
+import { onActivated, onMounted, reactive, ref } from "vue";
 import { Message } from "@arco-design/web-vue";
 import {
   acknowledgeEventExecution,
   cancelEventExecution,
+  listAllEventRules,
   listEventExecutions,
-  listEventRules,
   listSubscribableEvents,
   retryEventExecution,
   type EventExecution,
@@ -94,10 +121,10 @@ import {
   cancelLabel,
   canRetry,
   eventTitle,
+  executionStatusText,
+  executionStatusTone,
   formatDuration,
-  formatMs,
-  statusText,
-  statusTone
+  formatMs
 } from "./event-center-utils";
 
 defineOptions({ name: "EventCenterExecutions" });
@@ -111,6 +138,8 @@ const filters = reactive<{ rule_id: string; status: ExecutionStatus | "" }>({ ru
 const drawerVisible = ref(false);
 const detailId = ref("");
 const refreshToken = ref(0);
+// 正在做的操作（“动作/记录编号”）：做完之前其余操作按钮都不能点，防止连点重复提交。
+const acting = ref("");
 
 async function load() {
   loading.value = true;
@@ -133,7 +162,7 @@ async function loadOptions() {
   try {
     [events.value, rules.value] = await Promise.all([
       listSubscribableEvents().then(catalog => catalog.events),
-      listEventRules({ page: 1, size: 200 }).then(rsp => rsp.rules)
+      listAllEventRules()
     ]);
   } catch (error) {
     reportControlError(error);
@@ -162,6 +191,8 @@ function openDetail(item: EventExecution) {
 }
 
 async function act(kind: "retry" | "cancel" | "ack", item: EventExecution) {
+  if (acting.value) return;
+  acting.value = `${kind}/${item.execution_id}`;
   try {
     if (kind === "retry") await retryEventExecution(item.execution_id);
     else if (kind === "cancel") await cancelEventExecution(item.execution_id);
@@ -173,17 +204,23 @@ async function act(kind: "retry" | "cancel" | "ack", item: EventExecution) {
   } catch (error) {
     reportControlError(error);
   } finally {
+    acting.value = "";
     // 不管成败，抽屉里的详情都按最新状态重读（取消可能已生效而善后失败）。
     refreshToken.value += 1;
   }
 }
 
-onMounted(() => {
+/** 页面上的“刷新”：规则可能在另一个页签里改过，筛选用的规则和事件也一起重读。 */
+function refresh() {
   void loadOptions();
   void load();
-});
+}
 
-defineExpose({ load });
+onMounted(() => void load());
+// 页签切回来时（keep-alive）规则可能已经增删，重读筛选项；首次显示时也会调用。
+onActivated(() => void loadOptions());
+
+defineExpose({ load, refresh });
 </script>
 
 <style scoped>
