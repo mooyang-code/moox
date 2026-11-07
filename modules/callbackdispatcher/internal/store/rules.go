@@ -101,6 +101,16 @@ func (s *Store) ListEnabledRules(ctx context.Context, eventName string) ([]Rule,
 	return rulesFromRows(rows)
 }
 
+// ListDisabledSystemRules 返回触发这个事件的、已停用的系统动作规则。停用只影响新的下架：已经在处理的记录照常处理，
+// 也要照常合并改期，所以接收端要用它找到“只合并、不新建”的规则。
+func (s *Store) ListDisabledSystemRules(ctx context.Context, eventName string) ([]Rule, error) {
+	var rows []ruleRow
+	if err := s.db.WithContext(ctx).Where("c_event_name = ? AND c_system = 1 AND c_enabled = 0", eventName).Order("c_created_at ASC, c_rule_id ASC").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	return rulesFromRows(rows)
+}
+
 // UpdateRule 在事务里读出规则、交给 mutate 修改、再写回；mutate 返回错误则不写。
 func (s *Store) UpdateRule(ctx context.Context, ruleID string, now int64, mutate func(*Rule) error) (Rule, error) {
 	var updated Rule

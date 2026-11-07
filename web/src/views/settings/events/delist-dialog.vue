@@ -7,7 +7,10 @@
     @update:visible="(value: boolean) => emit('update:visible', value)"
   >
     <template v-if="phase === 'form'">
-      <a-alert v-if="systemActionEnabled === true" class="block-alert">
+      <a-alert v-if="systemRuleEnabled === false" type="warning" class="block-alert">
+        系统规则“标的即将下架时，卖出策略持有的这个币”已停用：新登记的下架不会被处理，不会禁止买入，也不会平仓。同一个标的已经在处理的下架照常处理，登记新的下架时间会照常改期。
+      </a-alert>
+      <a-alert v-else-if="systemActionEnabled === true" class="block-alert">
         用来补录漏报的下架，或做演练。登记后，系统会立即禁止买入这个标的，下架前 24 小时平掉策略持有的部分。
       </a-alert>
       <a-alert v-else type="warning" class="block-alert">
@@ -61,7 +64,7 @@
         </p>
         <p v-else-if="!holders.length" class="muted">没有策略持有这个标的。{{ noHolderEffect }}</p>
         <template v-else>
-          <p v-if="systemActionEnabled === true">下面这些组合持有这个标的，下架前 24 小时会被平仓：</p>
+          <p v-if="willProcess">下面这些组合持有这个标的，下架前 24 小时会被平仓：</p>
           <p v-else>下面这些组合持有这个标的：</p>
           <ul class="holder-list">
             <li v-for="holder in summary.live" :key="holderKey(holder)">生产　{{ holderLine(holder) }}</li>
@@ -77,7 +80,7 @@
       </template>
       <a-checkbox v-if="previewFailed || !verified" v-model="confirmed">我知道无法确认持有情况，仍然登记</a-checkbox>
       <a-checkbox v-else-if="summary.live.length" v-model="confirmed">
-        {{ systemActionEnabled === true ? "我确认有生产组合会被平仓，仍然登记" : "我确认有生产组合持有这个标的，仍然登记" }}
+        {{ willProcess ? "我确认有生产组合会被平仓，仍然登记" : "我确认有生产组合持有这个标的，仍然登记" }}
       </a-checkbox>
     </template>
 
@@ -126,7 +129,7 @@ import {
 
 defineOptions({ name: "EventDelistDialog" });
 
-const props = defineProps<{ visible: boolean; systemActionEnabled: boolean | null }>();
+const props = defineProps<{ visible: boolean; systemActionEnabled: boolean | null; systemRuleEnabled: boolean | null }>();
 const emit = defineEmits<{ "update:visible": [value: boolean] }>();
 
 const form = reactive({
@@ -150,7 +153,9 @@ const delistAtMs = computed(() => pickerValueToMs(form.delist_at));
 const pastTime = computed(() => isPastDelistTime(delistAtMs.value, Date.now()));
 const summary = computed(() => summarizeHolders(holders.value));
 const needConfirm = computed(() => previewFailed.value || !verified.value || summary.value.live.length > 0);
-const noHolderEffect = computed(() => (props.systemActionEnabled ? "登记后只会禁止买入。" : ""));
+// 系统动作已启用并且系统规则没有停用，登记的下架才会真的被处理。
+const willProcess = computed(() => props.systemActionEnabled === true && props.systemRuleEnabled !== false);
+const noHolderEffect = computed(() => (willProcess.value ? "登记后只会禁止买入。" : ""));
 const exchangeLabel = computed(() => DELIST_EXCHANGES.find(item => item.value === form.exchange)?.label ?? form.exchange);
 const marketLabel = computed(() => DELIST_MARKETS.find(item => item.value === form.market)?.label ?? form.market);
 

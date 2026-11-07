@@ -435,3 +435,21 @@ func finishCleanup(t *testing.T, s *store.Store, id string, now int64) {
 	require.NoError(t, err)
 	require.True(t, applied)
 }
+
+// 系统规则停用之后，已经在处理的记录照常推进（停用只影响新的下架）。
+func TestDisabledSystemRuleStillProcessesInFlightExecution(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	c := &clock{now: baseTime}
+	seeded := seedSystem(t, s, c)
+	_, err := s.UpdateRule(ctx, "sys", 2, func(rule *store.Rule) error { rule.Enabled = false; return nil })
+	require.NoError(t, err)
+	handler := &fakeHandler{outcomes: []action.Outcome{{Status: store.StatusSucceeded}}}
+	registry := action.NewRegistry()
+	registry.Register(store.SystemActionSellDelistedHoldings, handler)
+	worker := newWorker(t, s, &fakeSender{results: []delivery.Result{{}}}, registry, c)
+	require.Equal(t, 1, worker.RunOnce(ctx))
+	got, err := s.GetExecution(ctx, seeded.ExecutionID)
+	require.NoError(t, err)
+	require.Equal(t, store.StatusSucceeded, got.Status)
+}

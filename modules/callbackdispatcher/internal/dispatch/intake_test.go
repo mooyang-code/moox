@@ -322,3 +322,39 @@ func TestSystemActionNormalizesSymbolCase(t *testing.T) {
 	require.Equal(t, "event-upper", executions[0].EventID)
 	require.Contains(t, executions[0].PayloadJSON, "2026-11-12")
 }
+
+// 停用系统规则只影响新的下架：已经在处理的记录照常合并改期；没有在处理的不新建，也不记回执（重新启用后同一事件仍能新建）。
+func TestDisabledSystemRuleOnlyMergesIntoExistingExecution(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	intake := newIntake(t, s)
+	require.NoError(t, s.CreateRule(ctx, systemRule()))
+	entry := mustEntry(t)
+	first := messageFor(t)
+	require.NoError(t, intake.accept(ctx, entry, first, `{"exchange":"binance","market":"SPOT","exchange_symbol":"FOOUSDT","delist_at":"2026-11-11T08:00:00Z","scope":"ALL"}`))
+	require.Len(t, listAll(t, s), 1)
+
+	_, err := s.UpdateRule(ctx, "sys", 2, func(rule *store.Rule) error { rule.Enabled = false; return nil })
+	require.NoError(t, err)
+
+	// 改期：合并进已在处理的记录。
+	moved := messageFor(t)
+	moved.EventId = "event-moved"
+	moved.OccurredAt = timestamppb.New(baseTime.Add(time.Hour))
+	require.NoError(t, intake.accept(ctx, entry, moved, `{"exchange":"binance","market":"SPOT","exchange_symbol":"FOOUSDT","delist_at":"2026-11-12T08:00:00Z","scope":"ALL"}`))
+	executions := listAll(t, s)
+	require.Len(t, executions, 1)
+	require.Equal(t, "event-moved", executions[0].EventID)
+	require.Contains(t, executions[0].PayloadJSON, "2026-11-12")
+
+	// 别的标的的新下架：不新建，也不记回执。
+	other := messageFor(t)
+	other.EventId, other.SubjectId = "event-bar", "binance:SPOT:BARUSDT"
+	require.NoError(t, intake.accept(ctx, entry, other, `{"exchange":"binance","market":"SPOT","exchange_symbol":"BARUSDT","delist_at":"2026-11-12T08:00:00Z","scope":"ALL"}`))
+	require.Len(t, listAll(t, s), 1)
+
+	_, err = s.UpdateRule(ctx, "sys", 3, func(rule *store.Rule) error { rule.Enabled = true; return nil })
+	require.NoError(t, err)
+	require.NoError(t, intake.accept(ctx, entry, other, `{"exchange":"binance","market":"SPOT","exchange_symbol":"BARUSDT","delist_at":"2026-11-12T08:00:00Z","scope":"ALL"}`))
+	require.Len(t, listAll(t, s), 2, "重新启用后，同一事件仍然能新建（停用期间没有记回执）")
+}
