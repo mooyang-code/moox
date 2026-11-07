@@ -53,7 +53,7 @@
                   >定义 <span class="mono">{{ store.strategy?.name || current.strategy_id }}</span></span
                 >
                 <span class="cell-sub"
-                  >因子任务 <span class="mono">{{ current.factor_task_id }}</span></span
+                  >因子任务 <span class="mono">{{ tasksText(current.factor_tasks) }}</span></span
                 >
                 <span class="cell-sub"
                   >会话 <span class="mono">{{ current.session_id || "无当前会话" }}</span></span
@@ -62,7 +62,9 @@
               <a-space :size="16">
                 <a-link @click="router.push(detailLink(current.instance_id))">实例详情与启停</a-link>
                 <a-link
-                  @click="router.push(replayLink({ instanceId: current.instance_id, factorTaskId: current.factor_task_id }))"
+                  @click="
+                    router.push(replayLink({ instanceId: current.instance_id, factorTaskId: singleTaskId(current.factor_tasks) }))
+                  "
                   >按会话回放</a-link
                 >
               </a-space>
@@ -91,6 +93,7 @@
 </template>
 
 <script setup lang="ts">
+import { singleTaskId, tasksText } from "@/views/strategy/market-mode";
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { StaleSpaceRequestError } from "@/api/admin/stale-space";

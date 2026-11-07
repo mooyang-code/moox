@@ -91,6 +91,8 @@ export interface LogicalAccount {
   control_mode: ControlMode;
   execution_mode: ExecutionMode;
   market_type: MarketType;
+  /** 可交易的市场：启用成员已开通市场的并集（只读，由 Trade 计算）；策略要输出的市场必须都在里面。 */
+  markets?: MarketType[];
   settlement_asset: string;
   automation_state: "ACTIVE" | "PAUSED" | string;
   pause_reason: string;

@@ -34,7 +34,7 @@ function normalizeInstance(value: any): StrategyInstance {
     instance_id: value?.instance_id ?? "",
     strategy_id: value?.strategy_id ?? "",
     space_id: value?.space_id ?? "",
-    factor_task_id: value?.factor_task_id ?? "",
+    factor_tasks: { ...(value?.factor_tasks ?? {}) },
     logical_account_id: value?.logical_account_id ?? "",
     enabled: Boolean(value?.enabled),
     session_id: value?.session_id ?? "",
@@ -46,7 +46,7 @@ function normalizeInstance(value: any): StrategyInstance {
 }
 
 function normalizeTarget(value: any): InstrumentTarget {
-  return { instrument_id: value?.instrument_id ?? "", target_weight: value?.target_weight ?? "0" };
+  return { instrument_id: value?.instrument_id ?? "", target_weight: value?.target_weight ?? "0", market: value?.market ?? "" };
 }
 
 function normalizeResult(value: any): StrategyResult {
@@ -75,6 +75,7 @@ function normalizeItem(value: any): StrategyResultItem {
   return {
     rule_id: value?.rule_id ?? "",
     instrument_id: value?.instrument_id ?? "",
+    market: value?.market ?? "",
     stage: value?.stage ?? "",
     score: value?.score ?? "",
     rank: Number(value?.rank ?? 0),
@@ -187,14 +188,21 @@ function isInvalidParam(code: unknown): boolean {
   return code === 1 || code === "1" || code === "INVALID_PARAM";
 }
 
-/** 校验 DSL；给出 factor_task_id 时按任务的结果 View 解析绑定并在最新周期试算一次（不落库）。 */
-export async function validateStrategy(dsl_yaml: string, factor_task_id = ""): Promise<ValidateStrategyResult> {
+/** 校验 DSL；给出 factor_tasks（市场 → 因子任务）时按任务的结果 View 解析绑定并在最新周期试算一次（读全部绑定的 View，不落库）。 */
+export async function validateStrategy(
+  dsl_yaml: string,
+  factor_tasks: Record<string, string> = {}
+): Promise<ValidateStrategyResult> {
   let response: any;
   try {
-    response = await callControl<{ dsl_yaml: string; factor_task_id?: string }, any>("strategy", "ValidateStrategy", {
-      dsl_yaml,
-      factor_task_id: factor_task_id || undefined
-    });
+    response = await callControl<{ dsl_yaml: string; factor_tasks?: Record<string, string> }, any>(
+      "strategy",
+      "ValidateStrategy",
+      {
+        dsl_yaml,
+        factor_tasks: Object.keys(factor_tasks).length ? factor_tasks : undefined
+      }
+    );
   } catch (error) {
     // 只有服务端明确返回“参数无效”的校验失败才转成诊断结果；断网、HTTP、认证、空间失效等请求错误继续抛出，由页面按请求错误展示。
     const rejected = error instanceof ControlRequestError ? (error.response as any) : undefined;
@@ -221,7 +229,7 @@ export async function validateStrategy(dsl_yaml: string, factor_task_id = ""): P
 export async function createInstance(instance: {
   instance_id?: string;
   strategy_id: string;
-  factor_task_id: string;
+  factor_tasks: Record<string, string>;
   logical_account_id?: string;
 }) {
   const response = await call<{ instance: typeof instance & { enabled: false } }, { instance?: StrategyInstance }>(

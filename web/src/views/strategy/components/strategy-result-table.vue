@@ -104,6 +104,7 @@ import { useStrategyStore } from "@/store/modules/strategy";
 import ResolvedTable from "@/views/strategy/components/strategy-resolved-table.vue";
 import ResultItems from "@/views/strategy/components/strategy-result-items.vue";
 import ResultOverview from "@/views/strategy/components/strategy-result-overview.vue";
+import { marketLabel } from "@/views/strategy/market-mode";
 import {
   buildResultInsights,
   formatDelay,
@@ -157,7 +158,10 @@ const TargetList = defineComponent({
             "div",
             { class: "target-list" },
             listProps.targets.map(target =>
-              h("div", { class: "target-row" }, [h("span", target.instrument_id), h("strong", percent(target.target_weight))])
+              h("div", { class: "target-row" }, [
+                h("span", target.market ? `${target.instrument_id}（${marketLabel(target.market)}）` : target.instrument_id),
+                h("strong", percent(target.target_weight))
+              ])
             )
           )
         : h("div", { class: "muted" }, "无目标（转为现金或本期跳过）");

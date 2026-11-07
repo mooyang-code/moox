@@ -23,7 +23,7 @@
             ><StatusBadge :enabled="instance.enabled" :health="instance.health"
           /></a-descriptions-item>
           <a-descriptions-item label="View"
-            ><span class="mono">{{ instance.factor_task_id }}</span></a-descriptions-item
+            ><span class="mono">{{ tasksText(instance.factor_tasks) }}</span></a-descriptions-item
           >
           <a-descriptions-item label="模式"
             >{{ instance.logical_account_id ? "交易模式" : "仅计算" }}
@@ -50,6 +50,7 @@
 </template>
 
 <script setup lang="ts">
+import { tasksText } from "@/views/strategy/market-mode";
 import { useLogicalAccount } from "@/views/strategy/components/use-logical-account";
 import { computed, ref, watch } from "vue";
 import { StaleSpaceRequestError } from "@/api/admin/stale-space";

@@ -8,6 +8,7 @@ import {
   type TargetState
 } from "@/views/strategy/model";
 import { replayLink, resultsLink, type StrategyLink } from "@/views/strategy/links";
+import { singleTaskId } from "@/views/strategy/market-mode";
 import { shortId, sortInstancesForResults } from "@/views/strategy/results/results-model";
 
 export interface OverviewInput {
@@ -143,7 +144,7 @@ export function instanceCards(input: OverviewInput): InstanceCard[] {
         period: snapshot?.bar_end_time ? `最近一期 ${formatStrategyTime(snapshot.bar_end_time)}` : "",
         links: {
           results: resultsLink(instance.instance_id),
-          replay: replayLink({ instanceId: instance.instance_id, factorTaskId: instance.factor_task_id })
+          replay: replayLink({ instanceId: instance.instance_id, factorTaskId: singleTaskId(instance.factor_tasks) })
         }
       };
     });

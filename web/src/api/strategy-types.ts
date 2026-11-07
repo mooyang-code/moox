@@ -12,6 +12,8 @@ export interface PageResponse {
 export interface InstrumentTarget {
   instrument_id: string;
   target_weight: string;
+  /** 目标所在的市场（spot | swap | equity）：同一个标的的现货、永续各是一个目标。 */
+  market: string;
 }
 
 /** 策略定义：一份 DSL 文本及其内容哈希。 */
@@ -24,12 +26,12 @@ export interface Strategy {
   updated_at: string;
 }
 
-/** 实例：定义 + 一个因子任务（创建时选定，永久独占，不可改）+ 可选的组合账户；启用时固化 resolved_json。 */
+/** 实例：定义 + 一个或两个因子任务（市场 → 任务，创建时选定，永久独占，不可改）+ 可选的组合账户；启用时固化 resolved_json。 */
 export interface StrategyInstance {
   instance_id: string;
   strategy_id: string;
   space_id: string;
-  factor_task_id: string;
+  factor_tasks: Record<string, string>;
   logical_account_id: string;
   enabled: boolean;
   session_id: string;
@@ -67,6 +69,8 @@ export interface StrategyResult {
 export interface StrategyResultItem {
   rule_id: string;
   instrument_id: string;
+  /** 入选的权重进入的市场，其余是所选行所在的市场。 */
+  market: string;
   stage: string;
   score: string;
   rank: number;

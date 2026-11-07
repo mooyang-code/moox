@@ -1,3 +1,4 @@
+import { MARKET_ORDER } from "@/views/strategy/market-mode";
 import type { InstrumentTarget, StrategyInstance, StrategyResult, StrategyTargetSnapshot } from "@/api/strategy-types";
 
 export type TargetState = "inactive" | "unknown" | "empty" | "expired" | "zero" | "valid";
@@ -33,6 +34,11 @@ export function targetStateTag(state: TargetState): { label: string; color: stri
   )[state];
 }
 
+function marketRank(market: string): number {
+  const index = MARKET_ORDER.indexOf(market as (typeof MARKET_ORDER)[number]);
+  return index < 0 ? MARKET_ORDER.length : index;
+}
+
 /** 目标按权重绝对值从大到小排列，并给出相对最大权重的比例（0~1），用于权重条。 */
 export function rankTargets(targets: InstrumentTarget[]): { target: InstrumentTarget; weight: number; ratio: number }[] {
   const rows = targets.map(target => ({ target, weight: Number(target.target_weight) }));
@@ -40,7 +46,12 @@ export function rankTargets(targets: InstrumentTarget[]): { target: InstrumentTa
   const max = Math.max(0, ...valid.map(row => Math.abs(row.weight)));
   return rows
     .map(row => ({ ...row, weight: Number.isFinite(row.weight) ? row.weight : 0 }))
-    .sort((a, b) => Math.abs(b.weight) - Math.abs(a.weight) || a.target.instrument_id.localeCompare(b.target.instrument_id))
+    .sort(
+      (a, b) =>
+        Math.abs(b.weight) - Math.abs(a.weight) ||
+        a.target.instrument_id.localeCompare(b.target.instrument_id) ||
+        marketRank(a.target.market) - marketRank(b.target.market)
+    )
     .map(row => ({ ...row, ratio: max > 0 ? Math.abs(row.weight) / max : 0 }));
 }
 
@@ -238,14 +249,21 @@ export interface ResolvedColumn {
   definition_hash: string;
 }
 
-export interface ResolvedBinding {
+/** 一个市场绑定的因子任务与结果 View。 */
+export interface ResolvedTask {
+  market: string;
+  factor_task_id: string;
   view_id: string;
   dataset_id: string;
   source_dataset_id: string;
+}
+
+export interface ResolvedBinding {
+  /** 市场模式：select 取 spot | swap | both | equity，prefer 取 spot | swap | equity。 */
+  market: { select: string; prefer: string };
+  tasks: ResolvedTask[];
   bar: string;
   calendar: string;
-  market_type: string;
-  spot: boolean;
   min_age_bars: number;
   columns: ResolvedColumn[];
 }
@@ -253,7 +271,16 @@ export interface ResolvedBinding {
 /** 解析启用时固化的绑定（resolved_json）；未启用过的实例返回 null。 */
 export function parseResolved(raw?: string): ResolvedBinding | null {
   const value = parseObject(raw);
-  if (!value.view_id) return null;
+  const tasks = Object.entries((value.tasks ?? {}) as Record<string, any>)
+    .map(([market, task]) => ({
+      market,
+      factor_task_id: task?.factor_task_id ?? "",
+      view_id: task?.view_id ?? "",
+      dataset_id: task?.dataset_id ?? "",
+      source_dataset_id: task?.source_dataset_id ?? ""
+    }))
+    .sort((a, b) => MARKET_ORDER.indexOf(a.market as any) - MARKET_ORDER.indexOf(b.market as any));
+  if (!tasks.length) return null;
   const columns = Object.entries((value.columns ?? {}) as Record<string, any>)
     .map(([name, binding]) => ({
       name,
@@ -266,13 +293,10 @@ export function parseResolved(raw?: string): ResolvedBinding | null {
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
   return {
-    view_id: value.view_id,
-    dataset_id: value.dataset_id ?? "",
-    source_dataset_id: value.source_dataset_id ?? "",
+    market: { select: value.market?.select ?? "", prefer: value.market?.prefer ?? "" },
+    tasks,
     bar: value.bar ?? "",
     calendar: value.calendar ?? "",
-    market_type: value.market_type ?? "",
-    spot: Boolean(value.spot),
     min_age_bars: Number(value.min_age_bars ?? 0),
     columns
   };

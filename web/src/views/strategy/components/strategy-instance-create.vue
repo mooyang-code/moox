@@ -21,24 +21,40 @@
         <a-descriptions-item label="标的池">{{ preview.universe }}</a-descriptions-item>
         <a-descriptions-item label="bar 断言">{{ preview.bar }}</a-descriptions-item>
       </a-descriptions>
+      <a-form-item v-if="!requirement.declared" label="市场">
+        <a-radio-group v-model="form.single_market" type="button" @change="onTaskChange">
+          <a-radio v-for="item in singleMarkets" :key="item" :value="item">{{ marketLabel(item) }}</a-radio>
+        </a-radio-group>
+        <template #extra
+          >策略没有写 market，只绑一个因子任务：这里选任务的数据所属的市场（必须与任务源数据集的市场一致）。</template
+        >
+      </a-form-item>
+      <p v-else class="meta-hint mode-hint">
+        策略的市场模式需要绑定：{{ activeMarkets.map(marketLabel).join("、") }} 的因子任务{{
+          activeMarkets.length > 1 ? "（现货、永续各一个，两个任务的周期、日历和用到的列要一致）" : ""
+        }}。
+      </p>
       <a-form-item
-        label="因子任务"
+        v-for="market in activeMarkets"
+        :key="market"
+        :label="`${marketLabel(market)}因子任务`"
         required
-        :validate-status="fieldErrors.factor_task_id ? 'error' : undefined"
-        :help="fieldErrors.factor_task_id"
+        :validate-status="fieldErrors.factor_tasks ? 'error' : undefined"
+        :help="market === activeMarkets[0] ? fieldErrors.factor_tasks : undefined"
       >
         <a-select
-          v-model="form.factor_task_id"
+          v-model="form.tasks[market]"
           allow-search
+          allow-clear
           :loading="tasksLoading"
           placeholder="选择一个运行中、还没有关联实例的因子任务"
           @change="onTaskChange"
         >
-          <a-option v-for="task in tasks" :key="task.taskId" :value="task.taskId">
+          <a-option v-for="task in taskChoices(market)" :key="task.taskId" :value="task.taskId">
             {{ task.name }}（{{ task.taskId }} · {{ task.freq || "无周期" }}）
           </a-option>
         </a-select>
-        <template #extra>
+        <template v-if="market === activeMarkets[0]" #extra>
           <span v-if="tasksError" class="meta-error"
             >因子任务列表读取失败：{{ tasksError }}<a-link @click="loadTasksList">重试</a-link></span
           >
@@ -48,17 +64,17 @@
           <span v-else>一个因子任务只能被一个实例独占使用，关联创建后不能修改，也不能删除实例。</span>
         </template>
       </a-form-item>
-      <div v-if="selectedTask" class="task-columns">
+      <div v-for="item in selectedTasks" :key="item.task.taskId" class="task-columns">
         <div class="task-columns__head">
-          <strong>任务的列（DSL 里直接写这些列名）</strong>
-          <a-button size="mini" @click="copyColumns">复制全部列名</a-button>
+          <strong>{{ marketLabel(item.market) }}任务的列（DSL 里直接写这些列名）</strong>
+          <a-button size="mini" @click="copyColumns(item.task)">复制全部列名</a-button>
         </div>
         <a-space wrap size="mini">
-          <a-tag v-for="column in selectedTask.columns" :key="column" size="small">{{ column }}</a-tag>
-          <span v-if="!selectedTask.columns.length" class="meta-hint">这个任务还没有成员，先到「因子」模块给任务添加因子。</span>
+          <a-tag v-for="column in item.task.columns" :key="column" size="small">{{ column }}</a-tag>
+          <span v-if="!item.task.columns.length" class="meta-hint">这个任务还没有成员，先到「因子」模块给任务添加因子。</span>
         </a-space>
-        <p v-if="selectedTask.varMembers.length" class="meta-hint">
-          可变成员 {{ selectedTask.varMembers.join("、") }}：DSL 的 factor_params 要为每个可变成员给出参数（策略逐期提交），可用
+        <p v-if="item.task.varMembers.length" class="meta-hint">
+          可变成员 {{ item.task.varMembers.join("、") }}：DSL 的 factor_params 要为每个可变成员给出参数（策略逐期提交），可用
           params("成员键", "参数名") 读取当期实际参数。
         </p>
       </div>
@@ -96,7 +112,7 @@
     </a-form>
     <div class="check-head">
       <strong>绑定预检</strong>
-      <a-button size="small" :loading="checking" :disabled="!form.strategy_id || !form.factor_task_id" @click="check"
+      <a-button size="small" :loading="checking" :disabled="!form.strategy_id || !tasksSelected" @click="check"
         >解析列与成员契约</a-button
       >
     </div>
@@ -133,7 +149,8 @@ import type { LogicalAccount } from "@/api/trade/types";
 import type { FactorTaskInfo } from "@/api/factor/types";
 import { availableTasks, type TaskOption } from "@/views/strategy/components/task-options";
 import ResolvedTable from "@/views/strategy/components/strategy-resolved-table.vue";
-import { logicalAccountOptions, resolvedMarket } from "@/views/strategy/components/logical-account-options";
+import { logicalAccountOptions, resolvedMarkets } from "@/views/strategy/components/logical-account-options";
+import { marketLabel, marketRequirement } from "@/views/strategy/market-mode";
 import { parseDSL } from "@/views/strategy/dsl";
 
 const props = defineProps<{ visible: boolean; strategies: Strategy[]; spaceId: string; presetStrategyId?: string }>();
@@ -145,16 +162,19 @@ const accountsLoading = ref(false);
 const tasksError = ref("");
 const accountsError = ref("");
 const error = ref("");
-const fieldErrors = reactive<Record<"strategy_id" | "factor_task_id" | "logical_account_id", string>>({
+const fieldErrors = reactive<Record<"strategy_id" | "factor_tasks" | "logical_account_id", string>>({
   strategy_id: "",
-  factor_task_id: "",
+  factor_tasks: "",
   logical_account_id: ""
 });
 // mode 决定是否发送目标：账户读取失败只影响“发送至交易模块”，不阻断仅计算；切换模式不会悄悄改选账户。
 const form = reactive({
   instance_id: "",
   strategy_id: "",
-  factor_task_id: "",
+  // 策略没有写 market 时只绑一个任务，市场由用户选定。
+  single_market: "swap",
+  // 市场 → 因子任务。
+  tasks: {} as Record<string, string>,
   logical_account_id: "",
   mode: "compute" as "compute" | "trade"
 });
@@ -169,14 +189,33 @@ let checkRequest = 0;
 const selectedStrategy = computed(() => props.strategies.find(item => item.strategy_id === form.strategy_id));
 const preview = computed(() => (selectedStrategy.value ? parseDSL(selectedStrategy.value.dsl_yaml).preview : null));
 
-// 只列策略驱动且市场一致的组合账户，已被其他实例占用的显示但不可选；没有交易账户的市场（A 股）列表为空。
-const market = computed(() => resolvedMarket(check_result.value?.resolved_json));
+// 只列策略驱动且可交易市场包含策略输出市场的组合账户，已被其他实例占用的显示但不可选；没有交易账户的市场（A 股）列表为空。
+const market = computed(() => resolvedMarkets(check_result.value?.resolved_json));
 const accountOptions = computed(() => logicalAccountOptions(accounts.value, market.value));
 
-const selectedTask = computed(() => tasks.value.find(item => item.taskId === form.factor_task_id));
+// 策略的市场模式决定要绑定哪些市场的任务；没写 market 时只绑一个，市场由用户选。
+const singleMarkets = ["spot", "swap", "equity"];
+const requirement = computed(() => marketRequirement(selectedStrategy.value?.dsl_yaml ?? ""));
+const activeMarkets = computed(() => (requirement.value.declared ? requirement.value.markets : [form.single_market]));
+const selectedTasks = computed(() =>
+  activeMarkets.value.flatMap(market => {
+    const task = tasks.value.find(item => item.taskId === form.tasks[market]);
+    return task ? [{ market, task }] : [];
+  })
+);
+const tasksSelected = computed(() => activeMarkets.value.every(market => Boolean(form.tasks[market])));
+// 另一个市场已选的任务不再出现在这个市场的选项里：一个任务只能属于一个市场。
+function taskChoices(market: string) {
+  const taken = new Set(activeMarkets.value.filter(item => item !== market).map(item => form.tasks[item]));
+  return tasks.value.filter(task => !taken.has(task.taskId));
+}
+// 提交与预检的 factor_tasks：只含当前市场模式需要的市场。
+function factorTasks(): Record<string, string> {
+  return Object.fromEntries(activeMarkets.value.map(market => [market, form.tasks[market]]));
+}
 
-async function copyColumns() {
-  const text = selectedTask.value?.columns.join("\n") ?? "";
+async function copyColumns(task: TaskOption) {
+  const text = task.columns.join("\n");
   try {
     await navigator.clipboard.writeText(text);
     Message.success("列名已复制");
@@ -250,10 +289,11 @@ function loadMetadata() {
 
 function onStrategyChange() {
   fieldErrors.strategy_id = "";
+  form.tasks = {};
   resetCheck();
 }
 function onTaskChange() {
-  fieldErrors.factor_task_id = "";
+  fieldErrors.factor_tasks = "";
   resetCheck();
 }
 function onModeChange() {
@@ -268,11 +308,11 @@ function resetCheck() {
 }
 
 async function check() {
-  if (!selectedStrategy.value || !form.factor_task_id) return;
+  if (!selectedStrategy.value || !tasksSelected.value) return;
   const requestId = ++checkRequest;
   checking.value = true;
   try {
-    const result = await validateStrategy(selectedStrategy.value.dsl_yaml, form.factor_task_id);
+    const result = await validateStrategy(selectedStrategy.value.dsl_yaml, factorTasks());
     if (requestId === checkRequest) check_result.value = result;
   } catch (err) {
     if (requestId === checkRequest)
@@ -292,7 +332,8 @@ function resetForm() {
   saving.value = false;
   form.instance_id = "";
   form.strategy_id = props.presetStrategyId || "";
-  form.factor_task_id = "";
+  form.single_market = "swap";
+  form.tasks = {};
   form.logical_account_id = "";
   form.mode = "compute";
   tasks.value = [];
@@ -303,7 +344,7 @@ function resetForm() {
   accountsLoading.value = false;
   tasksError.value = "";
   accountsError.value = "";
-  fieldErrors.strategy_id = fieldErrors.factor_task_id = fieldErrors.logical_account_id = "";
+  fieldErrors.strategy_id = fieldErrors.factor_tasks = fieldErrors.logical_account_id = "";
   error.value = "";
   resetCheck();
 }
@@ -311,9 +352,9 @@ function resetForm() {
 async function submit() {
   error.value = "";
   fieldErrors.strategy_id = form.strategy_id ? "" : "请选择策略定义";
-  fieldErrors.factor_task_id = form.factor_task_id ? "" : "请选择因子任务";
+  fieldErrors.factor_tasks = tasksSelected.value ? "" : `请为${activeMarkets.value.map(marketLabel).join("、")}各选一个因子任务`;
   fieldErrors.logical_account_id = form.mode === "trade" && !form.logical_account_id ? "请选择组合账户，或改为“仅计算”" : "";
-  if (fieldErrors.strategy_id || fieldErrors.factor_task_id || fieldErrors.logical_account_id) return;
+  if (fieldErrors.strategy_id || fieldErrors.factor_tasks || fieldErrors.logical_account_id) return;
   const spaceId = props.spaceId;
   const requestId = ++submitRequest;
   saving.value = true;
@@ -321,7 +362,7 @@ async function submit() {
     const instance = await createInstance({
       instance_id: form.instance_id.trim() || undefined,
       strategy_id: form.strategy_id,
-      factor_task_id: form.factor_task_id,
+      factor_tasks: factorTasks(),
       logical_account_id: form.mode === "trade" ? form.logical_account_id : ""
     });
     if (requestId !== submitRequest || props.spaceId !== spaceId) {
@@ -392,6 +433,9 @@ watch(
 }
 .meta-error {
   color: rgb(var(--red-6));
+}
+.mode-hint {
+  margin: 0 0 12px;
 }
 .meta-hint {
   margin: 6px 0 0;
