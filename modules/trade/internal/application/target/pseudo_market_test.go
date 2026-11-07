@@ -98,9 +98,10 @@ func TestPseudoMarketAttemptsCountOnlyTheTrailingUnfilledRun(t *testing.T) {
 	// 一笔全部成交就清零：拆单的每一片都从首次滑点开始。
 	require.Equal(t, 0, pseudoMarketAttempts([]store.TargetChildOrder{child("IOC", "5", "0"), child("IOC", "5", "0"), child("IOC", "5", "5")}))
 	require.Equal(t, 1, pseudoMarketAttempts([]store.TargetChildOrder{child("IOC", "5", "5"), child("IOC", "5", "1")}))
-	// 市价单、挂单不是伪市价重试，打断连续。
-	require.Equal(t, 1, pseudoMarketAttempts([]store.TargetChildOrder{child("IOC", "5", "0"), {OrderType: "MARKET", Quantity: "1", FilledQuantity: "1"}, child("IOC", "5", "0")}))
-	require.Equal(t, 0, pseudoMarketAttempts([]store.TargetChildOrder{child("IOC", "5", "0"), child("GTC", "5", "0")}))
+	// 市价单、撤掉的挂单不是伪市价重试，跳过但不打断计数：挂单和伪市价交替出现时次数不会被清零。
+	require.Equal(t, 2, pseudoMarketAttempts([]store.TargetChildOrder{child("IOC", "5", "0"), {OrderType: "MARKET", Quantity: "1", FilledQuantity: "1"}, child("IOC", "5", "0")}))
+	require.Equal(t, 1, pseudoMarketAttempts([]store.TargetChildOrder{child("IOC", "5", "0"), child("GTC", "5", "0")}))
+	require.Equal(t, 1, pseudoMarketAttempts([]store.TargetChildOrder{child("IOC", "5", "5"), child("GTC", "5", "0"), child("IOC", "5", "0")}), "全部成交的 IOC 仍然清零")
 }
 
 // 用满次数仍没成交完：记为未到位，不再下单，告警一次；不卡住别的标的。
@@ -180,4 +181,19 @@ func TestPseudoMarketSpotSellNeverExceedsSellableBalance(t *testing.T) {
 	require.Len(t, f.orders.specs, 1)
 	require.Equal(t, "4", f.orders.specs[0].Quantity.String())
 	require.Equal(t, exchange.FillPolicyIOC, f.orders.specs[0].FillPolicy)
+}
+
+// 尝试次数按（目标，标的）统计，不是按成员：account-a 已经用满 4 次，换 account-b 也不会从头再来第 5 笔。
+func TestPseudoMarketAttemptsAreCountedPerInstrumentNotPerMember(t *testing.T) {
+	f := swapPolicyFixture(t, pseudoSettings)
+	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "10"}})
+	for attempt := 0; attempt < 4; attempt++ {
+		f.iocChild(t, "ioc-a"+string(rune('a'+attempt)), "10", "0", attempt)
+	}
+	executor := f.executor()
+	executor.MinBatchInterval = 0
+	result, err := executor.Converge(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Empty(t, f.orders.specs, "account-b 没下过单，也不能重新从第 0 次开始")
+	require.Equal(t, StatusBlocked, result.Status)
 }

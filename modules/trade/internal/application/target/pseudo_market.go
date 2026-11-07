@@ -16,14 +16,15 @@ import (
 // 没成交完的部分下一轮按最新持仓只补剩余量，滑点每次加一份 s，直到上限；用满次数仍没成交完就记“未到位”。
 
 // pseudoMarketAttempts 返回下一笔伪市价单是第几次尝试（从 0 开始）：
-// 这个标的本目标里最近连续的、没有全部成交的 IOC 限价子单的笔数。一笔子单全部成交就清零，
-// 所以拆单时每一片都从首次滑点开始，不会因为前面的片耗掉重试次数。
+// 这个标的本目标里（所有执行账户，换成员不重新计数）最近连续的、没有全部成交的 IOC 限价子单的笔数。
+// 一笔 IOC 子单全部成交就清零，所以拆单时每一片都从首次滑点开始，不会因为前面的片耗掉重试次数；
+// 非 IOC 的子单（撤掉的挂单、市价单）跳过，不打断计数，挂单和伪市价交替出现时次数不会被清零。
 func pseudoMarketAttempts(children []store.TargetChildOrder) int {
 	attempts := 0
 	for index := len(children) - 1; index >= 0; index-- {
 		child := children[index]
 		if child.OrderType != string(exchange.OrderTypeLimit) || child.TimeInForce != string(exchange.FillPolicyIOC) {
-			break
+			continue
 		}
 		quantity, quantityErr := shared.ParseDecimal(child.Quantity)
 		filled, filledErr := shared.ParseDecimal(child.FilledQuantity)

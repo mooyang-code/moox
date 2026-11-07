@@ -1194,7 +1194,8 @@ func (e *Executor) placeAction(
 				continue
 			}
 		}
-		sliceLimit := env.sliceNotionalLimit(target, candidate.instrument.InstrumentID, len(children))
+		accountChildren := childrenOfAccount(children, accountID)
+		sliceLimit := env.sliceNotionalLimit(target, candidate.instrument.InstrumentID, len(accountChildren))
 		if maxQuantity := floorToStep(sliceLimit.Div(quote.Price), mustBaseStep(candidate.instrument)); quantity.Cmp(maxQuantity) > 0 {
 			quantity = maxQuantity
 		}
@@ -1206,7 +1207,7 @@ func (e *Executor) placeAction(
 			capacityErrors = append(capacityErrors, candidate.member.account.TradingAccountID+": 单笔子单上限低于交易所最小数量")
 			continue
 		}
-		reversal := reversalCount(children, candidate)
+		reversal := reversalCount(accountChildren, candidate)
 		if reversal >= 2 {
 			// 同一目标内第二次反向：整条标的本目标内不再下单，新目标到达时自然清零。
 			if e.Observe != nil {
@@ -1648,16 +1649,26 @@ func (e *Executor) positionUnreflected(
 	return false, nil
 }
 
-// targetChildren 返回同一目标、同一执行账户、同一标的已发出的子单，按提交先后；
-// 拆单随机化、反向熔断和伪市价单的尝试次数共用这一次查询。
+// targetChildren 返回同一目标、同一标的已发出的子单（所有执行账户），按提交先后；
+// 伪市价单的尝试次数按标的统计（换成员不重新计数），拆单随机化和反向熔断按候选账户统计（见 childrenOfAccount），共用这一次查询。
 func (e *Executor) targetChildren(
 	ctx context.Context,
 	spaceID string,
 	target store.LogicalAccountTargetRecord,
 	candidate laneAction,
 ) ([]store.TargetChildOrder, error) {
-	return e.Store.TargetChildOrders(ctx, spaceID, target.LogicalAccountID, target.TargetID,
-		candidate.member.account.TradingAccountID, candidate.instrument.InstrumentID)
+	return e.Store.TargetChildOrders(ctx, spaceID, target.LogicalAccountID, target.TargetID, candidate.instrument.InstrumentID)
+}
+
+// childrenOfAccount 取出某个执行账户的子单。
+func childrenOfAccount(children []store.TargetChildOrder, tradingAccountID string) []store.TargetChildOrder {
+	var mine []store.TargetChildOrder
+	for _, child := range children {
+		if child.TradingAccountID == tradingAccountID {
+			mine = append(mine, child)
+		}
+	}
+	return mine
 }
 
 // reversalCount 返回已发出子单（含这次将发的）的方向切换次数。

@@ -341,7 +341,7 @@ func TestRestingFallbackContinuesTheAttemptCount(t *testing.T) {
 	_, err := executor.Converge(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
 	require.Len(t, f.orders.specs, 1)
-	require.Equal(t, 1, f.orders.specs[0].Attempt)
+	require.Equal(t, 2, f.orders.specs[0].Attempt, "两个成员各一笔零成交 IOC，按标的数是第 2 次")
 	require.Equal(t, exchange.FillPolicyIOC, f.orders.specs[0].FillPolicy)
 }
 

@@ -735,31 +735,31 @@ func (s *Store) RecentFilledOrdersForLane(
 
 // TargetChildOrder 是同一目标、同一执行账户、同一标的已发出的一笔子单摘要。
 type TargetChildOrder struct {
-	Side           string `gorm:"column:c_side"`
-	OrderType      string `gorm:"column:c_order_type"`
-	TimeInForce    string `gorm:"column:c_time_in_force"`
-	State          string `gorm:"column:c_state"`
-	Quantity       string `gorm:"column:c_quantity"`
-	FilledQuantity string `gorm:"column:c_filled_quantity"`
-	Attempt        int    `gorm:"column:c_attempt"`
+	TradingAccountID string `gorm:"column:c_trading_account_id"`
+	Side             string `gorm:"column:c_side"`
+	OrderType        string `gorm:"column:c_order_type"`
+	TimeInForce      string `gorm:"column:c_time_in_force"`
+	State            string `gorm:"column:c_state"`
+	Quantity         string `gorm:"column:c_quantity"`
+	FilledQuantity   string `gorm:"column:c_filled_quantity"`
+	Attempt          int    `gorm:"column:c_attempt"`
 }
 
-// TargetChildOrders 返回同一目标、同一执行账户、同一标的已发出的子单（提交过的），按提交先后排序。
-// 反向熔断、拆单随机化的种子和伪市价单的尝试次数都从这里算。
+// TargetChildOrders 返回同一目标、同一标的已发出的子单（提交过的，所有执行账户），按提交先后排序。
+// 伪市价单的尝试次数按（目标，标的）统计，反向熔断和拆单随机化的种子按执行账户统计，都从这里算。
 func (s *Store) TargetChildOrders(
 	ctx context.Context,
 	spaceID string,
 	logicalAccountID string,
 	targetID string,
-	tradingAccountID string,
 	instrumentID string,
 ) ([]TargetChildOrder, error) {
 	var orders []TargetChildOrder
 	if err := s.db.WithContext(ctx).Table("t_trade_orders").
-		Select("c_side, c_order_type, c_time_in_force, c_state, c_quantity, c_filled_quantity, c_attempt").
+		Select("c_trading_account_id, c_side, c_order_type, c_time_in_force, c_state, c_quantity, c_filled_quantity, c_attempt").
 		Where(`c_space_id = ? AND c_logical_account_id = ? AND c_owner_type = 'TARGET' AND c_owner_id = ?
-			AND c_trading_account_id = ? AND c_instrument_id = ? AND c_submitted_at > 0`,
-			spaceID, logicalAccountID, targetID, tradingAccountID, instrumentID).
+			AND c_instrument_id = ? AND c_submitted_at > 0`,
+			spaceID, logicalAccountID, targetID, instrumentID).
 		Order("c_submitted_at, c_order_id").
 		Scan(&orders).Error; err != nil {
 		return nil, err
