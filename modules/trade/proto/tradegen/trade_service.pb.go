@@ -8059,7 +8059,8 @@ type BlockInstrumentRsp struct {
 	RetInfo *commonpb.RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
 	// true 表示 Trade 无此标的（用户没开通对应市场的账户）：照常写入名单，不算失败。
 	InstrumentUnknown bool `protobuf:"varint,2,opt,name=instrument_unknown,json=instrumentUnknown,proto3" json:"instrument_unknown,omitempty"`
-	// false 表示标的已经在名单里，没有改动。
+	// false 表示标的已经在名单里，没有改动：已在名单里时保留第一个写入者的原因（事件中心依赖这个跨模块约定，
+	// 演练按名单原因里带的执行记录 ID 判断这一项是不是自己写的，不能靠 created——写名单的响应丢了再重试拿到的就是 false）。
 	Created bool `protobuf:"varint,3,opt,name=created,proto3" json:"created,omitempty"`
 }
 
@@ -8244,8 +8245,10 @@ type BlockedInstrument struct {
 	MarketType     MarketType `protobuf:"varint,2,opt,name=market_type,json=marketType,proto3,enum=trpc.moox.trade.MarketType" json:"market_type,omitempty"`
 	ExchangeSymbol string     `protobuf:"bytes,3,opt,name=exchange_symbol,json=exchangeSymbol,proto3" json:"exchange_symbol,omitempty"`
 	// 写入时能从标的表查到的内部标的 ID 和基础资产，只用于展示和审计，查不到为空。
-	InstrumentId  string `protobuf:"bytes,4,opt,name=instrument_id,json=instrumentId,proto3" json:"instrument_id,omitempty"`
-	BaseAsset     string `protobuf:"bytes,5,opt,name=base_asset,json=baseAsset,proto3" json:"base_asset,omitempty"`
+	InstrumentId string `protobuf:"bytes,4,opt,name=instrument_id,json=instrumentId,proto3" json:"instrument_id,omitempty"`
+	BaseAsset    string `protobuf:"bytes,5,opt,name=base_asset,json=baseAsset,proto3" json:"base_asset,omitempty"`
+	// 写入名单时的原因。同一个标的重复写入时保留第一个写入者的原因，不会被后来者覆盖（事件中心依赖这个跨模块约定：
+	// 原因里带着写入者的执行记录 ID，据此判断这一项是谁写的）。
 	Reason        string `protobuf:"bytes,6,opt,name=reason,proto3" json:"reason,omitempty"`
 	SourceEventId string `protobuf:"bytes,7,opt,name=source_event_id,json=sourceEventId,proto3" json:"source_event_id,omitempty"`
 	BlockedAt     int64  `protobuf:"varint,8,opt,name=blocked_at,json=blockedAt,proto3" json:"blocked_at,omitempty"`
