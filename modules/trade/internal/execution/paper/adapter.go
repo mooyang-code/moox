@@ -144,10 +144,15 @@ func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnaps
 	}
 	paperRows := paperBalances(balances, locked)
 	if account.HasPositionMarket() {
-		// 单一资金池里结算币的可用余额要扣掉合约占用的保证金和浮亏，现货买单不能按全额现金下单。
+		// 单一资金池里结算币这一行是现货买单看的：扣掉合约占用的保证金和浮亏，但浮盈不能花在现货上（现货不借币），
+		// 所以是 现金 + min(浮盈亏, 0) - 保证金 - 冻结。账户级的 AvailableFunds 给合约用，保持含浮盈的口径。
+		spotAvailable := settlement.Sub(usedMargin).Sub(locked[account.SettlementAsset])
+		if unrealizedPnL.IsNegative() {
+			spotAvailable = spotAvailable.Add(unrealizedPnL)
+		}
 		for i := range paperRows {
 			if paperRows[i].Asset == account.SettlementAsset {
-				paperRows[i].Available = available
+				paperRows[i].Available = spotAvailable
 			}
 		}
 	}

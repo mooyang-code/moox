@@ -92,7 +92,7 @@ func TestTwoMarketPaperSnapshotUsesOnePoolAndMarketSpecificPrices(t *testing.T) 
 		require.Equal(t, exchange.WalletUnified, balance.Wallet, "模拟盘单一资金池只有一个统一钱包")
 		if balance.Asset == "USDT" {
 			// 现货买单看的是这一行：合约占用的保证金和浮亏已经扣掉，不能按全额现金下现货单。
-			require.Zero(t, balance.Available.Cmp(shared.MustDecimal("954")), balance.Available.String())
+			require.Zero(t, balance.Available.Cmp(shared.MustDecimal("924")), balance.Available.String())
 		}
 	}
 }

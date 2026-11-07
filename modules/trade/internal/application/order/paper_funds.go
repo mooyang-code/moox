@@ -41,7 +41,12 @@ func (s *Service) paperMarginAdjustment(ctx context.Context, validation Validati
 		snapshot.ExchangeUpdatedAt.IsZero() || snapshot.ExchangeUpdatedAt.After(s.now()) || s.now().Sub(snapshot.ExchangeUpdatedAt) > 10*time.Second {
 		return shared.Zero(), accountExecutionError(validation.Account.ID, "snapshot", fmt.Errorf("%w: paper margin valuation unavailable", ErrServiceConfig))
 	}
-	return snapshot.UnrealizedPnL.Sub(snapshot.UsedMargin), nil
+	unrealized := snapshot.UnrealizedPnL
+	if !exchange.RuleFor(validation.Instrument.MarketType).UsesMargin && unrealized.Cmp(shared.Zero()) > 0 {
+		// 现货买入不借币：合约的浮盈不能拿来买现货，只扣浮亏和已占保证金；合约开仓才按“浮盈亏 - 保证金”。
+		unrealized = shared.Zero()
+	}
+	return unrealized.Sub(snapshot.UsedMargin), nil
 }
 
 // fundsMarginAdjustment 是下单资金检查用的保证金调整：减仓单在 checkPaperFunds 里不占新保证金，

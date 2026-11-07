@@ -54,3 +54,25 @@ func TestPaperMarginPoolAppliesToSpotBuyOfMixedAccount(t *testing.T) {
 	live.Account.ExecutionMode = exchange.ExecutionModeLive
 	require.False(t, paperUsesMarginPool(live))
 }
+
+// 合约浮盈为正：现货买单只扣已占保证金，浮盈不能花在现货上（现货不借币）；合约开仓仍按“浮盈 - 保证金”。
+func TestPaperSpotBuyDoesNotSpendUnrealizedProfit(t *testing.T) {
+	s, _, adapter := newTestServiceForMarket(t, exchange.MarketTypeSwap)
+	account := executableAccount(exchange.MarketTypeSwap)
+	account.Markets = []exchange.MarketType{exchange.MarketTypeSpot, exchange.MarketTypeSwap}
+	account.ExecutionMode = exchange.ExecutionModePaper
+	s.Adapters = errorBoundarySource{adapter: fixedSnapshotAdapter{adapterStub: adapter, snapshot: exchange.AccountSnapshot{
+		UsedMargin: shared.MustDecimal("7000"), UnrealizedPnL: shared.MustDecimal("20000"), ExchangeUpdatedAt: s.now(),
+		Present: exchange.AccountSnapshotPresence{UsedMargin: true, UnrealizedPnL: true},
+	}}}
+
+	spotBuy := Validation{Account: account, ReservedAsset: "USDT", Instrument: exchange.Instrument{MarketType: exchange.MarketTypeSpot}}
+	adjustment, err := s.paperMarginAdjustment(context.Background(), spotBuy)
+	require.NoError(t, err)
+	require.Equal(t, "-7000", adjustment.String(), "现货买单只扣保证金，不加浮盈 20000")
+
+	swapOpen := Validation{Account: account, ReservedAsset: "USDT", Instrument: exchange.Instrument{MarketType: exchange.MarketTypeSwap}}
+	adjustment, err = s.paperMarginAdjustment(context.Background(), swapOpen)
+	require.NoError(t, err)
+	require.Equal(t, "13000", adjustment.String(), "合约开仓可以用浮盈：20000 - 7000")
+}
