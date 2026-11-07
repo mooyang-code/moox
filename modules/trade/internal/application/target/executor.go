@@ -1961,6 +1961,10 @@ func (e *Executor) waitingOnChildren(
 		if state.Terminal() {
 			continue
 		}
+		// 系统单（BNB 补买、稳定币调平）和收敛无关，稳定币买单可能挂一个小时：不能让它把快路径一直挡住。
+		if record.OwnerType == string(orderdomain.OwnerSystem) {
+			continue
+		}
 		if record.OwnerType != string(orderdomain.OwnerTarget) || record.OwnerID != target.TargetID {
 			return false, nil
 		}
@@ -1988,6 +1992,9 @@ func (e *Executor) waitingOnChildren(
 			return false, err
 		}
 		for _, order := range active {
+			if order.OwnerType == string(orderdomain.OwnerSystem) {
+				continue
+			}
 			if order.OwnerType != string(orderdomain.OwnerTarget) || order.OwnerID != target.TargetID {
 				return false, nil
 			}

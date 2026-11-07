@@ -34,52 +34,56 @@ func bnbQuantity(account store.TradingAccountRecord) shared.Decimal {
 // topUpBNB 在 BNB 市值低于“保留金额 − 10”时市价补买到保留金额（SYSTEM 单，现货下单）。
 // 普通账户把补买的 BNB 在现货、合约钱包之间分配需要钱包划转，由真实交易所接入阶段的划转实现负责；
 // 这里只把缺口买到现货钱包里。账户没开通现货时无法补买，告警一次。
+// busy 为真表示补买单刚下出或还没结束：买单要花 USDT、余额要等同步才更新，同一轮后面的稳定币调平先让路。
 func (s *Service) topUpBNB(
 	ctx context.Context,
 	logical store.LogicalAccountRecord,
 	settings fundsettings.Settings,
 	account store.TradingAccountRecord,
 	adapter execution.ExecutionAdapter,
-) error {
+) (busy bool, err error) {
 	reserve := settings.BNBReserveAmount
 	if reserve.Cmp(shared.Zero()) <= 0 {
-		return nil
+		return false, nil
 	}
 	if !account.HasBalanceMarket() {
 		s.warnOnce("bnb-no-spot|"+account.TradingAccountID, fmt.Sprintf("执行账户 %s 没有开通现货，无法补买 BNB 保留金额", account.TradingAccountID))
-		return nil
+		return false, nil
 	}
 	instrument, found, err := s.spotInstrument(ctx, account, fundsettings.BNBAsset)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if !found {
 		s.warnOnce("bnb-no-instrument|"+account.TradingAccountID, fmt.Sprintf("执行账户 %s 上没有 BNB/%s 现货标的，无法补买", account.TradingAccountID, account.SettlementAsset))
-		return nil
+		return false, nil
 	}
 	open, err := s.openSystemOrders(ctx, account, ownerBNBReserve)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if len(open) > 0 {
-		return nil
+		return true, nil
 	}
 	price, quotedAt, err := s.referencePrice(ctx, adapter, instrument)
 	if err != nil {
-		return err
+		return false, err
 	}
 	value := bnbQuantity(account).Mul(price)
 	if value.Cmp(reserve.Sub(fundsettings.BNBReserveSlack)) >= 0 {
-		return nil
+		return false, nil
 	}
 	step, minimum, minNotional, err := quantityRules(instrument)
 	if err != nil {
-		return err
+		return false, err
 	}
 	quantity := shared.FloorToStep(reserve.Sub(value).Div(price), step)
 	if quantity.Cmp(minimum) < 0 || quantity.Mul(price).Cmp(minNotional) < 0 {
 		s.warnOnce("bnb-too-small|"+account.TradingAccountID, fmt.Sprintf("执行账户 %s 的 BNB 补买量低于交易所最小下单量，暂不补买", account.TradingAccountID))
-		return nil
+		return false, nil
 	}
-	return s.placeSystemOrder(ctx, logical, account, instrument, ownerBNBReserve, exchange.SideBuy, quantity, price, quotedAt, nil, exchange.FillPolicyUnspecified)
+	if err := s.placeSystemOrder(ctx, logical, account, instrument, ownerBNBReserve, exchange.SideBuy, quantity, price, quotedAt, nil, exchange.FillPolicyUnspecified); err != nil {
+		return false, err
+	}
+	return true, nil
 }

@@ -122,7 +122,7 @@ func newFixture(t *testing.T, fundSettings string, balances []store.AssetBalance
 		}); err != nil {
 			return err
 		}
-		for _, base := range []string{"BNB", "BTC", "USDC", "FDUSD", "DOGE"} {
+		for _, base := range []string{"BNB", "BTC", "USDC", "FDUSD", "DOGE", "XRP", "LTC", "ETH", "SHIB"} {
 			if err := tx.UpsertInstrument(store.InstrumentRecord{
 				Exchange: "BINANCE", Environment: "PRODUCTION", MarketType: "SPOT", ExchangeSymbol: base + "USDT", InstrumentID: base + "-USDT-SPOT",
 				BaseAsset: base, QuoteAsset: "USDT", SettlementAsset: "USDT", ExchangeQuantityStep: "0.001", MinExchangeQuantity: "0.001",
@@ -274,11 +274,31 @@ func dustFixture(t *testing.T, settings string, dust []exchange.DustAsset) *fixt
 	return f
 }
 
-func TestDustConvertsOnlyNonTargetNonExcludedBelowFiveUSDT(t *testing.T) {
+// markManaged 让这些基础资产成为受管资产：MooX 的人工单在它们的现货标的上成交过。
+func (f *fixture) markManaged(bases ...string) {
+	f.t.Helper()
+	require.NoError(f.t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
+		for _, base := range bases {
+			if err := tx.CreateOrder(store.OrderRecord{
+				SpaceID: "space-1", OrderID: "traded-" + base, TradingAccountID: "account-a", LogicalAccountID: "logical-1", ClientOrderID: "traded-" + base,
+				Exchange: "BINANCE", MarketType: "SPOT", InstrumentID: base + "-USDT-SPOT", ExchangeSymbol: base + "USDT",
+				OrderType: "MARKET", Side: "BUY", Quantity: "1", FilledQuantity: "1", ReferencePrice: "1", AveragePrice: "1",
+				OwnerType: "OPERATOR", OwnerID: "action-" + base, State: "FILLED", SubmittedAt: 1_000, FinishedAt: 1_100, Version: 1,
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}))
+}
+
+// 只兑受管的零头（MooX 成交过留下的）：用户自持、MooX 从没碰过的币不动；当前目标、排除资产、BNB、大额的也不动。
+func TestDustConvertsOnlyManagedNonTargetNonExcludedBelowFiveUSDT(t *testing.T) {
 	btcValue := func(usdt string) shared.Decimal { return shared.MustDecimal(usdt).Div(shared.MustDecimal("50000")) }
 	f := dustFixture(t, `{"dust_convert_enabled":true,"margin_coins":{"ETH":"100"},"stablecoin_margin":{"USDT":"0.5","USDC":"0.5"}}`, []exchange.DustAsset{
-		{Asset: "DOGE", Quantity: shared.MustDecimal("10"), ValueBTC: btcValue("2")},     // 低于 5U，非目标：兑
-		{Asset: "SHIB", Quantity: shared.MustDecimal("10"), ValueBTC: btcValue("4.99")},  // 兑
+		{Asset: "DOGE", Quantity: shared.MustDecimal("10"), ValueBTC: btcValue("2")},     // 受管、低于 5U、非目标：兑
+		{Asset: "FDUSD", Quantity: shared.MustDecimal("3"), ValueBTC: btcValue("3")},     // 没交易过：不兑
+		{Asset: "SHIB", Quantity: shared.MustDecimal("10"), ValueBTC: btcValue("4.99")},  // 用户自持、MooX 从没碰过：不兑
 		{Asset: "LTC", Quantity: shared.MustDecimal("1"), ValueBTC: btcValue("5")},       // 恰好 5U：不兑
 		{Asset: "XRP", Quantity: shared.MustDecimal("1"), ValueBTC: btcValue("30")},      // 太大：不兑
 		{Asset: "BTC", Quantity: shared.MustDecimal("0.00001"), ValueBTC: btcValue("1")}, // 在目标里：不兑
@@ -286,6 +306,7 @@ func TestDustConvertsOnlyNonTargetNonExcludedBelowFiveUSDT(t *testing.T) {
 		{Asset: "USDC", Quantity: shared.MustDecimal("2"), ValueBTC: btcValue("2")},      // 稳定币保证金（排除）：不兑
 		{Asset: "BNB", Quantity: shared.MustDecimal("0.001"), ValueBTC: btcValue("1")},   // BNB 自己：不兑
 	})
+	f.markManaged("DOGE", "LTC", "XRP", "ETH", "USDC")
 	_, accepted, err := f.store.AcceptLogicalAccountTarget(context.Background(), store.LogicalAccountTargetRecord{
 		SpaceID: "space-1", LogicalAccountID: "logical-1", TargetID: "t1", InstanceID: "i1", SessionID: "s1", StrategyID: "st",
 		BarEndTime: 2_000, EffectiveAt: 2_000, ValidUntil: time.Now().Add(time.Hour).UnixMilli(),
@@ -295,7 +316,7 @@ func TestDustConvertsOnlyNonTargetNonExcludedBelowFiveUSDT(t *testing.T) {
 	require.True(t, accepted)
 
 	require.NoError(t, f.run())
-	require.Equal(t, [][]string{{"DOGE", "SHIB"}}, f.adapter.converts)
+	require.Equal(t, [][]string{{"DOGE"}}, f.adapter.converts)
 	account, err := f.store.GetTradingAccountByID(context.Background(), "account-a")
 	require.NoError(t, err)
 	require.Equal(t, testNow.UnixMilli(), account.LastDustConvertAt, "兑换时间记在账户的 c_last_dust_convert_at 列")
@@ -305,6 +326,7 @@ func TestDustConvertWaitsForTheConfiguredInterval(t *testing.T) {
 	f := dustFixture(t, `{"dust_convert_enabled":true,"dust_convert_interval_days":7}`, []exchange.DustAsset{
 		{Asset: "DOGE", Quantity: shared.MustDecimal("10"), ValueBTC: shared.MustDecimal("0.00001")},
 	})
+	f.markManaged("DOGE")
 	require.NoError(t, f.run())
 	require.Len(t, f.adapter.converts, 1)
 	f.now = testNow.Add(6 * 24 * time.Hour)
@@ -365,15 +387,48 @@ func TestStablecoinSellsTheExcessWithAnIOCOrder(t *testing.T) {
 	require.Equal(t, "200", f.orders.specs[0].Quantity.String())
 }
 
-func TestStablecoinSellsBeforeItBuys(t *testing.T) {
+// 每轮只做一个方向：先卖多出来的；买入留到下一轮（卖单成交后余额才更新），不算失败。
+func TestStablecoinRebalancesOneDirectionPerRound(t *testing.T) {
 	// 三种稳定币：USDT 目标 40%、USDC 30%、FDUSD 30%。USDC 持有过多、FDUSD 不足。
 	f := newFixture(t, `{"stablecoin_margin":{"USDT":"0.4","USDC":"0.3","FDUSD":"0.3"}}`, []store.AssetBalance{balance("USDT", "400"), balance("USDC", "500"), balance("FDUSD", "100")})
-	require.NoError(t, f.run())
-	require.Len(t, f.orders.specs, 2)
+	require.NoError(t, f.run(), "买入留到下一轮，这一轮不算失败")
+	require.Len(t, f.orders.specs, 1)
 	require.Equal(t, "USDC-USDT-SPOT", f.orders.specs[0].InstrumentID)
-	require.Equal(t, exchange.SideSell, f.orders.specs[0].Side, "先卖多出来的")
-	require.Equal(t, "FDUSD-USDT-SPOT", f.orders.specs[1].InstrumentID)
-	require.Equal(t, exchange.SideBuy, f.orders.specs[1].Side)
+	require.Equal(t, exchange.SideSell, f.orders.specs[0].Side)
+
+	// 卖单成交、余额更新后的下一轮：买入 FDUSD。
+	f.orders.specs = nil
+	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
+		account, err := tx.GetTradingAccount("space-1", "account-a")
+		if err != nil {
+			return err
+		}
+		account.Snapshot.Balances = []store.AssetBalance{balance("USDT", "600"), balance("USDC", "300"), balance("FDUSD", "100")}
+		return tx.UpdateTradingAccountSync("space-1", "account-a", store.TradingAccountSyncState{
+			Ready: true, Snapshot: account.Snapshot, SnapshotSourceTime: testNow.UnixMilli(), LastSyncAt: testNow.UnixMilli(),
+		})
+	}))
+	require.NoError(t, f.run())
+	require.Len(t, f.orders.specs, 1)
+	require.Equal(t, "FDUSD-USDT-SPOT", f.orders.specs[0].InstrumentID)
+	require.Equal(t, exchange.SideBuy, f.orders.specs[0].Side)
+}
+
+// BNB 补买单刚下出时，同一轮的稳定币调平先让路。
+func TestStablecoinRebalanceYieldsToABNBTopUpInTheSameRound(t *testing.T) {
+	f := newFixture(t, `{"bnb_reserve_amount":"200","stablecoin_margin":{"USDT":"0.6","USDC":"0.4"}}`, []store.AssetBalance{balance("USDT", "800"), balance("USDC", "200")})
+	require.NoError(t, f.run())
+	require.Len(t, f.orders.specs, 1)
+	require.Equal(t, "BNB-USDT-SPOT", f.orders.specs[0].InstrumentID)
+}
+
+// BNB 抵扣开关的查询和设置在组合锁外：锁被占着（例如收敛正占着它）时开关照常确认。
+func TestBNBDiscountDoesNotWaitForTheLogicalAccountLock(t *testing.T) {
+	f := newFixture(t, `{"bnb_discount":true}`, []store.AssetBalance{balance("USDT", "1000")})
+	unlock := f.store.LockLogicalAccount("space-1", "logical-1")
+	defer unlock()
+	require.NoError(t, f.run())
+	require.Equal(t, []bool{true}, f.adapter.setCalls)
 }
 
 func TestStablecoinCancelsLastRoundsUnfilledBuyBeforeRecalculating(t *testing.T) {

@@ -19,7 +19,7 @@ import (
 // 多稳定币保证金调平（币安统一账户）。
 //   - 偏离的定义：各稳定币价值占稳定币总价值的实际比例与目标比例的绝对差，任何一个超过 5 个百分点就调平，否则不动；
 //   - 买入（要增加的稳定币）用买一价限价单，到下一次检查还没成交就撤掉；卖出（多出来的稳定币）用 IOC；都在稳定币对 USDT 的现货标的上下单；
-//   - 先卖后买：卖出多出来的稳定币换回 USDT，买入用的 USDT 才够；没成交的缺口下一次检查再补。
+//   - 每轮只做一个方向：先卖多出来的换回 USDT，买入留到下一轮（卖单成交后余额才更新）；没成交的缺口下一次检查再补。
 
 // stableOrderMaxAge 是稳定币买单最多挂多久：每小时检查一次，留 5 分钟余量，免得整点检查时刚好差几秒没撤。
 const stableOrderMaxAge = 55 * time.Minute
@@ -88,12 +88,28 @@ func (s *Service) rebalanceStablecoins(
 		}
 		adjustments = append(adjustments, adjustment{holding: holding, delta: total.Mul(settings.StablecoinTargets[holding.asset]).Sub(holding.value)})
 	}
-	// 先卖后买。
+	// 每轮只做一个方向：先卖。卖单成交后账户的余额要等同步才更新，同一轮的买单还按开始时的快照算，
+	// 会因为资金不足被拒；买入留到下一轮（下一次检查，或卖单成交触发的账户就绪唤醒），不算失败。
 	sort.SliceStable(adjustments, func(i, j int) bool { return adjustments[i].delta.Cmp(adjustments[j].delta) < 0 })
 	var placeErrors []error
+	soldThisRound := false
 	for _, item := range adjustments {
-		if err := s.adjustStablecoin(ctx, logical, account, adapter, item.holding, item.delta); err != nil {
-			placeErrors = append(placeErrors, fmt.Errorf("%s：%w", item.holding.asset, err))
+		if item.delta.IsNegative() {
+			placed, err := s.adjustStablecoin(ctx, logical, account, adapter, item.holding, item.delta)
+			soldThisRound = soldThisRound || placed
+			if err != nil {
+				placeErrors = append(placeErrors, fmt.Errorf("%s：%w", item.holding.asset, err))
+			}
+		}
+	}
+	if soldThisRound || len(placeErrors) > 0 {
+		return errors.Join(placeErrors...)
+	}
+	for _, item := range adjustments {
+		if !item.delta.IsNegative() {
+			if _, err := s.adjustStablecoin(ctx, logical, account, adapter, item.holding, item.delta); err != nil {
+				placeErrors = append(placeErrors, fmt.Errorf("%s：%w", item.holding.asset, err))
+			}
 		}
 	}
 	return errors.Join(placeErrors...)
@@ -159,24 +175,24 @@ func (s *Service) adjustStablecoin(
 	adapter execution.ExecutionAdapter,
 	holding stableHolding,
 	delta shared.Decimal,
-) error {
+) (bool, error) {
 	step, minimum, minNotional, err := quantityRules(holding.instrument)
 	if err != nil {
-		return err
+		return false, err
 	}
 	quantity := shared.FloorToStep(delta.Abs().Div(holding.price), step)
 	if delta.IsNegative() && quantity.Cmp(holding.quantity) > 0 {
 		quantity = shared.FloorToStep(holding.quantity, step)
 	}
 	if quantity.Cmp(minimum) < 0 || quantity.Mul(holding.price).Cmp(minNotional) < 0 {
-		return nil
+		return false, nil
 	}
 	quote, err := adapter.GetQuote(ctx, exchange.NewSymbolKey(holding.instrument.MarketType, holding.instrument.ExchangeSymbol))
 	if err != nil {
-		return err
+		return false, err
 	}
 	if quote.Bid.Cmp(shared.Zero()) <= 0 || quote.SourceTime.IsZero() || s.now().Sub(quote.SourceTime) > maxQuoteAge {
-		return fmt.Errorf("买一价不可用或已过期")
+		return false, fmt.Errorf("买一价不可用或已过期")
 	}
 	bid := quote.Bid
 	side, policy := exchange.SideBuy, exchange.FillPolicyGTC
@@ -185,5 +201,8 @@ func (s *Service) adjustStablecoin(
 		side, policy = exchange.SideSell, exchange.FillPolicyIOC
 	}
 	log.Infof("执行账户 %s 稳定币调平：%s %s %s @ %s", account.TradingAccountID, side, holding.instrument.InstrumentID, quantity.String(), bid.String())
-	return s.placeSystemOrder(ctx, logical, account, holding.instrument, ownerStableRebalance, side, quantity, holding.price, quote.SourceTime, &bid, policy)
+	if err := s.placeSystemOrder(ctx, logical, account, holding.instrument, ownerStableRebalance, side, quantity, holding.price, quote.SourceTime, &bid, policy); err != nil {
+		return false, err
+	}
+	return true, nil
 }

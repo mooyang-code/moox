@@ -126,11 +126,19 @@ func (s *Service) RunLogicalAccount(ctx context.Context, logical store.LogicalAc
 	if !settings.BNBDiscount && !settings.BNBReserveEnabled() && !settings.DustConvert && len(settings.StablecoinTargets) < 2 {
 		return nil
 	}
+	var runErrors []error
+	// BNB 抵扣开关只查询和设置交易所上的开关，不碰订单和资产，放在组合锁外：交易所慢的时候不挡收敛。
+	if settings.BNBDiscount {
+		runErrors = append(runErrors, s.runDiscount(ctx, logical)...)
+	}
+	if !settings.BNBReserveEnabled() && !settings.DustConvert && len(settings.StablecoinTargets) < 2 {
+		return errors.Join(runErrors...)
+	}
 	lockCtx, cancel := context.WithTimeout(ctx, lockWait)
 	defer cancel()
 	unlock, err := s.Store.LockLogicalAccountContext(lockCtx, logical.SpaceID, logical.LogicalAccountID)
 	if err != nil {
-		return nil
+		return errors.Join(runErrors...)
 	}
 	defer unlock()
 	// 锁里重新读：等锁期间设置、自动执行状态可能变了。
@@ -145,8 +153,6 @@ func (s *Service) RunLogicalAccount(ctx context.Context, logical store.LogicalAc
 	if err != nil {
 		return err
 	}
-	var runErrors []error
-	// 没有目标时（组合还没收到策略目标）按没有目标处理。
 	tradingAllowed, err := s.tradingAllowed(ctx, logical)
 	if err != nil {
 		return err
@@ -166,17 +172,15 @@ func (s *Service) RunLogicalAccount(ctx context.Context, logical store.LogicalAc
 			runErrors = append(runErrors, err)
 			continue
 		}
-		if settings.BNBDiscount {
-			if err := s.ensureBNBDiscount(ctx, account, adapter); err != nil {
-				runErrors = append(runErrors, fmt.Errorf("账户 %s 开启 BNB 抵扣：%w", account.TradingAccountID, err))
-			}
-		}
 		// 补买、兑换、调平会下单或动资产：组合暂停、正在清仓或减仓时不做。
 		if !tradingAllowed {
 			continue
 		}
+		bnbBusy := false
 		if settings.BNBReserveEnabled() {
-			if err := s.topUpBNB(ctx, logical, settings, account, adapter); err != nil {
+			busy, err := s.topUpBNB(ctx, logical, settings, account, adapter)
+			bnbBusy = busy
+			if err != nil {
 				runErrors = append(runErrors, fmt.Errorf("账户 %s 补买 BNB：%w", account.TradingAccountID, err))
 			}
 		}
@@ -185,13 +189,42 @@ func (s *Service) RunLogicalAccount(ctx context.Context, logical store.LogicalAc
 				runErrors = append(runErrors, fmt.Errorf("账户 %s 小额兑换 BNB：%w", account.TradingAccountID, err))
 			}
 		}
-		if len(settings.StablecoinTargets) > 1 {
+		// BNB 补买单刚下出（或还没结束）时稳定币调平先让路：补买要花 USDT，余额要等同步才更新。
+		if len(settings.StablecoinTargets) > 1 && !bnbBusy {
 			if err := s.rebalanceStablecoins(ctx, logical, settings, account, adapter); err != nil {
 				runErrors = append(runErrors, fmt.Errorf("账户 %s 稳定币调平：%w", account.TradingAccountID, err))
 			}
 		}
 	}
 	return errors.Join(runErrors...)
+}
+
+// runDiscount 确认组合里每个币安生产环境成员都打开了 BNB 抵扣（只开不关）。
+func (s *Service) runDiscount(ctx context.Context, logical store.LogicalAccountRecord) []error {
+	members, err := s.Store.ListLogicalAccountMembers(ctx, logical.SpaceID, logical.LogicalAccountID, false)
+	if err != nil {
+		return []error{err}
+	}
+	var errs []error
+	for _, member := range members {
+		account, err := s.Store.GetTradingAccountByID(ctx, member.TradingAccountID)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if !account.FundMaintenanceApplies() || account.Status != string(exchange.AccountStatusEnabled) || !account.Ready {
+			continue
+		}
+		adapter, err := s.Adapters.Adapter(account.TradingAccountID)
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if err := s.ensureBNBDiscount(ctx, account, adapter); err != nil {
+			errs = append(errs, fmt.Errorf("账户 %s 开启 BNB 抵扣：%w", account.TradingAccountID, err))
+		}
+	}
+	return errs
 }
 
 // tradingAllowed 判断能不能做会下单的维护：自动执行没暂停，且没有运行中的清仓、减仓、下架清仓。

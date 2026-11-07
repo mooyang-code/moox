@@ -14,9 +14,10 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// convertDust 每隔 D 天把账户里的小额零头兑成 BNB。只兑同时满足下面三条的资产：
-//   - 不在当前目标里（也不是 MooX 交易过的受管资产）；
-//   - 不是排除资产（BNB 保留、稳定币保证金、保证金币、套利底仓）；
+// convertDust 每隔 D 天把账户里 MooX 交易过留下的小额零头兑成 BNB。只兑同时满足下面几条的资产：
+//   - 是受管资产（MooX 的策略或人工单成交过的币）：用户自己放在账户里、MooX 从没碰过的币不动，
+//     和“用户自持的币不受管、不会被卖”一致——这是对计划“非目标、非排除”的有意收窄；
+//   - 不在当前目标里，也不是排除资产（BNB 保留、稳定币保证金、保证金币、套利底仓）；
 //   - 价值低于 5 个结算币。
 //
 // 上次兑换时间记在执行账户的 c_last_dust_convert_at 列里（不是检测结果）；检查过但没有要兑的零头也算一次。
@@ -39,7 +40,7 @@ func (s *Service) convertDust(
 	if err != nil {
 		return err
 	}
-	protected, err := s.protectedAssets(ctx, logical, settings, account)
+	eligible, err := s.convertibleAssets(ctx, logical, settings, account)
 	if err != nil {
 		return err
 	}
@@ -61,7 +62,7 @@ func (s *Service) convertDust(
 			if asset == fundsettings.BNBAsset || strings.EqualFold(asset, account.SettlementAsset) {
 				continue
 			}
-			if _, isProtected := protected[asset]; isProtected {
+			if _, isEligible := eligible[asset]; !isEligible {
 				continue
 			}
 			if item.ValueBTC.Mul(btcPrice).Cmp(dustValueLimit) >= 0 {
@@ -82,21 +83,26 @@ func (s *Service) convertDust(
 	})
 }
 
-// protectedAssets 返回不能兑换的资产：当前目标里的基础资产、受管资产和排除资产（排除资产用 settings 判断）。
-func (s *Service) protectedAssets(
+// convertibleAssets 返回可以兑换的资产：受管资产（ManagedAssets 已经减掉了排除资产）去掉当前目标里的基础资产、
+// 结算币和 BNB 自己。
+func (s *Service) convertibleAssets(
 	ctx context.Context,
 	logical store.LogicalAccountRecord,
 	settings fundsettings.Settings,
 	account store.TradingAccountRecord,
 ) (map[string]struct{}, error) {
-	protected := make(map[string]struct{})
 	managed, err := s.Store.ManagedAssets(ctx, account.SpaceID, account.TradingAccountID)
 	if err != nil {
 		return nil, err
 	}
+	eligible := make(map[string]struct{}, len(managed))
 	for asset := range managed {
-		protected[strings.ToUpper(asset)] = struct{}{}
+		if !settings.ExcludedFromManaged(asset) {
+			eligible[strings.ToUpper(asset)] = struct{}{}
+		}
 	}
+	delete(eligible, strings.ToUpper(account.SettlementAsset))
+	delete(eligible, fundsettings.BNBAsset)
 	instruments, err := s.Store.ListInstrumentsForAccount(ctx, account.TradingAccountID)
 	if err != nil {
 		return nil, err
@@ -104,9 +110,6 @@ func (s *Service) protectedAssets(
 	base := make(map[string]string, len(instruments))
 	for _, instrument := range instruments {
 		base[instrument.InstrumentID] = strings.ToUpper(instrument.BaseAsset)
-		if settings.ExcludedFromManaged(instrument.BaseAsset) {
-			protected[strings.ToUpper(instrument.BaseAsset)] = struct{}{}
-		}
 	}
 	target, err := s.Store.GetLogicalAccountTarget(ctx, logical.SpaceID, logical.LogicalAccountID)
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) && !errors.Is(err, store.ErrTargetExpired) {
@@ -114,14 +117,8 @@ func (s *Service) protectedAssets(
 	}
 	for _, item := range target.Targets {
 		if asset, known := base[item.InstrumentID]; known {
-			protected[asset] = struct{}{}
+			delete(eligible, asset)
 		}
 	}
-	for _, asset := range append(append([]string(nil), settings.StablecoinMargin...), settings.ArbitrageBaseAssets...) {
-		protected[strings.ToUpper(asset)] = struct{}{}
-	}
-	for asset := range settings.MarginCoins {
-		protected[strings.ToUpper(asset)] = struct{}{}
-	}
-	return protected, nil
+	return eligible, nil
 }

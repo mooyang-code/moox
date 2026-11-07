@@ -344,3 +344,30 @@ func TestRestingFallbackContinuesTheAttemptCount(t *testing.T) {
 	require.Equal(t, 1, f.orders.specs[0].Attempt)
 	require.Equal(t, exchange.FillPolicyIOC, f.orders.specs[0].FillPolicy)
 }
+
+// 组合上挂着系统单时，收敛的快路径（只在等本目标子单时不加载成员、不逐个标的计算）照常生效。
+func TestSystemOrdersDoNotDefeatTheWaitingFastPath(t *testing.T) {
+	f := swapPolicyFixture(t, restingSettings)
+	f.now = time.Now().UTC()
+	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "10"}})
+	target, err := f.store.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	f.order(t, store.OrderRecord{
+		SpaceID: "space-1", OrderID: "child-open", TradingAccountID: "account-a", LogicalAccountID: "logical-1", RunnerID: "runner-1",
+		ClientOrderID: "child-open", Exchange: "BINANCE", MarketType: "SWAP", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
+		OrderType: "MARKET", Side: "BUY", Quantity: "5", ReferencePrice: "100",
+		OwnerType: "TARGET", OwnerID: target.TargetID, State: "OPEN", SubmittedAt: f.now.UnixMilli(), Version: 1,
+	})
+	waiting, err := f.executor().waitingOnChildren(context.Background(), "space-1", "logical-1", target)
+	require.NoError(t, err)
+	require.True(t, waiting)
+	f.order(t, store.OrderRecord{
+		SpaceID: "space-1", OrderID: "system-1", TradingAccountID: "account-a", LogicalAccountID: "logical-1",
+		ClientOrderID: "system-1", Exchange: "BINANCE", MarketType: "SWAP", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
+		OrderType: "LIMIT", TimeInForce: "GTC", Side: "BUY", Quantity: "1", LimitPrice: strPtr("90"), ReferencePrice: "100",
+		OwnerType: "SYSTEM", OwnerID: "stable-rebalance", State: "OPEN", SubmittedAt: f.now.UnixMilli(), Version: 1,
+	})
+	waiting, err = f.executor().waitingOnChildren(context.Background(), "space-1", "logical-1", target)
+	require.NoError(t, err)
+	require.True(t, waiting, "挂着系统单，快路径照常")
+}
