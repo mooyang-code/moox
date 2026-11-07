@@ -119,6 +119,12 @@ func (tx *Tx) refreshClosedPaperBalances(account TradingAccountRecord) error {
 		snapshot.ExchangeUpdatedAt = valuedAt
 		snapshot.Equity = equity.String()
 		snapshot.AvailableFunds = equity.Sub(margin).String()
+		// 单一资金池：结算币的可用余额要扣掉合约占用的保证金和浮亏，与模拟盘适配器的快照一致。
+		for i := range snapshot.Balances {
+			if snapshot.Balances[i].Asset == account.SettlementAsset {
+				snapshot.Balances[i].Available = cash.Add(unrealized).Sub(margin).String()
+			}
+		}
 	}
 	encoded, err := encodeSnapshot(snapshot)
 	if err != nil {

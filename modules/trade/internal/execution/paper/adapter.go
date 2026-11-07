@@ -142,8 +142,17 @@ func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnaps
 	if account.HasPositionMarket() {
 		available = settlement.Add(unrealizedPnL).Sub(usedMargin).Sub(locked[account.SettlementAsset])
 	}
+	paperRows := paperBalances(balances, locked)
+	if account.HasPositionMarket() {
+		// 单一资金池里结算币的可用余额要扣掉合约占用的保证金和浮亏，现货买单不能按全额现金下单。
+		for i := range paperRows {
+			if paperRows[i].Asset == account.SettlementAsset {
+				paperRows[i].Available = available
+			}
+		}
+	}
 	return exchange.AccountSnapshot{
-		Balances: paperBalances(balances, locked), Equity: equity, AvailableFunds: available, UsedMargin: usedMargin,
+		Balances: paperRows, Equity: equity, AvailableFunds: available, UsedMargin: usedMargin,
 		UnrealizedPnL: unrealizedPnL, ExchangeUpdatedAt: a.now(), Present: exchange.AccountSnapshotPresence{Balances: true, Equity: true, AvailableFunds: true, UsedMargin: true, UnrealizedPnL: true},
 	}, nil
 }

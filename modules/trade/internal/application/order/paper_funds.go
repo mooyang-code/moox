@@ -11,10 +11,19 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 )
 
+// paperUsesMarginPool 报告订单预留的资金是否和合约保证金共用一个资金池：模拟盘、账户开通了合约市场、
+// 预留的是结算币。这时无论订单是现货还是合约，可用资金都要扣掉合约已占用的保证金和浮亏
+// （真实统一账户同样会因保证金不足拒单），不能让现货买单按全额现金下单。
+func paperUsesMarginPool(validation Validation) bool {
+	return validation.Account.ExecutionMode == exchange.ExecutionModePaper &&
+		validation.Account.HasLeverageMarket() &&
+		validation.ReservedAsset == validation.Account.SettlementAsset
+}
+
 // The caller holds the account lock. Market valuation happens outside the
 // SQLite transaction; cash and active reservations are read inside the write.
 func (s *Service) paperMarginAdjustment(ctx context.Context, validation Validation) (shared.Decimal, error) {
-	if validation.Account.ExecutionMode != exchange.ExecutionModePaper || !exchange.RuleFor(validation.Instrument.MarketType).UsesMargin {
+	if !paperUsesMarginPool(validation) {
 		return shared.Zero(), nil
 	}
 	if s.Adapters == nil {
