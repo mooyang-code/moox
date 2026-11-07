@@ -52,3 +52,30 @@ func TestViewSubjectTrackerBudgetCountsSeries(t *testing.T) {
 	tracker.retain(map[ViewKey]struct{}{})
 	require.Equal(t, 0, tracker.observed)
 }
+
+// 超过序列上限：只在第一次返回 ErrViewSeriesLimit，之后的新序列静默丢弃，已跟踪的序列照常更新；retain 释放额度后再超限会重新报告。
+func TestViewSubjectTrackerLimitIsReportedOnce(t *testing.T) {
+	tracker := newViewSubjectTracker()
+	require.Equal(t, maxViewSeriesObservations, tracker.limit)
+	tracker.limit = 2
+	at := time.Date(2026, 9, 8, 10, 0, 0, 0, time.UTC)
+	observe := func(view, subject, tag string, dataTime time.Time) error {
+		return tracker.observe(ViewDatasetObservation{SpaceID: "s", ViewID: view, DatasetID: "d", SubjectID: subject, Frequency: "1m", SeriesTag: tag, DataTime: dataTime})
+	}
+	require.NoError(t, observe("v1", "A", "spot", at))
+	require.NoError(t, observe("v1", "A", "swap", at))
+	require.ErrorIs(t, observe("v2", "B", "spot", at), ErrViewSeriesLimit)
+	for i := 0; i < 5; i++ {
+		require.NoError(t, observe("v2", "C", "spot", at), "已报告过，之后的新序列静默丢弃")
+	}
+	require.NoError(t, observe("v1", "A", "spot", at.Add(time.Minute)), "已跟踪的序列照常更新")
+	require.Equal(t, 2, tracker.observed)
+	require.Equal(t, at.Add(time.Minute).Unix(), tracker.scopes[viewSubjectScope{spaceID: "s", viewID: "v1", datasetID: "d", freq: "1m"}].series[viewSeries{subjectID: "A", seriesTag: "spot"}])
+
+	// v1 不再活跃：释放额度，v2 的新序列可以跟踪，再次超限时重新报告一次。
+	tracker.retain(map[ViewKey]struct{}{{SpaceID: "s", ViewID: "v2"}: {}})
+	require.NoError(t, observe("v2", "B", "spot", at))
+	require.NoError(t, observe("v2", "B", "swap", at))
+	require.ErrorIs(t, observe("v2", "C", "spot", at), ErrViewSeriesLimit)
+	require.NoError(t, observe("v2", "D", "spot", at))
+}

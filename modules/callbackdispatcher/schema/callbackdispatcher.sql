@@ -49,7 +49,8 @@ CREATE INDEX IF NOT EXISTS idx_t_event_receipts_created ON t_event_receipts (c_c
 -- ************ 执行记录 ************
 -- c_dedupe_key 只用于系统动作：规则加“交易所:市场:代码”，同一标的未结束的记录合并成一条。
 -- c_next_run_at 是工作线程下一次该处理这条记录的时间；已结束的记录为 0。
--- c_attempts 是累计尝试次数（编号用），c_failures 是自上次开始或重新执行以来的连续失败次数（决定重试间隔）。
+-- c_attempts 是累计尝试次数（编号用），c_failures 是自上次开始或重新执行以来的连续失败次数（通知用它决定重试间隔）。
+-- 系统动作的 c_failures 是连续暂时失败（调用 Trade 出错等）的次数，c_first_failed_at 是其中第一次的时间，一次推进没有出错就清零。
 CREATE TABLE IF NOT EXISTS t_event_executions (
     c_execution_id TEXT NOT NULL PRIMARY KEY,
     c_rule_id TEXT NOT NULL,
@@ -128,7 +129,11 @@ CREATE TABLE IF NOT EXISTS t_delist_actions (
     -- 只用于禁止买入那一行：演练（PAPER_ONLY）核对已有结论（SUCCEEDED 或 FAILED，说明在 c_error）而解除禁止没做成时记下结论，
     -- 之后只重试解除，结论不会因为名单里已经没有这个标的（解除其实已在 Trade 上生效、响应丢了）而丢掉；解除成功后清空。
     c_release_verdict TEXT NOT NULL DEFAULT '',
+    -- 只用于禁止买入那一行：演练结束时本记录自己解除名单（解除之前先置 1）。之后记录被重新打开（合并了新的登记、重新执行），
+    -- 名单里没有这一项不是手工解除，要清掉上一次演练的各轮步骤、重新写名单、按新时间线走；重新写名单或看到名单里还有这一项时清 0。
+    c_self_released INTEGER NOT NULL DEFAULT 0,
     -- 平仓各行和汇总行：这一轮是按哪个下架时间（Unix 毫秒）规划的。改期后这一轮没成功就按新时间重开（换新操作号）。
+    -- 禁止买入那一行：记下解除待重试的结论时，结论对应的下架时间；对不上说明之后合并进了新的登记，结论作废。
     c_planned_delist_at INTEGER NOT NULL DEFAULT 0,
     c_updated_at INTEGER NOT NULL,
     PRIMARY KEY (c_execution_id, c_round, c_kind, c_space_id, c_logical_account_id),
@@ -136,6 +141,7 @@ CREATE TABLE IF NOT EXISTS t_delist_actions (
         REFERENCES t_event_executions (c_execution_id)
         ON DELETE CASCADE,
     CHECK (c_release_verdict IN ('', 'SUCCEEDED', 'FAILED')),
+    CHECK (c_self_released IN (0, 1)),
     CHECK (c_kind IN ('BLOCK', 'FLATTEN', 'VERIFY')),
     CHECK (c_status IN ('PENDING', 'RUNNING', 'SUCCEEDED', 'FAILED', 'PARTIAL'))
 );

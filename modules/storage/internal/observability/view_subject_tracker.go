@@ -1,6 +1,7 @@
 package observability
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -11,9 +12,9 @@ import (
 )
 
 const (
-	// Bound the series (subject and series_tag) tracked per process so a
-	// malformed or runaway View cannot grow the tracker without limit.
-	maxViewSubjectObservations     = 20000
+	// maxViewSeriesObservations 是每个进程跟踪的序列（标的加 series_tag）上限，免得格式错误或失控的 View 让跟踪表无限增长。
+	// 按 2 万个标的估算：统一数据集每个标的有现货、永续两条序列，所以是 4 万条序列。
+	maxViewSeriesObservations      = 40000
 	maxViewDatasetMetricLabelBytes = 256
 	// ViewLaggingSubjectsReported caps the named lagging subjects per View;
 	// the count metric still covers all of them.
@@ -36,6 +37,9 @@ type ViewDatasetObservation struct {
 	SeriesTag string
 	DataTime  time.Time
 }
+
+// ErrViewSeriesLimit 表示跟踪的序列已达上限，新序列不再跟踪。
+var ErrViewSeriesLimit = errors.New("storage view series observation limit exceeded")
 
 type viewSubjectScope struct {
 	spaceID, viewID, datasetID, freq string
@@ -71,6 +75,11 @@ type viewSubjectTracker struct {
 	mu       sync.Mutex
 	scopes   map[viewSubjectScope]*viewSubjectState
 	observed int
+	// limit 是跟踪的序列上限，默认 maxViewSeriesObservations；测试可以调小。
+	limit int
+	// limitReported 表示这次超限已经返回过 ErrViewSeriesLimit：之后新序列静默丢弃，
+	// 调用方不会每次写入、每条序列都打一条日志；retain 释放额度回到上限以下后重新计。
+	limitReported bool
 
 	latestDesc         *prometheus.Desc
 	trackedSinceDesc   *prometheus.Desc
@@ -83,6 +92,7 @@ func newViewSubjectTracker() *viewSubjectTracker {
 	labels := []string{"space_id", "view_id", "dataset_id", "freq"}
 	return &viewSubjectTracker{
 		scopes: make(map[viewSubjectScope]*viewSubjectState),
+		limit:  maxViewSeriesObservations,
 		latestDesc: prometheus.NewDesc("moox_storage_view_output_latest_data_time_seconds",
 			"Latest output bar committed to an active View by any subject.", labels, nil),
 		trackedSinceDesc: prometheus.NewDesc("moox_storage_view_output_tracked_since_data_time_seconds",
@@ -112,8 +122,12 @@ func (t *viewSubjectTracker) observe(observation ViewDatasetObservation) error {
 	key := viewSeries{subjectID: subjectID, seriesTag: strings.TrimSpace(observation.SeriesTag)}
 	previous, known := state.series[key]
 	if !known {
-		if t.observed >= maxViewSubjectObservations {
-			return fmt.Errorf("storage view subject observation limit exceeded: %d", maxViewSubjectObservations)
+		if t.observed >= t.limit {
+			if t.limitReported {
+				return nil
+			}
+			t.limitReported = true
+			return fmt.Errorf("%w: 已跟踪 %d 条序列，之后的新序列不再跟踪（不再逐条报告）", ErrViewSeriesLimit, t.limit)
 		}
 		t.observed++
 		state.subjects[subjectID]++
@@ -138,6 +152,9 @@ func (t *viewSubjectTracker) retain(active map[ViewKey]struct{}) {
 		}
 		t.observed -= len(state.series)
 		delete(t.scopes, scope)
+	}
+	if t.observed < t.limit {
+		t.limitReported = false
 	}
 }
 

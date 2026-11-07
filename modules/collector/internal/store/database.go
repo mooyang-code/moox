@@ -209,6 +209,14 @@ func (s *Store) ApplySchema(sql string) error {
 // ErrSchemaNotUpgraded 表示已有的 Collector 库还停留在统一数据集之前的表结构。
 var ErrSchemaNotUpgraded = errors.New("collector 数据库表结构过旧")
 
+// 检查表结构用到的查询。
+const (
+	countTableColumnSQL        = `SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?`
+	absencePKHasSeriesTagSQL   = `SELECT COUNT(*) FROM pragma_table_info('t_collector_source_absences') WHERE name = 'c_series_tag' AND pk > 0`
+	chunkUniqueHasSeriesTagSQL = `SELECT COUNT(*) FROM pragma_index_list('t_collector_kline_backfill_chunks') AS idx
+JOIN pragma_index_info(idx.name) AS col WHERE idx."unique" = 1 AND col.name = 'c_series_tag'`
+)
+
 // verifySchemaUpgrade 检查新增的列与重建的表。ApplySchema 只执行 CREATE TABLE IF NOT EXISTS，旧库不会被补列，
 // 不检查的话服务照常启动，补采、合成、已确认缺失的读写却会逐个失败，只在日志里报错。
 func (s *Store) verifySchemaUpgrade() error {
@@ -221,7 +229,7 @@ func (s *Store) verifySchemaUpgrade() error {
 		{"t_collector_source_absences", "c_series_tag"},
 	} {
 		var count int64
-		if err := s.db.Raw(`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?`, column.table, column.name).Scan(&count).Error; err != nil {
+		if err := s.db.Raw(countTableColumnSQL, column.table, column.name).Scan(&count).Error; err != nil {
 			return fmt.Errorf("检查表结构 %s: %w", column.table, err)
 		}
 		if count == 0 {
@@ -231,15 +239,14 @@ func (s *Store) verifySchemaUpgrade() error {
 	if len(problems) == 0 {
 		// 两张表的主键、唯一键也要带 c_series_tag（只加列不够，要按迁移脚本重建）。
 		var absencePK int64
-		if err := s.db.Raw(`SELECT COUNT(*) FROM pragma_table_info('t_collector_source_absences') WHERE name = 'c_series_tag' AND pk > 0`).Scan(&absencePK).Error; err != nil {
+		if err := s.db.Raw(absencePKHasSeriesTagSQL).Scan(&absencePK).Error; err != nil {
 			return fmt.Errorf("检查表结构 t_collector_source_absences: %w", err)
 		}
 		if absencePK == 0 {
 			problems = append(problems, "t_collector_source_absences 的主键不含 c_series_tag")
 		}
 		var chunkUnique int64
-		if err := s.db.Raw(`SELECT COUNT(*) FROM pragma_index_list('t_collector_kline_backfill_chunks') AS idx
-			JOIN pragma_index_info(idx.name) AS col WHERE idx."unique" = 1 AND col.name = 'c_series_tag'`).Scan(&chunkUnique).Error; err != nil {
+		if err := s.db.Raw(chunkUniqueHasSeriesTagSQL).Scan(&chunkUnique).Error; err != nil {
 			return fmt.Errorf("检查表结构 t_collector_kline_backfill_chunks: %w", err)
 		}
 		if chunkUnique == 0 {

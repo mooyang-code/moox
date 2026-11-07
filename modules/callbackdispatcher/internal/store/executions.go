@@ -2,8 +2,8 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
-	"sort"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -27,9 +27,11 @@ func (s *Store) InTx(ctx context.Context, fn func(*Tx) error) error {
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error { return fn(&Tx{db: tx}) })
 }
 
+const insertReceipt = `INSERT INTO t_event_receipts (c_event_id, c_rule_id, c_created_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING`
+
 // ClaimReceipt 记下“这条事件对这条规则已经处理”。返回 false 说明以前处理过，调用方直接跳过。
 func (t *Tx) ClaimReceipt(eventID, ruleID string, now int64) (bool, error) {
-	result := t.db.Exec(`INSERT INTO t_event_receipts (c_event_id, c_rule_id, c_created_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING`, eventID, ruleID, now)
+	result := t.db.Exec(insertReceipt, eventID, ruleID, now)
 	return result.RowsAffected == 1, result.Error
 }
 
@@ -65,50 +67,41 @@ func (s *Store) ClaimDue(ctx context.Context, now int64, limit int, systemAction
 	return s.ClaimDueLimited(ctx, now, limit, systemActions, 0, nil)
 }
 
-// ClaimDueLimited 与 ClaimDue 相同，但每条规则这一轮最多取 perRule 条（0 表示不限）；remaining 里列出的规则按它的剩余名额取
-// （0 就是这一轮不取）。在 SQL 里按规则限额，一条规则积压再多，也不会占满每一轮的领取名额，别的规则照常被领到。
-func (s *Store) ClaimDueLimited(ctx context.Context, now int64, limit int, systemActions []string, perRule int, remaining map[string]int) ([]Execution, error) {
-	var claimed []Execution
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		where := "e.c_status = ? AND e.c_next_run_at > 0 AND e.c_next_run_at <= ? AND "
-		args := []any{StatusPending, now}
-		if len(systemActions) == 0 {
-			where += "e.c_action_type = ?"
-			args = append(args, ActionNotifyURL)
-		} else {
-			where += "(e.c_action_type = ? OR r.c_system_action IN ?)"
-			args = append(args, ActionNotifyURL, systemActions)
-		}
-		outer := ""
-		if perRule > 0 {
-			outer = " WHERE rn <= CASE c_rule_id"
-			var ruleIDs []string
-			for rule := range remaining {
-				ruleIDs = append(ruleIDs, rule)
-			}
-			sort.Strings(ruleIDs)
-			var caseArgs []any
-			for _, rule := range ruleIDs {
-				outer += " WHEN ? THEN ?"
-				caseArgs = append(caseArgs, rule, remaining[rule])
-			}
-			if len(ruleIDs) == 0 {
-				outer = " WHERE rn <= ?"
-			} else {
-				outer += " ELSE ? END"
-			}
-			caseArgs = append(caseArgs, perRule)
-			args = append(args, caseArgs...)
-		}
-		query := `SELECT * FROM (
+// claimDueLimited 取到期的待处理记录：通知类全取，系统动作只取已注册处理器的（参数是 JSON 数组）；
+// 每条规则按到期先后编号，perRule 大于 0 时每条规则最多取它的剩余名额（参数是“规则 → 名额”的 JSON 对象，没列出的规则取 perRule）。
+const claimDueLimited = `SELECT * FROM (
     SELECT e.*, ROW_NUMBER() OVER (PARTITION BY e.c_rule_id ORDER BY e.c_next_run_at ASC, e.c_execution_id ASC) AS rn
     FROM t_event_executions AS e
     LEFT JOIN t_event_rules AS r ON r.c_rule_id = e.c_rule_id
-    WHERE ` + where + `
-)` + outer + ` ORDER BY c_next_run_at ASC, c_execution_id ASC LIMIT ?`
-		args = append(args, limit)
+    WHERE e.c_status = ? AND e.c_next_run_at > 0 AND e.c_next_run_at <= ?
+    AND (e.c_action_type = ? OR r.c_system_action IN (SELECT value FROM json_each(?)))
+)
+WHERE ? <= 0 OR rn <= COALESCE((SELECT value FROM json_each(?) WHERE key = c_rule_id), ?)
+ORDER BY c_next_run_at ASC, c_execution_id ASC
+LIMIT ?`
+
+// ClaimDueLimited 与 ClaimDue 相同，但每条规则这一轮最多取 perRule 条（0 表示不限）；remaining 里列出的规则按它的剩余名额取
+// （0 就是这一轮不取）。在 SQL 里按规则限额，一条规则积压再多，也不会占满每一轮的领取名额，别的规则照常被领到。
+func (s *Store) ClaimDueLimited(ctx context.Context, now int64, limit int, systemActions []string, perRule int, remaining map[string]int) ([]Execution, error) {
+	// nil 切片、nil map 编码出来是 null，显式给空数组、空对象。
+	if systemActions == nil {
+		systemActions = []string{}
+	}
+	if remaining == nil {
+		remaining = map[string]int{}
+	}
+	actionsJSON, err := json.Marshal(systemActions)
+	if err != nil {
+		return nil, err
+	}
+	remainingJSON, err := json.Marshal(remaining)
+	if err != nil {
+		return nil, err
+	}
+	var claimed []Execution
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var rows []executionRow
-		if err := tx.Raw(query, args...).Scan(&rows).Error; err != nil {
+		if err := tx.Raw(claimDueLimited, StatusPending, now, ActionNotifyURL, string(actionsJSON), perRule, string(remainingJSON), perRule, limit).Scan(&rows).Error; err != nil {
 			return err
 		}
 		for _, row := range rows {
@@ -246,7 +239,17 @@ func (s *Store) ListAttempts(ctx context.Context, executionID string) ([]Attempt
 	return attempts, nil
 }
 
+// resetDrillBlockStep 把演练（范围 PAPER_ONLY）记录的禁止买入那一行（轮次 0）重置为待写入：清掉“自己解除过”、解除待重试的结论和它对应的下架时间。
+const resetDrillBlockStep = `UPDATE t_delist_actions
+SET c_status = 'PENDING', c_self_released = 0, c_release_verdict = '', c_planned_delist_at = 0, c_updated_at = ?
+WHERE c_execution_id = ? AND c_round = 0 AND c_kind = 'BLOCK'
+AND EXISTS (
+    SELECT 1 FROM t_event_executions
+    WHERE c_execution_id = ? AND c_action_type = 'SYSTEM' AND json_extract(c_payload_json, '$.scope') = 'PAPER_ONLY'
+)`
+
 // RetryExecution 把失败的记录放回待处理，立即重新执行；已经确认过的标记清除。
+// 演练记录的禁止买入那一行同时重置（见 resetDrillBlockStep）。
 // 系统动作的记录要先确认同一标的没有别的未结束记录，否则返回 ErrConflict。
 func (s *Store) RetryExecution(ctx context.Context, executionID string, now int64) (Execution, error) {
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -270,7 +273,11 @@ func (s *Store) RetryExecution(ctx context.Context, executionID string, now int6
 			"c_status": StatusPending, "c_next_run_at": now, "c_failures": 0, "c_first_failed_at": 0, "c_acknowledged": false,
 			"c_finished_at": 0, "c_updated_at": now,
 		}
-		return tx.Model(&executionRow{}).Where("c_execution_id = ?", executionID).Updates(updates).Error
+		if err := tx.Model(&executionRow{}).Where("c_execution_id = ?", executionID).Updates(updates).Error; err != nil {
+			return err
+		}
+		// 演练记录结束时已自己解除了名单：重新执行要从写名单开始，不能被“名单里没有这个标的”当作手工解除而停下。
+		return tx.Exec(resetDrillBlockStep, now, executionID, executionID).Error
 	})
 	if err != nil {
 		return Execution{}, err
@@ -399,6 +406,27 @@ func (s *Store) ListUnfinishedWithFailedSteps(ctx context.Context) ([]Execution,
 	return executions, nil
 }
 
+// listLongTransientFailures 查还没结束、从 c_first_failed_at 起一直暂时失败（Trade 不可达等，每次推进都带着问题说明）的系统动作记录。
+const listLongTransientFailures = `SELECT * FROM t_event_executions
+WHERE c_action_type = 'SYSTEM' AND c_status IN ('PENDING', 'RUNNING')
+AND c_failures > 0 AND c_first_failed_at > 0 AND c_first_failed_at <= ?
+ORDER BY c_created_at ASC`
+
+// ListLongTransientFailures 返回第一次暂时失败早于 failedBefore（Unix 毫秒）、之后一直没有成功推进过的未结束系统动作记录，用于计算告警关注项。
+func (s *Store) ListLongTransientFailures(ctx context.Context, failedBefore int64) ([]Execution, error) {
+	var rows []executionRow
+	if err := s.db.WithContext(ctx).Raw(listLongTransientFailures, failedBefore).Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	executions := make([]Execution, 0, len(rows))
+	for _, row := range rows {
+		executions = append(executions, executionFromRow(row))
+	}
+	return executions, nil
+}
+
+const purgeReceipts = `DELETE FROM t_event_receipts WHERE c_created_at < ?`
+
 // PurgeBefore 删除 cutoff 之前创建且已结束的执行记录（连同尝试与下架步骤），以及 cutoff 之前的事件回执。
 // 善后还没做成的已取消记录不删：用户还要靠它再取消一次。
 func (s *Store) PurgeBefore(ctx context.Context, cutoff int64) error {
@@ -406,8 +434,16 @@ func (s *Store) PurgeBefore(ctx context.Context, cutoff int64) error {
 		if err := tx.Where("c_created_at < ? AND c_status IN ? AND c_cleanup_pending = 0", cutoff, []string{StatusSucceeded, StatusFailed, StatusCanceled}).Delete(&executionRow{}).Error; err != nil {
 			return err
 		}
-		return tx.Exec(`DELETE FROM t_event_receipts WHERE c_created_at < ?`, cutoff).Error
+		return tx.Exec(purgeReceipts, cutoff).Error
 	})
+}
+
+// deleteDelistStepsExceptBlock 删掉一条记录除禁止买入那一行（轮次 0）以外的全部下架步骤。
+const deleteDelistStepsExceptBlock = `DELETE FROM t_delist_actions WHERE c_execution_id = ? AND NOT (c_round = 0 AND c_kind = 'BLOCK')`
+
+// DeleteDelistStepsExceptBlock 删掉一条记录除禁止买入那一行以外的全部下架步骤：演练结束后被重新打开时，新的一次演练从头开始。
+func (s *Store) DeleteDelistStepsExceptBlock(ctx context.Context, executionID string) error {
+	return s.db.WithContext(ctx).Exec(deleteDelistStepsExceptBlock, executionID).Error
 }
 
 // UpsertDelistAction 写入或更新下架处理的一步。

@@ -394,6 +394,7 @@ func (s *Service) observeViewWatermark(indexID, datasetID string, rows []*pb.Row
 	if frequency != "" && !watermark.IsZero() {
 		s.metrics.ObserveViewOutputWatermark(spaceID, viewID, datasetID, frequency, watermark)
 	}
+	// 跟踪的序列达到上限时只在第一次返回错误，这里不会每次写入、每条序列都打日志。
 	for key, dataTime := range datasetWatermarks {
 		if err := s.metrics.ObserveViewDatasetOutput(observability.ViewDatasetObservation{
 			SpaceID: spaceID, ViewID: viewID, DatasetID: datasetID, SubjectID: key.subjectID,

@@ -33,6 +33,7 @@ func TestBusyDoesNotCountAsRetry(t *testing.T) {
 		outcome := h.step("e1", at)
 		require.Equal(t, store.StatusPending, outcome.Status)
 		require.Equal(t, at.Add(30*time.Second), outcome.NextRunAt)
+		require.Empty(t, outcome.Error, "忙是正常等待，不算这次推进的暂时失败")
 	}
 	row := h.steps("e1")[flattenKey(RoundFlatten, "crypto", "la-1")]
 	require.Equal(t, store.DelistPending, row.Status)

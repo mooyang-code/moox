@@ -301,7 +301,8 @@ func TestSystemExecutionWaitsUntilHandlerIsRegistered(t *testing.T) {
 	require.Empty(t, sender.requests, "系统动作不发通知")
 }
 
-func TestSystemStepErrorIsRescheduledWithoutCountingFailure(t *testing.T) {
+// 系统动作的 Step 出错：一分钟后再试，累计连续暂时失败次数，第一次失败的时间不随之后的失败变动；一次正常推进后清零。
+func TestSystemStepErrorIsRescheduledAndCountedAsTransientFailure(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
 	c := &clock{now: baseTime}
@@ -310,13 +311,86 @@ func TestSystemStepErrorIsRescheduledWithoutCountingFailure(t *testing.T) {
 	registry := action.NewRegistry()
 	registry.Register(store.SystemActionSellDelistedHoldings, handler)
 	worker := newWorker(t, s, &fakeSender{results: []delivery.Result{{}}}, registry, c)
+	for i := 1; i <= 2; i++ {
+		require.Equal(t, 1, worker.RunOnce(ctx))
+		got, err := s.GetExecution(ctx, seeded.ExecutionID)
+		require.NoError(t, err)
+		require.Equal(t, store.StatusPending, got.Status)
+		require.Equal(t, "Trade 不可达", got.LastError)
+		require.Equal(t, c.now.Add(time.Minute).UnixMilli(), got.NextRunAt)
+		require.Equal(t, i, got.Failures)
+		require.Equal(t, baseTime.UnixMilli(), got.FirstFailedAt)
+		c.now = c.now.Add(time.Minute)
+	}
+
+	handler.mu.Lock()
+	handler.stepErr, handler.outcomes = nil, []action.Outcome{{Status: store.StatusPending, NextRunAt: c.now.Add(time.Hour)}}
+	handler.mu.Unlock()
 	require.Equal(t, 1, worker.RunOnce(ctx))
 	got, err := s.GetExecution(ctx, seeded.ExecutionID)
 	require.NoError(t, err)
+	require.Zero(t, got.Failures, "一次没有问题的推进就清零")
+	require.Zero(t, got.FirstFailedAt)
+	require.Empty(t, got.LastError)
+}
+
+// 系统动作返回“待处理并带着问题说明”（Trade 暂时不可达）：计入连续暂时失败；超过 15 分钟算作 action_failed，恢复后关注项消失。
+func TestSystemTransientFailuresRaiseActionFailedAfterFifteenMinutes(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	c := &clock{now: baseTime}
+	seeded := seedSystem(t, s, c)
+	handler := &fakeHandler{outcomes: []action.Outcome{{Status: store.StatusPending, NextRunAt: baseTime.Add(time.Minute), Error: "读取下架名单失败，稍后重试: Trade 不可达"}}}
+	registry := action.NewRegistry()
+	registry.Register(store.SystemActionSellDelistedHoldings, handler)
+	worker := newWorker(t, s, &fakeSender{results: []delivery.Result{{}}}, registry, c)
+	attention := &AttentionWorker{Store: s, Now: c.Now}
+	want := "系统规则（binance:SPOT:FOOUSDT）：连续暂时失败超过 15 分钟，请在执行记录里看原因"
+
+	for minute := 0; minute <= 15; minute++ {
+		c.now = baseTime.Add(time.Duration(minute) * time.Minute)
+		require.Equal(t, 1, worker.RunOnce(ctx), "第 %d 分钟", minute)
+		require.NoError(t, attention.Publish(ctx))
+		if minute < 15 {
+			require.Equal(t, 0.0, testutil.ToFloat64(telemetry.Attention.WithLabelValues(telemetry.AttentionActionFailed, want)), "第 %d 分钟还不告警", minute)
+		}
+	}
+	got, err := s.GetExecution(ctx, seeded.ExecutionID)
+	require.NoError(t, err)
+	require.Equal(t, 16, got.Failures)
+	require.Equal(t, baseTime.UnixMilli(), got.FirstFailedAt)
+	require.Equal(t, 1.0, testutil.ToFloat64(telemetry.Attention.WithLabelValues(telemetry.AttentionActionFailed, want)))
+
+	// 恢复：一次推进没有问题说明，计数清零，关注项消失。
+	handler.mu.Lock()
+	handler.outcomes = []action.Outcome{{Status: store.StatusPending, NextRunAt: c.now.Add(time.Hour)}}
+	handler.mu.Unlock()
+	c.now = c.now.Add(time.Minute)
+	require.Equal(t, 1, worker.RunOnce(ctx))
+	require.NoError(t, attention.Publish(ctx))
+	require.Equal(t, 0.0, testutil.ToFloat64(telemetry.Attention.WithLabelValues(telemetry.AttentionActionFailed, want)))
+	require.Equal(t, 0.0, testutil.ToFloat64(telemetry.Attention.WithLabelValues(telemetry.AttentionActionFailed, "")), "没有别的关注项")
+}
+
+// 通知类的记录读不到规则时放回去，不计入失败次数：它的失败次数决定重试间隔和期限。
+func TestNotifyRescheduleDoesNotCountFailure(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	c := &clock{now: baseTime}
+	seeded := seedNotify(t, s, c)
+	worker := newWorker(t, s, &fakeSender{results: []delivery.Result{{Class: delivery.Success}}}, nil, c)
+	execution, err := s.GetExecution(ctx, seeded.ExecutionID)
+	require.NoError(t, err)
+	claimed, err := s.ClaimDue(ctx, c.now.UnixMilli(), 1, nil)
+	require.NoError(t, err)
+	require.Len(t, claimed, 1)
+	execution.ClaimedAt = claimed[0].ClaimedAt
+	worker.reschedule(ctx, execution, "读取规则失败: 库忙")
+	got, err := s.GetExecution(ctx, seeded.ExecutionID)
+	require.NoError(t, err)
 	require.Equal(t, store.StatusPending, got.Status)
-	require.Equal(t, "Trade 不可达", got.LastError)
-	require.Equal(t, baseTime.Add(time.Minute).UnixMilli(), got.NextRunAt)
 	require.Zero(t, got.Failures)
+	require.Zero(t, got.FirstFailedAt)
 }
 
 func TestSystemFailureRaisesActionFailedAttention(t *testing.T) {

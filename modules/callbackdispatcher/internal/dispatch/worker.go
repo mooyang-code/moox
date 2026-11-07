@@ -163,10 +163,7 @@ func (w *Worker) process(ctx context.Context, execution store.Execution) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			log.ErrorContextf(ctx, "处理执行记录 %s 时出现 panic: %v", execution.ExecutionID, recovered)
-			w.save(ctx, execution, store.Result{
-				Status: store.StatusPending, NextRunAt: w.now().Add(time.Minute).UnixMilli(), LastError: "内部错误，稍后重试",
-				Attempts: execution.Attempts, Failures: execution.Failures, FirstFailedAt: execution.FirstFailedAt,
-			})
+			w.reschedule(ctx, execution, "内部错误，稍后重试")
 		}
 	}()
 	rule, err := w.Store.GetRule(ctx, execution.RuleID)
@@ -233,7 +230,7 @@ func (w *Worker) processSystem(ctx context.Context, execution store.Execution, r
 		w.reschedule(ctx, execution, err.Error())
 		return
 	}
-	update := store.Result{Attempts: execution.Attempts + 1, Failures: execution.Failures, FirstFailedAt: execution.FirstFailedAt, LastError: outcome.Error, ProcessedPayload: execution.PayloadJSON}
+	update := store.Result{Attempts: execution.Attempts + 1, LastError: outcome.Error, ProcessedPayload: execution.PayloadJSON}
 	switch outcome.Status {
 	case store.StatusPending:
 		next := outcome.NextRunAt
@@ -241,6 +238,11 @@ func (w *Worker) processSystem(ctx context.Context, execution store.Execution, r
 			next = now.Add(time.Minute)
 		}
 		update.Status, update.NextRunAt = store.StatusPending, next.UnixMilli()
+		// 待处理并带着问题说明，是这次推进遇到了暂时失败（Trade 不可达等）：累计连续次数，关注项据此提醒持续失败；
+		// 一次没有问题的推进就清零。
+		if outcome.Error != "" {
+			update.Failures, update.FirstFailedAt = transientFailure(execution, now)
+		}
 	case store.StatusSucceeded, store.StatusFailed, store.StatusCanceled:
 		update.Status, update.FinishedAt = outcome.Status, now.UnixMilli()
 	default:
@@ -250,12 +252,27 @@ func (w *Worker) processSystem(ctx context.Context, execution store.Execution, r
 	w.save(ctx, execution, update)
 }
 
-// reschedule 把记录放回待处理，一分钟后再试，不计入失败次数。
+// reschedule 把记录放回待处理，一分钟后再试。系统动作的记录算一次暂时失败（累计连续次数）；
+// 通知的记录不计：它的失败次数决定重试间隔和重试期限，读不到规则这类本地问题不能把它提前判为失败。
 func (w *Worker) reschedule(ctx context.Context, execution store.Execution, reason string) {
+	now := w.now()
+	failures, firstFailedAt := execution.Failures, execution.FirstFailedAt
+	if execution.ActionType == store.ActionSystem {
+		failures, firstFailedAt = transientFailure(execution, now)
+	}
 	w.save(ctx, execution, store.Result{
-		Status: store.StatusPending, NextRunAt: w.now().Add(time.Minute).UnixMilli(), LastError: reason,
-		Attempts: execution.Attempts, Failures: execution.Failures, FirstFailedAt: execution.FirstFailedAt, ProcessedPayload: execution.PayloadJSON,
+		Status: store.StatusPending, NextRunAt: now.Add(time.Minute).UnixMilli(), LastError: reason,
+		Attempts: execution.Attempts, Failures: failures, FirstFailedAt: firstFailedAt, ProcessedPayload: execution.PayloadJSON,
 	})
+}
+
+// transientFailure 返回系统动作的记录再记一次暂时失败后的连续失败次数和第一次失败的时间。
+func transientFailure(execution store.Execution, now time.Time) (int, int64) {
+	firstFailedAt := execution.FirstFailedAt
+	if execution.Failures == 0 || firstFailedAt == 0 {
+		firstFailedAt = now.UnixMilli()
+	}
+	return execution.Failures + 1, firstFailedAt
 }
 
 func (w *Worker) save(ctx context.Context, execution store.Execution, result store.Result) {
