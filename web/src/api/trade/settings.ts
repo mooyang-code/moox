@@ -40,7 +40,7 @@ export interface FundSettings {
   arbitrage_base_assets?: string[];
 }
 
-/** 带当前生效设置的组合账户（Trade 在 LogicalAccount 里只读返回两组设置）。 */
+/** 带当前生效设置的组合账户（Trade 在 LogicalAccount 里只读返回两组设置，父组件取到后传给设置表单）。 */
 export type LogicalAccountWithSettings = LogicalAccount & {
   order_settings?: OrderSettings;
   fund_settings?: FundSettings;
@@ -67,10 +67,4 @@ export function updateLogicalAccountFundSettings(logical_account_id: string, set
     { logical_account_id, settings },
     { silent: true }
   );
-}
-
-export function getLogicalAccountSettings(logical_account_id: string) {
-  return callTrade<{ logical_account_id: string }, SettingsResponse>("console", "GetLogicalAccount", {
-    logical_account_id
-  });
 }

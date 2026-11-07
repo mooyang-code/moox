@@ -76,7 +76,7 @@
     <a-alert v-if="error" type="error" class="settings-error">{{ error }}</a-alert>
     <a-space>
       <a-button type="primary" :loading="saving" @click="submit">保存下单设置</a-button>
-      <a-button @click="reset">还原</a-button>
+      <a-button @click="restore">还原</a-button>
     </a-space>
   </a-form>
 </template>
@@ -92,8 +92,12 @@ import {
   validateOrderSettingsModel
 } from "./order-settings-form";
 
+/**
+ * 下单设置表单，可以独立挂载：当前设置由父组件传入，点保存只发出 save 事件（带校验过的设置），
+ * 由父组件调用 updateLogicalAccountOrderSettings 并重新取组合账户；点还原发出 refresh，让父组件重新取数。
+ */
 const props = defineProps<{ settings?: OrderSettings; saving?: boolean }>();
-const emit = defineEmits<{ save: [settings: OrderSettings] }>();
+const emit = defineEmits<{ save: [settings: OrderSettings]; refresh: [] }>();
 
 const capMarkets = [
   { key: "hourly_cap_spot", label: "现货", placeholder: "BTC-USDT-SPOT 或 *" },
@@ -109,6 +113,11 @@ function reset() {
 }
 
 watch(() => props.settings, reset);
+
+function restore() {
+  reset();
+  emit("refresh");
+}
 
 function submit() {
   error.value = validateOrderSettingsModel(model);

@@ -7,7 +7,7 @@
       </a-form-item>
     </section>
 
-    <section class="settings-group">
+    <section v-if="liveOnly" class="settings-group">
       <h4>BNB（币安）</h4>
       <a-form-item label="BNB 抵扣手续费" extra="开启后会在币安账户上打开 BNB 抵扣开关，现货、合约一起设">
         <a-switch v-model="model.bnb_discount" />
@@ -26,7 +26,7 @@
       </a-form-item>
     </section>
 
-    <section class="settings-group">
+    <section v-if="liveOnly" class="settings-group">
       <h4>稳定币保证金（币安统一账户）</h4>
       <p class="settings-hint">
         各稳定币的目标比例，必须包含 USDT 且比例之和为 1。每小时检查一次，偏离目标超过 5% 时在稳定币交易对上调平；不填表示不调平。
@@ -60,21 +60,37 @@
       </a-form-item>
     </section>
 
+    <a-alert v-if="!liveOnly" type="info" class="settings-error">
+      BNB 抵扣、BNB 保留、小额兑换和稳定币保证金只对币安实盘组合生效，这个组合不显示。
+    </a-alert>
     <a-alert v-if="error" type="error" class="settings-error">{{ error }}</a-alert>
     <a-space>
       <a-button type="primary" :loading="saving" @click="submit">保存资金设置</a-button>
-      <a-button @click="reset">还原</a-button>
+      <a-button @click="restore">还原</a-button>
     </a-space>
   </a-form>
 </template>
 
 <script setup lang="ts">
-import { reactive, ref, watch } from "vue";
+import { computed, reactive, ref, watch } from "vue";
 import type { FundSettings } from "@/api/trade/settings";
-import { buildFundSettingsRequest, fundSettingsToModel, validateFundSettingsModel } from "./fund-settings-form";
+import {
+  buildFundSettingsRequest,
+  fundSettingsToModel,
+  showsLiveOnlyFields,
+  validateFundSettingsModel
+} from "./fund-settings-form";
 
-const props = defineProps<{ settings?: FundSettings; saving?: boolean }>();
-const emit = defineEmits<{ save: [settings: FundSettings] }>();
+/**
+ * 资金设置表单，可以独立挂载：当前设置由父组件传入，点保存只发出 save 事件（带校验过的设置），
+ * 由父组件调用 updateLogicalAccountFundSettings 并重新取组合账户；点还原发出 refresh，让父组件重新取数。
+ * paper、nonBinance 为真时不显示仅币安实盘生效的项。
+ */
+const props = defineProps<{ settings?: FundSettings; saving?: boolean; paper?: boolean; nonBinance?: boolean }>();
+const emit = defineEmits<{ save: [settings: FundSettings]; refresh: [] }>();
+
+const scope = computed(() => ({ paper: props.paper, nonBinance: props.nonBinance }));
+const liveOnly = computed(() => showsLiveOnlyFields(scope.value));
 
 const model = reactive(fundSettingsToModel(props.settings));
 const error = ref("");
@@ -86,10 +102,15 @@ function reset() {
 
 watch(() => props.settings, reset);
 
+function restore() {
+  reset();
+  emit("refresh");
+}
+
 function submit() {
-  error.value = validateFundSettingsModel(model);
+  error.value = validateFundSettingsModel(model, scope.value);
   if (error.value) return;
-  emit("save", buildFundSettingsRequest(model));
+  emit("save", buildFundSettingsRequest(model, scope.value));
 }
 </script>
 

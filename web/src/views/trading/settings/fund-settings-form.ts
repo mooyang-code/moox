@@ -18,6 +18,21 @@ export interface FundSettingsModel {
   arbitrage_base_assets: string;
 }
 
+/** 哪些项在表单里显示：BNB、小额兑换、稳定币保证金只对币安实盘组合生效，模拟盘和含非币安成员的组合不显示。 */
+export interface FundFormScope {
+  /** 模拟盘组合没有资金维护任务 */
+  paper?: boolean;
+  /** 含非币安成员：BNB 与稳定币相关项只适用于币安 */
+  nonBinance?: boolean;
+}
+
+/** BNB 补买的容差：市值低于“保留金额 − 10”才补买，所以保留金额要大于 10。 */
+const BNB_RESERVE_SLACK = 10;
+
+export function showsLiveOnlyFields(scope: FundFormScope = {}): boolean {
+  return !scope.paper && !scope.nonBinance;
+}
+
 export function defaultFundSettings(): FundSettings {
   return {
     reserve_ratio: "0",
@@ -76,26 +91,37 @@ export function parseAssetList(text: string): string[] {
 }
 
 /** 提交前的本地校验，规则和后端 domain/fundsettings 一致；返回第一条错误，空串表示通过。 */
-export function validateFundSettingsModel(model: FundSettingsModel): string {
+export function validateFundSettingsModel(model: FundSettingsModel, scope: FundFormScope = {}): string {
+  const liveOnly = showsLiveOnlyFields(scope);
   if (!isDecimal(model.reserve_ratio) || Number(model.reserve_ratio) >= 1) return "资金预留比例必须在 0 到 1 之间（不含 1）";
-  if (!isDecimal(model.bnb_reserve_amount)) return "BNB 保留金额必须是不小于 0 的数字";
-  if (
-    !Number.isInteger(model.dust_convert_interval_days) ||
-    model.dust_convert_interval_days < 1 ||
-    model.dust_convert_interval_days > 365
-  ) {
-    return "小额兑换 BNB 的间隔必须是 1 到 365 天的整数";
+  if (liveOnly) {
+    if (!isDecimal(model.bnb_reserve_amount)) return "BNB 保留金额必须是不小于 0 的数字";
+    const reserve = Number(model.bnb_reserve_amount);
+    if (reserve > 0 && reserve <= BNB_RESERVE_SLACK) {
+      return `BNB 保留金额要大于 ${BNB_RESERVE_SLACK}：市值低于保留金额减 ${BNB_RESERVE_SLACK} 才会补买，不大于 ${BNB_RESERVE_SLACK} 的设置永远不会补买`;
+    }
+    if (
+      !Number.isInteger(model.dust_convert_interval_days) ||
+      model.dust_convert_interval_days < 1 ||
+      model.dust_convert_interval_days > 365
+    ) {
+      return "小额兑换 BNB 的间隔必须是 1 到 365 天的整数";
+    }
   }
   const owners = new Map<string, string>();
   const claim = (asset: string, group: string): string => {
     if (!assetPattern.test(asset)) return `资产名 ${asset || "（空）"} 不合法（只允许字母和数字）`;
+    if (asset === "USDT" && group !== "稳定币保证金") return `USDT 是结算币，不能写进${group}`;
     const previous = owners.get(asset);
     if (previous)
       return previous === group ? `${group}里的资产 ${asset} 重复` : `资产 ${asset} 同时出现在${previous}和${group}里`;
     owners.set(asset, group);
     return "";
   };
-  const stable = model.stablecoin_margin.map(row => ({ asset: row.asset.trim().toUpperCase(), value: row.value.trim() }));
+  const stable = (liveOnly ? model.stablecoin_margin : []).map(row => ({
+    asset: row.asset.trim().toUpperCase(),
+    value: row.value.trim()
+  }));
   for (const row of stable) {
     const error = claim(row.asset, "稳定币保证金");
     if (error) return error;
@@ -118,6 +144,9 @@ export function validateFundSettingsModel(model: FundSettingsModel): string {
     const error = claim(asset, "套利底仓");
     if (error) return error;
   }
+  if (liveOnly && Number(model.bnb_reserve_amount) > 0 && owners.has("BNB")) {
+    return `开启 BNB 保留时，BNB 不能同时出现在${owners.get("BNB")}里`;
+  }
   return "";
 }
 
@@ -126,15 +155,18 @@ function recordOf(list: AssetRow[]): Record<string, string> | undefined {
   return Object.fromEntries(list.map(row => [row.asset.trim().toUpperCase(), row.value.trim()]));
 }
 
-export function buildFundSettingsRequest(model: FundSettingsModel): FundSettings {
+/** 不显示的项（模拟盘、含非币安成员）一律按默认值提交，不带过期的旧值。 */
+export function buildFundSettingsRequest(model: FundSettingsModel, scope: FundFormScope = {}): FundSettings {
   const base = parseAssetList(model.arbitrage_base_assets);
+  const liveOnly = showsLiveOnlyFields(scope);
+  const defaults = defaultFundSettings();
   return {
     reserve_ratio: model.reserve_ratio.trim(),
-    bnb_discount: model.bnb_discount,
-    bnb_reserve_amount: model.bnb_reserve_amount.trim(),
-    dust_convert_enabled: model.dust_convert_enabled,
-    dust_convert_interval_days: model.dust_convert_interval_days,
-    stablecoin_margin: recordOf(model.stablecoin_margin),
+    bnb_discount: liveOnly ? model.bnb_discount : defaults.bnb_discount,
+    bnb_reserve_amount: liveOnly ? model.bnb_reserve_amount.trim() : defaults.bnb_reserve_amount,
+    dust_convert_enabled: liveOnly ? model.dust_convert_enabled : defaults.dust_convert_enabled,
+    dust_convert_interval_days: liveOnly ? model.dust_convert_interval_days : defaults.dust_convert_interval_days,
+    stablecoin_margin: liveOnly ? recordOf(model.stablecoin_margin) : undefined,
     margin_coins: recordOf(model.margin_coins),
     arbitrage_base_assets: base.length > 0 ? base : undefined
   };
