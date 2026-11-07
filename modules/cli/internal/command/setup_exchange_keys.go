@@ -38,8 +38,9 @@ type exchangeKeyCheck struct {
 	Warnings         []string `json:"warnings,omitempty"`
 }
 
-// inspectCallTimeout 是经网关调一次检测的期限：海外机连不上时每把密钥不能各等 30 秒（网关默认超时）。
-var inspectCallTimeout = 10 * time.Second
+// inspectCallTimeout 是经网关调一次检测的期限：要长于 Trade 自己的检测时限（12 秒，服务端超时 15 秒），
+// 否则正常但耗时 10 多秒的检测会被说成“Trade 可能没部署”；又要短于网关默认的 30 秒，海外机连不上时每把密钥不能各等 30 秒。
+var inspectCallTimeout = 20 * time.Second
 
 // inspectCommandHint 是检测命令的写法，提示里直接给出可复制的完整命令。
 func inspectCommandHint(key setupconfig.ExchangeKey) string {
@@ -114,8 +115,10 @@ func inspectApplied(ctx context.Context, deps setupDeps, snapshot *setupconfig.S
 			check = classifyInspection(result.SecretID, key, raw, err)
 			unreachable = err != nil
 		}
-		if key.Name == "readonly" && !key.ReadOnly && known {
-			// Collector 检测币安现货下架读的正是 exchange-binance-production-readonly：名字叫 readonly 的密钥不标 readonly = true，
+		if key.Name == "readonly" && !key.ReadOnly && known &&
+			strings.EqualFold(key.Exchange, "binance") && strings.EqualFold(key.Environment, "production") {
+			// Collector 检测币安现货下架读的正是 exchange-binance-production-readonly（只有币安生产环境这一把有固定用途）：
+			// 名字叫 readonly 的密钥不标 readonly = true，
 			// 会被当成可以建执行账户的密钥，也不会跳过检测；只读密钥要写 readonly = true，并且在交易所只开读取权限。
 			check.Warnings = append(check.Warnings, "这把密钥的名称是 readonly（Collector 按固定 ID "+result.SecretID+" 读取它），但没有写 readonly = true：它会被当成可以建执行账户的密钥。只读密钥请写 readonly = true，并在交易所只开读取权限")
 		}

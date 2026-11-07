@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	setupclient "github.com/mooyang-code/moox/modules/cli/internal/setup/client"
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
@@ -307,4 +308,44 @@ func TestSetupApplyWarnsWhenReadonlyNamedKeyIsNotMarkedReadonly(t *testing.T) {
 			assert.Empty(t, check.Warnings)
 		}
 	}
+}
+
+// 固定 ID 的 readonly 只对币安生产环境有意义：其他交易所、测试网里名字叫 readonly 的密钥不提醒。
+func TestSetupApplyReadonlyReminderOnlyForBinanceProduction(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "moox.toml")
+	body := strings.Replace(exchangeKeysManifestBody, "%s", `["trade", "access", "egress-proxy"]`, 1) + `
+[[exchange_keys]]
+name = "readonly"
+exchange = "okx"
+environment = "production"
+api_key = "okx-prod-key"
+secret_key = "okx-prod-secret"
+passphrase = "okx-prod-passphrase"
+
+[[exchange_keys]]
+name = "readonly"
+exchange = "binance"
+environment = "testnet"
+api_key = "binance-test-key"
+secret_key = "binance-test-secret"
+`
+	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+	snapshot, err := setupconfig.Load(path, dir)
+	require.NoError(t, err)
+	deps := setupDeps{inspectExchangeKey: func(context.Context, *setupconfig.Snapshot, setupconfig.ExchangeKey) ([]byte, error) {
+		return []byte(inspectionPassed), nil
+	}}
+	applied := []setupclient.ExchangeKeyResult{
+		{SecretID: "exchange-okx-production-readonly", State: setupclient.ExchangeKeyCreated},
+		{SecretID: "exchange-binance-testnet-readonly", State: setupclient.ExchangeKeyCreated},
+	}
+	for _, check := range inspectApplied(context.Background(), deps, snapshot, applied) {
+		assert.NotContains(t, strings.Join(check.Warnings, "；"), "readonly = true", check.SecretID)
+	}
+}
+
+// 检测调用的期限要长于 Trade 自己的检测时限（12 秒）和服务端超时（15 秒）。
+func TestInspectCallTimeoutOutlastsTradeInspection(t *testing.T) {
+	assert.GreaterOrEqual(t, inspectCallTimeout, 15*time.Second)
 }
