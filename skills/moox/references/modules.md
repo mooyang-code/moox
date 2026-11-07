@@ -3,7 +3,7 @@
 每个模块列出：做什么、在哪台机器、常用命令、细节文档。管理台上的操作和各模块的主要操作都有专用命令；
 没有专用命令的底层接口才用 `moox-cli gateway call`，请求写法见 [`api-recipes.md`](api-recipes.md)。
 命令都在产物包（或仓库）根目录执行，默认读取当前目录的 `moox.toml`（`--file` 指定），不需要手工建隧道或设置环境变量。
-交易模块尚未完工：只能查询（`trade …`），不代用户创建账户、下单或清仓。
+交易模块尚未完工：只能查询（`trade …`），不代用户创建账户、下单、清仓、减仓或解除下架禁止。
 
 **通用约定**
 
@@ -103,6 +103,24 @@
   `strategy template list|show|save|delete|render`、`strategy display get|set`；策略服务里的历史回放 `strategy replay start|list|show|bars|cancel`；
   逐期回放（因子 → 策略 → 纸面成交）用 `./bin/moox-cli replay start|status|report …`。迁移整套 Python 选币策略：[`strategy-migration.md`](strategy-migration.md)。
 - **注意**：一个因子任务只能关联一个实例；改定义前先停用引用它的实例。不挂账户的实例只计算目标、不下单。
+
+## 交易（只读）
+
+- **做什么**：执行账户与组合账户、目标收敛下单、订单成交持仓、模拟盘；实盘风控：下架名单（名单标的只减不增，下架前由事件中心清仓）、保证金率监控（跌破阈值自动暂停组合并按比例减仓）。
+- **在哪**：独立单元 `trade`，默认海外机（`[deployments]` 决定）。
+- **常用**（都是只读，写操作由用户在管理台做）：
+
+```bash
+./bin/moox-cli trade logical list|show|target                      # 组合账户与当前策略目标
+./bin/moox-cli trade order list --logical-account-id <ID> [--owner-type TARGET|OPERATOR|EXTERNAL|SYSTEM]   # 订单，可按来源过滤
+./bin/moox-cli trade actions --logical-account-id <ID> [--action-type REDUCE]   # 人工操作记录（清仓、减仓、下架清仓…）
+./bin/moox-cli trade pnl --logical-account-id <ID>                 # 收益拆解：手续费、已实现盈亏、资金费（超出 90 天标明截断）
+./bin/moox-cli trade blocked list                                  # 下架名单（全局）
+./bin/moox-cli trade holders --exchange EXCHANGE_BINANCE --market-type MARKET_TYPE_SPOT --exchange-symbol FOOUSDT   # 策略持有某标的的执行账户（跨空间）
+```
+
+- **注意**：Agent 不创建实盘账户、不下单、不清仓减仓、不解除下架禁止；保证金率监控的阈值在组合的资金设置里，触发后组合会自动暂停，等用户确认安全后在管理台手动恢复。
+- 设计与排查：[`docs/模块/交易.md`](../../../docs/模块/交易.md)；告警（`trade_attention`，含 `margin_ratio_low`）见 [`monitor-attention.md`](monitor-attention.md)。
 
 ## 监控
 
