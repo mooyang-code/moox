@@ -361,6 +361,17 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 			}
 		}
 	}
+	// 统一数据集只有一个 series_tag 的一期，按标的的失败名单被原样带到了每个市场（见 readiness.Result.ForMarket），其实只属于有行的那个市场：
+	// 读完行之后，本期一行也没有的市场丢掉这些名单，按无行处理。否则这个市场会因为另一个市场的失败被判成整体失败，
+	// 而另一个市场没有失败时它又按无行处理，结论随无关的失败而变。
+	ready := make(map[string]readiness.Result, len(loads))
+	for _, load := range loads {
+		result := bar.Readiness[load.market]
+		if load.unavailable == "" && len(load.current) == 0 {
+			result = result.DropUnattributed()
+		}
+		ready[load.market] = result
+	}
 	// 多个市场时，某个因子在一个市场本期的标的上全部失败（例如时序因子在永续整体晚到），与这个市场的因子被整体跳过没有区别：按这个市场
 	// 不可用处理，已持仓的冻结。否则逐币的 factor_failed 不冻结，缺数比例又被另一个市场的行摊薄，持有的永续会被卖成现货。
 	// 放在读完行之后、年龄探针之前（整体失败的市场不做探针）：只统计本次实际读行的标的（instruments ∩ 这个市场的基础集合：策略池被收窄、
@@ -369,7 +380,7 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 	if len(loads) > 1 {
 		for _, load := range loads {
 			if load.unavailable == "" {
-				if detail := wholeMarketFailure(load, bar.Readiness[load.market], instruments, nil, quant.Decimal{}, false); detail != "" {
+				if detail := wholeMarketFailure(load, ready[load.market], instruments, nil, quant.Decimal{}, false); detail != "" {
 					markUnavailable(load, detail)
 				}
 			}
@@ -443,7 +454,7 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 				_, held := bar.Held[load.market][id]
 				return held
 			}
-			if detail := wholeMarketFailure(load, bar.Readiness[load.market], instruments, include, program.Strategy.Portfolio.MaxMissing, true); detail != "" {
+			if detail := wholeMarketFailure(load, ready[load.market], instruments, include, program.Strategy.Portfolio.MaxMissing, true); detail != "" {
 				markUnavailable(load, detail)
 				if _, probed := agePassed[load.market]; probed {
 					delete(agePassed, load.market)
@@ -495,7 +506,7 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 		if load.unavailable != "" {
 			input.Failed = marketUnavailable(program, load.universe, bar.Held[load.market])
 		} else {
-			input.Failed = failedColumns(resolved, program, bar.Readiness[load.market])
+			input.Failed = failedColumns(resolved, program, ready[load.market])
 		}
 		frame.Markets[load.market] = input
 	}
