@@ -194,7 +194,34 @@ async function gateway(route: Route) {
     case "GetLogicalAccount":
       calls.getLogical += 1;
       return route.fulfill({
-        json: ok({ logical_account: logicals.find(item => item.logical_account_id === body.logical_account_id) })
+        json: ok({
+          logical_account: {
+            ...logicals.find(item => item.logical_account_id === body.logical_account_id),
+            // 当前生效的设置：组合账户详情总是带着它们，设置表单拿它们当初始值
+            order_settings: {
+              rebalance_threshold_mode: "TARGET_RATIO",
+              rebalance_threshold_ratio: "0.05",
+              min_notional_spot: "10",
+              min_notional_swap: "10",
+              max_child_notional: "10000",
+              randomize_split: false,
+              batch_interval_seconds: 0,
+              order_mode: "MARKET",
+              slippage_step: "0.015",
+              slippage_max: "0.05",
+              max_attempts: 3,
+              resting_ratio: "0",
+              resting_ttl_seconds: 0
+            },
+            fund_settings: {
+              reserve_ratio: "0.05",
+              bnb_discount: false,
+              bnb_reserve_amount: "0",
+              dust_convert_enabled: false,
+              dust_convert_interval_days: 0
+            }
+          }
+        })
       });
     case "GetLogicalAccountTarget":
       return route.fulfill({
