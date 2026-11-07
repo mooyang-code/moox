@@ -18,7 +18,6 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution/paper"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
-	"github.com/rs/xid"
 )
 
 var (
@@ -83,6 +82,8 @@ type Executor struct {
 
 	batchMu   sync.Mutex
 	lastBatch map[string]time.Time
+	// warned 记录已经告警过的事项（见 warnOnce）。
+	warned map[string]struct{}
 }
 
 const (
@@ -133,6 +134,8 @@ type placement struct {
 	tooSmall bool
 	// deferred 表示本批这个执行账户的额度用完，留到下一批。
 	deferred bool
+	// unfilled 表示伪市价单用满尝试次数仍没成交完（未到位）。
+	unfilled bool
 	// capDeferred 表示单币每小时上限的剩余额度不够下一单，这个标的顺延到下一个整点。
 	capDeferred bool
 }
@@ -1046,6 +1049,8 @@ func (e *Executor) placeAction(
 	// tooSmall 只统计交易规则挡住的成员，不受拒单过滤影响：
 	// 有成员本来能下单但被排除时不能算完成。
 	tooSmall := 0
+	// unfilled 表示有成员的伪市价单用满了尝试次数。
+	unfilled := false
 	candidates := placementCandidates(action, members)
 	for _, candidate := range candidates {
 		accountID := candidate.member.account.TradingAccountID
@@ -1132,11 +1137,24 @@ func (e *Executor) placeAction(
 			}
 		}
 		// 单笔上限：拆单时每笔的名义金额不超过设置的上限；开了随机化，每笔取上限的 50%～100%。
-		sides, sidesErr := e.targetChildSides(ctx, spaceID, target, candidate)
-		if sidesErr != nil {
-			return placement{}, sidesErr
+		children, childrenErr := e.targetChildren(ctx, spaceID, target, candidate)
+		if childrenErr != nil {
+			return placement{}, childrenErr
 		}
-		sliceLimit := env.sliceNotionalLimit(target, candidate.instrument.InstrumentID, len(sides))
+		// 伪市价单：用满尝试次数仍没成交完的标的记为“未到位”，告警一次，不再重试，等下一份目标重算。
+		attempt := 0
+		pseudoMarket := env.settings.OrderMode == ordersettings.OrderModePseudoMarket
+		if pseudoMarket {
+			if attempt = pseudoMarketAttempts(children); attempt >= env.settings.MaxAttempts {
+				reason := fmt.Sprintf("伪市价单已尝试 %d 次仍没成交完，本份目标不再重试", attempt)
+				e.warnOnce("unfilled|"+target.TargetID+"|"+candidate.instrument.InstrumentID,
+					fmt.Sprintf("组合 %s 的 %s 在账户 %s 上%s", target.LogicalAccountID, candidate.instrument.InstrumentID, accountID, reason))
+				capacityErrors = append(capacityErrors, accountID+": "+reason)
+				unfilled = true
+				continue
+			}
+		}
+		sliceLimit := env.sliceNotionalLimit(target, candidate.instrument.InstrumentID, len(children))
 		if maxQuantity := floorToStep(sliceLimit.Div(quote.Price), mustBaseStep(candidate.instrument)); quantity.Cmp(maxQuantity) > 0 {
 			quantity = maxQuantity
 		}
@@ -1148,7 +1166,7 @@ func (e *Executor) placeAction(
 			capacityErrors = append(capacityErrors, candidate.member.account.TradingAccountID+": 单笔子单上限低于交易所最小数量")
 			continue
 		}
-		reversal := reversalCount(sides, candidate)
+		reversal := reversalCount(children, candidate)
 		if reversal >= 2 {
 			// 同一目标内第二次反向：整条标的本目标内不再下单，新目标到达时自然清零。
 			if e.Observe != nil {
@@ -1160,12 +1178,13 @@ func (e *Executor) placeAction(
 		spec := orderdomain.OrderSpec{
 			ClientOrderSpec: orderdomain.ClientOrderSpec{
 				TradingAccountID: candidate.member.account.TradingAccountID,
-				ClientOrderID:    childClientOrderID(),
+				ClientOrderID:    childClientOrderID(attempt),
 				InstrumentID:     candidate.instrument.InstrumentID,
 				Type:             exchange.OrderTypeMarket,
 				Side:             sideForDelta(candidate.delta),
 				Quantity:         quantity,
 			},
+			Attempt:        attempt,
 			ReferencePrice: quote.Price, ReferencePriceAt: quote.UpdatedAt,
 			ReducePositionOnly: candidate.reducing,
 			Owner: orderdomain.OrderOwner{
@@ -1175,6 +1194,11 @@ func (e *Executor) placeAction(
 			PositionBefore: candidate.member.positions[candidate.instrument.InstrumentID].String(),
 		}
 		spec.PositionSide = exchange.RuleFor(candidate.instrument.MarketType).PositionSide
+		if pseudoMarket {
+			// 限价 + IOC：价格 = 参考价 ×（1 ± 滑点），部分成交的剩余量下一轮按新的滑点再来。
+			limit := pseudoMarketPrice(quote.Price, spec.Side, env.settings, attempt, candidate.instrument.PriceTick)
+			spec.Type, spec.FillPolicy, spec.LimitPrice = exchange.OrderTypeLimit, exchange.FillPolicyIOC, &limit
+		}
 		if !candidate.reducing {
 			capacity, err := e.Orders.Capacity(ctx, spaceID, spec)
 			if err != nil {
@@ -1217,12 +1241,15 @@ func (e *Executor) placeAction(
 		// 只落库，批量提交由收敛统一发出；拒单后下一轮换成员，全部被拒时写入 blocked_targets。
 		return placement{placed: true, orderID: string(placed.ID)}, nil
 	}
-	result := placement{tooSmall: len(candidates) > 0 && tooSmall == len(candidates)}
+	result := placement{tooSmall: len(candidates) > 0 && tooSmall == len(candidates), unfilled: unfilled}
 	if len(capacityErrors) == 0 {
 		result.reason = "数量低于交易所最小值"
 		return result, nil
 	}
 	result.reason = "成员容量不足：" + strings.Join(capacityErrors, "; ")
+	if unfilled {
+		result.reason = "未到位：" + strings.Join(capacityErrors, "; ")
+	}
 	return result, nil
 }
 
@@ -1539,10 +1566,6 @@ func sideForDelta(delta shared.Decimal) exchange.Side {
 	return exchange.SideBuy
 }
 
-func childClientOrderID() string {
-	return "mt" + xid.New().String()
-}
-
 func (e *Executor) now() time.Time {
 	if e.Now != nil {
 		return e.Now()
@@ -1593,20 +1616,25 @@ func (e *Executor) positionUnreflected(
 	return false, nil
 }
 
-// targetChildSides 返回同一目标、同一执行账户、同一标的已发出子单的方向，按提交先后；拆单随机化和反向熔断共用。
-func (e *Executor) targetChildSides(
+// targetChildren 返回同一目标、同一执行账户、同一标的已发出的子单，按提交先后；
+// 拆单随机化、反向熔断和伪市价单的尝试次数共用这一次查询。
+func (e *Executor) targetChildren(
 	ctx context.Context,
 	spaceID string,
 	target store.LogicalAccountTargetRecord,
 	candidate laneAction,
-) ([]string, error) {
-	return e.Store.TargetChildSides(ctx, spaceID, target.LogicalAccountID, target.TargetID,
+) ([]store.TargetChildOrder, error) {
+	return e.Store.TargetChildOrders(ctx, spaceID, target.LogicalAccountID, target.TargetID,
 		candidate.member.account.TradingAccountID, candidate.instrument.InstrumentID)
 }
 
 // reversalCount 返回已发出子单（含这次将发的）的方向切换次数。
-func reversalCount(sides []string, candidate laneAction) int {
-	sides = append(append([]string(nil), sides...), string(sideForDelta(candidate.delta)))
+func reversalCount(children []store.TargetChildOrder, candidate laneAction) int {
+	sides := make([]string, 0, len(children)+1)
+	for _, child := range children {
+		sides = append(sides, child.Side)
+	}
+	sides = append(sides, string(sideForDelta(candidate.delta)))
 	switches := 0
 	for index := 1; index < len(sides); index++ {
 		if sides[index] != sides[index-1] {
