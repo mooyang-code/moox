@@ -251,3 +251,27 @@ func TestGapFillerCrossSectionHoldsWhileMarkerMayStillBeWritten(t *testing.T) {
 	require.Empty(t, f.chunks.calls)
 	require.Zero(t, f.ledger.PendingCount(), "超过 Settle 仍读不到：按原逻辑 gave_up")
 }
+
+// “未找到”也缓存：同一轮里同一（数据集、触发事件、周期）读不到 marker 只读一次；读失败不缓存，下一次还会再读；新一轮清空缓存。
+func TestGapFillerCachesMarkerNotFoundWithinSweep(t *testing.T) {
+	universe := &periodUniverse{byPeriod: map[int64]storageio.Universe{}}
+	filler := &gapFiller{universe: universe}
+	set := domain.FactorTask{SpaceID: "crypto", ResultDatasetID: "dataset_result"}
+	for i := 0; i < 3; i++ {
+		_, found, err := filler.computedUniverse(context.Background(), set, "evt-0", minuteAt(0).Unix())
+		require.NoError(t, err)
+		require.False(t, found)
+	}
+	require.Equal(t, 1, universe.reads, "未找到同一轮只读一次")
+	_, _, err := filler.computedUniverse(context.Background(), set, "evt-1", minuteAt(0).Unix())
+	require.NoError(t, err)
+	require.Equal(t, 2, universe.reads, "触发事件不同是另一个键")
+
+	failing := &periodUniverse{byPeriod: map[int64]storageio.Universe{}, err: errors.New("boom")}
+	filler = &gapFiller{universe: failing}
+	for i := 0; i < 2; i++ {
+		_, _, err := filler.computedUniverse(context.Background(), set, "evt-0", minuteAt(0).Unix())
+		require.Error(t, err)
+	}
+	require.Equal(t, 2, failing.reads, "读失败不缓存")
+}

@@ -90,3 +90,9 @@ type GapEntry struct {
 type GapSink interface {
 	RecordGaps(ctx context.Context, entries []GapEntry) error
 }
+
+// ReportedSink 是 GapSink 的可选扩展：这一期的周期完成标记（marker）写完后被调用。
+// 账本在结果和 marker 之前记账，恢复要读 marker 里冻结的序列全集，所以记账时唤醒恢复必然抢在 marker 之前，需要在这里再唤醒一次。
+type ReportedSink interface {
+	PeriodReported()
+}

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
+	"github.com/mooyang-code/moox/modules/factor/internal/seriesstore"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/mooyang-code/moox/packages/seriesset"
 	"github.com/stretchr/testify/require"
@@ -153,10 +154,31 @@ func TestSeriesFollowerRecomputeSelectionLeavesExpectedSeriesToTheDataLayer(t *t
 	f := newGapFixture(t, fakeUniverse{}, factor)
 	follower := &seriesFollower{sets: f.sets, source: fakeColumns{}, exec: f.chunks}
 	set, _ := f.sets.SetByID("fset")
-	require.NoError(t, follower.run(context.Background(), set, map[string]struct{}{"BTC": {}}, false, gapT0, gapT0.Add(time.Minute)))
+	_, err := follower.run(context.Background(), set, map[string]struct{}{"BTC": {}}, false, gapT0, gapT0.Add(time.Minute))
+	require.NoError(t, err)
 	require.Len(t, f.chunks.calls, 1)
 	selection := f.chunks.calls[0].selection
 	require.Empty(t, selection.Series)
 	require.False(t, selection.FillOnly)
 	require.Equal(t, []string{"BTC"}, selection.Subjects)
+}
+
+type noCommitted struct{}
+
+func (noCommitted) CommittedThrough(string) (time.Time, bool) { return time.Time{}, false }
+
+// 失效重算遇到推测期望缺数的跳过（旧值保留、没有真正重算）：recomputeTask 报告 derivedSkipped，调用方据此不清这一段待办；
+// 没有跳过时不报告，待办照常清除。
+func TestSeriesFollowerReportsDerivedSkippedSoPendingIsKept(t *testing.T) {
+	factor := gapFactor("ma", domain.FactorTypeTimeSeries, false)
+	pending := []seriesstore.PendingSpan{{Subject: "BTC", From: gapT0, To: gapT0.Add(time.Minute)}}
+	for _, skipped := range []bool{true, false} {
+		f := newGapFixture(t, fakeUniverse{}, factor)
+		f.chunks.derivedSkipped = skipped
+		follower := &seriesFollower{sets: f.sets, source: fakeColumns{}, exec: f.chunks, periods: noCommitted{}, chunk: 10}
+		derived, err := follower.recomputeTask(context.Background(), "fset", pending)
+		require.NoError(t, err)
+		require.Len(t, f.chunks.calls, 1)
+		require.Equal(t, skipped, derived)
+	}
 }

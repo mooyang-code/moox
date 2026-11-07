@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
@@ -175,7 +176,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 		default:
 		}
 	}
-	pipelineConfig.GapSink = warmingKickSink{GapSink: ledger, kick: kickGap}
+	pipelineConfig.GapSink = warmingKickSink{GapSink: ledger, kick: kickGap, pending: new(atomic.Bool)}
 	watermarks, err := watermark.Open(cfg.Watermark.StateFile)
 	if err != nil {
 		return nil, fmt.Errorf("open factor watermarks: %w", err)

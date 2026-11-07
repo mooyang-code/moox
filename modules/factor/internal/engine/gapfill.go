@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"sync/atomic"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
@@ -119,17 +120,30 @@ func (g *gapFiller) Run(ctx context.Context) {
 type warmingKickSink struct {
 	pipeline.GapSink
 	kick func()
+	// pending 记着已记账、还没等到 marker 的预热中跳过项：这一期的 marker 在结果写完之后才写，记账时唤醒的恢复读不到它，
+	// 只能保留待办等下一轮；marker 写完后（PeriodReported）再唤醒一次，恢复才能及时发生。
+	pending *atomic.Bool
 }
 
 func (s warmingKickSink) RecordGaps(ctx context.Context, entries []pipeline.GapEntry) error {
 	err := s.GapSink.RecordGaps(ctx, entries)
 	for _, entry := range entries {
 		if entry.Reason == pipeline.SkipReasonWarming {
+			if s.pending != nil {
+				s.pending.Store(true)
+			}
 			s.kick()
 			break
 		}
 	}
 	return err
+}
+
+// PeriodReported 在周期完成标记写完后调用：之前记过预热中跳过的项就再唤醒一次。多个任务并行时标志是共享的，多唤醒一次无害。
+func (s warmingKickSink) PeriodReported() {
+	if s.pending != nil && s.pending.Swap(false) {
+		s.kick()
+	}
 }
 
 // settled 判断一条待办是否可以恢复了：发现后过了 Settle（给自动补采留时间）；预热中跳过的项在该任务预热就绪后即可恢复，
