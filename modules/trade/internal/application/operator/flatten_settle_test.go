@@ -385,10 +385,10 @@ func unsettledNoted(fixture *operatorFixture, actionID, needle string) bool {
 	return false
 }
 
-// 收尾已满 30 分钟时这次调用的预算到点：解析成员 A 的结果未知子单时上下文被取消，成员 B 的子单就列不出来。
-// 这一遍没收拾全，是本动作这次调用的问题而不是共享故障：不能落成（否则 B 的待提交子单没人丢弃，一直占着资金预留），
-// 也不记“读写不了子单”的关注项；下次恢复完整收拾一遍后照常落成。
-func TestFlattenFinishingKeepsRunningWhenBudgetEndsAfterTimeout(t *testing.T) {
+// 收尾时这次调用的预算用完（解析成员 A 的结果未知子单时上下文被取消）：所有成员的子单在第一步只读写本地库时已经列全，
+// 成员 B 的待提交子单照样被丢弃（释放资金预留）；A 那笔留到下次再解析，不记“读写不了子单”的关注项。
+// 预算用完不能让收尾无限拖下去：满 30 分钟时照常落成，A 那笔交给人工核对。
+func TestFlattenFinishingBudgetEndDiscardsPendingAndRespectsTimeout(t *testing.T) {
 	fixture := newMixedFlattenFixture(t)
 	authErr := &orderapp.AccountExecutionError{TradingAccountID: "account-a", Operation: "get_order",
 		Err: &exchange.Error{Kind: exchange.ErrorAuthentication, Code: "-2015"}}
@@ -399,35 +399,39 @@ func TestFlattenFinishingKeepsRunningWhenBudgetEndsAfterTimeout(t *testing.T) {
 	require.Equal(t, "RUNNING", result.Action.Status)
 	require.Equal(t, enteredAt.UnixMilli(), result.FinishingSince)
 	operatorChild(t, fixture, "account-b", "delist-budget", "child-budget-b", "PENDING")
-
-	fixture.now = enteredAt.Add(30 * time.Minute)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	failing := service.Orders.(failResolveOrders)
-	service.Orders = cancelOnResolve{failResolveOrders: failing, cancel: cancel}
-	stored, err := fixture.store.GetOperatorAction(context.Background(), "space-1", "delist-budget")
-	require.NoError(t, err)
-	err = service.ResumeOperatorAction(ctx, stored)
-	require.True(t, err == nil || ActionScopedError(err), "预算到点不能被当成共享故障：%v", err)
-	stored, err = fixture.store.GetOperatorAction(context.Background(), "space-1", "delist-budget")
-	require.NoError(t, err)
-	decoded, err := decodeFlattenResult(stored)
-	require.NoError(t, err)
-	require.Equal(t, "RUNNING", decoded.Action.Status, "这一遍没收拾全，到了上限也不能落成")
-	require.Equal(t, "PARTIAL", decoded.FinishingStatus)
+
+	resumeCanceled := func() FlattenResult {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		service.Orders = cancelOnResolve{failResolveOrders: failing, cancel: cancel}
+		stored, err := fixture.store.GetOperatorAction(context.Background(), "space-1", "delist-budget")
+		require.NoError(t, err)
+		err = service.ResumeOperatorAction(ctx, stored)
+		require.True(t, err == nil || ActionScopedError(err), "预算用完不能被当成共享故障：%v", err)
+		stored, err = fixture.store.GetOperatorAction(context.Background(), "space-1", "delist-budget")
+		require.NoError(t, err)
+		decoded, err := decodeFlattenResult(stored)
+		require.NoError(t, err)
+		return decoded
+	}
+
+	// 上限之内：保持收尾，B 的待提交子单已丢弃，A 那笔留给下次。
+	fixture.now = enteredAt.Add(10 * time.Minute)
+	decoded := resumeCanceled()
+	require.Equal(t, "RUNNING", decoded.Action.Status)
 	require.Equal(t, enteredAt.UnixMilli(), decoded.FinishingSince, "不重新计时")
-	require.Empty(t, decoded.ManualCheckOrderIDs)
-	require.Equal(t, "PENDING", childState(t, fixture, "child-budget-b"), "B 的子单这次没轮到，留给下次恢复")
+	require.Equal(t, "CANCELED", childState(t, fixture, "child-budget-b"), "第一步只读写本地库，预算用完也照样丢弃待提交子单")
 	require.Equal(t, "SUBMIT_UNKNOWN", childState(t, fixture, "child-budget-a"))
 	require.False(t, unsettledNoted(fixture, "delist-budget", "读写不了子单"), "不能记成共享故障")
 
-	// 下次恢复（新的预算）：A 解析出来、B 丢弃，照常落成，没有要人工核对的子单。
-	service.Orders = failing.keepPendingOrders
-	decoded = resumeStored(t, fixture, service, "delist-budget")
+	// 满 30 分钟预算仍每次用完：照常落成，A 交给人工核对。
+	fixture.now = enteredAt.Add(30 * time.Minute)
+	decoded = resumeCanceled()
 	require.Equal(t, "PARTIAL", decoded.Action.Status)
-	require.Empty(t, decoded.ManualCheckOrderIDs)
-	require.Equal(t, "CANCELED", childState(t, fixture, "child-budget-a"))
-	require.Equal(t, "CANCELED", childState(t, fixture, "child-budget-b"), "待提交的子单丢弃，释放资金预留")
+	require.Equal(t, []string{"child-budget-a"}, decoded.ManualCheckOrderIDs)
+	require.True(t, unsettledNoted(fixture, "delist-budget", "需人工核对"))
+	require.False(t, unsettledNoted(fixture, "delist-budget", "读写不了子单"), "不能记成共享故障")
 	require.Empty(t, fixture.orders.specs, "收尾期间不下单")
 }
 
@@ -577,7 +581,7 @@ func TestSettleFlattenChildrenReturnsOnlySharedErrors(t *testing.T) {
 				return
 			}
 			if tc.budget {
-				// 预算到点后后面的账户列不了子单：作为本账户的预算错误返回，只记在这个动作上。
+				// 预算用完：没轮到的子单留给下次，不作为共享故障返回。
 				require.True(t, err == nil || ActionScopedError(err), "预算到点不能被当成共享故障：%v", err)
 			} else {
 				require.NoError(t, err, "本动作的问题不作为调用错误返回")

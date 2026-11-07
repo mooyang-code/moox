@@ -508,9 +508,9 @@ const flattenFinishingTimeout = 30 * time.Minute
 // 收拾完才落成 status。收尾满 flattenFinishingTimeout 仍收拾不完，或者子单收拾不了（交易所确认标的不存在），
 // 照样落成 status，这些子单记进结果的 ManualCheckOrderIDs 并记关注项，要人工核对。返回实际落库的状态。
 //
-// 子单解析失败属于本动作的账户问题，不作为调用错误返回（否则工作线程每秒都报错）；原因写进动作的 last_error。
-// 预算到点后列不了后面成员的子单同样是本动作的问题：这一遍没收拾全，不管到没到上限都保持收尾，下次恢复接着收拾。
-// 读写数据库这类共享故障在收尾 30 分钟内照样返回；满 30 分钟仍是共享故障，也并入没收拾掉的子单交给人工，照常落成。
+// 子单解析失败、本次预算用完属于本动作的问题，不作为调用错误返回（否则工作线程每秒都报错）；原因写进动作的 last_error，
+// 没收拾掉的子单统一受收尾上限约束。读写数据库这类共享故障在收尾 30 分钟内照样返回；满 30 分钟仍是共享故障，
+// 也并入没收拾掉的子单交给人工，照常落成。
 func (s *Service) finishFlatten(
 	ctx context.Context,
 	command FlattenCommand,
@@ -525,15 +525,6 @@ func (s *Service) finishFlatten(
 			result.FinishingSince = s.clock().UnixMilli()
 		}
 		timedOut := result.FinishingSince != 0 && s.clock().Sub(time.UnixMilli(result.FinishingSince)) >= flattenFinishingTimeout
-		if settleErr != nil && ActionScopedError(settleErr) {
-			// 本动作这次调用的问题（预算到点后列不了后面成员的子单）：这一遍没走完所有成员，outcome 不全，
-			// 到没到收尾上限都不能拿它落成（否则没轮到的成员的待提交子单一直占着资金预留），保持原样等下一次恢复接着收拾；
-			// 下一次完整收拾一遍后仍有没收拾掉的子单，才按收尾上限交给人工。和解析失败一样不作为调用错误返回，原因写进 last_error。
-			outcome.errs = append(outcome.errs, settleErr)
-			result.FinishingStatus = status
-			running := string(operatordomain.StatusRunning)
-			return running, s.persistFlattenProgressNote(ctx, result, running, outcome.errorText())
-		}
 		if settleErr != nil {
 			if !timedOut {
 				// 列子单、读写库这类共享故障：没法判断，保持原样等下一次恢复，错误照样返回（让就绪反映出故障）。
@@ -579,60 +570,100 @@ func (s *Service) finishFlatten(
 	return status, nil
 }
 
-// settleFlattenChildren 在动作结束前收拾本动作还没结束的子单，不让它们在动作结束后没人管：
-//   - 待提交的直接丢弃（记为已撤销，从没发到交易所）；
-//   - 提交中、结果未知的先同步解析，解析后退回待提交的同样丢弃；
-//   - 挂单中、撤单中的不动，它们自己会结束。
+// settleLocalTimeout 是收拾子单第一步（只读写本地库）的时限。这一步另起上下文，不受本次调用剩余预算影响。
+const settleLocalTimeout = 5 * time.Second
+
+// settleFlattenChildren 在动作结束前收拾本动作还没结束的子单，不让它们在动作结束后没人管。分两步：
+//  1. 只读写本地库：把所有成员上本动作的子单一次列全，待提交的直接丢弃（记为已撤销，从没发到交易所，释放资金预留）。
+//     这一步另起短超时的上下文，前面成员慢不会让后面成员的子单列不出来；
+//  2. 逐笔解析提交中、结果未知的子单（要问交易所），解析后退回待提交的同样丢弃。本次调用预算用完时，
+//     没轮到的留在 unsettled 里，下次恢复接着解析。挂单中、撤单中的不动，它们自己会结束。
 //
-// 结果分三类：unsettled 是这次没收拾掉、下次恢复还能再试的（未知窗口内、解析或丢弃遇到本动作的账户问题、取不到账户会话、预算到点）；
-// manualCheck 是收拾不了的（交易所确认标的不存在），不阻塞收尾，要人工核对；返回的错误是这次没法判断的：列子单读库失败，
-// 或解析、丢弃遇到不只关乎本动作的错误（ActionScopedError 判为否，例如写库失败）；预算到点后列子单失败记成本账户的预算错误返回。
-// 返回错误时也带回出错前的结果，出错的那笔子单记在 unsettled 里（收尾到上限时交给人工）。
+// 结果分三类：unsettled 是这次没收拾掉、下次恢复还能再试的（未知窗口内、解析或丢弃遇到本动作的账户问题、取不到账户会话、预算用完）；
+// manualCheck 是收拾不了的（交易所确认标的不存在），不阻塞收尾，要人工核对；返回的错误只有共享故障（列子单读库失败，
+// 或解析、丢弃遇到 ActionScopedError 判为否的错误，例如写库失败）。返回错误时也带回出错前的结果：
+// 第二步出错时，出错的和没轮到的子单都在 unsettled 里，结果是全的；第一步出错时结果不全，由调用方另行列出。
 func (s *Service) settleFlattenChildren(ctx context.Context, command FlattenCommand, members []store.LogicalAccountMemberRecord) (settleOutcome, error) {
 	var outcome settleOutcome
+	localCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), settleLocalTimeout)
+	defer cancel()
+	var unknown []store.OrderRecord
 	for _, member := range members {
-		records, err := s.Store.ListActiveOrdersForAccount(ctx, command.SpaceID, member.TradingAccountID)
+		records, err := s.Store.ListActiveOrdersForAccount(localCtx, command.SpaceID, member.TradingAccountID)
 		if err != nil {
-			return outcome, settleScoped(ctx, member.TradingAccountID, err)
+			return outcome, fmt.Errorf("列执行账户 %s 的子单：%w", member.TradingAccountID, err)
 		}
 		for _, child := range records {
 			if child.OwnerType != string(orderdomain.OwnerOperator) || child.OwnerID != command.ActionID {
 				continue
 			}
-			state := orderdomain.State(child.State)
-			if state == orderdomain.Submitting || state == orderdomain.SubmitUnknown {
-				resolved, resolveErr := s.Orders.ResolveUnknown(ctx, command.SpaceID, child.OrderID)
-				if resolveErr != nil {
-					if resolveErr = settleScoped(ctx, child.TradingAccountID, resolveErr); !ActionScopedError(resolveErr) {
-						outcome.unsettled = append(outcome.unsettled, child.OrderID)
-						return outcome, fmt.Errorf("解析子单 %s：%w", child.OrderID, resolveErr)
-					}
-					if childUnsettleable(resolveErr) {
-						outcome.manualCheck = append(outcome.manualCheck, child.OrderID)
-					} else {
-						outcome.unsettled = append(outcome.unsettled, child.OrderID)
-					}
-					outcome.errs = append(outcome.errs, fmt.Errorf("解析子单 %s：%w", child.OrderID, resolveErr))
-					continue
-				}
-				state = resolved.State
-			}
-			switch state {
+			switch orderdomain.State(child.State) {
 			case orderdomain.Pending:
-				if _, discardErr := s.Orders.DiscardPending(ctx, command.SpaceID, child.OrderID); discardErr != nil {
-					if discardErr = settleScoped(ctx, child.TradingAccountID, discardErr); !ActionScopedError(discardErr) {
-						outcome.unsettled = append(outcome.unsettled, child.OrderID)
-						return outcome, fmt.Errorf("丢弃子单 %s：%w", child.OrderID, discardErr)
-					}
-					outcome.unsettled = append(outcome.unsettled, child.OrderID)
-					outcome.errs = append(outcome.errs, fmt.Errorf("丢弃子单 %s：%w", child.OrderID, discardErr))
+				if err := s.discardChild(localCtx, command, child, &outcome); err != nil {
+					return outcome, err
 				}
 			case orderdomain.Submitting, orderdomain.SubmitUnknown:
-				outcome.unsettled = append(outcome.unsettled, child.OrderID)
+				unknown = append(unknown, child)
 			}
 		}
 	}
+	for i, child := range unknown {
+		if ctx.Err() != nil {
+			// 本次调用的预算用完：没轮到的留给下次恢复，到收尾上限时交给人工。
+			for _, rest := range unknown[i:] {
+				outcome.unsettled = append(outcome.unsettled, rest.OrderID)
+			}
+			outcome.errs = append(outcome.errs, fmt.Errorf("本次收拾的时间用完，还有 %d 笔子单没解析", len(unknown)-i))
+			break
+		}
+		resolved, resolveErr := s.Orders.ResolveUnknown(ctx, command.SpaceID, child.OrderID)
+		if resolveErr != nil {
+			if resolveErr = settleScoped(ctx, child.TradingAccountID, resolveErr); !ActionScopedError(resolveErr) {
+				for _, rest := range unknown[i:] {
+					outcome.unsettled = append(outcome.unsettled, rest.OrderID)
+				}
+				return outcome, fmt.Errorf("解析子单 %s：%w", child.OrderID, resolveErr)
+			}
+			if childUnsettleable(resolveErr) {
+				outcome.manualCheck = append(outcome.manualCheck, child.OrderID)
+			} else {
+				outcome.unsettled = append(outcome.unsettled, child.OrderID)
+			}
+			outcome.errs = append(outcome.errs, fmt.Errorf("解析子单 %s：%w", child.OrderID, resolveErr))
+			continue
+		}
+		switch resolved.State {
+		case orderdomain.Pending:
+			// 解析可能已用掉第一步的时限，丢弃另起一个短超时（只写本地库）。
+			discardCtx, cancelDiscard := context.WithTimeout(context.WithoutCancel(ctx), settleLocalTimeout)
+			err := s.discardChild(discardCtx, command, child, &outcome)
+			cancelDiscard()
+			if err != nil {
+				for _, rest := range unknown[i+1:] {
+					outcome.unsettled = append(outcome.unsettled, rest.OrderID)
+				}
+				return outcome, err
+			}
+		case orderdomain.Submitting, orderdomain.SubmitUnknown:
+			outcome.unsettled = append(outcome.unsettled, child.OrderID)
+		}
+	}
 	return outcome, nil
+}
+
+// discardChild 丢弃一笔待提交的子单。本动作的账户问题（例如等账户锁超时、版本冲突）记进 unsettled，下次再试；
+// 共享故障（写库失败）把这笔记进 unsettled 后返回错误。
+func (s *Service) discardChild(ctx context.Context, command FlattenCommand, child store.OrderRecord, outcome *settleOutcome) error {
+	_, discardErr := s.Orders.DiscardPending(ctx, command.SpaceID, child.OrderID)
+	if discardErr == nil {
+		return nil
+	}
+	outcome.unsettled = append(outcome.unsettled, child.OrderID)
+	if discardErr = settleScoped(ctx, child.TradingAccountID, discardErr); !ActionScopedError(discardErr) {
+		return fmt.Errorf("丢弃子单 %s：%w", child.OrderID, discardErr)
+	}
+	outcome.errs = append(outcome.errs, fmt.Errorf("丢弃子单 %s：%w", child.OrderID, discardErr))
+	return nil
 }
 
 // flattenChildrenLeft 在收尾到上限、收拾子单遇到共享故障时，尽量列出本动作还没结束、又不在 outcome 里的子单
