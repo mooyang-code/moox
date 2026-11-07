@@ -89,7 +89,7 @@ func (h *Handler) evaluatePool(ctx context.Context, p *period, key string, ready
 			results[i] = pool.MemberResult{ID: member.ID, Reason: memberReady.Reason, Detail: memberReady.Detail}
 			continue
 		}
-		loaded, skip, terminal, err := h.loadInput(ctx, p, key, member.Resolved, rt.pool.programs[i], memberReady)
+		loaded, skip, terminal, err := h.loadInput(ctx, p, key, member.Resolved, rt.pool.programs[i], memberReady, previous.Members[member.ID])
 		if terminal || err != nil {
 			return nil, input.Loaded{}, err
 		}

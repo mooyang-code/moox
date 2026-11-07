@@ -33,6 +33,9 @@ type Bar struct {
 	// Unavailable 是本期整体不可用的市场（市场 → 原因）：那个市场的因子本期被跳过，不读它的行，它的标的记缺失原因“市场不可用”，
 	// 已持仓的标的冻结。
 	Unavailable map[string]string
+	// Held 是上期在各市场持有非零目标（多空都算）的标的（市场 → 标的）：判断一个市场的因子失败比例时，持仓豁免年龄剔除
+	// （与单市场守门、选币池构造一致：年龄剔除只拦新进入的标的）。没有上期状态（试算）时为空。
+	Held map[string]map[string]struct{}
 }
 
 // Loaded 是装配完成的一期输入。
@@ -421,10 +424,10 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 		return Loaded{}, err
 	}
 	// 失败的标的占比超过 max_missing 也按这个市场不可用处理：多市场策略里，逐币的 factor_failed 不冻结，没持仓的币又会退回另一个市场的行，
-	// 缺数分母被摊薄，持有的永续照样被卖。分母与单市场守门尽量一致：只统计本次读行的标的，并扣掉在这个市场年龄不够的（年龄剔除的标的不算缺数）；
-	// LoadBar 看不到上期持仓，所以“年龄剔除只拦新进入的标的”的豁免在这里取不到：在这个市场年龄没通过的持仓失败时不计入。
-	// 判为不可用的市场清掉已读的行和年龄剔除记录。
+	// 缺数分母被摊薄，持有的永续照样被卖。分母与单市场守门尽量一致：只统计本次读行的标的，并扣掉在这个市场年龄不够的（年龄剔除的标的不算缺数），
+	// 但上期在这个市场持仓的豁免（年龄剔除只拦新进入的标的）。判为不可用的市场清掉已读的行和年龄剔除记录，规则级的年龄剔除集合也按剩下的市场重算。
 	if len(loads) > 1 {
+		cleared := false
 		for _, load := range loads {
 			if load.unavailable != "" {
 				continue
@@ -434,13 +437,31 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 				if !probed {
 					return true
 				}
-				_, ok := passed[id]
-				return ok
+				if _, ok := passed[id]; ok {
+					return true
+				}
+				_, held := bar.Held[load.market][id]
+				return held
 			}
 			if detail := wholeMarketFailure(load, bar.Readiness[load.market], instruments, include, program.Strategy.Portfolio.MaxMissing, true); detail != "" {
 				markUnavailable(load, detail)
-				delete(agePassed, load.market)
+				if _, probed := agePassed[load.market]; probed {
+					delete(agePassed, load.market)
+					cleared = true
+				}
 			}
+		}
+		if cleared && resolved.MinAgeBars > 0 {
+			// 不可用市场的探针结果不再作数：只在它那里通过年龄的标的，规则级也按年龄剔除记（与因子被跳过、全部失败而没做探针的市场口径一致）。
+			_ = sets.ApplyAge(ctx, resolved.MinAgeBars, func(context.Context, []string) (map[string]struct{}, error) {
+				passed := make(map[string]struct{})
+				for _, got := range agePassed {
+					for id := range got {
+						passed[id] = struct{}{}
+					}
+				}
+				return passed, nil
+			})
 		}
 		if err := skipWhenSelectionUnavailable(resolved, loads); err != nil {
 			return Loaded{}, err
@@ -481,7 +502,8 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 	return Loaded{Frame: frame, Sets: sets, Boundary: boundary, Steps: steps}, nil
 }
 
-// markUnavailable 把一个市场记为本期不可用，并清掉已读的行（不可用的市场不再用它的行；去掉这句用例也过，留着是为了不留半截数据）。
+// markUnavailable 把一个市场记为本期不可用，并清掉已读的行：必须清，不清的话没持仓的标的会取到不可用市场的行，
+// 在引擎里记成 market_unavailable 缺数，而不是退回另一个市场的行。
 func markUnavailable(load *marketLoad, detail string) {
 	load.unavailable, load.current, load.previous = detail, nil, nil
 }

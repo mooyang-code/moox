@@ -319,7 +319,7 @@ func (w ucWorld) run(t *testing.T, unified bool) engine.Decision {
 	if ready.Reason != "" {
 		return engine.Decision{Status: engine.StatusSkipped, SkipReason: ready.Reason}
 	}
-	loaded, err := input.Loader{Client: client}.LoadBar(ctx, "space", resolved, program, input.Bar{BarStart: ucBar, EventUniverse: p.eventUniverses(resolved), Readiness: ready.Results, Unavailable: ready.Unavailable})
+	loaded, err := input.Loader{Client: client}.LoadBar(ctx, "space", resolved, program, input.Bar{BarStart: ucBar, EventUniverse: p.eventUniverses(resolved), Readiness: ready.Results, Unavailable: ready.Unavailable, Held: w.state.HeldMarkets()})
 	if err != nil {
 		var skip *input.SkipError
 		if asSkip(err, &skip) {
@@ -797,5 +797,106 @@ func TestUnifiedMatchesDualTasksSkipsProbeForWhollyFailedMarket(t *testing.T) {
 				t.Fatalf("永续只是部分失败时仍要探针：%+v", decision)
 			}
 		})
+	}
+}
+
+// ucWideSpot 是现货 11 个币（永续的 B、C 也在其中，D、X 只在永续），持有 D|swap、X|swap 各 0.5：现货的币多，才会摊薄缺数比例。
+func ucWideSpot(mode string, maxMissing string) ucWorld {
+	spot := []string{"A", "B", "C", "E", "F", "G", "H", "I", "J", "K", "L"}
+	spotRows := map[string]float64{}
+	for i, id := range spot {
+		spotRows[id] = float64(i + 1)
+	}
+	world := ucWorld{
+		dsl:     ucDSLWith(mode, "universe: {min_age_bars: 24}\n", maxMissing),
+		members: map[string][]string{"spot": spot, "swap": {"B", "C", "D", "X"}},
+		rows:    map[string]map[string]float64{"spot": spotRows, "swap": {"B": 50, "C": 60, "D": 70, "X": 80}},
+		failed:  map[string][]string{}, skipped: map[string]bool{}, history: map[string][]string{"spot": spot},
+	}
+	ucHeld(&world, mode)
+	return world
+}
+
+// 持仓豁免年龄剔除：持有的 D、X 在永续探针窗口里没有行（年龄没通过），本期它们的永续因子失败。失败比例要把持仓算进去（单市场守门与
+// 引擎都对持仓豁免年龄剔除）：永续不可用、持仓冻结（或整期 too_many_missing、持仓不动），不能被当成逐币失败而卖成现货。
+func TestUnifiedMatchesDualTasksCountsHeldAgedOutFailures(t *testing.T) {
+	for _, mode := range []string{"{select: both, prefer: swap}", "{select: both, prefer: spot}"} {
+		for _, fails := range [][]string{{"D", "X"}, {"D"}, {"X"}} {
+			t.Run(mode+strings.Join(fails, ""), func(t *testing.T) {
+				world := ucWideSpot(mode, "0.2")
+				world.history["swap"] = []string{"B", "C"}
+				world.failed["swap"] = fails
+				for _, id := range fails {
+					delete(world.rows["swap"], id)
+				}
+				decision, targets := requireSame(t, world)
+				for _, key := range []string{"D|swap", "X|swap"} {
+					if _, ok := targets[key]; !ok && decision.Status != engine.StatusSkipped {
+						t.Fatalf("持有的 %s 被卖出：%s %v", key, decision.Status, targets)
+					}
+				}
+			})
+		}
+	}
+}
+
+// 反方向：max_missing 为 1、永续的 B、C 因子失败，持有的 D、X 数据正常但年龄没通过：持仓算进统计后永续不是“全部失败”，
+// 不会因为只统计探针通过的 B、C 就把整个永续判不可用、冻结正常的持仓。
+func TestUnifiedMatchesDualTasksHeldAgedOutHealthySeriesStayAvailable(t *testing.T) {
+	mode := "{select: both, prefer: swap}"
+	world := ucWideSpot(mode, "1")
+	world.history["swap"] = []string{"B", "C"}
+	world.failed["swap"] = []string{"B", "C"}
+	delete(world.rows["swap"], "B")
+	delete(world.rows["swap"], "C")
+	_, targets := requireSame(t, world)
+	for _, key := range []string{"D|swap", "X|swap"} {
+		if targets[key] != "0.5" {
+			t.Fatalf("数据正常的持仓 %s 不应被冻结，也不应被卖出：%v", key, targets)
+		}
+	}
+}
+
+// 清行是必需的：失败比例判永续不可用后，没持仓的 X 要退回现货的行；不清行的话它会取到不可用的永续行，记成 market_unavailable 缺数。
+func TestUnifiedMatchesDualTasksClearsRowsOfUnavailableMarket(t *testing.T) {
+	mode := "{select: both, prefer: swap}"
+	world := ucBase(mode)
+	world.state = engine.State{}
+	world.dsl = ucDSLWith(mode, "", "0.2")
+	world.failed["swap"] = []string{"B", "C", "D"}
+	for _, id := range world.failed["swap"] {
+		delete(world.rows["swap"], id)
+	}
+	world.rows["spot"]["X"] = 100
+	decision, targets := requireSame(t, world)
+	if decision.Status != engine.StatusOK || targets["X|spot"] == "" || targets["X|swap"] != "" {
+		t.Fatalf("永续不可用时没持仓的 X 应退回现货的行：%+v %v", decision, targets)
+	}
+}
+
+// 同一个只在永续上、没持仓的币在不同的“市场不可用”路径上口径一致：因子被跳过（不探针）与失败比例超限（探针之后）都按年龄剔除记，
+// 不再因为不可用市场的探针结果让它在规则级通过年龄、被当作缺数。
+func TestUnifiedUnavailablePathsTreatSwapOnlyListingTheSame(t *testing.T) {
+	mode := "{select: both, prefer: swap}"
+	base := func() ucWorld {
+		world := ucBase(mode)
+		world.state = engine.State{}
+		world.dsl = ucDSLWith(mode, "universe: {min_age_bars: 24}\n", "0.1")
+		world.history = map[string][]string{"spot": {"A", "B", "C", "X"}, "swap": {"B", "C", "D", "X"}}
+		return world
+	}
+	skipped := base()
+	skipped.skipped["swap"] = true
+	ratio := base()
+	ratio.failed["swap"] = []string{"B", "C", "X"}
+	for _, id := range ratio.failed["swap"] {
+		delete(ratio.rows["swap"], id)
+	}
+	a, _ := requireSame(t, skipped)
+	b, _ := requireSame(t, ratio)
+	textA, _ := summarize(t, a)
+	textB, _ := summarize(t, b)
+	if textA != textB {
+		t.Fatalf("两条不可用路径对只在永续上的 D 的口径应一致：\n因子被跳过：%s\n失败比例：%s", textA, textB)
 	}
 }

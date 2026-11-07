@@ -403,3 +403,19 @@ func TestAgedOutRowsAreSkippedExceptForHeldPositions(t *testing.T) {
 	}
 	requireTargets(t, decision, map[string]string{"X|swap": "1"})
 }
+
+// HeldMarkets 返回上期各市场持有非零目标的标的：多空都算，零权重不算。
+func TestStateHeldMarkets(t *testing.T) {
+	held := State{Targets: map[string]string{"A|spot": "0.5", "A|swap": "-0.25", "B|swap": "0", "C|swap": "1"}}.HeldMarkets()
+	if len(held["spot"]) != 1 || len(held["swap"]) != 2 {
+		t.Fatalf("持仓市场不符：%v", held)
+	}
+	for _, key := range [][2]string{{"spot", "A"}, {"swap", "A"}, {"swap", "C"}} {
+		if _, ok := held[key[0]][key[1]]; !ok {
+			t.Fatalf("%s 的 %s 应是持仓：%v", key[0], key[1], held)
+		}
+	}
+	if _, ok := held["swap"]["B"]; ok {
+		t.Fatalf("零权重不算持仓：%v", held)
+	}
+}

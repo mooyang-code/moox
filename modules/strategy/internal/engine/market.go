@@ -78,6 +78,20 @@ func indexHeld(previous State) heldIndex {
 	return index
 }
 
+// HeldMarkets 返回上期各市场持有非零目标（多空都算）的标的（市场 → 标的）。
+func (s State) HeldMarkets() map[string]map[string]struct{} {
+	held := make(map[string]map[string]struct{})
+	for id, entries := range indexHeld(s) {
+		for _, entry := range entries {
+			if held[entry.market] == nil {
+				held[entry.market] = make(map[string]struct{})
+			}
+			held[entry.market][id] = struct{}{}
+		}
+	}
+	return held
+}
+
 // holds 报告上期在这个市场持有标的的非零目标。
 func (h heldIndex) holds(id, market string) bool {
 	for _, entry := range h[id] {

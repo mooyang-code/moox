@@ -474,18 +474,19 @@ func (h *Handler) evaluate(ctx context.Context, p *period, payload *storagepb.Vi
 	if rt.pool != nil {
 		return h.evaluatePool(ctx, p, key, ready)
 	}
-	loaded, skip, terminal, err := h.loadInput(ctx, p, key, rt.resolved, rt.program, ready)
+	evalStart := h.now()
+	defer func() { p.timing.eval = h.now().Sub(evalStart) }()
+	// 上期状态先于输入装配读取：装配要知道各市场的持仓（判断因子失败比例时持仓豁免年龄剔除）。
+	previous, ok, err := h.previousState(ctx, p)
+	if err != nil || !ok {
+		return nil, input.Loaded{}, err
+	}
+	loaded, skip, terminal, err := h.loadInput(ctx, p, key, rt.resolved, rt.program, ready, previous)
 	if terminal || err != nil {
 		return nil, input.Loaded{}, err
 	}
 	if skip != nil {
 		return nil, input.Loaded{}, h.commitSkipped(ctx, p, skip.Reason, skip.Detail)
-	}
-	evalStart := h.now()
-	defer func() { p.timing.eval = h.now().Sub(evalStart) }()
-	previous, ok, err := h.previousState(ctx, p)
-	if err != nil || !ok {
-		return nil, input.Loaded{}, err
 	}
 	runStart := h.now()
 	decision, err := engine.Evaluate(rt.program, loaded.Frame, previous)
@@ -563,10 +564,10 @@ func (h *Handler) withReads(ctx context.Context, p *period, key string, read fun
 }
 
 // loadInput 装配一个绑定（普通策略的绑定，或策略池一个成员的绑定）的一期输入，读取规则见 withReads。
-func (h *Handler) loadInput(ctx context.Context, p *period, key string, resolved input.Resolved, program *dsl.Program, ready mergedReadiness) (loaded input.Loaded, skip *input.SkipError, terminal bool, err error) {
+func (h *Handler) loadInput(ctx context.Context, p *period, key string, resolved input.Resolved, program *dsl.Program, ready mergedReadiness, previous engine.State) (loaded input.Loaded, skip *input.SkipError, terminal bool, err error) {
 	skip, terminal, err = h.withReads(ctx, p, key, func() error {
 		var readErr error
-		loaded, readErr = p.loader.LoadBar(ctx, p.instance.SpaceID, resolved, program, input.Bar{BarStart: p.boundary.StorageStart, EventUniverse: p.eventUniverses(resolved), Readiness: ready.Results, Unavailable: ready.Unavailable})
+		loaded, readErr = p.loader.LoadBar(ctx, p.instance.SpaceID, resolved, program, input.Bar{BarStart: p.boundary.StorageStart, EventUniverse: p.eventUniverses(resolved), Readiness: ready.Results, Unavailable: ready.Unavailable, Held: previous.HeldMarkets()})
 		return readErr
 	})
 	return loaded, skip, terminal, err
