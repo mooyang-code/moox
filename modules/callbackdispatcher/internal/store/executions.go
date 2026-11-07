@@ -61,6 +61,12 @@ func (t *Tx) ReplaceExecutionEvent(executionID, eventID, payloadJSON string, occ
 // ClaimDue 取出到期的待处理记录并置为执行中。systemActions 是已经注册了处理器的系统动作：
 // 没有处理器的系统动作记录不取，免得每轮都到期却没人处理。
 func (s *Store) ClaimDue(ctx context.Context, now int64, limit int, systemActions []string) ([]Execution, error) {
+	return s.ClaimDueExcluding(ctx, now, limit, systemActions, nil)
+}
+
+// ClaimDueExcluding 与 ClaimDue 相同，但不取 excludeRules 里的规则的记录：某条规则已经占满了它的并发名额时，
+// 不让它的慢接口占住全部处理能力。
+func (s *Store) ClaimDueExcluding(ctx context.Context, now int64, limit int, systemActions, excludeRules []string) ([]Execution, error) {
 	var claimed []Execution
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var rows []executionRow
@@ -71,6 +77,9 @@ func (s *Store) ClaimDue(ctx context.Context, now int64, limit int, systemAction
 			query = query.Where("e.c_action_type = ?", ActionNotifyURL)
 		} else {
 			query = query.Where("(e.c_action_type = ? OR r.c_system_action IN ?)", ActionNotifyURL, systemActions)
+		}
+		if len(excludeRules) > 0 {
+			query = query.Where("e.c_rule_id NOT IN ?", excludeRules)
 		}
 		if err := query.Order("e.c_next_run_at ASC, e.c_execution_id ASC").Limit(limit).Scan(&rows).Error; err != nil {
 			return err
@@ -91,6 +100,20 @@ func (s *Store) ClaimDue(ctx context.Context, now int64, limit int, systemAction
 // RecoverRunning 把进程退出时停在执行中的记录放回待处理：通知的投递是“至少一次”，重复发送由对方按事件 ID 去重。
 func (s *Store) RecoverRunning(ctx context.Context, now int64) (int64, error) {
 	result := s.db.WithContext(ctx).Model(&executionRow{}).Where("c_status = ?", StatusRunning).
+		Updates(map[string]any{"c_status": StatusPending, "c_next_run_at": now, "c_updated_at": now})
+	return result.RowsAffected, result.Error
+}
+
+// ReleaseClaim 把刚领取、还没开始处理的记录放回待处理（保持原来的到期时间）：领取后发现它所属的规则已经占满并发名额。
+func (s *Store) ReleaseClaim(ctx context.Context, executionID string, now int64) error {
+	return s.db.WithContext(ctx).Model(&executionRow{}).Where("c_execution_id = ? AND c_status = ?", executionID, StatusRunning).
+		Updates(map[string]any{"c_status": StatusPending, "c_updated_at": now}).Error
+}
+
+// RecoverStaleRunning 把停在“执行中”超过 staleBefore（Unix 毫秒）没更新的记录放回待处理：
+// 处理它的线程卡死或丢失结果时，记录不会永远停在执行中。返回放回的条数。
+func (s *Store) RecoverStaleRunning(ctx context.Context, staleBefore, now int64) (int64, error) {
+	result := s.db.WithContext(ctx).Model(&executionRow{}).Where("c_status = ? AND c_updated_at < ?", StatusRunning, staleBefore).
 		Updates(map[string]any{"c_status": StatusPending, "c_next_run_at": now, "c_updated_at": now})
 	return result.RowsAffected, result.Error
 }
@@ -246,6 +269,12 @@ func (s *Store) CancelExecution(ctx context.Context, executionID string, now int
 			Updates(map[string]any{"c_status": StatusCanceled, "c_next_run_at": 0, "c_finished_at": now, "c_updated_at": now}).Error
 	})
 	return before, err
+}
+
+// SetLastError 改写执行记录的“最近一次错误”说明（不改状态）；空串表示清除。
+func (s *Store) SetLastError(ctx context.Context, executionID, message string, now int64) error {
+	return s.db.WithContext(ctx).Model(&executionRow{}).Where("c_execution_id = ?", executionID).
+		Updates(map[string]any{"c_last_error": message, "c_updated_at": now}).Error
 }
 
 // AcknowledgeExecution 确认失败的记录已处理，清除它引起的告警。

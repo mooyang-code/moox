@@ -32,6 +32,12 @@ type Worker struct {
 	// RetentionDays 是执行记录与回执的保留天数。
 	RetentionDays int
 	Now           func() time.Time
+
+	once     sync.Once
+	slots    chan struct{}
+	mu       sync.Mutex
+	running  map[string]int
+	inflight sync.WaitGroup
 }
 
 func (w *Worker) now() time.Time {
@@ -41,7 +47,14 @@ func (w *Worker) now() time.Time {
 	return time.Now()
 }
 
-// Run 一直处理到 ctx 结束：启动时把上次停在“执行中”的记录放回待处理，之后按间隔轮询，每小时清理一次过期记录。
+// StaleRunningAfter 是记录停在“执行中”超过多久还没有结果就放回待处理。一次处理最长只有几十秒，这个值要远大于它。
+const StaleRunningAfter = 10 * time.Minute
+
+// MaxPerRule 是同一条规则同时处理的执行记录数上限：一条规则的接口很慢时，不会占住全部处理能力。
+const MaxPerRule = 2
+
+// Run 一直处理到 ctx 结束：启动时把上次停在“执行中”的记录放回待处理，之后按间隔领取到期的记录（领取后立即返回，
+// 处理在各自的 goroutine 里并发进行，慢接口不会拖住下一轮），每分钟把卡在“执行中”太久的记录放回待处理，每小时清理一次过期记录。
 func (w *Worker) Run(ctx context.Context) error {
 	if recovered, err := w.Store.RecoverRunning(ctx, w.now().UnixMilli()); err != nil {
 		return fmt.Errorf("恢复执行中的记录失败: %w", err)
@@ -50,17 +63,34 @@ func (w *Worker) Run(ctx context.Context) error {
 	}
 	poll := time.NewTicker(w.PollInterval)
 	defer poll.Stop()
+	stale := time.NewTicker(time.Minute)
+	defer stale.Stop()
 	purge := time.NewTicker(time.Hour)
 	defer purge.Stop()
+	defer w.inflight.Wait()
 	for {
-		w.RunOnce(ctx)
+		w.dispatch(ctx)
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-stale.C:
+			w.recoverStale(ctx)
 		case <-purge.C:
 			w.purge(ctx)
 		case <-poll.C:
 		}
+	}
+}
+
+func (w *Worker) recoverStale(ctx context.Context) {
+	now := w.now()
+	recovered, err := w.Store.RecoverStaleRunning(ctx, now.Add(-StaleRunningAfter).UnixMilli(), now.UnixMilli())
+	if err != nil {
+		log.WarnContextf(ctx, "放回卡住的执行记录失败: %v", err)
+		return
+	}
+	if recovered > 0 {
+		log.WarnContextf(ctx, "已把 %d 条停在执行中超过 %s 的记录放回待处理", recovered, StaleRunningAfter)
 	}
 }
 
@@ -71,25 +101,69 @@ func (w *Worker) purge(ctx context.Context) {
 	}
 }
 
-// RunOnce 领取并处理所有到期的记录，返回处理的条数。
+// RunOnce 领取到期的记录并等它们处理完，返回处理的条数（测试与一次性调用用；Run 不等待）。
 func (w *Worker) RunOnce(ctx context.Context) int {
-	claimed, err := w.Store.ClaimDue(ctx, w.now().UnixMilli(), w.Batch, w.Actions.Actions())
+	launched := w.dispatch(ctx)
+	w.inflight.Wait()
+	return launched
+}
+
+// dispatch 按空闲的处理名额领取到期的记录，各自在 goroutine 里处理，领取完立即返回；返回启动的个数。
+// 已经占满 MaxPerRule 名额的规则这一轮不再领取。
+func (w *Worker) dispatch(ctx context.Context) int {
+	w.once.Do(func() {
+		w.slots = make(chan struct{}, w.Batch)
+		w.running = map[string]int{}
+	})
+	free := cap(w.slots) - len(w.slots)
+	if free <= 0 {
+		return 0
+	}
+	w.mu.Lock()
+	var busy []string
+	for rule, count := range w.running {
+		if count >= MaxPerRule {
+			busy = append(busy, rule)
+		}
+	}
+	w.mu.Unlock()
+	claimed, err := w.Store.ClaimDueExcluding(ctx, w.now().UnixMilli(), free, w.Actions.Actions(), busy)
 	if err != nil {
 		if ctx.Err() == nil {
 			log.WarnContextf(ctx, "领取到期的执行记录失败: %v", err)
 		}
 		return 0
 	}
-	var group sync.WaitGroup
+	launched := 0
 	for _, execution := range claimed {
-		group.Add(1)
+		w.mu.Lock()
+		over := w.running[execution.RuleID] >= MaxPerRule
+		if !over {
+			w.running[execution.RuleID]++
+		}
+		w.mu.Unlock()
+		if over {
+			// 同一轮领到了同一条规则的多条：超出并发名额的放回去，下一轮再领。
+			if err := w.Store.ReleaseClaim(ctx, execution.ExecutionID, w.now().UnixMilli()); err != nil && ctx.Err() == nil {
+				log.WarnContextf(ctx, "放回超出并发名额的执行记录 %s 失败: %v", execution.ExecutionID, err)
+			}
+			continue
+		}
+		w.slots <- struct{}{}
+		launched++
+		w.inflight.Add(1)
 		go func() {
-			defer group.Done()
+			defer func() {
+				w.mu.Lock()
+				w.running[execution.RuleID]--
+				w.mu.Unlock()
+				<-w.slots
+				w.inflight.Done()
+			}()
 			w.process(ctx, execution)
 		}()
 	}
-	group.Wait()
-	return len(claimed)
+	return launched
 }
 
 func (w *Worker) process(ctx context.Context, execution store.Execution) {
