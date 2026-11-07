@@ -37,6 +37,11 @@ type sourceAbsenceRow struct {
 
 func (sourceAbsenceRow) TableName() string { return "t_collector_source_absences" }
 
+// upsertSourceAbsence 写入一段已确认的缺失；同一序列同一起点重复确认时取更长的区间。
+const upsertSourceAbsence = `INSERT INTO t_collector_source_absences (c_space_id, c_dataset_id, c_frequency, c_subject_id, c_series_tag, c_from, c_to, c_bars, c_ctime)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (c_space_id, c_dataset_id, c_frequency, c_subject_id, c_series_tag, c_from) DO UPDATE SET c_to = MAX(c_to, excluded.c_to), c_bars = MAX(c_bars, excluded.c_bars)`
+
 // AddAbsences 记录已确认的行情源缺失；同一起点重复确认时取更长的区间。
 func (r *BackfillRepository) AddAbsences(ctx context.Context, absences []SourceAbsence) error {
 	if err := r.ready(); err != nil {
@@ -51,8 +56,7 @@ func (r *BackfillRepository) AddAbsences(ctx context.Context, absences []SourceA
 			if !absence.From.Before(absence.To) {
 				return fmt.Errorf("absence range of %s is empty", absence.SubjectID)
 			}
-			if err := tx.Exec(`INSERT INTO t_collector_source_absences (c_space_id, c_dataset_id, c_frequency, c_subject_id, c_series_tag, c_from, c_to, c_bars, c_ctime) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-				ON CONFLICT (c_space_id, c_dataset_id, c_frequency, c_subject_id, c_series_tag, c_from) DO UPDATE SET c_to = MAX(c_to, excluded.c_to), c_bars = MAX(c_bars, excluded.c_bars)`,
+			if err := tx.Exec(upsertSourceAbsence,
 				absence.SpaceID, absence.DatasetID, absence.Frequency, absence.SubjectID, absence.SeriesTag, absence.From.UTC(), absence.To.UTC(), absence.Bars, now).Error; err != nil {
 				return err
 			}

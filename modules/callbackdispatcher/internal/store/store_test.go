@@ -275,6 +275,60 @@ func TestClaimDueLimitedPerRule(t *testing.T) {
 	require.Equal(t, []string{"a2"}, ids(claimed))
 }
 
+// 领取查询整条写成常量，系统动作列表和剩余名额用 JSON 参数：各种参数组合的结果与按条件拼接时一致。
+func TestClaimDueLimitedCombinations(t *testing.T) {
+	sell := []string{SystemActionSellDelistedHoldings}
+	cases := []struct {
+		name      string
+		limit     int
+		actions   []string
+		perRule   int
+		remaining map[string]int
+		want      []string
+	}{
+		{name: "不限额、没有处理器", limit: 100, want: []string{"a0", "a1", "a2", "a3", "b0", "b1", "b2"}},
+		{name: "不限额时忽略剩余名额", limit: 100, remaining: map[string]int{"a": 0}, want: []string{"a0", "a1", "a2", "a3", "b0", "b1", "b2"}},
+		{name: "空的处理器列表与 nil 相同", limit: 100, actions: []string{}, remaining: map[string]int{}, want: []string{"a0", "a1", "a2", "a3", "b0", "b1", "b2"}},
+		{name: "有处理器时取系统动作", limit: 100, actions: sell, want: []string{"a0", "a1", "a2", "a3", "s0", "s1", "b0", "b1", "b2"}},
+		{name: "处理器列表里没有这个动作", limit: 100, actions: []string{"OTHER"}, want: []string{"a0", "a1", "a2", "a3", "b0", "b1", "b2"}},
+		{name: "每条规则最多 2 条", limit: 100, actions: sell, perRule: 2, want: []string{"a0", "a1", "s0", "s1", "b0", "b1"}},
+		{name: "剩余名额为 0 的规则一条不取", limit: 100, actions: sell, perRule: 2, remaining: map[string]int{"a": 0, "sys-1": 1}, want: []string{"s0", "b0", "b1"}},
+		{name: "剩余名额里列出不存在的规则", limit: 100, actions: sell, perRule: 1, remaining: map[string]int{"zzz": 0}, want: []string{"a0", "s0", "b0"}},
+		{name: "剩余名额可以大于每条规则的上限", limit: 100, perRule: 2, remaining: map[string]int{"a": 3}, want: []string{"a0", "a1", "a2", "b0", "b1"}},
+		{name: "总数受 limit 限制", limit: 3, actions: sell, perRule: 2, want: []string{"a0", "a1", "s0"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			s := openTest(t)
+			require.NoError(t, s.CreateRule(ctx, notifyRule("a")))
+			require.NoError(t, s.CreateRule(ctx, notifyRule("b")))
+			require.NoError(t, s.EnsureSystemRule(ctx, systemRule()))
+			require.NoError(t, s.InTx(ctx, func(tx *Tx) error {
+				for i, next := range []int64{1, 2, 3, 4} {
+					require.NoError(t, tx.InsertExecution(execution("a"+string(rune('0'+i)), "a", ActionNotifyURL, "", next)))
+				}
+				for i, next := range []int64{10, 11, 12} {
+					require.NoError(t, tx.InsertExecution(execution("b"+string(rune('0'+i)), "b", ActionNotifyURL, "", next)))
+				}
+				for i, next := range []int64{5, 6} {
+					require.NoError(t, tx.InsertExecution(execution("s"+string(rune('0'+i)), "sys-1", ActionSystem, "k"+string(rune('0'+i)), next)))
+				}
+				// 没到期的不取。
+				return tx.InsertExecution(execution("a9", "a", ActionNotifyURL, "", 500))
+			}))
+			claimed, err := s.ClaimDueLimited(ctx, 100, tc.limit, tc.actions, tc.perRule, tc.remaining)
+			require.NoError(t, err)
+			var got []string
+			for _, item := range claimed {
+				require.Equal(t, StatusRunning, item.Status)
+				got = append(got, item.ExecutionID)
+			}
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
 func TestFailureRetryAcknowledgeAndRecovery(t *testing.T) {
 	ctx := context.Background()
 	s := openTest(t)

@@ -162,6 +162,16 @@ type LastExecution struct {
 	At     int64
 }
 
+// lastExecutions 查每条规则（参数是规则 ID 的 JSON 数组）最近创建的一条执行记录。
+const lastExecutions = `SELECT e.c_rule_id, e.c_status, e.c_created_at
+FROM t_event_executions AS e
+WHERE e.c_rule_id IN (SELECT value FROM json_each(?)) AND e.c_execution_id = (
+    SELECT c_execution_id FROM t_event_executions
+    WHERE c_rule_id = e.c_rule_id
+    ORDER BY c_created_at DESC, c_execution_id DESC
+    LIMIT 1
+)`
+
 // LastExecutions 返回每条规则最近一次执行的状态与创建时间。
 func (s *Store) LastExecutions(ctx context.Context, ruleIDs []string) (map[string]LastExecution, error) {
 	result := make(map[string]LastExecution, len(ruleIDs))
@@ -173,15 +183,11 @@ func (s *Store) LastExecutions(ctx context.Context, ruleIDs []string) (map[strin
 		Status    string `gorm:"column:c_status"`
 		CreatedAt int64  `gorm:"column:c_created_at"`
 	}
-	err := s.db.WithContext(ctx).Raw(`
-		SELECT e.c_rule_id, e.c_status, e.c_created_at
-		FROM t_event_executions e
-		WHERE e.c_rule_id IN ? AND e.c_execution_id = (
-			SELECT c_execution_id FROM t_event_executions
-			WHERE c_rule_id = e.c_rule_id
-			ORDER BY c_created_at DESC, c_execution_id DESC LIMIT 1
-		)`, ruleIDs).Scan(&rows).Error
+	ruleIDsJSON, err := json.Marshal(ruleIDs)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.db.WithContext(ctx).Raw(lastExecutions, string(ruleIDsJSON)).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
 	for _, row := range rows {

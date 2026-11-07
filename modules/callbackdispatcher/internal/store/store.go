@@ -79,7 +79,7 @@ func (s *Store) ApplySchema(sql string) error {
 
 // Ping 检查数据库是否可用。
 func (s *Store) Ping(ctx context.Context) error {
-	return s.db.WithContext(ctx).Exec("SELECT 1").Error
+	return s.db.WithContext(ctx).Exec(pingSQL).Error
 }
 
 // Close 关闭连接。
@@ -98,6 +98,13 @@ func notFound(err error) error {
 	return err
 }
 
+// 检查连接与表结构用到的查询。
+const (
+	pingSQL             = `SELECT 1`
+	tableColumnsSQL     = `SELECT name FROM pragma_table_info(?)`
+	delistActionsDDLSQL = `SELECT COALESCE(sql, '') FROM sqlite_master WHERE type = 'table' AND name = 't_delist_actions'`
+)
+
 // requiredColumns 是当前代码依赖的、后来加进去的列：schema 只有 CREATE TABLE IF NOT EXISTS，没有迁移，旧库文件缺这些列时运行时才会报 no such column。
 var requiredColumns = map[string][]string{
 	"t_event_executions": {"c_claimed_at", "c_cleanup_pending", "c_cleanup_seq"},
@@ -115,7 +122,7 @@ func (s *Store) CheckSchema(ctx context.Context) error {
 	sort.Strings(tables)
 	for _, table := range tables {
 		var columns []string
-		if err := s.db.WithContext(ctx).Raw("SELECT name FROM pragma_table_info(?)", table).Scan(&columns).Error; err != nil {
+		if err := s.db.WithContext(ctx).Raw(tableColumnsSQL, table).Scan(&columns).Error; err != nil {
 			return fmt.Errorf("读取表 %s 的结构失败: %w", table, err)
 		}
 		for _, column := range requiredColumns[table] {
@@ -125,7 +132,7 @@ func (s *Store) CheckSchema(ctx context.Context) error {
 		}
 	}
 	var ddl string
-	if err := s.db.WithContext(ctx).Raw("SELECT COALESCE(sql, '') FROM sqlite_master WHERE type = 'table' AND name = 't_delist_actions'").Scan(&ddl).Error; err != nil {
+	if err := s.db.WithContext(ctx).Raw(delistActionsDDLSQL).Scan(&ddl).Error; err != nil {
 		return fmt.Errorf("读取 t_delist_actions 的定义失败: %w", err)
 	}
 	if !strings.Contains(ddl, "'PARTIAL'") {

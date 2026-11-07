@@ -2,8 +2,8 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
-	"sort"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -27,9 +27,11 @@ func (s *Store) InTx(ctx context.Context, fn func(*Tx) error) error {
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error { return fn(&Tx{db: tx}) })
 }
 
+const insertReceipt = `INSERT INTO t_event_receipts (c_event_id, c_rule_id, c_created_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING`
+
 // ClaimReceipt 记下“这条事件对这条规则已经处理”。返回 false 说明以前处理过，调用方直接跳过。
 func (t *Tx) ClaimReceipt(eventID, ruleID string, now int64) (bool, error) {
-	result := t.db.Exec(`INSERT INTO t_event_receipts (c_event_id, c_rule_id, c_created_at) VALUES (?, ?, ?) ON CONFLICT DO NOTHING`, eventID, ruleID, now)
+	result := t.db.Exec(insertReceipt, eventID, ruleID, now)
 	return result.RowsAffected == 1, result.Error
 }
 
@@ -65,50 +67,41 @@ func (s *Store) ClaimDue(ctx context.Context, now int64, limit int, systemAction
 	return s.ClaimDueLimited(ctx, now, limit, systemActions, 0, nil)
 }
 
-// ClaimDueLimited 与 ClaimDue 相同，但每条规则这一轮最多取 perRule 条（0 表示不限）；remaining 里列出的规则按它的剩余名额取
-// （0 就是这一轮不取）。在 SQL 里按规则限额，一条规则积压再多，也不会占满每一轮的领取名额，别的规则照常被领到。
-func (s *Store) ClaimDueLimited(ctx context.Context, now int64, limit int, systemActions []string, perRule int, remaining map[string]int) ([]Execution, error) {
-	var claimed []Execution
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		where := "e.c_status = ? AND e.c_next_run_at > 0 AND e.c_next_run_at <= ? AND "
-		args := []any{StatusPending, now}
-		if len(systemActions) == 0 {
-			where += "e.c_action_type = ?"
-			args = append(args, ActionNotifyURL)
-		} else {
-			where += "(e.c_action_type = ? OR r.c_system_action IN ?)"
-			args = append(args, ActionNotifyURL, systemActions)
-		}
-		outer := ""
-		if perRule > 0 {
-			outer = " WHERE rn <= CASE c_rule_id"
-			var ruleIDs []string
-			for rule := range remaining {
-				ruleIDs = append(ruleIDs, rule)
-			}
-			sort.Strings(ruleIDs)
-			var caseArgs []any
-			for _, rule := range ruleIDs {
-				outer += " WHEN ? THEN ?"
-				caseArgs = append(caseArgs, rule, remaining[rule])
-			}
-			if len(ruleIDs) == 0 {
-				outer = " WHERE rn <= ?"
-			} else {
-				outer += " ELSE ? END"
-			}
-			caseArgs = append(caseArgs, perRule)
-			args = append(args, caseArgs...)
-		}
-		query := `SELECT * FROM (
+// claimDueLimited 取到期的待处理记录：通知类全取，系统动作只取已注册处理器的（参数是 JSON 数组）；
+// 每条规则按到期先后编号，perRule 大于 0 时每条规则最多取它的剩余名额（参数是“规则 → 名额”的 JSON 对象，没列出的规则取 perRule）。
+const claimDueLimited = `SELECT * FROM (
     SELECT e.*, ROW_NUMBER() OVER (PARTITION BY e.c_rule_id ORDER BY e.c_next_run_at ASC, e.c_execution_id ASC) AS rn
     FROM t_event_executions AS e
     LEFT JOIN t_event_rules AS r ON r.c_rule_id = e.c_rule_id
-    WHERE ` + where + `
-)` + outer + ` ORDER BY c_next_run_at ASC, c_execution_id ASC LIMIT ?`
-		args = append(args, limit)
+    WHERE e.c_status = ? AND e.c_next_run_at > 0 AND e.c_next_run_at <= ?
+    AND (e.c_action_type = ? OR r.c_system_action IN (SELECT value FROM json_each(?)))
+)
+WHERE ? <= 0 OR rn <= COALESCE((SELECT value FROM json_each(?) WHERE key = c_rule_id), ?)
+ORDER BY c_next_run_at ASC, c_execution_id ASC
+LIMIT ?`
+
+// ClaimDueLimited 与 ClaimDue 相同，但每条规则这一轮最多取 perRule 条（0 表示不限）；remaining 里列出的规则按它的剩余名额取
+// （0 就是这一轮不取）。在 SQL 里按规则限额，一条规则积压再多，也不会占满每一轮的领取名额，别的规则照常被领到。
+func (s *Store) ClaimDueLimited(ctx context.Context, now int64, limit int, systemActions []string, perRule int, remaining map[string]int) ([]Execution, error) {
+	// nil 切片、nil map 编码出来是 null，显式给空数组、空对象。
+	if systemActions == nil {
+		systemActions = []string{}
+	}
+	if remaining == nil {
+		remaining = map[string]int{}
+	}
+	actionsJSON, err := json.Marshal(systemActions)
+	if err != nil {
+		return nil, err
+	}
+	remainingJSON, err := json.Marshal(remaining)
+	if err != nil {
+		return nil, err
+	}
+	var claimed []Execution
+	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		var rows []executionRow
-		if err := tx.Raw(query, args...).Scan(&rows).Error; err != nil {
+		if err := tx.Raw(claimDueLimited, StatusPending, now, ActionNotifyURL, string(actionsJSON), perRule, string(remainingJSON), perRule, limit).Scan(&rows).Error; err != nil {
 			return err
 		}
 		for _, row := range rows {
@@ -432,6 +425,8 @@ func (s *Store) ListLongTransientFailures(ctx context.Context, failedBefore int6
 	return executions, nil
 }
 
+const purgeReceipts = `DELETE FROM t_event_receipts WHERE c_created_at < ?`
+
 // PurgeBefore 删除 cutoff 之前创建且已结束的执行记录（连同尝试与下架步骤），以及 cutoff 之前的事件回执。
 // 善后还没做成的已取消记录不删：用户还要靠它再取消一次。
 func (s *Store) PurgeBefore(ctx context.Context, cutoff int64) error {
@@ -439,7 +434,7 @@ func (s *Store) PurgeBefore(ctx context.Context, cutoff int64) error {
 		if err := tx.Where("c_created_at < ? AND c_status IN ? AND c_cleanup_pending = 0", cutoff, []string{StatusSucceeded, StatusFailed, StatusCanceled}).Delete(&executionRow{}).Error; err != nil {
 			return err
 		}
-		return tx.Exec(`DELETE FROM t_event_receipts WHERE c_created_at < ?`, cutoff).Error
+		return tx.Exec(purgeReceipts, cutoff).Error
 	})
 }
 
