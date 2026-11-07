@@ -286,6 +286,10 @@ func TestPoolSkippedRecordCarriesFullState(t *testing.T) {
 	if got := h.state(skipped); got.Targets["A|spot"] != "0.5" || got.Members["a"].Targets["A|spot"] != "1" {
 		t.Fatalf("skipped 记录应带预热状态：%s", skipped.RuleStatesJSON)
 	}
+	// 摘要也写成员状态（池详情里这些期不缺）：每个成员都记没通过的原因。
+	if pooled := h.summary(skipped).Pool; pooled == nil || len(pooled.Members) != 2 || pooled.Members[0].Status != engine.StatusSkipped || pooled.Members[0].Reason != "factor_skipped" || pooled.Members[1].ID != "b" {
+		t.Fatalf("skipped 记录的摘要要带池的成员状态：%s", skipped.SummaryJSON)
+	}
 	// 下一期恢复：从 skipped 记录里的完整状态接着算（成员 a 的上期持有 A 仍在）。
 	h.now = start.Add(time.Hour)
 	h.frame(3, abcFrame(3, 2, 1))
@@ -448,5 +452,25 @@ func TestCatchupProgressCountsPoolWarmedThrough(t *testing.T) {
 	progress, err = other.handler.CatchupProgress(context.Background(), "i1", barStart(4), time.Minute)
 	if err != nil || !progress.Latest.IsZero() {
 		t.Fatalf("预热没完成时没有已处理的期：%+v %v", progress, err)
+	}
+}
+
+// 所有成员在就绪判断阶段都没通过：池的跳过原因优先取需要人工处理的原因（实例标 degraded），摘要里每个成员各记各的原因。
+func TestPoolSkipPrefersReasonNeedingManualFix(t *testing.T) {
+	h := newPoolHarness(t, poolDSL("{a: 0.5, b: 0.5}"), standardMembers(), nil)
+	h.warm(barStart(1), "")
+	h.frame(2, abcFrame(3, 2, 1))
+	// 成员 a 的因子 f 缺失（factor_missing），成员 b 的因子 g 定义变了（factor_changed）：排在前面的 a 不是需要人工处理的原因。
+	expectAck(t, h.deliverWith(2, map[string]string{"g": "hg_changed"}))
+	skipped := h.resultAt(2)
+	if skipped.Status != store.StatusSkipped || skipped.SkipReason != "factor_changed" {
+		t.Fatalf("池的跳过原因应取需要人工处理的原因：%+v", skipped)
+	}
+	if h.health() != store.HealthDegraded {
+		t.Fatalf("应标 degraded：%s", h.health())
+	}
+	members := h.summary(skipped).Pool.Members
+	if members[0].Reason != "factor_missing" || members[1].Reason != "factor_changed" {
+		t.Fatalf("各成员各记各的原因：%+v", members)
 	}
 }

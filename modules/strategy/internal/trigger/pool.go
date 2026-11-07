@@ -52,28 +52,20 @@ func (h *Handler) checkPoolReady(ctx context.Context, p *period) (mergedReadines
 		}
 		out.Members[member.ID] = h.checkReadyFor(p, member.Resolved, adjacent)
 	}
-	var first, degrading *struct{ id, reason, detail string }
 	failed := 0
 	for _, member := range rt.pool.members {
-		ready := out.Members[member.ID]
-		if ready.Reason == "" {
-			continue
-		}
-		failed++
-		entry := &struct{ id, reason, detail string }{member.ID, ready.Reason, ready.Detail}
-		if first == nil {
-			first = entry
-		}
-		if degrading == nil && degradingReasons[ready.Reason] {
-			degrading = entry
+		if out.Members[member.ID].Reason != "" {
+			failed++
 		}
 	}
 	if failed == len(rt.pool.members) {
-		pick := first
-		if degrading != nil {
-			pick = degrading
+		id, reason, _ := rt.pool.config.PickSkipReason(func(id string) string { return out.Members[id].Reason })
+		out.Reason, out.Detail = reason, fmt.Sprintf("成员 %s：%s", id, out.Members[id].Detail)
+		p.memberResults = make([]pool.MemberResult, 0, len(rt.pool.members))
+		for _, member := range rt.pool.members {
+			ready := out.Members[member.ID]
+			p.memberResults = append(p.memberResults, pool.MemberResult{ID: member.ID, Reason: ready.Reason, Detail: ready.Detail})
 		}
-		out.Reason, out.Detail = pick.reason, fmt.Sprintf("成员 %s：%s", pick.id, pick.detail)
 	}
 	return out, nil
 }
@@ -137,6 +129,33 @@ func (h *Handler) evaluatePool(ctx context.Context, p *period, key string, ready
 		return nil, input.Loaded{}, h.commitSkipped(ctx, p, input.SkipConfigError, err.Error())
 	}
 	return &decision, input.Loaded{Boundary: p.boundary, Steps: steps}, nil
+}
+
+// carriedSummary 是策略池 skipped 记录里写的摘要：成员的状态与原因（就绪判断阶段各成员的原因；没有逐成员原因时所有成员都记这条跳过原因），
+// 账本与比例沿用上期。普通策略写空对象。
+func (h *Handler) carriedSummary(p *period, state json.RawMessage, reason, detail string) (json.RawMessage, error) {
+	empty := json.RawMessage(`{}`)
+	rt := p.runtime
+	if rt.pool == nil {
+		return empty, nil
+	}
+	var previous engine.State
+	if len(state) > 0 {
+		if err := json.Unmarshal(state, &previous); err != nil {
+			return nil, err
+		}
+	}
+	results := p.memberResults
+	if len(results) == 0 {
+		for _, member := range rt.pool.members {
+			results = append(results, pool.MemberResult{ID: member.ID, Reason: reason, Detail: detail})
+		}
+	}
+	summary, err := pool.SkippedSummary(rt.pool.config, previous, results)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(engine.Summary{Rules: map[string]engine.RuleSummary{}, Notes: []string{detail}, Pool: summary})
 }
 
 // carriedState 是 skipped 记录里写的规则状态：策略池的 skipped 记录也带完整状态（最近一条带状态的结果，没有时是预热完成时的状态），

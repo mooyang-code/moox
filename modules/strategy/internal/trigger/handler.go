@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
+	"github.com/mooyang-code/moox/modules/strategy/internal/pool"
 	"github.com/mooyang-code/moox/modules/strategy/internal/readiness"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
@@ -205,6 +206,8 @@ type period struct {
 	timing     periodTiming
 	// shadow 为真表示实例在预热：目标事件带影子标记。
 	shadow bool
+	// memberResults 是策略池所有成员在就绪判断阶段都没通过时各成员的原因：skipped 记录的摘要据此写成员状态。
+	memberResults []pool.MemberResult
 }
 
 // periodTiming 是一期处理的分段耗时，成功提交时写入一行日志，用来定位“数据就绪到结果落库”的时间花在哪。
@@ -661,10 +664,14 @@ func (h *Handler) commitSkipped(ctx context.Context, p *period, reason, detail s
 	if err != nil {
 		return err
 	}
+	summary, err := h.carriedSummary(p, states, reason, detail)
+	if err != nil {
+		return err
+	}
 	result := store.Result{
 		ResultID: resultID, InstanceID: p.instance.InstanceID, SessionID: p.runtime.sessionID,
 		BarEndTime: p.boundary.BarEnd, ValidUntil: p.validUntil, Status: store.StatusSkipped, SkipReason: reason, DSLHash: p.runtime.dslHash,
-		InputJSON: inputJSON, TargetsJSON: json.RawMessage(`[]`), RuleStatesJSON: states, SummaryJSON: json.RawMessage(`{}`),
+		InputJSON: inputJSON, TargetsJSON: json.RawMessage(`[]`), RuleStatesJSON: states, SummaryJSON: summary,
 		PublishStatus: store.PublishNone, CreatedAt: h.now(),
 	}
 	return h.commitSkippedResult(ctx, p, result, reason, detail)

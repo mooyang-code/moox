@@ -30,6 +30,26 @@ type Config struct {
 	Portfolio dsl.Portfolio
 	// Mode 是池的有效市场模式（成员市场的并集，见 dsl.UnionMarket）。
 	Mode dsl.Market
+	// Degrading 非空时报告一个跳过原因是否需要人工处理：所有成员都没通过时，池的跳过原因优先取这类原因（实例据此标 degraded）。
+	Degrading func(reason string) bool
+}
+
+// PickSkipReason 在所有成员都没通过时选池的跳过原因：需要人工处理的原因优先，否则取第一个成员的原因。
+// 就绪判断阶段与求值阶段用同一个口径。reasonOf 返回成员没通过的原因；没有任何原因时返回 ok 为 false。
+func (c Config) PickSkipReason(reasonOf func(id string) string) (id, reason string, ok bool) {
+	for _, member := range c.Spec.Members {
+		current := reasonOf(member.ID)
+		if current == "" {
+			continue
+		}
+		if !ok {
+			id, reason, ok = member.ID, current, true
+		}
+		if c.Degrading != nil && c.Degrading(current) {
+			return member.ID, current, true
+		}
+	}
+	return id, reason, ok
 }
 
 // NewConfig 从池的策略定义构造配置；mode 是成员市场的并集。
@@ -111,7 +131,7 @@ func Step(cfg Config, previous engine.State, in Input) (engine.Decision, error) 
 		anyPassed = anyPassed || result.passed()
 	}
 	if !anyPassed {
-		reason, detail := skipReason(ids, results)
+		reason, detail := skipReason(cfg, ids, results)
 		decision := engine.Decision{Status: engine.StatusSkipped, SkipReason: reason, State: previous, Items: items,
 			Summary: engine.Summary{Rules: map[string]engine.RuleSummary{}, Notes: []string{detail}, Pool: summary(cfg, ids, results, state, nil, nil)}}
 		return decision, nil
@@ -308,17 +328,15 @@ func memberItems(ids []string, results map[string]MemberResult) []engine.Item {
 	return items
 }
 
-// skipReason 是所有成员都没通过时池的跳过原因：取第一个成员的原因（需要人工处理的原因由调用方的健康判定识别，
-// 这里不分轻重），说明里列出每个成员的原因。
-func skipReason(ids []string, results map[string]MemberResult) (reason, detail string) {
+// skipReason 是所有成员都没通过时池的跳过原因（口径见 Config.PickSkipReason），说明里列出每个成员的原因。
+func skipReason(cfg Config, ids []string, results map[string]MemberResult) (reason, detail string) {
 	reason = engine.SkipNoData
+	if _, picked, ok := cfg.PickSkipReason(func(id string) string { return results[id].reason() }); ok {
+		reason = picked
+	}
 	parts := make([]string, 0, len(ids))
-	for i, id := range ids {
-		result := results[id]
-		if i == 0 && result.reason() != "" {
-			reason = result.reason()
-		}
-		parts = append(parts, fmt.Sprintf("成员 %s：%s%s", id, result.reason(), detailSuffix(result.detail())))
+	for _, id := range ids {
+		parts = append(parts, fmt.Sprintf("成员 %s：%s%s", id, results[id].reason(), detailSuffix(results[id].detail())))
 	}
 	return reason, "所有成员本期都没通过，" + strings.Join(parts, "；")
 }
@@ -435,4 +453,19 @@ func PriceKeys(previous engine.State, members []MemberResult) ([]string, error) 
 	}
 	sort.Strings(keys)
 	return keys, nil
+}
+
+// SkippedSummary 构造池本期被跳过时的摘要（成员状态与原因、账本与比例沿用上期）：就绪判断阶段所有成员都没通过、不经过 Step 时用它，
+// 池的详情里这些期才不是空的。results 覆盖池的全部成员。
+func SkippedSummary(cfg Config, previous engine.State, results []MemberResult) (*engine.PoolSummary, error) {
+	ids := cfg.MemberIDs()
+	indexed, err := indexResults(ids, results)
+	if err != nil {
+		return nil, err
+	}
+	state, err := DecodeState(previous.Pool)
+	if err != nil {
+		return nil, err
+	}
+	return summary(cfg, ids, indexed, state, nil, nil), nil
 }

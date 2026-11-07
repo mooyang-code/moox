@@ -105,6 +105,7 @@ func (h *Handler) runtimeFor(ctx context.Context, instance store.Instance) (*run
 		if err != nil {
 			return &runtime{sessionID: sessionID, dslHash: session.DSLHash, resolved: compiled}, &input.SkipError{Reason: input.SkipConfigError, Detail: err.Error()}
 		}
+		config.Degrading = func(reason string) bool { return degradingReasons[reason] }
 		loaded.pool = &poolRuntime{config: config, members: members, programs: programs}
 		loaded.pool.setWarm(session)
 		// 池的相邻周期核对按成员各自做；池自己的 PreviousFactors 是成员的并集，只用来说明。

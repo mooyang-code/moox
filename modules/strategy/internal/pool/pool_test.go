@@ -517,3 +517,28 @@ func TestMemberResultsMustCoverThePool(t *testing.T) {
 func testBarEnd(bar int) time.Time {
 	return time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC).Add(time.Duration(bar) * time.Hour)
 }
+
+func TestSkipReasonPrefersDegradingThenFirstMember(t *testing.T) {
+	cfg := poolConfig(t, "  allocation: {method: fixed, ratios: {a: 1, b: 1}}\n", "")
+	step := func() engine.Decision {
+		decision, err := Step(cfg, engine.State{}, Input{BarIndex: 1, Members: []MemberResult{fail("a", "factor_skipped"), fail("b", "config_error")}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return decision
+	}
+	if got := step().SkipReason; got != "factor_skipped" {
+		t.Fatalf("没有判定口径时取第一个成员的原因：%s", got)
+	}
+	cfg.Degrading = func(reason string) bool { return reason == "config_error" }
+	if got := step().SkipReason; got != "config_error" {
+		t.Fatalf("需要人工处理的原因优先：%s", got)
+	}
+	id, reason, ok := cfg.PickSkipReason(func(id string) string { return map[string]string{"a": "", "b": "no_data"}[id] })
+	if !ok || id != "b" || reason != "no_data" {
+		t.Fatalf("跳过没有原因的成员：%s %s %v", id, reason, ok)
+	}
+	if _, _, ok := cfg.PickSkipReason(func(string) string { return "" }); ok {
+		t.Fatal("没有任何原因时 ok 为假")
+	}
+}
