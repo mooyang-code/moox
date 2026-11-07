@@ -42,3 +42,45 @@ func TestMalformedAcceptedReceiptIsTransportUnknown(t *testing.T) {
 		t.Fatalf("撤单 err = %v", err)
 	}
 }
+
+// 已下架的标的：查成交、按标的查挂单回 HTTP 400 + -1121 时都要带上错误码，账户同步据此跳过这个标的，不让整次同步失败。
+func TestFillsAndOpenOrdersOfDelistedSymbolAreInstrumentNotFound(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, `{"code":-1121,"msg":"Invalid symbol."}`, http.StatusBadRequest)
+	}))
+	defer server.Close()
+	adapter := testAdapter(exchange.MarketTypeSpot, server.URL)
+	key := exchange.NewSymbolKey(exchange.MarketTypeSpot, "DEADUSDT")
+	if _, _, err := adapter.ListRecentFills(context.Background(), key, ""); !exchange.IsInstrumentNotFound(err) {
+		t.Fatalf("查成交 err = %v", err)
+	}
+	if _, err := adapter.ListOpenOrdersForSymbol(context.Background(), key); !exchange.IsInstrumentNotFound(err) {
+		t.Fatalf("按标的查挂单 err = %v", err)
+	}
+}
+
+// 统一账户周期对账按标的查挂单：其中一个现货标的已下架（-1121）时跳过它，其余标的照常查，整次查询不失败。
+func TestPortfolioMarginScopedOpenOrdersSkipsDelistedSymbol(t *testing.T) {
+	var queried []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		symbol := request.URL.Query().Get("symbol")
+		queried = append(queried, request.URL.Path+"?"+symbol)
+		if symbol == "DEADUSDT" {
+			http.Error(w, `{"code":-1121,"msg":"Invalid symbol."}`, http.StatusBadRequest)
+			return
+		}
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer server.Close()
+	pm := testPM(server, exchange.MarketTypeSpot)
+	_, err := pm.ListOpenOrdersForSymbols(context.Background(), []exchange.SymbolKey{
+		exchange.NewSymbolKey(exchange.MarketTypeSpot, "DEADUSDT"),
+		exchange.NewSymbolKey(exchange.MarketTypeSpot, "BTCUSDT"),
+	})
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if len(queried) != 2 {
+		t.Fatalf("两个标的都要查，实际 %v", queried)
+	}
+}

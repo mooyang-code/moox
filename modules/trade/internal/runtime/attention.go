@@ -76,6 +76,8 @@ func (w *AttentionWorker) Scan(ctx context.Context) error {
 		// 清仓收尾、释放会话留下要人工核对的单：每次发生记一条，保留窗口内持续上报。
 		telemetry.AttentionFlattenOrdersUnsettled:  telemetry.Recent(telemetry.AttentionFlattenOrdersUnsettled, now, rejectionWindow),
 		telemetry.AttentionReleaseOrdersUnverified: telemetry.Recent(telemetry.AttentionReleaseOrdersUnverified, now, rejectionWindow),
+		// 同步把标的已下架、查不到的订单按过期结束：每笔记一条，保留窗口内持续上报。
+		telemetry.AttentionOrdersInstrumentGone: telemetry.Recent(telemetry.AttentionOrdersInstrumentGone, now, rejectionWindow),
 	}
 	names := make(map[string]string)
 	accounts, err := w.Store.ListAllTradingAccounts(ctx)

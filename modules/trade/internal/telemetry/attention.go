@@ -42,6 +42,9 @@ const (
 	// AttentionReleaseOrdersUnverified 是释放策略会话时凭证失效或账户没有会话，目标单没能撤下或确认，只按本地记录释放，
 	// 这些单要人工到交易所核对。
 	AttentionReleaseOrdersUnverified = "release_orders_unverified"
+	// AttentionOrdersInstrumentGone 是账户同步发现未结束订单的标的已下架、交易所查不到（币安 -1121、OKX 51001），
+	// 已按过期结束并释放资金预留；这笔单实际成交了多少要人工到交易所核对，持仓、余额以同步结果为准。
+	AttentionOrdersInstrumentGone = "orders_instrument_gone"
 )
 
 // attentionKinds 里每种情况都要上报，恢复后 Monitor 才能看到值回到 0。
@@ -50,7 +53,7 @@ var attentionKinds = []string{
 	AttentionAccountNotReady, AttentionTargetExpired, AttentionTargetReversal,
 	AttentionRateLimited, AttentionTurnoverHigh, AttentionUnknownResults, AttentionMarginRatioLow,
 	AttentionInspectionBlocked, AttentionInspectionFailing, AttentionTransferShortfall, AttentionTransferFailing,
-	AttentionValuationDegraded, AttentionFlattenOrdersUnsettled, AttentionReleaseOrdersUnverified,
+	AttentionValuationDegraded, AttentionFlattenOrdersUnsettled, AttentionReleaseOrdersUnverified, AttentionOrdersInstrumentGone,
 }
 
 // maxAttentionDetail 是标签的字节上限：Monitor 超过 512 字节会拒收整份上报。

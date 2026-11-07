@@ -105,25 +105,32 @@ func TestClaimSessionReleasesLeftoverTargetOrdersBestEffort(t *testing.T) {
 	require.Equal(t, "session-2", claimed.OwnerSessionID)
 }
 
-// 凭证失效、账户没有会话、标的已不存在时撤单永远不会成功：比照移出成员只按本地记录放行，释放会话并记关注项。
-// 掺着别的错误（例如交易所暂时不可用）时照样不释放，让策略重试。
+// 凭证失效、交易账户已停用（没有会话）、标的已不存在时撤单永远不会成功：比照移出成员只按本地记录放行，释放会话并记关注项。
+// 没有会话但交易账户仍启用（例如重启后会话还没建好）只是暂时的，不放行；掺着别的错误（例如交易所暂时不可用）时同样不放行，让策略重试。
 func TestReleaseSessionPassesWhenCredentialsUnavailable(t *testing.T) {
-	noSession := &orderapp.AccountExecutionError{TradingAccountID: "account-1", Operation: "adapter", Err: errors.New("交易账户会话还没有启动，请稍后重试")}
-	authFailed := &orderapp.AccountExecutionError{TradingAccountID: "account-1", Operation: "cancel", Err: &exchange.Error{Kind: exchange.ErrorAuthentication, Code: "-2015"}}
+	noSession := &orderapp.AccountExecutionError{TradingAccountID: "account-a", Operation: "adapter", Err: errors.New("交易账户会话还没有启动，请稍后重试")}
+	authFailed := &orderapp.AccountExecutionError{TradingAccountID: "account-a", Operation: "cancel", Err: &exchange.Error{Kind: exchange.ErrorAuthentication, Code: "-2015"}}
 	for _, tc := range []struct {
 		name     string
 		err      error
+		disabled bool
 		released bool
 	}{
-		{"没有会话", fmt.Errorf("目标单 o1：%w", noSession), true},
-		{"凭证失效", errors.Join(fmt.Errorf("目标单 o1：%w", authFailed), fmt.Errorf("目标单 o2：%w", noSession)), true},
-		{"标的已不存在", fmt.Errorf("目标单 o1：%w", &orderapp.AccountExecutionError{TradingAccountID: "account-1", Operation: "cancel",
-			Err: &exchange.Error{Kind: exchange.ErrorRejected, Code: exchange.CodeBinanceInvalidSymbol}}), true},
-		{"掺着暂时性错误", errors.Join(fmt.Errorf("目标单 o1：%w", authFailed), errors.New("目标单 o2：交易所暂时不可用")), false},
+		{"没有会话、账户仍启用", fmt.Errorf("目标单 o1：%w", noSession), false, false},
+		{"没有会话、账户已停用", fmt.Errorf("目标单 o1：%w", noSession), true, true},
+		{"凭证失效", fmt.Errorf("目标单 o1：%w", authFailed), false, true},
+		{"凭证失效且另一笔没有会话、账户仍启用", errors.Join(fmt.Errorf("目标单 o1：%w", authFailed), fmt.Errorf("目标单 o2：%w", noSession)), false, false},
+		{"凭证失效且另一笔没有会话、账户已停用", errors.Join(fmt.Errorf("目标单 o1：%w", authFailed), fmt.Errorf("目标单 o2：%w", noSession)), true, true},
+		{"标的已不存在", fmt.Errorf("目标单 o1：%w", &orderapp.AccountExecutionError{TradingAccountID: "account-a", Operation: "cancel",
+			Err: &exchange.Error{Kind: exchange.ErrorRejected, Code: exchange.CodeBinanceInvalidSymbol}}), false, true},
+		{"掺着暂时性错误", errors.Join(fmt.Errorf("目标单 o1：%w", authFailed), errors.New("目标单 o2：交易所暂时不可用")), false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			service, tradeStore, fence := modernSessionFixture(t)
 			acceptModernSessionTarget(t, tradeStore, "session-1")
+			if tc.disabled {
+				require.NoError(t, tradeStore.DBForTest().Exec(`UPDATE t_trading_accounts SET c_status = 'DISABLED' WHERE c_trading_account_id = 'account-a'`).Error)
+			}
 			service.TargetOrders = &recordingReleaser{store: tradeStore, err: tc.err}
 
 			err := service.ReleaseSession(context.Background(), "space-1", "logical-1", "instance-1", "session-1", fence)

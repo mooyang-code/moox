@@ -18,6 +18,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -258,8 +259,15 @@ func (s *Service) syncAccountLocked(
 	}
 	fills := make([]exchange.Fill, 0)
 	cursors := cloneCursors(account.FillCursors)
+	var warnings []string
 	for _, key := range symbols {
 		rows, cursor, listErr := adapter.ListRecentFills(ctx, key, cursors[key.String()])
+		if exchange.IsInstrumentNotFound(listErr) {
+			// 交易所确认标的不存在（已下架）：没有成交可拉，跳过这个标的，游标原样保留，不让整次同步失败。
+			// 未结束的单、成交游标、和交易所不一致的本地持仓都会把下架标的带进来，不跳过的话账户永远同步不过去。
+			warnings = append(warnings, fmt.Sprintf("标的 %s 在交易所已不存在，跳过成交查询", key))
+			continue
+		}
 		if listErr != nil {
 			result, failErr := s.fail(ctx, account, accountDependencyError(tradingAccountID, "list_fills", listErr))
 			return result, maxDifference, failErr
@@ -279,7 +287,7 @@ func (s *Service) syncAccountLocked(
 		openByClient[orderIdentityKey(current.Market, current.ClientOrderID)] = struct{}{}
 		openByExchange[orderIdentityKey(current.Market, current.ExchangeOrderID)] = struct{}{}
 	}
-	var missing []store.OrderRecord
+	var missing, gone []store.OrderRecord
 	for _, local := range localOrders {
 		if mode == syncLight || orderdomain.State(local.State).Terminal() {
 			continue
@@ -300,6 +308,12 @@ func (s *Service) syncAccountLocked(
 				missing = append(missing, local)
 			}
 			continue
+		case exchange.IsInstrumentNotFound(lookupErr):
+			// 标的已下架，这笔单再也查不到：能结束的按过期结束（见 closeInstrumentGone），其余跳过，都不让整次同步失败。
+			if s.instrumentGoneClosable(local) {
+				gone = append(gone, local)
+			}
+			continue
 		default:
 			result, failErr := s.fail(ctx, account, accountDependencyError(tradingAccountID, "get_order", lookupErr))
 			return result, maxDifference, failErr
@@ -317,6 +331,7 @@ func (s *Service) syncAccountLocked(
 	if err != nil {
 		return result, maxDifference, err
 	}
+	result.Warnings = append(result.Warnings, warnings...)
 	for _, local := range missing {
 		// 迟到成交仍可入账，领域模型允许已撤销订单继续应用成交。
 		if err := s.Fills.ConfirmCancel(ctx, local.SpaceID, local.OrderID); err != nil {
@@ -324,7 +339,67 @@ func (s *Service) syncAccountLocked(
 		}
 		result.Warnings = append(result.Warnings, fmt.Sprintf("订单 %s 在交易所已不存在，按已撤销处理", local.OrderID))
 	}
+	for _, local := range gone {
+		closed, err := s.closeInstrumentGone(ctx, local)
+		if err != nil {
+			return result, maxDifference, err
+		}
+		if !closed {
+			continue
+		}
+		result.OrdersUpdated++
+		result.Warnings = append(result.Warnings, fmt.Sprintf("订单 %s 的标的已下架，按过期结束，需人工核对", local.OrderID))
+		detail := fmt.Sprintf("执行账户 %s：订单 %s（%s %s）的标的已下架，交易所查不到，已按过期结束，需人工核对成交",
+			account.Name, local.OrderID, local.MarketType, local.ExchangeSymbol)
+		telemetry.Note(telemetry.AttentionOrdersInstrumentGone, detail, s.now())
+		log.WarnContextf(ctx, "交易关注项：%s", detail)
+	}
 	return result, maxDifference, nil
+}
+
+// InstrumentGoneReason 是标的已下架、交易所查不到的订单按过期结束时写进原因字段的说明，也是“需人工核对”的标记。
+const InstrumentGoneReason = "标的已下架，交易所查不到这笔单，成交以持仓/余额同步为准，需人工核对"
+
+// instrumentGoneClosable 报告交易所确认标的不存在时，这笔本地未结束订单能否直接按过期结束：发出过的单
+// （结果未知、挂单中、部分成交、撤单中、撤单结果未知）都算；提交中的要过了 5 分钟（避开正在进行的提交）；
+// 待提交的从没发到交易所，交给下单流程（提交时会被交易所拒绝）。
+func (s *Service) instrumentGoneClosable(local store.OrderRecord) bool {
+	switch orderdomain.State(local.State) {
+	case orderdomain.SubmitUnknown, orderdomain.Open, orderdomain.PartiallyFilled, orderdomain.Canceling, orderdomain.CancelUnknown:
+		return true
+	case orderdomain.Submitting:
+		since := local.CreatedAt
+		if submitted := time.UnixMilli(local.SubmittedAt); local.SubmittedAt > 0 && submitted.After(since) {
+			since = submitted
+		}
+		return !since.IsZero() && s.now().Sub(since) >= missingOrderGrace
+	}
+	return false
+}
+
+// closeInstrumentGone 把标的已下架、交易所查不到的订单落成 EXPIRED，原因写 InstrumentGoneReason，并释放剩余资金预留。
+// 这笔单到底成交了多少已经查不到：持仓、余额照常以交易所同步结果为准，迟到的成交仍可入账（领域模型允许已过期订单应用成交）。
+// 调用方持有账户锁；订单已经结束（例如私有流抢先更新）时不动，返回 false。
+func (s *Service) closeInstrumentGone(ctx context.Context, local store.OrderRecord) (bool, error) {
+	closed := false
+	err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
+		record, err := tx.GetOrder(local.SpaceID, local.OrderID)
+		if err != nil {
+			return err
+		}
+		if !s.instrumentGoneClosable(record) {
+			return nil
+		}
+		expected := record.Version
+		record.State = string(orderdomain.Expired)
+		record.RejectReason = InstrumentGoneReason
+		record.RemainingReservedQuantity = "0"
+		record.FinishedAt = s.now().UnixMilli()
+		record.Version++
+		closed = true
+		return tx.UpdateOrder(record, expected)
+	})
+	return closed && err == nil, err
 }
 
 // orderIdentityKey 是“市场:订单号”，用于在同一批订单里按订单号去重或比对。

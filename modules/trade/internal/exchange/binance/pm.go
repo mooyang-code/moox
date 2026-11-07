@@ -182,6 +182,10 @@ func (p *PortfolioMargin) ListOpenOrdersForSymbols(ctx context.Context, symbols 
 			}
 			seen[key.Symbol] = true
 			items, err := p.markets[market].ListOpenOrdersForSymbol(ctx, key)
+			if exchange.IsInstrumentNotFound(err) {
+				// 交易所确认标的不存在（已下架）：上面不可能有挂单，跳过它，不让一个下架标的让整次挂单查询失败。
+				continue
+			}
 			if err != nil {
 				return nil, err
 			}

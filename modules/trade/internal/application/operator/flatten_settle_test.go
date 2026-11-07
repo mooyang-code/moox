@@ -11,6 +11,7 @@ import (
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 	"github.com/stretchr/testify/require"
 )
@@ -375,24 +376,103 @@ func TestActionScopedErrorClassifiesAccountErrors(t *testing.T) {
 	require.False(t, ActionScopedError(nil))
 }
 
-// 上一个动作留下、标为需人工核对的子单（结果未知、标的已不存在）：之后的整组清仓撤单确认时跳过它，照常下单，不被它挡成一直运行。
-func TestLaterFlattenSkipsUnreachableLeftoverChild(t *testing.T) {
-	fixture := newMixedFlattenFixture(t)
-	gone := &orderapp.AccountExecutionError{TradingAccountID: "account-a", Operation: "get_order",
-		Err: &exchange.Error{Kind: exchange.ErrorRejected, Code: exchange.CodeBinanceInvalidSymbol}}
-	service, command := startFinishingWithUnknownChild(t, fixture, "delist-gone", "child-gone", gone)
-	result, err := service.FlattenLogicalAccount(context.Background(), command)
-	require.NoError(t, err)
-	require.Equal(t, "PARTIAL", result.Action.Status)
-	require.Equal(t, "SUBMIT_UNKNOWN", childState(t, fixture, "child-gone"))
+// cancelOnResolve 在解析子单时让调用上下文结束（模拟本次调用的预算刚好到点），并原样带回上下文的错误。
+type cancelOnResolve struct {
+	failResolveOrders
+	cancel context.CancelFunc
+}
 
-	fixture.orders.nextID = ""
-	later, err := service.FlattenLogicalAccount(context.Background(), flattenCommand("flatten-later"))
-	require.NoError(t, err)
-	require.NotEmpty(t, fixture.orders.specs, "遗留单不能挡住撤单确认，清仓要照常下单")
-	require.Equal(t, "account-a", later.Accounts[0].TradingAccountID)
-	require.Equal(t, []string{"child-gone"}, later.Accounts[0].ManualCheckOrderIDs)
-	require.NotEmpty(t, later.Accounts[0].ChildOrderIDs)
-	require.NotContains(t, later.Accounts[0].Error, ErrCancelUnconfirmed.Error())
-	require.Empty(t, later.Accounts[1].ManualCheckOrderIDs, "别的账户不带这笔单")
+func (o cancelOnResolve) ResolveUnknown(ctx context.Context, _ string, _ string) (orderdomain.Order, error) {
+	o.cancel()
+	return orderdomain.Order{}, ctx.Err()
+}
+
+// 收拾子单时解析、丢弃遇到的错误按 ActionScopedError 分：写库失败这类共享故障照样返回（动作保持收尾，下次恢复再收拾）；
+// 本动作的账户问题和预算到点只写进动作的 last_error，不作为调用错误返回。
+func TestSettleFlattenChildrenReturnsOnlySharedErrors(t *testing.T) {
+	authErr := &orderapp.AccountExecutionError{TradingAccountID: "account-a", Operation: "get_order",
+		Err: &exchange.Error{Kind: exchange.ErrorAuthentication, Code: "-2015"}}
+	for _, tc := range []struct {
+		name    string
+		err     error
+		pending bool
+		budget  bool
+		shared  bool
+	}{
+		{name: "解析时写库失败", err: errors.New("disk I/O error"), shared: true},
+		{name: "丢弃时写库失败", err: errors.New("disk I/O error"), pending: true, shared: true},
+		{name: "解析时凭证失效", err: authErr},
+		{name: "丢弃时撤单冲突", err: fmt.Errorf("discard: %w", store.ErrConflict), pending: true},
+		{name: "解析时预算到点", budget: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := newMixedFlattenFixture(t)
+			resolveErr := tc.err
+			if tc.pending {
+				resolveErr = nil
+			}
+			service, command := startFinishingWithUnknownChild(t, fixture, "delist-settle", "child-settle", resolveErr)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if tc.pending {
+				require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_trade_orders SET c_state = 'PENDING' WHERE c_order_id = 'child-settle'`).Error)
+				fixture.orders.cancelError = map[string]error{"child-settle": tc.err}
+			}
+			if tc.budget {
+				service.Orders = cancelOnResolve{failResolveOrders: service.Orders.(failResolveOrders), cancel: cancel}
+			}
+
+			result, err := service.FlattenLogicalAccount(ctx, command)
+			require.Equal(t, "RUNNING", result.Action.Status)
+			require.Equal(t, "PARTIAL", result.FinishingStatus, "收拾不完就保持收尾")
+			if tc.shared {
+				require.Error(t, err, "共享故障要返回")
+				require.False(t, ActionScopedError(err), "共享故障不能被当成单个动作的问题")
+				return
+			}
+			if tc.budget {
+				// 预算到点后后面的账户列不了子单：作为本账户的预算错误返回，只记在这个动作上。
+				require.True(t, err == nil || ActionScopedError(err), "预算到点不能被当成共享故障：%v", err)
+			} else {
+				require.NoError(t, err, "本动作的问题不作为调用错误返回")
+			}
+			stored, getErr := fixture.store.GetOperatorAction(context.Background(), "space-1", "delist-settle")
+			require.NoError(t, getErr)
+			require.Contains(t, stored.LastError, "child-settle")
+		})
+	}
+}
+
+// 成员在发起之后被移出组合、订单版本冲突（私有流并发改了同一行）只关乎这个动作，不让操作工作线程不就绪。
+func TestActionScopedErrorCoversMemberRemovalAndConflict(t *testing.T) {
+	require.True(t, ActionScopedError(errors.Join(ErrNotInLogicalAccount, nil)))
+	require.True(t, ActionScopedError(fmt.Errorf("cancel order o1: %w", fmt.Errorf("%w: stale order version", store.ErrConflict))))
+	require.False(t, ActionScopedError(errors.Join(ErrNotInLogicalAccount, errors.New("database is locked"))))
+	require.False(t, submissionBusinessError(store.ErrConflict), "版本冲突仍要重试，不算业务错误")
+
+	// 指定的执行账户、交易所在发起之后被移出组合（动作已创建，走成员筛选那两处）：动作按失败结束，返回的错误只关乎这个动作；
+	// 工作线程恢复运行中的动作拿到的也是这个错误形状。
+	for _, tc := range []struct{ name, account, exchange, instrument string }{
+		{"执行账户被移出", "account-gone", "", ""},
+		{"交易所没有成员", "", "BYBIT", "BTC-USDT-SWAP"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := newMixedFlattenFixture(t)
+			command := flattenCommand("flatten-removed")
+			command.TradingAccountID, command.Exchange, command.InstrumentID = tc.account, tc.exchange, tc.instrument
+			_, err := fixture.service().FlattenLogicalAccount(context.Background(), command)
+			require.ErrorIs(t, err, ErrNotInLogicalAccount)
+			require.True(t, ActionScopedError(err))
+			stored, getErr := fixture.store.GetOperatorAction(context.Background(), "space-1", "flatten-removed")
+			require.NoError(t, getErr)
+			require.Equal(t, "FAILED", stored.Status)
+
+			require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_operator_actions SET c_status = 'RUNNING' WHERE c_action_id = 'flatten-removed'`).Error)
+			stored, getErr = fixture.store.GetOperatorAction(context.Background(), "space-1", "flatten-removed")
+			require.NoError(t, getErr)
+			err = fixture.service().ResumeOperatorAction(context.Background(), stored)
+			require.Error(t, err)
+			require.True(t, ActionScopedError(err), "工作线程恢复时拿到的错误不能拖垮就绪：%v", err)
+		})
+	}
 }
