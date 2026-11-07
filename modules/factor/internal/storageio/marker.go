@@ -205,14 +205,18 @@ func shareFailedSeries(factors []*factorpb.FactorPeriodState) []*factorpb.Series
 }
 
 // MemberFailedSeries 还原成员完整的失败序列：周期级共享的 shared_failed_series 加上该成员自己的 failed_series（去重、已排序）。
+// 合并规则是共享包 packages/seriesset 的 Union（策略等不能引用 factor/internal 的读取方直接用它）。
 // 读取 PeriodDetail 的地方一律用它取成员的失败序列，不要直接读 FactorPeriodState.failed_series。
 func MemberFailedSeries(detail *factorpb.PeriodDetail, state *factorpb.FactorPeriodState) []seriesset.Series {
-	refs := append(append([]*factorpb.SeriesRef(nil), detail.GetSharedFailedSeries()...), state.GetFailedSeries()...)
+	return seriesset.Union(factorSeries(detail.GetSharedFailedSeries()), factorSeries(state.GetFailedSeries()))
+}
+
+func factorSeries(refs []*factorpb.SeriesRef) []seriesset.Series {
 	out := make([]seriesset.Series, 0, len(refs))
 	for _, ref := range refs {
 		out = append(out, seriesset.Series{SubjectID: ref.GetSubjectId(), SeriesTag: ref.GetSeriesTag()})
 	}
-	return normalizedSeries(out)
+	return out
 }
 
 func normalizedSorted(values []string) []string {
@@ -243,31 +247,7 @@ func computedEventID(spaceID string, marker *storagepb.DatasetPeriodCompletedMar
 }
 
 // normalizedSeries 去掉空项与重复项，按（标的、series_tag）排序；没有序列时返回 nil。
-func normalizedSeries(values []seriesset.Series) []seriesset.Series {
-	seen := make(map[seriesset.Series]struct{}, len(values))
-	out := make([]seriesset.Series, 0, len(values))
-	for _, value := range values {
-		value.SubjectID, value.SeriesTag = strings.TrimSpace(value.SubjectID), strings.TrimSpace(value.SeriesTag)
-		if value.SubjectID == "" || value.SeriesTag == "" {
-			continue
-		}
-		if _, exists := seen[value]; exists {
-			continue
-		}
-		seen[value] = struct{}{}
-		out = append(out, value)
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].SubjectID != out[j].SubjectID {
-			return out[i].SubjectID < out[j].SubjectID
-		}
-		return out[i].SeriesTag < out[j].SeriesTag
-	})
-	return out
-}
+func normalizedSeries(values []seriesset.Series) []seriesset.Series { return seriesset.Union(values) }
 
 func seriesToMarker(values []seriesset.Series) []*storagepb.SeriesRef {
 	if len(values) == 0 {

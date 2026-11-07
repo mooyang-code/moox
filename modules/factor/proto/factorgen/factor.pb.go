@@ -1015,7 +1015,7 @@ type PeriodDetail struct {
 	SourceDatasetId string               `protobuf:"bytes,1,opt,name=source_dataset_id,json=sourceDatasetId,proto3" json:"source_dataset_id,omitempty"`
 	Factors         []*FactorPeriodState `protobuf:"bytes,2,rep,name=factors,proto3" json:"factors,omitempty"`
 	// shared_failed_series 是所有成员的 failed_series 的交集，只放一份（永续整体晚到时每个成员的失败序列相同，逐成员复制会让标记超过事件体积上限）。
-	// 成员完整的失败序列 = shared_failed_series ∪ 该成员的 failed_series；读取方必须这样还原。只有统一数据集才有。
+	// 成员完整的失败序列 = shared_failed_series ∪ 该成员的 failed_series；读取方必须这样还原（共享实现：packages/seriesset 的 Union）。只有统一数据集才有。
 	SharedFailedSeries []*SeriesRef `protobuf:"bytes,3,rep,name=shared_failed_series,json=sharedFailedSeries,proto3" json:"shared_failed_series,omitempty"`
 }
 
