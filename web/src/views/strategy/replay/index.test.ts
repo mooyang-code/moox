@@ -25,6 +25,9 @@ vi.mock("@/api/strategy", () => ({
   cancelReplay: api.cancelReplay
 }));
 vi.mock("@/api/factor", () => ({ listFactorTasks: api.listFactorTasks }));
+vi.mock("@/api/storage/metadata", () => ({
+  listAllDatasets: vi.fn(async () => [{ dataset_id: "ds_uni", attributes: { market_type: "multi" } }])
+}));
 vi.mock("@/api/admin/http", () => ({ reportControlError: api.reportControlError, serverNow: () => api.serverNow }));
 vi.mock("@arco-design/web-vue", () => ({ Message: { success: vi.fn(), error: vi.fn() } }));
 // 假路由：push/replace 同步更新响应式 query，并记录导航，页面据此读写 URL 状态。

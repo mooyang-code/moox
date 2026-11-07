@@ -78,7 +78,8 @@ import { validateStrategy } from "@/api/strategy";
 import type { ValidateStrategyResult } from "@/api/strategy-types";
 import ResolvedTable from "@/views/strategy/components/strategy-resolved-table.vue";
 import ResultItems from "@/views/strategy/components/strategy-result-items.vue";
-import { enabledTasks, type TaskOption } from "@/views/strategy/components/task-options";
+import { enabledTasks, isUnifiedTask, type TaskOption } from "@/views/strategy/components/task-options";
+import { loadUnifiedDatasetIds } from "@/views/strategy/components/unified-datasets";
 import { marketLabel, marketRequirement, targetKey } from "@/views/strategy/market-mode";
 import { formatStrategyTime, percent, skipReasonLabel } from "@/views/strategy/model";
 
@@ -124,7 +125,10 @@ async function ensureTasks(visible = true) {
       infos.push(...(rsp.factor_tasks || []));
       if (!rsp.page_result?.has_more || !(rsp.factor_tasks || []).length) break;
     }
-    tasks.value = enabledTasks(infos, spaceId);
+    // 统一数据集上的任务要登记为 multi，试算面板按市场选任务，不列它们。
+    const unifiedIds = await loadUnifiedDatasetIds(spaceId);
+    if (requestId !== tasksRequest) return;
+    tasks.value = enabledTasks(infos, spaceId).filter(task => !isUnifiedTask(task, unifiedIds));
     loadedSpace = spaceId;
     tasksError.value = "";
   } catch (err) {
