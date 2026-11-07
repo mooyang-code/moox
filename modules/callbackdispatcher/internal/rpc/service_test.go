@@ -31,12 +31,22 @@ func (f *fakeSender) Send(_ context.Context, target delivery.Target, request del
 	return f.result
 }
 
-type cancelHandler struct{ err error }
+// countingCancelHandler 记录 OnCancel 被调用的次数和当时看到的记录状态。
+type countingCancelHandler struct {
+	err        error
+	cancels    int
+	seenStatus string
+}
 
-func (cancelHandler) Step(context.Context, store.Execution, time.Time) (action.Outcome, error) {
+func (*countingCancelHandler) Step(context.Context, store.Execution, time.Time) (action.Outcome, error) {
 	return action.Outcome{Status: store.StatusSucceeded}, nil
 }
-func (h cancelHandler) OnCancel(context.Context, store.Execution) error { return h.err }
+
+func (h *countingCancelHandler) OnCancel(_ context.Context, execution store.Execution) error {
+	h.cancels++
+	h.seenStatus = execution.Status
+	return h.err
+}
 
 func newService(t *testing.T) (*Service, *fakeSender) {
 	t.Helper()
@@ -335,31 +345,54 @@ func TestExecutionDetailIncludesAttemptsAndDelistSteps(t *testing.T) {
 	require.EqualValues(t, 2, step.Attempts)
 }
 
-func TestCancelSystemExecutionRunsHandlerCleanupFirst(t *testing.T) {
+// 取消：先原子置为已取消，再让处理器善后；已结束的记录在调处理器之前就被拒绝。
+func TestCancelSystemExecutionCancelsFirstThenRunsCleanup(t *testing.T) {
 	ctx := context.Background()
 	s, _ := newService(t)
+	cancel := func(id string) *pb.CancelEventExecutionRsp {
+		rsp, err := s.CancelEventExecution(ctx, &pb.CancelEventExecutionReq{ExecutionId: id})
+		require.NoError(t, err)
+		return rsp
+	}
+	status := func(id string) (pb.ExecutionStatus, string) {
+		got, err := s.GetEventExecution(ctx, &pb.GetEventExecutionReq{ExecutionId: id})
+		require.NoError(t, err)
+		return got.Detail.Execution.Status, got.Detail.Execution.LastError
+	}
 
 	// 没注册处理器（C6 之前）：直接取消。
 	seedExecution(t, s, "no-handler", SystemRuleID, store.ActionSystem, store.StatusPending)
-	rsp, err := s.CancelEventExecution(ctx, &pb.CancelEventExecutionReq{ExecutionId: "no-handler"})
-	require.NoError(t, err)
-	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.RetInfo.Code, rsp.RetInfo.Msg)
+	require.Equal(t, pb.ErrorCode_SUCCESS, cancel("no-handler").RetInfo.Code)
 
-	// 善后（解除禁止）失败：不取消，用户可以重试。
-	s.Actions.Register(store.SystemActionSellDelistedHoldings, cancelHandler{err: errors.New("Trade 不可达")})
+	// 善后（解除禁止）失败：记录已经是已取消（工作线程不会再推进它），错误说明里记下原因；再点一次取消只重做善后。
+	handler := &countingCancelHandler{err: errors.New("Trade 不可达")}
+	s.Actions.Register(store.SystemActionSellDelistedHoldings, handler)
 	seedExecution(t, s, "cleanup-fails", SystemRuleID, store.ActionSystem, store.StatusPending)
-	rsp, err = s.CancelEventExecution(ctx, &pb.CancelEventExecutionReq{ExecutionId: "cleanup-fails"})
-	require.NoError(t, err)
+	rsp := cancel("cleanup-fails")
 	require.Equal(t, pb.ErrorCode_INNER_ERR, rsp.RetInfo.Code)
 	require.NotContains(t, rsp.RetInfo.Msg, "Trade 不可达", "内部错误不原样返回")
-	got, err := s.GetEventExecution(ctx, &pb.GetEventExecutionReq{ExecutionId: "cleanup-fails"})
-	require.NoError(t, err)
-	require.Equal(t, pb.ExecutionStatus_EXECUTION_STATUS_PENDING, got.Detail.Execution.Status)
+	state, lastError := status("cleanup-fails")
+	require.Equal(t, pb.ExecutionStatus_EXECUTION_STATUS_CANCELED, state)
+	require.Contains(t, lastError, "取消后的善后失败")
+	require.Equal(t, 1, handler.cancels)
+	require.Equal(t, store.StatusPending, handler.seenStatus, "处理器看到的是取消前的记录")
 
-	s.Actions.Register(store.SystemActionSellDelistedHoldings, cancelHandler{})
-	rsp, err = s.CancelEventExecution(ctx, &pb.CancelEventExecutionReq{ExecutionId: "cleanup-fails"})
-	require.NoError(t, err)
-	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.RetInfo.Code, rsp.RetInfo.Msg)
+	require.Equal(t, pb.ErrorCode_INNER_ERR, cancel("cleanup-fails").RetInfo.Code)
+	require.Equal(t, 2, handler.cancels, "再取消一次重做善后")
+	handler.err = nil
+	require.Equal(t, pb.ErrorCode_SUCCESS, cancel("cleanup-fails").RetInfo.Code)
+	require.Equal(t, 3, handler.cancels)
+	_, lastError = status("cleanup-fails")
+	require.Empty(t, lastError, "善后成功后清除说明")
+	require.Equal(t, pb.ErrorCode_CONFLICT, cancel("cleanup-fails").RetInfo.Code, "善后做完之后不能再取消")
+	require.Equal(t, 3, handler.cancels)
+
+	// 已结束的记录在调处理器之前就拒绝。
+	seedExecution(t, s, "done", SystemRuleID, store.ActionSystem, store.StatusSucceeded)
+	seedExecution(t, s, "failed", SystemRuleID, store.ActionSystem, store.StatusFailed)
+	require.Equal(t, pb.ErrorCode_CONFLICT, cancel("done").RetInfo.Code)
+	require.Equal(t, pb.ErrorCode_CONFLICT, cancel("failed").RetInfo.Code)
+	require.Equal(t, 3, handler.cancels, "已结束的记录不调处理器")
 }
 
 func TestDeleteRuleCancelsItsPendingExecutions(t *testing.T) {

@@ -36,7 +36,12 @@ type Handler interface {
 	// Step 推进一条执行记录一步。返回错误表示这一步暂时没做成，工作线程稍后重试；
 	// 需要停下来（用完重试次数、核对失败）时返回 Status 为 StatusFailed 的 Outcome。
 	Step(ctx context.Context, execution store.Execution, now time.Time) (Outcome, error)
-	// OnCancel 在用户取消一条还没结束的记录时善后（下架：解除禁止买入）。返回错误则取消不生效，用户可以重试。
+	// OnCancel 在用户取消一条记录之后善后（下架：解除禁止买入）。服务先原子地把记录置为已取消，再调它；
+	// 它返回错误时记录仍是已取消，用户再点一次取消会重新调它，所以实现必须幂等。
+	//
+	// 竞态：取消发生在 Step 执行期间时，Step 可能在取消之后才写入禁止名单。所以处理器每次写名单（BlockInstrument）
+	// 之后必须复查执行记录的状态，已经是已取消就补一次解除（UnblockInstrument）；并且只有同一标的没有别的未结束的真实执行时才解除
+	// （Trade 的名单是全局的，演练登记 PAPER_ONLY 的取消不能解除真实下架的禁止）。
 	OnCancel(ctx context.Context, execution store.Execution) error
 }
 
