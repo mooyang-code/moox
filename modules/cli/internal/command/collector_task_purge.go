@@ -229,7 +229,8 @@ func runCollectorTaskPurge(ctx context.Context, flags collectorTaskPurgeFlags) (
 		}
 		if dbPath == "" {
 			paths := snapshot.Manifest.Paths.Resolved()
-			dbPath = filepath.Join(paths.ControlRoot, "data", "moox_collector.db")
+			// 组件的工作目录是 <ControlRoot>/current/<组件>，Collector 默认的相对路径 ./data/moox_collector.db 落在它下面的 data/。
+			dbPath = filepath.Join(paths.ControlRoot, "current", "collector", "data", "moox_collector.db")
 		}
 	}
 	if dbPath == "" {
