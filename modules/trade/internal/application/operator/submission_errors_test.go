@@ -19,9 +19,9 @@ import (
 
 type deadlinePrice struct{}
 
-func (deadlinePrice) LatestPrice(ctx context.Context, _ string, _ exchange.SymbolKey) (Quote, error) {
-	<-ctx.Done()
-	return Quote{}, ctx.Err()
+// 替身自己返回 DeadlineExceeded，不依赖真实时钟：测试里的 SQLite 在重负载下可能比固定的几十毫秒还慢。
+func (deadlinePrice) LatestPrice(context.Context, string, exchange.SymbolKey) (Quote, error) {
+	return Quote{}, context.DeadlineExceeded
 }
 
 type rejectedSubmissionAdapter struct{ *submissionAdapter }
@@ -66,27 +66,23 @@ func TestSubmissionJoinedExchangeAndSyncDatabaseFailurePreservesRejection(t *tes
 
 type deadlineOrders struct{ OrderService }
 
-func (s deadlineOrders) Place(ctx context.Context, _ string, _ orderdomain.OrderSpec) (orderdomain.Order, error) {
-	<-ctx.Done()
-	return orderdomain.Order{}, &orderapp.AccountExecutionError{Err: ctx.Err()}
+func (s deadlineOrders) Place(_ context.Context, _ string, _ orderdomain.OrderSpec) (orderdomain.Order, error) {
+	return orderdomain.Order{}, &orderapp.AccountExecutionError{Err: context.DeadlineExceeded}
 }
-func (s deadlineOrders) Submit(ctx context.Context, _, _ string) (orderdomain.Order, error) {
-	<-ctx.Done()
-	return orderdomain.Order{}, &orderapp.AccountExecutionError{Err: ctx.Err()}
+func (s deadlineOrders) Submit(_ context.Context, _, _ string) (orderdomain.Order, error) {
+	return orderdomain.Order{}, &orderapp.AccountExecutionError{Err: context.DeadlineExceeded}
 }
 
 type deadlineSubmitOrders struct{ OrderService }
 
-func (s deadlineSubmitOrders) Submit(ctx context.Context, _, _ string) (orderdomain.Order, error) {
-	<-ctx.Done()
-	return orderdomain.Order{}, &orderapp.AccountExecutionError{Err: ctx.Err()}
+func (s deadlineSubmitOrders) Submit(_ context.Context, _, _ string) (orderdomain.Order, error) {
+	return orderdomain.Order{}, &orderapp.AccountExecutionError{Err: context.DeadlineExceeded}
 }
 
 type deadlineUnknownOrders struct{ OrderService }
 
-func (s deadlineUnknownOrders) ResolveUnknown(ctx context.Context, _, _ string) (orderdomain.Order, error) {
-	<-ctx.Done()
-	return orderdomain.Order{}, &orderapp.AccountExecutionError{Err: ctx.Err()}
+func (s deadlineUnknownOrders) ResolveUnknown(_ context.Context, _, _ string) (orderdomain.Order, error) {
+	return orderdomain.Order{}, &orderapp.AccountExecutionError{Err: context.DeadlineExceeded}
 }
 
 func TestSubmissionInitialDisabledHasNoDurableSideEffects(t *testing.T) {
@@ -135,7 +131,7 @@ func TestSubmissionCanceledDependenciesStillPersistDiagnostics(t *testing.T) {
 					s.Orders = deadlineOrders{OrderService: s.Orders}
 				}
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			if strings.HasPrefix(path, "recovery") {
 				require.NoError(t, s.ResumeOperatorAction(ctx, action))

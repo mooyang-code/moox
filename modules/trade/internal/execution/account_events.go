@@ -21,6 +21,7 @@ func AccountEventsOf(adapter ExecutionAdapter) AccountEventSource {
 	}
 	return source
 }
+
 type AccountEventHandler interface {
 	OnSubscribed()
 	OnOrder(context.Context, exchange.Order) error
