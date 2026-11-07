@@ -102,7 +102,9 @@ type DelistAction struct {
 	ReleaseVerdict string
 	// SelfReleased 只用于禁止买入那一行：演练结束时本记录自己解除了名单（见 schema 的 c_self_released）。
 	SelfReleased bool
-	UpdatedAt    int64
+	// BusySince 只用于平仓各行：从第一次遇到 Trade 正忙（含同组合同标的有别的平仓在进行）起的时间（Unix 毫秒），发起成功或失败后清 0。
+	BusySince int64
+	UpdatedAt int64
 }
 
 // 下架处理的步骤种类与状态。
@@ -197,6 +199,7 @@ type delistRow struct {
 	PlannedDelistAt  int64  `gorm:"column:c_planned_delist_at"`
 	ReleaseVerdict   string `gorm:"column:c_release_verdict"`
 	SelfReleased     bool   `gorm:"column:c_self_released"`
+	BusySince        int64  `gorm:"column:c_busy_since"`
 	UpdatedAt        int64  `gorm:"column:c_updated_at;autoUpdateTime:false"`
 }
 

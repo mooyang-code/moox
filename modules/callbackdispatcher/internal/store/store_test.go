@@ -680,7 +680,7 @@ CREATE TABLE t_delist_actions (
 );`))
 	err = old.CheckSchema(ctx)
 	require.Error(t, err)
-	for _, want := range []string{"c_claimed_at", "c_cleanup_seq", "c_planned_delist_at", "c_release_verdict", "没有 PARTIAL", "删除库文件"} {
+	for _, want := range []string{"c_busy_since", "c_claimed_at", "c_cleanup_seq", "c_planned_delist_at", "c_release_verdict", "没有 PARTIAL", "删除库文件"} {
 		require.Contains(t, err.Error(), want)
 	}
 }

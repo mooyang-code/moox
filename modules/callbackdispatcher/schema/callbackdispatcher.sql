@@ -134,7 +134,10 @@ CREATE TABLE IF NOT EXISTS t_delist_actions (
     c_self_released INTEGER NOT NULL DEFAULT 0,
     -- 平仓各行和汇总行：这一轮是按哪个下架时间（Unix 毫秒）规划的。改期后这一轮没成功就按新时间重开（换新操作号）。
     -- 禁止买入那一行：记下解除待重试的结论时，结论对应的下架时间；对不上说明之后合并进了新的登记，结论作废。
+    -- 核对那一行：按哪个下架时间核对的；演练结束后又回到待处理而下架时间不同，说明合并了新的登记，重走时间线。
     c_planned_delist_at INTEGER NOT NULL DEFAULT 0,
+    -- 只用于平仓各行：从第一次遇到 Trade 正忙起的时间（Unix 毫秒），能发起或失败后清 0；持续 30 分钟还没能发起就算暂时失败。
+    c_busy_since INTEGER NOT NULL DEFAULT 0,
     c_updated_at INTEGER NOT NULL,
     PRIMARY KEY (c_execution_id, c_round, c_kind, c_space_id, c_logical_account_id),
     FOREIGN KEY (c_execution_id)

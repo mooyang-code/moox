@@ -42,6 +42,8 @@ const (
 	tradeTimeout = 30 * time.Second
 	// minStepBudget 是 Step 的剩余时间低于它时不再发起新的 Trade 调用，剩下的留给下一次推进。
 	minStepBudget = 45 * time.Second
+	// busyAlertAfter 是一行从第一次遇到 Trade 正忙起、持续多久还没能发起就算作暂时失败（关注项再过 15 分钟提醒）。
+	busyAlertAfter = 30 * time.Minute
 )
 
 // Handler 是下架处理器。
@@ -226,6 +228,13 @@ func (h *Handler) Step(ctx context.Context, execution store.Execution, now time.
 			// 旧结论作废，清掉上一次演练的步骤，重新写名单、按新的下架时间重走时间线（名单可能已被解除，不能当作手工解除）。
 			r.restart = true
 		}
+		if verify, ok := r.steps[stepKey{Round: RoundVerify, Kind: store.DelistKindVerify}]; ok && terminal(verify.Status) && verify.PlannedDelistAt != tgt.DelistAt.UnixMilli() {
+			// 已经有了终态的核对、记录又回到了待处理，而且核对时依据的下架时间和现在的不同：演练最后一步进行中合并了新的登记（结果没写进去）。
+			// 这是一次新的演练：清掉上一次的各轮步骤，重新写名单，按新的下架时间重走时间线。只看核对行，不看名单还在不在：
+			// 同标的有真实下架时名单项是它写的，演练结束时没有解除，名单一直都在。
+			// 下架时间相同（核对失败后点“重新执行”、卡住后被放回）不清步骤，只重新写名单、重新核对。
+			r.restart = true
+		}
 	}
 	outcome, err := r.step(ctx)
 	if err != nil || !tgt.PaperOnly || r.stopped || (outcome.Status != store.StatusSucceeded && outcome.Status != store.StatusFailed) {
@@ -293,7 +302,7 @@ type run struct {
 	problems []string
 	// stopped 为真表示执行记录已经被取消：不再发起新的 Trade 调用，直接返回。
 	stopped bool
-	// restart 为真表示演练结束后又被重新打开（见 Step 和 step）：这次推进清掉上一次演练的各轮步骤，重新写名单，按现在的下架时间重走时间线。
+	// restart 为真表示演练结束后又被重新打开、下架时间也变了（见 Step）：这次推进清掉上一次演练的各轮步骤，重新写名单，按现在的下架时间重走时间线。
 	restart bool
 }
 
@@ -329,6 +338,7 @@ func (r *run) save(ctx context.Context, step store.DelistAction) error {
 
 func (r *run) step(ctx context.Context) (action.Outcome, error) {
 	blockKey := stepKey{Round: RoundBlock, Kind: store.DelistKindBlock}
+	reblock := false
 	if block, ok := r.steps[blockKey]; ok && block.Status == store.DelistSucceeded && !r.restart {
 		// 每次推进前先查名单：已被手工解除的（误报、交易所改期），停止后续所有步骤。
 		callCtx, cancel := r.h.tradeCtx(ctx)
@@ -344,8 +354,9 @@ func (r *run) step(ctx context.Context) (action.Outcome, error) {
 		case !listed && !block.SelfReleased:
 			return action.Outcome{Status: store.StatusCanceled, Error: "禁止买入已被手工解除，下架处理已停止"}, nil
 		case !listed:
-			// 名单是这条演练结束时自己解除的，之后记录又被重新打开（合并了新的登记）：清掉上一次演练的步骤，重新写名单，按新的下架时间重走时间线。
-			r.restart = true
+			// 名单是这条演练结束时自己解除的，之后记录又回到待处理、下架时间没变（换了下架时间的已在 Step 里按重开处理）：
+			// 不是手工解除，重新写名单，已有的步骤照常推进（核对时间已过就重新核对）。
+			reblock = true
 		case block.SelfReleased:
 			// 名单里还有这一项（解除没生效，或别人写的）：之后再不见了就是被手工解除的。
 			block.SelfReleased = false
@@ -359,7 +370,7 @@ func (r *run) step(ctx context.Context) (action.Outcome, error) {
 			return action.Outcome{}, err
 		}
 	}
-	if block, ok := r.steps[blockKey]; !ok || block.Status != store.DelistSucceeded || r.restart {
+	if block, ok := r.steps[blockKey]; !ok || block.Status != store.DelistSucceeded || r.restart || reblock {
 		outcome, finished, err := r.ensureBlocked(ctx)
 		if finished || err != nil {
 			return outcome, err
@@ -635,73 +646,94 @@ func (r *run) roundRows(round int, plannedAt int64) []store.DelistAction {
 }
 
 // flattenRound 推进一轮平仓：到点后找持有者、给每个组合建一行（先存下操作号），再逐个发起并查结果。
-// 汇总行记下这一轮是按哪个下架时间规划的：改期之后下架时间变了，而这一轮已经以失败或只完成一部分结束（用完重试、到了旧的下架时间被停下），
-// 就按新时间重开，每个仍持有的组合换新的操作号再平；已经成功的一轮不重开。
+//
+// 汇总行记下这一轮是按哪个下架时间规划的。改期之后（下架时间变了）：
+//   - 旧计划里已经在 Trade 上运行的行照常查结果，直到结束，不管新计划这一轮到没到点（不查就没人知道它们结束了）；
+//   - 旧计划里还没发起的行（Trade 正忙、别的操作号在跑、失败后在等退避）不再按旧的截止时间发起，等新计划这一轮到点时随整轮重开；
+//   - 旧计划这一轮没有成功、也没有还在运行的行时，到了新计划这一轮的时间就按新时间重开：每个仍持有的组合换新的操作号、新的截止时间再平，
+//     不再持有的组合留下的旧行一并收掉（见 reopenRound）。已经成功的一轮不重开。
+//
+// 重开的判断放在推进旧行之后：同一次推进里旧行刚查到结束、新计划这一轮又已到点，就在这一步里重开，不等下一次推进。
 func (r *run) flattenRound(ctx context.Context, round int, due time.Time) error {
+	plannedAt := r.target.DelistAt.UnixMilli()
+	summaryKey := stepKey{Round: round, Kind: store.DelistKindFlatten}
+	summary, started := r.steps[summaryKey]
+	if started && !terminal(summary.Status) {
+		if err := r.advanceRound(ctx, summary); err != nil || r.stopped {
+			return err
+		}
+		summary = r.steps[summaryKey]
+	}
 	if r.now.Before(due) {
 		r.wakeAt(due)
 		return nil
 	}
-	plannedAt := r.target.DelistAt.UnixMilli()
-	summaryKey := stepKey{Round: round, Kind: store.DelistKindFlatten}
-	summary, started := r.steps[summaryKey]
-	reopen := started && summary.PlannedDelistAt != plannedAt && terminal(summary.Status) && summary.Status != store.DelistSucceeded
-	if !started || reopen {
-		if r.lowBudget(ctx) {
-			r.wakeAt(r.now.Add(5 * time.Second))
-			return nil
-		}
-		listed, err := r.listHolders(ctx)
-		if err != nil {
-			r.problem("第 %d 轮：查持有者失败，稍后重试: %v", round, err)
-			r.wakeAt(r.now.Add(transientRetry))
-			return nil
-		}
-		holders := listed.Holders
-		skipped := describeSkipped(listed.Skipped)
-		accounts := groupHolders(filterLive(holders))
-		for _, item := range accounts {
-			row := store.DelistAction{
-				Round: round, Kind: store.DelistKindFlatten, SpaceID: item.SpaceID, LogicalAccountID: item.LogicalAccountID,
-				Exchange:         r.target.Instrument.Exchange,
-				OperatorActionID: operatorActionID(r.execution.ExecutionID, round, item.SpaceID, item.LogicalAccountID, plannedAt),
-				Reason:           flattenReason(r.execution, r.target, round),
-				Status:           store.DelistPending, PlannedDelistAt: plannedAt,
-			}
-			// 重入时已按这个下架时间存下的行（含操作号、状态）不能被重置；改期前的旧行换成新的。
-			if existing, exists := r.steps[keyOf(row)]; exists && existing.PlannedDelistAt == plannedAt {
-				continue
-			}
-			if err := r.save(ctx, row); err != nil {
-				return err
-			}
-		}
-		summary = store.DelistAction{Round: round, Kind: store.DelistKindFlatten, Exchange: r.target.Instrument.Exchange, Status: store.DelistRunning, PlannedDelistAt: plannedAt}
-		notes := strings.Join(listed.Notes, "；")
-		// 有没能判断的账户时，这一轮不能算成功：汇总行带上说明，最终状态至少是“只完成一部分”，关注项会提醒人工确认。
-		summary.Error = skipped
-		summary.Result = joinLines(nonEmpty(fmt.Sprintf("持有的组合 %d 个", len(accounts)), describeDust(holders), notes))
-		if len(accounts) == 0 {
-			summary.Status = store.DelistSucceeded
-			headline := "没有策略持有，无需平仓"
-			if skipped != "" {
-				summary.Status = store.DelistPartial
-				headline = "没有查到策略持有，但有账户没能判断，不能当作没有持有"
-			}
-			summary.Result = joinLines(nonEmpty(headline, describeDust(holders), notes))
-		}
-		// 汇总行最后写：它按这个下架时间存在，说明这一轮的各组合行都已存好。
-		if err := r.save(ctx, summary); err != nil {
-			return err
-		}
-		if len(accounts) == 0 {
-			return nil
-		}
-	}
-	if terminal(summary.Status) {
+	if started && !r.reopenable(summary, plannedAt) {
 		return nil
 	}
-	rows := r.roundRows(round, summary.PlannedDelistAt)
+	if r.lowBudget(ctx) {
+		r.wakeAt(r.now.Add(5 * time.Second))
+		return nil
+	}
+	listed, err := r.listHolders(ctx)
+	if err != nil {
+		r.problem("第 %d 轮：查持有者失败，稍后重试: %v", round, err)
+		r.wakeAt(r.now.Add(transientRetry))
+		return nil
+	}
+	holders := listed.Holders
+	skipped := describeSkipped(listed.Skipped)
+	accounts := groupHolders(filterLive(holders))
+	holding := make(map[stepKey]bool, len(accounts))
+	for _, item := range accounts {
+		row := store.DelistAction{
+			Round: round, Kind: store.DelistKindFlatten, SpaceID: item.SpaceID, LogicalAccountID: item.LogicalAccountID,
+			Exchange:         r.target.Instrument.Exchange,
+			OperatorActionID: operatorActionID(r.execution.ExecutionID, round, item.SpaceID, item.LogicalAccountID, plannedAt),
+			Reason:           flattenReason(r.execution, r.target, round),
+			Status:           store.DelistPending, PlannedDelistAt: plannedAt,
+		}
+		holding[keyOf(row)] = true
+		// 重入时已按这个下架时间存下的行（含操作号、状态）不能被重置；改期前的旧行换成新的。
+		if existing, exists := r.steps[keyOf(row)]; exists && existing.PlannedDelistAt == plannedAt {
+			continue
+		}
+		if err := r.save(ctx, row); err != nil {
+			return err
+		}
+	}
+	if started {
+		if err := r.retireStaleRows(ctx, round, plannedAt, holding); err != nil {
+			return err
+		}
+	}
+	summary = store.DelistAction{Round: round, Kind: store.DelistKindFlatten, Exchange: r.target.Instrument.Exchange, Status: store.DelistRunning, PlannedDelistAt: plannedAt}
+	notes := strings.Join(listed.Notes, "；")
+	// 有没能判断的账户时，这一轮不能算成功：汇总行带上说明，最终状态至少是“只完成一部分”，关注项会提醒人工确认。
+	summary.Error = skipped
+	summary.Result = joinLines(nonEmpty(fmt.Sprintf("持有的组合 %d 个", len(accounts)), describeDust(holders), notes))
+	if len(accounts) == 0 {
+		summary.Status = store.DelistSucceeded
+		headline := "没有策略持有，无需平仓"
+		if skipped != "" {
+			summary.Status = store.DelistPartial
+			headline = "没有查到策略持有，但有账户没能判断，不能当作没有持有"
+		}
+		summary.Result = joinLines(nonEmpty(headline, describeDust(holders), notes))
+	}
+	// 汇总行最后写：它按这个下架时间存在，说明这一轮的各组合行都已存好。
+	if err := r.save(ctx, summary); err != nil {
+		return err
+	}
+	if len(accounts) == 0 {
+		return nil
+	}
+	return r.advanceRound(ctx, summary)
+}
+
+// advanceRound 推进汇总行所属计划的各组合行，都有了结果就给汇总行记上最终状态。
+func (r *run) advanceRound(ctx context.Context, summary store.DelistAction) error {
+	rows := r.roundRows(summary.Round, summary.PlannedDelistAt)
 	for _, row := range rows {
 		if r.stopped {
 			return nil
@@ -711,6 +743,46 @@ func (r *run) flattenRound(ctx context.Context, round int, due time.Time) error 
 		}
 	}
 	return r.settleSummary(ctx, summary, rows)
+}
+
+// reopenable 报告按旧下架时间规划的这一轮能不能按现在的下架时间重开：计划变了、这一轮没有成功，并且旧计划里没有还在 Trade 上运行的行。
+// 旧计划里只剩没发起的行时汇总行还没有终态，同样可以重开（这些行不会再按旧的截止时间发起）。
+func (r *run) reopenable(summary store.DelistAction, plannedAt int64) bool {
+	if summary.PlannedDelistAt == plannedAt || summary.Status == store.DelistSucceeded {
+		return false
+	}
+	for _, row := range r.roundRows(summary.Round, summary.PlannedDelistAt) {
+		if r.steps[keyOf(row)].Status == store.DelistRunning {
+			return false
+		}
+	}
+	return true
+}
+
+// retireStaleRows 在一轮按新的下架时间重开时，收掉不在新持有者名单里的组合留下的旧计划的行：它们已经不再持有，
+// 旧行留着失败、只完成一部分的状态，关注项会一直提醒到核对。改成按新计划“已不再持有”结束，旧结果写在说明里。
+// 旧计划里成功的行不动。
+func (r *run) retireStaleRows(ctx context.Context, round int, plannedAt int64, holding map[stepKey]bool) error {
+	var stale []store.DelistAction
+	for key, step := range r.steps {
+		if key.Round != round || key.Kind != store.DelistKindFlatten || (key.SpaceID == "" && key.LogicalAccountID == "") {
+			continue
+		}
+		if holding[key] || step.PlannedDelistAt == plannedAt || step.Status == store.DelistSucceeded {
+			continue
+		}
+		stale = append(stale, step)
+	}
+	for _, step := range stale {
+		previous := joinLines(nonEmpty(step.Status, step.Error))
+		step.Status, step.Error, step.NextCheckAt, step.BusySince = store.DelistSucceeded, "", 0, 0
+		step.Result = "改期后按新的下架时间重查，已不再持有（旧计划的结果：" + previous + "）"
+		step.PlannedDelistAt = plannedAt
+		if err := r.save(ctx, step); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // settleSummary 在这一轮的每个组合都有了结果之后，给汇总行记上最终状态。
@@ -759,7 +831,14 @@ func (r *run) advanceRow(ctx context.Context, row store.DelistAction) error {
 	if terminal(row.Status) {
 		return nil
 	}
+	if row.Status != store.DelistRunning && row.PlannedDelistAt != r.target.DelistAt.UnixMilli() {
+		// 改期前规划、还没在 Trade 上运行的行：不再按旧的截止时间发起（推迟时会比新计划早好几天卖出，旧截止时间也可能已经过了），
+		// 等新计划这一轮到点时随整轮重开（见 flattenRound）。
+		return nil
+	}
 	if next := time.UnixMilli(row.NextCheckAt); row.NextCheckAt > 0 && next.After(r.now) {
+		// 这一行没到再试的时间也要报持续忙：这次推进只要没有问题说明，工作线程就把连续暂时失败的次数清零。
+		r.reportLongBusy(row)
 		r.wakeAt(next)
 		return nil
 	}
@@ -782,19 +861,18 @@ func (r *run) advanceRow(ctx context.Context, row store.DelistAction) error {
 	return r.launch(ctx, row)
 }
 
-// launch 发起平仓。过了下架时间不下单：每次发起之前都用当前时间再判断一次，不只在 Step 入口判断。
+// launch 发起平仓。过了截止时间不下单：每次发起之前都用当前时间再判断一次，不只在 Step 入口判断。
 func (r *run) launch(ctx context.Context, row store.DelistAction) error {
-	if !r.h.now().Before(r.target.DelistAt) {
-		row.Status, row.Error = store.DelistFailed, "已到下架时间，不再下单"
-		return r.save(ctx, row)
-	}
-	// 下架时间 T 作为截止时间传给 Trade：平仓跑到 T 还没做完时由 Trade 停止下单，不靠这里的下一次推进才发现。
-	// 用这一行建立时的下架时间（操作号也由它算出）：截止时间是 Trade 判断同号请求是否一致的一部分，
+	// 这一行建立时的下架时间作为截止时间传给 Trade（操作号也由它算出）：截止时间是 Trade 判断同号请求是否一致的一部分，
 	// 同一个操作号重发必须带同一个值，否则会被判成幂等冲突；改期后新建的行自带新的下架时间。
-	// 一轮进行中下架时间被提前时，这一轮已有的行仍带原来的截止时间，到新的 T 由 afterDelist 停下这些行。
+	// 走到这里的行都是按现在的下架时间规划的（改期前没发起的行不会发起，见 advanceRow），截止时间就是现在的 T。
 	deadline := row.PlannedDelistAt
 	if deadline <= 0 {
 		deadline = r.target.DelistAt.UnixMilli()
+	}
+	if !r.h.now().Before(time.UnixMilli(deadline)) {
+		row.Status, row.Error = store.DelistFailed, "已到下架时间，不再下单"
+		return r.save(ctx, row)
 	}
 	callCtx, cancel := r.h.tradeCtx(ctx)
 	result, err := r.h.Trade.FlattenInstrument(callCtx, action.FlattenRequest{
@@ -805,21 +883,43 @@ func (r *run) launch(ctx context.Context, row store.DelistAction) error {
 	switch {
 	case errors.Is(err, action.ErrTradeBusy):
 		// 忙不计重试次数，稍后再试。
-		row.Error = "Trade 正忙，稍后再试"
-		row.NextCheckAt = r.now.Add(pollInterval).UnixMilli()
-		r.wakeAt(r.now.Add(pollInterval))
+		return r.busy(ctx, row, "Trade 正忙，稍后再试")
+	case errors.Is(err, action.ErrInvalidRequest):
+		// Trade 拒绝参数（INVALID_PARAM、TRADE_ADOPTION_REQUIRED 等）：同样的请求重试多少次都会被拒，这一行直接失败，关注项提醒人工处理。
+		row.Status, row.Error, row.NextCheckAt, row.BusySince = store.DelistFailed, "发起平仓被 Trade 拒绝: "+err.Error(), 0, 0
 		return r.save(ctx, row)
 	case err != nil:
+		row.BusySince = 0
 		return r.failed(ctx, row, "发起平仓失败: "+err.Error())
 	case result.ActionID != "" && result.ActionID != row.OperatorActionID:
 		// Trade 返回的是同组合同标的别的操作（别的记录的平仓还在跑）：不能把它当成自己的，更不能覆盖自己存下的操作号，
 		// 否则这个号之后带着自己的说明重发会被判幂等冲突。按忙处理：稍后再试，不计重试次数。
-		row.Error = "Trade 上同一个组合的同一个标的已有别的平仓在进行，稍后再试"
-		row.NextCheckAt = r.now.Add(pollInterval).UnixMilli()
-		r.wakeAt(r.now.Add(pollInterval))
-		return r.save(ctx, row)
+		return r.busy(ctx, row, "Trade 上同一个组合的同一个标的已有别的平仓在进行，稍后再试")
 	}
+	row.BusySince = 0
 	return r.apply(ctx, row, result)
+}
+
+// busy 记一次“Trade 正忙”：不计重试次数，30 秒后再试。第一次忙的时间记在行上，持续太久报成暂时失败（见 reportLongBusy）。
+func (r *run) busy(ctx context.Context, row store.DelistAction, message string) error {
+	row.Error = message
+	if row.BusySince == 0 {
+		row.BusySince = r.now.UnixMilli()
+	}
+	row.NextCheckAt = r.now.Add(pollInterval).UnixMilli()
+	r.wakeAt(r.now.Add(pollInterval))
+	r.reportLongBusy(row)
+	return r.save(ctx, row)
+}
+
+// reportLongBusy 在这一行从第一次忙起持续超过 busyAlertAfter 还没能发起时，把它记成这次推进的问题。
+// 忙本身是正常等待、不算问题，但一直忙下去，到下架时间都没平仓也不会告警；记成问题后工作线程累计连续暂时失败，关注项据此提醒。
+func (r *run) reportLongBusy(row store.DelistAction) {
+	if row.BusySince <= 0 || r.now.Sub(time.UnixMilli(row.BusySince)) < busyAlertAfter {
+		return
+	}
+	r.problem("%s/%s 第 %d 轮：从 %s 起 Trade 一直正忙或有别的平仓在进行，还没能发起平仓", row.SpaceID, row.LogicalAccountID, row.Round,
+		time.UnixMilli(row.BusySince).UTC().Format("2006-01-02 15:04 UTC"))
 }
 
 // poll 查平仓的结果。查询出错不计这一行的重试次数，30 秒后再查；但算作这次推进的暂时失败。
@@ -878,7 +978,11 @@ func (r *run) failed(ctx context.Context, row store.DelistAction, message string
 	return r.save(ctx, row)
 }
 
-// afterDelist 是下架时间之后：所有还没结束的平仓一律停下，等核对时间到了再核对，只核对不下单。
+// afterDelist 是下架时间之后：这里不再发起、不再查询，还没结束的行一律记为失败，等核对时间到了再核对，只核对不下单。
+//
+// 这只是事件中心这边停下，没有调用 Trade 去停止已经在跑的清仓：Trade 按发起时带的截止时间自己停止下单。
+// 一轮进行中下架时间被提前时，已经发起的清仓带的是原来（更晚）的截止时间，会越过新的 T 继续下单，直到它自己的截止时间
+// （Trade 那边每笔下单前检查截止时间也只能按这个值）；还没发起的行不会再按原来的截止时间发起（见 advanceRow）。
 func (r *run) afterDelist(ctx context.Context) (action.Outcome, error) {
 	var open []store.DelistAction
 	for key, step := range r.steps {
@@ -927,7 +1031,8 @@ func (r *run) verify(ctx context.Context) (action.Outcome, error) {
 	holders := listed.Holders
 	skipped := describeSkipped(listed.Skipped)
 	live := filterLive(holders)
-	step := store.DelistAction{Round: RoundVerify, Kind: store.DelistKindVerify, Exchange: r.target.Instrument.Exchange}
+	// 核对行记下按哪个下架时间核对：演练结束后又回到待处理时，据此区分“合并了新的登记”（重走时间线）和“同一个下架时间重新执行”（只重新核对），见 Step。
+	step := store.DelistAction{Round: RoundVerify, Kind: store.DelistKindVerify, Exchange: r.target.Instrument.Exchange, PlannedDelistAt: r.target.DelistAt.UnixMilli()}
 	if existing, ok := r.steps[keyOf(step)]; ok {
 		step.Attempts = existing.Attempts
 	}

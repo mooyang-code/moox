@@ -61,7 +61,11 @@ type fakeTrade struct {
 
 	calls    map[string]int
 	flattens []action.FlattenRequest
-	ops      map[string]*fakeOp
+	// launchedAt 是每次真正发起清仓（flattens 里的每一项）时的模拟时钟。
+	launchedAt []time.Time
+	ops        map[string]*fakeOp
+	// now 是模拟时钟，由 newHarness 设置。
+	now func() time.Time
 }
 
 type fakeOp struct {
@@ -217,6 +221,9 @@ func (f *fakeTrade) FlattenInstrument(_ context.Context, request action.FlattenR
 		return action.OperatorAction{}, action.ErrTradeBusy
 	}
 	f.flattens = append(f.flattens, request)
+	if f.now != nil {
+		f.launchedAt = append(f.launchedAt, f.now())
+	}
 	op := &fakeOp{request: request, status: action.OperatorRunning}
 	f.ops[request.ActionID] = op
 	return action.OperatorAction{ActionID: request.ActionID, Status: op.status}, nil
@@ -291,6 +298,7 @@ func newHarness(t *testing.T) *harness {
 	}))
 	trade := newFakeTrade()
 	clk := &clock{t: baseTime}
+	trade.now = clk.Now
 	return &harness{t: t, store: dbStore, trade: trade, clock: clk, handler: &Handler{Store: dbStore, Trade: trade, Now: clk.Now}}
 }
 
