@@ -75,6 +75,18 @@
 - **`gateway call` 不能调用返回密钥明文或完整 webhook 的方法**（`SecretMgr.GetSecretValue`、`MonitorMgr.ListNotificationChannels`），也拒绝密钥的新建、修改、启停、删除（`CreateSecret`、`UpdateSecret`、`ToggleSecretStatus`、`DeleteSecret`，由用户在管理台操作）：云账户凭证由专用命令在进程内使用，告警渠道用 `config notification` 查看（地址已打码）。
 - 请求字段以 `modules/<模块>/proto/*.proto` 为准；分页字段因服务而异（策略用 `{"page":{"page":1,"page_size":50}}`，其余用 `{"page":{"page":1,"size":50}}`）。
 
+### 人工结束钱包划转记录（`trpc.moox.trade.TradeConsoleService` 的 `ResolveWalletTransfer`）
+
+币安普通账户的钱包划转超过 10 分钟还没有对账出结果时，监控会发 `transfer_failing` 告警，文字里带划转编号，这个账户在此期间不会再发起新的划转。这是**用户自己判断**的操作：先请用户到交易所的划转记录里核对这笔划转有没有到账，用户确认结果后再调用，Agent 不代用户判断到账与否。
+
+```bash
+# 不带 --yes 只预览请求；用户确认后加 --yes。result 到账填 COMPLETED，没到账填 FAILED；note 是核对说明（可不写）
+./bin/moox-cli gateway call trpc.moox.trade.TradeConsoleService ResolveWalletTransfer --space-id crypto --data '{"transfer_id":"<告警里的划转编号>","result":"COMPLETED"}' --yes
+```
+
+- 只处理超过 10 分钟的未结记录；已经被自动对账或另一次人工处理结束的记录原样返回（`already_settled` 为真），不报错。
+- 记 `FAILED` 不计入连续失败，这个目标可以重新发起划转；记 `COMPLETED` 之后照常等现货钱包快照追上再买入。
+
 ## 密钥（trpc.moox.ops.SecretMgr）
 
 只用 `secret list` / `secret show` 查看有哪些密钥（不返回明文）。新建、修改密钥会让明文经过 Agent，**不要代用户写入**：请用户在管理台“设置 › 密钥”页自己填写。
