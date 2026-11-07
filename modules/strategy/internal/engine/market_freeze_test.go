@@ -163,6 +163,10 @@ portfolio: {leverage: 2}
 		t.Fatal(err)
 	}
 	requireHolds(t, decision, map[string]string{"C|spot": "0.5", "X|swap": "-0.5(hold)"})
+	// 不守门的这一期之后空头规则的理论持仓仍有 X，下一期永续恢复时照常判 exit。
+	if !contains(decision.State.Rules["s"].Held, "X") {
+		t.Fatalf("空头规则的持仓应保留 X：%+v", decision.State.Rules["s"])
+	}
 	for _, ruleID := range []string{"l", "s"} {
 		if item := findItem(t, decision, ruleID, "X"); item.Stage != StageHeld || item.Reason != reasonMarketHold || item.Market != dsl.MarketSwap {
 			t.Fatalf("规则 %s 里 X 的明细应是 held/market_hold、市场 swap：%+v", ruleID, item)
