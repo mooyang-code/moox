@@ -264,11 +264,11 @@ func (s *Service) syncAccountLocked(
 	for _, key := range symbols {
 		rows, cursor, listErr := adapter.ListRecentFills(ctx, key, cursors[key.String()])
 		if exchange.IsInstrumentNotFound(listErr) {
-			// 交易所确认标的不存在（已下架）：没有成交可拉，跳过这个标的、删掉它的成交游标，不让整次同步失败。
+			// 交易所确认标的不存在（已下架）：没有成交可拉，跳过这个标的、记提示，不让整次同步失败。
 			// 未结束的单、成交缺口、成交游标、和交易所不一致的本地持仓都会把下架标的带进来，不跳过的话账户永远同步不过去。
+			// 成交游标原样保留：删掉的话标的一旦又查得到（误报、重新上市），币安会从 fromId=0 把全部历史成交重拉一遍。
 			// 这个标的上的成交缺口再也补不上，在入账快照之前收掉（见 settleGoneFillGaps）。
 			warnings = append(warnings, fmt.Sprintf("标的 %s 在交易所已不存在，跳过成交查询", key))
-			delete(cursors, key.String())
 			goneSymbols = append(goneSymbols, key)
 			continue
 		}

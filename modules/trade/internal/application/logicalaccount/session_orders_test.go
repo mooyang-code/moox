@@ -198,6 +198,64 @@ func TestReleaseSessionNotesStuckReleaseAfterTenMinutes(t *testing.T) {
 	require.False(t, stuck(), "释放成功后清掉")
 }
 
+// 释放失败的计时只算连续失败：中间重绑撤单成功就清掉；两次失败隔了超过 10 分钟也重新计时，
+// 不会因为很久以前的一次失败，下一次失败一来就报 release_orders_stuck。
+func TestReleaseStuckTimerRestartsAfterRecoveryOrLongGap(t *testing.T) {
+	noSession := &orderapp.AccountExecutionError{TradingAccountID: "account-a", Operation: "adapter", Err: errors.New("交易账户会话还没有启动，请稍后重试")}
+	setup := func(t *testing.T) (*Service, *recordingReleaser, *time.Time, string) {
+		service, tradeStore, fence := modernSessionFixture(t)
+		acceptModernSessionTarget(t, tradeStore, "session-1")
+		now := time.Now().UTC()
+		service.Now = func() time.Time { return now }
+		releaser := &recordingReleaser{store: tradeStore, err: fmt.Errorf("目标单 o1：%w", noSession)}
+		service.TargetOrders = releaser
+		telemetry.Forget(telemetry.AttentionReleaseOrdersStuck, releaseStuckDetail("logical-1"))
+		return service, releaser, &now, fence
+	}
+	stuck := func(now time.Time) bool {
+		for _, detail := range telemetry.Recent(telemetry.AttentionReleaseOrdersStuck, now, time.Hour) {
+			if strings.Contains(detail, "logical-1") {
+				return true
+			}
+		}
+		return false
+	}
+	ctx := context.Background()
+
+	t.Run("重绑撤单成功后重新计时", func(t *testing.T) {
+		service, releaser, now, fence := setup(t)
+		start := *now
+		require.ErrorIs(t, service.ReleaseSession(ctx, "space-1", "logical-1", "instance-1", "session-1", fence), ErrTargetOrdersNotReleased)
+		*now = start.Add(5 * time.Minute)
+		require.ErrorIs(t, service.ReleaseSession(ctx, "space-1", "logical-1", "instance-1", "session-1", fence), ErrTargetOrdersNotReleased)
+
+		*now = start.Add(6 * time.Minute)
+		releaser.err = nil
+		_, rebound, err := service.RebindSession(ctx, "space-1", "logical-1", "instance-1", "session-1", fence, "instance-1", "session-2")
+		require.NoError(t, err)
+		require.Equal(t, 3, releaser.calls, "重绑真的撤了单")
+
+		// 距第一次失败已满 10 分钟，但中间重绑撤单成功过，这是新会话的第一次失败。
+		*now = start.Add(11 * time.Minute)
+		releaser.err = fmt.Errorf("目标单 o1：%w", noSession)
+		require.ErrorIs(t, service.ReleaseSession(ctx, "space-1", "logical-1", "instance-1", "session-2", rebound), ErrTargetOrdersNotReleased)
+		require.Equal(t, 4, releaser.calls, "释放确实走到了撤单")
+		require.False(t, stuck(*now), "重绑成功后要重新计时")
+	})
+
+	t.Run("两次失败隔了很久重新计时", func(t *testing.T) {
+		service, _, now, fence := setup(t)
+		start := *now
+		require.ErrorIs(t, service.ReleaseSession(ctx, "space-1", "logical-1", "instance-1", "session-1", fence), ErrTargetOrdersNotReleased)
+		*now = start.Add(24 * time.Hour)
+		require.ErrorIs(t, service.ReleaseSession(ctx, "space-1", "logical-1", "instance-1", "session-1", fence), ErrTargetOrdersNotReleased)
+		require.False(t, stuck(*now), "隔了一天的失败不算连续失败，不立刻报")
+		*now = start.Add(24*time.Hour + 10*time.Minute)
+		require.ErrorIs(t, service.ReleaseSession(ctx, "space-1", "logical-1", "instance-1", "session-1", fence), ErrTargetOrdersNotReleased)
+		require.True(t, stuck(*now), "从新的起点连续失败满 10 分钟照样要报")
+	})
+}
+
 func hasNote(kind, needle string) bool {
 	for _, detail := range telemetry.Recent(kind, time.Now(), time.Hour) {
 		if strings.Contains(detail, needle) {

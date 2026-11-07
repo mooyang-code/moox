@@ -361,6 +361,104 @@ func TestFlattenFinishingGivesUpOnSharedErrorAfterTimeout(t *testing.T) {
 	require.True(t, found, "要记关注项")
 }
 
+// operatorChild 在 accountID 上直接登记本动作的一笔子单（这个账户已开通市场上的限价卖单），用来摆出别的成员上还没结束的子单。
+func operatorChild(t *testing.T, fixture *operatorFixture, accountID, actionID, orderID, state string) {
+	t.Helper()
+	limit := "97"
+	instrument := fixture.instrument(accountID)
+	fixture.order(t, store.OrderRecord{
+		SpaceID: "space-1", TradingAccountID: accountID, OrderID: orderID, ClientOrderID: orderID,
+		MarketType: instrument.MarketType, InstrumentID: instrument.InstrumentID, ExchangeSymbol: instrument.ExchangeSymbol,
+		OrderType: "LIMIT", TimeInForce: "IOC", Side: "SELL", Quantity: "1", LimitPrice: &limit, ReferencePrice: "100",
+		ReservedAsset: "BTC", ReservedQuantity: "1", RemainingReservedQuantity: "1", SubmittedAt: 1,
+		State: state, OwnerType: "OPERATOR", OwnerID: actionID, LogicalAccountID: "logical-1", Version: 1,
+	})
+}
+
+// unsettledNoted 报告关注项 flatten_orders_unsettled 里有没有提到 actionID 且含 needle 的详情。
+func unsettledNoted(fixture *operatorFixture, actionID, needle string) bool {
+	for _, detail := range telemetry.Recent(telemetry.AttentionFlattenOrdersUnsettled, fixture.now, time.Minute) {
+		if strings.Contains(detail, actionID) && strings.Contains(detail, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+// 收尾已满 30 分钟时这次调用的预算到点：解析成员 A 的结果未知子单时上下文被取消，成员 B 的子单就列不出来。
+// 这一遍没收拾全，是本动作这次调用的问题而不是共享故障：不能落成（否则 B 的待提交子单没人丢弃，一直占着资金预留），
+// 也不记“读写不了子单”的关注项；下次恢复完整收拾一遍后照常落成。
+func TestFlattenFinishingKeepsRunningWhenBudgetEndsAfterTimeout(t *testing.T) {
+	fixture := newMixedFlattenFixture(t)
+	authErr := &orderapp.AccountExecutionError{TradingAccountID: "account-a", Operation: "get_order",
+		Err: &exchange.Error{Kind: exchange.ErrorAuthentication, Code: "-2015"}}
+	service, command := startFinishingWithUnknownChild(t, fixture, "delist-budget", "child-budget-a", authErr)
+	enteredAt := fixture.now
+	result, err := service.FlattenLogicalAccount(context.Background(), command)
+	require.NoError(t, err)
+	require.Equal(t, "RUNNING", result.Action.Status)
+	require.Equal(t, enteredAt.UnixMilli(), result.FinishingSince)
+	operatorChild(t, fixture, "account-b", "delist-budget", "child-budget-b", "PENDING")
+
+	fixture.now = enteredAt.Add(30 * time.Minute)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	failing := service.Orders.(failResolveOrders)
+	service.Orders = cancelOnResolve{failResolveOrders: failing, cancel: cancel}
+	stored, err := fixture.store.GetOperatorAction(context.Background(), "space-1", "delist-budget")
+	require.NoError(t, err)
+	err = service.ResumeOperatorAction(ctx, stored)
+	require.True(t, err == nil || ActionScopedError(err), "预算到点不能被当成共享故障：%v", err)
+	stored, err = fixture.store.GetOperatorAction(context.Background(), "space-1", "delist-budget")
+	require.NoError(t, err)
+	decoded, err := decodeFlattenResult(stored)
+	require.NoError(t, err)
+	require.Equal(t, "RUNNING", decoded.Action.Status, "这一遍没收拾全，到了上限也不能落成")
+	require.Equal(t, "PARTIAL", decoded.FinishingStatus)
+	require.Equal(t, enteredAt.UnixMilli(), decoded.FinishingSince, "不重新计时")
+	require.Empty(t, decoded.ManualCheckOrderIDs)
+	require.Equal(t, "PENDING", childState(t, fixture, "child-budget-b"), "B 的子单这次没轮到，留给下次恢复")
+	require.Equal(t, "SUBMIT_UNKNOWN", childState(t, fixture, "child-budget-a"))
+	require.False(t, unsettledNoted(fixture, "delist-budget", "读写不了子单"), "不能记成共享故障")
+
+	// 下次恢复（新的预算）：A 解析出来、B 丢弃，照常落成，没有要人工核对的子单。
+	service.Orders = failing.keepPendingOrders
+	decoded = resumeStored(t, fixture, service, "delist-budget")
+	require.Equal(t, "PARTIAL", decoded.Action.Status)
+	require.Empty(t, decoded.ManualCheckOrderIDs)
+	require.Equal(t, "CANCELED", childState(t, fixture, "child-budget-a"))
+	require.Equal(t, "CANCELED", childState(t, fixture, "child-budget-b"), "待提交的子单丢弃，释放资金预留")
+	require.Empty(t, fixture.orders.specs, "收尾期间不下单")
+}
+
+// 收尾满 30 分钟仍是共享故障（成员 A 的子单解析时写库失败，后面的成员没轮到）：落成时另起上下文把所有成员上
+// 本动作没结束的子单列全，待提交的丢弃（释放资金预留），其余和出错的那笔一起写进 manual_check_child_order_ids。
+func TestFlattenFinishingSharedErrorListsChildrenOfAllMembers(t *testing.T) {
+	fixture := newMixedFlattenFixture(t)
+	service, command := startFinishingWithUnknownChild(t, fixture, "delist-shared-all", "child-shared-a", errors.New("disk I/O error"))
+	enteredAt := fixture.now
+	result, err := service.FlattenLogicalAccount(context.Background(), command)
+	require.Error(t, err)
+	require.Equal(t, "RUNNING", result.Action.Status)
+	operatorChild(t, fixture, "account-b", "delist-shared-all", "child-shared-b-pending", "PENDING")
+	operatorChild(t, fixture, "account-b", "delist-shared-all", "child-shared-b-unknown", "SUBMIT_UNKNOWN")
+
+	fixture.now = enteredAt.Add(30 * time.Minute)
+	stored, err := fixture.store.GetOperatorAction(context.Background(), "space-1", "delist-shared-all")
+	require.NoError(t, err)
+	require.NoError(t, service.ResumeOperatorAction(context.Background(), stored), "满 30 分钟落成之后不再返回共享故障")
+	stored, err = fixture.store.GetOperatorAction(context.Background(), "space-1", "delist-shared-all")
+	require.NoError(t, err)
+	decoded, err := decodeFlattenResult(stored)
+	require.NoError(t, err)
+	require.Equal(t, "PARTIAL", decoded.Action.Status)
+	require.Equal(t, []string{"child-shared-a", "child-shared-b-unknown"}, decoded.ManualCheckOrderIDs, "两个成员的子单都要交给人工")
+	require.Equal(t, "CANCELED", childState(t, fixture, "child-shared-b-pending"), "待提交的子单丢弃，释放资金预留")
+	require.Equal(t, "SUBMIT_UNKNOWN", childState(t, fixture, "child-shared-b-unknown"), "结果未知的原样留着，等人工核对")
+	require.True(t, unsettledNoted(fixture, "delist-shared-all", "读写不了子单"))
+	require.Empty(t, fixture.orders.specs, "收尾期间不下单")
+}
+
 // 交易所确认标的不存在（币安 -1121、OKX 51001）：这笔子单等多久都收拾不了，不阻塞收尾，
 // 动作当场落成 PARTIAL，子单记为需人工核对。
 func TestFlattenFinishingReleasesUnsettleableChild(t *testing.T) {

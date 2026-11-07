@@ -509,6 +509,7 @@ const flattenFinishingTimeout = 30 * time.Minute
 // 照样落成 status，这些子单记进结果的 ManualCheckOrderIDs 并记关注项，要人工核对。返回实际落库的状态。
 //
 // 子单解析失败属于本动作的账户问题，不作为调用错误返回（否则工作线程每秒都报错）；原因写进动作的 last_error。
+// 预算到点后列不了后面成员的子单同样是本动作的问题：这一遍没收拾全，不管到没到上限都保持收尾，下次恢复接着收拾。
 // 读写数据库这类共享故障在收尾 30 分钟内照样返回；满 30 分钟仍是共享故障，也并入没收拾掉的子单交给人工，照常落成。
 func (s *Service) finishFlatten(
 	ctx context.Context,
@@ -524,6 +525,15 @@ func (s *Service) finishFlatten(
 			result.FinishingSince = s.clock().UnixMilli()
 		}
 		timedOut := result.FinishingSince != 0 && s.clock().Sub(time.UnixMilli(result.FinishingSince)) >= flattenFinishingTimeout
+		if settleErr != nil && ActionScopedError(settleErr) {
+			// 本动作这次调用的问题（预算到点后列不了后面成员的子单）：这一遍没走完所有成员，outcome 不全，
+			// 到没到收尾上限都不能拿它落成（否则没轮到的成员的待提交子单一直占着资金预留），保持原样等下一次恢复接着收拾；
+			// 下一次完整收拾一遍后仍有没收拾掉的子单，才按收尾上限交给人工。和解析失败一样不作为调用错误返回，原因写进 last_error。
+			outcome.errs = append(outcome.errs, settleErr)
+			result.FinishingStatus = status
+			running := string(operatordomain.StatusRunning)
+			return running, s.persistFlattenProgressNote(ctx, result, running, outcome.errorText())
+		}
 		if settleErr != nil {
 			if !timedOut {
 				// 列子单、读写库这类共享故障：没法判断，保持原样等下一次恢复，错误照样返回（让就绪反映出故障）。
@@ -532,7 +542,7 @@ func (s *Service) finishFlatten(
 				return running, errors.Join(settleErr, s.persistFlattenProgress(ctx, result, running))
 			}
 			// 收尾到上限仍是共享故障：不再无限运行下去，出错前没收拾掉的子单和出错的那笔一起交给人工，照常落成。
-			// 出错之后没轮到的子单尽量列出来；列不出来（库还在出错）时单号只能到订单记录里找，关注项照样记。
+			// 出错之后没轮到的子单尽量列出来（其中待提交的顺手丢弃，释放资金预留）；列不出来（库还在出错）时单号只能到订单记录里找，关注项照样记。
 			outcome.errs = append(outcome.errs, settleErr)
 			outcome.unsettled = append(outcome.unsettled, s.flattenChildrenLeft(ctx, command, members, outcome)...)
 		}
@@ -626,15 +636,18 @@ func (s *Service) settleFlattenChildren(ctx context.Context, command FlattenComm
 }
 
 // flattenChildrenLeft 在收尾到上限、收拾子单遇到共享故障时，尽量列出本动作还没结束、又不在 outcome 里的子单
-// （出错之后没轮到的），交给人工核对。列子单失败的账户跳过，只写日志。
+// （出错之后没轮到的），交给人工核对。待提交的顺手丢弃（从没发到交易所，释放资金预留），丢弃成功的不再交给人工；
+// 列子单失败的账户跳过，只写日志。调用上下文可能已经结束（预算到点），这里另起一个短超时的上下文，能列就列全。
 func (s *Service) flattenChildrenLeft(ctx context.Context, command FlattenCommand, members []store.LogicalAccountMemberRecord, outcome settleOutcome) []string {
+	listCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
 	seen := make(map[string]struct{}, len(outcome.unsettled)+len(outcome.manualCheck))
 	for _, id := range append(append([]string(nil), outcome.unsettled...), outcome.manualCheck...) {
 		seen[id] = struct{}{}
 	}
 	var left []string
 	for _, member := range members {
-		records, err := s.Store.ListActiveOrdersForAccount(ctx, command.SpaceID, member.TradingAccountID)
+		records, err := s.Store.ListActiveOrdersForAccount(listCtx, command.SpaceID, member.TradingAccountID)
 		if err != nil {
 			log.WarnContextf(ctx, "动作 %s 收尾到上限，列执行账户 %s 的子单失败：%v", command.ActionID, member.TradingAccountID, err)
 			continue
@@ -643,7 +656,8 @@ func (s *Service) flattenChildrenLeft(ctx context.Context, command FlattenComman
 			if child.OwnerType != string(orderdomain.OwnerOperator) || child.OwnerID != command.ActionID {
 				continue
 			}
-			switch orderdomain.State(child.State) {
+			state := orderdomain.State(child.State)
+			switch state {
 			case orderdomain.Pending, orderdomain.Submitting, orderdomain.SubmitUnknown:
 			default:
 				// 挂单中、撤单中的自己会结束，平时收尾也不管它们。
@@ -653,6 +667,13 @@ func (s *Service) flattenChildrenLeft(ctx context.Context, command FlattenComman
 				continue
 			}
 			seen[child.OrderID] = struct{}{}
+			if state == orderdomain.Pending {
+				_, discardErr := s.Orders.DiscardPending(listCtx, command.SpaceID, child.OrderID)
+				if discardErr == nil {
+					continue
+				}
+				log.WarnContextf(ctx, "动作 %s 收尾到上限，丢弃子单 %s 失败：%v", command.ActionID, child.OrderID, discardErr)
+			}
 			left = append(left, child.OrderID)
 		}
 	}

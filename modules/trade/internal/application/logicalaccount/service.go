@@ -60,9 +60,16 @@ type Service struct {
 	// TargetOrders 在策略会话释放、重绑、认领删掉目标之前撤掉组合里还没结束的目标挂单；为空时不撤（测试用）。
 	TargetOrders TargetOrderReleaser
 
-	// releaseFailingSince 按“空间/组合”记释放会话撤目标单连续失败的起点，释放撤单成功后删掉；只在内存里，重启后重新计时。
-	releaseMu           sync.Mutex
-	releaseFailingSince map[string]time.Time
+	// releaseFailures 按“空间/组合”记释放会话撤目标单连续失败的起点和最近一次失败时间；释放撤单成功、认领或重绑撤单成功、
+	// 释放请求已不作数时删掉；只在内存里，重启后重新计时。
+	releaseMu       sync.Mutex
+	releaseFailures map[string]releaseFailure
+}
+
+// releaseFailure 是一个组合释放会话撤目标单连续失败的计时。
+type releaseFailure struct {
+	since time.Time // 这一串连续失败的起点
+	last  time.Time // 最近一次失败的时间
 }
 
 // releaseStuckAfter 是释放会话连续失败多久之后记关注项 release_orders_stuck。
@@ -85,18 +92,21 @@ func releaseUnverifiedDetail(logicalAccountID string) string {
 
 // noteReleaseFailure 记下释放会话撤目标单失败：从第一次失败算起超过 releaseStuckAfter 仍在失败，就记关注项并写日志。
 // 账户启用但会话一直建不起来时，释放会一直失败，不记的话没人知道这个组合的会话卡着没释放。
+// 和上一次失败隔了超过 releaseStuckAfter 的不算连续失败（中间可能已经走了别的路径、没人清计时），起点重新算。
 func (s *Service) noteReleaseFailure(ctx context.Context, spaceID, logicalAccountID string, cause error) {
 	now := s.now()
 	key := releaseFailureKey(spaceID, logicalAccountID)
 	s.releaseMu.Lock()
-	if s.releaseFailingSince == nil {
-		s.releaseFailingSince = make(map[string]time.Time)
+	if s.releaseFailures == nil {
+		s.releaseFailures = make(map[string]releaseFailure)
 	}
-	since, found := s.releaseFailingSince[key]
-	if !found {
-		since = now
-		s.releaseFailingSince[key] = now
+	failure, found := s.releaseFailures[key]
+	if !found || now.Sub(failure.last) > releaseStuckAfter {
+		failure.since = now
 	}
+	failure.last = now
+	s.releaseFailures[key] = failure
+	since := failure.since
 	s.releaseMu.Unlock()
 	if now.Sub(since) < releaseStuckAfter {
 		return
@@ -106,11 +116,13 @@ func (s *Service) noteReleaseFailure(ctx context.Context, spaceID, logicalAccoun
 	log.WarnContextf(ctx, "交易关注项：%s（从 %s 起）：%v", detail, since.Format(time.RFC3339), cause)
 }
 
-// clearReleaseFailure 在释放会话撤目标单成功（或按本地记录放行）后清掉失败计时和关注项。
+// clearReleaseFailure 清掉释放会话的失败计时和关注项：释放撤目标单成功（或按本地记录放行）、认领或重绑撤目标单成功、
+// 释放请求已不作数（围栏过期、会话已换）时调用。
 func (s *Service) clearReleaseFailure(spaceID, logicalAccountID string) {
+	key := releaseFailureKey(spaceID, logicalAccountID)
 	s.releaseMu.Lock()
-	_, found := s.releaseFailingSince[releaseFailureKey(spaceID, logicalAccountID)]
-	delete(s.releaseFailingSince, releaseFailureKey(spaceID, logicalAccountID))
+	_, found := s.releaseFailures[key]
+	delete(s.releaseFailures, key)
 	s.releaseMu.Unlock()
 	if found {
 		telemetry.Forget(telemetry.AttentionReleaseOrdersStuck, releaseStuckDetail(logicalAccountID))
@@ -535,6 +547,8 @@ func (s *Service) ClaimSession(
 	if current, err := s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID); err == nil && claimChanges(current, instanceID, sessionID, expectedFence) {
 		if err := s.releaseTargetOrders(ctx, spaceID, logicalAccountID); err != nil {
 			log.WarnContextf(ctx, "交易关注项：组合 %s 认领会话前撤目标挂单失败，交给新目标的第 1 阶段处理：%v", logicalAccountID, err)
+		} else {
+			s.clearReleaseFailure(spaceID, logicalAccountID)
 		}
 	}
 	var fence string
@@ -575,6 +589,8 @@ func (s *Service) RebindSession(
 		rebindChanges(current, oldInstanceID, oldSessionID, expectedFence, newInstanceID, newSessionID) {
 		if err := s.releaseTargetOrders(ctx, spaceID, logicalAccountID); err != nil {
 			log.WarnContextf(ctx, "交易关注项：组合 %s 重绑会话前撤目标挂单失败，交给新目标的第 1 阶段处理：%v", logicalAccountID, err)
+		} else {
+			s.clearReleaseFailure(spaceID, logicalAccountID)
 		}
 	}
 	var fence string
@@ -634,8 +650,9 @@ func (s *Service) ReleaseSession(
 				log.WarnContextf(ctx, "交易关注项：%s：%v", detail, err)
 			}
 		}
-		s.clearReleaseFailure(spaceID, logicalAccountID)
 	}
+	// 撤单成功、按本地记录放行，或者这次释放不作数（围栏过期、会话已换，之前没释放下来的那个会话已经不在了）：清掉失败计时。
+	s.clearReleaseFailure(spaceID, logicalAccountID)
 	return s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		if err := tx.ReleaseLogicalAccountSession(spaceID, logicalAccountID, instanceID, sessionID, expectedFence); err != nil {
 			return err
