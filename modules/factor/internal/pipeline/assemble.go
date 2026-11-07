@@ -215,6 +215,22 @@ func (r *Runner) AssembleWithReport(plan Plan, loaded LoadResult, computation Co
 				}
 			}
 		}
+		// 期望序列是数据层推测的（补算、失效重算）：被跳过的 tag 不能确定真的缺数（可能只是晚到或刚下架），
+		// 不把这些行写成 NULL，输出列与 __params 保持已有的值，不覆盖实时路径算好的结果。
+		if plan.ExpectedSeriesDerived && !plan.FillOnly {
+			state := computation.FactorStates[member.Key]
+			for key, row := range rows {
+				if state.Status != "skipped" && !tagIn(state.SkippedSeriesTags, key.tag) {
+					continue
+				}
+				for _, column := range member.OutputColumns() {
+					delete(row.fields, column)
+				}
+				if base, ok := plan.BaseParams[RowKey{Subject: key.subject, At: key.at, Tag: key.tag}][member.Key]; ok {
+					row.params[member.Key] = base
+				}
+			}
+		}
 		failedSubjects := failedFactorSubjects[member.Key]
 		if len(failedSubjects) == 0 || plan.FillOnly {
 			continue

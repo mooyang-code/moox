@@ -97,7 +97,7 @@ func (r *Runner) Run(ctx context.Context, plan Plan) (Outcome, error) {
 			if err != nil {
 				return Outcome{StageDurations: outcome.StageDurations}, fmt.Errorf("构造补算的期望序列: %w", err)
 			}
-			plan.ExpectedSeries = series
+			plan.ExpectedSeries, plan.ExpectedSeriesDerived = series, len(series) > 0
 		}
 	}
 	outcome.StageDurations["plan"] = time.Since(planStarted)

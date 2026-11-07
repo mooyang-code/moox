@@ -41,10 +41,13 @@ type Plan struct {
 	// 有序列全集时 Expected 是它涉及的标的，Available 是至少有一条序列没有上游失败的标的，UpstreamFailed 是有序列上游失败的标的。
 	ExpectedSeries       []seriesset.Series
 	UpstreamFailedSeries []seriesset.Series
-	CarryColumns         []string
-	WriteCarry           bool
-	TriggerEventID       string
-	Budget               time.Duration
+	// ExpectedSeriesDerived 为真表示 ExpectedSeries 是数据层按本地存储推测出来的（补算、失效重算没有冻结全集可用），不是 marker 里冻结的确定值。
+	// 推测的期望可能把晚到或刚下架的序列算进来：非只填充的计划里，因这类推测缺数而被跳过的 series_tag 不写 NULL，保留已有的值。
+	ExpectedSeriesDerived bool
+	CarryColumns          []string
+	WriteCarry            bool
+	TriggerEventID        string
+	Budget                time.Duration
 	// FillOnly 只填充：窗口检查通过才计算并写入，有洞、失败都不写任何字段（尤其不写失效 NULL），也不写 carry 列。
 	// 用于空洞补齐后的恢复。
 	FillOnly bool

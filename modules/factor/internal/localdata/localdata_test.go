@@ -163,7 +163,19 @@ func (f *fakeStorage) WriteRows(_ context.Context, _, _, _ string, rows []storag
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for _, r := range rows {
-		f.results[r.SubjectID+r.DataTime.Format(time.RFC3339)+r.SeriesTag] = r
+		key := r.SubjectID + r.DataTime.Format(time.RFC3339) + r.SeriesTag
+		// 与 UpsertFields 一致：只更新请求带的字段，没带的字段保留已有的值。
+		if old, ok := f.results[key]; ok {
+			merged := make(map[string]any, len(old.Fields)+len(r.Fields))
+			for name, value := range old.Fields {
+				merged[name] = value
+			}
+			for name, value := range r.Fields {
+				merged[name] = value
+			}
+			r.Fields = merged
+		}
+		f.results[key] = r
 	}
 	return nil
 }

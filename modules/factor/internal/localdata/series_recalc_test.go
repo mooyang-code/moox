@@ -175,30 +175,114 @@ func TestExpectedSeriesIsNilForSingleSeriesDatasets(t *testing.T) {
 	require.Nil(t, series)
 }
 
-// 区间前很久就结束（比区间起点早过 DelistedAfter）的序列（下架的合约）不算期望序列：不影响其他标的，严格全集的截面因子在永续上照常按 BTC、ETH 排名，
-// 不会因为下架的 SOL 永续把整个永续 tag 跳过、把实时算好的排名覆盖成 NULL。
-func TestDelistedSwapSeriesIsNotExpected(t *testing.T) {
-	fx := unifiedStoreFixtureWith(t, []int{0, 1}, strictRank())
-	fx.data.cfg.DelistedAfter = 5 * time.Minute // 下架判断用固定时长：最后一行比区间起点早过 5 分钟（这里的时间轴是分钟）
-	subjects := []string{"BTC", "ETH", "SOL"}
-	series, err := fx.data.ExpectedSeries(context.Background(), pipeline.Plan{Mode: pipeline.ModeRecalc, Set: fx.set.Set, Members: fx.set.Members, Expected: subjects, TargetStart: at(9), TargetEnd: at(10)})
-	require.NoError(t, err)
-	require.Len(t, series, 5, "SOL 的永续序列在读取起点之前就结束了：不算期望")
-	for _, item := range series {
-		require.False(t, item.SubjectID == "SOL" && item.SeriesTag == swapTag)
+// presetSwapRanks 模拟实时路径已经为这些分钟写好的永续排名（有效值）。
+func (fx *fixture) presetSwapRanks(minutes ...int) {
+	for _, m := range minutes {
+		for i, s := range []string{"BTC", "ETH"} {
+			fx.st.mu.Lock()
+			fx.st.results[s+at(m).Format(time.RFC3339)+swapTag] = storageio.ResultRow{SubjectID: s, DataTime: at(m), SeriesTag: swapTag, Fields: map[string]any{"rank": 0.25 + 0.5*float64(i)}}
+			fx.st.mu.Unlock()
+		}
 	}
+}
+
+// 下架不久的合约（SOL 永续只有 0、1 两根，远没到下架的沉默阈值 6 小时）分不清是晚到还是下架，兜底推导仍把它当期望序列：
+// 严格全集的截面因子在永续上因此缺数，永续 tag 被跳过——但补算类计划里这种推测缺数不能把 BTC、ETH 永续实时算好的有效排名覆盖成 NULL：
+// 保留已有的值，现货照常排名。
+func TestRecentlyDelistedSwapDoesNotOverwriteExistingRanksWithNull(t *testing.T) {
+	fx := unifiedStoreFixtureWith(t, []int{0, 1}, strictRank())
+	subjects := []string{"BTC", "ETH", "SOL"}
+	fx.presetSwapRanks(7, 8, 9)
+	// 补全 0~9 的本地历史（Prepare 只拉回看根数），让第 7~9 分钟都有完整的回看窗口。
+	for _, s := range subjects {
+		fx.putLocalEarly(t, s, spotTag, minutesBetween(0, 9)...)
+	}
+	for _, s := range []string{"BTC", "ETH"} {
+		fx.putLocalEarly(t, s, swapTag, minutesBetween(0, 9)...)
+	}
+	series, err := fx.data.ExpectedSeries(context.Background(), pipeline.Plan{Mode: pipeline.ModeRecalc, Set: fx.set.Set, Members: fx.set.Members, Expected: subjects, TargetStart: at(5), TargetEnd: at(10)})
+	require.NoError(t, err)
+	require.Len(t, series, 6, "SOL 永续沉默才 8 分钟，不到阈值：仍是期望序列")
 
 	executor := recalcexec.NewExecutor(fx.runner)
 	source := func(context.Context) (recalcexec.Selection, error) {
 		return recalcexec.Selection{Set: fx.set.Set, Members: fx.set.Members, Subjects: subjects, Columns: []string{"close", "volume"}}, nil
 	}
-	require.NoError(t, executor.Run(context.Background(), recalcexec.Window{Start: at(9), End: at(10)}, source,
+	require.NoError(t, executor.Run(context.Background(), recalcexec.Window{Start: at(5), End: at(10)}, source,
 		func(context.Context, time.Time, pipeline.Outcome) (bool, error) { return false, nil }))
-	for _, s := range []string{"BTC", "ETH"} {
-		swap, ok := fx.rawResult(s, swapTag, 9)
-		require.True(t, ok, s)
-		require.NotNil(t, swap.rank, "永续照常排名：%s", s)
+	for _, m := range []int{7, 8, 9} {
+		for i, s := range []string{"BTC", "ETH"} {
+			swap, ok := fx.rawResult(s, swapTag, m)
+			require.True(t, ok, s)
+			require.Equal(t, 0.25+0.5*float64(i), swap.rank, "永续的有效排名保留：%s 第 %d 分钟", s, m)
+		}
+		for _, s := range subjects {
+			spot, ok := fx.rawResult(s, spotTag, m)
+			require.True(t, ok, s)
+			require.NotNil(t, spot.rank, "现货照常排名：%s 第 %d 分钟", s, m)
+		}
 	}
+}
+
+// 已经沉默超过阈值的序列（下架的合约）不算期望序列：参照点是数据源最新一根，不是区间起点。历史块能排除早已下架的合约，不影响其他标的。
+func TestLongDelistedSwapSeriesIsNotExpected(t *testing.T) {
+	fx := unifiedStoreFixtureWith(t, []int{0, 1}, strictRank())
+	// 数据源一直走到第 400 分钟；SOL 的永续停在第 1 分钟（沉默 399 分钟 > 6 小时）。
+	for _, s := range []string{"BTC", "ETH"} {
+		fx.putLocalEarly(t, s, swapTag, minutesBetween(10, 400)...)
+	}
+	for _, s := range []string{"BTC", "ETH", "SOL"} {
+		fx.putLocalEarly(t, s, spotTag, minutesBetween(10, 400)...)
+	}
+	subjects := []string{"BTC", "ETH", "SOL"}
+	series, err := fx.data.ExpectedSeries(context.Background(), pipeline.Plan{Mode: pipeline.ModeRecalc, Set: fx.set.Set, Members: fx.set.Members, Expected: subjects, TargetStart: at(395), TargetEnd: at(396)})
+	require.NoError(t, err)
+	require.Len(t, series, 5)
+	for _, item := range series {
+		require.False(t, item.SubjectID == "SOL" && item.SeriesTag == swapTag)
+	}
+}
+
+// 沉默阈值与周期、give_up_after 的关系：max(6 小时, 2×周期)，步长不小于 8 小时按 3 期；晚到一根的序列在任何周期下都不会被当成下架；恰等于阈值仍算期望。
+func TestDelistedThresholdScalesWithPeriod(t *testing.T) {
+	require.Equal(t, 6*time.Hour, DelistedThreshold(time.Minute))
+	require.Equal(t, 6*time.Hour, DelistedThreshold(5*time.Minute))
+	require.Equal(t, 6*time.Hour, DelistedThreshold(time.Hour), "1h 任务不随 give_up_after 变")
+	require.Equal(t, 8*time.Hour, DelistedThreshold(4*time.Hour), "k×周期 大于固定时长时取 2 期")
+	require.Equal(t, 72*time.Hour, DelistedThreshold(24*time.Hour), "日线按 3 期")
+	require.Equal(t, 3*7*24*time.Hour, DelistedThreshold(7*24*time.Hour))
+
+	start := t0.Add(100 * time.Hour)
+	for _, step := range []time.Duration{time.Minute, time.Hour, 8 * time.Hour, 12 * time.Hour, 24 * time.Hour, 7 * 24 * time.Hour} {
+		// 参照时刻取得离区间起点不远，让“阈值前的最后一行”仍落在区间起点之前。
+		reference := start.Add(DelistedThreshold(step) / 2)
+		// 晚到一根：最后一行是参照时刻的前一期。
+		require.False(t, seriesDelisted(reference.Add(-step), start, reference, step), "步长 %s 晚到一根不是下架", step)
+		// 恰等于阈值仍算期望，超过一点才是下架。
+		edge := reference.Add(-DelistedThreshold(step))
+		require.False(t, seriesDelisted(edge, start, reference, step), "步长 %s 沉默恰等于阈值仍算期望", step)
+		require.True(t, seriesDelisted(edge.Add(-time.Second), start, reference, step), "步长 %s 超过阈值才是下架", step)
+		// 延续到区间里的序列无论沉默多久都不算下架（区间内断档仍算缺失）。
+		require.False(t, seriesDelisted(start.Add(time.Hour), start, reference.Add(1000*time.Hour), step))
+	}
+}
+
+// 1d 任务永续晚到一根：兜底推导仍把永续当期望序列（沉默 1 天 < 3 期），所以只填充兜底恢复要 failed，不能因为现货行写成就确认；
+// 人工补算（推测期望）里严格截面因子在永续上不写 NULL。
+func TestDailyTaskLateSwapIsStillExpected(t *testing.T) {
+	day := 24 * time.Hour
+	base := t0
+	all := []seriesBounds{
+		{subject: "BTC", tag: spotTag, bounds: seriesstore.Bounds{Earliest: base, Latest: base.Add(10 * day)}},
+		{subject: "BTC", tag: swapTag, bounds: seriesstore.Bounds{Earliest: base, Latest: base.Add(9 * day)}},
+		{subject: "SOL", tag: swapTag, bounds: seriesstore.Bounds{Earliest: base, Latest: base.Add(8 * day)}},
+	}
+	got := expectedFromBounds(all, base.Add(10*day), base.Add(11*day), day)
+	require.Equal(t, []seriesset.Series{{SubjectID: "BTC", SeriesTag: spotTag}, {SubjectID: "BTC", SeriesTag: swapTag}, {SubjectID: "SOL", SeriesTag: swapTag}}, got,
+		"晚到一根、停更 2 天（沉默不超过 72 小时）都不是下架")
+	delisted := append(all, seriesBounds{subject: "OLD", tag: swapTag, bounds: seriesstore.Bounds{Earliest: base, Latest: base.Add(2 * day)}})
+	got = expectedFromBounds(delisted, base.Add(10*day), base.Add(11*day), day)
+	require.NotContains(t, got, seriesset.Series{SubjectID: "OLD", SeriesTag: swapTag}, "沉默 8 天 > 72 小时")
 }
 
 // 永续这一期晚到（现货 0~9 分钟、永续 0~8 分钟），对第 9 分钟只填充恢复时，现货行写成不能把 (成员, 标的, 周期) 确认掉；
@@ -326,21 +410,17 @@ func TestFillOnlyConvergesAfterSwapDelistedWithinLookback(t *testing.T) {
 func TestInvalidationProductionPathDoesNotOverwriteWithPartialUniverse(t *testing.T) {
 	fx := unifiedStoreFixture(t, strictRank())
 	subjects := []string{"BTC", "ETH", "SOL"}
-	for _, s := range []string{"BTC", "ETH"} {
-		fx.st.mu.Lock()
-		fx.st.results[s+at(9).Format(time.RFC3339)+swapTag] = storageio.ResultRow{SubjectID: s, DataTime: at(9), SeriesTag: swapTag, Fields: map[string]any{"rank": nil}}
-		fx.st.mu.Unlock()
-	}
+	fx.presetSwapRanks(9)
 	executor := recalcexec.NewExecutor(fx.runner)
 	source := func(context.Context) (recalcexec.Selection, error) { // 与 seriesFollower.run 一致：只给标的，不给 Series
 		return recalcexec.Selection{Set: fx.set.Set, Members: fx.set.Members, Subjects: subjects, Columns: []string{"close", "volume"}}, nil
 	}
 	_, err := executor.RunChunkWith(context.Background(), source, at(9), at(10), nil)
 	require.NoError(t, err)
-	for _, s := range []string{"BTC", "ETH"} {
+	for i, s := range []string{"BTC", "ETH"} {
 		swap, ok := fx.rawResult(s, swapTag, 9)
 		require.True(t, ok)
-		require.Nil(t, swap.rank, "重算后永续仍是 NULL：%s", s)
+		require.Equal(t, 0.25+0.5*float64(i), swap.rank, "重算后永续已有的排名保留，不在 BTC、ETH 上写出残缺排名也不写 NULL：%s", s)
 	}
 	for _, s := range subjects {
 		spot, ok := fx.rawResult(s, spotTag, 9)
