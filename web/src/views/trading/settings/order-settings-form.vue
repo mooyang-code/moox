@@ -73,9 +73,12 @@
       </a-form-item>
     </section>
 
-    <a-alert v-if="error" type="error" class="settings-error">{{ error }}</a-alert>
+    <a-alert v-if="formError" type="error" class="settings-error">{{ formError }}</a-alert>
+    <a-alert v-if="props.error" type="error" class="settings-error">
+      已保存的下单设置读不出来（{{ props.error }}），先修好再保存，否则会覆盖原来的设置。
+    </a-alert>
     <a-space>
-      <a-button type="primary" :loading="saving" @click="submit">保存下单设置</a-button>
+      <a-button type="primary" :loading="saving" :disabled="!!props.error" @click="submit">保存下单设置</a-button>
       <a-button @click="restore">还原</a-button>
     </a-space>
   </a-form>
@@ -96,7 +99,12 @@ import {
  * 下单设置表单，可以独立挂载：当前设置由父组件传入，点保存只发出 save 事件（带校验过的设置），
  * 由父组件调用 updateLogicalAccountOrderSettings 并重新取组合账户；点还原发出 refresh，让父组件重新取数。
  */
-const props = defineProps<{ settings?: OrderSettings; saving?: boolean }>();
+const props = defineProps<{
+  settings?: OrderSettings;
+  saving?: boolean;
+  /** 存的设置读不出来时的说明（LogicalAccount.order_settings_error）：显示提示并禁止保存，不按默认值显示 */
+  error?: string;
+}>();
 const emit = defineEmits<{ save: [settings: OrderSettings]; refresh: [] }>();
 
 const capMarkets = [
@@ -105,11 +113,11 @@ const capMarkets = [
 ] as const;
 
 const model = reactive(orderSettingsToModel(props.settings));
-const error = ref("");
+const formError = ref("");
 
 function reset() {
   Object.assign(model, orderSettingsToModel(props.settings));
-  error.value = "";
+  formError.value = "";
 }
 
 watch(() => props.settings, reset);
@@ -120,8 +128,8 @@ function restore() {
 }
 
 function submit() {
-  error.value = validateOrderSettingsModel(model);
-  if (error.value) return;
+  formError.value = validateOrderSettingsModel(model);
+  if (formError.value) return;
   emit("save", buildOrderSettingsRequest(model));
 }
 </script>

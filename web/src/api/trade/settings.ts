@@ -44,6 +44,9 @@ export interface FundSettings {
 export type LogicalAccountWithSettings = LogicalAccount & {
   order_settings?: OrderSettings;
   fund_settings?: FundSettings;
+  /** 存的设置读不出来时的说明（此时对应的设置为空）：界面提示并禁止保存，不能按默认值显示 */
+  order_settings_error?: string;
+  fund_settings_error?: string;
 };
 
 interface SettingsResponse {

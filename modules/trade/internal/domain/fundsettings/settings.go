@@ -27,7 +27,7 @@ type Settings struct {
 	StablecoinTargets map[string]shared.Decimal
 	// BNBDiscount 为真表示用 BNB 抵扣手续费（会话启动和设置变更时调用交易所的抵扣接口）。
 	BNBDiscount bool
-	// DustConvert 为真表示每隔 DustConvertInterval 把非目标、非排除、低于 5U 的现货零头兑成 BNB。
+	// DustConvert 为真表示每隔 DustConvertInterval 把 MooX 交易留下的（受管的）、不在当前目标里的、非排除的、低于 5U 的现货零头兑成 BNB。
 	DustConvert         bool
 	DustConvertInterval time.Duration
 	// MarginCoins 是保证金币及其配置的固定 U 值，按配置值计入权益。

@@ -18,7 +18,10 @@
       >
         <a-input v-model="model.bnb_reserve_amount" suffix="USDT" />
       </a-form-item>
-      <a-form-item label="小额资产兑换 BNB" extra="定期把不在目标里、低于 5 USDT 的现货零头兑成 BNB">
+      <a-form-item
+        label="小额资产兑换 BNB"
+        extra="定期把 MooX 交易留下的零头（不在当前目标里、不是排除资产、低于 5 USDT）兑成 BNB；你自己放在账户里、MooX 没交易过的币不动"
+      >
         <a-switch v-model="model.dust_convert_enabled" />
       </a-form-item>
       <a-form-item v-if="model.dust_convert_enabled" label="兑换间隔（天）">
@@ -52,10 +55,7 @@
 
     <section class="settings-group">
       <h4>套利底仓</h4>
-      <a-form-item
-        label="底仓资产"
-        extra="这些币的现货和对应永续都不参与策略持仓，按净值计入权益；填了以后组合只做合约。多个用逗号或空格分隔"
-      >
+      <a-form-item label="底仓资产" extra="这些币的现货和对应永续都不参与策略持仓，按净值计入权益。多个用逗号或空格分隔">
         <a-input v-model="model.arbitrage_base_assets" placeholder="例如 BTC, ETH" />
       </a-form-item>
     </section>
@@ -63,9 +63,12 @@
     <a-alert v-if="!liveOnly" type="info" class="settings-error">
       BNB 抵扣、BNB 保留、小额兑换和稳定币保证金只对币安实盘组合生效，这个组合不显示。
     </a-alert>
-    <a-alert v-if="error" type="error" class="settings-error">{{ error }}</a-alert>
+    <a-alert v-if="formError" type="error" class="settings-error">{{ formError }}</a-alert>
+    <a-alert v-if="props.error" type="error" class="settings-error">
+      已保存的资金设置读不出来（{{ props.error }}），先修好再保存，否则会覆盖原来的设置。
+    </a-alert>
     <a-space>
-      <a-button type="primary" :loading="saving" @click="submit">保存资金设置</a-button>
+      <a-button type="primary" :loading="saving" :disabled="!!props.error" @click="submit">保存资金设置</a-button>
       <a-button @click="restore">还原</a-button>
     </a-space>
   </a-form>
@@ -86,18 +89,29 @@ import {
  * 由父组件调用 updateLogicalAccountFundSettings 并重新取组合账户；点还原发出 refresh，让父组件重新取数。
  * paper、nonBinance 为真时不显示仅币安实盘生效的项。
  */
-const props = defineProps<{ settings?: FundSettings; saving?: boolean; paper?: boolean; nonBinance?: boolean }>();
+const props = defineProps<{
+  settings?: FundSettings;
+  saving?: boolean;
+  /** 存的设置读不出来时的说明（LogicalAccount.fund_settings_error）：显示提示并禁止保存，不按默认值显示 */
+  error?: string;
+  /** 模拟盘组合 */
+  paper?: boolean;
+  /** 组合里有非币安成员。父组件要把停用成员也算上（后端按全部成员判断，包括停用的） */
+  nonBinance?: boolean;
+  /** 组合的结算币，默认 USDT：稳定币保证金必须含它，保证金币和底仓不能写它 */
+  settlementAsset?: string;
+}>();
 const emit = defineEmits<{ save: [settings: FundSettings]; refresh: [] }>();
 
-const scope = computed(() => ({ paper: props.paper, nonBinance: props.nonBinance }));
+const scope = computed(() => ({ paper: props.paper, nonBinance: props.nonBinance, settlementAsset: props.settlementAsset }));
 const liveOnly = computed(() => showsLiveOnlyFields(scope.value));
 
 const model = reactive(fundSettingsToModel(props.settings));
-const error = ref("");
+const formError = ref("");
 
 function reset() {
   Object.assign(model, fundSettingsToModel(props.settings));
-  error.value = "";
+  formError.value = "";
 }
 
 watch(() => props.settings, reset);
@@ -108,8 +122,8 @@ function restore() {
 }
 
 function submit() {
-  error.value = validateFundSettingsModel(model, scope.value);
-  if (error.value) return;
+  formError.value = validateFundSettingsModel(model, scope.value);
+  if (formError.value) return;
   emit("save", buildFundSettingsRequest(model, scope.value));
 }
 </script>

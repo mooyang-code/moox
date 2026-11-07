@@ -24,6 +24,8 @@ export interface FundFormScope {
   paper?: boolean;
   /** 含非币安成员：BNB 与稳定币相关项只适用于币安 */
   nonBinance?: boolean;
+  /** 组合的结算币，默认 USDT：稳定币保证金必须含它，保证金币和套利底仓不能写它 */
+  settlementAsset?: string;
 }
 
 /** BNB 补买的容差：市值低于“保留金额 − 10”才补买，所以保留金额要大于 10。 */
@@ -108,10 +110,11 @@ export function validateFundSettingsModel(model: FundSettingsModel, scope: FundF
       return "小额兑换 BNB 的间隔必须是 1 到 365 天的整数";
     }
   }
+  const settlement = (scope.settlementAsset || "USDT").trim().toUpperCase();
   const owners = new Map<string, string>();
   const claim = (asset: string, group: string): string => {
     if (!assetPattern.test(asset)) return `资产名 ${asset || "（空）"} 不合法（只允许字母和数字）`;
-    if (asset === "USDT" && group !== "稳定币保证金") return `USDT 是结算币，不能写进${group}`;
+    if (asset === settlement && group !== "稳定币保证金") return `${settlement} 是这个组合的结算币，不能写进${group}`;
     const previous = owners.get(asset);
     if (previous)
       return previous === group ? `${group}里的资产 ${asset} 重复` : `资产 ${asset} 同时出现在${previous}和${group}里`;
@@ -130,7 +133,7 @@ export function validateFundSettingsModel(model: FundSettingsModel, scope: FundF
     }
   }
   if (stable.length > 0) {
-    if (!stable.some(row => row.asset === "USDT")) return "稳定币保证金必须包含 USDT";
+    if (!stable.some(row => row.asset === settlement)) return `稳定币保证金必须包含结算币 ${settlement}`;
     const sum = sumDecimals(stable.map(row => row.value));
     if (sum !== "1") return `稳定币保证金的目标比例之和必须等于 1，现在是 ${sum}`;
   }

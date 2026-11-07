@@ -47,7 +47,7 @@ describe("fund settings form", () => {
           ["FDUSD", "0.5"]
         ])
       )
-    ).toContain("必须包含 USDT");
+    ).toContain("必须包含结算币 USDT");
     expect(
       validateFundSettingsModel(
         model([
@@ -132,5 +132,34 @@ describe("fund settings form", () => {
     }
     expect(showsLiveOnlyFields()).toBe(true);
     expect(validateFundSettingsModel(stale)).toContain("之和必须等于 1");
+  });
+
+  it("follows the logical account settlement asset instead of hard-coding USDT", () => {
+    const base = fundSettingsToModel();
+    const usdc = { settlementAsset: "usdc" };
+    expect(validateFundSettingsModel({ ...base, margin_coins: [{ asset: "USDT", value: "10" }] }, usdc)).toBe("");
+    expect(validateFundSettingsModel({ ...base, margin_coins: [{ asset: "USDC", value: "10" }] }, usdc)).toContain("结算币");
+    const stable = (rows: Array<[string, string]>) => ({
+      ...base,
+      stablecoin_margin: rows.map(([asset, value]) => ({ asset, value }))
+    });
+    expect(
+      validateFundSettingsModel(
+        stable([
+          ["USDT", "0.5"],
+          ["FDUSD", "0.5"]
+        ]),
+        usdc
+      )
+    ).toContain("必须包含结算币 USDC");
+    expect(
+      validateFundSettingsModel(
+        stable([
+          ["USDC", "0.5"],
+          ["USDT", "0.5"]
+        ]),
+        usdc
+      )
+    ).toBe("");
   });
 });
