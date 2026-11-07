@@ -170,6 +170,9 @@ func CheckResolvedMarkets(resolved Resolved, tasks map[string]string) error {
 		if got := resolved.Tasks[market].FactorTaskID; got != taskID {
 			for actual, task := range resolved.Tasks {
 				if task.FactorTaskID == taskID {
+					if actual == MarketMulti {
+						return fmt.Errorf("因子任务 %s 在统一数据集上（同时放现货与永续），factor_tasks 要写 multi=%s，不能写成 %s；从实例发起的回放可以省略 factor_tasks", taskID, taskID, market)
+					}
 					return fmt.Errorf("因子任务 %s 登记为 %s 市场，但它的源数据集是 %s 市场", taskID, market, actual)
 				}
 			}

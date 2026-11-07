@@ -62,6 +62,10 @@ func TestResolveUnifiedDatasetRequiresMarket(t *testing.T) {
 	if err := CheckResolvedMarkets(resolved, map[string]string{MarketMulti: "ftask_1h"}); err != nil {
 		t.Fatal(err)
 	}
+	// 统一数据集上的任务写成现货（试算、回放按市场给 factor_tasks 时的常见错误）：提示写 multi 或从实例发起。
+	if err := CheckResolvedMarkets(resolved, map[string]string{"spot": "ftask_1h"}); err == nil || !strings.Contains(err.Error(), "multi=ftask_1h") || !strings.Contains(err.Error(), "从实例发起") {
+		t.Fatalf("应提示写 multi 或从实例发起：%v", err)
+	}
 	raw, _ := json.Marshal(resolved)
 	parsed, err := ParseResolved(raw)
 	if err != nil || !parsed.Unified() {
