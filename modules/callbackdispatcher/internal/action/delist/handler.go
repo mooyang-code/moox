@@ -469,6 +469,10 @@ func (r *run) noteDetected(ctx context.Context) {
 	}
 	live := filterLive(result.Holders)
 	if len(live) == 0 {
+		// 没查到持有者，但有账户没能判断：不能当作没有持有，同样提醒一次，免得漏掉。
+		if len(result.Skipped) > 0 {
+			telemetry.NoteDelistDetected(fmt.Sprintf("%s 将于 %s 下架，%d 个账户没能判断是否持有，请人工确认", r.target.subject(), r.target.DelistAt.UTC().Format("2006-01-02 15:04 UTC"), len(result.Skipped)), r.now)
+		}
 		return
 	}
 	telemetry.NoteDelistDetected(fmt.Sprintf("%s 将于 %s 下架，%d 个组合持有", r.target.subject(), r.target.DelistAt.UTC().Format("2006-01-02 15:04 UTC"), len(groupHolders(live))), r.now)

@@ -11,6 +11,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/callbackdispatcher/internal/action"
 	"github.com/mooyang-code/moox/modules/callbackdispatcher/internal/store"
+	"github.com/mooyang-code/moox/modules/callbackdispatcher/internal/telemetry"
 	"github.com/stretchr/testify/require"
 )
 
@@ -170,4 +171,14 @@ func TestFailedDrillRetryStopsBecauseBlockWasReleased(t *testing.T) {
 	out := h.step("drill", delistAt.Add(12*time.Minute))
 	require.Equal(t, store.StatusCanceled, out.Status)
 	require.Contains(t, out.Error, "手工解除")
+}
+
+// 没查到持有者但有没能判断的账户：同样发 delist_detected。
+func TestDelistDetectedWhenOnlySkippedAccounts(t *testing.T) {
+	h := newHarness(t)
+	h.trade.skipped = []action.SkippedAccount{{TradingAccountID: "ta-9", Reason: "资金设置读不出来"}}
+	h.addExecution("e1", baseTime.Add(48*time.Hour), "ALL")
+	h.step("e1", baseTime)
+	notes := telemetry.Recent(telemetry.AttentionDelistDetected, baseTime, time.Minute)
+	require.Contains(t, notes, "binance:SPOT:FOOUSDT 将于 2026-11-09 08:00 UTC 下架，1 个账户没能判断是否持有，请人工确认", "进程里的关注项记录是共享的，只看这一条")
 }
