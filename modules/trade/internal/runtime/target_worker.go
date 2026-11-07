@@ -51,6 +51,10 @@ type TargetWorker struct {
 	pending    map[targetKey]struct{}
 	queue      []targetKey
 
+	// retryTimers 按目标保存定时唤醒：同一个目标新的唤醒替换旧的，不会越积越多。
+	retryMu     sync.Mutex
+	retryTimers map[targetKey]*time.Timer
+
 	mu           sync.RWMutex
 	ready        bool
 	lastError    string
@@ -298,12 +302,30 @@ func (w *TargetWorker) runRecords(ctx context.Context, records []store.LogicalAc
 		}
 		if result.RetryAfter > 0 {
 			// 批间隔到期时直接唤醒，不等下一次定时轮询。
-			spaceID, logicalAccountID := record.SpaceID, record.LogicalAccountID
-			time.AfterFunc(result.RetryAfter, func() { w.WakeTarget(spaceID, logicalAccountID) })
+			w.scheduleRetry(record.SpaceID, record.LogicalAccountID, result.RetryAfter)
 		}
 		w.observe(result, convergeErr, now)
 	}
 	return errors.Join(runErrors...)
+}
+
+// scheduleRetry 给目标设一个定时唤醒；这个目标已有的定时唤醒先停掉，每个目标最多一个。
+func (w *TargetWorker) scheduleRetry(spaceID, logicalAccountID string, after time.Duration) {
+	key := targetKey{spaceID, logicalAccountID}
+	w.retryMu.Lock()
+	defer w.retryMu.Unlock()
+	if w.retryTimers == nil {
+		w.retryTimers = make(map[targetKey]*time.Timer)
+	}
+	if previous, ok := w.retryTimers[key]; ok {
+		previous.Stop()
+	}
+	w.retryTimers[key] = time.AfterFunc(after, func() {
+		w.retryMu.Lock()
+		delete(w.retryTimers, key)
+		w.retryMu.Unlock()
+		w.WakeTarget(spaceID, logicalAccountID)
+	})
 }
 
 func (w *TargetWorker) observe(

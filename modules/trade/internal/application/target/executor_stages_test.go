@@ -7,6 +7,7 @@ import (
 	"time"
 
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/stretchr/testify/require"
@@ -221,12 +222,13 @@ type fakeTransfer struct {
 	beforePending, collectPending bool
 	beforeCalls, collectCalls     int
 	buys                          []TransferBuy
+	scale                         map[string]shared.Decimal
 }
 
-func (f *fakeTransfer) BeforeSpotBuy(_ context.Context, _ string, _ store.LogicalAccountTargetRecord, buys []TransferBuy) (bool, error) {
+func (f *fakeTransfer) BeforeSpotBuy(_ context.Context, _ string, _ store.LogicalAccountTargetRecord, buys []TransferBuy) (TransferOutcome, error) {
 	f.beforeCalls++
 	f.buys = buys
-	return f.beforePending, nil
+	return TransferOutcome{Pending: f.beforePending, BuyScale: f.scale}, nil
 }
 
 func (f *fakeTransfer) Collect(_ context.Context, _ string, _ store.LogicalAccountTargetRecord, _ []store.TradingAccountRecord) (bool, error) {
@@ -331,4 +333,87 @@ func TestArbitrageBaseSwapLegIsNotFlattenedToZero(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, StatusConverged, result.Status)
 	require.Empty(t, f.orders.specs, "对冲腿不动")
+}
+
+func restingEthOrder(target store.LogicalAccountTargetRecord) store.OrderRecord {
+	return store.OrderRecord{
+		SpaceID: "space-1", OrderID: "resting-eth", TradingAccountID: "account-a", LogicalAccountID: "logical-1", RunnerID: target.RunnerID,
+		ClientOrderID: "resting-eth", Exchange: "BINANCE", MarketType: "SPOT", InstrumentID: "ETH-USDT-SPOT", ExchangeSymbol: "ETHUSDT",
+		OrderType: "LIMIT", TimeInForce: "GTC", Side: "BUY", Quantity: "2", LimitPrice: strPtr("90"), ReferencePrice: "100",
+		OwnerType: "TARGET", OwnerID: target.TargetID, State: "OPEN", Version: 1,
+	}
+}
+
+// ETH 挂单还没成交时，不阻塞其他标的：BTC 合约照常加仓，ETH 不再追加新单。
+func TestRestingOrderDoesNotBlockOtherInstruments(t *testing.T) {
+	f := newMixedExecutorFixture(t)
+	f.target(t, []store.InstrumentTarget{{InstrumentID: "ETH-USDT-SPOT", Quantity: "12"}, {InstrumentID: "BTC-USDT-SWAP", Quantity: "5"}})
+	f.now = time.Now().UTC()
+	target, err := f.store.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	f.order(t, restingEthOrder(target))
+
+	result, err := f.executor().Converge(context.Background(), "space-1", "logical-1")
+
+	require.NoError(t, err)
+	require.Equal(t, "place", result.Action)
+	require.Equal(t, []string{"BTC-USDT-SWAP:BUY"}, placedInstruments(f))
+}
+
+// BTC 到位后只剩 ETH 挂单：定为已收敛并设唤醒时间（到有效期末），不再每秒重算。
+func TestOnlyRestingLaneLeftConvergesWithWakeUp(t *testing.T) {
+	f := newMixedExecutorFixture(t)
+	f.target(t, []store.InstrumentTarget{{InstrumentID: "ETH-USDT-SPOT", Quantity: "12"}, {InstrumentID: "BTC-USDT-SWAP", Quantity: "5"}})
+	f.now = time.Now().UTC()
+	f.setSwapPosition("BTCUSDT", "5")
+	target, err := f.store.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	f.order(t, restingEthOrder(target))
+
+	result, err := f.executor().Converge(context.Background(), "space-1", "logical-1")
+
+	require.NoError(t, err)
+	require.Equal(t, StatusConverged, result.Status)
+	require.Greater(t, result.RetryAfter, 30*time.Minute)
+	require.Empty(t, f.orders.specs)
+}
+
+// 有标的被阻塞又有挂单：定为已阻塞也要设唤醒（定时器不扫已阻塞的目标），到期时撤掉挂单。
+func TestBlockedWithRestingOrderWakesUpAndCancelsAtExpiry(t *testing.T) {
+	f := newMixedExecutorFixture(t)
+	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_trade_instruments SET c_min_notional = '100000' WHERE c_instrument_id = 'BTC-USDT-SPOT'").Error)
+	f.target(t, []store.InstrumentTarget{{InstrumentID: "ETH-USDT-SPOT", Quantity: "12"}, {InstrumentID: "BTC-USDT-SPOT", Quantity: "3"}})
+	f.now = time.Now().UTC()
+	target, err := f.store.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	f.order(t, restingEthOrder(target))
+
+	result, err := f.executor().Converge(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Equal(t, StatusBlocked, result.Status)
+	require.Greater(t, result.RetryAfter, 30*time.Minute, "已阻塞的目标定时器不扫，必须设唤醒")
+
+	f.now = time.UnixMilli(target.ValidUntil).Add(time.Second).UTC()
+	result, err = f.executor().Converge(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Equal(t, StatusExpired, result.Status)
+	require.Equal(t, []string{"resting-eth"}, f.orders.canceled)
+}
+
+// 合约钱包可划额度不够：划转实现用 BuyScale 把现货买单按比例缩小，不会按全额下单。
+func TestTransferScaleShrinksSpotBuy(t *testing.T) {
+	f := newMixedExecutorFixture(t)
+	require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_trading_accounts SET c_execution_mode = 'LIVE', c_live_environment = 'PRODUCTION',
+		c_credential_secret_id = 'secret-1', c_account_mode = 'BINANCE_STANDARD'`).Error)
+	f.setSpotBalance("ETH", "0")
+	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SPOT", Quantity: "4"}})
+	f.now = time.Now().UTC()
+	executor := f.executor()
+	executor.Transfers = &fakeTransfer{scale: map[string]shared.Decimal{"account-a": shared.MustDecimal("0.5")}}
+
+	_, err := executor.Converge(context.Background(), "space-1", "logical-1")
+
+	require.NoError(t, err)
+	require.Len(t, f.orders.specs, 1)
+	require.Equal(t, "2", f.orders.specs[0].Quantity.String(), "额度只够一半，买入量从 4 缩到 2")
 }

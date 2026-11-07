@@ -38,10 +38,21 @@ func actionStage(action laneAction) int {
 // 真实交易所的划转由实盘下单能力的后续任务实现，这里只定义执行器要求的行为。
 type WalletTransfer interface {
 	// BeforeSpotBuy 在现货买入前把资金划进现货钱包，并等现货钱包的快照晚于划转完成时间。
-	// 返回 pending 为真表示还在划转或等待快照，本轮不进入现货买入。members 只含需要划转的普通账户。
-	BeforeSpotBuy(ctx context.Context, spaceID string, target store.LogicalAccountTargetRecord, buys []TransferBuy) (pending bool, err error)
+	// buys 只含需要划转的普通账户的现货买入。每一轮收敛都会调用它：实现必须按目标 ID 查划转表保证幂等，
+	// 已经划过的不重复划，划转完成但快照还没追上时返回 Pending。
+	// 合约钱包可划额度不够时，用 BuyScale 把该账户的现货买入按比例缩小（0 到 1，缺省不缩小，0 表示这轮买不了）。
+	BeforeSpotBuy(ctx context.Context, spaceID string, target store.LogicalAccountTargetRecord, buys []TransferBuy) (TransferOutcome, error)
 	// Collect 在目标执行完毕后把现货钱包多出来的资金归集回合约钱包，pending 为真表示归集还没完成。
+	// 同样每一轮都会调用，实现须保证幂等。
 	Collect(ctx context.Context, spaceID string, target store.LogicalAccountTargetRecord, accounts []store.TradingAccountRecord) (pending bool, err error)
+}
+
+// TransferOutcome 是第 4 阶段一次划转检查的结果。
+type TransferOutcome struct {
+	// Pending 为真表示还在划转或等待现货钱包快照，本轮不进入现货买入。
+	Pending bool
+	// BuyScale 是各账户现货买入要缩小到的比例（键：执行账户 ID，0 到 1）；没有条目表示不缩小。
+	BuyScale map[string]shared.Decimal
 }
 
 // TransferBuy 是一个需要划转资金的现货买入：账户、标的和计划买入的基础资产数量（金额由划转实现按报价折算）。
@@ -63,11 +74,10 @@ func (e *Executor) walletTransferBeforeSpotBuy(
 	ctx context.Context,
 	spaceID string,
 	target store.LogicalAccountTargetRecord,
-	_ []memberState,
 	buys []laneAction,
-) (bool, error) {
+) (TransferOutcome, error) {
 	if e.Transfers == nil {
-		return false, nil
+		return TransferOutcome{}, nil
 	}
 	var transfers []TransferBuy
 	for _, action := range buys {
@@ -76,9 +86,28 @@ func (e *Executor) walletTransferBeforeSpotBuy(
 		}
 	}
 	if len(transfers) == 0 {
-		return false, nil
+		return TransferOutcome{}, nil
 	}
 	return e.Transfers.BeforeSpotBuy(ctx, spaceID, target, transfers)
+}
+
+// scaleBuys 按划转额度缩小现货买入：比例为 0 的账户这轮不买，其余按比例缩小数量。
+func scaleBuys(buys []laneAction, scale map[string]shared.Decimal) []laneAction {
+	if len(scale) == 0 {
+		return buys
+	}
+	scaled := make([]laneAction, 0, len(buys))
+	for _, action := range buys {
+		ratio, found := scale[action.member.account.TradingAccountID]
+		switch {
+		case !found || ratio.Cmp(shared.MustDecimal("1")) >= 0:
+			scaled = append(scaled, action)
+		case ratio.Cmp(shared.Zero()) > 0:
+			action.delta = action.delta.Mul(ratio)
+			scaled = append(scaled, action)
+		}
+	}
+	return scaled
 }
 
 // walletCollect 执行阶段 6；没有配置划转或没有需要归集的账户时直接放行。

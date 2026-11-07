@@ -342,8 +342,9 @@ func (e *Executor) Converge(
 	}
 	// 规则：有在途子单（待提交、提交中、结果未知、挂单中）时本轮只处理这些单，不发新批。
 	inFlight := false
-	// resting 表示本目标有限价 GTC 挂单在簿上：挂单不阻塞收敛，也不让定时器每秒重算。
-	resting := false
+	var restingLanes map[string]struct{}
+	// restingLanes 是本目标有限价 GTC 挂单在簿上的标的：这些标的视为“进行中”，从本轮动作里剔除，
+	// 不阻塞其他标的；挂单剩余量从差额里扣除留给挂单任务。
 	var unknown []string
 	for _, current := range orders {
 		if current.OwnerType != string(orderdomain.OwnerTarget) ||
@@ -365,7 +366,10 @@ func (e *Executor) Converge(
 			inFlight = true
 		default:
 			if restingOrder(current) {
-				resting = true
+				if restingLanes == nil {
+					restingLanes = make(map[string]struct{})
+				}
+				restingLanes[current.InstrumentID] = struct{}{}
 			} else {
 				inFlight = true
 			}
@@ -405,14 +409,16 @@ func (e *Executor) Converge(
 			actions = append(actions, action)
 		}
 	}
-	if resting && len(actions) > 0 {
-		// 还有挂单没成交时不再追加新单：挂单剩余量从差额里扣除由挂单任务实现，在那之前保守等待。
-		target.BlockedTargets = blocked
-		if err := e.updateTarget(ctx, &target, StatusConverging); err != nil {
-			return Result{}, err
+	if len(restingLanes) > 0 {
+		kept := actions[:0]
+		for _, action := range actions {
+			if _, resting := restingLanes[action.instrument.InstrumentID]; !resting {
+				kept = append(kept, action)
+			}
 		}
-		return Result{Status: StatusConverging, Action: "wait"}, nil
+		actions = kept
 	}
+	resting := len(restingLanes) > 0
 	if len(actions) > 0 {
 		if allowed, retryAfter := e.batchAllowed(logicalAccount.LogicalAccountID, members); !allowed {
 			// 批间隔未到，或交易所接口限流暂停、权重用到 90%：本轮不发新批，也不算阻塞。
@@ -446,9 +452,27 @@ func (e *Executor) Converge(
 		}
 		if stage == stageSpotBuy {
 			// 阶段 4：普通账户把资金划进现货钱包，划转完成后才买入。统一账户、OKX、模拟盘没有这一步。
-			if transferring, err := e.walletTransferBeforeSpotBuy(ctx, spaceID, target, members, stageActions); err != nil {
+			outcome, err := e.walletTransferBeforeSpotBuy(ctx, spaceID, target, stageActions)
+			if err != nil {
 				return Result{}, err
-			} else if transferring {
+			}
+			// 合约钱包可划额度不够时，现货买入按比例缩小，剩下的留到下一份目标重算。
+			scaledActions := scaleBuys(stageActions, outcome.BuyScale)
+			for _, action := range stageActions {
+				kept := false
+				for _, scaled := range scaledActions {
+					kept = kept || (scaled.instrument.InstrumentID == action.instrument.InstrumentID &&
+						scaled.member.account.TradingAccountID == action.member.account.TradingAccountID)
+				}
+				if !kept {
+					blocked = append(blocked, store.BlockedTarget{
+						InstrumentID: action.instrument.InstrumentID, Quantity: action.delta.String(),
+						Reason: "合约钱包可划转的资金不足，这轮买不了",
+					})
+				}
+			}
+			stageActions = scaledActions
+			if outcome.Pending {
 				target.BlockedTargets = blocked
 				if err := e.updateTarget(ctx, &target, StatusConverging); err != nil {
 					return Result{}, err
@@ -549,22 +573,22 @@ func (e *Executor) Converge(
 	}
 	target.BlockedTargets = blocked
 	target.LastError = ""
+	// 只剩挂单（或阻塞加挂单）时，定时器不再扫这个目标：挂单成交会唤醒目标，下一份目标到达时在阶段 1 撤掉旧挂单，
+	// 一直没有成交也没有新目标则到有效期末被唤醒，走过期分支撤掉本目标的挂单，所以都要设唤醒时间。
+	var retryAfter time.Duration
+	if resting {
+		retryAfter = e.restingRetryAfter(target)
+	}
 	if len(blocked) > 0 {
 		if err := e.updateTarget(ctx, &target, StatusBlocked); err != nil {
 			return Result{}, err
 		}
-		return Result{Status: StatusBlocked}, nil
+		return Result{Status: StatusBlocked, RetryAfter: retryAfter}, nil
 	}
 	if err := e.updateTarget(ctx, &target, StatusConverged); err != nil {
 		return Result{}, err
 	}
-	result = Result{Status: StatusConverged}
-	if resting {
-		// 只剩挂单：目标定为已收敛，不再每秒重算。挂单成交会唤醒目标，下一份目标到达时在阶段 1 撤掉旧挂单，
-		// 一直没有成交也没有新目标则到有效期末被唤醒，走过期分支撤掉本目标的挂单。
-		result.RetryAfter = e.restingRetryAfter(target)
-	}
-	return result, nil
+	return Result{Status: StatusConverged, RetryAfter: retryAfter}, nil
 }
 
 // HasDifference 判断目标和实际持仓是否还有能下单的差额，用于过期目标的告警。
