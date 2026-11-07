@@ -125,7 +125,7 @@ import {
 
 defineOptions({ name: "EventExecutionDrawer" });
 
-const props = defineProps<{ visible: boolean; executionId: string; events: SubscribableEvent[] }>();
+const props = defineProps<{ visible: boolean; executionId: string; events: SubscribableEvent[]; refreshToken: number }>();
 const emit = defineEmits<{
   "update:visible": [value: boolean];
   action: [kind: "retry" | "cancel" | "ack", item: EventExecution];
@@ -150,11 +150,17 @@ async function load() {
   }
 }
 
-async function emitAction(kind: "retry" | "cancel" | "ack") {
+function emitAction(kind: "retry" | "cancel" | "ack") {
   emit("action", kind, execution.value);
-  // 操作完成后列表会刷新；抽屉里的详情也跟着重新读取。
-  setTimeout(() => void load(), 600);
 }
+
+// 父页面的操作完成之后（refreshToken 加一）才重新读取详情，不靠定时器猜时间。
+watch(
+  () => props.refreshToken,
+  () => {
+    if (props.visible && props.executionId) void load();
+  }
+);
 
 watch(
   () => [props.visible, props.executionId] as const,

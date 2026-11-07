@@ -3,6 +3,7 @@ import type { EventExecution, ScopeField } from "@/api/callback-dispatcher";
 import {
   actionText,
   SYSTEM_ACTION_DISABLED_TEXT,
+  systemActionNotice,
   canAcknowledge,
   canCancel,
   cancelConfirmText,
@@ -92,6 +93,15 @@ describe("事件中心的文案", () => {
       )
     ).toBe("系统：卖出策略持有的下架币（尚未启用，只记录）");
     expect(SYSTEM_ACTION_DISABLED_TEXT).toContain("系统动作尚未启用，现在只记录");
+    expect(systemActionNotice(true)).toBe("");
+    expect(systemActionNotice(false)).toBe(SYSTEM_ACTION_DISABLED_TEXT);
+    expect(systemActionNotice(null)).toContain("无法确认系统动作是否启用");
+    expect(
+      actionText(
+        { action_type: "ACTION_TYPE_SYSTEM", notify_url: "", system_action: "SYSTEM_ACTION_SELL_DELISTED_HOLDINGS" },
+        null
+      )
+    ).toBe("系统：卖出策略持有的下架币");
     const events = [{ event_name: "e.a", version: 1, title: "标的即将下架", description: "", scope_fields: [] }];
     expect(eventTitle(events, "e.a")).toBe("标的即将下架");
     expect(eventTitle(events, "e.b")).toBe("e.b");

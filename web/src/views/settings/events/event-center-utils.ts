@@ -114,12 +114,24 @@ export function scopeToForm(scope: ScopeFilter[]): Record<string, string[]> {
 /** 系统动作的处理器还没上线时，所有系统动作只留执行记录，不会真的动 Trade。 */
 export const SYSTEM_ACTION_DISABLED_TEXT = "系统动作尚未启用，现在只记录；启用后，还没结束的记录会接着处理。";
 
+/** 事件目录没读到时，不知道系统动作有没有启用：什么都不能断言。 */
+export const SYSTEM_ACTION_UNKNOWN_TEXT = "无法确认系统动作是否启用（没有读到事件目录），下面的处理结果以执行记录为准。";
+
+/**
+ * 系统动作是否启用的三态：true 已启用，false 尚未启用，null 还在加载或加载失败（未知）。
+ * 返回要给用户看的提示；已启用时为空。
+ */
+export function systemActionNotice(enabled: boolean | null): string {
+  if (enabled === null) return SYSTEM_ACTION_UNKNOWN_TEXT;
+  return enabled ? "" : SYSTEM_ACTION_DISABLED_TEXT;
+}
+
 export function actionText(
   rule: Pick<EventRule, "action_type" | "notify_url" | "system_action">,
-  systemActionEnabled = true
+  systemActionEnabled: boolean | null = true
 ): string {
   if (rule.action_type === "ACTION_TYPE_SYSTEM") {
-    return systemActionEnabled ? "系统：卖出策略持有的下架币" : "系统：卖出策略持有的下架币（尚未启用，只记录）";
+    return systemActionEnabled === false ? "系统：卖出策略持有的下架币（尚未启用，只记录）" : "系统：卖出策略持有的下架币";
   }
   return `通知地址：${rule.notify_url}`;
 }

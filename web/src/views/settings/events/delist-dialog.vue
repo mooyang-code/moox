@@ -7,11 +7,11 @@
     @update:visible="(value: boolean) => emit('update:visible', value)"
   >
     <template v-if="phase === 'form'">
-      <a-alert v-if="systemActionEnabled" class="block-alert">
+      <a-alert v-if="systemActionEnabled === true" class="block-alert">
         用来补录漏报的下架，或做演练。登记后，系统会立即禁止买入这个标的，下架前 24 小时平掉策略持有的部分。
       </a-alert>
       <a-alert v-else type="warning" class="block-alert">
-        用来补录漏报的下架，或做演练。{{ SYSTEM_ACTION_DISABLED_TEXT }}
+        用来补录漏报的下架，或做演练。{{ systemActionNotice(systemActionEnabled) }}
       </a-alert>
       <a-form :model="form" auto-label-width>
         <a-form-item field="exchange" label="交易所" required>
@@ -61,8 +61,8 @@
         </p>
         <p v-else-if="!holders.length" class="muted">没有策略持有这个标的。{{ noHolderEffect }}</p>
         <template v-else>
-          <p v-if="systemActionEnabled">下面这些组合持有这个标的，下架前 24 小时会被平仓：</p>
-          <p v-else>下面这些组合持有这个标的（系统动作尚未启用，不会被平仓）：</p>
+          <p v-if="systemActionEnabled === true">下面这些组合持有这个标的，下架前 24 小时会被平仓：</p>
+          <p v-else>下面这些组合持有这个标的：</p>
           <ul class="holder-list">
             <li v-for="holder in summary.live" :key="holderKey(holder)">生产　{{ holderLine(holder) }}</li>
             <li v-for="holder in summary.paper" :key="holderKey(holder)">模拟盘　{{ holderLine(holder) }}</li>
@@ -77,7 +77,7 @@
       </template>
       <a-checkbox v-if="previewFailed || !verified" v-model="confirmed">我知道无法确认持有情况，仍然登记</a-checkbox>
       <a-checkbox v-else-if="summary.live.length" v-model="confirmed">
-        {{ systemActionEnabled ? "我确认有生产组合会被平仓，仍然登记" : "我确认有生产组合持有这个标的，仍然登记" }}
+        {{ systemActionEnabled === true ? "我确认有生产组合会被平仓，仍然登记" : "我确认有生产组合持有这个标的，仍然登记" }}
       </a-checkbox>
     </template>
 
@@ -121,12 +121,12 @@ import {
   isPastDelistTime,
   pickerValueToMs,
   summarizeHolders,
-  SYSTEM_ACTION_DISABLED_TEXT
+  systemActionNotice
 } from "./event-center-utils";
 
 defineOptions({ name: "EventDelistDialog" });
 
-const props = defineProps<{ visible: boolean; systemActionEnabled: boolean }>();
+const props = defineProps<{ visible: boolean; systemActionEnabled: boolean | null }>();
 const emit = defineEmits<{ "update:visible": [value: boolean] }>();
 
 const form = reactive({

@@ -1,7 +1,7 @@
 <template>
   <section>
-    <a-alert v-if="!systemActionEnabled" type="warning" class="system-action-alert">
-      {{ SYSTEM_ACTION_DISABLED_TEXT }}
+    <a-alert v-if="systemActionNotice(systemActionEnabled)" type="warning" class="system-action-alert">
+      {{ systemActionNotice(systemActionEnabled) }}
     </a-alert>
     <a-table
       row-key="rule_id"
@@ -99,15 +99,15 @@ import {
   formatMs,
   statusText,
   statusTone,
-  SYSTEM_ACTION_DISABLED_TEXT
+  systemActionNotice
 } from "./event-center-utils";
 
 defineOptions({ name: "EventCenterRules" });
 
 const rows = ref<EventRule[]>([]);
 const events = ref<SubscribableEvent[]>([]);
-// 目录没加载出来时按已启用处理：不能因为一次加载失败就对用户说“尚未启用”。
-const systemActionEnabled = ref(true);
+// 三态：null 是还在加载或加载失败（不知道），不能当成已启用，也不能说“尚未启用”。
+const systemActionEnabled = ref<boolean | null>(null);
 const loading = ref(false);
 const pagination = reactive(defaultPagination());
 const toggling = ref("");

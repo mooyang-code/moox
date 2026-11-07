@@ -61,6 +61,7 @@
     <ExecutionDrawer
       v-model:visible="drawerVisible"
       :execution-id="detailId"
+      :refresh-token="refreshToken"
       :events="events"
       @action="(kind, item) => act(kind, item)"
     />
@@ -109,6 +110,7 @@ const pagination = reactive(defaultPagination());
 const filters = reactive<{ rule_id: string; status: ExecutionStatus | "" }>({ rule_id: "", status: "" });
 const drawerVisible = ref(false);
 const detailId = ref("");
+const refreshToken = ref(0);
 
 async function load() {
   loading.value = true;
@@ -164,10 +166,15 @@ async function act(kind: "retry" | "cancel" | "ack", item: EventExecution) {
     if (kind === "retry") await retryEventExecution(item.execution_id);
     else if (kind === "cancel") await cancelEventExecution(item.execution_id);
     else await acknowledgeEventExecution(item.execution_id);
-    Message.success(kind === "retry" ? "已重新开始执行" : kind === "cancel" ? "已取消" : "已确认");
+    Message.success(
+      kind === "retry" ? "已重新开始执行" : kind === "cancel" ? (item.cleanup_pending ? "善后已完成" : "已取消") : "已确认"
+    );
     await load();
   } catch (error) {
     reportControlError(error);
+  } finally {
+    // 不管成败，抽屉里的详情都按最新状态重读（取消可能已生效而善后失败）。
+    refreshToken.value += 1;
   }
 }
 
