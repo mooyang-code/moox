@@ -247,6 +247,12 @@ func TestInspectTransportErrorsAreInconclusive(t *testing.T) {
 		"时间戳 -1021":         {http.StatusBadRequest, errorBody(-1021, "Timestamp for this request is outside of the recvWindow.")},
 		"无法识别的错误码 -1121":    {http.StatusBadRequest, errorBody(-1121, "Invalid symbol.")},
 		"WAF HTTP 403 无错误码": {http.StatusForbidden, "<html>blocked</html>"},
+		// 限频、封禁、WAF、5xx 的响应体里即使带着鉴权类错误码（-2015），也不是“密钥被拒绝”：先看状态码和类别，再看错误码。
+		"HTTP 429 配 -2015": {http.StatusTooManyRequests, errorBody(-2015, "Invalid API-key, IP, or permissions for action.")},
+		"HTTP 418 配 -2015": {http.StatusTeapot, errorBody(-2015, "Invalid API-key, IP, or permissions for action.")},
+		"HTTP 403 配 -2015": {http.StatusForbidden, errorBody(-2015, "Invalid API-key, IP, or permissions for action.")},
+		"HTTP 500 配 -2015": {http.StatusInternalServerError, errorBody(-2015, "Invalid API-key, IP, or permissions for action.")},
+		"HTTP 503 配 -1022": {http.StatusServiceUnavailable, errorBody(-1022, "Signature for this request is not valid.")},
 		// HTTP 状态码不能先于响应体里的错误码：401 配网关页、401 配时间戳错误都不是“密钥被拒绝”。
 		"HTTP 401 配网关页":       {http.StatusUnauthorized, "<html>401 Authorization Required</html>"},
 		"HTTP 401 空响应体":       {http.StatusUnauthorized, ""},

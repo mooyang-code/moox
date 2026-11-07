@@ -158,6 +158,10 @@ func TestInspectTransportErrorsAreInconclusive(t *testing.T) {
 		"HTTP 401 配 HTML 网关页":  {http.StatusUnauthorized, `<html><body>401 Authorization Required</body></html>`},
 		"HTTP 401 空响应体":        {http.StatusUnauthorized, ``},
 		"HTTP 403 WAF 页":       {http.StatusForbidden, `<html>blocked</html>`},
+		// 5xx 响应体里带着鉴权类错误码（网关、代理改写）也不是“密钥被拒绝”。
+		"HTTP 500 配鉴权码 50111": {http.StatusInternalServerError, `{"code":"50111","msg":"Invalid OK-ACCESS-KEY","data":[]}`},
+		"HTTP 502 配鉴权码 50110": {http.StatusBadGateway, `{"code":"50110","msg":"IP whitelist","data":[]}`},
+		"HTTP 429 配鉴权码 50111": {http.StatusTooManyRequests, `{"code":"50111","msg":"Invalid OK-ACCESS-KEY","data":[]}`},
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -189,6 +193,12 @@ func TestClassifyUsesOKXErrorCodeFromNon2xxBody(t *testing.T) {
 	limited := &exchange.Error{Kind: exchange.ErrorRateLimited, HTTPStatus: 429, Err: errors.New("429")}
 	if err := classify(limited, []byte(`{"code":"50011","msg":"Too Many Requests"}`)); !exchange.IsKind(err, exchange.ErrorRateLimited) {
 		t.Fatalf("限频以状态码分类为准：%v", err)
+	}
+	// 5xx 配鉴权类错误码同样保持结果未知（只保留码），不能当成确定的鉴权失败。
+	serverAuth := &exchange.Error{Kind: exchange.ErrorTransportUnknown, HTTPStatus: 500, Err: errors.New("500")}
+	err = classify(serverAuth, []byte(`{"code":"50111","msg":"Invalid OK-ACCESS-KEY"}`))
+	if !errors.As(err, &typed) || typed.Kind != exchange.ErrorTransportUnknown || typed.Code != "50111" {
+		t.Fatalf("5xx 配鉴权码应保持结果未知并保留码：%+v", typed)
 	}
 	bad := &exchange.Error{Kind: exchange.ErrorTransportUnknown, HTTPStatus: 502, Err: errors.New("502")}
 	if err := classify(bad, []byte(`{"code":"59999","msg":"x"}`)); !exchange.IsKind(err, exchange.ErrorTransportUnknown) {

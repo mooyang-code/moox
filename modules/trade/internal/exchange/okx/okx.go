@@ -1183,7 +1183,8 @@ func classify(err error, raw []byte) error {
 		return typed
 	}
 	coded := classifyOKXCode(code, message).(*exchange.Error)
-	if coded.Kind == exchange.ErrorRejected && typed.Kind == exchange.ErrorTransportUnknown {
+	// 5xx、超时等结果不明的响应：响应体里的错误码（含鉴权类）不能把它变成确定结论，只保留码。
+	if (coded.Kind == exchange.ErrorRejected || coded.Kind == exchange.ErrorAuthentication) && typed.Kind == exchange.ErrorTransportUnknown {
 		typed.Code = code
 		return typed
 	}

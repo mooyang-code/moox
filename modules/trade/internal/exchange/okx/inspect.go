@@ -87,7 +87,7 @@ func inspectWith(ctx context.Context, request exchange.InspectRequest, adapter *
 // 50102、50112 的官方说明未逐字核对。
 func isCredentialRejection(err error) bool {
 	var typed *exchange.Error
-	if !errors.As(err, &typed) || typed.Kind != exchange.ErrorAuthentication {
+	if !errors.As(err, &typed) || typed.Kind != exchange.ErrorAuthentication || typed.HTTPStatus >= 500 {
 		return false
 	}
 	return typed.Code != "" && typed.Code != "50102" && typed.Code != "50112"

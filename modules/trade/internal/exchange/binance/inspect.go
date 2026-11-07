@@ -214,14 +214,40 @@ func multiAssetsMargin(ctx context.Context, client *httpclient.Client, credentia
 	return payload.MultiAssetsMargin, nil
 }
 
-// inspectionFailure 区分一次失败的调用：鉴权、权限类错误码返回说明（确定的结论）；
-// 其余（传输错误、限频、5xx、未知错误码、本地限流拦截）返回“没有结论”错误。
+// inspectionFailure 区分一次失败的调用：先看状态码和错误类别，再看错误码。
+// 限频（429、-1003）、IP 封禁（418）、WAF（403）、5xx、超时、本地限流拦截都是“没有结论”：这类响应体里可能带着
+// 鉴权类的错误码（网关、WAF 页面或限流时的错误体），不能据此判成“密钥被拒绝”。
+// 只有状态码和类别都不是上面这些，响应体里又是鉴权、权限类错误码时才返回说明（确定的结论）；其余一律“没有结论”。
 func inspectionFailure(err error, raw []byte) (reason string, inconclusive error) {
+	if transientFailure(err) {
+		return "", inconclusiveError(err)
+	}
 	code := apiCode(raw)
 	if authErrorCodes[code] {
 		return "交易所返回鉴权类错误 " + code + "（密钥无效、IP 不在白名单或没有对应权限）", nil
 	}
 	return "", inconclusiveError(err)
+}
+
+// transientFailure 报告错误是否一定不是“密钥被拒绝”的确定结论：限频、封禁、WAF、5xx、超时和传输错误、本地限流拦截。
+func transientFailure(err error) bool {
+	var typed *exchange.Error
+	if !errors.As(err, &typed) {
+		return true
+	}
+	switch typed.HTTPStatus {
+	case http.StatusForbidden, http.StatusTeapot, http.StatusTooManyRequests:
+		return true
+	}
+	if typed.HTTPStatus >= 500 {
+		return true
+	}
+	switch typed.Kind {
+	case exchange.ErrorRateLimited, exchange.ErrorOrderRateLimited, exchange.ErrorBanned, exchange.ErrorThrottled,
+		exchange.ErrorNotSent, exchange.ErrorNotReady, exchange.ErrorTransportUnknown:
+		return true
+	}
+	return false
 }
 
 func inconclusiveError(err error) error {
