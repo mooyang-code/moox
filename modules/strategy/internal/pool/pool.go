@@ -407,3 +407,32 @@ func summary(cfg Config, ids []string, results map[string]MemberResult, state St
 	}
 	return out
 }
+
+// PriceKeys 返回本期成员账本需要价格的（标的|市场）键：各账本里已有的持仓，加上通过的成员本期的目标。
+// 调用方按这些键读取收盘价放进 Input.Prices。
+func PriceKeys(previous engine.State, members []MemberResult) ([]string, error) {
+	state, err := DecodeState(previous.Pool)
+	if err != nil {
+		return nil, err
+	}
+	seen := map[string]struct{}{}
+	for _, book := range state.Ledgers {
+		for key := range book.Positions {
+			seen[key] = struct{}{}
+		}
+	}
+	for _, member := range members {
+		if !member.passed() {
+			continue
+		}
+		for _, target := range member.Decision.Targets {
+			seen[engine.TargetKey(target.InstrumentID, target.Market)] = struct{}{}
+		}
+	}
+	keys := make([]string, 0, len(seen))
+	for key := range seen {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys, nil
+}
