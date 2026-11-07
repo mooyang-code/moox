@@ -257,6 +257,33 @@ describe("strategy instance creation behavior", () => {
     });
   });
 
+  it("双市场策略不能写 factor_params：带可变成员的任务不可选并写明原因", async () => {
+    api.listFactorTasks.mockResolvedValue({
+      factor_tasks: [
+        taskInfo({ name: "现货因子" }, "ftask_spot"),
+        {
+          ...taskInfo({ name: "永续固定" }, "ftask_fixed"),
+          members: [{ member_key: "ma", kind: "fixed", output_columns: ["ma"] }]
+        }
+      ],
+      page_result: { has_more: false }
+    });
+    const mixed = [{ ...strategies[0], dsl_yaml: "name: demo\nmarket: {select: both, prefer: swap}\n" }];
+    const { wrapper } = await open({ presetStrategyId: "s1", strategies: mixed });
+    const spotOption = wrapper
+      .findAll("select")[1]
+      .findAll("option")
+      .find(item => item.attributes("value") === "ftask_spot")!;
+    expect(spotOption.attributes("disabled")).toBeDefined();
+    expect(spotOption.text()).toContain("有可变成员，不可选");
+    const fixedOption = wrapper
+      .findAll("select")[1]
+      .findAll("option")
+      .find(item => item.attributes("value") === "ftask_fixed")!;
+    expect(fixedOption.attributes("disabled")).toBeUndefined();
+    expect(wrapper.text()).toContain("现货、永续双市场策略不支持 factor_params");
+  });
+
   describe("统一数据集上的任务（方式 B）", () => {
     const mixed = [{ ...strategies[0], dsl_yaml: "name: demo\nmarket: {select: both, prefer: swap}\n" }];
     const unifiedTasks = () => {

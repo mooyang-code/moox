@@ -13,7 +13,8 @@
         <div class="page-actions">
           <a-switch v-model="autoRefresh" size="small" aria-label="自动刷新" /><span class="muted" aria-hidden="true"
             >自动刷新</span
-          ><a-button :disabled="!store.instance" @click="openReplay">回放</a-button
+          ><span v-if="isPoolInstance" class="muted" :title="POOL_REPLAY_REASON">策略池暂不支持回放</span
+          ><a-button :disabled="!store.instance || isPoolInstance" @click="openReplay">回放</a-button
           ><a-button :loading="refreshing" aria-label="刷新实例详情" @click="refreshDetail"
             ><template #icon><icon-refresh /></template>刷新</a-button
           >
@@ -170,6 +171,9 @@ const {
 });
 const logicalAccount = useLogicalAccount(computed(() => store.instance?.logical_account_id));
 
+// 研究回放不支持策略池（Strategy 的 StartReplay 直接拒绝），按钮禁用并说明原因。
+const POOL_REPLAY_REASON = "研究回放暂不支持策略池：成员的净值与分配比例要在池实例启用后的预热与运行中查看";
+const isPoolInstance = computed(() => poolMembers(store.strategy?.dsl_yaml || "") !== null);
 const hasFactors = computed(() => Boolean(store.instance && parseFactorBinding(store.instance.resolved_json)));
 const definitionHint = computed(() =>
   store.strategyStatus === "missing" ? "定义已删除" : store.strategyStatus === "error" ? "定义读取失败" : "定义读取中"
@@ -198,7 +202,7 @@ function handleControlFailed() {
   controlUncertain.value = true;
 }
 function openReplay() {
-  if (store.instance)
+  if (store.instance && !isPoolInstance.value)
     router.push(replayLink({ instanceId: store.instance.instance_id, factorTasks: store.instance.factor_tasks }));
 }
 onMounted(start);

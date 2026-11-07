@@ -55,7 +55,7 @@
           >统一数据集把现货、永续放在同一个数据集里（用 series_tag 区分），一个因子任务、一个 View
           同时覆盖两个市场，策略到达即求值；
           分开时现货、永续各有自己的数据集与因子任务，策略等两边都到齐再求值。统一数据集上的任务暂不支持
-          factor_params，也不能进策略池。</template
+          factor_params（带可变成员的任务在这种方式下不能选），也不能进策略池。</template
         >
       </a-form-item>
       <a-form-item
@@ -78,8 +78,14 @@
           "
           @change="onTaskChange"
         >
-          <a-option v-for="task in taskChoices(market)" :key="task.taskId" :value="task.taskId">
-            {{ task.name }}（{{ task.taskId }} · {{ task.freq || "无周期" }}）
+          <a-option
+            v-for="task in taskChoices(market)"
+            :key="task.taskId"
+            :value="task.taskId"
+            :disabled="Boolean(varBlockReason && task.varMembers.length)"
+          >
+            {{ task.name }}（{{ task.taskId }} · {{ task.freq || "无周期"
+            }}{{ varBlockReason && task.varMembers.length ? " · 有可变成员，不可选" : "" }}）
           </a-option>
         </a-select>
       </a-form-item>
@@ -98,6 +104,7 @@
         当前空间没有可用的因子任务：任务必须处于运行中，且还没有关联策略实例。请先到「因子」模块创建并启用任务。
       </p>
       <p v-else class="meta-hint">一个因子任务只能被一个实例独占使用，关联创建后不能修改，也不能删除实例。</p>
+      <p v-if="varBlockReason && hasVarMemberTasks" class="meta-hint">标为“有可变成员，不可选”的任务：{{ varBlockReason }}。</p>
       <div v-for="item in selectedTasks" :key="item.task.taskId" class="task-columns">
         <div class="task-columns__head">
           <strong
@@ -111,7 +118,10 @@
           <a-tag v-for="column in item.task.columns" :key="column" size="small">{{ column }}</a-tag>
           <span v-if="!item.task.columns.length" class="meta-hint">这个任务还没有成员，先到「因子」模块给任务添加因子。</span>
         </a-space>
-        <p v-if="item.task.varMembers.length" class="meta-hint">
+        <p v-if="item.task.varMembers.length && varBlockReason" class="meta-hint meta-error">
+          可变成员 {{ item.task.varMembers.join("、") }}：{{ varBlockReason }}，请换一个没有可变成员的任务。
+        </p>
+        <p v-else-if="item.task.varMembers.length" class="meta-hint">
           可变成员 {{ item.task.varMembers.join("、") }}：DSL 的 factor_params 要为每个可变成员给出参数（策略逐期提交），可用
           params("成员键", "参数名") 读取当期实际参数。
         </p>
@@ -186,7 +196,7 @@ import { listAllDatasets } from "@/api/storage/metadata";
 import { listLogicalAccounts } from "@/api/trade";
 import type { LogicalAccount } from "@/api/trade/types";
 import type { FactorTaskInfo } from "@/api/factor/types";
-import { availableTasks, isUnifiedTask, type TaskOption } from "@/views/strategy/components/task-options";
+import { availableTasks, isUnifiedTask, varMemberBlockReason, type TaskOption } from "@/views/strategy/components/task-options";
 import { isUnifiedMarketType } from "@/views/data/shared/series-market";
 import ResolvedTable from "@/views/strategy/components/strategy-resolved-table.vue";
 import { logicalAccountOptions, marketsToResolved, resolvedMarkets } from "@/views/strategy/components/logical-account-options";
@@ -313,6 +323,15 @@ const selectedTasks = computed(() =>
     return task ? [{ market, task }] : [];
   })
 );
+// 带可变成员的任务在当前绑定方式下能不能选（策略池、统一数据集、双市场都不能写 factor_params）。
+const varBlockReason = computed(() =>
+  varMemberBlockReason({
+    pool: Boolean(poolRequirement.value),
+    unified: unifiedMode.value,
+    marketCount: activeMarkets.value.length
+  })
+);
+const hasVarMemberTasks = computed(() => taskKeys.value.some(market => taskChoices(market).some(task => task.varMembers.length)));
 const tasksSelected = computed(() => taskKeys.value.length > 0 && taskKeys.value.every(market => Boolean(form.tasks[market])));
 // 统一数据集上的任务只能选 multi，其余键只能选单市场数据集上的任务；另一个键已选的任务不再出现：一个任务只能登记一次。
 // 数据集信息读取失败时分不出哪些任务在统一数据集上，先都列出，由绑定预检核对。

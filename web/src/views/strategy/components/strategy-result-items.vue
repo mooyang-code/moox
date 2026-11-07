@@ -20,11 +20,15 @@
         <span>预算 {{ percent(row.summary.budget) }} · 已分配 {{ percent(row.summary.allocated) }}</span>
       </div>
     </div>
-    <a-space v-if="summary.gross || summary.cash" class="totals" wrap>
+    <a-space v-if="summary.gross || summary.cash || summary.spotNet || summary.swapNet" class="totals" wrap>
       <a-tag>基础集合 {{ summary.universe }}</a-tag>
       <a-tag>gross {{ percent(summary.gross) }}</a-tag>
       <a-tag>net {{ percent(summary.net) }}</a-tag>
-      <a-tag color="arcoblue">现金 {{ percent(summary.cash) }}</a-tag>
+      <template v-if="summary.spotNet || summary.swapNet">
+        <a-tag>现货净 {{ percent(summary.spotNet) }}</a-tag>
+        <a-tag>永续净 {{ percent(summary.swapNet) }}</a-tag>
+      </template>
+      <a-tag v-else color="arcoblue">现金 {{ percent(summary.cash) }}</a-tag>
       <a-tag>换手 {{ percent(summary.turnover) }}</a-tag>
     </a-space>
     <a-alert v-for="note in summary.notes" :key="note" type="info" class="note">{{ note }}</a-alert>

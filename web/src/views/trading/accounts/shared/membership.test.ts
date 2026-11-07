@@ -35,12 +35,14 @@ describe("成员资格", () => {
     expect(eligibleAccounts(list, [target, other], target).map(item => item.trading_account_id)).toEqual(["ok"]);
   });
 
-  it("还没有成员的实盘组合：测试网和生产环境的账户都能加入；有成员后只收同环境的", () => {
+  it("还没有成员的实盘组合：只列进入页签所在环境的账户（不知道从哪进来按生产环境）；有成员后只收同环境的", () => {
     const live = (id: string, environment: 1 | 2) =>
       account(id, { execution_mode: 2, live: { environment, credential_secret_id: "s" } });
     const list = [live("testnet", 1), live("prod", 2), account("paper")];
     const empty = logical("empty", { execution_mode: 2 });
-    expect(eligibleAccounts(list, [empty], empty).map(item => item.trading_account_id)).toEqual(["testnet", "prod"]);
+    expect(eligibleAccounts(list, [empty], empty, "testnet").map(item => item.trading_account_id)).toEqual(["testnet"]);
+    expect(eligibleAccounts(list, [empty], empty, "prod").map(item => item.trading_account_id)).toEqual(["prod"]);
+    expect(eligibleAccounts(list, [empty], empty).map(item => item.trading_account_id)).toEqual(["prod"]);
     const withTestnet = logical("t", {
       execution_mode: 2,
       members: [{ trading_account_id: "member", enabled: true, priority: 1 }]

@@ -20,7 +20,8 @@ const tradeClient = axios.create({
  * 后端还没改成中文的错误：按错误常量开头对照成中文，只用于展示，不拿来做逻辑判断
  * （逻辑判断看错误码）。后端错误常量改成中文后，这张表里对应的项就删掉。
  * detailOnly：这个常量只是外层包装（例如 "trade store: invalid record: 修改组合成员前要先暂停组合"），
- * 后面接了具体原因时只显示原因，没有原因时才显示 text。
+ * 后面接的具体原因含中文时只显示原因；原因是英文或没有原因时照常显示“text（原因）”或 text。
+ * 常量后面可以接半角冒号或全角冒号“：”。
  */
 const tradeMessageTexts: readonly [prefix: string, text: string, detailOnly?: boolean][] = [
   ["trade: invalid trading account", "执行账户的参数不合法"],
@@ -39,14 +40,20 @@ const tradeMessageTexts: readonly [prefix: string, text: string, detailOnly?: bo
   ["trade store: invalid record", "数据不合法", true]
 ];
 
-/** 错误常量在消息里的位置：后面必须是结尾或冒号，避免 "trade: invalid order" 命中 "trade: invalid order transition"。 */
+/**
+ * 错误常量在消息里的位置：后面必须是结尾或冒号（半角或全角），避免 "trade: invalid order" 命中 "trade: invalid order transition"
+ * （空白不算：那样就会命中 transition）。
+ */
 function constantAt(raw: string, prefix: string): number {
   for (let at = raw.indexOf(prefix); at >= 0; at = raw.indexOf(prefix, at + 1)) {
     const next = raw.charAt(at + prefix.length);
-    if (next === "" || next === ":") return at;
+    if (next === "" || next === ":" || next === "：") return at;
   }
   return -1;
 }
+
+/** 含汉字：detailOnly 的原因只有是中文时才单独显示。 */
+const HAN = /[一-鿿]/;
 
 /**
  * 交易服务错误的展示文字：已知的英文错误常量换成中文，后端包装进去的具体原因（如 "%w: 具体原因"）接在括号里保留；
@@ -58,11 +65,11 @@ export function tradeErrorText(retInfo: RetInfo): string {
   for (const [prefix, text, detailOnly] of tradeMessageTexts) {
     const at = constantAt(raw, prefix);
     if (at < 0) continue;
-    const before = raw.slice(0, at).replace(/[:\s]+$/, "");
-    const after = raw.slice(at + prefix.length).replace(/^[:\s]+/, "");
+    const before = raw.slice(0, at).replace(/[:：\s]+$/, "");
+    const after = raw.slice(at + prefix.length).replace(/^[:：\s]+/, "");
     const detail = [before, after].filter(Boolean).join("；");
     if (!detail) return text;
-    return detailOnly ? detail : `${text}（${detail}）`;
+    return detailOnly && HAN.test(detail) ? detail : `${text}（${detail}）`;
   }
   return raw;
 }

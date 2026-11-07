@@ -9,7 +9,10 @@ const mocks = vi.hoisted(() => ({
   listEventRules: vi.fn(),
   listAllEventRules: vi.fn(),
   listSubscribableEvents: vi.fn(),
-  getEventExecution: vi.fn()
+  getEventExecution: vi.fn(),
+  deleteEventRule: vi.fn(),
+  listEventExecutions: vi.fn(),
+  cancelEventExecution: vi.fn()
 }));
 vi.mock("@/api/callback-dispatcher", async () => ({
   ...(await vi.importActual<typeof import("@/api/callback-dispatcher")>("@/api/callback-dispatcher")),
@@ -20,6 +23,7 @@ vi.mock("@/api/admin/http", () => ({ reportControlError: vi.fn(), callControl: v
 import RuleDialog from "./rule-dialog.vue";
 import EventRules from "./rules.vue";
 import ExecutionDrawer from "./execution-drawer.vue";
+import EventExecutions from "./executions.vue";
 
 Object.defineProperty(window, "matchMedia", {
   writable: true,
@@ -125,6 +129,86 @@ describe("规则列表", () => {
     wrapper = mount(EventRules, { global: { plugins: [ArcoVue] } });
     await flushPromises();
     expect((wrapper.vm as unknown as { systemRuleEnabled: boolean | null }).systemRuleEnabled).toBe(false);
+  });
+});
+
+describe("规则列表的翻页与刷新", () => {
+  it("删掉最后一页仅有的一行后回到上一页", async () => {
+    const first = Array.from({ length: 10 }, (_, i) => rule({ rule_id: `r${i}` }));
+    const last = rule({ rule_id: "r10" });
+    mocks.listAllEventRules.mockResolvedValue([]);
+    mocks.listSubscribableEvents.mockResolvedValue({ events, availableSystemActions: [] });
+    mocks.listEventRules.mockImplementation(async ({ page }: { page: number }) =>
+      page === 2 ? { rules: [last], page_result: { total: 11 } } : { rules: first, page_result: { total: 11 } }
+    );
+    mocks.deleteEventRule.mockResolvedValue({});
+    wrapper = mount(EventRules, { global: { plugins: [ArcoVue] } });
+    await flushPromises();
+    const vm = wrapper.vm as unknown as {
+      pagination: { current: number };
+      onPageChange(page: number): void;
+      remove(r: EventRule): Promise<void>;
+    };
+    vm.onPageChange(2);
+    await flushPromises();
+    expect(vm.pagination.current).toBe(2);
+    mocks.listEventRules.mockImplementation(async ({ page }: { page: number }) =>
+      page === 2 ? { rules: [], page_result: { total: 10 } } : { rules: first, page_result: { total: 10 } }
+    );
+    await vm.remove(last);
+    await flushPromises();
+    expect(vm.pagination.current).toBe(1);
+    expect((wrapper.vm as unknown as { rows: EventRule[] }).rows).toHaveLength(10);
+  });
+
+  it("迟到的旧页响应被丢弃", async () => {
+    mocks.listAllEventRules.mockResolvedValue([]);
+    mocks.listSubscribableEvents.mockResolvedValue({ events, availableSystemActions: [] });
+    let resolveOld!: (value: unknown) => void;
+    mocks.listEventRules.mockImplementationOnce(() => new Promise(done => (resolveOld = done)));
+    mocks.listEventRules.mockResolvedValue({ rules: [rule({ rule_id: "fresh" })], page_result: { total: 1 } });
+    wrapper = mount(EventRules, { global: { plugins: [ArcoVue] } });
+    await flushPromises();
+    (wrapper.vm as unknown as { refresh(): void }).refresh();
+    await flushPromises();
+    resolveOld({ rules: [rule({ rule_id: "stale" })], page_result: { total: 1 } });
+    await flushPromises();
+    expect((wrapper.vm as unknown as { rows: EventRule[] }).rows.map(item => item.rule_id)).toEqual(["fresh"]);
+  });
+
+  it("系统规则状态读不到时显示无法确认，不当成已启用", async () => {
+    mocks.listEventRules.mockResolvedValue({ rules: [], page_result: { total: 0 } });
+    mocks.listAllEventRules.mockRejectedValue(new Error("读不到"));
+    mocks.listSubscribableEvents.mockResolvedValue({ events, availableSystemActions: ["SYSTEM_ACTION_SELL_DELISTED_HOLDINGS"] });
+    wrapper = mount(EventRules, { global: { plugins: [ArcoVue] }, attachTo: document.body });
+    await flushPromises();
+    (wrapper.vm as unknown as { openDelist(): void }).openDelist();
+    await flushPromises();
+    expect(document.body.textContent).toContain("无法确认系统规则");
+    expect(document.body.textContent).not.toContain("登记后，系统会立即禁止买入这个标的");
+  });
+});
+
+describe("执行记录", () => {
+  it("取消失败后也重读列表", async () => {
+    const execution = {
+      execution_id: "x1",
+      rule_name: "规则",
+      event_name: "event.collector.instrument.delist_scheduled",
+      status: "EXECUTION_STATUS_RUNNING",
+      action_type: "ACTION_TYPE_SYSTEM",
+      cleanup_pending: false
+    };
+    mocks.listEventExecutions.mockResolvedValue({ executions: [execution], page_result: { total: 1 } });
+    mocks.listAllEventRules.mockResolvedValue([]);
+    mocks.listSubscribableEvents.mockResolvedValue({ events, availableSystemActions: [] });
+    mocks.cancelEventExecution.mockRejectedValue(new Error("取消失败"));
+    wrapper = mount(EventExecutions, { global: { plugins: [ArcoVue] } });
+    await flushPromises();
+    const calls = mocks.listEventExecutions.mock.calls.length;
+    await (wrapper.vm as unknown as { act(kind: string, item: unknown): Promise<void> }).act("cancel", execution);
+    await flushPromises();
+    expect(mocks.listEventExecutions.mock.calls.length).toBe(calls + 1);
   });
 });
 

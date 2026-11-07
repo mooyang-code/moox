@@ -29,7 +29,7 @@
       <a-form-item v-if="editing" label="启用" extra="停用后策略不再用它下单">
         <a-switch v-model="form.enabled" />
       </a-form-item>
-      <a-form-item v-else extra="只有出现在策略目标里的标的会被调整，其余资产不动">
+      <a-form-item v-if="!editing || adoptionNeeded" extra="只有出现在策略目标里的标的会被调整，其余资产不动">
         <a-checkbox v-model="form.adopt_existing_exposure">接管账户里已有的持仓</a-checkbox>
       </a-form-item>
     </a-form>
@@ -39,7 +39,7 @@
 <script setup lang="ts">
 import { reactive, ref } from "vue";
 import { Message } from "@arco-design/web-vue";
-import { addLogicalAccountMember, exchangeLabels } from "@/api/trade";
+import { addLogicalAccountMember, exchangeLabels, isTradeAdoptionRequired } from "@/api/trade";
 import type { LogicalAccount, TradingAccount } from "@/api/trade";
 import { createSubmitScope } from "@/utils/submit-scope";
 import { marketsText } from "../shared/markets";
@@ -52,6 +52,8 @@ const visible = ref(false);
 const editing = ref(false);
 const editingName = ref("");
 const error = ref("");
+// 重新启用已停用的成员时，账户上已有持仓或挂单，后端要求确认接管（TRADE_ADOPTION_REQUIRED）：这时才在编辑里显示“接管”勾选。
+const adoptionNeeded = ref(false);
 const form = reactive({ trading_account_id: "", enabled: true, priority: 1, adopt_existing_exposure: false });
 // 打开和关闭都使进行中的保存失效：迟到的响应不能关闭用户重新打开的对话框。
 const scope = createSubmitScope();
@@ -66,6 +68,7 @@ function openAdd() {
   });
   editing.value = false;
   error.value = "";
+  adoptionNeeded.value = false;
   visible.value = true;
 }
 
@@ -75,6 +78,7 @@ function openEdit(member: { trading_account_id: string; enabled: boolean; priori
   editing.value = true;
   editingName.value = name;
   error.value = "";
+  adoptionNeeded.value = false;
   visible.value = true;
 }
 
@@ -89,7 +93,15 @@ async function save() {
   try {
     await addLogicalAccountMember({ logical_account_id: logicalId, ...form });
   } catch (cause) {
-    if (submission.isCurrent()) error.value = cause instanceof Error ? cause.message : "请求失败，请稍后重试";
+    if (!submission.isCurrent()) return false;
+    if (isTradeAdoptionRequired(cause) && !form.adopt_existing_exposure) {
+      adoptionNeeded.value = true;
+      error.value = editing.value
+        ? "这个账户上已有持仓或挂单，重新启用要确认接管：勾选下方“接管账户里已有的持仓”后再保存。"
+        : "这个账户上已有持仓或挂单：勾选下方“接管账户里已有的持仓”后再保存。";
+      return false;
+    }
+    error.value = cause instanceof Error ? cause.message : "请求失败，请稍后重试";
     return false;
   }
   if (!submission.isCurrent() || props.logical.logical_account_id !== logicalId) return false;

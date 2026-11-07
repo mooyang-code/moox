@@ -7,7 +7,13 @@ import type {
   ScopeFilter,
   SubscribableEvent
 } from "@/api/callback-dispatcher";
-import type { InstrumentHolder, SkippedAccount } from "@/api/callback-dispatcher/delist";
+import type {
+  DelistExchange,
+  DelistMarket,
+  InstrumentHolder,
+  RegisterDelistNoticeReq,
+  SkippedAccount
+} from "@/api/callback-dispatcher/delist";
 import { NETWORK_ERROR_MESSAGE, isNetworkFailure } from "@/api/network-error";
 
 export type StatusTone = "wait" | "run" | "ok" | "fail" | "cancel";
@@ -371,6 +377,79 @@ export function delistTimeError(delistAtMs: number | null): string {
   if (!delistAtMs || !Number.isFinite(delistAtMs)) return "请选择下架时间";
   return "";
 }
+
+/** 表单里填的值（交易所代码、下架时间都还没规整）。 */
+export interface DelistFormValues {
+  exchange: DelistExchange;
+  market: DelistMarket;
+  exchange_symbol: string;
+  delist_at: string | number;
+  paper_only: boolean;
+}
+
+/** 点“下一步”时存下的登记参数：确认页的标题、提示和最终提交都只用它，预览之后再改表单也不会让两边对不上。 */
+export interface DelistSnapshot extends RegisterDelistNoticeReq {
+  /** 预览时下架时间是否已经过去。 */
+  past: boolean;
+}
+
+/** 把表单规整成登记参数（代码去空白、转大写，时间换成毫秒）；缺项时返回提示文字。 */
+export function delistSnapshot(form: DelistFormValues, nowMs: number): { snapshot: DelistSnapshot } | { error: string } {
+  const symbol = form.exchange_symbol.trim().toUpperCase();
+  if (!symbol) return { error: "请填写交易所代码" };
+  const delistAtMs = pickerValueToMs(form.delist_at);
+  const timeError = delistTimeError(delistAtMs);
+  if (timeError) return { error: timeError };
+  return {
+    snapshot: {
+      exchange: form.exchange,
+      market: form.market,
+      exchange_symbol: symbol,
+      delist_at_ms: delistAtMs,
+      paper_only: form.paper_only,
+      past: isPastDelistTime(delistAtMs, nowMs)
+    }
+  };
+}
+
+/** 只认最后一次发出的请求：每次发请求前取一个序号，响应回来时序号不是最新的就丢掉（对话框关掉重开也会换号）。 */
+export function createLatestGuard() {
+  let current = 0;
+  return {
+    next: () => ++current,
+    isLatest: (ticket: number) => ticket === current,
+    reset: () => {
+      current++;
+    }
+  };
+}
+
+/** “仅模拟盘”的说明：演练也会写全局的下架名单。 */
+export const PAPER_ONLY_NOTE =
+  "演练也会全局禁止买入这个标的（实盘组合也不能买），直到这条演练记录结束；只平模拟盘组合，实盘组合的持仓不受影响。";
+
+/** 下架时间已经过去时的说明：仍会写下架名单；真实下架结束后名单保留，演练结束后解除。 */
+export function pastTimeNote(paperOnly: boolean): string {
+  const tail = paperOnly ? "这条演练记录结束后解除。" : "这条真实下架记录结束后名单保留、不会解除。";
+  return `这个时间已经过去，不会下单，只做核对；仍会写下架名单（禁止买入），${tail}`;
+}
+
+/** 下架时间输入框下的说明。 */
+export const DELIST_TIME_HINT =
+  "填你本地的时间。填已经过去的时间时不会下单，只做核对；仍会写下架名单（禁止买入），真实下架（不打开“仅模拟盘”）结束后名单保留、不会解除。";
+
+/**
+ * 不在第一页、本页却读回来为空（删掉、取消了最后一页仅有的一行，或别处删了数据）：应该跳到的页码（现在的最后一页）；不用跳时返回 null。
+ */
+export function pageAfterShrink(current: number, pageSize: number, total: number, rowCount: number): number | null {
+  if (rowCount > 0 || current <= 1) return null;
+  const last = Math.max(1, Math.ceil(total / pageSize));
+  return last < current ? last : null;
+}
+
+/** 系统规则是否启用读不到时的说明：不能当成已启用。 */
+export const SYSTEM_RULE_UNKNOWN_TEXT =
+  "无法确认系统规则“标的即将下架时，卖出策略持有的这个币”是否启用（没有读到规则列表），登记后会不会被处理以执行记录为准。";
 
 /** 日期选择器按时间戳取值（value-format="timestamp"）；兼容字符串，没选时是 0。 */
 export function pickerValueToMs(value: string | number | null | undefined): number {

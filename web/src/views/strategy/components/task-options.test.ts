@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { FactorMember, FactorTask, FactorTaskInfo } from "@/api/factor/types";
-import { availableTasks, isUnifiedTask, taskColumns } from "./task-options";
+import { availableTasks, isUnifiedTask, taskColumns, varMemberBlockReason } from "./task-options";
 
 const task = (patch: Partial<FactorTask> = {}): FactorTask => ({
   task_id: "ftask_a",
@@ -86,5 +86,14 @@ describe("isUnifiedTask", () => {
     expect(unified.sourceDatasetId).toBe("ds_uni");
     expect(isUnifiedTask(unified, unifiedIds)).toBe(true);
     expect(isUnifiedTask(split, unifiedIds)).toBe(false);
+  });
+});
+
+describe("varMemberBlockReason", () => {
+  it("策略池、统一数据集、双市场不能写 factor_params，带可变成员的任务不能用；单市场可以", () => {
+    expect(varMemberBlockReason({ pool: false, unified: false, marketCount: 1 })).toBe("");
+    expect(varMemberBlockReason({ pool: true, unified: false, marketCount: 1 })).toContain("策略池");
+    expect(varMemberBlockReason({ pool: false, unified: true, marketCount: 2 })).toContain("统一数据集");
+    expect(varMemberBlockReason({ pool: false, unified: false, marketCount: 2 })).toContain("双市场");
   });
 });

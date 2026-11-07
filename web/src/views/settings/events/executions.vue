@@ -124,7 +124,8 @@ import {
   executionStatusText,
   executionStatusTone,
   formatDuration,
-  formatMs
+  formatMs,
+  pageAfterShrink
 } from "./event-center-utils";
 
 defineOptions({ name: "EventCenterExecutions" });
@@ -141,7 +142,10 @@ const refreshToken = ref(0);
 // 正在做的操作（“动作/记录编号”）：做完之前其余操作按钮都不能点，防止连点重复提交。
 const acting = ref("");
 
+// 列表请求的序号：换筛选、翻页、操作后重读等连续请求只认最后一次，迟到的旧结果不会覆盖新的。
+let loadSeq = 0;
 async function load() {
+  const seq = ++loadSeq;
   loading.value = true;
   try {
     const rsp = await listEventExecutions({
@@ -149,12 +153,21 @@ async function load() {
       status: filters.status || undefined,
       page: { page: pagination.current, size: pagination.pageSize }
     });
+    if (seq !== loadSeq) return;
+    const total = rsp.page_result?.total ?? rsp.executions.length;
+    // 按状态筛选时，取消、确认可能让最后一页仅有的一行移出筛选结果：回到现在的最后一页再读一次。
+    const page = pageAfterShrink(pagination.current, pagination.pageSize, total, rsp.executions.length);
+    if (page !== null) {
+      pagination.current = page;
+      void load();
+      return;
+    }
     rows.value = rsp.executions;
-    pagination.total = rsp.page_result?.total ?? rsp.executions.length;
+    pagination.total = total;
   } catch (error) {
-    reportControlError(error);
+    if (seq === loadSeq) reportControlError(error);
   } finally {
-    loading.value = false;
+    if (seq === loadSeq) loading.value = false;
   }
 }
 
@@ -200,13 +213,13 @@ async function act(kind: "retry" | "cancel" | "ack", item: EventExecution) {
     Message.success(
       kind === "retry" ? "已重新开始执行" : kind === "cancel" ? (item.cleanup_pending ? "善后已完成" : "已取消") : "已确认"
     );
-    await load();
   } catch (error) {
     reportControlError(error);
   } finally {
     acting.value = "";
-    // 不管成败，抽屉里的详情都按最新状态重读（取消可能已生效而善后失败）。
+    // 不管成败，列表和抽屉里的详情都按最新状态重读：取消可能已生效而善后失败，失败时列表上的状态也已经变了。
     refreshToken.value += 1;
+    void load();
   }
 }
 
@@ -217,8 +230,13 @@ function refresh() {
 }
 
 onMounted(() => void load());
-// 页签切回来时（keep-alive）规则可能已经增删，重读筛选项；首次显示时也会调用。
-onActivated(() => void loadOptions());
+// 页签切回来时（keep-alive）规则可能已经增删，重读筛选项；执行记录在别处也会推进，之后的每次切回都重读列表（首次显示 onMounted 已经读过）。
+let activatedOnce = false;
+onActivated(() => {
+  void loadOptions();
+  if (activatedOnce) void load();
+  activatedOnce = true;
+});
 
 defineExpose({ load, refresh });
 </script>

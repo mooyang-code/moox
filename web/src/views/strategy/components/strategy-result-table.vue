@@ -16,7 +16,7 @@
     :data="results"
     :loading="loading"
     :pagination="pagination"
-    :scroll="{ x: 1350 }"
+    :scroll="{ x: 1440 }"
     @page-change="changePage"
   >
     <template #columns>
@@ -46,9 +46,9 @@
           record.status === "ok" ? percent(parseSummary(record.summary_json).gross) : "-"
         }}</template></a-table-column
       >
-      <a-table-column title="现金" :width="92"
+      <a-table-column title="现金 / 分市场净敞口" :width="180"
         ><template #cell="{ record }">{{
-          record.status === "ok" ? percent(parseSummary(record.summary_json).cash) : "-"
+          record.status === "ok" ? cashOrNetText(parseSummary(record.summary_json)) : "-"
         }}</template></a-table-column
       >
       <a-table-column title="产出延迟" :width="92"
@@ -111,6 +111,7 @@ import ResultOverview from "@/views/strategy/components/strategy-result-overview
 import { marketLabel } from "@/views/strategy/market-mode";
 import {
   buildResultInsights,
+  cashOrNetText,
   formatDelay,
   formatStrategyTime,
   parseSummary,

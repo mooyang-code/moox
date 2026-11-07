@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildResultInsights,
   buildResultOverview,
+  cashOrNetText,
   deriveTargetState,
   formatDelay,
   itemReasonLabel,
@@ -106,6 +107,30 @@ describe("result insights", () => {
     expect(insights.b).toMatchObject({ comparable: true, added: [], removed: [] });
     expect(insights.c).toMatchObject({ comparable: true, added: ["C"], removed: ["B"] });
     expect(insights.c.delayMs).toBe(2000);
+  });
+
+  it("按（标的、市场）比较目标变化：同一个币从现货换到永续算一进一出，多个市场时带上市场名", () => {
+    const mixed = (id: string, minute: number, targets: [string, string][]) => ({
+      ...ok(id, minute, []),
+      targets: targets.map(([instrument_id, market]) => ({ instrument_id, market, target_weight: "0.2" }))
+    });
+    const insights = buildResultInsights([
+      mixed("a", 1, [
+        ["BTC", "spot"],
+        ["ETH", "swap"]
+      ]),
+      mixed("b", 2, [
+        ["BTC", "swap"],
+        ["ETH", "swap"]
+      ])
+    ]);
+    expect(insights.b).toMatchObject({ comparable: true, added: ["BTC（永续）"], removed: ["BTC（现货）"] });
+  });
+
+  it("混合市场显示分市场净敞口，其余显示现金", () => {
+    expect(cashOrNetText(parseSummary('{"spot_net":"0.3","swap_net":"-0.2"}'))).toBe("现货净 30.00% · 永续净 -20.00%");
+    expect(cashOrNetText(parseSummary('{"cash":"0.1"}'))).toBe("10.00%");
+    expect(skipReasonLabel("catchup")).toBe("恢复追赶中，只记因子指纹，不求值（catchup）");
   });
 
   it("never compares results across sessions", () => {

@@ -95,6 +95,16 @@ describe("Trade response errors", () => {
     expect(text("trade store: invalid record")).toBe("数据不合法");
   });
 
+  it("“记录不合法”后面接的是英文原因时照常显示“数据不合法（原因）”；全角冒号同样认得", () => {
+    const text = (msg: string) => new TradeResponseError({ ret_info: { code: 1, msg } }).message;
+    expect(text("trade store: invalid record: missing logical account")).toBe("数据不合法（missing logical account）");
+    expect(text("trade store: invalid record：修改组合成员前要先暂停组合")).toBe("修改组合成员前要先暂停组合");
+    expect(text("trade store: invalid record：bad state")).toBe("数据不合法（bad state）");
+    expect(text("trade: invalid order：数量必须大于 0")).toBe("订单参数不合法（数量必须大于 0）");
+    expect(text("trade store: conflict：")).toBe("数据已经被修改，刷新后再试");
+    expect(text("trade: invalid order transition")).toBe("trade: invalid order transition");
+  });
+
   it("does not invent acceptance when the response envelope is missing", async () => {
     client.post.mockResolvedValue({ data: {} });
     await expect(callTrade("console", "SubmitOrder", {})).rejects.toThrow("缺少 ret_info");

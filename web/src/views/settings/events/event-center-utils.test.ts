@@ -9,6 +9,12 @@ import {
   cancelLabel,
   canRetry,
   confirmCheckboxText,
+  createLatestGuard,
+  pageAfterShrink,
+  delistSnapshot,
+  pastTimeNote,
+  DELIST_TIME_HINT,
+  PAPER_ONLY_NOTE,
   delistTimeError,
   describeScope,
   eventTitle,
@@ -239,6 +245,55 @@ describe("手工登记下架", () => {
     expect(delistTimeError(1_700_000_000_000)).toBe("");
     expect(isPastDelistTime(1000, 2000)).toBe(true);
     expect(isPastDelistTime(3000, 2000)).toBe(false);
+  });
+
+  it("预览时存下规整过的登记参数，缺项时给出提示", () => {
+    const form = {
+      exchange: "binance" as const,
+      market: "SPOT" as const,
+      exchange_symbol: " fooUsdt ",
+      delist_at: 5000,
+      paper_only: true
+    };
+    expect(delistSnapshot(form, 1000)).toEqual({
+      snapshot: {
+        exchange: "binance",
+        market: "SPOT",
+        exchange_symbol: "FOOUSDT",
+        delist_at_ms: 5000,
+        paper_only: true,
+        past: false
+      }
+    });
+    expect(delistSnapshot({ ...form, delist_at: 500 }, 1000)).toMatchObject({ snapshot: { past: true } });
+    expect(delistSnapshot({ ...form, exchange_symbol: " " }, 1000)).toEqual({ error: "请填写交易所代码" });
+    expect(delistSnapshot({ ...form, delist_at: "" }, 1000)).toEqual({ error: "请选择下架时间" });
+  });
+
+  it("不在第一页、本页读回来为空时跳到现在的最后一页", () => {
+    expect(pageAfterShrink(2, 10, 10, 0)).toBe(1);
+    expect(pageAfterShrink(5, 10, 21, 0)).toBe(3);
+    expect(pageAfterShrink(2, 10, 11, 1)).toBeNull();
+    expect(pageAfterShrink(1, 10, 0, 0)).toBeNull();
+    expect(pageAfterShrink(2, 10, 0, 0)).toBe(1);
+  });
+
+  it("只认最后一次请求：换号后旧序号作废", () => {
+    const guard = createLatestGuard();
+    const first = guard.next();
+    const second = guard.next();
+    expect(guard.isLatest(first)).toBe(false);
+    expect(guard.isLatest(second)).toBe(true);
+    guard.reset();
+    expect(guard.isLatest(second)).toBe(false);
+  });
+
+  it("过去时间的说明区分真实下架与演练", () => {
+    expect(pastTimeNote(false)).toContain("仍会写下架名单");
+    expect(pastTimeNote(false)).toContain("名单保留、不会解除");
+    expect(pastTimeNote(true)).toContain("演练记录结束后解除");
+    expect(DELIST_TIME_HINT).toContain("仍会写下架名单");
+    expect(PAPER_ONLY_NOTE).toContain("直到这条演练记录结束");
   });
 
   it("日期选择器按时间戳取值，兼容字符串，没选时是 0", () => {
