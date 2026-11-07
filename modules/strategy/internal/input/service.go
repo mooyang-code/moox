@@ -127,7 +127,7 @@ func TaskIDs(tasks map[string]string) []string {
 // CheckResolvedMarkets 核对解析结果里的市场与实例登记的一致（解析之后的最后一道核对，不查 Storage）。
 func CheckResolvedMarkets(resolved Resolved, tasks map[string]string) error {
 	if len(resolved.Tasks) != len(tasks) {
-		return fmt.Errorf("实例登记了 %d 个因子任务，解析出 %d 个", len(tasks), len(resolved.Tasks))
+		return fmt.Errorf("登记了 %d 个因子任务，按策略的市场模式解析出 %d 个", len(tasks), len(resolved.Tasks))
 	}
 	for market, taskID := range tasks {
 		if got := resolved.Tasks[market].FactorTaskID; got != taskID {

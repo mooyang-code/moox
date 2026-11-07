@@ -253,7 +253,7 @@ func (r Resolved) ViewIDs() []string {
 	return ids
 }
 
-// SpotOnly 报告策略只输出现货或股票：研究回放目前只支持这种策略。
+// SpotOnly 报告策略只输出现货或股票：闭环回放目前只支持这种策略（研究回放已支持永续与混合市场）。
 func (r Resolved) SpotOnly() bool { return r.Market.Single() && dsl.SpotLike(r.Market.Select) }
 
 // MarketOfView 返回 View 所属的市场。

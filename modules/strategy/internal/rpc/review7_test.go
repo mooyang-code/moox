@@ -71,3 +71,37 @@ func TestStartReplayRecordsCalendar(t *testing.T) {
 		t.Fatalf("读取回放也应带上日历：%q", got.GetReplay().GetCalendar())
 	}
 }
+
+// 从实例发起的研究回放：省略 factor_tasks 时读实例关联的任务；给了但与实例不一致被拒绝；绑定两个任务的实例也能回放。
+func TestInstanceReplayUsesInstanceTasks(t *testing.T) {
+	h := newHarness(t)
+	h.createStrategy("s1", demoDSL)
+	h.createInstance("i1", "s1", "ftask_i1", "", true)
+	window := &strategypb.StartReplayReq{InstanceId: "i1", StartTime: "2026-09-02", EndTime: "2026-09-03"}
+
+	omitted, _ := h.service.StartReplay(h.ctx, window)
+	requireOK(t, int32(omitted.GetRetInfo().GetCode()), omitted.GetRetInfo().GetMsg())
+	if task := omitted.GetReplay().GetTasks()["spot"]; task.GetFactorTaskId() != "ftask_i1" || len(omitted.GetReplay().GetTasks()) != 1 {
+		t.Fatalf("省略 factor_tasks 应读实例关联的任务：%+v", omitted.GetReplay().GetTasks())
+	}
+
+	mismatch := &strategypb.StartReplayReq{InstanceId: "i1", StartTime: "2026-09-02", EndTime: "2026-09-03", FactorTasks: map[string]string{"spot": "ftask_a"}}
+	rejected, _ := h.service.StartReplay(h.ctx, mismatch)
+	requireFail(t, int32(rejected.GetRetInfo().GetCode()), rejected.GetRetInfo().GetMsg(), "必须读取实例关联的因子任务")
+
+	same := &strategypb.StartReplayReq{InstanceId: "i1", StartTime: "2026-09-02", EndTime: "2026-09-03", FactorTasks: map[string]string{"spot": "ftask_i1"}}
+	accepted, _ := h.service.StartReplay(h.ctx, same)
+	requireOK(t, int32(accepted.GetRetInfo().GetCode()), accepted.GetRetInfo().GetMsg())
+
+	// 绑定现货与永续两个任务的实例：研究回放按两个任务读取（不再拒绝多任务实例）。
+	dual, err := h.service.CreateStrategyInstance(h.ctx, &strategypb.CreateStrategyInstanceReq{Instance: &strategypb.StrategyInstance{InstanceId: "i2", StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_d1", "swap": "ftask_d2swap"}, Enabled: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireOK(t, int32(dual.GetRetInfo().GetCode()), dual.GetRetInfo().GetMsg())
+	both, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{InstanceId: "i2", StartTime: "2026-09-02", EndTime: "2026-09-03", SwapFeeBps: 5})
+	requireOK(t, int32(both.GetRetInfo().GetCode()), both.GetRetInfo().GetMsg())
+	if tasks := both.GetReplay().GetTasks(); len(tasks) != 2 || tasks["spot"].GetFactorTaskId() != "ftask_d1" || tasks["swap"].GetFactorTaskId() != "ftask_d2swap" || both.GetReplay().GetInstanceId() != "i2" {
+		t.Fatalf("双任务实例的回放应按两个任务读取：%+v", both.GetReplay())
+	}
+}
