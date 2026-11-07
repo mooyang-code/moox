@@ -87,8 +87,10 @@ type FlattenAccountResult struct {
 	// decided 为真时由 retry 决定动作是否继续；否则按 cause 是否只有业务错误判断。
 	decided bool
 	retry   bool
-	// pacingUntil 是下架清仓因两笔 IOC 间隔未到而要等到的时间（零值表示没有）。
+	// pacingUntil 是下架清仓下一笔 IOC 最早能下的时间（零值表示没有）：一笔 IOC 发出后记成现在加间隔，间隔未到被挡住时记成间隔结束。
 	pacingUntil time.Time
+	// pacedOnly 为真表示这一轮只被“间隔未到”挡住、什么都没做。
+	pacedOnly bool
 	// quotes 是本轮现货清仓拿到的报价（按资产），收尾判断零头时复用，不再逐个请求。
 	quotes map[string]shared.Decimal
 }
@@ -378,6 +380,11 @@ func (s *Service) FlattenLogicalAccount(
 		accountResult, wasExecutable := s.flattenAccount(
 			ctx, command, scope, member.TradingAccountID, deadline,
 		)
+		// 本账户的预算到点时，正在做的数据库或接口调用会带着原样的超时错误回来：那是预算用完，不是共享的故障，
+		// 记成本账户的预算错误（可重试），不能当作共享错误让整次调用失败。
+		if accountResult.cause != nil && errors.Is(accountResult.cause, context.DeadlineExceeded) && !time.Now().Before(deadline) {
+			accountResult.cause = &orderapp.AccountExecutionError{TradingAccountID: member.TradingAccountID, Operation: "flatten_budget", Err: accountResult.cause}
+		}
 		if wasExecutable {
 			executable++
 		}
@@ -649,13 +656,15 @@ func (s *Service) flattenAccount(
 			result.addError(&orderapp.AccountExecutionError{TradingAccountID: tradingAccountID, Operation: "flatten_budget", Err: context.DeadlineExceeded})
 			break
 		}
-		if attempt > 0 && s.stopIfUnblocked(ctx, command, scope, tradingAccountID, &result) {
-			return result, true
+		// 剩下的预算连发一笔单的余量都不够：这一轮到此为止，下一次调用接着来（不空转同步）。
+		if attempt > 0 && time.Until(deadline) < flattenNewOrderReserve {
+			break
 		}
-		// 上一轮只被“IOC 间隔未到”挡住：直接睡到间隔结束再往下做，中间不同步；等不到（超过本账户的预算）就结束这一轮，下一次调用接着来。
+		// 上一笔 IOC 刚结束、两笔之间的间隔没到：直接睡到间隔结束再往下做，中间不同步。睡醒后还要等一个轮间等待、留一个发单余量，
+		// 这些加起来超过本账户的预算就不睡了，结束这一轮。必须先睡再查名单：睡眠期间解除禁止，睡醒后不能再下一笔。
 		if until := result.pacingUntil; attempt > 0 && !until.IsZero() {
 			result.pacingUntil = time.Time{}
-			if until.After(deadline) {
+			if until.Add(s.retryWait()).Add(flattenNewOrderReserve).After(deadline) {
 				break
 			}
 			if err := sleepUntil(ctx, until); err != nil {
@@ -663,6 +672,9 @@ func (s *Service) flattenAccount(
 				result.cause = errors.Join(result.cause, &orderapp.AccountExecutionError{TradingAccountID: tradingAccountID, Operation: "flatten_wait", Err: err})
 				break
 			}
+		}
+		if attempt > 0 && s.stopIfUnblocked(ctx, command, scope, tradingAccountID, &result) {
+			return result, true
 		}
 		if attempt > 0 {
 			if err := s.waitFlattenRetry(ctx); err != nil {
@@ -714,6 +726,7 @@ func (s *Service) flattenAccount(
 		result.cause = nil
 		result.Dust = nil
 		result.quotes = nil
+		result.pacedOnly = false
 		reasons := make(map[string]flattenReason)
 		switch {
 		case len(account.Markets) == 0:
@@ -733,9 +746,12 @@ func (s *Service) flattenAccount(
 			result.addError(&orderapp.AccountExecutionError{TradingAccountID: tradingAccountID, Operation: "flatten_deadline", Err: ctx.Err()})
 			break
 		}
-		if err := s.syncLight(ctx, tradingAccountID); err != nil {
-			result.Error = joinError(result.Error, err.Error())
-			result.cause = errors.Join(result.cause, err)
+		// 只被“IOC 间隔未到”挡住的这一轮什么都没做，不做收尾同步（下一轮睡醒后再同步）。
+		if !result.pacedOnly {
+			if err := s.syncLight(ctx, tradingAccountID); err != nil {
+				result.Error = joinError(result.Error, err.Error())
+				result.cause = errors.Join(result.cause, err)
+			}
 		}
 		result.Remaining = s.remainingForAccount(
 			ctx, command.SpaceID, tradingAccountID, reasons, &result, scope,
@@ -1253,6 +1269,14 @@ func (s *Service) placeOrContinueFlattenChildWithQuote(
 		result.ChildOrderIDs, string(placed.ID),
 	)
 	_, err = s.Orders.Submit(ctx, command.SpaceID, string(placed.ID))
+	// IOC 单发出后马上就结束了：下一笔最早时间直接记成现在加间隔，下一轮先睡再同步，不用再多跑一轮被间隔挡住的空轮。
+	if err == nil && delist {
+		if interval := s.delistAttemptInterval(); interval > 0 {
+			if until := time.Now().Add(interval); until.After(result.pacingUntil) {
+				result.pacingUntil = until
+			}
+		}
+	}
 	return err
 }
 
@@ -1446,6 +1470,7 @@ func (r *FlattenAccountResult) notePacing(err error) bool {
 	if pacing.until.After(r.pacingUntil) {
 		r.pacingUntil = pacing.until
 	}
+	r.pacedOnly = true
 	return true
 }
 
@@ -1548,6 +1573,17 @@ func (s *Service) flattenAttempts() int {
 		return s.FlattenMaxAttempts
 	}
 	return int(^uint(0) >> 1)
+}
+
+// retryWait 是清仓一轮和下一轮之间的等待时间（负数表示不等，零用默认 200 毫秒）。
+func (s *Service) retryWait() time.Duration {
+	switch {
+	case s.FlattenRetryInterval < 0:
+		return 0
+	case s.FlattenRetryInterval == 0:
+		return 200 * time.Millisecond
+	}
+	return s.FlattenRetryInterval
 }
 
 func (s *Service) waitFlattenRetry(ctx context.Context) error {
