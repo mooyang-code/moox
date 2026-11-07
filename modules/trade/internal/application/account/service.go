@@ -10,6 +10,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 )
 
 var (
@@ -53,6 +54,7 @@ type SecretSource interface {
 // SymbolConfigs 记录会话里已经在交易所设置过的标的。
 type SymbolConfigs interface {
 	ForgetSymbolConfig(tradingAccountID string, symbol exchange.SymbolKey)
+	ForgetAllSymbolConfigs(tradingAccountID string)
 }
 
 type SessionState interface {
@@ -182,7 +184,7 @@ func (s *Service) rejectDuplicateCredential(ctx context.Context, value tradingac
 }
 
 // SetLeverage 设置杠杆。leverageKey 是内部标的 ID（例如 BTC-USDT-SWAP）或账户默认杠杆的键 "*"；
-// exchangeSymbol 是该标的的（市场，交易所代码）（默认杠杆时代码传 "*"），用来让会话下次开仓前重新设置。
+// exchangeSymbol 是该标的的（市场，交易所代码），用来让会话下次开仓前重新设置；默认杠杆影响全部标的，必须传零值键。
 func (s *Service) SetLeverage(
 	ctx context.Context,
 	tradingAccountID string,
@@ -193,9 +195,11 @@ func (s *Service) SetLeverage(
 	if s == nil || s.Store == nil {
 		return ErrServiceNotConfigured
 	}
+	isDefault := leverageKey == store.DefaultLeverageKey
 	if strings.TrimSpace(tradingAccountID) == "" ||
 		strings.TrimSpace(leverageKey) == "" ||
-		strings.TrimSpace(exchangeSymbol.Symbol) == "" ||
+		(isDefault && !exchangeSymbol.IsZero()) ||
+		(!isDefault && !exchangeSymbol.Valid()) ||
 		leverage.Cmp(shared.Zero()) <= 0 {
 		return tradingaccount.ErrInvalidAccount
 	}
@@ -214,7 +218,11 @@ func (s *Service) SetLeverage(
 	}
 	// 不重启会话，只让该标的下次开仓前重新设置。
 	if s.SymbolConfigs != nil {
-		s.SymbolConfigs.ForgetSymbolConfig(tradingAccountID, exchangeSymbol)
+		if isDefault {
+			s.SymbolConfigs.ForgetAllSymbolConfigs(tradingAccountID)
+		} else {
+			s.SymbolConfigs.ForgetSymbolConfig(tradingAccountID, exchangeSymbol)
+		}
 	}
 	return nil
 }

@@ -53,6 +53,14 @@ func classifyRateLimit(status int, _ []byte) exchange.ErrorKind {
 
 func (a *Adapter) Exchange() exchange.Exchange { return exchange.ExchangeOKX }
 
+// ownMarket 校验标的键属于本适配器服务的市场：传错市场直接报错，不会悄悄按本市场处理。
+func (a *Adapter) ownMarket(key exchange.SymbolKey) error {
+	if key.Market != a.config.Market() {
+		return &exchange.Error{Kind: exchange.ErrorRejected, Err: fmt.Errorf("标的键 %s 不属于本适配器服务的市场 %s", key, a.config.Market())}
+	}
+	return nil
+}
+
 // key 返回本适配器所服务市场下的标的键。
 func (a *Adapter) key(symbol string) exchange.SymbolKey {
 	return exchange.SymbolKey{Market: a.config.Market(), Symbol: symbol}
@@ -279,6 +287,9 @@ func (a *Adapter) GetReferencePrice(
 	ctx context.Context,
 	key exchange.SymbolKey,
 ) (exchange.ReferencePrice, error) {
+	if err := a.ownMarket(key); err != nil {
+		return exchange.ReferencePrice{}, err
+	}
 	symbol := key.Symbol
 	if price, at, ok := a.prices.Get(ctx, a.key(symbol), a.allPrices); ok {
 		return exchange.ReferencePrice{Price: price, UpdatedAt: at}, nil
@@ -338,6 +349,9 @@ func parseQuote(raw string) shared.Decimal {
 }
 
 func (a *Adapter) GetQuote(ctx context.Context, key exchange.SymbolKey) (execution.MarketQuote, error) {
+	if err := a.ownMarket(key); err != nil {
+		return execution.MarketQuote{}, err
+	}
 	data, err := a.request(ctx, http.MethodGet, "/api/v5/market/ticker", url.Values{"instId": []string{key.Symbol}}, nil, false)
 	if err != nil {
 		return execution.MarketQuote{}, err
@@ -650,6 +664,9 @@ func (a *Adapter) GetOrder(
 	key exchange.SymbolKey,
 	clientOrderID string,
 ) (exchange.Order, error) {
+	if err := a.ownMarket(key); err != nil {
+		return exchange.Order{}, err
+	}
 	symbolValue := key.Symbol
 	data, err := a.request(ctx, http.MethodGet, "/api/v5/trade/order", url.Values{
 		"instId":  []string{symbolValue},
@@ -672,6 +689,9 @@ func (a *Adapter) GetOrderByExchangeID(
 	key exchange.SymbolKey,
 	exchangeOrderID string,
 ) (exchange.Order, error) {
+	if err := a.ownMarket(key); err != nil {
+		return exchange.Order{}, err
+	}
 	symbol := key.Symbol
 	data, err := a.request(ctx, http.MethodGet, "/api/v5/trade/order", url.Values{
 		"instId": []string{symbol},
@@ -757,6 +777,9 @@ func (a *Adapter) CancelOrder(
 	key exchange.SymbolKey,
 	clientOrderID string,
 ) (exchange.Order, error) {
+	if err := a.ownMarket(key); err != nil {
+		return exchange.Order{}, err
+	}
 	symbolValue := key.Symbol
 	data, err := a.request(ctx, http.MethodPost, "/api/v5/trade/cancel-order", nil, map[string]string{
 		"instId": symbolValue, "clOrdId": clientOrderID,
@@ -802,6 +825,9 @@ func (a *Adapter) ListRecentFills(
 	key exchange.SymbolKey,
 	cursor string,
 ) ([]exchange.Fill, string, error) {
+	if err := a.ownMarket(key); err != nil {
+		return nil, "", err
+	}
 	symbolValue := key.Symbol
 	if strings.TrimSpace(symbolValue) == "" {
 		return nil, cursor, rejected("symbol is required to list OKX fills", nil)
@@ -904,6 +930,9 @@ func (a *Adapter) SetLeverage(
 	key exchange.SymbolKey,
 	leverage shared.Decimal,
 ) error {
+	if err := a.ownMarket(key); err != nil {
+		return err
+	}
 	symbolValue := key.Symbol
 	if a.config.Market() != exchange.MarketTypeSwap ||
 		strings.TrimSpace(symbolValue) == "" ||

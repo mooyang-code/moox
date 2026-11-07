@@ -193,7 +193,7 @@ func (h *AccountServer) SetLeverage(
 			return &tradepb.SetLeverageRsp{RetInfo: errorInfo(err)}, nil
 		}
 		// 杠杆键是内部标的 ID（账户默认杠杆是 "*"）；会话要的是交易所代码。
-		leverageKey, symbol := store.DefaultLeverageKey, exchange.SymbolKey{Symbol: store.DefaultLeverageKey}
+		leverageKey, symbol := store.DefaultLeverageKey, exchange.SymbolKey{}
 		if req.GetInstrumentId() != store.DefaultLeverageKey {
 			instrumentID := ""
 			if err == nil {

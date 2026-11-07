@@ -497,7 +497,7 @@ func TestSessionSetsSymbolConfigOnceUntilForgotten(t *testing.T) {
 	require.NoError(t, session.EnsureSymbolConfig(ctx, exchange.NewSymbolKey(exchange.MarketTypeSwap, "BTCUSDT"), leverage))
 	require.Len(t, scripted.callSnapshot(), 4)
 
-	session.ForgetSymbolConfig(exchange.NewSymbolKey(exchange.MarketTypeSwap, store.DefaultLeverageKey))
+	session.ForgetAllSymbolConfigs()
 	require.NoError(t, session.EnsureSymbolConfig(ctx, exchange.NewSymbolKey(exchange.MarketTypeSwap, "BTCUSDT"), leverage))
 	require.Len(t, scripted.callSnapshot(), 6)
 }

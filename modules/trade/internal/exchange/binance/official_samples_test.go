@@ -169,7 +169,7 @@ func TestOfficialTradeListSides(t *testing.T) {
 			}
 			_, _ = w.Write(body)
 		}))
-		fills, _, err := testAdapter(test.market, server.URL).ListRecentFills(context.Background(), exchange.NewSymbolKey(exchange.MarketTypeSpot, "x"), "1")
+		fills, _, err := testAdapter(test.market, server.URL).ListRecentFills(context.Background(), exchange.NewSymbolKey(test.market, "x"), "1")
 		server.Close()
 		if err != nil {
 			t.Fatalf("%s: %v", test.name, err)
@@ -231,7 +231,7 @@ func TestOfficialSamplesCarryTheirMarket(t *testing.T) {
 			_, _ = w.Write(body)
 		}))
 		adapter := testAdapter(test.market, server.URL)
-		fills, _, err := adapter.ListRecentFills(context.Background(), exchange.NewSymbolKey(exchange.MarketTypeSpot, "x"), "1")
+		fills, _, err := adapter.ListRecentFills(context.Background(), exchange.NewSymbolKey(test.market, "x"), "1")
 		server.Close()
 		if err != nil || len(fills) != 1 {
 			t.Fatalf("%s: fills = %+v err = %v", test.name, fills, err)

@@ -117,6 +117,14 @@ func (a *Adapter) wallet() exchange.Wallet {
 	return exchange.WalletSpot
 }
 
+// ownMarket 校验标的键属于本适配器服务的市场：传错市场直接报错，不会悄悄按本市场处理。
+func (a *Adapter) ownMarket(key exchange.SymbolKey) error {
+	if key.Market != a.config.Market() {
+		return &exchange.Error{Kind: exchange.ErrorRejected, Err: fmt.Errorf("标的键 %s 不属于本适配器服务的市场 %s", key, a.config.Market())}
+	}
+	return nil
+}
+
 // key 返回本适配器所服务市场下的标的键。
 func (a *Adapter) key(symbol string) exchange.SymbolKey {
 	return exchange.SymbolKey{Market: a.config.Market(), Symbol: symbol}
@@ -281,6 +289,9 @@ func (a *Adapter) GetReferencePrice(
 	ctx context.Context,
 	key exchange.SymbolKey,
 ) (exchange.ReferencePrice, error) {
+	if err := a.ownMarket(key); err != nil {
+		return exchange.ReferencePrice{}, err
+	}
 	symbol := key.Symbol
 	if price, at, ok := a.prices.Get(ctx, a.key(symbol), a.allPrices); ok {
 		return exchange.ReferencePrice{Price: price, UpdatedAt: at}, nil
@@ -332,6 +343,9 @@ func (a *Adapter) allPrices(ctx context.Context) (map[exchange.SymbolKey]shared.
 }
 
 func (a *Adapter) GetQuote(ctx context.Context, key exchange.SymbolKey) (execution.MarketQuote, error) {
+	if err := a.ownMarket(key); err != nil {
+		return execution.MarketQuote{}, err
+	}
 	last, err := a.GetReferencePrice(ctx, key)
 	if err != nil {
 		return execution.MarketQuote{}, err
@@ -683,6 +697,9 @@ func (a *Adapter) GetOrder(
 	key exchange.SymbolKey,
 	clientOrderID string,
 ) (exchange.Order, error) {
+	if err := a.ownMarket(key); err != nil {
+		return exchange.Order{}, err
+	}
 	symbolValue := key.Symbol
 	if strings.TrimSpace(symbolValue) == "" || strings.TrimSpace(clientOrderID) == "" {
 		return exchange.Order{}, typedRejected("symbol and client order id are required", nil)
@@ -706,6 +723,9 @@ func (a *Adapter) GetOrderByExchangeID(
 	key exchange.SymbolKey,
 	exchangeOrderID string,
 ) (exchange.Order, error) {
+	if err := a.ownMarket(key); err != nil {
+		return exchange.Order{}, err
+	}
 	symbol := key.Symbol
 	if strings.TrimSpace(symbol) == "" || strings.TrimSpace(exchangeOrderID) == "" {
 		return exchange.Order{}, typedRejected("symbol and Exchange order id are required", nil)
@@ -789,6 +809,9 @@ func (a *Adapter) CancelOrder(
 	key exchange.SymbolKey,
 	clientOrderID string,
 ) (exchange.Order, error) {
+	if err := a.ownMarket(key); err != nil {
+		return exchange.Order{}, err
+	}
 	symbolValue := key.Symbol
 	raw, err := a.request(ctx, http.MethodDelete, a.path("/api/v3/order", "/fapi/v1/order"), url.Values{
 		"symbol":            []string{symbolValue},
@@ -829,6 +852,9 @@ func (a *Adapter) ListRecentFills(
 	key exchange.SymbolKey,
 	cursor string,
 ) ([]exchange.Fill, string, error) {
+	if err := a.ownMarket(key); err != nil {
+		return nil, "", err
+	}
 	symbolValue := key.Symbol
 	if strings.TrimSpace(symbolValue) == "" {
 		return nil, cursor, typedRejected("symbol is required to list Binance fills", nil)
@@ -946,6 +972,9 @@ func (a *Adapter) SetLeverage(
 	key exchange.SymbolKey,
 	leverage shared.Decimal,
 ) error {
+	if err := a.ownMarket(key); err != nil {
+		return err
+	}
 	symbolValue := key.Symbol
 	if a.config.Market() != exchange.MarketTypeSwap ||
 		strings.TrimSpace(symbolValue) == "" ||
@@ -965,6 +994,9 @@ func (a *Adapter) SetMarginMode(
 	key exchange.SymbolKey,
 	mode exchange.MarginMode,
 ) error {
+	if err := a.ownMarket(key); err != nil {
+		return err
+	}
 	symbolValue := key.Symbol
 	if a.config.Market() != exchange.MarketTypeSwap ||
 		mode != exchange.MarginModeCross ||

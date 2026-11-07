@@ -575,15 +575,18 @@ func (s *ExchangeSession) symbolLock(symbol exchange.SymbolKey) *sync.Mutex {
 	return lock
 }
 
-// ForgetSymbolConfig 让标的下次开仓前重新设置；默认杠杆变更时全部标的都要重新设置。
+// ForgetSymbolConfig 让标的下次开仓前重新设置。
 func (s *ExchangeSession) ForgetSymbolConfig(symbol exchange.SymbolKey) {
 	s.symbolMu.Lock()
 	defer s.symbolMu.Unlock()
-	if symbol.Symbol == store.DefaultLeverageKey {
-		s.configuredSymbols = nil
-		return
-	}
 	delete(s.configuredSymbols, symbol)
+}
+
+// ForgetAllSymbolConfigs 让全部标的下次开仓前重新设置：账户默认杠杆变更时用。
+func (s *ExchangeSession) ForgetAllSymbolConfigs() {
+	s.symbolMu.Lock()
+	defer s.symbolMu.Unlock()
+	s.configuredSymbols = nil
 }
 
 func (s *ExchangeSession) marketData() execution.MarketDataSource {
