@@ -16,7 +16,8 @@ export interface PageResult {
 }
 
 export type Exchange = 0 | 1 | 2;
-export type MarketType = 0 | 1 | 2;
+/** 1 现货、2 永续、3 股票 */
+export type MarketType = 0 | 1 | 2 | 3;
 export type ExecutionMode = 0 | 1 | 2;
 export type ControlMode = 0 | 1 | 2;
 export type AccountEnvironment = 0 | 1 | 2;
@@ -30,6 +31,9 @@ export interface AssetBalance {
   available: string;
   locked: string;
   total: string;
+  /** 余额所在的钱包：SPOT、FUTURES、MARGIN、UNIFIED */
+  wallet?: string;
+  borrowed?: string;
 }
 
 export interface TradingAccountSnapshot {
@@ -40,6 +44,8 @@ export interface TradingAccountSnapshot {
   maintenance_margin: string;
   unrealized_pnl: string;
   exchange_updated_at: string;
+  /** 交易所给出的总权益，只用于展示核对 */
+  exchange_equity?: string;
 }
 
 export interface TradingAccount {
@@ -47,7 +53,8 @@ export interface TradingAccount {
   space_id: string;
   name: string;
   exchange: Exchange;
-  market_type: MarketType;
+  /** 账户已开通的市场，按现货、永续、股票的固定顺序排列 */
+  markets: MarketType[];
   execution_mode: ExecutionMode;
   settlement_asset: string;
   margin_mode: string;
@@ -62,6 +69,10 @@ export interface TradingAccount {
   updated_at: string;
   live?: LiveConfig;
   paper?: PaperConfig;
+  /** 账户类型，只由交易所检测写入：BINANCE_PORTFOLIO_MARGIN、BINANCE_STANDARD、OKX_UNIFIED；模拟盘和股票为空 */
+  account_mode?: string;
+  /** 最近一次检测的结果（JSON） */
+  inspection_json?: string;
 }
 
 export interface LiveConfig {
@@ -90,9 +101,8 @@ export interface LogicalAccount {
   owner_session_id?: string;
   control_mode: ControlMode;
   execution_mode: ExecutionMode;
-  market_type: MarketType;
   /** 可交易的市场：启用成员已开通市场的并集（只读，由 Trade 计算）；策略要输出的市场必须都在里面。 */
-  markets?: MarketType[];
+  markets: MarketType[];
   settlement_asset: string;
   automation_state: "ACTIVE" | "PAUSED" | string;
   pause_reason: string;
@@ -137,6 +147,8 @@ export interface Order {
   finished_at: string;
   created_at: string;
   updated_at: string;
+  /** 伪市价单的第几次尝试，从 0 开始 */
+  attempt?: number;
 }
 
 export interface Fill {
@@ -163,6 +175,8 @@ export interface Fill {
 }
 
 export interface Position {
+  /** 持仓所属市场；现货和合约的持仓互不抵消 */
+  market_type: MarketType;
   trading_account_id: string;
   instrument_id: string;
   exchange_symbol: string;
@@ -253,7 +267,8 @@ export interface FlattenResult {
 export interface CreateTradingAccountReq {
   name: string;
   exchange: Exchange;
-  market_type: MarketType;
+  /** 要开通的市场：加密货币取现货、永续的子集 */
+  markets: MarketType[];
   settlement_asset: string;
   margin_mode?: string;
   live: LiveConfig;
@@ -270,6 +285,7 @@ export interface UpdateTradingAccountReq {
 
 export interface ListTradingAccountsReq {
   exchange?: Exchange;
+  /** 只列已开通了该市场的账户 */
   market_type?: MarketType;
   execution_mode?: ExecutionMode;
   status?: string;
@@ -280,7 +296,6 @@ export interface CreateLogicalAccountReq {
   name: string;
   control_mode?: ControlMode;
   execution_mode: ExecutionMode;
-  market_type: MarketType;
   settlement_asset: string;
 }
 
@@ -305,6 +320,8 @@ export interface PlaceManualOrderReq {
   limit_price?: string;
   reason: string;
   deadline_at?: string;
+  /** 订单所在市场；账户开通了多个市场时必填 */
+  market_type?: MarketType;
 }
 
 export interface SubmitOrderReq extends PlaceManualOrderReq {
@@ -353,7 +370,8 @@ export interface CreatePaperSimulationReq {
   control_mode?: ControlMode;
   logical_account_name: string;
   exchange: Exchange;
-  market_type: MarketType;
+  /** 要开通的市场集合；模拟账户用一个资金池同时撮合开通的各个市场 */
+  markets: MarketType[];
   settlement_asset: string;
   margin_mode?: string;
   initial_balance: string;
@@ -407,10 +425,13 @@ export interface LedgerEntry {
   exchange_symbol?: string;
   trade_id?: string;
   info?: string;
+  market_type?: MarketType;
 }
 
 export interface ListAccountLedgerReq {
   trading_account_id: string;
+  /** 要查流水的市场；账户只有一个市场支持流水时可省略 */
+  market_type?: MarketType;
   start_time?: string;
   end_time?: string;
   limit?: number;

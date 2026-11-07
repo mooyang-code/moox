@@ -86,17 +86,10 @@ export const systemMenu = [
   }),
 
   directory("05", "0", "/trading/accounts", "trading", "trading", 5, { svgIcon: "balance-inquiry", icon: "" }),
-  menu("0501", "05", "/trading/accounts", "trading-accounts", "trading-accounts", "trading/account-workbench/index", 1),
-  menu(
-    "0502",
-    "05",
-    "/trading/positions",
-    "trading-positions",
-    "trading-positions",
-    "trading/position-detail/position-detail",
-    3
-  ),
-  menu("0503", "05", "/trading/orders", "trading-orders", "trading-orders", "trading/trade-record/trade-record", 4),
+  // 菜单路由会覆盖 route.ts 里的同名声明：环境页签用 ?env=，query 变化时复用页面。
+  menu("0501", "05", "/trading/accounts", "trading-accounts", "trading-accounts", "trading/accounts/index", 1, {
+    reuseOnQuery: true
+  }),
 
   directory("06", "0", "/ops/monitor", "ops", "ops", 6, { svgIcon: "defend", icon: "" }),
   menu("0607", "06", "/ops/monitor", "ops-monitor", "ops-monitor", "ops/monitor/index", 1),

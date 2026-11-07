@@ -16,7 +16,7 @@ describe("Trade public API", () => {
   });
 
   it("constructs 组合账户生命周期请求", async () => {
-    await trade.createLogicalAccount({ name: "paper", execution_mode: 1, market_type: 1, settlement_asset: "USDT" });
+    await trade.createLogicalAccount({ name: "paper", execution_mode: 1, settlement_asset: "USDT" });
     await trade.pauseLogicalAccount("logical-1", "manual intervention");
     await trade.resumeLogicalAccount("logical-1");
     await trade.flattenLogicalAccount("action-1", "logical-1", "risk cleanup");
@@ -63,7 +63,6 @@ describe("Trade public API", () => {
     const logical = {
       name: "manual",
       execution_mode: 1 as const,
-      market_type: 1 as const,
       settlement_asset: "USDT",
       control_mode: 2 as const
     };
@@ -73,7 +72,7 @@ describe("Trade public API", () => {
       account_name: "paper",
       logical_account_name: "manual",
       exchange: 1 as const,
-      market_type: 1 as const,
+      markets: [1, 2] as (1 | 2)[],
       settlement_asset: "USDT",
       initial_balance: "1000",
       maker_fee_rate: "0",
