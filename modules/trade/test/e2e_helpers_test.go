@@ -773,3 +773,6 @@ func decimal(raw string) shared.Decimal {
 func transportError(message string) error {
 	return &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: errors.New(message)}
 }
+
+// legacyOrderSettings 让下单行为和下单设置出现之前一致：市价单、不设配置的最小下单额、单笔上限放宽。
+const legacyOrderSettings = `{"order_mode":"MARKET","min_notional_spot":"0","min_notional_swap":"0","max_child_notional":"1000000"}`

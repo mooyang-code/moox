@@ -42,8 +42,7 @@ func TestManualFlattenThenResumeCanReopenLatestTarget(t *testing.T) {
 	prices := logicalAccountE2EPriceSource{at: now}
 	executor := &targetapp.Executor{
 		Store: f.store, Orders: f.orders, Prices: prices,
-		Now:              func() time.Time { return now },
-		MaxChildNotional: shared.MustDecimal("1000000"),
+		Now: func() time.Time { return now },
 	}
 	converged, err := executor.Converge(ctx, testSpace, testLogicalAccount)
 	require.NoError(t, err)
@@ -99,7 +98,8 @@ func seedSwapLogicalAccount(t *testing.T, tradeStore *store.Store) {
 	t.Helper()
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
-			SpaceID: testSpace, LogicalAccountID: testLogicalAccount,
+			OrderSettingsJSON: legacyOrderSettings,
+			SpaceID:           testSpace, LogicalAccountID: testLogicalAccount,
 			Name:            "E2E swap logical account",
 			OwnerInstanceID: testRunner, OwnerSessionID: "session-e2e",
 			ExecutionMode: "PAPER", SettlementAsset: "USDT",

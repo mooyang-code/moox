@@ -292,7 +292,7 @@ func symbolsForAssets(
 		if !exchange.RuleFor(instrument.MarketType).PositionFromBalance {
 			continue
 		}
-		if instrument.Status != "TRADING" && instrument.Status != "live" {
+		if !exchange.StatusTradable(instrument.Status) {
 			continue
 		}
 		if !strings.EqualFold(instrument.QuoteAsset, account.SettlementAsset) {

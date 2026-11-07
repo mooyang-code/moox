@@ -194,7 +194,7 @@ func (s *ConsoleServer) ListTradableInstruments(
 	}
 	rsp := &tradepb.ListTradableInstrumentsRsp{RetInfo: success()}
 	for _, record := range records {
-		if record.Status != "TRADING" && record.Status != "live" {
+		if !exchange.StatusTradable(record.Status) {
 			continue
 		}
 		if record.SettlementAsset != "" && record.SettlementAsset != account.SettlementAsset {

@@ -123,7 +123,9 @@ func (r *WeightResolver) Resolve(ctx context.Context, _ int64, request *tradeeve
 	if err != nil {
 		return WeightConversion{}, err
 	}
-	settings, err := fundsettings.Parse(logical.FundSettingsJSON)
+	// 与执行器、受管资产同一个读取入口：数值字段坏了取默认值，排除字段读不出来才报错；
+	// 不用严格解析，不然后来加的校验会让早先保存的设置整个读不出来。
+	settings, err := r.Store.ResolveFundSettings(logical)
 	if err != nil {
 		return WeightConversion{}, err
 	}
@@ -181,14 +183,11 @@ func (r *WeightResolver) Resolve(ctx context.Context, _ int64, request *tradeeve
 	// 换算用的权益再扣资金预留比例，以及 BNB 保留金额还差的部分：BNB 本身不计入权益，所以买到位后不再扣。
 	equity = equity.Sub(equity.Mul(settings.ReserveRatio))
 	if settings.BNBReserveEnabled() {
-		bnbValue, applicable, bnbErr := r.bnbMarketValue(ctx, members)
+		shortfall, bnbErr := r.bnbShortfall(ctx, members, settings.BNBReserveAmount)
 		if bnbErr != nil {
 			return WeightConversion{}, bnbErr
 		}
-		// 没有成员能买 BNB 现货（例如只开合约）时没有补买，也就不用为它留钱。
-		if shortfall := settings.BNBReserveAmount.Sub(bnbValue); applicable && shortfall.Cmp(shared.Zero()) > 0 {
-			equity = equity.Sub(shortfall)
-		}
+		equity = equity.Sub(shortfall)
 	}
 	if equity.Cmp(shared.Zero()) <= 0 {
 		return WeightConversion{}, fmt.Errorf("target weight resolver: 扣除资金预留和 BNB 保留金额后可用权益不为正")
@@ -297,25 +296,32 @@ func (r *WeightResolver) warnExcluded(ctx context.Context, logicalAccountID, ass
 	return true
 }
 
-// bnbMarketValue 返回成员账户里 BNB 现货余额的结算币市值；applicable 为假表示没有任何成员有 BNB 现货标的，不适用。
+// bnbShortfall 返回 BNB 保留金额还差的部分：每个会补买的执行账户各保留 N，逐个账户算缺口再求和，
+// 和资金维护任务的补买口径一致（M 个账户实际要买 M × N，不是只扣一份 N）。
+// 只算资金维护生效的账户（币安生产环境实盘）且开通了现货、有 BNB 现货标的的：其他账户没有补买，也就不用为它留钱。
 // 没有 BNB 余额时不取报价；取到的报价要新鲜。
-func (r *WeightResolver) bnbMarketValue(ctx context.Context, members []store.LogicalAccountMemberRecord) (shared.Decimal, bool, error) {
+func (r *WeightResolver) bnbShortfall(ctx context.Context, members []store.LogicalAccountMemberRecord, reserve shared.Decimal) (shared.Decimal, error) {
 	total := shared.Zero()
-	applicable := false
 	for _, member := range members {
 		account, err := r.Store.GetTradingAccountByID(ctx, member.TradingAccountID)
 		if err != nil {
-			return shared.Zero(), false, err
+			return shared.Zero(), err
+		}
+		// 口径和资金维护任务一致：它不处理停用、未就绪的账户，也不会在非交易状态的标的上补买，这些账户不用为补买留钱。
+		if !account.FundMaintenanceApplies() || !account.HasBalanceMarket() ||
+			account.Status != string(exchange.AccountStatusEnabled) || !account.Ready {
+			continue
 		}
 		instruments, err := r.Store.ListInstrumentsForAccount(ctx, account.TradingAccountID)
 		if err != nil {
-			return shared.Zero(), false, err
+			return shared.Zero(), err
 		}
 		var bnb *store.InstrumentRecord
 		for i := range instruments {
 			if exchange.RuleFor(instruments[i].MarketType).PositionFromBalance &&
 				strings.EqualFold(instruments[i].BaseAsset, fundsettings.BNBAsset) &&
-				strings.EqualFold(instruments[i].QuoteAsset, account.SettlementAsset) {
+				strings.EqualFold(instruments[i].QuoteAsset, account.SettlementAsset) &&
+				exchange.StatusTradable(instruments[i].Status) {
 				bnb = &instruments[i]
 				break
 			}
@@ -323,31 +329,37 @@ func (r *WeightResolver) bnbMarketValue(ctx context.Context, members []store.Log
 		if bnb == nil {
 			continue
 		}
-		applicable = true
 		quantity := shared.Zero()
-		// BNB 抵扣手续费的 BNB 现货和合约钱包里都可能有（普通账户分配到两个钱包），市值两个钱包都算。
+		// BNB 抵扣手续费的 BNB 现货和合约钱包里都可能有（普通账户分配到两个钱包），市值两个钱包都算；借出的不算。
 		for _, balance := range account.Snapshot.Balances {
-			if strings.EqualFold(balance.Asset, fundsettings.BNBAsset) {
-				held, err := shared.ParseDecimal(balance.Total)
-				if err != nil {
-					return shared.Zero(), false, err
-				}
-				quantity = quantity.Add(held)
+			if !strings.EqualFold(balance.Asset, fundsettings.BNBAsset) {
+				continue
 			}
+			held, err := shared.ParseDecimal(balance.Total)
+			if err != nil {
+				return shared.Zero(), err
+			}
+			if borrowed, borrowedErr := shared.ParseDecimal(balance.Borrowed); borrowedErr == nil {
+				held = held.Sub(borrowed)
+			}
+			quantity = quantity.Add(held)
 		}
-		if quantity.IsZero() {
-			continue
+		value := shared.Zero()
+		if quantity.Cmp(shared.Zero()) > 0 {
+			quote, err := r.Prices.LatestPrice(ctx, account.TradingAccountID, exchange.NewSymbolKey(bnb.MarketType, bnb.ExchangeSymbol))
+			if err != nil {
+				return shared.Zero(), err
+			}
+			if quote.Price.Cmp(shared.Zero()) <= 0 || quote.UpdatedAt.IsZero() || !r.priceFresh(quote.UpdatedAt) {
+				return shared.Zero(), fmt.Errorf("target weight resolver: invalid reference price for BNB")
+			}
+			value = quantity.Mul(quote.Price)
 		}
-		quote, err := r.Prices.LatestPrice(ctx, account.TradingAccountID, exchange.NewSymbolKey(bnb.MarketType, bnb.ExchangeSymbol))
-		if err != nil {
-			return shared.Zero(), false, err
+		if shortfall := reserve.Sub(value); shortfall.Cmp(shared.Zero()) > 0 {
+			total = total.Add(shortfall)
 		}
-		if quote.Price.Cmp(shared.Zero()) <= 0 || quote.UpdatedAt.IsZero() || !r.priceFresh(quote.UpdatedAt) {
-			return shared.Zero(), false, fmt.Errorf("target weight resolver: invalid reference price for BNB")
-		}
-		total = total.Add(quantity.Mul(quote.Price))
 	}
-	return total, applicable, nil
+	return total, nil
 }
 
 // unmanagedTargetValue 计算目标里尚未受管的现货资产市值。权益点只算受管资产，而目标一落库
@@ -437,7 +449,7 @@ func (r *WeightResolver) instrumentForMembers(ctx context.Context, spaceID strin
 		}
 		instrument, err := r.Store.GetInstrumentByIDForAccount(ctx, spaceID, member.TradingAccountID, instrumentID)
 		if err == nil {
-			if instrument.Status != "TRADING" && instrument.Status != "live" {
+			if !exchange.StatusTradable(instrument.Status) {
 				continue
 			}
 			if instrument.SettlementAsset != "" && instrument.SettlementAsset != account.SettlementAsset {

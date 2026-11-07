@@ -154,6 +154,51 @@ message LogicalAccount {
   // Strategy 生命周期调用的比较并交换令牌，只返回给内部调用方。
   string auth_fence = 18;
   ControlMode control_mode = 19;
+  // 只读：当前生效的下单设置和资金设置（没写的项已填上默认值）。
+  OrderSettings order_settings = 20;
+  FundSettings fund_settings = 21;
+  // 存的设置读不出来时的说明（此时对应的设置为空）：界面要提示并禁止保存，不能按默认值显示，否则一保存就覆盖了原设置。
+  string order_settings_error = 22;
+  string fund_settings_error = 23;
+}
+
+// 组合账户的下单设置，数值用字符串；写入时的校验见 domain/ordersettings。
+message OrderSettings {
+  // TARGET_RATIO | POSITION_RATIO | EQUITY_RATIO | ALWAYS，空表示默认 TARGET_RATIO
+  string rebalance_threshold_mode = 1;
+  string rebalance_threshold_ratio = 2;
+  string min_notional_spot = 3;
+  string min_notional_swap = 4;
+  // 每个标的每个自然小时累计下单金额上限：键是内部标的 ID 或 *，值是金额；没有条目表示不限
+  map<string, string> hourly_cap_spot = 5;
+  map<string, string> hourly_cap_swap = 6;
+  string max_child_notional = 7;
+  bool randomize_split = 8;
+  // 0 表示用默认批间隔
+  int32 batch_interval_seconds = 9;
+  // MARKET | PSEUDO_MARKET，空表示默认 PSEUDO_MARKET
+  string order_mode = 10;
+  string slippage_step = 11;
+  string slippage_max = 12;
+  int32 max_attempts = 13;
+  string resting_ratio = 14;
+  // 0 表示挂单保留到下一份目标到达为止
+  int32 resting_ttl_seconds = 15;
+}
+
+// 组合账户的资金设置，数值用字符串；写入时的校验见 domain/fundsettings。
+message FundSettings {
+  string reserve_ratio = 1;
+  bool bnb_discount = 2;
+  string bnb_reserve_amount = 3;
+  bool dust_convert_enabled = 4;
+  // 0 表示默认 15 天
+  int32 dust_convert_interval_days = 5;
+  // 稳定币及目标比例：必须含 USDT，比例之和为 1
+  map<string, string> stablecoin_margin = 6;
+  // 保证金币及配置的固定 U 值
+  map<string, string> margin_coins = 7;
+  repeated string arbitrage_base_assets = 8;
 }
 
 message Order {
@@ -248,6 +293,8 @@ message BlockedTarget {
   string instrument_id = 1;
   string quantity = 2;
   string reason = 3;
+  // true 表示不是被拦下，而是被单币每小时上限顺延到下一个整点：界面用中性色显示“顺延”，不计入“被拦下”。
+  bool deferred = 4;
 }
 
 message LogicalAccountTarget {
@@ -388,6 +435,24 @@ message UpdateLogicalAccountReq {
   string name = 2;
 }
 message UpdateLogicalAccountRsp {
+  common.RetInfo ret_info = 1;
+  LogicalAccount logical_account = 2;
+}
+
+message UpdateLogicalAccountOrderSettingsReq {
+  string logical_account_id = 1;
+  OrderSettings settings = 2;
+}
+message UpdateLogicalAccountOrderSettingsRsp {
+  common.RetInfo ret_info = 1;
+  LogicalAccount logical_account = 2;
+}
+
+message UpdateLogicalAccountFundSettingsReq {
+  string logical_account_id = 1;
+  FundSettings settings = 2;
+}
+message UpdateLogicalAccountFundSettingsRsp {
   common.RetInfo ret_info = 1;
   LogicalAccount logical_account = 2;
 }
@@ -740,6 +805,8 @@ service TradeConsoleService {
   rpc GetLogicalAccount(GetLogicalAccountReq) returns (GetLogicalAccountRsp);
   rpc ListLogicalAccounts(ListLogicalAccountsReq) returns (ListLogicalAccountsRsp);
   rpc UpdateLogicalAccount(UpdateLogicalAccountReq) returns (UpdateLogicalAccountRsp);
+  rpc UpdateLogicalAccountOrderSettings(UpdateLogicalAccountOrderSettingsReq) returns (UpdateLogicalAccountOrderSettingsRsp);
+  rpc UpdateLogicalAccountFundSettings(UpdateLogicalAccountFundSettingsReq) returns (UpdateLogicalAccountFundSettingsRsp);
   rpc AddLogicalAccountMember(AddLogicalAccountMemberReq) returns (AddLogicalAccountMemberRsp);
   rpc RemoveLogicalAccountMember(RemoveLogicalAccountMemberReq) returns (RemoveLogicalAccountMemberRsp);
   rpc ClaimLogicalAccountOwner(ClaimLogicalAccountOwnerReq) returns (ClaimLogicalAccountOwnerRsp);

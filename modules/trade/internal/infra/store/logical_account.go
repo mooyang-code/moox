@@ -334,6 +334,23 @@ func (tx *Tx) SetLogicalAccountName(
 	return requireUpdated(result.Error, result.RowsAffected, "logical account name")
 }
 
+const (
+	updateLogicalAccountOrderSettingsSQL = `UPDATE t_logical_accounts SET c_order_settings_json = ?, c_mtime = CURRENT_TIMESTAMP WHERE c_space_id = ? AND c_logical_account_id = ?`
+	updateLogicalAccountFundSettingsSQL  = `UPDATE t_logical_accounts SET c_fund_settings_json = ?, c_mtime = CURRENT_TIMESTAMP WHERE c_space_id = ? AND c_logical_account_id = ?`
+)
+
+// SetLogicalAccountOrderSettings 写入下单设置（调用方已校验并转成规范 JSON）。
+func (tx *Tx) SetLogicalAccountOrderSettings(spaceID, logicalAccountID, settingsJSON string) error {
+	result := tx.db.Exec(updateLogicalAccountOrderSettingsSQL, settingsJSON, spaceID, logicalAccountID)
+	return requireUpdated(result.Error, result.RowsAffected, "logical account order settings")
+}
+
+// SetLogicalAccountFundSettings 写入资金设置（调用方已校验并转成规范 JSON）。
+func (tx *Tx) SetLogicalAccountFundSettings(spaceID, logicalAccountID, settingsJSON string) error {
+	result := tx.db.Exec(updateLogicalAccountFundSettingsSQL, settingsJSON, spaceID, logicalAccountID)
+	return requireUpdated(result.Error, result.RowsAffected, "logical account fund settings")
+}
+
 // autoPausePrefix 区分系统自动暂停和人工暂停，自动暂停要告警。
 const autoPausePrefix = "自动暂停："
 

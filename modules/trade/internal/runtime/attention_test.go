@@ -37,3 +37,20 @@ func TestAttentionBlockedSpansNewTargets(t *testing.T) {
 	require.Equal(t, start, blocked["logical-1"])
 	require.Len(t, items[telemetry.AttentionTargetBlocked], 1)
 }
+
+// 每小时上限顺延的目标是已收敛（blocked_targets 里写着顺延原因）：不上报“目标持续阻塞”，也不开始计阻塞时长。
+func TestAttentionIgnoresHourlyCapDeferral(t *testing.T) {
+	worker := &AttentionWorker{blockedSince: map[string]time.Time{}}
+	now := time.UnixMilli(1_000_000)
+	logical := store.LogicalAccountRecord{LogicalAccountID: "logical-1", Name: "组合"}
+	target := store.LogicalAccountTargetRecord{
+		Status: targetapp.StatusConverged, EffectiveAt: 0, ValidUntil: 120_000,
+		BlockedTargets: []store.BlockedTarget{{InstrumentID: "BTC-USDT-SWAP", Reason: "单币每小时上限已用完，顺延到下一个整点继续"}},
+	}
+	items := map[string][]string{}
+	blocked := map[string]time.Time{}
+	worker.blockedSince["logical-1"] = now.Add(-time.Hour)
+	require.NoError(t, worker.noteTarget(context.Background(), logical, target, now, items, blocked))
+	require.Empty(t, items[telemetry.AttentionTargetBlocked])
+	require.Empty(t, blocked)
+}

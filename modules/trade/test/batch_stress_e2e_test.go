@@ -227,7 +227,8 @@ func TestBatchConvergenceUnderRandomFailuresDoesNotDuplicate(t *testing.T) {
 			}
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
-			SpaceID: testSpace, LogicalAccountID: testLogicalAccount, Name: "stress logical",
+			OrderSettingsJSON: legacyOrderSettings,
+			SpaceID:           testSpace, LogicalAccountID: testLogicalAccount, Name: "stress logical",
 			OwnerInstanceID: testRunner, OwnerSessionID: "session-e2e",
 			ExecutionMode: string(exchange.ExecutionModeLive), SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
@@ -272,8 +273,7 @@ func TestBatchConvergenceUnderRandomFailuresDoesNotDuplicate(t *testing.T) {
 	syncService.Orders = orders
 	executor := &targetapp.Executor{
 		Store: tradeStore, Orders: orders, Now: now,
-		Prices:           targetapp.ExchangePriceSource{Adapters: source},
-		MaxChildNotional: shared.MustDecimal("1000000"),
+		Prices: targetapp.ExchangePriceSource{Adapters: source},
 	}
 	var _ execution.ExecutionAdapter = market
 	converged := false

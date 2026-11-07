@@ -358,6 +358,8 @@ func logicalAccountToPB(
 			Priority:         int32(member.Priority),
 		})
 	}
+	orderSettings, orderSettingsError := orderSettingsToPB(value.OrderSettingsJSON)
+	fundSettings, fundSettingsError := fundSettingsToPB(value.FundSettingsJSON)
 	return &tradepb.LogicalAccount{
 		LogicalAccountId: value.LogicalAccountID,
 		SpaceId:          value.SpaceID,
@@ -377,6 +379,8 @@ func logicalAccountToPB(
 		ReadinessReasons: append([]string(nil), readiness.Reasons...),
 		CreatedAt:        unixMilli(value.CreatedAt),
 		UpdatedAt:        unixMilli(value.UpdatedAt),
+		OrderSettings:    orderSettings, OrderSettingsError: orderSettingsError,
+		FundSettings: fundSettings, FundSettingsError: fundSettingsError,
 	}
 }
 
@@ -456,6 +460,7 @@ func logicalAccountTargetToPB(
 			InstrumentId: target.InstrumentID,
 			Quantity:     target.Quantity,
 			Reason:       target.Reason,
+			Deferred:     target.Deferred,
 		})
 	}
 	return &tradepb.LogicalAccountTarget{

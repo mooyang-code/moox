@@ -156,12 +156,14 @@ func (s *Service) shouldWarnMissingSettlement(accountID string) bool {
 func (s *Service) fundSettings(ctx context.Context, account store.TradingAccountRecord) (fundsettings.Settings, error) {
 	logical, _, err := s.Store.FindLogicalAccountByTradingAccount(ctx, account.SpaceID, account.TradingAccountID)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return fundsettings.Parse("")
+		settings, _, _ := fundsettings.ParseLenient("")
+		return settings, nil
 	}
 	if err != nil {
 		return fundsettings.Settings{}, err
 	}
-	return fundsettings.Parse(logical.FundSettingsJSON)
+	// 与执行器同一个读取入口（宽松解析）：设置里个别数值坏了不让权益采样中断。
+	return s.Store.ResolveFundSettings(logical)
 }
 
 // valueSnapshot 按统一公式计算执行账户的权益（plan 4.6）：
@@ -188,12 +190,20 @@ func (s *Service) valueSnapshot(ctx context.Context, account store.TradingAccoun
 	settlementSeen := false
 	settlementAvailable := shared.Zero()
 	var held []store.AssetBalance
+	stableValue := shared.Zero()
 	for _, balance := range snapshot.Balances {
 		quantity := decimal(balance.Total).Sub(decimal(balance.Borrowed))
 		if strings.EqualFold(balance.Asset, settlement) {
 			settlementNet = settlementNet.Add(quantity)
 			settlementAvailable = settlementAvailable.Add(decimal(balance.Available))
 			settlementSeen = true
+			continue
+		}
+		// 多稳定币保证金：除结算币外的稳定币按市价折成结算币计入权益，不然调平时权益会凭空少一块。
+		if _, isStable := settings.StablecoinTargets[strings.ToUpper(balance.Asset)]; isStable {
+			if !quantity.IsZero() {
+				stableValue = stableValue.Add(quantity.Mul(s.stablecoinPrice(ctx, account, balance.Asset)))
+			}
 			continue
 		}
 		_, isManaged := managed[balance.Asset]
@@ -209,7 +219,7 @@ func (s *Service) valueSnapshot(ctx context.Context, account store.TradingAccoun
 		}
 	}
 	// 保证金币的配置值是组合层的数，在组合层只加一次，不在每个成员里各加一遍。
-	equity := settlementNet.Add(unrealized)
+	equity := settlementNet.Add(unrealized).Add(stableValue)
 	if len(held) > 0 {
 		if s.Adapters == nil {
 			return store.TradingAccountSnapshot{}, fmt.Errorf("equity: spot quote adapter is not configured")
@@ -255,6 +265,35 @@ func (s *Service) valueSnapshot(ctx context.Context, account store.TradingAccoun
 		snapshot.AvailableFunds = settlementAvailable.String()
 	}
 	return snapshot, nil
+}
+
+// stablecoinPrice 返回稳定币折成结算币的价格：取它对结算币的现货标的参考价；
+// 没有标的、取不到报价时按 1 计（稳定币锚定结算币，估值不能因为一时没有报价就中断权益采样）。
+func (s *Service) stablecoinPrice(ctx context.Context, account store.TradingAccountRecord, asset string) shared.Decimal {
+	one := shared.MustDecimal("1")
+	if s.Adapters == nil {
+		return one
+	}
+	instruments, err := s.Store.ListInstrumentsForAccount(ctx, account.TradingAccountID)
+	if err != nil {
+		return one
+	}
+	for _, instrument := range instruments {
+		if !exchange.RuleFor(instrument.MarketType).PositionFromBalance ||
+			!strings.EqualFold(instrument.BaseAsset, asset) || !strings.EqualFold(instrument.QuoteAsset, account.SettlementAsset) {
+			continue
+		}
+		adapter, adapterErr := s.Adapters.Adapter(account.TradingAccountID)
+		if adapterErr != nil {
+			return one
+		}
+		quote, quoteErr := adapter.GetReferencePrice(ctx, exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol))
+		if quoteErr != nil || quote.Price.Cmp(shared.Zero()) <= 0 || !s.sourceFresh(quote.UpdatedAt.UnixMilli()) {
+			return one
+		}
+		return quote.Price
+	}
+	return one
 }
 
 func (s *Service) sampleLogicalAccounts(ctx context.Context, spaceID, accountID string, sampled *store.TradingAccountSnapshot) error {
@@ -347,7 +386,7 @@ func (s *Service) sampleLogicalAccount(
 	if !logicalValid || sourceTime <= 0 {
 		return nil
 	}
-	settings, settingsErr := fundsettings.Parse(logical.FundSettingsJSON)
+	settings, settingsErr := s.Store.ResolveFundSettings(logical)
 	if settingsErr != nil {
 		return settingsErr
 	}

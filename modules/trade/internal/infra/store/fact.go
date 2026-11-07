@@ -675,7 +675,8 @@ func (s *Store) ListActiveOrdersForAccount(
 
 // RejectedTargetAccounts 返回本目标在该标的上被交易所拒绝过的执行账户及拒单原因。
 // c_submitted_at 为 0 的是本地校验失败，持仓或资金刷新后可以恢复，不计入；
-// 零成交结束的 EXPIRED 单同样计入，否则市价单被交易所过期后会循环重下。
+// 零成交结束的 EXPIRED 单同样计入，否则市价单被交易所过期后会循环重下；
+// 伪市价单（限价 + IOC）零成交过期是正常的，由尝试次数控制重试，不计入。
 func (s *Store) RejectedTargetAccounts(
 	ctx context.Context,
 	spaceID string,
@@ -687,7 +688,8 @@ func (s *Store) RejectedTargetAccounts(
 	if err := s.db.WithContext(ctx).Table("t_trade_orders").
 		Where(`c_space_id = ? AND c_logical_account_id = ? AND c_owner_type = 'TARGET' AND c_owner_id = ?
 			AND c_instrument_id = ? AND c_submitted_at > 0
-			AND (c_state = 'REJECTED' OR (c_state = 'EXPIRED' AND c_filled_quantity = '0'))`,
+			AND (c_state = 'REJECTED' OR (c_state = 'EXPIRED' AND c_filled_quantity = '0'
+				AND NOT (c_order_type = 'LIMIT' AND c_time_in_force = 'IOC')))`,
 			spaceID, logicalAccountID, targetID, instrumentID).
 		Find(&rows).Error; err != nil {
 		return nil, err
@@ -731,25 +733,67 @@ func (s *Store) RecentFilledOrdersForLane(
 	return records, nil
 }
 
-// TargetChildSides 返回同一目标、同一执行账户、同一标的已发出子单的方向，按提交时间排序。
-func (s *Store) TargetChildSides(
+// TargetChildOrder 是同一目标、同一执行账户、同一标的已发出的一笔子单摘要。
+type TargetChildOrder struct {
+	TradingAccountID string `gorm:"column:c_trading_account_id"`
+	Side             string `gorm:"column:c_side"`
+	OrderType        string `gorm:"column:c_order_type"`
+	TimeInForce      string `gorm:"column:c_time_in_force"`
+	State            string `gorm:"column:c_state"`
+	Quantity         string `gorm:"column:c_quantity"`
+	FilledQuantity   string `gorm:"column:c_filled_quantity"`
+	Attempt          int    `gorm:"column:c_attempt"`
+}
+
+// TargetChildOrders 返回同一目标、同一标的已发出的子单（提交过的，所有执行账户），按提交先后排序。
+// 伪市价单的尝试次数按（目标，标的）统计，反向熔断和拆单随机化的种子按执行账户统计，都从这里算。
+func (s *Store) TargetChildOrders(
 	ctx context.Context,
 	spaceID string,
 	logicalAccountID string,
 	targetID string,
-	tradingAccountID string,
 	instrumentID string,
-) ([]string, error) {
-	var sides []string
+) ([]TargetChildOrder, error) {
+	var orders []TargetChildOrder
 	if err := s.db.WithContext(ctx).Table("t_trade_orders").
+		Select("c_trading_account_id, c_side, c_order_type, c_time_in_force, c_state, c_quantity, c_filled_quantity, c_attempt").
 		Where(`c_space_id = ? AND c_logical_account_id = ? AND c_owner_type = 'TARGET' AND c_owner_id = ?
-			AND c_trading_account_id = ? AND c_instrument_id = ? AND c_submitted_at > 0`,
-			spaceID, logicalAccountID, targetID, tradingAccountID, instrumentID).
+			AND c_instrument_id = ? AND c_submitted_at > 0`,
+			spaceID, logicalAccountID, targetID, instrumentID).
 		Order("c_submitted_at, c_order_id").
-		Pluck("c_side", &sides).Error; err != nil {
+		Scan(&orders).Error; err != nil {
 		return nil, err
 	}
-	return sides, nil
+	return orders, nil
+}
+
+// SubmittedTargetOrder 是单币每小时上限汇总用的订单摘要。
+type SubmittedTargetOrder struct {
+	InstrumentID   string `gorm:"column:c_instrument_id"`
+	State          string `gorm:"column:c_state"`
+	Quantity       string `gorm:"column:c_quantity"`
+	FilledQuantity string `gorm:"column:c_filled_quantity"`
+	ReferencePrice string `gorm:"column:c_reference_price"`
+	AveragePrice   string `gorm:"column:c_average_price"`
+}
+
+// ListSubmittedTargetOrders 列出组合在 [from, to)（毫秒）内提交过的目标子单，不含被拒绝的和只在本地丢弃的（没提交过）。
+// 单币每小时上限从这里汇总，不另建表。
+func (s *Store) ListSubmittedTargetOrders(
+	ctx context.Context,
+	spaceID string,
+	logicalAccountID string,
+	from int64,
+	to int64,
+) ([]SubmittedTargetOrder, error) {
+	var rows []SubmittedTargetOrder
+	err := s.db.WithContext(ctx).Table("t_trade_orders").
+		Select("c_instrument_id, c_state, c_quantity, c_filled_quantity, c_reference_price, c_average_price").
+		Where(`c_space_id = ? AND c_logical_account_id = ? AND c_owner_type = 'TARGET'
+			AND c_submitted_at >= ? AND c_submitted_at < ? AND c_state <> 'REJECTED'`,
+			spaceID, logicalAccountID, from, to).
+		Scan(&rows).Error
+	return rows, err
 }
 
 func (s *Store) ListOrdersForLane(

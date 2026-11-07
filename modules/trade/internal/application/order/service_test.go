@@ -1493,3 +1493,17 @@ func TestServiceSubmitNotAcceptedReturnsToPending(t *testing.T) {
 		})
 	}
 }
+
+// 伪市价单的尝试次数写进订单表，读回来还在。
+func TestPlacePersistsPseudoMarketAttempt(t *testing.T) {
+	service, tradeStore, _ := newTestService(t)
+	spec := testSpec(service.now())
+	spec.Attempt = 2
+
+	placed, err := service.Place(context.Background(), "space-1", spec)
+	require.NoError(t, err)
+	require.Equal(t, 2, placed.Spec.Attempt)
+	record, err := tradeStore.GetOrder(context.Background(), "space-1", string(placed.ID))
+	require.NoError(t, err)
+	require.Equal(t, 2, record.Attempt)
+}
