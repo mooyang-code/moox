@@ -75,3 +75,26 @@ func TestAttentionFundsShortageIsReportedOnlyAsTransferShortfall(t *testing.T) {
 	require.Len(t, items[telemetry.AttentionTargetBlocked], 1)
 	require.Contains(t, items[telemetry.AttentionTargetBlocked][0], "ETH-USDT-SPOT")
 }
+
+// 资金缺口是持续状态：目标 BLOCKED 且带着资金不足的项，每次扫描都上报（不等阻塞超过一根 K 线，也不依赖事件窗口）；
+// 目标不再阻塞就不报。
+func TestAttentionFundsShortageIsDerivedFromCurrentTargetState(t *testing.T) {
+	worker := &AttentionWorker{blockedSince: map[string]time.Time{}}
+	now := time.UnixMilli(1_000_000)
+	logical := store.LogicalAccountRecord{LogicalAccountID: "logical-1", Name: "组合"}
+	target := store.LogicalAccountTargetRecord{
+		Status: targetapp.StatusBlocked, EffectiveAt: 0, ValidUntil: 3_600_000,
+		BlockedTargets: []store.BlockedTarget{{InstrumentID: "BTC-USDT-SPOT", Quantity: "0.005", Reason: "合约钱包可划转的资金不足，现货买入按现有资金缩小"}},
+	}
+	for range 2 {
+		items := map[string][]string{}
+		require.NoError(t, worker.noteTarget(context.Background(), logical, target, now, items, map[string]time.Time{}))
+		require.Equal(t, []string{"组合：合约钱包可划转的资金不足，现货买入被缩小或挡下"}, items[telemetry.AttentionTransferShortfall])
+		require.Empty(t, items[telemetry.AttentionTargetBlocked], "同一个缺口不再发 target_blocked")
+		now = now.Add(time.Hour)
+	}
+	target.Status = targetapp.StatusConverged
+	items := map[string][]string{}
+	require.NoError(t, worker.noteTarget(context.Background(), logical, target, now, items, map[string]time.Time{}))
+	require.Empty(t, items[telemetry.AttentionTransferShortfall])
+}

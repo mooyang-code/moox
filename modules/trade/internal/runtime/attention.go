@@ -185,6 +185,15 @@ func (w *AttentionWorker) noteTarget(
 			since = now
 		}
 		blocked[logical.LogicalAccountID] = since
+		// 资金缺口是持续状态：目标一直 BLOCKED 且带着资金不足的项就一直上报，不依赖 5 分钟的事件窗口
+		// （已阻塞的目标不会被定时重新收敛，策略周期长于窗口时事件早就过期了）。固定文字、不带会变的数字。
+		for _, item := range target.BlockedTargets {
+			if !item.Deferred && walletapp.IsFundsShortage(item.Reason) {
+				items[telemetry.AttentionTransferShortfall] = append(items[telemetry.AttentionTransferShortfall],
+					logical.Name+"：合约钱包可划转的资金不足，现货买入被缩小或挡下")
+				break
+			}
+		}
 		if now.Sub(since) > bar {
 			// 合约钱包可划转资金不足同时有 transfer_shortfall 在报，这里跳过它，同一个缺口不发两条告警；
 			// 只有别的原因的阻塞才算目标持续阻塞。
