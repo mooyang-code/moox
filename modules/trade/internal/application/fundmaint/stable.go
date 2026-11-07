@@ -87,7 +87,7 @@ func (s *Service) rebalanceStablecoins(
 	}
 	var adjustments []adjustment
 	for _, holding := range holdings {
-		if holding.asset == fundsettings.USDTAsset {
+		if strings.EqualFold(holding.asset, account.SettlementAsset) {
 			continue
 		}
 		adjustments = append(adjustments, adjustment{holding: holding, delta: total.Mul(settings.StablecoinTargets[holding.asset]).Sub(holding.value)})
@@ -149,7 +149,7 @@ func (s *Service) stableHoldings(
 			}
 			holding.quantity = holding.quantity.Add(quantity)
 		}
-		if asset != fundsettings.USDTAsset {
+		if !strings.EqualFold(asset, account.SettlementAsset) {
 			instrument, found, err := s.spotInstrument(ctx, account, asset)
 			if err != nil {
 				return nil, shared.Zero(), err

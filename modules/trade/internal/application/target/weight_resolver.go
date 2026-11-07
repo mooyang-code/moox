@@ -307,7 +307,9 @@ func (r *WeightResolver) bnbShortfall(ctx context.Context, members []store.Logic
 		if err != nil {
 			return shared.Zero(), err
 		}
-		if !account.FundMaintenanceApplies() || !account.HasBalanceMarket() {
+		// 口径和资金维护任务一致：它不处理停用、未就绪的账户，也不会在非交易状态的标的上补买，这些账户不用为补买留钱。
+		if !account.FundMaintenanceApplies() || !account.HasBalanceMarket() ||
+			account.Status != string(exchange.AccountStatusEnabled) || !account.Ready {
 			continue
 		}
 		instruments, err := r.Store.ListInstrumentsForAccount(ctx, account.TradingAccountID)
@@ -318,7 +320,8 @@ func (r *WeightResolver) bnbShortfall(ctx context.Context, members []store.Logic
 		for i := range instruments {
 			if exchange.RuleFor(instruments[i].MarketType).PositionFromBalance &&
 				strings.EqualFold(instruments[i].BaseAsset, fundsettings.BNBAsset) &&
-				strings.EqualFold(instruments[i].QuoteAsset, account.SettlementAsset) {
+				strings.EqualFold(instruments[i].QuoteAsset, account.SettlementAsset) &&
+				(instruments[i].Status == "TRADING" || instruments[i].Status == "live") {
 				bnb = &instruments[i]
 				break
 			}

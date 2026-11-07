@@ -236,3 +236,35 @@ func TestResolveAcceptsOlderFundSettingsThatFailTheCurrentWriteChecks(t *testing
 	require.NoError(t, err)
 	require.False(t, quantityOf(t, conversion, "BTC-USDT-SPOT").Hold)
 }
+
+// 缺口口径和资金维护一致：停用、未就绪的成员、BNB 标的不在交易状态时不会补买，也不为它们留钱。
+func TestBNBShortfallSkipsMembersAndInstrumentsTheMaintenanceTaskSkips(t *testing.T) {
+	tradeStore := newMixedResolverStore(t, `{"bnb_reserve_amount":"500"}`)
+	makeBinanceProduction(t, tradeStore, "account-a")
+	resolver := WeightResolver{Store: tradeStore, Prices: targetPriceStub{price: shared.MustDecimal("100")}, Equity: conversionEquityStub{}, Now: func() time.Time { return time.UnixMilli(2000) }}
+	members := []store.LogicalAccountMemberRecord{{TradingAccountID: "account-a"}}
+	shortfall := func() string {
+		value, err := resolver.bnbShortfall(context.Background(), members, shared.MustDecimal("500"))
+		require.NoError(t, err)
+		return value.String()
+	}
+	require.Equal(t, "400", shortfall())
+
+	require.NoError(t, tradeStore.DBForTest().Exec("UPDATE t_trading_accounts SET c_ready = 0").Error)
+	require.Equal(t, "0", shortfall(), "未就绪的账户资金维护不处理")
+	require.NoError(t, tradeStore.DBForTest().Exec("UPDATE t_trading_accounts SET c_ready = 1, c_status = 'DISABLED'").Error)
+	require.Equal(t, "0", shortfall(), "停用的账户资金维护不处理")
+	require.NoError(t, tradeStore.DBForTest().Exec("UPDATE t_trading_accounts SET c_status = 'ENABLED'").Error)
+	instruments, err := tradeStore.ListInstrumentsForAccount(context.Background(), "account-a")
+	require.NoError(t, err)
+	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		for _, instrument := range instruments {
+			if instrument.InstrumentID == "BNB-USDT-SPOT" {
+				instrument.Status = "BREAK"
+				return tx.UpsertInstrument(instrument)
+			}
+		}
+		return nil
+	}))
+	require.Equal(t, "0", shortfall(), "BNB 标的不在交易状态，补买不会下单")
+}

@@ -155,7 +155,12 @@ func (s *Service) UpdateFundSettings(
 	if s == nil || s.Store == nil {
 		return store.LogicalAccountRecord{}, ErrServiceConfig
 	}
-	parsed, canonical, err := fundsettings.ParseDocumentForWrite(document)
+	// 结算币在组合创建后不变，先读出来给校验用（稳定币必须含它、保证金币和底仓不能写它）。
+	current, err := s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
+	if err != nil {
+		return store.LogicalAccountRecord{}, err
+	}
+	parsed, canonical, err := fundsettings.ParseDocumentForWrite(document, current.SettlementAsset)
 	if err != nil {
 		return store.LogicalAccountRecord{}, fmt.Errorf("%w: %v", store.ErrInvalidRecord, err)
 	}
@@ -166,10 +171,6 @@ func (s *Service) UpdateFundSettings(
 		// 换算目标时却会一直扣着 BNB 的缺口，所以直接拒绝。
 		if existing.ExecutionMode == string(exchange.ExecutionModePaper) && maintenance {
 			return fmt.Errorf("%w: 模拟盘组合不支持 BNB 抵扣、BNB 保留、小额兑换和稳定币保证金（只对实盘生效）", store.ErrInvalidRecord)
-		}
-		// 保证金币、套利底仓不能写成这个组合的结算币（结算币在权益里本来就按净额算）。
-		if _, isMargin := parsed.MarginCoins[strings.ToUpper(existing.SettlementAsset)]; isMargin || parsed.IsArbitrageBase(existing.SettlementAsset) {
-			return fmt.Errorf("%w: %s 是这个组合的结算币，不能写进保证金币或套利底仓", store.ErrInvalidRecord, existing.SettlementAsset)
 		}
 		if !maintenance {
 			return nil
