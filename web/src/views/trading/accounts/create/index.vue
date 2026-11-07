@@ -238,7 +238,10 @@ watch(
 watch(
   () => [singleMarket.value, form.markets.length],
   () => {
-    if (singleMarket.value && form.markets.length > 1) form.markets = [form.markets[0]];
+    if (singleMarket.value && form.markets.length > 1) {
+      form.markets = [form.markets[0]];
+      syncMarketDefaults();
+    }
   }
 );
 
@@ -293,6 +296,11 @@ function setMarket(market: MarketType, on: boolean) {
       ? [market]
       : form.markets.filter(item => item !== market)
     : toggleMarket(form.markets, market, on);
+  syncMarketDefaults();
+}
+
+// 市场变了，结算资产和（没手工改过的）默认费率跟着重算：开通永续固定 USDT 结算，只开现货和带永续的默认费率不同。
+function syncMarketDefaults() {
   if (form.markets.includes(2)) form.settlementAsset = "USDT";
   if (!form.feesEdited) {
     const fees = defaultFees(form.markets);

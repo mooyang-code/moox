@@ -201,6 +201,33 @@ describe("新建账户提交", () => {
       expect(vm.form.markets).toEqual([]);
     });
 
+    it("收成一个市场后默认费率跟着重算：OKX 测试网勾两个市场后换成币安测试网，费率按现货默认", async () => {
+      const vm = await openDialog();
+      vm.open("testnet");
+      Object.assign(vm.form, { step: 2, name: "测试网账户", secretId: "s1", exchange: 2, markets: [2] });
+      await flushPromises();
+      const checkbox = (label: string) =>
+        [...document.querySelectorAll<HTMLElement>(".arco-checkbox")]
+          .find(item => item.textContent?.includes(label))!
+          .querySelector("input")!;
+      checkbox("现货").click();
+      await flushPromises();
+      expect(vm.form.markets).toEqual([1, 2]);
+      expect([vm.form.makerFeeRate, vm.form.takerFeeRate]).toEqual(["0.0002", "0.0005"]);
+
+      vm.form.exchange = 1;
+      await flushPromises();
+      expect(vm.form.markets).toEqual([1]);
+      expect([vm.form.makerFeeRate, vm.form.takerFeeRate], "按现货的默认费率").toEqual(["0.001", "0.001"]);
+
+      // 手工改过费率的不覆盖。
+      Object.assign(vm.form, { exchange: 2, markets: [1, 2], makerFeeRate: "0.0003", feesEdited: true });
+      await flushPromises();
+      vm.form.exchange = 1;
+      await flushPromises();
+      expect(vm.form.makerFeeRate).toBe("0.0003");
+    });
+
     it("换密钥后，“确认这是生产环境密钥且没有提现权限”作废", async () => {
       const vm = await openDialog();
       vm.open("prod");
