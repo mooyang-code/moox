@@ -267,3 +267,13 @@ func TestAgeProbeIsPerMarketOnUnifiedDataset(t *testing.T) {
 		t.Fatalf("第二期不应再为已通过的标的探针（两个市场交替也只读一次持久化）：%d", probes-before)
 	}
 }
+
+// 策略池暂不支持统一数据集上的任务：成员账本估值与预热按市场分别读取 View。
+func TestResolvePoolRejectsUnifiedDatasetTask(t *testing.T) {
+	client := newUnifiedClient()
+	members := []PoolMemberDef{memberDef(t, "a", "spot"), memberDef(t, "b", "swap")}
+	_, err := ResolvePool(context.Background(), client, "space", []string{"ftask_1h"}, parseStrategy(t, poolDSL), members)
+	if err == nil || !strings.Contains(err.Error(), "策略池暂不支持") {
+		t.Fatalf("统一数据集上的任务不能绑定策略池：%v", err)
+	}
+}

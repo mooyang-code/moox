@@ -111,7 +111,7 @@ type ucWorld struct {
 	skipped map[string]bool
 	// history 是各市场在年龄探针窗口里有历史行的标的。
 	history map[string][]string
-	// inactive 是数据集里已下架（不再是标签活跃成员）、但行仍在的标的：市场 → 标的。
+	// state 是上一期的引擎状态（持有的标的与目标）。
 	state engine.State
 }
 
