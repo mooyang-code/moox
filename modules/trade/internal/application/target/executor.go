@@ -133,8 +133,6 @@ type placement struct {
 	tooSmall bool
 	// deferred 表示本批这个执行账户的额度用完，留到下一批。
 	deferred bool
-	// unfilled 表示伪市价单用满尝试次数仍没成交完（未到位）。
-	unfilled bool
 	// capDeferred 表示单币每小时上限的剩余额度不够下一单，这个标的顺延到下一个整点。
 	capDeferred bool
 }
@@ -1277,7 +1275,7 @@ func (e *Executor) placeAction(
 		// 只落库，批量提交由收敛统一发出；拒单后下一轮换成员，全部被拒时写入 blocked_targets。
 		return placement{placed: true, orderID: string(placed.ID)}, nil
 	}
-	result := placement{tooSmall: len(candidates) > 0 && tooSmall == len(candidates), unfilled: unfilled}
+	result := placement{tooSmall: len(candidates) > 0 && tooSmall == len(candidates)}
 	if len(capacityErrors) == 0 {
 		result.reason = "数量低于交易所最小值"
 		return result, nil
