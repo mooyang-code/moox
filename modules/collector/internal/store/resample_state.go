@@ -172,6 +172,16 @@ func (row backfillNoticeRow) notice() BackfillNotice {
 		Start: row.Start.UTC(), End: row.End.UTC(), Origin: row.Origin, JobID: row.JobID, BatchID: row.BatchID}
 }
 
+// 发件箱事件的发布状态（t_collector_event_outbox.c_published）。
+const (
+	// OutboxPending 还没发布，发布协程会取走它。
+	OutboxPending = 0
+	// OutboxPublished 已经发布成功。
+	OutboxPublished = 1
+	// OutboxDead 是死信：事件无法解码，不再被当作待发布，只上报关注项等人工处理。
+	OutboxDead = 2
+)
+
 type eventOutboxRow struct {
 	ID           int64     `gorm:"column:c_id;primaryKey;autoIncrement"`
 	EventID      string    `gorm:"column:c_event_id"`
@@ -179,7 +189,7 @@ type eventOutboxRow struct {
 	EventName    string    `gorm:"column:c_event_name"`
 	SubjectToken string    `gorm:"column:c_subject_token"`
 	Payload      []byte    `gorm:"column:c_payload"`
-	Published    bool      `gorm:"column:c_published"`
+	Published    int       `gorm:"column:c_published"`
 	CreatedAt    time.Time `gorm:"column:c_ctime"`
 }
 
@@ -595,7 +605,7 @@ func (r *ResampleStateRepository) PendingEvents(ctx context.Context, limit int) 
 		limit = 100
 	}
 	var rows []eventOutboxRow
-	if err := r.db.WithContext(ctx).Where("c_published = ?", false).Order("c_id").Limit(limit).Find(&rows).Error; err != nil {
+	if err := r.db.WithContext(ctx).Where("c_published = ?", OutboxPending).Order("c_id").Limit(limit).Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	out := make([]OutboxEvent, len(rows))
@@ -610,15 +620,15 @@ func (r *ResampleStateRepository) MarkPublished(ctx context.Context, id int64) e
 	if err := r.ready(); err != nil {
 		return err
 	}
-	return r.db.WithContext(ctx).Model(&eventOutboxRow{}).Where("c_id = ?", id).Update("c_published", true).Error
+	return r.db.WithContext(ctx).Model(&eventOutboxRow{}).Where("c_id = ?", id).Update("c_published", OutboxPublished).Error
 }
 
-// MarkDead 把无法解码的发件箱事件标成死信（c_published = 2）：它不再被当作待发布，不会堵住后面的事件。
+// MarkDead 把无法解码的发件箱事件标成死信（OutboxDead）：它不再被当作待发布，不会堵住后面的事件。
 func (r *ResampleStateRepository) MarkDead(ctx context.Context, id int64) error {
 	if err := r.ready(); err != nil {
 		return err
 	}
-	return r.db.WithContext(ctx).Model(&eventOutboxRow{}).Where("c_id = ?", id).Update("c_published", 2).Error
+	return r.db.WithContext(ctx).Model(&eventOutboxRow{}).Where("c_id = ?", id).Update("c_published", OutboxDead).Error
 }
 
 // DeadEvents 返回被标成死信的发件箱事件个数。
@@ -627,7 +637,7 @@ func (r *ResampleStateRepository) DeadEvents(ctx context.Context) (int64, error)
 		return 0, err
 	}
 	var count int64
-	err := r.db.WithContext(ctx).Model(&eventOutboxRow{}).Where("c_published = 2").Count(&count).Error
+	err := r.db.WithContext(ctx).Model(&eventOutboxRow{}).Where("c_published = ?", OutboxDead).Count(&count).Error
 	return count, err
 }
 
@@ -642,6 +652,6 @@ func (r *ResampleStateRepository) CleanupNotices(ctx context.Context, before tim
 		return 0, result.Error
 	}
 	total += result.RowsAffected
-	result = r.db.WithContext(ctx).Where("c_published > 0 AND c_ctime < ?", before.UTC()).Delete(&eventOutboxRow{})
+	result = r.db.WithContext(ctx).Where("c_published <> ? AND c_ctime < ?", OutboxPending, before.UTC()).Delete(&eventOutboxRow{})
 	return total + result.RowsAffected, result.Error
 }

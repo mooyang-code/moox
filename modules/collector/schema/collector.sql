@@ -353,6 +353,7 @@ CREATE INDEX IF NOT EXISTS idx_t_collector_backfill_notices_batch ON t_collector
 
 -- Collector 本地事件发件箱：事件成批后与通知的封存在同一事务里写入，发布协程推送到 JetStream，
 -- 以 c_event_id 作为 Msg-Id 去重；发布成功才标记 c_published。
+-- c_published：0 待发布，1 已发布，2 死信（事件无法解码，不再发布，上报关注项等人工处理）。
 CREATE TABLE IF NOT EXISTS t_collector_event_outbox (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_event_id TEXT NOT NULL,
