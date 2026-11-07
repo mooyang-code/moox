@@ -2,10 +2,11 @@ package replay
 
 import (
 	"encoding/json"
-	"github.com/mooyang-code/moox/modules/strategy/internal/ledger"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/ledger"
 )
 
 // 年化只在区间不短于一周且结果有限时给出，否则省略并在局限中说明。
