@@ -461,3 +461,49 @@ func TestCollectWithoutTransferSupportOnlyWarns(t *testing.T) {
 	f.run()
 	require.Equal(t, 1, calls)
 }
+
+// 账户类型由交易所检测写入（T5）：检测写入之前不监控，写入之后对币安普通账户、统一账户生效。
+func TestDetectionWritingTheAccountModeEnablesTheMonitor(t *testing.T) {
+	writeMode := func(f *fixture, mode string) {
+		t.Helper()
+		require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
+			return tx.SetTradingAccountInspection("space-1", "account-1", "secret-1", mode, `{"account_mode":"`+mode+`"}`)
+		}))
+		// 账户类型变了会把就绪置为否，会话重建、同步成功后才恢复；这里直接模拟恢复。
+		require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_trading_accounts SET c_ready = 1`).Error)
+		f.advance(0)
+	}
+
+	// 普通账户：总权益 400 ÷ 持仓名义 1000 = 0.4 ≤ 0.5。
+	std := newFixture(t, "", "400")
+	require.NoError(t, std.store.DBForTest().Exec(`UPDATE t_trading_accounts SET c_account_mode = ''`).Error)
+	std.run()
+	require.Empty(t, std.reduces, "检测还没写入账户类型：不监控")
+	writeMode(std, "BINANCE_STANDARD")
+	std.run()
+	require.Len(t, std.reduces, 1, "检测写入普通账户后监控生效")
+
+	// 统一账户：uniMMR = 总权益 ÷ 维持保证金 = 120 ÷ 100 = 1.2 < 1.5。
+	unified := newFixture(t, "", "120")
+	require.NoError(t, unified.store.DBForTest().Exec(`UPDATE t_trading_accounts SET c_account_mode = '',
+		c_snapshot_json = json_set(c_snapshot_json, '$.maintenance_margin', '100')`).Error)
+	unified.run()
+	require.Empty(t, unified.reduces)
+	writeMode(unified, "BINANCE_PORTFOLIO_MARGIN")
+	unified.run()
+	require.Len(t, unified.reduces, 1, "检测写入统一账户后监控生效，读数是 总权益 ÷ 维持保证金")
+}
+
+// OKX 的实盘永续账户不监控，只告警一次（不管检测有没有写入账户类型）。
+func TestOKXAccountIsNotMonitoredAndWarnsOnce(t *testing.T) {
+	f := newFixture(t, "", "400")
+	require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_trading_accounts SET c_exchange = 'OKX', c_account_mode = 'OKX_UNIFIED'`).Error)
+	f.run()
+	f.run()
+	f.run()
+	require.Empty(t, f.reduces)
+	require.Len(t, f.service.warned, 1, "只告警一次")
+	for key := range f.service.warned {
+		require.Contains(t, key, "account-1")
+	}
+}

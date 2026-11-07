@@ -32,3 +32,4 @@
 - 普通账户合约钱包的可划转额度取 `/fapi/v3/account` 资产行的 `maxWithdrawAmount`（官方 SDK 转录的字段说明：Maximum transferable/withdrawable amount），不取 `availableBalance`（持仓浮盈、多资产模式下两者可以不一致）；字段缺失才退回可用余额。该字段的取值规则以官方说明为准，未用真实账户核对。
 - 资金流水去重假定合约收益流水里 `incomeType=TRANSFER` 的 `tranId` 就是万向划转的 `tranId`，用它避免已完成的划转重复出现；两者不是同一个编号时会重复。未核对，V3 实测要核对。
 - 等现货钱包快照追上划转用现货账户 `GET /api/v3/account` 的 `updateTime`（`binance.go` 里取 `updateTime`）：如果划转不更新这个时间，每笔划转后要等满 2 分钟（`snapshotGrace`）才放行买入，只是慢，不会多花钱。未核对，V3 实测要核对。
+- 保证金率监控的读数（阶段 4）：统一账户取 `GET /papi/v1/account` 的 `accountEquity`（总权益）和 `accountMaintMargin`（维持保证金），读数 = accountEquity ÷ accountMaintMargin；普通账户取 `/fapi/v3/account` 的 `totalMarginBalance`（总权益）和合约持仓名义。官方样例里的 `uniMMR`（5167.92）与 `accountEquity ÷ accountMaintMargin`（3.10）对不上，而 `actualEquity ÷ accountMaintMargin` 恰好等于样例的 `uniMMR`：币安算 `uniMMR` 的分子可能是不含抵押率折扣的 `actualEquity`。这里取 `accountEquity`（折扣后更保守，同样的账户读数不会高于币安的 `uniMMR`），样例数字是示例值，不能据此下结论。未核对，V3 小额实测要用真实账户核对：监控读数是否和币安的 `uniMMR` 一致。

@@ -103,6 +103,9 @@ func TestStandardAccountSnapshotsUseSeparateWallets(t *testing.T) {
 	require.Equal(t, exchange.WalletFutures, swap.Balances[0].Wallet)
 	// 合约钱包余额取 walletBalance（官方样例 23.72469206），不含未实现盈亏。
 	require.Equal(t, "23.72469206", swap.Balances[0].Total.String())
+	// 保证金率监控的读数：总权益取 totalMarginBalance，维持保证金取 totalMaintMargin（官方 fapi v3 样例）。
+	require.Equal(t, "126.72469206", swap.ExchangeEquity.String())
+	require.Equal(t, "0", swap.MaintenanceMargin.String())
 	// 可划转额度取 maxWithdrawAmount（官方：Maximum transferable/withdrawable amount），不是 availableBalance。
 	require.Equal(t, "23.72469206", swap.Balances[0].Transferable.String())
 	var info map[string]any

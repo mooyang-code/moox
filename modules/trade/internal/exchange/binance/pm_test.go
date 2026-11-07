@@ -308,6 +308,9 @@ func TestPortfolioMarginAccountSnapshotUsesOfficialSamples(t *testing.T) {
 	require.NotContains(t, byWallet, exchange.WalletUnified, "UM 钱包余额为 0 时不记条目")
 	require.Equal(t, "-7.5", snapshot.UnrealizedPnL.String(), "未实现盈亏取持仓接口，不取余额行里的 umUnrealizedPNL")
 	require.Equal(t, "73.47428058", snapshot.ExchangeEquity.String())
+	// 保证金率监控的统一账户读数：总权益 accountEquity、维持保证金 accountMaintMargin（官方 papi account 样例）。
+	require.Equal(t, "23.72469206", snapshot.MaintenanceMargin.String())
+	require.True(t, snapshot.Present.MaintenanceMargin && snapshot.Present.Equity)
 	require.Equal(t, "23.72469206", snapshot.UsedMargin.String())
 	require.False(t, snapshot.ExchangeUpdatedAt.IsZero())
 	require.Equal(t, snapshot.ExchangeUpdatedAt, snapshot.WalletUpdatedAt[exchange.WalletMargin])
