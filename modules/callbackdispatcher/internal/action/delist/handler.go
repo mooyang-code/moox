@@ -412,41 +412,46 @@ func (r *run) recheck(ctx context.Context) (store.Execution, error) {
 
 // noteDetected 发现下架时，用只读的 ListInstrumentHolders 查当前有没有策略持有，有就产生 delist_detected 关注项。查不到不影响处理。
 func (r *run) noteDetected(ctx context.Context) {
-	holders, err := r.listHolders(ctx)
+	result, err := r.listHolders(ctx)
 	if err != nil {
 		log.WarnContextf(ctx, "下架 %s：查持有者失败，不产生发现通知: %v", r.target.subject(), err)
 		return
 	}
-	var live []action.Holder
-	for _, holder := range holders {
-		if !holder.Dust {
-			live = append(live, holder)
-		}
-	}
+	live := filterLive(result.Holders)
 	if len(live) == 0 {
 		return
 	}
 	telemetry.NoteDelistDetected(fmt.Sprintf("%s 将于 %s 下架，%d 个组合持有", r.target.subject(), r.target.DelistAt.UTC().Format("2006-01-02 15:04 UTC"), len(groupHolders(live))), r.now)
 }
 
-// listHolders 查持有者。范围是 PAPER_ONLY 时自己再过滤一遍，不依赖 Trade 守约。
-func (r *run) listHolders(ctx context.Context) ([]action.Holder, error) {
+// listHolders 查持有者。范围是 PAPER_ONLY 时自己再过滤一遍持有者，不依赖 Trade 守约。
+func (r *run) listHolders(ctx context.Context) (action.HoldersResult, error) {
 	callCtx, cancel := r.h.tradeCtx(ctx)
 	defer cancel()
-	holders, err := r.h.Trade.ListInstrumentHolders(callCtx, r.target.Instrument, r.target.PaperOnly)
-	if err != nil {
-		return nil, err
+	result, err := r.h.Trade.ListInstrumentHolders(callCtx, r.target.Instrument, r.target.PaperOnly)
+	if err != nil || !r.target.PaperOnly {
+		return result, err
 	}
-	if !r.target.PaperOnly {
-		return holders, nil
-	}
-	paper := holders[:0:0]
-	for _, holder := range holders {
+	paper := result.Holders[:0:0]
+	for _, holder := range result.Holders {
 		if holder.Paper {
 			paper = append(paper, holder)
 		}
 	}
-	return paper, nil
+	result.Holders = paper
+	return result, nil
+}
+
+// describeSkipped 列出 Trade 没能判断的账户：它们不能当作没有持有，要人工确认。
+func describeSkipped(skipped []action.SkippedAccount) string {
+	if len(skipped) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(skipped))
+	for _, item := range skipped {
+		parts = append(parts, fmt.Sprintf("%s（%s）", item.TradingAccountID, item.Reason))
+	}
+	return fmt.Sprintf("有 %d 个账户没能判断持仓，需要人工确认：%s", len(skipped), strings.Join(parts, "、"))
 }
 
 // account 是一个（空间、组合账户）。
@@ -528,12 +533,14 @@ func (r *run) flattenRound(ctx context.Context, round int, due time.Time) error 
 			r.wakeAt(r.now.Add(5 * time.Second))
 			return nil
 		}
-		holders, err := r.listHolders(ctx)
+		listed, err := r.listHolders(ctx)
 		if err != nil {
 			r.problem("第 %d 轮：查持有者失败，稍后重试: %v", round, err)
 			r.wakeAt(r.now.Add(transientRetry))
 			return nil
 		}
+		holders := listed.Holders
+		skipped := describeSkipped(listed.Skipped)
 		accounts := groupHolders(filterLive(holders))
 		for _, item := range accounts {
 			row := store.DelistAction{
@@ -552,10 +559,18 @@ func (r *run) flattenRound(ctx context.Context, round int, due time.Time) error 
 			}
 		}
 		summary = store.DelistAction{Round: round, Kind: store.DelistKindFlatten, Exchange: r.target.Instrument.Exchange, Status: store.DelistRunning, PlannedDelistAt: plannedAt}
-		summary.Result = joinLines(nonEmpty(fmt.Sprintf("持有的组合 %d 个", len(accounts)), describeDust(holders)))
+		notes := strings.Join(listed.Notes, "；")
+		// 有没能判断的账户时，这一轮不能算成功：汇总行带上说明，最终状态至少是“只完成一部分”，关注项会提醒人工确认。
+		summary.Error = skipped
+		summary.Result = joinLines(nonEmpty(fmt.Sprintf("持有的组合 %d 个", len(accounts)), describeDust(holders), notes))
 		if len(accounts) == 0 {
 			summary.Status = store.DelistSucceeded
-			summary.Result = joinLines(nonEmpty("没有策略持有，无需平仓", describeDust(holders)))
+			headline := "没有策略持有，无需平仓"
+			if skipped != "" {
+				summary.Status = store.DelistPartial
+				headline = "没有查到策略持有，但有账户没能判断，不能当作没有持有"
+			}
+			summary.Result = joinLines(nonEmpty(headline, describeDust(holders), notes))
 		}
 		// 汇总行最后写：它按这个下架时间存在，说明这一轮的各组合行都已存好。
 		if err := r.save(ctx, summary); err != nil {
@@ -593,6 +608,9 @@ func (r *run) settleSummary(ctx context.Context, summary store.DelistAction, row
 		case current.Status == store.DelistPartial && status != store.DelistFailed:
 			status = store.DelistPartial
 		}
+	}
+	if status == store.DelistSucceeded && summary.Error != "" {
+		status = store.DelistPartial
 	}
 	summary.Status = status
 	return r.save(ctx, summary)
@@ -773,12 +791,14 @@ func (r *run) verify(ctx context.Context) (action.Outcome, error) {
 		r.wakeAt(r.now.Add(5 * time.Second))
 		return r.pending(), nil
 	}
-	holders, err := r.listHolders(ctx)
+	listed, err := r.listHolders(ctx)
 	if err != nil {
 		r.problem("核对时查持有者失败，稍后重试: %v", err)
 		r.wakeAt(r.now.Add(transientRetry))
 		return r.pending(), nil
 	}
+	holders := listed.Holders
+	skipped := describeSkipped(listed.Skipped)
 	live := filterLive(holders)
 	step := store.DelistAction{Round: RoundVerify, Kind: store.DelistKindVerify, Exchange: r.target.Instrument.Exchange}
 	if existing, ok := r.steps[keyOf(step)]; ok {
@@ -786,19 +806,25 @@ func (r *run) verify(ctx context.Context) (action.Outcome, error) {
 	}
 	step.Attempts++
 	dust := describeDust(holders)
-	if len(live) > 0 {
-		var parts []string
-		for _, item := range groupHolders(live) {
-			parts = append(parts, item.SpaceID+"/"+item.LogicalAccountID)
+	detail := joinLines(nonEmpty(dust, strings.Join(listed.Notes, "；")))
+	if len(live) > 0 || skipped != "" {
+		var message string
+		if len(live) > 0 {
+			var parts []string
+			for _, item := range groupHolders(live) {
+				parts = append(parts, item.SpaceID+"/"+item.LogicalAccountID)
+			}
+			message = fmt.Sprintf("下架后核对：仍有 %d 个组合持有 %s：%s", len(parts), r.target.subject(), strings.Join(parts, "、"))
 		}
-		message := fmt.Sprintf("下架后核对：仍有 %d 个组合持有 %s：%s", len(parts), r.target.subject(), strings.Join(parts, "、"))
-		step.Status, step.Error, step.Result = store.DelistFailed, message, dust
+		// 没能判断的账户不能当作没有持有：核对不通过，要人工确认。
+		message = joinLines(nonEmpty(message, skipped))
+		step.Status, step.Error, step.Result = store.DelistFailed, message, detail
 		if err := r.save(ctx, step); err != nil {
 			return action.Outcome{}, err
 		}
 		return action.Outcome{Status: store.StatusFailed, Error: message}, nil
 	}
-	step.Status, step.Result = store.DelistSucceeded, joinLines(nonEmpty("核对通过，没有策略持有", dust))
+	step.Status, step.Result = store.DelistSucceeded, joinLines(nonEmpty("核对通过，没有策略持有", detail))
 	if err := r.save(ctx, step); err != nil {
 		return action.Outcome{}, err
 	}

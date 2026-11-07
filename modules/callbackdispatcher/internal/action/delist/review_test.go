@@ -306,3 +306,64 @@ func TestPostponedDoesNotReopenSucceededRound(t *testing.T) {
 	h.step("e1", newT.Add(-24*time.Hour))
 	require.Equal(t, before, h.trade.flattenCount(), "成功的一轮不重开，新持仓留给复查")
 }
+
+// T27 对接：Trade 报告没能判断的账户（skipped）时，平仓轮次不能算成功、核对不能因为“没人持有”就通过，都要提醒人工确认。
+func TestSkippedAccountsNeedManualConfirmation(t *testing.T) {
+	skipped := []action.SkippedAccount{{TradingAccountID: "ta-9", Reason: "资金设置读不出来"}}
+
+	// 查到持有者、同时有没能判断的账户：持有的照常平；这一轮最终至少是“只完成一部分”，带着说明。
+	h := newHarness(t)
+	delistAt := baseTime.Add(48 * time.Hour)
+	h.trade.setHolders(live("crypto", "la-1"))
+	h.trade.skipped = skipped
+	h.trade.notes = []string{"计价币不是结算币，清仓不会卖它"}
+	h.addExecution("e1", delistAt, "ALL")
+	h.step("e1", baseTime)
+	h.step("e1", delistAt.Add(-24*time.Hour))
+	h.step("e1", delistAt.Add(-24*time.Hour+30*time.Second))
+	require.Equal(t, 1, h.trade.flattenCount())
+	round := h.steps("e1")[summaryKey(RoundFlatten)]
+	require.Equal(t, store.DelistPartial, round.Status)
+	require.Contains(t, round.Error, "ta-9（资金设置读不出来）")
+	require.Contains(t, round.Result, "计价币不是结算币")
+	require.Equal(t, store.DelistSucceeded, h.steps("e1")[flattenKey(RoundFlatten, "crypto", "la-1")].Status)
+	// 关注项会提醒：未结束的记录里有只完成一部分的步骤。
+	failed, err := h.store.ListUnfinishedWithFailedSteps(context.Background())
+	require.NoError(t, err)
+	require.Len(t, failed, 1)
+
+	// 没有查到持有者，但有没能判断的账户：这一轮不是“没有策略持有”。
+	h2 := newHarness(t)
+	h2.trade.skipped = skipped
+	h2.addExecution("e2", delistAt, "ALL")
+	h2.step("e2", baseTime)
+	h2.step("e2", delistAt.Add(-24*time.Hour))
+	round = h2.steps("e2")[summaryKey(RoundFlatten)]
+	require.Equal(t, store.DelistPartial, round.Status)
+	require.NotContains(t, round.Result, "没有策略持有，无需平仓")
+
+	// 核对：没人持有，但有没能判断的账户，不能通过。
+	out := h2.step("e2", delistAt.Add(10*time.Minute))
+	require.Equal(t, store.StatusFailed, out.Status)
+	require.Contains(t, out.Error, "需要人工确认")
+	require.Equal(t, store.DelistFailed, h2.steps("e2")[verifyKey()].Status)
+
+	// 账户确认之后（不再有没能判断的），重新执行核对通过。
+	h2.trade.skipped = nil
+	require.Equal(t, store.StatusSucceeded, h2.step("e2", delistAt.Add(11*time.Minute)).Status)
+}
+
+// 停用或出错的账户照常列出，处理器照常当作持有者平仓（会失败重试，核对仍有持有时告警）。
+func TestDisabledAccountHolderIsFlattenedLikeAnyOther(t *testing.T) {
+	h := newHarness(t)
+	delistAt := baseTime.Add(48 * time.Hour)
+	disabled := action.Holder{SpaceID: "crypto", LogicalAccountID: "la-off", Exchange: "binance", Quantity: "3", Status: "DISABLED"}
+	h.trade.setHolders(disabled)
+	h.trade.finalFor = func(action.FlattenRequest) (string, string) { return action.OperatorFailed, "账户已停用" }
+	h.addExecution("e1", delistAt, "ALL")
+	h.step("e1", baseTime)
+	h.step("e1", delistAt.Add(-24*time.Hour))
+	require.Equal(t, 1, h.trade.flattenCount())
+	out := h.step("e1", delistAt.Add(10*time.Minute))
+	require.Equal(t, store.StatusFailed, out.Status, "核对仍有持有，告警")
+}

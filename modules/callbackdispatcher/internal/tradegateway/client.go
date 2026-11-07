@@ -159,29 +159,32 @@ func (c *Client) ListBlockedInstruments(ctx context.Context) ([]action.Instrumen
 	return list, nil
 }
 
-// ListInstrumentHolders 跨空间列出持有该标的的执行账户（每个执行账户一行）。响应里没有交易所，持有者的交易所取自请求。
-func (c *Client) ListInstrumentHolders(ctx context.Context, instrument action.InstrumentRef, paperOnly bool) ([]action.Holder, error) {
+// ListInstrumentHolders 跨空间列出持有该标的的执行账户（每个执行账户一行），连同没能判断的账户和说明。响应里没有交易所，持有者的交易所取自请求。
+func (c *Client) ListInstrumentHolders(ctx context.Context, instrument action.InstrumentRef, paperOnly bool) (action.HoldersResult, error) {
 	exchange, market, err := c.instrument(instrument)
 	if err != nil {
-		return nil, err
+		return action.HoldersResult{}, err
 	}
 	response := new(tradepb.ListInstrumentHoldersRsp)
 	if err := c.invoke(ctx, "ListInstrumentHolders", "", &tradepb.ListInstrumentHoldersReq{
 		Exchange: exchange, MarketType: market, ExchangeSymbol: instrument.ExchangeSymbol, PaperOnly: paperOnly,
 	}, response); err != nil {
-		return nil, err
+		return action.HoldersResult{}, err
 	}
 	if err := retError(response.GetRetInfo()); err != nil {
-		return nil, err
+		return action.HoldersResult{}, err
 	}
-	holders := make([]action.Holder, 0, len(response.GetHolders()))
+	result := action.HoldersResult{InstrumentUnknown: response.GetInstrumentUnknown(), Notes: append([]string(nil), response.GetNotes()...)}
 	for _, item := range response.GetHolders() {
-		holders = append(holders, action.Holder{
+		result.Holders = append(result.Holders, action.Holder{
 			SpaceID: item.GetSpaceId(), LogicalAccountID: item.GetLogicalAccountId(), Exchange: instrument.Exchange,
-			Quantity: item.GetQuantity(), Dust: item.GetDust(), Paper: item.GetPaper(),
+			Quantity: item.GetQuantity(), Dust: item.GetDust(), Paper: item.GetPaper(), Status: item.GetStatus(), Note: item.GetNote(),
 		})
 	}
-	return holders, nil
+	for _, item := range response.GetSkippedAccounts() {
+		result.Skipped = append(result.Skipped, action.SkippedAccount{TradingAccountID: item.GetTradingAccountId(), Reason: item.GetReason()})
+	}
+	return result, nil
 }
 
 // FlattenInstrument 在持有者所在的空间里对一个组合发起单标的下架清仓。Trade 忙（busy，返回码 CONFLICT、不带动作）时返回 ErrTradeBusy。

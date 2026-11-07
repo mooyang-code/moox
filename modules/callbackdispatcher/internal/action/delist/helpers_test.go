@@ -46,6 +46,9 @@ type fakeTrade struct {
 	// ignorePaperOnly 模拟违约的 Trade：paperOnly 为真也返回全部持有者。
 	ignorePaperOnly bool
 	unknown         bool
+	// skipped 和 notes 是 ListInstrumentHolders 带回的没能判断的账户与说明。
+	skipped []action.SkippedAccount
+	notes   []string
 
 	// 各接口的钩子与注入的错误。
 	blockHook   func(ctx context.Context)
@@ -165,11 +168,11 @@ func (f *fakeTrade) ListBlockedInstruments(context.Context) ([]action.Instrument
 	return list, nil
 }
 
-func (f *fakeTrade) ListInstrumentHolders(_ context.Context, _ action.InstrumentRef, paperOnly bool) ([]action.Holder, error) {
+func (f *fakeTrade) ListInstrumentHolders(_ context.Context, _ action.InstrumentRef, paperOnly bool) (action.HoldersResult, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.enter("ListHolders"); err != nil {
-		return nil, err
+		return action.HoldersResult{}, err
 	}
 	var result []action.Holder
 	for _, holder := range f.holders {
@@ -178,7 +181,7 @@ func (f *fakeTrade) ListInstrumentHolders(_ context.Context, _ action.Instrument
 		}
 		result = append(result, holder)
 	}
-	return result, nil
+	return action.HoldersResult{Holders: result, Skipped: f.skipped, Notes: f.notes}, nil
 }
 
 func accountKey(spaceID, logicalAccountID string) string { return spaceID + "/" + logicalAccountID }

@@ -78,9 +78,9 @@ func TestBlockAndHoldersMapping(t *testing.T) {
 	gateway := &fakeGateway{responses: map[string]any{
 		"BlockInstrument": &tradepb.BlockInstrumentRsp{RetInfo: ok(), InstrumentUnknown: true},
 		"ListInstrumentHolders": &tradepb.ListInstrumentHoldersRsp{RetInfo: ok(), Holders: []*tradepb.InstrumentHolder{
-			{SpaceId: "crypto", LogicalAccountId: "la-1", TradingAccountId: "ta-1", Quantity: "10", Paper: true},
-			{SpaceId: "crypto", LogicalAccountId: "la-1", TradingAccountId: "ta-2", Quantity: "0.0001", Dust: true},
-		}},
+			{SpaceId: "crypto", LogicalAccountId: "la-1", TradingAccountId: "ta-1", Quantity: "10", Paper: true, Status: "ENABLED"},
+			{SpaceId: "crypto", LogicalAccountId: "la-1", TradingAccountId: "ta-2", Quantity: "0.0001", Dust: true, Status: "ERROR", Note: "取不到报价"},
+		}, SkippedAccounts: []*tradepb.SkippedAccount{{TradingAccountId: "ta-9", Reason: "资金设置读不出来"}}, Notes: []string{"计价币不是结算币，清仓不会卖它"}},
 		"ListBlockedInstruments": &tradepb.ListBlockedInstrumentsRsp{RetInfo: ok(), Instruments: []*tradepb.BlockedInstrument{
 			{Exchange: tradepb.Exchange_EXCHANGE_OKX, MarketType: tradepb.MarketType_MARKET_TYPE_SWAP, ExchangeSymbol: "FOO-USDT-SWAP"},
 		}},
@@ -99,9 +99,12 @@ func TestBlockAndHoldersMapping(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, gateway.calls[1].request.(*tradepb.ListInstrumentHoldersReq).PaperOnly)
 	require.Equal(t, []action.Holder{
-		{SpaceID: "crypto", LogicalAccountID: "la-1", Exchange: "binance", Quantity: "10", Paper: true},
-		{SpaceID: "crypto", LogicalAccountID: "la-1", Exchange: "binance", Quantity: "0.0001", Dust: true},
-	}, holders, "响应里没有交易所，取自请求")
+		{SpaceID: "crypto", LogicalAccountID: "la-1", Exchange: "binance", Quantity: "10", Paper: true, Status: "ENABLED"},
+		{SpaceID: "crypto", LogicalAccountID: "la-1", Exchange: "binance", Quantity: "0.0001", Dust: true, Status: "ERROR", Note: "取不到报价"},
+	}, holders.Holders, "响应里没有交易所，取自请求；账户状态和标注带回")
+	require.Equal(t, []action.SkippedAccount{{TradingAccountID: "ta-9", Reason: "资金设置读不出来"}}, holders.Skipped)
+	require.Equal(t, []string{"计价币不是结算币，清仓不会卖它"}, holders.Notes)
+	require.False(t, holders.InstrumentUnknown)
 
 	blocked, err := client.ListBlockedInstruments(context.Background())
 	require.NoError(t, err)

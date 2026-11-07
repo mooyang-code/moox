@@ -25,6 +25,27 @@ type Holder struct {
 	Dust     bool
 	// Paper 为真表示模拟盘组合。
 	Paper bool
+	// Status 是执行账户状态：ENABLED、DISABLED、ERROR。停用和出错的账户照常列出（最需要人工处理），对它们平仓会失败，核对会报仍有持有。
+	Status string
+	// Note 是 Trade 对这一项的标注，例如“取不到报价，零头只按最小数量判断”。
+	Note string
+}
+
+// SkippedAccount 是 Trade 查持有者时出错、没能判断的执行账户（资金设置读不出来、读受管资产出错等）。
+type SkippedAccount struct {
+	TradingAccountID string
+	Reason           string
+}
+
+// HoldersResult 是 ListInstrumentHolders 的结果。
+type HoldersResult struct {
+	Holders []Holder
+	// Skipped 不能当作没有持有：平仓轮次要提醒人工确认，下架后核对也不能因为“没人持有”就通过。
+	Skipped []SkippedAccount
+	// Notes 是明确不算持有的说明，例如标的的计价币不是账户的结算币（清仓不会卖它）。
+	Notes []string
+	// InstrumentUnknown 为真表示 Trade 没有这个标的，这时 Holders 为空，不算失败。
+	InstrumentUnknown bool
 }
 
 // Trade 操作（单标的下架清仓）的状态。
@@ -83,7 +104,7 @@ type TradeClient interface {
 	// ListBlockedInstruments 返回当前下架名单；每次推进前用它确认标的还在名单里。
 	ListBlockedInstruments(ctx context.Context) ([]InstrumentRef, error)
 	// ListInstrumentHolders 跨空间列出策略持有该标的的组合账户；paperOnly 为真只返回模拟盘。
-	ListInstrumentHolders(ctx context.Context, instrument InstrumentRef, paperOnly bool) ([]Holder, error)
+	ListInstrumentHolders(ctx context.Context, instrument InstrumentRef, paperOnly bool) (HoldersResult, error)
 	// FlattenInstrument 发起单标的下架清仓，返回 Trade 的操作（操作号、当前状态）。Trade 忙时返回 ErrTradeBusy。
 	FlattenInstrument(ctx context.Context, request FlattenRequest) (OperatorAction, error)
 	// GetOperatorAction 查询一次操作的结果。
