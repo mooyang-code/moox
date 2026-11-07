@@ -133,7 +133,7 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 	}
 	accountEvents := s.AccountEvents
 	if accountEvents == nil {
-		accountEvents, _ = s.Adapter.(execution.AccountEventSource)
+		accountEvents = execution.AccountEventsOf(s.Adapter)
 	}
 	if accountEvents == nil {
 		return s.runPolling(ctx)

@@ -119,6 +119,13 @@ func (a Account) validateMarkets() error {
 	if !slices.Equal(normalized, a.Markets) {
 		return invalidAccount("已开通的市场必须去重并按 SPOT、SWAP、STOCK 的顺序排列")
 	}
+	environment := a.Environment
+	if a.Live != nil {
+		environment = a.Live.Environment
+	}
+	if environment == exchange.AccountEnvironmentTestnet && len(a.Markets) > 1 {
+		return invalidAccount("测试网一个账户只能开通一个市场：现货测试网和合约测试网是两套密钥")
+	}
 	if !a.AccountMode.Valid() {
 		return invalidAccount("不支持的账户类型")
 	}

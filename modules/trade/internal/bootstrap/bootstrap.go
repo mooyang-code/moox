@@ -254,7 +254,7 @@ func initialize(
 			}
 			marketData = adapter
 			// 没有私有流的场所不订阅，会话改为短周期同步。
-			accountEvents, _ = adapter.(execution.AccountEventSource)
+			accountEvents = execution.AccountEventsOf(adapter)
 		}
 		return &traderuntime.ExchangeSession{
 			Account: record, Adapter: adapter, MarketData: marketData, AccountEvents: accountEvents,

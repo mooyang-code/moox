@@ -323,7 +323,8 @@ func (r *WeightResolver) bnbMarketValue(ctx context.Context, members []store.Log
 		}
 		applicable = true
 		quantity := shared.Zero()
-		for _, balance := range account.SpotBalances() {
+		// BNB 抵扣手续费的 BNB 现货和合约钱包里都可能有（普通账户分配到两个钱包），市值两个钱包都算。
+		for _, balance := range account.Snapshot.Balances {
 			if strings.EqualFold(balance.Asset, fundsettings.BNBAsset) {
 				held, err := shared.ParseDecimal(balance.Total)
 				if err != nil {

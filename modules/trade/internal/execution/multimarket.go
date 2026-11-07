@@ -272,6 +272,16 @@ func (m *MultiMarket) ListLedger(ctx context.Context, query exchange.LedgerQuery
 	return page, nil
 }
 
+// SupportsAccountEvents 报告每个市场的适配器是否都有私有流；任何一个没有就整体没有，会话用轮询同步。
+func (m *MultiMarket) SupportsAccountEvents() bool {
+	for _, market := range m.markets {
+		if _, ok := m.adapters[market].(AccountEventSource); !ok {
+			return false
+		}
+	}
+	return true
+}
+
 // Subscribe 同时订阅各市场的私有流，任何一路断开都整体结束并上报，由会话重连；
 // 全部订阅成功后才通知会话已订阅。
 func (m *MultiMarket) Subscribe(ctx context.Context, handler AccountEventHandler) error {
