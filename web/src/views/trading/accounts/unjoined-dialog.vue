@@ -58,8 +58,11 @@
         <template #expand-row="{ record }">
           <MemberSettings :account="record" @changed="emit('changed')">
             <template #actions>
-              <a-button v-if="record.status !== 'ENABLED'" size="small" @click="setStatus(record, 'ENABLED')">启用</a-button>
-              <a-button v-else size="small" status="danger" @click="setStatus(record, 'DISABLED')">停用</a-button>
+              <!-- 模拟账户不能改启停（后端拒绝），只有实盘账户给启用、停用 -->
+              <template v-if="record.execution_mode === 2">
+                <a-button v-if="record.status !== 'ENABLED'" size="small" @click="setStatus(record, 'ENABLED')">启用</a-button>
+                <a-button v-else size="small" status="danger" @click="setStatus(record, 'DISABLED')">停用</a-button>
+              </template>
             </template>
           </MemberSettings>
         </template>

@@ -9,6 +9,7 @@ const account = (id: string, extra: Partial<TradingAccount> = {}) =>
     exchange: 1,
     markets: [1],
     execution_mode: 1,
+    status: "ENABLED",
     snapshot: { equity: "100" },
     ...extra
   }) as TradingAccount;
@@ -49,6 +50,16 @@ describe("账户列表模型", () => {
     const accounts = [account("a"), account("off"), account("free"), account("live", { execution_mode: 2 })];
     expect(unjoinedAccounts(accounts, logicals, "paper").map(item => item.trading_account_id)).toEqual(["free"]);
     expect(unjoinedAccounts(accounts, logicals, "prod").map(item => item.trading_account_id)).toEqual(["live"]);
+  });
+
+  it("已关闭的模拟账户（已停用）不进未加入组合的列表，停用的实盘账户还在", () => {
+    const accounts = [
+      account("closed", { status: "DISABLED" }),
+      account("free"),
+      account("live-off", { execution_mode: 2, status: "DISABLED" })
+    ];
+    expect(unjoinedAccounts(accounts, [], "paper").map(item => item.trading_account_id)).toEqual(["free"]);
+    expect(unjoinedAccounts(accounts, [], "prod").map(item => item.trading_account_id)).toEqual(["live-off"]);
   });
 
   it("近 24 小时变化用窗口内首尾两点，点数不足或起点为 0 时为空", () => {

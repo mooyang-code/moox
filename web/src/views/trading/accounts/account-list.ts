@@ -11,13 +11,20 @@ export function joinedAccountIds(logicals: readonly LogicalAccount[]): Set<strin
   return new Set(logicals.flatMap(item => (item.members || []).map(member => member.trading_account_id)));
 }
 
+/** 已关闭的模拟账户：关闭会停用账户并移出组合，之后不能再启用，也不再出现在未加入组合的列表里。 */
+export function isClosedPaper(account: Pick<TradingAccount, "execution_mode" | "status">): boolean {
+  return account.execution_mode === 1 && account.status !== "ENABLED";
+}
+
 export function unjoinedAccounts(
   accounts: readonly TradingAccount[],
   logicals: readonly LogicalAccount[],
   env: Environment
 ): TradingAccount[] {
   const joined = joinedAccountIds(logicals);
-  return accounts.filter(item => !joined.has(item.trading_account_id) && accountEnvironment(item) === env);
+  return accounts.filter(
+    item => !joined.has(item.trading_account_id) && !isClosedPaper(item) && accountEnvironment(item) === env
+  );
 }
 
 export interface MemberRow {
