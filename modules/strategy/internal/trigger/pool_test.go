@@ -423,3 +423,30 @@ func TestPoolEnsuresWarmUpWhenNothingIsWarmingIt(t *testing.T) {
 		t.Fatalf("预热完成后不再补启动：%v", ensured)
 	}
 }
+
+// 追赶进度把策略池的预热终点算作已处理：预热推进过的期不会再有记录，只看结果表会让追赶永远追不平。
+func TestCatchupProgressCountsPoolWarmedThrough(t *testing.T) {
+	h := newPoolHarness(t, poolDSL("{a: 0.5, b: 0.5}"), standardMembers(), nil)
+	warmedThrough := barStart(3).Add(time.Hour)
+	h.warm(warmedThrough, "")
+	progress, err := h.handler.CatchupProgress(context.Background(), "i1", barStart(4).Add(time.Hour+time.Minute), time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !progress.Latest.Equal(warmedThrough) || !progress.Expected.Equal(barStart(4).Add(time.Hour)) || progress.CaughtUp() {
+		t.Fatalf("没有结果时已处理到预热终点：%+v", progress)
+	}
+	h.now = start.Add(2 * time.Hour)
+	h.frame(5, abcFrame(3, 2, 1))
+	expectAck(t, h.deliverWith(5, bothFactors))
+	progress, err = h.handler.CatchupProgress(context.Background(), "i1", barStart(5).Add(time.Hour+time.Minute), time.Minute)
+	if err != nil || !progress.Latest.Equal(barStart(5).Add(time.Hour)) || !progress.CaughtUp() {
+		t.Fatalf("有结果后取更晚的一期：%+v %v", progress, err)
+	}
+	// 预热终点比已处理的更晚时（预热期间没有结果）也取预热终点；预热还没完成时进度是零。
+	other := newPoolHarness(t, poolDSL("{a: 0.5, b: 0.5}"), standardMembers(), nil)
+	progress, err = other.handler.CatchupProgress(context.Background(), "i1", barStart(4), time.Minute)
+	if err != nil || !progress.Latest.IsZero() {
+		t.Fatalf("预热没完成时没有已处理的期：%+v %v", progress, err)
+	}
+}

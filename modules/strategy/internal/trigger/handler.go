@@ -799,7 +799,14 @@ func (h *Handler) CatchupProgress(ctx context.Context, instanceID string, now ti
 		h.programs = make(map[string]*runtime)
 	}
 	rt, rtErr := h.runtimeFor(ctx, instance)
+	var warmErr error
+	if rtErr == nil {
+		warmErr = h.refreshWarm(ctx, rt)
+	}
 	h.mu.Unlock()
+	if warmErr != nil {
+		return CatchupProgress{}, warmErr
+	}
 	var skip *input.SkipError
 	if rtErr != nil && !errors.As(rtErr, &skip) {
 		return CatchupProgress{}, rtErr
@@ -816,8 +823,7 @@ func (h *Handler) CatchupProgress(ctx context.Context, instanceID string, now ti
 	if err != nil {
 		return CatchupProgress{}, err
 	}
-	if has {
-		out.Latest = latest.BarEndTime
-	}
+	// 策略池预热推进过的期也算已处理（预热终点之前的事件被去重，不会再有记录）。
+	out.Latest = processedThrough(rt, latest, has)
 	return out, nil
 }
