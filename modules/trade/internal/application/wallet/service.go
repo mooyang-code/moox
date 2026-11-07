@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -320,7 +321,8 @@ func (s *Service) beforeSpotBuyForAccount(ctx context.Context, spaceID string, t
 	adapter, transferer, err := s.transferer(account.TradingAccountID)
 	if err != nil {
 		reason := fmt.Sprintf("账户钱包划转不可用：%v", err)
-		s.alertOnce(telemetry.AttentionTransferFailing, targetRecord.TargetID, account.TradingAccountID, account.Name+"："+reason)
+		s.alertOnceWithLabel(telemetry.AttentionTransferFailing, targetRecord.TargetID, account.TradingAccountID, account.Name+"："+reason,
+			account.Name+"：账户钱包划转不可用")
 		return accountResult{scale: &zero, reason: reason}
 	}
 	// 1. 这个账户所有未结的划转（不论目标）。
@@ -385,7 +387,8 @@ func (s *Service) beforeSpotBuyForAccount(ctx context.Context, spaceID string, t
 	failures, lastError := trailingHardFailures(history)
 	if failures >= maxTransferFailures {
 		reason := fmt.Sprintf("合约钱包划转连续失败 %d 次（%s），这个目标不再重试，现货买入这轮不做", failures, lastError)
-		s.alertOnce(telemetry.AttentionTransferFailing, targetRecord.TargetID, account.TradingAccountID, account.Name+"："+reason)
+		s.alertOnceWithLabel(telemetry.AttentionTransferFailing, targetRecord.TargetID, account.TradingAccountID, account.Name+"："+reason,
+			account.Name+"：合约钱包划转连续失败，这个目标不再重试")
 		return accountResult{scale: &zero, reason: reason}
 	}
 	capacity := walletTransferable(snapshot, exchange.WalletFutures, asset).Mul(dec(transferCapRatio)).RoundDown(8)
@@ -402,7 +405,7 @@ func (s *Service) beforeSpotBuyForAccount(ctx context.Context, spaceID string, t
 	if isCapped {
 		s.alertShortfallOnce(account, targetRecord.TargetID, requirement, spotAvailable.Add(amount))
 	}
-	start := s.startTransfer(ctx, spaceID, targetRecord, targetRecord.TargetID, account, store.TransferToSpot, asset, amount, isCapped, len(history), transferer, exchange.WalletFutures, exchange.WalletSpot)
+	start := s.startTransfer(ctx, spaceID, targetRecord, targetRecord.TargetID, account, store.TransferToSpot, asset, amount, isCapped, transferer, exchange.WalletFutures, exchange.WalletSpot)
 	switch {
 	case start.started:
 		// 划转已发出（或结果不明、等对账），这一轮不买。
@@ -533,10 +536,12 @@ func (s *Service) settleAccountPending(ctx context.Context, spaceID string, acco
 		if resolved.State == store.TransferStatePending {
 			pending = append(pending, resolved)
 			if now.Sub(time.UnixMilli(resolved.RequestedAt)) >= pendingAlertAfter {
-				s.alertOnce(telemetry.AttentionTransferFailing, resolved.TargetID, account.TradingAccountID,
+				// 金额、划转编号只进日志正文，关注项标签用固定文字（带变化的值会让指标序列不断增长）。
+				s.alertOnceWithLabel(telemetry.AttentionTransferFailing, resolved.TargetID, account.TradingAccountID,
 					fmt.Sprintf("%s：一笔划转（%s %s，划转编号 %s）超过 %d 分钟还没有确认，这个账户不会再发起新的划转；"+
 						"请到交易所核对划转记录，再用 ResolveWalletTransfer 人工结束这条记录（到账填 COMPLETED，没到账填 FAILED）",
-						account.Name, resolved.Amount, resolved.Asset, resolved.TransferID, int(pendingAlertAfter/time.Minute)))
+						account.Name, resolved.Amount, resolved.Asset, resolved.TransferID, int(pendingAlertAfter/time.Minute)),
+					fmt.Sprintf("%s：有划转超过 %d 分钟还没有确认，请到交易所核对后人工结束", account.Name, int(pendingAlertAfter/time.Minute)))
 			}
 		}
 	}
@@ -686,7 +691,6 @@ func (s *Service) startTransfer(
 	direction, asset string,
 	amount shared.Decimal,
 	capped bool,
-	attempt int,
 	transferer execution.WalletTransferer,
 	from, to exchange.Wallet,
 ) transferStart {
@@ -695,10 +699,18 @@ func (s *Service) startTransfer(
 		SpaceID: spaceID, TransferID: s.newID(), TradingAccountID: account.TradingAccountID,
 		LogicalAccountID: targetRecord.LogicalAccountID, TargetID: targetRecord.TargetID, Direction: direction,
 		Asset: asset, Amount: amount.RoundDown(8).String(), Capped: capped,
-		ClientRef: fmt.Sprintf("%s:%s:%d", refKey, direction, attempt+1), State: store.TransferStatePending,
-		RequestedAt: now.UnixMilli(),
+		State: store.TransferStatePending, RequestedAt: now.UnixMilli(),
 	}
-	if err := s.Store.Transaction(ctx, func(tx *store.Tx) error { return tx.InsertWalletTransfer(row) }); err != nil {
+	// 引用号“幂等键:方向:序号”，序号取这个前缀下已用过的最大值加一（不限时间窗口），和插入在同一个事务里。
+	prefix := fmt.Sprintf("%s:%s:", refKey, direction)
+	if err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
+		next, err := tx.NextWalletTransferAttempt(spaceID, account.TradingAccountID, prefix)
+		if err != nil {
+			return err
+		}
+		row.ClientRef = prefix + strconv.Itoa(next)
+		return tx.InsertWalletTransfer(row)
+	}); err != nil {
 		return transferStart{soft: true, failure: "写划转记录失败：" + err.Error()}
 	}
 	receipt, err := transferer.Transfer(ctx, from, to, asset, amount.RoundDown(8), row.ClientRef)
@@ -776,8 +788,9 @@ func (s *Service) collect(ctx context.Context, spaceID string, targetRecord stor
 	for _, account := range accounts {
 		accountPending, err := s.collectForAccount(ctx, spaceID, targetRecord, key, account)
 		if err != nil {
-			s.alertOnce(telemetry.AttentionTransferFailing, alertID, account.TradingAccountID,
-				fmt.Sprintf("%s：归集现货钱包的资金失败：%s", account.Name, truncate(exchange.FailureSummary(err), 200)))
+			s.alertOnceWithLabel(telemetry.AttentionTransferFailing, alertID, account.TradingAccountID,
+				fmt.Sprintf("%s：归集现货钱包的资金失败：%s", account.Name, truncate(exchange.FailureSummary(err), 200)),
+				account.Name+"：归集现货钱包的资金失败")
 			if key != "" {
 				failures = append(failures, fmt.Errorf("账户 %s：%w", account.Name, err))
 			}
@@ -817,7 +830,6 @@ func (s *Service) collectForAccount(ctx context.Context, spaceID string, targetR
 		// 账户上有别的未结划转：不发起新的归集。目标归集是收尾动作，不挡目标定终态；风控归集必须做成，等它结束后再来。
 		return key != "", nil
 	}
-	attempt := 0
 	hardFailures := 0
 	for _, row := range rows {
 		if !owns(row) {
@@ -827,7 +839,6 @@ func (s *Service) collectForAccount(ctx context.Context, spaceID string, targetR
 			// 这个目标已经归集过（或失败过）：每个目标最多归集一次，失败的留给下一份目标。
 			return false, nil
 		}
-		attempt++
 		switch {
 		case row.State == store.TransferStateCompleted:
 			return false, nil // 这次风控事件已经归集完成
@@ -863,7 +874,7 @@ func (s *Service) collectForAccount(ctx context.Context, spaceID string, targetR
 	if key != "" {
 		refKey = key
 	}
-	start := s.startTransfer(ctx, spaceID, targetRecord, refKey, account, store.TransferToFutures, asset, excess, false, attempt, transferer, exchange.WalletSpot, exchange.WalletFutures)
+	start := s.startTransfer(ctx, spaceID, targetRecord, refKey, account, store.TransferToFutures, asset, excess, false, transferer, exchange.WalletSpot, exchange.WalletFutures)
 	if !start.started {
 		return false, errors.New(start.failure)
 	}
@@ -893,8 +904,9 @@ func (s *Service) collectKeep(
 	}
 	settings, _, parseErr := fundsettings.ParseLenient(logical.FundSettingsJSON)
 	if parseErr != nil {
-		s.alertOnce(telemetry.AttentionTransferFailing, alertID, account.TradingAccountID,
-			fmt.Sprintf("%s：资金设置读不出来（%v），不知道现货钱包该留多少 BNB 补买资金，这次不归集", account.Name, parseErr))
+		s.alertOnceWithLabel(telemetry.AttentionTransferFailing, alertID, account.TradingAccountID,
+			fmt.Sprintf("%s：资金设置读不出来（%v），不知道现货钱包该留多少 BNB 补买资金，这次不归集", account.Name, parseErr),
+			account.Name+"：资金设置读不出来，这次不归集")
 		return keep, false, nil
 	}
 	if settings.BNBReserveUnreadable {
