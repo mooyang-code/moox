@@ -250,6 +250,19 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 		}
 	}
 	mark("标的", began)
+	// 多个市场时，某个因子在一个市场本期基础集合的每个币上都失败（例如时序因子在永续整体晚到、该市场所有序列都在失败名单里）与这个市场的
+	// 因子被整体跳过没有区别：按这个市场不可用处理，已持仓的冻结，不能因为“缺数比例没超过 max_missing”就把持仓卖掉。
+	// 单市场策略保持原来的缺数处理。
+	if len(loads) > 1 {
+		for _, load := range loads {
+			if load.unavailable == "" {
+				load.unavailable = wholeMarketFailure(load, bar.Readiness[load.market])
+			}
+		}
+		if err := skipWhenSelectionUnavailable(resolved, loads); err != nil {
+			return Loaded{}, err
+		}
+	}
 	var eventUniverse []string
 	if hasEventUniverse {
 		eventUniverse = uniqueSorted(mergedUniverse)
@@ -435,6 +448,49 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 		frame.Markets[load.market] = input
 	}
 	return Loaded{Frame: frame, Sets: sets, Boundary: boundary, Steps: steps}, nil
+}
+
+// wholeMarketFailure 判断一个市场本期是否整体失败：某个因子成员在这个市场基础集合的每个标的上都失败（基础集合为空不算）。
+// 返回说明，空串表示不是整体失败。
+func wholeMarketFailure(load *marketLoad, result readiness.Result) string {
+	if len(load.universe) == 0 {
+		return ""
+	}
+	for _, factorID := range sortedKeys(result.FailedByFactor) {
+		failed := make(map[string]struct{}, len(result.FailedByFactor[factorID]))
+		for _, id := range result.FailedByFactor[factorID] {
+			failed[id] = struct{}{}
+		}
+		all := true
+		for id := range load.universe {
+			if _, ok := failed[id]; !ok {
+				all = false
+				break
+			}
+		}
+		if all {
+			return fmt.Sprintf("成员 %s 在%s市场本期基础集合的每个标的（%d 个）上都失败，按这个市场不可用处理", factorID, load.market, len(load.universe))
+		}
+	}
+	return ""
+}
+
+// skipWhenSelectionUnavailable 在没有可用的市场、或选币市场不可用（没有候选池）时整期跳过，原因与因子被跳过一致（数据类原因，不计实例故障）；
+// 只有下单市场不可用时选币照常。
+func skipWhenSelectionUnavailable(resolved Resolved, loads []*marketLoad) error {
+	down := 0
+	for _, load := range loads {
+		if load.unavailable != "" {
+			down++
+			if selectMarket := resolved.Market.Select; selectMarket != dsl.MarketBoth && load.market == selectMarket {
+				return &SkipError{Reason: readiness.ReasonFactorSkipped, Detail: load.unavailable}
+			}
+		}
+	}
+	if down == len(loads) {
+		return &SkipError{Reason: readiness.ReasonFactorSkipped, Detail: loads[0].unavailable}
+	}
+	return nil
 }
 
 // involvedIn 报告标的是否是某个市场本期要读的标的。

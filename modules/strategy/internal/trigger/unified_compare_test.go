@@ -548,3 +548,41 @@ func TestUnifiedMatchesDualTasksKeepsHeldSwapWhenAgeProbeFails(t *testing.T) {
 		t.Fatalf("持有的 X 的永续应豁免年龄剔除、继续持有：%v", targets)
 	}
 }
+
+// 时序因子在永续整体晚到：永续所有序列都在失败名单里（不是被跳过）。某个因子在永续基础集合的每个币上都失败，按永续不可用处理：
+// 持有的永续冻结，不会被“缺数比例没超过 max_missing”放过而卖成现货（方式 A、B 一致，三种含永续下单的模式都一样）。
+func TestUnifiedMatchesDualTasksFreezesHeldSwapWhenSwapWhollyFailed(t *testing.T) {
+	for _, mode := range []string{"{select: both, prefer: swap}", "{select: both, prefer: spot}", "{select: spot, prefer: swap}"} {
+		t.Run(mode, func(t *testing.T) {
+			world := ucBase(mode)
+			world.failed["swap"] = world.members["swap"]
+			world.rows["swap"] = map[string]float64{}
+			// 持有的永续：D 只在永续上市，选币只看现货时它不会是持仓。
+			held, keys := []string{"D", "X"}, []string{"D|swap", "X|swap"}
+			if mode == "{select: spot, prefer: swap}" {
+				held, keys = []string{"X"}, []string{"X|swap"}
+			}
+			world.state = engine.State{Rules: map[string]engine.RuleState{"r": {Held: held}}, Targets: map[string]string{}}
+			for _, key := range keys {
+				world.state.Targets[key] = "0.5"
+			}
+			_, targets := requireSame(t, world)
+			for _, key := range keys {
+				if !strings.HasSuffix(targets[key], "(hold)") {
+					t.Fatalf("永续整体失败时持仓 %s 应冻结：%v", key, targets)
+				}
+			}
+		})
+	}
+}
+
+// 选币市场整体失败没有候选池：整期按数据类原因跳过（与因子被跳过一致）；只有下单市场整体失败时选币照常。
+func TestUnifiedMatchesDualTasksWhenSelectionMarketWhollyFailed(t *testing.T) {
+	world := ucBase("{select: spot, prefer: swap}")
+	world.failed["spot"] = world.members["spot"]
+	world.rows["spot"] = map[string]float64{}
+	decision, _ := requireSame(t, world)
+	if decision.Status != engine.StatusSkipped || decision.SkipReason != readiness.ReasonFactorSkipped {
+		t.Fatalf("选币市场整体失败应整期跳过：%+v", decision)
+	}
+}
