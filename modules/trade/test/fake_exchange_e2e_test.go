@@ -165,7 +165,8 @@ func seedFakeAccount(t *testing.T, tradeStore *store.Store, instrument exchange.
 			return err
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
-			SpaceID: testSpace, LogicalAccountID: testLogicalAccount, Name: "A 股组合",
+			OrderSettingsJSON: legacyOrderSettings,
+			SpaceID:           testSpace, LogicalAccountID: testLogicalAccount, Name: "A 股组合",
 			OwnerInstanceID: testRunner, OwnerSessionID: "session-e2e",
 			ExecutionMode:   string(exchange.ExecutionModeLive),
 			SettlementAsset: "CNY", AutomationState: "PAUSED", PauseReason: "configure",
@@ -225,9 +226,8 @@ func TestFakeExchangeRunsFullTargetLifecycle(t *testing.T) {
 	}
 	executor := &targetapp.Executor{
 		Store: tradeStore, Orders: f.orders, Exchanges: registry,
-		Prices:           targetapp.ExchangePriceSource{Adapters: adapterSource{adapter: adapter}},
-		Now:              func() time.Time { return now },
-		MaxChildNotional: shared.MustDecimal("100000000"),
+		Prices: targetapp.ExchangePriceSource{Adapters: adapterSource{adapter: adapter}},
+		Now:    func() time.Time { return now },
 	}
 	deliver := func(id string, sequence int64, quantity string) jetstream.HandlerDecision {
 		result := eventconsumer.HandleTarget(ctx, targetDeliveryWithTargets(t, now, id, sequence,

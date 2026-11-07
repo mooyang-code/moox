@@ -20,7 +20,8 @@ func TestClosePaperSimulationCancelsReservationsAndSurvivesRestartE2E(t *testing
 	f := newRestingPaperFixture(t, exchange.MarketTypeSpot)
 	require.NoError(t, f.store.Transaction(ctx, func(tx *store.Tx) error {
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
-			SpaceID: testSpace, LogicalAccountID: "logical-close", Name: "close",
+			OrderSettingsJSON: legacyOrderSettings,
+			SpaceID:           testSpace, LogicalAccountID: "logical-close", Name: "close",
 			ExecutionMode: "PAPER", SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "test setup",
 		}); err != nil {

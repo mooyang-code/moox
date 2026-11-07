@@ -59,14 +59,11 @@ type OrderService interface {
 }
 
 type Executor struct {
-	Store            *store.Store
-	Orders           OrderService
-	Prices           PriceSource
-	Exchanges        execution.ExchangeCatalog
-	Now              func() time.Time
-	MaxChildNotional shared.Decimal
-	// MinRebalanceRatio 是最小调仓比例，为零时用默认 5%。
-	MinRebalanceRatio shared.Decimal
+	Store     *store.Store
+	Orders    OrderService
+	Prices    PriceSource
+	Exchanges execution.ExchangeCatalog
+	Now       func() time.Time
 	// OnReversal 在同一目标内第一次出现反向子单时调用，用于告警。
 	OnReversal func(spaceID, logicalAccountID, instrumentID string, at time.Time)
 	// Observe 记录下单量指标，为空时不记录。
@@ -103,8 +100,6 @@ type ExecutionObserver interface {
 }
 
 const (
-	// defaultMinRebalanceRatio 是默认最小调仓比例：同号持仓与目标的差额不超过目标数量的这个比例时不下单。
-	defaultMinRebalanceRatio = "0.05"
 	// positionReflectWindow 是下单前持仓校验的回看时长。
 	positionReflectWindow     = 10 * time.Minute
 	reasonPositionUnreflected = "持仓未反映已成交子单"
@@ -254,6 +249,15 @@ func (e *Executor) Converge(
 		return Result{Status: StatusConverging, Action: "wait"}, nil
 	}
 
+	orderSettings, err := loadOrderSettings(logicalAccount)
+	if err != nil {
+		// 下单设置读不出来：这个组合不下单，原因写进目标。
+		target.LastError = err.Error()
+		if updateErr := e.updateTarget(ctx, &target, StatusPending); updateErr != nil {
+			return Result{}, updateErr
+		}
+		return Result{Status: StatusPaused}, nil
+	}
 	members, err := e.loadMembers(ctx, spaceID, logicalAccountID)
 	if errors.Is(err, store.ErrFundSettingsUnreadable) {
 		// 资金设置的排除字段读不出来：这个组合不下单，原因写进目标，不让整个模块显示未就绪。
@@ -349,6 +353,7 @@ func (e *Executor) Converge(
 	if err != nil {
 		return Result{}, err
 	}
+	env := e.newLaneEnv(ctx, spaceID, logicalAccountID, orderSettings, members, desired)
 	// 规则：有在途子单（待提交、提交中、结果未知、挂单中）时本轮只处理这些单，不发新批。
 	inFlight := false
 	var restingLanes map[string]struct{}
@@ -362,7 +367,7 @@ func (e *Executor) Converge(
 		}
 		switch orderdomain.State(current.State) {
 		case orderdomain.Pending:
-			result, handled, pendingErr := e.handlePendingChild(ctx, logicalAccount, &target, current, desired, members)
+			result, handled, pendingErr := e.handlePendingChild(ctx, logicalAccount, &target, current, desired, members, env)
 			if handled {
 				return result, pendingErr
 			}
@@ -401,7 +406,7 @@ func (e *Executor) Converge(
 	var actions []laneAction
 	for _, instrumentID := range laneIDs(desired, members) {
 		action, complete, reason, actionErr := e.laneAction(
-			instrumentID, desired[instrumentID], members,
+			env, instrumentID, desired[instrumentID], members,
 		)
 		if actionErr != nil {
 			return Result{}, actionErr
@@ -518,7 +523,7 @@ func (e *Executor) Converge(
 				continue
 			}
 			placement, placeErr := e.placeAction(
-				placeCtx, spaceID, target, action, members, quota,
+				placeCtx, spaceID, target, action, members, quota, env,
 			)
 			if placeErr != nil {
 				if len(placedIDs) > 0 {
@@ -610,8 +615,17 @@ func (e *Executor) HasDifference(ctx context.Context, target store.LogicalAccoun
 	if err != nil {
 		return false, err
 	}
+	logical, err := e.Store.GetLogicalAccount(ctx, target.SpaceID, target.LogicalAccountID)
+	if err != nil {
+		return false, err
+	}
+	orderSettings, err := loadOrderSettings(logical)
+	if err != nil {
+		return false, err
+	}
+	env := e.newLaneEnv(ctx, target.SpaceID, target.LogicalAccountID, orderSettings, members, desired)
 	for _, instrumentID := range laneIDs(desired, members) {
-		_, complete, _, err := e.laneAction(instrumentID, desired[instrumentID], members)
+		_, complete, _, err := e.laneAction(env, instrumentID, desired[instrumentID], members)
 		if err != nil {
 			return false, err
 		}
@@ -862,8 +876,9 @@ func laneIDs(
 	return values
 }
 
-// laneAction 先按最小调仓阈值判断整条标的是否已到位，再算下一步动作。收敛和过期告警共用，结论一致。
+// laneAction 先按调仓阈值判断整条标的是否已到位，再算下一步动作。收敛、过期告警和待提交子单的重新判断共用，结论一致。
 func (e *Executor) laneAction(
+	env *laneEnv,
 	instrumentID string,
 	desired desiredTarget,
 	members []memberState,
@@ -873,11 +888,7 @@ func (e *Executor) laneAction(
 		for _, member := range members {
 			confirmed = confirmed.Add(member.positions[instrumentID])
 		}
-		ratio := e.MinRebalanceRatio
-		if ratio.IsZero() {
-			ratio = shared.MustDecimal(defaultMinRebalanceRatio)
-		}
-		if withinRebalanceThreshold(desired.Quantity, confirmed, members, instrumentID, ratio) {
+		if env.withinRebalanceThreshold(desired.Quantity, confirmed, members, instrumentID) {
 			return laneAction{}, true, "", nil
 		}
 	}
@@ -959,28 +970,6 @@ func nextLaneAction(
 	return laneAction{}, false, "没有启用的成员支持该标的", nil
 }
 
-// withinRebalanceThreshold 判断整条标的的差额是否小到不用调：目标不为 0，所有成员持仓都和目标同号或为零，
-// 且 |目标 − 合计持仓| 不超过 |目标| 的 ratio。按整条标的比较，反向持仓和多成员对冲不会被跳过。
-func withinRebalanceThreshold(
-	desired shared.Decimal,
-	confirmed shared.Decimal,
-	members []memberState,
-	instrumentID string,
-	ratio shared.Decimal,
-) bool {
-	if desired.IsZero() {
-		return false
-	}
-	for _, member := range members {
-		position := member.positions[instrumentID]
-		if !position.IsZero() && !sameSign(position, desired) {
-			return false
-		}
-	}
-	limit := desired.Abs().Mul(ratio)
-	return desired.Sub(confirmed).Abs().Cmp(limit) <= 0
-}
-
 // belowMinimumQuantity 判断数量按步长取整后是否下不了单。
 func belowMinimumQuantity(quantity shared.Decimal, instrument store.InstrumentRecord) bool {
 	step, minimum, err := baseQuantityRules(instrument)
@@ -1032,6 +1021,7 @@ func (e *Executor) placeAction(
 	action laneAction,
 	members []memberState,
 	quota map[string]int,
+	env *laneEnv,
 ) (placement, error) {
 	rejected, err := e.Store.RejectedTargetAccounts(ctx, spaceID, target.LogicalAccountID, target.TargetID, action.instrument.InstrumentID)
 	if err != nil {
@@ -1083,6 +1073,12 @@ func (e *Executor) placeAction(
 			tooSmall++
 			continue
 		}
+		// 配置的最小下单额：合约减仓、清仓例外（否则剩余仓位下不了单、永远平不掉）。
+		if env.belowConfiguredMinimum(candidate, quantity, quote.Price) {
+			capacityErrors = append(capacityErrors, accountID+": 金额低于配置的最小下单额")
+			tooSmall++
+			continue
+		}
 		if reason, excluded := rejected[accountID]; excluded {
 			// 同一目标不再向拒过单的账户下单，下一个目标自然重试。
 			capacityErrors = append(capacityErrors, accountID+": "+reason)
@@ -1112,14 +1108,9 @@ func (e *Executor) placeAction(
 				return placement{}, err
 			}
 		}
-		if e.MaxChildNotional.Cmp(shared.Zero()) > 0 {
-			maxQuantity := floorToStep(
-				e.MaxChildNotional.Div(quote.Price),
-				mustBaseStep(candidate.instrument),
-			)
-			if quantity.Cmp(maxQuantity) > 0 {
-				quantity = maxQuantity
-			}
+		// 单笔上限：拆单时每笔的名义金额不超过设置的上限。
+		if maxQuantity := floorToStep(env.settings.MaxChildNotional.Div(quote.Price), mustBaseStep(candidate.instrument)); quantity.Cmp(maxQuantity) > 0 {
+			quantity = maxQuantity
 		}
 		_, minimum, err := baseQuantityRules(candidate.instrument)
 		if err != nil {
@@ -1711,6 +1702,7 @@ func (e *Executor) handlePendingChild(
 	current store.OrderRecord,
 	desired map[string]desiredTarget,
 	members []memberState,
+	env *laneEnv,
 ) (Result, bool, error) {
 	spaceID := current.SpaceID
 	if current.SubmittedAt == 0 {
@@ -1725,7 +1717,7 @@ func (e *Executor) handlePendingChild(
 		}
 		return Result{Status: StatusPaused}, true, err
 	}
-	action, complete, _, err := e.laneAction(current.InstrumentID, desired[current.InstrumentID], members)
+	action, complete, _, err := e.laneAction(env, current.InstrumentID, desired[current.InstrumentID], members)
 	if err != nil {
 		return Result{}, false, err
 	}

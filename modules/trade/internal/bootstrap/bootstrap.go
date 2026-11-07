@@ -21,6 +21,7 @@ import (
 	papersimulation "github.com/mooyang-code/moox/modules/trade/internal/application/papersimulation"
 	targetapp "github.com/mooyang-code/moox/modules/trade/internal/application/target"
 	"github.com/mooyang-code/moox/modules/trade/internal/config"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/ordersettings"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/eventconsumer"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
@@ -47,8 +48,8 @@ import (
 
 var startedAt = time.Now()
 
-// maxChildNotional 是单笔子单的金额上限，下单校验和目标拆单共用。
-const maxChildNotional = "100000"
+// maxChildNotional 是下单校验的单笔金额硬上限；目标拆单的单笔上限在组合的下单设置里，不能超过它。
+const maxChildNotional = ordersettings.MaxChildNotionalCeiling
 
 func Initialize(ctx context.Context, serverInstance *server.Server) (*server.Server, error) {
 	cfg, err := config.Load("./config/app.yaml")
@@ -169,10 +170,9 @@ func initialize(
 	targetExecutor := &targetapp.Executor{
 		Exchanges: registry,
 		Store:     tradeStore, Orders: orderService,
-		Prices:           targetapp.ExchangePriceSource{Adapters: manager},
-		MaxChildNotional: shared.MustDecimal(maxChildNotional),
-		OnReversal:       noteTargetReversal(tradeStore),
-		Observe:          &telemetry.ExecutionMetrics{},
+		Prices:     targetapp.ExchangePriceSource{Adapters: manager},
+		OnReversal: noteTargetReversal(tradeStore),
+		Observe:    &telemetry.ExecutionMetrics{},
 		// 每秒最多一批：永续每批 16 单、现货 8 单，约为交易所下单限额的 80%。
 		MinBatchInterval: time.Second,
 		// 模拟盘没有交易所限频，批间隔缩短到 0.3 秒。
