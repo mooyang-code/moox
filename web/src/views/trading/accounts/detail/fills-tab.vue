@@ -9,12 +9,19 @@
         v-model="accountId"
         allow-clear
         placeholder="执行账户"
-        class="narrow"
+        style="width: 150px"
         @change="search"
       >
         <a-option v-for="item in memberOptions" :key="item.id" :value="item.id">{{ item.label }}</a-option>
       </a-select>
-      <a-input v-model="symbol" allow-clear placeholder="标的，如 BTC" class="narrow" @press-enter="search" @clear="search" />
+      <a-input
+        v-model="symbol"
+        allow-clear
+        placeholder="标的，如 BTC"
+        style="width: 150px"
+        @press-enter="search"
+        @clear="search"
+      />
       <a-button :loading="loading" @click="search">查询</a-button>
       <span class="tx-muted hint">点一行看所属订单</span>
     </div>
@@ -174,10 +181,6 @@ watch(dataVersion, () => void load());
   align-items: center;
   gap: var(--moox-space-3);
   padding: 12px 16px;
-}
-
-.narrow {
-  width: 150px;
 }
 
 .hint {

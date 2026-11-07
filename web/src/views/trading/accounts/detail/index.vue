@@ -569,7 +569,7 @@ async function submitFlatten(reason: string) {
   if (rsp.action.action_id !== flattenActionId.value) Message.info("该组合账户已有正在执行的清仓，显示的是那次清仓的进度");
   tracker.action.value = rsp.action;
   tracker.submittedOrder.value = null;
-  tracker.start(rsp.action.action_id);
+  if (rsp.action.status === "RUNNING") tracker.start(rsp.action.action_id);
   afterAction();
   return true;
 }
@@ -588,7 +588,7 @@ async function submitCancel(reason: string) {
   if (abandoned(id)) return true;
   tracker.action.value = rsp.action;
   tracker.submittedOrder.value = null;
-  tracker.start(rsp.action.action_id);
+  if (rsp.action.status === "RUNNING") tracker.start(rsp.action.action_id);
   afterAction();
   return true;
 }
@@ -680,6 +680,7 @@ provide(detailContextKey, {
 .detail-meta {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 4px 16px;
   margin-top: 4px;
   color: var(--color-text-2);

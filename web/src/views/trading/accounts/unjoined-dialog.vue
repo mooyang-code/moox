@@ -12,14 +12,16 @@
     </template>
 
     <template v-if="mode === 'list'">
-      <p class="hint">这些账户不会交易，通常是从组合里移出的，或者停用后留下的。加入组合后才会被策略或手工下单用到。</p>
+      <p class="hint">
+        这些账户不会交易，通常是从组合里移出的，或者停用后留下的。加入组合后才会被策略或手工下单用到。点左边的三角展开设置。
+      </p>
       <a-table
         row-key="trading_account_id"
         size="small"
         :data="rows"
         :pagination="false"
         v-model:expanded-keys="expandedKeys"
-        :expandable="{ width: 0 }"
+        :expandable="{ width: 40 }"
       >
         <template #columns>
           <a-table-column title="执行账户">
@@ -43,12 +45,9 @@
               ><span class="tx-num">{{ fmtMoney(record.snapshot?.equity) }}</span></template
             >
           </a-table-column>
-          <a-table-column title="操作" :width="150">
+          <a-table-column title="操作" :width="190">
             <template #cell="{ record }">
-              <a-button size="mini" type="text" @click="toggleExpand(record.trading_account_id)">
-                {{ expandedKeys.includes(record.trading_account_id) ? "收起" : "设置" }}
-              </a-button>
-              <a-tooltip content="先在设置里启用" :disabled="record.status === 'ENABLED'">
+              <a-tooltip content="先展开这一行，在设置里启用" :disabled="record.status === 'ENABLED'">
                 <a-button size="mini" type="text" :disabled="record.status !== 'ENABLED'" @click="openJoin(record)"
                   >加入组合</a-button
                 >
@@ -143,12 +142,6 @@ function open() {
   mode.value = "list";
   expandedKeys.value = [];
   visible.value = true;
-}
-
-function toggleExpand(id: string) {
-  expandedKeys.value = expandedKeys.value.includes(id)
-    ? expandedKeys.value.filter(item => item !== id)
-    : [...expandedKeys.value, id];
 }
 
 function openJoin(account: TradingAccount) {

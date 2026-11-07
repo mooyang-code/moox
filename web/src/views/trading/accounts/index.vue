@@ -25,13 +25,13 @@
         :data="rows"
         :loading="loading"
         :pagination="false"
-        :scroll="{ x: 1100 }"
+        :scroll="{ x: 980 }"
         :row-class="rowClass"
         v-model:expanded-keys="expandedKeys"
         @row-click="onRowClick"
       >
         <template #columns>
-          <a-table-column title="组合账户" :width="260">
+          <a-table-column title="组合账户" :width="250">
             <template #cell="{ record }">
               <template v-if="record.kind === 'combo'">
                 <strong>{{ record.logical.name }}</strong>
@@ -42,7 +42,7 @@
               </template>
             </template>
           </a-table-column>
-          <a-table-column title="交易所" :width="140">
+          <a-table-column title="交易所" :width="190">
             <template #cell="{ record }">
               <template v-if="record.kind === 'combo'">{{ record.exchangesText }}</template>
               <template v-else>
@@ -50,7 +50,7 @@
               </template>
             </template>
           </a-table-column>
-          <a-table-column title="关联策略" :width="180">
+          <a-table-column title="关联策略">
             <template #cell="{ record }">
               <template v-if="record.kind === 'combo'">
                 <template v-if="strategyOf(record)">
@@ -68,7 +68,7 @@
               <span v-else class="tx-muted">优先级 {{ record.priority }} · {{ record.enabled ? "启用" : "停用" }}</span>
             </template>
           </a-table-column>
-          <a-table-column title="自动执行" :width="110">
+          <a-table-column title="自动执行" :width="150">
             <template #cell="{ record }">
               <template v-if="record.kind === 'combo'">
                 <span v-if="record.logical.control_mode !== 1" class="tx-muted">不适用</span>
@@ -92,7 +92,7 @@
               </span>
             </template>
           </a-table-column>
-          <a-table-column title="近 24 小时" :width="110" align="right">
+          <a-table-column title="近 24 小时" :width="130" align="right">
             <template #cell="{ record }">
               <template v-if="record.kind === 'combo'">
                 <span v-if="changes[record.key] === undefined" class="tx-muted">…</span>
@@ -101,7 +101,7 @@
               <span v-else class="tx-muted tx-num">可用 {{ fmtMoney(record.account.snapshot?.available_funds) }}</span>
             </template>
           </a-table-column>
-          <a-table-column title="持仓" :width="80" align="right">
+          <a-table-column title="持仓" :width="70" align="right">
             <template #cell="{ record }">
               <template v-if="record.kind === 'combo'">
                 <span v-if="counts[record.key] === undefined" class="tx-muted">…</span>

@@ -5,7 +5,7 @@
       <a-radio-group v-model="filter" type="button" @change="page = 1">
         <a-radio v-for="item in filters" :key="item.key" :value="item.key">{{ item.label }} {{ item.count }}</a-radio>
       </a-radio-group>
-      <a-input-search v-model="search" allow-clear placeholder="搜索币" class="search" @input="page = 1" />
+      <a-input-search v-model="search" allow-clear placeholder="搜索币" style="width: 200px" @input="page = 1" />
     </div>
     <a-table
       row-key="coin"
@@ -146,10 +146,6 @@ function instrumentOf(row: CoinRow) {
   align-items: center;
   gap: var(--moox-space-3);
   padding: 12px 16px;
-}
-
-.search {
-  width: 200px;
 }
 
 .alert {

@@ -2,14 +2,14 @@
   <SectionBlock title="资金流水" flush>
     <template #sub>直接查交易所（模拟盘查本地成交），不落库，最长 90 天</template>
     <div class="toolbar">
-      <a-select v-if="memberOptions.length > 1" v-model="accountId" class="narrow" @change="onAccountChange">
+      <a-select v-if="memberOptions.length > 1" v-model="accountId" style="width: 150px" @change="onAccountChange">
         <a-option v-for="item in memberOptions" :key="item.id" :value="item.id">{{ item.label }}</a-option>
       </a-select>
-      <a-select v-if="accountMarkets.length > 1" v-model="market" class="narrow" @change="load">
+      <a-select v-if="accountMarkets.length > 1" v-model="market" style="width: 150px" @change="load">
         <a-option v-for="item in accountMarkets" :key="item" :value="item">{{ marketLabel(item) }}</a-option>
       </a-select>
-      <a-range-picker v-model="range" value-format="timestamp" :allow-clear="false" class="range" @change="load" />
-      <a-select v-model="typeFilter" placeholder="全部类型" allow-clear class="narrow">
+      <a-range-picker v-model="range" value-format="timestamp" :allow-clear="false" style="width: 320px" @change="load" />
+      <a-select v-model="typeFilter" placeholder="全部类型" allow-clear style="width: 150px">
         <a-option v-for="item in ledgerTypeOptions" :key="item.value" :value="item.value">{{ item.label }}</a-option>
       </a-select>
       <a-button :loading="loading" @click="load">查询</a-button>
@@ -151,14 +151,6 @@ watch(
   align-items: center;
   gap: var(--moox-space-3);
   padding: 12px 16px;
-}
-
-.narrow {
-  width: 150px;
-}
-
-.range {
-  width: 320px;
 }
 
 .alert {

@@ -2,8 +2,8 @@
   <div class="settings">
     <SectionBlock title="执行账户" flush>
       <template #sub>
-        <template v-if="logical.control_mode === 1 && !membersEditable"
-          >增删执行账户、改优先级和启用状态前，要先暂停自动执行</template
+        点左边的三角展开单个账户的设置<template v-if="logical.control_mode === 1 && !membersEditable"
+          >；增删执行账户、改优先级和启用状态前，要先暂停自动执行</template
         >
       </template>
       <template #extra>
@@ -19,19 +19,16 @@
         size="small"
         :data="rows"
         :pagination="false"
-        :scroll="{ x: 1100 }"
+        :scroll="{ x: 1000 }"
         :expandable="{ width: 40 }"
         v-model:expanded-keys="expandedKeys"
       >
         <template #columns>
-          <a-table-column title="执行账户" :width="200">
+          <a-table-column title="执行账户" :width="190">
             <template #cell="{ record }">
               <strong>{{ record.account.name }}</strong>
               <div class="tx-muted tx-mono">{{ record.account.trading_account_id }}</div>
             </template>
-          </a-table-column>
-          <a-table-column title="环境" :width="90">
-            <template #cell="{ record }"><EnvMark :env="accountEnvironment(record.account)" /></template>
           </a-table-column>
           <a-table-column title="交易所 · 市场" :width="150">
             <template #cell="{ record }"
@@ -66,12 +63,9 @@
               ><span class="tx-muted">{{ fmtClock(record.account.last_sync_at) }}</span></template
             >
           </a-table-column>
-          <a-table-column title="操作" :width="220" fixed="right">
+          <a-table-column title="操作" :width="190" fixed="right">
             <template #cell="{ record }">
               <a-space :size="0">
-                <a-button size="mini" type="text" @click="toggleExpand(record.account.trading_account_id)">
-                  {{ expandedKeys.includes(record.account.trading_account_id) ? "收起设置" : "设置" }}
-                </a-button>
                 <a-button size="mini" type="text" @click="syncAccounts([record.account])">同步</a-button>
                 <a-tooltip content="先暂停自动执行" :disabled="membersEditable">
                   <a-button
@@ -184,8 +178,6 @@ import { Message } from "@arco-design/web-vue";
 import { exchangeLabels, listLogicalAccounts, removeLogicalAccountMember, updateLogicalAccount } from "@/api/trade";
 import type { LogicalAccount, TradingAccount } from "@/api/trade";
 import ConfirmDialog from "../shared/confirm-dialog.vue";
-import EnvMark from "../shared/env-mark.vue";
-import { accountEnvironment } from "../shared/environment";
 import { fmtClock, fmtMoney } from "../shared/format";
 import { marketsText } from "../shared/markets";
 import MemberSettings from "../shared/member-settings.vue";
@@ -245,12 +237,6 @@ watch(
   }
 );
 
-function toggleExpand(id: string) {
-  expandedKeys.value = expandedKeys.value.includes(id)
-    ? expandedKeys.value.filter(item => item !== id)
-    : [...expandedKeys.value, id];
-}
-
 function positionCountOf(accountId: string): number {
   return (
     snapshot.value.swapPositions.filter(item => item.trading_account_id === accountId).length +
@@ -290,6 +276,7 @@ async function renameCombo() {
 <style scoped>
 .settings {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--moox-space-3);
 }
 

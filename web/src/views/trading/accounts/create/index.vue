@@ -304,6 +304,10 @@ defineExpose({ open, form, next, submit });
   margin-bottom: var(--moox-space-3);
 }
 
+.choice + .block {
+  margin-top: var(--moox-space-4);
+}
+
 .title-env {
   margin-left: var(--moox-space-3);
   font-size: 13px;

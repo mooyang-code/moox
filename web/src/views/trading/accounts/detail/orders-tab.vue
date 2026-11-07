@@ -5,7 +5,7 @@
       <a-radio-group v-model="range" type="button" @change="search">
         <a-radio v-for="item in recordRanges" :key="item.key" :value="item.key">{{ item.label }}</a-radio>
       </a-radio-group>
-      <a-select v-model="state" allow-clear placeholder="订单状态" class="narrow" @change="search">
+      <a-select v-model="state" allow-clear placeholder="订单状态" style="width: 150px" @change="search">
         <a-option v-for="(label, value) in orderStateLabels" :key="value" :value="value">{{ label }}</a-option>
       </a-select>
       <a-select
@@ -13,12 +13,19 @@
         v-model="accountId"
         allow-clear
         placeholder="执行账户"
-        class="narrow"
+        style="width: 150px"
         @change="search"
       >
         <a-option v-for="item in memberOptions" :key="item.id" :value="item.id">{{ item.label }}</a-option>
       </a-select>
-      <a-input v-model="symbol" allow-clear placeholder="标的，如 BTC" class="narrow" @press-enter="search" @clear="search" />
+      <a-input
+        v-model="symbol"
+        allow-clear
+        placeholder="标的，如 BTC"
+        style="width: 150px"
+        @press-enter="search"
+        @clear="search"
+      />
       <a-button :loading="loading" @click="search">查询</a-button>
     </div>
     <a-alert v-if="error" type="error" class="alert">{{ error }}</a-alert>
@@ -207,10 +214,6 @@ watch(dataVersion, () => void load());
   align-items: center;
   gap: var(--moox-space-3);
   padding: 12px 16px;
-}
-
-.narrow {
-  width: 150px;
 }
 
 .alert {
