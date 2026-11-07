@@ -630,8 +630,12 @@ func (p *PortfolioMargin) dispatchMarginAccount(ctx context.Context, root fields
 		Present:           exchange.AccountSnapshotPresence{Balances: true},
 		RequiresSync:      true,
 	}
+	// 只在锁内取出借款表的引用（GetAccountSnapshot 整表替换、不原地修改），解锁后再组装快照、回调会话：
+	// 会话的 OnAccountSnapshot 要拿 opMu，而同步线程持着 opMu 调 GetAccountSnapshot 时末尾要拿 borrowMu，
+	// 持 borrowMu 回调会和同步线程互相等死。
 	p.borrowMu.Lock()
-	defer p.borrowMu.Unlock()
+	borrowed := p.borrowed
+	p.borrowMu.Unlock()
 	for _, row := range rows {
 		var asset, free, locked string
 		for key, target := range map[string]*string{"a": &asset, "f": &free, "l": &locked} {
@@ -649,7 +653,7 @@ func (p *PortfolioMargin) dispatchMarginAccount(ctx context.Context, root fields
 		}
 		snapshot.Balances = append(snapshot.Balances, exchange.AssetBalance{
 			Wallet: exchange.WalletMargin, Asset: asset, Available: available, Locked: lockedValue,
-			Total: available.Add(lockedValue), Borrowed: p.borrowed[asset],
+			Total: available.Add(lockedValue), Borrowed: borrowed[asset],
 		})
 	}
 	return handler.OnAccountSnapshot(ctx, snapshot)

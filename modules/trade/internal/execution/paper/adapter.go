@@ -35,6 +35,13 @@ type PublicMarketData interface {
 	execution.ReferencePriceSource
 }
 
+// 编译期确认模拟盘适配器实现了会话按类型断言使用的可选能力。
+var (
+	_ execution.ExecutionAdapter = (*Adapter)(nil)
+	_ execution.SymbolConfigurer = (*Adapter)(nil)
+	_ execution.LedgerSource     = (*Adapter)(nil)
+)
+
 type Adapter struct {
 	Account store.TradingAccountRecord
 	Store   FactStore

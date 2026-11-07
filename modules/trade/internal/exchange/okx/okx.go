@@ -23,6 +23,17 @@ import (
 
 const defaultBaseURL = "https://openapi.okx.com"
 
+// 编译期确认 OKX 适配器实现了会话按类型断言使用的各个可选能力：签名一旦漂移就编译失败，
+// 不会在运行时悄悄退化成“不支持”。
+var (
+	_ execution.ExecutionAdapter   = (*Adapter)(nil)
+	_ execution.ExchangeIdentity   = (*Adapter)(nil)
+	_ execution.SymbolConfigurer   = (*Adapter)(nil)
+	_ execution.AccountEventSource = (*Adapter)(nil)
+	_ execution.LedgerSource       = (*Adapter)(nil)
+	_ exchange.RateStatusSource    = (*Adapter)(nil)
+)
+
 type Adapter struct {
 	config     exchange.AccountConfig
 	credential exchange.Credential
@@ -948,14 +959,17 @@ func (a *Adapter) SetLeverage(
 
 func (a *Adapter) SetMarginMode(
 	_ context.Context,
-	_ shared.ExchangeSymbol,
+	key exchange.SymbolKey,
 	mode exchange.MarginMode,
 ) error {
-	if a.config.Market() != exchange.MarketTypeSwap || mode != exchange.MarginModeCross {
+	if err := a.ownMarket(key); err != nil {
+		return err
+	}
+	if a.config.Market() != exchange.MarketTypeSwap || mode != exchange.MarginModeCross ||
+		strings.TrimSpace(key.Symbol) == "" {
 		return rejected("only CROSS SWAP margin mode is supported", nil)
 	}
-	// OKX applies tdMode=cross per order and leverage setting; there is no
-	// separate account-wide margin-mode mutation for this v1 scope.
+	// OKX 的全仓由每笔订单的 tdMode=cross 和设杠杆时的 mgnMode=cross 决定，没有单独切换保证金模式的接口。
 	return nil
 }
 

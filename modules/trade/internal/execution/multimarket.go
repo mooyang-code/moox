@@ -11,6 +11,20 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 )
 
+// 编译期确认多市场组合适配器实现了全部可选能力（按子适配器是否具备在运行时再判断）。
+var (
+	_ ExecutionAdapter          = (*MultiMarket)(nil)
+	_ ExchangeIdentity          = (*MultiMarket)(nil)
+	_ SymbolConfigurer          = (*MultiMarket)(nil)
+	_ AccountEventSource        = (*MultiMarket)(nil)
+	_ LedgerSource              = (*MultiMarket)(nil)
+	_ CapabilityProbe           = (*MultiMarket)(nil)
+	_ WalletTransferer          = (*MultiMarket)(nil)
+	_ FeeDiscountConfigurer     = (*MultiMarket)(nil)
+	_ DustConverter             = (*MultiMarket)(nil)
+	_ exchange.RateStatusSource = (*MultiMarket)(nil)
+)
+
 // MultiMarket 把每个市场一个的单市场适配器合成一个执行账户的适配器：一把密钥同时做现货和合约。
 // 所有按标的的调用都按标的所属市场路由，现货和合约同名的代码（BTCUSDT）因此不会串；
 // 账户级的读取（余额、持仓、挂单）合并各市场的结果，每条记录自己带市场。

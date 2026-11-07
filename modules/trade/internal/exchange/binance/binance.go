@@ -34,6 +34,32 @@ const (
 	swapWeightLimit = 2400
 )
 
+// 编译期确认币安适配器（普通账户与统一账户）实现了会话按类型断言使用的各个可选能力：
+// 签名一旦漂移就编译失败，不会在运行时悄悄退化成“不支持”。
+var (
+	_ execution.ExecutionAdapter      = (*Adapter)(nil)
+	_ execution.ExchangeIdentity      = (*Adapter)(nil)
+	_ execution.SymbolConfigurer      = (*Adapter)(nil)
+	_ execution.AccountEventSource    = (*Adapter)(nil)
+	_ execution.LedgerSource          = (*Adapter)(nil)
+	_ execution.CapabilityProbe       = (*Adapter)(nil)
+	_ execution.WalletTransferer      = (*Adapter)(nil)
+	_ execution.FeeDiscountConfigurer = (*Adapter)(nil)
+	_ execution.DustConverter         = (*Adapter)(nil)
+	_ exchange.RateStatusSource       = (*Adapter)(nil)
+
+	_ execution.ExecutionAdapter      = (*PortfolioMargin)(nil)
+	_ execution.ExchangeIdentity      = (*PortfolioMargin)(nil)
+	_ execution.SymbolConfigurer      = (*PortfolioMargin)(nil)
+	_ execution.AccountEventSource    = (*PortfolioMargin)(nil)
+	_ execution.LedgerSource          = (*PortfolioMargin)(nil)
+	_ execution.ScopedOpenOrderSource = (*PortfolioMargin)(nil)
+	_ execution.CapabilityProbe       = (*PortfolioMargin)(nil)
+	_ execution.FeeDiscountConfigurer = (*PortfolioMargin)(nil)
+	_ execution.DustConverter         = (*PortfolioMargin)(nil)
+	_ exchange.RateStatusSource       = (*PortfolioMargin)(nil)
+)
+
 type Adapter struct {
 	config     exchange.AccountConfig
 	credential exchange.Credential

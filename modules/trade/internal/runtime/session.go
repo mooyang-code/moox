@@ -911,4 +911,13 @@ func cloneFillCursors(current store.FillCursors) store.FillCursors {
 	return result
 }
 
-var _ execution.AccountEventHandler = (*sessionHandler)(nil)
+// 编译期确认会话实现了 Manager 按类型断言使用的方法集。
+var (
+	_ execution.AccountEventHandler   = (*sessionHandler)(nil)
+	_ ManagedSession                  = (*ExchangeSession)(nil)
+	_ symbolConfigSession             = (*ExchangeSession)(nil)
+	_ interface{ RequestSync() bool } = (*ExchangeSession)(nil)
+	_ interface {
+		ExecutionAdapter() execution.ExecutionAdapter
+	} = (*ExchangeSession)(nil)
+)
