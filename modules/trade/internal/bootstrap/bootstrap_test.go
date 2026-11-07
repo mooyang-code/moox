@@ -10,6 +10,7 @@ import (
 
 	accountapp "github.com/mooyang-code/moox/modules/trade/internal/application/account"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange/binance"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
@@ -128,6 +129,33 @@ func TestBinanceLiveProductionRequiresInspectedAccountMode(t *testing.T) {
 	testnet.AccountMode, testnet.Environment = exchange.AccountModeUnspecified, exchange.AccountEnvironmentTestnet
 	_, err = registry.Bind(testnet, credential)
 	require.NoError(t, err)
+}
+
+// 统一账户整个账户一个适配器；普通账户按市场拆开再合成。
+func TestBindChoosesAdapterByInspectedAccountMode(t *testing.T) {
+	registry := execution.NewRegistry()
+	registerBuiltins(registry)
+	both := []exchange.MarketType{exchange.MarketTypeSpot, exchange.MarketTypeSwap}
+	config := exchange.AccountConfig{
+		TradingAccountID: "account-1", Exchange: exchange.ExchangeBinance, Markets: both, MarginMode: exchange.MarginModeCross,
+		ExecutionMode: exchange.ExecutionModeLive, Environment: exchange.AccountEnvironmentProduction, SettlementAsset: "USDT",
+		AccountMode: exchange.AccountModeBinancePortfolioMargin,
+	}
+	credential := exchange.Credential{APIKey: "key", APISecret: "secret"}
+	adapter, err := registry.Bind(config, credential)
+	require.NoError(t, err)
+	_, isPM := adapter.(*binance.PortfolioMargin)
+	require.True(t, isPM, "统一账户应是一个整账户适配器，实际 %T", adapter)
+
+	config.AccountMode = exchange.AccountModeBinanceStandard
+	adapter, err = registry.Bind(config, credential)
+	require.NoError(t, err)
+	_, isMulti := adapter.(*execution.MultiMarket)
+	require.True(t, isMulti, "普通账户应按市场拆开再合成，实际 %T", adapter)
+
+	config.AccountMode, config.Environment = exchange.AccountModeBinancePortfolioMargin, exchange.AccountEnvironmentTestnet
+	_, err = registry.Bind(config, credential)
+	require.ErrorContains(t, err, "没有统一账户")
 }
 
 type bootstrapSecretSource struct {

@@ -457,7 +457,12 @@ func registerBuiltins(registry *execution.Registry) {
 			Inspect:      inspect,
 		}
 	}
-	registry.Register(cryptoExchange(exchange.ExchangeBinance, binance.Inspect), func(
+	binanceDescriptor := cryptoExchange(exchange.ExchangeBinance, binance.Inspect)
+	// 统一账户整个账户一个适配器（一个余额接口、一条私有流）；普通账户按市场各一个，由注册表合成。
+	binanceDescriptor.WholeAccount = func(config exchange.AccountConfig) bool {
+		return config.AccountMode == exchange.AccountModeBinancePortfolioMargin
+	}
+	registry.Register(binanceDescriptor, func(
 		config exchange.AccountConfig,
 		credential exchange.Credential,
 	) (execution.ExecutionAdapter, error) {
@@ -466,6 +471,12 @@ func registerBuiltins(registry *execution.Registry) {
 		}
 		if err := requireInspectedMode(config); err != nil {
 			return nil, err
+		}
+		if config.AccountMode == exchange.AccountModeBinancePortfolioMargin {
+			if config.Environment == exchange.AccountEnvironmentTestnet {
+				return nil, errors.New("币安测试网没有统一账户")
+			}
+			return binance.NewPortfolioMargin(config, credential), nil
 		}
 		return binance.New(config, credential), nil
 	})

@@ -327,3 +327,123 @@ func (s *subscribedOnce) OnSubscribed() {
 		s.AccountEventHandler.OnSubscribed()
 	}
 }
+
+// Supports 报告某个可选能力是否至少有一个市场的适配器具备。
+func (m *MultiMarket) Supports(capability string) bool {
+	for _, market := range m.markets {
+		if m.supporting(market, capability) {
+			return true
+		}
+	}
+	return false
+}
+
+// supporting 报告某个市场的适配器是否实现并启用了某个可选能力。
+func (m *MultiMarket) supporting(market exchange.MarketType, capability string) bool {
+	adapter := m.adapters[market]
+	switch capability {
+	case CapabilityTransfer:
+		_, ok := adapter.(WalletTransferer)
+		return ok && Supports(adapter, capability)
+	case CapabilityFeeDiscount:
+		_, ok := adapter.(FeeDiscountConfigurer)
+		return ok && Supports(adapter, capability)
+	case CapabilityDust:
+		_, ok := adapter.(DustConverter)
+		return ok && Supports(adapter, capability)
+	}
+	return false
+}
+
+func (m *MultiMarket) unsupported(capability string) error {
+	return &exchange.Error{Kind: exchange.ErrorRejected, Err: fmt.Errorf("账户不支持 %s", capability)}
+}
+
+// Transfer、ListTransfers 由第一个具备划转能力的市场适配器完成（币安普通账户的划转挂在现货适配器上）。
+func (m *MultiMarket) Transfer(ctx context.Context, from, to exchange.Wallet, asset string, amount shared.Decimal, clientRef string) (TransferReceipt, error) {
+	for _, market := range m.markets {
+		if m.supporting(market, CapabilityTransfer) {
+			return m.adapters[market].(WalletTransferer).Transfer(ctx, from, to, asset, amount, clientRef)
+		}
+	}
+	return TransferReceipt{}, m.unsupported(CapabilityTransfer)
+}
+
+func (m *MultiMarket) ListTransfers(ctx context.Context, since time.Time) ([]TransferRecord, error) {
+	for _, market := range m.markets {
+		if m.supporting(market, CapabilityTransfer) {
+			return m.adapters[market].(WalletTransferer).ListTransfers(ctx, since)
+		}
+	}
+	return nil, m.unsupported(CapabilityTransfer)
+}
+
+// SetBNBFeeDiscount 让每个具备抵扣能力的市场适配器各设自己负责的那部分（现货、合约一起设）。
+func (m *MultiMarket) SetBNBFeeDiscount(ctx context.Context, enabled bool) error {
+	done := false
+	for _, market := range m.markets {
+		if !m.supporting(market, CapabilityFeeDiscount) {
+			continue
+		}
+		if err := m.adapters[market].(FeeDiscountConfigurer).SetBNBFeeDiscount(ctx, enabled); err != nil {
+			return err
+		}
+		done = true
+	}
+	if !done {
+		return m.unsupported(CapabilityFeeDiscount)
+	}
+	return nil
+}
+
+// GetBNBFeeDiscount 报告各部分抵扣是否全部开启。
+func (m *MultiMarket) GetBNBFeeDiscount(ctx context.Context) (bool, error) {
+	seen := false
+	for _, market := range m.markets {
+		if !m.supporting(market, CapabilityFeeDiscount) {
+			continue
+		}
+		on, err := m.adapters[market].(FeeDiscountConfigurer).GetBNBFeeDiscount(ctx)
+		if err != nil || !on {
+			return false, err
+		}
+		seen = true
+	}
+	if !seen {
+		return false, m.unsupported(CapabilityFeeDiscount)
+	}
+	return true, nil
+}
+
+// ListDust、ConvertDust 合并各具备小额兑换能力的市场适配器的结果。
+func (m *MultiMarket) ListDust(ctx context.Context) ([]DustAsset, error) {
+	var all []DustAsset
+	for _, market := range m.markets {
+		if !m.supporting(market, CapabilityDust) {
+			continue
+		}
+		items, err := m.adapters[market].(DustConverter).ListDust(ctx)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, items...)
+	}
+	return all, nil
+}
+
+func (m *MultiMarket) ConvertDust(ctx context.Context, assets []string) (DustResult, error) {
+	var merged DustResult
+	for _, market := range m.markets {
+		if !m.supporting(market, CapabilityDust) {
+			continue
+		}
+		part, err := m.adapters[market].(DustConverter).ConvertDust(ctx, assets)
+		if err != nil {
+			return DustResult{}, err
+		}
+		merged.TotalBNB = merged.TotalBNB.Add(part.TotalBNB)
+		merged.TransferIDs = append(merged.TransferIDs, part.TransferIDs...)
+		merged.ConvertedList = append(merged.ConvertedList, part.ConvertedList...)
+	}
+	return merged, nil
+}

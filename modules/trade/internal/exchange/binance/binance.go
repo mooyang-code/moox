@@ -20,6 +20,9 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 )
 
+// sideEffectNone 是统一账户杠杆账户下单的 sideEffectType 取值：不借币、不自动还款（官方 SDK 枚举 NO_SIDE_EFFECT）。
+const sideEffectNone = "NO_SIDE_EFFECT"
+
 const (
 	productionSpotURL = "https://api.binance.com"
 	testnetSpotURL    = "https://testnet.binance.vision"
@@ -36,6 +39,9 @@ type Adapter struct {
 	credential exchange.Credential
 	spot       *httpclient.Client
 	swap       *httpclient.Client
+	// papi 非空表示统一账户（组合保证金）模式：公共行情仍走 spot、swap，下单、撤单、查单、挂单、成交走 papi，
+	// 路径见 pmPaths；账户余额、持仓和私有流由 PortfolioMargin 在账户一级统一处理。
+	papi *httpclient.Client
 
 	mu          sync.RWMutex
 	instruments map[exchange.SymbolKey]exchange.Instrument
@@ -138,10 +144,37 @@ func (a *Adapter) client() *httpclient.Client {
 }
 
 func (a *Adapter) path(spot, swap string) string {
+	path := spot
 	if a.config.Market() == exchange.MarketTypeSwap {
-		return swap
+		path = swap
 	}
-	return spot
+	if a.papi != nil {
+		if mapped, ok := pmPaths[path]; ok {
+			return mapped
+		}
+	}
+	return path
+}
+
+// pmPaths 把普通账户的私有接口路径换成统一账户（papi）的对应路径；公共行情路径不在表里，保持不变。
+// 统一账户现货下单走杠杆账户（margin）接口，合约走 um 接口；路径与参数按官方 SDK 核对，见 testdata/README.md。
+var pmPaths = map[string]string{
+	"/api/v3/order":       "/papi/v1/margin/order",
+	"/api/v3/openOrders":  "/papi/v1/margin/openOrders",
+	"/api/v3/myTrades":    "/papi/v1/margin/myTrades",
+	"/fapi/v1/order":      "/papi/v1/um/order",
+	"/fapi/v1/openOrders": "/papi/v1/um/openOrders",
+	"/fapi/v1/userTrades": "/papi/v1/um/userTrades",
+	"/fapi/v1/leverage":   "/papi/v1/um/leverage",
+	"/fapi/v1/income":     "/papi/v1/um/income",
+}
+
+// privateClient 返回签名私有接口用的客户端：统一账户走 papi，普通账户按市场走现货或合约域名。
+func (a *Adapter) privateClient() *httpclient.Client {
+	if a.papi != nil {
+		return a.papi
+	}
+	return a.client()
 }
 
 // signedQuery 返回签好名的原始查询串：签名追加在末尾，签名用的正是发送的这段字节。
@@ -178,7 +211,7 @@ func (a *Adapter) signedRequest(
 	values url.Values,
 	order bool,
 ) ([]byte, error) {
-	return a.client().Do(ctx, &httpclient.Request{
+	return a.privateClient().Do(ctx, &httpclient.Request{
 		Method:   method,
 		Path:     path,
 		RawQuery: a.signedQuery(values),
@@ -433,10 +466,8 @@ type swapAccount struct {
 func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnapshot, error) {
 	// 持仓模式只在会话启动时检查一次，适配器随会话重建。
 	if a.config.Market() == exchange.MarketTypeSwap && !a.modeChecked.Load() {
+		// 普通账户允许多资产模式（保证金币需要），不再拒绝；模式写在检测结果里。
 		if err := a.ensureOneWayMode(ctx); err != nil {
-			return exchange.AccountSnapshot{}, err
-		}
-		if err := a.ensureSingleAssetMode(ctx); err != nil {
 			return exchange.AccountSnapshot{}, err
 		}
 		a.modeChecked.Store(true)
@@ -500,12 +531,16 @@ func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnaps
 	if err == nil {
 		snapshot.MaintenanceMargin, err = decimalOrZero(payload.TotalMaintMargin)
 	}
-	if err == nil {
-		snapshot.UnrealizedPnL, err = decimalOrZero(payload.TotalUnrealizedProfit)
-	}
 	if err != nil {
 		return exchange.AccountSnapshot{}, err
 	}
+	// 未实现盈亏只从持仓接口取一次：账户接口里的 totalUnrealizedProfit 不用，walletBalance 本身不含未实现盈亏，
+	// 这样统一权益公式（结算资产净额 + 永续未实现盈亏 + …）不会重复计入。
+	positions, err := a.ListPositionSnapshots(ctx)
+	if err != nil {
+		return exchange.AccountSnapshot{}, err
+	}
+	snapshot.UnrealizedPnL = sumUnrealizedPnL(positions)
 	for _, balance := range payload.Assets {
 		total, parseErr := decimalOrZero(balance.WalletBalance)
 		if parseErr != nil {
@@ -523,6 +558,15 @@ func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnaps
 	return snapshot, nil
 }
 
+// sumUnrealizedPnL 汇总持仓的未实现盈亏。
+func sumUnrealizedPnL(positions []exchange.Position) shared.Decimal {
+	total := shared.Zero()
+	for _, position := range positions {
+		total = total.Add(position.UnrealizedPnL)
+	}
+	return total
+}
+
 func (a *Adapter) ensureOneWayMode(ctx context.Context) error {
 	raw, err := a.request(ctx, http.MethodGet, "/fapi/v1/positionSide/dual", nil)
 	if err != nil {
@@ -536,23 +580,6 @@ func (a *Adapter) ensureOneWayMode(ctx context.Context) error {
 	}
 	if payload.DualSidePosition {
 		return typedRejected("hedge position mode is unsupported", nil)
-	}
-	return nil
-}
-
-func (a *Adapter) ensureSingleAssetMode(ctx context.Context) error {
-	raw, err := a.request(ctx, http.MethodGet, "/fapi/v1/multiAssetsMargin", nil)
-	if err != nil {
-		return err
-	}
-	var payload struct {
-		MultiAssetsMargin bool `json:"multiAssetsMargin"`
-	}
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		return typedRejected("decode multi-assets margin mode", err)
-	}
-	if payload.MultiAssetsMargin {
-		return typedRejected("multi-assets margin is unsupported", nil)
 	}
 	return nil
 }
@@ -778,6 +805,10 @@ func (a *Adapter) PlaceOrder(
 		if request.ReduceOnly {
 			values.Set("reduceOnly", "true")
 		}
+	} else if a.papi != nil {
+		// 统一账户的现货下单走杠杆账户：必须显式声明不借币、不自动还款。
+		// 官方默认值也是 NO_SIDE_EFFECT，但 MooX 不依赖默认值：任何一次现货下单请求都显式带上它。
+		values.Set("sideEffectType", sideEffectNone)
 	}
 	raw, err := a.signedRequest(
 		ctx,
@@ -987,7 +1018,7 @@ func (a *Adapter) SetLeverage(
 		strings.ContainsAny(leverage.String(), "./") {
 		return typedRejected("positive integer SWAP leverage is required", nil)
 	}
-	raw, err := a.request(ctx, http.MethodPost, "/fapi/v1/leverage", url.Values{
+	raw, err := a.request(ctx, http.MethodPost, a.path("", "/fapi/v1/leverage"), url.Values{
 		"symbol":   []string{symbolValue},
 		"leverage": []string{leverage.String()},
 	})
@@ -1007,6 +1038,10 @@ func (a *Adapter) SetMarginMode(
 		mode != exchange.MarginModeCross ||
 		strings.TrimSpace(symbolValue) == "" {
 		return typedRejected("only CROSS SWAP margin mode is supported", nil)
+	}
+	if a.papi != nil {
+		// 统一账户的合约一律全仓，没有切换保证金模式的接口。
+		return nil
 	}
 	raw, err := a.request(ctx, http.MethodPost, "/fapi/v1/marginType", url.Values{
 		"symbol":     []string{symbolValue},
@@ -1031,6 +1066,11 @@ func (a *Adapter) ordersFromPayload(payload []orderPayload) ([]exchange.Order, e
 }
 
 func (a *Adapter) orderFromPayload(row orderPayload) (exchange.Order, error) {
+	return orderFromRow(a.config.Market(), row)
+}
+
+// orderFromRow 把订单响应转成订单；市场由调用方指定，普通账户和统一账户共用。
+func orderFromRow(market exchange.MarketType, row orderPayload) (exchange.Order, error) {
 	quantity, err := decimalOrZero(row.OrigQty)
 	if err != nil {
 		return exchange.Order{}, err
@@ -1062,14 +1102,14 @@ func (a *Adapter) orderFromPayload(row orderPayload) (exchange.Order, error) {
 		limitPrice = &price
 	}
 	positionSide := exchange.PositionSideUnspecified
-	if a.config.Market() == exchange.MarketTypeSwap {
+	if market == exchange.MarketTypeSwap {
 		if row.PositionSide != "" && row.PositionSide != "BOTH" {
 			return exchange.Order{}, typedRejected("hedge order is unsupported", nil)
 		}
 		positionSide = exchange.PositionSideNet
 	}
 	return exchange.Order{
-		Market:          a.config.Market(),
+		Market:          market,
 		ExchangeOrderID: row.OrderID.String(),
 		ClientOrderID:   row.ClientOrderID,
 		ExchangeSymbol:  row.Symbol,
@@ -1098,6 +1138,11 @@ func firstPositive(values ...int64) int64 {
 }
 
 func (a *Adapter) fillFromPayload(row tradePayload) (exchange.Fill, error) {
+	return fillFromRow(a.config.Market(), a.config.SettlementAsset, row)
+}
+
+// fillFromRow 把成交查询的一行转成成交记录；普通账户和统一账户共用。
+func fillFromRow(market exchange.MarketType, settlementAsset string, row tradePayload) (exchange.Fill, error) {
 	quantity, err := decimalOrZero(row.Qty)
 	if err != nil {
 		return exchange.Fill{}, err
@@ -1119,7 +1164,7 @@ func (a *Adapter) fillFromPayload(row tradePayload) (exchange.Fill, error) {
 		side = exchange.SideBuy
 	}
 	positionSide := exchange.PositionSideUnspecified
-	if a.config.Market() == exchange.MarketTypeSwap {
+	if market == exchange.MarketTypeSwap {
 		if row.PositionSide != "" && row.PositionSide != "BOTH" {
 			return exchange.Fill{}, typedRejected("hedge fill is unsupported", nil)
 		}
@@ -1134,7 +1179,7 @@ func (a *Adapter) fillFromPayload(row tradePayload) (exchange.Fill, error) {
 		role = "MAKER"
 	}
 	return exchange.Fill{
-		Market:          a.config.Market(),
+		Market:          market,
 		ExchangeTradeID: row.ID.String(),
 		ExchangeOrderID: row.OrderID.String(),
 		ExchangeSymbol:  row.Symbol,
@@ -1145,7 +1190,7 @@ func (a *Adapter) fillFromPayload(row tradePayload) (exchange.Fill, error) {
 		Fee:             fee.Abs(),
 		FeeAsset:        row.CommissionAsset,
 		RealizedPnL:     pnl,
-		SettlementAsset: a.config.SettlementAsset,
+		SettlementAsset: settlementAsset,
 		LiquidityRole:   role,
 		TradedAt:        millis(row.Time),
 	}, nil

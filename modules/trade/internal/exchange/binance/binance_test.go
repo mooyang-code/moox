@@ -365,13 +365,14 @@ func TestSwapAccountSnapshotUsesAssetUpdateTime(t *testing.T) {
 		switch request.URL.Path {
 		case "/fapi/v1/positionSide/dual":
 			_, _ = io.WriteString(writer, `{"dualSidePosition":false}`)
-		case "/fapi/v1/multiAssetsMargin":
-			_, _ = io.WriteString(writer, `{"multiAssetsMargin":false}`)
+		case "/fapi/v3/positionRisk":
+			// 未实现盈亏只取持仓接口，不取账户接口的 totalUnrealizedProfit。
+			_, _ = io.WriteString(writer, `[{"symbol":"BTCUSDT","positionSide":"BOTH","positionAmt":"1","entryPrice":"100","markPrice":"90","unRealizedProfit":"-10","initialMargin":"20","notional":"90"}]`)
 		case "/fapi/v3/account":
 			_, _ = io.WriteString(writer, `{
 				"totalWalletBalance":"100","totalMarginBalance":"90","availableBalance":"80",
 				"totalInitialMargin":"20","totalMaintMargin":"2",
-				"totalUnrealizedProfit":"-10",
+				"totalUnrealizedProfit":"999",
 				"assets":[
 					{"asset":"USDT","walletBalance":"100","availableBalance":"80",
 					 "initialMargin":"20","unrealizedProfit":"1","updateTime":1700000000000}
@@ -395,25 +396,23 @@ func TestSwapAccountSnapshotUsesAssetUpdateTime(t *testing.T) {
 	}
 }
 
-func TestSwapAccountSnapshotRejectsMultiAssetsMode(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(
-		writer http.ResponseWriter,
-		request *http.Request,
-	) {
+// 普通账户允许多资产模式（保证金币需要）：不再因 multiAssetsMargin=true 拒绝，也不再请求这个接口。
+func TestSwapAccountSnapshotAcceptsMultiAssetsMode(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
 		case "/fapi/v1/positionSide/dual":
 			_, _ = io.WriteString(writer, `{"dualSidePosition":false}`)
-		case "/fapi/v1/multiAssetsMargin":
-			_, _ = io.WriteString(writer, `{"multiAssetsMargin":true}`)
+		case "/fapi/v3/positionRisk":
+			_, _ = io.WriteString(writer, `[]`)
+		case "/fapi/v3/account":
+			_, _ = writer.Write(sample(t, "fapi_account_v3.json"))
 		default:
 			t.Fatalf("unexpected path %s", request.URL.Path)
 		}
 	}))
 	defer server.Close()
-	_, err := testAdapter(exchange.MarketTypeSwap, server.URL).
-		GetAccountSnapshot(context.Background())
-	if !exchange.IsKind(err, exchange.ErrorRejected) {
-		t.Fatalf("error = %v", err)
+	if _, err := testAdapter(exchange.MarketTypeSwap, server.URL).GetAccountSnapshot(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 }
 
