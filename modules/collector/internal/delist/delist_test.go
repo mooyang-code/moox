@@ -275,3 +275,30 @@ func TestDetectorPublishesOncePerNoticeAndRaisesAttention(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, pending, 1, "同一条只发布一次")
 }
+
+// 币安现货计划里同一个代码出现在两个下架时间组：只取最早的，多轮轮询也只发布一次。
+func TestDetectorKeepsEarliestWhenSameSymbolHasTwoDelistTimes(t *testing.T) {
+	ctx := context.Background()
+	db := openStore(t)
+	registrar, _ := newRegistrar(t, db)
+	early := Notice{Exchange: "binance", Market: events.DelistMarketSpot, Symbol: "FOOUSDT", DelistAt: testNow.Add(72 * time.Hour), Source: events.DelistSourceBinanceSpotSchedule}
+	late := early
+	late.DelistAt = testNow.Add(96 * time.Hour)
+	other := Notice{Exchange: "binance", Market: events.DelistMarketSpot, Symbol: "BARUSDT", DelistAt: testNow.Add(96 * time.Hour), Source: events.DelistSourceBinanceSpotSchedule}
+	// 两轮的顺序不同：不管谁先出现，结果一样。
+	source := &scriptedSource{name: "币安现货", results: []sourceResult{{notices: []Notice{early, other, late}}, {notices: []Notice{late, early, other}}}}
+	detector := &Detector{Sources: []Source{source}, Registrar: registrar}
+
+	detector.RunOnce(ctx)
+	detector.RunOnce(ctx)
+	pending, err := db.Resample().PendingEvents(ctx, 10)
+	require.NoError(t, err)
+	require.Len(t, pending, 2, "FOOUSDT 与 BARUSDT 各发布一次，不在两个时间之间来回发布")
+
+	got := earliestPerInstrument([]Notice{late, early})
+	require.Len(t, got, 1)
+	require.True(t, got[0].DelistAt.Equal(early.DelistAt))
+	paper := early
+	paper.Scope = events.DelistScopePaperOnly
+	require.Len(t, earliestPerInstrument([]Notice{early, paper}), 2, "范围不同不合并")
+}

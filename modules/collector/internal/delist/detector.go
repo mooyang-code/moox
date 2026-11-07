@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/attention"
+	"github.com/mooyang-code/moox/packages/events"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -85,7 +86,7 @@ func (d *Detector) RunOnce(ctx context.Context) {
 		}
 		d.keyGone[name] = false
 		d.failures[name] = 0
-		for _, notice := range notices {
+		for _, notice := range earliestPerInstrument(notices) {
 			created, eventID, err := d.Registrar.Register(ctx, notice)
 			if err != nil {
 				log.ErrorContextf(ctx, "[Collector] 登记下架通知 %s:%s:%s 失败: %v", notice.Exchange, notice.Market, notice.Symbol, err)
@@ -97,6 +98,30 @@ func (d *Detector) RunOnce(ctx context.Context) {
 		}
 	}
 	d.publishLocked()
+}
+
+// earliestPerInstrument 同一来源一轮里，同一（交易所、市场、代码、范围）出现多条时只保留下架时间最早的：
+// 币安现货下架计划里同一个代码可能出现在两个下架时间组，不去重的话，每一轮都会在两个时间之间来回改、反复发布。
+func earliestPerInstrument(notices []Notice) []Notice {
+	type key struct{ exchange, market, symbol, scope string }
+	index := map[key]int{}
+	var out []Notice
+	for _, notice := range notices {
+		scope := notice.Scope
+		if scope == "" {
+			scope = events.DelistScopeAll
+		}
+		k := key{notice.Exchange, notice.Market, notice.Symbol, scope}
+		if i, ok := index[k]; ok {
+			if notice.DelistAt.Before(out[i].DelistAt) {
+				out[i] = notice
+			}
+			continue
+		}
+		index[k] = len(out)
+		out = append(out, notice)
+	}
+	return out
 }
 
 func (d *Detector) publishLocked() {
