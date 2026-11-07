@@ -247,6 +247,10 @@ func TestInspectTransportErrorsAreInconclusive(t *testing.T) {
 		"时间戳 -1021":         {http.StatusBadRequest, errorBody(-1021, "Timestamp for this request is outside of the recvWindow.")},
 		"无法识别的错误码 -1121":    {http.StatusBadRequest, errorBody(-1121, "Invalid symbol.")},
 		"WAF HTTP 403 无错误码": {http.StatusForbidden, "<html>blocked</html>"},
+		// HTTP 状态码不能先于响应体里的错误码：401 配网关页、401 配时间戳错误都不是“密钥被拒绝”。
+		"HTTP 401 配网关页":       {http.StatusUnauthorized, "<html>401 Authorization Required</html>"},
+		"HTTP 401 空响应体":       {http.StatusUnauthorized, ""},
+		"HTTP 401 配时间戳 -1021": {http.StatusUnauthorized, errorBody(-1021, "Timestamp for this request is outside of the recvWindow.")},
 	}
 	for name, reply := range tests {
 		t.Run(name+"（papi）", func(t *testing.T) {

@@ -1161,15 +1161,46 @@ func mapStatus(raw string, filled shared.Decimal) exchange.OrderStatus {
 	}
 }
 
-func classify(err error, _ []byte) error {
+// classify 把请求错误转成统一错误。OKX 的业务错误码在响应体里：鉴权类错误（密钥、签名、时间戳）常常带 HTTP 401 返回，
+// 如果只看状态码，401 一律是“鉴权失败”，时间戳过期（50102）这类“结果未知”的码就被当成密钥被拒绝。
+// 所以响应体里能解析出 OKX 错误码时，按错误码分类并保留码；限流类（HTTP 429 等）仍以状态码分类为准；
+// 5xx 且错误码没有明确含义时保持“结果未知”。
+func classify(err error, raw []byte) error {
 	if err == nil {
 		return nil
 	}
 	var typed *exchange.Error
-	if errors.As(err, &typed) {
+	if !errors.As(err, &typed) {
+		return &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: err}
+	}
+	code, message, found := okxErrorBody(raw)
+	if !found {
 		return typed
 	}
-	return &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: err}
+	switch typed.Kind {
+	case exchange.ErrorRateLimited, exchange.ErrorOrderRateLimited, exchange.ErrorBanned, exchange.ErrorThrottled, exchange.ErrorNotSent:
+		typed.Code = code
+		return typed
+	}
+	coded := classifyOKXCode(code, message).(*exchange.Error)
+	if coded.Kind == exchange.ErrorRejected && typed.Kind == exchange.ErrorTransportUnknown {
+		typed.Code = code
+		return typed
+	}
+	coded.HTTPStatus = typed.HTTPStatus
+	return coded
+}
+
+// okxErrorBody 从非 2xx 响应体里取 OKX 的错误码和说明；不是 OKX 的 JSON 信封时返回 false。
+func okxErrorBody(raw []byte) (code, message string, found bool) {
+	var envelope struct {
+		Code string `json:"code"`
+		Msg  string `json:"msg"`
+	}
+	if json.Unmarshal(raw, &envelope) != nil || envelope.Code == "" || envelope.Code == "0" {
+		return "", "", false
+	}
+	return envelope.Code, envelope.Msg, true
 }
 
 func classifyOKXCode(code, message string) error {

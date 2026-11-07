@@ -42,7 +42,8 @@ func inspectWith(ctx context.Context, request exchange.InspectRequest, adapter *
 	if err != nil {
 		// 只有鉴权类错误码是确定的结论；其余（超时、限频、5xx、无法识别的错误码）这次没检测成，不下结论。
 		if isCredentialRejection(err) {
-			result.CredentialRejected = "交易所返回鉴权类错误（密钥、passphrase 无效或 IP 不在白名单）：" + err.Error()
+			// 只记错误码和中文说明，不带交易所原始响应体和请求串（可能含签名）。
+			result.CredentialRejected = "交易所返回鉴权类错误 " + errorCode(err) + "（密钥、passphrase 无效或 IP 不在白名单）"
 			result.Blockers = result.BlockersFor(request.Markets)
 			return result, nil
 		}
@@ -80,12 +81,22 @@ func inspectWith(ctx context.Context, request exchange.InspectRequest, adapter *
 	return result, nil
 }
 
-// isCredentialRejection 报告错误是否是确定的“密钥被拒绝”：鉴权类错误码，但 50112 除外。
-// 50112 与时间戳有关（未逐字核对官方说明），海外机时钟偏差时可能出现，不能当成“密钥无效”暂停组合，按没有结论处理。
+// isCredentialRejection 报告错误是否是确定的“密钥被拒绝”：响应体里解析出了鉴权类错误码。
+// 没有可识别的错误码（HTTP 401 配 HTML、空响应体等）、以及与时间戳有关的 50102（请求过期）、50112，
+// 都不是确定结论：海外机时钟偏差、网关异常时不能判成“密钥无效”暂停组合，按没有结论处理。
+// 50102、50112 的官方说明未逐字核对。
 func isCredentialRejection(err error) bool {
 	var typed *exchange.Error
 	if !errors.As(err, &typed) || typed.Kind != exchange.ErrorAuthentication {
 		return false
 	}
-	return typed.Code != "50112"
+	return typed.Code != "" && typed.Code != "50102" && typed.Code != "50112"
+}
+
+func errorCode(err error) string {
+	var typed *exchange.Error
+	if errors.As(err, &typed) {
+		return typed.Code
+	}
+	return ""
 }

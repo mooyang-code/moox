@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
@@ -121,14 +122,21 @@ func TestInspectSpotModeAccountBlocksSwapOnly(t *testing.T) {
 }
 
 func TestInspectRejectedCredentialIsConclusive(t *testing.T) {
-	// 官方：HTTP 200 里 code 非 0 表示失败；50111 是密钥无效。
-	body := `{"code":"50111","msg":"Invalid OK-ACCESS-KEY","data":[]}`
-	result, err := inspectAgainst(t, http.StatusOK, body, exchange.InspectRequest{Environment: exchange.AccountEnvironmentProduction})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !hasFinding(result.Blockers, exchange.FindingCredentialRejected) {
-		t.Fatalf("鉴权类错误码应是确定结论：%+v", result)
+	// OKX 的鉴权类错误常带 HTTP 401（也可能是 HTTP 200 里 code 非 0）：50110、50111、50113 都是确定结论。
+	for _, status := range []int{http.StatusOK, http.StatusUnauthorized} {
+		for _, code := range []string{"50100", "50110", "50111", "50113", "50114"} {
+			body := `{"code":"` + code + `","msg":"auth","data":[]}`
+			result, err := inspectAgainst(t, status, body, exchange.InspectRequest{Environment: exchange.AccountEnvironmentProduction})
+			if err != nil {
+				t.Fatalf("HTTP %d 错误码 %s 应是确定结论：%v", status, code, err)
+			}
+			if !hasFinding(result.Blockers, exchange.FindingCredentialRejected) {
+				t.Fatalf("HTTP %d 错误码 %s：%+v", status, code, result)
+			}
+			if strings.Contains(result.CredentialRejected, "auth") || !strings.Contains(result.CredentialRejected, code) {
+				t.Fatalf("只记错误码和中文说明，不带响应体原文：%q", result.CredentialRejected)
+			}
+		}
 	}
 }
 
@@ -137,13 +145,19 @@ func TestInspectTransportErrorsAreInconclusive(t *testing.T) {
 		status int
 		body   string
 	}{
-		"限频 HTTP 429": {http.StatusTooManyRequests, `{"code":"50011","msg":"Too Many Requests","data":[]}`},
-		"服务端 5xx":     {http.StatusBadGateway, `bad gateway`},
-		"系统繁忙 50001":  {http.StatusOK, `{"code":"50001","msg":"Service temporarily unavailable","data":[]}`},
-		"超时 50004":    {http.StatusOK, `{"code":"50004","msg":"Endpoint request timeout","data":[]}`},
-		"无法识别的错误码":    {http.StatusOK, `{"code":"59999","msg":"unknown","data":[]}`},
-		"时间戳相关 50112": {http.StatusOK, `{"code":"50112","msg":"Invalid OK-ACCESS-TIMESTAMP","data":[]}`},
-		"时间戳过期 50102": {http.StatusOK, `{"code":"50102","msg":"Timestamp request expired","data":[]}`},
+		"限频 HTTP 429":          {http.StatusTooManyRequests, `{"code":"50011","msg":"Too Many Requests","data":[]}`},
+		"服务端 5xx":              {http.StatusBadGateway, `bad gateway`},
+		"系统繁忙 50001":           {http.StatusOK, `{"code":"50001","msg":"Service temporarily unavailable","data":[]}`},
+		"超时 50004":             {http.StatusOK, `{"code":"50004","msg":"Endpoint request timeout","data":[]}`},
+		"无法识别的错误码":             {http.StatusOK, `{"code":"59999","msg":"unknown","data":[]}`},
+		"时间戳相关 50112 HTTP 200": {http.StatusOK, `{"code":"50112","msg":"Invalid OK-ACCESS-TIMESTAMP","data":[]}`},
+		"时间戳过期 50102 HTTP 200": {http.StatusOK, `{"code":"50102","msg":"Timestamp request expired","data":[]}`},
+		// 时间戳类错误在 OKX 上常以 HTTP 401 返回：不能因为状态码是 401 就判成密钥被拒绝。
+		"时间戳过期 50102 HTTP 401": {http.StatusUnauthorized, `{"code":"50102","msg":"Timestamp request expired","data":[]}`},
+		"时间戳相关 50112 HTTP 401": {http.StatusUnauthorized, `{"code":"50112","msg":"Invalid OK-ACCESS-TIMESTAMP","data":[]}`},
+		"HTTP 401 配 HTML 网关页":  {http.StatusUnauthorized, `<html><body>401 Authorization Required</body></html>`},
+		"HTTP 401 空响应体":        {http.StatusUnauthorized, ``},
+		"HTTP 403 WAF 页":       {http.StatusForbidden, `<html>blocked</html>`},
 	}
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -152,6 +166,33 @@ func TestInspectTransportErrorsAreInconclusive(t *testing.T) {
 				t.Fatalf("应没有结论：err=%v result=%+v", err, result)
 			}
 		})
+	}
+}
+
+// 交易路径同样按响应体里的错误码分类：401 配 50102 是“结果未知”，不是鉴权失败。
+func TestClassifyUsesOKXErrorCodeFromNon2xxBody(t *testing.T) {
+	httpErr := func(status int) error {
+		return &exchange.Error{Kind: exchange.ErrorAuthentication, HTTPStatus: status, Err: errors.New("http 401")}
+	}
+	err := classify(httpErr(401), []byte(`{"code":"50102","msg":"Timestamp request expired"}`))
+	if !exchange.IsKind(err, exchange.ErrorTransportUnknown) {
+		t.Fatalf("50102 应是结果未知：%v", err)
+	}
+	err = classify(httpErr(401), []byte(`{"code":"50111","msg":"Invalid OK-ACCESS-KEY"}`))
+	var typed *exchange.Error
+	if !errors.As(err, &typed) || typed.Kind != exchange.ErrorAuthentication || typed.Code != "50111" || typed.HTTPStatus != 401 {
+		t.Fatalf("50111 应是鉴权失败并保留码和状态：%+v", typed)
+	}
+	if err := classify(httpErr(401), []byte(`<html>`)); !exchange.IsKind(err, exchange.ErrorAuthentication) {
+		t.Fatalf("没有错误码时保持状态码的分类：%v", err)
+	}
+	limited := &exchange.Error{Kind: exchange.ErrorRateLimited, HTTPStatus: 429, Err: errors.New("429")}
+	if err := classify(limited, []byte(`{"code":"50011","msg":"Too Many Requests"}`)); !exchange.IsKind(err, exchange.ErrorRateLimited) {
+		t.Fatalf("限频以状态码分类为准：%v", err)
+	}
+	bad := &exchange.Error{Kind: exchange.ErrorTransportUnknown, HTTPStatus: 502, Err: errors.New("502")}
+	if err := classify(bad, []byte(`{"code":"59999","msg":"x"}`)); !exchange.IsKind(err, exchange.ErrorTransportUnknown) {
+		t.Fatalf("5xx 配不明确的错误码保持结果未知：%v", err)
 	}
 }
 
