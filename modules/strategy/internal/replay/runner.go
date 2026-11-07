@@ -321,6 +321,11 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 	}
 	columns := uniqueStrings(append(append([]string{"close"}, program.Columns...), program.PreviousColumns...))
 	readers := make([]*marketReader, 0, len(markets))
+	// 统一数据集里两个市场共用一个 View：同一段的读取只发一次，各市场再按 series_tag 过滤。
+	var memo *input.RowsMemo
+	if resolved.Unified() {
+		memo = &input.RowsMemo{}
+	}
 	for _, market := range markets {
 		view := views[market]
 		loaderMarket := ""
@@ -329,11 +334,11 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 		}
 		readers = append(readers, &marketReader{
 			market: market, task: job.Tasks[resolved.TaskKey(market)], subjects: subjects[market], passed: make(map[string]struct{}),
-			rows:    &input.RangeLoader{Client: r.Client, SpaceID: job.SpaceID, View: view, Subjects: subjects[market], Columns: columns, Market: loaderMarket, Abort: abort},
-			history: &input.RangeLoader{Client: r.Client, SpaceID: job.SpaceID, View: view, Subjects: subjects[market], Columns: []string{"close"}, Market: loaderMarket, Abort: abort},
+			rows:    &input.RangeLoader{Client: r.Client, SpaceID: job.SpaceID, View: view, Subjects: subjects[market], Columns: columns, Market: loaderMarket, Memo: memo, Abort: abort},
+			history: &input.RangeLoader{Client: r.Client, SpaceID: job.SpaceID, View: view, Subjects: subjects[market], Columns: []string{"close"}, Market: loaderMarket, Memo: memo, Abort: abort},
 		})
 	}
-	reader := &segmentReader{runner: r, job: job, resolved: resolved, program: program, end: end, acc: acc, abort: abort, markets: readers}
+	reader := &segmentReader{runner: r, job: job, resolved: resolved, program: program, end: end, acc: acc, abort: abort, markets: readers, memo: memo}
 	members := cachedMembership(r.Client, job.SpaceID)
 	book := ledger.NewLedger(r.initialEquity(), job.SpotFeeBps, job.SwapFeeBps, r.liquidateAfter())
 	state := engine.State{}
@@ -581,6 +586,8 @@ type segmentReader struct {
 	acc      *accumulator
 	abort    func(context.Context) error
 	switches int
+	// memo 是统一数据集两个市场共用的读取暂存（方式 A 为空）。
+	memo *input.RowsMemo
 	// end 是当前有效的终点（不含）：换代后可能被新索引截短。
 	end time.Time
 }
@@ -599,6 +606,7 @@ func (s *segmentReader) load(ctx context.Context, segment []input.PeriodBoundari
 	revisionRereads := 0
 reload:
 	for {
+		s.memo.Reset()
 		loaded := make(map[string]marketSegment, len(s.markets))
 		for _, market := range s.markets {
 			market.history.ExpectedRevision = 0

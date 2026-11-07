@@ -18,6 +18,8 @@ const (
 // 其余元数据沿用现货的。读行时带不带 series_tag 的 selector 都按 Storage 的口径处理。
 type unifiedClient struct {
 	*dualClient
+	// reads 统计读取行的次数（不含年龄探针之外的别的调用）。
+	reads int
 }
 
 const (
@@ -48,6 +50,7 @@ func (c *unifiedClient) ListDatasetSubjects(ctx context.Context, spaceID, datase
 }
 
 func (c *unifiedClient) QueryRows(ctx context.Context, spaceID string, query input.Query) ([]input.Row, uint64, error) {
+	c.reads++
 	spotRows, revision, err := c.spot.QueryRows(ctx, spaceID, query)
 	if err != nil {
 		return nil, 0, err
@@ -85,7 +88,7 @@ func TestReplayOnUnifiedDatasetMatchesTwoTasks(t *testing.T) {
 				var client input.Client = dual
 				tasks := map[string]store.ReplayTask{"spot": spotTask, "swap": swapTask}
 				if unified {
-					client, tasks = &unifiedClient{dual}, map[string]store.ReplayTask{"multi": uniTask}
+					client, tasks = &unifiedClient{dualClient: dual}, map[string]store.ReplayTask{"multi": uniTask}
 				} else if strings.Contains(dslYaml, "market: {select: swap}") {
 					tasks = map[string]store.ReplayTask{"swap": swapTask}
 				}
@@ -115,7 +118,7 @@ func TestReplayOnUnifiedDatasetSkipsSameMarketAmbiguity(t *testing.T) {
 	repo := openStore(t)
 	dual := newDualClient()
 	dual.spot.ambiguous = map[int]bool{4: true} // 现货上的 A 在第 4 小时有两个序列
-	client := &unifiedClient{dual}
+	client := &unifiedClient{dualClient: dual}
 	job := startMarketReplay(t, repo, client, "p1", hedgeDSL, 6, map[string]store.ReplayTask{"multi": uniTask}, 0, 0)
 	(&Runner{Store: repo, Client: client, ChunkBars: 5, InitialEquity: 100}).Execute(context.Background(), job)
 	if done, _ := repo.GetReplay(context.Background(), "p1"); done.Status != store.ReplayDone {
@@ -126,5 +129,20 @@ func TestReplayOnUnifiedDatasetSkipsSameMarketAmbiguity(t *testing.T) {
 		if (hourOf(bar) == 4) != ambiguous {
 			t.Fatalf("只有第 4 小时（现货上的 A 有两个序列）应因歧义跳过：小时 %d 状态 %s 原因 %q", hourOf(bar), bar.Status, bar.SkipReason)
 		}
+	}
+}
+
+// 统一数据集的两个市场共用一个 View：同一段的行只读一次 Storage（各市场再按 series_tag 过滤），不是每个市场读一遍。
+func TestReplayOnUnifiedDatasetReadsEachSegmentOnce(t *testing.T) {
+	repo := openStore(t)
+	client := &unifiedClient{dualClient: newDualClient()}
+	job := startMarketReplay(t, repo, client, "p1", hedgeDSL, 12, map[string]store.ReplayTask{"multi": uniTask}, 0, 0)
+	(&Runner{Store: repo, Client: client, ChunkBars: 4, InitialEquity: 100}).Execute(context.Background(), job)
+	if done, _ := repo.GetReplay(context.Background(), "p1"); done.Status != store.ReplayDone {
+		t.Fatalf("回放应完成：%+v", done)
+	}
+	// 12 根每段 4 根，共 3 段；没有年龄要求时每段只读一次行。
+	if client.reads != 3 {
+		t.Fatalf("三段应各读一次行：实际读了 %d 次", client.reads)
 	}
 }
