@@ -160,7 +160,20 @@ func (h *Handler) Step(ctx context.Context, execution store.Execution, now time.
 	for _, step := range steps {
 		r.steps[keyOf(step)] = step
 	}
-	return r.step(ctx)
+	outcome, err := r.step(ctx)
+	if err != nil || !tgt.PaperOnly || r.stopped || (outcome.Status != store.StatusSucceeded && outcome.Status != store.StatusFailed) {
+		return outcome, err
+	}
+	// 演练（PAPER_ONLY）的标的是真实存在、并不会下架的：记录一结束就解除禁止，否则全局的禁止会一直留着，实盘再也买不了它，
+	// 而已结束的记录不能再取消。同标的还有别的未结束的下架处理时 release 不会解除。真实下架结束后名单保留（标的确实下架了）。
+	unlock := h.locks.Lock(tgt.subject())
+	defer unlock()
+	if releaseErr := h.release(ctx, execution, tgt); releaseErr != nil {
+		r.problem("演练结束后解除禁止买入失败，稍后重试: %v", releaseErr)
+		r.wakeAt(now.Add(transientRetry))
+		return r.pending(), nil
+	}
+	return outcome, nil
 }
 
 // run 是一次 Step 的状态：已存的步骤、这次发现的问题和下一次该醒来的时间。
@@ -225,7 +238,7 @@ func (r *run) step(ctx context.Context) (action.Outcome, error) {
 			r.wakeAt(r.now.Add(transientRetry))
 			return r.pending(), nil
 		}
-		if !slices.Contains(blocked, r.target.Instrument) {
+		if !slices.ContainsFunc(blocked, func(item action.InstrumentRef) bool { return normalizeRef(item) == r.target.Instrument }) {
 			return action.Outcome{Status: store.StatusCanceled, Error: "禁止买入已被手工解除，下架处理已停止"}, nil
 		}
 	}

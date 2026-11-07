@@ -40,7 +40,8 @@ func parseTarget(execution store.Execution) (target, error) {
 	if err := json.Unmarshal([]byte(execution.PayloadJSON), &payload); err != nil {
 		return target{}, fmt.Errorf("事件内容不是合法的 JSON: %w", err)
 	}
-	if payload.Exchange == "" || payload.ExchangeSymbol == "" || (payload.Market != events.DelistMarketSpot && payload.Market != events.DelistMarketSwap) {
+	instrument := normalizeRef(action.InstrumentRef{Exchange: payload.Exchange, Market: payload.Market, ExchangeSymbol: payload.ExchangeSymbol})
+	if instrument.Exchange == "" || instrument.ExchangeSymbol == "" || (instrument.Market != events.DelistMarketSpot && instrument.Market != events.DelistMarketSwap) {
 		return target{}, fmt.Errorf("事件内容缺少交易所、市场或交易所代码")
 	}
 	delistAt, err := time.Parse(time.RFC3339Nano, payload.DelistAt)
@@ -48,10 +49,20 @@ func parseTarget(execution store.Execution) (target, error) {
 		return target{}, fmt.Errorf("事件里的下架时间不合法: %w", err)
 	}
 	return target{
-		Instrument: action.InstrumentRef{Exchange: payload.Exchange, Market: payload.Market, ExchangeSymbol: payload.ExchangeSymbol},
+		Instrument: instrument,
 		DelistAt:   delistAt,
 		PaperOnly:  payload.Scope == events.DelistScopePaperOnly,
 	}, nil
+}
+
+// normalizeRef 统一标的的写法：交易所小写、市场和交易所代码大写、去掉首尾空白。事件里的标的（Collector 或手工登记）与 Trade 名单里的标的
+// 必须按同一种写法比较，否则“名单里还有没有这个标的”会误判成已被手工解除；调用 Trade 时也统一用大写代码。
+func normalizeRef(ref action.InstrumentRef) action.InstrumentRef {
+	return action.InstrumentRef{
+		Exchange:       strings.ToLower(strings.TrimSpace(ref.Exchange)),
+		Market:         strings.ToUpper(strings.TrimSpace(ref.Market)),
+		ExchangeSymbol: strings.ToUpper(strings.TrimSpace(ref.ExchangeSymbol)),
+	}
 }
 
 // subject 是标的的唯一名字（交易所:市场:代码），与执行记录的 c_subject_id 一致，也是进程内锁的键。

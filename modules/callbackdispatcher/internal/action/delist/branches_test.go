@@ -291,3 +291,96 @@ func TestCanceledExecutionStopsFlatten(t *testing.T) {
 	require.Equal(t, store.StatusCanceled, outcome.Status)
 	require.Zero(t, h.trade.flattenCount())
 }
+
+// 演练记录一结束（核对成功、核对失败、未知标的）就解除禁止：已结束的记录不能再取消，不解除会让全局的禁止永远留着。
+func TestDrillReleasesBlockWhenFinished(t *testing.T) {
+	delistAt := baseTime.Add(3 * time.Hour)
+
+	h := newHarness(t)
+	h.trade.setHolders(paper("paper-space", "la-p"))
+	h.addExecution("drill", delistAt, "PAPER_ONLY")
+	h.step("drill", baseTime)
+	require.True(t, h.trade.isBlocked())
+	h.step("drill", baseTime.Add(30*time.Second))
+	require.Equal(t, store.StatusSucceeded, h.step("drill", delistAt.Add(10*time.Minute)).Status)
+	require.False(t, h.trade.isBlocked(), "演练成功结束后解除禁止")
+
+	failing := newHarness(t)
+	failing.trade.setHolders(paper("paper-space", "la-p"))
+	failing.trade.finalFor = func(action.FlattenRequest) (string, string) { return action.OperatorPartial, "拒单" }
+	failing.addExecution("drill", delistAt, "PAPER_ONLY")
+	failing.step("drill", baseTime)
+	failing.step("drill", baseTime.Add(30*time.Second))
+	require.Equal(t, store.StatusFailed, failing.step("drill", delistAt.Add(10*time.Minute)).Status)
+	require.False(t, failing.trade.isBlocked(), "演练核对失败也解除")
+
+	unknown := newHarness(t)
+	unknown.trade.unknown = true
+	unknown.addExecution("drill", delistAt, "PAPER_ONLY")
+	require.Equal(t, store.StatusSucceeded, unknown.step("drill", baseTime).Status)
+	require.False(t, unknown.trade.isBlocked())
+
+	real := newHarness(t)
+	real.addExecution("real", delistAt, "ALL")
+	real.step("real", baseTime)
+	require.Equal(t, store.StatusSucceeded, real.step("real", delistAt.Add(10*time.Minute)).Status)
+	require.True(t, real.trade.isBlocked(), "真实下架结束后名单保留")
+}
+
+// 同标的的真实下架还没结束时，演练结束不解除禁止；解除失败时记录不结束，稍后重试。
+func TestDrillFinishKeepsBlockForUnfinishedRealAndRetriesOnFailure(t *testing.T) {
+	delistAt := baseTime.Add(3 * time.Hour)
+	h := newHarness(t)
+	h.addExecution("real", delistAt.Add(48*time.Hour), "ALL")
+	h.addExecution("drill", delistAt, "PAPER_ONLY")
+	h.step("real", baseTime)
+	h.step("drill", baseTime)
+	require.Equal(t, store.StatusSucceeded, h.step("drill", delistAt.Add(10*time.Minute)).Status)
+	require.True(t, h.trade.isBlocked())
+	require.Zero(t, h.trade.callCount("Unblock"))
+
+	h2 := newHarness(t)
+	h2.addExecution("drill", delistAt, "PAPER_ONLY")
+	h2.step("drill", baseTime)
+	h2.trade.unblockHook = func(context.Context) error { return errors.New("Trade 不可达") }
+	at := delistAt.Add(10 * time.Minute)
+	outcome := h2.step("drill", at)
+	require.Equal(t, store.StatusPending, outcome.Status)
+	require.Equal(t, at.Add(time.Minute), outcome.NextRunAt)
+	require.Contains(t, outcome.Error, "演练结束后解除禁止买入失败")
+	h2.trade.unblockHook = nil
+	require.Equal(t, store.StatusSucceeded, h2.step("drill", at.Add(time.Minute)).Status)
+	require.False(t, h2.trade.isBlocked())
+}
+
+// 名单里标的的写法（大小写、空白）与事件里不同时，不能误判成已被手工解除。
+func TestBlockedListComparisonIsNormalized(t *testing.T) {
+	h := newHarness(t)
+	delistAt := baseTime.Add(48 * time.Hour)
+	h.addExecution("e1", delistAt, "ALL")
+	h.step("e1", baseTime)
+	h.handler.Trade = renamedListTrade{h.trade}
+	outcome := h.step("e1", baseTime.Add(time.Hour))
+	require.Equal(t, store.StatusPending, outcome.Status, "写法不同不算已解除")
+
+	// 事件里的代码是小写、带空白：处理器统一成大写再调 Trade。
+	h2 := newHarness(t)
+	execution := h2.addExecution("e2", delistAt, "ALL")
+	execution.PayloadJSON = ` {"exchange":"Binance","market":"spot","exchange_symbol":" foousdt ","delist_at":"` + delistAt.UTC().Format(time.RFC3339) + `","scope":"ALL"}`
+	require.NoError(t, h2.store.InTx(context.Background(), func(tx *store.Tx) error {
+		return tx.ReplaceExecutionEvent("e2", "event-x", execution.PayloadJSON, baseTime.UnixMilli(), baseTime.UnixMilli())
+	}))
+	outcome = h2.step("e2", baseTime)
+	require.Empty(t, outcome.Error)
+	require.True(t, h2.trade.isBlocked(), "按统一后的 binance:SPOT:FOOUSDT 写入")
+}
+
+type renamedListTrade struct{ *fakeTrade }
+
+func (r renamedListTrade) ListBlockedInstruments(ctx context.Context) ([]action.InstrumentRef, error) {
+	list, err := r.fakeTrade.ListBlockedInstruments(ctx)
+	for i := range list {
+		list[i].Exchange, list[i].ExchangeSymbol = "BINANCE", " foousdt"
+	}
+	return list, err
+}
