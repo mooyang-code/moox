@@ -132,6 +132,8 @@ type placement struct {
 	tooSmall bool
 	// deferred 表示本批这个执行账户的额度用完，留到下一批。
 	deferred bool
+	// capDeferred 表示单币每小时上限的剩余额度不够下一单，这个标的顺延到下一个整点。
+	capDeferred bool
 }
 
 type laneAction struct {
@@ -451,6 +453,7 @@ func (e *Executor) Converge(
 	placeCtx := orderapp.WithSnapshotReuse(ctx)
 	var placedIDs []string
 	deferred := false
+	capDeferred := false
 	for _, stage := range []int{stageReduce, stageSwapAdd, stageSpotBuy} {
 		if len(placedIDs) > 0 || deferred {
 			break
@@ -536,6 +539,11 @@ func (e *Executor) Converge(
 				deferred = true
 				continue
 			}
+			if placement.capDeferred {
+				// 每小时额度用完：这个标的在本阶段视为已处理，不卡后面的阶段，留到下一个整点。
+				capDeferred = true
+				continue
+			}
 			if placement.tooSmall && laneFinished(desired[instrumentID], members, instrumentID) {
 				continue
 			}
@@ -592,6 +600,12 @@ func (e *Executor) Converge(
 	var retryAfter time.Duration
 	if resting {
 		retryAfter = e.restingRetryAfter(target)
+	}
+	// 有标的因每小时上限顺延：定时器不会再扫已收敛的目标，到下一个整点自己唤醒继续下顺延的部分；同时有挂单时取较早的唤醒时间。
+	if capDeferred {
+		if next := nextHourRetryDelay(e.now()); retryAfter == 0 || next < retryAfter {
+			retryAfter = next
+		}
 	}
 	if len(blocked) > 0 {
 		if err := e.updateTarget(ctx, &target, StatusBlocked); err != nil {
@@ -1061,6 +1075,14 @@ func (e *Executor) placeAction(
 		if quote.Price.Cmp(shared.Zero()) <= 0 {
 			return placement{}, &AccountError{TradingAccountID: candidate.member.account.TradingAccountID, Err: orderdomain.ErrInvalidSpec}
 		}
+		// 单币每小时上限：额度不够整笔时只下剩下的；剩下的不够下一单就顺延到下一个整点，不算下不了单。
+		quantity, clipped, capErr := env.applyHourlyCap(ctx, candidate, quantity, quote.Price)
+		if capErr != nil {
+			return placement{}, capErr
+		}
+		if clipped && env.tooSmallToPlace(candidate, quantity, quote.Price) {
+			return placement{capDeferred: true}, nil
+		}
 		belowMinimum, err := belowMinimumNotional(quantity, quote.Price, candidate.instrument.MinNotional)
 		if err != nil {
 			return placement{}, err
@@ -1182,6 +1204,7 @@ func (e *Executor) placeAction(
 			return placement{}, e.discardPendingOnTargetInvalidation(ctx, spaceID, string(placed.ID), err)
 		}
 		quota[accountID]--
+		env.noteSubmitted(candidate.instrument.InstrumentID, spec.Quantity.Mul(quote.Price))
 		if reversal == 1 && e.OnReversal != nil {
 			e.OnReversal(spaceID, target.LogicalAccountID, candidate.instrument.InstrumentID, e.now())
 		}

@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
+	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/ordersettings"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
@@ -14,12 +16,18 @@ import (
 // laneEnv 是一轮收敛里各标的共用的下单环境：下单设置、报价、权益和本小时已用额度都在一轮里只取一次，
 // Converge、HasDifference（过期告警）和待提交子单的重新判断用同一份，结论一致。
 type laneEnv struct {
-	settings ordersettings.Settings
+	executor         *Executor
+	spaceID          string
+	logicalAccountID string
+	settings         ordersettings.Settings
 	// quotes 是按需预取的标的报价（键：内部标的 ID）；阈值模式要用金额时才取，取不到的标的没有条目。
 	quotes map[string]Quote
 	// equity 是组合最近一个权益采样点的权益；equityKnown 为假表示取不到，EQUITY_RATIO 阈值不生效。
 	equity      shared.Decimal
 	equityKnown bool
+	// hourly 是本自然小时已提交的目标子单金额（键：内部标的 ID），配置了每小时上限、第一次要用时才查订单表。
+	hourly       map[string]shared.Decimal
+	hourlyLoaded bool
 }
 
 // errOrderSettingsUnreadable 表示下单设置读不出来：这个组合不下单，原因写进目标。
@@ -43,7 +51,7 @@ func (e *Executor) newLaneEnv(
 	members []memberState,
 	desired map[string]desiredTarget,
 ) *laneEnv {
-	env := &laneEnv{settings: settings, quotes: make(map[string]Quote)}
+	env := &laneEnv{executor: e, spaceID: spaceID, logicalAccountID: logicalAccountID, settings: settings, quotes: make(map[string]Quote)}
 	needsValue := settings.ThresholdMode == ordersettings.ThresholdPositionRatio ||
 		settings.ThresholdMode == ordersettings.ThresholdEquityRatio
 	if !needsValue {
@@ -137,4 +145,108 @@ func (env *laneEnv) belowConfiguredMinimum(candidate laneAction, quantity, price
 	}
 	minimum := env.settings.MinNotional(candidate.instrument.MarketType)
 	return minimum.Cmp(shared.Zero()) > 0 && quantity.Mul(price).Cmp(minimum) < 0
+}
+
+// hourWindow 返回当前时刻所在自然小时（UTC）的起止。
+func hourWindow(now time.Time) (start, next time.Time) {
+	start = now.UTC().Truncate(time.Hour)
+	return start, start.Add(time.Hour)
+}
+
+// nextHourRetryDelay 是到下一个整点的等待时间；多等一秒，保证唤醒时已经进入新的一小时。
+func nextHourRetryDelay(now time.Time) time.Duration {
+	_, next := hourWindow(now)
+	return next.Sub(now) + time.Second
+}
+
+// submittedNotional 是一笔已提交目标子单计入每小时上限的金额：结束的单按实际成交额，没结束的按全部数量 × 参考价。
+func submittedNotional(row store.SubmittedTargetOrder) shared.Decimal {
+	price, err := shared.ParseDecimal(row.ReferencePrice)
+	if err != nil {
+		return shared.Zero()
+	}
+	if orderdomain.State(row.State).Terminal() {
+		filled, filledErr := shared.ParseDecimal(row.FilledQuantity)
+		if filledErr != nil {
+			return shared.Zero()
+		}
+		if average, averageErr := shared.ParseDecimal(row.AveragePrice); averageErr == nil && average.Cmp(shared.Zero()) > 0 {
+			price = average
+		}
+		return filled.Mul(price)
+	}
+	quantity, err := shared.ParseDecimal(row.Quantity)
+	if err != nil {
+		return shared.Zero()
+	}
+	return quantity.Mul(price)
+}
+
+// hourlyUsed 返回标的本自然小时已提交的金额，第一次调用时按订单表汇总一次。
+func (env *laneEnv) hourlyUsed(ctx context.Context, instrumentID string) (shared.Decimal, error) {
+	if !env.hourlyLoaded {
+		start, next := hourWindow(env.executor.now())
+		rows, err := env.executor.Store.ListSubmittedTargetOrders(ctx, env.spaceID, env.logicalAccountID, start.UnixMilli(), next.UnixMilli())
+		if err != nil {
+			return shared.Zero(), err
+		}
+		env.hourly = make(map[string]shared.Decimal)
+		for _, row := range rows {
+			env.hourly[row.InstrumentID] = env.hourly[row.InstrumentID].Add(submittedNotional(row))
+		}
+		env.hourlyLoaded = true
+	}
+	return env.hourly[instrumentID], nil
+}
+
+// applyHourlyCap 按单币每小时上限收窄数量：本小时剩余额度不够整笔时只下剩下的部分。
+// clipped 为真表示数量被额度收窄了；收窄后下不了单的，调用方把这个标的顺延到下一个整点。
+func (env *laneEnv) applyHourlyCap(
+	ctx context.Context,
+	candidate laneAction,
+	quantity shared.Decimal,
+	price shared.Decimal,
+) (shared.Decimal, bool, error) {
+	limit, capped := env.settings.HourlyCap(candidate.instrument.MarketType, candidate.instrument.InstrumentID)
+	if !capped {
+		return quantity, false, nil
+	}
+	used, err := env.hourlyUsed(ctx, candidate.instrument.InstrumentID)
+	if err != nil {
+		return shared.Zero(), false, err
+	}
+	remaining := limit.Sub(used)
+	if remaining.Cmp(shared.Zero()) <= 0 {
+		return shared.Zero(), true, nil
+	}
+	allowed := floorToStep(remaining.Div(price), mustBaseStep(candidate.instrument))
+	if allowed.Cmp(quantity) < 0 {
+		return allowed, true, nil
+	}
+	return quantity, false, nil
+}
+
+// noteSubmitted 把刚建的子单金额记进本小时已用额度，同一轮后面的判断要用。
+func (env *laneEnv) noteSubmitted(instrumentID string, notional shared.Decimal) {
+	if env.hourlyLoaded {
+		env.hourly[instrumentID] = env.hourly[instrumentID].Add(notional)
+	}
+}
+
+// tooSmallToPlace 判断数量（已按步长取整）是否下不了单：不到交易所最小数量、不到交易所最小名义金额（合约全平例外）、
+// 或不到配置的最小下单额（合约减仓、清仓例外）。每小时上限把数量收窄后用它区分“额度不够”和“本来就太小”。
+func (env *laneEnv) tooSmallToPlace(candidate laneAction, quantity, price shared.Decimal) bool {
+	if quantity.Cmp(shared.Zero()) <= 0 {
+		return true
+	}
+	if _, minimum, err := baseQuantityRules(candidate.instrument); err != nil || quantity.Cmp(minimum) < 0 {
+		return true
+	}
+	belowExchange, err := belowMinimumNotional(quantity, price, candidate.instrument.MinNotional)
+	fullClose := candidate.reducing && exchange.RuleFor(candidate.instrument.MarketType).ReduceOnly &&
+		quantity.Cmp(candidate.member.positions[candidate.instrument.InstrumentID].Abs()) == 0
+	if err != nil || (belowExchange && !fullClose) {
+		return true
+	}
+	return env.belowConfiguredMinimum(candidate, quantity, price)
 }

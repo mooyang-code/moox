@@ -752,6 +752,35 @@ func (s *Store) TargetChildSides(
 	return sides, nil
 }
 
+// SubmittedTargetOrder 是单币每小时上限汇总用的订单摘要。
+type SubmittedTargetOrder struct {
+	InstrumentID   string `gorm:"column:c_instrument_id"`
+	State          string `gorm:"column:c_state"`
+	Quantity       string `gorm:"column:c_quantity"`
+	FilledQuantity string `gorm:"column:c_filled_quantity"`
+	ReferencePrice string `gorm:"column:c_reference_price"`
+	AveragePrice   string `gorm:"column:c_average_price"`
+}
+
+// ListSubmittedTargetOrders 列出组合在 [from, to)（毫秒）内提交过的目标子单，不含被拒绝的和只在本地丢弃的（没提交过）。
+// 单币每小时上限从这里汇总，不另建表。
+func (s *Store) ListSubmittedTargetOrders(
+	ctx context.Context,
+	spaceID string,
+	logicalAccountID string,
+	from int64,
+	to int64,
+) ([]SubmittedTargetOrder, error) {
+	var rows []SubmittedTargetOrder
+	err := s.db.WithContext(ctx).Table("t_trade_orders").
+		Select("c_instrument_id, c_state, c_quantity, c_filled_quantity, c_reference_price, c_average_price").
+		Where(`c_space_id = ? AND c_logical_account_id = ? AND c_owner_type = 'TARGET'
+			AND c_submitted_at >= ? AND c_submitted_at < ? AND c_state <> 'REJECTED'`,
+			spaceID, logicalAccountID, from, to).
+		Scan(&rows).Error
+	return rows, err
+}
+
 func (s *Store) ListOrdersForLane(
 	ctx context.Context,
 	spaceID string,

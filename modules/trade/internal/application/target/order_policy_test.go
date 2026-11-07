@@ -212,3 +212,12 @@ func TestSettingsDefaultsAreWhatTheExecutorUses(t *testing.T) {
 	require.Equal(t, ordersettings.ThresholdTargetRatio, settings.ThresholdMode)
 	require.Equal(t, shared.MustDecimal("100000").String(), settings.MaxChildNotional.String())
 }
+
+func mustSettings(t *testing.T, raw string) ordersettings.Settings {
+	t.Helper()
+	settings, err := ordersettings.Parse(raw)
+	require.NoError(t, err)
+	return settings
+}
+
+func mustDecimal(raw string) shared.Decimal { return shared.MustDecimal(raw) }
