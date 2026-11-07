@@ -25,6 +25,15 @@ export interface InstrumentHolder {
   paper: boolean;
 }
 
+/** 持有者预览：除了列表，还说明这份列表能不能当真。 */
+export interface HoldersPreview {
+  holders: InstrumentHolder[];
+  /** false 表示 Trade 的返回里没有 holders 字段、也没有“无此标的”标记，不能当成没人持有。 */
+  verified: boolean;
+  /** Trade 没有这个标的（没开通对应市场的账户），自然没有策略持有。 */
+  instrumentUnknown: boolean;
+}
+
 export interface ListInstrumentHoldersReq {
   exchange: string;
   market_type: string;
@@ -63,21 +72,22 @@ export function buildHoldersRequest(input: {
   };
 }
 
-export async function listInstrumentHolders(input: Parameters<typeof buildHoldersRequest>[0]): Promise<InstrumentHolder[]> {
-  const rsp = await callTrade<ListInstrumentHoldersReq, { ret_info: RetInfo; holders?: Partial<InstrumentHolder>[] }>(
-    "console",
-    "ListInstrumentHolders",
-    buildHoldersRequest(input),
-    { silent: true }
-  );
-  return (rsp.holders ?? []).map(item => ({
+export async function listInstrumentHolders(input: Parameters<typeof buildHoldersRequest>[0]): Promise<HoldersPreview> {
+  const rsp = await callTrade<
+    ListInstrumentHoldersReq,
+    { ret_info: RetInfo; holders?: Partial<InstrumentHolder>[]; instrument_unknown?: boolean }
+  >("console", "ListInstrumentHolders", buildHoldersRequest(input), { silent: true });
+  const instrumentUnknown = Boolean(rsp.instrument_unknown);
+  const holders = (rsp.holders ?? []).map(item => ({
     space_id: item.space_id ?? "",
     logical_account_id: item.logical_account_id ?? "",
     trading_account_id: item.trading_account_id ?? "",
     quantity: String(item.quantity ?? ""),
     dust: Boolean(item.dust),
-    paper: Boolean(item.paper)
+    // 只查模拟盘时，返回的每一项都是模拟盘，不依赖对方有没有填 paper。
+    paper: input.paper_only || Boolean(item.paper)
   }));
+  return { holders, verified: Array.isArray(rsp.holders) || instrumentUnknown, instrumentUnknown };
 }
 
 export async function registerDelistNotice(req: RegisterDelistNoticeReq): Promise<RegisterDelistNoticeResult> {

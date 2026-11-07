@@ -11,6 +11,7 @@ import {
   formatDuration,
   formatMs,
   isPastDelistTime,
+  pickerValueToMs,
   notifyUrlError,
   prettyPayload,
   roundText,
@@ -184,5 +185,13 @@ describe("手工登记下架", () => {
     expect(delistTimeError(1_700_000_000_000)).toBe("");
     expect(isPastDelistTime(1000, 2000)).toBe(true);
     expect(isPastDelistTime(3000, 2000)).toBe(false);
+  });
+
+  it("日期选择器按时间戳取值，兼容字符串，没选时是 0", () => {
+    expect(pickerValueToMs(1_700_000_000_000)).toBe(1_700_000_000_000);
+    expect(pickerValueToMs("2026-11-07T08:00:00Z")).toBe(Date.parse("2026-11-07T08:00:00Z"));
+    expect(pickerValueToMs("")).toBe(0);
+    expect(pickerValueToMs(null)).toBe(0);
+    expect(pickerValueToMs("不是时间")).toBe(0);
   });
 });

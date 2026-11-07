@@ -165,9 +165,39 @@ describe("手工登记下架的外部接口", () => {
       { exchange: "EXCHANGE_BINANCE", market_type: "MARKET_TYPE_SPOT", exchange_symbol: "FOOUSDT", paper_only: false },
       { silent: true }
     );
-    expect(holders).toEqual([
-      { space_id: "crypto", logical_account_id: "la-1", trading_account_id: "", quantity: "2", dust: false, paper: false }
-    ]);
+    expect(holders).toEqual({
+      holders: [
+        { space_id: "crypto", logical_account_id: "la-1", trading_account_id: "", quantity: "2", dust: false, paper: false }
+      ],
+      verified: true,
+      instrumentUnknown: false
+    });
+  });
+
+  it("只查模拟盘时，返回的每一项都按模拟盘处理", async () => {
+    mocks.callTrade.mockResolvedValue({
+      ret_info: { code: 0 },
+      holders: [{ space_id: "crypto", logical_account_id: "la-1", paper: false }]
+    });
+    const preview = await listInstrumentHolders({
+      exchange: "okx",
+      market: "SWAP",
+      exchange_symbol: "FOO-USDT-SWAP",
+      paper_only: true
+    });
+    expect(preview.holders.every(item => item.paper)).toBe(true);
+  });
+
+  it("没有 holders 字段又没有无此标的标记时，不能当成没人持有", async () => {
+    const input = { exchange: "binance", market: "SPOT", exchange_symbol: "FOOUSDT", paper_only: false } as const;
+    mocks.callTrade.mockResolvedValue({ ret_info: { code: 0 } });
+    expect(await listInstrumentHolders(input)).toMatchObject({ holders: [], verified: false });
+
+    mocks.callTrade.mockResolvedValue({ ret_info: { code: 0 }, holders: [] });
+    expect(await listInstrumentHolders(input)).toMatchObject({ holders: [], verified: true, instrumentUnknown: false });
+
+    mocks.callTrade.mockResolvedValue({ ret_info: { code: 0 }, instrument_unknown: true });
+    expect(await listInstrumentHolders(input)).toMatchObject({ holders: [], verified: true, instrumentUnknown: true });
   });
 
   it("登记下架带 crypto 空间头，created 缺省按已登记过处理", async () => {

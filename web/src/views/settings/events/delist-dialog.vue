@@ -25,7 +25,13 @@
           <a-input v-model="form.exchange_symbol" placeholder="例如：FOOUSDT（币安）或 FOO-USDT-SWAP（OKX）" />
         </a-form-item>
         <a-form-item field="delist_at" label="下架时间" required>
-          <a-date-picker v-model="form.delist_at" show-time format="YYYY-MM-DD HH:mm:ss" style="width: 100%" />
+          <a-date-picker
+            v-model="form.delist_at"
+            show-time
+            value-format="timestamp"
+            format="YYYY-MM-DD HH:mm:ss"
+            style="width: 100%"
+          />
           <template #extra>填你本地的时间。填已经过去的时间时，只做核对，不会下单。</template>
         </a-form-item>
         <a-form-item field="paper_only" label="仅模拟盘">
@@ -43,8 +49,14 @@
       <a-alert v-if="previewFailed" type="warning" class="block-alert">
         暂时无法预览会被平仓的组合（{{ previewError }}）。你可以确认后继续登记，但无法提前知道有哪些组合会受影响。
       </a-alert>
+      <a-alert v-else-if="!verified" type="warning" class="block-alert">
+        无法确认持有情况：交易服务没有返回持有者列表，不能当成没有组合持有。你可以确认后继续登记，但无法提前知道有哪些组合会受影响。
+      </a-alert>
       <template v-else>
-        <p v-if="!holders.length" class="muted">没有策略持有这个标的，登记后只会禁止买入。</p>
+        <p v-if="instrumentUnknown" class="muted">
+          交易服务里没有这个标的（还没开通对应市场的账户），没有策略持有，登记后只会禁止买入。
+        </p>
+        <p v-else-if="!holders.length" class="muted">没有策略持有这个标的，登记后只会禁止买入。</p>
         <template v-else>
           <p>下面这些组合持有这个标的，下架前 24 小时会被平仓：</p>
           <ul class="holder-list">
@@ -59,7 +71,7 @@
           </template>
         </template>
       </template>
-      <a-checkbox v-if="previewFailed" v-model="confirmed">我知道无法预览，仍然登记</a-checkbox>
+      <a-checkbox v-if="previewFailed || !verified" v-model="confirmed">我知道无法确认持有情况，仍然登记</a-checkbox>
       <a-checkbox v-else-if="summary.live.length" v-model="confirmed"> 我确认有生产组合会被平仓，仍然登记 </a-checkbox>
     </template>
 
@@ -101,6 +113,7 @@ import {
   formatMs,
   holderLine,
   isPastDelistTime,
+  pickerValueToMs,
   summarizeHolders
 } from "./event-center-utils";
 
@@ -113,21 +126,23 @@ const form = reactive({
   exchange: "binance" as DelistExchange,
   market: "SPOT" as DelistMarket,
   exchange_symbol: "",
-  delist_at: "" as string | number | Date,
+  delist_at: "" as string | number,
   paper_only: false
 });
 const phase = ref<"form" | "confirm">("form");
 const previewing = ref(false);
 const submitting = ref(false);
 const holders = ref<InstrumentHolder[]>([]);
+const verified = ref(true);
+const instrumentUnknown = ref(false);
 const previewFailed = ref(false);
 const previewError = ref("");
 const confirmed = ref(false);
 
-const delistAtMs = computed(() => (form.delist_at ? new Date(form.delist_at).getTime() : 0));
+const delistAtMs = computed(() => pickerValueToMs(form.delist_at));
 const pastTime = computed(() => isPastDelistTime(delistAtMs.value, Date.now()));
 const summary = computed(() => summarizeHolders(holders.value));
-const needConfirm = computed(() => previewFailed.value || summary.value.live.length > 0);
+const needConfirm = computed(() => previewFailed.value || !verified.value || summary.value.live.length > 0);
 const exchangeLabel = computed(() => DELIST_EXCHANGES.find(item => item.value === form.exchange)?.label ?? form.exchange);
 const marketLabel = computed(() => DELIST_MARKETS.find(item => item.value === form.market)?.label ?? form.market);
 
@@ -140,6 +155,8 @@ watch(
     Object.assign(form, { exchange: "binance", market: "SPOT", exchange_symbol: "", delist_at: "", paper_only: false });
     phase.value = "form";
     holders.value = [];
+    verified.value = true;
+    instrumentUnknown.value = false;
     previewFailed.value = false;
     confirmed.value = false;
   }
@@ -158,15 +175,20 @@ async function preview() {
   previewing.value = true;
   confirmed.value = false;
   try {
-    holders.value = await listInstrumentHolders({
+    const result = await listInstrumentHolders({
       exchange: form.exchange,
       market: form.market,
       exchange_symbol: form.exchange_symbol,
       paper_only: form.paper_only
     });
+    holders.value = result.holders;
+    verified.value = result.verified;
+    instrumentUnknown.value = result.instrumentUnknown;
     previewFailed.value = false;
   } catch (error) {
     holders.value = [];
+    verified.value = true;
+    instrumentUnknown.value = false;
     previewFailed.value = true;
     previewError.value = error instanceof Error ? error.message : "未知原因";
   } finally {

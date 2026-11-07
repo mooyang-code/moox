@@ -233,6 +233,14 @@ export function delistTimeError(delistAtMs: number | null): string {
   return "";
 }
 
+/** 日期选择器按时间戳取值（value-format="timestamp"）；兼容字符串，没选时是 0。 */
+export function pickerValueToMs(value: string | number | null | undefined): number {
+  if (typeof value === "number") return value;
+  if (!value) return 0;
+  const ms = Date.parse(value);
+  return Number.isNaN(ms) ? 0 : ms;
+}
+
 /** 事件内容缩进展示；不是合法 JSON 时原样显示。 */
 export function prettyPayload(raw: string): string {
   if (!raw.trim()) return "";
