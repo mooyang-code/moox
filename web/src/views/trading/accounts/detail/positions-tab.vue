@@ -75,15 +75,19 @@
             ><span class="tx-num">{{ record.spotBalance ? fmtQty(cleanNumber(record.spotBalance)) : "—" }}</span></template
           >
         </a-table-column>
-        <a-table-column title="操作" :width="80" fixed="right">
+        <a-table-column title="操作" :width="170" fixed="right">
           <template #cell="{ record }">
-            <a-button
-              size="mini"
-              type="text"
-              :disabled="!canOrder || !memberFor(instrumentOf(record))"
-              @click="openRowOrder(record)"
-              >下单</a-button
-            >
+            <a-space :size="0">
+              <a-button
+                v-for="hint in orderHints(record)"
+                :key="hint.market"
+                size="mini"
+                type="text"
+                :disabled="!canOrder || !memberFor(hint.instrumentId)"
+                @click="openRowOrder(hint)"
+                >下单·{{ marketLabel(hint.market) }}</a-button
+              >
+            </a-space>
           </template>
         </a-table-column>
       </template>
@@ -96,10 +100,18 @@
 import { computed, inject, ref } from "vue";
 import { useRoute } from "vue-router";
 import { fmtQty } from "../shared/format";
-import { marketOfInstrument } from "../shared/markets";
+import { marketLabel, marketOfInstrument } from "../shared/markets";
 import SectionBlock from "../shared/section-block.vue";
 import { detailContextKey } from "./context";
-import { cleanNumber, filterCoinRows, type CoinRow, type PositionFilter, type TargetCell } from "./positions-model";
+import {
+  cleanNumber,
+  filterCoinRows,
+  rowOrderHints,
+  type CoinRow,
+  type OrderHint,
+  type PositionFilter,
+  type TargetCell
+} from "./positions-model";
 
 const { logical, accounts, target, coinRows, flattenRunning, openOrder } = inject(detailContextKey)!;
 const route = useRoute();
@@ -144,15 +156,12 @@ function memberFor(instrumentId: string): string | undefined {
     member => member.enabled && accounts.value.get(member.trading_account_id)?.markets?.includes(market)
   )?.trading_account_id;
 }
-function openRowOrder(row: CoinRow) {
-  const instrumentId = instrumentOf(row);
-  openOrder(instrumentId, memberFor(instrumentId));
+/** 行内下单：每个有目标或有持仓的市场一个入口，带上市场、方向和与目标的差额。 */
+function orderHints(row: CoinRow) {
+  return rowOrderHints(row, logical.value.settlement_asset);
 }
-/** 行内下单：有永续目标或永续持仓时默认永续，否则现货。 */
-function instrumentOf(row: CoinRow) {
-  const quote = logical.value.settlement_asset;
-  const swap = row.targetSwap || row.actualSwap !== 0;
-  return `${row.coin}-${quote}-${swap ? "SWAP" : "SPOT"}`;
+function openRowOrder(hint: OrderHint) {
+  openOrder(hint.instrumentId, memberFor(hint.instrumentId), { side: hint.side, quantity: hint.quantity });
 }
 </script>
 

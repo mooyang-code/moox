@@ -250,4 +250,26 @@ describe("下单对话框", () => {
     expect(document.body.textContent).toContain("输入组合名称「Paper」确认");
     expect(document.body.textContent).toContain("真实资金");
   });
+
+  it("行内下单预填方向和数量", async () => {
+    const accounts = new Map([["account", { trading_account_id: "account", name: "A", markets: [1, 2] } as TradingAccount]]);
+    const Harness = defineComponent({
+      setup(_, { expose }) {
+        tracker = useActionTracker({ logicalAccountId: () => logicalRef.value?.logical_account_id, onChanged: () => undefined });
+        const inner = ref<DialogVM & { open(instrumentId?: string, accountId?: string, prefill?: object): void }>();
+        expose({ inner });
+        return () => h(OrderDialog as never, { ref: inner, logical: logicalRef.value, accounts, env: "paper", tracker });
+      }
+    });
+    wrapper = mount(Harness, { global: { plugins: [ArcoVue] } });
+    await flushPromises();
+    const vm = (
+      wrapper.vm as unknown as {
+        inner: { open: (a?: string, b?: string, c?: object) => void; manualForm: Record<string, unknown> };
+      }
+    ).inner;
+    vm.open("BTC-USDT-SWAP", "account", { side: 2, quantity: "0.6" });
+    await flushPromises();
+    expect(vm.manualForm).toMatchObject({ instrument_id: "BTC-USDT-SWAP", side: 2, quantity: "0.6" });
+  });
 });

@@ -103,8 +103,8 @@ export function buildCoinRows(input: BuildCoinRowsInput): CoinRow[] {
     if (row.targetSpot && row.targetSpot.quantity !== null) row.deviationSpot = row.actualSpot - row.targetSpot.quantity;
     if (row.targetSwap && row.targetSwap.quantity !== null) row.deviationSwap = row.actualSwap - row.targetSwap.quantity;
     const hasAnyTarget = Boolean(row.targetSpot || row.targetSwap);
-    // 现货里目标之外的币可能不受管，系统不会动，有目标时不列出；永续有仓位就要列出，哪怕目标里没有。
-    const listed = hasAnyTarget || row.blockedReason || row.actualSwap !== 0 || (!input.hasTarget && row.actualSpot !== 0);
+    // 目标之外的持仓也要列出：其中受管的现货会被执行器按目标 0 卖掉，永续有仓位也一样。
+    const listed = hasAnyTarget || row.blockedReason || row.actualSwap !== 0 || row.actualSpot !== 0;
     if (!listed) continue;
     row.worstRatio = Math.max(
       ratioOf(row.deviationSpot, row.targetSpot, row.actualSpot),
@@ -121,6 +121,42 @@ export function buildCoinRows(input: BuildCoinRowsInput): CoinRow[] {
 
 function stateOrder(row: CoinRow): number {
   return { blocked: 0, off: 1, extra: 2, ok: 3 }[row.state];
+}
+
+export interface OrderHint {
+  market: 1 | 2;
+  instrumentId: string;
+  /** 与目标有差额时预填的方向：差额为正要买入，为负要卖出；没有目标或保持当前持仓时为空 */
+  side?: 1 | 2;
+  /** 与目标的差额（绝对值） */
+  quantity?: string;
+}
+
+/**
+ * 行内下单的入口：现货、永续各一个（有目标或有持仓的市场才给），带上市场和与目标的差额。
+ * 币和计价币拼出内部标的 ID，两个市场都有目标时不会只能下永续。
+ */
+export function rowOrderHints(row: CoinRow, quote: string): OrderHint[] {
+  const hints: OrderHint[] = [];
+  const markets = [
+    { market: 1 as const, target: row.targetSpot, actual: row.actualSpot, deviation: row.deviationSpot, suffix: "SPOT" },
+    { market: 2 as const, target: row.targetSwap, actual: row.actualSwap, deviation: row.deviationSwap, suffix: "SWAP" }
+  ];
+  for (const item of markets) {
+    if (!item.target && item.actual === 0) continue;
+    const hint: OrderHint = { market: item.market, instrumentId: `${row.coin}-${quote}-${item.suffix}` };
+    if (item.deviation !== null && Math.abs(item.deviation) > 1e-12) {
+      hint.side = item.deviation < 0 ? 1 : 2;
+      hint.quantity = String(cleanNumber(Math.abs(item.deviation)));
+    }
+    hints.push(hint);
+  }
+  return hints;
+}
+
+/** 目标里涉及的币的个数：同一个币的现货、永续目标算一个。 */
+export function targetCoinCount(targets: readonly InstrumentTarget[]): number {
+  return new Set(targets.map(item => coinOf(item.instrument_id))).size;
 }
 
 export type PositionFilter = "all" | "off" | "holding";

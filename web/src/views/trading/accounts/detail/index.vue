@@ -86,7 +86,7 @@
           <div>
             <div class="k">{{ logical.control_mode === 1 ? "持仓 / 目标" : "持仓" }}</div>
             <div class="v tx-num">
-              {{ snapshotCount }}<small v-if="logical.control_mode === 1">/ {{ target?.targets.length ?? 0 }}</small>
+              {{ snapshotCount }}<small v-if="logical.control_mode === 1">/ {{ targetCoins }}</small>
             </div>
             <div v-if="logical.control_mode === 1" class="d">{{ offCount }} 个未到位</div>
             <div v-else class="d">现货和永续合计</div>
@@ -321,7 +321,7 @@ import { instrumentName, marketLabel } from "../shared/markets";
 import { loadPositionSnapshot, positionCount, type PositionSnapshot } from "../shared/position-snapshot";
 import { loadStrategyLinks, type StrategyLink } from "../shared/strategy-link";
 import { useActionTracker } from "./action-tracker";
-import { detailContextKey } from "./context";
+import { detailContextKey, type OrderPrefill } from "./context";
 import {
   actionTypeLabels,
   detailTabs,
@@ -338,7 +338,7 @@ import OrderDialog from "./order-dialog.vue";
 import OrdersTab from "./orders-tab.vue";
 import OverviewTab from "./overview-tab.vue";
 import PositionsTab from "./positions-tab.vue";
-import { buildCoinRows } from "./positions-model";
+import { buildCoinRows, targetCoinCount } from "./positions-model";
 import SettingsTab from "./settings-tab.vue";
 
 defineOptions({ name: "trading-account-detail" });
@@ -386,6 +386,7 @@ const coinRows = computed(() =>
   })
 );
 const snapshotCount = computed(() => positionCount(snapshot.value));
+const targetCoins = computed(() => targetCoinCount(target.value?.targets || []));
 const offCount = computed(() => coinRows.value.filter(row => row.state !== "ok").length);
 const membersEditable = computed(() => logical.value?.automation_state === "PAUSED");
 
@@ -622,8 +623,8 @@ async function syncAccounts(list: TradingAccount[]) {
   }
 }
 
-function openOrder(instrumentId?: string, accountId?: string) {
-  orderDialog.value?.open(instrumentId, accountId);
+function openOrder(instrumentId?: string, accountId?: string, prefill?: OrderPrefill) {
+  orderDialog.value?.open(instrumentId, accountId, prefill);
 }
 
 // 页签只在组合账户读到之后才渲染，这里可以放心当作非空。

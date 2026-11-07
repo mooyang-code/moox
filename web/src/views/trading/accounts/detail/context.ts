@@ -6,6 +6,12 @@ import type { StrategyLink } from "../shared/strategy-link";
 import type { ActionTracker } from "./action-tracker";
 import type { CoinRow } from "./positions-model";
 
+/** 下单对话框的预填：方向（1 买入、2 卖出）和数量。 */
+export interface OrderPrefill {
+  side?: 1 | 2;
+  quantity?: string;
+}
+
 /** 详情页壳提供给各页签的数据和操作。 */
 export interface DetailContext {
   logical: ComputedRef<LogicalAccount>;
@@ -26,7 +32,7 @@ export interface DetailContext {
   /** 清仓进行中：期间不能再下单或清仓 */
   flattenRunning: ComputedRef<boolean>;
   reload: () => Promise<void>;
-  openOrder: (instrumentId?: string, accountId?: string) => void;
+  openOrder: (instrumentId?: string, accountId?: string, prefill?: OrderPrefill) => void;
   openFlatten: (account?: TradingAccount) => void;
   openCancel: (order: Order) => void;
   openClosePaper: (account: TradingAccount) => void;

@@ -171,7 +171,7 @@ function loadMember() {
 }
 
 /** 打开下单对话框。有结果不明的旧请求时，只能对同一个执行账户重试原请求。 */
-function openManual(accountId: string, instrumentId = "") {
+function openManual(accountId: string, instrumentId = "", prefill: { side?: 1 | 2; quantity?: string } = {}) {
   if (![1, 2].includes(props.logical.control_mode)) return;
   if (pendingSubmission.value) {
     const pending = pendingSubmission.value.request;
@@ -196,8 +196,8 @@ function openManual(accountId: string, instrumentId = "") {
     client_order_id: createClientId().replace(/-/g, ""),
     order_type: 1,
     fill_policy: 0,
-    side: 1,
-    quantity: "",
+    side: prefill.side ?? 1,
+    quantity: prefill.quantity ?? "",
     limit_price: "",
     reason: "",
     deadline_at: ""
@@ -209,13 +209,13 @@ function openManual(accountId: string, instrumentId = "") {
 }
 
 /** 从页头进入：只有一个启用成员就直接用它，否则用第一个。 */
-function open(instrumentId = "", accountId = "") {
+function open(instrumentId = "", accountId = "", prefill: { side?: 1 | 2; quantity?: string } = {}) {
   const first = accountId || memberOptions.value[0]?.id;
   if (!first) {
     Message.warning("组合里没有启用的执行账户");
     return;
   }
-  openManual(first, instrumentId);
+  openManual(first, instrumentId, prefill);
 }
 
 async function submitManual() {

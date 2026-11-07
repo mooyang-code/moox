@@ -1,5 +1,6 @@
 import { listHoldings, listPositions } from "@/api/trade";
 import type { Holding, LogicalAccount, Position, TradingAccount } from "@/api/trade/types";
+import { coinOf } from "./markets";
 
 export interface PositionSnapshot {
   /** 永续持仓（已去掉零仓位） */
@@ -31,9 +32,12 @@ export async function loadPositionSnapshot(
   };
 }
 
-/** 持仓数：永续的非零仓位数，加上现货里有标的的非零持有数。 */
+/** 持仓数按币算：同一个币的现货和永续算一个，和「持仓与目标」里“有持仓”的口径一致。 */
 export function positionCount(snapshot: PositionSnapshot): number {
-  return (
-    snapshot.swapPositions.length + snapshot.spotHoldings.filter(item => item.instrument_id && Number(item.quantity) !== 0).length
-  );
+  const coins = new Set<string>();
+  for (const item of snapshot.swapPositions) coins.add(coinOf(item.instrument_id));
+  for (const item of snapshot.spotHoldings) {
+    if (item.instrument_id && Number(item.quantity) !== 0) coins.add(coinOf(item.instrument_id));
+  }
+  return coins.size;
 }
