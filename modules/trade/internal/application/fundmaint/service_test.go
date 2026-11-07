@@ -20,14 +20,16 @@ var testNow = time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC)
 // fakeAdapter 是同时支持 BNB 抵扣开关和小额兑换的币安适配器替身。
 type fakeAdapter struct {
 	execution.ExecutionAdapter
-	clock    func() time.Time
-	prices   map[string]string // 交易所代码 → 参考价
-	bids     map[string]string
-	discount bool
-	getErr   error
-	setCalls []bool
-	dust     []exchange.DustAsset
-	converts [][]string
+	clock      func() time.Time
+	prices     map[string]string // 交易所代码 → 参考价
+	bids       map[string]string
+	discount   bool
+	getErr     error
+	setCalls   []bool
+	dust       []exchange.DustAsset
+	converts   [][]string
+	convertErr error
+	listCalls  int
 }
 
 func (a *fakeAdapter) GetReferencePrice(_ context.Context, key exchange.SymbolKey) (exchange.ReferencePrice, error) {
@@ -52,8 +54,14 @@ func (a *fakeAdapter) SetBNBFeeDiscount(_ context.Context, enabled bool) error {
 	a.discount = enabled
 	return nil
 }
-func (a *fakeAdapter) ListDust(context.Context) ([]exchange.DustAsset, error) { return a.dust, nil }
+func (a *fakeAdapter) ListDust(context.Context) ([]exchange.DustAsset, error) {
+	a.listCalls++
+	return a.dust, nil
+}
 func (a *fakeAdapter) ConvertDust(_ context.Context, assets []string) (exchange.DustConversion, error) {
+	if a.convertErr != nil {
+		return exchange.DustConversion{}, a.convertErr
+	}
 	a.converts = append(a.converts, assets)
 	return exchange.DustConversion{Converted: assets, BNBReceived: shared.MustDecimal("0.01")}, nil
 }
@@ -494,4 +502,43 @@ func TestMaintenanceSkipsTestnetAndNonBinanceAccounts(t *testing.T) {
 		require.Empty(t, f.adapter.converts, name)
 		require.Empty(t, f.orders.specs, name)
 	}
+}
+
+// 兑换失败后退避：第一次把错误报出去，6 小时内不再调交易所（每小时检查、设置变更、账户就绪唤醒都不会反复重试），之后再试。
+func TestDustConvertBacksOffAfterAFailure(t *testing.T) {
+	f := dustFixture(t, `{"dust_convert_enabled":true}`, []exchange.DustAsset{{Asset: "DOGE", Quantity: shared.MustDecimal("10"), ValueBTC: shared.MustDecimal("0.00001")}})
+	f.markManaged("DOGE")
+	f.adapter.convertErr = errors.New("交易所拒绝：零头不足")
+	require.Error(t, f.run())
+	require.Equal(t, 1, f.adapter.listCalls)
+	for _, later := range []time.Duration{time.Minute, time.Hour, 5 * time.Hour} {
+		f.now = testNow.Add(later)
+		require.NoError(t, f.run(), "退避期内不再调交易所，也不再报同一个错")
+	}
+	require.Equal(t, 1, f.adapter.listCalls)
+	account, err := f.store.GetTradingAccountByID(context.Background(), "account-a")
+	require.NoError(t, err)
+	require.Zero(t, account.LastDustConvertAt, "失败不记兑换时间")
+
+	f.now = testNow.Add(6*time.Hour + time.Minute)
+	f.adapter.convertErr = nil
+	require.NoError(t, f.run())
+	require.Equal(t, [][]string{{"DOGE"}}, f.adapter.converts)
+}
+
+// BNB 补买让路时，超过一小时没成交的稳定币旧买单照样撤掉。
+func TestStaleStableBuyIsCancelledEvenWhenBNBTopUpIsBusy(t *testing.T) {
+	f := newFixture(t, `{"bnb_reserve_amount":"200","stablecoin_margin":{"USDT":"0.6","USDC":"0.4"}}`, []store.AssetBalance{balance("USDT", "800"), balance("USDC", "200")})
+	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.CreateOrder(store.OrderRecord{
+			SpaceID: "space-1", OrderID: "rest-1", TradingAccountID: "account-a", LogicalAccountID: "logical-1", ClientOrderID: "rest-1",
+			Exchange: "BINANCE", MarketType: "SPOT", InstrumentID: "USDC-USDT-SPOT", ExchangeSymbol: "USDCUSDT",
+			OrderType: "LIMIT", TimeInForce: "GTC", Side: "BUY", Quantity: "200", LimitPrice: strPtr("0.9995"), ReferencePrice: "1",
+			OwnerType: "SYSTEM", OwnerID: "stable-rebalance", State: "OPEN", SubmittedAt: testNow.Add(-56 * time.Minute).UnixMilli(), Version: 1,
+		})
+	}))
+	require.NoError(t, f.run())
+	require.Equal(t, []string{"rest-1"}, f.orders.canceled)
+	require.Len(t, f.orders.specs, 1, "只下了 BNB 补买，稳定币调平让路")
+	require.Equal(t, "BNB-USDT-SPOT", f.orders.specs[0].InstrumentID)
 }

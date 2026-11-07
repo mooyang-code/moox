@@ -59,7 +59,13 @@ type Service struct {
 	// discountApplied 记录已确认开启 BNB 抵扣的执行账户；设置变更时清掉，重新确认。
 	discountApplied map[string]bool
 	warned          map[string]struct{}
+	// dustRetryAt 是小额兑换失败后的最早重试时间（执行账户 → 时间）：失败后至少等 dustRetryBackoff，
+	// 不然每小时、每次改设置、每个账户首次就绪都会再调一次交易所。进程重启后清零。
+	dustRetryAt map[string]time.Time
 }
+
+// dustRetryBackoff 是小额兑换失败后的退避时间。
+const dustRetryBackoff = 6 * time.Hour
 
 func (s *Service) now() time.Time {
 	if s.Now != nil {
@@ -189,10 +195,17 @@ func (s *Service) RunLogicalAccount(ctx context.Context, logical store.LogicalAc
 				runErrors = append(runErrors, fmt.Errorf("账户 %s 小额兑换 BNB：%w", account.TradingAccountID, err))
 			}
 		}
-		// BNB 补买单刚下出（或还没结束）时稳定币调平先让路：补买要花 USDT，余额要等同步才更新。
-		if len(settings.StablecoinTargets) > 1 && !bnbBusy {
-			if err := s.rebalanceStablecoins(ctx, logical, settings, account, adapter); err != nil {
+		if len(settings.StablecoinTargets) > 1 && stableApplies(account) {
+			// 上一轮的买单先处理（过期的撤掉）；这和 BNB 补买无关，补买让路时旧买单照样要撤。
+			hasOpen, err := s.settleStableOrders(ctx, account)
+			if err != nil {
 				runErrors = append(runErrors, fmt.Errorf("账户 %s 稳定币调平：%w", account.TradingAccountID, err))
+			}
+			// BNB 补买单刚下出（或还没结束）时调平先让路：补买要花 USDT，余额要等同步才更新。
+			if !hasOpen && !bnbBusy && err == nil {
+				if err := s.rebalanceStablecoins(ctx, logical, settings, account, adapter); err != nil {
+					runErrors = append(runErrors, fmt.Errorf("账户 %s 稳定币调平：%w", account.TradingAccountID, err))
+				}
 			}
 		}
 	}

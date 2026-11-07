@@ -32,6 +32,31 @@ type stableHolding struct {
 	instrument store.InstrumentRecord // USDT 本身没有
 }
 
+// stableApplies 报告稳定币调平是否适用于这个账户：只有币安统一账户（有现货钱包）。
+func stableApplies(account store.TradingAccountRecord) bool {
+	return account.AccountMode == string(exchange.AccountModeBinancePortfolioMargin) && account.HasBalanceMarket()
+}
+
+// settleStableOrders 处理上一轮留下的稳定币买单：挂满 stableOrderMaxAge（到下一次检查）还没成交的撤掉，
+// 更早的唤醒（设置变更、会话就绪）不撤。hasOpen 为真表示还有没结束的单，这一轮不下新单。
+// 它和调平分开做：BNB 补买让路时，过期的旧买单照样要撤。
+func (s *Service) settleStableOrders(ctx context.Context, account store.TradingAccountRecord) (hasOpen bool, err error) {
+	open, err := s.openSystemOrders(ctx, account, ownerStableRebalance)
+	if err != nil || len(open) == 0 {
+		return false, err
+	}
+	now := s.now()
+	for _, record := range open {
+		if now.Sub(time.UnixMilli(record.SubmittedAt)) < stableOrderMaxAge {
+			continue
+		}
+		if _, err := s.Orders.Cancel(ctx, record.SpaceID, record.OrderID); err != nil {
+			return true, err
+		}
+	}
+	return true, nil
+}
+
 func (s *Service) rebalanceStablecoins(
 	ctx context.Context,
 	logical store.LogicalAccountRecord,
@@ -39,27 +64,6 @@ func (s *Service) rebalanceStablecoins(
 	account store.TradingAccountRecord,
 	adapter execution.ExecutionAdapter,
 ) error {
-	if account.AccountMode != string(exchange.AccountModeBinancePortfolioMargin) || !account.HasBalanceMarket() {
-		return nil
-	}
-	// 上一次的买单还挂着：到下一次检查（约一小时后）还没成交才撤，更早的唤醒（设置变更、会话就绪）只跳过这一轮；
-	// 撤单结束前不下新单，下一次检查再算。
-	open, err := s.openSystemOrders(ctx, account, ownerStableRebalance)
-	if err != nil {
-		return err
-	}
-	if len(open) > 0 {
-		now := s.now()
-		for _, record := range open {
-			if now.Sub(time.UnixMilli(record.SubmittedAt)) < stableOrderMaxAge {
-				continue
-			}
-			if _, err := s.Orders.Cancel(ctx, record.SpaceID, record.OrderID); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
 	holdings, total, err := s.stableHoldings(ctx, settings, account, adapter)
 	if err != nil {
 		return err

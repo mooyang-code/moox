@@ -36,6 +36,34 @@ func (s *Service) convertDust(
 	if account.LastDustConvertAt > 0 && now.Sub(time.UnixMilli(account.LastDustConvertAt)) < settings.DustConvertInterval {
 		return nil
 	}
+	s.mu.Lock()
+	retryAt := s.dustRetryAt[account.TradingAccountID]
+	s.mu.Unlock()
+	if now.Before(retryAt) {
+		return nil
+	}
+	// 失败了就退避：第一次把错误报出去，之后 6 小时内不再调交易所。
+	err := s.convertDustNow(ctx, logical, settings, account, adapter, converter, now)
+	if err != nil {
+		s.mu.Lock()
+		if s.dustRetryAt == nil {
+			s.dustRetryAt = make(map[string]time.Time)
+		}
+		s.dustRetryAt[account.TradingAccountID] = now.Add(dustRetryBackoff)
+		s.mu.Unlock()
+	}
+	return err
+}
+
+func (s *Service) convertDustNow(
+	ctx context.Context,
+	logical store.LogicalAccountRecord,
+	settings fundsettings.Settings,
+	account store.TradingAccountRecord,
+	adapter execution.ExecutionAdapter,
+	converter execution.DustConverter,
+	now time.Time,
+) error {
 	dust, err := converter.ListDust(ctx)
 	if err != nil {
 		return err
