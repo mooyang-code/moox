@@ -91,6 +91,20 @@ message CollectorKlineBackfilled {
   google.protobuf.Timestamp confirmed_at = 9;
 }
 
+// InstrumentDelistScheduled 宣告一个标的即将下架，由 Collector 的下架检测发布，只带元数据。
+// exchange 为小写交易所代码（binance、okx），market 为 SPOT 或 SWAP；
+// source 取 BINANCE_SPOT_SCHEDULE、BINANCE_SWAP_EXCHANGE_INFO、OKX_SWAP_INSTRUMENTS、MANUAL；
+// scope 取 ALL 或 PAPER_ONLY（后者只用于演练，只处理模拟盘组合）。
+message InstrumentDelistScheduled {
+  string exchange = 1;
+  string market = 2;
+  string exchange_symbol = 3;
+  google.protobuf.Timestamp delist_at = 4;
+  string source = 5;
+  google.protobuf.Timestamp first_seen_at = 6;
+  string scope = 7;
+}
+
 // DatasetSyncPoint is an ordered import/catchup fence in a Dataset outbox.
 message DatasetSyncPoint {
   string sync_point_id = 1;

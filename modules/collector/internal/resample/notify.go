@@ -14,8 +14,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/packages/events"
-	"github.com/mooyang-code/moox/packages/events/eventpb"
-	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/storagepb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -26,21 +24,19 @@ type DatasetSyncPoints interface {
 	AppendDatasetSyncPoint(ctx context.Context, spaceID, datasetID, requestID, source string) error
 }
 
-// EventRelay 把已编码的事件发布到 JetStream；events.Publisher 实现它。
-type EventRelay interface {
-	PublishMessage(context.Context, *eventpb.EventMessage) (*jetstream.PublishAck, error)
-}
-
-// NoticePublisher 把补写通知合并成批，对源数据集追加同步点，再经本地发件箱发布 event.collector.kline.backfilled。
+// NoticePublisher 把补写通知合并成批，对源数据集追加同步点，再写入本地发件箱；发件箱里的事件由 Collector 级的中继
+// （eventbus.Relay）发布 event.collector.kline.backfilled。
 //
 // 一批通知的 ID 由通知 ID 确定性算出：崩溃后重放得到同一个同步点与事件 ID，JetStream 用 Msg-Id 去重。
 type NoticePublisher struct {
 	State    *store.ResampleStateRepository
 	Sync     DatasetSyncPoints
 	Registry *events.Registry
-	// Relay 为空表示没有事件总线：通知只保留到保留期，不发布。
-	Relay EventRelay
-	Now   func() time.Time
+	// Enabled 为假表示没有配置事件总线：通知只保留到保留期，不成批。
+	Enabled bool
+	// Wake 在封存出新事件后调用，让中继不等下一个轮询周期就发布。
+	Wake func()
+	Now  func() time.Time
 	// MaxNotices 是一次合并的通知数上限。
 	MaxNotices int
 
@@ -61,24 +57,21 @@ type noticeGroup struct {
 	start, end                                   time.Time
 }
 
-// Flush 合并并封存全部还没成批的通知，然后发布发件箱里的事件。
+// Flush 合并并封存全部还没成批的通知，写入发件箱。
 func (p *NoticePublisher) Flush(ctx context.Context) error {
 	if p == nil || p.State == nil {
 		return errors.New("notice publisher state is required")
 	}
-	if p.Relay == nil || p.Registry == nil {
+	if !p.Enabled || p.Registry == nil {
 		return nil
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	var errs []error
-	if err := p.seal(ctx); err != nil {
-		errs = append(errs, err)
+	err := p.seal(ctx)
+	if p.Wake != nil {
+		p.Wake()
 	}
-	if err := p.relay(ctx); err != nil {
-		errs = append(errs, err)
-	}
-	return errors.Join(errs...)
+	return err
 }
 
 func (p *NoticePublisher) seal(ctx context.Context) error {
@@ -157,24 +150,4 @@ func (p *NoticePublisher) sealGroup(ctx context.Context, group *noticeGroup) err
 		return fmt.Errorf("encode backfilled event: %w", err)
 	}
 	return p.State.SealBatch(ctx, group.ids, store.OutboxEvent{EventID: id, SpaceID: group.spaceID, EventName: events.CollectorKlineBackfilled.Name(), SubjectToken: group.datasetID, Payload: raw})
-}
-
-func (p *NoticePublisher) relay(ctx context.Context) error {
-	pending, err := p.State.PendingEvents(ctx, 100)
-	if err != nil {
-		return err
-	}
-	for _, event := range pending {
-		message, err := p.Registry.UnmarshalMessage(event.Payload)
-		if err != nil {
-			return fmt.Errorf("outbox event %s is invalid: %w", event.EventID, err)
-		}
-		if _, err := p.Relay.PublishMessage(ctx, message); err != nil {
-			return fmt.Errorf("publish backfilled event %s: %w", event.EventID, err)
-		}
-		if err := p.State.MarkPublished(ctx, event.ID); err != nil {
-			return err
-		}
-	}
-	return nil
 }

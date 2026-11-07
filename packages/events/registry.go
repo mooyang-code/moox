@@ -81,6 +81,11 @@ var (
 	CollectorKlineBackfilled = declareEvent("event.collector.kline.backfilled", 1, "MOOX_COLLECTOR", "collector", func() proto.Message {
 		return &storagepb.CollectorKlineBackfilled{}
 	}, validateCollectorKlineBackfilled)
+	// InstrumentDelistScheduled 在 Collector 的下架检测发现标的即将下架（或手工登记）时发布，只带元数据；
+	// 信封 subject 是“交易所:市场:交易所代码”，空间固定为系统空间。
+	InstrumentDelistScheduled = declareEvent("event.collector.instrument.delist_scheduled", 1, "MOOX_COLLECTOR", "collector", func() proto.Message {
+		return &storagepb.InstrumentDelistScheduled{}
+	}, validateInstrumentDelistScheduled)
 	ViewDataReady = declareEvent("event.storage.view.data.ready", 2, "MOOX_STORAGE", "storage", func() proto.Message {
 		return &storagepb.ViewDataReady{}
 	}, validateViewDataReady)

@@ -377,12 +377,13 @@ control = ["console-proxy", "web-host", "admin", "monitor", "collector", "cloudf
 # 客户端与它同机时连回环地址，否则连它所在主机的对外地址。
 storage = ["storage-primary", "storage-node", "storage-view", "access", "eventbus"]
 # collector-stream 接收交易所 WS 推送并提供本地执行端，必须放在能直连交易所的海外机；首次安装用 setup deploy-unit --profile collector-stream。
-overseas = ["trade", "access", "egress-proxy", "collector-stream"]
+# callback-dispatcher 是事件中心：接收事件并向你配置的接口发通知，部署主机必须能访问到你的接口；首次安装用 setup deploy-unit --profile callback-dispatcher。
+overseas = ["trade", "access", "egress-proxy", "collector-stream", "callback-dispatcher"]
 # factor-engine 与 archive-worker 是外部程序组件，由 setup deploy-unit 以 systemd 用户服务安装，停用主机或部署时 CLI 同时停掉服务。
 factor = ["factor-engine", "archive-worker"]
 
 [egress_proxy]
-http_domains = ["*.binance.com", "data-api.binance.vision"]
+http_domains = ["*.binance.com", "data-api.binance.vision", "openapi.okx.com"]
 
 [egress_proxy.dns]
 refresh_interval_seconds = 300

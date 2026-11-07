@@ -47,7 +47,7 @@ broker 的证书、私钥和用户表只随 `eventbus` 单元下发（`export-cl
 
 ## 新增角色（不轮换现有令牌）
 
-给一个新的客户端（例如 `collector-eventbus`）开通事件总线权限，不需要轮换 CA 和现有令牌，在控制机上这样做；全程不打印令牌：
+给一个新的客户端（例如 `collector-eventbus`、事件中心的 `callback-dispatcher-eventbus`）开通事件总线权限，不需要轮换 CA 和现有令牌，在控制机上这样做；全程不打印令牌：
 
 1. 备份：Admin 数据库（`sqlite3` 的 backup，不要直接 `cp` 带 WAL 的库）、EventBus 的 `users.yaml` 与 `app.yaml`、要改的客户端 `app.yaml`，放进 `/data/moox/prod/eventbus-backup-<标签>-<时间>/`。
 2. 用新构建的 `moox-admin-cli`（先 `native-release.sh install ... --no-restart` 装到控制机）执行
@@ -56,6 +56,9 @@ broker 的证书、私钥和用户表只随 `eventbus` 单元下发（`export-cl
 4. 新角色的凭据文件放到使用方发布目录的 `secrets/eventbus/`（0600，`ca_file` 指向该目录里的 `ca.pem`，`urls` 按部署位置选择同机回环或 EventBus 对外地址）；使用方配置里引用它。
 5. 给 EventBus 配置新增流（如有），安装与代码一致的 `moox-eventbus` 并重启；EventBus 重启会让所有客户端短暂重连。
 6. 重启使用方，确认 JetStream 里出现它的持久消费者、日志没有 `Authorization Violation`，再删除临时导出目录。
+
+新增角色时，老环境缺这个角色的凭据文件，`eventbus-credentials reconcile` 会因为读不到它而失败：先按上面第 2～3 步 `ensure` 并 `export`，让新角色的文件和新的 `users.yaml` 一起下发。
+Collector 的发布权限也会随版本多一个主题（`moox.event.collector.instrument.delist_scheduled.v1.>`），所以新版 EventBus 的 `app.yaml`（`MOOX_COLLECTOR` 流加这个主题）和新 `users.yaml` 要先于 Collector 升级。
 
 ## 轮换时的强制顺序
 

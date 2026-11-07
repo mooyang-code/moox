@@ -51,6 +51,7 @@ export default {
     ["ops-activity"]: "activity log",
     ["settings"]: "settings",
     ["settings-spaces"]: "spaces",
-    ["settings-secrets"]: "secrets"
+    ["settings-secrets"]: "secrets",
+    ["settings-events"]: "event center"
   }
 };

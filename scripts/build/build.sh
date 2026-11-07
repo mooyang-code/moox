@@ -140,6 +140,8 @@ case "${TARGET_MODULE}" in
     build_go modules/strategy ./cmd/cli moox-strategy-cli 0
     build_go modules/trade ./cmd/server moox-trade 0
     build_go modules/trade ./cmd/cli moox-trade-cli 0
+    build_go modules/callbackdispatcher ./cmd/server moox-callback-dispatcher 0
+    build_go modules/callbackdispatcher ./cmd/cli moox-callback-dispatcher-cli 0
     build_go modules/monitor ./cmd/server moox-monitor 0
     build_go modules/monitor ./cmd/cli moox-monitor-cli 0
     if [[ "${TARGET_GOOS}" == "linux" ]]; then build_hostagent; fi
@@ -229,6 +231,14 @@ case "${TARGET_MODULE}" in
     ;;
   trade-cli)
     build_go modules/trade ./cmd/cli moox-trade-cli 0
+    ;;
+  callback-dispatcher)
+    # 纯 Go，可交叉编译；事件中心是独立部署单元。
+    build_go modules/callbackdispatcher ./cmd/server moox-callback-dispatcher 0
+    build_go modules/callbackdispatcher ./cmd/cli moox-callback-dispatcher-cli 0
+    ;;
+  callback-dispatcher-cli)
+    build_go modules/callbackdispatcher ./cmd/cli moox-callback-dispatcher-cli 0
     ;;
   storage)
     build_storage

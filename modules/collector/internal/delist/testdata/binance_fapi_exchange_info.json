@@ -1,0 +1,67 @@
+{
+  "exchangeFilters": [],
+  "rateLimits": [],
+  "serverTime": 1565613908500,
+  "assets": [],
+  "symbols": [
+    {
+      "symbol": "BLZUSDT",
+      "pair": "BLZUSDT",
+      "contractType": "PERPETUAL",
+      "deliveryDate": 4133404800000,
+      "onboardDate": 1598252400000,
+      "status": "TRADING",
+      "baseAsset": "BLZ",
+      "quoteAsset": "USDT",
+      "marginAsset": "USDT",
+      "underlyingType": "COIN"
+    },
+    {
+      "symbol": "FOOUSDT",
+      "pair": "FOOUSDT",
+      "contractType": "PERPETUAL",
+      "deliveryDate": 1793865600000,
+      "onboardDate": 1598252400000,
+      "status": "TRADING",
+      "baseAsset": "FOO",
+      "quoteAsset": "USDT",
+      "marginAsset": "USDT"
+    },
+    {
+      "symbol": "BTCUSDT_261225",
+      "pair": "BTCUSDT",
+      "contractType": "CURRENT_QUARTER",
+      "deliveryDate": 1793865600000,
+      "status": "TRADING",
+      "baseAsset": "BTC",
+      "quoteAsset": "USDT"
+    },
+    {
+      "symbol": "BARBUSD",
+      "pair": "BARBUSD",
+      "contractType": "PERPETUAL",
+      "deliveryDate": 1793865600000,
+      "status": "TRADING",
+      "baseAsset": "BAR",
+      "quoteAsset": "BUSD"
+    },
+    {
+      "symbol": "DELIVUSDT",
+      "pair": "DELIVUSDT",
+      "contractType": "PERPETUAL_DELIVERING",
+      "deliveryDate": 1793952000000,
+      "status": "TRADING",
+      "baseAsset": "DELIV",
+      "quoteAsset": "USDT"
+    },
+    {
+      "symbol": "GONEUSDT",
+      "pair": "GONEUSDT",
+      "contractType": "PERPETUAL",
+      "deliveryDate": 1500000000000,
+      "status": "SETTLING",
+      "baseAsset": "GONE",
+      "quoteAsset": "USDT"
+    }
+  ]
+}

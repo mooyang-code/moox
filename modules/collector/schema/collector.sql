@@ -353,6 +353,7 @@ CREATE INDEX IF NOT EXISTS idx_t_collector_backfill_notices_batch ON t_collector
 
 -- Collector 本地事件发件箱：事件成批后与通知的封存在同一事务里写入，发布协程推送到 JetStream，
 -- 以 c_event_id 作为 Msg-Id 去重；发布成功才标记 c_published。
+-- c_published：0 待发布，1 已发布，2 死信（事件无法解码，不再发布，上报关注项等人工处理）。
 CREATE TABLE IF NOT EXISTS t_collector_event_outbox (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_event_id TEXT NOT NULL,
@@ -366,6 +367,25 @@ CREATE TABLE IF NOT EXISTS t_collector_event_outbox (
 );
 
 CREATE INDEX IF NOT EXISTS idx_t_collector_event_outbox_pending ON t_collector_event_outbox (c_published, c_id);
+
+-- 下架检测发现（或手工登记）的下架通知：与该标的（交易所、市场、代码、范围）最近一次发布的下架时间相同时只更新最后报告时间，
+-- 不同（包括改回以前出现过的时间）就是一次新的发布，所以同一标的可以有多行；事件经上面的发件箱发布。
+-- 范围（ALL / PAPER_ONLY）是标的身份的一部分，演练登记不会挡住真实下架。
+CREATE TABLE IF NOT EXISTS t_collector_delist_notices (
+    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    c_exchange TEXT NOT NULL,
+    c_market TEXT NOT NULL,
+    c_symbol TEXT NOT NULL,
+    c_scope TEXT NOT NULL,
+    c_delist_at DATETIME NOT NULL,
+    c_source TEXT NOT NULL,
+    c_event_id TEXT NOT NULL,
+    c_first_seen_at DATETIME NOT NULL,
+    c_last_seen_at DATETIME NOT NULL,
+    UNIQUE (c_event_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_t_collector_delist_notices_instrument ON t_collector_delist_notices (c_exchange, c_market, c_symbol, c_scope, c_id);
 
 -- 已删除的旧结构：逐标的合成实例、实例写入目标、周期就绪（合成改为按数据集 × 桶批量执行，目标周期由 Storage 跟踪）。
 -- 保留这些语句让已有的库在升级后清掉旧表；新库里它们什么都不做。

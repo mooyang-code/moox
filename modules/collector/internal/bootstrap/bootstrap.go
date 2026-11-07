@@ -175,7 +175,15 @@ func Initialize(ctx context.Context, s *server.Server) (*Runtime, error) {
 	}
 	collectorpb.RegisterStreamCollectorService(streamServer, streamService)
 	svc.SetStreamService(streamService)
-	registerCollectorBackground(ctx, s, cfg, dbm, marketFetchMetrics, process)
+	bus, err := newEventBusRuntime(cfg, dbm)
+	if err != nil {
+		return nil, fmt.Errorf("initialize collector event bus: %w", err)
+	}
+	registerCollectorBackground(ctx, s, cfg, dbm, marketFetchMetrics, process, bus)
+	if err := registerDelistDetection(cfg, dbm, process, bus, svc); err != nil {
+		return nil, err
+	}
+	bus.start(process)
 	control := &collectorControl{}
 	if err := registerFetchPlanManager(cfg, dbm, process, resultManager, marketFetchMetrics, svc, streamService, control); err != nil {
 		return nil, err
@@ -433,7 +441,7 @@ func registerDNSRefreshSchedule(s *server.Server, cache dnsSnapshotter, process 
 
 // registerCollectorBackground 启动 Collector 的后台任务：K 线重采样与保留期清理。
 // 实时行情采集已全部由 SCF 定时器按采集计划触发（见 registerFetchPlanManager），这里不再有任何行情调度。
-func registerCollectorBackground(ctx context.Context, s *server.Server, cfg *Config, dbm *store.Store, metrics *marketfetch.Metrics, process *Runtime) {
+func registerCollectorBackground(ctx context.Context, s *server.Server, cfg *Config, dbm *store.Store, metrics *marketfetch.Metrics, process *Runtime, bus *eventBusRuntime) {
 	if s == nil || cfg == nil || dbm == nil {
 		return
 	}
@@ -445,7 +453,7 @@ func registerCollectorBackground(ctx context.Context, s *server.Server, cfg *Con
 	}
 	var resample *resampleRuntime
 	if cfg.KlineResample.Enabled {
-		runtime, resampleErr := newResampleRuntime(process, dbm, cfg, metadataSource, spaceIDs)
+		runtime, resampleErr := newResampleRuntime(process, dbm, cfg, metadataSource, spaceIDs, bus)
 		if resampleErr != nil {
 			log.WarnContextf(process.ctx, "collector kline resample disabled: %v", resampleErr)
 		} else {

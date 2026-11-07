@@ -84,7 +84,7 @@ func TestMigrateWritesBackupAndReencryptsCurrentFormat(t *testing.T) {
 	manifest, err := setupconfig.Parse(plain)
 	require.NoError(t, err)
 	require.Equal(t, "海外机", manifest.HostByID("overseas").Label)
-	require.Equal(t, []string{"trade", "access", "egress-proxy", "collector-stream"}, manifest.Deployments["overseas"])
+	require.Equal(t, []string{"trade", "access", "egress-proxy", "collector-stream", "callback-dispatcher"}, manifest.Deployments["overseas"])
 	require.NotContains(t, string(plain), "legacy-1")
 	require.NotContains(t, string(plain), "factor_type")
 	require.Contains(t, string(plain), "# 主机命名", "注释保持不动")

@@ -426,7 +426,7 @@ func describe(m setupconfig.Manifest, encrypted bool, where string) Overview {
 		for _, use := range []struct {
 			label      string
 			components []string
-		}{{"管理台", []string{"admin"}}, {"数据存储", []string{"storage-primary"}}, {"海外接入与交易", []string{"trade", "egress-proxy", "collector-stream"}}, {"因子计算", []string{"factor-engine"}}} {
+		}{{"管理台", []string{"admin"}}, {"数据存储", []string{"storage-primary"}}, {"海外接入与交易", []string{"trade", "egress-proxy", "collector-stream", "callback-dispatcher"}}, {"因子计算", []string{"factor-engine"}}} {
 			for _, component := range use.components {
 				if slices.Contains(placed, component) {
 					server.Uses = append(server.Uses, use.label)

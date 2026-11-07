@@ -184,6 +184,7 @@ proto:
 	$(MAKE) -C modules/egressproxy/proto all
 	$(MAKE) -C modules/factor/proto all
 	$(MAKE) -C modules/cloudfunction/proto all
+	$(MAKE) -C modules/callbackdispatcher/proto all
 	$(MAKE) -C modules/monitor/proto all
 	$(MAKE) -C modules/eventbus/proto all
 	$(MAKE) -C modules/hostagent/proto all

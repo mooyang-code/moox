@@ -13,6 +13,7 @@ import (
 	"github.com/glebarez/sqlite"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
 	adminschema "github.com/mooyang-code/moox/modules/admin/schema"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	natsserver "github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
@@ -54,8 +55,8 @@ func TestEventBusCredentialsEnsureIsIdempotent(t *testing.T) {
 	if err := db.Table("t_secrets").Where("c_category = ? AND c_provider = ? AND c_is_deleted = 0", "eventbus", "moox_eventbus").Count(&count).Error; err != nil {
 		t.Fatal(err)
 	}
-	if count != 11 {
-		t.Fatalf("eventbus records=%d, want 11（9 个角色令牌 + CA + 服务端证书）", count)
+	if count != 12 {
+		t.Fatalf("eventbus records=%d, want 12（10 个角色令牌 + CA + 服务端证书）", count)
 	}
 }
 
@@ -79,17 +80,45 @@ func TestEventbusCredentialsFactorConsumer(t *testing.T) {
 	require.Equal(t, []string{
 		"eventbus-internal-admin", "hostagent-publisher", "metrics-publisher", "monitor-observability-consumer",
 		"storage-eventbus",
-		"factor-eventbus", "strategy-eventbus", "trade-eventbus", "collector-eventbus",
+		"factor-eventbus", "strategy-eventbus", "trade-eventbus", "collector-eventbus", "callback-dispatcher-eventbus",
 	}, eventBusRoles)
 	collectorACL := eventBusACLBlock(yaml, "collector-eventbus")
 	for _, permission := range []string{
 		"moox.event.collector.kline.backfilled.v1.>",
+		"moox.event.collector.instrument.delist_scheduled.v1.>",
 		"$JS.API.CONSUMER.CREATE.MOOX_STORAGE.collector_resample_period_crypto_v1",
 		"$JS.API.CONSUMER.MSG.NEXT.MOOX_COLLECTOR.collector_resample_backfilled_stockcn_v1",
 		"$JS.ACK.MOOX_COLLECTOR.collector_resample_backfilled_crypto_v1.>",
 	} {
 		require.Contains(t, aclLine(collectorACL, "publish:"), permission)
 	}
+}
+
+func TestEventbusCredentialsCallbackDispatcherConsumer(t *testing.T) {
+	tokens := make(map[string]string, len(eventBusRoles))
+	for _, role := range eventBusRoles {
+		tokens[role] = "token"
+	}
+	acl := eventBusACLBlock(usersYAML(tokens), "callback-dispatcher-eventbus")
+	publish := aclLine(acl, "publish:")
+	require.Equal(t, `subscribe: {allow: ["_INBOX.>"]}`, strings.TrimSpace(aclLine(acl, "subscribe:")))
+	require.Contains(t, publish, `"$JS.API.STREAM.NAMES"`)
+	// 事件中心只消费，不发布任何事件主题。
+	require.NotContains(t, publish, `"moox.event.`)
+	for _, event := range events.CallbackDispatcherEvents {
+		name := events.CallbackDispatcherConsumerName(event)
+		for _, permission := range []string{
+			"$JS.API.CONSUMER.INFO.*." + name,
+			"$JS.API.CONSUMER.CREATE." + event.Stream() + "." + name,
+			"$JS.API.CONSUMER.DURABLE.CREATE." + event.Stream() + "." + name,
+			"$JS.API.CONSUMER.MSG.NEXT." + event.Stream() + "." + name,
+			"$JS.ACK." + event.Stream() + "." + name + ".>",
+		} {
+			require.Contains(t, publish, `"`+permission+`"`)
+		}
+	}
+	// 凭据文件名与角色一一对应，export-clients 能按文件名找到它。
+	require.Equal(t, "callback-dispatcher-eventbus.yaml", eventBusRoleFiles()["callback-dispatcher-eventbus"])
 }
 
 func TestEventBusCredentialsExportAndRotate(t *testing.T) {
@@ -266,15 +295,16 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 func TestEventBusCredentialsReconcilePreservesRoleTokensAndRefreshesACL(t *testing.T) {
 	dir := t.TempDir()
 	roleFiles := map[string]string{
-		"internal-admin.yaml":        "token: admin-token\n",
-		"hostagent-publisher.yaml":   "eventbus_token: host-token\n",
-		"metrics-publisher.yaml":     "token: metrics-token\n",
-		"monitor-observability.yaml": "monitor_eventbus_token: monitor-token\n",
-		"storage-eventbus.yaml":      "token: storage-token\n",
-		"factor-eventbus.yaml":       "token: factor-token\n",
-		"strategy-eventbus.yaml":     "token: strategy-token\n",
-		"trade-eventbus.yaml":        "token: trade-token\n",
-		"collector-eventbus.yaml":    "token: collector-token\n",
+		"internal-admin.yaml":               "token: admin-token\n",
+		"hostagent-publisher.yaml":          "eventbus_token: host-token\n",
+		"metrics-publisher.yaml":            "token: metrics-token\n",
+		"monitor-observability.yaml":        "monitor_eventbus_token: monitor-token\n",
+		"storage-eventbus.yaml":             "token: storage-token\n",
+		"factor-eventbus.yaml":              "token: factor-token\n",
+		"strategy-eventbus.yaml":            "token: strategy-token\n",
+		"trade-eventbus.yaml":               "token: trade-token\n",
+		"collector-eventbus.yaml":           "token: collector-token\n",
+		"callback-dispatcher-eventbus.yaml": "token: dispatcher-token\n",
 	}
 	for name, content := range roleFiles {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600))

@@ -83,42 +83,32 @@ func nakDelay(configured time.Duration) time.Duration {
 	return defaultNakDelay
 }
 
-// ConsumersConfig 是事件消费者的连接参数。
+// ConsumersConfig 是事件消费者的参数；连接由 Collector 级的 eventbus.Hub 提供。
 type ConsumersConfig struct {
-	URLs           []string
-	CredentialFile string
-	SpaceIDs       []string
-	FetchMaxWait   time.Duration
-	AckWait        time.Duration
-	MaxAckPending  int
+	SpaceIDs      []string
+	FetchMaxWait  time.Duration
+	AckWait       time.Duration
+	MaxAckPending int
 }
 
-// Consumers 持有 JetStream 连接与每个空间的两个持久消费者。
+// Consumers 持有每个空间的两个持久消费者；JetStream 连接是共享的，由 Collector 级的 Hub 管理，这里不关闭它。
 type Consumers struct {
-	client    *jetstream.Client
 	consumers []*events.Consumer
 	cancel    context.CancelFunc
 	wg        sync.WaitGroup
 	closeOnce sync.Once
 }
 
-// Start 连接事件总线并启动源周期完成与补采完成两个消费者（每个空间各一个持久消费者）。
-func Start(ctx context.Context, cfg ConsumersConfig, registry *events.Registry, period *PeriodHandler, backfilled *BackfilledHandler) (*Consumers, error) {
+// Start 在已有连接上启动源周期完成与补采完成两个消费者（每个空间各一个持久消费者）。
+func Start(ctx context.Context, client *jetstream.Client, cfg ConsumersConfig, registry *events.Registry, period *PeriodHandler, backfilled *BackfilledHandler) (*Consumers, error) {
 	if len(cfg.SpaceIDs) == 0 {
 		return nil, errors.New("resample consumers need at least one space")
 	}
-	clientCfg := jetstream.ConfigFromEnv(append([]string(nil), cfg.URLs...), "moox-collector")
-	if cfg.CredentialFile != "" {
-		if err := clientCfg.ApplyCredentialFile(jetstream.ExpandCredentialPath(cfg.CredentialFile)); err != nil {
-			return nil, err
-		}
-	}
-	client, err := jetstream.Connect(ctx, clientCfg)
-	if err != nil {
-		return nil, err
+	if client == nil {
+		return nil, errors.New("resample consumers need an EventBus connection")
 	}
 	runCtx, cancel := context.WithCancel(ctx)
-	c := &Consumers{client: client, cancel: cancel}
+	c := &Consumers{cancel: cancel}
 	ackWait, fetchWait, pending := cfg.AckWait, cfg.FetchMaxWait, cfg.MaxAckPending
 	if ackWait <= 0 {
 		ackWait = 2 * time.Minute
@@ -174,12 +164,7 @@ func Start(ctx context.Context, cfg ConsumersConfig, registry *events.Registry, 
 	return c, nil
 }
 
-// Publisher 返回共用这条连接的事件发布者。
-func (c *Consumers) Publisher(registry *events.Registry) (*events.Publisher, error) {
-	return events.NewPublisher(c.client, registry)
-}
-
-// Close 停止消费并关闭连接。
+// Close 停止消费（共享连接由 Hub 关闭）。
 func (c *Consumers) Close() error {
 	if c == nil {
 		return nil
@@ -191,7 +176,6 @@ func (c *Consumers) Close() error {
 			err = errors.Join(err, consumer.Close())
 		}
 		c.wg.Wait()
-		err = errors.Join(err, c.client.Close())
 	})
 	return err
 }

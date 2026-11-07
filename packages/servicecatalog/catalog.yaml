@@ -255,10 +255,12 @@ components:
           - ToggleSecretStatus
           - ExportSecrets
           - ImportSecrets
+          - GetReadonlyExchangeKey
         read_only_methods:
           - ListSecrets
           - GetSecret
           - GetSecretValue
+          - GetReadonlyExchangeKey
         acl:
           - methods:
               - ListSecrets
@@ -282,6 +284,12 @@ components:
               - cloudfunction
               - trade
               - moox-cli
+          # Collector 只能读固定 ID 只读 Key 的公开标识；网关转发会丢掉调用方元数据，
+          # GetSecretValue 没法按调用方限定，所以用专用方法授权，Collector 拿不到 Trade 的交易密钥。
+          - methods:
+              - GetReadonlyExchangeKey
+            callers:
+              - collector
       - path: trpc.moox.ops.SysDeploy
         port: 11109
         console_name: sysdeploy
@@ -659,6 +667,7 @@ components:
           - SetSubjectExclusions
           - ClearSubjectExclusions
           - ListSubjectExclusions
+          - RegisterDelistNotice
         read_only_methods:
           - GetTaskList
           - GetTaskDetail
@@ -718,6 +727,12 @@ components:
               - SetSubjectExclusions
               - ClearSubjectExclusions
               - ListSubjectExclusions
+            callers:
+              - console
+              - moox-cli
+          # 手工登记标的下架（补漏报和演练）：事件中心页面（经控制台）和 moox-cli。
+          - methods:
+              - RegisterDelistNotice
             callers:
               - console
               - moox-cli
@@ -1987,6 +2002,88 @@ components:
         - trade/config/trpc_go.yaml
       writable_paths:
         - data/trade
+      recovery_action_ids:
+        - restart_service_manually
+      required_in_default_profile: false
+  # 事件中心：接收 EventBus 事件，按用户配置的规则向用户接口发通知或执行系统动作。全局服务，不分空间。
+  - id: callback-dispatcher
+    name: 事件中心
+    binary: moox-callback-dispatcher
+    scope: any
+    replicas: single
+    protected: false
+    health:
+      kind: readyz
+      port: 11461
+      ready_body: '"ready":true'
+    services:
+      - path: trpc.moox.callbackdispatcher.CallbackDispatcherService
+        port: 11460
+        console_name: callback-dispatcher
+        # 测试发送要等对方最多 10 秒。
+        timeout_ms: 15000
+        max_body_bytes: 1048576
+        methods:
+          - ListSubscribableEvents
+          - ListEventRules
+          - GetEventRule
+          - CreateEventRule
+          - UpdateEventRule
+          - DeleteEventRule
+          - TestEventRule
+          - ListEventExecutions
+          - GetEventExecution
+          - RetryEventExecution
+          - CancelEventExecution
+          - AcknowledgeEventExecution
+        read_only_methods:
+          - ListSubscribableEvents
+          - ListEventRules
+          - GetEventRule
+          - ListEventExecutions
+          - GetEventExecution
+        acl:
+          # CreateEventRule 的返回里有验证密钥明文：只放行 console，moox-cli 与 gateway call 都不能调用。
+          - methods:
+              - CreateEventRule
+            callers:
+              - console
+          - methods:
+              - ListSubscribableEvents
+              - ListEventRules
+              - GetEventRule
+              - UpdateEventRule
+              - DeleteEventRule
+              - TestEventRule
+              - ListEventExecutions
+              - GetEventExecution
+              - RetryEventExecution
+              - CancelEventExecution
+              - AcknowledgeEventExecution
+            callers:
+              - console
+              - moox-cli
+    doctor:
+      role: callback-dispatcher
+      description: 事件中心：按规则把 EventBus 事件通知到用户接口或执行系统动作
+      duties:
+        - 消费可订阅事件并按规则匹配
+        - 投递通知并重试，记录每次执行
+      inputs:
+        - EventBus 事件
+        - 用户配置的事件规则
+      outputs:
+        - 通知请求与执行记录
+        - 事件中心关注项
+      dependencies:
+        - eventbus
+      transport: reporter
+      functional_observability: active
+      config_paths:
+        - callback-dispatcher/config/app.yaml
+        - callback-dispatcher/config/trpc_go.yaml
+      writable_paths:
+        - data/callback-dispatcher
       recovery_action_ids:
         - restart_service_manually
       required_in_default_profile: false

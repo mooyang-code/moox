@@ -93,7 +93,7 @@ func CheckDeleteTarget(target, home string) error {
 
 // knownEntries 是部署根下属于 MooX 的顶层条目。
 func knownEntries(paths setupconfig.Paths) []string {
-	known := []string{"host", "eventbus", "storage", "storage-view", "access", "egress-proxy", "trade", "collector-stream", "factor-engine", "archive-worker", "archive", "import", "bootstrap", "bootstrap-input", "material-exports", "identity", "run", "prod"}
+	known := []string{"host", "eventbus", "storage", "storage-view", "access", "egress-proxy", "trade", "collector-stream", "callback-dispatcher", "factor-engine", "archive-worker", "archive", "import", "bootstrap", "bootstrap-input", "material-exports", "identity", "run", "prod"}
 	for _, root := range []string{paths.ControlRoot, paths.StorageRoot, paths.ArchiveRoot} {
 		if relative, err := filepath.Rel(paths.DeployRoot, root); err == nil && !strings.HasPrefix(relative, "..") {
 			known = append(known, strings.Split(relative, "/")[0])

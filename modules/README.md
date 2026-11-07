@@ -13,6 +13,7 @@ MooX 的业务模块。每个模块是独立的 Go module（由仓库根目录 `
 | [consoleproxy](./consoleproxy/) | `moox-console-proxy` | 内嵌 Caddy 的控制台 HTTPS 入口 | [控制台代理](../docs/模块/控制台代理.md) |
 | [egressproxy](./egressproxy/) | `moox-egress-proxy` | 受限 HTTPS 出口与 DNS 解析 | [出口代理](../docs/模块/出口代理.md) |
 | [collector](./collector/) | `moox-collector`、`moox-collector-stream`、`moox-collector-scf`、`moox-collector-cli` | 采集控制面、WS 执行端与 SCF Timer 运行时 | [采集](../docs/模块/采集.md) |
+| [callbackdispatcher](./callbackdispatcher/) | `moox-callback-dispatcher`、`moox-callback-dispatcher-cli` | 事件中心：按规则向用户接口发通知或执行系统动作 | [事件中心](../docs/模块/事件中心.md) |
 | [cloudfunction](./cloudfunction/) | `moox-cloudfunction`、`moox-cloudfunction-cli` | 云账户、SCF 实例与代码包 | [云函数管理](../docs/模块/云函数管理.md) |
 | [factor](./factor/) | `moox-factor-mgr`、`moox-factor-engine`、`moox-factor-mgr-cli` | 因子管理与计算 | [因子](../docs/模块/因子.md) |
 | [strategy](./strategy/) | `moox-strategy`、`moox-strategy-cli` | 策略 DSL 与目标权重 | [策略](../docs/模块/策略.md) |

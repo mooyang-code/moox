@@ -37,10 +37,13 @@ kline_resample:
   history_buckets_per_round: 20
   history_max_jobs: 8
   max_read_keys: 5000
-  # 配置后订阅源数据集的周期完成事件与补采完成事件（事件是主路径）；不配置则只靠兜底检查，延迟约 1 分钟。
-  event_bus:
-    urls: []
-    credential_file: ""
+
+# Collector 到 EventBus 的连接，K 线合成（订阅源数据集的周期完成事件与补采完成事件，发布补采完成事件）与下架检测
+# （发布标的即将下架事件）共用。不配置时不发布任何事件，合成只靠兜底检查，延迟约 1 分钟。
+# 连不上时每分钟重试，EventBus 晚于 Collector 启动也能自动连上。
+event_bus:
+  urls: []
+  credential_file: ""
 
 health:
   addr: ":11412"
@@ -58,7 +61,7 @@ dns:
   # nameservers: ["119.29.29.29", "1.1.1.1"]
 
 egress_proxy:
-  domains: ["*.binance.com", "data-api.binance.vision"]
+  domains: ["*.binance.com", "data-api.binance.vision", "openapi.okx.com"]
   dns:
     domains: []
     refresh_interval: 5m

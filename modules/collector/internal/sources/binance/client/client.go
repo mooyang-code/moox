@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"strings"
 
@@ -157,6 +158,13 @@ func domainFromBaseURL(rawURL string) (string, error) {
 // GetDirect sends a normal HTTPS request using system DNS.
 func (c *Client) GetDirect(ctx context.Context, domain, path string, query url.Values, result interface{}) error {
 	return c.HTTPClient.Get(ctx, domain, path, query, result)
+}
+
+// GetDirectWithHeaders 与 GetDirect 相同，但请求带上额外的请求头：币安行情数据类接口（如
+// /sapi/v1/spot/delist-schedule）要求 X-MBX-APIKEY，不需要签名。头只对 api.binance.com 经出口代理放行，
+// 请求头的值不写进日志。
+func (c *Client) GetDirectWithHeaders(ctx context.Context, domain, path string, query url.Values, headers http.Header, result interface{}) error {
+	return c.HTTPClient.Get(httpclient.WithRequestHeaders(ctx, headers), domain, path, query, result)
 }
 
 // GetDirectWithIPs tries the control-plane DNS snapshot before falling back

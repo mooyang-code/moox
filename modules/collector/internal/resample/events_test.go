@@ -9,28 +9,10 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
-	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/storagepb"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
-
-type recordingRelay struct {
-	mu       sync.Mutex
-	messages []*eventpb.EventMessage
-	failures int
-}
-
-func (r *recordingRelay) PublishMessage(_ context.Context, message *eventpb.EventMessage) (*jetstream.PublishAck, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.failures > 0 {
-		r.failures--
-		return nil, context.DeadlineExceeded
-	}
-	r.messages = append(r.messages, message)
-	return &jetstream.PublishAck{}, nil
-}
 
 type recordingSync struct {
 	mu    sync.Mutex
@@ -59,19 +41,21 @@ func TestNoticePublisherMergesNoticesIntoOneEventPerGroupWithSyncPoint(t *testin
 	}))
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
-	relay := &recordingRelay{}
 	sync := &recordingSync{}
-	publisher := &NoticePublisher{State: mgr.Resample(), Sync: sync, Registry: registry, Relay: relay, Now: func() time.Time { return start.Add(3 * time.Hour) }}
+	woken := 0
+	publisher := &NoticePublisher{State: mgr.Resample(), Sync: sync, Registry: registry, Enabled: true, Wake: func() { woken++ }, Now: func() time.Time { return start.Add(3 * time.Hour) }}
 
-	relay.failures = 1 // 第一次发布失败：事件留在发件箱，下一次重发
-	require.Error(t, publisher.Flush(ctx))
-	require.Empty(t, relay.messages)
 	require.NoError(t, publisher.Flush(ctx))
-	require.Len(t, relay.messages, 3, "三个分组各一条事件：同数据集不同来源/作业不合并")
+	require.Equal(t, 1, woken, "封存后唤醒中继")
+	pending, err := mgr.Resample().PendingEvents(ctx, 10)
+	require.NoError(t, err)
+	require.Len(t, pending, 3, "三个分组各一条事件：同数据集不同来源/作业不合并")
 	require.Len(t, sync.calls, 3, "每个分组先追加一个同步点")
 
 	byJob := map[string]*storagepb.CollectorKlineBackfilled{}
-	for _, message := range relay.messages {
+	for _, event := range pending {
+		message, err := registry.UnmarshalMessage(event.Payload)
+		require.NoError(t, err)
 		value := decodePayload(t, registry, message)
 		byJob[value.GetJobId()] = value
 		require.Equal(t, value.GetDatasetId(), message.GetSubjectId())
@@ -84,9 +68,6 @@ func TestNoticePublisherMergesNoticesIntoOneEventPerGroupWithSyncPoint(t *testin
 	require.Equal(t, "auto", merged.GetOrigin())
 	require.Equal(t, "resample", byJob["job-3"].GetOrigin())
 
-	again, err := mgr.Resample().PendingEvents(ctx, 10)
-	require.NoError(t, err)
-	require.Empty(t, again, "发布成功后发件箱清空")
 	left, _ := mgr.Resample().UnsealedNotices(ctx, 10)
 	require.Empty(t, left)
 }
@@ -105,7 +86,7 @@ func TestNoticePublisherBatchIDIsDeterministicSoReplayIsIdempotent(t *testing.T)
 	require.NotEqual(t, batchID([]int64{1, 2}), batchID([]int64{1, 2, 3}))
 }
 
-func TestNoticePublisherWithoutRelayKeepsNoticesForRetention(t *testing.T) {
+func TestNoticePublisherWithoutEventBusKeepsNoticesForRetention(t *testing.T) {
 	mgr := openState(t)
 	ctx := context.Background()
 	require.NoError(t, mgr.Resample().AddNotices(ctx, []store.BackfillNotice{{SpaceID: "crypto", DatasetID: "d", Frequency: "5m", SubjectID: "A", Start: utc("2026-10-21T10:00:00Z"), End: utc("2026-10-21T11:00:00Z"), Origin: "auto"}}))
