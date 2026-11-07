@@ -33,14 +33,7 @@ func (tx *Tx) ClosePaperSimulation(spaceID, tradingAccountID string) error {
 			// Closing is terminal for a Paper fixture. Orders that are still in
 			// submission/cancel handshakes are rejected and their reservation is
 			// released rather than being retried through an exchange adapter.
-			result := tx.db.Exec(`
-				UPDATE t_trade_orders
-				SET c_state='CANCELED', c_first_match_pending=0,
-				    c_remaining_reserved_quantity='0', c_reject_reason=?,
-				    c_finished_at=CAST(strftime('%s','now') AS INTEGER)*1000,
-				    c_version=c_version+1, c_mtime=CURRENT_TIMESTAMP
-				WHERE c_space_id=? AND c_order_id=? AND c_version=?`,
-				"模拟账户已关闭", current.SpaceID, current.OrderID, current.Version)
+			result := tx.db.Exec(execCancelClosedPaperOrder, "模拟账户已关闭", current.SpaceID, current.OrderID, current.Version)
 			if result.Error != nil {
 				return result.Error
 			}
@@ -58,11 +51,7 @@ func (tx *Tx) ClosePaperSimulation(spaceID, tradingAccountID string) error {
 	var logicalRows []struct {
 		LogicalAccountID string `gorm:"column:c_logical_account_id"`
 	}
-	if err := tx.db.Raw(`
-		SELECT c_logical_account_id
-		FROM t_logical_account_members
-		WHERE c_space_id = ? AND c_trading_account_id = ?
-	`, spaceID, tradingAccountID).Scan(&logicalRows).Error; err != nil {
+	if err := tx.db.Raw(sqlPaperAccountLogicalIDs, spaceID, tradingAccountID).Scan(&logicalRows).Error; err != nil {
 		return err
 	}
 	for _, row := range logicalRows {
@@ -208,6 +197,14 @@ func (tx *Tx) SetTradingAccountStatus(spaceID, tradingAccountID, status string) 
 
 // 以下 SQL 整条写成常量，不在调用处拼接或内联。
 const (
+	execCancelClosedPaperOrder = `UPDATE t_trade_orders
+		SET c_state = 'CANCELED', c_first_match_pending = 0,
+		    c_remaining_reserved_quantity = '0', c_reject_reason = ?,
+		    c_finished_at = CAST(strftime('%s', 'now') AS INTEGER) * 1000,
+		    c_version = c_version + 1, c_mtime = CURRENT_TIMESTAMP
+		WHERE c_space_id = ? AND c_order_id = ? AND c_version = ?`
+	sqlPaperAccountLogicalIDs = `SELECT c_logical_account_id FROM t_logical_account_members
+		WHERE c_space_id = ? AND c_trading_account_id = ?`
 	execPausePaperLogicalAccount = `UPDATE t_logical_accounts SET c_automation_state = 'PAUSED', c_pause_reason = ?, c_mtime = CURRENT_TIMESTAMP
 		WHERE c_space_id = ? AND c_logical_account_id = ?`
 	execRemovePaperMember = `DELETE FROM t_logical_account_members
