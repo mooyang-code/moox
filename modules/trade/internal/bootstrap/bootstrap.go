@@ -208,8 +208,8 @@ func initialize(
 		fundWorker.Wake(spaceID, logicalAccountID)
 	}
 	operatorService := &operatorapp.Service{
-		Exchanges: registry,
-		Store:     tradeStore, Orders: orderService,
+		Exchanges: registry, Wake: targetWorker.Wake,
+		Store: tradeStore, Orders: orderService,
 		Syncer: accountSyncer{service: syncService},
 		Prices: targetapp.ExchangePriceSource{Adapters: manager},
 	}

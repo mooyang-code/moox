@@ -398,6 +398,11 @@ func (s *Service) FlattenLogicalAccount(
 	if err := s.persistFlattenProgress(ctx, &result, status); err != nil {
 		return result, errors.Join(errors.Join(sharedErrors...), err)
 	}
+	// 下架清仓结束（完成、部分完成、失败）后唤醒目标：已收敛、已阻塞的目标不被定时器扫描，
+	// 不唤醒的话周期长的策略要等下一份目标才恢复（解除禁止提前结束时尤其如此）。
+	if status != string(operatordomain.StatusRunning) && command.actionType() == operatordomain.ActionDelistFlatten && s.Wake != nil {
+		s.Wake()
+	}
 	return result, errors.Join(sharedErrors...)
 }
 
@@ -1573,7 +1578,7 @@ func appendUnique(values []string, value string) []string {
 const operatorDelistFlatten = operatordomain.ActionDelistFlatten
 
 const (
-	// delistMaxAttempts 是下架清仓每个标的最多下几次 IOC 单：用满仍没成交完就记终结原因，交给人看，不无限下单。
+	// delistMaxAttempts 是下架清仓每个标的连续几笔 IOC 单一股都没成交就记终结原因，交给人看，不无限下单。
 	delistMaxAttempts = 20
 )
 
@@ -1604,31 +1609,40 @@ func delistLimitPrice(reference shared.Decimal, side exchange.Side, priceTick st
 	return price
 }
 
-// delistAttempts 返回本动作在这个标的上已经结束的子单数（下一笔是第几次尝试）。
-// 最近一笔被交易所拒绝的不再重试（同样的单再发还是拒绝），已用满次数的同样是终结错误。
+// delistAttempts 返回下一笔子单是第几次尝试（本动作在这个标的上已结束的子单数，只用来让子单号唯一）。
+// 终结的情况：最近一笔被交易所拒绝（同样的单再发还是拒绝，复查要换新的动作号）；最近连续 delistMaxAttempts 笔 IOC 一股都没成交
+// （部分成交说明在推进，不算）。
 func (s *Service) delistAttempts(ctx context.Context, command FlattenCommand, tradingAccountID string, key exchange.SymbolKey) (int, error) {
 	records, err := s.Store.ListOrdersForLane(ctx, command.SpaceID, tradingAccountID, key)
 	if err != nil {
 		return 0, err
 	}
-	finished := 0
-	var last *store.OrderRecord
-	for index := range records {
-		current := records[index]
-		if current.OwnerType != string(orderdomain.OwnerOperator) || current.OwnerID != command.ActionID ||
-			!orderdomain.State(current.State).Terminal() {
-			continue
-		}
-		finished++
-		if last == nil || current.CreatedAt.After(last.CreatedAt) {
-			last = &records[index]
+	var finished []store.OrderRecord
+	for _, current := range records {
+		if current.OwnerType == string(orderdomain.OwnerOperator) && current.OwnerID == command.ActionID &&
+			orderdomain.State(current.State).Terminal() {
+			finished = append(finished, current)
 		}
 	}
-	if last != nil && last.State == string(orderdomain.Rejected) {
-		return 0, flattenFinal{fmt.Errorf("下架清仓的订单被交易所拒绝：%s", last.RejectReason)}
+	sort.SliceStable(finished, func(i, j int) bool {
+		if !finished[i].CreatedAt.Equal(finished[j].CreatedAt) {
+			return finished[i].CreatedAt.Before(finished[j].CreatedAt)
+		}
+		return finished[i].OrderID < finished[j].OrderID
+	})
+	if len(finished) > 0 && finished[len(finished)-1].State == string(orderdomain.Rejected) {
+		return 0, flattenFinal{fmt.Errorf("下架清仓的订单被交易所拒绝：%s", finished[len(finished)-1].RejectReason)}
 	}
-	if finished >= delistMaxAttempts {
-		return 0, flattenFinal{fmt.Errorf("下架清仓已下 %d 次限价单（滑点 3%%）仍未全部成交，需要人工处理", finished)}
+	unfilled := 0
+	for index := len(finished) - 1; index >= 0; index-- {
+		filled, parseErr := decimalOrZero(finished[index].FilledQuantity)
+		if parseErr != nil || filled.Cmp(shared.Zero()) > 0 {
+			break
+		}
+		unfilled++
 	}
-	return finished, nil
+	if unfilled >= delistMaxAttempts {
+		return 0, flattenFinal{fmt.Errorf("下架清仓连续 %d 次限价单（滑点 3%%）一股都没成交，需要人工处理", unfilled)}
+	}
+	return len(finished), nil
 }

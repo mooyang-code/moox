@@ -70,6 +70,9 @@ type Service struct {
 	FlattenMaxAttempts   int
 	FlattenRetryInterval time.Duration
 	FlattenTimeout       time.Duration
+
+	// Wake 在下架清仓结束时唤醒目标重新收敛，为空时不唤醒。
+	Wake func()
 }
 
 type ManualOrderCommand struct {

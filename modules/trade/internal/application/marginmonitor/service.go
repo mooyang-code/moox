@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -35,6 +36,11 @@ type Collect func(ctx context.Context, spaceID, logicalAccountID, actionID strin
 
 // ErrTransferUnavailable 表示还没有接入钱包划转：监控只告警一次，请用户手动把现货钱包的资金划回合约钱包。
 var ErrTransferUnavailable = errors.New("钱包划转还没有接入")
+
+// marginPauseText 是风控暂停原因的开头，marginPausePrefix 带上自动暂停的前缀，用来认出“由保证金率风控暂停”的组合。
+const marginPauseText = "保证金率过低"
+
+var marginPausePrefix = store.AutoPauseReason(marginPauseText)
 
 // ActionIDPrefix 是风控发起的减仓动作号的前缀，用来在操作记录里认出它们。
 const ActionIDPrefix = "margin-"
@@ -226,8 +232,9 @@ func (s *Service) RunLogicalAccount(ctx context.Context, logical store.LogicalAc
 	if err := s.collectAfterReduce(ctx, logical); err != nil {
 		log.Warnf("交易关注项：组合 %s 触发风控后的资金归集失败，下一轮重试：%v", logical.LogicalAccountID, err)
 	}
-	// 已经暂停（包括刚被风控暂停、等用户确认）的组合不再触发：用户手动恢复后才会重新监控，不会每个周期都再减一次。
-	if logical.AutomationState != "ACTIVE" {
+	// 上一次由保证金率风控暂停、用户还没确认恢复的组合不再触发：不会每个周期都再减一次，用户手动恢复后重新监控。
+	// 人工暂停、冲突自动暂停的组合照样监控：价格波动不会因为组合暂停就停下，杠杆仓位仍可能被打穿。
+	if strings.HasPrefix(logical.PauseReason, marginPausePrefix) {
 		return nil
 	}
 	running, err := s.Store.ListRunningOperatorActions(ctx, logical.SpaceID, logical.LogicalAccountID)
@@ -278,7 +285,7 @@ func (s *Service) trigger(ctx context.Context, logical store.LogicalAccountRecor
 		}
 		detail += reading.TradingAccountID + "：" + reading.Describe()
 	}
-	reason := store.AutoPauseReason("保证金率过低，已暂停并按 " + settings.MarginReduceRatio.String() + " 的比例减仓（" + detail + "）")
+	reason := store.AutoPauseReason(marginPauseText + "，已暂停并按 " + settings.MarginReduceRatio.String() + " 的比例减仓（" + detail + "）")
 	// 前一次告警：触发时刻就发出，不等减仓做完。
 	telemetry.Note(telemetry.AttentionMarginRatioLow, logical.Name+"："+detail, s.now())
 	log.Warnf("交易关注项：组合 %s 保证金率过低（%s），暂停组合并按 %s 减仓", logical.LogicalAccountID, detail, settings.MarginReduceRatio)

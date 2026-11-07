@@ -109,6 +109,13 @@ func TestDelistFlattenStopsAfterRejectionOrTooManyAttempts(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, fixture.orders.specs)
 	require.Contains(t, result.Accounts[0].Remaining[0].Reason, "需要人工处理")
+
+	// 最近一笔有成交说明在推进：连续没成交的笔数从头数，不会因为总笔数多就终结。
+	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_trade_orders SET c_filled_quantity = '1' WHERE c_order_id = 'old-t'`).Error)
+	fixture.orders.nextID = "child-progress"
+	_, err = fixture.service().FlattenLogicalAccount(context.Background(), command)
+	require.NoError(t, err)
+	require.Len(t, fixture.orders.specs, 1, "部分成交不计入连续未成交，继续下单")
 }
 
 // 解除禁止就停：撤掉本动作的订单，记 COMPLETED 并带“已解除禁止”标记，不下单、不记 PARTIAL。
@@ -126,12 +133,16 @@ func TestDelistFlattenStopsWhenTheInstrumentIsUnblocked(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, removed)
 	fixture.orders.specs, fixture.orders.leaveOpen, fixture.trace = nil, nil, nil
+	wakes := 0
+	service := fixture.service()
+	service.Wake = func() { wakes++ }
 
-	result, err := fixture.service().FlattenLogicalAccount(context.Background(), command)
+	result, err := service.FlattenLogicalAccount(context.Background(), command)
 
 	require.NoError(t, err)
 	require.Equal(t, "COMPLETED", result.Action.Status)
 	require.True(t, result.Unblocked)
+	require.Equal(t, 1, wakes, "提前结束时唤醒目标，周期长的策略不用等下一份目标")
 	require.Empty(t, fixture.orders.specs, "解除后不再下单")
 	require.Contains(t, fixture.trace, "cancel:child-account-a-BTC-USDT-SWAP", "撤掉本动作自己的订单")
 	var persisted struct {

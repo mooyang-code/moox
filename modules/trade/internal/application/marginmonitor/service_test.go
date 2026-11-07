@@ -329,3 +329,17 @@ func TestCollectTreatsUnavailableTransferAsDone(t *testing.T) {
 	f.run()
 	require.Equal(t, 1, calls)
 }
+
+// 人工暂停的组合照样监控（价格不会因为组合暂停就停下）；只有上一次由保证金风控暂停、还没恢复的组合才不再触发。
+func TestRunMonitorsManuallyPausedGroupsButNotMarginPausedOnes(t *testing.T) {
+	f := newFixture(t, "", "400")
+	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.SetLogicalAccountAutomation("space-1", "logical-1", "PAUSED", "人工暂停")
+	}))
+	f.run()
+	require.Len(t, f.reduces, 1, "人工暂停的组合保证金率太低，照样触发")
+
+	// 风控暂停之后（暂停原因带标记）不再触发。
+	f.run()
+	require.Len(t, f.reduces, 1)
+}
