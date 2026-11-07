@@ -140,7 +140,7 @@ func (s *Service) UpdateOrderSettings(
 	if err != nil {
 		return store.LogicalAccountRecord{}, fmt.Errorf("%w: %v", store.ErrInvalidRecord, err)
 	}
-	return s.saveSettings(ctx, spaceID, logicalAccountID, func(tx *store.Tx) error {
+	return s.saveSettings(ctx, spaceID, logicalAccountID, nil, func(tx *store.Tx) error {
 		return tx.SetLogicalAccountOrderSettings(spaceID, logicalAccountID, canonical)
 	})
 }
@@ -159,37 +159,24 @@ func (s *Service) UpdateFundSettings(
 	if err != nil {
 		return store.LogicalAccountRecord{}, fmt.Errorf("%w: %v", store.ErrInvalidRecord, err)
 	}
-	// BNB 抵扣、BNB 保留、小额兑换和稳定币调平只对实盘组合生效：模拟盘组合设了也没有任何维护任务去补，
-	// 换算目标时却会一直扣着 BNB 的缺口，所以直接拒绝。
-	existing, err := s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
-	if err != nil {
-		return store.LogicalAccountRecord{}, err
-	}
 	maintenance := parsed.BNBDiscount || parsed.BNBReserveEnabled() || parsed.DustConvert || len(parsed.StablecoinTargets) > 0
-	if existing.ExecutionMode == string(exchange.ExecutionModePaper) && maintenance {
-		return store.LogicalAccountRecord{}, fmt.Errorf("%w: 模拟盘组合不支持 BNB 抵扣、BNB 保留、小额兑换和稳定币保证金（只对实盘生效）", store.ErrInvalidRecord)
-	}
-	// 保证金币、套利底仓不能写成这个组合的结算币（结算币在权益里本来就按净额算）。
-	if _, isMargin := parsed.MarginCoins[strings.ToUpper(existing.SettlementAsset)]; isMargin || parsed.IsArbitrageBase(existing.SettlementAsset) {
-		return store.LogicalAccountRecord{}, fmt.Errorf("%w: %s 是这个组合的结算币，不能写进保证金币或套利底仓", store.ErrInvalidRecord, existing.SettlementAsset)
-	}
-	// BNB 抵扣、BNB 保留、小额兑 BNB、稳定币调平都是币安的功能：含非币安成员的组合不能开。
-	if maintenance {
-		members, err := s.Store.ListLogicalAccountMembers(ctx, spaceID, logicalAccountID, true)
-		if err != nil {
-			return store.LogicalAccountRecord{}, err
+	// 下面的检查读组合和成员的当前状态，放在组合锁里做：和加成员、改成员互斥，不会检查通过后成员又变了。
+	check := func(existing store.LogicalAccountRecord) error {
+		// BNB 抵扣、BNB 保留、小额兑换和稳定币调平只对实盘组合生效：模拟盘组合设了也没有任何维护任务去补，
+		// 换算目标时却会一直扣着 BNB 的缺口，所以直接拒绝。
+		if existing.ExecutionMode == string(exchange.ExecutionModePaper) && maintenance {
+			return fmt.Errorf("%w: 模拟盘组合不支持 BNB 抵扣、BNB 保留、小额兑换和稳定币保证金（只对实盘生效）", store.ErrInvalidRecord)
 		}
-		for _, member := range members {
-			account, err := s.Store.GetTradingAccountByID(ctx, member.TradingAccountID)
-			if err != nil {
-				return store.LogicalAccountRecord{}, err
-			}
-			if account.Exchange != string(exchange.ExchangeBinance) {
-				return store.LogicalAccountRecord{}, fmt.Errorf("%w: 成员 %s 不是币安账户，BNB 抵扣、BNB 保留、小额兑换和稳定币保证金只适用于币安", store.ErrInvalidRecord, account.TradingAccountID)
-			}
+		// 保证金币、套利底仓不能写成这个组合的结算币（结算币在权益里本来就按净额算）。
+		if _, isMargin := parsed.MarginCoins[strings.ToUpper(existing.SettlementAsset)]; isMargin || parsed.IsArbitrageBase(existing.SettlementAsset) {
+			return fmt.Errorf("%w: %s 是这个组合的结算币，不能写进保证金币或套利底仓", store.ErrInvalidRecord, existing.SettlementAsset)
 		}
+		if !maintenance {
+			return nil
+		}
+		return s.requireBinanceMembers(ctx, spaceID, logicalAccountID)
 	}
-	record, err := s.saveSettings(ctx, spaceID, logicalAccountID, func(tx *store.Tx) error {
+	record, err := s.saveSettings(ctx, spaceID, logicalAccountID, check, func(tx *store.Tx) error {
 		return tx.SetLogicalAccountFundSettings(spaceID, logicalAccountID, canonical)
 	})
 	if err == nil && s.OnFundSettingsChanged != nil {
@@ -198,10 +185,53 @@ func (s *Service) UpdateFundSettings(
 	return record, err
 }
 
+// requireBinanceMembers 要求组合的全部成员（含停用成员）都是币安账户：BNB 抵扣、BNB 保留、小额兑 BNB、稳定币调平都是币安的功能。
+func (s *Service) requireBinanceMembers(ctx context.Context, spaceID, logicalAccountID string) error {
+	members, err := s.Store.ListLogicalAccountMembers(ctx, spaceID, logicalAccountID, true)
+	if err != nil {
+		return err
+	}
+	for _, member := range members {
+		account, err := s.Store.GetTradingAccountByID(ctx, member.TradingAccountID)
+		if err != nil {
+			return err
+		}
+		if account.Exchange != string(exchange.ExchangeBinance) {
+			return fmt.Errorf("%w: 成员 %s 不是币安账户，BNB 抵扣、BNB 保留、小额兑换和稳定币保证金只适用于币安", store.ErrInvalidRecord, account.TradingAccountID)
+		}
+	}
+	return nil
+}
+
+// checkMemberAgainstFundSettings 加成员（或改成员）时复查资金设置：组合已经开了 BNB 项或稳定币调平，不能再加非币安成员，
+// 否则先开设置再加成员就能绕过写设置时的检查。调用方已经持有组合锁。
+func (s *Service) checkMemberAgainstFundSettings(ctx context.Context, command AddMemberCommand) error {
+	logical, err := s.Store.GetLogicalAccount(ctx, command.SpaceID, command.LogicalAccountID)
+	if err != nil {
+		return err
+	}
+	settings, err := s.Store.ResolveFundSettings(logical)
+	if err != nil {
+		return nil // 设置读不出来时执行器也不下单，这里不再叠加拒绝
+	}
+	if !settings.BNBDiscount && !settings.BNBReserveEnabled() && !settings.DustConvert && len(settings.StablecoinTargets) == 0 {
+		return nil
+	}
+	account, err := s.Store.GetTradingAccountByID(ctx, command.TradingAccountID)
+	if err != nil {
+		return err
+	}
+	if account.Exchange != string(exchange.ExchangeBinance) {
+		return fmt.Errorf("%w: 组合开了 BNB 抵扣、BNB 保留、小额兑换或稳定币保证金，只能加币安账户，%s 不是", store.ErrInvalidRecord, account.TradingAccountID)
+	}
+	return nil
+}
+
 func (s *Service) saveSettings(
 	ctx context.Context,
 	spaceID string,
 	logicalAccountID string,
+	check func(store.LogicalAccountRecord) error,
 	write func(*store.Tx) error,
 ) (store.LogicalAccountRecord, error) {
 	unlock, lockErr := s.Store.LockLogicalAccountContext(ctx, spaceID, logicalAccountID)
@@ -209,6 +239,15 @@ func (s *Service) saveSettings(
 		return store.LogicalAccountRecord{}, lockErr
 	}
 	defer unlock()
+	if check != nil {
+		existing, err := s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
+		if err != nil {
+			return store.LogicalAccountRecord{}, err
+		}
+		if err := check(existing); err != nil {
+			return store.LogicalAccountRecord{}, err
+		}
+	}
 	if err := s.Store.Transaction(ctx, write); err != nil {
 		return store.LogicalAccountRecord{}, err
 	}
@@ -272,6 +311,9 @@ func (s *Service) AddMember(ctx context.Context, command AddMemberCommand) error
 }
 
 func (s *Service) putMember(ctx context.Context, command AddMemberCommand) error {
+	if err := s.checkMemberAgainstFundSettings(ctx, command); err != nil {
+		return err
+	}
 	return s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		return tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
 			SpaceID: command.SpaceID, LogicalAccountID: command.LogicalAccountID,

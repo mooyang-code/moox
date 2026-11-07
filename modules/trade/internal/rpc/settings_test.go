@@ -3,6 +3,7 @@ package rpc
 import (
 	"context"
 	"testing"
+	"time"
 
 	logicalapp "github.com/mooyang-code/moox/modules/trade/internal/application/logicalaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
@@ -189,4 +190,42 @@ func TestUnreadableStoredSettingsAreReportedNotShownAsDefaults(t *testing.T) {
 	require.Empty(t, old.GetFundSettingsError(), "严格校验通不过但宽松解析读得出的旧设置照常显示")
 	require.Equal(t, "5", old.GetFundSettings().GetBnbReserveAmount())
 	require.Empty(t, old.GetOrderSettingsError())
+}
+
+type noopSyncer struct{}
+
+func (noopSyncer) SyncAccount(context.Context, string) error { return nil }
+
+// 先开 BNB 项再加非币安成员也不能绕过检查：加成员时复查资金设置。
+func TestAddingANonBinanceMemberIsRejectedWhenFundMaintenanceIsOn(t *testing.T) {
+	handler, ctx := newSettingsHandlerFor(t, tradepb.ExecutionMode_EXECUTION_MODE_LIVE)
+	handler.LogicalAccounts.Syncer = noopSyncer{}
+	require.NoError(t, handler.Store.Transaction(ctx, func(tx *store.Tx) error {
+		for _, account := range []store.TradingAccountRecord{
+			{SpaceID: "space-1", TradingAccountID: "okx-1", Name: "okx", Exchange: "OKX", Markets: []string{"SPOT"}, AccountMode: "OKX_UNIFIED", CredentialSecretID: "secret-okx"},
+			{SpaceID: "space-1", TradingAccountID: "binance-1", Name: "binance", Exchange: "BINANCE", Markets: []string{"SPOT"}, AccountMode: "BINANCE_STANDARD", CredentialSecretID: "secret-binance"},
+		} {
+			account.ExecutionMode, account.Environment, account.SettlementAsset, account.Status, account.Ready = "LIVE", "PRODUCTION", "USDT", "ENABLED", true
+			account.LastSyncAt, account.SnapshotSourceTime = time.Now().UnixMilli(), time.Now().UnixMilli()
+			if err := tx.CreateTradingAccount(account); err != nil {
+				return err
+			}
+		}
+		return nil
+	}))
+	enabled, err := handler.UpdateLogicalAccountFundSettings(ctx, &tradepb.UpdateLogicalAccountFundSettingsReq{
+		LogicalAccountId: "logical-1", Settings: &tradepb.FundSettings{BnbDiscount: true},
+	})
+	require.NoError(t, err)
+	require.Equal(t, tradepb.ErrorCode_SUCCESS, enabled.GetRetInfo().GetCode(), enabled.GetRetInfo().GetMsg())
+
+	add := func(accountID string) tradepb.ErrorCode {
+		response, err := handler.AddLogicalAccountMember(ctx, &tradepb.AddLogicalAccountMemberReq{LogicalAccountId: "logical-1", TradingAccountId: accountID, Enabled: true, Priority: 1})
+		require.NoError(t, err)
+		return response.GetRetInfo().GetCode()
+	}
+	require.Equal(t, tradepb.ErrorCode_INVALID_PARAM, add("okx-1"))
+	response, err := handler.AddLogicalAccountMember(ctx, &tradepb.AddLogicalAccountMemberReq{LogicalAccountId: "logical-1", TradingAccountId: "binance-1", Enabled: true, Priority: 1})
+	require.NoError(t, err)
+	require.Equal(t, tradepb.ErrorCode_SUCCESS, response.GetRetInfo().GetCode(), response.GetRetInfo().GetMsg())
 }
