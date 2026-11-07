@@ -23,13 +23,15 @@ const (
 	AttentionTurnoverHigh = "turnover_high"
 	// AttentionUnknownResults 是 1 分钟内下单结果未知偏多。
 	AttentionUnknownResults = "unknown_results"
+	// AttentionMarginRatioLow 是实盘账户保证金率跌到阈值以下，风控已暂停组合并减仓，等用户确认安全后手动恢复。
+	AttentionMarginRatioLow = "margin_ratio_low"
 )
 
 // attentionKinds 里每种情况都要上报，恢复后 Monitor 才能看到值回到 0。
 var attentionKinds = []string{
 	AttentionTargetRejected, AttentionAutoPaused, AttentionTargetBlocked,
 	AttentionAccountNotReady, AttentionTargetExpired, AttentionTargetReversal,
-	AttentionRateLimited, AttentionTurnoverHigh, AttentionUnknownResults,
+	AttentionRateLimited, AttentionTurnoverHigh, AttentionUnknownResults, AttentionMarginRatioLow,
 }
 
 // maxAttentionDetail 是标签的字节上限：Monitor 超过 512 字节会拒收整份上报。

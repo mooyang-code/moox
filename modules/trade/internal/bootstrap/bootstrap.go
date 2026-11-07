@@ -18,6 +18,7 @@ import (
 	equityapp "github.com/mooyang-code/moox/modules/trade/internal/application/equity"
 	"github.com/mooyang-code/moox/modules/trade/internal/application/fundmaint"
 	logicalapp "github.com/mooyang-code/moox/modules/trade/internal/application/logicalaccount"
+	"github.com/mooyang-code/moox/modules/trade/internal/application/marginmonitor"
 	operatorapp "github.com/mooyang-code/moox/modules/trade/internal/application/operator"
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
 	papersimulation "github.com/mooyang-code/moox/modules/trade/internal/application/papersimulation"
@@ -212,6 +213,29 @@ func initialize(
 		Syncer: accountSyncer{service: syncService},
 		Prices: targetapp.ExchangePriceSource{Adapters: manager},
 	}
+	// 保证金率监控：每分钟检查一次实盘账户；它复用资金维护的定时任务外壳（定时、门禁、超时一样）。
+	marginService := &marginmonitor.Service{
+		Store: tradeStore,
+		Reduce: func(
+			callCtx context.Context, spaceID, actionID, logicalAccountID string, ratio shared.Decimal, reason string,
+		) (store.OperatorActionRecord, error) {
+			result, reduceErr := operatorService.FlattenLogicalAccount(callCtx, operatorapp.FlattenCommand{
+				SpaceID: spaceID, ActionID: actionID, LogicalAccountID: logicalAccountID, Reason: reason, ReduceRatio: ratio,
+			})
+			return result.Action, reduceErr
+		},
+		Collect: func(
+			callCtx context.Context, spaceID, logicalAccountID, actionID string, accounts []store.TradingAccountRecord,
+		) (bool, error) {
+			// 归集用执行器的钱包划转；还没接入划转时监控只告警一次，请用户手动划转。
+			if targetExecutor.Transfers == nil {
+				return false, marginmonitor.ErrTransferUnavailable
+			}
+			return targetExecutor.Transfers.Collect(callCtx, spaceID,
+				store.LogicalAccountTargetRecord{SpaceID: spaceID, LogicalAccountID: logicalAccountID, TargetID: actionID}, accounts)
+		},
+	}
+	marginWorker := &traderuntime.FundWorker{Maintainer: marginService, Interval: time.Minute, Gate: lifeGate.Open}
 	operatorWorker := &traderuntime.OperatorWorker{
 		Actions: tradeStore, Resumer: operatorService, Interval: time.Second,
 	}
@@ -314,6 +338,7 @@ func initialize(
 	runWorker(paperMatcherWorker.Run)
 	runWorker(equitySampler.Run)
 	runWorker(fundWorker.Run)
+	runWorker(marginWorker.Run)
 	runWorker((&traderuntime.AttentionWorker{Store: tradeStore, Executor: targetExecutor}).Run)
 	if eventBus != nil {
 		client := eventBus

@@ -1098,6 +1098,7 @@ var TradeAttentionNames = map[string]string{
 	"rate_limited":      "交易所接口限流",
 	"turnover_high":     "组合账户成交额异常偏高",
 	"unknown_results":   "下单结果未知偏多",
+	"margin_ratio_low":  "合约保证金率过低",
 }
 
 // EventCenterAttentionNames 是事件中心上报的需要人看的情况。
