@@ -41,7 +41,7 @@ func seriesOf(subject string, tags ...string) []seriesset.Series {
 	return out
 }
 
-func unifiedFiller(f *gapFixture, universe *periodUniverse, multi bool) {
+func unifiedFiller(f *gapFixture, universe universeReader, multi bool) {
 	f.filler.universe = universe
 	f.filler.unified = func(context.Context, domain.FactorTask) (bool, error) { return multi, nil }
 }

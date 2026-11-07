@@ -58,6 +58,45 @@ type gapFiller struct {
 	// lastTried 记录每个组最近一次尝试的时间：一轮只处理 MaxGroupsPerSweep 个组，按「最久没试过的优先」轮转，
 	// 前面一直补不上的组不会让后面已经补齐的组长期得不到执行机会。
 	lastTried map[string]time.Time
+	// universeMemo 是一轮恢复里已读到的周期 marker 冻结全集，按（结果数据集、触发事件、周期）缓存：同一周期的 marker 一轮只读一次，
+	// 每轮开始时清空（读失败的不缓存）。
+	universeMemo map[universeKey]universeMemoEntry
+}
+
+type universeKey struct {
+	dataset, trigger string
+	period           int64
+}
+
+type universeMemoEntry struct {
+	universe storageio.Universe
+	found    bool
+}
+
+// computedUniverse 读周期 marker 里冻结的全集，一轮内同一（数据集、触发事件、周期）只读一次。
+func (g *gapFiller) computedUniverse(ctx context.Context, set domain.FactorTask, trigger string, period int64) (storageio.Universe, bool, error) {
+	key := universeKey{dataset: set.ResultDatasetID, trigger: trigger, period: period}
+	if cached, ok := g.universeMemo[key]; ok {
+		return cached.universe, cached.found, nil
+	}
+	universe, found, err := g.universe.ComputedUniverse(ctx, set.SpaceID, set.ResultDatasetID, trigger, period)
+	if err != nil {
+		return storageio.Universe{}, false, err
+	}
+	if g.universeMemo == nil {
+		g.universeMemo = make(map[universeKey]universeMemoEntry)
+	}
+	g.universeMemo[key] = universeMemoEntry{universe: universe, found: found}
+	return universe, found, nil
+}
+
+// markerMayBeLate 报告“读不到 marker”是否可能只是还没写：待办是实时周期跳过时记下的，marker 在这一期结果写完之后才写，
+// 恢复可能抢在它前面。待办刚记下不足 Settle 时保留待办、下一轮再试，不退回兜底推导，也不放弃。
+func (g *gapFiller) markerMayBeLate(firstSeen time.Time) bool {
+	if g.now == nil || g.cfg.Settle <= 0 {
+		return false
+	}
+	return g.now().UTC().Sub(firstSeen) < g.cfg.Settle
 }
 
 // Run 按 SweepInterval 轮询、或者被唤醒（预热完成、记入预热中跳过的项），直到 ctx 结束。
@@ -137,6 +176,7 @@ func (g *gapFiller) tick(ctx context.Context) {
 		return
 	}
 	g.expire()
+	g.universeMemo = make(map[universeKey]universeMemoEntry)
 	cutoff := g.now().UTC().Add(-g.cfg.Settle)
 	ready := g.readyTasks()
 	type groupKey struct {
@@ -375,9 +415,9 @@ func (g *gapFiller) span(set domain.FactorTask, entries []gapledger.Entry) (time
 func (g *gapFiller) fillSubjects(ctx context.Context, set domain.EngineTask, subjects []string, start, end time.Time) error {
 	taskID := set.Set.TaskID
 	pending := func() []gapledger.Entry { return g.ledger.PendingFor(taskID, subjects) }
-	runs, err := g.frozenRuns(ctx, set, pending(), start, end)
+	runs, err := g.frozenRuns(ctx, set, subjects, pending(), start, end)
 	if err != nil {
-		return fmt.Errorf("read frozen universe: %w", err) // 读取失败：保持待恢复，下轮再试
+		return fmt.Errorf("read frozen universe: %w", err)
 	}
 	for _, run := range runs {
 		if err := g.fillRun(ctx, taskID, pending, run); err != nil {
@@ -423,9 +463,11 @@ func (g *gapFiller) fillRun(ctx context.Context, taskID string, pending func() [
 	return err
 }
 
-// frozenRuns 把 [start, end) 切成按冻结全集分段的运行。非统一数据集（或没有任何周期有冻结全集）返回原区间的一次运行。
-// 有冻结全集时只覆盖有待办的周期：相邻的、冻结全集相同的周期合并，没有冻结全集的周期单独成段（期望序列由数据层兜底）。
-func (g *gapFiller) frozenRuns(ctx context.Context, set domain.EngineTask, entries []gapledger.Entry, start, end time.Time) ([]fillRun, error) {
+// frozenRuns 把 [start, end) 切成按冻结全集分段的运行。非统一数据集（或没有任何周期有冻结全集、也没有要保留的周期）返回原区间的一次运行。
+// 否则只覆盖有待办的周期：相邻的、冻结全集相同的周期合并（先按本批标的过滤全集再比较，别的标的上下架不切碎批次；不相邻的周期不合并），
+// 没有冻结全集的周期单独成段（期望序列由数据层兜底）。只处理时序成员的待办：截面成员由 fillCross 按周期恢复。
+// 某一期读 marker 失败，或读不到 marker 但待办刚记下不足 Settle（marker 可能还没写），这一期不运行、待办保留到下一轮，其余各期照常。
+func (g *gapFiller) frozenRuns(ctx context.Context, set domain.EngineTask, subjects []string, entries []gapledger.Entry, start, end time.Time) ([]fillRun, error) {
 	whole := []fillRun{{start: start, end: end}}
 	if g.unified == nil || g.universe == nil {
 		return whole, nil
@@ -438,44 +480,59 @@ func (g *gapFiller) frozenRuns(ctx context.Context, set domain.EngineTask, entri
 	if err != nil {
 		return nil, err
 	}
-	triggers := make(map[int64]string)
+	type periodInfo struct {
+		trigger   string
+		firstSeen time.Time // 这一期待办里最晚记下的时刻
+	}
+	infos := make(map[int64]*periodInfo)
 	var periods []int64
 	for _, entry := range entries {
-		if entry.Period.Before(start) || !entry.Period.Before(end) {
+		if entry.Period.Before(start) || !entry.Period.Before(end) || memberIsCross(set, entry.Member) {
 			continue
 		}
 		at := entry.Period.Unix()
-		if _, seen := triggers[at]; !seen {
+		info := infos[at]
+		if info == nil {
+			info = &periodInfo{}
+			infos[at] = info
 			periods = append(periods, at)
-			triggers[at] = ""
 		}
-		if triggers[at] == "" {
-			triggers[at] = entry.Trigger
+		if info.trigger == "" {
+			info.trigger = entry.Trigger
+		}
+		if entry.FirstSeen.After(info.firstSeen) {
+			info.firstSeen = entry.FirstSeen
 		}
 	}
 	sort.Slice(periods, func(i, j int) bool { return periods[i] < periods[j] })
 	var runs []fillRun
-	anyFrozen := false
+	anyFrozen, anyHeld := false, false
 	for _, at := range periods {
+		info := infos[at]
 		var series []seriesset.Series
-		if trigger := triggers[at]; trigger != "" {
-			universe, found, err := g.universe.ComputedUniverse(ctx, set.Set.SpaceID, set.Set.ResultDatasetID, trigger, at)
+		if info.trigger != "" {
+			universe, found, err := g.computedUniverse(ctx, set.Set, info.trigger, at)
 			if err != nil {
-				return nil, err
+				log.WarnContextf(ctx, "factor_gap_universe_read_failed task_id=%s period=%d error=%v", set.Set.TaskID, at, err)
+				anyHeld = true
+				continue // 只让读失败的这一期留待下一轮
 			}
 			if found {
-				series = universe.Series
+				series = seriesOfSubjects(universe.Series, subjects)
+			} else if g.markerMayBeLate(info.firstSeen) {
+				anyHeld = true
+				continue // marker 可能还没写：待办保留，下一轮再试
 			}
 		}
 		anyFrozen = anyFrozen || len(series) > 0
 		period := time.Unix(at, 0).UTC()
-		if last := len(runs) - 1; last >= 0 && sameSeries(runs[last].series, series) {
+		if last := len(runs) - 1; last >= 0 && runs[last].end.Equal(period) && sameSeries(runs[last].series, series) {
 			runs[last].end = period.Add(duration)
 			continue
 		}
 		runs = append(runs, fillRun{start: period, end: period.Add(duration), series: series})
 	}
-	if !anyFrozen {
+	if !anyFrozen && !anyHeld {
 		return whole, nil
 	}
 	return runs, nil
@@ -556,9 +613,17 @@ func (g *gapFiller) fillCross(ctx context.Context, set domain.EngineTask, entrie
 	if trigger == "" {
 		return g.ledger.MarkGaveUp(refs, "universe_unavailable")
 	}
-	universe, found, err := g.universe.ComputedUniverse(ctx, set.Set.SpaceID, set.Set.ResultDatasetID, trigger, period.Unix())
+	universe, found, err := g.computedUniverse(ctx, set.Set, trigger, period.Unix())
 	if err != nil {
 		return fmt.Errorf("read frozen universe: %w", err) // 读取失败：保持待恢复，下轮再试
+	}
+	if !found {
+		// marker 可能还没写（待办是实时周期跳过时记下的，marker 在结果写完之后才写）：刚记下不足 Settle 先保留，下一轮再试。
+		for _, entry := range entries {
+			if g.markerMayBeLate(entry.FirstSeen) {
+				return nil
+			}
+		}
 	}
 	if !found || len(universe.Subjects) == 0 {
 		return g.ledger.MarkGaveUp(refs, "universe_unavailable")

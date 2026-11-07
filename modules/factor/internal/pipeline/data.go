@@ -20,10 +20,12 @@ type Data interface {
 	WindowStatuses() []WarmupStatus
 }
 
-// SeriesExpecter 是数据层的可选能力：为补算类计划（人工补算、失效重算、时序因子空洞恢复）构造统一数据集的期望序列。
-// 这些路径拿不到周期 marker 里冻结的序列全集，改用本地存储里“应存在”的（标的、series_tag）：序列在计划区间结束之前已有数据，
-// 就是应存在，它在整个区间（含回看）都没数据才算缺失，与单序列数据集“标的整个区间都没数据才算缺失”同一粒度；
-// 新上永续的币，上市之前的区间不是缺失。单序列数据集（序列不跨现货、永续）返回 nil，计划保持按标的处理。
+// SeriesExpecter 是数据层的可选能力：为拿不到冻结全集的补算类计划（人工补算、失效重算，以及读不到周期 marker 的空洞恢复）
+// 构造统一数据集（源数据集属性 market_type=multi）的期望序列。能读到周期 marker 的恢复路径直接用冻结的 universe_series，不走这里。
+// 这里改用本地存储里“应存在”的（标的、series_tag）：序列在计划区间结束之前已有数据、并且没有下架就是应存在——
+// 下架看它最后一行相对数据源最新一根沉默了多久（超过 max(6 小时, 2×周期) 才算下架），与回看根数、give_up_after 无关；
+// 区间内断档、最近一期晚到的序列仍算应存在。这是推测（Plan.ExpectedSeriesDerived）：非只填充计划里因推测缺数被跳过的 tag 不写 NULL。
+// 单序列数据集返回 nil，计划保持按标的处理。
 type SeriesExpecter interface {
 	ExpectedSeries(ctx context.Context, plan Plan) ([]seriesset.Series, error)
 }
