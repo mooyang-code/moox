@@ -732,16 +732,16 @@ func (p *PortfolioMargin) GetBNBFeeDiscount(ctx context.Context) (bool, error) {
 }
 
 // ListDust 列出杠杆账户里可以兑换成 BNB 的小额资产（accountType=MARGIN）。
-func (p *PortfolioMargin) ListDust(ctx context.Context) ([]execution.DustAsset, error) {
+func (p *PortfolioMargin) ListDust(ctx context.Context) ([]exchange.DustAsset, error) {
 	if sub := p.markets[exchange.MarketTypeSpot]; sub != nil {
 		return sub.ListDust(ctx)
 	}
 	return nil, nil
 }
 
-func (p *PortfolioMargin) ConvertDust(ctx context.Context, assets []string) (execution.DustResult, error) {
+func (p *PortfolioMargin) ConvertDust(ctx context.Context, assets []string) (exchange.DustConversion, error) {
 	if sub := p.markets[exchange.MarketTypeSpot]; sub != nil {
 		return sub.ConvertDust(ctx, assets)
 	}
-	return execution.DustResult{}, nil
+	return exchange.DustConversion{}, nil
 }

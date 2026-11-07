@@ -8,13 +8,13 @@ import (
 )
 
 func TestParseDefaultsAndExcludedAssets(t *testing.T) {
-	empty, err := Parse("{}")
+	empty, err := parseStrict("{}")
 	require.NoError(t, err)
 	require.True(t, empty.ReserveRatio.IsZero())
 	require.False(t, empty.BNBReserveEnabled())
 	require.False(t, empty.ExcludedFromManaged("BNB"), "没开 BNB 保留时 BNB 是普通资产")
 
-	settings, err := Parse(`{
+	settings, err := parseStrict(`{
 		"reserve_ratio": "0.05", "bnb_reserve_amount": "200",
 		"stablecoin_margin": {"usdc": "0.5", "USDT": "0.5"},
 		"margin_coins": {"eth": "100"}, "arbitrage_base_assets": ["btc"]}`)
@@ -33,7 +33,7 @@ func TestParseRejectsInvalidValues(t *testing.T) {
 		`not json`, `{"reserve_ratio":"1"}`, `{"reserve_ratio":"-0.1"}`, `{"reserve_ratio":"abc"}`,
 		`{"bnb_reserve_amount":"-1"}`, `{"margin_coins":{"ETH":"-5"}}`,
 	} {
-		_, err := Parse(raw)
+		_, err := parseStrict(raw)
 		require.Error(t, err, raw)
 	}
 }

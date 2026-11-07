@@ -39,3 +39,16 @@ type SymbolConfigurer interface {
 	SetLeverage(context.Context, exchange.SymbolKey, shared.Decimal) error
 	SetMarginMode(context.Context, exchange.SymbolKey, exchange.MarginMode) error
 }
+
+// FeeDiscountConfigurer 是支持“用 BNB 抵扣手续费”开关的场所才实现的能力（币安）。
+// 普通账户现货、合约各有一个开关，统一账户的合约和现货分别走不同接口；实现要把它们一起设置。
+type FeeDiscountConfigurer interface {
+	SetBNBFeeDiscount(ctx context.Context, enabled bool) error
+	GetBNBFeeDiscount(ctx context.Context) (bool, error)
+}
+
+// DustConverter 是支持把小额资产兑换成 BNB 的场所才实现的能力（币安，现货或统一账户的杠杆钱包）。
+type DustConverter interface {
+	ListDust(ctx context.Context) ([]exchange.DustAsset, error)
+	ConvertDust(ctx context.Context, assets []string) (exchange.DustConversion, error)
+}

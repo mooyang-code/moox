@@ -3,6 +3,7 @@
 package engine
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/quant"
@@ -88,6 +89,10 @@ type State struct {
 	Rules map[string]RuleState `json:"rules,omitempty"`
 	// Targets 是组合目标权重，键是标的与市场（见 TargetKey）：同一个币的现货与永续各自独立、不互相抵消。
 	Targets map[string]string `json:"targets,omitempty"`
+	// Members 与 Pool 只有策略池用：Members 是成员 id → 成员自己的引擎状态（规则状态与成员目标），按成员隔开，规则 id 不会撞名；
+	// Pool 是池的跨期状态（上期比例、成员净值序列与模拟账本），由 pool 包编解码。
+	Members map[string]State `json:"members,omitempty"`
+	Pool    json.RawMessage  `json:"pool,omitempty"`
 }
 
 // 决策状态与跳过原因。
@@ -143,6 +148,41 @@ type Summary struct {
 	Cash     string   `json:"cash,omitempty"`
 	Turnover string   `json:"turnover,omitempty"`
 	Notes    []string `json:"notes,omitempty"`
+	// Pool 是策略池本期的明细（成员净值、分配比例、择时与贡献），非池为空。
+	Pool *PoolSummary `json:"pool,omitempty"`
+}
+
+// PoolSummary 是策略池一期的明细。
+type PoolSummary struct {
+	// Method 是分配方式（fixed 或 rotation）；Timing 为真表示叠加了择时。
+	Method string `json:"method"`
+	Timing bool   `json:"timing,omitempty"`
+	// Members 按池里的成员顺序。
+	Members []PoolMemberSummary `json:"members"`
+}
+
+// PoolMemberSummary 是一个成员一期的明细。
+type PoolMemberSummary struct {
+	ID string `json:"id"`
+	// Status 是成员本期的求值结果：ok；skipped 表示本期没通过（沿用上一期的目标权重），Reason 与 Detail 说明原因。
+	Status string `json:"status"`
+	Reason string `json:"reason,omitempty"`
+	Detail string `json:"detail,omitempty"`
+	// Equity 是成员模拟账本本期末的净值（初始为 1）；Bankrupt 为真表示成员模拟爆仓，此后不再分配资金。
+	Equity   float64 `json:"equity"`
+	Bankrupt bool    `json:"bankrupt,omitempty"`
+	// Base 是分配方式给出的比例（择时与步长之前）；Timing 是择时系数（1 或 0，没有择时时为空）；RatioBefore 是乘择时之后、
+	// 步长限制之前的比例；Ratio 是步长限制之后、实际用于合成的比例。
+	Base        string `json:"base"`
+	Timing      string `json:"timing,omitempty"`
+	RatioBefore string `json:"ratio_before"`
+	Ratio       string `json:"ratio"`
+	// Rank 是轮动的综合名次分（各因子名次按权重加权，越小越靠前），只有 rotation 且历史足够时才有。
+	Rank *float64 `json:"rank,omitempty"`
+	// Gross 与 Net 是成员目标乘比例之后的总敞口与净敞口；Targets 是各（标的|市场）的贡献权重（比例 × 成员目标权重）。
+	Gross   string            `json:"gross"`
+	Net     string            `json:"net"`
+	Targets map[string]string `json:"targets,omitempty"`
 }
 
 // Decision 是一次求值的产物。Status 为 skipped 时 Targets 为空、State 等于前序状态。

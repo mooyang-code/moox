@@ -24,6 +24,8 @@ type mergedReadiness struct {
 	Reason, Detail string
 	// Results 是各市场的就绪结论（市场 → 结论）。
 	Results map[string]readiness.Result
+	// Members 只有策略池用：各成员各自的就绪结论（成员 id → 结论）。池自己的 Reason 只在所有成员都没通过时非空。
+	Members map[string]mergedReadiness
 	// Unavailable 是本期整体不可用的市场（数据类原因，市场 → 说明）：只让这个市场不可用，不整期跳过。
 	Unavailable map[string]string
 }
@@ -35,7 +37,11 @@ type mergedReadiness struct {
 //
 // 各 View 的因子指纹写进本期输入记录，下一期据此核对相邻周期。
 func (h *Handler) checkReady(p *period, adjacent *store.InputRecord) mergedReadiness {
-	resolved := p.runtime.resolved
+	return h.checkReadyFor(p, p.runtime.resolved, adjacent)
+}
+
+// checkReadyFor 按一个绑定（普通策略的绑定，或策略池一个成员的绑定）做就绪判断，只看这个绑定用到的市场与因子。
+func (h *Handler) checkReadyFor(p *period, resolved input.Resolved, adjacent *store.InputRecord) mergedReadiness {
 	merged := mergedReadiness{Results: map[string]readiness.Result{}, Unavailable: map[string]string{}}
 	var dataReason, dataDetail string
 	for _, market := range resolved.Markets() {
@@ -46,8 +52,14 @@ func (h *Handler) checkReady(p *period, adjacent *store.InputRecord) mergedReadi
 		}
 		result := readiness.Check(resolved.ReadinessBinding(), previous, p.events[market])
 		merged.Results[market] = result
+		// 策略池里多个成员可能用同一个 View：各成员的因子指纹合并成一份。
 		view := p.input.Views[viewID]
-		view.Factors = result.Hashes
+		if view.Factors == nil {
+			view.Factors = make(map[string]string, len(result.Hashes))
+		}
+		for factor, hash := range result.Hashes {
+			view.Factors[factor] = hash
+		}
 		p.input.Views[viewID] = view
 		switch {
 		case result.Reason == "":
@@ -135,7 +147,7 @@ func (h *Handler) putArrival(ctx context.Context, instance store.Instance, sessi
 
 // recordArrival 在门禁返回等待时把到达的事件记下（尽力而为，失败只记日志；事件本身会重投）。
 func (h *Handler) recordArrival(ctx context.Context, instance store.Instance, rt *runtime, message *eventpb.EventMessage, payload *storagepb.ViewDataReady, periodTime time.Time) {
-	if rt == nil || rt.sessionID == "" || len(rt.resolved.Tasks) < 2 || rt.resolved.Calendar == "" {
+	if rt == nil || rt.sessionID == "" || (len(rt.resolved.Tasks) < 2 && rt.pool == nil) || rt.resolved.Calendar == "" {
 		return
 	}
 	boundary, err := input.FromStorageStart(rt.resolved.Calendar, rt.resolved.Bar, periodTime)

@@ -42,7 +42,7 @@ func TestParseLenientDefaultsAndStrictAgreeOnGoodSettings(t *testing.T) {
 	lenient, warning, err := ParseLenient(raw)
 	require.NoError(t, err)
 	require.NoError(t, warning)
-	strict, err := Parse(raw)
+	strict, err := parseStrict(raw)
 	require.NoError(t, err)
 	require.Equal(t, strict, lenient)
 	empty, warning, err := ParseLenient("")
@@ -55,13 +55,13 @@ func TestParseLenientDefaultsAndStrictAgreeOnGoodSettings(t *testing.T) {
 // 不能出现严格一侧认为 BTC 是底仓、宽松一侧不认，执行器就把底仓平掉。
 func TestParseLenientMatchesStrictOnKeyCase(t *testing.T) {
 	for _, raw := range []string{
-		`{"ARBITRAGE_BASE_ASSETS":["BTC"],"BNB_RESERVE_AMOUNT":"200","Margin_Coins":{"ETH":"100"},"Stablecoin_Margin":{"USDC":"0.5"},"RESERVE_RATIO":"0.05"}`,
+		`{"ARBITRAGE_BASE_ASSETS":["BTC"],"BNB_RESERVE_AMOUNT":"200","Margin_Coins":{"ETH":"100"},"Stablecoin_Margin":{"USDC":"0.5","USDT":"0.5"},"RESERVE_RATIO":"0.05"}`,
 		`{"Arbitrage_Base_Assets":["BTC"]}`,
 	} {
 		lenient, warning, err := ParseLenient(raw)
 		require.NoError(t, err, raw)
 		require.NoError(t, warning, raw)
-		strict, err := Parse(raw)
+		strict, err := parseStrict(raw)
 		require.NoError(t, err, raw)
 		require.Equal(t, strict, lenient, raw)
 		require.True(t, lenient.IsArbitrageBase("BTC"), raw)

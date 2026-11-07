@@ -92,7 +92,9 @@ const skipReasons: Record<string, string> = {
   history_insufficient: "历史覆盖不足",
   out_of_order: "乱序周期",
   expired: "周期已过期",
-  infra_retry_exhausted: "读取重试耗尽"
+  infra_retry_exhausted: "读取重试耗尽",
+  market_missing: "另一个市场的数据未到",
+  pool_warmup_failed: "策略池预热失败"
 };
 
 export function skipReasonLabel(reason?: string): string {

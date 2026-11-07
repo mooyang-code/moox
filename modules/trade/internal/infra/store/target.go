@@ -30,6 +30,8 @@ type BlockedTarget struct {
 	InstrumentID string `json:"instrument_id"`
 	Quantity     string `json:"quantity"`
 	Reason       string `json:"reason"`
+	// Deferred 为真表示这一项不是被拦下，而是被单币每小时上限顺延到下一个整点。
+	Deferred bool `json:"deferred,omitempty"`
 }
 
 type LogicalAccountTargetRecord struct {

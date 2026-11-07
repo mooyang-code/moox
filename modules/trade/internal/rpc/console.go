@@ -79,8 +79,9 @@ func (s *ConsoleServer) CreatePaperSimulation(
 	result, err := s.Paper.Create(ctx, papersimulation.CreateCommand{
 		SpaceID: spaceID, AccountName: strings.TrimSpace(req.GetAccountName()),
 		LogicalAccountName: strings.TrimSpace(req.GetLogicalAccountName()),
-		ControlMode:        controlModeFromPB(req.GetControlMode()),
-		Exchange:           exchangeFromPB(req.GetExchange()), Markets: marketsFromPB(req.GetMarkets()),
+		LogicalAccountID:   strings.TrimSpace(req.GetLogicalAccountId()), Priority: int(req.GetPriority()),
+		ControlMode: controlModeFromPB(req.GetControlMode()),
+		Exchange:    exchangeFromPB(req.GetExchange()), Markets: marketsFromPB(req.GetMarkets()),
 		SettlementAsset: strings.TrimSpace(req.GetSettlementAsset()), MarginMode: exchange.MarginMode(req.GetMarginMode()),
 		InitialBalance: initial, MakerFeeRate: maker, TakerFeeRate: taker, SlippageBPS: slippage,
 	})
@@ -157,9 +158,8 @@ func (s *ConsoleServer) GetExecutionCapabilities(
 		CanPlaceOrder: value.CanPlaceOrder, UnavailableReason: value.UnavailableReason,
 		CanClosePaperSimulation: value.CanClosePaperSimulation,
 	}
-	if _, ledgerErr := s.ledgerSource(accountRecord.TradingAccountID); ledgerErr == nil {
-		capabilities.Ledger = true
-	}
+	_, ledgerErr := s.ledgerSource(accountRecord.TradingAccountID)
+	capabilities.Ledger = ledgerCapability(ledgerErr)
 	for _, item := range value.OrderTypes {
 		capabilities.OrderTypes = append(capabilities.OrderTypes, orderTypeToPB(string(item)))
 	}
@@ -194,7 +194,7 @@ func (s *ConsoleServer) ListTradableInstruments(
 	}
 	rsp := &tradepb.ListTradableInstrumentsRsp{RetInfo: success()}
 	for _, record := range records {
-		if record.Status != "TRADING" && record.Status != "live" {
+		if !exchange.StatusTradable(record.Status) {
 			continue
 		}
 		if record.SettlementAsset != "" && record.SettlementAsset != account.SettlementAsset {

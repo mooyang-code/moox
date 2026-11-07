@@ -11,7 +11,9 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/application/exposure"
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
 	targetapp "github.com/mooyang-code/moox/modules/trade/internal/application/target"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/fundsettings"
 	logicaldomain "github.com/mooyang-code/moox/modules/trade/internal/domain/logicalaccount"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/ordersettings"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
@@ -47,6 +49,8 @@ type Service struct {
 	Prices         targetapp.PriceSource
 	Now            func() time.Time
 	MaxSnapshotAge time.Duration
+	// OnFundSettingsChanged 在资金设置保存后调用，通知资金维护任务重新检查；为空时不通知。
+	OnFundSettingsChanged func(spaceID, logicalAccountID string)
 }
 
 type AccountSyncer interface {
@@ -122,6 +126,135 @@ func (s *Service) UpdateName(
 	return s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
 }
 
+// UpdateOrderSettings 校验并保存下单设置。每次收敛都读最新设置，保存后对之后的收敛立即生效。
+func (s *Service) UpdateOrderSettings(
+	ctx context.Context,
+	spaceID string,
+	logicalAccountID string,
+	document ordersettings.Document,
+) (store.LogicalAccountRecord, error) {
+	if s == nil || s.Store == nil {
+		return store.LogicalAccountRecord{}, ErrServiceConfig
+	}
+	canonical, err := document.Canonical()
+	if err != nil {
+		return store.LogicalAccountRecord{}, fmt.Errorf("%w: %v", store.ErrInvalidRecord, err)
+	}
+	return s.saveSettings(ctx, spaceID, logicalAccountID, nil, func(tx *store.Tx) error {
+		return tx.SetLogicalAccountOrderSettings(spaceID, logicalAccountID, canonical)
+	})
+}
+
+// UpdateFundSettings 校验并保存资金设置，保存后通知资金维护任务重新检查。
+func (s *Service) UpdateFundSettings(
+	ctx context.Context,
+	spaceID string,
+	logicalAccountID string,
+	document fundsettings.Document,
+) (store.LogicalAccountRecord, error) {
+	if s == nil || s.Store == nil {
+		return store.LogicalAccountRecord{}, ErrServiceConfig
+	}
+	// 结算币在组合创建后不变，先读出来给校验用（稳定币必须含它、保证金币和底仓不能写它）。
+	current, err := s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
+	if err != nil {
+		return store.LogicalAccountRecord{}, err
+	}
+	parsed, canonical, err := fundsettings.ParseDocumentForWrite(document, current.SettlementAsset)
+	if err != nil {
+		return store.LogicalAccountRecord{}, fmt.Errorf("%w: %v", store.ErrInvalidRecord, err)
+	}
+	maintenance := parsed.BNBDiscount || parsed.BNBReserveEnabled() || parsed.DustConvert || len(parsed.StablecoinTargets) > 0
+	// 下面的检查读组合和成员的当前状态，放在组合锁里做：和加成员、改成员互斥，不会检查通过后成员又变了。
+	check := func(existing store.LogicalAccountRecord) error {
+		// BNB 抵扣、BNB 保留、小额兑换和稳定币调平只对实盘组合生效：模拟盘组合设了也没有任何维护任务去补，
+		// 换算目标时却会一直扣着 BNB 的缺口，所以直接拒绝。
+		if existing.ExecutionMode == string(exchange.ExecutionModePaper) && maintenance {
+			return fmt.Errorf("%w: 模拟盘组合不支持 BNB 抵扣、BNB 保留、小额兑换和稳定币保证金（只对实盘生效）", store.ErrInvalidRecord)
+		}
+		if !maintenance {
+			return nil
+		}
+		return s.requireBinanceMembers(ctx, spaceID, logicalAccountID)
+	}
+	record, err := s.saveSettings(ctx, spaceID, logicalAccountID, check, func(tx *store.Tx) error {
+		return tx.SetLogicalAccountFundSettings(spaceID, logicalAccountID, canonical)
+	})
+	if err == nil && s.OnFundSettingsChanged != nil {
+		s.OnFundSettingsChanged(spaceID, logicalAccountID)
+	}
+	return record, err
+}
+
+// requireBinanceMembers 要求组合的全部成员（含停用成员）都是币安账户：BNB 抵扣、BNB 保留、小额兑 BNB、稳定币调平都是币安的功能。
+func (s *Service) requireBinanceMembers(ctx context.Context, spaceID, logicalAccountID string) error {
+	members, err := s.Store.ListLogicalAccountMembers(ctx, spaceID, logicalAccountID, true)
+	if err != nil {
+		return err
+	}
+	for _, member := range members {
+		account, err := s.Store.GetTradingAccountByID(ctx, member.TradingAccountID)
+		if err != nil {
+			return err
+		}
+		if account.Exchange != string(exchange.ExchangeBinance) {
+			return fmt.Errorf("%w: 成员 %s 不是币安账户，BNB 抵扣、BNB 保留、小额兑换和稳定币保证金只适用于币安", store.ErrInvalidRecord, account.TradingAccountID)
+		}
+	}
+	return nil
+}
+
+// checkMemberAgainstFundSettings 加成员（或改成员）时复查资金设置：组合已经开了 BNB 项或稳定币调平，不能再加非币安成员，
+// 否则先开设置再加成员就能绕过写设置时的检查。调用方已经持有组合锁。
+func (s *Service) checkMemberAgainstFundSettings(ctx context.Context, command AddMemberCommand) error {
+	logical, err := s.Store.GetLogicalAccount(ctx, command.SpaceID, command.LogicalAccountID)
+	if err != nil {
+		return err
+	}
+	settings, err := s.Store.ResolveFundSettings(logical)
+	if err != nil {
+		return nil // 设置读不出来时执行器也不下单，这里不再叠加拒绝
+	}
+	if !settings.BNBDiscount && !settings.BNBReserveEnabled() && !settings.DustConvert && len(settings.StablecoinTargets) == 0 {
+		return nil
+	}
+	account, err := s.Store.GetTradingAccountByID(ctx, command.TradingAccountID)
+	if err != nil {
+		return err
+	}
+	if account.Exchange != string(exchange.ExchangeBinance) {
+		return fmt.Errorf("%w: 组合开了 BNB 抵扣、BNB 保留、小额兑换或稳定币保证金，只能加币安账户，%s 不是", store.ErrInvalidRecord, account.TradingAccountID)
+	}
+	return nil
+}
+
+func (s *Service) saveSettings(
+	ctx context.Context,
+	spaceID string,
+	logicalAccountID string,
+	check func(store.LogicalAccountRecord) error,
+	write func(*store.Tx) error,
+) (store.LogicalAccountRecord, error) {
+	unlock, lockErr := s.Store.LockLogicalAccountContext(ctx, spaceID, logicalAccountID)
+	if lockErr != nil {
+		return store.LogicalAccountRecord{}, lockErr
+	}
+	defer unlock()
+	if check != nil {
+		existing, err := s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
+		if err != nil {
+			return store.LogicalAccountRecord{}, err
+		}
+		if err := check(existing); err != nil {
+			return store.LogicalAccountRecord{}, err
+		}
+	}
+	if err := s.Store.Transaction(ctx, write); err != nil {
+		return store.LogicalAccountRecord{}, err
+	}
+	return s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
+}
+
 func (s *Service) AddMember(ctx context.Context, command AddMemberCommand) error {
 	if s == nil || s.Store == nil {
 		return ErrServiceConfig
@@ -179,6 +312,9 @@ func (s *Service) AddMember(ctx context.Context, command AddMemberCommand) error
 }
 
 func (s *Service) putMember(ctx context.Context, command AddMemberCommand) error {
+	if err := s.checkMemberAgainstFundSettings(ctx, command); err != nil {
+		return err
+	}
 	return s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		return tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
 			SpaceID: command.SpaceID, LogicalAccountID: command.LogicalAccountID,
@@ -547,7 +683,7 @@ func (s *Service) supportedInstruments(ctx context.Context, members []store.Logi
 			return nil, err
 		}
 		for _, instrument := range instruments {
-			if instrument.Status != "TRADING" && instrument.Status != "live" {
+			if !exchange.StatusTradable(instrument.Status) {
 				continue
 			}
 			if instrument.SettlementAsset != "" &&

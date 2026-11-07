@@ -76,9 +76,8 @@ func TestLogicalAccountTargetConsumerPersistsLatestAndWorkerConverges(t *testing
 	f.orders.Now = func() time.Time { return now }
 	executor := &targetapp.Executor{
 		Store: f.store, Orders: f.orders,
-		Prices:           targetapp.ExchangePriceSource{Adapters: adapterSource{adapter: f.adapter}},
-		Now:              func() time.Time { return now },
-		MaxChildNotional: shared.MustDecimal("1000000"),
+		Prices: targetapp.ExchangePriceSource{Adapters: adapterSource{adapter: f.adapter}},
+		Now:    func() time.Time { return now },
 	}
 	worker := &traderuntime.TargetWorker{
 		Store: f.store, Executor: executor, Interval: time.Hour,
@@ -143,9 +142,8 @@ func testEmptyFullTargetClosesExistingPosition(t *testing.T) {
 	f.orders.Now = func() time.Time { return now }
 	executor := targetapp.Executor{
 		Store: f.store, Orders: f.orders,
-		Prices:           targetapp.ExchangePriceSource{Adapters: adapterSource{adapter: f.adapter}},
-		Now:              func() time.Time { return now },
-		MaxChildNotional: shared.MustDecimal("1000000"),
+		Prices: targetapp.ExchangePriceSource{Adapters: adapterSource{adapter: f.adapter}},
+		Now:    func() time.Time { return now },
 	}
 	converged, err := executor.Converge(
 		context.Background(),
@@ -178,9 +176,8 @@ func TestLogicalAccountTargetRejectsStaleReferenceBeforePlacement(t *testing.T) 
 	f.orders.Validator.Now = func() time.Time { return now }
 	executor := targetapp.Executor{
 		Store: f.store, Orders: f.orders,
-		Prices:           targetapp.ExchangePriceSource{Adapters: adapterSource{adapter: f.adapter}},
-		Now:              func() time.Time { return now },
-		MaxChildNotional: shared.MustDecimal("1000000"),
+		Prices: targetapp.ExchangePriceSource{Adapters: adapterSource{adapter: f.adapter}},
+		Now:    func() time.Time { return now },
 	}
 	_, err := executor.Converge(
 		context.Background(),
@@ -246,7 +243,8 @@ func seedLogicalAccount(t *testing.T, tradeStore *store.Store) {
 	require.NoError(t, err)
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
-			SpaceID: testSpace, LogicalAccountID: testLogicalAccount,
+			OrderSettingsJSON: legacyOrderSettings,
+			SpaceID:           testSpace, LogicalAccountID: testLogicalAccount,
 			Name:            "E2E logical account",
 			OwnerInstanceID: testRunner, OwnerSessionID: "session-e2e",
 			ExecutionMode: account.ExecutionMode, SettlementAsset: "USDT",

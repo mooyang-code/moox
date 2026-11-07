@@ -40,7 +40,8 @@ func TestTargetLiveBalanceRejectionRefreshesBeforeRoutingNextChildE2E(t *testing
 			return err
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
-			SpaceID: testSpace, LogicalAccountID: testLogicalAccount, Name: "Live capacity routing",
+			OrderSettingsJSON: legacyOrderSettings,
+			SpaceID:           testSpace, LogicalAccountID: testLogicalAccount, Name: "Live capacity routing",
 			OwnerInstanceID: "live-instance", OwnerSessionID: "live-session",
 			ExecutionMode: "LIVE", SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
@@ -112,7 +113,8 @@ func TestTargetCapacitySplitUsesActualPaperFundsAndFillsE2E(t *testing.T) {
 			return err
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
-			SpaceID: testSpace, LogicalAccountID: testLogicalAccount, Name: "Capacity routing",
+			OrderSettingsJSON: legacyOrderSettings,
+			SpaceID:           testSpace, LogicalAccountID: testLogicalAccount, Name: "Capacity routing",
 			OwnerInstanceID: "capacity-instance", OwnerSessionID: "capacity-session",
 			ExecutionMode: "PAPER", SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
@@ -233,7 +235,8 @@ func TestTargetRejectionDoesNotLoopE2E(t *testing.T) {
 	f := newFixtureWithMode(t, exchange.MarketTypeSpot, fake, exchange.ExecutionModeLive)
 	require.NoError(t, f.store.Transaction(ctx, func(tx *store.Tx) error {
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
-			SpaceID: testSpace, LogicalAccountID: testLogicalAccount, Name: "reject",
+			OrderSettingsJSON: legacyOrderSettings,
+			SpaceID:           testSpace, LogicalAccountID: testLogicalAccount, Name: "reject",
 			OwnerInstanceID: "live-instance", OwnerSessionID: "live-session",
 			ExecutionMode: "LIVE", SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",

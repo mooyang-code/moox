@@ -127,7 +127,7 @@ func TestOrdinaryPaperRPCWorkerFillAndReplay(t *testing.T) {
 			logical, err := db.GetLogicalAccount(ctx, testSpace, logicalID)
 			require.NoError(t, err)
 			require.Equal(t, "MANUAL", logical.ControlMode)
-			require.Equal(t, "paper simulation created", logical.PauseReason)
+			require.Equal(t, "新建的模拟账户，等待恢复自动执行", logical.PauseReason)
 			require.NoError(t, db.Close())
 			reopened, err := store.Open(path)
 			require.NoError(t, err)

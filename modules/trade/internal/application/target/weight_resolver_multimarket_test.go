@@ -152,6 +152,7 @@ func TestExcludedAssetWarningOncePerDay(t *testing.T) {
 func TestConversionEquityDeductsReserveRatioAndBNBShortfall(t *testing.T) {
 	// 权益 2000 + 现货 BTC 1000 = 3000；预留 10% = 300；BNB 保留 500，现有 1 个 BNB = 100，还差 400。
 	tradeStore := newMixedResolverStore(t, `{"reserve_ratio":"0.1","bnb_reserve_amount":"500"}`)
+	makeBinanceProduction(t, tradeStore, "account-a")
 	resolver := WeightResolver{Store: tradeStore, Prices: targetPriceStub{price: shared.MustDecimal("100")}, Equity: conversionEquityStub{}, Now: func() time.Time { return time.UnixMilli(2000) }}
 
 	conversion, err := resolver.Resolve(context.Background(), 0, mixedRequest(weightTarget("BTC-USDT-SPOT", "SPOT", "0.5")), "space-1")
@@ -162,6 +163,7 @@ func TestConversionEquityDeductsReserveRatioAndBNBShortfall(t *testing.T) {
 
 	// BNB 买到位（市值不低于保留金额）后不再扣。
 	enough := newMixedResolverStore(t, `{"bnb_reserve_amount":"100"}`)
+	makeBinanceProduction(t, enough, "account-a")
 	resolver.Store = enough
 	conversion, err = resolver.Resolve(context.Background(), 0, mixedRequest(weightTarget("BTC-USDT-SPOT", "SPOT", "0.5")), "space-1")
 	require.NoError(t, err)
@@ -179,4 +181,90 @@ func TestShortingIsCheckedPerInstrumentMarket(t *testing.T) {
 
 	require.ErrorIs(t, err, ErrPermanent)
 	require.Contains(t, err.Error(), "ETH-USDT-SPOT")
+}
+
+// makeBinanceProduction 把测试账户改成币安生产环境的实盘账户：只有它们才有资金维护（BNB 补买）。
+func makeBinanceProduction(t *testing.T, tradeStore *store.Store, accountID string) {
+	t.Helper()
+	require.NoError(t, tradeStore.DBForTest().Exec(
+		`UPDATE t_trading_accounts SET c_execution_mode = 'LIVE', c_live_environment = 'PRODUCTION', c_credential_secret_id = 'secret-1',
+			c_account_mode = 'BINANCE_STANDARD', c_snapshot_json = REPLACE(c_snapshot_json, '"UNIFIED"', '"SPOT"') WHERE c_trading_account_id = ?`, accountID).Error)
+}
+
+// BNB 保留按每个会补买的币安执行账户各保留 N：两个成员各差 400，一共扣 800；
+// 非币安、测试网、模拟盘成员不补买，不为它们留钱。
+func TestBNBShortfallIsSummedPerBinanceMember(t *testing.T) {
+	// 权益 2000 + 现货 BTC 1000 = 3000；BNB 保留 500，每个成员现有 1 个 BNB = 100，各差 400。
+	tradeStore := newMixedResolverStore(t, `{"bnb_reserve_amount":"500"}`)
+	makeBinanceProduction(t, tradeStore, "account-a")
+	accounts, err := tradeStore.ListAllTradingAccounts(context.Background())
+	require.NoError(t, err)
+	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		second := accounts[0]
+		second.TradingAccountID, second.Name = "account-b", "account-b"
+		second.ExecutionMode, second.Environment, second.CredentialSecretID = "LIVE", "PRODUCTION", "secret-2"
+		return tx.CreateTradingAccount(second)
+	}))
+	resolver := WeightResolver{Store: tradeStore, Prices: targetPriceStub{price: shared.MustDecimal("100")}, Equity: conversionEquityStub{}, Now: func() time.Time { return time.UnixMilli(2000) }}
+	shortfall, err := resolver.bnbShortfall(context.Background(), []store.LogicalAccountMemberRecord{
+		{SpaceID: "space-1", LogicalAccountID: "logical-1", TradingAccountID: "account-a"},
+		{SpaceID: "space-1", LogicalAccountID: "logical-1", TradingAccountID: "account-b"},
+	}, shared.MustDecimal("500"))
+	require.NoError(t, err)
+	require.Equal(t, "800", shortfall.String())
+
+	// 第二个成员是测试网账户：不补买，不留钱。
+	require.NoError(t, tradeStore.DBForTest().Exec("UPDATE t_trading_accounts SET c_live_environment = 'TESTNET', c_markets = 'SPOT' WHERE c_trading_account_id = 'account-b'").Error)
+	shortfall, err = resolver.bnbShortfall(context.Background(), []store.LogicalAccountMemberRecord{
+		{TradingAccountID: "account-a"}, {TradingAccountID: "account-b"},
+	}, shared.MustDecimal("500"))
+	require.NoError(t, err)
+	require.Equal(t, "400", shortfall.String())
+
+	// 模拟盘成员也不补买。
+	require.NoError(t, tradeStore.DBForTest().Exec("UPDATE t_trading_accounts SET c_execution_mode = 'PAPER', c_live_environment = '', c_credential_secret_id = '', c_account_mode = '' WHERE c_trading_account_id = 'account-a'").Error)
+	shortfall, err = resolver.bnbShortfall(context.Background(), []store.LogicalAccountMemberRecord{{TradingAccountID: "account-a"}}, shared.MustDecimal("500"))
+	require.NoError(t, err)
+	require.Equal(t, "0", shortfall.String())
+}
+
+// 后来加的写入校验不能让早先保存的设置整个读不出来：目标换算和执行器一样宽松解析。
+func TestResolveAcceptsOlderFundSettingsThatFailTheCurrentWriteChecks(t *testing.T) {
+	tradeStore := newMixedResolverStore(t, `{"stablecoin_margin":{"USDC":"0.5"},"bnb_reserve_amount":"5"}`)
+	resolver := WeightResolver{Store: tradeStore, Prices: targetPriceStub{price: shared.MustDecimal("100")}, Equity: conversionEquityStub{}, Now: func() time.Time { return time.UnixMilli(2000) }}
+	conversion, err := resolver.Resolve(context.Background(), 0, mixedRequest(weightTarget("BTC-USDT-SPOT", "SPOT", "0.5")), "space-1")
+	require.NoError(t, err)
+	require.False(t, quantityOf(t, conversion, "BTC-USDT-SPOT").Hold)
+}
+
+// 缺口口径和资金维护一致：停用、未就绪的成员、BNB 标的不在交易状态时不会补买，也不为它们留钱。
+func TestBNBShortfallSkipsMembersAndInstrumentsTheMaintenanceTaskSkips(t *testing.T) {
+	tradeStore := newMixedResolverStore(t, `{"bnb_reserve_amount":"500"}`)
+	makeBinanceProduction(t, tradeStore, "account-a")
+	resolver := WeightResolver{Store: tradeStore, Prices: targetPriceStub{price: shared.MustDecimal("100")}, Equity: conversionEquityStub{}, Now: func() time.Time { return time.UnixMilli(2000) }}
+	members := []store.LogicalAccountMemberRecord{{TradingAccountID: "account-a"}}
+	shortfall := func() string {
+		value, err := resolver.bnbShortfall(context.Background(), members, shared.MustDecimal("500"))
+		require.NoError(t, err)
+		return value.String()
+	}
+	require.Equal(t, "400", shortfall())
+
+	require.NoError(t, tradeStore.DBForTest().Exec("UPDATE t_trading_accounts SET c_ready = 0").Error)
+	require.Equal(t, "0", shortfall(), "未就绪的账户资金维护不处理")
+	require.NoError(t, tradeStore.DBForTest().Exec("UPDATE t_trading_accounts SET c_ready = 1, c_status = 'DISABLED'").Error)
+	require.Equal(t, "0", shortfall(), "停用的账户资金维护不处理")
+	require.NoError(t, tradeStore.DBForTest().Exec("UPDATE t_trading_accounts SET c_status = 'ENABLED'").Error)
+	instruments, err := tradeStore.ListInstrumentsForAccount(context.Background(), "account-a")
+	require.NoError(t, err)
+	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		for _, instrument := range instruments {
+			if instrument.InstrumentID == "BNB-USDT-SPOT" {
+				instrument.Status = "BREAK"
+				return tx.UpsertInstrument(instrument)
+			}
+		}
+		return nil
+	}))
+	require.Equal(t, "0", shortfall(), "BNB 标的不在交易状态，补买不会下单")
 }

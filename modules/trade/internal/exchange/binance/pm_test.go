@@ -460,7 +460,7 @@ func TestPortfolioMarginFeeDiscountAndDust(t *testing.T) {
 	require.Equal(t, "MARGIN", state.find(http.MethodPost, "/sapi/v1/asset/dust-btc")[0].Query.Get("accountType"))
 	result, err := pm.ConvertDust(ctx, []string{"ADA", "ETH"})
 	require.NoError(t, err)
-	require.Equal(t, []string{"ETH"}, result.ConvertedList)
+	require.Equal(t, []string{"ETH"}, result.Converted)
 	require.Equal(t, []string{"ADA", "ETH"}, state.find(http.MethodPost, "/sapi/v1/asset/dust")[0].Query["asset"])
 	require.False(t, pm.Supports(execution.CapabilityTransfer), "统一账户不划转")
 }

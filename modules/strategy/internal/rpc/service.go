@@ -26,6 +26,12 @@ type Resolver interface {
 	Resolve(ctx context.Context, spaceID string, taskIDs []string, strategy dsl.Strategy) (input.Resolved, *dsl.Program, error)
 	// ResolveInstance 启用实例时的解析：先把任务（市场 → 任务）与实例永久关联（幂等），要求任务已启用，再解析绑定。
 	ResolveInstance(ctx context.Context, instanceID, spaceID string, tasks map[string]string, strategy dsl.Strategy) (input.Resolved, *dsl.Program, error)
+	// ResolvePoolInstance 是策略池启用时的解析：任务关联同 ResolveInstance，绑定按成员分别解析。
+	ResolvePoolInstance(ctx context.Context, instanceID, spaceID string, tasks map[string]string, pool dsl.Strategy, members []input.PoolMemberDef) (input.PoolResolved, error)
+	// ResolvePool 解析策略池的绑定（只读，不关联任务；校验接口用）。
+	ResolvePool(ctx context.Context, spaceID string, taskIDs []string, pool dsl.Strategy, members []input.PoolMemberDef) (input.PoolResolved, error)
+	// CheckPoolCoverage 在启用策略池时校验 View 的覆盖：按每个成员的 min_age_bars，以及 View 实际的历史够不够预热。
+	CheckPoolCoverage(ctx context.Context, spaceID string, pooled input.PoolResolved, now time.Time) error
 	// TaskMarket 返回因子任务的市场（任务结果 View → 数据集 → 源数据集的市场类型）。
 	TaskMarket(ctx context.Context, spaceID, taskID string) (string, error)
 	// CheckCoverage 在启用时校验 View 的覆盖：A 股行键、min_age_bars 所需的历史。
@@ -40,6 +46,12 @@ type Owner interface {
 	ClaimSession(ctx context.Context, spaceID, logicalAccountID, instanceID, sessionID string, markets []string) error
 	ReleaseSession(ctx context.Context, spaceID, logicalAccountID, instanceID, sessionID string) error
 	ValidateSession(ctx context.Context, spaceID, logicalAccountID, instanceID, sessionID string) error
+}
+
+// Warmer 管理策略池实例的后台预热：启用成功后开始预热，停用时取消。
+type Warmer interface {
+	Start(ctx context.Context, instanceID, sessionID string)
+	Stop(instanceID string)
 }
 
 // Alerter 接收需要人工处理的实例事件（例如因 Trade 拒绝会话被自动停用），用于模块健康告警。
@@ -58,8 +70,10 @@ type Service struct {
 	Resolver Resolver
 	Owner    Owner
 	Replays  ReplayWaker
-	Alerts   Alerter
-	Now      func() time.Time
+	// Warmer 为空时不预热（没有策略池的部署）。
+	Warmer Warmer
+	Alerts Alerter
+	Now    func() time.Time
 
 	// locks 是按定义 ID 的锁，引用计数归零即删除，不随出现过的定义无限增长。
 	locksMu sync.Mutex
@@ -251,6 +265,9 @@ func (s *Service) CreateStrategy(ctx context.Context, req *strategypb.CreateStra
 	if err != nil {
 		return &strategypb.CreateStrategyRsp{RetInfo: invalid(err)}, nil
 	}
+	if _, err := s.checkPool(ctx, strategy); err != nil {
+		return &strategypb.CreateStrategyRsp{RetInfo: invalid(err)}, nil
+	}
 	id := strings.TrimSpace(req.GetStrategy().GetStrategyId())
 	if id == "" {
 		if id, err = store.NewID(); err != nil {
@@ -277,6 +294,9 @@ func (s *Service) UpdateStrategy(ctx context.Context, req *strategypb.UpdateStra
 	}
 	strategy, hash, err := parseDefinition(req.GetDslYaml())
 	if err != nil {
+		return &strategypb.UpdateStrategyRsp{RetInfo: invalid(err)}, nil
+	}
+	if _, err := s.checkPool(ctx, strategy); err != nil {
 		return &strategypb.UpdateStrategyRsp{RetInfo: invalid(err)}, nil
 	}
 	unlock, lockErr := s.lockStrategy(ctx, req.GetStrategyId())
@@ -356,4 +376,41 @@ func (s *Service) DeleteStrategy(ctx context.Context, req *strategypb.DeleteStra
 		return &strategypb.DeleteStrategyRsp{RetInfo: invalid(err)}, nil
 	}
 	return &strategypb.DeleteStrategyRsp{RetInfo: success()}, nil
+}
+
+// poolMemberDefs 读取策略池各成员引用的策略定义（成员必须存在、没有被删除），解析出成员的 DSL；不是策略池时返回 nil。
+func (s *Service) poolMemberDefs(ctx context.Context, pool dsl.Strategy) ([]input.PoolMemberDef, error) {
+	if !pool.IsPool() {
+		return nil, nil
+	}
+	defs := make([]input.PoolMemberDef, 0, len(pool.Pool.Members))
+	for _, member := range pool.Pool.Members {
+		def, err := s.Store.GetDefinition(ctx, member.StrategyID)
+		if err != nil || def.DeletedAt != nil {
+			return nil, fmt.Errorf("成员 %s 引用的策略 %s 不存在", member.ID, member.StrategyID)
+		}
+		strategy, err := dsl.Parse([]byte(def.DSLYaml))
+		if err != nil {
+			return nil, fmt.Errorf("成员 %s 引用的策略 %s 的 DSL 无效：%w", member.ID, member.StrategyID, err)
+		}
+		defs = append(defs, input.PoolMemberDef{ID: member.ID, StrategyID: member.StrategyID, DSLYaml: def.DSLYaml, DSLHash: def.DSLHash, Strategy: strategy})
+	}
+	return defs, nil
+}
+
+// checkPool 在保存与校验策略池时核对成员：都存在、都能进池（不嵌套、显式写 market、没有 factor_params、周期一致），
+// 返回成员定义。不是策略池时什么也不做。
+func (s *Service) checkPool(ctx context.Context, strategy dsl.Strategy) ([]input.PoolMemberDef, error) {
+	members, err := s.poolMemberDefs(ctx, strategy)
+	if err != nil || members == nil {
+		return nil, err
+	}
+	strategies := make(map[string]dsl.Strategy, len(members))
+	for _, member := range members {
+		strategies[member.ID] = member.Strategy
+	}
+	if _, err := dsl.ValidatePoolMembers(strategy, strategies); err != nil {
+		return nil, err
+	}
+	return members, nil
 }

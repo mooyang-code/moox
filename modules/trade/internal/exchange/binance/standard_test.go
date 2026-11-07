@@ -190,13 +190,15 @@ func TestStandardFeeDiscountAndDustPerMarket(t *testing.T) {
 	dust, err := spot.ListDust(ctx)
 	require.NoError(t, err)
 	require.Equal(t, "ADA", dust[0].Asset)
+	require.Equal(t, "6.21", dust[0].Quantity.String())
+	require.Equal(t, "0.00016848", dust[0].ValueBTC.String(), "官方样例 toBTC")
 	require.Equal(t, "SPOT", state.find(http.MethodPost, "/sapi/v1/asset/dust-btc")[0].Query.Get("accountType"))
 	swapDust, err := swap.ListDust(ctx)
 	require.NoError(t, err)
 	require.Empty(t, swapDust)
 	converted, err := spot.ConvertDust(ctx, []string{"ETH"})
 	require.NoError(t, err)
-	require.Equal(t, []string{"ETH"}, converted.ConvertedList)
+	require.Equal(t, []string{"ETH"}, converted.Converted)
 }
 
 // 双市场账户通过 MultiMarket 使用这些能力：划转交给现货适配器，抵扣两边各设，小额兑换只现货。

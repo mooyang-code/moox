@@ -44,16 +44,7 @@ func (q *HoldingQuery) List(ctx context.Context, spaceID, accountID string) ([]h
 	if err != nil && account.ExecutionMode != string(exchange.ExecutionModePaper) {
 		return nil, err
 	}
-	byAsset := make(map[string]exchange.Instrument)
-	for _, record := range records {
-		if strings.EqualFold(record.QuoteAsset, account.SettlementAsset) {
-			byAsset[strings.ToUpper(record.BaseAsset)] = exchange.Instrument{
-				Exchange: exchange.Exchange(record.Exchange), MarketType: exchange.MarketType(record.MarketType),
-				ExchangeSymbol: record.ExchangeSymbol, InstrumentID: record.InstrumentID,
-				BaseAsset: record.BaseAsset, QuoteAsset: record.QuoteAsset, SettlementAsset: record.SettlementAsset,
-			}
-		}
-	}
+	index := holdingInstrumentIndex(records, account.SettlementAsset)
 	result := make([]holdingapp.Holding, 0, len(account.Snapshot.Balances))
 	for _, balance := range account.Snapshot.Balances {
 		quantity, err := shared.ParseDecimal(balance.Total)
@@ -70,7 +61,7 @@ func (q *HoldingQuery) List(ctx context.Context, spaceID, accountID string) ([]h
 			result = append(result, item)
 			continue
 		}
-		instrument, found := byAsset[strings.ToUpper(balance.Asset)]
+		instrument, found := balanceInstrument(index, account.Markets, balance.Asset)
 		if !found {
 			// 无法估值的资产也要展示，价格留空，页面显示“-”。
 			result = append(result, item)
@@ -114,6 +105,42 @@ func (q *HoldingQuery) List(ctx context.Context, spaceID, accountID string) ([]h
 		result = append(result, item)
 	}
 	return result, nil
+}
+
+// holdingKey 是（市场，基础资产）：同一个币的现货和永续是两个标的，余额只能对应持仓来自余额的市场。
+type holdingKey struct {
+	market exchange.MarketType
+	asset  string
+}
+
+// holdingInstrumentIndex 按（市场，基础资产）建标的索引，只收计价币等于结算资产的标的。
+func holdingInstrumentIndex(records []store.InstrumentRecord, settlementAsset string) map[holdingKey]exchange.Instrument {
+	index := make(map[holdingKey]exchange.Instrument)
+	for _, record := range records {
+		if !strings.EqualFold(record.QuoteAsset, settlementAsset) {
+			continue
+		}
+		market := exchange.MarketType(record.MarketType)
+		index[holdingKey{market: market, asset: strings.ToUpper(record.BaseAsset)}] = exchange.Instrument{
+			Exchange: exchange.Exchange(record.Exchange), MarketType: market,
+			ExchangeSymbol: record.ExchangeSymbol, InstrumentID: record.InstrumentID,
+			BaseAsset: record.BaseAsset, QuoteAsset: record.QuoteAsset, SettlementAsset: record.SettlementAsset,
+		}
+	}
+	return index
+}
+
+// balanceInstrument 找余额资产对应的标的：只在账户开通的、持仓来自余额的市场里找，不会配上永续标的。
+func balanceInstrument(index map[holdingKey]exchange.Instrument, markets []string, asset string) (exchange.Instrument, bool) {
+	for _, market := range markets {
+		if !exchange.RuleFor(market).PositionFromBalance {
+			continue
+		}
+		if instrument, found := index[holdingKey{market: exchange.MarketType(market), asset: strings.ToUpper(asset)}]; found {
+			return instrument, true
+		}
+	}
+	return exchange.Instrument{}, false
 }
 
 func (q *HoldingQuery) paperAverageCost(ctx context.Context, spaceID, accountID string, key exchange.SymbolKey) (shared.Decimal, error) {

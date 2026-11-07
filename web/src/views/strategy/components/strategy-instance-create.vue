@@ -15,12 +15,17 @@
         </a-select>
       </a-form-item>
       <a-descriptions v-if="preview" :column="1" bordered size="small" class="preview">
-        <a-descriptions-item label="规则">{{
+        <a-descriptions-item v-if="preview.pool" label="策略池">{{ describePool(preview.pool) }}</a-descriptions-item>
+        <a-descriptions-item v-else label="规则">{{
           preview.rules.map(rule => `${rule.name || rule.id}（${rule.type}）`).join("、")
         }}</a-descriptions-item>
-        <a-descriptions-item label="标的池">{{ preview.universe }}</a-descriptions-item>
+        <a-descriptions-item v-if="!preview.pool" label="标的池">{{ preview.universe }}</a-descriptions-item>
         <a-descriptions-item label="bar 断言">{{ preview.bar }}</a-descriptions-item>
       </a-descriptions>
+      <a-alert v-if="poolRequirement?.problems.length" type="warning" show-icon class="form-alert"
+        ><div>策略池的成员还不能用，暂不能创建：</div>
+        <div v-for="item in poolRequirement.problems" :key="item">{{ item }}</div></a-alert
+      >
       <a-form-item
         v-if="!requirement.declared"
         label="市场"
@@ -35,8 +40,9 @@
           market，只绑一个因子任务：先选任务的数据所属的市场（必须与任务源数据集的市场一致，创建前的预检会核对）。</template
         >
       </a-form-item>
-      <p v-else class="meta-hint mode-hint">
-        策略的市场模式需要绑定：{{ activeMarkets.map(marketLabel).join("、") }} 的因子任务{{
+      <p v-else-if="activeMarkets.length" class="meta-hint mode-hint">
+        {{ poolRequirement ? "策略池要绑定各成员所需市场的并集：" : "策略的市场模式需要绑定："
+        }}{{ activeMarkets.map(marketLabel).join("、") }} 的因子任务{{
           activeMarkets.length > 1 ? "（现货、永续各一个，两个任务的周期、日历和用到的列要一致）" : ""
         }}。
       </p>
@@ -145,7 +151,7 @@
 import { StaleSpaceRequestError } from "@/api/admin/stale-space";
 import { computed, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
-import { createInstance, getInstance, validateStrategy } from "@/api/strategy";
+import { createInstance, getInstance, getStrategy, validateStrategy } from "@/api/strategy";
 import type { Strategy, ValidateStrategyResult } from "@/api/strategy-types";
 import { listFactorTasks } from "@/api/factor";
 import { listLogicalAccounts } from "@/api/trade";
@@ -153,9 +159,14 @@ import type { LogicalAccount } from "@/api/trade/types";
 import type { FactorTaskInfo } from "@/api/factor/types";
 import { availableTasks, type TaskOption } from "@/views/strategy/components/task-options";
 import ResolvedTable from "@/views/strategy/components/strategy-resolved-table.vue";
-import { logicalAccountOptions, resolvedMarkets } from "@/views/strategy/components/logical-account-options";
-import { marketLabel, marketRequirement } from "@/views/strategy/market-mode";
-import { parseDSL } from "@/views/strategy/dsl";
+import { logicalAccountOptions, marketsToResolved, resolvedMarkets } from "@/views/strategy/components/logical-account-options";
+import {
+  marketLabel,
+  marketRequirement,
+  poolMembers,
+  poolRequirement as buildPoolRequirement
+} from "@/views/strategy/market-mode";
+import { describePool, parseDSL } from "@/views/strategy/dsl";
 
 const props = defineProps<{ visible: boolean; strategies: Strategy[]; spaceId: string; presetStrategyId?: string }>();
 const emit = defineEmits<{ "update:visible": [boolean]; created: [string] }>();
@@ -194,12 +205,57 @@ const selectedStrategy = computed(() => props.strategies.find(item => item.strat
 const preview = computed(() => (selectedStrategy.value ? parseDSL(selectedStrategy.value.dsl_yaml).preview : null));
 
 // 只列策略驱动且可交易市场包含策略输出市场的组合账户，已被其他实例占用的显示但不可选；没有交易账户的市场（A 股）列表为空。
-const market = computed(() => resolvedMarkets(check_result.value?.resolved_json));
+// 预检之前策略池就按成员市场的并集过滤；预检之后以服务端解析出的市场为准。
+const market = computed(() =>
+  check_result.value?.resolved_json || !poolRequirement.value?.markets.length
+    ? resolvedMarkets(check_result.value?.resolved_json)
+    : marketsToResolved(poolRequirement.value.markets)
+);
 const accountOptions = computed(() => logicalAccountOptions(accounts.value, market.value));
 
 // 策略的市场模式决定要绑定哪些市场的任务；没写 market 时只绑一个，市场由用户选。
 const singleMarkets = ["spot", "swap", "equity"];
-const requirement = computed(() => marketRequirement(selectedStrategy.value?.dsl_yaml ?? ""));
+// 策略池：成员引用的策略定义先从目录里找，目录里没有的按需读取（memberDefinitions：null 表示读取失败或不存在）。
+const memberDefinitions = reactive<Record<string, string | null>>({});
+const poolRequirement = computed(() =>
+  selectedStrategy.value
+    ? buildPoolRequirement(selectedStrategy.value.dsl_yaml, id => {
+        const found = props.strategies.find(item => item.strategy_id === id);
+        return found ? found.dsl_yaml : id in memberDefinitions ? memberDefinitions[id] : undefined;
+      })
+    : null
+);
+const requirement = computed(() =>
+  poolRequirement.value
+    ? { declared: true, markets: poolRequirement.value.markets }
+    : marketRequirement(selectedStrategy.value?.dsl_yaml ?? "")
+);
+let memberRequest = 0;
+const memberInflight = new Set<string>();
+async function loadMissingMembers() {
+  const dsl = selectedStrategy.value?.dsl_yaml;
+  if (!dsl) return;
+  const requestId = memberRequest;
+  const missing = (poolMembers(dsl) ?? [])
+    .map(member => member.strategyId)
+    .filter(id => id && !(id in memberDefinitions) && !props.strategies.some(item => item.strategy_id === id));
+  await Promise.all(
+    [...new Set(missing)].map(async id => {
+      const flight = `${requestId}:${id}`;
+      if (memberInflight.has(flight)) return;
+      memberInflight.add(flight);
+      let definition: string | null = null;
+      try {
+        definition = (await getStrategy(id)).dsl_yaml || null;
+      } catch {
+        // 读取失败按“不存在或读取失败”提示，不阻塞其他成员
+      }
+      memberInflight.delete(flight);
+      if (requestId === memberRequest) memberDefinitions[id] = definition;
+    })
+  );
+}
+watch(selectedStrategy, () => void loadMissingMembers(), { immediate: true });
 const activeMarkets = computed(() =>
   requirement.value.declared ? requirement.value.markets : form.single_market ? [form.single_market] : []
 );
@@ -344,6 +400,8 @@ function resetForm() {
   saving.value = false;
   form.instance_id = "";
   form.strategy_id = props.presetStrategyId || "";
+  memberRequest += 1;
+  for (const key of Object.keys(memberDefinitions)) delete memberDefinitions[key];
   form.single_market = "";
   form.tasks = {};
   form.logical_account_id = "";
@@ -359,11 +417,16 @@ function resetForm() {
   fieldErrors.strategy_id = fieldErrors.factor_tasks = fieldErrors.logical_account_id = "";
   error.value = "";
   resetCheck();
+  void loadMissingMembers();
 }
 
 async function submit() {
   error.value = "";
   fieldErrors.strategy_id = form.strategy_id ? "" : "请选择策略定义";
+  if (poolRequirement.value?.problems.length) {
+    error.value = `策略池的成员还不能用：${poolRequirement.value.problems.join("；")}`;
+    return;
+  }
   fieldErrors.factor_tasks = !activeMarkets.value.length
     ? "先选择任务的市场"
     : tasksSelected.value

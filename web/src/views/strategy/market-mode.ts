@@ -34,6 +34,61 @@ export function marketRequirement(dslYaml: string): MarketRequirement {
   return { declared: false, markets: [] };
 }
 
+/** 策略池的成员引用；DSL 不是策略池（没有 strategy_pool）或无法解析时返回 null。 */
+export function poolMembers(dslYaml: string): { id: string; strategyId: string }[] | null {
+  try {
+    const pool = parseDocument(dslYaml).toJS()?.strategy_pool;
+    if (pool === undefined || pool === null) return null;
+    const members = Array.isArray(pool?.members) ? pool.members : [];
+    return members.map((member: any) => ({ id: String(member?.id ?? ""), strategyId: String(member?.strategy ?? "") }));
+  } catch {
+    return null;
+  }
+}
+
+export interface PoolRequirement {
+  /** 池要绑定因子任务的市场：各成员所需市场的并集（现货在前）；有问题时为空。 */
+  markets: string[];
+  /** 阻止创建的问题（中文）：成员定义读不到、没写 market、是策略池等。 */
+  problems: string[];
+}
+
+/**
+ * 策略池要绑定的因子任务：成员引用的策略定义各自按 marketRequirement 解析市场，取并集。
+ * lookup 返回成员策略的 DSL 文本；null 表示确认不存在，undefined 表示还在读取。不是策略池时返回 null。
+ */
+export function poolRequirement(
+  dslYaml: string,
+  lookup: (strategyId: string) => string | null | undefined
+): PoolRequirement | null {
+  const members = poolMembers(dslYaml);
+  if (!members) return null;
+  if (!members.length) return { markets: [], problems: ["策略池没有写成员（strategy_pool.members）"] };
+  const problems: string[] = [];
+  const markets = new Set<string>();
+  for (const member of members) {
+    const label = `成员 ${member.id || "?"}`;
+    if (!member.strategyId) {
+      problems.push(`${label} 没有写 strategy`);
+      continue;
+    }
+    const memberDsl = lookup(member.strategyId);
+    if (memberDsl === undefined) {
+      problems.push(`正在读取${label}引用的策略 ${member.strategyId}…`);
+    } else if (memberDsl === null) {
+      problems.push(`${label} 引用的策略 ${member.strategyId} 不存在（定义已删除，或读取失败）`);
+    } else if (poolMembers(memberDsl)) {
+      problems.push(`${label} 引用的策略 ${member.strategyId} 本身是策略池，策略池不能嵌套`);
+    } else {
+      const requirement = marketRequirement(memberDsl);
+      if (!requirement.declared)
+        problems.push(`${label} 引用的策略 ${member.strategyId} 没有显式写 market，池成员必须写 market（股票策略不能进池）`);
+      else requirement.markets.forEach(market => markets.add(market));
+    }
+  }
+  return { markets: problems.length ? [] : MARKET_ORDER.filter(market => markets.has(market)), problems };
+}
+
 /** 实例绑定的因子任务，按市场先后排列。 */
 export function instanceTasks(tasks: Record<string, string> | undefined): { market: string; taskId: string }[] {
   return MARKET_ORDER.filter(market => tasks?.[market]).map(market => ({ market, taskId: tasks![market] }));

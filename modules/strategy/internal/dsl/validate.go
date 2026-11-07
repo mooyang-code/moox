@@ -63,6 +63,12 @@ func Validate(s *Strategy) error {
 			return err
 		}
 	}
+	if s.Pool != nil {
+		if err := validatePool(s); err != nil {
+			return err
+		}
+		return validatePortfolio(&s.Portfolio)
+	}
 	if s.Universe.MinAgeBars < 0 {
 		return errors.New("universe.min_age_bars 不能为负数")
 	}

@@ -49,12 +49,17 @@ CREATE TABLE IF NOT EXISTS t_strategy_instance_tasks (
     FOREIGN KEY (c_instance_id) REFERENCES t_strategy_instances (c_instance_id)
 );
 
--- 每次启用产生一个会话，固化当时的 DSL 版本与绑定解析
+-- 每次启用产生一个会话，固化当时的 DSL 版本与绑定解析。
+-- 策略池会话另有：c_members_json 是固化的成员（策略 ID、DSL 文本与哈希、各自的绑定解析），非池为空串；
+-- c_warm_state 是预热完成时的引擎状态，c_warmed_through 是预热推进到的最后一期（bar_end，毫秒），NULL 表示预热还没完成
 CREATE TABLE IF NOT EXISTS t_strategy_sessions (
     c_session_id TEXT NOT NULL PRIMARY KEY,
     c_instance_id TEXT NOT NULL,
     c_dsl_hash TEXT NOT NULL,
     c_resolved_json TEXT NOT NULL,
+    c_members_json TEXT NOT NULL DEFAULT '',
+    c_warm_state TEXT NOT NULL DEFAULT '',
+    c_warmed_through INTEGER,
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_closed_at DATETIME,
     FOREIGN KEY (c_instance_id) REFERENCES t_strategy_instances (c_instance_id),

@@ -51,6 +51,12 @@ func (s *ConsoleServer) ledgerSource(tradingAccountID string) (execution.LedgerS
 	return source, nil
 }
 
+// ledgerCapability 把取流水来源的结果换成“能否查流水”：只有交易所确实没有流水接口才是 false。
+// 会话还没建立等暂时性原因不算不支持，页面照常查询，由 ListAccountLedger 说明“会话未就绪”。
+func ledgerCapability(sourceErr error) bool {
+	return !errors.Is(sourceErr, errLedgerUnsupported)
+}
+
 // ListAccountLedger 从交易所即查资金流水（手续费、资金费、已实现盈亏、划转等），按时间倒序。
 func (s *ConsoleServer) ListAccountLedger(
 	ctx context.Context,

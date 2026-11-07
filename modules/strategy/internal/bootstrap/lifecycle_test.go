@@ -29,7 +29,7 @@ func TestTriggerGateFollowsLifecycleStage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gate := triggerGate(life)
+	gate := triggerGate(life, nil)
 	ctx := context.Background()
 	// 模块自身还没做第一次检查：暂时未就绪，事件稍后重投，不能丢弃。
 	if gate("i1") != trigger.ModeWait {
@@ -73,7 +73,7 @@ func TestTriggerGateCatchupModeAndReleaseBoundary(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	gate := triggerGate(life)
+	gate := triggerGate(life, nil)
 	if gate("i1") != trigger.ModeLive {
 		t.Fatal("运行中是正式模式")
 	}
@@ -194,7 +194,7 @@ func TestTriggerGateWaitsWhileModuleNotReadyAndStartupRefreshReleasesQuickly(t *
 			t.Fatal(err)
 		}
 	}
-	gate := triggerGate(life)
+	gate := triggerGate(life, nil)
 	if gate("i1") != trigger.ModeLive {
 		t.Fatal("模块与实例都就绪时正式求值")
 	}

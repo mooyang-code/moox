@@ -1,6 +1,10 @@
 package shared
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/stretchr/testify/require"
+)
 
 func TestDecimalExactArithmetic(t *testing.T) {
 	a := MustDecimal("0.1").Add(MustDecimal("0.2"))
@@ -33,4 +37,15 @@ func TestDecimalIsInteger(t *testing.T) {
 	if MustDecimal("1").Div(MustDecimal("3")).IsInteger() {
 		t.Fatal("accepted fractional rational")
 	}
+}
+
+func TestFloorToStep(t *testing.T) {
+	for _, c := range []struct{ value, step, want string }{
+		{"10.37", "0.1", "10.3"}, {"10.3", "0.1", "10.3"}, {"0.0005", "0.001", "0"}, {"7", "2", "6"},
+		{"100", "0.001", "100"}, {"-1", "0.1", "0"}, {"1", "0", "0"},
+	} {
+		require.Equal(t, c.want, FloorToStep(MustDecimal(c.value), MustDecimal(c.step)).String(), "%s / %s", c.value, c.step)
+	}
+	// 重复小数也不会丢精度：100 ÷ 3 向下取整到 0.01 是 33.33。
+	require.Equal(t, "33.33", FloorToStep(MustDecimal("100").Div(MustDecimal("3")), MustDecimal("0.01")).String())
 }

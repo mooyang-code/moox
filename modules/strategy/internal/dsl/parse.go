@@ -177,6 +177,8 @@ func decodeStrategy(root *yaml.Node) (Strategy, error) {
 		case "rules":
 			rulesSeen = true
 			strategy.Rules, err = decodeRules(f.value)
+		case "strategy_pool":
+			strategy.Pool, err = decodeStrategyPool(f.value)
 		case "portfolio":
 			strategy.Portfolio, err = decodePortfolio(f.value)
 		case "factors":
@@ -190,8 +192,11 @@ func decodeStrategy(root *yaml.Node) (Strategy, error) {
 			return Strategy{}, err
 		}
 	}
-	if !rulesSeen {
-		return Strategy{}, errors.New("策略 DSL 缺少 rules")
+	switch {
+	case rulesSeen && strategy.Pool != nil:
+		return Strategy{}, errors.New("rules 与 strategy_pool 只能写一个")
+	case !rulesSeen && strategy.Pool == nil:
+		return Strategy{}, errors.New("策略 DSL 缺少 rules（或 strategy_pool）")
 	}
 	return strategy, nil
 }

@@ -416,8 +416,8 @@ func (m *MultiMarket) GetBNBFeeDiscount(ctx context.Context) (bool, error) {
 }
 
 // ListDust、ConvertDust 合并各具备小额兑换能力的市场适配器的结果。
-func (m *MultiMarket) ListDust(ctx context.Context) ([]DustAsset, error) {
-	var all []DustAsset
+func (m *MultiMarket) ListDust(ctx context.Context) ([]exchange.DustAsset, error) {
+	var all []exchange.DustAsset
 	for _, market := range m.markets {
 		if !m.supporting(market, CapabilityDust) {
 			continue
@@ -431,19 +431,18 @@ func (m *MultiMarket) ListDust(ctx context.Context) ([]DustAsset, error) {
 	return all, nil
 }
 
-func (m *MultiMarket) ConvertDust(ctx context.Context, assets []string) (DustResult, error) {
-	var merged DustResult
+func (m *MultiMarket) ConvertDust(ctx context.Context, assets []string) (exchange.DustConversion, error) {
+	var merged exchange.DustConversion
 	for _, market := range m.markets {
 		if !m.supporting(market, CapabilityDust) {
 			continue
 		}
 		part, err := m.adapters[market].(DustConverter).ConvertDust(ctx, assets)
 		if err != nil {
-			return DustResult{}, err
+			return exchange.DustConversion{}, err
 		}
-		merged.TotalBNB = merged.TotalBNB.Add(part.TotalBNB)
-		merged.TransferIDs = append(merged.TransferIDs, part.TransferIDs...)
-		merged.ConvertedList = append(merged.ConvertedList, part.ConvertedList...)
+		merged.BNBReceived = merged.BNBReceived.Add(part.BNBReceived)
+		merged.Converted = append(merged.Converted, part.Converted...)
 	}
 	return merged, nil
 }

@@ -48,27 +48,26 @@ describe("page layout standards", () => {
   it("uses the compact single-tab header standard", () => {
     const spaces = read("settings/spaces/index.vue");
     const secrets = read("settings/secrets/index.vue");
-    const accounts = read("trading/account-overview/account-overview.vue");
-    const accountWorkbench = read("trading/account-workbench/index.vue");
+    const accounts = read("trading/accounts/index.vue");
+    const accountDetail = read("trading/accounts/detail/index.vue");
 
     expectMargin(spaces, ".page-head", "margin-bottom", 8);
     expect(spaces).toMatch(/\.page-head h2\s*\{[\s\S]*?margin:\s*0;/);
-    expectMargin(accounts, ".page-head", "margin-bottom", 16);
-    expect(accounts).toContain("创建账户");
-    expect(accounts).toContain('title="操作"');
-    expect(accounts).toContain('title="最近同步"');
-    expect(accounts).toContain('title="账户类型"');
-    expect(accounts).toContain('title="运行环境"');
-    expect(accounts).not.toContain("Readiness");
-    expect(accounts).not.toContain("创建 Paper 模拟");
-    expect(accounts).not.toContain("创建 Live 账户");
-    expect(accounts).not.toContain("<h2>执行账户</h2>");
-    expect(accounts).not.toContain("PageTitleTabs");
-    expect(accountWorkbench).toContain('label: "执行账户"');
-    expect(accountWorkbench).toContain('label: "组合账户"');
-    expect(accountWorkbench).toContain('class="trading-account-content"');
-    expect(accountWorkbench).toContain(':embedded="true"');
+    // 交易账户：环境用页面标题页签，只列组合账户；详情是整页，页签用 ?tab=
+    expect(accounts).toContain("PageTitleTabs");
+    expect(accounts).toContain('class="moox-page tx-accounts"');
+    expect(accounts).toContain("新建账户");
+    expect(accounts).toContain('title="组合账户"');
+    expect(accounts).toContain('title="交易所"');
+    expect(accounts).toContain('title="关联策略"');
+    expect(accounts).not.toContain("交易所 · 市场");
+    expect(accounts).not.toContain("<a-drawer");
+    expect(accountDetail).toContain('class="moox-page tx-detail"');
+    expect(accountDetail).not.toContain("<a-drawer");
+    // 菜单「交易管理」只留「交易账户」一项
     expect(staticMenuSource.match(/\/trading\/accounts/g)?.length).toBe(2);
+    expect(staticMenuSource).not.toContain("/trading/positions");
+    expect(staticMenuSource).not.toContain("/trading/orders");
     expect(staticMenuSource).not.toContain('"0504"');
     expect(staticMenuSource).not.toContain("/trading/logical-accounts");
     // 策略菜单与因子计算一致：总览 → 定义 → 运行（实例 / 结果 / 回放 工作台）。
@@ -135,7 +134,6 @@ describe("page layout standards", () => {
     const deployments = read("ops/deployments/index.vue");
     const storage = read("ops/storage/index.vue");
     const storageNodes = read("ops/storage/nodes.vue");
-    const tradeRecords = read("trading/trade-record/trade-record.vue");
 
     expectMargin(subjects, ".subjects-content", "margin-top", 12);
     expectMargin(taskManagement, ".task-management-content", "margin-top", 12);
@@ -150,31 +148,11 @@ describe("page layout standards", () => {
 
     expectMargin(storage, ".storage-config-content", "margin-top", 12);
     expect(storageNodes).toContain(".page-head");
-    expect(tradeRecords).not.toContain('import PageTitleTabs from "@/components/page-title-tabs/index.vue";');
-    expect(tradeRecords).toContain("<h2>交易记录</h2>");
-    expect(tradeRecords).toContain('class="orders-workbench-content"');
-    expect(tradeRecords).not.toContain("<a-tabs");
-    expect(tradeRecords).not.toContain('class="page-title-tabs"');
-    expect(tradeRecords).not.toContain('class="orders-account-toolbar"');
-    expect(tradeRecords).not.toContain("刷新账户状态");
-    expect(tradeRecords).not.toContain("refreshAccounts");
-    expect(tradeRecords).not.toContain("仅未完成");
-    expect(tradeRecords).not.toContain("onlyOpen");
-    expect(tradeRecords.match(/<a-space class="filter-bar" wrap>/g)).toHaveLength(1);
-    expect(tradeRecords.match(/placeholder="执行账户"/g)).toHaveLength(1);
-    expect(tradeRecords).toContain(">成交明细</h3>");
-    expect(tradeRecords).toContain("openOrderDetail");
-    expect(tradeRecords).not.toContain("fillTimeRange");
-    expectMargin(tradeRecords, ".orders-workbench-content", "margin-top", 12);
-    expect(tradeRecords).toMatch(/\.filter-bar\s*\{[\s\S]*?margin-bottom:\s*var\(--moox-space-tight\);/);
-    expect(tradeRecords).toMatch(/\.orders-page\s*:deep\(\.state-select\)\s*\{[\s\S]*?width:\s*140px;/);
-    expect(tradeRecords).toMatch(/\.orders-page\s*:deep\(\.time-range\)\s*\{[\s\S]*?width:\s*300px;/);
   });
 
   it("normalizes special list workbenches", () => {
     const cloudFunctions = read("collector/cloud-function/function-instance.vue");
     const factorResults = read("factor/results/index.vue");
-    const positions = read("trading/position-detail/position-detail.vue");
     const viewBrowse = read("data/view-browse/index.vue");
 
     const cloudFunctionActions = extractBlock(cloudFunctions, '<a-space class="cloud-function-action-bar" wrap>', "</a-space>");
@@ -233,9 +211,6 @@ describe("page layout standards", () => {
     expect(factorResults).toContain(':embedded="true"');
     expect(factorResults).not.toContain("ViewDefinitions");
 
-    expect(positions).toContain("<h2>持仓</h2>");
-    expect(positions).not.toContain('<a-button @click="loadPositions">');
-    expect(positions).toMatch(/\.position-filter-bar\s*\{[\s\S]*?margin-bottom:\s*var\(--moox-space-tight\);/);
 
     expectMargin(viewBrowse, ".page-head", "margin-bottom", 8);
   });

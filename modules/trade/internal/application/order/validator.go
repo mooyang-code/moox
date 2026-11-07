@@ -118,7 +118,7 @@ func (v Validator) validateOptions(ctx context.Context, spaceID string, spec ord
 	if err != nil {
 		return Validation{}, err
 	}
-	if instrument.Status != "TRADING" && instrument.Status != "live" {
+	if !exchange.StatusTradable(instrument.Status) {
 		return Validation{}, ErrInstrumentDisabled
 	}
 	exchangeQuantity := spec.Quantity

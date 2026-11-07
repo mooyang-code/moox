@@ -209,7 +209,7 @@ func (a *Adapter) dustAccountType() string {
 }
 
 // ListDust 列出可以兑换成 BNB 的小额资产（POST /sapi/v1/asset/dust-btc）。只有现货适配器有这个能力。
-func (a *Adapter) ListDust(ctx context.Context) ([]execution.DustAsset, error) {
+func (a *Adapter) ListDust(ctx context.Context) ([]exchange.DustAsset, error) {
 	if a.config.Market() != exchange.MarketTypeSpot {
 		return nil, nil
 	}
@@ -221,55 +221,53 @@ func (a *Adapter) ListDust(ctx context.Context) ([]execution.DustAsset, error) {
 		Details []struct {
 			Asset      string `json:"asset"`
 			AmountFree string `json:"amountFree"`
-			ToBNB      string `json:"toBNB"`
+			ToBTC      string `json:"toBTC"`
 		} `json:"details"`
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return nil, typedRejected("decode dust list", err)
 	}
-	out := make([]execution.DustAsset, 0, len(payload.Details))
+	out := make([]exchange.DustAsset, 0, len(payload.Details))
 	for _, row := range payload.Details {
 		amount, err := decimalOrZero(row.AmountFree)
 		if err != nil {
 			return nil, err
 		}
-		bnb, err := decimalOrZero(row.ToBNB)
+		valueBTC, err := decimalOrZero(row.ToBTC)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, execution.DustAsset{Asset: row.Asset, Amount: amount, BNBValue: bnb})
+		out = append(out, exchange.DustAsset{Asset: row.Asset, Quantity: amount, ValueBTC: valueBTC})
 	}
 	return out, nil
 }
 
 // ConvertDust 把指定的小额资产兑换成 BNB（POST /sapi/v1/asset/dust，asset 重复传多次）。
-func (a *Adapter) ConvertDust(ctx context.Context, assets []string) (execution.DustResult, error) {
+func (a *Adapter) ConvertDust(ctx context.Context, assets []string) (exchange.DustConversion, error) {
 	if a.config.Market() != exchange.MarketTypeSpot || len(assets) == 0 {
-		return execution.DustResult{}, nil
+		return exchange.DustConversion{}, nil
 	}
 	values := url.Values{"accountType": []string{a.dustAccountType()}, "asset": append([]string(nil), assets...)}
 	raw, err := a.sapiRequest(ctx, http.MethodPost, "/sapi/v1/asset/dust", values)
 	if err != nil {
-		return execution.DustResult{}, err
+		return exchange.DustConversion{}, err
 	}
 	var payload struct {
 		TotalTransfered string `json:"totalTransfered"`
 		TransferResult  []struct {
-			FromAsset string      `json:"fromAsset"`
-			TranID    json.Number `json:"tranId"`
+			FromAsset string `json:"fromAsset"`
 		} `json:"transferResult"`
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		return execution.DustResult{}, typedRejected("decode dust conversion", err)
+		return exchange.DustConversion{}, typedRejected("decode dust conversion", err)
 	}
-	total, err := decimalOrZero(payload.TotalTransfered)
+	received, err := decimalOrZero(payload.TotalTransfered)
 	if err != nil {
-		return execution.DustResult{}, err
+		return exchange.DustConversion{}, err
 	}
-	result := execution.DustResult{TotalBNB: total}
+	result := exchange.DustConversion{BNBReceived: received}
 	for _, row := range payload.TransferResult {
-		result.ConvertedList = append(result.ConvertedList, row.FromAsset)
-		result.TransferIDs = append(result.TransferIDs, row.TranID.String())
+		result.Converted = append(result.Converted, row.FromAsset)
 	}
 	return result, nil
 }

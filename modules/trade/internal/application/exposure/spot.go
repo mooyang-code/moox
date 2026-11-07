@@ -30,7 +30,7 @@ func SpotInstruments(instruments []store.InstrumentRecord, settlementAsset strin
 
 // Tradable 判断标的在该结算资产下是否可交易。
 func Tradable(instrument store.InstrumentRecord, settlementAsset string) bool {
-	return (instrument.Status == "TRADING" || instrument.Status == "live") &&
+	return exchange.StatusTradable(instrument.Status) &&
 		(instrument.SettlementAsset == "" || instrument.SettlementAsset == settlementAsset)
 }
 

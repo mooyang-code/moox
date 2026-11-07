@@ -38,6 +38,8 @@ describe("strategy model helpers", () => {
     expect(percent("x")).toBe("-");
     expect(shortHash("sha256:0123456789abcdef")).toBe("0123456789ab…");
     expect(skipReasonLabel("previous_version_unknown")).toContain("上一根版本未知");
+    expect(skipReasonLabel("pool_warmup_failed")).toBe("策略池预热失败（pool_warmup_failed）");
+    expect(skipReasonLabel("market_missing")).toContain("另一个市场的数据未到");
     expect(skipReasonLabel("custom")).toBe("custom");
     expect(skipReasonLabel("no_data")).toBe("本期无数据（no_data）");
     expect(skipReasonLabel("history_insufficient")).toContain("历史覆盖不足");

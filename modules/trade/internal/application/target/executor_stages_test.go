@@ -47,7 +47,7 @@ func newMixedExecutorFixture(t *testing.T) *targetFixture {
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
 			OwnerInstanceID: "runner-1", OwnerSessionID: "session-1", ExecutionMode: "PAPER",
-			SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "configure",
+			SettlementAsset: "USDT", OrderSettingsJSON: legacyOrderSettings, AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {
 			return err
 		}
@@ -176,7 +176,8 @@ func TestBlockedReduceDoesNotStallLaterStages(t *testing.T) {
 // 本目标只剩簿上的挂单：定为 CONVERGED，唤醒时间是距有效期末的剩余时间，不再每秒重算。
 func TestOnlyRestingOrdersConvergeWithRetryAfterValidUntil(t *testing.T) {
 	f := newMixedExecutorFixture(t)
-	f.target(t, []store.InstrumentTarget{{InstrumentID: "ETH-USDT-SPOT", Quantity: "10"}})
+	// 持仓 10、目标 11：差额 1，簿上的挂单买 1 正好覆盖。
+	f.target(t, []store.InstrumentTarget{{InstrumentID: "ETH-USDT-SPOT", Quantity: "11"}})
 	f.now = time.Now().UTC()
 	target, err := f.store.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)

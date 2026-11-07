@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math/big"
 	"sort"
 	"strings"
 	"sync"
@@ -12,12 +11,12 @@ import (
 
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/ordersettings"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution/paper"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
-	"github.com/rs/xid"
 )
 
 var (
@@ -59,14 +58,11 @@ type OrderService interface {
 }
 
 type Executor struct {
-	Store            *store.Store
-	Orders           OrderService
-	Prices           PriceSource
-	Exchanges        execution.ExchangeCatalog
-	Now              func() time.Time
-	MaxChildNotional shared.Decimal
-	// MinRebalanceRatio 是最小调仓比例，为零时用默认 5%。
-	MinRebalanceRatio shared.Decimal
+	Store     *store.Store
+	Orders    OrderService
+	Prices    PriceSource
+	Exchanges execution.ExchangeCatalog
+	Now       func() time.Time
 	// OnReversal 在同一目标内第一次出现反向子单时调用，用于告警。
 	OnReversal func(spaceID, logicalAccountID, instrumentID string, at time.Time)
 	// Observe 记录下单量指标，为空时不记录。
@@ -85,6 +81,8 @@ type Executor struct {
 
 	batchMu   sync.Mutex
 	lastBatch map[string]time.Time
+	// warned 记录已经告警过的事项（见 warnOnce）。
+	warned map[string]struct{}
 }
 
 const (
@@ -103,12 +101,11 @@ type ExecutionObserver interface {
 }
 
 const (
-	// defaultMinRebalanceRatio 是默认最小调仓比例：同号持仓与目标的差额不超过目标数量的这个比例时不下单。
-	defaultMinRebalanceRatio = "0.05"
 	// positionReflectWindow 是下单前持仓校验的回看时长。
 	positionReflectWindow     = 10 * time.Minute
 	reasonPositionUnreflected = "持仓未反映已成交子单"
 	reasonTargetReversal      = "同一目标内来回下单"
+	reasonHourlyCapDeferred   = "单币每小时上限已用完，顺延到下一个整点继续"
 )
 
 type Result struct {
@@ -137,6 +134,11 @@ type placement struct {
 	tooSmall bool
 	// deferred 表示本批这个执行账户的额度用完，留到下一批。
 	deferred bool
+	// capDeferred 表示单币每小时上限的剩余额度不够下一单，这个标的顺延到下一个整点。
+	capDeferred bool
+	// belowConfiguredMin 表示差额低于设置的最小下单额，视为已满足：跳过这个标的，不阻塞，blocked_targets 不记
+	// （和调仓阈值同口径；合约减仓、清仓不受这个门槛限制，照常下）。
+	belowConfiguredMin bool
 }
 
 type laneAction struct {
@@ -144,6 +146,9 @@ type laneAction struct {
 	instrument store.InstrumentRecord
 	delta      shared.Decimal
 	reducing   bool
+	// resting 表示这一片改成挂单（限价 + GTC，挂买一、卖一价）；hasResting 表示这个标的已经有挂单，差额里扣过它的剩余量。
+	resting    bool
+	hasResting bool
 }
 
 func (e *Executor) Converge(
@@ -254,6 +259,15 @@ func (e *Executor) Converge(
 		return Result{Status: StatusConverging, Action: "wait"}, nil
 	}
 
+	orderSettings, err := loadOrderSettings(logicalAccount)
+	if err != nil {
+		// 下单设置读不出来：这个组合不下单，原因写进目标。
+		target.LastError = err.Error()
+		if updateErr := e.updateTarget(ctx, &target, StatusPending); updateErr != nil {
+			return Result{}, updateErr
+		}
+		return Result{Status: StatusPaused}, nil
+	}
 	members, err := e.loadMembers(ctx, spaceID, logicalAccountID)
 	if errors.Is(err, store.ErrFundSettingsUnreadable) {
 		// 资金设置的排除字段读不出来：这个组合不下单，原因写进目标，不让整个模块显示未就绪。
@@ -349,11 +363,12 @@ func (e *Executor) Converge(
 	if err != nil {
 		return Result{}, err
 	}
+	env := e.newLaneEnv(ctx, spaceID, logicalAccountID, orderSettings, members, desired)
 	// 规则：有在途子单（待提交、提交中、结果未知、挂单中）时本轮只处理这些单，不发新批。
 	inFlight := false
-	var restingLanes map[string]struct{}
-	// restingLanes 是本目标有限价 GTC 挂单在簿上的标的：这些标的视为“进行中”，从本轮动作里剔除，
-	// 不阻塞其他标的；挂单剩余量从差额里扣除留给挂单任务。
+	// resting 是本目标簿上有限价 GTC 挂单的标的：挂单不阻塞其他标的，剩余量从这个标的的差额里扣除。
+	resting := make(map[string]*restingLane)
+	var expiredResting []store.OrderRecord
 	var unknown []string
 	for _, current := range orders {
 		if current.OwnerType != string(orderdomain.OwnerTarget) ||
@@ -362,7 +377,7 @@ func (e *Executor) Converge(
 		}
 		switch orderdomain.State(current.State) {
 		case orderdomain.Pending:
-			result, handled, pendingErr := e.handlePendingChild(ctx, logicalAccount, &target, current, desired, members)
+			result, handled, pendingErr := e.handlePendingChild(ctx, logicalAccount, &target, current, desired, members, env)
 			if handled {
 				return result, pendingErr
 			}
@@ -375,10 +390,15 @@ func (e *Executor) Converge(
 			inFlight = true
 		default:
 			if restingOrder(current) {
-				if restingLanes == nil {
-					restingLanes = make(map[string]struct{})
+				lane := resting[current.InstrumentID]
+				if lane == nil {
+					lane = &restingLane{signedRemaining: shared.Zero()}
+					resting[current.InstrumentID] = lane
 				}
-				restingLanes[current.InstrumentID] = struct{}{}
+				lane.add(current)
+				if expires := restingExpiresAt(current, orderSettings); !expires.IsZero() && !e.now().Before(expires) {
+					expiredResting = append(expiredResting, current)
+				}
 			} else {
 				inFlight = true
 			}
@@ -389,6 +409,13 @@ func (e *Executor) Converge(
 		if _, err := e.Orders.ResolveUnknownBatch(ctx, spaceID, unknown); err != nil {
 			return Result{}, err
 		}
+	}
+	// 超过挂单寿命的挂单撤掉，等撤单结束后剩余量重新计入差额。
+	for _, current := range expiredResting {
+		if err := e.stopOrder(ctx, target, current); err != nil {
+			return Result{}, err
+		}
+		inFlight = true
 	}
 	if inFlight {
 		if err := e.updateTarget(ctx, &target, StatusConverging); err != nil {
@@ -401,7 +428,7 @@ func (e *Executor) Converge(
 	var actions []laneAction
 	for _, instrumentID := range laneIDs(desired, members) {
 		action, complete, reason, actionErr := e.laneAction(
-			instrumentID, desired[instrumentID], members,
+			env, instrumentID, desired[instrumentID], members,
 		)
 		if actionErr != nil {
 			return Result{}, actionErr
@@ -418,18 +445,30 @@ func (e *Executor) Converge(
 			actions = append(actions, action)
 		}
 	}
-	if len(restingLanes) > 0 {
-		kept := actions[:0]
-		for _, action := range actions {
-			if _, resting := restingLanes[action.instrument.InstrumentID]; !resting {
-				kept = append(kept, action)
+	// 挂单的剩余量从差额里扣掉；反向或超出差额的挂单（买多、卖多的风险）撤掉，下一轮再按最新状态重算。
+	actions, staleResting := reconcileResting(actions, resting, blocked)
+	if len(staleResting) > 0 {
+		for _, current := range staleResting {
+			if err := e.stopOrder(ctx, target, current); err != nil {
+				return Result{}, err
 			}
 		}
-		actions = kept
+		target.BlockedTargets = blocked
+		if err := e.updateTarget(ctx, &target, StatusConverging); err != nil {
+			return Result{}, err
+		}
+		return Result{Status: StatusConverging, Action: "wait"}, nil
 	}
-	resting := len(restingLanes) > 0
+	hasResting := len(resting) > 0
+	// 按方向的金额预算挑出这一轮改成挂单的标的。
+	if !orderSettings.RestingRatio.IsZero() && len(actions) > 0 {
+		picked := pickResting(env, target, actions, desired, members, e.restingNotional(ctx))
+		for index := range actions {
+			_, actions[index].resting = picked[actions[index].instrument.InstrumentID]
+		}
+	}
 	if len(actions) > 0 {
-		if allowed, retryAfter := e.batchAllowed(logicalAccount.LogicalAccountID, members); !allowed {
+		if allowed, retryAfter := e.batchAllowed(logicalAccount.LogicalAccountID, members, env.settings); !allowed {
 			// 批间隔未到，或交易所接口限流暂停、权重用到 90%：本轮不发新批，也不算阻塞。
 			target.BlockedTargets = blocked
 			if err := e.updateTarget(ctx, &target, StatusConverging); err != nil {
@@ -446,6 +485,10 @@ func (e *Executor) Converge(
 	placeCtx := orderapp.WithSnapshotReuse(ctx)
 	var placedIDs []string
 	deferred := false
+	capDeferred := false
+	// deferredItems 是被每小时上限顺延的标的：写进 blocked_targets 让界面看得到原因，但不算阻塞——
+	// 全是顺延时目标定为 CONVERGED（计划 4.4），不触发“目标持续阻塞”告警；有真实阻塞时真实原因排在前面。
+	var deferredItems []store.BlockedTarget
 	for _, stage := range []int{stageReduce, stageSwapAdd, stageSpotBuy} {
 		if len(placedIDs) > 0 || deferred {
 			break
@@ -522,7 +565,7 @@ func (e *Executor) Converge(
 				continue
 			}
 			placement, placeErr := e.placeAction(
-				placeCtx, spaceID, target, action, members, quota,
+				placeCtx, spaceID, target, action, members, quota, env,
 			)
 			if placeErr != nil {
 				if len(placedIDs) > 0 {
@@ -535,7 +578,19 @@ func (e *Executor) Converge(
 				deferred = true
 				continue
 			}
+			if placement.capDeferred {
+				// 每小时额度用完：这个标的在本阶段视为已处理，不卡后面的阶段，留到下一个整点；
+				// 原因写进目标的 blocked_targets，界面看得到为什么没下单。
+				capDeferred = true
+				deferredItems = append(deferredItems, store.BlockedTarget{
+					InstrumentID: instrumentID, Quantity: action.delta.String(), Reason: reasonHourlyCapDeferred, Deferred: true,
+				})
+				continue
+			}
 			if placement.tooSmall && laneFinished(desired[instrumentID], members, instrumentID) {
+				continue
+			}
+			if placement.belowConfiguredMin {
 				continue
 			}
 			if placement.reason != "" {
@@ -560,7 +615,7 @@ func (e *Executor) Converge(
 		if batchErr != nil && len(results) == 0 {
 			return Result{}, batchErr
 		}
-		target.BlockedTargets = blocked
+		target.BlockedTargets = listedBlocked(blocked, deferredItems)
 		target.LastError = ""
 		if err := e.updateTarget(ctx, &target, StatusConverging); err != nil {
 			return Result{}, errors.Join(batchErr, err)
@@ -568,7 +623,7 @@ func (e *Executor) Converge(
 		return Result{Status: StatusConverging, Action: "place"}, batchErr
 	}
 	if deferred {
-		target.BlockedTargets = blocked
+		target.BlockedTargets = listedBlocked(blocked, deferredItems)
 		if err := e.updateTarget(ctx, &target, StatusConverging); err != nil {
 			return Result{}, err
 		}
@@ -578,19 +633,25 @@ func (e *Executor) Converge(
 	if collecting, err := e.walletCollect(ctx, spaceID, target, members); err != nil {
 		return Result{}, err
 	} else if collecting {
-		target.BlockedTargets = blocked
+		target.BlockedTargets = listedBlocked(blocked, deferredItems)
 		if err := e.updateTarget(ctx, &target, StatusConverging); err != nil {
 			return Result{}, err
 		}
 		return Result{Status: StatusConverging, Action: "collect", RetryAfter: transferPollInterval}, nil
 	}
-	target.BlockedTargets = blocked
+	target.BlockedTargets = listedBlocked(blocked, deferredItems)
 	target.LastError = ""
 	// 只剩挂单（或阻塞加挂单）时，定时器不再扫这个目标：挂单成交会唤醒目标，下一份目标到达时在阶段 1 撤掉旧挂单，
 	// 一直没有成交也没有新目标则到有效期末被唤醒，走过期分支撤掉本目标的挂单，所以都要设唤醒时间。
 	var retryAfter time.Duration
-	if resting {
-		retryAfter = e.restingRetryAfter(target)
+	if hasResting {
+		retryAfter = e.restingWake(target, resting, orderSettings)
+	}
+	// 有标的因每小时上限顺延：定时器不会再扫已收敛的目标，到下一个整点自己唤醒继续下顺延的部分；同时有挂单时取较早的唤醒时间。
+	if capDeferred {
+		if next := nextHourRetryDelay(e.now()); retryAfter == 0 || next < retryAfter {
+			retryAfter = next
+		}
 	}
 	if len(blocked) > 0 {
 		if err := e.updateTarget(ctx, &target, StatusBlocked); err != nil {
@@ -614,16 +675,41 @@ func (e *Executor) HasDifference(ctx context.Context, target store.LogicalAccoun
 	if err != nil {
 		return false, err
 	}
+	logical, err := e.Store.GetLogicalAccount(ctx, target.SpaceID, target.LogicalAccountID)
+	if err != nil {
+		return false, err
+	}
+	orderSettings, err := loadOrderSettings(logical)
+	if err != nil {
+		return false, err
+	}
+	env := e.newLaneEnv(ctx, target.SpaceID, target.LogicalAccountID, orderSettings, members, desired)
 	for _, instrumentID := range laneIDs(desired, members) {
-		_, complete, _, err := e.laneAction(instrumentID, desired[instrumentID], members)
+		action, complete, reason, err := e.laneAction(env, instrumentID, desired[instrumentID], members)
 		if err != nil {
 			return false, err
 		}
-		if !complete {
-			return true, nil
+		if complete {
+			continue
 		}
+		// 差额低于设置的最小下单额的，收敛时视为已满足，这里同口径：不算还有差额，免得误报“目标过期且持仓未到位”。
+		if reason == "" && e.belowConfiguredMinimumNow(ctx, env, action) {
+			continue
+		}
+		return true, nil
 	}
 	return false, nil
+}
+
+// belowConfiguredMinimumNow 判断一个动作的差额（按步长取整后）是否低于设置的最小下单额；取不到报价时按“不低于”处理。
+func (e *Executor) belowConfiguredMinimumNow(ctx context.Context, env *laneEnv, action laneAction) bool {
+	quote, err := e.Prices.LatestPrice(ctx, action.member.account.TradingAccountID,
+		exchange.NewSymbolKey(action.instrument.MarketType, action.instrument.ExchangeSymbol))
+	if err != nil || quote.Price.Cmp(shared.Zero()) <= 0 {
+		return false
+	}
+	quantity := floorToStep(action.delta.Abs(), mustBaseStep(action.instrument))
+	return env.belowConfiguredMinimum(action, quantity, quote.Price)
 }
 
 func (e *Executor) loadMembers(
@@ -663,7 +749,7 @@ func (e *Executor) loadMembers(
 		// 现货和合约的交易所代码相同（BTCUSDT），按（市场，代码）找标的。
 		symbols := make(map[exchange.SymbolKey]string)
 		for _, instrument := range instrumentRecords {
-			if instrument.Status != "TRADING" && instrument.Status != "live" {
+			if !exchange.StatusTradable(instrument.Status) {
 				continue
 			}
 			if instrument.SettlementAsset != "" &&
@@ -866,8 +952,9 @@ func laneIDs(
 	return values
 }
 
-// laneAction 先按最小调仓阈值判断整条标的是否已到位，再算下一步动作。收敛和过期告警共用，结论一致。
+// laneAction 先按调仓阈值判断整条标的是否已到位，再算下一步动作。收敛、过期告警和待提交子单的重新判断共用，结论一致。
 func (e *Executor) laneAction(
+	env *laneEnv,
 	instrumentID string,
 	desired desiredTarget,
 	members []memberState,
@@ -877,11 +964,7 @@ func (e *Executor) laneAction(
 		for _, member := range members {
 			confirmed = confirmed.Add(member.positions[instrumentID])
 		}
-		ratio := e.MinRebalanceRatio
-		if ratio.IsZero() {
-			ratio = shared.MustDecimal(defaultMinRebalanceRatio)
-		}
-		if withinRebalanceThreshold(desired.Quantity, confirmed, members, instrumentID, ratio) {
+		if env.withinRebalanceThreshold(desired.Quantity, confirmed, members, instrumentID) {
 			return laneAction{}, true, "", nil
 		}
 	}
@@ -963,28 +1046,6 @@ func nextLaneAction(
 	return laneAction{}, false, "没有启用的成员支持该标的", nil
 }
 
-// withinRebalanceThreshold 判断整条标的的差额是否小到不用调：目标不为 0，所有成员持仓都和目标同号或为零，
-// 且 |目标 − 合计持仓| 不超过 |目标| 的 ratio。按整条标的比较，反向持仓和多成员对冲不会被跳过。
-func withinRebalanceThreshold(
-	desired shared.Decimal,
-	confirmed shared.Decimal,
-	members []memberState,
-	instrumentID string,
-	ratio shared.Decimal,
-) bool {
-	if desired.IsZero() {
-		return false
-	}
-	for _, member := range members {
-		position := member.positions[instrumentID]
-		if !position.IsZero() && !sameSign(position, desired) {
-			return false
-		}
-	}
-	limit := desired.Abs().Mul(ratio)
-	return desired.Sub(confirmed).Abs().Cmp(limit) <= 0
-}
-
 // belowMinimumQuantity 判断数量按步长取整后是否下不了单。
 func belowMinimumQuantity(quantity shared.Decimal, instrument store.InstrumentRecord) bool {
 	step, minimum, err := baseQuantityRules(instrument)
@@ -1036,6 +1097,7 @@ func (e *Executor) placeAction(
 	action laneAction,
 	members []memberState,
 	quota map[string]int,
+	env *laneEnv,
 ) (placement, error) {
 	rejected, err := e.Store.RejectedTargetAccounts(ctx, spaceID, target.LogicalAccountID, target.TargetID, action.instrument.InstrumentID)
 	if err != nil {
@@ -1045,6 +1107,10 @@ func (e *Executor) placeAction(
 	// tooSmall 只统计交易规则挡住的成员，不受拒单过滤影响：
 	// 有成员本来能下单但被排除时不能算完成。
 	tooSmall := 0
+	// configuredSmall 统计因为低于设置的最小下单额而下不了单的成员。
+	configuredSmall := 0
+	// unfilled 表示有成员的伪市价单用满了尝试次数。
+	unfilled := false
 	candidates := placementCandidates(action, members)
 	for _, candidate := range candidates {
 		accountID := candidate.member.account.TradingAccountID
@@ -1075,9 +1141,18 @@ func (e *Executor) placeAction(
 		if quote.Price.Cmp(shared.Zero()) <= 0 {
 			return placement{}, &AccountError{TradingAccountID: candidate.member.account.TradingAccountID, Err: orderdomain.ErrInvalidSpec}
 		}
+		// 最小名义金额：交易所给了就用它，没给（OKX）用 minSz × 合约面值 × 价格折算。
 		minNotional, err := candidate.instrument.MinNotionalAt(quote.Price)
 		if err != nil {
 			return placement{}, fmt.Errorf("%w: minimum notional", ErrInvalidTarget)
+		}
+		// 单币每小时上限：额度不够整笔时只下剩下的；剩下的不够下一单就顺延到下一个整点，不算下不了单。
+		quantity, clipped, capErr := env.applyHourlyCap(ctx, candidate, quantity, quote.Price)
+		if capErr != nil {
+			return placement{}, capErr
+		}
+		if clipped && env.tooSmallToPlace(candidate, quantity, quote.Price) {
+			return placement{capDeferred: true}, nil
 		}
 		belowMinimum, err := belowMinimumNotional(quantity, quote.Price, minNotional)
 		if err != nil {
@@ -1089,6 +1164,13 @@ func (e *Executor) placeAction(
 		if belowMinimum && !fullClose {
 			capacityErrors = append(capacityErrors, accountID+": 金额低于交易所最小名义金额")
 			tooSmall++
+			continue
+		}
+		// 配置的最小下单额：合约减仓、清仓例外（否则剩余仓位下不了单、永远平不掉）。
+		if env.belowConfiguredMinimum(candidate, quantity, quote.Price) {
+			capacityErrors = append(capacityErrors, accountID+": 金额低于配置的最小下单额")
+			tooSmall++
+			configuredSmall++
 			continue
 		}
 		if reason, excluded := rejected[accountID]; excluded {
@@ -1120,14 +1202,36 @@ func (e *Executor) placeAction(
 				return placement{}, err
 			}
 		}
-		if e.MaxChildNotional.Cmp(shared.Zero()) > 0 {
-			maxQuantity := floorToStep(
-				e.MaxChildNotional.Div(quote.Price),
-				mustBaseStep(candidate.instrument),
-			)
-			if quantity.Cmp(maxQuantity) > 0 {
-				quantity = maxQuantity
+		// 单笔上限：拆单时每笔的名义金额不超过设置的上限；开了随机化，每笔取上限的 50%～100%。
+		children, childrenErr := e.targetChildren(ctx, spaceID, target, candidate)
+		if childrenErr != nil {
+			return placement{}, childrenErr
+		}
+		// 伪市价单：用满尝试次数仍没成交完的标的记为“未到位”，告警一次，不再重试，等下一份目标重算。
+		attempt := 0
+		// 挂单价先定：取不到买一卖一就不挂单，这一片走原来的下单方式（含伪市价的次数上限和“未到位”处理）。
+		var restingPrice shared.Decimal
+		if candidate.resting {
+			var restingOK bool
+			if restingPrice, restingOK = e.restingPrice(ctx, candidate); !restingOK {
+				candidate.resting = false
 			}
+		}
+		pseudoMarket := env.settings.OrderMode == ordersettings.OrderModePseudoMarket && !candidate.resting
+		if pseudoMarket {
+			if attempt = pseudoMarketAttempts(children); attempt >= env.settings.MaxAttempts {
+				reason := fmt.Sprintf("伪市价单已尝试 %d 次仍没成交完，本份目标不再重试", attempt)
+				e.warnOnce("unfilled|"+target.TargetID+"|"+candidate.instrument.InstrumentID,
+					fmt.Sprintf("组合 %s 的 %s 在账户 %s 上%s", target.LogicalAccountID, candidate.instrument.InstrumentID, accountID, reason))
+				capacityErrors = append(capacityErrors, accountID+": "+reason)
+				unfilled = true
+				continue
+			}
+		}
+		accountChildren := childrenOfAccount(children, accountID)
+		sliceLimit := env.sliceNotionalLimit(target, candidate.instrument.InstrumentID, len(accountChildren))
+		if maxQuantity := floorToStep(sliceLimit.Div(quote.Price), mustBaseStep(candidate.instrument)); quantity.Cmp(maxQuantity) > 0 {
+			quantity = maxQuantity
 		}
 		_, minimum, err := baseQuantityRules(candidate.instrument)
 		if err != nil {
@@ -1137,10 +1241,7 @@ func (e *Executor) placeAction(
 			capacityErrors = append(capacityErrors, candidate.member.account.TradingAccountID+": 单笔子单上限低于交易所最小数量")
 			continue
 		}
-		reversal, reversalErr := e.reversalCount(ctx, spaceID, target, candidate)
-		if reversalErr != nil {
-			return placement{}, reversalErr
-		}
+		reversal := reversalCount(accountChildren, candidate)
 		if reversal >= 2 {
 			// 同一目标内第二次反向：整条标的本目标内不再下单，新目标到达时自然清零。
 			if e.Observe != nil {
@@ -1152,12 +1253,13 @@ func (e *Executor) placeAction(
 		spec := orderdomain.OrderSpec{
 			ClientOrderSpec: orderdomain.ClientOrderSpec{
 				TradingAccountID: candidate.member.account.TradingAccountID,
-				ClientOrderID:    childClientOrderID(),
+				ClientOrderID:    childClientOrderID(attempt),
 				InstrumentID:     candidate.instrument.InstrumentID,
 				Type:             exchange.OrderTypeMarket,
 				Side:             sideForDelta(candidate.delta),
 				Quantity:         quantity,
 			},
+			Attempt:        attempt,
 			ReferencePrice: quote.Price, ReferencePriceAt: quote.UpdatedAt,
 			ReducePositionOnly: candidate.reducing,
 			Owner: orderdomain.OrderOwner{
@@ -1167,6 +1269,16 @@ func (e *Executor) placeAction(
 			PositionBefore: candidate.member.positions[candidate.instrument.InstrumentID].String(),
 		}
 		spec.PositionSide = exchange.RuleFor(candidate.instrument.MarketType).PositionSide
+		if candidate.resting {
+			// 挂单：限价 + GTC，买单挂买一价，卖单挂卖一价。
+			spec.Type, spec.FillPolicy, spec.LimitPrice = exchange.OrderTypeLimit, exchange.FillPolicyGTC, &restingPrice
+		}
+		if pseudoMarket {
+			// 限价 + IOC：价格 = 参考价 ×（1 ± 滑点），部分成交的剩余量下一轮按新的滑点再来。
+			// 默认最多 6% 的滑点比币安合约的价格过滤器（约 ±5%）宽，最后几次可能被交易所按拒单处理：1B 接入真实适配器时要处理。
+			limit := pseudoMarketPrice(quote.Price, spec.Side, env.settings, attempt, candidate.instrument.PriceTick)
+			spec.Type, spec.FillPolicy, spec.LimitPrice = exchange.OrderTypeLimit, exchange.FillPolicyIOC, &limit
+		}
 		if !candidate.reducing {
 			capacity, err := e.Orders.Capacity(ctx, spaceID, spec)
 			if err != nil {
@@ -1199,6 +1311,7 @@ func (e *Executor) placeAction(
 			return placement{}, e.discardPendingOnTargetInvalidation(ctx, spaceID, string(placed.ID), err)
 		}
 		quota[accountID]--
+		env.noteSubmitted(candidate.instrument.InstrumentID, spec.Quantity.Mul(quote.Price))
 		if reversal == 1 && e.OnReversal != nil {
 			e.OnReversal(spaceID, target.LogicalAccountID, candidate.instrument.InstrumentID, e.now())
 		}
@@ -1208,12 +1321,18 @@ func (e *Executor) placeAction(
 		// 只落库，批量提交由收敛统一发出；拒单后下一轮换成员，全部被拒时写入 blocked_targets。
 		return placement{placed: true, orderID: string(placed.ID)}, nil
 	}
-	result := placement{tooSmall: len(candidates) > 0 && tooSmall == len(candidates)}
+	result := placement{
+		tooSmall:           len(candidates) > 0 && tooSmall == len(candidates),
+		belowConfiguredMin: configuredSmall > 0 && tooSmall == len(candidates),
+	}
 	if len(capacityErrors) == 0 {
 		result.reason = "数量低于交易所最小值"
 		return result, nil
 	}
 	result.reason = "成员容量不足：" + strings.Join(capacityErrors, "; ")
+	if unfilled {
+		result.reason = "未到位：" + strings.Join(capacityErrors, "; ")
+	}
 	return result, nil
 }
 
@@ -1225,7 +1344,7 @@ func placementCandidates(action laneAction, members []memberState) []laneAction 
 		candidates := make([]laneAction, 0, len(members))
 		for _, member := range members {
 			if instrument, ok := member.instruments[instrumentID]; ok {
-				candidates = append(candidates, laneAction{member: member, instrument: instrument, delta: action.delta})
+				candidates = append(candidates, laneAction{member: member, instrument: instrument, delta: action.delta, resting: action.resting})
 			}
 		}
 		return candidates
@@ -1242,7 +1361,7 @@ func placementCandidates(action laneAction, members []memberState) []laneAction 
 		if position.Abs().Cmp(delta.Abs()) < 0 {
 			delta = position.Neg()
 		}
-		candidates = append(candidates, laneAction{member: member, instrument: instrument, delta: delta, reducing: true})
+		candidates = append(candidates, laneAction{member: member, instrument: instrument, delta: delta, reducing: true, resting: action.resting})
 	}
 	return candidates
 }
@@ -1502,20 +1621,7 @@ func mustBaseStep(instrument store.InstrumentRecord) shared.Decimal {
 }
 
 func floorToStep(value, step shared.Decimal) shared.Decimal {
-	if value.Cmp(shared.Zero()) <= 0 || step.Cmp(shared.Zero()) <= 0 {
-		return shared.Zero()
-	}
-	units := value.Div(step)
-	ratio := new(big.Rat)
-	if _, ok := ratio.SetString(units.String()); !ok {
-		return shared.Zero()
-	}
-	integer := new(big.Int).Quo(ratio.Num(), ratio.Denom())
-	raw, err := shared.ParseDecimal(integer.String())
-	if err != nil {
-		return shared.Zero()
-	}
-	return raw.Mul(step)
+	return shared.FloorToStep(value, step)
 }
 
 func sameSign(left, right shared.Decimal) bool {
@@ -1528,10 +1634,6 @@ func sideForDelta(delta shared.Decimal) exchange.Side {
 		return exchange.SideSell
 	}
 	return exchange.SideBuy
-}
-
-func childClientOrderID() string {
-	return "mt" + xid.New().String()
 }
 
 func (e *Executor) now() time.Time {
@@ -1584,17 +1686,33 @@ func (e *Executor) positionUnreflected(
 	return false, nil
 }
 
-// reversalCount 返回同一目标、同一执行账户、同一标的已发出子单（含这次将发的）的方向切换次数。
-func (e *Executor) reversalCount(
+// targetChildren 返回同一目标、同一标的已发出的子单（所有执行账户），按提交先后；
+// 伪市价单的尝试次数按标的统计（换成员不重新计数），拆单随机化和反向熔断按候选账户统计（见 childrenOfAccount），共用这一次查询。
+func (e *Executor) targetChildren(
 	ctx context.Context,
 	spaceID string,
 	target store.LogicalAccountTargetRecord,
 	candidate laneAction,
-) (int, error) {
-	sides, err := e.Store.TargetChildSides(ctx, spaceID, target.LogicalAccountID, target.TargetID,
-		candidate.member.account.TradingAccountID, candidate.instrument.InstrumentID)
-	if err != nil {
-		return 0, err
+) ([]store.TargetChildOrder, error) {
+	return e.Store.TargetChildOrders(ctx, spaceID, target.LogicalAccountID, target.TargetID, candidate.instrument.InstrumentID)
+}
+
+// childrenOfAccount 取出某个执行账户的子单。
+func childrenOfAccount(children []store.TargetChildOrder, tradingAccountID string) []store.TargetChildOrder {
+	var mine []store.TargetChildOrder
+	for _, child := range children {
+		if child.TradingAccountID == tradingAccountID {
+			mine = append(mine, child)
+		}
+	}
+	return mine
+}
+
+// reversalCount 返回已发出子单（含这次将发的）的方向切换次数。
+func reversalCount(children []store.TargetChildOrder, candidate laneAction) int {
+	sides := make([]string, 0, len(children)+1)
+	for _, child := range children {
+		sides = append(sides, child.Side)
 	}
 	sides = append(sides, string(sideForDelta(candidate.delta)))
 	switches := 0
@@ -1603,7 +1721,7 @@ func (e *Executor) reversalCount(
 			switches++
 		}
 	}
-	return switches, nil
+	return switches
 }
 
 // crossTargetReversal 判断这笔子单是否和 5 分钟内上一个目标在同一标的上的成交方向相反，只用于计数。
@@ -1662,9 +1780,9 @@ func (e *Executor) batchQuota(members []memberState) map[string]int {
 
 // batchAllowed 判断现在能否发新批：批间隔已到，成员接口没有限流暂停，权重用量低于 90%。
 // 只因批间隔未到而不能发时，retryAfter 是还要等的时间；限流原因由定时器重试。
-func (e *Executor) batchAllowed(logicalAccountID string, members []memberState) (bool, time.Duration) {
+func (e *Executor) batchAllowed(logicalAccountID string, members []memberState, settings ordersettings.Settings) (bool, time.Duration) {
 	now := e.now()
-	if interval := e.batchInterval(members); interval > 0 {
+	if interval := e.batchInterval(members, settings); interval > 0 {
 		e.batchMu.Lock()
 		last := e.lastBatch[logicalAccountID]
 		e.batchMu.Unlock()
@@ -1687,8 +1805,12 @@ func (e *Executor) batchAllowed(logicalAccountID string, members []memberState) 
 	return true, 0
 }
 
-// batchInterval 返回这个组合账户的批间隔：成员全部是模拟盘时用模拟盘间隔。
-func (e *Executor) batchInterval(members []memberState) time.Duration {
+// batchInterval 返回这个组合账户的批间隔：下单设置里写了就用设置的（实盘、模拟盘都一样），
+// 没写时取执行器的默认值，成员全部是模拟盘时用模拟盘的默认值。
+func (e *Executor) batchInterval(members []memberState, settings ordersettings.Settings) time.Duration {
+	if settings.BatchIntervalSet {
+		return settings.BatchInterval
+	}
 	if e.PaperMinBatchInterval <= 0 || len(members) == 0 {
 		return e.MinBatchInterval
 	}
@@ -1719,6 +1841,7 @@ func (e *Executor) handlePendingChild(
 	current store.OrderRecord,
 	desired map[string]desiredTarget,
 	members []memberState,
+	env *laneEnv,
 ) (Result, bool, error) {
 	spaceID := current.SpaceID
 	if current.SubmittedAt == 0 {
@@ -1733,7 +1856,7 @@ func (e *Executor) handlePendingChild(
 		}
 		return Result{Status: StatusPaused}, true, err
 	}
-	action, complete, _, err := e.laneAction(current.InstrumentID, desired[current.InstrumentID], members)
+	action, complete, _, err := e.laneAction(env, current.InstrumentID, desired[current.InstrumentID], members)
 	if err != nil {
 		return Result{}, false, err
 	}
@@ -1888,6 +2011,10 @@ func (e *Executor) waitingOnChildren(
 		if state.Terminal() {
 			continue
 		}
+		// 系统单（BNB 补买、稳定币调平）和收敛无关，稳定币买单可能挂一个小时：不能让它把快路径一直挡住。
+		if record.OwnerType == string(orderdomain.OwnerSystem) {
+			continue
+		}
 		if record.OwnerType != string(orderdomain.OwnerTarget) || record.OwnerID != target.TargetID {
 			return false, nil
 		}
@@ -1915,10 +2042,21 @@ func (e *Executor) waitingOnChildren(
 			return false, err
 		}
 		for _, order := range active {
+			if order.OwnerType == string(orderdomain.OwnerSystem) {
+				continue
+			}
 			if order.OwnerType != string(orderdomain.OwnerTarget) || order.OwnerID != target.TargetID {
 				return false, nil
 			}
 		}
 	}
 	return waiting, nil
+}
+
+// listedBlocked 返回写进目标 blocked_targets 的列表：真实阻塞在前（监控关注项只取第一条），顺延的在后。
+func listedBlocked(blocked, deferred []store.BlockedTarget) []store.BlockedTarget {
+	if len(deferred) == 0 {
+		return blocked
+	}
+	return append(append(make([]store.BlockedTarget, 0, len(blocked)+len(deferred)), blocked...), deferred...)
 }

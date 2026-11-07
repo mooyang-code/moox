@@ -62,33 +62,3 @@ type WalletTransferer interface {
 	// ListTransfers 返回 since 之后这个账户在两个钱包之间的划转记录（两个方向）。
 	ListTransfers(ctx context.Context, since time.Time) ([]TransferRecord, error)
 }
-
-// FeeDiscountConfigurer 是支持用 BNB 抵扣手续费的场所才实现的能力。
-// 唯一一个自动修改交易所账户设置的地方：只在用户于资金设置里显式开启抵扣时调用。
-type FeeDiscountConfigurer interface {
-	// SetBNBFeeDiscount 开关 BNB 抵扣；同一账户的多个市场适配器各设自己负责的那部分（现货与利息、合约）。
-	SetBNBFeeDiscount(ctx context.Context, enabled bool) error
-	// GetBNBFeeDiscount 报告当前是否开启；适配器负责的各部分全部开启才算开启。
-	GetBNBFeeDiscount(ctx context.Context) (bool, error)
-}
-
-// DustAsset 是可以兑换成 BNB 的小额资产。
-type DustAsset struct {
-	Asset string
-	// Amount 是可兑换的数量；BNBValue 是预计换得的 BNB 数量。
-	Amount   shared.Decimal
-	BNBValue shared.Decimal
-}
-
-// DustResult 是小额兑换的结果。
-type DustResult struct {
-	TotalBNB      shared.Decimal
-	TransferIDs   []string
-	ConvertedList []string
-}
-
-// DustConverter 是支持把小额资产兑换成 BNB 的场所才实现的能力。
-type DustConverter interface {
-	ListDust(ctx context.Context) ([]DustAsset, error)
-	ConvertDust(ctx context.Context, assets []string) (DustResult, error)
-}

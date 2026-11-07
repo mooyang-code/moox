@@ -1,6 +1,10 @@
 package replay
 
-import "math"
+import (
+	"math"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/ledger"
+)
 
 // 回放输出的精度规范（只作用于写入记录的输出，不改变账本模拟的内部状态）：
 // 金额、占比保留 4 位小数，持仓数量保留 8 位（加密货币的最小交易单位），价格是输入数据，原样保留。
@@ -36,8 +40,8 @@ func round4Ptr(value *float64) *float64 {
 	return &rounded
 }
 
-// rounded 返回按输出精度取整的账本变化副本。
-func (o Outcome) rounded() Outcome {
+// roundedOutcome 返回按输出精度取整的账本变化副本。
+func roundedOutcome(o ledger.Outcome) ledger.Outcome {
 	o.EquityBefore, o.EquityAfter = round4(o.EquityBefore), round4(o.EquityAfter)
 	o.Traded, o.Fee, o.Turnover = round4(o.Traded), round4(o.Fee), round4(o.Turnover)
 	o.BuyScale = round4Ptr(o.BuyScale)
