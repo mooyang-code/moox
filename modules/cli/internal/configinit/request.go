@@ -2,6 +2,7 @@ package configinit
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -28,6 +29,9 @@ type Request struct {
 		Overseas *Server    `json:"overseas"`
 		Factor   *SSHTarget `json:"factor"`
 	} `json:"servers"`
+	// ExchangeKeys 是可选的交易所密钥，写成 [[exchange_keys]]。只有配了海外服务器（Trade 所在的主机）才有用，
+	// 页面没配海外服务器时隐藏这一步；录入页不在本机检测密钥，部署完成后在海外机上检测。
+	ExchangeKeys []ExchangeKeyEntry `json:"exchange_keys"`
 
 	// 以下由 normalize 算出，供渲染使用。
 	hosts  []Host
@@ -103,6 +107,14 @@ func (r *Request) normalize(ctx context.Context, env Environment) error {
 			return err
 		}
 	}
+	exchangeKeys, err := normalizeExchangeKeyEntries(r.ExchangeKeys)
+	if err != nil {
+		return err
+	}
+	if len(exchangeKeys) > 0 && r.Servers.Overseas == nil {
+		return errors.New("交易所密钥要在海外服务器上使用（下单和检测都在那里），请先配置海外服务器，或者不填交易所密钥")
+	}
+	r.ExchangeKeys = exchangeKeys
 	keys, err := r.Tencent.normalize()
 	if err != nil {
 		return err

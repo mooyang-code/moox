@@ -32,22 +32,48 @@ type Space struct {
 	AttributesJSON string `json:"attributes_json"`
 }
 
+// 交易所密钥在 SecretMgr 里的状态，与 Admin 的 setup 服务一致。
+const (
+	ExchangeKeyCreated = "created" // 本次新建
+	ExchangeKeyExists  = "exists"  // 已存在，以管理台为准，不覆盖
+	ExchangeKeyDeleted = "deleted" // 已在管理台删除，不重建
+	ExchangeKeyMissing = "missing" // 还没有（只出现在状态查询里）
+)
+
+// ExchangeKeyResult 是一把交易所密钥（[[exchange_keys]]）的处理结果，不含密钥值。
+type ExchangeKeyResult struct {
+	SecretID string `json:"secret_id"`
+	State    string `json:"state"`
+	ReadOnly bool   `json:"readonly,omitempty"`
+	Note     string `json:"note,omitempty"`
+}
+
+// exchangeKeyNotes 把状态翻成给人看的说明。交易所密钥只建不改，所以“已存在”和“已删除”都要讲清楚为什么没动。
+var exchangeKeyNotes = map[string]string{
+	ExchangeKeyCreated: "已写入密钥管理",
+	ExchangeKeyExists:  "已存在，以管理台为准，未覆盖",
+	ExchangeKeyDeleted: "已在管理台删除，未重建",
+	ExchangeKeyMissing: "密钥管理里还没有",
+}
+
 type ApplyResult struct {
-	Action          string `json:"action"`
-	Users           int    `json:"users"`
-	Secrets         int    `json:"secrets"`
-	Spaces          int    `json:"spaces"`
-	SpacesCreated   int    `json:"spaces_created"`
-	SpacesUnchanged int    `json:"spaces_unchanged"`
+	Action          string              `json:"action"`
+	Users           int                 `json:"users"`
+	Secrets         int                 `json:"secrets"`
+	Spaces          int                 `json:"spaces"`
+	SpacesCreated   int                 `json:"spaces_created"`
+	SpacesUnchanged int                 `json:"spaces_unchanged"`
+	ExchangeKeys    []ExchangeKeyResult `json:"exchange_keys,omitempty"`
 }
 
 type StatusResult struct {
-	State     string `json:"state"`
-	Users     int    `json:"users"`
-	Secrets   int    `json:"secrets"`
-	Spaces    int    `json:"spaces"`
-	Missing   int    `json:"missing"`
-	Conflicts int    `json:"conflicts"`
+	State        string              `json:"state"`
+	Users        int                 `json:"users"`
+	Secrets      int                 `json:"secrets"`
+	Spaces       int                 `json:"spaces"`
+	Missing      int                 `json:"missing"`
+	Conflicts    int                 `json:"conflicts"`
+	ExchangeKeys []ExchangeKeyResult `json:"exchange_keys,omitempty"`
 }
 
 func New(gateway gatewayclient.Invoker) *Client {
@@ -85,6 +111,7 @@ func (c *Client) ApplyWithSpaces(
 		Secrets: int(response.GetSecrets()),
 		Spaces:  int(response.GetSpaces()), SpacesCreated: int(response.GetSpacesCreated()),
 		SpacesUnchanged: int(response.GetSpacesUnchanged()),
+		ExchangeKeys:    exchangeKeyResults(response.GetExchangeKeys()),
 	}, nil
 }
 
@@ -118,6 +145,7 @@ func (c *Client) StatusWithSpaces(
 		State: response.GetState(), Users: int(response.GetUsers()), Secrets: int(response.GetSecrets()),
 		Spaces:  int(response.GetSpaces()),
 		Missing: int(response.GetMissing()), Conflicts: int(response.GetConflicts()),
+		ExchangeKeys: exchangeKeyResults(response.GetExchangeKeys()),
 	}, nil
 }
 
@@ -158,6 +186,7 @@ func applyRequest(manifest setupconfig.Manifest, spaces []Space) *pb.ApplySetupR
 		Admin:        &pb.SetupAdmin{Username: manifest.Admin.Username, Password: manifest.Admin.Password},
 		TencentCloud: &pb.SetupTencentCloud{SecretId: manifest.TencentCloud.SecretID, SecretKey: manifest.TencentCloud.SecretKey},
 		Spaces:       spacesToPB(spaces),
+		ExchangeKeys: exchangeKeysToPB(manifest.ExchangeKeys),
 	}
 }
 
@@ -166,7 +195,29 @@ func statusRequest(manifest setupconfig.Manifest, spaces []Space) *pb.GetSetupSt
 		Admin:        &pb.SetupAdmin{Username: manifest.Admin.Username, Password: manifest.Admin.Password},
 		TencentCloud: &pb.SetupTencentCloud{SecretId: manifest.TencentCloud.SecretID, SecretKey: manifest.TencentCloud.SecretKey},
 		Spaces:       spacesToPB(spaces),
+		ExchangeKeys: exchangeKeysToPB(manifest.ExchangeKeys),
 	}
+}
+
+func exchangeKeysToPB(keys []setupconfig.ExchangeKey) []*pb.SetupExchangeKey {
+	result := make([]*pb.SetupExchangeKey, 0, len(keys))
+	for _, key := range keys {
+		result = append(result, &pb.SetupExchangeKey{
+			Name: key.Name, Exchange: key.Exchange, Environment: key.Environment,
+			ApiKey: key.APIKey, SecretKey: key.SecretKey, Passphrase: key.Passphrase, Readonly: key.ReadOnly,
+		})
+	}
+	return result
+}
+
+func exchangeKeyResults(items []*pb.SetupExchangeKeyResult) []ExchangeKeyResult {
+	var results []ExchangeKeyResult
+	for _, item := range items {
+		results = append(results, ExchangeKeyResult{
+			SecretID: item.GetSecretId(), State: item.GetState(), ReadOnly: item.GetReadonly(), Note: exchangeKeyNotes[item.GetState()],
+		})
+	}
+	return results
 }
 
 func spacesToPB(spaces []Space) []*pb.SetupSpace {
