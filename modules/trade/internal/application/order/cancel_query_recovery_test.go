@@ -30,7 +30,7 @@ func (s recoveryFillSync) SyncAccount(ctx context.Context, id string) error {
 
 func TestRecoverCancelTerminalQueryWaitsForRealFillReducer(t *testing.T) {
 	s, db, a := newTestService(t)
-	require.NoError(t, db.DBForTest().Exec("UPDATE t_trade_instruments SET c_instrument_id='BTC-USDT',c_environment='TESTNET'").Error)
+	require.NoError(t, db.DBForTest().Exec("UPDATE t_trade_instruments SET c_instrument_id='BTC-USDT-SPOT',c_environment='TESTNET'").Error)
 	spec := testSpec(s.now())
 	pending, err := s.Place(context.Background(), "space-1", spec)
 	require.NoError(t, err)

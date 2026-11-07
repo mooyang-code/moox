@@ -40,7 +40,7 @@ func TestUnifiedEquityFormulaOnStandardAccount(t *testing.T) {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
 			SpaceID: "space-1", TradingAccountID: "account-1", Name: "live",
 			Exchange: string(exchange.ExchangeBinance), Markets: []string{"SPOT", "SWAP"}, AccountMode: string(exchange.AccountModeBinanceStandard),
-			ExecutionMode: string(exchange.ExecutionModeLive), Environment: string(exchange.AccountEnvironmentTestnet),
+			ExecutionMode: string(exchange.ExecutionModeLive), Environment: string(exchange.AccountEnvironmentProduction),
 			CredentialSecretID: "secret-1", SettlementAsset: "USDT", MarginMode: "CROSS", LeverageSettings: store.LeverageSettings{"*": "5"},
 			Status: string(exchange.AccountStatusEnabled), Ready: true,
 			Snapshot: store.TradingAccountSnapshot{
@@ -70,7 +70,7 @@ func TestUnifiedEquityFormulaOnStandardAccount(t *testing.T) {
 		// 合约标的后写入：同名的合约不能顶替现货标的去给 BTC 估值。
 		for _, market := range []string{"SPOT", "SWAP"} {
 			record := store.InstrumentRecord{
-				Exchange: string(exchange.ExchangeBinance), Environment: string(exchange.AccountEnvironmentTestnet),
+				Exchange: string(exchange.ExchangeBinance), Environment: string(exchange.AccountEnvironmentProduction),
 				MarketType: market, ExchangeSymbol: "BTCUSDT", InstrumentID: "BTC-USDT-" + market,
 				BaseAsset: "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT", ExchangeQuantityStep: "0.001", MinExchangeQuantity: "0.001",
 				PriceTick: "0.1", Status: "TRADING",
@@ -113,7 +113,7 @@ func TestUnifiedEquitySubtractsBorrowedSettlement(t *testing.T) {
 		return tx.CreateTradingAccount(store.TradingAccountRecord{
 			SpaceID: "space-1", TradingAccountID: "account-1", Name: "live",
 			Exchange: string(exchange.ExchangeBinance), Markets: []string{"SPOT", "SWAP"}, AccountMode: string(exchange.AccountModeBinancePortfolioMargin),
-			ExecutionMode: string(exchange.ExecutionModeLive), Environment: string(exchange.AccountEnvironmentTestnet),
+			ExecutionMode: string(exchange.ExecutionModeLive), Environment: string(exchange.AccountEnvironmentProduction),
 			CredentialSecretID: "secret-1", SettlementAsset: "USDT", MarginMode: "CROSS", LeverageSettings: store.LeverageSettings{"*": "5"},
 			Status: string(exchange.AccountStatusEnabled), Ready: true,
 			Snapshot: store.TradingAccountSnapshot{

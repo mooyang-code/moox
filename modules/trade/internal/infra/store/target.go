@@ -150,7 +150,11 @@ func (tx *Tx) AcceptLogicalAccountTarget(
 		tradableMarkets[i] = exchange.MarketType(market)
 	}
 	for _, target := range record.Targets {
-		if target.Hold || exchange.RuleFor(exchange.ResolveInstrumentMarket(target.InstrumentID, tradableMarkets)).CanShort {
+		targetMarket := exchange.ResolveInstrumentMarket(target.InstrumentID, tradableMarkets)
+		if targetMarket == "" {
+			return LogicalAccountTargetRecord{}, false, fmt.Errorf("%w: 标的 %s 缺少市场后缀 -SPOT 或 -SWAP", ErrInvalidRecord, target.InstrumentID)
+		}
+		if target.Hold || exchange.RuleFor(targetMarket).CanShort {
 			continue
 		}
 		quantity, parseErr := shared.ParseDecimal(target.Quantity)

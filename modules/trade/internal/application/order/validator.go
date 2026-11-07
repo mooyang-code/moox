@@ -100,6 +100,9 @@ func (v Validator) validateOptions(ctx context.Context, spaceID string, spec ord
 	}
 	// 订单的市场由标的 ID 决定，必须是账户已开通的市场。
 	market := account.MarketForInstrument(spec.InstrumentID)
+	if market == "" {
+		return Validation{}, fmt.Errorf("%w: 标的 %s 缺少市场后缀 -SPOT 或 -SWAP", ErrInstrumentDisabled, spec.InstrumentID)
+	}
 	if !account.SupportsMarket(market) {
 		return Validation{}, fmt.Errorf("%w: 账户没有开通市场 %s", ErrInstrumentDisabled, market)
 	}

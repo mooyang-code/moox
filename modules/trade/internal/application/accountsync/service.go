@@ -968,6 +968,7 @@ func (s *Service) ensureOrderForFill(
 			ctx,
 			account.SpaceID,
 			account.TradingAccountID,
+			fill.Market,
 			fill.ClientOrderID,
 		); err == nil {
 			return record.OwnerType == string(orderdomain.OwnerExternal), nil
@@ -1043,6 +1044,7 @@ func (s *Service) applyOrder(
 			ctx,
 			account.SpaceID,
 			account.TradingAccountID,
+			current.Market,
 			current.ClientOrderID,
 		)
 	case current.ExchangeOrderID != "":
@@ -1332,6 +1334,7 @@ func (s *Service) importExternalOrder(
 			ctx,
 			account.SpaceID,
 			account.TradingAccountID,
+			current.Market,
 			clientOrderID,
 		)
 	}

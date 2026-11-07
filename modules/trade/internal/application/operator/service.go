@@ -528,7 +528,7 @@ func (s *Service) recoverChild(ctx context.Context, action store.OperatorActionR
 		return ManualOrderResult{}, true, err
 	}
 	persistedAction = action
-	child, err := s.Store.GetOrderByClientID(ctx, command.SpaceID, command.TradingAccountID, command.ClientOrderID)
+	child, err := s.Store.GetOrderByClientID(ctx, command.SpaceID, command.TradingAccountID, exchange.MarketOfInstrumentID(command.InstrumentID), command.ClientOrderID)
 	if errors.Is(err, gorm.ErrRecordNotFound) && progress.OrderID == "" {
 		if s.manualExpired(progress) {
 			result, err := s.failManualAction(ctx, action, errors.New("manual submission deadline exceeded"), nil)

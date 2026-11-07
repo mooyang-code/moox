@@ -113,6 +113,7 @@ func (s *Service) Place(
 		ctx,
 		spaceID,
 		spec.TradingAccountID,
+		exchange.MarketOfInstrumentID(spec.InstrumentID),
 		spec.ClientOrderID,
 	); err == nil {
 		if !sameSpec(existing, spec) {
@@ -210,6 +211,7 @@ func (s *Service) Place(
 				ctx,
 				validation.Account.SpaceID,
 				spec.TradingAccountID,
+				validation.Instrument.MarketType,
 				spec.ClientOrderID,
 			)
 			if getErr != nil {
@@ -1574,8 +1576,7 @@ func sameSpec(record store.OrderRecord, spec orderdomain.OrderSpec) bool {
 		return false
 	}
 	instrumentMatches := stored.Spec.InstrumentID == spec.InstrumentID ||
-		record.InstrumentID == spec.InstrumentID ||
-		record.ExchangeSymbol == spec.InstrumentID
+		record.InstrumentID == spec.InstrumentID
 	return stored.Spec.TradingAccountID == spec.TradingAccountID &&
 		stored.Spec.ClientOrderID == spec.ClientOrderID &&
 		instrumentMatches &&

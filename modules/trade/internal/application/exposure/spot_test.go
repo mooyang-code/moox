@@ -29,12 +29,13 @@ func TestSpotDust(t *testing.T) {
 
 func TestSpotInstrumentsUsesSettlementQuotedTradableInstrument(t *testing.T) {
 	instruments := []store.InstrumentRecord{
-		{InstrumentID: "BTC-BUSD", BaseAsset: "BTC", QuoteAsset: "BUSD", Status: "TRADING"},
-		{InstrumentID: "BTC-USDT-OFF", BaseAsset: "BTC", QuoteAsset: "USDT", Status: "BREAK"},
-		{InstrumentID: "BTC-USDT", BaseAsset: "BTC", QuoteAsset: "USDT", Status: "TRADING"},
+		{InstrumentID: "BTC-USDT-SWAP", MarketType: "SWAP", BaseAsset: "BTC", QuoteAsset: "USDT", Status: "TRADING"}, // 合约标的不能用来卖现货
+		{InstrumentID: "BTC-BUSD", MarketType: "SPOT", BaseAsset: "BTC", QuoteAsset: "BUSD", Status: "TRADING"},
+		{InstrumentID: "BTC-USDT-OFF", MarketType: "SPOT", BaseAsset: "BTC", QuoteAsset: "USDT", Status: "BREAK"},
+		{InstrumentID: "BTC-USDT-SPOT", MarketType: "SPOT", BaseAsset: "BTC", QuoteAsset: "USDT", Status: "TRADING"},
 	}
 	got := SpotInstruments(instruments, "USDT")
-	if got["BTC"].InstrumentID != "BTC-USDT" || len(got) != 1 {
+	if got["BTC"].InstrumentID != "BTC-USDT-SPOT" || len(got) != 1 {
 		t.Fatalf("instruments = %+v", got)
 	}
 }

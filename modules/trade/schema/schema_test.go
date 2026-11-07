@@ -140,7 +140,7 @@ func TestAllSQLDefinesApprovedIdentityScopes(t *testing.T) {
 		{"t_trading_accounts", []string{"c_space_id", "c_name"}},
 		{"t_trade_instruments", []string{"c_exchange", "c_environment", "c_market_type", "c_exchange_symbol"}},
 		{"t_trade_orders", []string{"c_space_id", "c_order_id"}},
-		{"t_trade_orders", []string{"c_space_id", "c_trading_account_id", "c_client_order_id"}},
+		{"t_trade_orders", []string{"c_space_id", "c_trading_account_id", "c_market_type", "c_client_order_id"}},
 		{"t_order_fills", []string{"c_space_id", "c_trading_account_id", "c_market_type", "c_exchange_symbol", "c_exchange_trade_id"}},
 		{"t_trading_positions", []string{"c_space_id", "c_trading_account_id", "c_market_type", "c_exchange_symbol", "c_position_side"}},
 		{"t_trading_position_tombstones", []string{"c_space_id", "c_trading_account_id", "c_market_type", "c_exchange_symbol", "c_position_side"}},

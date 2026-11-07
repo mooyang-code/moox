@@ -50,8 +50,16 @@ func TestMarketForInstrument(t *testing.T) {
 	if !both.SupportsMarket(exchange.MarketTypeSpot) || both.SupportsMarket(exchange.MarketTypeStock) || !both.HasLeverageMarket() {
 		t.Fatal("市场判断不对")
 	}
-	// 只开通一个市场时，标的 ID 不必带后缀。
-	if got := validSpotAccount().MarketForInstrument("BTCUSDT"); got != exchange.MarketTypeSpot {
-		t.Fatalf("market = %q", got)
+	// 一律按后缀判断：单市场账户也不例外，加密货币标的没有后缀就没有市场；股票代码只在开通了股票市场的账户上有效。
+	if got := validSpotAccount().MarketForInstrument("BTCUSDT"); got != "" {
+		t.Fatalf("没有后缀的加密货币标的市场 = %q，想要空", got)
+	}
+	if got := validSpotAccount().MarketForInstrument("BTC-USDT-SWAP"); got != exchange.MarketTypeSwap {
+		t.Fatalf("后缀指向的市场 = %q，不能被账户只开通现货改写", got)
+	}
+	stock := validSpotAccount()
+	stock.Markets = []exchange.MarketType{exchange.MarketTypeStock}
+	if got := stock.MarketForInstrument("600519.SH"); got != exchange.MarketTypeStock {
+		t.Fatalf("股票市场 = %q", got)
 	}
 }

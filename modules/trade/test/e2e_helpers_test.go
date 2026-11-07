@@ -332,7 +332,7 @@ func (a *synchronousPaperAdapter) PlaceOrder(ctx context.Context, request exchan
 	if err != nil {
 		return exchange.Order{}, err
 	}
-	record, err := a.Store.GetOrderByClientID(ctx, testSpace, testAccount, request.ClientOrderID)
+	record, err := a.Store.GetOrderByClientID(ctx, testSpace, testAccount, request.Market, request.ClientOrderID)
 	if err != nil {
 		return exchange.Order{}, err
 	}

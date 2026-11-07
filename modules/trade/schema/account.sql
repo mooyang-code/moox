@@ -24,6 +24,8 @@ CREATE TABLE IF NOT EXISTS t_trading_accounts (
     c_snapshot_source_time INTEGER NOT NULL DEFAULT 0,
     -- 各钱包待余额确认的水位（钱包 -> 交易所毫秒时间）：私有成交/余额事件抬高对应钱包的水位，只有覆盖该水位的完整余额快照才能清掉并恢复准入
     c_balance_pending_json TEXT NOT NULL DEFAULT '{}',
+    -- 上次小额资产兑换 BNB 的时间（毫秒）；单独存，不放进检测结果
+    c_last_dust_convert_at INTEGER NOT NULL DEFAULT 0,
     c_last_sync_at INTEGER NOT NULL DEFAULT 0,
     c_last_ready_at INTEGER NOT NULL DEFAULT 0,
     c_last_error TEXT NOT NULL DEFAULT '',
@@ -44,6 +46,8 @@ CREATE TABLE IF NOT EXISTS t_trading_accounts (
     CHECK (c_markets IN ('SPOT', 'SWAP', 'SPOT,SWAP', 'STOCK')),
     CHECK (c_account_mode IN ('', 'BINANCE_PORTFOLIO_MARGIN', 'BINANCE_STANDARD', 'OKX_UNIFIED')),
     CHECK (c_account_mode = '' OR (c_execution_mode = 'LIVE' AND c_markets <> 'STOCK')),
+    -- 测试网一个账户只开一个市场
+    CHECK (c_live_environment <> 'TESTNET' OR c_markets <> 'SPOT,SWAP'),
     CHECK (c_execution_mode IN ('PAPER', 'LIVE')),
     CHECK (
         (c_execution_mode = 'PAPER'

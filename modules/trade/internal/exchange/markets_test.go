@@ -50,8 +50,10 @@ func TestResolveInstrumentMarket(t *testing.T) {
 	both := []MarketType{MarketTypeSpot, MarketTypeSwap}
 	require.Equal(t, MarketTypeSwap, ResolveInstrumentMarket("BTC-USDT-SWAP", both))
 	require.Equal(t, MarketTypeSpot, ResolveInstrumentMarket("BTC-USDT-SPOT", both))
-	// 只开通一个市场时，不要求标的 ID 带后缀。
-	require.Equal(t, MarketTypeSwap, ResolveInstrumentMarket("BTCUSDT", []MarketType{MarketTypeSwap}))
+	// 一律按后缀判断：单市场账户也不例外，没有后缀的加密货币标的没有市场。
+	require.Equal(t, MarketType(""), ResolveInstrumentMarket("BTCUSDT", []MarketType{MarketTypeSwap}))
+	require.Equal(t, MarketTypeSwap, ResolveInstrumentMarket("BTC-USDT-SWAP", []MarketType{MarketTypeSpot}), "后缀不能被账户的市场改写")
+	require.Equal(t, MarketType(""), ResolveInstrumentMarket("600519.XSHG", []MarketType{MarketTypeSpot}), "没开股票市场的账户不认股票代码")
 	require.Equal(t, MarketTypeStock, ResolveInstrumentMarket("600519.XSHG", []MarketType{MarketTypeStock}))
 }
 

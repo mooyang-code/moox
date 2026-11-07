@@ -141,9 +141,8 @@ func TestServiceSyncAccountImportsExternalOrderAndAppliesFacts(t *testing.T) {
 	orderRecord, err := tradeStore.GetOrderByClientID(
 		context.Background(),
 		"space-1",
-		"account-1",
-		"manual-1",
-	)
+		"account-1", exchange.MarketTypeSwap,
+		"manual-1")
 	require.NoError(t, err)
 	require.Equal(t, "EXTERNAL", orderRecord.OwnerType)
 	require.Equal(t, "PARTIALLY_FILLED", orderRecord.State)
@@ -387,8 +386,7 @@ func TestTerminalExternalFillPausesSynchronouslyWithoutObserver(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "PAUSED", logicalAccount.AutomationState)
 	order, err := tradeStore.GetOrderByClientID(
-		context.Background(), "space-1", "account-1", current.ClientOrderID,
-	)
+		context.Background(), "space-1", "account-1", exchange.MarketTypeSwap, current.ClientOrderID)
 	require.NoError(t, err)
 	require.Equal(t, "FILLED", order.State)
 }
@@ -497,8 +495,7 @@ func TestOrderReducerIgnoresOlderExchangeUpdateAndAggregateFill(t *testing.T) {
 	require.NoError(t, service.ApplyOrder(context.Background(), "account-1", olderTerminal))
 
 	record, err := tradeStore.GetOrderByClientID(
-		context.Background(), "space-1", "account-1", open.ClientOrderID,
-	)
+		context.Background(), "space-1", "account-1", exchange.MarketTypeSwap, open.ClientOrderID)
 	require.NoError(t, err)
 	require.Equal(t, "OPEN", record.State)
 	require.Equal(t, "0", record.FilledQuantity)
@@ -529,8 +526,7 @@ func TestOrderReducerDoesNotRegressTerminalState(t *testing.T) {
 	require.NoError(t, service.ApplyOrder(context.Background(), "account-1", current))
 
 	record, err := tradeStore.GetOrderByClientID(
-		context.Background(), "space-1", "account-1", current.ClientOrderID,
-	)
+		context.Background(), "space-1", "account-1", exchange.MarketTypeSwap, current.ClientOrderID)
 	require.NoError(t, err)
 	require.Equal(t, "REJECTED", record.State)
 }
@@ -552,8 +548,7 @@ func TestOrderReducerIgnoresRegressingCumulativeFillSnapshot(t *testing.T) {
 	}
 	require.NoError(t, service.ApplyOrder(context.Background(), "account-1", current))
 	record, err := tradeStore.GetOrderByClientID(
-		context.Background(), "space-1", "account-1", current.ClientOrderID,
-	)
+		context.Background(), "space-1", "account-1", exchange.MarketTypeSwap, current.ClientOrderID)
 	require.NoError(t, err)
 	expected := record.Version
 	record.FilledQuantity = "1"
@@ -571,8 +566,7 @@ func TestOrderReducerIgnoresRegressingCumulativeFillSnapshot(t *testing.T) {
 	require.NoError(t, service.ApplyOrder(context.Background(), "account-1", regressing))
 
 	record, err = tradeStore.GetOrderByClientID(
-		context.Background(), "space-1", "account-1", current.ClientOrderID,
-	)
+		context.Background(), "space-1", "account-1", exchange.MarketTypeSwap, current.ClientOrderID)
 	require.NoError(t, err)
 	require.Equal(t, "PARTIALLY_FILLED", record.State)
 	require.Equal(t, "1", record.FilledQuantity)

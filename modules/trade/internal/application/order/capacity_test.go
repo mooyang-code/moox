@@ -39,7 +39,7 @@ func TestCapacityLiveUsesReservationFormulaAndBaseSteps(t *testing.T) {
 			spec.Quantity = shared.MustDecimal("2")
 			spec.Side = tc.side
 			if tc.market == exchange.MarketTypeSwap {
-				spec.PositionSide = exchange.PositionSideNet
+				spec.PositionSide, spec.InstrumentID = exchange.PositionSideNet, "BTC-USDT-SWAP"
 			}
 			got, err := s.Capacity(context.Background(), "space-1", spec)
 			require.NoError(t, err)
@@ -95,7 +95,7 @@ func TestCapacityPaperUsesLedgerFeesSlippageAndReservations(t *testing.T) {
 			spec.Quantity = shared.MustDecimal("2")
 			spec.Side = tc.side
 			if tc.market == exchange.MarketTypeSwap {
-				spec.PositionSide = exchange.PositionSideNet
+				spec.PositionSide, spec.InstrumentID = exchange.PositionSideNet, "BTC-USDT-SWAP"
 			}
 			got, err := s.Capacity(context.Background(), "space-1", spec)
 			require.NoError(t, err)

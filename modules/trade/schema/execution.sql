@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS t_trade_orders (
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (c_space_id, c_order_id),
-    UNIQUE (c_space_id, c_trading_account_id, c_client_order_id),
+    UNIQUE (c_space_id, c_trading_account_id, c_market_type, c_client_order_id),
     FOREIGN KEY (c_space_id, c_trading_account_id)
         REFERENCES t_trading_accounts (c_space_id, c_trading_account_id),
     FOREIGN KEY (c_space_id, c_logical_account_id)
@@ -116,14 +116,15 @@ ON t_trade_orders (
 CREATE INDEX IF NOT EXISTS idx_trade_orders_logical_state
 ON t_trade_orders (c_space_id, c_logical_account_id, c_state);
 
--- 单币每小时上限：按（组合、内部标的 ID、提交时间所在的自然小时）汇总已提交子单的名义金额。
-CREATE INDEX IF NOT EXISTS idx_trade_orders_logical_instrument_submitted
+-- 单币每小时上限：按（组合、内部标的 ID、提交时间所在的自然小时）汇总策略已提交子单的名义金额。
+CREATE INDEX IF NOT EXISTS idx_trade_orders_target_hourly
 ON t_trade_orders (
     c_space_id,
     c_logical_account_id,
     c_instrument_id,
     c_submitted_at
-);
+)
+WHERE c_owner_type = 'TARGET';
 
 -- 模拟撮合只扫 OPEN 订单，部分索引不随历史订单增长。
 CREATE INDEX IF NOT EXISTS idx_trade_orders_paper_open

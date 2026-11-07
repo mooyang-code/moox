@@ -292,6 +292,7 @@ func runSubmitPhase(
 			ctx,
 			smokeSpaceID,
 			harness.identity.AccountID,
+			instrument.MarketType,
 			clientOrderID,
 		); getErr == nil {
 			state := smokeState{

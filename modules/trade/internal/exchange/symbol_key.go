@@ -22,9 +22,22 @@ func (k SymbolKey) String() string {
 	return string(k.Market) + ":" + k.Symbol
 }
 
-// IsZero 报告键是否缺少市场或代码。
+// IsZero 报告键是否完全没填（市场和代码都为空），用作“不按标的过滤”。半空的键（有代码没市场）不是零值，会被 Validate 拒绝。
 func (k SymbolKey) IsZero() bool {
-	return k.Market == MarketTypeUnspecified || k.Symbol == ""
+	return k.Market == MarketTypeUnspecified && k.Symbol == ""
+}
+
+// Valid 报告键的市场和代码是否都已填写。
+func (k SymbolKey) Valid() bool {
+	return k.Market != MarketTypeUnspecified && k.Symbol != ""
+}
+
+// Validate 要求键要么完全没填，要么市场和代码都填了：给了代码就必须给市场，不猜。
+func (k SymbolKey) Validate() error {
+	if k.IsZero() || k.Valid() {
+		return nil
+	}
+	return fmt.Errorf("标的键 %q 缺少市场或交易所代码：给了代码就必须同时给市场", k.String())
 }
 
 // ParseSymbolKey 解析 String 的输出。

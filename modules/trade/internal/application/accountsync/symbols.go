@@ -31,7 +31,7 @@ func FullSymbols(
 ) []exchange.SymbolKey {
 	set := make(map[exchange.SymbolKey]struct{})
 	add := func(key exchange.SymbolKey) {
-		if !key.IsZero() {
+		if key.Valid() {
 			set[key] = struct{}{}
 		}
 	}
@@ -128,7 +128,7 @@ func (s *Service) BoundedFullSymbols(
 		if len(set) >= fullSymbolCap {
 			break
 		}
-		if !key.IsZero() {
+		if key.Valid() {
 			set[key] = struct{}{}
 		}
 	}

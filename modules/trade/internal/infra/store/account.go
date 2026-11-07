@@ -197,14 +197,6 @@ func (s TradingAccountSnapshot) WalletBalances(wallet string) []AssetBalance {
 // DefaultLeverageKey 是 LeverageSettings 里账户默认杠杆的键，不是交易标的。
 const DefaultLeverageKey = "*"
 
-// For 返回标的的杠杆，单标的配置优先，否则取账户默认杠杆。
-func (s LeverageSettings) For(symbol string) string {
-	if leverage := s[symbol]; leverage != "" {
-		return leverage
-	}
-	return s[DefaultLeverageKey]
-}
-
 type TradingAccountRecord struct {
 	SpaceID          string
 	TradingAccountID string
@@ -229,11 +221,13 @@ type TradingAccountRecord struct {
 	SnapshotSourceTime int64
 	// BalancePending 是各钱包待余额确认的水位（钱包 -> 毫秒）；没有条目表示该钱包没有待确认的成交或私有余额更新。
 	BalancePending map[string]int64
-	LastSyncAt     int64
-	LastReadyAt    int64
-	LastError      string
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+	// LastDustConvertAt 是上次小额资产兑换 BNB 的时间（毫秒），0 表示从没兑换过。
+	LastDustConvertAt int64
+	LastSyncAt        int64
+	LastReadyAt       int64
+	LastError         string
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 }
 
 // HasBalanceMarket 报告账户是否开通了持仓来自余额的市场（现货、股票）。
@@ -288,6 +282,7 @@ type tradingAccountRow struct {
 	SnapshotJSON         string    `gorm:"column:c_snapshot_json"`
 	SnapshotSourceTime   int64     `gorm:"column:c_snapshot_source_time"`
 	BalancePendingJSON   string    `gorm:"column:c_balance_pending_json"`
+	LastDustConvertAt    int64     `gorm:"column:c_last_dust_convert_at"`
 	LastSyncAt           int64     `gorm:"column:c_last_sync_at"`
 	LastReadyAt          int64     `gorm:"column:c_last_ready_at"`
 	LastError            string    `gorm:"column:c_last_error"`
@@ -617,6 +612,19 @@ func (tx *Tx) ClearBalancePendingThrough(spaceID, tradingAccountID string, walle
 	return nil
 }
 
+// SetLastDustConvertAt 记录上次小额资产兑换 BNB 的时间（毫秒）。
+func (tx *Tx) SetLastDustConvertAt(spaceID, tradingAccountID string, at int64) error {
+	if blank(spaceID) || blank(tradingAccountID) || at <= 0 {
+		return fmt.Errorf("%w: incomplete dust convert time", ErrInvalidRecord)
+	}
+	result := tx.db.Exec(`
+		UPDATE t_trading_accounts
+		SET c_last_dust_convert_at = ?, c_mtime = CURRENT_TIMESTAMP
+		WHERE c_space_id = ? AND c_trading_account_id = ?
+	`, at, spaceID, tradingAccountID)
+	return requireUpdated(result.Error, result.RowsAffected, "dust convert time")
+}
+
 func (tx *Tx) UpdateTradingAccountReadiness(
 	spaceID string,
 	tradingAccountID string,
@@ -830,7 +838,7 @@ func decodeAccountRow(row tradingAccountRow) (TradingAccountRecord, error) {
 		Ready:            row.Ready,
 		LeverageSettings: leverage, FillCursors: fillCursors,
 		Snapshot:           snapshot,
-		SnapshotSourceTime: row.SnapshotSourceTime, BalancePending: balancePending, LastSyncAt: row.LastSyncAt,
+		SnapshotSourceTime: row.SnapshotSourceTime, BalancePending: balancePending, LastDustConvertAt: row.LastDustConvertAt, LastSyncAt: row.LastSyncAt,
 		LastReadyAt: row.LastReadyAt, LastError: row.LastError,
 		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 	}, nil

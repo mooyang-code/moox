@@ -191,7 +191,7 @@ func TestOrdinaryLiveMockSubmissionMarketRules(t *testing.T) {
 			require.Error(t, err)
 			_, err = f.store.GetOperatorAction(ctx, testSpace, disabled.ActionID)
 			require.ErrorIs(t, err, gorm.ErrRecordNotFound)
-			_, err = f.store.GetOrderByClientID(ctx, testSpace, testAccount, disabled.ClientOrderID)
+			_, err = f.store.GetOrderByClientID(ctx, testSpace, testAccount, exchange.MarketTypeSwap, disabled.ClientOrderID)
 			require.ErrorIs(t, err, gorm.ErrRecordNotFound)
 			require.Equal(t, 1, fake.placeCalls)
 			runManualRecoveryWorker(t, f, service)

@@ -21,7 +21,7 @@ type FactStore interface {
 	GetTradingAccountByID(context.Context, string) (store.TradingAccountRecord, error)
 	GetPaperBalanceSnapshot(context.Context, string, string) (store.PaperBalanceSnapshot, error)
 	GetPaperAccountConfig(context.Context, string, string) (store.PaperAccountConfigRecord, error)
-	GetOrderByClientID(context.Context, string, string, string) (store.OrderRecord, error)
+	GetOrderByClientID(context.Context, string, string, exchange.MarketType, string) (store.OrderRecord, error)
 	ListActiveOrdersForAccount(context.Context, string, string) ([]store.OrderRecord, error)
 	GetOrderByExchangeID(context.Context, string, string, exchange.SymbolKey, string) (store.OrderRecord, error)
 	ListFills(context.Context, string, store.FillQuery) ([]store.FillRecord, int64, error)
@@ -334,7 +334,7 @@ func (a *Adapter) GetOrder(ctx context.Context, key exchange.SymbolKey, clientID
 	if a.Store == nil {
 		return exchange.Order{}, nil
 	}
-	row, err := a.Store.GetOrderByClientID(ctx, a.Account.SpaceID, a.Account.TradingAccountID, clientID)
+	row, err := a.Store.GetOrderByClientID(ctx, a.Account.SpaceID, a.Account.TradingAccountID, key.Market, clientID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return exchange.Order{}, &exchange.Error{Kind: exchange.ErrorOrderNotFound, Err: err}

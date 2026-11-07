@@ -560,18 +560,21 @@ func (s *Store) GetOrder(
 	return orderRecordFromRow(row), err
 }
 
+// GetOrderByClientID 按客户端订单号查单：同一个账户里现货和合约的订单号可以相同，所以要带市场。
 func (s *Store) GetOrderByClientID(
 	ctx context.Context,
 	spaceID string,
 	tradingAccountID string,
+	market exchange.MarketType,
 	clientOrderID string,
 ) (OrderRecord, error) {
 	var row orderRow
 	err := s.db.WithContext(ctx).Table("t_trade_orders").
 		Where(
-			"c_space_id = ? AND c_trading_account_id = ? AND c_client_order_id = ?",
+			"c_space_id = ? AND c_trading_account_id = ? AND c_market_type = ? AND c_client_order_id = ?",
 			spaceID,
 			tradingAccountID,
+			market,
 			clientOrderID,
 		).
 		Take(&row).Error
@@ -790,6 +793,9 @@ func (s *Store) ListOrders(
 	spaceID string,
 	query OrderQuery,
 ) ([]OrderRecord, int64, error) {
+	if query.ExchangeSymbol != "" && query.Market == "" {
+		return nil, 0, fmt.Errorf("%w: 按交易所代码查询必须同时给市场", ErrInvalidRecord)
+	}
 	db := s.db.WithContext(ctx).Table("t_trade_orders").
 		Where("c_space_id = ?", spaceID)
 	if query.LogicalAccountID != "" {
@@ -857,7 +863,7 @@ func (tx *Tx) FindOrderForFill(
 	exchangeOrderID string,
 	key exchange.SymbolKey,
 ) (OrderRecord, error) {
-	if spaceID == "" || tradingAccountID == "" || key.IsZero() ||
+	if spaceID == "" || tradingAccountID == "" || !key.Valid() ||
 		(clientOrderID == "" && exchangeOrderID == "") {
 		return OrderRecord{}, fmt.Errorf("%w: incomplete Fill order identity", ErrInvalidRecord)
 	}
@@ -1189,6 +1195,9 @@ func (s *Store) ListFills(
 	spaceID string,
 	query FillQuery,
 ) ([]FillRecord, int64, error) {
+	if query.ExchangeSymbol != "" && query.Market == "" {
+		return nil, 0, fmt.Errorf("%w: 按交易所代码查询必须同时给市场", ErrInvalidRecord)
+	}
 	db := s.db.WithContext(ctx).Table("t_order_fills").
 		Where("c_space_id = ?", spaceID)
 	if query.TradingAccountID != "" {
@@ -1658,6 +1667,9 @@ func (s *Store) ListPositions(
 	tradingAccountID string,
 	key exchange.SymbolKey,
 ) ([]PositionRecord, error) {
+	if err := key.Validate(); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidRecord, err)
+	}
 	return s.listPositions(ctx, spaceID, tradingAccountID, func(db *gorm.DB) *gorm.DB {
 		if key.IsZero() {
 			return db

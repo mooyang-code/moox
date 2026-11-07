@@ -58,13 +58,14 @@ func ParseMarkets(raw string) ([]MarketType, error) {
 	return normalized, nil
 }
 
-// ResolveInstrumentMarket 返回内部标的 ID 所属的市场：账户只开通一个市场时就是它；
-// 开通多个市场时标的 ID 必须自带 -SPOT、-SWAP 后缀。
+// ResolveInstrumentMarket 返回内部标的 ID 所属的市场，一律按后缀判断：加密货币标的必须带 -SPOT、-SWAP，
+// 没有后缀只可能是股票代码，且账户要开通了股票市场；否则返回空串，由调用方报错。
 func ResolveInstrumentMarket(instrumentID string, markets []MarketType) MarketType {
-	if len(markets) == 1 {
-		return markets[0]
+	market := MarketOfInstrumentID(instrumentID)
+	if market == MarketTypeStock && !slices.Contains(markets, MarketTypeStock) {
+		return ""
 	}
-	return MarketOfInstrumentID(instrumentID)
+	return market
 }
 
 // UnionMarkets 返回若干市场集合的并集，按固定顺序排列。

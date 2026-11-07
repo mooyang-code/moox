@@ -555,7 +555,10 @@ func (s instrumentSource) GetInstrument(
 	if err != nil {
 		return exchange.Instrument{}, err
 	}
-	return instrumentFromRecord(exchangeName, market, record), nil
+	if record.MarketType != string(market) {
+		return exchange.Instrument{}, fmt.Errorf("标的 %s 属于市场 %s，不是 %s", symbol, record.MarketType, market)
+	}
+	return instrumentFromRecord(exchangeName, exchange.MarketType(record.MarketType), record), nil
 }
 
 func (s instrumentSource) GetInstrumentForAccount(
@@ -573,7 +576,10 @@ func (s instrumentSource) GetInstrumentForAccount(
 	if err != nil {
 		return exchange.Instrument{}, err
 	}
-	return instrumentFromRecord(exchangeName, market, record), nil
+	if record.MarketType != string(market) {
+		return exchange.Instrument{}, fmt.Errorf("标的 %s 属于市场 %s，不是 %s", symbol, record.MarketType, market)
+	}
+	return instrumentFromRecord(exchangeName, exchange.MarketType(record.MarketType), record), nil
 }
 
 func instrumentFromRecord(exchangeName exchange.Exchange, market exchange.MarketType, record store.InstrumentRecord) exchange.Instrument {
@@ -615,7 +621,7 @@ func (s positionSource) GetPositionForAccount(
 	instrument, err := s.store.GetInstrumentByIDForAccount(ctx, account.SpaceID, tradingAccountID, symbol)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return exchange.Position{TradingAccountID: tradingAccountID, InstrumentID: symbol, ExchangeSymbol: symbol, PositionSide: exchange.PositionSideNet}, nil
+			return exchange.Position{TradingAccountID: tradingAccountID, InstrumentID: symbol, PositionSide: exchange.PositionSideNet}, nil
 		}
 		return exchange.Position{}, err
 	}
