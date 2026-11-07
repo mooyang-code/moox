@@ -85,6 +85,8 @@ type FlattenResult struct {
 	Accounts []FlattenAccountResult     `json:"accounts"`
 	// ReduceTargets 是减仓发起时写定的各持仓目标数量（键：执行账户|标的 ID），之后各轮都收敛到它。
 	ReduceTargets map[string]string `json:"reduce_targets,omitempty"`
+	// ReduceDone 是已经算过减仓目标的执行账户：每个账户的目标只在第一次算，之后沿用。
+	ReduceDone []string `json:"reduce_done_accounts,omitempty"`
 }
 
 type flattenRequest struct {
@@ -281,13 +283,16 @@ func (s *Service) FlattenLogicalAccount(
 		// 之后各轮（包括 FAILED、PARTIAL 后用同一个动作号重放和重启恢复）都沿用，不会再减一次。
 		var decodeErr error
 		if found {
-			if previous, _ := decodeFlattenResult(existing); len(previous.ReduceTargets) > 0 {
-				result.ReduceTargets = previous.ReduceTargets
+			if previous, _ := decodeFlattenResult(existing); len(previous.ReduceDone) > 0 || len(previous.ReduceTargets) > 0 {
+				result.ReduceTargets, result.ReduceDone = previous.ReduceTargets, previous.ReduceDone
 			}
 		}
 		scope.targets, decodeErr = decodeTargets(result.ReduceTargets)
 		if decodeErr != nil {
 			return result, decodeErr
+		}
+		for _, accountID := range result.ReduceDone {
+			scope.targets[scopeKey(accountID, "")] = shared.Zero()
 		}
 		targets := scope.targets
 		scope.ensureTargets = func(ctx context.Context, tradingAccountID string) error {
@@ -304,6 +309,7 @@ func (s *Service) FlattenLogicalAccount(
 			}
 			targets[marker] = shared.Zero()
 			result.ReduceTargets = encodeTargets(targets)
+			result.ReduceDone = appendUnique(result.ReduceDone, tradingAccountID)
 			return s.persistFlattenProgress(ctx, &result, "RUNNING")
 		}
 	}
@@ -828,6 +834,7 @@ func (s *Service) flattenSwap(
 		return
 	}
 	index := newInstrumentIndex(instruments, account.SettlementAsset)
+	settings := s.fundSettingsOf(ctx, command.SpaceID, account.TradingAccountID)
 	for _, position := range positions {
 		quantity, parseErr := shared.ParseDecimal(position.SignedQuantity)
 		if parseErr != nil {
@@ -848,6 +855,10 @@ func (s *Service) flattenSwap(
 			continue
 		}
 		if !scope.includes(instrument.InstrumentID) {
+			continue
+		}
+		// 套利底仓的永续对冲腿不参与清仓，与执行器一致：平掉它会留下没对冲的底仓现货。
+		if settings.IsArbitrageBase(instrument.BaseAsset) {
 			continue
 		}
 		// 减仓只处理登记过的持仓，并只减到目标数量；整组清仓的目标是零。
@@ -1163,6 +1174,7 @@ func (s *Service) remainingForAccount(
 	}
 	// 标的表索引和平仓用同一份：持仓所属标的按（市场，代码）查表，不用持仓记录里可能对不上的标的 ID。
 	index := newInstrumentIndex(instruments, account.SettlementAsset)
+	settings := s.fundSettingsOf(ctx, spaceID, tradingAccountID)
 	if account.HasPositionMarket() {
 		positions, listErr := s.Store.ListPositions(
 			ctx, spaceID, tradingAccountID, exchange.SymbolKey{},
@@ -1184,6 +1196,9 @@ func (s *Service) remainingForAccount(
 			}
 			instrumentID := ""
 			if instrument, found := index.bySymbol[exchange.NewSymbolKey(position.MarketType, position.ExchangeSymbol)]; found {
+				if settings.IsArbitrageBase(instrument.BaseAsset) {
+					continue // 对冲腿不算清仓剩余
+				}
 				instrumentID = instrument.InstrumentID
 			} else if scope.narrow() {
 				continue // 标的表里没有它，收窄范围时不算范围内
@@ -1282,7 +1297,8 @@ func (s *Service) persistFlattenProgress(
 	data, err := json.Marshal(struct {
 		Accounts      []FlattenAccountResult `json:"accounts"`
 		ReduceTargets map[string]string      `json:"reduce_targets,omitempty"`
-	}{Accounts: result.Accounts, ReduceTargets: result.ReduceTargets})
+		ReduceDone    []string               `json:"reduce_done_accounts,omitempty"`
+	}{Accounts: result.Accounts, ReduceTargets: result.ReduceTargets, ReduceDone: result.ReduceDone})
 	if err != nil {
 		return err
 	}
@@ -1317,12 +1333,13 @@ func decodeFlattenResult(action store.OperatorActionRecord) (FlattenResult, erro
 	var persisted struct {
 		Accounts      []FlattenAccountResult `json:"accounts"`
 		ReduceTargets map[string]string      `json:"reduce_targets,omitempty"`
+		ReduceDone    []string               `json:"reduce_done_accounts,omitempty"`
 	}
 	if err := json.Unmarshal([]byte(*action.ResultJSON), &persisted); err != nil {
 		return result, err
 	}
 	result.Accounts = persisted.Accounts
-	result.ReduceTargets = persisted.ReduceTargets
+	result.ReduceTargets, result.ReduceDone = persisted.ReduceTargets, persisted.ReduceDone
 	return result, nil
 }
 

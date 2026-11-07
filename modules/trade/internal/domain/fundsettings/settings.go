@@ -83,6 +83,17 @@ func Parse(raw string) (Settings, error) {
 	return settings, nil
 }
 
+// ParseOrDefault 解析失败时返回全部取默认值的设置和解析错误：清仓、平仓这类必须能执行的路径用它，
+// 设置坏了不能挡住清仓，调用方记告警后按默认设置继续。
+func ParseOrDefault(raw string) (Settings, error) {
+	settings, err := Parse(raw)
+	if err != nil {
+		defaults, _ := Parse("")
+		return defaults, err
+	}
+	return settings, nil
+}
+
 func parseOptional(raw, name string) (shared.Decimal, error) {
 	if strings.TrimSpace(raw) == "" {
 		return shared.Zero(), nil
@@ -92,6 +103,11 @@ func parseOptional(raw, name string) (shared.Decimal, error) {
 		return shared.Zero(), fmt.Errorf("%s不是合法数字：%w", name, err)
 	}
 	return value, nil
+}
+
+// HasExclusions 报告是否有任何排除资产：没有时调用方可以跳过逐个标的的排除检查。
+func (s Settings) HasExclusions() bool {
+	return s.BNBReserveEnabled() || len(s.StablecoinMargin) > 0 || len(s.MarginCoins) > 0 || len(s.ArbitrageBaseAssets) > 0
 }
 
 // BNBReserveEnabled 报告是否开启了 BNB 保留。

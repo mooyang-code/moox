@@ -7,6 +7,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/fundsettings"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"gorm.io/gorm"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // ListManagedInstruments 返回账户上有成交的策略或人工订单涉及的标的。
@@ -43,8 +44,10 @@ func (s *Store) ManagedAssets(ctx context.Context, spaceID, tradingAccountID str
 	}
 	var settings fundsettings.Settings
 	if err == nil {
-		if settings, err = fundsettings.Parse(logical.FundSettingsJSON); err != nil {
-			return nil, err
+		// 资金设置坏了不能挡住清仓、收敛：告警后按默认设置继续。
+		var settingsErr error
+		if settings, settingsErr = fundsettings.ParseOrDefault(logical.FundSettingsJSON); settingsErr != nil {
+			log.Warnf("交易关注项：组合 %s 的资金设置无法解析，按默认设置处理：%v", logical.LogicalAccountID, settingsErr)
 		}
 		target, targetErr := s.GetLogicalAccountTarget(ctx, spaceID, logical.LogicalAccountID)
 		if targetErr != nil && !errors.Is(targetErr, gorm.ErrRecordNotFound) {

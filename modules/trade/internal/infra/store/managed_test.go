@@ -132,3 +132,13 @@ func TestBalancePendingWatermarkIsPerWallet(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, map[string]int64{"SPOT": 3_000}, account.BalancePending)
 }
+
+// 资金设置坏了，受管资产照常算（按默认设置），不能让清仓、收敛报错。
+func TestManagedAssetsToleratesBrokenFundSettings(t *testing.T) {
+	s := seedManagedFixture(t, `{"reserve_ratio":"oops"}`, []managedOrder{{"SPOT", "ETH", "TARGET"}})
+
+	managed, err := s.ManagedAssets(context.Background(), "space-1", "account-1")
+
+	require.NoError(t, err)
+	require.Contains(t, managed, "ETH")
+}

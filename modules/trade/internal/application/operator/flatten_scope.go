@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/application/exposure"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/fundsettings"
 	operatordomain "github.com/mooyang-code/moox/modules/trade/internal/domain/operator"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
@@ -45,6 +46,17 @@ func (c FlattenCommand) validateScope() error {
 		return fmt.Errorf("%w: 减仓比例和单个标的不能同时给", ErrInvalidCommand)
 	}
 	return nil
+}
+
+// fundSettingsOf 读取执行账户所属组合的资金设置；不在组合里或设置坏了时取默认值（清仓不能被设置挡住）。
+func (s *Service) fundSettingsOf(ctx context.Context, spaceID, tradingAccountID string) fundsettings.Settings {
+	logical, _, err := s.Store.FindLogicalAccountMembership(ctx, spaceID, tradingAccountID)
+	if err != nil {
+		defaults, _ := fundsettings.Parse("")
+		return defaults
+	}
+	settings, _ := fundsettings.ParseOrDefault(logical.FundSettingsJSON)
+	return settings
 }
 
 // instrumentIndex 是账户标的的索引：不带可交易过滤，已下架的标的也能判断是否在清仓范围内。
@@ -138,6 +150,7 @@ func (s *Service) reduceTargetsForAccount(
 		return nil, err
 	}
 	index := newInstrumentIndex(instruments, account.SettlementAsset)
+	settings := s.fundSettingsOf(ctx, command.SpaceID, tradingAccountID)
 	add := func(instrument store.InstrumentRecord, current shared.Decimal) error {
 		step, minimum, ruleErr := baseQuantityRules(instrument)
 		if ruleErr != nil {
@@ -166,7 +179,8 @@ func (s *Service) reduceTargetsForAccount(
 				return nil, err
 			}
 			instrument, found := index.bySymbol[exchange.NewSymbolKey(position.MarketType, position.ExchangeSymbol)]
-			if quantity.IsZero() || !found || !exposure.Tradable(instrument, account.SettlementAsset) {
+			// 套利底仓的永续对冲腿不参与清仓和减仓，与执行器一致：平掉它会留下没对冲的底仓现货。
+			if quantity.IsZero() || !found || !exposure.Tradable(instrument, account.SettlementAsset) || settings.IsArbitrageBase(instrument.BaseAsset) {
 				continue
 			}
 			if err := add(instrument, quantity); err != nil {
@@ -201,12 +215,15 @@ func (s *Service) reduceTargetsForAccount(
 
 // encodeTargets / decodeTargets 把减仓目标存进动作结果里（键：执行账户|标的 ID，值为数量字符串）。
 func encodeTargets(targets map[string]shared.Decimal) map[string]string {
-	if len(targets) == 0 {
-		return nil
-	}
 	encoded := make(map[string]string, len(targets))
 	for key, value := range targets {
+		if strings.HasSuffix(key, "|") {
+			continue // “已算过目标”的账户标记单独存放，不混进目标
+		}
 		encoded[key] = value.String()
+	}
+	if len(encoded) == 0 {
+		return nil
 	}
 	return encoded
 }

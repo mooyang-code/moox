@@ -93,6 +93,8 @@ func TestReduceFixesTargetsAtStartAndDoesNotReduceAgain(t *testing.T) {
 	require.Equal(t, []string{"BTC-USDT-SPOT:SELL:1", "BTC-USDT-SWAP:SELL:1.5"}, placed(fixture))
 	require.Equal(t, "1", result.ReduceTargets["account-a|BTC-USDT-SPOT"])
 	require.Equal(t, "1.5", result.ReduceTargets["account-a|BTC-USDT-SWAP"])
+	require.Len(t, result.ReduceTargets, 2, "目标里不混入账户标记")
+	require.ElementsMatch(t, []string{"account-a", "account-b"}, result.ReduceDone)
 
 	// 子单成交、持仓同步到位后重放同一个动作：已经到目标数量，不再下单，动作完成。
 	fixture.orders.specs = nil
@@ -271,4 +273,17 @@ func TestRunningReduceWithDifferentRatioIsBusy(t *testing.T) {
 	_, handled, err = runningFlattenFor(running, other)
 	require.True(t, handled)
 	require.ErrorIs(t, err, ErrLogicalAccountBusy)
+}
+
+// 套利底仓：现货和永续对冲腿都不参与清仓，不会平掉对冲腿而留下没对冲的底仓现货。
+func TestFlattenKeepsArbitrageBaseAndItsHedgeLeg(t *testing.T) {
+	fixture := newMixedFlattenFixture(t)
+	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_logical_accounts SET c_fund_settings_json = '{"arbitrage_base_assets":["BTC"]}'`).Error)
+
+	result, err := fixture.service().FlattenLogicalAccount(context.Background(), flattenCommand("flatten-base"))
+
+	require.NoError(t, err)
+	require.Empty(t, placed(fixture), "底仓现货和永续对冲腿都不动")
+	require.Equal(t, "COMPLETED", result.Action.Status)
+	require.Empty(t, result.Accounts[0].Remaining)
 }

@@ -23,6 +23,7 @@ type targetOrderServiceStub struct {
 	specs        []orderdomain.OrderSpec
 	submitted    []string
 	canceled     []string
+	cancelErr    error
 	discarded    []string
 	resolved     []string
 	afterPlace   func()
@@ -97,6 +98,9 @@ func (s *targetOrderServiceStub) Cancel(
 	orderID string,
 ) (orderdomain.Order, error) {
 	s.canceled = append(s.canceled, orderID)
+	if s.cancelErr != nil {
+		return orderdomain.Order{}, s.cancelErr
+	}
 	return orderdomain.Order{ID: shared.OrderID(orderID)}, nil
 }
 

@@ -2,6 +2,7 @@ package target
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -416,4 +417,37 @@ func TestTransferScaleShrinksSpotBuy(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, f.orders.specs, 1)
 	require.Equal(t, "2", f.orders.specs[0].Quantity.String(), "额度只够一半，买入量从 4 缩到 2")
+}
+
+// 资金设置坏了不能挡住清仓：空目标照常收敛（卖掉现货 ETH）。
+func TestBrokenFundSettingsDoNotBlockFlatteningTarget(t *testing.T) {
+	f := newMixedExecutorFixture(t)
+	require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_logical_accounts SET c_fund_settings_json = '{"reserve_ratio":"oops"}'`).Error)
+	f.target(t, []store.InstrumentTarget{{InstrumentID: "ETH-USDT-SPOT", Quantity: "0"}})
+	f.now = time.Now().UTC()
+
+	result, err := f.executor().Converge(context.Background(), "space-1", "logical-1")
+
+	require.NoError(t, err)
+	require.Equal(t, "place", result.Action)
+	require.Equal(t, []string{"ETH-USDT-SPOT:SELL"}, placedInstruments(f))
+}
+
+// 到期撤挂单失败：目标保持原状并设重试唤醒（已收敛、已阻塞的目标不会被定时器扫到）。
+func TestExpiryCancelFailureSchedulesRetry(t *testing.T) {
+	f := newMixedExecutorFixture(t)
+	f.target(t, []store.InstrumentTarget{{InstrumentID: "ETH-USDT-SPOT", Quantity: "12"}})
+	target, err := f.store.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	f.order(t, restingEthOrder(target))
+	f.orders.cancelErr = errors.New("交易所暂时不可用")
+	f.now = time.UnixMilli(target.ValidUntil).Add(time.Second).UTC()
+
+	result, err := f.executor().Converge(context.Background(), "space-1", "logical-1")
+
+	require.Error(t, err)
+	require.Equal(t, expiryRetryDelay, result.RetryAfter)
+	current, err := f.store.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.NotEqual(t, StatusExpired, current.Status, "撤单没成功，目标不能先置为过期")
 }

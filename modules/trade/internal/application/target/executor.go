@@ -19,6 +19,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/execution/paper"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/rs/xid"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 var (
@@ -182,7 +183,8 @@ func (e *Executor) Converge(
 			defer cancel()
 			// 先释放待提交子单再置为过期：释放失败时目标不变，下一轮重试。
 			if err := e.releaseExpiredTargetOrders(persistCtx, spaceID, target); err != nil {
-				result, resultErr = Result{}, err
+				// 撤挂单失败：目标保持原状，过一会儿再来一次，不能等定时器（已收敛、已阻塞的目标不被扫描）。
+				result, resultErr = Result{RetryAfter: expiryRetryDelay}, err
 				return
 			}
 			target.Status = StatusExpired
@@ -631,9 +633,10 @@ func (e *Executor) loadMembers(
 	if err != nil {
 		return nil, err
 	}
-	settings, err := fundsettings.Parse(logical.FundSettingsJSON)
-	if err != nil {
-		return nil, err
+	// 资金设置坏了不能挡住收敛（空目标就是清仓）：告警后按默认设置继续。
+	settings, settingsErr := fundsettings.ParseOrDefault(logical.FundSettingsJSON)
+	if settingsErr != nil {
+		log.Warnf("交易关注项：组合 %s 的资金设置无法解析，按默认设置处理：%v", logicalAccountID, settingsErr)
 	}
 	members := make([]memberState, 0, len(records))
 	for _, record := range records {
