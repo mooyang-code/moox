@@ -357,7 +357,7 @@ func TestUnfinishedCancelCleanupRaisesActionFailedAttention(t *testing.T) {
 	require.NoError(t, attention.Publish(ctx))
 	require.Equal(t, 1.0, testutil.ToFloat64(telemetry.Attention.WithLabelValues(telemetry.AttentionActionFailed, "系统规则（binance:SPOT:FOOUSDT）：取消后的善后未完成，请在执行记录里点“重试善后”")))
 
-	require.NoError(t, s.FinishCleanup(ctx, seeded.ExecutionID, c.now.UnixMilli()))
+	finishCleanup(t, s, seeded.ExecutionID, c.now.UnixMilli())
 	require.NoError(t, attention.Publish(ctx))
 	require.Equal(t, 0.0, testutil.ToFloat64(telemetry.Attention.WithLabelValues(telemetry.AttentionActionFailed, "")))
 }
@@ -417,11 +417,21 @@ func TestUnfinishedExecutionWithFailedStepRaisesActionFailedAttention(t *testing
 
 	_, err := s.CancelExecution(ctx, seeded.ExecutionID, c.now.UnixMilli())
 	require.NoError(t, err)
-	require.NoError(t, s.FinishCleanup(ctx, seeded.ExecutionID, c.now.UnixMilli()))
+	finishCleanup(t, s, seeded.ExecutionID, c.now.UnixMilli())
 	telemetry.Note(telemetry.AttentionActionFailed, "binance:SPOT:FOOUSDT 下架后留有零头", c.now)
 	require.NoError(t, attention.Publish(ctx))
 	require.Equal(t, 1.0, testutil.ToFloat64(telemetry.Attention.WithLabelValues(telemetry.AttentionActionFailed, "binance:SPOT:FOOUSDT 下架后留有零头")))
 	c.now = c.now.Add(telemetry.DelistDetectedWindow + time.Second)
 	require.NoError(t, attention.Publish(ctx))
 	require.Equal(t, 0.0, testutil.ToFloat64(telemetry.Attention.WithLabelValues(telemetry.AttentionActionFailed, "")))
+}
+
+// finishCleanup 按当前序号记下善后做完。
+func finishCleanup(t *testing.T, s *store.Store, id string, now int64) {
+	t.Helper()
+	current, err := s.GetExecution(context.Background(), id)
+	require.NoError(t, err)
+	applied, err := s.FinishCleanup(context.Background(), id, current.CleanupSeq, now)
+	require.NoError(t, err)
+	require.True(t, applied)
 }

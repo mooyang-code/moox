@@ -63,9 +63,11 @@ type Execution struct {
 	Acknowledged bool
 	// CleanupPending 表示系统动作记录已取消，但取消后的善后（解除禁止买入）还没做成；做成之前可以再取消一次重做。
 	CleanupPending bool
-	CreatedAt      int64
-	UpdatedAt      int64
-	FinishedAt     int64
+	// CleanupSeq 是“善后未完成”标记每次置位时加一的序号，FinishCleanup 凭它判断善后期间标记有没有被重新置位。
+	CleanupSeq int64
+	CreatedAt  int64
+	UpdatedAt  int64
+	FinishedAt int64
 }
 
 // Attempt 是通知地址的一次尝试。
@@ -154,6 +156,7 @@ type executionRow struct {
 	DurationMS     int64  `gorm:"column:c_duration_ms"`
 	Acknowledged   bool   `gorm:"column:c_acknowledged"`
 	CleanupPending bool   `gorm:"column:c_cleanup_pending"`
+	CleanupSeq     int64  `gorm:"column:c_cleanup_seq"`
 	CreatedAt      int64  `gorm:"column:c_created_at;autoCreateTime:false"`
 	UpdatedAt      int64  `gorm:"column:c_updated_at;autoUpdateTime:false"`
 	FinishedAt     int64  `gorm:"column:c_finished_at"`

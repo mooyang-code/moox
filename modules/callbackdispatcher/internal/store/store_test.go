@@ -366,7 +366,7 @@ func TestCancelMarksCleanupPendingAndPurgeKeepsIt(t *testing.T) {
 	_, err = s.GetExecution(ctx, "note")
 	require.ErrorIs(t, err, ErrNotFound)
 
-	require.NoError(t, s.FinishCleanup(ctx, "sys", 101))
+	finishCleanup(t, s, "sys", 101)
 	require.NoError(t, s.PurgeBefore(ctx, 1000))
 	_, err = s.GetExecution(ctx, "sys")
 	require.ErrorIs(t, err, ErrNotFound, "善后做完后照常清理")
@@ -387,7 +387,7 @@ func TestSetCleanupErrorOnlyWhileCleanupPending(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "取消后的善后失败：Trade 不可达", got.LastError)
 
-	require.NoError(t, s.FinishCleanup(ctx, "sys", 102))
+	finishCleanup(t, s, "sys", 102)
 	require.NoError(t, s.SetCleanupError(ctx, "sys", "迟到的失败说明", 103))
 	got, err = s.GetExecution(ctx, "sys")
 	require.NoError(t, err)
@@ -472,7 +472,7 @@ func TestMarkCleanupPendingIfCanceled(t *testing.T) {
 
 	_, err = s.CancelExecution(ctx, "sys", 100)
 	require.NoError(t, err)
-	require.NoError(t, s.FinishCleanup(ctx, "sys", 101))
+	finishCleanup(t, s, "sys", 101)
 	applied, err = s.MarkCleanupPendingIfCanceled(ctx, "sys", "补解除失败：Trade 不可达", 102)
 	require.NoError(t, err)
 	require.True(t, applied)
@@ -564,4 +564,44 @@ func TestListUnfinishedWithFailedSteps(t *testing.T) {
 		ids = append(ids, item.ExecutionID)
 	}
 	require.ElementsMatch(t, []string{"failed-step", "partial-step"}, ids)
+}
+
+// finishCleanup 按当前序号记下善后做完（测试里没有并发的重新置位）。
+func finishCleanup(t *testing.T, s *Store, id string, now int64) {
+	t.Helper()
+	current, err := s.GetExecution(context.Background(), id)
+	require.NoError(t, err)
+	applied, err := s.FinishCleanup(context.Background(), id, current.CleanupSeq, now)
+	require.NoError(t, err)
+	require.True(t, applied)
+}
+
+// 善后期间标记被重新置位（序号变了）：FinishCleanup 不清除它。
+func TestFinishCleanupKeepsMarkSetAfterSeqRead(t *testing.T) {
+	ctx := context.Background()
+	s := openTest(t)
+	require.NoError(t, s.CreateRule(ctx, systemRule()))
+	require.NoError(t, s.InTx(ctx, func(tx *Tx) error {
+		return tx.InsertExecution(execution("sys", "sys-1", ActionSystem, "sys-1|x", 5))
+	}))
+	_, err := s.CancelExecution(ctx, "sys", 100)
+	require.NoError(t, err)
+	before, err := s.GetExecution(ctx, "sys")
+	require.NoError(t, err)
+
+	applied, err := s.MarkCleanupPendingIfCanceled(ctx, "sys", "补解除失败", 101)
+	require.NoError(t, err)
+	require.True(t, applied)
+	applied, err = s.FinishCleanup(ctx, "sys", before.CleanupSeq, 102)
+	require.NoError(t, err)
+	require.False(t, applied, "序号变了，说明还有善后没做完")
+	got, err := s.GetExecution(ctx, "sys")
+	require.NoError(t, err)
+	require.True(t, got.CleanupPending)
+	require.Equal(t, "补解除失败", got.LastError)
+
+	finishCleanup(t, s, "sys", 103)
+	got, err = s.GetExecution(ctx, "sys")
+	require.NoError(t, err)
+	require.False(t, got.CleanupPending)
 }

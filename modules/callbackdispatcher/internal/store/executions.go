@@ -293,16 +293,18 @@ func (s *Store) CancelExecution(ctx context.Context, executionID string, now int
 		return tx.Model(&executionRow{}).Where("c_execution_id = ?", executionID).
 			Updates(map[string]any{
 				"c_status": StatusCanceled, "c_next_run_at": 0, "c_finished_at": now, "c_updated_at": now,
-				"c_cleanup_pending": row.ActionType == ActionSystem,
+				"c_cleanup_pending": row.ActionType == ActionSystem, "c_cleanup_seq": gorm.Expr("c_cleanup_seq + 1"),
 			}).Error
 	})
 	return before, err
 }
 
-// FinishCleanup 记下取消后的善后已经做完：清除“善后未完成”标记和失败说明。
-func (s *Store) FinishCleanup(ctx context.Context, executionID string, now int64) error {
-	return s.db.WithContext(ctx).Model(&executionRow{}).Where("c_execution_id = ?", executionID).
-		Updates(map[string]any{"c_cleanup_pending": false, "c_last_error": "", "c_updated_at": now}).Error
+// FinishCleanup 记下取消后的善后已经做完：清除“善后未完成”标记和失败说明。seq 是开始善后时读到的 CleanupSeq，
+// 只有序号没变才清除：善后期间别处又把标记置了位（Step 写名单后补解除失败），说明还有善后没做完，不能被吞掉。返回是否清除。
+func (s *Store) FinishCleanup(ctx context.Context, executionID string, seq, now int64) (bool, error) {
+	result := s.db.WithContext(ctx).Model(&executionRow{}).Where("c_execution_id = ? AND c_cleanup_seq = ?", executionID, seq).
+		Updates(map[string]any{"c_cleanup_pending": false, "c_last_error": "", "c_updated_at": now})
+	return result.RowsAffected > 0, result.Error
 }
 
 // SetCleanupError 记下取消后的善后失败的原因。只在善后仍未完成时才写：两次取消交错、其中一次已经做完善后时，
@@ -330,7 +332,7 @@ func (s *Store) ListPendingCleanups(ctx context.Context) ([]Execution, error) {
 // 只有靠它用户才能看到“重试善后”，关注项也才会提醒。返回是否写入。
 func (s *Store) MarkCleanupPendingIfCanceled(ctx context.Context, executionID, message string, now int64) (bool, error) {
 	result := s.db.WithContext(ctx).Model(&executionRow{}).Where("c_execution_id = ? AND c_status = ?", executionID, StatusCanceled).
-		Updates(map[string]any{"c_cleanup_pending": true, "c_last_error": message, "c_updated_at": now})
+		Updates(map[string]any{"c_cleanup_pending": true, "c_cleanup_seq": gorm.Expr("c_cleanup_seq + 1"), "c_last_error": message, "c_updated_at": now})
 	return result.RowsAffected > 0, result.Error
 }
 

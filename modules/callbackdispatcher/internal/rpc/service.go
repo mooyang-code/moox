@@ -488,6 +488,12 @@ func (s *Service) CancelEventExecution(ctx context.Context, req *pb.CancelEventE
 	if execution.ActionType == store.ActionSystem {
 		// 善后和记状态都不跟请求一起取消：请求超时不能让记录停在“已取消但没人知道善后没做”。
 		cleanupCtx := context.WithoutCancel(ctx)
+		// 开始善后前读下标记的序号：善后期间标记被重新置位（序号变了），FinishCleanup 就不清除它。
+		current, err := s.Store.GetExecution(cleanupCtx, execution.ExecutionID)
+		if err != nil {
+			return fail(internalRet(ctx, "记录已取消，但读取执行记录失败，请点“重试善后”", err))
+		}
+		cleanupSeq := current.CleanupSeq
 		rule, err := s.Store.GetRule(cleanupCtx, execution.RuleID)
 		if err != nil && !errors.Is(err, store.ErrNotFound) {
 			return fail(internalRet(ctx, "记录已取消，但读取事件规则失败，请点“重试善后”", err))
@@ -501,7 +507,7 @@ func (s *Service) CancelEventExecution(ctx context.Context, req *pb.CancelEventE
 				return fail(failRet(pb.ErrorCode_INNER_ERR, "记录已取消，但解除禁止买入失败，请点“重试善后”"))
 			}
 		}
-		if err := s.Store.FinishCleanup(cleanupCtx, execution.ExecutionID, s.now().UnixMilli()); err != nil {
+		if _, err := s.Store.FinishCleanup(cleanupCtx, execution.ExecutionID, cleanupSeq, s.now().UnixMilli()); err != nil {
 			return fail(internalRet(ctx, "记录已取消，但记下善后完成失败，请点“重试善后”", err))
 		}
 	}

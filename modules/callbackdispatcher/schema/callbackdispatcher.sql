@@ -74,6 +74,8 @@ CREATE TABLE IF NOT EXISTS t_event_executions (
     c_acknowledged INTEGER NOT NULL DEFAULT 0,
     -- 系统动作记录已取消但善后（解除禁止买入）还没做成：1 时可以再取消一次重做，善后成功后清 0；清理旧记录时跳过。
     c_cleanup_pending INTEGER NOT NULL DEFAULT 0,
+    -- 每次置位“善后未完成”加一。善后做完只在序号没变时才清除标记：做善后期间别处（Step 写名单后补解除失败）又置了位，它不会被吞掉。
+    c_cleanup_seq INTEGER NOT NULL DEFAULT 0,
     c_created_at INTEGER NOT NULL,
     c_updated_at INTEGER NOT NULL,
     c_finished_at INTEGER NOT NULL DEFAULT 0,

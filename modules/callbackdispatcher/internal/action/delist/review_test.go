@@ -10,7 +10,9 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/callbackdispatcher/internal/action"
+	"github.com/mooyang-code/moox/modules/callbackdispatcher/internal/rpc"
 	"github.com/mooyang-code/moox/modules/callbackdispatcher/internal/store"
+	pb "github.com/mooyang-code/moox/modules/callbackdispatcher/proto/callbackdispatchergen"
 	"github.com/stretchr/testify/require"
 )
 
@@ -139,7 +141,9 @@ func TestRecheckFailureLeavesRetryableCleanup(t *testing.T) {
 	h.trade.blockHook = func(context.Context) {
 		_, err := h.store.CancelExecution(ctx, "e1", baseTime.UnixMilli())
 		require.NoError(t, err)
-		require.NoError(t, h.store.FinishCleanup(ctx, "e1", baseTime.UnixMilli())) // OnCancel 已经先做完了
+		current := h.execution("e1")
+		_, err = h.store.FinishCleanup(ctx, "e1", current.CleanupSeq, baseTime.UnixMilli()) // OnCancel 已经先做完了
+		require.NoError(t, err)
 	}
 	h.handler.loadExecution = func(context.Context, string) (store.Execution, error) {
 		return store.Execution{}, errors.New("数据库繁忙")
@@ -154,4 +158,39 @@ func TestRecheckFailureLeavesRetryableCleanup(t *testing.T) {
 	require.True(t, h.trade.isBlocked())
 	require.NoError(t, h.handler.OnCancel(ctx, got))
 	require.False(t, h.trade.isBlocked())
+}
+
+// R3：服务层做善后期间，Step 写名单后补解除失败又把标记置了位：服务层的“善后完成”不能把它吞掉，名单留着时用户仍看得到“重试善后”。
+func TestServiceFinishCleanupDoesNotSwallowStepCompensationFailure(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	h.addExecution("e1", baseTime.Add(48*time.Hour), "ALL")
+	registry := action.NewRegistry()
+	registry.Register(store.SystemActionSellDelistedHoldings, interleavedHandler{inner: h.handler, onCancelDone: func() {
+		// OnCancel 已经做完，但 Step 紧接着写了名单、补解除失败，把标记重新置位。
+		applied, err := h.store.MarkCleanupPendingIfCanceled(ctx, "e1", "取消后的善后失败：Trade 超时", baseTime.UnixMilli())
+		require.NoError(t, err)
+		require.True(t, applied)
+	}})
+	service := &rpc.Service{Store: h.store, Actions: registry, Now: h.clock.Now}
+	_, err := service.CancelEventExecution(ctx, &pb.CancelEventExecutionReq{ExecutionId: "e1"})
+	require.NoError(t, err)
+	got := h.execution("e1")
+	require.True(t, got.CleanupPending, "标记没有被吞掉")
+	require.Contains(t, got.LastError, "Trade 超时")
+}
+
+type interleavedHandler struct {
+	inner        *Handler
+	onCancelDone func()
+}
+
+func (i interleavedHandler) Step(ctx context.Context, execution store.Execution, now time.Time) (action.Outcome, error) {
+	return i.inner.Step(ctx, execution, now)
+}
+
+func (i interleavedHandler) OnCancel(ctx context.Context, execution store.Execution) error {
+	err := i.inner.OnCancel(ctx, execution)
+	i.onCancelDone()
+	return err
 }
