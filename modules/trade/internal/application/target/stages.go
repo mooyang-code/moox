@@ -96,7 +96,7 @@ func (e *Executor) walletTransferBeforeSpotBuy(
 	}
 	var transfers []TransferBuy
 	for _, action := range buys {
-		if needsWalletTransfer(action.member.account) {
+		if !action.noTransfer && needsWalletTransfer(action.member.account) {
 			transfers = append(transfers, TransferBuy{Account: action.member.account, Instrument: action.instrument, Quantity: action.delta.Abs()})
 		}
 	}

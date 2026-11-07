@@ -227,11 +227,12 @@ func TestWalletUncappedTransferTopsUpWhenPriceRises(t *testing.T) {
 	require.Equal(t, "0.01", f.orders.specs[0].Quantity.String(), "买单没有被缩小")
 }
 
-// 划转完成后某一轮买单被每小时上限顺延：这一轮不能把刚划进来的钱归集回合约钱包。
-func TestWalletCollectDoesNotTakeBackFundsForDeferredBuy(t *testing.T) {
+// 每小时上限已经用完：买单顺延到下一个整点，不为它划转（划进去这个小时也买不了，钱会一直停在现货钱包）；
+// 现货钱包里已有的资金到整点还要用，也不归集回合约钱包。
+func TestWalletHourlyCapUsedUpNeitherTransfersNorCollects(t *testing.T) {
 	f, fake, newExecutor := newWalletIntegration(t)
-	// 两个钱包合计 610：归集阈值 100，划转后现货钱包多出的 509 够归集，没有顺延保护时会被划回去。
-	fake.Set(func(e *wallettest.Exchange) { e.Futures = "600" })
+	// 现货 510、合约 600：没有顺延保护时现货钱包多出的 509 够归集。
+	fake.Set(func(e *wallettest.Exchange) { e.Spot = "510"; e.Futures = "600" })
 	f.setOrderSettings(t, `{"order_mode":"MARKET","min_notional_spot":"0","min_notional_swap":"0","hourly_cap_spot":{"BTC-USDT-SPOT":"1000"}}`)
 	hourStart := time.Now().UTC().Truncate(time.Hour).Add(time.Second).UnixMilli()
 	f.order(t, store.OrderRecord{
@@ -243,12 +244,42 @@ func TestWalletCollectDoesNotTakeBackFundsForDeferredBuy(t *testing.T) {
 	ctx := context.Background()
 	executor := newExecutor()
 
+	for range 3 {
+		result, err := executor.Converge(ctx, "space-1", "logical-1")
+		require.NoError(t, err)
+		require.Equal(t, StatusConverged, result.Status, "买单顺延到下一个整点")
+		require.Greater(t, result.RetryAfter, time.Duration(0), "到整点自己唤醒")
+	}
+	require.Empty(t, f.orders.specs)
+	require.Empty(t, fake.Calls(), "既不划转也不归集")
+	stored, err := f.store.GetLogicalAccountTarget(ctx, "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Len(t, stored.BlockedTargets, 1)
+	require.True(t, stored.BlockedTargets[0].Deferred)
+}
+
+// 划转完成后某一轮买单被每小时上限顺延（上限在划转之后才用完）：这一轮不能把刚划进来的钱归集回合约钱包。
+func TestWalletCollectDoesNotTakeBackFundsForDeferredBuy(t *testing.T) {
+	f, fake, newExecutor := newWalletIntegration(t)
+	fake.Set(func(e *wallettest.Exchange) { e.Futures = "600" })
+	f.setOrderSettings(t, `{"order_mode":"MARKET","min_notional_spot":"0","min_notional_swap":"0","hourly_cap_spot":{"BTC-USDT-SPOT":"1000"}}`)
+	ctx := context.Background()
+	executor := newExecutor()
+
 	result, err := executor.Converge(ctx, "space-1", "logical-1")
 	require.NoError(t, err)
-	require.Equal(t, "transfer", result.Action)
+	require.Equal(t, "transfer", result.Action, "上限还没用完：先划转")
 	fake.ConfirmAll()
 	markSpotSnapshot(t, f, time.Now().Add(time.Second))
 
+	// 划转到账后、买入之前，这个小时的额度被别处用完。
+	hourStart := time.Now().UTC().Truncate(time.Hour).Add(time.Second).UnixMilli()
+	f.order(t, store.OrderRecord{
+		SpaceID: "space-1", OrderID: "used", TradingAccountID: "account-a", LogicalAccountID: "logical-1", RunnerID: "runner-1",
+		ClientOrderID: "used", Exchange: "BINANCE", MarketType: "SPOT", InstrumentID: "BTC-USDT-SPOT", ExchangeSymbol: "BTCUSDT",
+		OrderType: "MARKET", Side: "BUY", Quantity: "10", ReferencePrice: "100", AveragePrice: "100", FilledQuantity: "10",
+		OwnerType: "TARGET", OwnerID: "target-current", State: "FILLED", SubmittedAt: hourStart, FinishedAt: hourStart, Version: 1,
+	})
 	result, err = executor.Converge(ctx, "space-1", "logical-1")
 	require.NoError(t, err)
 	require.Equal(t, StatusConverged, result.Status, "买单顺延到下一个整点")

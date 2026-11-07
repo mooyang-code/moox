@@ -162,6 +162,9 @@ type laneAction struct {
 	scaled      bool
 	fullDelta   shared.Decimal
 	scaleReason string
+	// noTransfer 表示这笔现货买入不向钱包要资金：这个成员（首选成员）在本目标已经下不了单，
+	// 但别的成员能下，下单时会换成员，给它划转没有意义。
+	noTransfer bool
 }
 
 // blockedQuantity 是写进 blocked_targets 的数量：被缩小过的买入记缩小前的原始差额。
@@ -557,16 +560,26 @@ func (e *Executor) Converge(
 			needed := stageActions[:0:0]
 			for _, action := range stageActions {
 				if needsWalletTransfer(action.member.account) {
-					satisfied, reason, err := e.spotBuyPrecheck(ctx, env, spaceID, target, action, desired, members)
+					verdict, err := e.spotBuyPrecheck(ctx, env, spaceID, target, action, desired, members)
 					if err != nil {
 						return Result{}, err
 					}
-					if satisfied {
+					switch {
+					case verdict.satisfied:
 						continue
-					}
-					if reason != "" {
+					case verdict.noTransfer:
+						action.noTransfer = true
+					case verdict.capDeferred:
+						// 每小时上限已用完：顺延到下一个整点，不为它划转；账户的资金到整点还要用，不归集。
+						capDeferred = true
+						deferredItems = append(deferredItems, store.BlockedTarget{
+							InstrumentID: action.instrument.InstrumentID, Quantity: action.delta.String(), Reason: reasonHourlyCapDeferred, Deferred: true,
+						})
+						holdCollect(stage, action)
+						continue
+					case verdict.blockedReason != "":
 						blocked = append(blocked, store.BlockedTarget{
-							InstrumentID: action.instrument.InstrumentID, Quantity: action.delta.String(), Reason: reason,
+							InstrumentID: action.instrument.InstrumentID, Quantity: action.delta.String(), Reason: verdict.blockedReason,
 						})
 						continue
 					}
@@ -642,11 +655,13 @@ func (e *Executor) Converge(
 					e.Observe.Blocked(action.member.account.TradingAccountID, "duplicate_blocked")
 				}
 				// 持仓回退到某笔已成交子单下单前的值：整条标的本轮跳过，不换成员，等同步纠正后重算。
+				// 这是暂时状态，买单马上要继续：不归集，否则资金归集回合约钱包后，同步追上来买单就没钱了。
 				blocked = append(blocked, store.BlockedTarget{
 					InstrumentID: instrumentID,
 					Quantity:     action.blockedQuantity(),
 					Reason:       reasonPositionUnreflected,
 				})
+				holdCollect(stage, action)
 				continue
 			}
 			placement, placeErr := e.placeAction(
@@ -811,13 +826,27 @@ func (e *Executor) HasDifference(ctx context.Context, target store.LogicalAccoun
 	return false, nil
 }
 
+// spotBuyVerdict 是 spotBuyPrecheck 的结论。
+type spotBuyVerdict struct {
+	// satisfied：视为已满足，不下单、不划转。
+	satisfied bool
+	// blockedReason 非空：因为非资金原因注定下不了单，直接记 BLOCKED，不划转。
+	blockedReason string
+	// capDeferred：单币每小时上限已经用完，这个标的顺延到下一个整点；这个小时一笔都下不了，不划转。
+	capDeferred bool
+	// noTransfer：首选成员下不了单、别的成员能下：照常进入下单，只是不为首选成员划转。
+	noTransfer bool
+}
+
 // spotBuyPrecheck 在向钱包要资金之前，按缩小前的原始差额判断一笔现货买入还要不要划转：
-//   - satisfied：视为已满足（低于设置的最小下单额，或交易规则下下不了单且已有同向持仓的零头），不下单、不划转；
-//   - blockedReason 非空：因为非资金原因下不了单（交易规则、所有成员在本目标都拒过单、反向次数已满、伪市价次数用满等），
+//   - 视为已满足（低于设置的最小下单额，或交易规则下下不了单且已有同向持仓的零头），不下单、不划转；
+//   - 因为非资金原因注定下不了单（交易规则、要划转的这个账户在本目标已被拒单、反向次数已满、伪市价次数用满等），
 //     直接记 BLOCKED，不划转：为一笔注定下不了的单划转，会先划进来、再被归集回去、再划进来，最后钱停在现货钱包；
+//   - 每小时上限用完了：顺延到下一个整点，不划转（划进去这个小时也买不了，钱会一直停在现货钱包）；
 //   - 都不是：交给钱包算资金需求。
 //
-// 取不到报价等账户级问题按“没满足”交给后面的流程处理。
+// 试算先看全部成员、再看要划转的这个账户（action.member）：这个账户自己下不了单、别的成员能下，不为它划转，下单照常。
+// 取不到报价等账户级问题按“没满足”交给后面的流程处理；目标已失效、过期这类目标级错误原样返回。
 func (e *Executor) spotBuyPrecheck(
 	ctx context.Context,
 	env *laneEnv,
@@ -826,43 +855,72 @@ func (e *Executor) spotBuyPrecheck(
 	action laneAction,
 	desired map[string]desiredTarget,
 	members []memberState,
-) (satisfied bool, blockedReason string, err error) {
+) (spotBuyVerdict, error) {
 	quote, err := e.Prices.LatestPrice(ctx, action.member.account.TradingAccountID,
 		exchange.NewSymbolKey(action.instrument.MarketType, action.instrument.ExchangeSymbol))
 	if err != nil {
 		if paper.IsInfrastructureError(err) {
-			return false, "", err
+			return spotBuyVerdict{}, err
 		}
-		return false, "", nil
+		return spotBuyVerdict{}, nil
 	}
 	if quote.Price.Cmp(shared.Zero()) <= 0 {
-		return false, "", nil
+		return spotBuyVerdict{}, nil
 	}
 	quantity := floorToStep(action.delta.Abs(), mustBaseStep(action.instrument))
 	if env.belowConfiguredMinimum(action, quantity, quote.Price) {
-		return true, "", nil
+		return spotBuyVerdict{satisfied: true}, nil
 	}
 	instrumentID := action.instrument.InstrumentID
 	finished := laneFinished(desired[instrumentID], members, instrumentID)
 	if finished && env.tooSmallToPlace(action, quantity, quote.Price) {
-		return true, "", nil
+		return spotBuyVerdict{satisfied: true}, nil
 	}
-	// 试算：走一遍下单前所有“下不了单”的检查，但不看资金容量、不落库。
-	probe, err := e.placeActionMode(ctx, spaceID, target, action, members, nil, env, true)
+	// 试算：先看全部成员（下单时会换成员），再看要划转的这个账户。
+	probe, err := e.dryRunPlacement(ctx, spaceID, target, action, members, env)
 	if err != nil {
-		if paper.IsInfrastructureError(err) || errors.Is(err, ErrInvalidTarget) {
-			return false, "", err
-		}
-		return false, "", nil
-	}
-	if probe.viable || probe.deferred || probe.capDeferred || probe.placed {
-		return false, "", nil
+		return spotBuyVerdict{}, err
 	}
 	switch {
+	case probe.capDeferred:
+		return spotBuyVerdict{capDeferred: true}, nil
+	case probe.viable || probe.deferred || probe.placed:
+		if len(members) > 1 {
+			// 有成员能下单：再只看要划转的这个账户。它自己下不了、别的成员能下，就不为它划转，下单照常。
+			own, ownErr := e.dryRunPlacement(ctx, spaceID, target, action, []memberState{action.member}, env)
+			if ownErr != nil {
+				return spotBuyVerdict{}, ownErr
+			}
+			if !(own.viable || own.deferred || own.placed || own.capDeferred) {
+				return spotBuyVerdict{noTransfer: true}, nil
+			}
+		}
+		return spotBuyVerdict{}, nil
 	case probe.belowConfiguredMin, probe.tooSmall && finished:
-		return true, "", nil
+		return spotBuyVerdict{satisfied: true}, nil
 	}
-	return false, probe.reason, nil
+	return spotBuyVerdict{blockedReason: probe.reason}, nil
+}
+
+// dryRunPlacement 试算：只有账户级的问题（取不到报价等）交给后面的流程（按“能下”处理）；
+// 目标过期、会话变化、还没生效这类目标级错误原样返回，不先划转。
+func (e *Executor) dryRunPlacement(
+	ctx context.Context,
+	spaceID string,
+	target store.LogicalAccountTargetRecord,
+	action laneAction,
+	members []memberState,
+	env *laneEnv,
+) (placement, error) {
+	probe, err := e.placeActionMode(ctx, spaceID, target, action, members, nil, env, true)
+	if err != nil {
+		var accountErr *AccountError
+		if errors.As(err, &accountErr) {
+			return placement{viable: true}, nil
+		}
+		return placement{}, err
+	}
+	return probe, nil
 }
 
 // belowConfiguredMinimumNow 判断一个动作的差额（按步长取整后）是否低于设置的最小下单额；取不到报价时按“不低于”处理。
@@ -1462,7 +1520,7 @@ func (e *Executor) placeActionMode(
 		reversal := reversalCount(accountChildren, candidate)
 		if reversal >= 2 {
 			// 同一目标内第二次反向：整条标的本目标内不再下单，新目标到达时自然清零。
-			if e.Observe != nil {
+			if e.Observe != nil && !dryRun {
 				e.Observe.Blocked(candidate.member.account.TradingAccountID, "reversal_blocked")
 			}
 			return placement{reason: reasonTargetReversal}, nil
