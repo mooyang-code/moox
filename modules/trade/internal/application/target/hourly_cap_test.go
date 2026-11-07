@@ -73,9 +73,14 @@ func TestHourlyCapExhaustedDefersToNextHour(t *testing.T) {
 	f.submittedChild(t, "used", "FILLED", "10", "10", "100", f.now.Truncate(time.Hour).Add(time.Second))
 	result := f.converge(t)
 	require.Empty(t, f.orders.specs)
-	require.Equal(t, StatusConverged, result.Status)
+	require.Equal(t, StatusBlocked, result.Status, "顺延的标的和原因写进 blocked_targets，界面看得到")
 	require.Greater(t, result.RetryAfter, time.Duration(0))
 	require.LessOrEqual(t, result.RetryAfter, time.Hour+time.Second)
+	target, err := f.store.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Len(t, target.BlockedTargets, 1)
+	require.Equal(t, "BTC-USDT-SWAP", target.BlockedTargets[0].InstrumentID)
+	require.Contains(t, target.BlockedTargets[0].Reason, "每小时上限")
 	require.Equal(t, nextHourRetryDelay(f.now).Round(time.Minute), result.RetryAfter.Round(time.Minute))
 }
 
@@ -102,7 +107,7 @@ func TestHourlyCapRemainderBelowMinimumIsDeferredNotBlocked(t *testing.T) {
 	f.submittedChild(t, "used", "FILLED", "9.7", "9.7", "100", f.now.Truncate(time.Hour).Add(time.Second))
 	result := f.converge(t)
 	require.Empty(t, f.orders.specs)
-	require.Equal(t, StatusConverged, result.Status, "剩余额度 30 低于最小下单额 50：顺延")
+	require.Equal(t, StatusBlocked, result.Status, "剩余额度 30 低于最小下单额 50：顺延，原因写进 blocked_targets")
 	require.Greater(t, result.RetryAfter, time.Duration(0))
 }
 
@@ -132,4 +137,40 @@ func TestHourlyCapIsOnlyQueriedWhenConfigured(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, clipped)
 	require.False(t, env.hourlyLoaded, "没配置每小时上限就不查订单表")
+}
+
+// 上限只限制加仓和建仓：本小时先买满额度后，目标改成 0 的清仓、减到更小目标的减仓照常下，金额照常计入汇总。
+func TestHourlyCapNeverBlocksReductions(t *testing.T) {
+	f := swapPolicyFixture(t, `{"order_mode":"MARKET","min_notional_swap":"0","rebalance_threshold_mode":"ALWAYS","hourly_cap_swap":{"BTC-USDT-SWAP":"1000"}}`)
+	f.now = time.Now().UTC()
+	f.position(t, "account-a", "BTCUSDT", "10")
+	f.target(t, nil)
+	// 本小时已经买了 10 个（1000）：额度用满。
+	f.submittedChild(t, "bought", "FILLED", "10", "10", "100", f.now.Truncate(time.Hour).Add(time.Second))
+	result := f.converge(t)
+	require.Len(t, f.orders.specs, 1, "清仓不受上限限制")
+	require.Equal(t, exchange.SideSell, f.orders.specs[0].Side)
+	require.Equal(t, "10", f.orders.specs[0].Quantity.String(), "整笔清掉，不被额度收窄")
+	require.Equal(t, StatusConverging, result.Status)
+
+	reducing := swapPolicyFixture(t, `{"order_mode":"MARKET","min_notional_swap":"0","rebalance_threshold_mode":"ALWAYS","hourly_cap_swap":{"BTC-USDT-SWAP":"1000"}}`)
+	reducing.now = time.Now().UTC()
+	reducing.position(t, "account-a", "BTCUSDT", "10")
+	reducing.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "4"}})
+	reducing.submittedChild(t, "bought", "FILLED", "10", "10", "100", reducing.now.Truncate(time.Hour).Add(time.Second))
+	reducing.converge(t)
+	require.Len(t, reducing.orders.specs, 1, "减仓不受上限限制")
+	require.Equal(t, "6", reducing.orders.specs[0].Quantity.String())
+}
+
+// 减仓的金额照常计入汇总：本小时的买入加卖出都占额度，之后的加仓只能用剩下的。
+func TestHourlyCapStillCountsReductionNotional(t *testing.T) {
+	f := swapPolicyFixture(t, `{"order_mode":"MARKET","min_notional_swap":"0","hourly_cap_swap":{"BTC-USDT-SWAP":"1000"}}`)
+	f.now = time.Now().UTC()
+	hour := f.now.Truncate(time.Hour)
+	f.submittedChild(t, "sold", "FILLED", "4", "4", "100", hour.Add(time.Second))
+	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "100"}})
+	f.converge(t)
+	require.Len(t, f.orders.specs, 1)
+	require.Equal(t, "6", f.orders.specs[0].Quantity.String(), "额度 1000 − 已提交 400 = 600")
 }

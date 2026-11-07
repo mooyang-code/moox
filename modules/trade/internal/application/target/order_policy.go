@@ -209,6 +209,11 @@ func (env *laneEnv) applyHourlyCap(
 	quantity shared.Decimal,
 	price shared.Decimal,
 ) (shared.Decimal, bool, error) {
+	// 上限只限制加仓和建仓：减仓（包括目标改成 0、受管但不在目标里按 0 卖出）一律不查上限，
+	// 否则本小时先买满额度后，策略想清仓也要等到下一个整点。减仓的金额照常计入汇总。
+	if candidate.reducing {
+		return quantity, false, nil
+	}
 	limit, capped := env.settings.HourlyCap(candidate.instrument.MarketType, candidate.instrument.InstrumentID)
 	if !capped {
 		return quantity, false, nil

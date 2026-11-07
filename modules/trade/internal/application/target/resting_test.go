@@ -305,3 +305,42 @@ func TestSystemOrdersDoNotPauseTheLogicalAccountOrBlockTheTarget(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "ACTIVE", logical.AutomationState)
 }
+
+// 挂单取不到买一卖一时退回伪市价，仍受最多尝试次数限制：已经有 4 笔零成交 IOC 就记未到位，不再下第 5 笔。
+func TestRestingFallbackToPseudoMarketStillHonoursMaxAttempts(t *testing.T) {
+	f := swapPolicyFixture(t, `{"min_notional_swap":"0","resting_ratio":"1"}`)
+	f.now = time.Now().UTC()
+	f.position(t, "account-a", "BTCUSDT", "100")
+	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "110"}})
+	for attempt := 0; attempt < 4; attempt++ {
+		f.iocChild(t, "ioc-a"+string(rune('a'+attempt)), "10", "0", attempt)
+		f.iocChildOn(t, "account-b", "OKX", "BTC-USDT-SWAP", "ioc-b"+string(rune('a'+attempt)), "10", "0", attempt)
+	}
+	executor := f.executor() // 没有买一卖一的报价来源：挂单取不到价格
+	executor.MinBatchInterval = 0
+	result, err := executor.Converge(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Empty(t, f.orders.specs, "次数用满，不再下第 5 笔")
+	require.Equal(t, StatusBlocked, result.Status)
+	target, err := f.store.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Contains(t, target.BlockedTargets[0].Reason, "未到位")
+	require.Len(t, executor.warned, 1)
+}
+
+// 取不到买一卖一、次数没用完时，退回的伪市价单按已有次数继续往上加滑点。
+func TestRestingFallbackContinuesTheAttemptCount(t *testing.T) {
+	f := swapPolicyFixture(t, `{"min_notional_swap":"0","resting_ratio":"1"}`)
+	f.now = time.Now().UTC()
+	f.position(t, "account-a", "BTCUSDT", "100")
+	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "110"}})
+	f.iocChild(t, "ioc-0", "10", "0", 0)
+	f.iocChildOn(t, "account-b", "OKX", "BTC-USDT-SWAP", "ioc-b0", "10", "0", 0)
+	executor := f.executor()
+	executor.MinBatchInterval = 0
+	_, err := executor.Converge(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Len(t, f.orders.specs, 1)
+	require.Equal(t, 1, f.orders.specs[0].Attempt)
+	require.Equal(t, exchange.FillPolicyIOC, f.orders.specs[0].FillPolicy)
+}

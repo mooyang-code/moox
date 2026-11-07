@@ -568,8 +568,14 @@ func (e *Executor) Converge(
 				continue
 			}
 			if placement.capDeferred {
-				// 每小时额度用完：这个标的在本阶段视为已处理，不卡后面的阶段，留到下一个整点。
+				// 每小时额度用完：这个标的在本阶段视为已处理，不卡后面的阶段，留到下一个整点；
+				// 原因写进目标的 blocked_targets，界面看得到为什么没下单。
 				capDeferred = true
+				_, next := hourWindow(e.now())
+				blocked = append(blocked, store.BlockedTarget{
+					InstrumentID: instrumentID, Quantity: action.delta.String(),
+					Reason: fmt.Sprintf("单币每小时上限已用完，顺延到 %s（UTC）继续", next.UTC().Format("15:04")),
+				})
 				continue
 			}
 			if placement.tooSmall && laneFinished(desired[instrumentID], members, instrumentID) {
@@ -1167,6 +1173,14 @@ func (e *Executor) placeAction(
 		}
 		// 伪市价单：用满尝试次数仍没成交完的标的记为“未到位”，告警一次，不再重试，等下一份目标重算。
 		attempt := 0
+		// 挂单价先定：取不到买一卖一就不挂单，这一片走原来的下单方式（含伪市价的次数上限和“未到位”处理）。
+		var restingPrice shared.Decimal
+		if candidate.resting {
+			var restingOK bool
+			if restingPrice, restingOK = e.restingPrice(ctx, candidate); !restingOK {
+				candidate.resting = false
+			}
+		}
 		pseudoMarket := env.settings.OrderMode == ordersettings.OrderModePseudoMarket && !candidate.resting
 		if pseudoMarket {
 			if attempt = pseudoMarketAttempts(children); attempt >= env.settings.MaxAttempts {
@@ -1219,17 +1233,12 @@ func (e *Executor) placeAction(
 		}
 		spec.PositionSide = exchange.RuleFor(candidate.instrument.MarketType).PositionSide
 		if candidate.resting {
-			// 挂单：限价 + GTC，买单挂买一价，卖单挂卖一价；取不到买一卖一时退回普通下单。
-			if price, ok := e.restingPrice(ctx, candidate); ok {
-				spec.Type, spec.FillPolicy, spec.LimitPrice = exchange.OrderTypeLimit, exchange.FillPolicyGTC, &price
-			} else if env.settings.OrderMode == ordersettings.OrderModePseudoMarket {
-				pseudoMarket = true
-				attempt = pseudoMarketAttempts(children)
-				spec.Attempt, spec.ClientOrderID = attempt, childClientOrderID(attempt)
-			}
+			// 挂单：限价 + GTC，买单挂买一价，卖单挂卖一价。
+			spec.Type, spec.FillPolicy, spec.LimitPrice = exchange.OrderTypeLimit, exchange.FillPolicyGTC, &restingPrice
 		}
 		if pseudoMarket {
 			// 限价 + IOC：价格 = 参考价 ×（1 ± 滑点），部分成交的剩余量下一轮按新的滑点再来。
+			// 默认最多 6% 的滑点比币安合约的价格过滤器（约 ±5%）宽，最后几次可能被交易所按拒单处理：1B 接入真实适配器时要处理。
 			limit := pseudoMarketPrice(quote.Price, spec.Side, env.settings, attempt, candidate.instrument.PriceTick)
 			spec.Type, spec.FillPolicy, spec.LimitPrice = exchange.OrderTypeLimit, exchange.FillPolicyIOC, &limit
 		}
