@@ -30,9 +30,11 @@
               <div class="tx-muted tx-mono">{{ record.account.trading_account_id }}</div>
             </template>
           </a-table-column>
-          <a-table-column title="交易所 · 市场" :width="160">
+          <a-table-column title="交易所 · 市场" :width="190">
             <template #cell="{ record }"
-              >{{ exchangeLabels[record.account.exchange] || "-" }} · {{ marketsText(record.account.markets) }}</template
+              ><span class="tx-nowrap"
+                >{{ exchangeLabels[record.account.exchange] || "-" }} · {{ marketsText(record.account.markets) }}</span
+              ></template
             >
           </a-table-column>
           <a-table-column title="优先级" :width="80" align="right">
@@ -63,7 +65,7 @@
               ><span class="tx-muted">{{ fmtClock(record.account.last_sync_at) }}</span></template
             >
           </a-table-column>
-          <a-table-column title="操作" :width="190" fixed="right">
+          <a-table-column title="操作" :width="190" :fixed="isNarrow ? undefined : 'right'">
             <template #cell="{ record }">
               <a-space :size="0">
                 <a-button size="mini" type="text" @click="syncAccounts([record.account])">同步</a-button>
@@ -175,6 +177,7 @@
 </template>
 
 <script setup lang="ts">
+import { useWindowSize } from "@vueuse/core";
 import { computed, inject, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { exchangeLabels, listLogicalAccounts, removeLogicalAccountMember, updateLogicalAccount } from "@/api/trade";
@@ -203,9 +206,12 @@ const {
   openFlatten,
   openClosePaper
 } = inject(detailContextKey)!;
+// 窄屏时右侧操作列不固定，不然会盖住数据列
+const { width: viewportWidth } = useWindowSize();
+const isNarrow = computed(() => viewportWidth.value < 768);
 
 // 各列宽度之和加展开箭头列：窄屏时横向滚动，数字不折行
-const MEMBERS_WIDTH = 40 + 190 + 160 + 80 + 70 + 140 + 120 + 120 + 120 + 190;
+const MEMBERS_WIDTH = 40 + 190 + 190 + 80 + 70 + 140 + 120 + 120 + 120 + 190;
 const memberDialog = ref<InstanceType<typeof MemberDialog>>();
 const expandedKeys = ref<string[]>([]);
 const allLogicals = ref<LogicalAccount[]>([]);

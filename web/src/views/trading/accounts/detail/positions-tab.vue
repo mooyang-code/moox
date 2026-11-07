@@ -75,7 +75,7 @@
             ><span class="tx-num">{{ record.spotBalance ? fmtQty(cleanNumber(record.spotBalance)) : "—" }}</span></template
           >
         </a-table-column>
-        <a-table-column title="操作" :width="170" fixed="right">
+        <a-table-column title="操作" :width="170" :fixed="isNarrow ? undefined : 'right'">
           <template #cell="{ record }">
             <a-space :size="0">
               <a-button
@@ -97,6 +97,7 @@
 </template>
 
 <script setup lang="ts">
+import { useWindowSize } from "@vueuse/core";
 import { computed, inject, ref } from "vue";
 import { useRoute } from "vue-router";
 import { fmtQty } from "../shared/format";
@@ -114,6 +115,9 @@ import {
 } from "./positions-model";
 
 const { logical, accounts, target, coinRows, flattenRunning, openOrder } = inject(detailContextKey)!;
+// 窄屏时右侧操作列不固定，不然会盖住数据列
+const { width: viewportWidth } = useWindowSize();
+const isNarrow = computed(() => viewportWidth.value < 768);
 const route = useRoute();
 
 const filter = ref<PositionFilter>(route.query.filter === "off" ? "off" : "all");
@@ -176,6 +180,7 @@ function openRowOrder(hint: OrderHint) {
 }
 
 .alert {
+  width: auto;
   margin: var(--moox-space-3) 16px;
 }
 </style>

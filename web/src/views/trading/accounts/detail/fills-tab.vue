@@ -197,6 +197,7 @@ watch(dataVersion, () => void load());
 }
 
 .alert {
+  width: auto;
   margin: 0 16px var(--moox-space-3);
 }
 

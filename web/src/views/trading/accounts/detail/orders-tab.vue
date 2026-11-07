@@ -84,7 +84,7 @@
         <a-table-column title="来源" :width="70">
           <template #cell="{ record }">{{ orderOwnerLabels[record.owner_type] || record.owner_type }}</template>
         </a-table-column>
-        <a-table-column title="操作" :width="80" fixed="right">
+        <a-table-column title="操作" :width="80" :fixed="isNarrow ? undefined : 'right'">
           <template #cell="{ record }">
             <a-button
               v-if="canCancelOrderState(record.state)"
@@ -104,6 +104,7 @@
 </template>
 
 <script setup lang="ts">
+import { useWindowSize } from "@vueuse/core";
 import { computed, inject, ref, watch } from "vue";
 import { canCancelOrderState, listOrders, orderOwnerLabels, orderStateLabels } from "@/api/trade";
 import type { MarketType, Order } from "@/api/trade";
@@ -118,6 +119,9 @@ import OrderDetailDrawer from "./order-detail-drawer.vue";
 import { rangeParams, recordRanges, type RecordRange } from "./record-range";
 
 const { logical, accounts, dataVersion, openCancel } = inject(detailContextKey)!;
+// 窄屏时右侧操作列不固定，不然会盖住数据列
+const { width: viewportWidth } = useWindowSize();
+const isNarrow = computed(() => viewportWidth.value < 768);
 
 const range = ref<RecordRange>("7d");
 const state = ref<string>();
@@ -226,6 +230,7 @@ watch(dataVersion, () => void load());
 }
 
 .alert {
+  width: auto;
   margin: 0 16px var(--moox-space-3);
 }
 
