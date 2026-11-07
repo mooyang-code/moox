@@ -25,6 +25,13 @@ describe("新建账户", () => {
     expect(restrictMarkets([1], ["SPOT", "SWAP"])).toEqual([1]);
   });
 
+  it("币安测试网只能开通一个市场，OKX 不受限", () => {
+    const base = { ...createDefaultForm(), name: "a", secretId: "s", kind: "testnet" as const, markets: [1, 2] as (1 | 2)[] };
+    expect(validateStep(base, 2)).toContain("只能开通一个市场");
+    expect(validateStep({ ...base, exchange: 2 }, 2)).toBe("");
+    expect(validateStep({ ...base, markets: [2] }, 2)).toBe("");
+  });
+
   it("模拟盘请求带市场集合，永续固定全仓，新建组合时组合名称缺省取账户名", () => {
     const form = { ...createDefaultForm(), name: " 演示 ", markets: [1, 2] as (1 | 2)[], controlMode: 2 as const };
     expect(buildPaperRequest(form)).toMatchObject({

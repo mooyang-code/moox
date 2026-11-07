@@ -40,7 +40,8 @@
         </a-select>
       </a-form-item>
       <a-form-item label="账户名称"><a-input v-model="form.name" :max-length="64" /></a-form-item>
-      <!-- 实盘：选完密钥立即检测账户类型和权限，有阻断项或没有结论时“下一步”不放行 -->
+      <!-- 实盘：选完密钥立即检测账户类型和权限，有阻断项或没有结论时“下一步”不放行。
+           这一步还没选市场，只拦和市场无关的阻断项（提现权限、密钥被拒绝等）；和市场有关的在下一步按所选市场再检测 -->
       <InspectionPreview
         v-if="form.kind !== 'paper'"
         :exchange="form.exchange"
@@ -52,7 +53,7 @@
 
     <!-- 3 市场与参数 -->
     <a-form v-else-if="form.step === 2" :model="form" layout="vertical">
-      <a-form-item label="开通的市场" extra="一个账户可以同时开通现货和永续；永续固定全仓、USDT 结算">
+      <a-form-item label="开通的市场" :extra="marketsExtra">
         <a-space size="large">
           <a-checkbox
             :model-value="form.markets.includes(1)"
@@ -71,6 +72,15 @@
       <a-form-item label="结算资产">
         <a-input v-model="form.settlementAsset" :disabled="form.markets.includes(2)" />
       </a-form-item>
+      <!-- 实盘：按所选市场再检测一次（万向划转权限、双向持仓等和市场有关的阻断项），通过才能继续 -->
+      <InspectionPreview
+        v-if="form.kind !== 'paper'"
+        :exchange="form.exchange"
+        :environment="form.kind === 'testnet' ? 1 : 2"
+        :secret-id="form.secretId"
+        :markets="form.markets"
+        @change="onMarketPreviewChange"
+      />
       <template v-if="form.kind === 'paper'">
         <div class="row">
           <a-form-item label="初始资金"><a-input v-model="form.initialBalance" /></a-form-item>
@@ -190,6 +200,8 @@ const secretsLoading = ref(false);
 const scope = createSubmitScope();
 // 实盘第二步的检测结果：allowNext 为真才能离开这一步；可开通的市场用来收窄第三步的勾选
 const preview = reactive<{ allowNext: boolean; view: InspectionView | null }>({ allowNext: false, view: null });
+// 第三步按所选市场再检测的结果：和市场有关的阻断项在这里判断
+const marketPreview = reactive({ allowNext: false });
 // 这次已经建成的账户、组合：提交中途失败后重试时用来跳过已完成的部分
 const created = reactive({ accountId: "", logicalId: "", joined: false });
 
@@ -200,15 +212,36 @@ const joinable = computed(() => joinableLogicals(props.logicals, accountMapOf(pr
 
 const nextDisabled = computed(() => {
   if (form.step === 0) return !selectedKind.value?.open;
-  return form.step === 1 && form.kind !== "paper" && !preview.allowNext;
+  if (form.kind === "paper") return false;
+  if (form.step === 1) return !preview.allowNext;
+  return form.step === 2 && !marketPreview.allowNext;
 });
 
+// 币安测试网一个账户只能开通一个市场（现货测试网和合约测试网是两套密钥）
+const singleMarket = computed(() => form.kind === "testnet" && form.exchange === 1);
+const marketsExtra = computed(() =>
+  singleMarket.value
+    ? "币安测试网一个账户只能开通一个市场：现货测试网和合约测试网是两套密钥；永续固定全仓、USDT 结算"
+    : "一个账户可以同时开通现货和永续；永续固定全仓、USDT 结算"
+);
+
 watch(visible, () => scope.invalidate());
+// 换密钥、换交易所后，之前的“确认这是生产环境密钥且没有提现权限”作废，要对新的密钥重新确认
+watch(
+  () => [form.secretId, form.exchange],
+  () => {
+    form.ack = false;
+  }
+);
 
 function onPreviewChange(payload: { allowNext: boolean; view: InspectionView | null }) {
   preview.allowNext = payload.allowNext;
   preview.view = payload.view;
   if (payload.view) form.markets = restrictMarkets(form.markets, payload.view.availableMarkets);
+}
+
+function onMarketPreviewChange(payload: { allowNext: boolean }) {
+  marketPreview.allowNext = payload.allowNext;
 }
 
 /** 模拟盘不限制；实盘只能开通检测结果里有的市场（测试网跳过检测、没有市场列表时不限制）。 */
@@ -233,6 +266,7 @@ function open(kind: Environment) {
   Object.assign(form, createDefaultForm(createKinds.find(item => item.key === kind)?.open ? kind : "paper"));
   Object.assign(created, { accountId: "", logicalId: "", joined: false });
   Object.assign(preview, { allowNext: false, view: null });
+  marketPreview.allowNext = false;
   error.value = "";
   submitting.value = false;
   visible.value = true;
@@ -245,7 +279,7 @@ function onExchangeChange() {
 }
 
 function setMarket(market: MarketType, on: boolean) {
-  form.markets = toggleMarket(form.markets, market, on);
+  form.markets = singleMarket.value ? (on ? [market] : form.markets) : toggleMarket(form.markets, market, on);
   if (form.markets.includes(2)) form.settlementAsset = "USDT";
   if (!form.feesEdited) {
     const fees = defaultFees(form.markets);

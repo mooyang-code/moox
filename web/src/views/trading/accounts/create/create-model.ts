@@ -95,6 +95,7 @@ export function validateStep(form: CreateForm, step: number): string {
   }
   if (step === 2) {
     if (!form.markets.length) return "至少开通一个市场";
+    if (form.kind === "testnet" && form.exchange === 1 && form.markets.length > 1) return "币安测试网一个账户只能开通一个市场";
     if (!form.settlementAsset.trim()) return "请输入结算资产";
     if (form.markets.includes(2) && form.settlementAsset.trim().toUpperCase() !== "USDT") return "永续只支持 USDT 结算";
     if (form.kind === "paper") {

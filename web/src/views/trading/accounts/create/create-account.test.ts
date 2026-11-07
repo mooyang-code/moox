@@ -143,6 +143,51 @@ describe("新建账户提交", () => {
 
     const liveForm = { kind: "testnet", secretId: "s1", name: "实盘账户", markets: [2] };
 
+    it("第三步按所选市场再检测一次：和市场有关的阻断项在这里拦，第二步只拦和市场无关的", async () => {
+      const vm = await openDialog();
+      vm.open("prod");
+      Object.assign(vm.form, { step: 1, name: "实盘账户", secretId: "s1", markets: [1, 2] });
+      mocks.inspectExchangeCredential.mockResolvedValueOnce({
+        inspection: { account_mode: "BINANCE_STANDARD", available_markets: [1, 2] }
+      });
+      await flushPromises();
+      await vi.waitFor(() => expect(nextButton()?.disabled).toBe(false));
+      expect(mocks.inspectExchangeCredential.mock.calls[0][0].markets).toBeUndefined();
+
+      // 进入第三步：按所选市场再检测，合约双向持仓这类和市场有关的阻断项在这里拦下。
+      mocks.inspectExchangeCredential.mockResolvedValueOnce({
+        inspection: { account_mode: "BINANCE_STANDARD", blockers: [{ code: "hedge_position_mode", message: "合约是双向持仓" }] }
+      });
+      vm.form.step = 2;
+      await flushPromises();
+      await vi.waitFor(() => expect(document.body.textContent).toContain("合约是双向持仓"));
+      expect(mocks.inspectExchangeCredential.mock.calls[1][0].markets).toEqual([1, 2]);
+      expect(nextButton()?.disabled).toBe(true);
+    });
+
+    it("币安测试网一个账户只能开通一个市场：勾另一个市场是切换，不是追加", async () => {
+      const vm = await openDialog();
+      vm.open("testnet");
+      Object.assign(vm.form, { step: 2, name: "测试网账户", secretId: "s1", markets: [2] });
+      await flushPromises();
+      const spot = [...document.querySelectorAll<HTMLElement>(".arco-checkbox")].find(item => item.textContent?.includes("现货"));
+      spot!.querySelector("input")!.click();
+      await flushPromises();
+      expect(vm.form.markets).toEqual([1]);
+    });
+
+    it("换密钥后，“确认这是生产环境密钥且没有提现权限”作废", async () => {
+      const vm = await openDialog();
+      vm.open("prod");
+      Object.assign(vm.form, { step: 2, secretId: "s1", ack: true });
+      await flushPromises();
+      expect(vm.form.ack).toBe(false);
+      vm.form.ack = true;
+      vm.form.secretId = "s2";
+      await flushPromises();
+      expect(vm.form.ack).toBe(false);
+    });
+
     it("加入组合失败只显示一条红色提示并锁定前几步，重试只补加入不重复建账户", async () => {
       mocks.createTradingAccount.mockResolvedValue({ account: { trading_account_id: "ta-live" } });
       const vm = await openDialog();
