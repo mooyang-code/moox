@@ -117,15 +117,7 @@ func (tx *Tx) CreateLogicalAccount(record LogicalAccountRecord) error {
 	if blank(record.FundSettingsJSON) {
 		record.FundSettingsJSON = "{}"
 	}
-	err := tx.db.Exec(`
-		INSERT INTO t_logical_accounts (
-			c_space_id, c_logical_account_id, c_name, c_owner_claimed_at,
-			c_owner_instance_id, c_owner_session_id, c_auth_fence,
-			c_control_mode, c_execution_mode, c_settlement_asset,
-			c_order_settings_json, c_fund_settings_json,
-			c_automation_state, c_pause_reason
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`,
+	err := tx.db.Exec(execInsertLogicalAccount,
 		record.SpaceID, record.LogicalAccountID, record.Name, ownerGeneration,
 		ownerInstance, ownerSession, authFence,
 		record.ControlMode, record.ExecutionMode, record.SettlementAsset,
@@ -409,14 +401,7 @@ func (tx *Tx) SetLogicalAccountAutomation(
 		(state == string(logicalaccount.AutomationPaused) && blank(reason)) {
 		return fmt.Errorf("%w: automation state and reason disagree", ErrInvalidRecord)
 	}
-	result := tx.db.Exec(`
-		UPDATE t_logical_accounts
-		SET c_resumed_at = CASE WHEN ? = 'ACTIVE' AND c_automation_state <> 'ACTIVE' THEN ? ELSE c_resumed_at END,
-			c_automation_state = ?, c_pause_reason = ?,
-			c_mtime = CURRENT_TIMESTAMP
-		WHERE c_space_id = ? AND c_logical_account_id = ?
-		  AND (? <> 'ACTIVE' OR c_control_mode = 'STRATEGY')
-	`, state, time.Now().UnixMilli(), state, reason, spaceID, logicalAccountID, state)
+	result := tx.db.Exec(execSetLogicalAccountAutomation, state, time.Now().UnixMilli(), state, reason, spaceID, logicalAccountID, state)
 	return requireUpdated(result.Error, result.RowsAffected, "logical account automation")
 }
 
@@ -432,14 +417,7 @@ func (tx *Tx) LogicalAccountMarkets(spaceID, logicalAccountID string) ([]string,
 
 func logicalAccountMarkets(db *gorm.DB, spaceID, logicalAccountID string) ([]string, error) {
 	var rows []string
-	if err := db.Raw(`
-		SELECT a.c_markets
-		FROM t_logical_account_members AS m
-		JOIN t_trading_accounts AS a
-			ON a.c_space_id = m.c_space_id
-			AND a.c_trading_account_id = m.c_trading_account_id
-		WHERE m.c_space_id = ? AND m.c_logical_account_id = ? AND m.c_enabled = 1
-	`, spaceID, logicalAccountID).Scan(&rows).Error; err != nil {
+	if err := db.Raw(queryLogicalAccountMemberMarkets, spaceID, logicalAccountID).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
 	sets := make([][]exchange.MarketType, 0, len(rows))
@@ -660,3 +638,27 @@ func logicalAccountMemberRecord(row logicalAccountMemberRow) LogicalAccountMembe
 		CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 	}
 }
+
+// 以下 SQL 整条写成常量，不在调用处拼接或内联。
+const (
+	execInsertLogicalAccount = `INSERT INTO t_logical_accounts (
+			c_space_id, c_logical_account_id, c_name, c_owner_claimed_at,
+			c_owner_instance_id, c_owner_session_id, c_auth_fence,
+			c_control_mode, c_execution_mode, c_settlement_asset,
+			c_order_settings_json, c_fund_settings_json,
+			c_automation_state, c_pause_reason
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	// 改自动执行状态：从暂停恢复时记下恢复时间；只有策略控制的组合能恢复自动执行。
+	execSetLogicalAccountAutomation = `UPDATE t_logical_accounts
+		SET c_resumed_at = CASE WHEN ? = 'ACTIVE' AND c_automation_state <> 'ACTIVE' THEN ? ELSE c_resumed_at END,
+			c_automation_state = ?, c_pause_reason = ?,
+			c_mtime = CURRENT_TIMESTAMP
+		WHERE c_space_id = ? AND c_logical_account_id = ?
+		  AND (? <> 'ACTIVE' OR c_control_mode = 'STRATEGY')`
+	queryLogicalAccountMemberMarkets = `SELECT a.c_markets
+		FROM t_logical_account_members AS m
+		JOIN t_trading_accounts AS a
+			ON a.c_space_id = m.c_space_id
+			AND a.c_trading_account_id = m.c_trading_account_id
+		WHERE m.c_space_id = ? AND m.c_logical_account_id = ? AND m.c_enabled = 1`
+)

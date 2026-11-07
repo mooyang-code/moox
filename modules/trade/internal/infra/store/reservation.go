@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
@@ -21,18 +22,11 @@ func (tx *Tx) GetUnreflectedReservation(
 	var rows []struct {
 		Quantity string `gorm:"column:c_remaining_reserved_quantity"`
 	}
-	if err := tx.db.Raw(`
-		SELECT c_remaining_reserved_quantity
-		FROM t_trade_orders
-		WHERE c_space_id = ? AND c_trading_account_id = ?
-			AND c_reserved_asset = ?
-			AND c_market_type IN ?
-			AND c_remaining_reserved_quantity != '0'
-			AND (
-				c_state IN ('PENDING', 'SUBMITTING', 'SUBMIT_UNKNOWN')
-				OR c_submitted_at >= ?
-			)
-	`, spaceID, tradingAccountID, asset, markets, snapshotSourceTime).Scan(&rows).Error; err != nil {
+	marketsJSON, err := json.Marshal(markets)
+	if err != nil {
+		return shared.Decimal{}, fmt.Errorf("%w: encode reservation markets", ErrInvalidRecord)
+	}
+	if err := tx.db.Raw(queryUnreflectedReservations, spaceID, tradingAccountID, asset, string(marketsJSON), snapshotSourceTime).Scan(&rows).Error; err != nil {
 		return shared.Decimal{}, err
 	}
 	total := shared.Zero()
@@ -91,12 +85,7 @@ func (s *Store) OrderSymbolsWithFillGap(ctx context.Context, spaceID, tradingAcc
 		Filled   string `gorm:"column:c_filled_quantity"`
 		Observed string `gorm:"column:c_observed_filled_quantity"`
 	}
-	if err := s.db.WithContext(ctx).Raw(`
-		SELECT c_market_type, c_exchange_symbol, c_filled_quantity, c_observed_filled_quantity
-		FROM t_trade_orders
-		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_observed_filled_quantity != '0'
-			AND c_observed_filled_quantity <> c_filled_quantity
-	`, spaceID, tradingAccountID).Scan(&rows).Error; err != nil {
+	if err := s.db.WithContext(ctx).Raw(queryOrdersWithFillGap, spaceID, tradingAccountID).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
 	var keys []exchange.SymbolKey
@@ -115,3 +104,22 @@ func (s *Store) OrderSymbolsWithFillGap(ctx context.Context, spaceID, tradingAcc
 	}
 	return keys, nil
 }
+
+// 以下 SQL 整条写成常量，不在调用处拼接或内联。
+const (
+	// 市场列表经 json_each(?) 传入。
+	queryUnreflectedReservations = `SELECT c_remaining_reserved_quantity
+		FROM t_trade_orders
+		WHERE c_space_id = ? AND c_trading_account_id = ?
+			AND c_reserved_asset = ?
+			AND c_market_type IN (SELECT value FROM json_each(?))
+			AND c_remaining_reserved_quantity != '0'
+			AND (
+				c_state IN ('PENDING', 'SUBMITTING', 'SUBMIT_UNKNOWN')
+				OR c_submitted_at >= ?
+			)`
+	queryOrdersWithFillGap = `SELECT c_market_type, c_exchange_symbol, c_filled_quantity, c_observed_filled_quantity
+		FROM t_trade_orders
+		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_observed_filled_quantity != '0'
+			AND c_observed_filled_quantity <> c_filled_quantity`
+)

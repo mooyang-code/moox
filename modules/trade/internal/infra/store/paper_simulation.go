@@ -70,18 +70,12 @@ func (tx *Tx) ClosePaperSimulation(spaceID, tradingAccountID string) error {
 		if logicalID == "" {
 			continue
 		}
-		result := tx.db.Exec(`
-			UPDATE t_logical_accounts SET c_automation_state = 'PAUSED', c_pause_reason = ?, c_mtime = CURRENT_TIMESTAMP
-			WHERE c_space_id = ? AND c_logical_account_id = ?
-		`, "模拟账户已关闭，自动执行已暂停", spaceID, logicalID)
+		result := tx.db.Exec(execPausePaperLogicalAccount, "模拟账户已关闭，自动执行已暂停", spaceID, logicalID)
 		if result.Error != nil {
 			return result.Error
 		}
 		// 关闭后账户不再持仓和下单，移出成员，组合账户里其他成员不受影响。
-		if err := tx.db.Exec(`
-			DELETE FROM t_logical_account_members
-			WHERE c_space_id = ? AND c_logical_account_id = ? AND c_trading_account_id = ?
-		`, spaceID, logicalID, tradingAccountID).Error; err != nil {
+		if err := tx.db.Exec(execRemovePaperMember, spaceID, logicalID, tradingAccountID).Error; err != nil {
 			return err
 		}
 	}
@@ -211,3 +205,11 @@ func (tx *Tx) SetTradingAccountStatus(spaceID, tradingAccountID, status string) 
 	`, status, spaceID, tradingAccountID)
 	return requireUpdated(result.Error, result.RowsAffected, "trading account status")
 }
+
+// 以下 SQL 整条写成常量，不在调用处拼接或内联。
+const (
+	execPausePaperLogicalAccount = `UPDATE t_logical_accounts SET c_automation_state = 'PAUSED', c_pause_reason = ?, c_mtime = CURRENT_TIMESTAMP
+		WHERE c_space_id = ? AND c_logical_account_id = ?`
+	execRemovePaperMember = `DELETE FROM t_logical_account_members
+		WHERE c_space_id = ? AND c_logical_account_id = ? AND c_trading_account_id = ?`
+)
