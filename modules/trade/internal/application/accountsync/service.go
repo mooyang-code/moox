@@ -477,7 +477,12 @@ func (s *Service) applySnapshot(
 	}
 	// 空持仓/缺失持仓的删除边界：持仓列表是先于本轮成交读取的，不能用后取的余额时间当边界，
 	// 否则刚补录成交投影出的持仓会被当作“交易所没有”而删除。边界不晚于本轮最早成交之前。
+	// 边界取持仓读取时间：账户快照时间是各钱包里最早的（现货钱包几天没变动时会很旧），
+	// 用它会让交易所已经平掉（强平、ADL、手工平）的合约仓永远删不掉。
 	positionDeleteBefore := snapshot.Account.ExchangeUpdatedAt.UnixMilli()
+	if !snapshot.PositionsReadAt.IsZero() {
+		positionDeleteBefore = snapshot.PositionsReadAt.UnixMilli()
+	}
 	for _, fill := range snapshot.Fills {
 		if earliest := fill.TradedAt.UnixMilli() - 1; earliest < positionDeleteBefore {
 			positionDeleteBefore = earliest
