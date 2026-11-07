@@ -39,7 +39,7 @@ func storedTags(t *testing.T, store *seriesstore.Store) map[string]int {
 
 // 统一数据集：现货、永续分两次导入（导入专用的 /v1/series/write），互不覆盖；重复导入同一个市场是幂等的。
 func TestLocalWriteSpotThenSwapImportsDoNotOverwriteEachOther(t *testing.T) {
-	w, store := newTestWriter(t)
+	w, store := newTestWriterFor(t, true)
 	code, out := post(t, w, taggedWireRequest(importSpotTag, 0, 1, 2))
 	require.Equal(t, http.StatusOK, code, out)
 	require.Equal(t, map[string]int{importSpotTag: 3}, storedTags(t, store))

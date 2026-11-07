@@ -36,6 +36,8 @@ type fakeStorage struct {
 	markers []storageio.PeriodMarker
 	// retention 是源数据集的保留期（如 "8d"）；空表示 forever。
 	retention string
+	// marketType 是源数据集的 market_type 属性；统一数据集为 "multi"。
+	marketType string
 }
 
 func newFakeStorage() *fakeStorage {
@@ -85,7 +87,7 @@ func (f *fakeStorage) GetDataset(context.Context, string, string) (storageio.Dat
 	if retention == "" {
 		retention = "forever"
 	}
-	return storageio.DatasetInfo{Retention: retention}, nil
+	return storageio.DatasetInfo{Retention: retention, Attributes: map[string]string{"market_type": f.marketType}}, nil
 }
 
 func (f *fakeStorage) ReadWindow(_ context.Context, req storageio.ReadRequest) (map[string]*storageio.Frame, error) {

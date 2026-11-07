@@ -92,9 +92,21 @@ type Data struct {
 	mu      sync.Mutex
 	sources map[seriesstore.Source]*source
 
+	// unified 缓存各数据源是不是统一数据集（数据集属性 market_type=multi），避免每个补算分块都读一次元数据。
+	unifiedMu sync.Mutex
+	unified   map[seriesstore.Source]unifiedEntry
+
 	// hotWrites 是走热路径（窗口先追加、写盘并行）的标的写入累计数，coldWrites 是同步写盘的累计数。
 	hotWrites, coldWrites atomic.Int64
 }
+
+type unifiedEntry struct {
+	multi bool
+	at    time.Time
+}
+
+// unifiedCacheTTL 是“是否统一数据集”结论的缓存时间；数据集的 market_type 创建后不会改变，缓存只为减少元数据读取。
+const unifiedCacheTTL = time.Minute
 
 type coverageKey struct {
 	subject  string
@@ -147,7 +159,28 @@ func New(cfg Config) *Data {
 		cfg:     cfg,
 		syncer:  &seriessync.Syncer{Store: cfg.Store, Storage: cfg.Storage, Workers: cfg.Workers, BatchSubjects: cfg.BatchSubjects},
 		sources: map[seriesstore.Source]*source{},
+		unified: map[seriesstore.Source]unifiedEntry{},
 	}
+}
+
+// UnifiedDataset 报告数据源是不是统一数据集（同一数据集里放现货、永续两个市场的序列）：以数据集属性
+// market_type=multi 为准（采集建数据集时写入），不靠本地存储里有哪些 series_tag 推断。
+func (d *Data) UnifiedDataset(ctx context.Context, src seriesstore.Source) (bool, error) {
+	d.unifiedMu.Lock()
+	if entry, ok := d.unified[src]; ok && d.cfg.Now().Sub(entry.at) < unifiedCacheTTL {
+		d.unifiedMu.Unlock()
+		return entry.multi, nil
+	}
+	d.unifiedMu.Unlock()
+	info, err := d.cfg.Storage.GetDataset(ctx, src.SpaceID, src.DatasetID)
+	if err != nil {
+		return false, fmt.Errorf("读取源数据集 %s/%s 的 market_type：%w", src.SpaceID, src.DatasetID, err)
+	}
+	multi := strings.EqualFold(strings.TrimSpace(info.Attributes["market_type"]), seriesset.MarketMulti)
+	d.unifiedMu.Lock()
+	d.unified[src] = unifiedEntry{multi: multi, at: d.cfg.Now()}
+	d.unifiedMu.Unlock()
+	return multi, nil
 }
 
 // Reset 丢弃内存里的全部数据源（窗口、同步状态）并释放常驻内存登记（重置时用，之后要对每个任务重新 Prepare）。
@@ -613,28 +646,34 @@ func (d *Data) Load(ctx context.Context, plan pipeline.Plan) (pipeline.DataResul
 	return d.loadRange(ctx, st, plan, subjects)
 }
 
-// ExpectedSeries 实现 pipeline.SeriesExpecter：补算类计划在统一数据集（本地存储里这些标的的序列跨现货、永续两个市场）上的期望序列。
-// 序列在计划区间结束之前已有数据才算应存在；单序列数据集返回 nil。
-func (d *Data) ExpectedSeries(_ context.Context, plan pipeline.Plan) ([]seriesset.Series, error) {
+// ExpectedSeries 实现 pipeline.SeriesExpecter：补算类计划在统一数据集（数据集属性 market_type=multi）上的期望序列，
+// 取本地存储里这些标的在读取范围内应存在的每条序列（标的、series_tag）。
+// 应存在 = 计划区间结束之前已有数据，并且最后一根不早于读取起点（区间起点减回看）：区间内断档仍算缺失，
+// 回看起点之前就已结束的（下架的合约）不算期望序列，否则它会让严格截面因子永远跳过整个 tag。
+// 单序列数据集返回 nil。
+func (d *Data) ExpectedSeries(ctx context.Context, plan pipeline.Plan) ([]seriesset.Series, error) {
 	src := sourceOf(plan.Set)
+	multi, err := d.UnifiedDataset(ctx, src)
+	if err != nil || !multi {
+		return nil, err
+	}
+	readStart, err := pipeline.ReadStart(periodclock.Continuous{}, plan)
+	if err != nil {
+		return nil, err
+	}
 	end := plan.TargetEnd.Unix()
 	var out []seriesset.Series
-	markets := map[string]struct{}{}
 	for _, subject := range plan.Expected {
 		bounds, err := d.cfg.Store.TagBounds(src, subject)
 		if err != nil {
 			return nil, err
 		}
 		for tag, b := range bounds {
-			if b.Earliest.Unix() >= end {
+			if b.Earliest.Unix() >= end || b.Latest.Before(readStart) {
 				continue
 			}
 			out = append(out, seriesset.Series{SubjectID: subject, SeriesTag: tag})
-			markets[seriesset.SeriesTagMarket(tag)] = struct{}{}
 		}
-	}
-	if len(markets) < 2 {
-		return nil, nil
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].SubjectID != out[j].SubjectID {
