@@ -164,7 +164,7 @@ func finishInspection(result exchange.Inspection, request exchange.InspectReques
 	if result.CanTradeSwap && !result.PortfolioMarginSuspected {
 		result.AvailableMarkets = append(result.AvailableMarkets, exchange.MarketTypeSwap)
 	}
-	result.Blockers = result.BlockersFor(request.Markets)
+	result.ApplyFindings(request.Markets)
 	return result
 }
 

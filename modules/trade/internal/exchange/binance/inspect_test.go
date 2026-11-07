@@ -191,6 +191,26 @@ func TestInspectHedgeModeBlocks(t *testing.T) {
 	}
 }
 
+// 预览（不带市场）：双向持仓这类和市场有关的问题不是阻断项，写成“开通对应市场时会被阻断”的提醒。
+func TestInspectPreviewTurnsMarketSpecificProblemsIntoWarnings(t *testing.T) {
+	_, clients := newInspectServer(t, standardRoutes(t, string(sample(t, "fapi_position_dual.json")), nil))
+	result, err := inspectWith(context.Background(), exchange.InspectRequest{Environment: exchange.AccountEnvironmentProduction}, clients)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Blockers) != 0 {
+		t.Fatalf("预览不应有和市场有关的阻断项：%+v", result.Blockers)
+	}
+	if !hasFinding(result.Warnings, exchange.FindingHedgeMode) {
+		t.Fatalf("双向持仓应写成提醒：%+v", result.Warnings)
+	}
+	for _, warning := range result.Warnings {
+		if warning.Code == exchange.FindingHedgeMode && !strings.Contains(warning.Message, "开通对应市场时会被阻断") {
+			t.Fatalf("提醒要说明开通对应市场时会被阻断：%q", warning.Message)
+		}
+	}
+}
+
 func TestInspectSuspectedPortfolioMarginOldKey(t *testing.T) {
 	routes := standardRoutes(t, `{"dualSidePosition": false}`, nil)
 	routes["/fapi/v3/account"] = inspectReply{http.StatusUnauthorized, errorBody(-2015, "Invalid API-key, IP, or permissions for action.")}

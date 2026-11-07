@@ -67,7 +67,7 @@ func (s *Service) now() time.Time {
 	return time.Now().UTC()
 }
 
-// InspectCredential 只读检测一把密钥，不落库：录入密钥和建账户前预览。markets 为空时按这把密钥能开通的全部市场判断阻断项。
+// InspectCredential 只读检测一把密钥，不落库：录入密钥和建账户前预览。markets 为空时阻断项只有和市场无关的（提现权限、密钥被拒绝等），和市场有关的问题（双向持仓、缺万向划转权限、OKX 现货模式开永续等）写成提醒。
 // 检测没有成功（传输错误）时返回 ErrInspectionUnavailable，调用方不能当作“有问题”。
 func (s *Service) InspectCredential(
 	ctx context.Context,

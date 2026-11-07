@@ -35,7 +35,7 @@ func inspectWith(ctx context.Context, request exchange.InspectRequest, adapter *
 	}
 	if strings.TrimSpace(request.Credential.Passphrase) == "" {
 		result.CredentialRejected = "OKX 密钥缺少 passphrase"
-		result.Blockers = result.BlockersFor(request.Markets)
+		result.ApplyFindings(request.Markets)
 		return result, nil
 	}
 	data, err := adapter.request(ctx, http.MethodGet, "/api/v5/account/config", nil, nil, true)
@@ -44,7 +44,7 @@ func inspectWith(ctx context.Context, request exchange.InspectRequest, adapter *
 		if isCredentialRejection(err) {
 			// 只记错误码和中文说明，不带交易所原始响应体和请求串（可能含签名）。
 			result.CredentialRejected = "交易所返回鉴权类错误 " + errorCode(err) + "（密钥、passphrase 无效或 IP 不在白名单）"
-			result.Blockers = result.BlockersFor(request.Markets)
+			result.ApplyFindings(request.Markets)
 			return result, nil
 		}
 		return exchange.Inspection{}, errors.Join(exchange.ErrInspectionInconclusive, err)
@@ -77,7 +77,7 @@ func inspectWith(ctx context.Context, request exchange.InspectRequest, adapter *
 	if result.CanTradeSwap && config.AcctLv != "1" {
 		result.AvailableMarkets = append(result.AvailableMarkets, exchange.MarketTypeSwap)
 	}
-	result.Blockers = result.BlockersFor(request.Markets)
+	result.ApplyFindings(request.Markets)
 	return result, nil
 }
 

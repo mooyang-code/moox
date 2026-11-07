@@ -89,6 +89,20 @@ func TestInspectOfficialSampleHasWithdrawPermissionAndHedgeMode(t *testing.T) {
 	}
 }
 
+// 预览（不带市场）：双向持仓不是阻断项，写成提醒；提现权限这类和市场无关的照样阻断。
+func TestInspectPreviewTurnsHedgeModeIntoWarning(t *testing.T) {
+	result, err := inspectAgainst(t, http.StatusOK, string(readSample(t, "account_config.json")), exchange.InspectRequest{Environment: exchange.AccountEnvironmentProduction})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasFinding(result.Blockers, exchange.FindingWithdrawPermission) || hasFinding(result.Blockers, exchange.FindingHedgeMode) {
+		t.Fatalf("预览只拦和市场无关的阻断项：%+v", result.Blockers)
+	}
+	if !hasFinding(result.Warnings, exchange.FindingHedgeMode) {
+		t.Fatalf("双向持仓应写成提醒：%+v", result.Warnings)
+	}
+}
+
 func TestInspectUnifiedAccountPasses(t *testing.T) {
 	for _, level := range []string{"2", "3", "4"} {
 		replaced := configReply(t, func(row map[string]any) {

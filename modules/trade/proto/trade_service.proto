@@ -395,7 +395,7 @@ message InspectExchangeCredentialReq {
   Exchange exchange = 1;
   AccountEnvironment environment = 2;
   string credential_secret_id = 3;
-  // 要开通的市场；不传时按这把密钥能开通的全部市场判断阻断项。
+  // 要开通的市场；不传时阻断项只有和市场无关的，和市场有关的问题写在 warnings 里（开通对应市场时会被阻断）。
   repeated MarketType markets = 4;
 }
 message InspectExchangeCredentialRsp {

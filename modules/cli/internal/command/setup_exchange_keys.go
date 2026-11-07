@@ -52,7 +52,7 @@ func inspectCommandHint(key setupconfig.ExchangeKey) string {
 		strings.ToUpper(key.Exchange), environment, key.ID())
 }
 
-// tradeInspectRequest 是 InspectExchangeCredential 的请求（JSON，枚举写名字）。markets 不传：按这把密钥能开通的全部市场判断。
+// tradeInspectRequest 是 InspectExchangeCredential 的请求（JSON，枚举写名字）。markets 不传：阻断项只有和市场无关的，和市场有关的问题在提醒里说明。
 func tradeInspectRequest(key setupconfig.ExchangeKey) map[string]any {
 	environment := "ACCOUNT_ENVIRONMENT_PRODUCTION"
 	if key.Environment == "testnet" {
@@ -191,6 +191,10 @@ func classifyInspection(secretID string, key setupconfig.ExchangeKey, raw []byte
 		check.Status, check.Message = exchangeCheckOK, "测试网跳过了权限与账户类型检测"
 	default:
 		check.Status, check.Message = exchangeCheckOK, "检测通过"
+		if len(check.Warnings) > 0 {
+			// 这里不带市场，只判断了和市场无关的问题；和市场有关的（双向持仓、缺万向划转权限等）在提醒里，建账户时按所选市场再判断。
+			check.Message = "检测通过（只判断了和市场无关的问题，和市场有关的见提醒）"
+		}
 	}
 	return check
 }

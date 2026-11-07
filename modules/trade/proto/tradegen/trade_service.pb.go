@@ -3202,7 +3202,7 @@ type InspectExchangeCredentialReq struct {
 	Exchange           Exchange           `protobuf:"varint,1,opt,name=exchange,proto3,enum=trpc.moox.trade.Exchange" json:"exchange,omitempty"`
 	Environment        AccountEnvironment `protobuf:"varint,2,opt,name=environment,proto3,enum=trpc.moox.trade.AccountEnvironment" json:"environment,omitempty"`
 	CredentialSecretId string             `protobuf:"bytes,3,opt,name=credential_secret_id,json=credentialSecretId,proto3" json:"credential_secret_id,omitempty"`
-	// 要开通的市场；不传时按这把密钥能开通的全部市场判断阻断项。
+	// 要开通的市场；不传时阻断项只有和市场无关的，和市场有关的问题写在 warnings 里（开通对应市场时会被阻断）。
 	Markets []MarketType `protobuf:"varint,4,rep,packed,name=markets,proto3,enum=trpc.moox.trade.MarketType" json:"markets,omitempty"`
 }
 

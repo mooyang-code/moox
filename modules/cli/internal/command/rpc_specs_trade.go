@@ -18,7 +18,7 @@ func init() {
 			Flags: []rpcFlag{reqFlag("account-id", "trading_account_id", "交易账户 ID")}},
 		rpcSpec{Path: []string{"trade", "inspect-credential"}, Short: "检测一把交易所密钥的账户类型和权限（只读，不落库，不下单）", Service: tradeConsole, Method: "InspectExchangeCredential",
 			Flags: []rpcFlag{reqFlag("exchange", "exchange", "交易所（EXCHANGE_BINANCE 或 EXCHANGE_OKX）"), reqFlag("environment", "environment", "环境（ACCOUNT_ENVIRONMENT_PRODUCTION 或 ACCOUNT_ENVIRONMENT_TESTNET）"),
-				reqFlag("credential-secret-id", "credential_secret_id", "密钥管理里的交易所密钥 ID"), jsonFlag("markets", "markets", "要开通的市场，JSON 数组，如 [\"MARKET_TYPE_SPOT\",\"MARKET_TYPE_SWAP\"]；不填按这把密钥能开通的全部市场判断")}},
+				reqFlag("credential-secret-id", "credential_secret_id", "密钥管理里的交易所密钥 ID"), jsonFlag("markets", "markets", "要开通的市场，JSON 数组，如 [\"MARKET_TYPE_SPOT\",\"MARKET_TYPE_SWAP\"]；不填时只拦和市场无关的问题，和市场有关的（双向持仓、缺万向划转权限等）写在提醒里")}},
 		rpcSpec{Path: []string{"trade", "logical", "list"}, Short: "列出逻辑账户", Service: tradeConsole, Method: "ListLogicalAccounts", Page: rpcPageSize},
 		rpcSpec{Path: []string{"trade", "logical", "show"}, Short: "查看逻辑账户", Service: tradeConsole, Method: "GetLogicalAccount",
 			Flags: []rpcFlag{reqFlag("logical-account-id", "logical_account_id", "逻辑账户 ID")}},

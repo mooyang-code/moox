@@ -27,7 +27,7 @@ export function inspectionRequest(input: InspectionRequestInput): InspectExchang
     environment: input.environment,
     credential_secret_id: input.secretId
   };
-  // 不勾选市场表示预览：不传 markets，由后端按这把密钥能开通的全部市场判断。
+  // 不勾选市场表示预览：不传 markets，后端只给和市场无关的阻断项，和市场有关的问题写成提醒。
   if (input.markets.length > 0) request.markets = [...input.markets].sort((a, b) => a - b);
   return request;
 }

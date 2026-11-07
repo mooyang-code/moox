@@ -132,6 +132,25 @@ func (i Inspection) BlockersFor(markets []MarketType) []InspectionFinding {
 	return findings
 }
 
+// ApplyFindings 按要开通的市场填写阻断项和提醒。markets 为空（预览）时阻断项只有和市场无关的，
+// 和市场有关的问题（只在开通合约或同时开通现货、合约时才成立的）写成提醒，说明开通对应市场时会被阻断。
+func (i *Inspection) ApplyFindings(markets []MarketType) {
+	i.Blockers = i.BlockersFor(markets)
+	if len(markets) != 0 {
+		return
+	}
+	base := make(map[string]struct{}, len(i.Blockers))
+	for _, finding := range i.Blockers {
+		base[finding.Message] = struct{}{}
+	}
+	for _, finding := range i.BlockersFor(i.AvailableMarkets) {
+		if _, ok := base[finding.Message]; ok {
+			continue
+		}
+		i.Warnings = append(i.Warnings, InspectionFinding{Code: finding.Code, Message: "开通对应市场时会被阻断：" + finding.Message})
+	}
+}
+
 // CredentialFingerprint 返回 API Key 的指纹（SHA-256 前 12 个十六进制字符）；API Key 为空返回空串。
 func CredentialFingerprint(apiKey string) string {
 	if apiKey == "" {
@@ -172,7 +191,7 @@ func (i Inspection) Encode() (string, error) {
 type InspectRequest struct {
 	Environment AccountEnvironment
 	Credential  Credential
-	// Markets 是要开通的市场，空表示预览（按这把密钥能开通的全部市场判断）。
+	// Markets 是要开通的市场，空表示预览（阻断项只有和市场无关的，和市场有关的问题写成提醒）。
 	Markets []MarketType
 }
 
