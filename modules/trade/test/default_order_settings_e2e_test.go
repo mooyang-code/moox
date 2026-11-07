@@ -165,3 +165,46 @@ func ptrDecimal(raw string) *shared.Decimal {
 	value := shared.MustDecimal(raw)
 	return &value
 }
+
+// 默认设置里现货最小下单额是 10：低于它的目标不下单（写进 blocked_targets），高于它的照常下。
+// 把交易所最小数量放小，让配置的门槛真正起作用（夹具里的最小数量 0.001 个 BTC 本身就是 50 USDT）。
+func TestDefaultOrderSettingsEnforceTheConfiguredMinimumNotional(t *testing.T) {
+	ctx := context.Background()
+	for _, c := range []struct {
+		quantity string
+		placed   bool
+	}{{"0.0001", false}, {"0.0003", true}} { // 50000 × 0.0001 = 5 < 10；50000 × 0.0003 = 15 ≥ 10
+		f := defaultSettingsFixture(t, exchange.MarketTypeSpot)
+		instruments, err := f.store.ListInstrumentsForAccount(ctx, testAccount)
+		require.NoError(t, err)
+		require.NoError(t, f.store.Transaction(ctx, func(tx *store.Tx) error {
+			for _, instrument := range instruments {
+				instrument.ExchangeQuantityStep, instrument.MinExchangeQuantity, instrument.MinNotional = "0.00001", "0.00001", "1"
+				if err := tx.UpsertInstrument(instrument); err != nil {
+					return err
+				}
+			}
+			return nil
+		}))
+		executor := &targetapp.Executor{
+			Store: f.store, Orders: f.orders, Now: func() time.Time { return testNow },
+			Prices: targetapp.ExchangePriceSource{Adapters: adapterSource{adapter: f.adapter}},
+		}
+		options := eventconsumer.TargetOptions{Store: f.store, Now: func() time.Time { return testNow }, WeightResolver: testTargetWeightResolver{}}
+		accepted := eventconsumer.HandleTarget(ctx, targetDelivery(t, testNow, "min-notional", 1, c.quantity), options)
+		require.Equal(t, jetstream.ACK, accepted.Decision, accepted.Err)
+		result, err := executor.Converge(ctx, testSpace, testLogicalAccount)
+		require.NoError(t, err)
+		orders, _, err := f.store.ListOrders(ctx, testSpace, store.OrderQuery{LogicalAccountID: testLogicalAccount, Limit: 10})
+		require.NoError(t, err)
+		if c.placed {
+			require.Len(t, orders, 1, "数量 %s", c.quantity)
+			continue
+		}
+		require.Empty(t, orders, "数量 %s：金额 5 低于默认最小下单额 10", c.quantity)
+		require.Equal(t, targetapp.StatusBlocked, result.Status)
+		target, err := f.store.GetLogicalAccountTarget(ctx, testSpace, testLogicalAccount)
+		require.NoError(t, err)
+		require.Contains(t, target.BlockedTargets[0].Reason, "最小下单额")
+	}
+}
