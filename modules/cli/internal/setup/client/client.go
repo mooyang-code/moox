@@ -106,6 +106,9 @@ func (c *Client) ApplyWithSpaces(
 	if err := checkRetInfo(response.GetRetInfo()); err != nil {
 		return ApplyResult{}, err
 	}
+	if err := checkExchangeKeysAnswered(snapshot.Manifest, response.GetExchangeKeys()); err != nil {
+		return ApplyResult{}, err
+	}
 	return ApplyResult{
 		Action: response.GetAction(), Users: int(response.GetUsers()),
 		Secrets: int(response.GetSecrets()),
@@ -139,6 +142,9 @@ func (c *Client) StatusWithSpaces(
 		return StatusResult{}, fmt.Errorf("config_changed")
 	}
 	if err := checkRetInfo(response.GetRetInfo()); err != nil {
+		return StatusResult{}, err
+	}
+	if err := checkExchangeKeysAnswered(snapshot.Manifest, response.GetExchangeKeys()); err != nil {
 		return StatusResult{}, err
 	}
 	return StatusResult{
@@ -208,6 +214,15 @@ func exchangeKeysToPB(keys []setupconfig.ExchangeKey) []*pb.SetupExchangeKey {
 		})
 	}
 	return result
+}
+
+// checkExchangeKeysAnswered 防止新 CLI 配没升级的 Admin：proto3 会静默丢掉不认识的字段，旧的 Admin 照常返回成功却一把交易所密钥都没写。
+// moox.toml 里有交易所密钥而响应里没有逐把结果（条数对不上）时报错，提示先升级管理后台。
+func checkExchangeKeysAnswered(manifest setupconfig.Manifest, answered []*pb.SetupExchangeKeyResult) error {
+	if len(manifest.ExchangeKeys) > 0 && len(answered) != len(manifest.ExchangeKeys) {
+		return fmt.Errorf("setup_admin_outdated: moox.toml 里有 %d 把交易所密钥，管理后台只返回了 %d 把的处理结果：它可能还是不认识 [[exchange_keys]] 的旧版本，没有写入任何密钥；请先升级管理后台（Admin）再运行 apply 或 init", len(manifest.ExchangeKeys), len(answered))
+	}
+	return nil
 }
 
 func exchangeKeyResults(items []*pb.SetupExchangeKeyResult) []ExchangeKeyResult {

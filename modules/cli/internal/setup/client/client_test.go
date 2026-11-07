@@ -268,3 +268,37 @@ passphrase = "recognizable-passphrase"
 		assert.NotContains(t, string(raw), value)
 	}
 }
+
+// 旧的 Admin 不认识 exchange_keys 字段，会静默丢掉它并返回成功：CLI 要能发现，不能让用户以为密钥已经写入。
+func TestApplyAndStatusFailWhenAdminIgnoresExchangeKeys(t *testing.T) {
+	extra := `
+[[exchange_keys]]
+name = "readonly"
+exchange = "binance"
+environment = "production"
+api_key = "k"
+secret_key = "s"
+readonly = true
+`
+	snapshot, _ := clientSnapshotWithExtra(t, extra)
+	forwarder := &fakeForwarder{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		var response []byte
+		if request.URL.Path == "/trpc.moox.admin.Setup/ApplySetup" {
+			response, _ = protojson.Marshal(&pb.ApplySetupRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, Action: "created", Users: 1, Secrets: 1})
+		} else {
+			response, _ = protojson.Marshal(&pb.GetSetupStatusRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, State: "completed", Users: 1, Secrets: 1})
+		}
+		_, _ = w.Write(response)
+	})}
+	_, err := New(forwarder).Apply(context.Background(), snapshot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "先升级管理后台")
+	_, err = New(forwarder).Status(context.Background(), snapshot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "setup_admin_outdated")
+
+	// 没有交易所密钥时不受影响。
+	plain, _ := clientSnapshotWithExtra(t, "")
+	_, err = New(forwarder).Apply(context.Background(), plain)
+	require.NoError(t, err)
+}
