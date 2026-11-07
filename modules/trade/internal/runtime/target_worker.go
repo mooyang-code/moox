@@ -320,12 +320,17 @@ func (w *TargetWorker) scheduleRetry(spaceID, logicalAccountID string, after tim
 	if previous, ok := w.retryTimers[key]; ok {
 		previous.Stop()
 	}
-	w.retryTimers[key] = time.AfterFunc(after, func() {
+	var timer *time.Timer
+	timer = time.AfterFunc(after, func() {
 		w.retryMu.Lock()
-		delete(w.retryTimers, key)
+		// 表里已经是新的定时器时不能删掉它。
+		if w.retryTimers[key] == timer {
+			delete(w.retryTimers, key)
+		}
 		w.retryMu.Unlock()
 		w.WakeTarget(spaceID, logicalAccountID)
 	})
+	w.retryTimers[key] = timer
 }
 
 func (w *TargetWorker) observe(

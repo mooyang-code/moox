@@ -22,6 +22,9 @@ const (
 // transferPollInterval 是等待划转完成时再次收敛的间隔。
 const transferPollInterval = time.Second
 
+// expiryRetryDelay 是到期撤挂单失败后再次收敛的间隔。
+const expiryRetryDelay = 5 * time.Second
+
 // actionStage 返回一个动作所属的执行阶段。
 func actionStage(action laneAction) int {
 	switch {
@@ -92,6 +95,8 @@ func (e *Executor) walletTransferBeforeSpotBuy(
 }
 
 // scaleBuys 按划转额度缩小现货买入：比例为 0 的账户这轮不买，其余按比例缩小数量。
+// 约定：比例是“划转实现这一轮看到的可用额度”相对“这一轮计划买入量”的比例。每一轮收敛都会按当前持仓重算计划买入量、
+// 再缩一次，已经买到的部分下一轮已在持仓里，不会重复缩小同一笔。实现划转（T9）时要对齐这个口径，比例按本轮算，不要累计。
 func scaleBuys(buys []laneAction, scale map[string]shared.Decimal) []laneAction {
 	if len(scale) == 0 {
 		return buys

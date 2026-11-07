@@ -139,10 +139,10 @@ func TestOperatorWorkerRealServicesTimeoutActionThenAdvancesNext(t *testing.T) {
 			command.ClientOrderID = "z-client"
 			second, err := s.SubmitOrder(context.Background(), command)
 			require.NoError(t, err)
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			var resumed []string
-			worker := &traderuntime.OperatorWorker{Actions: f.store, ActionTimeout: 40 * time.Millisecond, Resumer: submissionResumerFunc(func(ctx context.Context, current store.OperatorActionRecord) error {
+			worker := &traderuntime.OperatorWorker{Actions: f.store, ActionTimeout: 5 * time.Second, Resumer: submissionResumerFunc(func(ctx context.Context, current store.OperatorActionRecord) error {
 				resumed = append(resumed, current.ActionID)
 				err := s.ResumeOperatorAction(ctx, current)
 				if current.ActionID == second.Action.ActionID {

@@ -138,3 +138,16 @@ func TestUnifiedEquitySubtractsBorrowedSettlement(t *testing.T) {
 	require.Len(t, points, 1)
 	require.Equal(t, "1150", points[0].Equity, "(300 - 100) + 1000 - 50")
 }
+
+// 缺结算币明细的告警按账户限频：权益采样每 20 秒一次，同一个账户一小时只告警一次。
+func TestMissingSettlementWarningIsRateLimited(t *testing.T) {
+	now := time.UnixMilli(1_700_000_000_000)
+	service := &Service{Now: func() time.Time { return now }}
+
+	require.True(t, service.shouldWarnMissingSettlement("account-1"))
+	now = now.Add(20 * time.Second)
+	require.False(t, service.shouldWarnMissingSettlement("account-1"))
+	require.True(t, service.shouldWarnMissingSettlement("account-2"))
+	now = now.Add(time.Hour)
+	require.True(t, service.shouldWarnMissingSettlement("account-1"))
+}

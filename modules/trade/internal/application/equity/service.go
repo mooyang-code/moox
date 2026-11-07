@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/fundsettings"
@@ -23,6 +24,10 @@ type Service struct {
 	}
 	Now          func() time.Time
 	SourceMaxAge time.Duration
+
+	// missingSettlementWarned 记录缺结算币明细告警的时间（执行账户 -> 毫秒），同一个账户一小时只告警一次。
+	warnMu                  sync.Mutex
+	missingSettlementWarned map[string]int64
 }
 
 func (s *Service) ListSampleAccounts(ctx context.Context) ([]string, error) {
@@ -132,6 +137,21 @@ func (s *Service) SampleAccount(ctx context.Context, accountID string) error {
 	return s.sampleLogicalAccounts(ctx, account.SpaceID, accountID, &snapshot)
 }
 
+// shouldWarnMissingSettlement 限频：同一个账户一小时只告警一次（权益采样每 20 秒一次，不能刷屏）。
+func (s *Service) shouldWarnMissingSettlement(accountID string) bool {
+	now := s.now().UnixMilli()
+	s.warnMu.Lock()
+	defer s.warnMu.Unlock()
+	if s.missingSettlementWarned == nil {
+		s.missingSettlementWarned = make(map[string]int64)
+	}
+	if last, ok := s.missingSettlementWarned[accountID]; ok && now-last < int64(time.Hour/time.Millisecond) {
+		return false
+	}
+	s.missingSettlementWarned[accountID] = now
+	return true
+}
+
 // fundSettings 读取执行账户所属组合的资金设置；不在任何组合里时取默认值。
 func (s *Service) fundSettings(ctx context.Context, account store.TradingAccountRecord) (fundsettings.Settings, error) {
 	logical, _, err := s.Store.FindLogicalAccountByTradingAccount(ctx, account.SpaceID, account.TradingAccountID)
@@ -146,9 +166,9 @@ func (s *Service) fundSettings(ctx context.Context, account store.TradingAccount
 
 // valueSnapshot 按统一公式计算执行账户的权益（plan 4.6）：
 //
-//	权益 = 结算资产在各钱包的净额（含负债为负）+ 永续未实现盈亏 + 受管现货市值 + 保证金币配置值 + 套利底仓现货市值
+//	权益 = 结算资产在各钱包的净额（含负债为负）+ 永续未实现盈亏 + 受管现货市值 + 套利底仓现货市值
 //
-// 底仓对冲腿的未实现盈亏已包含在永续未实现盈亏里，底仓净值 = 底仓现货市值 + 对冲腿盈亏，所以公式只多加底仓现货市值。
+// 保证金币的配置值是组合层的数，由组合权益加一次，不在这里加。底仓对冲腿的未实现盈亏已包含在永续未实现盈亏里，底仓净值 = 底仓现货市值 + 对冲腿盈亏，所以公式只多加底仓现货市值。
 // 交易所给的总权益不参与计算，只在 ExchangeEquity 里留作展示核对。没有报价时不写入，避免留下误导的零值曲线。
 func (s *Service) valueSnapshot(ctx context.Context, account store.TradingAccountRecord, snapshot store.TradingAccountSnapshot) (store.TradingAccountSnapshot, error) {
 	if account.HasBalanceMarket() && !s.sourceFresh(snapshot.ExchangeUpdatedAt) {
@@ -184,7 +204,9 @@ func (s *Service) valueSnapshot(ctx context.Context, account store.TradingAccoun
 	}
 	if !settlementSeen {
 		// 快照里没有结算币明细时，不能退回交易所给的总权益（它含未实现盈亏和其他币，会重复计入）：结算资产净额按 0 处理并告警。
-		log.WarnContextf(ctx, "交易关注项：执行账户 %s 的余额快照里没有结算币 %s 的明细，权益里的结算资产净额按 0 计", account.TradingAccountID, settlement)
+		if s.shouldWarnMissingSettlement(account.TradingAccountID) {
+			log.WarnContextf(ctx, "交易关注项：执行账户 %s 的余额快照里没有结算币 %s 的明细，权益里的结算资产净额按 0 计", account.TradingAccountID, settlement)
+		}
 	}
 	// 保证金币的配置值是组合层的数，在组合层只加一次，不在每个成员里各加一遍。
 	equity := settlementNet.Add(unrealized)

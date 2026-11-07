@@ -136,8 +136,10 @@ func (r *WeightResolver) Resolve(ctx context.Context, _ int64, request *tradeeve
 	}
 	// 排除资产（BNB 保留、稳定币保证金、保证金币、底仓）只跳过这一项并告警，其余照常执行。
 	// 跳过的标的按“保持”处理：既不加仓也不减仓，整份目标全被跳过时也不会变成清仓指令，也不需要权益和报价。
-	if err := r.skipExcludedTargets(ctx, spaceID, request.GetLogicalAccountId(), settings, members, orderedWeights); err != nil {
-		return WeightConversion{}, err
+	if settings.HasExclusions() {
+		if err := r.skipExcludedTargets(ctx, spaceID, request.GetLogicalAccountId(), settings, members, orderedWeights); err != nil {
+			return WeightConversion{}, err
+		}
 	}
 	if allHold(orderedWeights) {
 		held := make([]store.InstrumentTarget, 0, len(orderedWeights))
