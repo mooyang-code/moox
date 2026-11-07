@@ -440,7 +440,7 @@ async function loadFirst() {
   loadError.value = "";
   try {
     await reload();
-    const links = await loadStrategyLinks();
+    const links = await loadStrategyLinks(logical.value ? [logical.value] : []);
     strategy.value = links.get(logicalId.value) ?? null;
   } catch {
     if (!logical.value) loadError.value = "组合账户不存在或无权限";

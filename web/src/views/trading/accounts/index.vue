@@ -220,7 +220,7 @@ async function load() {
 }
 
 async function loadStrategies(request: { isLatest(): boolean }) {
-  const links = await loadStrategyLinks();
+  const links = await loadStrategyLinks(logicals.value);
   if (request.isLatest()) strategies.value = links;
 }
 
