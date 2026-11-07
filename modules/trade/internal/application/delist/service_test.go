@@ -4,6 +4,11 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
+
+	targetapp "github.com/mooyang-code/moox/modules/trade/internal/application/target"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/stretchr/testify/require"
@@ -193,11 +198,11 @@ func TestHoldersOnlyCountStrategyHoldings(t *testing.T) {
 		accountSpec{id: "okx", exchange: "OKX", mode: "LIVE", environment: "PRODUCTION", markets: []string{"SPOT"}, logical: "logical-live", balances: spotBalance("9")},
 		accountSpec{id: "loose", exchange: "BINANCE", mode: "LIVE", environment: "PRODUCTION", markets: []string{"SPOT"}, balances: spotBalance("9")},
 		accountSpec{id: "unmanaged", exchange: "BINANCE", mode: "LIVE", environment: "PRODUCTION", markets: []string{"SPOT"}, logical: "logical-live", balances: spotBalance("9")},
-		accountSpec{id: "closed", exchange: "BINANCE", mode: "PAPER", environment: "PAPER", markets: []string{"SPOT"}, logical: "logical-paper", balances: spotBalance("9"), status: "CLOSED"},
+		accountSpec{id: "disabled", exchange: "BINANCE", mode: "PAPER", environment: "PAPER", markets: []string{"SPOT"}, logical: "logical-paper", balances: spotBalance("9"), status: "DISABLED"},
 		accountSpec{id: "dust", exchange: "BINANCE", mode: "PAPER", environment: "PAPER", markets: []string{"SPOT"}, logical: "logical-paper", balances: spotBalance("0.5")},
 		accountSpec{id: "empty", exchange: "BINANCE", mode: "PAPER", environment: "PAPER", markets: []string{"SPOT"}, logical: "logical-paper"},
 	)
-	for _, id := range []string{"live", "paper", "testnet", "okx", "closed", "dust", "empty"} { // loose 不在组合里，没有组合订单
+	for _, id := range []string{"live", "paper", "testnet", "okx", "disabled", "dust", "empty"} { // loose 不在组合里，没有组合订单
 		markManaged(t, tradeStore, id, "bought-"+id)
 	}
 	service := &Service{Store: tradeStore}
@@ -210,8 +215,10 @@ func TestHoldersOnlyCountStrategyHoldings(t *testing.T) {
 	for _, holder := range result.Holders {
 		got[holder.TradingAccountID] = holder
 	}
-	require.Len(t, got, 3, "只有 live、paper、dust")
-	require.Equal(t, Holder{SpaceID: "space-1", LogicalAccountID: "logical-live", TradingAccountID: "live", Quantity: "12.5"}, got["live"])
+	require.Len(t, got, 4, "live、paper、dust 和已停用的 disabled（停用的账户照常列出并带状态）")
+	require.Equal(t, "DISABLED", got["disabled"].Status)
+	require.Equal(t, "ENABLED", got["live"].Status)
+	require.Equal(t, Holder{SpaceID: "space-1", LogicalAccountID: "logical-live", TradingAccountID: "live", Quantity: "12.5", Status: "ENABLED", Note: "取不到报价，零头只按最小数量判断"}, got["live"])
 	require.True(t, got["paper"].Paper)
 	require.False(t, got["live"].Paper)
 	require.True(t, got["dust"].Dust, "低于最小数量 1 的是零头")
@@ -219,7 +226,7 @@ func TestHoldersOnlyCountStrategyHoldings(t *testing.T) {
 
 	paperOnly, err := service.Holders(context.Background(), key, true)
 	require.NoError(t, err)
-	require.Len(t, paperOnly.Holders, 2)
+	require.Len(t, paperOnly.Holders, 3, "paper、dust、disabled")
 	for _, holder := range paperOnly.Holders {
 		require.True(t, holder.Paper, "paper_only 时每一项都必须是模拟盘")
 	}
@@ -270,6 +277,105 @@ func TestHoldersSwapSkipsFlatAndArbitrageHedgeLegs(t *testing.T) {
 	hedged, err := service.Holders(context.Background(), key, false)
 	require.NoError(t, err)
 	require.Empty(t, hedged.Holders, "套利底仓的永续对冲腿不是策略持有")
+}
+
+type fixedPrice string
+
+func (p fixedPrice) LatestPrice(context.Context, string, exchange.SymbolKey) (targetapp.Quote, error) {
+	return targetapp.Quote{Price: shared.MustDecimal(string(p)), UpdatedAt: time.Now()}, nil
+}
+
+// 零头和清仓同一个口径：有报价时还看最小金额（价格暴跌的下架币常常高于最小数量、低于最小金额）；取不到报价时按最小数量并标注。
+func TestHoldersDustUsesMinimumNotionalWhenThereIsAQuote(t *testing.T) {
+	tradeStore := newDelistStore(t)
+	seedInstruments(t, tradeStore)
+	require.NoError(t, tradeStore.DBForTest().Exec(`UPDATE t_trade_instruments SET c_min_notional = '5' WHERE c_market_type = 'SPOT'`).Error)
+	tradeStore.InvalidateCaches()
+	seedAccounts(t, tradeStore, "",
+		accountSpec{id: "paper", exchange: "BINANCE", mode: "PAPER", environment: "PAPER", markets: []string{"SPOT"}, logical: "logical-paper", balances: spotBalance("3")})
+	markManaged(t, tradeStore, "paper", "bought-paper")
+	key := Key{Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "FOOUSDT"}
+
+	// 3 个、价格 1：价值 3 低于最小金额 5，是零头；数量 3 高于最小数量 1。
+	result, err := (&Service{Store: tradeStore, Prices: fixedPrice("1")}).Holders(context.Background(), key, false)
+	require.NoError(t, err)
+	require.Len(t, result.Holders, 1)
+	require.True(t, result.Holders[0].Dust)
+	require.Empty(t, result.Holders[0].Note)
+
+	result, err = (&Service{Store: tradeStore, Prices: fixedPrice("2")}).Holders(context.Background(), key, false)
+	require.NoError(t, err)
+	require.False(t, result.Holders[0].Dust, "价值 6 不低于最小金额")
+
+	result, err = (&Service{Store: tradeStore}).Holders(context.Background(), key, false)
+	require.NoError(t, err)
+	require.False(t, result.Holders[0].Dust, "没有报价只按最小数量判断")
+	require.Contains(t, result.Holders[0].Note, "取不到报价")
+}
+
+// 一个组合出错（资金设置读不出来）不能让整个跨空间查询失败：跳过它并在响应里标出，其余照常。
+func TestHoldersSkipsAnAccountThatErrorsInsteadOfFailingEverything(t *testing.T) {
+	tradeStore := newDelistStore(t)
+	seedInstruments(t, tradeStore)
+	seedAccounts(t, tradeStore, "",
+		accountSpec{id: "good", exchange: "BINANCE", mode: "PAPER", environment: "PAPER", markets: []string{"SPOT"}, logical: "logical-good", balances: spotBalance("7")},
+		accountSpec{id: "broken", exchange: "BINANCE", mode: "PAPER", environment: "PAPER", markets: []string{"SPOT"}, logical: "logical-broken", balances: spotBalance("7")},
+	)
+	markManaged(t, tradeStore, "good", "bought-good")
+	markManaged(t, tradeStore, "broken", "bought-broken")
+	require.NoError(t, tradeStore.DBForTest().Exec(`UPDATE t_logical_accounts SET c_fund_settings_json = '{"arbitrage_base_assets":"BTC"}' WHERE c_logical_account_id = 'logical-broken'`).Error)
+
+	result, err := (&Service{Store: tradeStore}).Holders(context.Background(), Key{Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "FOOUSDT"}, false)
+
+	require.NoError(t, err)
+	require.Len(t, result.Holders, 1)
+	require.Equal(t, "good", result.Holders[0].TradingAccountID)
+	require.Len(t, result.SkippedAccounts, 1)
+	require.Equal(t, "broken", result.SkippedAccounts[0].TradingAccountID)
+	require.NotEmpty(t, result.SkippedAccounts[0].Reason)
+}
+
+// 标的的计价币不是账户的结算币（屏蔽 FOOBTC，账户按 USDT 结算）：清仓什么也不会卖，不能算持有，写进说明。
+func TestHoldersIgnoreInstrumentsQuotedInANonSettlementAsset(t *testing.T) {
+	tradeStore := newDelistStore(t)
+	seedInstruments(t, tradeStore)
+	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.UpsertInstrument(store.InstrumentRecord{
+			Exchange: "BINANCE", Environment: "PRODUCTION", MarketType: "SPOT", ExchangeSymbol: "FOOBTC", InstrumentID: "FOO-BTC-SPOT",
+			BaseAsset: "FOO", QuoteAsset: "BTC", SettlementAsset: "BTC", ExchangeQuantityStep: "0.1", MinExchangeQuantity: "1", PriceTick: "0.00000001", Status: "TRADING",
+		})
+	}))
+	seedAccounts(t, tradeStore, "",
+		accountSpec{id: "paper", exchange: "BINANCE", mode: "PAPER", environment: "PAPER", markets: []string{"SPOT"}, logical: "logical-paper", balances: spotBalance("9")})
+	markManaged(t, tradeStore, "paper", "bought-paper")
+
+	result, err := (&Service{Store: tradeStore}).Holders(context.Background(), Key{Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "FOOBTC"}, false)
+
+	require.NoError(t, err)
+	require.Empty(t, result.Holders)
+	require.Len(t, result.Notes, 1)
+	require.Contains(t, result.Notes[0], "计价币不是结算币")
+}
+
+// 交易所代码统一转大写：调用方传小写也能对上标的，不会被判成“Trade 无此标的”而漏掉真实的下架。
+func TestKeysAreCaseInsensitive(t *testing.T) {
+	tradeStore := newDelistStore(t)
+	seedInstruments(t, tradeStore)
+	service := &Service{Store: tradeStore}
+	lower := Key{Exchange: "binance", MarketType: "swap", ExchangeSymbol: "foousdt"}
+
+	result, err := service.Block(context.Background(), lower, "公告下架", "")
+	require.NoError(t, err)
+	require.False(t, result.InstrumentUnknown)
+	list, err := service.List(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, "FOOUSDT", list[0].ExchangeSymbol)
+	holders, err := service.Holders(context.Background(), lower, false)
+	require.NoError(t, err)
+	require.False(t, holders.InstrumentUnknown)
+	removed, err := service.Unblock(context.Background(), lower)
+	require.NoError(t, err)
+	require.True(t, removed)
 }
 
 func TestResolveInstrumentIDRequiresAMemberOfTheExchange(t *testing.T) {

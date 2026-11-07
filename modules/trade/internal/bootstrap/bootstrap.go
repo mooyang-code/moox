@@ -440,7 +440,7 @@ func initialize(
 			MatcherReady:       paperMatcherWorker.Ready,
 			Holdings:           &rpc.HoldingQuery{Store: tradeStore, Adapters: manager},
 			Adapters:           manager,
-			Delist:             &delistapp.Service{Store: tradeStore, OnChanged: targetWorker.Wake},
+			Delist:             &delistapp.Service{Store: tradeStore, OnChanged: targetWorker.Wake, Prices: targetapp.ExchangePriceSource{Adapters: manager}},
 			FlattenInstrument: func(callCtx context.Context, command rpc.FlattenInstrumentCommand) (store.OperatorActionRecord, bool, error) {
 				result, flattenErr := operatorService.FlattenLogicalAccount(callCtx, operatorapp.FlattenCommand{
 					SpaceID: command.SpaceID, ActionID: command.ActionID, LogicalAccountID: command.LogicalAccountID,

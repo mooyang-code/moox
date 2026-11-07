@@ -102,9 +102,13 @@ func (s *ConsoleServer) ListInstrumentHolders(ctx context.Context, req *tradepb.
 	for _, holder := range result.Holders {
 		rsp.Holders = append(rsp.Holders, &tradepb.InstrumentHolder{
 			SpaceId: holder.SpaceID, LogicalAccountId: holder.LogicalAccountID, TradingAccountId: holder.TradingAccountID,
-			Quantity: holder.Quantity, Dust: holder.Dust, Paper: holder.Paper,
+			Quantity: holder.Quantity, Dust: holder.Dust, Paper: holder.Paper, Status: holder.Status, Note: holder.Note,
 		})
 	}
+	for _, skipped := range result.SkippedAccounts {
+		rsp.SkippedAccounts = append(rsp.SkippedAccounts, &tradepb.SkippedAccount{TradingAccountId: skipped.TradingAccountID, Reason: skipped.Reason})
+	}
+	rsp.Notes = result.Notes
 	return rsp, nil
 }
 

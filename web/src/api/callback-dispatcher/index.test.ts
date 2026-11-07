@@ -176,10 +176,21 @@ describe("手工登记下架的外部接口", () => {
     );
     expect(holders).toEqual({
       holders: [
-        { space_id: "crypto", logical_account_id: "la-1", trading_account_id: "", quantity: "2", dust: false, paper: false }
+        {
+          space_id: "crypto",
+          logical_account_id: "la-1",
+          trading_account_id: "",
+          quantity: "2",
+          dust: false,
+          paper: false,
+          status: "",
+          note: ""
+        }
       ],
       verified: true,
-      instrumentUnknown: false
+      instrumentUnknown: false,
+      skippedAccounts: [],
+      notes: []
     });
   });
 
@@ -205,6 +216,22 @@ describe("手工登记下架的外部接口", () => {
       holders: [{ space_id: "crypto", logical_account_id: "la-1", paper: false }]
     });
     expect((await listInstrumentHolders({ ...paperOnly, paper_only: false })).verified).toBe(false);
+  });
+
+  it("有账户出错没能判断时不能当成确认了持有情况", async () => {
+    mocks.callTrade.mockResolvedValue({
+      ret_info: { code: 0 },
+      holders: [],
+      skipped_accounts: [{ trading_account_id: "ta-9", reason: "资金设置读不出来" }]
+    });
+    const result = await listInstrumentHolders({
+      exchange: "binance",
+      market: "SPOT",
+      exchange_symbol: "FOOUSDT",
+      paper_only: false
+    });
+    expect(result.verified).toBe(false);
+    expect(result.skippedAccounts).toEqual([{ trading_account_id: "ta-9", reason: "资金设置读不出来" }]);
   });
 
   it("没有 holders 字段又没有无此标的标记时，不能当成没人持有", async () => {
