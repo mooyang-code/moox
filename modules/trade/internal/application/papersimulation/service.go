@@ -109,7 +109,7 @@ func (s *Service) Create(ctx context.Context, command CreateCommand) (Result, er
 		ControlMode: command.ControlMode,
 		SpaceID:     command.SpaceID, LogicalAccountID: logicalID, Name: command.LogicalAccountName,
 		ExecutionMode: "PAPER", SettlementAsset: command.SettlementAsset,
-		AutomationState: "PAUSED", PauseReason: "paper simulation created",
+		AutomationState: "PAUSED", PauseReason: "新建的模拟账户，等待恢复自动执行",
 	}
 	if logical.ControlMode == "" {
 		logical.ControlMode = "STRATEGY"

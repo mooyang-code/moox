@@ -68,7 +68,7 @@ func New(
 		ExecutionMode:   mode,
 		SettlementAsset: settlementAsset,
 		AutomationState: AutomationPaused,
-		PauseReason:     "new logical account",
+		PauseReason:     "新建的组合账户，等待恢复自动执行",
 	}
 	if err := account.Validate(); err != nil {
 		return Account{}, err
