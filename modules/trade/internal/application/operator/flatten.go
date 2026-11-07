@@ -80,7 +80,7 @@ type FlattenAccountResult struct {
 	Error string              `json:"error,omitempty"`
 	// Unblocked 为真表示下架清仓发现标的已被解除禁止而提前结束（不算失败）。
 	Unblocked bool `json:"unblocked,omitempty"`
-	cause error
+	cause     error
 	// decided 为真时由 retry 决定动作是否继续；否则按 cause 是否只有业务错误判断。
 	decided bool
 	retry   bool
