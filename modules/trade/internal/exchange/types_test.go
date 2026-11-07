@@ -3,6 +3,8 @@ package exchange
 import (
 	"errors"
 	"testing"
+
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 )
 
 func TestCanonicalInstrumentIDIsExchangeIndependent(t *testing.T) {
@@ -59,5 +61,28 @@ func TestNormalizeInstrumentID(t *testing.T) {
 				t.Fatalf("got=%q err=%v want=%q", got, err, tc.want)
 			}
 		})
+	}
+}
+
+func TestInstrumentMinNotionalAt(t *testing.T) {
+	price := shared.MustDecimal("50000")
+	tests := []struct {
+		name       string
+		instrument Instrument
+		want       string
+	}{
+		{"交易所给了最小名义金额就用它（币安）", Instrument{MinNotional: shared.MustDecimal("5"), MinExchangeQuantity: shared.MustDecimal("0.001"), ContractValue: shared.MustDecimal("1")}, "5"},
+		{"OKX 现货：minSz × 价格", Instrument{MinExchangeQuantity: shared.MustDecimal("0.00001"), ContractValue: shared.MustDecimal("1")}, "0.5"},
+		{"OKX 永续：minSz（张）× ctVal × 价格，ctVal 不能漏", Instrument{MinExchangeQuantity: shared.MustDecimal("1"), ContractValue: shared.MustDecimal("0.01")}, "500"},
+		{"缺合约面值按 1", Instrument{MinExchangeQuantity: shared.MustDecimal("0.001")}, "50"},
+		{"没有最小下单量没有下限", Instrument{ContractValue: shared.MustDecimal("0.01")}, "0"},
+	}
+	for _, test := range tests {
+		if got := test.instrument.MinNotionalAt(price); got.String() != test.want {
+			t.Errorf("%s: %s，想要 %s", test.name, got, test.want)
+		}
+	}
+	if got := (Instrument{MinExchangeQuantity: shared.MustDecimal("1")}).MinNotionalAt(shared.Zero()); !got.IsZero() {
+		t.Errorf("价格为 0 时没有下限：%s", got)
 	}
 }

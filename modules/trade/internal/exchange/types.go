@@ -317,6 +317,23 @@ type Instrument struct {
 	ExchangeUpdatedAt    time.Time
 }
 
+// MinNotionalAt 返回在某个价格下的最小下单名义金额：交易所给了最小名义金额（币安）就用它；
+// 没有（OKX）就用最小下单量折算：minSz × 合约面值 × 价格（现货合约面值为 1；永续要乘 ctVal，漏掉会差几个数量级）。
+// 最小下单量和合约面值缺失时返回 0，表示没有可用的下限。
+func (i Instrument) MinNotionalAt(price shared.Decimal) shared.Decimal {
+	if i.MinNotional.Cmp(shared.Zero()) > 0 {
+		return i.MinNotional
+	}
+	if price.Cmp(shared.Zero()) <= 0 || i.MinExchangeQuantity.Cmp(shared.Zero()) <= 0 {
+		return shared.Zero()
+	}
+	contractValue := i.ContractValue
+	if contractValue.Cmp(shared.Zero()) <= 0 {
+		contractValue = shared.MustDecimal("1")
+	}
+	return i.MinExchangeQuantity.Mul(contractValue).Mul(price)
+}
+
 type AssetBalance struct {
 	Wallet    Wallet
 	Asset     string
