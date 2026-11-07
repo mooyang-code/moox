@@ -106,7 +106,9 @@ type DelistAction struct {
 	BusySince int64
 	// ReopenSeq 是重开序号，参与生成操作号（含义见 schema 的 c_reopen_seq）。
 	ReopenSeq int
-	UpdatedAt int64
+	// NextReopenSeq 只用于禁止买入那一行：新一次演练各轮第一次规划用的重开序号（含义见 schema 的 c_next_reopen_seq）。
+	NextReopenSeq int
+	UpdatedAt     int64
 }
 
 // 下架处理的步骤种类与状态。
@@ -203,6 +205,7 @@ type delistRow struct {
 	SelfReleased     bool   `gorm:"column:c_self_released"`
 	BusySince        int64  `gorm:"column:c_busy_since"`
 	ReopenSeq        int    `gorm:"column:c_reopen_seq"`
+	NextReopenSeq    int    `gorm:"column:c_next_reopen_seq"`
 	UpdatedAt        int64  `gorm:"column:c_updated_at;autoUpdateTime:false"`
 }
 

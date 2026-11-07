@@ -130,7 +130,7 @@ describe("result insights", () => {
   it("混合市场显示分市场净敞口，其余显示现金", () => {
     expect(cashOrNetText(parseSummary('{"spot_net":"0.3","swap_net":"-0.2"}'))).toBe("现货净 30.00% · 永续净 -20.00%");
     expect(cashOrNetText(parseSummary('{"cash":"0.1"}'))).toBe("10.00%");
-    expect(skipReasonLabel("catchup")).toBe("恢复追赶中，只记因子指纹，不求值（catchup）");
+    expect(skipReasonLabel("catchup")).toBe("恢复追赶中，不发目标（就绪时照常求值、只推进规则状态）（catchup）");
   });
 
   it("never compares results across sessions", () => {

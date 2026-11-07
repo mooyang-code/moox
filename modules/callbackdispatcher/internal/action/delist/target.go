@@ -104,7 +104,8 @@ var operatorNamespace = uuid.MustParse("6f1c3a52-7d1e-4a55-9d0b-0c6d6f6b7c01")
 // 用的也是同一个操作号，由 Trade 的幂等挡住重复。每一轮的号不同，所以复查（包括上一轮 PARTIAL 之后）总是换新号；
 // 改期之后这一轮按新时间重开时，号也跟着换（旧号对应的清仓已经以失败或只完成一部分结束）。
 // 重开序号让“下架时间 A→B→A 改回原值”后的重开不会算回第一次的号：同号请求 Trade 直接返回旧操作已结束的结果（例如 COMPLETED），
-// 会被当成这次已经平掉。序号为 0（一轮第一次规划）时不参与，号与只按下架时间生成的相同。
+// 会被当成这次已经平掉；演练重新打开后各轮第一次规划的序号接着上一次演练用过的往上算（见 clearPreviousRun），同样不会撞号。
+// 序号为 0 时不参与，号与只按下架时间生成的相同。
 func operatorActionID(executionID string, round int, spaceID, logicalAccountID string, plannedAt int64, reopenSeq int) string {
 	name := fmt.Sprintf("%s|%d|%s|%s|%d", executionID, round, spaceID, logicalAccountID, plannedAt)
 	if reopenSeq > 0 {

@@ -141,6 +141,9 @@ CREATE TABLE IF NOT EXISTS t_delist_actions (
     -- 只用于平仓各行和汇总行：这一行所属计划的重开序号，参与生成操作号。一轮第一次规划为 0，每按新的下架时间重开一次加 1；
     -- 下架时间 A→B→A 改回原值后重开的一轮，操作号因此不会与第一次相同（同号请求 Trade 直接返回旧操作已结束的结果）。同一行重发沿用存下的操作号。
     c_reopen_seq INTEGER NOT NULL DEFAULT 0,
+    -- 只用于禁止买入那一行：演练结束后被重新打开、清掉上一次的各轮步骤之前，记下上一次各轮用过的最大重开序号加 1。
+    -- 新一次演练各轮第一次规划从它开始，操作号不会与上一次演练用过的相同（同号请求 Trade 直接返回旧操作已结束的结果）。
+    c_next_reopen_seq INTEGER NOT NULL DEFAULT 0,
     c_updated_at INTEGER NOT NULL,
     PRIMARY KEY (c_execution_id, c_round, c_kind, c_space_id, c_logical_account_id),
     FOREIGN KEY (c_execution_id)

@@ -399,9 +399,25 @@ func (r *run) step(ctx context.Context) (action.Outcome, error) {
 // clearPreviousRun 删掉上一次演练的各轮步骤（平仓、复查、核对），只留禁止买入那一行：新的一次演练从头开始，
 // 上一次留下的失败、只平了一部分的行也不会让关注项一直提醒到新的核对。
 //
-// 各轮的汇总行删掉之后重开序号从 0 算起，不会撞上一次演练的操作号：上一次演练有平仓行，就是走到了核对（已过了它的下架时间）才结束，
-// 新的下架时间要么在那之后、与之前用过的都不同，要么已经过去而只核对、不平仓。
+// 删之前先在禁止买入那一行记下上一次各轮用过的最大重开序号加 1，新一次演练各轮第一次规划从它开始。不能从 0 算起：
+// 上一次演练可能按 (A,0) 发起、改期后按 (X,1) 重开，新的一次演练又回到下架时间 A，从 0 算就是上一次用过的 (A,0)，
+// Trade 按同号幂等直接返回旧操作的终态，这一轮就没有真的平。起始序号按存下的行算出、不在旧值上累加：写完起始序号、删行之前退出，重入算出的还是同一个值。
 func (r *run) clearPreviousRun(ctx context.Context) error {
+	blockKey := stepKey{Round: RoundBlock, Kind: store.DelistKindBlock}
+	if block, ok := r.steps[blockKey]; ok {
+		next := block.NextReopenSeq
+		for key, step := range r.steps {
+			if key.Kind == store.DelistKindFlatten {
+				next = max(next, step.ReopenSeq+1)
+			}
+		}
+		if next != block.NextReopenSeq {
+			block.NextReopenSeq = next
+			if err := r.save(ctx, block); err != nil {
+				return err
+			}
+		}
+	}
 	if err := r.h.Store.DeleteDelistStepsExceptBlock(ctx, r.execution.ExecutionID); err != nil {
 		return fmt.Errorf("清除上一次演练的步骤失败: %w", err)
 	}
@@ -660,12 +676,15 @@ func (r *run) roundRows(summary store.DelistAction) []store.DelistAction {
 // 重开的判断放在推进旧行之后：同一次推进里旧行刚查到结束、新计划这一轮又已到点，就在这一步里重开，不等下一次推进。
 // 重开之前先按操作号向 Trade 查一次旧计划里没在运行的行（见 probeUnlaunched），发起时响应丢了的清仓查到还在跑就等它结束。
 //
-// 每次规划带一个重开序号（参与生成操作号，存在汇总行和各组合行上）：一轮第一次规划为 0，每重开一次加 1。汇总行最后写，规划写到一半退出后重入时旧汇总行没变，算出的是同一个序号，已存下的行原样保留。
+// 每次规划带一个重开序号（参与生成操作号，存在汇总行和各组合行上）：一轮第一次规划用禁止买入那一行记下的起始序号（只有演练重新打开后才不为 0，见 clearPreviousRun），
+// 每重开一次加 1。汇总行最后写：重开规划写到一半退出时，已改写的组合行带着新的序号，旧汇总行还是旧的（见 replanInterrupted），重入后接着按重开走完规划，
+// 算出的是同一个序号，已存下的行原样保留。
 func (r *run) flattenRound(ctx context.Context, round int, due time.Time) error {
 	plannedAt := r.target.DelistAt.UnixMilli()
 	summaryKey := stepKey{Round: round, Kind: store.DelistKindFlatten}
 	summary, started := r.steps[summaryKey]
-	if started && !terminal(summary.Status) {
+	interrupted := started && r.replanInterrupted(summary)
+	if started && !terminal(summary.Status) && !interrupted {
 		if err := r.advanceRound(ctx, summary); err != nil || r.stopped {
 			return err
 		}
@@ -675,18 +694,23 @@ func (r *run) flattenRound(ctx context.Context, round int, due time.Time) error 
 		r.wakeAt(due)
 		return nil
 	}
-	if started && !r.reopenable(summary, plannedAt) {
+	if started && !interrupted && !r.reopenable(summary, plannedAt) {
 		return nil
 	}
 	if r.lowBudget(ctx) {
 		r.wakeAt(r.now.Add(5 * time.Second))
 		return nil
 	}
-	seq := 0
+	seq := r.steps[stepKey{Round: RoundBlock, Kind: store.DelistKindBlock}].NextReopenSeq
 	if started {
 		settled, err := r.probeUnlaunched(ctx, summary)
 		if err != nil || !settled || r.stopped {
 			return err
+		}
+		if rows := r.roundRows(summary); !interrupted && summary.Error == "" && allSucceeded(r.steps, rows) {
+			// 查完旧计划的各组合行都成功了（发起时响应丢了，清仓其实已经做完）：这一轮成功，先结算并返回，不重开、不消耗序号。
+			// 汇总行带着没能判断的账户说明时不走这里：那样结算出来是“只完成一部分”，之后每次都会在这里结算而永远不重开。
+			return r.settleSummary(ctx, summary, rows)
 		}
 		seq = summary.ReopenSeq + 1
 	}
@@ -777,11 +801,35 @@ func (r *run) reopenable(summary store.DelistAction, plannedAt int64) bool {
 	return true
 }
 
+// replanInterrupted 报告这一轮上一次重开规划是不是写到一半就退出了：本轮有组合行的重开序号比汇总行的大。
+// 汇总行最后写、与新行同一个序号，收掉的旧行（见 retireStaleRows）也改成新序号，所以规划写完后不会有组合行的序号比汇总行大。
+// 写到一半时旧汇总行所属的计划里已经少了被改写的行，不能按它推进、结算（会把这一轮结算成成功而不再重开），要接着按重开走完规划；
+// 不管这期间下架时间有没有再改（包括改回旧汇总行的下架时间）。被改写的行在汇总行写好之前不会发起，所以没有在 Trade 上运行的。
+func (r *run) replanInterrupted(summary store.DelistAction) bool {
+	for key, step := range r.steps {
+		if key.Round == summary.Round && key.Kind == store.DelistKindFlatten && (key.SpaceID != "" || key.LogicalAccountID != "") &&
+			step.ReopenSeq > summary.ReopenSeq {
+			return true
+		}
+	}
+	return false
+}
+
+// allSucceeded 报告 rows 里的每一行（按 steps 里的最新状态）都已成功；没有行时为假。
+func allSucceeded(steps map[stepKey]store.DelistAction, rows []store.DelistAction) bool {
+	for _, row := range rows {
+		if steps[keyOf(row)].Status != store.DelistSucceeded {
+			return false
+		}
+	}
+	return len(rows) > 0
+}
+
 // probeUnlaunched 在一轮按新的下架时间重开之前，按存下的操作号向 Trade 查一次旧计划里还没在运行的行（待发起、失败后在等退避）。
 // 发起平仓时响应可能丢了（调用超时、网关抖动、进程在拿到响应前退出）：Trade 上其实已经建了这个操作号的清仓、正在卖，
 // 这时重开换新号再发起，就会有两笔清仓同时卖同一个组合。
 //   - 查到还在运行：按运行中跟踪（之后每 30 秒查一次），这一轮等它结束再决定要不要重开；
-//   - 查到已结束：按结果记下（成功的这一轮就不再重开）；
+//   - 查到已结束：按结果记下；查完旧计划的组合行都成功的，调用方先结算这一轮（成功）并返回，不重开；
 //   - Trade 没有这个操作（从没建过，例如一直正忙、还没来得及发起）：可以重开；
 //   - 查询出错：这次不重开，稍后再查。
 //

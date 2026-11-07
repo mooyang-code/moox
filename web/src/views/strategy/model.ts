@@ -95,7 +95,7 @@ const skipReasons: Record<string, string> = {
   infra_retry_exhausted: "读取重试耗尽",
   market_missing: "另一个市场的数据未到",
   market_failed: "市场整体失败（因子失败比例过高）",
-  catchup: "恢复追赶中，只记因子指纹，不求值",
+  catchup: "恢复追赶中，不发目标（就绪时照常求值、只推进规则状态）",
   pool_warmup_failed: "策略池预热失败"
 };
 
