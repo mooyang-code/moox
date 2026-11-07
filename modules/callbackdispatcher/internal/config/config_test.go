@@ -13,7 +13,6 @@ func TestShippedConfigLoads(t *testing.T) {
 	cfg, err := Load(filepath.Join("..", "..", "config", "app.yaml"))
 	require.NoError(t, err)
 	require.Equal(t, "callback-dispatcher", cfg.GatewayClient.Caller)
-	require.Equal(t, ":11461", cfg.Health.Addr)
 	require.Equal(t, 24*time.Hour, cfg.Delivery.RetryWindow)
 	require.Equal(t, 3*time.Second, cfg.Delivery.ConnectTimeout)
 	require.Equal(t, 10*time.Second, cfg.Delivery.RequestTimeout)

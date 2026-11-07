@@ -12,7 +12,7 @@ import (
 
 func newConfigMigrateCommand() *cobra.Command {
 	var file, renameHost, importSCF, addDeployment, reachability, factorsEnabled, retention, exampleFile string
-	var removeTasks, removeFactors, addTasks []string
+	var removeTasks, removeFactors, addTasks, addEgressDomains []string
 	var yes bool
 	cmd := &cobra.Command{
 		Use:   "migrate",
@@ -26,6 +26,7 @@ func newConfigMigrateCommand() *cobra.Command {
 - 加 --set-retention defaults.<频率>=<时长> 或 <空间>.<频率>=<时长> 时设置该频率的保留期（生效要重装 Storage 单元）；
 - 加 --set-reachability 主机ID=direct|outbound 时设置主机可达性；
 - 加 --add-deployment 主机ID=组件ID[,组件ID] 时把组件并入该主机的 [deployments]（已有的不重复）；
+- 加 --add-egress-domain <域名>（可重复）时把域名追加到 [egress_proxy] http_domains（已在名单里的不重复）；生效要重新渲染并发布出口代理与 Collector；
 - 加 --import-scf <JSON> 时整体替换 [scf_plan]（云账号、地域网络与入口主机、空间与市场），并给入口主机补上 region 与 private_address；
 - 加 --remove-factor-task <任务ID>、--remove-factor <因子ID>（都可重复）时删除这些因子任务与因子定义（只改本机配置，线上已有的任务不动）；
 - 加 --add-factor-task <任务ID>（可重复）时把仓库根 moox.toml.example 里这个因子任务原样复制进来（例如 A 股的 ftask_cn_5m），已有同 ID 的任务时报错。
@@ -35,7 +36,7 @@ func newConfigMigrateCommand() *cobra.Command {
 		Args:         cobra.NoArgs,
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			opts := configinit.MigrateOptions{Write: yes, SCFImport: importSCF, RemoveFactorTasks: removeTasks, RemoveFactors: removeFactors, AddFactorTasks: addTasks, ExampleFile: exampleFile}
+			opts := configinit.MigrateOptions{Write: yes, SCFImport: importSCF, RemoveFactorTasks: removeTasks, RemoveFactors: removeFactors, AddFactorTasks: addTasks, AddEgressDomains: addEgressDomains, ExampleFile: exampleFile}
 			opts.FactorsEnabled = strings.TrimSpace(factorsEnabled)
 			if retention != "" {
 				target, value, ok := strings.Cut(retention, "=")
@@ -88,6 +89,7 @@ func newConfigMigrateCommand() *cobra.Command {
 	cmd.Flags().StringArrayVar(&addTasks, "add-factor-task", nil, "从仓库根 moox.toml.example 复制这个因子任务（[[factors.tasks]] 的 id），可重复；已有同 ID 时报错")
 	cmd.Flags().StringVar(&exampleFile, "example-file", "", "--add-factor-task 读取的配置样例（默认仓库根的 moox.toml.example）")
 	cmd.Flags().StringVar(&addDeployment, "add-deployment", "", "把组件加进主机的 [deployments]，写成 主机ID=组件ID[,组件ID]，例如 factor=factor-engine,archive-worker")
+	cmd.Flags().StringArrayVar(&addEgressDomains, "add-egress-domain", nil, "把域名追加到 [egress_proxy] http_domains，例如 openapi.okx.com，可重复；已在名单里的不重复")
 	cmd.Flags().BoolVar(&yes, "yes", false, "校验通过后写回（备份原文件并重新加密）")
 	return cmd
 }

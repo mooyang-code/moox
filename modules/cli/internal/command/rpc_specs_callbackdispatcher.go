@@ -28,7 +28,7 @@ func init() {
 			Flags: []rpcFlag{reqFlag("rule-id", "rule_id", "规则 ID")}},
 
 		rpcSpec{Path: []string{"event", "executions", "list"}, Short: "列出执行记录", Service: callbackDispatcher, Method: "ListEventExecutions", NoSpace: true, Page: rpcPageSize,
-			Flags: []rpcFlag{strFlag("rule-id", "rule_id", "按规则过滤"), strFlag("status", "status", "按状态过滤：EXECUTION_STATUS_PENDING、RUNNING、SUCCEEDED、FAILED、CANCELED")}},
+			Flags: []rpcFlag{strFlag("rule-id", "rule_id", "按规则过滤"), strFlag("status", "status", "按状态过滤，写完整的枚举名：EXECUTION_STATUS_PENDING、EXECUTION_STATUS_RUNNING、EXECUTION_STATUS_SUCCEEDED、EXECUTION_STATUS_FAILED、EXECUTION_STATUS_CANCELED")}},
 		rpcSpec{Path: []string{"event", "executions", "get"}, Short: "查看一条执行记录（每次尝试的状态码、耗时；下架处理的各轮步骤）", Service: callbackDispatcher, Method: "GetEventExecution", NoSpace: true,
 			Flags: []rpcFlag{reqFlag("execution-id", "execution_id", "执行记录 ID")}},
 		rpcSpec{Path: []string{"event", "executions", "retry"}, Short: "重新执行一条失败的记录", Service: callbackDispatcher, Method: "RetryEventExecution", NoSpace: true,

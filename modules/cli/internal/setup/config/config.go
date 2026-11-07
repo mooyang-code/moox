@@ -135,6 +135,11 @@ type Observability struct {
 	DeliverPolicy string `toml:"deliver_policy"`
 }
 
+// DefaultEgressHTTPDomains 是 moox.toml 没写 [egress_proxy] http_domains 时使用的出口代理 HTTP 白名单。
+func DefaultEgressHTTPDomains() []string {
+	return []string{"*.binance.com", "data-api.binance.vision", "openapi.okx.com"}
+}
+
 // EgressProxy separates upstream policy from service deployment.
 type EgressProxy struct {
 	HTTPDomains []string  `toml:"http_domains"`
@@ -666,7 +671,7 @@ func decodeStrict(raw []byte, out *Manifest) error {
 		out.Factors.SourceDir = "./modules/factor/factors"
 	}
 	if !md.IsDefined("egress_proxy", "http_domains") {
-		out.EgressProxy.HTTPDomains = []string{"*.binance.com", "data-api.binance.vision", "openapi.okx.com"}
+		out.EgressProxy.HTTPDomains = DefaultEgressHTTPDomains()
 	}
 	if !md.IsDefined("egress_proxy", "dns", "refresh_interval_seconds") {
 		out.EgressProxy.DNS.RefreshIntervalSeconds = 300

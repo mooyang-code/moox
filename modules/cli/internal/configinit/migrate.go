@@ -18,6 +18,7 @@ import (
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/configcrypt"
+	"github.com/mooyang-code/moox/packages/security/domainpolicy"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 )
 
@@ -38,6 +39,8 @@ type MigrateOptions struct {
 	// AddDeploymentHost / AddDeploymentComponents 非空时把这些组件加进该主机的 [deployments] 条目（--add-deployment 主机=组件,组件）。
 	AddDeploymentHost       string
 	AddDeploymentComponents []string
+	// AddEgressDomains 列出要追加到 [egress_proxy] http_domains 的域名（--add-egress-domain，可重复）；已在名单里的不重复。
+	AddEgressDomains []string
 	// SCFImport 非空时用这份 JSON 整体替换 [scf_plan]，并给相关主机补上 region 与 private_address（--import-scf）。
 	SCFImport string
 	// RemoveFactorTasks / RemoveFactors 列出要删除的 [[factors.tasks]]（按 id）与 [[factors.definitions]]（按 factor_id）
@@ -121,6 +124,8 @@ type MigrateReport struct {
 	Reachability map[string]string `json:"reachability,omitempty"`
 	// AddedDeployments 记录 --add-deployment 新增到各主机的组件。
 	AddedDeployments map[string][]string `json:"added_deployments,omitempty"`
+	// AddedEgressDomains 记录 --add-egress-domain 实际追加到 http_domains 的域名（已在名单里的不算）。
+	AddedEgressDomains []string `json:"added_egress_domains,omitempty"`
 	// RemovedFactorTasks / RemovedFactors 记录 --remove-factor-task、--remove-factor 删掉的任务 ID 与因子 ID。
 	RemovedFactorTasks []string `json:"removed_factor_tasks,omitempty"`
 	RemovedFactors     []string `json:"removed_factors,omitempty"`
@@ -206,6 +211,11 @@ func MigrateFile(path string, opts MigrateOptions) (MigrateReport, error) {
 		}
 		if len(added) > 0 {
 			report.AddedDeployments = map[string][]string{opts.AddDeploymentHost: added}
+		}
+	}
+	if len(opts.AddEgressDomains) > 0 {
+		if migrated, report.AddedEgressDomains, err = addEgressDomains(migrated, opts.AddEgressDomains); err != nil {
+			return report, err
 		}
 	}
 	if opts.SCFImport != "" {
@@ -1009,6 +1019,71 @@ func setHostReachability(plain []byte, host, mode string) ([]byte, error) {
 		out = append(out, b.lines...)
 	}
 	return []byte(strings.Join(out, "\n")), nil
+}
+
+// addEgressDomains 把域名追加到 [egress_proxy] http_domains，返回实际追加的域名。
+// 已在名单里的（同名，或被已有的 *. 后缀覆盖）不重复；没写 http_domains 时从默认名单开始追加，没有 [egress_proxy] 表时新建。
+func addEgressDomains(plain []byte, domains []string) ([]byte, []string, error) {
+	blocks := splitBlocks(strings.Split(string(plain), "\n"))
+	i := slices.IndexFunc(blocks, func(b block) bool { return b.header == "egress_proxy" && !b.array })
+	if i < 0 {
+		blocks = append(blocks, block{header: "egress_proxy", lines: []string{"[egress_proxy]", ""}})
+		i = len(blocks) - 1
+		// 新表放在文件末尾：前一块末尾没有空行时补一行，和其它表隔开
+		if prev := blocks[i-1].lines; len(prev) > 0 && strings.TrimSpace(prev[len(prev)-1]) != "" {
+			blocks[i-1].lines = append(prev, "")
+		}
+	}
+	lines := blocks[i].lines
+	start, end := -1, -1
+	for n := 1; n < len(lines); n++ {
+		if key, _, ok := keyValue(lines[n]); ok && key == "http_domains" {
+			start, end = n, valueEnd(lines, n)
+			break
+		}
+	}
+	current := setupconfig.DefaultEgressHTTPDomains()
+	if start >= 0 {
+		current = nil
+		for _, item := range regexp.MustCompile(`"([^"]+)"`).FindAllStringSubmatch(strings.Join(lines[start:end+1], "\n"), -1) {
+			current = append(current, item[1])
+		}
+	}
+	merged := slices.Clone(current)
+	var added []string
+	for _, raw := range domains {
+		domain := strings.ToLower(strings.TrimSpace(raw))
+		if _, ok := domainpolicy.Host(strings.TrimPrefix(domain, "*.")); !ok {
+			return nil, nil, fmt.Errorf("--add-egress-domain %q 不是合法域名：只能写完整域名（例如 openapi.okx.com）或 *. 开头的后缀", raw)
+		}
+		if slices.Contains(merged, domain) {
+			continue
+		}
+		if matcher, err := domainpolicy.New(merged); err == nil && !strings.HasPrefix(domain, "*.") && matcher.Allows(domain) {
+			continue
+		}
+		merged = append(merged, domain)
+		added = append(added, domain)
+	}
+	if len(added) == 0 {
+		return plain, nil, nil
+	}
+	quoted := make([]string, len(merged))
+	for n, domain := range merged {
+		quoted[n] = fmt.Sprintf("%q", domain)
+	}
+	line := "http_domains = [" + strings.Join(quoted, ", ") + "]"
+	if start >= 0 {
+		lines = append(lines[:start], append([]string{line}, lines[end+1:]...)...)
+	} else {
+		lines = append(lines[:1], append([]string{line}, lines[1:]...)...)
+	}
+	blocks[i].lines = lines
+	var out []string
+	for _, b := range blocks {
+		out = append(out, b.lines...)
+	}
+	return []byte(strings.Join(out, "\n")), added, nil
 }
 
 // addHostDeployments 把组件并入 [deployments] 里该主机的列表（没有就新建条目，已有的组件不重复），返回实际新增的组件。

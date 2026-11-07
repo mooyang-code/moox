@@ -44,7 +44,7 @@ $S ledger --host control      # 发布台账：谁在什么时候装了哪个提
 | 每台主机 | `host` | `host-gateway` `host-agent` |
 | 存储机 | `eventbus` | `eventbus`（2026-10-27 起在存储机，见下） |
 | 存储机、海外机 | `access` | `access` |
-| 海外机 | `trade`、`egress-proxy`、`collector-stream` | `trade`、`egress-proxy`、`collector-stream` |
+| 海外机 | `trade`、`egress-proxy`、`collector-stream`、`callback-dispatcher` | `trade`、`egress-proxy`、`collector-stream`、`callback-dispatcher`（事件中心；所在主机按 `[deployments]`，默认海外机） |
 | 因子机 | systemd 用户单元 | `moox-factor-engine`、`moox-archive-worker`（原生安装目录为 `<部署根>/<组件>`，见下） |
 
 **EventBus 单元在存储机**（`/data/moox/eventbus/releases/eventbus-manual-20261027` + `current`，2026-10-27 从控制机迁来，手工搭成，布局与 `eventbus` profile 一致）。
@@ -53,7 +53,7 @@ $S ledger --host control      # 发布台账：谁在什么时候装了哪个提
 装到控制机 `prod` 单元的二进制，`reseal` 依赖这一点：新版 `moox-runtime` 按 `control` profile 校验清单，计划里多出 `eventbus` 会报 `preparation receipt requires a valid unit selection`。
 
 构建目标是 `scripts/build/build.sh` 的参数，和组件 id 基本一致（`host-gateway` 目标同时产出 server、cli 和 `moox-runtime`；`admin`、`monitor`、`collector`、
-`factor-mgr`、`strategy`、`trade`、`cloudfunction` 目标同时产出对应的 `-cli`；`storage-cli`、`factor-engine`、`hostagent` 是独立目标）。
+`factor-mgr`、`strategy`、`trade`、`cloudfunction`、`callback-dispatcher` 目标同时产出对应的 `-cli`；`storage-cli`、`factor-engine`、`hostagent` 是独立目标）。
 CGO 只有 Storage 需要（DuckDB），脚本对 `storage`、`storage-cgo`、`storage-primary`、`storage-node` 目标自动在 Docker 编译镜像里开启 CGO 构建（`storage-cli` 仍是纯 Go），其余一律在本机交叉编译且关闭 CGO；**不要在宿主机上直接 `CGO_ENABLED=1` 交叉编译 Storage**，需要先启动 Docker（macOS：`colima start`）。
 
 ## 标准流程（单个或几个组件）

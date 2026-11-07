@@ -44,6 +44,7 @@ moox-cli config set hosts.storage.label=存储主机 --yes     # 校验通过后
 | `--set-factors-enabled true|false` | `[factors] enabled` |
 | `--set-reachability 主机ID=direct|outbound` | 主机可达性 |
 | `--add-deployment 主机ID=组件ID[,组件ID]` | 把组件并入主机的 `[deployments]` |
+| `--add-egress-domain <域名>`（可重复） | 把域名追加到 `[egress_proxy] http_domains`（已在名单里或被 `*.` 后缀覆盖的不重复；没写这项时从默认名单开始追加）；**生效要重新渲染并发布出口代理与 Collector** |
 | `--rename-host 旧ID=新ID` | 主机改名（主机表、`[deployments]`、引用一起改） |
 | `--import-scf <JSON>` | 整体替换 `[scf_plan]` |
 | `--remove-factor-task <任务ID>`、`--remove-factor <因子ID>`（都可重复） | 删除因子任务、因子定义；因子仍被留下的任务引用时报错。只改本机配置，线上已有的任务不动 |
