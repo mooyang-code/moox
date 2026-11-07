@@ -191,6 +191,31 @@ func TestUnifiedSwapLateLeavesSpotComputed(t *testing.T) {
 	}
 }
 
+// 上游判为失败的序列，本地即使已有这一期的数据也写 NULL、不记参数，也不参与截面排名（统一数据集执行计划 3.5）。
+func TestUnifiedUpstreamFailedSeriesWritesNullEvenWithLocalData(t *testing.T) {
+	target := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
+	mean := testPipelineFactor("mean", domain.FactorTypeTimeSeries, 2, false)
+	rank := testPipelineFactor("rank", domain.FactorTypeCrossSection, 2, true)
+	subjects := []string{"BTC", "ETH", "SOL"}
+	plan := unifiedPlan(target, []domain.FactorDef{mean, rank}, subjects)
+	plan.UpstreamFailedSeries = []seriesset.Series{series("BTC", tagSwap)}
+	plan.UpstreamFailed = []string{"BTC"}
+	data := unifiedData(subjects, target, 2) // 本地每条序列都有这一期的源行
+	loaded, computation, rows := runUnified(t, plan, data)
+
+	require.Contains(t, loaded.FailedSeries, series("BTC", tagSwap))
+	require.Contains(t, computation.FactorStates["mean"].FailedSeries, series("BTC", tagSwap))
+	failed := rowFor(t, rows, "BTC", tagSwap)
+	require.Nil(t, failed.Fields["mean"], "上游失败的序列写 NULL")
+	require.Nil(t, failed.Fields["rank"])
+	params := string(failed.Fields[factorname.ParamsColumn].(storageio.JSONText))
+	require.NotContains(t, params, `"mean"`, "没有取得值，不记参数")
+	require.NotContains(t, params, `"rank"`)
+	require.NotNil(t, rowFor(t, rows, "BTC", tagSpot).Fields["mean"], "同标的另一个市场照常")
+	require.Equal(t, 0.5, rowFor(t, rows, "ETH", tagSwap).Fields["rank"], "永续只在 ETH、SOL 之间排名，BTC 永续不参与")
+	require.Equal(t, 1.0, rowFor(t, rows, "SOL", tagSwap).Fields["rank"])
+}
+
 // 事件里只有现货的序列失败时，标的仍然可读（永续可用）：Available 按序列推出。
 func TestBuildLivePlanUnifiedKeepsSubjectsWithAnyUsableSeries(t *testing.T) {
 	target := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)

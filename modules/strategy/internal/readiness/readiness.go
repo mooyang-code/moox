@@ -209,7 +209,11 @@ func seriesOf(refs []*factorpb.SeriesRef) []seriesset.Series {
 // ForMarket 把统一数据集（一个 View、多个 series_tag）上的一份就绪结论拆成某个市场的结论，其余字段与方式 A 里一个 View 的结论同口径：
 //   - 整期原因（Reason 非空：成员契约变了、因子整体被跳过等）原样带到每个市场；
 //   - 某个因子在这个市场的 series_tag 上被跳过（SkippedTags）：这个市场本期不可用，Reason 记 ReasonFactorSkipped（数据类原因），别的市场照常；
-//   - 失败与空洞只取这个市场的序列（按 seriesset.SeriesTagMarket 归市场），不读按标的折叠的字段。
+//   - 失败与空洞只取这个市场的序列（按 seriesset.SeriesTagMarket 归市场），不读按标的折叠的字段；
+//   - 例外：某个因子有失败标的却没有任何失败序列，说明这一期 Storage 没有生成序列名单（期望快照里只剩一个 series_tag 时，
+//     周期完成事件不带 universe_series，因子按单序列处理，只给出按标的的名单）。事件里没有字段能确定这一期是哪个 tag、
+//     归哪个市场，只能保守处理：按标的的失败、空洞名单原样带到每个市场，等于“所有市场的这些标的都失败”。
+//     宁可让另一个市场的这些标的本期缺数，也不能把真实失败的标的当成可用。
 func (r Result) ForMarket(market string) Result {
 	out := Result{Reason: r.Reason, Detail: r.Detail, Hashes: r.Hashes, FailedSubjects: r.FailedSubjects,
 		FailedByFactor: map[string][]string{}, GapByFactor: map[string][]string{}}
@@ -233,6 +237,16 @@ func (r Result) ForMarket(market string) Result {
 	for factorID, gaps := range r.GapSeries {
 		if subjects := subjectsInMarket(gaps, market); len(subjects) > 0 {
 			out.GapByFactor[factorID] = subjects
+		}
+	}
+	for factorID, subjects := range r.FailedByFactor {
+		if len(subjects) == 0 || len(r.FailedSeries[factorID]) > 0 {
+			continue
+		}
+		// 没有序列名单的一期：按标的的名单带到每个市场（见上面的注释）。
+		out.FailedByFactor[factorID] = append([]string(nil), subjects...)
+		if gaps := r.GapByFactor[factorID]; len(gaps) > 0 {
+			out.GapByFactor[factorID] = append([]string(nil), gaps...)
 		}
 	}
 	return out
