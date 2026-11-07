@@ -175,8 +175,8 @@ func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnaps
 }
 
 // balancePrice 给现货持有的一个币取估值价，取不到新鲜报价时和实盘权益采样用同一套降级规则（execution.DegradedPrice）：
-// 不超龄的最后已知价；没有估值标的、在下架名单里、交易所确认标的不存在的按 0 计；其余不在交易状态的按本账户最近一笔成交价计；
-// 标的仍在交易只是暂时取价失败的照旧报错。用上降级估值时记关注项。
+// 不超龄的最后已知价；没有估值标的、交易所确认标的不存在、不在交易状态又在下架名单里的按 0 计；其余不在交易状态的按本账户最近一笔成交价计；
+// 标的仍在交易只是暂时取价失败的照旧报错（在下架名单里也一样）。用上降级估值时记关注项。
 func (a *Adapter) balancePrice(ctx context.Context, account store.TradingAccountRecord, byBase map[string]store.InstrumentRecord, asset string) (shared.Decimal, error) {
 	instrument, found := byBase[asset]
 	if !found {
@@ -212,7 +212,8 @@ func (a *Adapter) degradedPrice(
 	failure execution.ValuationFailure,
 	cause error,
 ) (shared.Decimal, error) {
-	if instrument != nil && failure != execution.ValuationInstrumentGone {
+	// 只有已经不可交易的标的才因为在下架名单里按 0 计；仍在交易的照旧取价失败报错。
+	if instrument != nil && failure == execution.ValuationNotTrading {
 		if source, ok := a.Store.(blockedSetSource); ok {
 			blocked, err := source.LoadBlockedSet(ctx)
 			if err != nil {

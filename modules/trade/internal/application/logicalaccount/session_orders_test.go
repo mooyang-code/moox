@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"testing"
 
+	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
 
-// recordingReleaser 记下撤目标单的调用，并在调用时查看目标是否还在（撤单必须在删目标之前）。
+// recordingReleaser 记下撤目标单的调用，并在调用时查看目标是否还在（释放会话时目标要先删掉，执行器不再按它下新单）。
 type recordingReleaser struct {
 	store         *store.Store
 	err           error
@@ -26,8 +28,8 @@ func (r *recordingReleaser) ReleaseTargetOrders(ctx context.Context, spaceID, lo
 	return r.err
 }
 
-// 释放会话：先撤目标挂单（此时目标还在），再释放会话、删掉目标。
-func TestReleaseSessionReleasesTargetOrdersBeforeDeletingTarget(t *testing.T) {
+// 释放会话：先删目标，再撤目标单（此时目标已经不在），最后释放会话。
+func TestReleaseSessionDeletesTargetBeforeReleasingTargetOrders(t *testing.T) {
 	service, tradeStore, fence := modernSessionFixture(t)
 	acceptModernSessionTarget(t, tradeStore, "session-1")
 	releaser := &recordingReleaser{store: tradeStore}
@@ -35,12 +37,13 @@ func TestReleaseSessionReleasesTargetOrdersBeforeDeletingTarget(t *testing.T) {
 
 	require.NoError(t, service.ReleaseSession(context.Background(), "space-1", "logical-1", "instance-1", "session-1", fence))
 	require.Equal(t, 1, releaser.calls)
-	require.Equal(t, []bool{true}, releaser.targetPresent)
+	require.Equal(t, []bool{false}, releaser.targetPresent, "撤单时目标已删，执行器不会再下新单")
 	_, err := tradeStore.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
 }
 
-// 撤单失败：不释放、不删目标，返回的错误不会被当成“所有权冲突”或“账户不存在”（策略据此稍后重试释放）；重试成功后释放。
+// 撤单失败：不释放会话（目标已删，执行器不再下新单），返回的错误不会被当成“所有权冲突”或“账户不存在”
+// （策略据此稍后重试释放）；重试成功后释放。
 func TestReleaseSessionKeepsSessionWhenTargetOrdersRemain(t *testing.T) {
 	service, tradeStore, fence := modernSessionFixture(t)
 	acceptModernSessionTarget(t, tradeStore, "session-1")
@@ -55,7 +58,7 @@ func TestReleaseSessionKeepsSessionWhenTargetOrdersRemain(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "session-1", account.OwnerSessionID)
 	_, err = tradeStore.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
-	require.NoError(t, err, "目标还在，执行器照常管着它的挂单")
+	require.ErrorIs(t, err, gorm.ErrRecordNotFound, "目标已删，执行器不会再按它下新单")
 
 	releaser.err = nil
 	require.NoError(t, service.ReleaseSession(context.Background(), "space-1", "logical-1", "instance-1", "session-1", fence))
@@ -100,4 +103,39 @@ func TestClaimSessionReleasesLeftoverTargetOrdersBestEffort(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, releaser.calls)
 	require.Equal(t, "session-2", claimed.OwnerSessionID)
+}
+
+// 凭证失效、账户没有会话、标的已不存在时撤单永远不会成功：比照移出成员只按本地记录放行，释放会话并记关注项。
+// 掺着别的错误（例如交易所暂时不可用）时照样不释放，让策略重试。
+func TestReleaseSessionPassesWhenCredentialsUnavailable(t *testing.T) {
+	noSession := &orderapp.AccountExecutionError{TradingAccountID: "account-1", Operation: "adapter", Err: errors.New("交易账户会话还没有启动，请稍后重试")}
+	authFailed := &orderapp.AccountExecutionError{TradingAccountID: "account-1", Operation: "cancel", Err: &exchange.Error{Kind: exchange.ErrorAuthentication, Code: "-2015"}}
+	for _, tc := range []struct {
+		name     string
+		err      error
+		released bool
+	}{
+		{"没有会话", fmt.Errorf("目标单 o1：%w", noSession), true},
+		{"凭证失效", errors.Join(fmt.Errorf("目标单 o1：%w", authFailed), fmt.Errorf("目标单 o2：%w", noSession)), true},
+		{"标的已不存在", fmt.Errorf("目标单 o1：%w", &orderapp.AccountExecutionError{TradingAccountID: "account-1", Operation: "cancel",
+			Err: &exchange.Error{Kind: exchange.ErrorRejected, Code: exchange.CodeBinanceInvalidSymbol}}), true},
+		{"掺着暂时性错误", errors.Join(fmt.Errorf("目标单 o1：%w", authFailed), errors.New("目标单 o2：交易所暂时不可用")), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			service, tradeStore, fence := modernSessionFixture(t)
+			acceptModernSessionTarget(t, tradeStore, "session-1")
+			service.TargetOrders = &recordingReleaser{store: tradeStore, err: tc.err}
+
+			err := service.ReleaseSession(context.Background(), "space-1", "logical-1", "instance-1", "session-1", fence)
+			account, getErr := tradeStore.GetLogicalAccount(context.Background(), "space-1", "logical-1")
+			require.NoError(t, getErr)
+			if tc.released {
+				require.NoError(t, err)
+				require.Empty(t, account.OwnerSessionID)
+				return
+			}
+			require.ErrorIs(t, err, ErrTargetOrdersNotReleased)
+			require.Equal(t, "session-1", account.OwnerSessionID)
+		})
+	}
 }

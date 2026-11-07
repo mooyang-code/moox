@@ -10,10 +10,11 @@ import (
 
 // 受管现货取不到新鲜报价时的估值规则，权益采样（application/equity）和模拟盘账户快照（execution/paper）共用：
 //  1. 有不超龄的最后已知价就用它；
-//  2. 否则只有三种情况按 0 计：标的表里没有这个标的、标的在下架名单里、交易所确认标的不存在——这些资产已经卖不掉或很快归零；
+//  2. 否则只有三种情况按 0 计：标的表里没有这个标的、交易所确认标的不存在、标的已不在交易状态又在下架名单里——
+//     这些资产已经卖不掉或很快归零；
 //  3. 标的不在交易状态（BREAK、HALT、暂停、盘前等）但仍可能恢复：退回这个资产在本账户最近一笔成交的价格；
 //  4. 仍然没有价，或者标的还在交易、只是这次取价失败（限流、网络、报价过期）：照旧报错，不把真实持仓按 0 计
-//     （权益骤降会让目标换算去缩仓）。
+//     （权益骤降会让目标换算去缩仓）。标的在下架名单里但还在交易时也是这样：下架之前它仍有市价。
 
 // ValuationFailure 是取不到新鲜报价的原因。
 type ValuationFailure int
@@ -21,7 +22,7 @@ type ValuationFailure int
 const (
 	// ValuationMissingInstrument：标的表里没有这个资产对结算币的现货标的。
 	ValuationMissingInstrument ValuationFailure = iota + 1
-	// ValuationDelisted：标的在下架名单里。
+	// ValuationDelisted：标的已不在交易状态，又在下架名单里。
 	ValuationDelisted
 	// ValuationInstrumentGone：交易所确认标的不存在（币安 -1121、OKX 51001）。
 	ValuationInstrumentGone

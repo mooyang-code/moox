@@ -23,6 +23,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -115,6 +116,24 @@ type FlattenResult struct {
 	// FinishingStatus 非空表示动作已经定了要以这个状态结束（PARTIAL、FAILED 等），只是本动作还有子单在解析或丢弃失败：
 	// 动作先保持运行，之后每次恢复只收拾子单、不再下单，收拾完才落成这个状态。
 	FinishingStatus string `json:"finishing_status,omitempty"`
+	// FinishingSince 是进入收尾的时间（毫秒）：满 flattenFinishingTimeout 仍收拾不完就不再等，照常落成 FinishingStatus，
+	// 没收拾掉的子单记进 ManualCheckOrderIDs。落库保存，重启后照样从这个时间算。
+	FinishingSince int64 `json:"finishing_since,omitempty"`
+	// ManualCheckOrderIDs 是动作结束时没能收拾掉的子单（收尾超时仍解析不出、交易所确认标的不存在、取不到账户会话），
+	// 动作不再管它们，要人工到交易所核对。
+	ManualCheckOrderIDs []string `json:"manual_check_child_order_ids,omitempty"`
+}
+
+// flattenProgress 是清仓进度落库的 JSON（t_operator_actions.c_result_json）。
+type flattenProgress struct {
+	Accounts            []FlattenAccountResult `json:"accounts"`
+	Unblocked           bool                   `json:"unblocked,omitempty"`
+	AttemptStartedAt    int64                  `json:"attempt_started_at,omitempty"`
+	ReduceTargets       map[string]string      `json:"reduce_targets,omitempty"`
+	ReduceDone          []string               `json:"reduce_done_accounts,omitempty"`
+	FinishingStatus     string                 `json:"finishing_status,omitempty"`
+	FinishingSince      int64                  `json:"finishing_since,omitempty"`
+	ManualCheckOrderIDs []string               `json:"manual_check_child_order_ids,omitempty"`
 }
 
 type flattenRequest struct {
@@ -383,9 +402,10 @@ func (s *Service) FlattenLogicalAccount(
 	if found {
 		previous, _ = decodeFlattenResult(existing)
 	}
-	// 上一次已经定了结局、只差收拾子单：这次只收拾，不再下单。上一轮记下的各账户进度保留。
+	// 上一次已经定了结局、只差收拾子单：这次只收拾，不再下单。上一轮记下的各账户进度、进入收尾的时间保留。
 	if resuming && previous.FinishingStatus != "" {
 		result.Accounts, result.Unblocked = previous.Accounts, previous.Unblocked
+		result.FinishingSince = previous.FinishingSince
 		_, err := s.finishFlatten(ctx, command, members, &result, previous.FinishingStatus)
 		return result, err
 	}
@@ -480,9 +500,16 @@ func (s *Service) unblockedEverywhere(ctx context.Context, command FlattenComman
 	return present > 0
 }
 
+// flattenFinishingTimeout 是收尾（只收拾子单、不再下单）的上限：从进入收尾算起，满了仍收拾不完就不再等。
+const flattenFinishingTimeout = 30 * time.Minute
+
 // finishFlatten 把清仓进度落成 status。动作要离开运行（完成、部分完成、失败）时先收拾本动作还没结束的子单：
-// 收拾不完（子单还在解析、丢弃失败）就先保持运行并记下要结束成什么，之后每次恢复只收拾、不下单，收拾完才落成 status。
-// 返回实际落库的状态。
+// 收拾不完（子单还在解析、丢弃失败）就先保持运行并记下要结束成什么、什么时候进入的收尾，之后每次恢复只收拾、不下单，
+// 收拾完才落成 status。收尾满 flattenFinishingTimeout 仍收拾不完，或者子单收拾不了（交易所确认标的不存在、取不到账户会话），
+// 照样落成 status，这些子单记进结果的 ManualCheckOrderIDs 并记关注项，要人工核对。返回实际落库的状态。
+//
+// 子单解析失败属于本动作的账户问题，不作为调用错误返回（否则工作线程每秒都报错）；原因写进动作的 last_error。
+// 读写数据库这类共享故障照样返回。
 func (s *Service) finishFlatten(
 	ctx context.Context,
 	command FlattenCommand,
@@ -490,16 +517,40 @@ func (s *Service) finishFlatten(
 	result *FlattenResult,
 	status string,
 ) (string, error) {
+	note := ""
 	if status != string(operatordomain.StatusRunning) {
-		settled, settleErr := s.settleFlattenChildren(ctx, command, members)
-		if settleErr != nil || !settled {
+		outcome, settleErr := s.settleFlattenChildren(ctx, command, members)
+		if settleErr != nil {
+			// 列子单、读库失败：没法判断，保持原样等下一次恢复。
 			result.FinishingStatus = status
+			if result.FinishingSince == 0 {
+				result.FinishingSince = s.clock().UnixMilli()
+			}
 			running := string(operatordomain.StatusRunning)
 			return running, errors.Join(settleErr, s.persistFlattenProgress(ctx, result, running))
 		}
-		result.FinishingStatus = ""
+		result.ManualCheckOrderIDs = outcome.manualCheck
+		if len(outcome.unsettled) > 0 {
+			if result.FinishingSince == 0 {
+				result.FinishingSince = s.clock().UnixMilli()
+			}
+			if s.clock().Sub(time.UnixMilli(result.FinishingSince)) < flattenFinishingTimeout {
+				result.FinishingStatus = status
+				running := string(operatordomain.StatusRunning)
+				return running, s.persistFlattenProgressNote(ctx, result, running, outcome.errorText())
+			}
+			// 收尾到上限：不再等，没收拾掉的子单交给人工。
+			result.ManualCheckOrderIDs = append(result.ManualCheckOrderIDs, outcome.unsettled...)
+		}
+		if len(result.ManualCheckOrderIDs) > 0 {
+			detail := fmt.Sprintf("组合 %s 的动作 %s：%d 笔子单没收拾掉，需人工核对", command.LogicalAccountID, command.ActionID, len(result.ManualCheckOrderIDs))
+			telemetry.Note(telemetry.AttentionFlattenOrdersUnsettled, detail, s.clock())
+			log.WarnContextf(ctx, "交易关注项：%s（%s）：%s", detail, strings.Join(result.ManualCheckOrderIDs, ","), outcome.errorText())
+		}
+		result.FinishingStatus, result.FinishingSince = "", 0
+		note = outcome.errorText()
 	}
-	if err := s.persistFlattenProgress(ctx, result, status); err != nil {
+	if err := s.persistFlattenProgressNote(ctx, result, status, note); err != nil {
 		return status, err
 	}
 	// 下架清仓结束（完成、部分完成、失败）后唤醒目标：已收敛、已阻塞的目标不被定时器扫描，
@@ -515,14 +566,14 @@ func (s *Service) finishFlatten(
 //   - 提交中、结果未知的先同步解析，解析后退回待提交的同样丢弃；
 //   - 挂单中、撤单中的不动，它们自己会结束。
 //
-// 还有子单解析不出结果时返回 false（通常在未知窗口内），由下一次恢复接着收拾。
-func (s *Service) settleFlattenChildren(ctx context.Context, command FlattenCommand, members []store.LogicalAccountMemberRecord) (bool, error) {
-	settled := true
-	var settleErrors []error
+// 结果分三类：unsettled 是这次没收拾掉、下次恢复还能再试的（未知窗口内、解析或丢弃报错）；manualCheck 是收拾不了的
+// （交易所确认标的不存在、取不到账户会话），不阻塞收尾，要人工核对；返回的错误只有列子单这类读库失败。
+func (s *Service) settleFlattenChildren(ctx context.Context, command FlattenCommand, members []store.LogicalAccountMemberRecord) (settleOutcome, error) {
+	var outcome settleOutcome
 	for _, member := range members {
 		records, err := s.Store.ListActiveOrdersForAccount(ctx, command.SpaceID, member.TradingAccountID)
 		if err != nil {
-			return false, err
+			return settleOutcome{}, err
 		}
 		for _, child := range records {
 			if child.OwnerType != string(orderdomain.OwnerOperator) || child.OwnerID != command.ActionID {
@@ -532,7 +583,12 @@ func (s *Service) settleFlattenChildren(ctx context.Context, command FlattenComm
 			if state == orderdomain.Submitting || state == orderdomain.SubmitUnknown {
 				resolved, resolveErr := s.Orders.ResolveUnknown(ctx, command.SpaceID, child.OrderID)
 				if resolveErr != nil {
-					settleErrors = append(settleErrors, fmt.Errorf("解析子单 %s：%w", child.OrderID, resolveErr))
+					if childUnsettleable(resolveErr) {
+						outcome.manualCheck = append(outcome.manualCheck, child.OrderID)
+					} else {
+						outcome.unsettled = append(outcome.unsettled, child.OrderID)
+					}
+					outcome.errs = append(outcome.errs, fmt.Errorf("解析子单 %s：%w", child.OrderID, resolveErr))
 					continue
 				}
 				state = resolved.State
@@ -540,17 +596,48 @@ func (s *Service) settleFlattenChildren(ctx context.Context, command FlattenComm
 			switch state {
 			case orderdomain.Pending:
 				if _, discardErr := s.Orders.DiscardPending(ctx, command.SpaceID, child.OrderID); discardErr != nil {
-					settleErrors = append(settleErrors, fmt.Errorf("丢弃子单 %s：%w", child.OrderID, discardErr))
+					outcome.unsettled = append(outcome.unsettled, child.OrderID)
+					outcome.errs = append(outcome.errs, fmt.Errorf("丢弃子单 %s：%w", child.OrderID, discardErr))
 				}
 			case orderdomain.Submitting, orderdomain.SubmitUnknown:
-				settled = false
+				outcome.unsettled = append(outcome.unsettled, child.OrderID)
 			}
 		}
 	}
-	if len(settleErrors) > 0 {
-		return false, errors.Join(settleErrors...)
+	return outcome, nil
+}
+
+// settleOutcome 是一次收拾子单的结果。
+type settleOutcome struct {
+	unsettled   []string
+	manualCheck []string
+	errs        []error
+}
+
+// errorText 是写进动作 last_error 的收拾失败原因；没有错误时为空。
+func (o settleOutcome) errorText() string {
+	if len(o.errs) == 0 {
+		return ""
 	}
-	return settled, nil
+	return errors.Join(o.errs...).Error()
+}
+
+// childUnsettleable 报告子单解析失败是否属于等多久都收拾不了的：交易所确认标的不存在（币安 -1121、OKX 51001，标的已下架），
+// 或者取不到账户的执行通道（没有会话、账户已停用）。凭证失效、超时、限流等不算，按收尾上限处理。
+func childUnsettleable(err error) bool {
+	if exchange.IsInstrumentNotFound(err) {
+		return true
+	}
+	var accountErr *orderapp.AccountExecutionError
+	return errors.As(err, &accountErr) && accountErr.Operation == "adapter"
+}
+
+// clock 返回当前时间（测试可以替换 Now）。
+func (s *Service) clock() time.Time {
+	if s.Now != nil {
+		return s.Now()
+	}
+	return time.Now()
 }
 
 // reasonArbitrageHedgeLeg 是只平一个标的而它正是套利底仓对冲腿时的剩余原因。
@@ -1636,18 +1723,22 @@ func (s *Service) persistFlattenProgress(
 	result *FlattenResult,
 	status string,
 ) error {
+	return s.persistFlattenProgressNote(ctx, result, status, "")
+}
+
+// persistFlattenProgressNote 落库清仓进度；note 非空时追加到 last_error（收尾时子单解析、丢弃失败的原因）。
+func (s *Service) persistFlattenProgressNote(
+	ctx context.Context,
+	result *FlattenResult,
+	status string,
+	note string,
+) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
-	data, err := json.Marshal(struct {
-		Accounts         []FlattenAccountResult `json:"accounts"`
-		Unblocked        bool                   `json:"unblocked,omitempty"`
-		AttemptStartedAt int64                  `json:"attempt_started_at,omitempty"`
-		ReduceTargets    map[string]string      `json:"reduce_targets,omitempty"`
-		ReduceDone       []string               `json:"reduce_done_accounts,omitempty"`
-		FinishingStatus  string                 `json:"finishing_status,omitempty"`
-	}{
+	data, err := json.Marshal(flattenProgress{
 		Accounts: result.Accounts, Unblocked: result.Unblocked, AttemptStartedAt: result.AttemptStartedAt,
 		ReduceTargets: result.ReduceTargets, ReduceDone: result.ReduceDone, FinishingStatus: result.FinishingStatus,
+		FinishingSince: result.FinishingSince, ManualCheckOrderIDs: result.ManualCheckOrderIDs,
 	})
 	if err != nil {
 		return err
@@ -1665,6 +1756,9 @@ func (s *Service) persistFlattenProgress(
 			)
 		}
 	}
+	if note != "" {
+		action.LastError = joinError(action.LastError, "收拾子单："+note)
+	}
 	if err := s.updateAction(ctx, action); err != nil {
 		return err
 	}
@@ -1680,20 +1774,14 @@ func decodeFlattenResult(action store.OperatorActionRecord) (FlattenResult, erro
 		}
 		return result, errors.New(action.LastError)
 	}
-	var persisted struct {
-		Accounts         []FlattenAccountResult `json:"accounts"`
-		Unblocked        bool                   `json:"unblocked,omitempty"`
-		AttemptStartedAt int64                  `json:"attempt_started_at,omitempty"`
-		ReduceTargets    map[string]string      `json:"reduce_targets,omitempty"`
-		ReduceDone       []string               `json:"reduce_done_accounts,omitempty"`
-		FinishingStatus  string                 `json:"finishing_status,omitempty"`
-	}
+	var persisted flattenProgress
 	if err := json.Unmarshal([]byte(*action.ResultJSON), &persisted); err != nil {
 		return result, err
 	}
 	result.Accounts, result.Unblocked, result.AttemptStartedAt = persisted.Accounts, persisted.Unblocked, persisted.AttemptStartedAt
 	result.ReduceTargets, result.ReduceDone = persisted.ReduceTargets, persisted.ReduceDone
-	result.FinishingStatus = persisted.FinishingStatus
+	result.FinishingStatus, result.FinishingSince = persisted.FinishingStatus, persisted.FinishingSince
+	result.ManualCheckOrderIDs = persisted.ManualCheckOrderIDs
 	return result, nil
 }
 

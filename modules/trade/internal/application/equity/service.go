@@ -361,7 +361,8 @@ func (s *Service) heldPrice(
 	return quote.Price, quote.UpdatedAt.UnixMilli(), nil
 }
 
-// degradedPrice 按统一规则给取不到新鲜报价的受管现货定价，用上降级估值时记关注项。标的在下架名单里时按“下架”处理（可以按 0 计）。
+// degradedPrice 按统一规则给取不到新鲜报价的受管现货定价，用上降级估值时记关注项。标的已经不可交易（状态不是 TRADING）
+// 又在下架名单里时按“下架”处理（可以按 0 计）；仍在交易、只是这次取价失败的，在名单里也照旧报错（valuation.go 第 4 条）。
 func (s *Service) degradedPrice(
 	ctx context.Context,
 	account store.TradingAccountRecord,
@@ -371,7 +372,7 @@ func (s *Service) degradedPrice(
 	cause error,
 ) (shared.Decimal, int64, error) {
 	reason := degradeReason(cause)
-	if instrument != nil && failure != execution.ValuationInstrumentGone {
+	if instrument != nil && failure == execution.ValuationNotTrading {
 		blocked, err := s.Store.LoadBlockedSet(ctx)
 		if err != nil {
 			return shared.Zero(), 0, err

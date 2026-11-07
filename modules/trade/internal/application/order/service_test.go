@@ -1090,6 +1090,25 @@ func TestServiceCancelWaitsForAccountSyncBeforeTerminalRelease(t *testing.T) {
 	require.Equal(t, "101", record.RemainingReservedQuantity)
 }
 
+// 一批撤单不带同步：撤单照常落 CANCELING，最后由调用方同步一次。
+func TestServiceCancelWithoutSyncDefersAccountSync(t *testing.T) {
+	service, _, _ := newTestService(t)
+	syncer := &syncerStub{}
+	service.Syncer = syncer
+	placed, err := service.Place(context.Background(), "space-1", testSpec(time.Unix(1_700_000_000, 0)))
+	require.NoError(t, err)
+	placed, err = service.Submit(context.Background(), "space-1", string(placed.ID))
+	require.NoError(t, err)
+	before := syncer.calls
+
+	got, err := service.CancelWithoutSync(context.Background(), "space-1", string(placed.ID))
+	require.NoError(t, err)
+	require.Equal(t, "CANCELING", string(got.State))
+	require.Equal(t, before, syncer.calls, "撤单后不立刻同步")
+	require.NoError(t, service.SyncAfterCancel(context.Background(), "account-1"))
+	require.Equal(t, before+1, syncer.calls)
+}
+
 func TestServiceCancelRejectionRestoresOpenState(t *testing.T) {
 	service, _, adapter := newTestService(t)
 	service.Syncer = &syncerStub{}

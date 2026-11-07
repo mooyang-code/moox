@@ -535,10 +535,40 @@ func (s *Service) checkTargetAuthorization(
 	return nil
 }
 
+// Cancel 撤单，撤单请求成功后同步一次账户确认撤单结果。
 func (s *Service) Cancel(
 	ctx context.Context,
 	spaceID string,
 	orderID string,
+) (orderdomain.Order, error) {
+	return s.cancel(ctx, spaceID, orderID, true)
+}
+
+// CancelWithoutSync 撤单但不做撤单后的账户同步：一次撤一批单（例如释放会话撤组合里所有目标单）时，
+// 每笔都同步会让 N 笔挂单做 N 次全量同步、超出调用期限。调用方撤完之后对每个撤过单的账户调用一次 SyncAfterCancel。
+func (s *Service) CancelWithoutSync(
+	ctx context.Context,
+	spaceID string,
+	orderID string,
+) (orderdomain.Order, error) {
+	return s.cancel(ctx, spaceID, orderID, false)
+}
+
+// SyncAfterCancel 在一批撤单之后同步一次账户（读全部挂单，确认撤单结果）。
+func (s *Service) SyncAfterCancel(ctx context.Context, tradingAccountID string) error {
+	if s == nil || s.Syncer == nil {
+		return ErrServiceConfig
+	}
+	syncCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	defer cancel()
+	return s.Syncer.SyncAccount(syncCtx, tradingAccountID)
+}
+
+func (s *Service) cancel(
+	ctx context.Context,
+	spaceID string,
+	orderID string,
+	syncAfter bool,
 ) (orderdomain.Order, error) {
 	if s == nil || s.Store == nil || s.Adapters == nil || s.Syncer == nil {
 		return orderdomain.Order{}, ErrServiceConfig
@@ -582,11 +612,16 @@ func (s *Service) Cancel(
 				if confirmErr := confirmer.ConfirmCancel(ctx, record.SpaceID, record.OrderID); confirmErr != nil {
 					return orderdomain.Order{}, confirmErr
 				}
-				if syncErr := s.Syncer.SyncAccount(ctx, record.TradingAccountID); syncErr != nil {
-					return orderdomain.Order{}, syncErr
+				if syncAfter {
+					if syncErr := s.Syncer.SyncAccount(ctx, record.TradingAccountID); syncErr != nil {
+						return orderdomain.Order{}, syncErr
+					}
 				}
 				return s.Get(ctx, record.SpaceID, record.OrderID)
 			}
+		}
+		if !syncAfter {
+			return aggregate, nil
 		}
 		err = s.Syncer.SyncAccount(ctx, record.TradingAccountID)
 		return aggregate, err

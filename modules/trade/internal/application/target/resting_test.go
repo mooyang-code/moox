@@ -48,7 +48,7 @@ func (f *targetFixture) restingOrder(t *testing.T, orderID, side, quantity, fill
 	}
 	f.order(t, store.OrderRecord{
 		SpaceID: "space-1", OrderID: orderID, TradingAccountID: "account-a", LogicalAccountID: "logical-1", RunnerID: "runner-1",
-		ClientOrderID: orderID, Exchange: "BINANCE", MarketType: "SWAP", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
+		ClientOrderID: orderID, ExchangeOrderID: "exchange-" + orderID, Exchange: "BINANCE", MarketType: "SWAP", InstrumentID: "BTC-USDT-SWAP", ExchangeSymbol: "BTCUSDT",
 		OrderType: "LIMIT", TimeInForce: "GTC", Side: side, Quantity: quantity, LimitPrice: strPtr("99.9"), ReferencePrice: "100",
 		FilledQuantity: filled, OwnerType: "TARGET", OwnerID: "target-current", State: state, SubmittedAt: submittedAt.UnixMilli(), Version: 1,
 	})

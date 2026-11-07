@@ -73,6 +73,9 @@ func (w *AttentionWorker) Scan(ctx context.Context) error {
 		telemetry.AttentionTransferShortfall: telemetry.Recent(telemetry.AttentionTransferShortfall, now, rejectionWindow),
 		telemetry.AttentionTransferFailing:   telemetry.Recent(telemetry.AttentionTransferFailing, now, rejectionWindow),
 		telemetry.AttentionValuationDegraded: telemetry.Recent(telemetry.AttentionValuationDegraded, now, rejectionWindow),
+		// 清仓收尾、释放会话留下要人工核对的单：每次发生记一条，保留窗口内持续上报。
+		telemetry.AttentionFlattenOrdersUnsettled:  telemetry.Recent(telemetry.AttentionFlattenOrdersUnsettled, now, rejectionWindow),
+		telemetry.AttentionReleaseOrdersUnverified: telemetry.Recent(telemetry.AttentionReleaseOrdersUnverified, now, rejectionWindow),
 	}
 	names := make(map[string]string)
 	accounts, err := w.Store.ListAllTradingAccounts(ctx)

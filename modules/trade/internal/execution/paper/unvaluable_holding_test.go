@@ -143,6 +143,19 @@ func TestPaperSnapshotKeepsFailingOnTransientQuoteErrorWithoutLastPrice(t *testi
 	require.True(t, exchange.IsKind(err, exchange.ErrorRateLimited), "err = %v", err)
 }
 
+// BTC 在下架名单里但还在交易、从没取到过价、这次被限流：照旧报错，不因为在名单里就按 0 计。
+func TestPaperSnapshotBlockedTradingHoldingKeepsFailingOnQuoteError(t *testing.T) {
+	now := time.Now().UTC()
+	facts := delistedFacts{account: delistedPaperAccount(), haltFill: "7",
+		blocked: []store.BlockedInstrumentRecord{{Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "BTCUSDT"}}}
+	paperAdapter := &Adapter{
+		Account: store.TradingAccountRecord{SpaceID: "space", TradingAccountID: "paper"}, Store: facts,
+		MarketData: &delistedMarket{now: now, failed: true}, Now: func() time.Time { return now },
+	}
+	_, err := paperAdapter.GetAccountSnapshot(context.Background())
+	require.True(t, exchange.IsKind(err, exchange.ErrorRateLimited), "err = %v", err)
+}
+
 // 停止交易的 HALT 没有成交记录：不在下架名单里时报错，在下架名单里按 0 计。
 func TestPaperSnapshotHaltedHoldingNeedsFillOrDelisting(t *testing.T) {
 	now := time.Now().UTC()

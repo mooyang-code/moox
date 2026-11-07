@@ -17,6 +17,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -367,6 +368,24 @@ func credentialUnavailable(err error) bool {
 	return errors.As(err, &accountErr) && accountErr.Operation == "adapter"
 }
 
+// allOrdersUnreachable 判断撤目标单失败是否每一支都是等多久都不会成功的：凭证失效、账户没有会话、交易所确认标的不存在。
+// 多笔单的错误是 errors.Join 起来的，只要有一支是别的错误（例如超时、限流），就不算，照样让调用方重试。
+func allOrdersUnreachable(err error) bool {
+	if err == nil {
+		return false
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		children := joined.Unwrap()
+		for _, child := range children {
+			if !allOrdersUnreachable(child) {
+				return false
+			}
+		}
+		return len(children) > 0
+	}
+	return credentialUnavailable(err) || exchange.IsInstrumentNotFound(err)
+}
+
 // UnverifiedRemovalWarning 是同步失败、只凭本地记录移除成员时返回的提示。
 const UnverifiedRemovalWarning = "执行账户同步失败（例如凭证已失效），只按本地记录确认没有挂单和持仓，交易所侧仓位没有核对"
 
@@ -400,7 +419,9 @@ func (s *Service) RemoveMember(
 	}
 	if exposed {
 		if syncErr != nil {
-			return "", syncErr
+			// 本地还有挂单、持仓或受管资产：照样按“有持仓不能移出”报，不能只返回同步错误（没有会话时会被当成“稍后重试”，
+			// 重试多少次都不会成功，也看不出是有持仓）。同步错误只作为原因附上，不参与错误码判断。
+			return "", fmt.Errorf("%w（同步失败：%v）", ErrRemovalHasExposure, syncErr)
 		}
 		return "", ErrRemovalHasExposure
 	}
@@ -508,14 +529,29 @@ func (s *Service) ReleaseSession(
 		return lockErr
 	}
 	defer unlock()
-	// 释放会删掉目标，之后没有人再管这个组合的目标单：先撤掉挂单，撤不下来就不释放、返回错误，由策略稍后重试释放。
+	// 释放会删掉目标，之后没有人再管这个组合的目标单。顺序：先删目标（执行器不会再按它下新单），再撤目标单，最后做所有权 CAS。
+	// 撤不下来就不释放、返回错误，由策略稍后重试释放（目标已删，重试时只撤单）。撤单按组合查单，不依赖目标。
+	// 凭证失效、账户没有会话时撤单永远不会成功：比照移出成员，只按本地记录放行，记关注项，交给人工核对；
+	// 交易所确认标的不存在（已下架）的单也不可能还挂着，同样放行。
 	current, err := s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
 	if err != nil {
 		return err
 	}
 	if releaseChanges(current, instanceID, sessionID, expectedFence) {
-		if err := s.releaseTargetOrders(ctx, spaceID, logicalAccountID); err != nil {
+		if err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
+			return tx.DeleteLogicalAccountTarget(spaceID, logicalAccountID)
+		}); err != nil {
 			return err
+		}
+		if s.TargetOrders != nil {
+			if err := s.TargetOrders.ReleaseTargetOrders(ctx, spaceID, logicalAccountID); err != nil {
+				if ctx.Err() != nil || !allOrdersUnreachable(err) {
+					return targetOrdersNotReleased{cause: err}
+				}
+				detail := "组合 " + logicalAccountID + "：凭证失效、没有会话或标的已不存在，目标单没能撤下，只按本地记录释放会话，需人工核对"
+				telemetry.Note(telemetry.AttentionReleaseOrdersUnverified, detail, time.Now())
+				log.WarnContextf(ctx, "交易关注项：%s：%v", detail, err)
+			}
 		}
 	}
 	return s.Store.Transaction(ctx, func(tx *store.Tx) error {

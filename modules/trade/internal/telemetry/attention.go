@@ -36,6 +36,12 @@ const (
 	// AttentionValuationDegraded 是受管资产取不到价（已下架、停止交易、交易所确认标的不存在或暂时取价失败），
 	// 权益按最后已知价或 0 计，没有阻断采样。
 	AttentionValuationDegraded = "valuation_degraded"
+	// AttentionFlattenOrdersUnsettled 是清仓、减仓、下架清仓结束时有子单没收拾掉（收尾满 30 分钟仍解析不出结果、
+	// 交易所确认标的不存在、取不到账户会话），动作照常结束，这些子单要人工到交易所核对。
+	AttentionFlattenOrdersUnsettled = "flatten_orders_unsettled"
+	// AttentionReleaseOrdersUnverified 是释放策略会话时凭证失效或账户没有会话，目标单没能撤下或确认，只按本地记录释放，
+	// 这些单要人工到交易所核对。
+	AttentionReleaseOrdersUnverified = "release_orders_unverified"
 )
 
 // attentionKinds 里每种情况都要上报，恢复后 Monitor 才能看到值回到 0。
@@ -44,7 +50,7 @@ var attentionKinds = []string{
 	AttentionAccountNotReady, AttentionTargetExpired, AttentionTargetReversal,
 	AttentionRateLimited, AttentionTurnoverHigh, AttentionUnknownResults, AttentionMarginRatioLow,
 	AttentionInspectionBlocked, AttentionInspectionFailing, AttentionTransferShortfall, AttentionTransferFailing,
-	AttentionValuationDegraded,
+	AttentionValuationDegraded, AttentionFlattenOrdersUnsettled, AttentionReleaseOrdersUnverified,
 }
 
 // maxAttentionDetail 是标签的字节上限：Monitor 超过 512 字节会拒收整份上报。
