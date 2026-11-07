@@ -259,4 +259,15 @@ func TestWalletCollectDoesNotTakeBackFundsForDeferredBuy(t *testing.T) {
 	require.Len(t, fake.Calls(), 1)
 }
 
+// 低于设置最小下单额的差额视为已满足：合约钱包资金充足、现货钱包不够时也不发起划转（划转了这笔单也不会下）。
+func TestWalletNoTransferForBuyBelowConfiguredMinimum(t *testing.T) {
+	f, fake, newExecutor := newWalletIntegration(t)
+	f.setOrderSettings(t, `{"order_mode":"MARKET","min_notional_spot":"10","min_notional_swap":"0"}`)
+	result, err := newExecutor().Converge(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Equal(t, StatusConverged, result.Status)
+	require.Empty(t, fake.Calls(), "差额 1U 低于最小下单额 10U：不为它划转")
+	require.Empty(t, f.orders.specs)
+}
+
 func mustDec(value string) shared.Decimal { return shared.MustDecimal(value) }

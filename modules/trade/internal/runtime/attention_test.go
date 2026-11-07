@@ -54,3 +54,24 @@ func TestAttentionIgnoresHourlyCapDeferral(t *testing.T) {
 	require.Empty(t, items[telemetry.AttentionTargetBlocked])
 	require.Empty(t, blocked)
 }
+
+// 合约钱包可划转资金不足同时有 transfer_shortfall 在报：同一个缺口不再发 target_blocked；别的原因的阻塞照常报。
+func TestAttentionFundsShortageIsReportedOnlyAsTransferShortfall(t *testing.T) {
+	worker := &AttentionWorker{blockedSince: map[string]time.Time{}}
+	start := time.UnixMilli(1_000_000)
+	now := start.Add(5*time.Minute + time.Second)
+	logical := store.LogicalAccountRecord{LogicalAccountID: "logical-1", Name: "组合"}
+	worker.blockedSince["logical-1"] = start
+	target := store.LogicalAccountTargetRecord{
+		Status: targetapp.StatusBlocked, EffectiveAt: 0, ValidUntil: 120_000,
+		BlockedTargets: []store.BlockedTarget{{InstrumentID: "BTC-USDT-SPOT", Reason: "合约钱包可划转的资金不足，现货买入按现有资金缩小"}},
+	}
+	items := map[string][]string{}
+	require.NoError(t, worker.noteTarget(context.Background(), logical, target, now, items, map[string]time.Time{}))
+	require.Empty(t, items[telemetry.AttentionTargetBlocked])
+
+	target.BlockedTargets = append(target.BlockedTargets, store.BlockedTarget{InstrumentID: "ETH-USDT-SPOT", Reason: "交易所拒单"})
+	require.NoError(t, worker.noteTarget(context.Background(), logical, target, now, items, map[string]time.Time{}))
+	require.Len(t, items[telemetry.AttentionTargetBlocked], 1)
+	require.Contains(t, items[telemetry.AttentionTargetBlocked][0], "ETH-USDT-SPOT")
+}

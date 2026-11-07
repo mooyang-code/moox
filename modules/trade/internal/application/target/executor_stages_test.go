@@ -229,13 +229,14 @@ type fakeTransfer struct {
 	beforeCalls, collectCalls int
 	buys                      []TransferBuy
 	scale                     map[string]shared.Decimal
+	reasons                   map[string]string
 	collected                 []string
 }
 
 func (f *fakeTransfer) BeforeSpotBuy(_ context.Context, _ string, _ store.LogicalAccountTargetRecord, buys []TransferBuy) (TransferOutcome, error) {
 	f.beforeCalls++
 	f.buys = buys
-	outcome := TransferOutcome{BuyScale: f.scale}
+	outcome := TransferOutcome{BuyScale: f.scale, Reasons: f.reasons}
 	outcome.Waiting = map[string]string{}
 	for _, buy := range buys {
 		if f.beforePending || f.waitAccounts[buy.Account.TradingAccountID] {

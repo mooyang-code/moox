@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/trade/internal/application/wallet"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/stretchr/testify/require"
 )
@@ -90,8 +92,8 @@ func TestWaitingAccountOnlyBlocksItsOwnSpotBuys(t *testing.T) {
 	require.Empty(t, stored.BlockedTargets, "等划转不是阻塞")
 }
 
-// 本目标里还有被挡住的现货买单时，这个账户不归集：刚划进现货钱包的钱还要用来买入。
-func TestCollectSkippedWhileSpotBuyIsBlocked(t *testing.T) {
+// 因为被拒单、数量太小等非资金原因被挡住的买单不阻止归集：这些买单用不上资金，资金一直留在现货钱包没有道理。
+func TestCollectNotSkippedWhileSpotBuyIsBlockedForNonFundsReason(t *testing.T) {
 	f := liveStandardFixture(t)
 	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_trade_instruments SET c_min_notional = '100000' WHERE c_instrument_id = 'BTC-USDT-SPOT'").Error)
 	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SPOT", Quantity: "3"}})
@@ -103,8 +105,55 @@ func TestCollectSkippedWhileSpotBuyIsBlocked(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, StatusBlocked, result.Status)
 	require.Empty(t, f.orders.specs)
-	require.Zero(t, transfer.collectCalls, "买单被挡住：不归集")
-	require.Empty(t, transfer.collected)
+	require.Equal(t, []string{"account-a"}, transfer.collected, "非资金原因的阻塞不拦归集")
+}
+
+// 持有同向仓位（0.005 BTC，目标 0.01）、资金缺口把买单缩得下不了单：记 BLOCKED 和原始差额，不再因为“已有同向持仓”静默跳过；
+// 同时账户不归集（资金还要等）。
+func TestScaledBuyTooSmallWithExistingPositionIsBlockedNotSkipped(t *testing.T) {
+	f := liveStandardFixture(t)
+	f.setSpotBalance("BTC", "0.005")
+	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SPOT", Quantity: "0.01"}})
+	transfer := &fakeTransfer{
+		scale:   map[string]shared.Decimal{"account-a": mustDecimal("0.01")},
+		reasons: map[string]string{"account-a": wallet.ReasonShortfallScaled},
+	}
+	executor := f.executor()
+	executor.Transfers = transfer
+
+	result, err := executor.Converge(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Equal(t, StatusBlocked, result.Status, "缺钱：真实的资金缺口，不是已满足")
+	require.Empty(t, f.orders.specs)
+	stored, err := f.store.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Len(t, stored.BlockedTargets, 1)
+	require.Equal(t, "0.005", stored.BlockedTargets[0].Quantity)
+	require.True(t, wallet.IsFundsShortage(stored.BlockedTargets[0].Reason))
+	require.Zero(t, transfer.collectCalls, "买单在等资金，不归集")
+}
+
+// 差额（8U）低于设置的最小下单额（10U）：本来就视为已满足。缺钱时也一样不阻塞；
+// 不为这笔不会下的单向钱包要资金（买单不交给划转）。
+func TestBelowConfiguredMinimumBuyIsSatisfiedAndNeverTransfersOrBlocks(t *testing.T) {
+	f := liveStandardFixture(t)
+	f.setOrderSettings(t, `{"order_mode":"MARKET","min_notional_spot":"10","min_notional_swap":"0"}`)
+	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SPOT", Quantity: "0.08"}})
+	transfer := &fakeTransfer{
+		scale:   map[string]shared.Decimal{"account-a": shared.Zero()},
+		reasons: map[string]string{"account-a": wallet.ReasonShortfallNoBuy},
+	}
+	executor := f.executor()
+	executor.Transfers = transfer
+
+	result, err := executor.Converge(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Equal(t, StatusConverged, result.Status, "缺钱也不判 BLOCKED：差额本来就不会下单")
+	require.Empty(t, f.orders.specs)
+	require.Empty(t, transfer.buys, "不会下的买单不计入划转需求")
+	stored, err := f.store.GetLogicalAccountTarget(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Empty(t, stored.BlockedTargets)
 }
 
 // 每小时上限把现货买单顺延到下一个整点：整点之前不归集，顺延的买单到整点还要用这笔资金。

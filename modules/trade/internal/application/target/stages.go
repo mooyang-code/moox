@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/trade/internal/application/wallet"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
@@ -20,7 +21,7 @@ const (
 )
 
 // reasonTransferScaled 是现货买入被划转额度缩小、钱包没有给出更具体原因时的说明。
-const reasonTransferScaled = "合约钱包可划转的资金不足，现货买入按现有资金缩小"
+const reasonTransferScaled = wallet.ReasonShortfallScaled
 
 // transferPollInterval 是等待划转完成时再次收敛的间隔。
 const transferPollInterval = time.Second

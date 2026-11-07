@@ -67,6 +67,20 @@ const (
 	softNotArrive = "[未到账]"
 )
 
+// 合约钱包可划转的资金不够时，写进 blocked_targets 的原因都以 FundsShortagePrefix 开头：
+// 执行器据此判断“这个账户的买单在等资金”（不归集），关注项据此把它合并进 transfer_shortfall（不再重复发 target_blocked）。
+const (
+	FundsShortagePrefix = "合约钱包可划转的资金"
+	// ReasonShortfallNoBuy 是资金不足、钱包没有给出更具体原因时，这轮买不了的说明。
+	ReasonShortfallNoBuy = FundsShortagePrefix + "不足，这轮买不了"
+	// ReasonShortfallScaled 是资金不足、买单按现有资金缩小的说明。
+	ReasonShortfallScaled = FundsShortagePrefix + "不足，现货买入按现有资金缩小"
+	reasonCapacityUsedUp  = FundsShortagePrefix + "已经划完，现货买入按现有资金缩小"
+)
+
+// IsFundsShortage 报告 blocked_targets 的原因是不是合约钱包可划转资金不足。
+func IsFundsShortage(reason string) bool { return strings.HasPrefix(reason, FundsShortagePrefix) }
+
 // AdapterSource 按执行账户取适配器。
 type AdapterSource interface {
 	Adapter(accountID string) (execution.ExecutionAdapter, error)
@@ -337,9 +351,9 @@ func (s *Service) beforeSpotBuyForAccount(ctx context.Context, spaceID string, t
 	completed, capped := completedTransfers(history)
 	if capped || completed >= maxTransfersPerTarget {
 		// 上一笔已经把合约钱包可划的额度划完（或这个目标划得太多次了）：不再追加，只按现有资金缩小。
-		reason := "合约钱包可划转的资金已经划完，现货买入按现有资金缩小"
+		reason := reasonCapacityUsedUp
 		if !capped {
-			reason = fmt.Sprintf("这个目标已经划转 %d 次仍然不够，现货买入按现有资金缩小", completed)
+			reason = fmt.Sprintf(FundsShortagePrefix+"一直不够（这个目标已经划转 %d 次），现货买入按现有资金缩小", completed)
 		}
 		s.alertShortfallOnce(account, targetRecord.TargetID, requirement, spotAvailable)
 		return accountResult{scale: scaleFor(spotAvailable, requirement), reason: reason}
@@ -357,7 +371,7 @@ func (s *Service) beforeSpotBuyForAccount(ctx context.Context, spaceID string, t
 	}
 	if amount.Cmp(dec(minTransferAmount)) < 0 {
 		s.alertShortfallOnce(account, targetRecord.TargetID, requirement, spotAvailable)
-		return accountResult{scale: scaleFor(spotAvailable, requirement), reason: "合约钱包可划转的资金不足，现货买入按现有资金缩小"}
+		return accountResult{scale: scaleFor(spotAvailable, requirement), reason: ReasonShortfallScaled}
 	}
 	// 被额度封顶的划转在记录上打标记：它完成后这个目标不再追加划转。
 	isCapped := amount.Cmp(need) < 0

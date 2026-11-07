@@ -10,6 +10,7 @@ import (
 	"time"
 
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
+	"github.com/mooyang-code/moox/modules/trade/internal/application/wallet"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/ordersettings"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
@@ -503,10 +504,11 @@ func (e *Executor) Converge(
 	// 其余账户照常下单；只要还有账户在等，目标不能定终态，也不进入归集。
 	transferWaiting := false
 	var transferRetry time.Duration
-	// openBuyAccounts 是本目标里还有未完成、被挡或被顺延的现货买单的执行账户：这些账户不归集，
-	// 否则刚划进现货钱包的资金又被划回合约钱包，剩下的买单再也买不了。
+	// openBuyAccounts 是本目标里还有现货买单在等这笔资金的执行账户（顺延到下一个整点、等划转、因合约钱包可划转资金不足被缩小或挡下）：
+	// 这些账户不归集，否则刚划进现货钱包的资金又被划回合约钱包，剩下的买单再也买不了。
+	// 因为被拒单、反向次数超限等非资金原因被挡的买单不算：资金用不上，应该照常归集。
 	openBuyAccounts := map[string]struct{}{}
-	// holdCollect 记下现货买单（阶段 5）里没做完的账户：被挡、被顺延，或缩小后太小。
+	// holdCollect 记下现货买单（阶段 5）里还在等资金的账户。
 	holdCollect := func(stage int, action laneAction) {
 		if stage == stageSpotBuy {
 			openBuyAccounts[action.member.account.TradingAccountID] = struct{}{}
@@ -529,6 +531,22 @@ func (e *Executor) Converge(
 			continue
 		}
 		if stage == stageSpotBuy {
+			// 缩小前的原始差额就够不上最小下单额（或交易规则下下不了单且已有同向持仓）的买单视为已满足：
+			// 不下单，也不计入划转需求，否则会为一笔不会下的单划转资金，或在缺钱时把本来已满足的差额判成 BLOCKED。
+			needed := stageActions[:0:0]
+			for _, action := range stageActions {
+				if needsWalletTransfer(action.member.account) {
+					satisfied, err := e.spotBuyAlreadySatisfied(ctx, env, action, desired, members)
+					if err != nil {
+						return Result{}, err
+					}
+					if satisfied {
+						continue
+					}
+				}
+				needed = append(needed, action)
+			}
+			stageActions = needed
 			// 阶段 4：普通账户把资金划进现货钱包，划转完成后才买入。统一账户、OKX、模拟盘没有这一步。
 			outcome, err := e.walletTransferBeforeSpotBuy(ctx, spaceID, target, stageActions)
 			if err != nil {
@@ -557,9 +575,11 @@ func (e *Executor) Converge(
 				if !kept {
 					reason := outcome.Reasons[accountID]
 					if reason == "" {
-						reason = "合约钱包可划转的资金不足，这轮买不了"
+						reason = wallet.ReasonShortfallNoBuy
 					}
-					openBuyAccounts[accountID] = struct{}{}
+					if wallet.IsFundsShortage(reason) {
+						openBuyAccounts[accountID] = struct{}{}
+					}
 					blocked = append(blocked, store.BlockedTarget{
 						InstrumentID: action.instrument.InstrumentID, Quantity: action.blockedQuantity(),
 						Reason: reason,
@@ -600,7 +620,6 @@ func (e *Executor) Converge(
 					Quantity:     action.blockedQuantity(),
 					Reason:       reasonPositionUnreflected,
 				})
-				holdCollect(stage, action)
 				continue
 			}
 			placement, placeErr := e.placeAction(
@@ -627,18 +646,20 @@ func (e *Executor) Converge(
 				})
 				continue
 			}
-			if placement.tooSmall && laneFinished(desired[instrumentID], members, instrumentID) {
-				continue
-			}
-			if placement.belowConfiguredMin && !action.scaled {
-				continue
-			}
 			if action.scaled && (placement.belowConfiguredMin || placement.tooSmall) {
 				// 缩小后的买单太小下不了：不是“已满足”，原因是合约钱包划转的资金不够，要让界面看得到。
 				blocked = append(blocked, store.BlockedTarget{
 					InstrumentID: instrumentID, Quantity: action.blockedQuantity(), Reason: action.scaleReason,
 				})
-				holdCollect(stage, action)
+				if wallet.IsFundsShortage(action.scaleReason) {
+					holdCollect(stage, action)
+				}
+				continue
+			}
+			if placement.tooSmall && laneFinished(desired[instrumentID], members, instrumentID) {
+				continue
+			}
+			if placement.belowConfiguredMin {
 				continue
 			}
 			if placement.reason != "" {
@@ -647,7 +668,6 @@ func (e *Executor) Converge(
 					Quantity:     action.blockedQuantity(),
 					Reason:       placement.reason,
 				})
-				holdCollect(stage, action)
 				continue
 			}
 			if placement.placed {
@@ -757,6 +777,34 @@ func (e *Executor) HasDifference(ctx context.Context, target store.LogicalAccoun
 		return true, nil
 	}
 	return false, nil
+}
+
+// spotBuyAlreadySatisfied 按缩小前的原始差额判断一笔现货买入是否视为已满足：低于设置的最小下单额，
+// 或交易规则下下不了单且已有同向持仓（零头）。取不到报价时按“没满足”交给后面的流程处理。
+func (e *Executor) spotBuyAlreadySatisfied(
+	ctx context.Context,
+	env *laneEnv,
+	action laneAction,
+	desired map[string]desiredTarget,
+	members []memberState,
+) (bool, error) {
+	quote, err := e.Prices.LatestPrice(ctx, action.member.account.TradingAccountID,
+		exchange.NewSymbolKey(action.instrument.MarketType, action.instrument.ExchangeSymbol))
+	if err != nil {
+		if paper.IsInfrastructureError(err) {
+			return false, err
+		}
+		return false, nil
+	}
+	if quote.Price.Cmp(shared.Zero()) <= 0 {
+		return false, nil
+	}
+	quantity := floorToStep(action.delta.Abs(), mustBaseStep(action.instrument))
+	if env.belowConfiguredMinimum(action, quantity, quote.Price) {
+		return true, nil
+	}
+	instrumentID := action.instrument.InstrumentID
+	return laneFinished(desired[instrumentID], members, instrumentID) && env.tooSmallToPlace(action, quantity, quote.Price), nil
 }
 
 // belowConfiguredMinimumNow 判断一个动作的差额（按步长取整后）是否低于设置的最小下单额；取不到报价时按“不低于”处理。
