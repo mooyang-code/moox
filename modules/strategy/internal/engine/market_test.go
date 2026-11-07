@@ -346,3 +346,34 @@ portfolio: {leverage: 1, max_missing: 1}
 		t.Fatalf("多头规则不受影响：%+v", rule)
 	}
 }
+
+// select: spot, prefer: swap：持仓在永续上的币仍先取永续的行；永续本期不可用时冻结，不被卖出，也不退回去取现货的行。
+func TestHoldingMarketRowFirstForSpotSelectSwapPrefer(t *testing.T) {
+	program := compileIn(t, dsl.Market{Select: dsl.MarketSpot, Prefer: dsl.MarketSwap}, topOneRule+"portfolio: {max_missing: 1}\n", "m")
+	rows := map[string]map[string]float64{dsl.MarketSpot: {"A": 1, "B": 9}, dsl.MarketSwap: {}}
+	unavailable := map[string]map[string]map[string]string{dsl.MarketSwap: {"m": {"A": FailedMarket, "B": FailedMarket}}}
+	decision, err := Evaluate(program, marketFrame(program, rows, unavailable), State{Targets: map[string]string{"A|swap": "0.4"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertOK(t, decision)
+	got := keysOf(decision)
+	if got["A|swap"] != "0.4" {
+		t.Fatalf("永续不可用时持仓在永续的币应冻结保持：%v", got)
+	}
+	var hold bool
+	for _, target := range decision.Targets {
+		hold = hold || (target.InstrumentID == "A" && target.Market == dsl.MarketSwap && target.Hold)
+	}
+	if !hold {
+		t.Fatalf("A 应是保持目标：%+v", decision.Targets)
+	}
+
+	// 永续可用时，持仓币取永续的行（A=10 胜过 B=2）；若误取现货的行（A=1），入选的会变成 B。
+	rows = map[string]map[string]float64{dsl.MarketSpot: {"A": 1, "B": 2}, dsl.MarketSwap: {"A": 10, "B": 2}}
+	decision, err = Evaluate(program, marketFrame(program, rows, nil), State{Targets: map[string]string{"A|swap": "0.4"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireTargets(t, decision, map[string]string{"A|swap": "1"})
+}

@@ -129,7 +129,7 @@ func otherMarket(mode dsl.Market, market string) string {
 // selectPool 做选币池构造（设计 3.1，第 1～3、5 步）：为每个标的在各市场的行里选出一行，记下本行市场与
 // 两个市场的可用标记，并合并失败证据。选出的行写入 Rows，失败证据写入 FailedColumns。
 //
-//   - 上期持有正权重目标的标的（select: both 时），只取它持仓所在市场的行；那一行本期不存在时按无行处理，
+//   - 上期持有正权重目标的标的（所有模式），只取它持仓所在市场的行；那一行本期不存在时按无行处理，
 //     走缺数和冻结逻辑，不退回去取另一个市场的行。
 //   - 其余标的：select: both 时两个市场都可用只留 prefer 那一行，只在一边可用就留那一边；select 为单个市场时只用该市场的行。
 func selectPool(mode dsl.Market, frame Frame, held heldIndex) Frame {
@@ -200,11 +200,12 @@ func poolSubjects(frame Frame) []string {
 
 // pickOrder 返回标的取行时依次尝试的市场。
 func pickOrder(mode dsl.Market, id string, held heldIndex) []string {
+	// 所有模式都先取持仓所在市场的行（设计 3.1 第 2 步）：空洞保护和止损用的始终是持仓市场的数据。
+	if hold := held.positiveMarket(id, mode.Prefer); hold != "" && mode.Has(hold) {
+		return []string{hold}
+	}
 	if mode.Select != dsl.MarketBoth {
 		return []string{mode.Select}
-	}
-	if hold := held.positiveMarket(id, mode.Prefer); hold != "" {
-		return []string{hold}
 	}
 	return []string{mode.Prefer, otherMarket(mode, mode.Prefer)}
 }

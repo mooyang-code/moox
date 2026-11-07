@@ -45,7 +45,7 @@ market:
 - 同一个币的现货和永续是两个独立的目标，不互相抵消；空头一律在永续。
 - 上期已持有正权重目标的币，本期沿用它所在的市场（避免永续偶尔缺数时来回倒仓），直到权重归零。
 - 一个市场的因子本期被跳过时，这个市场的币本期不可用：已持仓的保持不动，新开仓用另一个市场。
-- 可能输出现货的模式里，tranche 规则不能做空，且必须 `sizing.method: weight`；绑定两个任务的策略不支持 `factor_params`。
+- tranche 只能用在单市场模式（`spot/spot`、`swap/swap`）；纯现货的 tranche 不能做空且必须 `sizing.method: weight`；双市场模式（`both`、`spot/swap`）不支持 tranche。绑定两个任务的策略不支持 `factor_params`。
 - 行为变化：现货权重之和超过 1、总敞口超过 `leverage` 时，现在按比例缩小并在摘要注明，不再整期跳过。
 
 ### universe 与 portfolio
@@ -69,7 +69,7 @@ market:
 | `signal` | 固定池择时 | `pool`、`entry`、`exit`、`weight`，可选 `stop` |
 | `tranche` | 批次持仓：每根 K 线按本期选币新开一批，每批持有 h 期，多批叠加 | `tranche` 子策略模板、可选 `params` 参数表、`weight`，见第 4 节 |
 
-含 `tranche` 规则的策略只能全部是 `tranche` 规则，且不能写 `factor_params`，只能绑定合约 View。
+含 `tranche` 规则的策略只能全部是 `tranche` 规则，且不能写 `factor_params`；只能用在单个市场的策略（`spot/spot` 按权重持有且不做空，或 `swap/swap`），双市场模式启用被拒（S1 暂不支持双市场 tranche：市场不可用时无法冻结持仓）。
 
 ### rank 规则
 
@@ -230,4 +230,4 @@ stop:
 | 提示 `cap × 选中数量 < total` | 预算分不完 | 调大 `cap` 或 `select.top`，或调小 `total` |
 | 启用被拒，提示列不存在 | 规则引用的列不在因子任务结果里 | 按成员键推导列名；默认参数的成员省略参数段 |
 | 含参数表的 DSL 被拒（超 64 KiB） | 参数表很大 | 含参数表的策略上限是 1 MiB，仍超出就拆成多条规则或多个策略 |
-| tranche 策略启用被拒 | 混用了 `rank` 规则、`factor_params`，或在可能输出现货的模式里做空 / 按数量持有 | tranche 只能全部是 tranche 规则；可能输出现货的模式里只能 `sizing.method: weight` 且不做空 |
+| tranche 策略启用被拒 | 混用了 `rank` 规则、`factor_params`，用在双市场模式，或纯现货里做空 / 按数量持有 | tranche 只能全部是 tranche 规则、只用单市场模式；纯现货只能 `sizing.method: weight` 且不做空 |

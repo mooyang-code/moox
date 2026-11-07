@@ -149,8 +149,10 @@ rules:
 		{"现货按权重持有可以", tranche("weight", "0"), spot, ""},
 		{"现货按数量持有", tranche("quantity", "0"), spot, "只能用 sizing.method: weight"},
 		{"现货做空", tranche("weight", "0.5"), spot, "不能做空"},
-		{"混合市场按数量持有", tranche("quantity", "0"), both, "只能用 sizing.method: weight"},
-		{"混合市场做空", tranche("weight", "0.5"), both, "不能做空"},
+		{"两边选的混合市场", tranche("weight", "0"), both, "S1 暂不支持双市场 tranche"},
+		{"两边选现货优先", tranche("weight", "0"), Market{MarketBoth, MarketSpot}, "S1 暂不支持双市场 tranche"},
+		{"现货选币永续下单", tranche("weight", "0"), Market{MarketSpot, MarketSwap}, "S1 暂不支持双市场 tranche"},
+		{"纯永续按权重持有", tranche("weight", "0.5"), swap, ""},
 		{"纯永续不受限", tranche("quantity", "0.5"), swap, ""},
 	}
 	for _, tc := range cases {
