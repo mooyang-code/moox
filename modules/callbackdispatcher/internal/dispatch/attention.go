@@ -10,7 +10,10 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-var urlPattern = regexp.MustCompile(`"?https?://[^\s"]+"?:?`)
+// TransientFailureAlertAfter 是系统动作的记录连续暂时失败多久之后算作 action_failed 关注项。
+const TransientFailureAlertAfter = 15 * time.Minute
+
+var urlPattern =regexp.MustCompile(`"?https?://[^\s"]+"?:?`)
 
 // stableReason 去掉错误里的地址并截短：错误原文可能带签名参数，每次都不同，会让指标序列不断增长。
 func stableReason(reason string) string {
@@ -25,6 +28,7 @@ func stableReason(reason string) string {
 //   - execution_failed：通知类的记录失败，直到用户重新执行或确认；
 //   - action_failed：系统动作的记录失败，直到用户处理；已取消但取消后的善后（解除禁止买入）没做成的记录也算，直到再取消一次做成；
 //     还没结束的记录里有下架步骤失败（某个组合的平仓用完重试、到了下架时间仍没平完、只平了一部分）也算，直到记录结束；
+//     还没结束的记录连续暂时失败（调用 Trade 出错等）超过 TransientFailureAlertAfter 也算，直到有一次推进没有出错；
 //     下架后核对时留有零头只报一次（telemetry.Note），约 3 分钟；
 //   - delist_detected：由系统动作处理器记下（telemetry.NoteDelistDetected），约 3 分钟。
 type AttentionWorker struct {
@@ -82,6 +86,18 @@ func (a *AttentionWorker) Publish(ctx context.Context) error {
 	}
 	for _, execution := range stepFailures {
 		detail := execution.RuleName + "（" + execution.SubjectID + "）：下架处理有步骤失败或只完成一部分，请在执行记录里看各步结果"
+		if !seen[detail] {
+			seen[detail] = true
+			items[telemetry.AttentionActionFailed] = append(items[telemetry.AttentionActionFailed], detail)
+		}
+	}
+	// 系统动作调用 Trade 一直暂时失败时记录始终是待处理，不会置为失败，单独提醒。detail 用固定文案，不带持续时间和错误原文，免得标签每轮都变。
+	stuck, err := a.Store.ListLongTransientFailures(ctx, a.now().Add(-TransientFailureAlertAfter).UnixMilli())
+	if err != nil {
+		return err
+	}
+	for _, execution := range stuck {
+		detail := execution.RuleName + "（" + execution.SubjectID + "）：连续暂时失败超过 15 分钟，请在执行记录里看原因"
 		if !seen[detail] {
 			seen[detail] = true
 			items[telemetry.AttentionActionFailed] = append(items[telemetry.AttentionActionFailed], detail)

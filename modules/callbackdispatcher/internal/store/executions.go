@@ -399,6 +399,25 @@ func (s *Store) ListUnfinishedWithFailedSteps(ctx context.Context) ([]Execution,
 	return executions, nil
 }
 
+// listLongTransientFailures 查还没结束、从 c_first_failed_at 起一直暂时失败（Trade 不可达等，每次推进都带着问题说明）的系统动作记录。
+const listLongTransientFailures = `SELECT * FROM t_event_executions
+WHERE c_action_type = 'SYSTEM' AND c_status IN ('PENDING', 'RUNNING')
+AND c_failures > 0 AND c_first_failed_at > 0 AND c_first_failed_at <= ?
+ORDER BY c_created_at ASC`
+
+// ListLongTransientFailures 返回第一次暂时失败早于 failedBefore（Unix 毫秒）、之后一直没有成功推进过的未结束系统动作记录，用于计算告警关注项。
+func (s *Store) ListLongTransientFailures(ctx context.Context, failedBefore int64) ([]Execution, error) {
+	var rows []executionRow
+	if err := s.db.WithContext(ctx).Raw(listLongTransientFailures, failedBefore).Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	executions := make([]Execution, 0, len(rows))
+	for _, row := range rows {
+		executions = append(executions, executionFromRow(row))
+	}
+	return executions, nil
+}
+
 // PurgeBefore 删除 cutoff 之前创建且已结束的执行记录（连同尝试与下架步骤），以及 cutoff 之前的事件回执。
 // 善后还没做成的已取消记录不删：用户还要靠它再取消一次。
 func (s *Store) PurgeBefore(ctx context.Context, cutoff int64) error {

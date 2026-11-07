@@ -223,7 +223,7 @@ func TestForeignActionIDIsTreatedAsBusy(t *testing.T) {
 	h.addExecution("real", delistAt, "ALL")
 	h.addExecution("drill", delistAt, "PAPER_ONLY")
 	h.step("real", baseTime)
-	h.step("drill", baseTime)
+	require.Empty(t, h.step("drill", baseTime).Error, "别的操作号正在平是正常等待，不算这次推进的暂时失败")
 	realRow := h.steps("real")[flattenKey(RoundFlatten, "crypto", "la-paper")]
 	drillRow := h.steps("drill")[flattenKey(RoundFlatten, "crypto", "la-paper")]
 	require.NotEqual(t, realRow.OperatorActionID, drillRow.OperatorActionID, "不能记成别人的操作号")

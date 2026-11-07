@@ -280,7 +280,8 @@ type run struct {
 	steps     map[stepKey]store.DelistAction
 	// wake 是下一次该推进的时间，取各步骤要求的最早的一个。
 	wake time.Time
-	// problems 是这次推进遇到的暂时性问题（Trade 不可达、Trade 忙等），原样带给执行记录的失败说明。
+	// problems 是这次推进遇到的暂时性问题（Trade 不可达、读写名单或查询出错），原样带给执行记录的失败说明；
+	// 工作线程按它是否为空累计连续暂时失败次数。Trade 忙、别的操作号正在平属于正常等待，不放进来，只写在那一行上。
 	problems []string
 	// stopped 为真表示执行记录已经被取消：不再发起新的 Trade 调用，直接返回。
 	stopped bool
@@ -770,13 +771,14 @@ func (r *run) launch(ctx context.Context, row store.DelistAction) error {
 	return r.apply(ctx, row, result)
 }
 
-// poll 查平仓的结果。查询出错不计重试次数，30 秒后再查。
+// poll 查平仓的结果。查询出错不计这一行的重试次数，30 秒后再查；但算作这次推进的暂时失败。
 func (r *run) poll(ctx context.Context, row store.DelistAction) error {
 	callCtx, cancel := r.h.tradeCtx(ctx)
 	result, err := r.h.Trade.GetOperatorAction(callCtx, row.SpaceID, row.OperatorActionID)
 	cancel()
 	if err != nil {
 		row.Error = "查询平仓结果失败: " + err.Error()
+		r.problem("%s/%s 第 %d 轮：查询平仓结果失败，稍后重试: %v", row.SpaceID, row.LogicalAccountID, row.Round, err)
 		row.NextCheckAt = r.now.Add(pollInterval).UnixMilli()
 		r.wakeAt(r.now.Add(pollInterval))
 		return r.save(ctx, row)
