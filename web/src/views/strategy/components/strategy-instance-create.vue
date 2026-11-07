@@ -21,12 +21,18 @@
         <a-descriptions-item label="标的池">{{ preview.universe }}</a-descriptions-item>
         <a-descriptions-item label="bar 断言">{{ preview.bar }}</a-descriptions-item>
       </a-descriptions>
-      <a-form-item v-if="!requirement.declared" label="市场">
-        <a-radio-group v-model="form.single_market" type="button" @change="onTaskChange">
+      <a-form-item
+        v-if="!requirement.declared"
+        label="市场"
+        :validate-status="!activeMarkets.length && fieldErrors.factor_tasks ? 'error' : undefined"
+        :help="!activeMarkets.length ? fieldErrors.factor_tasks : undefined"
+      >
+        <a-radio-group v-model="form.single_market" type="button" @change="onMarketChange">
           <a-radio v-for="item in singleMarkets" :key="item" :value="item">{{ marketLabel(item) }}</a-radio>
         </a-radio-group>
         <template #extra
-          >策略没有写 market，只绑一个因子任务：这里选任务的数据所属的市场（必须与任务源数据集的市场一致）。</template
+          >策略没有写
+          market，只绑一个因子任务：先选任务的数据所属的市场（必须与任务源数据集的市场一致，创建前的预检会核对）。</template
         >
       </a-form-item>
       <p v-else class="meta-hint mode-hint">
@@ -54,16 +60,14 @@
             {{ task.name }}（{{ task.taskId }} · {{ task.freq || "无周期" }}）
           </a-option>
         </a-select>
-        <template v-if="market === activeMarkets[0]" #extra>
-          <span v-if="tasksError" class="meta-error"
-            >因子任务列表读取失败：{{ tasksError }}<a-link @click="loadTasksList">重试</a-link></span
-          >
-          <span v-else-if="!tasksLoading && !tasks.length"
-            >当前空间没有可用的因子任务：任务必须处于运行中，且还没有关联策略实例。请先到「因子」模块创建并启用任务。</span
-          >
-          <span v-else>一个因子任务只能被一个实例独占使用，关联创建后不能修改，也不能删除实例。</span>
-        </template>
       </a-form-item>
+      <p v-if="tasksError" class="meta-hint meta-error">
+        因子任务列表读取失败：{{ tasksError }}<a-link @click="loadTasksList">重试</a-link>
+      </p>
+      <p v-else-if="!tasksLoading && !tasks.length" class="meta-hint">
+        当前空间没有可用的因子任务：任务必须处于运行中，且还没有关联策略实例。请先到「因子」模块创建并启用任务。
+      </p>
+      <p v-else class="meta-hint">一个因子任务只能被一个实例独占使用，关联创建后不能修改，也不能删除实例。</p>
       <div v-for="item in selectedTasks" :key="item.task.taskId" class="task-columns">
         <div class="task-columns__head">
           <strong>{{ marketLabel(item.market) }}任务的列（DSL 里直接写这些列名）</strong>
@@ -172,7 +176,7 @@ const form = reactive({
   instance_id: "",
   strategy_id: "",
   // 策略没有写 market 时只绑一个任务，市场由用户选定。
-  single_market: "swap",
+  single_market: "",
   // 市场 → 因子任务。
   tasks: {} as Record<string, string>,
   logical_account_id: "",
@@ -196,14 +200,18 @@ const accountOptions = computed(() => logicalAccountOptions(accounts.value, mark
 // 策略的市场模式决定要绑定哪些市场的任务；没写 market 时只绑一个，市场由用户选。
 const singleMarkets = ["spot", "swap", "equity"];
 const requirement = computed(() => marketRequirement(selectedStrategy.value?.dsl_yaml ?? ""));
-const activeMarkets = computed(() => (requirement.value.declared ? requirement.value.markets : [form.single_market]));
+const activeMarkets = computed(() =>
+  requirement.value.declared ? requirement.value.markets : form.single_market ? [form.single_market] : []
+);
 const selectedTasks = computed(() =>
   activeMarkets.value.flatMap(market => {
     const task = tasks.value.find(item => item.taskId === form.tasks[market]);
     return task ? [{ market, task }] : [];
   })
 );
-const tasksSelected = computed(() => activeMarkets.value.every(market => Boolean(form.tasks[market])));
+const tasksSelected = computed(
+  () => activeMarkets.value.length > 0 && activeMarkets.value.every(market => Boolean(form.tasks[market]))
+);
 // 另一个市场已选的任务不再出现在这个市场的选项里：一个任务只能属于一个市场。
 function taskChoices(market: string) {
   const taken = new Set(activeMarkets.value.filter(item => item !== market).map(item => form.tasks[item]));
@@ -292,6 +300,10 @@ function onStrategyChange() {
   form.tasks = {};
   resetCheck();
 }
+function onMarketChange() {
+  form.tasks = {};
+  onTaskChange();
+}
 function onTaskChange() {
   fieldErrors.factor_tasks = "";
   resetCheck();
@@ -332,7 +344,7 @@ function resetForm() {
   saving.value = false;
   form.instance_id = "";
   form.strategy_id = props.presetStrategyId || "";
-  form.single_market = "swap";
+  form.single_market = "";
   form.tasks = {};
   form.logical_account_id = "";
   form.mode = "compute";
@@ -352,7 +364,14 @@ function resetForm() {
 async function submit() {
   error.value = "";
   fieldErrors.strategy_id = form.strategy_id ? "" : "请选择策略定义";
-  fieldErrors.factor_tasks = tasksSelected.value ? "" : `请为${activeMarkets.value.map(marketLabel).join("、")}各选一个因子任务`;
+  fieldErrors.factor_tasks = !activeMarkets.value.length
+    ? "先选择任务的市场"
+    : tasksSelected.value
+      ? ""
+      : `请为${activeMarkets.value.map(marketLabel).join("、")}各选一个因子任务`;
+  // 一个任务关联实例后永久占住：必须先通过绑定预检（服务端会核对市场与任务是否对应），再创建。
+  if (!fieldErrors.factor_tasks && !check_result.value?.resolved_json)
+    fieldErrors.factor_tasks = "请先点击“解析列与成员契约”，预检通过后再创建（预检会核对市场与任务是否对应）";
   fieldErrors.logical_account_id = form.mode === "trade" && !form.logical_account_id ? "请选择组合账户，或改为“仅计算”" : "";
   if (fieldErrors.strategy_id || fieldErrors.factor_tasks || fieldErrors.logical_account_id) return;
   const spaceId = props.spaceId;

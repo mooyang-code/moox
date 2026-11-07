@@ -26,6 +26,8 @@ type Resolver interface {
 	Resolve(ctx context.Context, spaceID string, taskIDs []string, strategy dsl.Strategy) (input.Resolved, *dsl.Program, error)
 	// ResolveInstance 启用实例时的解析：先把任务（市场 → 任务）与实例永久关联（幂等），要求任务已启用，再解析绑定。
 	ResolveInstance(ctx context.Context, instanceID, spaceID string, tasks map[string]string, strategy dsl.Strategy) (input.Resolved, *dsl.Program, error)
+	// TaskMarket 返回因子任务的市场（任务结果 View → 数据集 → 源数据集的市场类型）。
+	TaskMarket(ctx context.Context, spaceID, taskID string) (string, error)
 	// CheckCoverage 在启用时校验 View 的覆盖：A 股行键、min_age_bars 所需的历史。
 	CheckCoverage(ctx context.Context, spaceID string, resolved input.Resolved, now time.Time) error
 	LoadLatest(ctx context.Context, spaceID string, resolved input.Resolved, program *dsl.Program, now time.Time) (input.Loaded, error)

@@ -67,6 +67,15 @@ func (s *Service) CreateStrategyInstance(ctx context.Context, req *strategypb.Cr
 	if def, err := s.Store.GetDefinition(ctx, instance.StrategyID); err != nil || def.DeletedAt != nil {
 		return &strategypb.CreateStrategyInstanceRsp{RetInfo: invalid(fmt.Errorf("策略定义 %s 不存在", instance.StrategyID))}, nil
 	}
+	// 创建时就按任务源数据集核对“市场 → 任务”：任务一旦关联实例就永久占住，填错了实例启用不了又删不掉。
+	if s.Resolver == nil {
+		return &strategypb.CreateStrategyInstanceRsp{RetInfo: invalid(errDependenciesUnavailable)}, nil
+	}
+	if err := input.CheckTasksMarkets(ctx, factorTasks, func(ctx context.Context, taskID string) (string, error) {
+		return s.Resolver.TaskMarket(ctx, scoped, taskID)
+	}); err != nil {
+		return &strategypb.CreateStrategyInstanceRsp{RetInfo: invalid(err)}, nil
+	}
 	if v.GetEnabled() && instance.LogicalAccountID != nil && s.Owner == nil {
 		return &strategypb.CreateStrategyInstanceRsp{RetInfo: invalid(errors.New("未接线 Trade，不能启用绑定账户的实例"))}, nil
 	}

@@ -99,7 +99,22 @@ describe("strategy instance creation behavior", () => {
     return { wrapper, flushPromises };
   }
 
+  // 创建前要先通过绑定预检（服务端核对市场与任务是否对应）。
+  async function precheck(wrapper: { findAll: (selector: string) => any[] }, flushPromises: () => Promise<void>) {
+    await wrapper
+      .findAll("button")
+      .find(item => item.text() === "解析列与成员契约")!
+      .trigger("click");
+    await flushPromises();
+  }
+
   beforeEach(() => {
+    api.validateStrategy.mockReset().mockResolvedValue({
+      diagnostics: [],
+      resolved_json: '{"market":{"select":"swap","prefer":"swap"}}',
+      trial: null,
+      trial_items: []
+    });
     api.createInstance.mockReset().mockResolvedValue({ instance_id: "i1" });
     api.listFactorTasks.mockReset().mockResolvedValue({ factor_tasks: [taskInfo()], page_result: { has_more: false } });
     api.listLogicalAccounts.mockReset().mockResolvedValue({ logical_accounts: [], page_result: { has_more: false } });
@@ -115,6 +130,7 @@ describe("strategy instance creation behavior", () => {
     const { wrapper, flushPromises } = await open({ presetStrategyId: "s1" });
     const selects = wrapper.findAll("select");
     await selects[1].setValue("ftask_a");
+    await precheck(wrapper, flushPromises);
     await wrapper
       .findAll("button")
       .find(item => item.text() === "创建停用实例")!
@@ -151,6 +167,7 @@ describe("strategy instance creation behavior", () => {
       .find(item => item.text() === "重试")!
       .trigger("click");
     await flushPromises();
+    await precheck(wrapper, flushPromises);
     await wrapper.findAll("select")[2].setValue("acc1");
     await wrapper
       .findAll("button")
@@ -218,6 +235,7 @@ describe("strategy instance creation behavior", () => {
     expect(api.createInstance).not.toHaveBeenCalled();
     expect(wrapper.text()).toContain("请为现货、永续各选一个因子任务");
     await wrapper.findAll("select")[2].setValue("ftask_swap");
+    await precheck(wrapper, flushPromises);
     await create().trigger("click");
     await flushPromises();
     expect(api.createInstance).toHaveBeenCalledWith({
@@ -250,7 +268,7 @@ describe("strategy instance creation behavior", () => {
     api.listFactorTasks
       .mockRejectedValueOnce(new Error("因子服务不可用"))
       .mockResolvedValueOnce({ factor_tasks: [taskInfo()], page_result: { has_more: false } });
-    const { wrapper, flushPromises } = await open();
+    const { wrapper, flushPromises } = await open({ presetStrategyId: "s1" });
     expect(wrapper.text()).toContain("因子任务列表读取失败：因子服务不可用");
     await wrapper.find(".link").trigger("click");
     await flushPromises();
@@ -305,6 +323,7 @@ describe("strategy instance creation behavior", () => {
   it("emits created without asking the parent to close, so the parent's navigation wins", async () => {
     const { wrapper, flushPromises } = await open({ presetStrategyId: "s1" });
     await wrapper.findAll("select")[1].setValue("ftask_a");
+    await precheck(wrapper, flushPromises);
     await wrapper
       .findAll("button")
       .find(item => item.text() === "创建停用实例")!
@@ -312,5 +331,33 @@ describe("strategy instance creation behavior", () => {
     await flushPromises();
     expect(wrapper.emitted("created")).toEqual([["i1"]]);
     expect(wrapper.emitted("update:visible")).toBeUndefined();
+  });
+
+  it("refuses to create before the binding precheck passes and without choosing a market for an undeclared strategy", async () => {
+    const undeclared = [{ ...strategies[0], dsl_yaml: "name: demo\n" }];
+    const { wrapper, flushPromises } = await open({ presetStrategyId: "s1", strategies: undeclared });
+    const create = () => wrapper.findAll("button").find(item => item.text() === "创建停用实例")!;
+    // 没写 market：没有默认市场，先选市场。
+    expect(wrapper.findAll("select")).toHaveLength(1);
+    await create().trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("先选择任务的市场");
+    wrapper.findComponent({ name: "RadioGroupStub" }).vm.$emit("update:modelValue", "swap");
+    await flushPromises();
+    await wrapper.findAll("select")[1].setValue("ftask_a");
+    // 选了任务但没有预检：不能创建。
+    await create().trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("请先点击“解析列与成员契约”");
+    expect(api.createInstance).not.toHaveBeenCalled();
+    await precheck(wrapper, flushPromises);
+    await create().trigger("click");
+    await flushPromises();
+    expect(api.createInstance).toHaveBeenCalledWith({
+      instance_id: undefined,
+      strategy_id: "s1",
+      factor_tasks: { swap: "ftask_a" },
+      logical_account_id: ""
+    });
   });
 });

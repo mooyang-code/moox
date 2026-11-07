@@ -171,3 +171,27 @@ func TestLoadBarSelectSpotKeepsSwapOnlyForAvailability(t *testing.T) {
 		t.Fatalf("基础集合只由现货构成：%v", loaded.Frame.Universe)
 	}
 }
+
+// 启用时先核对“市场 → 任务”再关联：登记错了市场的任务不能被关联占住。
+func TestResolveInstanceChecksMarketsBeforeBinding(t *testing.T) {
+	client := newDualClient()
+	tasks := &tasksFake{}
+	service := Service{Client: client, Sets: tasks}
+	// ftask_1h 是现货任务，却登记成永续。
+	_, _, err := service.ResolveInstance(context.Background(), "i1", "space", map[string]string{"swap": "ftask_1h"}, parseStrategy(t, strings.Replace(dualDSL, "market: {select: both, prefer: swap}\n", "market: {select: swap}\n", 1)))
+	if err == nil || !strings.Contains(err.Error(), "登记为 swap 市场，但它的源数据集是 spot 市场") {
+		t.Fatalf("登记错市场应被拒绝：%v", err)
+	}
+	if len(tasks.binds) != 0 {
+		t.Fatalf("核对失败时不能关联任务：%v", tasks.binds)
+	}
+	if _, _, err := service.ResolveInstance(context.Background(), "i1", "space", map[string]string{"spot": "ftask_1h", "swap": "ftask_swap1h"}, parseStrategy(t, dualDSL)); err != nil {
+		t.Fatalf("市场对得上应通过：%v", err)
+	}
+	if len(tasks.binds) != 2 {
+		t.Fatalf("两个任务都应关联：%v", tasks.binds)
+	}
+	if market, err := service.TaskMarket(context.Background(), "space", "ftask_swap1h"); err != nil || market != "swap" {
+		t.Fatalf("任务市场不符：%s %v", market, err)
+	}
+}

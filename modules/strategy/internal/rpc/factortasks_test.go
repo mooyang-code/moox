@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -156,4 +157,29 @@ func TestValidateStrategyReadsEveryBoundTask(t *testing.T) {
 	if got := strings.Join(h.resolver.resolvedTasks, ","); got != "ftask_a,ftask_b" {
 		t.Fatalf("应按现货、永续的顺序解析全部任务：%s", got)
 	}
+}
+
+// 创建实例时就核对“市场 → 任务”：登记错市场的任务不会被占住，改对之后可以再创建。
+func TestCreateInstanceChecksTaskMarkets(t *testing.T) {
+	h := newHarness(t)
+	h.createStrategy("s1", demoDSL)
+	create := func(id string, tasks map[string]string) *strategypb.CreateStrategyInstanceRsp {
+		rsp, err := h.service.CreateStrategyInstance(h.ctx, &strategypb.CreateStrategyInstanceReq{Instance: &strategypb.StrategyInstance{InstanceId: id, StrategyId: "s1", FactorTasks: tasks}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rsp
+	}
+	h.resolver.taskMarkets = map[string]string{"ftask_real_swap": "swap"}
+	wrong := create("i1", map[string]string{"spot": "ftask_real_swap"})
+	requireFail(t, int32(wrong.GetRetInfo().GetCode()), wrong.GetRetInfo().GetMsg(), "登记为 spot 市场，但它的源数据集是 swap 市场")
+	if _, err := h.service.Store.GetInstance(h.ctx, "i1"); err == nil {
+		t.Fatal("市场登记错误时不应创建实例")
+	}
+	right := create("i1", map[string]string{"swap": "ftask_real_swap"})
+	requireOK(t, int32(right.GetRetInfo().GetCode()), right.GetRetInfo().GetMsg())
+	h.resolver.taskMarketErr = errors.New("View 不存在")
+	h.resolver.taskMarkets = nil
+	unknown := create("i2", map[string]string{"spot": "ftask_new"})
+	requireFail(t, int32(unknown.GetRetInfo().GetCode()), unknown.GetRetInfo().GetMsg(), "无法确定因子任务 ftask_new 的市场")
 }

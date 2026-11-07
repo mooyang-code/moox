@@ -31,7 +31,9 @@ rules:
 
 // fakeResolver 按因子任务返回固定的解析结果；swap 结尾的任务视为合约。view 是回放区间校验使用的覆盖范围。
 type fakeResolver struct {
-	calls int
+	calls         int
+	taskMarkets   map[string]string
+	taskMarketErr error
 	// resolvedTasks 记下最近一次 Resolve 收到的任务（按市场先后）。
 	resolvedTasks []string
 	bound         []string
@@ -45,6 +47,20 @@ type fakeResolver struct {
 	onResolve func()
 	// calendar 非空时解析结果使用该日历的日线（例如 cn_stock）。
 	calendar string
+}
+
+// TaskMarket：后缀 swap 的任务是永续，其余现货；taskMarkets 里登记的优先。
+func (f *fakeResolver) TaskMarket(_ context.Context, _, taskID string) (string, error) {
+	if market, ok := f.taskMarkets[taskID]; ok {
+		return market, nil
+	}
+	if f.taskMarketErr != nil {
+		return "", f.taskMarketErr
+	}
+	if strings.HasSuffix(taskID, "swap") {
+		return "swap", nil
+	}
+	return "spot", nil
 }
 
 func (f *fakeResolver) CheckCoverage(context.Context, string, input.Resolved, time.Time) error {

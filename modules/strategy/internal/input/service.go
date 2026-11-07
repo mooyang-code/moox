@@ -32,6 +32,10 @@ func (s Service) ResolveInstance(ctx context.Context, instanceID, spaceID string
 		return Resolved{}, nil, err
 	}
 	taskIDs := TaskIDs(tasks)
+	// 关联是永久的：先核对市场，填错的任务不能被关联占住。
+	if err := CheckTasksMarkets(ctx, tasks, func(ctx context.Context, taskID string) (string, error) { return s.TaskMarket(ctx, spaceID, taskID) }); err != nil {
+		return Resolved{}, nil, err
+	}
 	for _, taskID := range taskIDs {
 		bound, err := s.Sets.BindFactorTask(ctx, taskID, instanceID)
 		if err != nil {
@@ -62,6 +66,39 @@ func (s Service) ResolveInstance(ctx context.Context, instanceID, spaceID string
 		case <-time.After(s.ReadyStep):
 		}
 	}
+}
+
+// TaskMarket 返回因子任务的市场：任务结果 View → 数据集 → 源数据集的市场类型。创建实例和启用前用它核对“市场 → 任务”的对应。
+func (s Service) TaskMarket(ctx context.Context, spaceID, taskID string) (string, error) {
+	if s.Client == nil {
+		return "", errors.New("Storage 与 Factor 依赖未配置，不能确定因子任务的市场")
+	}
+	item, err := resolveView(ctx, s.Client, spaceID, strings.TrimSpace(taskID), dsl.Strategy{})
+	if err != nil {
+		return "", err
+	}
+	return item.market, nil
+}
+
+// CheckTasksMarkets 核对实例登记的“市场 → 任务”：每个任务的源数据集市场必须就是登记的市场。填错会让任务被永久占住、实例又启用不了，
+// 所以创建实例时就要核对，启用时也要在关联任务之前再核对一次。
+func CheckTasksMarkets(ctx context.Context, tasks map[string]string, marketOf func(ctx context.Context, taskID string) (string, error)) error {
+	for _, taskID := range TaskIDs(tasks) {
+		market := ""
+		for registered, id := range tasks {
+			if id == taskID {
+				market = registered
+			}
+		}
+		actual, err := marketOf(ctx, taskID)
+		if err != nil {
+			return fmt.Errorf("无法确定因子任务 %s 的市场（它的结果 View 或数据集还没有就绪？）：%w", taskID, err)
+		}
+		if actual != market {
+			return fmt.Errorf("因子任务 %s 登记为 %s 市场，但它的源数据集是 %s 市场", taskID, market, actual)
+		}
+	}
+	return nil
 }
 
 // TaskIDs 返回实例登记的因子任务（按市场先后：现货、永续、股票）。
