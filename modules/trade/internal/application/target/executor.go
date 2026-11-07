@@ -11,6 +11,7 @@ import (
 	"time"
 
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/fundsettings"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
@@ -602,6 +603,14 @@ func (e *Executor) loadMembers(
 	if len(records) == 0 {
 		return nil, fmt.Errorf("%w: logical account has no enabled members", ErrInvalidTarget)
 	}
+	logical, err := e.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
+	if err != nil {
+		return nil, err
+	}
+	settings, err := fundsettings.Parse(logical.FundSettingsJSON)
+	if err != nil {
+		return nil, err
+	}
 	members := make([]memberState, 0, len(records))
 	for _, record := range records {
 		account, err := e.Store.GetTradingAccountByID(ctx, record.TradingAccountID)
@@ -682,6 +691,10 @@ func (e *Executor) loadMembers(
 					continue
 				}
 				instrumentID := symbols[exchange.NewSymbolKey(position.MarketType, position.ExchangeSymbol)]
+				// 套利底仓的对冲腿不参与策略持仓：不在目标里也不能按 0 平掉。
+				if instrument, known := instruments[instrumentID]; known && settings.IsArbitrageBase(instrument.BaseAsset) {
+					continue
+				}
 				if instrumentID == "" {
 					blocked = append(blocked, store.BlockedTarget{
 						InstrumentID: position.ExchangeSymbol,

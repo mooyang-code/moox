@@ -317,3 +317,18 @@ func TestNewTargetCancelsPreviousTargetRestingOrder(t *testing.T) {
 	require.Equal(t, "stop", result.Action)
 	require.Equal(t, []string{"old-resting"}, f.orders.canceled)
 }
+
+// 套利底仓的对冲腿（永续）不参与策略持仓：不在目标里也不会被当作“按 0 平掉”。
+func TestArbitrageBaseSwapLegIsNotFlattenedToZero(t *testing.T) {
+	f := newMixedExecutorFixture(t)
+	require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_logical_accounts SET c_fund_settings_json = '{"arbitrage_base_assets":["BTC"]}'`).Error)
+	f.setSwapPosition("BTCUSDT", "-5")
+	f.target(t, []store.InstrumentTarget{{InstrumentID: "ETH-USDT-SPOT", Quantity: "10"}})
+	f.now = time.Now().UTC()
+
+	result, err := f.executor().Converge(context.Background(), "space-1", "logical-1")
+
+	require.NoError(t, err)
+	require.Equal(t, StatusConverged, result.Status)
+	require.Empty(t, f.orders.specs, "对冲腿不动")
+}
