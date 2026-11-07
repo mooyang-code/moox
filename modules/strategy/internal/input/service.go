@@ -125,8 +125,9 @@ func (s Service) TaskMarket(ctx context.Context, spaceID, taskID string) (string
 	return item.market, nil
 }
 
-// CheckRegisteredMarkets 核对实例登记的“市场 → 任务”：每个任务的源数据集市场（由 marketOf 查询）必须就是登记的市场。填错会让任务被永久占住、
-// 实例又启用不了，所以创建实例时就要核对，启用时也要在关联任务之前再核对一次。
+// CheckRegisteredMarkets 核对实例登记的“市场 → 任务”：每个任务的源数据集市场（由 marketOf 查询）必须就是登记的市场；
+// 统一数据集（market_type = multi）上的任务登记为 multi。填错会让任务被永久占住、实例又启用不了，所以创建实例时就要核对，
+// 启用时也要在关联任务之前再核对一次。
 func CheckRegisteredMarkets(ctx context.Context, tasks map[string]string, marketOf func(ctx context.Context, taskID string) (string, error)) error {
 	for _, taskID := range TaskIDs(tasks) {
 		market := ""
@@ -139,6 +140,9 @@ func CheckRegisteredMarkets(ctx context.Context, tasks map[string]string, market
 		if err != nil {
 			return fmt.Errorf("无法确定因子任务 %s 的市场（它的结果 View 或数据集还没有就绪？）：%w", taskID, err)
 		}
+		if actual == MarketMulti && market != MarketMulti {
+			return fmt.Errorf("因子任务 %s 的源数据集是统一数据集（同时放现货与永续），要登记为 multi，不能登记为 %s", taskID, market)
+		}
 		if actual != market {
 			return fmt.Errorf("因子任务 %s 登记为 %s 市场，但它的源数据集是 %s 市场", taskID, market, actual)
 		}
@@ -146,10 +150,10 @@ func CheckRegisteredMarkets(ctx context.Context, tasks map[string]string, market
 	return nil
 }
 
-// TaskIDs 返回实例登记的因子任务（按市场先后：现货、永续、股票）。
+// TaskIDs 返回实例登记的因子任务（按现货、永续、股票、统一数据集的先后）。
 func TaskIDs(tasks map[string]string) []string {
 	ids := make([]string, 0, len(tasks))
-	for _, market := range []string{dsl.MarketSpot, dsl.MarketSwap, dsl.MarketEquity} {
+	for _, market := range []string{dsl.MarketSpot, dsl.MarketSwap, dsl.MarketEquity, MarketMulti} {
 		if id, ok := tasks[market]; ok {
 			ids = append(ids, id)
 		}
@@ -157,7 +161,7 @@ func TaskIDs(tasks map[string]string) []string {
 	return ids
 }
 
-// CheckResolvedMarkets 核对解析结果里的市场与实例登记的一致（解析之后的最后一道核对，不查 Storage）。
+// CheckResolvedMarkets 核对解析结果里的任务键与实例登记的一致（解析之后的最后一道核对，不查 Storage）。
 func CheckResolvedMarkets(resolved Resolved, tasks map[string]string) error {
 	if len(resolved.Tasks) != len(tasks) {
 		return fmt.Errorf("登记了 %d 个因子任务，按策略的市场模式解析出 %d 个", len(tasks), len(resolved.Tasks))
@@ -193,14 +197,14 @@ func (s Service) Resolve(ctx context.Context, spaceID string, taskIDs []string, 
 }
 
 // ReplayWindow 逐个读取绑定 View 的覆盖范围，校验回放起点并截断终点：起点要在每个 View 的可用范围内，终点取各 View 中最早的。
-// 返回截断后的终点与各市场校验所用的活动索引代次（市场 → 代次）。
+// 返回截断后的终点与各任务键校验所用的活动索引代次（任务键 → 代次）。
 func (s Service) ReplayWindow(ctx context.Context, spaceID string, resolved Resolved, program *dsl.Program, start, end, now time.Time) (time.Time, map[string]string, error) {
 	if s.Client == nil {
 		return time.Time{}, nil, errors.New("Storage 与 Factor 依赖未配置，不能回放")
 	}
 	generations := make(map[string]string, len(resolved.Tasks))
-	for _, market := range resolved.Markets() {
-		view, err := s.Client.GetView(ctx, spaceID, resolved.Tasks[market].ViewID)
+	for _, key := range resolved.TaskKeys() {
+		view, err := s.Client.GetView(ctx, spaceID, resolved.Tasks[key].ViewID)
 		if err != nil {
 			return time.Time{}, nil, err
 		}
@@ -209,11 +213,11 @@ func (s Service) ReplayWindow(ctx context.Context, spaceID string, resolved Reso
 		}
 		if end, err = ReplayWindow(resolved, program, view, start, end, now); err != nil {
 			if len(resolved.Tasks) > 1 {
-				err = fmt.Errorf("%s 市场的 View %s：%w", market, view.ViewID, err)
+				err = fmt.Errorf("%s 市场的 View %s：%w", key, view.ViewID, err)
 			}
 			return time.Time{}, nil, err
 		}
-		generations[market] = view.Generation
+		generations[key] = view.Generation
 	}
 	return end, generations, nil
 }

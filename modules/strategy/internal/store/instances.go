@@ -26,7 +26,7 @@ type Instance struct {
 	InstanceID string
 	StrategyID string
 	SpaceID    string
-	// FactorTasks 是市场（spot、swap、equity）→ 因子任务 ID。
+	// FactorTasks 是市场（spot、swap、equity）→ 因子任务 ID；统一数据集上的任务登记为 multi。
 	FactorTasks      map[string]string
 	LogicalAccountID *string
 	Enabled          bool
@@ -69,8 +69,8 @@ func validateInstanceIdentity(instance Instance) error {
 		return errors.New("实例需要绑定一个或两个因子任务")
 	}
 	for market, taskID := range instance.FactorTasks {
-		if market != "spot" && market != "swap" && market != "equity" {
-			return fmt.Errorf("factor_tasks 的市场 %q 不受支持，只能是 spot、swap 或 equity", market)
+		if market != "spot" && market != "swap" && market != "equity" && market != "multi" {
+			return fmt.Errorf("factor_tasks 的市场 %q 不受支持，只能是 spot、swap、equity 或 multi", market)
 		}
 		if strings.TrimSpace(taskID) == "" {
 			return fmt.Errorf("factor_tasks 的 %s 任务不能为空", market)

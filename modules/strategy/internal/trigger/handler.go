@@ -268,7 +268,7 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 		}
 	}
 	calendar, bar := rt.resolved.Calendar, rt.resolved.Bar
-	market, bound := rt.resolved.MarketOfView(payload.GetViewId())
+	taskKey, bound := rt.resolved.TaskKeyOfView(payload.GetViewId())
 	if !bound {
 		if h.firstDrop(message.GetEventId(), instance.InstanceID) {
 			h.logf("实例 %s 的绑定里没有 View %s，本期丢弃", instance.InstanceID, payload.GetViewId())
@@ -329,7 +329,7 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 	// 补记与补处理只看已处理到的那一期（策略池再加上预热终点）之后的期（补处理完的期已有结果，不会再被查到）。
 	p.after = processedThrough(rt, latest, hasLatest)
 	// 汇合：绑定两个因子任务的实例等两个 View 的事件都到齐再求值（见 gather）。
-	events, complete, err := h.gather(ctx, p, payload, market, periodTime)
+	events, complete, err := h.gather(ctx, p, payload, taskKey, periodTime)
 	if err != nil {
 		return err
 	}

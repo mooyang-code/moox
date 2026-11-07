@@ -71,6 +71,9 @@ func resolveViews(ctx context.Context, client Client, spaceID string, taskIDs []
 		seen[item.market] = taskID
 		views = append(views, item)
 	}
+	if _, unified := seen[MarketMulti]; unified && len(views) > 1 {
+		return nil, fmt.Errorf("因子任务 %s 在统一数据集上，同时覆盖现货与永续，不能再绑定其他任务", seen[MarketMulti])
+	}
 	sort.Slice(views, func(i, j int) bool { return marketOrder(views[i].market) < marketOrder(views[j].market) })
 	return views, nil
 }
@@ -91,18 +94,26 @@ func bindViews(ctx context.Context, client Client, spaceID string, views []resol
 		}
 	}
 	resolved.Bar, resolved.Calendar = strings.ToLower(first.view.Frequency), calendarOf(first)
-	// 市场模式：DSL 写出的，或只绑一个任务时取任务的市场；股票不允许写 market。
+	// 市场模式：DSL 写出的，或只绑一个任务时取任务的市场；股票不允许写 market；统一数据集同时覆盖现货与永续，没有可当默认值的市场，必须写。
+	unified := first.market == MarketMulti
 	switch {
 	case first.market == dsl.MarketEquity && strategy.MarketDeclared:
 		return Resolved{}, nil, errors.New("股票策略不允许写 market")
 	case strategy.MarketDeclared:
 		resolved.Market = strategy.Market
+	case unified:
+		return Resolved{}, nil, errors.New("因子任务在统一数据集上，同时覆盖现货与永续，DSL 必须写 market（select、prefer）")
 	case len(views) == 1:
 		resolved.Market = dsl.SingleMarket(first.market)
 	default:
 		return Resolved{}, nil, errors.New("绑定了现货、永续两个因子任务，DSL 必须写 market（select、prefer）")
 	}
-	if got := resolved.Markets(); len(got) != len(resolved.Market.Markets()) || len(got) != len(views) {
+	if unified {
+		// 参数按标的取值，现货、永续两条序列会共用同一组参数，是否合理以后再定。
+		if len(strategy.FactorParams) > 0 {
+			return Resolved{}, nil, errors.New("统一数据集上的任务暂不支持 factor_params：现货、永续两条序列会共用同一组参数")
+		}
+	} else if got := resolved.Markets(); len(got) != len(resolved.Market.Markets()) || len(got) != len(views) {
 		return Resolved{}, nil, fmt.Errorf("市场模式 %s 需要绑定 %s 的因子任务，实际绑定了 %s", resolved.Market, strings.Join(resolved.Market.Markets(), "、"), strings.Join(boundMarkets(views), "、"))
 	}
 	strategy.Market = resolved.Market
@@ -421,8 +432,8 @@ func CheckCoverage(ctx context.Context, client Client, spaceID string, resolved 
 	if resolved.MinAgeBars <= 0 && !stockDaily(resolved.Calendar, resolved.Bar) {
 		return nil
 	}
-	for _, market := range resolved.Markets() {
-		if err := checkViewCoverage(ctx, client, spaceID, resolved, resolved.Tasks[market].ViewID, now); err != nil {
+	for _, key := range resolved.TaskKeys() {
+		if err := checkViewCoverage(ctx, client, spaceID, resolved, resolved.Tasks[key].ViewID, now); err != nil {
 			return err
 		}
 	}
@@ -512,9 +523,9 @@ func sourceMarketType(ctx context.Context, client Client, spaceID string, source
 	return marketType, nil
 }
 
-// knownMarketType 报告策略支持的市场类型：现货 spot、永续合约 swap、A 股 equity。
+// knownMarketType 报告策略支持的数据集市场类型：现货 spot、永续合约 swap、A 股 equity，以及同时放现货与永续的统一数据集 multi。
 func knownMarketType(value string) bool {
-	return value == "spot" || value == "swap" || value == "equity"
+	return value == "spot" || value == "swap" || value == "equity" || value == MarketMulti
 }
 
 // StockTradingDaysPerYear 是 A 股一年的交易日数（与回放年化口径一致），用于把自然时长折算为交易日根数。
@@ -624,7 +635,11 @@ func ParseResolved(raw []byte) (Resolved, error) {
 	if resolved.Market.IsZero() || len(resolved.Tasks) == 0 || resolved.Bar == "" || resolved.Calendar == "" {
 		return Resolved{}, errors.New("resolved_json 缺少 market、tasks、bar 或 calendar")
 	}
-	if got := resolved.Markets(); len(got) != len(resolved.Tasks) || len(got) != len(resolved.Market.Markets()) {
+	if resolved.Unified() {
+		if len(resolved.Tasks) != 1 {
+			return Resolved{}, errors.New("resolved_json 的统一数据集任务不能与其他任务并存")
+		}
+	} else if got := resolved.Markets(); len(got) != len(resolved.Tasks) || len(got) != len(resolved.Market.Markets()) {
 		return Resolved{}, errors.New("resolved_json 的 tasks 与 market 不一致")
 	}
 	for market, task := range resolved.Tasks {

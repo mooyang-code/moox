@@ -99,10 +99,10 @@ func (p *period) eventUniverses() map[string][]string {
 
 // gather 汇合本期各 View 的就绪事件，返回各市场的事件与是否到齐（设计 3.2.1 第 2～4 步）。绑定两个任务的实例先把到达的
 // 这条事件幂等地记下，再检查本期的两个 View 是否都到了；之后把更早还不会再等到齐的期补记为 skipped。
-func (h *Handler) gather(ctx context.Context, p *period, payload *storagepb.ViewDataReady, market string, periodTime time.Time) (map[string]*storagepb.ViewDataReady, bool, error) {
+func (h *Handler) gather(ctx context.Context, p *period, payload *storagepb.ViewDataReady, taskKey string, periodTime time.Time) (map[string]*storagepb.ViewDataReady, bool, error) {
 	resolved := p.runtime.resolved
 	if len(resolved.Tasks) == 1 {
-		return map[string]*storagepb.ViewDataReady{market: payload}, true, nil
+		return map[string]*storagepb.ViewDataReady{taskKey: payload}, true, nil
 	}
 	if err := h.putArrival(ctx, p.instance, p.runtime.sessionID, p.boundary.BarEnd, p.eventID, payload); err != nil {
 		return nil, false, err
@@ -113,7 +113,7 @@ func (h *Handler) gather(ctx context.Context, p *period, payload *storagepb.View
 	}
 	events := make(map[string]*storagepb.ViewDataReady, len(records))
 	for _, record := range records {
-		recordMarket, ok := resolved.MarketOfView(record.ViewID)
+		recordKey, ok := resolved.TaskKeyOfView(record.ViewID)
 		if !ok {
 			continue
 		}
@@ -122,7 +122,7 @@ func (h *Handler) gather(ctx context.Context, p *period, payload *storagepb.View
 			h.logf("实例 %s 的到达记录 %s 无法解析：%v", p.instance.InstanceID, record.ViewID, err)
 			return nil, false, fmt.Errorf("解析 View %s 的到达记录：%w", record.ViewID, err)
 		}
-		events[recordMarket] = event
+		events[recordKey] = event
 		p.input.Views[record.ViewID] = store.ViewInput{EventID: record.EventID}
 	}
 	complete := len(events) == len(resolved.Tasks)

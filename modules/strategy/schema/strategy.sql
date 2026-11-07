@@ -38,13 +38,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_t_strategy_instances_account
 ON t_strategy_instances (c_space_id, c_logical_account_id)
 WHERE c_enabled = 1 AND c_logical_account_id IS NOT NULL;
 
--- 实例绑定的因子任务：每个市场（spot、swap、equity）一个，一个因子任务只能被一个实例独占
+-- 实例绑定的因子任务：每个市场（spot、swap、equity）一个，统一数据集上的任务登记为 multi（同时覆盖现货与永续）；一个因子任务只能被一个实例独占
 CREATE TABLE IF NOT EXISTS t_strategy_instance_tasks (
     c_instance_id TEXT NOT NULL,
     c_market TEXT NOT NULL,
     c_factor_task_id TEXT NOT NULL,
     PRIMARY KEY (c_instance_id, c_market),
-    CHECK (c_market IN ('spot', 'swap', 'equity')),
+    CHECK (c_market IN ('spot', 'swap', 'equity', 'multi')),
     UNIQUE (c_factor_task_id),
     FOREIGN KEY (c_instance_id) REFERENCES t_strategy_instances (c_instance_id)
 );
