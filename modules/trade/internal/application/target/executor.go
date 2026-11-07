@@ -145,6 +145,9 @@ type laneAction struct {
 	instrument store.InstrumentRecord
 	delta      shared.Decimal
 	reducing   bool
+	// resting 表示这一片改成挂单（限价 + GTC，挂买一、卖一价）；hasResting 表示这个标的已经有挂单，差额里扣过它的剩余量。
+	resting    bool
+	hasResting bool
 }
 
 func (e *Executor) Converge(
@@ -362,9 +365,9 @@ func (e *Executor) Converge(
 	env := e.newLaneEnv(ctx, spaceID, logicalAccountID, orderSettings, members, desired)
 	// 规则：有在途子单（待提交、提交中、结果未知、挂单中）时本轮只处理这些单，不发新批。
 	inFlight := false
-	var restingLanes map[string]struct{}
-	// restingLanes 是本目标有限价 GTC 挂单在簿上的标的：这些标的视为“进行中”，从本轮动作里剔除，
-	// 不阻塞其他标的；挂单剩余量从差额里扣除留给挂单任务。
+	// resting 是本目标簿上有限价 GTC 挂单的标的：挂单不阻塞其他标的，剩余量从这个标的的差额里扣除。
+	resting := make(map[string]*restingLane)
+	var expiredResting []store.OrderRecord
 	var unknown []string
 	for _, current := range orders {
 		if current.OwnerType != string(orderdomain.OwnerTarget) ||
@@ -386,10 +389,15 @@ func (e *Executor) Converge(
 			inFlight = true
 		default:
 			if restingOrder(current) {
-				if restingLanes == nil {
-					restingLanes = make(map[string]struct{})
+				lane := resting[current.InstrumentID]
+				if lane == nil {
+					lane = &restingLane{signedRemaining: shared.Zero()}
+					resting[current.InstrumentID] = lane
 				}
-				restingLanes[current.InstrumentID] = struct{}{}
+				lane.add(current)
+				if expires := restingExpiresAt(current, orderSettings); !expires.IsZero() && !e.now().Before(expires) {
+					expiredResting = append(expiredResting, current)
+				}
 			} else {
 				inFlight = true
 			}
@@ -400,6 +408,13 @@ func (e *Executor) Converge(
 		if _, err := e.Orders.ResolveUnknownBatch(ctx, spaceID, unknown); err != nil {
 			return Result{}, err
 		}
+	}
+	// 超过挂单寿命的挂单撤掉，等撤单结束后剩余量重新计入差额。
+	for _, current := range expiredResting {
+		if err := e.stopOrder(ctx, target, current); err != nil {
+			return Result{}, err
+		}
+		inFlight = true
 	}
 	if inFlight {
 		if err := e.updateTarget(ctx, &target, StatusConverging); err != nil {
@@ -429,16 +444,28 @@ func (e *Executor) Converge(
 			actions = append(actions, action)
 		}
 	}
-	if len(restingLanes) > 0 {
-		kept := actions[:0]
-		for _, action := range actions {
-			if _, resting := restingLanes[action.instrument.InstrumentID]; !resting {
-				kept = append(kept, action)
+	// 挂单的剩余量从差额里扣掉；反向或超出差额的挂单（买多、卖多的风险）撤掉，下一轮再按最新状态重算。
+	actions, staleResting := reconcileResting(actions, resting, blocked)
+	if len(staleResting) > 0 {
+		for _, current := range staleResting {
+			if err := e.stopOrder(ctx, target, current); err != nil {
+				return Result{}, err
 			}
 		}
-		actions = kept
+		target.BlockedTargets = blocked
+		if err := e.updateTarget(ctx, &target, StatusConverging); err != nil {
+			return Result{}, err
+		}
+		return Result{Status: StatusConverging, Action: "wait"}, nil
 	}
-	resting := len(restingLanes) > 0
+	hasResting := len(resting) > 0
+	// 按方向的金额预算挑出这一轮改成挂单的标的。
+	if !orderSettings.RestingRatio.IsZero() && len(actions) > 0 {
+		picked := pickResting(env, target, actions, desired, members, e.restingNotional(ctx))
+		for index := range actions {
+			_, actions[index].resting = picked[actions[index].instrument.InstrumentID]
+		}
+	}
 	if len(actions) > 0 {
 		if allowed, retryAfter := e.batchAllowed(logicalAccount.LogicalAccountID, members, env.settings); !allowed {
 			// 批间隔未到，或交易所接口限流暂停、权重用到 90%：本轮不发新批，也不算阻塞。
@@ -602,8 +629,8 @@ func (e *Executor) Converge(
 	// 只剩挂单（或阻塞加挂单）时，定时器不再扫这个目标：挂单成交会唤醒目标，下一份目标到达时在阶段 1 撤掉旧挂单，
 	// 一直没有成交也没有新目标则到有效期末被唤醒，走过期分支撤掉本目标的挂单，所以都要设唤醒时间。
 	var retryAfter time.Duration
-	if resting {
-		retryAfter = e.restingRetryAfter(target)
+	if hasResting {
+		retryAfter = e.restingWake(target, resting, orderSettings)
 	}
 	// 有标的因每小时上限顺延：定时器不会再扫已收敛的目标，到下一个整点自己唤醒继续下顺延的部分；同时有挂单时取较早的唤醒时间。
 	if capDeferred {
@@ -1143,7 +1170,7 @@ func (e *Executor) placeAction(
 		}
 		// 伪市价单：用满尝试次数仍没成交完的标的记为“未到位”，告警一次，不再重试，等下一份目标重算。
 		attempt := 0
-		pseudoMarket := env.settings.OrderMode == ordersettings.OrderModePseudoMarket
+		pseudoMarket := env.settings.OrderMode == ordersettings.OrderModePseudoMarket && !candidate.resting
 		if pseudoMarket {
 			if attempt = pseudoMarketAttempts(children); attempt >= env.settings.MaxAttempts {
 				reason := fmt.Sprintf("伪市价单已尝试 %d 次仍没成交完，本份目标不再重试", attempt)
@@ -1194,6 +1221,16 @@ func (e *Executor) placeAction(
 			PositionBefore: candidate.member.positions[candidate.instrument.InstrumentID].String(),
 		}
 		spec.PositionSide = exchange.RuleFor(candidate.instrument.MarketType).PositionSide
+		if candidate.resting {
+			// 挂单：限价 + GTC，买单挂买一价，卖单挂卖一价；取不到买一卖一时退回普通下单。
+			if price, ok := e.restingPrice(ctx, candidate); ok {
+				spec.Type, spec.FillPolicy, spec.LimitPrice = exchange.OrderTypeLimit, exchange.FillPolicyGTC, &price
+			} else if env.settings.OrderMode == ordersettings.OrderModePseudoMarket {
+				pseudoMarket = true
+				attempt = pseudoMarketAttempts(children)
+				spec.Attempt, spec.ClientOrderID = attempt, childClientOrderID(attempt)
+			}
+		}
 		if pseudoMarket {
 			// 限价 + IOC：价格 = 参考价 ×（1 ± 滑点），部分成交的剩余量下一轮按新的滑点再来。
 			limit := pseudoMarketPrice(quote.Price, spec.Side, env.settings, attempt, candidate.instrument.PriceTick)
@@ -1261,7 +1298,7 @@ func placementCandidates(action laneAction, members []memberState) []laneAction 
 		candidates := make([]laneAction, 0, len(members))
 		for _, member := range members {
 			if instrument, ok := member.instruments[instrumentID]; ok {
-				candidates = append(candidates, laneAction{member: member, instrument: instrument, delta: action.delta})
+				candidates = append(candidates, laneAction{member: member, instrument: instrument, delta: action.delta, resting: action.resting})
 			}
 		}
 		return candidates
@@ -1278,7 +1315,7 @@ func placementCandidates(action laneAction, members []memberState) []laneAction 
 		if position.Abs().Cmp(delta.Abs()) < 0 {
 			delta = position.Neg()
 		}
-		candidates = append(candidates, laneAction{member: member, instrument: instrument, delta: delta, reducing: true})
+		candidates = append(candidates, laneAction{member: member, instrument: instrument, delta: delta, reducing: true, resting: action.resting})
 	}
 	return candidates
 }
