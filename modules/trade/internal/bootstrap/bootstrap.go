@@ -270,8 +270,11 @@ func initialize(
 			PaperMatcherReady:     paperMatcherWorker.Ready,
 			PaperAccountState:     paperMatcher.AccountState,
 			PaperAccountRecovered: paperMatcher.RecoverAccount,
-			OnReady:               equitySampler.Enqueue,
-			SyncInterval:          30 * time.Second,
+			OnReady: func(tradingAccountID string) {
+				equitySampler.Enqueue(tradingAccountID)
+				fundWorker.AccountReady(tradingAccountID)
+			},
+			SyncInterval: 30 * time.Second,
 		}, nil
 	}
 

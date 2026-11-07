@@ -12,6 +12,11 @@ import (
 
 func newSettingsHandler(t *testing.T) (*LogicalAccountServer, context.Context) {
 	t.Helper()
+	return newSettingsHandlerFor(t, tradepb.ExecutionMode_EXECUTION_MODE_PAPER)
+}
+
+func newSettingsHandlerFor(t *testing.T, mode tradepb.ExecutionMode) (*LogicalAccountServer, context.Context) {
+	t.Helper()
 	tradeStore := openRPCStore(t)
 	handler := &LogicalAccountServer{
 		LogicalAccounts: &logicalapp.Service{Store: tradeStore},
@@ -20,7 +25,7 @@ func newSettingsHandler(t *testing.T) (*LogicalAccountServer, context.Context) {
 	}
 	ctx := spacecontext.WithSpaceID(context.Background(), "space-1")
 	created, err := handler.CreateLogicalAccount(ctx, &tradepb.CreateLogicalAccountReq{
-		Name: "main", ExecutionMode: tradepb.ExecutionMode_EXECUTION_MODE_PAPER, SettlementAsset: "USDT",
+		Name: "main", ExecutionMode: mode, SettlementAsset: "USDT",
 	})
 	require.NoError(t, err)
 	require.Equal(t, tradepb.ErrorCode_SUCCESS, created.GetRetInfo().GetCode())
@@ -72,7 +77,7 @@ func TestUpdateOrderSettingsRejectsInvalidValues(t *testing.T) {
 }
 
 func TestUpdateFundSettingsValidatesStablecoinMargin(t *testing.T) {
-	handler, ctx := newSettingsHandler(t)
+	handler, ctx := newSettingsHandlerFor(t, tradepb.ExecutionMode_EXECUTION_MODE_LIVE)
 	update := func(settings *tradepb.FundSettings) *tradepb.UpdateLogicalAccountFundSettingsRsp {
 		response, err := handler.UpdateLogicalAccountFundSettings(ctx, &tradepb.UpdateLogicalAccountFundSettingsReq{
 			LogicalAccountId: "logical-1", Settings: settings,
@@ -110,4 +115,24 @@ func TestSettingsRPCRequiresSpaceAndSettings(t *testing.T) {
 	response2, err := handler.UpdateLogicalAccountFundSettings(spacecontext.WithSpaceID(context.Background(), "space-1"), &tradepb.UpdateLogicalAccountFundSettingsReq{LogicalAccountId: "x"})
 	require.NoError(t, err)
 	require.Equal(t, tradepb.ErrorCode_INVALID_PARAM, response2.GetRetInfo().GetCode())
+}
+
+// 模拟盘组合没有资金维护任务：BNB 抵扣、BNB 保留、小额兑换和稳定币保证金写不进去，其他项照常。
+func TestPaperLogicalAccountRejectsLiveOnlyFundSettings(t *testing.T) {
+	handler, ctx := newSettingsHandler(t)
+	update := func(settings *tradepb.FundSettings) *tradepb.UpdateLogicalAccountFundSettingsRsp {
+		response, err := handler.UpdateLogicalAccountFundSettings(ctx, &tradepb.UpdateLogicalAccountFundSettingsReq{LogicalAccountId: "logical-1", Settings: settings})
+		require.NoError(t, err)
+		return response
+	}
+	for name, settings := range map[string]*tradepb.FundSettings{
+		"BNB 抵扣": {BnbDiscount: true},
+		"BNB 保留": {BnbReserveAmount: "100"},
+		"小额兑换":   {DustConvertEnabled: true},
+		"稳定币保证金": {StablecoinMargin: map[string]string{"USDT": "0.5", "USDC": "0.5"}},
+	} {
+		require.Equal(t, tradepb.ErrorCode_INVALID_PARAM, update(settings).GetRetInfo().GetCode(), name)
+	}
+	response := update(&tradepb.FundSettings{ReserveRatio: "0.05", MarginCoins: map[string]string{"ETH": "100"}, ArbitrageBaseAssets: []string{"BTC"}})
+	require.Equal(t, tradepb.ErrorCode_SUCCESS, response.GetRetInfo().GetCode(), response.GetRetInfo().GetMsg())
 }

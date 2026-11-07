@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/fundsettings"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
@@ -19,6 +20,9 @@ import (
 //   - 偏离的定义：各稳定币价值占稳定币总价值的实际比例与目标比例的绝对差，任何一个超过 5 个百分点就调平，否则不动；
 //   - 买入（要增加的稳定币）用买一价限价单，到下一次检查还没成交就撤掉；卖出（多出来的稳定币）用 IOC；都在稳定币对 USDT 的现货标的上下单；
 //   - 先卖后买：卖出多出来的稳定币换回 USDT，买入用的 USDT 才够；没成交的缺口下一次检查再补。
+
+// stableOrderMaxAge 是稳定币买单最多挂多久：每小时检查一次，留 5 分钟余量，免得整点检查时刚好差几秒没撤。
+const stableOrderMaxAge = 55 * time.Minute
 
 type stableHolding struct {
 	asset      string
@@ -38,13 +42,18 @@ func (s *Service) rebalanceStablecoins(
 	if account.AccountMode != string(exchange.AccountModeBinancePortfolioMargin) || !account.HasBalanceMarket() {
 		return nil
 	}
-	// 上一次的买单还挂着就撤掉：撤单结束前不再下新单，下一次检查再算。
+	// 上一次的买单还挂着：到下一次检查（约一小时后）还没成交才撤，更早的唤醒（设置变更、会话就绪）只跳过这一轮；
+	// 撤单结束前不下新单，下一次检查再算。
 	open, err := s.openSystemOrders(ctx, account, ownerStableRebalance)
 	if err != nil {
 		return err
 	}
 	if len(open) > 0 {
+		now := s.now()
 		for _, record := range open {
+			if now.Sub(time.UnixMilli(record.SubmittedAt)) < stableOrderMaxAge {
+				continue
+			}
 			if _, err := s.Orders.Cancel(ctx, record.SpaceID, record.OrderID); err != nil {
 				return err
 			}

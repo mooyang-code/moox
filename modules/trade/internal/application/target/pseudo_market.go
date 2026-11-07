@@ -72,7 +72,8 @@ func childClientOrderID(attempt int) string {
 // warnOnce 同一个键只告警一次（进程内）：伪市价用满次数这类每轮都会再次判到的情况不刷屏。
 func (e *Executor) warnOnce(key, message string) {
 	e.batchMu.Lock()
-	if e.warned == nil {
+	// 每个目标、每个标的一个键，目标换得快：积到上千条就整个清掉（最多多告警一次），不让它随进程寿命无限增长。
+	if e.warned == nil || len(e.warned) >= 1000 {
 		e.warned = make(map[string]struct{})
 	}
 	_, repeated := e.warned[key]

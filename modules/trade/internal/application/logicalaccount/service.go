@@ -155,9 +155,19 @@ func (s *Service) UpdateFundSettings(
 	if s == nil || s.Store == nil {
 		return store.LogicalAccountRecord{}, ErrServiceConfig
 	}
-	_, canonical, err := fundsettings.ParseDocumentForWrite(document)
+	parsed, canonical, err := fundsettings.ParseDocumentForWrite(document)
 	if err != nil {
 		return store.LogicalAccountRecord{}, fmt.Errorf("%w: %v", store.ErrInvalidRecord, err)
+	}
+	// BNB 抵扣、BNB 保留、小额兑换和稳定币调平只对实盘组合生效：模拟盘组合设了也没有任何维护任务去补，
+	// 换算目标时却会一直扣着 BNB 的缺口，所以直接拒绝。
+	existing, err := s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
+	if err != nil {
+		return store.LogicalAccountRecord{}, err
+	}
+	if existing.ExecutionMode == string(exchange.ExecutionModePaper) &&
+		(parsed.BNBDiscount || parsed.BNBReserveEnabled() || parsed.DustConvert || len(parsed.StablecoinTargets) > 0) {
+		return store.LogicalAccountRecord{}, fmt.Errorf("%w: 模拟盘组合不支持 BNB 抵扣、BNB 保留、小额兑换和稳定币保证金（只对实盘生效）", store.ErrInvalidRecord)
 	}
 	record, err := s.saveSettings(ctx, spaceID, logicalAccountID, func(tx *store.Tx) error {
 		return tx.SetLogicalAccountFundSettings(spaceID, logicalAccountID, canonical)

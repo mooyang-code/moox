@@ -391,6 +391,25 @@ func TestStablecoinCancelsLastRoundsUnfilledBuyBeforeRecalculating(t *testing.T)
 	require.Empty(t, f.orders.specs, "撤单结束前不下新单")
 }
 
+// 更早的唤醒（设置变更、会话就绪）不撤刚挂不久的买单，也不下新单，等下一次定时检查。
+func TestStablecoinKeepsARecentBuyUntilTheNextScheduledCheck(t *testing.T) {
+	f := newFixture(t, stableSettings, []store.AssetBalance{balance("USDT", "800"), balance("USDC", "200")})
+	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.CreateOrder(store.OrderRecord{
+			SpaceID: "space-1", OrderID: "rest-1", TradingAccountID: "account-a", LogicalAccountID: "logical-1", ClientOrderID: "rest-1",
+			Exchange: "BINANCE", MarketType: "SPOT", InstrumentID: "USDC-USDT-SPOT", ExchangeSymbol: "USDCUSDT",
+			OrderType: "LIMIT", TimeInForce: "GTC", Side: "BUY", Quantity: "200", LimitPrice: strPtr("0.9995"), ReferencePrice: "1",
+			OwnerType: "SYSTEM", OwnerID: "stable-rebalance", State: "OPEN", SubmittedAt: testNow.Add(-10 * time.Minute).UnixMilli(), Version: 1,
+		})
+	}))
+	require.NoError(t, f.run())
+	require.Empty(t, f.orders.canceled, "挂了 10 分钟，不撤")
+	require.Empty(t, f.orders.specs)
+	f.now = testNow.Add(46 * time.Minute) // 已经挂了 56 分钟
+	require.NoError(t, f.run())
+	require.Equal(t, []string{"rest-1"}, f.orders.canceled)
+}
+
 func TestStablecoinRebalanceIsUnifiedAccountOnly(t *testing.T) {
 	f := newFixture(t, stableSettings, []store.AssetBalance{balance("USDT", "800"), balance("USDC", "200")})
 	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_trading_accounts SET c_account_mode = 'BINANCE_STANDARD'").Error)

@@ -26,6 +26,8 @@ type FundWorker struct {
 
 	once sync.Once
 	wake chan struct{}
+	// ready 记录已经因“会话就绪”唤醒过的执行账户：每个账户每个进程只唤醒一次，之后靠定时器和设置变更。
+	ready sync.Map
 }
 
 func (w *FundWorker) init() {
@@ -41,6 +43,17 @@ func (w *FundWorker) Wake(string, string) {
 	select {
 	case w.wake <- struct{}{}:
 	default:
+	}
+}
+
+// AccountReady 在执行账户的会话第一次就绪时唤醒一次：进程刚启动时账户还没就绪，启动那一轮什么都做不了，
+// 不唤醒的话 BNB 抵扣和补买要等到下一个整点间隔。会话每次同步都会就绪，所以只在第一次唤醒。
+func (w *FundWorker) AccountReady(tradingAccountID string) {
+	if w == nil {
+		return
+	}
+	if _, seen := w.ready.LoadOrStore(tradingAccountID, struct{}{}); !seen {
+		w.Wake("", "")
 	}
 }
 

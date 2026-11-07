@@ -51,3 +51,23 @@ func TestFundWorkerHonoursTheLifecycleGate(t *testing.T) {
 func TestFundWorkerWithoutAMaintainerReportsConfigError(t *testing.T) {
 	require.ErrorIs(t, (&FundWorker{}).Run(context.Background()), errFundWorkerConfig)
 }
+
+// 会话第一次就绪时唤醒一次（进程刚启动时账户还没就绪），之后每次就绪不再唤醒。
+func TestFundWorkerWakesOnlyOnTheFirstReadyOfAnAccount(t *testing.T) {
+	maintainer := &countingMaintainer{}
+	worker := &FundWorker{Maintainer: maintainer, Interval: time.Hour}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- worker.Run(ctx) }()
+	require.Eventually(t, func() bool { return maintainer.runs.Load() == 1 }, 2*time.Second, 5*time.Millisecond)
+	worker.AccountReady("account-a")
+	require.Eventually(t, func() bool { return maintainer.runs.Load() == 2 }, 2*time.Second, 5*time.Millisecond)
+	worker.AccountReady("account-a")
+	worker.AccountReady("account-a")
+	time.Sleep(50 * time.Millisecond)
+	require.EqualValues(t, 2, maintainer.runs.Load(), "同一个账户再次就绪不再唤醒")
+	worker.AccountReady("account-b")
+	require.Eventually(t, func() bool { return maintainer.runs.Load() == 3 }, 2*time.Second, 5*time.Millisecond)
+	cancel()
+	<-done
+}
