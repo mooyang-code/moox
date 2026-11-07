@@ -13,7 +13,7 @@ func TestUpsertAccountEquityPointRejectsOlderSource(t *testing.T) {
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
 		if err := tx.CreateTradingAccount(TradingAccountRecord{
 			SpaceID: "space", TradingAccountID: "account", Name: "Paper",
-			Exchange: "BINANCE", MarketType: "SPOT", ExecutionMode: "PAPER",
+			Exchange: "BINANCE", Markets: []string{"SPOT"}, ExecutionMode: "PAPER",
 			SettlementAsset: "USDT", Status: "ENABLED",
 		}); err != nil {
 			return err

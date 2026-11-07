@@ -54,7 +54,7 @@ func TestAccountRPCCreateAndSpaceIsolation(t *testing.T) {
 		spacecontext.WithSpaceID(context.Background(), "space-1"),
 		&tradepb.CreateTradingAccountReq{
 			Name: "main", Exchange: tradepb.Exchange_EXCHANGE_BINANCE,
-			MarketType:      tradepb.MarketType_MARKET_TYPE_SPOT,
+			Markets:         []tradepb.MarketType{tradepb.MarketType_MARKET_TYPE_SPOT},
 			Live:            &tradepb.LiveConfig{Environment: tradepb.AccountEnvironment_ACCOUNT_ENVIRONMENT_TESTNET, CredentialSecretId: "secret-1"},
 			SettlementAsset: "USDT",
 		},

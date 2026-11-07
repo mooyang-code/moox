@@ -59,7 +59,6 @@ func (s *Service) Create(
 	logicalAccountID string,
 	name string,
 	mode exchange.ExecutionMode,
-	market exchange.MarketType,
 	settlementAsset string,
 	controlMode string,
 ) (store.LogicalAccountRecord, error) {
@@ -71,7 +70,6 @@ func (s *Service) Create(
 		logicalAccountID,
 		strings.TrimSpace(name),
 		mode,
-		market,
 		strings.ToUpper(strings.TrimSpace(settlementAsset)),
 		logicaldomain.ControlMode(controlMode),
 	)
@@ -83,7 +81,6 @@ func (s *Service) Create(
 			ControlMode: string(value.ControlMode),
 			SpaceID:     value.SpaceID, LogicalAccountID: value.ID, Name: value.Name,
 			ExecutionMode:   string(value.ExecutionMode),
-			MarketType:      string(value.MarketType),
 			SettlementAsset: value.SettlementAsset,
 			AutomationState: string(value.AutomationState),
 			PauseReason:     value.PauseReason,
@@ -595,7 +592,7 @@ func (s *Service) exposure(
 			return true, nil
 		}
 	}
-	positions, err := s.Store.ListPositions(ctx, spaceID, tradingAccountID, "")
+	positions, err := s.Store.ListPositions(ctx, spaceID, tradingAccountID, exchange.SymbolKey{})
 	if err != nil {
 		return false, err
 	}
@@ -608,8 +605,8 @@ func (s *Service) exposure(
 			return true, nil
 		}
 	}
-	if exchange.RuleFor(account.MarketType).PositionFromBalance {
-		for _, balance := range account.Snapshot.Balances {
+	if account.HasBalanceMarket() {
+		for _, balance := range account.SpotBalances() {
 			if balance.Asset == account.SettlementAsset {
 				continue
 			}
@@ -635,7 +632,22 @@ func (s *Service) managedExposure(ctx context.Context, spaceID, tradingAccountID
 	if err != nil {
 		return false, err
 	}
-	if !exchange.RuleFor(account.MarketType).PositionFromBalance {
+	if account.HasPositionMarket() {
+		positions, positionErr := s.Store.ListPositions(ctx, spaceID, tradingAccountID, exchange.SymbolKey{})
+		if positionErr != nil {
+			return false, positionErr
+		}
+		for _, position := range positions {
+			quantity, parseErr := shared.ParseDecimal(position.SignedQuantity)
+			if parseErr != nil {
+				return false, parseErr
+			}
+			if !quantity.IsZero() {
+				return true, nil
+			}
+		}
+	}
+	if !account.HasBalanceMarket() {
 		return true, nil
 	}
 	orders, err := s.Store.ListActiveOrdersForAccount(ctx, spaceID, tradingAccountID)
@@ -655,7 +667,7 @@ func (s *Service) managedExposure(ctx context.Context, spaceID, tradingAccountID
 	}
 	// 与清仓同一套规则：按总量判断，卖出后留下的零头下不了单，不挡移除。
 	byAsset := exposure.SpotInstruments(instruments, account.SettlementAsset)
-	for _, balance := range account.Snapshot.Balances {
+	for _, balance := range account.SpotBalances() {
 		total, parseErr := shared.ParseDecimal(balance.Total)
 		if parseErr != nil {
 			return false, parseErr
@@ -669,7 +681,7 @@ func (s *Service) managedExposure(ctx context.Context, spaceID, tradingAccountID
 		}
 		price := shared.Zero()
 		if s.Prices != nil {
-			if quote, quoteErr := s.Prices.LatestPrice(ctx, tradingAccountID, instrument.ExchangeSymbol); quoteErr == nil {
+			if quote, quoteErr := s.Prices.LatestPrice(ctx, tradingAccountID, exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol)); quoteErr == nil {
 				price = quote.Price
 			}
 		}

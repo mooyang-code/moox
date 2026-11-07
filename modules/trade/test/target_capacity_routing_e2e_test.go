@@ -30,7 +30,8 @@ func TestTargetLiveBalanceRejectionRefreshesBeforeRoutingNextChildE2E(t *testing
 	account, err := f.store.GetTradingAccountByID(ctx, testAccount)
 	require.NoError(t, err)
 	account.TradingAccountID, account.Name = second, second
-	account.Snapshot.Balances = []store.AssetBalance{{Asset: "USDT", Available: "100000", Total: "100000"}}
+	account.CredentialSecretID = "local-http-mock-only-b" // 一把密钥只能对应一个执行账户
+	account.Snapshot.Balances = []store.AssetBalance{{Wallet: "SPOT", Asset: "USDT", Available: "100000", Total: "100000"}}
 	require.NoError(t, f.store.Transaction(ctx, func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(account); err != nil {
 			return err
@@ -41,7 +42,7 @@ func TestTargetLiveBalanceRejectionRefreshesBeforeRoutingNextChildE2E(t *testing
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: testSpace, LogicalAccountID: testLogicalAccount, Name: "Live capacity routing",
 			OwnerInstanceID: "live-instance", OwnerSessionID: "live-session",
-			ExecutionMode: "LIVE", MarketType: "SPOT", SettlementAsset: "USDT",
+			ExecutionMode: "LIVE", SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {
 			return err
@@ -66,7 +67,7 @@ func TestTargetLiveBalanceRejectionRefreshesBeforeRoutingNextChildE2E(t *testing
 	adapters := isolationAdapters{testAccount: a, second: b}
 	f.orders.Adapters, f.sync.Adapters = adapters, adapters
 	f.sync.Now = func() time.Time { return testNow }
-	a.account.Balances = []exchange.AssetBalance{{Asset: "USDT", Available: shared.Zero(), Total: shared.Zero()}}
+	a.account.Balances = []exchange.AssetBalance{{Wallet: exchange.WalletSpot, Asset: "USDT", Available: shared.Zero(), Total: shared.Zero()}}
 	a.account.AvailableFunds = shared.Zero()
 	a.placeErr = &exchange.Error{Kind: exchange.ErrorInsufficientBalance, Err: errors.New("authoritative funds exhausted")}
 	executor := &targetapp.Executor{Store: f.store, Orders: f.orders,
@@ -113,7 +114,7 @@ func TestTargetCapacitySplitUsesActualPaperFundsAndFillsE2E(t *testing.T) {
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: testSpace, LogicalAccountID: testLogicalAccount, Name: "Capacity routing",
 			OwnerInstanceID: "capacity-instance", OwnerSessionID: "capacity-session",
-			ExecutionMode: "PAPER", MarketType: "SPOT", SettlementAsset: "USDT",
+			ExecutionMode: "PAPER", SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {
 			return err
@@ -157,7 +158,7 @@ func TestTargetCapacitySplitUsesActualPaperFundsAndFillsE2E(t *testing.T) {
 		TargetId: "capacity-target", LogicalAccountId: testLogicalAccount,
 		InstanceId: "capacity-instance", SessionId: "capacity-session", StrategyId: "capacity-strategy",
 		BarEndTime: timestamppb.New(testNow), EffectiveAt: timestamppb.New(testNow), ValidUntil: timestamppb.New(testNow.Add(time.Hour)),
-		Targets: []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: testSubjectID, TargetWeight: "1"}},
+		Targets: []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: testSubjectID, MarketType: "SPOT", TargetWeight: "1"}},
 	}, events.PublishOptions{EventID: "capacity-target", OccurredAt: testNow, SpaceID: testSpace, SubjectID: testLogicalAccount})
 	require.NoError(t, err)
 	raw, err := proto.Marshal(encoded.Message)
@@ -234,7 +235,7 @@ func TestTargetRejectionDoesNotLoopE2E(t *testing.T) {
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: testSpace, LogicalAccountID: testLogicalAccount, Name: "reject",
 			OwnerInstanceID: "live-instance", OwnerSessionID: "live-session",
-			ExecutionMode: "LIVE", MarketType: "SPOT", SettlementAsset: "USDT",
+			ExecutionMode: "LIVE", SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {
 			return err

@@ -370,7 +370,7 @@ func TestManualOrderRunningReplayFailsAfterAccountMovesLogicalAccount(t *testing
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-2", Name: "logical-2",
-			ExecutionMode: "PAPER", MarketType: "SPOT", SettlementAsset: "USDT",
+			ExecutionMode: "PAPER", SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {
 			return err
@@ -438,7 +438,7 @@ func TestManualLogicalAccountLockRevalidatesMovedEnabledMembership(t *testing.T)
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-2", Name: "logical-2",
-			ExecutionMode: "PAPER", MarketType: "SPOT", SettlementAsset: "USDT",
+			ExecutionMode: "PAPER", SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {
 			return err
@@ -659,7 +659,7 @@ func newOperatorFixture(t *testing.T, market exchange.MarketType) *operatorFixtu
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
 			OwnerInstanceID: "runner-1", OwnerSessionID: "session-1", ExecutionMode: "PAPER",
-			MarketType: string(market), SettlementAsset: "USDT",
+			SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {
 			return err
@@ -691,7 +691,7 @@ func (f *operatorFixture) account(id string) store.TradingAccountRecord {
 	}
 	return store.TradingAccountRecord{
 		SpaceID: "space-1", TradingAccountID: id, Name: id,
-		Exchange: exchangeName, MarketType: string(f.market),
+		Exchange: exchangeName, Markets: []string{string(f.market)},
 		ExecutionMode: "PAPER", Environment: "PAPER",
 		SettlementAsset: "USDT", MarginMode: map[bool]string{
 			true: "CROSS", false: "",
@@ -702,7 +702,7 @@ func (f *operatorFixture) account(id string) store.TradingAccountRecord {
 		},
 		Snapshot: store.TradingAccountSnapshot{
 			AvailableFunds: "100000",
-			Balances: []store.AssetBalance{{
+			Balances: []store.AssetBalance{{Wallet: "UNIFIED",
 				Asset: "USDT", Available: "100000", Total: "100000",
 			}},
 		},
@@ -791,6 +791,7 @@ func (s *operatorOrderStub) Place(
 		SpaceID: spaceID, OrderID: id,
 		TradingAccountID: spec.TradingAccountID,
 		ClientOrderID:    spec.ClientOrderID, ExchangeSymbol: spec.InstrumentID,
+		MarketType: string(exchange.MarketOfInstrumentID(spec.InstrumentID)), InstrumentID: spec.InstrumentID,
 		OrderType: string(spec.Type), TimeInForce: string(spec.FillPolicy),
 		Side: string(spec.Side), PositionSide: string(spec.PositionSide),
 		Quantity: spec.Quantity.String(), ReferencePrice: spec.ReferencePrice.String(),
@@ -931,13 +932,9 @@ type operatorPriceStub struct {
 	calls *[]string
 }
 
-func (s operatorPriceStub) LatestPrice(
-	_ context.Context,
-	_ string,
-	symbol string,
-) (Quote, error) {
+func (s operatorPriceStub) LatestPrice(_ context.Context, _ string, symbol exchange.SymbolKey) (Quote, error) {
 	if s.calls != nil {
-		*s.calls = append(*s.calls, symbol)
+		*s.calls = append(*s.calls, symbol.Symbol)
 	}
 	return s.quote, s.err
 }

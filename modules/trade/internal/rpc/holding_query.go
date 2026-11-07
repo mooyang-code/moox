@@ -33,7 +33,7 @@ func (q *HoldingQuery) List(ctx context.Context, spaceID, accountID string) ([]h
 	if err != nil {
 		return nil, err
 	}
-	if !exchange.RuleFor(account.MarketType).PositionFromBalance {
+	if !account.HasBalanceMarket() {
 		return nil, fmt.Errorf("holding query: account is not SPOT")
 	}
 	var quoteSource execution.ReferencePriceSource
@@ -78,14 +78,14 @@ func (q *HoldingQuery) List(ctx context.Context, spaceID, accountID string) ([]h
 		}
 		item.InstrumentID, item.ExchangeSymbol = instrument.InstrumentID, holdingQuoteSymbol(instrument)
 		if account.ExecutionMode == string(exchange.ExecutionModePaper) {
-			averageCost, costErr := q.paperAverageCost(ctx, spaceID, accountID, item.ExchangeSymbol)
+			averageCost, costErr := q.paperAverageCost(ctx, spaceID, accountID, exchange.NewSymbolKey(instrument.MarketType, item.ExchangeSymbol))
 			if costErr != nil {
 				return nil, costErr
 			}
 			item.AverageCost = averageCost
 		}
 		if quoteSource != nil {
-			if quote, quoteErr := quoteSource.GetReferencePrice(ctx, holdingQuoteSymbol(instrument)); quoteErr == nil {
+			if quote, quoteErr := quoteSource.GetReferencePrice(ctx, exchange.NewSymbolKey(instrument.MarketType, holdingQuoteSymbol(instrument))); quoteErr == nil {
 				item.MarkPrice = quote.Price
 				item.MarketValue = quantity.Mul(quote.Price)
 				item.SourceTime = quote.UpdatedAt
@@ -95,7 +95,7 @@ func (q *HoldingQuery) List(ctx context.Context, spaceID, accountID string) ([]h
 			// historical mark from the latest fill when one exists; otherwise
 			// return identity and quantity without fabricating a valuation.
 			fills, _, fillErr := q.Store.ListFills(ctx, spaceID, store.FillQuery{
-				TradingAccountID: accountID, ExchangeSymbol: holdingQuoteSymbol(instrument), Limit: 1,
+				TradingAccountID: accountID, Market: string(instrument.MarketType), ExchangeSymbol: holdingQuoteSymbol(instrument), Limit: 1,
 			})
 			if fillErr != nil {
 				return nil, fillErr
@@ -116,12 +116,12 @@ func (q *HoldingQuery) List(ctx context.Context, spaceID, accountID string) ([]h
 	return result, nil
 }
 
-func (q *HoldingQuery) paperAverageCost(ctx context.Context, spaceID, accountID, symbol string) (shared.Decimal, error) {
+func (q *HoldingQuery) paperAverageCost(ctx context.Context, spaceID, accountID string, key exchange.SymbolKey) (shared.Decimal, error) {
 	const pageSize = 1000
 	allFills := make([]store.FillRecord, 0, pageSize)
 	for offset := 0; ; offset += pageSize {
 		fills, total, err := q.Store.ListFills(ctx, spaceID, store.FillQuery{
-			TradingAccountID: accountID, ExchangeSymbol: symbol, Offset: offset, Limit: pageSize,
+			TradingAccountID: accountID, Market: string(key.Market), ExchangeSymbol: key.Symbol, Offset: offset, Limit: pageSize,
 		})
 		if err != nil {
 			return shared.Zero(), err

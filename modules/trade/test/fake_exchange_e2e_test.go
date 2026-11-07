@@ -42,7 +42,7 @@ func newFakeCore() *fakeCore {
 		Status: "TRADING", ExchangeUpdatedAt: testNow,
 	}
 	fake.reference.Price = shared.MustDecimal("1500")
-	fake.account.Balances = []exchange.AssetBalance{{
+	fake.account.Balances = []exchange.AssetBalance{{Wallet: exchange.WalletSpot,
 		Asset: "CNY", Available: shared.MustDecimal("1000000"), Total: shared.MustDecimal("1000000"),
 	}}
 	fake.account.Equity = shared.MustDecimal("1000000")
@@ -78,7 +78,7 @@ func (b *fakeCore) moveBalances(cash, total, available shared.Decimal) {
 	balances[0].Available = balances[0].Available.Add(cash)
 	b.account.AvailableFunds = balances[0].Available
 	if len(balances) == 1 {
-		b.account.Balances = append(balances, exchange.AssetBalance{
+		b.account.Balances = append(balances, exchange.AssetBalance{Wallet: exchange.WalletSpot,
 			Asset: fakeInstrument, Available: available, Locked: total.Sub(available), Total: total,
 		})
 		return
@@ -138,12 +138,12 @@ func seedFakeAccount(t *testing.T, tradeStore *store.Store, instrument exchange.
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
 			SpaceID: testSpace, TradingAccountID: testAccount, Name: "A 股",
-			Exchange: string(fakeExchangeName), MarketType: string(exchange.MarketTypeStock),
+			Exchange: string(fakeExchangeName), Markets: []string{string(exchange.MarketTypeStock)},
 			ExecutionMode: string(exchange.ExecutionModeLive), Environment: string(exchange.AccountEnvironmentTestnet),
 			CredentialSecretID: "fake-exchange-secret", SettlementAsset: "CNY",
 			Status: string(exchange.AccountStatusEnabled), Ready: true,
 			Snapshot: store.TradingAccountSnapshot{
-				Balances: []store.AssetBalance{{Asset: "CNY", Available: "1000000", Total: "1000000"}},
+				Balances: []store.AssetBalance{{Wallet: "SPOT", Asset: "CNY", Available: "1000000", Total: "1000000"}},
 				Equity:   "1000000", AvailableFunds: "1000000", ExchangeUpdatedAt: testNow.UnixMilli(),
 			},
 			SnapshotSourceTime: testNow.UnixMilli(), LastSyncAt: testNow.UnixMilli(),
@@ -167,7 +167,7 @@ func seedFakeAccount(t *testing.T, tradeStore *store.Store, instrument exchange.
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: testSpace, LogicalAccountID: testLogicalAccount, Name: "A 股组合",
 			OwnerInstanceID: testRunner, OwnerSessionID: "session-e2e",
-			ExecutionMode: string(exchange.ExecutionModeLive), MarketType: string(exchange.MarketTypeStock),
+			ExecutionMode:   string(exchange.ExecutionModeLive),
 			SettlementAsset: "CNY", AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {
 			return err
@@ -199,7 +199,7 @@ func TestFakeExchangeRunsFullTargetLifecycle(t *testing.T) {
 		return fakeAdapter{ExecutionAdapter: core}, nil
 	})
 	adapter, err := registry.Bind(exchange.AccountConfig{
-		TradingAccountID: testAccount, Exchange: fakeExchangeName, MarketType: exchange.MarketTypeStock,
+		TradingAccountID: testAccount, Exchange: fakeExchangeName, Markets: []exchange.MarketType{exchange.MarketTypeStock},
 		ExecutionMode: exchange.ExecutionModeLive, SettlementAsset: "CNY",
 	}, exchange.Credential{Extra: map[string]string{"gateway": "127.0.0.1:9000"}})
 	require.NoError(t, err)
@@ -231,7 +231,7 @@ func TestFakeExchangeRunsFullTargetLifecycle(t *testing.T) {
 	}
 	deliver := func(id string, sequence int64, quantity string) jetstream.HandlerDecision {
 		result := eventconsumer.HandleTarget(ctx, targetDeliveryWithTargets(t, now, id, sequence,
-			[]*tradeeventpb.InstrumentWeightTarget{{InstrumentId: fakeInstrument, TargetWeight: quantity}},
+			[]*tradeeventpb.InstrumentWeightTarget{{InstrumentId: fakeInstrument, MarketType: "STOCK", TargetWeight: quantity}},
 		), options)
 		return result.Decision
 	}

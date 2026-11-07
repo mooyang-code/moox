@@ -119,7 +119,7 @@ func TestValidatorReservationMatrix(t *testing.T) {
 					instrument: testInstrument(tt.market),
 				},
 				Positions: positionSourceStub{
-					position: exchange.Position{SignedQuantity: shared.MustDecimal("2")},
+					position: exchange.Position{Market: exchange.MarketTypeSwap, SignedQuantity: shared.MustDecimal("2")},
 				}, Now: func() time.Time { return now },
 				MaxReferenceAge:  time.Second,
 				MaxChildNotional: shared.MustDecimal("1000"),
@@ -133,7 +133,7 @@ func TestValidatorReservationMatrix(t *testing.T) {
 				spec.FillPolicy = exchange.FillPolicyGTC
 			}
 			if tt.market == exchange.MarketTypeSwap {
-				spec.PositionSide = exchange.PositionSideNet
+				spec.PositionSide, spec.InstrumentID = exchange.PositionSideNet, "BTC-USDT-SWAP"
 			}
 
 			got, err := validator.Validate(context.Background(), "space-1", spec)
@@ -208,7 +208,7 @@ func TestValidatorRejectsDisabledInstrumentAndInvalidQuantity(t *testing.T) {
 			spec := testSpec(now)
 			spec.Quantity = shared.MustDecimal(tt.quantity)
 			if tt.market == exchange.MarketTypeSwap {
-				spec.PositionSide = exchange.PositionSideNet
+				spec.PositionSide, spec.InstrumentID = exchange.PositionSideNet, "BTC-USDT-SWAP"
 			}
 
 			_, err := validator.Validate(context.Background(), "space-1", spec)
@@ -223,7 +223,7 @@ func TestValidatorRejectsDisabledInstrumentAndInvalidQuantity(t *testing.T) {
 	)
 	spec := testSpec(now)
 	spec.Quantity = shared.MustDecimal("0.2")
-	spec.PositionSide = exchange.PositionSideNet
+	spec.PositionSide, spec.InstrumentID = exchange.PositionSideNet, "BTC-USDT-SWAP"
 	_, err := validator.Validate(context.Background(), "space-1", spec)
 	require.NoError(t, err, "0.2 base units must convert to two whole contracts")
 }
@@ -258,7 +258,7 @@ func TestValidatorRejectsNotionalAndInsufficientFunds(t *testing.T) {
 	swap.Snapshot.AvailableFunds = shared.MustDecimal("20")
 	validator = testValidator(now, swap, testInstrument(exchange.MarketTypeSwap))
 	spec = testSpec(now)
-	spec.PositionSide = exchange.PositionSideNet
+	spec.PositionSide, spec.InstrumentID = exchange.PositionSideNet, "BTC-USDT-SWAP"
 	_, err = validator.Validate(context.Background(), "space-1", spec)
 	require.ErrorIs(t, err, ErrInsufficientFunds)
 }
@@ -267,7 +267,7 @@ func TestValidatorRejectsInvalidLeverage(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	instrument := testInstrument(exchange.MarketTypeSwap)
 	spec := testSpec(now)
-	spec.PositionSide = exchange.PositionSideNet
+	spec.PositionSide, spec.InstrumentID = exchange.PositionSideNet, "BTC-USDT-SWAP"
 
 	account := executableAccount(exchange.MarketTypeSwap)
 	delete(account.LeverageSettings, spec.InstrumentID)
@@ -285,7 +285,7 @@ func TestValidatorRejectsInvalidLeverage(t *testing.T) {
 func TestValidatorRejectsInvalidReduceOnlyOrder(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	spec := testSpec(now)
-	spec.PositionSide = exchange.PositionSideNet
+	spec.PositionSide, spec.InstrumentID = exchange.PositionSideNet, "BTC-USDT-SWAP"
 	spec.ReducePositionOnly = true
 
 	tests := []struct {
@@ -304,7 +304,7 @@ func TestValidatorRejectsInvalidReduceOnlyOrder(t *testing.T) {
 				testInstrument(exchange.MarketTypeSwap),
 			)
 			validator.Positions = positionSourceStub{
-				position: exchange.Position{SignedQuantity: shared.MustDecimal("2")},
+				position: exchange.Position{Market: exchange.MarketTypeSwap, SignedQuantity: shared.MustDecimal("2")},
 			}
 			candidate := spec
 			candidate.Side = tt.side
@@ -320,6 +320,7 @@ func TestValidatorAcceptsPaperLimitForMatcher(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	account := executableAccount(exchange.MarketTypeSpot)
 	account.ExecutionMode = exchange.ExecutionModePaper
+	moveToUnifiedWallet(&account)
 	validator := testValidator(now, account, testInstrument(exchange.MarketTypeSpot))
 	spec := testSpec(now)
 	spec.Type = exchange.OrderTypeLimit
@@ -334,6 +335,7 @@ func TestValidatorAcceptsPaperMarket(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	account := executableAccount(exchange.MarketTypeSpot)
 	account.ExecutionMode = exchange.ExecutionModePaper
+	moveToUnifiedWallet(&account)
 	validator := testValidator(now, account, testInstrument(exchange.MarketTypeSpot))
 
 	_, err := validator.Validate(context.Background(), "space-1", testSpec(now))
@@ -386,14 +388,14 @@ func testValidator(
 func executableAccount(market exchange.MarketType) tradingaccount.Account {
 	account := tradingaccount.Account{
 		ID: "account-1", SpaceID: "space-1", Name: "main",
-		Exchange: exchange.ExchangeBinance, MarketType: market,
+		Exchange: exchange.ExchangeBinance, Markets: []exchange.MarketType{market},
 		ExecutionMode: exchange.ExecutionModeLive, Environment: exchange.AccountEnvironmentTestnet,
 		CredentialSecretID: "secret-1",
 		SettlementAsset:    "USDT", Status: exchange.AccountStatusEnabled, Ready: true,
 		Snapshot: exchange.AccountSnapshot{
 			Balances: []exchange.AssetBalance{
-				{Asset: "USDT", Available: shared.MustDecimal("1000")},
-				{Asset: "BTC", Available: shared.MustDecimal("10")},
+				{Wallet: exchange.WalletSpot, Asset: "USDT", Available: shared.MustDecimal("1000")},
+				{Wallet: exchange.WalletSpot, Asset: "BTC", Available: shared.MustDecimal("10")},
 			},
 			AvailableFunds: shared.MustDecimal("1000"),
 		},
@@ -401,7 +403,7 @@ func executableAccount(market exchange.MarketType) tradingaccount.Account {
 	if market == exchange.MarketTypeSwap {
 		account.MarginMode = exchange.MarginModeCross
 		account.LeverageSettings = map[string]shared.Decimal{
-			"BTC-USDT": shared.MustDecimal("5"),
+			"BTC-USDT-SWAP": shared.MustDecimal("5"),
 		}
 	}
 	return account
@@ -409,7 +411,7 @@ func executableAccount(market exchange.MarketType) tradingaccount.Account {
 
 func testInstrument(market exchange.MarketType) exchange.Instrument {
 	instrument := exchange.Instrument{
-		Exchange: exchange.ExchangeBinance, MarketType: market, ExchangeSymbol: "BTC-USDT",
+		Exchange: exchange.ExchangeBinance, MarketType: market, ExchangeSymbol: "BTC-USDT", InstrumentID: "BTC-USDT-" + string(market),
 		BaseAsset: "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT",
 		ExchangeQuantityStep: shared.MustDecimal("0.1"),
 		MinExchangeQuantity:  shared.MustDecimal("0.1"),
@@ -430,7 +432,7 @@ func testSpec(referenceAt time.Time) orderdomain.OrderSpec {
 	return orderdomain.OrderSpec{
 		ClientOrderSpec: orderdomain.ClientOrderSpec{
 			TradingAccountID: "account-1", ClientOrderID: "client-1",
-			InstrumentID: "BTC-USDT", Type: exchange.OrderTypeMarket,
+			InstrumentID: "BTC-USDT-SPOT", Type: exchange.OrderTypeMarket,
 			Side: exchange.SideBuy, Quantity: shared.MustDecimal("1"),
 		},
 		ReferencePrice: shared.MustDecimal("100"), ReferencePriceAt: referenceAt,
@@ -455,4 +457,11 @@ func setTestOwner(spec *orderdomain.OrderSpec, ownerType orderdomain.OwnerType) 
 func decimalPointer(raw string) *shared.Decimal {
 	value := shared.MustDecimal(raw)
 	return &value
+}
+
+// 模拟盘只有一个统一钱包，夹具里的余额要跟着放进去。
+func moveToUnifiedWallet(account *tradingaccount.Account) {
+	for i := range account.Snapshot.Balances {
+		account.Snapshot.Balances[i].Wallet = exchange.WalletUnified
+	}
 }

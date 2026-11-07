@@ -61,7 +61,7 @@ func (s *Service) Capacity(ctx context.Context, spaceID string, spec orderdomain
 		quantity = minCapacity(quantity, s.Validator.MaxChildNotional.Div(spec.ReferencePrice))
 	}
 	step, minimum := validation.Instrument.ExchangeQuantityStep, validation.Instrument.MinExchangeQuantity
-	if exchange.RuleFor(validation.Account.MarketType).ContractValue {
+	if exchange.RuleFor(validation.Instrument.MarketType).ContractValue {
 		step = step.Mul(validation.Instrument.ContractValue)
 		minimum = minimum.Mul(validation.Instrument.ContractValue)
 	}
@@ -101,15 +101,16 @@ func availableReservationFunds(tx *store.Tx, validation Validation, adjustment s
 		}
 		return balances.Totals[validation.ReservedAsset].Add(adjustment).Sub(balances.Reserved[validation.ReservedAsset]), nil
 	}
-	unreflected, err := tx.GetUnreflectedReservation(validation.Account.SpaceID, validation.Account.ID, validation.ReservedAsset, validation.Account.SnapshotSourceTime.UnixMilli())
+	market := validation.Instrument.MarketType
+	unreflected, err := tx.GetUnreflectedReservation(
+		validation.Account.SpaceID, validation.Account.ID, validation.ReservedAsset,
+		validation.Account.MarketsSharingFunds(market),
+		validation.Account.SnapshotSourceTime.UnixMilli(),
+	)
 	if err != nil {
 		return shared.Zero(), err
 	}
-	available := availableBalance(validation.Account.Snapshot, validation.ReservedAsset)
-	if exchange.RuleFor(validation.Account.MarketType).UsesMargin {
-		available = validation.Account.Snapshot.AvailableFunds
-	}
-	return available.Sub(unreflected), nil
+	return availableFunds(validation.Account, market, validation.ReservedAsset).Sub(unreflected), nil
 }
 
 func (s *Service) paperReference(ctx context.Context, spec orderdomain.OrderSpec, validation Validation) (orderdomain.OrderSpec, error) {
@@ -120,7 +121,7 @@ func (s *Service) paperReference(ctx context.Context, spec orderdomain.OrderSpec
 	if err != nil {
 		return spec, accountExecutionError(spec.TradingAccountID, "adapter", err)
 	}
-	quote, err := adapter.GetQuote(ctx, shared.ExchangeSymbol(validation.Instrument.ExchangeSymbol))
+	quote, err := adapter.GetQuote(ctx, exchange.NewSymbolKey(validation.Instrument.MarketType, validation.Instrument.ExchangeSymbol))
 	if err != nil {
 		return spec, accountExecutionError(spec.TradingAccountID, "quote", err)
 	}

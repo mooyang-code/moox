@@ -52,6 +52,19 @@ func NormalizeInstrumentID(raw string, market MarketType) (string, error) {
 	}
 }
 
+// MarketOfInstrumentID 由 Trade 内部标的 ID 推导所属市场：加密货币带 -SPOT、-SWAP 后缀，
+// 其余（股票）是原始代码。
+func MarketOfInstrumentID(instrumentID string) MarketType {
+	switch {
+	case strings.HasSuffix(instrumentID, "-"+string(MarketTypeSwap)):
+		return MarketTypeSwap
+	case strings.HasSuffix(instrumentID, "-"+string(MarketTypeSpot)):
+		return MarketTypeSpot
+	default:
+		return MarketTypeStock
+	}
+}
+
 // Exchange 指交易场所，可以是交易所，也可以是券商。
 type Exchange string
 
@@ -78,6 +91,65 @@ const (
 func (m MarketType) Valid() bool {
 	_, ok := marketRules[m]
 	return ok
+}
+
+// AccountMode 是加密货币实盘账户的类型，只由交易所检测写入；模拟盘和股票账户没有。
+type AccountMode string
+
+const (
+	AccountModeUnspecified            AccountMode = ""
+	AccountModeBinancePortfolioMargin AccountMode = "BINANCE_PORTFOLIO_MARGIN"
+	AccountModeBinanceStandard        AccountMode = "BINANCE_STANDARD"
+	AccountModeOKXUnified             AccountMode = "OKX_UNIFIED"
+)
+
+// Valid 允许空值：账户类型在检测之前、以及模拟盘和股票账户上都是空串。
+func (m AccountMode) Valid() bool {
+	switch m {
+	case AccountModeUnspecified, AccountModeBinancePortfolioMargin, AccountModeBinanceStandard, AccountModeOKXUnified:
+		return true
+	default:
+		return false
+	}
+}
+
+// Wallet 是余额所在的钱包。币安普通账户有现货、合约两个钱包，统一账户有杠杆、统一两个钱包，
+// OKX 和模拟盘只有一个统一钱包。
+type Wallet string
+
+const (
+	WalletUnspecified Wallet = ""
+	WalletSpot        Wallet = "SPOT"
+	WalletFutures     Wallet = "FUTURES"
+	WalletMargin      Wallet = "MARGIN"
+	WalletUnified     Wallet = "UNIFIED"
+)
+
+func (w Wallet) Valid() bool {
+	return w == WalletSpot || w == WalletFutures || w == WalletMargin || w == WalletUnified
+}
+
+// WalletFor 返回某个市场的资金所在的钱包：
+// 币安普通账户 SPOT→SPOT、SWAP→FUTURES；币安统一账户 SPOT→MARGIN、SWAP→UNIFIED；OKX 统一账户和模拟盘都是 UNIFIED。
+// 账户类型还没检测出来（空串）时，OKX 按统一账户，其余按币安普通账户的口径，与适配器当前输出的钱包一致。
+func WalletFor(name Exchange, mode AccountMode, market MarketType) Wallet {
+	if mode == AccountModeUnspecified && name == ExchangeOKX {
+		mode = AccountModeOKXUnified
+	}
+	switch mode {
+	case AccountModeOKXUnified:
+		return WalletUnified
+	case AccountModeBinancePortfolioMargin:
+		if market == MarketTypeSwap {
+			return WalletUnified
+		}
+		return WalletMargin
+	default:
+		if market == MarketTypeSwap {
+			return WalletFutures
+		}
+		return WalletSpot
+	}
 }
 
 type ExecutionMode string
@@ -205,13 +277,23 @@ type Credential struct {
 type AccountConfig struct {
 	TradingAccountID string
 	Exchange         Exchange
-	MarketType       MarketType
-	ExecutionMode    ExecutionMode
-	Environment      AccountEnvironment
-	SettlementAsset  string
-	MarginMode       MarginMode
+	// Markets 是账户已开通的市场。同时开通多个市场时，注册表为每个市场各绑一个单市场适配器，
+	// 交给 execution.MultiMarket 按标的所属市场路由；单市场适配器拿到的配置里只有一个市场。
+	Markets         []MarketType
+	ExecutionMode   ExecutionMode
+	Environment     AccountEnvironment
+	SettlementAsset string
+	MarginMode      MarginMode
 	// CreatedAt 之前的成交不入账，适配器不用为它们多查一次订单。
 	CreatedAt time.Time
+}
+
+// Market 返回单市场适配器所服务的市场；开通了多个市场（或没有）时返回空串。
+func (c AccountConfig) Market() MarketType {
+	if len(c.Markets) != 1 {
+		return MarketTypeUnspecified
+	}
+	return c.Markets[0]
 }
 
 type Instrument struct {
@@ -234,10 +316,13 @@ type Instrument struct {
 }
 
 type AssetBalance struct {
+	Wallet    Wallet
 	Asset     string
 	Available shared.Decimal
 	Locked    shared.Decimal
 	Total     shared.Decimal
+	// Borrowed 是借款（统一账户的杠杆钱包），没有借款的钱包为零。
+	Borrowed shared.Decimal
 }
 
 type AccountSnapshot struct {
@@ -247,9 +332,13 @@ type AccountSnapshot struct {
 	UsedMargin        shared.Decimal
 	MaintenanceMargin shared.Decimal
 	UnrealizedPnL     shared.Decimal
+	// ExchangeEquity 是交易所给的总权益，只用于展示核对，不参与换算。
+	ExchangeEquity    shared.Decimal
 	ExchangeUpdatedAt time.Time
-	Present           AccountSnapshotPresence
-	RequiresSync      bool
+	// WalletUpdatedAt 是各钱包余额的读取时间；同时读多个市场的适配器按钱包记录，没有记录的钱包按 ExchangeUpdatedAt 算。
+	WalletUpdatedAt map[Wallet]time.Time
+	Present         AccountSnapshotPresence
+	RequiresSync    bool
 }
 
 type AccountSnapshotPresence struct {
@@ -263,6 +352,7 @@ type AccountSnapshotPresence struct {
 
 type Position struct {
 	TradingAccountID  string
+	Market            MarketType
 	InstrumentID      string
 	ExchangeSymbol    string
 	PositionSide      PositionSide
@@ -279,7 +369,9 @@ type Position struct {
 }
 
 type OrderRequest struct {
-	ClientOrderID  string
+	ClientOrderID string
+	// Market 是标的所属的市场：同一个账户的现货、合约代码相同（BTCUSDT），下单必须说明是哪个市场。
+	Market         MarketType
 	ExchangeSymbol string
 	OrderType      OrderType
 	FillPolicy     FillPolicy
@@ -302,6 +394,7 @@ func (r OrderRequest) NativeTimeInForce() TimeInForce {
 type Order struct {
 	ExchangeOrderID string
 	ClientOrderID   string
+	Market          MarketType
 	ExchangeSymbol  string
 	OrderType       OrderType
 	TimeInForce     TimeInForce
@@ -321,6 +414,7 @@ type Fill struct {
 	ExchangeTradeID string
 	ExchangeOrderID string
 	ClientOrderID   string
+	Market          MarketType
 	ExchangeSymbol  string
 	Side            Side
 	PositionSide    PositionSide

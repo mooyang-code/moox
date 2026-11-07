@@ -11,10 +11,19 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 )
 
+// paperUsesMarginPool 报告订单预留的资金是否和合约保证金共用一个资金池：模拟盘、账户开通了合约市场、
+// 预留的是结算币。这时无论订单是现货还是合约，可用资金都要扣掉合约已占用的保证金和浮亏
+// （真实统一账户同样会因保证金不足拒单），不能让现货买单按全额现金下单。
+func paperUsesMarginPool(validation Validation) bool {
+	return validation.Account.ExecutionMode == exchange.ExecutionModePaper &&
+		validation.Account.HasLeverageMarket() &&
+		validation.ReservedAsset == validation.Account.SettlementAsset
+}
+
 // The caller holds the account lock. Market valuation happens outside the
 // SQLite transaction; cash and active reservations are read inside the write.
 func (s *Service) paperMarginAdjustment(ctx context.Context, validation Validation) (shared.Decimal, error) {
-	if validation.Account.ExecutionMode != exchange.ExecutionModePaper || !exchange.RuleFor(validation.Account.MarketType).UsesMargin {
+	if !paperUsesMarginPool(validation) {
 		return shared.Zero(), nil
 	}
 	if s.Adapters == nil {
@@ -32,7 +41,12 @@ func (s *Service) paperMarginAdjustment(ctx context.Context, validation Validati
 		snapshot.ExchangeUpdatedAt.IsZero() || snapshot.ExchangeUpdatedAt.After(s.now()) || s.now().Sub(snapshot.ExchangeUpdatedAt) > 10*time.Second {
 		return shared.Zero(), accountExecutionError(validation.Account.ID, "snapshot", fmt.Errorf("%w: paper margin valuation unavailable", ErrServiceConfig))
 	}
-	return snapshot.UnrealizedPnL.Sub(snapshot.UsedMargin), nil
+	unrealized := snapshot.UnrealizedPnL
+	if !exchange.RuleFor(validation.Instrument.MarketType).UsesMargin && unrealized.Cmp(shared.Zero()) > 0 {
+		// 现货买入不借币：合约的浮盈不能拿来买现货，只扣浮亏和已占保证金；合约开仓才按“浮盈亏 - 保证金”。
+		unrealized = shared.Zero()
+	}
+	return unrealized.Sub(snapshot.UsedMargin), nil
 }
 
 // fundsMarginAdjustment 是下单资金检查用的保证金调整：减仓单在 checkPaperFunds 里不占新保证金，

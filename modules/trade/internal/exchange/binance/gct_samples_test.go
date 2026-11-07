@@ -74,7 +74,7 @@ func TestRecordedSpotOrders(t *testing.T) {
 		t.Fatalf("open orders = %+v", open)
 	}
 
-	order, err := adapter.GetOrder(context.Background(), "BTCUSDT", "eliteOrder")
+	order, err := adapter.GetOrder(context.Background(), exchange.NewSymbolKey(exchange.MarketTypeSpot, "BTCUSDT"), "eliteOrder")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,7 @@ func TestRecordedSpotOrders(t *testing.T) {
 	}
 
 	// 撤单回执的 clientOrderId 是撤单请求自己的单号，返回值必须是被撤订单的单号；部分成交后撤销。
-	canceled, err := adapter.CancelOrder(context.Background(), "LTCBTC", "myOrder1")
+	canceled, err := adapter.CancelOrder(context.Background(), exchange.NewSymbolKey(exchange.MarketTypeSpot, "LTCBTC"), "myOrder1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,7 @@ func TestRecordedFuturesBooks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if book := books["BTCUSDT"]; book.Bid.String() != "11495.46" || book.Ask.String() != "11495.47" {
+	if book := books[exchange.SymbolKey{Market: exchange.MarketTypeSwap, Symbol: "BTCUSDT"}]; book.Bid.String() != "11495.46" || book.Ask.String() != "11495.47" {
 		t.Fatalf("books = %+v", books)
 	}
 }

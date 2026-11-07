@@ -20,11 +20,7 @@ type logicalAccountE2EPriceSource struct {
 	at time.Time
 }
 
-func (s logicalAccountE2EPriceSource) LatestPrice(
-	context.Context,
-	string,
-	string,
-) (targetapp.Quote, error) {
+func (s logicalAccountE2EPriceSource) LatestPrice(context.Context, string, exchange.SymbolKey) (targetapp.Quote, error) {
 	return targetapp.Quote{
 		Price: shared.MustDecimal("50000"), UpdatedAt: s.at,
 	}, nil
@@ -35,7 +31,7 @@ func TestManualFlattenThenResumeCanReopenLatestTarget(t *testing.T) {
 	now := testNow
 	f := newPaperFixture(t, exchange.MarketTypeSwap)
 	seedSwapLogicalAccount(t, f.store)
-	delivery := targetDelivery(t, now, "target-reopen", 1, "0.002")
+	delivery := targetDeliveryForMarket(t, now, "target-reopen", 1, "0.002", exchange.MarketTypeSwap)
 	handled := eventconsumer.HandleTarget(ctx, delivery, eventconsumer.TargetOptions{
 		Store:          f.store,
 		Now:            func() time.Time { return now },
@@ -106,7 +102,7 @@ func seedSwapLogicalAccount(t *testing.T, tradeStore *store.Store) {
 			SpaceID: testSpace, LogicalAccountID: testLogicalAccount,
 			Name:            "E2E swap logical account",
 			OwnerInstanceID: testRunner, OwnerSessionID: "session-e2e",
-			ExecutionMode: "PAPER", MarketType: "SWAP", SettlementAsset: "USDT",
+			ExecutionMode: "PAPER", SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {
 			return err

@@ -29,7 +29,7 @@ type Adapter struct {
 	client     *httpclient.Client
 
 	mu          sync.RWMutex
-	instruments map[string]exchange.Instrument
+	instruments map[exchange.SymbolKey]exchange.Instrument
 	prices      exchange.PriceBoard
 }
 
@@ -39,7 +39,7 @@ func New(config exchange.AccountConfig, credential exchange.Credential) *Adapter
 	return &Adapter{
 		config: config, credential: credential,
 		client:      client,
-		instruments: make(map[string]exchange.Instrument),
+		instruments: make(map[exchange.SymbolKey]exchange.Instrument),
 	}
 }
 
@@ -52,6 +52,19 @@ func classifyRateLimit(status int, _ []byte) exchange.ErrorKind {
 }
 
 func (a *Adapter) Exchange() exchange.Exchange { return exchange.ExchangeOKX }
+
+// ownMarket 校验标的键属于本适配器服务的市场：传错市场直接报错，不会悄悄按本市场处理。
+func (a *Adapter) ownMarket(key exchange.SymbolKey) error {
+	if key.Market != a.config.Market() {
+		return &exchange.Error{Kind: exchange.ErrorRejected, Err: fmt.Errorf("标的键 %s 不属于本适配器服务的市场 %s", key, a.config.Market())}
+	}
+	return nil
+}
+
+// key 返回本适配器所服务市场下的标的键。
+func (a *Adapter) key(symbol string) exchange.SymbolKey {
+	return exchange.SymbolKey{Market: a.config.Market(), Symbol: symbol}
+}
 
 // RateStatus 返回限流状态。OKX 没有权重响应头，只有暂停信息。
 func (a *Adapter) RateStatus() exchange.RateStatus {
@@ -175,7 +188,7 @@ func signature(secret, timestamp, method, path, body string) string {
 }
 
 func (a *Adapter) instrumentType() string {
-	if a.config.MarketType == exchange.MarketTypeSwap {
+	if a.config.Market() == exchange.MarketTypeSwap {
 		return "SWAP"
 	}
 	return "SPOT"
@@ -213,7 +226,7 @@ func (a *Adapter) LoadInstruments(ctx context.Context) ([]exchange.Instrument, e
 			continue
 		}
 		baseAsset, quoteAsset := row.BaseCcy, row.QuoteCcy
-		if a.config.MarketType == exchange.MarketTypeSwap {
+		if a.config.Market() == exchange.MarketTypeSwap {
 			if row.CtType != "linear" || row.SettleCcy != "USDT" ||
 				row.CtVal == "" || row.CtValCcy == "" {
 				continue
@@ -223,13 +236,13 @@ func (a *Adapter) LoadInstruments(ctx context.Context) ([]exchange.Instrument, e
 		instrumentID, idErr := exchange.CanonicalInstrumentID(
 			baseAsset,
 			quoteAsset,
-			a.config.MarketType,
+			a.config.Market(),
 		)
 		if idErr != nil {
 			return nil, rejected("canonical instrument ID", idErr)
 		}
 		instrument := exchange.Instrument{
-			Exchange: exchange.ExchangeOKX, MarketType: a.config.MarketType,
+			Exchange: exchange.ExchangeOKX, MarketType: a.config.Market(),
 			ExchangeSymbol: row.InstID, InstrumentID: instrumentID,
 			BaseAsset: baseAsset, QuoteAsset: quoteAsset,
 			Status: row.State, ExchangeUpdatedAt: time.Now().UTC(),
@@ -244,7 +257,7 @@ func (a *Adapter) LoadInstruments(ctx context.Context) ([]exchange.Instrument, e
 		if err != nil {
 			return nil, err
 		}
-		if a.config.MarketType == exchange.MarketTypeSwap {
+		if a.config.Market() == exchange.MarketTypeSwap {
 			instrument.Linear = true
 			instrument.SettlementAsset = row.SettleCcy
 			instrument.ContractValue, err = decimal(row.CtVal)
@@ -262,9 +275,9 @@ func (a *Adapter) LoadInstruments(ctx context.Context) ([]exchange.Instrument, e
 		out = append(out, instrument)
 	}
 	a.mu.Lock()
-	a.instruments = make(map[string]exchange.Instrument, len(out))
+	a.instruments = make(map[exchange.SymbolKey]exchange.Instrument, len(out))
 	for _, instrument := range out {
-		a.instruments[instrument.ExchangeSymbol] = instrument
+		a.instruments[a.key(instrument.ExchangeSymbol)] = instrument
 	}
 	a.mu.Unlock()
 	return out, nil
@@ -272,9 +285,13 @@ func (a *Adapter) LoadInstruments(ctx context.Context) ([]exchange.Instrument, e
 
 func (a *Adapter) GetReferencePrice(
 	ctx context.Context,
-	symbol string,
+	key exchange.SymbolKey,
 ) (exchange.ReferencePrice, error) {
-	if price, at, ok := a.prices.Get(ctx, symbol, a.allPrices); ok {
+	if err := a.ownMarket(key); err != nil {
+		return exchange.ReferencePrice{}, err
+	}
+	symbol := key.Symbol
+	if price, at, ok := a.prices.Get(ctx, a.key(symbol), a.allPrices); ok {
 		return exchange.ReferencePrice{Price: price, UpdatedAt: at}, nil
 	}
 	data, err := a.request(
@@ -302,8 +319,8 @@ func (a *Adapter) GetReferencePrice(
 	return exchange.ReferencePrice{Price: price, UpdatedAt: time.Now().UTC()}, nil
 }
 
-func (a *Adapter) allPrices(ctx context.Context) (map[string]shared.Decimal, error) {
-	data, err := a.request(ctx, http.MethodGet, "/api/v5/market/tickers", url.Values{"instType": []string{string(a.config.MarketType)}}, nil, false)
+func (a *Adapter) allPrices(ctx context.Context) (map[exchange.SymbolKey]shared.Decimal, error) {
+	data, err := a.request(ctx, http.MethodGet, "/api/v5/market/tickers", url.Values{"instType": []string{string(a.config.Market())}}, nil, false)
 	if err != nil {
 		return nil, err
 	}
@@ -314,10 +331,10 @@ func (a *Adapter) allPrices(ctx context.Context) (map[string]shared.Decimal, err
 	if err := json.Unmarshal(data, &rows); err != nil {
 		return nil, rejected("decode all prices", err)
 	}
-	prices := make(map[string]shared.Decimal, len(rows))
+	prices := make(map[exchange.SymbolKey]shared.Decimal, len(rows))
 	for _, row := range rows {
 		if price, err := shared.ParseDecimal(row.Last); err == nil {
-			prices[row.InstID] = price
+			prices[a.key(row.InstID)] = price
 		}
 	}
 	return prices, nil
@@ -331,8 +348,11 @@ func parseQuote(raw string) shared.Decimal {
 	return value
 }
 
-func (a *Adapter) GetQuote(ctx context.Context, symbol shared.ExchangeSymbol) (execution.MarketQuote, error) {
-	data, err := a.request(ctx, http.MethodGet, "/api/v5/market/ticker", url.Values{"instId": []string{symbol.String()}}, nil, false)
+func (a *Adapter) GetQuote(ctx context.Context, key exchange.SymbolKey) (execution.MarketQuote, error) {
+	if err := a.ownMarket(key); err != nil {
+		return execution.MarketQuote{}, err
+	}
+	data, err := a.request(ctx, http.MethodGet, "/api/v5/market/ticker", url.Values{"instId": []string{key.Symbol}}, nil, false)
 	if err != nil {
 		return execution.MarketQuote{}, err
 	}
@@ -349,7 +369,7 @@ func (a *Adapter) GetQuote(ctx context.Context, symbol shared.ExchangeSymbol) (e
 
 func (a *Adapter) instrument(symbol string) (exchange.Instrument, error) {
 	a.mu.RLock()
-	instrument, ok := a.instruments[symbol]
+	instrument, ok := a.instruments[a.key(symbol)]
 	a.mu.RUnlock()
 	if !ok {
 		return exchange.Instrument{}, &exchange.Error{
@@ -361,7 +381,7 @@ func (a *Adapter) instrument(symbol string) (exchange.Instrument, error) {
 }
 
 func (a *Adapter) toExchangeQuantity(symbol string, base shared.Decimal) (shared.Decimal, error) {
-	if a.config.MarketType == exchange.MarketTypeSpot {
+	if a.config.Market() == exchange.MarketTypeSpot {
 		return base, nil
 	}
 	instrument, err := a.instrument(symbol)
@@ -383,7 +403,7 @@ func (a *Adapter) toExchangeQuantity(symbol string, base shared.Decimal) (shared
 }
 
 func (a *Adapter) toBaseQuantity(symbol string, contracts shared.Decimal) (shared.Decimal, error) {
-	if a.config.MarketType == exchange.MarketTypeSpot {
+	if a.config.Market() == exchange.MarketTypeSpot {
 		return contracts, nil
 	}
 	instrument, err := a.instrument(symbol)
@@ -399,6 +419,7 @@ func (a *Adapter) toBaseQuantity(symbol string, contracts shared.Decimal) (share
 
 type balanceEnvelope struct {
 	UTime   string `json:"uTime"`
+	TotalEq string `json:"totalEq"`
 	Details []struct {
 		Ccy       string `json:"ccy"`
 		AvailBal  string `json:"availBal"`
@@ -413,7 +434,7 @@ type balanceEnvelope struct {
 }
 
 func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnapshot, error) {
-	if a.config.MarketType == exchange.MarketTypeSwap {
+	if a.config.Market() == exchange.MarketTypeSwap {
 		if err := a.ensureNetPositionMode(ctx); err != nil {
 			return exchange.AccountSnapshot{}, err
 		}
@@ -429,20 +450,20 @@ func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnaps
 	return a.balanceSnapshot(payload[0])
 }
 
-// balanceSnapshot 把 REST 余额和私有流 account 推送统一转成账户快照。权益取结算币那一项的 eq，
-// 不用 totalEq（全币种折合 USD，账户里有别的币时会高估权益）。推送只带有变化的币种，
-// 所以结算币相关字段只有带了结算币明细才标记为存在，否则合并时会把它们写成 0。
+// balanceSnapshot 把 REST 余额和私有流 account 推送统一转成账户快照。余额数量取 cashBal（不含未实现盈亏），
+// 未实现盈亏只从 upl 取一次；totalEq（全币种折合 USD，账户里有别的币时会和统一权益重复）只记入 ExchangeEquity 供展示核对。
+// 推送只带有变化的币种，所以结算币相关字段只有带了结算币明细才标记为存在，否则合并时会把它们写成 0。
 func (a *Adapter) balanceSnapshot(row balanceEnvelope) (exchange.AccountSnapshot, error) {
 	snapshot := exchange.AccountSnapshot{
 		ExchangeUpdatedAt: millisString(row.UTime),
 		Present:           exchange.AccountSnapshotPresence{Balances: true},
 	}
+	if exchangeEquity, err := decimalOrZero(row.TotalEq); err == nil {
+		snapshot.ExchangeEquity = exchangeEquity
+	}
 	for _, detail := range row.Details {
-		totalRaw := detail.Eq
-		if totalRaw == "" {
-			totalRaw = detail.CashBal
-		}
-		total, err := decimalOrZero(totalRaw)
+		// 只用 cashBal：缺失按 0 处理，不退回含未实现盈亏的 eq（会和 upl 重复计入）。
+		total, err := decimalOrZero(detail.CashBal)
 		if err != nil {
 			return exchange.AccountSnapshot{}, err
 		}
@@ -459,7 +480,8 @@ func (a *Adapter) balanceSnapshot(row balanceEnvelope) (exchange.AccountSnapshot
 			return exchange.AccountSnapshot{}, err
 		}
 		snapshot.Balances = append(snapshot.Balances, exchange.AssetBalance{
-			Asset: detail.Ccy, Available: available, Locked: locked, Total: total,
+			Wallet: exchange.WalletUnified,
+			Asset:  detail.Ccy, Available: available, Locked: locked, Total: total,
 		})
 		if !strings.EqualFold(detail.Ccy, a.config.SettlementAsset) {
 			continue
@@ -519,7 +541,7 @@ type positionPayload struct {
 }
 
 func (a *Adapter) ListPositionSnapshots(ctx context.Context) ([]exchange.Position, error) {
-	if a.config.MarketType == exchange.MarketTypeSpot {
+	if a.config.Market() == exchange.MarketTypeSpot {
 		return nil, nil
 	}
 	data, err := a.request(ctx, http.MethodGet, "/api/v5/account/positions", url.Values{
@@ -546,6 +568,7 @@ func (a *Adapter) ListPositionSnapshots(ctx context.Context) ([]exchange.Positio
 			return nil, err
 		}
 		position := exchange.Position{
+			Market:           a.config.Market(),
 			TradingAccountID: a.config.TradingAccountID,
 			ExchangeSymbol:   row.InstID, PositionSide: exchange.PositionSideNet,
 			SignedQuantity: quantity, MarginMode: exchange.MarginModeCross,
@@ -638,10 +661,13 @@ func (a *Adapter) ListOpenOrders(ctx context.Context) ([]exchange.Order, error) 
 
 func (a *Adapter) GetOrder(
 	ctx context.Context,
-	symbol shared.ExchangeSymbol,
+	key exchange.SymbolKey,
 	clientOrderID string,
 ) (exchange.Order, error) {
-	symbolValue := symbol.String()
+	if err := a.ownMarket(key); err != nil {
+		return exchange.Order{}, err
+	}
+	symbolValue := key.Symbol
 	data, err := a.request(ctx, http.MethodGet, "/api/v5/trade/order", url.Values{
 		"instId":  []string{symbolValue},
 		"clOrdId": []string{clientOrderID},
@@ -660,9 +686,13 @@ func (a *Adapter) GetOrder(
 
 func (a *Adapter) GetOrderByExchangeID(
 	ctx context.Context,
-	symbol string,
+	key exchange.SymbolKey,
 	exchangeOrderID string,
 ) (exchange.Order, error) {
+	if err := a.ownMarket(key); err != nil {
+		return exchange.Order{}, err
+	}
+	symbol := key.Symbol
 	data, err := a.request(ctx, http.MethodGet, "/api/v5/trade/order", url.Values{
 		"instId": []string{symbol},
 		"ordId":  []string{exchangeOrderID},
@@ -683,7 +713,7 @@ func (a *Adapter) PlaceOrder(
 	ctx context.Context,
 	request exchange.OrderRequest,
 ) (exchange.Order, error) {
-	if err := validateRequest(request, a.config.MarketType); err != nil {
+	if err := validateRequest(request, a.config.Market()); err != nil {
 		return exchange.Order{}, err
 	}
 	quantity, err := a.toExchangeQuantity(request.ExchangeSymbol, request.Quantity)
@@ -696,7 +726,7 @@ func (a *Adapter) PlaceOrder(
 		"ordType": strings.ToLower(string(request.OrderType)),
 		"sz":      quantity.String(),
 	}
-	if a.config.MarketType == exchange.MarketTypeSpot &&
+	if a.config.Market() == exchange.MarketTypeSpot &&
 		request.OrderType == exchange.OrderTypeMarket &&
 		request.Side == exchange.SideBuy {
 		// Domain MARKET quantities are always base-asset quantities. OKX
@@ -707,7 +737,7 @@ func (a *Adapter) PlaceOrder(
 		body["px"] = request.LimitPrice.String()
 		body["ordType"] = mapOKXLimitType(request.EffectiveFillPolicy())
 	}
-	if a.config.MarketType == exchange.MarketTypeSwap {
+	if a.config.Market() == exchange.MarketTypeSwap {
 		body["tdMode"] = "cross"
 		body["posSide"] = "net"
 		if request.ReduceOnly {
@@ -726,6 +756,7 @@ func (a *Adapter) PlaceOrder(
 		return exchange.Order{}, a.rateLimited(classifyOKXCode(payload[0].SCode, payload[0].SMsg), true)
 	}
 	return exchange.Order{
+		Market:          a.config.Market(),
 		ExchangeOrderID: payload[0].OrdID,
 		ClientOrderID:   request.ClientOrderID,
 		ExchangeSymbol:  request.ExchangeSymbol,
@@ -743,10 +774,13 @@ func (a *Adapter) PlaceOrder(
 
 func (a *Adapter) CancelOrder(
 	ctx context.Context,
-	symbol shared.ExchangeSymbol,
+	key exchange.SymbolKey,
 	clientOrderID string,
 ) (exchange.Order, error) {
-	symbolValue := symbol.String()
+	if err := a.ownMarket(key); err != nil {
+		return exchange.Order{}, err
+	}
+	symbolValue := key.Symbol
 	data, err := a.request(ctx, http.MethodPost, "/api/v5/trade/cancel-order", nil, map[string]string{
 		"instId": symbolValue, "clOrdId": clientOrderID,
 	}, true)
@@ -763,6 +797,7 @@ func (a *Adapter) CancelOrder(
 	// 回执只说明撤单已受理；最终状态和可能抢先发生的成交由调用方撤单后的同步拿到，这里不再追查订单：
 	// 追查失败会被当成撤单没发出而重发。
 	return exchange.Order{
+		Market:          a.config.Market(),
 		ExchangeOrderID: payload[0].OrdID, ClientOrderID: clientOrderID, ExchangeSymbol: symbolValue,
 	}, nil
 }
@@ -787,10 +822,13 @@ type fillPayload struct {
 
 func (a *Adapter) ListRecentFills(
 	ctx context.Context,
-	symbol shared.ExchangeSymbol,
+	key exchange.SymbolKey,
 	cursor string,
 ) ([]exchange.Fill, string, error) {
-	symbolValue := symbol.String()
+	if err := a.ownMarket(key); err != nil {
+		return nil, "", err
+	}
+	symbolValue := key.Symbol
 	if strings.TrimSpace(symbolValue) == "" {
 		return nil, cursor, rejected("symbol is required to list OKX fills", nil)
 	}
@@ -889,11 +927,14 @@ func compareBillID(left string, right string) int {
 
 func (a *Adapter) SetLeverage(
 	ctx context.Context,
-	symbol shared.ExchangeSymbol,
+	key exchange.SymbolKey,
 	leverage shared.Decimal,
 ) error {
-	symbolValue := symbol.String()
-	if a.config.MarketType != exchange.MarketTypeSwap ||
+	if err := a.ownMarket(key); err != nil {
+		return err
+	}
+	symbolValue := key.Symbol
+	if a.config.Market() != exchange.MarketTypeSwap ||
 		strings.TrimSpace(symbolValue) == "" ||
 		leverage.Cmp(shared.Zero()) <= 0 ||
 		strings.ContainsAny(leverage.String(), "./") {
@@ -910,7 +951,7 @@ func (a *Adapter) SetMarginMode(
 	_ shared.ExchangeSymbol,
 	mode exchange.MarginMode,
 ) error {
-	if a.config.MarketType != exchange.MarketTypeSwap || mode != exchange.MarginModeCross {
+	if a.config.Market() != exchange.MarketTypeSwap || mode != exchange.MarginModeCross {
 		return rejected("only CROSS SWAP margin mode is supported", nil)
 	}
 	// OKX applies tdMode=cross per order and leverage setting; there is no
@@ -956,7 +997,7 @@ func (a *Adapter) order(row orderPayload) (exchange.Order, error) {
 		return exchange.Order{}, err
 	}
 	positionSide := exchange.PositionSideUnspecified
-	if a.config.MarketType == exchange.MarketTypeSwap {
+	if a.config.Market() == exchange.MarketTypeSwap {
 		if row.PosSide != "" && row.PosSide != "net" {
 			return exchange.Order{}, rejected("hedge order is unsupported", nil)
 		}
@@ -968,6 +1009,7 @@ func (a *Adapter) order(row orderPayload) (exchange.Order, error) {
 		limitPrice = &price
 	}
 	return exchange.Order{
+		Market:          a.config.Market(),
 		ExchangeOrderID: row.OrdID, ClientOrderID: row.ClOrdID,
 		ExchangeSymbol: row.InstID, OrderType: orderType, TimeInForce: tif,
 		Side: exchange.Side(strings.ToUpper(row.Side)), PositionSide: positionSide,
@@ -1009,13 +1051,14 @@ func (a *Adapter) fill(row fillPayload) (exchange.Fill, error) {
 		return exchange.Fill{}, err
 	}
 	positionSide := exchange.PositionSideUnspecified
-	if a.config.MarketType == exchange.MarketTypeSwap {
+	if a.config.Market() == exchange.MarketTypeSwap {
 		if row.PosSide != "" && row.PosSide != "net" {
 			return exchange.Fill{}, rejected("hedge fill is unsupported", nil)
 		}
 		positionSide = exchange.PositionSideNet
 	}
 	return exchange.Fill{
+		Market:          a.config.Market(),
 		ExchangeTradeID: row.TradeID, ExchangeOrderID: row.OrdID,
 		ClientOrderID: row.ClOrdID, ExchangeSymbol: row.InstID,
 		Side: exchange.Side(strings.ToUpper(row.Side)), PositionSide: positionSide,

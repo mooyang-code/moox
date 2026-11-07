@@ -13,7 +13,7 @@ func init() {
 
 	registerRPCSpecs(
 		rpcSpec{Path: []string{"trade", "account", "list"}, Short: "列出交易账户", Service: tradeConsole, Method: "ListTradingAccounts", Page: rpcPageSize,
-			Flags: []rpcFlag{strFlag("exchange", "exchange", "按交易所过滤"), strFlag("market-type", "market_type", "按市场类型过滤"), strFlag("execution-mode", "execution_mode", "按执行模式过滤"), strFlag("status", "status", "按状态过滤")}},
+			Flags: []rpcFlag{strFlag("exchange", "exchange", "按交易所过滤"), strFlag("market-type", "market_type", "按已开通的市场过滤（写 MARKET_TYPE_SPOT、MARKET_TYPE_SWAP 或 MARKET_TYPE_STOCK）"), strFlag("execution-mode", "execution_mode", "按执行模式过滤"), strFlag("status", "status", "按状态过滤")}},
 		rpcSpec{Path: []string{"trade", "account", "show"}, Short: "查看交易账户", Service: tradeConsole, Method: "GetTradingAccount",
 			Flags: []rpcFlag{reqFlag("account-id", "trading_account_id", "交易账户 ID")}},
 		rpcSpec{Path: []string{"trade", "logical", "list"}, Short: "列出逻辑账户", Service: tradeConsole, Method: "ListLogicalAccounts", Page: rpcPageSize},
@@ -35,7 +35,8 @@ func init() {
 			Flags: []rpcFlag{reqFlag("account-id", "trading_account_id", "交易账户 ID")}},
 		rpcSpec{Path: []string{"trade", "ledger"}, Short: "查询交易账户的资金流水（手续费、资金费、已实现盈亏、划转）", Service: tradeConsole, Method: "ListAccountLedger",
 			Flags: []rpcFlag{reqFlag("account-id", "trading_account_id", "交易账户 ID"), intFlag("start-time", "start_time", "起点（毫秒时间戳，默认 7 天前）"),
-				intFlag("end-time", "end_time", "终点（毫秒时间戳，默认现在）"), intFlag("limit", "limit", "最多条数（默认 200，最多 1000）")}},
+				intFlag("end-time", "end_time", "终点（毫秒时间戳，默认现在）"), intFlag("limit", "limit", "最多条数（默认 200，最多 1000）"),
+				strFlag("market-type", "market_type", "要查流水的市场（写 MARKET_TYPE_SPOT 或 MARKET_TYPE_SWAP）；账户开通多个市场且都支持流水时必填")}},
 		rpcSpec{Path: []string{"trade", "equity"}, Short: "查询权益曲线", Service: tradeConsole, Method: "QueryEquityCurve",
 			Flags: []rpcFlag{strFlag("account-id", "trading_account_id", "交易账户 ID"), strFlag("logical-account-id", "logical_account_id", "逻辑账户 ID"),
 				intFlag("start-time", "start_time", "起点（毫秒时间戳）"), intFlag("end-time", "end_time", "终点（毫秒时间戳）")}},

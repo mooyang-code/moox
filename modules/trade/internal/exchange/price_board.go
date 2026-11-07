@@ -24,16 +24,16 @@ type Book struct {
 	Ask shared.Decimal
 }
 
-// PriceBoard 缓存全市场最新价。零值可用，每个交易所适配器一份。
+// PriceBoard 缓存全市场最新价，按（市场，交易所代码）查询。零值可用，每个交易所适配器一份。
 type PriceBoard struct{ board[shared.Decimal] }
 
 // Get 返回标的的最新价和取得时间。全市场接口失败或没有这个标的时 ok 为 false，调用方退回单标的接口。
 func (b *PriceBoard) Get(
 	ctx context.Context,
-	symbol string,
-	fetch func(context.Context) (map[string]shared.Decimal, error),
+	key SymbolKey,
+	fetch func(context.Context) (map[SymbolKey]shared.Decimal, error),
 ) (shared.Decimal, time.Time, bool) {
-	price, at, ok := b.get(ctx, priceBoardTTL, symbol, fetch)
+	price, at, ok := b.get(ctx, priceBoardTTL, key, fetch)
 	return price, at, ok && price.Cmp(shared.Zero()) > 0
 }
 
@@ -43,31 +43,31 @@ type BookBoard struct{ board[Book] }
 // Get 返回标的的买一卖一和取得时间。全市场接口失败、没有这个标的或报价为空时 ok 为 false，调用方退回单标的接口。
 func (b *BookBoard) Get(
 	ctx context.Context,
-	symbol string,
-	fetch func(context.Context) (map[string]Book, error),
+	key SymbolKey,
+	fetch func(context.Context) (map[SymbolKey]Book, error),
 ) (Book, time.Time, bool) {
-	book, at, ok := b.get(ctx, bookBoardTTL, symbol, fetch)
+	book, at, ok := b.get(ctx, bookBoardTTL, key, fetch)
 	return book, at, ok && book.Bid.Cmp(shared.Zero()) > 0 && book.Ask.Cmp(shared.Zero()) > 0
 }
 
 // board 是按标的查询的全市场快照。
 type board[V any] struct {
 	once     sync.Once
-	snapshot *cache.Snapshot[map[string]V]
+	snapshot *cache.Snapshot[map[SymbolKey]V]
 }
 
 func (b *board[V]) get(
 	ctx context.Context,
 	ttl time.Duration,
-	symbol string,
-	fetch func(context.Context) (map[string]V, error),
+	key SymbolKey,
+	fetch func(context.Context) (map[SymbolKey]V, error),
 ) (V, time.Time, bool) {
-	b.once.Do(func() { b.snapshot = cache.NewSnapshot[map[string]V](ttl) })
+	b.once.Do(func() { b.snapshot = cache.NewSnapshot[map[SymbolKey]V](ttl) })
 	var zero V
 	values, at, err := b.snapshot.Get(ctx, fetch)
 	if err != nil {
 		return zero, time.Time{}, false
 	}
-	value, ok := values[symbol]
+	value, ok := values[key]
 	return value, at, ok
 }

@@ -102,13 +102,13 @@ func (tx *Tx) refreshClosedPaperBalances(account TradingAccountRecord) error {
 	snapshot.Balances = make([]AssetBalance, 0, len(assets))
 	for _, asset := range assets {
 		total := projection.Totals[asset].String()
-		snapshot.Balances = append(snapshot.Balances, AssetBalance{Asset: asset, Total: total, Available: total, Locked: "0"})
+		snapshot.Balances = append(snapshot.Balances, AssetBalance{Wallet: string(exchange.WalletUnified), Asset: asset, Total: total, Available: total, Locked: "0", Borrowed: "0"})
 	}
 	// Closing must work without quotes. Cash is authoritative, but mark-based
 	// valuation remains cached and none of its freshness timestamps advance.
 	cash := projection.Totals[account.SettlementAsset]
 	snapshot.AvailableFunds = cash.String()
-	if !exchange.RuleFor(account.MarketType).PositionFromBalance {
+	if account.HasPositionMarket() {
 		margin, unrealized, valuedAt, err := tx.closedPaperPositionValuation(account)
 		if err != nil {
 			return err
@@ -119,6 +119,17 @@ func (tx *Tx) refreshClosedPaperBalances(account TradingAccountRecord) error {
 		snapshot.ExchangeUpdatedAt = valuedAt
 		snapshot.Equity = equity.String()
 		snapshot.AvailableFunds = equity.Sub(margin).String()
+		// 单一资金池：结算币这一行是现货买单看的，扣保证金和浮亏、浮盈不能花在现货上，与模拟盘适配器的快照一致。
+		spotAvailable := cash.Sub(margin)
+		if unrealized.IsNegative() {
+			spotAvailable = spotAvailable.Add(unrealized)
+		}
+		// 只合约的账户没有现货买单，这一行保持原样（总额），不改显示。
+		for i := range snapshot.Balances {
+			if account.HasBalanceMarket() && snapshot.Balances[i].Asset == account.SettlementAsset {
+				snapshot.Balances[i].Available = spotAvailable.String()
+			}
+		}
 	}
 	encoded, err := encodeSnapshot(snapshot)
 	if err != nil {

@@ -57,7 +57,7 @@ type CancelConfirmer interface {
 
 // SymbolConfigurer 在首次开仓前把杠杆设置到交易所。
 type SymbolConfigurer interface {
-	EnsureSymbolConfig(ctx context.Context, tradingAccountID, symbol string, leverage shared.Decimal) error
+	EnsureSymbolConfig(ctx context.Context, tradingAccountID string, symbol exchange.SymbolKey, leverage shared.Decimal) error
 }
 
 type Service struct {
@@ -113,6 +113,7 @@ func (s *Service) Place(
 		ctx,
 		spaceID,
 		spec.TradingAccountID,
+		exchange.MarketOfInstrumentID(spec.InstrumentID),
 		spec.ClientOrderID,
 	); err == nil {
 		if !sameSpec(existing, spec) {
@@ -156,7 +157,7 @@ func (s *Service) Place(
 	record := orderRecord(validation, *aggregate)
 	err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		if validation.Instrument.InstrumentID != "" &&
-			exchange.RuleFor(validation.Account.MarketType).ReduceOnly &&
+			exchange.RuleFor(validation.Instrument.MarketType).ReduceOnly &&
 			spec.ReducePositionOnly {
 			accountRecord, err := tx.GetTradingAccount(validation.Account.SpaceID, spec.TradingAccountID)
 			if err != nil {
@@ -210,6 +211,7 @@ func (s *Service) Place(
 				ctx,
 				validation.Account.SpaceID,
 				spec.TradingAccountID,
+				validation.Instrument.MarketType,
 				spec.ClientOrderID,
 			)
 			if getErr != nil {
@@ -260,7 +262,7 @@ func (s *Service) deriveReducePositionOnly(
 		return spec, err
 	}
 	spec.ReducePositionOnly = false
-	if !exchange.RuleFor(account.MarketType).ReduceOnly {
+	if !exchange.RuleFor(account.MarketForInstrument(spec.InstrumentID)).ReduceOnly {
 		return spec, nil
 	}
 	if s.Validator.Positions == nil {
@@ -564,7 +566,7 @@ func (s *Service) Cancel(
 		return orderdomain.Order{}, err
 	}
 
-	response, callErr := adapter.CancelOrder(ctx, shared.ExchangeSymbol(record.ExchangeSymbol), record.ClientOrderID)
+	response, callErr := adapter.CancelOrder(ctx, exchange.NewSymbolKey(record.MarketType, record.ExchangeSymbol), record.ClientOrderID)
 	persistCtx, persistCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 	defer persistCancel()
 	ctx = persistCtx
@@ -647,7 +649,7 @@ func (s *Service) RecoverCancel(
 	if err != nil {
 		return current, accountExecutionError(record.TradingAccountID, "adapter", err)
 	}
-	found, lookupErr := adapter.GetOrder(ctx, shared.ExchangeSymbol(record.ExchangeSymbol), record.ClientOrderID)
+	found, lookupErr := adapter.GetOrder(ctx, exchange.NewSymbolKey(record.MarketType, record.ExchangeSymbol), record.ClientOrderID)
 	if lookupErr != nil {
 		return current, accountExecutionError(record.TradingAccountID, "cancel_lookup", lookupErr)
 	}
@@ -675,7 +677,7 @@ func (s *Service) RecoverCancel(
 		return latest, accountExecutionError(record.TradingAccountID, "cancel_lookup", err)
 	}
 	ioCtx := ctx
-	_, callErr := adapter.CancelOrder(ctx, shared.ExchangeSymbol(record.ExchangeSymbol), record.ClientOrderID)
+	_, callErr := adapter.CancelOrder(ctx, exchange.NewSymbolKey(record.MarketType, record.ExchangeSymbol), record.ClientOrderID)
 	persistCtx, persistCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 	defer persistCancel()
 	if callErr == nil {
@@ -864,7 +866,7 @@ func (s *Service) resolveUnknown(
 	if err != nil {
 		return current, accountExecutionError(record.TradingAccountID, "adapter", err)
 	}
-	found, lookupErr := adapter.GetOrder(ctx, shared.ExchangeSymbol(record.ExchangeSymbol), record.ClientOrderID)
+	found, lookupErr := adapter.GetOrder(ctx, exchange.NewSymbolKey(record.MarketType, record.ExchangeSymbol), record.ClientOrderID)
 	if lookupErr == nil {
 		return s.resolveUnknownFound(ctx, record, current, found.ExchangeOrderID)
 	}
@@ -874,9 +876,9 @@ func (s *Service) resolveUnknown(
 	// 从已同步的位置往后找，不重新拉全部历史。
 	cursor := ""
 	if account, accountErr := s.Store.GetTradingAccountByID(ctx, record.TradingAccountID); accountErr == nil {
-		cursor = account.FillCursors[record.ExchangeSymbol]
+		cursor = account.FillCursors[exchange.NewSymbolKey(record.MarketType, record.ExchangeSymbol).String()]
 	}
-	fills, _, fillsErr := adapter.ListRecentFills(ctx, shared.ExchangeSymbol(record.ExchangeSymbol), cursor)
+	fills, _, fillsErr := adapter.ListRecentFills(ctx, exchange.NewSymbolKey(record.MarketType, record.ExchangeSymbol), cursor)
 	if fillsErr != nil {
 		return current, accountExecutionError(record.TradingAccountID, "list_fills", fillsErr)
 	}
@@ -927,7 +929,7 @@ func (s *Service) freshReference(
 	if err != nil {
 		return spec, accountExecutionError(record.TradingAccountID, "adapter", err)
 	}
-	quote, err := adapter.GetQuote(ctx, shared.ExchangeSymbol(record.ExchangeSymbol))
+	quote, err := adapter.GetQuote(ctx, exchange.NewSymbolKey(record.MarketType, record.ExchangeSymbol))
 	if err != nil {
 		return spec, accountExecutionError(record.TradingAccountID, "quote", err)
 	}
@@ -1040,7 +1042,7 @@ func (s *Service) prepareSubmit(
 		if adapterErr != nil {
 			return nil, aggregate, accountExecutionError(record.TradingAccountID, "adapter", adapterErr)
 		}
-		quote, quoteErr := adapter.GetQuote(ctx, shared.ExchangeSymbol(record.ExchangeSymbol))
+		quote, quoteErr := adapter.GetQuote(ctx, exchange.NewSymbolKey(record.MarketType, record.ExchangeSymbol))
 		if quoteErr != nil {
 			return nil, aggregate, accountExecutionError(record.TradingAccountID, "quote", quoteErr)
 		}
@@ -1080,8 +1082,8 @@ func (s *Service) prepareSubmit(
 		return nil, aggregate, err
 	}
 	if s.SymbolConfig != nil && validation.Account.ExecutionMode == exchange.ExecutionModeLive &&
-		exchange.RuleFor(validation.Account.MarketType).Leverage && !aggregate.Spec.ReducePositionOnly {
-		if err := s.SymbolConfig.EnsureSymbolConfig(ctx, record.TradingAccountID, record.ExchangeSymbol, validation.Leverage); err != nil {
+		exchange.RuleFor(validation.Instrument.MarketType).Leverage && !aggregate.Spec.ReducePositionOnly {
+		if err := s.SymbolConfig.EnsureSymbolConfig(ctx, record.TradingAccountID, exchange.NewSymbolKey(record.MarketType, record.ExchangeSymbol), validation.Leverage); err != nil {
 			if !exchange.IsKind(err, exchange.ErrorRejected) {
 				return nil, aggregate, err
 			}
@@ -1124,7 +1126,7 @@ func (s *Service) prepareSubmit(
 			feeRate = maxDecimal(validation.Account.Paper.MakerFeeRate, validation.Account.Paper.TakerFeeRate)
 		}
 		notional := aggregate.Spec.Quantity.Mul(price)
-		if exchange.RuleFor(validation.Account.MarketType).UsesMargin {
+		if exchange.RuleFor(validation.Instrument.MarketType).UsesMargin {
 			validation.ReservedQuantity = notional.Mul(feeRate)
 			if !aggregate.Spec.ReducePositionOnly {
 				validation.ReservedQuantity = validation.ReservedQuantity.Add(notional.Div(validation.Leverage))
@@ -1152,7 +1154,12 @@ func (s *Service) prepareSubmit(
 				}
 			}
 		} else if refreshedReference || retryRepriced {
-			unreflected, err := tx.GetUnreflectedReservation(record.SpaceID, record.TradingAccountID, validation.ReservedAsset, validation.Account.SnapshotSourceTime.UnixMilli())
+			market := validation.Instrument.MarketType
+			unreflected, err := tx.GetUnreflectedReservation(
+				record.SpaceID, record.TradingAccountID, validation.ReservedAsset,
+				validation.Account.MarketsSharingFunds(market),
+				validation.Account.SnapshotSourceTime.UnixMilli(),
+			)
 			if err != nil {
 				return err
 			}
@@ -1163,10 +1170,7 @@ func (s *Service) prepareSubmit(
 				}
 				unreflected = unreflected.Sub(previous)
 			}
-			available := availableBalance(validation.Account.Snapshot, validation.ReservedAsset)
-			if exchange.RuleFor(validation.Account.MarketType).UsesMargin {
-				available = validation.Account.Snapshot.AvailableFunds
-			}
+			available := availableFunds(validation.Account, market, validation.ReservedAsset)
 			if available.Cmp(unreflected.Add(validation.ReservedQuantity)) < 0 {
 				return ErrInsufficientFunds
 			}
@@ -1215,6 +1219,7 @@ func (s *Service) deliverSubmit(
 		return pending, false, err
 	}
 	response, callErr := adapter.PlaceOrder(ctx, exchange.OrderRequest{
+		Market:         validation.Instrument.MarketType,
 		ClientOrderID:  aggregate.Spec.ClientOrderID,
 		ExchangeSymbol: exchangeSymbol, OrderType: aggregate.Spec.Type,
 		FillPolicy: aggregate.Spec.FillPolicy, Side: aggregate.Spec.Side,
@@ -1299,7 +1304,7 @@ func (s *Service) deliverSubmit(
 				// 水位只用交易所时间：本地时间比成交晚一个往返，现货余额的更新时间永远追不上。
 				// 回执没有时间时只关闭准入，成交缺口会挡住恢复，成交入账时再按成交时间抬水位。
 				if at := response.UpdatedAt.UnixMilli(); at > 0 {
-					if err := tx.RaiseBalancePending(latest.SpaceID, latest.TradingAccountID, at); err != nil {
+					if err := tx.RaiseBalancePending(latest.SpaceID, latest.TradingAccountID, exchange.WalletFor(validation.Account.Exchange, validation.Account.AccountMode, exchange.MarketType(latest.MarketType)), at); err != nil {
 						return err
 					}
 				}
@@ -1431,7 +1436,7 @@ func orderRecord(validation Validation, value orderdomain.Order) store.OrderReco
 		TradingAccountID: value.Spec.TradingAccountID,
 		ClientOrderID:    value.Spec.ClientOrderID,
 		Exchange:         string(validation.Account.Exchange),
-		MarketType:       string(validation.Account.MarketType),
+		MarketType:       string(validation.Instrument.MarketType),
 		InstrumentID:     instrumentID,
 		ExchangeSymbol:   exchangeSymbol,
 		OrderType:        string(value.Spec.Type), TimeInForce: string(value.Spec.FillPolicy),
@@ -1571,8 +1576,7 @@ func sameSpec(record store.OrderRecord, spec orderdomain.OrderSpec) bool {
 		return false
 	}
 	instrumentMatches := stored.Spec.InstrumentID == spec.InstrumentID ||
-		record.InstrumentID == spec.InstrumentID ||
-		record.ExchangeSymbol == spec.InstrumentID
+		record.InstrumentID == spec.InstrumentID
 	return stored.Spec.TradingAccountID == spec.TradingAccountID &&
 		stored.Spec.ClientOrderID == spec.ClientOrderID &&
 		instrumentMatches &&

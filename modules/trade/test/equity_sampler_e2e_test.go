@@ -36,7 +36,7 @@ func TestEquitySamplerPersistsOneMonotonicAccountPointE2E(t *testing.T) {
 	// watermark cannot overwrite the same minute bucket.
 	require.NoError(t, f.store.Transaction(ctx, func(tx *store.Tx) error {
 		return tx.UpdateTradingAccountSnapshot(testSpace, testAccount, store.TradingAccountSnapshot{
-			Balances:          []store.AssetBalance{{Asset: "USDT", Available: "200000", Total: "200000"}},
+			Balances:          []store.AssetBalance{{Wallet: "UNIFIED", Asset: "USDT", Available: "200000", Total: "200000"}},
 			Equity:            "200000",
 			AvailableFunds:    "200000",
 			ExchangeUpdatedAt: testNow.Add(time.Second).UnixMilli(),
@@ -46,7 +46,7 @@ func TestEquitySamplerPersistsOneMonotonicAccountPointE2E(t *testing.T) {
 	require.NoError(t, newer.SampleAccount(ctx, testAccount))
 	require.NoError(t, f.store.Transaction(ctx, func(tx *store.Tx) error {
 		return tx.UpdateTradingAccountSnapshot(testSpace, testAccount, store.TradingAccountSnapshot{
-			Balances: []store.AssetBalance{{Asset: "USDT", Available: "1", Total: "1"}},
+			Balances: []store.AssetBalance{{Wallet: "UNIFIED", Asset: "USDT", Available: "1", Total: "1"}},
 			Equity:   "1", AvailableFunds: "1", ExchangeUpdatedAt: testNow.UnixMilli(),
 		})
 	}))

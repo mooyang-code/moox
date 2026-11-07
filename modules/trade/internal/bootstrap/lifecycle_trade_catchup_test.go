@@ -52,7 +52,7 @@ func TestTradeCatchupRequiresFreshReconciledLiveAccounts(t *testing.T) {
 		"对账陈旧":  live("c", stale, nil),
 		"账户未就绪": live("c", fresh, func(r *store.TradingAccountRecord) { r.Ready = false }),
 		"有错误":   live("c", fresh, func(r *store.TradingAccountRecord) { r.LastError = "签名失败" }),
-		"余额待确认": live("c", fresh, func(r *store.TradingAccountRecord) { r.BalancePendingUntil = now.UnixMilli() }),
+		"余额待确认": live("c", fresh, func(r *store.TradingAccountRecord) { r.BalancePending = map[string]int64{"SPOT": now.UnixMilli()} }),
 	} {
 		got, err := hook(accountsFake{list: []store.TradingAccountRecord{live("a", fresh, nil), account}}, quiesceFake{})
 		require.NoError(t, err, name)

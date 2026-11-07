@@ -68,6 +68,9 @@ message AssetBalance {
   string available = 2;
   string locked = 3;
   string total = 4;
+  // 余额所在的钱包：SPOT、FUTURES、MARGIN、UNIFIED。
+  string wallet = 5;
+  string borrowed = 6;
 }
 
 message TradingAccountSnapshot {
@@ -78,6 +81,8 @@ message TradingAccountSnapshot {
   string maintenance_margin = 5;
   string unrealized_pnl = 6;
   int64 exchange_updated_at = 7;
+  // 交易所给出的总权益，只用于展示核对，不参与换算。
+  string exchange_equity = 8;
 }
 
 message LiveConfig {
@@ -97,7 +102,8 @@ message TradingAccount {
   string space_id = 2;
   string name = 3;
   Exchange exchange = 4;
-  MarketType market_type = 5;
+  // 账户已开通的市场，按 SPOT、SWAP、STOCK 的固定顺序排列。
+  repeated MarketType markets = 5;
   ExecutionMode execution_mode = 6;
   string settlement_asset = 7;
   string margin_mode = 8;
@@ -114,6 +120,10 @@ message TradingAccount {
   TradingAccountSnapshot snapshot = 18;
   int64 created_at = 19;
   int64 updated_at = 20;
+  // 账户类型，只由交易所检测写入：BINANCE_PORTFOLIO_MARGIN、BINANCE_STANDARD、OKX_UNIFIED；模拟盘和股票为空。
+  string account_mode = 21;
+  // 最近一次检测的结果（JSON）：权限、持仓模式、检测时间、阻断项。
+  string inspection_json = 22;
 }
 
 message LogicalAccountMember {
@@ -127,7 +137,8 @@ message LogicalAccount {
   string space_id = 2;
   string name = 3;
   ExecutionMode execution_mode = 5;
-  MarketType market_type = 6;
+  // 只读：启用成员已开通市场的并集，是这个组合当前可交易的市场。
+  repeated MarketType markets = 6;
   string settlement_asset = 7;
   string automation_state = 8;
   string pause_reason = 9;
@@ -179,6 +190,8 @@ message Order {
   int64 finished_at = 31;
   int64 created_at = 32;
   int64 updated_at = 33;
+  // 伪市价单的第几次尝试，从 0 开始。
+  int32 attempt = 34;
 }
 
 message Fill {
@@ -205,6 +218,8 @@ message Fill {
 }
 
 message Position {
+  // 持仓所属市场；现货和合约的持仓互不抵消。
+  MarketType market_type = 16;
   string trading_account_id = 1;
   string instrument_id = 2;
   string exchange_symbol = 3;
@@ -269,7 +284,8 @@ message OperatorAction {
 message CreateTradingAccountReq {
   string name = 1;
   Exchange exchange = 2;
-  MarketType market_type = 3;
+  // 要开通的市场：加密货币取 SPOT、SWAP 的子集，股票只有 STOCK。
+  repeated MarketType markets = 3;
   string settlement_asset = 4;
   string margin_mode = 5;
   LiveConfig live = 7;
@@ -302,6 +318,7 @@ message GetTradingAccountRsp {
 
 message ListTradingAccountsReq {
   optional Exchange exchange = 1;
+  // 过滤已开通了该市场的账户。
   optional MarketType market_type = 2;
   optional ExecutionMode execution_mode = 3;
   string status = 5;
@@ -340,7 +357,6 @@ message SyncTradingAccountRsp {
 message CreateLogicalAccountReq {
   string name = 1;
   ExecutionMode execution_mode = 2;
-  MarketType market_type = 3;
   string settlement_asset = 4;
   // Unspecified creates a STRATEGY-controlled account.
   ControlMode control_mode = 5;
@@ -485,6 +501,8 @@ message PlaceManualOrderReq {
   string reason = 11;
   // Unix milliseconds; zero freezes the server default at first acceptance.
   int64 deadline_at = 12;
+  // 订单所在市场。账户开通了多个市场时必填；只开通一个市场时可省略，按它处理。
+  MarketType market_type = 13;
 }
 message PlaceManualOrderRsp {
   common.RetInfo ret_info = 1;
@@ -509,6 +527,8 @@ message SubmitOrderReq {
   string reason = 12;
   // Unix milliseconds; zero freezes the server default at first acceptance.
   int64 deadline_at = 13;
+  // 订单所在市场。账户开通了多个市场时必填；只开通一个市场时可省略，按它处理。
+  MarketType market_type = 14;
 }
 message SubmitOrderRsp {
   common.RetInfo ret_info = 1;
@@ -596,7 +616,8 @@ message CreatePaperSimulationReq {
   string account_name = 1;
   string logical_account_name = 2;
   Exchange exchange = 3;
-  MarketType market_type = 4;
+  // 要开通的市场集合；模拟账户用一个资金池同时撮合开通的各个市场。
+  repeated MarketType markets = 4;
   string settlement_asset = 5;
   string margin_mode = 6;
   string initial_balance = 7;
@@ -749,6 +770,8 @@ message ListAccountLedgerReq {
   int64 end_time = 3;
   // 默认 200，最多 1000。
   int32 limit = 4;
+  // 要查流水的市场；账户只有一个市场支持流水时可省略。
+  MarketType market_type = 5;
 }
 
 message LedgerEntry {
@@ -762,6 +785,8 @@ message LedgerEntry {
   string exchange_symbol = 7;
   string trade_id = 8;
   string info = 9;
+  // 流水所属市场。
+  MarketType market_type = 10;
 }
 
 message ListAccountLedgerRsp {

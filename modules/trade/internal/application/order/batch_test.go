@@ -58,7 +58,7 @@ func (a *barrierAdapter) PlaceOrder(_ context.Context, request exchange.OrderReq
 	if status == "" {
 		status = exchange.OrderStatusOpen
 	}
-	return exchange.Order{ExchangeOrderID: "exchange-" + request.ClientOrderID, Status: status}, nil
+	return exchange.Order{Market: exchange.MarketTypeSwap, ExchangeOrderID: "exchange-" + request.ClientOrderID, Status: status}, nil
 }
 
 func batchService(t *testing.T, count int) (*Service, *barrierAdapter, []string) {

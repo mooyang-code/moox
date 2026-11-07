@@ -3,12 +3,12 @@ package account
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
-	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/stretchr/testify/require"
 )
 
@@ -53,7 +53,7 @@ func TestCreateValidatesAggregateAndCredential(t *testing.T) {
 		},
 		{
 			name:   "missing market",
-			mutate: func(value *tradingaccount.Account) { value.MarketType = exchange.MarketTypeUnspecified },
+			mutate: func(value *tradingaccount.Account) { value.Markets = nil },
 			secret: validSecret(),
 			want:   tradingaccount.ErrInvalidAccount,
 		},
@@ -136,7 +136,7 @@ func TestCreateValidatesAggregateAndCredential(t *testing.T) {
 		{
 			name: "SWAP requires CROSS",
 			mutate: func(value *tradingaccount.Account) {
-				value.MarketType = exchange.MarketTypeSwap
+				value.Markets = []exchange.MarketType{exchange.MarketTypeSwap}
 			},
 			secret: validSecret(),
 			want:   tradingaccount.ErrInvalidAccount,
@@ -268,7 +268,7 @@ func TestUpdateChangesOnlyExplicitMutableFields(t *testing.T) {
 		t.Fatalf("Name = %q, want %q", got.Name, name)
 	}
 	if got.Exchange != before.Exchange ||
-		got.MarketType != before.MarketType ||
+		!slices.Equal(got.Markets, before.Markets) ||
 		got.ExecutionMode != before.ExecutionMode ||
 		got.CredentialSecretID != before.CredentialSecretID ||
 		got.SettlementAsset != before.SettlementAsset ||
@@ -422,7 +422,8 @@ func TestSetLeverageAndPauseUseCommandSpecificWrites(t *testing.T) {
 	if err := service.SetLeverage(
 		context.Background(),
 		value.ID,
-		"ETH-USDT",
+		"ETH-USDT-SWAP",
+		exchange.NewSymbolKey(exchange.MarketTypeSwap, "ETH-USDT"),
 		shared.MustDecimal("3"),
 	); err != nil {
 		t.Fatalf("SetLeverage() error = %v", err)
@@ -438,7 +439,7 @@ func validAccount() tradingaccount.Account {
 		SpaceID:            "space-1",
 		Name:               "main",
 		Exchange:           exchange.ExchangeBinance,
-		MarketType:         exchange.MarketTypeSpot,
+		Markets:            []exchange.MarketType{exchange.MarketTypeSpot},
 		ExecutionMode:      exchange.ExecutionModePaper,
 		Environment:        exchange.AccountEnvironmentPaper,
 		CredentialSecretID: "secret-1",
@@ -449,7 +450,7 @@ func validAccount() tradingaccount.Account {
 
 func validSwapAccount() tradingaccount.Account {
 	value := validAccount()
-	value.MarketType = exchange.MarketTypeSwap
+	value.Markets = []exchange.MarketType{exchange.MarketTypeSwap}
 	value.MarginMode = exchange.MarginModeCross
 	value.LeverageSettings = map[string]shared.Decimal{
 		"BTC-USDT": shared.MustDecimal("5"),
@@ -576,12 +577,6 @@ func TestApplyUpdateReplacesLiveCredentialUsedByPersistence(t *testing.T) {
 	}
 }
 
-type unifiedExchanges struct{}
-
-func (unifiedExchanges) Descriptor(name exchange.Exchange) (execution.ExchangeDescriptor, bool) {
-	return execution.ExchangeDescriptor{Exchange: name, UnifiedAccount: name == exchange.ExchangeOKX}, true
-}
-
 func liveCredentialAccount(id string, name exchange.Exchange, market exchange.MarketType) tradingaccount.Account {
 	value := validAccount()
 	if market == exchange.MarketTypeSwap {
@@ -596,35 +591,49 @@ func liveCredentialAccount(id string, name exchange.Exchange, market exchange.Ma
 	return value
 }
 
-func TestRejectDuplicateCredentialFollowsExchangeWalletModel(t *testing.T) {
+func TestRejectDuplicateCredentialIsUnconditional(t *testing.T) {
 	ctx := context.Background()
-	service := Service{Store: newMemoryStore(), Exchanges: unifiedExchanges{}}
+	service := Service{Store: newMemoryStore()}
 	store := service.Store.(*memoryStore)
 
-	binanceSpot := liveCredentialAccount("binance-spot", exchange.ExchangeBinance, exchange.MarketTypeSpot)
-	store.accounts[binanceSpot.ID] = binanceSpot
+	for _, name := range []exchange.Exchange{exchange.ExchangeBinance, exchange.ExchangeOKX} {
+		existing := liveCredentialAccount(string(name)+"-spot", name, exchange.MarketTypeSpot)
+		store.accounts[existing.ID] = existing
 
-	// Binance 现货和合约钱包分开，同一把密钥可以各建一个。
-	require.NoError(t, service.rejectDuplicateCredential(ctx, liveCredentialAccount("binance-swap", exchange.ExchangeBinance, exchange.MarketTypeSwap)))
-	err := service.rejectDuplicateCredential(ctx, liveCredentialAccount("binance-spot-2", exchange.ExchangeBinance, exchange.MarketTypeSpot))
-	require.ErrorIs(t, err, tradingaccount.ErrInvalidAccount)
-	require.Contains(t, err.Error(), "binance-spot")
+		// 一把密钥只能对应一个执行账户：不管交易所、也不管市场是否相同。账户同时做现货和合约。
+		for _, market := range []exchange.MarketType{exchange.MarketTypeSpot, exchange.MarketTypeSwap} {
+			err := service.rejectDuplicateCredential(ctx, liveCredentialAccount(string(name)+"-second", name, market))
+			require.ErrorIs(t, err, tradingaccount.ErrInvalidAccount, "%s %s", name, market)
+			require.Contains(t, err.Error(), existing.Name)
+		}
+	}
 
-	// OKX 现货和合约共用账户，同一把密钥只能建一个。
-	okxSpot := liveCredentialAccount("okx-spot", exchange.ExchangeOKX, exchange.MarketTypeSpot)
-	store.accounts[okxSpot.ID] = okxSpot
-	require.Error(t, service.rejectDuplicateCredential(ctx, liveCredentialAccount("okx-swap", exchange.ExchangeOKX, exchange.MarketTypeSwap)))
-
-	// 不同密钥、账户自身都不算重复。
-	other := liveCredentialAccount("binance-spot-3", exchange.ExchangeBinance, exchange.MarketTypeSpot)
+	// 不同密钥、账户自身、不同环境都不算重复。
+	binance := store.accounts["BINANCE-spot"]
+	other := liveCredentialAccount("binance-other", exchange.ExchangeBinance, exchange.MarketTypeSpot)
 	other.CredentialSecretID = "secret-2"
 	require.NoError(t, service.rejectDuplicateCredential(ctx, other))
-	require.NoError(t, service.rejectDuplicateCredential(ctx, binanceSpot))
+	require.NoError(t, service.rejectDuplicateCredential(ctx, binance))
+	production := liveCredentialAccount("binance-production", exchange.ExchangeBinance, exchange.MarketTypeSpot)
+	production.Environment = exchange.AccountEnvironmentProduction
+	require.NoError(t, service.rejectDuplicateCredential(ctx, production))
 
 	// 停用的账户不占用密钥，重新启用时才检查。
-	binanceSpot.Status = exchange.AccountStatusDisabled
-	store.accounts[binanceSpot.ID] = binanceSpot
-	require.NoError(t, service.rejectDuplicateCredential(ctx, liveCredentialAccount("binance-spot-2", exchange.ExchangeBinance, exchange.MarketTypeSpot)))
+	binance.Status = exchange.AccountStatusDisabled
+	store.accounts[binance.ID] = binance
+	require.NoError(t, service.rejectDuplicateCredential(ctx, liveCredentialAccount("binance-again", exchange.ExchangeBinance, exchange.MarketTypeSpot)))
+}
+
+func TestCreateAcceptsMultiMarketAccount(t *testing.T) {
+	value := validAccount()
+	value.Markets = []exchange.MarketType{exchange.MarketTypeSpot, exchange.MarketTypeSwap}
+	value.MarginMode = exchange.MarginModeCross
+	value.LeverageSettings = map[string]shared.Decimal{"*": shared.MustDecimal("1")}
+
+	created, err := (&Service{Store: newMemoryStore()}).Create(context.Background(), value)
+
+	require.NoError(t, err)
+	require.Equal(t, value.Markets, created.Markets)
 }
 
 func TestUpdateRejectsDisablingAccountStillInLogicalAccount(t *testing.T) {

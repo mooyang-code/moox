@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
@@ -75,7 +76,7 @@ func (h *ExecutionServer) PlaceManualOrder(
 		}
 		limitPrice = &value
 	}
-	instrumentID, err := h.accountInstrumentID(ctx, spaceID, req.GetTradingAccountId(), req.GetInstrumentId())
+	instrumentID, err := h.requestInstrumentID(ctx, spaceID, req.GetTradingAccountId(), req.GetInstrumentId(), req.GetMarketType())
 	if err != nil {
 		return &tradepb.PlaceManualOrderRsp{RetInfo: instrumentErrorInfo(err)}, nil
 	}
@@ -375,7 +376,44 @@ func (h *ExecutionServer) positionAccountIDs(
 	return ids, nil
 }
 
-// accountInstrumentID 按执行账户的市场标准化上游传入的标的 ID。
+// normalizeForMarkets 按可选的市场集合标准化上游传入的标的 ID：只有一个市场时按它标准化；
+// 有多个市场时，标的 ID 必须自带市场后缀（例如 BTC-USDT-SWAP），否则无法判断是哪个市场。
+func normalizeForMarkets(raw string, markets []string) (string, error) {
+	switch len(markets) {
+	case 0:
+		return "", fmt.Errorf("%w: %q 没有可交易的市场", exchange.ErrInvalidInstrumentID, raw)
+	case 1:
+		return exchange.NormalizeInstrumentID(raw, exchange.MarketType(markets[0]))
+	}
+	for _, market := range markets {
+		if id, err := exchange.NormalizeInstrumentID(raw, exchange.MarketType(market)); err == nil &&
+			strings.HasSuffix(strings.ToUpper(strings.TrimSpace(raw)), "-"+market) {
+			return id, nil
+		}
+	}
+	return "", fmt.Errorf("%w: 开通了多个市场 %v，标的 %q 必须带市场后缀", exchange.ErrInvalidInstrumentID, markets, raw)
+}
+
+// requestInstrumentID 按请求显式给的市场标准化标的 ID：账户必须开通了这个市场。没给市场时回到账户开通的市场
+// （只开通一个时按它，开通多个时标的 ID 必须自带后缀）。
+func (h *ExecutionServer) requestInstrumentID(
+	ctx context.Context, spaceID, tradingAccountID, raw string, market tradepb.MarketType,
+) (string, error) {
+	if market == tradepb.MarketType_MARKET_TYPE_UNSPECIFIED || raw == "" {
+		return h.accountInstrumentID(ctx, spaceID, tradingAccountID, raw)
+	}
+	account, err := h.Store.GetTradingAccount(ctx, spaceID, tradingAccountID)
+	if err != nil {
+		return "", err
+	}
+	explicit := marketFromPB(market)
+	if !account.SupportsMarket(string(explicit)) {
+		return "", fmt.Errorf("%w: 账户没有开通市场 %s", exchange.ErrInvalidInstrumentID, explicit)
+	}
+	return exchange.NormalizeInstrumentID(raw, explicit)
+}
+
+// accountInstrumentID 按执行账户已开通的市场标准化上游传入的标的 ID。
 func (h *ExecutionServer) accountInstrumentID(ctx context.Context, spaceID, tradingAccountID, raw string) (string, error) {
 	if raw == "" {
 		return "", nil
@@ -384,7 +422,7 @@ func (h *ExecutionServer) accountInstrumentID(ctx context.Context, spaceID, trad
 	if err != nil {
 		return "", err
 	}
-	return exchange.NormalizeInstrumentID(raw, exchange.MarketType(account.MarketType))
+	return normalizeForMarkets(raw, account.Markets)
 }
 
 // queryInstrumentID 给查询用：有账户信息时标准化，没有时按原值匹配。
@@ -395,11 +433,11 @@ func (h *ExecutionServer) queryInstrumentID(ctx context.Context, spaceID, logica
 	case tradingAccountID != "":
 		return h.accountInstrumentID(ctx, spaceID, tradingAccountID, raw)
 	case logicalAccountID != "":
-		account, err := h.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
+		markets, err := h.Store.LogicalAccountMarkets(ctx, spaceID, logicalAccountID)
 		if err != nil {
 			return "", err
 		}
-		return exchange.NormalizeInstrumentID(raw, exchange.MarketType(account.MarketType))
+		return normalizeForMarkets(raw, markets)
 	default:
 		return raw, nil
 	}

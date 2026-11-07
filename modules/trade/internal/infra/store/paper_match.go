@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 )
 
 func (s *Store) ListPaperMatchCandidates(ctx context.Context, limit int) ([]OrderRecord, error) {
@@ -84,7 +85,7 @@ func (tx *Tx) CancelPaperOrder(current OrderRecord, expectedVersion uint64, reas
 }
 
 func (tx *Tx) CanFillReduceOnly(order OrderRecord) (bool, error) {
-	position, found, err := tx.GetPosition(order.SpaceID, order.TradingAccountID, order.ExchangeSymbol, order.PositionSide)
+	position, found, err := tx.GetPosition(order.SpaceID, order.TradingAccountID, exchange.NewSymbolKey(order.MarketType, order.ExchangeSymbol), order.PositionSide)
 	if err != nil || !found {
 		return false, err
 	}

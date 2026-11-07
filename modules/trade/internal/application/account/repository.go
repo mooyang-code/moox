@@ -123,14 +123,16 @@ func accountRecord(value tradingaccount.Account) store.TradingAccountRecord {
 	}
 	record := store.TradingAccountRecord{
 		SpaceID: value.SpaceID, TradingAccountID: value.ID, Name: value.Name,
-		Exchange: string(value.Exchange), MarketType: string(value.MarketType),
+		Exchange: string(value.Exchange), Markets: marketStrings(value.Markets),
 		ExecutionMode:      string(value.ExecutionMode),
+		AccountMode:        string(value.AccountMode),
+		InspectionJSON:     value.InspectionJSON,
 		Environment:        string(value.MarketDataEnvironment()),
 		CredentialSecretID: credentialSecret(value),
 		SettlementAsset:    value.SettlementAsset, MarginMode: string(value.MarginMode),
 		Status: string(value.Status), Ready: value.Ready,
 		LeverageSettings: leverage, FillCursors: store.FillCursors{},
-		Snapshot:           snapshotRecord(value.Snapshot),
+		Snapshot:           store.SnapshotFromExchange(value.Snapshot),
 		SnapshotSourceTime: timestampMillis(value.SnapshotSourceTime),
 		LastSyncAt:         timestampMillis(value.LastSyncAt),
 		LastReadyAt:        timestampMillis(value.LastReadyAt), LastError: value.LastError,
@@ -164,14 +166,16 @@ func accountDomain(record store.TradingAccountRecord) (tradingaccount.Account, e
 	value := tradingaccount.Account{
 		ID: record.TradingAccountID, SpaceID: record.SpaceID, Name: record.Name,
 		Exchange:           exchange.Exchange(record.Exchange),
-		MarketType:         exchange.MarketType(record.MarketType),
+		Markets:            marketTypes(record.Markets),
 		ExecutionMode:      exchange.ExecutionMode(record.ExecutionMode),
+		AccountMode:        exchange.AccountMode(record.AccountMode),
+		InspectionJSON:     record.InspectionJSON,
 		Environment:        exchange.AccountEnvironment(record.Environment),
 		CredentialSecretID: record.CredentialSecretID,
 		SettlementAsset:    record.SettlementAsset,
 		MarginMode:         exchange.MarginMode(record.MarginMode),
 		Status:             exchange.AccountStatus(record.Status), Ready: record.Ready,
-		LeverageSettings: leverage, Snapshot: snapshotDomain(record.Snapshot),
+		LeverageSettings: leverage, Snapshot: record.Snapshot.ToExchange(),
 		SnapshotSourceTime: millisTime(record.SnapshotSourceTime),
 		LastSyncAt:         millisTime(record.LastSyncAt),
 		LastReadyAt:        millisTime(record.LastReadyAt), LastError: record.LastError,
@@ -218,52 +222,20 @@ func cloneLeverage(values store.LeverageSettings) store.LeverageSettings {
 	return cloned
 }
 
-func snapshotRecord(value exchange.AccountSnapshot) store.TradingAccountSnapshot {
-	balances := make([]store.AssetBalance, 0, len(value.Balances))
-	for _, balance := range value.Balances {
-		balances = append(balances, store.AssetBalance{
-			Asset: balance.Asset, Available: balance.Available.String(),
-			Locked: balance.Locked.String(), Total: balance.Total.String(),
-		})
+func marketStrings(markets []exchange.MarketType) []string {
+	result := make([]string, len(markets))
+	for i, market := range markets {
+		result[i] = string(market)
 	}
-	return store.TradingAccountSnapshot{
-		Balances: balances, Equity: value.Equity.String(),
-		AvailableFunds:    value.AvailableFunds.String(),
-		UsedMargin:        value.UsedMargin.String(),
-		MaintenanceMargin: value.MaintenanceMargin.String(),
-		UnrealizedPnL:     value.UnrealizedPnL.String(),
-		ExchangeUpdatedAt: timestampMillis(value.ExchangeUpdatedAt),
-	}
+	return result
 }
 
-func snapshotDomain(value store.TradingAccountSnapshot) exchange.AccountSnapshot {
-	balances := make([]exchange.AssetBalance, 0, len(value.Balances))
-	for _, balance := range value.Balances {
-		balances = append(balances, exchange.AssetBalance{
-			Asset:     balance.Asset,
-			Available: decimalOrZero(balance.Available),
-			Locked:    decimalOrZero(balance.Locked), Total: decimalOrZero(balance.Total),
-		})
+func marketTypes(markets []string) []exchange.MarketType {
+	result := make([]exchange.MarketType, len(markets))
+	for i, market := range markets {
+		result[i] = exchange.MarketType(market)
 	}
-	return exchange.AccountSnapshot{
-		Balances: balances, Equity: decimalOrZero(value.Equity),
-		AvailableFunds:    decimalOrZero(value.AvailableFunds),
-		UsedMargin:        decimalOrZero(value.UsedMargin),
-		MaintenanceMargin: decimalOrZero(value.MaintenanceMargin),
-		UnrealizedPnL:     decimalOrZero(value.UnrealizedPnL),
-		ExchangeUpdatedAt: millisTime(value.ExchangeUpdatedAt),
-	}
-}
-
-func decimalOrZero(raw string) shared.Decimal {
-	if raw == "" {
-		return shared.Zero()
-	}
-	value, err := shared.ParseDecimal(raw)
-	if err != nil {
-		return shared.Zero()
-	}
-	return value
+	return result
 }
 
 func millisTime(value int64) time.Time {

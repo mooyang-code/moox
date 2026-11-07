@@ -29,7 +29,7 @@ var (
 type Quote = targetapp.Quote
 
 type PriceSource interface {
-	LatestPrice(context.Context, string, string) (Quote, error)
+	LatestPrice(context.Context, string, exchange.SymbolKey) (Quote, error)
 }
 
 type AccountSyncer interface {
@@ -354,7 +354,7 @@ func (s *Service) PlaceManualOrder(
 		return ManualOrderResult{Action: action}, err
 	}
 	quote, err := s.Prices.LatestPrice(
-		ctx, command.TradingAccountID, instrument.ExchangeSymbol,
+		ctx, command.TradingAccountID, exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol),
 	)
 	if err != nil {
 		return s.deferSubmission(ctx, action, err)
@@ -406,7 +406,7 @@ func (s *Service) ResumeOperatorAction(
 		return nil
 	}
 	switch action.ActionType {
-	case "FLATTEN":
+	case "FLATTEN", "REDUCE", "DELIST_FLATTEN":
 		command, err := decodeFlattenRequest(action)
 		if err != nil {
 			return err
@@ -528,7 +528,7 @@ func (s *Service) recoverChild(ctx context.Context, action store.OperatorActionR
 		return ManualOrderResult{}, true, err
 	}
 	persistedAction = action
-	child, err := s.Store.GetOrderByClientID(ctx, command.SpaceID, command.TradingAccountID, command.ClientOrderID)
+	child, err := s.Store.GetOrderByClientID(ctx, command.SpaceID, command.TradingAccountID, exchange.MarketOfInstrumentID(command.InstrumentID), command.ClientOrderID)
 	if errors.Is(err, gorm.ErrRecordNotFound) && progress.OrderID == "" {
 		if s.manualExpired(progress) {
 			result, err := s.failManualAction(ctx, action, errors.New("manual submission deadline exceeded"), nil)

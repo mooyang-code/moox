@@ -141,18 +141,29 @@ func (tx *Tx) AcceptLogicalAccountTarget(
 	if time.Now().UTC().UnixMilli() >= record.ValidUntil {
 		return LogicalAccountTargetRecord{}, false, fmt.Errorf("%w: target validity window", ErrTargetExpired)
 	}
-	if !exchange.RuleFor(account.MarketType).CanShort {
-		for _, target := range record.Targets {
-			if target.Hold {
-				continue
-			}
-			quantity, parseErr := shared.ParseDecimal(target.Quantity)
-			if parseErr != nil || quantity.Cmp(shared.Zero()) < 0 {
-				return LogicalAccountTargetRecord{}, false, fmt.Errorf(
-					"%w: SPOT target quantity cannot be negative",
-					ErrInvalidRecord,
-				)
-			}
+	tradable, marketsErr := tx.LogicalAccountMarkets(record.SpaceID, record.LogicalAccountID)
+	if marketsErr != nil {
+		return LogicalAccountTargetRecord{}, false, marketsErr
+	}
+	tradableMarkets := make([]exchange.MarketType, len(tradable))
+	for i, market := range tradable {
+		tradableMarkets[i] = exchange.MarketType(market)
+	}
+	for _, target := range record.Targets {
+		targetMarket := exchange.ResolveInstrumentMarket(target.InstrumentID, tradableMarkets)
+		if targetMarket == "" {
+			return LogicalAccountTargetRecord{}, false, fmt.Errorf("%w: 标的 %s 缺少市场后缀 -SPOT 或 -SWAP", ErrInvalidRecord, target.InstrumentID)
+		}
+		if target.Hold || exchange.RuleFor(targetMarket).CanShort {
+			continue
+		}
+		quantity, parseErr := shared.ParseDecimal(target.Quantity)
+		if parseErr != nil || quantity.Cmp(shared.Zero()) < 0 {
+			return LogicalAccountTargetRecord{}, false, fmt.Errorf(
+				"%w: %s 不能做空，目标数量不能为负",
+				ErrInvalidRecord,
+				target.InstrumentID,
+			)
 		}
 	}
 

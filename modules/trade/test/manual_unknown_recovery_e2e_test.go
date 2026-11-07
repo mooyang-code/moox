@@ -83,7 +83,7 @@ func TestManualUnknownSubmissionRemainsRecoverable(t *testing.T) {
 	action, err := f.store.GetOperatorAction(ctx, testSpace, command.ActionID)
 	require.NoError(t, err)
 	require.Equal(t, "RUNNING", action.Status, "response loss must remain recoverable")
-	unknown, err := f.store.GetOrderByClientID(ctx, testSpace, testAccount, command.ClientOrderID)
+	unknown, err := f.store.GetOrderByClientID(ctx, testSpace, testAccount, exchange.MarketTypeSwap, command.ClientOrderID)
 	require.NoError(t, err)
 	require.Equal(t, string(orderdomain.SubmitUnknown), unknown.State)
 	require.NotNil(t, action.ResultJSON)
@@ -96,7 +96,7 @@ func TestManualUnknownSubmissionRemainsRecoverable(t *testing.T) {
 
 	fake.mu.Lock()
 	fake.placeErr = nil
-	fake.orders[command.ClientOrderID] = exchange.Order{
+	fake.orders[command.ClientOrderID] = exchange.Order{Market: exchange.MarketTypeSwap,
 		ExchangeOrderID: "accepted-manual-response-lost", ClientOrderID: command.ClientOrderID,
 		ExchangeSymbol: testSymbol, OrderType: command.Type, Side: command.Side,
 		PositionSide: command.PositionSide, Quantity: command.Quantity,
@@ -205,7 +205,7 @@ func TestManualLinkedPendingChildRecoveredBeforeSubmit(t *testing.T) {
 	initial, err := service.PlaceManualOrder(ctx, command)
 	require.ErrorContains(t, err, "fault after action link before Submit dispatch")
 	require.Equal(t, "RUNNING", initial.Action.Status)
-	child, err := f.store.GetOrderByClientID(ctx, testSpace, testAccount, command.ClientOrderID)
+	child, err := f.store.GetOrderByClientID(ctx, testSpace, testAccount, exchange.MarketTypeSwap, command.ClientOrderID)
 	require.NoError(t, err)
 	require.Equal(t, string(orderdomain.Pending), child.State)
 	require.NotNil(t, initial.Action.ResultJSON)
@@ -383,7 +383,7 @@ func TestManualLinkedPendingCannotSubmitAfterMembershipRemoval(t *testing.T) {
 	result, err := restarted.PlaceManualOrder(ctx, command)
 	require.Error(t, err)
 	require.Equal(t, "FAILED", result.Action.Status)
-	child, err := f.store.GetOrderByClientID(ctx, testSpace, testAccount, command.ClientOrderID)
+	child, err := f.store.GetOrderByClientID(ctx, testSpace, testAccount, exchange.MarketTypeSwap, command.ClientOrderID)
 	require.NoError(t, err)
 	require.Equal(t, string(orderdomain.Canceled), child.State)
 	require.Equal(t, "0", child.RemainingReservedQuantity)
@@ -429,7 +429,7 @@ func TestManualPendingChildRecoveredWithoutActionLink(t *testing.T) {
 	initial, err := service.PlaceManualOrder(ctx, command)
 	require.ErrorContains(t, err, "fault after durable Place before action link")
 	require.Equal(t, "RUNNING", initial.Action.Status)
-	child, err := f.store.GetOrderByClientID(ctx, testSpace, testAccount, command.ClientOrderID)
+	child, err := f.store.GetOrderByClientID(ctx, testSpace, testAccount, exchange.MarketTypeSwap, command.ClientOrderID)
 	require.NoError(t, err)
 	require.Equal(t, string(orderdomain.Pending), child.State)
 	require.NotContains(t, *initial.Action.ResultJSON, child.OrderID)
@@ -459,7 +459,7 @@ func TestManualConfirmedAbsentPendingRespectsOriginalDeadline(t *testing.T) {
 			f.fake.placeErr = transportError("manual response lost")
 			initial, err := service.PlaceManualOrder(ctx, command)
 			require.NoError(t, err)
-			child, err := f.store.GetOrderByClientID(ctx, testSpace, testAccount, command.ClientOrderID)
+			child, err := f.store.GetOrderByClientID(ctx, testSpace, testAccount, exchange.MarketTypeSwap, command.ClientOrderID)
 			require.NoError(t, err)
 			now := testNow.Add(2 * time.Second)
 			if expired {
@@ -476,7 +476,7 @@ func TestManualConfirmedAbsentPendingRespectsOriginalDeadline(t *testing.T) {
 			err = restarted.ResumeOperatorAction(ctx, initial.Action)
 			require.NoError(t, err, "a durably recorded expiration does not fail worker health")
 			result, err := restarted.PlaceManualOrder(ctx, command)
-			persisted, getErr := f.store.GetOrderByClientID(ctx, testSpace, testAccount, command.ClientOrderID)
+			persisted, getErr := f.store.GetOrderByClientID(ctx, testSpace, testAccount, exchange.MarketTypeSwap, command.ClientOrderID)
 			require.NoError(t, getErr)
 			require.Equal(t, child.OrderID, persisted.OrderID)
 			f.fake.mu.Lock()

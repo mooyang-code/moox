@@ -3,6 +3,7 @@ package rpc
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
@@ -64,8 +65,16 @@ func (s *ConsoleServer) ListAccountLedger(
 		return &tradepb.ListAccountLedgerRsp{RetInfo: errorInfo(errServiceUnavailable)}, nil
 	}
 	// 先按空间读一次账户，保证只能查自己空间的账户。
-	if _, err := s.Store.GetTradingAccount(ctx, spaceID, req.GetTradingAccountId()); err != nil {
+	account, err := s.Store.GetTradingAccount(ctx, spaceID, req.GetTradingAccountId())
+	if err != nil {
 		return &tradepb.ListAccountLedgerRsp{RetInfo: errorInfo(err)}, nil
+	}
+	market := marketFromPB(req.GetMarketType())
+	if market != exchange.MarketTypeUnspecified && !account.SupportsMarket(string(market)) {
+		return &tradepb.ListAccountLedgerRsp{RetInfo: invalidInfo(fmt.Errorf("账户没有开通市场 %s", market))}, nil
+	}
+	if market == exchange.MarketTypeUnspecified && len(account.Markets) == 1 {
+		market = exchange.MarketType(account.Markets[0])
 	}
 	source, err := s.ledgerSource(req.GetTradingAccountId())
 	if err != nil {
@@ -85,16 +94,23 @@ func (s *ConsoleServer) ListAccountLedger(
 	}
 	queryCtx, cancel := context.WithTimeout(ctx, ledgerQueryTimeout)
 	defer cancel()
-	page, err := source.ListLedger(queryCtx, exchange.LedgerQuery{Start: start, End: end, Limit: limit})
+	page, err := source.ListLedger(queryCtx, exchange.LedgerQuery{Market: market, Start: start, End: end, Limit: limit})
 	if err != nil {
 		return &tradepb.ListAccountLedgerRsp{RetInfo: errorInfo(err)}, nil
 	}
 	rsp := &tradepb.ListAccountLedgerRsp{RetInfo: success(), HasMore: page.HasMore}
 	for _, entry := range page.Entries {
+		// 流水所属市场只给按市场区分的类型；划转、利息等账户级流水不属于某个市场，留空。
+		entryMarket := tradepb.MarketType_MARKET_TYPE_UNSPECIFIED
+		if entry.Market != exchange.MarketTypeUnspecified {
+			entryMarket = marketToPB(string(entry.Market))
+		} else if entry.Type.MarketScoped() {
+			entryMarket = marketToPB(string(market))
+		}
 		rsp.Entries = append(rsp.Entries, &tradepb.LedgerEntry{
 			Id: entry.ID, Time: entry.Time.UnixMilli(), Type: string(entry.Type), ExchangeType: entry.ExchangeType,
 			Asset: entry.Asset, Amount: entry.Amount.String(), ExchangeSymbol: entry.ExchangeSymbol,
-			TradeId: entry.TradeID, Info: entry.Info,
+			TradeId: entry.TradeID, Info: entry.Info, MarketType: entryMarket,
 		})
 	}
 	return rsp, nil

@@ -513,7 +513,11 @@ func (h *Handler) buildResult(p *period, decision engine.Decision, loaded input.
 		InputJSON: inputJSON, TargetsJSON: targetsJSON, RuleStatesJSON: states, SummaryJSON: summary, PublishStatus: store.PublishNone, CreatedAt: now,
 	}
 	if decision.Status == engine.StatusOK && p.instance.LogicalAccountID != nil {
-		event, err := MarshalTargetEvent(p.instance, result, targets, p.shadow)
+		marketType, err := TradeMarketType(p.runtime.resolved.MarketType)
+		if err != nil {
+			return store.Result{}, nil, err
+		}
+		event, err := MarshalTargetEvent(p.instance, result, targets, p.shadow, marketType)
 		if err != nil {
 			return store.Result{}, nil, err
 		}

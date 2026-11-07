@@ -3,6 +3,7 @@ package target
 import (
 	"context"
 
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 )
 
@@ -17,7 +18,7 @@ type ExchangePriceSource struct {
 func (s ExchangePriceSource) LatestPrice(
 	ctx context.Context,
 	tradingAccountID string,
-	symbol string,
+	key exchange.SymbolKey,
 ) (Quote, error) {
 	if s.Adapters == nil {
 		return Quote{}, ErrExecutorConfig
@@ -26,7 +27,7 @@ func (s ExchangePriceSource) LatestPrice(
 	if err != nil {
 		return Quote{}, err
 	}
-	quote, err := adapter.GetReferencePrice(ctx, symbol)
+	quote, err := adapter.GetReferencePrice(ctx, key)
 	if err != nil {
 		return Quote{}, err
 	}

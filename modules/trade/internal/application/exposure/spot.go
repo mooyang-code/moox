@@ -6,14 +6,17 @@ import (
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 )
 
-// SpotInstruments 返回现货资产到卖出标的的对应：计价资产等于结算资产、在结算资产下可交易；同一资产取第一个。
+// SpotInstruments 返回现货资产到卖出标的的对应：只看持仓来自余额的市场（现货），合约标的不能用来卖现货；
+// 计价资产等于结算资产、在结算资产下可交易；同一资产取第一个。
 func SpotInstruments(instruments []store.InstrumentRecord, settlementAsset string) map[string]store.InstrumentRecord {
 	byAsset := make(map[string]store.InstrumentRecord)
 	for _, instrument := range instruments {
-		if !Tradable(instrument, settlementAsset) ||
+		if !exchange.RuleFor(instrument.MarketType).PositionFromBalance ||
+			!Tradable(instrument, settlementAsset) ||
 			instrument.QuoteAsset != settlementAsset ||
 			instrument.BaseAsset == settlementAsset {
 			continue

@@ -33,8 +33,15 @@ var shadowTargetSQL string
 //go:embed replay.sql
 var replaySQL string
 
+//go:embed wallet_transfer.sql
+var walletTransferSQL string
+
+//go:embed blocked_instrument.sql
+var blockedInstrumentSQL string
+
 // AllSQL returns the complete greenfield schema in foreign-key dependency order.
 func AllSQL() string {
 	return accountSQL + "\n" + instrumentSQL + "\n" + logicalAccountSQL + "\n" +
-		paperAccountConfigSQL + "\n" + equitySQL + "\n" + targetReceiptSQL + "\n" + shadowTargetSQL + "\n" + replaySQL + "\n" + executionSQL + "\n" + paperBalanceSQL
+		paperAccountConfigSQL + "\n" + equitySQL + "\n" + targetReceiptSQL + "\n" + shadowTargetSQL + "\n" + replaySQL + "\n" + executionSQL + "\n" + paperBalanceSQL + "\n" +
+		walletTransferSQL + "\n" + blockedInstrumentSQL
 }

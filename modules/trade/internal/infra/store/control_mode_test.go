@@ -29,7 +29,7 @@ func TestManualControlModeRejectsStrategyMutations(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
-		return tx.CreateLogicalAccount(LogicalAccountRecord{SpaceID: "space", LogicalAccountID: "manual", Name: "manual", ControlMode: "MANUAL", ExecutionMode: "PAPER", MarketType: "SPOT", SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "manual"})
+		return tx.CreateLogicalAccount(LogicalAccountRecord{SpaceID: "space", LogicalAccountID: "manual", Name: "manual", ControlMode: "MANUAL", ExecutionMode: "PAPER", SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "manual"})
 	}))
 	before, err := s.GetLogicalAccount(ctx, "space", "manual")
 	require.NoError(t, err)
@@ -75,7 +75,7 @@ func TestCreateControlModesPersistAndRejectUnknown(t *testing.T) {
 	s := openTestStore(t)
 	for _, mode := range []string{"", "STRATEGY", "MANUAL", "invalid"} {
 		err := s.Transaction(context.Background(), func(tx *Tx) error {
-			return tx.CreateLogicalAccount(LogicalAccountRecord{SpaceID: "space", LogicalAccountID: "account-" + mode, Name: "account-" + mode, ControlMode: mode, ExecutionMode: "PAPER", MarketType: "SPOT", SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "created"})
+			return tx.CreateLogicalAccount(LogicalAccountRecord{SpaceID: "space", LogicalAccountID: "account-" + mode, Name: "account-" + mode, ControlMode: mode, ExecutionMode: "PAPER", SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "created"})
 		})
 		if mode == "invalid" {
 			require.Error(t, err)

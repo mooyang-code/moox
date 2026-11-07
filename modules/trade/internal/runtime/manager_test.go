@@ -194,7 +194,7 @@ func TestManagerOwnsExactlyOneSessionPerEnabledAccount(t *testing.T) {
 func TestManagerReadyForRejectsStaleSessionConfiguration(t *testing.T) {
 	record := store.TradingAccountRecord{
 		SpaceID: "space-1", TradingAccountID: "account-1",
-		Exchange: "BINANCE", MarketType: "SPOT", ExecutionMode: "LIVE",
+		Exchange: "BINANCE", Markets: []string{"SPOT"}, ExecutionMode: "LIVE",
 		CredentialSecretID: "secret-1", SettlementAsset: "USDT",
 		Status: "ENABLED", LeverageSettings: store.LeverageSettings{},
 	}
@@ -215,7 +215,7 @@ func TestManagerReadyForRejectsStaleSessionConfiguration(t *testing.T) {
 	<-session.started
 	account := tradingaccount.Account{
 		ID: "account-1", SpaceID: "space-1",
-		Exchange: exchange.ExchangeBinance, MarketType: exchange.MarketTypeSpot,
+		Exchange: exchange.ExchangeBinance, Markets: []exchange.MarketType{exchange.MarketTypeSpot},
 		ExecutionMode:      exchange.ExecutionModeLive,
 		CredentialSecretID: "secret-1", SettlementAsset: "USDT",
 		Status: exchange.AccountStatusEnabled, LeverageSettings: map[string]shared.Decimal{},

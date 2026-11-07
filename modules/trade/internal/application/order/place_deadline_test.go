@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
@@ -33,7 +34,7 @@ func TestPlaceAccountLockHonorsDeadline(t *testing.T) {
 		<-done
 		t.Fatal("order admission waited for account lock beyond its deadline")
 	}
-	_, err := db.GetOrderByClientID(context.Background(), "space-1", spec.TradingAccountID, spec.ClientOrderID)
+	_, err := db.GetOrderByClientID(context.Background(), "space-1", spec.TradingAccountID, exchange.MarketTypeSpot, spec.ClientOrderID)
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
 	// Canceled admission must neither leave a background waiter nor consume the
 	// client ID. A subsequent caller can still admit exactly that request.

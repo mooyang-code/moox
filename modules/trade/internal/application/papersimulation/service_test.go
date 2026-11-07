@@ -19,7 +19,7 @@ func TestCreatePreservesControlModeAndRejectsUnknownAtomically(t *testing.T) {
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, db.Close()) })
 			s := Service{Store: db}
-			result, err := s.Create(context.Background(), CreateCommand{SpaceID: "space", AccountName: "paper", LogicalAccountName: "logical", ControlMode: mode, Exchange: "BINANCE", MarketType: "SPOT", SettlementAsset: "USDT", InitialBalance: shared.MustDecimal("100")})
+			result, err := s.Create(context.Background(), CreateCommand{SpaceID: "space", AccountName: "paper", LogicalAccountName: "logical", ControlMode: mode, Exchange: "BINANCE", Markets: []exchange.MarketType{"SPOT"}, SettlementAsset: "USDT", InitialBalance: shared.MustDecimal("100")})
 			if mode == "unknown" {
 				require.Error(t, err)
 				var count int64
@@ -43,7 +43,7 @@ func TestCreatePreservesControlModeAndRejectsUnknownAtomically(t *testing.T) {
 func paperCommand(account, logical string) CreateCommand {
 	return CreateCommand{
 		SpaceID: "space", AccountName: account, LogicalAccountName: logical, Exchange: exchange.ExchangeBinance,
-		MarketType: exchange.MarketTypeSpot, SettlementAsset: "USDT", InitialBalance: shared.MustDecimal("1000"),
+		Markets: []exchange.MarketType{exchange.MarketTypeSpot}, SettlementAsset: "USDT", InitialBalance: shared.MustDecimal("1000"),
 		MakerFeeRate: shared.Zero(), TakerFeeRate: shared.Zero(), SlippageBPS: shared.Zero(),
 	}
 }
@@ -116,4 +116,40 @@ func TestCloseRemovesDisabledMembership(t *testing.T) {
 
 	_, _, err = db.FindLogicalAccountMembership(ctx, "space", accountID)
 	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
+}
+
+func TestCreateNormalizesMarketsAndRejectsUnsupportedSets(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	s := Service{Store: db}
+	ctx := context.Background()
+
+	for name, markets := range map[string][]exchange.MarketType{
+		"空集合":    nil,
+		"未知市场":   {"FUTURES"},
+		"股票混合现货": {exchange.MarketTypeStock, exchange.MarketTypeSpot},
+	} {
+		command := paperCommand("bad-"+name, "")
+		command.Markets = markets
+		_, err := s.Create(ctx, command)
+		require.Error(t, err, name)
+	}
+	// 现货加合约：一个账户、一个资金池同时撮合两个市场。
+	command := paperCommand("both", "")
+	command.Markets = []exchange.MarketType{exchange.MarketTypeSwap, exchange.MarketTypeSpot}
+	both, err := s.Create(ctx, command)
+	require.NoError(t, err)
+	require.Equal(t, []string{"SPOT", "SWAP"}, both.Account.Markets)
+	require.Equal(t, "CROSS", both.Account.MarginMode)
+	require.Equal(t, "UNIFIED", both.Account.Snapshot.Balances[0].Wallet)
+
+	command = paperCommand("swap", "")
+	command.Markets = []exchange.MarketType{exchange.MarketTypeSwap}
+	result, err := s.Create(ctx, command)
+	require.NoError(t, err)
+	require.Equal(t, []string{"SWAP"}, result.Account.Markets)
+	require.Equal(t, "CROSS", result.Account.MarginMode)
+	require.Equal(t, "1", result.Account.LeverageSettings[store.DefaultLeverageKey])
+	require.Equal(t, "UNIFIED", result.Account.Snapshot.Balances[0].Wallet)
 }

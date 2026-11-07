@@ -140,7 +140,7 @@ func validSpotAccount() Account {
 		SpaceID:            "space-1",
 		Name:               "main",
 		Exchange:           exchange.ExchangeBinance,
-		MarketType:         exchange.MarketTypeSpot,
+		Markets:            []exchange.MarketType{exchange.MarketTypeSpot},
 		ExecutionMode:      exchange.ExecutionModePaper,
 		Environment:        exchange.AccountEnvironmentPaper,
 		CredentialSecretID: "secret-1",
@@ -152,7 +152,7 @@ func validSpotAccount() Account {
 
 func validSwapAccount() Account {
 	account := validSpotAccount()
-	account.MarketType = exchange.MarketTypeSwap
+	account.Markets = []exchange.MarketType{exchange.MarketTypeSwap}
 	account.MarginMode = exchange.MarginModeCross
 	account.LeverageSettings = map[string]shared.Decimal{
 		"BTC-USDT": shared.MustDecimal("5"),

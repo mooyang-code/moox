@@ -131,6 +131,7 @@ func TestManualOrderRequestHasExactApprovedShape(t *testing.T) {
 		"limit_price":        10,
 		"reason":             11,
 		"deadline_at":        12,
+		"market_type":        13,
 	}
 	fields := (&PlaceManualOrderReq{}).ProtoReflect().Descriptor().Fields()
 	if fields.Len() != len(want) {
@@ -295,8 +296,8 @@ func TestCreateTradingAccountRequiresLiveConfig(t *testing.T) {
 	base := func() *CreateTradingAccountReq {
 		return &CreateTradingAccountReq{
 			Name: "live", Exchange: Exchange_EXCHANGE_OKX,
-			MarketType: MarketType_MARKET_TYPE_SWAP,
-			Live:       &LiveConfig{Environment: AccountEnvironment_ACCOUNT_ENVIRONMENT_TESTNET, CredentialSecretId: "secret-1"},
+			Markets: []MarketType{MarketType_MARKET_TYPE_SWAP},
+			Live:    &LiveConfig{Environment: AccountEnvironment_ACCOUNT_ENVIRONMENT_TESTNET, CredentialSecretId: "secret-1"},
 		}
 	}
 	if err := base().Validate(); err != nil {

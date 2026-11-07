@@ -2,6 +2,7 @@ package execution
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -23,8 +24,6 @@ type ExchangeDescriptor struct {
 	Exchange     exchange.Exchange
 	OrderTypes   []exchange.OrderType
 	FillPolicies []exchange.FillPolicy
-	// UnifiedAccount 表示现货和合约共用一个资金账户，同一把密钥只能建一个执行账户。
-	UnifiedAccount bool
 	// TradingSession 判断当前是否在交易时段；nil 表示全天可交易。
 	TradingSession func(time.Time) bool
 }
@@ -93,31 +92,47 @@ func (r *Registry) Bind(config exchange.AccountConfig, credential exchange.Crede
 	if !ok {
 		return nil, fmt.Errorf("execution: unregistered Exchange %q", config.Exchange)
 	}
-	adapter, err := factory(config, credential)
-	if err != nil {
-		return nil, fmt.Errorf("execution: bind %s account %q: %w", config.Exchange, config.TradingAccountID, err)
+	// 每个市场绑一个单市场适配器；开通多个市场时合成一个按市场路由的适配器。
+	adapters := make(map[exchange.MarketType]ExecutionAdapter, len(config.Markets))
+	for _, market := range config.Markets {
+		single := config
+		single.Markets = []exchange.MarketType{market}
+		if !exchange.RuleFor(market).Leverage {
+			single.MarginMode = exchange.MarginModeUnspecified
+		}
+		adapter, err := factory(single, credential)
+		if err != nil {
+			return nil, fmt.Errorf("execution: bind %s account %q market %s: %w", config.Exchange, config.TradingAccountID, market, err)
+		}
+		if adapter == nil {
+			return nil, fmt.Errorf("execution: %s factory returned nil adapter", config.Exchange)
+		}
+		identity, ok := adapter.(ExchangeIdentity)
+		if !ok || identity.Exchange() != config.Exchange {
+			return nil, fmt.Errorf("execution: adapter identity does not match account Exchange %q", config.Exchange)
+		}
+		adapters[market] = adapter
 	}
-	if adapter == nil {
-		return nil, fmt.Errorf("execution: %s factory returned nil adapter", config.Exchange)
+	if len(config.Markets) == 1 {
+		return adapters[config.Markets[0]], nil
 	}
-	identity, ok := adapter.(ExchangeIdentity)
-	if !ok || identity.Exchange() != config.Exchange {
-		return nil, fmt.Errorf("execution: adapter identity does not match account Exchange %q", config.Exchange)
-	}
-	return adapter, nil
+	return NewMultiMarket(config.Exchange, config.Markets, adapters)
 }
 
 func validateBinding(config exchange.AccountConfig) error {
 	if strings.TrimSpace(config.TradingAccountID) == "" ||
 		!config.Exchange.Valid() ||
-		!config.MarketType.Valid() ||
 		!config.ExecutionMode.Valid() ||
 		strings.TrimSpace(config.SettlementAsset) == "" {
 		return fmt.Errorf("execution: invalid account binding")
 	}
-	if !exchange.RuleFor(config.MarketType).Leverage {
+	normalized, err := exchange.NormalizeMarkets(config.Markets)
+	if err != nil || !slices.Equal(normalized, config.Markets) {
+		return fmt.Errorf("execution: invalid account markets %v", config.Markets)
+	}
+	if !slices.ContainsFunc(config.Markets, func(market exchange.MarketType) bool { return exchange.RuleFor(market).Leverage }) {
 		if config.MarginMode != exchange.MarginModeUnspecified {
-			return fmt.Errorf("execution: SPOT account cannot configure margin mode")
+			return fmt.Errorf("execution: account without SWAP cannot configure margin mode")
 		}
 		return nil
 	}

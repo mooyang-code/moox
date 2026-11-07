@@ -35,7 +35,7 @@ func (a *Adapter) Subscribe(ctx context.Context, handler execution.AccountEventH
 	if handler == nil {
 		return typedRejected("private event handler is required", nil)
 	}
-	if a.config.MarketType == exchange.MarketTypeSpot {
+	if a.config.Market() == exchange.MarketTypeSpot {
 		return a.subscribeSpotPrivate(ctx, handler)
 	}
 	return a.subscribeSwapPrivate(ctx, handler)
@@ -201,7 +201,7 @@ func (a *Adapter) receivePrivate(
 }
 
 func (a *Adapter) privateHeartbeatTimeout() time.Duration {
-	if a.config.MarketType == exchange.MarketTypeSwap {
+	if a.config.Market() == exchange.MarketTypeSwap {
 		// USD-M sends a server ping roughly every three minutes.
 		return 4 * time.Minute
 	}
@@ -381,13 +381,14 @@ func (a *Adapter) dispatchPrivate(
 		return err
 	}
 	positionSide := exchange.PositionSideUnspecified
-	if a.config.MarketType == exchange.MarketTypeSwap {
+	if a.config.Market() == exchange.MarketTypeSwap {
 		if order.payload.PositionSide != "" && order.payload.PositionSide != "BOTH" {
 			return typedRejected("hedge fill is unsupported", nil)
 		}
 		positionSide = exchange.PositionSideNet
 	}
 	return handler.OnFill(ctx, exchange.Fill{
+		Market:          a.config.Market(),
 		ExchangeTradeID: order.tradeID,
 		ExchangeOrderID: order.payload.OrderID.String(),
 		ClientOrderID:   order.payload.ClientOrderID,
@@ -543,7 +544,8 @@ func (a *Adapter) dispatchFuturesAccount(
 			return err
 		}
 		snapshot.Balances = append(snapshot.Balances, exchange.AssetBalance{
-			Asset: asset, Available: available, Locked: total.Sub(available), Total: total,
+			Wallet: a.wallet(),
+			Asset:  asset, Available: available, Locked: total.Sub(available), Total: total,
 		})
 	}
 	if err := handler.OnAccountSnapshot(ctx, snapshot); err != nil {
@@ -569,6 +571,7 @@ func (a *Adapter) dispatchFuturesAccount(
 			return err
 		}
 		position := exchange.Position{
+			Market:           a.config.Market(),
 			TradingAccountID: a.config.TradingAccountID,
 			ExchangeSymbol:   symbol, PositionSide: exchange.PositionSideNet,
 			SignedQuantity: quantity, MarginMode: exchange.MarginModeCross,
@@ -621,7 +624,8 @@ func (a *Adapter) dispatchSpotAccount(
 			return err
 		}
 		snapshot.Balances = append(snapshot.Balances, exchange.AssetBalance{
-			Asset: asset, Available: available, Locked: lockedValue,
+			Wallet: a.wallet(),
+			Asset:  asset, Available: available, Locked: lockedValue,
 			Total: available.Add(lockedValue),
 		})
 	}

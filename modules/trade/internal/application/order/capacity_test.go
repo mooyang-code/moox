@@ -39,7 +39,7 @@ func TestCapacityLiveUsesReservationFormulaAndBaseSteps(t *testing.T) {
 			spec.Quantity = shared.MustDecimal("2")
 			spec.Side = tc.side
 			if tc.market == exchange.MarketTypeSwap {
-				spec.PositionSide = exchange.PositionSideNet
+				spec.PositionSide, spec.InstrumentID = exchange.PositionSideNet, "BTC-USDT-SWAP"
 			}
 			got, err := s.Capacity(context.Background(), "space-1", spec)
 			require.NoError(t, err)
@@ -53,7 +53,7 @@ type capacityPaperAdapter struct {
 	now time.Time
 }
 
-func (a capacityPaperAdapter) GetQuote(context.Context, shared.ExchangeSymbol) (execution.MarketQuote, error) {
+func (a capacityPaperAdapter) GetQuote(context.Context, exchange.SymbolKey) (execution.MarketQuote, error) {
 	return execution.MarketQuote{Bid: shared.MustDecimal("100"), Ask: shared.MustDecimal("100"), Last: shared.MustDecimal("90"), SourceTime: a.now}, nil
 }
 func (a capacityPaperAdapter) GetAccountSnapshot(context.Context) (exchange.AccountSnapshot, error) {
@@ -95,7 +95,7 @@ func TestCapacityPaperUsesLedgerFeesSlippageAndReservations(t *testing.T) {
 			spec.Quantity = shared.MustDecimal("2")
 			spec.Side = tc.side
 			if tc.market == exchange.MarketTypeSwap {
-				spec.PositionSide = exchange.PositionSideNet
+				spec.PositionSide, spec.InstrumentID = exchange.PositionSideNet, "BTC-USDT-SWAP"
 			}
 			got, err := s.Capacity(context.Background(), "space-1", spec)
 			require.NoError(t, err)

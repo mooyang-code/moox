@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -253,14 +254,20 @@ func (s *Store) ListInstrumentsForAccount(ctx context.Context, tradingAccountID 
 	if account.ExecutionMode == "PAPER" || environment == "" {
 		environment = "PRODUCTION"
 	}
-	items, err := s.ListInstrumentsInEnvironment(ctx, account.Exchange, environment, account.MarketType)
-	if err != nil {
-		return nil, err
+	var result []InstrumentRecord
+	for _, market := range account.Markets {
+		items, err := s.ListInstrumentsInEnvironment(ctx, account.Exchange, environment, market)
+		if err != nil {
+			return nil, err
+		}
+		if len(items) == 0 && environment != "PRODUCTION" {
+			if items, err = s.ListInstrumentsInEnvironment(ctx, account.Exchange, "PRODUCTION", market); err != nil {
+				return nil, err
+			}
+		}
+		result = append(result, items...)
 	}
-	if len(items) == 0 && environment != "PRODUCTION" {
-		return s.ListInstrumentsInEnvironment(ctx, account.Exchange, "PRODUCTION", account.MarketType)
-	}
-	return items, nil
+	return result, nil
 }
 
 func (tx *Tx) GetInstrument(
@@ -288,11 +295,16 @@ func (tx *Tx) GetInstrumentByIDForAccount(spaceID, tradingAccountID, instrumentI
 	if err != nil {
 		return InstrumentRecord{}, err
 	}
-	set, err := tx.instrumentSet(instrumentScope{identity.Exchange, identity.Environment, identity.MarketType})
-	if err != nil {
-		return InstrumentRecord{}, err
+	for _, market := range identity.Markets {
+		set, err := tx.instrumentSet(instrumentScope{identity.Exchange, identity.Environment, market})
+		if err != nil {
+			return InstrumentRecord{}, err
+		}
+		if record, lookupErr := set.id(instrumentID); lookupErr == nil {
+			return record, nil
+		}
 	}
-	return set.id(instrumentID)
+	return InstrumentRecord{}, gorm.ErrRecordNotFound
 }
 
 func getInstrumentByID(db *gorm.DB, instrumentID string, scope ...string) (InstrumentRecord, error) {
@@ -341,30 +353,32 @@ func getInstrumentByID(db *gorm.DB, instrumentID string, scope ...string) (Instr
 }
 
 type OrderRecord struct {
-	SpaceID                   string
-	OrderID                   string
-	TradingAccountID          string
-	ClientOrderID             string
-	ExchangeOrderID           string
-	Exchange                  string
-	MarketType                string
-	InstrumentID              string
-	ExchangeSymbol            string
-	OrderType                 string
-	TimeInForce               string
-	Side                      string
-	PositionSide              string
-	Quantity                  string
-	LimitPrice                *string
-	ReferencePrice            string
-	ReferencePriceAt          int64
-	ReduceOnly                bool
-	OwnerType                 string
-	OwnerID                   string
-	LogicalAccountID          string
-	RunnerID                  string
-	PositionBefore            string
-	State                     string
+	SpaceID          string
+	OrderID          string
+	TradingAccountID string
+	ClientOrderID    string
+	ExchangeOrderID  string
+	Exchange         string
+	MarketType       string
+	InstrumentID     string
+	ExchangeSymbol   string
+	OrderType        string
+	TimeInForce      string
+	Side             string
+	PositionSide     string
+	Quantity         string
+	LimitPrice       *string
+	ReferencePrice   string
+	ReferencePriceAt int64
+	ReduceOnly       bool
+	OwnerType        string
+	OwnerID          string
+	LogicalAccountID string
+	RunnerID         string
+	PositionBefore   string
+	State            string
+	// Attempt 是伪市价单的第几次尝试，从 0 开始。
+	Attempt                   int
 	FilledQuantity            string
 	AveragePrice              string
 	ReservedAsset             string
@@ -406,6 +420,7 @@ type orderRow struct {
 	RunnerID                  *string   `gorm:"column:c_runner_id"`
 	PositionBefore            string    `gorm:"column:c_position_before"`
 	State                     string    `gorm:"column:c_state"`
+	Attempt                   int       `gorm:"column:c_attempt"`
 	FilledQuantity            string    `gorm:"column:c_filled_quantity"`
 	AveragePrice              string    `gorm:"column:c_average_price"`
 	ReservedAsset             string    `gorm:"column:c_reserved_asset"`
@@ -440,7 +455,7 @@ func (tx *Tx) CreateOrder(record OrderRecord) error {
 	if err := validateOrDeriveIdentity(&record.Exchange, identity.Exchange, "order Exchange"); err != nil {
 		return err
 	}
-	if err := validateOrDeriveIdentity(&record.MarketType, identity.MarketType, "order market type"); err != nil {
+	if err := identity.resolveMarket(&record.MarketType, "order"); err != nil {
 		return err
 	}
 	var instrument InstrumentRecord
@@ -472,11 +487,11 @@ func (tx *Tx) CreateOrder(record OrderRecord) error {
 			c_time_in_force, c_side, c_position_side, c_quantity, c_limit_price,
 			c_reference_price, c_reference_price_at, c_reduce_only, c_owner_type,
 			c_owner_id, c_logical_account_id, c_runner_id, c_position_before,
-			c_state, c_filled_quantity, c_average_price,
+			c_state, c_attempt, c_filled_quantity, c_average_price,
 			c_reserved_asset, c_reserved_quantity, c_remaining_reserved_quantity,
 			c_paper_execution_price, c_first_match_pending, c_reject_reason,
 			c_exchange_updated_at, c_version, c_submitted_at, c_finished_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		record.SpaceID, record.OrderID, record.TradingAccountID, record.ClientOrderID,
 		record.ExchangeOrderID, record.Exchange, record.MarketType, record.InstrumentID, record.ExchangeSymbol,
@@ -484,7 +499,7 @@ func (tx *Tx) CreateOrder(record OrderRecord) error {
 		record.Quantity, record.LimitPrice, record.ReferencePrice, record.ReferencePriceAt,
 		record.ReduceOnly, record.OwnerType, record.OwnerID,
 		nullableString(record.LogicalAccountID), nullableString(record.RunnerID), record.PositionBefore, record.State,
-		record.FilledQuantity, record.AveragePrice,
+		record.Attempt, record.FilledQuantity, record.AveragePrice,
 		record.ReservedAsset, record.ReservedQuantity,
 		record.RemainingReservedQuantity, record.PaperExecutionPrice, record.FirstMatchPending,
 		record.RejectReason, record.ExchangeUpdatedAt, record.Version, record.SubmittedAt, record.FinishedAt,
@@ -545,18 +560,21 @@ func (s *Store) GetOrder(
 	return orderRecordFromRow(row), err
 }
 
+// GetOrderByClientID 按客户端订单号查单：同一个账户里现货和合约的订单号可以相同，所以要带市场。
 func (s *Store) GetOrderByClientID(
 	ctx context.Context,
 	spaceID string,
 	tradingAccountID string,
+	market exchange.MarketType,
 	clientOrderID string,
 ) (OrderRecord, error) {
 	var row orderRow
 	err := s.db.WithContext(ctx).Table("t_trade_orders").
 		Where(
-			"c_space_id = ? AND c_trading_account_id = ? AND c_client_order_id = ?",
+			"c_space_id = ? AND c_trading_account_id = ? AND c_market_type = ? AND c_client_order_id = ?",
 			spaceID,
 			tradingAccountID,
+			market,
 			clientOrderID,
 		).
 		Take(&row).Error
@@ -567,16 +585,17 @@ func (s *Store) GetOrderByExchangeID(
 	ctx context.Context,
 	spaceID string,
 	tradingAccountID string,
-	symbol string,
+	key exchange.SymbolKey,
 	exchangeOrderID string,
 ) (OrderRecord, error) {
 	var row orderRow
 	err := s.db.WithContext(ctx).Table("t_trade_orders").
 		Where(
-			"c_space_id = ? AND c_trading_account_id = ? AND c_exchange_symbol = ? AND c_exchange_order_id = ?",
+			"c_space_id = ? AND c_trading_account_id = ? AND c_market_type = ? AND c_exchange_symbol = ? AND c_exchange_order_id = ?",
 			spaceID,
 			tradingAccountID,
-			symbol,
+			key.Market,
+			key.Symbol,
 			exchangeOrderID,
 		).
 		Take(&row).Error
@@ -691,14 +710,14 @@ func (s *Store) RecentFilledOrdersForLane(
 	ctx context.Context,
 	spaceID string,
 	tradingAccountID string,
-	symbol string,
+	key exchange.SymbolKey,
 	since int64,
 ) ([]OrderRecord, error) {
 	var rows []orderRow
 	if err := s.db.WithContext(ctx).Table("t_trade_orders").
-		Where(`c_space_id = ? AND c_trading_account_id = ? AND c_exchange_symbol = ?
+		Where(`c_space_id = ? AND c_trading_account_id = ? AND c_market_type = ? AND c_exchange_symbol = ?
 			AND c_finished_at > ? AND c_filled_quantity <> '0'`,
-			spaceID, tradingAccountID, symbol, since).
+			spaceID, tradingAccountID, key.Market, key.Symbol, since).
 		// 同一毫秒结束的订单按写入顺序：订单号是随机的，不能用来排先后。
 		Order("c_finished_at DESC, rowid DESC").
 		Limit(50).
@@ -737,15 +756,16 @@ func (s *Store) ListOrdersForLane(
 	ctx context.Context,
 	spaceID string,
 	tradingAccountID string,
-	symbol string,
+	key exchange.SymbolKey,
 ) ([]OrderRecord, error) {
 	var rows []orderRow
 	if err := s.db.WithContext(ctx).Table("t_trade_orders").
 		Where(
-			"c_space_id = ? AND c_trading_account_id = ? AND c_exchange_symbol = ?",
+			"c_space_id = ? AND c_trading_account_id = ? AND c_market_type = ? AND c_exchange_symbol = ?",
 			spaceID,
 			tradingAccountID,
-			symbol,
+			key.Market,
+			key.Symbol,
 		).
 		Find(&rows).Error; err != nil {
 		return nil, err
@@ -757,13 +777,15 @@ type OrderQuery struct {
 	LogicalAccountID string
 	TradingAccountID string
 	InstrumentID     string
-	ExchangeSymbol   string
-	State            string
-	OnlyOpen         bool
-	StartTime        int64
-	EndTime          int64
-	Offset           int
-	Limit            int
+	// Market 与 ExchangeSymbol 一起过滤；只给 ExchangeSymbol 不给 Market 会把同名的现货和合约混在一起。
+	Market         string
+	ExchangeSymbol string
+	State          string
+	OnlyOpen       bool
+	StartTime      int64
+	EndTime        int64
+	Offset         int
+	Limit          int
 }
 
 func (s *Store) ListOrders(
@@ -771,6 +793,9 @@ func (s *Store) ListOrders(
 	spaceID string,
 	query OrderQuery,
 ) ([]OrderRecord, int64, error) {
+	if query.ExchangeSymbol != "" && query.Market == "" {
+		return nil, 0, fmt.Errorf("%w: 按交易所代码查询必须同时给市场", ErrInvalidRecord)
+	}
 	db := s.db.WithContext(ctx).Table("t_trade_orders").
 		Where("c_space_id = ?", spaceID)
 	if query.LogicalAccountID != "" {
@@ -781,6 +806,9 @@ func (s *Store) ListOrders(
 	}
 	if query.InstrumentID != "" {
 		db = db.Where("c_instrument_id = ?", query.InstrumentID)
+	}
+	if query.Market != "" {
+		db = db.Where("c_market_type = ?", query.Market)
 	}
 	if query.ExchangeSymbol != "" {
 		db = db.Where("c_exchange_symbol = ?", query.ExchangeSymbol)
@@ -833,18 +861,18 @@ func (tx *Tx) FindOrderForFill(
 	tradingAccountID string,
 	clientOrderID string,
 	exchangeOrderID string,
-	symbol string,
+	key exchange.SymbolKey,
 ) (OrderRecord, error) {
-	if spaceID == "" || tradingAccountID == "" || symbol == "" ||
+	if spaceID == "" || tradingAccountID == "" || !key.Valid() ||
 		(clientOrderID == "" && exchangeOrderID == "") {
 		return OrderRecord{}, fmt.Errorf("%w: incomplete Fill order identity", ErrInvalidRecord)
 	}
 	var row orderRow
 	query := `
 		SELECT * FROM t_trade_orders
-		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_exchange_symbol = ?
+		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_market_type = ? AND c_exchange_symbol = ?
 	`
-	args := []any{spaceID, tradingAccountID, symbol}
+	args := []any{spaceID, tradingAccountID, key.Market, key.Symbol}
 	if clientOrderID != "" && exchangeOrderID != "" {
 		query += " AND (c_client_order_id = ? OR c_exchange_order_id = ?)"
 		args = append(args, clientOrderID, exchangeOrderID)
@@ -928,14 +956,14 @@ func (tx *Tx) UpdateOrder(record OrderRecord, expectedVersion uint64) error {
 	}
 	result := tx.db.Exec(`
 		UPDATE t_trade_orders
-		SET c_exchange_order_id = ?, c_state = ?, c_filled_quantity = ?,
+		SET c_exchange_order_id = ?, c_state = ?, c_attempt = ?, c_filled_quantity = ?,
 			c_average_price = ?, c_reduce_only = ?, c_reserved_asset = ?,
 			c_reserved_quantity = ?, c_remaining_reserved_quantity = ?,
 			c_reject_reason = ?, c_exchange_updated_at = ?, c_version = ?,
 			c_submitted_at = ?, c_finished_at = ?, c_mtime = CURRENT_TIMESTAMP
 		WHERE c_space_id = ? AND c_order_id = ? AND c_version = ?
 		`,
-		record.ExchangeOrderID, record.State, record.FilledQuantity,
+		record.ExchangeOrderID, record.State, record.Attempt, record.FilledQuantity,
 		record.AveragePrice, record.ReduceOnly, record.ReservedAsset,
 		record.ReservedQuantity, record.RemainingReservedQuantity,
 		record.RejectReason, record.ExchangeUpdatedAt, record.Version,
@@ -962,6 +990,7 @@ func orderRecordFromRow(row orderRow) OrderRecord {
 		ReduceOnly: row.ReduceOnly, OwnerType: row.OwnerType, OwnerID: row.OwnerID,
 		LogicalAccountID: valueOrEmpty(row.LogicalAccountID),
 		RunnerID:         valueOrEmpty(row.RunnerID), PositionBefore: row.PositionBefore, State: row.State,
+		Attempt:        row.Attempt,
 		FilledQuantity: row.FilledQuantity, AveragePrice: row.AveragePrice,
 		ReservedAsset: row.ReservedAsset, ReservedQuantity: row.ReservedQuantity,
 		RemainingReservedQuantity: row.RemainingReservedQuantity,
@@ -1116,9 +1145,9 @@ func (tx *Tx) fillIdentityExists(record FillRecord) (bool, error) {
 	var count int64
 	err := tx.db.Raw(`
 		SELECT COUNT(*) FROM t_order_fills
-		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_exchange_symbol = ?
+		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_market_type = ? AND c_exchange_symbol = ?
 			AND c_exchange_trade_id = ?
-	`, record.SpaceID, record.TradingAccountID, record.ExchangeSymbol, record.ExchangeTradeID).
+	`, record.SpaceID, record.TradingAccountID, record.MarketType, record.ExchangeSymbol, record.ExchangeTradeID).
 		Scan(&count).Error
 	return count != 0, err
 }
@@ -1152,11 +1181,13 @@ type FillQuery struct {
 	LogicalAccountID string
 	OrderID          string
 	InstrumentID     string
-	ExchangeSymbol   string
-	StartTime        int64
-	EndTime          int64
-	Offset           int
-	Limit            int
+	// Market 与 ExchangeSymbol 一起过滤；只给 ExchangeSymbol 不给 Market 会把同名的现货和合约混在一起。
+	Market         string
+	ExchangeSymbol string
+	StartTime      int64
+	EndTime        int64
+	Offset         int
+	Limit          int
 }
 
 func (s *Store) ListFills(
@@ -1164,6 +1195,9 @@ func (s *Store) ListFills(
 	spaceID string,
 	query FillQuery,
 ) ([]FillRecord, int64, error) {
+	if query.ExchangeSymbol != "" && query.Market == "" {
+		return nil, 0, fmt.Errorf("%w: 按交易所代码查询必须同时给市场", ErrInvalidRecord)
+	}
 	db := s.db.WithContext(ctx).Table("t_order_fills").
 		Where("c_space_id = ?", spaceID)
 	if query.TradingAccountID != "" {
@@ -1179,6 +1213,9 @@ func (s *Store) ListFills(
 	}
 	if query.InstrumentID != "" {
 		db = db.Where("c_instrument_id = ?", query.InstrumentID)
+	}
+	if query.Market != "" {
+		db = db.Where("c_market_type = ?", query.Market)
 	}
 	if query.ExchangeSymbol != "" {
 		db = db.Where("c_exchange_symbol = ?", query.ExchangeSymbol)
@@ -1226,9 +1263,9 @@ func (tx *Tx) resolveDuplicateFill(
 			c_instrument_id, c_exchange_symbol, c_side, c_position_side, c_price, c_quantity, c_fee,
 			c_fee_asset, c_settlement_asset, c_realized_pnl, c_role, c_traded_at
 		FROM t_order_fills
-		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_exchange_symbol = ?
+		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_market_type = ? AND c_exchange_symbol = ?
 			AND c_exchange_trade_id = ?
-	`, record.SpaceID, record.TradingAccountID, record.ExchangeSymbol, record.ExchangeTradeID).
+	`, record.SpaceID, record.TradingAccountID, record.MarketType, record.ExchangeSymbol, record.ExchangeTradeID).
 		Scan(&existing)
 	if result.Error != nil {
 		return false, result.Error
@@ -1275,13 +1312,28 @@ func fillRowFromRecord(record FillRecord) fillRow {
 }
 
 type tradingAccountIdentity struct {
-	Exchange      string `gorm:"column:c_exchange"`
-	MarketType    string `gorm:"column:c_market_type"`
-	Environment   string `gorm:"column:c_environment"`
-	ExecutionMode string `gorm:"column:c_execution_mode"`
+	Exchange      string
+	Markets       []string
+	Environment   string
+	ExecutionMode string
 }
 
-// accountIdentity 返回账户的交易所、市场和行情环境。账户创建后这些不变，按账户缓存。
+// resolveMarket 校验或推导订单、持仓的市场：必须是账户已开通的市场；没写市场时，只有单市场账户才能推导。
+func (i tradingAccountIdentity) resolveMarket(market *string, label string) error {
+	if *market == "" {
+		if len(i.Markets) != 1 {
+			return fmt.Errorf("%w: 账户开通了多个市场，%s必须指定市场", ErrInvalidRecord, label)
+		}
+		*market = i.Markets[0]
+		return nil
+	}
+	if !slices.Contains(i.Markets, *market) {
+		return fmt.Errorf("%w: 账户没有开通市场 %s（已开通 %v）", ErrInvalidRecord, *market, i.Markets)
+	}
+	return nil
+}
+
+// accountIdentity 返回账户的交易所、已开通市场和行情环境。账户创建后这些不变，按账户缓存。
 func (tx *Tx) accountIdentity(spaceID string, tradingAccountID string) (tradingAccountIdentity, error) {
 	if tx.store == nil || tx.accountsWritten {
 		return tx.loadAccountIdentity(spaceID, tradingAccountID)
@@ -1292,17 +1344,29 @@ func (tx *Tx) accountIdentity(spaceID string, tradingAccountID string) (tradingA
 }
 
 func (tx *Tx) loadAccountIdentity(spaceID string, tradingAccountID string) (tradingAccountIdentity, error) {
-	var identity tradingAccountIdentity
+	var row struct {
+		Exchange      string `gorm:"column:c_exchange"`
+		Markets       string `gorm:"column:c_markets"`
+		Environment   string `gorm:"column:c_environment"`
+		ExecutionMode string `gorm:"column:c_execution_mode"`
+	}
 	result := tx.db.Raw(`
-		SELECT c_exchange, c_market_type, c_live_environment AS c_environment, c_execution_mode
+		SELECT c_exchange, c_markets, c_live_environment AS c_environment, c_execution_mode
 		FROM t_trading_accounts
 		WHERE c_space_id = ? AND c_trading_account_id = ?
-	`, spaceID, tradingAccountID).Scan(&identity)
+	`, spaceID, tradingAccountID).Scan(&row)
 	if result.Error != nil {
 		return tradingAccountIdentity{}, result.Error
 	}
 	if result.RowsAffected != 1 {
 		return tradingAccountIdentity{}, fmt.Errorf("%w: Exchange account identity", ErrInvalidRecord)
+	}
+	markets, err := decodeMarkets(row.Markets)
+	if err != nil {
+		return tradingAccountIdentity{}, err
+	}
+	identity := tradingAccountIdentity{
+		Exchange: row.Exchange, Markets: markets, Environment: row.Environment, ExecutionMode: row.ExecutionMode,
 	}
 	if identity.ExecutionMode == "PAPER" {
 		identity.Environment = "PRODUCTION"
@@ -1328,6 +1392,7 @@ func validateOrDeriveIdentity(actual *string, expected string, label string) err
 type PositionRecord struct {
 	SpaceID           string
 	TradingAccountID  string
+	MarketType        string
 	InstrumentID      string
 	ExchangeSymbol    string
 	PositionSide      string
@@ -1359,8 +1424,11 @@ func (tx *Tx) upsertPosition(record PositionRecord, overrideBefore int64) error 
 	if err != nil {
 		return err
 	}
+	if err := identity.resolveMarket(&record.MarketType, "持仓"); err != nil {
+		return err
+	}
 	if record.InstrumentID == "" {
-		set, err := tx.instrumentSet(instrumentScope{identity.Exchange, identity.Environment, identity.MarketType})
+		set, err := tx.instrumentSet(instrumentScope{identity.Exchange, identity.Environment, record.MarketType})
 		if err != nil {
 			return err
 		}
@@ -1370,17 +1438,17 @@ func (tx *Tx) upsertPosition(record PositionRecord, overrideBefore int64) error 
 			record.InstrumentID = record.ExchangeSymbol
 		}
 	}
-	if err := canonicalizePosition(&record, identity.MarketType); err != nil {
+	if err := canonicalizePosition(&record, record.MarketType); err != nil {
 		return err
 	}
 	return tx.db.Exec(`
 		INSERT INTO t_trading_positions (
-			c_space_id, c_trading_account_id, c_instrument_id, c_exchange_symbol, c_position_side,
+			c_space_id, c_trading_account_id, c_market_type, c_instrument_id, c_exchange_symbol, c_position_side,
 			c_signed_quantity, c_entry_price, c_mark_price, c_leverage, c_margin_mode,
 			c_used_margin, c_liquidation_price, c_unrealized_pnl, c_realized_pnl,
 			c_exchange_updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(c_space_id, c_trading_account_id, c_exchange_symbol, c_position_side)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(c_space_id, c_trading_account_id, c_market_type, c_exchange_symbol, c_position_side)
 		DO UPDATE SET
 			c_signed_quantity = excluded.c_signed_quantity,
 			c_entry_price = excluded.c_entry_price,
@@ -1397,7 +1465,7 @@ func (tx *Tx) upsertPosition(record PositionRecord, overrideBefore int64) error 
 			t_trading_positions.c_exchange_updated_at
 			OR t_trading_positions.c_exchange_updated_at <= ?
 	`,
-		record.SpaceID, record.TradingAccountID, record.InstrumentID, record.ExchangeSymbol, record.PositionSide,
+		record.SpaceID, record.TradingAccountID, record.MarketType, record.InstrumentID, record.ExchangeSymbol, record.PositionSide,
 		record.SignedQuantity, record.EntryPrice,
 		record.MarkPrice, record.Leverage, record.MarginMode,
 		record.UsedMargin, record.LiquidationPrice,
@@ -1418,6 +1486,17 @@ func (tx *Tx) ReplacePositionsForAccount(
 ) error {
 	if blank(spaceID) || blank(tradingAccountID) || snapshotAt <= 0 {
 		return fmt.Errorf("%w: incomplete position snapshot identity", ErrInvalidRecord)
+	}
+	identity, err := tx.accountIdentity(spaceID, tradingAccountID)
+	if err != nil {
+		return err
+	}
+	// 先确定每条持仓的市场：后面保留、墓碑的匹配都按（市场，代码，方向）。
+	records = append([]PositionRecord(nil), records...)
+	for i := range records {
+		if err := identity.resolveMarket(&records[i].MarketType, "持仓"); err != nil {
+			return err
+		}
 	}
 	for _, record := range records {
 		if record.SpaceID != spaceID || record.TradingAccountID != tradingAccountID {
@@ -1446,8 +1525,8 @@ func (tx *Tx) ReplacePositionsForAccount(
 			if index > 0 {
 				retained.WriteString(" OR ")
 			}
-			retained.WriteString("(c_exchange_symbol = ? AND c_position_side = ?)")
-			args = append(args, record.ExchangeSymbol, record.PositionSide)
+			retained.WriteString("(c_market_type = ? AND c_exchange_symbol = ? AND c_position_side = ?)")
+			args = append(args, record.MarketType, record.ExchangeSymbol, record.PositionSide)
 		}
 		retained.WriteString(")")
 		where += retained.String()
@@ -1461,10 +1540,10 @@ func (tx *Tx) ReplacePositionsForAccount(
 	}
 	tombstoneArgs := append([]any{tombstoneAt}, args...)
 	if err := tx.db.Exec(`
-		INSERT INTO t_trading_position_tombstones (c_space_id, c_trading_account_id, c_exchange_symbol, c_position_side, c_covered_until)
-		SELECT c_space_id, c_trading_account_id, c_exchange_symbol, c_position_side, MAX(c_snapshot_covered_until, ?)
+		INSERT INTO t_trading_position_tombstones (c_space_id, c_trading_account_id, c_market_type, c_exchange_symbol, c_position_side, c_covered_until)
+		SELECT c_space_id, c_trading_account_id, c_market_type, c_exchange_symbol, c_position_side, MAX(c_snapshot_covered_until, ?)
 		FROM t_trading_positions`+where+`
-		ON CONFLICT(c_space_id, c_trading_account_id, c_exchange_symbol, c_position_side)
+		ON CONFLICT(c_space_id, c_trading_account_id, c_market_type, c_exchange_symbol, c_position_side)
 		DO UPDATE SET c_covered_until = MAX(c_covered_until, excluded.c_covered_until)
 	`, tombstoneArgs...).Error; err != nil {
 		return writeError(err)
@@ -1473,8 +1552,8 @@ func (tx *Tx) ReplacePositionsForAccount(
 	for _, record := range records {
 		if err := tx.db.Exec(`
 			DELETE FROM t_trading_position_tombstones
-			WHERE c_space_id = ? AND c_trading_account_id = ? AND c_exchange_symbol = ? AND c_position_side = ?
-		`, record.SpaceID, record.TradingAccountID, record.ExchangeSymbol, record.PositionSide).Error; err != nil {
+			WHERE c_space_id = ? AND c_trading_account_id = ? AND c_market_type = ? AND c_exchange_symbol = ? AND c_position_side = ?
+		`, record.SpaceID, record.TradingAccountID, record.MarketType, record.ExchangeSymbol, record.PositionSide).Error; err != nil {
 			return writeError(err)
 		}
 	}
@@ -1490,21 +1569,21 @@ func (tx *Tx) markPositionSnapshotCovered(record PositionRecord) error {
 	return writeError(tx.db.Exec(`
 		UPDATE t_trading_positions
 		SET c_snapshot_covered_until = MAX(c_snapshot_covered_until, ?)
-		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_exchange_symbol = ? AND c_position_side = ?
-	`, record.ExchangeUpdatedAt, record.SpaceID, record.TradingAccountID, record.ExchangeSymbol, record.PositionSide).Error)
+		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_market_type = ? AND c_exchange_symbol = ? AND c_position_side = ?
+	`, record.ExchangeUpdatedAt, record.SpaceID, record.TradingAccountID, record.MarketType, record.ExchangeSymbol, record.PositionSide).Error)
 }
 
 // PositionSnapshotCoveredUntil 返回权威持仓快照已覆盖到的时间；没有快照覆盖过返回 0。
-func (tx *Tx) PositionSnapshotCoveredUntil(spaceID, tradingAccountID, symbol, positionSide string) (int64, error) {
+func (tx *Tx) PositionSnapshotCoveredUntil(spaceID, tradingAccountID string, key exchange.SymbolKey, positionSide string) (int64, error) {
 	var covered int64
 	if err := tx.db.Raw(`
 		SELECT MAX(
 			COALESCE((SELECT MAX(c_snapshot_covered_until) FROM t_trading_positions
-				WHERE c_space_id = ? AND c_trading_account_id = ? AND c_exchange_symbol = ? AND c_position_side = ?), 0),
+				WHERE c_space_id = ? AND c_trading_account_id = ? AND c_market_type = ? AND c_exchange_symbol = ? AND c_position_side = ?), 0),
 			COALESCE((SELECT MAX(c_covered_until) FROM t_trading_position_tombstones
-				WHERE c_space_id = ? AND c_trading_account_id = ? AND c_exchange_symbol = ? AND c_position_side = ?), 0)
+				WHERE c_space_id = ? AND c_trading_account_id = ? AND c_market_type = ? AND c_exchange_symbol = ? AND c_position_side = ?), 0)
 		)
-	`, spaceID, tradingAccountID, symbol, positionSide, spaceID, tradingAccountID, symbol, positionSide).Scan(&covered).Error; err != nil {
+	`, spaceID, tradingAccountID, key.Market, key.Symbol, positionSide, spaceID, tradingAccountID, key.Market, key.Symbol, positionSide).Scan(&covered).Error; err != nil {
 		return 0, err
 	}
 	return covered, nil
@@ -1513,12 +1592,13 @@ func (tx *Tx) PositionSnapshotCoveredUntil(spaceID, tradingAccountID, symbol, po
 func (tx *Tx) GetPosition(
 	spaceID string,
 	tradingAccountID string,
-	symbol string,
+	key exchange.SymbolKey,
 	positionSide string,
 ) (PositionRecord, bool, error) {
 	var row struct {
 		SpaceID           string    `gorm:"column:c_space_id"`
 		TradingAccountID  string    `gorm:"column:c_trading_account_id"`
+		MarketType        string    `gorm:"column:c_market_type"`
 		InstrumentID      string    `gorm:"column:c_instrument_id"`
 		ExchangeSymbol    string    `gorm:"column:c_exchange_symbol"`
 		PositionSide      string    `gorm:"column:c_position_side"`
@@ -1536,9 +1616,9 @@ func (tx *Tx) GetPosition(
 	}
 	result := tx.db.Raw(`
 		SELECT * FROM t_trading_positions
-		WHERE c_space_id = ? AND c_trading_account_id = ?
+		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_market_type = ?
 			AND c_exchange_symbol = ? AND c_position_side = ?
-	`, spaceID, tradingAccountID, symbol, positionSide).Scan(&row)
+	`, spaceID, tradingAccountID, key.Market, key.Symbol, positionSide).Scan(&row)
 	if result.Error != nil {
 		return PositionRecord{}, false, result.Error
 	}
@@ -1546,7 +1626,7 @@ func (tx *Tx) GetPosition(
 		return PositionRecord{}, false, nil
 	}
 	return PositionRecord{
-		SpaceID: row.SpaceID, TradingAccountID: row.TradingAccountID, InstrumentID: row.InstrumentID,
+		SpaceID: row.SpaceID, TradingAccountID: row.TradingAccountID, MarketType: row.MarketType, InstrumentID: row.InstrumentID,
 		ExchangeSymbol: row.ExchangeSymbol, PositionSide: row.PositionSide,
 		SignedQuantity: row.SignedQuantity, EntryPrice: row.EntryPrice,
 		MarkPrice: row.MarkPrice, Leverage: row.Leverage,
@@ -1562,7 +1642,7 @@ func (s *Store) GetPosition(
 	ctx context.Context,
 	spaceID string,
 	tradingAccountID string,
-	symbol string,
+	key exchange.SymbolKey,
 	positionSide string,
 ) (PositionRecord, bool, error) {
 	var record PositionRecord
@@ -1572,7 +1652,7 @@ func (s *Store) GetPosition(
 		record, found, err = tx.GetPosition(
 			spaceID,
 			tradingAccountID,
-			symbol,
+			key,
 			positionSide,
 		)
 		return err
@@ -1580,13 +1660,22 @@ func (s *Store) GetPosition(
 	return record, found, err
 }
 
+// ListPositions 列出账户的持仓；key 为零值时列出全部，否则只列这个（市场、交易所代码）下的持仓。
 func (s *Store) ListPositions(
 	ctx context.Context,
 	spaceID string,
 	tradingAccountID string,
-	symbol string,
+	key exchange.SymbolKey,
 ) ([]PositionRecord, error) {
-	return s.listPositions(ctx, spaceID, tradingAccountID, "c_exchange_symbol", symbol)
+	if err := key.Validate(); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidRecord, err)
+	}
+	return s.listPositions(ctx, spaceID, tradingAccountID, func(db *gorm.DB) *gorm.DB {
+		if key.IsZero() {
+			return db
+		}
+		return db.Where("c_market_type = ? AND c_exchange_symbol = ?", key.Market, key.Symbol)
+	})
 }
 
 // ListPositionsByInstrument filters positions by the canonical instrument ID.
@@ -1596,24 +1685,26 @@ func (s *Store) ListPositionsByInstrument(
 	tradingAccountID string,
 	instrumentID string,
 ) ([]PositionRecord, error) {
-	return s.listPositions(ctx, spaceID, tradingAccountID, "c_instrument_id", instrumentID)
+	return s.listPositions(ctx, spaceID, tradingAccountID, func(db *gorm.DB) *gorm.DB {
+		if instrumentID == "" {
+			return db
+		}
+		return db.Where("c_instrument_id = ?", instrumentID)
+	})
 }
 
 func (s *Store) listPositions(
 	ctx context.Context,
 	spaceID string,
 	tradingAccountID string,
-	filterColumn string,
-	filterValue string,
+	filter func(*gorm.DB) *gorm.DB,
 ) ([]PositionRecord, error) {
-	db := s.db.WithContext(ctx).Table("t_trading_positions").
-		Where("c_space_id = ? AND c_trading_account_id = ?", spaceID, tradingAccountID)
-	if filterValue != "" {
-		db = db.Where(filterColumn+" = ?", filterValue)
-	}
+	db := filter(s.db.WithContext(ctx).Table("t_trading_positions").
+		Where("c_space_id = ? AND c_trading_account_id = ?", spaceID, tradingAccountID))
 	var rows []struct {
 		SpaceID           string    `gorm:"column:c_space_id"`
 		TradingAccountID  string    `gorm:"column:c_trading_account_id"`
+		MarketType        string    `gorm:"column:c_market_type"`
 		InstrumentID      string    `gorm:"column:c_instrument_id"`
 		ExchangeSymbol    string    `gorm:"column:c_exchange_symbol"`
 		PositionSide      string    `gorm:"column:c_position_side"`
@@ -1629,13 +1720,13 @@ func (s *Store) listPositions(
 		ExchangeUpdatedAt int64     `gorm:"column:c_exchange_updated_at"`
 		UpdatedAt         time.Time `gorm:"column:c_mtime"`
 	}
-	if err := db.Order("c_exchange_symbol, c_position_side").Find(&rows).Error; err != nil {
+	if err := db.Order("c_market_type, c_exchange_symbol, c_position_side").Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	records := make([]PositionRecord, 0, len(rows))
 	for _, row := range rows {
 		records = append(records, PositionRecord{
-			SpaceID: row.SpaceID, TradingAccountID: row.TradingAccountID,
+			SpaceID: row.SpaceID, TradingAccountID: row.TradingAccountID, MarketType: row.MarketType,
 			InstrumentID: row.InstrumentID, ExchangeSymbol: row.ExchangeSymbol, PositionSide: row.PositionSide,
 			SignedQuantity: row.SignedQuantity, EntryPrice: row.EntryPrice,
 			MarkPrice: row.MarkPrice, Leverage: row.Leverage,

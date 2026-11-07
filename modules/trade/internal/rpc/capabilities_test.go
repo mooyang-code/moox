@@ -83,7 +83,7 @@ func TestGetExecutionCapabilitiesThroughConsoleServer(t *testing.T) {
 	defer tradeStore.Close()
 	if err := tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.CreateTradingAccount(store.TradingAccountRecord{
-			SpaceID: "space-1", TradingAccountID: "account-1", Name: "paper", Exchange: "BINANCE", MarketType: "SPOT",
+			SpaceID: "space-1", TradingAccountID: "account-1", Name: "paper", Exchange: "BINANCE", Markets: []string{"SPOT"},
 			ExecutionMode: "PAPER", Environment: "PAPER", SettlementAsset: "USDT", Status: "ENABLED",
 		})
 	}); err != nil {

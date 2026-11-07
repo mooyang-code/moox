@@ -39,7 +39,7 @@ func TestResolveUnknownAccountLockHonorsDeadline(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, record, current)
 	adapter.getErr = nil
-	adapter.getResult = exchange.Order{ExchangeOrderID: "recovered-order"}
+	adapter.getResult = exchange.Order{Market: exchange.MarketTypeSwap, ExchangeOrderID: "recovered-order"}
 	resolved, err := svc.ResolveUnknown(context.Background(), "space-1", record.OrderID)
 	require.NoError(t, err)
 	require.Equal(t, "OPEN", string(resolved.State))

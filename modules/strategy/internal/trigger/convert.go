@@ -79,8 +79,23 @@ func ResultItems(items []engine.Item) []store.ResultItem {
 	return out
 }
 
+// TradeMarketType 把策略的市场类型（spot、swap、equity）转成 Trade 事件契约里的市场写法。
+func TradeMarketType(marketType string) (string, error) {
+	switch marketType {
+	case "spot":
+		return "SPOT", nil
+	case "swap":
+		return "SWAP", nil
+	case "equity":
+		return "STOCK", nil
+	default:
+		return "", fmt.Errorf("策略市场 %q 不受支持，无法生成目标事件", marketType)
+	}
+}
+
 // MarshalTargetEvent 构造发给 Trade 的目标权重事件；shadow 为真表示预热中的影子目标。
-func MarshalTargetEvent(instance store.Instance, result store.Result, targets []TargetJSON, shadow bool) ([]byte, error) {
+// marketType 是目标里所有标的所属的 Trade 市场（SPOT、SWAP、STOCK）。
+func MarshalTargetEvent(instance store.Instance, result store.Result, targets []TargetJSON, shadow bool, marketType string) ([]byte, error) {
 	if instance.LogicalAccountID == nil {
 		return nil, fmt.Errorf("观察实例没有组合账户，不能构造目标事件")
 	}
@@ -90,7 +105,7 @@ func MarshalTargetEvent(instance store.Instance, result store.Result, targets []
 	}
 	payloadTargets := make([]*tradeeventpb.InstrumentWeightTarget, 0, len(targets))
 	for _, target := range targets {
-		payloadTargets = append(payloadTargets, &tradeeventpb.InstrumentWeightTarget{InstrumentId: target.InstrumentID, TargetWeight: target.TargetWeight, Hold: target.Hold})
+		payloadTargets = append(payloadTargets, &tradeeventpb.InstrumentWeightTarget{InstrumentId: target.InstrumentID, TargetWeight: target.TargetWeight, Hold: target.Hold, MarketType: marketType})
 	}
 	payload := &tradeeventpb.LogicalAccountTargetWeightRequested{
 		TargetId: result.ResultID, InstanceId: result.InstanceID, LogicalAccountId: *instance.LogicalAccountID,

@@ -5,7 +5,6 @@ import (
 	"errors"
 	"sync"
 
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 )
@@ -95,7 +94,7 @@ func (a probingAdapter) LoadInstruments(ctx context.Context) ([]exchange.Instrum
 	return a.marketData.LoadInstruments(ctx)
 }
 
-func (a probingAdapter) GetQuote(ctx context.Context, symbol shared.ExchangeSymbol) (execution.MarketQuote, error) {
+func (a probingAdapter) GetQuote(ctx context.Context, symbol exchange.SymbolKey) (execution.MarketQuote, error) {
 	if a.marketData == nil {
 		return execution.MarketQuote{}, errors.New("testnet adapter has no market-data source")
 	}
@@ -104,7 +103,7 @@ func (a probingAdapter) GetQuote(ctx context.Context, symbol shared.ExchangeSymb
 
 func (a probingAdapter) GetReferencePrice(
 	ctx context.Context,
-	symbol string,
+	symbol exchange.SymbolKey,
 ) (exchange.ReferencePrice, error) {
 	source, ok := a.ExecutionAdapter.(execution.ReferencePriceSource)
 	if !ok {
@@ -117,7 +116,7 @@ func (a probingAdapter) GetReferencePrice(
 
 func (a probingAdapter) GetOrderByExchangeID(
 	ctx context.Context,
-	symbol string,
+	symbol exchange.SymbolKey,
 	exchangeOrderID string,
 ) (exchange.Order, error) {
 	lookup, ok := a.ExecutionAdapter.(execution.ExchangeOrderLookup)
