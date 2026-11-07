@@ -62,6 +62,7 @@ func (s *Service) Apply(ctx context.Context, manifest Manifest) (Result, error) 
 			created += n
 			result.ExchangeKeys = append(result.ExchangeKeys, keyResult)
 		}
+		result.Secrets = secretsPresent(len(keys), result.ExchangeKeys)
 		return nil
 	})
 	if err != nil {
@@ -129,6 +130,7 @@ func (s *Service) Inspect(ctx context.Context, manifest Manifest) (Status, error
 			}
 			status.ExchangeKeys = append(status.ExchangeKeys, ExchangeKeyResult{SecretID: exchangeKeyID(key), State: keyState, ReadOnly: key.ReadOnly})
 		}
+		status.Secrets = secretsPresent(len(keys), status.ExchangeKeys)
 		return nil
 	})
 	if err != nil {
@@ -140,6 +142,18 @@ func (s *Service) Inspect(ctx context.Context, manifest Manifest) (Status, error
 		status.State = "incomplete"
 	}
 	return status, nil
+}
+
+// secretsPresent 是应当存在的密钥数：腾讯云一把加每把交易所密钥，已在管理台删除的交易所密钥不再算
+// （setup 不会重建它们，计入会让数量永远对不上）。
+func secretsPresent(keyCount int, results []ExchangeKeyResult) int {
+	present := 1 + keyCount
+	for _, result := range results {
+		if result.State == ExchangeKeyDeleted {
+			present--
+		}
+	}
+	return present
 }
 
 // expectedResult 的 Secrets 是 moox.toml 要求存在的密钥数：腾讯云一把加每把交易所密钥。

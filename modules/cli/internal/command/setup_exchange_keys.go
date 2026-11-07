@@ -3,8 +3,10 @@ package command
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/cli/internal/adminclient"
 	setupclient "github.com/mooyang-code/moox/modules/cli/internal/setup/client"
@@ -36,6 +38,9 @@ type exchangeKeyCheck struct {
 	Warnings         []string `json:"warnings,omitempty"`
 }
 
+// inspectCallTimeout 是经网关调一次检测的期限：海外机连不上时每把密钥不能各等 30 秒（网关默认超时）。
+var inspectCallTimeout = 10 * time.Second
+
 // inspectCommandHint 是检测命令的写法，提示里直接给出可复制的完整命令。
 func inspectCommandHint(key setupconfig.ExchangeKey) string {
 	environment := "ACCOUNT_ENVIRONMENT_PRODUCTION"
@@ -60,6 +65,8 @@ func tradeInspectRequest(key setupconfig.ExchangeKey) map[string]any {
 // defaultInspectExchangeKey 经网关调 Trade 的 InspectExchangeCredential，返回原始响应。
 // 调用本身失败（Trade 没部署、网关连不上）返回错误；业务失败在响应的 ret_info 里，由 classifyInspection 判断。
 func defaultInspectExchangeKey(ctx context.Context, snapshot *setupconfig.Snapshot, key setupconfig.ExchangeKey) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, inspectCallTimeout)
+	defer cancel()
 	gateway, err := openCommandGateway(ctx, "", snapshot)
 	if err != nil {
 		return nil, err
@@ -81,6 +88,8 @@ func inspectApplied(ctx context.Context, deps setupDeps, snapshot *setupconfig.S
 		keys[key.ID()] = key
 	}
 	tradeConfigured := snapshot.Manifest.ComponentHost("trade") != ""
+	// unreachable 为真表示前面一把密钥的检测调用就连不上 Trade：其余密钥不再逐把等超时，直接提示部署后再检测。
+	unreachable := false
 	var checks []exchangeKeyCheck
 	for _, result := range applied {
 		key, known := keys[result.SecretID]
@@ -97,9 +106,18 @@ func inspectApplied(ctx context.Context, deps setupDeps, snapshot *setupconfig.S
 		case !tradeConfigured:
 			check.Status = exchangeCheckPending
 			check.Message = "Trade 还没部署：部署完成后在海外机上检测这把密钥，执行 " + inspectCommandHint(key) + "，或在管理台「设置 › 秘钥管理」点“测试连接”"
+		case unreachable:
+			check.Status = exchangeCheckPending
+			check.Message = "前面一把密钥的检测已经连不上 Trade，这把不再逐个等待：确认 Trade 已部署并可访问后，执行 " + inspectCommandHint(key)
 		default:
 			raw, err := deps.inspectExchangeKey(ctx, snapshot, key)
 			check = classifyInspection(result.SecretID, key, raw, err)
+			unreachable = err != nil
+		}
+		if key.Name == "readonly" && !key.ReadOnly && known {
+			// Collector 检测币安现货下架读的正是 exchange-binance-production-readonly：名字叫 readonly 的密钥不标 readonly = true，
+			// 会被当成可以建执行账户的密钥，也不会跳过检测；只读密钥要写 readonly = true，并且在交易所只开读取权限。
+			check.Warnings = append(check.Warnings, "这把密钥的名称是 readonly（Collector 按固定 ID "+result.SecretID+" 读取它），但没有写 readonly = true：它会被当成可以建执行账户的密钥。只读密钥请写 readonly = true，并在交易所只开读取权限")
 		}
 		checks = append(checks, check)
 	}
@@ -111,7 +129,11 @@ func classifyInspection(secretID string, key setupconfig.ExchangeKey, raw []byte
 	check := exchangeKeyCheck{SecretID: secretID}
 	if callErr != nil {
 		check.Status = exchangeCheckPending
-		check.Message = "连不上 Trade：它可能还没部署或暂时不可用。部署完成后在海外机上检测这把密钥，执行 " + inspectCommandHint(key) + "，或在管理台点“测试连接”"
+		reason := "它可能还没部署或暂时不可用"
+		if errors.Is(callErr, context.DeadlineExceeded) {
+			reason = fmt.Sprintf("等了 %d 秒没有回应：海外机上的 Trade 可能没有部署，或网络不通", int(inspectCallTimeout/time.Second))
+		}
+		check.Message = "连不上 Trade：" + reason + "。部署完成后在海外机上检测这把密钥，执行 " + inspectCommandHint(key) + "，或在管理台点“测试连接”"
 		return check
 	}
 	var response struct {
@@ -138,9 +160,13 @@ func classifyInspection(secretID string, key setupconfig.ExchangeKey, raw []byte
 	switch strings.Trim(strings.TrimSpace(string(response.RetInfo.Code)), `"`) {
 	case "", "0", "null", "SUCCESS":
 	case "4", "INNER_ERR":
-		// 检测没有完成：交易所接口超时、限频等，Trade 不下结论。不能当作密钥有问题。
+		// Trade 把“检测没有完成”（交易所接口超时、限频）和其他未归类的内部错误（例如从 Admin 读密钥失败）都归到 INNER_ERR，
+		// 这里分不出是哪一种，所以不说成“交易所接口不可用”，也不断定密钥有问题。
 		check.Status = exchangeCheckIncomplete
-		check.Message = "检测没有完成（交易所接口暂时不可用或限频），不代表密钥有问题；稍后重试：" + inspectCommandHint(key)
+		check.Message = "检测失败，原因未明确（常见原因是交易所接口超时或限频，也可能是 Trade 内部错误），不能断定密钥有问题；稍后重试，仍失败请查看 Trade 日志：" + inspectCommandHint(key)
+		if detail := strings.TrimSpace(response.RetInfo.Msg); detail != "" {
+			check.Message += "（Trade 返回：" + truncateText(detail, 160) + "）"
+		}
 		return check
 	default:
 		check.Status = exchangeCheckFailed
@@ -164,4 +190,12 @@ func classifyInspection(secretID string, key setupconfig.ExchangeKey, raw []byte
 		check.Status, check.Message = exchangeCheckOK, "检测通过"
 	}
 	return check
+}
+
+func truncateText(value string, limit int) string {
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	return string(runes[:limit]) + "…"
 }

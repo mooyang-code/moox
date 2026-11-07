@@ -207,7 +207,8 @@ func TestClassifyInspectionByReturnCode(t *testing.T) {
 		want   string
 	}{
 		{"检测没有完成只提示稍后重试", `{"ret_info":{"code":"INNER_ERR","msg":"trade account: 密钥检测没有完成：timeout"}}`, nil, "incomplete", "稍后重试"},
-		{"数字返回码 4 也是没有完成", `{"ret_info":{"code":4,"msg":"x"}}`, nil, "incomplete", "不代表密钥有问题"},
+		{"INNER_ERR 不说成交易所不可用，指向 Trade 日志", `{"ret_info":{"code":"INNER_ERR","msg":"读取密钥失败"}}`, nil, "incomplete", "查看 Trade 日志"},
+		{"数字返回码 4 也是没有完成", `{"ret_info":{"code":4,"msg":"x"}}`, nil, "incomplete", "不能断定密钥有问题"},
 		{"密钥读不到", `{"ret_info":{"code":"NOT_FOUND","msg":"秘钥不存在"}}`, nil, "failed", "密钥不可用：秘钥不存在"},
 		{"参数错误", `{"ret_info":{"code":"INVALID_PARAM","msg":"秘钥未启用"}}`, nil, "failed", "秘钥未启用"},
 		{"调用失败视为 Trade 未就绪", ``, errors.New("route not found"), "pending", "moox-cli trade inspect-credential"},
@@ -252,5 +253,58 @@ func TestInspectRequestMatchesTheInspectCredentialCommand(t *testing.T) {
 	}
 	for field := range tradeInspectRequest(setupconfig.ExchangeKey{Name: "m", Exchange: "okx", Environment: "testnet"}) {
 		assert.True(t, fields[field], "命令没有字段 %s", field)
+	}
+}
+
+// 海外机连不上 Trade：第一把密钥的检测超时后，其余密钥不再逐把等超时。
+func TestSetupApplyStopsCallingTradeAfterFirstUnreachable(t *testing.T) {
+	snapshot := exchangeKeysSnapshot(t, `["trade", "access", "egress-proxy"]`)
+	// 把已写入的结果改成两把可检测的密钥。
+	calls := 0
+	deps := setupDeps{inspectExchangeKey: func(context.Context, *setupconfig.Snapshot, setupconfig.ExchangeKey) ([]byte, error) {
+		calls++
+		return nil, context.DeadlineExceeded
+	}}
+	applied := []setupclient.ExchangeKeyResult{
+		{SecretID: "exchange-binance-production-main", State: setupclient.ExchangeKeyExists},
+		{SecretID: "exchange-okx-testnet-revoked", State: setupclient.ExchangeKeyExists},
+	}
+	checks := inspectApplied(context.Background(), deps, snapshot, applied)
+	require.Len(t, checks, 2)
+	assert.Equal(t, 1, calls, "第一把连不上后不再逐把调用")
+	assert.Equal(t, "pending", checks[0].Status)
+	assert.Contains(t, checks[0].Message, "秒没有回应")
+	assert.Equal(t, "pending", checks[1].Status)
+	assert.Contains(t, checks[1].Message, "moox-cli trade inspect-credential")
+}
+
+// name 叫 readonly 却没写 readonly = true：Collector 按这个固定 ID 读取，要提醒。
+func TestSetupApplyWarnsWhenReadonlyNamedKeyIsNotMarkedReadonly(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "moox.toml")
+	body := strings.Replace(exchangeKeysManifestBody, "%s", `["trade", "access", "egress-proxy"]`, 1)
+	body = strings.Replace(body, "api_key = \"recognizable-ro-key\"\nsecret_key = \"recognizable-ro-secret\"\nreadonly = true", "api_key = \"recognizable-ro-key\"\nsecret_key = \"recognizable-ro-secret\"", 1)
+	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+	snapshot, err := setupconfig.Load(path, dir)
+	require.NoError(t, err)
+	deps := setupDeps{inspectExchangeKey: func(context.Context, *setupconfig.Snapshot, setupconfig.ExchangeKey) ([]byte, error) {
+		return []byte(inspectionPassed), nil
+	}}
+	checks := inspectApplied(context.Background(), deps, snapshot, appliedExchangeKeys())
+	warned := ""
+	for _, check := range checks {
+		if check.SecretID == "exchange-binance-production-readonly" {
+			require.NotEmpty(t, check.Warnings)
+			warned = strings.Join(check.Warnings, "；")
+		}
+	}
+	assert.Contains(t, warned, "readonly = true")
+	assert.Contains(t, warned, "Collector")
+	// 标了 readonly = true 的不提醒。
+	checks = inspectApplied(context.Background(), deps, exchangeKeysSnapshot(t, `["trade", "access", "egress-proxy"]`), appliedExchangeKeys())
+	for _, check := range checks {
+		if check.SecretID == "exchange-binance-production-readonly" {
+			assert.Empty(t, check.Warnings)
+		}
 	}
 }

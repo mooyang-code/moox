@@ -123,6 +123,7 @@ func TestApplyDoesNotRecreateExchangeKeyDeletedInConsole(t *testing.T) {
 	assert.Equal(t, "unchanged", result.Action)
 	assert.Equal(t, ExchangeKeyDeleted, result.ExchangeKeys[0].State)
 	assert.Equal(t, ExchangeKeyExists, result.ExchangeKeys[1].State)
+	assert.Equal(t, 2, result.Secrets, "腾讯云一把加一把还在的交易所密钥，已在管理台删除的不再算")
 	rows := secretRows(t, service, "exchange-binance-production-readonly")
 	require.Len(t, rows, 1, "不能再建出第二行")
 	assert.True(t, rows[0].IsDeleted)
@@ -132,6 +133,7 @@ func TestApplyDoesNotRecreateExchangeKeyDeletedInConsole(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "completed", status.State)
 	assert.Zero(t, status.Missing)
+	assert.Equal(t, 2, status.Secrets, "已在管理台删除的密钥不算在应当存在的数量里")
 	assert.Equal(t, ExchangeKeyDeleted, status.ExchangeKeys[0].State)
 }
 
