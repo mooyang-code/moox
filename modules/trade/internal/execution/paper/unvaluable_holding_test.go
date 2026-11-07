@@ -14,9 +14,23 @@ import (
 )
 
 // delistedFacts 是一个模拟账户：持有 BTC（正常交易）和 DEAD（已下架的零头），以及一个停止交易的 HALT。
+// haltFill 非空时是 HALT 在本账户最近一笔成交的价格；blocked 是下架名单。
 type delistedFacts struct {
 	FactStore
-	account store.TradingAccountRecord
+	account  store.TradingAccountRecord
+	haltFill string
+	blocked  []store.BlockedInstrumentRecord
+}
+
+func (f delistedFacts) ListFills(_ context.Context, _ string, query store.FillQuery) ([]store.FillRecord, int64, error) {
+	if query.ExchangeSymbol == "HALTUSDT" && f.haltFill != "" {
+		return []store.FillRecord{{Price: f.haltFill}}, 1, nil
+	}
+	return nil, 0, nil
+}
+
+func (f delistedFacts) LoadBlockedSet(context.Context) (store.BlockedSet, error) {
+	return store.NewBlockedSet(f.blocked), nil
 }
 
 func (f delistedFacts) GetTradingAccountByID(context.Context, string) (store.TradingAccountRecord, error) {
@@ -69,30 +83,44 @@ func (m *delistedMarket) GetReferencePrice(_ context.Context, key exchange.Symbo
 	return exchange.ReferencePrice{Price: shared.MustDecimal("100"), UpdatedAt: m.now}, nil
 }
 
+func delistedPaperAccount() store.TradingAccountRecord {
+	return store.TradingAccountRecord{
+		SpaceID: "space", TradingAccountID: "paper", Name: "模拟盘", Exchange: "BINANCE", Markets: []string{"SPOT"},
+		ExecutionMode: "PAPER", SettlementAsset: "USDT",
+	}
+}
+
+// 规则与实盘权益采样一致（execution.DegradedPrice）：交易所确认不存在（DEAD）、没有估值标的（GONE）按 0 计；
+// 停止交易（HALT）按最近一笔成交价计；BTC 暂时限流时沿用不超龄的最后已知价。
 func TestPaperSnapshotDegradesUnvaluableHoldingsAndSpotSellSkipsSnapshot(t *testing.T) {
 	d, _, order := deciderFixture(t, "SPOT")
 	now := d.Now()
 	market := &delistedMarket{now: now}
 	paperAdapter := &Adapter{
-		Account: store.TradingAccountRecord{SpaceID: "space", TradingAccountID: "paper"},
-		Store: delistedFacts{account: store.TradingAccountRecord{
-			SpaceID: "space", TradingAccountID: "paper", Name: "模拟盘", Exchange: "BINANCE", Markets: []string{"SPOT"},
-			ExecutionMode: "PAPER", SettlementAsset: "USDT",
-		}},
+		Account:    store.TradingAccountRecord{SpaceID: "space", TradingAccountID: "paper"},
+		Store:      delistedFacts{account: delistedPaperAccount(), haltFill: "7"},
 		MarketData: market, Now: func() time.Time { return now },
 	}
 	snapshot, err := paperAdapter.GetAccountSnapshot(context.Background())
 	require.NoError(t, err, "下架、停止交易、没有标的的零头都不能让快照失败")
-	// USDT 1000 + BTC 1 × 100；DEAD、HALT、GONE 没有最后已知价，按 0 计。
-	require.Equal(t, "1100", snapshot.Equity.String())
+	// USDT 1000 + BTC 1 × 100 + HALT 2 × 7（最近成交价）；DEAD、GONE 按 0 计。
+	require.Equal(t, "1114", snapshot.Equity.String())
 	require.NotContains(t, market.asked, "HALTUSDT", "状态不可交易的标的不发取价请求")
 	require.NotEmpty(t, telemetry.Recent(telemetry.AttentionValuationDegraded, now, time.Minute))
 
-	// 之后 BTC 暂时取价失败（限流）：有最后已知价就用它，不报错。
+	// 之后 BTC 暂时取价失败（限流）：有不超龄的最后已知价就用它，不报错。
 	market.failed = true
 	snapshot, err = paperAdapter.GetAccountSnapshot(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, "1100", snapshot.Equity.String())
+	require.Equal(t, "1114", snapshot.Equity.String())
+
+	// 最后已知价超过保留时间：不再沿用，照旧报错。
+	later := now.Add(execution.LastPriceMaxAge + time.Second)
+	paperAdapter.Now = func() time.Time { return later }
+	_, err = paperAdapter.GetAccountSnapshot(context.Background())
+	require.True(t, exchange.IsKind(err, exchange.ErrorRateLimited), "err = %v", err)
+	paperAdapter.Now = func() time.Time { return now }
+	market.failed = false
 
 	// 现货卖单撮合不读快照。
 	d.Adapters = deciderAdapters{paperAdapter}
@@ -107,12 +135,28 @@ func TestPaperSnapshotKeepsFailingOnTransientQuoteErrorWithoutLastPrice(t *testi
 	now := time.Now().UTC()
 	paperAdapter := &Adapter{
 		Account: store.TradingAccountRecord{SpaceID: "space", TradingAccountID: "paper"},
-		Store: delistedFacts{account: store.TradingAccountRecord{
-			SpaceID: "space", TradingAccountID: "paper", Exchange: "BINANCE", Markets: []string{"SPOT"},
-			ExecutionMode: "PAPER", SettlementAsset: "USDT",
-		}},
+		// HALT 有成交记录，报错只能来自仍在交易的 BTC。
+		Store:      delistedFacts{account: delistedPaperAccount(), haltFill: "7"},
 		MarketData: &delistedMarket{now: now, failed: true}, Now: func() time.Time { return now },
 	}
 	_, err := paperAdapter.GetAccountSnapshot(context.Background())
 	require.True(t, exchange.IsKind(err, exchange.ErrorRateLimited), "err = %v", err)
+}
+
+// 停止交易的 HALT 没有成交记录：不在下架名单里时报错，在下架名单里按 0 计。
+func TestPaperSnapshotHaltedHoldingNeedsFillOrDelisting(t *testing.T) {
+	now := time.Now().UTC()
+	facts := delistedFacts{account: delistedPaperAccount()}
+	paperAdapter := &Adapter{
+		Account: store.TradingAccountRecord{SpaceID: "space", TradingAccountID: "paper"}, Store: facts,
+		MarketData: &delistedMarket{now: now}, Now: func() time.Time { return now },
+	}
+	_, err := paperAdapter.GetAccountSnapshot(context.Background())
+	require.ErrorContains(t, err, "HALTUSDT 状态为 BREAK")
+
+	facts.blocked = []store.BlockedInstrumentRecord{{Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "HALTUSDT"}}
+	paperAdapter.Store = facts
+	snapshot, err := paperAdapter.GetAccountSnapshot(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, "1100", snapshot.Equity.String())
 }

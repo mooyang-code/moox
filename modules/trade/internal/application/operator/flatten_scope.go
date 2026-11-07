@@ -263,22 +263,31 @@ func (s *Service) requireInstrumentInMembers(ctx context.Context, command Flatte
 // delistStillBlocked 报告下架清仓的标的在这个账户的交易所上是否仍在下架名单里。
 // 账户的标的表里没有这个标的时，没有东西可平，按“仍在名单里”处理，由后面的流程自然结束。
 func (s *Service) delistStillBlocked(ctx context.Context, spaceID, tradingAccountID, instrumentID string) (bool, error) {
-	account, err := s.Store.GetTradingAccountByID(ctx, tradingAccountID)
+	blocked, found, err := s.delistBlockState(ctx, spaceID, tradingAccountID, instrumentID)
 	if err != nil {
 		return false, err
+	}
+	return blocked || !found, nil
+}
+
+// delistBlockState 查标的在这个账户的交易所上是否在下架名单里；found 为假表示账户的标的表里没有这个标的。
+func (s *Service) delistBlockState(ctx context.Context, spaceID, tradingAccountID, instrumentID string) (blocked, found bool, err error) {
+	account, err := s.Store.GetTradingAccountByID(ctx, tradingAccountID)
+	if err != nil {
+		return false, false, err
 	}
 	instrument, err := s.Store.GetInstrumentByIDForAccount(ctx, spaceID, tradingAccountID, instrumentID)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return true, nil
+		return false, false, nil
 	}
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
-	blocked, err := s.Store.LoadBlockedSet(ctx)
+	set, err := s.Store.LoadBlockedSet(ctx)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
-	return blocked.ContainsInstrument(account.Exchange, instrument), nil
+	return set.ContainsInstrument(account.Exchange, instrument), true, nil
 }
 
 // stopIfUnblocked 在下架清仓的每一轮开头先查名单：已经解除禁止就撤掉本动作的订单，撤单之后同步并确认它们都结束了，
@@ -308,7 +317,7 @@ func (s *Service) stopIfUnblocked(
 		err = s.confirmFlattenChildren(ctx, command, tradingAccountID, result)
 	}
 	if err != nil {
-		result.Status, result.decided, result.retry = "RUNNING", true, true
+		result.Status, result.decided, result.retry, result.unblocking = "RUNNING", true, true, true
 		// 只是还没做完：写进说明，不当作这次调用的错误（cause 留空）。
 		result.Error, result.cause = "已解除禁止，撤单还没确认结束，下一轮继续："+err.Error(), nil
 		return true

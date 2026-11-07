@@ -3,18 +3,22 @@ package target
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	operatordomain "github.com/mooyang-code/moox/modules/trade/internal/domain/operator"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"gorm.io/gorm"
 )
 
 // 下架名单与下架清仓在执行器里的三个效果（计划 4.7）：
 //   - 名单里还能交易的标的“只减不增”：目标截到不超过当前持仓，策略减仓、卖出照常，加仓的部分去掉；
 //   - 名单里已经不能交易的标的整项跳过：不买不卖，也不当作“没有可交易标的”把整份目标置为 BLOCKED；
-//   - 正在做下架清仓（DELIST_FLATTEN 运行中）的标的，执行器不碰：它的单不算冲突，也不和它同时下单。
+//   - 正在做下架清仓（DELIST_FLATTEN 运行中）的标的，执行器不碰，也不和它同时下单。
+//
+// 清仓一族（DELIST_FLATTEN、FLATTEN、REDUCE）的子单不管动作是否还在运行都不算冲突（见 flattenChild）。
 
 // delistFlattenScope 是一个运行中的下架清仓动作的范围，从动作的请求 JSON 读出。
 // 键名与 operator 包的 flattenRequest 一致（instrument_id、exchange、trading_account_id）。
@@ -46,6 +50,39 @@ func (d delistFlattens) covers(account store.TradingAccountRecord, instrumentID 
 		return true
 	}
 	return false
+}
+
+// flattenChildTypes 是子单不算冲突的人工动作类型：清仓一族。人工下单（MANUAL_ORDER）的单仍然算冲突。
+var flattenChildTypes = map[string]struct{}{
+	string(operatordomain.ActionDelistFlatten): {},
+	string(operatordomain.ActionFlatten):       {},
+	string(operatordomain.ActionReduce):        {},
+}
+
+// flattenChildCache 记一轮收敛里查过的人工动作号是不是清仓一族，同一个动作的多笔子单只查一次。
+type flattenChildCache map[string]bool
+
+// flattenChild 报告这个人工动作号下的单是不是清仓一族的子单。动作结束（PARTIAL、FAILED、COMPLETED）时清仓已收拾过
+// 待提交、结果未知的子单，剩下的挂单中、撤单中的会自己结束：按冲突暂停组合，恢复后又会被同一笔单暂停。
+// 动作记录查不到时按冲突处理。
+func (e *Executor) flattenChild(ctx context.Context, spaceID, actionID string, running delistFlattens, cache flattenChildCache) (bool, error) {
+	if running.owns(actionID) {
+		return true, nil
+	}
+	if exempt, seen := cache[actionID]; seen {
+		return exempt, nil
+	}
+	action, err := e.Store.GetOperatorAction(ctx, spaceID, actionID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		cache[actionID] = false
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	_, exempt := flattenChildTypes[action.ActionType]
+	cache[actionID] = exempt
+	return exempt, nil
 }
 
 func (e *Executor) runningDelistFlattens(ctx context.Context, spaceID, logicalAccountID string) (delistFlattens, error) {

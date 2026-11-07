@@ -757,6 +757,8 @@ type TargetChildOrder struct {
 	Quantity         string `gorm:"column:c_quantity"`
 	FilledQuantity   string `gorm:"column:c_filled_quantity"`
 	Attempt          int    `gorm:"column:c_attempt"`
+	// ExchangeOrderID 为空表示交易所从没确认收到这笔单（例如查无此单退回待提交、随后丢弃）。
+	ExchangeOrderID string `gorm:"column:c_exchange_order_id"`
 }
 
 // TargetChildOrders 返回同一目标、同一标的已发出的子单（提交过的，所有执行账户），按提交先后排序。
@@ -770,7 +772,7 @@ func (s *Store) TargetChildOrders(
 ) ([]TargetChildOrder, error) {
 	var orders []TargetChildOrder
 	if err := s.db.WithContext(ctx).Table("t_trade_orders").
-		Select("c_trading_account_id, c_side, c_order_type, c_time_in_force, c_state, c_quantity, c_filled_quantity, c_attempt").
+		Select("c_trading_account_id, c_side, c_order_type, c_time_in_force, c_state, c_quantity, c_filled_quantity, c_attempt, c_exchange_order_id").
 		Where(`c_space_id = ? AND c_logical_account_id = ? AND c_owner_type = 'TARGET' AND c_owner_id = ?
 			AND c_instrument_id = ? AND c_submitted_at > 0`,
 			spaceID, logicalAccountID, targetID, instrumentID).
@@ -779,6 +781,29 @@ func (s *Store) TargetChildOrders(
 		return nil, err
 	}
 	return orders, nil
+}
+
+// sqlTargetEndedRestingInstruments 取一份目标里挂过单（限价 GTC、提交过）而且挂单已经结束（被撤、过期、被拒）的标的。
+const sqlTargetEndedRestingInstruments = `
+	SELECT DISTINCT c_instrument_id
+	FROM t_trade_orders
+	WHERE c_space_id = ? AND c_logical_account_id = ? AND c_owner_type = 'TARGET' AND c_owner_id = ?
+		AND c_state IN ('CANCELED', 'PARTIALLY_CANCELED', 'EXPIRED', 'REJECTED')
+		AND c_order_type = 'LIMIT' AND c_time_in_force = 'GTC' AND c_submitted_at > 0`
+
+// TargetEndedRestingInstruments 返回这份目标里挂单已经结束的标的（内部标的 ID）：执行器不再在这些标的上挂单，改吃单，
+// 否则挂单到期撤掉后下一轮又挂上，撤了重挂一直循环。
+func (s *Store) TargetEndedRestingInstruments(ctx context.Context, spaceID, logicalAccountID, targetID string) (map[string]struct{}, error) {
+	var instrumentIDs []string
+	if err := s.db.WithContext(ctx).Raw(sqlTargetEndedRestingInstruments, spaceID, logicalAccountID, targetID).
+		Scan(&instrumentIDs).Error; err != nil {
+		return nil, err
+	}
+	result := make(map[string]struct{}, len(instrumentIDs))
+	for _, instrumentID := range instrumentIDs {
+		result[instrumentID] = struct{}{}
+	}
+	return result, nil
 }
 
 // SubmittedTargetOrder 是单币每小时上限汇总用的订单摘要。
