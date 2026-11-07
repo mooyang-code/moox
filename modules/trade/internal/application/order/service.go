@@ -799,7 +799,7 @@ func (s *Service) DiscardPending(
 	}
 	unlock, err := s.Store.LockTradingAccountContext(ctx, record.TradingAccountID)
 	if err != nil {
-		return orderdomain.Order{}, &AccountExecutionError{TradingAccountID: record.TradingAccountID, Operation: "discard_pending_lock", Err: err}
+		return orderdomain.Order{}, &AccountExecutionError{TradingAccountID: record.TradingAccountID, Operation: OperationDiscardPendingLock, Err: err}
 	}
 	defer unlock()
 	record, err = s.Store.GetOrder(ctx, spaceID, orderID)

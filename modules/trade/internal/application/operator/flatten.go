@@ -431,9 +431,9 @@ func (s *Service) FlattenLogicalAccount(
 		accountResult, wasExecutable := s.flattenAccount(
 			ctx, command, scope, member.TradingAccountID, deadline,
 		)
-		// 本账户的预算到点后，正在做的数据库或接口调用会带着错误回来（超时，也可能是被打断的写库、已回滚的事务）：
-		// 那是预算用完，不是共享的故障，记成本账户的预算错误（可重试），不能当作共享错误让整次调用失败。
-		if accountResult.cause != nil && !time.Now().Before(deadline) && !submissionBusinessError(accountResult.cause) {
+		// 本账户的预算到点时，正在做的数据库或接口调用会带着原样的超时错误回来：那是预算用完，不是共享的故障，
+		// 记成本账户的预算错误（可重试），不能当作共享错误让整次调用失败。
+		if accountResult.cause != nil && errors.Is(accountResult.cause, context.DeadlineExceeded) && !time.Now().Before(deadline) {
 			accountResult.cause = &orderapp.AccountExecutionError{TradingAccountID: member.TradingAccountID, Operation: "flatten_budget", Err: accountResult.cause}
 		}
 		if wasExecutable {
@@ -690,7 +690,7 @@ func (s *Service) discardChild(ctx context.Context, command FlattenCommand, chil
 	outcome.unsettled = append(outcome.unsettled, child.OrderID)
 	outcome.errs = append(outcome.errs, fmt.Errorf("丢弃子单 %s：%w", child.OrderID, discardErr))
 	var accountErr *orderapp.AccountExecutionError
-	if errors.As(discardErr, &accountErr) && accountErr.Operation == "discard_pending_lock" {
+	if errors.As(discardErr, &accountErr) && accountErr.Operation == orderapp.OperationDiscardPendingLock {
 		return errDiscardLockBusy
 	}
 	return discardErr

@@ -616,22 +616,26 @@ func TestActionScopedErrorCoversMemberRemovalAndConflict(t *testing.T) {
 	}
 }
 
-// blockDiscard 让指定子单的丢弃一直等到上下文结束（模拟要等的交易账户锁被一个卡在交易所调用上的同步占着），带回上下文的错误。
+// blockDiscard 让 account 上子单的丢弃一直等到上下文结束（模拟交易账户锁被一个卡在交易所调用上的同步占着），
+// 和真实的 DiscardPending 一样带回 Operation 为等锁的 AccountExecutionError；attempts 记下每笔丢弃尝试。
 type blockDiscard struct {
 	failResolveOrders
-	block string
+	account  string
+	attempts *[]string
 }
 
 func (o blockDiscard) DiscardPending(ctx context.Context, spaceID, orderID string) (orderdomain.Order, error) {
-	if orderID == o.block {
+	*o.attempts = append(*o.attempts, orderID)
+	record, err := o.fixture.store.GetOrder(context.Background(), spaceID, orderID)
+	if err == nil && record.TradingAccountID == o.account {
 		<-ctx.Done()
-		return orderdomain.Order{}, ctx.Err()
+		return orderdomain.Order{}, &orderapp.AccountExecutionError{TradingAccountID: o.account, Operation: orderapp.OperationDiscardPendingLock, Err: ctx.Err()}
 	}
 	return o.failResolveOrders.DiscardPending(ctx, spaceID, orderID)
 }
 
-// 收尾时成员 A 的待提交子单丢弃要等账户锁、等到时限到期：这是本动作的问题，不能被当成共享故障（否则工作线程不就绪、
-// Trade 被自动暂停）；成员 B 的待提交子单当轮照样丢弃（每笔丢弃各用各的时限）。
+// 收尾时成员 A 的待提交子单丢弃要等账户锁、等到时限到期：只记在本动作上，不作为调用错误返回（不让 Trade 不就绪）；
+// A 余下的待提交子单这一轮不再试（锁被占着，再等也是白等），成员 B 的待提交子单当轮照样丢弃。
 func TestFlattenFinishingDiscardLockWaitIsActionScoped(t *testing.T) {
 	previous := settleLocalTimeout
 	settleLocalTimeout = 50 * time.Millisecond
@@ -641,15 +645,19 @@ func TestFlattenFinishingDiscardLockWaitIsActionScoped(t *testing.T) {
 		Err: &exchange.Error{Kind: exchange.ErrorAuthentication, Code: "-2015"}}
 	service, _ := startFinishingWithUnknownChild(t, fixture, "delist-lock", "child-lock-unknown", authErr)
 	operatorChild(t, fixture, "account-a", "delist-lock", "child-lock-a", "PENDING")
+	operatorChild(t, fixture, "account-a", "delist-lock", "child-lock-a2", "PENDING")
 	operatorChild(t, fixture, "account-b", "delist-lock", "child-lock-b", "PENDING")
-	service.Orders = blockDiscard{failResolveOrders: service.Orders.(failResolveOrders), block: "child-lock-a"}
+	var attempts []string
+	service.Orders = blockDiscard{failResolveOrders: service.Orders.(failResolveOrders), account: "account-a", attempts: &attempts}
 
 	stored, err := fixture.store.GetOperatorAction(context.Background(), "space-1", "delist-lock")
 	require.NoError(t, err)
 	err = service.ResumeOperatorAction(context.Background(), stored)
 	require.NoError(t, err, "等账户锁超时只记在本动作上")
 	require.Equal(t, "PENDING", childState(t, fixture, "child-lock-a"))
+	require.Equal(t, "PENDING", childState(t, fixture, "child-lock-a2"))
 	require.Equal(t, "CANCELED", childState(t, fixture, "child-lock-b"), "B 的待提交子单当轮丢弃")
+	require.Equal(t, []string{"child-lock-a", "child-lock-b"}, attempts, "A 等锁超时一次后，它余下的待提交子单这一轮不再试")
 	decoded := resumeStoredNoAssert(t, fixture, "delist-lock")
 	require.Equal(t, "RUNNING", decoded.Action.Status)
 	require.False(t, unsettledNoted(fixture, "delist-lock", "读写不了子单"))
@@ -703,4 +711,35 @@ func resumeStoredNoAssert(t *testing.T, fixture *operatorFixture, actionID strin
 	decoded, err := decodeFlattenResult(stored)
 	require.NoError(t, err)
 	return decoded
+}
+
+// 某个账户的子单列不出来（读库报错，这里用一行坏数据模拟）：记为没列全，其余账户照常收拾；未满 30 分钟保持收尾，
+// 不作为调用错误返回；满 30 分钟另列一次后照常落成，关注项写明没能列全。
+func TestFlattenFinishingIncompleteListingRespectsTimeout(t *testing.T) {
+	fixture := newMixedFlattenFixture(t)
+	authErr := &orderapp.AccountExecutionError{TradingAccountID: "account-a", Operation: "get_order",
+		Err: &exchange.Error{Kind: exchange.ErrorAuthentication, Code: "-2015"}}
+	service, _ := startFinishingWithUnknownChild(t, fixture, "delist-list", "child-list-unknown", authErr)
+	enteredAt := fixture.now
+	operatorChild(t, fixture, "account-a", "delist-list", "child-list-a", "PENDING")
+	operatorChild(t, fixture, "account-b", "delist-list", "child-list-bad", "PENDING")
+	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_trade_orders SET c_version = 'bad' WHERE c_order_id = 'child-list-bad'`).Error)
+	_, listErr := fixture.store.ListActiveOrdersForAccount(context.Background(), "space-1", "account-b")
+	require.Error(t, listErr, "坏数据要让列子单报错")
+
+	decoded := resumeStored(t, fixture, service, "delist-list")
+	require.Equal(t, "RUNNING", decoded.Action.Status, "没列全就保持收尾")
+	require.Equal(t, enteredAt.UnixMilli(), decoded.FinishingSince)
+	fixture.now = enteredAt.Add(29 * time.Minute)
+	decoded = resumeStored(t, fixture, service, "delist-list")
+	require.Equal(t, "RUNNING", decoded.Action.Status)
+	require.Equal(t, enteredAt.UnixMilli(), decoded.FinishingSince, "不重新计时")
+	require.Equal(t, "CANCELED", childState(t, fixture, "child-list-a"), "其余账户照常收拾")
+	require.Contains(t, decoded.Action.LastError, "account-b")
+
+	fixture.now = enteredAt.Add(30 * time.Minute)
+	decoded = resumeStored(t, fixture, service, "delist-list")
+	require.Equal(t, "PARTIAL", decoded.Action.Status)
+	require.True(t, unsettledNoted(fixture, "delist-list", "没能列全"))
+	require.Empty(t, fixture.orders.specs, "收尾期间不下单")
 }
