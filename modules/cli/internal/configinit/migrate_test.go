@@ -331,6 +331,34 @@ func TestMigrateAddDeploymentRejectsUnknownHostAndComponent(t *testing.T) {
 	require.Error(t, err, "未知组件由配置校验拒绝")
 }
 
+// [deployments] 里主机的列表是单引号或多行写法时也按 TOML 读到原有组件，写回时不丢。
+func TestMigrateAddDeploymentReadsSingleQuotedAndMultilineArrays(t *testing.T) {
+	line := regexp.MustCompile(`(?m)^storage = \[.*\]\n`)
+	for name, replacement := range map[string]string{
+		"单引号": "storage = ['storage-primary', 'storage-node', 'storage-view', 'access'] # 单引号\n",
+		"多行":  "storage = [\n  'storage-primary',\n  \"storage-node\",\n  'storage-view',\n  'access',\n]\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			text := sampleText(t)
+			require.True(t, line.MatchString(text))
+			path, root, keys := migrateFixture(t, line.ReplaceAllString(text, replacement))
+			report, err := MigrateFile(path, MigrateOptions{
+				RepoRoot: root, Keys: keys, Write: true,
+				AddDeploymentHost: "storage", AddDeploymentComponents: []string{"access", "eventbus"},
+			})
+			require.NoError(t, err)
+			require.Equal(t, map[string][]string{"storage": {"eventbus"}}, report.AddedDeployments)
+			sealed, err := os.ReadFile(path)
+			require.NoError(t, err)
+			plain, err := configcrypt.Decrypt(sealed, keys)
+			require.NoError(t, err)
+			snapshot, err := setupconfig.Parse(plain)
+			require.NoError(t, err)
+			require.Equal(t, []string{"storage-primary", "storage-node", "storage-view", "access", "eventbus"}, snapshot.Deployments["storage"])
+		})
+	}
+}
+
 // --add-egress-domain 把域名追加到 [egress_proxy] http_domains：已在名单里（同名或被 *. 后缀覆盖）的不重复，重复执行没有改动。
 func TestMigrateAddsEgressDomains(t *testing.T) {
 	path, root, keys := migrateFixture(t, sampleText(t))

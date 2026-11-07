@@ -24,6 +24,7 @@ func TestErrorInfoDedicatedTradeCodes(t *testing.T) {
 		{"取执行通道时会话未启动", &orderapp.AccountExecutionError{TradingAccountID: "a", Operation: "adapter", Err: runtime.ErrSessionConfig}, tradepb.ErrorCode_TRADE_SESSION_NOT_READY},
 		{"需要接管", logicalapp.ErrAdoptionRequired, tradepb.ErrorCode_TRADE_ADOPTION_REQUIRED},
 		{"有持仓不能停用", logicalapp.ErrMemberHasExposure, tradepb.ErrorCode_INVALID_PARAM},
+		{"有持仓不能移出", logicalapp.ErrRemovalHasExposure, tradepb.ErrorCode_INVALID_PARAM},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			info := errorInfo(tc.err)

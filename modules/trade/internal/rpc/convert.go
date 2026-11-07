@@ -60,6 +60,7 @@ func errorInfo(err error) *tradepb.RetInfo {
 		errors.Is(err, orderapp.ErrCrossZero),
 		errors.Is(err, tradingaccount.ErrInvalidAccount),
 		errors.Is(err, logicalapp.ErrMemberHasExposure),
+		errors.Is(err, logicalapp.ErrRemovalHasExposure),
 		errors.Is(err, logicalaccount.ErrMemberElsewhere),
 		errors.Is(err, accountapp.ErrAccountInLogicalAccount),
 		errors.Is(err, operatorapp.ErrNotInLogicalAccount),

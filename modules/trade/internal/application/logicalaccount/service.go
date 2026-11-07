@@ -22,11 +22,14 @@ import (
 )
 
 var (
-	ErrServiceConfig     = errors.New("组合账户服务未配置")
-	ErrAdoptionRequired  = errors.New("执行账户上已有持仓或挂单，加入组合需要确认接管这些已有仓位")
-	ErrMemberHasExposure = errors.New("执行账户上还有持仓或挂单，不能以停用状态加入或移出组合，请先清仓")
-	ErrOwnerConflict     = errors.New("组合账户已被别的策略会话占用")
-	ErrNotReady          = errors.New("组合账户还没准备好，暂时不能恢复自动执行")
+	ErrServiceConfig    = errors.New("组合账户服务未配置")
+	ErrAdoptionRequired = errors.New("执行账户上已有持仓或挂单，加入组合需要确认接管这些已有仓位")
+	// ErrMemberHasExposure 是以停用状态加入组合、或停用已有成员时，执行账户上还有挂单、持仓或非结算资产余额。
+	ErrMemberHasExposure = errors.New("执行账户上还有挂单、持仓或非结算资产余额，不能以停用状态加入组合，也不能停用成员，请先清仓")
+	// ErrRemovalHasExposure 是移出成员时，执行账户上还有挂单、持仓或受管的现货资产（非受管资产与卖不掉的零头不算）。
+	ErrRemovalHasExposure = errors.New("执行账户上还有挂单、持仓或受管的现货资产，不能移出组合，请先撤单、平仓后再移出")
+	ErrOwnerConflict      = errors.New("组合账户已被别的策略会话占用")
+	ErrNotReady           = errors.New("组合账户还没准备好，暂时不能恢复自动执行")
 )
 
 type AddMemberCommand struct {
@@ -399,7 +402,7 @@ func (s *Service) RemoveMember(
 		if syncErr != nil {
 			return "", syncErr
 		}
-		return "", ErrMemberHasExposure
+		return "", ErrRemovalHasExposure
 	}
 	if err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		return tx.DeleteLogicalAccountMember(

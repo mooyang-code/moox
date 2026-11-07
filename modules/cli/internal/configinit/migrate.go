@@ -1101,13 +1101,22 @@ func addHostDeployments(plain []byte, host string, components []string) ([]byte,
 	if i < 0 {
 		return nil, nil, errors.New("moox.toml 里没有 [deployments]")
 	}
-	var current []string
-	for _, line := range blocks[i].lines[1:] {
-		if key, value, ok := keyValue(line); ok && key == host {
-			for _, item := range regexp.MustCompile(`"([^"]+)"`).FindAllStringSubmatch(value, -1) {
-				current = append(current, item[1])
-			}
+	lines := blocks[i].lines
+	start, end := -1, -1
+	for n := 1; n < len(lines); n++ {
+		if key, _, ok := keyValue(lines[n]); ok && key == host {
+			start, end = n, valueEnd(lines, n)
+			break
 		}
+	}
+	var current []string
+	if start >= 0 {
+		// 按 TOML 解析这一项：单引号、双引号、多行数组都能读到，写回时不会丢组件。
+		var value map[string][]string
+		if _, err := toml.Decode(strings.Join(lines[start:end+1], "\n"), &value); err != nil {
+			return nil, nil, fmt.Errorf("读不出 [deployments] %s：%w", host, err)
+		}
+		current = value[host]
 	}
 	var added []string
 	merged := slices.Clone(current)
@@ -1124,7 +1133,13 @@ func addHostDeployments(plain []byte, host string, components []string) ([]byte,
 	for n, component := range merged {
 		quoted[n] = fmt.Sprintf("%q", component)
 	}
-	setBlockKey(&blocks[i], host, "["+strings.Join(quoted, ", ")+"]")
+	line := host + " = [" + strings.Join(quoted, ", ") + "]"
+	if start >= 0 {
+		lines = append(lines[:start], append([]string{line}, lines[end+1:]...)...)
+	} else {
+		lines = append(lines[:1], append([]string{line}, lines[1:]...)...)
+	}
+	blocks[i].lines = lines
 	var out []string
 	for _, b := range blocks {
 		out = append(out, b.lines...)

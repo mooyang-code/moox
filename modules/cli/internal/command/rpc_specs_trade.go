@@ -1,7 +1,7 @@
 package command
 
-// 交易（TradeConsoleService）只读查询。交易模块尚未完工：账户创建与修改、下单、撤单、平仓、减仓、纸面模拟、下架名单的写入与解除等写操作不提供命令，
-// Agent 也不要代用户创建实盘账户、下单、清仓或解除下架禁止。
+// 交易（TradeConsoleService）只读查询。账户创建与修改、下单、撤单、平仓、减仓、纸面模拟、下架名单的写入与解除等写操作由用户在管理台自己做，
+// 不提供命令；Agent 也不代用户创建实盘账户、下单、清仓或解除下架禁止。
 
 const tradeConsole = "trpc.moox.trade.TradeConsoleService"
 

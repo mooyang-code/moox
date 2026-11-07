@@ -78,7 +78,7 @@ func TestRemoveMemberRejectsActiveOrdersOrPositions(t *testing.T) {
 	_, err := service.RemoveMember(
 		context.Background(), "space-1", "logical-1", "account-a",
 	)
-	require.ErrorIs(t, err, ErrMemberHasExposure)
+	require.ErrorIs(t, err, ErrRemovalHasExposure)
 }
 
 type authFailingSyncer struct{}

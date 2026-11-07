@@ -1,7 +1,7 @@
 package command
 
 const (
-	tradeWriteReason     = "交易模块尚未完工：不提供写操作命令，Agent 不代用户创建账户、下单、撤单或清仓"
+	tradeWriteReason     = "交易的写操作由用户在管理台自己做，不提供命令：Agent 不代用户创建账户、下单、撤单或清仓"
 	walletTransferReason = "人工结束一条钱包划转记录要先到交易所核对划转记录再判断到账与否，Agent 不代用户判断；用户确认后用 gateway call 调用"
 	secretWriteReason    = "密钥的新建、修改、启停与删除由用户在管理台“设置 › 密钥”操作（明文不经过 Agent；gateway call 也拒绝这些方法）"
 	sshReason            = "管理台的交互式 SSH 终端与文件管理；命令行用 host exec、host get、host put 代替"
