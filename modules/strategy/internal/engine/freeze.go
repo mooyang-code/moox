@@ -101,6 +101,10 @@ func frozenSet(program *dsl.Program, frame Frame, previous State, held heldIndex
 			if !ruleHeld && contains(frame.AgedOut[ruleID], id) {
 				continue // 年龄剔除只拦新进入的标的
 			}
+			if _, noRow := frame.shortNoRow[ruleID][id]; noRow {
+				blocked = true // 永续已经没有它的空头：按无行处理，不借用另一个市场的证据冻结
+				continue
+			}
 			columns, previousColumns := rule.Columns(), rule.PreviousColumns()
 			if ruleHeld {
 				columns, previousColumns = heldColumns(rule)

@@ -17,6 +17,8 @@ type ruleSets struct {
 	frozen    map[string]struct{}
 	// holdReason 是冻结标的的明细原因（gap_hold 或 market_hold，见 frozenSet）。
 	holdReason map[string]string
+	// waived 表示规则本期不守门（永续整体不可用时的空头规则，见 waivesShortGuard）：规则只保持冻结的持仓，holding 规则不重建批次。
+	waived bool
 	// inactive 是 tranche 规则里本期有行但 volume 为 0 的标的：不是候选，也不算缺数（require_volume 时只有 volume > 0 的行是候选）。
 	inactive []string
 }
@@ -55,7 +57,7 @@ func partitionRule(rule *dsl.CompiledRule, frame Frame, held []string, frozen ma
 			continue
 		}
 		row, ok := frame.Rows[id]
-		if !ok {
+		if _, noRow := frame.shortNoRow[rule.Rule.ID][id]; !ok || noRow {
 			sets.missing[id] = "no_row"
 			continue
 		}

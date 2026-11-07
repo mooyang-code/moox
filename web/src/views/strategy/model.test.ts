@@ -83,6 +83,7 @@ describe("strategy model helpers", () => {
     expect(itemReasonLabel("market_unavailable:m")).toBe("市场本期不可用（m）（market_unavailable:m）");
     expect(itemReasonLabel("gap_hold")).toBe("K 线空洞，保持持仓不动（gap_hold）");
     expect(itemReasonLabel("market_hold")).toBe("所在市场本期不可用，保持持仓不动（market_hold）");
+    expect(itemReasonLabel("period_skipped")).toBe("本期整期跳过，未求值（period_skipped）");
     expect(itemReasonLabel("custom_reason")).toBe("custom_reason");
   });
 });

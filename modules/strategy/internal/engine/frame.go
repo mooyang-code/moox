@@ -52,6 +52,8 @@ type Frame struct {
 	FailedColumns map[string]map[string]string
 	// avail 是标的在各市场本期是否可用：该市场的 View 本期有它的行。
 	avail map[string]map[string]bool
+	// shortNoRow 是空头规则里按无行处理的持仓（规则 → 标的）：永续已经没有它、也没有失败证据的永续空头（见 restrictShortCandidates）。
+	shortNoRow map[string]map[string]struct{}
 }
 
 // 上游失败的原因：因子对该标的计算失败，因子因回看窗口 K 线空洞对该标的失败（FailedGap，是 FailedFactor 的细分），

@@ -19,7 +19,8 @@ func Evaluate(program *dsl.Program, frame Frame, previous State) (Decision, erro
 		return Decision{}, errors.New("策略程序没有确定市场模式")
 	}
 	held := indexHeld(previous)
-	frame = restrictShortCandidates(program, mode, selectPool(mode, frame, held), previous)
+	columns := append(append([]string(nil), program.Columns...), program.PreviousColumns...)
+	frame = restrictShortCandidates(program, mode, selectPool(mode, frame, held, columns), previous, held)
 	decision := evaluateFrame(program, mode, frame, previous, held)
 	labelItems(program, mode, frame, held, decision.Items)
 	sortItems(program, decision.Items)
@@ -48,6 +49,7 @@ func evaluateFrame(program *dsl.Program, mode dsl.Market, frame Frame, previous 
 		} else {
 			sets = partitionRule(rule, frame, previous.Rules[rule.Rule.ID].Held, frozen, holdReasons)
 		}
+		sets.waived = waivesShortGuard(mode, rule.Rule, frame, sets)
 		partitions[i] = sets
 		decision.Summary.Rules[rule.Rule.ID] = RuleSummary{
 			Expected:  len(sets.expected),
@@ -61,11 +63,11 @@ func evaluateFrame(program *dsl.Program, mode dsl.Market, frame Frame, previous 
 		if skipReason != "" {
 			continue
 		}
-		if waivesShortGuard(mode, rule.Rule, frame) {
+		if sets.waived {
 			decision.Summary.Notes = append(decision.Summary.Notes, fmt.Sprintf("永续本期整体不可用，空头规则 %s 不守门：冻结的空头保持不动，不新开空头", rule.Rule.ID))
 			continue
 		}
-		if reason := guard(program.Strategy.Portfolio, rule.Rule.Type, sets, guardedFrozen(mode, frame, sets, previous.Rules[rule.Rule.ID].Held)); reason != "" {
+		if reason := guard(program.Strategy.Portfolio, rule.Rule.Type, sets, guardedFrozen(mode, sets, previous.Rules[rule.Rule.ID].Held)); reason != "" {
 			skipReason = reason
 			skipNote = fmt.Sprintf("规则 %s：预期 %d、年龄剔除 %d、可用 %d、缺数 %d", rule.Rule.ID, len(sets.expected), len(sets.agedOut), len(sets.available), len(sets.missing))
 		}
@@ -179,25 +181,17 @@ func guard(portfolio dsl.Portfolio, ruleType string, sets ruleSets, frozen int) 
 	return ""
 }
 
-// guardedFrozen 返回规则守门计入缺数的冻结标的数。通常是规则预期集合里的全部冻结标的；多市场模式下有市场本期整体不可用时，
-// 只计本规则上期持有的冻结标的：冻结按币，别的规则在不可用市场的持仓（例如永续不可用时的永续空头）会把这个币在所有规则里冻结，
-// 本规则没持有它，它对本规则只是本期不参与的候选，计进缺数会让一部分市场不可用变成整期跳过（设计 3.2.1）。
-func guardedFrozen(mode dsl.Market, frame Frame, sets ruleSets, ruleHeld []string) int {
-	partial := false
-	if !mode.Single() {
-		for _, market := range mode.Markets() {
-			if marketUnavailable(frame, market) {
-				partial = true
-				break
-			}
-		}
-	}
-	if !partial {
+// guardedFrozen 返回规则守门计入缺数的冻结标的数。通常是规则预期集合里的全部冻结标的；多市场模式下只排除一种：本规则上期没持有、
+// 并且是因为所在市场本期整体不可用而冻结（market_hold）的标的。冻结按币，别的规则在不可用市场的持仓（例如永续不可用时的永续空头）
+// 会把这个币在所有规则里冻结，本规则没持有它，它对本规则只是本期不参与的候选，计进缺数会让一部分市场不可用变成整期跳过（设计 3.2.1）。
+// 本规则持有的冻结标的、以及因单币空洞（gap_hold）冻结的标的照旧计入：空洞与另一个市场可不可用无关。
+func guardedFrozen(mode dsl.Market, sets ruleSets, ruleHeld []string) int {
+	if mode.Single() {
 		return len(sets.frozen)
 	}
 	count := 0
 	for id := range sets.frozen {
-		if contains(ruleHeld, id) {
+		if contains(ruleHeld, id) || sets.holdReason[id] != reasonMarketHold {
 			count++
 		}
 	}

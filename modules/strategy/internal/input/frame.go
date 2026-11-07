@@ -493,7 +493,7 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 			input.Rows[subjectID] = engineRow
 		}
 		if load.unavailable != "" {
-			input.Failed = marketUnavailable(program, load.universe)
+			input.Failed = marketUnavailable(program, load.universe, bar.Held[load.market])
 		} else {
 			input.Failed = failedColumns(resolved, program, bar.Readiness[load.market])
 		}
@@ -582,12 +582,17 @@ func involvedIn(wanted map[string]map[string]struct{}, subjectID string) bool {
 	return false
 }
 
-// marketUnavailable 构造整个市场本期不可用的失败证据：该市场基础集合里每个标的在每个引用列上都记 market_unavailable。
-func marketUnavailable(program *dsl.Program, universe map[string]Subject) map[string]map[string]string {
+// marketUnavailable 构造整个市场本期不可用的失败证据：该市场基础集合里每个标的、以及上期在这个市场持仓的标的（held），在每个引用列上都记
+// market_unavailable。持仓要单独补上：它可能已不在这个市场本期的基础集合里（例如永续标签刚移除了它），没有证据时引擎会借用另一个市场的行
+// 重新排名（永续空头用现货的因子值），而不是冻结。
+func marketUnavailable(program *dsl.Program, universe map[string]Subject, held map[string]struct{}) map[string]map[string]string {
 	failed := make(map[string]map[string]string)
 	for _, column := range uniqueSorted(append(append([]string(nil), program.Columns...), program.PreviousColumns...)) {
-		failed[column] = make(map[string]string, len(universe))
+		failed[column] = make(map[string]string, len(universe)+len(held))
 		for id := range universe {
+			failed[column][id] = engine.FailedMarket
+		}
+		for id := range held {
 			failed[column][id] = engine.FailedMarket
 		}
 	}
