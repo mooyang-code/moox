@@ -333,7 +333,7 @@
 
 | 命令 | 说明 |
 | --- | --- |
-| `setup apply` | 写入初始用户与云凭据 |
+| `setup apply` | 写入初始用户、云凭据与交易所密钥（`[[exchange_keys]]`，只建不改）；Trade 已部署时逐把检测（只读和已在管理台删除的跳过，检测没完成只提示稍后重试，不影响退出码），没部署时提示部署后用 `trade inspect-credential` |
 | `setup attach-scf-vpc` | 为腾讯云函数绑定 VPC 子网（默认只预览，--yes 才绑定） |
 | `setup bootstrap` | 通过已核验 SSH 初始化核心或完整控制服务 |
 | `setup build-linux` | 在本机 Docker 里构建需要 CGO 的 Linux 二进制 |
