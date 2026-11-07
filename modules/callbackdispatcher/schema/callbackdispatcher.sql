@@ -125,6 +125,9 @@ CREATE TABLE IF NOT EXISTS t_delist_actions (
     c_result TEXT NOT NULL DEFAULT '',
     c_error TEXT NOT NULL DEFAULT '',
     c_next_check_at INTEGER NOT NULL DEFAULT 0,
+    -- 只用于禁止买入那一行：演练（PAPER_ONLY）核对已有结论（SUCCEEDED 或 FAILED，说明在 c_error）而解除禁止没做成时记下结论，
+    -- 之后只重试解除，结论不会因为名单里已经没有这个标的（解除其实已在 Trade 上生效、响应丢了）而丢掉；解除成功后清空。
+    c_release_verdict TEXT NOT NULL DEFAULT '',
     -- 平仓各行和汇总行：这一轮是按哪个下架时间（Unix 毫秒）规划的。改期后这一轮没成功就按新时间重开（换新操作号）。
     c_planned_delist_at INTEGER NOT NULL DEFAULT 0,
     c_updated_at INTEGER NOT NULL,
@@ -132,6 +135,7 @@ CREATE TABLE IF NOT EXISTS t_delist_actions (
     FOREIGN KEY (c_execution_id)
         REFERENCES t_event_executions (c_execution_id)
         ON DELETE CASCADE,
+    CHECK (c_release_verdict IN ('', 'SUCCEEDED', 'FAILED')),
     CHECK (c_kind IN ('BLOCK', 'FLATTEN', 'VERIFY')),
     CHECK (c_status IN ('PENDING', 'RUNNING', 'SUCCEEDED', 'FAILED', 'PARTIAL'))
 );

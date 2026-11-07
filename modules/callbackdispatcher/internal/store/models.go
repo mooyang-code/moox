@@ -98,7 +98,9 @@ type DelistAction struct {
 	NextCheckAt      int64
 	// PlannedDelistAt 是平仓各行和汇总行规划时依据的下架时间（Unix 毫秒）。
 	PlannedDelistAt int64
-	UpdatedAt       int64
+	// ReleaseVerdict 只用于禁止买入那一行：演练核对已有结论、解除禁止没做成时的结论（SUCCEEDED、FAILED），否则为空。
+	ReleaseVerdict string
+	UpdatedAt      int64
 }
 
 // 下架处理的步骤种类与状态。
@@ -191,6 +193,7 @@ type delistRow struct {
 	Error            string `gorm:"column:c_error"`
 	NextCheckAt      int64  `gorm:"column:c_next_check_at"`
 	PlannedDelistAt  int64  `gorm:"column:c_planned_delist_at"`
+	ReleaseVerdict   string `gorm:"column:c_release_verdict"`
 	UpdatedAt        int64  `gorm:"column:c_updated_at;autoUpdateTime:false"`
 }
 

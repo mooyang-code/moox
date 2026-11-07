@@ -215,6 +215,13 @@ func (h *Handler) Step(ctx context.Context, execution store.Execution, now time.
 	for _, step := range steps {
 		r.steps[keyOf(step)] = step
 	}
+	if tgt.PaperOnly {
+		if block, ok := r.steps[stepKey{Round: RoundBlock, Kind: store.DelistKindBlock}]; ok && block.ReleaseVerdict != "" {
+			// 演练核对已有结论、只剩解除没做成：不再走整条时间线（先查名单会发现名单里已经没有这一项而把记录置为已取消，结论就丢了），
+			// 也不重新核对，只重试解除，成功后返回已存下的结论。
+			return r.retryRelease(ctx, block)
+		}
+	}
 	outcome, err := r.step(ctx)
 	if err != nil || !tgt.PaperOnly || r.stopped || (outcome.Status != store.StatusSucceeded && outcome.Status != store.StatusFailed) {
 		return outcome, err
@@ -223,26 +230,39 @@ func (h *Handler) Step(ctx context.Context, execution store.Execution, now time.
 	// 而已结束的记录不能再取消。release 只解除自己写的那一项，同标的还有未取消的真实下架时不解除。真实下架结束后名单保留（标的确实下架了）。
 	unlock := h.locks.Lock(tgt.subject())
 	defer unlock()
-	verifyStep, hasVerify := r.steps[stepKey{Round: RoundVerify, Kind: store.DelistKindVerify}]
-	if releaseErr := h.release(ctx, execution, tgt, hasBlockStep(steps) || r.hasBlock()); releaseErr != nil {
-		// 核对已经有了结论：记下“只剩解除没做成”，之后每次重试只重试解除，不重新核对（否则核对行次数不断加一、零头告警反复上报）。
-		if hasVerify && terminal(verifyStep.Status) {
-			verifyStep.NextCheckAt = now.UnixMilli()
-			if err := r.save(ctx, verifyStep); err != nil {
-				log.WarnContextf(ctx, "记录演练解除待重试失败: %v", err)
+	if releaseErr := h.release(ctx, execution, tgt, r.hasBlock()); releaseErr != nil {
+		// 记下结论：之后每次重试只重试解除。
+		if block, ok := r.steps[stepKey{Round: RoundBlock, Kind: store.DelistKindBlock}]; ok {
+			block.ReleaseVerdict, block.Error = outcome.Status, outcome.Error
+			if err := r.save(ctx, block); err != nil {
+				log.WarnContextf(ctx, "记录演练解除待重试的结论失败: %v", err)
 			}
 		}
 		r.problem("演练结束后解除禁止买入失败，稍后重试: %v", releaseErr)
 		r.wakeAt(now.Add(transientRetry))
 		return r.pending(), nil
 	}
-	if hasVerify && verifyStep.NextCheckAt != 0 {
-		verifyStep.NextCheckAt = 0
-		if err := r.save(ctx, verifyStep); err != nil {
-			log.WarnContextf(ctx, "清除演练解除待重试标记失败: %v", err)
-		}
-	}
 	return outcome, nil
+}
+
+// retryRelease 只重试演练结束后的解除；成功后清除“待重试解除”的标记，返回已存下的结论。
+func (r *run) retryRelease(ctx context.Context, block store.DelistAction) (action.Outcome, error) {
+	unlock := r.h.locks.Lock(r.target.subject())
+	defer unlock()
+	if err := r.h.release(ctx, r.execution, r.target, true); err != nil {
+		r.problem("演练结束后解除禁止买入失败，稍后重试: %v", err)
+		r.wakeAt(r.now.Add(transientRetry))
+		return r.pending(), nil
+	}
+	verdict, message := block.ReleaseVerdict, block.Error
+	block.ReleaseVerdict, block.Error = "", ""
+	if err := r.save(ctx, block); err != nil {
+		return action.Outcome{}, err
+	}
+	if verdict == store.StatusFailed {
+		return action.Outcome{Status: store.StatusFailed, Error: message}, nil
+	}
+	return action.Outcome{Status: store.StatusSucceeded}, nil
 }
 
 // hasBlock 报告这次推进里有没有存下禁止买入那一行。
@@ -835,14 +855,6 @@ func (r *run) afterDelist(ctx context.Context) (action.Outcome, error) {
 	if r.now.Before(verifyAt) {
 		r.wakeAt(verifyAt)
 		return r.pending(), nil
-	}
-	// 演练核对已经有了结论、只剩解除禁止没做成时，只重试解除（Step 的收尾做），不重新核对：
-	// 否则核对行的尝试次数不断加一，零头关注项每分钟重复上报。
-	if verified, ok := r.steps[stepKey{Round: RoundVerify, Kind: store.DelistKindVerify}]; ok && terminal(verified.Status) && verified.NextCheckAt > 0 {
-		if verified.Status == store.DelistSucceeded {
-			return action.Outcome{Status: store.StatusSucceeded}, nil
-		}
-		return action.Outcome{Status: store.StatusFailed, Error: verified.Error}, nil
 	}
 	return r.verify(ctx)
 }

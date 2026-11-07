@@ -153,7 +153,7 @@ func TestDrillReleaseRetryDoesNotReverify(t *testing.T) {
 	out = h.step("drill", at.Add(5*time.Minute))
 	require.Equal(t, store.StatusSucceeded, out.Status)
 	require.False(t, h.trade.isBlocked())
-	require.Zero(t, h.steps("drill")[verifyKey()].NextCheckAt, "解除成功后清除待重试标记")
+	require.Empty(t, h.steps("drill")[blockKey()].ReleaseVerdict, "解除成功后清除待重试标记")
 }
 
 // 核对失败的演练已经解除了名单：之后重新执行时，名单里没有这个标的，记录自己停下（演练已经结束），不会被“待重试解除”的标记卡住。
@@ -167,7 +167,7 @@ func TestFailedDrillRetryStopsBecauseBlockWasReleased(t *testing.T) {
 	h.step("drill", baseTime.Add(31*time.Second))
 	require.Equal(t, store.StatusFailed, h.step("drill", delistAt.Add(11*time.Minute)).Status)
 	require.False(t, h.trade.isBlocked())
-	require.Zero(t, h.steps("drill")[verifyKey()].NextCheckAt, "解除成功，没有待重试的标记")
+	require.Empty(t, h.steps("drill")[blockKey()].ReleaseVerdict, "解除成功，没有待重试的标记")
 	out := h.step("drill", delistAt.Add(12*time.Minute))
 	require.Equal(t, store.StatusCanceled, out.Status)
 	require.Contains(t, out.Error, "手工解除")
@@ -181,4 +181,64 @@ func TestDelistDetectedWhenOnlySkippedAccounts(t *testing.T) {
 	h.step("e1", baseTime)
 	notes := telemetry.Recent(telemetry.AttentionDelistDetected, baseTime, time.Minute)
 	require.Contains(t, notes, "binance:SPOT:FOOUSDT 将于 2026-11-09 08:00 UTC 下架，1 个账户没能判断是否持有，请人工确认", "进程里的关注项记录是共享的，只看这一条")
+}
+
+// 第 3 轮复审小 4：演练核对已有结论、解除其实已在 Trade 上生效只是响应丢了：下一次推进只重试解除（名单里已经没有这一项也算解除完成），
+// 返回已存下的核对结论，不会被“名单里没有这个标的”置成已取消，也不丢失败结论。
+func TestDrillReleaseLostResponseKeepsVerdict(t *testing.T) {
+	for _, verdict := range []string{"succeeded", "failed"} {
+		t.Run(verdict, func(t *testing.T) {
+			h := newHarness(t)
+			delistAt := baseTime.Add(3 * time.Hour)
+			if verdict == "failed" {
+				h.trade.setHolders(paper("crypto", "la-p"))
+				h.trade.finalFor = func(action.FlattenRequest) (string, string) { return action.OperatorPartial, "拒单" }
+			}
+			h.addExecution("drill", delistAt, "PAPER_ONLY")
+			h.step("drill", baseTime)
+			h.step("drill", baseTime.Add(31*time.Second))
+			lost := true
+			h.trade.unblockHook = func(context.Context) error {
+				if lost {
+					lost = false
+					h.trade.mu.Lock()
+					delete(h.trade.blocked, foo)
+					h.trade.mu.Unlock()
+					return context.DeadlineExceeded
+				}
+				return nil
+			}
+			at := delistAt.Add(11 * time.Minute)
+			out := h.step("drill", at)
+			require.Equal(t, store.StatusPending, out.Status)
+			require.False(t, h.trade.isBlocked())
+			require.NotEmpty(t, h.steps("drill")[blockKey()].ReleaseVerdict, "核对结论记在禁止买入那一行")
+
+			out = h.step("drill", at.Add(time.Minute))
+			want := store.StatusSucceeded
+			if verdict == "failed" {
+				want = store.StatusFailed
+				require.Contains(t, out.Error, "仍有 1 个组合持有")
+			}
+			require.Equal(t, want, out.Status, "保留核对结论")
+			require.Empty(t, h.steps("drill")[blockKey()].ReleaseVerdict)
+			require.Equal(t, 1, h.steps("drill")[verifyKey()].Attempts, "没有重新核对")
+		})
+	}
+}
+
+// 未知标的的演练：结束时解除失败，下一次推进直接重试解除并结束，不重走整条时间线。
+func TestUnknownInstrumentDrillReleaseRetryFinishesDirectly(t *testing.T) {
+	h := newHarness(t)
+	h.trade.unknown = true
+	h.addExecution("drill", baseTime.Add(48*time.Hour), "PAPER_ONLY")
+	h.trade.unblockHook = func(context.Context) error { return errors.New("Trade 超时") }
+	out := h.step("drill", baseTime)
+	require.Equal(t, store.StatusPending, out.Status)
+	require.Equal(t, baseTime.Add(time.Minute), out.NextRunAt)
+	h.trade.unblockHook = nil
+	out = h.step("drill", baseTime.Add(time.Minute))
+	require.Equal(t, store.StatusSucceeded, out.Status, "直接重试解除并结束")
+	require.False(t, h.trade.isBlocked())
+	require.Zero(t, h.trade.callCount("ListHolders"), "没有重走时间线")
 }
