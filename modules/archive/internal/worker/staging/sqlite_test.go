@@ -28,9 +28,7 @@ func TestStageKeepsNanosecondKeys(t *testing.T) {
 		t.Fatalf("stats = %+v", stats)
 	}
 	file := filepath.Join(t.TempDir(), "p.csv")
-	if err := s.ExportCSV(ctx, task, p, file, false); err != nil {
-		t.Fatal(err)
-	}
+	exportFile(t, s, task, p, file)
 	raw, _ := os.ReadFile(file)
 	if !strings.Contains(string(raw), "2026-10-15T01:00:00.0000001Z,BTC") || !strings.Contains(string(raw), "2026-10-15T01:00:00.0000002Z,BTC") {
 		t.Fatalf("csv =\n%s", raw)
@@ -58,13 +56,11 @@ func TestAllColumnTypesRoundTripThroughTheArchiveFile(t *testing.T) {
 	}
 	p, _, _ := s.Partition(ctx, "crypto", "all", "2026-10-15")
 	file := filepath.Join(t.TempDir(), "all.csv.gz")
-	if err := s.Export(ctx, task, p, file); err != nil {
+	exportFile(t, s, task, p, file)
+	if err := s.MarkExported(ctx, "crypto", "all", p.Key, now0.Add(time.Hour), "rel.csv", fileSHA(t, file)); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.MarkExported(ctx, "crypto", "all", p.Key, now0.Add(time.Hour), fileSHA(t, file)); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Finalize(ctx, task, []string{p.Key}, now0, now0, true); err != nil {
+	if err := finalizeAll(ctx, s, task, []string{p.Key}, now0, now0); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.ReopenFinal(ctx, task, p.Key, file); err != nil {
@@ -98,9 +94,9 @@ func TestReopenFinalRejectsMalformedFiles(t *testing.T) {
 	_, _ = s.Stage(ctx, task, []Row{row("BTC", day0, "", 1.0, 1.0, nil, nil)}, utcDay, now0)
 	p, _, _ := s.Partition(ctx, "crypto", "ds_1m", "2026-10-15")
 	file := filepath.Join(t.TempDir(), "p.csv")
-	_ = s.ExportCSV(ctx, task, p, file, false)
-	_ = s.MarkExported(ctx, "crypto", "ds_1m", p.Key, now0.Add(time.Hour), "sha")
-	_ = s.Finalize(ctx, task, []string{p.Key}, now0, now0, true)
+	exportFile(t, s, task, p, file)
+	_ = s.MarkExported(ctx, "crypto", "ds_1m", p.Key, now0.Add(time.Hour), "rel.csv", "sha")
+	_ = finalizeAll(ctx, s, task, []string{p.Key}, now0, now0)
 	for name, body := range map[string]string{
 		"field count": "data_time,subject_id,series_tag,open,close,note,n\n2026-10-15T00:00:00Z,BTC,,1.0\n",
 		"bad number":  "data_time,subject_id,series_tag,open,close,note,n\n2026-10-15T00:00:00Z,BTC,\"\",abc,1.0,,\n",
@@ -115,6 +111,22 @@ func TestReopenFinalRejectsMalformedFiles(t *testing.T) {
 		}
 		if stats, _ := s.Stats(ctx, task, p); stats.Rows != 0 {
 			t.Fatalf("%s: 失败的读回不能留下行: %+v", name, stats)
+		}
+	}
+}
+
+func TestFloatsUseFixedNotationBelow1e21(t *testing.T) {
+	for v, want := range map[float64]string{
+		1234567.0: "1234567.0", 0.00001234: "0.00001234", 1e22: "1e+22", 2: "2.0", -0.5: "-0.5",
+		123456789012345678: "123456789012345680.0", math.Inf(1): "+Inf", math.Inf(-1): "-Inf",
+	} {
+		got := formatFloat(v)
+		if got != want {
+			t.Fatalf("formatFloat(%v) = %q, want %q", v, got, want)
+		}
+		back, err := parseValue(TypeDouble, csvField{value: got})
+		if err != nil || back.(float64) != v {
+			t.Fatalf("%q 读回 = %v err=%v", got, back, err)
 		}
 	}
 }

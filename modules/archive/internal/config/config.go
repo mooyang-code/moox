@@ -48,9 +48,9 @@ type WorkerConfig struct {
 	TakeoverWait time.Duration `yaml:"takeover_wait"`
 }
 
-// ScheduleConfig 是执行计划的规则。
+// ScheduleConfig 是复核的读取规则（拉取边界与检查节奏是代码常量，见 schedule 包）。
 type ScheduleConfig struct {
-	MinInterval time.Duration `yaml:"min_interval"`
+	// MinLookback 是复核从水位往前回看的最少时长 L。
 	MinLookback time.Duration `yaml:"min_lookback"`
 }
 
@@ -101,7 +101,7 @@ func Default() *Config {
 		Database:         DatabaseConfig{Path: "./data/archive-mgr/archive.db"},
 		Run:              RunConfig{LeaseTTL: 10 * time.Minute},
 		Worker:           WorkerConfig{TakeoverWait: 45 * time.Second},
-		Schedule:         ScheduleConfig{MinInterval: 5 * time.Minute, MinLookback: 15 * time.Minute},
+		Schedule:         ScheduleConfig{MinLookback: 15 * time.Minute},
 		Retention:        RetentionConfig{ScheduledSuccess: 30 * 24 * time.Hour, Other: 90 * 24 * time.Hour},
 		StagingRetention: 72 * time.Hour,
 		Spaces: map[string]SpaceConfig{
@@ -138,9 +138,6 @@ func (c *Config) Validate() error {
 	}
 	if c.Worker.TakeoverWait < 15*time.Second {
 		return fmt.Errorf("worker.takeover_wait 不能小于 15 秒")
-	}
-	if c.Schedule.MinInterval < 5*time.Minute {
-		return fmt.Errorf("schedule.min_interval 不能小于 5 分钟")
 	}
 	if c.Schedule.MinLookback < 15*time.Minute {
 		return fmt.Errorf("schedule.min_lookback 不能小于 15 分钟")

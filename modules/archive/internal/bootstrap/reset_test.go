@@ -49,8 +49,8 @@ func TestArchivePauseSkipsTimersAndResetRefusesActiveRuns(t *testing.T) {
 
 	sqlDB, err := db.SQLDB()
 	require.NoError(t, err)
-	_, err = sqlDB.Exec(`INSERT INTO t_archive_tasks (c_space_id, c_dataset_id, c_freq, c_partition_unit, c_schedule_cron, c_interval_seconds, c_start_at)
-		VALUES ('crypto', 'ds', '1m', 'day', '0 2 * * *', 86400, CURRENT_TIMESTAMP)`)
+	_, err = sqlDB.Exec(`INSERT INTO t_archive_tasks (c_space_id, c_dataset_id, c_freq, c_partition_unit, c_interval_seconds)
+		VALUES ('crypto', 'ds', '1m', 'day', 3600)`)
 	require.NoError(t, err)
 	_, err = sqlDB.Exec(`INSERT INTO t_archive_runs (c_run_id, c_space_id, c_dataset_id, c_kind, c_status, c_scheduled_at)
 		VALUES ('r1', 'crypto', 'ds', 'scheduled', 'running', CURRENT_TIMESTAMP)`)

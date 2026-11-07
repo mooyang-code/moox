@@ -40,8 +40,11 @@ const (
 	RunFailed    = "failed"
 	RunCanceled  = "canceled"
 
+	// KindScheduled 是复核（每小时或每天一次，推进水位）；KindManual 是立即运行（同复核）；
+	// KindTick 是到点拉取（读下发区间、不推进水位）；KindRange 是补拉区间。
 	KindScheduled = "scheduled"
 	KindManual    = "manual"
+	KindTick      = "tick"
 	KindRange     = "range"
 
 	PartitionOpen     = "open"
@@ -129,8 +132,14 @@ func (s *Store) Close() error {
 
 // IncrementalVacuum 回收空闲页。
 func (s *Store) IncrementalVacuum(ctx context.Context) error {
-	_, err := s.db.ExecContext(ctx, "PRAGMA incremental_vacuum")
-	return err
+	// incremental_vacuum 每一步只回收一页，Exec 只执行一步，要用 Query 把结果读完。
+	rows, err := s.db.QueryContext(ctx, "PRAGMA incremental_vacuum")
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+	}
+	return errors.Join(rows.Err(), rows.Close())
 }
 
 // tx 在事务里执行 fn；返回错误即回滚。

@@ -20,15 +20,15 @@
 | `archive partitions list` | 列出分区 |
 | `archive runs cancel` | 取消排队中或运行中的运行 |
 | `archive runs get` | 查看一次运行（含无法补齐的区间） |
-| `archive runs list` | 列出运行记录 |
+| `archive runs list` | 列出运行记录（默认不列成功的到点拉取，`--include-ticks` 列出全部） |
 | `archive tasks backfill` | 补拉指定数据时间区间 |
-| `archive tasks create` | 创建归档任务 |
+| `archive tasks create` | 创建归档任务（下一次检查立即复核，之后按收盘拉取） |
 | `archive tasks delete` | 删除没有分区的任务 |
 | `archive tasks list` | 列出归档任务（--space-id 为空表示全部空间） |
-| `archive tasks prepare` | 查看数据集的频率、保留期、推荐执行计划与最早回补起点 |
-| `archive tasks preview` | 校验执行计划并预览接下来 5 次运行与读取区间 |
-| `archive tasks run` | 立即运行一次 |
-| `archive tasks update` | 修改执行计划或启停任务 |
+| `archive tasks prepare` | 查看数据集的频率、保留期、推荐的拉取间隔与最早回补起点 |
+| `archive tasks preview` | 预览接下来 5 次拉取、3 次复核、复核读取区间与分区导出时间 |
+| `archive tasks run` | 立即运行一次（同复核） |
+| `archive tasks update` | 修改拉取间隔、回补起点或启停任务 |
 | `archive worker retire` | 退役一个不再使用的 worker 登记（例如换机后的旧记录） |
 
 ## cloud：云函数：云账户、函数实例、SCF 导入与代码包（调用 CloudFunctionMgr）

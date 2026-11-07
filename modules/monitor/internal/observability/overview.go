@@ -120,7 +120,9 @@ type Builder struct {
 	MarketFetchThresholds      MarketFetchThresholds
 	// Inventory 是采集任务清单，用来确定每个空间的市场交易日历（市场、日历、时区、交易时段）。
 	Inventory InventorySource
-	Now       func() time.Time
+	// Datasets 列出应当有归档任务的数据集，用于“未归档的数据集”检查；为空时不做这项检查。
+	Datasets ArchivableDatasets
+	Now      func() time.Time
 }
 
 // InventorySource 提供最近一份有效的采集任务清单；monmetrics.TaskResultInventoryCache 实现它。
@@ -207,6 +209,11 @@ func (b Builder) Build(ctx context.Context, spaceID string) (Overview, error) {
 		return Overview{}, err
 	}
 	out.BusinessChecks = append(out.BusinessChecks, presence...)
+	archive, err := b.buildArchiveHealth(ctx, spaceID, now)
+	if err != nil {
+		return Overview{}, err
+	}
+	out.BusinessChecks = append(out.BusinessChecks, archive...)
 	seriesLimit, err := b.buildSeriesLimitHealth(ctx, spaceID, now)
 	if err != nil {
 		return Overview{}, err

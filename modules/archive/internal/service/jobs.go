@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/archive/internal/schedule"
 	"github.com/mooyang-code/moox/modules/archive/internal/store"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -13,53 +14,26 @@ const (
 	datasetRefreshEvery = time.Hour
 	cleanupEvery        = time.Hour
 	vacuumEvery         = 24 * time.Hour
-	deletedTaskKeep     = 24 * time.Hour
+	// tickSuccessRetention 是成功的到点拉取运行的保留期（每天最多 1440 条，只留 24 小时）。
+	tickSuccessRetention = 24 * time.Hour
 )
 
-// deletedTask 是一条待通知 worker 的已删除任务。
-type deletedTask struct {
-	space, dataset, epoch string
-	at                    time.Time
-}
-
-// markDeleted 记下被删除的任务（含它的实例标识），下次 worker 心跳时通知它清理暂存表。
-func (s *Service) markDeleted(space, dataset, epoch string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.deletedTasks[space+"/"+dataset] = deletedTask{space: space, dataset: dataset, epoch: epoch, at: s.clock()}
-}
-
-// clearDeleted 在数据集重新创建任务时撤销之前的「已删除」通知，避免 worker 稍后清掉新任务的暂存数据。
-func (s *Service) clearDeleted(space, dataset string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	delete(s.deletedTasks, space+"/"+dataset)
-}
-
-// deletedTaskRefs 返回仍需通知 worker 的已删除任务，并清理过期条目。
-func (s *Service) deletedTaskRefs() []deletedTask {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	now := s.clock()
-	var out []deletedTask
-	for key, d := range s.deletedTasks {
-		if now.Sub(d.at) > deletedTaskKeep {
-			delete(s.deletedTasks, key)
-			continue
-		}
-		out = append(out, d)
-	}
-	return out
-}
-
-// Trigger 是全局触发器（每秒一次）：处理到点的启用任务。
+// Trigger 是全局检查（每分钟第 25 秒）：对每个启用的任务按拉取边界与复核边界判定，到点才生成运行，见 schedule.Decide。
 func (s *Service) Trigger(ctx context.Context) error {
-	result, problems, err := s.store.TriggerDue(ctx, s.clock(), func(task store.Task, now time.Time) (time.Time, error) {
-		plan, err := s.plan(task.ScheduleCron, task.ScheduleTZ)
+	now := s.clock()
+	result, problems, err := s.store.TriggerDue(ctx, now, func(task store.Task) (store.TriggerPlan, error) {
+		decision, err := schedule.Decide(s.timing(task.SpaceID, task.Freq, task.PullEveryBars), task.LastBoundary, task.LastReview, now)
 		if err != nil {
-			return time.Time{}, err
+			return store.TriggerPlan{}, err
 		}
-		return plan.Next(now), nil
+		plan := store.TriggerPlan{RangeStart: decision.RangeStart, RangeEnd: decision.RangeEnd, LastBoundary: decision.LastBoundary, LastReview: decision.LastReview}
+		switch decision.Action {
+		case schedule.ActionReview:
+			plan.Kind = store.KindScheduled
+		case schedule.ActionTick:
+			plan.Kind = store.KindTick
+		}
+		return plan, nil
 	})
 	for _, problem := range problems {
 		log.ErrorContextf(ctx, "archive trigger: %v", problem)
@@ -67,8 +41,8 @@ func (s *Service) Trigger(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("archive trigger: %w", err)
 	}
-	if result.Created > 0 || result.Skipped > 0 {
-		log.InfoContextf(ctx, "archive trigger created=%d skipped=%d", result.Created, result.Skipped)
+	if result.Reviews > 0 || result.Ticks > 0 || result.Skipped > 0 {
+		log.InfoContextf(ctx, "archive trigger reviews=%d ticks=%d skipped=%d", result.Reviews, result.Ticks, result.Skipped)
 	}
 	return nil
 }
@@ -99,7 +73,7 @@ func (s *Service) Maintain(ctx context.Context) error {
 		}
 	}
 	if doCleanup {
-		removed, err := s.store.CleanupRuns(ctx, now, s.cfg.Retention.ScheduledSuccess, s.cfg.Retention.Other)
+		removed, err := s.store.CleanupRuns(ctx, now, tickSuccessRetention, s.cfg.Retention.ScheduledSuccess, s.cfg.Retention.Other)
 		if err != nil {
 			firstErr = err
 		} else {
@@ -125,7 +99,7 @@ func (s *Service) Maintain(ctx context.Context) error {
 
 // refreshDatasets 从 Storage 读取各任务数据集的线上保留期与 DataNode。单个数据集失败不影响其他数据集。
 func (s *Service) refreshDatasets(ctx context.Context) error {
-	tasks, _, err := s.store.ListTasks(ctx, "", 100000, 0)
+	tasks, _, err := s.store.ListTasks(ctx, "", maxListedTasks, 0)
 	if err != nil {
 		return err
 	}

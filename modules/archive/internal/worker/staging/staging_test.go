@@ -71,6 +71,59 @@ func fileSHA(t *testing.T, path string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// exportFile 把分区导出成文件（路径以 .gz 结尾时 gzip 压缩），返回文件的 sha256。
+func exportFile(t *testing.T, s *Store, task Task, p PartitionState, path string) string {
+	t.Helper()
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var w io.Writer = f
+	var zw *gzip.Writer
+	if strings.HasSuffix(path, ".gz") {
+		zw = gzip.NewWriter(f)
+		w = zw
+	}
+	if err := s.ExportCSV(context.Background(), task, p, w); err != nil {
+		t.Fatal(err)
+	}
+	if zw != nil {
+		if err := zw.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return fileSHA(t, path)
+}
+
+// finalizeAll 定稿分区后推进水位（运行结束时的两步）。
+func finalizeAll(ctx context.Context, s *Store, task Task, keys []string, watermark, finalizedAt time.Time) error {
+	if err := s.Finalize(ctx, task, keys, finalizedAt); err != nil {
+		return err
+	}
+	return s.AdvanceWatermark(ctx, task.SpaceID, task.DatasetID, watermark)
+}
+
+func stagedTables(t *testing.T, s *Store) []string {
+	t.Helper()
+	rows, err := s.db.Query(`SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'staged\_%' ESCAPE '\' ORDER BY name`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, name)
+	}
+	return out
+}
+
 func TestStageWritesOnlyNewAndChangedRows(t *testing.T) {
 	s, ctx, task := openTest(t), context.Background(), klineTask()
 	if err := s.EnsureTable(ctx, task); err != nil {
@@ -86,13 +139,13 @@ func TestStageWritesOnlyNewAndChangedRows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Added != 3 || res.Changed != 0 || len(res.Touched) != 1 || res.Touched["2026-10-15"].Start != day0 {
+	if res.Added != 3 || res.Changed != 0 {
 		t.Fatalf("first stage = %+v", res)
 	}
 	// 值没变：不产生写入，也不动 last_changed_at。
 	later := now0.Add(time.Hour)
 	res, err = s.Stage(ctx, task, rows, utcDay, later)
-	if err != nil || res.Added != 0 || res.Changed != 0 || len(res.Touched) != 0 {
+	if err != nil || res.Added != 0 || res.Changed != 0 {
 		t.Fatalf("unchanged stage = %+v err=%v", res, err)
 	}
 	p, ok, _ := s.Partition(ctx, "crypto", "ds_1m", "2026-10-15")
@@ -130,7 +183,7 @@ func TestStageDedupesKeysWithinABatchAndSplitsPartitions(t *testing.T) {
 		row("BTC", at, "", 2.0, 2.0, nil, nil), // 同键，以最后一条为准
 		row("BTC", at.Add(time.Minute), "", 3.0, 3.0, nil, nil),
 	}, utcDay, now0)
-	if err != nil || res.Added != 2 || len(res.Touched) != 2 || res.Touched["2026-10-16"].Start != day1 {
+	if err != nil || res.Added != 2 {
 		t.Fatalf("res = %+v err=%v", res, err)
 	}
 	var open float64
@@ -201,10 +254,8 @@ func TestExportWritesSortedGzipCSVThatKeepsEmptyStringsAndNulls(t *testing.T) {
 		t.Fatal(err)
 	}
 	p, _, _ := s.Partition(ctx, "crypto", "ds_1m", "2026-10-15")
-	dest := filepath.Join(t.TempDir(), "out.csv.gz.partial")
-	if err := s.Export(ctx, task, p, dest); err != nil {
-		t.Fatal(err)
-	}
+	dest := filepath.Join(t.TempDir(), "out.csv.gz")
+	exportFile(t, s, task, p, dest)
 	want := strings.Join([]string{
 		`data_time,subject_id,series_tag,open,close,note,n`,
 		`2026-10-15T01:00:00Z,BTC,"",65432.12,2.0,"q""t",-1`,
@@ -214,18 +265,14 @@ func TestExportWritesSortedGzipCSVThatKeepsEmptyStringsAndNulls(t *testing.T) {
 	if got := readGzip(t, dest); got != want {
 		t.Fatalf("csv =\n%s\nwant\n%s", got, want)
 	}
-	header, err := CSVHeader(dest)
-	if err != nil || strings.Join(header, ",") != "data_time,subject_id,series_tag,open,close,note,n" {
-		t.Fatalf("header = %v err=%v", header, err)
-	}
-	if err := s.MarkExported(ctx, "crypto", "ds_1m", "2026-10-15", now0.Add(time.Hour), fileSHA(t, dest)); err != nil {
+	if err := s.MarkExported(ctx, "crypto", "ds_1m", "2026-10-15", now0.Add(time.Hour), "rel.csv", fileSHA(t, dest)); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.MarkExported(ctx, "crypto", "ds_1m", "nope", now0, ""); err == nil {
+	if err := s.MarkExported(ctx, "crypto", "ds_1m", "nope", now0, "rel.csv", ""); err == nil {
 		t.Fatal("未登记的分区不能标记已导出")
 	}
 	p, _, _ = s.Partition(ctx, "crypto", "ds_1m", "2026-10-15")
-	if p.Status != StatusExported || p.NeedsExport() || p.SHA256 == "" || p.ExportCount != 1 {
+	if p.Status != StatusExported || p.NeedsExport() || p.SHA256 == "" || p.ExportCount != 1 || p.FilePath != "rel.csv" {
 		t.Fatalf("partition = %+v", p)
 	}
 	// 导出之后又有变化：需要重写。
@@ -236,59 +283,48 @@ func TestExportWritesSortedGzipCSVThatKeepsEmptyStringsAndNulls(t *testing.T) {
 	}
 }
 
-func TestFinalizeDeletesRowsAndAdvancesTheWatermarkAtomically(t *testing.T) {
+func TestFinalizeDeletesRowsPerPartitionAndTheWatermarkAdvancesSeparately(t *testing.T) {
 	s, ctx, task := openTest(t), context.Background(), klineTask()
 	_ = s.EnsureTable(ctx, task)
 	at := day0.Add(time.Hour)
 	_, _ = s.Stage(ctx, task, []Row{row("BTC", at, "", 1.0, 1.0, nil, nil), row("BTC", day1.Add(time.Hour), "", 2.0, 2.0, nil, nil)}, utcDay, now0)
 	p, _, _ := s.Partition(ctx, "crypto", "ds_1m", "2026-10-15")
 	w := now0.Add(48 * time.Hour)
-	// 有未导出的变化：拒绝定稿，水位也不动。
-	if err := s.Finalize(ctx, task, []string{"2026-10-15"}, w, now0, true); err == nil {
+	// 有未导出的变化：拒绝定稿。
+	if err := s.Finalize(ctx, task, []string{"2026-10-15"}, now0); err == nil {
 		t.Fatal("有未导出的变化不能定稿")
 	}
-	if _, ok, _ := s.Watermark(ctx, "crypto", "ds_1m"); ok {
-		t.Fatal("定稿失败时水位不能推进")
-	}
 	dest := filepath.Join(t.TempDir(), "p.csv.gz")
-	if err := s.Export(ctx, task, p, dest); err != nil {
-		t.Fatal(err)
-	}
-	_ = s.MarkExported(ctx, "crypto", "ds_1m", "2026-10-15", now0.Add(time.Minute), "sha")
-	// 同一事务里有一个不存在的分区：整体回滚，已存在分区仍是 exported、行还在、水位不动。
-	if err := s.Finalize(ctx, task, []string{"2026-10-15", "2026-09-01"}, w, now0, true); err == nil {
-		t.Fatal("包含不存在的分区应整体失败")
+	exportFile(t, s, task, p, dest)
+	_ = s.MarkExported(ctx, "crypto", "ds_1m", "2026-10-15", now0.Add(time.Minute), "rel.csv", "sha")
+	// 每个分区一个事务：前一个分区定稿成功，后一个不存在的分区报错，已定稿的不回滚。
+	if err := s.Finalize(ctx, task, []string{"2026-10-15", "2026-09-01"}, now0); err == nil {
+		t.Fatal("不存在的分区应报错")
 	}
 	p, _, _ = s.Partition(ctx, "crypto", "ds_1m", "2026-10-15")
 	stats, _ := s.Stats(ctx, task, p)
-	if p.Status != StatusExported || stats.Rows != 1 {
-		t.Fatalf("回滚后分区应不变: %+v %+v", p, stats)
+	if p.Status != StatusFinal || stats.Rows != 0 || p.NeedsExport() || p.RowCount != 1 {
+		t.Fatalf("定稿后: %+v %+v", p, stats)
 	}
 	if _, ok, _ := s.Watermark(ctx, "crypto", "ds_1m"); ok {
-		t.Fatal("回滚后水位不能推进")
+		t.Fatal("定稿不推进水位")
 	}
-	if err := s.Finalize(ctx, task, []string{"2026-10-15"}, w, now0, true); err != nil {
+	// 已定稿的分区再定稿是空操作。
+	if err := s.Finalize(ctx, task, []string{"2026-10-15"}, now0.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	p, _, _ = s.Partition(ctx, "crypto", "ds_1m", "2026-10-15")
-	stats, _ = s.Stats(ctx, task, p)
-	if p.Status != StatusFinal || stats.Rows != 0 || p.NeedsExport() {
-		t.Fatalf("定稿后: %+v %+v", p, stats)
+	if again, _, _ := s.Partition(ctx, "crypto", "ds_1m", "2026-10-15"); !again.FinalizedAt.Equal(now0) || again.RowCount != 1 {
+		t.Fatalf("重复定稿不能改统计: %+v", again)
 	}
 	other, _, _ := s.Partition(ctx, "crypto", "ds_1m", "2026-10-16")
 	if otherStats, _ := s.Stats(ctx, task, other); otherStats.Rows != 1 {
 		t.Fatalf("其他分区的行不能被删: %+v", otherStats)
 	}
-	if got, ok, err := s.Watermark(ctx, "crypto", "ds_1m"); err != nil || !ok || !got.Equal(w) {
-		t.Fatalf("watermark = %v %v %v", got, ok, err)
-	}
-	// 只推进水位、不定稿任何分区（运行没有可定稿的分区时）。
-	w2 := w.Add(time.Hour)
-	if err := s.Finalize(ctx, task, nil, w2, now0, true); err != nil {
+	if err := s.AdvanceWatermark(ctx, "crypto", "ds_1m", w); err != nil {
 		t.Fatal(err)
 	}
-	if got, _, _ := s.Watermark(ctx, "crypto", "ds_1m"); !got.Equal(w2) {
-		t.Fatalf("watermark = %v", got)
+	if got, ok, err := s.Watermark(ctx, "crypto", "ds_1m"); err != nil || !ok || !got.Equal(w) {
+		t.Fatalf("watermark = %v %v %v", got, ok, err)
 	}
 }
 
@@ -303,10 +339,10 @@ func TestReopenFinalReadsTheFileBackSoRepeatedRowsDoNotRewriteIt(t *testing.T) {
 	_, _ = s.Stage(ctx, task, rows, utcDay, now0)
 	p, _, _ := s.Partition(ctx, "crypto", "ds_1m", "2026-10-15")
 	file := filepath.Join(t.TempDir(), "p.csv.gz")
-	_ = s.Export(ctx, task, p, file)
+	exportFile(t, s, task, p, file)
 	exportedAt := now0.Add(time.Hour)
-	_ = s.MarkExported(ctx, "crypto", "ds_1m", "2026-10-15", exportedAt, fileSHA(t, file))
-	if err := s.Finalize(ctx, task, []string{"2026-10-15"}, now0, now0, true); err != nil {
+	_ = s.MarkExported(ctx, "crypto", "ds_1m", "2026-10-15", exportedAt, "rel.csv", fileSHA(t, file))
+	if err := finalizeAll(ctx, s, task, []string{"2026-10-15"}, now0, now0); err != nil {
 		t.Fatal(err)
 	}
 	// 数据集又加了一列：读回时旧文件没有这一列，补 NULL。
@@ -319,7 +355,7 @@ func TestReopenFinalReadsTheFileBackSoRepeatedRowsDoNotRewriteIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	p, _, _ = s.Partition(ctx, "crypto", "ds_1m", "2026-10-15")
-	if p.Status != StatusOpen || p.NeedsExport() {
+	if p.Status != StatusExported || p.NeedsExport() {
 		t.Fatalf("重新打开后不应需要重写: %+v", p)
 	}
 	stats, _ := s.Stats(ctx, wider, p)
@@ -348,9 +384,7 @@ func TestReopenFinalReadsTheFileBackSoRepeatedRowsDoNotRewriteIt(t *testing.T) {
 		t.Fatalf("晚到的行应触发重写: %+v", p)
 	}
 	rewritten := filepath.Join(t.TempDir(), "again.csv.gz")
-	if err := s.Export(ctx, wider, p, rewritten); err != nil {
-		t.Fatal(err)
-	}
+	exportFile(t, s, wider, p, rewritten)
 	got := readGzip(t, rewritten)
 	for _, want := range []string{`BTC,"",1.0,2.0,"",5,`, `BTC,"x,y",1.5,,,,`, `ETH,"",9.0,9.0,,,`, "data_time,subject_id,series_tag,open,close,note,n,volume"} {
 		if !strings.Contains(got, want) {
@@ -359,7 +393,7 @@ func TestReopenFinalReadsTheFileBackSoRepeatedRowsDoNotRewriteIt(t *testing.T) {
 	}
 	// 只有定稿的分区才能读回。
 	if err := s.ReopenFinal(ctx, wider, "2026-10-15", file); err == nil {
-		t.Fatal("open 状态的分区不能重复读回")
+		t.Fatal("未定稿的分区不能重复读回")
 	}
 	if err := s.ReopenFinal(ctx, wider, "2026-10-15", filepath.Join(t.TempDir(), "missing.csv.gz")); err == nil {
 		t.Fatal("文件缺失必须报错")
@@ -370,15 +404,15 @@ func TestDropTaskRemovesTablesAndState(t *testing.T) {
 	s, ctx, task := openTest(t), context.Background(), klineTask()
 	_ = s.EnsureTable(ctx, task)
 	_, _ = s.Stage(ctx, task, []Row{row("BTC", day0, "", 1.0, 1.0, nil, nil)}, utcDay, now0)
-	_ = s.Finalize(ctx, task, nil, now0, now0, true)
-	tables, _ := s.StagedTables(ctx)
+	_ = finalizeAll(ctx, s, task, nil, now0, now0)
+	tables := stagedTables(t, s)
 	if len(tables) != 1 || tables[0] != task.Table() {
 		t.Fatalf("tables = %v", tables)
 	}
 	if err := s.DropTask(ctx, "crypto", "ds_1m"); err != nil {
 		t.Fatal(err)
 	}
-	tables, _ = s.StagedTables(ctx)
+	tables = stagedTables(t, s)
 	parts, _ := s.Partitions(ctx, "crypto", "ds_1m")
 	if _, ok, _ := s.Watermark(ctx, "crypto", "ds_1m"); len(tables) != 0 || len(parts) != 0 || ok {
 		t.Fatalf("tables=%v parts=%v watermark=%v", tables, parts, ok)
@@ -398,7 +432,7 @@ func TestOpenValidatesLimitsAndReopensExistingState(t *testing.T) {
 	task := klineTask()
 	_ = s.EnsureTable(context.Background(), task)
 	_, _ = s.Stage(context.Background(), task, []Row{row("BTC", day0, "", 1.0, 1.0, nil, nil)}, utcDay, now0)
-	if err := s.Checkpoint(context.Background()); err != nil {
+	if err := s.Maintain(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if s.FileBytes() == 0 || s.Path() != path {
@@ -413,72 +447,6 @@ func TestOpenValidatesLimitsAndReopensExistingState(t *testing.T) {
 	parts, _ := again.Partitions(context.Background(), "crypto", "ds_1m")
 	if len(parts) != 1 {
 		t.Fatalf("重新打开后分区状态应保留: %v", parts)
-	}
-}
-
-func TestCompactShrinksTheFileAfterLargeDeletesAndKeepsTheData(t *testing.T) {
-	s, ctx, task := openTest(t), context.Background(), klineTask()
-	big := Task{SpaceID: "crypto", DatasetID: "big", Columns: task.Columns}
-	_ = s.EnsureTable(ctx, big)
-	var rows []Row
-	for i := 0; i < 8000; i++ {
-		rows = append(rows, row(fmt.Sprintf("S%04d", i%200), day0.Add(time.Duration(i/200)*time.Minute), fmt.Sprintf("tag-%d", i), float64(i), float64(i)*1.5, fmt.Sprintf("note-%d", i), int64(i)))
-	}
-	if _, err := s.Stage(ctx, big, rows, utcDay, now0); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Checkpoint(ctx); err != nil {
-		t.Fatal(err)
-	}
-	// 小任务的数据排在大任务之后；删除大任务后，空闲块在文件中间，文件不会自动变小。
-	_ = s.EnsureTable(ctx, task)
-	if _, err := s.Stage(ctx, task, []Row{row("BTC", day0, "", 1.0, 1.0, nil, nil)}, utcDay, now0); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Finalize(ctx, task, nil, now0, now0, true); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Checkpoint(ctx); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.DropTask(ctx, "crypto", "big"); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Checkpoint(ctx); err != nil {
-		t.Fatal(err)
-	}
-	before := s.FileBytes()
-	sizes, err := s.Sizes(ctx)
-	if err != nil || sizes.FileBytes == 0 || sizes.UsedBytes >= sizes.FileBytes*3/4 {
-		t.Fatalf("删除大任务后应有大量空闲块: %+v err=%v", sizes, err)
-	}
-	// 阈值很高：不重建。
-	if done, err := s.Compact(ctx, 2, before*10); err != nil || done {
-		t.Fatalf("done=%v err=%v", done, err)
-	}
-	done, err := s.Compact(ctx, 1.5, 0)
-	if err != nil || !done {
-		t.Fatalf("compact done=%v err=%v", done, err)
-	}
-	if after := s.FileBytes(); after >= before*3/4 {
-		t.Fatalf("文件应明显变小: before=%d after=%d", before, after)
-	}
-	// 重建之后状态表、水位、暂存表都还在，并且能继续使用。
-	if w, ok, _ := s.Watermark(ctx, "crypto", "ds_1m"); !ok || !w.Equal(now0) {
-		t.Fatalf("watermark = %v %v", w, ok)
-	}
-	if parts, _ := s.Partitions(ctx, "crypto", "ds_1m"); len(parts) != 1 {
-		t.Fatalf("partitions = %+v", parts)
-	}
-	if res, err := s.Stage(ctx, task, []Row{row("ETH", day0, "", 2.0, 2.0, nil, nil)}, utcDay, now0.Add(time.Hour)); err != nil || res.Added != 1 {
-		t.Fatalf("重建后仍可写入: %+v err=%v", res, err)
-	}
-	var count int
-	if err := s.db.QueryRow(fmt.Sprintf(`SELECT count(*) FROM %s`, quote(task.Table()))).Scan(&count); err != nil || count != 2 {
-		t.Fatalf("重建后数据应保留: count=%d err=%v", count, err)
-	}
-	if _, err := os.Stat(s.Path() + ".old"); !os.IsNotExist(err) {
-		t.Fatal("旧文件应被清理")
 	}
 }
 
@@ -505,14 +473,14 @@ func TestPendingReportsTrackEveryChangeUntilTheManagerAcknowledges(t *testing.T)
 	// 导出、定稿都会重新标记；定稿后统计存在分区状态里。
 	p, _, _ := s.Partition(ctx, "crypto", "ds_1m", "2026-10-15")
 	dest := filepath.Join(t.TempDir(), "p.csv.gz")
-	_ = s.Export(ctx, task, p, dest)
-	_ = s.MarkExported(ctx, "crypto", "ds_1m", "2026-10-15", now0.Add(2*time.Hour), "sha")
+	exportFile(t, s, task, p, dest)
+	_ = s.MarkExported(ctx, "crypto", "ds_1m", "2026-10-15", now0.Add(2*time.Hour), "rel.csv", "sha")
 	if pending, _ = s.PendingReports(ctx, "crypto", "ds_1m"); len(pending) != 1 || pending[0].ExportCount != 1 {
 		t.Fatalf("导出后应待上报: %+v", pending)
 	}
 	_ = s.MarkReported(ctx, "crypto", "ds_1m", []string{"2026-10-15"})
 	finalizedAt := now0.Add(72 * time.Hour)
-	if err := s.Finalize(ctx, task, []string{"2026-10-15"}, finalizedAt, finalizedAt, true); err != nil {
+	if err := finalizeAll(ctx, s, task, []string{"2026-10-15"}, finalizedAt, finalizedAt); err != nil {
 		t.Fatal(err)
 	}
 	pending, _ = s.PendingReports(ctx, "crypto", "ds_1m")
@@ -526,7 +494,7 @@ func TestPendingReportsTrackEveryChangeUntilTheManagerAcknowledges(t *testing.T)
 		t.Fatal(err)
 	}
 	pending, _ = s.PendingReports(ctx, "crypto", "ds_1m")
-	if len(pending) != 1 || pending[0].Status != StatusOpen || !pending[0].FinalizedAt.IsZero() {
+	if len(pending) != 1 || pending[0].Status != StatusExported || !pending[0].FinalizedAt.IsZero() {
 		t.Fatalf("重新打开后: %+v", pending)
 	}
 	if err := s.MarkReported(ctx, "crypto", "ds_1m", nil); err != nil {
@@ -556,7 +524,7 @@ func TestFirstStartIsKeptUntilTheWatermarkAdvances(t *testing.T) {
 		t.Fatal("只记起点不等于有水位")
 	}
 	_ = s.EnsureTable(ctx, task)
-	if err := s.Finalize(ctx, task, nil, now0, now0, true); err != nil {
+	if err := finalizeAll(ctx, s, task, nil, now0, now0); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok, _ := s.FirstStart(ctx, "crypto", "ds_1m"); ok {
@@ -567,104 +535,202 @@ func TestFirstStartIsKeptUntilTheWatermarkAdvances(t *testing.T) {
 	}
 }
 
-func TestBindEpochDropsStateOfAPreviousTaskInstance(t *testing.T) {
+func TestNewDatabaseUsesIncrementalVacuumAndMaintainReturnsFreePages(t *testing.T) {
+	s, ctx := openTest(t), context.Background()
+	var mode int
+	if err := s.db.QueryRow(`PRAGMA auto_vacuum`).Scan(&mode); err != nil || mode != 2 {
+		t.Fatalf("auto_vacuum = %d err=%v，应为 2（INCREMENTAL）", mode, err)
+	}
+	big := Task{SpaceID: "crypto", DatasetID: "big", Columns: klineTask().Columns}
+	_ = s.EnsureTable(ctx, big)
+	var rows []Row
+	for i := 0; i < 8000; i++ {
+		rows = append(rows, row(fmt.Sprintf("S%04d", i%200), day0.Add(time.Duration(i/200)*time.Minute), fmt.Sprintf("tag-%d", i), float64(i), float64(i), fmt.Sprintf("note-%d", i), int64(i)))
+	}
+	if _, err := s.Stage(ctx, big, rows, utcDay, now0); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Maintain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	before := s.FileBytes()
+	if err := s.DropTask(ctx, "crypto", "big"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Maintain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var free int
+	if err := s.db.QueryRow(`PRAGMA freelist_count`).Scan(&free); err != nil || free != 0 {
+		t.Fatalf("维护后空闲页应归还: free=%d err=%v", free, err)
+	}
+	if after := s.FileBytes(); after >= before/2 {
+		t.Fatalf("文件应明显变小: before=%d after=%d", before, after)
+	}
+	if info, err := os.Stat(s.Path() + "-wal"); err == nil && info.Size() != 0 {
+		t.Fatalf("WAL 应被截断: %d", info.Size())
+	}
+}
+
+func TestBindTaskDropsStateOfAnotherTaskID(t *testing.T) {
 	s, ctx, task := openTest(t), context.Background(), klineTask()
+	if err := s.BindTask(ctx, "crypto", "ds_1m", ""); err == nil {
+		t.Fatal("缺少 task_id 必须报错")
+	}
+	if err := s.BindTask(ctx, "crypto", "ds_1m", "7"); err != nil {
+		t.Fatal(err)
+	}
 	_ = s.EnsureTable(ctx, task)
-	if dropped, err := s.BindEpoch(ctx, "crypto", "ds_1m", "e1"); err != nil || dropped {
-		t.Fatalf("首次绑定: dropped=%v err=%v", dropped, err)
-	}
-	_ = s.Finalize(ctx, task, nil, now0, now0, true)
-	if _, ok, _ := s.Watermark(ctx, "crypto", "ds_1m"); !ok {
-		t.Fatal("应有水位")
-	}
-	// 同一实例再次绑定：保留水位。
-	if dropped, err := s.BindEpoch(ctx, "crypto", "ds_1m", "e1"); err != nil || dropped {
-		t.Fatalf("同实例: dropped=%v err=%v", dropped, err)
+	_, _ = s.Stage(ctx, task, []Row{row("BTC", day0, "", 1.0, 1.0, nil, nil)}, utcDay, now0)
+	_ = finalizeAll(ctx, s, task, nil, now0, now0)
+	// 同一任务再次绑定：保留全部状态。
+	if err := s.BindTask(ctx, "crypto", "ds_1m", "7"); err != nil {
+		t.Fatal(err)
 	}
 	if _, ok, _ := s.Watermark(ctx, "crypto", "ds_1m"); !ok {
-		t.Fatal("同一实例不应丢水位")
+		t.Fatal("同一任务不应丢水位")
 	}
-	// 任务重建：旧水位和暂存表被丢弃，且新实例已绑定。
-	if dropped, err := s.BindEpoch(ctx, "crypto", "ds_1m", "e2"); err != nil || !dropped {
-		t.Fatalf("新实例: dropped=%v err=%v", dropped, err)
+	// 任务重建：旧水位、暂存表与分区状态全部丢弃。
+	if err := s.BindTask(ctx, "crypto", "ds_1m", "8"); err != nil {
+		t.Fatal(err)
 	}
-	if _, ok, _ := s.Watermark(ctx, "crypto", "ds_1m"); ok {
-		t.Fatal("旧水位必须被丢弃")
+	parts, _ := s.Partitions(ctx, "crypto", "ds_1m")
+	if _, ok, _ := s.Watermark(ctx, "crypto", "ds_1m"); ok || len(parts) != 0 || len(stagedTables(t, s)) != 0 {
+		t.Fatalf("旧任务状态应被丢弃: watermark=%v parts=%v", ok, parts)
 	}
-	if tables, _ := s.StagedTables(ctx); len(tables) != 0 {
+	var stored string
+	_ = s.db.QueryRow(`SELECT task_id FROM task_state WHERE space_id = 'crypto' AND dataset_id = 'ds_1m'`).Scan(&stored)
+	if stored != "8" {
+		t.Fatalf("task_id = %q", stored)
+	}
+}
+
+func TestReconcileDropsDatasetsThatAreNotInTheTaskList(t *testing.T) {
+	s, ctx := openTest(t), context.Background()
+	for _, ds := range []string{"keep", "gone", "recreated"} {
+		task := Task{SpaceID: "crypto", DatasetID: ds, Columns: klineTask().Columns}
+		_ = s.BindTask(ctx, "crypto", ds, "1")
+		_ = s.EnsureTable(ctx, task)
+		if _, err := s.Stage(ctx, task, []Row{row("BTC", day0, "", 1.0, 1.0, nil, nil)}, utcDay, now0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dropped, err := s.Reconcile(ctx, map[string]string{"crypto/keep": "1", "crypto/recreated": "2", "crypto/other": "3"})
+	if err != nil || strings.Join(dropped, ",") != "crypto/gone,crypto/recreated" {
+		t.Fatalf("dropped = %v err=%v", dropped, err)
+	}
+	if tables := stagedTables(t, s); len(tables) != 1 || tables[0] != (Task{SpaceID: "crypto", DatasetID: "keep"}).Table() {
 		t.Fatalf("tables = %v", tables)
 	}
-	if dropped, _ := s.BindEpoch(ctx, "crypto", "ds_1m", "e2"); dropped {
-		t.Fatal("绑定后再次执行不应再丢弃")
+	for ds, want := range map[string]int{"keep": 1, "gone": 0, "recreated": 0} {
+		if parts, _ := s.Partitions(ctx, "crypto", ds); len(parts) != want {
+			t.Fatalf("%s: partitions = %v", ds, parts)
+		}
+	}
+	// 空列表（没有任何任务）清掉全部。
+	if dropped, err := s.Reconcile(ctx, map[string]string{}); err != nil || len(dropped) != 1 {
+		t.Fatalf("dropped = %v err=%v", dropped, err)
 	}
 }
 
-func TestDropIfUnboundKeepsStateBoundToATaskInstance(t *testing.T) {
+func TestRestorePartitionsRecoversExportedAsFinalAndKeepsLocalState(t *testing.T) {
 	s, ctx, task := openTest(t), context.Background(), klineTask()
 	_ = s.EnsureTable(ctx, task)
-	_ = s.Finalize(ctx, task, nil, now0, now0, true)
-	// 升级前的状态（没有实例标识）会被丢弃。
-	if err := s.DropIfUnbound(ctx, "crypto", "ds_1m"); err != nil {
-		t.Fatal(err)
+	// 本地已有 10-16 的状态：登记不能覆盖它。
+	_, _ = s.Stage(ctx, task, []Row{row("BTC", day1, "", 1.0, 1.0, nil, nil)}, utcDay, now0)
+	exportedAt := now0.Add(-time.Hour)
+	regs := []PartitionState{
+		{Key: "2026-10-14", Start: day0.AddDate(0, 0, -1), End: day0, Status: StatusFinal, FilePath: "crypto/ds_1m/2026/20261014.csv.gz", SHA256: "a",
+			ExportCount: 2, RowCount: 10, SubjectCount: 2, ExportedAt: exportedAt, LastChangedAt: exportedAt, FinalizedAt: exportedAt, MinDataTime: day0.Add(-time.Hour), MaxDataTime: day0.Add(-time.Minute)},
+		{Key: "2026-10-15", Start: day0, End: day1, Status: StatusExported, FilePath: "crypto/ds_1m/2026/20261015.csv.gz", SHA256: "b",
+			ExportCount: 1, RowCount: 5, SubjectCount: 1, ExportedAt: exportedAt, LastChangedAt: exportedAt.Add(-time.Minute)},
+		{Key: "2026-10-16", Start: day1, End: day1.AddDate(0, 0, 1), Status: StatusExported, FilePath: "x", SHA256: "c", ExportedAt: exportedAt, RowCount: 99},
+		{Key: "2026-10-17", Start: day1.AddDate(0, 0, 1), End: day1.AddDate(0, 0, 2), Status: StatusOpen},
+		// 读回后还没重新定稿：mgr 里是 open 但有文件，同样按 final 恢复。
+		{Key: "2026-10-18", Start: day1.AddDate(0, 0, 2), End: day1.AddDate(0, 0, 3), Status: StatusOpen, FilePath: "crypto/ds_1m/2026/20261018.csv.gz", SHA256: "d",
+			ExportCount: 3, RowCount: 7, SubjectCount: 1, ExportedAt: exportedAt},
 	}
-	if _, ok, _ := s.Watermark(ctx, "crypto", "ds_1m"); ok {
-		t.Fatal("未绑定的旧状态应被丢弃")
+	n, err := s.RestorePartitions(ctx, "crypto", "ds_1m", regs, now0)
+	if err != nil || n != 3 {
+		t.Fatalf("inserted=%d err=%v", n, err)
 	}
-	// 绑定实例之后，迟到的清理不能删掉它。
-	_ = s.EnsureTable(ctx, task)
-	_, _ = s.BindEpoch(ctx, "crypto", "ds_1m", "e1")
-	_ = s.Finalize(ctx, task, nil, now0, now0, true)
-	if err := s.DropIfUnbound(ctx, "crypto", "ds_1m"); err != nil {
-		t.Fatal(err)
+	p14, _, _ := s.Partition(ctx, "crypto", "ds_1m", "2026-10-14")
+	if p14.Status != StatusFinal || p14.RowCount != 10 || p14.ExportCount != 2 || p14.FilePath != regs[0].FilePath || !p14.FinalizedAt.Equal(exportedAt) || p14.ReportPending || p14.NeedsExport() {
+		t.Fatalf("10-14 = %+v", p14)
 	}
-	if _, ok, _ := s.Watermark(ctx, "crypto", "ds_1m"); !ok {
-		t.Fatal("已绑定实例的状态不能被迟到的清理删除")
+	p15, _, _ := s.Partition(ctx, "crypto", "ds_1m", "2026-10-15")
+	if p15.Status != StatusFinal || p15.RowCount != 5 || p15.SHA256 != "b" || !p15.FinalizedAt.Equal(now0) || !p15.ExportedAt.Equal(exportedAt) || p15.ReportPending {
+		t.Fatalf("登记为 exported 的应按 final 恢复: %+v", p15)
+	}
+	p16, _, _ := s.Partition(ctx, "crypto", "ds_1m", "2026-10-16")
+	if p16.Status != StatusOpen || p16.RowCount != 0 {
+		t.Fatalf("本地已有的分区不能被登记覆盖: %+v", p16)
+	}
+	if _, ok, _ := s.Partition(ctx, "crypto", "ds_1m", "2026-10-17"); ok {
+		t.Fatal("没有文件的登记不恢复")
+	}
+	p18, _, _ := s.Partition(ctx, "crypto", "ds_1m", "2026-10-18")
+	if p18.Status != StatusFinal || p18.RowCount != 7 || p18.ExportCount != 3 || !p18.FinalizedAt.Equal(now0) || p18.NeedsExport() {
+		t.Fatalf("有文件的 open 登记应按 final 恢复: %+v", p18)
+	}
+	if _, err := s.RestorePartitions(ctx, "crypto", "ds_1m", []PartitionState{{Key: "2026-10-01", Status: StatusFinal, FilePath: "x"}}, now0); err == nil {
+		t.Fatal("缺少 sha256 或导出时间的登记必须报错")
 	}
 }
 
-func TestDropIfUnboundAlsoClearsStagedDataWithoutTaskState(t *testing.T) {
+func TestStageRejectsRowsInAFinalPartition(t *testing.T) {
 	s, ctx, task := openTest(t), context.Background(), klineTask()
 	_ = s.EnsureTable(ctx, task)
 	_, _ = s.Stage(ctx, task, []Row{row("BTC", day0, "", 1.0, 1.0, nil, nil)}, utcDay, now0)
-	if err := s.DropIfUnbound(ctx, "crypto", "ds_1m"); err != nil {
-		t.Fatal(err)
+	p, _, _ := s.Partition(ctx, "crypto", "ds_1m", "2026-10-15")
+	_ = s.MarkExported(ctx, "crypto", "ds_1m", p.Key, now0.Add(time.Hour), "rel.csv", "sha")
+	_ = s.Finalize(ctx, task, []string{p.Key}, now0)
+	_, err := s.Stage(ctx, task, []Row{row("ETH", day0, "", 2.0, 2.0, nil, nil), row("ETH", day1, "", 2.0, 2.0, nil, nil)}, utcDay, now0.Add(2*time.Hour))
+	if err == nil || !strings.Contains(err.Error(), "已定稿") {
+		t.Fatalf("写入已定稿分区应报错: %v", err)
 	}
-	if tables, _ := s.StagedTables(ctx); len(tables) != 0 {
-		t.Fatalf("没有 task_state 的旧暂存表也应清理: %v", tables)
-	}
-}
-
-func TestDropDeletedIgnoresALateNoticeForAnOlderTaskInstance(t *testing.T) {
-	s, ctx, task := openTest(t), context.Background(), klineTask()
-	_ = s.EnsureTable(ctx, task)
-	_, _ = s.BindEpoch(ctx, "crypto", "ds_1m", "7")
-	_ = s.Finalize(ctx, task, nil, now0, now0, true)
-	// 迟到的、属于旧实例 3 的删除通知：新实例 7 的状态保留。
-	if err := s.DropDeleted(ctx, "crypto", "ds_1m", "3"); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok, _ := s.Watermark(ctx, "crypto", "ds_1m"); !ok {
-		t.Fatal("旧实例的删除通知不能清掉新实例的状态")
-	}
-	// 属于当前实例的删除通知照常清理。
-	if err := s.DropDeleted(ctx, "crypto", "ds_1m", "7"); err != nil {
-		t.Fatal(err)
-	}
-	if _, ok, _ := s.Watermark(ctx, "crypto", "ds_1m"); ok {
-		t.Fatal("当前实例被删除后应清理")
+	p, _, _ = s.Partition(ctx, "crypto", "ds_1m", "2026-10-15")
+	if _, ok, _ := s.Partition(ctx, "crypto", "ds_1m", "2026-10-16"); p.Status != StatusFinal || ok {
+		t.Fatalf("整批回滚: %+v other=%v", p, ok)
 	}
 }
 
-func TestDropDeletedCleansOlderInstancesWhenTheNoticeIsForANewerOne(t *testing.T) {
-	s, ctx, task := openTest(t), context.Background(), klineTask()
+func TestTimesOutsideTheNanosecondRangeAreRejected(t *testing.T) {
+	s, ctx := openTest(t), context.Background()
+	task := Task{SpaceID: "crypto", DatasetID: "t", Columns: []Column{{"ts", TypeTime}}}
 	_ = s.EnsureTable(ctx, task)
-	_, _ = s.BindEpoch(ctx, "crypto", "ds_1m", "7")
-	_ = s.Finalize(ctx, task, nil, now0, now0, true)
-	// 删除 7、重建 8、再删除 8：通知只剩 8，仍要清掉 worker 上 7 的遗留状态。
-	if err := s.DropDeleted(ctx, "crypto", "ds_1m", "8"); err != nil {
+	for _, bad := range []time.Time{{}, time.Date(1677, 12, 31, 0, 0, 0, 0, time.UTC), time.Date(2262, 1, 1, 0, 0, 0, 0, time.UTC)} {
+		if _, err := s.Stage(ctx, task, []Row{row("BTC", day0, "", bad)}, utcDay, now0); err == nil {
+			t.Fatalf("时间列 %v 应报错", bad)
+		}
+		if _, err := s.Stage(ctx, task, []Row{row("BTC", bad, "", nil)}, utcDay, now0); err == nil {
+			t.Fatalf("data_time %v 应报错", bad)
+		}
+	}
+	if _, err := s.Stage(ctx, task, []Row{row("BTC", day0, "", time.Date(2261, 12, 31, 0, 0, 0, 0, time.UTC))}, utcDay, now0); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok, _ := s.Watermark(ctx, "crypto", "ds_1m"); ok {
-		t.Fatal("更早实例的遗留状态应被清理")
+}
+
+func TestResumeFromOnlyMovesForwardAndIsClearedWithTheWatermark(t *testing.T) {
+	s, ctx := openTest(t), context.Background()
+	_ = s.SetFirstStart(ctx, "crypto", "ds_1m", day0)
+	if err := s.SetResumeFrom(ctx, "crypto", "ds_1m", day1); err != nil {
+		t.Fatal(err)
+	}
+	_ = s.SetResumeFrom(ctx, "crypto", "ds_1m", day0)
+	if got, ok, _ := s.ResumeFrom(ctx, "crypto", "ds_1m"); !ok || !got.Equal(day1) {
+		t.Fatalf("resume = %v %v", got, ok)
+	}
+	if got, ok, _ := s.FirstStart(ctx, "crypto", "ds_1m"); !ok || !got.Equal(day0) {
+		t.Fatalf("记续读起点不能改首次起点: %v %v", got, ok)
+	}
+	if err := s.AdvanceWatermark(ctx, "crypto", "ds_1m", now0); err != nil {
+		t.Fatal(err)
+	}
+	_, resume, _ := s.ResumeFrom(ctx, "crypto", "ds_1m")
+	_, first, _ := s.FirstStart(ctx, "crypto", "ds_1m")
+	if resume || first {
+		t.Fatal("推进水位时应清掉续读起点与首次起点")
 	}
 }

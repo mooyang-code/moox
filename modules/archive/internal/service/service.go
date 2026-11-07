@@ -43,6 +43,9 @@ type DatasetProvider interface {
 	GetDataset(ctx context.Context, spaceID, datasetID string) (Dataset, error)
 }
 
+// maxListedTasks 是一次列出全部任务时的上限（单用户系统的任务数远小于它）。
+const maxListedTasks = 100000
+
 // ErrDatasetNotFound 表示数据集在 Storage 中不存在。
 var ErrDatasetNotFound = errors.New("dataset not found")
 
@@ -53,13 +56,10 @@ type Service struct {
 	datasets DatasetProvider
 	now      func() time.Time
 
-	mu            sync.Mutex
-	plans         map[string]*schedule.Plan
-	deletedTasks  map[string]deletedTask
-	lastRefresh   time.Time
-	lastCleanup   time.Time
-	lastVacuum    time.Time
-	lastHeartbeat time.Time
+	mu          sync.Mutex
+	lastRefresh time.Time
+	lastCleanup time.Time
+	lastVacuum  time.Time
 }
 
 // Option 调整 Service。
@@ -73,8 +73,7 @@ func New(db *store.Store, cfg *config.Config, datasets DatasetProvider, opts ...
 	if db == nil || cfg == nil || datasets == nil {
 		return nil, errors.New("archive service requires a store, config and dataset provider")
 	}
-	s := &Service{store: db, cfg: cfg, datasets: datasets, now: func() time.Time { return time.Now().UTC() },
-		plans: map[string]*schedule.Plan{}, deletedTasks: map[string]deletedTask{}}
+	s := &Service{store: db, cfg: cfg, datasets: datasets, now: func() time.Time { return time.Now().UTC() }}
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -89,26 +88,14 @@ func (s *Service) Worker() *WorkerService { return &WorkerService{svc: s} }
 
 func (s *Service) clock() time.Time { return s.now().UTC() }
 
-// plan 解析并缓存执行计划。
-func (s *Service) plan(spec, tz string) (*schedule.Plan, error) {
-	key := spec + "|" + tz
-	s.mu.Lock()
-	cached, ok := s.plans[key]
-	s.mu.Unlock()
-	if ok {
-		return cached, nil
-	}
-	plan, err := schedule.Parse(spec, tz)
+// timing 返回任务算拉取边界用的时序信息（空间时区与本地收盘时刻取自配置；时区无效时按 UTC）。
+func (s *Service) timing(spaceID, freq string, pullEveryBars int) schedule.Timing {
+	spaceCfg := s.cfg.Space(spaceID)
+	loc, err := time.LoadLocation(spaceCfg.TZ)
 	if err != nil {
-		return nil, err
+		loc = time.UTC
 	}
-	s.mu.Lock()
-	if len(s.plans) > 512 {
-		s.plans = map[string]*schedule.Plan{}
-	}
-	s.plans[key] = plan
-	s.mu.Unlock()
-	return plan, nil
+	return schedule.Timing{Freq: freq, PullEveryBars: pullEveryBars, Loc: loc, LocalClose: spaceCfg.LocalClose}
 }
 
 func success() *commonpb.RetInfo {
@@ -183,10 +170,10 @@ func resolveSpace(ctx context.Context, requested string, required bool) (string,
 	return requested, nil
 }
 
-// parseRetention 解析线上保留期："<n>h"，"forever" 或空串表示不限。
+// parseRetention 解析线上保留期："<n>h" 或 "forever"（不限）；空串说明没有读到数据集信息，按错误处理。
 func parseRetention(value string) (limit time.Duration, forever bool, err error) {
 	value = strings.TrimSpace(value)
-	if value == "" || value == "forever" {
+	if value == "forever" {
 		return 0, true, nil
 	}
 	d, err := time.ParseDuration(value)

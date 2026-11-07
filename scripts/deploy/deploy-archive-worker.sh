@@ -15,6 +15,8 @@ ACCESS_ID=""
 ACCESS_KEY_ID=""
 BINARY=""
 HEALTH_ENV=""
+EXPORT_FORMAT="csv.gz"
+PAGE_ROWS="500"
 SKIP_BUILD=0
 NO_START=0
 SYSTEMD_USER_DIR="${MOOX_SYSTEMD_USER_DIR:-${HOME}/.config/systemd/user}"
@@ -36,6 +38,8 @@ Options:
   --binary <path>           Install this prebuilt moox-archive-worker (from the release package).
   --health-env <path>       Health credential file (MOOX_HEALTH_AUTH_* variables, mode 0600) rendered by moox-cli.
                             Required for the first deployment; later deployments keep the installed one.
+  --export-format <fmt>     Partition file format: csv.gz (default) or csv.
+  --page-rows <n>           Rows per Storage read page, 1..2000. Default: 500.
   --skip-build              Reuse <dir>/bin/moox-archive-worker.
   --no-start                Install files only; do not (re)start the service.
 
@@ -65,6 +69,8 @@ while [[ $# -gt 0 ]]; do
     --access-key-id) ACCESS_KEY_ID="$2"; shift 2 ;;
     --binary) BINARY="$2"; shift 2 ;;
     --health-env) HEALTH_ENV="$2"; shift 2 ;;
+    --export-format) EXPORT_FORMAT="$2"; shift 2 ;;
+    --page-rows) PAGE_ROWS="$2"; shift 2 ;;
     --skip-build) SKIP_BUILD=1; shift ;;
     --no-start) NO_START=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -76,6 +82,8 @@ done
 [[ "${ACCESS_ADDRESS}" =~ ^(\[[0-9a-fA-F:]+\]|[A-Za-z0-9.-]+):[0-9]+$ ]] || fail "--access-address must be host:port"
 [[ "${ACCESS_ID}" =~ ^access@[a-z][a-z0-9]*(-[a-z0-9]+)*$ ]] || fail "--access-id must be access@host"
 [[ "${ACCESS_KEY_ID}" =~ ^[A-Za-z0-9._@:-]+$ && ${#ACCESS_KEY_ID} -le 128 ]] || fail "--access-key-id must be the assigned credential identifier"
+[[ "${EXPORT_FORMAT}" == "csv" || "${EXPORT_FORMAT}" == "csv.gz" ]] || fail "--export-format must be csv or csv.gz"
+[[ "${PAGE_ROWS}" =~ ^[0-9]+$ && "${PAGE_ROWS}" -ge 1 && "${PAGE_ROWS}" -le 2000 ]] || fail "--page-rows must be 1..2000"
 mkdir -p "${DEPLOY_DIR}"
 DEPLOY_DIR="$(cd "${DEPLOY_DIR}" && pwd -P)"
 SECRETS_DIR="${SECRETS_DIR:-${DEPLOY_DIR}/secrets}"
@@ -124,14 +132,13 @@ storage_auth_file: ${SECRETS_DIR}/storage-primary-auth.secret
 worker:
   worker_id: ${WORKER_ID}
   root_dir: ${ROOT_DIR}
-  export_formats: [csv]
+  export_format: ${EXPORT_FORMAT}
   min_free_bytes: 5GB
   heartbeat_interval: 10s
   pull_interval: 5s
 
 staging:
   cache_size: 256MB
-  rebuild_ratio: 2
 
 pacing:
   request_seconds: [25, 55]
@@ -141,7 +148,7 @@ pacing:
   max_bytes_per_second: 512KB
   max_concurrent_runs: 4
   max_runs_per_data_node: 2
-  page_rows: 500
+  page_rows: ${PAGE_ROWS}
 
 health:
   addr: 127.0.0.1:11418

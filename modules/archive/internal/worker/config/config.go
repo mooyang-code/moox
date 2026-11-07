@@ -73,19 +73,19 @@ type Config struct {
 
 // WorkerSection 是 worker 本身的设置。
 type WorkerSection struct {
-	WorkerID          string        `yaml:"worker_id"`
-	RootDir           string        `yaml:"root_dir"`
-	ExportFormats     []string      `yaml:"export_formats"`
+	WorkerID string `yaml:"worker_id"`
+	RootDir  string `yaml:"root_dir"`
+	// ExportFormat 是导出文件格式：csv.gz（默认）或 csv。
+	ExportFormat      string        `yaml:"export_format"`
 	MinFreeBytes      ByteSize      `yaml:"min_free_bytes"`
 	HeartbeatInterval time.Duration `yaml:"heartbeat_interval"`
 	PullInterval      time.Duration `yaml:"pull_interval"`
 }
 
-// StagingSection 是 DuckDB 暂存库的资源设置。
+// StagingSection 是 SQLite 暂存库的资源设置。
 type StagingSection struct {
-	// CacheSize 是暂存库（SQLite）的页缓存上限。
-	CacheSize    ByteSize `yaml:"cache_size"`
-	RebuildRatio float64  `yaml:"rebuild_ratio"`
+	// CacheSize 是暂存库的页缓存上限。
+	CacheSize ByteSize `yaml:"cache_size"`
 }
 
 // PacingSection 是节奏与并发。
@@ -117,10 +117,10 @@ func Default() *Config {
 	return &Config{
 		StorageAuthFile: "../secrets/storage-primary-auth.secret",
 		Worker: WorkerSection{
-			WorkerID: Caller + "@" + host, ExportFormats: []string{"csv"}, MinFreeBytes: ByteSize(5 << 30),
+			WorkerID: Caller + "@" + host, ExportFormat: "csv.gz", MinFreeBytes: ByteSize(5 << 30),
 			HeartbeatInterval: 10 * time.Second, PullInterval: 5 * time.Second,
 		},
-		Staging: StagingSection{CacheSize: ByteSize(256 << 20), RebuildRatio: 2},
+		Staging: StagingSection{CacheSize: ByteSize(256 << 20)},
 		Pacing: PacingSection{
 			RequestSeconds: [2]int{25, 55}, MinuteWindow: true, HourQuiet: [2]string{"58:00", "04:00"}, RequestInterval: 200 * time.Millisecond,
 			MaxBytesPerSecond: ByteSize(512 << 10), MaxConcurrentRuns: 4, MaxRunsPerDataNode: 2, PageRows: 500,
@@ -178,8 +178,8 @@ func (c *Config) Validate() error {
 	if strings.Contains(w.RootDir, string(filepath.Separator)+"Documents"+string(filepath.Separator)) {
 		return fmt.Errorf("worker.root_dir 不能放在 ~/Documents 下")
 	}
-	if len(w.ExportFormats) != 1 || (w.ExportFormats[0] != "csv" && w.ExportFormats[0] != "csv.gz") {
-		return fmt.Errorf("worker.export_formats 目前只支持 [csv] 或 [csv.gz]")
+	if w.ExportFormat != "csv" && w.ExportFormat != "csv.gz" {
+		return fmt.Errorf("worker.export_format 只支持 csv 或 csv.gz")
 	}
 	if w.MinFreeBytes < 0 {
 		return fmt.Errorf("worker.min_free_bytes 不能为负")
@@ -189,9 +189,6 @@ func (c *Config) Validate() error {
 	}
 	if w.PullInterval < time.Second {
 		return fmt.Errorf("worker.pull_interval 不能小于 1s")
-	}
-	if c.Staging.RebuildRatio < 1.2 {
-		return fmt.Errorf("staging.rebuild_ratio 不能小于 1.2")
 	}
 	if c.Staging.CacheSize < ByteSize(1<<20) {
 		return fmt.Errorf("staging.cache_size 不能小于 1MB")
@@ -221,7 +218,7 @@ func (c *Config) Validate() error {
 // PacingConfig 转成节奏包的配置。
 func (c *Config) PacingConfig() pacing.Config {
 	return pacing.Config{
-		RequestSeconds: c.Pacing.RequestSeconds, DisableMinuteWindow: !c.Pacing.MinuteWindow, HourQuiet: c.Pacing.HourQuiet,
+		RequestSeconds: c.Pacing.RequestSeconds, MinuteWindow: c.Pacing.MinuteWindow, HourQuiet: c.Pacing.HourQuiet,
 		RequestInterval: c.Pacing.RequestInterval, MaxBytesPerSecond: int64(c.Pacing.MaxBytesPerSecond),
 	}
 }

@@ -121,6 +121,14 @@ func scanNanos(v sql.NullInt64) time.Time {
 	return fromNanos(v.Int64)
 }
 
+// checkNanosRange 检查时间能否用 Unix 纳秒（int64）表示：超出 1678～2261 年会溢出，零值时间也在此列。
+func checkNanosRange(t time.Time) error {
+	if y := t.UTC().Year(); y < 1678 || y > 2261 {
+		return fmt.Errorf("时间 %s 超出可存储范围（1678～2261 年）", t.UTC().Format(time.RFC3339Nano))
+	}
+	return nil
+}
+
 // bindValue 把行里的 Go 值转换成绑定参数：时间转纳秒、布尔转 0/1，其余原样。
 func bindValue(columnType string, value any) (any, error) {
 	if value == nil {
@@ -129,6 +137,9 @@ func bindValue(columnType string, value any) (any, error) {
 	switch columnType {
 	case TypeTime:
 		if t, ok := value.(time.Time); ok {
+			if err := checkNanosRange(t); err != nil {
+				return nil, err
+			}
 			return nanos(t), nil
 		}
 	case TypeBool:
@@ -174,7 +185,7 @@ type Store struct {
 	opts Options
 }
 
-// Open 打开（必要时创建）暂存库，并创建任务水位与分区状态两张永久表。
+// Open 打开（必要时创建）暂存库，并创建任务状态与分区状态两张永久表。
 func Open(path string, opts Options) (*Store, error) {
 	if opts.CacheBytes == 0 {
 		opts.CacheBytes = 256 << 20
@@ -196,7 +207,8 @@ CREATE TABLE IF NOT EXISTS task_state (
     dataset_id TEXT NOT NULL,
     scan_watermark INTEGER,
     first_start INTEGER,
-    task_epoch TEXT,
+    resume_from INTEGER,
+    task_id TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (space_id, dataset_id)
 ) WITHOUT ROWID`, `
 CREATE TABLE IF NOT EXISTS partition_state (
@@ -208,6 +220,7 @@ CREATE TABLE IF NOT EXISTS partition_state (
     status TEXT NOT NULL DEFAULT 'open',
     last_changed_at INTEGER NOT NULL,
     exported_at INTEGER,
+    file_path TEXT NOT NULL DEFAULT '',
     file_sha256 TEXT NOT NULL DEFAULT '',
     export_count INTEGER NOT NULL DEFAULT 0,
     row_count INTEGER NOT NULL DEFAULT 0,
@@ -229,6 +242,8 @@ CREATE TABLE IF NOT EXISTS partition_state (
 
 func openDB(path string, opts Options) (*sql.DB, error) {
 	pragmas := []string{
+		// 必须在建表之前生效；删除数据后的空闲页由每天维护的 incremental_vacuum 交还给文件系统。
+		"_pragma=auto_vacuum(INCREMENTAL)",
 		"_pragma=journal_mode(WAL)",
 		"_pragma=synchronous(NORMAL)",
 		"_pragma=busy_timeout(5000)",
@@ -260,10 +275,22 @@ func (s *Store) Close() error {
 // Path 返回库文件路径。
 func (s *Store) Path() string { return s.path }
 
-// Checkpoint 把 WAL 合入库文件并截断 WAL。
-func (s *Store) Checkpoint(ctx context.Context) error {
-	_, err := s.db.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)")
-	return err
+// Maintain 是每天的维护：先回收空闲页（改动先写进 WAL），再把 WAL 合入库文件并截断。调用方保证此时没有运行在使用暂存库。
+func (s *Store) Maintain(ctx context.Context) error {
+	// incremental_vacuum 每一步只回收一页，Exec 只执行一步，要用 Query 把结果读完。
+	rows, err := s.db.QueryContext(ctx, "PRAGMA incremental_vacuum")
+	if err != nil {
+		return fmt.Errorf("回收暂存库空闲页: %w", err)
+	}
+	for rows.Next() {
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return fmt.Errorf("回收暂存库空闲页: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+		return fmt.Errorf("暂存库检查点: %w", err)
+	}
+	return nil
 }
 
 // FileBytes 返回库文件与 WAL 文件（<库>-wal）的当前大小之和。
@@ -333,7 +360,7 @@ func (s *Store) tableColumns(ctx context.Context, table string) (map[string]bool
 	return out, rows.Err()
 }
 
-// DropTask 删除任务的暂存表、水位和分区状态（任务已删除时的清理）。
+// DropTask 删除数据集的暂存表、任务状态和分区状态（任务已删除或重建时的清理）。
 func (s *Store) DropTask(ctx context.Context, spaceID, datasetID string) error {
 	task := Task{SpaceID: spaceID, DatasetID: datasetID}
 	return s.tx(ctx, func(tx *sql.Tx) error {
@@ -346,40 +373,6 @@ func (s *Store) DropTask(ctx context.Context, spaceID, datasetID string) error {
 		_, err := tx.ExecContext(ctx, `DELETE FROM partition_state WHERE space_id = ? AND dataset_id = ?`, spaceID, datasetID)
 		return err
 	})
-}
-
-// StagedTables 返回暂存库里全部暂存表名。
-func (s *Store) StagedTables(ctx context.Context) ([]string, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 'staged\_%' ESCAPE '\' ORDER BY name`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []string
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			return nil, err
-		}
-		out = append(out, name)
-	}
-	return out, rows.Err()
-}
-
-// Watermark 返回任务的读取水位 W；没有时 ok 为假。
-func (s *Store) Watermark(ctx context.Context, spaceID, datasetID string) (time.Time, bool, error) {
-	var w sql.NullInt64
-	err := s.db.QueryRowContext(ctx, `SELECT scan_watermark FROM task_state WHERE space_id = ? AND dataset_id = ?`, spaceID, datasetID).Scan(&w)
-	if errors.Is(err, sql.ErrNoRows) {
-		return time.Time{}, false, nil
-	}
-	if err != nil {
-		return time.Time{}, false, err
-	}
-	if !w.Valid {
-		return time.Time{}, false, nil
-	}
-	return fromNanos(w.Int64), true, nil
 }
 
 func (s *Store) tx(ctx context.Context, fn func(*sql.Tx) error) error {
