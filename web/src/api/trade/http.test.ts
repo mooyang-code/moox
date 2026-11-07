@@ -55,6 +55,14 @@ describe("Trade response errors", () => {
     expect(isTradeNotFound(new TradeResponseError({ ret_info: { code: "NOT_FOUND", msg: "" } }))).toBe(true);
   });
 
+  it("包装进去的具体原因保留在括号里；只认完整的错误常量", () => {
+    const text = (msg: string) => new TradeResponseError({ ret_info: { code: 14, msg } }).message;
+    expect(text("trade store: conflict: stale paper order")).toBe("数据已经被修改，刷新后再试（stale paper order）");
+    expect(text("trade store: conflict")).toBe("数据已经被修改，刷新后再试");
+    expect(text("trade: invalid order transition")).toBe("trade: invalid order transition");
+    expect(text("trade: invalid order: quantity must be positive")).toBe("订单参数不合法（quantity must be positive）");
+  });
+
   it("does not invent acceptance when the response envelope is missing", async () => {
     client.post.mockResolvedValue({ data: {} });
     await expect(callTrade("console", "SubmitOrder", {})).rejects.toThrow("缺少 ret_info");

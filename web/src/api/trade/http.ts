@@ -43,12 +43,31 @@ const tradeMessageTexts: readonly [prefix: string, text: string][] = [
   ["ExchangeSession is not configured", "执行账户的交易所会话还没有建立，稍等几秒再试"]
 ];
 
-/** 交易服务错误的展示文字：已知的英文错误换成中文，其余原样返回；没有消息时给出错误码。 */
+/** 错误常量在消息里的位置：后面必须是结尾或冒号，避免 "trade: invalid order" 命中 "trade: invalid order transition"。 */
+function constantAt(raw: string, prefix: string): number {
+  for (let at = raw.indexOf(prefix); at >= 0; at = raw.indexOf(prefix, at + 1)) {
+    const next = raw.charAt(at + prefix.length);
+    if (next === "" || next === ":") return at;
+  }
+  return -1;
+}
+
+/**
+ * 交易服务错误的展示文字：已知的英文错误常量换成中文，后端包装进去的具体原因（如 "%w: 具体原因"）接在括号里保留；
+ * 其余原样返回；没有消息时给出错误码。
+ */
 export function tradeErrorText(retInfo: RetInfo): string {
   const raw = retInfo.msg || "";
   if (!raw) return `交易服务请求失败（错误码 ${retInfo.code}）`;
-  const known = tradeMessageTexts.find(([prefix]) => raw.startsWith(prefix) || raw.includes(prefix));
-  return known ? known[1] : raw;
+  for (const [prefix, text] of tradeMessageTexts) {
+    const at = constantAt(raw, prefix);
+    if (at < 0) continue;
+    const before = raw.slice(0, at).replace(/[:\s]+$/, "");
+    const after = raw.slice(at + prefix.length).replace(/^[:\s]+/, "");
+    const detail = [before, after].filter(Boolean).join("；");
+    return detail ? `${text}（${detail}）` : text;
+  }
+  return raw;
 }
 
 export class TradeResponseError extends Error {

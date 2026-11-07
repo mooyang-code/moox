@@ -274,7 +274,7 @@ const hasBinanceLive = computed(() =>
     );
   })
 );
-const candidates = computed(() => eligibleAccounts(allAccounts.value, allLogicals.value, logical.value, env.value));
+const candidates = computed(() => eligibleAccounts(allAccounts.value, allLogicals.value, logical.value));
 const hasPositions = computed(
   () => snapshot.value.swapPositions.length > 0 || snapshot.value.spotHoldings.some(item => item.instrument_id)
 );

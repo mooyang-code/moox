@@ -32,7 +32,21 @@ describe("成员资格", () => {
       account("asset", { settlement_asset: "USDC" }),
       account("live", { execution_mode: 2 })
     ];
-    expect(eligibleAccounts(list, [target, other], target, "paper").map(item => item.trading_account_id)).toEqual(["ok"]);
+    expect(eligibleAccounts(list, [target, other], target).map(item => item.trading_account_id)).toEqual(["ok"]);
+  });
+
+  it("还没有成员的实盘组合：测试网和生产环境的账户都能加入；有成员后只收同环境的", () => {
+    const live = (id: string, environment: 1 | 2) =>
+      account(id, { execution_mode: 2, live: { environment, credential_secret_id: "s" } });
+    const list = [live("testnet", 1), live("prod", 2), account("paper")];
+    const empty = logical("empty", { execution_mode: 2 });
+    expect(eligibleAccounts(list, [empty], empty).map(item => item.trading_account_id)).toEqual(["testnet", "prod"]);
+    const withTestnet = logical("t", {
+      execution_mode: 2,
+      members: [{ trading_account_id: "member", enabled: true, priority: 1 }]
+    });
+    const all = [...list, live("member", 1)];
+    expect(eligibleAccounts(all, [withTestnet], withTestnet).map(item => item.trading_account_id)).toEqual(["testnet"]);
   });
 
   it("只能加入同环境、同结算资产、已暂停的组合，优先级排在成员之后", () => {
