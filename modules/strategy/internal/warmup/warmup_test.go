@@ -468,3 +468,35 @@ func TestFirstLivePeriodAfterWarmUpMatchesOneLongRun(t *testing.T) {
 		t.Fatal("测试数据应产生非空目标")
 	}
 }
+
+// Ensure 只在没有任何预热任务时才开始：正在预热、已经失败的都不重来。
+func TestEnsureStartsOnlyWhenThereIsNoJob(t *testing.T) {
+	h := newHarness(t)
+	h.client.gate = make(chan struct{})
+	h.manager.Ensure("i1", "session-1")
+	if status, _ := h.manager.State("i1"); status != StatusRunning {
+		t.Fatalf("没有任务时应补启动：%v", status)
+	}
+	h.manager.Ensure("i1", "session-1")
+	close(h.client.gate)
+	eventually(t, "预热完成", func() bool { return h.session(t).WarmedThrough != nil })
+
+	failed := newHarness(t)
+	failed.client.indexedFrom = origin.Add(98 * time.Hour)
+	failed.manager.Start(context.Background(), "i1", "session-1")
+	eventually(t, "预热失败", func() bool {
+		status, _ := failed.manager.State("i1")
+		return status == StatusFailed
+	})
+	queries := failed.client.queryCount()
+	failed.manager.Ensure("i1", "session-1")
+	if status, _ := failed.manager.State("i1"); status != StatusFailed || failed.client.queryCount() != queries {
+		t.Fatal("已经失败的预热不能因为事件到达而重来")
+	}
+}
+
+func (f *fakeClient) queryCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.queries
+}

@@ -14,7 +14,6 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/tradeowner"
 	"github.com/mooyang-code/moox/modules/strategy/internal/trigger"
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
-	"trpc.group/trpc-go/trpc-go/log"
 )
 
 func optionalString(value string) *string {
@@ -303,6 +302,9 @@ func (s *Service) enable(ctx context.Context, instance store.Instance) (store.In
 		return instance, fmt.Errorf("策略定义 %s 不存在", instance.StrategyID)
 	}
 	sessionID := ""
+	// poolSession 为真表示这次启用用的会话是策略池会话（带成员快照）：启用成功后要开始预热。直接用这里已有的成员快照判断，
+	// 不再重读会话——重读失败会让预热没有启动，门禁又看不到任务，事件就被一直重投。
+	poolSession := false
 	var resolvedJSON json.RawMessage
 	if instance.SessionID != nil && strings.TrimSpace(*instance.SessionID) != "" {
 		previous := *instance.SessionID
@@ -316,6 +318,7 @@ func (s *Service) enable(ctx context.Context, instance store.Instance) (store.In
 			}
 			sessionID = session.SessionID
 			resolvedJSON = json.RawMessage(session.ResolvedJSON)
+			poolSession = session.MembersJSON != ""
 		} else {
 			if instance.LogicalAccountID != nil {
 				if err := s.Owner.ReleaseSession(ctx, instance.SpaceID, *instance.LogicalAccountID, instance.InstanceID, previous); err != nil && !tradeowner.IsReleaseSettled(err) {
@@ -373,6 +376,7 @@ func (s *Service) enable(ctx context.Context, instance store.Instance) (store.In
 		if err != nil {
 			return reload(), err
 		}
+		poolSession = membersJSON != ""
 		if sessionID, err = store.NewID(); err != nil {
 			return reload(), err
 		}
@@ -408,25 +412,10 @@ func (s *Service) enable(ctx context.Context, instance store.Instance) (store.In
 		}
 		return reload(), err
 	}
-	s.startWarmUp(ctx, instance.InstanceID, sessionID)
+	if poolSession && s.Warmer != nil {
+		s.Warmer.Start(ctx, instance.InstanceID, sessionID)
+	}
 	return reload(), nil
-}
-
-// startWarmUp 在策略池实例启用成功后开始后台预热：会话带成员快照、还没有预热结果才需要；非池实例什么也不做。
-func (s *Service) startWarmUp(ctx context.Context, instanceID, sessionID string) {
-	if s.Warmer == nil {
-		return
-	}
-	session, err := s.Store.GetSession(ctx, sessionID)
-	if err != nil {
-		// 读不到会话就不知道要不要预热：记日志，进程重启时的恢复会重新找出没有预热结果的池会话。
-		log.Warnf("实例 %s 启用后读取会话 %s 失败，策略池预热没有开始：%v", instanceID, sessionID, err)
-		return
-	}
-	if session.MembersJSON == "" || session.WarmedThrough != nil {
-		return
-	}
-	s.Warmer.Start(ctx, instanceID, sessionID)
 }
 
 // checkLiveCalendar 拒绝在 A 股内嵌日历过了可用截止日后启用实例：此后每一期都推算不出有效期，结果都会被丢弃。

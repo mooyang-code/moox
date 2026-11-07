@@ -83,6 +83,9 @@ type Handler struct {
 	// ReleasedAt 非空时返回实例最近一次放行的时间：BarEnd 不晚于它的周期（放行之前收盘的）只记录、不求值，
 	// 无论事件何时到达、重投多少次，都不会为放行之前的周期发目标。为零表示没有放行过。
 	ReleasedAt func(instanceID string) time.Time
+	// EnsureWarm 非空时，处理器发现策略池实例还没有预热结果、也没人在预热它（例如启用后开始预热的那一步失败了）时调用，
+	// 由它在没有预热任务的情况下补启动一次；没有它，事件会被一直重投直到积满消费者的未确认上限。
+	EnsureWarm func(instanceID, sessionID string)
 
 	mu       sync.Mutex
 	programs map[string]*runtime
@@ -255,6 +258,9 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 			// 策略池预热还没完成：事件稍后重投（正常由门禁拦住，这里是兜底），到达记录照写：预热完成后按 bar 顺序补处理，
 			// 不会因为重投退避的先后变成乱序。
 			h.recordArrival(ctx, instance, rt, message, payload, time.Unix(payload.GetPeriodTime(), 0).UTC())
+			if h.EnsureWarm != nil {
+				h.EnsureWarm(instance.InstanceID, rt.sessionID)
+			}
 			return ErrModuleNotReady
 		}
 	}

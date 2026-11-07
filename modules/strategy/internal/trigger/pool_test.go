@@ -406,3 +406,20 @@ func TestPoolEventsArrivingDuringWarmUpAreProcessedInOrder(t *testing.T) {
 	expectAck(t, h.deliverWith(2, bothFactors))
 	expectAck(t, h.deliverWith(3, bothFactors))
 }
+
+// 处理器发现池实例没有预热结果、也没人在预热它时，补启动一次预热（事件仍然重投）；预热完成后不再触发。
+func TestPoolEnsuresWarmUpWhenNothingIsWarmingIt(t *testing.T) {
+	h := newPoolHarness(t, poolDSL("{a: 0.5, b: 0.5}"), standardMembers(), nil)
+	var ensured []string
+	h.handler.EnsureWarm = func(instanceID, sessionID string) { ensured = append(ensured, instanceID+"@"+sessionID) }
+	h.frame(2, abcFrame(3, 2, 1))
+	expectRetry(t, h.deliverWith(2, bothFactors))
+	if len(ensured) != 1 || ensured[0] != "i1@session-1" {
+		t.Fatalf("应补启动预热：%v", ensured)
+	}
+	h.warm(barStart(1), "")
+	expectAck(t, h.deliverWith(2, bothFactors))
+	if len(ensured) != 1 {
+		t.Fatalf("预热完成后不再补启动：%v", ensured)
+	}
+}

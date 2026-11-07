@@ -105,6 +105,16 @@ func (m *Manager) Start(ctx context.Context, instanceID, sessionID string) {
 	}()
 }
 
+// Ensure 只在实例没有任何预热任务（不在预热，也没有失败）时才开始预热：处理器发现池实例没有预热结果又没人预热时用它补启动，
+// 不会让已经失败的预热在每条事件到达时重来一遍。
+func (m *Manager) Ensure(instanceID, sessionID string) {
+	if status, _ := m.State(instanceID); status != StatusNone {
+		return
+	}
+	m.Start(context.Background(), instanceID, sessionID)
+	m.logf("实例 %s 的策略池会话 %s 没有预热任务，已补启动", instanceID, sessionID)
+}
+
 // Stop 取消实例的预热（停用实例时调用）；没有任务时什么也不做。
 func (m *Manager) Stop(instanceID string) {
 	m.mu.Lock()

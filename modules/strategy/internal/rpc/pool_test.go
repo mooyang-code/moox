@@ -239,3 +239,29 @@ func TestPoolEnableStartsWarmUpAndDisableStopsIt(t *testing.T) {
 		t.Fatalf("重新启用应以新会话重新预热：%v", warmer.started)
 	}
 }
+
+// 认领结果未知时保留待定会话，之后沿用同一会话启用成功，也要开始预热（用会话里已有的成员快照判断，不重读会话）。
+func TestPoolReenableOfPendingSessionStartsWarmUp(t *testing.T) {
+	h := newHarness(t)
+	warmer := &fakeWarmer{}
+	h.service.Warmer = warmer
+	h.createStrategy("member_spot", spotMemberDSL)
+	h.createStrategy("member_swap", swapMemberDSL)
+	h.createStrategy("pool_1", poolDefDSL)
+	h.owner.claimErr = errors.New("claim timeout")
+	rsp, err := h.service.CreateStrategyInstance(h.ctx, &strategypb.CreateStrategyInstanceReq{Instance: &strategypb.StrategyInstance{InstanceId: "p1", StrategyId: "pool_1", FactorTasks: map[string]string{"spot": "ftask_p2", "swap": "ftask_p2swap"}, LogicalAccountId: "acct-1", Enabled: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireFail(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg(), "p1")
+	pending := rsp.GetInstance().GetSessionId()
+	if pending == "" || len(warmer.started) != 0 {
+		t.Fatalf("认领没成功时保留待定会话、不预热：%q %v", pending, warmer.started)
+	}
+	h.owner.claimErr = nil
+	recovered := h.setEnabled("p1", true)
+	requireOK(t, int32(recovered.GetRetInfo().GetCode()), recovered.GetRetInfo().GetMsg())
+	if len(warmer.started) != 1 || warmer.started[0] != "p1@"+pending {
+		t.Fatalf("沿用待定会话启用成功后应开始预热：%v", warmer.started)
+	}
+}
