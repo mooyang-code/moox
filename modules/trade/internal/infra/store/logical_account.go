@@ -377,6 +377,11 @@ func MarginPausePendingReason() string {
 	return AutoPauseReason(marginPauseText + "，组合已暂停，减仓待执行（等待进行中的清仓结束）")
 }
 
+// MarginPauseUnreducedReason 是“减仓待执行”期间保证金率又回到安全线、减仓不会再做时的原因：组合仍暂停，没有减过仓，等用户确认后恢复。
+func MarginPauseUnreducedReason() string {
+	return AutoPauseReason(marginPauseText + "，组合已暂停但没有减仓（保证金率已回到安全线），等待确认安全后手动恢复")
+}
+
 // IsMarginPausePending 判断暂停原因是否是“已暂停、减仓待执行”。
 func IsMarginPausePending(reason string) bool { return reason == MarginPausePendingReason() }
 

@@ -421,8 +421,11 @@ func TestDelistFlattenWaitsOutTheIntervalWithoutSpinningSyncs(t *testing.T) {
 	service.FlattenRetryInterval = 10 * time.Millisecond
 	service.FlattenTimeout = 4 * time.Second
 	service.DelistAttemptInterval = 400 * time.Millisecond
+	// 只处理币安成员：预算不被两个成员分掉，到期时也不会落在某个数据库调用里。
+	command := delistCommand("delist-spin", "BTC-USDT-SWAP")
+	command.Exchange = "BINANCE"
 
-	_, err := service.FlattenLogicalAccount(context.Background(), delistCommand("delist-spin", "BTC-USDT-SWAP"))
+	_, err := service.FlattenLogicalAccount(context.Background(), command)
 	require.NoError(t, err)
 
 	// 第一笔和第二笔下单之间的同步次数：等间隔的 400 毫秒里不能同步（空转的话每 10 毫秒一轮、两次同步，上百次）。
@@ -474,4 +477,49 @@ func TestDelistFlattenRetryDeadlineStartsAtTheRoundNotTheActionCreation(t *testi
 	result, err = service.FlattenLogicalAccount(context.Background(), command)
 	require.NoError(t, err)
 	require.Equal(t, "PARTIAL", result.Action.Status)
+}
+
+// 等间隔的睡眠期间解除禁止：睡醒后先查名单，不能再下一笔 IOC（多卖的一笔随后又会被执行器买回来）。
+func TestDelistFlattenDoesNotPlaceAfterTheUnblockDuringTheIntervalSleep(t *testing.T) {
+	fixture := newMixedFlattenFixture(t)
+	fixture.block(t, "SWAP", "BTCUSDT")
+	service := fixture.service()
+	service.FlattenMaxAttempts = 1000
+	service.FlattenRetryInterval = 10 * time.Millisecond
+	service.DelistAttemptInterval = 800 * time.Millisecond
+	command := delistCommand("delist-sleep-unblock", "BTC-USDT-SWAP")
+	command.Exchange = "BINANCE"
+	go func() {
+		time.Sleep(300 * time.Millisecond) // 第一笔之后、正在睡
+		_, _ = fixture.store.UnblockInstrument(context.Background(), "BINANCE", "SWAP", "BTCUSDT")
+	}()
+
+	result, err := service.FlattenLogicalAccount(context.Background(), command)
+
+	require.NoError(t, err)
+	require.Len(t, fixture.orders.specs, 1, "解除禁止之后不再下单")
+	require.Equal(t, "COMPLETED", result.Action.Status)
+	require.True(t, result.Unblocked)
+}
+
+// 睡醒后离本账户期限不够再发一单（轮间等待加发单余量）：不睡了，这一轮干净地结束，不空转到期限、不写错误。
+func TestDelistFlattenEndsTheRoundWhenTheWakeUpLeavesNoRoomToPlace(t *testing.T) {
+	fixture := newMixedFlattenFixture(t)
+	fixture.block(t, "SWAP", "BTCUSDT")
+	service := fixture.service()
+	service.FlattenMaxAttempts = 1000
+	service.FlattenRetryInterval = 10 * time.Millisecond
+	service.FlattenTimeout = 1500 * time.Millisecond
+	service.DelistAttemptInterval = 800 * time.Millisecond
+	command := delistCommand("delist-no-room", "BTC-USDT-SWAP")
+	command.Exchange = "BINANCE"
+
+	started := time.Now()
+	result, err := service.FlattenLogicalAccount(context.Background(), command)
+
+	require.NoError(t, err)
+	require.Less(t, time.Since(started), 700*time.Millisecond, "没有睡到间隔结束，也没有空转到期限")
+	require.Len(t, fixture.orders.specs, 1)
+	require.Equal(t, "RUNNING", result.Action.Status, "下一次调用接着来")
+	require.Empty(t, result.Action.LastError)
 }

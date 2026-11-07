@@ -589,3 +589,28 @@ func TestOKXAccountIsNotMonitoredAndWarnsOnce(t *testing.T) {
 		require.Contains(t, key, "account-1")
 	}
 }
+
+// “减仓待执行”期间保证金率又回到安全线：减仓不会再做，原因改成“没有减仓、等待确认后恢复”，不能一直写待执行；
+// 之后比值再跌破阈值，照样补上减仓。
+func TestPendingReasonBecomesUnreducedOnceTheRatioIsSafe(t *testing.T) {
+	f := newFixture(t, "", "400")
+	f.busy = true
+	f.run()
+	require.Equal(t, store.MarginPausePendingReason(), f.logical().PauseReason)
+
+	// 比值回到安全线（阈值调低到 0.3，读数 0.4）。
+	require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_logical_accounts SET c_fund_settings_json = '{"margin_ratio_threshold":"0.3"}'`).Error)
+	f.busy = false
+	f.run()
+	require.Empty(t, f.reduces)
+	require.Equal(t, store.MarginPauseUnreducedReason(), f.logical().PauseReason)
+	require.True(t, store.IsMarginPauseReason(f.logical().PauseReason), "仍是保证金风控暂停，关注项照报")
+	require.False(t, store.IsMarginPausePending(f.logical().PauseReason))
+	f.run()
+	require.Empty(t, f.reduces, "原因改过之后不再重复处理")
+
+	// 比值又跌破阈值：没有对应的风控减仓，照样补上。
+	require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_logical_accounts SET c_fund_settings_json = '{}'`).Error)
+	f.run()
+	require.Len(t, f.reduces, 1)
+}

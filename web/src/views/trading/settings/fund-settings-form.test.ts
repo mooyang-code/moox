@@ -267,7 +267,7 @@ describe("fund settings form", () => {
       expect(marginMonitorHiddenNote({ testnet: true, hasBinanceLive: true })).toContain("只对生产环境的币安实盘组合生效");
       expect(marginMonitorHiddenNote({ testnet: true, hasBinanceLive: false })).toContain("只对生产环境");
       expect(marginMonitorHiddenNote({ nonBinance: true, hasBinanceLive: false })).toContain(
-        "没有币安生产实盘成员，保证金率监控不生效"
+        "没有会被监控的币安账户（生产实盘、已启用、开通了永续），保证金率监控不生效"
       );
       expect(marginMonitorMixedNote({ nonBinance: true, hasBinanceLive: true })).toContain("对整组减仓（含 OKX 成员）");
       expect(marginMonitorMixedNote({ hasBinanceLive: true })).toBe("");

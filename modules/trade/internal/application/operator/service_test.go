@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -798,7 +799,7 @@ func (s *operatorOrderStub) Place(
 	record := store.OrderRecord{
 		SpaceID: spaceID, OrderID: id,
 		TradingAccountID: spec.TradingAccountID,
-		ClientOrderID:    spec.ClientOrderID, ExchangeSymbol: spec.InstrumentID,
+		ClientOrderID:    spec.ClientOrderID, ExchangeSymbol: stubExchangeSymbol(spec.InstrumentID),
 		MarketType: string(exchange.MarketOfInstrumentID(spec.InstrumentID)), InstrumentID: spec.InstrumentID,
 		OrderType: string(spec.Type), TimeInForce: string(spec.FillPolicy),
 		Side: string(spec.Side), PositionSide: string(spec.PositionSide),
@@ -954,4 +955,10 @@ func traceIndex(trace []string, expected string) int {
 		}
 	}
 	return -1
+}
+
+// stubExchangeSymbol 把内部标的 ID（BTC-USDT-SWAP）还原成测试夹具里的交易所代码（BTCUSDT），订单按（市场、代码）才查得到。
+func stubExchangeSymbol(instrumentID string) string {
+	symbol := strings.TrimSuffix(strings.TrimSuffix(instrumentID, "-SWAP"), "-SPOT")
+	return strings.ReplaceAll(symbol, "-", "")
 }

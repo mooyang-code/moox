@@ -145,7 +145,7 @@ const props = defineProps<{
   nonBinance?: boolean;
   /** 测试网组合（不监控保证金率）。父组件按交易账户的环境传入 */
   testnet?: boolean;
-  /** 组合里有币安生产实盘成员（后端只要有就监控保证金率）。父组件要把停用成员也算上；不传按有处理 */
+  /** 组合里有会被监控的币安账户：启用的成员、账户已启用、生产实盘、开通了永续（停用成员、只开现货的账户不算）；不传按有处理 */
   hasBinanceLive?: boolean;
   /** 组合的结算币，默认 USDT：稳定币保证金必须含它，保证金币和底仓不能写它 */
   settlementAsset?: string;

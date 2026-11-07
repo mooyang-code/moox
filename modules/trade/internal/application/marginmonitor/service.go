@@ -303,6 +303,7 @@ func (s *Service) RunLogicalAccount(ctx context.Context, logical store.LogicalAc
 		return nil
 	}
 	var triggered []Reading
+	safe := false // 有账户读出了数、且没跌破阈值
 	for _, account := range accounts {
 		if !Applies(account) {
 			continue
@@ -321,9 +322,15 @@ func (s *Service) RunLogicalAccount(ctx context.Context, logical store.LogicalAc
 		}
 		if ok && reading.Triggered {
 			triggered = append(triggered, reading)
+		} else if ok {
+			safe = true
 		}
 	}
 	if len(triggered) == 0 {
+		// “减仓待执行”期间保证金率又回到了安全线：减仓不会再做，原因不能一直写“待执行”，改成“没有减仓、等待确认后恢复”。
+		if safe && store.IsMarginPausePending(logical.PauseReason) && s.Pause != nil {
+			return s.Pause(ctx, logical.SpaceID, logical.LogicalAccountID, store.MarginPauseUnreducedReason())
+		}
 		return nil
 	}
 	return s.trigger(ctx, logical, settings, triggered)
@@ -377,8 +384,8 @@ func (s *Service) trigger(ctx context.Context, logical store.LogicalAccountRecor
 // 只处理由保证金风控暂停的组合的最近一次风控减仓；减仓还在跑就等，已处理过的记在进程内（重启后会再调一次，归集实现是幂等的）。
 // 归集的账户有一个没就绪就先不记完成，下一轮再来。
 func (s *Service) collectAfterReduce(ctx context.Context, logical store.LogicalAccountRecord, accounts []store.TradingAccountRecord) error {
-	// 只跟随“已发起减仓”的风控暂停；减仓还没排进去（待执行）时没有要归集的。
-	if !store.IsMarginPauseReason(logical.PauseReason) || store.IsMarginPausePending(logical.PauseReason) {
+	// 只跟随“已发起减仓”的风控暂停；减仓待执行、或待执行期间回到安全线而没有减仓时，没有要归集的。
+	if logical.PauseReason != store.MarginPauseReason() {
 		return nil
 	}
 	action, err := s.lastMarginAction(ctx, logical)
