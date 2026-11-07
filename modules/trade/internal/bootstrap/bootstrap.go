@@ -2,7 +2,6 @@ package bootstrap
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"gorm.io/gorm"
@@ -98,6 +97,7 @@ func initialize(
 	accounts := &accountapp.Service{
 		Store: accountapp.Repository{Store: tradeStore}, Secrets: secrets,
 		SessionState: manager, SymbolConfigs: manager, Exchanges: registry, LiveTradingEnabled: cfg.Runtime.LiveTradingEnabled,
+		Inspector: registry,
 	}
 	orderService := &orderapp.Service{
 		Store: tradeStore, Adapters: manager, SymbolConfig: manager, RequestSync: manager.RequestSync,
@@ -197,6 +197,7 @@ func initialize(
 		Store: tradeStore, Syncer: accountSyncer{service: syncService},
 		Prices: targetapp.ExchangePriceSource{Adapters: manager},
 	}
+	inspectionWorker := &traderuntime.InspectionWorker{Store: tradeStore, Accounts: accounts, Logical: logicalAccounts}
 	operatorService := &operatorapp.Service{
 		Exchanges: registry,
 		Store:     tradeStore, Orders: orderService,
@@ -225,6 +226,7 @@ func initialize(
 			Exchange:         exchange.Exchange(record.Exchange),
 			Markets:          marketTypes(record.Markets),
 			ExecutionMode:    exchange.ExecutionMode(record.ExecutionMode),
+			AccountMode:      exchange.AccountMode(record.AccountMode),
 			Environment:      exchange.AccountEnvironment(record.Environment),
 			SettlementAsset:  record.SettlementAsset,
 			MarginMode:       exchange.MarginMode(record.MarginMode),
@@ -301,6 +303,7 @@ func initialize(
 	runWorker(operatorWorker.Run)
 	runWorker(paperMatcherWorker.Run)
 	runWorker(equitySampler.Run)
+	runWorker(inspectionWorker.Run)
 	runWorker((&traderuntime.AttentionWorker{Store: tradeStore, Executor: targetExecutor}).Run)
 	if eventBus != nil {
 		client := eventBus
@@ -316,7 +319,7 @@ func initialize(
 	}
 	rpc.RegisterAll(
 		serverInstance,
-		&rpc.AccountServer{Accounts: accounts, Sync: syncService, Store: tradeStore},
+		&rpc.AccountServer{Accounts: accounts, Sync: syncService, Store: tradeStore, AfterInspection: inspectionWorker.Handle},
 		&rpc.LogicalAccountServer{
 			LogicalAccounts: logicalAccounts,
 			Store:           tradeStore,
@@ -446,23 +449,27 @@ func initialize(
 
 // registerBuiltins 是唯一的场所注册列表，新增场所时在这里加一行。
 func registerBuiltins(registry *execution.Registry) {
-	cryptoExchange := func(name exchange.Exchange) execution.ExchangeDescriptor {
+	cryptoExchange := func(name exchange.Exchange, inspect exchange.Inspector) execution.ExchangeDescriptor {
 		return execution.ExchangeDescriptor{
 			Exchange:     name,
 			OrderTypes:   []exchange.OrderType{exchange.OrderTypeMarket, exchange.OrderTypeLimit},
 			FillPolicies: []exchange.FillPolicy{exchange.FillPolicyGTC, exchange.FillPolicyIOC, exchange.FillPolicyFOK},
+			Inspect:      inspect,
 		}
 	}
-	registry.Register(cryptoExchange(exchange.ExchangeBinance), func(
+	registry.Register(cryptoExchange(exchange.ExchangeBinance, binance.Inspect), func(
 		config exchange.AccountConfig,
 		credential exchange.Credential,
 	) (execution.ExecutionAdapter, error) {
 		if err := requireAPIKey(config, credential); err != nil {
 			return nil, err
 		}
+		if err := requireInspectedMode(config); err != nil {
+			return nil, err
+		}
 		return binance.New(config, credential), nil
 	})
-	okxExchange := cryptoExchange(exchange.ExchangeOKX)
+	okxExchange := cryptoExchange(exchange.ExchangeOKX, okx.Inspect)
 	registry.Register(okxExchange, func(
 		config exchange.AccountConfig,
 		credential exchange.Credential,
@@ -487,6 +494,17 @@ func requireAPIKey(config exchange.AccountConfig, credential exchange.Credential
 	return nil
 }
 
+// requireInspectedMode：币安生产环境的实盘账户必须先检测出账户类型（统一账户和普通账户的接口完全不同），不能按默认值猜。
+// 测试网跳过检测，一律按普通账户。
+func requireInspectedMode(config exchange.AccountConfig) error {
+	if config.ExecutionMode == exchange.ExecutionModeLive &&
+		config.Environment == exchange.AccountEnvironmentProduction &&
+		config.AccountMode == exchange.AccountModeUnspecified {
+		return errors.New("账户类型还没有检测出来：请先在管理台对这个账户“重新检测”")
+	}
+	return nil
+}
+
 func exchangeCredential(
 	ctx context.Context,
 	secrets accountapp.SecretSource,
@@ -506,19 +524,7 @@ func exchangeCredential(
 			secretID,
 		)
 	}
-	extra := map[string]string{}
-	if strings.TrimSpace(value.ExtraConfig) != "" {
-		if err := json.Unmarshal([]byte(value.ExtraConfig), &extra); err != nil {
-			return exchange.Credential{}, fmt.Errorf(
-				"trade bootstrap: decode credential extra config: %w",
-				err,
-			)
-		}
-	}
-	return exchange.Credential{
-		APIKey: value.KeyID, APISecret: value.SecretValue,
-		Passphrase: extra["passphrase"], Extra: extra,
-	}, nil
+	return accountapp.CredentialFromSecret(value)
 }
 
 type accountSyncer struct {

@@ -195,7 +195,23 @@ func (a Account) ExecutionEligibility() error {
 	if a.Status != exchange.AccountStatusEnabled || !a.Ready {
 		return ErrAccountNotExecutable
 	}
+	if blockers := a.InspectionBlockers(); len(blockers) != 0 {
+		return fmt.Errorf("%w：%s", ErrAccountNotExecutable, blockers[0].Message)
+	}
 	return nil
+}
+
+// InspectionBlockers 返回最近一次检测里按账户已开通市场算出的阻断项：有任何一项，账户都不能下单。
+// 还没有检测过的账户（模拟盘、股票，或检测前的实盘账户）没有阻断项；检测结果解析失败时不阻断，由复查重新写入。
+func (a Account) InspectionBlockers() []exchange.InspectionFinding {
+	if a.ExecutionMode != exchange.ExecutionModeLive {
+		return nil
+	}
+	inspection, err := exchange.ParseInspection(a.InspectionJSON)
+	if err != nil {
+		return nil
+	}
+	return inspection.BlockersFor(a.Markets)
 }
 
 func (a Account) MarketDataEnvironment() exchange.AccountEnvironment {

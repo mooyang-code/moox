@@ -1,0 +1,19 @@
+{
+  "clientOrderId": "testOrder",
+  "cumQty": "0",
+  "executedQty": "0",
+  "orderId": 22542179,
+  "origQty": "10",
+  "price": "0",
+  "reduceOnly": false,
+  "side": "BUY",
+  "positionSide": "SHORT",
+  "status": "NEW",
+  "symbol": "BTCUSDT",
+  "timeInForce": "GTD",
+  "type": "MARKET",
+  "selfTradePreventionMode": "EXPIRE_MAKER",
+  "goodTillDate": 1693207680000,
+  "updateTime": 1566818724722,
+  "priceMatch": "NONE"
+}

@@ -107,6 +107,29 @@ func TestRegisterBuiltinsBindsSupportedExchanges(t *testing.T) {
 	}
 }
 
+func TestBinanceLiveProductionRequiresInspectedAccountMode(t *testing.T) {
+	registry := execution.NewRegistry()
+	registerBuiltins(registry)
+	config := exchange.AccountConfig{
+		TradingAccountID: "account-1", Exchange: exchange.ExchangeBinance,
+		Markets:       []exchange.MarketType{exchange.MarketTypeSpot},
+		ExecutionMode: exchange.ExecutionModeLive, Environment: exchange.AccountEnvironmentProduction, SettlementAsset: "USDT",
+	}
+	credential := exchange.Credential{APIKey: "key", APISecret: "secret"}
+	_, err := registry.Bind(config, credential)
+	require.ErrorContains(t, err, "账户类型还没有检测出来", "生产环境的实盘账户不能按默认值猜账户类型")
+
+	config.AccountMode = exchange.AccountModeBinanceStandard
+	_, err = registry.Bind(config, credential)
+	require.NoError(t, err)
+
+	// 测试网跳过检测，没有账户类型也能绑定。
+	testnet := config
+	testnet.AccountMode, testnet.Environment = exchange.AccountModeUnspecified, exchange.AccountEnvironmentTestnet
+	_, err = registry.Bind(testnet, credential)
+	require.NoError(t, err)
+}
+
 type bootstrapSecretSource struct {
 	secret   accountapp.ExchangeSecret
 	err      error

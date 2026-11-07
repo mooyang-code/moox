@@ -450,6 +450,7 @@
 | `trade account show` | 查看交易账户 |
 | `trade action` | 查看一次操作的执行结果 |
 | `trade capabilities` | 查看交易账户的执行能力 |
+| `trade inspect-credential` | 检测一把交易所密钥的账户类型和权限（只读，不落库，不下单）；`--markets` 指定要开通的市场 |
 | `trade instruments` | 列出交易账户可下单的标的 |
 | `trade equity` | 查询权益曲线 |
 | `trade fills` | 列出成交 |

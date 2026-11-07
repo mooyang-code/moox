@@ -79,6 +79,14 @@ func (w *AttentionWorker) Scan(ctx context.Context) error {
 	for _, account := range accounts {
 		spaces[account.SpaceID] = struct{}{}
 		names[account.TradingAccountID] = account.Name
+		if blocked, failing := InspectionAttention(account); blocked != "" || failing != "" {
+			if blocked != "" {
+				items[telemetry.AttentionInspectionBlocked] = append(items[telemetry.AttentionInspectionBlocked], blocked)
+			}
+			if failing != "" {
+				items[telemetry.AttentionInspectionFailing] = append(items[telemetry.AttentionInspectionFailing], failing)
+			}
+		}
 		if account.Status != string(exchange.AccountStatusEnabled) || account.Ready {
 			continue
 		}

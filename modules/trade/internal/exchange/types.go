@@ -279,8 +279,10 @@ type AccountConfig struct {
 	Exchange         Exchange
 	// Markets 是账户已开通的市场。同时开通多个市场时，注册表为每个市场各绑一个单市场适配器，
 	// 交给 execution.MultiMarket 按标的所属市场路由；单市场适配器拿到的配置里只有一个市场。
-	Markets         []MarketType
-	ExecutionMode   ExecutionMode
+	Markets       []MarketType
+	ExecutionMode ExecutionMode
+	// AccountMode 是检测出来的账户类型（币安统一账户或普通账户、OKX 统一账户）；模拟盘为空。
+	AccountMode     AccountMode
 	Environment     AccountEnvironment
 	SettlementAsset string
 	MarginMode      MarginMode

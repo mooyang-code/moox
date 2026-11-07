@@ -115,6 +115,7 @@ var consoleOnly = map[string]string{
 	"trpc.moox.trade.TradeConsoleService/UpdateTradingAccount":       tradeWriteReason,
 	"trpc.moox.trade.TradeConsoleService/SetLeverage":                tradeWriteReason,
 	"trpc.moox.trade.TradeConsoleService/SyncTradingAccount":         tradeWriteReason,
+	"trpc.moox.trade.TradeConsoleService/ReinspectTradingAccount":    tradeWriteReason,
 	"trpc.moox.trade.TradeConsoleService/CreateLogicalAccount":       tradeWriteReason,
 	"trpc.moox.trade.TradeConsoleService/UpdateLogicalAccount":       tradeWriteReason,
 	"trpc.moox.trade.TradeConsoleService/AddLogicalAccountMember":    tradeWriteReason,

@@ -308,6 +308,66 @@ message UpdateTradingAccountRsp {
   TradingAccount account = 2;
 }
 
+// 交易所密钥检测发现的一条问题（阻断项或提醒）。code 取值见 exchange.Finding* 常量。
+message InspectionFinding {
+  string code = 1;
+  string message = 2;
+}
+
+// 一次交易所密钥检测的结果。
+message ExchangeInspection {
+  // 账户类型：BINANCE_PORTFOLIO_MARGIN、BINANCE_STANDARD、OKX_UNIFIED。
+  string account_mode = 1;
+  // 测试网跳过了权限与类型检测。
+  bool skipped = 2;
+  bool can_withdraw = 3;
+  bool can_trade_spot = 4;
+  bool can_trade_swap = 5;
+  // 币安万向划转权限。
+  bool universal_transfer = 6;
+  bool ip_restricted = 7;
+  // 交易所原样返回的权限描述（OKX 的 perm 和绑定 IP）。
+  string raw_permissions = 8;
+  string okx_acct_lv = 9;
+  // ONE_WAY、HEDGE；读不到为空。
+  string position_mode = 10;
+  bool multi_assets_margin = 11;
+  // 这把密钥当前能开通的市场。
+  repeated MarketType available_markets = 12;
+  repeated InspectionFinding blockers = 13;
+  repeated InspectionFinding warnings = 14;
+  // 检测时间，毫秒。
+  int64 inspected_at = 15;
+  // 复查连续失败次数（传输错误不下结论，保留上次结果）。
+  int32 consecutive_failures = 16;
+  string last_failure = 17;
+}
+
+// 只读检测一把交易所密钥，不落库：录入密钥和建账户前预览。
+message InspectExchangeCredentialReq {
+  Exchange exchange = 1;
+  AccountEnvironment environment = 2;
+  string credential_secret_id = 3;
+  // 要开通的市场；不传时按这把密钥能开通的全部市场判断阻断项。
+  repeated MarketType markets = 4;
+}
+message InspectExchangeCredentialRsp {
+  common.RetInfo ret_info = 1;
+  ExchangeInspection inspection = 2;
+}
+
+// 对已有账户重新检测，结果写回账户类型和检测结果。
+message ReinspectTradingAccountReq {
+  string trading_account_id = 1;
+}
+message ReinspectTradingAccountRsp {
+  common.RetInfo ret_info = 1;
+  ExchangeInspection inspection = 2;
+  TradingAccount account = 3;
+  // 账户类型相比上次变了。
+  bool mode_changed = 4;
+}
+
 message GetTradingAccountReq {
   string trading_account_id = 1;
 }
@@ -731,6 +791,8 @@ service TradeConsoleService {
   rpc ListTradingAccounts(ListTradingAccountsReq) returns (ListTradingAccountsRsp);
   rpc SetLeverage(SetLeverageReq) returns (SetLeverageRsp);
   rpc SyncTradingAccount(SyncTradingAccountReq) returns (SyncTradingAccountRsp);
+  rpc InspectExchangeCredential(InspectExchangeCredentialReq) returns (InspectExchangeCredentialRsp);
+  rpc ReinspectTradingAccount(ReinspectTradingAccountReq) returns (ReinspectTradingAccountRsp);
   rpc CreateLogicalAccount(CreateLogicalAccountReq) returns (CreateLogicalAccountRsp);
   rpc GetLogicalAccount(GetLogicalAccountReq) returns (GetLogicalAccountRsp);
   rpc ListLogicalAccounts(ListLogicalAccountsReq) returns (ListLogicalAccountsRsp);

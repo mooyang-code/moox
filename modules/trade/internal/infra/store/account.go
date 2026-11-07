@@ -486,6 +486,24 @@ func (tx *Tx) UpdateTradingAccountConfiguration(
 	return requireUpdated(result.Error, result.RowsAffected, "Exchange account configuration")
 }
 
+// setTradingAccountInspectionSQL 写入检测出的账户类型和检测结果；账户类型变了就把就绪置为否，让会话重建后重新同步。
+const setTradingAccountInspectionSQL = `
+	UPDATE t_trading_accounts
+	SET c_account_mode = ?, c_inspection_json = ?,
+		c_ready = CASE WHEN c_account_mode <> ? THEN 0 ELSE c_ready END,
+		c_mtime = CURRENT_TIMESTAMP
+	WHERE c_space_id = ? AND c_trading_account_id = ?
+`
+
+// SetTradingAccountInspection 写入最近一次检测的结果。
+func (tx *Tx) SetTradingAccountInspection(spaceID, tradingAccountID, accountMode, inspectionJSON string) error {
+	if blank(spaceID) || blank(tradingAccountID) || blank(inspectionJSON) {
+		return fmt.Errorf("%w: incomplete Exchange account inspection", ErrInvalidRecord)
+	}
+	result := tx.db.Exec(setTradingAccountInspectionSQL, accountMode, inspectionJSON, accountMode, spaceID, tradingAccountID)
+	return requireUpdated(result.Error, result.RowsAffected, "Exchange account inspection")
+}
+
 func (tx *Tx) SetTradingAccountLeverage(
 	spaceID string,
 	tradingAccountID string,

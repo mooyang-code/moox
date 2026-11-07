@@ -415,3 +415,36 @@ export interface ListAccountLedgerReq {
   end_time?: string;
   limit?: number;
 }
+
+// 交易所密钥检测（InspectExchangeCredential、ReinspectTradingAccount）的返回。
+export interface InspectionFinding {
+  code: string;
+  message: string;
+}
+
+export interface ExchangeInspection {
+  account_mode?: string;
+  skipped?: boolean;
+  can_withdraw?: boolean;
+  can_trade_spot?: boolean;
+  can_trade_swap?: boolean;
+  universal_transfer?: boolean;
+  ip_restricted?: boolean;
+  raw_permissions?: string;
+  okx_acct_lv?: string;
+  position_mode?: string;
+  multi_assets_margin?: boolean;
+  available_markets?: MarketType[];
+  blockers?: InspectionFinding[];
+  warnings?: InspectionFinding[];
+  inspected_at?: number | string;
+  consecutive_failures?: number;
+  last_failure?: string;
+}
+
+export interface InspectExchangeCredentialReq {
+  exchange: Exchange;
+  environment: AccountEnvironment;
+  credential_secret_id: string;
+  markets?: MarketType[];
+}

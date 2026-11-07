@@ -58,6 +58,8 @@ func errorInfo(err error) *tradepb.RetInfo {
 		errors.Is(err, errLedgerUnavailable),
 		errors.Is(err, logicalapp.ErrNotReady),
 		errors.Is(err, accountapp.ErrInvalidCredential),
+		errors.Is(err, accountapp.ErrInspectionBlocked),
+		errors.Is(err, accountapp.ErrReadOnlyCredential),
 		errors.Is(err, orderdomain.ErrInvalidOrder),
 		errors.Is(err, orderdomain.ErrInvalidSpec),
 		errors.Is(err, orderapp.ErrAccountOwnership),

@@ -25,6 +25,8 @@ type AccountServer struct {
 	Sync     *accountsync.Service
 	Store    *store.Store
 	NewID    func() string
+	// AfterInspection 处理重新检测的结果（暂停组合、告警）；为空时只写回结果。
+	AfterInspection InspectionFollowUp
 }
 
 func (h *AccountServer) CreateTradingAccount(

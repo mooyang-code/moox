@@ -23,6 +23,10 @@ const (
 	AttentionTurnoverHigh = "turnover_high"
 	// AttentionUnknownResults 是 1 分钟内下单结果未知偏多。
 	AttentionUnknownResults = "unknown_results"
+	// AttentionInspectionBlocked 是交易账户的密钥检测发现阻断项（提现权限、疑似统一账户旧密钥等）。
+	AttentionInspectionBlocked = "inspection_blocked"
+	// AttentionInspectionFailing 是密钥复查连续多次没有检测成功。
+	AttentionInspectionFailing = "inspection_failing"
 )
 
 // attentionKinds 里每种情况都要上报，恢复后 Monitor 才能看到值回到 0。
@@ -30,6 +34,7 @@ var attentionKinds = []string{
 	AttentionTargetRejected, AttentionAutoPaused, AttentionTargetBlocked,
 	AttentionAccountNotReady, AttentionTargetExpired, AttentionTargetReversal,
 	AttentionRateLimited, AttentionTurnoverHigh, AttentionUnknownResults,
+	AttentionInspectionBlocked, AttentionInspectionFailing,
 }
 
 // maxAttentionDetail 是标签的字节上限：Monitor 超过 512 字节会拒收整份上报。

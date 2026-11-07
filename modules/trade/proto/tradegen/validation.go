@@ -86,6 +86,27 @@ func (r *SyncTradingAccountReq) Validate() error {
 	return nil
 }
 
+func (r *InspectExchangeCredentialReq) Validate() error {
+	if r == nil || !validExchange(r.Exchange) ||
+		(r.Environment != AccountEnvironment_ACCOUNT_ENVIRONMENT_TESTNET &&
+			r.Environment != AccountEnvironment_ACCOUNT_ENVIRONMENT_PRODUCTION) ||
+		strings.TrimSpace(r.CredentialSecretId) == "" {
+		return fmt.Errorf("exchange, environment and credential_secret_id are required")
+	}
+	// 市场可以不填（预览），填了就必须合法且不重复。
+	if len(r.Markets) != 0 && !validMarkets(r.Markets) {
+		return fmt.Errorf("markets are invalid")
+	}
+	return nil
+}
+
+func (r *ReinspectTradingAccountReq) Validate() error {
+	if r == nil || strings.TrimSpace(r.TradingAccountId) == "" {
+		return fmt.Errorf("trading_account_id is required")
+	}
+	return nil
+}
+
 func (r *CreatePaperSimulationReq) Validate() error {
 	if r == nil || strings.TrimSpace(r.AccountName) == "" ||
 		!validExchange(r.Exchange) || !validMarkets(r.Markets) || strings.TrimSpace(r.SettlementAsset) == "" {

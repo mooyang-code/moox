@@ -31,6 +31,10 @@ type TradeConsoleServiceService interface {
 
 	SyncTradingAccount(ctx context.Context, req *SyncTradingAccountReq) (*SyncTradingAccountRsp, error)
 
+	InspectExchangeCredential(ctx context.Context, req *InspectExchangeCredentialReq) (*InspectExchangeCredentialRsp, error)
+
+	ReinspectTradingAccount(ctx context.Context, req *ReinspectTradingAccountReq) (*ReinspectTradingAccountRsp, error)
+
 	CreateLogicalAccount(ctx context.Context, req *CreateLogicalAccountReq) (*CreateLogicalAccountRsp, error)
 
 	GetLogicalAccount(ctx context.Context, req *GetLogicalAccountReq) (*GetLogicalAccountRsp, error)
@@ -188,6 +192,42 @@ func TradeConsoleServiceService_SyncTradingAccount_Handler(svr interface{}, ctx 
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(TradeConsoleServiceService).SyncTradingAccount(ctx, reqbody.(*SyncTradingAccountReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func TradeConsoleServiceService_InspectExchangeCredential_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &InspectExchangeCredentialReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(TradeConsoleServiceService).InspectExchangeCredential(ctx, reqbody.(*InspectExchangeCredentialReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func TradeConsoleServiceService_ReinspectTradingAccount_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ReinspectTradingAccountReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(TradeConsoleServiceService).ReinspectTradingAccount(ctx, reqbody.(*ReinspectTradingAccountReq))
 	}
 
 	var rsp interface{}
@@ -750,6 +790,14 @@ var TradeConsoleServiceServer_ServiceDesc = server.ServiceDesc{
 			Func: TradeConsoleServiceService_SyncTradingAccount_Handler,
 		},
 		{
+			Name: "/trpc.moox.trade.TradeConsoleService/InspectExchangeCredential",
+			Func: TradeConsoleServiceService_InspectExchangeCredential_Handler,
+		},
+		{
+			Name: "/trpc.moox.trade.TradeConsoleService/ReinspectTradingAccount",
+			Func: TradeConsoleServiceService_ReinspectTradingAccount_Handler,
+		},
+		{
 			Name: "/trpc.moox.trade.TradeConsoleService/CreateLogicalAccount",
 			Func: TradeConsoleServiceService_CreateLogicalAccount_Handler,
 		},
@@ -897,6 +945,12 @@ func (s *UnimplementedTradeConsoleService) SetLeverage(ctx context.Context, req 
 func (s *UnimplementedTradeConsoleService) SyncTradingAccount(ctx context.Context, req *SyncTradingAccountReq) (*SyncTradingAccountRsp, error) {
 	return nil, errors.New("rpc SyncTradingAccount of service TradeConsoleService is not implemented")
 }
+func (s *UnimplementedTradeConsoleService) InspectExchangeCredential(ctx context.Context, req *InspectExchangeCredentialReq) (*InspectExchangeCredentialRsp, error) {
+	return nil, errors.New("rpc InspectExchangeCredential of service TradeConsoleService is not implemented")
+}
+func (s *UnimplementedTradeConsoleService) ReinspectTradingAccount(ctx context.Context, req *ReinspectTradingAccountReq) (*ReinspectTradingAccountRsp, error) {
+	return nil, errors.New("rpc ReinspectTradingAccount of service TradeConsoleService is not implemented")
+}
 func (s *UnimplementedTradeConsoleService) CreateLogicalAccount(ctx context.Context, req *CreateLogicalAccountReq) (*CreateLogicalAccountRsp, error) {
 	return nil, errors.New("rpc CreateLogicalAccount of service TradeConsoleService is not implemented")
 }
@@ -1004,6 +1058,10 @@ type TradeConsoleServiceClientProxy interface {
 	SetLeverage(ctx context.Context, req *SetLeverageReq, opts ...client.Option) (rsp *SetLeverageRsp, err error)
 
 	SyncTradingAccount(ctx context.Context, req *SyncTradingAccountReq, opts ...client.Option) (rsp *SyncTradingAccountRsp, err error)
+
+	InspectExchangeCredential(ctx context.Context, req *InspectExchangeCredentialReq, opts ...client.Option) (rsp *InspectExchangeCredentialRsp, err error)
+
+	ReinspectTradingAccount(ctx context.Context, req *ReinspectTradingAccountReq, opts ...client.Option) (rsp *ReinspectTradingAccountRsp, err error)
 
 	CreateLogicalAccount(ctx context.Context, req *CreateLogicalAccountReq, opts ...client.Option) (rsp *CreateLogicalAccountRsp, err error)
 
@@ -1187,6 +1245,46 @@ func (c *TradeConsoleServiceClientProxyImpl) SyncTradingAccount(ctx context.Cont
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &SyncTradingAccountRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *TradeConsoleServiceClientProxyImpl) InspectExchangeCredential(ctx context.Context, req *InspectExchangeCredentialReq, opts ...client.Option) (*InspectExchangeCredentialRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.trade.TradeConsoleService/InspectExchangeCredential")
+	msg.WithCalleeServiceName(TradeConsoleServiceServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("trade")
+	msg.WithCalleeService("TradeConsoleService")
+	msg.WithCalleeMethod("InspectExchangeCredential")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &InspectExchangeCredentialRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *TradeConsoleServiceClientProxyImpl) ReinspectTradingAccount(ctx context.Context, req *ReinspectTradingAccountReq, opts ...client.Option) (*ReinspectTradingAccountRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.trade.TradeConsoleService/ReinspectTradingAccount")
+	msg.WithCalleeServiceName(TradeConsoleServiceServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("trade")
+	msg.WithCalleeService("TradeConsoleService")
+	msg.WithCalleeMethod("ReinspectTradingAccount")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ReinspectTradingAccountRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

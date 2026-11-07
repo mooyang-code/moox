@@ -1089,15 +1089,17 @@ func (b Builder) buildBusinessChecks(ctx context.Context, spaceID string) ([]Bus
 
 // TradeAttentionNames 是 Trade 上报的需要人看的情况。
 var TradeAttentionNames = map[string]string{
-	"target_rejected":   "交易目标被拒绝",
-	"auto_paused":       "组合账户自动暂停",
-	"target_blocked":    "交易目标持续阻塞",
-	"account_not_ready": "执行账户持续未就绪",
-	"target_expired":    "交易目标连续过期",
-	"target_reversal":   "同一目标内反向下单",
-	"rate_limited":      "交易所接口限流",
-	"turnover_high":     "组合账户成交额异常偏高",
-	"unknown_results":   "下单结果未知偏多",
+	"target_rejected":    "交易目标被拒绝",
+	"auto_paused":        "组合账户自动暂停",
+	"target_blocked":     "交易目标持续阻塞",
+	"account_not_ready":  "执行账户持续未就绪",
+	"target_expired":     "交易目标连续过期",
+	"target_reversal":    "同一目标内反向下单",
+	"rate_limited":       "交易所接口限流",
+	"turnover_high":      "组合账户成交额异常偏高",
+	"unknown_results":    "下单结果未知偏多",
+	"inspection_blocked": "交易账户密钥检测发现阻断项",
+	"inspection_failing": "交易账户密钥检测连续失败",
 }
 
 // EventCenterAttentionNames 是事件中心上报的需要人看的情况。

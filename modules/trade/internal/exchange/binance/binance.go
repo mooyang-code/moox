@@ -146,12 +146,17 @@ func (a *Adapter) path(spot, swap string) string {
 
 // signedQuery 返回签好名的原始查询串：签名追加在末尾，签名用的正是发送的这段字节。
 func (a *Adapter) signedQuery(values url.Values) string {
+	return signQuery(a.credential.APISecret, values)
+}
+
+// signQuery 给查询参数加上时间戳和接收窗口并签名；现货、合约、统一账户和检测共用。
+func signQuery(secret string, values url.Values) string {
 	query := cloneValues(values)
 	query.Set("timestamp", strconv.FormatInt(time.Now().UnixMilli(), 10))
 	query.Set("recvWindow", strconv.Itoa(recvWindow))
 	encoded := query.Encode()
 	return encoded + "&signature=" + hex.EncodeToString(hmacSha256(
-		[]byte(a.credential.APISecret),
+		[]byte(secret),
 		[]byte(encoded),
 	))
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
@@ -151,7 +152,7 @@ func TestCreateValidatesAggregateAndCredential(t *testing.T) {
 			}
 			store := newMemoryStore()
 			secrets := &fakeSecrets{secret: tt.secret}
-			service := Service{Store: store, Secrets: secrets}
+			service := Service{Store: store, Secrets: secrets, Inspector: okInspector}
 
 			_, err := service.Create(context.Background(), value)
 			if !errors.Is(err, tt.want) {
@@ -177,7 +178,7 @@ func TestCreateDoesNotAliasSameNameAcrossExecutionModes(t *testing.T) {
 	secrets := &fakeSecrets{
 		secret: validSecret(),
 	}
-	service := Service{Store: store, Secrets: secrets}
+	service := Service{Store: store, Secrets: secrets, Inspector: okInspector}
 
 	_, err := service.Create(context.Background(), live)
 	if !errors.Is(err, ErrAccountConflict) {
@@ -199,7 +200,7 @@ func TestCreateProductionAccountIsRejectedWhileLiveTradingIsDisabled(t *testing.
 	secrets := &fakeSecrets{
 		secret: validSecret(),
 	}
-	service := Service{Store: store, Secrets: secrets}
+	service := Service{Store: store, Secrets: secrets, Inspector: okInspector}
 
 	_, err := service.Create(context.Background(), value)
 	if !errors.Is(err, ErrLiveTradingDisabled) {
@@ -219,6 +220,7 @@ func TestCreateProductionAccountWhenLiveTradingIsEnabled(t *testing.T) {
 	value.ExecutionMode = exchange.ExecutionModeLive
 	value.Environment = exchange.AccountEnvironmentProduction
 	service := Service{
+		Inspector:          okInspector,
 		Store:              store,
 		Secrets:            &fakeSecrets{secret: validSecret()},
 		LiveTradingEnabled: true,
@@ -254,7 +256,7 @@ func TestUpdateChangesOnlyExplicitMutableFields(t *testing.T) {
 	before.Environment = exchange.AccountEnvironmentTestnet
 	before.Live = &tradingaccount.LiveConfig{Environment: exchange.AccountEnvironmentTestnet, CredentialSecretID: "secret-1"}
 	store.accounts[before.ID] = before
-	service := Service{Store: store, Secrets: &fakeSecrets{secret: validSecret()}}
+	service := Service{Store: store, Secrets: &fakeSecrets{secret: validSecret()}, Inspector: okInspector}
 	name := "renamed"
 
 	got, err := service.Update(context.Background(), UpdateCommand{
@@ -525,6 +527,16 @@ func (s *memoryStore) Update(_ context.Context, command UpdateCommand) error {
 	return nil
 }
 
+func (s *memoryStore) SetInspection(_ context.Context, id string, mode exchange.AccountMode, inspectionJSON string) error {
+	value, found := s.accounts[id]
+	if !found {
+		return ErrAccountNotFound
+	}
+	value.AccountMode, value.InspectionJSON = mode, inspectionJSON
+	s.accounts[id] = value
+	return nil
+}
+
 func (s *memoryStore) SetLeverage(
 	_ context.Context,
 	id string,
@@ -542,6 +554,36 @@ func (s *memoryStore) SetLeverage(
 	value.LeverageSettings[symbol] = leverage
 	s.accounts[id] = value
 	return nil
+}
+
+// okInspector 对任何密钥都检测通过：币安记为普通账户、OKX 记为统一账户，两个市场都能开通。
+var okInspector = &fakeInspector{}
+
+type fakeInspector struct {
+	// result 非空时返回它；err 非空时返回错误。
+	result *exchange.Inspection
+	err    error
+	calls  []exchange.InspectRequest
+}
+
+func (f *fakeInspector) Inspect(_ context.Context, name exchange.Exchange, request exchange.InspectRequest) (exchange.Inspection, error) {
+	f.calls = append(f.calls, request)
+	if f.err != nil {
+		return exchange.Inspection{}, f.err
+	}
+	if f.result != nil {
+		return *f.result, nil
+	}
+	mode := exchange.AccountModeBinanceStandard
+	if name == exchange.ExchangeOKX {
+		mode = exchange.AccountModeOKXUnified
+	}
+	return exchange.Inspection{
+		Exchange: name, Environment: request.Environment, AccountMode: mode,
+		CanTradeSpot: true, CanTradeSwap: true, UniversalTransfer: true,
+		AvailableMarkets: []exchange.MarketType{exchange.MarketTypeSpot, exchange.MarketTypeSwap},
+		InspectedAt:      time.Now().UTC(),
+	}, nil
 }
 
 type fakeSecrets struct {

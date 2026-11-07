@@ -7,10 +7,12 @@ import type {
   CreatePaperSimulationReq,
   CreateLogicalAccountReq,
   TradingAccount,
+  ExchangeInspection,
   ExecutionCapabilities,
   EquityPoint,
   Fill,
   Holding,
+  InspectExchangeCredentialReq,
   LedgerEntry,
   ListAccountLedgerReq,
   ListTradingAccountsReq,
@@ -77,6 +79,24 @@ export function syncTradingAccount(trading_account_id: string) {
       warnings: string[];
     }
   >("console", "SyncTradingAccount", { trading_account_id });
+}
+
+// 只读检测一把交易所密钥，不落库；检测没有完成（超时、限频）时返回业务错误，不代表密钥有问题。
+export function inspectExchangeCredential(req: InspectExchangeCredentialReq) {
+  return callTrade<InspectExchangeCredentialReq, { ret_info: RetInfo; inspection: ExchangeInspection }>(
+    "console",
+    "InspectExchangeCredential",
+    req,
+    { silent: true }
+  );
+}
+
+// 对已有账户重新检测，结果写回账户类型和检测结果。
+export function reinspectTradingAccount(trading_account_id: string) {
+  return callTrade<
+    { trading_account_id: string },
+    { ret_info: RetInfo; inspection: ExchangeInspection; account: TradingAccount; mode_changed: boolean }
+  >("console", "ReinspectTradingAccount", { trading_account_id }, { silent: true });
 }
 
 export function createPaperSimulation(req: CreatePaperSimulationReq) {

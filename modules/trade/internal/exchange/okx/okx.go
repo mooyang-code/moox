@@ -1178,7 +1178,8 @@ func classifyOKXCode(code, message string) error {
 	case "50011", "50040", "50061":
 		kind = exchange.ErrorOrderRateLimited
 	// 鉴权类：API 冻结、环境不符、请求头缺失或错误、签名错误（50014 是“参数不能为空”，不是鉴权）。
-	case "50100", "50101", "50103", "50104", "50105", "50106", "50111", "50112", "50113", "50114":
+	// 50110（IP 不在密钥的白名单里）未在官方文档里逐字核对，按鉴权类处理。
+	case "50100", "50101", "50103", "50104", "50105", "50106", "50110", "50111", "50112", "50113", "50114":
 		kind = exchange.ErrorAuthentication
 	case "51008":
 		kind = exchange.ErrorInsufficientBalance
