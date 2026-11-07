@@ -111,6 +111,9 @@ type ucWorld struct {
 	skipped map[string]bool
 	// history 是各市场在年龄探针窗口里有历史行的标的。
 	history map[string][]string
+	// extra 是只出现在方式 B 里的标的：它们在市场标签里是活跃成员，但因子没有期望这条序列（刚新上标签、universe_series 里还没有，
+	// 或已停更而标签没移除），所以既没有行也不在失败名单里；方式 A 的数据集里没有它们。
+	extra map[string][]string
 	// state 是上一期的引擎状态（持有的标的与目标）。
 	state engine.State
 }
@@ -209,10 +212,11 @@ func (w ucWorld) build(t *testing.T, unified bool) (*ucStorage, []string, map[st
 	switch {
 	case unified:
 		addView("ftask_uni", "ds_uni", "src_uni", "", map[string]string{"market_type": "multi"}, []string{"binance_spot", "binance_swap"})
-		all := union(w.members[dsl.MarketSpot], w.members[dsl.MarketSwap])
+		all := union(w.members[dsl.MarketSpot], w.members[dsl.MarketSwap], w.extra[dsl.MarketSpot], w.extra[dsl.MarketSwap])
 		// 数据集的绑定里每个标的只有一条；已下架的永续标的仍然绑定着（现货还在）。
 		client.subjects["ds_uni"] = ucSubjects(ucSpotTag, all, nil)
-		client.tags["binance_spot"], client.tags["binance_swap"] = w.members[dsl.MarketSpot], w.members[dsl.MarketSwap]
+		client.tags["binance_spot"] = union(w.members[dsl.MarketSpot], w.extra[dsl.MarketSpot])
+		client.tags["binance_swap"] = union(w.members[dsl.MarketSwap], w.extra[dsl.MarketSwap])
 		client.rows = func(query input.Query) []input.Row { return w.rowsFor(query, dsl.MarketSpot, dsl.MarketSwap) }
 		// 因子明细：按标的折叠的 failed_subjects 是各市场失败的并集（模拟因子的实际输出），按序列的字段才是真相。
 		var failedSeries []*factorpb.SeriesRef
@@ -582,7 +586,63 @@ func TestUnifiedMatchesDualTasksWhenSelectionMarketWhollyFailed(t *testing.T) {
 	world.failed["spot"] = world.members["spot"]
 	world.rows["spot"] = map[string]float64{}
 	decision, _ := requireSame(t, world)
-	if decision.Status != engine.StatusSkipped || decision.SkipReason != readiness.ReasonFactorSkipped {
-		t.Fatalf("选币市场整体失败应整期跳过：%+v", decision)
+	if decision.Status != engine.StatusSkipped || decision.SkipReason != input.SkipMarketFailed {
+		t.Fatalf("选币市场整体失败应整期按 market_failed 跳过：%+v", decision)
+	}
+}
+
+// 永续整体晚到、四个永续币全部失败，但永续标签里还有一个因子没有期望这条序列的币 Y（现货也有它）：方式 B 的永续基础集合里多出的
+// Y 既没有行也不在失败名单里，“每个币都失败”的判断只看有行或在失败名单里的标的，与方式 A 一致：持有的永续冻结，不卖成现货。
+func TestUnifiedMatchesDualTasksWhenSwapWhollyFailedWithUnexpectedSeries(t *testing.T) {
+	for _, mode := range []string{"{select: both, prefer: swap}", "{select: both, prefer: spot}", "{select: spot, prefer: swap}"} {
+		t.Run(mode, func(t *testing.T) {
+			world := ucBase(mode)
+			world.members["spot"] = []string{"A", "B", "C", "X", "Y"}
+			world.rows["spot"]["Y"] = 9
+			world.extra = map[string][]string{"swap": {"Y"}}
+			world.failed["swap"] = world.members["swap"]
+			world.rows["swap"] = map[string]float64{}
+			held, keys := []string{"D", "X"}, []string{"D|swap", "X|swap"}
+			if mode == "{select: spot, prefer: swap}" {
+				held, keys = []string{"X"}, []string{"X|swap"}
+			}
+			world.state = engine.State{Rules: map[string]engine.RuleState{"r": {Held: held}}, Targets: map[string]string{}}
+			for _, key := range keys {
+				world.state.Targets[key] = "0.5"
+			}
+			_, targets := requireSame(t, world)
+			for _, key := range keys {
+				if !strings.HasSuffix(targets[key], "(hold)") {
+					t.Fatalf("永续整体失败时持仓 %s 应冻结：%v", key, targets)
+				}
+			}
+		})
+	}
+}
+
+// 部分失败的边界：永续 4 个里 3 个失败，超过 max_missing（0.2）就按永续不可用处理（与单市场守门同口径）：多市场策略里持有的永续冻结，
+// 不会因为没持仓的币退回现货的行、缺数分母被摊薄而被卖出；纯永续（单市场）仍然是整期 too_many_missing。
+func TestUnifiedMatchesDualTasksWhenMostSwapSeriesFailed(t *testing.T) {
+	for _, mode := range []string{"{select: both, prefer: swap}", "{select: both, prefer: spot}"} {
+		t.Run(mode, func(t *testing.T) {
+			world := ucBase(mode)
+			world.dsl = strings.Replace(world.dsl, "max_missing: 1", "max_missing: 0.2", 1)
+			world.failed["swap"] = []string{"B", "C", "D"}
+			world.rows["swap"] = map[string]float64{"X": 8}
+			world.state = engine.State{Rules: map[string]engine.RuleState{"r": {Held: []string{"D", "X"}}}, Targets: map[string]string{"D|swap": "0.5", "X|swap": "0.5"}}
+			// 永续不可用后冻结的持仓仍计入缺数，比例超过 max_missing：整期 too_many_missing，持仓不动，不会卖出。
+			decision, _ := requireSame(t, world)
+			if decision.Status != engine.StatusSkipped || decision.SkipReason != engine.SkipTooManyMissing {
+				t.Fatalf("永续大面积失败时应整期跳过、持仓不动：%+v", decision)
+			}
+		})
+	}
+	single := ucBase("{select: swap, prefer: swap}")
+	single.dsl = strings.Replace(single.dsl, "max_missing: 1", "max_missing: 0.2", 1)
+	single.failed["swap"] = []string{"B", "C", "D"}
+	single.rows["swap"] = map[string]float64{"X": 8}
+	decision, _ := requireSame(t, single)
+	if decision.Status != engine.StatusSkipped || decision.SkipReason != engine.SkipTooManyMissing {
+		t.Fatalf("纯永续（单市场）大面积失败仍整期 too_many_missing：%+v", decision)
 	}
 }

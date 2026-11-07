@@ -67,6 +67,9 @@ func (e *SkipError) Error() string {
 const (
 	SkipConfigError     = "config_error"
 	SkipAmbiguousSeries = "ambiguous_series"
+	// SkipMarketFailed 表示多市场策略里选币市场、或所有市场本期整体失败（某个因子在市场里失败的标的占比超过 max_missing）：
+	// 没有可用的市场。属于数据类原因，不计实例故障；它不是“数据还在积累”，持续出现要走数据集新鲜度告警，不归入积累中。
+	SkipMarketFailed = "market_failed"
 	// SkipHistoryInsufficient 表示 View 当前覆盖的历史不足以判断 min_age_bars，不能把标的当作新上市剔除。
 	SkipHistoryInsufficient = "history_insufficient"
 )

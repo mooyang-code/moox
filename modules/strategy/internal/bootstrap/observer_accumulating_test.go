@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
+	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
@@ -104,4 +105,23 @@ func TestObserverTreatsTooManyMissingAsWarmupUntilFirstOk(t *testing.T) {
 	now = now.Add(warmupMinimum + time.Minute)
 	period()
 	require.EqualValues(t, 1, counterByLabel(t, registry, "moox_strategy_dataset_runs_total", "incomplete"), "超过上限还缺数要告警")
+}
+
+// 多市场策略所有市场（或选币市场）整体失败记 market_failed：数据类原因，不计模块失败，但不是“积累中”：
+// 数据集记 incomplete，持续出现走数据集新鲜度告警（不能像 factor_skipped 那样被当成积累期最多显示 72 小时）。
+func TestObserverDoesNotTreatMarketFailedAsAccumulating(t *testing.T) {
+	repo := openStore(t)
+	seedEnabled(t, repo, "i1", nil, resolvedJSON)
+	registry := prometheus.NewRegistry()
+	observer, err := newInstanceObserver(repo, registry, t.Logf)
+	require.NoError(t, err)
+	require.NoError(t, observer.refresh(context.Background()))
+	instance, err := repo.GetInstance(context.Background(), "i1")
+	require.NoError(t, err)
+	now := time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
+	observer.now = func() time.Time { return now }
+	observer.ObservePeriod(context.Background(), instance, "1h", now.Add(-time.Hour), now, store.StatusSkipped, input.SkipMarketFailed)
+	require.EqualValues(t, 1, counterByLabel(t, registry, "moox_strategy_dataset_runs_total", "incomplete"))
+	require.Zero(t, counterByLabel(t, registry, "moox_strategy_dataset_runs_total", "partial"), "不归入积累中")
+	require.Zero(t, counterByLabel(t, registry, "moox_strategy_runs_total", "error"), "数据类原因，不计模块失败")
 }
