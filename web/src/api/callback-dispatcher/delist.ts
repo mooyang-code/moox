@@ -84,7 +84,7 @@ export function buildHoldersRequest(input: {
   return {
     exchange: TRADE_EXCHANGE[input.exchange],
     market_type: TRADE_MARKET[input.market],
-    exchange_symbol: input.exchange_symbol.trim(),
+    exchange_symbol: input.exchange_symbol.trim().toUpperCase(),
     paper_only: input.paper_only
   };
 }

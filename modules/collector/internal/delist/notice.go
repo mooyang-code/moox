@@ -22,7 +22,7 @@ type Notice struct {
 	Exchange string
 	// Market 是 SPOT 或 SWAP。
 	Market string
-	// Symbol 是交易所代码，例如 FOOUSDT、FOO-USDT-SWAP。
+	// Symbol 是大写的交易所代码，例如 FOOUSDT、FOO-USDT-SWAP：下游（事件中心、Trade）按这个写法判断“同一个标的”。
 	Symbol   string
 	DelistAt time.Time
 	// Source 取 events.DelistSource* 之一。
@@ -33,14 +33,14 @@ type Notice struct {
 
 // Validate 检查通知的各个字段。
 func (n Notice) Validate() error {
-	if strings.TrimSpace(n.Exchange) == "" || n.Exchange != strings.ToLower(n.Exchange) || strings.ContainsAny(n.Exchange, ": ") {
-		return errors.New("交易所必须是小写代码，例如 binance、okx")
+	if n.Exchange != "binance" && n.Exchange != "okx" {
+		return errors.New("交易所只能是小写的 binance 或 okx")
 	}
 	if n.Market != events.DelistMarketSpot && n.Market != events.DelistMarketSwap {
 		return fmt.Errorf("市场只能是 %s 或 %s", events.DelistMarketSpot, events.DelistMarketSwap)
 	}
-	if strings.TrimSpace(n.Symbol) == "" || strings.TrimSpace(n.Symbol) != n.Symbol || strings.Contains(n.Symbol, ":") {
-		return errors.New("交易所代码不能为空，不能带空格或冒号")
+	if strings.TrimSpace(n.Symbol) == "" || strings.TrimSpace(n.Symbol) != n.Symbol || strings.Contains(n.Symbol, ":") || n.Symbol != strings.ToUpper(n.Symbol) {
+		return errors.New("交易所代码不能为空，必须是大写，不能带空格或冒号")
 	}
 	if n.DelistAt.IsZero() {
 		return errors.New("下架时间不能为空")

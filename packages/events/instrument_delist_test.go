@@ -39,11 +39,14 @@ func TestInstrumentDelistScheduledRoundTripAndValidation(t *testing.T) {
 	for name, mutate := range map[string]func(*storagepb.InstrumentDelistScheduled){
 		"subject mismatch": func(p *storagepb.InstrumentDelistScheduled) { p.ExchangeSymbol = "BARUSDT" },
 		"upper exchange":   func(p *storagepb.InstrumentDelistScheduled) { p.Exchange = "BINANCE" },
-		"bad market":       func(p *storagepb.InstrumentDelistScheduled) { p.Market = "FUTURES" },
-		"no delist time":   func(p *storagepb.InstrumentDelistScheduled) { p.DelistAt = nil },
-		"no first seen":    func(p *storagepb.InstrumentDelistScheduled) { p.FirstSeenAt = nil },
-		"bad source":       func(p *storagepb.InstrumentDelistScheduled) { p.Source = "OTHER" },
-		"bad scope":        func(p *storagepb.InstrumentDelistScheduled) { p.Scope = "" },
+		"lower symbol": func(p *storagepb.InstrumentDelistScheduled) {
+			p.ExchangeSymbol = "foousdt"
+		},
+		"bad market":     func(p *storagepb.InstrumentDelistScheduled) { p.Market = "FUTURES" },
+		"no delist time": func(p *storagepb.InstrumentDelistScheduled) { p.DelistAt = nil },
+		"no first seen":  func(p *storagepb.InstrumentDelistScheduled) { p.FirstSeenAt = nil },
+		"bad source":     func(p *storagepb.InstrumentDelistScheduled) { p.Source = "OTHER" },
+		"bad scope":      func(p *storagepb.InstrumentDelistScheduled) { p.Scope = "" },
 	} {
 		broken := proto.Clone(payload).(*storagepb.InstrumentDelistScheduled)
 		mutate(broken)

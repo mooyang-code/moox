@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -132,13 +133,16 @@ func (i *Intake) accept(ctx context.Context, entry catalog.Entry, message *event
 // acceptSystem 按（规则、标的、范围）合并或新建：同一标的同一范围已经有未结束的执行记录时只更新它的事件内容，不新建。
 // 范围（ALL / PAPER_ONLY）是合并键的一部分：演练用的“仅模拟盘”登记不能改写同一标的真实下架的事件内容和时间。
 func acceptSystem(tx *store.Tx, rule store.Rule, message *eventpb.EventMessage, payloadJSON string, now int64) error {
-	key := rule.RuleID + "|" + message.GetSubjectId() + "|" + scopeOf(payloadJSON)
+	subject := systemSubject(message, payloadJSON)
+	key := rule.RuleID + "|" + subject + "|" + scopeOf(payloadJSON)
 	existing, found, err := tx.FindUnfinishedByDedupe(key)
 	if err != nil {
 		return err
 	}
 	if !found {
-		return tx.InsertExecution(newExecution(rule, message, payloadJSON, key, now))
+		execution := newExecution(rule, message, payloadJSON, key, now)
+		execution.SubjectID = subject
+		return tx.InsertExecution(execution)
 	}
 	if sameSchedule(existing.PayloadJSON, payloadJSON) {
 		return nil
@@ -149,6 +153,21 @@ func acceptSystem(tx *store.Tx, rule store.Rule, message *eventpb.EventMessage, 
 		return nil
 	}
 	return tx.ReplaceExecutionEvent(existing.ExecutionID, message.GetEventId(), payloadJSON, occurredAt, now)
+}
+
+// systemSubject 是系统动作记录的标的名（交易所:市场:代码），合并键和记录的 c_subject_id 都用它：交易所小写，市场和代码大写。
+// 同一个币的不同写法（foousdt、FOOUSDT）必须落成同一个标的，否则合并键不同会建出两条记录，“同标的别的执行”的判断也会失效。
+// 内容里取不到时退回信封的 subject。
+func systemSubject(message *eventpb.EventMessage, payloadJSON string) string {
+	var payload struct {
+		Exchange       string `json:"exchange"`
+		Market         string `json:"market"`
+		ExchangeSymbol string `json:"exchange_symbol"`
+	}
+	if err := json.Unmarshal([]byte(payloadJSON), &payload); err != nil || payload.Exchange == "" || payload.Market == "" || payload.ExchangeSymbol == "" {
+		return message.GetSubjectId()
+	}
+	return strings.ToLower(strings.TrimSpace(payload.Exchange)) + ":" + strings.ToUpper(strings.TrimSpace(payload.Market)) + ":" + strings.ToUpper(strings.TrimSpace(payload.ExchangeSymbol))
 }
 
 // scopeOf 取下架事件内容里的范围。

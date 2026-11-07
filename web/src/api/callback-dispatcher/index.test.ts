@@ -157,6 +157,13 @@ describe("手工登记下架的外部接口", () => {
     });
   });
 
+  it("交易所代码统一成大写：预览和登记都按同一个写法", () => {
+    expect(
+      buildHoldersRequest({ exchange: "binance", market: "SPOT", exchange_symbol: " foousdt ", paper_only: false })
+        .exchange_symbol
+    ).toBe("FOOUSDT");
+  });
+
   it("预览持有者：静默调用，缺省字段补默认值", async () => {
     mocks.callTrade.mockResolvedValue({
       ret_info: { code: 0 },

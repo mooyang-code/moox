@@ -301,3 +301,24 @@ func TestStoreFailureIsRetriedNotLost(t *testing.T) {
 	require.Equal(t, RetryLater, handle(ctx, intake, delistDelivery(t, "binance", events.DelistMarketSpot, "FOOUSDT", baseTime.Add(time.Hour))))
 	require.Positive(t, RetryDelay)
 }
+
+// 同一个币的不同写法落成同一个标的：subject 与合并键统一后，大小写不同的事件合并成一条记录，c_subject_id 是统一后的写法。
+func TestSystemActionNormalizesSymbolCase(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	intake := newIntake(t, s)
+	require.NoError(t, s.CreateRule(ctx, systemRule()))
+	entry := mustEntry(t)
+	first := messageFor(t)
+	first.EventId, first.SubjectId = "event-lower", "binance:SPOT:foousdt"
+	require.NoError(t, intake.accept(ctx, entry, first, `{"exchange":"binance","market":"SPOT","exchange_symbol":"foousdt","delist_at":"2026-11-11T08:00:00Z","scope":"ALL"}`))
+	second := messageFor(t)
+	second.EventId = "event-upper"
+	require.NoError(t, intake.accept(ctx, entry, second, `{"exchange":"binance","market":"SPOT","exchange_symbol":"FOOUSDT","delist_at":"2026-11-12T08:00:00Z","scope":"ALL"}`))
+
+	executions := listAll(t, s)
+	require.Len(t, executions, 1, "大小写不同也是同一个标的，合并成一条")
+	require.Equal(t, "binance:SPOT:FOOUSDT", executions[0].SubjectID)
+	require.Equal(t, "event-upper", executions[0].EventID)
+	require.Contains(t, executions[0].PayloadJSON, "2026-11-12")
+}

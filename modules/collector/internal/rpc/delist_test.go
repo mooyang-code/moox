@@ -37,10 +37,11 @@ func TestRegisterDelistNotice(t *testing.T) {
 	registrar := &fakeDelistRegistrar{created: true}
 	service.SetDelistRegistrar(registrar)
 	for name, req := range map[string]*pb.RegisterDelistNoticeReq{
-		"没有下架时间": {Exchange: "binance", Market: "SPOT", ExchangeSymbol: "FOOUSDT"},
-		"大写交易所":  {Exchange: "BINANCE", Market: "SPOT", ExchangeSymbol: "FOOUSDT", DelistAtMs: delistAt.UnixMilli()},
-		"市场不对":   {Exchange: "binance", Market: "FUTURES", ExchangeSymbol: "FOOUSDT", DelistAtMs: delistAt.UnixMilli()},
-		"代码为空":   {Exchange: "binance", Market: "SWAP", DelistAtMs: delistAt.UnixMilli()},
+		"没有下架时间":  {Exchange: "binance", Market: "SPOT", ExchangeSymbol: "FOOUSDT"},
+		"大写交易所":   {Exchange: "BINANCE", Market: "SPOT", ExchangeSymbol: "FOOUSDT", DelistAtMs: delistAt.UnixMilli()},
+		"市场不对":    {Exchange: "binance", Market: "FUTURES", ExchangeSymbol: "FOOUSDT", DelistAtMs: delistAt.UnixMilli()},
+		"代码为空":    {Exchange: "binance", Market: "SWAP", DelistAtMs: delistAt.UnixMilli()},
+		"不支持的交易所": {Exchange: "kraken", Market: "SPOT", ExchangeSymbol: "FOOUSDT", DelistAtMs: delistAt.UnixMilli()},
 	} {
 		rsp, err := service.RegisterDelistNotice(ctx, req)
 		require.NoError(t, err)
@@ -54,6 +55,13 @@ func TestRegisterDelistNotice(t *testing.T) {
 	require.True(t, rsp.GetCreated())
 	require.Equal(t, "delist-event-1", rsp.GetEventId())
 	require.Equal(t, []delist.Notice{{Exchange: "binance", Market: "SWAP", Symbol: "FOOUSDT", DelistAt: delistAt, Source: events.DelistSourceManual, Scope: events.DelistScopePaperOnly}}, registrar.notices)
+
+	// 手工登记时代码写成小写：统一成大写再登记，下游按大写判断“同一个标的”。
+	registrar.notices = nil
+	rsp, err = service.RegisterDelistNotice(ctx, &pb.RegisterDelistNoticeReq{Exchange: "okx", Market: "SWAP", ExchangeSymbol: " foo-usdt-swap ", DelistAtMs: delistAt.UnixMilli()})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode(), rsp.GetRetInfo().GetMsg())
+	require.Equal(t, "FOO-USDT-SWAP", registrar.notices[0].Symbol)
 
 	registrar.err = errors.New("数据库错误细节")
 	rsp, err = service.RegisterDelistNotice(ctx, &pb.RegisterDelistNoticeReq{Exchange: "okx", Market: "SWAP", ExchangeSymbol: "FOO-USDT-SWAP", DelistAtMs: delistAt.UnixMilli()})

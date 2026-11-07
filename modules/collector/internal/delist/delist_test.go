@@ -302,3 +302,19 @@ func TestDetectorKeepsEarliestWhenSameSymbolHasTwoDelistTimes(t *testing.T) {
 	paper.Scope = events.DelistScopePaperOnly
 	require.Len(t, earliestPerInstrument([]Notice{early, paper}), 2, "范围不同不合并")
 }
+
+// 通知校验：交易所只放行 binance、okx，交易所代码必须是大写。
+func TestNoticeValidateRequiresKnownExchangeAndUpperSymbol(t *testing.T) {
+	base := Notice{Exchange: "binance", Market: events.DelistMarketSpot, Symbol: "FOOUSDT", DelistAt: time.Now()}
+	require.NoError(t, base.Validate())
+	for name, mutate := range map[string]func(*Notice){
+		"未知交易所": func(n *Notice) { n.Exchange = "kraken" },
+		"大写交易所": func(n *Notice) { n.Exchange = "BINANCE" },
+		"小写代码":  func(n *Notice) { n.Symbol = "foousdt" },
+		"带空格":   func(n *Notice) { n.Symbol = " FOOUSDT" },
+	} {
+		notice := base
+		mutate(&notice)
+		require.Error(t, notice.Validate(), name)
+	}
+}

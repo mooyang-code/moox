@@ -46,7 +46,7 @@
 
     <template v-else>
       <p class="summary-title">
-        {{ exchangeLabel }} {{ marketLabel }} {{ form.exchange_symbol.trim() }}，下架时间 {{ formatMs(delistAtMs) }}
+        {{ exchangeLabel }} {{ marketLabel }} {{ form.exchange_symbol.trim().toUpperCase() }}，下架时间 {{ formatMs(delistAtMs) }}
       </p>
       <a-alert v-if="pastTime" type="warning" class="block-alert">这个时间已经过去，只做核对，不会下单。</a-alert>
       <a-alert v-if="previewFailed" type="warning" class="block-alert">
@@ -211,7 +211,7 @@ async function submit() {
     const result = await registerDelistNotice({
       exchange: form.exchange,
       market: form.market,
-      exchange_symbol: form.exchange_symbol.trim(),
+      exchange_symbol: form.exchange_symbol.trim().toUpperCase(),
       delist_at_ms: delistAtMs.value,
       paper_only: form.paper_only
     });
