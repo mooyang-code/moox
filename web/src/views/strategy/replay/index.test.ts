@@ -49,7 +49,13 @@ vi.mock("vue-router", () => ({
 vi.mock("@/store/modules/space", () => ({ useSpaceStore: () => api.space }));
 vi.mock("@/store/modules/strategy", () => ({
   useStrategyStore: () =>
-    reactive({ strategyCatalog: [{ strategy_id: "s1", name: "动量" }], loadAllStrategies: api.loadAllStrategies })
+    reactive({
+      strategyCatalog: [
+        { strategy_id: "s1", name: "动量" },
+        { strategy_id: "s2", name: "混合", dsl_yaml: "name: m\nmarket: {select: both, prefer: spot}\n" }
+      ],
+      loadAllStrategies: api.loadAllStrategies
+    })
 }));
 vi.mock("@visactor/vchart", () => ({
   default: class {
@@ -444,6 +450,29 @@ describe("strategy replay page", () => {
       swap_fee_bps: 5
     });
     expect(Object.keys(api.startReplay.mock.calls[0][0].factor_tasks)).toEqual(["spot", "swap"]);
+  });
+
+  it("asks for one task per market when a saved definition uses both markets", async () => {
+    api.listReplays.mockResolvedValue({ items: [], page: { total: 0 } });
+    api.startReplay.mockResolvedValue({ replay: replay("r8", "pending"), bar_count: 3, first_bar_end: "", last_bar_end: "" });
+    api.getReplay.mockResolvedValue(replay("r8", "pending"));
+    const wrapper = mountPage();
+    await flushPromises();
+    const vm = wrapper.vm as any;
+    vm.form.source = "definition";
+    vm.form.strategy_id = "s2";
+    await nextTick();
+    // 策略写了 market：不再让用户选任务所属的市场（该单选只在 DSL 没写 market 时出现）。
+    expect(wrapper.text()).not.toContain("股票");
+    vm.form.tasks = { spot: "ftask_a", swap: "ftask_b" };
+    await nextTick();
+    const startButton = wrapper.findAll("button").find(button => button.text() === "开始回放");
+    await startButton!.trigger("click");
+    await flushPromises();
+    expect(api.startReplay.mock.calls[0][0]).toMatchObject({
+      strategy_id: "s2",
+      factor_tasks: { spot: "ftask_a", swap: "ftask_b" }
+    });
   });
 
   it("rejects a replay that misses the task of a market the strategy uses", async () => {
