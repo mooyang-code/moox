@@ -626,6 +626,11 @@ message CreatePaperSimulationReq {
   string slippage_bps = 10;
   // Independent of PAPER/LIVE execution mode; immutable after creation.
   ControlMode control_mode = 11;
+  // 加入已有的组合账户：给了编号，就在创建账户的同一个事务里把新账户加成启用成员，
+  // 此时 logical_account_name 必须为空。组合必须已暂停、是模拟盘、结算资产一致。
+  string logical_account_id = 12;
+  // 加入已有组合时的优先级；不填就排在现有成员之后。
+  int32 priority = 13;
 }
 
 message CreatePaperSimulationRsp {

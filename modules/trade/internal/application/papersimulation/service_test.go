@@ -153,3 +153,84 @@ func TestCreateNormalizesMarketsAndRejectsUnsupportedSets(t *testing.T) {
 	require.Equal(t, "1", result.Account.LeverageSettings[store.DefaultLeverageKey])
 	require.Equal(t, "UNIFIED", result.Account.Snapshot.Balances[0].Wallet)
 }
+
+func TestCreateJoinsExistingPausedLogicalAccountInOneTransaction(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	s := Service{Store: db}
+	first, err := s.Create(ctx, paperCommand("paper-a", "logical"))
+	require.NoError(t, err)
+	logicalID := first.LogicalAccount.LogicalAccountID
+
+	// 不给优先级：排在现有成员（优先级 1）之后；账户和成员关系同时写入，不需要账户会话
+	command := paperCommand("paper-b", "")
+	command.LogicalAccountID = logicalID
+	second, err := s.Create(ctx, command)
+	require.NoError(t, err)
+	require.Equal(t, logicalID, second.LogicalAccount.LogicalAccountID)
+	members, err := db.ListLogicalAccountMembers(ctx, "space", logicalID, true)
+	require.NoError(t, err)
+	require.Len(t, members, 2)
+	require.Equal(t, second.Account.TradingAccountID, members[1].TradingAccountID)
+	require.Equal(t, 2, members[1].Priority)
+	require.True(t, members[1].Enabled)
+
+	// 指定优先级时原样使用
+	command = paperCommand("paper-c", "")
+	command.LogicalAccountID = logicalID
+	command.Priority = 9
+	third, err := s.Create(ctx, command)
+	require.NoError(t, err)
+	members, err = db.ListLogicalAccountMembers(ctx, "space", logicalID, true)
+	require.NoError(t, err)
+	require.Equal(t, third.Account.TradingAccountID, members[2].TradingAccountID)
+	require.Equal(t, 9, members[2].Priority)
+}
+
+func TestCreateIntoRejectsRunningMismatchedAndUnknownLogicalAccountsWithoutCreatingAccount(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	s := Service{Store: db}
+	first, err := s.Create(ctx, paperCommand("paper-a", "logical"))
+	require.NoError(t, err)
+	logicalID := first.LogicalAccount.LogicalAccountID
+	require.NoError(t, db.DBForTest().Table("t_logical_accounts").
+		Where("c_logical_account_id = ?", logicalID).Updates(map[string]any{"c_automation_state": "ACTIVE", "c_pause_reason": ""}).Error)
+
+	countAccounts := func() int64 {
+		var count int64
+		require.NoError(t, db.DBForTest().Table("t_trading_accounts").Count(&count).Error)
+		return count
+	}
+	before := countAccounts()
+
+	running := paperCommand("paper-b", "")
+	running.LogicalAccountID = logicalID
+	_, err = s.Create(ctx, running)
+	require.ErrorContains(t, err, "先暂停")
+
+	require.NoError(t, db.DBForTest().Table("t_logical_accounts").
+		Where("c_logical_account_id = ?", logicalID).Updates(map[string]any{"c_automation_state": "PAUSED", "c_pause_reason": "测试"}).Error)
+	mismatched := paperCommand("paper-c", "")
+	mismatched.LogicalAccountID = logicalID
+	mismatched.SettlementAsset = "USDC"
+	_, err = s.Create(ctx, mismatched)
+	require.ErrorContains(t, err, "结算资产")
+
+	unknown := paperCommand("paper-d", "")
+	unknown.LogicalAccountID = "no-such-logical"
+	_, err = s.Create(ctx, unknown)
+	require.Error(t, err)
+
+	both := paperCommand("paper-e", "new-name")
+	both.LogicalAccountID = logicalID
+	_, err = s.Create(ctx, both)
+	require.Error(t, err)
+
+	// 每次被拒绝都不留下孤立的执行账户
+	require.Equal(t, before, countAccounts())
+}

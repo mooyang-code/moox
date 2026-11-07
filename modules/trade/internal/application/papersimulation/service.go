@@ -20,7 +20,11 @@ type CreateCommand struct {
 	SpaceID            string
 	AccountName        string
 	LogicalAccountName string
-	Exchange           exchange.Exchange
+	// LogicalAccountID 不为空时，新账户在创建的同一个事务里加入这个已有的组合账户（此时 LogicalAccountName 必须为空）。
+	LogicalAccountID string
+	// Priority 是加入已有组合时的优先级；为 0 时排在现有成员之后。
+	Priority int
+	Exchange exchange.Exchange
 	// Markets 是模拟账户开通的市场集合：加密货币取 SPOT、SWAP 的子集，股票只有 STOCK。
 	Markets         []exchange.MarketType
 	SettlementAsset string
@@ -79,6 +83,9 @@ func (s *Service) Create(ctx context.Context, command CreateCommand) (Result, er
 		// the same 1x value after restart.
 		leverageSettings["*"] = "1"
 	}
+	if command.LogicalAccountID != "" && command.LogicalAccountName != "" {
+		return Result{}, fmt.Errorf("paper simulation: 加入已有组合和新建组合只能选一个")
+	}
 	accountID, logicalID := stableIDs(command.SpaceID, command.AccountName, command.LogicalAccountName)
 	account := store.TradingAccountRecord{
 		SpaceID: command.SpaceID, TradingAccountID: accountID, Name: command.AccountName,
@@ -96,6 +103,10 @@ func (s *Service) Create(ctx context.Context, command CreateCommand) (Result, er
 			InitialBalance: command.InitialBalance.String(), MakerFeeRate: command.MakerFeeRate.String(),
 			TakerFeeRate: command.TakerFeeRate.String(), SlippageBPS: command.SlippageBPS.String(),
 		},
+	}
+	// 加入已有组合：账户和成员关系在同一个事务里写入。刚建的模拟账户不可能有持仓，不需要先同步、也不用等会话建立。
+	if command.LogicalAccountID != "" {
+		return s.createInto(ctx, command, account)
 	}
 	// 不填组合账户名称时只建执行账户，之后再加入已有的组合账户。
 	if command.LogicalAccountName == "" {
@@ -123,6 +134,52 @@ func (s *Service) Create(ctx context.Context, command CreateCommand) (Result, er
 		}
 		return tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
 			SpaceID: command.SpaceID, LogicalAccountID: logicalID, TradingAccountID: accountID, Enabled: true, Priority: 1,
+		})
+	})
+	if err != nil {
+		return Result{}, err
+	}
+	return Result{Account: account, LogicalAccount: logical}, nil
+}
+
+// createInto 创建模拟账户并加入已有的组合账户。组合必须已暂停（后端要求改成员前先暂停）、是模拟盘、结算资产一致；
+// 环境、成员唯一等其余检查由 PutLogicalAccountMember 在同一个事务里完成。
+func (s *Service) createInto(ctx context.Context, command CreateCommand, account store.TradingAccountRecord) (Result, error) {
+	logical, err := s.Store.GetLogicalAccount(ctx, command.SpaceID, command.LogicalAccountID)
+	if err != nil {
+		return Result{}, err
+	}
+	switch {
+	case logical.ExecutionMode != "PAPER":
+		return Result{}, fmt.Errorf("%w: 只能加入模拟盘的组合账户", store.ErrInvalidRecord)
+	case !strings.EqualFold(logical.SettlementAsset, command.SettlementAsset):
+		return Result{}, fmt.Errorf("%w: 组合账户的结算资产是 %s，和模拟账户的 %s 不一致", store.ErrInvalidRecord, logical.SettlementAsset, command.SettlementAsset)
+	case logical.AutomationState != "PAUSED":
+		return Result{}, fmt.Errorf("%w: 组合账户正在自动执行，先暂停再加入新账户", store.ErrInvalidRecord)
+	}
+	unlock, err := s.Store.LockMemberChange(ctx, command.SpaceID, command.LogicalAccountID, account.TradingAccountID)
+	if err != nil {
+		return Result{}, err
+	}
+	defer unlock()
+	priority := command.Priority
+	if priority <= 0 {
+		members, listErr := s.Store.ListLogicalAccountMembers(ctx, command.SpaceID, command.LogicalAccountID, true)
+		if listErr != nil {
+			return Result{}, listErr
+		}
+		for _, member := range members {
+			priority = max(priority, member.Priority)
+		}
+		priority++
+	}
+	err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
+		if err := tx.CreateTradingAccount(account); err != nil {
+			return err
+		}
+		return tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
+			SpaceID: command.SpaceID, LogicalAccountID: command.LogicalAccountID,
+			TradingAccountID: account.TradingAccountID, Enabled: true, Priority: priority,
 		})
 	})
 	if err != nil {
