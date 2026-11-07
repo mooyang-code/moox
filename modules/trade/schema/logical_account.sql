@@ -15,6 +15,8 @@ CREATE TABLE IF NOT EXISTS t_logical_accounts (
     c_fund_settings_json TEXT NOT NULL DEFAULT '{}',
     c_automation_state TEXT NOT NULL DEFAULT 'PAUSED',
     c_pause_reason TEXT NOT NULL DEFAULT '',
+    -- 最近一次从暂停恢复自动执行的时间（毫秒）：保证金率风控据此判断“上次风控减仓之后组合是否恢复过”，不依赖进程内存
+    c_resumed_at INTEGER NOT NULL DEFAULT 0,
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_control_mode TEXT NOT NULL DEFAULT 'STRATEGY',

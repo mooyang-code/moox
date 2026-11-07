@@ -133,11 +133,13 @@ func capReduceOnly(target, position shared.Decimal) shared.Decimal {
 func (e *Executor) warnReduceOnly(ctx context.Context, env *laneEnv, logicalAccountID string, original map[string]desiredTarget, truncated []string, members []memberState) {
 	day := e.now().Format("2006-01-02")
 	for _, instrumentID := range truncated {
-		if !e.truncationMatters(ctx, env, instrumentID, original[instrumentID], members) {
+		key := "reduce-only|" + logicalAccountID + "|" + instrumentID + "|" + day
+		// 先查当天是否已经告警过，再去判断（判断要取一次报价，每轮都取太多余）。
+		if e.alreadyWarned(key) || !e.truncationMatters(ctx, env, instrumentID, original[instrumentID], members) {
 			continue
 		}
 		e.warnOnce(
-			"reduce-only|"+logicalAccountID+"|"+instrumentID+"|"+day,
+			key,
 			fmt.Sprintf("组合 %s 的标的 %s 在下架名单里，目标里加仓的部分已去掉，只减不增", logicalAccountID, instrumentID),
 		)
 	}

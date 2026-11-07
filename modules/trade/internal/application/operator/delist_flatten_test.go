@@ -98,6 +98,13 @@ func ageOrders(t *testing.T, fixture *operatorFixture, actionID string) {
 	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_trade_orders SET c_ctime = datetime('now', '-10 minutes') WHERE c_owner_id = ?`, actionID).Error)
 }
 
+// currentRoundOrders 把本动作已有子单的创建时间往后拨几秒：订单创建时间只精确到秒，起点也取到秒，
+// 同一秒内的子单算上一轮留下的；测试里要让它们算这一轮的。
+func currentRoundOrders(t *testing.T, fixture *operatorFixture, actionID string) {
+	t.Helper()
+	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_trade_orders SET c_ctime = datetime('now', '+5 seconds') WHERE c_owner_id = ?`, actionID).Error)
+}
+
 // 被交易所拒绝：这一轮停下（PARTIAL）；同一个动作号重试会重新来过——起点之前的被拒子单不计，会再下单。
 func TestDelistFlattenRetryAfterARejectionStartsOver(t *testing.T) {
 	fixture := newMixedFlattenFixture(t)
@@ -107,6 +114,7 @@ func TestDelistFlattenRetryAfterARejectionStartsOver(t *testing.T) {
 	_, err := fixture.service().FlattenLogicalAccount(context.Background(), command)
 	require.NoError(t, err)
 	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_trade_orders SET c_state = 'REJECTED', c_reject_reason = '交易对暂停', c_exchange_symbol = 'BTCUSDT' WHERE c_owner_id = 'delist-reject'`).Error)
+	currentRoundOrders(t, fixture, "delist-reject")
 	fixture.orders.specs = nil
 
 	// 这一轮里最近一笔被拒：不再下，动作以 PARTIAL 结束。
@@ -144,6 +152,7 @@ func TestDelistFlattenUnfilledStreakCapsThenResetsOnRetry(t *testing.T) {
 			State: "EXPIRED", OwnerType: "OPERATOR", OwnerID: "delist-streak", LogicalAccountID: "logical-1", Version: 1,
 		})
 	}
+	currentRoundOrders(t, fixture, "delist-streak")
 	fixture.orders.specs = nil
 
 	result, err := fixture.service().FlattenLogicalAccount(context.Background(), command)
@@ -400,4 +409,69 @@ func TestDelistFlattenWithAnotherActionIDOnTheSameInstrumentIsBusy(t *testing.T)
 	require.Empty(t, fixture.orders.specs)
 	_, getErr := fixture.store.GetOperatorAction(context.Background(), "space-1", "real")
 	require.Error(t, getErr, "新号没有创建")
+}
+
+// IOC 之间的间隔里不能空转同步：间隔没到时直接睡到间隔结束再往下做。否则轮内循环每 200 毫秒一轮、每轮两次轻量同步，
+// 对币安现货加永续要发 3 个接口，一次调用的预算里就是几十次同步，会打满 IP 限频。
+func TestDelistFlattenWaitsOutTheIntervalWithoutSpinningSyncs(t *testing.T) {
+	fixture := newMixedFlattenFixture(t)
+	fixture.block(t, "SWAP", "BTCUSDT")
+	service := fixture.service()
+	service.FlattenMaxAttempts = 1000
+	service.FlattenRetryInterval = 10 * time.Millisecond
+	service.FlattenTimeout = 4 * time.Second
+	service.DelistAttemptInterval = 400 * time.Millisecond
+
+	_, err := service.FlattenLogicalAccount(context.Background(), delistCommand("delist-spin", "BTC-USDT-SWAP"))
+	require.NoError(t, err)
+
+	// 第一笔和第二笔下单之间的同步次数：等间隔的 400 毫秒里不能同步（空转的话每 10 毫秒一轮、两次同步，上百次）。
+	first, second := -1, -1
+	for index, entry := range fixture.trace {
+		if len(entry) > 6 && entry[:6] == "place:" {
+			if first < 0 {
+				first = index
+			} else if second < 0 {
+				second = index
+			}
+		}
+	}
+	require.GreaterOrEqual(t, second, 0, "间隔过后继续下第二笔，trace=%v", fixture.trace)
+	syncs := 0
+	for _, entry := range fixture.trace[first:second] {
+		if entry == "sync:account-a" {
+			syncs++
+		}
+	}
+	require.LessOrEqual(t, syncs, 6, "两笔之间同步了 %d 次", syncs)
+}
+
+// 清仓这一族的 30 分钟期限从这一轮的起点算：动作创建很久之后用同一个动作号重试，不能一次调用就被记 PARTIAL。
+func TestDelistFlattenRetryDeadlineStartsAtTheRoundNotTheActionCreation(t *testing.T) {
+	fixture := newMixedFlattenFixture(t)
+	fixture.block(t, "SWAP", "BTCUSDT")
+	command := delistCommand("delist-old", "BTC-USDT-SWAP")
+	fixture.orders.leaveOpen = map[string]bool{"child-account-a-BTC-USDT-SWAP": true}
+	fixture.orders.nextID = ""
+	service := fixture.service()
+	service.Now = time.Now
+	first, err := service.FlattenLogicalAccount(context.Background(), command)
+	require.NoError(t, err)
+	require.Equal(t, "RUNNING", first.Action.Status)
+
+	// 动作是 40 分钟前创建的，且已经结束（FAILED）；同一个动作号重试。
+	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_operator_actions SET c_ctime = datetime('now', '-40 minutes'), c_status = 'FAILED' WHERE c_action_id = 'delist-old'`).Error)
+	result, err := service.FlattenLogicalAccount(context.Background(), command)
+	require.NoError(t, err)
+	require.Equal(t, "RUNNING", result.Action.Status, "期限从这一轮的起点算，不是动作创建时间")
+
+	// 这一轮自己超过 30 分钟才记 PARTIAL。
+	var persisted struct {
+		AttemptStartedAt int64 `json:"attempt_started_at"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(*result.Action.ResultJSON), &persisted))
+	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_operator_actions SET c_result_json = json_set(c_result_json, '$.attempt_started_at', ?)`, time.Now().Add(-40*time.Minute).UnixMilli()).Error)
+	result, err = service.FlattenLogicalAccount(context.Background(), command)
+	require.NoError(t, err)
+	require.Equal(t, "PARTIAL", result.Action.Status)
 }

@@ -70,6 +70,14 @@ func childClientOrderID(attempt int) string {
 	return fmt.Sprintf("mt%sa%d", xid.New().String(), attempt)
 }
 
+// alreadyWarned 报告这个键是否已经告警过（不改变状态）。
+func (e *Executor) alreadyWarned(key string) bool {
+	e.batchMu.Lock()
+	defer e.batchMu.Unlock()
+	_, warned := e.warned[key]
+	return warned
+}
+
 // warnOnce 同一个键只告警一次（进程内）：伪市价用满次数这类每轮都会再次判到的情况不刷屏。
 func (e *Executor) warnOnce(key, message string) {
 	e.batchMu.Lock()

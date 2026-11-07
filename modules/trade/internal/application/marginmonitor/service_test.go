@@ -242,6 +242,12 @@ func newFixture(t *testing.T, fundSettings, exchangeEquity string) *fixture {
 	return f
 }
 
+// restart 模拟 Trade 重启：新的监控实例，没有任何内存状态，只剩库里的东西。
+func (f *fixture) restart() {
+	old := f.service
+	f.service = &Service{Store: old.Store, Now: old.Now, Reduce: old.Reduce, Pause: old.Pause, Collect: old.Collect}
+}
+
 func (f *fixture) run() {
 	f.t.Helper()
 	require.NoError(f.t, f.service.RunAll(context.Background()))
@@ -337,7 +343,7 @@ func TestRunPausesFirstWhenTheReduceCannotStart(t *testing.T) {
 	f.busy = true
 	f.run()
 	require.Empty(t, f.reduces)
-	require.Equal(t, []string{store.MarginPauseReason()}, f.pauses)
+	require.Equal(t, []string{store.MarginPausePendingReason()}, f.pauses, "先暂停时不能写已减仓")
 	require.Equal(t, "PAUSED", f.logical().AutomationState)
 
 	f.run()
@@ -346,6 +352,15 @@ func TestRunPausesFirstWhenTheReduceCannotStart(t *testing.T) {
 	f.busy = false
 	f.run()
 	require.Len(t, f.reduces, 1, "下架清仓结束后，下一轮把减仓补上")
+}
+
+// resume 模拟用户恢复组合：库里记下恢复时间（比减仓动作晚一秒以上）。
+func (f *fixture) resume() {
+	f.t.Helper()
+	require.NoError(f.t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.SetLogicalAccountAutomation("space-1", "logical-1", "ACTIVE", "")
+	}))
+	require.NoError(f.t, f.store.DBForTest().Exec(`UPDATE t_logical_accounts SET c_resumed_at = ?`, time.Now().Add(5*time.Second).UnixMilli()).Error)
 }
 
 // 暂停期间用户人工下单、撤单、清仓会改写暂停原因：比值仍低也不会再自动减一次；用户恢复之后重新监控。
@@ -357,18 +372,51 @@ func TestRunDoesNotReduceAgainAfterTheManualOverrideOfThePauseReason(t *testing.
 	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.SetLogicalAccountAutomation("space-1", "logical-1", "PAUSED", "人工清仓")
 	}))
-	f.advance(5 * time.Second)
 	f.run()
 	require.Len(t, f.reduces, 1, "暂停原因被人工操作改写后不再触发")
 
-	// 用户确认后恢复（第一次减仓早已做完）：监控看到组合又运行了，比值仍低就再触发。
+	// 用户确认后恢复（第一次减仓早已做完）：比值仍低就再触发。
 	require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_operator_actions SET c_status = 'COMPLETED'`).Error)
-	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.SetLogicalAccountAutomation("space-1", "logical-1", "ACTIVE", "")
-	}))
-	f.advance(5 * time.Second)
+	f.resume()
 	f.run()
 	require.Len(t, f.reduces, 2)
+}
+
+// 重启不丢保护（M1）：几天前触发过风控减仓、用户已恢复，之后用户人工暂停；Trade 重启（监控的进程内存清零）；价格大跌比值很低：
+// “恢复过”记在库里，所以照样触发，不能因为历史上有过风控减仓就漏掉。
+func TestRestartKeepsTheProtectionAfterAnEarlierMarginReduceWasResumed(t *testing.T) {
+	f := newFixture(t, "", "400")
+	f.run()
+	require.Len(t, f.reduces, 1)
+	require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_operator_actions SET c_status = 'COMPLETED'`).Error)
+	f.resume()
+	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.SetLogicalAccountAutomation("space-1", "logical-1", "PAUSED", "人工暂停")
+	}))
+
+	f.restart()
+	f.run()
+
+	require.Len(t, f.reduces, 2, "重启后照样监控")
+}
+
+// 重启不丢待补的减仓（M2）：有下架清仓在跑，减仓排不进去，先暂停；Trade 重启；下架清仓结束后要把减仓补上，
+// 而且先暂停时的原因不能写“已减仓”（用户会以为已经减过）。
+func TestRestartStillCompletesAReduceThatWasPendingBehindADelistFlatten(t *testing.T) {
+	f := newFixture(t, "", "400")
+	f.busy = true
+	f.run()
+	require.Empty(t, f.reduces)
+	require.Equal(t, store.MarginPausePendingReason(), f.logical().PauseReason)
+	require.NotContains(t, f.logical().PauseReason, "已暂停并按设置的比例减仓", "减仓还没做，不能说已减仓")
+	require.True(t, store.IsMarginPauseReason(f.logical().PauseReason), "仍然算保证金风控暂停（关注项照报）")
+
+	f.restart()
+	f.busy = false
+	f.run()
+
+	require.Len(t, f.reduces, 1, "下架清仓结束后补上减仓")
+	require.Equal(t, store.MarginPauseReason(), f.logical().PauseReason, "减仓发出后原因换成已减仓")
 }
 
 // 人工暂停的组合照样监控（价格不会因为组合暂停就停下）。

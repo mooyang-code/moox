@@ -3,6 +3,7 @@ package operator
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -786,6 +787,13 @@ func (s *operatorOrderStub) Place(
 	id := s.nextID
 	if id == "" {
 		id = "child-" + spec.TradingAccountID + "-" + spec.InstrumentID
+		// 同一个测试里下多笔时订单号不能撞：已经有同号的就加序号。
+		for n := 2; ; n++ {
+			if _, err := s.store.GetOrder(ctx, spaceID, id); err != nil {
+				break
+			}
+			id = fmt.Sprintf("child-%s-%s-%d", spec.TradingAccountID, spec.InstrumentID, n)
+		}
 	}
 	record := store.OrderRecord{
 		SpaceID: spaceID, OrderID: id,
