@@ -21,7 +21,7 @@ func TestLastDustConvertAtIsItsOwnColumn(t *testing.T) {
 	require.Equal(t, int64(1_700_000_000_000), account.LastDustConvertAt)
 }
 
-// 测试网一个账户只开一个市场。
+// 币安测试网一个账户只开一个市场；OKX 模拟盘可以同时开两个。
 func TestTestnetAccountCannotOpenBothMarkets(t *testing.T) {
 	s := openTestStore(t)
 	account := testAccount()
@@ -33,4 +33,10 @@ func TestTestnetAccountCannotOpenBothMarkets(t *testing.T) {
 
 	account.Environment = "PRODUCTION"
 	require.NoError(t, s.Transaction(context.Background(), func(tx *Tx) error { return tx.CreateTradingAccount(account) }))
+
+	okx := testAccount()
+	okx.TradingAccountID, okx.Name, okx.CredentialSecretID = "okx-demo", "okx-demo", "secret-okx"
+	okx.Exchange, okx.ExecutionMode, okx.Environment = "OKX", "LIVE", "TESTNET"
+	okx.Markets, okx.MarginMode = []string{"SPOT", "SWAP"}, "CROSS"
+	require.NoError(t, s.Transaction(context.Background(), func(tx *Tx) error { return tx.CreateTradingAccount(okx) }), "OKX 模拟盘一个账户可以同时开两个市场")
 }

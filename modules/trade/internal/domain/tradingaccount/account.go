@@ -123,8 +123,9 @@ func (a Account) validateMarkets() error {
 	if a.Live != nil {
 		environment = a.Live.Environment
 	}
-	if environment == exchange.AccountEnvironmentTestnet && len(a.Markets) > 1 {
-		return invalidAccount("测试网一个账户只能开通一个市场：现货测试网和合约测试网是两套密钥")
+	// 只有币安测试网要求一个账户一个市场；OKX 模拟盘一把密钥同时能做现货和永续。
+	if environment == exchange.AccountEnvironmentTestnet && a.Exchange == exchange.ExchangeBinance && len(a.Markets) > 1 {
+		return invalidAccount("币安测试网一个账户只能开通一个市场：现货测试网和合约测试网是两套密钥")
 	}
 	if !a.AccountMode.Valid() {
 		return invalidAccount("不支持的账户类型")
