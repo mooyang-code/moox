@@ -33,8 +33,11 @@ type InstrumentRecord struct {
 	MinExchangeQuantity  string
 	PriceTick            string
 	MinNotional          string
-	Status               string
-	ExchangeUpdatedAt    int64
+	// MaxBuyPriceRatio、MinSellPriceRatio 是交易所的价格偏离限制（见 exchange.Instrument），"0" 表示没有。
+	MaxBuyPriceRatio  string
+	MinSellPriceRatio string
+	Status            string
+	ExchangeUpdatedAt int64
 }
 
 func (tx *Tx) UpsertInstrument(record InstrumentRecord) error {
@@ -113,14 +116,31 @@ func (tx *Tx) UpsertInstrument(record InstrumentRecord) error {
 	if err != nil {
 		return err
 	}
-	return writeError(tx.db.Exec(`
-		INSERT INTO t_trade_instruments (
+	if record.MaxBuyPriceRatio, err = canonicalDefaultZero(record.MaxBuyPriceRatio, "max buy price ratio", decimalNonNegative); err != nil {
+		return err
+	}
+	if record.MinSellPriceRatio, err = canonicalDefaultZero(record.MinSellPriceRatio, "min sell price ratio", decimalNonNegative); err != nil {
+		return err
+	}
+	return writeError(tx.db.Exec(execUpsertInstrument,
+		record.Exchange, record.Environment, record.MarketType, record.ExchangeSymbol, record.InstrumentID,
+		record.BaseAsset, record.QuoteAsset, record.SettlementAsset, record.Linear,
+		record.ContractValue, record.ContractValueAsset,
+		record.ExchangeQuantityStep, record.MinExchangeQuantity,
+		record.PriceTick, record.MinNotional, record.MaxBuyPriceRatio, record.MinSellPriceRatio, record.Status,
+		record.ExchangeUpdatedAt,
+	).Error)
+}
+
+// execUpsertInstrument 写入或更新一个标的。
+const execUpsertInstrument = `INSERT INTO t_trade_instruments (
 			c_exchange, c_environment, c_market_type, c_exchange_symbol, c_instrument_id, c_base_asset,
 			c_quote_asset, c_settlement_asset, c_linear, c_contract_value,
 			c_contract_value_asset, c_exchange_quantity_step,
-			c_min_exchange_quantity, c_price_tick, c_min_notional, c_status,
+			c_min_exchange_quantity, c_price_tick, c_min_notional,
+			c_max_buy_price_ratio, c_min_sell_price_ratio, c_status,
 			c_exchange_updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(c_exchange, c_environment, c_market_type, c_exchange_symbol) DO UPDATE SET
 			c_instrument_id = excluded.c_instrument_id,
 			c_base_asset = excluded.c_base_asset,
@@ -133,18 +153,11 @@ func (tx *Tx) UpsertInstrument(record InstrumentRecord) error {
 			c_min_exchange_quantity = excluded.c_min_exchange_quantity,
 			c_price_tick = excluded.c_price_tick,
 			c_min_notional = excluded.c_min_notional,
+			c_max_buy_price_ratio = excluded.c_max_buy_price_ratio,
+			c_min_sell_price_ratio = excluded.c_min_sell_price_ratio,
 			c_status = excluded.c_status,
 			c_exchange_updated_at = excluded.c_exchange_updated_at,
-			c_mtime = CURRENT_TIMESTAMP
-	`,
-		record.Exchange, record.Environment, record.MarketType, record.ExchangeSymbol, record.InstrumentID,
-		record.BaseAsset, record.QuoteAsset, record.SettlementAsset, record.Linear,
-		record.ContractValue, record.ContractValueAsset,
-		record.ExchangeQuantityStep, record.MinExchangeQuantity,
-		record.PriceTick, record.MinNotional, record.Status,
-		record.ExchangeUpdatedAt,
-	).Error)
-}
+			c_mtime = CURRENT_TIMESTAMP`
 
 func (s *Store) GetInstrument(
 	ctx context.Context,
@@ -220,6 +233,8 @@ func queryInstruments(db *gorm.DB, exchange, environment, marketType string) ([]
 		MinExchangeQuantity  string `gorm:"column:c_min_exchange_quantity"`
 		PriceTick            string `gorm:"column:c_price_tick"`
 		MinNotional          string `gorm:"column:c_min_notional"`
+		MaxBuyPriceRatio     string `gorm:"column:c_max_buy_price_ratio"`
+		MinSellPriceRatio    string `gorm:"column:c_min_sell_price_ratio"`
 		Status               string `gorm:"column:c_status"`
 		ExchangeUpdatedAt    int64  `gorm:"column:c_exchange_updated_at"`
 	}
@@ -240,6 +255,7 @@ func queryInstruments(db *gorm.DB, exchange, environment, marketType string) ([]
 			ExchangeQuantityStep: row.ExchangeQuantityStep,
 			MinExchangeQuantity:  row.MinExchangeQuantity,
 			PriceTick:            row.PriceTick, MinNotional: row.MinNotional,
+			MaxBuyPriceRatio: row.MaxBuyPriceRatio, MinSellPriceRatio: row.MinSellPriceRatio,
 			Status: row.Status, ExchangeUpdatedAt: row.ExchangeUpdatedAt,
 		})
 	}
@@ -328,6 +344,8 @@ func getInstrumentByID(db *gorm.DB, instrumentID string, scope ...string) (Instr
 		MinExchangeQuantity  string `gorm:"column:c_min_exchange_quantity"`
 		PriceTick            string `gorm:"column:c_price_tick"`
 		MinNotional          string `gorm:"column:c_min_notional"`
+		MaxBuyPriceRatio     string `gorm:"column:c_max_buy_price_ratio"`
+		MinSellPriceRatio    string `gorm:"column:c_min_sell_price_ratio"`
 		Status               string `gorm:"column:c_status"`
 		ExchangeUpdatedAt    int64  `gorm:"column:c_exchange_updated_at"`
 	}
@@ -349,6 +367,7 @@ func getInstrumentByID(db *gorm.DB, instrumentID string, scope ...string) (Instr
 		Linear: row.Linear, ContractValue: row.ContractValue, ContractValueAsset: row.ContractValueAsset,
 		ExchangeQuantityStep: row.ExchangeQuantityStep, MinExchangeQuantity: row.MinExchangeQuantity,
 		PriceTick: row.PriceTick, MinNotional: row.MinNotional, Status: row.Status,
+		MaxBuyPriceRatio: row.MaxBuyPriceRatio, MinSellPriceRatio: row.MinSellPriceRatio,
 		ExchangeUpdatedAt: row.ExchangeUpdatedAt,
 	}, err
 }

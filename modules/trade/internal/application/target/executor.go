@@ -1554,8 +1554,9 @@ func (e *Executor) placeActionMode(
 		}
 		if pseudoMarket {
 			// 限价 + IOC：价格 = 参考价 ×（1 ± 滑点），部分成交的剩余量下一轮按新的滑点再来。
-			// 默认最多 6% 的滑点比币安合约的价格过滤器（约 ±5%）宽，最后几次可能被交易所按拒单处理：1B 接入真实适配器时要处理。
+			// 默认最多 6% 的滑点比币安合约的价格过滤器（约 ±5%）宽，按标的的价格偏离限制夹住，避免最后几次被交易所拒单。
 			limit := pseudoMarketPrice(quote.Price, spec.Side, env.settings, attempt, candidate.instrument.PriceTick)
+			limit = clampToPriceBand(limit, quote.Price, spec.Side, candidate.instrument)
 			spec.Type, spec.FillPolicy, spec.LimitPrice = exchange.OrderTypeLimit, exchange.FillPolicyIOC, &limit
 		}
 		if !candidate.reducing {

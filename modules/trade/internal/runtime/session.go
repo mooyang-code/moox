@@ -678,6 +678,8 @@ func (s *ExchangeSession) persistInstruments(
 				MinExchangeQuantity:  instrument.MinExchangeQuantity.String(),
 				PriceTick:            instrument.PriceTick.String(),
 				MinNotional:          instrument.MinNotional.String(), Status: instrument.Status,
+				MaxBuyPriceRatio:  instrument.MaxBuyPriceRatio.String(),
+				MinSellPriceRatio: instrument.MinSellPriceRatio.String(),
 				ExchangeUpdatedAt: instrument.ExchangeUpdatedAt.UnixMilli(),
 			}); err != nil {
 				return err

@@ -25,3 +25,20 @@ func TestReferencePriceOfDelistedSymbolIsInstrumentNotFound(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// HTTP 200 之后回执字段解析不了：交易所已受理，按结果不明处理，不当确定拒单。
+func TestMalformedAcceptedReceiptIsTransportUnknown(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"symbol":"BTCUSDT","orderId":42,"clientOrderId":"cid","origQty":"abc","executedQty":"0","status":"NEW"}`))
+	}))
+	defer server.Close()
+	adapter := testAdapter(exchange.MarketTypeSpot, server.URL)
+	_, err := adapter.PlaceOrder(context.Background(), orderRequest(exchange.OrderTypeMarket))
+	if !exchange.IsKind(err, exchange.ErrorTransportUnknown) {
+		t.Fatalf("下单 err = %v", err)
+	}
+	_, err = adapter.CancelOrder(context.Background(), exchange.NewSymbolKey(exchange.MarketTypeSpot, "BTCUSDT"), "cid")
+	if !exchange.IsKind(err, exchange.ErrorTransportUnknown) {
+		t.Fatalf("撤单 err = %v", err)
+	}
+}

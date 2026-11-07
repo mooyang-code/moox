@@ -171,6 +171,16 @@ type ReinspectResult struct {
 // Reinspect 对已有账户重新检测并把结果写回账户类型和检测结果。
 // 传输错误（超时、限频、5xx）不下结论：保留上次结果，只累加连续失败次数，不触发阻断；调用方在次数到阈值时告警。
 func (s *Service) Reinspect(ctx context.Context, accountID string) (ReinspectResult, error) {
+	return s.reinspect(ctx, accountID, true)
+}
+
+// ReinspectUncounted 同 Reinspect，但这次没检测成功不计入连续失败次数：会话绑定时的立即复查是额外的一次，
+// 不能让“连续 N 次复查没成功”的告警提前触发（次数只按每小时的定期复查累计）。
+func (s *Service) ReinspectUncounted(ctx context.Context, accountID string) (ReinspectResult, error) {
+	return s.reinspect(ctx, accountID, false)
+}
+
+func (s *Service) reinspect(ctx context.Context, accountID string, countFailure bool) (ReinspectResult, error) {
 	if s == nil || s.Store == nil || s.Inspector == nil {
 		return ReinspectResult{}, ErrServiceNotConfigured
 	}
@@ -194,14 +204,16 @@ func (s *Service) Reinspect(ctx context.Context, accountID string) (ReinspectRes
 		if !errors.Is(err, ErrInspectionUnavailable) {
 			return ReinspectResult{}, err
 		}
-		previous.ConsecutiveFailures++
-		previous.LastFailure, previous.LastFailureAt = truncateRunes(err.Error(), 200), s.now()
-		encoded, encodeErr := previous.Encode()
-		if encodeErr != nil {
-			return ReinspectResult{}, encodeErr
-		}
-		if writeErr := s.Store.SetInspection(ctx, accountID, current.CredentialSecretID, current.AccountMode, encoded); writeErr != nil {
-			return ReinspectResult{}, staleInspection(writeErr)
+		if countFailure {
+			previous.ConsecutiveFailures++
+			previous.LastFailure, previous.LastFailureAt = truncateRunes(err.Error(), 200), s.now()
+			encoded, encodeErr := previous.Encode()
+			if encodeErr != nil {
+				return ReinspectResult{}, encodeErr
+			}
+			if writeErr := s.Store.SetInspection(ctx, accountID, current.CredentialSecretID, current.AccountMode, encoded); writeErr != nil {
+				return ReinspectResult{}, staleInspection(writeErr)
+			}
 		}
 		result.Inspection, result.Inconclusive, result.Cause = previous, true, err
 		result.Blocked = previous.Blocked(current.Markets)

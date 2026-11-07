@@ -56,6 +56,45 @@ func pseudoMarketPrice(reference shared.Decimal, side exchange.Side, settings or
 	return price
 }
 
+// priceBandHeadroom 是价格偏离限制里实际使用的比例：交易所按自己的参考价（合约是标记价、现货是加权均价）判断，
+// 和这里用的最新成交价有差距，只用允许偏离的 90%，避免贴着边界被拒单。
+var priceBandHeadroom = shared.MustDecimal("0.9")
+
+// clampToPriceBand 把伪市价单的限价夹在交易所的价格偏离限制里（币安 PERCENT_PRICE / PERCENT_PRICE_BY_SIDE）：
+// 买单不高于 参考价 ×（1 + (上限倍数 − 1) × 90%），卖单不低于 参考价 ×（1 − (1 − 下限倍数) × 90%），向内取整到价格精度。
+// 标的没有给出限制（倍数为 0 或读不出来）时原样返回。
+func clampToPriceBand(price, reference shared.Decimal, side exchange.Side, instrument store.InstrumentRecord) shared.Decimal {
+	one := shared.MustDecimal("1")
+	tick, tickErr := shared.ParseDecimal(instrument.PriceTick)
+	validTick := tickErr == nil && tick.Cmp(shared.Zero()) > 0
+	if side == exchange.SideBuy {
+		ratio, err := shared.ParseDecimal(instrument.MaxBuyPriceRatio)
+		if err != nil || ratio.Cmp(one) <= 0 {
+			return price
+		}
+		ceiling := reference.Mul(one.Add(ratio.Sub(one).Mul(priceBandHeadroom)))
+		if validTick {
+			ceiling = floorToStep(ceiling, tick)
+		}
+		if price.Cmp(ceiling) > 0 {
+			return ceiling
+		}
+		return price
+	}
+	ratio, err := shared.ParseDecimal(instrument.MinSellPriceRatio)
+	if err != nil || ratio.Cmp(shared.Zero()) <= 0 || ratio.Cmp(one) >= 0 {
+		return price
+	}
+	floor := reference.Mul(one.Sub(one.Sub(ratio).Mul(priceBandHeadroom)))
+	if validTick {
+		floor = ceilToStep(floor, tick)
+	}
+	if price.Cmp(floor) < 0 {
+		return floor
+	}
+	return price
+}
+
 // ceilToStep 把正数向上取整到步长的整数倍。
 func ceilToStep(value, step shared.Decimal) shared.Decimal {
 	floored := floorToStep(value, step)

@@ -715,6 +715,7 @@ func instrumentFromRecord(exchangeName exchange.Exchange, market exchange.Market
 		ExchangeQuantityStep: decimal(record.ExchangeQuantityStep),
 		MinExchangeQuantity:  decimal(record.MinExchangeQuantity),
 		PriceTick:            decimal(record.PriceTick), MinNotional: decimal(record.MinNotional),
+		MaxBuyPriceRatio: decimal(record.MaxBuyPriceRatio), MinSellPriceRatio: decimal(record.MinSellPriceRatio),
 		Status: record.Status, ExchangeUpdatedAt: time.UnixMilli(record.ExchangeUpdatedAt),
 	}
 }

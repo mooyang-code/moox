@@ -207,3 +207,15 @@ func TestChildClientOrderIDsFitEveryExchange(t *testing.T) {
 		require.True(t, okx.ValidClientOrderID(id), id)
 	}
 }
+
+// 伪市价单的限价按交易所的价格偏离限制夹住（只用允许偏离的 90%），没有限制时原样。
+func TestPseudoMarketPriceIsClampedToThePriceBand(t *testing.T) {
+	instrument := store.InstrumentRecord{PriceTick: "0.1", MaxBuyPriceRatio: "1.05", MinSellPriceRatio: "0.95"}
+	reference := shared.MustDecimal("100")
+	// 买 106 超过 100 × (1 + 0.05 × 0.9) = 104.5
+	require.Equal(t, "104.5", clampToPriceBand(shared.MustDecimal("106"), reference, exchange.SideBuy, instrument).String())
+	require.Equal(t, "103", clampToPriceBand(shared.MustDecimal("103"), reference, exchange.SideBuy, instrument).String())
+	// 卖 94 低于 100 × (1 − 0.05 × 0.9) = 95.5
+	require.Equal(t, "95.5", clampToPriceBand(shared.MustDecimal("94"), reference, exchange.SideSell, instrument).String())
+	require.Equal(t, "106", clampToPriceBand(shared.MustDecimal("106"), reference, exchange.SideBuy, store.InstrumentRecord{PriceTick: "0.1", MaxBuyPriceRatio: "0"}).String())
+}
