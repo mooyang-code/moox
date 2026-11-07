@@ -141,7 +141,10 @@ func FailureSummary(err error) string {
 		case ErrorTransportUnknown:
 			kind = "网络错误或交易所服务异常"
 		case ErrorAuthentication:
-			kind = "鉴权类错误但没有可识别的错误码"
+			kind = "鉴权类错误"
+			if typed.Code == "" {
+				kind = "鉴权类错误，没有可识别的错误码"
+			}
 		case ErrorRejected:
 			kind = "被交易所拒绝"
 		case ErrorInsufficientBalance:

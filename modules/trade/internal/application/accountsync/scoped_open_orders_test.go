@@ -2,6 +2,7 @@ package accountsync
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -106,4 +107,31 @@ func TestReconcileReadsOpenOrdersPerSymbolWhileOtherModesReadAll(t *testing.T) {
 	orders, err := service.listOpenOrders(context.Background(), plain, account, syncReconcile)
 	require.NoError(t, err)
 	require.Len(t, orders, 1, "没有按标的查询能力的适配器照常读全部挂单")
+}
+
+// 要查的现货标的超过上限时退回全量查：逐个串行查比一次全量查还贵。
+func TestReconcileFallsBackToFullQueryWhenTooManySymbols(t *testing.T) {
+	tradeStore := openSyncStore(t)
+	account := seedSpotAccountWithTargetAndHoldings(t, tradeStore)
+	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		for index := 0; index < scopedOpenOrderLimit; index++ {
+			base := fmt.Sprintf("C%02d", index)
+			if err := tx.UpsertInstrument(store.InstrumentRecord{
+				Exchange: "BINANCE", Environment: "TESTNET", MarketType: "SPOT", ExchangeSymbol: base + "USDT",
+				InstrumentID: base + "-USDT-SPOT", BaseAsset: base, QuoteAsset: "USDT", SettlementAsset: "USDT",
+				ExchangeQuantityStep: "0.001", MinExchangeQuantity: "0.001", PriceTick: "0.1", Status: "TRADING",
+			}); err != nil {
+				return err
+			}
+			account.Snapshot.Balances = append(account.Snapshot.Balances, store.AssetBalance{Wallet: "UNIFIED", Asset: base, Available: "1", Total: "1"})
+		}
+		return nil
+	}))
+	service := &Service{Store: tradeStore, Now: func() time.Time { return time.UnixMilli(10_000) }}
+	adapter := &scopedAdapter{syncAdapter: &syncAdapter{}}
+
+	_, err := service.listOpenOrders(context.Background(), adapter, account, syncReconcile)
+	require.NoError(t, err)
+	require.Equal(t, 1, adapter.fullCalls, "标的超过上限：退回全量查")
+	require.Empty(t, adapter.scoped)
 }

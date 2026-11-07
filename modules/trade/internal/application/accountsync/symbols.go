@@ -22,9 +22,12 @@ const (
 	rotationLimit   = 20
 )
 
+// scopedOpenOrderLimit 是周期对账按标的逐个查挂单的上限：超过就退回不带 symbol 的全量查询。
+const scopedOpenOrderLimit = 20
+
 // listOpenOrders 读挂单。统一账户现货不传 symbol 的挂单查询按“当前交易中的标的数量”计权重，30 秒一次的周期对账
 // 改为只查本地未结束订单、受管（持有）资产和当前目标涉及的现货标的，每个标的权重 5；会话启动、手动全量同步和增量同步
-// （确认撤单等）仍读全部挂单。没有这个能力的适配器（普通账户、OKX、模拟盘）照常读全部挂单。
+// （确认撤单等）仍读全部挂单；要查的标的超过 scopedOpenOrderLimit 个时也退回全量查。没有这个能力的适配器（普通账户、OKX、模拟盘）照常读全部挂单。
 func (s *Service) listOpenOrders(ctx context.Context, adapter execution.ExecutionAdapter, account store.TradingAccountRecord, mode syncMode) ([]exchange.Order, error) {
 	scoped, ok := adapter.(execution.ScopedOpenOrderSource)
 	if !ok || mode != syncReconcile {
@@ -33,6 +36,10 @@ func (s *Service) listOpenOrders(ctx context.Context, adapter execution.Executio
 	symbols, err := s.reconcileSpotSymbols(ctx, account)
 	if err != nil {
 		return nil, err
+	}
+	if len(symbols) > scopedOpenOrderLimit {
+		// 标的太多时逐个串行查（每个权重 5、一个请求）比一次全量查还慢还贵，退回全量查。
+		return adapter.ListOpenOrders(ctx)
 	}
 	return scoped.ListOpenOrdersForSymbols(ctx, symbols)
 }

@@ -4,6 +4,8 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestErrorSupportsErrorsAsAndUnwrap(t *testing.T) {
@@ -88,4 +90,11 @@ func TestIsConfirmedOrderMissingOnlyTrustsExplicitCodes(t *testing.T) {
 		IsConfirmedOrderMissing(&Error{Kind: ErrorRejected, Code: "-2013"}) {
 		t.Fatal("没有明确错误码时不能确认")
 	}
+}
+
+func TestFailureSummaryMentionsCodeOnlyWhenThereIsOne(t *testing.T) {
+	withCode := FailureSummary(&Error{Kind: ErrorAuthentication, HTTPStatus: 401, Code: "-2015", Err: errors.New("x")})
+	require.Equal(t, "鉴权类错误，HTTP 401，错误码 -2015", withCode)
+	withoutCode := FailureSummary(&Error{Kind: ErrorAuthentication, HTTPStatus: 401, Err: errors.New("x")})
+	require.Equal(t, "鉴权类错误，没有可识别的错误码，HTTP 401", withoutCode)
 }
