@@ -349,8 +349,43 @@ func TestDetectorReportsRejectedNotices(t *testing.T) {
 	pending, err := db.Resample().PendingEvents(ctx, 10)
 	require.NoError(t, err)
 	require.Len(t, pending, 1, "合法的照常发布，不因一条被拒绝而整批失败")
-	require.Equal(t, 1.0, testutil.ToFloat64(attn.Gauge().WithLabelValues(attention.KindSourceFailed, "OKX 1 条下架条目被校验拒绝、没有发布（可能漏报）：okx:SWAP:FOO:USDT 下架通知不合法：交易所代码不能为空，必须是大写，不能带空格或冒号")))
+	require.Equal(t, 1.0, testutil.ToFloat64(attn.Gauge().WithLabelValues(attention.KindSourceFailed, "OKX 有下架条目被校验拒绝、没有发布（可能漏报），详见 Collector 日志")))
 
 	detector.RunOnce(ctx)
 	require.Equal(t, 0.0, testutil.ToFloat64(attn.Gauge().WithLabelValues(attention.KindSourceFailed, "")), "下一轮不再被拒就恢复")
+}
+
+// 被拒条目的关注项 detail 是每个来源一段固定文字：被拒条数、来源返回顺序变化都不会换成新的指标序列。
+func TestRejectedAttentionDetailIsStable(t *testing.T) {
+	ctx := context.Background()
+	db := openStore(t)
+	registrar, _ := newRegistrar(t, db)
+	attn := attention.New(prometheus.NewRegistry())
+	bad1 := Notice{Exchange: "okx", Market: events.DelistMarketSwap, Symbol: "AAA:USDT", DelistAt: testNow.Add(72 * time.Hour), Source: events.DelistSourceOKXSwapInstruments}
+	bad2 := Notice{Exchange: "okx", Market: events.DelistMarketSwap, Symbol: "BBB:USDT", DelistAt: testNow.Add(72 * time.Hour), Source: events.DelistSourceOKXSwapInstruments}
+	source := &scriptedSource{name: "OKX", results: []sourceResult{{notices: []Notice{bad1}}, {notices: []Notice{bad1, bad2}}, {notices: []Notice{bad2, bad1}}}}
+	detector := &Detector{Sources: []Source{source}, Registrar: registrar, Attention: attn}
+	const detail = "OKX 有下架条目被校验拒绝、没有发布（可能漏报），详见 Collector 日志"
+	for i := 0; i < 3; i++ {
+		detector.RunOnce(ctx)
+		require.Equal(t, 1.0, testutil.ToFloat64(attn.Gauge().WithLabelValues(attention.KindSourceFailed, detail)), "第 %d 轮", i)
+	}
+}
+
+// 去重在转大写之前会漏掉大小写不同的同一个币：同一来源一轮返回 fooUSDT 与 FOOUSDT、下架时间不同时，只登记下架时间最早的一条，
+// 多跑几轮也不会积出多条待发布事件、不会来回改期。
+func TestCaseVariantsAreDedupedToEarliest(t *testing.T) {
+	ctx := context.Background()
+	db := openStore(t)
+	registrar, _ := newRegistrar(t, db)
+	early := Notice{Exchange: "binance", Market: events.DelistMarketSpot, Symbol: "fooUSDT", DelistAt: testNow.Add(48 * time.Hour), Source: events.DelistSourceBinanceSpotSchedule}
+	late := Notice{Exchange: "binance", Market: events.DelistMarketSpot, Symbol: "FOOUSDT", DelistAt: testNow.Add(96 * time.Hour), Source: events.DelistSourceBinanceSpotSchedule}
+	source := &scriptedSource{name: "币安现货", results: []sourceResult{{notices: []Notice{early, late}}, {notices: []Notice{late, early}}}}
+	detector := &Detector{Sources: []Source{source}, Registrar: registrar}
+	for i := 0; i < 4; i++ {
+		detector.RunOnce(ctx)
+	}
+	pending, err := db.Resample().PendingEvents(ctx, 10)
+	require.NoError(t, err)
+	require.Len(t, pending, 1, "只发布下架时间最早的一条")
 }
