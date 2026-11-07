@@ -73,7 +73,7 @@ func (tx *Tx) ClosePaperSimulation(spaceID, tradingAccountID string) error {
 		result := tx.db.Exec(`
 			UPDATE t_logical_accounts SET c_automation_state = 'PAUSED', c_pause_reason = ?, c_mtime = CURRENT_TIMESTAMP
 			WHERE c_space_id = ? AND c_logical_account_id = ?
-		`, "paper simulation closed", spaceID, logicalID)
+		`, "模拟账户已关闭，自动执行已暂停", spaceID, logicalID)
 		if result.Error != nil {
 			return result.Error
 		}
