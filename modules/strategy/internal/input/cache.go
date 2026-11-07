@@ -242,13 +242,15 @@ func (m *MetaCache) ageRecord(ctx context.Context, key AgeKey, ids []string) {
 		return
 	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	slot := m.ageSlotLocked(ctx, key)
 	for _, id := range ids {
 		slot.ok[id] = struct{}{}
 	}
-	if m.Ages != nil {
-		_ = m.Ages.SaveAgePassed(ctx, key.SpaceID, key.ViewID, key.IndexID, key.MinAgeBars, key.Market, ids, time.Now())
+	ages := m.Ages
+	m.mu.Unlock()
+	// 持久化不在全局锁里做：写库慢时不能挡住其他实例读缓存。
+	if ages != nil {
+		_ = ages.SaveAgePassed(ctx, key.SpaceID, key.ViewID, key.IndexID, key.MinAgeBars, key.Market, ids, time.Now())
 	}
 }
 
