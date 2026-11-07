@@ -27,10 +27,30 @@ message SetupSpace {
   string attributes_json = 8;
 }
 
+// moox.toml 的 [[exchange_keys]]：交易所密钥。固定 ID 为 exchange-<交易所>-<环境>-<名称>，只建不改。
+message SetupExchangeKey {
+  string name = 1;
+  string exchange = 2;     // binance、okx
+  string environment = 3;  // production、testnet
+  string api_key = 4;
+  string secret_key = 5;
+  string passphrase = 6;   // OKX
+  bool readonly = 7;       // 只读密钥：额外写入 extra_config 的 readonly=true，Trade 据此拒绝用它建执行账户
+}
+
+// 一把交易所密钥在 SecretMgr 里的状态：created 本次新建；exists 已存在（以管理台为准，不覆盖）；
+// deleted 已在管理台删除（不重建）；missing 还没有（只出现在状态查询里）。
+message SetupExchangeKeyResult {
+  string secret_id = 1;
+  string state = 2;
+  bool readonly = 3;
+}
+
 message ApplySetupReq {
   SetupAdmin admin = 1;
   SetupTencentCloud tencent_cloud = 2;
   repeated SetupSpace spaces = 5;
+  repeated SetupExchangeKey exchange_keys = 6;
 }
 
 message ApplySetupRsp {
@@ -41,12 +61,14 @@ message ApplySetupRsp {
   int32 spaces = 6;
   int32 spaces_created = 7;
   int32 spaces_unchanged = 8;
+  repeated SetupExchangeKeyResult exchange_keys = 9;
 }
 
 message GetSetupStatusReq {
   SetupAdmin admin = 1;
   SetupTencentCloud tencent_cloud = 2;
   repeated SetupSpace spaces = 5;
+  repeated SetupExchangeKey exchange_keys = 6;
 }
 
 message GetSetupStatusRsp {
@@ -57,6 +79,7 @@ message GetSetupStatusRsp {
   int32 missing = 6;
   int32 conflicts = 7;
   int32 spaces = 8;
+  repeated SetupExchangeKeyResult exchange_keys = 9;
 }
 
 // 配置备份：CLI 用管理员密码派生的密钥加密整份 moox.toml 后上传，服务端只保存密文信封（解不开），

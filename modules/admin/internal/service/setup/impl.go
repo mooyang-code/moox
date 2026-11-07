@@ -28,6 +28,10 @@ func (s *Service) Apply(ctx context.Context, manifest Manifest) (Result, error) 
 	if err != nil {
 		return Result{}, err
 	}
+	keys, err := normalizeExchangeKeys(manifest.ExchangeKeys)
+	if err != nil {
+		return Result{}, err
+	}
 	created := 0
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		n, err := s.ensureAdmin(ctx, tx, manifest.Admin)
@@ -48,6 +52,16 @@ func (s *Service) Apply(ctx context.Context, manifest Manifest) (Result, error) 
 			created += n
 			result.SpacesCreated += n
 		}
+		// 交易所密钥只建不改，不进整体冲突判断：已存在或已在管理台删除的都原样保留。
+		result.ExchangeKeys = result.ExchangeKeys[:0]
+		for _, key := range keys {
+			keyResult, n, err := s.ensureExchangeKey(ctx, tx, key)
+			if err != nil {
+				return err
+			}
+			created += n
+			result.ExchangeKeys = append(result.ExchangeKeys, keyResult)
+		}
 		return nil
 	})
 	if err != nil {
@@ -56,6 +70,7 @@ func (s *Service) Apply(ctx context.Context, manifest Manifest) (Result, error) 
 			status, inspectErr := s.Inspect(ctx, manifest)
 			if inspectErr == nil && status.State == "completed" {
 				result.Action = "unchanged"
+				result.ExchangeKeys = status.ExchangeKeys
 				return result, nil
 			}
 			if inspectErr == nil && status.State == "conflict" {
@@ -80,7 +95,11 @@ func (s *Service) Inspect(ctx context.Context, manifest Manifest) (Status, error
 	if err != nil {
 		return Status{}, err
 	}
-	status := Status{State: "completed", Users: 1, Secrets: 1, Spaces: len(spaces)}
+	keys, err := normalizeExchangeKeys(manifest.ExchangeKeys)
+	if err != nil {
+		return Status{}, err
+	}
+	status := Status{State: "completed", Users: 1, Secrets: 1 + len(keys), Spaces: len(spaces)}
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		state, err := s.inspectAdmin(ctx, tx, manifest.Admin)
 		if err != nil {
@@ -99,6 +118,17 @@ func (s *Service) Inspect(ctx context.Context, manifest Manifest) (Status, error
 			}
 			status.add(state)
 		}
+		for _, key := range keys {
+			keyState, err := s.inspectExchangeKey(ctx, tx, key)
+			if err != nil {
+				return err
+			}
+			// 只有真正缺失的密钥算 Missing；已存在、已在管理台删除都算完成，否则 setup init 会永远报未完成。
+			if keyState == ExchangeKeyMissing {
+				status.add(recordMissing)
+			}
+			status.ExchangeKeys = append(status.ExchangeKeys, ExchangeKeyResult{SecretID: exchangeKeyID(key), State: keyState, ReadOnly: key.ReadOnly})
+		}
 		return nil
 	})
 	if err != nil {
@@ -112,9 +142,10 @@ func (s *Service) Inspect(ctx context.Context, manifest Manifest) (Status, error
 	return status, nil
 }
 
+// expectedResult 的 Secrets 是 moox.toml 要求存在的密钥数：腾讯云一把加每把交易所密钥。
 func expectedResult(manifest Manifest) Result {
 	return Result{
-		Users: 1, Secrets: 1,
+		Users: 1, Secrets: 1 + len(manifest.ExchangeKeys),
 		Spaces: len(manifest.Spaces), SpacesUnchanged: len(manifest.Spaces),
 	}
 }
@@ -125,6 +156,9 @@ func validateManifest(manifest Manifest, db *gorm.DB, encryptionKey string) erro
 		return ErrInvalid
 	}
 	if _, err := normalizeSpaces(manifest.Spaces); err != nil {
+		return err
+	}
+	if _, err := normalizeExchangeKeys(manifest.ExchangeKeys); err != nil {
 		return err
 	}
 	return nil

@@ -117,7 +117,7 @@ func (s *Service) GetSecretValue(ctx context.Context, req *pb.GetSecretValueReq)
 // ReadonlyExchangeKeyID 返回只读交易所 Key 的固定秘钥 ID：exchange-<交易所>-production-readonly（setup apply 按 moox.toml 的
 // [[exchange_keys]] readonly = true 写入）。
 func ReadonlyExchangeKeyID(exchange string) string {
-	return "exchange-" + exchange + "-production-readonly"
+	return model.ExchangeSecretID(exchange, "production", "readonly")
 }
 
 // GetReadonlyExchangeKey 只返回只读交易所 Key 的公开标识 key_id，不返回秘钥值与额外配置。

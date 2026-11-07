@@ -40,6 +40,7 @@ func (s *Service) ApplySetup(ctx context.Context, request *pb.ApplySetupReq) (*p
 		Users: int32(result.Users), Secrets: int32(result.Secrets),
 		Spaces: int32(result.Spaces), SpacesCreated: int32(result.SpacesCreated),
 		SpacesUnchanged: int32(result.SpacesUnchanged),
+		ExchangeKeys:    exchangeKeyResultsToPB(result.ExchangeKeys),
 	}, nil
 }
 
@@ -57,6 +58,7 @@ func (s *Service) GetSetupStatus(ctx context.Context, request *pb.GetSetupStatus
 		RetInfo: setupRetOK(), State: status.State,
 		Users: int32(status.Users), Secrets: int32(status.Secrets),
 		Missing: int32(status.Missing), Conflicts: int32(status.Conflicts), Spaces: int32(status.Spaces),
+		ExchangeKeys: exchangeKeyResultsToPB(status.ExchangeKeys),
 	}, nil
 }
 
@@ -90,20 +92,21 @@ func applyManifest(request *pb.ApplySetupReq) (setup.Manifest, error) {
 	if request == nil {
 		return setup.Manifest{}, setup.ErrInvalid
 	}
-	return manifestFromPB(request.GetAdmin(), request.GetTencentCloud(), request.GetSpaces())
+	return manifestFromPB(request.GetAdmin(), request.GetTencentCloud(), request.GetSpaces(), request.GetExchangeKeys())
 }
 
 func statusManifest(request *pb.GetSetupStatusReq) (setup.Manifest, error) {
 	if request == nil {
 		return setup.Manifest{}, setup.ErrInvalid
 	}
-	return manifestFromPB(request.GetAdmin(), request.GetTencentCloud(), request.GetSpaces())
+	return manifestFromPB(request.GetAdmin(), request.GetTencentCloud(), request.GetSpaces(), request.GetExchangeKeys())
 }
 
 func manifestFromPB(
 	admin *pb.SetupAdmin,
 	cloud *pb.SetupTencentCloud,
 	spaces []*pb.SetupSpace,
+	exchangeKeys []*pb.SetupExchangeKey,
 ) (setup.Manifest, error) {
 	if admin == nil || cloud == nil {
 		return setup.Manifest{}, setup.ErrInvalid
@@ -119,7 +122,24 @@ func manifestFromPB(
 		}
 		manifest.Spaces = append(manifest.Spaces, spaceFromPB(space))
 	}
+	for _, key := range exchangeKeys {
+		if key == nil {
+			return setup.Manifest{}, setup.ErrInvalid
+		}
+		manifest.ExchangeKeys = append(manifest.ExchangeKeys, setup.ExchangeKey{
+			Name: key.GetName(), Exchange: key.GetExchange(), Environment: key.GetEnvironment(),
+			APIKey: key.GetApiKey(), SecretKey: key.GetSecretKey(), Passphrase: key.GetPassphrase(), ReadOnly: key.GetReadonly(),
+		})
+	}
 	return manifest, nil
+}
+
+func exchangeKeyResultsToPB(results []setup.ExchangeKeyResult) []*pb.SetupExchangeKeyResult {
+	out := make([]*pb.SetupExchangeKeyResult, 0, len(results))
+	for _, result := range results {
+		out = append(out, &pb.SetupExchangeKeyResult{SecretId: result.SecretID, State: result.State, Readonly: result.ReadOnly})
+	}
+	return out
 }
 
 func spaceFromPB(space *pb.SetupSpace) setup.Space {
