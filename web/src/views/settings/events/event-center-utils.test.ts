@@ -8,6 +8,7 @@ import {
   cancelConfirmText,
   cancelLabel,
   canRetry,
+  confirmCheckboxText,
   delistTimeError,
   describeScope,
   eventTitle,
@@ -210,6 +211,19 @@ describe("手工登记下架", () => {
     );
     expect(holderLine(holder({ status: "ERROR" }))).toContain("账户出错");
     expect(skippedLine({ trading_account_id: "ta-9", reason: "资金设置读不出来" })).toBe("执行账户 ta-9：资金设置读不出来");
+  });
+
+  it("二次确认的勾选框文字：几件要确认的事同时出现时合并成一句", () => {
+    const base = { previewFailed: false, verified: true, skipped: 0, live: 0, willProcess: true };
+    expect(confirmCheckboxText(base)).toBe("");
+    expect(confirmCheckboxText({ ...base, previewFailed: true })).toBe("我知道无法确认持有情况，仍然登记");
+    expect(confirmCheckboxText({ ...base, verified: false, live: 2 })).toBe("我知道无法确认持有情况，仍然登记");
+    expect(confirmCheckboxText({ ...base, live: 1 })).toBe("我确认有生产组合会被平仓，仍然登记");
+    expect(confirmCheckboxText({ ...base, live: 1, willProcess: false })).toBe("我确认有生产组合持有这个标的，仍然登记");
+    expect(confirmCheckboxText({ ...base, skipped: 1 })).toBe("我确认有账户没能判断持有情况，仍然登记");
+    expect(confirmCheckboxText({ ...base, live: 1, skipped: 2 })).toBe(
+      "我确认有生产组合会被平仓，并且有账户没能判断持有情况，仍然登记"
+    );
   });
 
   it("下架时间必须填，允许补录过去的时间", () => {

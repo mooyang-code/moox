@@ -92,11 +92,7 @@
           </ul>
         </template>
       </template>
-      <a-checkbox v-if="previewFailed || !verified" v-model="confirmed">我知道无法确认持有情况，仍然登记</a-checkbox>
-      <a-checkbox v-else-if="skippedAccounts.length" v-model="confirmed">我知道有账户没能判断持有情况，仍然登记</a-checkbox>
-      <a-checkbox v-else-if="summary.live.length" v-model="confirmed">
-        {{ willProcess ? "我确认有生产组合会被平仓，仍然登记" : "我确认有生产组合持有这个标的，仍然登记" }}
-      </a-checkbox>
+      <a-checkbox v-if="confirmText" v-model="confirmed">{{ confirmText }}</a-checkbox>
     </template>
 
     <template #footer>
@@ -134,6 +130,7 @@ import { reportControlError } from "@/api/admin/http";
 import {
   DELIST_EXCHANGES,
   DELIST_MARKETS,
+  confirmCheckboxText,
   delistTimeError,
   formatMs,
   holderLine,
@@ -171,6 +168,15 @@ const confirmed = ref(false);
 const delistAtMs = computed(() => pickerValueToMs(form.delist_at));
 const pastTime = computed(() => isPastDelistTime(delistAtMs.value, Date.now()));
 const summary = computed(() => summarizeHolders(holders.value));
+const confirmText = computed(() =>
+  confirmCheckboxText({
+    previewFailed: previewFailed.value,
+    verified: verified.value,
+    skipped: skippedAccounts.value.length,
+    live: summary.value.live.length,
+    willProcess: willProcess.value
+  })
+);
 const needConfirm = computed(
   () => previewFailed.value || !verified.value || skippedAccounts.value.length > 0 || summary.value.live.length > 0
 );

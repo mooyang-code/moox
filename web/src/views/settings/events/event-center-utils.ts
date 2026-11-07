@@ -264,6 +264,25 @@ export function skippedLine(account: SkippedAccount): string {
   return `执行账户 ${account.trading_account_id}：${account.reason || "原因未知"}`;
 }
 
+/**
+ * 登记前二次确认的勾选框文字；不需要确认时为空。几种情况同时出现时合并成一句，每件要确认的事都写出来：
+ * “会平仓生产组合”是破坏性操作的确认依据，不能因为同时有没能判断的账户就被吞掉。
+ */
+export function confirmCheckboxText(input: {
+  previewFailed: boolean;
+  verified: boolean;
+  skipped: number;
+  live: number;
+  willProcess: boolean;
+}): string {
+  if (input.previewFailed || !input.verified) return "我知道无法确认持有情况，仍然登记";
+  const parts: string[] = [];
+  if (input.live > 0) parts.push(input.willProcess ? "有生产组合会被平仓" : "有生产组合持有这个标的");
+  if (input.skipped > 0) parts.push("有账户没能判断持有情况");
+  if (!parts.length) return "";
+  return `我确认${parts.join("，并且")}，仍然登记`;
+}
+
 /** 手工登记时可能出现的取值。 */
 export const DELIST_EXCHANGES = [
   { value: "binance", label: "币安" },
