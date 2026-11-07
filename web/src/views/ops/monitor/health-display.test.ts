@@ -23,12 +23,15 @@ describe("health display", () => {
       href: "#/settings/events?tab=executions",
       label: "查看事件中心执行记录"
     });
-    expect(
-      alertLink({ type: "business", kind: "collector_attention" }, "rule-1:collector_attention:delist_readonly_key_missing")
-    ).toEqual({ href: "#/settings/secrets", label: "去录入币安只读 Key" });
-    expect(
-      alertLink({ type: "business", kind: "collector_attention" }, "rule-1:collector_attention:delist_source_failed").href
-    ).not.toBe("#/settings/secrets");
+    expect(alertLink({ type: "business", kind: "collector_attention", attention_kind: "delist_readonly_key_missing" })).toEqual({
+      href: "#/settings/secrets",
+      label: "去录入币安只读 Key"
+    });
+    expect(alertLink({ type: "business", kind: "collector_attention", attention_kind: "delist_source_failed" }).href).not.toBe(
+      "#/settings/secrets"
+    );
+    // 只认 attention_kind，不再从告警编号里截取
+    expect(alertLink({ type: "business", kind: "collector_attention" }).href).not.toBe("#/settings/secrets");
     expect(alertLink({ type: "component", host_id: "control", component_id: "collector" }).href).toBe(
       "#/ops/deployments?tab=services&host_id=control&component_id=collector"
     );

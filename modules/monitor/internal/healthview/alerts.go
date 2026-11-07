@@ -42,6 +42,10 @@ func alertObject(spaceID, checkID string, facts observability.Overview) *pb.Heal
 			}
 		}
 	}
+	// 关注项检查按登记过的种类给出 attention_kind，前端不用再从告警编号里截取。
+	if len(parts) == 2 && observability.AttentionCheckName(parts[0], parts[1]) != "" {
+		object.AttentionKind = parts[1]
+	}
 	if len(parts) >= 4 && parts[0] == "dataset" {
 		object.Type, object.Producer, object.DatasetId, object.Freq = "dataset", parts[1], strings.Join(parts[2:len(parts)-1], ":"), parts[len(parts)-1]
 	}

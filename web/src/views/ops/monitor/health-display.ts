@@ -43,12 +43,9 @@ export function hostHref(hostID?: string) {
 
 const COLLECTOR_RESULTS = { href: "#/collector/tasks?tab=results", label: "查看采集结果" };
 
-/** 缺少币安只读 Key 的告警检查 ID：告警编号是“告警规则 ID:检查 ID”，按完整的检查 ID 结尾认出它。 */
-const READONLY_KEY_MISSING_CHECK = "collector_attention:delist_readonly_key_missing";
-
-/** 告警对象的处理入口：页面地址与链接文字。alertId 用来区分同一类关注项里的具体情况。 */
-export function alertLink(object?: HealthObject, alertId?: string): { href: string; label: string } {
-  if (object?.kind === "collector_attention" && alertId?.endsWith(`:${READONLY_KEY_MISSING_CHECK}`)) {
+/** 告警对象的处理入口：页面地址与链接文字。同一类关注项里的具体情况按 Monitor 给出的 attention_kind 区分。 */
+export function alertLink(object?: HealthObject): { href: string; label: string } {
+  if (object?.kind === "collector_attention" && object.attention_kind === "delist_readonly_key_missing") {
     return { href: "#/settings/secrets", label: "去录入币安只读 Key" };
   }
   if (object?.type === "host") return { href: hostHref(object.host_id), label: "查看主机" };
@@ -89,6 +86,6 @@ export function alertLink(object?: HealthObject, alertId?: string): { href: stri
   };
 }
 
-export function alertHref(item: { object?: HealthObject; id?: string }) {
-  return alertLink(item.object, item.id).href;
+export function alertHref(item: { object?: HealthObject }) {
+  return alertLink(item.object).href;
 }
