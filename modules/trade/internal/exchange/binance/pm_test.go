@@ -311,6 +311,8 @@ func TestPortfolioMarginAccountSnapshotUsesOfficialSamples(t *testing.T) {
 	// 保证金率监控的统一账户读数：总权益 accountEquity、维持保证金 accountMaintMargin（官方 papi account 样例）。
 	require.Equal(t, "23.72469206", snapshot.MaintenanceMargin.String())
 	require.True(t, snapshot.Present.MaintenanceMargin && snapshot.Present.Equity)
+	// 交易所给的 uniMMR（官方样例 5167.92171923）一并进快照，监控直接用它。
+	require.Equal(t, "5167.92171923", snapshot.UniMMR.String())
 	require.Equal(t, "23.72469206", snapshot.UsedMargin.String())
 	require.False(t, snapshot.ExchangeUpdatedAt.IsZero())
 	require.Equal(t, snapshot.ExchangeUpdatedAt, snapshot.WalletUpdatedAt[exchange.WalletMargin])

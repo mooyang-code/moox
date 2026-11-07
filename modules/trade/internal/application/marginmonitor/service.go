@@ -7,7 +7,8 @@
 //     正是币安决定强平的口径，保证金币手工划到合约钱包的部分也算在内）。持仓名义 = Σ 持仓数量绝对值 × 标记价（没有标记价用开仓均价）。
 //     计划 4.6 的“策略权益不用交易所总权益”指的是换算目标的权益，不是这里的风控读数。
 //   - 统一账户（BINANCE_PORTFOLIO_MARGIN）：uniMMR = 总权益 ÷ 维持保证金，低于阈值（默认 1.5）时触发；总权益取 ExchangeEquity，
-//     维持保证金取快照里的 MaintenanceMargin。
+//     维持保证金取快照里的 MaintenanceMargin；交易所给了 uniMMR（快照的 UniMMR）就直接用它比阈值（分子计入抵押率并扣掉挂单浮亏，
+//     比自己算的更准），只有它为空才退回总权益 ÷ 维持保证金。
 //   - 分母为零或数据缺失（没有持仓、维持保证金或总权益没填、快照太久没更新）一律不触发：数据不全时不能凭空减仓。
 //   - OKX 暂不接入：官方样例里账户级的维持保证金在 mmr、adjEq，币种明细里的 mmr 和 mgnRatio 是空串，现有快照读不对，先不监控、告警一次；
 //     账户类型还没有检测写入（依赖交易所检测任务 T5）的实盘永续账户同样不监控、告警一次。
@@ -103,12 +104,20 @@ type Reading struct {
 	Value     shared.Decimal
 	Threshold shared.Decimal
 	Triggered bool
+	// FromUniMMR 为真表示 Value 直接取自交易所给的 uniMMR；Computed 是用总权益 ÷ 维持保证金自己算的值（算不出来为零），
+	// 两个值都写进日志，V3 实测时对照。
+	FromUniMMR bool
+	Computed   shared.Decimal
 }
 
 // Describe 只用在日志里（比值是变化的数字，不进暂停原因和告警详情）。
 func (r Reading) Describe() string {
 	if r.Unified {
-		return fmt.Sprintf("%s：uniMMR %.4f 低于阈值 %s", r.AccountName, r.Value.Float64(), r.Threshold)
+		source := "总权益 ÷ 维持保证金（交易所没给 uniMMR）"
+		if r.FromUniMMR {
+			source = "交易所的 uniMMR"
+		}
+		return fmt.Sprintf("%s：%s %.4f 低于阈值 %s（自己用 accountEquity ÷ accountMaintMargin 算 %.4f）", r.AccountName, source, r.Value.Float64(), r.Threshold, r.Computed.Float64())
 	}
 	return fmt.Sprintf("%s：总权益 ÷ 持仓名义 = %.4f，不高于阈值 %s", r.AccountName, r.Value.Float64(), r.Threshold)
 }
@@ -149,18 +158,26 @@ func unsupportedNote(account store.TradingAccountRecord) string {
 func Evaluate(account store.TradingAccountRecord, positions []store.PositionRecord, settings fundsettings.Settings) (Reading, bool) {
 	reading := Reading{AccountName: account.Name}
 	equity := parseOrZero(account.Snapshot.ExchangeEquity)
-	if equity.Cmp(shared.Zero()) <= 0 {
-		return reading, false
-	}
 	if exchange.AccountMode(account.AccountMode) != exchange.AccountModeBinanceStandard {
 		reading.Unified, reading.Threshold = true, settings.UnifiedMMRThreshold
 		maintenance := parseOrZero(account.Snapshot.MaintenanceMargin)
-		if maintenance.Cmp(shared.Zero()) <= 0 {
+		if equity.Cmp(shared.Zero()) > 0 && maintenance.Cmp(shared.Zero()) > 0 {
+			reading.Computed = equity.Div(maintenance)
+		}
+		// 优先用交易所给的 uniMMR：它的分子是计入抵押率、再扣掉挂单浮亏后的调整后权益；自己算的 accountEquity ÷ accountMaintMargin
+		// 没扣挂单浮亏，有挂单时可能比币安的 uniMMR 略高。交易所没给时才退回自己算。
+		if uni := parseOrZero(account.Snapshot.UniMMR); uni.Cmp(shared.Zero()) > 0 {
+			reading.Value, reading.FromUniMMR = uni, true
+		} else if !reading.Computed.IsZero() {
+			reading.Value = reading.Computed
+		} else {
 			return reading, false
 		}
-		reading.Value = equity.Div(maintenance)
 		reading.Triggered = reading.Value.Cmp(reading.Threshold) < 0
 		return reading, true
+	}
+	if equity.Cmp(shared.Zero()) <= 0 {
+		return reading, false
 	}
 	reading.Threshold = settings.MarginRatioThreshold
 	notional := shared.Zero()
@@ -298,7 +315,11 @@ func (s *Service) RunLogicalAccount(ctx context.Context, logical store.LogicalAc
 		if err != nil {
 			return err
 		}
-		if reading, ok := Evaluate(account, positions, settings); ok && reading.Triggered {
+		reading, ok := Evaluate(account, positions, settings)
+		if ok && reading.Unified {
+			log.Debugf("交易关注项：统一账户 %s 的保证金率读数 %.4f（交易所 uniMMR：%t，自己算 %.4f）", account.Name, reading.Value.Float64(), reading.FromUniMMR, reading.Computed.Float64())
+		}
+		if ok && reading.Triggered {
 			triggered = append(triggered, reading)
 		}
 	}

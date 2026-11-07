@@ -1547,6 +1547,10 @@ func mergePrivateSnapshot(
 			*field.destination = field.source
 		}
 	}
+	if update.Present.MaintenanceMargin {
+		// 维持保证金被私有事件更新了，上一次完整读到的 uniMMR 已经过期：清掉，监控退回用权益和维持保证金自己算。
+		current.UniMMR = ""
+	}
 	current.ExchangeUpdatedAt = incoming.ExchangeUpdatedAt
 	return current
 }

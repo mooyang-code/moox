@@ -36,7 +36,9 @@ type TradingAccountSnapshot struct {
 	MaintenanceMargin string
 	UnrealizedPnL     string
 	// ExchangeEquity 是交易所给的总权益，只用于展示核对。
-	ExchangeEquity    string
+	ExchangeEquity string
+	// UniMMR 是交易所给的统一账户维持保证金率（空表示没有），见 exchange.AccountSnapshot.UniMMR。
+	UniMMR            string
 	ExchangeUpdatedAt int64
 	// WalletUpdatedAt 记录各钱包余额的更新时间（交易所毫秒）；没有记录的钱包按 ExchangeUpdatedAt 算。
 	WalletUpdatedAt map[string]int64
@@ -57,6 +59,7 @@ type snapshotDocument struct {
 	MaintenanceMargin string           `json:"maintenance_margin"`
 	UnrealizedPnL     string           `json:"unrealized_pnl"`
 	ExchangeEquity    string           `json:"exchange_equity"`
+	UniMMR            string           `json:"uni_mmr,omitempty"`
 	ExchangeUpdatedAt int64            `json:"exchange_updated_at"`
 	Wallets           []walletSnapshot `json:"wallets"`
 }
@@ -66,7 +69,7 @@ func (s TradingAccountSnapshot) MarshalJSON() ([]byte, error) {
 	document := snapshotDocument{
 		Equity: s.Equity, AvailableFunds: s.AvailableFunds, UsedMargin: s.UsedMargin,
 		MaintenanceMargin: s.MaintenanceMargin, UnrealizedPnL: s.UnrealizedPnL,
-		ExchangeEquity: s.ExchangeEquity, ExchangeUpdatedAt: s.ExchangeUpdatedAt,
+		ExchangeEquity: s.ExchangeEquity, UniMMR: s.UniMMR, ExchangeUpdatedAt: s.ExchangeUpdatedAt,
 		Wallets: []walletSnapshot{},
 	}
 	index := make(map[string]int)
@@ -96,7 +99,7 @@ func (s *TradingAccountSnapshot) UnmarshalJSON(data []byte) error {
 	*s = TradingAccountSnapshot{
 		Equity: document.Equity, AvailableFunds: document.AvailableFunds, UsedMargin: document.UsedMargin,
 		MaintenanceMargin: document.MaintenanceMargin, UnrealizedPnL: document.UnrealizedPnL,
-		ExchangeEquity: document.ExchangeEquity, ExchangeUpdatedAt: document.ExchangeUpdatedAt,
+		ExchangeEquity: document.ExchangeEquity, UniMMR: document.UniMMR, ExchangeUpdatedAt: document.ExchangeUpdatedAt,
 	}
 	for _, wallet := range document.Wallets {
 		if s.WalletUpdatedAt == nil {
@@ -129,6 +132,9 @@ func SnapshotFromExchange(snapshot exchange.AccountSnapshot) TradingAccountSnaps
 		UnrealizedPnL:     snapshot.UnrealizedPnL.String(),
 		ExchangeEquity:    snapshot.ExchangeEquity.String(),
 		ExchangeUpdatedAt: snapshot.ExchangeUpdatedAt.UnixMilli(),
+	}
+	if !snapshot.UniMMR.IsZero() {
+		record.UniMMR = snapshot.UniMMR.String()
 	}
 	if len(snapshot.WalletUpdatedAt) > 0 {
 		record.WalletUpdatedAt = make(map[string]int64, len(snapshot.WalletUpdatedAt))
@@ -168,6 +174,7 @@ func (s TradingAccountSnapshot) ToExchange() exchange.AccountSnapshot {
 		MaintenanceMargin: decimalOrZero(s.MaintenanceMargin),
 		UnrealizedPnL:     decimalOrZero(s.UnrealizedPnL),
 		ExchangeEquity:    decimalOrZero(s.ExchangeEquity),
+		UniMMR:            decimalOrZero(s.UniMMR),
 		ExchangeUpdatedAt: updatedAt,
 	}
 }
@@ -995,6 +1002,7 @@ func encodeSnapshot(snapshot TradingAccountSnapshot) (string, error) {
 		&snapshot.MaintenanceMargin,
 		&snapshot.UnrealizedPnL,
 		&snapshot.ExchangeEquity,
+		&snapshot.UniMMR,
 	} {
 		canonical, err := canonicalOptionalDecimal(*value)
 		if err != nil {

@@ -356,7 +356,10 @@ type AccountSnapshot struct {
 	MaintenanceMargin shared.Decimal
 	UnrealizedPnL     shared.Decimal
 	// ExchangeEquity 是交易所给的总权益，只用于展示核对，不参与换算。
-	ExchangeEquity    shared.Decimal
+	ExchangeEquity shared.Decimal
+	// UniMMR 是交易所给的统一账户维持保证金率（币安 papi account 的 uniMMR，零表示没有）。保证金率监控直接用它比阈值：
+	// 它的分子是计入抵押率、再扣掉挂单浮亏（openLoss）后的调整后权益，自己用 accountEquity ÷ accountMaintMargin 算可能偏高。
+	UniMMR            shared.Decimal
 	ExchangeUpdatedAt time.Time
 	// WalletUpdatedAt 是各钱包余额的读取时间；同时读多个市场的适配器按钱包记录，没有记录的钱包按 ExchangeUpdatedAt 算。
 	WalletUpdatedAt map[Wallet]time.Time

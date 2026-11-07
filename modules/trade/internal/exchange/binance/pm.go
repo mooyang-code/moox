@@ -351,6 +351,9 @@ func (p *PortfolioMargin) GetAccountSnapshot(ctx context.Context) (exchange.Acco
 	if snapshot.MaintenanceMargin, err = decimalOrZero(account.AccountMaintMargin); err != nil {
 		return exchange.AccountSnapshot{}, err
 	}
+	if snapshot.UniMMR, err = decimalOrZero(account.UniMMR); err != nil {
+		return exchange.AccountSnapshot{}, err
+	}
 	// 账户级可用资金：优先用接口给的 totalAvailableBalance；官方样例里它是空串（未核对真实取值），
 	// 取不到时用“杠杆钱包可用 + UM 钱包余额 − 账户已用初始保证金”估算，不低于 0。
 	if account.TotalAvailableBalance != "" {

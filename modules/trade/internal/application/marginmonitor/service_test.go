@@ -98,6 +98,40 @@ func TestEvaluateUnifiedAccountTriggersOnlyBelowThreshold(t *testing.T) {
 	}
 }
 
+// 交易所给了 uniMMR 就直接用它比阈值（分子计入抵押率并扣掉挂单浮亏），不用自己算的值：
+// 自己算 accountEquity ÷ accountMaintMargin = 2.0 看着安全，交易所的 uniMMR 是 1.4（有挂单浮亏）就要触发。
+func TestEvaluateUnifiedAccountPrefersTheExchangeUniMMR(t *testing.T) {
+	settings := defaults(t) // 阈值 1.5
+	account := standardAccount("200")
+	account.AccountMode = "BINANCE_PORTFOLIO_MARGIN"
+	account.Snapshot.MaintenanceMargin = "100"
+
+	account.Snapshot.UniMMR = "1.4"
+	reading, ok := Evaluate(account, nil, settings)
+	require.True(t, ok)
+	require.True(t, reading.FromUniMMR)
+	require.Equal(t, "1.4", reading.Value.String())
+	require.Equal(t, "2", reading.Computed.String(), "自己算的值也留着，写日志对照")
+	require.True(t, reading.Triggered)
+
+	// 交易所没给 uniMMR 才退回自己算。
+	account.Snapshot.UniMMR = ""
+	reading, ok = Evaluate(account, nil, settings)
+	require.True(t, ok)
+	require.False(t, reading.FromUniMMR)
+	require.Equal(t, "2", reading.Value.String())
+	require.False(t, reading.Triggered)
+
+	// 只有 uniMMR（总权益、维持保证金都没填）也能判断。
+	only := standardAccount("")
+	only.AccountMode = "BINANCE_PORTFOLIO_MARGIN"
+	only.Snapshot.UniMMR = "1.2"
+	reading, ok = Evaluate(only, nil, settings)
+	require.True(t, ok)
+	require.True(t, reading.Triggered)
+	require.Contains(t, reading.Describe(), "交易所的 uniMMR")
+}
+
 func TestEvaluateUsesTheConfiguredThresholds(t *testing.T) {
 	settings, _, err := fundsettings.ParseLenient(`{"margin_ratio_threshold":"0.3","unified_mmr_threshold":"2"}`)
 	require.NoError(t, err)
