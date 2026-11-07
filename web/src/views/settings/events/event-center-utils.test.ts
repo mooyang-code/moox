@@ -91,7 +91,7 @@ describe("事件中心的文案", () => {
         false
       )
     ).toBe("系统：卖出策略持有的下架币（尚未启用，只记录）");
-    expect(SYSTEM_ACTION_DISABLED_TEXT).toContain("系统动作尚未启用，只记录");
+    expect(SYSTEM_ACTION_DISABLED_TEXT).toContain("系统动作尚未启用，现在只记录");
     const events = [{ event_name: "e.a", version: 1, title: "标的即将下架", description: "", scope_fields: [] }];
     expect(eventTitle(events, "e.a")).toBe("标的即将下架");
     expect(eventTitle(events, "e.b")).toBe("e.b");

@@ -183,18 +183,28 @@ describe("手工登记下架的外部接口", () => {
     });
   });
 
-  it("只查模拟盘时，返回的每一项都按模拟盘处理", async () => {
+  it("Trade 违约时按无法确认处理：只查模拟盘却返回非模拟盘的项；无此标的却带着持有者", async () => {
+    const paperOnly = { exchange: "okx", market: "SWAP", exchange_symbol: "FOO-USDT-SWAP", paper_only: true } as const;
     mocks.callTrade.mockResolvedValue({
       ret_info: { code: 0 },
       holders: [{ space_id: "crypto", logical_account_id: "la-1", paper: false }]
     });
-    const preview = await listInstrumentHolders({
-      exchange: "okx",
-      market: "SWAP",
-      exchange_symbol: "FOO-USDT-SWAP",
-      paper_only: true
+    const violated = await listInstrumentHolders(paperOnly);
+    expect(violated.verified).toBe(false);
+    expect(violated.holders[0].paper).toBe(false);
+
+    mocks.callTrade.mockResolvedValue({
+      ret_info: { code: 0 },
+      holders: [{ space_id: "crypto", logical_account_id: "la-1", paper: true }]
     });
-    expect(preview.holders.every(item => item.paper)).toBe(true);
+    expect((await listInstrumentHolders(paperOnly)).verified).toBe(true);
+
+    mocks.callTrade.mockResolvedValue({
+      ret_info: { code: 0 },
+      instrument_unknown: true,
+      holders: [{ space_id: "crypto", logical_account_id: "la-1", paper: false }]
+    });
+    expect((await listInstrumentHolders({ ...paperOnly, paper_only: false })).verified).toBe(false);
   });
 
   it("没有 holders 字段又没有无此标的标记时，不能当成没人持有", async () => {

@@ -112,7 +112,7 @@ export function scopeToForm(scope: ScopeFilter[]): Record<string, string[]> {
 }
 
 /** 系统动作的处理器还没上线时，所有系统动作只留执行记录，不会真的动 Trade。 */
-export const SYSTEM_ACTION_DISABLED_TEXT = "系统动作尚未启用，只记录：下架事件只会产生执行记录，不会禁止买入，也不会平仓。";
+export const SYSTEM_ACTION_DISABLED_TEXT = "系统动作尚未启用，现在只记录；启用后，还没结束的记录会接着处理。";
 
 export function actionText(
   rule: Pick<EventRule, "action_type" | "notify_url" | "system_action">,

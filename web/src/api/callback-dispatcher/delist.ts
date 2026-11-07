@@ -28,7 +28,10 @@ export interface InstrumentHolder {
 /** 持有者预览：除了列表，还说明这份列表能不能当真。 */
 export interface HoldersPreview {
   holders: InstrumentHolder[];
-  /** false 表示 Trade 的返回里没有 holders 字段、也没有“无此标的”标记，不能当成没人持有。 */
+  /**
+   * false 表示这份结果不能当真，不能当成没人持有：Trade 的返回里没有 holders 字段又没有“无此标的”标记；
+   * 或者违反约定（只查模拟盘却返回了非模拟盘的项；标明无此标的却带着持有者）。
+   */
   verified: boolean;
   /** Trade 没有这个标的（没开通对应市场的账户），自然没有策略持有。 */
   instrumentUnknown: boolean;
@@ -84,10 +87,11 @@ export async function listInstrumentHolders(input: Parameters<typeof buildHolder
     trading_account_id: item.trading_account_id ?? "",
     quantity: String(item.quantity ?? ""),
     dust: Boolean(item.dust),
-    // 只查模拟盘时，返回的每一项都是模拟盘，不依赖对方有没有填 paper。
-    paper: input.paper_only || Boolean(item.paper)
+    paper: Boolean(item.paper)
   }));
-  return { holders, verified: Array.isArray(rsp.holders) || instrumentUnknown, instrumentUnknown };
+  // 不替对方改写 paper：对方违约要让人看得出来，而不是被掩盖。
+  const violated = (input.paper_only && holders.some(item => !item.paper)) || (instrumentUnknown && holders.length > 0);
+  return { holders, verified: (Array.isArray(rsp.holders) || instrumentUnknown) && !violated, instrumentUnknown };
 }
 
 export async function registerDelistNotice(req: RegisterDelistNoticeReq): Promise<RegisterDelistNoticeResult> {

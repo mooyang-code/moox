@@ -106,7 +106,8 @@ defineOptions({ name: "EventCenterRules" });
 
 const rows = ref<EventRule[]>([]);
 const events = ref<SubscribableEvent[]>([]);
-const systemActionEnabled = ref(false);
+// 目录没加载出来时按已启用处理：不能因为一次加载失败就对用户说“尚未启用”。
+const systemActionEnabled = ref(true);
 const loading = ref(false);
 const pagination = reactive(defaultPagination());
 const toggling = ref("");
