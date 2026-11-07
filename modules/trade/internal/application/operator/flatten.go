@@ -121,7 +121,7 @@ type FlattenResult struct {
 	// FinishingSince 是进入收尾的时间（毫秒）：满 flattenFinishingTimeout 仍收拾不完就不再等，照常落成 FinishingStatus，
 	// 没收拾掉的子单记进 ManualCheckOrderIDs。落库保存，重启后照样从这个时间算。
 	FinishingSince int64 `json:"finishing_since,omitempty"`
-	// ManualCheckOrderIDs 是动作结束时没能收拾掉的子单（收尾超时仍解析不出、交易所确认标的不存在、取不到账户会话），
+	// ManualCheckOrderIDs 是动作结束时没能收拾掉的子单（收尾超时仍解析不出、交易所确认标的不存在），
 	// 动作不再管它们，要人工到交易所核对。
 	ManualCheckOrderIDs []string `json:"manual_check_child_order_ids,omitempty"`
 }
@@ -508,7 +508,7 @@ const flattenFinishingTimeout = 30 * time.Minute
 
 // finishFlatten 把清仓进度落成 status。动作要离开运行（完成、部分完成、失败）时先收拾本动作还没结束的子单：
 // 收拾不完（子单还在解析、丢弃失败）就先保持运行并记下要结束成什么、什么时候进入的收尾，之后每次恢复只收拾、不下单，
-// 收拾完才落成 status。收尾满 flattenFinishingTimeout 仍收拾不完，或者子单收拾不了（交易所确认标的不存在、取不到账户会话），
+// 收拾完才落成 status。收尾满 flattenFinishingTimeout 仍收拾不完，或者子单收拾不了（交易所确认标的不存在），
 // 照样落成 status，这些子单记进结果的 ManualCheckOrderIDs 并记关注项，要人工核对。返回实际落库的状态。
 //
 // 子单解析失败属于本动作的账户问题，不作为调用错误返回（否则工作线程每秒都报错）；原因写进动作的 last_error。
@@ -569,8 +569,8 @@ func (s *Service) finishFlatten(
 //   - 提交中、结果未知的先同步解析，解析后退回待提交的同样丢弃；
 //   - 挂单中、撤单中的不动，它们自己会结束。
 //
-// 结果分三类：unsettled 是这次没收拾掉、下次恢复还能再试的（未知窗口内、解析或丢弃报错）；manualCheck 是收拾不了的
-// （交易所确认标的不存在、取不到账户会话），不阻塞收尾，要人工核对；返回的错误只有列子单这类读库失败。
+// 结果分三类：unsettled 是这次没收拾掉、下次恢复还能再试的（未知窗口内、解析或丢弃报错、取不到账户会话）；manualCheck 是收拾不了的
+// （交易所确认标的不存在），不阻塞收尾，要人工核对；返回的错误只有列子单这类读库失败。
 func (s *Service) settleFlattenChildren(ctx context.Context, command FlattenCommand, members []store.LogicalAccountMemberRecord) (settleOutcome, error) {
 	var outcome settleOutcome
 	for _, member := range members {
@@ -625,14 +625,11 @@ func (o settleOutcome) errorText() string {
 	return errors.Join(o.errs...).Error()
 }
 
-// childUnsettleable 报告子单解析失败是否属于等多久都收拾不了的：交易所确认标的不存在（币安 -1121、OKX 51001，标的已下架），
-// 或者取不到账户的执行通道（没有会话、账户已停用）。凭证失效、超时、限流等不算，按收尾上限处理。
+// childUnsettleable 报告子单解析失败是否属于等多久都收拾不了的：只有交易所确认标的不存在（币安 -1121、OKX 51001，标的已下架）。
+// 取不到账户的执行通道（没有会话）不算：重启后会话还没建好时只是暂时的，当场放行会把本可解析的子单丢给人工；
+// 它和凭证失效、超时、限流一样按收尾上限处理。
 func childUnsettleable(err error) bool {
-	if exchange.IsInstrumentNotFound(err) {
-		return true
-	}
-	var accountErr *orderapp.AccountExecutionError
-	return errors.As(err, &accountErr) && accountErr.Operation == "adapter"
+	return exchange.IsInstrumentNotFound(err)
 }
 
 // clock 返回当前时间（测试可以替换 Now）。

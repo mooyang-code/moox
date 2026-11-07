@@ -312,7 +312,7 @@ func TestFlattenFinishingGivesUpAfterTimeout(t *testing.T) {
 	require.NotEmpty(t, telemetry.Recent(telemetry.AttentionFlattenOrdersUnsettled, fixture.now, time.Minute))
 }
 
-// 交易所确认标的不存在（币安 -1121、OKX 51001）或取不到账户会话：这笔子单等多久都收拾不了，不阻塞收尾，
+// 交易所确认标的不存在（币安 -1121、OKX 51001）：这笔子单等多久都收拾不了，不阻塞收尾，
 // 动作当场落成 PARTIAL，子单记为需人工核对。
 func TestFlattenFinishingReleasesUnsettleableChild(t *testing.T) {
 	for _, tc := range []struct {
@@ -323,8 +323,6 @@ func TestFlattenFinishingReleasesUnsettleableChild(t *testing.T) {
 			Err: &exchange.Error{Kind: exchange.ErrorRejected, Code: exchange.CodeBinanceInvalidSymbol}}},
 		{"OKX 标的不存在", &orderapp.AccountExecutionError{TradingAccountID: "account-a", Operation: "get_order",
 			Err: &exchange.Error{Kind: exchange.ErrorRejected, Code: exchange.CodeOKXInstrumentNotFound}}},
-		{"没有会话", &orderapp.AccountExecutionError{TradingAccountID: "account-a", Operation: "adapter",
-			Err: errors.New("交易账户会话还没有启动，请稍后重试")}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fixture := newMixedFlattenFixture(t)
@@ -338,6 +336,33 @@ func TestFlattenFinishingReleasesUnsettleableChild(t *testing.T) {
 			require.Empty(t, fixture.orders.specs)
 		})
 	}
+}
+
+// 取不到账户会话（重启后会话还没建好）只是暂时的：不当场放行，和凭证失效一样保持收尾，
+// 满 30 分钟仍取不到才落成 PARTIAL、子单记为需人工核对。
+func TestFlattenFinishingWaitsForMissingSession(t *testing.T) {
+	fixture := newMixedFlattenFixture(t)
+	noSession := &orderapp.AccountExecutionError{TradingAccountID: "account-a", Operation: "adapter",
+		Err: errors.New("交易账户会话还没有启动，请稍后重试")}
+	service, command := startFinishingWithUnknownChild(t, fixture, "delist-nosession", "child-nosession", noSession)
+	enteredAt := fixture.now
+
+	result, err := service.FlattenLogicalAccount(context.Background(), command)
+	require.NoError(t, err)
+	require.Equal(t, "RUNNING", result.Action.Status, "没有会话不当场放行")
+	require.Equal(t, "PARTIAL", result.FinishingStatus)
+	require.Empty(t, result.ManualCheckOrderIDs)
+
+	fixture.now = enteredAt.Add(29 * time.Minute)
+	decoded := resumeStored(t, fixture, service, "delist-nosession")
+	require.Equal(t, "RUNNING", decoded.Action.Status)
+
+	fixture.now = enteredAt.Add(30 * time.Minute)
+	decoded = resumeStored(t, fixture, service, "delist-nosession")
+	require.Equal(t, "PARTIAL", decoded.Action.Status)
+	require.Equal(t, []string{"child-nosession"}, decoded.ManualCheckOrderIDs)
+	require.Empty(t, decoded.FinishingStatus)
+	require.Empty(t, fixture.orders.specs, "收尾期间不下单")
 }
 
 // 工作线程按 ActionScopedError 隔离单个动作的失败：账户、交易所侧的错误只记在这个动作上；掺着共享故障的不算。

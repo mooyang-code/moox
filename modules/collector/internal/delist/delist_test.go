@@ -259,7 +259,8 @@ func TestDetectorPublishesOncePerNoticeAndRaisesAttention(t *testing.T) {
 	pending, err := db.Resample().PendingEvents(ctx, 10)
 	require.NoError(t, err)
 	require.Len(t, pending, 1)
-	require.Equal(t, 1.0, testutil.ToFloat64(attn.Gauge().WithLabelValues(attention.KindReadonlyKeyMissing, "币安现货：没有读到只读 Key（exchange-binance-production-readonly），用 setup apply 写入")))
+	require.Equal(t, 1.0, testutil.ToFloat64(attn.Gauge().WithLabelValues(attention.KindReadonlyKeyMissing, "币安现货"+readonlyKeyMissingDetail)))
+	require.Less(t, len("币安现货"+readonlyKeyMissingDetail), 480, "detail 超过 Collector 关注项的字节上限会被截断")
 	require.Equal(t, 0.0, testutil.ToFloat64(attn.Gauge().WithLabelValues(attention.KindSourceFailed, "")))
 
 	detector.RunOnce(ctx) // 币安现货补上 Key 后恢复；OKX 第 1 次失败

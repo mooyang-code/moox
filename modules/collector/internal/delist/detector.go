@@ -17,6 +17,12 @@ import (
 // SourceFailureThreshold 是来源连续失败多少次才算关注项。
 const SourceFailureThreshold = 3
 
+// readonlyKeyMissingDetail 是缺币安只读 Key 时关注项 detail 里来源名之后的说明。读不到分三种情况（被禁用、没有、在管理台删除过），
+// 关注项分不出是哪一种，一次写全，与管理台监控页的处理说明一致。detail 有字节上限（attention 包的 maxDetail），措辞要短。
+const readonlyKeyMissingDetail = "：没有读到只读 Key（exchange-binance-production-readonly）。被禁用：到秘钥管理页启用；" +
+	"没有：moox-cli config edit 加一把币安正式环境的只读 Key（名称 readonly），再 setup apply；" +
+	"在管理台删除过：setup apply 不会重建，目前补不回来，见采集文档的已知限制"
+
 // Detector 定时轮询各个来源，把新发现的下架通知登记（并发布）。
 type Detector struct {
 	Sources   []Source
@@ -154,7 +160,7 @@ func (d *Detector) publishLocked() {
 	}
 	for name, missing := range d.keyGone {
 		if missing {
-			items[attention.KindReadonlyKeyMissing] = append(items[attention.KindReadonlyKeyMissing], name+"：没有读到只读 Key（exchange-binance-production-readonly），用 setup apply 写入")
+			items[attention.KindReadonlyKeyMissing] = append(items[attention.KindReadonlyKeyMissing], name+readonlyKeyMissingDetail)
 		}
 	}
 	d.Attention.Set("delist", items)
