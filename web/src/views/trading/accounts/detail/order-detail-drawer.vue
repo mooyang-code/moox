@@ -1,5 +1,5 @@
 <template>
-  <a-drawer :visible="visible" :width="560" :footer="false" unmount-on-close @cancel="emit('update:visible', false)">
+  <a-drawer :visible="visible" width="min(560px, 100vw)" :footer="false" unmount-on-close @cancel="emit('update:visible', false)">
     <template #title>
       订单 {{ order ? `${instrumentName(order.instrument_id)} ${order.side === 1 ? "买入" : "卖出"}` : "" }}
     </template>

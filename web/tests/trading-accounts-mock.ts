@@ -345,7 +345,14 @@ async function gateway(route: Route) {
     case "GetExecutionCapabilities":
       return route.fulfill({
         json: ok({
-          capabilities: { can_place_order: true, order_types: [1, 2], fill_policies: [1, 2, 3], can_close_paper_simulation: true }
+          capabilities: {
+            can_place_order: true,
+            order_types: [1, 2],
+            fill_policies: [1, 2, 3],
+            can_close_paper_simulation: true,
+            // 生产账户的交易所没有流水接口，用来测“不支持”的展示
+            ledger: body.trading_account_id !== "ta-prod-1"
+          }
         })
       });
     case "ListTradableInstruments":

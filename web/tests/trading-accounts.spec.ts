@@ -169,3 +169,67 @@ test("从详情页返回列表时重新读取，不显示缓存的旧数据", as
   await expect(page.getByText("未加入组合的执行账户 1 个")).toBeVisible();
   await expect.poll(() => calls.listLogicals).toBeGreaterThan(before);
 });
+
+test("1280 宽时列表和成员表的每一列都保持自己的宽度，数字不折行", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.goto("/#/trading/accounts");
+  await expect(page.getByText("默认策略模拟组合")).toBeVisible();
+  const widths = await page
+    .locator(".tx-accounts th.arco-table-th")
+    .evaluateAll(items => items.map(item => item.getBoundingClientRect().width));
+  expect(widths.length).toBeGreaterThanOrEqual(8);
+  // 每一列至少 60 像素；关联策略列有自己的宽度
+  for (const width of widths) expect(width).toBeGreaterThanOrEqual(60);
+  const strategy = await page.getByRole("columnheader", { name: "关联策略", exact: true }).boundingBox();
+  expect(strategy?.width).toBeGreaterThanOrEqual(190);
+  await expect(page.getByText("动量轮动")).toBeVisible();
+
+  await openDetail(page, "la-paper-1", "settings");
+  const equity = page.locator(".tx-detail .arco-table-td .tx-num").first();
+  await expect(equity).toBeVisible();
+  expect((await equity.boundingBox())?.height).toBeLessThan(28);
+});
+
+test("390 窄屏下列表、详情和订单抽屉不产生页面横向溢出", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 800 });
+  const overflow = () => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+  await page.goto("/#/trading/accounts");
+  await expect(page.getByText("默认策略模拟组合")).toBeVisible();
+  expect(await overflow()).toBeLessThanOrEqual(1);
+  await openDetail(page, "la-paper-1");
+  await expect(page.getByRole("heading", { name: "默认策略模拟组合" })).toBeVisible();
+  expect(await overflow()).toBeLessThanOrEqual(1);
+  await openDetail(page, "la-paper-1", "orders");
+  await page.getByText("BTC-USDT").first().click();
+  const drawer = page.locator(".arco-drawer:visible");
+  await expect(drawer.getByText("成交明细")).toBeVisible();
+  expect((await drawer.boundingBox())?.width).toBeLessThanOrEqual(390);
+  expect(await overflow()).toBeLessThanOrEqual(1);
+});
+
+test("资金流水：模拟盘没有市场下拉；交易所没有流水接口时直接说明", async ({ page }) => {
+  await openDetail(page, "la-paper-1", "ledger");
+  await expect(page.getByText("手续费").first()).toBeVisible();
+  // 账户开通了现货和永续，但模拟盘后端不看市场，不显示下拉
+  await expect(page.locator(".tx-detail .arco-select")).toHaveCount(1);
+  await openDetail(page, "la-prod-1", "ledger");
+  await expect(page.getByText("没有资金流水接口")).toBeVisible();
+});
+
+test("订单的市场下拉在没输入币时置灰", async ({ page }) => {
+  await openDetail(page, "la-paper-1", "orders");
+  const disabled = page.locator(".tx-detail .arco-select-view-disabled");
+  await expect(disabled).toHaveCount(1);
+  await page.getByPlaceholder("币，如 BTC").fill("BTC");
+  await expect(disabled).toHaveCount(0);
+});
+
+test("持仓行下单：现货、永续各一个入口，预填方向和与目标的差额", async ({ page }) => {
+  await openDetail(page, "la-paper-1", "positions");
+  await expect(page.getByRole("button", { name: "下单·现货" }).first()).toBeVisible();
+  await page.getByRole("row", { name: /BTC/ }).getByRole("button", { name: "下单·永续" }).click();
+  const dialog = page.locator(".arco-modal:visible");
+  // BTC 永续目标 1、实际 0.5：买入 0.5
+  await expect(field(dialog, "数量")).toHaveValue("0.5");
+  await expect(dialog.locator(".arco-radio-checked").filter({ hasText: "买入" })).toBeVisible();
+});

@@ -136,7 +136,9 @@
         <template v-if="item.account.execution_mode === 1">
           <div class="danger-text">
             <strong>关闭模拟账户「{{ item.account.name }}」</strong>
-            <div class="tx-muted">撤掉它的未完成订单，停用账户并移出组合。之后不能再下单，历史订单和成交保留。</div>
+            <div class="tx-muted">
+              撤掉它的未完成订单，停用账户并移出组合，并暂停整个组合账户的自动执行。之后不能再下单，历史订单和成交保留。
+            </div>
           </div>
           <a-button status="danger" @click="openClosePaper(item.account)">关闭模拟账户</a-button>
         </template>

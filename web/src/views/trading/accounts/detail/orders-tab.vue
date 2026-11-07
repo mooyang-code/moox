@@ -18,7 +18,7 @@
       >
         <a-option v-for="item in memberOptions" :key="item.id" :value="item.id">{{ item.label }}</a-option>
       </a-select>
-      <a-select v-if="marketOptions.length > 1" v-model="market" style="width: 110px" @change="search">
+      <a-select v-if="marketOptions.length > 1" v-model="market" :disabled="!symbol.trim()" style="width: 110px" @change="search">
         <a-option v-for="item in marketOptions" :key="item" :value="item">{{ marketLabel(item) }}</a-option>
       </a-select>
       <a-input v-model="symbol" allow-clear placeholder="币，如 BTC" style="width: 150px" @press-enter="search" @clear="search" />

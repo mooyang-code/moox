@@ -275,6 +275,9 @@
           <a-alert type="error" class="dialog-block">
             撤掉这个账户的未完成订单，停用账户并移出组合。关闭后不能再下单，也不能重新启用；历史订单、成交保留。
           </a-alert>
+          <a-alert type="warning" class="dialog-block"
+            >会暂停整个组合账户的自动执行，组合里的其他执行账户也不再按策略下单，需要时再手动恢复。</a-alert
+          >
           <a-alert v-if="(logical.members || []).length === 1" type="info" class="dialog-block">
             这是组合里唯一的执行账户，关闭后组合会变成未就绪。
           </a-alert>
