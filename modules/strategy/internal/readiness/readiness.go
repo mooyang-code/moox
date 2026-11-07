@@ -64,18 +64,14 @@ type Result struct {
 	Hashes map[string]string
 	// FailedByFactor 是 degraded 因子对应的失败标的，引用该因子的规则把它们视为缺数。
 	FailedByFactor map[string][]string
-	// GapByFactor 是 FailedByFactor 中因回看窗口 K 线空洞而失败的标的（子集）：持仓的标的缺数且全部原因都是空洞时，策略保持持仓而不是退出。
-	GapByFactor map[string][]string
 	// FailedSubjects 是没有因子状态的 View（K 线 View）在 degraded 时声明失败的标的，所有列都视为缺数。
 	FailedSubjects []string
 
-	// 下面三项只有统一数据集（一个 View 里有多个 series_tag）才有，按序列给出结论，用 ForMarket 拆成各市场的结论。
-	// 统一数据集上不能读 FailedByFactor、GapByFactor：它们按标的折叠，永续上失败的币现货也会被一起算成失败。
+	// 下面两项只有统一数据集（一个 View 里有多个 series_tag）才有，按序列给出结论，用 ForMarket 拆成各市场的结论。
+	// 统一数据集上不能读 FailedByFactor：它按标的折叠，永续上失败的币现货也会被一起算成失败。
 
 	// FailedSeries 是 degraded 因子对应的失败序列（成员完整的失败序列 = 周期级共享的 shared_failed_series ∪ 成员自己的 failed_series）。
 	FailedSeries map[string][]seriesset.Series
-	// GapSeries 是 FailedSeries 中因回看窗口 K 线空洞而失败的序列（子集）。
-	GapSeries map[string][]seriesset.Series
 	// SkippedTags 是 degraded 因子被跳过的 series_tag（例如截面因子在这个 tag 上缺数）：这些 tag 的序列结果是 NULL，对应市场本期不可用。
 	// 全部 tag 都跳过时因子状态是 skipped，按 ReasonFactorSkipped 处理。
 	SkippedTags map[string][]string
@@ -83,8 +79,8 @@ type Result struct {
 
 // Check 按设计文档 3.3 的表格顺序判定：因子缺失 → 事件指纹变化 → 上一根版本证据 → 因子跳过 → 降级标的。
 func Check(binding Binding, adjacent *Record, event *storagepb.ViewDataReady) Result {
-	result := Result{Hashes: make(map[string]string, len(binding.Factors)), FailedByFactor: map[string][]string{}, GapByFactor: map[string][]string{},
-		FailedSeries: map[string][]seriesset.Series{}, GapSeries: map[string][]seriesset.Series{}, SkippedTags: map[string][]string{}}
+	result := Result{Hashes: make(map[string]string, len(binding.Factors)), FailedByFactor: map[string][]string{},
+		FailedSeries: map[string][]seriesset.Series{}, SkippedTags: map[string][]string{}}
 	states, shared, err := indexFactors(event)
 	if err != nil && len(binding.Factors) > 0 {
 		result.Reason = ReasonFactorMissing
@@ -147,14 +143,8 @@ func Check(binding Binding, adjacent *Record, event *storagepb.ViewDataReady) Re
 			if len(failed) > 0 {
 				result.FailedByFactor[factorID] = failed
 			}
-			if gaps := uniqueSorted(state.GetGapSubjects()); len(gaps) > 0 {
-				result.GapByFactor[factorID] = gaps
-			}
 			if failed := seriesset.Union(shared, seriesOf(state.GetFailedSeries())); len(failed) > 0 {
 				result.FailedSeries[factorID] = failed
-			}
-			if gaps := seriesset.Union(seriesOf(state.GetGapSeries())); len(gaps) > 0 {
-				result.GapSeries[factorID] = gaps
 			}
 			if tags := uniqueSorted(state.GetSkippedSeriesTags()); len(tags) > 0 {
 				result.SkippedTags[factorID] = tags
@@ -209,14 +199,14 @@ func seriesOf(refs []*factorpb.SeriesRef) []seriesset.Series {
 // ForMarket 把统一数据集（一个 View、多个 series_tag）上的一份就绪结论拆成某个市场的结论，其余字段与方式 A 里一个 View 的结论同口径：
 //   - 整期原因（Reason 非空：成员契约变了、因子整体被跳过等）原样带到每个市场；
 //   - 某个因子在这个市场的 series_tag 上被跳过（SkippedTags）：这个市场本期不可用，Reason 记 ReasonFactorSkipped（数据类原因），别的市场照常；
-//   - 失败与空洞只取这个市场的序列（按 seriesset.SeriesTagMarket 归市场），不读按标的折叠的字段；
+//   - 失败只取这个市场的序列（按 seriesset.SeriesTagMarket 归市场），不读按标的折叠的字段；
 //   - 例外：某个因子有失败标的却没有任何失败序列，说明这一期 Storage 没有生成序列名单（期望快照里只剩一个 series_tag 时，
 //     周期完成事件不带 universe_series，因子按单序列处理，只给出按标的的名单）。事件里没有字段能确定这一期是哪个 tag、
-//     归哪个市场，只能保守处理：按标的的失败、空洞名单原样带到每个市场，等于“所有市场的这些标的都失败”。
+//     归哪个市场，只能保守处理：按标的的失败名单原样带到每个市场，等于“所有市场的这些标的都失败”。
 //     宁可让另一个市场的这些标的本期缺数，也不能把真实失败的标的当成可用。
 func (r Result) ForMarket(market string) Result {
 	out := Result{Reason: r.Reason, Detail: r.Detail, Hashes: r.Hashes, FailedSubjects: r.FailedSubjects,
-		FailedByFactor: map[string][]string{}, GapByFactor: map[string][]string{}}
+		FailedByFactor: map[string][]string{}}
 	if r.Reason != "" {
 		return out
 	}
@@ -234,20 +224,12 @@ func (r Result) ForMarket(market string) Result {
 			out.FailedByFactor[factorID] = subjects
 		}
 	}
-	for factorID, gaps := range r.GapSeries {
-		if subjects := subjectsInMarket(gaps, market); len(subjects) > 0 {
-			out.GapByFactor[factorID] = subjects
-		}
-	}
 	for factorID, subjects := range r.FailedByFactor {
 		if len(subjects) == 0 || len(r.FailedSeries[factorID]) > 0 {
 			continue
 		}
 		// 没有序列名单的一期：按标的的名单带到每个市场（见上面的注释）。
 		out.FailedByFactor[factorID] = append([]string(nil), subjects...)
-		if gaps := r.GapByFactor[factorID]; len(gaps) > 0 {
-			out.GapByFactor[factorID] = append([]string(nil), gaps...)
-		}
 	}
 	return out
 }

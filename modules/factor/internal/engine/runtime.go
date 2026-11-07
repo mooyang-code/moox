@@ -159,7 +159,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 		OnCompileError:  func(taskID, factorID string) { r.metrics.CompileErrors.WithLabelValues(taskID, factorID).Inc() },
 		MemoryAdmission: r.admit, AdmissionTimeout: cfg.Pipeline.PeriodBudgetMax, UDF: r.udf.Host(),
 	}
-	// 跳过账本与恢复始终开启：预热中被跳过的周期也靠它补算。gap.enabled 只控制回看窗口的空洞检查。
+	// 跳过账本与恢复始终开启：预热中、数据取不到而跳过的周期都靠它补算。
 	ledger, expired, err := gapledger.Open(cfg.Gap.LedgerDir, time.Now, cfg.Gap.GiveUpAfter)
 	if err != nil {
 		return nil, fmt.Errorf("open factor gap ledger: %w", err)

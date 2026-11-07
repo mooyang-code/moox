@@ -79,9 +79,8 @@ describe("strategy model helpers", () => {
     expect(itemReasonLabel("missing:close")).toBe("缺少 close（missing:close）");
     expect(itemReasonLabel("factor_failed:ma_20")).toContain("上游因子失败（ma_20）");
     expect(itemReasonLabel("source_failed:close")).toContain("上游数据失败（close）");
-    expect(itemReasonLabel("factor_gap:ma_20")).toBe("上游因子 K 线空洞（ma_20）（factor_gap:ma_20）");
     expect(itemReasonLabel("market_unavailable:m")).toBe("市场本期不可用（m）（market_unavailable:m）");
-    expect(itemReasonLabel("gap_hold")).toBe("K 线空洞，保持持仓不动（gap_hold）");
+    expect(itemReasonLabel("prev_hold")).toBe("只缺上一根，保持持仓不动（prev_hold）");
     expect(itemReasonLabel("market_hold")).toBe("所在市场本期不可用，保持持仓不动（market_hold）");
     expect(itemReasonLabel("period_skipped")).toBe("本期整期跳过，未求值（period_skipped）");
     expect(itemReasonLabel("custom_reason")).toBe("custom_reason");

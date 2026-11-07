@@ -123,8 +123,7 @@ func markerToProto(marker PeriodMarker) (*storagepb.DatasetPeriodCompletedMarker
 		detailFactors = append(detailFactors, &factorpb.FactorPeriodState{
 			FactorId: factor.FactorID, MemberKey: factor.MemberKey, MemberKind: factor.MemberKind, Status: factor.Status,
 			FailedSubjects: normalizedSorted(factor.FailedSubjects), SpecHash: factor.SourceHash,
-			DefinitionHash: factor.DefinitionHash, GapSubjects: normalizedSorted(factor.GapSubjects),
-			FailedSeries: seriesToFactorPB(factor.FailedSeries), GapSeries: seriesToFactorPB(factor.GapSeries),
+			DefinitionHash: factor.DefinitionHash, FailedSeries: seriesToFactorPB(factor.FailedSeries),
 			SkippedSeriesTags: normalizedSorted(factor.SkippedSeriesTags),
 		})
 	}

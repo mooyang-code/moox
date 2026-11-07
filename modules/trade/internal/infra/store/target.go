@@ -22,7 +22,7 @@ type InstrumentTarget struct {
 	InstrumentID string `json:"instrument_id"`
 	// Quantity 在 Hold 为 true 时为空：保持标的不换算数量。
 	Quantity string `json:"quantity,omitempty"`
-	// Hold 为 true 表示保持该标的当前持仓数量不动（策略因数据空洞暂时无法决策），执行器对它既不加仓也不减仓。
+	// Hold 为 true 表示保持该标的当前持仓数量不动（标的所在市场本期不可用或只缺上一根，策略暂时无法决策），执行器对它既不加仓也不减仓。
 	Hold bool `json:"hold,omitempty"`
 }
 

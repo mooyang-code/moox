@@ -16,7 +16,7 @@ import (
 //  4. gross 超过 portfolio.leverage 时按比例缩小；
 //  5. 写入目标、摘要与换手。
 //
-// 现货负权重仍然报错：它说明策略或定市场的逻辑有错。frozen 是因 K 线空洞或市场不可用缺数而保持持仓的标的：
+// 现货负权重仍然报错：它说明策略或定市场的逻辑有错。frozen 是因市场不可用或只缺上一根而保持持仓的标的：
 // 按标的展开成上期所有非零的（标的, 市场）键，它们的目标是保持标记，权重取上期值。
 func applyPortfolio(decision *Decision, portfolio dsl.Portfolio, mode dsl.Market, contributions map[string]quant.Decimal, frozen map[string]struct{}, previous State, held heldIndex, tolerance quant.Decimal) error {
 	for key := range contributions {
@@ -151,7 +151,7 @@ func fitBudget(quantized quantizedTargets, holds []Target, portfolio dsl.Portfol
 	for _, hold := range holds {
 		heldNames = append(heldNames, hold.InstrumentID)
 	}
-	summary.Notes = append(summary.Notes, fmt.Sprintf("%d 个标的因数据空洞或市场不可用保持持仓：%s", len(holdIDs(holds)), strings.Join(holdIDs(holds), "、")))
+	summary.Notes = append(summary.Notes, fmt.Sprintf("%d 个标的因市场不可用或只缺上一根保持持仓：%s", len(holdIDs(holds)), strings.Join(holdIDs(holds), "、")))
 	return quantized
 }
 

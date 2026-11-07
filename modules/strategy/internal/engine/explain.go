@@ -22,8 +22,8 @@ const (
 	StageWeighted = "weighted"
 	// StageDropped：曾被选中或持有但被剔除（filter_after、exit、score 无效）。
 	StageDropped = "dropped"
-	// StageHeld：因 K 线空洞（或只缺上一根）、所在市场本期不可用而缺数的已持仓标的，持仓数量保持不动（不求值、不调仓），
-	// 原因分别是 gap_hold、market_hold。
+	// StageHeld：因只缺上一根、所在市场本期不可用而缺数的已持仓标的，持仓数量保持不动（不求值、不调仓），
+	// 原因分别是 prev_hold、market_hold。
 	StageHeld = "held"
 )
 

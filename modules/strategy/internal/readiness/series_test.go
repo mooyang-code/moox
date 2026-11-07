@@ -35,18 +35,17 @@ func unifiedEvent(shared []*factorpb.SeriesRef, states ...*factorpb.FactorPeriod
 func TestForMarketSplitsFailedSeriesByMarket(t *testing.T) {
 	member := state("ma", "degraded", "h1", "BTC-USDT", "ETH-USDT")
 	member.FailedSeries = refs("ETH-USDT", swapTag)
-	member.GapSeries = refs("ETH-USDT", swapTag)
 	shared := refs("BTC-USDT", swapTag, "SOL-USDT", spotTag)
 	result := Check(Binding{Factors: map[string]string{"ma": "h1|fixed"}}, nil, unifiedEvent(shared, member))
 	if result.Reason != "" {
 		t.Fatalf("部分序列失败不应整期跳过：%+v", result)
 	}
 	spot, swap := result.ForMarket("spot"), result.ForMarket("swap")
-	if !reflect.DeepEqual(spot.FailedByFactor, map[string][]string{"ma": {"SOL-USDT"}}) || len(spot.GapByFactor) != 0 {
+	if !reflect.DeepEqual(spot.FailedByFactor, map[string][]string{"ma": {"SOL-USDT"}}) {
 		t.Fatalf("现货只失败了 SOL：%+v", spot)
 	}
-	if !reflect.DeepEqual(swap.FailedByFactor, map[string][]string{"ma": {"BTC-USDT", "ETH-USDT"}}) || !reflect.DeepEqual(swap.GapByFactor, map[string][]string{"ma": {"ETH-USDT"}}) {
-		t.Fatalf("永续失败了 BTC、ETH，空洞是 ETH：%+v", swap)
+	if !reflect.DeepEqual(swap.FailedByFactor, map[string][]string{"ma": {"BTC-USDT", "ETH-USDT"}}) {
+		t.Fatalf("永续失败了 BTC、ETH：%+v", swap)
 	}
 	if spot.Reason != "" || swap.Reason != "" {
 		t.Fatalf("失败序列不让市场不可用：%q %q", spot.Reason, swap.Reason)
@@ -57,14 +56,13 @@ func TestForMarketSplitsFailedSeriesByMarket(t *testing.T) {
 // 事件里确定不了是哪个市场，按标的的名单保守地带到每个市场，失败的标的不会被当成可用。
 func TestForMarketFallsBackToSubjectsWithoutSeriesList(t *testing.T) {
 	member := state("ma", "degraded", "h1", "BTC-USDT")
-	member.GapSubjects = []string{"BTC-USDT"}
 	result := Check(Binding{Factors: map[string]string{"ma": "h1|fixed"}}, nil, unifiedEvent(nil, member, state("rank", "complete", "h2")))
 	if result.Reason != "" || len(result.FailedSeries) != 0 {
 		t.Fatalf("没有序列名单：%+v", result)
 	}
 	for _, market := range []string{"spot", "swap"} {
 		got := result.ForMarket(market)
-		if !reflect.DeepEqual(got.FailedByFactor, map[string][]string{"ma": {"BTC-USDT"}}) || !reflect.DeepEqual(got.GapByFactor, map[string][]string{"ma": {"BTC-USDT"}}) {
+		if !reflect.DeepEqual(got.FailedByFactor, map[string][]string{"ma": {"BTC-USDT"}}) {
 			t.Fatalf("%s 市场应保守地把 BTC 记为失败：%+v", market, got)
 		}
 		if _, ok := got.FailedByFactor["rank"]; ok {

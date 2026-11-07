@@ -6,7 +6,7 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 )
 
-// 本文件覆盖多市场模式下持仓在永续上的冻结：单币空洞（factor_gap）与永续整体不可用（market_unavailable）。
+// 本文件覆盖多市场模式下持仓在永续上的冻结：永续整体不可用（market_unavailable）时冻结，逐币的因子失败不冻结。
 
 const shortTopOneRule = `name: s
 rules:
@@ -56,39 +56,36 @@ func requireHolds(t *testing.T, decision Decision, want map[string]string) {
 	}
 }
 
-// singleCoinFailure 构造“永续上 A 单币失败”的帧：现货 A、B、C，永续 B、C、D；nullRow 为 true 时永续保留 A 的行但没有 m 值
-// （失败序列在源数据行存在时写成 NULL 行），否则永续没有 A 的行。
-func singleCoinFailure(program *dsl.Program, reason string, nullRow bool) Frame {
+// singleCoinFailure 构造“永续上 A 单币失败”的帧：现货 A、B、C，永续 B、C、D，永续没有 A 的行，只有 A 的失败证据。
+func singleCoinFailure(program *dsl.Program, reason string) Frame {
 	rows := map[string]map[string]float64{
 		dsl.MarketSpot: {"A": 1, "B": 2, "C": 3},
 		dsl.MarketSwap: {"B": 20, "C": 30, "D": 1},
 	}
 	failed := map[string]map[string]map[string]string{dsl.MarketSwap: {"m": {"A": reason}}}
-	frame := marketFrame(program, rows, failed)
-	if nullRow {
-		frame.Markets[dsl.MarketSwap].Rows["A"] = Row{Values: map[string]float64{}}
-	}
-	return frame
+	return marketFrame(program, rows, failed)
 }
 
-// 多市场模式下持有永续空头 A、本期永续上 A 单币空洞：与单市场一样冻结，A 保持目标，不改用现货行的因子值重新排名而被平掉。
-// 两种 prefer × 永续行缺失或是 NULL 行（prefer: spot 加 NULL 行时，旧逻辑会取到现货行）。
-func TestHeldSwapShortFreezesOnSingleCoinGap(t *testing.T) {
+// swapDown 构造永续整体不可用的帧：现货 A、B、C 照常，永续的行已清掉，永续基础集合 A、B、C、D 都带 market_unavailable 证据。
+func swapDown(program *dsl.Program) Frame {
+	rows := map[string]map[string]float64{dsl.MarketSpot: {"A": 1, "B": 2, "C": 3}}
+	down := map[string]string{"A": FailedMarket, "B": FailedMarket, "C": FailedMarket, "D": FailedMarket}
+	return marketFrame(program, rows, map[string]map[string]map[string]string{dsl.MarketSwap: {"m": down}})
+}
+
+// 多市场模式下持有永续空头 A、本期永续整体不可用：A 冻结保持，不改用现货行的因子值重新排名而被平掉（两种 prefer）。
+func TestHeldSwapShortFreezesWhenSwapUnavailable(t *testing.T) {
 	for _, prefer := range []string{dsl.MarketSpot, dsl.MarketSwap} {
-		for _, nullRow := range []bool{false, true} {
-			program := compileIn(t, dsl.Market{Select: dsl.MarketBoth, Prefer: prefer}, shortTopOneRule, "m")
-			frame := singleCoinFailure(program, FailedGap, nullRow)
-			previous := State{Rules: map[string]RuleState{"r": {Held: []string{"A"}}}, Targets: map[string]string{"A|swap": "-0.5"}}
-			decision, err := Evaluate(program, frame, previous)
-			if err != nil {
-				t.Fatal(err)
-			}
-			// 空头规则照常在其余永续可用的币里选：C 在两个市场的值都最大。
-			requireHolds(t, decision, map[string]string{"A|swap": "-0.5(hold)", "C|swap": "-0.5"})
-			item := findItem(t, decision, "r", "A")
-			if item.Stage != StageHeld || item.Reason != reasonGapHold || item.Market != dsl.MarketSwap {
-				t.Fatalf("prefer=%s nullRow=%v：A 的明细应是 held/gap_hold、市场 swap：%+v", prefer, nullRow, item)
-			}
+		program := compileIn(t, dsl.Market{Select: dsl.MarketBoth, Prefer: prefer}, shortTopOneRule, "m")
+		previous := State{Rules: map[string]RuleState{"r": {Held: []string{"A"}}}, Targets: map[string]string{"A|swap": "-0.5"}}
+		decision, err := Evaluate(program, swapDown(program), previous)
+		if err != nil {
+			t.Fatal(err)
+		}
+		requireHolds(t, decision, map[string]string{"A|swap": "-0.5(hold)"})
+		item := findItem(t, decision, "r", "A")
+		if item.Stage != StageHeld || item.Reason != reasonMarketHold || item.Market != dsl.MarketSwap {
+			t.Fatalf("prefer=%s：A 的明细应是 held/market_hold、市场 swap：%+v", prefer, item)
 		}
 	}
 }
@@ -97,7 +94,7 @@ func TestHeldSwapShortFreezesOnSingleCoinGap(t *testing.T) {
 func TestHeldSwapShortNotFrozenOnFactorFailure(t *testing.T) {
 	for _, prefer := range []string{dsl.MarketSpot, dsl.MarketSwap} {
 		program := compileIn(t, dsl.Market{Select: dsl.MarketBoth, Prefer: prefer}, shortTopOneRule, "m")
-		frame := singleCoinFailure(program, FailedFactor, false)
+		frame := singleCoinFailure(program, FailedFactor)
 		previous := State{Rules: map[string]RuleState{"r": {Held: []string{"A"}}}, Targets: map[string]string{"A|swap": "-0.5"}}
 		decision, err := Evaluate(program, frame, previous)
 		if err != nil {
@@ -107,29 +104,26 @@ func TestHeldSwapShortNotFrozenOnFactorFailure(t *testing.T) {
 	}
 }
 
-// 多市场模式下持有永续多头 A、本期永续上 A 单币空洞：粘住持仓市场的行，冻结保持（三种含永续下单的模式）。
-func TestHeldSwapLongFreezesOnSingleCoinGap(t *testing.T) {
+// 多市场模式下持有永续多头 A、本期永续整体不可用：粘住持仓市场，冻结保持（三种含永续下单的模式）。
+func TestHeldSwapLongFreezesWhenSwapUnavailable(t *testing.T) {
 	modes := []dsl.Market{
 		{Select: dsl.MarketBoth, Prefer: dsl.MarketSpot},
 		{Select: dsl.MarketBoth, Prefer: dsl.MarketSwap},
 		{Select: dsl.MarketSpot, Prefer: dsl.MarketSwap},
 	}
 	for _, mode := range modes {
-		for _, nullRow := range []bool{false, true} {
-			program := compileIn(t, mode, longTopOneRule, "m")
-			frame := singleCoinFailure(program, FailedGap, nullRow)
-			previous := State{Rules: map[string]RuleState{"r": {Held: []string{"A"}}}, Targets: map[string]string{"A|swap": "0.5"}}
-			decision, err := Evaluate(program, frame, previous)
-			if err != nil {
-				t.Fatal(err)
-			}
-			assertOK(t, decision)
-			if got := holdsOf(decision)["A|swap"]; got != "0.5(hold)" {
-				t.Fatalf("%+v nullRow=%v：持有的永续多头 A 空洞时应冻结：%v", mode, nullRow, holdsOf(decision))
-			}
-			if item := findItem(t, decision, "r", "A"); item.Stage != StageHeld || item.Reason != reasonGapHold || item.Market != dsl.MarketSwap {
-				t.Fatalf("%+v nullRow=%v：A 的明细应是 held/gap_hold、市场 swap：%+v", mode, nullRow, item)
-			}
+		program := compileIn(t, mode, longTopOneRule, "m")
+		previous := State{Rules: map[string]RuleState{"r": {Held: []string{"A"}}}, Targets: map[string]string{"A|swap": "0.5"}}
+		decision, err := Evaluate(program, swapDown(program), previous)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertOK(t, decision)
+		if got := holdsOf(decision)["A|swap"]; got != "0.5(hold)" {
+			t.Fatalf("%+v：持有的永续多头 A 在永续不可用时应冻结：%v", mode, holdsOf(decision))
+		}
+		if item := findItem(t, decision, "r", "A"); item.Stage != StageHeld || item.Reason != reasonMarketHold || item.Market != dsl.MarketSwap {
+			t.Fatalf("%+v：A 的明细应是 held/market_hold、市场 swap：%+v", mode, item)
 		}
 	}
 }

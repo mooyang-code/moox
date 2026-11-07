@@ -197,8 +197,8 @@ func selectPool(mode dsl.Market, frame Frame, held heldIndex, columns []string) 
 	}
 	// 上期在某个市场持有空头、而这个市场本期对它的失败证据全都可冻结时，只取这个市场的行（有行取行，没行按无行），证据随之归到这个市场，
 	// 由冻结逻辑保持，不退回另一个市场的行；否则空头（取行顺序是 prefer 加另一个市场，粘住只看正权重）会改用现货的因子值重新排名，
-	// 在永续上平仓或改仓。条件两条都要满足：① 这个市场对这个币至少有一条证据，并且每条都是整体不可用（FailedMarket）或单币空洞
-	// （FailedGap，与单市场一样，空洞的持仓冻结）；混有 factor_failed 等其他原因时单市场下也不冻结，照常按 pickOrder 取行。
+	// 在永续上平仓或改仓。条件两条都要满足：① 这个市场对这个币至少有一条证据，并且每条都是整体不可用（FailedMarket）；
+	// 混有 factor_failed 等逐币原因时单市场下也不冻结，照常按 pickOrder 取行。
 	// ② 这个市场本期有它的行（失败序列写成 NULL 行），或者证据覆盖策略引用的全部列（没有行、只有部分列有证据时，其余列是无证据的缺失，
 	// 单市场下同样不冻结，也按 pickOrder）。冻结按币：同一个币持有现货多头又持有永续空头时，满足条件就把现货多头一起冻结（保守，已知边界）。
 	freezable := func(market, id string) bool {
@@ -208,7 +208,7 @@ func selectPool(mode dsl.Market, frame Frame, held heldIndex, columns []string) 
 			if !failed {
 				continue
 			}
-			if reason != FailedMarket && reason != FailedGap {
+			if reason != FailedMarket {
 				return false
 			}
 			covered[column] = struct{}{}
@@ -287,7 +287,7 @@ func poolSubjects(frame Frame) []string {
 
 // pickOrder 返回标的取行时依次尝试的市场。
 func pickOrder(mode dsl.Market, id string, held heldIndex) []string {
-	// 所有模式都先取持仓所在市场的行（设计 3.1 第 2 步）：空洞保护和止损用的始终是持仓市场的数据。
+	// 所有模式都先取持仓所在市场的行（设计 3.1 第 2 步）：冻结保护和止损用的始终是持仓市场的数据。
 	if hold := held.positiveMarket(id, mode.Prefer); hold != "" && mode.Has(hold) {
 		return []string{hold}
 	}

@@ -33,7 +33,7 @@ func evaluateFrame(program *dsl.Program, mode dsl.Market, frame Frame, previous 
 		State:   State{Rules: make(map[string]RuleState, len(program.Rules)), Targets: map[string]string{}},
 		Summary: Summary{Universe: len(frame.Universe), Rules: make(map[string]RuleSummary, len(program.Rules))},
 	}
-	// 因 K 线空洞缺数的已持仓标的在所有规则里冻结：不求值、不调仓，持仓数量保持不动（见 freeze.go）。
+	// 因所在市场本期不可用（或只缺上一根）缺数的已持仓标的在所有规则里冻结：不求值、不调仓，持仓数量保持不动（见 freeze.go）。
 	frozen, holdReasons := frozenSet(program, frame, previous, held)
 	// 第一遍：集合划分与守门。守门失败也要给出全部规则的集合摘要与缺数明细，便于排查。
 	partitions := make([]ruleSets, len(program.Rules))
@@ -184,7 +184,7 @@ func guard(portfolio dsl.Portfolio, ruleType string, sets ruleSets, frozen int) 
 // guardedFrozen 返回规则守门计入缺数的冻结标的数。通常是规则预期集合里的全部冻结标的；多市场模式下只排除一种：本规则上期没持有、
 // 并且是因为所在市场本期整体不可用而冻结（market_hold）的标的。冻结按币，别的规则在不可用市场的持仓（例如永续不可用时的永续空头）
 // 会把这个币在所有规则里冻结，本规则没持有它，它对本规则只是本期不参与的候选，计进缺数会让一部分市场不可用变成整期跳过（设计 3.2.1）。
-// 本规则持有的冻结标的、以及因单币空洞（gap_hold）冻结的标的照旧计入：空洞与另一个市场可不可用无关。
+// 本规则持有的冻结标的、以及只缺上一根而冻结（prev_hold）的标的照旧计入：只缺上一根与另一个市场可不可用无关。
 func guardedFrozen(mode dsl.Market, sets ruleSets, ruleHeld []string) int {
 	if mode.Single() {
 		return len(sets.frozen)

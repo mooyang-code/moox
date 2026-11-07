@@ -118,15 +118,12 @@ message FactorPeriodState {
   repeated string failed_subjects = 3;
   string spec_hash = 4;
   string definition_hash = 5;
-  // gap_subjects 是 failed_subjects 中因回看窗口 K 线空洞而失败的标的（子集）。
-  repeated string gap_subjects = 6;
   string member_key = 7;
   // member_kind 是成员类型：fixed 或 var。
   string member_kind = 8;
-  // failed_series、gap_series 是按序列（标的、series_tag）的失败与空洞名单，只有统一数据集（多个 series_tag）才填，
-  // 原有的按标的字段口径不变；gap_series 是 failed_series 的子集。
+  // failed_series 是按序列（标的、series_tag）的失败名单，只有统一数据集（多个 series_tag）才填，
+  // failed_subjects 的口径不变。
   repeated SeriesRef failed_series = 9;
-  repeated SeriesRef gap_series = 10;
   // skipped_series_tags 是被跳过的 series_tag（例如截面因子的全集缺数）：这些序列的结果写 NULL。
   // 全部 tag 都跳过时 status 为 skipped，只跳过一部分时 status 为 degraded 并在这里列出。
   repeated string skipped_series_tags = 11;

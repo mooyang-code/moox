@@ -131,7 +131,7 @@ func ValidateMode(s Strategy, mode Market) error {
 		return fmt.Errorf("%s 策略要绑定现货、永续两个因子任务，不支持 factor_params（两个任务的可变成员键可能重名，参数回写会冲突）", modeLabel(mode))
 	}
 	if !mode.Single() && s.HasTranche() {
-		return fmt.Errorf("%s 策略不支持 tranche 规则：S1 暂不支持双市场 tranche，原因是一个市场本期不可用时 tranche 的持仓无法冻结（tranche 内部把同一个币的多空合成一个净值，也不参与空洞冻结），会把这个市场里的持仓卖掉；tranche 只能用在单个市场的策略（spot/spot 或 swap/swap）", modeLabel(mode))
+		return fmt.Errorf("%s 策略不支持 tranche 规则：S1 暂不支持双市场 tranche，原因是一个市场本期不可用时 tranche 的持仓无法冻结（tranche 内部把同一个币的多空合成一个净值，也不参与冻结），会把这个市场里的持仓卖掉；tranche 只能用在单个市场的策略（spot/spot 或 swap/swap）", modeLabel(mode))
 	}
 	if !mode.Has(MarketSwap) {
 		if s.Portfolio.Leverage.Cmp(quant.One()) > 0 {

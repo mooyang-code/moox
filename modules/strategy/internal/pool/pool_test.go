@@ -408,7 +408,7 @@ func TestFrozenSubjectKeepsPreviousPoolWeight(t *testing.T) {
 		t.Fatal(err)
 	}
 	requireMap(t, "第 1 期", targets(first), map[string]string{spotX: "0.4", spotY: "0.2"})
-	// 第 2 期成员 a 因空洞冻结了 X（保持标记，权重是预留的 0.6），b 想把 X 调到 0.4：池里 X 保持上期池目标 0.4 不动。
+	// 第 2 期成员 a 因市场不可用冻结了 X（保持标记，权重是预留的 0.6），b 想把 X 调到 0.4：池里 X 保持上期池目标 0.4 不动。
 	held := pass("a", map[string]string{spotX: "0.6"})
 	held.Decision.Targets[0].Hold = true
 	second, err := Step(cfg, first.State, Input{BarIndex: 2, Prices: map[string]float64{spotX: 100, spotY: 10}, Members: []MemberResult{

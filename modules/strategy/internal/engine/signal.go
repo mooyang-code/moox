@@ -21,7 +21,7 @@ func evaluateSignal(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous
 	entries := make(map[string]StopEntry)
 	heldBefore := make(map[string]struct{}, len(previous.Held))
 	held := make([]string, 0, len(previous.Held)+len(sets.available))
-	// 冻结的持仓（因 K 线空洞缺数）不判 exit、不参与平分，但仍记在理论持仓里，保持结束后照常延续。
+	// 冻结的持仓（见 freeze.go）不判 exit、不参与平分，但仍记在理论持仓里，保持结束后照常延续。
 	var frozenHeld []string
 	for _, id := range previous.Held {
 		heldBefore[id] = struct{}{}

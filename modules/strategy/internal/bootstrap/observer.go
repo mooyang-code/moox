@@ -27,7 +27,7 @@ const (
 	moduleHealthCheck = "strategy-targets"
 )
 
-// accumulatingReasons 是“数据还没攒够”的跳过原因：View 的历史不足以判断 min_age_bars，或上游因子这期被空洞保护跳过。
+// accumulatingReasons 是“数据还没攒够”的跳过原因：View 的历史不足以判断 min_age_bars，或上游因子这期被跳过（例如截面因子的全集缺数）。
 // 数据重置、新建因子任务之后必然出现一段，数据攒够自动恢复。只要还在积累期上限之内，这类跳过记为 partial（Monitor 显示“积累中”，
 // 不告警，也不计模块失败）；超过上限仍然不足，说明不是在积累（例如 min_age_bars 超过 View 保留根数），回到失败处理。
 var accumulatingReasons = map[string]bool{

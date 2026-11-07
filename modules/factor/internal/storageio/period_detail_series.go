@@ -7,11 +7,11 @@ import (
 	"github.com/mooyang-code/moox/packages/seriesset"
 )
 
-// validateStateSeries 校验一个成员的按序列字段：失败序列在序列全集里，空洞序列是失败序列的子集，跳过的 tag 在序列全集里出现；
+// validateStateSeries 校验一个成员的按序列字段：失败序列在序列全集里，跳过的 tag 在序列全集里出现；
 // 没有序列全集（单序列数据集）时这些字段必须为空；complete 的成员不能有这些名单。
 func validateStateSeries(state *factorpb.FactorPeriodState, universe map[seriesset.Series]struct{}, tags map[string]struct{}) error {
 	label := state.GetFactorId()
-	if len(universe) == 0 && (len(state.GetFailedSeries()) != 0 || len(state.GetGapSeries()) != 0 || len(state.GetSkippedSeriesTags()) != 0) {
+	if len(universe) == 0 && (len(state.GetFailedSeries()) != 0 || len(state.GetSkippedSeriesTags()) != 0) {
 		return fmt.Errorf("factor period detail: factor %q has series lists but the period has no universe_series", label)
 	}
 	failed := make(map[seriesset.Series]struct{}, len(state.GetFailedSeries()))
@@ -27,20 +27,6 @@ func validateStateSeries(state *factorpb.FactorPeriodState, universe map[seriess
 			return fmt.Errorf("factor period detail: factor %q failed_series %q is not in universe_series", label, item.SubjectID+"/"+item.SeriesTag)
 		}
 		failed[item] = struct{}{}
-	}
-	gaps := make(map[seriesset.Series]struct{}, len(state.GetGapSeries()))
-	for i, ref := range state.GetGapSeries() {
-		item, err := seriesOf(ref, fmt.Sprintf("factor %q gap_series item %d", label, i))
-		if err != nil {
-			return err
-		}
-		if _, dup := gaps[item]; dup {
-			return fmt.Errorf("factor period detail: factor %q gap_series item %q is duplicated", label, item.SubjectID+"/"+item.SeriesTag)
-		}
-		if _, ok := failed[item]; !ok {
-			return fmt.Errorf("factor period detail: factor %q gap_series %q is not in failed_series", label, item.SubjectID+"/"+item.SeriesTag)
-		}
-		gaps[item] = struct{}{}
 	}
 	skipped, err := uniqueTokens(state.GetSkippedSeriesTags(), fmt.Sprintf("factor %q skipped_series_tags", label))
 	if err != nil {

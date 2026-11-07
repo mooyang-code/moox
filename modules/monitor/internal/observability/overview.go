@@ -962,7 +962,7 @@ func datasetStatus(now time.Time, key datasetKey, value datasetValues, policy re
 	case !marketIdle && runLag > 0 && now.Sub(runFrom) > runLag:
 		item.Status, item.Reason = "stale", "run stale"
 	case warmingNow(now, item, successLag):
-		// 生产者仍在按设计只产出部分结果（空洞保护、历史不足、预热）：页面显示降级，但不是故障，不告警。
+		// 生产者仍在按设计只产出部分结果（历史不足、预热）：页面显示降级，但不是故障，不告警。
 		item.Status, item.Reason = "degraded", DatasetReasonWarming
 	case item.LastSuccessAt.IsZero():
 		item.Status, item.Reason = "degraded", "尚无成功运行"
@@ -989,8 +989,8 @@ func laterTime(left, right time.Time) time.Time {
 	return left
 }
 
-// DatasetReasonWarming 是“数据积累中”的原因码：生产者报告最近一次运行只按设计产出了部分结果（窗口空洞保护、
-// 历史不足、预热中），而且此后没有更新的成功。状态仍是 degraded，页面照常展示；告警检查把它当作通过。
+// DatasetReasonWarming 是“数据积累中”的原因码：生产者报告最近一次运行只按设计产出了部分结果（历史不足、
+// 预热中），而且此后没有更新的成功。状态仍是 degraded，页面照常展示；告警检查把它当作通过。
 const DatasetReasonWarming = "warming"
 
 // warmingNow 判断数据集是否处在“积累中”：最近一次产出是部分结果（比最近一次成功更新），并且部分结果仍按期出现——

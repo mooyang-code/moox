@@ -7,7 +7,7 @@ import (
 )
 
 // ruleSets 是一条规则的集合划分：预期 E(r)、年龄剔除 G(r)、可用 A(r)、缺数 M(r)，以及保持持仓的冻结集合 F(r)。
-// 冻结的标的（因 K 线空洞缺数的已持仓标的，见 freeze.go）既不算可用也不算缺数：规则对它们不求值，持仓保持不动；
+// 冻结的标的（因市场不可用或只缺上一根而缺数的已持仓标的，见 freeze.go）既不算可用也不算缺数：规则对它们不求值，持仓保持不动；
 // 但守门仍把它们计入缺数比例，保护中的标的不能伪装成可用。
 type ruleSets struct {
 	expected  []string
@@ -15,7 +15,7 @@ type ruleSets struct {
 	available []string
 	missing   map[string]string
 	frozen    map[string]struct{}
-	// holdReason 是冻结标的的明细原因（gap_hold 或 market_hold，见 frozenSet）。
+	// holdReason 是冻结标的的明细原因（prev_hold 或 market_hold，见 frozenSet）。
 	holdReason map[string]string
 	// waived 表示规则本期不守门（永续整体不可用时的空头规则，见 waivesShortGuard）：规则只保持冻结的持仓，holding 规则不重建批次。
 	waived bool
@@ -101,7 +101,7 @@ func (s ruleSets) items(ruleID string) []Item {
 		if _, held := s.frozen[id]; held {
 			reason := s.holdReason[id]
 			if reason == "" {
-				reason = reasonGapHold
+				reason = reasonPrevHold
 			}
 			items = append(items, Item{RuleID: ruleID, InstrumentID: id, Stage: StageHeld, Reason: reason})
 			continue

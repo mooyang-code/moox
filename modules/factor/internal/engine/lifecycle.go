@@ -295,7 +295,7 @@ func (r *Runtime) autoConfirmTask(ref lifecycle.Ref, since time.Time) bool {
 //
 // 统一数据集（多个 series_tag）上截面因子只跳过一部分 tag 时成员记 degraded 并列出跳过的 tag：缺数的序列是行情本身的状况，
 // 不说明窗口没载入完，所以这样的 degraded 成员算作已完成；这时这一期因缺数序列而记的失败标的、整期 degraded 也不拦。
-// 预热中、空洞、整个计算失败的成员仍然不算。
+// 预热中、整个计算失败的成员仍然不算。
 func runConfirmsWarmup(run trackedRun, members []domain.MemberDef) bool {
 	if run.warming > 0 || run.rows == 0 || len(members) == 0 || run.status == "failed" {
 		return false
@@ -318,7 +318,7 @@ func runConfirmsWarmup(run trackedRun, members []domain.MemberDef) bool {
 	}
 	for _, factor := range run.factors {
 		member, ok := want[factor.MemberKey]
-		if !ok || len(factor.GapSubjects) > 0 || len(factor.GapSeries) > 0 {
+		if !ok {
 			return false
 		}
 		if factor.Status == "degraded" && len(factor.SkippedSeriesTags) > 0 {

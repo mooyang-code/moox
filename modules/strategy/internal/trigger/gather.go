@@ -52,7 +52,7 @@ func (h *Handler) checkReadyFor(p *period, resolved input.Resolved, adjacent *st
 		}
 		return readiness.Check(resolved.ReadinessBinding(), previous, p.events[key])
 	}
-	// 统一数据集只有一个 View 和一条事件：判断一次，再按序列拆成各市场的结论（每个市场的失败、空洞、被跳过的 tag 各自判断）。
+	// 统一数据集只有一个 View 和一条事件：判断一次，再按序列拆成各市场的结论（每个市场的失败、被跳过的 tag 各自判断）。
 	var unified readiness.Result
 	if resolved.Unified() {
 		unified = check(input.MarketMulti)

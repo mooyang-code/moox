@@ -109,11 +109,6 @@ func TestRunConfirmsWarmupAcceptsPartialSeriesSkip(t *testing.T) {
 	})
 	require.True(t, runConfirmsWarmup(partial, members), "只跳过永续：缺数的序列是行情本身的状况，不说明窗口没载完")
 
-	withGap := state("degraded", func(f *domain.FactorPeriodState) {
-		f.SkippedSeriesTags = []string{engineSwapTag}
-		f.GapSeries = []seriesset.Series{engineSeries("SOL", engineSpotTag)}
-	})
-	require.False(t, runConfirmsWarmup(withGap, members), "有空洞不算")
 	warming := partial
 	warming.warming = 1
 	require.False(t, runConfirmsWarmup(warming, members), "预热中不算")

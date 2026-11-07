@@ -120,7 +120,7 @@ const itemReasons: Record<string, string> = {
   not_expected: "已不在预期集合",
   period_skipped: "本期整期跳过，未求值",
   holding: "延续批次持有",
-  gap_hold: "K 线空洞，保持持仓不动",
+  prev_hold: "只缺上一根，保持持仓不动",
   market_hold: "所在市场本期不可用，保持持仓不动",
   stop_loss: "固定止损",
   trailing_stop: "跟踪止损",
@@ -137,13 +137,12 @@ function reasonText(reason: string): string {
   if (reason.startsWith("missing:")) return `缺少 ${reason.slice("missing:".length)}`;
   if (reason.startsWith("factor_failed:")) return `上游因子失败（${reason.slice("factor_failed:".length)}）`;
   if (reason.startsWith("source_failed:")) return `上游数据失败（${reason.slice("source_failed:".length)}）`;
-  if (reason.startsWith("factor_gap:")) return `上游因子 K 线空洞（${reason.slice("factor_gap:".length)}）`;
   if (reason.startsWith("market_unavailable:")) return `市场本期不可用（${reason.slice("market_unavailable:".length)}）`;
   if (reason.startsWith("score_error:")) return `分数计算出错：${reason.slice("score_error:".length)}`;
   return itemReasons[reason] ?? reason;
 }
 
-/** 解释明细的原因：已知代码给出中文说明并附原文，带前缀的原因（holding:、tranche:、missing:、factor_failed:、source_failed:、factor_gap:、market_unavailable:、score_error:）逐段翻译。 */
+/** 解释明细的原因：已知代码给出中文说明并附原文，带前缀的原因（holding:、tranche:、missing:、factor_failed:、source_failed:、market_unavailable:、score_error:）逐段翻译。 */
 export function itemReasonLabel(reason?: string): string {
   if (!reason) return "-";
   const text = reasonText(reason);

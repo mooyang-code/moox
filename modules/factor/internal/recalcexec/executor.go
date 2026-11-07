@@ -556,7 +556,6 @@ func mergeOutcome(into, next pipeline.Outcome) pipeline.Outcome {
 		}
 		into.Factors[i].FailedSubjects = append(into.Factors[i].FailedSubjects, state.FailedSubjects...)
 		into.Factors[i].FailedSeries = append(into.Factors[i].FailedSeries, state.FailedSeries...)
-		into.Factors[i].GapSeries = append(into.Factors[i].GapSeries, state.GapSeries...)
 		into.Factors[i].SkippedSeriesTags = append(into.Factors[i].SkippedSeriesTags, state.SkippedSeriesTags...)
 	}
 	return into

@@ -47,9 +47,9 @@ func hedgeState() State {
 	return State{Rules: map[string]RuleState{"l": {Held: []string{"X"}}, "s": {Held: []string{"X"}}}, Targets: map[string]string{"X|spot": "0.5", "X|swap": "-0.5"}}
 }
 
-// 对冲币 X 的永续证据不全是空洞时，不只取永续的行：
-//   - 永续 NULL 行上 m 列 factor_failed、v 列 factor_gap（混合失败）；
-//   - 永续没有 X 的行，只有 v 列空洞证据（证据没覆盖 m 列）。
+// 对冲币 X 的永续证据不全是可冻结的市场不可用时，不只取永续的行：
+//   - 永续 NULL 行上 m 列 factor_failed、v 列 market_unavailable（混有逐币失败）；
+//   - 永续没有 X 的行，只有 v 列 market_unavailable 证据（证据没覆盖 m 列）。
 //
 // 两种情况都按 pickOrder 取现货（粘住）的行，现货多头照常、永续空头用现货行继续排名，两腿都保持（不是被一起平掉）。
 func TestHedgeCoinKeepsBothLegsWhenSwapEvidenceNotFreezable(t *testing.T) {
@@ -59,8 +59,8 @@ func TestHedgeCoinKeepsBothLegsWhenSwapEvidenceNotFreezable(t *testing.T) {
 		swapX  *Row
 		failed map[string]map[string]string
 	}{
-		{"混合失败的 NULL 行", &Row{Values: map[string]float64{}}, map[string]map[string]string{"m": {"X": FailedFactor}, "v": {"X": FailedGap}}},
-		{"无行且证据不全", nil, map[string]map[string]string{"v": {"X": FailedGap}}},
+		{"混合失败的 NULL 行", &Row{Values: map[string]float64{}}, map[string]map[string]string{"m": {"X": FailedFactor}, "v": {"X": FailedMarket}}},
+		{"无行且证据不全", nil, map[string]map[string]string{"v": {"X": FailedMarket}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -82,47 +82,25 @@ func TestHedgeCoinKeepsBothLegsWhenSwapEvidenceNotFreezable(t *testing.T) {
 	}
 }
 
-// 对冲币 X 的永续 NULL 行只有空洞证据：两腿一起冻结（保守的已知边界）。冻结明细按规则方向标上期持仓的市场：
-// 多头规则标现货、空头规则标永续（所选行在永续上）。
-func TestHedgeCoinFreezesBothLegsOnSwapGapAndLabelsByDirection(t *testing.T) {
+// 对冲币 X（现货多头加永续空头）、本期永续整体不可用：两腿一起冻结（冻结按币，保守的已知边界）。冻结明细按规则方向标上期持仓的市场：
+// 多头规则标现货、空头规则标永续。
+func TestHedgeCoinFreezesBothLegsWhenSwapDownAndLabelsByDirection(t *testing.T) {
 	program := compileIn(t, dsl.Market{Select: dsl.MarketBoth, Prefer: dsl.MarketSpot}, longShortTwoColumns, "m", "v")
 	rows := map[string]map[string]Row{
 		dsl.MarketSpot: {"A": values("m", 1, "v", 1), "B": values("m", 2, "v", 2), "X": values("m", 9, "v", 9)},
-		dsl.MarketSwap: {"A": values("m", 1, "v", 1), "B": values("m", 2, "v", 2), "X": values("m", 9)},
+		dsl.MarketSwap: {},
 	}
-	frame := rowsFrame(program, rows, map[string]map[string]map[string]string{dsl.MarketSwap: {"v": {"X": FailedGap}}}, []string{"A", "B", "X"})
+	down := map[string]string{"A": FailedMarket, "B": FailedMarket, "X": FailedMarket}
+	frame := rowsFrame(program, rows, map[string]map[string]map[string]string{dsl.MarketSwap: {"m": down, "v": down}}, []string{"A", "B", "X"})
 	decision, err := Evaluate(program, frame, hedgeState())
 	if err != nil {
 		t.Fatal(err)
 	}
-	requireHolds(t, decision, map[string]string{"B|spot": "0.5", "B|swap": "-0.5", "X|spot": "0.5(hold)", "X|swap": "-0.5(hold)"})
+	requireHolds(t, decision, map[string]string{"B|spot": "0.5", "X|spot": "0.5(hold)", "X|swap": "-0.5(hold)"})
 	for ruleID, market := range map[string]string{"l": dsl.MarketSpot, "s": dsl.MarketSwap} {
-		if item := findItem(t, decision, ruleID, "X"); item.Stage != StageHeld || item.Market != market {
-			t.Fatalf("规则 %s 里 X 的冻结明细应标 %s：%+v", ruleID, market, item)
+		if item := findItem(t, decision, ruleID, "X"); item.Stage != StageHeld || item.Reason != reasonMarketHold || item.Market != market {
+			t.Fatalf("规则 %s 里 X 的冻结明细应是 market_hold、标 %s：%+v", ruleID, market, item)
 		}
-	}
-}
-
-// 只持有永续空头 X、现货 X 空洞（现货行是 NULL 行加空洞证据）：X 冻结，空头规则的冻结明细标永续，不是所选行的现货。
-func TestSwapShortFrozenBySpotGapLabelsSwap(t *testing.T) {
-	program := compileIn(t, dsl.Market{Select: dsl.MarketBoth, Prefer: dsl.MarketSpot}, longShortTwoColumns, "m", "v")
-	rows := map[string]map[string]Row{
-		dsl.MarketSpot: {"A": values("m", 1, "v", 1), "B": values("m", 2, "v", 2), "X": {Values: map[string]float64{}}},
-		dsl.MarketSwap: {"A": values("m", 1, "v", 1), "B": values("m", 2, "v", 2), "X": values("m", 9, "v", 9)},
-	}
-	failed := map[string]map[string]map[string]string{dsl.MarketSpot: {"m": {"X": FailedGap}, "v": {"X": FailedGap}}}
-	frame := rowsFrame(program, rows, failed, []string{"A", "B", "X"})
-	previous := State{Rules: map[string]RuleState{"s": {Held: []string{"X"}}}, Targets: map[string]string{"X|swap": "-0.5"}}
-	decision, err := Evaluate(program, frame, previous)
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertOK(t, decision)
-	if got := holdsOf(decision)["X|swap"]; got != "-0.5(hold)" {
-		t.Fatalf("X 应冻结：%v", holdsOf(decision))
-	}
-	if item := findItem(t, decision, "s", "X"); item.Stage != StageHeld || item.Market != dsl.MarketSwap {
-		t.Fatalf("空头规则里 X 的冻结明细应标 swap：%+v", item)
 	}
 }
 
@@ -232,19 +210,19 @@ func TestSwapDownGuardsShortRuleWhenHeldShortLacksEvidence(t *testing.T) {
 	assertSkipped(t, decision, SkipTooManyMissing)
 }
 
-// 规则 l1 预期 5 个币，其中 G1、G2 由规则 l2 在现货持有、本期现货空洞（gap_hold）：不管永续可不可用，l1 都把它们计入缺数，
+// 规则 l1 预期 5 个币，其中 G1、G2 由规则 l2 在现货持有、本期只缺上一根（prev_hold）：不管永续可不可用，l1 都把它们计入缺数，
 // 2/5 超过 max_missing 0.2，整期 too_many_missing。守门只排除别的规则持有、因市场不可用（market_hold）冻结的标的。
-func TestGuardCountsOtherRulesGapHoldsRegardlessOfSwap(t *testing.T) {
+func TestGuardCountsOtherRulesPrevHoldsRegardlessOfSwap(t *testing.T) {
 	program := compileIn(t, dsl.Market{Select: dsl.MarketBoth, Prefer: dsl.MarketSpot}, `name: ll
 rules:
   - id: l1
     type: rank
-    score: "m"
+    score: "m + bars[-1].m"
     select: {top: 1}
     weight: {total: 0.5}
   - id: l2
     type: rank
-    score: "m"
+    score: "m + bars[-1].m"
     select: {top: 2}
     weight: {total: 0.5}
 portfolio: {max_missing: 0.2}
@@ -254,15 +232,16 @@ portfolio: {max_missing: 0.2}
 		big = append(big, fmt.Sprintf("Z%02d", i))
 	}
 	for _, swapDown := range []bool{false, true} {
-		spot := map[string]Row{"G1": {Values: map[string]float64{}}, "G2": {Values: map[string]float64{}}}
+		// G1、G2 当期齐全、只缺上一根；其余币当期与上一根都有值。
+		spot := map[string]Row{"G1": {Values: map[string]float64{"m": 1}, Previous: map[string]float64{}}, "G2": {Values: map[string]float64{"m": 1}, Previous: map[string]float64{}}}
 		swap := map[string]Row{}
 		for i, id := range big {
 			if id != "G1" && id != "G2" {
-				spot[id] = values("m", i)
-				swap[id] = values("m", i)
+				row := Row{Values: map[string]float64{"m": float64(i)}, Previous: map[string]float64{"m": float64(i)}}
+				spot[id], swap[id] = row, row
 			}
 		}
-		failed := map[string]map[string]map[string]string{dsl.MarketSpot: {"m": {"G1": FailedGap, "G2": FailedGap}}}
+		failed := map[string]map[string]map[string]string{}
 		if swapDown {
 			down := map[string]string{}
 			for id := range swap {
@@ -280,6 +259,12 @@ portfolio: {max_missing: 0.2}
 		}
 		if decision.Status != StatusSkipped || decision.SkipReason != SkipTooManyMissing {
 			t.Fatalf("swapDown=%v：期望 too_many_missing，实际 %s(%s) %v", swapDown, decision.Status, decision.SkipReason, decision.Summary.Notes)
+		}
+		if got := decision.Summary.Rules["l1"]; got.Held != 2 || got.Missing != 0 {
+			t.Fatalf("swapDown=%v：G1、G2 应是冻结（prev_hold）而不是普通缺数：%+v", swapDown, got)
+		}
+		if item := findItem(t, decision, "l1", "G1"); item.Stage != StageHeld || item.Reason != reasonPrevHold {
+			t.Fatalf("swapDown=%v：G1 的明细应是 held/prev_hold：%+v", swapDown, item)
 		}
 	}
 }

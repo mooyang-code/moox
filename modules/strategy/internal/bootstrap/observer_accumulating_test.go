@@ -41,7 +41,7 @@ func hasLabel(labels []*dto.LabelPair, name, value string) bool {
 	return false
 }
 
-// 数据积累期（历史不足、上游因子被空洞保护跳过）：数据集记 partial，不计模块失败；超过积累期上限仍然不足就是真问题，
+// 数据积累期（历史不足、上游因子被跳过）：数据集记 partial，不计模块失败；超过积累期上限仍然不足就是真问题，
 // 回到 incomplete 并计模块失败；出现 ok 后重新计时；与积累无关的跳过原因不受影响。
 func TestObserverTreatsHistoryAccumulationAsPartialWithinTheLimit(t *testing.T) {
 	repo := openStore(t)

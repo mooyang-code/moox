@@ -18,7 +18,7 @@ type TargetJSON struct {
 	// Market 是目标所在的市场（spot、swap 或 equity）：同一个标的的现货、永续各是一个目标。
 	Market       string `json:"market"`
 	TargetWeight string `json:"target_weight"`
-	// Hold 为 true 表示保持该标的当前持仓数量不动（因 K 线空洞缺数），TargetWeight 是预留的预算占用。
+	// Hold 为 true 表示保持该标的当前持仓数量不动（市场不可用或只缺上一根，见 engine 的冻结），TargetWeight 是预留的预算占用。
 	Hold bool `json:"hold,omitempty"`
 }
 

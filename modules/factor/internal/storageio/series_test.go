@@ -19,7 +19,7 @@ func seriesRef(subject, tag string) seriesset.Series {
 	return seriesset.Series{SubjectID: subject, SeriesTag: tag}
 }
 
-// 统一数据集：周期完成标记带按序列的全集与失败名单，明细里的失败序列、空洞序列、跳过的 tag 去重排序后写出。
+// 统一数据集：周期完成标记带按序列的全集与失败名单，明细里的失败序列、跳过的 tag 去重排序后写出。
 func TestMarkerToProtoCarriesSeriesLists(t *testing.T) {
 	universe := []seriesset.Series{
 		seriesRef("ETH", testSwapTag), seriesRef("BTC", testSpotTag), seriesRef("BTC", testSwapTag), seriesRef("ETH", testSpotTag),
@@ -30,7 +30,7 @@ func TestMarkerToProtoCarriesSeriesLists(t *testing.T) {
 		UniverseSeries: universe, FailedSeries: []seriesset.Series{seriesRef("ETH", testSwapTag)},
 		Factors: []FactorState{{
 			FactorID: "rank", MemberKey: "rank", MemberKind: "fixed", Status: "degraded", FailedSubjects: []string{"ETH"},
-			FailedSeries: []seriesset.Series{seriesRef("ETH", testSwapTag), seriesRef("ETH", testSwapTag)}, GapSeries: []seriesset.Series{seriesRef("ETH", testSwapTag)},
+			FailedSeries:      []seriesset.Series{seriesRef("ETH", testSwapTag), seriesRef("ETH", testSwapTag)},
 			SkippedSeriesTags: []string{testSwapTag, testSwapTag}, SourceHash: "s", DefinitionHash: "d",
 		}},
 	}
@@ -46,7 +46,6 @@ func TestMarkerToProtoCarriesSeriesLists(t *testing.T) {
 	require.Len(t, detail.GetSharedFailedSeries(), 1, "失败序列在周期级放一份")
 	require.Empty(t, state.GetFailedSeries(), "成员级只放与周期级不同的部分")
 	require.Equal(t, []seriesset.Series{seriesRef("ETH", testSwapTag)}, MemberFailedSeries(detail, state), "读回时还原成完整的成员级名单")
-	require.Len(t, state.GetGapSeries(), 1)
 	require.Equal(t, []string{testSwapTag}, state.GetSkippedSeriesTags())
 
 	// 读回：冻结全集带按序列的名单。
@@ -76,7 +75,6 @@ func TestValidatePeriodDetailSeriesRules(t *testing.T) {
 
 	for name, mutate := range map[string]func(*factorpb.FactorPeriodState){
 		"failed series not in universe": func(s *factorpb.FactorPeriodState) { s.FailedSeries = []*factorpb.SeriesRef{ref("ETH", testSwapTag)} },
-		"gap series not failed":         func(s *factorpb.FactorPeriodState) { s.GapSeries = []*factorpb.SeriesRef{ref("BTC", testSpotTag)} },
 		"skipped tag unknown":           func(s *factorpb.FactorPeriodState) { s.SkippedSeriesTags = []string{"venue:okx"} },
 		"complete with failed series": func(s *factorpb.FactorPeriodState) {
 			s.Status, s.FailedSubjects = "complete", nil

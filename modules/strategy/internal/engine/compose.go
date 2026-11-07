@@ -7,7 +7,7 @@ import (
 
 // ComposeTargets 把已按（标的|市场）合成的权重套上组合约束（max_weight 截断、保持目标预留预算、现货预算、leverage 缩小，见 applyPortfolio），
 // 返回 ok 决策：目标、摘要（gross、net、换手与说明）与只含目标的 State。策略池用它把“比例 × 成员目标”的合成结果交给与普通策略同一套约束。
-// mode 是池的有效市场模式（成员市场的并集）；frozen 是需要保持持仓的标的（成员因空洞或市场不可用冻结的并集），保持上期池目标的权重。
+// mode 是池的有效市场模式（成员市场的并集）；frozen 是需要保持持仓的标的（成员因市场不可用或只缺上一根冻结的并集），保持上期池目标的权重。
 func ComposeTargets(portfolio dsl.Portfolio, mode dsl.Market, contributions map[string]quant.Decimal, frozen map[string]struct{}, previous State) (Decision, error) {
 	decision := Decision{
 		Status:  StatusOK,
@@ -33,7 +33,7 @@ func poolTolerance(portfolio dsl.Portfolio) quant.Decimal {
 	return noise
 }
 
-// HeldSubjects 返回成员目标里带保持标记的标的（成员因空洞或市场不可用冻结的标的）。
+// HeldSubjects 返回成员目标里带保持标记的标的（成员因市场不可用或只缺上一根冻结的标的）。
 func HeldSubjects(targets []Target) []string {
 	var ids []string
 	for _, target := range targets {

@@ -22,7 +22,7 @@ type Row struct {
 // MarketInput 是一个市场的 View 本期输入：每个标的在该市场的行，以及该市场上游失败的标的。
 type MarketInput struct {
 	Rows map[string]Row
-	// Failed 记录该市场上游失败的标的：列名 → 标的 → 原因（FailedFactor、FailedGap、FailedSource 或 FailedMarket）。
+	// Failed 记录该市场上游失败的标的：列名 → 标的 → 原因（FailedFactor、FailedSource 或 FailedMarket）。
 	Failed map[string]map[string]string
 	// AgedOut 是这个市场里年龄不够（min_age_bars 的探针没通过）的标的：多个市场时，年龄按市场各自判断，老币刚上线永续，
 	// 不能用现货的历史让永续的行通过年龄检查。选币池构造不取这些标的在这个市场的行，但已持仓的豁免：年龄剔除只拦新进入的标的，
@@ -56,12 +56,10 @@ type Frame struct {
 	shortNoRow map[string]map[string]struct{}
 }
 
-// 上游失败的原因：因子对该标的计算失败，因子因回看窗口 K 线空洞对该标的失败（FailedGap，是 FailedFactor 的细分），
-// View 本身（例如 K 线采集）声明该标的本期失败，或该标的所在市场本期整体不可用（FailedMarket：那个市场的因子本期被跳过）。
-// 空洞与市场不可用都允许已持仓的标的冻结（见 freeze.go）。
+// 上游失败的原因：因子对该标的计算失败，View 本身（例如 K 线采集）声明该标的本期失败，
+// 或该标的所在市场本期整体不可用（FailedMarket：那个市场的因子本期被跳过）。只有市场不可用允许已持仓的标的冻结（见 freeze.go）。
 const (
 	FailedFactor = "factor_failed"
-	FailedGap    = "factor_gap"
 	FailedSource = "source_failed"
 	FailedMarket = "market_unavailable"
 )
@@ -128,7 +126,7 @@ type RuleSummary struct {
 	AgedOut   int `json:"aged_out"`
 	Available int `json:"available"`
 	Missing   int `json:"missing"`
-	// Held 是因 K 线空洞缺数而保持持仓的标的数（不计入 Available 与 Missing）。
+	// Held 是因所在市场本期不可用（或只缺上一根）而保持持仓的标的数（不计入 Available 与 Missing）。
 	Held      int    `json:"held,omitempty"`
 	Filtered  int    `json:"filtered"`
 	Scored    int    `json:"scored"`

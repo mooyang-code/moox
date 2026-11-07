@@ -174,9 +174,9 @@ func union(lists ...[]string) []string {
 	return out
 }
 
-func ucState(status string, failedSubjects []string, failedSeries, gapSeries []*factorpb.SeriesRef, skippedTags []string) *factorpb.FactorPeriodState {
+func ucState(status string, failedSubjects []string, failedSeries []*factorpb.SeriesRef, skippedTags []string) *factorpb.FactorPeriodState {
 	return &factorpb.FactorPeriodState{MemberKey: "f", MemberKind: "fixed", FactorId: "f", Status: status, DefinitionHash: "h1",
-		FailedSubjects: failedSubjects, FailedSeries: failedSeries, GapSeries: gapSeries, SkippedSeriesTags: skippedTags}
+		FailedSubjects: failedSubjects, FailedSeries: failedSeries, SkippedSeriesTags: skippedTags}
 }
 
 func ucEvent(viewID string, universe []string, state *factorpb.FactorPeriodState, shared []*factorpb.SeriesRef) *storagepb.ViewDataReady {
@@ -237,7 +237,7 @@ func (w ucWorld) build(t *testing.T, unified bool) (*ucStorage, []string, map[st
 		case len(failedSeries) > 0 || len(skippedTags) > 0:
 			status = "degraded"
 		}
-		events[input.MarketMulti] = ucEvent("view_factor_uni", all, ucState(status, union(folded), failedSeries, nil, skippedTags), nil)
+		events[input.MarketMulti] = ucEvent("view_factor_uni", all, ucState(status, union(folded), failedSeries, skippedTags), nil)
 		return client, []string{"ftask_uni"}, events
 	}
 	var tasks []string
@@ -275,7 +275,7 @@ func (w ucWorld) build(t *testing.T, unified bool) (*ucStorage, []string, map[st
 		case len(w.failed[market]) > 0:
 			status = "degraded"
 		}
-		events[market] = ucEvent("view_factor_"+suffix, universeOf(market), ucState(status, w.failed[market], nil, nil, nil), nil)
+		events[market] = ucEvent("view_factor_"+suffix, universeOf(market), ucState(status, w.failed[market], nil, nil), nil)
 	}
 	return client, tasks, events
 }
