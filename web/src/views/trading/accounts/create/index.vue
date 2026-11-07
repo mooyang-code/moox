@@ -15,7 +15,11 @@
       <a-step v-for="title in stepTitles(form.kind)" :key="title">{{ title }}</a-step>
     </a-steps>
 
+    <a-alert v-if="waiting" type="info" class="block">
+      正在等待账户会话建立：新账户的会话由运行时每隔几秒检查建立，建好后会自动加入组合，最多等 20 秒。
+    </a-alert>
     <a-alert v-if="error" type="error" class="block">{{ error }}</a-alert>
+    <a-alert v-if="locked" type="warning" class="block"> 执行账户已经创建，前面几步的参数不能再改，这里只补做加入组合。 </a-alert>
 
     <!-- 1 类型 -->
     <div v-if="form.step === 0" class="choice" role="radiogroup" aria-label="账户类型">
@@ -82,12 +86,12 @@
     <div v-else>
       <div class="choice" role="radiogroup" aria-label="组合">
         <label :class="{ on: form.join === 'new' }">
-          <input v-model="form.join" type="radio" name="join" value="new" />
+          <input v-model="form.join" type="radio" name="join" value="new" :disabled="Boolean(created.logicalId)" />
           <strong>新建一个组合账户</strong>
           <span class="desc">最常见：一份资金对应一个组合</span>
         </label>
         <label :class="{ on: form.join === 'exist' }">
-          <input v-model="form.join" type="radio" name="join" value="exist" />
+          <input v-model="form.join" type="radio" name="join" value="exist" :disabled="Boolean(created.logicalId)" />
           <strong>加入已有组合</strong>
           <span class="desc">把多个交易所账户合成一份资金管理</span>
         </label>
@@ -125,7 +129,7 @@
     </div>
 
     <div class="footer">
-      <a-button @click="back">{{ form.step ? "上一步" : "取消" }}</a-button>
+      <a-button @click="back">{{ form.step && !locked ? "上一步" : "取消" }}</a-button>
       <a-button v-if="form.step < 3" type="primary" :disabled="form.step === 0 && !selectedKind?.open" @click="next"
         >下一步</a-button
       >
@@ -149,6 +153,7 @@ import { loadExchangeSecrets, type ExchangeSecretOption } from "../shared/exchan
 import { joinableLogicals, nextPriority } from "../shared/membership";
 import { accountMapOf } from "../account-list";
 import type { TradingAccount } from "@/api/trade";
+import { retryWhileSessionStarting } from "./join-retry";
 import {
   buildLiveRequest,
   buildPaperRequest,
@@ -169,12 +174,15 @@ const visible = ref(false);
 const form = reactive(createDefaultForm());
 const error = ref("");
 const submitting = ref(false);
+const waiting = ref(false);
 const secrets = ref<ExchangeSecretOption[]>([]);
 const secretsLoading = ref(false);
 const scope = createSubmitScope();
 // 这次已经建成的账户、组合：提交中途失败后重试时用来跳过已完成的部分
 const created = reactive({ accountId: "", logicalId: "", joined: false });
 
+// 账户已经建成：前面几步的参数锁定，重试沿用已创建的账户和组合
+const locked = computed(() => Boolean(created.accountId));
 const selectedKind = computed(() => createKinds.find(item => item.key === form.kind));
 const joinable = computed(() => joinableLogicals(props.logicals, accountMapOf(props.accounts), form.kind, form.settlementAsset));
 
@@ -227,7 +235,7 @@ function next() {
 
 function back() {
   error.value = "";
-  if (form.step) form.step = (form.step - 1) as typeof form.step;
+  if (form.step && !locked.value) form.step = (form.step - 1) as typeof form.step;
   else visible.value = false;
 }
 
@@ -242,6 +250,7 @@ async function submit() {
   }
   const submission = scope.begin();
   submitting.value = true;
+  waiting.value = false;
   error.value = "";
   const exist =
     form.join === "exist" ? props.logicals.find(item => item.logical_account_id === form.existingLogicalId) : undefined;
@@ -263,19 +272,25 @@ async function submit() {
           await createLogicalAccount({
             name: form.logicalName.trim() || form.name.trim(),
             control_mode: form.controlMode,
-            execution_mode: 2,
+            // 按账户类型取执行模式：模拟盘是 1，测试网和生产环境是 2
+            execution_mode: form.kind === "paper" ? 1 : 2,
             settlement_asset: form.settlementAsset.trim().toUpperCase()
           })
         ).logical_account.logical_account_id;
         created.logicalId = target;
       }
-      await addLogicalAccountMember({
-        logical_account_id: target,
-        trading_account_id: created.accountId,
-        enabled: true,
-        priority: exist ? nextPriority(exist) : 1,
-        adopt_existing_exposure: false
-      });
+      // 新账户的会话要等运行时的周期检查才建起来，加入组合在这之前会失败：自动等一会儿再试
+      await retryWhileSessionStarting(
+        () =>
+          addLogicalAccountMember({
+            logical_account_id: target,
+            trading_account_id: created.accountId,
+            enabled: true,
+            priority: exist ? nextPriority(exist) : 1,
+            adopt_existing_exposure: false
+          }),
+        { onWaiting: () => (waiting.value = true), cancelled: () => !submission.isCurrent() }
+      );
       created.joined = true;
     }
   } catch (cause) {
@@ -287,9 +302,11 @@ async function submit() {
     }
     if (created.accountId) emit("created", form.kind);
     submitting.value = false;
+    waiting.value = false;
     return;
   }
   submitting.value = false;
+  waiting.value = false;
   if (!submission.isCurrent()) return;
   visible.value = false;
   Message.success("账户已创建");

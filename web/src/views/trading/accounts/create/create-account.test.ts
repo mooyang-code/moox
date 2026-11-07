@@ -48,6 +48,7 @@ async function openDialog(logicals: LogicalAccount[] = [existing]) {
 }
 
 beforeEach(() => {
+  mocks.createLogicalAccount.mockReset().mockResolvedValue({ logical_account: { logical_account_id: "la-made" } });
   mocks.createPaperSimulation.mockReset().mockResolvedValue({ account: { trading_account_id: "ta-new" } });
   mocks.addLogicalAccountMember.mockReset().mockResolvedValue({});
 });
@@ -88,5 +89,51 @@ describe("新建账户提交", () => {
     await vm.submit();
     expect(mocks.createPaperSimulation).toHaveBeenCalledWith(expect.objectContaining({ logical_account_name: "新组合" }));
     expect(mocks.addLogicalAccountMember).not.toHaveBeenCalled();
+  });
+
+  it("新账户的会话还没建起来时自动等待重试，不让用户手动再点", async () => {
+    vi.useFakeTimers();
+    try {
+      const vm = await openDialog();
+      mocks.addLogicalAccountMember
+        .mockRejectedValueOnce(new Error("trade runtime: ExchangeSession is not configured"))
+        .mockRejectedValueOnce(new Error("trade runtime: ExchangeSession is not configured"));
+      const submitting = vm.submit();
+      await vi.advanceTimersByTimeAsync(2600);
+      expect(document.body.textContent).toContain("正在等待账户会话建立");
+      await vi.advanceTimersByTimeAsync(2600);
+      await submitting;
+      expect(mocks.addLogicalAccountMember).toHaveBeenCalledTimes(3);
+      expect(mocks.createPaperSimulation).toHaveBeenCalledTimes(1);
+      expect(wrapper.emitted("created")).toEqual([["paper"]]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("部分失败后改选新建组合，按账户类型建组合（模拟盘是 1，不是实盘），并锁定前面几步", async () => {
+    const vm = await openDialog();
+    mocks.addLogicalAccountMember.mockRejectedValueOnce(new Error("先暂停自动执行"));
+    await vm.submit();
+    await flushPromises();
+    expect(wrapper.text() + document.body.textContent).toContain("不能再改");
+    Object.assign(vm.form, { join: "new", logicalName: "补建的组合", controlMode: 2 });
+    await vm.submit();
+    expect(mocks.createPaperSimulation).toHaveBeenCalledTimes(1);
+    expect(mocks.createLogicalAccount).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "补建的组合", execution_mode: 1, control_mode: 2 })
+    );
+    expect(mocks.addLogicalAccountMember).toHaveBeenLastCalledWith(
+      expect.objectContaining({ logical_account_id: "la-made", trading_account_id: "ta-new", priority: 1 })
+    );
+  });
+
+  it("实盘账户新建组合时执行模式是 2", async () => {
+    mocks.createTradingAccount.mockResolvedValue({ account: { trading_account_id: "ta-live" } });
+    const vm = await openDialog();
+    // 1A 期间实盘选项在界面上不开放，这里直接验证提交逻辑
+    Object.assign(vm.form, { kind: "testnet", secretId: "s1", join: "new", logicalName: "实盘组合" });
+    await vm.submit();
+    expect(mocks.createLogicalAccount).toHaveBeenCalledWith(expect.objectContaining({ execution_mode: 2 }));
   });
 });
