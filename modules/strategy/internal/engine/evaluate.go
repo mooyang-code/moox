@@ -21,7 +21,7 @@ func Evaluate(program *dsl.Program, frame Frame, previous State) (Decision, erro
 	held := indexHeld(previous)
 	frame = restrictShortCandidates(program, mode, selectPool(mode, frame, held), previous)
 	decision := evaluateFrame(program, mode, frame, previous, held)
-	labelItems(mode, frame, held, decision.Items)
+	labelItems(program, mode, frame, held, decision.Items)
 	sortItems(program, decision.Items)
 	return decision, nil
 }
@@ -33,7 +33,7 @@ func evaluateFrame(program *dsl.Program, mode dsl.Market, frame Frame, previous 
 		Summary: Summary{Universe: len(frame.Universe), Rules: make(map[string]RuleSummary, len(program.Rules))},
 	}
 	// 因 K 线空洞缺数的已持仓标的在所有规则里冻结：不求值、不调仓，持仓数量保持不动（见 freeze.go）。
-	frozen := frozenSet(program, frame, previous, held)
+	frozen, holdReasons := frozenSet(program, frame, previous, held)
 	// 第一遍：集合划分与守门。守门失败也要给出全部规则的集合摘要与缺数明细，便于排查。
 	partitions := make([]ruleSets, len(program.Rules))
 	skipReason, skipNote := "", ""
@@ -46,7 +46,7 @@ func evaluateFrame(program *dsl.Program, mode dsl.Market, frame Frame, previous 
 		if rule.Rule.Type == dsl.RuleTypeTranche {
 			sets = partitionTranche(rule, frame, previous.Rules[rule.Rule.ID].Held)
 		} else {
-			sets = partitionRule(rule, frame, previous.Rules[rule.Rule.ID].Held, frozen)
+			sets = partitionRule(rule, frame, previous.Rules[rule.Rule.ID].Held, frozen, holdReasons)
 		}
 		partitions[i] = sets
 		decision.Summary.Rules[rule.Rule.ID] = RuleSummary{
@@ -61,7 +61,11 @@ func evaluateFrame(program *dsl.Program, mode dsl.Market, frame Frame, previous 
 		if skipReason != "" {
 			continue
 		}
-		if reason := guard(program.Strategy.Portfolio, rule.Rule.Type, sets); reason != "" {
+		if waivesShortGuard(mode, rule.Rule, frame) {
+			decision.Summary.Notes = append(decision.Summary.Notes, fmt.Sprintf("永续本期整体不可用，空头规则 %s 不守门：冻结的空头保持不动，不新开空头", rule.Rule.ID))
+			continue
+		}
+		if reason := guard(program.Strategy.Portfolio, rule.Rule.Type, sets, guardedFrozen(mode, frame, sets, previous.Rules[rule.Rule.ID].Held)); reason != "" {
 			skipReason = reason
 			skipNote = fmt.Sprintf("规则 %s：预期 %d、年龄剔除 %d、可用 %d、缺数 %d", rule.Rule.ID, len(sets.expected), len(sets.agedOut), len(sets.available), len(sets.missing))
 		}
@@ -158,14 +162,14 @@ func skipped(decision Decision, previous State, reason, note string) Decision {
 // guard 是规则的守门，任一规则不通过都整期跳过，空候选与大面积缺数不能当作"选不出标的"或"退出"去清仓：
 // rank 规则没有可评估的候选（预期集合为空或全部年龄剔除）、进入 filter 的可用标的少于 min_universe 时
 // 记 universe_too_small；rank 与 signal 规则的缺数占（预期 − 年龄剔除）的比例超过 max_missing 时记
-// too_many_missing。signal 规则的池是显式的，不受 min_universe 约束，池为空时不守门。
-func guard(portfolio dsl.Portfolio, ruleType string, sets ruleSets) string {
+// too_many_missing。signal 规则的池是显式的，不受 min_universe 约束，池为空时不守门。frozen 是计入缺数的冻结标的数（见 guardedFrozen）。
+func guard(portfolio dsl.Portfolio, ruleType string, sets ruleSets, frozen int) string {
 	denominator := len(sets.expected) - len(sets.agedOut)
 	if (ruleType == dsl.RuleTypeRank || ruleType == dsl.RuleTypeTranche) && (denominator <= 0 || len(sets.available) < portfolio.MinUniverse) {
 		return SkipUniverseTooSmall
 	}
 	// 冻结（保持持仓）的标的仍计入缺数比例：保护中的标的不能伪装成可用。
-	missing := len(sets.missing) + len(sets.frozen)
+	missing := len(sets.missing) + frozen
 	if denominator > 0 && missing > 0 {
 		ratio := quant.Must(fmt.Sprint(missing)).Div(quant.Must(fmt.Sprint(denominator)))
 		if ratio.Cmp(portfolio.MaxMissing) > 0 {
@@ -173,4 +177,29 @@ func guard(portfolio dsl.Portfolio, ruleType string, sets ruleSets) string {
 		}
 	}
 	return ""
+}
+
+// guardedFrozen 返回规则守门计入缺数的冻结标的数。通常是规则预期集合里的全部冻结标的；多市场模式下有市场本期整体不可用时，
+// 只计本规则上期持有的冻结标的：冻结按币，别的规则在不可用市场的持仓（例如永续不可用时的永续空头）会把这个币在所有规则里冻结，
+// 本规则没持有它，它对本规则只是本期不参与的候选，计进缺数会让一部分市场不可用变成整期跳过（设计 3.2.1）。
+func guardedFrozen(mode dsl.Market, frame Frame, sets ruleSets, ruleHeld []string) int {
+	partial := false
+	if !mode.Single() {
+		for _, market := range mode.Markets() {
+			if marketUnavailable(frame, market) {
+				partial = true
+				break
+			}
+		}
+	}
+	if !partial {
+		return len(sets.frozen)
+	}
+	count := 0
+	for id := range sets.frozen {
+		if contains(ruleHeld, id) {
+			count++
+		}
+	}
+	return count
 }

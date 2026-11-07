@@ -183,12 +183,14 @@ func selectPool(mode dsl.Market, frame Frame, held heldIndex) Frame {
 		}
 		return row, true
 	}
-	// 上期在某个市场持有空头、而这个市场本期整体不可用（FailedMarket）时，只取这个市场的行：没有行就按市场不可用冻结，不退回另一个市场的行。
-	// 否则空头（取行顺序是 prefer 加另一个市场，粘住只看正权重）会改用现货的因子值重新排名，在永续上平仓或改仓，违反“不可用时冻结持仓”。
-	// 冻结按币：同一个币持有现货多头又持有永续空头时，永续不可用会把现货多头一起冻结（保守，已知边界）。
-	marketDown := func(market, id string) bool {
+	// 上期在某个市场持有空头、而这个市场本期对它有可冻结的失败证据时，只取这个市场的行（有行取行，没行按无行），证据随之归到这个市场，
+	// 由冻结逻辑保持，不退回另一个市场的行。可冻结的证据有两种：这个市场本期整体不可用（FailedMarket），或这个币在这个市场单币空洞
+	// （FailedGap，与单市场一样，空洞的持仓冻结；factor_failed 单市场下也不冻结，这里不放开）。空洞的行可能还在（失败序列写成 NULL 行），
+	// 所以只看证据、不看行在不在。否则空头（取行顺序是 prefer 加另一个市场，粘住只看正权重）会改用现货的因子值重新排名，在永续上平仓或改仓。
+	// 冻结按币：同一个币持有现货多头又持有永续空头时，永续不可用或空洞会把现货多头一起冻结（保守，已知边界）。
+	freezable := func(market, id string) bool {
 		for _, subjects := range frame.Markets[market].Failed {
-			if subjects[id] == FailedMarket {
+			if reason := subjects[id]; reason == FailedMarket || reason == FailedGap {
 				return true
 			}
 		}
@@ -196,7 +198,7 @@ func selectPool(mode dsl.Market, frame Frame, held heldIndex) Frame {
 	}
 	orderOf := func(id string) []string {
 		for _, entry := range held[id] {
-			if entry.weight.IsNegative() && mode.Has(entry.market) && marketDown(entry.market, id) {
+			if entry.weight.IsNegative() && mode.Has(entry.market) && freezable(entry.market, id) {
 				return []string{entry.market}
 			}
 		}
@@ -265,6 +267,30 @@ func pickOrder(mode dsl.Market, id string, held heldIndex) []string {
 	return []string{mode.Prefer, otherMarket(mode, mode.Prefer)}
 }
 
+// filtersShortCandidates 报告这条规则是否做空头候选过滤：同时涉及现货与永续的模式下、非 tranche 的空头规则。
+func filtersShortCandidates(mode dsl.Market, rule dsl.Rule) bool {
+	return !mode.Single() && mode.Has(dsl.MarketSwap) && rule.Type != dsl.RuleTypeTranche && rule.Side == dsl.SideShort
+}
+
+// marketUnavailable 报告这个市场本期整体不可用：帧里它的失败证据有 market_unavailable（input 对整个市场的每个标的都记这个原因）。
+func marketUnavailable(frame Frame, market string) bool {
+	for _, subjects := range frame.Markets[market].Failed {
+		for _, reason := range subjects {
+			if reason == FailedMarket {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// waivesShortGuard 报告这条规则本期不做守门：多市场模式下永续本期整体不可用时的空头规则（设计 3.2.1：只有一部分市场不可用时不整期跳过）。
+// 空头只走永续，永续整体不可用时空头候选过滤之后它的预期集合只剩上期持有的空头（全部按市场不可用冻结），守门必然判
+// universe_too_small 或 too_many_missing，把多头腿也一起整期跳过。冻结的空头由 holdTargets 单独产出保持目标，规则本身没有可用候选、不配权。
+func waivesShortGuard(mode dsl.Market, rule dsl.Rule, frame Frame) bool {
+	return filtersShortCandidates(mode, rule) && marketUnavailable(frame, dsl.MarketSwap)
+}
+
 // restrictShortCandidates 做空头候选过滤（设计 3.1 第 4 步）：空头只走永续，新开空头的候选只保留本期永续可用的标的；
 // 规则上期已持有的标的不过滤，永续本期不可用时由冻结逻辑保持持仓，不能因为一期没有永续数据就把空头平掉。
 // 只在同时涉及现货与永续的模式下过滤，纯永续策略的缺数照旧计入缺数。
@@ -282,7 +308,7 @@ func restrictShortCandidates(program *dsl.Program, mode dsl.Market, frame Frame,
 	}
 	for i := range program.Rules {
 		rule := program.Rules[i].Rule
-		if rule.Type == dsl.RuleTypeTranche || rule.Side != dsl.SideShort {
+		if !filtersShortCandidates(mode, rule) {
 			continue
 		}
 		heldByRule := previous.Rules[rule.ID].Held
@@ -329,7 +355,12 @@ func contributionMarket(mode dsl.Market, frame Frame, held heldIndex, id string,
 }
 
 // labelItems 给解释明细标上市场：入选的权重取它进入的市场，其余取所选行所在的市场；单市场策略总是那个市场。
-func labelItems(mode dsl.Market, frame Frame, held heldIndex, items []Item) {
+// 冻结（保持持仓）的标的没有行时取上期持仓所在的市场：空头规则取它的空头所在市场（永续），其余规则取正权重持仓的市场。
+func labelItems(program *dsl.Program, mode dsl.Market, frame Frame, held heldIndex, items []Item) {
+	shortRules := make(map[string]bool, len(program.Rules))
+	for i := range program.Rules {
+		shortRules[program.Rules[i].Rule.ID] = program.Rules[i].Rule.Side == dsl.SideShort
+	}
 	for i := range items {
 		item := &items[i]
 		switch {
@@ -339,6 +370,28 @@ func labelItems(mode dsl.Market, frame Frame, held heldIndex, items []Item) {
 			item.Market = contributionMarket(mode, frame, held, item.InstrumentID, strings.HasPrefix(item.Weight, "-"))
 		default:
 			item.Market = frame.RowMarket[item.InstrumentID]
+			if item.Market == "" && item.Stage == StageHeld {
+				item.Market = held.heldMarket(item.InstrumentID, shortRules[item.RuleID], mode.Prefer)
+			}
 		}
 	}
+}
+
+// heldMarket 返回标的上期持仓所在的市场：short 为 true 时取负权重目标的市场，否则取正权重目标的市场（两个市场都有时取 prefer）；
+// 没有对应方向的持仓时退回任一持仓市场，都没有返回空串。
+func (h heldIndex) heldMarket(id string, short bool, prefer string) string {
+	if !short {
+		if market := h.positiveMarket(id, prefer); market != "" {
+			return market
+		}
+	}
+	for _, entry := range h[id] {
+		if entry.weight.IsNegative() {
+			return entry.market
+		}
+	}
+	if entries := h[id]; len(entries) > 0 {
+		return entries[0].market
+	}
+	return ""
 }

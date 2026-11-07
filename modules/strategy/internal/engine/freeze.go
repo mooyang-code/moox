@@ -15,7 +15,9 @@ const (
 	// causeOther：其余一切缺失（因子失败、K 线失败、无行、值缺失而没有证据）。
 	causeOther = "other"
 
-	reasonGapHold = "gap_hold"
+	// 冻结标的的明细原因：reasonGapHold 是 K 线空洞（或只缺上一根）保持持仓，reasonMarketHold 是所在市场本期整体不可用保持持仓。
+	reasonGapHold    = "gap_hold"
+	reasonMarketHold = "market_hold"
 )
 
 // cause 是一列上的一个缺失原因。text 与明细里的 Reason 一致（例如 factor_gap:ma、missing:bars[-1].ma）。
@@ -79,15 +81,16 @@ func heldColumns(rule *dsl.CompiledRule) (columns, previous []string) {
 // frozenSet 返回因 K 线空洞或市场不可用缺数、需要保持持仓的标的：策略当前持有（上期组合目标非零，任一市场）的标的，
 // 只要在所有引用它的规则里缺失的原因全部是空洞（gap）、市场不可用（market）或只缺上一根（prevonly），就冻结——持仓数量不动，不判 exit、不从目标里移除。
 // 只要有任何一条规则里混有其他原因（因子失败、K 线失败、无行、值缺失而没有证据），就完全按现有逻辑处理。
-func frozenSet(program *dsl.Program, frame Frame, previous State, held heldIndex) map[string]struct{} {
-	frozen := make(map[string]struct{})
+// reasons 是每个冻结标的的明细原因：任一规则里有市场不可用的原因记 market_hold，否则记 gap_hold。
+func frozenSet(program *dsl.Program, frame Frame, previous State, held heldIndex) (frozen map[string]struct{}, reasons map[string]string) {
+	frozen, reasons = make(map[string]struct{}), make(map[string]string)
 	// tranche 规则不与其他规则混用，持仓到期由自己的持有计数决定，不参与空洞冻结。
 	if program.Strategy.HasTranche() {
-		return frozen
+		return frozen, reasons
 	}
 	candidates := held.subjects()
 	for _, id := range candidates {
-		protectable, blocked := false, false
+		protectable, blocked, market := false, false, false
 		for i := range program.Rules {
 			rule := &program.Rules[i]
 			ruleID := rule.Rule.ID
@@ -107,6 +110,8 @@ func frozenSet(program *dsl.Program, frame Frame, previous State, held heldIndex
 				switch c.kind {
 				case causeOther:
 					blocked = true
+				case causeMarket:
+					protectable, market = true, true
 				default:
 					protectable = true
 				}
@@ -114,9 +119,13 @@ func frozenSet(program *dsl.Program, frame Frame, previous State, held heldIndex
 		}
 		if protectable && !blocked {
 			frozen[id] = struct{}{}
+			reasons[id] = reasonGapHold
+			if market {
+				reasons[id] = reasonMarketHold
+			}
 		}
 	}
-	return frozen
+	return frozen, reasons
 }
 
 func contains(values []string, target string) bool {
