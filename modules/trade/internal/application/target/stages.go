@@ -19,6 +19,9 @@ const (
 	stageSpotBuy = 5
 )
 
+// reasonTransferScaled 是现货买入被划转额度缩小、钱包没有给出更具体原因时的说明。
+const reasonTransferScaled = "合约钱包可划转的资金不足，现货买入按现有资金缩小"
+
 // transferPollInterval 是等待划转完成时再次收敛的间隔。
 const transferPollInterval = time.Second
 
@@ -99,20 +102,31 @@ func (e *Executor) walletTransferBeforeSpotBuy(
 }
 
 // scaleBuys 按划转额度缩小现货买入：比例为 0 的账户这轮不买，其余按比例缩小数量。
+// 比例和缩小后的数量都向下取到 8 位小数（否则有理数的比例会让 blocked_targets 里的数量写成分数、整轮收敛报错）；
+// 缩小后的动作记下原始差额和缩小原因，写 blocked_targets 时用原始差额。
 // 约定：比例是“划转实现这一轮看到的可用额度”相对“这一轮计划买入量”的比例。每一轮收敛都会按当前持仓重算计划买入量、
 // 再缩一次，已经买到的部分下一轮已在持仓里，不会重复缩小同一笔。实现划转（T9）时要对齐这个口径，比例按本轮算，不要累计。
-func scaleBuys(buys []laneAction, scale map[string]shared.Decimal) []laneAction {
+func scaleBuys(buys []laneAction, scale map[string]shared.Decimal, reasons map[string]string) []laneAction {
 	if len(scale) == 0 {
 		return buys
 	}
 	scaled := make([]laneAction, 0, len(buys))
 	for _, action := range buys {
-		ratio, found := scale[action.member.account.TradingAccountID]
+		accountID := action.member.account.TradingAccountID
+		ratio, found := scale[accountID]
 		switch {
 		case !found || ratio.Cmp(shared.MustDecimal("1")) >= 0:
 			scaled = append(scaled, action)
-		case ratio.Cmp(shared.Zero()) > 0:
-			action.delta = action.delta.Mul(ratio)
+		default:
+			smaller := action.delta.Mul(ratio.RoundDown(8)).RoundDown(8)
+			if smaller.Cmp(shared.Zero()) <= 0 {
+				continue
+			}
+			reason := reasons[accountID]
+			if reason == "" {
+				reason = reasonTransferScaled
+			}
+			action.fullDelta, action.delta, action.scaled, action.scaleReason = action.delta, smaller, true, reason
 			scaled = append(scaled, action)
 		}
 	}

@@ -149,6 +149,19 @@ type laneAction struct {
 	// resting 表示这一片改成挂单（限价 + GTC，挂买一、卖一价）；hasResting 表示这个标的已经有挂单，差额里扣过它的剩余量。
 	resting    bool
 	hasResting bool
+	// scaled 表示现货买入被划转额度缩小过：delta 是缩小后的数量，fullDelta 是缩小前的原始差额，
+	// scaleReason 是缩小的原因。blocked_targets 记原始差额；缩小后太小下不了单也要记原因，不能当“已满足”悄悄跳过。
+	scaled      bool
+	fullDelta   shared.Decimal
+	scaleReason string
+}
+
+// blockedQuantity 是写进 blocked_targets 的数量：被缩小过的买入记缩小前的原始差额。
+func (a laneAction) blockedQuantity() string {
+	if a.scaled {
+		return a.fullDelta.String()
+	}
+	return a.delta.String()
 }
 
 func (e *Executor) Converge(
@@ -509,7 +522,7 @@ func (e *Executor) Converge(
 				return Result{}, err
 			}
 			// 合约钱包可划额度不够时，现货买入按比例缩小，剩下的留到下一份目标重算。
-			scaledActions := scaleBuys(stageActions, outcome.BuyScale)
+			scaledActions := scaleBuys(stageActions, outcome.BuyScale, outcome.Reasons)
 			for _, action := range stageActions {
 				kept := false
 				for _, scaled := range scaledActions {
@@ -522,7 +535,7 @@ func (e *Executor) Converge(
 						reason = "合约钱包可划转的资金不足，这轮买不了"
 					}
 					blocked = append(blocked, store.BlockedTarget{
-						InstrumentID: action.instrument.InstrumentID, Quantity: action.delta.String(),
+						InstrumentID: action.instrument.InstrumentID, Quantity: action.blockedQuantity(),
 						Reason: reason,
 					})
 				}
@@ -559,7 +572,7 @@ func (e *Executor) Converge(
 				// 持仓回退到某笔已成交子单下单前的值：整条标的本轮跳过，不换成员，等同步纠正后重算。
 				blocked = append(blocked, store.BlockedTarget{
 					InstrumentID: instrumentID,
-					Quantity:     action.delta.String(),
+					Quantity:     action.blockedQuantity(),
 					Reason:       reasonPositionUnreflected,
 				})
 				continue
@@ -583,20 +596,27 @@ func (e *Executor) Converge(
 				// 原因写进目标的 blocked_targets，界面看得到为什么没下单。
 				capDeferred = true
 				deferredItems = append(deferredItems, store.BlockedTarget{
-					InstrumentID: instrumentID, Quantity: action.delta.String(), Reason: reasonHourlyCapDeferred, Deferred: true,
+					InstrumentID: instrumentID, Quantity: action.blockedQuantity(), Reason: reasonHourlyCapDeferred, Deferred: true,
 				})
 				continue
 			}
 			if placement.tooSmall && laneFinished(desired[instrumentID], members, instrumentID) {
 				continue
 			}
-			if placement.belowConfiguredMin {
+			if placement.belowConfiguredMin && !action.scaled {
+				continue
+			}
+			if action.scaled && (placement.belowConfiguredMin || placement.tooSmall) {
+				// 缩小后的买单太小下不了：不是“已满足”，原因是合约钱包划转的资金不够，要让界面看得到。
+				blocked = append(blocked, store.BlockedTarget{
+					InstrumentID: instrumentID, Quantity: action.blockedQuantity(), Reason: action.scaleReason,
+				})
 				continue
 			}
 			if placement.reason != "" {
 				blocked = append(blocked, store.BlockedTarget{
 					InstrumentID: instrumentID,
-					Quantity:     action.delta.String(),
+					Quantity:     action.blockedQuantity(),
 					Reason:       placement.reason,
 				})
 				continue

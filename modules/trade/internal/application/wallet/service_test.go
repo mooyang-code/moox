@@ -336,12 +336,12 @@ func TestInsufficientCapacityTransfersOnceThenOnlyScales(t *testing.T) {
 	require.False(t, outcome.Pending)
 	scale, ok := outcome.BuyScale["account-1"]
 	require.True(t, ok)
-	require.Equal(t, shared.MustDecimal("109").Div(shared.MustDecimal("510")).String(), scale.String())
+	require.Equal(t, shared.MustDecimal("109").Div(shared.MustDecimal("510")).RoundDown(8).String(), scale.String())
 	// 即使合约钱包又有了可划转的资金，这个目标也不再划转；比例按本轮算，不累计。
 	e.exchange.Set(func(f *wallettest.Exchange) { f.Futures = "5000" })
 	for range 3 {
 		outcome = e.before("0.005")
-		require.Equal(t, shared.MustDecimal("109").Div(shared.MustDecimal("255")).String(), outcome.BuyScale["account-1"].String())
+		require.Equal(t, shared.MustDecimal("109").Div(shared.MustDecimal("255")).RoundDown(8).String(), outcome.BuyScale["account-1"].String())
 	}
 	require.Len(t, e.exchange.Calls(), 1, "同一个目标不会再划转")
 	require.Len(t, telemetry.Recent(telemetry.AttentionTransferShortfall, e.now, time.Minute), after, "告警每个目标一次，不是每轮一次")

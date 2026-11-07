@@ -114,6 +114,45 @@ func TestWalletShortfallShrinksBuyAndRecordsReasonWithRealService(t *testing.T) 
 	require.Len(t, fake.Calls(), 1, "不会再划第二笔")
 }
 
+// 额度不足、缩小后的买单太小下不了：整轮收敛不报错（缩小比例是有理数，数量写不进 blocked_targets 曾让 Trade 整体未就绪），
+// 目标定终态 BLOCKED，blocked_targets 记原始差额和原因，不能当“已满足”悄悄定成 CONVERGED。
+func TestWalletScaledBuyTooSmallIsBlockedWithOriginalQuantity(t *testing.T) {
+	f, fake, newExecutor := newWalletIntegration(t)
+	fake.Set(func(e *wallettest.Exchange) { e.Spot = "5"; e.Futures = "0" })
+	ctx := context.Background()
+	executor := newExecutor()
+
+	result, err := executor.Converge(ctx, "space-1", "logical-1")
+	require.NoError(t, err, "缩小后的数量必须能写进 blocked_targets，不能让整轮收敛失败")
+	require.Equal(t, StatusBlocked, result.Status)
+	require.Empty(t, f.orders.specs)
+	require.Empty(t, fake.Calls(), "合约钱包没有可划转的资金，不发划转")
+	stored, err := f.store.GetLogicalAccountTarget(ctx, "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Equal(t, StatusBlocked, stored.Status)
+	require.Len(t, stored.BlockedTargets, 1)
+	require.Equal(t, "BTC-USDT-SPOT", stored.BlockedTargets[0].InstrumentID)
+	require.Equal(t, "0.01", stored.BlockedTargets[0].Quantity, "记缩小前的原始差额")
+	require.Contains(t, stored.BlockedTargets[0].Reason, "资金不足")
+}
+
+func TestScaleBuysRoundsDownAndKeepsOriginalDelta(t *testing.T) {
+	member := memberState{account: store.TradingAccountRecord{TradingAccountID: "account-a"}}
+	buys := []laneAction{{member: member, delta: mustDec("0.01")}}
+	ratio := mustDec("1").Div(mustDec("510"))
+
+	scaled := scaleBuys(buys, map[string]shared.Decimal{"account-a": ratio}, nil)
+	require.Len(t, scaled, 1)
+	require.True(t, scaled[0].scaled)
+	require.Equal(t, "0.01", scaled[0].blockedQuantity())
+	require.Equal(t, scaled[0].delta.RoundDown(8).String(), scaled[0].delta.String(), "缩小后的数量最多 8 位小数")
+	_, err := shared.ParseDecimal(scaled[0].delta.String())
+	require.NoError(t, err)
+
+	// 向下取整后为 0 的按“这轮买不了”处理。
+	require.Empty(t, scaleBuys(buys, map[string]shared.Decimal{"account-a": mustDec("0.000000001")}, nil))
+}
+
 // 账户的划转被交易所拒绝：这个账户的买入记 blocked 并写明原因，整轮收敛不报错，目标定终态 BLOCKED。
 func TestWalletRejectionIsRecordedAsBlockedReasonNotRoundError(t *testing.T) {
 	f, fake, newExecutor := newWalletIntegration(t)

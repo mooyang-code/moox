@@ -305,7 +305,8 @@ func scaleFor(available, requirement shared.Decimal) *shared.Decimal {
 	}
 	ratio := shared.Zero()
 	if available.Cmp(shared.Zero()) > 0 {
-		ratio = available.Div(requirement)
+		// 向下取到 8 位小数：不取整的有理数比例会让缩小后的数量带分数，写不进 blocked_targets。
+		ratio = available.Div(requirement).RoundDown(8)
 	}
 	return &ratio
 }
