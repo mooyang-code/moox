@@ -451,7 +451,15 @@ func checkViewCoverage(ctx context.Context, client Client, spaceID string, resol
 		return err
 	}
 	if resolved.MinAgeBars > 0 {
-		return checkAgeCoverage(view, resolved, resolved.MinAgeBars, now)
+		if err := checkAgeCoverage(view, resolved, resolved.MinAgeBars, now); err != nil {
+			return err
+		}
+		// 统一数据集的 View 级覆盖统计取所有序列的最早一行：现货、永续分两次导入、永续历史较短时它会放行，之后永续一直被当新上市。
+		// 各市场的历史分别要够：在目标根附近按市场探针，某个市场一行都没有就拒绝启用（与现货、永续各一个任务时分别校验一致）。
+		if resolved.Unified() {
+			return checkUnifiedAgeCoverage(ctx, client, spaceID, view, resolved, now)
+		}
+		return nil
 	}
 	// 没有 min_age_bars 时覆盖范围不影响实时求值，只校验行键；还没有数据时无从校验，允许启用。
 	if view.IndexedTo.IsZero() {

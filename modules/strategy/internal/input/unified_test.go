@@ -283,3 +283,28 @@ func hasKey(set map[string]struct{}, key string) bool {
 	_, ok := set[key]
 	return ok
 }
+
+// 启用时按市场核对 min_age_bars 的历史：View 级覆盖统计取所有序列的最早一行，现货历史够、永续刚导入很短时它会放行，
+// 之后永续一直被当新上市；各市场的序列都要在目标根附近有数据才能启用（现货、永续各一个任务时本来就是分别校验的）。
+func TestCheckCoverageUnifiedRequiresHistoryPerMarket(t *testing.T) {
+	client := newUnifiedClient()
+	strategy := parseStrategy(t, strings.Replace(unifiedDSL, "rules:", "universe: {min_age_bars: 24}\nrules:", 1))
+	resolved, _, err := Resolve(context.Background(), client, "space", []string{"ftask_1h"}, strategy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := barStart.Add(time.Hour)
+	client.rows = func(query Query) ([]Row, uint64, error) {
+		return unifiedRows(query.Start, map[string]float64{"BTC-USDT": 1}, nil), 1, nil // 窗口里只有现货的历史
+	}
+	err = CheckCoverage(context.Background(), client, "space", resolved, now)
+	if err == nil || !strings.Contains(err.Error(), "永续市场的序列") {
+		t.Fatalf("永续历史不够应拒绝启用并点名永续：%v", err)
+	}
+	client.rows = func(query Query) ([]Row, uint64, error) {
+		return unifiedRows(query.Start, map[string]float64{"BTC-USDT": 1}, map[string]float64{"DOGE-USDT": 1}), 1, nil
+	}
+	if err := CheckCoverage(context.Background(), client, "space", resolved, now); err != nil {
+		t.Fatalf("两个市场历史都够应放行：%v", err)
+	}
+}

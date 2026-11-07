@@ -522,3 +522,29 @@ func TestHandleEvaluatesUnifiedInstanceOnArrival(t *testing.T) {
 	}
 	h.noResultAt(2)
 }
+
+// 年龄缓存为空（新启用、索引换代）时，永续在探针窗口里整体没有行而现货有：方式 B 的确认查询只看永续自己的序列，
+// 与方式 A 一样整期 history_insufficient，持仓不动，不能把永续全部判成新上市而卖掉持有的永续。
+func TestUnifiedMatchesDualTasksWhenSwapHistoryHasGap(t *testing.T) {
+	world := ucBase("{select: both, prefer: swap}")
+	world.dsl = ucDSL("{select: both, prefer: swap}", true)
+	world.history = map[string][]string{"spot": {"A", "B", "C", "X"}}
+	world.state = engine.State{Rules: map[string]engine.RuleState{"r": {Held: []string{"D", "X"}}}, Targets: map[string]string{"D|swap": "0.5", "X|swap": "0.5"}}
+	decision, _ := requireSame(t, world)
+	if decision.Status != engine.StatusSkipped || decision.SkipReason != input.SkipHistoryInsufficient {
+		t.Fatalf("永续整段历史缺口应整期 history_insufficient：%+v", decision)
+	}
+}
+
+// 持仓的标的在永续上的年龄探针没通过（探针窗口有缺口）时豁免：年龄剔除只拦新进入的标的，持仓不能因为行被删而被卖出。
+func TestUnifiedMatchesDualTasksKeepsHeldSwapWhenAgeProbeFails(t *testing.T) {
+	world := ucBase("{select: both, prefer: swap}")
+	world.dsl = ucDSL("{select: both, prefer: swap}", true)
+	// 探针窗口里永续只有 D 有行：持有的 X 的永续没通过年龄；现货的历史都有。
+	world.history = map[string][]string{"spot": {"A", "B", "C", "X"}, "swap": {"D"}}
+	world.state = engine.State{Rules: map[string]engine.RuleState{"r": {Held: []string{"D", "X"}}}, Targets: map[string]string{"D|swap": "0.5", "X|swap": "0.5"}}
+	_, targets := requireSame(t, world)
+	if !reflect.DeepEqual(targets, map[string]string{"D|swap": "0.5", "X|swap": "0.5"}) {
+		t.Fatalf("持有的 X 的永续应豁免年龄剔除、继续持有：%v", targets)
+	}
+}

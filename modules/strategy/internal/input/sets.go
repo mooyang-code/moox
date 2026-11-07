@@ -256,7 +256,8 @@ func NewAgeProbe(client Client, spaceID string, resolved Resolved, view ViewInfo
 		}
 		if len(satisfied) == 0 {
 			// 候选全部不满足时，确认窗口内整个数据集是否有数据：一行都没有说明是历史缺口（停机、维护），
-			// 不能把全部标的当作新上市剔除。
+			// 不能把全部标的当作新上市剔除。统一数据集上只看这个市场自己的序列（现货有数据、永续整段缺口时，
+			// 不能因为读到了现货行就把永续全部判成新上市），所以读全部序列再按市场过滤，不能只取一行。
 			all := make([]Subject, 0, len(subjects))
 			for _, subject := range subjects {
 				if resolved.Unified() {
@@ -265,9 +266,16 @@ func NewAgeProbe(client Client, spaceID string, resolved Resolved, view ViewInfo
 				all = append(all, subject)
 			}
 			sort.Slice(all, func(i, j int) bool { return all[i].SubjectID < all[j].SubjectID })
-			present, _, err := client.QueryRows(ctx, spaceID, Query{ViewID: view.ViewID, DatasetID: view.DatasetID, Frequency: view.Frequency, Subjects: all, Start: from, End: to, Columns: []string{ageProbeColumn}, ExpectedIndexID: view.ActiveIndexID, ExpectedRevision: revision, Limit: 1})
+			confirm := Query{ViewID: view.ViewID, DatasetID: view.DatasetID, Frequency: view.Frequency, Subjects: all, Start: from, End: to, Columns: []string{ageProbeColumn}, ExpectedIndexID: view.ActiveIndexID, ExpectedRevision: revision}
+			if !resolved.Unified() {
+				confirm.Limit = 1
+			}
+			present, _, err := client.QueryRows(ctx, spaceID, confirm)
 			if err != nil {
 				return nil, fmt.Errorf("年龄探针确认查询：%w", err)
+			}
+			if resolved.Unified() {
+				present = rowsOfMarket(present, market)
 			}
 			if len(present) == 0 {
 				return nil, &SkipError{Reason: SkipHistoryInsufficient, Detail: fmt.Sprintf("min_age_bars=%d 的探针窗口 %s 至 %s 内整个数据集都没有数据（历史缺口），无法判断上市时间", resolved.MinAgeBars, PeriodLabel(resolved.Calendar, resolved.Bar, from), PeriodLabel(resolved.Calendar, resolved.Bar, to.Add(-time.Nanosecond)))}
