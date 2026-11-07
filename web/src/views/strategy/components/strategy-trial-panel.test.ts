@@ -4,6 +4,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const { validateStrategy, listFactorTasks } = vi.hoisted(() => ({ validateStrategy: vi.fn(), listFactorTasks: vi.fn() }));
 vi.mock("@/api/strategy", () => ({ validateStrategy }));
 vi.mock("@/api/factor", () => ({ listFactorTasks }));
+vi.mock("@/api/storage/metadata", () => ({
+  listAllDatasets: vi.fn(async () => [{ dataset_id: "ds_uni", attributes: { market_type: "multi" } }])
+}));
 
 import TrialPanel from "./strategy-trial-panel.vue";
 
@@ -40,6 +43,27 @@ describe("strategy trial panel", () => {
     listFactorTasks
       .mockReset()
       .mockResolvedValue({ factor_tasks: [taskInfo("ftask_spot"), taskInfo("ftask_swap")], page_result: { has_more: false } });
+  });
+
+  it("does not offer tasks on a unified dataset: the panel registers tasks by market", async () => {
+    listFactorTasks.mockResolvedValue({
+      factor_tasks: [
+        taskInfo("ftask_spot"),
+        { factor_task: { ...taskInfo("ftask_uni").factor_task, source_dataset_id: "ds_uni" }, members: [] }
+      ],
+      page_result: { has_more: false }
+    });
+    const wrapper = mount(TrialPanel, {
+      props: { source: "name: a\nmarket: {select: swap}\n", spaceId: "s1" },
+      global: { stubs }
+    });
+    await (wrapper.vm as unknown as { ensureTasks: () => Promise<void> }).ensureTasks();
+    await flushPromises();
+    const options = wrapper
+      .findAll("option")
+      .map(item => item.attributes("value"))
+      .filter(Boolean);
+    expect(options).toEqual(["ftask_spot"]);
   });
 
   it("drops a response that arrives after the DSL changed", async () => {

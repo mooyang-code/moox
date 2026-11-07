@@ -197,3 +197,44 @@ portfolio:
 		t.Fatalf("双任务实例应被闭环回放拒绝：%v", err)
 	}
 }
+
+// 统一数据集上的实例（哪怕策略只用现货）也被闭环回放拒绝：因子引擎的闭环回放只取每个标的的第一条序列。
+func TestReplayBindRejectsUnifiedDatasetInstance(t *testing.T) {
+	const spotOnlyDSL = `name: spot_only
+market: {select: spot}
+rules:
+  - id: r
+    type: rank
+    score: "m"
+    select: {top: 2}
+    weight: {total: 1}
+portfolio:
+  max_missing: 1
+`
+	ctx := context.Background()
+	repo, err := store.Open(filepath.Join(t.TempDir(), "strategy.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+	if err := repo.ApplySchema(schema.AllSQL()); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.CreateDefinition(ctx, store.Definition{StrategyID: "s1", Name: "spot_only", DSLYaml: spotOnlyDSL, DSLHash: dsl.Hash([]byte(spotOnlyDSL)), CreatedAt: bar0}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.CreateInstance(ctx, store.Instance{InstanceID: "i1", StrategyID: "s1", SpaceID: "space", FactorTasks: map[string]string{"multi": "ftask_a"}, CreatedAt: bar0}); err != nil {
+		t.Fatal(err)
+	}
+	e := &ReplayEvaluator{Store: repo, Client: unifiedReplayClient{}}
+	if _, err := e.Bind(ctx, "i1"); err == nil || !strings.Contains(err.Error(), "统一数据集") {
+		t.Fatalf("统一数据集上的实例应被闭环回放拒绝：%v", err)
+	}
+}
+
+// unifiedReplayClient 的任务 ftask_a 在统一数据集上（源数据集 market_type=multi）。
+type unifiedReplayClient struct{ replayClient }
+
+func (c unifiedReplayClient) GetDataset(_ context.Context, _, datasetID string) (input.DatasetInfo, error) {
+	return input.DatasetInfo{DatasetID: datasetID, Frequency: "1h", Retention: "forever", Attributes: map[string]string{"market_type": "multi"}}, nil
+}

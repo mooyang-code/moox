@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
+	"github.com/mooyang-code/moox/packages/seriesset"
 	"github.com/mooyang-code/moox/packages/storagepb"
 	"google.golang.org/protobuf/proto"
 )
@@ -67,12 +68,24 @@ type Result struct {
 	GapByFactor map[string][]string
 	// FailedSubjects 是没有因子状态的 View（K 线 View）在 degraded 时声明失败的标的，所有列都视为缺数。
 	FailedSubjects []string
+
+	// 下面三项只有统一数据集（一个 View 里有多个 series_tag）才有，按序列给出结论，用 ForMarket 拆成各市场的结论。
+	// 统一数据集上不能读 FailedByFactor、GapByFactor：它们按标的折叠，永续上失败的币现货也会被一起算成失败。
+
+	// FailedSeries 是 degraded 因子对应的失败序列（成员完整的失败序列 = 周期级共享的 shared_failed_series ∪ 成员自己的 failed_series）。
+	FailedSeries map[string][]seriesset.Series
+	// GapSeries 是 FailedSeries 中因回看窗口 K 线空洞而失败的序列（子集）。
+	GapSeries map[string][]seriesset.Series
+	// SkippedTags 是 degraded 因子被跳过的 series_tag（例如截面因子在这个 tag 上缺数）：这些 tag 的序列结果是 NULL，对应市场本期不可用。
+	// 全部 tag 都跳过时因子状态是 skipped，按 ReasonFactorSkipped 处理。
+	SkippedTags map[string][]string
 }
 
 // Check 按设计文档 3.3 的表格顺序判定：因子缺失 → 事件指纹变化 → 上一根版本证据 → 因子跳过 → 降级标的。
 func Check(binding Binding, adjacent *Record, event *storagepb.ViewDataReady) Result {
-	result := Result{Hashes: make(map[string]string, len(binding.Factors)), FailedByFactor: map[string][]string{}, GapByFactor: map[string][]string{}}
-	states, err := indexFactors(event)
+	result := Result{Hashes: make(map[string]string, len(binding.Factors)), FailedByFactor: map[string][]string{}, GapByFactor: map[string][]string{},
+		FailedSeries: map[string][]seriesset.Series{}, GapSeries: map[string][]seriesset.Series{}, SkippedTags: map[string][]string{}}
+	states, shared, err := indexFactors(event)
 	if err != nil && len(binding.Factors) > 0 {
 		result.Reason = ReasonFactorMissing
 		result.Detail = fmt.Sprintf("事件里的因子周期明细无法解析：%v", err)
@@ -137,6 +150,15 @@ func Check(binding Binding, adjacent *Record, event *storagepb.ViewDataReady) Re
 			if gaps := uniqueSorted(state.GetGapSubjects()); len(gaps) > 0 {
 				result.GapByFactor[factorID] = gaps
 			}
+			if failed := seriesset.Union(shared, seriesOf(state.GetFailedSeries())); len(failed) > 0 {
+				result.FailedSeries[factorID] = failed
+			}
+			if gaps := seriesset.Union(seriesOf(state.GetGapSeries())); len(gaps) > 0 {
+				result.GapSeries[factorID] = gaps
+			}
+			if tags := uniqueSorted(state.GetSkippedSeriesTags()); len(tags) > 0 {
+				result.SkippedTags[factorID] = tags
+			}
 		}
 	}
 	if len(states) == 0 && event.GetStatus() == statusDegraded {
@@ -151,15 +173,15 @@ func EncodeDetail(factors []*factorpb.FactorPeriodState) (string, []byte, error)
 	return PeriodDetailType, raw, err
 }
 
-// indexFactors 解码事件 detail 里的因子周期明细，按成员键索引因子状态（同一因子可以用不同参数出现多次）。
-// 不带因子明细的事件（K 线 View）返回空表。
-func indexFactors(event *storagepb.ViewDataReady) (map[string]*factorpb.FactorPeriodState, error) {
+// indexFactors 解码事件 detail 里的因子周期明细，按成员键索引因子状态（同一因子可以用不同参数出现多次），
+// 并返回周期级共享的失败序列（shared_failed_series，只有统一数据集才有）。不带因子明细的事件（K 线 View）返回空表。
+func indexFactors(event *storagepb.ViewDataReady) (map[string]*factorpb.FactorPeriodState, []seriesset.Series, error) {
 	if event.GetDetailType() != PeriodDetailType || len(event.GetDetail()) == 0 {
-		return map[string]*factorpb.FactorPeriodState{}, nil
+		return map[string]*factorpb.FactorPeriodState{}, nil, nil
 	}
 	detail := &factorpb.PeriodDetail{}
 	if err := proto.Unmarshal(event.GetDetail(), detail); err != nil {
-		return map[string]*factorpb.FactorPeriodState{}, err
+		return map[string]*factorpb.FactorPeriodState{}, nil, err
 	}
 	states := make(map[string]*factorpb.FactorPeriodState, len(detail.GetFactors()))
 	for _, state := range detail.GetFactors() {
@@ -172,7 +194,59 @@ func indexFactors(event *storagepb.ViewDataReady) (map[string]*factorpb.FactorPe
 		}
 		states[id] = state
 	}
-	return states, nil
+	return states, seriesOf(detail.GetSharedFailedSeries()), nil
+}
+
+// seriesOf 把明细里的序列引用换成序列身份。
+func seriesOf(refs []*factorpb.SeriesRef) []seriesset.Series {
+	out := make([]seriesset.Series, 0, len(refs))
+	for _, ref := range refs {
+		out = append(out, seriesset.Series{SubjectID: ref.GetSubjectId(), SeriesTag: ref.GetSeriesTag()})
+	}
+	return out
+}
+
+// ForMarket 把统一数据集（一个 View、多个 series_tag）上的一份就绪结论拆成某个市场的结论，其余字段与方式 A 里一个 View 的结论同口径：
+//   - 整期原因（Reason 非空：成员契约变了、因子整体被跳过等）原样带到每个市场；
+//   - 某个因子在这个市场的 series_tag 上被跳过（SkippedTags）：这个市场本期不可用，Reason 记 ReasonFactorSkipped（数据类原因），别的市场照常；
+//   - 失败与空洞只取这个市场的序列（按 seriesset.SeriesTagMarket 归市场），不读按标的折叠的字段。
+func (r Result) ForMarket(market string) Result {
+	out := Result{Reason: r.Reason, Detail: r.Detail, Hashes: r.Hashes, FailedSubjects: r.FailedSubjects,
+		FailedByFactor: map[string][]string{}, GapByFactor: map[string][]string{}}
+	if r.Reason != "" {
+		return out
+	}
+	for _, factorID := range sortedKeys(r.SkippedTags) {
+		for _, tag := range r.SkippedTags[factorID] {
+			if seriesset.SeriesTagMarket(tag) == market {
+				out.Reason = ReasonFactorSkipped
+				out.Detail = fmt.Sprintf("成员 %s 在 %s 市场（序列 %s）本期被跳过", factorID, market, tag)
+				return out
+			}
+		}
+	}
+	for factorID, failed := range r.FailedSeries {
+		if subjects := subjectsInMarket(failed, market); len(subjects) > 0 {
+			out.FailedByFactor[factorID] = subjects
+		}
+	}
+	for factorID, gaps := range r.GapSeries {
+		if subjects := subjectsInMarket(gaps, market); len(subjects) > 0 {
+			out.GapByFactor[factorID] = subjects
+		}
+	}
+	return out
+}
+
+// subjectsInMarket 返回序列里属于某个市场的标的（去重、排序）。
+func subjectsInMarket(series []seriesset.Series, market string) []string {
+	var subjects []string
+	for _, item := range series {
+		if seriesset.SeriesTagMarket(item.SeriesTag) == market {
+			subjects = append(subjects, item.SubjectID)
+		}
+	}
+	return uniqueSorted(subjects)
 }
 
 // parseScopeRef 解析 View 事件的 failed_scope_ref：逗号分隔的标的列表；字面量 degraded 表示没有具体标的。

@@ -377,3 +377,45 @@ func TestHoldingMarketRowFirstForSpotSelectSwapPrefer(t *testing.T) {
 	}
 	requireTargets(t, decision, map[string]string{"A|swap": "1"})
 }
+
+// 年龄不够的标的（MarketInput.AgedOut）不取这个市场的行；已持仓的豁免，年龄剔除只拦新进入的标的。
+func TestAgedOutRowsAreSkippedExceptForHeldPositions(t *testing.T) {
+	mode := dsl.Market{Select: dsl.MarketBoth, Prefer: dsl.MarketSwap}
+	program := compileIn(t, mode, topOneRule, "m")
+	rows := map[string]map[string]float64{dsl.MarketSpot: {"X": 4, "B": 3}, dsl.MarketSwap: {"X": 8, "B": 2}}
+	frame := func() Frame {
+		f := marketFrame(program, rows, nil)
+		swap := f.Markets[dsl.MarketSwap]
+		swap.AgedOut = map[string]struct{}{"X": {}}
+		f.Markets[dsl.MarketSwap] = swap
+		return f
+	}
+	// 没持仓：永续上年龄不够的 X 不用永续的行（8），退回现货的行（4），仍胜过 B。
+	decision, err := Evaluate(program, frame(), State{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireTargets(t, decision, map[string]string{"X|spot": "1"})
+	// 持有 X 的永续：豁免，用永续的行，持仓不被换掉。
+	decision, err = Evaluate(program, frame(), State{Targets: map[string]string{"X|swap": "1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireTargets(t, decision, map[string]string{"X|swap": "1"})
+}
+
+// HeldMarkets 返回上期各市场持有非零目标的标的：多空都算，零权重不算。
+func TestStateHeldMarkets(t *testing.T) {
+	held := State{Targets: map[string]string{"A|spot": "0.5", "A|swap": "-0.25", "B|swap": "0", "C|swap": "1"}}.HeldMarkets()
+	if len(held["spot"]) != 1 || len(held["swap"]) != 2 {
+		t.Fatalf("持仓市场不符：%v", held)
+	}
+	for _, key := range [][2]string{{"spot", "A"}, {"swap", "A"}, {"swap", "C"}} {
+		if _, ok := held[key[0]][key[1]]; !ok {
+			t.Fatalf("%s 的 %s 应是持仓：%v", key[0], key[1], held)
+		}
+	}
+	if _, ok := held["swap"]["B"]; ok {
+		t.Fatalf("零权重不算持仓：%v", held)
+	}
+}

@@ -443,17 +443,17 @@ func sessionTasks(session store.Session) map[string]string {
 }
 
 // normalizeFactorTasks 校验并规范化请求里的 factor_tasks（市场 → 因子任务）：一个或两个，市场只能是 spot、swap、equity，
-// 股票不能与加密货币市场混用，任务 ID 必须合法且不重复。
+// 统一数据集（同时放现货与永续）上的任务登记为 multi；股票、multi 都不能与其他市场混用，任务 ID 必须合法且不重复。
 func normalizeFactorTasks(raw map[string]string) (map[string]string, error) {
 	if len(raw) == 0 {
-		return nil, errors.New("factor_tasks 不能为空：按市场（spot、swap、equity）给出因子任务")
+		return nil, errors.New("factor_tasks 不能为空：按市场（spot、swap、equity）给出因子任务，统一数据集上的任务写 multi")
 	}
 	tasks := make(map[string]string, len(raw))
 	seen := map[string]string{}
 	for market, taskID := range raw {
 		market, taskID = strings.TrimSpace(market), strings.TrimSpace(taskID)
-		if market != dsl.MarketSpot && market != dsl.MarketSwap && market != dsl.MarketEquity {
-			return nil, fmt.Errorf("factor_tasks 的市场 %q 不受支持，只能是 spot、swap 或 equity", market)
+		if market != dsl.MarketSpot && market != dsl.MarketSwap && market != dsl.MarketEquity && market != input.MarketMulti {
+			return nil, fmt.Errorf("factor_tasks 的市场 %q 不受支持，只能是 spot、swap、equity 或 multi（统一数据集上的任务）", market)
 		}
 		if _, err := input.ViewIDOfTask(taskID); err != nil {
 			return nil, fmt.Errorf("factor_tasks 的 %s 任务 ID 不合法：%w", market, err)
@@ -466,6 +466,9 @@ func normalizeFactorTasks(raw map[string]string) (map[string]string, error) {
 	}
 	if _, equity := tasks[dsl.MarketEquity]; equity && len(tasks) > 1 {
 		return nil, errors.New("股票（equity）不能与现货、永续混用")
+	}
+	if _, unified := tasks[input.MarketMulti]; unified && len(tasks) > 1 {
+		return nil, errors.New("统一数据集上的任务（multi）已同时覆盖现货与永续，不能再绑定其他任务")
 	}
 	return tasks, nil
 }

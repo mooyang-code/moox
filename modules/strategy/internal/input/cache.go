@@ -17,27 +17,36 @@ type MetaCache struct {
 	subjects map[string][]Subject
 	members  map[string][]string
 	tags     map[string]TagInfo
+	// datasetTags 是数据集挂的标的范围标签：数据集的标的范围变化也会让标的修订号递增。
+	datasetTags map[string][]string
 
-	// ageKey / ageOK 缓存已证明“年龄足够”的标的：上市时间只会越来越久，探针通过一次后不必每期重查。
-	// 键是 View 的活动索引与 min_age_bars，索引重建（换了活动索引）后自动作废。
-	ageKey string
-	ageOK  map[string]struct{}
+	// ages 缓存已证明“年龄足够”的标的：上市时间只会越来越久，探针通过一次后不必每期重查。
+	// 键是（View、min_age_bars、市场），槽里记着当时的活动索引，索引重建（换了活动索引）后自动作废。
+	// 统一数据集的两个市场在同一个 View 里每期交替探针，所以每个键各占一个槽。
+	ages map[string]*ageSlot
 	// Ages 非空时，年龄探针通过的标的会持久化，重启后第一期也不必重新探针；读写失败只影响缓存效果，不影响探针结果。
 	Ages AgeStore
 }
 
-// AgeKey 标识一组年龄探针结果：某个 View 的某个活动索引、某个 min_age_bars。
+// ageSlot 是一个（View、min_age_bars、市场）下已证明年龄足够的标的，只对 indexID 这一代索引有效。
+type ageSlot struct {
+	indexID string
+	ok      map[string]struct{}
+}
+
+// AgeKey 标识一组年龄探针结果：某个 View 的某个活动索引、某个 min_age_bars、某个市场（统一数据集上一个 View 里现货、永续各有各的历史）。
 type AgeKey struct {
 	SpaceID    string
 	ViewID     string
 	IndexID    string
 	MinAgeBars int
+	Market     string
 }
 
 // AgeStore 持久化年龄探针通过的标的。
 type AgeStore interface {
-	LoadAgePassed(ctx context.Context, spaceID, viewID, indexID string, minAgeBars int) ([]string, error)
-	SaveAgePassed(ctx context.Context, spaceID, viewID, indexID string, minAgeBars int, subjectIDs []string, at time.Time) error
+	LoadAgePassed(ctx context.Context, spaceID, viewID, indexID string, minAgeBars int, market string) ([]string, error)
+	SaveAgePassed(ctx context.Context, spaceID, viewID, indexID string, minAgeBars int, market string, subjectIDs []string, at time.Time) error
 }
 
 // NewMetaCache 创建空缓存；Loader 不带缓存时每个事件使用一份新的，等同于事件内缓存。
@@ -51,6 +60,7 @@ func (m *MetaCache) reset() {
 	m.subjects = map[string][]Subject{}
 	m.members = map[string][]string{}
 	m.tags = map[string]TagInfo{}
+	m.datasetTags = map[string][]string{}
 }
 
 // sync 登记空间的修订号；与已缓存的不一致（或换了空间）时丢弃全部缓存。
@@ -215,9 +225,9 @@ func (c *eventClient) ListTagMembers(ctx context.Context, spaceID, tagID string)
 func (m *MetaCache) ageSplit(ctx context.Context, key AgeKey, ids []string) (hit, miss []string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.switchAgeKeyLocked(ctx, key)
+	slot := m.ageSlotLocked(ctx, key)
 	for _, id := range ids {
-		if _, ok := m.ageOK[id]; ok {
+		if _, ok := slot.ok[id]; ok {
 			hit = append(hit, id)
 		} else {
 			miss = append(miss, id)
@@ -232,28 +242,61 @@ func (m *MetaCache) ageRecord(ctx context.Context, key AgeKey, ids []string) {
 		return
 	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.switchAgeKeyLocked(ctx, key)
+	slot := m.ageSlotLocked(ctx, key)
 	for _, id := range ids {
-		m.ageOK[id] = struct{}{}
+		slot.ok[id] = struct{}{}
 	}
-	if m.Ages != nil {
-		_ = m.Ages.SaveAgePassed(ctx, key.SpaceID, key.ViewID, key.IndexID, key.MinAgeBars, ids, time.Now())
+	ages := m.Ages
+	m.mu.Unlock()
+	// 持久化不在全局锁里做：写库慢时不能挡住其他实例读缓存。
+	if ages != nil {
+		_ = ages.SaveAgePassed(ctx, key.SpaceID, key.ViewID, key.IndexID, key.MinAgeBars, key.Market, ids, time.Now())
 	}
 }
 
-func (m *MetaCache) switchAgeKeyLocked(ctx context.Context, key AgeKey) {
-	label := key.SpaceID + "\x00" + key.ViewID + "\x00" + key.IndexID + "\x00" + strconv.Itoa(key.MinAgeBars)
-	if m.ageKey == label && m.ageOK != nil {
-		return
+// ageSlotLocked 返回键对应的槽；槽不存在或属于旧的活动索引时换一份新的，并从持久化里读回这个键已通过的标的。
+func (m *MetaCache) ageSlotLocked(ctx context.Context, key AgeKey) *ageSlot {
+	label := key.SpaceID + "\x00" + key.ViewID + "\x00" + strconv.Itoa(key.MinAgeBars) + "\x00" + key.Market
+	if slot := m.ages[label]; slot != nil && slot.indexID == key.IndexID {
+		return slot
 	}
-	m.ageKey, m.ageOK = label, map[string]struct{}{}
+	slot := &ageSlot{indexID: key.IndexID, ok: map[string]struct{}{}}
+	if m.ages == nil {
+		m.ages = map[string]*ageSlot{}
+	}
+	m.ages[label] = slot
 	if m.Ages == nil {
-		return
+		return slot
 	}
-	if ids, err := m.Ages.LoadAgePassed(ctx, key.SpaceID, key.ViewID, key.IndexID, key.MinAgeBars); err == nil {
+	if ids, err := m.Ages.LoadAgePassed(ctx, key.SpaceID, key.ViewID, key.IndexID, key.MinAgeBars, key.Market); err == nil {
 		for _, id := range ids {
-			m.ageOK[id] = struct{}{}
+			slot.ok[id] = struct{}{}
 		}
 	}
+	return slot
+}
+
+// datasetTagsOf 返回数据集挂的标的范围标签（统一数据集按它们的市场类型划分各市场的标的）。事件内装配器经 MetaCache 按标的修订号缓存，
+// 其他客户端每次直接读取数据集。
+func datasetTagsOf(ctx context.Context, client Client, spaceID, datasetID string) ([]string, error) {
+	cache, cached := client.(*eventClient)
+	key := spaceID + "\x00" + datasetID
+	if cached {
+		cache.meta.mu.Lock()
+		tags, ok := cache.meta.datasetTags[key]
+		cache.meta.mu.Unlock()
+		if ok {
+			return append([]string(nil), tags...), nil
+		}
+	}
+	dataset, err := client.GetDataset(ctx, spaceID, datasetID)
+	if err != nil {
+		return nil, err
+	}
+	if cached {
+		cache.meta.mu.Lock()
+		cache.meta.datasetTags[key] = dataset.SubjectTags
+		cache.meta.mu.Unlock()
+	}
+	return append([]string(nil), dataset.SubjectTags...), nil
 }

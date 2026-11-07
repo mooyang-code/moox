@@ -50,7 +50,7 @@ func TestAllSQLCreatesExactlyStrategyTables(t *testing.T) {
 func TestStrategySchemaColumns(t *testing.T) {
 	db := openMemory(t)
 	want := map[string][]string{
-		"t_strategy_age_passed":       {"c_space_id", "c_view_id", "c_index_id", "c_min_age_bars", "c_subject_id", "c_ctime"},
+		"t_strategy_age_passed":       {"c_space_id", "c_view_id", "c_index_id", "c_min_age_bars", "c_market", "c_subject_id", "c_ctime"},
 		"t_strategy_defs":             {"c_strategy_id", "c_name", "c_dsl_yaml", "c_dsl_hash", "c_deleted_at", "c_ctime", "c_mtime"},
 		"t_strategy_def_versions":     {"c_dsl_hash", "c_dsl_yaml", "c_ctime"},
 		"t_strategy_display_settings": {"c_instance_id", "c_hidden_json", "c_ctime", "c_mtime"},

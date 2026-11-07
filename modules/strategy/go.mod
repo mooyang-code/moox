@@ -23,6 +23,7 @@ require (
 	github.com/mooyang-code/moox/packages/lifecycle v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/marketcalendar v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/report v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/seriesset v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/servicecatalog v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/storagepb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/timerjob v0.0.0-00010101000000-000000000000
@@ -126,6 +127,8 @@ replace github.com/mooyang-code/moox/packages/jetstream => ../../packages/jetstr
 replace github.com/mooyang-code/moox/packages/events => ../../packages/events
 
 replace github.com/mooyang-code/moox/packages/factorname => ../../packages/factorname
+
+replace github.com/mooyang-code/moox/packages/seriesset => ../../packages/seriesset
 
 replace github.com/mooyang-code/moox/packages/requestauth => ../../packages/requestauth
 

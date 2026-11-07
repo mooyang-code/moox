@@ -24,6 +24,8 @@ message StrategyInstance {
   string strategy_id = 2;
   string space_id = 3;
   // 市场（spot | swap | equity）→ 因子任务 ID；市场必须与任务源数据集的市场一致，且恰好是策略市场模式需要的那些市场。
+  // 统一数据集（同一个数据集里同时放现货、永续两条序列，数据集的 market_type 是 multi）上的任务登记为 multi，只绑这一个任务，
+  // 策略必须显式写 market。
   map<string, string> factor_tasks = 4;
   string logical_account_id = 5;
   bool enabled = 6;
@@ -142,7 +144,7 @@ message DeleteStrategyRsp { common.RetInfo ret_info = 1; }
 
 message ValidateStrategyReq {
   string dsl_yaml = 1;
-  map<string, string> factor_tasks = 2;  // 可选，市场 → 因子任务 ID；给出时做列解析并在最新周期试算（读全部绑定的 View）
+  map<string, string> factor_tasks = 2;  // 可选，市场（统一数据集上的任务写 multi）→ 因子任务 ID；给出时做列解析并在最新周期试算（读全部绑定的 View）
 }
 message ValidateStrategyRsp {
   common.RetInfo ret_info = 1;
@@ -189,7 +191,7 @@ message StartReplayReq {
   string start_time = 4;
   string end_time = 5;
   string instance_id = 7;
-  map<string, string> factor_tasks = 8;  // 市场（spot | swap | equity）→ 回放读取的因子任务；市场要与任务的源数据集一致，策略要用到的市场都要给出
+  map<string, string> factor_tasks = 8;  // 市场（spot | swap | equity，统一数据集上的任务写 multi）→ 回放读取的因子任务；市场要与任务的源数据集一致，策略要用到的市场都要给出
   double spot_fee_bps = 9;               // 现货与股票的单边手续费（基点）
   double swap_fee_bps = 10;              // 永续的单边手续费（基点）
 }

@@ -183,3 +183,20 @@ func TestCreateInstanceChecksTaskMarkets(t *testing.T) {
 	unknown := create("i2", map[string]string{"spot": "ftask_new"})
 	requireFail(t, int32(unknown.GetRetInfo().GetCode()), unknown.GetRetInfo().GetMsg(), "无法确定因子任务 ftask_new 的市场")
 }
+
+// factor_tasks 的 multi 键：统一数据集上的任务只能单独绑定。
+func TestNormalizeFactorTasksUnified(t *testing.T) {
+	tasks, err := normalizeFactorTasks(map[string]string{"multi": " ftask_unified "})
+	if err != nil || tasks["multi"] != "ftask_unified" || len(tasks) != 1 {
+		t.Fatalf("multi 单独绑定应通过：%v err=%v", tasks, err)
+	}
+	for name, raw := range map[string]map[string]string{
+		"与现货混用": {"multi": "ftask_a", "spot": "ftask_b"},
+		"与永续混用": {"multi": "ftask_a", "swap": "ftask_b"},
+		"未知市场":  {"future": "ftask_a"},
+	} {
+		if _, err := normalizeFactorTasks(raw); err == nil {
+			t.Errorf("%s应被拒绝", name)
+		}
+	}
+}

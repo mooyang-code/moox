@@ -3,6 +3,8 @@ import type { FactorTaskInfo } from "@/api/factor/types";
 /** 创建实例时可选的因子任务：列出任务的全部结果列名，策略 DSL 里直接写这些列名。 */
 export interface TaskOption {
   taskId: string;
+  /** 任务的源数据集：它的 market_type 是 multi 时任务在统一数据集上。 */
+  sourceDatasetId: string;
   /** 展示名：任务名（没有名称时用任务 ID）。 */
   name: string;
   freq: string;
@@ -23,6 +25,7 @@ export function enabledTasks(infos: FactorTaskInfo[], spaceId: string): TaskOpti
     .filter(info => info.factor_task.space_id === spaceId && info.factor_task.status === "enabled")
     .map(info => ({
       taskId: info.factor_task.task_id,
+      sourceDatasetId: info.factor_task.source_dataset_id,
       name: info.factor_task.name || info.factor_task.task_id,
       freq: info.factor_task.freq,
       columns: taskColumns(info),
@@ -37,4 +40,9 @@ export function enabledTasks(infos: FactorTaskInfo[], spaceId: string): TaskOpti
 export function availableTasks(infos: FactorTaskInfo[], spaceId: string): TaskOption[] {
   const unbound = new Set(infos.filter(info => !info.factor_task.bound_instance_id).map(info => info.factor_task.task_id));
   return enabledTasks(infos, spaceId).filter(task => unbound.has(task.taskId));
+}
+
+/** 任务是否在统一数据集上（源数据集的 market_type 是 multi，一个任务同时覆盖现货与永续）。 */
+export function isUnifiedTask(task: Pick<TaskOption, "sourceDatasetId">, unifiedDatasetIds: ReadonlySet<string>): boolean {
+  return unifiedDatasetIds.has(task.sourceDatasetId);
 }
