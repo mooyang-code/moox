@@ -18,30 +18,45 @@ type Row struct {
 	Params map[string]map[string]float64
 }
 
+// MarketInput 是一个市场的 View 本期输入：每个标的在该市场的行，以及该市场上游失败的标的。
+type MarketInput struct {
+	Rows map[string]Row
+	// Failed 记录该市场上游失败的标的：列名 → 标的 → 原因（FailedFactor、FailedGap、FailedSource 或 FailedMarket）。
+	Failed map[string]map[string]string
+}
+
 // Frame 是一个周期的全部输入。集合划分由 input 包完成到规则级的预期集合：
 // Universe 是基础集合 U，Expected 与 AgedOut 按规则 id 给出 E(r) 与 G(r)；
 // 可用集合 A(r) 与缺数集合 M(r) 由引擎按规则引用的列从 Rows 与 FailedColumns 推导。
+//
+// 调用方只填 Markets（策略涉及的每个市场一项，单市场策略只有一项）；Evaluate 开头做选币池构造，
+// 为每个标的选出一行写入 Rows、RowMarket，并合并失败证据写入 FailedColumns，规则只看这几项。
 type Frame struct {
 	BarEnd time.Time
 	// BarIndex 是该 bar 在日历中的序号，只用于 holding 的 offset 计算。
 	BarIndex int64
-	// Spot 为 true 时不允许负权重且 Σw 不得超过 1。
-	Spot     bool
-	Rows     map[string]Row
+	Markets  map[string]MarketInput
 	Universe []string
 	Expected map[string][]string
 	AgedOut  map[string][]string
-	// FailedColumns 记录上游失败的标的：列名 → 标的 → 原因（FailedFactor 或 FailedSource）。引用该列的规则把这些
-	// 标的视为缺数，明细原因为“<原因>:<列>”。
+
+	// 以下由选币池构造填入。Rows 每个标的一行，RowMarket 是这一行所属的市场；FailedColumns 是合并后的失败证据
+	// （列名 → 标的 → 原因），引用该列的规则把这些标的视为缺数，明细原因为“<原因>:<列>”。
+	Rows          map[string]Row
+	RowMarket     map[string]string
 	FailedColumns map[string]map[string]string
+	// avail 是标的在各市场本期是否可用：该市场的 View 本期有它的行。
+	avail map[string]map[string]bool
 }
 
 // 上游失败的原因：因子对该标的计算失败，因子因回看窗口 K 线空洞对该标的失败（FailedGap，是 FailedFactor 的细分），
-// 或 View 本身（例如 K 线采集）声明该标的本期失败。
+// View 本身（例如 K 线采集）声明该标的本期失败，或该标的所在市场本期整体不可用（FailedMarket：那个市场的因子本期被跳过）。
+// 空洞与市场不可用都允许已持仓的标的冻结（见 freeze.go）。
 const (
 	FailedFactor = "factor_failed"
 	FailedGap    = "factor_gap"
 	FailedSource = "source_failed"
+	FailedMarket = "market_unavailable"
 )
 
 // HoldingBatch 是 holding 规则在某个偏移建立的一个批次；BaseWeights 之和不超过 1，
@@ -70,8 +85,9 @@ type RuleState struct {
 
 // State 是一次 ok 决策之后的全部状态：各规则状态与组合目标权重（供换手统计）。
 type State struct {
-	Rules   map[string]RuleState `json:"rules,omitempty"`
-	Targets map[string]string    `json:"targets,omitempty"`
+	Rules map[string]RuleState `json:"rules,omitempty"`
+	// Targets 是组合目标权重，键是标的与市场（见 TargetKey）：同一个币的现货与永续各自独立、不互相抵消。
+	Targets map[string]string `json:"targets,omitempty"`
 }
 
 // 决策状态与跳过原因。
@@ -85,10 +101,12 @@ const (
 	SkipConfigError      = "config_error"
 )
 
-// Target 是一个标的的目标权重（相对总权益，做空为负）。
+// Target 是一个标的在一个市场的目标权重（相对总权益，做空为负）。
 type Target struct {
 	InstrumentID string
-	Weight       quant.Decimal
+	// Market 是目标所在的市场：spot、swap 或 equity。
+	Market string
+	Weight quant.Decimal
 	// Hold 为 true 表示保持该标的当前持仓数量不动：Weight 是预留的预算占用（取上期组合目标权重），下游不据此调仓。
 	Hold bool
 }
@@ -119,9 +137,12 @@ type Summary struct {
 	Rules    map[string]RuleSummary `json:"rules"`
 	Gross    string                 `json:"gross,omitempty"`
 	Net      string                 `json:"net,omitempty"`
-	Cash     string                 `json:"cash,omitempty"`
-	Turnover string                 `json:"turnover,omitempty"`
-	Notes    []string               `json:"notes,omitempty"`
+	// SpotNet 与 SwapNet 是混合市场策略分市场的净敞口；此时 Cash 没有意义，不填。
+	SpotNet  string   `json:"spot_net,omitempty"`
+	SwapNet  string   `json:"swap_net,omitempty"`
+	Cash     string   `json:"cash,omitempty"`
+	Turnover string   `json:"turnover,omitempty"`
+	Notes    []string `json:"notes,omitempty"`
 }
 
 // Decision 是一次求值的产物。Status 为 skipped 时 Targets 为空、State 等于前序状态。

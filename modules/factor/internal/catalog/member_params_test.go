@@ -168,7 +168,7 @@ func TestMemberColumnsCarryContractAttributes(t *testing.T) {
 	}
 }
 
-// 关联：重复关联同一个实例幂等；换实例、清空都拒绝；没有成员的任务不能关联；一个实例只能关联一个任务。
+// 关联：重复关联同一个实例幂等；换实例、清空都拒绝；没有成员的任务不能关联；一个实例可以关联多个任务，一个任务只能关联一个实例。
 func TestBindTask(t *testing.T) {
 	ctx := context.Background()
 	db := openCatalogStore(t)
@@ -197,7 +197,9 @@ func TestBindTask(t *testing.T) {
 	require.NoError(t, err)
 	addMember(t, svc, other.TaskID, "momentum", domain.MemberStatusDisabled)
 	_, err = svc.BindTask(ctx, other.TaskID, "inst-1")
-	require.ErrorIs(t, err, store.ErrConflict, "一个实例只能关联一个任务")
+	require.NoError(t, err, "一个实例可以关联多个任务")
+	_, err = svc.BindTask(ctx, other.TaskID, "inst-2")
+	require.ErrorIs(t, err, store.ErrConflict, "一个任务只能关联一个实例")
 }
 
 // 任务名称含汉字、不超过 10 个字、空间内唯一；任务 ID 可以指定也可以随机生成。

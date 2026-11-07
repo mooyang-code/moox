@@ -45,6 +45,7 @@ const (
 )
 
 // failureReasons 是计入模块健康检查失败的跳过原因；其余跳过是业务上的"本期不能求值"，只通过实例的数据集新鲜度告警。
+// market_missing（绑定两个因子任务的实例里另一个市场的数据没到）属于后者：数据未到，不是模块故障。
 var failureReasons = map[string]bool{
 	trigger.SkipInfraRetryExhausted: true,
 	input.SkipConfigError:           true,

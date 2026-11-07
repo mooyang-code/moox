@@ -22,7 +22,7 @@ func (h *harness) rebindStock() {
 	if err := h.repo.DisableInstance(ctx, "i1", &h.session, nil, "", bar0); err != nil {
 		h.t.Fatal(err)
 	}
-	resolved := input.Resolved{ViewID: "view_factor_a", FactorTaskID: "ftask_a", DatasetID: "ds", Bar: "1d", Calendar: "cn_stock", Spot: true, Columns: map[string]input.ColumnBinding{}, Factors: map[string]string{}, ViewColumns: []string{"close", "m"}}
+	resolved := input.Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]input.TaskBinding{"spot": {ViewID: "view_factor_a", FactorTaskID: "ftask_a", DatasetID: "ds"}}, Bar: "1d", Calendar: "cn_stock", Columns: map[string]input.ColumnBinding{}, Factors: map[string]string{}, ViewColumns: []string{"close", "m"}}
 	raw, _ := json.Marshal(resolved)
 	session := "session-stock"
 	if err := h.repo.OpenSession(ctx, store.Session{SessionID: session, InstanceID: "i1", DSLHash: dsl.Hash([]byte(rankDSL)), ResolvedJSON: string(raw), CreatedAt: bar0}, rankDSL); err != nil {

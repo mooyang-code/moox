@@ -74,8 +74,8 @@ func TestExternalStrategyCommitPublishesLogicalAccountTarget(t *testing.T) {
 	require.NotEmpty(t, logical)
 	hash := dsl.Hash([]byte(externalDSL))
 	require.NoError(t, repo.CreateDefinition(ctx, store.Definition{StrategyID: "strategy-e2e", Name: "external_e2e", DSLYaml: externalDSL, DSLHash: hash, CreatedAt: now}))
-	require.NoError(t, repo.CreateInstance(ctx, store.Instance{InstanceID: "instance-e2e", StrategyID: "strategy-e2e", SpaceID: "space-e2e", ViewID: "factor_view", LogicalAccountID: &logical, CreatedAt: now}))
-	resolved := input.Resolved{ViewID: "factor_view", DatasetID: "factor_ds", Bar: "1h", Calendar: input.DefaultCalendar, Spot: true, Columns: map[string]input.ColumnBinding{"bias": {Source: input.SourceFactor, Member: "bias", FactorID: "bias", DefinitionHash: "sha256:bias"}}, Factors: map[string]string{"bias": "sha256:bias"}, ViewColumns: []string{"bias", "close"}}
+	require.NoError(t, repo.CreateInstance(ctx, store.Instance{InstanceID: "instance-e2e", StrategyID: "strategy-e2e", SpaceID: "space-e2e", FactorTasks: map[string]string{"spot": "factor_task"}, LogicalAccountID: &logical, CreatedAt: now}))
+	resolved := input.Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]input.TaskBinding{"spot": {ViewID: "factor_view", FactorTaskID: "factor_task", DatasetID: "factor_ds"}}, Bar: "1h", Calendar: input.DefaultCalendar, Columns: map[string]input.ColumnBinding{"bias": {Source: input.SourceFactor, Member: "bias", FactorID: "bias", DefinitionHash: "sha256:bias"}}, Factors: map[string]string{"bias": "sha256:bias"}, ViewColumns: []string{"bias", "close"}}
 	resolvedJSON, err := json.Marshal(resolved)
 	require.NoError(t, err)
 	require.NoError(t, repo.OpenSession(ctx, store.Session{SessionID: session, InstanceID: "instance-e2e", DSLHash: hash, ResolvedJSON: string(resolvedJSON), CreatedAt: now}, externalDSL))
@@ -172,10 +172,10 @@ func (externalInput) LoadBar(_ context.Context, _ string, resolved input.Resolve
 		return input.Loaded{}, err
 	}
 	ids := []string{"BTC-USDT", "ETH-USDT"}
-	frame := engine.Frame{BarEnd: boundary.BarEnd, BarIndex: boundary.BarIndex, Spot: true, Universe: ids, Expected: map[string][]string{"r": ids}, AgedOut: map[string][]string{}, Rows: map[string]engine.Row{
+	frame := engine.Frame{BarEnd: boundary.BarEnd, BarIndex: boundary.BarIndex, Universe: ids, Expected: map[string][]string{"r": ids}, AgedOut: map[string][]string{}, Markets: map[string]engine.MarketInput{"spot": {Rows: map[string]engine.Row{
 		"BTC-USDT": {Values: map[string]float64{"bias": 2, "close": 100}},
 		"ETH-USDT": {Values: map[string]float64{"bias": 1, "close": 10}},
-	}}
+	}}}}
 	subjects := map[string]input.Subject{"BTC-USDT": {SubjectID: "BTC-USDT", Active: true}, "ETH-USDT": {SubjectID: "ETH-USDT", Active: true}}
 	return input.Loaded{Frame: frame, Sets: input.Sets{Universe: ids, Expected: frame.Expected, AgedOut: frame.AgedOut, Subjects: subjects}, Boundary: boundary}, nil
 }

@@ -169,6 +169,9 @@ func decodeStrategy(root *yaml.Node) (Strategy, error) {
 			strategy.Name, err = scalarRequiredText(f.value, "name")
 		case "bar":
 			strategy.Bar, err = scalarRequiredText(f.value, "bar")
+		case "market":
+			strategy.Market, err = decodeMarket(f.value)
+			strategy.MarketDeclared = err == nil
 		case "universe":
 			strategy.Universe, err = decodeUniverse(f.value)
 		case "rules":

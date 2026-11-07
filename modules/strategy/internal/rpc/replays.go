@@ -37,12 +37,24 @@ func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayRe
 	if err != nil {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(err)}, nil
 	}
-	if req == nil || strings.TrimSpace(req.GetFactorTaskId()) == "" {
-		return &strategypb.StartReplayRsp{RetInfo: invalid(errors.New("factor_task_id 不能为空"))}, nil
+	if req == nil {
+		return &strategypb.StartReplayRsp{RetInfo: invalid(errNilRequest)}, nil
 	}
 	source, err := s.replaySource(ctx, scoped, req)
 	if err != nil {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(err)}, nil
+	}
+	// 从实例发起时，没给 factor_tasks 就读实例关联的任务，给了就必须与实例一致；其余来源必须自己给出。
+	requested := req.GetFactorTasks()
+	if len(requested) == 0 {
+		requested = source.instanceTasks
+	}
+	tasks, err := normalizeFactorTasks(requested)
+	if err != nil {
+		return &strategypb.StartReplayRsp{RetInfo: invalid(err)}, nil
+	}
+	if source.instanceTasks != nil && !store.SameTasks(tasks, source.instanceTasks) {
+		return &strategypb.StartReplayRsp{RetInfo: invalid(errors.New("从实例发起的回放必须读取实例关联的因子任务"))}, nil
 	}
 	strategy, _, err := parseDefinition(source.dslYaml)
 	if err != nil {
@@ -59,8 +71,10 @@ func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayRe
 	if !end.After(start) {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(errors.New("end_time 必须晚于 start_time"))}, nil
 	}
-	if fee := req.GetFeeBps(); math.IsNaN(fee) || math.IsInf(fee, 0) || fee < 0 || fee > store.MaxReplayFeeBps {
-		return &strategypb.StartReplayRsp{RetInfo: invalid(fmt.Errorf("fee_bps 必须在 0 到 %d 之间", store.MaxReplayFeeBps))}, nil
+	for name, fee := range map[string]float64{"spot_fee_bps": req.GetSpotFeeBps(), "swap_fee_bps": req.GetSwapFeeBps()} {
+		if math.IsNaN(fee) || math.IsInf(fee, 0) || fee < 0 || fee > store.MaxReplayFeeBps {
+			return &strategypb.StartReplayRsp{RetInfo: invalid(fmt.Errorf("%s 必须在 0 到 %d 之间", name, store.MaxReplayFeeBps))}, nil
+		}
 	}
 	if s.Resolver == nil {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(errors.New("Storage 与 Factor 依赖未配置，不能回放"))}, nil
@@ -69,7 +83,7 @@ func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayRe
 		return &strategypb.StartReplayRsp{RetInfo: invalid(errors.New("输出了 factor_params 的策略暂不支持研究回放：可变成员的参数随策略逐期变化，需要从实例发起的闭环回放"))}, nil
 	}
 	if strategy.HasTranche() {
-		return &strategypb.StartReplayRsp{RetInfo: invalid(errors.New("tranche 规则只用于合约 View，而研究回放第一版只支持现货，暂不支持回放 tranche 策略"))}, nil
+		return &strategypb.StartReplayRsp{RetInfo: invalid(errors.New("研究回放第一版不支持 tranche 策略"))}, nil
 	}
 	// 先做一次低成本计数：排队已满时不必再解析绑定、让 Storage 现算覆盖统计；事务内的计数仍是最终判定。
 	if active, err := s.Store.CountActiveReplays(ctx, scoped); err != nil {
@@ -77,20 +91,20 @@ func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayRe
 	} else if active >= store.MaxActiveReplays {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(fmt.Errorf("空间 %s 已有 %d 个排队或运行中的回放，请等它们完成或取消后再发起", scoped, active))}, nil
 	}
-	resolved, program, err := s.Resolver.Resolve(ctx, scoped, req.GetFactorTaskId(), strategy)
+	resolved, program, err := s.Resolver.Resolve(ctx, scoped, input.TaskIDs(tasks), strategy)
 	if err != nil {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(err)}, nil
 	}
-	if !resolved.Spot {
-		return &strategypb.StartReplayRsp{RetInfo: invalid(fmt.Errorf("View %s 的源数据集 market_type=%s；第一版回放只支持现货", resolved.ViewID, resolved.MarketType))}, nil
+	if err := input.CheckResolvedMarkets(resolved, tasks); err != nil {
+		return &strategypb.StartReplayRsp{RetInfo: invalid(err)}, nil
 	}
 	// A 股日线按上海日期回放：区间两端换成所在上海日期的零点，记录与执行都用换算后的区间。
 	if start, end, err = input.ReplayRange(resolved.Calendar, resolved.Bar, start, end); err != nil {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(err)}, nil
 	}
 	// 同步校验起点、截断终点并检查根数上限：排队后才失败、或回放没有数据的未来 bar 都会误导用户。
-	generation := ""
-	if end, generation, err = s.Resolver.ReplayWindow(ctx, scoped, resolved, program, start, end, s.nowTime()); err != nil {
+	var generations map[string]string
+	if end, generations, err = s.Resolver.ReplayWindow(ctx, scoped, resolved, program, start, end, s.nowTime()); err != nil {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(err)}, nil
 	}
 	bars, err := input.ReplayBars(resolved.Calendar, resolved.Bar, start, end, input.DefaultReplayMaxBars)
@@ -104,7 +118,11 @@ func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayRe
 	if err != nil {
 		return &strategypb.StartReplayRsp{RetInfo: failure(err)}, nil
 	}
-	replay := store.Replay{ReplayID: replayID, StrategyID: source.strategyID, InstanceID: source.instanceID, SessionID: source.sessionID, DSLYaml: source.dslYaml, DSLHash: dsl.Hash([]byte(source.dslYaml)), ViewGeneration: generation, Calendar: resolved.Calendar, SpaceID: scoped, FactorTaskID: resolved.FactorTaskID, ViewID: resolved.ViewID, StartTime: start, EndTime: end, FeeBps: req.GetFeeBps(), Factors: resolved.Factors, CreatedAt: s.nowTime()}
+	replayTasks := make(map[string]store.ReplayTask, len(resolved.Tasks))
+	for market, task := range resolved.Tasks {
+		replayTasks[market] = store.ReplayTask{FactorTaskID: task.FactorTaskID, ViewID: task.ViewID, ViewGeneration: generations[market]}
+	}
+	replay := store.Replay{ReplayID: replayID, StrategyID: source.strategyID, InstanceID: source.instanceID, SessionID: source.sessionID, DSLYaml: source.dslYaml, DSLHash: dsl.Hash([]byte(source.dslYaml)), Calendar: resolved.Calendar, SpaceID: scoped, Tasks: replayTasks, StartTime: start, EndTime: end, SpotFeeBps: req.GetSpotFeeBps(), SwapFeeBps: req.GetSwapFeeBps(), Factors: resolved.Factors, CreatedAt: s.nowTime()}
 	if err := s.Store.CreateReplay(ctx, replay); err != nil {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(err)}, nil
 	}
@@ -124,6 +142,8 @@ type replayInput struct {
 	strategyID *string
 	instanceID *string
 	sessionID  *string
+	// instanceTasks 是从实例发起时实例关联的因子任务（市场 → 任务）；其他来源为 nil。
+	instanceTasks map[string]string
 }
 
 // replaySource 按 strategy_id、dsl_yaml、instance_id 三选一确定被回放的 DSL 文本：定义当前的版本、给定文本，
@@ -170,7 +190,7 @@ func (s *Service) replaySource(ctx context.Context, scoped string, req *strategy
 		if err != nil {
 			return replayInput{}, err
 		}
-		return replayInput{dslYaml: version.DSLYaml, strategyID: &instance.StrategyID, instanceID: &instance.InstanceID, sessionID: &sessionID}, nil
+		return replayInput{dslYaml: version.DSLYaml, strategyID: &instance.StrategyID, instanceID: &instance.InstanceID, sessionID: &sessionID, instanceTasks: instance.FactorTasks}, nil
 	default:
 		return replayInput{dslYaml: text}, nil
 	}

@@ -17,15 +17,10 @@ export function taskColumns(info: Pick<FactorTaskInfo, "members">): string[] {
   return (info.members || []).flatMap(member => member.output_columns ?? []);
 }
 
-/**
- * 创建实例时可选的任务：当前空间里运行中、还没有关联实例的因子任务（关联是独占且永久的）；按名称排序。
- */
-export function availableTasks(infos: FactorTaskInfo[], spaceId: string): TaskOption[] {
+/** 当前空间里运行中的因子任务（试算只读，不要求未关联实例）；按名称排序。 */
+export function enabledTasks(infos: FactorTaskInfo[], spaceId: string): TaskOption[] {
   return infos
-    .filter(
-      info =>
-        info.factor_task.space_id === spaceId && info.factor_task.status === "enabled" && !info.factor_task.bound_instance_id
-    )
+    .filter(info => info.factor_task.space_id === spaceId && info.factor_task.status === "enabled")
     .map(info => ({
       taskId: info.factor_task.task_id,
       name: info.factor_task.name || info.factor_task.task_id,
@@ -34,4 +29,12 @@ export function availableTasks(infos: FactorTaskInfo[], spaceId: string): TaskOp
       varMembers: (info.members || []).filter(member => member.kind === "var").map(member => member.member_key)
     }))
     .sort((a, b) => a.name.localeCompare(b.name) || a.taskId.localeCompare(b.taskId));
+}
+
+/**
+ * 创建实例时可选的任务：当前空间里运行中、还没有关联实例的因子任务（关联是独占且永久的）；按名称排序。
+ */
+export function availableTasks(infos: FactorTaskInfo[], spaceId: string): TaskOption[] {
+  const unbound = new Set(infos.filter(info => !info.factor_task.bound_instance_id).map(info => info.factor_task.task_id));
+  return enabledTasks(infos, spaceId).filter(task => unbound.has(task.taskId));
 }

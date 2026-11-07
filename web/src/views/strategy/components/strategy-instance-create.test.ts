@@ -7,7 +7,7 @@ const source = readFileSync(resolve(process.cwd(), "src/views/strategy/component
 describe("strategy instance creation contract", () => {
   it("binds a definition, one factor task and an optional account, and stays disabled", () => {
     expect(source).toContain("createInstance({");
-    expect(source).toContain("factor_task_id: form.factor_task_id");
+    expect(source).toContain("factor_tasks: factorTasks()");
     expect(source).toContain('Message.success("策略实例已创建并保持停用")');
     expect(source).not.toContain("setInstanceEnabled(");
     expect(source).not.toContain("input_bindings_json");
@@ -15,7 +15,7 @@ describe("strategy instance creation contract", () => {
   });
 
   it("prechecks the binding through the server instead of rebuilding it locally", () => {
-    expect(source).toContain("validateStrategy(selectedStrategy.value.dsl_yaml, form.factor_task_id)");
+    expect(source).toContain("validateStrategy(selectedStrategy.value.dsl_yaml, factorTasks())");
     expect(source).toContain("ResolvedTable");
     expect(source).toContain("创建请求结果未知，但实例 ID 已存在");
   });
@@ -69,7 +69,16 @@ describe("strategy instance creation behavior", () => {
     "a-button": { template: "<button><slot /></button>" },
     ResolvedTable: true
   };
-  const strategies = [{ strategy_id: "s1", name: "动量", dsl_yaml: "name: demo", dsl_hash: "h", created_at: "", updated_at: "" }];
+  const strategies = [
+    {
+      strategy_id: "s1",
+      name: "动量",
+      dsl_yaml: "name: demo\nmarket: {select: swap}\n",
+      dsl_hash: "h",
+      created_at: "",
+      updated_at: ""
+    }
+  ];
   const taskInfo = (patch: Record<string, unknown> = {}, taskId = "ftask_a") => ({
     factor_task: { task_id: taskId, name: "现货因子", space_id: "crypto", freq: "1h", status: "enabled", ...patch },
     members: [
@@ -90,7 +99,22 @@ describe("strategy instance creation behavior", () => {
     return { wrapper, flushPromises };
   }
 
+  // 创建前要先通过绑定预检（服务端核对市场与任务是否对应）。
+  async function precheck(wrapper: { findAll: (selector: string) => any[] }, flushPromises: () => Promise<void>) {
+    await wrapper
+      .findAll("button")
+      .find(item => item.text() === "解析列与成员契约")!
+      .trigger("click");
+    await flushPromises();
+  }
+
   beforeEach(() => {
+    api.validateStrategy.mockReset().mockResolvedValue({
+      diagnostics: [],
+      resolved_json: '{"market":{"select":"swap","prefer":"swap"}}',
+      trial: null,
+      trial_items: []
+    });
     api.createInstance.mockReset().mockResolvedValue({ instance_id: "i1" });
     api.listFactorTasks.mockReset().mockResolvedValue({ factor_tasks: [taskInfo()], page_result: { has_more: false } });
     api.listLogicalAccounts.mockReset().mockResolvedValue({ logical_accounts: [], page_result: { has_more: false } });
@@ -106,6 +130,7 @@ describe("strategy instance creation behavior", () => {
     const { wrapper, flushPromises } = await open({ presetStrategyId: "s1" });
     const selects = wrapper.findAll("select");
     await selects[1].setValue("ftask_a");
+    await precheck(wrapper, flushPromises);
     await wrapper
       .findAll("button")
       .find(item => item.text() === "创建停用实例")!
@@ -114,14 +139,14 @@ describe("strategy instance creation behavior", () => {
     expect(api.createInstance).toHaveBeenCalledWith({
       instance_id: undefined,
       strategy_id: "s1",
-      factor_task_id: "ftask_a",
+      factor_tasks: { swap: "ftask_a" },
       logical_account_id: ""
     });
   });
 
   it("shows the account failure with a retry in trade mode and blocks submission without an account", async () => {
     api.listLogicalAccounts.mockRejectedValueOnce(new Error("账户服务不可用")).mockResolvedValueOnce({
-      logical_accounts: [{ logical_account_id: "acc1", name: "账户一", space_id: "crypto", control_mode: 1 }],
+      logical_accounts: [{ logical_account_id: "acc1", name: "账户一", space_id: "crypto", control_mode: 1, markets: [2] }],
       page_result: { has_more: false }
     });
     const { wrapper, flushPromises } = await open({ presetStrategyId: "s1" });
@@ -142,6 +167,7 @@ describe("strategy instance creation behavior", () => {
       .find(item => item.text() === "重试")!
       .trigger("click");
     await flushPromises();
+    await precheck(wrapper, flushPromises);
     await wrapper.findAll("select")[2].setValue("acc1");
     await wrapper
       .findAll("button")
@@ -151,19 +177,22 @@ describe("strategy instance creation behavior", () => {
     expect(api.createInstance).toHaveBeenCalledWith({
       instance_id: undefined,
       strategy_id: "s1",
-      factor_task_id: "ftask_a",
+      factor_tasks: { swap: "ftask_a" },
       logical_account_id: "acc1"
     });
   });
 
   it("lists no account for A-share instances and says why", async () => {
     api.listLogicalAccounts.mockResolvedValue({
-      logical_accounts: [{ logical_account_id: "acc1", name: "账户一", space_id: "crypto", control_mode: 1, market_type: 1 }],
+      logical_accounts: [{ logical_account_id: "acc1", name: "账户一", space_id: "crypto", control_mode: 1, markets: [1] }],
       page_result: { has_more: false }
     });
-    api.validateStrategy
-      .mockReset()
-      .mockResolvedValue({ diagnostics: [], resolved_json: '{"market_type":"equity"}', trial: null, trial_items: [] });
+    api.validateStrategy.mockReset().mockResolvedValue({
+      diagnostics: [],
+      resolved_json: '{"market":{"select":"equity","prefer":"equity"}}',
+      trial: null,
+      trial_items: []
+    });
     const { wrapper, flushPromises } = await open({ presetStrategyId: "s1" });
     await wrapper.findAll("select")[1].setValue("ftask_a");
     await wrapper
@@ -181,11 +210,65 @@ describe("strategy instance creation behavior", () => {
     ).toEqual([""]);
   });
 
+  it("asks for a spot and a swap task for a mixed-market strategy and keeps one task from being picked twice", async () => {
+    api.listFactorTasks.mockResolvedValue({
+      factor_tasks: [taskInfo({ name: "现货因子" }, "ftask_spot"), taskInfo({ name: "永续因子" }, "ftask_swap")],
+      page_result: { has_more: false }
+    });
+    const mixed = [{ ...strategies[0], dsl_yaml: "name: demo\nmarket: {select: both, prefer: swap}\n" }];
+    const { wrapper, flushPromises } = await open({ presetStrategyId: "s1", strategies: mixed });
+    const selects = wrapper.findAll("select");
+    // 定义、现货任务、永续任务三个选择框。
+    expect(selects).toHaveLength(3);
+    expect(wrapper.text()).toContain("现货、永续 的因子任务");
+    await selects[1].setValue("ftask_spot");
+    await flushPromises();
+    const swapOptions = wrapper
+      .findAll("select")[2]
+      .findAll("option")
+      .map(item => item.attributes("value"));
+    expect(swapOptions).not.toContain("ftask_spot");
+    // 只选了一个市场的任务不能创建。
+    const create = () => wrapper.findAll("button").find(item => item.text() === "创建停用实例")!;
+    await create().trigger("click");
+    await flushPromises();
+    expect(api.createInstance).not.toHaveBeenCalled();
+    expect(wrapper.text()).toContain("请为现货、永续各选一个因子任务");
+    await wrapper.findAll("select")[2].setValue("ftask_swap");
+    await precheck(wrapper, flushPromises);
+    await create().trigger("click");
+    await flushPromises();
+    expect(api.createInstance).toHaveBeenCalledWith({
+      instance_id: undefined,
+      strategy_id: "s1",
+      factor_tasks: { spot: "ftask_spot", swap: "ftask_swap" },
+      logical_account_id: ""
+    });
+  });
+
+  it("prechecks a mixed-market strategy with both tasks", async () => {
+    api.listFactorTasks.mockResolvedValue({
+      factor_tasks: [taskInfo({}, "ftask_spot"), taskInfo({}, "ftask_swap")],
+      page_result: { has_more: false }
+    });
+    api.validateStrategy.mockReset().mockResolvedValue({ diagnostics: [], resolved_json: "", trial: null, trial_items: [] });
+    const mixed = [{ ...strategies[0], dsl_yaml: "name: demo\nmarket: {select: both, prefer: spot}\n" }];
+    const { wrapper, flushPromises } = await open({ presetStrategyId: "s1", strategies: mixed });
+    await wrapper.findAll("select")[1].setValue("ftask_spot");
+    await wrapper.findAll("select")[2].setValue("ftask_swap");
+    await wrapper
+      .findAll("button")
+      .find(item => item.text() === "解析列与成员契约")!
+      .trigger("click");
+    await flushPromises();
+    expect(api.validateStrategy).toHaveBeenCalledWith(mixed[0].dsl_yaml, { spot: "ftask_spot", swap: "ftask_swap" });
+  });
+
   it("offers a retry when the factor task list fails", async () => {
     api.listFactorTasks
       .mockRejectedValueOnce(new Error("因子服务不可用"))
       .mockResolvedValueOnce({ factor_tasks: [taskInfo()], page_result: { has_more: false } });
-    const { wrapper, flushPromises } = await open();
+    const { wrapper, flushPromises } = await open({ presetStrategyId: "s1" });
     expect(wrapper.text()).toContain("因子任务列表读取失败：因子服务不可用");
     await wrapper.find(".link").trigger("click");
     await flushPromises();
@@ -240,6 +323,7 @@ describe("strategy instance creation behavior", () => {
   it("emits created without asking the parent to close, so the parent's navigation wins", async () => {
     const { wrapper, flushPromises } = await open({ presetStrategyId: "s1" });
     await wrapper.findAll("select")[1].setValue("ftask_a");
+    await precheck(wrapper, flushPromises);
     await wrapper
       .findAll("button")
       .find(item => item.text() === "创建停用实例")!
@@ -247,5 +331,33 @@ describe("strategy instance creation behavior", () => {
     await flushPromises();
     expect(wrapper.emitted("created")).toEqual([["i1"]]);
     expect(wrapper.emitted("update:visible")).toBeUndefined();
+  });
+
+  it("refuses to create before the binding precheck passes and without choosing a market for an undeclared strategy", async () => {
+    const undeclared = [{ ...strategies[0], dsl_yaml: "name: demo\n" }];
+    const { wrapper, flushPromises } = await open({ presetStrategyId: "s1", strategies: undeclared });
+    const create = () => wrapper.findAll("button").find(item => item.text() === "创建停用实例")!;
+    // 没写 market：没有默认市场，先选市场。
+    expect(wrapper.findAll("select")).toHaveLength(1);
+    await create().trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("先选择任务的市场");
+    wrapper.findComponent({ name: "RadioGroupStub" }).vm.$emit("update:modelValue", "swap");
+    await flushPromises();
+    await wrapper.findAll("select")[1].setValue("ftask_a");
+    // 选了任务但没有预检：不能创建。
+    await create().trigger("click");
+    await flushPromises();
+    expect(wrapper.text()).toContain("请先点击“解析列与成员契约”");
+    expect(api.createInstance).not.toHaveBeenCalled();
+    await precheck(wrapper, flushPromises);
+    await create().trigger("click");
+    await flushPromises();
+    expect(api.createInstance).toHaveBeenCalledWith({
+      instance_id: undefined,
+      strategy_id: "s1",
+      factor_tasks: { swap: "ftask_a" },
+      logical_account_id: ""
+    });
   });
 });

@@ -3,6 +3,7 @@ package input
 import (
 	"context"
 	"errors"
+	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"strings"
 	"testing"
 	"time"
@@ -70,7 +71,7 @@ func TestGenerationChangeReadRetriesAndConfirms(t *testing.T) {
 // 最早一行可能来自早已停更的序列，不检查；还没有数据时允许启用。
 func TestStockEnableChecksRowKeyWithoutMinAge(t *testing.T) {
 	now := time.Date(2026, 10, 12, 10, 0, 0, 0, time.UTC)
-	resolved := Resolved{ViewID: "view_stock", Bar: "1d", Calendar: "cn_stock"}
+	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {ViewID: "view_stock"}}, Bar: "1d", Calendar: "cn_stock"}
 	client := newFakeClient("spot")
 	client.views["view_stock"] = ViewInfo{ViewID: "view_stock", IndexedFrom: stockDay(t, 2026, 1, 5), IndexedTo: time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC), SeriesBars: 500}
 	if err := CheckCoverage(context.Background(), client, "space", resolved, now); err == nil || !strings.Contains(err.Error(), "不是上海时间零点") || !strings.Contains(err.Error(), "不能启用实例") {

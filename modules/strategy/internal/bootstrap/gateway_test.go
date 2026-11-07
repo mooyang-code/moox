@@ -322,7 +322,7 @@ func TestStrategyDependenciesUseSharedDeploymentGateway(t *testing.T) {
 	require.Equal(t, "sha256:fixture", factor.DefinitionHash)
 
 	owner := tradeowner.New(cfg.Trade, gateway)
-	require.NoError(t, owner.ClaimSession(ctx, "crypto", "acct-1", "instance-1", "session-1", "swap"))
+	require.NoError(t, owner.ClaimSession(ctx, "crypto", "acct-1", "instance-1", "session-1", []string{"swap"}))
 	require.NoError(t, owner.ValidateSession(ctx, "crypto", "acct-1", "instance-1", "session-1"))
 	require.NoError(t, owner.ReleaseSession(ctx, "crypto", "acct-1", "instance-1", "session-1"))
 

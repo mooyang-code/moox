@@ -46,13 +46,13 @@ func TestStartReplayChecksActiveLimitFirst(t *testing.T) {
 	h := newHarness(t)
 	h.createStrategy("s1", demoDSL)
 	for i := 0; i < store.MaxActiveReplays; i++ {
-		replay := store.Replay{ReplayID: fmt.Sprintf("p%d", i), DSLYaml: demoDSL, DSLHash: dsl.Hash([]byte(demoDSL)), Calendar: "crypto_24x7", ViewGeneration: "idx@b1", SpaceID: "crypto", FactorTaskID: "ftask_a", ViewID: "view_factor_a", StartTime: h.now.Add(-48 * time.Hour), EndTime: h.now.Add(-24 * time.Hour), CreatedAt: h.now}
+		replay := store.Replay{ReplayID: fmt.Sprintf("p%d", i), DSLYaml: demoDSL, DSLHash: dsl.Hash([]byte(demoDSL)), Calendar: "crypto_24x7", SpaceID: "crypto", Tasks: map[string]store.ReplayTask{"spot": {FactorTaskID: "ftask_a", ViewID: "view_factor_a", ViewGeneration: "idx@b1"}}, StartTime: h.now.Add(-48 * time.Hour), EndTime: h.now.Add(-24 * time.Hour), CreatedAt: h.now}
 		if err := h.service.Store.CreateReplay(h.ctx, replay); err != nil {
 			t.Fatal(err)
 		}
 	}
 	calls := h.resolver.calls
-	rsp, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTaskId: "ftask_a", StartTime: "2026-09-02T00:00:00Z", EndTime: "2026-09-03T00:00:00Z"})
+	rsp, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_a"}, StartTime: "2026-09-02T00:00:00Z", EndTime: "2026-09-03T00:00:00Z"})
 	requireFail(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg(), "排队或运行中")
 	if h.resolver.calls != calls {
 		t.Fatalf("排队已满时不应解析绑定：%d → %d", calls, h.resolver.calls)

@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 )
 
 // ErrStale 表示读取过程中 View 的活动索引或修订号发生变化，已读页面作废，需要整体重读。
@@ -192,27 +194,76 @@ const (
 	SourceFactor  = "factor"
 )
 
+// TaskBinding 是市场模式里一个市场绑定的因子任务及其结果 View。
+type TaskBinding struct {
+	// ViewID 是因子任务的结果 View（由任务 ID 推导；事件路由与求值都用它），FactorTaskID 是因子任务。
+	ViewID          string `json:"view_id"`
+	FactorTaskID    string `json:"factor_task_id"`
+	DatasetID       string `json:"dataset_id"`
+	SourceDatasetID string `json:"source_dataset_id,omitempty"`
+}
+
 // Resolved 是启用时固化的绑定解析，保存在实例与会话的 resolved_json 中。
 type Resolved struct {
-	// ViewID 是关联因子任务的结果 View（由任务 ID 推导；事件路由与求值都用它），FactorTaskID 是关联的因子任务。
-	ViewID       string `json:"view_id"`
-	FactorTaskID string `json:"factor_task_id"`
+	// Market 是有效的市场模式：DSL 写出的，或没写时按唯一绑定的因子任务的市场取的默认值。
+	Market dsl.Market `json:"market"`
+	// Tasks 是各市场绑定的因子任务与结果 View（键是 spot、swap 或 equity），键集合恰好是 Market.Markets()。
+	Tasks map[string]TaskBinding `json:"tasks"`
 	// FactorParams 是任务各可变成员（成员键）的因子定义声明的可调参数：启用时固化，参数输出据此补齐默认值、取整与限幅。
-	FactorParams    map[string][]ParamDecl   `json:"factor_params,omitempty"`
-	DatasetID       string                   `json:"dataset_id"`
-	SourceDatasetID string                   `json:"source_dataset_id,omitempty"`
-	Bar             string                   `json:"bar"`
-	Calendar        string                   `json:"calendar"`
-	MarketType      string                   `json:"market_type,omitempty"`
-	Spot            bool                     `json:"spot"`
-	Columns         map[string]ColumnBinding `json:"columns"`
-	// Factors 是引用的因子成员（成员键）及其固化的成员契约（readiness.Contract：定义哈希加成员类型）。
+	FactorParams map[string][]ParamDecl   `json:"factor_params,omitempty"`
+	Bar          string                   `json:"bar"`
+	Calendar     string                   `json:"calendar"`
+	Columns      map[string]ColumnBinding `json:"columns"`
+	// Factors 是引用的因子成员（成员键）及其固化的成员契约（readiness.Contract：定义哈希加成员类型）；
+	// 绑定了多个任务时，每个任务里同名成员的契约必须一致。
 	Factors map[string]string `json:"factors,omitempty"`
 	// PreviousFactors 是经 bars[-1] 读取的因子列所属的成员（排序）：只有它们需要上一根的版本证据。由编译结果派生
 	// （Resolve 与 Compile 填入），不进快照。
 	PreviousFactors []string `json:"-"`
 	MinAgeBars      int      `json:"min_age_bars,omitempty"`
-	ViewColumns     []string `json:"view_columns"`
+	// ViewColumns 是各 View 共有的列（排序）：DSL 引用的列必须在每个绑定的 View 里都存在。
+	ViewColumns []string `json:"view_columns"`
+}
+
+// Markets 返回绑定的市场（现货在前、永续其次）。
+func (r Resolved) Markets() []string {
+	markets := make([]string, 0, len(r.Tasks))
+	for _, market := range r.Market.Markets() {
+		if _, ok := r.Tasks[market]; ok {
+			markets = append(markets, market)
+		}
+	}
+	return markets
+}
+
+// Primary 返回第一个市场的绑定：只绑一个任务时就是唯一的绑定（回放、试算展示等只读一个 View 的地方使用）。
+func (r Resolved) Primary() TaskBinding {
+	for _, market := range r.Markets() {
+		return r.Tasks[market]
+	}
+	return TaskBinding{}
+}
+
+// ViewIDs 返回绑定的结果 View（按市场先后）。
+func (r Resolved) ViewIDs() []string {
+	ids := make([]string, 0, len(r.Tasks))
+	for _, market := range r.Markets() {
+		ids = append(ids, r.Tasks[market].ViewID)
+	}
+	return ids
+}
+
+// SpotOnly 报告策略只输出现货或股票：闭环回放目前只支持这种策略（研究回放已支持永续与混合市场）。
+func (r Resolved) SpotOnly() bool { return r.Market.Single() && dsl.SpotLike(r.Market.Select) }
+
+// MarketOfView 返回 View 所属的市场。
+func (r Resolved) MarketOfView(viewID string) (string, bool) {
+	for market, task := range r.Tasks {
+		if task.ViewID == viewID {
+			return market, true
+		}
+	}
+	return "", false
 }
 
 // ColumnsOfFactor 返回由某个因子成员（成员键）产出的被引用列。

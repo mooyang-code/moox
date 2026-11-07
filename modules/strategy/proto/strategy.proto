@@ -16,13 +16,15 @@ message Strategy {
   string updated_at = 6;
 }
 
-// StrategyInstance 把定义绑定到一个空间、一个因子任务和可选的组合账户。因子任务在创建时写定、不能修改，
-// 实例第一次启用时才与任务正式关联（独占、永久）；读取的 View 是该任务结果数据集的默认 View，由任务 ID 推导。
+// StrategyInstance 把定义绑定到一个空间、一个或两个（现货、永续各一个）因子任务和可选的组合账户。因子任务在创建时写定、
+// 不能修改，实例第一次启用时才与任务正式关联（一个任务只关联一个实例，永久）；读取的 View 是任务结果数据集的默认 View，
+// 由任务 ID 推导。
 message StrategyInstance {
   string instance_id = 1;
   string strategy_id = 2;
   string space_id = 3;
-  string factor_task_id = 4;
+  // 市场（spot | swap | equity）→ 因子任务 ID；市场必须与任务源数据集的市场一致，且恰好是策略市场模式需要的那些市场。
+  map<string, string> factor_tasks = 4;
   string logical_account_id = 5;
   bool enabled = 6;
   string session_id = 7;
@@ -36,6 +38,7 @@ message StrategyInstance {
 message InstrumentTarget {
   string instrument_id = 1;
   string target_weight = 2;
+  string market = 3;                     // spot | swap | equity；同一个标的的现货、永续各是一个目标
 }
 
 // StrategyResult 是一个处理过的周期：ok 带目标，skipped 带原因。
@@ -69,6 +72,13 @@ message StrategyResultItem {
   int32 rank = 5;
   string weight = 6;
   string reason = 7;
+  string market = 8;                     // 入选的权重取它进入的市场，其余取所选行所在的市场（spot | swap | equity）
+}
+
+// ReplayTask 是研究回放在一个市场读取的因子任务及其结果 View。
+message ReplayTask {
+  string factor_task_id = 1;
+  string view_id = 2;                    // 因子任务的结果 View
 }
 
 // Replay 是一次基于 View 的研究回放任务。
@@ -77,10 +87,8 @@ message Replay {
   string strategy_id = 2;
   string dsl_yaml = 3;
   string space_id = 4;
-  string view_id = 5;
   string start_time = 6;
   string end_time = 7;
-  double fee_bps = 8;
   string status = 9;                     // pending | running | done | failed | cancelled
   string progress_time = 10;
   string metrics_json = 11;              // 累计收益、年化、最大回撤、平均换手、平均持仓数、跳过周期数、局限性标注
@@ -91,7 +99,9 @@ message Replay {
   string instance_id = 16;               // 从实例发起时的来源实例
   string session_id = 17;                // 从实例发起时固化 DSL 的会话
   string calendar = 18;                  // 回放所用的日历（crypto_24x7 | cn_stock）；cn_stock 的区间按上海日期解释
-  string factor_task_id = 19;            // 回放读取的因子任务（view_id 是它的结果 View）
+  map<string, ReplayTask> tasks = 20;    // 市场（spot | swap | equity）→ 读取的因子任务与结果 View
+  double spot_fee_bps = 21;              // 现货与股票的单边手续费
+  double swap_fee_bps = 22;              // 永续的单边手续费
 }
 
 // ReplayBar 是回放中一个周期的记录。
@@ -110,6 +120,8 @@ message ReplayBar {
   string skip_reason = 12;
   int32 unfilled = 13;                   // 目标未达成的标的数
   int32 liquidated = 14;                 // 本期清算的标的数
+  double spot_value = 15;                // 期末现货类持仓的市值之和
+  double swap_value = 16;                // 期末永续持仓的净名义价值（多头为正，空头为负）
 }
 
 message PageRequest {
@@ -130,7 +142,7 @@ message DeleteStrategyRsp { common.RetInfo ret_info = 1; }
 
 message ValidateStrategyReq {
   string dsl_yaml = 1;
-  string factor_task_id = 2;             // 可选；给出时做列解析并在最新周期试算
+  map<string, string> factor_tasks = 2;  // 可选，市场 → 因子任务 ID；给出时做列解析并在最新周期试算（读全部绑定的 View）
 }
 message ValidateStrategyRsp {
   common.RetInfo ret_info = 1;
@@ -174,11 +186,12 @@ message ListStrategyTargetsRsp {
 message StartReplayReq {
   string strategy_id = 1;                // strategy_id、dsl_yaml、instance_id 三选一：定义当前的 DSL、给定文本或实例当前会话固化的 DSL
   string dsl_yaml = 2;
-  string factor_task_id = 3;             // 回放读取的因子任务的结果 View；从实例发起时必须与实例关联的任务一致
   string start_time = 4;
   string end_time = 5;
-  double fee_bps = 6;
   string instance_id = 7;
+  map<string, string> factor_tasks = 8;  // 市场（spot | swap | equity）→ 回放读取的因子任务；市场要与任务的源数据集一致，策略要用到的市场都要给出
+  double spot_fee_bps = 9;               // 现货与股票的单边手续费（基点）
+  double swap_fee_bps = 10;              // 永续的单边手续费（基点）
 }
 message StartReplayRsp { common.RetInfo ret_info = 1; Replay replay = 2; int32 bar_count = 3; string first_bar_end = 4; string last_bar_end = 5; }
 message GetReplayReq { string replay_id = 1; }

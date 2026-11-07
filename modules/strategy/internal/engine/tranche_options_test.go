@@ -14,7 +14,7 @@ func compileTranche(t *testing.T, body string, columns ...string) *dsl.Program {
 	t.Helper()
 	strategy, err := dsl.Parse([]byte("name: t\nrules:\n  - id: g\n    type: tranche\n    weight: 1\n" + body + "portfolio: {leverage: 10, max_missing: 1}\n"))
 	require.NoError(t, err)
-	program, err := dsl.Compile(strategy, append([]string{"close", "volume"}, columns...))
+	program, err := compileMode(strategy, append([]string{"close", "volume"}, columns...))
 	require.NoError(t, err)
 	return program
 }
@@ -24,7 +24,7 @@ func trancheWeights(t *testing.T, program *dsl.Program, bars []map[string]map[st
 	var state State
 	var out []map[string]string
 	for i, bar := range bars {
-		decision, err := Evaluate(program, trancheFrame(bar, int64(100+i), "g"), state)
+		decision, err := evalFrame(program, trancheFrame(bar, int64(100+i), "g"), state)
 		require.NoError(t, err)
 		require.Equal(t, StatusOK, decision.Status, "第 %d 期：%v", i, decision.Summary.Notes)
 		weights := map[string]string{}

@@ -21,12 +21,13 @@ const (
 	HealthSessionUnverified = "session_unverified"
 )
 
-// Instance 把定义绑定到一个空间、一个因子任务和可选的组合账户。因子任务在创建时写定、不能修改；读取的 View 是任务结果数据集的默认 View。
+// Instance 把定义绑定到一个空间、一个或两个因子任务和可选的组合账户。因子任务在创建时写定、不能修改；读取的 View 是任务结果数据集的默认 View。
 type Instance struct {
-	InstanceID       string
-	StrategyID       string
-	SpaceID          string
-	FactorTaskID     string
+	InstanceID string
+	StrategyID string
+	SpaceID    string
+	// FactorTasks 是市场（spot、swap、equity）→ 因子任务 ID。
+	FactorTasks      map[string]string
 	LogicalAccountID *string
 	Enabled          bool
 	SessionID        *string
@@ -40,7 +41,6 @@ type instanceRow struct {
 	InstanceID       string         `gorm:"column:c_instance_id"`
 	StrategyID       string         `gorm:"column:c_strategy_id"`
 	SpaceID          string         `gorm:"column:c_space_id"`
-	FactorTaskID     string         `gorm:"column:c_factor_task_id"`
 	LogicalAccountID sql.NullString `gorm:"column:c_logical_account_id"`
 	Enabled          int            `gorm:"column:c_enabled"`
 	SessionID        sql.NullString `gorm:"column:c_session_id"`
@@ -52,18 +52,29 @@ type instanceRow struct {
 
 func (r instanceRow) instance() Instance {
 	return Instance{
-		InstanceID: r.InstanceID, StrategyID: r.StrategyID, SpaceID: r.SpaceID, FactorTaskID: r.FactorTaskID,
+		InstanceID: r.InstanceID, StrategyID: r.StrategyID, SpaceID: r.SpaceID,
 		LogicalAccountID: nullableString(r.LogicalAccountID), Enabled: r.Enabled == 1, SessionID: nullableString(r.SessionID),
 		ResolvedJSON: json.RawMessage(r.ResolvedJSON), Health: r.Health,
 		CreatedAt: r.CreatedAt.UTC(), UpdatedAt: r.UpdatedAt.UTC(),
 	}
 }
 
-const instanceColumns = "c_instance_id, c_strategy_id, c_space_id, c_factor_task_id, c_logical_account_id, c_enabled, c_session_id, c_resolved_json, c_health, c_ctime, c_mtime"
+const instanceColumns = "c_instance_id, c_strategy_id, c_space_id, c_logical_account_id, c_enabled, c_session_id, c_resolved_json, c_health, c_ctime, c_mtime"
 
 func validateInstanceIdentity(instance Instance) error {
-	if strings.TrimSpace(instance.InstanceID) == "" || strings.TrimSpace(instance.StrategyID) == "" || strings.TrimSpace(instance.SpaceID) == "" || strings.TrimSpace(instance.FactorTaskID) == "" {
-		return errors.New("实例缺少 instance_id、strategy_id、space_id 或 factor_task_id")
+	if strings.TrimSpace(instance.InstanceID) == "" || strings.TrimSpace(instance.StrategyID) == "" || strings.TrimSpace(instance.SpaceID) == "" {
+		return errors.New("实例缺少 instance_id、strategy_id 或 space_id")
+	}
+	if len(instance.FactorTasks) == 0 || len(instance.FactorTasks) > 2 {
+		return errors.New("实例需要绑定一个或两个因子任务")
+	}
+	for market, taskID := range instance.FactorTasks {
+		if market != "spot" && market != "swap" && market != "equity" {
+			return fmt.Errorf("factor_tasks 的市场 %q 不受支持，只能是 spot、swap 或 equity", market)
+		}
+		if strings.TrimSpace(taskID) == "" {
+			return fmt.Errorf("factor_tasks 的 %s 任务不能为空", market)
+		}
 	}
 	if instance.LogicalAccountID != nil && strings.TrimSpace(*instance.LogicalAccountID) == "" {
 		return errors.New("logical_account_id 不能为空字符串")
@@ -93,6 +104,55 @@ func readInstance(tx *gorm.DB, instanceID string) (instanceRow, error) {
 	return row, nil
 }
 
+// instanceTasks 读取一个实例绑定的因子任务（市场 → 任务）。
+func instanceTasks(tx *gorm.DB, instanceID string) (map[string]string, error) {
+	var rows []struct {
+		Market       string `gorm:"column:c_market"`
+		FactorTaskID string `gorm:"column:c_factor_task_id"`
+	}
+	if err := tx.Raw(`SELECT c_market, c_factor_task_id FROM t_strategy_instance_tasks WHERE c_instance_id = ?`, instanceID).Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	tasks := make(map[string]string, len(rows))
+	for _, row := range rows {
+		tasks[row.Market] = row.FactorTaskID
+	}
+	return tasks, nil
+}
+
+// withTasks 给一批实例行补上绑定的因子任务，按一次查询读取。
+func withTasks(tx *gorm.DB, rows []instanceRow) ([]Instance, error) {
+	instances := make([]Instance, 0, len(rows))
+	if len(rows) == 0 {
+		return instances, nil
+	}
+	ids := make([]any, 0, len(rows))
+	for _, row := range rows {
+		ids = append(ids, row.InstanceID)
+	}
+	var taskRows []struct {
+		InstanceID   string `gorm:"column:c_instance_id"`
+		Market       string `gorm:"column:c_market"`
+		FactorTaskID string `gorm:"column:c_factor_task_id"`
+	}
+	if err := tx.Raw(`SELECT c_instance_id, c_market, c_factor_task_id FROM t_strategy_instance_tasks WHERE c_instance_id IN (?`+strings.Repeat(", ?", len(ids)-1)+`)`, ids...).Scan(&taskRows).Error; err != nil {
+		return nil, err
+	}
+	byInstance := make(map[string]map[string]string, len(rows))
+	for _, taskRow := range taskRows {
+		if byInstance[taskRow.InstanceID] == nil {
+			byInstance[taskRow.InstanceID] = map[string]string{}
+		}
+		byInstance[taskRow.InstanceID][taskRow.Market] = taskRow.FactorTaskID
+	}
+	for _, row := range rows {
+		instance := row.instance()
+		instance.FactorTasks = byInstance[row.InstanceID]
+		instances = append(instances, instance)
+	}
+	return instances, nil
+}
+
 // CreateInstance 新建停用状态的实例。
 func (s *Store) CreateInstance(ctx context.Context, instance Instance) error {
 	if err := validateInstanceIdentity(instance); err != nil {
@@ -110,20 +170,33 @@ func (s *Store) CreateInstance(ctx context.Context, instance Instance) error {
 		if err := requireLiveDefinition(tx, instance.StrategyID); err != nil {
 			return err
 		}
-		return tx.Exec(`
-			INSERT INTO t_strategy_instances (c_instance_id, c_strategy_id, c_space_id, c_factor_task_id, c_logical_account_id, c_enabled, c_session_id, c_resolved_json, c_health, c_ctime, c_mtime)
-			VALUES (?, ?, ?, ?, ?, 0, NULL, ?, 'ok', ?, ?)
-		`, instance.InstanceID, instance.StrategyID, instance.SpaceID, instance.FactorTaskID, stringValue(instance.LogicalAccountID), resolved, now, now).Error
+		if err := tx.Exec(`
+			INSERT INTO t_strategy_instances (c_instance_id, c_strategy_id, c_space_id, c_logical_account_id, c_enabled, c_session_id, c_resolved_json, c_health, c_ctime, c_mtime)
+			VALUES (?, ?, ?, ?, 0, NULL, ?, 'ok', ?, ?)
+		`, instance.InstanceID, instance.StrategyID, instance.SpaceID, stringValue(instance.LogicalAccountID), resolved, now, now).Error; err != nil {
+			return err
+		}
+		for market, taskID := range instance.FactorTasks {
+			if err := tx.Exec(`INSERT INTO t_strategy_instance_tasks (c_instance_id, c_market, c_factor_task_id) VALUES (?, ?, ?)`, instance.InstanceID, market, strings.TrimSpace(taskID)).Error; err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 }
 
 // GetInstance 读取实例。
 func (s *Store) GetInstance(ctx context.Context, instanceID string) (Instance, error) {
-	row, err := readInstance(s.db.WithContext(ctx), instanceID)
+	tx := s.db.WithContext(ctx)
+	row, err := readInstance(tx, instanceID)
 	if err != nil {
 		return Instance{}, err
 	}
-	return row.instance(), nil
+	instance := row.instance()
+	if instance.FactorTasks, err = instanceTasks(tx, instanceID); err != nil {
+		return Instance{}, err
+	}
+	return instance, nil
 }
 
 // UpdateInstance 修改停用且无会话实例的定义与账户绑定。因子任务在创建时写定，不能修改（也不写这一列）。
@@ -143,7 +216,11 @@ func (s *Store) UpdateInstance(ctx context.Context, instance Instance) error {
 		if current.Enabled == 1 {
 			return errors.New("实例必须先停用才能修改")
 		}
-		if current.FactorTaskID != instance.FactorTaskID {
+		tasks, err := instanceTasks(tx, instance.InstanceID)
+		if err != nil {
+			return err
+		}
+		if !SameTasks(tasks, instance.FactorTasks) {
 			return errors.New("实例的因子任务在创建时写定，不能修改")
 		}
 		if current.SessionID.Valid {
@@ -179,11 +256,7 @@ func (s *Store) ListInstances(ctx context.Context, spaceID string, enabled *bool
 	if err := s.db.WithContext(ctx).Raw(query, args...).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
-	instances := make([]Instance, 0, len(rows))
-	for _, row := range rows {
-		instances = append(instances, row.instance())
-	}
-	return instances, nil
+	return withTasks(s.db.WithContext(ctx), rows)
 }
 
 // EnabledInstancesByView 返回事件路由到某个 View 的启用实例：实例读取的是关联因子任务的结果 View，所以由 View ID
@@ -200,16 +273,26 @@ func (s *Store) EnabledInstancesByView(ctx context.Context, spaceID, viewID stri
 	var rows []instanceRow
 	if err := s.db.WithContext(ctx).Raw(`
 		SELECT `+instanceColumns+` FROM t_strategy_instances
-		WHERE c_space_id = ? AND c_factor_task_id = ? AND c_enabled = 1
+		WHERE c_space_id = ? AND c_enabled = 1
+		AND c_instance_id IN (SELECT c_instance_id FROM t_strategy_instance_tasks WHERE c_factor_task_id = ?)
 		ORDER BY c_instance_id
 	`, spaceID, taskID).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
-	instances := make([]Instance, 0, len(rows))
-	for _, row := range rows {
-		instances = append(instances, row.instance())
+	return withTasks(s.db.WithContext(ctx), rows)
+}
+
+// SameTasks 报告两份因子任务绑定相同。
+func SameTasks(a, b map[string]string) bool {
+	if len(a) != len(b) {
+		return false
 	}
-	return instances, nil
+	for market, taskID := range a {
+		if strings.TrimSpace(b[market]) != taskID {
+			return false
+		}
+	}
+	return true
 }
 
 // SetInstanceEnabled 推进启用握手：enabled=false 把会话挂到停用的实例上（启用流程先写会话再联系 Trade，认领响应
@@ -384,10 +467,20 @@ func requireMatchingSession(tx *gorm.DB, instance instanceRow, sessionID string)
 		return err
 	}
 	var resolved struct {
-		FactorTaskID string `json:"factor_task_id"`
+		Tasks map[string]struct {
+			FactorTaskID string `json:"factor_task_id"`
+		} `json:"tasks"`
 	}
 	_ = json.Unmarshal([]byte(session.ResolvedJSON), &resolved)
-	if definitionHash != session.DSLHash || resolved.FactorTaskID != instance.FactorTaskID {
+	sessionTasks := make(map[string]string, len(resolved.Tasks))
+	for market, task := range resolved.Tasks {
+		sessionTasks[market] = task.FactorTaskID
+	}
+	tasks, err := instanceTasks(tx, instance.InstanceID)
+	if err != nil {
+		return err
+	}
+	if definitionHash != session.DSLHash || !SameTasks(sessionTasks, tasks) {
 		return errors.New("实例在启用期间被修改，请重新启用")
 	}
 	return nil

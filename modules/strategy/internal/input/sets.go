@@ -207,10 +207,10 @@ func NewAgeProbe(client Client, spaceID string, resolved Resolved, view ViewInfo
 			return nil, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("min_age_bars=%d 的探针窗口无法换算：%v", resolved.MinAgeBars, err)}
 		}
 		if target, start := to.Add(-time.Nanosecond), CoverageStartAt(view, resolved, barStart); !start.IsZero() && target.Before(start) {
-			return nil, &SkipError{Reason: SkipHistoryInsufficient, Detail: fmt.Sprintf("min_age_bars=%d 需要 %s 的数据，但 View %s 的活跃序列当前最早只覆盖到 %s", resolved.MinAgeBars, PeriodLabel(resolved.Calendar, resolved.Bar, target), resolved.ViewID, PeriodLabel(resolved.Calendar, resolved.Bar, start))}
+			return nil, &SkipError{Reason: SkipHistoryInsufficient, Detail: fmt.Sprintf("min_age_bars=%d 需要 %s 的数据，但 View %s 的活跃序列当前最早只覆盖到 %s", resolved.MinAgeBars, PeriodLabel(resolved.Calendar, resolved.Bar, target), view.ViewID, PeriodLabel(resolved.Calendar, resolved.Bar, start))}
 		}
 		// 已证明年龄足够的标的直接放行，只探针其余的；全部已知时不发查询。
-		cacheKey := AgeKey{SpaceID: spaceID, ViewID: resolved.ViewID, IndexID: view.ActiveIndexID, MinAgeBars: resolved.MinAgeBars}
+		cacheKey := AgeKey{SpaceID: spaceID, ViewID: view.ViewID, IndexID: view.ActiveIndexID, MinAgeBars: resolved.MinAgeBars}
 		candidates := instruments
 		var hits []string
 		if meta != nil {
@@ -229,7 +229,7 @@ func NewAgeProbe(client Client, spaceID string, resolved Resolved, view ViewInfo
 				selected = append(selected, subject)
 			}
 		}
-		rows, _, err := client.QueryRows(ctx, spaceID, Query{ViewID: resolved.ViewID, DatasetID: view.DatasetID, Frequency: view.Frequency, Subjects: selected, Start: from, End: to, Columns: []string{ageProbeColumn}, ExpectedIndexID: view.ActiveIndexID, ExpectedRevision: revision})
+		rows, _, err := client.QueryRows(ctx, spaceID, Query{ViewID: view.ViewID, DatasetID: view.DatasetID, Frequency: view.Frequency, Subjects: selected, Start: from, End: to, Columns: []string{ageProbeColumn}, ExpectedIndexID: view.ActiveIndexID, ExpectedRevision: revision})
 		if err != nil {
 			return nil, fmt.Errorf("年龄探针查询：%w", err)
 		}
@@ -253,7 +253,7 @@ func NewAgeProbe(client Client, spaceID string, resolved Resolved, view ViewInfo
 				all = append(all, subject)
 			}
 			sort.Slice(all, func(i, j int) bool { return all[i].SubjectID < all[j].SubjectID })
-			present, _, err := client.QueryRows(ctx, spaceID, Query{ViewID: resolved.ViewID, DatasetID: view.DatasetID, Frequency: view.Frequency, Subjects: all, Start: from, End: to, Columns: []string{ageProbeColumn}, ExpectedIndexID: view.ActiveIndexID, ExpectedRevision: revision, Limit: 1})
+			present, _, err := client.QueryRows(ctx, spaceID, Query{ViewID: view.ViewID, DatasetID: view.DatasetID, Frequency: view.Frequency, Subjects: all, Start: from, End: to, Columns: []string{ageProbeColumn}, ExpectedIndexID: view.ActiveIndexID, ExpectedRevision: revision, Limit: 1})
 			if err != nil {
 				return nil, fmt.Errorf("年龄探针确认查询：%w", err)
 			}

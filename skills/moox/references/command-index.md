@@ -417,7 +417,7 @@
 | `strategy replay cancel` | 取消回放 |
 | `strategy replay list` | 列出策略历史回放 |
 | `strategy replay show` | 查看一次回放 |
-| `strategy replay start` | 开始一次策略历史回放 |
+| `strategy replay start` | 开始一次策略历史回放（支持现货、永续与混合市场） |
 | `strategy result list` | 列出实例每期的结果 |
 | `strategy result show` | 查看一期结果 |
 | `strategy show` | 查看一个策略定义 |

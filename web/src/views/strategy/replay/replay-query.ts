@@ -1,10 +1,12 @@
+import { formatFactorTasks, parseFactorTasks } from "@/views/strategy/market-mode";
 import { buildQuery, queryPage, queryString } from "@/views/strategy/query";
 
 /** 创建回放时的来源预填：入口一次性写入，不随表单输入更新。 */
 export interface ReplayPrefill {
   strategyId: string;
   instanceId: string;
-  factorTaskId: string;
+  /** 市场 → 因子任务。 */
+  factorTasks: Record<string, string>;
 }
 
 /** 回放页的 URL 状态：分析对象、两处分页、创建抽屉及其预填。 */
@@ -18,7 +20,7 @@ export interface ReplayQueryState {
 
 type QueryLike = Record<string, unknown>;
 
-export const emptyPrefill: ReplayPrefill = { strategyId: "", instanceId: "", factorTaskId: "" };
+export const emptyPrefill: ReplayPrefill = { strategyId: "", instanceId: "", factorTasks: {} };
 
 /** 从 URL 解析并规范化：非法页码回到 1；实例与定义同时出现时沿用“实例优先”，清掉定义。 */
 export function parseReplayQuery(query: QueryLike): ReplayQueryState {
@@ -31,7 +33,7 @@ export function parseReplayQuery(query: QueryLike): ReplayQueryState {
     prefill: {
       strategyId: instanceId ? "" : queryString(query.strategy_id as string),
       instanceId,
-      factorTaskId: queryString(query.factor_task_id as string)
+      factorTasks: parseFactorTasks(queryString(query.factor_tasks as string))
     }
   };
 }
@@ -50,7 +52,7 @@ export function buildReplayQuery(state: ReplayQueryState): Record<string, string
       create: state.create ? "1" : "",
       strategy_id: prefill.instanceId ? "" : prefill.strategyId,
       instance_id: prefill.instanceId,
-      factor_task_id: prefill.factorTaskId
+      factor_tasks: formatFactorTasks(prefill.factorTasks)
     },
     { page: 1, bar_page: 1 }
   );

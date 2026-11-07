@@ -37,7 +37,7 @@ type FactorTask struct {
 	Status          string `protobuf:"bytes,8,opt,name=status,proto3" json:"status,omitempty"`
 	CreatedAt       string `protobuf:"bytes,9,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	UpdatedAt       string `protobuf:"bytes,10,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
-	// bound_instance_id 是关联的策略实例：独占、永久，写入后不能修改；为空表示还没有关联。
+	// bound_instance_id 是关联的策略实例：一个任务只关联一个实例，一个实例可以关联多个任务；写入后不能修改；为空表示还没有关联。
 	BoundInstanceId string `protobuf:"bytes,11,opt,name=bound_instance_id,json=boundInstanceId,proto3" json:"bound_instance_id,omitempty"`
 }
 

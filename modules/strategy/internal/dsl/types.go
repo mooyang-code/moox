@@ -32,11 +32,15 @@ const (
 
 // Strategy 是解析并校验后的策略定义。
 type Strategy struct {
-	Name      string
-	Bar       string // 可选断言，规范频率；实际周期由绑定的 View 决定
-	Universe  Universe
-	Rules     []Rule
-	Portfolio Portfolio
+	Name string
+	Bar  string // 可选断言，规范频率；实际周期由绑定的 View 决定
+	// Market 是市场模式；DSL 没写 market 时为零值，由绑定的因子任务的市场填入默认值（见 Market）。
+	Market Market
+	// MarketDeclared 为真表示 DSL 里显式写了 market。
+	MarketDeclared bool
+	Universe       Universe
+	Rules          []Rule
+	Portfolio      Portfolio
 	// FactorParams 是可变成员的成员键 → 参数名 → 下一期参数的输出表达式（见 factors.go）。
 	FactorParams map[string]map[string]ParamExpr
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -61,7 +62,7 @@ func newReplayEvaluator(t *testing.T) *ReplayEvaluator {
 	if err := repo.CreateDefinition(ctx, store.Definition{StrategyID: "s1", Name: "demo", DSLYaml: rankDSL, DSLHash: hash, CreatedAt: bar0}); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.CreateInstance(ctx, store.Instance{InstanceID: "i1", StrategyID: "s1", SpaceID: "space", FactorTaskID: "ftask_a", CreatedAt: bar0}); err != nil {
+	if err := repo.CreateInstance(ctx, store.Instance{InstanceID: "i1", StrategyID: "s1", SpaceID: "space", FactorTasks: map[string]string{"spot": "ftask_a"}, CreatedAt: bar0}); err != nil {
 		t.Fatal(err)
 	}
 	return &ReplayEvaluator{Store: repo, Client: replayClient{}}
@@ -138,5 +139,61 @@ func TestReplayEvaluateRanksAndCarriesState(t *testing.T) {
 
 	if _, err := e.Evaluate(ctx, ReplayEvaluateRequest{ReplayID: "r1", InstanceID: "i1", DSLHash: "other", Period: period}); err == nil {
 		t.Fatal("没有绑定的版本不能求值")
+	}
+}
+
+// dualReplayClient 在 replayClient 之外再提供一个永续任务 ftask_b 的 View。
+type dualReplayClient struct{ replayClient }
+
+func (c dualReplayClient) GetView(ctx context.Context, space, viewID string) (input.ViewInfo, error) {
+	view, err := c.replayClient.GetView(ctx, space, "view_factor_a")
+	view.ViewID = viewID
+	if viewID == "view_factor_b" {
+		view.DatasetID = "ds2"
+	} else {
+		view.DatasetID = "ds"
+	}
+	return view, err
+}
+
+func (c dualReplayClient) GetDataset(_ context.Context, _, datasetID string) (input.DatasetInfo, error) {
+	market := "spot"
+	if datasetID == "ds2" {
+		market = "swap"
+	}
+	return input.DatasetInfo{DatasetID: datasetID, Frequency: "1h", Retention: "forever", Attributes: map[string]string{"market_type": market}}, nil
+}
+
+// 闭环回放只支持单个现货任务的实例：绑定了现货、永续两个任务的实例，以及非现货的实例，绑定时显式拒绝。
+func TestReplayBindRejectsDualTaskAndNonSpotInstances(t *testing.T) {
+	const mixedDSL = `name: mixed
+market: {select: both, prefer: spot}
+rules:
+  - id: r
+    type: rank
+    score: "m"
+    select: {top: 2}
+    weight: {total: 1}
+portfolio:
+  max_missing: 1
+`
+	ctx := context.Background()
+	repo, err := store.Open(filepath.Join(t.TempDir(), "strategy.sqlite"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+	if err := repo.ApplySchema(schema.AllSQL()); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.CreateDefinition(ctx, store.Definition{StrategyID: "s1", Name: "mixed", DSLYaml: mixedDSL, DSLHash: dsl.Hash([]byte(mixedDSL)), CreatedAt: bar0}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.CreateInstance(ctx, store.Instance{InstanceID: "i1", StrategyID: "s1", SpaceID: "space", FactorTasks: map[string]string{"spot": "ftask_a", "swap": "ftask_b"}, CreatedAt: bar0}); err != nil {
+		t.Fatal(err)
+	}
+	e := &ReplayEvaluator{Store: repo, Client: dualReplayClient{}}
+	if _, err := e.Bind(ctx, "i1"); err == nil || !strings.Contains(err.Error(), "只支持单个现货任务") {
+		t.Fatalf("双任务实例应被闭环回放拒绝：%v", err)
 	}
 }

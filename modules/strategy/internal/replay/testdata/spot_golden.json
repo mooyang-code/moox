@@ -1,0 +1,3148 @@
+{
+ "min_age_new_listing": {
+  "bars": [
+   {
+    "bar_end": 1788231600,
+    "equity": 99.9001,
+    "fee": 0.0999,
+    "frozen": 0,
+    "holdings": 1,
+    "liquidated": 0,
+    "positions": {
+     "cash": 0,
+     "positions": {
+      "A": {
+       "last_price": 102,
+       "quantity": 0.97941274,
+       "value": 99.9001
+      }
+     }
+    },
+    "return": -0.001,
+    "skip_reason": "",
+    "status": "ok",
+    "summary": {
+     "decision": {
+      "cash": "0",
+      "gross": "1",
+      "net": "1",
+      "rules": {
+       "r": {
+        "aged_out": 0,
+        "allocated": "1",
+        "available": 2,
+        "budget": "1",
+        "expected": 2,
+        "filtered": 0,
+        "missing": 0,
+        "scored": 2,
+        "selected": 1,
+        "weighted": 1
+       }
+      },
+      "turnover": "0.5",
+      "universe": 2
+     },
+     "ledger": {
+      "equity_after": 99.9001,
+      "equity_before": 100,
+      "fee": 0.0999,
+      "traded": 99.9001,
+      "turnover": 0.4995
+     },
+     "skip_reason": ""
+    },
+    "targets": [
+     {
+      "target_weight": "1"
+     }
+    ],
+    "turnover": 0.4995,
+    "unfilled": 0
+   },
+   {
+    "bar_end": 1788235200,
+    "equity": 100.8795,
+    "fee": 0,
+    "frozen": 0,
+    "holdings": 1,
+    "liquidated": 0,
+    "positions": {
+     "cash": 0,
+     "positions": {
+      "A": {
+       "last_price": 103,
+       "quantity": 0.97941274,
+       "value": 100.8795
+      }
+     }
+    },
+    "return": 0.0098,
+    "skip_reason": "",
+    "status": "ok",
+    "summary": {
+     "decision": {
+      "cash": "0",
+      "gross": "1",
+      "net": "1",
+      "rules": {
+       "r": {
+        "aged_out": 0,
+        "allocated": "1",
+        "available": 2,
+        "budget": "1",
+        "expected": 2,
+        "filtered": 0,
+        "missing": 0,
+        "scored": 2,
+        "selected": 1,
+        "weighted": 1
+       }
+      },
+      "turnover": "0",
+      "universe": 2
+     },
+     "ledger": {
+      "equity_after": 100.8795,
+      "equity_before": 100.8795,
+      "fee": 0,
+      "traded": 0,
+      "turnover": 0
+     },
+     "skip_reason": ""
+    },
+    "targets": [
+     {
+      "target_weight": "1"
+     }
+    ],
+    "turnover": 0,
+    "unfilled": 0
+   },
+   {
+    "bar_end": 1788238800,
+    "equity": 101.8589,
+    "fee": 0,
+    "frozen": 0,
+    "holdings": 1,
+    "liquidated": 0,
+    "positions": {
+     "cash": 0,
+     "positions": {
+      "A": {
+       "last_price": 104,
+       "quantity": 0.97941274,
+       "value": 101.8589
+      }
+     }
+    },
+    "return": 0.0097,
+    "skip_reason": "",
+    "status": "ok",
+    "summary": {
+     "decision": {
+      "cash": "0",
+      "gross": "1",
+      "net": "1",
+      "rules": {
+       "r": {
+        "aged_out": 0,
+        "allocated": "1",
+        "available": 2,
+        "budget": "1",
+        "expected": 2,
+        "filtered": 0,
+        "missing": 0,
+        "scored": 2,
+        "selected": 1,
+        "weighted": 1
+       }
+      },
+      "turnover": "0",
+      "universe": 2
+     },
+     "ledger": {
+      "equity_after": 101.8589,
+      "equity_before": 101.8589,
+      "fee": 0,
+      "traded": 0,
+      "turnover": 0
+     },
+     "skip_reason": ""
+    },
+    "targets": [
+     {
+      "target_weight": "1"
+     }
+    ],
+    "turnover": 0,
+    "unfilled": 0
+   },
+   {
+    "bar_end": 1788242400,
+    "equity": 102.8383,
+    "fee": 0,
+    "frozen": 0,
+    "holdings": 1,
+    "liquidated": 0,
+    "positions": {
+     "cash": 0,
+     "positions": {
+      "A": {
+       "last_price": 105,
+       "quantity": 0.97941274,
+       "value": 102.8383
+      }
+     }
+    },
+    "return": 0.0096,
+    "skip_reason": "",
+    "status": "ok",
+    "summary": {
+     "decision": {
+      "cash": "0",
+      "gross": "1",
+      "net": "1",
+      "rules": {
+       "r": {
+        "aged_out": 0,
+        "allocated": "1",
+        "available": 2,
+        "budget": "1",
+        "expected": 2,
+        "filtered": 0,
+        "missing": 0,
+        "scored": 2,
+        "selected": 1,
+        "weighted": 1
+       }
+      },
+      "turnover": "0",
+      "universe": 2
+     },
+     "ledger": {
+      "equity_after": 102.8383,
+      "equity_before": 102.8383,
+      "fee": 0,
+      "traded": 0,
+      "turnover": 0
+     },
+     "skip_reason": ""
+    },
+    "targets": [
+     {
+      "target_weight": "1"
+     }
+    ],
+    "turnover": 0,
+    "unfilled": 0
+   },
+   {
+    "bar_end": 1788246000,
+    "equity": 103.8178,
+    "fee": 0,
+    "frozen": 0,
+    "holdings": 1,
+    "liquidated": 0,
+    "positions": {
+     "cash": 0,
+     "positions": {
+      "A": {
+       "last_price": 106,
+       "quantity": 0.97941274,
+       "value": 103.8178
+      }
+     }
+    },
+    "return": 0.0095,
+    "skip_reason": "",
+    "status": "ok",
+    "summary": {
+     "decision": {
+      "cash": "0",
+      "gross": "1",
+      "net": "1",
+      "rules": {
+       "r": {
+        "aged_out": 0,
+        "allocated": "1",
+        "available": 2,
+        "budget": "1",
+        "expected": 2,
+        "filtered": 0,
+        "missing": 0,
+        "scored": 2,
+        "selected": 1,
+        "weighted": 1
+       }
+      },
+      "turnover": "0",
+      "universe": 2
+     },
+     "ledger": {
+      "equity_after": 103.8178,
+      "equity_before": 103.8178,
+      "fee": 0,
+      "traded": 0,
+      "turnover": 0
+     },
+     "skip_reason": ""
+    },
+    "targets": [
+     {
+      "target_weight": "1"
+     }
+    ],
+    "turnover": 0,
+    "unfilled": 0
+   },
+   {
+    "bar_end": 1788249600,
+    "equity": 104.7972,
+    "fee": 0,
+    "frozen": 0,
+    "holdings": 1,
+    "liquidated": 0,
+    "positions": {
+     "cash": 0,
+     "positions": {
+      "A": {
+       "last_price": 107,
+       "quantity": 0.97941274,
+       "value": 104.7972
+      }
+     }
+    },
+    "return": 0.0094,
+    "skip_reason": "",
+    "status": "ok",
+    "summary": {
+     "decision": {
+      "cash": "0",
+      "gross": "1",
+      "net": "1",
+      "rules": {
+       "r": {
+        "aged_out": 1,
+        "allocated": "1",
+        "available": 2,
+        "budget": "1",
+        "expected": 3,
+        "filtered": 0,
+        "missing": 0,
+        "scored": 2,
+        "selected": 1,
+        "weighted": 1
+       }
+      },
+      "turnover": "0",
+      "universe": 3
+     },
+     "ledger": {
+      "equity_after": 104.7972,
+      "equity_before": 104.7972,
+      "fee": 0,
+      "traded": 0,
+      "turnover": 0
+     },
+     "skip_reason": ""
+    },
+    "targets": [
+     {
+      "target_weight": "1"
+     }
+    ],
+    "turnover": 0,
+    "unfilled": 0
+   },
+   {
+    "bar_end": 1788253200,
+    "equity": 105.7766,
+    "fee": 0,
+    "frozen": 0,
+    "holdings": 1,
+    "liquidated": 0,
+    "positions": {
+     "cash": 0,
+     "positions": {
+      "A": {
+       "last_price": 108,
+       "quantity": 0.97941274,
+       "value": 105.7766
+      }
+     }
+    },
+    "return": 0.0093,
+    "skip_reason": "",
+    "status": "ok",
+    "summary": {
+     "decision": {
+      "cash": "0",
+      "gross": "1",
+      "net": "1",
+      "rules": {
+       "r": {
+        "aged_out": 1,
+        "allocated": "1",
+        "available": 2,
+        "budget": "1",
+        "expected": 3,
+        "filtered": 0,
+        "missing": 0,
+        "scored": 2,
+        "selected": 1,
+        "weighted": 1
+       }
+      },
+      "turnover": "0",
+      "universe": 3
+     },
+     "ledger": {
+      "equity_after": 105.7766,
+      "equity_before": 105.7766,
+      "fee": 0,
+      "traded": 0,
+      "turnover": 0
+     },
+     "skip_reason": ""
+    },
+    "targets": [
+     {
+      "target_weight": "1"
+     }
+    ],
+    "turnover": 0,
+    "unfilled": 0
+   },
+   {
+    "bar_end": 1788256800,
+    "equity": 106.5427,
+    "fee": 0.2133,
+    "frozen": 0,
+    "holdings": 1,
+    "liquidated": 0,
+    "positions": {
+     "cash": 0,
+     "positions": {
+      "B": {
+       "last_price": 58,
+       "quantity": 1.83694294,
+       "value": 106.5427
+      }
+     }
+    },
+    "return": 0.0072,
+    "skip_reason": "",
+    "status": "ok",
+    "summary": {
+     "decision": {
+      "cash": "0",
+      "gross": "1",
+      "net": "1",
+      "rules": {
+       "r": {
+        "aged_out": 0,
+        "allocated": "1",
+        "available": 3,
+        "budget": "1",
+        "expected": 3,
+        "filtered": 0,
+        "missing": 0,
+        "scored": 3,
+        "selected": 1,
+        "weighted": 1
+       }
+      },
+      "turnover": "1",
+      "universe": 3
+     },
+     "ledger": {
+      "equity_after": 106.5427,
+      "equity_before": 106.756,
+      "fee": 0.2133,
+      "traded": 213.2987,
+      "turnover": 0.999
+     },
+     "skip_reason": ""
+    },
+    "targets": [
+     {
+      "target_weight": "1"
+     }
+    ],
+    "turnover": 0.999,
+    "unfilled": 0
+   },
+   {
+    "bar_end": 1788260400,
+    "equity": 91.6636,
+    "fee": 0.1835,
+    "frozen": 0,
+    "holdings": 1,
+    "liquidated": 0,
+    "positions": {
+     "cash": 0,
+     "positions": {
+      "A": {
+       "last_price": 110,
+       "quantity": 0.83330578,
+       "value": 91.6636
+      }
+     }
+    },
+    "return": -0.1397,
+    "skip_reason": "",
+    "status": "ok",
+    "summary": {
+     "decision": {
+      "cash": "0",
+      "gross": "1",
+      "net": "1",
+      "rules": {
+       "r": {
+        "aged_out": 0,
+        "allocated": "1",
+        "available": 3,
+        "budget": "1",
+        "expected": 3,
+        "filtered": 0,
+        "missing": 0,
+        "scored": 3,
+        "selected": 1,
+        "weighted": 1
+       }
+      },
+      "turnover": "1",
+      "universe": 3
+     },
+     "ledger": {
+      "equity_after": 91.6636,
+      "equity_before": 91.8471,
+      "fee": 0.1835,
+      "traded": 183.5108,
+      "turnover": 0.999
+     },
+     "skip_reason": ""
+    },
+    "targets": [
+     {
+      "target_weight": "1"
+     }
+    ],
+    "turnover": 0.999,
+    "unfilled": 0
+   },
+   {
+    "bar_end": 1788264000,
+    "equity": 92.3121,
+    "fee": 0.1848,
+    "frozen": 0,
+    "holdings": 1,
+    "liquidated": 0,
+    "positions": {
+     "cash": 0,
+     "positions": {
+      "B": {
+       "last_price": 52,
+       "quantity": 1.77523332,
+       "value": 92.3121
+      }
+     }
+    },
+    "return": 0.0071,
+    "skip_reason": "",
+    "status": "ok",
+    "summary": {
+     "decision": {
+      "cash": "0",
+      "gross": "1",
+      "net": "1",
+      "rules": {
+       "r": {
+        "aged_out": 0,
+        "allocated": "1",
+        "available": 3,
+        "budget": "1",
+        "expected": 3,
+        "filtered": 0,
+        "missing": 0,
+        "scored": 3,
+        "selected": 1,
+        "weighted": 1
+       }
+      },
+      "turnover": "1",
+      "universe": 3
+     },
+     "ledger": {
+      "equity_after": 92.3121,
+      "equity_before": 92.4969,
+      "fee": 0.1848,
+      "traded": 184.8091,
+      "turnover": 0.999
+     },
+     "skip_reason": ""
+    },
+    "targets": [
+     {
+      "target_weight": "1"
+     }
+    ],
+    "turnover": 0.999,
+    "unfilled": 0
+   },
+   {
+    "bar_end": 1788267600,
+    "equity": 95.8626,
+    "fee": 0,
+    "frozen": 0,
+    "holdings": 1,
+    "liquidated": 0,
+    "positions": {
+     "cash": 0,
+     "positions": {
+      "B": {
+       "last_price": 54,
+       "quantity": 1.77523332,
+       "value": 95.8626
+      }
+     }
+    },
+    "return": 0.0385,
+    "skip_reason": "",
+    "status": "ok",
+    "summary": {
+     "decision": {
+      "cash": "0",
+      "gross": "1",
+      "net": "1",
+      "rules": {
+       "r": {
+        "aged_out": 0,
+        "allocated": "1",
+        "available": 3,
+        "budget": "1",
+        "expected": 3,
+        "filtered": 0,
+        "missing": 0,
+        "scored": 3,
+        "selected": 1,
+        "weighted": 1
+       }
+      },
+      "turnover": "0",
+      "universe": 3
+     },
+     "ledger": {
+      "equity_after": 95.8626,
+      "equity_before": 95.8626,
+      "fee": 0,
+      "traded": 0,
+      "turnover": 0
+     },
+     "skip_reason": ""
+    },
+    "targets": [
+     {
+      "target_weight": "1"
+     }
+    ],
+    "turnover": 0,
+    "unfilled": 0
+   },
+   {
+    "bar_end": 1788271200,
+    "equity": 99.4131,
+    "fee": 0,
+    "frozen": 0,
+    "holdings": 1,
+    "liquidated": 0,
+    "positions": {
+     "cash": 0,
+     "positions": {
+      "B": {
+       "last_price": 56,
+       "quantity": 1.77523332,
+       "value": 99.4131
+      }
+     }
+    },
+    "return": 0.037,
+    "skip_reason": "",
+    "status": "ok",
+    "summary": {
+     "decision": {
+      "cash": "0",
+      "gross": "1",
+      "net": "1",
+      "rules": {
+       "r": {
+        "aged_out": 0,
+        "allocated": "1",
+        "available": 3,
+        "budget": "1",
+        "expected": 3,
+        "filtered": 0,
+        "missing": 0,
+        "scored": 3,
+        "selected": 1,
+        "weighted": 1
+       }
+      },
+      "turnover": "0",
+      "universe": 3
+     },
+     "ledger": {
+      "equity_after": 99.4131,
+      "equity_before": 99.4131,
+      "fee": 0,
+      "traded": 0,
+      "turnover": 0
+     },
+     "skip_reason": ""
+    },
+    "targets": [
+     {
+      "target_weight": "1"
+     }
+    ],
+    "turnover": 0,
+    "unfilled": 0
+   }
+  ],
+  "metrics": {
+   "average_holdings": 1,
+   "average_turnover": 0.2914,
+   "bars": 12,
+   "factors": {
+    "mom": "sha256:mom|fixed"
+   },
+   "final_equity": 99.4131,
+   "first_bar_end": "2026-09-01T03:00:00Z",
+   "initial_equity": 100,
+   "last_bar_end": "2026-09-01T14:00:00Z",
+   "limitations": [
+    "研究回放：按当期 close 成交的理想化假设，与实盘在 bar_end 之后成交不同",
+    "区间内历史行版本未验证：因子结果行不携带版本，只核对了回放开始时的因子定义指纹",
+    "基础集合取每期有行的标的，与实时事件名单可能不同；数据集的全部标的绑定（含已停用）都参与读取",
+    "手续费只按实际成交额计；不含滑点与盘口冲击",
+    "持有标的连续缺价 3 期后在 ok 期按最后价清算（研究假设）",
+    "区间不足一周，不给出年化收益"
+   ],
+   "liquidations": 0,
+   "max_drawdown": 0.1397,
+   "ok_bars": 12,
+   "skipped_bars": 0,
+   "total_fee": 0.6815,
+   "total_return": -0.0059,
+   "unfilled_bars": 0
+  }
+ },
+ "previous_bar_ambiguous": {
+  "bars": [
+   {
+    "bar_end": 1788231600,
+    "equity": 99.9001,
+    "fee": 0.0999,
+    "frozen": 0,
+    "holdings": 1,
+    "liquidated": 0,
+    "positions": {
+     "cash": 0,
+     "positions": {
+      "B": {
+       "last_price": 54,
+       "quantity": 1.85000185,
+       "value": 99.9001
+      }
+     }
+    },
+    "return": -0.001,
+    "skip_reason": "",
+    "status": "ok",
+    "summary": {
+     "decision": {
+      "cash": "0",
+      "gross": "1",
+      "net": "1",
+      "rules": {
+       "r": {
+        "aged_out": 0,
+        "allocated": "1",
+        "available": 3,
+        "budget": "1",
+        "expected": 3,
+        "filtered": 0,
+        "missing": 0,
+        "scored": 3,
+        "selected": 1,
+        "weighted": 1
+       }
+      },
+      "turnover": "0.5",
+      "universe": 3
+     },
+     "ledger": {
+      "equity_after": 99.9001,
+      "equity_before": 100,
+      "fee": 0.0999,
+      "traded": 99.9001,
+      "turnover": 0.4995
+     },
+     "skip_reason": ""
+    },
+    "targets": [
+     {
+      "target_weight": "1"
+     }
+    ],
+    "turnover": 0.4995,
+    "unfilled": 0
+   },
+   {
+    "bar_end": 1788235200,
+    "equity": 103.6001,
+    "fee": 0,
+    "frozen": 0,
+    "holdings": 1,
+    "liquidated": 0,
+    "positions": {
+     "cash": 0,
+     "positions": {
+      "B": {
+       "last_price": 56,
+       "quantity": 1.85000185,
+       "value": 103.6001
+      }
+     }
+    },
+    "return": 0.037,
+    "skip_reason": "",
+    "status": "ok",
+    "summary": {
+     "decision": {
+      "cash": "0",
+      "gross": "1",
+      "net": "1",
+      "rules": {
+       "r": {
+        "aged_out": 0,
+        "allocated": "1",
+        "available": 3,
+        "budget": "1",
+        "expected": 3,
+        "filtered": 0,
+        "missing": 0,
+        "scored": 3,
+        "selected": 1,
+        "weighted": 1
+       }
+      },
+      "turnover": "0",
+      "universe": 3
+     },
+     "ledger": {
+      "equity_after": 103.6001,
+      "equity_before": 103.6001,
+      "fee": 0,
+      "traded": 0,
+      "turnover": 0
+     },
+     "skip_reason": ""
+    },
+    "targets": [
+     {
+      "target_weight": "1"
+     }
+    ],
+    "turnover": 0,
+    "unfilled": 0
+   },
+   {
+    "bar_end": 1788238800,
+    "equity": 107.3001,
+    "fee": 0,
+    "frozen": 0,
+    "holdings": 1,
+    "liquidated": 0,
+    "positions": {
+     "cash": 0,
+     "positions": {
+      "B": {
+       "last_price": 58,
+       "quantity": 1.85000185,
+       "value": 107.3001
+      }
+     }
+    },
+    "return": 0.0357,
+    "skip_reason": "",
+    "status": "ok",
+    "summary": {
+     "decision": {
+      "cash": "0",
+      "gross": "1",
+      "net": "1",
+      "rules": {
+       "r": {
+        "aged_out": 0,
+        "allocated": "1",
+        "available": 3,
+        "budget": "1",
+        "expected": 3,
+        "filtered": 0,
+        "missing": 0,
+        "scored": 3,
+        "selected": 1,
+        "weighted": 1
+       }
+      },
+      "turnover": "0",
+      "universe": 3
+     },
+     "ledger": {
+      "equity_after": 107.3001,
+      "equity_before": 107.3001,
+      "fee": 0,
+      "traded": 0,
+      "turnover": 0
+     },
+     "skip_reason": ""
+    },
+    "targets": [
+     {
+      "target_weight": "1"
+     }
+    ],
+    "turnover": 0,
+    "unfilled": 0
+   },
+   {
+    "bar_end": 1788242400,
+    "equity": 92.3153,
+    "fee": 0.1848,
+    "frozen": 0,
+    "holdings": 1,
+    "liquidated": 0,
+    "positions": {
+     "cash": 0,
+     "positions": {
+      "A": {
+       "last_price": 105,
+       "quantity": 0.87919312,
+       "value": 92.3153
+      }
+     }
+    },
+    "return": -0.1397,
+    "skip_reason": "",
+    "status": "ok",
+    "summary": {
+     "decision": {
+      "cash": "0",
+      "gross": "1",
+      "net": "1",
+      "rules": {
+       "r": {
+        "aged_out": 0,
+        "allocated": "1",
+        "available": 3,
+        "budget": "1",
+        "expected": 3,
+        "filtered": 0,
+        "missing": 0,
+        "scored": 3,
+        "selected": 1,
+        "weighted": 1
+       }
+      },
+      "turnover": "1",
+      "universe": 3
+     },
+     "ledger": {
+      "equity_after": 92.3153,
+      "equity_before": 92.5001,
+      "fee": 0.1848,
+      "traded": 184.8154,
+      "turnover": 0.999
+     },
+     "skip_reason": ""
+    },
+    "targets": [
+     {
+      "target_weight": "1"
+     }
+    ],
+    "turnover": 0.999,
+    "unfilled": 0
+   },
+   {
+    "bar_end": 1788246000,
+    "equity": 92.3153,
+    "fee": 0,
+    "frozen": 1,
+    "holdings": 1,
+    "liquidated": 0,
+    "positions": {
+     "cash": 0,
+     "positions": {
+      "A": {
+       "frozen": true,
+       "last_price": 105,
+       "missing_bars": 1,
+       "quantity": 0.87919312,
+       "value": 92.3153
+      }
+     }
+    },
+    "return": 0,
+    "skip_reason": "ambiguous_series",
+    "status": "skipped",
+    "summary": {
+     "decision": {
+      "notes": [
+       "标的 A 在同一周期有多个序列（venue:binance、venue:other）"
+      ],
+      "rules": null,
+      "universe": 0
+     },
+     "ledger": {
+      "equity_after": 92.3153,
+      "equity_before": 92.3153,
+      "fee": 0,
+      "traded": 0,
+      "turnover": 0
+     },
+     "skip_reason": "ambiguous_series"
+    },
+    "targets": [],
+    "turnover": 0,
+    "unfilled": 0
+   },
+   {
+    "bar_end": 1788249600,
+    "equity": 94.0737,
+    "fee": 0,
+    "frozen": 0,
+    "holdings": 1,
+    "liquidated": 0,
+    "positions": {
+     "cash": 0,
+     "positions": {
+      "A": {
+       "last_price": 107,
+       "quantity": 0.87919312,
+       "value": 94.0737
+      }
+     }
+    },
+    "return": 0.019,
+    "skip_reason": "ambiguous_series",
+    "status": "skipped",
+    "summary": {
+     "decision": {
+      "notes": [
+       "上一根：标的 A 在同一周期有多个序列（venue:binance、venue:other）"
+      ],
+      "rules": null,
+      "universe": 0
+     },
+     "ledger": {
+      "equity_after": 94.0737,
+      "equity_before": 94.0737,
+      "fee": 0,
+      "traded": 0,
+      "turnover": 0
+     },
+     "skip_reason": "ambiguous_series"
+    },
+    "targets": [],
+    "turnover": 0,
+    "unfilled": 0
+   },
+   {
+    "bar_end": 1788253200,
+    "equity": 94.7631,
+    "fee": 0.1897,
+    "frozen": 0,
+    "holdings": 1,
+    "liquidated": 0,
+    "positions": {
+     "cash": 0,
+     "positions": {
+      "B": {
+       "last_price": 56,
+       "quantity": 1.69219894,
+       "value": 94.7631
+      }
+     }
+    },
+    "return": 0.0073,
+    "skip_reason": "",
+    "status": "ok",
+    "summary": {
+     "decision": {
+      "cash": "0",
+      "gross": "1",
+      "net": "1",
+      "rules": {
+       "r": {
+        "aged_out": 0,
+        "allocated": "1",
+        "available": 3,
+        "budget": "1",
+        "expected": 3,
+        "filtered": 0,
+        "missing": 0,
+        "scored": 3,
+        "selected": 1,
+        "weighted": 1
+       }
+      },
+      "turnover": "1",
+      "universe": 3
+     },
+     "ledger": {
+      "equity_after": 94.7631,
+      "equity_before": 94.9529,
+      "fee": 0.1897,
+      "traded": 189.716,
+      "turnover": 0.999
+     },
+     "skip_reason": ""
+    },
+    "targets": [
+     {
+      "target_weight": "1"
+     }
+    ],
+    "turnover": 0.999,
+    "unfilled": 0
+   },
+   {
+    "bar_end": 1788256800,
+    "equity": 94.7631,
+    "fee": 0,
+    "frozen": 1,
+    "holdings": 1,
+    "liquidated": 0,
+    "positions": {
+     "cash": 0,
+     "positions": {
+      "B": {
+       "frozen": true,
+       "last_price": 56,
+       "missing_bars": 1,
+       "quantity": 1.69219894,
+       "value": 94.7631
+      }
+     }
+    },
+    "return": 0,
+    "skip_reason": "",
+    "status": "ok",
+    "summary": {
+     "decision": {
+      "cash": "0",
+      "gross": "1",
+      "net": "1",
+      "rules": {
+       "r": {
+        "aged_out": 0,
+        "allocated": "1",
+        "available": 2,
+        "budget": "1",
+        "expected": 2,
+        "filtered": 0,
+        "missing": 0,
+        "scored": 2,
+        "selected": 1,
+        "weighted": 1
+       }
+      },
+      "turnover": "1",
+      "universe": 2
+     },
+     "ledger": {
+      "buy_scale": 0,
+      "equity_after": 94.7631,
+      "equity_before": 94.7631,
+      "fee": 0,
+      "traded": 0,
+      "turnover": 0,
+      "unfilled": [
+       "A",
+       "B"
+      ]
+     },
+     "skip_reason": ""
+    },
+    "targets": [
+     {
+      "target_weight": "1"
+     }
+    ],
+    "turnover": 0,
+    "unfilled": 2
+   },
+   {
+    "bar_end": 1788260400,
+    "equity": 94.5738,
+    "fee": 0.1893,
+    "frozen": 0,
+    "holdings": 1,
+    "liquidated": 1,
+    "positions": {
+     "cash": 0,
+     "positions": {
+      "A": {
+       "last_price": 110,
+       "quantity": 0.85976185,
+       "value": 94.5738
+      }
+     }
+    },
+    "return": -0.002,
+    "skip_reason": "",
+    "status": "ok",
+    "summary": {
+     "decision": {
+      "cash": "0",
+      "gross": "1",
+      "net": "1",
+      "rules": {
+       "r": {
+        "aged_out": 0,
+        "allocated": "1",
+        "available": 2,
+        "budget": "1",
+        "expected": 2,
+        "filtered": 0,
+        "missing": 0,
+        "scored": 2,
+        "selected": 1,
+        "weighted": 1
+       }
+      },
+      "turnover": "0",
+      "universe": 2
+     },
+     "ledger": {
+      "equity_after": 94.5738,
+      "equity_before": 94.7631,
+      "fee": 0.1893,
+      "liquidated": [
+       "B"
+      ],
+      "traded": 189.3369,
+      "turnover": 0.999
+     },
+     "skip_reason": ""
+    },
+    "targets": [
+     {
+      "target_weight": "1"
+     }
+    ],
+    "turnover": 0.999,
+    "unfilled": 0
+   },
+   {
+    "bar_end": 1788264000,
+    "equity": 95.4336,
+    "fee": 0,
+    "frozen": 0,
+    "holdings": 1,
+    "liquidated": 0,
+    "positions": {
+     "cash": 0,
+     "positions": {
+      "A": {
+       "last_price": 111,
+       "quantity": 0.85976185,
+       "value": 95.4336
+      }
+     }
+    },
+    "return": 0.0091,
+    "skip_reason": "",
+    "status": "ok",
+    "summary": {
+     "decision": {
+      "cash": "0",
+      "gross": "1",
+      "net": "1",
+      "rules": {
+       "r": {
+        "aged_out": 0,
+        "allocated": "1",
+        "available": 2,
+        "budget": "1",
+        "expected": 3,
+        "filtered": 0,
+        "missing": 1,
+        "scored": 2,
+        "selected": 1,
+        "weighted": 1
+       }
+      },
+      "turnover": "0",
+      "universe": 3
+     },
+     "ledger": {
+      "equity_after": 95.4336,
+      "equity_before": 95.4336,
+      "fee": 0,
+      "traded": 0,
+      "turnover": 0
+     },
+     "skip_reason": ""
+    },
+    "targets": [
+     {
+      "target_weight": "1"
+     }
+    ],
+    "turnover": 0,
+    "unfilled": 0
+   },
+   {
+    "bar_end": 1788267600,
+    "equity": 96.1009,
+    "fee": 0.1924,
+    "frozen": 0,
+    "holdings": 1,
+    "liquidated": 0,
+    "positions": {
+     "cash": 0,
+     "positions": {
+      "B": {
+       "last_price": 54,
+       "quantity": 1.77964691,
+       "value": 96.1009
+      }
+     }
+    },
+    "return": 0.007,
+    "skip_reason": "",
+    "status": "ok",
+    "summary": {
+     "decision": {
+      "cash": "0",
+      "gross": "1",
+      "net": "1",
+      "rules": {
+       "r": {
+        "aged_out": 0,
+        "allocated": "1",
+        "available": 3,
+        "budget": "1",
+        "expected": 3,
+        "filtered": 0,
+        "missing": 0,
+        "scored": 3,
+        "selected": 1,
+        "weighted": 1
+       }
+      },
+      "turnover": "1",
+      "universe": 3
+     },
+     "ledger": {
+      "equity_after": 96.1009,
+      "equity_before": 96.2933,
+      "fee": 0.1924,
+      "traded": 192.3943,
+      "turnover": 0.999
+     },
+     "skip_reason": ""
+    },
+    "targets": [
+     {
+      "target_weight": "1"
+     }
+    ],
+    "turnover": 0.999,
+    "unfilled": 0
+   },
+   {
+    "bar_end": 1788271200,
+    "equity": 99.6602,
+    "fee": 0,
+    "frozen": 0,
+    "holdings": 1,
+    "liquidated": 0,
+    "positions": {
+     "cash": 0,
+     "positions": {
+      "B": {
+       "last_price": 56,
+       "quantity": 1.77964691,
+       "value": 99.6602
+      }
+     }
+    },
+    "return": 0.037,
+    "skip_reason": "",
+    "status": "ok",
+    "summary": {
+     "decision": {
+      "cash": "0",
+      "gross": "1",
+      "net": "1",
+      "rules": {
+       "r": {
+        "aged_out": 0,
+        "allocated": "1",
+        "available": 3,
+        "budget": "1",
+        "expected": 3,
+        "filtered": 0,
+        "missing": 0,
+        "scored": 3,
+        "selected": 1,
+        "weighted": 1
+       }
+      },
+      "turnover": "0",
+      "universe": 3
+     },
+     "ledger": {
+      "equity_after": 99.6602,
+      "equity_before": 99.6602,
+      "fee": 0,
+      "traded": 0,
+      "turnover": 0
+     },
+     "skip_reason": ""
+    },
+    "targets": [
+     {
+      "target_weight": "1"
+     }
+    ],
+    "turnover": 0,
+    "unfilled": 0
+   }
+  ],
+  "metrics": {
+   "average_holdings": 1,
+   "average_turnover": 0.4496,
+   "bars": 12,
+   "final_equity": 99.6602,
+   "first_bar_end": "2026-09-01T03:00:00Z",
+   "initial_equity": 100,
+   "last_bar_end": "2026-09-01T14:00:00Z",
+   "limitations": [
+    "研究回放：按当期 close 成交的理想化假设，与实盘在 bar_end 之后成交不同",
+    "区间内历史行版本未验证：因子结果行不携带版本，只核对了回放开始时的因子定义指纹",
+    "基础集合取每期有行的标的，与实时事件名单可能不同；数据集的全部标的绑定（含已停用）都参与读取",
+    "手续费只按实际成交额计；不含滑点与盘口冲击",
+    "持有标的连续缺价 2 期后在 ok 期按最后价清算（研究假设）",
+    "区间不足一周，不给出年化收益"
+   ],
+   "liquidations": 1,
+   "max_drawdown": 0.1397,
+   "ok_bars": 10,
+   "skip_reasons": {
+    "ambiguous_series": 2
+   },
+   "skipped_bars": 2,
+   "total_fee": 0.8562,
+   "total_return": -0.0034,
+   "unfilled_bars": 1
+  }
+ },
+ "top1_missing_price": {
+  "bars": [
+   {
+    "bar_end": 1788231600,
+    "equity": 99.9001,
+    "fee": 0.0999,
+    "frozen": 0,
+    "holdings": 1,
+    "liquidated": 0,
+    "positions": {
+     "cash": 0,
+     "positions": {
+      "B": {
+       "last_price": 54,
+       "quantity": 1.85000185,
+       "value": 99.9001
+      }
+     }
+    },
+    "return": -0.001,
+    "skip_reason": "",
+    "status": "ok",
+    "summary": {
+     "decision": {
+      "cash": "0",
+      "gross": "1",
+      "net": "1",
+      "rules": {
+       "r": {
+        "aged_out": 0,
+        "allocated": "1",
+        "available": 3,
+        "budget": "1",
+        "expected": 3,
+        "filtered": 0,
+        "missing": 0,
+        "scored": 3,
+        "selected": 1,
+        "weighted": 1
+       }
+      },
+      "turnover": "0.5",
+      "universe": 3
+     },
+     "ledger": {
+      "equity_after": 99.9001,
+      "equity_before": 100,
+      "fee": 0.0999,
+      "traded": 99.9001,
+      "turnover": 0.4995
+     },
+     "skip_reason": ""
+    },
+    "targets": [
+     {
+      "target_weight": "1"
+     }
+    ],
+    "turnover": 0.4995,
+    "unfilled": 0
+   },
+   {
+    "bar_end": 1788235200,
+    "equity": 103.6001,
+    "fee": 0,
+    "frozen": 0,
+    "holdings": 1,
+    "liquidated": 0,
+    "positions": {
+     "cash": 0,
+     "positions": {
+      "B": {
+       "last_price": 56,
+       "quantity": 1.85000185,
+       "value": 103.6001
+      }
+     }
+    },
+    "return": 0.037,
+    "skip_reason": "",
+    "status": "ok",
+    "summary": {
+     "decision": {
+      "cash": "0",
+      "gross": "1",
+      "net": "1",
+      "rules": {
+       "r": {
+        "aged_out": 0,
+        "allocated": "1",
+        "available": 3,
+        "budget": "1",
+        "expected": 3,
+        "filtered": 0,
+        "missing": 0,
+        "scored": 3,
+        "selected": 1,
+        "weighted": 1
+       }
+      },
+      "turnover": "0",
+      "universe": 3
+     },
+     "ledger": {
+      "equity_after": 103.6001,
+      "equity_before": 103.6001,
+      "fee": 0,
+      "traded": 0,
+      "turnover": 0
+     },
+     "skip_reason": ""
+    },
+    "targets": [
+     {
+      "target_weight": "1"
+     }
+    ],
+    "turnover": 0,
+    "unfilled": 0
+   },
+   {
+    "bar_end": 1788238800,
+    "equity": 107.3001,
+    "fee": 0,
+    "frozen": 0,
+    "holdings": 1,
+    "liquidated": 0,
+    "positions": {
+     "cash": 0,
+     "positions": {
+      "B": {
+       "last_price": 58,
+       "quantity": 1.85000185,
+       "value": 107.3001
+      }
+     }
+    },
+    "return": 0.0357,
+    "skip_reason": "",
+    "status": "ok",
+    "summary": {
+     "decision": {
+      "cash": "0",
+      "gross": "1",
+      "net": "1",
+      "rules": {
+       "r": {
+        "aged_out": 0,
+        "allocated": "1",
+        "available": 3,
+        "budget": "1",
+        "expected": 3,
+        "filtered": 0,
+        "missing": 0,
+        "scored": 3,
+        "selected": 1,
+        "weighted": 1
+       }
+      },
+      "turnover": "0",
+      "universe": 3
+     },
+     "ledger": {
+      "equity_after": 107.3001,
+      "equity_before": 107.3001,
+      "fee": 0,
+      "traded": 0,
+      "turnover": 0
+     },
+     "skip_reason": ""
+    },
+    "targets": [
+     {
+      "target_weight": "1"
+     }
+    ],
+    "turnover": 0,
+    "unfilled": 0
+   },
+   {
+    "bar_end": 1788242400,
+    "equity": 92.3153,
+    "fee": 0.1848,
+    "frozen": 0,
+    "holdings": 1,
+    "liquidated": 0,
+    "positions": {
+     "cash": 0,
+     "positions": {
+      "C": {
+       "last_price": 12,
+       "quantity": 7.69293976,
+       "value": 92.3153
+      }
+     }
+    },
+    "return": -0.1397,
+    "skip_reason": "",
+    "status": "ok",
+    "summary": {
+     "decision": {
+      "cash": "0",
+      "gross": "1",
+      "net": "1",
+      "rules": {
+       "r": {
+        "aged_out": 0,
+        "allocated": "1",
+        "available": 2,
+        "budget": "1",
+        "expected": 2,
+        "filtered": 0,
+        "missing": 0,
+        "scored": 2,
+        "selected": 1,
+        "weighted": 1
+       }
+      },
+      "turnover": "1",
+      "universe": 2
+     },
+     "ledger": {
+      "equity_after": 92.3153,
+      "equity_before": 92.5001,
+      "fee": 0.1848,
+      "traded": 184.8154,
+      "turnover": 0.999
+     },
+     "skip_reason": ""
+    },
+    "targets": [
+     {
+      "target_weight": "1"
+     }
+    ],
+    "turnover": 0.999,
+    "unfilled": 0
+   },
+   {
+    "bar_end": 1788246000,
+    "equity": 76.7757,
+    "fee": 0.1537,
+    "frozen": 0,
+    "holdings": 1,
+    "liquidated": 0,
+    "positions": {
+     "cash": 0,
+     "positions": {
+      "B": {
+       "last_price": 52,
+       "quantity": 1.47645563,
+       "value": 76.7757
+      }
+     }
+    },
+    "return": -0.1683,
+    "skip_reason": "",
+    "status": "ok",
+    "summary": {
+     "decision": {
+      "cash": "0",
+      "gross": "1",
+      "net": "1",
+      "rules": {
+       "r": {
+        "aged_out": 0,
+        "allocated": "1",
+        "available": 2,
+        "budget": "1",
+        "expected": 2,
+        "filtered": 0,
+        "missing": 0,
+        "scored": 2,
+        "selected": 1,
+        "weighted": 1
+       }
+      },
+      "turnover": "1",
+      "universe": 2
+     },
+     "ledger": {
+      "equity_after": 76.7757,
+      "equity_before": 76.9294,
+      "fee": 0.1537,
+      "traded": 153.7051,
+      "turnover": 0.999
+     },
+     "skip_reason": ""
+    },
+    "targets": [
+     {
+      "target_weight": "1"
+     }
+    ],
+    "turnover": 0.999,
+    "unfilled": 0
+   },
+   {
+    "bar_end": 1788249600,
+    "equity": 79.7286,
+    "fee": 0,
+    "frozen": 0,
+    "holdings": 1,
+    "liquidated": 0,
+    "positions": {
+     "cash": 0,
+     "positions": {
+      "B": {
+       "last_price": 54,
+       "quantity": 1.47645563,
+       "value": 79.7286
+      }
+     }
+    },
+    "return": 0.0385,
+    "skip_reason": "",
+    "status": "ok",
+    "summary": {
+     "decision": {
+      "cash": "0",
+      "gross": "1",
+      "net": "1",
+      "rules": {
+       "r": {
+        "aged_out": 0,
+        "allocated": "1",
+        "available": 2,
+        "budget": "1",
+        "expected": 2,
+        "filtered": 0,
+        "missing": 0,
+        "scored": 2,
+        "selected": 1,
+        "weighted": 1
+       }
+      },
+      "turnover": "0",
+      "universe": 2
+     },
+     "ledger": {
+      "equity_after": 79.7286,
+      "equity_before": 79.7286,
+      "fee": 0,
+      "traded": 0,
+      "turnover": 0
+     },
+     "skip_reason": ""
+    },
+    "targets": [
+     {
+      "target_weight": "1"
+     }
+    ],
+    "turnover": 0,
+    "unfilled": 0
+   },
+   {
+    "bar_end": 1788253200,
+    "equity": 82.6815,
+    "fee": 0,
+    "frozen": 0,
+    "holdings": 1,
+    "liquidated": 0,
+    "positions": {
+     "cash": 0,
+     "positions": {
+      "B": {
+       "last_price": 56,
+       "quantity": 1.47645563,
+       "value": 82.6815
+      }
+     }
+    },
+    "return": 0.037,
+    "skip_reason": "",
+    "status": "ok",
+    "summary": {
+     "decision": {
+      "cash": "0",
+      "gross": "1",
+      "net": "1",
+      "rules": {
+       "r": {
+        "aged_out": 0,
+        "allocated": "1",
+        "available": 2,
+        "budget": "1",
+        "expected": 2,
+        "filtered": 0,
+        "missing": 0,
+        "scored": 2,
+        "selected": 1,
+        "weighted": 1
+       }
+      },
+      "turnover": "0",
+      "universe": 2
+     },
+     "ledger": {
+      "equity_after": 82.6815,
+      "equity_before": 82.6815,
+      "fee": 0,
+      "traded": 0,
+      "turnover": 0
+     },
+     "skip_reason": ""
+    },
+    "targets": [
+     {
+      "target_weight": "1"
+     }
+    ],
+    "turnover": 0,
+    "unfilled": 0
+   },
+   {
+    "bar_end": 1788256800,
+    "equity": 85.6344,
+    "fee": 0,
+    "frozen": 0,
+    "holdings": 1,
+    "liquidated": 0,
+    "positions": {
+     "cash": 0,
+     "positions": {
+      "B": {
+       "last_price": 58,
+       "quantity": 1.47645563,
+       "value": 85.6344
+      }
+     }
+    },
+    "return": 0.0357,
+    "skip_reason": "",
+    "status": "ok",
+    "summary": {
+     "decision": {
+      "cash": "0",
+      "gross": "1",
+      "net": "1",
+      "rules": {
+       "r": {
+        "aged_out": 0,
+        "allocated": "1",
+        "available": 3,
+        "budget": "1",
+        "expected": 3,
+        "filtered": 0,
+        "missing": 0,
+        "scored": 3,
+        "selected": 1,
+        "weighted": 1
+       }
+      },
+      "turnover": "0",
+      "universe": 3
+     },
+     "ledger": {
+      "equity_after": 85.6344,
+      "equity_before": 85.6344,
+      "fee": 0,
+      "traded": 0,
+      "turnover": 0
+     },
+     "skip_reason": ""
+    },
+    "targets": [
+     {
+      "target_weight": "1"
+     }
+    ],
+    "turnover": 0,
+    "unfilled": 0
+   },
+   {
+    "bar_end": 1788260400,
+    "equity": 73.6753,
+    "fee": 0.1475,
+    "frozen": 0,
+    "holdings": 1,
+    "liquidated": 0,
+    "positions": {
+     "cash": 0,
+     "positions": {
+      "A": {
+       "last_price": 110,
+       "quantity": 0.6697753,
+       "value": 73.6753
+      }
+     }
+    },
+    "return": -0.1397,
+    "skip_reason": "",
+    "status": "ok",
+    "summary": {
+     "decision": {
+      "cash": "0",
+      "gross": "1",
+      "net": "1",
+      "rules": {
+       "r": {
+        "aged_out": 0,
+        "allocated": "1",
+        "available": 3,
+        "budget": "1",
+        "expected": 3,
+        "filtered": 0,
+        "missing": 0,
+        "scored": 3,
+        "selected": 1,
+        "weighted": 1
+       }
+      },
+      "turnover": "1",
+      "universe": 3
+     },
+     "ledger": {
+      "equity_after": 73.6753,
+      "equity_before": 73.8228,
+      "fee": 0.1475,
+      "traded": 147.4981,
+      "turnover": 0.999
+     },
+     "skip_reason": ""
+    },
+    "targets": [
+     {
+      "target_weight": "1"
+     }
+    ],
+    "turnover": 0.999,
+    "unfilled": 0
+   },
+   {
+    "bar_end": 1788264000,
+    "equity": 74.1965,
+    "fee": 0.1485,
+    "frozen": 0,
+    "holdings": 1,
+    "liquidated": 0,
+    "positions": {
+     "cash": 0,
+     "positions": {
+      "B": {
+       "last_price": 52,
+       "quantity": 1.42685609,
+       "value": 74.1965
+      }
+     }
+    },
+    "return": 0.0071,
+    "skip_reason": "",
+    "status": "ok",
+    "summary": {
+     "decision": {
+      "cash": "0",
+      "gross": "1",
+      "net": "1",
+      "rules": {
+       "r": {
+        "aged_out": 0,
+        "allocated": "1",
+        "available": 3,
+        "budget": "1",
+        "expected": 3,
+        "filtered": 0,
+        "missing": 0,
+        "scored": 3,
+        "selected": 1,
+        "weighted": 1
+       }
+      },
+      "turnover": "1",
+      "universe": 3
+     },
+     "ledger": {
+      "equity_after": 74.1965,
+      "equity_before": 74.3451,
+      "fee": 0.1485,
+      "traded": 148.5416,
+      "turnover": 0.999
+     },
+     "skip_reason": ""
+    },
+    "targets": [
+     {
+      "target_weight": "1"
+     }
+    ],
+    "turnover": 0.999,
+    "unfilled": 0
+   },
+   {
+    "bar_end": 1788267600,
+    "equity": 77.0502,
+    "fee": 0,
+    "frozen": 0,
+    "holdings": 1,
+    "liquidated": 0,
+    "positions": {
+     "cash": 0,
+     "positions": {
+      "B": {
+       "last_price": 54,
+       "quantity": 1.42685609,
+       "value": 77.0502
+      }
+     }
+    },
+    "return": 0.0385,
+    "skip_reason": "",
+    "status": "ok",
+    "summary": {
+     "decision": {
+      "cash": "0",
+      "gross": "1",
+      "net": "1",
+      "rules": {
+       "r": {
+        "aged_out": 0,
+        "allocated": "1",
+        "available": 3,
+        "budget": "1",
+        "expected": 3,
+        "filtered": 0,
+        "missing": 0,
+        "scored": 3,
+        "selected": 1,
+        "weighted": 1
+       }
+      },
+      "turnover": "0",
+      "universe": 3
+     },
+     "ledger": {
+      "equity_after": 77.0502,
+      "equity_before": 77.0502,
+      "fee": 0,
+      "traded": 0,
+      "turnover": 0
+     },
+     "skip_reason": ""
+    },
+    "targets": [
+     {
+      "target_weight": "1"
+     }
+    ],
+    "turnover": 0,
+    "unfilled": 0
+   },
+   {
+    "bar_end": 1788271200,
+    "equity": 79.9039,
+    "fee": 0,
+    "frozen": 0,
+    "holdings": 1,
+    "liquidated": 0,
+    "positions": {
+     "cash": 0,
+     "positions": {
+      "B": {
+       "last_price": 56,
+       "quantity": 1.42685609,
+       "value": 79.9039
+      }
+     }
+    },
+    "return": 0.037,
+    "skip_reason": "",
+    "status": "ok",
+    "summary": {
+     "decision": {
+      "cash": "0",
+      "gross": "1",
+      "net": "1",
+      "rules": {
+       "r": {
+        "aged_out": 0,
+        "allocated": "1",
+        "available": 3,
+        "budget": "1",
+        "expected": 3,
+        "filtered": 0,
+        "missing": 0,
+        "scored": 3,
+        "selected": 1,
+        "weighted": 1
+       }
+      },
+      "turnover": "0",
+      "universe": 3
+     },
+     "ledger": {
+      "equity_after": 79.9039,
+      "equity_before": 79.9039,
+      "fee": 0,
+      "traded": 0,
+      "turnover": 0
+     },
+     "skip_reason": ""
+    },
+    "targets": [
+     {
+      "target_weight": "1"
+     }
+    ],
+    "turnover": 0,
+    "unfilled": 0
+   },
+   {
+    "bar_end": 1788274800,
+    "equity": 82.7577,
+    "fee": 0,
+    "frozen": 0,
+    "holdings": 1,
+    "liquidated": 0,
+    "positions": {
+     "cash": 0,
+     "positions": {
+      "B": {
+       "last_price": 58,
+       "quantity": 1.42685609,
+       "value": 82.7577
+      }
+     }
+    },
+    "return": 0.0357,
+    "skip_reason": "",
+    "status": "ok",
+    "summary": {
+     "decision": {
+      "cash": "0",
+      "gross": "1",
+      "net": "1",
+      "rules": {
+       "r": {
+        "aged_out": 0,
+        "allocated": "1",
+        "available": 3,
+        "budget": "1",
+        "expected": 3,
+        "filtered": 0,
+        "missing": 0,
+        "scored": 3,
+        "selected": 1,
+        "weighted": 1
+       }
+      },
+      "turnover": "0",
+      "universe": 3
+     },
+     "ledger": {
+      "equity_after": 82.7577,
+      "equity_before": 82.7577,
+      "fee": 0,
+      "traded": 0,
+      "turnover": 0
+     },
+     "skip_reason": ""
+    },
+    "targets": [
+     {
+      "target_weight": "1"
+     }
+    ],
+    "turnover": 0,
+    "unfilled": 0
+   },
+   {
+    "bar_end": 1788278400,
+    "equity": 71.2003,
+    "fee": 0.1425,
+    "frozen": 0,
+    "holdings": 1,
+    "liquidated": 0,
+    "positions": {
+     "cash": 0,
+     "positions": {
+      "A": {
+       "last_price": 115,
+       "quantity": 0.61913271,
+       "value": 71.2003
+      }
+     }
+    },
+    "return": -0.1397,
+    "skip_reason": "",
+    "status": "ok",
+    "summary": {
+     "decision": {
+      "cash": "0",
+      "gross": "1",
+      "net": "1",
+      "rules": {
+       "r": {
+        "aged_out": 0,
+        "allocated": "1",
+        "available": 3,
+        "budget": "1",
+        "expected": 3,
+        "filtered": 0,
+        "missing": 0,
+        "scored": 3,
+        "selected": 1,
+        "weighted": 1
+       }
+      },
+      "turnover": "1",
+      "universe": 3
+     },
+     "ledger": {
+      "equity_after": 71.2003,
+      "equity_before": 71.3428,
+      "fee": 0.1425,
+      "traded": 142.5431,
+      "turnover": 0.999
+     },
+     "skip_reason": ""
+    },
+    "targets": [
+     {
+      "target_weight": "1"
+     }
+    ],
+    "turnover": 0.999,
+    "unfilled": 0
+   }
+  ],
+  "metrics": {
+   "average_holdings": 1,
+   "average_turnover": 0.3925,
+   "bars": 14,
+   "factors": {
+    "mom": "sha256:mom|fixed"
+   },
+   "final_equity": 71.2003,
+   "first_bar_end": "2026-09-01T03:00:00Z",
+   "initial_equity": 100,
+   "last_bar_end": "2026-09-01T16:00:00Z",
+   "limitations": [
+    "研究回放：按当期 close 成交的理想化假设，与实盘在 bar_end 之后成交不同",
+    "区间内历史行版本未验证：因子结果行不携带版本，只核对了回放开始时的因子定义指纹",
+    "基础集合取每期有行的标的，与实时事件名单可能不同；数据集的全部标的绑定（含已停用）都参与读取",
+    "手续费只按实际成交额计；不含滑点与盘口冲击",
+    "持有标的连续缺价 2 期后在 ok 期按最后价清算（研究假设）",
+    "区间不足一周，不给出年化收益"
+   ],
+   "liquidations": 0,
+   "max_drawdown": 0.3364,
+   "ok_bars": 14,
+   "skipped_bars": 0,
+   "total_fee": 0.877,
+   "total_return": -0.288,
+   "unfilled_bars": 0
+  }
+ },
+ "top2_cash_buffer": {
+  "bars": [
+   {
+    "bar_end": 1788231600,
+    "equity": 99.9201,
+    "fee": 0.0799,
+    "frozen": 0,
+    "holdings": 2,
+    "liquidated": 0,
+    "positions": {
+     "cash": 19.984,
+     "positions": {
+      "A": {
+       "last_price": 102,
+       "quantity": 0.39184339,
+       "value": 39.968
+      },
+      "B": {
+       "last_price": 54,
+       "quantity": 0.74014862,
+       "value": 39.968
+      }
+     }
+    },
+    "return": -0.0008,
+    "skip_reason": "",
+    "status": "ok",
+    "summary": {
+     "decision": {
+      "cash": "0.2",
+      "gross": "0.8",
+      "net": "0.8",
+      "rules": {
+       "r": {
+        "aged_out": 0,
+        "allocated": "0.8",
+        "available": 3,
+        "budget": "0.8",
+        "expected": 3,
+        "filtered": 0,
+        "missing": 0,
+        "scored": 3,
+        "selected": 2,
+        "weighted": 2
+       }
+      },
+      "turnover": "0.4",
+      "universe": 3
+     },
+     "ledger": {
+      "equity_after": 99.9201,
+      "equity_before": 100,
+      "fee": 0.0799,
+      "traded": 79.9361,
+      "turnover": 0.3997
+     },
+     "skip_reason": ""
+    },
+    "targets": [
+     {
+      "target_weight": "0.4"
+     },
+     {
+      "target_weight": "0.4"
+     }
+    ],
+    "turnover": 0.3997,
+    "unfilled": 0
+   },
+   {
+    "bar_end": 1788235200,
+    "equity": 101.7911,
+    "fee": 0.0011,
+    "frozen": 0,
+    "holdings": 2,
+    "liquidated": 0,
+    "positions": {
+     "cash": 20.3582,
+     "positions": {
+      "A": {
+       "last_price": 103,
+       "quantity": 0.39530531,
+       "value": 40.7164
+      },
+      "B": {
+       "last_price": 56,
+       "quantity": 0.7270794,
+       "value": 40.7164
+      }
+     }
+    },
+    "return": 0.0187,
+    "skip_reason": "",
+    "status": "ok",
+    "summary": {
+     "decision": {
+      "cash": "0.2",
+      "gross": "0.8",
+      "net": "0.8",
+      "rules": {
+       "r": {
+        "aged_out": 0,
+        "allocated": "0.8",
+        "available": 3,
+        "budget": "0.8",
+        "expected": 3,
+        "filtered": 0,
+        "missing": 0,
+        "scored": 3,
+        "selected": 2,
+        "weighted": 2
+       }
+      },
+      "turnover": "0",
+      "universe": 3
+     },
+     "ledger": {
+      "equity_after": 101.7911,
+      "equity_before": 101.7922,
+      "fee": 0.0011,
+      "traded": 1.0885,
+      "turnover": 0.0053
+     },
+     "skip_reason": ""
+    },
+    "targets": [
+     {
+      "target_weight": "0.4"
+     },
+     {
+      "target_weight": "0.4"
+     }
+    ],
+    "turnover": 0.0053,
+    "unfilled": 0
+   },
+   {
+    "bar_end": 1788238800,
+    "equity": 103.6395,
+    "fee": 0.0011,
+    "frozen": 0,
+    "holdings": 2,
+    "liquidated": 0,
+    "positions": {
+     "cash": 20.7279,
+     "positions": {
+      "A": {
+       "last_price": 104,
+       "quantity": 0.39861354,
+       "value": 41.4558
+      },
+      "B": {
+       "last_price": 58,
+       "quantity": 0.71475532,
+       "value": 41.4558
+      }
+     }
+    },
+    "return": 0.0182,
+    "skip_reason": "",
+    "status": "ok",
+    "summary": {
+     "decision": {
+      "cash": "0.2",
+      "gross": "0.8",
+      "net": "0.8",
+      "rules": {
+       "r": {
+        "aged_out": 0,
+        "allocated": "0.8",
+        "available": 3,
+        "budget": "0.8",
+        "expected": 3,
+        "filtered": 0,
+        "missing": 0,
+        "scored": 3,
+        "selected": 2,
+        "weighted": 2
+       }
+      },
+      "turnover": "0",
+      "universe": 3
+     },
+     "ledger": {
+      "equity_after": 103.6395,
+      "equity_before": 103.6406,
+      "fee": 0.0011,
+      "traded": 1.0589,
+      "turnover": 0.0051
+     },
+     "skip_reason": ""
+    },
+    "targets": [
+     {
+      "target_weight": "0.4"
+     },
+     {
+      "target_weight": "0.4"
+     }
+    ],
+    "turnover": 0.0051,
+    "unfilled": 0
+   },
+   {
+    "bar_end": 1788242400,
+    "equity": 98.2425,
+    "fee": 0.0776,
+    "frozen": 0,
+    "holdings": 2,
+    "liquidated": 0,
+    "positions": {
+     "cash": 19.6485,
+     "positions": {
+      "A": {
+       "last_price": 105,
+       "quantity": 0.37425714,
+       "value": 39.297
+      },
+      "C": {
+       "last_price": 12,
+       "quantity": 3.27475001,
+       "value": 39.297
+      }
+     }
+    },
+    "return": -0.0521,
+    "skip_reason": "",
+    "status": "ok",
+    "summary": {
+     "decision": {
+      "cash": "0.2",
+      "gross": "0.8",
+      "net": "0.8",
+      "rules": {
+       "r": {
+        "aged_out": 0,
+        "allocated": "0.8",
+        "available": 3,
+        "budget": "0.8",
+        "expected": 3,
+        "filtered": 0,
+        "missing": 0,
+        "scored": 3,
+        "selected": 2,
+        "weighted": 2
+       }
+      },
+      "turnover": "0.4",
+      "universe": 3
+     },
+     "ledger": {
+      "equity_after": 98.2425,
+      "equity_before": 98.3201,
+      "fee": 0.0776,
+      "traded": 77.5922,
+      "turnover": 0.3946
+     },
+     "skip_reason": ""
+    },
+    "targets": [
+     {
+      "target_weight": "0.4"
+     },
+     {
+      "target_weight": "0.4"
+     }
+    ],
+    "turnover": 0.3946,
+    "unfilled": 0
+   },
+   {
+    "bar_end": 1788246000,
+    "equity": 91.9948,
+    "fee": 0.0724,
+    "frozen": 0,
+    "holdings": 2,
+    "liquidated": 0,
+    "positions": {
+     "cash": 18.399,
+     "positions": {
+      "A": {
+       "last_price": 106,
+       "quantity": 0.34715033,
+       "value": 36.7979
+      },
+      "B": {
+       "last_price": 52,
+       "quantity": 0.7076526,
+       "value": 36.7979
+      }
+     }
+    },
+    "return": -0.0636,
+    "skip_reason": "",
+    "status": "ok",
+    "summary": {
+     "decision": {
+      "cash": "0.2",
+      "gross": "0.8",
+      "net": "0.8",
+      "rules": {
+       "r": {
+        "aged_out": 0,
+        "allocated": "0.8",
+        "available": 3,
+        "budget": "0.8",
+        "expected": 3,
+        "filtered": 0,
+        "missing": 0,
+        "scored": 3,
+        "selected": 2,
+        "weighted": 2
+       }
+      },
+      "turnover": "0.4",
+      "universe": 3
+     },
+     "ledger": {
+      "equity_after": 91.9948,
+      "equity_before": 92.0673,
+      "fee": 0.0724,
+      "traded": 72.4188,
+      "turnover": 0.3933
+     },
+     "skip_reason": ""
+    },
+    "targets": [
+     {
+      "target_weight": "0.4"
+     },
+     {
+      "target_weight": "0.4"
+     }
+    ],
+    "turnover": 0.3933,
+    "unfilled": 0
+   },
+   {
+    "bar_end": 1788249600,
+    "equity": 93.7562,
+    "fee": 0.0011,
+    "frozen": 0,
+    "holdings": 2,
+    "liquidated": 0,
+    "positions": {
+     "cash": 18.7512,
+     "positions": {
+      "A": {
+       "last_price": 107,
+       "quantity": 0.35049056,
+       "value": 37.5025
+      },
+      "B": {
+       "last_price": 54,
+       "quantity": 0.69449056,
+       "value": 37.5025
+      }
+     }
+    },
+    "return": 0.0191,
+    "skip_reason": "",
+    "status": "ok",
+    "summary": {
+     "decision": {
+      "cash": "0.2",
+      "gross": "0.8",
+      "net": "0.8",
+      "rules": {
+       "r": {
+        "aged_out": 0,
+        "allocated": "0.8",
+        "available": 3,
+        "budget": "0.8",
+        "expected": 3,
+        "filtered": 0,
+        "missing": 0,
+        "scored": 3,
+        "selected": 2,
+        "weighted": 2
+       }
+      },
+      "turnover": "0",
+      "universe": 3
+     },
+     "ledger": {
+      "equity_after": 93.7562,
+      "equity_before": 93.7573,
+      "fee": 0.0011,
+      "traded": 1.0682,
+      "turnover": 0.0057
+     },
+     "skip_reason": ""
+    },
+    "targets": [
+     {
+      "target_weight": "0.4"
+     },
+     {
+      "target_weight": "0.4"
+     }
+    ],
+    "turnover": 0.0057,
+    "unfilled": 0
+   },
+   {
+    "bar_end": 1788253200,
+    "equity": 95.4947,
+    "fee": 0.001,
+    "frozen": 0,
+    "holdings": 2,
+    "liquidated": 0,
+    "positions": {
+     "cash": 19.0989,
+     "positions": {
+      "A": {
+       "last_price": 108,
+       "quantity": 0.35368392,
+       "value": 38.1979
+      },
+      "B": {
+       "last_price": 56,
+       "quantity": 0.68210471,
+       "value": 38.1979
+      }
+     }
+    },
+    "return": 0.0185,
+    "skip_reason": "",
+    "status": "ok",
+    "summary": {
+     "decision": {
+      "cash": "0.2",
+      "gross": "0.8",
+      "net": "0.8",
+      "rules": {
+       "r": {
+        "aged_out": 0,
+        "allocated": "0.8",
+        "available": 3,
+        "budget": "0.8",
+        "expected": 3,
+        "filtered": 0,
+        "missing": 0,
+        "scored": 3,
+        "selected": 2,
+        "weighted": 2
+       }
+      },
+      "turnover": "0",
+      "universe": 3
+     },
+     "ledger": {
+      "equity_after": 95.4947,
+      "equity_before": 95.4957,
+      "fee": 0.001,
+      "traded": 1.0385,
+      "turnover": 0.0054
+     },
+     "skip_reason": ""
+    },
+    "targets": [
+     {
+      "target_weight": "0.4"
+     },
+     {
+      "target_weight": "0.4"
+     }
+    ],
+    "turnover": 0.0054,
+    "unfilled": 0
+   },
+   {
+    "bar_end": 1788256800,
+    "equity": 97.2115,
+    "fee": 0.001,
+    "frozen": 0,
+    "holdings": 2,
+    "liquidated": 0,
+    "positions": {
+     "cash": 19.4423,
+     "positions": {
+      "A": {
+       "last_price": 109,
+       "quantity": 0.3567396,
+       "value": 38.8846
+      },
+      "B": {
+       "last_price": 58,
+       "quantity": 0.67042443,
+       "value": 38.8846
+      }
+     }
+    },
+    "return": 0.018,
+    "skip_reason": "",
+    "status": "ok",
+    "summary": {
+     "decision": {
+      "cash": "0.2",
+      "gross": "0.8",
+      "net": "0.8",
+      "rules": {
+       "r": {
+        "aged_out": 0,
+        "allocated": "0.8",
+        "available": 3,
+        "budget": "0.8",
+        "expected": 3,
+        "filtered": 0,
+        "missing": 0,
+        "scored": 3,
+        "selected": 2,
+        "weighted": 2
+       }
+      },
+      "turnover": "0",
+      "universe": 3
+     },
+     "ledger": {
+      "equity_after": 97.2115,
+      "equity_before": 97.2126,
+      "fee": 0.001,
+      "traded": 1.0105,
+      "turnover": 0.0052
+     },
+     "skip_reason": ""
+    },
+    "targets": [
+     {
+      "target_weight": "0.4"
+     },
+     {
+      "target_weight": "0.4"
+     }
+    ],
+    "turnover": 0.0052,
+    "unfilled": 0
+   },
+   {
+    "bar_end": 1788260400,
+    "equity": 92.1321,
+    "fee": 0.0728,
+    "frozen": 0,
+    "holdings": 2,
+    "liquidated": 0,
+    "positions": {
+     "cash": 18.4264,
+     "positions": {
+      "A": {
+       "last_price": 110,
+       "quantity": 0.3350259,
+       "value": 36.8528
+      },
+      "C": {
+       "last_price": 11,
+       "quantity": 3.35025904,
+       "value": 36.8528
+      }
+     }
+    },
+    "return": -0.0523,
+    "skip_reason": "",
+    "status": "ok",
+    "summary": {
+     "decision": {
+      "cash": "0.2",
+      "gross": "0.8",
+      "net": "0.8",
+      "rules": {
+       "r": {
+        "aged_out": 0,
+        "allocated": "0.8",
+        "available": 3,
+        "budget": "0.8",
+        "expected": 3,
+        "filtered": 0,
+        "missing": 0,
+        "scored": 3,
+        "selected": 2,
+        "weighted": 2
+       }
+      },
+      "turnover": "0.4",
+      "universe": 3
+     },
+     "ledger": {
+      "equity_after": 92.1321,
+      "equity_before": 92.2049,
+      "fee": 0.0728,
+      "traded": 72.7626,
+      "turnover": 0.3946
+     },
+     "skip_reason": ""
+    },
+    "targets": [
+     {
+      "target_weight": "0.4"
+     },
+     {
+      "target_weight": "0.4"
+     }
+    ],
+    "turnover": 0.3946,
+    "unfilled": 0
+   },
+   {
+    "bar_end": 1788264000,
+    "equity": 95.7378,
+    "fee": 0.0796,
+    "frozen": 0,
+    "holdings": 2,
+    "liquidated": 0,
+    "positions": {
+     "cash": 19.1476,
+     "positions": {
+      "A": {
+       "last_price": 111,
+       "quantity": 0.34500109,
+       "value": 38.2951
+      },
+      "B": {
+       "last_price": 52,
+       "quantity": 0.73644464,
+       "value": 38.2951
+      }
+     }
+    },
+    "return": 0.0391,
+    "skip_reason": "",
+    "status": "ok",
+    "summary": {
+     "decision": {
+      "cash": "0.2",
+      "gross": "0.8",
+      "net": "0.8",
+      "rules": {
+       "r": {
+        "aged_out": 0,
+        "allocated": "0.8",
+        "available": 3,
+        "budget": "0.8",
+        "expected": 3,
+        "filtered": 0,
+        "missing": 0,
+        "scored": 3,
+        "selected": 2,
+        "weighted": 2
+       }
+      },
+      "turnover": "0.4",
+      "universe": 3
+     },
+     "ledger": {
+      "equity_after": 95.7378,
+      "equity_before": 95.8174,
+      "fee": 0.0796,
+      "traded": 79.6055,
+      "turnover": 0.4154
+     },
+     "skip_reason": ""
+    },
+    "targets": [
+     {
+      "target_weight": "0.4"
+     },
+     {
+      "target_weight": "0.4"
+     }
+    ],
+    "turnover": 0.4154,
+    "unfilled": 0
+   },
+   {
+    "bar_end": 1788267600,
+    "equity": 97.5546,
+    "fee": 0.0011,
+    "frozen": 0,
+    "holdings": 2,
+    "liquidated": 0,
+    "positions": {
+     "cash": 19.5109,
+     "positions": {
+      "A": {
+       "last_price": 112,
+       "quantity": 0.34840916,
+       "value": 39.0218
+      },
+      "B": {
+       "last_price": 54,
+       "quantity": 0.72262641,
+       "value": 39.0218
+      }
+     }
+    },
+    "return": 0.019,
+    "skip_reason": "",
+    "status": "ok",
+    "summary": {
+     "decision": {
+      "cash": "0.2",
+      "gross": "0.8",
+      "net": "0.8",
+      "rules": {
+       "r": {
+        "aged_out": 0,
+        "allocated": "0.8",
+        "available": 3,
+        "budget": "0.8",
+        "expected": 3,
+        "filtered": 0,
+        "missing": 0,
+        "scored": 3,
+        "selected": 2,
+        "weighted": 2
+       }
+      },
+      "turnover": "0",
+      "universe": 3
+     },
+     "ledger": {
+      "equity_after": 97.5546,
+      "equity_before": 97.5557,
+      "fee": 0.0011,
+      "traded": 1.1279,
+      "turnover": 0.0058
+     },
+     "skip_reason": ""
+    },
+    "targets": [
+     {
+      "target_weight": "0.4"
+     },
+     {
+      "target_weight": "0.4"
+     }
+    ],
+    "turnover": 0.0058,
+    "unfilled": 0
+   },
+   {
+    "bar_end": 1788271200,
+    "equity": 99.3471,
+    "fee": 0.0011,
+    "frozen": 0,
+    "holdings": 2,
+    "liquidated": 0,
+    "positions": {
+     "cash": 19.8694,
+     "positions": {
+      "A": {
+       "last_price": 113,
+       "quantity": 0.35167126,
+       "value": 39.7389
+      },
+      "B": {
+       "last_price": 56,
+       "quantity": 0.70962236,
+       "value": 39.7389
+      }
+     }
+    },
+    "return": 0.0184,
+    "skip_reason": "",
+    "status": "ok",
+    "summary": {
+     "decision": {
+      "cash": "0.2",
+      "gross": "0.8",
+      "net": "0.8",
+      "rules": {
+       "r": {
+        "aged_out": 0,
+        "allocated": "0.8",
+        "available": 3,
+        "budget": "0.8",
+        "expected": 3,
+        "filtered": 0,
+        "missing": 0,
+        "scored": 3,
+        "selected": 2,
+        "weighted": 2
+       }
+      },
+      "turnover": "0",
+      "universe": 3
+     },
+     "ledger": {
+      "equity_after": 99.3471,
+      "equity_before": 99.3482,
+      "fee": 0.0011,
+      "traded": 1.0968,
+      "turnover": 0.0055
+     },
+     "skip_reason": ""
+    },
+    "targets": [
+     {
+      "target_weight": "0.4"
+     },
+     {
+      "target_weight": "0.4"
+     }
+    ],
+    "turnover": 0.0055,
+    "unfilled": 0
+   }
+  ],
+  "metrics": {
+   "average_holdings": 2,
+   "average_turnover": 0.1696,
+   "bars": 12,
+   "factors": {
+    "mom": "sha256:mom|fixed"
+   },
+   "final_equity": 99.3471,
+   "first_bar_end": "2026-09-01T03:00:00Z",
+   "initial_equity": 100,
+   "last_bar_end": "2026-09-01T14:00:00Z",
+   "limitations": [
+    "研究回放：按当期 close 成交的理想化假设，与实盘在 bar_end 之后成交不同",
+    "区间内历史行版本未验证：因子结果行不携带版本，只核对了回放开始时的因子定义指纹",
+    "基础集合取每期有行的标的，与实时事件名单可能不同；数据集的全部标的绑定（含已停用）都参与读取",
+    "手续费只按实际成交额计；不含滑点与盘口冲击",
+    "持有标的连续缺价 3 期后在 ok 期按最后价清算（研究假设）",
+    "区间不足一周，不给出年化收益"
+   ],
+   "liquidations": 0,
+   "max_drawdown": 0.1124,
+   "ok_bars": 12,
+   "skipped_bars": 0,
+   "total_fee": 0.3898,
+   "total_return": -0.0065,
+   "unfilled_bars": 0
+  }
+ }
+}

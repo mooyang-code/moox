@@ -15,7 +15,7 @@ func paramProgram(t *testing.T, params string) *dsl.Program {
 	if err != nil {
 		t.Fatal(err)
 	}
-	program, err := dsl.Compile(strategy, []string{"close", "vol"})
+	program, err := compileMode(strategy, []string{"close", "vol"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +40,7 @@ var biasDecls = map[string][]dsl.ParamDecl{
 // 没写出的参数取定义的默认值；常数表达式不需要任何列。
 func TestEvaluateParamsDefaultsOverridesAndFitting(t *testing.T) {
 	program := paramProgram(t, "  bias__var:\n    window:\n      default: vol\n      per_subject: vol * 2\n  ma__var:\n    window: \"200\"\n")
-	outcome := EvaluateParams(program, paramFrame(map[string]float64{"A": 10, "B": 20, "C": 30}), biasDecls)
+	outcome := EvaluateParams(program, inMarket(program, paramFrame(map[string]float64{"A": 10, "B": 20, "C": 30})), biasDecls)
 	want := ParamSet{
 		"bias__var": {
 			// A 的 per_subject 是 20，等于统一值，不进覆盖；B 是 40；C 是 60（恰为上限）。
@@ -61,7 +61,7 @@ func TestEvaluateParamsRoundsIntegersAndSkipsMemberOnFailure(t *testing.T) {
 	program := paramProgram(t, "  bias__var:\n    window: \"20.6\"\n  ma__var:\n    window: vol\n")
 	frame := paramFrame(map[string]float64{"A": 10})
 	delete(frame.Rows["A"].Values, "vol") // ma__var 的参数在所有标的上都没有有效值
-	outcome := EvaluateParams(program, frame, biasDecls)
+	outcome := EvaluateParams(program, inMarket(program, frame), biasDecls)
 	if got := outcome.Params["bias__var"]["window"].Default; got != 21 {
 		t.Fatalf("整型参数应四舍五入：%v", got)
 	}
@@ -81,7 +81,7 @@ func TestEvaluateParamsSkipsSubjectsMissingReferencedColumns(t *testing.T) {
 		"B": {Values: map[string]float64{"close": 1, "vol": 30}},                                          // 新标的，没有上一根
 		"C": {Values: map[string]float64{"close": 1, "vol": 50}, Previous: map[string]float64{"vol": 50}}, // 上游失败
 	}, FailedColumns: map[string]map[string]string{"vol": {"C": FailedSource}}}
-	outcome := EvaluateParams(program, frame, biasDecls)
+	outcome := EvaluateParams(program, inMarket(program, frame), biasDecls)
 	got := outcome.Params["bias__var"]["window"]
 	if got.Default != 30 || len(got.Overrides) != 1 || got.Overrides["A"] != 31 {
 		t.Fatalf("缺数的标的不应参与：%+v", got)
@@ -106,7 +106,7 @@ rules:
 	if err != nil {
 		t.Fatal(err)
 	}
-	program, err := dsl.Compile(strategy, []string{"close"})
+	program, err := compileMode(strategy, []string{"close"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +121,7 @@ rules:
 			"C": row(1, nil),
 		},
 	}
-	decision, err := Evaluate(program, frame, State{})
+	decision, err := evalFrame(program, frame, State{})
 	if err != nil {
 		t.Fatal(err)
 	}

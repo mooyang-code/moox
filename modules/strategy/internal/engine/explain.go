@@ -30,11 +30,13 @@ const (
 type Item struct {
 	RuleID       string `json:"rule_id"`
 	InstrumentID string `json:"instrument_id"`
-	Stage        string `json:"stage"`
-	Score        string `json:"score,omitempty"`
-	Rank         int    `json:"rank,omitempty"`
-	Weight       string `json:"weight,omitempty"`
-	Reason       string `json:"reason,omitempty"`
+	// Market 是标的所在的市场：入选的权重取它进入的市场，其余取所选行所在的市场。
+	Market string `json:"market,omitempty"`
+	Stage  string `json:"stage"`
+	Score  string `json:"score,omitempty"`
+	Rank   int    `json:"rank,omitempty"`
+	Weight string `json:"weight,omitempty"`
+	Reason string `json:"reason,omitempty"`
 }
 
 // sortItems 按规则声明顺序、标的 id 排序，保证解释明细可重复。

@@ -144,22 +144,28 @@ func (h *Handler) Handle(ctx context.Context, message *eventpb.EventMessage, pay
 	if len(retry) > 0 {
 		return errors.Join(retry...)
 	}
+	h.forget(message.GetEventId())
+	return nil
+}
+
+// forget 清掉一条事件在所有实例上的尝试计数、已耗尽记录与丢弃标记（调用方持有 h.mu）：事件处理成功后不再需要。
+func (h *Handler) forget(eventID string) {
+	prefix := eventID + "\x00"
 	for key := range h.attempts {
-		if strings.HasPrefix(key, message.GetEventId()+"\x00") {
+		if strings.HasPrefix(key, prefix) {
 			delete(h.attempts, key)
 		}
 	}
 	for key := range h.exhausted {
-		if strings.HasPrefix(key, message.GetEventId()+"\x00") {
+		if strings.HasPrefix(key, prefix) {
 			delete(h.exhausted, key)
 		}
 	}
 	for key := range h.dropped {
-		if strings.HasPrefix(key, message.GetEventId()+"\x00") {
+		if strings.HasPrefix(key, prefix) {
 			delete(h.dropped, key)
 		}
 	}
-	return nil
 }
 
 // firstDrop 报告这条事件对这个实例的丢弃是否第一次发生（调用方持有 h.mu）。丢弃不落记录，没有别的依据去重：
@@ -180,11 +186,14 @@ func (h *Handler) firstDrop(eventID, instanceID string) bool {
 
 // period 是一个实例处理一期时的上下文。
 type period struct {
-	loader     Loader
-	instance   store.Instance
-	runtime    *runtime
-	eventID    string
-	viewID     string
+	loader   Loader
+	instance store.Instance
+	runtime  *runtime
+	eventID  string
+	// after 是处理本期时实例已处理到的那一期（零值表示没有）：补记与补处理只看它之后的期。
+	after time.Time
+	// events 是本期各市场 View 的就绪事件（市场 → 事件）：只绑一个任务的实例就是到达的这一条，绑定两个任务的实例是汇合后的两条。
+	events     map[string]*storagepb.ViewDataReady
 	boundary   input.PeriodBoundaries
 	validUntil time.Time
 	input      store.InputRecord
@@ -216,11 +225,14 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 	if mode == ModeOff {
 		return nil
 	}
-	if mode == ModeWait {
-		return ErrModuleNotReady
-	}
 	periodTime := time.Unix(payload.GetPeriodTime(), 0).UTC()
 	rt, rtErr := h.runtimeFor(ctx, instance)
+	if mode == ModeWait {
+		// 门禁等待：事件返回重投，不确认；绑定多个 View 的实例仍把这条事件幂等记下，这样不会出现
+		// “最后一个到达的事件在等待中被确认掉，这一期再也不求值”。
+		h.recordArrival(ctx, instance, rt, message, payload, periodTime)
+		return ErrModuleNotReady
+	}
 	var skip *input.SkipError
 	if rtErr != nil && !errors.As(rtErr, &skip) {
 		return rtErr
@@ -234,6 +246,14 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 		return nil
 	}
 	calendar, bar := rt.resolved.Calendar, rt.resolved.Bar
+	market, bound := rt.resolved.MarketOfView(payload.GetViewId())
+	if !bound {
+		if h.firstDrop(message.GetEventId(), instance.InstanceID) {
+			h.logf("实例 %s 的绑定里没有 View %s，本期丢弃", instance.InstanceID, payload.GetViewId())
+			h.observe(ctx, instance, bar, time.Time{}, time.Time{}, store.StatusSkipped, input.SkipConfigError)
+		}
+		return nil
+	}
 	// 日历换算失败（例如 A 股内嵌日历已过期、周期不在交易日上）无法确定周期与有效期，只能 ACK：
 	// 记日志并计入模块健康失败，不能悄悄丢掉这一期。
 	boundary, err := input.FromStorageStart(calendar, bar, periodTime)
@@ -252,8 +272,8 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 		}
 		return nil
 	}
-	p := &period{timing: periodTiming{start: h.now()}, shadow: h.mode(instance.InstanceID) == ModeShadow, loader: loader, instance: instance, runtime: rt, eventID: message.GetEventId(), viewID: payload.GetViewId(), boundary: boundary, validUntil: validUntil}
-	p.input = store.InputRecord{ViewID: payload.GetViewId(), Bar: bar, Calendar: calendar, BarStart: boundary.StorageStart, EventID: message.GetEventId()}
+	p := &period{timing: periodTiming{start: h.now()}, shadow: h.mode(instance.InstanceID) == ModeShadow, loader: loader, instance: instance, runtime: rt, eventID: message.GetEventId(), boundary: boundary, validUntil: validUntil}
+	p.input = store.InputRecord{Bar: bar, Calendar: calendar, BarStart: boundary.StorageStart, Views: map[string]store.ViewInput{payload.GetViewId(): {EventID: message.GetEventId()}}}
 	if skip != nil {
 		return h.commitSkipped(ctx, p, skip.Reason, skip.Detail)
 	}
@@ -273,23 +293,53 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 		}
 		return h.commitSkipped(ctx, p, store.SkipOutOfOrder, fmt.Sprintf("已处理到 %s", input.BarEndLabel(calendar, bar, latest.BarEndTime)))
 	}
+	if len(rt.resolved.Tasks) > 1 {
+		// 更早的期两个 View 都已记下、只是还没求值（例如门禁等待期间都被记下，放行后先重投了较晚的一期）：按 bar 顺序先把它们求值，
+		// 再处理当期。
+		after := time.Time{}
+		if hasLatest {
+			after = latest.BarEndTime
+		}
+		if err := h.processPending(ctx, loader, instance, rt, after, boundary.BarEnd); err != nil {
+			return err
+		}
+	}
+	// 补记与补处理只看已处理到的那一期之后的期（补处理完的期已有结果，不会再被查到）。
+	if hasLatest {
+		p.after = latest.BarEndTime
+	}
+	// 汇合：绑定两个因子任务的实例等两个 View 的事件都到齐再求值（见 gather）。
+	events, complete, err := h.gather(ctx, p, payload, market, periodTime)
+	if err != nil {
+		return err
+	}
+	if !complete {
+		return nil
+	}
+	p.events = events
+	if len(rt.resolved.Tasks) > 1 {
+		// 汇合之后再取上一条结果：补处理更早的期、补记 market_missing 都发生在汇合里，当期提交的比较交换要对着它们之后的状态，
+		// 否则会冲突并把当期多求值一次（例如“第 1 期齐、第 2 期缺、第 3 期齐”应只装配 2 次）。
+		if latest, hasLatest, err = h.Store.LatestProcessed(ctx, instance.InstanceID, rt.sessionID); err != nil {
+			return err
+		}
+	}
 	expired := mode != ModeCatchup && !validUntil.After(h.now())
-	var adjacent *readiness.Record
+	var adjacent *store.InputRecord
 	if len(rt.resolved.PreviousFactors) > 0 {
 		previousEnd, err := advance(calendar, bar, boundary.BarEnd, -1)
 		if err != nil {
 			return h.commitSkipped(ctx, p, input.SkipConfigError, err.Error())
 		}
-		_, record, found, err := h.Store.AdjacentRecord(ctx, instance.InstanceID, p.viewID, bar, calendar, previousEnd, rt.resolved.PreviousFactors, rt.sessionID)
+		_, record, found, err := h.Store.AdjacentRecord(ctx, instance.InstanceID, rt.resolved.ViewIDs(), bar, calendar, previousEnd, rt.resolved.PreviousFactors, rt.sessionID)
 		if err != nil {
 			return err
 		}
 		if found {
-			adjacent = &readiness.Record{Factors: record.Factors}
+			adjacent = &record
 		}
 	}
-	ready := readiness.Check(rt.resolved.ReadinessBinding(), adjacent, payload)
-	p.input.Factors = ready.Hashes
+	ready := h.checkReady(p, adjacent)
 	if expired {
 		// 迟到周期（有效期已过）不发目标，但仍求值并只推进规则状态：状态是逐期累积的（tranche 的开仓记录与持有计数、持仓集合），跳过会让后续周期的状态缺口。
 		detail := fmt.Sprintf("有效期 %s 已过", input.BarEndLabel(calendar, bar, validUntil))
@@ -383,7 +433,7 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 }
 
 // evaluate 读取输入并求值。返回 nil 决策表示本期已作为 skipped 落库。
-func (h *Handler) evaluate(ctx context.Context, p *period, payload *storagepb.ViewDataReady, ready readiness.Result) (*engine.Decision, input.Loaded, error) {
+func (h *Handler) evaluate(ctx context.Context, p *period, payload *storagepb.ViewDataReady, ready mergedReadiness) (*engine.Decision, input.Loaded, error) {
 	rt := p.runtime
 	key := p.eventID + "\x00" + p.instance.InstanceID
 	if detail, done := h.exhausted[key]; done {
@@ -398,7 +448,7 @@ func (h *Handler) evaluate(ctx context.Context, p *period, payload *storagepb.Vi
 	for reread := 0; ; reread++ {
 		var err error
 		loadStart := h.now()
-		loaded, err = p.loader.LoadBar(ctx, p.instance.SpaceID, rt.resolved, rt.program, input.Bar{BarStart: p.boundary.StorageStart, EventUniverse: eventUniverse(payload), Readiness: ready})
+		loaded, err = p.loader.LoadBar(ctx, p.instance.SpaceID, rt.resolved, rt.program, input.Bar{BarStart: p.boundary.StorageStart, EventUniverse: p.eventUniverses(), Readiness: ready.Results, Unavailable: ready.Unavailable})
 		p.timing.load = h.now().Sub(loadStart)
 		if err == nil {
 			break
@@ -455,7 +505,7 @@ func (h *Handler) evaluate(ctx context.Context, p *period, payload *storagepb.Vi
 
 // advanceState 对不发目标的迟到周期（追赶、有效期已过）求值并只记录推进后的规则状态，记为 skipped(reason)。
 // 求值没有给出 ok 决策时与原来一致，只记 skipped(reason)。
-func (h *Handler) advanceState(ctx context.Context, p *period, payload *storagepb.ViewDataReady, ready readiness.Result, reason, detail string) error {
+func (h *Handler) advanceState(ctx context.Context, p *period, payload *storagepb.ViewDataReady, ready mergedReadiness, reason, detail string) error {
 	decision, loaded, err := h.evaluate(ctx, p, payload, ready)
 	if err != nil || decision == nil {
 		return err
@@ -513,11 +563,7 @@ func (h *Handler) buildResult(p *period, decision engine.Decision, loaded input.
 		InputJSON: inputJSON, TargetsJSON: targetsJSON, RuleStatesJSON: states, SummaryJSON: summary, PublishStatus: store.PublishNone, CreatedAt: now,
 	}
 	if decision.Status == engine.StatusOK && p.instance.LogicalAccountID != nil {
-		marketType, err := TradeMarketType(p.runtime.resolved.MarketType)
-		if err != nil {
-			return store.Result{}, nil, err
-		}
-		event, err := MarshalTargetEvent(p.instance, result, targets, p.shadow, marketType)
+		event, err := MarshalTargetEvent(p.instance, result, targets, p.shadow)
 		if err != nil {
 			return store.Result{}, nil, err
 		}

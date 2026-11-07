@@ -1,4 +1,5 @@
-import type { ReplayBar } from "@/api/strategy-types";
+import type { Replay, ReplayBar } from "@/api/strategy-types";
+import { positionLabel, tasksText } from "@/views/strategy/market-mode";
 
 export interface ReplayMetrics {
   bars: number;
@@ -20,6 +21,8 @@ export interface ReplayMetrics {
   limitations: string[];
   first_bar_end: string;
   last_bar_end: string;
+  /** 权益首次不超过 0（模拟爆仓）的那一期的 bar_end；没有爆仓为空串。此后各期空仓。 */
+  bankrupt_at: string;
 }
 
 /** 解析回放指标；任务未完成或指标缺失时返回 null。 */
@@ -47,7 +50,8 @@ export function parseMetrics(raw?: string): ReplayMetrics | null {
       factors: value.factors ?? {},
       limitations: Array.isArray(value.limitations) ? value.limitations : [],
       first_bar_end: value.first_bar_end ?? "",
-      last_bar_end: value.last_bar_end ?? ""
+      last_bar_end: value.last_bar_end ?? "",
+      bankrupt_at: value.bankrupt_at ?? ""
     };
   } catch {
     return null;
@@ -164,9 +168,27 @@ export function mergeBars(known: ReplayBar[], incoming: ReplayBar[]): ReplayBar[
   return merged.sort((a, b) => Date.parse(a.bar_end_time) - Date.parse(b.bar_end_time));
 }
 
-/** 一期理论账本里的一个持仓。 */
+/** 回放读取的因子任务的展示文本：单任务只写 ID，多任务写成 现货 xxx、永续 yyy。 */
+export function replayTasksText(replay: Pick<Replay, "tasks">): string {
+  return tasksText(Object.fromEntries(Object.entries(replay.tasks ?? {}).map(([market, task]) => [market, task.factor_task_id])));
+}
+
+/** 回放是否读取永续：永续相关的列、费率与“未计资金费与强平”的说明只在这时显示。 */
+export function replayUsesSwap(replay: Pick<Replay, "tasks"> | null | undefined): boolean {
+  return Boolean(replay?.tasks?.swap);
+}
+
+/** 回放的手续费说明：现货类一个费率，用到永续时再写永续的。 */
+export function replayFeeText(replay: Pick<Replay, "tasks" | "spot_fee_bps" | "swap_fee_bps">): string {
+  return replayUsesSwap(replay)
+    ? `现货 ${replay.spot_fee_bps} bps、永续 ${replay.swap_fee_bps} bps`
+    : `${replay.spot_fee_bps} bps`;
+}
+
+/** 一期理论账本里的一个持仓：id 是（标的|市场）键，label 是展示文本，市值对永续是带符号的名义价值。 */
 export interface ReplayPosition {
   id: string;
+  label: string;
   quantity: number;
   last_price: number;
   value: number;
@@ -206,13 +228,15 @@ export function parseBarDetail(bar: ReplayBar): ReplayBarDetail {
     positions.positions && typeof positions.positions === "object" ? positions.positions : {}
   ).map(([id, value]: [string, any]) => ({
     id,
+    label: positionLabel(id),
     quantity: Number(value?.quantity ?? 0),
     last_price: Number(value?.last_price ?? 0),
     value: Number(value?.value ?? 0),
     frozen: Boolean(value?.frozen),
     missing_bars: Number(value?.missing_bars ?? 0)
   }));
-  items.sort((a, b) => b.value - a.value || a.id.localeCompare(b.id));
+  // 空头的市值为负：按绝对值排序，大的在前。
+  items.sort((a, b) => Math.abs(b.value) - Math.abs(a.value) || a.id.localeCompare(b.id));
   const equity = bar.equity > 0 ? bar.equity : 1;
   const list = (value: unknown) => (Array.isArray(value) ? value.map(String) : []);
   return {
@@ -220,8 +244,8 @@ export function parseBarDetail(bar: ReplayBar): ReplayBarDetail {
     positions: items,
     traded: Number(ledger.traded ?? 0),
     fee: Number(ledger.fee ?? 0),
-    unfilled: list(ledger.unfilled),
-    liquidated: list(ledger.liquidated),
+    unfilled: list(ledger.unfilled).map(positionLabel),
+    liquidated: list(ledger.liquidated).map(positionLabel),
     buyScale: ledger.buy_scale === undefined || ledger.buy_scale === null ? null : Number(ledger.buy_scale),
     notes: list(summary.decision?.notes)
   };

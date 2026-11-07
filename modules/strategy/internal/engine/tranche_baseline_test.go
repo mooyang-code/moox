@@ -167,7 +167,7 @@ func TestTrancheMatchesLegacyBaseline(t *testing.T) {
 		t.Run(scenario.Name, func(t *testing.T) {
 			strategy, err := dsl.Parse([]byte(withReferenceOptions(t, scenario.DSL)))
 			require.NoError(t, err)
-			program, err := dsl.Compile(strategy, scenario.Columns)
+			program, err := compileMode(strategy, scenario.Columns)
 			require.NoError(t, err)
 			rule := &program.Rules[0]
 			subsOf := map[string]string{}
@@ -188,7 +188,7 @@ func TestTrancheMatchesLegacyBaseline(t *testing.T) {
 					}
 					rows[id] = decoded
 				}
-				decision, err := Evaluate(program, trancheFrame(rows, int64(i), rule.Rule.ID), state)
+				decision, err := evalFrame(program, trancheFrame(rows, int64(i), rule.Rule.ID), state)
 				require.NoError(t, err)
 				require.Equal(t, bar.Status, decision.Status, "第 %d 期", i)
 				got := map[string]string{}

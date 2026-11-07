@@ -17,7 +17,7 @@ message FactorTask {
   string status = 8;
   string created_at = 9;
   string updated_at = 10;
-  // bound_instance_id 是关联的策略实例：独占、永久，写入后不能修改；为空表示还没有关联。
+  // bound_instance_id 是关联的策略实例：一个任务只关联一个实例，一个实例可以关联多个任务；写入后不能修改；为空表示还没有关联。
   string bound_instance_id = 11;
 }
 

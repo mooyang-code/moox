@@ -124,8 +124,8 @@ func TestAutoConfirmOnlyObserverInstances(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, instance := range []store.Instance{
-		{InstanceID: "observer", StrategyID: "s", SpaceID: "crypto", FactorTaskID: "ftask_a", CreatedAt: now, UpdatedAt: now},
-		{InstanceID: "trader", StrategyID: "s", SpaceID: "crypto", FactorTaskID: "ftask_b", LogicalAccountID: &account, CreatedAt: now, UpdatedAt: now},
+		{InstanceID: "observer", StrategyID: "s", SpaceID: "crypto", FactorTasks: map[string]string{"spot": "ftask_a"}, CreatedAt: now, UpdatedAt: now},
+		{InstanceID: "trader", StrategyID: "s", SpaceID: "crypto", FactorTasks: map[string]string{"spot": "ftask_b"}, LogicalAccountID: &account, CreatedAt: now, UpdatedAt: now},
 	} {
 		if err := db.CreateInstance(ctx, instance); err != nil {
 			t.Fatal(err)

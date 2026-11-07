@@ -41,6 +41,7 @@ func (o Outcome) rounded() Outcome {
 	o.EquityBefore, o.EquityAfter = round4(o.EquityBefore), round4(o.EquityAfter)
 	o.Traded, o.Fee, o.Turnover = round4(o.Traded), round4(o.Fee), round4(o.Turnover)
 	o.BuyScale = round4Ptr(o.BuyScale)
+	o.SpotValue, o.SwapValue = round4(o.SpotValue), round4(o.SwapValue)
 	return o
 }
 

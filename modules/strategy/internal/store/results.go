@@ -24,6 +24,9 @@ const (
 	SkipExpired    = "expired"
 	// SkipCatchup 是恢复追赶中记录的周期：只记因子指纹（供下一期的相邻周期检查），不求值、不发目标。
 	SkipCatchup = "catchup"
+	// SkipMarketMissing 是绑定两个因子任务的实例里，另一个市场的数据没有到：缺的那个 View 已经到了更晚的一期，或更晚的一期已经汇合求值，
+	// 这一期不会再等到齐。属于数据未到，不计入实例故障。
+	SkipMarketMissing = "market_missing"
 )
 
 // PublishStatus 是结果的投递状态。
@@ -49,15 +52,19 @@ var (
 	ErrResultCASConflict = errors.New("策略结果比较交换冲突")
 )
 
-// InputRecord 是结果中保存的输入摘要（c_input_json 的结构）。
+// ViewInput 是结果中保存的一个 View 的输入摘要：收到的事件与各因子成员的契约指纹。
+type ViewInput struct {
+	EventID string            `json:"event_id,omitempty"`
+	Factors map[string]string `json:"factors,omitempty"`
+}
+
+// InputRecord 是结果中保存的输入摘要（c_input_json 的结构）：每个绑定的 View 一份。
 type InputRecord struct {
-	ViewID   string            `json:"view_id"`
-	Bar      string            `json:"bar"`
-	Calendar string            `json:"calendar"`
-	BarStart time.Time         `json:"bar_start"`
-	EventID  string            `json:"event_id,omitempty"`
-	Factors  map[string]string `json:"factors,omitempty"`
-	Detail   string            `json:"detail,omitempty"`
+	Bar      string               `json:"bar"`
+	Calendar string               `json:"calendar"`
+	BarStart time.Time            `json:"bar_start"`
+	Views    map[string]ViewInput `json:"views,omitempty"`
+	Detail   string               `json:"detail,omitempty"`
 }
 
 // Result 是一个处理过的周期：ok 带目标与规则状态，skipped 带原因。
@@ -88,11 +95,13 @@ type Result struct {
 type ResultItem struct {
 	RuleID       string
 	InstrumentID string
-	Stage        string
-	Score        *float64
-	Rank         *int
-	Weight       *string
-	Reason       string
+	// Market 是入选的权重进入的市场，其余是所选行所在的市场（spot | swap | equity）。
+	Market string
+	Stage  string
+	Score  *float64
+	Rank   *int
+	Weight *string
+	Reason string
 }
 
 type resultRow struct {
@@ -295,8 +304,8 @@ func insertItems(tx *gorm.DB, resultID string, createdAt time.Time, items []Resu
 			end = len(items)
 		}
 		var builder strings.Builder
-		builder.WriteString("INSERT INTO t_strategy_result_items (c_result_id, c_rule_id, c_instrument_id, c_stage, c_score, c_rank, c_weight, c_reason, c_ctime) VALUES ")
-		args := make([]any, 0, (end-start)*9)
+		builder.WriteString("INSERT INTO t_strategy_result_items (c_result_id, c_rule_id, c_instrument_id, c_market, c_stage, c_score, c_rank, c_weight, c_reason, c_ctime) VALUES ")
+		args := make([]any, 0, (end-start)*10)
 		for i, item := range items[start:end] {
 			if strings.TrimSpace(item.RuleID) == "" || strings.TrimSpace(item.InstrumentID) == "" || strings.TrimSpace(item.Stage) == "" {
 				return fmt.Errorf("%w：解释明细缺少规则、标的或阶段", ErrResultInvalid)
@@ -304,7 +313,7 @@ func insertItems(tx *gorm.DB, resultID string, createdAt time.Time, items []Resu
 			if i > 0 {
 				builder.WriteString(", ")
 			}
-			builder.WriteString("(?, ?, ?, ?, ?, ?, ?, ?, ?)")
+			builder.WriteString("(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
 			var score, rank, weight any
 			if item.Score != nil {
 				score = *item.Score
@@ -315,7 +324,7 @@ func insertItems(tx *gorm.DB, resultID string, createdAt time.Time, items []Resu
 			if item.Weight != nil {
 				weight = *item.Weight
 			}
-			args = append(args, resultID, item.RuleID, item.InstrumentID, item.Stage, score, rank, weight, item.Reason, createdAt)
+			args = append(args, resultID, item.RuleID, item.InstrumentID, item.Market, item.Stage, score, rank, weight, item.Reason, createdAt)
 		}
 		if err := tx.Exec(builder.String(), args...).Error; err != nil {
 			return err
@@ -386,9 +395,9 @@ func (s *Store) ResultAtBar(ctx context.Context, instanceID, sessionID string, b
 	return row.result(), true, nil
 }
 
-// AdjacentRecord 查找本实例对某一根 bar 的可信处理记录：同一 View、同一 bar 与日历，且含有全部所需因子的指纹；
+// AdjacentRecord 查找本实例对某一根 bar 的可信处理记录：同一 bar 与日历，且每个 View 都含有全部所需因子的指纹；
 // 不限会话，优先当前会话，其次创建时间最新。
-func (s *Store) AdjacentRecord(ctx context.Context, instanceID, viewID, bar, calendar string, barEnd time.Time, factorIDs []string, preferSessionID string) (Result, InputRecord, bool, error) {
+func (s *Store) AdjacentRecord(ctx context.Context, instanceID string, viewIDs []string, bar, calendar string, barEnd time.Time, factorIDs []string, preferSessionID string) (Result, InputRecord, bool, error) {
 	var rows []resultRow
 	if err := s.db.WithContext(ctx).Raw(`
 		SELECT `+resultColumns+` FROM t_strategy_results
@@ -402,14 +411,15 @@ func (s *Store) AdjacentRecord(ctx context.Context, instanceID, viewID, bar, cal
 		if err := json.Unmarshal([]byte(row.InputJSON), &input); err != nil {
 			continue
 		}
-		if input.ViewID != viewID || input.Bar != bar || input.Calendar != calendar {
+		if input.Bar != bar || input.Calendar != calendar {
 			continue
 		}
 		covered := true
-		for _, factorID := range factorIDs {
-			if input.Factors[factorID] == "" {
-				covered = false
-				break
+		for _, viewID := range viewIDs {
+			for _, factorID := range factorIDs {
+				if input.Views[viewID].Factors[factorID] == "" {
+					covered = false
+				}
 			}
 		}
 		if !covered {
@@ -466,18 +476,19 @@ func (s *Store) ListResultItems(ctx context.Context, resultID string) ([]ResultI
 	var rows []struct {
 		RuleID       string          `gorm:"column:c_rule_id"`
 		InstrumentID string          `gorm:"column:c_instrument_id"`
+		Market       string          `gorm:"column:c_market"`
 		Stage        string          `gorm:"column:c_stage"`
 		Score        sql.NullFloat64 `gorm:"column:c_score"`
 		Rank         sql.NullInt64   `gorm:"column:c_rank"`
 		Weight       sql.NullString  `gorm:"column:c_weight"`
 		Reason       string          `gorm:"column:c_reason"`
 	}
-	if err := s.db.WithContext(ctx).Raw(`SELECT c_rule_id, c_instrument_id, c_stage, c_score, c_rank, c_weight, c_reason FROM t_strategy_result_items WHERE c_result_id = ? ORDER BY c_rule_id, c_instrument_id`, resultID).Scan(&rows).Error; err != nil {
+	if err := s.db.WithContext(ctx).Raw(`SELECT c_rule_id, c_instrument_id, c_market, c_stage, c_score, c_rank, c_weight, c_reason FROM t_strategy_result_items WHERE c_result_id = ? ORDER BY c_rule_id, c_instrument_id`, resultID).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
 	items := make([]ResultItem, 0, len(rows))
 	for _, row := range rows {
-		item := ResultItem{RuleID: row.RuleID, InstrumentID: row.InstrumentID, Stage: row.Stage, Reason: row.Reason, Weight: nullableString(row.Weight)}
+		item := ResultItem{RuleID: row.RuleID, InstrumentID: row.InstrumentID, Market: row.Market, Stage: row.Stage, Reason: row.Reason, Weight: nullableString(row.Weight)}
 		if row.Score.Valid {
 			score := row.Score.Float64
 			item.Score = &score

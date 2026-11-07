@@ -4,13 +4,20 @@ import { buildReplayQuery, emptyPrefill, parseReplayQuery } from "./replay-query
 describe("replay query", () => {
   it("normalizes pages and drops the definition when an instance is given", () => {
     expect(
-      parseReplayQuery({ page: "0", bar_page: "x", strategy_id: "s1", instance_id: "i1", factor_task_id: "ftask_1", create: "1" })
+      parseReplayQuery({
+        page: "0",
+        bar_page: "x",
+        strategy_id: "s1",
+        instance_id: "i1",
+        factor_tasks: "spot=ftask_1,swap=ftask_2",
+        create: "1"
+      })
     ).toEqual({
       replayId: "",
       page: 1,
       barPage: 1,
       create: true,
-      prefill: { strategyId: "", instanceId: "i1", factorTaskId: "ftask_1" }
+      prefill: { strategyId: "", instanceId: "i1", factorTasks: { spot: "ftask_1", swap: "ftask_2" } }
     });
   });
 
@@ -21,8 +28,8 @@ describe("replay query", () => {
   });
 
   it("keeps the prefill only while the create drawer is open", () => {
-    const open = parseReplayQuery({ create: "1", strategy_id: "s1", factor_task_id: "ftask_1" });
-    expect(buildReplayQuery(open)).toEqual({ create: "1", strategy_id: "s1", factor_task_id: "ftask_1" });
+    const open = parseReplayQuery({ create: "1", strategy_id: "s1", factor_tasks: "spot=ftask_1" });
+    expect(buildReplayQuery(open)).toEqual({ create: "1", strategy_id: "s1", factor_tasks: "spot=ftask_1" });
     expect(buildReplayQuery({ ...open, create: false })).toEqual({});
   });
 

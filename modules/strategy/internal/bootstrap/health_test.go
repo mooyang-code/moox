@@ -50,13 +50,13 @@ func seedEnabled(t *testing.T, repo *store.Store, instanceID string, account *st
 	if err := json.Unmarshal([]byte(resolved), &snapshot); err != nil {
 		t.Fatal(err)
 	}
-	snapshot["factor_task_id"] = task
+	snapshot["tasks"] = map[string]any{"spot": map[string]any{"view_id": "view_factor_a", "factor_task_id": task}}
 	raw, err := json.Marshal(snapshot)
 	if err != nil {
 		t.Fatal(err)
 	}
 	resolved = string(raw)
-	if err := repo.CreateInstance(ctx, store.Instance{InstanceID: instanceID, StrategyID: "s1", SpaceID: "crypto", FactorTaskID: task, LogicalAccountID: account, CreatedAt: seedTime}); err != nil {
+	if err := repo.CreateInstance(ctx, store.Instance{InstanceID: instanceID, StrategyID: "s1", SpaceID: "crypto", FactorTasks: map[string]string{"spot": task}, LogicalAccountID: account, CreatedAt: seedTime}); err != nil {
 		t.Fatal(err)
 	}
 	session := instanceID + "-session"
@@ -72,7 +72,7 @@ func seedEnabled(t *testing.T, repo *store.Store, instanceID string, account *st
 	}
 }
 
-const resolvedJSON = `{"completion_kind":"collector.period.completed","view_id":"view_factor_a","factor_task_id":"ftask_a","dataset_id":"ds","bar":"1h","calendar":"crypto_24x7","spot":true,"columns":{},"view_columns":["close"]}`
+const resolvedJSON = `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"view_id":"view_factor_a","factor_task_id":"ftask_a","dataset_id":"ds"}},"bar":"1h","calendar":"crypto_24x7","columns":{},"view_columns":["close"]}`
 
 func TestStrategyHealthFailsClosedWhileEventBusUnavailable(t *testing.T) {
 	repo := openStore(t)

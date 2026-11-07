@@ -58,7 +58,7 @@ func newTunedReplayEvaluator(t *testing.T) *ReplayEvaluator {
 	if err := repo.CreateDefinition(ctx, store.Definition{StrategyID: "s1", Name: "tuned", DSLYaml: tunedReplayDSL, DSLHash: hash, CreatedAt: bar0}); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.CreateInstance(ctx, store.Instance{InstanceID: "i1", StrategyID: "s1", SpaceID: "space", FactorTaskID: "ftask_a", CreatedAt: bar0}); err != nil {
+	if err := repo.CreateInstance(ctx, store.Instance{InstanceID: "i1", StrategyID: "s1", SpaceID: "space", FactorTasks: map[string]string{"spot": "ftask_a"}, CreatedAt: bar0}); err != nil {
 		t.Fatal(err)
 	}
 	return &ReplayEvaluator{Store: repo, Client: tunedReplayClient{}}

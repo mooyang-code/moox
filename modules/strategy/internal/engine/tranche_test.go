@@ -26,7 +26,7 @@ func TestTrancheStateSurvivesRestart(t *testing.T) {
 	golden := loadGoldenCase(t, "multi_sub_merge")
 	strategy, err := dsl.Parse([]byte(golden.DSL))
 	require.NoError(t, err)
-	program, err := dsl.Compile(strategy, columnsOf(bars))
+	program, err := compileMode(strategy, columnsOf(bars))
 	require.NoError(t, err)
 	rule := &program.Rules[0]
 	var direct, restarted RuleState
@@ -58,11 +58,11 @@ func TestTrancheEvaluateEndToEnd(t *testing.T) {
 	golden := loadGoldenCase(t, "hold_36_volume_gap")
 	strategy, err := dsl.Parse([]byte(golden.DSL))
 	require.NoError(t, err)
-	program, err := dsl.Compile(strategy, columnsOf(bars))
+	program, err := compileMode(strategy, columnsOf(bars))
 	require.NoError(t, err)
 	var state State
 	for i, bar := range bars {
-		decision, err := Evaluate(program, trancheFrame(bar, int64(i), "g"), state)
+		decision, err := evalFrame(program, trancheFrame(bar, int64(i), "g"), state)
 		require.NoError(t, err)
 		require.Equal(t, StatusOK, decision.Status, "第 %d 期：%v", i, decision.Summary.Notes)
 		got := map[string]quant.Decimal{}
@@ -84,11 +84,11 @@ func TestTrancheEvaluateEndToEnd(t *testing.T) {
 	// 缺数守门：一半标的没有行时整期跳过（max_missing 设为 0）。
 	strict, err := dsl.Parse([]byte(golden.DSL[:len(golden.DSL)-len("  max_missing: 1\n")] + "  max_missing: 0\n"))
 	require.NoError(t, err)
-	program, err = dsl.Compile(strict, columnsOf(bars))
+	program, err = compileMode(strict, columnsOf(bars))
 	require.NoError(t, err)
 	frame := trancheFrame(bars[0], 0, "g")
 	delete(frame.Rows, "AAA-USDT")
-	decision, err := Evaluate(program, frame, State{})
+	decision, err := evalFrame(program, frame, State{})
 	require.NoError(t, err)
 	require.Equal(t, StatusSkipped, decision.Status)
 	require.Equal(t, SkipTooManyMissing, decision.SkipReason)

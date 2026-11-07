@@ -17,7 +17,7 @@ import (
 // 一致（周五 ok、周一跳过仍是 40 小时，而不是退回 24 小时、周一就报 success stale）。
 func TestStockBasesAreLoadedFromStore(t *testing.T) {
 	repo := openStore(t)
-	stockJSON := `{"completion_kind":"collector.period.completed","view_id":"view_factor_a","factor_task_id":"ftask_a","dataset_id":"ds","bar":"1d","calendar":"cn_stock","spot":true,"columns":{},"view_columns":["close"]}`
+	stockJSON := `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"view_id":"view_factor_a","factor_task_id":"ftask_a","dataset_id":"ds"}},"bar":"1d","calendar":"cn_stock","columns":{},"view_columns":["close"]}`
 	seedEnabled(t, repo, "i1", nil, stockJSON)
 	shanghai := time.FixedZone("CST", 8*3600)
 	friday := time.Date(2026, 10, 9, 15, 0, 0, 0, shanghai)
@@ -28,7 +28,7 @@ func TestStockBasesAreLoadedFromStore(t *testing.T) {
 		status string
 		reason string
 	}{{"r1", friday, store.StatusOK, ""}, {"r2", monday, store.StatusSkipped, "factor_missing"}} {
-		input, _ := json.Marshal(store.InputRecord{ViewID: "view_a", Bar: "1d", Calendar: "cn_stock", BarStart: item.barEnd.Add(-15 * time.Hour)})
+		input, _ := json.Marshal(store.InputRecord{Views: map[string]store.ViewInput{"view_a": {}}, Bar: "1d", Calendar: "cn_stock", BarStart: item.barEnd.Add(-15 * time.Hour)})
 		result := store.Result{ResultID: item.id, InstanceID: "i1", SessionID: "i1-session", BarEndTime: item.barEnd, ValidUntil: item.barEnd.Add(48 * time.Hour), Status: item.status, SkipReason: item.reason, DSLHash: "sha256:demo",
 			InputJSON: input, TargetsJSON: json.RawMessage(`[]`), RuleStatesJSON: json.RawMessage(`{}`), SummaryJSON: json.RawMessage(`{}`), PublishStatus: store.PublishNone, CreatedAt: item.barEnd.Add(time.Minute)}
 		if _, _, err := repo.CommitResult(context.Background(), store.CommitRequest{Result: result, Now: item.barEnd.Add(time.Minute)}); err != nil {

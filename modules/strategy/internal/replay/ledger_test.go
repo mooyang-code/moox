@@ -17,7 +17,7 @@ func near(t *testing.T, label string, got, want float64) {
 
 // heldLedger 构造 A、B 各持 50、现金 0 的账本。
 func heldLedger(feeBps float64) *Ledger {
-	ledger := NewLedger(0, feeBps, 3)
+	ledger := NewLedger(0, feeBps, 0, 3)
 	ledger.Positions["A"] = &Position{Quantity: 5, LastPrice: 10, Value: 50}
 	ledger.Positions["B"] = &Position{Quantity: 50, LastPrice: 1, Value: 50}
 	return ledger
@@ -56,7 +56,7 @@ func TestS22TargetsUseTotalEquityDenominator(t *testing.T) {
 
 // 带费用的全仓建仓与全量换仓：资金守恒、现金不为负、费用只按实际成交额。
 func TestLedgerFullRebalanceConservesCapital(t *testing.T) {
-	ledger := NewLedger(100, 10, 3)
+	ledger := NewLedger(100, 10, 0, 3)
 	first := ledger.Step(Step{OK: true, Prices: map[string]float64{"A": 10, "B": 5}, Targets: map[string]float64{"A": 0.5, "B": 0.5}})
 	if ledger.Cash < 0 {
 		t.Fatalf("现金不能为负：%f", ledger.Cash)
@@ -83,7 +83,7 @@ func TestLedgerFullRebalanceConservesCapital(t *testing.T) {
 
 // 目标不变但价格漂移后再平衡：三期已知价格，断言持仓、现金、收益与换手。
 func TestLedgerRebalancesAfterPriceDrift(t *testing.T) {
-	ledger := NewLedger(100, 0, 3)
+	ledger := NewLedger(100, 0, 0, 3)
 	ledger.Step(Step{OK: true, Prices: map[string]float64{"A": 10, "B": 10}, Targets: map[string]float64{"A": 0.5, "B": 0.5}})
 	near(t, "A 数量", ledger.Positions["A"].Quantity, 5)
 	drift := ledger.Step(Step{OK: true, Prices: map[string]float64{"A": 20, "B": 10}, Targets: map[string]float64{"A": 0.5, "B": 0.5}})
@@ -99,7 +99,7 @@ func TestLedgerRebalancesAfterPriceDrift(t *testing.T) {
 
 // S27：连续缺价，第 K 期恰好 skipped：不成交、不清算、只推进计数；下一 ok 期仍无价则按最后价清算。
 func TestS27LiquidationOnlyOnOkBars(t *testing.T) {
-	ledger := NewLedger(0, 10, 3)
+	ledger := NewLedger(0, 10, 0, 3)
 	ledger.Positions["A"] = &Position{Quantity: 10, LastPrice: 10, Value: 100}
 	for bar := 1; bar <= 2; bar++ {
 		outcome := ledger.Step(Step{OK: true, Prices: map[string]float64{}, Targets: map[string]float64{"A": 1}})
@@ -124,7 +124,7 @@ func TestS27LiquidationOnlyOnOkBars(t *testing.T) {
 
 // S27：重新有价则回到可成交并清零计数，按当期目标处理。
 func TestS27PriceReturnResetsCounter(t *testing.T) {
-	ledger := NewLedger(0, 0, 3)
+	ledger := NewLedger(0, 0, 0, 3)
 	ledger.Positions["A"] = &Position{Quantity: 10, LastPrice: 10, Value: 100}
 	ledger.Step(Step{OK: true, Prices: map[string]float64{}, Targets: map[string]float64{"A": 1}})
 	ledger.Step(Step{OK: true, Prices: map[string]float64{}, Targets: map[string]float64{"A": 1}})
@@ -155,7 +155,7 @@ func TestFrozenRebalanceExecutesWhenPriceReturns(t *testing.T) {
 
 // 买单缩减后费用只按实际成交额计。
 func TestScaledBuysChargeFeesOnActualTrades(t *testing.T) {
-	ledger := NewLedger(10, 100, 3)
+	ledger := NewLedger(10, 100, 0, 3)
 	ledger.Positions["A"] = &Position{Quantity: 9, LastPrice: 10, Value: 90}
 	outcome := ledger.Step(Step{OK: true, Prices: map[string]float64{"B": 1}, Targets: map[string]float64{"A": 0.9, "B": 0.5}})
 	if outcome.BuyScale == nil || *outcome.BuyScale <= 0 || *outcome.BuyScale >= 1 {
@@ -170,7 +170,7 @@ func TestScaledBuysChargeFeesOnActualTrades(t *testing.T) {
 // 初始权益较大时，迭代残差不能被当作目标未达成：粉尘阈值相对权益计算。
 // 构造上一期留下的残差：现金 1e-10，B 比目标少约 1e-10；补这笔粉尘级的仓不应报未达成。
 func TestLargeEquityResidualIsNotUnfilled(t *testing.T) {
-	ledger := NewLedger(1e-10, 10, 3)
+	ledger := NewLedger(1e-10, 10, 0, 3)
 	ledger.Positions["A"] = &Position{Quantity: 10, LastPrice: 5, Value: 50}
 	ledger.Positions["B"] = &Position{Quantity: 4.99999999999, LastPrice: 10, Value: 49.9999999999}
 	outcome := ledger.Step(Step{OK: true, Prices: map[string]float64{"A": 5, "B": 10}, Targets: map[string]float64{"A": 0.5, "B": 0.5}})
@@ -184,7 +184,7 @@ func TestLargeEquityResidualIsNotUnfilled(t *testing.T) {
 
 // 现金为 0 时买入全部无法成交，缩减比例 0 也要显式给出。
 func TestZeroCashReportsZeroBuyScale(t *testing.T) {
-	ledger := NewLedger(0, 10, 3)
+	ledger := NewLedger(0, 10, 0, 3)
 	ledger.Positions["A"] = &Position{Quantity: 10, LastPrice: 10, Value: 100}
 	outcome := ledger.Step(Step{OK: true, Prices: map[string]float64{"B": 1}, Targets: map[string]float64{"A": 0.5, "B": 0.5}})
 	if outcome.BuyScale == nil || *outcome.BuyScale != 0 {

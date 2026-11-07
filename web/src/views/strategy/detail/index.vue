@@ -53,7 +53,7 @@
             <span class="mono">{{ store.instance.strategy_id }}</span></a-descriptions-item
           >
           <a-descriptions-item label="因子任务"
-            ><span class="mono">{{ store.instance.factor_task_id }}</span></a-descriptions-item
+            ><span class="mono">{{ tasksText(store.instance.factor_tasks) }}</span></a-descriptions-item
           >
           <a-descriptions-item label="运行会话"
             ><span class="mono">{{ store.instance.session_id || "无当前会话" }}</span></a-descriptions-item
@@ -112,6 +112,7 @@
 </template>
 
 <script setup lang="ts">
+import { tasksText } from "@/views/strategy/market-mode";
 import { useLogicalAccount } from "@/views/strategy/components/use-logical-account";
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
@@ -197,7 +198,7 @@ function handleControlFailed() {
 }
 function openReplay() {
   if (store.instance)
-    router.push(replayLink({ instanceId: store.instance.instance_id, factorTaskId: store.instance.factor_task_id }));
+    router.push(replayLink({ instanceId: store.instance.instance_id, factorTasks: store.instance.factor_tasks }));
 }
 onMounted(start);
 watch(

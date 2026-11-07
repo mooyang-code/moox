@@ -41,12 +41,14 @@
         <div v-for="(column, index) in columns" :key="index" class="target-col" role="rowgroup">
           <div class="target-row target-row--head" role="row">
             <span role="columnheader">标的</span>
+            <span role="columnheader">市场</span>
             <span role="columnheader">权重分布</span>
             <span role="columnheader" class="target-weight-col">目标权重</span>
             <span role="columnheader">方向</span>
           </div>
-          <div v-for="row in column" :key="row.target.instrument_id" class="target-row" role="row">
+          <div v-for="row in column" :key="targetKey(row.target.instrument_id, row.target.market)" class="target-row" role="row">
             <span role="cell" class="target-id">{{ row.target.instrument_id }}</span>
+            <span role="cell" class="target-market">{{ marketLabel(row.target.market) }}</span>
             <span role="cell" class="target-bar" aria-hidden="true"
               ><span :class="['target-bar__fill', row.weight < 0 ? 'short' : 'long']" :style="{ width: `${row.ratio * 100}%` }"
             /></span>
@@ -86,6 +88,7 @@ import {
   targetWeightPercent,
   type TargetState
 } from "@/views/strategy/model";
+import { marketLabel, targetKey } from "@/views/strategy/market-mode";
 
 const props = defineProps<{
   targets: InstrumentTarget[];
@@ -274,7 +277,7 @@ const notice = computed<{ type: "info" | "warning"; text: string } | null>(() =>
 }
 .target-row {
   display: grid;
-  grid-template-columns: minmax(90px, 1.1fr) minmax(40px, 1fr) 64px 32px;
+  grid-template-columns: minmax(90px, 1.1fr) 40px minmax(40px, 1fr) 64px 32px;
   align-items: center;
   gap: 10px;
   padding: 7px 12px;
@@ -293,6 +296,10 @@ const notice = computed<{ type: "info" | "warning"; text: string } | null>(() =>
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.target-market {
+  color: var(--color-text-3);
+  font-size: 12px;
 }
 .target-bar {
   height: 8px;

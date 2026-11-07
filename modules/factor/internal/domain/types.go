@@ -26,7 +26,7 @@ const (
 const DefaultCategoryID = "uncategorized"
 
 // FactorTask 是一个因子计算任务：一个源数据集和频率，产出一个结果数据集。
-// BoundInstanceID 是关联的策略实例：独占、永久，写入后不能修改；为空表示还没有关联。
+// BoundInstanceID 是关联的策略实例：任务独占、永久，一个实例可以关联多个任务，写入后不能修改；为空表示还没有关联。
 // 任务的标的就是源数据集当前的标的，没有单独的对象范围。
 type FactorTask struct {
 	TaskID          string    `json:"task_id" gorm:"column:c_task_id;primaryKey"`
