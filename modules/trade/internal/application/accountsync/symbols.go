@@ -22,7 +22,7 @@ const (
 	rotationLimit   = 20
 )
 
-// scopedOpenOrderLimit 是周期对账按标的逐个查挂单的上限：超过就退回不带 symbol 的全量查询。
+// scopedOpenOrderLimit 是周期对账按标的逐个查挂单的上限：超过就退回不带 symbol 的全量查询（逐个串行查的延迟随标的数线性增长）。
 const scopedOpenOrderLimit = 20
 
 // listOpenOrders 读挂单。统一账户现货不传 symbol 的挂单查询按“当前交易中的标的数量”计权重，30 秒一次的周期对账
@@ -38,7 +38,7 @@ func (s *Service) listOpenOrders(ctx context.Context, adapter execution.Executio
 		return nil, err
 	}
 	if len(symbols) > scopedOpenOrderLimit {
-		// 标的太多时逐个串行查（每个权重 5、一个请求）比一次全量查还慢还贵，退回全量查。
+		// 标的太多时逐个串行查（每个标的一次往返）的延迟高过一次全量查，退回全量查；权重上不比较：全量查按交易中的标的数计权重，逐个查每个 5。
 		return adapter.ListOpenOrders(ctx)
 	}
 	return scoped.ListOpenOrdersForSymbols(ctx, symbols)

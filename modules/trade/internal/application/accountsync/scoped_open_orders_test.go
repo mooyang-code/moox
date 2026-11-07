@@ -109,7 +109,7 @@ func TestReconcileReadsOpenOrdersPerSymbolWhileOtherModesReadAll(t *testing.T) {
 	require.Len(t, orders, 1, "没有按标的查询能力的适配器照常读全部挂单")
 }
 
-// 要查的现货标的超过上限时退回全量查：逐个串行查比一次全量查还贵。
+// 要查的现货标的超过上限时退回全量查：逐个串行查的延迟随标的数增长。
 func TestReconcileFallsBackToFullQueryWhenTooManySymbols(t *testing.T) {
 	tradeStore := openSyncStore(t)
 	account := seedSpotAccountWithTargetAndHoldings(t, tradeStore)
