@@ -36,8 +36,9 @@ export interface FundFormScope {
   /** 测试网组合：保证金率监控不监控测试网 */
   testnet?: boolean;
   /**
-   * 组合里有币安生产实盘成员（包括停用的）：后端只要有这样的成员就监控保证金率。
-   * 不传按有处理，只有明确传 false（全是 OKX 等不被监控的成员）才隐藏。
+   * 组合里有会被监控的币安账户：启用的成员、执行账户已启用、生产实盘、**开通了永续**、账户类型是币安普通或统一账户
+   * （后端 marginmonitor 就按这个口径监控；停用的成员、只开现货的币安账户、测试网都不被监控，不算）。
+   * 不传按有处理，只有明确传 false（没有这样的账户，例如全是 OKX 或只开现货）才隐藏。
    */
   hasBinanceLive?: boolean;
   /** 组合的结算币，默认 USDT：稳定币保证金必须含它，保证金币和套利底仓不能写它 */
@@ -60,7 +61,7 @@ export function showsMarginMonitor(scope: FundFormScope = {}): boolean {
 export function marginMonitorHiddenNote(scope: FundFormScope = {}): string {
   if (showsMarginMonitor(scope) || scope.paper) return "";
   if (scope.testnet) return "保证金率监控只对生产环境的币安实盘组合生效，测试网组合不显示";
-  return "这个组合没有币安生产实盘成员，保证金率监控不生效";
+  return "这个组合没有会被监控的币安账户（生产实盘、已启用、开通了永续），保证金率监控不生效";
 }
 
 /** 混合组合（既有币安生产实盘成员、又有非币安成员）在监控区块里的补充说明；其他情况返回空串。 */
