@@ -229,3 +229,21 @@ func TestAddingANonBinanceMemberIsRejectedWhenFundMaintenanceIsOn(t *testing.T) 
 	require.NoError(t, err)
 	require.Equal(t, tradepb.ErrorCode_SUCCESS, response.GetRetInfo().GetCode(), response.GetRetInfo().GetMsg())
 }
+
+// 个别数值读不出来（宽松解析给出 warning）时，设置照常返回，但错误说明也要有：
+// 否则界面稳定币保证金显示为空、BNB 保留显示 0，一保存就把排除集合和 BNB 保留悄悄改掉。
+func TestFundSettingsWarningsAreReportedAndSavingIsBlockedByTheErrorField(t *testing.T) {
+	handler, ctx := newSettingsHandlerFor(t, tradepb.ExecutionMode_EXECUTION_MODE_LIVE)
+	set := func(fund string) *tradepb.LogicalAccount {
+		require.NoError(t, handler.Store.DBForTest().Exec("UPDATE t_logical_accounts SET c_fund_settings_json = ?", fund).Error)
+		got, err := handler.GetLogicalAccount(ctx, &tradepb.GetLogicalAccountReq{LogicalAccountId: "logical-1"})
+		require.NoError(t, err)
+		return got.GetLogicalAccount()
+	}
+	stable := set(`{"stablecoin_margin":{"USDT":"0.5","USDC":"abc"}}`)
+	require.NotEmpty(t, stable.GetFundSettingsError())
+	require.NotNil(t, stable.GetFundSettings())
+	bnb := set(`{"bnb_reserve_amount":"abc"}`)
+	require.Contains(t, bnb.GetFundSettingsError(), "BNB")
+	require.Empty(t, set(`{"bnb_reserve_amount":"200"}`).GetFundSettingsError(), "读得出的设置没有错误说明")
+}

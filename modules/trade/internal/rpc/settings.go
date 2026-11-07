@@ -104,11 +104,18 @@ func fundSettingsFromPB(value *tradepb.FundSettings) fundsettings.Document {
 	}
 }
 
-// fundSettingsToPB 用与执行器一致的宽松解析显示当前生效的值；排除字段读不出来时返回错误说明。
+// fundSettingsToPB 用与执行器一致的宽松解析显示当前生效的值。
+// 排除字段读不出来时返回错误说明、不返回设置；个别数值读不出来（宽松解析给出 warning）时设置照常返回，
+// 但错误说明也要有：执行器按默认值处理（BNB 保留读不出来时按“已开启”处理），界面不能当没事，
+// 否则用户一保存就把排除集合或 BNB 保留悄悄改掉。
 func fundSettingsToPB(stored string) (*tradepb.FundSettings, string) {
-	settings, _, err := fundsettings.ParseLenient(stored)
+	settings, warning, err := fundsettings.ParseLenient(stored)
 	if err != nil {
 		return nil, err.Error()
+	}
+	message := ""
+	if warning != nil {
+		message = warning.Error()
 	}
 	value := settings.Document()
 	return &tradepb.FundSettings{
@@ -120,5 +127,5 @@ func fundSettingsToPB(stored string) (*tradepb.FundSettings, string) {
 		StablecoinMargin:        value.StablecoinMargin,
 		MarginCoins:             value.MarginCoins,
 		ArbitrageBaseAssets:     value.ArbitrageBaseAssets,
-	}, ""
+	}, message
 }
