@@ -144,7 +144,7 @@ func (c *Client) UnblockInstrument(ctx context.Context, instrument action.Instru
 }
 
 // ListBlockedInstruments 返回当前下架名单。
-func (c *Client) ListBlockedInstruments(ctx context.Context) ([]action.InstrumentRef, error) {
+func (c *Client) ListBlockedInstruments(ctx context.Context) ([]action.BlockedInstrument, error) {
 	response := new(tradepb.ListBlockedInstrumentsRsp)
 	if err := c.invoke(ctx, "ListBlockedInstruments", "", &tradepb.ListBlockedInstrumentsReq{}, response); err != nil {
 		return nil, err
@@ -152,9 +152,12 @@ func (c *Client) ListBlockedInstruments(ctx context.Context) ([]action.Instrumen
 	if err := retError(response.GetRetInfo()); err != nil {
 		return nil, err
 	}
-	list := make([]action.InstrumentRef, 0, len(response.GetInstruments()))
+	list := make([]action.BlockedInstrument, 0, len(response.GetInstruments()))
 	for _, item := range response.GetInstruments() {
-		list = append(list, action.InstrumentRef{Exchange: fromExchange(item.GetExchange()), Market: fromMarket(item.GetMarketType()), ExchangeSymbol: item.GetExchangeSymbol()})
+		list = append(list, action.BlockedInstrument{
+			Instrument: action.InstrumentRef{Exchange: fromExchange(item.GetExchange()), Market: fromMarket(item.GetMarketType()), ExchangeSymbol: item.GetExchangeSymbol()},
+			Reason:     item.GetReason(),
+		})
 	}
 	return list, nil
 }

@@ -40,8 +40,9 @@ func (c *clock) Set(t time.Time) {
 
 // fakeTrade 是假的 Trade：名单、持仓和清仓操作都在内存里，清仓按操作号幂等。
 type fakeTrade struct {
-	mu      sync.Mutex
-	blocked map[action.InstrumentRef]bool
+	mu sync.Mutex
+	// blocked 是下架名单：标的 → 第一个写入者的原因（重复写入保留第一个，和 Trade 一样）。
+	blocked map[action.InstrumentRef]string
 	holders []action.Holder
 	// ignorePaperOnly 模拟违约的 Trade：paperOnly 为真也返回全部持有者。
 	ignorePaperOnly bool
@@ -72,7 +73,7 @@ type fakeOp struct {
 
 func newFakeTrade() *fakeTrade {
 	return &fakeTrade{
-		blocked: map[action.InstrumentRef]bool{}, errs: map[string]error{}, busyLeft: map[string]int{},
+		blocked: map[action.InstrumentRef]string{}, errs: map[string]error{}, busyLeft: map[string]int{},
 		calls: map[string]int{}, ops: map[string]*fakeOp{},
 	}
 }
@@ -86,12 +87,18 @@ func (f *fakeTrade) setHolders(holders ...action.Holder) {
 func (f *fakeTrade) isBlocked() bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.blocked[foo]
+	_, blocked := f.blocked[foo]
+	return blocked
 }
 
+// setBlocked 直接改名单（不经过处理器）：写入的原因是“手工”，不带任何执行记录的标记。
 func (f *fakeTrade) setBlocked(blocked bool) {
 	f.mu.Lock()
-	f.blocked[foo] = blocked
+	if blocked {
+		f.blocked[foo] = "手工"
+	} else {
+		delete(f.blocked, foo)
+	}
 	f.mu.Unlock()
 }
 
@@ -130,8 +137,11 @@ func (f *fakeTrade) BlockInstrument(ctx context.Context, instrument action.Instr
 	if err := f.enter("Block"); err != nil {
 		return action.BlockResult{}, err
 	}
-	created := !f.blocked[instrument]
-	f.blocked[instrument] = true
+	_, exists := f.blocked[instrument]
+	if !exists {
+		f.blocked[instrument] = reason
+	}
+	created := !exists
 	return action.BlockResult{InstrumentUnknown: f.unknown, Created: created}, nil
 }
 
@@ -153,17 +163,15 @@ func (f *fakeTrade) UnblockInstrument(ctx context.Context, instrument action.Ins
 	return nil
 }
 
-func (f *fakeTrade) ListBlockedInstruments(context.Context) ([]action.InstrumentRef, error) {
+func (f *fakeTrade) ListBlockedInstruments(context.Context) ([]action.BlockedInstrument, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.enter("ListBlocked"); err != nil {
 		return nil, err
 	}
-	var list []action.InstrumentRef
-	for instrument, blocked := range f.blocked {
-		if blocked {
-			list = append(list, instrument)
-		}
+	var list []action.BlockedInstrument
+	for instrument, reason := range f.blocked {
+		list = append(list, action.BlockedInstrument{Instrument: instrument, Reason: reason})
 	}
 	return list, nil
 }

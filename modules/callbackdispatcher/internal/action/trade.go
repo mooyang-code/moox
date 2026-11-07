@@ -87,6 +87,12 @@ type BlockResult struct {
 	Created bool
 }
 
+// BlockedInstrument 是下架名单里的一项。名单遇到重复写入时保留第一个写入者的原因，所以原因里带的执行记录 ID 能说明这一项是谁写的。
+type BlockedInstrument struct {
+	Instrument InstrumentRef
+	Reason     string
+}
+
 // ErrInvalidRequest 表示 Trade 认为请求本身不合法（参数、市场不支持）：重试没有用。
 var ErrInvalidRequest = errors.New("Trade 拒绝了请求参数")
 
@@ -101,8 +107,8 @@ type TradeClient interface {
 	BlockInstrument(ctx context.Context, instrument InstrumentRef, reason, eventID string) (BlockResult, error)
 	// UnblockInstrument 解除禁止。
 	UnblockInstrument(ctx context.Context, instrument InstrumentRef) error
-	// ListBlockedInstruments 返回当前下架名单；每次推进前用它确认标的还在名单里。
-	ListBlockedInstruments(ctx context.Context) ([]InstrumentRef, error)
+	// ListBlockedInstruments 返回当前下架名单（含每一项的原因）；每次推进前用它确认标的还在名单里，演练解除前用它确认这一项是自己写的。
+	ListBlockedInstruments(ctx context.Context) ([]BlockedInstrument, error)
 	// ListInstrumentHolders 跨空间列出策略持有该标的的组合账户；paperOnly 为真只返回模拟盘。
 	ListInstrumentHolders(ctx context.Context, instrument InstrumentRef, paperOnly bool) (HoldersResult, error)
 	// FlattenInstrument 发起单标的下架清仓，返回 Trade 的操作（操作号、当前状态）。Trade 忙时返回 ErrTradeBusy。

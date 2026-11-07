@@ -377,10 +377,10 @@ func TestBlockedListComparisonIsNormalized(t *testing.T) {
 
 type renamedListTrade struct{ *fakeTrade }
 
-func (r renamedListTrade) ListBlockedInstruments(ctx context.Context) ([]action.InstrumentRef, error) {
+func (r renamedListTrade) ListBlockedInstruments(ctx context.Context) ([]action.BlockedInstrument, error) {
 	list, err := r.fakeTrade.ListBlockedInstruments(ctx)
 	for i := range list {
-		list[i].Exchange, list[i].ExchangeSymbol = "BINANCE", " foousdt"
+		list[i].Instrument.Exchange, list[i].Instrument.ExchangeSymbol = "BINANCE", " foousdt"
 	}
 	return list, err
 }

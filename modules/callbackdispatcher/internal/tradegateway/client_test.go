@@ -82,7 +82,7 @@ func TestBlockAndHoldersMapping(t *testing.T) {
 			{SpaceId: "crypto", LogicalAccountId: "la-1", TradingAccountId: "ta-2", Quantity: "0.0001", Dust: true, Status: "ERROR", Note: "取不到报价"},
 		}, SkippedAccounts: []*tradepb.SkippedAccount{{TradingAccountId: "ta-9", Reason: "资金设置读不出来"}}, Notes: []string{"计价币不是结算币，清仓不会卖它"}},
 		"ListBlockedInstruments": &tradepb.ListBlockedInstrumentsRsp{RetInfo: ok(), Instruments: []*tradepb.BlockedInstrument{
-			{Exchange: tradepb.Exchange_EXCHANGE_OKX, MarketType: tradepb.MarketType_MARKET_TYPE_SWAP, ExchangeSymbol: "FOO-USDT-SWAP"},
+			{Exchange: tradepb.Exchange_EXCHANGE_OKX, MarketType: tradepb.MarketType_MARKET_TYPE_SWAP, ExchangeSymbol: "FOO-USDT-SWAP", Reason: "下架（事件中心执行记录 e1）"},
 		}},
 	}}
 	client := New(gateway)
@@ -108,7 +108,7 @@ func TestBlockAndHoldersMapping(t *testing.T) {
 
 	blocked, err := client.ListBlockedInstruments(context.Background())
 	require.NoError(t, err)
-	require.Equal(t, []action.InstrumentRef{{Exchange: "okx", Market: "SWAP", ExchangeSymbol: "FOO-USDT-SWAP"}}, blocked)
+	require.Equal(t, []action.BlockedInstrument{{Instrument: action.InstrumentRef{Exchange: "okx", Market: "SWAP", ExchangeSymbol: "FOO-USDT-SWAP"}, Reason: "下架（事件中心执行记录 e1）"}}, blocked, "原因带回：演练据此判断名单是不是自己写的")
 
 	_, err = client.BlockInstrument(context.Background(), action.InstrumentRef{Exchange: "kraken", Market: "SPOT", ExchangeSymbol: "X"}, "r", "e")
 	require.ErrorIs(t, err, action.ErrInvalidRequest)

@@ -125,33 +125,45 @@ func (h *Handler) OnCancel(ctx context.Context, execution store.Execution) error
 	if err != nil {
 		return fmt.Errorf("读取下架步骤失败: %w", err)
 	}
-	block, attempted := findBlock(steps)
-	return h.release(ctx, execution, tgt, block, attempted)
+	return h.release(ctx, execution, tgt, hasBlockStep(steps))
 }
 
-// findBlock 找出禁止买入那一行；没有说明这条记录从来没有尝试过写名单。
-func findBlock(steps []store.DelistAction) (store.DelistAction, bool) {
+// hasBlockStep 报告这条记录有没有禁止买入那一行：没有说明它从来没有尝试过写名单。
+// 那一行在调用 Trade 之前就存下，所以“Trade 已写入但响应丢了、进程退出”之类的情况下，这一行也在。
+func hasBlockStep(steps []store.DelistAction) bool {
 	for _, step := range steps {
 		if step.Kind == store.DelistKindBlock && step.Round == RoundBlock {
-			return step, true
+			return true
 		}
 	}
-	return store.DelistAction{}, false
+	return false
 }
 
-// release 解除禁止买入。调用时必须已持有这个标的的锁。block 是这条记录禁止买入那一行，attempted 为假表示从没尝试过写名单。
+// blockOwnerMarker 是写进名单原因里的执行记录标记。名单遇到重复写入时保留第一个写入者的原因，所以名单里这一项的原因带着谁的标记，
+// 就说明是谁写的；不能靠写名单时 Trade 返回的 created 记：写的响应丢了再重试，拿到的就是 created=false。
+// 只按执行记录 ID 匹配（原因里的下架时间在改期后会变）。
+func blockOwnerMarker(executionID string) string {
+	return "事件中心执行记录 " + executionID + "）"
+}
+
+// release 解除禁止买入。调用时必须已持有这个标的的锁。attempted 为假表示这条记录从没尝试过写名单。
 //   - 真实下架（ALL）：尝试过写名单就一律解除。同标的的演练还没结束时，它下一次推进前查名单发现不在了会自己停下，代价只是一次模拟盘演练；
 //     不解除的话，已发起的平仓会继续卖（Trade 只在解除禁止时才停下清仓）。
-//   - 演练（PAPER_ONLY）：只解除“自己写进名单的那一条”（block.OwnsBlock），并且同标的没有未取消的真实下架（含已结束的，结束的真实下架按设计
-//     保留名单）。否则演练的结束或取消会把真实下架的名单解除，持有这个币的组合就卡在被禁止里。
+//   - 演练（PAPER_ONLY）：只解除“自己写进名单的那一条”——名单里这一项的原因带着自己的执行记录 ID，并且同标的没有未取消的真实下架
+//     （含已结束的，结束的真实下架按设计保留名单）。名单里没有这一项就没有要解除的。否则演练的结束或取消会把真实下架的名单解除，
+//     持有这个币的组合就卡在被禁止里。
 //
 // Trade 拒绝参数（ErrInvalidRequest）说明名单里本来就不会有它，当作没有要解除的，不能让记录永远卡在善后上。
-func (h *Handler) release(ctx context.Context, execution store.Execution, tgt target, block store.DelistAction, attempted bool) error {
+func (h *Handler) release(ctx context.Context, execution store.Execution, tgt target, attempted bool) error {
 	if !attempted {
 		return nil
 	}
 	if tgt.PaperOnly {
-		if !block.OwnsBlock {
+		owned, err := h.ownsListedBlock(ctx, execution, tgt)
+		if err != nil {
+			return err
+		}
+		if !owned {
 			return nil
 		}
 		others, err := h.Store.CountNonCanceledAllBySubject(ctx, tgt.subject(), execution.ExecutionID)
@@ -168,6 +180,25 @@ func (h *Handler) release(ctx context.Context, execution store.Execution, tgt ta
 		return fmt.Errorf("解除禁止买入失败: %w", err)
 	}
 	return nil
+}
+
+// ownsListedBlock 查名单里这个标的的这一项是不是这条记录写的。
+func (h *Handler) ownsListedBlock(ctx context.Context, execution store.Execution, tgt target) (bool, error) {
+	callCtx, cancel := h.tradeCtx(ctx)
+	defer cancel()
+	blocked, err := h.Trade.ListBlockedInstruments(callCtx)
+	if err != nil {
+		if errors.Is(err, action.ErrInvalidRequest) {
+			return false, nil
+		}
+		return false, fmt.Errorf("读取下架名单失败: %w", err)
+	}
+	for _, item := range blocked {
+		if normalizeRef(item.Instrument) == tgt.Instrument {
+			return strings.Contains(item.Reason, blockOwnerMarker(execution.ExecutionID)), nil
+		}
+	}
+	return false, nil
 }
 
 // Step 推进一条下架执行记录。
@@ -189,16 +220,35 @@ func (h *Handler) Step(ctx context.Context, execution store.Execution, now time.
 		return outcome, err
 	}
 	// 演练（PAPER_ONLY）的标的是真实存在、并不会下架的：记录一结束就解除禁止，否则全局的禁止会一直留着，实盘再也买不了它，
-	// 而已结束的记录不能再取消。同标的还有别的未结束的下架处理时 release 不会解除。真实下架结束后名单保留（标的确实下架了）。
+	// 而已结束的记录不能再取消。release 只解除自己写的那一项，同标的还有未取消的真实下架时不解除。真实下架结束后名单保留（标的确实下架了）。
 	unlock := h.locks.Lock(tgt.subject())
 	defer unlock()
-	block, attempted := r.blockRow()
-	if releaseErr := h.release(ctx, execution, tgt, block, attempted); releaseErr != nil {
+	verifyStep, hasVerify := r.steps[stepKey{Round: RoundVerify, Kind: store.DelistKindVerify}]
+	if releaseErr := h.release(ctx, execution, tgt, hasBlockStep(steps) || r.hasBlock()); releaseErr != nil {
+		// 核对已经有了结论：记下“只剩解除没做成”，之后每次重试只重试解除，不重新核对（否则核对行次数不断加一、零头告警反复上报）。
+		if hasVerify && terminal(verifyStep.Status) {
+			verifyStep.NextCheckAt = now.UnixMilli()
+			if err := r.save(ctx, verifyStep); err != nil {
+				log.WarnContextf(ctx, "记录演练解除待重试失败: %v", err)
+			}
+		}
 		r.problem("演练结束后解除禁止买入失败，稍后重试: %v", releaseErr)
 		r.wakeAt(now.Add(transientRetry))
 		return r.pending(), nil
 	}
+	if hasVerify && verifyStep.NextCheckAt != 0 {
+		verifyStep.NextCheckAt = 0
+		if err := r.save(ctx, verifyStep); err != nil {
+			log.WarnContextf(ctx, "清除演练解除待重试标记失败: %v", err)
+		}
+	}
 	return outcome, nil
+}
+
+// hasBlock 报告这次推进里有没有存下禁止买入那一行。
+func (r *run) hasBlock() bool {
+	_, ok := r.steps[stepKey{Round: RoundBlock, Kind: store.DelistKindBlock}]
+	return ok
 }
 
 // run 是一次 Step 的状态：已存的步骤、这次发现的问题和下一次该醒来的时间。
@@ -214,12 +264,6 @@ type run struct {
 	problems []string
 	// stopped 为真表示执行记录已经被取消：不再发起新的 Trade 调用，直接返回。
 	stopped bool
-}
-
-// blockRow 返回这条记录禁止买入那一行。
-func (r *run) blockRow() (store.DelistAction, bool) {
-	step, ok := r.steps[stepKey{Round: RoundBlock, Kind: store.DelistKindBlock}]
-	return step, ok
 }
 
 func (r *run) wakeAt(at time.Time) {
@@ -269,7 +313,7 @@ func (r *run) step(ctx context.Context) (action.Outcome, error) {
 			r.wakeAt(r.now.Add(transientRetry))
 			return r.pending(), nil
 		}
-		if !slices.ContainsFunc(blocked, func(item action.InstrumentRef) bool { return normalizeRef(item) == r.target.Instrument }) {
+		if !slices.ContainsFunc(blocked, func(item action.BlockedInstrument) bool { return normalizeRef(item.Instrument) == r.target.Instrument }) {
 			return action.Outcome{Status: store.StatusCanceled, Error: "禁止买入已被手工解除，下架处理已停止"}, nil
 		}
 	}
@@ -311,12 +355,19 @@ func (r *run) ensureBlocked(ctx context.Context) (outcome action.Outcome, finish
 	step.Round, step.Kind, step.Exchange = RoundBlock, store.DelistKindBlock, r.target.Instrument.Exchange
 	step.Reason = blockReason(r.execution, r.target)
 
+	// 调用 Trade 之前先把这一行存下：Trade 可能已经写入而响应丢了（超时、网关抖动），或者写入之后进程就退出了，
+	// 之后取消和演练结束靠这一行知道“这条记录尝试过写名单”，再按名单里原因带的执行记录 ID 判断是不是自己写的。
+	step.Status, step.Error, step.Result = store.DelistPending, "", "正在写入禁止名单"
+	step.Attempts++
+	if err := r.save(ctx, step); err != nil {
+		return action.Outcome{}, false, err
+	}
+
 	callCtx, cancel := r.h.tradeCtx(ctx)
 	result, blockErr := r.h.Trade.BlockInstrument(callCtx, r.target.Instrument, step.Reason, r.execution.EventID)
 	cancel()
 	if blockErr != nil {
 		step.Status, step.Error = store.DelistPending, blockErr.Error()
-		step.Attempts++
 		if errors.Is(blockErr, action.ErrInvalidRequest) {
 			step.Status = store.DelistFailed
 			if err := r.save(ctx, step); err != nil {
@@ -332,9 +383,8 @@ func (r *run) ensureBlocked(ctx context.Context) (outcome action.Outcome, finish
 		return r.pending(), true, nil
 	}
 
-	// 先记下“名单已经写了”（还不算成功）：之后无论是复查出已取消，还是复查本身失败，OnCancel 才知道有名单要解除、是不是自己写的。
-	step.OwnsBlock = step.OwnsBlock || result.Created
-	step.Status, step.Error, step.Attempts = store.DelistPending, "", step.Attempts+1
+	// 记下“名单已经写了”（还不算成功），再复查记录状态。
+	step.Status, step.Error = store.DelistPending, ""
 	step.Result = "名单已写入，正在确认执行记录状态"
 	if err := r.save(ctx, step); err != nil {
 		return action.Outcome{}, false, err
@@ -354,7 +404,7 @@ func (r *run) ensureBlocked(ctx context.Context) (outcome action.Outcome, finish
 		return r.pending(), true, nil
 	}
 	if fresh.Status == store.StatusCanceled {
-		if releaseErr := r.h.release(ctx, fresh, r.target, step, true); releaseErr != nil {
+		if releaseErr := r.h.release(ctx, fresh, r.target, true); releaseErr != nil {
 			// 记录已经不是执行中，SaveResult 会丢掉结果：直接把“善后未完成”标记写回库，用户才看得到“重试善后”。
 			message := "取消后的善后失败：" + releaseErr.Error()
 			if _, markErr := r.h.Store.MarkCleanupPendingIfCanceled(context.WithoutCancel(ctx), fresh.ExecutionID, message, r.h.now().UnixMilli()); markErr != nil {
@@ -781,6 +831,14 @@ func (r *run) afterDelist(ctx context.Context) (action.Outcome, error) {
 	if r.now.Before(verifyAt) {
 		r.wakeAt(verifyAt)
 		return r.pending(), nil
+	}
+	// 演练核对已经有了结论、只剩解除禁止没做成时，只重试解除（Step 的收尾做），不重新核对：
+	// 否则核对行的尝试次数不断加一，零头关注项每分钟重复上报。
+	if verified, ok := r.steps[stepKey{Round: RoundVerify, Kind: store.DelistKindVerify}]; ok && terminal(verified.Status) && verified.NextCheckAt > 0 {
+		if verified.Status == store.DelistSucceeded {
+			return action.Outcome{Status: store.StatusSucceeded}, nil
+		}
+		return action.Outcome{Status: store.StatusFailed, Error: verified.Error}, nil
 	}
 	return r.verify(ctx)
 }

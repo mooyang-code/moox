@@ -92,7 +92,6 @@ func TestDrillDoesNotUnblockWhatItDidNotWrite(t *testing.T) {
 	h.trade.setBlocked(true) // 名单早就有了（例如已结束并被清理的真实下架留下的）
 	h.addExecution("drill", baseTime.Add(3*time.Hour), "PAPER_ONLY")
 	h.step("drill", baseTime)
-	require.False(t, h.steps("drill")[blockKey()].OwnsBlock)
 	require.NoError(t, h.cancel("drill"))
 	require.True(t, h.trade.isBlocked())
 	require.Zero(t, h.trade.callCount("Unblock"))
@@ -100,7 +99,6 @@ func TestDrillDoesNotUnblockWhatItDidNotWrite(t *testing.T) {
 	h2 := newHarness(t)
 	h2.addExecution("drill", baseTime.Add(3*time.Hour), "PAPER_ONLY")
 	h2.step("drill", baseTime)
-	require.True(t, h2.steps("drill")[blockKey()].OwnsBlock)
 	require.NoError(t, h2.cancel("drill"))
 	require.False(t, h2.trade.isBlocked(), "自己写的名单，取消时解除")
 }
