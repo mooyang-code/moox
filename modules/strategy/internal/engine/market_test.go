@@ -312,3 +312,37 @@ func TestTargetsCarryMarketAndStateKeys(t *testing.T) {
 		t.Fatalf("目标与状态不符：%+v %v", decision.Targets, decision.State.Targets)
 	}
 }
+
+// 现货独有且年龄不够的新币：空头候选过滤后它不再算年龄剔除，不会把“预期 − 年龄剔除”算成 0 而让整期跳过（多头腿也不受影响）。
+func TestShortCandidateFilterAlsoDropsAgedOutSubjects(t *testing.T) {
+	program := compileIn(t, dsl.Market{Select: dsl.MarketBoth, Prefer: dsl.MarketSpot}, `name: m
+rules:
+  - id: l
+    type: rank
+    score: "m"
+    select: {top: 1}
+    weight: 0.5
+  - id: s
+    type: rank
+    side: short
+    score: "m"
+    select: {bottom: 1}
+    weight: 0.5
+portfolio: {leverage: 1, max_missing: 1}
+`, "m")
+	rows := map[string]map[string]float64{dsl.MarketSpot: {"B": 5, "D": 9}, dsl.MarketSwap: {"B": 5}}
+	frame := marketFrame(program, rows, nil)
+	// D 是现货独有的新币，年龄探针没通过：两条规则都把它记为年龄剔除。
+	frame.AgedOut = map[string][]string{"l": {"D"}, "s": {"D"}}
+	decision, err := Evaluate(program, frame, State{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireTargets(t, decision, map[string]string{"B|spot": "0.5", "B|swap": "-0.5"})
+	if rule := decision.Summary.Rules["s"]; rule.Expected != 1 || rule.AgedOut != 0 {
+		t.Fatalf("空头规则的预期集合应只含永续可用的标的，年龄剔除不再计入：%+v", rule)
+	}
+	if rule := decision.Summary.Rules["l"]; rule.Expected != 2 || rule.AgedOut != 1 {
+		t.Fatalf("多头规则不受影响：%+v", rule)
+	}
+}

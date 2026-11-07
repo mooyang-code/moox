@@ -220,6 +220,10 @@ func restrictShortCandidates(program *dsl.Program, mode dsl.Market, frame Frame,
 	for ruleID, ids := range frame.Expected {
 		expected[ruleID] = ids
 	}
+	agedOut := make(map[string][]string, len(frame.AgedOut))
+	for ruleID, ids := range frame.AgedOut {
+		agedOut[ruleID] = ids
+	}
 	for i := range program.Rules {
 		rule := program.Rules[i].Rule
 		if rule.Type == dsl.RuleTypeTranche || rule.Side != dsl.SideShort {
@@ -233,8 +237,20 @@ func restrictShortCandidates(program *dsl.Program, mode dsl.Market, frame Frame,
 			}
 		}
 		expected[rule.ID] = kept
+		// 年龄剔除只统计仍在预期集合里的标的：被空头候选过滤掉的标的不再算进“预期 − 年龄剔除”的分母。
+		inExpected := make(map[string]struct{}, len(kept))
+		for _, id := range kept {
+			inExpected[id] = struct{}{}
+		}
+		aged := make([]string, 0, len(frame.AgedOut[rule.ID]))
+		for _, id := range frame.AgedOut[rule.ID] {
+			if _, ok := inExpected[id]; ok {
+				aged = append(aged, id)
+			}
+		}
+		agedOut[rule.ID] = aged
 	}
-	frame.Expected = expected
+	frame.Expected, frame.AgedOut = expected, agedOut
 	return frame
 }
 
