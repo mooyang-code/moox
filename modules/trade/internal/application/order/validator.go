@@ -302,6 +302,9 @@ func withFeeBuffer(amount, rate shared.Decimal) shared.Decimal {
 func availableFunds(account tradingaccount.Account, market exchange.MarketType, asset string) shared.Decimal {
 	// 统一账户、OKX、模拟盘各市场共用一个资金池：开通了合约时结算币看账户级可用资金（已扣保证金），其他资产加总各钱包。
 	if account.SharesFundsAcrossMarkets() {
+		// 未核对（实盘前 V3 实测确认）：币安统一账户的现货（杠杆账户）买单是否只能用杠杆钱包里的结算币。
+		// 官方文档只写了 /papi/v1/asset-collection 把资产“从期货账户转到杠杆账户”，没有写明杠杆下单不能直接用 UM 钱包；
+		// 若实测确认只能用杠杆钱包，这里要改看杠杆钱包可用额，资金不足时先归集再下单。
 		if account.HasLeverageMarket() && asset == account.SettlementAsset {
 			return account.Snapshot.AvailableFunds
 		}

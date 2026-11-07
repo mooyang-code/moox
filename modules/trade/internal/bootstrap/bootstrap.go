@@ -247,10 +247,7 @@ func initialize(
 			// 是这次风控事件的幂等键：钱包按它做幂等（划转记录的本地引用号带着它），不同风控事件的归集互不影响。
 			return targetExecutor.Transfers.CollectForRisk(callCtx, spaceID, logicalAccountID, idempotencyKey, accounts)
 		},
-		Pause: func(callCtx context.Context, spaceID, logicalAccountID, reason string) error {
-			_, pauseErr := logicalAccounts.Pause(callCtx, spaceID, logicalAccountID, reason)
-			return pauseErr
-		},
+		Pause: logicalAccounts.PauseIf,
 	}
 	marginWorker := &traderuntime.FundWorker{Maintainer: marginService, Interval: time.Minute, Gate: lifeGate.Open, Name: "保证金率监控"}
 	operatorWorker := &traderuntime.OperatorWorker{

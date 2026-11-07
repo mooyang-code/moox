@@ -262,11 +262,17 @@ func newFixture(t *testing.T, fundSettings, exchangeEquity string) *fixture {
 			})
 			return record, err
 		},
-		Pause: func(_ context.Context, spaceID, logicalID, reason string) error {
-			f.pauses = append(f.pauses, reason)
-			return tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-				return tx.SetLogicalAccountAutomation(spaceID, logicalID, "PAUSED", reason)
+		Pause: func(_ context.Context, spaceID, logicalID, expectedState, expectedReason, reason string) (bool, error) {
+			var paused bool
+			err := tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+				var pauseErr error
+				paused, pauseErr = tx.PauseLogicalAccountIf(spaceID, logicalID, expectedState, expectedReason, reason)
+				return pauseErr
 			})
+			if paused {
+				f.pauses = append(f.pauses, reason)
+			}
+			return paused, err
 		},
 		Collect: func(_ context.Context, _, logicalID, actionID string, accounts []store.TradingAccountRecord) (bool, error) {
 			f.collect = append(f.collect, logicalID+"|"+actionID+"|"+accounts[0].TradingAccountID)

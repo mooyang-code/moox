@@ -374,6 +374,36 @@ func MarginPauseUnreducedReason() string {
 	return AutoPauseReason(marginPauseText + "，组合已暂停但没有减仓（保证金率已回到安全线），等待确认安全后手动恢复")
 }
 
+// MarginPauseReduceFailedReason、MarginPauseReducePartialReason 是风控减仓结束但没有做完时的原因：
+// 原因不能再写“已按比例减仓”，用户要知道仓位还没减到位。
+func MarginPauseReduceFailedReason() string {
+	return AutoPauseReason(marginPauseText + "，组合已暂停，风控减仓失败，请检查持仓后手动处理并确认恢复")
+}
+
+func MarginPauseReducePartialReason() string {
+	return AutoPauseReason(marginPauseText + "，组合已暂停，风控减仓只完成了一部分，请检查持仓后手动处理并确认恢复")
+}
+
+// IsMarginPauseReduced 判断暂停原因是否表示风控已经发起过减仓（不论减仓是否做完），减仓后的归集跟随这些原因。
+func IsMarginPauseReduced(reason string) bool {
+	return reason == MarginPauseReason() || reason == MarginPauseReduceFailedReason() || reason == MarginPauseReducePartialReason()
+}
+
+// MarginAttentionDetail 是 margin_ratio_low 关注项的固定文字，带上减仓状态（不带比值）。
+func MarginAttentionDetail(reason string) string {
+	switch reason {
+	case MarginPausePendingReason():
+		return "保证金率风控已暂停，减仓待执行"
+	case MarginPauseUnreducedReason():
+		return "保证金率风控已暂停，没有减仓，等待确认后恢复"
+	case MarginPauseReduceFailedReason():
+		return "保证金率风控已暂停，减仓失败，需要人工处理"
+	case MarginPauseReducePartialReason():
+		return "保证金率风控已暂停，减仓只完成一部分，需要人工处理"
+	}
+	return "保证金率风控已暂停，等待确认后恢复"
+}
+
 // IsMarginPausePending 判断暂停原因是否是“已暂停、减仓待执行”。
 func IsMarginPausePending(reason string) bool { return reason == MarginPausePendingReason() }
 
@@ -403,6 +433,19 @@ func (tx *Tx) SetLogicalAccountAutomation(
 	}
 	result := tx.db.Exec(execSetLogicalAccountAutomation, state, time.Now().UnixMilli(), state, reason, spaceID, logicalAccountID, state)
 	return requireUpdated(result.Error, result.RowsAffected, "logical account automation")
+}
+
+// PauseLogicalAccountIf 只在组合当前的自动执行状态和暂停原因仍是预期值时把它暂停（改写原因），返回是否改了：
+// 风控在读到组合之后、写入之前，用户可能已经恢复、人工暂停或改写了原因，不能覆盖。
+func (tx *Tx) PauseLogicalAccountIf(spaceID, logicalAccountID, expectedState, expectedReason, reason string) (bool, error) {
+	if blank(spaceID) || blank(logicalAccountID) || blank(reason) {
+		return false, fmt.Errorf("%w: incomplete conditional pause", ErrInvalidRecord)
+	}
+	result := tx.db.Exec(execPauseLogicalAccountIf, reason, spaceID, logicalAccountID, expectedState, expectedReason)
+	if result.Error != nil {
+		return false, writeError(result.Error)
+	}
+	return result.RowsAffected == 1, nil
 }
 
 // LogicalAccountMarkets 返回组合账户可交易的市场：启用成员已开通市场的并集，按固定顺序排列。
@@ -655,6 +698,9 @@ const (
 			c_mtime = CURRENT_TIMESTAMP
 		WHERE c_space_id = ? AND c_logical_account_id = ?
 		  AND (? <> 'ACTIVE' OR c_control_mode = 'STRATEGY')`
+	execPauseLogicalAccountIf = `UPDATE t_logical_accounts
+		SET c_automation_state = 'PAUSED', c_pause_reason = ?, c_mtime = CURRENT_TIMESTAMP
+		WHERE c_space_id = ? AND c_logical_account_id = ? AND c_automation_state = ? AND c_pause_reason = ?`
 	queryLogicalAccountMemberMarkets = `SELECT a.c_markets
 		FROM t_logical_account_members AS m
 		JOIN t_trading_accounts AS a

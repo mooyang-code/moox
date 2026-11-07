@@ -496,6 +496,28 @@ func (s *Service) Pause(
 	return s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
 }
 
+// PauseIf 只在组合当前的状态和暂停原因仍是预期值时暂停（改写原因），返回是否改了。
+func (s *Service) PauseIf(ctx context.Context, spaceID, logicalAccountID, expectedState, expectedReason, reason string) (bool, error) {
+	if s == nil || s.Store == nil {
+		return false, ErrServiceConfig
+	}
+	if strings.TrimSpace(reason) == "" {
+		return false, fmt.Errorf("%w: 暂停原因不能为空", store.ErrInvalidRecord)
+	}
+	unlock, lockErr := s.Store.LockLogicalAccountContext(ctx, spaceID, logicalAccountID)
+	if lockErr != nil {
+		return false, lockErr
+	}
+	defer unlock()
+	var paused bool
+	err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
+		var pauseErr error
+		paused, pauseErr = tx.PauseLogicalAccountIf(spaceID, logicalAccountID, expectedState, expectedReason, strings.TrimSpace(reason))
+		return pauseErr
+	})
+	return paused, err
+}
+
 func (s *Service) Resume(
 	ctx context.Context,
 	spaceID string,
