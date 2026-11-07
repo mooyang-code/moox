@@ -1,4 +1,4 @@
-import { MARKET_ORDER } from "@/views/strategy/market-mode";
+import { MARKET_ORDER, marketLabel } from "@/views/strategy/market-mode";
 import type { InstrumentTarget, StrategyInstance, StrategyResult, StrategyTargetSnapshot } from "@/api/strategy-types";
 
 export type TargetState = "inactive" | "unknown" | "empty" | "expired" | "zero" | "valid";
@@ -95,6 +95,7 @@ const skipReasons: Record<string, string> = {
   infra_retry_exhausted: "读取重试耗尽",
   market_missing: "另一个市场的数据未到",
   market_failed: "市场整体失败（因子失败比例过高）",
+  catchup: "恢复追赶中，只记因子指纹，不求值",
   pool_warmup_failed: "策略池预热失败"
 };
 
@@ -218,6 +219,9 @@ export interface ResultSummary {
   rules: Record<string, RuleSummary>;
   gross: string;
   net: string;
+  /** 混合市场策略分市场的净敞口；此时 cash 没有意义，后端不填。 */
+  spotNet: string;
+  swapNet: string;
   cash: string;
   turnover: string;
   notes: string[];
@@ -240,6 +244,8 @@ export function parseSummary(raw?: string): ResultSummary {
     rules: value.rules && typeof value.rules === "object" ? value.rules : {},
     gross: value.gross ?? "",
     net: value.net ?? "",
+    spotNet: value.spot_net ?? "",
+    swapNet: value.swap_net ?? "",
     cash: value.cash ?? "",
     turnover: value.turnover ?? "",
     notes: Array.isArray(value.notes) ? value.notes : []
@@ -327,9 +333,16 @@ type ResultLike = Pick<
   "result_id" | "session_id" | "status" | "bar_end_time" | "created_at" | "targets" | "skip_reason"
 >;
 
+/** 混合市场策略显示分市场净敞口（现金没有意义），其余显示现金比例。 */
+export function cashOrNetText(summary: Pick<ResultSummary, "cash" | "spotNet" | "swapNet">): string {
+  if (summary.spotNet || summary.swapNet) return `现货净 ${percent(summary.spotNet)} · 永续净 ${percent(summary.swapNet)}`;
+  return percent(summary.cash);
+}
+
 /**
  * 按 K 线结束时间从旧到新比较同一会话内相邻的 ok 结果，得到每期的目标成员变化与产出延迟。
- * 比较的是目标标的集合（不含权重），也不代表账户实际持仓。
+ * 比较的是目标集合（不含权重），按（标的、市场）区分：同一个币从现货换到永续也算一进一出；也不代表账户实际持仓。
+ * 本页结果涉及多个市场时，变化里的标的带上市场名。
  * 不同会话的结果互不比较：每个会话的首期 comparable 为 false；分页边界上最旧的一期同理。
  * 跳过期不改变该会话的比较基线，成员变化跨过跳过期比较。
  */
@@ -337,18 +350,30 @@ export function buildResultInsights(results: ResultLike[]): Record<string, Resul
   const ordered = [...results].sort((a, b) => Date.parse(a.bar_end_time) - Date.parse(b.bar_end_time));
   const insights: Record<string, ResultInsight> = {};
   const baselines = new Map<string, Set<string>>();
+  const markets = new Set(ordered.flatMap(item => item.targets.map(target => target.market || "")));
+  const keyOf = (target: InstrumentTarget) => `${target.instrument_id}\u0000${target.market || ""}`;
+  const labelOf = (key: string) => {
+    const [id, market] = key.split("\u0000");
+    return markets.size > 1 && market ? `${id}（${marketLabel(market)}）` : id;
+  };
   for (const item of ordered) {
     const barEnd = Date.parse(item.bar_end_time);
     const created = Date.parse(item.created_at);
     const delayMs = Number.isFinite(barEnd) && Number.isFinite(created) ? created - barEnd : null;
     const insight: ResultInsight = { added: [], removed: [], comparable: false, delayMs };
     if (item.status === "ok") {
-      const current = new Set(item.targets.map(target => target.instrument_id));
+      const current = new Set(item.targets.map(keyOf));
       const previous = baselines.get(item.session_id);
       if (previous) {
         insight.comparable = true;
-        insight.added = [...current].filter(id => !previous.has(id)).sort();
-        insight.removed = [...previous].filter(id => !current.has(id)).sort();
+        insight.added = [...current]
+          .filter(key => !previous.has(key))
+          .map(labelOf)
+          .sort();
+        insight.removed = [...previous]
+          .filter(key => !current.has(key))
+          .map(labelOf)
+          .sort();
       }
       baselines.set(item.session_id, current);
     }

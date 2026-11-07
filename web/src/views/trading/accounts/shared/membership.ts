@@ -1,26 +1,29 @@
 import type { LogicalAccount, TradingAccount } from "@/api/trade/types";
 import { accountMapOf, joinedAccountIds } from "../account-list";
-import { accountEnvironment, logicalInEnvironment, type Environment } from "./environment";
+import { accountEnvironment, logicalEnvironment, logicalInEnvironment, type Environment } from "./environment";
 
 /**
  * 能加入这个组合的执行账户：环境、模拟或实盘、结算资产都和组合一致（后端的校验），
  * 已启用，并且不在任何组合里（一个执行账户最多属于一个组合）。市场不限，组合的可交易市场取成员的并集。
- * 环境按 logicalInEnvironment 判断：还没有可判断成员的实盘组合，测试网和生产环境的账户都能加入。
+ * 环境按 logicalEnvironment 判断：还没有可判断成员的实盘组合按进入的页签（entered）算，从测试网页签进来只列测试网账户，
+ * 从生产环境页签进来（或不知道从哪进来）只列生产环境账户，和详情页显示的环境一致。
  */
 export function eligibleAccounts(
   accounts: readonly TradingAccount[],
   logicals: readonly LogicalAccount[],
-  logical: LogicalAccount
+  logical: LogicalAccount,
+  entered?: Environment
 ): TradingAccount[] {
   const joined = joinedAccountIds(logicals);
   const accountMap = accountMapOf(accounts);
+  const env = logicalEnvironment(logical, accountMap, entered);
   return accounts.filter(
     item =>
       item.status === "ENABLED" &&
       !joined.has(item.trading_account_id) &&
       item.execution_mode === logical.execution_mode &&
       item.settlement_asset === logical.settlement_asset &&
-      logicalInEnvironment(logical, accountMap, accountEnvironment(item))
+      accountEnvironment(item) === env
   );
 }
 

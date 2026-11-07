@@ -113,3 +113,22 @@ func TestCheckWithoutSeriesFieldsKeepsSubjectFields(t *testing.T) {
 		t.Fatalf("单市场 View 只有按标的的失败：%+v", result)
 	}
 }
+
+// 单 tag 回退带过来的失败名单记在 UnattributedFactors 里；DropUnattributed 只去掉这些，按序列归市场的失败保留。
+func TestDropUnattributedKeepsSeriesFailures(t *testing.T) {
+	fallback := state("ma", "degraded", "h1", "BTC-USDT")
+	bySeries := state("rank", "degraded", "h2", "ETH-USDT")
+	bySeries.FailedSeries = refs("ETH-USDT", swapTag)
+	result := Check(Binding{Factors: map[string]string{"ma": "h1|fixed", "rank": "h2|fixed"}}, nil, unifiedEvent(nil, fallback, bySeries))
+	swap := result.ForMarket("swap")
+	if _, ok := swap.UnattributedFactors["ma"]; !ok || len(swap.UnattributedFactors) != 1 {
+		t.Fatalf("只有回退的因子记为来源不明：%+v", swap.UnattributedFactors)
+	}
+	dropped := swap.DropUnattributed()
+	if !reflect.DeepEqual(dropped.FailedByFactor, map[string][]string{"rank": {"ETH-USDT"}}) || dropped.UnattributedFactors != nil {
+		t.Fatalf("去掉回退名单后只剩按序列的失败：%+v", dropped)
+	}
+	if !reflect.DeepEqual(swap.FailedByFactor["ma"], []string{"BTC-USDT"}) {
+		t.Fatalf("DropUnattributed 不改原结论：%+v", swap.FailedByFactor)
+	}
+}

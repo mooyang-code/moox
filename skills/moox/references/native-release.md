@@ -144,6 +144,13 @@ $S catalog-changed --host control                    # 用台账里最近一次 
 
 目录里的方法超时（`method_timeouts_ms`）要和服务端 `trpc_go.yaml` 的 `timeout` 配套：服务端不小于目录。
 
+### Collector 的 `delist.auto_detect`
+
+Collector 读配置时不接受不认识的键，旧版本的 Collector 不认识 `delist` 段，读到就启动失败。因此：
+
+1. 先换 Collector 二进制，再渲染（`setup apply` 等）或手改 `config/app.yaml` 的 `delist` 段；渲染只替换配置里已有的 `delist` 段、不新增，旧配置里没有这一段时要按上面的办法手工加上（没配海外机时写 `auto_detect: false`）。
+2. 回滚到旧版本 Collector 之前，先删掉 `config/app.yaml` 里的 `delist` 段。
+
 ## 不走 `native-release.sh` 的组件
 
 **因子引擎与归档 Worker** 使用 systemd 用户单元 `moox-factor-engine.service` / `moox-archive-worker.service`。原生安装器写入 `<paths.deploy_root>/<组件>`，默认 `/data/moox/factor-engine` 与 `/data/moox/archive-worker`；旧手工安装可能位于家目录，先用 `systemctl --user cat <服务>` 核对实际路径。

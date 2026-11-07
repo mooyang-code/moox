@@ -487,3 +487,43 @@ func TestMigrateRemovesTLSMode(t *testing.T) {
 		t.Fatalf("没有删掉 tls_mode：%s %+v", migrated, report)
 	}
 }
+
+// 整条重写时保留原条目首行、末行的行尾注释；多行数组中间几行的注释保不住，报告里列出条目位置。
+func TestMigrateRewriteKeepsTrailingComments(t *testing.T) {
+	decrypt := func(t *testing.T, path string, keys *configcrypt.MemoryStore) string {
+		t.Helper()
+		sealed, err := os.ReadFile(path)
+		require.NoError(t, err)
+		plain, err := configcrypt.Decrypt(sealed, keys)
+		require.NoError(t, err)
+		_, err = setupconfig.Parse(plain)
+		require.NoError(t, err)
+		return string(plain)
+	}
+	t.Run("单行条目的行尾注释", func(t *testing.T) {
+		text := regexp.MustCompile(`(?m)^http_domains = .*\n`).ReplaceAllString(sampleText(t), "http_domains = ['*.binance.com', 'openapi.okx.com'] # 走海外机 \"出口\"\n")
+		path, root, keys := migrateFixture(t, text)
+		report, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, Write: true, AddEgressDomains: []string{"www.okx.com"}})
+		require.NoError(t, err)
+		require.Empty(t, report.DroppedComments)
+		require.Contains(t, decrypt(t, path, keys), `http_domains = ["*.binance.com", "openapi.okx.com", "www.okx.com"]   # 走海外机 "出口"`)
+	})
+	t.Run("多行条目首行末行保留、中间几行提示", func(t *testing.T) {
+		line := regexp.MustCompile(`(?m)^storage = \[.*\]\n`)
+		text := line.ReplaceAllString(sampleText(t), "storage = [ # 存储机\n  'storage-primary', # 主库\n  'storage-node',\n  'storage-view',\n  'access',\n] # 末行\n")
+		path, root, keys := migrateFixture(t, text)
+		report, err := MigrateFile(path, MigrateOptions{
+			RepoRoot: root, Keys: keys, Write: true,
+			AddDeploymentHost: "storage", AddDeploymentComponents: []string{"eventbus"},
+		})
+		require.NoError(t, err)
+		require.Equal(t, []string{"[deployments] storage：该条目中间几行的注释已去掉"}, report.DroppedComments)
+		plain := decrypt(t, path, keys)
+		require.Contains(t, plain, `storage = ["storage-primary", "storage-node", "storage-view", "access", "eventbus"]   # 存储机 # 末行`)
+		require.NotContains(t, plain, "# 主库")
+	})
+	t.Run("井号在字符串里不算注释", func(t *testing.T) {
+		require.Empty(t, lineComment(`a = ["x#y", 'z#w']`))
+		require.Equal(t, "# 真注释", lineComment(`a = ["x\"#y"] # 真注释`))
+	})
+}

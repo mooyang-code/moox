@@ -227,7 +227,7 @@ func TestForeignActionIDIsTreatedAsBusy(t *testing.T) {
 	realRow := h.steps("real")[flattenKey(RoundFlatten, "crypto", "la-paper")]
 	drillRow := h.steps("drill")[flattenKey(RoundFlatten, "crypto", "la-paper")]
 	require.NotEqual(t, realRow.OperatorActionID, drillRow.OperatorActionID, "不能记成别人的操作号")
-	require.Equal(t, operatorActionID("drill", RoundFlatten, "crypto", "la-paper", delistAt.UnixMilli()), drillRow.OperatorActionID)
+	require.Equal(t, operatorActionID("drill", RoundFlatten, "crypto", "la-paper", delistAt.UnixMilli(), 0), drillRow.OperatorActionID)
 	require.Zero(t, drillRow.Attempts, "忙不计次数")
 	require.Equal(t, store.DelistPending, drillRow.Status)
 	require.Contains(t, drillRow.Error, "已有别的平仓")

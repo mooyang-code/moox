@@ -1,6 +1,8 @@
 gateway_client:
   caller: collector
   key_file: ./caller-collector.key
+delist:
+  auto_detect: false
 egress_proxy:
   domains:
     - '*.binance.com'
@@ -10,8 +12,6 @@ egress_proxy:
     refresh_interval: 300s
     request_timeout: 3000ms
     cache_ttl: 300s
-delist:
-  auto_detect: false
 scf_access:
   access_address: 2.2.2.2:11004
   access_id: access@storage

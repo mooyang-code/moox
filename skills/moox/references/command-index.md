@@ -80,7 +80,7 @@
 | `collector resample jobs` | 查看历史合成作业；带 --job-id 查看单个作业，否则按任务、状态列出最近的作业 |
 | `collector resample preview` | 预览合成的源任务与目标频率是否可行 |
 | `collector status` | 查看空间的采集运行状态：总体健康、各数据集的自动巡检进度与缺口、补采汇总 |
-| `collector delist register` | 手工登记标的下架，补漏报或演练（会发布“标的即将下架”事件，事件中心的系统规则随即禁止买入；默认只预览，--yes 才执行） |
+| `collector delist register` | 手工登记标的下架，补漏报或演练（会发布“标的即将下架”事件，事件中心的系统规则随即禁止买入，到 T−24h 会自动卖出策略持有的实盘仓位；默认只预览，--yes 前向用户确认标的和下架时间；演练用 --paper-only） |
 | `collector subjects exclude` | 把标的从采集计划里临时去掉（交易所公告下架、数据异常等） |
 | `collector subjects exclusions` | 列出空间当前生效的排除（设置人、原因、设置与到期时间） |
 | `collector subjects listers` | 列出可用的标的来源（交易所列表器） |

@@ -98,6 +98,9 @@ type BlockedInstrument struct {
 // ErrInvalidRequest 表示 Trade 认为请求本身不合法（参数、市场不支持）：重试没有用。
 var ErrInvalidRequest = errors.New("Trade 拒绝了请求参数")
 
+// ErrOperatorNotFound 表示 Trade 没有这个操作号的操作（从没建过）：GetOperatorAction 查不到时返回。
+var ErrOperatorNotFound = errors.New("Trade 没有这个操作")
+
 // ErrTradeBusy 表示 Trade 暂时忙（同组合有别的清仓在跑，或拿不到组合锁）：稍后再试，不计入重试次数。
 // 实现方把 Trade 的“忙”返回码翻译成它。
 var ErrTradeBusy = errors.New("Trade 正忙，稍后再试")
@@ -115,6 +118,6 @@ type TradeClient interface {
 	ListInstrumentHolders(ctx context.Context, instrument InstrumentRef, paperOnly bool) (HoldersResult, error)
 	// FlattenInstrument 发起单标的下架清仓，返回 Trade 的操作（操作号、当前状态）。Trade 忙时返回 ErrTradeBusy。
 	FlattenInstrument(ctx context.Context, request FlattenRequest) (OperatorAction, error)
-	// GetOperatorAction 查询一次操作的结果。
+	// GetOperatorAction 查询一次操作的结果。没有这个操作号的操作时返回 ErrOperatorNotFound。
 	GetOperatorAction(ctx context.Context, spaceID, operatorActionID string) (OperatorAction, error)
 }

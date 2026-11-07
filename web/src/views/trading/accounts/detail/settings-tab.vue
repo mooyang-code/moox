@@ -277,7 +277,7 @@ const hasBinanceLive = computed(() =>
     );
   })
 );
-const candidates = computed(() => eligibleAccounts(allAccounts.value, allLogicals.value, logical.value));
+const candidates = computed(() => eligibleAccounts(allAccounts.value, allLogicals.value, logical.value, env.value));
 const hasPositions = computed(
   () => snapshot.value.swapPositions.length > 0 || snapshot.value.spotHoldings.some(item => item.instrument_id)
 );
@@ -321,7 +321,13 @@ async function submitRemove() {
   if (!account) return false;
   const rsp = await removeLogicalAccountMember(logical.value.logical_account_id, account.trading_account_id);
   const warning = rsp.ret_info?.msg?.trim();
-  if (warning) Message.warning(`已移出组合：${warning}`);
+  // 只按本地记录确认、交易所侧没有核对：这条提示要用户看过、手动关掉，不能几秒后自己消失。
+  if (warning)
+    Message.warning({
+      content: `已移出组合：${warning}。请到交易所确认这个账户没有残留的挂单和仓位。`,
+      duration: 0,
+      closable: true
+    });
   else Message.success("已移出组合");
   await reload();
   return true;

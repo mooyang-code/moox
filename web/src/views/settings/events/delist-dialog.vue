@@ -10,13 +10,16 @@
       <a-alert v-if="systemRuleEnabled === false" type="warning" class="block-alert">
         系统规则“标的即将下架时，卖出策略持有的这个币”已停用：新登记的下架不会被处理，不会禁止买入，也不会平仓。同一个标的已经在处理的下架照常处理，登记新的下架时间会照常改期。
       </a-alert>
+      <a-alert v-else-if="systemRuleEnabled === null" type="warning" class="block-alert">
+        用来补录漏报的下架，或做演练。{{ SYSTEM_RULE_UNKNOWN_TEXT }}
+      </a-alert>
       <a-alert v-else-if="systemActionEnabled === true" class="block-alert">
         用来补录漏报的下架，或做演练。登记后，系统会立即禁止买入这个标的，下架前 24 小时平掉策略持有的部分。
       </a-alert>
       <a-alert v-else type="warning" class="block-alert">
         用来补录漏报的下架，或做演练。{{ systemActionNotice(systemActionEnabled) }}
       </a-alert>
-      <a-form :model="form" auto-label-width>
+      <a-form :model="form" auto-label-width :disabled="previewing">
         <a-form-item field="exchange" label="交易所" required>
           <a-select v-model="form.exchange">
             <a-option v-for="item in DELIST_EXCHANGES" :key="item.value" :value="item.value">{{ item.label }}</a-option>
@@ -38,20 +41,21 @@
             format="YYYY-MM-DD HH:mm:ss"
             style="width: 100%"
           />
-          <template #extra>填你本地的时间。填已经过去的时间时，只做核对，不会下单。</template>
+          <template #extra>{{ DELIST_TIME_HINT }}</template>
         </a-form-item>
         <a-form-item field="paper_only" label="仅模拟盘">
           <a-switch v-model="form.paper_only" />
-          <template #extra>打开后只处理模拟盘组合，实盘组合不受影响。演练时用。</template>
+          <template #extra>演练时用。{{ PAPER_ONLY_NOTE }}</template>
         </a-form-item>
       </a-form>
     </template>
 
     <template v-else>
       <p class="summary-title">
-        {{ exchangeLabel }} {{ marketLabel }} {{ form.exchange_symbol.trim().toUpperCase() }}，下架时间 {{ formatMs(delistAtMs) }}
+        {{ summaryTitle }}
       </p>
-      <a-alert v-if="pastTime" type="warning" class="block-alert">这个时间已经过去，只做核对，不会下单。</a-alert>
+      <a-alert v-if="snapshot?.paper_only" type="warning" class="block-alert">这是演练。{{ PAPER_ONLY_NOTE }}</a-alert>
+      <a-alert v-if="pastTime" type="warning" class="block-alert">{{ pastTimeNote(Boolean(snapshot?.paper_only)) }}</a-alert>
       <a-alert v-if="previewFailed" type="warning" class="block-alert">
         暂时无法预览会被平仓的组合（{{ previewError }}）。你可以确认后继续登记，但无法提前知道有哪些组合会受影响。
       </a-alert>
@@ -60,7 +64,9 @@
       </a-alert>
       <template v-else>
         <p v-if="instrumentUnknown" class="muted">
-          交易服务里没有这个标的（还没开通对应市场的账户），没有策略持有。{{ noHolderEffect }}
+          交易服务不认识这个交易所代码：可能是代码写错了，也可能还没开通对应市场的账户。请先核对代码；代码无误的话，没有策略持有这个标的。{{
+            noHolderEffect
+          }}
         </p>
         <p v-else-if="!holders.length && !skippedAccounts.length" class="muted">没有策略持有这个标的。{{ noHolderEffect }}</p>
         <template v-else-if="holders.length">
@@ -98,7 +104,7 @@
     <template #footer>
       <a-space>
         <a-button @click="emit('update:visible', false)">取消</a-button>
-        <a-button v-if="phase === 'confirm'" @click="phase = 'form'">上一步</a-button>
+        <a-button v-if="phase === 'confirm'" :disabled="submitting" @click="phase = 'form'">上一步</a-button>
         <a-button v-if="phase === 'form'" type="primary" :loading="previewing" @click="preview">下一步</a-button>
         <a-button
           v-else
@@ -130,16 +136,20 @@ import { reportControlError } from "@/api/admin/http";
 import {
   DELIST_EXCHANGES,
   DELIST_MARKETS,
+  DELIST_TIME_HINT,
+  PAPER_ONLY_NOTE,
+  SYSTEM_RULE_UNKNOWN_TEXT,
   confirmCheckboxText,
-  delistTimeError,
+  createLatestGuard,
+  delistSnapshot,
   formatMs,
   holderLine,
-  isPastDelistTime,
-  pickerValueToMs,
+  pastTimeNote,
   requestErrorText,
   skippedLine,
   summarizeHolders,
-  systemActionNotice
+  systemActionNotice,
+  type DelistSnapshot
 } from "./event-center-utils";
 
 defineOptions({ name: "EventDelistDialog" });
@@ -157,6 +167,8 @@ const form = reactive({
 const phase = ref<"form" | "confirm">("form");
 const previewing = ref(false);
 const submitting = ref(false);
+// 点“下一步”时存下的登记参数：确认页和提交都只用它，不再读表单。
+const snapshot = ref<DelistSnapshot | null>(null);
 const holders = ref<InstrumentHolder[]>([]);
 const skippedAccounts = ref<SkippedAccount[]>([]);
 const notes = ref<string[]>([]);
@@ -165,9 +177,10 @@ const instrumentUnknown = ref(false);
 const previewFailed = ref(false);
 const previewError = ref("");
 const confirmed = ref(false);
+// 预览请求的序号：迟到的旧响应（连点、关掉重开）直接丢掉。
+const previewGuard = createLatestGuard();
 
-const delistAtMs = computed(() => pickerValueToMs(form.delist_at));
-const pastTime = computed(() => isPastDelistTime(delistAtMs.value, Date.now()));
+const pastTime = computed(() => Boolean(snapshot.value?.past));
 const summary = computed(() => summarizeHolders(holders.value));
 const confirmText = computed(() =>
   confirmCheckboxText({
@@ -181,78 +194,87 @@ const confirmText = computed(() =>
 const needConfirm = computed(
   () => previewFailed.value || !verified.value || skippedAccounts.value.length > 0 || summary.value.live.length > 0
 );
-// 系统动作已启用并且系统规则没有停用，登记的下架才会真的被处理；下架时间已经过去时只做核对，不会平仓。
-const willProcess = computed(() => props.systemActionEnabled === true && props.systemRuleEnabled !== false && !pastTime.value);
+// 系统动作已启用并且确认系统规则已启用，登记的下架才会真的被处理（规则状态读不到时不能当成已启用）；下架时间已经过去时只做核对，不会平仓。
+const willProcess = computed(() => props.systemActionEnabled === true && props.systemRuleEnabled === true && !pastTime.value);
 const noHolderEffect = computed(() => (willProcess.value ? "登记后只会禁止买入。" : ""));
-const exchangeLabel = computed(() => DELIST_EXCHANGES.find(item => item.value === form.exchange)?.label ?? form.exchange);
-const marketLabel = computed(() => DELIST_MARKETS.find(item => item.value === form.market)?.label ?? form.market);
+const summaryTitle = computed(() => {
+  const value = snapshot.value;
+  if (!value) return "";
+  const exchange = DELIST_EXCHANGES.find(item => item.value === value.exchange)?.label ?? value.exchange;
+  const market = DELIST_MARKETS.find(item => item.value === value.market)?.label ?? value.market;
+  return `${exchange} ${market} ${value.exchange_symbol}，下架时间 ${formatMs(value.delist_at_ms)}`;
+});
 
 const holderKey = (holder: InstrumentHolder) => `${holder.space_id}/${holder.logical_account_id}/${holder.trading_account_id}`;
+
+function resetPreview() {
+  holders.value = [];
+  skippedAccounts.value = [];
+  notes.value = [];
+  verified.value = true;
+  instrumentUnknown.value = false;
+  previewFailed.value = false;
+  previewError.value = "";
+  confirmed.value = false;
+}
 
 watch(
   () => props.visible,
   visible => {
+    // 关掉或重新打开都换号：上一次没回来的预览响应不会再写进来。
+    previewGuard.reset();
     if (!visible) return;
     Object.assign(form, { exchange: "binance", market: "SPOT", exchange_symbol: "", delist_at: "", paper_only: false });
     phase.value = "form";
-    holders.value = [];
-    skippedAccounts.value = [];
-    notes.value = [];
-    verified.value = true;
-    instrumentUnknown.value = false;
-    previewFailed.value = false;
-    confirmed.value = false;
+    previewing.value = false;
+    submitting.value = false;
+    snapshot.value = null;
+    resetPreview();
   }
 );
 
 async function preview() {
-  if (!form.exchange_symbol.trim()) {
-    Message.warning("请填写交易所代码");
+  if (previewing.value) return;
+  const built = delistSnapshot(form, Date.now());
+  if ("error" in built) {
+    Message.warning(built.error);
     return;
   }
-  const timeError = delistTimeError(delistAtMs.value);
-  if (timeError) {
-    Message.warning(timeError);
-    return;
-  }
+  const request = built.snapshot;
+  const ticket = previewGuard.next();
   previewing.value = true;
-  confirmed.value = false;
+  resetPreview();
   try {
-    const result = await listInstrumentHolders({
-      exchange: form.exchange,
-      market: form.market,
-      exchange_symbol: form.exchange_symbol,
-      paper_only: form.paper_only
-    });
+    const result = await listInstrumentHolders(request);
+    if (!previewGuard.isLatest(ticket)) return;
     holders.value = result.holders;
     skippedAccounts.value = result.skippedAccounts;
     notes.value = result.notes;
     verified.value = result.verified;
     instrumentUnknown.value = result.instrumentUnknown;
-    previewFailed.value = false;
   } catch (error) {
-    holders.value = [];
-    skippedAccounts.value = [];
-    notes.value = [];
-    verified.value = true;
-    instrumentUnknown.value = false;
+    if (!previewGuard.isLatest(ticket)) return;
     previewFailed.value = true;
     previewError.value = requestErrorText(error);
   } finally {
-    previewing.value = false;
+    if (previewGuard.isLatest(ticket)) previewing.value = false;
   }
+  if (!previewGuard.isLatest(ticket)) return;
+  snapshot.value = request;
   phase.value = "confirm";
 }
 
 async function submit() {
+  const value = snapshot.value;
+  if (!value || submitting.value) return;
   submitting.value = true;
   try {
     const result = await registerDelistNotice({
-      exchange: form.exchange,
-      market: form.market,
-      exchange_symbol: form.exchange_symbol.trim().toUpperCase(),
-      delist_at_ms: delistAtMs.value,
-      paper_only: form.paper_only
+      exchange: value.exchange,
+      market: value.market,
+      exchange_symbol: value.exchange_symbol,
+      delist_at_ms: value.delist_at_ms,
+      paper_only: value.paper_only
     });
     Message.success(result.created ? "已登记，稍后可以在执行记录里看到处理进度" : "这条下架之前已经登记过");
     emit("update:visible", false);

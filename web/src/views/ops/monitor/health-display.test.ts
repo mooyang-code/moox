@@ -23,14 +23,24 @@ describe("health display", () => {
       href: "#/settings/events?tab=executions",
       label: "查看事件中心执行记录"
     });
-    // 缺币安只读 Key 只能在命令行补：不跳秘钥页（那里建不出固定 ID 的 Key），首页跳监控页看说明
+    // 缺币安只读 Key：首页跳监控页看说明；说明分三种情况写，被禁用的那种给秘钥页入口
     const readonlyMissing = { type: "business", kind: "collector_attention", attention_kind: "delist_readonly_key_missing" };
     expect(alertLink(readonlyMissing).href).toBe("#/ops/monitor");
-    expect(alertNote(readonlyMissing)).toContain("moox-cli config edit");
-    expect(alertNote(readonlyMissing)).toContain('name = "readonly"');
-    expect(alertNote(readonlyMissing)).toContain("moox-cli setup apply");
-    expect(alertNote(readonlyMissing)).toContain("moox-cli collector delist register");
-    expect(alertNote({ type: "business", kind: "collector_attention", attention_kind: "delist_source_failed" })).toBe("");
+    const note = alertNote(readonlyMissing);
+    expect(note?.link).toEqual({ href: "#/settings/secrets", label: "已禁用的话到秘钥管理页启用" });
+    const [disabled, missing, deleted, manual] = note?.lines ?? [];
+    expect(disabled).toContain("被禁用");
+    expect(disabled).toContain("启用");
+    expect(missing).toContain("moox-cli config edit");
+    expect(missing).toContain("正式环境");
+    expect(missing).toContain("名称填 readonly");
+    expect(missing).toContain("moox-cli setup apply");
+    expect(deleted).toContain("删除过");
+    expect(deleted).toContain("setup apply 不会重建");
+    expect(manual).toContain("moox-cli collector delist register");
+    expect(manual).toContain("事件中心");
+    expect(note?.lines.join("")).not.toContain("生产环境");
+    expect(alertNote({ type: "business", kind: "collector_attention", attention_kind: "delist_source_failed" })).toBeNull();
     expect(alertLink({ type: "business", kind: "collector_attention", attention_kind: "delist_source_failed" }).href).not.toBe(
       "#/settings/secrets"
     );

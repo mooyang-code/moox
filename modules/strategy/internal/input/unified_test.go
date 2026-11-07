@@ -4,10 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
+	"github.com/mooyang-code/moox/modules/strategy/internal/readiness"
 )
+
+// engineMarket 是一个市场的输入，测试里按值比较。
+type engineMarket = engine.MarketInput
 
 const (
 	spotTag = "venue:binance|market:spot|source:spot_http"
@@ -350,5 +357,45 @@ func TestRowsMemoKeyDistinguishesSubjects(t *testing.T) {
 	load("BTC-USDT", "ETH-USDT")
 	if len(client.queries) != 3 {
 		t.Fatalf("Reset 之后要重新读：%d 次", len(client.queries))
+	}
+}
+
+// 统一数据集某一期只有现货一个 series_tag（Storage 不生成序列名单）：按标的的失败名单经 ForMarket 原样带到两个市场。
+// 读完行之后，本期一行也没有的永续丢掉这些名单、按无行处理：现货有没有（与永续无关的）失败，永续的结论都一样，不会因为现货的失败被判成整体失败。
+func TestLoadBarUnifiedSingleTagFallbackDropsFailuresOnRowlessMarket(t *testing.T) {
+	load := func(failed []string) (spot, swap engineMarket) {
+		t.Helper()
+		client := newUnifiedClient()
+		resolved, program, err := Resolve(context.Background(), client, "space", []string{"ftask_1h"}, parseStrategy(t, unifiedDSL))
+		if err != nil {
+			t.Fatal(err)
+		}
+		client.rows = func(Query) ([]Row, uint64, error) {
+			return unifiedRows(barStart, map[string]float64{"BTC-USDT": 1, "ETH-USDT": 2, "SOL-USDT": 3}, nil), 7, nil
+		}
+		unified := readiness.Result{FailedByFactor: map[string][]string{}}
+		if len(failed) > 0 {
+			unified.FailedByFactor["ma"] = failed
+		}
+		universe := []string{"BTC-USDT", "ETH-USDT", "SOL-USDT", "DOGE-USDT"}
+		loaded, err := Loader{Client: client}.LoadBar(context.Background(), "space", resolved, program, Bar{
+			BarStart: barStart, EventUniverse: map[string][]string{"spot": universe, "swap": universe},
+			Readiness: map[string]readiness.Result{"spot": unified.ForMarket("spot"), "swap": unified.ForMarket("swap")},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return engineMarket(loaded.Frame.Markets["spot"]), engineMarket(loaded.Frame.Markets["swap"])
+	}
+	cleanSpot, cleanSwap := load(nil)
+	failedSpot, failedSwap := load([]string{"BTC-USDT"})
+	if len(cleanSwap.Rows) != 0 || len(cleanSwap.Failed) != 0 {
+		t.Fatalf("现货没有失败时永续无行、没有失败标记：%+v", cleanSwap)
+	}
+	if !reflect.DeepEqual(cleanSwap, failedSwap) {
+		t.Fatalf("现货的失败不能改变零行永续的结论：没有失败 %+v，有失败 %+v", cleanSwap, failedSwap)
+	}
+	if len(cleanSpot.Failed) != 0 || failedSpot.Failed["ma_20"]["BTC-USDT"] == "" {
+		t.Fatalf("有行的现货照常按失败处理：%+v / %+v", cleanSpot.Failed, failedSpot.Failed)
 	}
 }

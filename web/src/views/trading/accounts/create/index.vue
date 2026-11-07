@@ -246,6 +246,20 @@ watch(
   }
 );
 
+// 改环境（测试网、生产环境）后，之前选的密钥属于另一个环境：清掉，检测结果也作废，回到第 2 步时按新环境重新读密钥。
+watch(
+  () => form.kind,
+  () => {
+    form.secretId = "";
+    secrets.value = [];
+    secretsRequest++;
+    secretsLoading.value = false;
+    Object.assign(preview, { allowNext: false, view: null });
+  },
+  // 同步执行：环境一改就清掉，不会把紧接着选的新密钥也清掉。
+  { flush: "sync" }
+);
+
 // 换交易所或环境后进入单选模式（币安测试网），已经勾着的多个市场收成一个，否则两个都勾着、点哪个都取消不掉
 watch(
   () => [singleMarket.value, form.markets.length],
@@ -274,14 +288,18 @@ function marketAvailable(market: "SPOT" | "SWAP"): boolean {
   return !available.length || available.includes(market);
 }
 
+// 密钥列表的请求序号：换交易所、换环境后，旧环境迟到的列表不能覆盖新的。
+let secretsRequest = 0;
 async function loadSecrets() {
+  const requestId = ++secretsRequest;
   secretsLoading.value = true;
   try {
-    secrets.value = await loadExchangeSecrets(form.exchange, form.kind === "testnet" ? 1 : 2);
+    const list = await loadExchangeSecrets(form.exchange, form.kind === "testnet" ? 1 : 2);
+    if (requestId === secretsRequest) secrets.value = list;
   } catch {
-    secrets.value = [];
+    if (requestId === secretsRequest) secrets.value = [];
   } finally {
-    secretsLoading.value = false;
+    if (requestId === secretsRequest) secretsLoading.value = false;
   }
 }
 

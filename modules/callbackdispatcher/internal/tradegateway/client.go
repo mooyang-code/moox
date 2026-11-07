@@ -216,11 +216,15 @@ func (c *Client) FlattenInstrument(ctx context.Context, request action.FlattenRe
 	return result, nil
 }
 
-// GetOperatorAction 查询一次操作的结果。
+// GetOperatorAction 查询一次操作的结果。Trade 返回 NOT_FOUND（没有这个操作号的操作）时返回 action.ErrOperatorNotFound，
+// 调用方据此区分“从没建过”和“暂时查不到”。
 func (c *Client) GetOperatorAction(ctx context.Context, spaceID, operatorActionID string) (action.OperatorAction, error) {
 	response := new(tradepb.GetOperatorActionRsp)
 	if err := c.invoke(ctx, "GetOperatorAction", spaceID, &tradepb.GetOperatorActionReq{ActionId: operatorActionID}, response); err != nil {
 		return action.OperatorAction{}, err
+	}
+	if response.GetRetInfo().GetCode() == tradepb.ErrorCode_NOT_FOUND {
+		return action.OperatorAction{}, fmt.Errorf("%w：%s", action.ErrOperatorNotFound, response.GetRetInfo().GetMsg())
 	}
 	if err := retError(response.GetRetInfo()); err != nil {
 		return action.OperatorAction{}, err

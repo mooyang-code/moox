@@ -81,7 +81,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, onActivated, onMounted, reactive, ref, watch } from "vue";
 import { Message, Modal } from "@arco-design/web-vue";
 import {
   deleteEventRule,
@@ -105,6 +105,7 @@ import {
   eventTitle,
   formatDuration,
   formatMs,
+  pageAfterShrink,
   secretHintText,
   statusText,
   statusTone,
@@ -142,17 +143,29 @@ watch(secretVisible, visible => {
 
 const fieldsOf = (eventName: string) => events.value.find(event => event.event_name === eventName)?.scope_fields ?? [];
 
+// 列表请求的序号：翻页、删除后重读等连续请求只认最后一次，迟到的旧页不会覆盖新页。
+let loadSeq = 0;
 async function load() {
+  const seq = ++loadSeq;
   loading.value = true;
   void loadSystemRule();
   try {
     const rsp = await listEventRules({ page: pagination.current, size: pagination.pageSize });
+    if (seq !== loadSeq) return;
+    const total = rsp.page_result?.total ?? rsp.rules.length;
+    // 删掉最后一页仅有的一行后，本页读回来是空的：回到现在的最后一页再读一次。
+    const page = pageAfterShrink(pagination.current, pagination.pageSize, total, rsp.rules.length);
+    if (page !== null) {
+      pagination.current = page;
+      void load();
+      return;
+    }
     rows.value = rsp.rules;
-    pagination.total = rsp.page_result?.total ?? rsp.rules.length;
+    pagination.total = total;
   } catch (error) {
-    reportControlError(error);
+    if (seq === loadSeq) reportControlError(error);
   } finally {
-    loading.value = false;
+    if (seq === loadSeq) loading.value = false;
   }
 }
 
@@ -269,12 +282,21 @@ async function sendTest(rule: EventRule) {
   }
 }
 
-onMounted(() => {
+/** 页面上的“刷新”：规则列表、事件目录和系统规则状态一起重读。 */
+function refresh() {
   void loadEvents();
   void load();
+}
+
+onMounted(refresh);
+// 页签切回来时（keep-alive）执行记录页可能已经让规则的最近一次执行变了，重读列表；首次显示时 onMounted 已经读过。
+let activatedOnce = false;
+onActivated(() => {
+  if (activatedOnce) refresh();
+  activatedOnce = true;
 });
 
-defineExpose({ openCreate, openDelist, load });
+defineExpose({ openCreate, openDelist, load, refresh });
 </script>
 
 <style scoped>

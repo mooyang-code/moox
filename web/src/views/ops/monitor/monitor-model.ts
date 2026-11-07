@@ -73,8 +73,8 @@ export interface AlertLine {
   recovering: boolean;
   facts: Fact[];
   link: { href: string; label: string };
-  /** 只能在命令行里处理的告警的处理说明；有说明时不显示跳转链接。 */
-  note: string;
+  /** 要先看说明的告警的处理说明（几段文字），显示在原因下面；没有时为空数组。 */
+  note: string[];
 }
 
 export interface AlertGroup {
@@ -193,6 +193,7 @@ export function expectedBar(item: HealthDataset, delay: BarDelay, nowMs: number)
 }
 
 function alertLine(alert: HealthAlert, names: NameBook, nowMs: number): AlertLine {
+  const note = alertNote(alert.object);
   const startedMs = toMillis(alert.triggered_at);
   const facts: Fact[] = [
     { label: "触发时间", value: shortTime(alert.triggered_at, nowMs) },
@@ -211,8 +212,8 @@ function alertLine(alert: HealthAlert, names: NameBook, nowMs: number): AlertLin
     duration: since(startedMs, nowMs),
     recovering: Boolean(alert.recovering),
     facts,
-    link: alertLink(alert.object),
-    note: alertNote(alert.object)
+    link: note?.link ?? alertLink(alert.object),
+    note: note?.lines ?? []
   };
 }
 

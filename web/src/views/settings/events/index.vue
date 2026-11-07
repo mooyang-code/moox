@@ -4,6 +4,10 @@
       <div class="event-center-head">
         <PageTitleTabs :model-value="activeTab" :items="tabs" aria-label="事件中心" @change="onTabChange" />
         <a-space v-if="activeTab === 'rules'">
+          <a-button @click="rulesRef?.refresh()">
+            <template #icon><icon-refresh /></template>
+            刷新
+          </a-button>
           <a-button @click="rulesRef?.openDelist()">手工登记下架</a-button>
           <a-button type="primary" status="success" @click="rulesRef?.openCreate()">
             <template #icon><icon-plus /></template>

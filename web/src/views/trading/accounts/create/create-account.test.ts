@@ -241,6 +241,18 @@ describe("新建账户提交", () => {
       expect(vm.form.ack).toBe(false);
     });
 
+    it("改环境后清掉已选的密钥（另一个环境的密钥），回到第 2 步按新环境重新选", async () => {
+      const vm = await openDialog();
+      vm.open("testnet");
+      await flushPromises();
+      Object.assign(vm.form, { step: 1, secretId: "testnet-secret" });
+      await flushPromises();
+      expect(vm.form.secretId).toBe("testnet-secret");
+      Object.assign(vm.form, { step: 0, kind: "prod" });
+      await flushPromises();
+      expect(vm.form.secretId).toBe("");
+    });
+
     it("加入组合失败只显示一条红色提示并锁定前几步，重试只补加入不重复建账户", async () => {
       mocks.createTradingAccount.mockResolvedValue({ account: { trading_account_id: "ta-live" } });
       const vm = await openDialog();
