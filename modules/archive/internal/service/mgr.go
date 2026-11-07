@@ -22,7 +22,8 @@ type MgrService struct{ svc *Service }
 const (
 	defaultPageSize = 50
 	maxPageSize     = 200
-	previewRuns     = 5
+	previewPulls    = 5
+	previewReviews  = 3
 	timeSeriesKind  = "time_series"
 	datasetActive   = "active"
 )
@@ -45,74 +46,50 @@ func pageResult(page, size, total int) *commonpb.PageResult {
 	return &commonpb.PageResult{Page: uint32(page), Size: uint32(size), Total: uint32(total), HasMore: page*size < total, TotalState: commonpb.TotalState_EXACT}
 }
 
-// scheduleInput 是创建与修改任务时用户填写的执行计划部分。
-type scheduleInput struct {
-	Cron, TZ, StartMode, StartAt, BackfillFrom string
+// validateBackfill 校验回补起点：必须早于当前时间，且不早于「今天 − 线上保留期 + 1 天」（保留期为 forever 时不限）。
+func validateBackfill(value, retention string, now time.Time) (time.Time, error) {
+	backfill, err := parseRFC("backfill_from", value)
+	if err != nil || backfill.IsZero() {
+		return backfill, err
+	}
+	if !backfill.Before(now) {
+		return time.Time{}, fmt.Errorf("%w：必须早于当前时间", ErrInvalidBackfill)
+	}
+	earliest, ok, err := earliestBackfill(retention, now)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if ok && backfill.Before(earliest) {
+		return time.Time{}, fmt.Errorf("%w：不能早于 %s（今天 − 线上保留期 + 1 天）", ErrInvalidBackfill, earliest.Format(time.RFC3339))
+	}
+	return backfill, nil
 }
 
-// builtSchedule 是校验后的执行计划。
-type builtSchedule struct {
-	Plan         *schedule.Plan
-	Interval     time.Duration
-	StartAt      time.Time
-	BackfillFrom time.Time
-	NextRunAt    time.Time
-	Immediate    bool
-}
-
-// buildSchedule 校验执行计划与开始时间，计算下一个计划时刻。
-func (s *Service) buildSchedule(in scheduleInput, retention string, now time.Time) (builtSchedule, error) {
-	plan, err := s.plan(in.Cron, in.TZ)
+// pullEveryBars 校验用户填写的 N：0 取 fallback；1d 及以上每天一次，固定存 1。
+func pullEveryBars(freq string, requested uint32, fallback int) (int, error) {
+	daily, err := schedule.Daily(freq)
 	if err != nil {
-		return builtSchedule{}, err
+		return 0, err
 	}
-	interval, err := plan.CheckInterval(now, s.cfg.Schedule.MinInterval)
+	n := int(requested)
+	if n == 0 {
+		n = fallback
+	}
+	if err := schedule.ValidatePullEveryBars(n); err != nil {
+		return 0, err
+	}
+	if daily {
+		return 1, nil
+	}
+	// 步长不超过一天：步长太长时到点拉取要读的根数会超出线上保留期，被截断后误记为无法补齐。
+	span, err := schedule.BarSpan(freq)
 	if err != nil {
-		return builtSchedule{}, err
+		return 0, err
 	}
-	out := builtSchedule{Plan: plan, Interval: interval}
-	switch strings.TrimSpace(in.StartMode) {
-	case "", "immediate":
-		out.StartAt, out.Immediate = now, true
-		out.NextRunAt = plan.Next(now)
-	case "at":
-		start, err := parseRFC("start_at", in.StartAt)
-		if err != nil {
-			return builtSchedule{}, err
-		}
-		if start.IsZero() {
-			return builtSchedule{}, errors.New("start_mode=at 时必须填写 start_at")
-		}
-		out.StartAt = start
-		base := start
-		if base.Before(now) {
-			base = now
-		}
-		out.NextRunAt = plan.Next(base.Add(-time.Second))
-	default:
-		return builtSchedule{}, fmt.Errorf("start_mode %q 无效，只能是 immediate 或 at", in.StartMode)
+	if span*time.Duration(n) > 24*time.Hour {
+		return 0, fmt.Errorf("pull_every_bars × 频率不能超过 1 天：%s × %d", freq, n)
 	}
-	if out.NextRunAt.IsZero() {
-		return builtSchedule{}, errors.New("执行计划没有下一个计划时刻")
-	}
-	backfill, err := parseRFC("backfill_from", in.BackfillFrom)
-	if err != nil {
-		return builtSchedule{}, err
-	}
-	if !backfill.IsZero() {
-		if !backfill.Before(now) {
-			return builtSchedule{}, fmt.Errorf("%w：必须早于当前时间", ErrInvalidBackfill)
-		}
-		earliest, ok, err := earliestBackfill(retention, now)
-		if err != nil {
-			return builtSchedule{}, err
-		}
-		if ok && backfill.Before(earliest) {
-			return builtSchedule{}, fmt.Errorf("%w：不能早于 %s（今天 − 线上保留期 + 1 天）", ErrInvalidBackfill, earliest.Format(time.RFC3339))
-		}
-		out.BackfillFrom = backfill
-	}
-	return out, nil
+	return n, nil
 }
 
 // earliestBackfill 返回回补起点的下限；保留期为 forever 时返回 false。
@@ -162,29 +139,34 @@ func (m *MgrService) CreateArchiveTask(ctx context.Context, req *archivepb.Creat
 	if err != nil {
 		return &archivepb.CreateArchiveTaskRsp{RetInfo: invalid(err)}, nil
 	}
-	now := s.clock()
-	built, err := s.buildSchedule(scheduleInput{req.GetScheduleCron(), req.GetScheduleTz(), req.GetStartMode(), req.GetStartAt(), req.GetBackfillFrom()}, ds.Retention, now)
+	interval, err := schedule.ReviewInterval(ds.Freq)
+	if err != nil {
+		return &archivepb.CreateArchiveTaskRsp{RetInfo: invalid(err)}, nil
+	}
+	n, err := pullEveryBars(ds.Freq, req.GetPullEveryBars(), schedule.DefaultPullEveryBars)
+	if err != nil {
+		return &archivepb.CreateArchiveTaskRsp{RetInfo: invalid(err)}, nil
+	}
+	backfill, err := validateBackfill(req.GetBackfillFrom(), ds.Retention, s.clock())
 	if err != nil {
 		return &archivepb.CreateArchiveTaskRsp{RetInfo: invalid(err)}, nil
 	}
 	task := store.Task{
 		MetaJSON: metaJSON(ds),
 		SpaceID:  space, DatasetID: ds.DatasetID, Freq: ds.Freq, PartitionUnit: unit, DataNodeID: ds.DataNodeID, Retention: ds.Retention,
-		ScheduleCron: built.Plan.Cron, ScheduleTZ: built.Plan.TZ, IntervalSeconds: int(built.Interval / time.Second), StartAt: built.StartAt,
-		BackfillFrom: built.BackfillFrom, Status: store.StatusEnabled, NextRunAt: built.NextRunAt, Creator: "console",
+		PullEveryBars: n, IntervalSeconds: int(interval / time.Second), BackfillFrom: backfill, Status: store.StatusEnabled, Creator: "console",
 	}
-	immediate := built.Immediate
 	if req.GetPaused() {
-		task.Status, task.NextRunAt, immediate = store.StatusPaused, time.Time{}, false
+		task.Status = store.StatusPaused
 	}
-	created, _, err := s.store.CreateTask(ctx, task, immediate, now)
+	created, err := s.store.CreateTask(ctx, task)
 	if err != nil {
 		if errors.Is(err, store.ErrConflict) {
 			return &archivepb.CreateArchiveTaskRsp{RetInfo: conflict(fmt.Errorf("数据集 %s 已经有归档任务", ds.DatasetID))}, nil
 		}
 		return &archivepb.CreateArchiveTaskRsp{RetInfo: fail(err)}, nil
 	}
-	return &archivepb.CreateArchiveTaskRsp{RetInfo: success(), Task: taskToPB(created)}, nil
+	return &archivepb.CreateArchiveTaskRsp{RetInfo: success(), Task: s.taskToPB(created, s.clock())}, nil
 }
 
 func datasetError(err error) *commonpb.RetInfo {
@@ -215,47 +197,24 @@ func (m *MgrService) UpdateArchiveTask(ctx context.Context, req *archivepb.Updat
 	default:
 		return &archivepb.UpdateArchiveTaskRsp{RetInfo: invalid(fmt.Errorf("status %q 无效，只能是 enabled 或 paused", req.GetStatus()))}, nil
 	}
-	in := scheduleInput{Cron: task.ScheduleCron, TZ: task.ScheduleTZ, StartMode: "at", StartAt: fmtRFC(task.StartAt), BackfillFrom: fmtRFC(task.BackfillFrom)}
-	if req.GetScheduleCron() != "" {
-		in.Cron = req.GetScheduleCron()
-	}
-	if req.GetScheduleTz() != "" {
-		in.TZ = req.GetScheduleTz()
-	}
-	if req.GetStartMode() != "" {
-		in.StartMode, in.StartAt = req.GetStartMode(), req.GetStartAt()
-	}
-	if req.GetBackfillFrom() != "" {
-		in.BackfillFrom = req.GetBackfillFrom()
+	n, err := pullEveryBars(task.Freq, req.GetPullEveryBars(), task.PullEveryBars)
+	if err != nil {
+		return &archivepb.UpdateArchiveTaskRsp{RetInfo: invalid(err)}, nil
 	}
 	now := s.clock()
-	built, err := s.buildSchedule(in, task.Retention, now)
-	if err != nil {
-		// 已有回补起点超出保留期时不应阻止修改其他设置：只有用户改了回补起点才校验它。
-		if req.GetBackfillFrom() == "" && errors.Is(err, ErrInvalidBackfill) {
-			in.BackfillFrom = ""
-			built, err = s.buildSchedule(in, task.Retention, now)
-		}
-		if err != nil {
+	// 用户没改回补起点时保留原值（即使它已超出保留期），首次回补尚未完成时不能被改丢；只有改了才校验。
+	backfill := task.BackfillFrom
+	if req.GetBackfillFrom() != "" {
+		if backfill, err = validateBackfill(req.GetBackfillFrom(), task.Retention, now); err != nil {
 			return &archivepb.UpdateArchiveTaskRsp{RetInfo: invalid(err)}, nil
 		}
 	}
-	if req.GetBackfillFrom() == "" {
-		// 用户没改回补起点：保留原值（即使它已超出保留期，校验时被忽略），首次回补尚未完成时不能被改丢。
-		built.BackfillFrom = task.BackfillFrom
-	}
-	update := store.TaskUpdate{
-		ScheduleCron: built.Plan.Cron, ScheduleTZ: built.Plan.TZ, IntervalSeconds: int(built.Interval / time.Second), StartAt: built.StartAt,
-		BackfillFrom: built.BackfillFrom, Status: status, NextRunAt: built.NextRunAt, RunNow: req.GetRunNow(), ClearUnrecoverable: req.GetClearUnrecoverable(),
-	}
-	if status == store.StatusPaused {
-		update.NextRunAt = time.Time{}
-	}
-	updated, _, err := s.store.UpdateTask(ctx, space, req.GetDatasetId(), update, now)
+	update := store.TaskUpdate{PullEveryBars: n, BackfillFrom: backfill, Status: status, ClearUnrecoverable: req.GetClearUnrecoverable()}
+	updated, err := s.store.UpdateTask(ctx, space, req.GetDatasetId(), update, now)
 	if err != nil {
 		return &archivepb.UpdateArchiveTaskRsp{RetInfo: fail(err)}, nil
 	}
-	return &archivepb.UpdateArchiveTaskRsp{RetInfo: success(), Task: taskToPB(updated)}, nil
+	return &archivepb.UpdateArchiveTaskRsp{RetInfo: success(), Task: s.taskToPB(updated, now)}, nil
 }
 
 func (m *MgrService) DeleteArchiveTask(ctx context.Context, req *archivepb.DeleteArchiveTaskReq) (*archivepb.DeleteArchiveTaskRsp, error) {
@@ -364,7 +323,7 @@ func (m *MgrService) ListArchiveRuns(ctx context.Context, req *archivepb.ListArc
 		return &archivepb.ListArchiveRunsRsp{RetInfo: invalid(err)}, nil
 	}
 	page, size, offset := pageOf(req.GetPage())
-	runs, total, err := m.svc.store.ListRuns(ctx, space, req.GetDatasetId(), req.GetStatus(), size, offset)
+	runs, total, err := m.svc.store.ListRuns(ctx, space, req.GetDatasetId(), req.GetStatus(), req.GetIncludeTicks(), size, offset)
 	if err != nil {
 		return &archivepb.ListArchiveRunsRsp{RetInfo: inner(err)}, nil
 	}
@@ -444,10 +403,9 @@ func (m *MgrService) PrepareArchiveTask(ctx context.Context, req *archivepb.Prep
 	if err != nil {
 		return &archivepb.PrepareArchiveTaskRsp{RetInfo: invalid(err)}, nil
 	}
-	spec, tz := schedule.DefaultPlan(space, ds.Freq)
 	rsp := &archivepb.PrepareArchiveTaskRsp{
 		RetInfo: success(), Freq: ds.Freq, PartitionUnit: unit, Retention: ds.Retention, DataNodeId: ds.DataNodeID,
-		RecommendedCron: spec, RecommendedTz: tz,
+		RecommendedPullEveryBars: schedule.DefaultPullEveryBars,
 	}
 	if earliest, ok, _ := earliestBackfill(ds.Retention, s.clock()); ok {
 		rsp.EarliestBackfillFrom = fmtRFC(earliest)
@@ -468,48 +426,58 @@ func (m *MgrService) PreviewArchiveSchedule(ctx context.Context, req *archivepb.
 	if err != nil {
 		return &archivepb.PreviewArchiveScheduleRsp{RetInfo: datasetError(err)}, nil
 	}
+	n, err := pullEveryBars(ds.Freq, req.GetPullEveryBars(), schedule.DefaultPullEveryBars)
+	if err != nil {
+		return &archivepb.PreviewArchiveScheduleRsp{RetInfo: invalid(err)}, nil
+	}
+	interval, err := schedule.ReviewInterval(ds.Freq)
+	if err != nil {
+		return &archivepb.PreviewArchiveScheduleRsp{RetInfo: invalid(err)}, nil
+	}
+	span, err := schedule.ReadSpan(interval, s.cfg.Schedule.MinLookback, ds.Freq)
+	if err != nil {
+		return &archivepb.PreviewArchiveScheduleRsp{RetInfo: invalid(err)}, nil
+	}
 	now := s.clock()
-	built, err := s.buildSchedule(scheduleInput{req.GetScheduleCron(), req.GetScheduleTz(), req.GetStartMode(), req.GetStartAt(), ""}, ds.Retention, now)
+	timing := s.timing(space, ds.Freq, n)
+	pulls, err := schedule.NextPulls(timing, now, previewPulls)
 	if err != nil {
 		return &archivepb.PreviewArchiveScheduleRsp{RetInfo: invalid(err)}, nil
 	}
-	span, err := schedule.ReadSpan(built.Interval, s.cfg.Schedule.MinLookback, ds.Freq)
+	reviews, err := schedule.NextReviews(timing, now, previewReviews)
 	if err != nil {
 		return &archivepb.PreviewArchiveScheduleRsp{RetInfo: invalid(err)}, nil
 	}
-	rsp := &archivepb.PreviewArchiveScheduleRsp{RetInfo: success(), IntervalSeconds: uint32(built.Interval / time.Second), ReadSpanSeconds: uint32(span / time.Second)}
-	runs := built.Plan.NextN(built.NextRunAt.Add(-time.Second), previewRuns)
-	for _, t := range runs {
+	rsp := &archivepb.PreviewArchiveScheduleRsp{RetInfo: success(), IntervalSeconds: uint32(interval / time.Second), ReadSpanSeconds: uint32(span / time.Second)}
+	for _, t := range pulls {
 		rsp.NextRuns = append(rsp.NextRuns, fmtRFC(t))
 	}
-	rsp.Warnings = schedule.AvoidanceWarnings(runs)
-	rsp.PartitionExportEstimates = s.exportEstimates(space, ds, built.Plan, now)
+	for _, t := range reviews {
+		rsp.NextReviews = append(rsp.NextReviews, fmtRFC(t))
+	}
+	rsp.PartitionExportEstimates = s.exportEstimates(space, ds, timing, now)
 	return rsp, nil
 }
 
-// exportEstimates 给出上一个分区与当前分区预计的导出时间。
-func (s *Service) exportEstimates(space string, ds Dataset, plan *schedule.Plan, now time.Time) []string {
+// exportEstimates 给出上一个分区与当前分区预计的导出时间：收盘 + 最少回看之后的第一次拉取或复核。
+func (s *Service) exportEstimates(space string, ds Dataset, timing schedule.Timing, now time.Time) []string {
 	unit, err := schedule.PartitionUnit(ds.Freq)
 	if err != nil {
 		return nil
 	}
 	spaceCfg := s.cfg.Space(space)
-	loc, err := time.LoadLocation(spaceCfg.TZ)
-	if err != nil {
-		loc = time.UTC
-	}
-	currentKey, currentStart, currentEnd := schedule.PartitionOf(unit, loc, now)
-	previousKey, previousStart, previousEnd := schedule.PartitionOf(unit, loc, currentStart.Add(-time.Second))
+	currentKey, currentStart, currentEnd := schedule.PartitionOf(unit, timing.Loc, now)
+	previousKey, previousStart, previousEnd := schedule.PartitionOf(unit, timing.Loc, currentStart.Add(-time.Second))
 	var out []string
 	for _, c := range []struct {
 		key        string
 		start, end time.Time
 	}{{previousKey, previousStart, previousEnd}, {currentKey, currentStart, currentEnd}} {
-		closeAt, err := schedule.PartitionClose(unit, loc, spaceCfg.LocalClose, ds.Freq, c.start, c.end)
+		closeAt, err := schedule.PartitionClose(unit, timing.Loc, spaceCfg.LocalClose, ds.Freq, c.start, c.end)
 		if err != nil {
 			continue
 		}
-		if at := plan.ExportEstimate(closeAt, s.cfg.Schedule.MinLookback); !at.IsZero() {
+		if at, err := schedule.ExportEstimate(timing, closeAt, s.cfg.Schedule.MinLookback); err == nil {
 			out = append(out, fmt.Sprintf("分区 %s：预计 %s 导出", c.key, fmtRFC(at)))
 		}
 	}
@@ -541,6 +509,10 @@ func (s *Service) taskViews(ctx context.Context, space string, tasks []store.Tas
 	if err != nil {
 		return nil, err
 	}
+	lastReviews, err := s.store.LastReviewRuns(ctx, space)
+	if err != nil {
+		return nil, err
+	}
 	sums, err := s.store.PartitionSummaries(ctx, space)
 	if err != nil {
 		return nil, err
@@ -565,13 +537,17 @@ func (s *Service) taskViews(ctx context.Context, space string, tasks []store.Tas
 	out := make([]*archivepb.ArchiveTask, 0, len(tasks))
 	for _, task := range tasks {
 		key := task.SpaceID + "/" + task.DatasetID
-		view := taskToPB(task)
+		view := s.taskToPB(task, now)
 		in := healthInput{Now: now, Task: task, OpenParts: openByTask[key], OldestQueued: queued[key], WorkerActive: active, WorkerLastSeen: lastSeen,
 			Lookback: s.cfg.Schedule.MinLookback, SpaceTZ: s.cfg.Space(task.SpaceID).TZ, SpaceLocalClose: s.cfg.Space(task.SpaceID).LocalClose}
 		if run, ok := lastRuns[key]; ok {
 			copied := run
 			in.LastRun = &copied
 			view.LastRun = runToPB(run)
+		}
+		if run, ok := lastReviews[key]; ok {
+			copied := run
+			in.LastReview = &copied
 		}
 		if sum, ok := sums[key]; ok {
 			view.PartitionCount, view.FileCount, view.TotalRows, view.TotalFileBytes = uint32(sum.Partitions), uint32(sum.Files), sum.Rows, sum.FileBytes

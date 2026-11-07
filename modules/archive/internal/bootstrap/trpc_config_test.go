@@ -1,6 +1,8 @@
 package bootstrap
 
 import (
+	"fmt"
+	"github.com/mooyang-code/moox/modules/archive/internal/schedule"
 	"os"
 	"strings"
 	"testing"
@@ -61,7 +63,7 @@ func TestShippedTRPCConfigMatchesTheServiceCatalogAndTimers(t *testing.T) {
 		t.Fatalf("健康端口 trpc_go.yaml=%d 服务目录=%d", byName[healthService].Port, component.Health.Port)
 	}
 	trigger, maintain := byName[triggerService], byName[maintainService]
-	if trigger.Protocol != "timer" || trigger.Network != "* * * * * *" || trigger.Timeout != int(triggerTimeout.Milliseconds()) {
+	if trigger.Protocol != "timer" || trigger.Network != fmt.Sprintf("%d * * * * *", schedule.CheckSecond) || trigger.Timeout != int(triggerTimeout.Milliseconds()) {
 		t.Fatalf("全局触发器配置不对: %+v", trigger)
 	}
 	if maintain.Protocol != "timer" || !strings.HasPrefix(maintain.Network, "13 ") || maintain.Timeout != int(maintainTimeout.Milliseconds()) {

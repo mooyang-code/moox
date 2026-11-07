@@ -31,7 +31,7 @@ const (
 	maintainService = "trpc.moox.archive.mgr.maintain.timer"
 	metricsService  = "trpc.moox.archive.mgr.metrics.timer"
 
-	triggerTimeout  = 900 * time.Millisecond
+	triggerTimeout  = 20 * time.Second
 	maintainTimeout = 50 * time.Second
 	metricsTimeout  = 10 * time.Second
 )

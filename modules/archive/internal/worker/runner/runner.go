@@ -99,7 +99,7 @@ func (r *Runner) now() time.Time {
 }
 
 // Execute 执行一次运行。report 在每页之后调用，返回 true 表示运行已被取消。
-// 每读完一个分区块就导出、定稿到期的分区，并（非补拉运行）把续读起点记进暂存库；全部读完才推进水位。
+// 每读完一个分区块就导出、定稿到期的分区，并（复核与手动运行）把续读起点记进暂存库；全部读完才推进水位（补拉与到点拉取不推进）。
 // 出错或取消时已提交的批次留在暂存区，水位不推进，下次从续读起点接着读；返回的 Outcome 仍带上待上报的分区登记。
 func (r *Runner) Execute(ctx context.Context, a *archivepb.RunAssignment, report func(Progress) bool) (out *Outcome, err error) {
 	started, err := time.Parse(time.RFC3339, a.GetStartedAt())
@@ -174,7 +174,7 @@ func (r *Runner) Execute(ctx context.Context, a *archivepb.RunAssignment, report
 		return out, fmt.Errorf("写 dataset.json 失败: %w", err)
 	}
 	out.Unrecoverable = unrecoverable
-	resumable := a.GetKind() != "range"
+	resumable := !fixedRange(a)
 	for i, rng := range ranges {
 		if err := s.readChunk(ctx, rng[0], rng[1]); err != nil {
 			return out, err
@@ -253,11 +253,17 @@ func parseOptionalTime(value string) (time.Time, error) {
 	return t.UTC(), nil
 }
 
+// fixedRange 报告运行是否读下发的区间：补拉区间（range）与到点拉取（tick）读 [range_start, range_end)，
+// 不续读、不推进水位，也不写首次起点；复核与手动运行从水位往前回看读到本次开始。
+func fixedRange(a *archivepb.RunAssignment) bool {
+	return a.GetKind() == "range" || a.GetKind() == "tick"
+}
+
 // readRanges 算出本次要读的区间，并按分区边界切成块。
 func (s *runState) readRanges(ctx context.Context) ([][2]time.Time, []*archivepb.UnrecoverableRange, error) {
 	a := s.a
 	var start, end time.Time
-	if a.GetKind() == "range" {
+	if fixedRange(a) {
 		var err error
 		if start, err = time.Parse(time.RFC3339, a.GetRangeStart()); err != nil {
 			return nil, nil, fmt.Errorf("invalid range_start: %w", err)

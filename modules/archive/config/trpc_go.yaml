@@ -36,9 +36,9 @@ server:
       timeout: 3000
     - name: trpc.moox.archive.mgr.trigger.timer
       port: 11407
-      network: "* * * * * *"
+      network: "25 * * * * *"
       protocol: timer
-      timeout: 900
+      timeout: 20000
     - name: trpc.moox.archive.mgr.maintain.timer
       port: 11409
       network: "13 * * * * *"

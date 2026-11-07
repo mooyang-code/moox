@@ -23,14 +23,11 @@ type archiveFlags struct {
 	File         string
 	SpaceID      string
 	DatasetID    string
-	Cron         string
-	TZ           string
-	StartMode    string
-	StartAt      string
+	PullEvery    uint32
 	BackfillFrom string
 	Paused       bool
 	Status       string
-	RunNow       bool
+	IncludeTicks bool
 	ClearUnrecov bool
 	From         string
 	To           string
@@ -107,7 +104,7 @@ func runArchiveTasksPreview(ctx context.Context, out io.Writer, f archiveFlags) 
 	}
 	rsp := &archivepb.PreviewArchiveScheduleRsp{}
 	return archiveInvoke(ctx, out, f.File, "PreviewArchiveSchedule", &archivepb.PreviewArchiveScheduleReq{
-		SpaceId: f.SpaceID, DatasetId: f.DatasetID, ScheduleCron: f.Cron, ScheduleTz: f.TZ, StartMode: f.StartMode, StartAt: f.StartAt,
+		SpaceId: f.SpaceID, DatasetId: f.DatasetID, PullEveryBars: f.PullEvery,
 	}, rsp, rsp.GetRetInfo)
 }
 
@@ -115,13 +112,9 @@ func runArchiveTasksCreate(ctx context.Context, out io.Writer, f archiveFlags) e
 	if err := f.requireSpaceAndDataset(); err != nil {
 		return err
 	}
-	if strings.TrimSpace(f.Cron) == "" {
-		return errors.New("--cron 必填（带秒的 6 段 cron）；可先用 `archive tasks prepare` 查看推荐的计划")
-	}
 	rsp := &archivepb.CreateArchiveTaskRsp{}
 	return archiveInvoke(ctx, out, f.File, "CreateArchiveTask", &archivepb.CreateArchiveTaskReq{
-		SpaceId: f.SpaceID, DatasetId: f.DatasetID, ScheduleCron: f.Cron, ScheduleTz: f.TZ, StartMode: f.StartMode, StartAt: f.StartAt,
-		BackfillFrom: f.BackfillFrom, Paused: f.Paused,
+		SpaceId: f.SpaceID, DatasetId: f.DatasetID, PullEveryBars: f.PullEvery, BackfillFrom: f.BackfillFrom, Paused: f.Paused,
 	}, rsp, rsp.GetRetInfo)
 }
 
@@ -131,8 +124,7 @@ func runArchiveTasksUpdate(ctx context.Context, out io.Writer, f archiveFlags) e
 	}
 	rsp := &archivepb.UpdateArchiveTaskRsp{}
 	return archiveInvoke(ctx, out, f.File, "UpdateArchiveTask", &archivepb.UpdateArchiveTaskReq{
-		SpaceId: f.SpaceID, DatasetId: f.DatasetID, ScheduleCron: f.Cron, ScheduleTz: f.TZ, StartMode: f.StartMode, StartAt: f.StartAt,
-		BackfillFrom: f.BackfillFrom, Status: f.Status, RunNow: f.RunNow, ClearUnrecoverable: f.ClearUnrecov,
+		SpaceId: f.SpaceID, DatasetId: f.DatasetID, PullEveryBars: f.PullEvery, BackfillFrom: f.BackfillFrom, Status: f.Status, ClearUnrecoverable: f.ClearUnrecov,
 	}, rsp, rsp.GetRetInfo)
 }
 
@@ -181,7 +173,7 @@ func runArchiveTasksBackfill(ctx context.Context, out io.Writer, f archiveFlags)
 
 func runArchiveRunsList(ctx context.Context, out io.Writer, f archiveFlags) error {
 	rsp := &archivepb.ListArchiveRunsRsp{}
-	return archiveInvoke(ctx, out, f.File, "ListArchiveRuns", &archivepb.ListArchiveRunsReq{SpaceId: f.SpaceID, DatasetId: f.DatasetID, Status: f.Status, Page: f.page()}, rsp, rsp.GetRetInfo)
+	return archiveInvoke(ctx, out, f.File, "ListArchiveRuns", &archivepb.ListArchiveRunsReq{SpaceId: f.SpaceID, DatasetId: f.DatasetID, Status: f.Status, IncludeTicks: f.IncludeTicks, Page: f.page()}, rsp, rsp.GetRetInfo)
 }
 
 func runArchiveRunsGet(ctx context.Context, out io.Writer, f archiveFlags) error {
@@ -241,12 +233,9 @@ func bindDataset(cmd *cobra.Command, f *archiveFlags) {
 	cmd.Flags().StringVar(&f.DatasetID, "dataset-id", "", "数据集 ID")
 }
 
-func bindSchedule(cmd *cobra.Command, f *archiveFlags) {
+func bindSchedule(cmd *cobra.Command, f *archiveFlags, zero string) {
 	bindDataset(cmd, f)
-	cmd.Flags().StringVar(&f.Cron, "cron", "", "执行计划：带秒的 6 段 cron，最短间隔 5 分钟")
-	cmd.Flags().StringVar(&f.TZ, "tz", "", "执行计划的时区，默认 Asia/Shanghai")
-	cmd.Flags().StringVar(&f.StartMode, "start-mode", "", "immediate（默认，保存后立即运行一次）或 at")
-	cmd.Flags().StringVar(&f.StartAt, "start-at", "", "start-mode=at 时的开始时间，RFC3339")
+	cmd.Flags().Uint32Var(&f.PullEvery, "pull-every-bars", 0, "每收盘多少根 K 线拉取一次（1～1440，频率 × N 不超过 1 天；1d 及以上每天一次，统一存 1）；0 表示"+zero)
 }
 
 func bindPaging(cmd *cobra.Command, f *archiveFlags) {
@@ -272,25 +261,26 @@ func init() {
 	)
 	tasks.AddCommand(
 		newArchiveLeaf("list", "列出归档任务（--space-id 为空表示全部空间）", runArchiveTasksList, func(c *cobra.Command, f *archiveFlags) { bindSpace(c, f); bindPaging(c, f) }),
-		newArchiveLeaf("prepare", "查看数据集的频率、保留期、推荐执行计划与最早回补起点", runArchiveTasksPrepare, bindDataset),
-		newArchiveLeaf("preview", "校验执行计划并预览接下来 5 次运行与读取区间", runArchiveTasksPreview, bindSchedule),
-		newArchiveLeaf("create", "创建归档任务", runArchiveTasksCreate, func(c *cobra.Command, f *archiveFlags) {
-			bindSchedule(c, f)
+		newArchiveLeaf("prepare", "查看数据集的频率、保留期、推荐的拉取间隔与最早回补起点", runArchiveTasksPrepare, bindDataset),
+		newArchiveLeaf("preview", "预览接下来 5 次拉取、3 次复核、复核读取区间与分区导出时间", runArchiveTasksPreview, func(c *cobra.Command, f *archiveFlags) {
+			bindSchedule(c, f, "默认 1")
+		}),
+		newArchiveLeaf("create", "创建归档任务（下一次检查立即复核，之后按收盘拉取）", runArchiveTasksCreate, func(c *cobra.Command, f *archiveFlags) {
+			bindSchedule(c, f, "默认 1")
 			c.Flags().StringVar(&f.BackfillFrom, "backfill-from", "", "首次运行回补的数据起点，RFC3339；不早于线上保留期")
 			c.Flags().BoolVar(&f.Paused, "paused", false, "创建后先停用")
 		}),
-		newArchiveLeaf("update", "修改执行计划或启停任务", runArchiveTasksUpdate, func(c *cobra.Command, f *archiveFlags) {
-			bindSchedule(c, f)
+		newArchiveLeaf("update", "修改拉取间隔、回补起点或启停任务", runArchiveTasksUpdate, func(c *cobra.Command, f *archiveFlags) {
+			bindSchedule(c, f, "不修改")
 			c.Flags().StringVar(&f.BackfillFrom, "backfill-from", "", "回补起点，RFC3339")
-			c.Flags().StringVar(&f.Status, "status", "", "enabled 或 paused")
-			c.Flags().BoolVar(&f.RunNow, "run-now", false, "启用时立即运行一次")
+			c.Flags().StringVar(&f.Status, "status", "", "enabled 或 paused；重新启用后下一次检查立即复核")
 			c.Flags().BoolVar(&f.ClearUnrecov, "clear-unrecoverable", false, "清除任务累积的无法补齐区间（确认过、不再需要提示时）")
 		}),
 		newArchiveLeaf("delete", "删除没有分区的任务", runArchiveTasksDelete, func(c *cobra.Command, f *archiveFlags) {
 			bindDataset(c, f)
 			c.Flags().BoolVar(&f.Yes, "yes", false, "确认删除")
 		}),
-		newArchiveLeaf("run", "立即运行一次", runArchiveTasksRun, bindDataset),
+		newArchiveLeaf("run", "立即运行一次（同复核）", runArchiveTasksRun, bindDataset),
 		newArchiveLeaf("backfill", "补拉指定数据时间区间", runArchiveTasksBackfill, func(c *cobra.Command, f *archiveFlags) {
 			bindDataset(c, f)
 			c.Flags().StringVar(&f.From, "from", "", "起始数据时间（含），RFC3339")
@@ -302,6 +292,7 @@ func init() {
 			bindDataset(c, f)
 			bindPaging(c, f)
 			c.Flags().StringVar(&f.Status, "status", "", "queued、running、succeeded、failed、canceled")
+			c.Flags().BoolVar(&f.IncludeTicks, "include-ticks", false, "同时列出成功的到点拉取（tick）运行；默认不列")
 		}),
 		newArchiveLeaf("get", "查看一次运行（含无法补齐的区间）", runArchiveRunsGet, func(c *cobra.Command, f *archiveFlags) {
 			c.Flags().StringVar(&f.RunID, "run-id", "", "运行 ID")

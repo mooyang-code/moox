@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/archive/internal/schedule"
 	"github.com/mooyang-code/moox/modules/archive/internal/store"
 	archivepb "github.com/mooyang-code/moox/modules/archive/proto/archivegen"
 )
@@ -57,14 +58,20 @@ func workerToPB(w store.Worker, now time.Time) *archivepb.ArchiveWorkerInfo {
 	}
 }
 
-func taskToPB(t store.Task) *archivepb.ArchiveTask {
+// taskToPB 把任务转成接口消息；启用的任务带上下一次拉取时刻（算不出时留空）。
+func (s *Service) taskToPB(t store.Task, now time.Time) *archivepb.ArchiveTask {
 	out := &archivepb.ArchiveTask{
 		SpaceId: t.SpaceID, DatasetId: t.DatasetID, Freq: t.Freq, PartitionUnit: t.PartitionUnit, DataNodeId: t.DataNodeID, Retention: t.Retention,
-		ScheduleCron: t.ScheduleCron, ScheduleTz: t.ScheduleTZ, IntervalSeconds: uint32(t.IntervalSeconds), StartAt: fmtRFC(t.StartAt),
-		BackfillFrom: fmtRFC(t.BackfillFrom), Status: t.Status, NextRunAt: fmtRFC(t.NextRunAt), ConsecutiveSkips: uint32(t.ConsecutiveSkips),
+		PullEveryBars: uint32(t.PullEveryBars), IntervalSeconds: uint32(t.IntervalSeconds), BackfillFrom: fmtRFC(t.BackfillFrom), Status: t.Status,
+		LastBoundary: fmtRFC(t.LastBoundary), LastReview: fmtRFC(t.LastReview), ConsecutiveSkips: uint32(t.ConsecutiveSkips),
 		LastSuccessAt: fmtRFC(t.LastSuccessAt), FinalUntil: fmtRFC(t.FinalUntil), Creator: t.Creator, CreatedAt: fmtRFC(t.CreatedAt), UpdatedAt: fmtRFC(t.UpdatedAt),
+		BlockedReason: t.BlockedReason,
 	}
-	out.BlockedReason = t.BlockedReason
+	if t.Status == store.StatusEnabled {
+		if pulls, err := schedule.NextPulls(s.timing(t.SpaceID, t.Freq, t.PullEveryBars), now, 1); err == nil && len(pulls) > 0 {
+			out.NextPullAt = fmtRFC(pulls[0])
+		}
+	}
 	for _, item := range t.Unrecoverable {
 		out.Unrecoverable = append(out.Unrecoverable, &archivepb.UnrecoverableRange{SubjectId: item.SubjectID, SeriesTag: item.SeriesTag, StartTime: item.StartTime, EndTime: item.EndTime})
 	}

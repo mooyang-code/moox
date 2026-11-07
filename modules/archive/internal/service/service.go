@@ -57,7 +57,6 @@ type Service struct {
 	now      func() time.Time
 
 	mu          sync.Mutex
-	plans       map[string]*schedule.Plan
 	lastRefresh time.Time
 	lastCleanup time.Time
 	lastVacuum  time.Time
@@ -74,8 +73,7 @@ func New(db *store.Store, cfg *config.Config, datasets DatasetProvider, opts ...
 	if db == nil || cfg == nil || datasets == nil {
 		return nil, errors.New("archive service requires a store, config and dataset provider")
 	}
-	s := &Service{store: db, cfg: cfg, datasets: datasets, now: func() time.Time { return time.Now().UTC() },
-		plans: map[string]*schedule.Plan{}}
+	s := &Service{store: db, cfg: cfg, datasets: datasets, now: func() time.Time { return time.Now().UTC() }}
 	for _, opt := range opts {
 		opt(s)
 	}
@@ -90,26 +88,14 @@ func (s *Service) Worker() *WorkerService { return &WorkerService{svc: s} }
 
 func (s *Service) clock() time.Time { return s.now().UTC() }
 
-// plan 解析并缓存执行计划。
-func (s *Service) plan(spec, tz string) (*schedule.Plan, error) {
-	key := spec + "|" + tz
-	s.mu.Lock()
-	cached, ok := s.plans[key]
-	s.mu.Unlock()
-	if ok {
-		return cached, nil
-	}
-	plan, err := schedule.Parse(spec, tz)
+// timing 返回任务算拉取边界用的时序信息（空间时区与本地收盘时刻取自配置；时区无效时按 UTC）。
+func (s *Service) timing(spaceID, freq string, pullEveryBars int) schedule.Timing {
+	spaceCfg := s.cfg.Space(spaceID)
+	loc, err := time.LoadLocation(spaceCfg.TZ)
 	if err != nil {
-		return nil, err
+		loc = time.UTC
 	}
-	s.mu.Lock()
-	if len(s.plans) > 512 {
-		s.plans = map[string]*schedule.Plan{}
-	}
-	s.plans[key] = plan
-	s.mu.Unlock()
-	return plan, nil
+	return schedule.Timing{Freq: freq, PullEveryBars: pullEveryBars, Loc: loc, LocalClose: spaceCfg.LocalClose}
 }
 
 func success() *commonpb.RetInfo {

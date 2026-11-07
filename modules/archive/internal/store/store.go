@@ -40,8 +40,11 @@ const (
 	RunFailed    = "failed"
 	RunCanceled  = "canceled"
 
+	// KindScheduled 是复核（每小时或每天一次，推进水位）；KindManual 是立即运行（同复核）；
+	// KindTick 是到点拉取（读下发区间、不推进水位）；KindRange 是补拉区间。
 	KindScheduled = "scheduled"
 	KindManual    = "manual"
+	KindTick      = "tick"
 	KindRange     = "range"
 
 	PartitionOpen     = "open"

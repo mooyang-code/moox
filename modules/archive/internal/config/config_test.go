@@ -29,7 +29,7 @@ func TestLoadAppliesDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Schedule.MinInterval != 5*time.Minute || cfg.Schedule.MinLookback != 15*time.Minute || cfg.Run.LeaseTTL != 10*time.Minute ||
+	if cfg.Schedule.MinLookback != 15*time.Minute || cfg.Run.LeaseTTL != 10*time.Minute ||
 		cfg.Worker.TakeoverWait != 45*time.Second || cfg.StagingRetention != 72*time.Hour || cfg.Database.Path != "./data/archive-mgr/archive.db" {
 		t.Fatalf("defaults = %+v", cfg)
 	}
@@ -47,7 +47,6 @@ func TestLoadRejectsUnknownKeysMultipleDocumentsAndBadValues(t *testing.T) {
 		"two documents":  minimal + "---\ndatabase:\n  path: x\n",
 		"wrong caller":   strings.Replace(minimal, "archive-mgr", "someone", 1),
 		"short lease":    minimal + "run:\n  lease_ttl: 10s\n",
-		"low interval":   minimal + "schedule:\n  min_interval: 1m\n",
 		"low lookback":   minimal + "schedule:\n  min_lookback: 5m\n",
 		"bad takeover":   minimal + "worker:\n  takeover_wait: 1s\n",
 		"bad retention":  minimal + "retention:\n  scheduled_success: 720h\n  other: 24h\n",

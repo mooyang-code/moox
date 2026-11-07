@@ -41,22 +41,36 @@ func useArchiveGateway(t *testing.T, g *archiveFakeGateway) {
 
 func ok() *commonpb.RetInfo { return &commonpb.RetInfo{Code: commonpb.ErrorCode_SUCCESS} }
 
-func TestArchiveCreateSendsTheScheduleAndPrintsProtoFieldNames(t *testing.T) {
-	g := &archiveFakeGateway{rsp: &archivepb.CreateArchiveTaskRsp{RetInfo: ok(), Task: &archivepb.ArchiveTask{SpaceId: "crypto", DatasetId: "ds", IntervalSeconds: 3600, NextRunAt: "2026-10-17T01:34:43Z"}}}
+func TestArchiveCreateSendsThePullIntervalAndPrintsProtoFieldNames(t *testing.T) {
+	g := &archiveFakeGateway{rsp: &archivepb.CreateArchiveTaskRsp{RetInfo: ok(), Task: &archivepb.ArchiveTask{SpaceId: "crypto", DatasetId: "ds", IntervalSeconds: 3600, PullEveryBars: 5, NextPullAt: "2026-10-17T01:05:25Z"}}}
 	useArchiveGateway(t, g)
 	var out bytes.Buffer
-	err := runArchiveTasksCreate(context.Background(), &out, archiveFlags{SpaceID: "crypto", DatasetID: "ds", Cron: "43 34 * * * *", TZ: "Asia/Shanghai", BackfillFrom: "2026-10-15T00:00:00Z", Paused: true})
+	err := runArchiveTasksCreate(context.Background(), &out, archiveFlags{SpaceID: "crypto", DatasetID: "ds", PullEvery: 5, BackfillFrom: "2026-10-15T00:00:00Z", Paused: true})
 	require.NoError(t, err)
 	assert.Equal(t, "trpc.moox.archive.ArchiveMgr", g.service)
 	assert.Equal(t, "CreateArchiveTask", g.method)
 	req := g.req.(*archivepb.CreateArchiveTaskReq)
-	assert.Equal(t, "43 34 * * * *", req.GetScheduleCron())
-	assert.Equal(t, "Asia/Shanghai", req.GetScheduleTz())
+	assert.Equal(t, uint32(5), req.GetPullEveryBars())
 	assert.Equal(t, "2026-10-15T00:00:00Z", req.GetBackfillFrom())
 	assert.True(t, req.GetPaused())
 	assert.True(t, g.closed)
 	assert.Contains(t, out.String(), `"interval_seconds": 3600`)
-	assert.Contains(t, out.String(), `"next_run_at": "2026-10-17T01:34:43Z"`)
+	assert.Contains(t, out.String(), `"pull_every_bars": 5`)
+	assert.Contains(t, out.String(), `"next_pull_at": "2026-10-17T01:05:25Z"`)
+}
+
+func TestArchivePreviewAndRunsListSendTheNewFields(t *testing.T) {
+	g := &archiveFakeGateway{rsp: &archivepb.PreviewArchiveScheduleRsp{RetInfo: ok(), NextRuns: []string{"2026-10-17T01:04:25Z"}, NextReviews: []string{"2026-10-17T01:34:25Z"}}}
+	useArchiveGateway(t, g)
+	var out bytes.Buffer
+	require.NoError(t, runArchiveTasksPreview(context.Background(), &out, archiveFlags{SpaceID: "crypto", DatasetID: "ds", PullEvery: 3}))
+	assert.Equal(t, uint32(3), g.req.(*archivepb.PreviewArchiveScheduleReq).GetPullEveryBars())
+	assert.Contains(t, out.String(), `"next_reviews": [`)
+
+	runs := &archiveFakeGateway{rsp: &archivepb.ListArchiveRunsRsp{RetInfo: ok()}}
+	useArchiveGateway(t, runs)
+	require.NoError(t, runArchiveRunsList(context.Background(), &out, archiveFlags{IncludeTicks: true}))
+	assert.True(t, runs.req.(*archivepb.ListArchiveRunsReq).GetIncludeTicks())
 }
 
 func TestArchiveCommandsValidateInputsBeforeCallingTheGateway(t *testing.T) {
@@ -65,8 +79,7 @@ func TestArchiveCommandsValidateInputsBeforeCallingTheGateway(t *testing.T) {
 	ctx := context.Background()
 	var out bytes.Buffer
 	for name, err := range map[string]error{
-		"create without dataset":  runArchiveTasksCreate(ctx, &out, archiveFlags{SpaceID: "crypto", Cron: "x"}),
-		"create without cron":     runArchiveTasksCreate(ctx, &out, archiveFlags{SpaceID: "crypto", DatasetID: "ds"}),
+		"create without dataset":  runArchiveTasksCreate(ctx, &out, archiveFlags{SpaceID: "crypto"}),
 		"delete without yes":      runArchiveTasksDelete(ctx, &out, archiveFlags{SpaceID: "crypto", DatasetID: "ds"}),
 		"backfill without range":  runArchiveTasksBackfill(ctx, &out, archiveFlags{SpaceID: "crypto", DatasetID: "ds"}),
 		"run get without id":      runArchiveRunsGet(ctx, &out, archiveFlags{}),
@@ -93,7 +106,7 @@ func TestArchiveCommandsMapToTheRightMethods(t *testing.T) {
 			return runArchiveTasksPrepare(ctx, b, archiveFlags{SpaceID: "crypto", DatasetID: "ds"})
 		}},
 		{"PreviewArchiveSchedule", &archivepb.PreviewArchiveScheduleRsp{RetInfo: ok()}, func(b *bytes.Buffer) error {
-			return runArchiveTasksPreview(ctx, b, archiveFlags{SpaceID: "crypto", DatasetID: "ds", Cron: "0 0 * * * *"})
+			return runArchiveTasksPreview(ctx, b, archiveFlags{SpaceID: "crypto", DatasetID: "ds"})
 		}},
 		{"UpdateArchiveTask", &archivepb.UpdateArchiveTaskRsp{RetInfo: ok()}, func(b *bytes.Buffer) error {
 			return runArchiveTasksUpdate(ctx, b, archiveFlags{SpaceID: "crypto", DatasetID: "ds", Status: "paused"})
@@ -130,7 +143,7 @@ func TestArchiveSurfacesManagerErrors(t *testing.T) {
 	g := &archiveFakeGateway{rsp: &archivepb.CreateArchiveTaskRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_CONFLICT, Msg: "数据集已有归档任务"}}}
 	useArchiveGateway(t, g)
 	var out bytes.Buffer
-	err := runArchiveTasksCreate(context.Background(), &out, archiveFlags{SpaceID: "crypto", DatasetID: "ds", Cron: "0 0 * * * *"})
+	err := runArchiveTasksCreate(context.Background(), &out, archiveFlags{SpaceID: "crypto", DatasetID: "ds"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "数据集已有归档任务")
 	assert.Empty(t, out.String())

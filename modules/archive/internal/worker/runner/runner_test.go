@@ -819,3 +819,57 @@ func TestEmptyRetentionIsAnError(t *testing.T) {
 		t.Fatal("forever 是永久")
 	}
 }
+
+func TestTickReadsTheAssignedRangeWithoutTouchingTheWatermark(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	// 首次就是到点拉取（复核还没跑过）：只读下发区间，不写首次起点。
+	e.now = time.Date(2026, 10, 17, 0, 4, 30, 0, time.UTC)
+	e.src.rows = rows("BTC", time.Date(2026, 10, 16, 23, 50, 0, 0, time.UTC), 14, 1)
+	tick := func(a *archivepb.RunAssignment) {
+		a.Kind, a.RangeStart, a.RangeEnd = "tick", "2026-10-16T23:55:00Z", "2026-10-17T00:04:25Z"
+	}
+	out := e.run(2000, tick, nil)
+	if out.Status != "succeeded" || out.Progress.RowsRead != 9 {
+		t.Fatalf("out = %+v", out)
+	}
+	var bounds []string
+	for _, r := range e.src.requests {
+		bounds = append(bounds, r.Start.Format("01-02T15:04:05")+"→"+r.End.Format("01-02T15:04:05"))
+	}
+	// 按分区边界切块，读的就是下发区间。
+	if strings.Join(bounds, ",") != "10-16T23:55:00→10-17T00:00:00,10-17T00:00:00→10-17T00:04:25" {
+		t.Fatalf("requests = %v", bounds)
+	}
+	if _, ok, _ := e.store.Watermark(ctx, "crypto", "ds_1m"); ok {
+		t.Fatal("到点拉取不能推进水位")
+	}
+	if _, ok, _ := e.store.FirstStart(ctx, "crypto", "ds_1m"); ok {
+		t.Fatal("到点拉取不能写首次起点")
+	}
+	if _, ok, _ := e.store.ResumeFrom(ctx, "crypto", "ds_1m"); ok {
+		t.Fatal("到点拉取不能写续读起点")
+	}
+
+	// 复核推进水位；之后的到点拉取不改它。
+	e.now = time.Date(2026, 10, 17, 0, 34, 30, 0, time.UTC)
+	e.run(2000, nil, nil)
+	w, ok, _ := e.store.Watermark(ctx, "crypto", "ds_1m")
+	if !ok || !w.Equal(e.now) {
+		t.Fatalf("复核推进水位: %v %v", w, ok)
+	}
+	e.now = time.Date(2026, 10, 17, 0, 40, 30, 0, time.UTC)
+	e.src.requests = nil
+	out = e.run(2000, func(a *archivepb.RunAssignment) {
+		a.Kind, a.RangeStart, a.RangeEnd = "tick", "2026-10-17T00:37:00Z", "2026-10-17T00:40:25Z"
+	}, nil)
+	if out.Status != "succeeded" || len(e.src.requests) != 1 || !e.src.requests[0].Start.Equal(time.Date(2026, 10, 17, 0, 37, 0, 0, time.UTC)) {
+		t.Fatalf("out = %+v requests = %+v", out, e.src.requests)
+	}
+	if after, _, _ := e.store.Watermark(ctx, "crypto", "ds_1m"); !after.Equal(w) {
+		t.Fatalf("到点拉取改了水位: %s → %s", w, after)
+	}
+	if _, ok, _ := e.store.ResumeFrom(ctx, "crypto", "ds_1m"); ok {
+		t.Fatal("到点拉取不能写续读起点")
+	}
+}

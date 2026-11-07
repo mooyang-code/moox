@@ -221,7 +221,7 @@ c_unrecoverable_json = ?, c_lease_until = NULL, c_lease_token = '' WHERE c_run_i
 		}
 		// 被取消的运行即使 worker 上报成功也不推进任务状态；最近成功时间只前进不回退。
 		// 水位已推进，回补起点不再需要：清掉它，免得暂存库丢失后又从回补起点整段重读。
-		if status == RunSucceeded && run.Kind != KindRange {
+		if status == RunSucceeded && (run.Kind == KindScheduled || run.Kind == KindManual) {
 			if _, err := tx.ExecContext(ctx, `UPDATE t_archive_tasks SET c_last_success_at = ?, c_backfill_from = NULL WHERE c_space_id = ? AND c_dataset_id = ? AND (c_last_success_at IS NULL OR c_last_success_at < ?)`,
 				fmtTime(run.StartedAt), run.SpaceID, run.DatasetID, fmtTime(run.StartedAt)); err != nil {
 				return err

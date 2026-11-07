@@ -14,7 +14,7 @@ worker:
   takeover_wait: 45s
 
 schedule:
-  min_interval: 5m
+  # 复核从水位往前回看的最少时长。
   min_lookback: 15m
 
 retention:

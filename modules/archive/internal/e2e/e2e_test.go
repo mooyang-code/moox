@@ -67,13 +67,17 @@ func (datasets) GetDataset(_ context.Context, space, dataset string) (service.Da
 	return service.Dataset{SpaceID: space, DatasetID: dataset, DataKind: "time_series", Freq: "1m", Status: "active", DataNodeID: "node-0", Retention: "forever"}, nil
 }
 
-type fakeStorage struct{ rows []staging.Row }
+type fakeStorage struct {
+	rows     []staging.Row
+	requests []source.Range
+}
 
 func (f *fakeStorage) Columns(context.Context, string, string) ([]staging.Column, error) {
 	return []staging.Column{{Name: "close", Type: staging.TypeDouble}, {Name: "open", Type: staging.TypeDouble}}, nil
 }
 
 func (f *fakeStorage) ReadRange(_ context.Context, req source.Range) (source.Page, error) {
+	f.requests = append(f.requests, req)
 	var out []staging.Row
 	for _, row := range f.rows {
 		if !row.DataTime.Before(req.Start) && row.DataTime.Before(req.End) {
@@ -102,7 +106,7 @@ func (instant) Interval() time.Duration                    { return 0 }
 
 func TestManagerAndWorkerCompleteAFullArchiveCycle(t *testing.T) {
 	ctx := context.Background()
-	now := time.Date(2026, 10, 17, 0, 34, 43, 0, time.UTC) // 昨天的分区在这次运行结束时导出
+	now := time.Date(2026, 10, 17, 0, 34, 25, 0, time.UTC) // 第 34 分那次检查；昨天的分区在这次运行结束时导出
 	clock := func() time.Time { return now }
 
 	db, err := store.Open(filepath.Join(t.TempDir(), "archive.db"))
@@ -142,12 +146,15 @@ func TestManagerAndWorkerCompleteAFullArchiveCycle(t *testing.T) {
 	}
 	worker := newWorker()
 
-	// 1. 创建任务（立即开始，回补起点在昨天 20:00）：每小时 :34:43 的计划。
+	// 1. 创建任务（回补起点在昨天 20:00）：新任务两个边界为空，第一次检查就生成复核。
 	created, _ := svc.Mgr().CreateArchiveTask(ctx, &archivepb.CreateArchiveTaskReq{
-		SpaceId: "crypto", DatasetId: "ds_1m", ScheduleCron: "43 34 * * * *", BackfillFrom: yesterday.Format(time.RFC3339),
+		SpaceId: "crypto", DatasetId: "ds_1m", BackfillFrom: yesterday.Format(time.RFC3339),
 	})
 	if created.GetRetInfo().GetCode() != commonpb.ErrorCode_SUCCESS {
 		t.Fatalf("create = %v", created.GetRetInfo())
+	}
+	if err := svc.Trigger(ctx); err != nil {
+		t.Fatal(err)
 	}
 
 	// 2. worker 心跳取得租约、领取、执行（同步等待结束）。
@@ -188,8 +195,29 @@ func TestManagerAndWorkerCompleteAFullArchiveCycle(t *testing.T) {
 		t.Fatalf("task = %v", task)
 	}
 
-	// 4. 下一次计划时刻（一小时后）：触发器生成 scheduled 运行，worker 从水位往前 L 读取，没有新数据，不重写文件。
-	now = now.Add(time.Hour)
+	// 3b. 到点拉取：00:40:25 读 [00:32, 00:40:25)（上次边界 00:34 往前 2 根），不推进最近成功时间，默认的运行列表里看不到成功的 tick。
+	successAt := task.GetLastSuccessAt()
+	now = time.Date(2026, 10, 17, 0, 40, 25, 0, time.UTC)
+	if err := svc.Trigger(ctx); err != nil {
+		t.Fatal(err)
+	}
+	requestsBefore := len(storage.requests)
+	runOnce()
+	ticks, _ := svc.Mgr().ListArchiveRuns(ctx, &archivepb.ListArchiveRunsReq{SpaceId: "crypto", IncludeTicks: true})
+	if len(ticks.GetRuns()) != 2 || ticks.GetRuns()[0].GetKind() != "tick" || ticks.GetRuns()[0].GetStatus() != "succeeded" ||
+		ticks.GetRuns()[0].GetRangeStart() != "2026-10-17T00:32:00Z" || ticks.GetRuns()[0].GetRangeEnd() != "2026-10-17T00:40:25Z" {
+		t.Fatalf("tick runs = %v", ticks.GetRuns())
+	}
+	if got := storage.requests[requestsBefore:]; len(got) != 1 || !got[0].Start.Equal(time.Date(2026, 10, 17, 0, 32, 0, 0, time.UTC)) {
+		t.Fatalf("tick 只读下发区间: %+v", got)
+	}
+	list, _ = svc.Mgr().ListArchiveTasks(ctx, &archivepb.ListArchiveTasksReq{SpaceId: "crypto"})
+	if list.GetTasks()[0].GetLastSuccessAt() != successAt || list.GetTasks()[0].GetLastBoundary() != "2026-10-17T00:40:00Z" {
+		t.Fatalf("tick 后的任务 = %v", list.GetTasks()[0])
+	}
+
+	// 4. 下一次复核（01:34:25）：触发器生成 scheduled 运行，worker 从水位往前 L 读取，没有新数据，不重写文件。
+	now = time.Date(2026, 10, 17, 1, 34, 25, 0, time.UTC)
 	if err := svc.Trigger(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +259,7 @@ func TestManagerAndWorkerCompleteAFullArchiveCycle(t *testing.T) {
 	}
 
 	// 5. 三天之后：分区过了暂存保留期，被定稿，mgr 的定稿边界前进，文件仍在。
-	now = time.Date(2026, 10, 20, 1, 34, 43, 0, time.UTC)
+	now = time.Date(2026, 10, 20, 1, 34, 25, 0, time.UTC)
 	if err := svc.Trigger(ctx); err != nil {
 		t.Fatal(err)
 	}

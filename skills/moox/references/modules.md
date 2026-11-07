@@ -115,12 +115,13 @@
 
 ## 归档（只有命令行）
 
-定时把事实数据按日 / 月导出成 CSV（或 CSV.GZ），Worker 跑在因子机。
+把事实数据按日 / 月导出成 CSV（或 CSV.GZ），Worker 跑在因子机。不填执行计划：每收盘 N 根（`--pull-every-bars`，默认 1）拉一次新收盘的几根，
+低于 1d 的另有每小时第 34 分的复核（推进水位），1d 及以上每天一次。
 
 ```bash
-./bin/moox-cli archive tasks prepare --space-id crypto --dataset-id <数据集>   # 看频率、保留期与推荐执行计划
-./bin/moox-cli archive tasks create --space-id crypto --dataset-id <数据集> --cron "0 30 2 * * *"
-./bin/moox-cli archive tasks list|preview               # 列出任务；校验执行计划并预览接下来 5 次运行与读取区间
+./bin/moox-cli archive tasks prepare --space-id crypto --dataset-id <数据集>   # 看频率、保留期与推荐的拉取间隔
+./bin/moox-cli archive tasks create --space-id crypto --dataset-id <数据集> [--pull-every-bars 5]
+./bin/moox-cli archive tasks list|preview               # 列出任务；预览接下来的拉取、复核时刻与分区导出时间
 ./bin/moox-cli archive overview | runs list|get|cancel | partitions list|get
 ./bin/moox-cli archive tasks backfill|run|update|delete ...
 ./bin/moox-cli archive worker retire --worker <ID> --yes # 退役换机后遗留的旧 worker 登记

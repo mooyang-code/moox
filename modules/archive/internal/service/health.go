@@ -21,10 +21,12 @@ const (
 
 // healthInput 是计算任务健康等级需要的全部上下文。
 type healthInput struct {
-	Now       time.Time
-	Task      store.Task
-	LastRun   *store.Run
-	OpenParts []store.Partition
+	Now     time.Time
+	Task    store.Task
+	LastRun *store.Run
+	// LastReview 是最近一次复核或手动运行；耗时规则只看它（到点拉取每分钟一条，耗时与复核间隔无关）。
+	LastReview *store.Run
+	OpenParts  []store.Partition
 	// OldestQueued 是最早一条排队中运行的计划时刻，没有则为零值。
 	OldestQueued time.Time
 	// WorkerOfflineSince 是活动 worker 离线的起点（最近一次心跳或从未心跳时的零值）；有活动 worker 时为 Active。
@@ -35,7 +37,10 @@ type healthInput struct {
 	SpaceLocalClose string
 }
 
-// evaluateHealth 按设计第 13 节计算任务健康等级，返回等级与原因（多条用分号分隔）。
+// consecutiveSkipsWarn 是连续跳过多少次算需关注：每分钟检查一次，复核运行期间跳过几次是常态。
+const consecutiveSkipsWarn = 10
+
+// evaluateHealth 计算任务健康等级，返回等级与原因（多条用分号分隔）。
 func evaluateHealth(in healthInput) (string, string) {
 	if in.Task.Status == store.StatusPaused {
 		return HealthPaused, "任务已停用"
@@ -75,24 +80,31 @@ func evaluateHealth(in healthInput) (string, string) {
 		}
 	}
 	// 需关注。
-	if in.LastRun != nil && in.LastRun.Status == store.RunFailed {
-		reason := "最近一次运行失败"
-		if in.LastRun.Message != "" {
-			reason += "：" + in.LastRun.Message
+	// 复核失败单独看：到点拉取每分钟一条，一次成功的拉取会把失败的复核盖住。
+	for _, r := range []struct {
+		run   *store.Run
+		label string
+	}{{in.LastRun, "最近一次运行失败"}, {in.LastReview, "最近一次复核失败"}} {
+		if r.run == nil || r.run.Status != store.RunFailed || (r.label == "最近一次复核失败" && in.LastRun != nil && in.LastRun.RunID == r.run.RunID) {
+			continue
+		}
+		reason := r.label
+		if r.run.Message != "" {
+			reason += "：" + r.run.Message
 		}
 		warns = append(warns, reason)
 	}
-	if in.Task.ConsecutiveSkips >= 3 {
+	if in.Task.ConsecutiveSkips >= consecutiveSkipsWarn {
 		warns = append(warns, fmt.Sprintf("已连续跳过 %d 次", in.Task.ConsecutiveSkips))
 	}
 	interval := time.Duration(in.Task.IntervalSeconds) * time.Second
-	if in.LastRun != nil && !in.LastRun.StartedAt.IsZero() && !in.LastRun.FinishedAt.IsZero() && interval > 0 {
-		if took := in.LastRun.FinishedAt.Sub(in.LastRun.StartedAt); took > interval/2 {
-			warns = append(warns, fmt.Sprintf("最近一次运行耗时 %s，超过执行间隔的一半", took.Truncate(time.Second)))
+	if r := in.LastReview; r != nil && !r.StartedAt.IsZero() && !r.FinishedAt.IsZero() && interval > 0 {
+		if took := r.FinishedAt.Sub(r.StartedAt); took > interval/2 {
+			warns = append(warns, fmt.Sprintf("最近一次复核耗时 %s，超过复核间隔的一半", took.Truncate(time.Second)))
 		}
 	}
 	if overdue := overduePartitions(in); overdue > 0 {
-		warns = append(warns, fmt.Sprintf("有 %d 个分区到时间超过 2 个执行间隔仍未导出", overdue))
+		warns = append(warns, fmt.Sprintf("有 %d 个分区到时间超过 2 个复核间隔仍未导出", overdue))
 	}
 	switch {
 	case len(errs) > 0:
