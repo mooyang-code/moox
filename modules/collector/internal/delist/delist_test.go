@@ -318,3 +318,39 @@ func TestNoticeValidateRequiresKnownExchangeAndUpperSymbol(t *testing.T) {
 		require.Error(t, notice.Validate(), name)
 	}
 }
+
+// 来源返回小写或大小写混用的代码：Register 统一成大写再校验，照常发布，不漏报。
+func TestRegisterUppercasesSymbolBeforeValidating(t *testing.T) {
+	ctx := context.Background()
+	db := openStore(t)
+	registrar, _ := newRegistrar(t, db)
+	notice := Notice{Exchange: "okx", Market: events.DelistMarketSwap, Symbol: " foo-USDT-SWAP ", DelistAt: testNow.Add(72 * time.Hour), Source: events.DelistSourceOKXSwapInstruments}
+	created, _, err := registrar.Register(ctx, notice)
+	require.NoError(t, err)
+	require.True(t, created)
+	pending, err := db.Resample().PendingEvents(ctx, 10)
+	require.NoError(t, err)
+	require.Len(t, pending, 1)
+	require.Equal(t, "okx:SWAP:FOO-USDT-SWAP", pending[0].SubjectToken)
+}
+
+// 来源返回的条目被校验拒绝（交易所、市场不对，代码带冒号等）：这一条没有发布，等于漏报，要按来源故障关注项报出来，下一轮不再被拒就恢复。
+func TestDetectorReportsRejectedNotices(t *testing.T) {
+	ctx := context.Background()
+	db := openStore(t)
+	registrar, _ := newRegistrar(t, db)
+	attn := attention.New(prometheus.NewRegistry())
+	bad := Notice{Exchange: "okx", Market: events.DelistMarketSwap, Symbol: "FOO:USDT", DelistAt: testNow.Add(72 * time.Hour), Source: events.DelistSourceOKXSwapInstruments}
+	good := Notice{Exchange: "okx", Market: events.DelistMarketSwap, Symbol: "BAR-USDT-SWAP", DelistAt: testNow.Add(72 * time.Hour), Source: events.DelistSourceOKXSwapInstruments}
+	source := &scriptedSource{name: "OKX", results: []sourceResult{{notices: []Notice{bad, good}}, {notices: []Notice{good}}}}
+	detector := &Detector{Sources: []Source{source}, Registrar: registrar, Attention: attn}
+
+	detector.RunOnce(ctx)
+	pending, err := db.Resample().PendingEvents(ctx, 10)
+	require.NoError(t, err)
+	require.Len(t, pending, 1, "合法的照常发布，不因一条被拒绝而整批失败")
+	require.Equal(t, 1.0, testutil.ToFloat64(attn.Gauge().WithLabelValues(attention.KindSourceFailed, "OKX 1 条下架条目被校验拒绝、没有发布（可能漏报）：okx:SWAP:FOO:USDT 下架通知不合法：交易所代码不能为空，必须是大写，不能带空格或冒号")))
+
+	detector.RunOnce(ctx)
+	require.Equal(t, 0.0, testutil.ToFloat64(attn.Gauge().WithLabelValues(attention.KindSourceFailed, "")), "下一轮不再被拒就恢复")
+}

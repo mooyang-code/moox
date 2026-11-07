@@ -31,6 +31,8 @@ type Detector struct {
 	failures map[string]int
 	lastErr  map[string]string
 	keyGone  map[string]bool
+	// rejected 是各来源这一轮被校验拒绝的条目：拒绝等于漏报，所以按关注项报出来，下一轮不再被拒就恢复。
+	rejected map[string]string
 }
 
 // Run 一直轮询到 ctx 结束。第一轮在启动后马上进行。
@@ -56,7 +58,7 @@ func (d *Detector) RunOnce(ctx context.Context) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.failures == nil {
-		d.failures, d.lastErr, d.keyGone = map[string]int{}, map[string]string{}, map[string]bool{}
+		d.failures, d.lastErr, d.keyGone, d.rejected = map[string]int{}, map[string]string{}, map[string]bool{}, map[string]string{}
 	}
 	timeout := d.FetchTimeout
 	if timeout <= 0 {
@@ -86,8 +88,15 @@ func (d *Detector) RunOnce(ctx context.Context) {
 		}
 		d.keyGone[name] = false
 		d.failures[name] = 0
+		rejected, firstReason := 0, ""
 		for _, notice := range earliestPerInstrument(notices) {
 			created, eventID, err := d.Registrar.Register(ctx, notice)
+			if errors.Is(err, ErrInvalidNotice) {
+				if rejected == 0 {
+					firstReason = fmt.Sprintf("%s:%s:%s %v", notice.Exchange, notice.Market, notice.Symbol, err)
+				}
+				rejected++
+			}
 			if err != nil {
 				log.ErrorContextf(ctx, "[Collector] 登记下架通知 %s:%s:%s 失败: %v", notice.Exchange, notice.Market, notice.Symbol, err)
 				continue
@@ -95,6 +104,11 @@ func (d *Detector) RunOnce(ctx context.Context) {
 			if created {
 				log.InfoContextf(ctx, "[Collector] 发现标的即将下架 %s:%s:%s 下架时间 %s 来源 %s 事件 %s", notice.Exchange, notice.Market, notice.Symbol, notice.DelistAt.Format(time.RFC3339), name, eventID)
 			}
+		}
+		if rejected > 0 {
+			d.rejected[name] = fmt.Sprintf("%s %d 条下架条目被校验拒绝、没有发布（可能漏报）：%s", name, rejected, firstReason)
+		} else {
+			delete(d.rejected, name)
 		}
 	}
 	d.publishLocked()
@@ -133,6 +147,12 @@ func (d *Detector) publishLocked() {
 		if count >= SourceFailureThreshold {
 			items[attention.KindSourceFailed] = append(items[attention.KindSourceFailed], fmt.Sprintf("%s 连续 %d 次以上失败：%s", name, SourceFailureThreshold, stable(d.lastErr[name])))
 		}
+	}
+	for _, reason := range d.rejected {
+		if runes := []rune(reason); len(runes) > 150 {
+			reason = string(runes[:150])
+		}
+		items[attention.KindSourceFailed] = append(items[attention.KindSourceFailed], reason)
 	}
 	for name, missing := range d.keyGone {
 		if missing {

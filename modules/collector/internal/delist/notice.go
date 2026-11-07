@@ -31,6 +31,9 @@ type Notice struct {
 	Scope string
 }
 
+// ErrInvalidNotice 表示通知没通过校验（不是写库出错）：这一条不会发布，来源返回了不该有的内容，要让人知道，不能只打一行日志就跳过。
+var ErrInvalidNotice = errors.New("下架通知不合法")
+
 // Validate 检查通知的各个字段。
 func (n Notice) Validate() error {
 	if n.Exchange != "binance" && n.Exchange != "okx" {
@@ -74,8 +77,10 @@ func (r *Registrar) Register(ctx context.Context, notice Notice) (created bool, 
 	if notice.Scope == "" {
 		notice.Scope = events.DelistScopeAll
 	}
+	// 交易所代码统一成大写再校验（与手工登记的 RPC 一致）：下游按大写判断“同一个标的”，来源返回小写或大小写混用时不能因此漏报。
+	notice.Symbol = strings.ToUpper(strings.TrimSpace(notice.Symbol))
 	if err := notice.Validate(); err != nil {
-		return false, "", err
+		return false, "", fmt.Errorf("%w：%v", ErrInvalidNotice, err)
 	}
 	now := r.now()
 	delistAt := notice.DelistAt.UTC().Truncate(time.Millisecond)
