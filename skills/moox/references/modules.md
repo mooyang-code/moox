@@ -36,6 +36,7 @@
 ./bin/moox-cli collector delist register --exchange binance --market SPOT --symbol FOOUSDT --delist-at-ms <毫秒> [--paper-only] --yes   # 手工登记下架（会触发系统规则）
 ```
 
+- 库文件没有迁移：事件中心启动时发现表结构是旧的（报“数据库是旧版本的结构”）就拒绝启动，要先停服务、删库文件（`data/moox_callback_dispatcher.db*`）再启动，和用户确认后再做。
 - 设计与排查：[`docs/模块/事件中心.md`](../../../docs/模块/事件中心.md)；告警（`event_center_attention`）见 [`monitor-attention.md`](monitor-attention.md)。
 
 ## 采集

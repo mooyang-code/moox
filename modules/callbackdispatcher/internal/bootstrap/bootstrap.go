@@ -108,6 +108,9 @@ func Initialize(ctx context.Context, s *server.Server) (*server.Server, error) {
 	if err := dbStore.ApplySchema(schema.AllSQL()); err != nil {
 		return nil, fmt.Errorf("初始化数据库结构失败: %w", err)
 	}
+	if err := dbStore.CheckSchema(ctx); err != nil {
+		return nil, fmt.Errorf("%w（库文件 %s）", err, cfg.Database.Path)
+	}
 	// 服务自带的系统规则：首次启动时创建，默认启用；用户停用过的不会被改回来。
 	if err := dbStore.EnsureSystemRule(ctx, rpc.SystemRule(time.Now())); err != nil {
 		return nil, fmt.Errorf("创建系统规则失败: %w", err)

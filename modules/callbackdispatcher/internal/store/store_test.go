@@ -605,3 +605,28 @@ func TestFinishCleanupKeepsMarkSetAfterSeqRead(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, got.CleanupPending)
 }
+
+// 当前 schema 通过检查；旧库（缺列、状态约束里没有 PARTIAL）被拒绝，并给出中文提示。
+func TestCheckSchemaRejectsOldDatabase(t *testing.T) {
+	ctx := context.Background()
+	require.NoError(t, openTest(t).CheckSchema(ctx))
+
+	old, err := Open(filepath.Join(t.TempDir(), "old.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = old.Close() })
+	require.NoError(t, old.ApplySchema(`
+CREATE TABLE t_event_executions (
+    c_execution_id TEXT NOT NULL PRIMARY KEY,
+    c_cleanup_pending INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE t_delist_actions (
+    c_execution_id TEXT NOT NULL,
+    c_status TEXT NOT NULL DEFAULT 'PENDING',
+    CHECK (c_status IN ('PENDING', 'RUNNING', 'SUCCEEDED', 'FAILED'))
+);`))
+	err = old.CheckSchema(ctx)
+	require.Error(t, err)
+	for _, want := range []string{"c_claimed_at", "c_cleanup_seq", "c_owns_block", "c_planned_delist_at", "没有 PARTIAL", "删除库文件"} {
+		require.Contains(t, err.Error(), want)
+	}
+}

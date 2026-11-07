@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 
 	"github.com/glebarez/sqlite"
@@ -94,4 +96,43 @@ func notFound(err error) error {
 		return ErrNotFound
 	}
 	return err
+}
+
+// requiredColumns 是当前代码依赖的、后来加进去的列：schema 只有 CREATE TABLE IF NOT EXISTS，没有迁移，旧库文件缺这些列时运行时才会报 no such column。
+var requiredColumns = map[string][]string{
+	"t_event_executions": {"c_claimed_at", "c_cleanup_pending", "c_cleanup_seq"},
+	"t_delist_actions":   {"c_owns_block", "c_planned_delist_at"},
+}
+
+// CheckSchema 检查库里的表结构是不是当前版本：缺列，或者 t_delist_actions 的状态约束里没有 PARTIAL，说明是旧库。
+// 旧库不检查的后果是静默的：写步骤一直失败，记录每分钟被放回，不计失败也不告警。事件中心没有迁移，旧库必须删掉重建，这里直接拒绝启动。
+func (s *Store) CheckSchema(ctx context.Context) error {
+	var problems []string
+	tables := make([]string, 0, len(requiredColumns))
+	for table := range requiredColumns {
+		tables = append(tables, table)
+	}
+	sort.Strings(tables)
+	for _, table := range tables {
+		var columns []string
+		if err := s.db.WithContext(ctx).Raw("SELECT name FROM pragma_table_info(?)", table).Scan(&columns).Error; err != nil {
+			return fmt.Errorf("读取表 %s 的结构失败: %w", table, err)
+		}
+		for _, column := range requiredColumns[table] {
+			if !slices.Contains(columns, column) {
+				problems = append(problems, table+" 缺少列 "+column)
+			}
+		}
+	}
+	var ddl string
+	if err := s.db.WithContext(ctx).Raw("SELECT COALESCE(sql, '') FROM sqlite_master WHERE type = 'table' AND name = 't_delist_actions'").Scan(&ddl).Error; err != nil {
+		return fmt.Errorf("读取 t_delist_actions 的定义失败: %w", err)
+	}
+	if !strings.Contains(ddl, "'PARTIAL'") {
+		problems = append(problems, "t_delist_actions 的状态约束里没有 PARTIAL")
+	}
+	if len(problems) > 0 {
+		return fmt.Errorf("事件中心的数据库是旧版本的结构（%s）；事件中心没有数据库迁移，请先停止服务、删除库文件后再启动", strings.Join(problems, "；"))
+	}
+	return nil
 }
