@@ -192,15 +192,6 @@ func CheckPoolCoverage(ctx context.Context, client Client, spaceID string, membe
 	return nil
 }
 
-// PoolMemberIDs 返回成员 id（按池里的顺序）。
-func PoolMemberIDs(members []PoolMember) []string {
-	ids := make([]string, 0, len(members))
-	for _, member := range members {
-		ids = append(ids, member.ID)
-	}
-	return ids
-}
-
 func memberStrategies(members []PoolMemberDef) []dsl.Strategy {
 	strategies := make([]dsl.Strategy, 0, len(members))
 	for _, member := range members {

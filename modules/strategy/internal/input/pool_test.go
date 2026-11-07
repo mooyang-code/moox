@@ -63,9 +63,6 @@ func TestResolvePoolBindsUnionOfMemberMarkets(t *testing.T) {
 	if err != nil || len(parsed) != 2 || len(programs) != 2 || parsed[1].ID != "b" || parsed[1].DSLYaml != members[1].DSLYaml || parsed[1].DSLHash != members[1].DSLHash {
 		t.Fatalf("members_json 往返失败：%+v %v", parsed, err)
 	}
-	if got := strings.Join(PoolMemberIDs(parsed), ","); got != "a,b" {
-		t.Fatalf("成员顺序：%s", got)
-	}
 }
 
 func TestResolvePoolRejectsInconsistentBindings(t *testing.T) {
