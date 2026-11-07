@@ -234,6 +234,14 @@ watch(
   }
 );
 
+// 换交易所或环境后进入单选模式（币安测试网），已经勾着的多个市场收成一个，否则两个都勾着、点哪个都取消不掉
+watch(
+  () => [singleMarket.value, form.markets.length],
+  () => {
+    if (singleMarket.value && form.markets.length > 1) form.markets = [form.markets[0]];
+  }
+);
+
 function onPreviewChange(payload: { allowNext: boolean; view: InspectionView | null }) {
   preview.allowNext = payload.allowNext;
   preview.view = payload.view;
@@ -279,7 +287,12 @@ function onExchangeChange() {
 }
 
 function setMarket(market: MarketType, on: boolean) {
-  form.markets = singleMarket.value ? (on ? [market] : form.markets) : toggleMarket(form.markets, market, on);
+  // 单选模式：勾另一个市场是切换，取消勾选照常生效
+  form.markets = singleMarket.value
+    ? on
+      ? [market]
+      : form.markets.filter(item => item !== market)
+    : toggleMarket(form.markets, market, on);
   if (form.markets.includes(2)) form.settlementAsset = "USDT";
   if (!form.feesEdited) {
     const fees = defaultFees(form.markets);

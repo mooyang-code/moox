@@ -176,6 +176,31 @@ describe("新建账户提交", () => {
       expect(vm.form.markets).toEqual([1]);
     });
 
+    it("币安测试网单选：取消勾选照常生效；已勾两个市场时换成测试网会收成一个", async () => {
+      const vm = await openDialog();
+      vm.open("testnet");
+      Object.assign(vm.form, { step: 2, name: "测试网账户", secretId: "s1", markets: [2] });
+      await flushPromises();
+      const checkbox = (label: string) =>
+        [...document.querySelectorAll<HTMLElement>(".arco-checkbox")]
+          .find(item => item.textContent?.includes(label))!
+          .querySelector("input")!;
+      checkbox("永续").click();
+      await flushPromises();
+      expect(vm.form.markets, "取消勾选生效").toEqual([]);
+
+      // OKX 测试网可以勾两个市场；换成币安后收成一个，之后能正常取消。
+      Object.assign(vm.form, { exchange: 2, markets: [1, 2] });
+      await flushPromises();
+      expect(vm.form.markets).toEqual([1, 2]);
+      vm.form.exchange = 1;
+      await flushPromises();
+      expect(vm.form.markets).toEqual([1]);
+      checkbox("现货").click();
+      await flushPromises();
+      expect(vm.form.markets).toEqual([]);
+    });
+
     it("换密钥后，“确认这是生产环境密钥且没有提现权限”作废", async () => {
       const vm = await openDialog();
       vm.open("prod");

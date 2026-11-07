@@ -21,7 +21,10 @@
           <a-radio :value="1">测试网</a-radio>
         </a-radio-group>
       </a-form-item>
-      <a-form-item label="要开通的市场" extra="不勾选时只判断和市场无关的问题；和市场有关的（双向持仓、万向划转权限等）写在提醒里">
+      <a-form-item
+        label="要开通的市场"
+        extra="不勾选时只判断和市场无关的问题；和市场有关的（双向持仓、万向划转权限等）写在提醒里"
+      >
         <a-checkbox-group v-model="form.markets" :disabled="running">
           <a-checkbox :value="1">现货</a-checkbox>
           <a-checkbox :value="2">永续合约</a-checkbox>
