@@ -44,7 +44,7 @@ type Replay struct {
 	DSLHash  string
 	Calendar string
 	SpaceID  string
-	// Tasks 是各市场（spot、swap、equity）读取的因子任务与结果 View。
+	// Tasks 是各任务键（市场 spot、swap、equity，统一数据集上的任务是 multi）读取的因子任务与结果 View。
 	Tasks     map[string]ReplayTask
 	StartTime time.Time
 	EndTime   time.Time
@@ -146,8 +146,8 @@ func (s *Store) CreateReplay(ctx context.Context, replay Replay) error {
 		return errors.New("回放需要读取一个或两个因子任务")
 	}
 	for market, task := range replay.Tasks {
-		if market != "spot" && market != "swap" && market != "equity" {
-			return fmt.Errorf("回放的市场 %q 不受支持，只能是 spot、swap 或 equity", market)
+		if market != "spot" && market != "swap" && market != "equity" && market != "multi" {
+			return fmt.Errorf("回放的市场 %q 不受支持，只能是 spot、swap、equity 或 multi", market)
 		}
 		if strings.TrimSpace(task.FactorTaskID) == "" || strings.TrimSpace(task.ViewID) == "" || strings.TrimSpace(task.ViewGeneration) == "" {
 			return fmt.Errorf("回放的 %s 任务缺少因子任务、view_id 或 View 索引代次", market)

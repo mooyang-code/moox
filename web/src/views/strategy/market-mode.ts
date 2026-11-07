@@ -3,7 +3,18 @@ import { parseDocument } from "yaml";
 /** 策略涉及的市场，顺序固定：现货、永续、股票。 */
 export const MARKET_ORDER = ["spot", "swap", "equity"] as const;
 
-export const marketLabels: Record<string, string> = { spot: "现货", swap: "永续", equity: "股票" };
+/** 统一数据集上的因子任务登记的键：一个任务同时覆盖现货与永续（数据集的 market_type 是 multi）。 */
+export const UNIFIED_TASK_KEY = "multi";
+
+/** 因子任务的键，顺序固定：三个市场，然后是统一数据集上的任务。 */
+export const TASK_KEY_ORDER = [...MARKET_ORDER, UNIFIED_TASK_KEY] as const;
+
+export const marketLabels: Record<string, string> = {
+  spot: "现货",
+  swap: "永续",
+  equity: "股票",
+  [UNIFIED_TASK_KEY]: "统一数据集"
+};
 
 export function marketLabel(market: string): string {
   return marketLabels[market] || market || "-";
@@ -89,9 +100,9 @@ export function poolRequirement(
   return { markets: problems.length ? [] : MARKET_ORDER.filter(market => markets.has(market)), problems };
 }
 
-/** 实例绑定的因子任务，按市场先后排列。 */
+/** 实例绑定的因子任务，按市场先后排列（统一数据集上的任务键是 multi，排在最后）。 */
 export function instanceTasks(tasks: Record<string, string> | undefined): { market: string; taskId: string }[] {
-  return MARKET_ORDER.filter(market => tasks?.[market]).map(market => ({ market, taskId: tasks![market] }));
+  return TASK_KEY_ORDER.filter(market => tasks?.[market]).map(market => ({ market, taskId: tasks![market] }));
 }
 
 /** 因子任务的展示文本：单任务只写 ID，多任务写成 现货 xxx、永续 yyy。 */
@@ -108,12 +119,12 @@ export function formatFactorTasks(tasks: Record<string, string> | undefined): st
     .join(",");
 }
 
-/** 解析 URL 里的因子任务；只认现货、永续、股票三个市场，其余与格式不对的项忽略。 */
+/** 解析 URL 里的因子任务；只认现货、永续、股票三个市场与统一数据集（multi），其余与格式不对的项忽略。 */
 export function parseFactorTasks(raw: string): Record<string, string> {
   const tasks: Record<string, string> = {};
   for (const part of raw.split(",")) {
     const [market, taskId] = part.split("=").map(item => item.trim());
-    if (taskId && (MARKET_ORDER as readonly string[]).includes(market)) tasks[market] = taskId;
+    if (taskId && (TASK_KEY_ORDER as readonly string[]).includes(market)) tasks[market] = taskId;
   }
   return tasks;
 }

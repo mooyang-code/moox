@@ -122,6 +122,8 @@ type StrategyInstance struct {
 	StrategyId string `protobuf:"bytes,2,opt,name=strategy_id,json=strategyId,proto3" json:"strategy_id,omitempty"`
 	SpaceId    string `protobuf:"bytes,3,opt,name=space_id,json=spaceId,proto3" json:"space_id,omitempty"`
 	// 市场（spot | swap | equity）→ 因子任务 ID；市场必须与任务源数据集的市场一致，且恰好是策略市场模式需要的那些市场。
+	// 统一数据集（同一个数据集里同时放现货、永续两条序列，数据集的 market_type 是 multi）上的任务登记为 multi，只绑这一个任务，
+	// 策略必须显式写 market。
 	FactorTasks      map[string]string `protobuf:"bytes,4,rep,name=factor_tasks,json=factorTasks,proto3" json:"factor_tasks,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"`
 	LogicalAccountId string            `protobuf:"bytes,5,opt,name=logical_account_id,json=logicalAccountId,proto3" json:"logical_account_id,omitempty"`
 	Enabled          bool              `protobuf:"varint,6,opt,name=enabled,proto3" json:"enabled,omitempty"`
@@ -1597,7 +1599,7 @@ type ValidateStrategyReq struct {
 	unknownFields protoimpl.UnknownFields
 
 	DslYaml     string            `protobuf:"bytes,1,opt,name=dsl_yaml,json=dslYaml,proto3" json:"dsl_yaml,omitempty"`
-	FactorTasks map[string]string `protobuf:"bytes,2,rep,name=factor_tasks,json=factorTasks,proto3" json:"factor_tasks,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"` // 可选，市场 → 因子任务 ID；给出时做列解析并在最新周期试算（读全部绑定的 View）
+	FactorTasks map[string]string `protobuf:"bytes,2,rep,name=factor_tasks,json=factorTasks,proto3" json:"factor_tasks,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"` // 可选，市场（统一数据集上的任务写 multi）→ 因子任务 ID；给出时做列解析并在最新周期试算（读全部绑定的 View）
 }
 
 func (x *ValidateStrategyReq) Reset() {
@@ -2703,7 +2705,7 @@ type StartReplayReq struct {
 	StartTime   string            `protobuf:"bytes,4,opt,name=start_time,json=startTime,proto3" json:"start_time,omitempty"`
 	EndTime     string            `protobuf:"bytes,5,opt,name=end_time,json=endTime,proto3" json:"end_time,omitempty"`
 	InstanceId  string            `protobuf:"bytes,7,opt,name=instance_id,json=instanceId,proto3" json:"instance_id,omitempty"`
-	FactorTasks map[string]string `protobuf:"bytes,8,rep,name=factor_tasks,json=factorTasks,proto3" json:"factor_tasks,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"` // 市场（spot | swap | equity）→ 回放读取的因子任务；市场要与任务的源数据集一致，策略要用到的市场都要给出
+	FactorTasks map[string]string `protobuf:"bytes,8,rep,name=factor_tasks,json=factorTasks,proto3" json:"factor_tasks,omitempty" protobuf_key:"bytes,1,opt,name=key,proto3" protobuf_val:"bytes,2,opt,name=value,proto3"` // 市场（spot | swap | equity，统一数据集上的任务写 multi）→ 回放读取的因子任务；市场要与任务的源数据集一致，策略要用到的市场都要给出
 	SpotFeeBps  float64           `protobuf:"fixed64,9,opt,name=spot_fee_bps,json=spotFeeBps,proto3" json:"spot_fee_bps,omitempty"`                                                                                        // 现货与股票的单边手续费（基点）
 	SwapFeeBps  float64           `protobuf:"fixed64,10,opt,name=swap_fee_bps,json=swapFeeBps,proto3" json:"swap_fee_bps,omitempty"`                                                                                       // 永续的单边手续费（基点）
 }

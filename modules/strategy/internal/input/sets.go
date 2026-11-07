@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
+	"github.com/mooyang-code/moox/packages/seriesset"
 )
 
 // Membership 按标签查询成员；实时与回放共用。
@@ -192,7 +193,9 @@ func AgeWindow(calendar, bar string, barStart time.Time, minAgeBars int) (time.T
 
 // NewAgeProbe 构造每期一次的探针查询：读取年龄窗口内的 close 列，有行即满足。
 // revision 应与当期主查询一致；活跃序列的覆盖起点（CoverageStartAt）晚于目标根时无法判断年龄，返回 history_insufficient。
-func NewAgeProbe(client Client, spaceID string, resolved Resolved, view ViewInfo, subjects map[string]Subject, barStart time.Time, revision uint64, meta *MetaCache) AgeProbe {
+// market 是探针判断的市场：统一数据集上一个 View 里现货、永续各有各的历史，只有这个市场自己的序列有行才算年龄足够
+// （老的现货币新上永续时，不能用现货的历史直接通过永续的年龄检查），通过记录也按（标的、市场）保存；方式 A 里 View 本身就决定了市场。
+func NewAgeProbe(client Client, spaceID string, resolved Resolved, view ViewInfo, market string, subjects map[string]Subject, barStart time.Time, revision uint64, meta *MetaCache) AgeProbe {
 	return func(ctx context.Context, instruments []string) (map[string]struct{}, error) {
 		if resolved.MinAgeBars <= 0 || len(instruments) == 0 {
 			all := make(map[string]struct{}, len(instruments))
@@ -210,7 +213,7 @@ func NewAgeProbe(client Client, spaceID string, resolved Resolved, view ViewInfo
 			return nil, &SkipError{Reason: SkipHistoryInsufficient, Detail: fmt.Sprintf("min_age_bars=%d 需要 %s 的数据，但 View %s 的活跃序列当前最早只覆盖到 %s", resolved.MinAgeBars, PeriodLabel(resolved.Calendar, resolved.Bar, target), view.ViewID, PeriodLabel(resolved.Calendar, resolved.Bar, start))}
 		}
 		// 已证明年龄足够的标的直接放行，只探针其余的；全部已知时不发查询。
-		cacheKey := AgeKey{SpaceID: spaceID, ViewID: view.ViewID, IndexID: view.ActiveIndexID, MinAgeBars: resolved.MinAgeBars}
+		cacheKey := AgeKey{SpaceID: spaceID, ViewID: view.ViewID, IndexID: view.ActiveIndexID, MinAgeBars: resolved.MinAgeBars, Market: market}
 		candidates := instruments
 		var hits []string
 		if meta != nil {
@@ -226,6 +229,9 @@ func NewAgeProbe(client Client, spaceID string, resolved Resolved, view ViewInfo
 		selected := make([]Subject, 0, len(candidates))
 		for _, id := range candidates {
 			if subject, ok := subjects[id]; ok {
+				if resolved.Unified() {
+					subject.SeriesTag = "" // 读全部序列，再按市场取
+				}
 				selected = append(selected, subject)
 			}
 		}
@@ -235,6 +241,9 @@ func NewAgeProbe(client Client, spaceID string, resolved Resolved, view ViewInfo
 		}
 		var passed []string
 		for _, row := range rows {
+			if resolved.Unified() && seriesset.SeriesTagMarket(row.SeriesTag) != market {
+				continue
+			}
 			if _, ok := subjects[row.SubjectID]; ok {
 				if _, dup := satisfied[row.SubjectID]; !dup {
 					passed = append(passed, row.SubjectID)
@@ -247,15 +256,26 @@ func NewAgeProbe(client Client, spaceID string, resolved Resolved, view ViewInfo
 		}
 		if len(satisfied) == 0 {
 			// 候选全部不满足时，确认窗口内整个数据集是否有数据：一行都没有说明是历史缺口（停机、维护），
-			// 不能把全部标的当作新上市剔除。
+			// 不能把全部标的当作新上市剔除。统一数据集上只看这个市场自己的序列（现货有数据、永续整段缺口时，
+			// 不能因为读到了现货行就把永续全部判成新上市），所以读全部序列再按市场过滤，不能只取一行。
 			all := make([]Subject, 0, len(subjects))
 			for _, subject := range subjects {
+				if resolved.Unified() {
+					subject.SeriesTag = ""
+				}
 				all = append(all, subject)
 			}
 			sort.Slice(all, func(i, j int) bool { return all[i].SubjectID < all[j].SubjectID })
-			present, _, err := client.QueryRows(ctx, spaceID, Query{ViewID: view.ViewID, DatasetID: view.DatasetID, Frequency: view.Frequency, Subjects: all, Start: from, End: to, Columns: []string{ageProbeColumn}, ExpectedIndexID: view.ActiveIndexID, ExpectedRevision: revision, Limit: 1})
+			confirm := Query{ViewID: view.ViewID, DatasetID: view.DatasetID, Frequency: view.Frequency, Subjects: all, Start: from, End: to, Columns: []string{ageProbeColumn}, ExpectedIndexID: view.ActiveIndexID, ExpectedRevision: revision}
+			if !resolved.Unified() {
+				confirm.Limit = 1
+			}
+			present, _, err := client.QueryRows(ctx, spaceID, confirm)
 			if err != nil {
 				return nil, fmt.Errorf("年龄探针确认查询：%w", err)
+			}
+			if resolved.Unified() {
+				present = rowsOfMarket(present, market)
 			}
 			if len(present) == 0 {
 				return nil, &SkipError{Reason: SkipHistoryInsufficient, Detail: fmt.Sprintf("min_age_bars=%d 的探针窗口 %s 至 %s 内整个数据集都没有数据（历史缺口），无法判断上市时间", resolved.MinAgeBars, PeriodLabel(resolved.Calendar, resolved.Bar, from), PeriodLabel(resolved.Calendar, resolved.Bar, to.Add(-time.Nanosecond)))}

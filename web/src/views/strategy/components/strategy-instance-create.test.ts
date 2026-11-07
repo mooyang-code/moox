@@ -28,7 +28,8 @@ describe("strategy instance creation behavior", () => {
     getStrategy: vi.fn(),
     validateStrategy: vi.fn(),
     listFactorTasks: vi.fn(),
-    listLogicalAccounts: vi.fn()
+    listLogicalAccounts: vi.fn(),
+    listAllDatasets: vi.fn()
   }));
   vi.mock("@/api/strategy", () => ({
     createInstance: api.createInstance,
@@ -37,6 +38,7 @@ describe("strategy instance creation behavior", () => {
     validateStrategy: api.validateStrategy
   }));
   vi.mock("@/api/factor", () => ({ listFactorTasks: api.listFactorTasks }));
+  vi.mock("@/api/storage/metadata", () => ({ listAllDatasets: api.listAllDatasets }));
   vi.mock("@/api/trade", () => ({ listLogicalAccounts: api.listLogicalAccounts }));
   vi.mock("@arco-design/web-vue", () => ({ Message: { success: vi.fn(), info: vi.fn(), error: vi.fn() } }));
 
@@ -121,7 +123,12 @@ describe("strategy instance creation behavior", () => {
     api.getStrategy.mockReset().mockRejectedValue(new Error("策略不存在"));
     api.listFactorTasks.mockReset().mockResolvedValue({ factor_tasks: [taskInfo()], page_result: { has_more: false } });
     api.listLogicalAccounts.mockReset().mockResolvedValue({ logical_accounts: [], page_result: { has_more: false } });
+    api.listAllDatasets.mockReset().mockResolvedValue([]);
   });
+
+  // 运行模式的单选组是页面里最后一个单选组（前面可能还有“输入方式”）。
+  const runModeGroup = (wrapper: { findAllComponents: (selector: { name: string }) => any[] }) =>
+    wrapper.findAllComponents({ name: "RadioGroupStub" }).at(-1)!;
 
   it("preselects the preset definition", async () => {
     const { wrapper } = await open({ presetStrategyId: "s1" });
@@ -154,7 +161,7 @@ describe("strategy instance creation behavior", () => {
     });
     const { wrapper, flushPromises } = await open({ presetStrategyId: "s1" });
     await wrapper.findAll("select")[1].setValue("ftask_a");
-    wrapper.findComponent({ name: "RadioGroupStub" }).vm.$emit("update:modelValue", "trade");
+    runModeGroup(wrapper).vm.$emit("update:modelValue", "trade");
     await flushPromises();
     expect(wrapper.text()).toContain("账户列表读取失败：账户服务不可用");
     await wrapper
@@ -202,7 +209,7 @@ describe("strategy instance creation behavior", () => {
       .findAll("button")
       .find(item => item.text() === "解析列与成员契约")!
       .trigger("click");
-    wrapper.findComponent({ name: "RadioGroupStub" }).vm.$emit("update:modelValue", "trade");
+    runModeGroup(wrapper).vm.$emit("update:modelValue", "trade");
     await flushPromises();
     expect(wrapper.text()).toContain("A 股暂无交易账户，请改为“仅计算”。");
     expect(
@@ -246,6 +253,69 @@ describe("strategy instance creation behavior", () => {
       strategy_id: "s1",
       factor_tasks: { spot: "ftask_spot", swap: "ftask_swap" },
       logical_account_id: ""
+    });
+  });
+
+  describe("统一数据集上的任务（方式 B）", () => {
+    const mixed = [{ ...strategies[0], dsl_yaml: "name: demo\nmarket: {select: both, prefer: swap}\n" }];
+    const unifiedTasks = () => {
+      api.listFactorTasks.mockResolvedValue({
+        factor_tasks: [
+          taskInfo({ name: "统一因子", source_dataset_id: "ds_uni" }, "ftask_uni"),
+          taskInfo({ name: "现货因子", source_dataset_id: "ds_spot" }, "ftask_spot"),
+          taskInfo({ name: "永续因子", source_dataset_id: "ds_swap" }, "ftask_swap")
+        ],
+        page_result: { has_more: false }
+      });
+      api.listAllDatasets.mockResolvedValue([
+        { dataset_id: "ds_uni", attributes: { market_type: "multi" } },
+        { dataset_id: "ds_spot", attributes: { market_type: "spot" } },
+        { dataset_id: "ds_swap", attributes: {} }
+      ]);
+    };
+    const optionValues = (select: { findAll: (selector: string) => any[] }) =>
+      select.findAll("option").map(item => item.attributes("value"));
+
+    it("lets a strategy with market pick one task on a unified dataset and registers it as multi", async () => {
+      unifiedTasks();
+      const { wrapper, flushPromises } = await open({ presetStrategyId: "s1", strategies: mixed });
+      // 分开的方式里只列单市场数据集上的任务。
+      expect(optionValues(wrapper.findAll("select")[1])).not.toContain("ftask_uni");
+      wrapper.findAllComponents({ name: "RadioGroupStub" })[0].vm.$emit("update:modelValue", "unified");
+      await flushPromises();
+      const selects = wrapper.findAll("select");
+      // 定义、统一数据集任务两个选择框，只列统一数据集上的任务。
+      expect(selects).toHaveLength(2);
+      expect(optionValues(selects[1]).filter(Boolean)).toEqual(["ftask_uni"]);
+      await selects[1].setValue("ftask_uni");
+      await precheck(wrapper, flushPromises);
+      await wrapper
+        .findAll("button")
+        .find(item => item.text() === "创建停用实例")!
+        .trigger("click");
+      await flushPromises();
+      expect(api.validateStrategy).toHaveBeenCalledWith(mixed[0].dsl_yaml, { multi: "ftask_uni" });
+      expect(api.createInstance).toHaveBeenCalledWith({
+        instance_id: undefined,
+        strategy_id: "s1",
+        factor_tasks: { multi: "ftask_uni" },
+        logical_account_id: ""
+      });
+    });
+
+    it("does not offer unified datasets to a strategy without market", async () => {
+      unifiedTasks();
+      const noMarket = [{ ...strategies[0], dsl_yaml: "name: demo\n" }];
+      const { wrapper } = await open({ presetStrategyId: "s1", strategies: noMarket });
+      expect(wrapper.text()).not.toContain("统一数据集上的一个因子任务");
+    });
+
+    it("keeps listing every task and says so when the datasets cannot be read", async () => {
+      unifiedTasks();
+      api.listAllDatasets.mockRejectedValue(new Error("存储服务不可用"));
+      const { wrapper } = await open({ presetStrategyId: "s1", strategies: mixed });
+      expect(wrapper.text()).toContain("数据集信息读取失败（存储服务不可用）");
+      expect(optionValues(wrapper.findAll("select")[1])).toContain("ftask_uni");
     });
   });
 
@@ -447,7 +517,7 @@ describe("strategy instance creation behavior", () => {
         presetStrategyId: "pool",
         strategies: [pool("s_spot", "s_swap"), spotMember, swapMember]
       });
-      wrapper.findComponent({ name: "RadioGroupStub" }).vm.$emit("update:modelValue", "trade");
+      runModeGroup(wrapper).vm.$emit("update:modelValue", "trade");
       await flushPromises();
       const accountSelect = wrapper.findAll("select")[3];
       expect(accountSelect.findAll("option").map(item => item.attributes("value"))).toEqual(["", "acc_both"]);

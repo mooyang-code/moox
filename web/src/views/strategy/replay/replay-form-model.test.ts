@@ -37,6 +37,9 @@ describe("replay form model", () => {
       "spot"
     ]);
     expect(replayMarkets({ ...base, instance_id: "i1", tasks: { swap: "b", spot: "a" } }, strategies)).toEqual(["spot", "swap"]);
+    // 统一数据集上的实例：任务键是 multi，回放读这一个任务。
+    expect(replayMarkets({ ...base, instance_id: "i1", tasks: { multi: "u" } }, strategies)).toEqual(["multi"]);
+    expect(replayFactorTasks({ ...base, instance_id: "i1", tasks: { multi: "u" } }, strategies)).toEqual({ multi: "u" });
     expect(replayMarkets({ ...base, strategy_id: "s3", single_market: "" }, strategies)).toEqual([]);
     expect(replayMarkets({ ...base, strategy_id: "s3", single_market: "equity" }, strategies)).toEqual(["equity"]);
   });

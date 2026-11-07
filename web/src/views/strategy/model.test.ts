@@ -40,6 +40,7 @@ describe("strategy model helpers", () => {
     expect(skipReasonLabel("previous_version_unknown")).toContain("上一根版本未知");
     expect(skipReasonLabel("pool_warmup_failed")).toBe("策略池预热失败（pool_warmup_failed）");
     expect(skipReasonLabel("market_missing")).toContain("另一个市场的数据未到");
+    expect(skipReasonLabel("market_failed")).toContain("市场整体失败");
     expect(skipReasonLabel("custom")).toBe("custom");
     expect(skipReasonLabel("no_data")).toBe("本期无数据（no_data）");
     expect(skipReasonLabel("history_insufficient")).toContain("历史覆盖不足");
