@@ -156,23 +156,6 @@ func TestDrillReleaseRetryDoesNotReverify(t *testing.T) {
 	require.Empty(t, h.steps("drill")[blockKey()].ReleaseVerdict, "解除成功后清除待重试标记")
 }
 
-// 核对失败的演练已经解除了名单：之后重新执行时，名单里没有这个标的，记录自己停下（演练已经结束），不会被“待重试解除”的标记卡住。
-func TestFailedDrillRetryStopsBecauseBlockWasReleased(t *testing.T) {
-	h := newHarness(t)
-	delistAt := baseTime.Add(3 * time.Hour)
-	h.trade.setHolders(paper("crypto", "la-p"))
-	h.trade.finalFor = func(action.FlattenRequest) (string, string) { return action.OperatorPartial, "拒单" }
-	h.addExecution("drill", delistAt, "PAPER_ONLY")
-	h.step("drill", baseTime)
-	h.step("drill", baseTime.Add(31*time.Second))
-	require.Equal(t, store.StatusFailed, h.step("drill", delistAt.Add(11*time.Minute)).Status)
-	require.False(t, h.trade.isBlocked())
-	require.Empty(t, h.steps("drill")[blockKey()].ReleaseVerdict, "解除成功，没有待重试的标记")
-	out := h.step("drill", delistAt.Add(12*time.Minute))
-	require.Equal(t, store.StatusCanceled, out.Status)
-	require.Contains(t, out.Error, "手工解除")
-}
-
 // 没查到持有者但有没能判断的账户：同样发 delist_detected。
 func TestDelistDetectedWhenOnlySkippedAccounts(t *testing.T) {
 	h := newHarness(t)

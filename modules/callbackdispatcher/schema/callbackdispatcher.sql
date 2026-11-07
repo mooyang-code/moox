@@ -129,7 +129,12 @@ CREATE TABLE IF NOT EXISTS t_delist_actions (
     -- 只用于禁止买入那一行：演练（PAPER_ONLY）核对已有结论（SUCCEEDED 或 FAILED，说明在 c_error）而解除禁止没做成时记下结论，
     -- 之后只重试解除，结论不会因为名单里已经没有这个标的（解除其实已在 Trade 上生效、响应丢了）而丢掉；解除成功后清空。
     c_release_verdict TEXT NOT NULL DEFAULT '',
+    -- 只用于禁止买入那一行：演练结束时本记录自己解除名单（解除之前先置 1）。之后记录被重新打开（合并了新的登记、重新执行），
+    -- 名单里没有这一项不是手工解除，要重新写名单、按新时间线走；重新写名单或看到名单里还有这一项时清 0。
+    c_self_released INTEGER NOT NULL DEFAULT 0,
     -- 平仓各行和汇总行：这一轮是按哪个下架时间（Unix 毫秒）规划的。改期后这一轮没成功就按新时间重开（换新操作号）。
+    -- 禁止买入那一行：记下解除待重试的结论时，结论对应的下架时间；演练被重新打开、重新写名单时，新时间线的下架时间
+    -- （此前按别的下架时间规划的各轮都重开，含已成功的）。
     c_planned_delist_at INTEGER NOT NULL DEFAULT 0,
     c_updated_at INTEGER NOT NULL,
     PRIMARY KEY (c_execution_id, c_round, c_kind, c_space_id, c_logical_account_id),
@@ -137,6 +142,7 @@ CREATE TABLE IF NOT EXISTS t_delist_actions (
         REFERENCES t_event_executions (c_execution_id)
         ON DELETE CASCADE,
     CHECK (c_release_verdict IN ('', 'SUCCEEDED', 'FAILED')),
+    CHECK (c_self_released IN (0, 1)),
     CHECK (c_kind IN ('BLOCK', 'FLATTEN', 'VERIFY')),
     CHECK (c_status IN ('PENDING', 'RUNNING', 'SUCCEEDED', 'FAILED', 'PARTIAL'))
 );

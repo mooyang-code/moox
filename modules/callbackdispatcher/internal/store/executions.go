@@ -246,7 +246,17 @@ func (s *Store) ListAttempts(ctx context.Context, executionID string) ([]Attempt
 	return attempts, nil
 }
 
+// resetDrillBlockStep 把演练（范围 PAPER_ONLY）记录的禁止买入那一行（轮次 0）重置为待写入：清掉“自己解除过”、解除待重试的结论和它对应的下架时间。
+const resetDrillBlockStep = `UPDATE t_delist_actions
+SET c_status = 'PENDING', c_self_released = 0, c_release_verdict = '', c_planned_delist_at = 0, c_updated_at = ?
+WHERE c_execution_id = ? AND c_round = 0 AND c_kind = 'BLOCK'
+AND EXISTS (
+    SELECT 1 FROM t_event_executions
+    WHERE c_execution_id = ? AND c_action_type = 'SYSTEM' AND json_extract(c_payload_json, '$.scope') = 'PAPER_ONLY'
+)`
+
 // RetryExecution 把失败的记录放回待处理，立即重新执行；已经确认过的标记清除。
+// 演练记录的禁止买入那一行同时重置（见 resetDrillBlockStep）。
 // 系统动作的记录要先确认同一标的没有别的未结束记录，否则返回 ErrConflict。
 func (s *Store) RetryExecution(ctx context.Context, executionID string, now int64) (Execution, error) {
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -270,7 +280,11 @@ func (s *Store) RetryExecution(ctx context.Context, executionID string, now int6
 			"c_status": StatusPending, "c_next_run_at": now, "c_failures": 0, "c_first_failed_at": 0, "c_acknowledged": false,
 			"c_finished_at": 0, "c_updated_at": now,
 		}
-		return tx.Model(&executionRow{}).Where("c_execution_id = ?", executionID).Updates(updates).Error
+		if err := tx.Model(&executionRow{}).Where("c_execution_id = ?", executionID).Updates(updates).Error; err != nil {
+			return err
+		}
+		// 演练记录结束时已自己解除了名单：重新执行要从写名单开始，不能被“名单里没有这个标的”当作手工解除而停下。
+		return tx.Exec(resetDrillBlockStep, now, executionID, executionID).Error
 	})
 	if err != nil {
 		return Execution{}, err

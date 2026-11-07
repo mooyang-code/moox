@@ -217,9 +217,14 @@ func (h *Handler) Step(ctx context.Context, execution store.Execution, now time.
 	}
 	if tgt.PaperOnly {
 		if block, ok := r.steps[stepKey{Round: RoundBlock, Kind: store.DelistKindBlock}]; ok && block.ReleaseVerdict != "" {
-			// 演练核对已有结论、只剩解除没做成：不再走整条时间线（先查名单会发现名单里已经没有这一项而把记录置为已取消，结论就丢了），
-			// 也不重新核对，只重试解除，成功后返回已存下的结论。
-			return r.retryRelease(ctx, block)
+			if block.PlannedDelistAt == tgt.DelistAt.UnixMilli() {
+				// 演练核对已有结论、只剩解除没做成：不再走整条时间线（先查名单会发现名单里已经没有这一项而把记录置为已取消，结论就丢了），
+				// 也不重新核对，只重试解除，成功后返回已存下的结论。
+				return r.retryRelease(ctx, block)
+			}
+			// 结论是按别的下架时间得出的：重试解除期间同标的又来了一次演练登记、下架时间不同，合并进了这条记录。
+			// 旧结论作废，重新写名单、按新的下架时间重走时间线（名单可能已被解除，不能当作手工解除）。
+			r.restart = true
 		}
 	}
 	outcome, err := r.step(ctx)
@@ -230,10 +235,19 @@ func (h *Handler) Step(ctx context.Context, execution store.Execution, now time.
 	// 而已结束的记录不能再取消。release 只解除自己写的那一项，同标的还有未取消的真实下架时不解除。真实下架结束后名单保留（标的确实下架了）。
 	unlock := h.locks.Lock(tgt.subject())
 	defer unlock()
-	if releaseErr := h.release(ctx, execution, tgt, r.hasBlock()); releaseErr != nil {
-		// 记下结论：之后每次重试只重试解除。
-		if block, ok := r.steps[stepKey{Round: RoundBlock, Kind: store.DelistKindBlock}]; ok {
-			block.ReleaseVerdict, block.Error = outcome.Status, outcome.Error
+	block, hasBlock := r.steps[stepKey{Round: RoundBlock, Kind: store.DelistKindBlock}]
+	if hasBlock && !block.SelfReleased {
+		// 解除之前先记下“本记录自己解除了名单”：之后记录被重新打开（这一步进行中合并了新的登记、核对失败后重新执行），
+		// 下一次推进查名单发现没有这一项时，知道是自己解除的，重新写名单，而不是当作手工解除把记录置为已取消。
+		block.SelfReleased = true
+		if err := r.save(ctx, block); err != nil {
+			return action.Outcome{}, err
+		}
+	}
+	if releaseErr := h.release(ctx, execution, tgt, hasBlock); releaseErr != nil {
+		// 记下结论和它对应的下架时间：之后每次重试只重试解除；下架时间被合并改了，结论就作废。
+		if hasBlock {
+			block.ReleaseVerdict, block.Error, block.PlannedDelistAt = outcome.Status, outcome.Error, tgt.DelistAt.UnixMilli()
 			if err := r.save(ctx, block); err != nil {
 				log.WarnContextf(ctx, "记录演练解除待重试的结论失败: %v", err)
 			}
@@ -265,12 +279,6 @@ func (r *run) retryRelease(ctx context.Context, block store.DelistAction) (actio
 	return action.Outcome{Status: store.StatusSucceeded}, nil
 }
 
-// hasBlock 报告这次推进里有没有存下禁止买入那一行。
-func (r *run) hasBlock() bool {
-	_, ok := r.steps[stepKey{Round: RoundBlock, Kind: store.DelistKindBlock}]
-	return ok
-}
-
 // run 是一次 Step 的状态：已存的步骤、这次发现的问题和下一次该醒来的时间。
 type run struct {
 	h         *Handler
@@ -285,6 +293,8 @@ type run struct {
 	problems []string
 	// stopped 为真表示执行记录已经被取消：不再发起新的 Trade 调用，直接返回。
 	stopped bool
+	// restart 为真表示演练结束后又被重新打开（见 Step 和 step）：这次推进要重新写名单，按现在的下架时间重走时间线。
+	restart bool
 }
 
 func (r *run) wakeAt(at time.Time) {
@@ -319,12 +329,7 @@ func (r *run) save(ctx context.Context, step store.DelistAction) error {
 
 func (r *run) step(ctx context.Context) (action.Outcome, error) {
 	blockKey := stepKey{Round: RoundBlock, Kind: store.DelistKindBlock}
-	if block, ok := r.steps[blockKey]; !ok || block.Status != store.DelistSucceeded {
-		outcome, finished, err := r.ensureBlocked(ctx)
-		if finished || err != nil {
-			return outcome, err
-		}
-	} else {
+	if block, ok := r.steps[blockKey]; ok && block.Status == store.DelistSucceeded && !r.restart {
 		// 每次推进前先查名单：已被手工解除的（误报、交易所改期），停止后续所有步骤。
 		callCtx, cancel := r.h.tradeCtx(ctx)
 		blocked, err := r.h.Trade.ListBlockedInstruments(callCtx)
@@ -334,8 +339,25 @@ func (r *run) step(ctx context.Context) (action.Outcome, error) {
 			r.wakeAt(r.now.Add(transientRetry))
 			return r.pending(), nil
 		}
-		if !slices.ContainsFunc(blocked, func(item action.BlockedInstrument) bool { return normalizeRef(item.Instrument) == r.target.Instrument }) {
+		listed := slices.ContainsFunc(blocked, func(item action.BlockedInstrument) bool { return normalizeRef(item.Instrument) == r.target.Instrument })
+		switch {
+		case !listed && !block.SelfReleased:
 			return action.Outcome{Status: store.StatusCanceled, Error: "禁止买入已被手工解除，下架处理已停止"}, nil
+		case !listed:
+			// 名单是这条演练结束时自己解除的，之后记录又被重新打开（合并了新的登记）：重新写名单，按新的下架时间重走时间线。
+			r.restart = true
+		case block.SelfReleased:
+			// 名单里还有这一项（解除没生效，或别人写的）：之后再不见了就是被手工解除的。
+			block.SelfReleased = false
+			if err := r.save(ctx, block); err != nil {
+				return action.Outcome{}, err
+			}
+		}
+	}
+	if block, ok := r.steps[blockKey]; !ok || block.Status != store.DelistSucceeded || r.restart {
+		outcome, finished, err := r.ensureBlocked(ctx)
+		if finished || err != nil {
+			return outcome, err
 		}
 	}
 
@@ -375,6 +397,12 @@ func (r *run) ensureBlocked(ctx context.Context) (outcome action.Outcome, finish
 	step := r.steps[blockKey]
 	step.Round, step.Kind, step.Exchange = RoundBlock, store.DelistKindBlock, r.target.Instrument.Exchange
 	step.Reason = blockReason(r.execution, r.target)
+	// 重新写名单就不再是“自己解除过”，旧的解除待重试结论也作废。
+	step.SelfReleased, step.ReleaseVerdict = false, ""
+	if r.restart {
+		// 演练被重新打开：记下新时间线的下架时间，此前按别的下架时间规划的各轮都重开（见 flattenRound）。
+		step.PlannedDelistAt = r.target.DelistAt.UnixMilli()
+	}
 
 	// 调用 Trade 之前先把这一行存下：Trade 可能已经写入而响应丢了（超时、网关抖动），或者写入之后进程就退出了，
 	// 之后取消和演练结束靠这一行知道“这条记录尝试过写名单”，再按名单里原因带的执行记录 ID 判断是不是自己写的。
@@ -593,7 +621,7 @@ func (r *run) roundRows(round int, plannedAt int64) []store.DelistAction {
 
 // flattenRound 推进一轮平仓：到点后找持有者、给每个组合建一行（先存下操作号），再逐个发起并查结果。
 // 汇总行记下这一轮是按哪个下架时间规划的：改期之后下架时间变了，而这一轮已经以失败或只完成一部分结束（用完重试、到了旧的下架时间被停下），
-// 就按新时间重开，每个仍持有的组合换新的操作号再平；已经成功的一轮不重开。
+// 就按新时间重开，每个仍持有的组合换新的操作号再平；已经成功的一轮不重开，除非演练结束后又被重新打开（那是新的一次演练）。
 func (r *run) flattenRound(ctx context.Context, round int, due time.Time) error {
 	if r.now.Before(due) {
 		r.wakeAt(due)
@@ -602,7 +630,9 @@ func (r *run) flattenRound(ctx context.Context, round int, due time.Time) error 
 	plannedAt := r.target.DelistAt.UnixMilli()
 	summaryKey := stepKey{Round: round, Kind: store.DelistKindFlatten}
 	summary, started := r.steps[summaryKey]
-	reopen := started && summary.PlannedDelistAt != plannedAt && terminal(summary.Status) && summary.Status != store.DelistSucceeded
+	// 演练被重新打开时，禁止买入那一行记着新时间线的下架时间：此前按别的下架时间规划的轮次属于上一次演练，成功的也重开。
+	restarted := r.steps[stepKey{Round: RoundBlock, Kind: store.DelistKindBlock}].PlannedDelistAt == plannedAt
+	reopen := started && summary.PlannedDelistAt != plannedAt && terminal(summary.Status) && (summary.Status != store.DelistSucceeded || restarted)
 	if !started || reopen {
 		if r.lowBudget(ctx) {
 			r.wakeAt(r.now.Add(5 * time.Second))

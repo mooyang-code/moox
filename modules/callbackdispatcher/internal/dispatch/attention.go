@@ -13,7 +13,7 @@ import (
 // TransientFailureAlertAfter 是系统动作的记录连续暂时失败多久之后算作 action_failed 关注项。
 const TransientFailureAlertAfter = 15 * time.Minute
 
-var urlPattern =regexp.MustCompile(`"?https?://[^\s"]+"?:?`)
+var urlPattern = regexp.MustCompile(`"?https?://[^\s"]+"?:?`)
 
 // stableReason 去掉错误里的地址并截短：错误原文可能带签名参数，每次都不同，会让指标序列不断增长。
 func stableReason(reason string) string {
