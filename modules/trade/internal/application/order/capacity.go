@@ -104,7 +104,7 @@ func availableReservationFunds(tx *store.Tx, validation Validation, adjustment s
 	market := validation.Instrument.MarketType
 	unreflected, err := tx.GetUnreflectedReservation(
 		validation.Account.SpaceID, validation.Account.ID, validation.ReservedAsset,
-		validation.Account.MarketsInWallet(validation.Account.WalletFor(market)),
+		validation.Account.MarketsSharingFunds(market),
 		validation.Account.SnapshotSourceTime.UnixMilli(),
 	)
 	if err != nil {

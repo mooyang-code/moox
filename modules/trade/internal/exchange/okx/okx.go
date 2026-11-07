@@ -448,11 +448,8 @@ func (a *Adapter) balanceSnapshot(row balanceEnvelope) (exchange.AccountSnapshot
 		snapshot.ExchangeEquity = exchangeEquity
 	}
 	for _, detail := range row.Details {
-		totalRaw := detail.CashBal
-		if totalRaw == "" {
-			totalRaw = detail.Eq
-		}
-		total, err := decimalOrZero(totalRaw)
+		// 只用 cashBal：缺失按 0 处理，不退回含未实现盈亏的 eq（会和 upl 重复计入）。
+		total, err := decimalOrZero(detail.CashBal)
 		if err != nil {
 			return exchange.AccountSnapshot{}, err
 		}

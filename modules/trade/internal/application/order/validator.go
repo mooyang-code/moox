@@ -295,11 +295,29 @@ func withFeeBuffer(amount, rate shared.Decimal) shared.Decimal {
 // availableFunds 返回订单所在钱包里某个资产的可用资金。普通账户的现货、合约钱包分开算；
 // 统一账户的合约和 OKX、模拟盘共用一个钱包，保证金按账户级可用资金算；只开通合约的账户同样如此。
 func availableFunds(account tradingaccount.Account, market exchange.MarketType, asset string) shared.Decimal {
+	// 统一账户、OKX、模拟盘各市场共用一个资金池：开通了合约时结算币看账户级可用资金（已扣保证金），其他资产加总各钱包。
+	if account.SharesFundsAcrossMarkets() {
+		if account.HasLeverageMarket() && asset == account.SettlementAsset {
+			return account.Snapshot.AvailableFunds
+		}
+		return availablePool(account.Snapshot, asset)
+	}
 	wallet := account.WalletFor(market)
 	if exchange.RuleFor(market).UsesMargin && (len(account.Markets) == 1 || wallet == exchange.WalletUnified) {
 		return account.Snapshot.AvailableFunds
 	}
 	return availableBalance(account.Snapshot, wallet, asset)
+}
+
+// availablePool 加总资产在各钱包的可用余额。
+func availablePool(snapshot exchange.AccountSnapshot, asset string) shared.Decimal {
+	total := shared.Zero()
+	for _, balance := range snapshot.Balances {
+		if balance.Asset == asset {
+			total = total.Add(balance.Available)
+		}
+	}
+	return total
 }
 
 // availableBalance 取指定钱包里资产的可用余额；快照没有钱包信息（空钱包）的余额当作属于任何钱包。

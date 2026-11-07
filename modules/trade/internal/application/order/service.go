@@ -1157,7 +1157,7 @@ func (s *Service) prepareSubmit(
 			market := validation.Instrument.MarketType
 			unreflected, err := tx.GetUnreflectedReservation(
 				record.SpaceID, record.TradingAccountID, validation.ReservedAsset,
-				validation.Account.MarketsInWallet(validation.Account.WalletFor(market)),
+				validation.Account.MarketsSharingFunds(market),
 				validation.Account.SnapshotSourceTime.UnixMilli(),
 			)
 			if err != nil {

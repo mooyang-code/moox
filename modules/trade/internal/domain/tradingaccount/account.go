@@ -143,12 +143,28 @@ func (a Account) WalletFor(market exchange.MarketType) exchange.Wallet {
 	return exchange.WalletFor(a.Exchange, a.AccountMode, market)
 }
 
-// MarketsInWallet 返回占用同一个钱包资金的市场：普通账户的现货和合约各用各的钱包，统一账户和 OKX 共用一个。
-func (a Account) MarketsInWallet(wallet exchange.Wallet) []string {
+// SharesFundsAcrossMarkets 报告各市场是否共用一个资金池：币安统一账户、OKX 统一账户和模拟盘都是，
+// 现货买入和合约保证金花同一份结算币；币安普通账户的现货、合约钱包各用各的。
+// 余额里的钱包标签（统一账户现货在 MARGIN、合约在 UNIFIED）只用于展示和对账，不决定资金池。
+func (a Account) SharesFundsAcrossMarkets() bool {
+	if a.ExecutionMode == exchange.ExecutionModePaper {
+		return true
+	}
+	mode := a.AccountMode
+	if mode == exchange.AccountModeUnspecified && a.Exchange == exchange.ExchangeOKX {
+		mode = exchange.AccountModeOKXUnified
+	}
+	return mode == exchange.AccountModeOKXUnified || mode == exchange.AccountModeBinancePortfolioMargin
+}
+
+// MarketsSharingFunds 返回和某个市场占用同一份资金的市场：共用资金池时是全部已开通市场，
+// 否则是同一个钱包里的市场。
+func (a Account) MarketsSharingFunds(market exchange.MarketType) []string {
 	var markets []string
-	for _, market := range a.Markets {
-		if a.WalletFor(market) == wallet {
-			markets = append(markets, string(market))
+	wallet := a.WalletFor(market)
+	for _, candidate := range a.Markets {
+		if a.SharesFundsAcrossMarkets() || a.WalletFor(candidate) == wallet {
+			markets = append(markets, string(candidate))
 		}
 	}
 	return markets

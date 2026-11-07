@@ -13,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"gorm.io/gorm"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 type Service struct {
@@ -181,11 +182,12 @@ func (s *Service) valueSnapshot(ctx context.Context, account store.TradingAccoun
 			held = append(held, balance)
 		}
 	}
-	if !settlementSeen && !account.HasBalanceMarket() {
-		// 合约账户的快照没有带结算币明细时，沿用快照里的权益，去掉其中的未实现盈亏。
-		settlementNet = decimal(snapshot.Equity).Sub(unrealized)
+	if !settlementSeen {
+		// 快照里没有结算币明细时，不能退回交易所给的总权益（它含未实现盈亏和其他币，会重复计入）：结算资产净额按 0 处理并告警。
+		log.WarnContextf(ctx, "交易关注项：执行账户 %s 的余额快照里没有结算币 %s 的明细，权益里的结算资产净额按 0 计", account.TradingAccountID, settlement)
 	}
-	equity := settlementNet.Add(unrealized).Add(settings.MarginCoinValue())
+	// 保证金币的配置值是组合层的数，在组合层只加一次，不在每个成员里各加一遍。
+	equity := settlementNet.Add(unrealized)
 	if len(held) > 0 {
 		if s.Adapters == nil {
 			return store.TradingAccountSnapshot{}, fmt.Errorf("equity: spot quote adapter is not configured")
@@ -323,6 +325,11 @@ func (s *Service) sampleLogicalAccount(
 	if !logicalValid || sourceTime <= 0 {
 		return nil
 	}
+	settings, settingsErr := fundsettings.Parse(logical.FundSettingsJSON)
+	if settingsErr != nil {
+		return settingsErr
+	}
+	equity = equity.Add(settings.MarginCoinValue())
 	var pnl *string
 	if allPnl {
 		value := unrealized.String()
