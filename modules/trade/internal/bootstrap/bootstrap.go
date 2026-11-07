@@ -13,9 +13,11 @@ import (
 	accountapp "github.com/mooyang-code/moox/modules/trade/internal/application/account"
 	"github.com/mooyang-code/moox/modules/trade/internal/application/accountsync"
 	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
+	delistapp "github.com/mooyang-code/moox/modules/trade/internal/application/delist"
 	equityapp "github.com/mooyang-code/moox/modules/trade/internal/application/equity"
 	"github.com/mooyang-code/moox/modules/trade/internal/application/fundmaint"
 	logicalapp "github.com/mooyang-code/moox/modules/trade/internal/application/logicalaccount"
+	"github.com/mooyang-code/moox/modules/trade/internal/application/marginmonitor"
 	operatorapp "github.com/mooyang-code/moox/modules/trade/internal/application/operator"
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
 	papersimulation "github.com/mooyang-code/moox/modules/trade/internal/application/papersimulation"
@@ -213,11 +215,39 @@ func initialize(
 		fundWorker.Wake(spaceID, logicalAccountID)
 	}
 	operatorService := &operatorapp.Service{
-		Exchanges: registry,
-		Store:     tradeStore, Orders: orderService,
+		Exchanges: registry, Wake: targetWorker.Wake,
+		Store: tradeStore, Orders: orderService,
 		Syncer: accountSyncer{service: syncService},
 		Prices: targetapp.ExchangePriceSource{Adapters: manager},
 	}
+	// 保证金率监控：每分钟检查一次实盘账户；它复用资金维护的定时任务外壳（定时、门禁、超时一样）。
+	marginService := &marginmonitor.Service{
+		Store: tradeStore,
+		Reduce: func(
+			callCtx context.Context, spaceID, actionID, logicalAccountID string, ratio shared.Decimal, reason string,
+		) (store.OperatorActionRecord, error) {
+			result, reduceErr := operatorService.FlattenLogicalAccount(callCtx, operatorapp.FlattenCommand{
+				SpaceID: spaceID, ActionID: actionID, LogicalAccountID: logicalAccountID, Reason: reason, ReduceRatio: ratio,
+			})
+			return result.Action, reduceErr
+		},
+		Collect: func(
+			callCtx context.Context, spaceID, logicalAccountID, actionID string, accounts []store.TradingAccountRecord,
+		) (bool, error) {
+			// 归集用执行器的钱包划转；还没接入划转时监控只告警一次，请用户手动划转。
+			if targetExecutor.Transfers == nil {
+				return false, marginmonitor.ErrTransferUnavailable
+			}
+			// 风控划转没有目标：TargetID 为空串（见 wallet_transfer.sql）。
+			return targetExecutor.Transfers.Collect(callCtx, spaceID,
+				store.LogicalAccountTargetRecord{SpaceID: spaceID, LogicalAccountID: logicalAccountID}, accounts)
+		},
+		Pause: func(callCtx context.Context, spaceID, logicalAccountID, reason string) error {
+			_, pauseErr := logicalAccounts.Pause(callCtx, spaceID, logicalAccountID, reason)
+			return pauseErr
+		},
+	}
+	marginWorker := &traderuntime.FundWorker{Maintainer: marginService, Interval: time.Minute, Gate: lifeGate.Open, Name: "保证金率监控"}
 	operatorWorker := &traderuntime.OperatorWorker{
 		Actions: tradeStore, Resumer: operatorService, Interval: time.Second,
 	}
@@ -327,6 +357,7 @@ func initialize(
 	runWorker(equitySampler.Run)
 	runWorker(inspectionWorker.Run)
 	runWorker(fundWorker.Run)
+	runWorker(marginWorker.Run)
 	runWorker((&traderuntime.AttentionWorker{Store: tradeStore, Executor: targetExecutor}).Run)
 	if eventBus != nil {
 		client := eventBus
@@ -423,6 +454,22 @@ func initialize(
 			MatcherReady:       paperMatcherWorker.Ready,
 			Holdings:           &rpc.HoldingQuery{Store: tradeStore, Adapters: manager},
 			Adapters:           manager,
+			Delist:             &delistapp.Service{Store: tradeStore, OnChanged: targetWorker.Wake, Prices: targetapp.ExchangePriceSource{Adapters: manager}},
+			FlattenInstrument: func(callCtx context.Context, command rpc.FlattenInstrumentCommand) (store.OperatorActionRecord, bool, error) {
+				result, flattenErr := operatorService.FlattenLogicalAccount(callCtx, operatorapp.FlattenCommand{
+					SpaceID: command.SpaceID, ActionID: command.ActionID, LogicalAccountID: command.LogicalAccountID,
+					Reason: command.Reason, InstrumentID: command.InstrumentID, Exchange: command.Exchange,
+				})
+				return result.Action, result.Unblocked, flattenErr
+			},
+			ReduceAccount: func(
+				callCtx context.Context, spaceID, actionID, logicalAccountID string, ratio shared.Decimal, reason string,
+			) (store.OperatorActionRecord, error) {
+				result, reduceErr := operatorService.FlattenLogicalAccount(callCtx, operatorapp.FlattenCommand{
+					SpaceID: spaceID, ActionID: actionID, LogicalAccountID: logicalAccountID, Reason: reason, ReduceRatio: ratio,
+				})
+				return result.Action, reduceErr
+			},
 			FlattenAccount: func(
 				callCtx context.Context, spaceID, actionID, tradingAccountID, reason string,
 			) (store.OperatorActionRecord, error) {

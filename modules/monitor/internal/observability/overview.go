@@ -1102,6 +1102,7 @@ var TradeAttentionNames = map[string]string{
 	"inspection_failing": "交易账户密钥检测连续失败",
 	"transfer_shortfall": "合约钱包可划转资金不足，现货买入被缩小",
 	"transfer_failing":   "钱包划转或归集出问题",
+	"margin_ratio_low":   "合约保证金率过低",
 }
 
 // EventCenterAttentionNames 是事件中心上报的需要人看的情况。

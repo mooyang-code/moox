@@ -98,6 +98,22 @@ type TradeConsoleServiceService interface {
 	ListAccountLedger(ctx context.Context, req *ListAccountLedgerReq) (*ListAccountLedgerRsp, error)
 
 	FlattenTradingAccount(ctx context.Context, req *FlattenTradingAccountReq) (*FlattenTradingAccountRsp, error)
+
+	BlockInstrument(ctx context.Context, req *BlockInstrumentReq) (*BlockInstrumentRsp, error)
+
+	UnblockInstrument(ctx context.Context, req *UnblockInstrumentReq) (*UnblockInstrumentRsp, error)
+
+	ListBlockedInstruments(ctx context.Context, req *ListBlockedInstrumentsReq) (*ListBlockedInstrumentsRsp, error)
+
+	ListInstrumentHolders(ctx context.Context, req *ListInstrumentHoldersReq) (*ListInstrumentHoldersRsp, error)
+
+	FlattenInstrument(ctx context.Context, req *FlattenInstrumentReq) (*FlattenInstrumentRsp, error)
+
+	ReduceLogicalAccount(ctx context.Context, req *ReduceLogicalAccountReq) (*ReduceLogicalAccountRsp, error)
+
+	SummarizeAccountPnl(ctx context.Context, req *SummarizeAccountPnlReq) (*SummarizeAccountPnlRsp, error)
+
+	ListOperatorActions(ctx context.Context, req *ListOperatorActionsReq) (*ListOperatorActionsRsp, error)
 }
 
 func TradeConsoleServiceService_CreateTradingAccount_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -820,6 +836,150 @@ func TradeConsoleServiceService_FlattenTradingAccount_Handler(svr interface{}, c
 	return rsp, nil
 }
 
+func TradeConsoleServiceService_BlockInstrument_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &BlockInstrumentReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(TradeConsoleServiceService).BlockInstrument(ctx, reqbody.(*BlockInstrumentReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func TradeConsoleServiceService_UnblockInstrument_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &UnblockInstrumentReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(TradeConsoleServiceService).UnblockInstrument(ctx, reqbody.(*UnblockInstrumentReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func TradeConsoleServiceService_ListBlockedInstruments_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListBlockedInstrumentsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(TradeConsoleServiceService).ListBlockedInstruments(ctx, reqbody.(*ListBlockedInstrumentsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func TradeConsoleServiceService_ListInstrumentHolders_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListInstrumentHoldersReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(TradeConsoleServiceService).ListInstrumentHolders(ctx, reqbody.(*ListInstrumentHoldersReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func TradeConsoleServiceService_FlattenInstrument_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &FlattenInstrumentReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(TradeConsoleServiceService).FlattenInstrument(ctx, reqbody.(*FlattenInstrumentReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func TradeConsoleServiceService_ReduceLogicalAccount_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ReduceLogicalAccountReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(TradeConsoleServiceService).ReduceLogicalAccount(ctx, reqbody.(*ReduceLogicalAccountReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func TradeConsoleServiceService_SummarizeAccountPnl_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &SummarizeAccountPnlReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(TradeConsoleServiceService).SummarizeAccountPnl(ctx, reqbody.(*SummarizeAccountPnlReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func TradeConsoleServiceService_ListOperatorActions_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ListOperatorActionsReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(TradeConsoleServiceService).ListOperatorActions(ctx, reqbody.(*ListOperatorActionsReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // TradeConsoleServiceServer_ServiceDesc descriptor for server.RegisterService.
 var TradeConsoleServiceServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.trade.TradeConsoleService",
@@ -985,6 +1145,38 @@ var TradeConsoleServiceServer_ServiceDesc = server.ServiceDesc{
 			Name: "/trpc.moox.trade.TradeConsoleService/FlattenTradingAccount",
 			Func: TradeConsoleServiceService_FlattenTradingAccount_Handler,
 		},
+		{
+			Name: "/trpc.moox.trade.TradeConsoleService/BlockInstrument",
+			Func: TradeConsoleServiceService_BlockInstrument_Handler,
+		},
+		{
+			Name: "/trpc.moox.trade.TradeConsoleService/UnblockInstrument",
+			Func: TradeConsoleServiceService_UnblockInstrument_Handler,
+		},
+		{
+			Name: "/trpc.moox.trade.TradeConsoleService/ListBlockedInstruments",
+			Func: TradeConsoleServiceService_ListBlockedInstruments_Handler,
+		},
+		{
+			Name: "/trpc.moox.trade.TradeConsoleService/ListInstrumentHolders",
+			Func: TradeConsoleServiceService_ListInstrumentHolders_Handler,
+		},
+		{
+			Name: "/trpc.moox.trade.TradeConsoleService/FlattenInstrument",
+			Func: TradeConsoleServiceService_FlattenInstrument_Handler,
+		},
+		{
+			Name: "/trpc.moox.trade.TradeConsoleService/ReduceLogicalAccount",
+			Func: TradeConsoleServiceService_ReduceLogicalAccount_Handler,
+		},
+		{
+			Name: "/trpc.moox.trade.TradeConsoleService/SummarizeAccountPnl",
+			Func: TradeConsoleServiceService_SummarizeAccountPnl_Handler,
+		},
+		{
+			Name: "/trpc.moox.trade.TradeConsoleService/ListOperatorActions",
+			Func: TradeConsoleServiceService_ListOperatorActions_Handler,
+		},
 	},
 }
 
@@ -1119,6 +1311,30 @@ func (s *UnimplementedTradeConsoleService) ListAccountLedger(ctx context.Context
 func (s *UnimplementedTradeConsoleService) FlattenTradingAccount(ctx context.Context, req *FlattenTradingAccountReq) (*FlattenTradingAccountRsp, error) {
 	return nil, errors.New("rpc FlattenTradingAccount of service TradeConsoleService is not implemented")
 }
+func (s *UnimplementedTradeConsoleService) BlockInstrument(ctx context.Context, req *BlockInstrumentReq) (*BlockInstrumentRsp, error) {
+	return nil, errors.New("rpc BlockInstrument of service TradeConsoleService is not implemented")
+}
+func (s *UnimplementedTradeConsoleService) UnblockInstrument(ctx context.Context, req *UnblockInstrumentReq) (*UnblockInstrumentRsp, error) {
+	return nil, errors.New("rpc UnblockInstrument of service TradeConsoleService is not implemented")
+}
+func (s *UnimplementedTradeConsoleService) ListBlockedInstruments(ctx context.Context, req *ListBlockedInstrumentsReq) (*ListBlockedInstrumentsRsp, error) {
+	return nil, errors.New("rpc ListBlockedInstruments of service TradeConsoleService is not implemented")
+}
+func (s *UnimplementedTradeConsoleService) ListInstrumentHolders(ctx context.Context, req *ListInstrumentHoldersReq) (*ListInstrumentHoldersRsp, error) {
+	return nil, errors.New("rpc ListInstrumentHolders of service TradeConsoleService is not implemented")
+}
+func (s *UnimplementedTradeConsoleService) FlattenInstrument(ctx context.Context, req *FlattenInstrumentReq) (*FlattenInstrumentRsp, error) {
+	return nil, errors.New("rpc FlattenInstrument of service TradeConsoleService is not implemented")
+}
+func (s *UnimplementedTradeConsoleService) ReduceLogicalAccount(ctx context.Context, req *ReduceLogicalAccountReq) (*ReduceLogicalAccountRsp, error) {
+	return nil, errors.New("rpc ReduceLogicalAccount of service TradeConsoleService is not implemented")
+}
+func (s *UnimplementedTradeConsoleService) SummarizeAccountPnl(ctx context.Context, req *SummarizeAccountPnlReq) (*SummarizeAccountPnlRsp, error) {
+	return nil, errors.New("rpc SummarizeAccountPnl of service TradeConsoleService is not implemented")
+}
+func (s *UnimplementedTradeConsoleService) ListOperatorActions(ctx context.Context, req *ListOperatorActionsReq) (*ListOperatorActionsRsp, error) {
+	return nil, errors.New("rpc ListOperatorActions of service TradeConsoleService is not implemented")
+}
 
 // END --------------------------------- Default Unimplemented Server Service --------------------------------- END
 
@@ -1207,6 +1423,22 @@ type TradeConsoleServiceClientProxy interface {
 	ListAccountLedger(ctx context.Context, req *ListAccountLedgerReq, opts ...client.Option) (rsp *ListAccountLedgerRsp, err error)
 
 	FlattenTradingAccount(ctx context.Context, req *FlattenTradingAccountReq, opts ...client.Option) (rsp *FlattenTradingAccountRsp, err error)
+
+	BlockInstrument(ctx context.Context, req *BlockInstrumentReq, opts ...client.Option) (rsp *BlockInstrumentRsp, err error)
+
+	UnblockInstrument(ctx context.Context, req *UnblockInstrumentReq, opts ...client.Option) (rsp *UnblockInstrumentRsp, err error)
+
+	ListBlockedInstruments(ctx context.Context, req *ListBlockedInstrumentsReq, opts ...client.Option) (rsp *ListBlockedInstrumentsRsp, err error)
+
+	ListInstrumentHolders(ctx context.Context, req *ListInstrumentHoldersReq, opts ...client.Option) (rsp *ListInstrumentHoldersRsp, err error)
+
+	FlattenInstrument(ctx context.Context, req *FlattenInstrumentReq, opts ...client.Option) (rsp *FlattenInstrumentRsp, err error)
+
+	ReduceLogicalAccount(ctx context.Context, req *ReduceLogicalAccountReq, opts ...client.Option) (rsp *ReduceLogicalAccountRsp, err error)
+
+	SummarizeAccountPnl(ctx context.Context, req *SummarizeAccountPnlReq, opts ...client.Option) (rsp *SummarizeAccountPnlRsp, err error)
+
+	ListOperatorActions(ctx context.Context, req *ListOperatorActionsReq, opts ...client.Option) (rsp *ListOperatorActionsRsp, err error)
 }
 
 type TradeConsoleServiceClientProxyImpl struct {
@@ -2012,6 +2244,166 @@ func (c *TradeConsoleServiceClientProxyImpl) FlattenTradingAccount(ctx context.C
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &FlattenTradingAccountRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *TradeConsoleServiceClientProxyImpl) BlockInstrument(ctx context.Context, req *BlockInstrumentReq, opts ...client.Option) (*BlockInstrumentRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.trade.TradeConsoleService/BlockInstrument")
+	msg.WithCalleeServiceName(TradeConsoleServiceServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("trade")
+	msg.WithCalleeService("TradeConsoleService")
+	msg.WithCalleeMethod("BlockInstrument")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &BlockInstrumentRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *TradeConsoleServiceClientProxyImpl) UnblockInstrument(ctx context.Context, req *UnblockInstrumentReq, opts ...client.Option) (*UnblockInstrumentRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.trade.TradeConsoleService/UnblockInstrument")
+	msg.WithCalleeServiceName(TradeConsoleServiceServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("trade")
+	msg.WithCalleeService("TradeConsoleService")
+	msg.WithCalleeMethod("UnblockInstrument")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &UnblockInstrumentRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *TradeConsoleServiceClientProxyImpl) ListBlockedInstruments(ctx context.Context, req *ListBlockedInstrumentsReq, opts ...client.Option) (*ListBlockedInstrumentsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.trade.TradeConsoleService/ListBlockedInstruments")
+	msg.WithCalleeServiceName(TradeConsoleServiceServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("trade")
+	msg.WithCalleeService("TradeConsoleService")
+	msg.WithCalleeMethod("ListBlockedInstruments")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ListBlockedInstrumentsRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *TradeConsoleServiceClientProxyImpl) ListInstrumentHolders(ctx context.Context, req *ListInstrumentHoldersReq, opts ...client.Option) (*ListInstrumentHoldersRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.trade.TradeConsoleService/ListInstrumentHolders")
+	msg.WithCalleeServiceName(TradeConsoleServiceServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("trade")
+	msg.WithCalleeService("TradeConsoleService")
+	msg.WithCalleeMethod("ListInstrumentHolders")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ListInstrumentHoldersRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *TradeConsoleServiceClientProxyImpl) FlattenInstrument(ctx context.Context, req *FlattenInstrumentReq, opts ...client.Option) (*FlattenInstrumentRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.trade.TradeConsoleService/FlattenInstrument")
+	msg.WithCalleeServiceName(TradeConsoleServiceServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("trade")
+	msg.WithCalleeService("TradeConsoleService")
+	msg.WithCalleeMethod("FlattenInstrument")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &FlattenInstrumentRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *TradeConsoleServiceClientProxyImpl) ReduceLogicalAccount(ctx context.Context, req *ReduceLogicalAccountReq, opts ...client.Option) (*ReduceLogicalAccountRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.trade.TradeConsoleService/ReduceLogicalAccount")
+	msg.WithCalleeServiceName(TradeConsoleServiceServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("trade")
+	msg.WithCalleeService("TradeConsoleService")
+	msg.WithCalleeMethod("ReduceLogicalAccount")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ReduceLogicalAccountRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *TradeConsoleServiceClientProxyImpl) SummarizeAccountPnl(ctx context.Context, req *SummarizeAccountPnlReq, opts ...client.Option) (*SummarizeAccountPnlRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.trade.TradeConsoleService/SummarizeAccountPnl")
+	msg.WithCalleeServiceName(TradeConsoleServiceServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("trade")
+	msg.WithCalleeService("TradeConsoleService")
+	msg.WithCalleeMethod("SummarizeAccountPnl")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &SummarizeAccountPnlRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *TradeConsoleServiceClientProxyImpl) ListOperatorActions(ctx context.Context, req *ListOperatorActionsReq, opts ...client.Option) (*ListOperatorActionsRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.trade.TradeConsoleService/ListOperatorActions")
+	msg.WithCalleeServiceName(TradeConsoleServiceServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("trade")
+	msg.WithCalleeService("TradeConsoleService")
+	msg.WithCalleeMethod("ListOperatorActions")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ListOperatorActionsRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

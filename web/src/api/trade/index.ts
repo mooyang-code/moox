@@ -15,6 +15,7 @@ import type {
   InspectExchangeCredentialReq,
   LedgerEntry,
   ListAccountLedgerReq,
+  ListOperatorActionsReq,
   ListTradingAccountsReq,
   ListFillsReq,
   ListOrdersReq,
@@ -23,12 +24,15 @@ import type {
   LogicalAccountResponse,
   LogicalAccountTarget,
   OperatorAction,
+  OperatorActionType,
   Order,
   Page,
   PageResult,
   PlaceManualOrderReq,
   SubmitOrderReq,
   Position,
+  SummarizeAccountPnlReq,
+  SummarizeAccountPnlRsp,
   TradableInstrument,
   RetInfo,
   UpdateTradingAccountReq
@@ -283,6 +287,19 @@ export function listPositions(req: ListPositionsReq) {
   return callTrade<ListPositionsReq, { ret_info: RetInfo; positions: Position[] }>("console", "ListPositions", req);
 }
 
+/** 收益拆解：手续费、已实现盈亏按资产分别汇总，资金费从交易所即查，不折算 */
+export function summarizeAccountPnl(req: SummarizeAccountPnlReq) {
+  return callTrade<SummarizeAccountPnlReq, SummarizeAccountPnlRsp>("console", "SummarizeAccountPnl", req);
+}
+
+export function listOperatorActions(req: ListOperatorActionsReq) {
+  return callTrade<ListOperatorActionsReq, { ret_info: RetInfo; actions?: OperatorAction[]; page_result?: PageResult }>(
+    "console",
+    "ListOperatorActions",
+    req
+  );
+}
+
 export const exchangeLabels: Record<number, string> = { 0: "-", 1: "Binance", 2: "OKX" };
 export const marketTypeLabels: Record<number, string> = { 0: "-", 1: "现货", 2: "永续", 3: "股票" };
 export const orderSideLabels: Record<number, string> = { 0: "-", 1: "买入", 2: "卖出" };
@@ -311,6 +328,15 @@ export const actionStateLabels: Record<string, string> = {
   PARTIAL: "部分完成",
   FAILED: "失败"
 };
+/** 操作记录里的完整类型名；页头进度条另有一套短名（detail-model 的 actionTypeLabels） */
+export const operatorActionTypeLabels: Record<OperatorActionType, string> = {
+  MANUAL_ORDER: "人工下单",
+  SUBMIT_ORDER: "提交订单",
+  CANCEL_ORDER: "撤单",
+  FLATTEN: "整组清仓",
+  REDUCE: "按比例减仓",
+  DELIST_FLATTEN: "下架清仓"
+};
 export const targetStateLabels: Record<string, string> = {
   PENDING: "等待执行",
   CONVERGING: "收敛中",
@@ -326,7 +352,8 @@ export function canCancelOrderState(state: string): boolean {
 export const orderOwnerLabels: Record<string, string> = {
   TARGET: "策略",
   OPERATOR: "人工",
-  EXTERNAL: "外部"
+  EXTERNAL: "外部",
+  SYSTEM: "系统"
 };
 
 export function formatTimestamp(value?: string): string {

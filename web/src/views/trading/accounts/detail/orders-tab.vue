@@ -1,12 +1,14 @@
 <template>
   <SectionBlock title="订单" flush>
-    <!-- 来源筛选需要 ListOrders 增加 owner_type 参数，随 T29 一起做 -->
     <div class="toolbar">
       <a-radio-group v-model="range" type="button" @change="search">
         <a-radio v-for="item in recordRanges" :key="item.key" :value="item.key">{{ item.label }}</a-radio>
       </a-radio-group>
       <a-select v-model="state" allow-clear placeholder="订单状态" style="width: 150px" @change="search">
         <a-option v-for="(label, value) in orderStateLabels" :key="value" :value="value">{{ label }}</a-option>
+      </a-select>
+      <a-select v-model="ownerType" allow-clear placeholder="订单来源" style="width: 120px" @change="search">
+        <a-option v-for="(label, value) in orderOwnerLabels" :key="value" :value="value">{{ label }}</a-option>
       </a-select>
       <a-select
         v-if="memberOptions.length > 1"
@@ -81,7 +83,7 @@
             <StatusMark :tone="stateTone(record.state)">{{ orderStateLabels[record.state] || record.state }}</StatusMark>
           </template>
         </a-table-column>
-        <a-table-column title="来源" :width="70">
+        <a-table-column title="来源" :width="80">
           <template #cell="{ record }">{{ orderOwnerLabels[record.owner_type] || record.owner_type }}</template>
         </a-table-column>
         <a-table-column title="操作" :width="80" :fixed="isNarrow ? undefined : 'right'">
@@ -125,6 +127,7 @@ const isNarrow = computed(() => viewportWidth.value < 768);
 
 const range = ref<RecordRange>("7d");
 const state = ref<string>();
+const ownerType = ref<string>();
 const accountId = ref<string>();
 const symbol = ref("");
 const market = ref<MarketType>();
@@ -187,6 +190,7 @@ async function load() {
       trading_account_id: accountId.value,
       instrument_id: instrumentFilter(symbol.value, market.value, logical.value.settlement_asset),
       state: state.value,
+      owner_type: ownerType.value || undefined,
       ...rangeParams(range.value),
       page: { page: page.value, size: pageSize }
     });

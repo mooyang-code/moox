@@ -2,7 +2,7 @@
 
 管理台上的每个操作都有对应的 `moox-cli` 专用命令（下面按页面列出）。专用命令把参数映射到请求字段，帮你省去拼 JSON，并对破坏性操作默认只预览。
 只有底层接口（Storage 数据面）没有专用命令，才用 `moox-cli gateway call` 直接调用内部服务（见文末）。
-交易模块尚未完工：只能查询，不代用户创建账户、下单或清仓。
+交易模块尚未完工：只能查询，不代用户创建账户、下单、清仓、减仓或解除下架禁止。
 
 ## 通用约定
 
@@ -30,7 +30,7 @@
 | 因子 › 因子定义 | 定义、分类、校验与试算 | `factor list|show|create|update|delete|validate|preview|functions`、`factor category list|upsert|delete|assign` |
 | 因子 › 计算任务 | 任务、成员、补算、状态 | `factor task list|show|create|enable|disable|delete|params`、`factor member add|remove|enable|disable`、`factor recalc submit|list|show|cancel`、`factor status`；阶段 `lifecycle …`；自定义算子 `udf …` |
 | 策略 | 定义、实例、结果、回放、模板 | `strategy list|show|validate|create|update|delete`、`strategy instance list|show|create|update|enable|disable`、`strategy result list|show`、`strategy target list`、`strategy replay start|list|show|bars|cancel`、`strategy template list|show|save|delete|render`、`strategy display get|set` |
-| 交易（只读） | 账户、订单、成交、持仓、权益 | `trade account list|show`、`trade logical list|show|target`、`trade order list|show`、`trade fills|positions|holdings|equity|capabilities|action` |
+| 交易（只读） | 账户、订单、成交、持仓、权益、收益拆解、操作记录、下架名单与持有者 | `trade account list|show`、`trade logical list|show|target`、`trade order list|show`、`trade fills|positions|holdings|equity|capabilities|action|actions|pnl|holders`、`trade blocked list` |
 | 运维 › 监控 | 总览、到达历史、主机资源、告警屏蔽 | `monitor health|arrival|hosts|host-metrics|mute|unmute|mute-status`、`doctor alerts`、`eventbus overview|streams|consumers|consumer|events` |
 | 运维 › 主机、部署 | 查询；增删启停只走 setup | `host list|deployments|routes|catalog|directory`、`host agent status|snapshot|run-once --host`、`setup hosts|host|deployment|remove-host|sync-deployments …` |
 | 运维 › 存储节点 | 登记查询与修改 | `storage node list|show|update|delete` |

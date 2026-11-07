@@ -199,6 +199,13 @@ message FundSettings {
   // 保证金币及配置的固定 U 值
   map<string, string> margin_coins = 7;
   repeated string arbitrage_base_assets = 8;
+  // 保证金率监控（只对实盘账户生效）。普通账户：合约钱包权益 ÷ 合约持仓名义不高于 margin_ratio_threshold 时触发，空表示默认 0.5；
+  // 统一账户：uniMMR 低于 unified_mmr_threshold 时触发，空表示默认 1.5。触发后暂停组合并按 margin_reduce_ratio（空表示默认 0.1）减仓。
+  string margin_ratio_threshold = 9;
+  string unified_mmr_threshold = 10;
+  string margin_reduce_ratio = 11;
+  // 为 true 时不做保证金率监控。
+  bool margin_monitor_disabled = 12;
 }
 
 message Order {
@@ -722,6 +729,8 @@ message ListOrdersReq {
   int64 start_time = 6;
   int64 end_time = 7;
   common.Page page = 8;
+  // 按订单来源过滤：TARGET（策略目标）、OPERATOR（人工操作）、EXTERNAL（外部）、SYSTEM（BNB 补买、稳定币调平）；空表示全部。
+  string owner_type = 9;
 }
 message ListOrdersRsp {
   common.RetInfo ret_info = 1;
@@ -912,6 +921,14 @@ service TradeConsoleService {
   rpc ListHoldings(ListHoldingsReq) returns (ListHoldingsRsp);
   rpc ListAccountLedger(ListAccountLedgerReq) returns (ListAccountLedgerRsp);
   rpc FlattenTradingAccount(FlattenTradingAccountReq) returns (FlattenTradingAccountRsp);
+  rpc BlockInstrument(BlockInstrumentReq) returns (BlockInstrumentRsp);
+  rpc UnblockInstrument(UnblockInstrumentReq) returns (UnblockInstrumentRsp);
+  rpc ListBlockedInstruments(ListBlockedInstrumentsReq) returns (ListBlockedInstrumentsRsp);
+  rpc ListInstrumentHolders(ListInstrumentHoldersReq) returns (ListInstrumentHoldersRsp);
+  rpc FlattenInstrument(FlattenInstrumentReq) returns (FlattenInstrumentRsp);
+  rpc ReduceLogicalAccount(ReduceLogicalAccountReq) returns (ReduceLogicalAccountRsp);
+  rpc SummarizeAccountPnl(SummarizeAccountPnlReq) returns (SummarizeAccountPnlRsp);
+  rpc ListOperatorActions(ListOperatorActionsReq) returns (ListOperatorActionsRsp);
 }
 
 // 资金流水：手续费、资金费、已实现盈亏、划转等，从交易所即查即用，按时间倒序。
@@ -946,4 +963,173 @@ message ListAccountLedgerRsp {
   repeated LedgerEntry entries = 2;
   // 时间窗内还有更早的记录没取到。
   bool has_more = 3;
+}
+
+// ===== 下架名单与下架清仓（交易计划 4.7，供事件中心调用） =====
+// 下面的接口都用（交易所、市场、交易所代码）定位标的，由 Trade 换算内部标的 ID。
+// 名单的三个接口和 ListInstrumentHolders 是全局的，不分空间，Trade 不检查空间头。
+
+// 写入下架名单。名单标的“只减不增”：还能交易时目标里加仓的部分被截掉、减仓照常，不能交易时整项跳过。
+message BlockInstrumentReq {
+  Exchange exchange = 1;
+  // 只收 MARKET_TYPE_SPOT、MARKET_TYPE_SWAP。
+  MarketType market_type = 2;
+  string exchange_symbol = 3;
+  string reason = 4;
+  // 来源事件 ID，只用于审计。
+  string event_id = 5;
+}
+message BlockInstrumentRsp {
+  common.RetInfo ret_info = 1;
+  // true 表示 Trade 无此标的（用户没开通对应市场的账户）：照常写入名单，不算失败。
+  bool instrument_unknown = 2;
+  // false 表示标的已经在名单里，没有改动。
+  bool created = 3;
+}
+
+message UnblockInstrumentReq {
+  Exchange exchange = 1;
+  MarketType market_type = 2;
+  string exchange_symbol = 3;
+}
+message UnblockInstrumentRsp {
+  common.RetInfo ret_info = 1;
+  // false 表示标的本来就不在名单里。
+  bool removed = 2;
+}
+
+message BlockedInstrument {
+  Exchange exchange = 1;
+  MarketType market_type = 2;
+  string exchange_symbol = 3;
+  // 写入时能从标的表查到的内部标的 ID 和基础资产，只用于展示和审计，查不到为空。
+  string instrument_id = 4;
+  string base_asset = 5;
+  string reason = 6;
+  string source_event_id = 7;
+  int64 blocked_at = 8;
+}
+message ListBlockedInstrumentsReq {}
+message ListBlockedInstrumentsRsp {
+  common.RetInfo ret_info = 1;
+  repeated BlockedInstrument instruments = 2;
+}
+
+// 策略持有某个标的的一个执行账户（每个执行账户一行，调用方按空间和组合聚合）。
+message InstrumentHolder {
+  string space_id = 1;
+  string logical_account_id = 2;
+  string trading_account_id = 3;
+  // 持有数量，保留原精度：现货是余额，永续是带符号的持仓。
+  string quantity = 4;
+  // 零头：低于交易所最小数量，下不了单，清仓也不会处理。
+  bool dust = 5;
+  // 模拟盘。
+  bool paper = 6;
+  // 执行账户状态：ENABLED、DISABLED、ERROR。停用和出错的账户照常列出（最需要人工处理），由调用方按状态决定怎么处理。
+  string status = 7;
+  // 对这一项的标注，例如“取不到报价，零头只按最小数量判断”；没有则为空。
+  string note = 8;
+}
+message SkippedAccount {
+  string trading_account_id = 1;
+  string reason = 2;
+}
+message ListInstrumentHoldersReq {
+  Exchange exchange = 1;
+  MarketType market_type = 2;
+  string exchange_symbol = 3;
+  // true 时只返回模拟盘。
+  bool paper_only = 4;
+}
+message ListInstrumentHoldersRsp {
+  common.RetInfo ret_info = 1;
+  // 没有持有者时是空数组（不会省略）。holders 为空且 instrument_unknown 为 false，表示确认没有策略持有。
+  repeated InstrumentHolder holders = 2;
+  // true 表示 Trade 无此标的，这时 holders 为空，不算失败。
+  bool instrument_unknown = 3;
+  // 查询时出错、没能判断的账户（资金设置读不出来、读受管资产出错等）：不能当作没有持有，调用方要提示人工确认。
+  repeated SkippedAccount skipped_accounts = 4;
+  // 明确不算持有的说明，例如标的的计价币不是账户的结算币（清仓不会卖它）。
+  repeated string notes = 5;
+}
+
+// 在调用时带的空间里，对组合中属于这个交易所的成员发起单标的下架清仓（DELIST_FLATTEN）：不暂停组合，只看这一个标的。
+// 同一个 action_id 要求组合、标的、reason 完全一致；已完成的直接返回旧结果；FAILED、PARTIAL 用同一个号再调会重新执行。
+message FlattenInstrumentReq {
+  string action_id = 1;
+  string logical_account_id = 2;
+  Exchange exchange = 3;
+  MarketType market_type = 4;
+  string exchange_symbol = 5;
+  string reason = 6;
+}
+message FlattenInstrumentRsp {
+  common.RetInfo ret_info = 1;
+  OperatorAction action = 2;
+  // true 表示 Trade 暂时忙（同组合有整组清仓、减仓在跑，或拿不到组合锁），稍后再试，不计入重试次数；此时 ret_info 是 CONFLICT。
+  bool busy = 3;
+  // true 表示标的已被解除禁止而提前结束，动作记 COMPLETED，不要重试（结果 JSON 顶层也带 unblocked）。
+  bool unblocked = 4;
+}
+
+// 按比例减仓（REDUCE）：先暂停组合、撤全部订单，再把现货和合约同比例减掉；每个持仓的目标数量发起时写定，重试不会再减一次。
+message ReduceLogicalAccountReq {
+  string action_id = 1;
+  string logical_account_id = 2;
+  // 大于 0 小于 1 的比例，例如 0.1。
+  string reduce_ratio = 3;
+  string reason = 4;
+}
+message ReduceLogicalAccountRsp {
+  common.RetInfo ret_info = 1;
+  OperatorAction action = 2;
+}
+
+// ===== 收益拆解与人工操作记录 =====
+
+message PnlAmount {
+  string asset = 1;
+  string amount = 2;
+}
+
+// 收益拆解：手续费和已实现盈亏从成交表汇总，资金费从交易所流水即查。
+message SummarizeAccountPnlReq {
+  string logical_account_id = 1;
+  // 只看组合里的一个执行账户。
+  string trading_account_id = 2;
+  // 毫秒时间戳；不传时默认近 7 天，时间范围最长 90 天。
+  int64 start_time = 3;
+  int64 end_time = 4;
+}
+message SummarizeAccountPnlRsp {
+  common.RetInfo ret_info = 1;
+  // 手续费，按手续费资产分别汇总（不折算），费用为正数。
+  repeated PnlAmount fees = 2;
+  // 已实现盈亏，按结算资产汇总。
+  repeated PnlAmount realized_pnl = 3;
+  // 资金费，按结算资产汇总，收到为正、支付为负。
+  repeated PnlAmount funding_fees = 4;
+  int64 fill_count = 5;
+  // 资金费是否取到了：模拟盘、现货账户或交易所不支持流水时为 false，funding_note 说明原因。
+  bool funding_available = 6;
+  // 资金费流水翻页没取完，或有账户的流水查不了：汇总只是一部分。
+  bool funding_truncated = 7;
+  string funding_note = 8;
+  // 资金费实际统计的起点（毫秒时间戳）。
+  int64 funding_from = 9;
+}
+
+message ListOperatorActionsReq {
+  string logical_account_id = 1;
+  // 按动作类型过滤：MANUAL_ORDER、SUBMIT_ORDER、CANCEL_ORDER、FLATTEN、REDUCE、DELIST_FLATTEN；空表示全部。
+  string action_type = 2;
+  int64 start_time = 3;
+  int64 end_time = 4;
+  common.Page page = 5;
+}
+message ListOperatorActionsRsp {
+  common.RetInfo ret_info = 1;
+  repeated OperatorAction actions = 2;
+  common.PageResult page_result = 3;
 }

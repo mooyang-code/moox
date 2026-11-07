@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -97,4 +98,28 @@ func TestAttentionFundsShortageIsDerivedFromCurrentTargetState(t *testing.T) {
 	items := map[string][]string{}
 	require.NoError(t, worker.noteTarget(context.Background(), logical, target, now, items, map[string]time.Time{}))
 	require.Empty(t, items[telemetry.AttentionTransferShortfall])
+}
+
+// 保证金率风控暂停的组合：只要暂停原因还在（用户没确认恢复）就持续上报 margin_ratio_low，详情是固定文字；
+// 不依赖带时间窗口的记录，过了窗口告警也不会丢。别的自动暂停原因不算。
+func TestAttentionReportsMarginPauseUntilTheUserResumes(t *testing.T) {
+	tradeStore, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tradeStore.Close() })
+	worker := &AttentionWorker{Store: tradeStore, blockedSince: map[string]time.Time{}}
+	scan := func(reason string) map[string][]string {
+		items := map[string][]string{}
+		logical := store.LogicalAccountRecord{SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "实盘组合", PauseReason: reason}
+		require.NoError(t, worker.scanLogicalAccount(context.Background(), logical, time.Now(), items, map[string]time.Time{}))
+		return items
+	}
+
+	items := scan(store.MarginPauseReason())
+	require.Equal(t, []string{"实盘组合：保证金率风控已暂停，等待确认后恢复"}, items[telemetry.AttentionMarginRatioLow])
+	require.Len(t, items[telemetry.AttentionAutoPaused], 1, "同时仍是自动暂停")
+	require.NotContains(t, items[telemetry.AttentionAutoPaused][0], "0.")
+
+	require.Empty(t, scan(store.AutoPauseReason("发现外部订单"))[telemetry.AttentionMarginRatioLow])
+	require.Empty(t, scan("人工暂停")[telemetry.AttentionMarginRatioLow])
+	require.Empty(t, scan("")[telemetry.AttentionMarginRatioLow], "恢复之后告警消失")
 }

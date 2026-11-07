@@ -825,11 +825,13 @@ type OrderQuery struct {
 	Market         string
 	ExchangeSymbol string
 	State          string
-	OnlyOpen       bool
-	StartTime      int64
-	EndTime        int64
-	Offset         int
-	Limit          int
+	// OwnerType 按订单来源过滤：TARGET、OPERATOR、EXTERNAL、SYSTEM；为空不过滤。
+	OwnerType string
+	OnlyOpen  bool
+	StartTime int64
+	EndTime   int64
+	Offset    int
+	Limit     int
 }
 
 func (s *Store) ListOrders(
@@ -859,6 +861,9 @@ func (s *Store) ListOrders(
 	}
 	if query.State != "" {
 		db = db.Where("c_state = ?", query.State)
+	}
+	if query.OwnerType != "" {
+		db = db.Where("c_owner_type = ?", query.OwnerType)
 	}
 	if query.OnlyOpen {
 		db = db.Where("c_state IN ?", activeOrderStates)

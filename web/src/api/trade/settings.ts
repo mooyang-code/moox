@@ -38,6 +38,15 @@ export interface FundSettings {
   /** 保证金币及配置的固定 U 值 */
   margin_coins?: Record<string, string>;
   arbitrage_base_assets?: string[];
+  // 以下四项是保证金率监控，只对实盘账户生效（不分交易所）；阈值是字符串小数，空表示用默认值
+  /** 普通账户：合约钱包权益 ÷ 合约持仓名义不高于它时触发，默认 0.5，范围 (0, 10] */
+  margin_ratio_threshold?: string;
+  /** 统一账户：uniMMR 低于它时触发，默认 1.5，范围 (1, 100] */
+  unified_mmr_threshold?: string;
+  /** 触发后每个持仓减掉的比例，默认 0.1，范围 (0, 1) */
+  margin_reduce_ratio?: string;
+  /** true 表示不监控 */
+  margin_monitor_disabled?: boolean;
 }
 
 /** 带当前生效设置的组合账户（Trade 在 LogicalAccount 里只读返回两组设置，父组件取到后传给设置表单）。 */

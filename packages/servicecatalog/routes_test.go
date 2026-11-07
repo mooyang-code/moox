@@ -112,7 +112,7 @@ func TestCompileThreeHostRoutesAndVerificationScopes(t *testing.T) {
 	}{
 		"control":  {196, []string{"access", "admin", "cloudfunction", "collector", "collector-stream", "console", "host-agent", "host-gateway@control", "host-gateway@overseas", "host-gateway@storage", "monitor", "moox-cli", "storage-view", "strategy", "trade"}, "f9953f6dbc45d74dc4c9be3f4f25cc06ab56e42b03b1da7633a46bd32db46a06"},
 		"storage":  {80, []string{"access", "archive-mgr", "collector", "collector-stream", "console", "factor-mgr", "monitor", "moox-cli", "strategy"}, "d8cbc0c0358eb28b304be9024ad5b6bb269f5589e2f67b019e8243fb482968b3"},
-		"overseas": {58, []string{"collector", "console", "monitor", "moox-cli", "strategy"}, "600758e131513df757d2be8edfcd67e2d00a5999d2a46c9344049873ec7c3b26"},
+		"overseas": {66, []string{"callback-dispatcher", "collector", "console", "monitor", "moox-cli", "strategy"}, "e93196a5b5ecb194054892feae7e2c22d6296e3a9c3e66ac40cc90044ca24a43"},
 	}
 	for _, host := range p.Hosts {
 		compiled, err := c.Compile(p, host.ID)
@@ -376,7 +376,7 @@ func TestOutboundHostCompilesRelayAllowlist(t *testing.T) {
 		t.Fatalf("relays = %+v", control.Relays)
 	}
 	relay := control.Relays[0]
-	if relay.Ports[0].Port != HostGatewayRemotePort || !slices.Equal(relay.Ports[0].Callers, []string{"collector", "console", "monitor", "moox-cli", "strategy"}) {
+	if relay.Ports[0].Port != HostGatewayRemotePort || !slices.Equal(relay.Ports[0].Callers, []string{"callback-dispatcher", "collector", "console", "monitor", "moox-cli", "strategy"}) {
 		t.Fatalf("gateway port = %+v", relay.Ports[0])
 	}
 	if !relay.Allowed("monitor", HostGatewayRemotePort) || relay.Allowed("admin", HostGatewayRemotePort) || relay.Allowed("monitor", 1) {

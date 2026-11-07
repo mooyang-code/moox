@@ -88,7 +88,15 @@ describe("Trade public API", () => {
     // 后端常量：target/executor.go 的 Status*，operator 的 Action 状态。
     expect(Object.keys(trade.targetStateLabels).sort()).toEqual(["BLOCKED", "CONVERGED", "CONVERGING", "EXPIRED", "PENDING"]);
     expect(Object.keys(trade.actionStateLabels).sort()).toEqual(["COMPLETED", "FAILED", "PARTIAL", "RUNNING"]);
-    expect(Object.keys(trade.orderOwnerLabels).sort()).toEqual(["EXTERNAL", "OPERATOR", "TARGET"]);
+    expect(Object.keys(trade.orderOwnerLabels).sort()).toEqual(["EXTERNAL", "OPERATOR", "SYSTEM", "TARGET"]);
+    expect(Object.keys(trade.operatorActionTypeLabels).sort()).toEqual([
+      "CANCEL_ORDER",
+      "DELIST_FLATTEN",
+      "FLATTEN",
+      "MANUAL_ORDER",
+      "REDUCE",
+      "SUBMIT_ORDER"
+    ]);
   });
 
   it("撤单中和撤单状态未知可以重试确认", () => {
@@ -191,5 +199,30 @@ describe("Trade public API", () => {
         updated_at: "2"
       })?.accounts[0].remaining_positions?.[0].quantity
     ).toBe("0.1");
+  });
+
+  it("管理台不暴露只给事件中心用的写入接口", () => {
+    expect(trade).not.toHaveProperty("blockInstrument");
+    expect(trade).not.toHaveProperty("flattenInstrument");
+  });
+
+  it("收益拆解、操作记录和按来源筛选订单的请求原样透传", async () => {
+    const pnl = { logical_account_id: "logical-1", start_time: "1000", end_time: "2000" };
+    await trade.summarizeAccountPnl(pnl);
+    expect(callTrade).toHaveBeenLastCalledWith("console", "SummarizeAccountPnl", pnl);
+
+    const actions = {
+      logical_account_id: "logical-1",
+      action_type: "REDUCE" as const,
+      page: { page: 2, size: 10 }
+    };
+    await trade.listOperatorActions(actions);
+    expect(callTrade).toHaveBeenLastCalledWith("console", "ListOperatorActions", actions);
+
+    await trade.listOrders({ logical_account_id: "logical-1", owner_type: "SYSTEM" });
+    expect(callTrade).toHaveBeenLastCalledWith("console", "ListOrders", {
+      logical_account_id: "logical-1",
+      owner_type: "SYSTEM"
+    });
   });
 });

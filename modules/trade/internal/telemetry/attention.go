@@ -31,13 +31,15 @@ const (
 	AttentionTransferShortfall = "transfer_shortfall"
 	// AttentionTransferFailing 是钱包划转、归集出了问题：连续失败、查询持续失败、未结划转迟迟没确认。
 	AttentionTransferFailing = "transfer_failing"
+	// AttentionMarginRatioLow 是实盘账户保证金率跌到阈值以下，风控已暂停组合并减仓，等用户确认安全后手动恢复。
+	AttentionMarginRatioLow = "margin_ratio_low"
 )
 
 // attentionKinds 里每种情况都要上报，恢复后 Monitor 才能看到值回到 0。
 var attentionKinds = []string{
 	AttentionTargetRejected, AttentionAutoPaused, AttentionTargetBlocked,
 	AttentionAccountNotReady, AttentionTargetExpired, AttentionTargetReversal,
-	AttentionRateLimited, AttentionTurnoverHigh, AttentionUnknownResults,
+	AttentionRateLimited, AttentionTurnoverHigh, AttentionUnknownResults, AttentionMarginRatioLow,
 	AttentionInspectionBlocked, AttentionInspectionFailing, AttentionTransferShortfall, AttentionTransferFailing,
 }
 

@@ -9,6 +9,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/application/exposure"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/fundsettings"
 	operatordomain "github.com/mooyang-code/moox/modules/trade/internal/domain/operator"
+	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
@@ -44,6 +45,9 @@ func (c FlattenCommand) validateScope() error {
 	}
 	if c.reducing() && strings.TrimSpace(c.InstrumentID) != "" {
 		return fmt.Errorf("%w: 减仓比例和单个标的不能同时给", ErrInvalidCommand)
+	}
+	if strings.TrimSpace(c.Exchange) != "" && strings.TrimSpace(c.InstrumentID) == "" {
+		return fmt.Errorf("%w: 指定交易所时必须同时指定标的", ErrInvalidCommand)
 	}
 	return nil
 }
@@ -94,6 +98,9 @@ type flattenScope struct {
 	ensureTargets func(ctx context.Context, tradingAccountID string, settings fundsettings.Settings) error
 	// settings 是这个账户这一轮读到的资金设置（flattenAccount 读一次，平仓、剩余统计、减仓目标共用）。
 	settings fundsettings.Settings
+	// stillBlocked 只用于下架清仓：报告标的是否仍在下架名单里。解除禁止（多半是误报被取消）后清仓必须停下，
+	// 否则执行器恢复买入、清仓继续卖，会来回成交。
+	stillBlocked func(ctx context.Context, tradingAccountID string) (bool, error)
 }
 
 // narrow 报告范围是否被收窄：只平一个标的，或减仓（只处理登记过的持仓）。收窄时范围外的资产和持仓一律跳过。
@@ -251,4 +258,84 @@ func (s *Service) requireInstrumentInMembers(ctx context.Context, command Flatte
 		}
 	}
 	return fmt.Errorf("%w: 标的 %s 在所有成员的标的表里都解析不到", ErrInvalidCommand, instrumentID)
+}
+
+// delistStillBlocked 报告下架清仓的标的在这个账户的交易所上是否仍在下架名单里。
+// 账户的标的表里没有这个标的时，没有东西可平，按“仍在名单里”处理，由后面的流程自然结束。
+func (s *Service) delistStillBlocked(ctx context.Context, spaceID, tradingAccountID, instrumentID string) (bool, error) {
+	account, err := s.Store.GetTradingAccountByID(ctx, tradingAccountID)
+	if err != nil {
+		return false, err
+	}
+	instrument, err := s.Store.GetInstrumentByIDForAccount(ctx, spaceID, tradingAccountID, instrumentID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	blocked, err := s.Store.LoadBlockedSet(ctx)
+	if err != nil {
+		return false, err
+	}
+	return blocked.ContainsInstrument(account.Exchange, instrument), nil
+}
+
+// stopIfUnblocked 在下架清仓的每一轮开头先查名单：已经解除禁止就撤掉本动作的订单，撤单之后同步并确认它们都结束了，
+// 账户才记 COMPLETED 并带“已解除禁止”标记（不记 FAILED 或 PARTIAL，免得事件中心按规则重试）。
+// 撤单还没确认结束时这个账户这一轮到此为止（记运行中、可重试），下一轮接着确认：不能返回去继续下单，
+// 也不能把还没结束的订单留给执行器（它会把这笔 OPERATOR 单当冲突、暂停组合）。
+// 查名单失败时不停（按仍在名单里继续），错误留给后面的步骤；返回 true 表示这个账户这一轮不再往下做。
+func (s *Service) stopIfUnblocked(
+	ctx context.Context,
+	command FlattenCommand,
+	scope flattenScope,
+	tradingAccountID string,
+	result *FlattenAccountResult,
+) bool {
+	if scope.stillBlocked == nil {
+		return false
+	}
+	blocked, err := scope.stillBlocked(ctx, tradingAccountID)
+	if err != nil || blocked {
+		return false
+	}
+	canceled, err := s.cancelOwnOrders(ctx, command.SpaceID, tradingAccountID, command.ActionID, result)
+	if err == nil {
+		err = s.syncAfterCancel(ctx, tradingAccountID, canceled)
+	}
+	if err == nil {
+		err = s.confirmFlattenChildren(ctx, command, tradingAccountID, result)
+	}
+	if err != nil {
+		result.Status, result.decided, result.retry = "RUNNING", true, true
+		// 只是还没做完：写进说明，不当作这次调用的错误（cause 留空）。
+		result.Error, result.cause = "已解除禁止，撤单还没确认结束，下一轮继续："+err.Error(), nil
+		return true
+	}
+	result.Status, result.Error, result.cause = "COMPLETED", "", nil
+	result.Unblocked, result.decided, result.retry = true, true, false
+	return true
+}
+
+// cancelOwnOrders 撤掉本动作自己下的、还没结束的订单，返回是否撤了单。
+func (s *Service) cancelOwnOrders(ctx context.Context, spaceID, tradingAccountID, actionID string, result *FlattenAccountResult) (bool, error) {
+	records, err := s.Store.ListActiveOrdersForAccount(ctx, spaceID, tradingAccountID)
+	if err != nil {
+		return false, err
+	}
+	canceled := false
+	var cancelErrors []error
+	for _, current := range records {
+		if orderdomain.State(current.State).Terminal() ||
+			current.OwnerType != string(orderdomain.OwnerOperator) || current.OwnerID != actionID {
+			continue
+		}
+		canceled = true
+		result.ChildOrderIDs = appendUnique(result.ChildOrderIDs, current.OrderID)
+		if err := s.stopOrder(ctx, current); err != nil {
+			cancelErrors = append(cancelErrors, fmt.Errorf("cancel order %s: %w", current.OrderID, err))
+		}
+	}
+	return canceled, errors.Join(cancelErrors...)
 }

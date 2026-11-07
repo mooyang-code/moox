@@ -133,4 +133,6 @@ var consoleOnly = map[string]string{
 	"trpc.moox.trade.TradeConsoleService/CancelOrder":                       tradeWriteReason,
 	"trpc.moox.trade.TradeConsoleService/CreatePaperSimulation":             tradeWriteReason,
 	"trpc.moox.trade.TradeConsoleService/ClosePaperSimulation":              tradeWriteReason,
+	"trpc.moox.trade.TradeConsoleService/ReduceLogicalAccount":              tradeWriteReason,
+	"trpc.moox.trade.TradeConsoleService/UnblockInstrument":                 "解除下架禁止只由事件中心的取消执行或管理台操作：解除后策略会恢复买入，Agent 不代用户解除",
 }

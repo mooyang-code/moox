@@ -144,6 +144,11 @@ func (w *AttentionWorker) scanLogicalAccount(
 	if store.IsAutoPauseReason(logical.PauseReason) {
 		items[telemetry.AttentionAutoPaused] = append(items[telemetry.AttentionAutoPaused], logical.Name+"："+logical.PauseReason)
 	}
+	// 保证金率风控暂停的组合在用户确认恢复之前一直上报，按库里的状态推出（不用带时间窗口的记录，窗口过了告警就丢了）；
+	// 详情是固定文字，不带比值，不会每次触发产生新的指标序列。
+	if store.IsMarginPauseReason(logical.PauseReason) {
+		items[telemetry.AttentionMarginRatioLow] = append(items[telemetry.AttentionMarginRatioLow], logical.Name+"：保证金率风控已暂停，等待确认后恢复")
+	}
 	// 换手检查出错只记日志，不能挡住后面的过期、被挡检查。
 	if high, err := w.turnoverHigh(ctx, logical, now); err != nil {
 		log.WarnContextf(ctx, "交易关注项：组合 %s 换手检查失败：%v", logical.LogicalAccountID, err)
