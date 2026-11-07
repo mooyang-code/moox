@@ -604,6 +604,8 @@ func (s *segmentReader) load(ctx context.Context, segment []input.PeriodBoundari
 		readFrom = segment[0].PreviousStart
 	}
 	revisionRereads := 0
+	// 各市场都读完（成功或失败）就丢掉暂存的原始行：求值期间不再多占一份。
+	defer s.memo.Reset()
 reload:
 	for {
 		s.memo.Reset()

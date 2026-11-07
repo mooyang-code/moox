@@ -312,3 +312,43 @@ func TestCheckCoverageUnifiedRequiresHistoryPerMarket(t *testing.T) {
 		t.Fatalf("两个市场历史都够应放行：%v", err)
 	}
 }
+
+// 暂存的键含标的内容：个数相同、标的不同的两次读取不能共用一次结果。
+func TestRowsMemoKeyDistinguishesSubjects(t *testing.T) {
+	client := newUnifiedClient()
+	view := client.views["view_factor_1h"]
+	client.rows = func(query Query) ([]Row, uint64, error) {
+		var rows []Row
+		for _, subject := range query.Subjects {
+			rows = append(rows, Row{SubjectID: subject.SubjectID, SeriesTag: spotTag, DataTime: barStart, Values: map[string]float64{"ma_20": 1}})
+		}
+		return rows, 1, nil
+	}
+	memo := &RowsMemo{}
+	load := func(ids ...string) RangeRows {
+		subjects := make([]Subject, 0, len(ids))
+		for _, id := range ids {
+			subjects = append(subjects, Subject{SubjectID: id})
+		}
+		rows, err := (&RangeLoader{Client: client, SpaceID: "space", View: view, Subjects: subjects, Market: "spot", Memo: memo}).Load(context.Background(), barStart, barStart.Add(time.Hour))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rows
+	}
+	first, same, other := load("BTC-USDT", "ETH-USDT"), load("BTC-USDT", "ETH-USDT"), load("BTC-USDT", "SOL-USDT")
+	if len(client.queries) != 2 {
+		t.Fatalf("相同的读取共用一次、不同的标的各读一次：%d 次", len(client.queries))
+	}
+	if len(first.Bars[barStart.Unix()]) != 2 || len(same.Bars[barStart.Unix()]) != 2 {
+		t.Fatalf("共用的读取结果不符：%+v", same.Bars)
+	}
+	if _, ok := other.Bars[barStart.Unix()]["SOL-USDT"]; !ok {
+		t.Fatalf("标的不同的读取要读自己的：%+v", other.Bars)
+	}
+	memo.Reset()
+	load("BTC-USDT", "ETH-USDT")
+	if len(client.queries) != 3 {
+		t.Fatalf("Reset 之后要重新读：%d 次", len(client.queries))
+	}
+}

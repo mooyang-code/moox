@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"math/rand/v2"
 	"strings"
 	"time"
@@ -383,9 +384,21 @@ func (l *RangeLoader) Load(ctx context.Context, start, end time.Time) (RangeRows
 	}
 }
 
+// subjectsKey 是标的（含 series_tag，顺序有关）内容的摘要，作暂存的键：只比个数会把标的不同的两次读取当成同一次。
+func subjectsKey(subjects []Subject) string {
+	hash := fnv.New64a()
+	for _, subject := range subjects {
+		_, _ = hash.Write([]byte(subject.SubjectID))
+		_, _ = hash.Write([]byte{0})
+		_, _ = hash.Write([]byte(subject.SeriesTag))
+		_, _ = hash.Write([]byte{1})
+	}
+	return fmt.Sprintf("%d:%x", len(subjects), hash.Sum64())
+}
+
 // queryRows 读一段原始行；有 Memo 时同样的读取只发一次。
 func (l *RangeLoader) queryRows(ctx context.Context, start, end time.Time) ([]Row, uint64, error) {
-	key := fmt.Sprintf("%s|%s|%d|%d|%d|%d|%s", l.View.ViewID, l.View.ActiveIndexID, start.UnixNano(), end.UnixNano(), l.ExpectedRevision, len(l.Subjects), strings.Join(l.Columns, ","))
+	key := fmt.Sprintf("%s|%s|%d|%d|%d|%s|%s", l.View.ViewID, l.View.ActiveIndexID, start.UnixNano(), end.UnixNano(), l.ExpectedRevision, subjectsKey(l.Subjects), strings.Join(l.Columns, ","))
 	if l.Memo != nil {
 		if entry, ok := l.Memo.entries[key]; ok {
 			return entry.rows, entry.revision, nil
