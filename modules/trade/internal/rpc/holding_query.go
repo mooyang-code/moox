@@ -27,7 +27,7 @@ type HoldingQuery struct {
 
 func (q *HoldingQuery) List(ctx context.Context, spaceID, accountID string) ([]holdingapp.Holding, error) {
 	if q == nil || q.Store == nil || q.Adapters == nil {
-		return nil, fmt.Errorf("holding query: service is not configured")
+		return nil, fmt.Errorf("持有者查询服务未配置")
 	}
 	account, err := q.Store.GetTradingAccount(ctx, spaceID, accountID)
 	if err != nil {

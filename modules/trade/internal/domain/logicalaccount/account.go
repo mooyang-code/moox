@@ -9,13 +9,13 @@ import (
 )
 
 var (
-	ErrInvalidAccount   = errors.New("trade: invalid logical account")
-	ErrMembershipChange = errors.New("trade: logical account membership change requires pause")
-	ErrInhomogeneous    = errors.New("trade: logical account members must be homogeneous")
+	ErrInvalidAccount   = errors.New("组合账户参数不合法")
+	ErrMembershipChange = errors.New("修改组合成员前要先暂停组合")
+	ErrInhomogeneous    = errors.New("组合成员必须同为实盘或同为模拟盘、同一环境、同一结算资产")
 	// ErrMemberElsewhere：一个执行账户最多属于一个组合账户，换组合要先从原组合移除。
 	ErrMemberElsewhere = errors.New("执行账户已属于其他组合账户，先从该组合移除")
-	ErrRunnerOwnership = errors.New("trade: logical account runner ownership conflict")
-	ErrAutomationState = errors.New("trade: invalid logical account automation state")
+	ErrRunnerOwnership = errors.New("组合账户已被别的策略会话占用")
+	ErrAutomationState = errors.New("组合账户的自动执行状态不合法")
 )
 
 type AutomationState string

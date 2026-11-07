@@ -18,7 +18,7 @@ import (
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
 )
 
-var errSpaceRequired = errors.New("trade RPC: authenticated space is required")
+var errSpaceRequired = errors.New("请求没有带上已认证的使用空间")
 
 type AccountServer struct {
 	Accounts *accountapp.Service

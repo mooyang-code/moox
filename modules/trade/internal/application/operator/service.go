@@ -20,10 +20,10 @@ import (
 )
 
 var (
-	ErrServiceConfig       = errors.New("trade operator: service is not configured")
-	ErrInvalidCommand      = errors.New("trade operator: invalid command")
-	ErrCancelUnconfirmed   = errors.New("trade operator: cancellation is not confirmed")
-	ErrInvalidActionResult = errors.New("trade operator: invalid persisted action result")
+	ErrServiceConfig       = errors.New("人工操作服务未配置")
+	ErrInvalidCommand      = errors.New("人工操作参数不合法")
+	ErrCancelUnconfirmed   = errors.New("撤单还没有得到交易所确认")
+	ErrInvalidActionResult = errors.New("已保存的人工操作结果无法解析")
 )
 
 type Quote = targetapp.Quote

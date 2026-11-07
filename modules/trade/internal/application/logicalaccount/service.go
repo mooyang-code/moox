@@ -21,11 +21,11 @@ import (
 )
 
 var (
-	ErrServiceConfig     = errors.New("trade logical account: service is not configured")
-	ErrAdoptionRequired  = errors.New("trade logical account: adoption is required")
-	ErrMemberHasExposure = errors.New("trade logical account: member has active exposure")
-	ErrOwnerConflict     = errors.New("trade logical account: runner ownership conflict")
-	ErrNotReady          = errors.New("trade logical account: not ready")
+	ErrServiceConfig     = errors.New("组合账户服务未配置")
+	ErrAdoptionRequired  = errors.New("执行账户上已有持仓或挂单，加入组合需要确认接管这些已有仓位")
+	ErrMemberHasExposure = errors.New("执行账户上还有持仓或挂单，不能以停用状态加入或移出组合，请先清仓")
+	ErrOwnerConflict     = errors.New("组合账户已被别的策略会话占用")
+	ErrNotReady          = errors.New("组合账户还没准备好，暂时不能恢复自动执行")
 )
 
 type AddMemberCommand struct {
@@ -550,7 +550,7 @@ func (s *Service) Resume(
 	if current.AutomationState != before.AutomationState ||
 		current.PauseReason != before.PauseReason {
 		return store.LogicalAccountRecord{}, "", fmt.Errorf(
-			"%w: account facts changed while resuming",
+			"%w：恢复期间组合的状态被改动了，请重试",
 			ErrNotReady,
 		)
 	}
@@ -560,7 +560,7 @@ func (s *Service) Resume(
 	}
 	if !readiness.Ready {
 		return store.LogicalAccountRecord{}, "", fmt.Errorf(
-			"%w: %s", ErrNotReady, strings.Join(readiness.Reasons, "; "),
+			"%w：%s", ErrNotReady, strings.Join(readiness.Reasons, "；"),
 		)
 	}
 	running, err := s.Store.ListRunningOperatorActions(
@@ -571,7 +571,7 @@ func (s *Service) Resume(
 	}
 	if len(running) > 0 {
 		return store.LogicalAccountRecord{}, "",
-			fmt.Errorf("%w: operator action is still running", ErrNotReady)
+			fmt.Errorf("%w：还有人工操作在执行", ErrNotReady)
 	}
 	if err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		return tx.SetLogicalAccountAutomation(

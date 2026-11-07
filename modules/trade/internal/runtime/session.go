@@ -18,7 +18,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 )
 
-var ErrSessionConfig = errors.New("trade runtime: ExchangeSession is not configured")
+var ErrSessionConfig = errors.New("交易账户会话还没有启动（ExchangeSession is not configured），请稍后重试")
 
 const (
 	sessionOrderWindow        = 5 * time.Minute

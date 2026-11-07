@@ -15,11 +15,11 @@ import (
 
 var (
 	// ErrInspectionBlocked：检测发现阻断项，账户不能建立（或已有账户不能继续下单）。
-	ErrInspectionBlocked = errors.New("trade account: 密钥检测发现阻断项")
+	ErrInspectionBlocked = errors.New("密钥检测发现阻断项")
 	// ErrInspectionUnavailable：这次检测没有成功（超时、限频、5xx），不下结论，请稍后重试。
-	ErrInspectionUnavailable = errors.New("trade account: 密钥检测没有完成")
+	ErrInspectionUnavailable = errors.New("密钥检测没有完成")
 	// ErrReadOnlyCredential：只读密钥（录入页标记 readonly）不能用来建执行账户。
-	ErrReadOnlyCredential = errors.New("trade account: 只读密钥不能用来建执行账户")
+	ErrReadOnlyCredential = errors.New("只读密钥不能用来建执行账户")
 )
 
 // Inspector 按场所检测交易所密钥；execution.Registry 实现它。

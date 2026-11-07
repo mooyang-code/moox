@@ -34,7 +34,7 @@ func (h *ExecutionServer) SubmitOrder(ctx context.Context, req *tradepb.SubmitOr
 		return &tradepb.SubmitOrderRsp{RetInfo: instrumentErrorInfo(err)}, nil
 	}
 	if h.SubmitOrdinary == nil {
-		err = fmt.Errorf("trade RPC: ordinary order service is not configured")
+		err = fmt.Errorf("普通下单服务未配置")
 	}
 	var action store.OperatorActionRecord
 	var order store.OrderRecord

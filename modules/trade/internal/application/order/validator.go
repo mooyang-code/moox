@@ -21,7 +21,7 @@ var (
 	ErrInsufficientFunds  = errors.New("可用资金不足")
 	ErrLeverageLimit      = errors.New("杠杆超过上限")
 	ErrReduceOnly         = errors.New("只减仓订单无效")
-	ErrValidatorConfig    = errors.New("trade order: validator is not configured")
+	ErrValidatorConfig    = errors.New("下单校验未配置")
 )
 
 type AccountEligibility interface {

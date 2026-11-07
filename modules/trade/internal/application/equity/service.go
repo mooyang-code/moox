@@ -266,7 +266,7 @@ func (s *Service) unifiedSnapshot(ctx context.Context, account store.TradingAcco
 		// 多稳定币保证金：除结算币外的稳定币按市价折成结算币计入权益，不然调平时权益会凭空少一块。
 		if _, isStable := settings.StablecoinTargets[strings.ToUpper(balance.Asset)]; isStable {
 			if !quantity.IsZero() {
-				stableValue = stableValue.Add(quantity.Mul(s.stablecoinPrice(ctx, account, balance.Asset)))
+				stableValue = stableValue.Add(quantity.Mul(s.stablecoinPrice(ctx, account, balance.Asset, prices)))
 			}
 			continue
 		}
@@ -376,9 +376,10 @@ func (s *Service) heldPrice(
 
 // stablecoinPrice 返回稳定币折成结算币的价格：取它对结算币的现货标的参考价；
 // 没有标的、取不到报价时按 1 计（稳定币锚定结算币，估值不能因为一时没有报价就中断权益采样）。
-func (s *Service) stablecoinPrice(ctx context.Context, account store.TradingAccountRecord, asset string) shared.Decimal {
+// prices 非空时直接用它取价（同步路径传入读快照的适配器，不再经 Manager 取适配器）。
+func (s *Service) stablecoinPrice(ctx context.Context, account store.TradingAccountRecord, asset string, prices execution.ReferencePriceSource) shared.Decimal {
 	one := shared.MustDecimal("1")
-	if s.Adapters == nil {
+	if prices == nil && s.Adapters == nil {
 		return one
 	}
 	instruments, err := s.Store.ListInstrumentsForAccount(ctx, account.TradingAccountID)
@@ -390,11 +391,14 @@ func (s *Service) stablecoinPrice(ctx context.Context, account store.TradingAcco
 			!strings.EqualFold(instrument.BaseAsset, asset) || !strings.EqualFold(instrument.QuoteAsset, account.SettlementAsset) {
 			continue
 		}
-		adapter, adapterErr := s.Adapters.Adapter(account.TradingAccountID)
-		if adapterErr != nil {
-			return one
+		if prices == nil {
+			adapter, adapterErr := s.Adapters.Adapter(account.TradingAccountID)
+			if adapterErr != nil {
+				return one
+			}
+			prices = adapter
 		}
-		quote, quoteErr := adapter.GetReferencePrice(ctx, exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol))
+		quote, quoteErr := prices.GetReferencePrice(ctx, exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol))
 		if quoteErr != nil || quote.Price.Cmp(shared.Zero()) <= 0 || !s.sourceFresh(quote.UpdatedAt.UnixMilli()) {
 			return one
 		}

@@ -17,8 +17,8 @@ import (
 )
 
 var (
-	errServiceUnavailable = errors.New("trade RPC: service is not configured")
-	errInvalidCurveTarget = errors.New("trade RPC: exactly one equity curve target is required")
+	errServiceUnavailable = errors.New("交易服务未配置")
+	errInvalidCurveTarget = errors.New("权益曲线要指定且只能指定一个账户或组合")
 )
 
 // ConsoleServer is the single public business service. The existing handlers
@@ -281,7 +281,7 @@ func (s *ConsoleServer) ListHoldings(
 		return &tradepb.ListHoldingsRsp{RetInfo: errorInfo(err)}, nil
 	}
 	if !account.HasBalanceMarket() {
-		return &tradepb.ListHoldingsRsp{RetInfo: invalidInfo(errors.New("holdings are only available for SPOT accounts"))}, nil
+		return &tradepb.ListHoldingsRsp{RetInfo: invalidInfo(errors.New("只有开通现货的账户才有持币明细"))}, nil
 	}
 	if s.Holdings != nil {
 		values, err := s.Holdings.List(ctx, spaceID, req.GetTradingAccountId())
