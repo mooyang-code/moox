@@ -1,8 +1,13 @@
 -- 统一数据集（现货加永续）上线前升级已有 Collector 库。
--- 步骤：停 Collector → 备份 moox_collector.db → sqlite3 moox_collector.db < 本脚本 → 换二进制并启动。
--- 启动时只执行 CREATE TABLE IF NOT EXISTS，不会补列也不会重建表；新版本启动检查发现库没有升级会拒绝启动。
--- 脚本在一个事务里，只能对未升级的库执行一次（列已存在时 ALTER 会失败，整体回滚）。
--- 本文件不是启动 schema，不会被载入。
+-- 步骤：停 Collector → 备份 moox_collector.db → 用 -bail 执行本脚本 → 换二进制并启动：
+--     sqlite3 -bail moox_collector.db < 20261105-unified-dataset.sql
+-- 必须带 -bail：sqlite3 命令行默认遇错继续执行。脚本只能对未升级的库执行一次；对已升级的库重跑时，
+-- 第一条 ALTER 就会因列已存在而失败，不带 -bail 会接着重建两张表并 COMMIT：拷数据时不带 c_series_tag，
+-- 已有记录的序列标签全部丢成空串（统一数据集的现货、永续记录合并，主键冲突时拷贝失败、整张表被清空）。
+-- 带 -bail 时遇到第一个错误就停，事务未提交，库保持原样。拿不准库是否升级过，先看启动检查的报错，
+-- 或用 sqlite3 查表里有没有 c_series_tag 列。
+-- 新版本启动时只执行 CREATE TABLE IF NOT EXISTS，不会补列也不会重建表；启动检查发现库没有升级会拒绝启动。
+-- 本文件不是启动 schema，不会被载入；随发布包在 collector/schema/migrations/ 下提供。
 BEGIN;
 ALTER TABLE t_collector_backfill_notices ADD COLUMN c_series_tag TEXT NOT NULL DEFAULT '';
 ALTER TABLE t_collector_resample_snapshots ADD COLUMN c_members TEXT NOT NULL DEFAULT '{}';
