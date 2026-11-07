@@ -900,3 +900,50 @@ func TestUnifiedUnavailablePathsTreatSwapOnlyListingTheSame(t *testing.T) {
 		t.Fatalf("两条不可用路径对只在永续上的 D 的口径应一致：\n因子被跳过：%s\n失败比例：%s", textA, textB)
 	}
 }
+
+// ucShortDSL 是只做空的 rank 策略（空头一律永续），leverage 2。
+func ucShortDSL(mode, maxMissing string) string {
+	return "name: compare\nmarket: " + mode + "\nrules:\n  - id: r\n    type: rank\n    side: short\n    score: \"m\"\n    select: {top: 1}\n    weight: {total: 0.5}\nportfolio: {max_missing: " + maxMissing + ", leverage: 2}\n"
+}
+
+// 持有永续空头、永续本期不可用时，空头冻结不动：三条不可用路径（因子被跳过、全部失败、失败比例超限）× 两种 prefer × 方式 A、B。
+// 以前空头只取 prefer 加另一个市场的行（粘住只看正权重），永续不可用时退回现货的行，规则用现货因子值重新排名，在永续上平仓或改仓。
+func TestUnifiedMatchesDualTasksFreezesHeldSwapShorts(t *testing.T) {
+	paths := []struct {
+		name, maxMissing string
+		apply            func(*ucWorld)
+	}{
+		{"因子被跳过", "1", func(w *ucWorld) { w.skipped["swap"] = true }},
+		{"全部失败", "1", func(w *ucWorld) {
+			w.failed["swap"] = w.members["swap"]
+			w.rows["swap"] = map[string]float64{}
+		}},
+		{"失败比例超限", "0.2", func(w *ucWorld) {
+			w.failed["swap"] = []string{"B", "D"}
+			delete(w.rows["swap"], "B")
+			delete(w.rows["swap"], "D")
+		}},
+	}
+	for _, prefer := range []string{"spot", "swap"} {
+		for _, path := range paths {
+			t.Run(path.name+"/prefer "+prefer, func(t *testing.T) {
+				mode := "{select: both, prefer: " + prefer + "}"
+				world := ucBase(mode)
+				world.dsl = ucShortDSL(mode, path.maxMissing)
+				path.apply(&world)
+				world.state = engine.State{Rules: map[string]engine.RuleState{"r": {Held: []string{"C", "X"}}}, Targets: map[string]string{"C|swap": "-0.25", "X|swap": "-0.25"}}
+				decision, targets := requireSame(t, world)
+				if decision.Status == engine.StatusSkipped {
+					// 冻结的持仓占满预期集合：整期 too_many_missing，持仓不动。
+					if decision.SkipReason != engine.SkipTooManyMissing {
+						t.Fatalf("只能是 too_many_missing：%+v", decision.SkipReason)
+					}
+					return
+				}
+				if targets["C|swap"] != "-0.25(hold)" || targets["X|swap"] != "-0.25(hold)" {
+					t.Fatalf("永续不可用时持有的空头应冻结：%v", targets)
+				}
+			})
+		}
+	}
+}

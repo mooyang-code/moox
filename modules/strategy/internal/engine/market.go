@@ -183,6 +183,25 @@ func selectPool(mode dsl.Market, frame Frame, held heldIndex) Frame {
 		}
 		return row, true
 	}
+	// 上期在某个市场持有空头、而这个市场本期整体不可用（FailedMarket）时，只取这个市场的行：没有行就按市场不可用冻结，不退回另一个市场的行。
+	// 否则空头（取行顺序是 prefer 加另一个市场，粘住只看正权重）会改用现货的因子值重新排名，在永续上平仓或改仓，违反“不可用时冻结持仓”。
+	// 冻结按币：同一个币持有现货多头又持有永续空头时，永续不可用会把现货多头一起冻结（保守，已知边界）。
+	marketDown := func(market, id string) bool {
+		for _, subjects := range frame.Markets[market].Failed {
+			if subjects[id] == FailedMarket {
+				return true
+			}
+		}
+		return false
+	}
+	orderOf := func(id string) []string {
+		for _, entry := range held[id] {
+			if entry.weight.IsNegative() && mode.Has(entry.market) && marketDown(entry.market, id) {
+				return []string{entry.market}
+			}
+		}
+		return pickOrder(mode, id, held)
+	}
 	for _, id := range subjects {
 		flags := make(map[string]bool, len(markets))
 		for _, market := range markets {
@@ -190,7 +209,7 @@ func selectPool(mode dsl.Market, frame Frame, held heldIndex) Frame {
 			flags[market] = ok
 		}
 		frame.avail[id] = flags
-		for _, market := range pickOrder(mode, id, held) {
+		for _, market := range orderOf(id) {
 			if row, ok := usableRow(market, id); ok {
 				frame.Rows[id] = row
 				frame.RowMarket[id] = market
@@ -200,7 +219,7 @@ func selectPool(mode dsl.Market, frame Frame, held heldIndex) Frame {
 	}
 	// 失败证据：有行的标的取所选行所在市场的证据；无行的标的按取行顺序合并各市场的证据，先到先得。
 	for _, id := range subjects {
-		order := pickOrder(mode, id, held)
+		order := orderOf(id)
 		if market, ok := frame.RowMarket[id]; ok {
 			order = []string{market}
 		}
