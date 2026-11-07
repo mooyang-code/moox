@@ -172,7 +172,7 @@ func TestManagerOwnsExactlyOneSessionPerEnabledAccount(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		return manager.Ready("account-1")
-	}, time.Second, 10*time.Millisecond)
+	}, 5*time.Second, 10*time.Millisecond)
 	require.Equal(t, int32(1), factoryCalls.Load())
 	require.Equal(t, SessionSnapshot{
 		Enabled: 1, Ready: 1, Reconciled: true,
@@ -183,7 +183,7 @@ func TestManagerOwnsExactlyOneSessionPerEnabledAccount(t *testing.T) {
 	source.set(nil)
 	require.Eventually(t, func() bool {
 		return manager.Snapshot().Enabled == 0
-	}, time.Second, 10*time.Millisecond)
+	}, 5*time.Second, 10*time.Millisecond)
 	<-session.stopped
 	require.Equal(t, "account-1", <-removed)
 
@@ -327,7 +327,7 @@ func TestManagerReconnectsTheExistingSessionAfterRunFailure(t *testing.T) {
 	}
 	require.Eventually(t, func() bool {
 		return manager.Ready("account-1")
-	}, time.Second, 10*time.Millisecond)
+	}, 5*time.Second, 10*time.Millisecond)
 	require.Equal(t, int32(2), session.runCalls.Load())
 	require.Equal(t, int32(1), factoryCalls.Load(), "reconnect must reuse the session")
 

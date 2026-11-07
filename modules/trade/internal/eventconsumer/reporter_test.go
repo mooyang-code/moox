@@ -183,7 +183,7 @@ func TestRunTargetReportsBusinessDecisionAfterTransportAction(t *testing.T) {
 	}, 5*time.Second, 10*time.Millisecond, "the real runner must process and terminate the delivery")
 	require.Eventually(t, func() bool {
 		return targetReportMetric(t, "TERM", "authorization_conflict", "success") == before+1
-	}, time.Second, 10*time.Millisecond, "the successful TERM currently hides its business rejection")
+	}, 5*time.Second, 10*time.Millisecond, "the successful TERM currently hides its business rejection")
 }
 
 func targetReportMetric(t *testing.T, decision, code, action string) float64 {

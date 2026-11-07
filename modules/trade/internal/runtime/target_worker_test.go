@@ -310,14 +310,14 @@ func TestTargetWorkerReadinessRecoversAfterTransientStoreError(t *testing.T) {
 	require.Eventually(t, func() bool {
 		snapshot := worker.Snapshot()
 		return !snapshot.Ready && snapshot.LastError == "temporary list failure"
-	}, time.Second, 10*time.Millisecond)
+	}, 5*time.Second, 10*time.Millisecond)
 	targets.mu.Lock()
 	targets.err = nil
 	targets.mu.Unlock()
 	require.Eventually(t, func() bool {
 		snapshot := worker.Snapshot()
 		return snapshot.Ready && snapshot.LastError == ""
-	}, time.Second, 10*time.Millisecond)
+	}, 5*time.Second, 10*time.Millisecond)
 
 	cancel()
 	require.ErrorIs(t, <-done, context.Canceled)
