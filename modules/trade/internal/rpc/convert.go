@@ -460,6 +460,7 @@ func logicalAccountTargetToPB(
 			InstrumentId: target.InstrumentID,
 			Quantity:     target.Quantity,
 			Reason:       target.Reason,
+			Deferred:     target.Deferred,
 		})
 	}
 	return &tradepb.LogicalAccountTarget{

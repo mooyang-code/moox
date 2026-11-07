@@ -196,6 +196,8 @@ export interface TradableInstrument {
 
 export interface BlockedTarget extends InstrumentTarget {
   reason: string;
+  /** 不是被拦下，而是被单币每小时上限顺延到下一个整点：用中性色显示“顺延”，不计入“被拦下” */
+  deferred?: boolean;
 }
 
 export interface LogicalAccountTarget {

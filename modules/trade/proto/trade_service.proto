@@ -293,6 +293,8 @@ message BlockedTarget {
   string instrument_id = 1;
   string quantity = 2;
   string reason = 3;
+  // true 表示不是被拦下，而是被单币每小时上限顺延到下一个整点：界面用中性色显示“顺延”，不计入“被拦下”。
+  bool deferred = 4;
 }
 
 message LogicalAccountTarget {

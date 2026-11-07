@@ -50,10 +50,16 @@ function display(value: number) {
   return String(Number(value.toPrecision(8)));
 }
 
+// 被每小时上限顺延的标的：目标虽然定为已收敛，但这一项还有差额没下完，不能显示“已到位”。
+function isDeferred(blocked: BlockedTarget[], instrumentId: string) {
+  return blocked.some(item => item.instrument_id === instrumentId && item.deferred);
+}
+
 function statusOf(target: InstrumentTarget, difference: number, blocked: BlockedTarget[]) {
   if (target.hold) return "保持当前持仓";
-  const reason = blocked.find(item => item.instrument_id === target.instrument_id)?.reason;
-  if (reason) return `已阻塞：${reason}`;
+  const item = blocked.find(entry => entry.instrument_id === target.instrument_id);
+  if (item?.deferred) return `顺延：${item.reason}`;
+  if (item?.reason) return `已阻塞：${item.reason}`;
   return difference === 0 ? "已到位" : "收敛中";
 }
 
@@ -79,7 +85,10 @@ export function buildComparison(
       actual: display(current),
       difference: display(difference),
       // 目标保留 18 位小数，收敛后差额是下不了单的零头，以目标状态为准。
-      status: options.converged && !item.hold ? "已到位" : statusOf(item, difference, blocked)
+      status:
+        options.converged && !item.hold && !isDeferred(blocked, item.instrument_id)
+          ? "已到位"
+          : statusOf(item, difference, blocked)
     };
   });
   // 无法映射到标的的敞口只出现在阻塞列表里。
@@ -90,7 +99,7 @@ export function buildComparison(
         target: "-",
         actual: "-",
         difference: item.quantity,
-        status: `已阻塞：${item.reason}`
+        status: item.deferred ? `顺延：${item.reason}` : `已阻塞：${item.reason}`
       });
     }
   }

@@ -576,7 +576,7 @@ func (e *Executor) Converge(
 				// 原因写进目标的 blocked_targets，界面看得到为什么没下单。
 				capDeferred = true
 				deferredItems = append(deferredItems, store.BlockedTarget{
-					InstrumentID: instrumentID, Quantity: action.delta.String(), Reason: reasonHourlyCapDeferred,
+					InstrumentID: instrumentID, Quantity: action.delta.String(), Reason: reasonHourlyCapDeferred, Deferred: true,
 				})
 				continue
 			}

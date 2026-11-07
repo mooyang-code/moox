@@ -81,6 +81,7 @@ func TestHourlyCapExhaustedDefersToNextHour(t *testing.T) {
 	require.Len(t, target.BlockedTargets, 1)
 	require.Equal(t, "BTC-USDT-SWAP", target.BlockedTargets[0].InstrumentID)
 	require.Equal(t, reasonHourlyCapDeferred, target.BlockedTargets[0].Reason, "原因写进 blocked_targets 让界面看得到，文案不带具体时刻")
+	require.True(t, target.BlockedTargets[0].Deferred, "标记为顺延，界面用中性色显示")
 	require.NotContains(t, target.BlockedTargets[0].Reason, ":")
 	require.Equal(t, nextHourRetryDelay(f.now).Round(time.Minute), result.RetryAfter.Round(time.Minute))
 }
@@ -196,4 +197,6 @@ func TestHourlyCapDeferralAfterARealBlockKeepsTheRealReasonFirst(t *testing.T) {
 	require.Len(t, target.BlockedTargets, 2)
 	require.Equal(t, "BTC-USDT-SPOT", target.BlockedTargets[0].InstrumentID, "真实阻塞排前面")
 	require.Equal(t, reasonHourlyCapDeferred, target.BlockedTargets[1].Reason)
+	require.False(t, target.BlockedTargets[0].Deferred, "真实阻塞不带顺延标记")
+	require.True(t, target.BlockedTargets[1].Deferred)
 }

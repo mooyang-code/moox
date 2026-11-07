@@ -18,6 +18,18 @@ describe("目标与实际持仓对照", () => {
     expect(rows[2]).toMatchObject({ target: "保持", status: "保持当前持仓" });
   });
 
+  it("被每小时上限顺延的标的显示“顺延”，即使目标已定为已收敛也不显示已到位", () => {
+    const deferred = [
+      { instrument_id: "BTC-USDT-SWAP", quantity: "1", reason: "单币每小时上限已用完，顺延到下一个整点继续", deferred: true }
+    ];
+    const [row] = buildComparison([{ instrument_id: "BTC-USDT-SWAP", quantity: "1" }], deferred, {}, { converged: true });
+    expect(row.status).toBe("顺延：单币每小时上限已用完，顺延到下一个整点继续");
+    expect(row.status).not.toContain("阻塞");
+    // 无法映射到标的、只出现在列表里的顺延项同样不算阻塞。
+    const [orphan] = buildComparison([], deferred, {});
+    expect(orphan.status.startsWith("顺延：")).toBe(true);
+  });
+
   it("列出目标之外仍持有的标的", () => {
     const rows = buildComparison([], [], { "BTC-USDT-SWAP": 1 }, { includeUntargeted: true });
     expect(rows).toHaveLength(1);
