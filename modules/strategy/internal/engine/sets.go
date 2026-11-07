@@ -15,6 +15,8 @@ type ruleSets struct {
 	available []string
 	missing   map[string]string
 	frozen    map[string]struct{}
+	// holdReason 是冻结标的的明细原因（gap_hold 或 market_hold，见 frozenSet）。
+	holdReason map[string]string
 	// inactive 是 tranche 规则里本期有行但 volume 为 0 的标的：不是候选，也不算缺数（require_volume 时只有 volume > 0 的行是候选）。
 	inactive []string
 }
@@ -23,8 +25,8 @@ type ruleSets struct {
 // 年龄剔除只拦住新进入的标的：规则上期已持有的标的在建仓时已经满足 min_age_bars，不会因为探针窗口内恰好
 // 缺数（历史数据缺口）被当作新上市剔除。signal 规则的持仓只判 exit，只需要 exit 引用的列（含 bars[-1]）：
 // 只缺 entry 用到的输入（例如交叉入场的上一根）不能触发清仓；未持有的候选同时判 entry 与 exit，需要全部列。
-func partitionRule(rule *dsl.CompiledRule, frame Frame, held []string, frozen map[string]struct{}) ruleSets {
-	sets := ruleSets{agedOut: make(map[string]struct{}), missing: make(map[string]string), frozen: make(map[string]struct{})}
+func partitionRule(rule *dsl.CompiledRule, frame Frame, held []string, frozen map[string]struct{}, holdReasons map[string]string) ruleSets {
+	sets := ruleSets{agedOut: make(map[string]struct{}), missing: make(map[string]string), frozen: make(map[string]struct{}), holdReason: holdReasons}
 	heldSet := make(map[string]struct{}, len(held))
 	for _, id := range held {
 		heldSet[id] = struct{}{}
@@ -95,7 +97,11 @@ func (s ruleSets) items(ruleID string) []Item {
 			continue
 		}
 		if _, held := s.frozen[id]; held {
-			items = append(items, Item{RuleID: ruleID, InstrumentID: id, Stage: StageHeld, Reason: reasonGapHold})
+			reason := s.holdReason[id]
+			if reason == "" {
+				reason = reasonGapHold
+			}
+			items = append(items, Item{RuleID: ruleID, InstrumentID: id, Stage: StageHeld, Reason: reason})
 			continue
 		}
 		if reason, missing := s.missing[id]; missing {

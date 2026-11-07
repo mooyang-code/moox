@@ -119,6 +119,8 @@ const itemReasons: Record<string, string> = {
   score_invalid: "分数无效",
   not_expected: "已不在预期集合",
   holding: "延续批次持有",
+  gap_hold: "K 线空洞，保持持仓不动",
+  market_hold: "所在市场本期不可用，保持持仓不动",
   stop_loss: "固定止损",
   trailing_stop: "跟踪止损",
   take_profit: "止盈",
@@ -134,11 +136,13 @@ function reasonText(reason: string): string {
   if (reason.startsWith("missing:")) return `缺少 ${reason.slice("missing:".length)}`;
   if (reason.startsWith("factor_failed:")) return `上游因子失败（${reason.slice("factor_failed:".length)}）`;
   if (reason.startsWith("source_failed:")) return `上游数据失败（${reason.slice("source_failed:".length)}）`;
+  if (reason.startsWith("factor_gap:")) return `上游因子 K 线空洞（${reason.slice("factor_gap:".length)}）`;
+  if (reason.startsWith("market_unavailable:")) return `市场本期不可用（${reason.slice("market_unavailable:".length)}）`;
   if (reason.startsWith("score_error:")) return `分数计算出错：${reason.slice("score_error:".length)}`;
   return itemReasons[reason] ?? reason;
 }
 
-/** 解释明细的原因：已知代码给出中文说明并附原文，带前缀的原因（holding:、tranche:、missing:、factor_failed:、source_failed:、score_error:）逐段翻译。 */
+/** 解释明细的原因：已知代码给出中文说明并附原文，带前缀的原因（holding:、tranche:、missing:、factor_failed:、source_failed:、factor_gap:、market_unavailable:、score_error:）逐段翻译。 */
 export function itemReasonLabel(reason?: string): string {
   if (!reason) return "-";
   const text = reasonText(reason);
@@ -153,6 +157,7 @@ const stages: Record<string, { label: string; color: string }> = {
   idle: { label: "未触发", color: "gray" },
   weighted: { label: "入选", color: "green" },
   dropped: { label: "被剔除", color: "orange" },
+  held: { label: "保持持仓", color: "orange" },
   stopped: { label: "止损止盈", color: "red" }
 };
 
@@ -164,16 +169,17 @@ export function stageColor(stage: string): string {
   return stages[stage]?.color ?? "blue";
 }
 
-/** 解释明细的阶段顺序：入选的放最前面，其次是止损止盈、被剔除、打分未入选，最后是缺数、未触发、被过滤和年龄不足。 */
+/** 解释明细的阶段顺序：入选的放最前面，其次是保持持仓、止损止盈、被剔除、打分未入选，最后是缺数、未触发、被过滤和年龄不足。 */
 const stageOrder: Record<string, number> = {
   weighted: 0,
-  stopped: 1,
-  dropped: 2,
-  scored: 3,
-  missing: 4,
-  idle: 5,
-  filtered: 6,
-  aged_out: 7
+  held: 1,
+  stopped: 2,
+  dropped: 3,
+  scored: 4,
+  missing: 5,
+  idle: 6,
+  filtered: 7,
+  aged_out: 8
 };
 
 /** 解释明细排序：按阶段，再按名次（无名次的在后），最后按标的；入选的几个标的不会淹没在几百个被过滤的标的里。 */

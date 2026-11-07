@@ -59,17 +59,31 @@ func normalizeDisplay(hidden DisplayHidden) (DisplayHidden, error) {
 	return hidden, nil
 }
 
+// 外显设置的 SQL：整条写成常量，不在调用处拼接。
+const (
+	// sqlCountDisplaySettings 统计实例的外显设置记录（0 或 1）。
+	sqlCountDisplaySettings = `SELECT COUNT(*) FROM t_strategy_display_settings WHERE c_instance_id = ?`
+	// sqlSelectDisplayHidden 读取实例外显设置的隐藏内容。
+	sqlSelectDisplayHidden = `SELECT c_hidden_json FROM t_strategy_display_settings WHERE c_instance_id = ?`
+	// sqlDeleteDisplaySettings 删除实例的外显设置（全部展示）。
+	sqlDeleteDisplaySettings = `DELETE FROM t_strategy_display_settings WHERE c_instance_id = ?`
+	// sqlUpsertDisplaySettings 新建或替换实例的外显设置（保留原创建时间）。
+	sqlUpsertDisplaySettings = `
+		INSERT INTO t_strategy_display_settings (c_instance_id, c_hidden_json, c_ctime, c_mtime) VALUES (?, ?, ?, ?)
+		ON CONFLICT (c_instance_id) DO UPDATE SET c_hidden_json = excluded.c_hidden_json, c_mtime = excluded.c_mtime`
+)
+
 // GetDisplayHidden 读取实例的外显设置；没有记录时返回空设置（全部展示）。
 func (s *Store) GetDisplayHidden(ctx context.Context, instanceID string) (DisplayHidden, error) {
 	var raw string
 	var count int64
-	if err := s.db.WithContext(ctx).Raw(`SELECT COUNT(*) FROM t_strategy_display_settings WHERE c_instance_id = ?`, instanceID).Scan(&count).Error; err != nil {
+	if err := s.db.WithContext(ctx).Raw(sqlCountDisplaySettings, instanceID).Scan(&count).Error; err != nil {
 		return DisplayHidden{}, err
 	}
 	if count == 0 {
 		return DisplayHidden{}, nil
 	}
-	if err := s.db.WithContext(ctx).Raw(`SELECT c_hidden_json FROM t_strategy_display_settings WHERE c_instance_id = ?`, instanceID).Scan(&raw).Error; err != nil {
+	if err := s.db.WithContext(ctx).Raw(sqlSelectDisplayHidden, instanceID).Scan(&raw).Error; err != nil {
 		return DisplayHidden{}, err
 	}
 	var hidden DisplayHidden
@@ -89,15 +103,12 @@ func (s *Store) SetDisplayHidden(ctx context.Context, instanceID string, hidden 
 		return DisplayHidden{}, err
 	}
 	if len(hidden.Categories)+len(hidden.Members)+len(hidden.Columns) == 0 {
-		return hidden, s.db.WithContext(ctx).Exec(`DELETE FROM t_strategy_display_settings WHERE c_instance_id = ?`, instanceID).Error
+		return hidden, s.db.WithContext(ctx).Exec(sqlDeleteDisplaySettings, instanceID).Error
 	}
 	raw, err := json.Marshal(hidden)
 	if err != nil {
 		return DisplayHidden{}, err
 	}
 	now := at.UTC()
-	return hidden, s.db.WithContext(ctx).Exec(`
-		INSERT INTO t_strategy_display_settings (c_instance_id, c_hidden_json, c_ctime, c_mtime) VALUES (?, ?, ?, ?)
-		ON CONFLICT (c_instance_id) DO UPDATE SET c_hidden_json = excluded.c_hidden_json, c_mtime = excluded.c_mtime
-	`, instanceID, string(raw), now, now).Error
+	return hidden, s.db.WithContext(ctx).Exec(sqlUpsertDisplaySettings, instanceID, string(raw), now, now).Error
 }

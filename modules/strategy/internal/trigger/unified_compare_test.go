@@ -910,44 +910,71 @@ func ucShortDSL(mode, maxMissing string) string {
 	return "name: compare\nmarket: " + mode + "\nrules:\n  - id: r\n    type: rank\n    side: short\n    score: \"m\"\n    select: {top: 1}\n    weight: {total: 0.5}\nportfolio: {max_missing: " + maxMissing + ", leverage: 2}\n"
 }
 
-// 持有永续空头、永续本期不可用时，空头冻结不动：三条不可用路径（因子被跳过、全部失败、失败比例超限）× 两种 prefer × 方式 A、B。
-// 以前空头只取 prefer 加另一个市场的行（粘住只看正权重），永续不可用时退回现货的行，规则用现货因子值重新排名，在永续上平仓或改仓。
+// ucSwapDownPaths 是永续本期不可用的三条路径：因子被跳过、全部失败、失败比例超限（4 个里 2 个失败，超过 max_missing 0.2）。
+var ucSwapDownPaths = []struct {
+	name, maxMissing string
+	apply            func(*ucWorld)
+}{
+	{"因子被跳过", "1", func(w *ucWorld) { w.skipped["swap"] = true }},
+	{"全部失败", "1", func(w *ucWorld) {
+		w.failed["swap"] = w.members["swap"]
+		w.rows["swap"] = map[string]float64{}
+	}},
+	{"失败比例超限", "0.2", func(w *ucWorld) {
+		w.failed["swap"] = []string{"B", "D"}
+		delete(w.rows["swap"], "B")
+		delete(w.rows["swap"], "D")
+	}},
+}
+
+// 持有永续空头、永续本期不可用时，空头冻结不动：三条不可用路径 × 三种含永续下单的多市场模式 × 方式 A、B，都必须正常求值、空头保持。
+// 以前空头只取 prefer 加另一个市场的行（粘住只看正权重），永续不可用时退回现货的行，规则用现货因子值重新排名，在永续上平仓或改仓；
+// 空头规则守门又因为预期集合只剩冻结的空头而整期 too_many_missing。
 func TestUnifiedMatchesDualTasksFreezesHeldSwapShorts(t *testing.T) {
-	paths := []struct {
-		name, maxMissing string
-		apply            func(*ucWorld)
-	}{
-		{"因子被跳过", "1", func(w *ucWorld) { w.skipped["swap"] = true }},
-		{"全部失败", "1", func(w *ucWorld) {
-			w.failed["swap"] = w.members["swap"]
-			w.rows["swap"] = map[string]float64{}
-		}},
-		{"失败比例超限", "0.2", func(w *ucWorld) {
-			w.failed["swap"] = []string{"B", "D"}
-			delete(w.rows["swap"], "B")
-			delete(w.rows["swap"], "D")
-		}},
-	}
-	for _, prefer := range []string{"spot", "swap"} {
-		for _, path := range paths {
-			t.Run(path.name+"/prefer "+prefer, func(t *testing.T) {
-				mode := "{select: both, prefer: " + prefer + "}"
+	for _, mode := range []string{"{select: both, prefer: spot}", "{select: both, prefer: swap}", "{select: spot, prefer: swap}"} {
+		for _, path := range ucSwapDownPaths {
+			t.Run(path.name+"/"+mode, func(t *testing.T) {
 				world := ucBase(mode)
 				world.dsl = ucShortDSL(mode, path.maxMissing)
 				path.apply(&world)
 				world.state = engine.State{Rules: map[string]engine.RuleState{"r": {Held: []string{"C", "X"}}}, Targets: map[string]string{"C|swap": "-0.25", "X|swap": "-0.25"}}
 				decision, targets := requireSame(t, world)
-				if decision.Status == engine.StatusSkipped {
-					// 冻结的持仓占满预期集合：整期 too_many_missing，持仓不动。
-					if decision.SkipReason != engine.SkipTooManyMissing {
-						t.Fatalf("只能是 too_many_missing：%+v", decision.SkipReason)
-					}
-					return
+				if decision.Status != engine.StatusOK {
+					t.Fatalf("永续不可用时空头规则不守门，应正常求值：%s %v", decision.SkipReason, decision.Summary.Notes)
 				}
-				if targets["C|swap"] != "-0.25(hold)" || targets["X|swap"] != "-0.25(hold)" {
-					t.Fatalf("永续不可用时持有的空头应冻结：%v", targets)
+				if len(targets) != 2 || targets["C|swap"] != "-0.25(hold)" || targets["X|swap"] != "-0.25(hold)" {
+					t.Fatalf("永续不可用时持有的空头应冻结，也不新开空头：%v", targets)
 				}
 			})
 		}
+	}
+}
+
+// 多空策略（both/spot，默认 max_missing 0.2），永续 4 个币里 B 失败（1/4 超过 0.2，永续本期不可用）：只是一部分市场不可用，不整期跳过（设计 3.2.1）。
+// 没有空头持仓时多头照常在现货开仓；持有永续空头 X 时空头保持不动、多头照常——冻结的 X 不是多头规则的持仓，不计入多头规则守门的缺数。
+func TestUnifiedLongShortKeepsLongLegWhenSwapUnavailable(t *testing.T) {
+	mode := "{select: both, prefer: spot}"
+	longShort := "name: compare\nmarket: " + mode + "\nrules:\n  - id: l\n    type: rank\n    score: \"m\"\n    select: {top: 1}\n    weight: {total: 0.5}\n  - id: s\n    type: rank\n    side: short\n    score: \"m\"\n    select: {top: 1}\n    weight: {total: 0.5}\nportfolio: {leverage: 2}\n"
+	cases := []struct {
+		name  string
+		state engine.State
+		want  map[string]string
+	}{
+		{"没有空头持仓", engine.State{}, map[string]string{"X|spot": "0.5"}},
+		{"持有永续空头", engine.State{Rules: map[string]engine.RuleState{"s": {Held: []string{"X"}}}, Targets: map[string]string{"X|swap": "-0.5"}},
+			map[string]string{"C|spot": "0.5", "X|swap": "-0.5(hold)"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			world := ucBase(mode)
+			world.dsl = longShort
+			world.failed["swap"] = []string{"B"}
+			delete(world.rows["swap"], "B")
+			world.state = tc.state
+			decision, targets := requireSame(t, world)
+			if decision.Status != engine.StatusOK || !reflect.DeepEqual(targets, tc.want) {
+				t.Fatalf("永续不可用时多头腿应照常调仓：%s/%s %v，期望 %v", decision.Status, decision.SkipReason, targets, tc.want)
+			}
+		})
 	}
 }

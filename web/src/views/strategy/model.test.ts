@@ -45,6 +45,7 @@ describe("strategy model helpers", () => {
     expect(skipReasonLabel("no_data")).toBe("本期无数据（no_data）");
     expect(skipReasonLabel("history_insufficient")).toContain("历史覆盖不足");
     expect(stageLabel("weighted")).toBe("入选");
+    expect(stageLabel("held")).toBe("保持持仓");
   });
 
   it("parses summaries and resolved bindings defensively", () => {
@@ -78,6 +79,10 @@ describe("strategy model helpers", () => {
     expect(itemReasonLabel("missing:close")).toBe("缺少 close（missing:close）");
     expect(itemReasonLabel("factor_failed:ma_20")).toContain("上游因子失败（ma_20）");
     expect(itemReasonLabel("source_failed:close")).toContain("上游数据失败（close）");
+    expect(itemReasonLabel("factor_gap:ma_20")).toBe("上游因子 K 线空洞（ma_20）（factor_gap:ma_20）");
+    expect(itemReasonLabel("market_unavailable:m")).toBe("市场本期不可用（m）（market_unavailable:m）");
+    expect(itemReasonLabel("gap_hold")).toBe("K 线空洞，保持持仓不动（gap_hold）");
+    expect(itemReasonLabel("market_hold")).toBe("所在市场本期不可用，保持持仓不动（market_hold）");
     expect(itemReasonLabel("custom_reason")).toBe("custom_reason");
   });
 });
