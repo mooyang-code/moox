@@ -438,6 +438,14 @@ func (s *Store) PurgeBefore(ctx context.Context, cutoff int64) error {
 	})
 }
 
+// deleteDelistStepsExceptBlock 删掉一条记录除禁止买入那一行（轮次 0）以外的全部下架步骤。
+const deleteDelistStepsExceptBlock = `DELETE FROM t_delist_actions WHERE c_execution_id = ? AND NOT (c_round = 0 AND c_kind = 'BLOCK')`
+
+// DeleteDelistStepsExceptBlock 删掉一条记录除禁止买入那一行以外的全部下架步骤：演练结束后被重新打开时，新的一次演练从头开始。
+func (s *Store) DeleteDelistStepsExceptBlock(ctx context.Context, executionID string) error {
+	return s.db.WithContext(ctx).Exec(deleteDelistStepsExceptBlock, executionID).Error
+}
+
 // UpsertDelistAction 写入或更新下架处理的一步。
 func (s *Store) UpsertDelistAction(ctx context.Context, action DelistAction) error {
 	row := delistRow(action)

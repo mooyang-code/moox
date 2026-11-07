@@ -68,7 +68,7 @@ func (h *harness) merge(id string, delistAt time.Time) {
 }
 
 // 小 1 场景 1：演练最后一步（核对 + 解除）进行中，同标的又来一次演练登记、下架时间不同，SaveResult 把记录改回待处理。
-// 下一次推进发现名单里没有这一项，但这是自己结束时解除的：重新写名单，按新的下架时间重走时间线（已成功的轮次也重开），不置为已取消。
+// 下一次推进发现名单里没有这一项，但这是自己结束时解除的：清掉上一次演练的步骤，重新写名单，按新的下架时间重走时间线，不置为已取消。
 func TestDrillReopenedDuringFinalStepRestartsTimeline(t *testing.T) {
 	h := newHarness(t)
 	run := h.throughWorker()
@@ -97,12 +97,12 @@ func TestDrillReopenedDuringFinalStepRestartsTimeline(t *testing.T) {
 	require.Equal(t, store.StatusPending, execution.Status, "不能当作手工解除而置为已取消")
 	require.True(t, h.trade.isBlocked(), "重新写名单")
 	require.Equal(t, blocks+1, h.trade.callCount("Block"))
-	block := h.steps("drill")[blockKey()]
-	require.False(t, block.SelfReleased)
-	require.Equal(t, newDelistAt.UnixMilli(), block.PlannedDelistAt)
+	steps := h.steps("drill")
+	require.Len(t, steps, 1, "上一次演练的各轮步骤已清掉，只留禁止买入那一行")
+	require.False(t, steps[blockKey()].SelfReleased)
 	require.Equal(t, newDelistAt.Add(-24*time.Hour).UnixMilli(), execution.NextRunAt, "按新的下架时间走")
 
-	// 新时间线：已成功的第 1 轮按新时间重开，新出现的模拟盘持仓照常平掉；结束时再次解除。
+	// 新时间线：第 1 轮从头开始，新出现的模拟盘持仓照常平掉；结束时再次解除。
 	h.trade.setHolders(paper("crypto", "la-p"))
 	run("drill", newDelistAt.Add(-24*time.Hour))
 	require.Equal(t, 2, h.trade.flattenCount())
@@ -214,10 +214,43 @@ func TestDrillReleaseRetryWithMergedScheduleRestarts(t *testing.T) {
 	require.Equal(t, newDelistAt.Add(-24*time.Hour), out.NextRunAt)
 	require.Equal(t, blocks+1, h.trade.callCount("Block"))
 	require.True(t, h.trade.isBlocked())
-	block = h.steps("drill")[blockKey()]
-	require.Empty(t, block.ReleaseVerdict)
-	require.Equal(t, newDelistAt.UnixMilli(), block.PlannedDelistAt)
+	steps := h.steps("drill")
+	require.Len(t, steps, 1, "上一次演练的各轮步骤已清掉")
+	require.Empty(t, steps[blockKey()].ReleaseVerdict)
+	require.Zero(t, steps[blockKey()].PlannedDelistAt, "结论连同它对应的下架时间一起作废")
 
 	require.Equal(t, store.StatusSucceeded, h.step("drill", newDelistAt.Add(10*time.Minute)).Status)
 	require.False(t, h.trade.isBlocked())
+}
+
+// 上一次演练核对失败（核对行失败、平仓只完成一部分），最后一步进行中合并了新登记：重新打开后旧的失败行不留着，
+// 关注项不会一直提醒“下架处理有步骤失败”到新的核对。
+func TestDrillReopenedAfterFailedVerifyDropsOldFailedSteps(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	run := h.throughWorker()
+	delistAt := baseTime.Add(3 * time.Hour)
+	h.trade.setHolders(paper("crypto", "la-p"))
+	h.trade.finalFor = func(action.FlattenRequest) (string, string) { return action.OperatorPartial, "拒单" }
+	h.addExecution("drill", delistAt, "PAPER_ONLY")
+	run("drill", baseTime)
+	run("drill", baseTime.Add(31*time.Second))
+
+	newDelistAt := delistAt.Add(48 * time.Hour)
+	var once sync.Once
+	h.trade.unblockHook = func(context.Context) error {
+		once.Do(func() { h.merge("drill", newDelistAt) })
+		return nil
+	}
+	execution := run("drill", delistAt.Add(11*time.Minute))
+	require.Equal(t, store.StatusPending, execution.Status, "核对失败的结果没写，记录改回待处理")
+	require.Equal(t, store.DelistFailed, h.steps("drill")[verifyKey()].Status)
+
+	execution = run("drill", delistAt.Add(11*time.Minute))
+	require.Equal(t, store.StatusPending, execution.Status)
+	require.True(t, h.trade.isBlocked())
+	require.Len(t, h.steps("drill"), 1)
+	failed, err := h.store.ListUnfinishedWithFailedSteps(ctx)
+	require.NoError(t, err)
+	require.Empty(t, failed, "上一次演练的失败行不再触发关注项")
 }

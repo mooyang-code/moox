@@ -112,7 +112,7 @@ var requiredColumns = map[string][]string{
 }
 
 // CheckSchema 检查库里的表结构是不是当前版本：缺列，或者 t_delist_actions 的状态约束里没有 PARTIAL，说明是旧库。
-// 旧库不检查的后果是静默的：写步骤一直失败，记录每分钟被放回，不计失败也不告警。事件中心没有迁移，旧库必须删掉重建，这里直接拒绝启动。
+// 旧库不检查的后果很隐蔽：写步骤一直失败，记录每分钟被放回，要 15 分钟后才以“连续暂时失败”告警，原因也不直观。事件中心没有迁移，旧库必须删掉重建，这里直接拒绝启动。
 func (s *Store) CheckSchema(ctx context.Context) error {
 	var problems []string
 	tables := make([]string, 0, len(requiredColumns))
