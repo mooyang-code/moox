@@ -157,9 +157,8 @@ func (s *ConsoleServer) GetExecutionCapabilities(
 		CanPlaceOrder: value.CanPlaceOrder, UnavailableReason: value.UnavailableReason,
 		CanClosePaperSimulation: value.CanClosePaperSimulation,
 	}
-	if _, ledgerErr := s.ledgerSource(accountRecord.TradingAccountID); ledgerErr == nil {
-		capabilities.Ledger = true
-	}
+	_, ledgerErr := s.ledgerSource(accountRecord.TradingAccountID)
+	capabilities.Ledger = ledgerCapability(ledgerErr)
 	for _, item := range value.OrderTypes {
 		capabilities.OrderTypes = append(capabilities.OrderTypes, orderTypeToPB(string(item)))
 	}
