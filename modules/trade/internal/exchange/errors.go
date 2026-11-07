@@ -92,7 +92,8 @@ func IsConfirmedOrderMissing(err error) bool {
 }
 
 // IsInstrumentNotFound 报告交易所是否用明确的错误码确认标的不存在（已下架或代码错误）：
-// 币安 -1121（Invalid symbol），OKX 51001（Instrument ID does not exist，社区样例确认，官方错误码表未逐字核对）。
+// 币安 -1121（Invalid symbol），OKX 51001（官方错误码表 Trade Class：Instrument ID, Instrument ID code or Spread ID doesn't exist.，
+// 见 https://www.okx.com/docs-v5/en/#error-code-rest-api-public-trade-class）。
 // Kind 仍是 ErrorRejected，下单路径按拒单处理不受影响；估值路径据此把下架零头降级处理，不阻断采样。
 func IsInstrumentNotFound(err error) bool {
 	var typed *Error

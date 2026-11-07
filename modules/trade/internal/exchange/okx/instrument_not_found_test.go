@@ -14,7 +14,7 @@ import (
 // 单标的 ticker 退回请求：OKX 回 51001，或成功但没有行，都按“标的不存在”返回，估值据此降级。
 func TestReferencePriceOfMissingInstrumentIsInstrumentNotFound(t *testing.T) {
 	for name, body := range map[string]string{
-		"51001": `{"code":"51001","msg":"Instrument ID does not exist.","data":[]}`,
+		"51001": `{"code":"51001","msg":"Instrument ID, Instrument ID code or Spread ID doesn't exist.","data":[]}`,
 		"空数据":   `{"code":"0","msg":"","data":[]}`,
 	} {
 		t.Run(name, func(t *testing.T) {
