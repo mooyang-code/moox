@@ -140,7 +140,9 @@ CREATE TABLE IF NOT EXISTS t_strategy_result_items (
 
 CREATE INDEX IF NOT EXISTS idx_t_strategy_result_items_ctime ON t_strategy_result_items (c_ctime);
 
--- 回放任务：基于因子任务结果 View 的研究回放（c_view_id 由 c_factor_task_id 推导），按天数与每个空间的个数清理；c_view_generation 是提交时校验区间所用的活动索引代次
+-- 回放任务：基于因子任务结果 View 的研究回放，按天数与每个空间的个数清理；c_tasks_json 是市场（spot、swap、equity）→
+-- {factor_task_id, view_id, view_generation}：结果 View 由任务推导，view_generation 是提交时校验区间所用的活动索引代次；
+-- 费率分两列：c_spot_fee_bps 用于现货与股票，c_swap_fee_bps 用于永续
 CREATE TABLE IF NOT EXISTS t_strategy_replays (
     c_replay_id TEXT NOT NULL PRIMARY KEY,
     c_strategy_id TEXT,
@@ -148,14 +150,13 @@ CREATE TABLE IF NOT EXISTS t_strategy_replays (
     c_session_id TEXT,
     c_dsl_yaml TEXT NOT NULL,
     c_dsl_hash TEXT NOT NULL,
-    c_view_generation TEXT NOT NULL,
     c_calendar TEXT NOT NULL,
     c_space_id TEXT NOT NULL,
-    c_factor_task_id TEXT NOT NULL,
-    c_view_id TEXT NOT NULL,
+    c_tasks_json TEXT NOT NULL,
     c_start_time INTEGER NOT NULL,
     c_end_time INTEGER NOT NULL,
-    c_fee_bps REAL NOT NULL DEFAULT 0,
+    c_spot_fee_bps REAL NOT NULL DEFAULT 0,
+    c_swap_fee_bps REAL NOT NULL DEFAULT 0,
     c_factors_json TEXT NOT NULL DEFAULT '{}',
     c_status TEXT NOT NULL,
     c_progress_time INTEGER,
@@ -164,12 +165,14 @@ CREATE TABLE IF NOT EXISTS t_strategy_replays (
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK (c_status IN ('pending', 'running', 'done', 'failed', 'cancelled')),
-    CHECK (c_fee_bps >= 0 AND c_fee_bps <= 1000)
+    CHECK (c_spot_fee_bps >= 0 AND c_spot_fee_bps <= 1000),
+    CHECK (c_swap_fee_bps >= 0 AND c_swap_fee_bps <= 1000)
 );
 
 CREATE INDEX IF NOT EXISTS idx_t_strategy_replays_space ON t_strategy_replays (c_space_id, c_ctime);
 
--- 回放每期一行：目标、理论持仓账本、摘要与曲线字段，随所属回放清理
+-- 回放每期一行：目标、理论持仓账本、摘要与曲线字段，随所属回放清理；c_spot_value 是期末现货类持仓市值之和，
+-- c_swap_value 是永续持仓的净名义价值（多头为正、空头为负）
 CREATE TABLE IF NOT EXISTS t_strategy_replay_bars (
     c_replay_id TEXT NOT NULL,
     c_bar_end_time INTEGER NOT NULL,
@@ -181,6 +184,8 @@ CREATE TABLE IF NOT EXISTS t_strategy_replay_bars (
     c_equity REAL,
     c_turnover REAL,
     c_fee REAL,
+    c_spot_value REAL NOT NULL DEFAULT 0,
+    c_swap_value REAL NOT NULL DEFAULT 0,
     c_holdings INTEGER NOT NULL DEFAULT 0,
     c_frozen INTEGER NOT NULL DEFAULT 0,
     c_skip_reason TEXT NOT NULL DEFAULT '',

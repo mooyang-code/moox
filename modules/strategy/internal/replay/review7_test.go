@@ -72,8 +72,8 @@ func TestRecheckReportsCoverageReason(t *testing.T) {
 		t.Fatal(err)
 	}
 	resolved := input.Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]input.TaskBinding{"spot": {ViewID: "view_factor_a"}}, Bar: "1d", Calendar: "cn_stock"}
-	job := store.Replay{ReplayID: "p1", SpaceID: "crypto", FactorTaskID: "ftask_a", ViewID: "view_factor_a", EndTime: time.Date(2027, 2, 1, 0, 0, 0, 0, shanghai)}
-	_, _, err = runner.recheckWindow(context.Background(), job, resolved, nil, view, time.Date(2026, 12, 1, 0, 0, 0, 0, shanghai), job.EndTime, true, nil)
+	job := store.Replay{ReplayID: "p1", SpaceID: "crypto", Tasks: map[string]store.ReplayTask{"spot": {FactorTaskID: "ftask_a", ViewID: "view_factor_a", ViewGeneration: "idx"}}, EndTime: time.Date(2027, 2, 1, 0, 0, 0, 0, shanghai)}
+	_, _, err = runner.recheckView(context.Background(), job, "spot", resolved, nil, view, time.Date(2026, 12, 1, 0, 0, 0, 0, shanghai), job.EndTime, true, nil)
 	if err == nil || !strings.Contains(err.Error(), "超出 A 股内嵌交易日历") || strings.Contains(err.Error(), "暂时未知") {
 		t.Fatalf("复查应说明具体原因：%v", err)
 	}

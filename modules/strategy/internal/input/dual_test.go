@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
 	"github.com/mooyang-code/moox/modules/strategy/internal/readiness"
 )
@@ -243,5 +244,26 @@ func TestResolveInstanceWaitsForViewBeforeCheckingMarkets(t *testing.T) {
 	started := time.Now()
 	if _, _, err := service.ResolveInstance(context.Background(), "i1", "space", map[string]string{"swap": "ftask_1h"}, parseStrategy(t, strings.Replace(dualDSL, "market: {select: both, prefer: swap}\n", "market: {select: swap}\n", 1))); err == nil || time.Since(started) > 500*time.Millisecond {
 		t.Fatalf("市场对不上应立即报错而不是等待：%v", err)
+	}
+}
+
+// 回放区间逐个 View 校验：起点要在每个 View 的可用范围内，终点取各 View 中最早的，并返回各市场的索引代次。
+func TestServiceReplayWindowChecksEveryView(t *testing.T) {
+	client := newDualClient()
+	spot, swap := client.views["view_factor_1h"], client.views["view_factor_swap1h"]
+	spot.Generation, spot.IndexedFrom, spot.IndexedTo = "idx_a@s", barStart.Add(-500*time.Hour), barStart
+	swap.Generation, swap.IndexedFrom, swap.IndexedTo = "idx_b@w", barStart.Add(-50*time.Hour), barStart.Add(-10*time.Hour)
+	client.views["view_factor_1h"], client.views["view_factor_swap1h"] = spot, swap
+	resolved := Resolved{Market: dsl.Market{Select: dsl.MarketBoth, Prefer: dsl.MarketSpot}, Calendar: DefaultCalendar, Bar: "1h", Tasks: map[string]TaskBinding{
+		"spot": {ViewID: "view_factor_1h"}, "swap": {ViewID: "view_factor_swap1h"}}}
+	service := Service{Client: client}
+
+	end, generations, err := service.ReplayWindow(context.Background(), "space", resolved, nil, barStart.Add(-40*time.Hour), barStart.Add(10*time.Hour), testNow)
+	if err != nil || !end.Equal(barStart.Add(-10*time.Hour)) || generations["spot"] != "idx_a@s" || generations["swap"] != "idx_b@w" || len(generations) != 2 {
+		t.Fatalf("终点应取各 View 中最早的、并返回各市场的代次：end=%s generations=%v err=%v", end, generations, err)
+	}
+	// 起点在现货的范围内，却早于永续的覆盖起点：被永续的 View 拒绝。
+	if _, _, err := service.ReplayWindow(context.Background(), "space", resolved, nil, barStart.Add(-200*time.Hour), barStart, testNow); err == nil || !strings.Contains(err.Error(), "view_factor_swap1h") {
+		t.Fatalf("起点早于永续 View 的覆盖起点应被拒绝并指明 View：%v", err)
 	}
 }

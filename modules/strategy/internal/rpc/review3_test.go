@@ -86,7 +86,7 @@ func TestReplayRecordsSourceAndTrimsList(t *testing.T) {
 	if err != nil || instance.SessionID == nil {
 		t.Fatalf("实例应已启用：%+v err=%v", instance, err)
 	}
-	started, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{InstanceId: "i1", FactorTaskId: "ftask_a", StartTime: "2026-09-02T00:00:00.0005Z", EndTime: "2026-09-03T00:00:00Z"})
+	started, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{InstanceId: "i1", FactorTasks: map[string]string{"spot": "ftask_i1"}, StartTime: "2026-09-02T00:00:00.0005Z", EndTime: "2026-09-03T00:00:00Z"})
 	requireOK(t, int32(started.GetRetInfo().GetCode()), started.GetRetInfo().GetMsg())
 	replay := started.GetReplay()
 	if replay.GetInstanceId() != "i1" || replay.GetSessionId() != *instance.SessionID || replay.GetStartTime() != "2026-09-02T00:00:00Z" {

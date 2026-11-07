@@ -90,8 +90,8 @@ func TestValidateAndReplayByFactorTask(t *testing.T) {
 	}
 
 	noTask, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{DslYaml: demoDSL, StartTime: "2026-09-01T00:00:00Z", EndTime: "2026-09-02T00:00:00Z"})
-	requireFail(t, int32(noTask.GetRetInfo().GetCode()), noTask.GetRetInfo().GetMsg(), "factor_task_id")
-	tuned, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{DslYaml: tunedDSL, FactorTaskId: "ftask_x", StartTime: "2026-09-01T00:00:00Z", EndTime: "2026-09-02T00:00:00Z"})
+	requireFail(t, int32(noTask.GetRetInfo().GetCode()), noTask.GetRetInfo().GetMsg(), "factor_tasks")
+	tuned, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{DslYaml: tunedDSL, FactorTasks: map[string]string{"spot": "ftask_x"}, StartTime: "2026-09-01T00:00:00Z", EndTime: "2026-09-02T00:00:00Z"})
 	requireFail(t, int32(tuned.GetRetInfo().GetCode()), tuned.GetRetInfo().GetMsg(), "factor_params")
 }
 

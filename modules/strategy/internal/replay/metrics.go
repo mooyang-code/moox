@@ -160,8 +160,8 @@ func periodsPerYear(calendar, bar string, duration time.Duration) float64 {
 	return float64(365*24*time.Hour) / float64(duration)
 }
 
-// limitations 是每份回放报告都要标注的局限。
-func limitations(liquidateAfter int, usesTags bool) []string {
+// limitations 是每份回放报告都要标注的局限；用到永续时再注明资金费与强平。
+func limitations(liquidateAfter int, usesTags, usesSwap bool) []string {
 	notes := []string{
 		"研究回放：按当期 close 成交的理想化假设，与实盘在 bar_end 之后成交不同",
 		"区间内历史行版本未验证：因子结果行不携带版本，只核对了回放开始时的因子定义指纹",
@@ -171,6 +171,9 @@ func limitations(liquidateAfter int, usesTags bool) []string {
 	}
 	if usesTags {
 		notes = append(notes, "标签只有当前成员关系：按标签选池存在幸存者偏差")
+	}
+	if usesSwap {
+		notes = append(notes, "永续按收盘价逐期结算盈亏、不占用现金：未计资金费，不模拟强平与保证金率")
 	}
 	return notes
 }

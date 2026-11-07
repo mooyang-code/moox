@@ -22,6 +22,15 @@ const (
 	ReplayCancelled = "cancelled"
 )
 
+// ReplayTask 是回放在一个市场读取的因子任务及其结果 View。
+type ReplayTask struct {
+	FactorTaskID string `json:"factor_task_id"`
+	// ViewID 是任务的结果 View；ViewGeneration 是提交时校验区间所用的活动索引代次：同一代索引只追加、不删除行，
+	// 执行时代次没变就沿用提交时的区间。
+	ViewID         string `json:"view_id"`
+	ViewGeneration string `json:"view_generation"`
+}
+
 // Replay 是一次基于 View 的研究回放任务。
 type Replay struct {
 	ReplayID   string
@@ -30,19 +39,18 @@ type Replay struct {
 	InstanceID *string
 	SessionID  *string
 	DSLYaml    string
-	// DSLHash 是被回放 DSL 的内容哈希（列表不带 DSL 全文时据此展示版本）；ViewGeneration 是提交时校验区间所用的
-	// 活动索引代次：同一代索引只追加、不删除行，执行时代次没变就沿用提交时的区间。Calendar 是回放所用的日历
+	// DSLHash 是被回放 DSL 的内容哈希（列表不带 DSL 全文时据此展示版本）。Calendar 是回放所用的日历
 	// （A 股日线的区间按上海日期解释，页面据此显示日期）。
-	DSLHash        string
-	ViewGeneration string
-	Calendar       string
-	SpaceID        string
-	// FactorTaskID 是回放读取的因子任务；ViewID 是它的结果 View。
-	FactorTaskID string
-	ViewID       string
-	StartTime    time.Time
-	EndTime      time.Time
-	FeeBps       float64
+	DSLHash  string
+	Calendar string
+	SpaceID  string
+	// Tasks 是各市场（spot、swap、equity）读取的因子任务与结果 View。
+	Tasks     map[string]ReplayTask
+	StartTime time.Time
+	EndTime   time.Time
+	// SpotFeeBps 是现货与股票的单边手续费，SwapFeeBps 是永续的（基点）。
+	SpotFeeBps float64
+	SwapFeeBps float64
 	// Factors 是发起回放时固化的因子定义指纹；执行时与当时的定义比对，排队期间变化即拒绝执行。
 	Factors      map[string]string
 	Status       string
@@ -72,46 +80,51 @@ type ReplayBar struct {
 	Equity        float64
 	Turnover      float64
 	Fee           float64
-	Holdings      int
-	Frozen        int
-	SkipReason    string
-	Unfilled      int
-	Liquidated    int
+	// SpotValue 是期末现货类持仓的市值之和，SwapValue 是永续持仓的净名义价值（多头为正、空头为负）。
+	SpotValue  float64
+	SwapValue  float64
+	Holdings   int
+	Frozen     int
+	SkipReason string
+	Unfilled   int
+	Liquidated int
 }
 
 type replayRow struct {
-	ReplayID       string         `gorm:"column:c_replay_id"`
-	StrategyID     sql.NullString `gorm:"column:c_strategy_id"`
-	InstanceID     sql.NullString `gorm:"column:c_instance_id"`
-	SessionID      sql.NullString `gorm:"column:c_session_id"`
-	DSLYaml        string         `gorm:"column:c_dsl_yaml"`
-	DSLHash        string         `gorm:"column:c_dsl_hash"`
-	ViewGeneration string         `gorm:"column:c_view_generation"`
-	Calendar       string         `gorm:"column:c_calendar"`
-	SpaceID        string         `gorm:"column:c_space_id"`
-	FactorTaskID   string         `gorm:"column:c_factor_task_id"`
-	ViewID         string         `gorm:"column:c_view_id"`
-	StartTime      int64          `gorm:"column:c_start_time"`
-	EndTime        int64          `gorm:"column:c_end_time"`
-	FeeBps         float64        `gorm:"column:c_fee_bps"`
-	FactorsJSON    string         `gorm:"column:c_factors_json"`
-	Status         string         `gorm:"column:c_status"`
-	ProgressTime   sql.NullInt64  `gorm:"column:c_progress_time"`
-	MetricsJSON    string         `gorm:"column:c_metrics_json"`
-	Error          string         `gorm:"column:c_error"`
-	CreatedAt      time.Time      `gorm:"column:c_ctime"`
-	UpdatedAt      time.Time      `gorm:"column:c_mtime"`
+	ReplayID     string         `gorm:"column:c_replay_id"`
+	StrategyID   sql.NullString `gorm:"column:c_strategy_id"`
+	InstanceID   sql.NullString `gorm:"column:c_instance_id"`
+	SessionID    sql.NullString `gorm:"column:c_session_id"`
+	DSLYaml      string         `gorm:"column:c_dsl_yaml"`
+	DSLHash      string         `gorm:"column:c_dsl_hash"`
+	Calendar     string         `gorm:"column:c_calendar"`
+	SpaceID      string         `gorm:"column:c_space_id"`
+	TasksJSON    string         `gorm:"column:c_tasks_json"`
+	StartTime    int64          `gorm:"column:c_start_time"`
+	EndTime      int64          `gorm:"column:c_end_time"`
+	SpotFeeBps   float64        `gorm:"column:c_spot_fee_bps"`
+	SwapFeeBps   float64        `gorm:"column:c_swap_fee_bps"`
+	FactorsJSON  string         `gorm:"column:c_factors_json"`
+	Status       string         `gorm:"column:c_status"`
+	ProgressTime sql.NullInt64  `gorm:"column:c_progress_time"`
+	MetricsJSON  string         `gorm:"column:c_metrics_json"`
+	Error        string         `gorm:"column:c_error"`
+	CreatedAt    time.Time      `gorm:"column:c_ctime"`
+	UpdatedAt    time.Time      `gorm:"column:c_mtime"`
 }
 
 func (r replayRow) replay() Replay {
 	replay := Replay{
-		ReplayID: r.ReplayID, StrategyID: nullableString(r.StrategyID), InstanceID: nullableString(r.InstanceID), SessionID: nullableString(r.SessionID), DSLYaml: r.DSLYaml, DSLHash: r.DSLHash, ViewGeneration: r.ViewGeneration, Calendar: r.Calendar, SpaceID: r.SpaceID, FactorTaskID: r.FactorTaskID, ViewID: r.ViewID,
-		StartTime: fromMillis(r.StartTime), EndTime: fromMillis(r.EndTime), FeeBps: r.FeeBps, Status: r.Status,
+		ReplayID: r.ReplayID, StrategyID: nullableString(r.StrategyID), InstanceID: nullableString(r.InstanceID), SessionID: nullableString(r.SessionID), DSLYaml: r.DSLYaml, DSLHash: r.DSLHash, Calendar: r.Calendar, SpaceID: r.SpaceID,
+		StartTime: fromMillis(r.StartTime), EndTime: fromMillis(r.EndTime), SpotFeeBps: r.SpotFeeBps, SwapFeeBps: r.SwapFeeBps, Status: r.Status,
 		MetricsJSON: json.RawMessage(r.MetricsJSON), Error: r.Error, CreatedAt: r.CreatedAt.UTC(), UpdatedAt: r.UpdatedAt.UTC(),
 	}
 	if r.ProgressTime.Valid {
 		at := fromMillis(r.ProgressTime.Int64)
 		replay.ProgressTime = &at
+	}
+	if r.TasksJSON != "" {
+		_ = json.Unmarshal([]byte(r.TasksJSON), &replay.Tasks)
 	}
 	if r.FactorsJSON != "" {
 		_ = json.Unmarshal([]byte(r.FactorsJSON), &replay.Factors)
@@ -119,21 +132,34 @@ func (r replayRow) replay() Replay {
 	return replay
 }
 
-const replayColumns = "c_replay_id, c_strategy_id, c_instance_id, c_session_id, c_dsl_yaml, c_dsl_hash, c_view_generation, c_calendar, c_space_id, c_factor_task_id, c_view_id, c_start_time, c_end_time, c_fee_bps, c_factors_json, c_status, c_progress_time, c_metrics_json, c_error, c_ctime, c_mtime"
+const replayColumns = "c_replay_id, c_strategy_id, c_instance_id, c_session_id, c_dsl_yaml, c_dsl_hash, c_calendar, c_space_id, c_tasks_json, c_start_time, c_end_time, c_spot_fee_bps, c_swap_fee_bps, c_factors_json, c_status, c_progress_time, c_metrics_json, c_error, c_ctime, c_mtime"
 
 // replayListColumns 与 replayColumns 相同，只是不读取 DSL 全文。
 var replayListColumns = strings.Replace(replayColumns, "c_dsl_yaml,", "'' AS c_dsl_yaml,", 1)
 
 // CreateReplay 登记一个 pending 的回放任务。
 func (s *Store) CreateReplay(ctx context.Context, replay Replay) error {
-	if strings.TrimSpace(replay.ReplayID) == "" || strings.TrimSpace(replay.SpaceID) == "" || strings.TrimSpace(replay.FactorTaskID) == "" || strings.TrimSpace(replay.ViewID) == "" || strings.TrimSpace(replay.DSLYaml) == "" || strings.TrimSpace(replay.DSLHash) == "" || strings.TrimSpace(replay.ViewGeneration) == "" || strings.TrimSpace(replay.Calendar) == "" {
-		return errors.New("回放缺少 replay_id、space_id、view_id、DSL 文本、版本哈希、View 索引代次或日历")
+	if strings.TrimSpace(replay.ReplayID) == "" || strings.TrimSpace(replay.SpaceID) == "" || strings.TrimSpace(replay.DSLYaml) == "" || strings.TrimSpace(replay.DSLHash) == "" || strings.TrimSpace(replay.Calendar) == "" {
+		return errors.New("回放缺少 replay_id、space_id、DSL 文本、版本哈希或日历")
+	}
+	if len(replay.Tasks) == 0 || len(replay.Tasks) > 2 {
+		return errors.New("回放需要读取一个或两个因子任务")
+	}
+	for market, task := range replay.Tasks {
+		if market != "spot" && market != "swap" && market != "equity" {
+			return fmt.Errorf("回放的市场 %q 不受支持，只能是 spot、swap 或 equity", market)
+		}
+		if strings.TrimSpace(task.FactorTaskID) == "" || strings.TrimSpace(task.ViewID) == "" || strings.TrimSpace(task.ViewGeneration) == "" {
+			return fmt.Errorf("回放的 %s 任务缺少因子任务、view_id 或 View 索引代次", market)
+		}
 	}
 	if replay.StartTime.IsZero() || replay.EndTime.IsZero() || !replay.EndTime.After(replay.StartTime) {
 		return errors.New("回放区间必须满足 start < end")
 	}
-	if math.IsNaN(replay.FeeBps) || replay.FeeBps < 0 || replay.FeeBps > MaxReplayFeeBps {
-		return fmt.Errorf("手续费必须在 0 到 %d bps 之间", MaxReplayFeeBps)
+	for name, fee := range map[string]float64{"现货": replay.SpotFeeBps, "永续": replay.SwapFeeBps} {
+		if math.IsNaN(fee) || fee < 0 || fee > MaxReplayFeeBps {
+			return fmt.Errorf("%s手续费必须在 0 到 %d bps 之间", name, MaxReplayFeeBps)
+		}
 	}
 	now, err := requireTime(replay.CreatedAt)
 	if err != nil {
@@ -147,6 +173,10 @@ func (s *Store) CreateReplay(ctx context.Context, replay Replay) error {
 	if err != nil {
 		return err
 	}
+	tasksJSON, err := json.Marshal(replay.Tasks)
+	if err != nil {
+		return err
+	}
 	return s.transaction(ctx, func(tx *gorm.DB) error {
 		var active int64
 		if err := tx.Raw(`SELECT COUNT(*) FROM t_strategy_replays WHERE c_space_id = ? AND c_status IN ('pending', 'running')`, replay.SpaceID).Scan(&active).Error; err != nil {
@@ -157,8 +187,8 @@ func (s *Store) CreateReplay(ctx context.Context, replay Replay) error {
 		}
 		return tx.Exec(`
 			INSERT INTO t_strategy_replays (`+replayColumns+`)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, '{}', '', ?, ?)
-		`, replay.ReplayID, stringValue(replay.StrategyID), stringValue(replay.InstanceID), stringValue(replay.SessionID), replay.DSLYaml, replay.DSLHash, replay.ViewGeneration, replay.Calendar, replay.SpaceID, replay.FactorTaskID, replay.ViewID, millis(replay.StartTime), millis(replay.EndTime), replay.FeeBps, string(factorsJSON), now, now).Error
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, '{}', '', ?, ?)
+		`, replay.ReplayID, stringValue(replay.StrategyID), stringValue(replay.InstanceID), stringValue(replay.SessionID), replay.DSLYaml, replay.DSLHash, replay.Calendar, replay.SpaceID, string(tasksJSON), millis(replay.StartTime), millis(replay.EndTime), replay.SpotFeeBps, replay.SwapFeeBps, string(factorsJSON), now, now).Error
 	})
 }
 
@@ -335,9 +365,9 @@ func (s *Store) AppendReplayBar(ctx context.Context, bar ReplayBar) error {
 		}
 	}
 	return s.db.WithContext(ctx).Exec(`
-		INSERT INTO t_strategy_replay_bars (c_replay_id, c_bar_end_time, c_status, c_targets_json, c_positions_json, c_summary_json, c_return, c_equity, c_turnover, c_fee, c_holdings, c_frozen, c_skip_reason, c_unfilled, c_liquidated)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, bar.ReplayID, millis(bar.BarEndTime), bar.Status, string(bar.TargetsJSON), string(bar.PositionsJSON), string(bar.SummaryJSON), bar.Return, bar.Equity, bar.Turnover, bar.Fee, bar.Holdings, bar.Frozen, bar.SkipReason, bar.Unfilled, bar.Liquidated).Error
+		INSERT INTO t_strategy_replay_bars (c_replay_id, c_bar_end_time, c_status, c_targets_json, c_positions_json, c_summary_json, c_return, c_equity, c_turnover, c_fee, c_spot_value, c_swap_value, c_holdings, c_frozen, c_skip_reason, c_unfilled, c_liquidated)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, bar.ReplayID, millis(bar.BarEndTime), bar.Status, string(bar.TargetsJSON), string(bar.PositionsJSON), string(bar.SummaryJSON), bar.Return, bar.Equity, bar.Turnover, bar.Fee, bar.SpotValue, bar.SwapValue, bar.Holdings, bar.Frozen, bar.SkipReason, bar.Unfilled, bar.Liquidated).Error
 }
 
 // ListReplayBars 按周期顺序分页读取回放记录。brief 为 true 时不读目标、持仓与摘要 JSON（返回空值），
@@ -364,15 +394,17 @@ func (s *Store) ListReplayBars(ctx context.Context, replayID string, offset, lim
 		Equity        float64 `gorm:"column:c_equity"`
 		Turnover      float64 `gorm:"column:c_turnover"`
 		Fee           float64 `gorm:"column:c_fee"`
+		SpotValue     float64 `gorm:"column:c_spot_value"`
+		SwapValue     float64 `gorm:"column:c_swap_value"`
 		Holdings      int     `gorm:"column:c_holdings"`
 		Frozen        int     `gorm:"column:c_frozen"`
 		SkipReason    string  `gorm:"column:c_skip_reason"`
 		Unfilled      int     `gorm:"column:c_unfilled"`
 		Liquidated    int     `gorm:"column:c_liquidated"`
 	}
-	columns := "c_replay_id, c_bar_end_time, c_status, c_targets_json, c_positions_json, c_summary_json, c_return, c_equity, c_turnover, c_fee, c_holdings, c_frozen, c_skip_reason, c_unfilled, c_liquidated"
+	columns := "c_replay_id, c_bar_end_time, c_status, c_targets_json, c_positions_json, c_summary_json, c_return, c_equity, c_turnover, c_fee, c_spot_value, c_swap_value, c_holdings, c_frozen, c_skip_reason, c_unfilled, c_liquidated"
 	if brief {
-		columns = "c_replay_id, c_bar_end_time, c_status, '[]' AS c_targets_json, '{}' AS c_positions_json, '{}' AS c_summary_json, c_return, c_equity, c_turnover, c_fee, c_holdings, c_frozen, c_skip_reason, c_unfilled, c_liquidated"
+		columns = "c_replay_id, c_bar_end_time, c_status, '[]' AS c_targets_json, '{}' AS c_positions_json, '{}' AS c_summary_json, c_return, c_equity, c_turnover, c_fee, c_spot_value, c_swap_value, c_holdings, c_frozen, c_skip_reason, c_unfilled, c_liquidated"
 	}
 	if err := s.db.WithContext(ctx).Raw(`SELECT `+columns+` FROM t_strategy_replay_bars WHERE c_replay_id = ? ORDER BY c_bar_end_time LIMIT ? OFFSET ?`, replayID, limit, offset).Scan(&rows).Error; err != nil {
 		return nil, 0, err
@@ -381,7 +413,7 @@ func (s *Store) ListReplayBars(ctx context.Context, replayID string, offset, lim
 	for _, row := range rows {
 		bars = append(bars, ReplayBar{
 			ReplayID: row.ReplayID, BarEndTime: fromMillis(row.BarEndTime), Status: row.Status, TargetsJSON: json.RawMessage(row.TargetsJSON), PositionsJSON: json.RawMessage(row.PositionsJSON), SummaryJSON: json.RawMessage(row.SummaryJSON),
-			Return: row.Return, Equity: row.Equity, Turnover: row.Turnover, Fee: row.Fee, Holdings: row.Holdings, Frozen: row.Frozen, SkipReason: row.SkipReason, Unfilled: row.Unfilled, Liquidated: row.Liquidated,
+			Return: row.Return, Equity: row.Equity, Turnover: row.Turnover, Fee: row.Fee, SpotValue: row.SpotValue, SwapValue: row.SwapValue, Holdings: row.Holdings, Frozen: row.Frozen, SkipReason: row.SkipReason, Unfilled: row.Unfilled, Liquidated: row.Liquidated,
 		})
 	}
 	return bars, total, nil

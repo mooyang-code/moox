@@ -22,7 +22,7 @@ func recheckFixture(t *testing.T, client *fakeClient) (*Runner, store.Replay, in
 		t.Fatal(err)
 	}
 	resolved := input.Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]input.TaskBinding{"spot": {ViewID: "view_factor_a"}}, Bar: "1h", Calendar: input.DefaultCalendar}
-	job := store.Replay{ReplayID: "p1", SpaceID: "crypto", FactorTaskID: "ftask_a", ViewID: "view_factor_a", EndTime: origin.Add(20 * time.Hour)}
+	job := store.Replay{ReplayID: "p1", SpaceID: "crypto", Tasks: map[string]store.ReplayTask{"spot": {FactorTaskID: "ftask_a", ViewID: "view_factor_a", ViewGeneration: "idx"}}, EndTime: origin.Add(20 * time.Hour)}
 	return &Runner{Store: openStore(t), Client: client}, job, resolved, view
 }
 
@@ -30,7 +30,7 @@ func recheckFixture(t *testing.T, client *fakeClient) (*Runner, store.Replay, in
 func TestRecheckRetriesTransportFailures(t *testing.T) {
 	client := &fakeClient{marketType: "spot", coverageTransport: 2}
 	runner, job, resolved, view := recheckFixture(t, client)
-	if _, end, err := runner.recheckWindow(context.Background(), job, resolved, nil, view, origin.Add(10*time.Hour), job.EndTime, true, nil); err != nil || !end.Equal(job.EndTime) || client.coverageCalls != 3 {
+	if _, end, err := runner.recheckView(context.Background(), job, "spot", resolved, nil, view, origin.Add(10*time.Hour), job.EndTime, true, nil); err != nil || !end.Equal(job.EndTime) || client.coverageCalls != 3 {
 		t.Fatalf("传输失败应重试后通过：end=%s calls=%d err=%v", end, client.coverageCalls, err)
 	}
 }
@@ -41,7 +41,7 @@ func TestRecheckStopsWhenCancelled(t *testing.T) {
 	runner, job, resolved, view := recheckFixture(t, client)
 	aborted := errors.New("回放已取消")
 	abort := func(context.Context) error { return aborted }
-	if _, _, err := runner.recheckWindow(context.Background(), job, resolved, nil, view, origin.Add(10*time.Hour), job.EndTime, true, abort); !errors.Is(err, aborted) || client.coverageCalls != 1 {
+	if _, _, err := runner.recheckView(context.Background(), job, "spot", resolved, nil, view, origin.Add(10*time.Hour), job.EndTime, true, abort); !errors.Is(err, aborted) || client.coverageCalls != 1 {
 		t.Fatalf("取消后不应再读取覆盖统计：calls=%d err=%v", client.coverageCalls, err)
 	}
 }
@@ -70,7 +70,7 @@ func TestRecheckRetriesViewReadAfterStale(t *testing.T) {
 	client := &fakeClient{marketType: "spot", coverageStale: 1}
 	runner, job, resolved, view := recheckFixture(t, client)
 	client.viewTransport, client.viewCalls = 2, 0
-	if _, end, err := runner.recheckWindow(context.Background(), job, resolved, nil, view, origin.Add(10*time.Hour), job.EndTime, true, nil); err != nil || !end.Equal(job.EndTime) {
+	if _, end, err := runner.recheckView(context.Background(), job, "spot", resolved, nil, view, origin.Add(10*time.Hour), job.EndTime, true, nil); err != nil || !end.Equal(job.EndTime) {
 		t.Fatalf("读取 View 的传输失败应重试后通过：end=%s err=%v", end, err)
 	}
 	if client.viewCalls != 3 {
@@ -89,7 +89,7 @@ func TestRecheckTransportBackoffStopsOnCancel(t *testing.T) {
 		}
 		return nil
 	}
-	if _, _, err := runner.recheckWindow(context.Background(), job, resolved, nil, view, origin.Add(10*time.Hour), job.EndTime, true, abort); !errors.Is(err, aborted) || client.coverageCalls != 1 {
+	if _, _, err := runner.recheckView(context.Background(), job, "spot", resolved, nil, view, origin.Add(10*time.Hour), job.EndTime, true, abort); !errors.Is(err, aborted) || client.coverageCalls != 1 {
 		t.Fatalf("取消后不应再读取覆盖统计：calls=%d err=%v", client.coverageCalls, err)
 	}
 }

@@ -186,10 +186,10 @@ func TestStartReplayRecordsHashAndIndex(t *testing.T) {
 	h := newHarness(t)
 	h.createStrategy("s1", demoDSL)
 	h.resolver.view.ActiveIndexID, h.resolver.view.Generation = "idx_a", "idx_a@b7"
-	started, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTaskId: "ftask_a", StartTime: "2026-09-02T00:00:00Z", EndTime: "2026-09-03T00:00:00Z"})
+	started, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_a"}, StartTime: "2026-09-02T00:00:00Z", EndTime: "2026-09-03T00:00:00Z"})
 	requireOK(t, int32(started.GetRetInfo().GetCode()), started.GetRetInfo().GetMsg())
 	stored, err := h.service.Store.GetReplay(h.ctx, started.GetReplay().GetReplayId())
-	if err != nil || stored.DSLHash != dsl.Hash([]byte(demoDSL)) || stored.ViewGeneration != "idx_a@b7" {
+	if err != nil || stored.DSLHash != dsl.Hash([]byte(demoDSL)) || stored.Tasks["spot"].ViewGeneration != "idx_a@b7" {
 		t.Fatalf("回放应记录版本哈希与活动索引：%+v err=%v", stored, err)
 	}
 	if started.GetReplay().GetDslHash() != stored.DSLHash {

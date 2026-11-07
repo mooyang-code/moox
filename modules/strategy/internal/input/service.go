@@ -159,20 +159,30 @@ func (s Service) Resolve(ctx context.Context, spaceID string, taskIDs []string, 
 	return Resolve(ctx, s.Client, spaceID, taskIDs, strategy)
 }
 
-// ReplayWindow 读取 View 的覆盖范围，校验回放起点并截断终点，返回截断后的终点与校验所用的活动索引代次。
-func (s Service) ReplayWindow(ctx context.Context, spaceID string, resolved Resolved, program *dsl.Program, start, end, now time.Time) (time.Time, string, error) {
+// ReplayWindow 逐个读取绑定 View 的覆盖范围，校验回放起点并截断终点：起点要在每个 View 的可用范围内，终点取各 View 中最早的。
+// 返回截断后的终点与各市场校验所用的活动索引代次（市场 → 代次）。
+func (s Service) ReplayWindow(ctx context.Context, spaceID string, resolved Resolved, program *dsl.Program, start, end, now time.Time) (time.Time, map[string]string, error) {
 	if s.Client == nil {
-		return time.Time{}, "", errors.New("Storage 与 Factor 依赖未配置，不能回放")
+		return time.Time{}, nil, errors.New("Storage 与 Factor 依赖未配置，不能回放")
 	}
-	view, err := s.Client.GetView(ctx, spaceID, resolved.Primary().ViewID)
-	if err != nil {
-		return time.Time{}, "", err
+	generations := make(map[string]string, len(resolved.Tasks))
+	for _, market := range resolved.Markets() {
+		view, err := s.Client.GetView(ctx, spaceID, resolved.Tasks[market].ViewID)
+		if err != nil {
+			return time.Time{}, nil, err
+		}
+		if view, err = WithCoverage(ctx, s.Client, spaceID, view, true); err != nil {
+			return time.Time{}, nil, err
+		}
+		if end, err = ReplayWindow(resolved, program, view, start, end, now); err != nil {
+			if len(resolved.Tasks) > 1 {
+				err = fmt.Errorf("%s 市场的 View %s：%w", market, view.ViewID, err)
+			}
+			return time.Time{}, nil, err
+		}
+		generations[market] = view.Generation
 	}
-	if view, err = WithCoverage(ctx, s.Client, spaceID, view, true); err != nil {
-		return time.Time{}, "", err
-	}
-	end, err = ReplayWindow(resolved, program, view, start, end, now)
-	return end, view.Generation, err
+	return end, generations, nil
 }
 
 // CheckCoverage 在启用实例时校验 View 的覆盖（见包级 CheckCoverage）。

@@ -31,8 +31,8 @@ type Resolver interface {
 	// CheckCoverage 在启用时校验 View 的覆盖：A 股行键、min_age_bars 所需的历史。
 	CheckCoverage(ctx context.Context, spaceID string, resolved input.Resolved, now time.Time) error
 	LoadLatest(ctx context.Context, spaceID string, resolved input.Resolved, program *dsl.Program, now time.Time) (input.Loaded, error)
-	// ReplayWindow 校验并截断回放区间，返回截断后的终点与校验所用的活动索引代次。
-	ReplayWindow(ctx context.Context, spaceID string, resolved input.Resolved, program *dsl.Program, start, end, now time.Time) (time.Time, string, error)
+	// ReplayWindow 校验并截断回放区间，返回截断后的终点与各市场校验所用的活动索引代次（市场 → 代次）。
+	ReplayWindow(ctx context.Context, spaceID string, resolved input.Resolved, program *dsl.Program, start, end, now time.Time) (time.Time, map[string]string, error)
 }
 
 // Owner 是 Trade 组合账户的会话所有权接口。
