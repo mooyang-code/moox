@@ -25,6 +25,7 @@ describe("strategy instance creation behavior", () => {
   const api = vi.hoisted(() => ({
     createInstance: vi.fn(),
     getInstance: vi.fn(),
+    getStrategy: vi.fn(),
     validateStrategy: vi.fn(),
     listFactorTasks: vi.fn(),
     listLogicalAccounts: vi.fn()
@@ -32,6 +33,7 @@ describe("strategy instance creation behavior", () => {
   vi.mock("@/api/strategy", () => ({
     createInstance: api.createInstance,
     getInstance: api.getInstance,
+    getStrategy: api.getStrategy,
     validateStrategy: api.validateStrategy
   }));
   vi.mock("@/api/factor", () => ({ listFactorTasks: api.listFactorTasks }));
@@ -116,6 +118,7 @@ describe("strategy instance creation behavior", () => {
       trial_items: []
     });
     api.createInstance.mockReset().mockResolvedValue({ instance_id: "i1" });
+    api.getStrategy.mockReset().mockRejectedValue(new Error("策略不存在"));
     api.listFactorTasks.mockReset().mockResolvedValue({ factor_tasks: [taskInfo()], page_result: { has_more: false } });
     api.listLogicalAccounts.mockReset().mockResolvedValue({ logical_accounts: [], page_result: { has_more: false } });
   });
@@ -358,6 +361,136 @@ describe("strategy instance creation behavior", () => {
       strategy_id: "s1",
       factor_tasks: { swap: "ftask_a" },
       logical_account_id: ""
+    });
+  });
+
+  describe("策略池实例", () => {
+    const def = (id: string, dsl: string) => ({ ...strategies[0], strategy_id: id, name: id, dsl_yaml: dsl });
+    const spotMember = def("s_spot", "name: m\nmarket: {select: spot}\n");
+    const swapMember = def("s_swap", "name: m\nmarket: {select: swap, prefer: swap}\n");
+    const mixedMember = def("s_mixed", "name: m\nmarket: {select: both, prefer: swap}\n");
+    const noMarketMember = def("s_plain", "name: m\n");
+    const pool = (...members: string[]) =>
+      def(
+        "pool",
+        `name: p\nbar: 1h\nstrategy_pool:\n  members:\n${members.map((id, index) => `    - {id: m${index}, strategy: ${id}}\n`).join("")}  allocation: {method: fixed, ratios: {m0: 1}}\n`
+      );
+    const create = (wrapper: { findAll: (selector: string) => any[] }) =>
+      wrapper.findAll("button").find(item => item.text() === "创建停用实例")!;
+    const resolved = (select: string, prefer: string) =>
+      api.validateStrategy.mockReset().mockResolvedValue({
+        diagnostics: [],
+        resolved_json: JSON.stringify({ market: { select, prefer } }),
+        trial: null,
+        trial_items: []
+      });
+
+    it.each([
+      ["纯现货池", [spotMember, spotMember], ["spot"], ["spot", "spot"]],
+      ["纯永续池", [swapMember], ["swap"], ["swap", "swap"]]
+    ])("%s只要绑定一个对应市场的因子任务", async (_name, members, markets, resolvedMarket) => {
+      resolved(resolvedMarket[0], resolvedMarket[1]);
+      const list = [pool(...members.map(item => item.strategy_id)), spotMember, swapMember];
+      const { wrapper, flushPromises } = await open({ presetStrategyId: "pool", strategies: list });
+      // 定义选择框 + 一个任务选择框，不需要先选市场
+      expect(wrapper.findAll("select")).toHaveLength(2);
+      expect(wrapper.text()).toContain("策略池要绑定各成员所需市场的并集");
+      expect(wrapper.text()).toContain(`${markets[0] === "spot" ? "现货" : "永续"} 的因子任务`);
+      await wrapper.findAll("select")[1].setValue("ftask_a");
+      await precheck(wrapper, flushPromises);
+      await create(wrapper).trigger("click");
+      await flushPromises();
+      expect(api.createInstance).toHaveBeenCalledWith({
+        instance_id: undefined,
+        strategy_id: "pool",
+        factor_tasks: { [markets[0]]: "ftask_a" },
+        logical_account_id: ""
+      });
+    });
+
+    it("现货加永续的池（含 select=both 的成员）要现货、永续各绑一个任务，提交的仍是 市场→任务", async () => {
+      api.listFactorTasks.mockResolvedValue({
+        factor_tasks: [taskInfo({}, "ftask_spot"), taskInfo({}, "ftask_swap")],
+        page_result: { has_more: false }
+      });
+      resolved("both", "spot");
+      const list = [pool("s_spot", "s_swap"), spotMember, swapMember];
+      const { wrapper, flushPromises } = await open({ presetStrategyId: "pool", strategies: list });
+      expect(wrapper.findAll("select")).toHaveLength(3);
+      expect(wrapper.text()).toContain("现货、永续 的因子任务");
+      await wrapper.findAll("select")[1].setValue("ftask_spot");
+      await wrapper.findAll("select")[2].setValue("ftask_swap");
+      await precheck(wrapper, flushPromises);
+      expect(api.validateStrategy).toHaveBeenCalledWith(list[0].dsl_yaml, { spot: "ftask_spot", swap: "ftask_swap" });
+      await create(wrapper).trigger("click");
+      await flushPromises();
+      expect(api.createInstance).toHaveBeenCalledWith({
+        instance_id: undefined,
+        strategy_id: "pool",
+        factor_tasks: { spot: "ftask_spot", swap: "ftask_swap" },
+        logical_account_id: ""
+      });
+      // 单个成员 select=both 同样涉及两个市场
+      const only = await open({ presetStrategyId: "pool", strategies: [pool("s_mixed"), mixedMember] });
+      expect(only.wrapper.findAll("select")).toHaveLength(3);
+    });
+
+    it("还没预检时账户就按成员市场的并集过滤：只列出可交易市场包含现货与永续的账户", async () => {
+      api.listLogicalAccounts.mockResolvedValue({
+        logical_accounts: [
+          { logical_account_id: "acc_spot", name: "现货户", space_id: "crypto", control_mode: 1, markets: [1] },
+          { logical_account_id: "acc_both", name: "双市场户", space_id: "crypto", control_mode: 1, markets: [1, 2] }
+        ],
+        page_result: { has_more: false }
+      });
+      const { wrapper, flushPromises } = await open({
+        presetStrategyId: "pool",
+        strategies: [pool("s_spot", "s_swap"), spotMember, swapMember]
+      });
+      wrapper.findComponent({ name: "RadioGroupStub" }).vm.$emit("update:modelValue", "trade");
+      await flushPromises();
+      const accountSelect = wrapper.findAll("select")[3];
+      expect(accountSelect.findAll("option").map(item => item.attributes("value"))).toEqual(["", "acc_both"]);
+    });
+
+    it("成员定义不在目录里时按需读取；读取成功后按它的市场解析", async () => {
+      api.getStrategy.mockResolvedValue(spotMember);
+      const { wrapper } = await open({ presetStrategyId: "pool", strategies: [pool("s_spot")] });
+      expect(api.getStrategy).toHaveBeenCalledWith("s_spot");
+      expect(wrapper.text()).not.toContain("暂不能创建");
+      expect(wrapper.findAll("select")).toHaveLength(2);
+    });
+
+    it("成员定义缺失时给出中文提示并禁止提交", async () => {
+      const { wrapper, flushPromises } = await open({ presetStrategyId: "pool", strategies: [pool("s_gone")] });
+      expect(wrapper.text()).toContain("成员 m0 引用的策略 s_gone 不存在（定义已删除，或读取失败）");
+      expect(wrapper.findAll("select")).toHaveLength(1);
+      await create(wrapper).trigger("click");
+      await flushPromises();
+      expect(wrapper.text()).toContain("策略池的成员还不能用");
+      expect(api.createInstance).not.toHaveBeenCalled();
+      expect(api.validateStrategy).not.toHaveBeenCalled();
+    });
+
+    it("成员没写 market 时给出中文提示并禁止提交，其他成员没问题也不例外", async () => {
+      const { wrapper, flushPromises } = await open({
+        presetStrategyId: "pool",
+        strategies: [pool("s_spot", "s_plain"), spotMember, noMarketMember]
+      });
+      expect(wrapper.text()).toContain("成员 m1 引用的策略 s_plain 没有显式写 market，池成员必须写 market");
+      expect(wrapper.findAll("select")).toHaveLength(1);
+      await create(wrapper).trigger("click");
+      await flushPromises();
+      expect(api.createInstance).not.toHaveBeenCalled();
+    });
+
+    it("池里嵌套了池时提示不能嵌套", async () => {
+      const inner = pool("s_spot");
+      const { wrapper } = await open({
+        presetStrategyId: "outer",
+        strategies: [{ ...pool("inner"), strategy_id: "outer" }, { ...inner, strategy_id: "inner" }, spotMember]
+      });
+      expect(wrapper.text()).toContain("本身是策略池，策略池不能嵌套");
     });
   });
 });

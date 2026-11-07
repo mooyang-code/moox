@@ -61,6 +61,22 @@ type fakeLoader struct {
 	onLoad      func()
 	// lastBar 是最近一次装配收到的参数。
 	lastBar input.Bar
+	// prices 是各周期（bar_start）的收盘价（标的|市场 → 价格），LoadPrices 按请求的键返回其中有价的。
+	prices      map[int64]map[string]float64
+	priceCalls  int
+	priceKeysAt [][]string
+}
+
+func (l *fakeLoader) LoadPrices(_ context.Context, _ string, _ input.Resolved, bar input.Bar, keys []string) (map[string]float64, error) {
+	l.priceCalls++
+	l.priceKeysAt = append(l.priceKeysAt, keys)
+	out := map[string]float64{}
+	for _, key := range keys {
+		if price, ok := l.prices[bar.BarStart.Unix()][key]; ok {
+			out[key] = price
+		}
+	}
+	return out, nil
 }
 
 // Invalidate 记录处理器在 ErrStale 后丢弃事件内缓存的次数。

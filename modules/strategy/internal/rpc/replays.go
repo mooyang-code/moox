@@ -79,6 +79,9 @@ func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayRe
 	if s.Resolver == nil {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(errors.New("Storage 与 Factor 依赖未配置，不能回放"))}, nil
 	}
+	if strategy.IsPool() {
+		return &strategypb.StartReplayRsp{RetInfo: invalid(errors.New("研究回放暂不支持策略池：成员的净值与分配比例要在池实例启用后的预热与运行中查看"))}, nil
+	}
 	if len(strategy.FactorParams) > 0 {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(errors.New("输出了 factor_params 的策略暂不支持研究回放：可变成员的参数随策略逐期变化，需要从实例发起的闭环回放"))}, nil
 	}

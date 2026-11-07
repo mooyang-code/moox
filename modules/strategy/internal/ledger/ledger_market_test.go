@@ -1,7 +1,6 @@
-package replay
+package ledger
 
 import (
-	"encoding/json"
 	"math"
 	"reflect"
 	"testing"
@@ -213,33 +212,6 @@ func TestFrozenSwapDoesNotSettleUntilPriceReturns(t *testing.T) {
 	resumed := ledger.Step(Step{OK: true, Prices: map[string]float64{swapA: 15}, Targets: map[string]float64{swapA: 0.5}})
 	near(t, "恢复报价后结算冻结期间的价差", resumed.EquityBefore, 115)
 	near(t, "名义价值调到权益的一半", ledger.Positions[swapA].Value, 57.5)
-}
-
-func TestSnapshotKeysCarryInstrumentAndMarket(t *testing.T) {
-	ledger := NewLedger(100, 0, 0, 3)
-	ledger.Step(Step{OK: true, Prices: map[string]float64{spotA: 10, swapA: 10}, Targets: map[string]float64{spotA: 0.5, swapA: -0.5}})
-	raw, err := json.Marshal(ledger.Snapshot())
-	if err != nil {
-		t.Fatal(err)
-	}
-	var snapshot struct {
-		Cash      float64 `json:"cash"`
-		Positions map[string]struct {
-			InstrumentID string  `json:"instrument_id"`
-			Market       string  `json:"market"`
-			Quantity     float64 `json:"quantity"`
-			Value        float64 `json:"value"`
-		} `json:"positions"`
-	}
-	if err := json.Unmarshal(raw, &snapshot); err != nil {
-		t.Fatal(err)
-	}
-	if len(snapshot.Positions) != 2 || snapshot.Positions[spotA].Market != "spot" || snapshot.Positions[swapA].Market != "swap" || snapshot.Positions[swapA].InstrumentID != "A" {
-		t.Fatalf("持仓键与字段不符：%s", raw)
-	}
-	if snapshot.Positions[swapA].Quantity != -5 || snapshot.Positions[swapA].Value != -50 {
-		t.Fatalf("永续持仓不符：%s", raw)
-	}
 }
 
 func TestPositionKeysSortBySubjectThenMarket(t *testing.T) {

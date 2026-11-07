@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
+	"github.com/mooyang-code/moox/modules/strategy/internal/ledger"
 )
 
 // Metrics 是回放的绩效与局限性说明，写入 metrics_json。
@@ -63,7 +64,7 @@ func minAnnualizedBars(calendar, bar string, duration time.Duration) int {
 	return int((minAnnualizedSpan + duration - 1) / duration)
 }
 
-func (a *accumulator) add(barEnd time.Time, ok bool, reason string, outcome Outcome, holdings int) {
+func (a *accumulator) add(barEnd time.Time, ok bool, reason string, outcome ledger.Outcome, holdings int) {
 	m := &a.metrics
 	if m.Bars == 0 {
 		m.FirstBarEnd = barEnd

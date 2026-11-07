@@ -1,5 +1,5 @@
-// Package replay 是基于 View 的研究回放：按周期装配历史帧、复用引擎求值，并用理论账本模拟现货与永续的成交。
-package replay
+// Package ledger 是理论账本：按收盘价模拟现货与永续的成交、手续费与逐期结算，研究回放与策略池的成员净值共用。
+package ledger
 
 import (
 	"math"
@@ -35,15 +35,15 @@ type Position struct {
 // 权益 = 现金 + 现货市值，成交只改数量并扣手续费。这样永续的盈利可以用来买现货，亏损会减少现金（现金可以为负，此时现货买入被缩减为 0，
 // 目标权重按缩小后的权益折算，现货随后被卖出补回现金）。没有价格的永续持仓冻结，不结算。不计资金费，不模拟强平与保证金率。
 type Ledger struct {
-	Cash      float64
-	Positions map[string]*Position
+	Cash      float64              `json:"cash"`
+	Positions map[string]*Position `json:"positions"`
 	// SpotFeeRate 是现货类（现货、股票）的单边手续费率，SwapFeeRate 是永续的。
-	SpotFeeRate    float64
-	SwapFeeRate    float64
-	LiquidateAfter int
+	SpotFeeRate    float64 `json:"spot_fee_rate"`
+	SwapFeeRate    float64 `json:"swap_fee_rate"`
+	LiquidateAfter int     `json:"liquidate_after"`
 	// Bankrupt 在持仓期间权益降到不超过 0 时置位（模拟爆仓）：之后各期忽略目标，可成交的持仓全部平掉、不再开仓，空仓直到结束。
 	// 没有这条规则时负权益会让“目标权重 × 权益”变成反向持仓，账户靠反向持仓“复活”。
-	Bankrupt bool
+	Bankrupt bool `json:"bankrupt,omitempty"`
 }
 
 // NewLedger 用初始现金构造账本；spotFeeBps 与 swapFeeBps 是现货类与永续的单边手续费（基点）。
@@ -378,23 +378,4 @@ func sortKeys(keys []string) {
 		}
 		return !isSwapKey(keys[i]) && isSwapKey(keys[j])
 	})
-}
-
-// snapshotPosition 是写入 positions_json 的一个持仓：带上标的与市场，键仍是 engine.TargetKey。
-type snapshotPosition struct {
-	InstrumentID string `json:"instrument_id"`
-	Market       string `json:"market"`
-	Position
-}
-
-// Snapshot 返回持仓与现金的拷贝（写入 positions_json）。
-func (l *Ledger) Snapshot() map[string]any {
-	positions := make(map[string]snapshotPosition, len(l.Positions))
-	for id, position := range l.Positions {
-		copied := *position
-		copied.Quantity, copied.Value = roundPlaces(copied.Quantity, quantityPlaces), round4(copied.Value)
-		instrument, market := engine.SplitTargetKey(id)
-		positions[id] = snapshotPosition{InstrumentID: instrument, Market: market, Position: copied}
-	}
-	return map[string]any{"cash": round4(l.Cash), "positions": positions}
 }

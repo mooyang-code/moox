@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/strategy/internal/ledger"
+
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
@@ -191,7 +193,7 @@ func TestAnnualizedThresholdByCalendar(t *testing.T) {
 	}
 	acc := newAccumulator(100, periodsPerYear("cn_stock", "1d", 24*time.Hour), minAnnualizedBars("cn_stock", "1d", 24*time.Hour))
 	for i := 0; i < 5; i++ {
-		acc.add(origin.Add(time.Duration(i)*24*time.Hour), true, "", Outcome{EquityBefore: 100 + float64(i), EquityAfter: 100 + float64(i+1)}, 0)
+		acc.add(origin.Add(time.Duration(i)*24*time.Hour), true, "", ledger.Outcome{EquityBefore: 100 + float64(i), EquityAfter: 100 + float64(i+1)}, 0)
 	}
 	if metrics := acc.finish(); metrics.AnnualizedReturn == nil {
 		t.Fatalf("A 股一整周应给出年化：%+v", metrics)

@@ -133,6 +133,9 @@ func (e *ReplayEvaluator) Bind(ctx context.Context, instanceID string) (ReplayBi
 	if err != nil {
 		return ReplayBinding{}, err
 	}
+	if strategy.IsPool() {
+		return ReplayBinding{}, errors.New("闭环回放不支持策略池")
+	}
 	if strategy.HasTranche() {
 		return ReplayBinding{}, errors.New("闭环回放第一版不支持 tranche 策略")
 	}

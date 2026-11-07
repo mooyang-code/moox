@@ -40,7 +40,9 @@ type Strategy struct {
 	MarketDeclared bool
 	Universe       Universe
 	Rules          []Rule
-	Portfolio      Portfolio
+	// Pool 非空表示策略池：与 Rules 互斥（见 pool.go）。
+	Pool      *StrategyPool
+	Portfolio Portfolio
 	// FactorParams 是可变成员的成员键 → 参数名 → 下一期参数的输出表达式（见 factors.go）。
 	FactorParams map[string]map[string]ParamExpr
 }

@@ -302,6 +302,9 @@ func (s *Service) enable(ctx context.Context, instance store.Instance) (store.In
 		return instance, fmt.Errorf("策略定义 %s 不存在", instance.StrategyID)
 	}
 	sessionID := ""
+	// poolSession 为真表示这次启用用的会话是策略池会话（带成员快照）：启用成功后要开始预热。直接用这里已有的成员快照判断，
+	// 不再重读会话——重读失败会让预热没有启动，门禁又看不到任务，事件就被一直重投。
+	poolSession := false
 	var resolvedJSON json.RawMessage
 	if instance.SessionID != nil && strings.TrimSpace(*instance.SessionID) != "" {
 		previous := *instance.SessionID
@@ -315,6 +318,7 @@ func (s *Service) enable(ctx context.Context, instance store.Instance) (store.In
 			}
 			sessionID = session.SessionID
 			resolvedJSON = json.RawMessage(session.ResolvedJSON)
+			poolSession = session.MembersJSON != ""
 		} else {
 			if instance.LogicalAccountID != nil {
 				if err := s.Owner.ReleaseSession(ctx, instance.SpaceID, *instance.LogicalAccountID, instance.InstanceID, previous); err != nil && !tradeowner.IsReleaseSettled(err) {
@@ -335,25 +339,49 @@ func (s *Service) enable(ctx context.Context, instance store.Instance) (store.In
 		if s.Resolver == nil {
 			return reload(), errors.New("Storage 与 Factor 依赖未配置，不能启用实例")
 		}
-		resolved, _, err := s.Resolver.ResolveInstance(ctx, instance.InstanceID, instance.SpaceID, instance.FactorTasks, strategy)
-		if err != nil {
-			return reload(), err
-		}
-		if err := checkLiveCalendar(resolved, s.nowTime()); err != nil {
-			return reload(), err
-		}
-		if err := s.Resolver.CheckCoverage(ctx, instance.SpaceID, resolved, s.nowTime()); err != nil {
-			return reload(), err
+		var resolved input.Resolved
+		membersJSON := ""
+		if strategy.IsPool() {
+			members, err := s.checkPool(ctx, strategy)
+			if err != nil {
+				return reload(), err
+			}
+			pooled, err := s.Resolver.ResolvePoolInstance(ctx, instance.InstanceID, instance.SpaceID, instance.FactorTasks, strategy, members)
+			if err != nil {
+				return reload(), err
+			}
+			if err := checkLiveCalendar(pooled.Resolved, s.nowTime()); err != nil {
+				return reload(), err
+			}
+			if err := s.Resolver.CheckPoolCoverage(ctx, instance.SpaceID, pooled, s.nowTime()); err != nil {
+				return reload(), err
+			}
+			if membersJSON, err = pooled.MembersJSON(); err != nil {
+				return reload(), err
+			}
+			resolved = pooled.Resolved
+		} else {
+			var err error
+			if resolved, _, err = s.Resolver.ResolveInstance(ctx, instance.InstanceID, instance.SpaceID, instance.FactorTasks, strategy); err != nil {
+				return reload(), err
+			}
+			if err := checkLiveCalendar(resolved, s.nowTime()); err != nil {
+				return reload(), err
+			}
+			if err := s.Resolver.CheckCoverage(ctx, instance.SpaceID, resolved, s.nowTime()); err != nil {
+				return reload(), err
+			}
 		}
 		resolvedJSON, err = json.Marshal(resolved)
 		if err != nil {
 			return reload(), err
 		}
+		poolSession = membersJSON != ""
 		if sessionID, err = store.NewID(); err != nil {
 			return reload(), err
 		}
 		now := s.nowTime()
-		if err := s.Store.OpenSession(ctx, store.Session{SessionID: sessionID, InstanceID: instance.InstanceID, DSLHash: definition.DSLHash, ResolvedJSON: string(resolvedJSON), CreatedAt: now}, definition.DSLYaml); err != nil {
+		if err := s.Store.OpenSession(ctx, store.Session{SessionID: sessionID, InstanceID: instance.InstanceID, DSLHash: definition.DSLHash, ResolvedJSON: string(resolvedJSON), MembersJSON: membersJSON, CreatedAt: now}, definition.DSLYaml); err != nil {
 			return reload(), fmt.Errorf("写入会话快照失败：%w", err)
 		}
 		// 先把会话写到停用状态的实例上再联系 Trade：认领响应丢失时，启动对账能释放这个确定的身份。
@@ -383,6 +411,9 @@ func (s *Service) enable(ctx context.Context, instance store.Instance) (store.In
 			_ = s.Owner.ReleaseSession(ctx, instance.SpaceID, *instance.LogicalAccountID, instance.InstanceID, sessionID)
 		}
 		return reload(), err
+	}
+	if poolSession && s.Warmer != nil {
+		s.Warmer.Start(ctx, instance.InstanceID, sessionID)
 	}
 	return reload(), nil
 }
@@ -454,6 +485,9 @@ func (s *Service) disable(ctx context.Context, instance store.Instance) (store.I
 	}
 	if err := s.Store.DisableInstance(ctx, instance.InstanceID, instance.SessionID, pending, "", s.nowTime()); err != nil {
 		return reload(), err
+	}
+	if s.Warmer != nil {
+		s.Warmer.Stop(instance.InstanceID)
 	}
 	if releaseNeeded {
 		if s.Owner == nil {
