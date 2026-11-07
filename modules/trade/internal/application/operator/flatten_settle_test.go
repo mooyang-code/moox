@@ -435,8 +435,8 @@ func TestFlattenFinishingBudgetEndDiscardsPendingAndRespectsTimeout(t *testing.T
 	require.Empty(t, fixture.orders.specs, "收尾期间不下单")
 }
 
-// 收尾满 30 分钟仍是共享故障（成员 A 的子单解析时写库失败，后面的成员没轮到）：落成时另起上下文把所有成员上
-// 本动作没结束的子单列全，待提交的丢弃（释放资金预留），其余和出错的那笔一起写进 manual_check_child_order_ids。
+// 收尾满 30 分钟仍是共享故障（成员 A 的子单解析时写库失败）：B 的待提交子单在第二步（解析之前）已丢弃，
+// 出错的那笔和没轮到的结果未知子单一起写进 manual_check_child_order_ids，照常落成并记关注项。
 func TestFlattenFinishingSharedErrorListsChildrenOfAllMembers(t *testing.T) {
 	fixture := newMixedFlattenFixture(t)
 	service, command := startFinishingWithUnknownChild(t, fixture, "delist-shared-all", "child-shared-a", errors.New("disk I/O error"))
@@ -625,4 +625,93 @@ func TestActionScopedErrorCoversMemberRemovalAndConflict(t *testing.T) {
 			require.True(t, ActionScopedError(err), "工作线程恢复时拿到的错误不能拖垮就绪：%v", err)
 		})
 	}
+}
+
+// blockDiscard 让指定子单的丢弃一直等到上下文结束（模拟要等的交易账户锁被一个卡在交易所调用上的同步占着），带回上下文的错误。
+type blockDiscard struct {
+	failResolveOrders
+	block string
+}
+
+func (o blockDiscard) DiscardPending(ctx context.Context, spaceID, orderID string) (orderdomain.Order, error) {
+	if orderID == o.block {
+		<-ctx.Done()
+		return orderdomain.Order{}, ctx.Err()
+	}
+	return o.failResolveOrders.DiscardPending(ctx, spaceID, orderID)
+}
+
+// 收尾时成员 A 的待提交子单丢弃要等账户锁、等到时限到期：这是本动作的问题，不能被当成共享故障（否则工作线程不就绪、
+// Trade 被自动暂停）；成员 B 的待提交子单当轮照样丢弃（每笔丢弃各用各的时限）。
+func TestFlattenFinishingDiscardLockWaitIsActionScoped(t *testing.T) {
+	previous := settleLocalTimeout
+	settleLocalTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { settleLocalTimeout = previous })
+	fixture := newMixedFlattenFixture(t)
+	authErr := &orderapp.AccountExecutionError{TradingAccountID: "account-a", Operation: "get_order",
+		Err: &exchange.Error{Kind: exchange.ErrorAuthentication, Code: "-2015"}}
+	service, _ := startFinishingWithUnknownChild(t, fixture, "delist-lock", "child-lock-unknown", authErr)
+	operatorChild(t, fixture, "account-a", "delist-lock", "child-lock-a", "PENDING")
+	operatorChild(t, fixture, "account-b", "delist-lock", "child-lock-b", "PENDING")
+	service.Orders = blockDiscard{failResolveOrders: service.Orders.(failResolveOrders), block: "child-lock-a"}
+
+	stored, err := fixture.store.GetOperatorAction(context.Background(), "space-1", "delist-lock")
+	require.NoError(t, err)
+	err = service.ResumeOperatorAction(context.Background(), stored)
+	require.True(t, err == nil || ActionScopedError(err), "等账户锁超时是本动作的问题，不能被当成共享故障：%v", err)
+	require.Equal(t, "PENDING", childState(t, fixture, "child-lock-a"))
+	require.Equal(t, "CANCELED", childState(t, fixture, "child-lock-b"), "B 的待提交子单当轮丢弃")
+	decoded := resumeStoredNoAssert(t, fixture, "delist-lock")
+	require.Equal(t, "RUNNING", decoded.Action.Status)
+	require.False(t, unsettledNoted(fixture, "delist-lock", "读写不了子单"))
+}
+
+// hangResolve 让指定子单的解析一直挂到上下文结束（模拟交易所查单不响应）；other 里的子单解析后退回待提交。
+type hangResolve struct {
+	failResolveOrders
+	hang  string
+	other string
+}
+
+func (o hangResolve) ResolveUnknown(ctx context.Context, spaceID, orderID string) (orderdomain.Order, error) {
+	switch orderID {
+	case o.hang:
+		<-ctx.Done()
+		return orderdomain.Order{}, ctx.Err()
+	case o.other:
+		return orderdomain.Order{ID: shared.OrderID(orderID), State: orderdomain.Pending}, nil
+	}
+	return o.failResolveOrders.ResolveUnknown(ctx, spaceID, orderID)
+}
+
+// 成员 A 的结果未知子单解析一直挂住：剩余预算平均分给每笔，A 那笔到自己的时限就放下，成员 B 的子单照样轮得到；
+// B 那笔解析后退回待提交，当轮丢弃（释放资金预留）。
+func TestFlattenFinishingHungResolveDoesNotStarveOtherMembers(t *testing.T) {
+	fixture := newMixedFlattenFixture(t)
+	authErr := &orderapp.AccountExecutionError{TradingAccountID: "account-a", Operation: "get_order",
+		Err: &exchange.Error{Kind: exchange.ErrorAuthentication, Code: "-2015"}}
+	service, _ := startFinishingWithUnknownChild(t, fixture, "delist-hang", "child-hang-first", authErr)
+	operatorChild(t, fixture, "account-a", "delist-hang", "child-hang-a", "SUBMIT_UNKNOWN")
+	operatorChild(t, fixture, "account-b", "delist-hang", "child-ok-b", "SUBMIT_UNKNOWN")
+	service.Orders = hangResolve{failResolveOrders: service.Orders.(failResolveOrders), hang: "child-hang-a", other: "child-ok-b"}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	stored, err := fixture.store.GetOperatorAction(context.Background(), "space-1", "delist-hang")
+	require.NoError(t, err)
+	err = service.ResumeOperatorAction(ctx, stored)
+	require.True(t, err == nil || ActionScopedError(err), "解析挂住是本动作的问题：%v", err)
+	require.Equal(t, "SUBMIT_UNKNOWN", childState(t, fixture, "child-hang-a"))
+	require.Equal(t, "CANCELED", childState(t, fixture, "child-ok-b"), "B 的子单轮得到，解析后退回待提交就丢弃")
+	require.Equal(t, "RUNNING", resumeStoredNoAssert(t, fixture, "delist-hang").Action.Status)
+}
+
+// resumeStoredNoAssert 只读出动作当前的结果，不再恢复一次。
+func resumeStoredNoAssert(t *testing.T, fixture *operatorFixture, actionID string) FlattenResult {
+	t.Helper()
+	stored, err := fixture.store.GetOperatorAction(context.Background(), "space-1", actionID)
+	require.NoError(t, err)
+	decoded, err := decodeFlattenResult(stored)
+	require.NoError(t, err)
+	return decoded
 }
