@@ -10,6 +10,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"github.com/mooyang-code/moox/packages/marketcalendar"
+	"github.com/mooyang-code/moox/packages/seriesset"
 )
 
 // DefaultReplayMaxBars 是一次回放允许的最多 bar 数。
@@ -288,6 +289,9 @@ type RangeLoader struct {
 	View     ViewInfo
 	Subjects []Subject
 	Columns  []string
+	// Market 非空表示读的是统一数据集（一个 View 里现货、永续用 series_tag 区分）里这个市场的行：Subjects 不带 series_tag
+	// （读全部序列），读回的行按 series_tag 对应的市场过滤，只保留这个市场的；歧义也只在这个市场内判断。为空时按 View 读全部行。
+	Market string
 	// ExpectedRevision 非零时固定读取的索引修订号（取自同一段主数据读取返回的修订号）：修订号变化时不退避重读，
 	// 直接返回 *RevisionChangedError，由调用方连同主数据一起重读，保证同一段的两次读取来自同一修订号。
 	ExpectedRevision uint64
@@ -325,7 +329,7 @@ func (l *RangeLoader) Load(ctx context.Context, start, end time.Time) (RangeRows
 			if err := l.checkGeneration(ctx); err != nil {
 				return RangeRows{}, err
 			}
-			grouped := groupRange(rows)
+			grouped := groupRange(rows, l.Market)
 			grouped.Revision = revision
 			return grouped, nil
 		}
@@ -461,23 +465,41 @@ func sleepContext(ctx context.Context, d time.Duration) error {
 	}
 }
 
-func groupRange(rows []Row) RangeRows {
+func groupRange(rows []Row, market string) RangeRows {
 	result := RangeRows{Bars: make(map[int64]map[string]Row), Ambiguous: make(map[int64]map[string]string)}
 	tags := make(map[int64]map[string]string)
+	markAmbiguous := func(key int64, subjectID, detail string) {
+		if result.Ambiguous[key] == nil {
+			result.Ambiguous[key] = make(map[string]string)
+		}
+		result.Ambiguous[key][subjectID] = detail
+	}
 	for _, row := range rows {
 		if row.SubjectID == "" {
 			continue
 		}
 		key := row.DataTime.Unix()
+		if market != "" {
+			// 统一数据集：现货、永续两条序列并存是正常的；换不出市场的序列才有歧义，两个市场都不能用这个标的的这一根。
+			rowMarket := seriesset.SeriesTagMarket(row.SeriesTag)
+			if rowMarket != dsl.MarketSpot && rowMarket != dsl.MarketSwap {
+				markAmbiguous(key, row.SubjectID, fmt.Sprintf("标的 %s 的序列 %q 无法判断所属市场", row.SubjectID, row.SeriesTag))
+				continue
+			}
+			if rowMarket != market {
+				continue
+			}
+		}
 		if result.Bars[key] == nil {
 			result.Bars[key] = make(map[string]Row)
 			tags[key] = make(map[string]string)
 		}
 		if tag, seen := tags[key][row.SubjectID]; seen && tag != row.SeriesTag {
-			if result.Ambiguous[key] == nil {
-				result.Ambiguous[key] = make(map[string]string)
+			detail := fmt.Sprintf("标的 %s 在同一周期有多个序列（%s、%s）", row.SubjectID, tag, row.SeriesTag)
+			if market != "" {
+				detail = fmt.Sprintf("标的 %s 在同一周期的%s市场有多个序列（%s、%s）", row.SubjectID, market, tag, row.SeriesTag)
 			}
-			result.Ambiguous[key][row.SubjectID] = fmt.Sprintf("标的 %s 在同一周期有多个序列（%s、%s）", row.SubjectID, tag, row.SeriesTag)
+			markAmbiguous(key, row.SubjectID, detail)
 			continue
 		}
 		tags[key][row.SubjectID] = row.SeriesTag

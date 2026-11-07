@@ -3,8 +3,10 @@ package input
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 const (
@@ -104,5 +106,164 @@ func TestCheckRegisteredMarketsUnified(t *testing.T) {
 	spotOf := func(context.Context, string) (string, error) { return "spot", nil }
 	if err := CheckRegisteredMarkets(context.Background(), map[string]string{MarketMulti: "ftask_1h"}, spotOf); err == nil {
 		t.Fatal("单市场数据集登记成 multi 应被拒绝")
+	}
+}
+
+// unifiedRows 是统一数据集 View 里一个周期的行：每个标的在现货、永续两条序列上各一行（只给出有的）。
+func unifiedRows(at time.Time, spot, swap map[string]float64) []Row {
+	var rows []Row
+	for id, value := range spot {
+		rows = append(rows, Row{SubjectID: id, SeriesTag: spotTag, DataTime: at, Values: map[string]float64{"ma_20": value, "close": 1}})
+	}
+	for id, value := range swap {
+		rows = append(rows, Row{SubjectID: id, SeriesTag: swapTag, DataTime: at, Values: map[string]float64{"ma_20": value, "close": 1}})
+	}
+	return rows
+}
+
+// 统一数据集：只读一次（selector 不带 series_tag），按 series_tag 对应的市场拆行；每个市场的标的取自己标签的活跃成员；
+// 同一标的现货、永续两条序列并存不是歧义。
+func TestLoadBarUnifiedReadsOnceAndSplitsByMarket(t *testing.T) {
+	client := newUnifiedClient()
+	resolved, program, err := Resolve(context.Background(), client, "space", []string{"ftask_1h"}, parseStrategy(t, unifiedDSL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.rows = func(query Query) ([]Row, uint64, error) {
+		// OLD-USDT 不是任何标签的活跃成员；DOGE 的现货行不属于现货标签成员。
+		return unifiedRows(barStart, map[string]float64{"BTC-USDT": 1, "ETH-USDT": 2, "DOGE-USDT": 50}, map[string]float64{"BTC-USDT": 10, "DOGE-USDT": 4}), 7, nil
+	}
+	universe := []string{"BTC-USDT", "ETH-USDT", "SOL-USDT", "DOGE-USDT", "OLD-USDT"}
+	loaded, err := Loader{Client: client}.LoadBar(context.Background(), "space", resolved, program, Bar{BarStart: barStart, EventUniverse: map[string][]string{"spot": universe, "swap": universe}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(client.queries) != 1 {
+		t.Fatalf("统一数据集一个 View 只读一次：%d 次", len(client.queries))
+	}
+	for _, subject := range client.queries[0].Subjects {
+		if subject.SeriesTag != "" {
+			t.Fatalf("统一数据集读全部序列，selector 不能带 series_tag：%+v", subject)
+		}
+	}
+	spot, swap := loaded.Frame.Markets["spot"], loaded.Frame.Markets["swap"]
+	if len(spot.Rows) != 2 || spot.Rows["BTC-USDT"].Values["ma_20"] != 1 || spot.Rows["ETH-USDT"].Values["ma_20"] != 2 {
+		t.Fatalf("现货行不符（DOGE 不是现货成员）：%+v", spot.Rows)
+	}
+	if len(swap.Rows) != 2 || swap.Rows["BTC-USDT"].Values["ma_20"] != 10 || swap.Rows["DOGE-USDT"].Values["ma_20"] != 4 {
+		t.Fatalf("永续行不符：%+v", swap.Rows)
+	}
+	if got := strings.Join(loaded.Frame.Universe, ","); got != "BTC-USDT,DOGE-USDT,ETH-USDT,SOL-USDT" {
+		t.Fatalf("基础集合是两个市场各自的活跃标的的并集（OLD 已停用）：%s", got)
+	}
+}
+
+// 歧义只在同一个市场内判断：同一标的的现货序列出现两个 tag，或序列换不出市场，才整期跳过；单市场数据集上同标的多序列仍是歧义。
+func TestLoadBarUnifiedAmbiguity(t *testing.T) {
+	cases := map[string][]Row{
+		"同一市场两个序列": append(unifiedRows(barStart, map[string]float64{"BTC-USDT": 1}, nil),
+			Row{SubjectID: "BTC-USDT", SeriesTag: "venue:binance|market:spot|source:backup", DataTime: barStart, Values: map[string]float64{"ma_20": 2}}),
+		"序列换不出市场": {{SubjectID: "BTC-USDT", SeriesTag: "venue:binance|market:option", DataTime: barStart, Values: map[string]float64{"ma_20": 2}}},
+	}
+	for name, rows := range cases {
+		client := newUnifiedClient()
+		resolved, program, err := Resolve(context.Background(), client, "space", []string{"ftask_1h"}, parseStrategy(t, unifiedDSL))
+		if err != nil {
+			t.Fatal(err)
+		}
+		client.rows = func(Query) ([]Row, uint64, error) { return rows, 1, nil }
+		_, err = Loader{Client: client}.LoadBar(context.Background(), "space", resolved, program, Bar{BarStart: barStart, EventUniverse: map[string][]string{"spot": {"BTC-USDT"}, "swap": {"BTC-USDT"}}})
+		var skip *SkipError
+		if !errors.As(err, &skip) || skip.Reason != SkipAmbiguousSeries {
+			t.Errorf("%s：应按 ambiguous_series 跳过：%v", name, err)
+		}
+	}
+	// 单市场数据集：同一标的同一周期两个序列仍是歧义。
+	single := newFakeClient("spot")
+	resolved, program, err := Resolve(context.Background(), single, "space", []string{"ftask_1h"}, parseStrategy(t, exampleDSL))
+	if err != nil {
+		t.Fatal(err)
+	}
+	single.rows = func(Query) ([]Row, uint64, error) {
+		return []Row{{SubjectID: "ETH-USDT", SeriesTag: spotTag, DataTime: barStart}, {SubjectID: "ETH-USDT", SeriesTag: swapTag, DataTime: barStart}}, 1, nil
+	}
+	if _, err := (Loader{Client: single}).LoadBar(context.Background(), "space", resolved, program, Bar{BarStart: barStart}); err == nil || !strings.Contains(err.Error(), "多个序列") {
+		t.Fatalf("单市场数据集上同标的多序列仍是歧义：%v", err)
+	}
+}
+
+// 研究回放的分段读取：统一数据集上同一标的的现货、永续两条序列互不歧义，每个市场的读取器只留自己的序列；
+// 单市场读取器（没有 Market）里同标的多序列仍是歧义。
+func TestRangeLoaderFiltersByMarket(t *testing.T) {
+	client := newUnifiedClient()
+	view := client.views["view_factor_1h"]
+	client.rows = func(Query) ([]Row, uint64, error) {
+		rows := unifiedRows(barStart, map[string]float64{"BTC-USDT": 1}, map[string]float64{"BTC-USDT": 10})
+		return append(rows, Row{SubjectID: "ETH-USDT", SeriesTag: "venue:binance|market:option", DataTime: barStart}), 1, nil
+	}
+	load := func(market string) RangeRows {
+		loader := &RangeLoader{Client: client, SpaceID: "space", View: view, Subjects: []Subject{{SubjectID: "BTC-USDT"}, {SubjectID: "ETH-USDT"}}, Market: market}
+		rows, err := loader.Load(context.Background(), barStart, barStart.Add(time.Hour))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rows
+	}
+	key := barStart.Unix()
+	spot, swap := load("spot"), load("swap")
+	if spot.Bars[key]["BTC-USDT"].Values["ma_20"] != 1 || swap.Bars[key]["BTC-USDT"].Values["ma_20"] != 10 {
+		t.Fatalf("每个市场只留自己的序列：%+v %+v", spot.Bars[key], swap.Bars[key])
+	}
+	if len(spot.Ambiguous[key]) != 1 || len(swap.Ambiguous[key]) != 1 || spot.Ambiguous[key]["ETH-USDT"] == "" {
+		t.Fatalf("换不出市场的序列两个市场都歧义，现货、永续并存不歧义：%+v %+v", spot.Ambiguous, swap.Ambiguous)
+	}
+	both := load("")
+	if both.Ambiguous[key]["BTC-USDT"] == "" {
+		t.Fatalf("没有 Market 时同标的多序列仍是歧义：%+v", both.Ambiguous)
+	}
+}
+
+// 年龄探针按（标的、市场）记录：同一个 View 里现货、永续分别记，统一数据集的两个市场每期交替探针也只在第一次读持久化。
+func TestAgeProbeIsPerMarketOnUnifiedDataset(t *testing.T) {
+	client := newUnifiedClient()
+	strategy := parseStrategy(t, strings.Replace(unifiedDSL, "rules:", "universe: {min_age_bars: 24}\nrules:", 1))
+	resolved, program, err := Resolve(context.Background(), client, "space", []string{"ftask_1h"}, strategy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	probes := 0
+	client.rows = func(query Query) ([]Row, uint64, error) {
+		if len(query.Columns) == 1 && query.Columns[0] == "close" {
+			probes++
+			// 窗口里只有现货的历史：BTC、ETH 的永续刚上线。
+			return unifiedRows(query.Start, map[string]float64{"BTC-USDT": 1, "ETH-USDT": 1, "SOL-USDT": 1}, map[string]float64{"DOGE-USDT": 1}), 1, nil
+		}
+		return unifiedRows(barStart, map[string]float64{"BTC-USDT": 1, "ETH-USDT": 2, "SOL-USDT": 3}, map[string]float64{"BTC-USDT": 10, "ETH-USDT": 11, "DOGE-USDT": 4}), 1, nil
+	}
+	store := &memoryAgeStore{saved: map[string][]string{}}
+	meta := NewMetaCache()
+	meta.Ages = store
+	universe := []string{"BTC-USDT", "ETH-USDT", "SOL-USDT", "DOGE-USDT"}
+	load := func() Loaded {
+		loaded, err := Loader{Client: client, Meta: meta}.ForEvent().LoadBar(context.Background(), "space", resolved, program, Bar{BarStart: barStart, EventUniverse: map[string][]string{"spot": universe, "swap": universe}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return loaded
+	}
+	loaded := load()
+	if _, ok := loaded.Frame.Markets["swap"].Rows["BTC-USDT"]; ok {
+		t.Fatalf("永续刚上线的 BTC 不能借用现货的历史通过年龄检查：%+v", loaded.Frame.Markets["swap"].Rows)
+	}
+	if len(loaded.Frame.Markets["spot"].Rows) != 3 || loaded.Frame.Markets["swap"].Rows["DOGE-USDT"].Values["ma_20"] != 4 {
+		t.Fatalf("现货三个标的都通过，永续只有 DOGE：%+v", loaded.Frame.Markets)
+	}
+	if len(store.saved) != 2 {
+		t.Fatalf("通过记录按市场分开保存：%v", store.saved)
+	}
+	before := probes
+	load()
+	if probes-before > 2 {
+		t.Fatalf("第二期不应再为已通过的标的探针（两个市场交替也只读一次持久化）：%d", probes-before)
 	}
 }

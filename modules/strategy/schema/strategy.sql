@@ -200,15 +200,17 @@ CREATE TABLE IF NOT EXISTS t_strategy_replay_bars (
     FOREIGN KEY (c_replay_id) REFERENCES t_strategy_replays (c_replay_id) ON DELETE CASCADE
 );
 
--- 年龄探针通过的标的：上市时间只会越来越久，通过一次后跨周期、跨重启复用；c_index_id 是 View 的活动索引，索引重建后旧行作废
+-- 年龄探针通过的标的：上市时间只会越来越久，通过一次后跨周期、跨重启复用；c_index_id 是 View 的活动索引，索引重建后旧行作废；
+-- c_market 是探针判断的市场（统一数据集的一个 View 里现货、永续各有各的历史，老的现货币新上永续时不能用现货的历史通过永续的年龄检查）
 CREATE TABLE IF NOT EXISTS t_strategy_age_passed (
     c_space_id TEXT NOT NULL,
     c_view_id TEXT NOT NULL,
     c_index_id TEXT NOT NULL,
     c_min_age_bars INTEGER NOT NULL,
+    c_market TEXT NOT NULL,
     c_subject_id TEXT NOT NULL,
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (c_space_id, c_view_id, c_index_id, c_min_age_bars, c_subject_id)
+    PRIMARY KEY (c_space_id, c_view_id, c_index_id, c_min_age_bars, c_market, c_subject_id)
 );
 
 -- 实例的外显设置：只存隐藏的内容（默认全部展示）。只影响控制台展示与默认导出，不影响 View 的列和策略能读到的数据，

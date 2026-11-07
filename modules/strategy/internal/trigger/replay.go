@@ -143,6 +143,9 @@ func (e *ReplayEvaluator) Bind(ctx context.Context, instanceID string) (ReplayBi
 	if err != nil {
 		return ReplayBinding{}, err
 	}
+	if resolved.Unified() {
+		return ReplayBinding{}, errors.New("闭环回放不支持统一数据集上的任务：因子引擎的闭环回放只取每个标的的第一条序列，现货、永续共用一个标的时会取错；请用研究回放")
+	}
 	if !resolved.SpotOnly() {
 		return ReplayBinding{}, fmt.Errorf("闭环回放第一版只支持单个现货任务的实例；这个实例的市场模式是 %s（绑定了 %s 的任务），暂不支持回放", resolved.Market, strings.Join(resolved.Markets(), "、"))
 	}

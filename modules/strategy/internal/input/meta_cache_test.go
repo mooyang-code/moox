@@ -203,12 +203,12 @@ func TestAgeProbeCacheSkipsQueryUntilIndexChanges(t *testing.T) {
 // memoryAgeStore 是内存里的 AgeStore，用来模拟跨重启的持久化。
 type memoryAgeStore struct{ saved map[string][]string }
 
-func (m *memoryAgeStore) LoadAgePassed(_ context.Context, spaceID, viewID, indexID string, minAgeBars int) ([]string, error) {
-	return m.saved[fmt.Sprintf("%s|%s|%s|%d", spaceID, viewID, indexID, minAgeBars)], nil
+func (m *memoryAgeStore) LoadAgePassed(_ context.Context, spaceID, viewID, indexID string, minAgeBars int, market string) ([]string, error) {
+	return m.saved[fmt.Sprintf("%s|%s|%s|%d|%s", spaceID, viewID, indexID, minAgeBars, market)], nil
 }
 
-func (m *memoryAgeStore) SaveAgePassed(_ context.Context, spaceID, viewID, indexID string, minAgeBars int, ids []string, _ time.Time) error {
-	key := fmt.Sprintf("%s|%s|%s|%d", spaceID, viewID, indexID, minAgeBars)
+func (m *memoryAgeStore) SaveAgePassed(_ context.Context, spaceID, viewID, indexID string, minAgeBars int, market string, ids []string, _ time.Time) error {
+	key := fmt.Sprintf("%s|%s|%s|%d|%s", spaceID, viewID, indexID, minAgeBars, market)
 	m.saved[key] = append(m.saved[key], ids...)
 	return nil
 }

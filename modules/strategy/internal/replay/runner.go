@@ -205,11 +205,11 @@ func replayTaskIDs(job store.Replay) map[string]string {
 	return tasks
 }
 
-// replayViewIDs 返回回放读取的结果 View（按市场先后）。
+// replayViewIDs 返回回放读取的结果 View（按任务键先后）。
 func replayViewIDs(job store.Replay) []string {
 	ids := make([]string, 0, len(job.Tasks))
-	for _, market := range []string{dsl.MarketSpot, dsl.MarketSwap, dsl.MarketEquity} {
-		if task, ok := job.Tasks[market]; ok {
+	for _, key := range []string{dsl.MarketSpot, dsl.MarketSwap, dsl.MarketEquity, input.MarketMulti} {
+		if task, ok := job.Tasks[key]; ok {
 			ids = append(ids, task.ViewID)
 		}
 	}
@@ -229,12 +229,13 @@ type marketReader struct {
 }
 
 // loadMarketViews 读取绑定的每个市场的结果 View（要有 close 列，账本按它估值）与数据集的全部标的绑定（含已停用，回放中都视为活跃）。
+// 统一数据集里现货、永续共用一个 View：每个市场各取一份（View 与标的相同，标的不带 series_tag，读全部序列，读回的行再按市场过滤）。
 func loadMarketViews(ctx context.Context, client input.Client, spaceID string, resolved input.Resolved) (map[string]input.ViewInfo, map[string][]input.Subject, error) {
 	markets := resolved.Markets()
 	views := make(map[string]input.ViewInfo, len(markets))
 	subjects := make(map[string][]input.Subject, len(markets))
 	for _, market := range markets {
-		task := resolved.Tasks[market]
+		task := resolved.TaskOf(market)
 		view, err := client.GetView(ctx, spaceID, task.ViewID)
 		if err != nil {
 			return nil, nil, err
@@ -256,6 +257,9 @@ func loadMarketViews(ctx context.Context, client input.Client, spaceID string, r
 		active := make([]input.Subject, 0, len(bindings))
 		for _, subject := range bindings {
 			subject.Active = true
+			if resolved.Unified() {
+				subject.SeriesTag = ""
+			}
 			active = append(active, subject)
 		}
 		if len(active) == 0 {
@@ -319,10 +323,14 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 	readers := make([]*marketReader, 0, len(markets))
 	for _, market := range markets {
 		view := views[market]
+		loaderMarket := ""
+		if resolved.Unified() {
+			loaderMarket = market
+		}
 		readers = append(readers, &marketReader{
-			market: market, task: job.Tasks[market], subjects: subjects[market], passed: make(map[string]struct{}),
-			rows:    &input.RangeLoader{Client: r.Client, SpaceID: job.SpaceID, View: view, Subjects: subjects[market], Columns: columns, Abort: abort},
-			history: &input.RangeLoader{Client: r.Client, SpaceID: job.SpaceID, View: view, Subjects: subjects[market], Columns: []string{"close"}, Abort: abort},
+			market: market, task: job.Tasks[resolved.TaskKey(market)], subjects: subjects[market], passed: make(map[string]struct{}),
+			rows:    &input.RangeLoader{Client: r.Client, SpaceID: job.SpaceID, View: view, Subjects: subjects[market], Columns: columns, Market: loaderMarket, Abort: abort},
+			history: &input.RangeLoader{Client: r.Client, SpaceID: job.SpaceID, View: view, Subjects: subjects[market], Columns: []string{"close"}, Market: loaderMarket, Abort: abort},
 		})
 	}
 	reader := &segmentReader{runner: r, job: job, resolved: resolved, program: program, end: end, acc: acc, abort: abort, markets: readers}
@@ -476,20 +484,27 @@ func (r *Runner) abortHook(replayID string) func(context.Context) error {
 // 的起点并截断终点，终点取各 View 中最早的；返回各市场更新后的 View。
 func (r *Runner) recheckWindow(ctx context.Context, job store.Replay, resolved input.Resolved, program *dsl.Program, views map[string]input.ViewInfo, start, end time.Time, abort func(context.Context) error) (map[string]input.ViewInfo, time.Time, error) {
 	checked := make(map[string]input.ViewInfo, len(views))
+	byKey := make(map[string]input.ViewInfo, len(views))
 	for _, market := range resolved.Markets() {
-		view, newEnd, err := r.recheckView(ctx, job, market, resolved, program, views[market], start, end, false, abort)
+		key := resolved.TaskKey(market)
+		// 统一数据集的两个市场共用一个 View，只复查一次。
+		if view, ok := byKey[key]; ok {
+			checked[market] = view
+			continue
+		}
+		view, newEnd, err := r.recheckView(ctx, job, key, resolved, program, views[market], start, end, false, abort)
 		if err != nil {
 			return nil, time.Time{}, err
 		}
-		checked[market], end = view, newEnd
+		checked[market], byKey[key], end = view, view, newEnd
 	}
 	return checked, end, nil
 }
 
-// recheckView 在一个市场的活动索引换了一代后，按新索引的精确统计复查 [start, end) 的起点并截断终点；midRun 说明换代发生在
+// recheckView 在一个任务键（一个结果 View）的活动索引换了一代后，按新索引的精确统计复查 [start, end) 的起点并截断终点；midRun 说明换代发生在
 // 回放过程中（start 是剩余区间的起点）还是排队期间（start 是回放起点）。新索引的统计未知时无法确认区间仍然有效，拒绝继续。
-func (r *Runner) recheckView(ctx context.Context, job store.Replay, market string, resolved input.Resolved, program *dsl.Program, view input.ViewInfo, start, end time.Time, midRun bool, abort func(context.Context) error) (input.ViewInfo, time.Time, error) {
-	task := job.Tasks[market]
+func (r *Runner) recheckView(ctx context.Context, job store.Replay, taskKey string, resolved input.Resolved, program *dsl.Program, view input.ViewInfo, start, end time.Time, midRun bool, abort func(context.Context) error) (input.ViewInfo, time.Time, error) {
+	task := job.Tasks[taskKey]
 	when := "在排队期间"
 	if midRun {
 		when = "在回放过程中"
@@ -614,13 +629,20 @@ reload:
 				return nil, fmt.Errorf("View %s 的活动索引在回放过程中持续变化，请稍后重新发起回放", market.task.ViewID)
 			}
 			s.switches++
-			view, end, err := s.runner.recheckView(ctx, s.job, market.market, s.resolved, s.program, changed.View, segment[0].StorageStart, s.end, true, s.abort)
+			taskKey := s.resolved.TaskKey(market.market)
+			view, end, err := s.runner.recheckView(ctx, s.job, taskKey, s.resolved, s.program, changed.View, segment[0].StorageStart, s.end, true, s.abort)
 			if err != nil {
 				return nil, err
 			}
-			market.rows.View, market.history.View, s.end = view, view, end
-			// 年龄证明属于旧索引；与实时的缓存一致，换代后重新判定。
-			clear(market.passed)
+			s.end = end
+			// 年龄证明属于旧索引；与实时的缓存一致，换代后重新判定。统一数据集的两个市场共用一个 View，一起切换，
+			// 同一次换代不会被另一个市场再算一次。
+			for _, other := range s.markets {
+				if s.resolved.TaskKey(other.market) == taskKey {
+					other.rows.View, other.history.View = view, view
+					clear(other.passed)
+				}
+			}
 			s.acc.setNote(noteIndexSwitch, fmt.Sprintf("回放过程中 View 重建了 %d 次索引，每次都按新索引复查了剩余区间后继续", s.switches))
 			continue reload
 		}
