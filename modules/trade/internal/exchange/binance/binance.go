@@ -461,12 +461,13 @@ type swapAccount struct {
 	TotalMaintMargin      string `json:"totalMaintMargin"`
 	TotalUnrealizedProfit string `json:"totalUnrealizedProfit"`
 	Assets                []struct {
-		Asset            string `json:"asset"`
-		WalletBalance    string `json:"walletBalance"`
-		AvailableBalance string `json:"availableBalance"`
-		InitialMargin    string `json:"initialMargin"`
-		UnrealizedProfit string `json:"unrealizedProfit"`
-		UpdateTime       int64  `json:"updateTime"`
+		Asset             string `json:"asset"`
+		WalletBalance     string `json:"walletBalance"`
+		AvailableBalance  string `json:"availableBalance"`
+		MaxWithdrawAmount string `json:"maxWithdrawAmount"`
+		InitialMargin     string `json:"initialMargin"`
+		UnrealizedProfit  string `json:"unrealizedProfit"`
+		UpdateTime        int64  `json:"updateTime"`
 	} `json:"assets"`
 }
 
@@ -557,9 +558,17 @@ func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnaps
 		if parseErr != nil {
 			return exchange.AccountSnapshot{}, parseErr
 		}
+		// 可划转额度取 maxWithdrawAmount（官方：Maximum transferable/withdrawable amount），不是 availableBalance；
+		// 字段缺失时才退回可用余额。
+		transferable := available
+		if balance.MaxWithdrawAmount != "" {
+			if transferable, parseErr = decimalOrZero(balance.MaxWithdrawAmount); parseErr != nil {
+				return exchange.AccountSnapshot{}, parseErr
+			}
+		}
 		snapshot.Balances = append(snapshot.Balances, exchange.AssetBalance{
 			Wallet: a.wallet(),
-			Asset:  balance.Asset, Available: available, Locked: total.Sub(available), Total: total,
+			Asset:  balance.Asset, Available: available, Locked: total.Sub(available), Total: total, Transferable: transferable,
 		})
 	}
 	return snapshot, nil

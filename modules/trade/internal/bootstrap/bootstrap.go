@@ -180,10 +180,10 @@ func initialize(
 		PaperMinBatchInterval: 300 * time.Millisecond,
 		RateStatus:            adapterRateStatus(manager),
 		// 普通账户的第 4、6 阶段：钱包划转与归集；统一账户、OKX、模拟盘不会调用。
-		Transfers: &walletapp.Service{
+		Transfers: targetapp.NewWalletTransfer(&walletapp.Service{
 			Store: tradeStore, Adapters: manager,
 			RequestSync: func(accountID string) { manager.RequestSync(accountID) },
-		},
+		}),
 	}
 	observeRateLimits()
 	weightResolver := &targetapp.WeightResolver{

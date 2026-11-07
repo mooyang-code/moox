@@ -80,3 +80,17 @@ func TestListAccountLedgerMergesLocalTransfers(t *testing.T) {
 	require.True(t, ids["transfer:t-1"], "本地划转记录应合并进资金流水：%v", ids)
 	require.Len(t, rsp.GetEntries(), 3)
 }
+
+// 合约收益流水里已经有的划转（流水号相同）不再合并本地记录，同一笔划转只出现一次。
+func TestMergeTransferEntriesDoesNotDuplicateTransfersAlreadyInExchangeLedger(t *testing.T) {
+	exchangeEntries := []exchange.LedgerEntry{
+		{ID: "9689322392:TRANSFER", Time: time.UnixMilli(2000), Type: exchange.LedgerTransfer, Asset: "USDT", Amount: shared.MustDecimal("-500")},
+	}
+	transfers := []store.WalletTransferRecord{
+		{TransferID: "t-1", ExchangeTransferID: "9689322392", Direction: store.TransferToSpot, Asset: "USDT", Amount: "500", State: store.TransferStateCompleted, CompletedAt: 2000},
+		{TransferID: "t-2", ExchangeTransferID: "9689322999", Direction: store.TransferToFutures, Asset: "USDT", Amount: "100", State: store.TransferStateCompleted, CompletedAt: 3000},
+	}
+	merged, _ := mergeTransferEntries(exchangeEntries, transfers, 10, false)
+	require.Len(t, merged, 2)
+	require.Equal(t, []string{"transfer:t-2", "9689322392:TRANSFER"}, []string{merged[0].ID, merged[1].ID})
+}

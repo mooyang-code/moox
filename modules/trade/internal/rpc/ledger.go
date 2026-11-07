@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
@@ -127,8 +128,17 @@ func (s *ConsoleServer) ListAccountLedger(
 // 划转是账户级流水，不属于某个市场；方向写在说明里。多出来的部分标记还有更多。
 func mergeTransferEntries(entries []exchange.LedgerEntry, transfers []store.WalletTransferRecord, limit int, hasMore bool) ([]exchange.LedgerEntry, bool) {
 	merged := append([]exchange.LedgerEntry(nil), entries...)
+	// 合约的收益流水（/fapi/v1/income）本来就带 TRANSFER 类型，流水号是划转的 tranId（ID 形如 “tranId:TRANSFER”）：
+	// 交易所流水里已经有的划转不再合并本地记录，否则同一笔划转出现两次、正负号还不一样。
+	seen := map[string]bool{}
+	for _, entry := range entries {
+		if entry.Type == exchange.LedgerTransfer {
+			id, _, _ := strings.Cut(entry.ID, ":")
+			seen[id] = true
+		}
+	}
 	for _, transfer := range transfers {
-		if transfer.State != store.TransferStateCompleted {
+		if transfer.State != store.TransferStateCompleted || (transfer.ExchangeTransferID != "" && seen[transfer.ExchangeTransferID]) {
 			continue
 		}
 		amount, err := shared.ParseDecimal(transfer.Amount)

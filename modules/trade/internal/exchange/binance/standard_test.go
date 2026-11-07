@@ -2,6 +2,7 @@ package binance
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -102,6 +103,20 @@ func TestStandardAccountSnapshotsUseSeparateWallets(t *testing.T) {
 	require.Equal(t, exchange.WalletFutures, swap.Balances[0].Wallet)
 	// 合约钱包余额取 walletBalance（官方样例 23.72469206），不含未实现盈亏。
 	require.Equal(t, "23.72469206", swap.Balances[0].Total.String())
+	// 可划转额度取 maxWithdrawAmount（官方：Maximum transferable/withdrawable amount），不是 availableBalance。
+	require.Equal(t, "23.72469206", swap.Balances[0].Transferable.String())
+	var info map[string]any
+	require.NoError(t, json.Unmarshal(sample(t, "fapi_account_v3.json"), &info))
+	info["assets"].([]any)[0].(map[string]any)["maxWithdrawAmount"] = "5.5"
+	changed, err := json.Marshal(info)
+	require.NoError(t, err)
+	_, other := newPMServer(t, map[string]string{
+		"GET /fapi/v3/account": string(changed), "GET /fapi/v3/positionRisk": `[]`, "GET /fapi/v1/positionSide/dual": `{"dualSidePosition": false}`,
+	})
+	limited, err := testAdapter(exchange.MarketTypeSwap, other.URL).GetAccountSnapshot(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, "23.72469206", limited.Balances[0].Available.String())
+	require.Equal(t, "5.5", limited.Balances[0].Transferable.String(), "可用余额和可转出额度不一致时，划转用后者")
 }
 
 func TestStandardWalletTransferUsesUniversalTransfer(t *testing.T) {

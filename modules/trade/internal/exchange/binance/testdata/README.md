@@ -29,3 +29,4 @@
 - `GET /papi/v1/margin/openOrders` 不传 symbol：官方 SDK 里转录的文档原文写明不传则返回全部标的的挂单，但同时说明限频权重按“当前交易中的标的数量”计（传 symbol 权重 5）；SDK 的参数校验却把 symbol 标成必填，两者不一致。适配器以文档说明为准（不传），真实行为和权重消耗未实测，V3 小额实测要核对；如果必填，改成按相关标的逐个查询。
 - 统一账户同时开合约时，现货买单的本地资金校验用账户级可用资金（含 UM 钱包）。如果交易所要求现货买单只能花杠杆钱包里的资金（需要先 `/papi/v1/asset-collection` 归集），带 `NO_SIDE_EFFECT` 的买单会被交易所拒绝；这一点未核对，V3 小额实测必须覆盖。
 - 统一账户的现货标的按 `isMarginTradingAllowed` 过滤（该字段在现货 `exchangeInfo` 的官方文档里有，样例里取值全为 true）。
+- 普通账户合约钱包的可划转额度取 `/fapi/v3/account` 资产行的 `maxWithdrawAmount`（官方 SDK 转录的字段说明：Maximum transferable/withdrawable amount），不取 `availableBalance`（持仓浮盈、多资产模式下两者可以不一致）；字段缺失才退回可用余额。该字段的取值规则以官方说明为准，未用真实账户核对。

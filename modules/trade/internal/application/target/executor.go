@@ -474,9 +474,13 @@ func (e *Executor) Converge(
 						scaled.member.account.TradingAccountID == action.member.account.TradingAccountID)
 				}
 				if !kept {
+					reason := outcome.Reasons[action.member.account.TradingAccountID]
+					if reason == "" {
+						reason = "合约钱包可划转的资金不足，这轮买不了"
+					}
 					blocked = append(blocked, store.BlockedTarget{
 						InstrumentID: action.instrument.InstrumentID, Quantity: action.delta.String(),
-						Reason: "合约钱包可划转的资金不足，这轮买不了",
+						Reason: reason,
 					})
 				}
 			}
@@ -486,7 +490,7 @@ func (e *Executor) Converge(
 				if err := e.updateTarget(ctx, &target, StatusConverging); err != nil {
 					return Result{}, err
 				}
-				return Result{Status: StatusConverging, Action: "transfer", RetryAfter: transferPollInterval}, nil
+				return Result{Status: StatusConverging, Action: "transfer", RetryAfter: max(transferPollInterval, outcome.RetryAfter)}, nil
 			}
 		}
 		for _, action := range stageActions {

@@ -38,7 +38,7 @@ func actionStage(action laneAction) int {
 }
 
 // WalletTransfer 是普通账户第 4、6 阶段的钱包划转。统一账户、OKX、模拟盘没有划转，不会调用它；
-// 真实交易所的划转由实盘下单能力的后续任务实现，这里只定义执行器要求的行为。
+// 真实实现是 application/wallet（通过 NewWalletTransfer 接进来），这里定义执行器要求的行为。
 type WalletTransfer interface {
 	// BeforeSpotBuy 在现货买入前把资金划进现货钱包，并等现货钱包的快照晚于划转完成时间。
 	// buys 只含需要划转的普通账户的现货买入。每一轮收敛都会调用它：实现必须按目标 ID 查划转表保证幂等，
@@ -56,6 +56,10 @@ type TransferOutcome struct {
 	Pending bool
 	// BuyScale 是各账户现货买入要缩小到的比例（键：执行账户 ID，0 到 1）；没有条目表示不缩小。
 	BuyScale map[string]shared.Decimal
+	// Reasons 是比例缩小或为 0 的原因（键：执行账户 ID），写进 blocked_targets；没有写原因的用默认说明。
+	Reasons map[string]string
+	// RetryAfter 是建议的下次收敛间隔（划转前的查询持续失败时指数退避）；0 表示用 transferPollInterval。
+	RetryAfter time.Duration
 }
 
 // TransferBuy 是一个需要划转资金的现货买入：账户、标的和计划买入的基础资产数量（金额由划转实现按报价折算）。

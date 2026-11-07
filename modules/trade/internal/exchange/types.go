@@ -342,6 +342,10 @@ type AssetBalance struct {
 	Total     shared.Decimal
 	// Borrowed 是借款（统一账户的杠杆钱包），没有借款的钱包为零。
 	Borrowed shared.Decimal
+	// Transferable 是这个钱包里这个资产最多能划转出去的数量（币安普通账户合约钱包的 maxWithdrawAmount，
+	// 官方说明为 “Maximum transferable/withdrawable amount”）。它和可用余额不是一回事：持仓浮盈、多资产模式下
+	// 可用余额可以大于允许转出的数量。没有这个概念的钱包为零；只用于划转，不进入快照存储。
+	Transferable shared.Decimal
 }
 
 type AccountSnapshot struct {
