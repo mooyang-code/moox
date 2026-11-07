@@ -77,7 +77,13 @@
         </a-table-column>
         <a-table-column title="操作" :width="80" fixed="right">
           <template #cell="{ record }">
-            <a-button size="mini" type="text" :disabled="!canOrder" @click="openOrder(instrumentOf(record))">下单</a-button>
+            <a-button
+              size="mini"
+              type="text"
+              :disabled="!canOrder || !memberFor(instrumentOf(record))"
+              @click="openRowOrder(record)"
+              >下单</a-button
+            >
           </template>
         </a-table-column>
       </template>
@@ -90,11 +96,12 @@
 import { computed, inject, ref } from "vue";
 import { useRoute } from "vue-router";
 import { fmtQty } from "../shared/format";
+import { marketOfInstrument } from "../shared/markets";
 import SectionBlock from "../shared/section-block.vue";
 import { detailContextKey } from "./context";
 import { cleanNumber, filterCoinRows, type CoinRow, type PositionFilter, type TargetCell } from "./positions-model";
 
-const { logical, target, coinRows, flattenRunning, openOrder } = inject(detailContextKey)!;
+const { logical, accounts, target, coinRows, flattenRunning, openOrder } = inject(detailContextKey)!;
 const route = useRoute();
 
 const filter = ref<PositionFilter>(route.query.filter === "off" ? "off" : "all");
@@ -129,6 +136,17 @@ function deviationClass(deviation: number, row: CoinRow, key: "targetSpot" | "ta
   const ratio = base === 0 ? (deviation === 0 ? 0 : 1) : Math.abs(deviation) / base;
   if (ratio <= 0.01) return "";
   return deviation > 0 ? "tx-pos" : "tx-neg";
+}
+/** 能下这个标的的成员：启用，并且已开通标的所在的市场。 */
+function memberFor(instrumentId: string): string | undefined {
+  const market = marketOfInstrument(instrumentId);
+  return (logical.value.members || []).find(
+    member => member.enabled && accounts.value.get(member.trading_account_id)?.markets?.includes(market)
+  )?.trading_account_id;
+}
+function openRowOrder(row: CoinRow) {
+  const instrumentId = instrumentOf(row);
+  openOrder(instrumentId, memberFor(instrumentId));
 }
 /** 行内下单：有永续目标或永续持仓时默认永续，否则现货。 */
 function instrumentOf(row: CoinRow) {

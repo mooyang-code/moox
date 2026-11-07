@@ -172,6 +172,8 @@ const submitting = ref(false);
 const secrets = ref<ExchangeSecretOption[]>([]);
 const secretsLoading = ref(false);
 const scope = createSubmitScope();
+// 这次已经建成的账户、组合：提交中途失败后重试时用来跳过已完成的部分
+const created = reactive({ accountId: "", logicalId: "", joined: false });
 
 const selectedKind = computed(() => createKinds.find(item => item.key === form.kind));
 const joinable = computed(() => joinableLogicals(props.logicals, accountMapOf(props.accounts), form.kind, form.settlementAsset));
@@ -191,6 +193,7 @@ async function loadSecrets() {
 
 function open(kind: Environment) {
   Object.assign(form, createDefaultForm(createKinds.find(item => item.key === kind)?.open ? kind : "paper"));
+  Object.assign(created, { accountId: "", logicalId: "", joined: false });
   error.value = "";
   submitting.value = false;
   visible.value = true;
@@ -242,45 +245,47 @@ async function submit() {
   error.value = "";
   const exist =
     form.join === "exist" ? props.logicals.find(item => item.logical_account_id === form.existingLogicalId) : undefined;
-  let createdAccountId = "";
   try {
-    if (form.kind === "paper") {
-      createdAccountId = (await createPaperSimulation(buildPaperRequest(form))).account.trading_account_id;
-    } else {
-      createdAccountId = (await createTradingAccount(buildLiveRequest(form))).account.trading_account_id;
-      if (!exist) {
-        const logical = await createLogicalAccount({
-          name: form.logicalName.trim() || form.name.trim(),
-          control_mode: form.controlMode,
-          execution_mode: 2,
-          settlement_asset: form.settlementAsset.trim().toUpperCase()
-        });
-        await addLogicalAccountMember({
-          logical_account_id: logical.logical_account.logical_account_id,
-          trading_account_id: createdAccountId,
-          enabled: true,
-          priority: 1,
-          adopt_existing_exposure: false
-        });
+    // 前面几步已经建成的对象记在 created 里：加入组合失败后重试，只补没做完的，不会重复建账户（同名会冲突）
+    if (!created.accountId) {
+      if (form.kind === "paper") {
+        created.accountId = (await createPaperSimulation(buildPaperRequest(form))).account.trading_account_id;
+        // 新建组合时，模拟账户的创建请求已经把账户加进了新组合
+        created.joined = !exist;
+      } else {
+        created.accountId = (await createTradingAccount(buildLiveRequest(form))).account.trading_account_id;
       }
     }
-    if (exist) {
+    if (!created.joined) {
+      let target = exist?.logical_account_id ?? created.logicalId;
+      if (!target) {
+        target = (
+          await createLogicalAccount({
+            name: form.logicalName.trim() || form.name.trim(),
+            control_mode: form.controlMode,
+            execution_mode: 2,
+            settlement_asset: form.settlementAsset.trim().toUpperCase()
+          })
+        ).logical_account.logical_account_id;
+        created.logicalId = target;
+      }
       await addLogicalAccountMember({
-        logical_account_id: exist.logical_account_id,
-        trading_account_id: createdAccountId,
+        logical_account_id: target,
+        trading_account_id: created.accountId,
         enabled: true,
-        priority: nextPriority(exist),
+        priority: exist ? nextPriority(exist) : 1,
         adopt_existing_exposure: false
       });
+      created.joined = true;
     }
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : "请求失败，请稍后重试";
     if (submission.isCurrent()) {
-      error.value = createdAccountId
-        ? `执行账户已创建，但加入组合失败：${message}。可以在列表右上角「未加入组合的执行账户」里重试。`
+      error.value = created.accountId
+        ? `执行账户已创建，但加入组合没有完成：${message}。修正后可以再点一次，只会补做加入组合。`
         : message;
     }
-    if (createdAccountId) emit("created", form.kind);
+    if (created.accountId) emit("created", form.kind);
     submitting.value = false;
     return;
   }

@@ -158,3 +158,14 @@ test("订单、成交、资金流水页签读数据，订单行点开看详情",
   await openDetail(page, "la-paper-1", "ledger");
   await expect(page.getByText("手续费").first()).toBeVisible();
 });
+
+test("从详情页返回列表时重新读取，不显示缓存的旧数据", async ({ page }) => {
+  await page.goto("/#/trading/accounts");
+  await expect(page.getByText("默认策略模拟组合")).toBeVisible();
+  const before = calls.listLogicals;
+  await page.getByText("默认策略模拟组合").click();
+  await expect(page.getByRole("heading", { name: "默认策略模拟组合" })).toBeVisible();
+  await page.getByRole("button", { name: "模拟盘" }).first().click();
+  await expect(page.getByText("未加入组合的执行账户 1 个")).toBeVisible();
+  await expect.poll(() => calls.listLogicals).toBeGreaterThan(before);
+});

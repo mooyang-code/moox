@@ -104,7 +104,11 @@ watch(
     error.value = "";
     fills.value = [];
     try {
-      const rsp = await listFills({ order_id: id, page: { page: 1, size: 200 } });
+      const rsp = await listFills({
+        order_id: id,
+        trading_account_id: props.order?.trading_account_id,
+        page: { page: 1, size: 200 }
+      });
       if (request.isLatest()) fills.value = rsp.fills || [];
     } catch (cause) {
       if (request.isLatest()) error.value = cause instanceof Error ? cause.message : "成交明细读取失败";

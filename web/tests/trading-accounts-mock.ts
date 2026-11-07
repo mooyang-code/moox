@@ -165,6 +165,8 @@ export interface Calls {
   paper: Record<string, unknown>[];
   members: Record<string, unknown>[];
   flatten: Record<string, unknown>[];
+  /** ListLogicalAccounts 被调用的次数 */
+  listLogicals: number;
 }
 export let calls: Calls;
 
@@ -183,6 +185,7 @@ async function gateway(route: Route) {
     case "ListTradingAccounts":
       return route.fulfill({ json: ok({ accounts, page_result: { page: 1, size: 200, total: accounts.length } }) });
     case "ListLogicalAccounts":
+      calls.listLogicals += 1;
       return route.fulfill({
         json: ok({ logical_accounts: logicals, page_result: { page: 1, size: 500, total: logicals.length } })
       });
@@ -372,7 +375,7 @@ async function gateway(route: Route) {
 }
 
 export async function installTradingMock(page: Page) {
-  calls = { paper: [], members: [], flatten: [] };
+  calls = { paper: [], members: [], flatten: [], listLogicals: 0 };
   await installE2ESession(page, "space-1");
   await page.route(/\/api\/admin\/[^/]+\/[^/?#]+(?:\?|$)/, gateway);
   return calls;

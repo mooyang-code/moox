@@ -145,7 +145,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { computed, onActivated, onBeforeUnmount, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import PageTitleTabs from "@/components/page-title-tabs/index.vue";
 import { useSpaceStore } from "@/store/modules/space";
@@ -202,6 +202,10 @@ async function load() {
     if (!request.isLatest()) return;
     logicals.value = logicalRsp.logical_accounts || [];
     accounts.value = accountRsp.accounts || [];
+    // 重新读列表后权益变化和持仓数也要重读
+    changes.value = {};
+    counts.value = {};
+    void loadExtras(rows.value);
     void loadStrategies(request);
   } catch (error) {
     if (request.isLatest()) loadError.value = error instanceof Error ? error.message : "读取交易账户失败，请稍后重试";
@@ -242,10 +246,8 @@ async function loadExtras(list: ComboRow[]) {
   await Promise.all([worker(), worker(), worker()]);
 }
 
-watch(
-  () => rows.value.map(row => row.key).join(","),
-  () => void loadExtras(rows.value)
-);
+// 切换环境后，新环境里还没读过的组合补读权益变化和持仓数
+watch(env, () => void loadExtras(rows.value));
 
 function changeEnv(key: string) {
   const next = environmentFromQuery(key);
@@ -269,8 +271,6 @@ function openStrategy(instanceId: string) {
 
 function onCreated(kind: Environment) {
   if (kind !== env.value) changeEnv(kind);
-  changes.value = {};
-  counts.value = {};
   void load();
 }
 
@@ -290,6 +290,13 @@ watch(
 onBeforeUnmount(() => {
   listRequests.invalidate();
   extraRequests.invalidate();
+});
+
+// 列表页被页面缓存：从详情页回来时（关闭模拟账户、移出成员、改名之后）重新读，不显示旧数据。
+let activatedOnce = false;
+onActivated(() => {
+  if (activatedOnce) void load();
+  activatedOnce = true;
 });
 
 void load();
