@@ -123,7 +123,9 @@ func (r *WeightResolver) Resolve(ctx context.Context, _ int64, request *tradeeve
 	if err != nil {
 		return WeightConversion{}, err
 	}
-	settings, err := fundsettings.Parse(logical.FundSettingsJSON)
+	// 与执行器、受管资产同一个读取入口：数值字段坏了取默认值，排除字段读不出来才报错；
+	// 不用严格解析，不然后来加的校验会让早先保存的设置整个读不出来。
+	settings, err := r.Store.ResolveFundSettings(logical)
 	if err != nil {
 		return WeightConversion{}, err
 	}

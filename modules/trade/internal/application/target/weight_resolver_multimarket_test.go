@@ -227,3 +227,12 @@ func TestBNBShortfallIsSummedPerBinanceMember(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "0", shortfall.String())
 }
+
+// 后来加的写入校验不能让早先保存的设置整个读不出来：目标换算和执行器一样宽松解析。
+func TestResolveAcceptsOlderFundSettingsThatFailTheCurrentWriteChecks(t *testing.T) {
+	tradeStore := newMixedResolverStore(t, `{"stablecoin_margin":{"USDC":"0.5"},"bnb_reserve_amount":"5"}`)
+	resolver := WeightResolver{Store: tradeStore, Prices: targetPriceStub{price: shared.MustDecimal("100")}, Equity: conversionEquityStub{}, Now: func() time.Time { return time.UnixMilli(2000) }}
+	conversion, err := resolver.Resolve(context.Background(), 0, mixedRequest(weightTarget("BTC-USDT-SPOT", "SPOT", "0.5")), "space-1")
+	require.NoError(t, err)
+	require.False(t, quantityOf(t, conversion, "BTC-USDT-SPOT").Hold)
+}

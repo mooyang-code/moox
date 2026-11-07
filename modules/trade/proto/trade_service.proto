@@ -157,6 +157,9 @@ message LogicalAccount {
   // 只读：当前生效的下单设置和资金设置（没写的项已填上默认值）。
   OrderSettings order_settings = 20;
   FundSettings fund_settings = 21;
+  // 存的设置读不出来时的说明（此时对应的设置为空）：界面要提示并禁止保存，不能按默认值显示，否则一保存就覆盖了原设置。
+  string order_settings_error = 22;
+  string fund_settings_error = 23;
 }
 
 // 组合账户的下单设置，数值用字符串；写入时的校验见 domain/ordersettings。

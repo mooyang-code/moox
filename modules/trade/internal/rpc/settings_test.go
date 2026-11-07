@@ -167,3 +167,26 @@ func TestFundSettingsAreRestrictedToBinanceMembersAndSettlementAsset(t *testing.
 	require.Equal(t, tradepb.ErrorCode_SUCCESS, update(&tradepb.FundSettings{ReserveRatio: "0.05", MarginCoins: map[string]string{"ETH": "100"}}), "与交易所无关的项照常")
 	require.Equal(t, tradepb.ErrorCode_INVALID_PARAM, update(&tradepb.FundSettings{MarginCoins: map[string]string{"USDT": "100"}}), "结算币不能当保证金币")
 }
+
+// 存的设置读不出来时返回错误说明、不返回设置：界面不能按默认值显示（一保存就覆盖了原设置）。
+// 只是不满足后来加的写入校验的旧设置，照常显示（和执行器一样宽松解析）。
+func TestUnreadableStoredSettingsAreReportedNotShownAsDefaults(t *testing.T) {
+	handler, ctx := newSettingsHandlerFor(t, tradepb.ExecutionMode_EXECUTION_MODE_LIVE)
+	set := func(order, fund string) *tradepb.LogicalAccount {
+		require.NoError(t, handler.Store.DBForTest().Exec(
+			"UPDATE t_logical_accounts SET c_order_settings_json = ?, c_fund_settings_json = ?", order, fund).Error)
+		got, err := handler.GetLogicalAccount(ctx, &tradepb.GetLogicalAccountReq{LogicalAccountId: "logical-1"})
+		require.NoError(t, err)
+		return got.GetLogicalAccount()
+	}
+	broken := set(`{"order_mode":"LIMIT"}`, `{"arbitrage_base_assets":"BTC"}`)
+	require.Nil(t, broken.GetOrderSettings())
+	require.Contains(t, broken.GetOrderSettingsError(), "下单方式")
+	require.Nil(t, broken.GetFundSettings())
+	require.NotEmpty(t, broken.GetFundSettingsError())
+
+	old := set(`{}`, `{"stablecoin_margin":{"USDC":"0.5"},"bnb_reserve_amount":"5"}`)
+	require.Empty(t, old.GetFundSettingsError(), "严格校验通不过但宽松解析读得出的旧设置照常显示")
+	require.Equal(t, "5", old.GetFundSettings().GetBnbReserveAmount())
+	require.Empty(t, old.GetOrderSettingsError())
+}

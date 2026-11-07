@@ -156,12 +156,14 @@ func (s *Service) shouldWarnMissingSettlement(accountID string) bool {
 func (s *Service) fundSettings(ctx context.Context, account store.TradingAccountRecord) (fundsettings.Settings, error) {
 	logical, _, err := s.Store.FindLogicalAccountByTradingAccount(ctx, account.SpaceID, account.TradingAccountID)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return fundsettings.Parse("")
+		settings, _, _ := fundsettings.ParseLenient("")
+		return settings, nil
 	}
 	if err != nil {
 		return fundsettings.Settings{}, err
 	}
-	return fundsettings.Parse(logical.FundSettingsJSON)
+	// 与执行器同一个读取入口（宽松解析）：设置里个别数值坏了不让权益采样中断。
+	return s.Store.ResolveFundSettings(logical)
 }
 
 // valueSnapshot 按统一公式计算执行账户的权益（plan 4.6）：
@@ -384,7 +386,7 @@ func (s *Service) sampleLogicalAccount(
 	if !logicalValid || sourceTime <= 0 {
 		return nil
 	}
-	settings, settingsErr := fundsettings.Parse(logical.FundSettingsJSON)
+	settings, settingsErr := s.Store.ResolveFundSettings(logical)
 	if settingsErr != nil {
 		return settingsErr
 	}

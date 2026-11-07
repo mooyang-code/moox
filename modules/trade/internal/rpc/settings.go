@@ -64,11 +64,12 @@ func orderSettingsFromPB(value *tradepb.OrderSettings) ordersettings.Document {
 	}
 }
 
-// orderSettingsToPB 把存储的设置转成当前生效的值（没写的项填默认值）；存的内容读不出来时返回 nil。
-func orderSettingsToPB(stored string) *tradepb.OrderSettings {
+// orderSettingsToPB 把存储的设置转成当前生效的值（没写的项填默认值）；
+// 存的内容读不出来时返回错误说明（界面据此提示并禁止保存，不能按默认值显示——用户一保存就把原设置覆盖了）。
+func orderSettingsToPB(stored string) (*tradepb.OrderSettings, string) {
 	settings, err := ordersettings.Parse(stored)
 	if err != nil {
-		return nil
+		return nil, err.Error()
 	}
 	value := settings.Document()
 	return &tradepb.OrderSettings{
@@ -87,7 +88,7 @@ func orderSettingsToPB(stored string) *tradepb.OrderSettings {
 		MaxAttempts:             int32(value.MaxAttempts),
 		RestingRatio:            value.RestingRatio,
 		RestingTtlSeconds:       int32(value.RestingTTLSeconds),
-	}
+	}, ""
 }
 
 func fundSettingsFromPB(value *tradepb.FundSettings) fundsettings.Document {
@@ -103,10 +104,11 @@ func fundSettingsFromPB(value *tradepb.FundSettings) fundsettings.Document {
 	}
 }
 
-func fundSettingsToPB(stored string) *tradepb.FundSettings {
-	settings, err := fundsettings.Parse(stored)
+// fundSettingsToPB 用与执行器一致的宽松解析显示当前生效的值；排除字段读不出来时返回错误说明。
+func fundSettingsToPB(stored string) (*tradepb.FundSettings, string) {
+	settings, _, err := fundsettings.ParseLenient(stored)
 	if err != nil {
-		return nil
+		return nil, err.Error()
 	}
 	value := settings.Document()
 	return &tradepb.FundSettings{
@@ -118,5 +120,5 @@ func fundSettingsToPB(stored string) *tradepb.FundSettings {
 		StablecoinMargin:        value.StablecoinMargin,
 		MarginCoins:             value.MarginCoins,
 		ArbitrageBaseAssets:     value.ArbitrageBaseAssets,
-	}
+	}, ""
 }
