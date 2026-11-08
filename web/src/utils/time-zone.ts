@@ -94,7 +94,8 @@ export function toInstantMs(value: string | number | Date | null | undefined): n
   let normalized = text.replace(" ", "T").replace(/(\.\d{3})\d+/, "$1");
   if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?$/.test(normalized)) normalized += "Z";
   const parsed = Date.parse(normalized);
-  return Number.isFinite(parsed) ? parsed : null;
+  // Go 的零时间（0001-01-01T00:00:00Z）和 1970 年以前的值都当作没有
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
 }
 
 /** 墙钟文本（不带后缀）：second 为 “YYYY-MM-DD HH:mm:ss”，minute 去掉秒，date 只有日期，clock 只有时分秒。 */
