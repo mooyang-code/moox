@@ -12,7 +12,7 @@
           <span :class="`tone-${healthTone(task.health)}`">{{ healthLabel(task.health) }}</span>
           <span v-if="task.health_reason && task.health !== 'ok'" class="reason">{{ task.health_reason }}</span>
         </div>
-        <a-space :size="4">
+        <a-space :size="4" wrap>
           <a-button size="small" :loading="busy[task.dataset_id || '']" @click="emit('run', task)">立即运行</a-button>
           <a-button size="small" @click="emit('edit', task)">编辑</a-button>
           <a-button size="small" @click="emit('backfill', task)">补拉区间</a-button>
@@ -28,7 +28,7 @@
         </a-space>
       </div>
 
-      <a-descriptions :column="2" size="small" bordered class="summary">
+      <a-descriptions :column="{ xs: 1, sm: 1, md: 2 }" size="small" bordered class="summary">
         <a-descriptions-item label="频率 / 分区"
           >{{ task.freq || "—" }} / {{ partitionUnitText(task.partition_unit) }}</a-descriptions-item
         >

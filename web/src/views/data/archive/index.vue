@@ -262,9 +262,10 @@ watch([() => query.value.create, mainLoaded], ([create, loaded]) => {
     setQuery({ create: "" });
   }
 });
-function onCreated(datasetId: string) {
+async function onCreated(datasetId: string) {
   invalidateArchiveCoverage();
-  void tick();
+  // 先重读任务表再打开详情：否则详情找不到新任务，会被当成“任务不存在”关掉
+  await loadMain();
   openTask(datasetId);
 }
 
