@@ -9,7 +9,8 @@ const api = vi.hoisted(() => ({
   store: null as any,
   space: null as any,
   warning: vi.fn(),
-  confirmToggle: vi.fn()
+  confirmToggle: vi.fn(),
+  enableOpen: vi.fn()
 }));
 vi.mock("@arco-design/web-vue", () => ({ Message: { success: vi.fn(), error: vi.fn() }, Modal: { warning: api.warning } }));
 vi.mock("@/views/strategy/components/instance-toggle", () => ({ confirmInstanceToggle: api.confirmToggle }));
@@ -50,6 +51,7 @@ const stubs = {
         ]);
     }
   }),
+  InstanceEnableDialog: { template: "<div />", methods: { open: api.enableOpen } },
   InstanceQuickDrawer: defineComponent({
     props: ["instanceId"],
     setup(props) {
@@ -110,7 +112,10 @@ describe("strategy running page", () => {
   it("restores filters, page and the quick detail from the URL with one request", async () => {
     const { wrapper } = await setup({ strategy_id: "s1", enabled: "false", page: "2", instance_id: "i1" });
     expect(api.loadInstances).toHaveBeenCalledTimes(1);
-    expect(api.loadInstances).toHaveBeenCalledWith({ strategy_id: "s1", enabled: false, page: 2, page_size: 20 });
+    expect(api.loadInstances).toHaveBeenCalledWith(
+      { strategy_id: "s1", enabled: false, page: 2, page_size: 20 },
+      { background: false }
+    );
     expect(wrapper.find(".quick").text()).toBe("quick:i1");
     expect(wrapper.find(".create").text()).toBe("create:false:s1");
   });
@@ -127,6 +132,12 @@ describe("strategy running page", () => {
     await flushPromises();
     expect(router.currentRoute.value.name).toBe("strategy-detail");
     expect(router.currentRoute.value.params.instanceId).toBe("i-new");
+    // 后退回到列表，不再带 create=1（不会重新弹出空的创建抽屉）
+    router.back();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    await flushPromises();
+    expect(router.currentRoute.value.query.create).toBeUndefined();
+    expect(router.currentRoute.value.query.strategy_id).toBe("s1");
   });
 
   it("does not reload when only the overlay changes", async () => {
@@ -143,7 +154,10 @@ describe("strategy running page", () => {
     await wrapper.find(".goto-3").trigger("click");
     await flushPromises();
     expect(router.currentRoute.value.query).toEqual({ page: "3", strategy_id: "s1" });
-    expect(api.loadInstances).toHaveBeenLastCalledWith({ strategy_id: "s1", enabled: undefined, page: 3, page_size: 20 });
+    expect(api.loadInstances).toHaveBeenLastCalledWith(
+      { strategy_id: "s1", enabled: undefined, page: 3, page_size: 20 },
+      { background: false }
+    );
   });
 
   it("keeps the deep link when the space initializes but clears it on a real switch", async () => {
@@ -163,7 +177,10 @@ describe("strategy running page", () => {
     expect(api.clearInstances).toHaveBeenCalledTimes(2);
     expect(router.currentRoute.value.query).toEqual({});
     expect(api.loadInstances).toHaveBeenCalledTimes(2);
-    expect(api.loadInstances).toHaveBeenLastCalledWith({ strategy_id: undefined, enabled: undefined, page: 1, page_size: 20 });
+    expect(api.loadInstances).toHaveBeenLastCalledWith(
+      { strategy_id: undefined, enabled: undefined, page: 1, page_size: 20 },
+      { background: false }
+    );
   });
 
   it("shows a catalog failure without marking the instance list as failed", async () => {
@@ -185,8 +202,27 @@ describe("strategy running page", () => {
     expect(vm.togglingId).toBe("i5");
     await hooks.onSettled(false);
     expect(api.loadInstances).toHaveBeenCalledTimes(1);
-    expect(api.loadInstances).toHaveBeenLastCalledWith({ strategy_id: undefined, enabled: undefined, page: 2, page_size: 20 });
+    expect(api.loadInstances).toHaveBeenLastCalledWith(
+      { strategy_id: undefined, enabled: undefined, page: 2, page_size: 20 },
+      { background: false }
+    );
     expect(vm.togglingId).toBe("");
+  });
+
+  it("enables a trade-mode instance through the dialog that names the account and environment", async () => {
+    const { wrapper } = await setup({});
+    api.confirmToggle.mockClear();
+    api.enableOpen.mockClear();
+    const vm = wrapper.vm as unknown as { toggle: (instance: unknown) => void };
+    const instance = { instance_id: "i6", enabled: false, session_id: "", logical_account_id: "la-1", factor_tasks: {} };
+    vm.toggle(instance);
+    expect(api.enableOpen).toHaveBeenCalledWith(instance, expect.any(Object));
+    expect(api.confirmToggle).not.toHaveBeenCalled();
+    // 停用、仅计算的实例仍走通用确认
+    vm.toggle({ ...instance, enabled: true });
+    vm.toggle({ ...instance, instance_id: "i7", logical_account_id: "" });
+    expect(api.confirmToggle).toHaveBeenCalledTimes(2);
+    expect(api.enableOpen).toHaveBeenCalledTimes(1);
   });
 
   it("lets only the latest of two quick space switches load the list", async () => {
@@ -199,7 +235,10 @@ describe("strategy running page", () => {
     await flushPromises();
     expect(router.currentRoute.value.query).toEqual({});
     expect(api.loadInstances).toHaveBeenCalledTimes(1);
-    expect(api.loadInstances).toHaveBeenLastCalledWith({ strategy_id: undefined, enabled: undefined, page: 1, page_size: 20 });
+    expect(api.loadInstances).toHaveBeenLastCalledWith(
+      { strategy_id: undefined, enabled: undefined, page: 1, page_size: 20 },
+      { background: false }
+    );
   });
 
   it("clears instances left over from another space when the page mounts", async () => {

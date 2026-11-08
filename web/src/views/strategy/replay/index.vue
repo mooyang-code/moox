@@ -4,10 +4,10 @@
       <div class="result-toolbar">
         <span class="result-count">
           共 {{ replayTotal }} 个回放<span v-if="readAt">；状态读取：{{ readAt }}</span>
-          <InfoTip text="基于因子任务的研究回放：现货理论账本、按当期收盘价成交，用于比较策略版本，不承诺复现实时结果。" />
+          <InfoTip text="基于计算任务的研究回放：现货理论账本、按当期收盘价成交，用于比较策略版本，不承诺复现实时结果。" />
         </span>
         <a-space wrap
-          ><a-button :loading="listLoading" aria-label="刷新回放" @click="loadReplays"
+          ><a-button :loading="listLoading" aria-label="刷新回放" @click="manualRefresh"
             ><template #icon><icon-refresh /></template>刷新</a-button
           ><a-button type="primary" @click="openCreate"
             ><template #icon><icon-plus /></template>发起回放</a-button
@@ -52,27 +52,32 @@
                 <span class="muted" :title="selected.dsl_hash"> · DSL {{ shortHash(selected.dsl_hash) }}</span>
               </div>
               <a-space>
-                <a-popconfirm
+                <a-button size="small" :loading="rerunning" @click="rerunWithConfig">按此配置重新发起</a-button>
+                <a-button
                   v-if="(selected.status === 'pending' || selected.status === 'running') && selected.replay_id === selectedId"
-                  content="回放不支持续跑，取消后只保留已写入的周期记录。确定取消？"
-                  ok-text="取消回放"
-                  cancel-text="继续运行"
-                  @ok="cancel"
+                  class="cancel-replay"
+                  status="warning"
+                  :loading="cancelling"
+                  @click="confirmCancel"
+                  >取消回放</a-button
                 >
-                  <a-button status="warning" :loading="cancelling">取消回放</a-button>
-                </a-popconfirm>
               </a-space>
             </div>
             <div class="muted detail-info">
-              {{ sourceLabel(selected) }}
+              <a-link v-if="selected.strategy_id" @click="router.push(definitionsLink(selected.strategy_id))">{{
+                sourceLabel(selected)
+              }}</a-link>
+              <template v-else>{{ sourceLabel(selected) }}</template>
               <template v-if="selected.instance_id">
-                · 实例 <span class="mono">{{ selected.instance_id }}</span
+                · 实例
+                <a-link class="mono" @click="router.push(detailLink(selected.instance_id))">{{ selected.instance_id }}</a-link
                 >，会话 <span class="mono">{{ selected.session_id }}</span></template
               >
-              · 因子任务 {{ replayTasksText(selected) }} · 区间 {{ replayRangeLabel(selected) }} · 手续费
+              · 计算任务 {{ replayTasksText(selected) }} · 区间 {{ replayRangeLabel(selected, displayZone) }} · 手续费
               {{ replayFeeText(selected) }}
               <template v-if="metrics?.first_bar_end">
-                · 实际首根 {{ formatUtcTime(metrics.first_bar_end) }}，末根 {{ formatUtcTime(metrics.last_bar_end) }}</template
+                · 实际首根 {{ formatInstant(metrics.first_bar_end, displayZone) }}，末根
+                {{ formatInstant(metrics.last_bar_end, displayZone) }}</template
               >
             </div>
             <a-alert v-if="selected.status === 'failed'" type="error" show-icon class="top-alert"
@@ -117,7 +122,7 @@
             </div>
             <a-alert v-if="metrics?.bankrupt_at" type="error" show-icon class="top-alert"
               >模拟爆仓：K 线结束于
-              {{ formatUtcTime(metrics.bankrupt_at) }}
+              {{ formatInstant(metrics.bankrupt_at, displayZone) }}
               的这一期权益不为正，持仓已全部平掉，此后各期空仓、权益保持不变；之后的曲线不代表策略还能继续运行。</a-alert
             >
             <a-alert v-if="replayUsesSwap(selected)" type="warning" class="top-alert"
@@ -208,8 +213,8 @@
                 </div>
               </template>
               <template #columns>
-                <a-table-column title="K 线结束（UTC）" :width="170"
-                  ><template #cell="{ record }">{{ formatUtcTime(record.bar_end_time) }}</template></a-table-column
+                <a-table-column title="K 线结束" :width="190"
+                  ><template #cell="{ record }">{{ formatInstant(record.bar_end_time, displayZone) }}</template></a-table-column
                 >
                 <a-table-column title="状态" :width="150"
                   ><template #cell="{ record }"
@@ -276,7 +281,7 @@
 <script setup lang="ts">
 import { StaleSpaceRequestError } from "@/api/admin/stale-space";
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
-import { Message } from "@arco-design/web-vue";
+import { Message, Modal } from "@arco-design/web-vue";
 import type VChart from "@visactor/vchart";
 import { useRoute, useRouter } from "vue-router";
 import { cancelReplay, getReplay, listReplayBars, listReplays, startReplay } from "@/api/strategy";
@@ -290,8 +295,8 @@ import { useSpaceStore } from "@/store/modules/space";
 import { useStrategyStore } from "@/store/modules/strategy";
 import { percent, shortHash, skipReasonLabel } from "@/views/strategy/model";
 import { sameQuery } from "@/views/strategy/query";
-import InfoTip from "@/views/factor/shared/info-tip.vue";
-import { STRATEGY_TASKS_ROUTE, normalizeTaskTab } from "@/views/strategy/links";
+import InfoTip from "@/components/info-tip/index.vue";
+import { STRATEGY_TASKS_ROUTE, definitionsLink, detailLink, normalizeTaskTab } from "@/views/strategy/links";
 import ReplayCreateDrawer from "@/views/strategy/replay/replay-create-drawer.vue";
 import { parseFactorTasks } from "@/views/strategy/market-mode";
 import {
@@ -302,16 +307,18 @@ import {
 } from "@/views/strategy/replay/replay-form-model";
 import { buildReplayQuery, parseReplayQuery, type ReplayQueryState } from "@/views/strategy/replay/replay-query";
 import ReplayRecordList from "@/views/strategy/replay/replay-record-list.vue";
+import { formatInstant, msToWallClock, zoneSuffix } from "@/utils/time-zone";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
+import { usePolling } from "@/hooks/usePolling";
 import {
   equitySeries,
   equitySummary,
-  formatUtcTime,
   mergeBars,
   parseBarDetail,
   parseMetrics,
-  parseUtcInput,
-  recentUtcRange,
+  recentRange,
   replayFeeText,
+  replayFormFromReplay,
   replayRangeLabel,
   replaySourceLabel,
   replayStatusColor,
@@ -333,6 +340,8 @@ const router = useRouter();
 const parsed = computed(() => parseReplayQuery(route.query));
 const spaceStore = useSpaceStore();
 const strategyStore = useStrategyStore();
+// 回放的时间按当前空间登记的时区显示和选择
+const displayZone = useDisplayZone();
 const replayPageSize = 20;
 const tablePageSize = 50;
 const seriesPageSize = 2000;
@@ -371,7 +380,6 @@ const pollFailures = ref(0);
 const awaitingMetrics = ref<{ replayId: string; until: number } | null>(null);
 const clock = ref(Date.now());
 const chartContainer = ref<HTMLElement>();
-const [presetStart, presetEnd] = recentUtcRange(30);
 const form = reactive<ReplayFormState>({
   source: "definition",
   strategy_id: String(route.query.strategy_id || ""),
@@ -379,8 +387,7 @@ const form = reactive<ReplayFormState>({
   instance_id: String(route.query.instance_id || ""),
   single_market: "",
   tasks: parseFactorTasks(String(route.query.factor_tasks || "")),
-  start: presetStart,
-  end: presetEnd,
+  range: recentRange(30),
   spot_fee_bps: 10,
   swap_fee_bps: 10
 });
@@ -391,8 +398,6 @@ function loadChartLibrary() {
   chartLibrary ??= import("@visactor/vchart");
   return chartLibrary;
 }
-let poll: ReturnType<typeof setInterval> | null = null;
-let polling = false;
 // generation 随空间切换递增：旧空间发出的请求返回后一律丢弃；selectRequest 让被新选择取代的详情请求作废。
 // listSeq 是列表请求的发出序号，listApplied 是已应用的最新序号：晚返回的旧请求（或旧页）不能覆盖新结果；
 // listLoadingSeq 只跟踪手动加载，决定加载状态何时结束；tableLoadingRequest 同样只跟踪表格的手动加载。
@@ -446,7 +451,7 @@ const awaitingShown = computed(() => {
       clock.value <= waiting.until
   );
 });
-const chartLabel = computed(() => equitySummary(series.value));
+const chartLabel = computed(() => equitySummary(series.value, displayZone.value));
 const detailCache = new WeakMap<ReplayBar, ReturnType<typeof parseBarDetail>>();
 
 /** 一期的持仓账本与摘要（完整记录才有），按记录缓存解析结果。 */
@@ -469,6 +474,13 @@ function pct(value: number | null) {
   return value !== null && Number.isFinite(value) ? `${(value * 100).toFixed(2)}%` : "-";
 }
 
+/** 手动刷新顺带重读策略目录，别处新建的定义也能出现在发起回放的下拉里。 */
+function manualRefresh() {
+  strategyStore.invalidateStrategyCatalog();
+  void loadStrategies();
+  void loadReplays();
+}
+
 async function loadStrategies() {
   try {
     await strategyStore.loadAllStrategies(200);
@@ -486,7 +498,7 @@ async function loadStrategies() {
 function applyReplayList(gen: number, seq: number, page: number, result: PageResult<Replay>): boolean {
   if (gen !== generation || seq <= listApplied || page !== replayPage.value) return false;
   listApplied = seq;
-  readAt.value = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+  readAt.value = formatInstant(Date.now(), displayZone.value, "clock");
   replays.value = result.items;
   replayTotal.value = result.page.total;
   errors.list = "";
@@ -540,7 +552,7 @@ async function loadTasks() {
     );
     errors.tasks = "";
   } catch (err) {
-    if (gen === generation) errors.tasks = `因子任务列表加载失败：${err instanceof Error ? err.message : "未知错误"}`;
+    if (gen === generation) errors.tasks = `计算任务列表加载失败：${err instanceof Error ? err.message : "未知错误"}`;
   } finally {
     if (gen === generation) tasksLoading.value = false;
   }
@@ -763,19 +775,27 @@ async function renderChart(rebuild: boolean) {
       xField: "time",
       yField: "value",
       axes: [
-        // 页面其余位置都按 UTC 显示：时间轴与提示框同样用 UTC，并带上时分。
-        { orient: "bottom", type: "time", layers: [{ timeFormat: "%m-%d %H:%M", timeFormatMode: "utc" }] },
+        // VChart 的时间轴只认本地和 UTC：横轴用毫秒的线性轴，刻度和提示框按空间时区格式化，时区写在轴标题上。
+        // 不固定 min/max：运行中的回放轮询追加数据时横轴跟着延伸。
+        {
+          orient: "bottom",
+          type: "linear",
+          zero: false,
+          nice: false,
+          title: { visible: true, text: `时间（${zoneSuffix(latest[0].time, displayZone.value)}）` },
+          label: { formatMethod: (text: string | string[]) => msToWallClock(Number(text), displayZone.value, "minute").slice(5) }
+        },
         { orient: "left", type: "linear", zero: false }
       ],
       line: { style: { lineWidth: 2 } },
       point: { visible: false },
       tooltip: {
         mark: {
-          title: { value: (datum: any) => utcLabel(datum?.time) },
+          title: { value: (datum: any) => timeLabel(datum?.time) },
           content: [{ key: "权益", value: (datum: any) => Number(datum?.value).toFixed(4) }]
         },
         dimension: {
-          title: { value: (datum: any) => utcLabel(datum?.time) },
+          title: { value: (datum: any) => timeLabel(datum?.time) },
           content: [{ key: "权益", value: (datum: any) => Number(datum?.value).toFixed(4) }]
         }
       }
@@ -785,17 +805,16 @@ async function renderChart(rebuild: boolean) {
   chart.renderSync();
 }
 
-function utcLabel(time: unknown): string {
+function timeLabel(time: unknown): string {
   const value = typeof time === "number" ? time : Number(time);
-  return Number.isFinite(value) ? formatUtcTime(new Date(value).toISOString()) : "";
+  return Number.isFinite(value) ? formatInstant(value, displayZone.value) : "";
 }
 
 async function start() {
-  errors.start = validateReplayForm(form, parseUtcInput, strategyStore.strategyCatalog);
-  const startTime = parseUtcInput(form.start);
-  const endTime = parseUtcInput(form.end);
+  errors.start = validateReplayForm(form, strategyStore.strategyCatalog);
   const source = replaySourceOf(form);
-  if (errors.start || !source || !startTime || !endTime) return;
+  if (errors.start || !source || !form.range) return;
+  const [startTime, endTime] = form.range.map(ms => new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z"));
   const gen = generation;
   const picks = userPicks;
   starting.value = true;
@@ -810,7 +829,7 @@ async function start() {
     });
     if (gen !== generation) return;
     Message.success(
-      `回放已排队：共 ${started.bar_count} 根，首根 ${formatUtcTime(started.first_bar_end)}，末根 ${formatUtcTime(started.last_bar_end)}`
+      `回放已排队：共 ${started.bar_count} 根，首根 ${formatInstant(started.first_bar_end, displayZone.value)}，末根 ${formatInstant(started.last_bar_end, displayZone.value)}`
     );
     closeCreate();
     replayPage.value = 1;
@@ -825,6 +844,17 @@ async function start() {
   } finally {
     starting.value = false;
   }
+}
+
+function confirmCancel() {
+  Modal.confirm({
+    title: "取消这个回放？",
+    content: "回放不支持续跑，取消后只保留已写入的周期记录。",
+    okText: "取消回放",
+    okButtonProps: { status: "warning" },
+    cancelText: "继续运行",
+    onOk: () => void cancel()
+  });
 }
 
 async function cancel() {
@@ -851,6 +881,27 @@ async function cancel() {
 function openCreate() {
   if (!parsed.value.create) writeQuery({ create: true }, "push");
 }
+
+/** 按所选回放的配置重新发起：取回放详情里的 DSL、任务、区间和手续费，填进发起表单（DSL 用当时的原文）。 */
+const rerunning = ref(false);
+async function rerunWithConfig() {
+  const replayId = selected.value?.replay_id;
+  if (!replayId) return;
+  rerunning.value = true;
+  try {
+    const next = replayFormFromReplay(await getReplay(replayId));
+    if (!next) {
+      Message.info("这个回放用的是统一数据集上的任务，发起表单不能选，请从实例详情发起");
+      return;
+    }
+    Object.assign(form, { ...next, single_market: Object.keys(next.tasks).length === 1 ? Object.keys(next.tasks)[0] : "" });
+    openCreate();
+  } catch (err) {
+    Message.error(err instanceof Error ? err.message : "回放详情读取失败");
+  } finally {
+    rerunning.value = false;
+  }
+}
 /** 关闭创建抽屉：预填一并从 URL 清除（它们只表示创建来源，不表示分析对象）。 */
 function closeCreate() {
   writeQuery({ create: false });
@@ -872,15 +923,13 @@ function applyRouteSelection() {
   if (replayId && replayId !== selectedId.value) void select(replayId, { tablePage: barPage });
 }
 
-function startPolling() {
-  poll = setInterval(async () => {
-    clock.value = Date.now();
-    if (awaitingMetrics.value && clock.value > awaitingMetrics.value.until) awaitingMetrics.value = null;
-    if (polling) return;
-    if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
-    // 所选回放不在当前列表页时也要刷新：轮询条件看列表与所选回放两处。
-    if (!replays.value.some(item => item.status === "pending" || item.status === "running") && !selectedNeedsRefresh()) return;
-    polling = true;
+// 每 5 秒一轮（usePolling：页面隐藏时暂停、上一轮没结束不叠加）。
+async function pollTick() {
+  clock.value = Date.now();
+  if (awaitingMetrics.value && clock.value > awaitingMetrics.value.until) awaitingMetrics.value = null;
+  // 所选回放不在当前列表页时也要刷新：轮询条件看列表与所选回放两处。
+  if (!replays.value.some(item => item.status === "pending" || item.status === "running") && !selectedNeedsRefresh()) return;
+  {
     const gen = generation;
     const seq = ++listSeq;
     const page = replayPage.value;
@@ -893,11 +942,10 @@ function startPolling() {
       if (gen === generation) pollFailures.value = 0;
     } catch {
       if (gen === generation) pollFailures.value += 1;
-    } finally {
-      polling = false;
     }
-  }, 5000);
+  }
 }
+usePolling(pollTick, 5000);
 
 onMounted(() => {
   // 策略定义按空间授权：空间尚未初始化时请求会被拒绝，由下面的空间监听在就绪后补载。
@@ -907,7 +955,6 @@ onMounted(() => {
   }
   loadTasks();
   loadReplays();
-  startPolling();
 });
 watch(
   () => parsed.value.create,
@@ -979,7 +1026,6 @@ watch(
   }
 );
 onBeforeUnmount(() => {
-  if (poll) clearInterval(poll);
   // 作废进行中的请求：返回后不再翻页读取、不再渲染图表。
   generation += 1;
   selectRequest += 1;

@@ -60,17 +60,21 @@ function mountPage() {
     ].map(name => [name, true])
   );
   return shallowMount(ViewBrowse, {
-    props: { embedded: true, viewIds: ["view-known"], activeViewId: "view-known", refreshKey: 0 },
+    props: { viewIds: ["view-known"], activeViewId: "view-known", refreshKey: 0 },
     global: {
       stubs: {
         ...stubs,
         "a-button": { emits: ["click"], template: "<button @click=\"$emit('click')\"><slot /></button>" },
         "a-spin": { template: "<div><slot /></div>" },
-        "a-alert": { template: "<div class='alert'><slot /></div>" },
-        ResultTable: { props: ["rows"], template: '<div data-testid="rows">{{ rows.map(row => row.key).join(",") }}</div>' }
+        "a-alert": { template: "<div class='alert'><slot /></div>" }
       }
     }
   });
+}
+
+/** 表格当前显示的行（按 key 拼接）。 */
+function rowKeys(wrapper: { vm: unknown }): string {
+  return ((wrapper.vm as { tableRows: { key: string }[] }).tableRows || []).map(row => row.key).join(",");
 }
 
 describe("View result refresh", () => {
@@ -106,12 +110,12 @@ describe("View result refresh", () => {
     const query = mode === "record" ? mocks.queryRecords : mocks.queryTimeSeries;
     const wrapper = mountPage();
     await flushPromises();
-    const previousRows = wrapper.get("[data-testid='rows']").text();
+    const previousRows = rowKeys(wrapper);
     expect(previousRows).toBe(mode === "record" ? "record-known" : "BTC");
     query.mockRejectedValueOnce(new Error("Storage unavailable"));
     await wrapper.setProps({ refreshKey: 1 });
     await flushPromises();
-    expect(wrapper.get("[data-testid='rows']").text()).toBe(previousRows);
+    expect(rowKeys(wrapper)).toBe(previousRows);
     expect(wrapper.text()).toContain("Storage unavailable");
     expect(wrapper.text()).toContain("保留上次查询数据");
     expect(wrapper.text()).toContain("数据状态待刷新");
@@ -123,11 +127,98 @@ describe("View result refresh", () => {
     wrapper.unmount();
   });
 
+  it("自动刷新失败不弹提示、错误条不闪；手动刷新失败只由页面提示一次", async () => {
+    vi.useFakeTimers();
+    const wrapper = shallowMount(ViewBrowse, {
+      props: {
+        viewIds: ["view-known"],
+        activeViewId: "view-known",
+        refreshKey: 0,
+        autoRefreshIntervalMs: 60_000
+      },
+      global: {
+        stubs: {
+          "a-alert": { template: "<div class='alert'><slot /></div>" }
+        }
+      }
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    await flushPromises();
+    expect(mocks.queryTimeSeries).toHaveBeenCalledTimes(1);
+    expect(mocks.queryTimeSeries.mock.lastCall?.[1]).toEqual({ silentError: true });
+
+    // 手动刷新失败：页面提示一次（请求层静默，不会弹两次），错误条出现
+    mocks.queryTimeSeries.mockRejectedValueOnce(new Error("Storage unavailable"));
+    await wrapper.setProps({ refreshKey: 1 });
+    await flushPromises();
+    expect(mocks.messageError).toHaveBeenCalledTimes(1);
+    expect(wrapper.text()).toContain("Storage unavailable");
+
+    // 自动刷新再失败：不弹提示，请求开始时也不清掉错误条
+    let rejectPoll!: (error: Error) => void;
+    mocks.queryTimeSeries.mockImplementationOnce(() => new Promise((_resolve, reject) => (rejectPoll = reject)));
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(wrapper.text()).toContain("Storage unavailable");
+    rejectPoll(new Error("Storage unavailable"));
+    await flushPromises();
+    expect(mocks.messageError).toHaveBeenCalledTimes(1);
+
+    // 自动刷新成功后错误条消失
+    await vi.advanceTimersByTimeAsync(60_000);
+    await flushPromises();
+    expect(wrapper.text()).not.toContain("Storage unavailable");
+    wrapper.unmount();
+    vi.useRealTimers();
+  });
+
+  it("视图元数据没读到时自动刷新不重试，不会每轮弹提示", async () => {
+    vi.useFakeTimers();
+    mocks.catalog.mockRejectedValue(new Error("Storage unavailable"));
+    const wrapper = shallowMount(ViewBrowse, {
+      props: { viewIds: ["view-known"], activeViewId: "view-known", autoRefreshIntervalMs: 60_000 },
+      global: { stubs: { "a-alert": { template: "<div class='alert'><slot /></div>" } } }
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    await flushPromises();
+    const calls = mocks.catalog.mock.calls.length;
+    const errors = mocks.messageError.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(mocks.catalog.mock.calls.length).toBe(calls);
+    expect(mocks.messageError.mock.calls.length).toBe(errors);
+    wrapper.unmount();
+    vi.useRealTimers();
+  });
+
+  it("行操作“K 线”用这一行的标的和序列标签查，不用查询区的筛选", async () => {
+    const wrapper = mountPage();
+    await flushPromises();
+    const vm = wrapper.vm as unknown as {
+      filters: { fieldName: string; operator: string; value?: string }[];
+      openRowKline(record: unknown): Promise<void>;
+      reloadKlineRecords(): Promise<void>;
+    };
+    // 查询区筛的是另一个标的：行内 K 线不能用它
+    vm.filters.splice(0, vm.filters.length, { fieldName: "subject_id", operator: "eq", value: "BTCUSDT" });
+    mocks.queryTimeSeries.mockClear();
+    await vm.openRowKline({ rawKey: { subject_id: "ETHUSDT", series_tag: "market:swap" } });
+    await flushPromises();
+    const filter = JSON.stringify(mocks.queryTimeSeries.mock.calls[0]?.[0]?.filter);
+    expect(filter).toContain("ETHUSDT");
+    expect(filter).toContain("market:swap");
+    expect(filter).not.toContain("BTCUSDT");
+    // 弹窗里刷新也沿用这一行
+    mocks.queryTimeSeries.mockClear();
+    await vm.reloadKlineRecords();
+    await flushPromises();
+    expect(JSON.stringify(mocks.queryTimeSeries.mock.calls[0]?.[0]?.filter)).toContain("ETHUSDT");
+    wrapper.unmount();
+  });
+
   it("leaves an initial query failure empty without claiming previous data", async () => {
     mocks.queryTimeSeries.mockRejectedValue(new Error("Storage unavailable"));
     const wrapper = mountPage();
     await flushPromises();
-    expect(wrapper.get("[data-testid='rows']").text()).toBe("");
+    expect(rowKeys(wrapper)).toBe("");
     expect(wrapper.text()).toContain("Storage unavailable");
     expect(wrapper.text()).not.toContain("保留上次查询数据");
     wrapper.unmount();
@@ -176,7 +267,7 @@ describe("View result refresh", () => {
       ?.trigger("click");
     await flushPromises();
     expect(mocks.catalog).toHaveBeenCalledTimes(2);
-    expect(wrapper.get("[data-testid='rows']").text()).toBe("BTC");
+    expect(rowKeys(wrapper)).toBe("BTC");
     expect(wrapper.text()).not.toContain("Storage unavailable");
     wrapper.unmount();
   });

@@ -1,5 +1,6 @@
 import type { Replay, ReplayBar } from "@/api/strategy-types";
 import { positionLabel, tasksText } from "@/views/strategy/market-mode";
+import { formatInstant, msToWallClock, toInstantMs } from "@/utils/time-zone";
 
 export interface ReplayMetrics {
   bars: number;
@@ -80,49 +81,10 @@ export function replayStatusColor(status: string): string {
   );
 }
 
-/** 把 "YYYY-MM-DD HH:mm"（或只有日期）的 UTC 文本转为 ISO 时间；格式或日期无效时返回 null。 */
-export function parseUtcInput(text: string): string | null {
-  const match = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}))?$/.exec(text.trim());
-  if (!match) return null;
-  const [, year, month, day, hour = "00", minute = "00"] = match;
-  const value = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute)));
-  if (
-    value.getUTCFullYear() !== Number(year) ||
-    value.getUTCMonth() !== Number(month) - 1 ||
-    value.getUTCDate() !== Number(day) ||
-    value.getUTCHours() !== Number(hour) ||
-    value.getUTCMinutes() !== Number(minute)
-  )
-    return null;
-  return value.toISOString().replace(/\.\d{3}Z$/, "Z");
-}
-
-/** 把时间格式化为 UTC 的 "YYYY-MM-DD HH:mm"，用于输入框。 */
-export function formatUtcInput(value: Date): string {
-  return value.toISOString().slice(0, 16).replace("T", " ");
-}
-
-/** 最近 days 天的 UTC 区间（终点取当前整点）。 */
-export function recentUtcRange(days: number, now = new Date()): [string, string] {
-  const end = new Date(now.getTime());
-  end.setUTCMinutes(0, 0, 0);
-  const start = new Date(end.getTime() - days * 24 * 3600 * 1000);
-  return [formatUtcInput(start), formatUtcInput(end)];
-}
-
-/** 按 UTC 显示时间（回放区间以 UTC 输入，列表与周期表保持一致）。 */
-export function formatUtcTime(value?: string): string {
-  if (!value) return "-";
-  const timestamp = Date.parse(value);
-  if (!Number.isFinite(timestamp)) return "时间未知";
-  return `${new Date(timestamp).toISOString().slice(0, 16).replace("T", " ")} UTC`;
-}
-
-/** 时刻所在的上海日期（YYYY-MM-DD）。 */
-function shanghaiDate(value: string): string {
-  const timestamp = Date.parse(value);
-  if (!Number.isFinite(timestamp)) return "时间未知";
-  return new Date(timestamp + 8 * 3600 * 1000).toISOString().slice(0, 10);
+/** 最近 days 天的区间（毫秒，终点取当前整点）。 */
+export function recentRange(days: number, nowMs = Date.now()): [number, number] {
+  const end = Math.floor(nowMs / 3_600_000) * 3_600_000;
+  return [end - days * 86_400_000, end];
 }
 
 /** 回放对象的说明：定义名称（或 ID），或未保存的 DSL 文本。 */
@@ -132,27 +94,18 @@ export function replaySourceLabel(replay: { strategy_id: string }, catalog: { st
   return definition ? `${definition.name}（${replay.strategy_id}）` : replay.strategy_id;
 }
 
-/** 时刻是否是上海时间零点。 */
-function isShanghaiMidnight(value: string): boolean {
-  const timestamp = Date.parse(value);
-  return Number.isFinite(timestamp) && (timestamp + 8 * 3600 * 1000) % (24 * 3600 * 1000) === 0;
-}
-
 /**
- * 回放区间的写法：A 股日线按上海日期（含起始日、不含结束日），其余按 UTC 时间。回放记录只带日历不带周期，
- * A 股日线的区间两端总是上海零点；A 股日内的区间是真实时刻，不是上海零点时按 UTC 时间写。
+ * 回放区间的写法：A 股日线的区间两端是空间时区的零点，按日期写（含起始日、不含结束日）；其余写时刻。
+ * 回放记录只带日历不带周期，A 股日内的区间是真实时刻，不是零点时按时刻写。
  */
-export function replayRangeLabel(replay: { calendar?: string; start_time: string; end_time: string }): string {
-  if (
-    replay.calendar === "cn_stock" &&
-    replay.start_time &&
-    replay.end_time &&
-    isShanghaiMidnight(replay.start_time) &&
-    isShanghaiMidnight(replay.end_time)
-  ) {
-    return `${shanghaiDate(replay.start_time)} → ${shanghaiDate(replay.end_time)}（上海日期，不含结束日）`;
+export function replayRangeLabel(replay: { calendar?: string; start_time: string; end_time: string }, zone: string): string {
+  const start = toInstantMs(replay.start_time);
+  const end = toInstantMs(replay.end_time);
+  const midnight = (ms: number) => msToWallClock(ms, zone, "clock") === "00:00:00";
+  if (replay.calendar === "cn_stock" && start !== null && end !== null && midnight(start) && midnight(end)) {
+    return `${formatInstant(start, zone, "date")} → ${formatInstant(end, zone, "date")}（不含结束日）`;
   }
-  return `${formatUtcTime(replay.start_time)} → ${formatUtcTime(replay.end_time)}`;
+  return `${formatInstant(replay.start_time, zone, "minute")} → ${formatInstant(replay.end_time, zone, "minute")}`;
 }
 
 /** 把新读到的周期记录合并到已加载的列表：按 bar_end_time 去重并保持升序。 */
@@ -168,7 +121,7 @@ export function mergeBars(known: ReplayBar[], incoming: ReplayBar[]): ReplayBar[
   return merged.sort((a, b) => Date.parse(a.bar_end_time) - Date.parse(b.bar_end_time));
 }
 
-/** 回放读取的因子任务的展示文本：单任务只写 ID，多任务写成 现货 xxx、永续 yyy。 */
+/** 回放读取的计算任务的展示文本：单任务只写 ID，多任务写成 现货 xxx、永续 yyy。 */
 export function replayTasksText(replay: Pick<Replay, "tasks">): string {
   return tasksText(Object.fromEntries(Object.entries(replay.tasks ?? {}).map(([market, task]) => [market, task.factor_task_id])));
 }
@@ -255,12 +208,37 @@ export function parseBarDetail(bar: ReplayBar): ReplayBarDetail {
 }
 
 /** 权益曲线的文字摘要，供屏幕阅读器等无法查看图形的场景使用。 */
-export function equitySummary(bars: ReplayBar[]): string {
+export function equitySummary(bars: ReplayBar[], zone: string): string {
   const points = equitySeries(bars);
   if (!points.length) return "暂无权益曲线";
   const values = points.map(point => point.value);
   const first = points[0];
   const last = points[points.length - 1];
-  const label = (time: number) => formatUtcTime(new Date(time).toISOString());
+  const label = (time: number) => formatInstant(time, zone);
   return `权益曲线：共 ${points.length} 根，${label(first.time)} 权益 ${first.value.toFixed(4)}，${label(last.time)} 权益 ${last.value.toFixed(4)}，最高 ${Math.max(...values).toFixed(4)}，最低 ${Math.min(...values).toFixed(4)}`;
+}
+
+/** 回放列表里的一行指标：累计收益和最大回撤；还没有指标时为空串。 */
+export function replayMetricsLine(raw?: string): string {
+  const metrics = parseMetrics(raw);
+  if (!metrics) return "";
+  return `累计收益 ${(metrics.total_return * 100).toFixed(2)}% · 最大回撤 ${(metrics.max_drawdown * 100).toFixed(2)}%`;
+}
+
+/** 按某个回放的配置重新发起时的表单值；用了统一数据集上的任务（multi）时返回 null，要从实例详情发起。 */
+export function replayFormFromReplay(replay: Replay) {
+  const tasks = Object.fromEntries(Object.entries(replay.tasks || {}).map(([market, task]) => [market, task.factor_task_id]));
+  if ("multi" in tasks) return null;
+  const start = Date.parse(replay.start_time);
+  const end = Date.parse(replay.end_time);
+  return {
+    source: "dsl" as const,
+    strategy_id: replay.strategy_id,
+    dsl_yaml: replay.dsl_yaml,
+    instance_id: "",
+    tasks,
+    range: Number.isFinite(start) && Number.isFinite(end) ? ([start, end] as [number, number]) : null,
+    spot_fee_bps: replay.spot_fee_bps,
+    swap_fee_bps: replay.swap_fee_bps
+  };
 }

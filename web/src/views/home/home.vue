@@ -10,12 +10,12 @@
       <template v-else>
         <section class="banner" :class="`is-${status.tone}`">
           <div class="banner-main">
-            <div class="banner-meta">
-              {{ greeting }}，{{ userName }} · {{ todayText }}<template v-if="spaceName"> · {{ spaceName }}</template>
-            </div>
             <div class="banner-status">
-              <span class="status-icon" :class="`is-${status.tone}`"><component :is="statusIcon" /></span>
               <h2>{{ status.text }}</h2>
+              <span class="banner-time"
+                >更新于 {{ updatedAt || "—" }}
+                <a class="refresh" :class="{ 'is-busy': refreshing }" @click="manualRefresh">刷新</a></span
+              >
             </div>
             <div v-if="stage" class="banner-stage" :title="stage.issues.join('\n')">
               <span class="stage-dot" :class="`is-${stage.color}`" />
@@ -23,30 +23,12 @@
               <small v-if="stage.recovered" class="stage-recovered">已自动恢复</small>
               <small v-for="issue in stage.issues" :key="issue" class="stage-issue">{{ issue }}</small>
             </div>
-            <div class="banner-facts">
-              <span v-for="fact in facts" :key="fact.key" :title="fact.hint"
-                >{{ fact.label }} <b :class="`is-${fact.tone}`">{{ fact.value }}</b></span
-              >
-            </div>
             <nav class="banner-links" aria-label="常用入口">
               <button v-for="link in quickLinks" :key="link.label" type="button" class="quick" @click="go(link.target)">
                 <component :is="link.icon" />{{ link.label }}
               </button>
             </nav>
           </div>
-          <aside class="health-card" aria-label="系统健康">
-            <span class="health-card__label">系统健康</span>
-            <div class="health-card__value">
-              <strong>{{ services.percent === undefined ? "—" : `${services.percent}%` }}</strong>
-              <span v-if="services.available">{{ services.healthy }}/{{ services.total }} 组件</span>
-            </div>
-            <div class="meter"><i :class="`is-${services.tone}`" :style="{ width: `${services.percent || 0}%` }" /></div>
-            <span class="health-card__foot">{{ hosts.length }} 台主机 · {{ alertCount }} 告警</span>
-            <span class="health-card__foot health-card__time"
-              >更新于 {{ updatedAt || "—" }}
-              <a class="refresh" :class="{ 'is-busy': refreshing }" @click="manualRefresh">刷新</a></span
-            >
-          </aside>
         </section>
 
         <section class="kpis" aria-label="关键指标">
@@ -76,15 +58,18 @@
             </header>
             <div class="tile-body">
               <p v-if="!currentStrategy" class="tile-empty">
-                {{ strategyLoaded ? "还没有策略实例" : "读取中…" }}
-                <a v-if="strategyLoaded" @click="go(instancesLink({ create: true }))">新建实例</a>
+                <template v-if="strategyLoaded">
+                  还没有策略实例 <a @click="go(instancesLink({ create: true }))">新建实例</a>
+                </template>
+                <template v-else-if="liveErrors.strategy">读取失败 · <a @click="manualRefresh">重试</a></template>
+                <template v-else>读取中…</template>
               </p>
               <template v-else>
                 <button type="button" class="strategy-head" @click="go(currentStrategy.link)">
                   <span class="dot" :class="`is-${currentStrategy.tone}`" />
                   <b class="ellipsis">{{ currentStrategy.name }}</b>
                   <span class="strategy-state" :class="`is-${currentStrategy.tone}`">{{ currentStrategy.state.label }}</span>
-                  <span class="strategy-when">最近一期 {{ currentStrategy.lastBar }}</span>
+                  <span class="strategy-when" :title="currentStrategy.lastBarTitle">最近一期 {{ currentStrategy.lastBar }}</span>
                 </button>
                 <p v-if="!currentStrategy.holdings.length" class="tile-empty">
                   {{ currentStrategy.enabled ? "暂无目标" : "已停用，不再产出目标" }}
@@ -121,8 +106,7 @@
             </header>
             <div class="tile-body">
               <div v-if="!attention.length" class="all-clear">
-                <component :is="statusIcon" :class="`is-${status.tone}`" />
-                <span>{{ overview || monitorError ? (monitorError ? "监控数据暂不可用" : "一切正常") : "读取中…" }}</span>
+                <span>{{ allClearText }}</span>
                 <small v-if="updatedAt">最近检查 {{ updatedAt }}</small>
               </div>
               <button
@@ -131,13 +115,13 @@
                 type="button"
                 class="line attention-line"
                 :title="item.detail"
-                @click="go(item.target)"
+                @click="openAttention(item)"
               >
                 <span class="dot" :class="`is-${item.tone}`" />
                 <span class="ellipsis"
                   >{{ item.title }}<em v-if="item.detail"> · {{ item.detail }}</em></span
                 >
-                <span class="muted">{{ item.when || item.source }}</span>
+                <span class="muted" :title="item.whenTitle">{{ item.when || item.source }}</span>
               </button>
             </div>
             <footer class="tile-foot">
@@ -153,7 +137,11 @@
               <a @click="go('/factor/tasks?tab=results')">计算结果 →</a>
             </header>
             <div class="tile-body">
-              <p v-if="!factors.length" class="tile-empty">{{ factorLoaded ? "当前空间没有计算任务" : "读取中…" }}</p>
+              <p v-if="!factors.length" class="tile-empty">
+                <template v-if="factorLoaded">当前空间没有计算任务</template>
+                <template v-else-if="liveErrors.factor">读取失败 · <a @click="manualRefresh">重试</a></template>
+                <template v-else>读取中…</template>
+              </p>
               <template v-else>
                 <div class="line line-head factor-cols"><span>任务</span><span>最近周期</span><span>进度</span></div>
                 <button
@@ -186,6 +174,7 @@
               <p v-if="!freshness.length" class="tile-empty">
                 {{ monitorError ? "监控数据暂不可用" : overview ? "暂无数据链路观测" : "读取中…" }}
               </p>
+              <p v-else-if="!foldedFreshness.shown.length" class="tile-empty">{{ freshness.length }} 条数据链路都正常</p>
               <button
                 v-for="row in foldedFreshness.shown"
                 :key="row.key"
@@ -206,17 +195,18 @@
             </footer>
           </section>
 
-          <section class="tile tile-third" aria-label="主机资源">
+          <section class="tile tile-third" aria-label="主机工作台">
             <header class="tile-head">
               <h3>
-                主机资源<small>{{ hosts.length }}</small>
+                主机工作台<small>{{ hosts.length }}</small>
               </h3>
-              <a @click="go('/ops/monitor')">服务 {{ services.available ? `${services.healthy}/${services.total}` : "—" }} →</a>
+              <a @click="go('/ops/hosts?tab=monitor')">全部主机 →</a>
             </header>
             <div class="tile-body">
               <p v-if="!hosts.length" class="tile-empty">
                 {{ monitorError ? "监控数据暂不可用" : overview ? "没有上报的主机" : "读取中…" }}
               </p>
+              <p v-else-if="!foldedHosts.shown.length" class="tile-empty">{{ hosts.length }} 台主机都正常</p>
               <template v-else>
                 <div class="line line-head host-cols"><span>主机</span><span>CPU</span><span>内存</span><span>磁盘</span></div>
                 <button
@@ -234,7 +224,7 @@
               </template>
             </div>
             <footer class="tile-foot">
-              <a v-if="foldedHosts.hidden" @click="go('/ops/hosts')">另有 {{ foldedHosts.hidden }} 台</a>
+              <a v-if="foldedHosts.hidden" @click="go('/ops/hosts?tab=monitor')">另有 {{ foldedHosts.hidden }} 台</a>
             </footer>
           </section>
 
@@ -244,11 +234,22 @@
               <a @click="go('/ops/activity')">活动日志 →</a>
             </header>
             <div class="tile-body activity-body">
-              <p v-if="!activity.length" class="tile-empty">{{ activityLoaded ? "暂无动态" : "读取中…" }}</p>
-              <div v-for="row in activity" :key="row.key" class="line activity-line" :title="row.title">
-                <span class="muted">{{ row.when }}</span>
+              <p v-if="!activity.length" class="tile-empty">
+                <template v-if="activityLoaded">暂无动态</template>
+                <template v-else-if="liveErrors.activity">读取失败 · <a @click="manualRefresh">重试</a></template>
+                <template v-else>读取中…</template>
+              </p>
+              <button
+                v-for="row in activity"
+                :key="row.key"
+                type="button"
+                class="line activity-line"
+                :title="row.title"
+                @click="go('/ops/activity')"
+              >
+                <span class="muted" :title="row.whenTitle">{{ row.when }}</span>
                 <span class="ellipsis">{{ row.title }}</span>
-              </div>
+              </button>
             </div>
           </section>
         </div>
@@ -263,7 +264,7 @@
   </div>
 </template>
 
-<script setup lang="ts" name="Home">
+<script setup lang="ts">
 import { computed, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { listActivityLogs, type ActivityLogItem } from "@/api/admin/activity";
@@ -277,8 +278,7 @@ import { listInstances, listStrategies, listStrategyTargets } from "@/api/strate
 import type { Strategy, StrategyInstance, StrategyTargetSnapshot } from "@/api/strategy-types";
 import { listTradingAccounts } from "@/api/trade";
 import { usePolling } from "@/hooks/usePolling";
-import { useSpaceStore } from "@/store/modules/space";
-import { useUserInfoStore } from "@/store/modules/user-info";
+import { isSystemSpace, useSpaceStore } from "@/store/modules/space";
 import { RequestGate } from "@/utils/request-gate";
 import { datasetMatchesAttribution, isLikelyFactorResultDataset } from "@/views/data/shared/module-attribution";
 import { alertHref } from "@/views/ops/monitor/health-display";
@@ -287,28 +287,28 @@ import {
   TILE_LIMITS,
   activityRows,
   attentionItems,
-  bannerFacts,
   factorRows,
   fold,
   freshnessRows,
   hostRows,
   kpiCards,
+  scopeOverviewToSpace,
   statusLine,
   strategyRows,
   systemStage,
-  toneIcon,
   type HomeTarget,
   type NameBook
 } from "./home-model";
-import { serviceHealth } from "./service-health";
+import { formatInstant } from "@/utils/time-zone";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
 
 const TARGET_FETCH_LIMIT = 12;
 
 const router = useRouter();
 const spaceStore = useSpaceStore();
-const userStore = useUserInfoStore();
 const selectedSpaceId = computed(() => spaceStore.selectedSpaceId);
-const spaceName = computed(() => spaceStore.selectedSpace?.name || "");
+// 空间磁贴（因子、策略、数据新鲜度、动态）按当前空间的时区；告警、主机等全局部分按 UTC
+const displayZone = useDisplayZone();
 
 const nowMs = ref(Date.now());
 const updatedAt = ref("");
@@ -328,7 +328,7 @@ const counts = reactive<Record<string, number | null>>({
 });
 const spaceLoadGate = new RequestGate();
 
-// 实时部分：监控概览、因子任务、策略实例与目标、最近动态，定时刷新。
+// 实时部分：监控概览、计算任务、策略实例与目标、最近动态，定时刷新。
 const overview = ref<HealthOverview>();
 const monitorError = ref("");
 const factorTasks = ref<FactorTaskInfo[]>([]);
@@ -339,17 +339,36 @@ const catalog = ref<Strategy[]>([]);
 const strategyLoaded = ref(false);
 const activityItems = ref<ActivityLogItem[]>([]);
 const activityLoaded = ref(false);
+// 监控以外各路读取的失败原因：读不到的部分不能显示成正常，也不能刷新“更新于”。
+const liveErrors = reactive({ factor: "", strategy: "", activity: "" });
+const failedCount = computed(() => Object.values(liveErrors).filter(Boolean).length);
 const liveLoadGate = new RequestGate();
 
-const factors = computed(() => factorRows(factorTasks.value, selectedSpaceId.value || "", names, nowMs.value));
-const strategies = computed(() => strategyRows(instances.value, targets.value, catalog.value, nowMs.value));
-const freshness = computed(() => freshnessRows(overview.value, names, nowMs.value));
+const factors = computed(() => factorRows(factorTasks.value, selectedSpaceId.value || "", names, nowMs.value, displayZone.value));
+const strategies = computed(() => strategyRows(instances.value, targets.value, catalog.value, nowMs.value, displayZone.value));
+// 监控概览取的是全部空间：告警、主机、组件看全局，数据新鲜度只看当前空间。
+const freshness = computed(() =>
+  freshnessRows(scopeOverviewToSpace(overview.value, selectedSpaceId.value || ""), names, nowMs.value)
+);
 const hosts = computed(() => hostRows(overview.value?.hosts || []));
-const foldedFreshness = computed(() => fold(freshness.value, TILE_LIMITS.freshness));
+// 新鲜度和主机两格只列不正常的行：首页只回答“有没有问题、去哪处理”
+const foldedFreshness = computed(() =>
+  fold(
+    freshness.value.filter(row => row.tone !== "ok"),
+    TILE_LIMITS.freshness
+  )
+);
 const foldedFactors = computed(() => fold(factors.value, TILE_LIMITS.factors));
-const foldedHosts = computed(() => fold(hosts.value, TILE_LIMITS.hosts));
+const foldedHosts = computed(() =>
+  fold(
+    hosts.value.filter(row => row.tone !== "ok"),
+    TILE_LIMITS.hosts
+  )
+);
 const foldedAttention = computed(() => fold(attention.value, TILE_LIMITS.attention));
-const activity = computed(() => activityRows(activityItems.value, names, nowMs.value).slice(0, TILE_LIMITS.activity));
+const activity = computed(() =>
+  activityRows(activityItems.value, names, nowMs.value, displayZone.value).slice(0, TILE_LIMITS.activity)
+);
 const attention = computed(() =>
   attentionItems({
     alerts: monitorError.value ? [] : overview.value?.alerts || [],
@@ -358,19 +377,25 @@ const attention = computed(() =>
     freshness: freshness.value,
     names,
     nowMs: nowMs.value,
-    alertTarget: alert => alertHref(alert).replace(/^#/, "")
+    alertTarget: alert => alertHref(alert).replace(/^#/, ""),
+    spaceLabel
   })
 );
 const status = computed(() =>
-  statusLine({ attention: attention.value, overview: overview.value, monitorError: monitorError.value })
+  statusLine({
+    attention: attention.value,
+    overview: overview.value,
+    monitorError: monitorError.value,
+    failed: failedCount.value
+  })
 );
 const stage = computed(() => (monitorError.value ? undefined : systemStage(overview.value)));
-const alertCount = computed(() => (monitorError.value ? "—" : String(overview.value?.summary?.alert_count ?? 0)));
-const statusIcon = computed(() => toneIcon(status.value.tone));
-const services = computed(() => serviceHealth(overview.value, monitorError.value));
-const facts = computed(() =>
-  bannerFacts({ strategies: strategies.value, factors: factors.value, freshness: freshness.value, nowMs: nowMs.value })
-);
+// 监控没有关注项时这一格的说明：别的格子读取失败时不能写“一切正常”
+const allClearText = computed(() => {
+  if (monitorError.value) return "监控数据暂不可用";
+  if (!overview.value) return "读取中…";
+  return failedCount.value ? `监控没有关注项，另有 ${failedCount.value} 项读取失败` : "一切正常";
+});
 const kpis = computed(() =>
   kpiCards({
     strategies: strategies.value,
@@ -380,7 +405,8 @@ const kpis = computed(() =>
     freshness: freshness.value,
     alertCount: monitorError.value ? undefined : overview.value?.summary?.alert_count,
     monitorError: monitorError.value,
-    nowMs: nowMs.value
+    nowMs: nowMs.value,
+    zone: displayZone.value
   })
 );
 
@@ -392,20 +418,8 @@ function stepStrategy(delta: number) {
   if (total > 1) strategyIndex.value = (strategyIndex.value + delta + total) % total;
 }
 
-const userName = computed(() => userStore.account.user?.userName || "Trader");
-const greeting = computed(() => {
-  const hour = new Date(nowMs.value).getHours();
-  return hour < 6 ? "凌晨好" : hour < 12 ? "早上好" : hour < 18 ? "下午好" : "晚上好";
-});
-
-const todayText = computed(() => {
-  const date = new Date(nowMs.value);
-  const weekday = ["日", "一", "二", "三", "四", "五", "六"][date.getDay()];
-  return `${date.getMonth() + 1} 月 ${date.getDate()} 日 星期${weekday}`;
-});
-
 const quickLinks: { label: string; icon: string; target: HomeTarget }[] = [
-  { label: "K 线浏览", icon: "icon-bar-chart", target: "/collector/tasks?tab=results" },
+  { label: "采集结果", icon: "icon-bar-chart", target: "/collector/tasks?tab=results" },
   { label: "因子结果", icon: "icon-experiment", target: "/factor/tasks?tab=results" },
   { label: "策略结果", icon: "icon-compass", target: resultsLink() },
   { label: "策略回放", icon: "icon-history", target: replayLink() },
@@ -432,9 +446,28 @@ function go(target: HomeTarget) {
   void router.push(target);
 }
 
-function stamp() {
+/** 待处理项属于别的空间时（例如别的空间的数据集告警），先切到那个空间再打开。 */
+function openAttention(item: { target: HomeTarget; spaceId?: string }) {
+  if (item.spaceId && item.spaceId !== selectedSpaceId.value) spaceStore.setSelectedSpace(item.spaceId);
+  go(item.target);
+}
+
+/** 告警所属空间的显示名：当前空间不加前缀，系统内部空间写“系统”。 */
+function spaceLabel(spaceId: string): string {
+  if (!spaceId || spaceId === selectedSpaceId.value) return "";
+  if (isSystemSpace(spaceId)) return "系统";
+  return (spaceStore.spaces || []).find(item => item.space_id === spaceId)?.name || spaceId;
+}
+
+/** 推进页面时钟；只有这一轮全部读到时才更新“更新于”，部分失败时保留上一次成功的时间。 */
+function stamp(allOk: boolean) {
   nowMs.value = Date.now();
-  updatedAt.value = new Date(nowMs.value).toLocaleTimeString("zh-CN", { hour12: false });
+  // 页面整体的更新时间属于全局部分，按 UTC
+  if (allOk) updatedAt.value = formatInstant(nowMs.value, "UTC", "clock");
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error && error.message ? error.message : String(error);
 }
 
 /** 空间范围：数据集 / View 名称、资产数量与策略定义名称。单项失败不影响其它项。 */
@@ -482,7 +515,7 @@ async function loadSpaceScoped() {
 }
 
 /**
- * 实时部分：监控概览、因子任务、策略实例与最新目标、最近动态。
+ * 实时部分：监控概览、计算任务、策略实例与最新目标、最近动态。
  * 动态多取一些（30 条）：“新增 0、移除 0”的无变化记录会被过滤掉，仍要凑满磁贴的固定条数。
  */
 async function loadLive() {
@@ -491,8 +524,10 @@ async function loadLive() {
   if (!spaceId) return;
   const isCurrent = () => liveLoadGate.isCurrent(token) && selectedSpaceId.value === spaceId;
   await Promise.allSettled([
+    // 不带空间：首页的健康结论要和监控页一致，别的空间断了数据也要看得到
+    // 首页每路读取的失败都写在页面上，后台读取一律不弹全局提示
     monitorApi
-      .getOverview({ space_id: spaceId })
+      .getOverview({}, { silentError: true })
       .then(result => {
         if (!isCurrent()) return;
         overview.value = result.overview;
@@ -501,29 +536,45 @@ async function loadLive() {
       .catch(error => {
         if (isCurrent()) monitorError.value = error instanceof Error ? error.message : String(error);
       }),
-    listFactorTasks({ page: { page: 1, size: 500 } }).then(rsp => {
-      if (!isCurrent()) return;
-      factorTasks.value = rsp.factor_tasks ?? [];
-      const own = factorTasks.value.filter(item => item.factor_task.space_id === spaceId);
-      counts.factorTasks = own.length;
-      counts.factors = own.reduce((total, item) => total + (item.members ?? []).filter(m => m.status === "enabled").length, 0);
-      factorLoaded.value = true;
-    }),
-    loadStrategies(isCurrent),
-    listActivityLogs({ space_id: spaceId, page: { page: 1, size: 30 } }).then(rsp => {
-      if (!isCurrent()) return;
-      activityItems.value = rsp.items ?? [];
-      activityLoaded.value = true;
-    })
+    listFactorTasks({ page: { page: 1, size: 500 } }, { silentError: true })
+      .then(rsp => {
+        if (!isCurrent()) return;
+        factorTasks.value = rsp.factor_tasks ?? [];
+        const own = factorTasks.value.filter(item => item.factor_task.space_id === spaceId);
+        counts.factorTasks = own.length;
+        counts.factors = own.reduce((total, item) => total + (item.members ?? []).filter(m => m.status === "enabled").length, 0);
+        factorLoaded.value = true;
+        liveErrors.factor = "";
+      })
+      .catch(error => {
+        if (isCurrent()) liveErrors.factor = errorText(error);
+      }),
+    loadStrategies(isCurrent)
+      .then(() => {
+        if (isCurrent()) liveErrors.strategy = "";
+      })
+      .catch(error => {
+        if (isCurrent()) liveErrors.strategy = errorText(error);
+      }),
+    listActivityLogs({ space_id: spaceId, page: { page: 1, size: 30 } }, { silentError: true })
+      .then(rsp => {
+        if (!isCurrent()) return;
+        activityItems.value = rsp.items ?? [];
+        activityLoaded.value = true;
+        liveErrors.activity = "";
+      })
+      .catch(error => {
+        if (isCurrent()) liveErrors.activity = errorText(error);
+      })
   ]);
-  if (isCurrent()) stamp();
+  if (isCurrent()) stamp(!monitorError.value && failedCount.value === 0);
 }
 
 async function loadStrategies(isCurrent: () => boolean) {
-  const page = await listInstances({ page: 1, page_size: 200 });
+  const page = await listInstances({ page: 1, page_size: 200 }, { silent: true });
   if (!isCurrent()) return;
   const enabled = page.items.filter(item => item.enabled).slice(0, TARGET_FETCH_LIMIT);
-  const settled = await Promise.allSettled(enabled.map(item => listStrategyTargets(item.instance_id)));
+  const settled = await Promise.allSettled(enabled.map(item => listStrategyTargets(item.instance_id, { silent: true })));
   if (!isCurrent()) return;
   const next: Record<string, StrategyTargetSnapshot> = {};
   settled.forEach((result, index) => {
@@ -558,6 +609,7 @@ function resetSpace() {
   strategyLoaded.value = false;
   activityItems.value = [];
   activityLoaded.value = false;
+  Object.assign(liveErrors, { factor: "", strategy: "", activity: "" });
   updatedAt.value = "";
   strategyIndex.value = 0;
 }
@@ -661,10 +713,10 @@ a {
   color: var(--color-text-2);
 }
 
-/* Banner：浅底色整块，状态用图标与文字颜色表达，不画边框与色条 */
+/* Banner：浅底色整块，状态用文字颜色表达，不画边框与色条 */
 .banner {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 190px;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--moox-space-4);
   padding: var(--moox-space-4);
   border-radius: 8px;
@@ -676,11 +728,6 @@ a {
   min-width: 0;
   flex-direction: column;
   gap: var(--moox-space-2);
-}
-
-.banner-meta {
-  color: var(--color-text-3);
-  font-size: 12px;
 }
 
 .banner-status {
@@ -695,10 +742,9 @@ a {
   font-weight: 600;
 }
 
-.status-icon {
-  display: inline-flex;
-  font-size: 26px;
-  color: var(--tone);
+.banner-time {
+  color: var(--color-text-3);
+  font-size: 12px;
 }
 
 .banner-stage {
@@ -758,19 +804,6 @@ a {
   color: var(--color-text-3);
 }
 
-.banner-facts {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 20px;
-  color: var(--color-text-2);
-  font-size: 13px;
-}
-
-.banner-facts b {
-  color: var(--tone, var(--color-text-1));
-  font-weight: 600;
-}
-
 .banner-links {
   display: flex;
   flex-wrap: wrap;
@@ -794,43 +827,6 @@ a {
 
 .quick:hover {
   color: rgb(var(--primary-6));
-}
-
-.health-card {
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  gap: 6px;
-  padding: 12px 14px;
-  border-radius: 8px;
-  background: var(--color-bg-2);
-}
-
-.health-card__label,
-.health-card__foot {
-  color: var(--color-text-3);
-  font-size: 12px;
-}
-
-.health-card__value {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-}
-
-.health-card__value strong {
-  font-size: 26px;
-  font-weight: 600;
-}
-
-.health-card__value span {
-  color: var(--color-text-3);
-  font-size: 12px;
-}
-
-.health-card__time {
-  display: flex;
-  justify-content: space-between;
 }
 
 .refresh.is-busy {
@@ -1102,11 +1098,6 @@ button.line:hover {
   gap: 6px;
   color: var(--color-text-2);
   font-size: 13px;
-}
-
-.all-clear svg {
-  font-size: 28px;
-  color: var(--tone);
 }
 
 .all-clear small {

@@ -22,25 +22,29 @@
           <a-descriptions-item label="状态"
             ><StatusBadge :enabled="instance.enabled" :health="instance.health"
           /></a-descriptions-item>
-          <a-descriptions-item label="因子任务"
-            ><span class="mono">{{ tasksText(instance.factor_tasks) }}</span></a-descriptions-item
-          >
+          <a-descriptions-item label="计算任务"><FactorTaskLinks :tasks="instance.factor_tasks" /></a-descriptions-item>
           <a-descriptions-item label="模式"
             >{{ instance.logical_account_id ? "交易模式" : "仅计算" }}
-            <span v-if="instance.logical_account_id" class="mono"
-              >· {{ logicalAccount?.name || instance.logical_account_id }}</span
+            <span v-if="instance.logical_account_id"
+              >·
+              <a class="mono" :href="`#/trading/accounts/${encodeURIComponent(instance.logical_account_id)}`">{{
+                logicalAccount?.name || instance.logical_account_id
+              }}</a
+              ><template v-if="logicalAccountError">（账户读取失败）</template></span
             ></a-descriptions-item
           >
           <a-descriptions-item label="当前会话"
             ><span class="mono">{{ instance.session_id || "无当前会话" }}</span></a-descriptions-item
           >
-          <a-descriptions-item label="更新时间">{{ formatStrategyTime(instance.updated_at) }}</a-descriptions-item>
+          <a-descriptions-item label="更新时间">{{ formatInstant(instance.updated_at, displayZone) }}</a-descriptions-item>
           <a-descriptions-item label="读取时间">{{ readAt }}</a-descriptions-item>
         </a-descriptions>
         <a-space class="drawer-actions" wrap>
           <a-button type="primary" @click="emit('results', instance.instance_id)">查看运行结果</a-button>
           <a-button @click="emit('openDetail', instance.instance_id)">打开完整详情</a-button>
-          <a-button @click="emit('replay', instance)">按实例会话回放</a-button>
+          <a-tooltip :content="POOL_REPLAY_DISABLED_TEXT" :disabled="!isPool">
+            <a-button :disabled="isPool" @click="emit('replay', instance)">按实例会话回放</a-button>
+          </a-tooltip>
           <a-button :loading="loading" @click="load">刷新</a-button>
         </a-space>
         <div class="muted">当前目标与历史结果在「运行结果」查看；启停可在列表「更多」菜单或完整详情中操作。</div>
@@ -50,7 +54,8 @@
 </template>
 
 <script setup lang="ts">
-import { tasksText } from "@/views/strategy/market-mode";
+import FactorTaskLinks from "@/views/strategy/components/factor-task-links.vue";
+import { POOL_REPLAY_DISABLED_TEXT, isPoolStrategy } from "@/views/strategy/dsl";
 import { useLogicalAccount } from "@/views/strategy/components/use-logical-account";
 import { computed, ref, watch } from "vue";
 import { StaleSpaceRequestError } from "@/api/admin/stale-space";
@@ -58,20 +63,32 @@ import { getInstance } from "@/api/strategy";
 import type { Strategy, StrategyInstance } from "@/api/strategy-types";
 import { RequestGate } from "@/utils/request-gate";
 import StatusBadge from "@/views/strategy/components/strategy-status-badge.vue";
-import { formatStrategyTime } from "@/views/strategy/model";
+import { formatInstant } from "@/utils/time-zone";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
+
+// 页面时间按当前空间登记的时区显示
+const displayZone = useDisplayZone();
 
 // 快速详情只读取实例本身，不加载定义、目标与历史结果；换对象先清空旧内容，迟到响应由 gate 丢弃。
 const props = defineProps<{ instanceId: string; strategies: Strategy[] }>();
 const emit = defineEmits<{ close: []; openDetail: [string]; results: [string]; replay: [StrategyInstance] }>();
 
 const instance = ref<StrategyInstance | null>(null);
-const logicalAccount = useLogicalAccount(computed(() => instance.value?.logical_account_id));
+// 研究回放不支持策略池：回放入口禁用
+const isPool = computed(() =>
+  isPoolStrategy(props.strategies.find(item => item.strategy_id === instance.value?.strategy_id)?.dsl_yaml)
+);
+const { account: logicalAccount, error: logicalAccountError } = useLogicalAccount(
+  computed(() => instance.value?.logical_account_id)
+);
 const loading = ref(false);
 const error = ref("");
 const readAt = ref("-");
 const gate = new RequestGate();
 const strategyName = computed(
-  () => props.strategies.find(item => item.strategy_id === instance.value?.strategy_id)?.name || "定义已删除或未加载"
+  () =>
+    props.strategies.find(item => item.strategy_id === instance.value?.strategy_id)?.name ||
+    `${instance.value?.strategy_id || ""}（名称未加载）`
 );
 
 async function load() {
@@ -88,7 +105,7 @@ async function load() {
     const loaded = await getInstance(props.instanceId);
     if (!gate.isCurrent(token)) return;
     instance.value = loaded;
-    readAt.value = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+    readAt.value = formatInstant(Date.now(), displayZone.value, "clock");
   } catch (err) {
     if (err instanceof StaleSpaceRequestError) return;
     if (gate.isCurrent(token)) {

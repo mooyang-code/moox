@@ -1,7 +1,7 @@
 import type { ArrivalHistory, HealthOverview } from "@/api/monitor";
 import { isSystemSpace } from "@/store/modules/space";
 import { humanizeDuration, toMillis, toSeconds, type NameBook } from "@/views/home/home-model";
-import { marketClock, marketTime, marketZone, zoneLabel } from "./market-time";
+import { marketClock, marketTime, resolveZone, zoneSuffix } from "@/utils/time-zone";
 
 /** 一条数据链路：入库环节的源数据集加周期；时间按它的市场时区。 */
 export interface ArrivalChain {
@@ -27,13 +27,13 @@ export function arrivalChains(overview: HealthOverview | undefined, names: NameB
         spaceId: item.space_id || "",
         datasetId: id,
         freq: item.freq || "",
-        timezone: marketZone(item.timezone)
+        timezone: resolveZone(item.timezone)
       };
     })
     .sort((a, b) => a.spaceId.localeCompare(b.spaceId) || a.label.localeCompare(b.label, "zh-CN"));
 }
 
-/** 因子任务选项：一个源数据集上有多个任务时才需要选择（只有一个时服务端默认查它）。 */
+/** 计算任务选项：一个源数据集上有多个任务时才需要选择（只有一个时服务端默认查它）。 */
 export function arrivalTaskOptions(history: ArrivalHistory | undefined) {
   return (history?.tasks || [])
     .filter(task => task.task_id)
@@ -100,7 +100,7 @@ export function arrivalModel(
   names: NameBook,
   displayNames: Record<string, string> = {}
 ): ArrivalModel {
-  const timezone = marketZone(history?.timezone);
+  const timezone = resolveZone(history?.timezone);
   const startMs = toMillis(history?.start_at) ?? 0;
   const endMs = toMillis(history?.end_at) ?? 0;
   const series = (history?.series || []).map(item => {
@@ -143,7 +143,7 @@ export function arrivalModel(
   if (history?.retention_truncated) notice = "这一天早于 7 天的保留期，曲线可能不完整";
   else if (history?.truncated) notice = "记录超过一次查询的上限，曲线只含这一天前面的部分";
   else if (history && !series.length) notice = "这一天还没有到达记录";
-  return { timezone, zone: zoneLabel(timezone, startMs || Date.now()), day: history?.day || "", startMs, endMs, series, notice };
+  return { timezone, zone: zoneSuffix(startMs || Date.now(), timezone), day: history?.day || "", startMs, endMs, series, notice };
 }
 
 const SERIES_COLORS = ["#2563eb", "#16a34a", "#7c3aed", "#0891b2", "#d97706", "#db2777"];

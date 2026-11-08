@@ -24,35 +24,6 @@
   white-space: nowrap;
 }
 
-/* 环境标记：小方块加文字，不用胶囊 */
-.tx-env {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  white-space: nowrap;
-}
-
-.tx-env::before {
-  width: 8px;
-  height: 8px;
-  border-radius: 1px;
-  background: currentcolor;
-  content: "";
-}
-
-.tx-env--paper {
-  color: var(--color-text-2);
-}
-
-.tx-env--testnet {
-  color: rgb(var(--orange-6));
-}
-
-.tx-env--prod {
-  color: rgb(var(--red-6));
-  font-weight: 600;
-}
-
 /* 状态：圆点加文字 */
 .tx-st {
   display: inline-flex;
@@ -84,15 +55,6 @@
 
 .tx-st--run::before {
   background: rgb(var(--arcoblue-6));
-}
-
-/* 确认对话框顶部的环境色条 */
-.tx-confirm--testnet .arco-modal-header {
-  border-top: 3px solid rgb(var(--orange-6));
-}
-
-.tx-confirm--prod .arco-modal-header {
-  border-top: 3px solid rgb(var(--red-6));
 }
 
 /* 数字后面的单位 */

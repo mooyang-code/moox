@@ -1,4 +1,5 @@
 import type { LedgerType, MarketType } from "@/api/trade";
+import { addDays, msToWallClock, wallClockToMs } from "@/utils/time-zone";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -25,16 +26,17 @@ export function defaultLedgerMarket(markets: readonly number[] | undefined): Mar
   return (markets?.includes(2) ? 2 : (markets?.[0] ?? 1)) as MarketType;
 }
 
-/** 默认查近 7 天：[开始, 结束] 毫秒时间戳 */
-export function defaultLedgerRange(now = Date.now()): number[] {
-  return [now - 7 * DAY_MS, now];
+/** 默认查近 7 天（含今天，按显示时区的整天）：[6 天前零点, 明天零点)，毫秒时间戳。 */
+export function defaultLedgerRange(zone: string, now = Date.now()): [number, number] {
+  const today = msToWallClock(now, zone, "date");
+  return [wallClockToMs(addDays(today, -6), zone)!, wallClockToMs(addDays(today, 1), zone)!];
 }
 
 /** 交易所只保留约 3 个月的账单，后端也限制单次最长 90 天 */
 export const MAX_LEDGER_DAYS = 90;
 
-export function ledgerRangeError(range: number[]): string {
-  if (range.length !== 2 || !(range[0] < range[1])) return "请选择有效的时间范围";
+export function ledgerRangeError(range: [number, number] | null): string {
+  if (!range || !(range[0] < range[1])) return "请选择有效的时间范围";
   if (range[1] - range[0] > MAX_LEDGER_DAYS * DAY_MS) return `时间范围不能超过 ${MAX_LEDGER_DAYS} 天`;
   return "";
 }

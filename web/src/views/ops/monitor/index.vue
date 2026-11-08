@@ -8,8 +8,8 @@
         </div>
         <a-space>
           <span class="muted">告警推送：{{ notificationLabel }}</span>
-          <a-button :loading="loading" @click="refresh">刷新</a-button>
-          <a-button v-if="isAdmin" type="outline" @click="openNotification">消息通知设置</a-button>
+          <a-button :loading="loading" @click="refresh()">刷新</a-button>
+          <a-button type="outline" @click="openNotification">消息通知设置</a-button>
         </a-space>
       </header>
 
@@ -21,7 +21,9 @@
           <p v-if="loaded && !overview.topology_known && groups.length">部署清单尚未完成同步，组件健康状态可能不完整</p>
         </div>
         <div class="verdict-meta">
-          <span>{{ loadedAt ? `${relativeTime(loadedAt, clockMs)}更新` : "尚未读取" }}</span>
+          <span :title="loadedAt ? fullTime(loadedAt) : undefined">{{
+            loadedAt ? `${relativeTime(loadedAt, clockMs)}更新` : "尚未读取"
+          }}</span>
           <span>每 30 秒刷新</span>
         </div>
       </section>
@@ -39,7 +41,7 @@
                 type="button"
                 class="alert-line__main"
                 :aria-expanded="expandedAlert === line.key"
-                @click="expandedAlert = expandedAlert === line.key ? '' : line.key"
+                @click="toggleAlert(line.key)"
               >
                 <span class="dot" />
                 <span class="alert-line__title">{{ line.title }}</span>
@@ -53,13 +55,13 @@
               </div>
               <div class="alert-line__foot">
                 <span class="chip">{{ line.layer }}</span>
-                <a class="locator" :href="line.link.href">{{ line.link.label }} →</a>
+                <a class="locator" :href="line.link.href" @click="switchSpaceFor(line.link)">{{ line.link.label }} →</a>
               </div>
               <div v-if="expandedAlert === line.key" class="alert-line__detail">
                 <dl class="facts">
                   <template v-for="fact in line.facts" :key="fact.label">
                     <dt>{{ fact.label }}</dt>
-                    <dd>{{ fact.value }}</dd>
+                    <dd :title="fact.title">{{ fact.value }}</dd>
                   </template>
                 </dl>
                 <RawError :value="line.rawError" />
@@ -171,7 +173,7 @@
                 <p v-for="issue in host.gatewayIssues" :key="issue.label" class="host-card__reason">
                   {{ issue.label }}：{{ issue.value }}
                 </p>
-                <small class="muted">最后上报 {{ host.lastReported }}</small>
+                <small class="muted" :title="host.lastReportedTitle">最后上报 {{ host.lastReported }}</small>
               </div>
               <p v-if="!hosts.length" class="empty">暂无主机</p>
             </div>
@@ -237,12 +239,7 @@
             </div>
             <footer v-if="pipelineView === 'table'" class="tile-foot">
               <span v-if="!datasetGroups.length" class="muted">{{ pipelineQuiet }}</span>
-              <button
-                v-if="allDatasetRows.length"
-                type="button"
-                class="link-button"
-                @click="expanded.pipeline = !expanded.pipeline"
-              >
+              <button v-if="allDatasetRows.length" type="button" class="link-button" @click="toggleExpand('pipeline')">
                 {{ expanded.pipeline ? "只看需要关注的" : `展开全部 ${allDatasetRows.length} 条` }}
               </button>
             </footer>
@@ -266,14 +263,14 @@
               <li v-for="item in businessRows" :key="item.key" :class="`is-${item.tone}`">
                 <div>
                   <span class="dot" />{{ item.title }}<em>{{ item.attention ? item.reason : item.status }}</em>
-                  <small class="muted">{{ item.spaceId }} · {{ item.checkedAt }}</small>
+                  <small class="muted" :title="item.checkedAtTitle">{{ item.spaceId }} · {{ item.checkedAt }}</small>
                 </div>
                 <RawError v-if="item.attention" :value="item.rawError" />
               </li>
             </ul>
             <footer class="tile-foot">
               <span v-if="!businessRows.length" class="muted">{{ businessQuiet }}</span>
-              <button v-if="businessCount" type="button" class="link-button" @click="expanded.business = !expanded.business">
+              <button v-if="businessCount" type="button" class="link-button" @click="toggleExpand('business')">
                 {{ expanded.business ? "只看需要关注的" : `展开全部 ${businessCount} 项` }}
               </button>
             </footer>
@@ -327,13 +324,13 @@
           <dt>当前状态</dt>
           <dd>{{ statusLabel(selected.status) }}</dd>
           <dt>状态开始</dt>
-          <dd>{{ formatCheckedAt(selected.status_since) }}</dd>
+          <dd>{{ formatInstant(selected.status_since, displayZone) }}</dd>
           <dt>探测地址</dt>
           <dd>{{ selected.probe_url || "不探测" }}</dd>
         </dl>
         <h4>健康探测 · {{ statusLabel(selected.probe?.status) }}</h4>
         <p>
-          {{ selected.probe?.reason }}<small> · 最新检查 {{ formatCheckedAt(selected.probe?.checked_at) }}</small>
+          {{ selected.probe?.reason }}<small> · 最新检查 {{ formatInstant(selected.probe?.checked_at, displayZone) }}</small>
         </p>
         <RawError :value="selected.probe?.raw_error" />
         <div v-if="selected.recent_probes?.length" class="probe-strip" aria-label="最近探测">
@@ -342,7 +339,7 @@
             :key="probe.checked_at"
             class="probe"
             :class="`is-${classify(probe.status).tone}`"
-            :title="`${formatCheckedAt(probe.checked_at)} · ${statusLabel(probe.status)} · ${probe.reason || ''}`"
+            :title="`${formatInstant(probe.checked_at, displayZone)} · ${statusLabel(probe.status)} · ${probe.reason || ''}`"
           />
           <small class="muted">最近 {{ selected.recent_probes.length }} 次探测（最多 10 次）</small>
         </div>
@@ -350,7 +347,8 @@
           指标上报 · {{ selected.reporter?.status === "unchecked" ? "不要求上报" : statusLabel(selected.reporter?.status) }}
         </h4>
         <p>
-          {{ selected.reporter?.reason }}<small> · 最后上报 {{ formatCheckedAt(selected.reporter?.checked_at) }}</small>
+          {{ selected.reporter?.reason
+          }}<small> · 最后上报 {{ formatInstant(selected.reporter?.checked_at, displayZone) }}</small>
         </p>
         <div v-if="selected.instances?.length" class="table-scroll">
           <table>
@@ -369,7 +367,7 @@
                 </td>
                 <td>{{ item.version }}</td>
                 <td>{{ statusLabel(item.status) }}</td>
-                <td>{{ formatCheckedAt(item.last_reported_at) }}</td>
+                <td>{{ formatInstant(item.last_reported_at, displayZone) }}</td>
               </tr>
             </tbody>
           </table>
@@ -380,17 +378,17 @@
 </template>
 
 <script setup lang="ts">
+import { useSpaceStore } from "@/store/modules/space";
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
-import { storeToRefs } from "pinia";
 import { Message, Modal } from "@arco-design/web-vue";
+import { useRoute, useRouter } from "vue-router";
 import { monitorApi, type HealthComponent, type HealthOverview, type NotificationChannel } from "@/api/monitor";
 import { listAllDatasets, listAllViews } from "@/api/storage/metadata";
 import { usePolling } from "@/hooks/usePolling";
 import { createLatestRequestGuard } from "@/utils/latest-request";
-import { useUserInfoStore } from "@/store/modules/user-info";
 import { createSubmitScope } from "@/utils/submit-scope";
-import { relativeTime, toneIcon, type NameBook } from "@/views/home/home-model";
-import { formatCheckedAt, statusLabel } from "./health-display";
+import { fullTime, relativeTime, toneIcon, type NameBook } from "@/views/home/home-model";
+import { statusLabel } from "./health-display";
 import {
   alertGroups,
   businessKinds,
@@ -408,6 +406,11 @@ import {
 } from "./monitor-model";
 import ArrivalChart from "./arrival-chart.vue";
 import RawError from "./raw-error.vue";
+import { formatInstant } from "@/utils/time-zone";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
+
+// 页面时间按 UTC显示
+const displayZone = useDisplayZone("global");
 
 const overview = ref<HealthOverview>({});
 const loading = ref(false);
@@ -416,9 +419,29 @@ const error = ref("");
 const loadedAt = ref("");
 const clockMs = ref(Date.now());
 const names = reactive<NameBook>({ datasets: {}, views: {} });
-const expandedAlert = ref("");
+// 展开状态写进 URL（?expand=pipeline,business&alert=<key>）：切到别的标签页再回来、刷新后仍是展开的
+const route = useRoute();
+const router = useRouter();
+const firstQuery = (value: unknown) => String((Array.isArray(value) ? value[0] : value) ?? "");
+const expandSet = computed(() => new Set(firstQuery(route.query.expand).split(",").filter(Boolean)));
+const expandedAlert = computed(() => firstQuery(route.query.alert));
+function writeQuery(patch: Record<string, string | undefined>) {
+  const next = Object.fromEntries(
+    Object.entries({ ...route.query, ...patch }).filter(([, value]) => value !== undefined && value !== "")
+  );
+  void router.replace({ query: next });
+}
+function toggleExpand(key: "pipeline" | "business") {
+  const set = new Set(expandSet.value);
+  if (set.has(key)) set.delete(key);
+  else set.add(key);
+  writeQuery({ expand: [...set].sort().join(",") || undefined });
+}
+function toggleAlert(key: string) {
+  writeQuery({ alert: expandedAlert.value === key ? undefined : key });
+}
 const showAllIncidents = ref(false);
-const expanded = reactive({ pipeline: false, business: false });
+const expanded = computed(() => ({ pipeline: expandSet.value.has("pipeline"), business: expandSet.value.has("business") }));
 /** 数据链路的视图：表格（各数据集当前状态）或曲线（一条链路某一天逐根 K 线的到达延迟）。 */
 const pipelineView = ref<"table" | "chart">("table");
 const detailVisible = ref(false);
@@ -428,9 +451,6 @@ const channels = ref<NotificationChannel[]>([]);
 const draft = reactive({ channel_type: "wecom", webhook_url: "" });
 const adding = ref(false);
 const removing = ref("");
-// 完整的 Webhook URL 是推送凭据，读取接口只对全局管理员开放，其他用户不显示设置入口。
-const { account } = storeToRefs(useUserInfoStore());
-const isAdmin = computed(() => !!account.value.user?.admin);
 const refreshGuard = createLatestRequestGuard();
 
 const nowMs = computed(() => serverNow(overview.value, clockMs.value));
@@ -484,7 +504,7 @@ const datasetGroups = computed(() =>
         id: stage.id,
         label: stage.label,
         summary: `${stage.rows.length} 个数据集${attention ? ` · ${attention} 个需要关注` : ""}`,
-        rows: expanded.pipeline ? stage.rows : stage.rows.filter(row => row.attention)
+        rows: expanded.value.pipeline ? stage.rows : stage.rows.filter(row => row.attention)
       };
     })
     .filter(group => group.rows.length)
@@ -495,7 +515,7 @@ const pipelineQuiet = computed(() =>
 const business = computed(() => businessKinds(overview.value, names, nowMs.value));
 const businessCount = computed(() => business.value.reduce((sum, kind) => sum + kind.total, 0));
 const businessRows = computed(() =>
-  business.value.flatMap(kind => (expanded.business ? kind.items : kind.items.filter(item => item.attention)))
+  business.value.flatMap(kind => (expanded.value.business ? kind.items : kind.items.filter(item => item.attention)))
 );
 const businessQuiet = computed(() => (businessCount.value ? "没有需要关注的业务检查" : "暂无业务检查"));
 const notificationLabel = computed(() => {
@@ -503,7 +523,7 @@ const notificationLabel = computed(() => {
   const count = summary?.channel_count || 0;
   if (!count) return "未配置";
   const platforms = [...new Set((summary?.channel_types || []).map(type => channelName(type)))].join("、");
-  return count > 1 ? `${platforms}（${count} 个渠道）` : `${platforms} ✓`;
+  return count > 1 ? `${platforms}（${count} 个渠道）` : `${platforms}（已配置）`;
 });
 
 function channelName(type?: string) {
@@ -514,11 +534,12 @@ function othersText(titles: string[]) {
   return titles.length > 2 ? `${titles.slice(0, 2).join("、")} 等 ${titles.length} 项` : titles.join("、");
 }
 
-async function refresh() {
+/** background：30 秒的后台刷新，不弹全局提示，失败写在页面上（保留上次的数据）。 */
+async function refresh(background = false) {
   const request = refreshGuard.begin();
   loading.value = true;
   try {
-    const rsp = await monitorApi.getOverview();
+    const rsp = await monitorApi.getOverview({}, { silentError: background });
     if (!rsp.overview) throw new Error("健康概览响应缺失");
     if (request.isLatest()) {
       overview.value = rsp.overview;
@@ -635,7 +656,11 @@ const notificationScope = createSubmitScope({ global: true });
 watch(notificationVisible, () => notificationScope.invalidate());
 
 // 编辑通知设置时暂停轮询，避免刷新打断表单。
-usePolling(refresh, 30000, () => !notificationVisible.value);
+usePolling(
+  () => refresh(true),
+  30000,
+  () => !notificationVisible.value
+);
 let clock: number | undefined;
 onMounted(() => {
   void refresh();
@@ -645,6 +670,12 @@ onBeforeUnmount(() => {
   if (clock !== undefined) window.clearInterval(clock);
   refreshGuard.invalidate();
 });
+
+// 告警对象属于别的空间时（例如别的空间的数据集），先切到那个空间再打开链接
+const spaceStoreForLinks = useSpaceStore();
+function switchSpaceFor(link: { href: string; spaceId?: string }) {
+  if (link.spaceId && link.spaceId !== spaceStoreForLinks.selectedSpaceId) spaceStoreForLinks.setSelectedSpace(link.spaceId);
+}
 </script>
 
 <style scoped lang="scss">

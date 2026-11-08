@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -8,6 +9,7 @@ import (
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/encoding/protojson"
 	"gopkg.in/yaml.v3"
 )
 
@@ -74,4 +76,28 @@ func TestScopeValue(t *testing.T) {
 	require.False(t, period.HasField(FieldExchange))
 	_, ok = Lookup("event.unknown")
 	require.False(t, ok)
+}
+
+// 字段说明覆盖 payload 的每个 proto 字段（不多不少），说明不为空；示例能按真实推送的写法（protojson、proto 字段名）解码。
+func TestPayloadFieldsAndSampleMatchProto(t *testing.T) {
+	for _, entry := range Subscribable() {
+		fields := entry.Event.NewPayload().ProtoReflect().Descriptor().Fields()
+		protoNames := map[string]bool{}
+		for i := 0; i < fields.Len(); i++ {
+			protoNames[string(fields.Get(i).Name())] = true
+		}
+		described := map[string]bool{}
+		for _, field := range entry.PayloadFields {
+			require.NotEmpty(t, field.Title, "%s.%s", entry.Name(), field.Key)
+			described[field.Key] = true
+		}
+		require.Equal(t, protoNames, described, "%s 的字段说明要覆盖全部 proto 字段", entry.Name())
+
+		for key := range entry.Sample {
+			require.True(t, protoNames[key], "%s 的示例字段 %s 要用 proto 字段名", entry.Name(), key)
+		}
+		raw, err := json.Marshal(entry.Sample)
+		require.NoError(t, err)
+		require.NoError(t, protojson.Unmarshal(raw, entry.Event.NewPayload()), "%s 的示例要能按 protojson 解码", entry.Name())
+	}
 }

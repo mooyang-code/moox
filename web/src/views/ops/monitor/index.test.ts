@@ -1,4 +1,4 @@
-import { defineComponent } from "vue";
+import { defineComponent, reactive } from "vue";
 import { Message, Modal } from "@arco-design/web-vue";
 import { mount, flushPromises, type VueWrapper } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
@@ -6,10 +6,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { callControl } from "@/api/admin/http";
 import { monitorApi, type HealthOverview } from "@/api/monitor";
 import { listAllDatasets } from "@/api/storage/metadata";
-import { useUserInfoStore } from "@/store/modules/user-info";
 import HealthMonitor from "./index.vue";
 
 vi.mock("@/api/admin/http", () => ({ callControl: vi.fn() }));
+// 展开状态在 URL 里：路由换成可控的假实现
+const nav = vi.hoisted(() => ({ route: { query: {} as Record<string, string> } }));
+vi.mock("vue-router", () => ({
+  useRoute: () => nav.route,
+  useRouter: () => ({
+    replace: ({ query }: { query: Record<string, string> }) => {
+      nav.route.query = query;
+    }
+  })
+}));
 vi.mock("@visactor/vchart", () => ({
   default: class {
     renderSync() {
@@ -71,6 +80,7 @@ describe("monitor page", () => {
   beforeEach(() => {
     mockedCallControl.mockReset();
     setActivePinia(createPinia());
+    nav.route = reactive({ query: {} });
   });
   afterEach(() => {
     vi.restoreAllMocks();
@@ -90,6 +100,28 @@ describe("monitor page", () => {
     expect(page.find(".verdict").classes()).toContain("is-ok");
     expect(page.find('[aria-label="当前告警"]').exists()).toBe(false);
     expect(page.text()).toContain("最近 48 小时没有告警");
+  });
+
+  it("告警对象在别的空间时，点链接先切到那个空间；同一空间不切", async () => {
+    const { useSpaceStore } = await import("@/store/modules/space");
+    const store = useSpaceStore();
+    store.selectedSpaceId = "crypto";
+    const switchSpace = vi.spyOn(store, "setSelectedSpace").mockImplementation(() => undefined);
+    const alert = (id: string, space_id: string) => ({
+      id,
+      severity: "warning",
+      title: id,
+      triggered_at: "2026-10-16T02:58:20Z",
+      object: { type: "dataset" as const, producer: "collector", dataset_id: `ds_${id}`, freq: "5m", space_id }
+    });
+    const page = render({ ...healthy, alerts: [alert("a", "stockcn"), alert("b", "crypto")] });
+    await flushPromises();
+    const links = page.findAll("a.locator");
+    await links[0].trigger("click");
+    expect(switchSpace).toHaveBeenCalledWith("stockcn");
+    switchSpace.mockClear();
+    await links[1].trigger("click");
+    expect(switchSpace).not.toHaveBeenCalled();
   });
 
   it("lists alerts grouped by trigger time and expands their evidence", async () => {
@@ -177,6 +209,26 @@ describe("monitor page", () => {
     await timeline.find(".link-button").trigger("click");
     expect(timeline.findAll(".incident")).toHaveLength(2);
     expect(timeline.text()).toContain("29 秒后恢复 · 闪断");
+  });
+
+  it("带 ?expand= 打开时数据链路是展开的；点展开写进 URL", async () => {
+    nav.route.query = { expand: "pipeline" };
+    const page = render({
+      ...healthy,
+      pipeline: [
+        {
+          id: "storage",
+          status: "healthy",
+          datasets: [
+            { producer: "storage", space_id: "crypto", dataset_id: "dataset_abc", freq: "1m", status: "healthy", timezone: "UTC" }
+          ]
+        }
+      ]
+    });
+    await flushPromises();
+    expect(page.find('[aria-label="数据链路"] .link-button').text()).toBe("只看需要关注的");
+    await page.find('[aria-label="数据链路"] .link-button').trigger("click");
+    expect(nav.route.query.expand).toBeUndefined();
   });
 
   it("shows only the latest incidents until expanded", async () => {
@@ -336,8 +388,7 @@ describe("monitor page", () => {
     expect(page.findAll(".host-card")).toHaveLength(1);
   });
 
-  it("lets administrators add and delete notification channels and shows full webhook URLs", async () => {
-    useUserInfoStore().account.user = { admin: true };
+  it("adds and deletes notification channels and shows full webhook URLs", async () => {
     vi.spyOn(Message, "success").mockImplementation(() => ({ close: () => undefined }));
     vi.spyOn(Modal, "warning").mockImplementation(config => {
       config.onOk?.();
@@ -347,7 +398,7 @@ describe("monitor page", () => {
     const feishu = "https://open.feishu.cn/open-apis/bot/v2/hook/0f6c3c1e-1234-4abc-9def-111111111111";
     const page = render({ ...healthy, notification: { channel_count: 1, channel_types: ["wecom"] } });
     await flushPromises();
-    expect(page.text()).toContain("告警推送：企业微信 ✓");
+    expect(page.text()).toContain("告警推送：企业微信（已配置）");
 
     mockedCallControl.mockResolvedValueOnce({ channels: [{ channel_id: "nc_1", channel_type: "wecom", webhook_url: wecom }] });
     const settings = page.findAll("button").find(button => button.text() === "消息通知设置");
@@ -389,7 +440,7 @@ describe("monitor page", () => {
         .findAll(".notification-list__url")
         .map(item => item.text())
     ).toEqual([feishu]);
-    expect(page.text()).toContain("告警推送：飞书 ✓");
+    expect(page.text()).toContain("告警推送：飞书（已配置）");
   });
 
   it("always labels component chips with their names", async () => {
@@ -400,10 +451,10 @@ describe("monitor page", () => {
     expect(page.find('[aria-label="组件"]').text()).not.toContain("只显示状态点");
   });
 
-  it("hides notification settings from users who cannot read the webhook", async () => {
+  it("always shows notification settings: the console has a single user with full access", async () => {
     const page = render(healthy);
     await flushPromises();
-    expect(page.findAll("button").some(button => button.text() === "消息通知设置")).toBe(false);
+    expect(page.findAll("button").some(button => button.text() === "消息通知设置")).toBe(true);
   });
 
   it("stacks every health layer on its own row so no side-by-side gap appears", async () => {
@@ -417,6 +468,6 @@ describe("monitor page", () => {
   it("uses the structured overview endpoint", async () => {
     mockedCallControl.mockResolvedValue({ overview: healthy });
     await monitorApi.getOverview({ space_id: "crypto" });
-    expect(mockedCallControl).toHaveBeenLastCalledWith("monitor", "GetHealthOverview", { space_id: "crypto" });
+    expect(mockedCallControl).toHaveBeenLastCalledWith("monitor", "GetHealthOverview", { space_id: "crypto" }, expect.anything());
   });
 });

@@ -1,6 +1,6 @@
 import type { EquityPoint, LogicalAccount, TradingAccount } from "@/api/trade/types";
 import { exchangeLabels } from "@/api/trade";
-import { logicalInEnvironment, accountEnvironment, type Environment } from "./shared/environment";
+import { logicalInEnvironment, accountEnvironment, type Environment } from "@/components/trade-confirm/environment";
 
 export function accountMapOf(accounts: readonly TradingAccount[]): Map<string, TradingAccount> {
   return new Map(accounts.map(account => [account.trading_account_id, account]));

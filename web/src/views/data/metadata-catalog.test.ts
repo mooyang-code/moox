@@ -11,8 +11,8 @@ describe("metadata catalog pages", () => {
     );
     expect(toolbar).toContain("<h2>");
     expect(toolbar).toContain("<a-input-search");
-    expect(toolbar).toContain("新增");
-    expect(toolbar.indexOf("<a-input-search")).toBeLessThan(toolbar.indexOf("新增"));
+    expect(toolbar).toContain("新建");
+    expect(toolbar.indexOf("<a-input-search")).toBeLessThan(toolbar.indexOf("新建"));
     expect(sources).toContain('@search="onSearch"');
     expect(sources).toContain('@clear="onSearch"');
     expect(sources).toContain("keyword: searchKeyword.value.trim() || undefined");
@@ -35,10 +35,13 @@ describe("metadata catalog pages", () => {
     expect(source).toMatch(/\.toolbar-main\s*\{[^}]*display:\s*flex;/);
   });
 
-  it("tells users that registered fields cannot be deleted", () => {
+  it("说明字段注册后不能删除，只能停用或隐藏；批量栏也叫“隐藏”", () => {
     const source = fs.readFileSync(path.resolve(__dirname, "fields/index.vue"), "utf8");
+    const batchBar = fs.readFileSync(path.resolve(__dirname, "fields/components/FieldBatchBar.vue"), "utf8");
 
-    expect(source).toContain("字段注册后不可删除");
-    expect(source).toContain("不再使用时可将字段停用");
+    expect(source).toContain("字段注册后不能删除");
+    expect(source).toContain("可以停用，或者隐藏");
+    expect(batchBar).toContain("隐藏</a-button");
+    expect(batchBar).not.toContain("删除</a-button");
   });
 });

@@ -4,7 +4,8 @@ export {
   isTradeInvalidParam,
   isTradeNotFound,
   isTradeSessionNotReady,
-  TradeResponseError
+  TradeResponseError,
+  withDialogErrors
 } from "./http";
 import type {
   AccountResponse,
@@ -53,26 +54,25 @@ export function createTradingAccount(req: CreateTradingAccountReq) {
   });
 }
 
-export function updateTradingAccount(req: UpdateTradingAccountReq) {
-  return callTrade<UpdateTradingAccountReq, AccountResponse>("console", "UpdateTradingAccount", req);
+/** silent：错误由调用方显示（例如确认框里），这里不再弹一次。 */
+export function updateTradingAccount(req: UpdateTradingAccountReq, options: { silent?: boolean } = {}) {
+  return callTrade<UpdateTradingAccountReq, AccountResponse>("console", "UpdateTradingAccount", req, options);
 }
 
-export function getTradingAccount(trading_account_id: string) {
-  return callTrade<{ trading_account_id: string }, AccountResponse>("console", "GetTradingAccount", {
-    trading_account_id
-  });
-}
-
-export function listTradingAccounts(req: ListTradingAccountsReq = {}) {
+export function listTradingAccounts(req: ListTradingAccountsReq = {}, options: { silent?: boolean } = {}) {
   return callTrade<ListTradingAccountsReq, { ret_info: RetInfo; accounts: TradingAccount[]; page_result: PageResult }>(
     "console",
     "ListTradingAccounts",
-    req
+    req,
+    options
   );
 }
 
-export function setLeverage(req: { trading_account_id: string; instrument_id: string; leverage: string }) {
-  return callTrade<typeof req, AccountResponse>("console", "SetLeverage", req);
+export function setLeverage(
+  req: { trading_account_id: string; instrument_id: string; leverage: string },
+  options: { silent?: boolean } = {}
+) {
+  return callTrade<typeof req, AccountResponse>("console", "SetLeverage", req, options);
 }
 
 export function syncTradingAccount(trading_account_id: string) {
@@ -141,19 +141,25 @@ export function listTradableInstruments(trading_account_id: string) {
   );
 }
 
-export function queryEquityCurve(req: {
-  trading_account_id?: string;
-  logical_account_id?: string;
-  start_time?: string;
-  end_time?: string;
-}) {
-  return callTrade<typeof req, { ret_info: RetInfo; points: EquityPoint[] }>("console", "QueryEquityCurve", req);
+export function queryEquityCurve(
+  req: {
+    trading_account_id?: string;
+    logical_account_id?: string;
+    start_time?: string;
+    end_time?: string;
+  },
+  options: { silent?: boolean } = {}
+) {
+  return callTrade<typeof req, { ret_info: RetInfo; points: EquityPoint[] }>("console", "QueryEquityCurve", req, options);
 }
 
-export function listHoldings(trading_account_id: string) {
-  return callTrade<{ trading_account_id: string }, { ret_info: RetInfo; holdings: Holding[] }>("console", "ListHoldings", {
-    trading_account_id
-  });
+export function listHoldings(trading_account_id: string, options: { silent?: boolean } = {}) {
+  return callTrade<{ trading_account_id: string }, { ret_info: RetInfo; holdings: Holding[] }>(
+    "console",
+    "ListHoldings",
+    { trading_account_id },
+    options
+  );
 }
 
 /** 从交易所即查资金流水（手续费、资金费、已实现盈亏、划转等），按时间倒序 */
@@ -177,17 +183,21 @@ export function createLogicalAccount(req: CreateLogicalAccountReq) {
   return callTrade<CreateLogicalAccountReq, LogicalAccountResponse>("console", "CreateLogicalAccount", req, { silent: true });
 }
 
-export function getLogicalAccount(logical_account_id: string) {
-  return callTrade<{ logical_account_id: string }, LogicalAccountResponse>("console", "GetLogicalAccount", {
-    logical_account_id
-  });
+export function getLogicalAccount(logical_account_id: string, options: { silent?: boolean } = {}) {
+  return callTrade<{ logical_account_id: string }, LogicalAccountResponse>(
+    "console",
+    "GetLogicalAccount",
+    { logical_account_id },
+    options
+  );
 }
 
-export function listLogicalAccounts(page: Page = {}) {
+export function listLogicalAccounts(page: Page = {}, options: { silent?: boolean } = {}) {
   return callTrade<{ page: Page }, { ret_info: RetInfo; logical_accounts: LogicalAccount[]; page_result: PageResult }>(
     "console",
     "ListLogicalAccounts",
-    { page }
+    { page },
+    options
   );
 }
 
@@ -265,34 +275,43 @@ export function cancelOrder(action_id: string, order_id: string, reason: string)
   >("console", "CancelOrder", { action_id, order_id, reason }, { silent: true });
 }
 
-export function getOperatorAction(action_id: string) {
-  return callTrade<{ action_id: string }, { ret_info: RetInfo; action: OperatorAction }>("console", "GetOperatorAction", {
-    action_id
-  });
-}
-
-export function getLogicalAccountTarget(logical_account_id: string) {
-  return callTrade<{ logical_account_id: string }, { ret_info: RetInfo; target?: LogicalAccountTarget }>(
+export function getOperatorAction(action_id: string, options: { silent?: boolean } = {}) {
+  return callTrade<{ action_id: string }, { ret_info: RetInfo; action: OperatorAction }>(
     "console",
-    "GetLogicalAccountTarget",
-    { logical_account_id }
+    "GetOperatorAction",
+    { action_id },
+    options
   );
 }
 
-export function getOrder(order_id: string) {
-  return callTrade<{ order_id: string }, { ret_info: RetInfo; order: Order }>("console", "GetOrder", { order_id });
+export function getLogicalAccountTarget(logical_account_id: string, options: { silent?: boolean } = {}) {
+  return callTrade<{ logical_account_id: string }, { ret_info: RetInfo; target?: LogicalAccountTarget }>(
+    "console",
+    "GetLogicalAccountTarget",
+    { logical_account_id },
+    options
+  );
 }
 
-export function listOrders(req: ListOrdersReq = {}) {
-  return callTrade<ListOrdersReq, { ret_info: RetInfo; orders: Order[]; page_result: PageResult }>("console", "ListOrders", req);
+export function getOrder(order_id: string, options: { silent?: boolean } = {}) {
+  return callTrade<{ order_id: string }, { ret_info: RetInfo; order: Order }>("console", "GetOrder", { order_id }, options);
+}
+
+export function listOrders(req: ListOrdersReq = {}, options: { silent?: boolean } = {}) {
+  return callTrade<ListOrdersReq, { ret_info: RetInfo; orders: Order[]; page_result: PageResult }>(
+    "console",
+    "ListOrders",
+    req,
+    options
+  );
 }
 
 export function listFills(req: ListFillsReq = {}) {
   return callTrade<ListFillsReq, { ret_info: RetInfo; fills: Fill[]; page_result: PageResult }>("console", "ListFills", req);
 }
 
-export function listPositions(req: ListPositionsReq) {
-  return callTrade<ListPositionsReq, { ret_info: RetInfo; positions: Position[] }>("console", "ListPositions", req);
+export function listPositions(req: ListPositionsReq, options: { silent?: boolean } = {}) {
+  return callTrade<ListPositionsReq, { ret_info: RetInfo; positions: Position[] }>("console", "ListPositions", req, options);
 }
 
 /** 收益拆解：手续费、已实现盈亏按资产分别汇总，资金费从交易所即查，不折算 */
@@ -300,15 +319,16 @@ export function summarizeAccountPnl(req: SummarizeAccountPnlReq) {
   return callTrade<SummarizeAccountPnlReq, SummarizeAccountPnlRsp>("console", "SummarizeAccountPnl", req);
 }
 
-export function listOperatorActions(req: ListOperatorActionsReq) {
+export function listOperatorActions(req: ListOperatorActionsReq, options: { silent?: boolean } = {}) {
   return callTrade<ListOperatorActionsReq, { ret_info: RetInfo; actions?: OperatorAction[]; page_result?: PageResult }>(
     "console",
     "ListOperatorActions",
-    req
+    req,
+    options
   );
 }
 
-export const exchangeLabels: Record<number, string> = { 0: "-", 1: "Binance", 2: "OKX", 3: "A 股" };
+export const exchangeLabels: Record<number, string> = { 0: "-", 1: "币安", 2: "OKX", 3: "A 股" };
 export const orderStateLabels: Record<string, string> = {
   PENDING: "等待提交",
   SUBMITTING: "提交中",
@@ -360,6 +380,13 @@ export const targetStateLabels: Record<string, string> = {
   EXPIRED: "已过期"
 };
 
+/** 未完成的订单：和后端 activeOrderStates 一致（含等待提交、提交中，这两种还不能撤）。 */
+export function isActiveOrderState(state: string): boolean {
+  return ["PENDING", "SUBMITTING", "SUBMIT_UNKNOWN", "OPEN", "PARTIALLY_FILLED", "CANCELING", "CANCEL_UNKNOWN"].includes(
+    state.toUpperCase()
+  );
+}
+
 export function canCancelOrderState(state: string): boolean {
   return ["OPEN", "PARTIALLY_FILLED", "SUBMIT_UNKNOWN", "CANCELING", "CANCEL_UNKNOWN"].includes(state.toUpperCase());
 }
@@ -370,13 +397,6 @@ export const orderOwnerLabels: Record<string, string> = {
   EXTERNAL: "外部",
   SYSTEM: "系统"
 };
-
-export function formatTimestamp(value?: string): string {
-  if (!value) return "-";
-  const milliseconds = Number(value);
-  if (!Number.isFinite(milliseconds) || milliseconds <= 0) return "-";
-  return new Date(milliseconds).toLocaleString();
-}
 
 export function parseFlattenResult(action?: OperatorAction): import("./types").FlattenResult | null {
   if (!action?.result_json) return null;

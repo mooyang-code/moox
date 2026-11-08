@@ -1,7 +1,7 @@
 import { callControl } from "@/api/admin/http";
 import { secureLoginManager } from "@/utils/crypto";
 
-export const loginAPI = async (data: { username: string; password: string; verifyCode: string }) => {
+export const loginAPI = async (data: { username: string; password: string }) => {
   return await secureLoginManager.login(data.username, data.password);
 };
 

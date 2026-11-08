@@ -37,7 +37,11 @@
           <a-descriptions-item label="计算任务 ID">{{ set.task_id }}</a-descriptions-item>
           <a-descriptions-item label="频率">{{ set.freq }}</a-descriptions-item>
           <a-descriptions-item label="关联策略实例">
-            <template v-if="set.bound_instance_id">{{ set.bound_instance_id }}</template>
+            <a-link
+              v-if="set.bound_instance_id"
+              @click="router.push({ name: 'strategy-detail', params: { instanceId: set.bound_instance_id } })"
+              >{{ set.bound_instance_id }}</a-link
+            >
             <span v-else class="detail-hint">尚未关联：创建策略实例时选择这个任务，关联后永久有效</span>
           </a-descriptions-item>
           <a-descriptions-item label="源数据集" :span="2">{{ sourceName }}（{{ set.source_dataset_id }}）</a-descriptions-item>
@@ -75,6 +79,8 @@
 </template>
 
 <script setup lang="ts">
+import { useDisplayZone } from "@/hooks/useDisplayZone";
+import { formatInstant } from "@/utils/time-zone";
 import { computed, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import type { FactorTask, FactorTaskInfo } from "@/api/factor/types";
@@ -84,11 +90,13 @@ import { RequestGate } from "@/utils/request-gate";
 import { setHealth } from "@/views/factor/shared/health";
 import HealthTag from "@/views/factor/shared/health-tag.vue";
 import { taskStatusTag } from "@/views/factor/shared/status";
-import { deleteState, ENABLE_ENGINE_HINT, setActionKind } from "./compute-tasks-model";
+import { deleteState, ENABLE_ENGINE_HINT, taskActionKind } from "./compute-tasks-model";
 import MemberSection from "./member-section.vue";
 
 defineOptions({ name: "FactorTaskDetailDrawer" });
 
+// 页面时间按当前空间登记的时区显示
+const displayZone = useDisplayZone();
 const props = defineProps<{ info?: FactorTaskInfo; busy?: boolean }>();
 const emit = defineEmits<{
   (e: "close"): void;
@@ -104,7 +112,7 @@ const set = computed(() => props.info?.factor_task as FactorTask);
 const title = computed(() => (props.info ? store.taskLabel(set.value) : ""));
 const statusTag = computed(() => taskStatusTag(set.value?.status || ""));
 const health = computed(() => setHealth(set.value ?? { status: "pending", freq: "" }, props.info?.last_run));
-const actionKind = computed(() => (set.value ? setActionKind(set.value) : "none"));
+const actionKind = computed(() => (set.value ? taskActionKind(set.value) : "none"));
 const removeState = computed(() => (props.info ? deleteState(props.info) : { disabled: true, reason: "" }));
 const sourceName = computed(() =>
   set.value ? store.datasetNames[set.value.source_dataset_id] || set.value.source_dataset_id : ""
@@ -140,7 +148,7 @@ watch(
 );
 
 function formatTime(value?: string) {
-  return value ? new Date(value).toLocaleString() : "-";
+  return formatInstant(value, displayZone.value);
 }
 
 function goDefinitions() {

@@ -93,7 +93,8 @@ async function openEntry(env: "paper" | "prod" = "paper", instrumentId = "BTC-US
     instrument_id: instrumentId,
     quantity: "0.01",
     reason: "test",
-    deadline_at: "2030-01-01T12:00"
+    // 选择器给的是毫秒时刻（已按空间时区换算）
+    deadline_at: Date.parse("2030-01-01T12:00:00Z")
   });
   return dialog;
 }
@@ -118,6 +119,16 @@ afterEach(() => {
 });
 
 describe("下单对话框", () => {
+  it("读取下单能力失败时在对话框里写明原因，重试成功后清掉", async () => {
+    mocks.getExecutionCapabilities.mockRejectedValueOnce(new Error("交易服务不可用"));
+    await openEntry();
+    expect(document.body.textContent).toContain("读取这个执行账户的下单能力失败：交易服务不可用");
+    const retry = [...document.querySelectorAll<HTMLButtonElement>("button")].find(item => item.textContent?.trim() === "重试");
+    retry?.click();
+    await flushPromises();
+    expect(document.body.textContent).not.toContain("读取这个执行账户的下单能力失败");
+  });
+
   it("自主下单走普通提交并带绝对截止时间，不接管；请求带标的所在市场", async () => {
     const vm = await openEntry();
     expect(document.body.textContent).not.toContain("提交前会暂停整个组合账户");
@@ -129,7 +140,7 @@ describe("下单对话框", () => {
         client_order_id: "client",
         market_type: 1,
         position_side: undefined,
-        deadline_at: String(new Date("2030-01-01T12:00").getTime())
+        deadline_at: String(Date.parse("2030-01-01T12:00:00Z"))
       })
     );
     expect(mocks.placeManualOrder).not.toHaveBeenCalled();
@@ -245,7 +256,7 @@ describe("下单对话框", () => {
     expect(tracker.action.value?.status).toBe("RUNNING");
     expect(tracker.submittedOrder.value).toBeNull();
     expect(mocks.getOrder).not.toHaveBeenCalled();
-    expect(mocks.getOperatorAction).toHaveBeenCalledWith("action");
+    expect(mocks.getOperatorAction).toHaveBeenCalledWith("action", { silent: true });
   });
 
   it("生产环境要输入组合名称才能提交", async () => {

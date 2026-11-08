@@ -18,7 +18,7 @@
               }}</a-tag></template
             ></a-table-column
           >
-          <a-table-column title="因子任务" :width="180"
+          <a-table-column title="计算任务" :width="180"
             ><template #cell="{ record }"
               ><span class="mono">{{ record.factor_task_id }}</span></template
             ></a-table-column

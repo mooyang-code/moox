@@ -51,11 +51,11 @@ export function deleteFactorTask(task_id: string, purge = false) {
   return callFactor<{ task_id: string; purge: boolean }, FactorRetRsp>("DeleteFactorTask", { task_id, purge });
 }
 
-export function listFactorTasks(params: ListFactorTasksReq = {}) {
-  return callFactor<ListFactorTasksReq, FactorRetRsp<ListFactorTasksRsp>>("ListFactorTasks", params);
+export function listFactorTasks(params: ListFactorTasksReq = {}, options: { silentError?: boolean } = {}) {
+  return callFactor<ListFactorTasksReq, FactorRetRsp<ListFactorTasksRsp>>("ListFactorTasks", params, options);
 }
 
-/** 读取一个因子任务；任务不存在时抛出 ret_info.code 为 NOT_FOUND 的 ControlRequestError。silent 为 true 时失败不弹全局提示。 */
+/** 读取一个计算任务；任务不存在时抛出 ret_info.code 为 NOT_FOUND 的 ControlRequestError。silent 为 true 时失败不弹全局提示。 */
 export async function getFactorTask(task_id: string, options: { silent?: boolean } = {}) {
   type Rsp = FactorRetRsp<{ factor_task: FactorTask }>;
   const rsp = options.silent
@@ -115,8 +115,12 @@ export async function setFactorMemberStatus(
   return { member: rsp.member };
 }
 
-export async function listFactorCategories() {
-  const rsp = await callFactor<Record<string, never>, FactorRetRsp<{ categories: FactorCategory[] }>>("ListFactorCategories", {});
+export async function listFactorCategories(options: { silentError?: boolean } = {}) {
+  const rsp = await callFactor<Record<string, never>, FactorRetRsp<{ categories: FactorCategory[] }>>(
+    "ListFactorCategories",
+    {},
+    options
+  );
   return rsp.categories || [];
 }
 
@@ -146,7 +150,7 @@ export async function setFactorCategory(factor_id: string, category_id: string) 
   return rsp.factor;
 }
 
-/** 读取因子任务里各可变成员最近一次被接受的提交（只读）。 */
+/** 读取计算任务里各可变成员最近一次被接受的提交（只读）。 */
 export function getFactorParams(params: GetFactorParamsReq) {
   return callFactor<GetFactorParamsReq, FactorRetRsp<GetFactorParamsRsp>>("GetFactorParams", params);
 }
@@ -169,23 +173,24 @@ export async function cancelRecalcJob(job_id: string) {
   return rsp.job;
 }
 
-export function listRecalcJobs(params: ListRecalcJobsReq) {
-  return callFactor<ListRecalcJobsReq, FactorRetRsp<ListRecalcJobsRsp>>("ListRecalcJobs", params);
+export function listRecalcJobs(params: ListRecalcJobsReq, options: { silentError?: boolean } = {}) {
+  return callFactor<ListRecalcJobsReq, FactorRetRsp<ListRecalcJobsRsp>>("ListRecalcJobs", params, options);
 }
 
-export function getFactorStatus() {
-  return callFactor<Record<string, never>, EngineStatus>("GetStatus", {});
+export function getFactorStatus(options: { silentError?: boolean } = {}) {
+  return callFactor<Record<string, never>, EngineStatus>("GetStatus", {}, options);
 }
 
 /** 编译一个定义：定义不合法时 valid=false，诊断带字段路径与行列（不是接口错误）。 */
-export function validateFactorSpec(spec: string, allow_partial_universe = false) {
-  return callFactor<{ spec: string; allow_partial_universe: boolean }, ValidateFactorSpecRsp>("ValidateFactorSpec", {
-    spec,
-    allow_partial_universe
-  });
+/** factor_id 为空时后端按草稿处理；单输出因子的输出名就是因子 ID，所以编辑器要带上它。 */
+export function validateFactorSpec(spec: string, allow_partial_universe = false, factor_id = "") {
+  return callFactor<{ spec: string; allow_partial_universe: boolean; factor_id?: string }, ValidateFactorSpecRsp>(
+    "ValidateFactorSpec",
+    { spec, allow_partial_universe, ...(factor_id ? { factor_id } : {}) }
+  );
 }
 
-/** 在因子任务的源数据上试算：少量标的、最近若干期，不写结果。 */
+/** 在计算任务的源数据上试算：少量标的、最近若干期，不写结果。 */
 export function previewFactor(params: PreviewFactorReq) {
   return callFactor<PreviewFactorReq, PreviewFactorRsp>("PreviewFactor", params);
 }

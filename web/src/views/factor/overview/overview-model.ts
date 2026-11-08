@@ -76,7 +76,7 @@ export function statsStrip(status: EngineStatus | null | undefined, runningRecal
       key: "recalc",
       label: "进行中补算",
       value: String(runningRecalc),
-      hint: "启用回填与手动补算",
+      hint: "启用后需要手动补算历史",
       tone: runningRecalc ? "info" : "muted"
     }
   ];
@@ -119,35 +119,39 @@ function engineStat(status: EngineStatus | null | undefined): StatItem {
   };
 }
 
-export interface MemberChip {
+/** 需要人看的成员（本期降级或跳过）：一行文字。 */
+export interface AbnormalMember {
   factorId: string;
-  label: string;
-  color: string;
+  text: string;
 }
 
 export interface TaskCard {
   taskId: string;
   title: string;
   health: SetHealth;
-  chips: MemberChip[];
+  /** 成员状态计数，一行文字，例如“正常 3 · 降级 1”；没有成员时为空。 */
+  summary: string;
+  abnormal: AbnormalMember[];
   links: ReturnType<typeof cardLinks>;
 }
 
-function memberChips(info: FactorTaskInfo): MemberChip[] {
+/** 成员按状态计数（只列有的状态），只把降级、跳过的成员单独列出来。 */
+function memberSummary(info: FactorTaskInfo): Pick<TaskCard, "summary" | "abnormal"> {
   const states = new Map((info.last_run?.factors ?? []).map(state => [state.member_key || state.factor_id, state]));
-  return info.members.map(member => {
+  const counts = new Map<string, number>();
+  const abnormal: AbnormalMember[] = [];
+  for (const member of info.members) {
     const alias = member.member_key;
     const state = states.get(alias);
-    if (member.status === "disabled") return { factorId: alias, ...memberStatusTag("disabled") };
-    if (!state) return { factorId: alias, label: "等待周期", color: "gray" };
-    const tag = periodStatusTag(state.status);
-    const failed = state.failed_subjects?.length ?? 0;
-    return {
-      factorId: alias,
-      label: state.status === "degraded" && failed ? `${tag.label} · ${failed} 个对象失败` : tag.label,
-      color: tag.color
-    };
-  });
+    const label =
+      member.status === "disabled" ? memberStatusTag("disabled").label : state ? periodStatusTag(state.status).label : "等待周期";
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+    if (member.status !== "disabled" && (state?.status === "degraded" || state?.status === "skipped")) {
+      const failed = state.failed_subjects?.length ?? 0;
+      abnormal.push({ factorId: alias, text: state.status === "degraded" && failed ? `${label} · ${failed} 个对象失败` : label });
+    }
+  }
+  return { summary: [...counts].map(([label, count]) => `${label} ${count}`).join(" · "), abnormal };
 }
 
 export function taskCards(sets: FactorTaskInfo[], labelOf: (set: FactorTask) => string): TaskCard[] {
@@ -155,7 +159,7 @@ export function taskCards(sets: FactorTaskInfo[], labelOf: (set: FactorTask) => 
     taskId: info.factor_task.task_id,
     title: labelOf(info.factor_task),
     health: setHealth(info.factor_task, info.last_run),
-    chips: memberChips(info),
+    ...memberSummary(info),
     links: cardLinks(info.factor_task.task_id)
   }));
 }

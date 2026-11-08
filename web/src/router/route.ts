@@ -37,10 +37,22 @@ export const staticRoutes = [
         meta: { title: "settings-secrets" }
       },
       {
-        path: "/settings/events",
-        name: "settings-events",
-        component: () => import("@/views/settings/events/index.vue"),
-        meta: { title: "settings-events" }
+        path: "/events/subscriptions",
+        name: "events-subscriptions",
+        component: () => import("@/views/events/subscriptions/index.vue"),
+        meta: { title: "events-subscriptions" }
+      },
+      {
+        path: "/events/executions",
+        name: "events-executions",
+        component: () => import("@/views/events/executions/index.vue"),
+        meta: { title: "events-executions", reuseOnQuery: true }
+      },
+      {
+        path: "/events/delist",
+        name: "events-delist",
+        component: () => import("@/views/events/delist/index.vue"),
+        meta: { title: "events-delist" }
       },
       {
         path: "/data/sources",
@@ -52,13 +64,19 @@ export const staticRoutes = [
         path: "/data/subjects",
         name: "data-subjects",
         component: () => import("@/views/data/subjects/index.vue"),
-        meta: { title: "data-subjects" }
+        meta: { title: "data-subjects", reuseOnQuery: true }
       },
       {
         path: "/data/fields",
         name: "data-fields",
         component: () => import("@/views/data/fields/index.vue"),
-        meta: { title: "data-fields" }
+        meta: { title: "data-fields", reuseOnQuery: true }
+      },
+      {
+        path: "/data/archive",
+        name: "data-archive",
+        component: () => import("@/views/data/archive/index.vue"),
+        meta: { title: "data-archive", reuseOnQuery: true }
       },
       {
         path: "/factor/overview",
@@ -127,12 +145,6 @@ export const staticRoutes = [
         meta: { title: "strategy-detail", hide: true, activeMenu: "strategy-tasks" }
       },
       {
-        path: "/data/import",
-        name: "data-import",
-        component: () => import("@/views/data/import/index.vue"),
-        meta: { title: "data-import" }
-      },
-      {
         path: "/ops/activity",
         name: "ops-activity",
         component: () => import("@/views/ops/activity/index.vue"),
@@ -142,7 +154,7 @@ export const staticRoutes = [
         path: "/collector/tasks",
         name: "collector-tasks",
         component: () => import("@/views/collector/task-management/index.vue"),
-        meta: { title: "collector-tasks" }
+        meta: { title: "collector-tasks", reuseOnQuery: true }
       },
       {
         path: "/trading/accounts",
@@ -160,43 +172,32 @@ export const staticRoutes = [
         path: "/ops/monitor",
         name: "ops-monitor",
         component: () => import("@/views/ops/monitor/index.vue"),
-        meta: { title: "ops-monitor" }
+        meta: { title: "ops-monitor", reuseOnQuery: true }
       },
       {
         path: "/ops/deployments",
         name: "ops-deployments",
         component: () => import("@/views/ops/deployments/index.vue"),
-        meta: { title: "ops-deployments" }
+        meta: { title: "ops-deployments", reuseOnQuery: true }
       },
       {
         path: "/ops/hosts",
         name: "ops-hosts",
         component: () => import("@/views/ops/host-workbench/index.vue"),
-        meta: { title: "ops-hosts" }
+        meta: { title: "ops-hosts", reuseOnQuery: true }
       },
       {
         path: "/ops/storage/nodes",
         name: "ops-storage",
-        component: () => import("@/views/ops/storage/index.vue"),
+        component: () => import("@/views/ops/storage/nodes.vue"),
         meta: { title: "ops-storage" }
       }
     ]
   }
 ];
 
-export const notFoundAndNoPower = [
-  {
-    path: "/401",
-    name: "no-access",
-    component: () => import("@/views/error/401.vue"),
-    meta: { title: "no-access", hide: true }
-  },
-  {
-    path: "/500",
-    name: "no-network",
-    component: () => import("@/views/error/500.vue"),
-    meta: { title: "no-network", hide: true }
-  },
+// 兜底路由：没有匹配的路径都落到 404 页
+export const notFoundRoutes = [
   {
     path: "/:path(.*)*",
     name: "not-found",

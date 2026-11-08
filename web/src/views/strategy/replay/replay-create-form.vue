@@ -32,8 +32,8 @@
         />
       </a-form-item>
     </template>
-    <a-form-item v-if="form.instance_id" label="因子任务">
-      <span class="mono">{{ tasksText(form.tasks) || "读取实例关联的因子任务" }}</span>
+    <a-form-item v-if="form.instance_id" label="计算任务">
+      <span class="mono">{{ tasksText(form.tasks) || "读取实例关联的计算任务" }}</span>
       <span class="muted task-note">（按实例关联的任务，不能更改）</span>
     </a-form-item>
     <template v-else>
@@ -41,38 +41,40 @@
         <a-radio-group v-model="form.single_market" type="button" size="small">
           <a-radio v-for="item in MARKET_ORDER" :key="item" :value="item">{{ marketLabel(item) }}</a-radio>
         </a-radio-group>
-        <template #extra>策略没有写 market，只读一个因子任务：先选任务的数据所属的市场（要与任务源数据集的市场一致）。</template>
+        <template #extra>策略没有写 market，只读一个计算任务：先选任务的数据所属的市场（要与任务源数据集的市场一致）。</template>
       </a-form-item>
-      <a-form-item v-for="market in markets" :key="market" :label="`${marketLabel(market)}因子任务`" required>
+      <a-form-item v-for="market in markets" :key="market" :label="`${marketLabel(market)}计算任务`" required>
         <a-select
           v-model="form.tasks[market]"
           allow-search
           :loading="tasksLoading"
-          :placeholder="`选择${marketLabel(market)}因子任务`"
+          :placeholder="`选择${marketLabel(market)}计算任务`"
         >
           <a-option v-for="task in taskChoices(market)" :key="task.task_id" :value="task.task_id"
             >{{ task.name || task.task_id }}（{{ task.task_id }} · {{ task.freq || "无周期" }}）</a-option
           >
         </a-select>
-        <template v-if="market === markets[0] && markets.length > 1" #extra
-          >现货、永续各选一个，两个任务的周期、日历和用到的列要一致。</template
+        <template v-if="market === markets[0]" #extra
+          ><template v-if="markets.length > 1">现货、永续各选一个，两个任务的周期、日历和用到的列要一致。</template
+          >统一数据集上的任务不在这里列出，要回放请从实例详情发起。</template
         >
       </a-form-item>
     </template>
-    <a-form-item label="区间（UTC，左闭右开，格式 YYYY-MM-DD HH:mm）" required>
-      <!-- 表单项内容区是横向 flex：包一层纵向容器，输入、快捷区间与说明依次上下排列。 -->
+    <a-form-item label="区间" required>
+      <!-- 表单项内容区是横向 flex：包一层纵向容器，选择器与说明上下排列。 -->
       <div class="range-block">
-        <div class="range-inputs">
-          <a-input v-model="form.start" aria-label="开始时间（UTC）" placeholder="开始，例如 2026-09-01 00:00" />
-          <span class="range-sep">至</span>
-          <a-input v-model="form.end" aria-label="结束时间（UTC）" placeholder="结束，例如 2026-10-01 00:00" />
+        <ZonedRangePicker
+          v-model="form.range"
+          :zone="zone"
+          :show-time="!dateOnly"
+          :quick-ranges="quickRanges"
+          style="width: 100%"
+        />
+        <div class="muted range-hint">
+          {{
+            dateOnly ? "日线任务按日期回放：起止两天都含在内。" : "含开始时刻、不含结束时刻。A 股日线任务按日期回放（只选日期）。"
+          }}
         </div>
-        <a-space class="presets" :size="4">
-          <a-button size="mini" @click="applyPreset(1)">近 1 天</a-button>
-          <a-button size="mini" @click="applyPreset(7)">近 7 天</a-button>
-          <a-button size="mini" @click="applyPreset(30)">近 30 天</a-button>
-        </a-space>
-        <div class="muted range-hint">A 股日线任务按上海日期回放：起止各取所在的上海日期，含起始日期、不含结束日期。</div>
       </div>
     </a-form-item>
     <a-form-item :label="usesSwap ? '现货单边手续费（bps）' : '单边手续费（bps）'">
@@ -86,16 +88,26 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, watch } from "vue";
 import type { Strategy } from "@/api/strategy-types";
 import type { FactorTask } from "@/api/factor/types";
-import { recentUtcRange } from "@/views/strategy/replay/model";
-import { type ReplayFormState, replayDslText, replayMarkets } from "@/views/strategy/replay/replay-form-model";
+import ZonedRangePicker from "@/components/zoned-date-picker/zoned-range-picker.vue";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
+import { recentRange } from "@/views/strategy/replay/model";
+import {
+  type ReplayFormState,
+  replayDateOnly,
+  replayDslText,
+  replayMarkets,
+  wholeDays
+} from "@/views/strategy/replay/replay-form-model";
 import { MARKET_ORDER, marketLabel, marketRequirement, tasksText } from "@/views/strategy/market-mode";
 
 // 表单状态由页面持有（提交与预填都在页面里），这里直接编辑同一个响应式对象。
 const form = defineModel<ReplayFormState>({ required: true });
 const props = defineProps<{ strategies: Strategy[]; tasks: FactorTask[]; tasksLoading: boolean }>();
+// 区间按当前空间登记的时区选择
+const zone = useDisplayZone();
 
 // 策略的 market 决定要读哪些市场的任务；没写 market 时只读一个，市场由用户选。
 const declared = computed(() => marketRequirement(replayDslText(form.value, props.strategies)).declared);
@@ -109,9 +121,20 @@ function taskChoices(market: string) {
   return props.tasks.filter(task => !taken.has(task.task_id));
 }
 
-function applyPreset(days: number) {
-  [form.value.start, form.value.end] = recentUtcRange(days);
-}
+// 选的任务都是日线时只选日期（按空间时区的整天）
+const dateOnly = computed(() => replayDateOnly(form.value, props.strategies, props.tasks));
+// 换成日线任务时，把已有的区间（默认的整点区间，或先按分钟选好的）吸附成显示的那几个整天
+watch(
+  [dateOnly, () => form.value.range, zone],
+  () => {
+    const range = form.value.range;
+    if (!dateOnly.value || !range) return;
+    const snapped = wholeDays(range, zone.value);
+    if (snapped[0] !== range[0] || snapped[1] !== range[1]) form.value.range = snapped;
+  },
+  { immediate: true }
+);
+const quickRanges = [1, 7, 30].map(days => ({ label: `近 ${days} 天`, range: () => recentRange(days) }));
 </script>
 
 <style scoped>
@@ -123,24 +146,12 @@ function applyPreset(days: number) {
   gap: 6px;
   width: 100%;
 }
-.range-inputs {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-  align-items: center;
-  gap: 8px;
-}
-.range-sep {
-  color: var(--color-text-3);
-}
 .range-hint {
   font-size: 12px;
 }
 .muted {
   color: var(--color-text-3);
   font-size: 12px;
-}
-.presets {
-  margin: 0;
 }
 .task-note {
   margin-left: 6px;

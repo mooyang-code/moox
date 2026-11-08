@@ -3,12 +3,15 @@ import { setInstanceEnabled } from "@/api/strategy";
 
 export const TOGGLE_CANCELED_TIP = "已取消，实例状态未改变";
 
-/** 启停确认框的文案：停用强调不清仓，启用说明会固化快照、交易模式会认领账户会话。 */
+/**
+ * 启停确认框的文案：停用强调不清仓；启用说明会固化快照、计算任务会永久关联。
+ * 绑了组合账户的实例启用时不走这里，改用 instance-enable-dialog.vue（要写明账户和环境，生产要输入组合名称）。
+ */
 export function instanceToggleCopy(enable: boolean) {
   return enable
     ? {
         title: "启用实例",
-        content: "启用会解析 View、列与因子指纹并固化会话快照，交易模式下还会认领账户会话。确认启用？",
+        content: "启用会解析 View、列与因子指纹并固化会话快照；计算任务会与本实例永久关联（已关联的不变）。确认启用？",
         okText: "确认启用"
       }
     : {
@@ -16,6 +19,13 @@ export function instanceToggleCopy(enable: boolean) {
         content: "停用后不会再计算新目标，也不会自动清仓。确认停用？",
         okText: "确认停用"
       };
+}
+
+/** 启用绑了组合账户的实例时，确认框要用到的实例字段。 */
+export interface EnableTarget {
+  instance_id: string;
+  logical_account_id: string;
+  factor_tasks?: Record<string, string>;
 }
 
 export interface InstanceToggleHooks {
@@ -44,7 +54,8 @@ export function confirmInstanceToggle(instanceId: string, enable: boolean, hooks
   });
 }
 
-async function toggleInstance(instanceId: string, enable: boolean, hooks: InstanceToggleHooks) {
+/** 发启停请求并给出可见提示；确认已经由调用方做过。 */
+export async function toggleInstance(instanceId: string, enable: boolean, hooks: InstanceToggleHooks = {}) {
   hooks.onStart?.();
   const pending = Message.loading({ content: enable ? "正在启用实例…" : "正在停用实例…", duration: 0 });
   let ok = false;

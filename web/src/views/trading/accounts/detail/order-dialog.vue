@@ -20,6 +20,10 @@
       这是策略驱动的组合，提交前会暂停整个组合账户并取消活动目标订单，恢复前策略目标不会执行。
     </a-alert>
     <a-alert v-if="submissionError" type="warning" class="section">{{ submissionError }}</a-alert>
+    <a-alert v-if="memberLoadError" type="error" class="section">
+      读取这个执行账户的下单能力失败：{{ memberLoadError }}
+      <template #action><a-button size="mini" @click="loadMember">重试</a-button></template>
+    </a-alert>
     <a-form :model="manualForm" auto-label-width :disabled="!!pendingSubmission">
       <a-form-item v-if="memberOptions.length > 1" label="执行账户" required>
         <a-select v-model="memberId" @change="loadMember">
@@ -56,7 +60,9 @@
         <a-input v-model="manualForm.limit_price" />
       </a-form-item>
       <a-form-item label="原因" required><a-input v-model="manualForm.reason" /></a-form-item>
-      <a-form-item label="提交截止时间"><a-input v-model="manualForm.deadline_at" type="datetime-local" /></a-form-item>
+      <a-form-item label="提交截止时间">
+        <ZonedDatePicker v-model="manualForm.deadline_at" :zone="displayZone" allow-clear style="width: 100%" />
+      </a-form-item>
     </a-form>
     <a-form v-if="tier.requiresName" :model="{}" layout="vertical">
       <a-form-item :label="`输入组合名称「${logical.name}」确认`">
@@ -79,13 +85,18 @@ import {
 import type { ExecutionCapabilities, LogicalAccount, SubmitOrderReq, TradableInstrument, TradingAccount } from "@/api/trade";
 import { createClientId } from "@/utils/client-id";
 import { createLatestRequestGuard } from "@/utils/latest-request";
-import EnvMark from "../shared/env-mark.vue";
-import { confirmTier, nameConfirmed, type Environment } from "../shared/environment";
+import EnvMark from "@/components/trade-confirm/env-mark.vue";
+import ZonedDatePicker from "@/components/zoned-date-picker/zoned-date-picker.vue";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
+import { confirmTier, nameConfirmed, type Environment } from "@/components/trade-confirm/environment";
 import { instrumentName, marketLabel, marketOfInstrument } from "../shared/markets";
 import { instrumentRuleHint, orderRuleError } from "../shared/order-rules";
 import type { ActionTracker } from "./action-tracker";
 
 defineOptions({ name: "trading-order-dialog" });
+
+// 截止时间按当前空间登记的时区选择
+const displayZone = useDisplayZone();
 
 const props = defineProps<{
   logical: LogicalAccount;
@@ -102,6 +113,8 @@ const typedName = ref("");
 const memberId = ref("");
 const capabilities = ref<ExecutionCapabilities | null>(null);
 const instruments = ref<TradableInstrument[]>([]);
+// 下单能力或可交易标的读取失败：订单类型、标的会是空的，要在对话框里说明原因并给重试，不能等提交时才提示。
+const memberLoadError = ref("");
 const pendingSubmission = ref<{ mode: 1 | 2; request: SubmitOrderReq } | null>(null);
 const capabilityRequests = createLatestRequestGuard();
 const manualForm = reactive({
@@ -115,7 +128,8 @@ const manualForm = reactive({
   quantity: "",
   limit_price: "",
   reason: "",
-  deadline_at: ""
+  // 毫秒时刻，按空间时区选择；不填为 null
+  deadline_at: null as number | null
 });
 
 const tier = computed(() => confirmTier(props.env));
@@ -153,7 +167,11 @@ function loadMember() {
   manualForm.instrument_id = "";
   capabilities.value = null;
   instruments.value = [];
+  memberLoadError.value = "";
   const request = capabilityRequests.begin();
+  const failed = (cause: unknown) => {
+    if (request.isLatest()) memberLoadError.value = cause instanceof Error && cause.message ? cause.message : "请稍后重试";
+  };
   getExecutionCapabilities(accountId)
     .then(response => {
       if (!request.isLatest()) return;
@@ -162,16 +180,12 @@ function loadMember() {
       const types = response.capabilities?.order_types || [];
       if (types.length && !types.includes(manualForm.order_type)) manualForm.order_type = types[0] as 1 | 2;
     })
-    .catch(() => {
-      if (request.isLatest()) capabilities.value = null;
-    });
+    .catch(failed);
   listTradableInstruments(accountId)
     .then(response => {
       if (request.isLatest()) instruments.value = response.instruments || [];
     })
-    .catch(() => {
-      if (request.isLatest()) instruments.value = [];
-    });
+    .catch(failed);
 }
 
 /** 打开下单对话框。有结果不明的旧请求时，只能对同一个执行账户重试原请求。 */
@@ -204,7 +218,7 @@ function openManual(accountId: string, instrumentId = "", prefill: { side?: 1 | 
     quantity: prefill.quantity ?? "",
     limit_price: "",
     reason: "",
-    deadline_at: ""
+    deadline_at: null
   });
   memberId.value = accountId;
   loadMember();
@@ -247,8 +261,8 @@ async function submitManual() {
       Message.warning(ruleError);
       return false;
     }
-    const deadline = manualForm.deadline_at ? new Date(manualForm.deadline_at).getTime() : undefined;
-    if (deadline !== undefined && (!Number.isFinite(deadline) || deadline <= Date.now())) {
+    const deadline = manualForm.deadline_at ?? undefined;
+    if (deadline !== undefined && deadline <= Date.now()) {
       Message.warning("提交截止时间必须晚于当前时间");
       return false;
     }

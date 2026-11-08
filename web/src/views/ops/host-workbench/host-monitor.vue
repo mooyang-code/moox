@@ -64,6 +64,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRoute } from "vue-router";
+import { usePolling } from "@/hooks/usePolling";
 import { getCurrentMetrics, type HostMetrics } from "@/api/modules/host-monitor";
 import { listAllDeploymentHosts } from "@/api/admin/sysdeploy";
 import type { DeploymentHost } from "@/api/admin/types";
@@ -91,7 +92,6 @@ const loadError = ref("");
 const selectedKey = ref("");
 const historyRefreshKey = ref(0);
 const viewMode = ref<MonitorViewMode>(normalizeMonitorViewMode(localStorage.getItem(VIEW_MODE_KEY)));
-let refreshTimer: ReturnType<typeof setInterval> | null = null;
 let requestID = 0;
 
 const rows = computed(() => buildHostMonitorRows(hosts.value, monitors.value));
@@ -102,10 +102,12 @@ const attentionCount = computed(() => rows.value.filter(row => row.attention || 
 const unmonitoredCount = computed(() => rows.value.filter(row => row.state === "unmonitored").length);
 const storageStatus = computed(() => (!storageAvailable.value ? "不可用" : dataGap.value ? "存在缺口" : "正常"));
 
-async function refreshData(refreshHistory = false) {
+/** background：自动刷新，不弹全局提示，失败写在页面上并保留上次的数据。 */
+async function refreshData(refreshHistory = false, background = false) {
   const currentRequestID = ++requestID;
   loading.value = true;
-  const results = await Promise.allSettled([getCurrentMetrics(), listAllDeploymentHosts()]);
+  const options = { silentError: background };
+  const results = await Promise.allSettled([getCurrentMetrics(options), listAllDeploymentHosts(options)]);
   if (currentRequestID !== requestID) return;
   const [monitorResult, hostResult] = results;
   const errors: string[] = [];
@@ -126,14 +128,8 @@ async function refreshData(refreshHistory = false) {
   loading.value = false;
 }
 
-function startAutoRefresh() {
-  if (refreshTimer) clearInterval(refreshTimer);
-  refreshTimer = setInterval(() => void refreshData(false), AUTO_REFRESH_MS);
-}
-function stopAutoRefresh() {
-  if (refreshTimer) clearInterval(refreshTimer);
-  refreshTimer = null;
-}
+// 自动刷新：开关打开且页面可见时轮询，不叠加
+usePolling(() => refreshData(false, true), AUTO_REFRESH_MS, autoRefresh);
 function manualRefresh() {
   return refreshData(true);
 }
@@ -145,14 +141,9 @@ watch([rows, requestedHostID], ([value, hostID]) => {
   else if (!value.some(row => row.key === selectedKey.value)) selectedKey.value = value[0].key;
 });
 watch(viewMode, value => localStorage.setItem(VIEW_MODE_KEY, value));
-watch(autoRefresh, value => (value ? startAutoRefresh() : stopAutoRefresh()));
-onMounted(async () => {
-  await refreshData(false);
-  startAutoRefresh();
-});
+onMounted(() => refreshData(false));
 onUnmounted(() => {
   requestID++;
-  stopAutoRefresh();
 });
 </script>
 
@@ -203,14 +194,15 @@ onUnmounted(() => {
 .monitor-summary strong {
   font-size: 16px;
 }
+/* 汇总行的颜色用主题变量，暗色模式下也清楚 */
 .healthy {
-  color: #16803c;
+  color: rgb(var(--success-6));
 }
 .warning {
-  color: #d97706;
+  color: rgb(var(--warning-6));
 }
 .danger {
-  color: #dc2626;
+  color: rgb(var(--danger-6));
 }
 .monitor-alert {
   margin-bottom: var(--moox-space-2);

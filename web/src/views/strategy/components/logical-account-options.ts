@@ -1,4 +1,5 @@
-import type { LogicalAccount, MarketType } from "@/api/trade/types";
+import type { LogicalAccount, MarketType, TradingAccount } from "@/api/trade/types";
+import { environmentLabel, logicalEnvironment } from "@/components/trade-confirm/environment";
 
 // 策略市场在交易模块里的编号：A 股（equity）对应股票市场，可以挂 A 股模拟账户。
 const marketTypes: Record<string, number> = { spot: 1, swap: 2, equity: 3 };
@@ -33,8 +34,22 @@ export function marketsToResolved(markets: string[]): ResolvedMarkets {
   return { types: markets.map(market => marketTypes[market]).filter(Boolean) };
 }
 
+/**
+ * 选项前面的环境：模拟盘、测试网、生产。组合账户本身只区分模拟和实盘，测试网和生产要看成员执行账户；
+ * 执行账户没读到（tradingAccounts 为 null）时实盘只写“实盘”，不猜是测试网还是生产。
+ */
+export function environmentPrefix(account: LogicalAccount, tradingAccounts: ReadonlyMap<string, TradingAccount> | null): string {
+  if (account.execution_mode === 1) return environmentLabel("paper");
+  if (!tradingAccounts) return "实盘";
+  return environmentLabel(logicalEnvironment(account, tradingAccounts));
+}
+
 // 账户的可交易市场必须包含策略要输出的全部市场（交易模块用启用成员已开通市场的并集算出）。
-export function logicalAccountOptions(accounts: LogicalAccount[], markets: ResolvedMarkets = {}): LogicalAccountOption[] {
+export function logicalAccountOptions(
+  accounts: LogicalAccount[],
+  markets: ResolvedMarkets = {},
+  tradingAccounts: ReadonlyMap<string, TradingAccount> | null = null
+): LogicalAccountOption[] {
   return accounts
     .filter(
       account =>
@@ -48,7 +63,7 @@ export function logicalAccountOptions(accounts: LogicalAccount[], markets: Resol
       return {
         account,
         disabledReason,
-        label: `${account.name || account.logical_account_id}（${members} 个成员，${state}${suffix}）`
+        label: `${environmentPrefix(account, tradingAccounts)} · ${account.name || account.logical_account_id}（${members} 个成员，${state}${suffix}）`
       };
     });
 }

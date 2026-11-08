@@ -11,6 +11,9 @@ declare module 'vue' {
     ActivityLog: typeof import('./components/activity-log/index.vue')['default']
     CodeBlock: typeof import('./components/code-block/index.vue')['default']
     CodeEditor: typeof import('./components/code-editor/index.vue')['default']
+    ConfirmDialog: typeof import('./components/trade-confirm/confirm-dialog.vue')['default']
+    EnvMark: typeof import('./components/trade-confirm/env-mark.vue')['default']
+    InfoTip: typeof import('./components/info-tip/index.vue')['default']
     InspectionPreview: typeof import('./components/trade-inspection/inspection-preview.vue')['default']
     InspectionResult: typeof import('./components/trade-inspection/inspection-result.vue')['default']
     InspectionTestDialog: typeof import('./components/trade-inspection/inspection-test-dialog.vue')['default']
@@ -21,6 +24,8 @@ declare module 'vue' {
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
     SvgIcon: typeof import('./components/svg-icon/index.vue')['default']
-    VerifyCode: typeof import('./components/verify-code/index.vue')['default']
+    TimeText: typeof import('./components/time-text/index.vue')['default']
+    ZonedDatePicker: typeof import('./components/zoned-date-picker/zoned-date-picker.vue')['default']
+    ZonedRangePicker: typeof import('./components/zoned-date-picker/zoned-range-picker.vue')['default']
   }
 }

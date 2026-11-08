@@ -2,8 +2,8 @@
   <div class="moox-page deployments-page">
     <div class="moox-inner">
       <div class="page-head">
-        <PageTitleTabs v-model="tab" :items="tabs" aria-label="服务部署" />
-        <a-button :loading="loading" aria-label="刷新部署状态" @click="refresh">刷新</a-button>
+        <PageTitleTabs v-model="tab" :items="tabs" aria-label="服务" />
+        <a-button :loading="loading" aria-label="刷新部署状态" @click="refresh()">刷新</a-button>
       </div>
       <p class="muted">
         主机与组件的新增、部署、启停和移除都通过 moox skill 操作（让 Agent 使用 moox skill
@@ -20,10 +20,9 @@
           <div class="filters">
             <a-input v-model="search" allow-clear placeholder="搜索主机、组件名称或 ID" aria-label="搜索部署" />
             <a-select v-model="filter" aria-label="部署状态筛选">
-              <a-option value="all">全部</a-option><a-option value="abnormal">异常</a-option
-              ><a-option value="disabled">已停用</a-option>
+              <a-option value="enabled">启用中</a-option><a-option value="abnormal">异常</a-option
+              ><a-option value="disabled">已停用</a-option><a-option value="all">全部</a-option>
             </a-select>
-            <a-checkbox v-model="showDisabled">显示已停用</a-checkbox>
           </div>
           <section v-for="group in visibleGroups" :key="group.host.host_id" class="host-group" :data-host-id="group.host.host_id">
             <div class="host-heading">
@@ -48,7 +47,7 @@
                 syncFor(group.host.host_id).label
               }}
               <span v-if="syncFor(group.host.host_id).pendingSince"
-                >（自 {{ formatCheckedAt(syncFor(group.host.host_id).pendingSince) }}）</span
+                >（自 {{ formatInstant(syncFor(group.host.host_id).pendingSince, displayZone) }}）</span
               >
               <span v-else-if="syncFor(group.host.host_id).label === '待同步'">（起点尚未观测）</span>
               · 组件：{{
@@ -95,7 +94,9 @@
                     <td>
                       <div v-for="instance in row.health?.instances || []" :key="`${instance.instance_id}/${instance.boot_id}`">
                         <span>{{ instance.instance_id }} · {{ instance.version || "版本未知" }}</span
-                        ><small>{{ statusLabel(instance.status) }} · {{ formatCheckedAt(instance.last_reported_at) }}</small>
+                        ><small
+                          >{{ statusLabel(instance.status) }} · {{ formatInstant(instance.last_reported_at, displayZone) }}</small
+                        >
                       </div>
                       <span v-if="!row.health?.instances?.length" class="muted">暂无上报</span>
                     </td>
@@ -140,10 +141,10 @@
           </div>
           <div v-if="currentRoutes" class="snapshot-summary">
             <p>
-              快照格式 v{{ currentRoutes.snapshot_schema_version }} · 本次编译 {{ formatCheckedAt(currentRoutes.compiled_at) }} ·
-              {{ syncFor(selectedHostId).label
+              快照格式 v{{ currentRoutes.snapshot_schema_version }} · 本次编译
+              {{ formatInstant(currentRoutes.compiled_at, displayZone) }} · {{ syncFor(selectedHostId).label
               }}<span v-if="syncFor(selectedHostId).pendingSince"
-                >（自 {{ formatCheckedAt(syncFor(selectedHostId).pendingSince) }}）</span
+                >（自 {{ formatInstant(syncFor(selectedHostId).pendingSince, displayZone) }}）</span
               >
             </p>
             <p class="hashes">
@@ -205,7 +206,8 @@
         </template>
       </div>
       <small v-if="catalog" class="muted"
-        >组件目录 v{{ catalog.version }} · {{ catalogHash }} · Monitor {{ formatCheckedAt(overview?.generated_at) }}</small
+        >组件目录 v{{ catalog.version }} · {{ catalogHash }} · Monitor
+        {{ formatInstant(overview?.generated_at, displayZone) }}</small
       >
       <a-drawer v-model:visible="drawerVisible" :width="640" title="组件详情" :footer="false">
         <template v-if="detail">
@@ -235,7 +237,8 @@
             <dd>{{ statusLabel(detail.row.health?.probe?.status) }} / {{ statusLabel(detail.row.health?.reporter?.status) }}</dd>
             <dt>登记 / 更新</dt>
             <dd>
-              {{ formatCheckedAt(detail.row.deployment.created_at) }} / {{ formatCheckedAt(detail.row.deployment.updated_at) }}
+              {{ formatInstant(detail.row.deployment.created_at, displayZone) }} /
+              {{ formatInstant(detail.row.deployment.updated_at, displayZone) }}
             </dd>
           </dl>
           <section v-if="detail.row.health?.probe?.raw_error">
@@ -256,7 +259,7 @@
           <h4>上报实例</h4>
           <p v-for="instance in detail.row.health?.instances || []" :key="`${instance.instance_id}/${instance.boot_id}`">
             {{ instance.instance_id }} · {{ instance.boot_id }} · {{ instance.version || "版本未知" }} ·
-            {{ statusLabel(instance.status) }} · {{ formatCheckedAt(instance.last_reported_at) }}
+            {{ statusLabel(instance.status) }} · {{ formatInstant(instance.last_reported_at, displayZone) }}
           </p>
           <p v-if="!detail.row.health?.instances?.length" class="muted">暂无上报</p>
         </template>
@@ -268,10 +271,15 @@
 import { computed, ref, watch } from "vue";
 import PageTitleTabs from "@/components/page-title-tabs/index.vue";
 import RawError from "@/views/ops/monitor/raw-error.vue";
-import { formatCheckedAt, statusColor, statusLabel } from "@/views/ops/monitor/health-display";
+import { statusColor, statusLabel } from "@/views/ops/monitor/health-display";
 import { componentPorts, gatewayLabel, groupRoutes, routeSync } from "./model";
 import TopologyView from "./topology-view.vue";
 import { useDeployments } from "./use-deployments";
+import { formatInstant } from "@/utils/time-zone";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
+// 页面时间按 UTC显示
+const displayZone = useDisplayZone("global");
+
 defineOptions({ name: "OpsDeployments" });
 const tabs = [
   { key: "services", label: "服务" },
@@ -292,7 +300,6 @@ const {
   monitorError,
   search,
   filter,
-  showDisabled,
   selectedHostId,
   groups,
   visibleGroups,

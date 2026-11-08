@@ -28,7 +28,7 @@
 
       <a-modal
         v-model:visible="fileManagerVisible"
-        title="文件管理"
+        :title="fileManagerHost ? `文件管理 · ${fileManagerHost}` : '文件管理'"
         :width="960"
         :footer="false"
         :body-style="{ padding: 0, height: '70vh', overflowY: 'auto' }"
@@ -36,7 +36,7 @@
         @close="closeFileManager"
       >
         <a-spin :loading="fileManagerLoading" class="file-manager-loading">
-          <SshFileManager v-if="fileManagerSessionId" :session-id="fileManagerSessionId" />
+          <SshFileManager v-if="fileManagerSessionId" :session-id="fileManagerSessionId" :host-label="fileManagerHost" />
         </a-spin>
       </a-modal>
     </div>
@@ -44,20 +44,19 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch, onBeforeUnmount } from "vue";
+import { computed, ref, watch, onBeforeUnmount } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { Message } from "@arco-design/web-vue";
 import PageTitleTabs from "@/components/page-title-tabs/index.vue";
-import SshHosts from "@/views/container/ssh-hosts/ssh-hosts.vue";
-import SshTerminal from "@/views/container/ssh-terminal/ssh-terminal.vue";
-import SshFileManager from "@/views/container/ssh-file-manager/ssh-file-manager.vue";
+import SshHosts from "./ssh-hosts.vue";
+import SshTerminal from "./ssh-terminal.vue";
+import SshFileManager from "./ssh-file-manager.vue";
 import HostMonitor from "./host-monitor.vue";
 import { listAllDeploymentHosts } from "@/api/admin/sysdeploy";
 import type { DeploymentHost } from "@/api/admin/types";
 import { getCurrentMetrics, type HostMetrics } from "@/api/modules/host-monitor";
 import { createSSHSession, disconnectSSHSession } from "@/api/modules/ssh";
 import { buildHostMonitorRows } from "./host-monitor-mapping";
-import { sshAvailability } from "./host-workbench-utils";
 
 const route = useRoute();
 const router = useRouter();
@@ -80,6 +79,8 @@ const terminalHostId = ref("");
 const fileManagerVisible = ref(false);
 const fileManagerLoading = ref(false);
 const fileManagerSessionId = ref("");
+// 文件管理连着的主机：弹窗标题和删除确认里要写出来，免得在错的机器上删文件
+const fileManagerHost = ref("");
 const terminalTitle = computed(() => {
   const host = hosts.value.find(item => item.host_id === terminalHostId.value);
   if (!host) return "SSH 终端";
@@ -131,6 +132,8 @@ async function openFileManager(hostId: string) {
       return;
     }
     fileManagerSessionId.value = response.session_id;
+    const host = hosts.value.find(item => item.host_id === hostId);
+    fileManagerHost.value = host ? `${host.label || host.host_id}（${host.address}）` : hostId;
     fileManagerVisible.value = true;
   } catch (error: any) {
     if (request !== fileManagerRequest) return;
@@ -154,13 +157,15 @@ watch(
   }
 );
 
-onMounted(async () => {
-  await loadMonitorData();
-  // 只有主机列表页签的 host_id 链接才直接打开终端；监控页签的 host_id 只用来定位主机，不能建连。
-  const hostId = typeof route.query.host_id === "string" ? route.query.host_id : "";
-  const target = hosts.value.find(item => item.host_id === hostId);
-  if (activeTab.value === "hosts" && target && sshAvailability(target).ok) openTerminal(hostId);
-});
+// 主机列表只在“主机列表”页签读取，每次进入这个页签都刷新；“主机监控”页签由子组件自己读，外层不再重复读一遍。
+// 终端只在点击时打开：URL 里的 host_id 只用来定位主机，挂载、刷新、切页签都不会建立 SSH 连接（O4）
+watch(
+  activeTab,
+  tab => {
+    if (tab === "hosts") void loadMonitorData();
+  },
+  { immediate: true }
+);
 
 onBeforeUnmount(() => {
   fileManagerRequest += 1;
@@ -191,17 +196,6 @@ onBeforeUnmount(() => {
   border: 0;
   border-radius: 0;
   box-shadow: none;
-}
-.monitor-table-wrap {
-  margin-top: var(--moox-space-1);
-}
-.ssh-management {
-  margin-top: var(--moox-space-4);
-  border-top: 1px solid var(--color-border-2);
-  padding-top: var(--moox-space-3);
-}
-.ssh-management :deep(.moox-page) {
-  padding: 0;
 }
 .terminal-modal-body {
   height: min(68vh, 720px);

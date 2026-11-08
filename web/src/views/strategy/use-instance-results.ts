@@ -2,6 +2,9 @@ import { computed, onUnmounted, ref, watch, type Ref } from "vue";
 import { useStrategyStore } from "@/store/modules/strategy";
 import { deriveTargetState, type TargetState } from "@/views/strategy/model";
 import { useNowClock } from "@/views/strategy/use-now-clock";
+import { usePolling } from "@/hooks/usePolling";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
+import { formatInstant } from "@/utils/time-zone";
 
 export type ResultScope = "session" | "all";
 
@@ -23,6 +26,7 @@ export function useInstanceResults(
   } = {}
 ) {
   const store = useStrategyStore();
+  const displayZone = useDisplayZone();
   const resultPage = ref(1);
   const resultScope = ref<ResultScope>("session");
   const resultPageSize = 20;
@@ -42,16 +46,18 @@ export function useInstanceResults(
       : "unknown"
   );
 
-  async function load(): Promise<boolean> {
+  /** background：每 10 秒的后台刷新，不弹全局提示，失败由页面上的错误条显示。 */
+  async function load(background = false): Promise<boolean> {
     if (!instanceId.value) return false;
     try {
       const applied = await store.loadInstanceDetail(
         instanceId.value,
         resultPage.value,
         resultPageSize,
-        resultScope.value === "all"
+        resultScope.value === "all",
+        { silent: background }
       );
-      if (applied) readAt.value = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+      if (applied) readAt.value = formatInstant(Date.now(), displayZone.value, "clock");
       await options.onLoaded?.(applied);
       return applied;
     } catch {
@@ -83,7 +89,6 @@ export function useInstanceResults(
   }
 
   function start() {
-    store.stopPolling();
     store.clearDetail();
     resultPage.value = 1;
     resultScope.value = "session";
@@ -91,14 +96,19 @@ export function useInstanceResults(
     options.onReset?.();
     if (!instanceId.value) return;
     void load();
-    store.startPolling(() => (options.autoRefresh?.value === false ? undefined : load()));
   }
+
+  // 每 10 秒后台刷新（关闭自动刷新时停；页面隐藏时暂停、不叠加）
+  usePolling(
+    () => load(true),
+    10_000,
+    () => Boolean(instanceId.value) && options.autoRefresh?.value !== false
+  );
 
   watch(instanceId, (next, previous) => {
     if (next !== previous) start();
   });
   onUnmounted(() => {
-    store.stopPolling();
     store.clearDetail();
   });
 

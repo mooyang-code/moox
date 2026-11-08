@@ -1,4 +1,5 @@
 import { PACKAGE_STATUS_LABEL, PACKAGE_TYPE_LABEL } from "@/api/function-package";
+import { formatInstant } from "@/utils/time-zone";
 
 export interface FunctionInstance {
   instance_id: string;
@@ -52,14 +53,6 @@ export function parseMetadata(value: unknown): Record<string, unknown> {
   return typeof value === "object" ? (value as Record<string, unknown>) : {};
 }
 
-export const getBatchChangeTypeText = (value: string) =>
-  (
-    ({
-      FUNCTION_JOB_OPERATION_CREATE_INSTANCES: "批量创建实例",
-      FUNCTION_JOB_OPERATION_DEPLOY_INSTANCES: "批量部署实例"
-    }) as Record<string, string>
-  )[value] || value;
-
 export const getProviderName = (value: string) => ({ tencent: "腾讯云", aliyun: "阿里云", aws: "AWS" })[value] || value;
 export const getFunctionTypeLabel = (value: string) =>
   ({ "scf-event": "云函数（事件型）", "scf-web": "云函数（Web型）", server: "服务器" })[value] || value;
@@ -85,11 +78,16 @@ export function getPackageTypeColor(value: number | string) {
         "3": "gray",
         PACKAGE_TYPE_COLLECTOR: "blue",
         PACKAGE_TYPE_FACTOR: "green",
-        PACKAGE_TYPE_CUSTOM: "gray"
+        PACKAGE_TYPE_CUSTOM: "gray",
+        data_collector: "blue",
+        factor_calculator: "green"
       } as Record<string, string>
     )[String(value)] || "gray"
   );
 }
+// PackageStatus 枚举：2 = 可用（已上传完成），只有可用的代码包能下载。
+export const PACKAGE_STATUS_AVAILABLE = 2;
+
 export function getPackageStatusColor(value: number | string) {
   return ({ 1: "blue", 2: "green", 3: "red", 4: "gray" } as Record<number, string>)[Number(value)] || "gray";
 }
@@ -121,23 +119,10 @@ export function formatFileSize(size: number) {
   return `${(size / (1024 * 1024 * 1024)).toFixed(1)}GB`;
 }
 
-export function formatDateTime(value?: string) {
-  if (!value) return "-";
-  try {
-    return new Date(value).toLocaleString("zh-CN", {
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit"
-    });
-  } catch {
-    return value;
-  }
+/** 带时区后缀的时间：执行器属于空间，用空间时区；代码包这类全局对象用 UTC。 */
+export function formatDateTime(value: string | undefined, zone: string) {
+  return formatInstant(value, zone);
 }
-
-export const formatTime = formatDateTime;
 
 export function formatMetadata(metadata: string | Record<string, unknown>) {
   if (!metadata) return "-";

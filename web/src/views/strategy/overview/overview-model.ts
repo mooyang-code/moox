@@ -1,14 +1,9 @@
 import type { Replay, Strategy, StrategyInstance, StrategyTargetSnapshot } from "@/api/strategy-types";
-import {
-  deriveTargetState,
-  formatStrategyTime,
-  percent,
-  rankTargets,
-  targetStateTag,
-  type TargetState
-} from "@/views/strategy/model";
+import { deriveTargetState, percent, rankTargets, targetStateTag, type TargetState } from "@/views/strategy/model";
 import { replayLink, resultsLink, type StrategyLink } from "@/views/strategy/links";
 import { shortId, sortInstancesForResults } from "@/views/strategy/results/results-model";
+import { formatInstant } from "@/utils/time-zone";
+import { isPoolStrategy } from "@/views/strategy/dsl";
 
 export interface OverviewInput {
   instances: StrategyInstance[];
@@ -17,6 +12,8 @@ export interface OverviewInput {
   replays: Replay[];
   catalog: Strategy[];
   nowMs: number;
+  /** 已暂停自动执行的组合账户 ID：绑定它们的实例目标不会执行。 */
+  pausedAccounts?: Set<string>;
 }
 
 export type Tone = "ok" | "danger" | "muted" | "normal";
@@ -47,11 +44,13 @@ export interface InstanceCard {
   chips: TargetChip[];
   more: number;
   period: string;
+  /** 策略池：研究回放不支持，回放入口禁用。 */
+  pool: boolean;
   links: { results: StrategyLink; replay: StrategyLink };
 }
 
 export interface PendingItem {
-  kind: "degraded" | "session_unverified" | "expired" | "releasing";
+  kind: "degraded" | "paused" | "session_unverified" | "expired" | "releasing";
   instanceId: string;
   title: string;
   text: string;
@@ -118,7 +117,8 @@ export function overviewStats(input: OverviewInput): StatItem[] {
   ];
 }
 
-export function instanceCards(input: OverviewInput): InstanceCard[] {
+/** zone 是显示时区（当前空间）。 */
+export function instanceCards(input: OverviewInput, zone: string): InstanceCard[] {
   return sortInstancesForResults(input.instances)
     .slice(0, CARD_LIMIT)
     .map(instance => {
@@ -128,6 +128,7 @@ export function instanceCards(input: OverviewInput): InstanceCard[] {
       return {
         instanceId: instance.instance_id,
         title: definitionName(instance, input.catalog),
+        pool: isPoolStrategy(input.catalog.find(item => item.strategy_id === instance.strategy_id)?.dsl_yaml),
         subtitle: instance.instance_id,
         enabled: instance.enabled,
         health: instance.health,
@@ -140,7 +141,7 @@ export function instanceCards(input: OverviewInput): InstanceCard[] {
           short: row.weight < 0
         })),
         more: Math.max(0, ranked.length - CARD_CHIP_LIMIT),
-        period: snapshot?.bar_end_time ? `最近一期 ${formatStrategyTime(snapshot.bar_end_time)}` : "",
+        period: snapshot?.bar_end_time ? `最近一期 ${formatInstant(snapshot.bar_end_time, zone)}` : "",
         links: {
           results: resultsLink(instance.instance_id),
           replay: replayLink({ instanceId: instance.instance_id, factorTasks: instance.factor_tasks })
@@ -158,6 +159,13 @@ export function pendingItems(input: OverviewInput): PendingItem[] {
     const base = { instanceId: instance.instance_id, title, target };
     if (instance.health === "degraded") {
       items.push({ ...base, kind: "degraded", text: "最近一期被跳过，查看历史结果中的跳过原因" });
+    } else if (instance.enabled && instance.logical_account_id && input.pausedAccounts?.has(instance.logical_account_id)) {
+      items.push({
+        ...base,
+        kind: "paused",
+        text: "组合账户已暂停，目标不会执行，到组合账户恢复自动执行",
+        target: { name: "trading-account-detail", params: { logical_account_id: instance.logical_account_id } }
+      });
     } else if (instance.health === "session_unverified") {
       items.push({ ...base, kind: "session_unverified", text: "无法核实 Trade 账户会话，目标是否被接受未知" });
     } else if (instance.enabled && stateOf(instance, input.targets, input.nowMs) === "expired") {

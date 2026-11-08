@@ -96,7 +96,7 @@ const viewColumns = [
 
 const ViewBrowseStub = defineComponent({
   name: "ViewBrowse",
-  props: ["queryReady", "displayColumns", "projectColumns", "searchColumns", "extraFilters"],
+  props: ["queryReady", "displayColumns", "projectColumns", "searchColumns", "extraFilters", "refreshKey"],
   template: '<div class="view-browse-stub"><slot name="query-extra" /></div>'
 });
 
@@ -137,6 +137,33 @@ describe("因子结果页", () => {
       { category_id: "momentum", name: "动量类" }
     ]);
     hoisted.getDisplay.mockReset().mockResolvedValue({ categories: [], members: [], columns: [] });
+  });
+
+  it("刷新结果只让表格重读行，不重建视图浏览；成员变化时只重读视图列", async () => {
+    const wrapper = mountPage();
+    await flushPromises();
+    const first = wrapper.findComponent(ViewBrowseStub);
+    expect(hoisted.listViews).toHaveBeenCalledTimes(1);
+    await (wrapper.vm as unknown as { refreshResults(): Promise<void> }).refreshResults();
+    await flushPromises();
+    const after = wrapper.findComponent(ViewBrowseStub);
+    expect(after.vm).toBe(first.vm);
+    expect(after.props("refreshKey")).toBe(1);
+    expect(hoisted.listViews).toHaveBeenCalledTimes(1);
+    expect(hoisted.listAllViewColumns).toHaveBeenCalledTimes(2); // 刷新时也重读列
+
+    // 成员启停（成员键不变）也重读列：启用时后端才补结果列
+    const enabledCalls = hoisted.listAllViewColumns.mock.calls.length;
+    (hoisted.store.tasks as FactorTaskInfo[])[0].members[0].status = "disabled";
+    await flushPromises();
+    expect(hoisted.listAllViewColumns.mock.calls.length).toBe(enabledCalls + 1);
+
+    const columnsCalls = hoisted.listAllViewColumns.mock.calls.length;
+    (hoisted.store.tasks as FactorTaskInfo[])[0].members.push(member("macd", ["macd"]));
+    await flushPromises();
+    expect(hoisted.listAllViewColumns.mock.calls.length).toBe(columnsCalls + 1);
+    expect(hoisted.listViews).toHaveBeenCalledTimes(1);
+    expect(wrapper.findComponent(ViewBrowseStub).vm).toBe(first.vm);
   });
 
   it("列元数据就绪前不放行查询；就绪后只投影行情列，搜索只含行情列", async () => {
@@ -211,7 +238,7 @@ describe("因子结果页", () => {
     expect(browse.props("searchColumns")).toEqual(["close", "request_id"]);
   });
 
-  it("关联了策略实例的因子任务按外显设置收窄范围：隐藏的分类不能用于条件", async () => {
+  it("关联了策略实例的计算任务按外显设置收窄范围：隐藏的分类不能用于条件", async () => {
     Object.assign(hoisted.store, { tasks: [taskInfo("a", "inst-1")] });
     hoisted.getDisplay.mockResolvedValue({ categories: ["momentum"], members: [], columns: ["open"] });
     hoisted.route.query = { tab: "results", task: "a", fc: JSON.stringify([["rsi", "gt", 70]]) };

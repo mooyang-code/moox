@@ -8,25 +8,25 @@
           <template #action><a-button size="mini" @click="reload">重试</a-button></template>
         </a-alert>
 
-        <a-empty v-if="!tabs.length && !store.loading" description="暂无计算任务">
+        <a-empty v-if="!available.length && !store.loading" description="暂无计算任务">
           <template #extra>
             <a-button @click="goTasks">前往计算任务</a-button>
           </template>
         </a-empty>
 
-        <template v-else-if="tabs.length">
+        <template v-else-if="available.length">
           <div class="result-toolbar">
-            <span class="result-count"
-              >共 {{ tabs.length }} 个计算任务<span v-if="readAt">；状态读取：{{ readAt }}</span></span
-            >
+            <a-space wrap>
+              <TaskSelect :model-value="activeTaskId" :include="isResultTask" @change="onTabChange" />
+              <span class="result-count"
+                >共 {{ available.length }} 个计算任务<span v-if="readAt">；任务状态读取于 {{ readAt }}</span></span
+              >
+            </a-space>
             <a-button :loading="viewLoading" @click="refreshResults">
               <template #icon><icon-refresh /></template>
               刷新结果
             </a-button>
           </div>
-          <a-tabs v-model:active-key="activeTaskId" type="rounded" size="medium" class="result-tabs" @change="onTabChange">
-            <a-tab-pane v-for="tab in tabs" :key="tab.taskId" :title="tab.title" />
-          </a-tabs>
 
           <a-alert v-if="scopeError" type="error" show-icon class="results-alert">
             {{ scopeError }}
@@ -36,7 +36,7 @@
           <ViewBrowse
             v-if="resultView"
             :key="`${resultView.space_id}/${resultView.view_id}`"
-            :embedded="true"
+            :zone="displayZone"
             :view-ids="[resultView.view_id]"
             :active-view-id="resultView.view_id"
             :refresh-key="refreshKey"
@@ -103,6 +103,8 @@
 </template>
 
 <script setup lang="ts">
+import { useDisplayZone } from "@/hooks/useDisplayZone";
+import { formatInstant } from "@/utils/time-zone";
 import { computed, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { Message } from "@arco-design/web-vue";
@@ -114,8 +116,9 @@ import { getStrategyDisplaySettings } from "@/api/strategy";
 import type { DisplayHidden } from "@/api/strategy-types";
 import { RequestGate } from "@/utils/request-gate";
 import ViewBrowse from "@/views/data/view-browse/index.vue";
+import TaskSelect from "@/views/factor/shared/task-select.vue";
 import { useFactorScope } from "@/views/factor/shared/use-factor-scope";
-import { pickResultView, resolveActiveTaskId, resultTasks, resultSummary, resultTabTitle } from "./results-model";
+import { pickResultView, resolveActiveTaskId, resultTasks, resultSummary } from "./results-model";
 import { buildFactorScope } from "./factor-scope";
 import { decodeConditions, encodeConditions, toFilterState, type FactorCondition } from "./factor-condition";
 import {
@@ -132,22 +135,20 @@ import ColumnSettingsDrawer from "./column-settings-drawer.vue";
 
 defineOptions({ name: "FactorResults" });
 
+// 页面时间按当前空间登记的时区显示
+const displayZone = useDisplayZone();
 const route = useRoute();
 const router = useRouter();
 const { store, spaceId, selectTask, navigate, reload } = useFactorScope({ requireSet: true });
 
 const available = computed<FactorTaskInfo[]>(() => resultTasks(store.tasks));
-const tabs = computed(() =>
-  available.value.map((info: FactorTaskInfo) => ({
-    taskId: info.factor_task.task_id,
-    title: resultTabTitle(info, store.taskLabel(info.factor_task))
-  }))
-);
+// 任务下拉只列能浏览结果的任务（和补算页同一个下拉组件）
+const isResultTask = (info: FactorTaskInfo) => resultTasks([info]).length > 0;
 const activeTaskId = ref("");
 const activeInfo = computed(() =>
   available.value.find((item: FactorTaskInfo) => item.factor_task.task_id === activeTaskId.value)
 );
-const summary = computed(() => resultSummary(activeInfo.value ?? {}));
+const summary = computed(() => resultSummary(activeInfo.value ?? {}, displayZone.value));
 
 const resultView = ref<View | null>(null);
 const viewLoading = ref(false);
@@ -186,7 +187,7 @@ const valuesVisible = ref(false);
 const valuesRowKey = ref<TimeSeriesKey>();
 
 function stamp() {
-  readAt.value = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+  readAt.value = formatInstant(Date.now(), displayZone.value, "clock");
 }
 
 async function loadResultView() {
@@ -271,10 +272,33 @@ function onTabChange(key: string | number) {
   selectTask(String(key));
 }
 
+/**
+ * “刷新结果”：重读任务状态和视图列，表格只重读行（不重建视图浏览，筛选保留）；视图还没有时才重新找视图。
+ * 视图列也要重读：成员启用时后端才补结果列，可能比成员状态晚一步。
+ */
 async function refreshResults() {
   await store.reload();
-  await loadResultView();
+  if (!resultView.value) {
+    await loadResultView();
+    return;
+  }
+  await reloadViewColumns();
   refreshKey.value += 1;
+}
+
+/** 成员变了（添加、移除、启停）：结果列跟着变，只重读视图列，不重建视图浏览。 */
+let columnsSeq = 0;
+async function reloadViewColumns() {
+  const current = activeInfo.value?.factor_task;
+  const view = resultView.value;
+  if (!current || !view || !scopeReady.value) return;
+  const seq = ++columnsSeq;
+  try {
+    const columns = await listAllViewColumns(current.space_id, view.view_id);
+    if (seq === columnsSeq && resultView.value?.view_id === view.view_id) viewColumns.value = columns;
+  } catch {
+    // 读不到时沿用上次的列，下次成员变化或点“刷新结果”时再读。
+  }
 }
 
 function goTasks() {
@@ -306,6 +330,13 @@ watch(
 );
 
 watch(() => store.tasks, stamp, { immediate: true });
+watch(
+  // 启用时后端才补结果列，所以状态也算在内
+  () => (activeInfo.value?.members ?? []).map(member => `${member.member_key || member.factor_id}:${member.status}`).join(","),
+  (keys, previous) => {
+    if (previous !== undefined && keys !== previous) void reloadViewColumns();
+  }
+);
 </script>
 
 <style scoped lang="scss">
@@ -321,15 +352,6 @@ watch(() => store.tasks, stamp, { immediate: true });
 
 .results-alert {
   margin-bottom: var(--moox-space-3);
-}
-
-.result-tabs {
-  min-width: 0;
-  margin-bottom: var(--moox-space-3);
-}
-
-.result-tabs :deep(.arco-tabs-content) {
-  display: none;
 }
 
 .results-loading {

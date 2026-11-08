@@ -1,11 +1,15 @@
 <template>
-  <component
-    :is="packageManageContainer"
-    v-bind="packageManageContainerProps"
+  <!-- 从执行器页打开：外层用抽屉，里面还会再打开“上传”“代码包详情”弹窗，免得弹窗叠弹窗 -->
+  <a-drawer
+    :visible="visible"
+    title="代码包版本管理"
+    width="min(1200px, 100vw)"
+    :mask-closable="false"
+    :footer="false"
     @update:visible="handlePackageManageVisibleChange"
     @cancel="handleCancel"
   >
-    <div class="function-package-manage" :class="{ 'moox-inner': standalone }">
+    <div class="function-package-manage">
       <!-- 搜索区域 -->
       <div class="package-toolbar">
         <a-space class="package-filters" wrap>
@@ -65,7 +69,7 @@
           </a-table-column>
           <a-table-column title="状态" data-index="status" :width="100">
             <template #cell="{ record }">
-              <a-tag :color="getStatusColor(record.status)">
+              <a-tag :color="getPackageStatusColor(record.status)">
                 {{ getPackageStatusLabel(record.status) }}
               </a-tag>
             </template>
@@ -247,115 +251,15 @@
     </a-modal>
 
     <!-- 代码包详情弹窗 -->
-    <a-modal
-      v-model:visible="detailVisible"
-      title="代码包详情"
-      :width="800"
-      :mask-closable="false"
-      :footer="false"
-      @cancel="handleDetailCancel"
-    >
-      <div v-if="packageDetail" class="package-detail">
-        <!-- 基本信息 -->
-        <a-descriptions title="基本信息" :column="2" bordered size="medium" style="margin-bottom: var(--moox-space-4)">
-          <a-descriptions-item label="代码包名称">{{ packageDetail.package_name }}</a-descriptions-item>
-          <a-descriptions-item label="版本">{{ packageDetail.version }}</a-descriptions-item>
-          <a-descriptions-item label="类型">
-            <a-tag :color="getPackageTypeColor(packageDetail.package_type)">
-              {{ getPackageTypeLabel(packageDetail.package_type) }}
-            </a-tag>
-          </a-descriptions-item>
-          <a-descriptions-item label="运行时环境">{{ packageDetail.runtime }}</a-descriptions-item>
-          <a-descriptions-item label="文件大小">{{ formatFileSize(packageDetail.file_size) }}</a-descriptions-item>
-          <a-descriptions-item label="状态">
-            <a-tag :color="getStatusColor(packageDetail.status)">
-              {{ getPackageStatusLabel(packageDetail.status) }}
-            </a-tag>
-          </a-descriptions-item>
-          <a-descriptions-item label="文件MD5" :span="2">
-            <a-typography-text copyable>{{ packageDetail.file_md5 || "-" }}</a-typography-text>
-          </a-descriptions-item>
-          <a-descriptions-item label="描述" :span="2">
-            {{ packageDetail.description || "-" }}
-          </a-descriptions-item>
-        </a-descriptions>
-
-        <!-- 存储信息 -->
-        <a-descriptions title="存储信息" :column="2" bordered size="medium" style="margin-bottom: var(--moox-space-4)">
-          <a-descriptions-item label="云账户">
-            {{ packageDetail.cloud_account_id || "本地存储" }}
-          </a-descriptions-item>
-          <a-descriptions-item label="存储类型">
-            <a-tag :color="packageDetail.cos_bucket === 'local' ? 'orange' : 'blue'">
-              {{ packageDetail.cos_bucket === "local" ? "本地存储" : "COS存储" }}
-            </a-tag>
-          </a-descriptions-item>
-          <a-descriptions-item label="COS地区">
-            {{ packageDetail.cos_region || "-" }}
-          </a-descriptions-item>
-          <a-descriptions-item label="COS桶">
-            {{ packageDetail.cos_bucket === "local" ? "-" : packageDetail.cos_bucket || "-" }}
-          </a-descriptions-item>
-          <a-descriptions-item label="存储路径" :span="2">
-            <a-typography-text copyable v-if="packageDetail.cos_path">
-              {{ packageDetail.cos_path }}
-            </a-typography-text>
-            <span v-else>-</span>
-          </a-descriptions-item>
-        </a-descriptions>
-
-        <!-- 时间信息 -->
-        <a-descriptions title="时间信息" :column="2" bordered size="medium">
-          <a-descriptions-item label="创建者">{{ packageDetail.created_by }}</a-descriptions-item>
-          <a-descriptions-item label="创建时间">{{ formatTime(packageDetail.created_time) }}</a-descriptions-item>
-          <a-descriptions-item label="最后部署时间" :span="2">
-            {{ packageDetail.last_deploy_time ? formatTime(packageDetail.last_deploy_time) : "-" }}
-          </a-descriptions-item>
-        </a-descriptions>
-
-        <div style="margin-top: var(--moox-space-4); text-align: right">
-          <a-space>
-            <a-button @click="handleDetailCancel">关闭</a-button>
-            <a-button
-              type="primary"
-              status="success"
-              @click="onDownload(packageDetail)"
-              :disabled="Number(packageDetail.status) !== PACKAGE_STATUS_AVAILABLE"
-              :loading="
-                downloadProgress[packageDetail.package_id] !== undefined && downloadProgress[packageDetail.package_id] < 100
-              "
-            >
-              <template #icon>
-                <icon-download />
-              </template>
-              <span
-                v-if="
-                  downloadProgress[packageDetail.package_id] !== undefined && downloadProgress[packageDetail.package_id] < 100
-                "
-              >
-                下载中...
-              </span>
-              <span v-else>下载</span>
-            </a-button>
-          </a-space>
-        </div>
-      </div>
-      <div v-else style="text-align: center; padding: var(--moox-space-8)">
-        <a-spin :loading="true" />
-        <div style="margin-top: var(--moox-space-4)">加载中...</div>
-      </div>
-    </a-modal>
-  </component>
+    <FunctionPackageDetail v-model:visible="detailVisible" :package-id="detailPackageId" />
+  </a-drawer>
 </template>
 
 <script setup lang="ts">
-// PackageStatus 枚举：2 = 可用（已上传完成）。
-const PACKAGE_STATUS_AVAILABLE = 2;
-import { ref, watch, reactive, computed, onMounted } from "vue";
-import { Message, Modal } from "@arco-design/web-vue";
+import { ref, watch, reactive, computed } from "vue";
+import { Message } from "@arco-design/web-vue";
 import {
   getFunctionPackageList,
-  getFunctionPackageDetail,
   uploadFunctionPackage,
   deleteFunctionPackage,
   downloadPackageByURL,
@@ -363,8 +267,6 @@ import {
   PACKAGE_TYPE_OPTIONS,
   resolvePackageType,
   STATUS_OPTIONS,
-  PACKAGE_STATUS_LABEL,
-  PACKAGE_TYPE_LABEL,
   type FunctionPackage,
   type PackageListRequest
 } from "@/api/function-package";
@@ -372,12 +274,21 @@ import { getCloudAccountList, type CloudAccount } from "@/api/cloud-account";
 import { useSpaceStore } from "@/store/modules/space";
 import { selectedSpaceGeneration } from "@/api/admin/space-header";
 import { createLatestRequestGuard } from "@/utils/latest-request";
-import { StaleSpaceRequestError } from "@/api/admin/stale-space";
+import FunctionPackageDetail from "./function-package-detail.vue";
+import {
+  PACKAGE_STATUS_AVAILABLE,
+  formatDateTime,
+  formatFileSize,
+  getPackageStatusColor,
+  getPackageStatusLabel,
+  getPackageTypeColor,
+  getPackageTypeLabel,
+  getProviderName
+} from "./function-instance-model";
 
 // Props
 const props = defineProps<{
   modelValue?: boolean;
-  mode?: "page" | "modal";
   packageType?: string | number; // 用于过滤代码包类型
   workloadType?: string; // 用于过滤业务类型
 }>();
@@ -393,25 +304,7 @@ const spaceStore = useSpaceStore();
 const listGuard = createLatestRequestGuard();
 // 上传提交序号：取消/关闭/重新打开上传弹窗、切换空间都会使进行中的提交失效
 let uploadSubmitToken = 0;
-const packageManageMode = computed(() => props.mode || "page");
-const standalone = computed(() => packageManageMode.value === "page");
-const visible = ref(standalone.value ? true : props.modelValue);
-const packageManageContainer = computed(() => (standalone.value ? "div" : Modal));
-const packageManageContainerProps = computed(() => {
-  if (standalone.value) {
-    return {
-      class: "moox-page function-package-page"
-    };
-  }
-
-  return {
-    visible: visible.value,
-    title: "代码包版本管理",
-    width: 1200,
-    maskClosable: false,
-    footer: false
-  };
-});
+const visible = ref(props.modelValue);
 const loading = ref(false);
 const packageList = ref<FunctionPackage[]>([]);
 const cloudAccountOptions = ref<CloudAccount[]>([]);
@@ -423,7 +316,7 @@ const fileList = ref<any[]>([]);
 
 // 详情弹窗
 const detailVisible = ref(false);
-const packageDetail = ref<FunctionPackage | null>(null);
+const detailPackageId = ref("");
 
 // 版本验证状态
 const versionValidationStatus = ref<"error" | "warning" | "success" | undefined>(undefined);
@@ -467,7 +360,6 @@ const uploadForm = reactive({ ...defaultUploadForm });
 watch(
   () => props.modelValue,
   async newVal => {
-    if (standalone.value) return;
     visible.value = newVal;
     if (newVal) {
       await initializePackageManage();
@@ -476,10 +368,8 @@ watch(
 );
 
 watch(visible, newVal => {
-  if (!standalone.value) {
-    emit("update:modelValue", newVal);
-    if (!newVal) resetForSpace();
-  }
+  emit("update:modelValue", newVal);
+  if (!newVal) resetForSpace();
 });
 
 // 关闭弹窗或切换空间：作废在途请求，清空列表与详情，避免组件常驻时重新打开看到其他空间的数据
@@ -487,12 +377,10 @@ function resetForSpace() {
   uploadSubmitToken += 1;
   uploading.value = false;
   listGuard.invalidate();
-  detailGuard.invalidate();
   loading.value = false;
   packageList.value = [];
   total.value = 0;
   detailVisible.value = false;
-  packageDetail.value = null;
 }
 
 watch(
@@ -501,19 +389,13 @@ watch(
     if (spaceId === oldSpaceId) return;
     resetForSpace();
     searchForm.page = 1;
-    if (standalone.value || visible.value) void loadPackageList();
+    if (visible.value) void loadPackageList();
   }
 );
 
 const handlePackageManageVisibleChange = (newVal: boolean) => {
   visible.value = newVal;
 };
-
-onMounted(async () => {
-  if (standalone.value) {
-    await initializePackageManage();
-  }
-});
 
 const initializePackageManage = async () => {
   if (props.workloadType) {
@@ -969,126 +851,16 @@ const handleCancel = () => {
 };
 
 // 显示代码包详情
-const detailGuard = createLatestRequestGuard();
-const onShowDetail = async (record: FunctionPackage) => {
-  const request = detailGuard.begin();
-  packageDetail.value = null;
+const onShowDetail = (record: FunctionPackage) => {
+  detailPackageId.value = record.package_id;
   detailVisible.value = true;
-
-  try {
-    const detail = await getFunctionPackageDetail(record.package_id);
-    if (!request.isLatest()) return;
-    if (detail) {
-      packageDetail.value = detail;
-    } else {
-      throw new Error("获取详情失败");
-    }
-  } catch (error) {
-    // 切换空间造成的取消、或已被新的详情请求取代：不弹失败提示，也不关闭新的详情
-    if (error instanceof StaleSpaceRequestError || !request.isLatest()) return;
-    console.error("获取代码包详情失败:", error);
-    Message.error({
-      content: "获取代码包详情失败",
-      duration: 5000
-    });
-    detailVisible.value = false;
-  }
 };
 
-// 关闭详情弹窗
-const handleDetailCancel = () => {
-  detailGuard.invalidate();
-  detailVisible.value = false;
-  packageDetail.value = null;
-};
-
-// 工具函数
-const getProviderName = (provider: string) => {
-  const providerMap: Record<string, string> = {
-    tencent: "腾讯云",
-    aliyun: "阿里云",
-    aws: "AWS"
-  };
-  return providerMap[provider] || provider;
-};
-
-const getPackageTypeColor = (packageType: number | string) => {
-  const normalized = String(packageType);
-  const colorMap: Record<string, string> = {
-    "1": "blue",
-    "2": "green",
-    "3": "gray",
-    PACKAGE_TYPE_COLLECTOR: "blue",
-    PACKAGE_TYPE_FACTOR: "green",
-    PACKAGE_TYPE_CUSTOM: "gray",
-    data_collector: "blue",
-    factor_calculator: "green"
-  };
-  return colorMap[normalized] || "gray";
-};
-
-const getStatusColor = (status: number | string) => {
-  const colorMap: Record<number, string> = {
-    1: "blue",
-    2: "green",
-    3: "red",
-    4: "gray"
-  };
-  const numeric = typeof status === "number" ? status : Number(status);
-  return colorMap[numeric] || "gray";
-};
-
-const getPackageStatusLabel = (status: number | string) => {
-  const numeric = typeof status === "number" ? status : Number(status);
-  const enumMap: Record<number, string> = {
-    1: "PACKAGE_STATUS_PENDING",
-    2: "PACKAGE_STATUS_AVAILABLE",
-    3: "PACKAGE_STATUS_FAILED",
-    4: "PACKAGE_STATUS_DELETED"
-  };
-  const key = enumMap[numeric] || "PACKAGE_STATUS_UNSPECIFIED";
-  return PACKAGE_STATUS_LABEL[key] || "未知";
-};
-
-const getPackageTypeLabel = (packageType: number | string) => {
-  if (typeof packageType === "string" && PACKAGE_TYPE_LABEL[packageType]) {
-    return PACKAGE_TYPE_LABEL[packageType];
-  }
-  const numeric = typeof packageType === "number" ? packageType : Number(packageType);
-  const enumMap: Record<number, string> = {
-    1: "PACKAGE_TYPE_COLLECTOR",
-    2: "PACKAGE_TYPE_FACTOR",
-    3: "PACKAGE_TYPE_CUSTOM"
-  };
-  const key = enumMap[numeric] || "PACKAGE_TYPE_UNSPECIFIED";
-  return PACKAGE_TYPE_LABEL[key] || String(packageType);
-};
-
-const formatFileSize = (size: number) => {
-  if (size < 1024) return size + "B";
-  if (size < 1024 * 1024) return (size / 1024).toFixed(1) + "KB";
-  if (size < 1024 * 1024 * 1024) return (size / (1024 * 1024)).toFixed(1) + "MB";
-  return (size / (1024 * 1024 * 1024)).toFixed(1) + "GB";
-};
-
-const formatTime = (time: string | undefined) => {
-  if (!time) return "-";
-  return new Date(time).toLocaleString("zh-CN", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit"
-  });
-};
+// 代码包、云账户是全局对象：时间按 UTC 带后缀
+const formatTime = (time: string | undefined) => formatDateTime(time, "UTC");
 </script>
 
 <style scoped>
-.function-package-page {
-  min-height: 100%;
-}
-
 .function-package-manage {
   min-height: 600px;
 }
@@ -1146,20 +918,5 @@ const formatTime = (time: string | undefined) => {
 
 :deep(.arco-form-item-status-success .arco-form-item-feedback) {
   color: #00b42a;
-}
-
-/* 加载动画 */
-@keyframes spin {
-  0% {
-    transform: rotate(0deg);
-  }
-  100% {
-    transform: rotate(360deg);
-  }
-}
-
-.spinning-icon {
-  animation: spin 1s linear infinite;
-  display: inline-block;
 }
 </style>

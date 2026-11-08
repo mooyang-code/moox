@@ -9,9 +9,7 @@ import {
   jobSegments,
   jobStatusInfo,
   normalizeSegment,
-  quickRange,
-  toRFC3339,
-  utcText
+  quickRange
 } from "./backfill-model";
 
 describe("collector backfill helpers", () => {
@@ -36,14 +34,11 @@ describe("collector backfill helpers", () => {
     expect(jobActive(job)).toBe(false);
   });
 
-  it("formats UTC times and parses time input as UTC", () => {
-    const now = new Date("2026-10-15T12:00:00Z");
-    expect(utcText("2026-10-15T08:30:00Z", now)).toBe("10-15 08:30");
-    expect(utcText("2025-01-02T03:04:00Z", now)).toBe("2025-01-02 03:04");
-    expect(quickRange(1, new Date("2026-10-15T12:34:56Z"))).toEqual(["2026-10-15 11:34", "2026-10-15 12:34"]);
-    expect(toRFC3339("2026-10-12 08:00")).toBe("2026-10-12T08:00:00Z");
-    expect(toRFC3339("")).toBeNull();
-    expect(toRFC3339("not-a-time")).toBeNull();
+  it("快捷范围是取整到分钟的两个时刻，和显示时区无关", () => {
+    expect(quickRange(1, Date.parse("2026-10-15T12:34:56Z"))).toEqual([
+      Date.parse("2026-10-15T11:34:00Z"),
+      Date.parse("2026-10-15T12:34:00Z")
+    ]);
   });
 });
 
@@ -56,7 +51,9 @@ describe("collector backfill page", () => {
     expect(page).toContain("共 {{ total }} 条补采作业");
     expect(page).toContain('placeholder="全部数据集"');
     expect(page).toContain('v-for="item in JOB_SEGMENTS"');
-    expect(page).toContain("listKlineBackfills(space, filterOf(), page.value, pageSize)");
+    expect(page).toContain(
+      "listKlineBackfills(space, filterOf(), page.value, pageSize, { silentError: Boolean(options.silent) })"
+    );
     expect(page).toContain('fixed="right"');
   });
 
@@ -72,10 +69,24 @@ describe("collector backfill page", () => {
     expect(page).toContain("jobDatasetText(record)");
   });
 
-  it("uses a UTC range picker and can backfill the checked gaps", () => {
-    expect(dialog).toContain("a-range-picker");
-    expect(dialog).toContain("时间范围（UTC");
+  it("按空间时区选范围，并能补采检查出的缺口", () => {
+    expect(dialog).toContain("<ZonedRangePicker");
+    expect(dialog).toContain(':zone="displayZone"');
     expect(dialog).toContain("补采这些缺口");
     expect(dialog).toContain('emit("submitted", created.job_id)');
+  });
+});
+
+describe("大范围补采的确认摘要", () => {
+  it("没选数据集或整段重拉时给出摘要，只补一个数据集的缺口时不用确认", async () => {
+    const { backfillScopeSummary } = await import("./backfill-model");
+    const base = { datasetCount: 12, subjectId: "", from: "2026-11-01T00:00:00Z", to: "2026-11-08T00:00:00Z" };
+    expect(backfillScopeSummary({ ...base, datasetLabel: "现货K线", force: false })).toBeNull();
+    expect(backfillScopeSummary({ ...base, datasetLabel: "", force: false })).toBe(
+      "补采范围：全部 12 个数据集、全部标的，共 7 天；只补缺口。"
+    );
+    expect(
+      backfillScopeSummary({ ...base, datasetLabel: "现货K线", subjectId: "BTCUSDT", to: "2026-11-01T06:00:00Z", force: true })
+    ).toBe("补采范围：数据集「现货K线」、标的 BTCUSDT，共 6 小时；范围内应有的 K 线全部重拉（不检查缺口）。");
   });
 });

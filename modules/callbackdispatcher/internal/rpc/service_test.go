@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"path/filepath"
 	"strings"
@@ -98,6 +99,15 @@ func TestSubscribableEventsCatalog(t *testing.T) {
 		fields = append(fields, field.Field)
 	}
 	require.Equal(t, []string{"exchange", "market", "exchange_symbol"}, fields)
+
+	// 示例是完整的请求体（和推送给通知地址的一致），字段说明随事件返回。
+	for _, event := range rsp.Events {
+		var body map[string]any
+		require.NoError(t, json.Unmarshal([]byte(event.SampleJson), &body), event.EventName)
+		require.Equal(t, event.EventName, body["event"])
+		require.IsType(t, map[string]any{}, body["data"], event.EventName)
+		require.NotEmpty(t, event.PayloadFields, event.EventName)
+	}
 }
 
 // 系统动作的处理器注册之前，目录里不列它：管理台据此提示“系统动作尚未启用，只记录”。

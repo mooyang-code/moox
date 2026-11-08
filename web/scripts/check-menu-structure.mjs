@@ -60,6 +60,7 @@ function assertNotVisible(name) {
 const dataCollection = findDirectory("compute-collector");
 const factorCompute = findDirectory("factor-compute");
 const trading = findDirectory("trading");
+const eventCenter = findDirectory("events");
 const ops = findDirectory("ops");
 
 assert(zhCN.includes('["compute-collector"]: "数据采集"'), "compute-collector zh-CN label must be 数据采集");
@@ -71,16 +72,29 @@ assert(zhCN.includes('["factor-tasks"]: "计算任务"'), "factor-tasks zh-CN la
 
 assertNotVisible("data-assets");
 assert(dataCollection.parentId === "0", "compute-collector must be a root menu");
-assert(dataCollection.path === "/data/sources", "compute-collector default path must be /data/sources");
+assert(dataCollection.path === "/collector/tasks", "compute-collector default path must be /collector/tasks");
 assert(factorCompute.parentId === "0", "factor-compute must be a root menu");
 assert(factorCompute.sort > dataCollection.sort, "factor-compute must appear after data collection");
 assert(factorCompute.sort < trading.sort, "factor-compute must appear before trading");
 assert(ops.path === "/ops/monitor", "ops default path must be /ops/monitor");
+// 事件中心是根菜单，排在交易之后、运维之前；三个子页依次是事件订阅、处理记录、下架处理
+assert(eventCenter.parentId === "0", "events must be a root menu");
+assert(trading.sort < eventCenter.sort && eventCenter.sort < ops.sort, "events must appear after trading and before ops");
+const eventMenus = ["events-subscriptions", "events-executions", "events-delist"].map(name => findMenu(name));
+for (const item of eventMenus) assert(item.parentId === eventCenter.id, `${item.title} must be under events`);
+assert(
+  eventMenus.every((item, index) => index === 0 || item.sort > eventMenus[index - 1].sort),
+  "event center menus must be ordered subscriptions -> executions -> delist"
+);
+assert(!staticMenu.includes("settings-events"), "event center must not remain under settings");
 const monitor = findMenu("ops-monitor");
 const deployments = findMenu("ops-deployments");
 const hosts = findMenu("ops-hosts");
 for (const item of [monitor, deployments, hosts]) assert(item.parentId === ops.id, `${item.menuName} must be under ops`);
-assert(monitor.sort < deployments.sort && deployments.sort < hosts.sort, "monitor, deployments and hosts must keep their intended order");
+assert(
+  monitor.sort < deployments.sort && deployments.sort < hosts.sort,
+  "monitor, deployments and hosts must keep their intended order"
+);
 assert(!staticMenu.includes("ops-services"), "retired service management menu must be absent");
 assert(staticMenu.includes('svgIcon: "experiment"'), "factor icon must be unique");
 assert(staticMenu.includes('svgIcon: "mind-mapping"'), "strategy icon must be unique");
@@ -122,8 +136,32 @@ assert(dataSubjects.sort < dataFields.sort, "subjects must appear before base fi
 const collectorTasks = findMenu("collector-tasks");
 assert(collectorTasks.parentId === dataCollection.id, "collector-tasks must be under data collection");
 assert(collectorTasks.path === "/collector/tasks", "collector-tasks path must be canonical");
-assert(dataFields.sort < collectorTasks.sort, "base fields must appear before collection tasks");
+// 采集任务排第一（数据归档紧跟其后，见下），数据源、数据对象、基础字段排在后面
+assert(collectorTasks.sort < dataSources.sort, "collection tasks must appear before data sources");
 assert(routes.includes('path: "/collector/tasks"'), "collector tasks route must exist");
+
+// 数据归档紧跟采集任务：按 sort 排序后两者相邻、它在后；不写死 sort 数值，目录里调整顺序时不用改这里。
+const dataArchive = findMenu("data-archive");
+assert(dataArchive.parentId === dataCollection.id, "data-archive must be under data collection");
+assert(dataArchive.path === "/data/archive", "data-archive path must be /data/archive");
+assert(zhCN.includes('["data-archive"]: "数据归档"'), "data-archive zh-CN label must be 数据归档");
+const collectionMenus = [
+  ...staticMenu.matchAll(
+    new RegExp(String.raw`menu\(\s*"[^"]+",\s*"${dataCollection.id}",\s*"[^"]+",\s*"([^"]+)",\s*"[^"]+",\s*"[^"]+",\s*(\d+)`, "g")
+  )
+]
+  .map(match => ({ name: match[1], sort: Number(match[2]) }))
+  .sort((a, b) => a.sort - b.sort)
+  .map(item => item.name);
+assert(
+  collectionMenus.indexOf("data-archive") === collectionMenus.indexOf("collector-tasks") + 1,
+  "data-archive must come right after collector-tasks"
+);
+assert(/menu\("0309"[^)]*reuseOnQuery: true/.test(staticMenu), "data-archive menu must declare reuseOnQuery");
+assert(
+  /path: "\/data\/archive",[^}]*meta: \{[^}]*reuseOnQuery: true/.test(routes),
+  "data-archive route must declare reuseOnQuery"
+);
 const collectorTabOrder = ["采集任务", "采集结果", "运行状态", "执行器", "补采"].map(label =>
   collectorTaskWorkbench.indexOf(`label: "${label}"`)
 );

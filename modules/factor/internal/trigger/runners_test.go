@@ -83,9 +83,12 @@ func TestRunnerHoldsTaskLockDuringRun(t *testing.T) {
 		return pipeline.Outcome{}, nil
 	})
 	require.NoError(t, err)
-	locks.mu.Lock()
-	require.Zero(t, locks.active["set-a"])
-	locks.mu.Unlock()
+	// 结果先送回、任务锁随后在 runJob 的 defer 里释放：等它释放，且断言时不持有 locks.mu（持有着失败会让 Close 卡死）。
+	require.Eventually(t, func() bool {
+		locks.mu.Lock()
+		defer locks.mu.Unlock()
+		return locks.active["set-a"] == 0
+	}, time.Second, time.Millisecond)
 }
 
 func TestRunnerStatusReportsActiveAndQueuedPeriods(t *testing.T) {

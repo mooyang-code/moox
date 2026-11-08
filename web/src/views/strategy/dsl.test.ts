@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { mixedMarketTemplate, parseDSL, poolTemplate, rankedTemplate, signalTemplate, summarizeDSL, tunedTemplate } from "./dsl";
+import {
+  isPoolStrategy,
+  mixedMarketTemplate,
+  parseDSL,
+  poolTemplate,
+  rankedTemplate,
+  signalTemplate,
+  summarizeDSL,
+  tunedTemplate
+} from "./dsl";
 
 describe("strategy DSL preview", () => {
   it("parses the v3 templates without diagnostics", () => {
@@ -84,8 +93,8 @@ rules:
 });
 
 describe("market 预览", () => {
-  it("没写 market 时按因子任务的市场，写了就说明选币范围与下单市场", () => {
-    expect(parseDSL(rankedTemplate).preview?.market).toBe("按因子任务的市场");
+  it("没写 market 时按计算任务的市场，写了就说明选币范围与下单市场", () => {
+    expect(parseDSL(rankedTemplate).preview?.market).toBe("按计算任务的市场");
     expect(parseDSL("name: a\nmarket: {select: spot}\nrules:\n  - {id: r, type: rank}\n").preview?.market).toBe("选币范围 现货");
     expect(parseDSL(mixedMarketTemplate).preview?.market).toBe("选币范围 现货与永续，优先在永续下单");
   });
@@ -184,7 +193,7 @@ describe("策略池", () => {
     );
     expect(list).toEqual(
       expect.arrayContaining([
-        "策略池不写 market：成员各自显式写 market，池要绑定的因子任务是成员所需市场的并集",
+        "策略池不写 market：成员各自显式写 market，池要绑定的计算任务是成员所需市场的并集",
         "策略池必须写 bar：成员的周期要与池一致",
         "策略池不写 universe：标的范围由各成员自己的 universe 决定",
         "策略池不支持 factor_params：多个成员可能给同一个可变成员写参数，会冲突"
@@ -194,5 +203,15 @@ describe("策略池", () => {
 
   it("什么都没写时提示可以写 strategy_pool", () => {
     expect(messages("name: a\n")).toContain("rules 必须是非空列表，每条规则包含 id 与 type（策略池请写 strategy_pool）");
+  });
+});
+
+describe("策略池判断（回放入口据此禁用）", () => {
+  it("策略池为真；普通策略、空文本、解析失败的为假", () => {
+    expect(isPoolStrategy(poolTemplate)).toBe(true);
+    expect(isPoolStrategy(rankedTemplate)).toBe(false);
+    expect(isPoolStrategy("")).toBe(false);
+    expect(isPoolStrategy(undefined)).toBe(false);
+    expect(isPoolStrategy("name: [")).toBe(false);
   });
 });

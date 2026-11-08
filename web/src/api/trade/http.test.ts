@@ -13,7 +13,8 @@ import {
   isTradeInvalidParam,
   isTradeNotFound,
   isTradeSessionNotReady,
-  TradeResponseError
+  TradeResponseError,
+  withDialogErrors
 } from "./http";
 
 describe("Trade response errors", () => {
@@ -29,6 +30,29 @@ describe("Trade response errors", () => {
     await expect(callTrade("console", "ListOrders", {})).rejects.toThrow();
     await expect(callTrade("console", "GetOperatorAction", {})).rejects.toThrow();
     await expect(callTrade("console", "SubmitOrder", {}, { silent: true })).rejects.toThrow();
+    expect(messageError).toHaveBeenCalledTimes(1);
+  });
+
+  it("确认对话框提交期间的写操作出错不弹全局提示，结束后恢复", async () => {
+    client.post.mockResolvedValue({ data: { ret_info: { code: 1, msg: "暂停失败" } } });
+    await expect(withDialogErrors(() => callTrade("console", "PauseLogicalAccount", {}))).rejects.toThrow("暂停失败");
+    expect(client.post.mock.calls.at(-1)?.[2]).toEqual({ silentError: true });
+    expect(messageError).not.toHaveBeenCalled();
+    await expect(callTrade("console", "PauseLogicalAccount", {})).rejects.toThrow();
+    expect(messageError).toHaveBeenCalledTimes(1);
+  });
+
+  it("传输错误也听 silent：后台轮询的请求带上 silentError，拦截器据此不弹提示", async () => {
+    client.post.mockResolvedValue({ data: { ret_info: { code: 0 } } });
+    await callTrade("console", "GetLogicalAccount", {}, { silent: true });
+    expect(client.post.mock.calls.at(-1)?.[2]).toEqual({ silentError: true });
+    const onError = client.interceptors.response.use.mock.calls[0][1] as (error: unknown) => Promise<unknown>;
+    // 静默时不弹提示，但网络错误照样改写成中文：下单等对话框会显示 error.message
+    const silentFailure = { config: { silentError: true }, message: "Network Error" };
+    await expect(onError(silentFailure)).rejects.toBeTruthy();
+    expect(messageError).not.toHaveBeenCalled();
+    expect(silentFailure.message).not.toBe("Network Error");
+    await expect(onError({ config: {}, message: "Network Error" })).rejects.toBeTruthy();
     expect(messageError).toHaveBeenCalledTimes(1);
   });
 

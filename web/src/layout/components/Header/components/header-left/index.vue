@@ -7,7 +7,7 @@
         :options="spaceOptions"
         @change="onSpaceChange"
         placeholder="请选择空间"
-        style="width: 220px; margin-left: var(--moox-space-4)"
+        :style="{ width: isMobile ? '150px' : '220px', marginLeft: 'var(--moox-space-4)' }"
         allow-search
         :loading="loading"
       >
@@ -43,7 +43,9 @@
           <a-input v-model="createForm.market" placeholder="如 HK / US / CN" />
         </a-form-item>
         <a-form-item label="时区">
-          <a-input v-model="createForm.timezone" placeholder="如 Asia/Shanghai" />
+          <a-select v-model="createForm.timezone" placeholder="选择时区">
+            <a-option v-for="item in SPACE_TIMEZONES" :key="item.value" :value="item.value">{{ item.label }}</a-option>
+          </a-select>
         </a-form-item>
       </a-form>
     </a-modal>
@@ -51,16 +53,20 @@
 </template>
 
 <script setup lang="ts">
+import { useDevicesSize } from "@/hooks/useDevicesSize";
 import { onMounted, computed, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import ButtonCollapsed from "@/layout/components/Header/components/button-collapsed/index.vue";
 import { useSpaceStore } from "@/store/modules/space";
 import { createSpace } from "@/api/admin/spaces";
 import { createSubmitScope } from "@/utils/submit-scope";
+import { SPACE_TIMEZONES } from "@/utils/space-zones";
 import { storeToRefs } from "pinia";
 import type { Space } from "@/api/admin/types";
 
 const spaceStore = useSpaceStore();
+// 窄屏缩短空间选择框，右侧只留用户菜单，两者不重叠
+const { isMobile } = useDevicesSize();
 const { spaces, selectedSpaceId, loading } = storeToRefs(spaceStore);
 
 const spaceOptions = computed(() => {
@@ -107,6 +113,10 @@ const submitCreate = async (): Promise<boolean> => {
   const name = createForm.name.trim();
   if (!spaceId || !name) {
     Message.warning("请填写空间 ID 和名称");
+    return false;
+  }
+  if (!createForm.timezone) {
+    Message.warning("请选择时区：页面上这个空间的时间按它显示");
     return false;
   }
   const submission = createScope.begin();

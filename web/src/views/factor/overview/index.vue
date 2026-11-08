@@ -39,10 +39,13 @@
                 <a-tag size="small" :color="card.health.color">{{ card.health.label }}</a-tag>
               </header>
               <div class="task-card__chips">
-                <span v-if="!card.chips.length" class="task-card__empty">还没有因子</span>
-                <a-tag v-for="chip in card.chips" :key="chip.factorId" size="small" :color="chip.color">
-                  {{ chip.factorId }} · {{ chip.label }}
-                </a-tag>
+                <span v-if="!card.summary" class="task-card__empty">还没有因子</span>
+                <template v-else>
+                  <span class="task-card__summary">{{ card.summary }}</span>
+                  <span v-for="item in card.abnormal" :key="item.factorId" class="task-card__abnormal">
+                    {{ item.factorId }}：{{ item.text }}
+                  </span>
+                </template>
               </div>
               <footer class="task-card__links">
                 <a-link @click="go(card.links.results)">结果</a-link>
@@ -86,9 +89,8 @@ import { computed, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { listRecalcJobs } from "@/api/factor";
 import type { FactorTask, FactorTaskInfo, RecalcJob } from "@/api/factor/types";
-import { usePolling } from "@/hooks/usePolling";
 import { RequestGate } from "@/utils/request-gate";
-import InfoTip from "@/views/factor/shared/info-tip.vue";
+import InfoTip from "@/components/info-tip/index.vue";
 import { useFactorScope } from "@/views/factor/shared/use-factor-scope";
 import { progressPercent } from "@/views/factor/recalc/recalc-model";
 import { pendingItems, recalcQueryTasks, splitRecalcJobs, statsStrip, taskCards, type RouteTarget } from "./overview-model";
@@ -96,7 +98,8 @@ import { pendingItems, recalcQueryTasks, splitRecalcJobs, statsStrip, taskCards,
 defineOptions({ name: "FactorOverview" });
 
 const router = useRouter();
-const { store, spaceId, reload } = useFactorScope();
+// 补算作业和计算任务、引擎状态同一轮刷新
+const { store, spaceId, reload } = useFactorScope({ extraPoll: () => loadJobs(true) });
 
 const jobs = ref<RecalcJob[]>([]);
 const refreshing = ref(false);
@@ -110,8 +113,8 @@ const running = computed(() => split.value.running);
 const pending = computed(() => pendingItems(sets.value, split.value.failed, labelOf));
 const stats = computed(() => statsStrip(store.engine, running.value.length));
 
-/** ListRecalcJobs 必须带 task_id：只对已启用的计算任务扇出，页面失活时不轮询。 */
-async function loadJobs() {
+/** ListRecalcJobs 必须带 task_id：只对已启用的计算任务扇出。 */
+async function loadJobs(background = false) {
   const token = gate.next();
   const ids = recalcQueryTasks(sets.value);
   if (!ids.length) {
@@ -121,7 +124,10 @@ async function loadJobs() {
   try {
     const results = await Promise.all(
       ids.map(taskId =>
-        listRecalcJobs({ task_id: taskId, statuses: ["accepted", "running", "failed"], page: { page: 1, size: 20 } })
+        listRecalcJobs(
+          { task_id: taskId, statuses: ["accepted", "running", "failed"], page: { page: 1, size: 20 } },
+          { silentError: background }
+        )
       )
     );
     if (gate.isCurrent(token)) jobs.value = results.flatMap(rsp => rsp.jobs || []);
@@ -147,7 +153,6 @@ function recalcTarget(job: RecalcJob): RouteTarget {
   return { path: "/factor/tasks", query: { tab: "recalc", task: job.task_id, job: job.job_id } };
 }
 
-usePolling(loadJobs, 10_000, () => Boolean(spaceId.value));
 watch(
   () => recalcQueryTasks(sets.value).join(","),
   () => void loadJobs(),
@@ -243,9 +248,18 @@ watch(
 
 .task-card__chips {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  flex-direction: column;
+  gap: 2px;
   margin: var(--moox-space-2) 0;
+  font-size: 13px;
+}
+
+.task-card__summary {
+  color: var(--color-text-2);
+}
+
+.task-card__abnormal {
+  color: rgb(var(--warning-6));
 }
 
 .task-card__empty {

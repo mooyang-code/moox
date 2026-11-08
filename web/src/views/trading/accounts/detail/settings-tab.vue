@@ -62,8 +62,9 @@
           </a-table-column>
           <a-table-column title="最近同步" :width="120">
             <template #cell="{ record }"
-              ><span class="tx-muted">{{ fmtClock(record.account.last_sync_at) }}</span></template
-            >
+              ><span class="tx-muted"
+                ><TimeText :value="record.account.last_sync_at" :zone="displayZone" precision="minute" /></span
+            ></template>
           </a-table-column>
           <a-table-column title="操作" :width="190" :fixed="isNarrow ? undefined : 'right'">
             <template #cell="{ record }">
@@ -170,7 +171,7 @@
       </div>
     </section>
 
-    <MemberDialog ref="memberDialog" :logical="logical" :candidates="candidates" @saved="reload" />
+    <MemberDialog ref="memberDialog" :logical="logical" :candidates="candidates" :env="env" @saved="reload" />
 
     <ConfirmDialog
       v-model:visible="removeVisible"
@@ -198,6 +199,7 @@
 </template>
 
 <script setup lang="ts">
+import TimeText from "@/components/time-text/index.vue";
 import { useWindowSize } from "@vueuse/core";
 import { computed, inject, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
@@ -212,17 +214,21 @@ import {
 } from "@/api/trade/settings";
 import FundSettingsForm from "../../settings/fund-settings-form.vue";
 import OrderSettingsForm from "../../settings/order-settings-form.vue";
-import ConfirmDialog from "../shared/confirm-dialog.vue";
-import { accountEnvironment } from "../shared/environment";
-import { fmtClock, fmtMoney } from "../shared/format";
+import ConfirmDialog from "@/components/trade-confirm/confirm-dialog.vue";
+import { accountEnvironment } from "@/components/trade-confirm/environment";
+import { fmtMoney } from "../shared/format";
 import { marketsText } from "../shared/markets";
+import { positionCount } from "../shared/position-snapshot";
 import MemberSettings from "../shared/member-settings.vue";
 import { eligibleAccounts } from "../shared/membership";
 import SectionBlock from "../shared/section-block.vue";
 import StatusMark from "../shared/status-mark.vue";
 import { detailContextKey } from "./context";
 import MemberDialog from "./member-dialog.vue";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
 
+// 交易页的时间按当前空间登记的时区显示
+const displayZone = useDisplayZone();
 const {
   logical,
   accounts,
@@ -278,9 +284,8 @@ const hasBinanceLive = computed(() =>
   })
 );
 const candidates = computed(() => eligibleAccounts(allAccounts.value, allLogicals.value, logical.value, env.value));
-const hasPositions = computed(
-  () => snapshot.value.swapPositions.length > 0 || snapshot.value.spotHoldings.some(item => item.instrument_id)
-);
+// 和页头“清仓”按钮同一口径：零数量的现货余额不算持仓
+const hasPositions = computed(() => positionCount(snapshot.value) > 0);
 const nameDirty = computed(() => comboName.value.trim() !== "" && comboName.value.trim() !== logical.value.name);
 
 // 候选账户要排除所有组合里的成员，所以读全部组合；成员变化后重读。

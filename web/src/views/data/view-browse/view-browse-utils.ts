@@ -2,14 +2,18 @@ import type {
   Dataset,
   DatasetColumn,
   Field,
+  FieldValue,
   FieldValueType,
   FilterCond,
   FilterSpec,
+  RecordRow,
   SortSpec,
+  TimeSeriesRow,
   TypedValue,
   View,
   ViewColumn
 } from "@/api/storage/types";
+import { formatInstant, toInstantMs, wallClockToMs } from "@/utils/time-zone";
 
 export type ViewBrowseMode = "none" | "time_series" | "record" | "missing";
 export type ViewSortDirection = "" | "asc" | "desc";
@@ -117,9 +121,10 @@ export function viewDisplayName(view?: Pick<View, "view_id" | "name"> | null) {
   return view.name || view.view_id || "";
 }
 
-// A股空间（stockcn）的 series_tag 恒为 default，浏览时默认按它筛选；其他空间的标签区分来源，默认不填。
-export function defaultSeriesTagForView(view?: Pick<View, "space_id"> | null) {
-  return view?.space_id === "stockcn" ? "default" : "";
+// 新加“序列标签”筛选时的默认值：当前结果里只有一种序列标签时用它（例如 A 股恒为 default），有多种或还没有结果时不填。
+export function defaultSeriesTag(rows: Array<{ seriesTag?: string }>) {
+  const tags = new Set(rows.map(row => row.seriesTag ?? ""));
+  return tags.size === 1 ? [...tags][0] : "";
 }
 
 export function viewModeFromPrimaryDataset(
@@ -194,14 +199,15 @@ const compareOps: Partial<Record<ViewFilterOperator, FilterCond["op"]>> = {
   lte: "FILTER_OP_LTE"
 };
 
-export function buildViewFilterExprs(filters: ViewFilterState[]): FilterSpec | undefined {
+/** zone 是 TIME 类型筛选值的输入时区：墙钟按它解析成 UTC 时刻再提交。 */
+export function buildViewFilterExprs(filters: ViewFilterState[], zone = "UTC"): FilterSpec | undefined {
   const out: FilterCond[] = [];
   for (const filter of filters) {
     const fieldName = filter.fieldName.trim();
     if (!fieldName) continue;
     const valueType = filter.valueType || "FIELD_VALUE_TYPE_STRING";
     const push = (op: FilterCond["op"], raw: string) => {
-      const typed = typedFilterValue(raw, valueType);
+      const typed = typedFilterValue(raw, valueType, zone);
       if (typed) out.push({ column: fieldName, op, values: [typed] });
     };
 
@@ -352,7 +358,7 @@ function isTimeSeriesDataKind(value: unknown) {
 }
 
 /** 按列类型转换检索值；数值列的值不是完整的有限数字时返回 undefined，条件整条丢弃。 */
-function typedFilterValue(value: string, valueType: FieldValueType): TypedValue | undefined {
+function typedFilterValue(value: string, valueType: FieldValueType, zone: string): TypedValue | undefined {
   if (isValueType(valueType, "FIELD_VALUE_TYPE_INT", 2)) {
     const parsed = Number(value);
     return Number.isInteger(parsed) ? { int_value: parsed } : undefined;
@@ -365,7 +371,11 @@ function typedFilterValue(value: string, valueType: FieldValueType): TypedValue 
     return { bool_value: value === "true" || value === "1" || value === "是" };
   }
   if (isValueType(valueType, "FIELD_VALUE_TYPE_TIME", 5)) {
-    return { time_value: value };
+    // 墙钟（YYYY-MM-DD[ HH:mm[:ss]]）按输入时区解析；带 Z 或数字偏移的 RFC3339 按它自己的偏移换算；
+    // 都不是（例如纯数字）时不加这个条件，不能把 20261107 当成毫秒
+    const withOffset = /T.*(Z|[+-]\d{2}:?\d{2})$/i.test(value.trim());
+    const ms = wallClockToMs(value, zone) ?? (withOffset ? toInstantMs(value) : null);
+    return ms === null ? undefined : { time_value: new Date(ms).toISOString().replace(/\.000Z$/, "Z") };
   }
   return { string_value: value };
 }
@@ -434,4 +444,110 @@ function klineFieldValue(values: Record<string, string>, fieldName: "open" | "hi
     if (entry) return entry[1];
   }
   return undefined;
+}
+
+// ---- 表格行转换：把时序行、记录行转成表格行，并估算列宽 ----
+
+export interface BrowseTableRow {
+  id: string;
+  key: string;
+  version: string;
+  seriesTag?: string;
+  values: Record<string, string>;
+}
+
+const minAdaptiveColumnWidth = 112;
+const maxAdaptiveColumnWidth = 320;
+
+export function adaptiveColumnWidth(columnName: string, label: string, rows: Array<Pick<BrowseTableRow, "values">>) {
+  const headerWidth = visualTextWidth(label || columnName);
+  const valueWidth = rows.reduce((maxWidth, row) => {
+    const value = row.values?.[columnName];
+    return Math.max(maxWidth, visualTextWidth(value || ""));
+  }, 0);
+  const rawWidth = Math.max(headerWidth, valueWidth) + 48;
+  return clamp(roundUp(rawWidth, 8), minAdaptiveColumnWidth, maxAdaptiveColumnWidth);
+}
+
+function containsCJK(value: string) {
+  return /[\u3400-\u9fff]/.test(value);
+}
+
+function visualTextWidth(value: string) {
+  return Array.from(value).reduce((sum, char) => sum + (containsCJK(char) ? 14 : 8), 0);
+}
+
+function roundUp(value: number, step: number) {
+  return Math.ceil(value / step) * step;
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+/** zone 给出时，TIME 类型的值按这个时区显示并带后缀；不给时原样显示。 */
+function fieldValueText(field?: FieldValue, zone?: string) {
+  if (!field?.value) return "-";
+  return typedValueText(field.value, zone);
+}
+
+export function typedValueText(value?: TypedValue, zone?: string): string {
+  if (!value) return "-";
+  if (value.string_value !== undefined) return value.string_value;
+  if (value.int_value !== undefined) return String(value.int_value);
+  if (value.double_value !== undefined) return String(value.double_value);
+  if (value.bool_value !== undefined) return value.bool_value ? "true" : "false";
+  if (value.time_value !== undefined) return zone ? formatInstant(value.time_value, zone) : value.time_value;
+  if (value.json_value !== undefined) return value.json_value;
+  if (value.bytes_value !== undefined) return value.bytes_value;
+  if (value.list_value?.values) return value.list_value.values.map(item => typedValueText(item, zone)).join(", ");
+  return "-";
+}
+
+export function rowsToColumnNames(rows: Array<TimeSeriesRow | RecordRow>, preferred: string[] = []) {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const name of preferred) {
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    out.push(name);
+  }
+  // 声明过的 View/Dataset 投影就是表结构：不再追加实时索引里残留的字段（例如已下线的因子输出）。
+  if (out.length > 0) return out;
+  for (const row of rows) {
+    for (const field of row.fields || []) {
+      if (!field.field_id || seen.has(field.field_id)) continue;
+      seen.add(field.field_id);
+      out.push(field.field_id);
+    }
+  }
+  return out;
+}
+
+/** version 保留原始的 data_time（排序、K 线要用），显示时再按时区格式化；zone 只用于 TIME 类型的字段值。 */
+export function timeSeriesRowsToTableRows(rows: TimeSeriesRow[], zone?: string): BrowseTableRow[] {
+  return rows.map(row => ({
+    id: `ts-${row.key?.subject_id || ""}-${row.key?.freq || ""}-${row.key?.series_tag || ""}-${row.key?.data_time || ""}`,
+    key: row.key?.subject_id || "-",
+    version: row.key?.data_time || "-",
+    seriesTag: row.key?.series_tag || "",
+    values: fieldsToValueMap(row.fields || [], zone)
+  }));
+}
+
+export function recordRowsToTableRows(rows: RecordRow[], zone?: string): BrowseTableRow[] {
+  return rows.map((row, index) => ({
+    id: `record-${index}-${row.key?.record_id || ""}-${row.key?.version || ""}`,
+    key: row.key?.record_id || "-",
+    version: row.key?.version || "-",
+    values: fieldsToValueMap(row.fields || [], zone)
+  }));
+}
+
+function fieldsToValueMap(fields: FieldValue[], zone?: string) {
+  const out: Record<string, string> = {};
+  for (const field of fields) {
+    out[field.field_id] = fieldValueText(field, zone);
+  }
+  return out;
 }

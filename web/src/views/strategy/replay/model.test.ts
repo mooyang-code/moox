@@ -2,13 +2,13 @@ import { describe, expect, it } from "vitest";
 import {
   equitySeries,
   equitySummary,
-  formatUtcTime,
   replayRangeLabel,
   mergeBars,
   parseBarDetail,
   parseMetrics,
-  parseUtcInput,
-  recentUtcRange,
+  replayFormFromReplay,
+  replayMetricsLine,
+  recentRange,
   replayFeeText,
   replayStatusLabel,
   replayTasksText,
@@ -69,9 +69,7 @@ describe("replay model helpers", () => {
     expect(parseMetrics('{"bars":3}')?.annualized_return).toBeNull();
   });
 
-  it("formats UTC times, merges bars incrementally and reads skip reasons", () => {
-    expect(formatUtcTime("2026-09-01T03:00:00Z")).toBe("2026-09-01 03:00 UTC");
-    expect(formatUtcTime("")).toBe("-");
+  it("merges bars incrementally and reads skip reasons", () => {
     const bar = (time: string) => ({
       bar_end_time: time,
       status: "ok",
@@ -98,13 +96,9 @@ describe("replay model helpers", () => {
     expect(mergeBars(known, [])).toBe(known);
   });
 
-  it("parses UTC text inputs and builds recent ranges", () => {
-    expect(parseUtcInput("2026-09-01 08:30")).toBe("2026-09-01T08:30:00Z");
-    expect(parseUtcInput("2026-09-01")).toBe("2026-09-01T00:00:00Z");
-    expect(parseUtcInput("2026-02-30 00:00")).toBeNull();
-    expect(parseUtcInput("2026-09-01 24:00")).toBeNull();
-    expect(parseUtcInput("09/01/2026")).toBeNull();
-    expect(recentUtcRange(7, new Date("2026-10-08T15:42:10Z"))).toEqual(["2026-10-01 15:00", "2026-10-08 15:00"]);
+  it("builds recent ranges ending at the current whole hour", () => {
+    const now = Date.parse("2026-10-08T15:42:10Z");
+    expect(recentRange(7, now)).toEqual([Date.parse("2026-10-01T15:00:00Z"), Date.parse("2026-10-08T15:00:00Z")]);
   });
 
   it("parses a bar's ledger and summary for the detail row", () => {
@@ -210,22 +204,56 @@ describe("replay model helpers", () => {
       unfilled: 0,
       liquidated: 0
     });
-    expect(equitySummary([])).toBe("暂无权益曲线");
-    expect(
-      equitySummary([point("2026-09-01T01:00:00Z", 1), point("2026-09-01T02:00:00Z", 1.2), point("2026-09-01T03:00:00Z", 0.9)])
-    ).toBe("权益曲线：共 3 根，2026-09-01 01:00 UTC 权益 1.0000，2026-09-01 03:00 UTC 权益 0.9000，最高 1.2000，最低 0.9000");
+    expect(equitySummary([], "UTC")).toBe("暂无权益曲线");
+    const points = [point("2026-09-01T01:00:00Z", 1), point("2026-09-01T02:00:00Z", 1.2), point("2026-09-01T03:00:00Z", 0.9)];
+    expect(equitySummary(points, "UTC")).toBe(
+      "权益曲线：共 3 根，2026-09-01 01:00:00 UTC 权益 1.0000，2026-09-01 03:00:00 UTC 权益 0.9000，最高 1.2000，最低 0.9000"
+    );
+    expect(equitySummary(points, "Asia/Shanghai")).toContain("2026-09-01 09:00:00 UTC+8 权益 1.0000");
   });
 
-  it("labels A-share replay ranges with Shanghai dates", () => {
-    expect(replayRangeLabel({ calendar: "cn_stock", start_time: "2026-08-31T16:00:00Z", end_time: "2026-09-30T16:00:00Z" })).toBe(
-      "2026-09-01 → 2026-10-01（上海日期，不含结束日）"
-    );
+  it("labels A-share daily ranges with dates in the space zone, other ranges with times", () => {
+    const sh = "Asia/Shanghai";
     expect(
-      replayRangeLabel({ calendar: "crypto_24x7", start_time: "2026-09-01T00:00:00Z", end_time: "2026-09-02T00:00:00Z" })
+      replayRangeLabel({ calendar: "cn_stock", start_time: "2026-08-31T16:00:00Z", end_time: "2026-09-30T16:00:00Z" }, sh)
+    ).toBe("2026-09-01 UTC+8 → 2026-10-01 UTC+8（不含结束日）");
+    expect(
+      replayRangeLabel({ calendar: "crypto_24x7", start_time: "2026-09-01T00:00:00Z", end_time: "2026-09-02T00:00:00Z" }, "UTC")
     ).toBe("2026-09-01 00:00 UTC → 2026-09-02 00:00 UTC");
-    // A 股日内的区间是真实时刻，按 UTC 时间写。
-    expect(replayRangeLabel({ calendar: "cn_stock", start_time: "2026-10-08T03:00:00Z", end_time: "2026-10-08T05:30:00Z" })).toBe(
-      "2026-10-08 03:00 UTC → 2026-10-08 05:30 UTC"
-    );
+    // A 股日内的区间是真实时刻，按空间时区写时刻。
+    expect(
+      replayRangeLabel({ calendar: "cn_stock", start_time: "2026-10-08T03:00:00Z", end_time: "2026-10-08T05:30:00Z" }, sh)
+    ).toBe("2026-10-08 11:00 UTC+8 → 2026-10-08 13:30 UTC+8");
+  });
+});
+
+describe("回放对比", () => {
+  it("列表显示累计收益和最大回撤；还没有指标时为空", () => {
+    expect(replayMetricsLine('{"bars":10,"total_return":0.1234,"max_drawdown":0.05}')).toBe("累计收益 12.34% · 最大回撤 5.00%");
+    expect(replayMetricsLine("")).toBe("");
+  });
+
+  it("按此配置重新发起：带上当时的 DSL、任务、区间和手续费；统一数据集上的任务不能在表单里选", () => {
+    const base = {
+      replay_id: "r1",
+      strategy_id: "s1",
+      dsl_yaml: "name: demo",
+      tasks: { swap: { factor_task_id: "ft1", view_id: "v1" } },
+      start_time: "2026-10-01T00:00:00Z",
+      end_time: "2026-10-02T00:00:00Z",
+      spot_fee_bps: 8,
+      swap_fee_bps: 5
+    } as never;
+    expect(replayFormFromReplay(base)).toMatchObject({
+      source: "dsl",
+      dsl_yaml: "name: demo",
+      tasks: { swap: "ft1" },
+      range: [Date.UTC(2026, 9, 1), Date.UTC(2026, 9, 2)],
+      spot_fee_bps: 8,
+      swap_fee_bps: 5
+    });
+    expect(
+      replayFormFromReplay({ ...(base as object), tasks: { multi: { factor_task_id: "u", view_id: "v" } } } as never)
+    ).toBeNull();
   });
 });

@@ -62,7 +62,9 @@
                 </template>
                 <template v-else>
                   <span class="tx-muted">无</span>
-                  <div class="tx-muted">{{ record.logical.control_mode === 2 ? "自主下单" : "尚未绑定策略" }}</div>
+                  <div class="tx-muted">
+                    {{ record.logical.control_mode === 2 ? "自主下单" : strategiesFailed ? "策略读取失败" : "尚未绑定策略" }}
+                  </div>
                 </template>
               </template>
               <span v-else class="tx-muted">优先级 {{ record.priority }} · {{ record.enabled ? "启用" : "停用" }}</span>
@@ -80,7 +82,9 @@
                 </a-tooltip>
                 <StatusMark v-else tone="run">运行中</StatusMark>
               </template>
-              <span v-else class="tx-muted tx-nowrap">同步于 {{ fmtClock(record.account.last_sync_at) }}</span>
+              <span v-else class="tx-muted tx-nowrap"
+                >同步于 <TimeText :value="record.account.last_sync_at" :zone="displayZone" precision="minute"
+              /></span>
             </template>
           </a-table-column>
           <a-table-column title="权益" :width="170" align="right">
@@ -147,7 +151,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onActivated, onBeforeUnmount, ref, watch } from "vue";
+import TimeText from "@/components/time-text/index.vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import PageTitleTabs from "@/components/page-title-tabs/index.vue";
 import { useSpaceStore } from "@/store/modules/space";
@@ -156,14 +161,22 @@ import type { LogicalAccount, TradingAccount } from "@/api/trade";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import { accountMapOf, comboRows, equityChange, unjoinedAccounts, type ComboRow, type MemberRow } from "./account-list";
 import CreateAccount from "./create/index.vue";
-import { environmentFromQuery, environmentLabel, environmentTabs, type Environment } from "./shared/environment";
-import { fmtClock, fmtMoney, fmtPercent, pnlClass } from "./shared/format";
+import {
+  environmentFromQuery,
+  environmentLabel,
+  environmentTabs,
+  type Environment
+} from "@/components/trade-confirm/environment";
+import { fmtMoney, fmtPercent, pnlClass } from "./shared/format";
 import { marketsText } from "./shared/markets";
 import { loadPositionSnapshot, positionCount } from "./shared/position-snapshot";
 import StatusMark from "./shared/status-mark.vue";
 import { loadStrategyLinks, type StrategyLink } from "./shared/strategy-link";
 import UnjoinedDialog from "./unjoined-dialog.vue";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
 
+// 交易页的时间按当前空间登记的时区显示
+const displayZone = useDisplayZone();
 defineOptions({ name: "trading-accounts" });
 
 // 各列宽度之和：窄屏时表格横向滚动，每一列都保持自己的宽度，不会被挤成 0
@@ -178,6 +191,8 @@ const currentDesc = computed(() => environmentTabs.find(item => item.key === env
 const logicals = ref<LogicalAccount[]>([]);
 const accounts = ref<TradingAccount[]>([]);
 const strategies = ref<Map<string, StrategyLink>>(new Map());
+// 关联策略读取失败：列表里写“策略读取失败”，不当成没有绑定
+const strategiesFailed = ref(false);
 const loading = ref(false);
 const loadError = ref("");
 const expandedKeys = ref<string[]>([]);
@@ -221,7 +236,9 @@ async function load() {
 
 async function loadStrategies(request: { isLatest(): boolean }) {
   const links = await loadStrategyLinks(logicals.value);
-  if (request.isLatest()) strategies.value = links;
+  if (!request.isLatest()) return;
+  strategiesFailed.value = links === null;
+  strategies.value = links ?? new Map();
 }
 
 const strategyOf = (row: ComboRow) => strategies.value.get(row.key);
@@ -296,13 +313,6 @@ watch(
 onBeforeUnmount(() => {
   listRequests.invalidate();
   extraRequests.invalidate();
-});
-
-// 列表页被页面缓存：从详情页回来时（关闭模拟账户、移出成员、改名之后）重新读，不显示旧数据。
-let activatedOnce = false;
-onActivated(() => {
-  if (activatedOnce) void load();
-  activatedOnce = true;
 });
 
 void load();

@@ -67,20 +67,32 @@ export function quickRange(freq: string, kind: "periods" | "day" | "week", now =
   return { start: end - span, end };
 }
 
+/**
+ * 按交易时段分桶的市场：空间 ID 即市场 ID（后端 packages/barclock），crypto 全天连续，其余（A 股等）按交易时段。
+ * 前端没有交易日历，这类市场的周期数只能按自然时间估算。
+ */
+export function isSessionMarket(spaceId: string): boolean {
+  return Boolean(spaceId) && spaceId !== "crypto";
+}
+
+export const SESSION_ESTIMATE_NOTE = "按自然时间估算，实际以交易时段为准";
+
 export interface EstimateInput {
   freq: string;
-  start?: number;
-  end?: number;
+  /** 按交易时段的市场：周期数按自然时间估算，文字里注明。 */
+  sessionMarket?: boolean;
+  start?: number | null;
+  end?: number | null;
   factorCount: number;
   subjectMode: RecalcSubjectMode;
   subjectCount: number;
 }
 
 /** 提交前的汇总：周期数 × 因子数 × 对象范围（按频率与时间范围前端估算）。 */
-export function estimateRecalc({ freq, start, end, factorCount, subjectMode, subjectCount }: EstimateInput) {
+export function estimateRecalc({ freq, start, end, factorCount, subjectMode, subjectCount, sessionMarket }: EstimateInput) {
   const interval = intervalMs(freq);
-  const valid = interval > 0 && start !== undefined && end !== undefined && end > start;
-  const periods = valid ? Math.floor((end - start) / interval) : 0;
+  const periods = interval > 0 && start != null && end != null && end > start ? Math.floor((end - start) / interval) : 0;
   const scope = subjectMode === "include" ? `${subjectCount} 个对象` : "全部对象";
-  return { periods, factors: factorCount, text: `将处理 ${periods} 个周期 × ${factorCount} 个因子 × ${scope}` };
+  const note = sessionMarket ? `（${SESSION_ESTIMATE_NOTE}）` : "";
+  return { periods, factors: factorCount, text: `将处理 ${periods} 个周期 × ${factorCount} 个因子 × ${scope}${note}` };
 }

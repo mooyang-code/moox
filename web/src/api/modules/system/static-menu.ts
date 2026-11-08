@@ -1,7 +1,6 @@
 const baseMeta = {
   hide: false,
   disable: false,
-  keepAlive: true,
   affix: false,
   link: "",
   iframe: false,
@@ -50,14 +49,21 @@ const directory = (
 export const systemMenu = [
   menu("01", "0", "/home", "home", "home", "home/home", 1, { affix: true, svgIcon: "home", icon: "" }),
 
-  directory("03", "0", "/data/sources", "compute-collector", "compute-collector", 2, {
+  // 最常用的“采集任务”排第一、作为目录落地页，数据归档紧跟在它后面；数据源、数据对象、基础字段排在后面。
+  directory("03", "0", "/collector/tasks", "compute-collector", "compute-collector", 2, {
     svgIcon: "functions",
     icon: ""
   }),
-  menu("0306", "03", "/data/sources", "data-sources", "data-sources", "data/sources/index", 1),
-  menu("0307", "03", "/data/subjects", "data-subjects", "data-subjects", "data/subjects/index", 2),
-  menu("0308", "03", "/data/fields", "data-fields", "data-fields", "data/fields/index", 3),
-  menu("0303", "03", "/collector/tasks", "collector-tasks", "collector-tasks", "collector/task-management/index", 4),
+  // 目录下的菜单项会替换 route.ts 的同名路由（已在浏览器核对）：采集任务的页签与筛选、字段页的筛选都在 query 里，query 变化时复用页面。
+  menu("0303", "03", "/collector/tasks", "collector-tasks", "collector-tasks", "collector/task-management/index", 1, {
+    reuseOnQuery: true
+  }),
+  // 任务详情、页签、筛选都在 query 里，query 变化时复用页面。
+  menu("0309", "03", "/data/archive", "data-archive", "data-archive", "data/archive/index", 2, { reuseOnQuery: true }),
+  menu("0306", "03", "/data/sources", "data-sources", "data-sources", "data/sources/index", 3),
+  // 页签和所选标签在 query 里：query 变化时复用页面
+  menu("0307", "03", "/data/subjects", "data-subjects", "data-subjects", "data/subjects/index", 4, { reuseOnQuery: true }),
+  menu("0308", "03", "/data/fields", "data-fields", "data-fields", "data/fields/index", 5, { reuseOnQuery: true }),
 
   directory("0240", "0", "/factor/overview", "factor-compute", "factor-compute", 3, { svgIcon: "experiment", icon: "" }),
   menu("024001", "0240", "/factor/overview", "factor-overview", "factor-overview", "factor/overview/index", 1),
@@ -91,18 +97,26 @@ export const systemMenu = [
     reuseOnQuery: true
   }),
 
-  directory("06", "0", "/ops/monitor", "ops", "ops", 6, { svgIcon: "defend", icon: "" }),
-  menu("0607", "06", "/ops/monitor", "ops-monitor", "ops-monitor", "ops/monitor/index", 1),
-  menu("0601", "06", "/ops/hosts", "ops-hosts", "ops-hosts", "ops/host-workbench/index", 3),
-  menu("0600", "06", "/ops/deployments", "ops-deployments", "ops-deployments", "ops/deployments/index", 2),
-  menu("0606", "06", "/ops/storage/nodes", "ops-storage", "ops-storage", "ops/storage/index", 4),
+  // 事件中心是一级菜单，排在交易之后、运维之前。
+  directory("055", "0", "/events/subscriptions", "events", "events", 6, { svgIcon: "form", icon: "" }),
+  menu("05501", "055", "/events/subscriptions", "events-subscriptions", "events-subscriptions", "events/subscriptions/index", 1),
+  // 筛选和打开的记录在 query 里（告警会直接带失败筛选跳进来），query 变化时复用页面。
+  menu("05502", "055", "/events/executions", "events-executions", "events-executions", "events/executions/index", 2, {
+    reuseOnQuery: true
+  }),
+  menu("05503", "055", "/events/delist", "events-delist", "events-delist", "events/delist/index", 3),
+
+  directory("06", "0", "/ops/monitor", "ops", "ops", 7, { svgIcon: "defend", icon: "" }),
+  // 展开状态、页签、筛选、定位的主机都在 query 里：query 变化时复用页面（菜单与 route.ts 两处都写）
+  menu("0607", "06", "/ops/monitor", "ops-monitor", "ops-monitor", "ops/monitor/index", 1, { reuseOnQuery: true }),
+  menu("0601", "06", "/ops/hosts", "ops-hosts", "ops-hosts", "ops/host-workbench/index", 3, { reuseOnQuery: true }),
+  menu("0600", "06", "/ops/deployments", "ops-deployments", "ops-deployments", "ops/deployments/index", 2, {
+    reuseOnQuery: true
+  }),
+  menu("0606", "06", "/ops/storage/nodes", "ops-storage", "ops-storage", "ops/storage/nodes", 4),
   menu("0608", "06", "/ops/activity", "ops-activity", "ops-activity", "ops/activity/index", 5),
 
-  directory("07", "0", "/settings/spaces", "settings", "settings", 7, { svgIcon: "set", icon: "" }),
+  directory("07", "0", "/settings/spaces", "settings", "settings", 8, { svgIcon: "set", icon: "" }),
   menu("0701", "07", "/settings/spaces", "settings-spaces", "settings-spaces", "settings/spaces/index", 1),
-  menu("0702", "07", "/settings/secrets", "settings-secrets", "settings-secrets", "settings/secrets/index", 2),
-  // 页签用 ?tab=（告警会直接跳到执行记录），query 变化时复用页面。
-  menu("0703", "07", "/settings/events", "settings-events", "settings-events", "settings/events/index", 3, {
-    reuseOnQuery: true
-  })
+  menu("0702", "07", "/settings/secrets", "settings-secrets", "settings-secrets", "settings/secrets/index", 2)
 ];

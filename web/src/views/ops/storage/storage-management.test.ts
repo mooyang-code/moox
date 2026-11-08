@@ -6,8 +6,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   listDataNodes: vi.fn(),
-  push: vi.fn()
+  push: vi.fn(),
+  space: { selectedSpaceId: "space-b", setSelectedSpace: vi.fn() }
 }));
+vi.mock("@/store/modules/space", () => ({ useSpaceStore: () => mocks.space }));
 
 vi.mock("@/api/storage/metadata", async () => {
   const actual = await vi.importActual<typeof import("@/api/storage/metadata")>("@/api/storage/metadata");
@@ -71,16 +73,11 @@ describe("storage configuration workbench", () => {
     mocks.push.mockReset();
   });
 
-  it("keeps the DataNode page behind the storage tab surface and falls back unknown tabs to nodes", () => {
-    const source = fs.readFileSync(path.resolve(__dirname, "index.vue"), "utf8");
-    const normalized = normalizeSource(source);
-
-    expect(source).toContain("PageTitleTabs");
-    expect(source).toContain('aria-label="存储配置"');
-    expect(normalized).toContain('label:"数据节点"');
-    expect(normalized).not.toContain("归档文件");
-    expect(normalized).toContain('typeStorageConfigTab="nodes"');
-    expect(normalized).not.toContain("routes");
+  it("存储节点只有一个页面：菜单直接打开节点页，没有只有一个页签的外层", () => {
+    expect(fs.existsSync(path.resolve(__dirname, "index.vue"))).toBe(false);
+    const nodes = fs.readFileSync(path.resolve(__dirname, "nodes.vue"), "utf8");
+    expect(nodes).toContain("<h2>存储节点</h2>");
+    expect(nodes).not.toContain("PageTitleTabs");
   });
 
   it("removes the route page and route URL while keeping the single storage menu", () => {
@@ -122,9 +119,11 @@ describe("storage configuration workbench", () => {
     expect(wrapper.text()).not.toContain("删除");
 
     await wrapper.find(".dataset-tag").trigger("click");
+    // 数据集属于 space-a：先切到那个空间，结果页按 ?dataset= 选任务
+    expect(mocks.space.setSelectedSpace).toHaveBeenCalledWith("space-a");
     expect(mocks.push).toHaveBeenCalledWith({
       path: "/collector/tasks",
-      query: { tab: "results", space_id: "space-a" }
+      query: { tab: "results", dataset: "dataset-a" }
     });
 
     await wrapper.find(".dataset-tag").trigger("keydown", { key: "Enter" });

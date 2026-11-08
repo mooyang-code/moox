@@ -43,6 +43,7 @@
 import { computed, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { createStrategy, listStrategyTemplates, renderStrategyTemplate } from "@/api/strategy";
+import { useStrategyStore } from "@/store/modules/strategy";
 import type { StrategyTemplate } from "@/api/strategy-types";
 
 defineOptions({ name: "StrategyTemplateCreate" });
@@ -119,6 +120,8 @@ async function create() {
   error.value = "";
   try {
     const strategy = await createStrategy({ dsl_yaml: dsl.value });
+    // 各页缓存的策略目录里还没有这条定义：作废后下次用到时重读，否则创建实例的下拉里选不到它
+    useStrategyStore().invalidateStrategyCatalog();
     Message.success(`策略「${strategy.name}」已创建`);
     emit("created", strategy.strategy_id);
   } catch (err) {

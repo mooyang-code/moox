@@ -10,6 +10,8 @@ export interface CollectorPage {
 
 export interface CollectorTaskResult {
   result_name?: string;
+  /** 结果写入的数据集；采集任务页据此显示归档状态 */
+  dataset_id?: string;
   view_id?: string;
   view_ids?: string[];
   status?: string;
@@ -273,11 +275,17 @@ export async function getKlineResampleJob(spaceId: string, jobId: string): Promi
   return response.job;
 }
 
-export async function listKlineResampleJobs(spaceId: string, taskId = "", status = "", limit = 50): Promise<ResampleJob[]> {
+export async function listKlineResampleJobs(
+  spaceId: string,
+  taskId = "",
+  status = "",
+  limit = 50,
+  options: { silentError?: boolean } = {}
+): Promise<ResampleJob[]> {
   const response = await callControl<
     { space_id: string; task_id: string; status: string; limit: number },
     { jobs?: ResampleJob[] }
-  >("collector", "ListKlineResampleJobs", { space_id: spaceId, task_id: taskId, status, limit });
+  >("collector", "ListKlineResampleJobs", { space_id: spaceId, task_id: taskId, status, limit }, options);
   return response.jobs || [];
 }
 

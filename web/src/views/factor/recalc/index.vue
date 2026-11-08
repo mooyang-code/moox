@@ -18,10 +18,10 @@
           <div class="result-toolbar">
             <span class="result-count">
               共 {{ pagination.total }} 条补算作业
-              <InfoTip text="启用因子时的历史回填与手动补算都在这里；有进行中的任务时每 3 秒自动刷新。" />
+              <InfoTip text="启用因子不会回填历史，启用后需要在这里手动补算；有进行中的任务时每 3 秒自动刷新。" />
             </span>
             <a-space wrap>
-              <SetSelect :model-value="store.currentTaskId" @change="onSetChange" />
+              <TaskSelect :model-value="store.currentTaskId" @change="onTaskChange" />
               <a-button :loading="loading" @click="refresh">
                 <template #icon><icon-refresh /></template>
                 刷新
@@ -55,7 +55,8 @@
             <template #columns>
               <a-table-column title="任务" :width="260">
                 <template #cell="{ record }">
-                  <div class="job-id" :title="record.job.job_id">{{ record.job.job_id }}</div>
+                  <div>{{ taskName(record.job.task_id) }}</div>
+                  <div class="job-id" :title="record.job.job_id">作业 {{ record.job.job_id }}</div>
                 </template>
               </a-table-column>
               <a-table-column title="因子" :width="180" :ellipsis="true" :tooltip="true">
@@ -63,8 +64,8 @@
               </a-table-column>
               <a-table-column title="时间范围" :width="260">
                 <template #cell="{ record }">
-                  {{ formatTime(record.job.start_time) }}<br />
-                  → {{ formatTime(record.job.end_time) }}
+                  {{ formatTime(record.job.start_time, displayZone) }}<br />
+                  → {{ formatTime(record.job.end_time, displayZone) }}
                 </template>
               </a-table-column>
               <a-table-column title="状态" :width="200">
@@ -87,7 +88,7 @@
                 <template #cell="{ record }">{{ record.job.engine_id || "待领取" }}</template>
               </a-table-column>
               <a-table-column title="创建时间" :width="180">
-                <template #cell="{ record }">{{ formatTime(record.job.created_at) }}</template>
+                <template #cell="{ record }">{{ formatTime(record.job.created_at, displayZone) }}</template>
               </a-table-column>
               <a-table-column title="操作" :width="90" align="center" fixed="right">
                 <template #cell="{ record }">
@@ -111,22 +112,31 @@ import { computed, nextTick, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { Message } from "@arco-design/web-vue";
 import { cancelRecalcJob, listRecalcJobs } from "@/api/factor";
-import type { FactorTask, RecalcJob } from "@/api/factor/types";
+import type { FactorTask, FactorTaskInfo, RecalcJob } from "@/api/factor/types";
 import { usePolling } from "@/hooks/usePolling";
 import { RequestGate } from "@/utils/request-gate";
 import { applyPageResult, defaultPagination, formatTime } from "@/views/data/shared/metadata-utils";
-import InfoTip from "@/views/factor/shared/info-tip.vue";
-import SetSelect from "@/views/factor/shared/task-select.vue";
+import InfoTip from "@/components/info-tip/index.vue";
+import TaskSelect from "@/views/factor/shared/task-select.vue";
 import { isActiveJob } from "@/views/factor/shared/status";
 import { useFactorScope } from "@/views/factor/shared/use-factor-scope";
 import RecalcCreateDrawer from "./recalc-create-drawer.vue";
 import { STATUS_SEGMENTS, jobDisplay, progressPercent, segmentStatuses, type StatusSegment } from "./recalc-model";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
 
+// 页面时间按当前空间登记的时区显示
+const displayZone = useDisplayZone();
 defineOptions({ name: "FactorRecalc" });
 
 const route = useRoute();
 const router = useRouter();
 const { store, spaceId, selectTask, navigate, reload } = useFactorScope({ requireSet: true, poll: false });
+
+/** 任务列显示任务名；任务已不在当前空间的列表里时显示任务 ID。 */
+function taskName(taskId: string) {
+  const info = store.tasks.find((item: FactorTaskInfo) => item.factor_task.task_id === taskId);
+  return info ? store.taskLabel(info.factor_task) : taskId;
+}
 
 const set = computed<FactorTask | undefined>(() => store.current?.factor_task);
 const highlightJob = computed(() => {
@@ -162,11 +172,14 @@ async function load(options: { silent?: boolean } = {}) {
   if (!options.silent) loading.value = true;
   try {
     const statuses = segmentStatuses(segment.value);
-    const rsp = await listRecalcJobs({
-      task_id: current.task_id,
-      ...(statuses ? { statuses } : {}),
-      page: { page: pagination.current, size: pagination.pageSize }
-    });
+    const rsp = await listRecalcJobs(
+      {
+        task_id: current.task_id,
+        ...(statuses ? { statuses } : {}),
+        page: { page: pagination.current, size: pagination.pageSize }
+      },
+      { silentError: Boolean(options.silent) }
+    );
     if (!gate.isCurrent(token)) return;
     jobs.value = rsp.jobs || [];
     applyPageResult(pagination, rsp.page_result);
@@ -189,7 +202,7 @@ function refresh() {
   return load();
 }
 
-function onSetChange(taskId: string) {
+function onTaskChange(taskId: string) {
   selectTask(taskId);
 }
 
@@ -259,6 +272,7 @@ watch(
 
 .job-id {
   overflow: hidden;
+  color: var(--color-text-3);
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;

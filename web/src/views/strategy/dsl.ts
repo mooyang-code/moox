@@ -1,6 +1,6 @@
 import { parseDocument } from "yaml";
 
-/** 截面选股模板：假设关联的因子任务里有默认参数的 bias、bias_q、quote_volume_mean、quote_volume_mean_q 成员（列名就是成员键）；bias = close / MA（窗口默认 20）。 */
+/** 截面选股模板：假设关联的计算任务里有默认参数的 bias、bias_q、quote_volume_mean、quote_volume_mean_q 成员（列名就是成员键）；bias = close / MA（窗口默认 20）。 */
 export const rankedTemplate = `name: binance_spot_momentum
 bar: 1m
 
@@ -50,8 +50,8 @@ portfolio:
 `;
 
 /**
- * 动态调参模板：策略不声明因子，规则直接引用关联因子任务的列名（成员键与列名规则见因子文档）；
- * 因子任务里要有可变成员 ma__var（加成员时选“可变”），factor_params 每期求出它下一期的参数
+ * 动态调参模板：策略不声明因子，规则直接引用关联计算任务的列名（成员键与列名规则见因子文档）；
+ * 计算任务里要有可变成员 ma__var（加成员时选“可变”），factor_params 每期求出它下一期的参数
  * （default 是各标的取值的中位数，per_subject 可选，与统一值不同的标的进入覆盖；没有写出的参数取因子定义的默认值），
  * params("ma__var", "window") 读取这一行实际用的窗口。
  */
@@ -79,7 +79,7 @@ portfolio:
 
 /** 混合市场示例：market 写 {select: both, prefer: swap}，同一个币两边都有时优先永续下单；空头只走永续（现货不能做空）。 */
 export const mixedMarketTemplate = `# 混合市场示例：从现货与永续两边选币，空头只走永续。
-# 创建实例时绑定因子任务：现货、永续各一个（两个任务的列名要一致），或统一数据集上的一个任务；
+# 创建实例时绑定计算任务：现货、永续各一个（两个任务的列名要一致），或统一数据集上的一个任务；
 # 混合市场不能用 tranche 规则与 factor_params。
 name: mixed_market_momentum
 bar: 1h
@@ -125,7 +125,7 @@ export const poolTemplate = `# 策略池示例：把已有的策略定义当作�
 # strategy 里的 strategy_trend_a、strategy_trend_b 是占位，请换成实际的策略定义 ID。
 # 成员必须显式写 market，bar 要与池一致，不能是策略池，不能用 factor_params。
 # 池本身不写 market、universe、factor_params，必须写 bar。
-# 池要绑定的因子任务是各成员所需市场的并集：成员都是现货就绑一个现货任务，混有永续就现货、永续各绑一个。
+# 池要绑定的计算任务是各成员所需市场的并集：成员都是现货就绑一个现货任务，混有永续就现货、永续各绑一个。
 # 启用后先在后台预热成员净值，预热完成前不能确认运行。
 name: trend_rotation_pool
 bar: 1h
@@ -185,7 +185,7 @@ export interface DSLPreview {
   rules: DSLRulePreview[];
   universe: string;
   leverage: string;
-  /** 市场模式的说明；没写 market 时是“按因子任务的市场”，策略池是成员市场的并集。 */
+  /** 市场模式的说明；没写 market 时是“按计算任务的市场”，策略池是成员市场的并集。 */
   market: string;
   /** 策略池策略才有；此时 rules 为空。 */
   pool?: DSLPoolPreview;
@@ -248,9 +248,9 @@ export function parseDSL(source: string): { preview: DSLPreview | null; diagnost
 
 const marketSelectText: Record<string, string> = { spot: "现货", swap: "永续", both: "现货与永续" };
 
-/** market 的说明：没写时按因子任务的市场；写了就给出选币范围与同一个币两边都有时的下单市场。 */
+/** market 的说明：没写时按计算任务的市场；写了就给出选币范围与同一个币两边都有时的下单市场。 */
 function describeMarket(market: unknown): string {
-  if (!market || typeof market !== "object" || Array.isArray(market)) return "按因子任务的市场";
+  if (!market || typeof market !== "object" || Array.isArray(market)) return "按计算任务的市场";
   const { select, prefer } = market as Record<string, unknown>;
   const text = (value: unknown) => marketSelectText[String(value)] ?? String(value);
   const parts = [`选币范围 ${select === undefined ? "?" : text(select)}`];
@@ -264,7 +264,7 @@ const rotationFactorNames = ["return", "ma_ratio", "drawdown"];
 function inspectPool(value: Record<string, any>, diagnostics: DSLDiagnostic[]): DSLPoolPreview | undefined {
   const report = (message: string) => diagnostics.push({ message });
   if (value.rules !== undefined) report("rules 与 strategy_pool 只能写一个：策略池的逻辑都在成员策略里");
-  if (value.market !== undefined) report("策略池不写 market：成员各自显式写 market，池要绑定的因子任务是成员所需市场的并集");
+  if (value.market !== undefined) report("策略池不写 market：成员各自显式写 market，池要绑定的计算任务是成员所需市场的并集");
   if (value.bar === undefined) report("策略池必须写 bar：成员的周期要与池一致");
   if (value.universe !== undefined) report("策略池不写 universe：标的范围由各成员自己的 universe 决定");
   if (value.factor_params !== undefined) report("策略池不支持 factor_params：多个成员可能给同一个可变成员写参数，会冲突");
@@ -358,4 +358,12 @@ export function summarizeDSL(source: string): string {
     )
     .join("、");
   return `${preview.bar} · ${preview.rules.length} 条规则：${rules}`;
+}
+
+/** 研究回放暂不支持策略池：回放入口据此禁用。 */
+export const POOL_REPLAY_DISABLED_TEXT = "研究回放暂不支持策略池";
+
+/** DSL 是不是策略池（解析失败的不算）。 */
+export function isPoolStrategy(dslYaml: string | undefined): boolean {
+  return Boolean(dslYaml && parseDSL(dslYaml).preview?.pool);
 }

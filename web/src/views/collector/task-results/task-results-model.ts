@@ -1,3 +1,4 @@
+import { marketTime } from "@/utils/time-zone";
 import type { CollectorTask } from "@/api/collector";
 
 export type TaskResultState = "ready" | "preparing" | "stale" | "error";
@@ -50,16 +51,14 @@ export function resampleSourceTaskId(task: CollectorTask): string {
  * 合成结果还没有数据时的空状态说明：任务还在准备时说明在准备数据集；已就绪则说明在等第一个目标桶收盘。
  * 预计时间按 UTC 固定网格给出（交易时段市场遇到休市会顺延），1d 等长周期的第一个桶可能要等很久，说清楚避免被当成故障。
  */
-export function resampleEmptyDescription(task: CollectorTask, frequencyMinutes: number, now = new Date()): string {
+export function resampleEmptyDescription(task: CollectorTask, frequencyMinutes: number, zone: string, now = Date.now()): string {
   const prepareState = String(task.prepare_state || "").toLowerCase();
   if (prepareState && prepareState !== "ready") return "正在准备结果数据集，请稍后刷新";
   if (frequencyMinutes <= 0) return "等待第一个目标桶收盘";
   const size = frequencyMinutes * 60 * 1000;
-  const next = new Date((Math.floor(now.getTime() / size) + 1) * size);
-  const hh = String(next.getUTCHours()).padStart(2, "0");
-  const mm = String(next.getUTCMinutes()).padStart(2, "0");
-  const day = frequencyMinutes >= 24 * 60 ? `${next.getUTCMonth() + 1}-${next.getUTCDate()} ` : "";
-  return `等待第一个目标桶收盘（预计 ${day}${hh}:${mm} UTC，交易时段市场遇休市会顺延）`;
+  const next = (Math.floor(now / size) + 1) * size;
+  // 桶按 UTC 固定网格算，显示按空间时区带后缀
+  return `等待第一个目标桶收盘（预计 ${marketTime(next, zone, now)}，交易时段市场遇休市会顺延）`;
 }
 
 export function getTaskResultViewIds(task: CollectorTask): string[] {
@@ -110,4 +109,23 @@ function timestamp(value?: string) {
 
 function queryString(value: unknown) {
   return Array.isArray(value) ? String(value[0] || "") : String(value || "");
+}
+
+/**
+ * 按结果数据集（和周期）找任务：告警、存储节点等处带 ?dataset=&freq= 跳进来时自动选中。
+ * 同一个数据集有多个任务时按周期挑；找不到时返回空串。
+ */
+export function taskIdForDataset(tasks: CollectorTask[], datasetId: unknown, freq: unknown): string {
+  const dataset = queryString(datasetId);
+  if (!dataset) return "";
+  const matched = sortTasksByCreatedAt(tasks).filter(task => task.result?.dataset_id === dataset);
+  const wanted = queryString(freq);
+  const byFreq = wanted ? matched.find(task => taskFreq(task) === wanted) : undefined;
+  return (byFreq ?? matched[0])?.task_id ?? "";
+}
+
+function taskFreq(task: CollectorTask): string {
+  const params = task.collect_params ?? {};
+  const value = task.data_type === "kline_resample" ? params.target_frequency : params.frequency;
+  return typeof value === "string" ? value : "";
 }

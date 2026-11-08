@@ -15,7 +15,6 @@ declare namespace Menu {
     title: string;
     hide: boolean;
     disable: boolean;
-    keepAlive: boolean;
     affix: boolean;
     link?: string;
     iframe?: boolean;

@@ -1,13 +1,12 @@
 import NProgress from "@/config/nprogress";
+import { loginLocation } from "@/utils/safe-redirect";
 import pinia from "@/store/index";
 import { createRouter, createWebHashHistory } from "vue-router";
-import { staticRoutes, notFoundAndNoPower } from "@/router/route.ts";
+import { staticRoutes, notFoundRoutes } from "@/router/route.ts";
 import { currentlyRoute } from "@/router/route-output";
-import { shouldShowRouteLoading } from "@/router/route-loading";
 import { storeToRefs } from "pinia";
 import { useUserInfoStore } from "@/store/modules/user-info";
 import { useRoutesConfigStore } from "@/store/modules/route-config";
-import { useLoadingStore } from "@/store/modules/loading";
 import { useRoutingMethod } from "@/hooks/useRoutingMethod";
 import { isEmptyObject } from "@/utils/index";
 /**
@@ -19,13 +18,10 @@ const router = createRouter({
   history: createWebHashHistory(),
   /**
    * 设置静态路由，其它的路由通过addRoute动态添加
-   * 1、staticRoutes登录页、layout页、默认页面('/')
-   * 2、notFoundAndNoPower 添加默认 401、500界面，防止提示 No match found for location with path 'xxx'
-   * 2、后端控制路由中也需要添加 notFoundAndNoPower 401、500界面
-   * 静态添加 notFoundAndNoPower 401、500界面将全屏显示
-   * 如果要 notFoundAndNoPower 在layout容器展示，则需要移除静态添加并将其添加到缓存路由树
+   * 1、staticRoutes：登录页、layout页、默认页面('/')
+   * 2、notFoundRoutes：404 兜底，防止提示 No match found for location with path 'xxx'；静态添加时全屏显示
    */
-  routes: [...staticRoutes, ...notFoundAndNoPower]
+  routes: [...staticRoutes, ...notFoundRoutes]
 });
 
 /**
@@ -41,23 +37,19 @@ const router = createRouter({
 router.beforeEach(async (to: any, _from: any, next: any) => {
   NProgress.start(); // 开启进度条
   const store = useUserInfoStore(pinia);
-  const loadingStore = useLoadingStore(pinia);
   const { token, account } = storeToRefs(store);
 
   if (token.value && !(await store.hasValidSession())) {
     await store.logOut();
   }
 
-  // 显示路由加载状态（同一页面仅 query 变化时不显示，避免卸载页面内容）
-  if (shouldShowRouteLoading(to, _from)) loadingStore.showRouteLoading();
-
   // next()内部加了path等于跳转指定路由会再次触发router.beforeEach，内部无参数等于放行，不会触发router.beforeEach
   if (to.path === "/login" && !token.value) {
     // 1、去登录页，无token，放行
     next();
   } else if (!token.value) {
-    // 2、没有token，直接重定向到登录页
-    next("/login");
+    // 2、没有token（含会话失效、刚被登出），带着原地址去登录页，登录后回来
+    next(loginLocation(to.fullPath));
   } else if (to.path === "/login" && token.value) {
     // 3、去登录页，有token，检查token是否有效
     // 如果用户信息为空，说明token可能无效，允许进入登录页
@@ -99,8 +91,8 @@ router.beforeEach(async (to: any, _from: any, next: any) => {
         // 确保完全清除用户状态，避免死循环
         await store.logOut();
 
-        // 直接跳转到登录页，不做任何其他检查
-        next("/login");
+        // 跳转到登录页，带着原地址，登录后回来
+        next(loginLocation(to.fullPath));
         return;
       }
     } else {
@@ -123,7 +115,7 @@ router.beforeEach(async (to: any, _from: any, next: any) => {
 
       // 获取外链路由的处理函数
       // 所有的路由正常放行，只不过额外判断是否是外链，如果是，则打开新窗口跳转外链
-      // 外链的页面依旧正常打开，只不过不会参与缓存与tabs显示，符合路由跳转的直觉
+      // 外链的页面依旧正常打开，只不过不进标签栏，符合路由跳转的直觉
       const { openExternalLinks } = useRoutingMethod();
       // 处理外链跳转
       openExternalLinks(to);
@@ -138,16 +130,12 @@ router.beforeEach(async (to: any, _from: any, next: any) => {
 // 路由跳转错误
 router.onError((error: any) => {
   NProgress.done();
-  const loadingStore = useLoadingStore(pinia);
-  loadingStore.hideRouteLoading();
   console.warn("路由错误", error.message);
 });
 
 // 路由加载后
 router.afterEach(() => {
   NProgress.done();
-  const loadingStore = useLoadingStore(pinia);
-  loadingStore.hideRouteLoading();
 });
 
 export default router;

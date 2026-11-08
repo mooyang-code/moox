@@ -42,7 +42,8 @@
       </a-table-column>
       <a-table-column title="使用情况" :width="240">
         <template #cell="{ record }">
-          <span v-if="!record.chips.length" class="usage-empty">未被使用</span>
+          <span v-if="record.otherUsage" class="usage-empty">{{ record.otherUsage }}</span>
+          <span v-else-if="!record.chips.length" class="usage-empty">未被使用</span>
           <div v-else class="usage-chips">
             <button
               v-for="chip in record.chips"
@@ -59,7 +60,7 @@
         </template>
       </a-table-column>
       <a-table-column title="更新时间" data-index="updated_at" :width="170" :sortable="{ sortDirections: ['ascend', 'descend'] }">
-        <template #cell="{ record }">{{ formatTime(record.updated_at) }}</template>
+        <template #cell="{ record }">{{ formatTime(record.updated_at, displayZone) }}</template>
       </a-table-column>
       <a-table-column title="操作" :width="90" align="center" fixed="right">
         <template #cell="{ record }">
@@ -98,7 +99,10 @@
 import { formatTime } from "@/views/data/shared/metadata-utils";
 import { factorTypeLabel } from "@/views/factor/shared/status";
 import type { DefinitionRow } from "./definitions-model";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
 
+// 页面时间按当前空间登记的时区显示
+const displayZone = useDisplayZone();
 const props = defineProps<{
   rows: DefinitionRow[];
   loading: boolean;

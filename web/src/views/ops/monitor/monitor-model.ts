@@ -10,15 +10,15 @@ import type {
 import {
   humanizeDuration,
   prettifyIds,
+  fullTime,
   relativeTime,
-  shortTime,
   toMillis,
   toSeconds,
   type NameBook,
   type Tone
 } from "@/views/home/home-model";
 import { alertLink, alertNote, hostHref, statusLabel } from "./health-display";
-import { marketTime } from "./market-time";
+import { marketTime } from "@/utils/time-zone";
 
 /** 触发时间相差不超过 60 秒的告警多半是同一个原因（服务重启、网络抖动），合并成一组展示。 */
 export const SAME_CAUSE_WINDOW_MS = 60_000;
@@ -44,9 +44,6 @@ export function serverNow(overview: HealthOverview | undefined, fallbackMs: numb
   return toMillis(overview?.generated_at) ?? fallbackMs;
 }
 
-/** 毫秒时间戳转 ISO 字符串：首页的时间工具把数字当作 Unix 秒。 */
-const iso = (ms: number) => new Date(ms).toISOString();
-
 function since(startMs: number | null, nowMs: number): string {
   return startMs === null ? "—" : humanizeDuration(Math.max(0, Math.floor((nowMs - startMs) / 1000)));
 }
@@ -58,6 +55,8 @@ const LAYER_LABELS: Record<string, string> = { component: "组件", dataset: "�
 export interface Fact {
   label: string;
   value: string;
+  /** 相对时间的完整时间（悬停用） */
+  title?: string;
 }
 
 export interface AlertLine {
@@ -97,7 +96,12 @@ function datasetFacts(dataset: HealthDataset | undefined, nowMs: number): Fact[]
   if (delay.text !== "—") facts.push({ label: "到达", value: delay.text });
   const limit = toSeconds(dataset.lateness_limit_seconds);
   if (limit) facts.push({ label: "允许迟到", value: humanizeDuration(limit) });
-  if (dataset.last_success_at) facts.push({ label: "最近成功", value: relativeTime(dataset.last_success_at, nowMs) });
+  if (dataset.last_success_at)
+    facts.push({
+      label: "最近成功",
+      value: relativeTime(dataset.last_success_at, nowMs),
+      title: fullTime(dataset.last_success_at)
+    });
   return facts;
 }
 
@@ -196,8 +200,8 @@ function alertLine(alert: HealthAlert, names: NameBook, nowMs: number): AlertLin
   const note = alertNote(alert.object);
   const startedMs = toMillis(alert.triggered_at);
   const facts: Fact[] = [
-    { label: "触发时间", value: shortTime(alert.triggered_at, nowMs) },
-    { label: "最新检查", value: relativeTime(alert.last_checked_at, nowMs) },
+    { label: "触发时间", value: marketTime(toMillis(alert.triggered_at), "UTC", nowMs) },
+    { label: "最新检查", value: relativeTime(alert.last_checked_at, nowMs), title: fullTime(alert.last_checked_at) },
     ...datasetFacts(alert.dataset, nowMs)
   ];
   return {
@@ -435,7 +439,7 @@ function incidentOutcome(state: IncidentState, group: IncidentItem[], startedMs:
     return { outcome: startedMs === null ? "进行中" : `进行中 · 已持续 ${since(startedMs, nowMs)}`, flap: false };
   if (state === "revoked") return { outcome: "已撤销（检查停用或移除）", flap: false };
   const lastEnd = Math.max(...group.map(item => item.endedMs ?? 0));
-  if (startedMs === null) return { outcome: `${shortTime(iso(lastEnd), nowMs)} 恢复`, flap: false };
+  if (startedMs === null) return { outcome: `${marketTime(lastEnd, "UTC", nowMs)} 恢复`, flap: false };
   const lasted = Math.max(0, lastEnd - startedMs);
   return { outcome: `${humanizeDuration(Math.round(lasted / 1000))}后恢复`, flap: lasted <= FLAP_MS };
 }
@@ -464,7 +468,7 @@ export function incidentTimeline(overview: HealthOverview | undefined, names: Na
         key: group.map(item => item.incident.id).join("|"),
         tone: state === "active" ? worst(group.map(item => item.tone)) : "idle",
         startedMs,
-        time: startedMs === null ? "窗口之前" : shortTime(iso(startedMs), nowMs),
+        time: startedMs === null ? "窗口之前" : marketTime(startedMs, "UTC", nowMs),
         title: primary.title,
         others: ordered.slice(1).map(item => item.title),
         reason: prettifyIds(primary.incident.reason || "", names),
@@ -671,6 +675,7 @@ export interface BusinessItem {
   reason: string;
   rawError: string;
   checkedAt: string;
+  checkedAtTitle: string;
   spaceId: string;
 }
 
@@ -707,6 +712,7 @@ export function businessKinds(overview: HealthOverview | undefined, names: NameB
       reason: prettifyIds(item.reason || "", names),
       rawError: item.raw_error || "",
       checkedAt: relativeTime(item.checked_at, nowMs),
+      checkedAtTitle: fullTime(item.checked_at),
       spaceId: item.space_id || ""
     });
     kinds.set(item.kind || "", list);
@@ -751,6 +757,7 @@ export interface HostCard {
   meters: Meter[];
   gatewayIssues: Fact[];
   lastReported: string;
+  lastReportedTitle: string;
   href: string;
 }
 
@@ -819,6 +826,7 @@ export function hostCards(overview: HealthOverview | undefined, nowMs: number): 
         value: signal.signal?.reason || statusLabel(signal.signal?.status)
       })),
     lastReported: relativeTime(host.last_reported_at, nowMs),
+    lastReportedTitle: fullTime(host.last_reported_at),
     href: hostHref(host.host_id)
   }));
 }

@@ -179,13 +179,16 @@ function normalizePageParams<T extends { page?: Page | number; page_size?: numbe
   return normalized;
 }
 
+/** 实例按空间存放；spaceId 显式指定查哪个空间（默认当前所选空间），用于统计全局对象（云账户）在各空间的使用。 */
 export const listFunctionInstances = async (
-  params: ListFunctionInstancesRequest = {}
+  params: ListFunctionInstancesRequest = {},
+  spaceId?: string
 ): Promise<{ items: FunctionInstance[]; total: number; page?: PageResult }> => {
   const rsp = await callControl<ListFunctionInstancesRequest, { items?: FunctionInstance[]; page?: PageResult }>(
     "cloudfunction",
     "ListFunctionInstances",
-    normalizePageParams(params)
+    normalizePageParams(params),
+    spaceId ? { headers: { "X-Space-Id": spaceId } } : undefined
   );
   return { items: rsp.items ?? [], total: rsp.page?.total ?? 0, page: rsp.page };
 };

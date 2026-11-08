@@ -7,14 +7,22 @@ describe("account ledger helpers", () => {
     expect(ledgerTypeLabel("NEW_TYPE")).toBe("NEW_TYPE");
   });
 
-  it("defaults to the last seven days", () => {
-    expect(defaultLedgerRange(8 * 86_400_000)).toEqual([86_400_000, 8 * 86_400_000]);
+  it("defaults to the last seven whole days in the display zone, today included", () => {
+    const now = Date.parse("2026-11-07T20:00:00Z");
+    // UTC：11-01 零点到 11-08 零点
+    expect(defaultLedgerRange("UTC", now)).toEqual([Date.parse("2026-11-01T00:00:00Z"), Date.parse("2026-11-08T00:00:00Z")]);
+    // 北京时间已经是 11-08：11-02 零点到 11-09 零点
+    expect(defaultLedgerRange("Asia/Shanghai", now)).toEqual([
+      Date.parse("2026-11-01T16:00:00Z"),
+      Date.parse("2026-11-08T16:00:00Z")
+    ]);
   });
 
   it("rejects ranges longer than 90 days", () => {
     expect(ledgerRangeError([0, 91 * 86_400_000])).toContain("90");
     expect(ledgerRangeError([0, 7 * 86_400_000])).toBe("");
     expect(ledgerRangeError([10, 5])).not.toBe("");
+    expect(ledgerRangeError(null)).not.toBe("");
   });
 
   it("colors amounts by sign", () => {

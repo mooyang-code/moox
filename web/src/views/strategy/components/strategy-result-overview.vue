@@ -14,10 +14,10 @@
       <div class="stat">
         <span class="label">跳过原因</span>
         <span v-if="!overview.skipReasons.length" class="muted">无</span>
-        <a-space v-else wrap size="mini"
-          ><a-tag v-for="item in overview.skipReasons" :key="item.reason" size="small" color="orange"
-            >{{ skipReasonLabel(item.reason) }} × {{ item.count }}</a-tag
-          ></a-space
+        <span v-else class="skip-reasons"
+          ><template v-for="(item, index) in overview.skipReasons" :key="item.reason"
+            >{{ index ? "；" : "" }}{{ skipReasonLabel(item.reason) }} × {{ item.count }}</template
+          ></span
         >
       </div>
     </div>
@@ -30,7 +30,8 @@
         <span class="targets">● 目标数（0–{{ maxTargets }}）</span>
         <span class="turnover">● 换手（0–{{ percent(maxTurnover) }}）</span>
         <span class="muted"
-          >{{ formatStrategyTime(points[0].time) }} → {{ formatStrategyTime(points[points.length - 1].time) }}</span
+          >{{ formatInstant(points[0].time, displayZone) }} →
+          {{ formatInstant(points[points.length - 1].time, displayZone) }}</span
         >
       </div>
     </div>
@@ -40,7 +41,12 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import type { StrategyResult } from "@/api/strategy-types";
-import { buildResultOverview, formatDelay, formatStrategyTime, percent, skipReasonLabel } from "@/views/strategy/model";
+import { buildResultOverview, formatDelay, percent, skipReasonLabel } from "@/views/strategy/model";
+import { formatInstant } from "@/utils/time-zone";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
+
+// 页面时间按当前空间登记的时区显示
+const displayZone = useDisplayZone();
 
 const props = defineProps<{ results: StrategyResult[] }>();
 const overview = computed(() => buildResultOverview(props.results));
@@ -67,6 +73,10 @@ const turnoverLine = computed(() =>
 </script>
 
 <style scoped>
+.skip-reasons {
+  color: rgb(var(--warning-6));
+  font-size: 13px;
+}
 .overview {
   display: grid;
   gap: 10px;

@@ -6,7 +6,7 @@ export type PrecheckResult = { ok: true; memberKey: string; columns: string[] } 
 
 const fixable = (reason: string): PrecheckResult => ({ ok: false, reason, fixable: true });
 
-/** 因子任务里已有成员中预检用到的部分。 */
+/** 计算任务里已有成员中预检用到的部分。 */
 export type PrecheckMember = Pick<FactorMember, "factor_id" | "member_key" | "kind"> & {
   params?: Record<string, number>;
   /** 成员在结果数据集里的列名（含成员键前缀）。 */
@@ -15,7 +15,7 @@ export type PrecheckMember = Pick<FactorMember, "factor_id" | "member_key" | "ki
 
 export interface PrecheckInput {
   candidate: FactorDef;
-  /** 该因子任务已有的成员（含已停用）。 */
+  /** 该计算任务已有的成员（含已停用）。 */
   members: PrecheckMember[];
   /** 源数据集的列名；还没加载出来时为 null，此时跳过依赖数据集的检查。 */
   sourceColumns: string[] | null;

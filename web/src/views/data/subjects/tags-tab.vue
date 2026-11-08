@@ -61,10 +61,12 @@
               v-if="syncStatusOf(record.tag_id)?.last_status === 'failed'"
               :content="syncStatusOf(record.tag_id)?.last_error || '同步失败'"
             >
-              <span class="run-status run-status--failed">失败 · {{ formatTime(syncStatusOf(record.tag_id)?.last_run_at) }}</span>
+              <span class="run-status run-status--failed"
+                >失败 · {{ formatTime(syncStatusOf(record.tag_id)?.last_run_at, tagTimezone(record)) }}</span
+              >
             </a-tooltip>
             <span v-else-if="syncStatusOf(record.tag_id)?.last_status === 'success'" class="run-status run-status--success">
-              成功 · {{ formatTime(syncStatusOf(record.tag_id)?.last_run_at) }}
+              成功 · {{ formatTime(syncStatusOf(record.tag_id)?.last_run_at, tagTimezone(record)) }}
             </span>
             <span v-else-if="syncStatusFailed" class="muted">状态获取失败</span>
             <span v-else class="muted">从未运行</span>
@@ -82,9 +84,8 @@
           </template>
         </a-table-column>
       </template>
+      <template #empty><a-empty description="暂无标签" /></template>
     </a-table>
-
-    <a-empty v-if="!loading && !rows.length" description="暂无标签" />
 
     <a-modal v-model:visible="visible" width="700px" :title="editing ? '编辑标签' : '新建标签'" @before-ok="submit">
       <a-form :model="form" auto-label-width>
@@ -132,7 +133,8 @@
         </a-row>
         <div v-if="form.mode === 'auto'" class="next-runs">
           <span class="muted">接下来运行</span>
-          <a-tag v-for="run in previewRuns" :key="run" size="small">{{ formatTime(run) }}</a-tag>
+          <!-- 按标签自己选的时区显示（定时就是按它算的），带后缀 -->
+          <span v-if="previewRuns.length">{{ previewRuns.map(run => formatTime(run, form.timezone, "minute")).join("；") }}</span>
           <span v-if="!previewRuns.length" class="run-status--failed">定时更新表达式无效</span>
         </div>
       </a-form>
@@ -144,7 +146,16 @@
         <template #columns>
           <a-table-column title="数据集 ID" data-index="dataset_id" />
           <a-table-column title="数据集名称" data-index="dataset_name" />
-          <a-table-column title="采集任务 ID" data-index="collector_task_id" />
+          <a-table-column title="采集任务 ID">
+            <template #cell="{ record }">
+              <a-link
+                v-if="record.collector_task_id"
+                :href="`#/collector/tasks?detail=${encodeURIComponent(record.collector_task_id)}`"
+                >{{ record.collector_task_id }}</a-link
+              >
+              <span v-else>-</span>
+            </template>
+          </a-table-column>
         </template>
       </a-table>
     </a-modal>
@@ -154,7 +165,7 @@
 <script setup lang="ts">
 import { createSubmitScope } from "@/utils/submit-scope";
 import { createLatestRequestGuard } from "@/utils/latest-request";
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, reactive, ref, watch } from "vue";
 import { Message, Modal } from "@arco-design/web-vue";
 import { listSubjectListers, listTagSyncStatus, type SubjectLister, type TagSyncStatus } from "@/api/collector";
 import { deleteTag, listTags, upsertTag } from "@/api/storage/metadata";
@@ -372,8 +383,6 @@ watch(
   },
   { immediate: true }
 );
-
-onMounted(() => void load());
 
 // 提交作用域（重新打开才使旧提交失效，@ok 自动关闭不影响正常保存）：visible 打开/关闭都会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
 const tagScope = createSubmitScope();

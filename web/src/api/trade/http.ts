@@ -118,17 +118,34 @@ function assertSuccess(response: { ret_info?: RetInfo }) {
 // 轮询和查询失败时不弹窗，否则每次轮询都会弹一次；写操作默认提示业务错误。
 const quietMethod = /^(List|Get|Query)/;
 
+// 确认对话框提交期间发出的请求不弹全局提示：错误由对话框自己显示，避免同一个错误提示两遍
+let dialogSubmissions = 0;
+
+/** 在确认对话框里执行提交：期间发出的交易请求出错时只抛给调用方，不弹全局提示。 */
+export async function withDialogErrors<T>(submit: () => Promise<T>): Promise<T> {
+  dialogSubmissions += 1;
+  try {
+    return await submit();
+  } finally {
+    dialogSubmissions -= 1;
+  }
+}
+
 export async function callTrade<TReq extends object, TRsp extends { ret_info: RetInfo }>(
   group: keyof typeof tradeServiceMap,
   method: string,
   req: TReq,
   options: { silent?: boolean } = {}
 ): Promise<TRsp> {
-  const rsp = await tradeClient.post<TRsp>(`/api/admin/${tradeServiceMap[group]}/${method}`, req);
+  // silent 同时管传输错误：后台轮询失败不弹全局提示，由页面自己显示
+  const silent = Boolean(options.silent) || dialogSubmissions > 0;
+  const rsp = await tradeClient.post<TRsp>(`/api/admin/${tradeServiceMap[group]}/${method}`, req, {
+    silentError: silent
+  });
   try {
     assertSuccess(rsp.data);
   } catch (error) {
-    if (error instanceof TradeResponseError && !options.silent && !quietMethod.test(method)) {
+    if (error instanceof TradeResponseError && !silent && !quietMethod.test(method)) {
       Message.error(error.message);
     }
     throw error;
@@ -148,7 +165,9 @@ tradeClient.interceptors.response.use(
     return rsp;
   },
   error => {
-    Message.error(explainTransportError(error, "Trade 请求失败"));
+    // 静默时也要把网络错误改写成中文（调用方会把 error.message 显示在自己的对话框里），只是不弹全局提示。
+    const message = explainTransportError(error, "Trade 请求失败");
+    if (!error?.config?.silentError) Message.error(message);
     return Promise.reject(error);
   }
 );

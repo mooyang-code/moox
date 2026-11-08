@@ -26,13 +26,17 @@
       >
         <template #columns>
           <a-table-column title="空间ID" data-index="space_id" :width="180" />
-          <a-table-column title="名称" data-index="name" :width="180" />
+          <a-table-column title="名称" :width="180">
+            <template #cell="{ record }">
+              {{ record.name }}<span v-if="record.space_id === spaceStore.selectedSpaceId" class="current-mark">（当前）</span>
+            </template>
+          </a-table-column>
           <a-table-column title="负责人" data-index="owner" :width="120" />
           <a-table-column title="市场" data-index="market" :width="110" />
           <a-table-column title="时区" data-index="timezone" :width="150" />
           <a-table-column title="状态" :width="90">
             <template #cell="{ record }">
-              <a-tag size="small" :color="statusColor(record.status)">{{ statusLabel(record.status) }}</a-tag>
+              <StatusMark :tone="record.status === 'active' ? 'ok' : ''">{{ statusLabel(record.status) }}</StatusMark>
             </template>
           </a-table-column>
           <a-table-column title="更新时间" :width="180">
@@ -57,7 +61,7 @@
         </template>
       </a-table>
 
-      <a-modal v-model:visible="visible" width="720px" :title="modalTitle" @ok="submit">
+      <a-modal v-model:visible="visible" width="min(720px, 100vw)" :title="modalTitle" :on-before-ok="submit">
         <a-form :model="form" auto-label-width>
           <a-form-item field="space_id" label="空间ID" required>
             <a-input v-model="form.space_id" :disabled="editing" placeholder="例如 cn_stock" />
@@ -74,8 +78,11 @@
           <a-form-item field="market" label="市场">
             <a-input v-model="form.market" placeholder="例如 CN、US、CRYPTO" />
           </a-form-item>
-          <a-form-item field="timezone" label="时区">
-            <a-input v-model="form.timezone" placeholder="例如 Asia/Shanghai" />
+          <a-form-item field="timezone" label="时区" required :extra="uncommonZoneHint(form.timezone || '')">
+            <a-select v-model="form.timezone" placeholder="选择时区：页面上这个空间的时间按它显示">
+              <a-option v-for="item in SPACE_TIMEZONES" :key="item.value" :value="item.value">{{ item.label }}</a-option>
+              <a-option v-if="uncommonZoneHint(form.timezone || '')" :value="form.timezone">{{ form.timezone }}</a-option>
+            </a-select>
           </a-form-item>
           <a-form-item field="status" label="状态">
             <a-select v-model="form.status">
@@ -89,20 +96,16 @@
 </template>
 
 <script setup lang="ts">
+import StatusMark from "@/views/trading/accounts/shared/status-mark.vue";
 import { createSubmitScope } from "@/utils/submit-scope";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
+import { reportControlError } from "@/api/admin/http";
+import { SPACE_TIMEZONES, uncommonZoneHint } from "@/utils/space-zones";
 import { createSpace, listSpaces, updateSpace } from "@/api/admin/spaces";
 import type { Space } from "@/api/admin/types";
 import { isSystemSpace, useSpaceStore } from "@/store/modules/space";
-import {
-  applyPageResult,
-  defaultPagination,
-  formatTime,
-  statusColor,
-  statusLabel,
-  statusOptions
-} from "@/views/data/shared/metadata-utils";
+import { applyPageResult, defaultPagination, formatTime, statusLabel, statusOptions } from "@/views/data/shared/metadata-utils";
 
 defineOptions({ name: "SettingsSpaces" });
 
@@ -119,7 +122,7 @@ const form = reactive<Space>({
   description: "",
   owner: "",
   market: "",
-  timezone: "Asia/Shanghai",
+  timezone: "",
   status: "active"
 });
 
@@ -144,7 +147,7 @@ function resetForm() {
     description: "",
     owner: "",
     market: "",
-    timezone: "Asia/Shanghai",
+    timezone: "",
     status: "active"
   });
 }
@@ -163,32 +166,40 @@ function openEdit(record: Space) {
     description: record.description || "",
     owner: record.owner || "",
     market: record.market || "",
-    timezone: record.timezone || "Asia/Shanghai",
+    timezone: record.timezone || "",
     status: record.status || "active"
   });
   visible.value = true;
 }
 
-async function submit() {
+/** 弹窗的“确定”：校验或保存失败时返回 false，弹窗保持打开，填的内容不丢。 */
+async function submit(): Promise<boolean> {
   if (!form.space_id || !form.name) {
     Message.warning("请填写空间ID和名称");
-    return;
+    return false;
+  }
+  if (!form.timezone) {
+    Message.warning("请选择时区：页面上这个空间的时间按它显示");
+    return false;
   }
   // 固定提交快照：保存期间表单可能被关闭并重新打开去编辑另一个空间，旧提交只能用自己提交的数据
   const submission = spaceScope.begin();
   const submitted = { ...form };
-  if (editing.value) {
-    await updateSpace(submitted);
-  } else {
-    await createSpace(submitted);
+  const creating = !editing.value;
+  try {
+    if (creating) await createSpace(submitted);
+    else await updateSpace(submitted);
+  } catch (error) {
+    reportControlError(error);
+    return false;
   }
   Message.success("空间已保存");
-  if (!submission.isCurrent()) return;
-  visible.value = false;
-  await load();
-  if (submitted.status === "active" && submission.isCurrent()) {
-    spaceStore.setSelectedSpace(submitted.space_id);
-  }
+  if (!submission.isCurrent()) return false;
+  void load().then(() => {
+    // 只有新建的空间才切过去；编辑别的空间不能把当前空间悄悄切走
+    if (creating && submitted.status === "active" && submission.isCurrent()) spaceStore.setSelectedSpace(submitted.space_id);
+  });
+  return true;
 }
 
 function onPageChange(page: number) {
@@ -226,6 +237,10 @@ watch(visible, open => {
 }
 
 .page-head span {
+  color: var(--color-text-3);
+}
+
+.current-mark {
   color: var(--color-text-3);
 }
 </style>

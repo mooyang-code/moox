@@ -18,7 +18,7 @@ const onBack = () => {
   if (window.history.state.back !== null) {
     router.replace(window.history.state.back);
   } else {
-    router.replace("/login");
+    router.replace("/home");
   }
 };
 </script>

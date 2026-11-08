@@ -10,8 +10,8 @@
                 <template #icon><component :is="overall.info.icon" /></template>
                 {{ overall.info.text }}
               </a-tag>
-              <span v-if="!overall.reasons.length" class="muted">采集计划已生效，各数据集的自动检查都跟得上。</span>
-              <span v-else class="verdict-reason">{{ overall.reasons[0] }}</span>
+              <span v-if="overall.healthy" class="muted">采集计划已生效，各数据集的自动检查都跟得上。</span>
+              <span v-else-if="overall.reasons.length" class="verdict-reason">{{ overall.reasons[0] }}</span>
               <a-tooltip v-if="overall.reasons.length > 1">
                 <template #content>
                   <div v-for="reason in overall.reasons" :key="reason">{{ reason }}</div>
@@ -20,7 +20,10 @@
               </a-tooltip>
             </div>
             <a-space>
-              <span class="muted">{{ status.generated_at ? `更新于 ${localTimeText(status.generated_at)}` : "" }}</span>
+              <span v-if="loadError && loaded" class="verdict-reason"
+                >最近一次读取失败：{{ loadError }}，下面是上次成功的结果</span
+              >
+              <span class="muted">{{ status.generated_at ? `更新于 ${timeText(status.generated_at)}` : "" }}</span>
               <a-button size="small" @click="logVisible = true">
                 <template #icon><icon-history /></template>
                 变更记录
@@ -34,36 +37,40 @@
             <div class="metric">
               <span class="metric-label">采集计划</span>
               <div class="metric-line">
-                <b class="metric-value metric-value--text">{{ planText }}</b>
-                <span class="metric-sub">{{ planSub }}</span>
+                <b class="metric-value metric-value--text">{{ loaded ? planText : "—" }}</b>
+                <span v-if="loaded" class="metric-sub">{{ planSub }}</span>
               </div>
             </div>
             <div class="metric">
               <span class="metric-label">函数</span>
               <div class="metric-line">
-                <b class="metric-value">{{ summary.functions }}</b>
-                <span class="metric-sub">下发中 {{ summary.pendingFunctions }} · 退役中 {{ summary.retiringFunctions }}</span>
+                <b class="metric-value">{{ loaded ? summary.functions : "—" }}</b>
+                <span v-if="loaded" class="metric-sub"
+                  >下发中 {{ summary.pendingFunctions }} · 退役中 {{ summary.retiringFunctions }}</span
+                >
               </div>
             </div>
             <div class="metric">
               <span class="metric-label">数据集 / 标的</span>
               <div class="metric-line">
-                <b class="metric-value">{{ summary.datasets }} / {{ summary.subjects }}</b>
-                <span class="metric-sub">正在采集</span>
+                <b class="metric-value">{{ loaded ? `${summary.datasets} / ${summary.subjects}` : "—" }}</b>
+                <span v-if="loaded" class="metric-sub">正在采集</span>
               </div>
             </div>
             <div class="metric">
               <span class="metric-label">近 24h 实时缺口</span>
               <div class="metric-line">
-                <b class="metric-value" :class="{ 'metric-value--warn': summary.gapBars > 0 }">{{ summary.gapBars }} 根</b>
-                <span class="metric-sub">{{ summary.gapSubjects }} 个标的，由自动补采修复</span>
+                <b class="metric-value" :class="{ 'metric-value--warn': summary.gapBars > 0 }">{{
+                  loaded ? `${summary.gapBars} 根` : "—"
+                }}</b>
+                <span v-if="loaded" class="metric-sub">{{ summary.gapSubjects }} 个标的，由自动补采修复</span>
               </div>
             </div>
             <div class="metric metric--link" role="button" tabindex="0" @click="goBackfills()" @keydown.enter="goBackfills()">
               <span class="metric-label">补采 <icon-right /></span>
               <div class="metric-line">
-                <b class="metric-value">{{ status.active_backfills || 0 }}</b>
-                <span class="metric-sub" :class="{ 'danger-text': (status.failed_backfills_24h || 0) > 0 }"
+                <b class="metric-value">{{ loaded ? status.active_backfills || 0 : "—" }}</b>
+                <span v-if="loaded" class="metric-sub" :class="{ 'danger-text': (status.failed_backfills_24h || 0) > 0 }"
                   >进行中 · 24h 失败 {{ status.failed_backfills_24h || 0 }}</span
                 >
               </div>
@@ -89,16 +96,16 @@
             class="clickable-table"
             @row-click="toggleDataset"
           >
-            <template #empty><div class="empty-text">还没有正在采集的数据集</div></template>
+            <template #empty
+              ><div class="empty-text">{{ emptyText("还没有正在采集的数据集") }}</div></template
+            >
             <template #columns>
               <a-table-column title="数据集">
                 <template #cell="{ record }">
                   <div class="dataset-cell" :title="`${record.dataset_id} · ${record.frequency}`">
                     <span v-if="record.dataset_name" class="dataset-name">{{ record.dataset_name }}</span>
-                    <template v-else>
-                      <span class="mono-text dataset-name">{{ record.dataset_id }}</span>
-                      <a-tag size="small" class="freq-tag">{{ record.frequency }}</a-tag>
-                    </template>
+                    <span v-else class="mono-text dataset-name">{{ record.dataset_id }}</span>
+                    <span class="freq-text">{{ record.frequency }}</span>
                   </div>
                 </template>
               </a-table-column>
@@ -110,7 +117,9 @@
                   <a-tooltip :content="INSPECTION_TIP"><icon-question-circle class="column-tip" /></a-tooltip>
                 </template>
                 <template #cell="{ record }">
-                  <span :style="{ color: inspectionInfo(record).color }">{{ inspectionInfo(record).text }}</span>
+                  <span :style="{ color: inspectionInfo(record, displayZone).color }">{{
+                    inspectionInfo(record, displayZone).text
+                  }}</span>
                 </template>
               </a-table-column>
               <a-table-column title="24h 实时缺口" :width="130">
@@ -147,23 +156,22 @@
                   <icon-exclamation-circle /> {{ reason }}
                 </div>
                 <div class="detail-line">
-                  首次生效 {{ localTimeText(record.effective_from) }} · 自动巡检已查至
-                  {{ record.inspected_until ? localTimeText(record.inspected_until) : "尚未巡检" }}（每 5
-                  分钟一次，发现缺口自动补采）
+                  首次生效 {{ timeText(record.effective_from) }} · 自动巡检已查至
+                  {{ record.inspected_until ? timeText(record.inspected_until) : "尚未巡检" }}（每 5 分钟一次，发现缺口自动补采）
                 </div>
                 <div class="detail-line">
                   历史缺口扫描：
                   <template v-if="!record.history_scanned_at">尚未扫描</template>
                   <template v-else-if="record.history_error"
-                    >{{ localTimeText(record.history_scanned_at) }} 失败（{{ record.history_error }}）</template
+                    >{{ timeText(record.history_scanned_at) }} 失败（{{ record.history_error }}）</template
                   >
                   <template v-else-if="record.history_gap_bars">
-                    {{ localTimeText(record.history_scanned_at) }} 发现 {{ record.history_gap_bars }} 根缺口（{{
+                    {{ timeText(record.history_scanned_at) }} 发现 {{ record.history_gap_bars }} 根缺口（{{
                       record.history_gap_subjects
                     }}
                     个标的），补采确认后行情源本来没有的部分会自动排除
                   </template>
-                  <template v-else>{{ localTimeText(record.history_scanned_at) }} 无缺口</template>
+                  <template v-else>{{ timeText(record.history_scanned_at) }} 无缺口</template>
                 </div>
                 <div v-if="record.absent_bars" class="detail-line">
                   已确认行情源没有 {{ record.absent_bars }} 根（如停牌、无成交），不算缺口、不影响健康
@@ -205,7 +213,7 @@
               status.stream.online ? "在线" : "离线"
             }}</a-tag>
             <span class="muted mono-text"
-              >{{ status.stream.instance_id }} · 心跳 {{ status.stream.heartbeat_at }} · 已应用计划
+              >{{ status.stream.instance_id }} · 心跳 {{ timeText(status.stream.heartbeat_at) }} · 已应用计划
               {{ status.stream.applied_plan_id }}/{{ status.stream.applied_stage }}</span
             >
           </div>
@@ -217,7 +225,9 @@
               <a-table-column title="已订阅" :width="80" align="center">
                 <template #cell="{ record }">{{ record.subscribed ? "是" : "否" }}</template>
               </a-table-column>
-              <a-table-column title="最近消息" data-index="last_message_at" :width="230" />
+              <a-table-column title="最近消息" :width="230">
+                <template #cell="{ record }">{{ timeText(record.last_message_at) }}</template>
+              </a-table-column>
               <a-table-column title="重连" data-index="reconnects" :width="70" align="right" />
               <a-table-column title="地址" data-index="endpoint" />
             </template>
@@ -230,7 +240,9 @@
             :pagination="false"
             :bordered="{ cell: true }"
           >
-            <template #empty><div class="empty-text">还没有周期统计</div></template>
+            <template #empty
+              ><div class="empty-text">{{ emptyText("还没有周期统计") }}</div></template
+            >
             <template #columns>
               <a-table-column title="周期" data-index="period" :width="180" />
               <a-table-column title="数据集" :width="220">
@@ -275,7 +287,9 @@
               :bordered="{ cell: true }"
               table-layout-fixed
             >
-              <template #empty><div class="empty-text">没有匹配的函数</div></template>
+              <template #empty
+                ><div class="empty-text">{{ emptyText("没有匹配的函数") }}</div></template
+              >
               <template #columns>
                 <a-table-column title="函数" :width="330">
                   <template #cell="{ record }">
@@ -342,14 +356,15 @@
     <FunctionDetailDialog :fn="selectedFunction" :dataset-names="datasetNames" @close="selectedFunction = null" />
 
     <a-drawer v-model:visible="logVisible" :width="860" :footer="false" title="标的变更记录" unmount-on-close>
-      <ActivityLog :space-id="selectedSpaceId" category="collector.subject_change" :page-size="20" />
+      <ActivityLog :space-id="selectedSpaceId" :zone="displayZone" category="collector.subject_change" :page-size="20" />
     </a-drawer>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, nextTick, onActivated, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
+import { usePolling } from "@/hooks/usePolling";
 import { Message } from "@arco-design/web-vue";
 import { storeToRefs } from "pinia";
 import ActivityLog from "@/components/activity-log/index.vue";
@@ -380,14 +395,20 @@ import {
   inspectionInfo,
   levelInfo,
   levelRank,
-  localTimeText,
+  overallStatus,
   statusSummary
 } from "./runtime-status-model";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
+import { formatInstant } from "@/utils/time-zone";
 
+const route = useRoute();
 const router = useRouter();
 const spaceStore = useSpaceStore();
 const { selectedSpaceId } = storeToRefs(spaceStore);
 const guard = createLatestRequestGuard();
+// 运行状态的时间按当前空间登记的时区带后缀显示
+const displayZone = useDisplayZone();
+const timeText = (value?: string) => formatInstant(value, displayZone.value);
 
 const status = ref<GetCollectorStatusResponse>({});
 const statusLoading = ref(false);
@@ -401,11 +422,12 @@ const rangeDataset = ref("");
 const logVisible = ref(false);
 
 const summary = computed(() => statusSummary(status.value));
-const overall = computed(() => ({
-  level: status.value.level || "ok",
-  info: levelInfo(status.value.level),
-  reasons: status.value.reasons || []
-}));
+// 读取失败时不能显示成“正常”：loaded 表示当前空间至少读到过一次。
+const loaded = ref(false);
+const loadError = ref("");
+const overall = computed(() => overallStatus({ status: status.value, loaded: loaded.value, error: loadError.value }));
+// 还没读到过数据时，表格不显示“没有数据”这类空状态，免得当成真的没有
+const emptyText = (text: string) => (loaded.value ? text : loadError.value ? "读取失败" : "读取中…");
 const datasetRows = computed(() =>
   [...(status.value.datasets || [])]
     .sort((a, b) => levelRank(b.level) - levelRank(a.level))
@@ -463,7 +485,7 @@ const streamPeriodRows = computed(() =>
     key: `${stat.dataset_id}-${stat.frequency}-${stat.period}`,
     dataset_id: stat.dataset_id,
     frequency: stat.frequency,
-    period: new Date(Number(stat.period || 0) * 1000).toISOString().replace(".000Z", "Z"),
+    period: formatInstant(Number(stat.period || 0) * 1000, displayZone.value),
     error: stat.error || "",
     ...streamPeriodText(stat)
   }))
@@ -485,7 +507,7 @@ const planText = computed(() => {
 });
 const planSub = computed(() => {
   const plan = status.value.open || status.value.applied;
-  return plan ? `${localTimeText(plan.updated_at)} 更新` : "创建采集任务后自动生成";
+  return plan ? `${timeText(plan.updated_at)} 更新` : "创建采集任务后自动生成";
 });
 
 const selectedFunction = ref<CollectorFunctionStatus | null>(null);
@@ -504,19 +526,22 @@ function datasetFunctionText(record: CollectorDatasetStatus) {
   return functions.length > 3 ? `${functions.slice(0, 3).join("、")} 等` : functions.join("、");
 }
 
-async function loadStatus() {
+/** background：60 秒的自动刷新，不转加载态、不弹全局提示；失败写在页面上，保留上次的结果。 */
+async function loadStatus(background = false) {
   const spaceId = selectedSpaceId.value || "";
   if (!spaceId) return;
   const request = guard.begin();
-  statusLoading.value = true;
+  if (!background) statusLoading.value = true;
   try {
-    const data = await getCollectorStatus(spaceId);
+    const data = await getCollectorStatus(spaceId, { silentError: background });
     if (!request.isLatest() || spaceId !== (selectedSpaceId.value || "")) return;
     status.value = data;
+    loaded.value = true;
+    loadError.value = "";
     // 行高要等数据渲染后才能量到。
     void nextTick(fitFunctionPageSize);
   } catch (error) {
-    if (request.isLatest()) console.error("获取运行状态失败:", error);
+    if (request.isLatest()) loadError.value = error instanceof Error && error.message ? error.message : "请稍后重试";
   } finally {
     if (request.isLatest()) statusLoading.value = false;
   }
@@ -525,6 +550,12 @@ async function loadStatus() {
 function refreshAll() {
   void loadStatus();
 }
+
+usePolling(
+  () => loadStatus(true),
+  60_000,
+  () => Boolean(selectedSpaceId.value)
+);
 
 function toggleDataset(record: { key: string }) {
   expandedKeys.value = expandedKeys.value.includes(record.key)
@@ -545,7 +576,11 @@ function openRange(mode: "check" | "backfill", datasetId = "") {
 
 /** 打开补采 Tab；带上作业 ID 时直接展开它的详情。 */
 function goBackfills(jobId?: string) {
-  void router.push({ path: "/collector/tasks", query: { tab: "backfills", ...(jobId ? { job: jobId } : {}) } });
+  // 别的页签的参数原样保留；补采自己的筛选从默认开始
+  const others = Object.fromEntries(
+    Object.entries(route.query).filter(([key]) => !["tab", "segment", "dataset", "job"].includes(key))
+  );
+  void router.push({ path: "/collector/tasks", query: { ...others, tab: "backfills", ...(jobId ? { job: jobId } : {}) } });
 }
 
 function onJobSubmitted(jobId: string) {
@@ -579,6 +614,8 @@ watch(functionFilters, () => (functionPage.value = 1), { deep: true });
 watch(selectedSpaceId, () => {
   guard.invalidate();
   status.value = {};
+  loaded.value = false;
+  loadError.value = "";
   expandedKeys.value = [];
   functionFilters.value = { keyword: "", region: "", market: "", abnormalOnly: false };
   void loadStatus();
@@ -768,8 +805,10 @@ onMounted(loadStatus);
   color: var(--color-text-3);
   cursor: help;
 }
-.freq-tag {
+.freq-text {
   flex: none;
+  color: var(--color-text-3);
+  font-size: 12px;
 }
 .dataset-detail {
   display: flex;

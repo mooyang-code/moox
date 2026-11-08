@@ -14,7 +14,7 @@
           />
           <a-button type="primary" status="success" :disabled="!selectedSpaceId" @click="openCreate">
             <template #icon><icon-plus /></template>
-            新增来源
+            新建来源
           </a-button>
         </a-space>
       </div>
@@ -38,10 +38,11 @@
           <a-table-column title="名称" data-index="name" :width="180" />
           <a-table-column title="属性" :width="320">
             <template #cell="{ record }">
-              <a-space wrap size="mini">
-                <a-tag v-for="[key, value] in attributeEntries(record)" :key="key" size="small">{{ key }}={{ value }}</a-tag>
-                <span v-if="!attributeEntries(record).length" class="muted">—</span>
-              </a-space>
+              <div v-for="[key, value] in attributeEntries(record)" :key="key" class="attr-line">
+                <span class="attr-key">{{ key }}</span
+                >{{ value }}
+              </div>
+              <span v-if="!attributeEntries(record).length" class="muted">—</span>
             </template>
           </a-table-column>
           <a-table-column title="状态" :width="90">
@@ -50,7 +51,7 @@
             </template>
           </a-table-column>
           <a-table-column title="更新时间" :width="180">
-            <template #cell="{ record }">{{ formatTime(record.updated_at) }}</template>
+            <template #cell="{ record }">{{ formatTime(record.updated_at, displayZone) }}</template>
           </a-table-column>
           <a-table-column title="操作" :width="90" align="center" :fixed="'right'">
             <template #cell="{ record }">
@@ -60,7 +61,7 @@
         </template>
       </a-table>
 
-      <a-modal v-model:visible="visible" width="760px" :title="modalTitle" @ok="submit">
+      <a-modal v-model:visible="visible" width="min(760px, 100vw)" :title="modalTitle" :on-before-ok="submit">
         <a-form :model="form" auto-label-width>
           <a-form-item field="data_source_id" label="来源ID" required>
             <a-input v-model="form.data_source_id" :disabled="editing" placeholder="例如 binance" />
@@ -74,9 +75,19 @@
             </a-select>
           </a-form-item>
           <a-form-item v-if="attributeEntries(form).length" label="属性">
-            <a-space wrap size="mini">
-              <a-tag v-for="[key, value] in attributeEntries(form)" :key="key" size="small">{{ key }}={{ value }}</a-tag>
-            </a-space>
+            <a-table
+              :data="formAttributeRows"
+              row-key="key"
+              size="small"
+              :pagination="false"
+              :bordered="{ cell: true }"
+              class="attr-table"
+            >
+              <template #columns>
+                <a-table-column title="属性" data-index="key" :width="160" />
+                <a-table-column title="值" data-index="value" />
+              </template>
+            </a-table>
           </a-form-item>
         </a-form>
       </a-modal>
@@ -100,7 +111,10 @@ import {
   statusLabel,
   statusOptions
 } from "@/views/data/shared/metadata-utils";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
 
+// 页面时间按当前空间登记的时区显示
+const displayZone = useDisplayZone();
 defineOptions({ name: "DataSources" });
 
 const spaceStore = useSpaceStore();
@@ -119,7 +133,7 @@ const form = reactive<DataSource>({
   status: "active"
 });
 
-const modalTitle = computed(() => (editing.value ? "编辑数据源" : "新增数据源"));
+const modalTitle = computed(() => (editing.value ? "编辑数据源" : "新建数据源"));
 
 const loadRequests = createLatestRequestGuard();
 
@@ -145,6 +159,9 @@ async function load() {
     if (request.isLatest()) loading.value = false;
   }
 }
+
+// 编辑弹窗里的属性小表格
+const formAttributeRows = computed(() => attributeEntries(form).map(([key, value]) => ({ key, value })));
 
 function attributeEntries(source: Pick<DataSource, "attributes">): Array<[string, string]> {
   return Object.entries(source.attributes || {});
@@ -177,27 +194,31 @@ function openEdit(record: DataSource) {
   visible.value = true;
 }
 
-async function submit() {
+/** 弹窗的“确定”：校验或保存失败时返回 false，弹窗保持打开，填的内容不丢（失败原因由请求层提示）。 */
+async function submit(): Promise<boolean> {
   const spaceId = spaceStore.requireSpaceId();
   // 表单属于打开它时的空间：切换空间后不能把它写进新空间（会覆盖新空间里相同 ID 的数据源）。
   if (form.space_id && form.space_id !== spaceId) {
     Message.warning("空间已切换，请重新打开编辑窗口");
-    visible.value = false;
-    return;
+    return true;
   }
   if (!form.data_source_id || !form.name) {
     Message.warning("请补全来源ID和名称");
-    return;
+    return false;
   }
   // 属性由写入方维护，页面不编辑但要原样带回，否则保存会把已有属性清掉。
   const payload = { ...form, space_id: spaceId };
   const submission = sourceScope.begin();
-  if (editing.value) await updateDataSource(payload);
-  else await createDataSource(payload);
+  try {
+    if (editing.value) await updateDataSource(payload);
+    else await createDataSource(payload);
+  } catch {
+    return false;
+  }
   Message.success("数据源已保存");
-  if (!submission.isCurrent()) return;
-  visible.value = false;
-  await load();
+  if (!submission.isCurrent()) return false;
+  void load();
+  return true;
 }
 
 function onPageChange(page: number) {
@@ -218,7 +239,7 @@ watch(selectedSpaceId, () => {
 });
 onMounted(load);
 
-// 提交作用域（重新打开才使旧提交失效，@ok 自动关闭不影响正常保存）：visible 打开/关闭都会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
+// 提交作用域：重新打开弹窗使旧提交失效，迟到的响应不能再关闭或清空重新打开的表单
 const sourceScope = createSubmitScope();
 watch(visible, open => {
   if (open) sourceScope.invalidate();
@@ -226,6 +247,20 @@ watch(visible, open => {
 </script>
 
 <style scoped>
+.attr-line {
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.attr-key {
+  margin-right: 8px;
+  color: var(--color-text-3);
+}
+
+.attr-table {
+  width: 100%;
+}
+
 .page-head {
   display: flex;
   align-items: center;

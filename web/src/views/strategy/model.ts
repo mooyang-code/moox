@@ -67,12 +67,6 @@ export function percent(value: string | number | undefined, digits = 2): string 
   return `${(number * 100).toFixed(digits)}%`;
 }
 
-export function formatStrategyTime(value?: string): string {
-  if (!value) return "-";
-  const timestamp = Date.parse(value);
-  return Number.isFinite(timestamp) ? new Date(timestamp).toLocaleString() : "时间未知";
-}
-
 export function shortHash(value?: string): string {
   if (!value) return "-";
   const hex = value.replace(/^sha256:/, "");
@@ -98,6 +92,34 @@ const skipReasons: Record<string, string> = {
   catchup: "恢复追赶中，不发目标（就绪时照常求值、只推进规则状态）",
   pool_warmup_failed: "策略池预热失败"
 };
+
+/** 跳过原因的下一步：已知原因给出怎么处理；会自动恢复的写明不用管。 */
+const skipNextSteps: Record<string, string> = {
+  factor_changed: "停用再启用实例，按新的因子定义重新固化",
+  previous_version_unknown: "通常下一期自动恢复；持续出现时停用再启用实例",
+  factor_missing: "等上游计算任务产出，通常自动恢复；持续出现时查看计算任务",
+  factor_skipped: "上游因子本期跳过，通常自动恢复；持续出现时查看计算任务",
+  market_missing: "等另一个市场的计算任务产出，通常自动恢复",
+  market_failed: "上游因子失败比例过高，查看计算任务的失败原因",
+  no_data: "本期没有数据，通常自动恢复；持续出现时查看采集和计算任务",
+  universe_too_small: "可用标的太少：检查数据覆盖，或调整策略的标的池",
+  too_many_missing: "缺数比例过高：检查采集和计算任务的覆盖",
+  config_error: "检查策略定义，改好后停用再启用实例",
+  ambiguous_series: "同一标的有多个序列：检查计算任务用的数据集",
+  history_insufficient: "历史覆盖不足：等数据积累，或补采、补算历史",
+  out_of_order: "周期乱序，通常自动恢复",
+  expired: "周期已过期，通常自动恢复",
+  infra_retry_exhausted: "读取重试耗尽，通常下一期自动恢复；持续出现时查看存储和网关",
+  catchup: "恢复追赶中，追上后自动恢复发目标",
+  pool_warmup_failed: "检查策略池成员是否可用，改好后停用再启用实例"
+};
+
+/** 最近一期被跳过时的说明：原因和下一步。 */
+export function skipAdvice(reason?: string): string {
+  if (!reason) return "最近一期被跳过，请在下方历史结果里看原因。";
+  const next = skipNextSteps[reason];
+  return `最近一期被跳过：${skipReasonLabel(reason)}。${next ? `${next}。` : "请在下方历史结果里看详情。"}`;
+}
 
 export function skipReasonLabel(reason?: string): string {
   if (!reason) return "-";
@@ -264,7 +286,7 @@ export interface ResolvedColumn {
   definition_hash: string;
 }
 
-/** 一个市场绑定的因子任务与结果 View。 */
+/** 一个市场绑定的计算任务与结果 View。 */
 export interface ResolvedTask {
   market: string;
   factor_task_id: string;
@@ -433,4 +455,19 @@ export function buildResultOverview(results: ResultLike[] & Pick<StrategyResult,
 export function formatDelay(ms: number | null | undefined): string {
   if (ms === null || ms === undefined || !Number.isFinite(ms)) return "-";
   return ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(1)}s`;
+}
+
+/**
+ * 实例实际运行的 DSL 版本：取本会话最新结果的 dsl_hash；和定义当前的 dsl_hash 不同时说明要停用再启用才生效。
+ * 本会话还没有结果时返回空串。
+ */
+export function runningVersionText(
+  sessionId: string,
+  results: Pick<StrategyResult, "session_id" | "dsl_hash">[],
+  definitionHash?: string
+) {
+  const latest = results.find(item => item.session_id === sessionId && item.dsl_hash);
+  if (!sessionId || !latest) return "";
+  const running = `运行版本 ${shortHash(latest.dsl_hash)}`;
+  return definitionHash && definitionHash !== latest.dsl_hash ? `${running}，定义已更新，停用再启用后生效` : running;
 }

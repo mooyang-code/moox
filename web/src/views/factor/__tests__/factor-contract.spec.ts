@@ -124,7 +124,7 @@ describe("factor pages contract", () => {
     expect(taskHost).toContain("PageTitleTabs");
     expect(factorScope).toContain("route.query.task");
     expect(factorScope).toContain("usePolling");
-    expect(overviewPage).toContain("usePolling");
+    expect(overviewPage).toContain("extraPoll");
   });
 
   it("changes member status only through setFactorMemberStatus without a backfill job", () => {
@@ -151,7 +151,7 @@ describe("factor pages contract", () => {
       'v-model="usageFilter"',
       "查询",
       "toolbar-actions",
-      "新增因子"
+      "新建因子"
     ].map(text => toolbar.indexOf(text));
     expect(positions.every(position => position >= 0)).toBe(true);
     expect(positions).toEqual([...positions].sort((left, right) => left - right));
@@ -168,7 +168,7 @@ describe("factor pages contract", () => {
     expect(factorEditor).toContain("insertTemplate('cross_section')");
     expect(factorEditor).not.toContain('v-model="form.factor_type"');
     expect(factorEditor).not.toContain("createFactorTask");
-    expect(factorEditor).toContain("onBeforeRouteLeave");
+    expect(factorEditor).toContain("useUnsavedGuard(");
   });
 
   it("loads recalc jobs from the backend and renders degraded notes separately from errors", () => {

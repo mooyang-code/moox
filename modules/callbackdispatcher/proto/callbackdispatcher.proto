@@ -62,6 +62,17 @@ message SubscribableEvent {
   string title = 3;
   string description = 4;
   repeated ScopeField scope_fields = 5;
+  // 示例请求体：和真实推送给通知地址的请求体格式一致（“发一条测试”发的就是它）。
+  string sample_json = 6;
+  // 事件 data 里各字段的说明。
+  repeated PayloadField payload_fields = 7;
+}
+
+// 事件 data 里的一个字段。
+message PayloadField {
+  string field = 1;
+  // 字段的中文说明。
+  string title = 2;
 }
 
 // 规则最近一次执行的结果。

@@ -17,9 +17,10 @@
             <span>{{ replaySourceLabel(item, strategies) }}</span>
           </span>
           <span class="replay-line muted mono">{{ replayTasksText(item) }}</span>
-          <span class="replay-line muted">{{ replayRangeLabel(item) }}</span>
+          <span class="replay-line muted">{{ replayRangeLabel(item, displayZone) }}</span>
+          <span v-if="replayMetricsLine(item.metrics_json)" class="replay-line">{{ replayMetricsLine(item.metrics_json) }}</span>
           <span v-if="item.status === 'running' && item.progress_time" class="replay-line muted">
-            进度 {{ formatUtcTime(item.progress_time) }}
+            进度 {{ formatInstant(item.progress_time, displayZone) }}
           </span>
         </button>
       </a-list-item>
@@ -40,13 +41,18 @@
 <script setup lang="ts">
 import type { Replay, Strategy } from "@/api/strategy-types";
 import {
-  formatUtcTime,
+  replayMetricsLine,
   replayRangeLabel,
   replaySourceLabel,
   replayStatusColor,
   replayTasksText,
   replayStatusLabel
 } from "@/views/strategy/replay/model";
+import { formatInstant } from "@/utils/time-zone";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
+
+// 页面时间按当前空间登记的时区显示
+const displayZone = useDisplayZone();
 
 defineProps<{
   replays: Replay[];

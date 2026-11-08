@@ -38,7 +38,7 @@
     <a-alert v-if="errorText" type="warning" class="dialog-alert dialog-error">
       {{ errorText }}
     </a-alert>
-    <inspection-result v-if="view" :view="view" class="dialog-result" />
+    <inspection-result v-if="view" :view="view" :zone="displayZone" class="dialog-result" />
   </a-modal>
 </template>
 
@@ -47,12 +47,15 @@ import { computed, reactive, ref, watch } from "vue";
 import { inspectExchangeCredential } from "@/api/trade";
 import type { Exchange, MarketType } from "@/api/trade/types";
 import InspectionResult from "./inspection-result.vue";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
 import { fromInspection, type InspectionView } from "./inspection";
 import { exchangeFromProvider, inspectionRequest, secretEnvironmentOf } from "./inspection-request";
 
 defineOptions({ name: "TradeInspectionTestDialog" });
 
 const props = defineProps<{ visible: boolean; secretId: string; secretName: string; provider: string }>();
+// 检测时间：密钥页和空间无关，按 UTC
+const displayZone = useDisplayZone("global");
 const emit = defineEmits<{ "update:visible": [value: boolean] }>();
 
 const form = reactive<{ environment: 1 | 2; markets: MarketType[] }>({ environment: 2, markets: [] });

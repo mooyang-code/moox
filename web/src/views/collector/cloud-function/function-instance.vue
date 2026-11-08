@@ -3,10 +3,6 @@
     <a-spin :loading="loading">
       <div class="moox-inner">
         <a-space class="cloud-function-action-bar" wrap>
-          <a-button type="primary" status="danger" @click="batchDelete" :disabled="batchChangeProcessing">
-            <template #icon><icon-delete /></template>
-            <span>批量删除</span>
-          </a-button>
           <a-button type="outline" @click="onCloudAccountManage">
             <template #icon><icon-settings /></template>
             <span>云账户管理</span>
@@ -21,13 +17,19 @@
           </a-button>
         </a-space>
         <a-space class="cloud-function-filter-bar" wrap>
-          <a-select v-model="form.cloudAccountId" placeholder="请选择云账户" style="width: 200px" allow-clear>
+          <a-select v-model="form.cloudAccountId" placeholder="请选择云账户" style="width: 200px" allow-clear @change="search">
             <a-option v-for="account in cloudAccountOptions" :key="account.account_id" :value="account.account_id">
               {{ account.account_name }} ({{ getProviderName(account.provider) }})
             </a-option>
           </a-select>
-          <a-input v-model="form.instanceId" placeholder="请输入实例ID" allow-clear />
-          <a-select placeholder="地区" v-model="form.region" style="width: 200px" allow-clear>
+          <a-input
+            v-model="form.instanceId"
+            placeholder="请输入实例ID，回车查询"
+            allow-clear
+            @press-enter="search"
+            @clear="search"
+          />
+          <a-select placeholder="地区" v-model="form.region" style="width: 200px" allow-clear @change="search">
             <a-option v-for="region in regionOptions" :key="region.code" :value="region.code">
               {{ region.name }}
               <a-tag
@@ -40,61 +42,16 @@
               </a-tag>
             </a-option>
           </a-select>
-          <a-select placeholder="实例类型" v-model="form.functionType" style="width: 180px" allow-clear>
+          <a-select placeholder="实例类型" v-model="form.functionType" style="width: 180px" allow-clear @change="search">
             <a-option value="scf-event">云函数（事件型）</a-option>
             <a-option value="scf-web">云函数（Web型）</a-option>
             <a-option value="server">服务器</a-option>
           </a-select>
-          <a-button type="primary" @click="search">
-            <template #icon><icon-search /></template>
-            <span>查询</span>
-          </a-button>
         </a-space>
-
-        <!-- 批量变更进度提示 -->
-        <a-alert
-          v-if="currentBatchChangeStatus"
-          type="info"
-          style="margin: var(--moox-space-4) 0"
-          closable
-          @close="handleCloseBatchChangeAlert"
-        >
-          <template #title>
-            <a-space>
-              <icon-loading v-if="batchChangeProcessing" spin />
-              <span>
-                {{
-                  batchChangeProcessing
-                    ? "云函数实例批量变更处理中"
-                    : batchPollingTimedOut
-                      ? "已停止自动查询任务进度"
-                      : "云函数实例批量变更已完成"
-                }}
-              </span>
-            </a-space>
-          </template>
-          <div>
-            <div>任务：{{ currentBatchChangeStatus.job.job_id }}</div>
-            <div>变更类型：{{ getBatchChangeTypeText(currentBatchChangeStatus.job.operation) }}</div>
-            <div>
-              处理进度：{{ currentBatchChangeStatus.job.success_count + currentBatchChangeStatus.job.failed_count }} /
-              {{ currentBatchChangeStatus.job.total_count }}
-            </div>
-            <div>
-              成功：{{ currentBatchChangeStatus.job.success_count }}，失败：{{ currentBatchChangeStatus.job.failed_count }}
-            </div>
-            <a-progress
-              :percent="(Number(currentBatchChangeStatus.job.progress_percent) || 0) / 100"
-              :status="currentBatchChangeStatus.job.failed_count > 0 ? 'warning' : 'normal'"
-              :stroke-width="8"
-              style="margin-top: var(--moox-space-2)"
-            />
-          </div>
-        </a-alert>
 
         <!-- 选择状态提示 -->
         <a-alert
-          v-if="selectedKeys.length > 0 && !batchChangeProcessing"
+          v-if="selectedKeys.length > 0"
           type="info"
           style="margin: var(--moox-space-4) 0"
           :closable="true"
@@ -104,9 +61,12 @@
           <div style="font-size: 12px; color: #86909c">
             提示：批量操作只会对当前选中的实例生效。切换页面时会保留其他页的选择状态。
           </div>
+          <template #action>
+            <a-button size="small" status="danger" @click="batchDelete">删除已选实例</a-button>
+          </template>
         </a-alert>
 
-        <FunctionInstanceTable :loading="loading" :selected-count="selectedKeys.length">
+        <div class="function-instance-table">
           <a-table
             row-key="instance_id"
             size="small"
@@ -115,7 +75,7 @@
             :loading="loading"
             :scroll="{ x: '100%', y: '100%', minWidth: 1000 }"
             :pagination="paginationConfig"
-            :row-selection="batchChangeProcessing ? undefined : { type: 'checkbox', showCheckedAll: true }"
+            :row-selection="{ type: 'checkbox', showCheckedAll: true }"
             :selected-keys="selectedKeys"
             @select="select"
             @select-all="selectAll"
@@ -177,14 +137,15 @@
               <a-table-column title="操作" :width="56" align="center" fixed="right">
                 <template #cell="{ record }">
                   <a-popconfirm
-                    content="确定要删除该实例吗？删除后将无法恢复。"
-                    ok-text="确定"
+                    :content="deleteInstanceText(record)"
+                    ok-text="删除"
+                    :ok-button-props="{ status: 'danger' }"
                     cancel-text="取消"
                     @ok="() => onDelete(record)"
                     position="tr"
                   >
                     <a-tooltip content="删除实例">
-                      <a-button type="primary" size="mini" status="danger" :disabled="batchChangeProcessing">
+                      <a-button type="primary" size="mini" status="danger">
                         <template #icon><icon-delete /></template>
                       </a-button>
                     </a-tooltip>
@@ -193,7 +154,7 @@
               </a-table-column>
             </template>
           </a-table>
-        </FunctionInstanceTable>
+        </div>
       </div>
     </a-spin>
 
@@ -205,14 +166,13 @@
     <!-- 代码包版本管理弹窗 -->
     <FunctionPackageManage
       v-model="functionPackageManageVisible"
-      mode="modal"
       :package-type="currentPackageType"
       :workload-type="currentWorkloadType"
       @refresh="loadData"
     />
 
-    <!-- 实例详情弹窗 -->
-    <a-modal v-model:visible="instanceDetailVisible" title="云函数实例详情" :width="800" :footer="false" :mask-closable="true">
+    <!-- 实例详情抽屉（新做的详情一律用抽屉） -->
+    <a-drawer v-model:visible="instanceDetailVisible" title="云函数实例详情" width="min(800px, 100vw)" :footer="false">
       <div v-if="selectedInstanceDetail">
         <a-descriptions :column="2" bordered :label-style="{ fontWeight: 'bold', width: '140px' }">
           <a-descriptions-item label="实例ID">
@@ -291,134 +251,47 @@
             <span v-else>-</span>
           </a-descriptions-item>
           <a-descriptions-item label="创建时间">
-            {{ formatDateTime(selectedInstanceDetail.create_time) }}
+            {{ formatDateTime(selectedInstanceDetail.create_time, displayZone) }}
           </a-descriptions-item>
           <a-descriptions-item label="更新时间">
-            {{ formatDateTime(selectedInstanceDetail.modify_time) }}
+            {{ formatDateTime(selectedInstanceDetail.modify_time, displayZone) }}
           </a-descriptions-item>
         </a-descriptions>
       </div>
-    </a-modal>
+    </a-drawer>
 
     <!-- 代码包详情弹窗 -->
-    <a-modal
-      v-model:visible="packageDetailVisible"
-      title="代码包详情"
-      :width="800"
-      :mask-closable="false"
-      :footer="false"
-      @cancel="handlePackageDetailCancel"
-    >
-      <div v-if="packageDetail" class="package-detail">
-        <!-- 基本信息 -->
-        <a-descriptions title="基本信息" :column="2" bordered size="medium" style="margin-bottom: var(--moox-space-4)">
-          <a-descriptions-item label="代码包名称">{{ packageDetail.package_name }}</a-descriptions-item>
-          <a-descriptions-item label="版本">{{ packageDetail.version }}</a-descriptions-item>
-          <a-descriptions-item label="类型">
-            <a-tag :color="getPackageTypeColor(packageDetail.package_type)">
-              {{ getPackageTypeLabel(packageDetail.package_type) }}
-            </a-tag>
-          </a-descriptions-item>
-          <a-descriptions-item label="运行时环境">{{ packageDetail.runtime }}</a-descriptions-item>
-          <a-descriptions-item label="文件大小">{{ formatFileSize(packageDetail.file_size) }}</a-descriptions-item>
-          <a-descriptions-item label="状态">
-            <a-tag :color="getPackageStatusColor(packageDetail.status)">
-              {{ getPackageStatusLabel(packageDetail.status) }}
-            </a-tag>
-          </a-descriptions-item>
-          <a-descriptions-item label="文件MD5" :span="2">
-            <a-typography-text copyable>{{ packageDetail.file_md5 || "-" }}</a-typography-text>
-          </a-descriptions-item>
-          <a-descriptions-item label="描述" :span="2">
-            {{ packageDetail.description || "-" }}
-          </a-descriptions-item>
-        </a-descriptions>
-
-        <!-- 存储信息 -->
-        <a-descriptions title="存储信息" :column="2" bordered size="medium" style="margin-bottom: var(--moox-space-4)">
-          <a-descriptions-item label="云账户ID">{{ packageDetail.cloud_account_id }}</a-descriptions-item>
-          <a-descriptions-item label="COS区域">{{ packageDetail.cos_region }}</a-descriptions-item>
-          <a-descriptions-item label="COS Bucket">{{ packageDetail.cos_bucket }}</a-descriptions-item>
-          <a-descriptions-item label="COS路径">{{ packageDetail.cos_path }}</a-descriptions-item>
-          <a-descriptions-item label="原始文件名" :span="2">{{ packageDetail.original_filename || "-" }}</a-descriptions-item>
-        </a-descriptions>
-
-        <!-- 审计信息 -->
-        <a-descriptions title="审计信息" :column="2" bordered size="medium" style="margin-bottom: var(--moox-space-4)">
-          <a-descriptions-item label="创建者">{{ packageDetail.created_by }}</a-descriptions-item>
-          <a-descriptions-item label="创建时间">{{ formatDateTime(packageDetail.created_time) }}</a-descriptions-item>
-          <a-descriptions-item label="最后部署时间" :span="2">
-            {{ packageDetail.last_deploy_time ? formatDateTime(packageDetail.last_deploy_time) : "-" }}
-          </a-descriptions-item>
-        </a-descriptions>
-
-        <div style="margin-top: var(--moox-space-4); text-align: right">
-          <a-space>
-            <a-button @click="handlePackageDetailCancel">关闭</a-button>
-            <a-button
-              type="primary"
-              status="success"
-              @click="onDownloadPackage(packageDetail)"
-              :disabled="packageDetail.status !== 2"
-              :loading="downloadProgress[packageDetail.id] !== undefined && downloadProgress[packageDetail.id] < 100"
-            >
-              <template #icon>
-                <icon-download />
-              </template>
-              <span v-if="downloadProgress[packageDetail.id] !== undefined && downloadProgress[packageDetail.id] < 100">
-                下载中...
-              </span>
-              <span v-else>下载</span>
-            </a-button>
-          </a-space>
-        </div>
-      </div>
-      <div v-else style="text-align: center; padding: var(--moox-space-8)">
-        <a-spin :loading="true" />
-        <div style="margin-top: var(--moox-space-4)">加载中...</div>
-      </div>
-    </a-modal>
+    <FunctionPackageDetail v-model:visible="packageDetailVisible" :package-id="packageDetailId" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, onBeforeUnmount, h, watch } from "vue";
-import { useRoute, useRouter } from "vue-router";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
+import { ref, reactive, computed, onMounted, onBeforeUnmount, watch } from "vue";
 import { storeToRefs } from "pinia";
 import { Message, Modal } from "@arco-design/web-vue";
-import { getFunctionPackageDetail, downloadPackageByURL, type FunctionPackage } from "@/api/function-package";
 import { getCloudAccountList, type CloudAccount } from "@/api/cloud-account";
 import {
   deleteFunctionInstances,
-  getFunctionJob,
   listFunctionInstances,
   listCloudRegions,
-  type SubmitDeleteFunctionInstancesRequest,
-  type GetFunctionJobResponse
+  type SubmitDeleteFunctionInstancesRequest
 } from "@/api/function-instance";
 import { useSpaceStore } from "@/store/modules/space";
 import { createLatestRequestGuard } from "@/utils/latest-request";
-import { getFunctionJobId, setFunctionJobId } from "@/utils/function-job-change";
 import CloudAccountManage from "../cloud-account/cloud-account-manage.vue";
 import FunctionPackageManage from "./function-package-manage.vue";
 import SCFSyncDialog from "./scf-sync-dialog.vue";
-import FunctionInstanceTable from "./components/function-instance-table.vue";
-import { createFunctionJobPoller } from "./function-job-poller";
+import FunctionPackageDetail from "./function-package-detail.vue";
 import { captureDeleteSelection, updateDeleteSelection, type FunctionInstanceDeleteSnapshotMap } from "./delete-selection";
 import {
   formatDateTime,
-  formatFileSize,
   formatMetadata,
-  getBatchChangeTypeText,
   getFunctionTypeColor,
   getTriggerTypeLabel,
   getTimerAvailableColor,
   getTimerAvailableLabel,
   getFunctionTypeLabel,
-  getPackageStatusColor,
-  getPackageStatusLabel,
-  getPackageTypeColor,
-  getPackageTypeLabel,
   getProviderName,
   normalizeFunctionInstances,
   parseMetadata,
@@ -427,16 +300,12 @@ import {
 } from "./function-instance-model";
 
 // 状态管理
+// 页面时间按当前空间登记的时区显示
+const displayZone = useDisplayZone();
 const spaceStore = useSpaceStore();
 const { selectedSpaceId } = storeToRefs(spaceStore);
-const route = useRoute();
-const router = useRouter();
 const loading = ref(false);
 const listGuard = createLatestRequestGuard();
-const batchChangeProcessing = ref(false);
-const batchPollingTimedOut = ref(false);
-const currentBatchChangeStatus = ref<GetFunctionJobResponse | null>(null);
-const batchPoller = createFunctionJobPoller(getFunctionJob);
 
 const form = reactive({
   cloudAccountId: "",
@@ -495,23 +364,14 @@ onMounted(async () => {
   }
   await loadCloudAccounts();
   await loadRegions(); // 加载地区列表
-  const jobId = getFunctionJobId(route.query);
-  if (jobId) {
-    await startBatchPolling(jobId);
-  }
 });
 
 watch(selectedSpaceId, async (spaceId, oldSpaceId) => {
+  // 换空间时旧空间的代码包详情请求会被取消，弹窗一并关掉，不然会一直停在加载中
+  packageDetailVisible.value = false;
   if (spaceId === oldSpaceId) return;
-  // 先同步作废所有在途请求，再做任何 await：路由更新等待期间旧空间的响应也不能继续推进
+  // 先作废所有在途请求，旧空间的响应不能再写回列表
   listGuard.invalidate();
-  batchPoller.stop();
-  currentBatchChangeStatus.value = null;
-  batchChangeProcessing.value = false;
-  batchPollingTimedOut.value = false;
-  if (getFunctionJobId(route.query)) {
-    await replaceRouteJobId();
-  }
   // 切换空间：立即清空列表、分页与详情，避免旧空间数据残留
   loading.value = false;
   cloudFunctionList.value = [];
@@ -527,93 +387,12 @@ watch(selectedSpaceId, async (spaceId, oldSpaceId) => {
   await loadData();
 });
 
+// 删除要续租并等后端任务结束：离开页面时中止这两个循环，不在后台一直跑完
+const deleteAbort = new AbortController();
 onBeforeUnmount(() => {
+  deleteAbort.abort();
   listGuard.invalidate();
-  batchPoller.dispose();
-  currentBatchChangeStatus.value = null;
 });
-
-const replaceRouteJobId = (jobId?: string) => router.replace({ query: setFunctionJobId(route.query, jobId) });
-
-const showBatchResult = (data: GetFunctionJobResponse) => {
-  if (data.job.failed_count === 0) {
-    Message.success(`${getBatchChangeTypeText(data.job.operation)}成功！共处理 ${data.job.total_count} 个实例`);
-    return;
-  }
-
-  const failedItems = data.items.filter(item => item.status === "FUNCTION_JOB_ITEM_STATUS_FAILED");
-  const content = () =>
-    h("div", { style: { maxHeight: "400px", overflowY: "auto" } }, [
-      h("div", { style: { marginBottom: "var(--moox-space-3)" } }, [
-        h("div", `变更类型：${getBatchChangeTypeText(data.job.operation)}`),
-        h("div", `总数量：${data.job.total_count}`),
-        h("div", `成功数量：${data.job.success_count}`),
-        h("div", { style: { color: "#ff4d4f" } }, `失败数量：${data.job.failed_count}`)
-      ]),
-      ...failedItems.map(item =>
-        h(
-          "div",
-          {
-            key: item.item_id,
-            style: {
-              marginBottom: "var(--moox-space-3)",
-              padding: "var(--moox-space-2)",
-              backgroundColor: "#fff2f0",
-              borderRadius: "4px",
-              border: "1px solid #ffccc7"
-            }
-          },
-          [
-            h("div", { style: { fontWeight: "bold" } }, item.instance_id || item.item_id),
-            h("div", { style: { color: "#ff4d4f", fontSize: "12px" } }, item.error_message || "未知错误")
-          ]
-        )
-      )
-    ]);
-
-  Modal.error({
-    title: data.job.status === "FUNCTION_JOB_STATUS_PARTIAL" ? "批量变更部分失败" : "批量变更失败",
-    content,
-    width: 700,
-    maskClosable: false
-  });
-};
-
-const startBatchPolling = async (jobId: string) => {
-  batchChangeProcessing.value = true;
-  batchPollingTimedOut.value = false;
-  await batchPoller.start(jobId, {
-    onUpdate: data => {
-      currentBatchChangeStatus.value = data;
-    },
-    onTerminal: async data => {
-      currentBatchChangeStatus.value = data;
-      batchChangeProcessing.value = false;
-      batchPollingTimedOut.value = false;
-      clearDeleteSelection();
-      await replaceRouteJobId();
-      await loadData();
-      showBatchResult(data);
-    },
-    onError: error => {
-      console.warn("查询云函数实例批量变更进度失败，将继续重试:", error);
-    },
-    onPollingTimeout: () => {
-      batchChangeProcessing.value = false;
-      batchPollingTimedOut.value = true;
-      Message.warning("已停止自动查询任务进度，刷新页面可继续查询");
-    }
-  });
-};
-
-// 关闭批量变更提示
-const handleCloseBatchChangeAlert = () => {
-  batchPoller.stop();
-  currentBatchChangeStatus.value = null;
-  batchChangeProcessing.value = false;
-  batchPollingTimedOut.value = false;
-  void replaceRouteJobId();
-};
 
 // 批量删除
 const batchDelete = () => {
@@ -637,7 +416,7 @@ const batchDelete = () => {
 
   Modal.warning({
     title: "批量删除确认",
-    content: `确定要删除选中的 ${selectedKeys.value.length} 个实例吗？删除后将无法恢复。`,
+    content: `删除选中的 ${selectedKeys.value.length} 个实例：会同时删掉云端的云函数并清掉登记，删除后无法恢复。`,
     hideCancel: false,
     onOk: async () => {
       await executeBatchDelete(request);
@@ -649,11 +428,12 @@ const batchDelete = () => {
 const executeBatchDelete = async (request: SubmitDeleteFunctionInstancesRequest) => {
   try {
     const total = request.instance_ids.length;
-    const rsp = await deleteFunctionInstances(request);
+    const rsp = await deleteFunctionInstances(request, { signal: deleteAbort.signal });
     clearDeleteSelection();
     await loadData();
     Message.success(`已删除 ${rsp.processed_count} / ${total} 个实例`);
   } catch (error: any) {
+    if (deleteAbort.signal.aborted) return;
     console.error("批量删除失败:", error);
     Message.error("批量删除失败: " + (error?.message || "未知错误"));
   }
@@ -796,17 +576,27 @@ const clearDeleteSelection = () => {
 
 // 单个操作（保留原有实现）
 
+/** 单个删除的说明：删除会连云端的云函数一起删（后端 SubmitDeleteFunctionInstances），不只是清登记。 */
+function deleteInstanceText(record: FunctionInstance) {
+  const where = record.region ? `（${record.region}）` : "";
+  return `删除实例「${record.instance_id}」${where}？会同时删掉云端的云函数并清掉登记，删除后无法恢复。`;
+}
+
 const onDelete = async (record: FunctionInstance) => {
   try {
     const snapshot = updateDeleteSelection({}, [record], true);
-    const rsp = await deleteFunctionInstances({
-      space_id: selectedSpaceId.value ?? "",
-      instance_ids: [record.instance_id],
-      instance_snapshots: captureDeleteSelection([record.instance_id], snapshot)
-    });
+    const rsp = await deleteFunctionInstances(
+      {
+        space_id: selectedSpaceId.value ?? "",
+        instance_ids: [record.instance_id],
+        instance_snapshots: captureDeleteSelection([record.instance_id], snapshot)
+      },
+      { signal: deleteAbort.signal }
+    );
     await loadData();
     Message.success(rsp.processed_count > 0 ? "删除成功" : "实例无需删除");
   } catch (error: any) {
+    if (deleteAbort.signal.aborted) return;
     Message.error("删除失败: " + (error?.message || "未知错误"));
   }
 };
@@ -846,84 +636,20 @@ const timerEnabledLabel = () => {
 };
 const timerDateTimeText = () => {
   const value = timerMetadataText("runtime_config_reconciled_at");
-  return value === "-" ? "-" : formatDateTime(value);
+  return value === "-" ? "-" : formatDateTime(value, displayZone.value);
 };
 
 // 代码包详情
 const packageDetailVisible = ref(false);
-const packageDetail = ref<FunctionPackage | null>(null);
-const downloadProgress = ref<Record<string, number>>({});
+const packageDetailId = ref("");
 
-// 显示代码包详情
-const onShowPackageDetail = async (record: FunctionInstance) => {
-  // 如果没有package_id，则不显示
+const onShowPackageDetail = (record: FunctionInstance) => {
   if (!record.package_id) {
     Message.warning("该实例未关联代码包");
     return;
   }
-
-  packageDetail.value = null;
+  packageDetailId.value = record.package_id;
   packageDetailVisible.value = true;
-
-  try {
-    const detail = await getFunctionPackageDetail(record.package_id);
-    if (detail) {
-      packageDetail.value = detail;
-    } else {
-      throw new Error("获取详情失败");
-    }
-  } catch (error) {
-    console.error("获取代码包详情失败:", error);
-    Message.error({
-      content: "获取代码包详情失败",
-      duration: 5000
-    });
-    packageDetailVisible.value = false;
-  }
-};
-
-// 关闭代码包详情弹窗
-const handlePackageDetailCancel = () => {
-  packageDetailVisible.value = false;
-  packageDetail.value = null;
-};
-
-// 下载代码包
-const onDownloadPackage = async (pkg: FunctionPackage) => {
-  if (pkg.status !== 2) {
-    Message.warning("只能下载可用状态的代码包");
-    return;
-  }
-
-  try {
-    downloadProgress.value[pkg.package_id] = 0;
-
-    Message.info({
-      content: "开始下载代码包...",
-      duration: 2000
-    });
-
-    await downloadPackageByURL(pkg.package_id);
-
-    downloadProgress.value[pkg.package_id] = 100;
-
-    Message.success({
-      content: "代码包下载成功",
-      duration: 3000
-    });
-
-    // 3秒后清除进度
-    setTimeout(() => {
-      delete downloadProgress.value[pkg.package_id];
-    }, 3000);
-  } catch (error) {
-    console.error("下载代码包失败:", error);
-    delete downloadProgress.value[pkg.package_id];
-    Message.error({
-      content: "代码包下载失败",
-      duration: 5000
-    });
-  }
 };
 </script>
 

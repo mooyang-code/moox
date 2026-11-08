@@ -5,32 +5,18 @@ import { moduleReplacement, linearArray } from "@/router/route-output";
 
 /**
  * 路由列表
- * @methods setRouteNames 设置路由名称集合
  * @methods setTabs 添加tabs标签页
  * @methods setCurrentRoute 设置系统内的当前路由
  * @methods removeTabsList 删除tabs页的指定路由
- * @methods removeRouteName 删除缓存路由名，用于取消页面缓存，单个删除
- * @methods removeRouteNames 删除缓存路由名，用于取消页面缓存，批量删除
  * @methods resetRoute 重置动态添加的路由
  * @methods initSetRouter 路由初始化
  */
 export const routesConfigStore = () => {
   const routeTree = ref<any>([]); // 有访问权限的路由树
   const routeList = ref<any>([]); // 有访问权限的一维路由数组
-  const cacheRoutes = ref<string[]>([]); // 所有可缓存路由的路由名
   const tabsList = ref<any>([]); // 标签页数据
   const currentRoute = ref<any>({}); // 当前路由
   const addedRouteNames = ref<string[]>([]); // 本次动态注册的路由名
-
-  /**
-   * 设置可缓存路由的路由名
-   * @param {string} name 路由名
-   */
-  function setRouteNames(name: string) {
-    let state = cacheRoutes.value.some((item: string) => item === name);
-    if (state) return;
-    cacheRoutes.value.push(name);
-  }
 
   /**
    * 添加tabs标签页
@@ -61,22 +47,6 @@ export const routesConfigStore = () => {
     if (tabsList.value[index].meta.affix) return;
     if (index === -1) return;
     tabsList.value.splice(index, 1);
-  }
-  /**
-   * 删除缓存路由名，用于取消页面缓存，单个删除
-   * @param {string} key 路由名
-   */
-  function removeRouteName(key: string) {
-    const index = cacheRoutes.value.findIndex((item: string) => item === key);
-    if (index === -1) return;
-    cacheRoutes.value.splice(index, 1);
-  }
-  /**
-   * 删除缓存路由名，用于取消页面缓存，批量删除
-   * @param {Array} list 路由名
-   */
-  function removeRouteNames(list: Array<string>) {
-    cacheRoutes.value = cacheRoutes.value.filter((item: string) => !list.includes(item));
   }
   /**
    * 重置动态添加的路由
@@ -122,15 +92,11 @@ export const routesConfigStore = () => {
   return {
     routeTree,
     routeList,
-    cacheRoutes,
     tabsList,
     currentRoute,
-    setRouteNames,
     setTabs,
     setCurrentRoute,
     removeTabsList,
-    removeRouteName,
-    removeRouteNames,
     resetRoute,
     initSetRouter
   };

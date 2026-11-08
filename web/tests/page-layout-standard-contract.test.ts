@@ -84,7 +84,7 @@ describe("page layout standards", () => {
     expect(secrets).not.toContain('class="filter-bar"');
     expect(secrets.indexOf('placeholder="搜索名称或描述"')).toBeLessThan(secrets.indexOf('placeholder="分类"'));
     expect(secrets.indexOf('placeholder="分类"')).toBeLessThan(secrets.indexOf('placeholder="状态"'));
-    expect(secrets.indexOf('placeholder="状态"')).toBeLessThan(secrets.indexOf("新增秘钥"));
+    expect(secrets.indexOf('placeholder="状态"')).toBeLessThan(secrets.indexOf("新建密钥"));
     expectMargin(secrets, ".page-head", "margin-bottom", 5);
   });
 
@@ -96,7 +96,7 @@ describe("page layout standards", () => {
     expect(host).toContain("PageTitleTabs");
     expect(host).toContain("<keep-alive>");
     expect(computeTasks).toContain("新建计算任务");
-    expect(definitions).toContain("新增因子");
+    expect(definitions).toContain("新建因子");
     expect(definitions).not.toContain('class="filters"');
   });
 
@@ -132,7 +132,6 @@ describe("page layout standards", () => {
     const collectorTasks = read("collector/collection-tasks/collection-tasks.vue");
     const taskResults = read("collector/task-results/index.vue");
     const deployments = read("ops/deployments/index.vue");
-    const storage = read("ops/storage/index.vue");
     const storageNodes = read("ops/storage/nodes.vue");
 
     expectMargin(subjects, ".subjects-content", "margin-top", 12);
@@ -146,34 +145,32 @@ describe("page layout standards", () => {
     expectMargin(deployments, ".deployments-content", "margin-top", 12);
     expectMargin(deployments, ".filters", "margin-bottom", 8);
 
-    expectMargin(storage, ".storage-config-content", "margin-top", 12);
     expect(storageNodes).toContain(".page-head");
   });
 
   it("normalizes special list workbenches", () => {
     const cloudFunctions = read("collector/cloud-function/function-instance.vue");
     const factorResults = read("factor/results/index.vue");
-    const viewBrowse = read("data/view-browse/index.vue");
 
     const cloudFunctionActions = extractBlock(cloudFunctions, '<a-space class="cloud-function-action-bar" wrap>', "</a-space>");
     const cloudFunctionFilters = extractBlock(cloudFunctions, '<a-space class="cloud-function-filter-bar" wrap>', "</a-space>");
+    // 批量删除不放在工具栏第一位：选中实例后才出现在“已选择 N 个实例”提示条里
+    expect(cloudFunctionActions).not.toContain("batchDelete");
+    expect(cloudFunctions).toContain('<a-button size="small" status="danger" @click="batchDelete">删除已选实例</a-button>');
     expectStrictOrder(cloudFunctionActions, [
-      '<a-button type="primary" status="danger" @click="batchDelete" :disabled="batchChangeProcessing">',
-      "<span>批量删除</span>",
       '<a-button type="outline" @click="onCloudAccountManage">',
       "<span>云账户管理</span>",
       '<a-button type="outline" @click="onFunctionPackageManage">',
       "<span>代码包版本</span>"
     ]);
     expectStrictOrder(cloudFunctionFilters, [
-      '<a-select v-model="form.cloudAccountId" placeholder="请选择云账户" style="width: 200px" allow-clear>',
-      '<a-input v-model="form.instanceId" placeholder="请输入实例ID" allow-clear />',
-      '<a-select placeholder="地区" v-model="form.region" style="width: 200px" allow-clear>',
-      '<a-select placeholder="实例类型" v-model="form.functionType" style="width: 180px" allow-clear>',
-      '<a-button type="primary" @click="search">',
-      "<icon-search />",
-      "<span>查询</span>"
+      '<a-select v-model="form.cloudAccountId" placeholder="请选择云账户" style="width: 200px" allow-clear @change="search">',
+      'v-model="form.instanceId"',
+      '<a-select placeholder="地区" v-model="form.region" style="width: 200px" allow-clear @change="search">',
+      '<a-select placeholder="实例类型" v-model="form.functionType" style="width: 180px" allow-clear @change="search">'
     ]);
+    // 下拉即时生效、文本框回车生效：工具栏不再有“查询”按钮
+    expect(cloudFunctionFilters).not.toContain("<span>查询</span>");
     expect(cloudFunctions).not.toContain('class="cloud-function-toolbar"');
     expect(cloudFunctions).not.toContain(".moox-inner .a-row");
     expect(cloudFunctions).not.toContain("<h2>云函数实例</h2>");
@@ -208,18 +205,13 @@ describe("page layout standards", () => {
     expect(factorResults).toContain('class="result-toolbar"');
     expect(factorResults).toContain("#status-extra");
     expect(factorResults).not.toContain("status-strip");
-    expect(factorResults).toContain(':embedded="true"');
     expect(factorResults).not.toContain("ViewDefinitions");
-
-
-    expectMargin(viewBrowse, ".page-head", "margin-bottom", 8);
   });
 
   it("keeps dashboard page boundaries on the compact spacing rhythm", () => {
     const theme = readStyle("var/global-theme.scss");
     const globalStyle = readStyle("index.scss");
     const healthMonitor = read("ops/monitor/index.vue");
-    const dataImport = read("data/import/index.vue");
     const strategyDefinitions = read("strategy/definitions/index.vue");
     const hostMonitor = read("ops/host-workbench/host-monitor.vue");
     const packageManage = read("collector/cloud-function/function-package-manage.vue");
@@ -231,8 +223,6 @@ describe("page layout standards", () => {
     expect(healthMonitor).toContain("监控告警");
     expect(healthMonitor).toMatch(/\.health-section\s*\{[\s\S]*?margin-top:\s*24px;/);
 
-    expect(dataImport).toMatch(/\.page-head,\s*\.preview-head\s*\{[\s\S]*?margin-bottom:\s*var\(--moox-space-2\);/);
-    expect(dataImport).toMatch(/\.sync-alert\s*\{\s*margin:\s*var\(--moox-space-2\) 0;\s*\}/);
     expectMargin(strategyDefinitions, ".page-head", "margin-bottom", 8);
     expectMargin(strategyDefinitions, ".top-alert", "margin-bottom", 8);
     expect(hostMonitor).toMatch(/\.host-monitor-page\s*\{[\s\S]*?padding:\s*0 0 var\(--moox-space-5\);/);

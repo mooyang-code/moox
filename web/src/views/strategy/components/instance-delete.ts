@@ -14,7 +14,7 @@ export function canDeleteInstance(instance: Pick<StrategyInstance, "enabled" | "
   return !instance.enabled && !instance.session_id;
 }
 
-/** 删除确认框里的一个因子任务：factorTask 为空表示因子服务里已经没有这个任务（上次删除时已删掉）。 */
+/** 删除确认框里的一个计算任务：factorTask 为空表示因子服务里已经没有这个任务（上次删除时已删掉）。 */
 export interface DeleteTaskLine {
   market: string;
   taskId: string;
@@ -26,11 +26,11 @@ export function deletedWithInstance(instanceId: string, task: DeleteTaskLine): b
   return !task.factorTask || task.factorTask.bound_instance_id === instanceId;
 }
 
-/** 确认框正文：分两组列出将删除的因子任务与数据集、保留的因子任务（写明原因），最后写明结果数据不可恢复。 */
+/** 确认框正文：分两组列出将删除的计算任务与数据集、保留的计算任务（写明原因），最后写明结果数据不可恢复。 */
 export function instanceDeleteLines(instanceId: string, tasks: DeleteTaskLine[]): string[] {
   const removed = tasks.filter(task => deletedWithInstance(instanceId, task));
   const kept = tasks.filter(task => !deletedWithInstance(instanceId, task));
-  const lines = ["将删除的因子任务和数据集："];
+  const lines = ["将删除的计算任务和数据集："];
   if (!removed.length) lines.push("无");
   for (const task of removed) {
     const market = marketLabel(task.market);
@@ -39,11 +39,11 @@ export function instanceDeleteLines(instanceId: string, tasks: DeleteTaskLine[])
       continue;
     }
     const name = task.factorTask.name ? `「${task.factorTask.name}」` : "";
-    lines.push(`${market}：因子任务 ${task.taskId}${name}，结果数据集 ${task.factorTask.result_dataset_id || "-"}`);
+    lines.push(`${market}：计算任务 ${task.taskId}${name}，结果数据集 ${task.factorTask.result_dataset_id || "-"}`);
   }
   if (kept.length) {
-    lines.push("保留的因子任务（只去掉实例对它的引用）：");
-    for (const task of kept) lines.push(`${marketLabel(task.market)}：因子任务 ${task.taskId}，未绑定到此实例`);
+    lines.push("保留的计算任务（只去掉实例对它的引用）：");
+    for (const task of kept) lines.push(`${marketLabel(task.market)}：计算任务 ${task.taskId}，未绑定到此实例`);
   }
   lines.push("结果数据不可恢复。交易模块里的历史目标和订单保留。");
   return lines;
@@ -65,7 +65,7 @@ function isNotFound(error: unknown): boolean {
   return code === 5 || code === "5" || code === "NOT_FOUND";
 }
 
-/** 逐个读实例登记的因子任务；因子服务里已经没有的返回空。 */
+/** 逐个读实例登记的计算任务；因子服务里已经没有的返回空。 */
 async function loadInstanceTasks(instance: StrategyInstance): Promise<DeleteTaskLine[]> {
   return Promise.all(
     instanceTasks(instance.factor_tasks).map(async item => {
@@ -92,7 +92,7 @@ export async function confirmInstanceDelete(instance: StrategyInstance, hooks: I
   try {
     tasks = await loadInstanceTasks(instance);
   } catch (error) {
-    Message.error(`读取因子任务失败，暂不能删除：${error instanceof Error ? error.message : String(error)}`);
+    Message.error(`读取计算任务失败，暂不能删除：${error instanceof Error ? error.message : String(error)}`);
     return;
   }
   Modal.confirm({

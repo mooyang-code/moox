@@ -2,8 +2,6 @@ export default {
   system: {
     ["login"]: "登录",
     ["not-found"]: "未找到页面",
-    ["zh-CN"]: "中文",
-    ["en-US"]: "English",
     ["refresh"]: "刷新",
     ["close-current"]: "关闭当前",
     ["close-left-side"]: "关闭左侧",
@@ -14,7 +12,7 @@ export default {
     ["switch-to-daytime-mode"]: "切换白天模式",
     ["full-screen"]: "全屏",
     ["exit-full-screen"]: "退出全屏",
-    ["system-settings"]: "系统设置",
+    ["system-settings"]: "布局设置",
     ["theme-settings"]: "主题设置",
     ["logout"]: "退出登录"
   },
@@ -36,21 +34,24 @@ export default {
     ["strategy-tasks"]: "策略运行",
     ["strategy-definition-new"]: "新建策略",
     ["strategy-definition-edit"]: "编辑策略",
-    ["strategy-detail"]: "策略详情",
-    ["data-import"]: "数据导入",
+    ["strategy-detail"]: "实例详情",
     ["compute-collector"]: "数据采集",
     ["collector-tasks"]: "采集任务",
+    ["data-archive"]: "数据归档",
     ["trading-accounts"]: "交易账户",
     ["trading-account-detail"]: "交易账户详情",
     ["ops"]: "资源与运维",
     ["ops-monitor"]: "监控告警",
-    ["ops-deployments"]: "服务部署",
+    ["ops-deployments"]: "服务",
     ["ops-hosts"]: "主机工作台",
-    ["ops-storage"]: "存储配置",
+    ["ops-storage"]: "存储节点",
     ["ops-activity"]: "活动日志",
     ["settings"]: "系统设置",
     ["settings-spaces"]: "空间管理",
-    ["settings-secrets"]: "秘钥管理",
-    ["settings-events"]: "事件中心"
+    ["settings-secrets"]: "密钥管理",
+    ["events"]: "事件中心",
+    ["events-subscriptions"]: "事件订阅",
+    ["events-executions"]: "处理记录",
+    ["events-delist"]: "下架处理"
   }
 };

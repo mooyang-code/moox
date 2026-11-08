@@ -12,23 +12,31 @@ import type {
   ServiceDirectory
 } from "./types";
 
-export function getCatalog() {
-  return callControl<Record<string, never>, CatalogResponse>("sysdeploy", "GetCatalog", {});
+/** 后台轮询的读取传 { silentError: true }：失败不弹全局提示，由页面自己显示。 */
+type ReadOptions = { silentError?: boolean };
+
+export function getCatalog(options: ReadOptions = {}) {
+  return callControl<Record<string, never>, CatalogResponse>("sysdeploy", "GetCatalog", {}, options);
 }
-export function listDeploymentHosts(req: { host_id?: string; status?: DeploymentStatus; page?: PageReq } = {}) {
-  return callControl<typeof req, { hosts?: DeploymentHost[]; page_result?: PageResult }>("sysdeploy", "ListHosts", req);
+export function listDeploymentHosts(
+  req: { host_id?: string; status?: DeploymentStatus; page?: PageReq } = {},
+  options: ReadOptions = {}
+) {
+  return callControl<typeof req, { hosts?: DeploymentHost[]; page_result?: PageResult }>("sysdeploy", "ListHosts", req, options);
 }
 export function listDeployments(
-  req: { host_id?: string; component_id?: string; status?: DeploymentStatus; page?: PageReq } = {}
+  req: { host_id?: string; component_id?: string; status?: DeploymentStatus; page?: PageReq } = {},
+  options: ReadOptions = {}
 ) {
   return callControl<typeof req, { deployments?: ComponentDeployment[]; page_result?: PageResult }>(
     "sysdeploy",
     "ListDeployments",
-    req
+    req,
+    options
   );
 }
-export function getHostRoutes(hostId: string) {
-  return callControl<{ host_id: string }, HostRoutesResponse>("sysdeploy", "GetHostRoutes", { host_id: hostId });
+export function getHostRoutes(hostId: string, options: ReadOptions = {}) {
+  return callControl<{ host_id: string }, HostRoutesResponse>("sysdeploy", "GetHostRoutes", { host_id: hostId }, options);
 }
 export function getDirectory() {
   return callControl<Record<string, never>, { directory?: ServiceDirectory }>("sysdeploy", "GetDirectory", {});
@@ -50,19 +58,19 @@ async function allPages<T>(read: (page: number) => Promise<{ items: T[]; page_re
     if (result.items.length === 0) throw new Error("部署清单分页返回空页，请刷新重试");
   }
 }
-export function listAllDeploymentHosts() {
+export function listAllDeploymentHosts(options: ReadOptions = {}) {
   return allPages(
     async page => {
-      const result = await listDeploymentHosts({ page: { page, size: 100 } });
+      const result = await listDeploymentHosts({ page: { page, size: 100 } }, options);
       return { items: result.hosts || [], page_result: result.page_result };
     },
     row => row.host_id
   );
 }
-export function listAllDeployments() {
+export function listAllDeployments(options: ReadOptions = {}) {
   return allPages(
     async page => {
-      const result = await listDeployments({ page: { page, size: 100 } });
+      const result = await listDeployments({ page: { page, size: 100 } }, options);
       return { items: result.deployments || [], page_result: result.page_result };
     },
     row => `${row.host_id}\0${row.component_id}`

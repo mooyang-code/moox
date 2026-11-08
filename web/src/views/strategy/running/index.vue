@@ -3,7 +3,7 @@
     <div class="moox-inner">
       <a-alert v-if="store.instancesError" type="error" show-icon class="top-alert"
         >实例加载失败：{{ store.instancesError
-        }}<template #action><a-button size="small" @click="refresh">重试</a-button></template></a-alert
+        }}<template #action><a-button size="small" @click="refresh()">重试</a-button></template></a-alert
       >
       <a-alert v-if="store.catalogError" type="warning" show-icon class="top-alert"
         >策略定义目录加载失败，定义名称与筛选项可能不完整：{{ store.catalogError
@@ -17,17 +17,22 @@
           />
         </span>
         <a-space wrap>
-          <a-select v-model="filters.strategy_id" allow-clear allow-search placeholder="全部策略定义" class="filter-select"
+          <a-select
+            v-model="filters.strategy_id"
+            allow-clear
+            allow-search
+            placeholder="全部策略定义"
+            class="filter-select"
+            @change="search"
             ><a-option v-for="item in store.strategyCatalog" :key="item.strategy_id" :value="item.strategy_id"
               >{{ item.name }}（{{ item.strategy_id }}）</a-option
             ></a-select
           >
-          <a-select v-model="filters.enabled" allow-clear placeholder="全部状态" class="filter-status"
+          <a-select v-model="filters.enabled" allow-clear placeholder="全部状态" class="filter-status" @change="search"
             ><a-option value="true">已启用</a-option><a-option value="false">已停用</a-option></a-select
           >
-          <a-button @click="search">查询</a-button>
           <a-button @click="reset">重置</a-button>
-          <a-button :loading="store.instancesLoading" aria-label="刷新实例" @click="refresh"
+          <a-button :loading="store.instancesLoading" aria-label="刷新实例" @click="manualRefresh"
             ><template #icon><icon-refresh /></template>刷新</a-button
           >
           <a-button type="primary" status="success" :disabled="!spaceStore.selectedSpaceId" @click="openCreate"
@@ -50,11 +55,9 @@
               <div class="cell-sub mono">{{ record.instance_id }}</div></template
             ></a-table-column
           >
-          <a-table-column title="因子任务" :width="200" :ellipsis="true" :tooltip="true"
-            ><template #cell="{ record }"
-              ><span class="mono">{{ tasksText(record.factor_tasks) }}</span></template
-            ></a-table-column
-          >
+          <a-table-column title="计算任务" :width="200" :ellipsis="true" :tooltip="true"
+            ><template #cell="{ record }"><FactorTaskLinks :tasks="record.factor_tasks" /></template
+          ></a-table-column>
           <a-table-column title="模式" :width="130"
             ><template #cell="{ record }"
               ><a-tag :color="record.logical_account_id ? 'orange' : 'blue'">{{
@@ -66,10 +69,10 @@
             ><template #cell="{ record }"
               ><StatusBadge :enabled="record.enabled" :health="record.health" />
               <div v-if="record.missing_factor_tasks?.length" class="cell-sub delete-incomplete">
-                引用的因子任务已不存在<InfoTip text="删除实例即可清理；启用会失败。" /></div></template
+                引用的计算任务已不存在<InfoTip text="删除实例即可清理；启用会失败。" /></div></template
           ></a-table-column>
           <a-table-column title="更新时间" :width="180"
-            ><template #cell="{ record }">{{ formatStrategyTime(record.updated_at) }}</template></a-table-column
+            ><template #cell="{ record }">{{ formatInstant(record.updated_at, displayZone) }}</template></a-table-column
           >
           <a-table-column title="操作" :width="170" fixed="right">
             <template #cell="{ record }">
@@ -123,12 +126,13 @@
         @update:visible="value => (value ? openCreate() : closeOverlay())"
         @created="created"
       />
+      <InstanceEnableDialog ref="enableDialog" />
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { tasksText } from "@/views/strategy/market-mode";
+import FactorTaskLinks from "@/views/strategy/components/factor-task-links.vue";
 import { listLogicalAccounts } from "@/api/trade";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
@@ -138,9 +142,9 @@ import { useStrategyStore } from "@/store/modules/strategy";
 import StatusBadge from "@/views/strategy/components/strategy-status-badge.vue";
 import StrategyInstanceCreate from "@/views/strategy/components/strategy-instance-create.vue";
 import { confirmInstanceToggle } from "@/views/strategy/components/instance-toggle";
+import InstanceEnableDialog from "@/views/strategy/components/instance-enable-dialog.vue";
 import { canDeleteInstance, confirmInstanceDelete } from "@/views/strategy/components/instance-delete";
-import { formatStrategyTime } from "@/views/strategy/model";
-import InfoTip from "@/views/factor/shared/info-tip.vue";
+import InfoTip from "@/components/info-tip/index.vue";
 import { STRATEGY_TASKS_ROUTE, detailLink, normalizeTaskTab, replayLink, resultsLink } from "@/views/strategy/links";
 import InstanceQuickDrawer from "@/views/strategy/running/instance-quick-drawer.vue";
 import {
@@ -150,6 +154,12 @@ import {
   parseRunningQuery,
   type RunningState
 } from "@/views/strategy/running/running-model";
+import { formatInstant } from "@/utils/time-zone";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
+import { usePolling } from "@/hooks/usePolling";
+
+// 页面时间按当前空间登记的时区显示
+const displayZone = useDisplayZone();
 
 defineOptions({ name: "StrategyRunning" });
 const ROUTE_NAME = STRATEGY_TASKS_ROUTE;
@@ -170,6 +180,7 @@ const filters = reactive({ strategy_id: state.value.strategyId, enabled: state.v
 const pagination = computed(() => ({ current: state.value.page, pageSize: PAGE_SIZE, total: store.totalInstances }));
 const readAt = ref("");
 const togglingId = ref("");
+const enableDialog = ref<InstanceType<typeof InstanceEnableDialog> | null>(null);
 const empty = computed(() =>
   emptyKind({
     loading: store.instancesLoading,
@@ -184,20 +195,34 @@ function go(next: Partial<RunningState>, mode: "push" | "replace" = "replace") {
   const target = { name: ROUTE_NAME, query: buildRunningQuery({ ...state.value, ...next }) };
   return mode === "push" ? router.push(target) : router.replace(target);
 }
-async function refresh() {
+async function refresh(background = false) {
   loadedKey = listKey(state.value);
   const { strategyId, enabled, page } = state.value;
   try {
-    await store.loadInstances({
-      strategy_id: strategyId || undefined,
-      enabled: enabled === "" ? undefined : enabled === "true",
-      page,
-      page_size: PAGE_SIZE
-    });
-    readAt.value = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+    await store.loadInstances(
+      {
+        strategy_id: strategyId || undefined,
+        enabled: enabled === "" ? undefined : enabled === "true",
+        page,
+        page_size: PAGE_SIZE
+      },
+      { background }
+    );
+    readAt.value = formatInstant(Date.now(), displayZone.value, "clock");
   } catch {
     // 错误已记入 store.instancesError，页面就近展示。
   }
+}
+// 每 30 秒后台刷新实例列表（页面隐藏时暂停、不叠加）
+usePolling(
+  () => refresh(true),
+  30_000,
+  () => Boolean(spaceStore.selectedSpaceId)
+);
+/** 手动刷新顺带重读策略目录：别处（如 CLI、模板新建）新建的定义也能出现在筛选和创建实例的下拉里。 */
+function manualRefresh() {
+  store.invalidateStrategyCatalog();
+  void Promise.all([refresh(), loadCatalog()]);
 }
 // 定义目录只用于名称与筛选项：它失败不应让整张实例表显示为读取失败。
 async function loadCatalog() {
@@ -243,23 +268,29 @@ function isCurrentTab() {
   return route.name === ROUTE_NAME && normalizeTaskTab(route.query.tab) === "instances";
 }
 function strategyName(id: string) {
-  return store.strategyCatalog.find((item: Strategy) => item.strategy_id === id)?.name || "定义已删除或未加载";
+  // 后端不允许删除被实例引用的定义，读不到名称只会是目录还没加载
+  return store.strategyCatalog.find((item: Strategy) => item.strategy_id === id)?.name || `${id}（名称未加载）`;
 }
-function created(instanceId: string) {
+/** 创建成功：先把当前这条历史里的 create 去掉，再去详情页；否则在详情页按后退会重新弹出空的创建抽屉。 */
+async function created(instanceId: string) {
+  await go({ create: false });
   openDetail(instanceId);
 }
 /** 列表行启停：与详情页共用确认对话框与请求流程，结束后（无论成败）重新读取列表以显示真实状态。 */
 function toggle(instance: StrategyInstance) {
   if (togglingId.value) return;
-  confirmInstanceToggle(instance.instance_id, !instance.enabled, {
+  const hooks = {
     onStart: () => (togglingId.value = instance.instance_id),
     onSettled: async () => {
       await refresh();
       togglingId.value = "";
     }
-  });
+  };
+  // 启用绑了组合账户的实例：确认框要写明账户和环境，生产要输入组合名称
+  if (!instance.enabled && instance.logical_account_id) enableDialog.value?.open(instance, hooks);
+  else confirmInstanceToggle(instance.instance_id, !instance.enabled, hooks);
 }
-/** 删除已停用的实例：确认框列出将要删除的因子任务与结果数据集；结束后（无论成败）重新读取列表。 */
+/** 删除已停用的实例：确认框列出将要删除的计算任务与结果数据集；结束后（无论成败）重新读取列表。 */
 function remove(instance: StrategyInstance) {
   if (togglingId.value) return;
   void confirmInstanceDelete(instance, {

@@ -26,17 +26,29 @@ export interface ActionState {
 
 const allowed: ActionState = { disabled: false, reason: "" };
 
+/** 在用：本空间有引用，或其他空间有引用（只知道数量）。 */
+function inUse(item: Pick<FactorInfo, "usages" | "other_space_usage_count">) {
+  return item.usages.length > 0 || (item.other_space_usage_count ?? 0) > 0;
+}
+
 export function usageCounts(items: FactorInfo[]) {
-  const using = items.filter(item => item.usages.length > 0).length;
+  const using = items.filter(inUse).length;
   return { all: items.length, using, idle: items.length - using };
+}
+
+/** 没有本空间引用、但有其他空间引用时的说明；否则为空串。 */
+export function otherSpaceUsageText(item: Pick<FactorInfo, "usages" | "other_space_usage_count">) {
+  const other = item.other_space_usage_count ?? 0;
+  return !item.usages.length && other > 0 ? `其他空间有 ${other} 个成员在用` : "";
 }
 
 export function filterDefinitions(items: FactorInfo[], filters: DefinitionFilters) {
   const keyword = filters.keyword.trim().toLowerCase();
-  return items.filter(({ factor, usages }) => {
+  return items.filter(item => {
+    const { factor } = item;
     if (filters.type && factor.factor_type !== filters.type) return false;
-    if (filters.usage === "using" && !usages.length) return false;
-    if (filters.usage === "idle" && usages.length) return false;
+    if (filters.usage === "using" && !inUse(item)) return false;
+    if (filters.usage === "idle" && inUse(item)) return false;
     if (filters.category && categoryOf(factor) !== filters.category) return false;
     if (!keyword) return true;
     return factor.factor_id.toLowerCase().includes(keyword) || factor.name.toLowerCase().includes(keyword);
@@ -69,16 +81,21 @@ export function usageChips(usages: FactorUsage[], labelOf: (taskId: string) => s
   }));
 }
 
-/** 被任一已启用成员引用时不能编辑（后端规则 D20）。 */
-export function definitionEditState(item: Pick<FactorInfo, "usages">): ActionState {
-  return item.usages.some(usage => usage.status === "enabled")
-    ? { disabled: true, reason: "被启用中的计算任务使用，需先停用" }
-    : allowed;
+type UsageCounts = Pick<FactorInfo, "usages" | "other_space_usage_count" | "other_space_enabled_count">;
+
+/** 被任一已启用成员引用时不能编辑（后端规则 D20）：其他空间的启用成员也算，只是看不到是哪个任务。 */
+export function definitionEditState(item: UsageCounts): ActionState {
+  if (item.usages.some(usage => usage.status === "enabled"))
+    return { disabled: true, reason: "被启用中的计算任务使用，需先停用" };
+  const other = item.other_space_enabled_count ?? 0;
+  return other > 0 ? { disabled: true, reason: `其他空间有 ${other} 个启用中的成员在用，需先在那个空间停用` } : allowed;
 }
 
-/** 仍被任一计算任务引用时不能删除（D21）。 */
-export function definitionDeleteState(item: Pick<FactorInfo, "usages">): ActionState {
-  return item.usages.length > 0 ? { disabled: true, reason: "仍被计算任务使用，需先从计算任务中移除" } : allowed;
+/** 仍被任一计算任务引用时不能删除（D21）：其他空间的引用（启用、停用都算）也挡住删除。 */
+export function definitionDeleteState(item: UsageCounts): ActionState {
+  if (item.usages.length > 0) return { disabled: true, reason: "仍被计算任务使用，需先从计算任务中移除" };
+  const other = item.other_space_usage_count ?? 0;
+  return other > 0 ? { disabled: true, reason: `其他空间有 ${other} 个成员在用，需先在那个空间移除` } : allowed;
 }
 
 /** 分类 ID 合法形式：小写字母开头，只含小写字母、数字、下划线，最长 32 位。 */
@@ -142,6 +159,8 @@ export interface DefinitionRow {
   category: string;
   paramNames: string;
   chips: UsageChip[];
+  /** 只有其他空间在用时的说明。 */
+  otherUsage: string;
   edit: ActionState;
   remove: ActionState;
 }
@@ -158,6 +177,7 @@ export function definitionRows(
     category: categoryName(categories, item.factor.category_id),
     paramNames: (item.factor.params ?? []).map(param => param.name).join(", ") || "-",
     chips: usageChips(item.usages, labelOf),
+    otherUsage: otherSpaceUsageText(item),
     edit: definitionEditState(item),
     remove: definitionDeleteState(item)
   }));

@@ -171,8 +171,8 @@ export async function updateStrategy(strategy_id: string, dsl_yaml: string) {
   return normalizeStrategy(response.strategy);
 }
 
-export async function getStrategy(strategy_id: string) {
-  const response = await call<{ strategy_id: string }, { strategy?: Strategy }>("GetStrategy", { strategy_id });
+export async function getStrategy(strategy_id: string, options: RequestOptions = {}) {
+  const response = await call<{ strategy_id: string }, { strategy?: Strategy }>("GetStrategy", { strategy_id }, options);
   return normalizeStrategy(response.strategy);
 }
 
@@ -196,7 +196,7 @@ function isInvalidParam(code: unknown): boolean {
   return code === 1 || code === "1" || code === "INVALID_PARAM";
 }
 
-/** 校验 DSL；给出 factor_tasks（市场 → 因子任务）时按任务的结果 View 解析绑定并在最新周期试算一次（读全部绑定的 View，不落库）。 */
+/** 校验 DSL；给出 factor_tasks（市场 → 计算任务）时按任务的结果 View 解析绑定并在最新周期试算一次（读全部绑定的 View，不落库）。 */
 export async function validateStrategy(
   dsl_yaml: string,
   factor_tasks: Record<string, string> = {}
@@ -247,35 +247,47 @@ export async function createInstance(instance: {
   return normalizeInstance(response.instance);
 }
 
-/** 修改实例的策略定义与组合账户；因子任务在创建时写定，不能修改。 */
-export async function updateInstance(instance: { instance_id: string; strategy_id?: string; logical_account_id?: string }) {
-  const response = await call<{ instance: typeof instance }, { instance?: StrategyInstance }>("UpdateStrategyInstance", {
-    instance
-  });
-  return normalizeInstance(response.instance);
-}
-
-export async function getInstance(instance_id: string) {
-  const response = await call<{ instance_id: string }, { instance?: StrategyInstance }>("GetStrategyInstance", { instance_id });
+export async function getInstance(instance_id: string, options: RequestOptions = {}) {
+  const response = await call<{ instance_id: string }, { instance?: StrategyInstance }>(
+    "GetStrategyInstance",
+    { instance_id },
+    options
+  );
   return normalizeInstance(response.instance);
 }
 
 export async function listInstances(
-  params: PageRequest & { strategy_id?: string; enabled?: boolean } = {}
+  params: PageRequest & { strategy_id?: string; enabled?: boolean } = {},
+  options: RequestOptions = {}
 ): Promise<PageResult<StrategyInstance>> {
   const response = await call<
     { page: Required<PageRequest>; strategy_id?: string; enabled?: boolean },
     { instances?: StrategyInstance[]; total?: number; page?: number; page_size?: number }
-  >("ListStrategyInstances", {
-    page: pageRequest(params),
-    strategy_id: params.strategy_id || undefined,
-    // 清空筛选时下拉框给出空字符串：只在确实是布尔值时才发送。
-    enabled: typeof params.enabled === "boolean" ? params.enabled : undefined
-  });
+  >(
+    "ListStrategyInstances",
+    {
+      page: pageRequest(params),
+      strategy_id: params.strategy_id || undefined,
+      // 清空筛选时下拉框给出空字符串：只在确实是布尔值时才发送。
+      enabled: typeof params.enabled === "boolean" ? params.enabled : undefined
+    },
+    options
+  );
   return {
     items: (response.instances ?? []).map(normalizeInstance),
     page: { total: Number(response.total ?? 0), page: response.page, page_size: response.page_size }
   };
+}
+
+/** 读当前空间的全部实例：每页 200 个，最多读 10 页（单用户场景下足够）。 */
+export async function listAllInstances(options: RequestOptions = {}): Promise<StrategyInstance[]> {
+  const all: StrategyInstance[] = [];
+  for (let page = 1; page <= 10; page += 1) {
+    const rsp = await listInstances({ page, page_size: 200 }, options);
+    all.push(...rsp.items);
+    if (!rsp.items.length || all.length >= rsp.page.total) break;
+  }
+  return all;
 }
 
 export async function setInstanceEnabled(instance_id: string, enabled: boolean) {
@@ -286,19 +298,20 @@ export async function setInstanceEnabled(instance_id: string, enabled: boolean) 
   return normalizeInstance(response.instance);
 }
 
-/** 删除已停用的实例，连同它关联的因子任务和结果数据集；失败由调用方提示（超时时删除可能已做了一部分，重试安全）。 */
+/** 删除已停用的实例，连同它关联的计算任务和结果数据集；失败由调用方提示（超时时删除可能已做了一部分，重试安全）。 */
 export async function deleteInstance(instance_id: string) {
   await call<{ instance_id: string }, Record<string, never>>("DeleteStrategyInstance", { instance_id }, { silent: true });
 }
 
 export async function listStrategyResults(
   instance_id: string,
-  params: PageRequest & { session_id?: string } = {}
+  params: PageRequest & { session_id?: string } = {},
+  options: RequestOptions = {}
 ): Promise<PageResult<StrategyResult>> {
   const response = await call<
     { instance_id: string; session_id?: string; page: Required<PageRequest> },
     { results?: StrategyResult[]; total?: number; page?: number; page_size?: number }
-  >("ListStrategyResults", { instance_id, session_id: params.session_id || undefined, page: pageRequest(params) });
+  >("ListStrategyResults", { instance_id, session_id: params.session_id || undefined, page: pageRequest(params) }, options);
   return {
     items: (response.results ?? []).map(normalizeResult),
     page: { total: Number(response.total ?? 0), page: response.page, page_size: response.page_size }
@@ -319,11 +332,11 @@ export async function getStrategyResult(result_id: string): Promise<StrategyResu
   };
 }
 
-export async function listStrategyTargets(instance_id: string): Promise<StrategyTargetSnapshot> {
+export async function listStrategyTargets(instance_id: string, options: RequestOptions = {}): Promise<StrategyTargetSnapshot> {
   const response = await call<
     { instance_id: string },
     { targets?: InstrumentTarget[]; session_id?: string; bar_end_time?: string; valid_until?: string; result_id?: string }
-  >("ListStrategyTargets", { instance_id });
+  >("ListStrategyTargets", { instance_id }, options);
   return {
     targets: (response.targets ?? []).map(normalizeTarget),
     session_id: response.session_id ?? "",

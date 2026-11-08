@@ -5,6 +5,9 @@ import type { ValidateFactorSpecRsp } from "@/api/factor/types";
 import type { DatasetColumn } from "@/api/storage/types";
 import { CROSS_SECTION_SPEC_TEMPLATE, TIMESERIES_SPEC_TEMPLATE, isBuiltinTemplate, specTemplate } from "./editor-template";
 import {
+  copyFactorId,
+  setPendingCopy,
+  takePendingCopy,
   blankFactorForm,
   buildFactorPayload,
   checklistBlockers,
@@ -14,6 +17,7 @@ import {
   factorChecklist,
   filterFunctions,
   formFromDefinition,
+  previewRequest,
   sourceInputColumns,
   specKey,
   type CompileState,
@@ -33,7 +37,7 @@ const column = (name: string, patch: Partial<DatasetColumn> = {}): DatasetColumn
 
 const valid = (patch: Partial<FactorFormState> = {}): FactorFormState => ({
   ...blankFactorForm(),
-  factor_id: "Bias",
+  factor_id: "bias",
   name: "Bias 偏离",
   spec: "outputs:\n  bias_20: close / ts_mean(close, 20) - 1\n",
   ...patch
@@ -183,8 +187,9 @@ describe("templates and function reference", () => {
 describe("editor page contract", () => {
   const page = fs.readFileSync(path.resolve(__dirname, "index.vue"), "utf8");
 
-  it("editor has no 因子任务 / 源数据集 / 频率 selector", () => {
-    expect(page).not.toContain("因子任务");
+  it("editor form has no 计算任务 / 源数据集 / 频率 field", () => {
+    expect(page).not.toContain('label="计算任务"');
+    expect(page).not.toContain("task-select.vue");
     expect(page).not.toContain('label="源数据集"');
     expect(page).not.toContain('label="频率"');
     expect(page).toContain("参考数据集");
@@ -196,8 +201,14 @@ describe("editor page contract", () => {
     expect(page).toContain("updateFactor");
   });
 
-  it("editor registers onBeforeRouteLeave", () => {
-    expect(page).toContain("onBeforeRouteLeave");
+  it("新建保存后换到编辑页的地址（留在编辑页），编辑保存后回列表；编辑页能添加到计算任务并预选这个因子", () => {
+    expect(page).toContain("else await router.replace(`/factor/definitions/${encodeURIComponent(payload.factor_id)}/edit`)");
+    expect(page).toContain('if (editing.value) goBackOr(router, "/factor/definitions")');
+    expect(page).toContain(':preset-factor-id="factorId"');
+  });
+
+  it("editor protects unsaved changes on leave, reload and tab close", () => {
+    expect(page).toContain("useUnsavedGuard(");
   });
 
   it("editor edits the YAML spec in the code editor and compiles it on the server", () => {
@@ -214,5 +225,52 @@ describe("editor page contract", () => {
     expect(page).toContain("referenceDatasetId");
     expect(fs.readFileSync(path.resolve(__dirname, "factor-form.ts"), "utf8")).not.toContain("referenceDatasetId");
     expect(buildFactorPayload(valid())).not.toHaveProperty("referenceDatasetId");
+  });
+});
+
+describe("因子 ID 与后端规则一致", () => {
+  it.each(["Bias", "a__b", "_bias", "bias_", "1bias", "a".repeat(25)])("%j 在保存前检查里不通过", id => {
+    const form = valid({ factor_id: id });
+    expect(failing(form).map(item => item.key)).toContain("factor_id");
+  });
+
+  it.each(["bias", "bias_20", "ma5_ratio"])("%j 通过", id => {
+    const form = valid({ factor_id: id });
+    expect(failing(form).map(item => item.key)).not.toContain("factor_id");
+  });
+
+  it("试算请求带上因子 ID（去掉首尾空格），没填时不带", () => {
+    const scope = { taskId: "t1", subjects: ["BTC-USDT"], periods: 20 };
+    expect(previewRequest(valid({ factor_id: " bias_20 " }), scope)).toMatchObject({
+      task_id: "t1",
+      subjects: ["BTC-USDT"],
+      periods: 20,
+      factor_id: "bias_20"
+    });
+    expect(previewRequest(valid({ factor_id: "" }), scope).factor_id).toBeUndefined();
+  });
+
+  it("改了因子 ID 后旧的校验结果作废，单输出因子的输出名要按新 ID 重新推导", () => {
+    const form = valid({ factor_id: "bias" });
+    const compile = ok(form);
+    expect(compiledFor(compile, form)).toBe(true);
+    expect(compiledFor(compile, { ...form, factor_id: "bias_20" })).toBe(false);
+  });
+});
+
+describe("另存为新因子", () => {
+  it("ID 加 _v2，已有 _vN 的加一；超长时截断原 ID 且不留结尾下划线", () => {
+    expect(copyFactorId("bias_20")).toBe("bias_20_v2");
+    expect(copyFactorId("bias_20_v2")).toBe("bias_20_v3");
+    const long = copyFactorId("abcdefghij_klmnopqrstu_x");
+    expect(long.length).toBeLessThanOrEqual(24);
+    expect(long).toBe("abcdefghij_klmnopqrst_v2");
+    expect(copyFactorId("abcdefghijklmnopqrst_uvw")).toBe("abcdefghijklmnopqrst_v2");
+  });
+
+  it("带过去的定义只能取走一次", () => {
+    setPendingCopy({ ...blankFactorForm(), factor_id: "a_v2" });
+    expect(takePendingCopy()?.factor_id).toBe("a_v2");
+    expect(takePendingCopy()).toBeNull();
   });
 });

@@ -26,9 +26,12 @@
                 <span class="tx-muted">（实例 {{ strategy.instanceId }}）</span>
               </span>
               <span v-else-if="logical.owner_instance_id">
-                关联策略实例 <span class="tx-mono">{{ logical.owner_instance_id }}</span>
+                关联策略实例
+                <a-link class="tx-mono" @click="openInstance(logical.owner_instance_id)">{{ logical.owner_instance_id }}</a-link>
               </span>
-              <span v-else>{{ logical.control_mode === 2 ? "自主下单，没有关联策略" : "尚未绑定策略" }}</span>
+              <span v-else>{{
+                logical.control_mode === 2 ? "自主下单，没有关联策略" : strategiesFailed ? "策略读取失败" : "尚未绑定策略"
+              }}</span>
               <span class="tx-muted tx-mono">{{ logical.logical_account_id }}</span>
             </div>
           </div>
@@ -62,15 +65,17 @@
             <div class="v tx-num">
               {{ fmtMoney(totals.equity) }}<small>{{ logical.settlement_asset }}</small>
             </div>
-            <div class="d">同步于 {{ fmtClock(latestSync) }}</div>
+            <div class="d">同步于 <TimeText :value="latestSync" :zone="displayZone" precision="minute" /></div>
           </div>
           <div v-if="initialBalance">
             <div class="k">较初始资金</div>
-            <div class="v tx-num" :class="pnlClass((totals.equity ?? 0) - initialBalance)">
-              {{ fmtSigned((totals.equity ?? 0) - initialBalance) }}
+            <!-- 还没读到权益（新建账户首次同步前）时整格显示“—”，不能按 0 算成 −100% -->
+            <div class="v tx-num" :class="equityChange === null ? '' : pnlClass(equityChange)">
+              {{ equityChange === null ? "—" : fmtSigned(equityChange) }}
             </div>
             <div class="d">
-              初始 {{ fmtMoney(initialBalance, 0) }} · {{ fmtPercent(((totals.equity ?? 0) - initialBalance) / initialBalance) }}
+              初始 {{ fmtMoney(initialBalance, 0) }} ·
+              {{ equityChange === null ? "—" : fmtPercent(equityChange / initialBalance) }}
             </div>
           </div>
           <div>
@@ -198,12 +203,12 @@
         >
           <a-descriptions v-if="target" :column="1" size="small" class="dialog-block">
             <a-descriptions-item label="当前目标"
-              >{{ formatTimestamp(String(target.bar_end_time || "")) }} 的 K 线，{{
+              >{{ formatInstant(target.bar_end_time, displayZone) }} 的 K 线，{{
                 target.targets.length
               }}
               个标的</a-descriptions-item
             >
-            <a-descriptions-item label="有效至">{{ fmtClock(target.valid_until, true) }}</a-descriptions-item>
+            <a-descriptions-item label="有效至">{{ formatInstant(target.valid_until, displayZone) }}</a-descriptions-item>
             <a-descriptions-item label="暂停原因">{{ logical.pause_reason || "未填写" }}</a-descriptions-item>
           </a-descriptions>
           <p class="dialog-text">
@@ -227,9 +232,7 @@
             <a-descriptions-item label="范围">
               {{ flattenTarget ? "只动这一个执行账户，组合里其他账户不动" : `组合里全部 ${enabledAccounts.length} 个执行账户` }}
             </a-descriptions-item>
-            <a-descriptions-item label="撤销订单">{{
-              flattenOrders === null ? "读取中…" : `${flattenOrders} 个未完成订单`
-            }}</a-descriptions-item>
+            <a-descriptions-item label="撤销订单">{{ flattenOrdersText }}</a-descriptions-item>
             <a-descriptions-item label="平掉持仓">
               {{ flattenInfo.positions }} 个，按市价，价值约 {{ fmtMoney(flattenInfo.value) }} {{ logical.settlement_asset }}
             </a-descriptions-item>
@@ -291,7 +294,9 @@
 </template>
 
 <script setup lang="ts">
+import TimeText from "@/components/time-text/index.vue";
 import { computed, onBeforeUnmount, provide, ref, watch } from "vue";
+import { usePolling } from "@/hooks/usePolling";
 import { useRoute, useRouter } from "vue-router";
 import { Message } from "@arco-design/web-vue";
 import { useSpaceStore } from "@/store/modules/space";
@@ -304,10 +309,10 @@ import {
   exchangeLabels,
   flattenLogicalAccount,
   flattenTradingAccount,
-  formatTimestamp,
   getLogicalAccount,
   isTradeNotFound,
   getLogicalAccountTarget,
+  listOperatorActions,
   listOrders,
   listTradingAccounts,
   orderOwnerLabels,
@@ -319,10 +324,10 @@ import {
 } from "@/api/trade";
 import type { LogicalAccount, LogicalAccountTarget, Order, TradingAccount } from "@/api/trade";
 import { accountMapOf } from "../account-list";
-import ConfirmDialog from "../shared/confirm-dialog.vue";
-import EnvMark from "../shared/env-mark.vue";
-import { environmentFromQuery, environmentLabel, logicalEnvironment } from "../shared/environment";
-import { fmtClock, fmtMoney, fmtPercent, fmtQty, fmtSigned, pnlClass } from "../shared/format";
+import ConfirmDialog from "@/components/trade-confirm/confirm-dialog.vue";
+import EnvMark from "@/components/trade-confirm/env-mark.vue";
+import { environmentFromQuery, environmentLabel, logicalEnvironment } from "@/components/trade-confirm/environment";
+import { fmtMoney, fmtPercent, fmtQty, fmtSigned, pnlClass } from "../shared/format";
 import { instrumentName, marketLabel } from "../shared/markets";
 import { loadPositionSnapshot, positionCount, type PositionSnapshot } from "../shared/position-snapshot";
 import { loadStrategyLinks, type StrategyLink } from "../shared/strategy-link";
@@ -331,10 +336,12 @@ import { detailContextKey, type OrderPrefill } from "./context";
 import {
   actionTypeLabels,
   detailTabs,
+  equityChangeOf,
   flattenPreview,
   isFlattenRunning,
   memberTotals,
   paperInitialBalance,
+  runningAction,
   tabFromQuery,
   targetExpired
 } from "./detail-model";
@@ -346,7 +353,11 @@ import OverviewTab from "./overview-tab.vue";
 import PositionsTab from "./positions-tab.vue";
 import { buildCoinRows, targetCoinCount } from "./positions-model";
 import SettingsTab from "./settings-tab.vue";
+import { formatInstant } from "@/utils/time-zone";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
 
+// 交易页的时间按当前空间登记的时区显示
+const displayZone = useDisplayZone();
 defineOptions({ name: "trading-account-detail" });
 
 const route = useRoute();
@@ -362,6 +373,8 @@ const allAccounts = ref<TradingAccount[]>([]);
 const target = ref<LogicalAccountTarget | null>(null);
 const snapshot = ref<PositionSnapshot>({ swapPositions: [], spotHoldings: [] });
 const strategy = ref<StrategyLink | null>(null);
+// 关联策略读取失败：页头既没有关联策略也没有实例编号时写“策略读取失败”
+const strategiesFailed = ref(false);
 const dataVersion = ref(0);
 const syncing = ref(false);
 const orderDialog = ref<InstanceType<typeof OrderDialog>>();
@@ -379,6 +392,7 @@ const enabledAccounts = computed(() =>
 );
 const totals = computed(() => memberTotals(enabledAccounts.value));
 const initialBalance = computed(() => paperInitialBalance(enabledAccounts.value));
+const equityChange = computed(() => equityChangeOf(totals.value.equity, initialBalance.value));
 const latestSync = computed(() => Math.max(0, ...enabledAccounts.value.map(item => Number(item.last_sync_at) || 0)));
 const exchangesText = computed(() => {
   const names = [...new Set(enabledAccounts.value.map(item => exchangeLabels[item.exchange] || "-"))];
@@ -429,32 +443,52 @@ const actionAlertType = computed(() => {
 
 // 同一时刻只认最新一次读取：空间切换、页签切换后迟到的响应不能覆盖当前数据。
 const reloads = createLatestRequestGuard();
-let poller: ReturnType<typeof setInterval> | null = null;
-
-async function reload() {
+/** background：每 5 秒的后台刷新，不弹全局提示；失败保留上次的数据，下一轮再试。 */
+async function reload(background = false) {
   const id = logicalId.value;
   if (!id) return;
   const request = reloads.begin();
+  const options = { silent: background };
   const [logicalRsp, targetRsp, accountRsp] = await Promise.all([
-    getLogicalAccount(id),
-    getLogicalAccountTarget(id).catch(() => ({ target: undefined })),
-    listTradingAccounts({ page: { page: 1, size: 200 } })
+    getLogicalAccount(id, options),
+    getLogicalAccountTarget(id, options).catch(() => ({ target: undefined })),
+    listTradingAccounts({ page: { page: 1, size: 200 } }, options)
   ]);
   if (!request.isLatest() || id !== logicalId.value) return;
   loadError.value = "";
   logical.value = logicalRsp.logical_account;
   target.value = targetRsp.target || null;
   allAccounts.value = accountRsp.accounts || [];
-  const next = await loadPositionSnapshot(logicalRsp.logical_account, accounts.value).catch(() => null);
+  const next = await loadPositionSnapshot(logicalRsp.logical_account, accounts.value, options).catch(() => null);
   if (next && request.isLatest() && id === logicalId.value) snapshot.value = next;
+}
+
+/** 刷新页面后接回进行中的操作（例如清仓）：页头继续显示进度，结束后订单、成交跟着刷新。 */
+async function resumeRunningAction() {
+  const id = logicalId.value;
+  if (!id) return;
+  try {
+    const rsp = await listOperatorActions({ logical_account_id: id, page: { page: 1, size: 20 } }, { silent: true });
+    if (id !== logicalId.value || tracker.action.value) return;
+    const running = runningAction(rsp.actions);
+    if (!running) return;
+    tracker.action.value = running;
+    tracker.start(running.action_id);
+  } catch {
+    // 只用于接回进度；读不到时不提示，操作记录页签里仍能看到
+  }
 }
 
 async function loadFirst() {
   loadError.value = "";
   try {
     await reload();
+    void resumeRunningAction();
     const links = await loadStrategyLinks(logical.value ? [logical.value] : []);
-    strategy.value = links.get(logicalId.value) ?? null;
+    // 读取失败时保留上一次读到的关联策略；没有的话页头仍能按 owner_instance_id 链到实例，
+    // 两样都没有时写“策略读取失败”，不当成没有绑定
+    strategiesFailed.value = links === null;
+    if (links) strategy.value = links.get(logicalId.value) ?? null;
   } catch (cause) {
     if (logical.value) return;
     // 不存在和其他失败（网络、服务暂时不可用）分开说：后者可以重试，轮询读到后也会自动恢复
@@ -465,23 +499,8 @@ async function loadFirst() {
   }
 }
 
-function startPolling() {
-  stopPolling();
-  let busy = false;
-  poller = setInterval(() => {
-    if (busy || document.hidden) return;
-    busy = true;
-    void reload()
-      .catch(() => undefined)
-      .finally(() => {
-        busy = false;
-      });
-  }, 5000);
-}
-function stopPolling() {
-  if (poller) clearInterval(poller);
-  poller = null;
-}
+// 每 5 秒后台刷新（页面隐藏时暂停、不叠加）
+usePolling(() => reload(true), 5000);
 
 watch(
   logicalId,
@@ -503,9 +522,7 @@ watch(
     if (next && previous && next !== previous) backToList();
   }
 );
-startPolling();
 onBeforeUnmount(() => {
-  stopPolling();
   reloads.invalidate();
 });
 
@@ -517,6 +534,10 @@ function setTab(key: string) {
 
 function backToList() {
   void router.push({ path: "/trading/accounts", query: { env: env.value === "paper" ? undefined : env.value } });
+}
+
+function openInstance(instanceId: string) {
+  void router.push({ name: "strategy-detail", params: { instanceId } });
 }
 
 function openStrategy() {
@@ -533,13 +554,19 @@ const pauseVisible = ref(false);
 const resumeVisible = ref(false);
 const flattenVisible = ref(false);
 const flattenTarget = ref<TradingAccount | null>(null);
-const flattenOrders = ref<number | null>(null);
+// 未完成订单数：null 表示读取中，undefined 表示读取失败
+const flattenOrders = ref<number | null | undefined>(null);
 const flattenActionId = ref("");
 const cancelVisible = ref(false);
 const cancelOrderTarget = ref<Order | null>(null);
 const cancelActionId = ref("");
 const closePaperVisible = ref(false);
 const closePaperTarget = ref<TradingAccount | null>(null);
+const flattenOrdersText = computed(() => {
+  if (flattenOrders.value === null) return "读取中…";
+  if (flattenOrders.value === undefined) return "未完成订单数读取失败，清仓时仍会全部撤销";
+  return `${flattenOrders.value} 个未完成订单`;
+});
 const flattenInfo = computed(() => flattenPreview(snapshot.value, flattenTarget.value?.trading_account_id));
 
 /** 提交期间组合账户被切走：请求已经发出，但不再改动当前页面。 */
@@ -570,11 +597,13 @@ function openFlatten(account?: TradingAccount) {
   flattenVisible.value = true;
   const id = logicalId.value;
   const scope = account ? { trading_account_id: account.trading_account_id } : { logical_account_id: id };
-  listOrders({ ...scope, only_open: true, page: { page: 1, size: 1 } })
+  listOrders({ ...scope, only_open: true, page: { page: 1, size: 1 } }, { silent: true })
     .then(rsp => {
       if (flattenVisible.value && logicalId.value === id) flattenOrders.value = rsp.page_result?.total ?? 0;
     })
-    .catch(() => undefined);
+    .catch(() => {
+      if (flattenVisible.value && logicalId.value === id) flattenOrders.value = undefined;
+    });
 }
 
 async function submitFlatten(reason: string) {

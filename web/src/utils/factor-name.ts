@@ -323,7 +323,7 @@ function trimPrefix(prefix: string, id: string): string {
   return suffix;
 }
 
-/** 由同一个后缀生成因子任务、结果数据集、默认 View 的 ID；parse* 是它们的反解，返回后缀。 */
+/** 由同一个后缀生成计算任务、结果数据集、默认 View 的 ID；parse* 是它们的反解，返回后缀。 */
 export const taskId = (suffix: string): string => withPrefix(TASK_PREFIX, suffix);
 export const resultDatasetId = (suffix: string): string => withPrefix(DATASET_PREFIX, suffix);
 export const resultViewId = (suffix: string): string => withPrefix(VIEW_PREFIX, suffix);

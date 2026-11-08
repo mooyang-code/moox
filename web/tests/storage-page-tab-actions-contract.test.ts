@@ -10,6 +10,7 @@ const pages = {
 describe("storage page actions contract", () => {
   it("does not add a DataNode create action", () => {
     expect(pages.nodes).not.toContain("新增节点");
+    expect(pages.nodes).not.toContain("新建节点");
     expect(pages.nodes).not.toContain("openCreate");
   });
 
@@ -24,7 +25,8 @@ describe("storage page actions contract", () => {
     expect(pages.nodes).toContain('title="操作" :width="90"');
     expect(pages.nodes).toContain("display: flex;\n  flex-wrap: wrap;");
     expect(pages.nodes).toContain('path: "/collector/tasks"');
-    expect(pages.nodes).toContain('query: { tab: "results", space_id: summary.space_id }');
+    expect(pages.nodes).toContain('query: { tab: "results", dataset: summary.dataset_id }');
+    expect(pages.nodes).toContain("spaceStore.setSelectedSpace(summary.space_id)");
   });
 
   it("uses a modal for DataNode details instead of a side drawer", () => {
@@ -33,9 +35,8 @@ describe("storage page actions contract", () => {
     expect(pages.nodes).toMatch(/<a-modal[\s\S]*data-testid="data-node-detail-modal"[\s\S]*width="1000px"/);
     expect(pages.nodes).toContain('class="detail-datasets-list"');
     expect(pages.nodes).toContain("<a-pagination");
-    expect(pages.nodes).toContain(":pagination=\"false\"");
+    expect(pages.nodes).toContain(':pagination="false"');
     expect(pages.nodes).toContain("pageSize: 10");
     expect(pages.nodes).toContain("showPageSize: false");
   });
-
 });

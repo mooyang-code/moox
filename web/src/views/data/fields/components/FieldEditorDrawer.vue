@@ -3,7 +3,7 @@
     class="field-editor-container"
     :visible="visible"
     width="min(560px, 100vw)"
-    :title="editing ? '编辑字段' : '新增字段'"
+    :title="editing ? '编辑字段' : '新建字段'"
     :footer="false"
     :mask="false"
     :mask-closable="false"

@@ -36,7 +36,7 @@
         </div>
         <div class="toolbar-actions">
           <a-button type="primary" status="success" :disabled="!spaceId" @click="createFactor">
-            <template #icon><icon-plus /></template>新增因子
+            <template #icon><icon-plus /></template>新建因子
           </a-button>
         </div>
       </div>
@@ -79,7 +79,7 @@
               :selected-keys="selectedKeys"
               :empty-text="emptyText"
               @select="selectedKeys = $event"
-              @detail="detailId = $event"
+              @detail="openDetail"
               @edit="editFactor"
               @remove="removeFactor"
               @open-task="openTask"
@@ -103,13 +103,19 @@
           @delete="confirmDeleteCategory"
         />
       </a-drawer>
-      <FactorDetailDrawer :factor-id="detailId" :categories="categories" @close="detailId = ''" @open-task="openTask" />
+      <FactorDetailDrawer
+        :factor-id="detailId"
+        :categories="categories"
+        @close="closeDetail"
+        @open-task="openTask"
+        @edit="editFactor"
+      />
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onActivated, reactive, ref, watch } from "vue";
+import { computed, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { Message, Modal } from "@arco-design/web-vue";
 import {
@@ -158,7 +164,8 @@ const mobileTreeVisible = ref(false);
 const items = ref<FactorInfo[]>([]);
 const loading = ref(false);
 const loadError = ref("");
-const detailId = ref("");
+// 打开的因子详情写进 ?detail=：刷新、后退、分享链接都能回到同一个因子
+const detailId = computed(() => (typeof route.query.detail === "string" ? route.query.detail : ""));
 const selectedKeys = ref<string[]>([]);
 const pagination = reactive({ current: 1, pageSize: 20, pageSizeOptions: [20, 50, 100], showPageSize: true, showTotal: true });
 const gate = new RequestGate();
@@ -348,6 +355,16 @@ function editFactor(factorId: string) {
   void router.push(`/factor/definitions/${encodeURIComponent(factorId)}/edit`);
 }
 
+function openDetail(factorId: string) {
+  void router.replace({ path: route.path, query: { ...route.query, detail: factorId } });
+}
+
+function closeDetail() {
+  const query = { ...route.query };
+  delete query.detail;
+  void router.replace({ path: route.path, query });
+}
+
 function openTask(taskId: string) {
   void router.push({ path: "/factor/tasks", query: { detail: taskId } });
 }
@@ -362,8 +379,6 @@ async function removeFactor(factorId: string) {
   }
 }
 
-// 成员在计算任务里被添加 / 移除 / 启停后，使用情况会变化；切回本页（keep-alive 激活）时重新拉取。
-let fresh = true;
 // 请求按空间授权：空间初始化完成（或切换）后才加载，避免无空间时被 403 且不再恢复。
 watch(
   spaceId,
@@ -376,15 +391,6 @@ watch(
   },
   { immediate: true }
 );
-onActivated(() => {
-  if (fresh) {
-    fresh = false;
-    return;
-  }
-  if (!spaceId.value) return;
-  void load();
-  void store.reload();
-});
 </script>
 
 <style scoped>

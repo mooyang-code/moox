@@ -15,8 +15,8 @@ describe("strategy DSL editor contract", () => {
   it("protects a dirty draft and offers a server-side trial", () => {
     expect(source).toContain("当前 DSL 尚未保存，确认替换？");
     expect(source).toContain("当前 DSL 尚未保存，确认离开？");
-    expect(source).toContain("onBeforeRouteLeave");
-    expect(source).toContain("onBeforeRouteUpdate");
+    // 站内离开、刷新、关标签页前的提示收在 useUnsavedGuard 里
+    expect(source).toContain("useUnsavedGuard(");
     expect(source).toContain("<TrialPanel");
   });
 

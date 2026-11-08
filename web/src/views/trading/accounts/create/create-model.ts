@@ -1,6 +1,6 @@
 import type { CreatePaperSimulationReq, CreateTradingAccountReq, Exchange, MarketType } from "@/api/trade/types";
 import { isTradeSessionNotReady } from "@/api/trade/http";
-import type { Environment } from "../shared/environment";
+import type { Environment } from "@/components/trade-confirm/environment";
 
 export const createKinds: readonly { key: Environment; label: string; desc: string; open: boolean }[] = [
   { key: "paper", label: "模拟盘", desc: "用真实行情在本地撮合，不连交易所，不需要密钥。", open: true },

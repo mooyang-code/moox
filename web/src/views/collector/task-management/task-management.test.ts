@@ -20,13 +20,6 @@ describe("collector task management workbench", () => {
     expect(normalized).toContain('typeCollectorTaskTab="tasks"|"status"|"backfills"|"executors"|"results"');
   });
 
-  it("uses the result task query only for the result tab", () => {
-    const source = fs.readFileSync(path.resolve(__dirname, "index.vue"), "utf8");
-    const normalized = normalizeSource(source);
-    expect(normalized).toContain('tab==="results"&&resultTask?{tab,resultTask}:{tab}');
-    expect(normalized).toContain("consttab=normalizeTab(value)");
-  });
-
   it("keeps one visible task menu and removes retired collector URLs", () => {
     const menu = fs.readFileSync(path.resolve(__dirname, "../../../api/modules/system/static-menu.ts"), "utf8");
     const routes = fs.readFileSync(path.resolve(__dirname, "../../../router/route.ts"), "utf8");
@@ -47,10 +40,12 @@ describe("collector task management workbench", () => {
     const firstToolbarEnd = source.indexOf("</a-space>");
     const tableStart = source.indexOf("<a-table");
     const createPosition = source.indexOf("新建采集任务");
-    const searchPosition = source.indexOf("查询");
+    const searchPosition = source.indexOf('placeholder="搜索任务名称 / 任务 ID"');
 
     expect(createPosition).toBeGreaterThan(0);
     expect(createPosition).toBeLessThan(searchPosition);
+    // 下拉即时生效、文本框回车生效：工具栏不再有“查询”按钮
+    expect(source.slice(0, firstToolbarEnd)).not.toContain("查询");
     expect(createPosition).toBeLessThan(firstToolbarEnd);
     expect(source.slice(firstToolbarEnd, tableStart)).not.toContain("新建采集任务");
   });
@@ -65,7 +60,9 @@ describe("collector task management workbench", () => {
 
   it("derives the active tab from the URL only", () => {
     const normalized = normalizeSource(fs.readFileSync(path.resolve(__dirname, "index.vue"), "utf8"));
-    expect(normalized).toContain("constactiveTab=computed<CollectorTaskTab>(()=>normalizeTab(route.query.tab))");
+    expect(normalized).toContain(
+      "constactiveTab=computed<CollectorTaskTab>(()=>landingTab.value??normalizeTab(route.query.tab))"
+    );
     expect(normalized).not.toMatch(/activeTab\.value=(?!=)/);
   });
 });

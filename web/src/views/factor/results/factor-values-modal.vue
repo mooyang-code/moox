@@ -68,6 +68,8 @@
 </template>
 
 <script setup lang="ts">
+import { useDisplayZone } from "@/hooks/useDisplayZone";
+import { formatInstant } from "@/utils/time-zone";
 import { computed, ref, watch } from "vue";
 import type { TimeSeriesKey } from "@/api/storage/types";
 import { queryTimeSeriesRows } from "@/api/storage/view";
@@ -84,6 +86,8 @@ import {
   type FactorScope
 } from "./factor-scope";
 
+// 页面时间按当前空间登记的时区显示
+const displayZone = useDisplayZone();
 const props = defineProps<{
   visible: boolean;
   viewId: string;
@@ -115,7 +119,7 @@ const title = computed(() => {
     key.subject_id,
     key.freq,
     key.series_tag || "默认序列",
-    key.data_time ? new Date(key.data_time).toLocaleString("zh-CN", { hour12: false }) : ""
+    key.data_time ? formatInstant(key.data_time, displayZone.value) : ""
   ];
   return `因子值 · ${parts.filter(Boolean).join(" · ")}`;
 });

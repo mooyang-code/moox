@@ -45,7 +45,7 @@ describe("FactorMgr factor-set API", () => {
   it("lists sets and factor definitions with their new request fields", async () => {
     call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, factor_tasks: [] });
     await listFactorTasks({ status: "enabled", page: { page: 1, size: 20 } });
-    expect(call).toHaveBeenLastCalledWith("ListFactorTasks", { status: "enabled", page: { page: 1, size: 20 } });
+    expect(call).toHaveBeenLastCalledWith("ListFactorTasks", { status: "enabled", page: { page: 1, size: 20 } }, {});
 
     call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, factors: [] });
     await listFactors({ task_id: "set-1", status: "enabled", page: { page: 1, size: 20 } });
@@ -69,6 +69,12 @@ describe("FactorMgr factor-set API", () => {
     call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, valid: true });
     await validateFactorSpec("outputs:\n  x: close\n", true);
     expect(call).toHaveBeenLastCalledWith("ValidateFactorSpec", { spec: "outputs:\n  x: close\n", allow_partial_universe: true });
+    await validateFactorSpec("outputs:\n  x: close\n", false, "bias");
+    expect(call).toHaveBeenLastCalledWith("ValidateFactorSpec", {
+      spec: "outputs:\n  x: close\n",
+      allow_partial_universe: false,
+      factor_id: "bias"
+    });
     call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, columns: [], rows: [] });
     await previewFactor({ task_id: "ftask_a", spec: "outputs:\n  x: close\n", periods: 10 });
     expect(call).toHaveBeenLastCalledWith("PreviewFactor", { task_id: "ftask_a", spec: "outputs:\n  x: close\n", periods: 10 });
@@ -132,7 +138,7 @@ describe("FactorMgr factor-set API", () => {
   it("manages categories, factor category and the submitted params", async () => {
     call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, categories: [{ category_id: "momentum", name: "动量类" }] });
     await expect(listFactorCategories()).resolves.toEqual([{ category_id: "momentum", name: "动量类" }]);
-    expect(call).toHaveBeenLastCalledWith("ListFactorCategories", {});
+    expect(call).toHaveBeenLastCalledWith("ListFactorCategories", {}, {});
 
     call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, category: { category_id: "volume", name: "成交量类" } });
     await upsertFactorCategory({ category_id: "volume", name: "成交量类" });
@@ -182,7 +188,7 @@ describe("FactorMgr factor-set API", () => {
 
     call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, consumer_running: true });
     await getFactorStatus();
-    expect(call).toHaveBeenLastCalledWith("GetStatus", {});
+    expect(call).toHaveBeenLastCalledWith("GetStatus", {}, {});
   });
 
   it("exposes set and factor detail, update, and delete operations", async () => {

@@ -1,27 +1,12 @@
 import { createI18n } from "vue-i18n";
 import zhCN from "@/lang/modules/zhCN";
-import enUS from "@/lang/modules/enUS";
 
-/* 获取语言 */
-const getLang = () => {
-  let store = localStorage.getItem("theme-config");
-  if (store) {
-    return JSON.parse(store)?.language || "zh-CN";
-  } else {
-    return "zh-CN";
-  }
-};
-/* 这里必须是messages名称 */
-const messages = {
-  "zh-CN": zhCN,
-  "en-US": enUS
-};
-
+// 界面只有中文：菜单、标签栏和面包屑的标题从中文表里取
 const i18n = createI18n({
   legacy: false, // Composition API模式需要设为false
   globalInjection: true, // 全局生效: $
-  locale: getLang(), // 默认语言
-  messages, // 数据源
+  locale: "zh-CN",
+  messages: { "zh-CN": zhCN },
   missing: (_: string, key: string) => {
     return removeBeforeFirstDot(key);
   }

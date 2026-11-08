@@ -18,9 +18,9 @@ describe("page toolbar cleanup contract", () => {
     expect(deployments).toMatch(/\.deployments-content\s*\{[\s\S]*?margin-top:\s*var\(--moox-space-3\);/);
 
     const secrets = read("settings/secrets/index.vue");
-    expect(secrets).not.toContain("统一管理 admin 本地秘钥");
+    expect(secrets).not.toContain("统一管理 admin 本地密钥");
     expect(secrets).not.toContain("<icon-refresh />");
-    expect(secrets.indexOf("<h2>秘钥管理</h2>")).toBeLessThan(secrets.indexOf('placeholder="搜索名称或描述"'));
+    expect(secrets.indexOf("<h2>密钥管理</h2>")).toBeLessThan(secrets.indexOf('placeholder="搜索名称或描述"'));
 
     const fields = read("data/fields/index.vue");
     expect(fields).not.toContain('class="field-total"');
@@ -37,7 +37,7 @@ describe("page toolbar cleanup contract", () => {
       "collector/cloud-function/function-instance.vue": ['@click="reset"'],
       "collector/cloud-function/function-package-manage.vue": ['@click="resetSearch"'],
       "collector/collection-tasks/collection-tasks.vue": ['@click="reset"'],
-      "container/ssh-hosts/ssh-hosts.vue": ['@click="reset"'],
+      "ops/host-workbench/ssh-hosts.vue": ['@click="reset"'],
       "data/subjects/index.vue": ['<a-button :disabled="!selectedSpaceId" @click="load">', '<a-button @click="loadSymbols">'],
       "settings/secrets/index.vue": ['<a-button @click="load">'],
       "settings/spaces/index.vue": ['<a-button @click="load">']
@@ -51,6 +51,6 @@ describe("page toolbar cleanup contract", () => {
 
   it("keeps independent operational refresh controls", () => {
     expect(read("ops/host-workbench/host-monitor.vue")).toContain('aria-label="刷新主机监控"');
-    expect(read("container/ssh-file-manager/ssh-file-manager.vue")).toContain('@click="refresh"');
+    expect(read("ops/host-workbench/ssh-file-manager.vue")).toContain('@click="refresh"');
   });
 });

@@ -15,20 +15,16 @@
             @press-enter="search"
             @clear="search"
           />
-          <a-select v-model="filters.dataType" placeholder="数据类型" allow-clear style="width: 140px">
+          <a-select v-model="filters.dataType" placeholder="数据类型" allow-clear style="width: 140px" @change="search">
             <a-option v-for="config in availableDataTypeConfigs" :key="config.data_type" :value="config.data_type">
               {{ config.type_name }}
             </a-option>
           </a-select>
-          <a-select v-model="filters.enabled" placeholder="启用状态" style="width: 120px">
+          <a-select v-model="filters.enabled" placeholder="启用状态" style="width: 120px" @change="search">
             <a-option value="">全部</a-option>
             <a-option value="true">启用</a-option>
             <a-option value="false">禁用</a-option>
           </a-select>
-          <a-button type="primary" @click="search">
-            <template #icon><icon-search /></template>
-            查询
-          </a-button>
         </a-space>
 
         <a-table
@@ -52,6 +48,7 @@
             <a-table-column title="任务名称" data-index="task_name" :width="240">
               <template #cell="{ record }">
                 <a-link @click="onViewDetails(record)">{{ record.task_name || record.task_id }}</a-link>
+                <ArchiveCoverageText :dataset-id="record.result?.dataset_id" />
               </template>
             </a-table-column>
             <a-table-column title="数据类型" :width="100">
@@ -280,7 +277,7 @@
                 <a-radio value="split">按市场拆成两个任务</a-radio>
               </a-radio-group>
               <span class="field-hint"
-                >合并后现货、永续放在同一个数据集里，只要一个因子任务和一个
+                >合并后现货、永续放在同一个数据集里，只要一个计算任务和一个
                 View；两个市场共用采集周期，一个市场延迟会拖慢另一个。只用一个市场的策略建议按市场拆成两个任务。</span
               >
             </a-form-item>
@@ -445,7 +442,14 @@
       </template>
     </a-drawer>
 
-    <a-drawer v-model:visible="detailVisible" title="任务详情" width="640px" unmount-on-close>
+    <a-drawer
+      v-model:visible="detailVisible"
+      title="任务详情"
+      width="640px"
+      :footer="false"
+      unmount-on-close
+      @cancel="onDetailCancel"
+    >
       <template v-if="detailData">
         <section class="detail-section">
           <h4 class="detail-section__title">基本信息</h4>
@@ -500,19 +504,39 @@
             <a-descriptions-item label="最近数据时间">{{
               formatDateTime(detailData.result?.last_data_time)
             }}</a-descriptions-item>
+            <a-descriptions-item label="归档">
+              <ArchiveCoverageText :dataset-id="detailData.result?.dataset_id" />
+            </a-descriptions-item>
             <a-descriptions-item label="任务描述" :span="2">{{ detailData.description || "-" }}</a-descriptions-item>
             <a-descriptions-item v-if="detailData.last_error" label="准备信息" :span="2">
               {{ detailData.last_error }}
             </a-descriptions-item>
           </a-descriptions>
         </section>
+        <a-space class="detail-actions">
+          <a-button type="primary" @click="openResultsFromDetail(detailData)">采集结果</a-button>
+          <a-button @click="editFromDetail(detailData)">修改</a-button>
+          <a-button v-if="detailData.data_type === 'kline_resample'" @click="jobsFromDetail(detailData)">历史合成</a-button>
+        </a-space>
       </template>
     </a-drawer>
 
-    <a-modal v-model:visible="deleteVisible" title="删除采集任务" :ok-loading="deleteLoading" @before-ok="handleDeleteOk">
+    <a-modal
+      v-model:visible="deleteVisible"
+      :title="deleteTarget ? `删除「${deleteTarget.task_name || deleteTarget.task_id}」` : '删除采集任务'"
+      ok-text="删除"
+      :ok-button-props="{ status: deleteResultData ? 'danger' : 'warning' }"
+      :ok-loading="deleteLoading"
+      @before-ok="handleDeleteOk"
+    >
       <a-alert type="warning" show-icon>
         删除任务会移除任务配置、实例和运行记录。结果数据默认保留；如需物理删除，请显式选择第二项。
       </a-alert>
+      <p v-if="deleteDependents.length" class="delete-dependents">
+        以它为源的合成任务：{{
+          deleteDependents.map(item => item.task_name || item.task_id).join("、")
+        }}。删除后它们收不到新的源数据。
+      </p>
       <a-radio-group v-model="deleteResultData" direction="vertical" class="delete-options">
         <a-radio :value="false">删除任务，保留结果数据</a-radio>
         <a-radio :value="true">删除任务并物理删除结果数据和数据视图</a-radio>
@@ -531,8 +555,12 @@
 </template>
 
 <script setup lang="ts">
+import { buildResultsQuery } from "@/views/collector/task-results/task-results-model";
+import ArchiveCoverageText from "@/views/data/archive/archive-coverage-text.vue";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
+import { formatInstant } from "@/utils/time-zone";
 import { createSubmitScope } from "@/utils/submit-scope";
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, onActivated, onDeactivated, onMounted, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { Message, Modal } from "@arco-design/web-vue";
 import {
@@ -541,6 +569,7 @@ import {
   DisableTask,
   GetDataTypeConfigs,
   GetDataTypeConfigWithFields,
+  GetTaskDetail,
   GetTaskList,
   UpdateTask,
   previewKlineResampleSource,
@@ -592,6 +621,8 @@ type EditorForm = {
   creator: string;
 };
 
+// 页面时间按当前空间登记的时区显示
+const displayZone = useDisplayZone();
 const loading = ref(false);
 const submitLoading = ref(false);
 const loadingSourceTasks = ref(false);
@@ -758,17 +789,90 @@ function clearFilters() {
   search();
 }
 
-// 列表筛选与分页写入 URL：刷新、分享后可还原；taskId 是详情深链参数，原样保留。
-function syncListQuery() {
+// ---- URL 状态 ----
+// 本页签自己的参数：筛选、页码、打开的详情（detail，和因子页同名）。和别的页签共用同一个 query，只改自己的键；
+// 页面在页签容器的 keep-alive 里，不可见时不写 URL，重新可见时按 URL 同步（URL 里没有就把内存状态写回去）。
+const OWN_KEYS = ["keyword", "dataType", "enabled", "page", "detail"];
+let pageActive = true;
+
+function ownQuery(): Record<string, string> {
   const query: Record<string, string> = {};
-  if (typeof route.query.tab === "string") query.tab = route.query.tab;
-  if (typeof route.query.taskId === "string") query.taskId = route.query.taskId;
   if (filters.keyword.trim()) query.keyword = filters.keyword.trim();
   if (filters.dataType) query.dataType = filters.dataType;
   if (filters.enabled) query.enabled = filters.enabled;
   if (pagination.current > 1) query.page = String(pagination.current);
-  void router.replace({ path: "/collector/tasks", query });
+  if (detailVisible.value && detailData.value?.task_id) query.detail = detailData.value.task_id;
+  return query;
 }
+
+function syncListQuery() {
+  if (!pageActive) return;
+  const others = Object.fromEntries(Object.entries(route.query).filter(([key]) => !OWN_KEYS.includes(key)));
+  const next = { ...others, ...ownQuery() };
+  const current = Object.fromEntries(Object.entries(route.query).map(([key, value]) => [key, queryText(value)]));
+  if (JSON.stringify(next, Object.keys(next).sort()) === JSON.stringify(current, Object.keys(current).sort())) return;
+  void router.replace({ path: "/collector/tasks", query: next });
+}
+
+/** 按 URL 改筛选和页码，返回列表条件是否变了。 */
+function readListQuery(): boolean {
+  const next = {
+    keyword: queryText(route.query.keyword),
+    dataType: queryText(route.query.dataType),
+    enabled: normalizeEnabledFilter(route.query.enabled),
+    page: Math.max(1, Number.parseInt(queryText(route.query.page), 10) || 1)
+  };
+  const changed =
+    next.keyword !== filters.keyword.trim() ||
+    next.dataType !== filters.dataType ||
+    next.enabled !== filters.enabled ||
+    next.page !== pagination.current;
+  Object.assign(filters, { keyword: next.keyword, dataType: next.dataType, enabled: next.enabled });
+  pagination.current = next.page;
+  return changed;
+}
+
+/** 按 URL 的 detail 开关详情抽屉；目标不在当前页时单独取。 */
+function syncDetailFromQuery() {
+  const id = queryText(route.query.detail);
+  if (!id) {
+    if (detailVisible.value) detailVisible.value = false;
+    return;
+  }
+  if (detailVisible.value && detailData.value?.task_id === id) return;
+  void openDetailById(id);
+}
+
+const onTasksTab = () => !route.query.tab || route.query.tab === "tasks";
+
+watch(
+  () => route.query,
+  () => {
+    if (!pageActive || !onTasksTab()) return;
+    if (readListQuery()) void getTaskList();
+    syncDetailFromQuery();
+  }
+);
+
+// 首次挂载在页签容器的 keep-alive 里也会触发一次激活：初始状态已由 setup 和首次加载处理，这里跳过，
+// 免得带 ?detail= 进来时列表还没回来就多取一次详情。之后每次切回来按 URL 同步，URL 里没有就写回。
+let activatedOnce = false;
+onActivated(() => {
+  pageActive = true;
+  if (!activatedOnce) {
+    activatedOnce = true;
+    return;
+  }
+  if (OWN_KEYS.some(key => route.query[key] !== undefined)) {
+    if (readListQuery()) void getTaskList();
+    syncDetailFromQuery();
+  } else {
+    syncListQuery();
+  }
+});
+onDeactivated(() => {
+  pageActive = false;
+});
 
 const editorTitle = computed(() => (editorMode.value === "create" ? "新建采集任务" : "修改采集任务"));
 const editing = computed(() => editorMode.value === "edit");
@@ -792,6 +896,10 @@ const frequencyHints = computed(() => {
   const source = frequencyMinutes(resamplePreview.value?.source_frequency || "");
   return (resamplePreview.value?.allowed_frequencies || []).filter(item => frequencyMinutes(item) > source);
 });
+// 要删除的任务被哪些合成任务当作源：删除确认里列出来
+const deleteDependents = computed(() =>
+  deleteTarget.value ? sourceTasks.value.filter(task => stringParam(task, "source_task_id") === deleteTarget.value?.task_id) : []
+);
 const detailDependents = computed(() =>
   detailData.value ? sourceTasks.value.filter(task => stringParam(task, "source_task_id") === detailData.value?.task_id) : []
 );
@@ -848,10 +956,9 @@ function taskRouteSummary(task: CollectionTaskRecord): string {
   return "-";
 }
 
+/** 采集任务属于空间：时间按空间时区带后缀。 */
 function formatDateTime(value?: string) {
-  if (!value) return "-";
-  const date = new Date(value);
-  return Number.isNaN(date.valueOf()) ? value : date.toLocaleString("zh-CN");
+  return formatInstant(value, displayZone.value);
 }
 
 function resultStatusLabel(task: CollectionTaskRecord) {
@@ -1233,11 +1340,7 @@ async function getTaskList() {
     if (generation !== taskListGeneration) return;
     taskList.value = (response.tasks || []).map(normalizeCollectionTask);
     pagination.total = Number(response.page?.total ?? taskList.value.length);
-    const requestedTaskID = typeof route.query.taskId === "string" ? route.query.taskId : "";
-    if (requestedTaskID) {
-      const requestedTask = taskList.value.find(task => task.task_id === requestedTaskID);
-      if (requestedTask) onViewDetails(requestedTask);
-    }
+    if (pageActive && onTasksTab()) syncDetailFromQuery();
   } catch (error) {
     Message.error(error instanceof Error ? error.message : "获取任务列表失败");
   } finally {
@@ -1396,11 +1499,6 @@ function buildCollectionTaskParamsForUpdate(input: CollectionTaskInput) {
 }
 
 async function loadDataNodes() {
-  // DataNode 列表是全局运维接口，只有全局管理员可读；普通成员使用系统默认节点。
-  if (!account.value.user?.admin) {
-    dataNodes.value = [];
-    return;
-  }
   loadingDataNodes.value = true;
   try {
     const nodes: DataNode[] = [];
@@ -1486,15 +1584,56 @@ function onViewDetails(record: CollectionTaskRecord) {
   detailData.value = record;
   detailVisible.value = true;
   void loadOutputFieldCatalog();
+  syncListQuery();
 }
 
-// 详情里点「依赖它的合成任务」：定位到列表里的该任务并打开它的详情。
-function locateTask(record: CollectionTaskRecord) {
-  const target = taskList.value.find(task => task.task_id === record.task_id);
-  if (target) {
-    detailData.value = target;
-    void loadOutputFieldCatalog();
+let detailRequestToken = 0;
+/** 按任务 ID 打开详情：先在当前页和空间的全部任务里找，找不到再单独取。 */
+async function openDetailById(taskId: string) {
+  const local = taskList.value.find(task => task.task_id === taskId) || sourceTasks.value.find(task => task.task_id === taskId);
+  if (local) {
+    onViewDetails(local);
+    return;
   }
+  const spaceId = selectedSpaceId.value;
+  if (!spaceId) return;
+  const token = ++detailRequestToken;
+  try {
+    const response = await GetTaskDetail({ space_id: spaceId, task_id: taskId });
+    if (token !== detailRequestToken || spaceId !== selectedSpaceId.value) return;
+    if (response.task) onViewDetails(normalizeCollectionTask(response.task));
+  } catch {
+    // 取不到（已删除或不在当前空间）：去掉 URL 里的 detail；网络错误由请求层提示，业务错误不另提示
+    if (token === detailRequestToken) syncListQuery();
+  }
+}
+
+// 用户关掉详情时去掉 URL 里的 detail。不用 watch：切空间时程序关掉抽屉，不能在那时按旧 query 写回 URL
+function onDetailCancel() {
+  detailVisible.value = false;
+  syncListQuery();
+}
+
+/** 详情抽屉底部的直达入口：去采集结果页签看这个任务的结果（去掉本页的 detail，其余参数保留）。 */
+function openResultsFromDetail(record: CollectionTaskRecord) {
+  detailVisible.value = false;
+  const others = Object.fromEntries(Object.entries(route.query).filter(([key]) => key !== "detail"));
+  void router.replace({ path: "/collector/tasks", query: { ...others, ...buildResultsQuery(record.task_id) } });
+}
+
+function editFromDetail(record: CollectionTaskRecord) {
+  onDetailCancel();
+  onUpdate(record);
+}
+
+function jobsFromDetail(record: CollectionTaskRecord) {
+  onDetailCancel();
+  openJobs(record);
+}
+
+// 详情里点「依赖它的合成任务」：打开该任务的详情（不在当前页时单独取）。
+function locateTask(record: CollectionTaskRecord) {
+  void openDetailById(record.task_id);
 }
 
 function openDelete(record: CollectionTaskRecord) {
@@ -1552,12 +1691,13 @@ watch(selectedSpaceId, () => {
   loadingOutputFields.value = false;
   if (!editing.value) selectedOutputFields.value = [];
   if (outputFieldsVisible.value) void loadOutputFieldCatalog();
-  // 筛选参数属于旧空间：换空间后任务清单不同，连同 URL 一起清掉。
+  // 筛选、详情属于旧空间：只重置内存状态，URL 由页签容器统一清掉。
   filters.keyword = "";
   filters.dataType = "";
   filters.enabled = "";
   pagination.current = 1;
-  syncListQuery();
+  detailRequestToken += 1;
+  detailVisible.value = false;
   // 空间初始化完成或切换后重新加载；数据类型配置同样按空间授权，不能只在挂载时请求一次。
   if (selectedSpaceId.value) {
     void getDataTypeConfigs();
@@ -1780,6 +1920,10 @@ pre {
   margin-bottom: var(--moox-space-4);
 }
 
+.detail-actions {
+  margin-top: 16px;
+}
+
 /* 编辑态不可变项的只读摘要：替代一排禁用控件，一眼可读 */
 .readonly-summary {
   display: flex;
@@ -1881,5 +2025,9 @@ pre {
     flex-direction: column;
     gap: 6px;
   }
+}
+.delete-dependents {
+  margin: var(--moox-space-3) 0 0;
+  color: var(--color-text-2);
 }
 </style>

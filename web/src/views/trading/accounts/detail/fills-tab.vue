@@ -37,7 +37,7 @@
       <template #columns>
         <a-table-column title="成交时间" :width="140">
           <template #cell="{ record }"
-            ><span class="tx-muted tx-nowrap">{{ fmtClock(record.traded_at, true) }}</span></template
+            ><span class="tx-muted tx-nowrap">{{ formatInstant(record.traded_at, displayZone) }}</span></template
           >
         </a-table-column>
         <a-table-column v-if="memberOptions.length > 1" title="执行账户" :width="130" ellipsis tooltip>
@@ -94,14 +94,18 @@ import { Message } from "@arco-design/web-vue";
 import { getOrder, listFills } from "@/api/trade";
 import type { Fill, MarketType, Order } from "@/api/trade";
 import { createLatestRequestGuard } from "@/utils/latest-request";
-import { fmtClock, fmtMoney, fmtQty, fmtSigned, pnlClass } from "../shared/format";
+import { fmtMoney, fmtQty, fmtSigned, pnlClass } from "../shared/format";
 import { instrumentName, marketLabel } from "../shared/markets";
 import { instrumentFilter } from "./instrument-filter";
 import SectionBlock from "../shared/section-block.vue";
 import { detailContextKey } from "./context";
 import OrderDetailDrawer from "./order-detail-drawer.vue";
 import { rangeParams, recordRanges, type RecordRange } from "./record-range";
+import { formatInstant } from "@/utils/time-zone";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
 
+// 交易页的时间按当前空间登记的时区显示
+const displayZone = useDisplayZone();
 const { logical, accounts, dataVersion } = inject(detailContextKey)!;
 
 const range = ref<RecordRange>("7d");

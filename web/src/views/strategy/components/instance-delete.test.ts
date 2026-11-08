@@ -62,10 +62,10 @@ describe("instance delete flow", () => {
         factorTask: { name: "公共", result_dataset_id: "dataset_shared", bound_instance_id: "" } as never
       }
     ]).join("\n");
-    expect(lines).toContain("将删除的因子任务和数据集");
+    expect(lines).toContain("将删除的计算任务和数据集");
     expect(lines).toContain("ftask_spot「现货因子」，结果数据集 dataset_factor_spot");
     expect(lines).toContain("ftask_swap（已删除）");
-    expect(lines).toContain("保留的因子任务");
+    expect(lines).toContain("保留的计算任务");
     expect(lines).toContain("ftask_spot_1m，未绑定到此实例");
     expect(lines).not.toContain("dataset_shared");
     expect(lines).toContain("结果数据不可恢复");
@@ -104,7 +104,7 @@ describe("instance delete flow", () => {
     api.getFactorTask.mockRejectedValue(new Error("网络错误"));
     await confirmInstanceDelete(instance);
     expect(api.confirm).not.toHaveBeenCalled();
-    expect(api.Message.error.mock.calls[0][0]).toContain("读取因子任务失败");
+    expect(api.Message.error.mock.calls[0][0]).toContain("读取计算任务失败");
   });
 
   it("asks to retry when the request times out", async () => {

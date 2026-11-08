@@ -13,9 +13,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import PageTitleTabs from "@/components/page-title-tabs/index.vue";
+import { useSpaceStore } from "@/store/modules/space";
 import CollectionTasks from "@/views/collector/collection-tasks/collection-tasks.vue";
 import RuntimeStatus from "@/views/collector/runtime-status/runtime-status.vue";
 import BackfillJobs from "@/views/collector/backfill-jobs/index.vue";
@@ -37,7 +38,14 @@ const route = useRoute();
 const router = useRouter();
 // 当前 Tab 只由 URL 决定：点击时只改 URL，不先切换本地状态，避免新 Tab 在跳转完成前
 // 按旧 query 写回 URL 而取消这次跳转。
-const activeTab = computed<CollectorTaskTab>(() => normalizeTab(route.query.tab));
+// 从菜单进来（地址里没有任何参数）时默认看“运行状态”；带参数的链接（任务详情、筛选、别的页签）照原样打开。
+// 在 setup 里同步决定，首次渲染就是运行状态，不会先挂载“采集任务”页签白发请求；地址写回后以地址为准。
+// 只在进入页面时判断一次：之后在“采集任务”页签里清空筛选，地址也会变成没有参数，不能把用户切走。
+const landingTab = ref<CollectorTaskTab | null>(Object.keys(route.query).length ? null : "status");
+if (landingTab.value) {
+  void router.replace({ path: "/collector/tasks", query: { tab: landingTab.value } }).finally(() => (landingTab.value = null));
+}
+const activeTab = computed<CollectorTaskTab>(() => landingTab.value ?? normalizeTab(route.query.tab));
 
 // 运行状态页占满可视高度，由函数列表在表格内部滚动。
 const fillHeight = computed(() => activeTab.value === "status");
@@ -57,13 +65,26 @@ function normalizeTab(value: unknown): CollectorTaskTab {
   return value === "status" || value === "backfills" || value === "executors" || value === "results" ? value : "tasks";
 }
 
-// 切换 Tab 时只保留目标 Tab 自己的参数：采集结果保留所选任务，其余 Tab 的筛选参数（如补采的数据集、作业）不带过去。
+/**
+ * 各页签的参数都放在同一个 query 里、键不重叠（任务：keyword、dataType、enabled、page、detail；结果：resultTask；
+ * 补采：segment、dataset、job；执行器没有地址参数）。切页签只改 tab，其余参数原样保留，切回来时状态还在。
+ * 每个页签只在自己可见时写自己的键，见各页签的实现。
+ */
 function onTabChange(value: string | number) {
   const tab = normalizeTab(value);
-  const resultTask = Array.isArray(route.query.resultTask) ? route.query.resultTask[0] : route.query.resultTask;
-  const query = tab === "tasks" ? {} : tab === "results" && resultTask ? { tab, resultTask } : { tab };
-  void router.replace({ path: "/collector/tasks", query });
+  const rest = Object.fromEntries(Object.entries(route.query).filter(([key]) => key !== "tab"));
+  void router.replace({ path: "/collector/tasks", query: tab === "tasks" ? rest : { ...rest, tab } });
 }
+
+// 切空间：各页签的参数都属于旧空间（任务、结果、作业），统一在这里清掉，只保留当前页签；页签自己只重置内存里的状态。
+const spaceStore = useSpaceStore();
+watch(
+  () => spaceStore.selectedSpaceId,
+  (next, previous) => {
+    if (!previous || next === previous) return;
+    void router.replace({ path: "/collector/tasks", query: activeTab.value === "tasks" ? {} : { tab: activeTab.value } });
+  }
+);
 </script>
 
 <style scoped lang="scss">

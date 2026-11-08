@@ -101,17 +101,19 @@ describe("strategy trial panel", () => {
     expect(wrapper.text()).not.toContain("旧输入的结果");
   });
 
-  it("clears a finished result when the DSL changes and accepts the next run", async () => {
+  it("DSL 改动后保留旧结果并标明对应修改前的 DSL，重新试算后换成新结果", async () => {
     validateStrategy.mockResolvedValueOnce(passed("第一次结果")).mockResolvedValueOnce(passed("第二次结果"));
     const wrapper = mount(TrialPanel, { props: { source: "name: a", spaceId: "s1" }, global: { stubs } });
     await wrapper.find("button").trigger("click");
     await flushPromises();
     expect(wrapper.text()).toContain("第一次结果");
     await wrapper.setProps({ source: "name: b" });
-    expect(wrapper.text()).not.toContain("第一次结果");
+    expect(wrapper.text()).toContain("第一次结果");
+    expect(wrapper.text()).toContain("对应修改前的 DSL");
     await wrapper.find("button").trigger("click");
     await flushPromises();
     expect(wrapper.text()).toContain("第二次结果");
+    expect(wrapper.text()).not.toContain("对应修改前的 DSL");
   });
 
   it("trials a mixed-market strategy with a spot and a swap task and shows the market of each target", async () => {

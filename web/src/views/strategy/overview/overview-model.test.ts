@@ -75,9 +75,11 @@ describe("strategy overview model", () => {
         instances: [instance("a")],
         targets: { a: snapshot("2026-10-10T13:00:00Z", weights) },
         catalog: [{ strategy_id: "s1", name: "动量" }] as never
-      })
+      }),
+      "UTC"
     );
     expect(card.title).toBe("动量");
+    expect(card.period).toBe("最近一期 2026-10-10 11:00:00 UTC");
     expect(card.chips).toHaveLength(CARD_CHIP_LIMIT);
     expect(card.chips[0]).toEqual({ instrumentId: "SHORT", text: "SHORT -50.00%", short: true });
     expect(card.more).toBe(9 - CARD_CHIP_LIMIT);
@@ -108,6 +110,18 @@ describe("strategy overview model", () => {
       ["exp", "expired"],
       ["rel", "releasing"]
     ]);
+  });
+
+  it("绑定的组合账户已暂停时列为待处理，链接到组合账户", () => {
+    const items = pendingItems(
+      input({
+        instances: [instance("p", { logical_account_id: "acc1" }), instance("q", { logical_account_id: "acc2" })],
+        targets: { p: snapshot("2026-10-10T13:00:00Z"), q: snapshot("2026-10-10T13:00:00Z") },
+        pausedAccounts: new Set(["acc1"])
+      })
+    );
+    expect(items.map(item => [item.instanceId, item.kind])).toEqual([["p", "paused"]]);
+    expect(items[0].target).toEqual({ name: "trading-account-detail", params: { logical_account_id: "acc1" } });
   });
 
   it("keeps only pending and running replays", () => {

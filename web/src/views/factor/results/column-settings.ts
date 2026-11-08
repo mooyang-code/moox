@@ -3,7 +3,7 @@ import { LOCKED_SYSTEM_KEYS, SYSTEM_KEYS, type FactorScope } from "./factor-scop
 /** 主表最多钉住的因子列数；更多的因子请在“查看全部”弹窗里看。 */
 export const MAX_PINNED = 30;
 
-/** 结果页的列设置，按因子任务分别保存在浏览器本地。 */
+/** 结果页的列设置，按计算任务分别保存在浏览器本地。 */
 export interface ColumnSettings {
   /** 隐藏的系统键（只能是频率、序列标签）。 */
   hiddenSystem: string[];

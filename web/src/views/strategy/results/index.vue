@@ -39,7 +39,7 @@
 
           <a-alert v-if="store.detailError" type="error" show-icon class="page-alert">
             实例读取失败：{{ store.detailError }}
-            <template #action><a-button size="mini" @click="load">重试</a-button></template>
+            <template #action><a-button size="mini" @click="load()">重试</a-button></template>
           </a-alert>
 
           <template v-if="current">
@@ -52,18 +52,20 @@
                 <span class="cell-sub"
                   >定义 <span class="mono">{{ store.strategy?.name || current.strategy_id }}</span></span
                 >
-                <span class="cell-sub"
-                  >因子任务 <span class="mono">{{ tasksText(current.factor_tasks) }}</span></span
-                >
+                <span class="cell-sub">计算任务 <FactorTaskLinks :tasks="current.factor_tasks" /></span>
                 <span class="cell-sub"
                   >会话 <span class="mono">{{ current.session_id || "无当前会话" }}</span></span
                 >
               </a-space>
               <a-space :size="16">
                 <a-link @click="router.push(detailLink(current.instance_id))">实例详情与启停</a-link>
-                <a-link @click="router.push(replayLink({ instanceId: current.instance_id, factorTasks: current.factor_tasks }))"
-                  >按会话回放</a-link
-                >
+                <a-tooltip :content="POOL_REPLAY_DISABLED_TEXT" :disabled="!currentIsPool">
+                  <a-link
+                    :disabled="currentIsPool"
+                    @click="router.push(replayLink({ instanceId: current.instance_id, factorTasks: current.factor_tasks }))"
+                    >按会话回放</a-link
+                  >
+                </a-tooltip>
               </a-space>
             </div>
             <InstanceResults
@@ -90,15 +92,16 @@
 </template>
 
 <script setup lang="ts">
-import { tasksText } from "@/views/strategy/market-mode";
+import FactorTaskLinks from "@/views/strategy/components/factor-task-links.vue";
+import { POOL_REPLAY_DISABLED_TEXT, isPoolStrategy } from "@/views/strategy/dsl";
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { StaleSpaceRequestError } from "@/api/admin/stale-space";
-import { listInstances } from "@/api/strategy";
+import { listAllInstances } from "@/api/strategy";
 import type { StrategyInstance } from "@/api/strategy-types";
 import { useSpaceStore } from "@/store/modules/space";
 import { RequestGate } from "@/utils/request-gate";
-import InfoTip from "@/views/factor/shared/info-tip.vue";
+import InfoTip from "@/components/info-tip/index.vue";
 import InstanceResults from "@/views/strategy/components/strategy-instance-results.vue";
 import StatusBadge from "@/views/strategy/components/strategy-status-badge.vue";
 import { STRATEGY_TASKS_ROUTE, detailLink, instancesLink, normalizeTaskTab, replayLink } from "@/views/strategy/links";
@@ -108,7 +111,6 @@ import { useInstanceResults } from "@/views/strategy/use-instance-results";
 
 defineOptions({ name: "StrategyResults" });
 
-const PAGE_SIZE = 200;
 const route = useRoute();
 const router = useRouter();
 const spaceStore = useSpaceStore();
@@ -145,13 +147,15 @@ const {
 
 const tabs = computed(() => {
   const list = instanceTabs(instances.value, store.strategyCatalog);
-  // URL 指定的实例不在列表里（例如已删除、仍可查看历史）：单独补一个 Tab，避免选中项无处显示。
+  // URL 指定的实例不在列表里（例如链接里的实例不属于当前空间）：单独补一个 Tab，避免选中项无处显示。
   if (selectedId.value && !list.some(tab => tab.instanceId === selectedId.value)) {
     list.unshift({ instanceId: selectedId.value, title: `实例 ${selectedId.value.slice(0, 8)}`, enabled: false, health: "" });
   }
   return list;
 });
 const current = computed(() => (store.instance && store.instance.instance_id === selectedId.value ? store.instance : null));
+// 研究回放不支持策略池：回放入口禁用（定义从实例详情一起读到的 store.strategy 里取）
+const currentIsPool = computed(() => Boolean(current.value) && isPoolStrategy(store.strategy?.dsl_yaml));
 
 function writeInstance(instanceId: string, mode: "push" | "replace" = "replace") {
   if (!isCurrentTab()) return;
@@ -171,12 +175,7 @@ async function loadInstanceList() {
   listLoading.value = true;
   listError.value = "";
   try {
-    const all: StrategyInstance[] = [];
-    for (let page = 1; page <= 10; page += 1) {
-      const rsp = await listInstances({ page, page_size: PAGE_SIZE });
-      all.push(...rsp.items);
-      if (!rsp.items.length || all.length >= rsp.page.total) break;
-    }
+    const all = await listAllInstances();
     if (!listGate.isCurrent(token)) return;
     instances.value = all;
     listLoaded.value = true;

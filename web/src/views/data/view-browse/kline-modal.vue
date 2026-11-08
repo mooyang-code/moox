@@ -64,6 +64,7 @@ const props = defineProps<{
   freq: string;
   records: KlineChartRecord[];
   loading: boolean;
+  zone: string;
   limit: number;
 }>();
 
@@ -100,7 +101,8 @@ function renderChart() {
   disposeChart();
   chart = initChart(host, {
     locale: "zh-CN",
-    timezone: "Asia/Shanghai",
+    // K 线图的时间轴按调用方给的时区（当前空间）
+    timezone: props.zone,
     styles: {
       grid: {
         horizontal: { color: "rgba(160, 174, 192, 0.12)" },

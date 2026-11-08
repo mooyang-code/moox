@@ -1,4 +1,5 @@
-import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { usePolling } from "@/hooks/usePolling";
 import { useRoute, useRouter } from "vue-router";
 import { decodeCatalog, getCatalog, getHostRoutes, listAllDeploymentHosts, listAllDeployments } from "@/api/admin/sysdeploy";
 import type { ComponentCatalog, ComponentDeployment, DeploymentHost, HostRoutesResponse } from "@/api/admin/types";
@@ -22,13 +23,20 @@ export function useDeployments() {
   const monitorError = ref("");
   const loaded = ref(false);
   const search = ref("");
-  const filter = ref("all");
-  const showDisabled = ref(false);
+  // 状态筛选写进 URL（?filter=）：默认“启用中”不写；“全部”含已停用，替代原来重复的“显示已停用”复选框
+  const filter = computed({
+    get: () => {
+      const value = query(route.query.filter);
+      return ["abnormal", "disabled", "all"].includes(value) ? value : "enabled";
+    },
+    set: value => {
+      const next = { ...route.query, filter: value === "enabled" ? undefined : value };
+      void router.replace({ query: Object.fromEntries(Object.entries(next).filter(([, item]) => item !== undefined)) });
+    }
+  });
   const selectedHostId = ref("");
   const drawerKey = ref("");
   const guard = createLatestRequestGuard();
-  let timer: ReturnType<typeof setInterval> | undefined;
-  let active = false;
   let appliedLocator = "";
   const query = (value: unknown) => (typeof value === "string" ? value : "");
   const tab = computed({
@@ -91,9 +99,8 @@ export function useDeployments() {
           ...group,
           rows: group.rows.filter(row => {
             const disabled = row.status === "disabled";
-            if (filter.value === "disabled") {
-              if (!disabled) return false;
-            } else if (disabled && !showDisabled.value) return false;
+            if (filter.value === "disabled" && !disabled) return false;
+            if ((filter.value === "enabled" || filter.value === "abnormal") && disabled) return false;
             if (filter.value === "abnormal" && !["down", "degraded", "unknown"].includes(row.status)) return false;
             return hostMatches || [row.deployment.component_id, row.definition?.name].join(" ").toLowerCase().includes(needle);
           })
@@ -135,8 +142,8 @@ export function useDeployments() {
       drawerKey.value = group?.rows.find(row => row.deployment.component_id === requestedComponent.value)?.key || "";
       if (group) {
         appliedLocator = locator;
-        showDisabled.value = true;
-        filter.value = "all";
+        // 定位的部署可能已停用：切到“全部”才看得见
+        if (filter.value !== "all") filter.value = "all";
       }
     }
     if (!requestedComponent.value) appliedLocator = "";
@@ -158,21 +165,23 @@ export function useDeployments() {
     drawerKey.value = "";
     await router.replace({ query: next });
   }
-  async function refresh() {
+  /** background：后台轮询，不弹全局提示，失败写在页面上并保留上次的数据。 */
+  async function refresh(background = false) {
     const request = guard.begin();
     loading.value = true;
+    const options = { silentError: background };
     try {
       const [rawCatalog, hostRows, deploymentItems, health] = await Promise.all([
-        getCatalog(),
-        listAllDeploymentHosts(),
-        listAllDeployments(),
+        getCatalog(options),
+        listAllDeploymentHosts(options),
+        listAllDeployments(options),
         monitorApi
-          .getOverview()
+          .getOverview({}, options)
           .then(result => ({ overview: result.overview, error: "" }))
           .catch(reason => ({ overview: undefined, error: reason instanceof Error ? reason.message : String(reason) }))
       ]);
       const definition = decodeCatalog(rawCatalog);
-      const snapshots = await loadHostRoutes(hostRows, getHostRoutes);
+      const snapshots = await loadHostRoutes(hostRows, hostId => getHostRoutes(hostId, options));
       if (!request.isLatest()) return;
       catalog.value = definition;
       catalogHash.value = rawCatalog.sha256;
@@ -192,25 +201,13 @@ export function useDeployments() {
       if (request.isLatest()) loading.value = false;
     }
   }
-  function start() {
-    if (active) return;
-    active = true;
-    void refresh();
-    timer = setInterval(() => {
-      if (!loading.value) void refresh();
-    }, 15000);
-  }
-  function stop() {
-    active = false;
+  // 每 15 秒后台刷新一次（页面隐藏时暂停、不叠加）
+  usePolling(() => refresh(true), 15_000);
+  onMounted(() => void refresh());
+  onBeforeUnmount(() => {
     guard.invalidate();
-    if (timer) clearInterval(timer);
-    timer = undefined;
     loading.value = false;
-  }
-  onMounted(start);
-  onActivated(start);
-  onDeactivated(stop);
-  onBeforeUnmount(stop);
+  });
   return {
     tab,
     catalog,
@@ -225,7 +222,6 @@ export function useDeployments() {
     monitorError,
     search,
     filter,
-    showDisabled,
     selectedHostId,
     groups,
     visibleGroups,

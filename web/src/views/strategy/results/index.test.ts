@@ -4,7 +4,11 @@ import { defineComponent, h, nextTick, reactive } from "vue";
 import { createMemoryHistory, createRouter } from "vue-router";
 
 const ctx = vi.hoisted(() => ({ store: null as any, space: null as any, listInstances: vi.fn() }));
-vi.mock("@/api/strategy", () => ({ listInstances: ctx.listInstances }));
+vi.mock("@/api/strategy", () => ({
+  listInstances: ctx.listInstances,
+  listAllInstances: (options?: unknown) =>
+    ctx.listInstances({ page: 1, page_size: 200 }, options).then((rsp: { items: unknown[] }) => rsp.items)
+}));
 vi.mock("@/store/modules/space", () => ({ useSpaceStore: () => ctx.space }));
 vi.mock("@/store/modules/strategy", () => ({ useStrategyStore: () => ctx.store }));
 vi.mock("@/views/strategy/components/strategy-instance-results.vue", () => ({
@@ -107,7 +111,7 @@ describe("strategy results tab", () => {
   it("selects the first enabled, most recently updated instance and shows its results right away", async () => {
     const { router, wrapper } = await setup({});
     expect(router.currentRoute.value.query).toEqual({ tab: "results", instance: "on-2" });
-    expect(ctx.store.loadInstanceDetail).toHaveBeenCalledWith("on-2", 1, 20, false);
+    expect(ctx.store.loadInstanceDetail).toHaveBeenCalledWith("on-2", 1, 20, false, { silent: false });
     expect(wrapper.find(".panel").text()).toBe("panel:on-2");
     expect(wrapper.findAll(".tab-title").map(item => item.text())).toEqual(["动量 · on-2", "动量 · on-1", "动量 · off（停用）"]);
   });
@@ -115,7 +119,7 @@ describe("strategy results tab", () => {
   it("keeps an explicit instance from the URL, even one that is not in the list", async () => {
     const { router, wrapper } = await setup({ instance: "deleted-1" });
     expect(router.currentRoute.value.query.instance).toBe("deleted-1");
-    expect(ctx.store.loadInstanceDetail).toHaveBeenCalledWith("deleted-1", 1, 20, false);
+    expect(ctx.store.loadInstanceDetail).toHaveBeenCalledWith("deleted-1", 1, 20, false, { silent: false });
     expect(wrapper.findAll(".tab-title")[0].text()).toBe("实例 deleted-");
   });
 
@@ -123,7 +127,7 @@ describe("strategy results tab", () => {
     const { router, wrapper } = await setup({ instance: "on-1" });
     await router.push({ path: "/strategy/tasks", query: { tab: "results", instance: "off" } });
     await flushPromises();
-    expect(ctx.store.loadInstanceDetail).toHaveBeenLastCalledWith("off", 1, 20, false);
+    expect(ctx.store.loadInstanceDetail).toHaveBeenLastCalledWith("off", 1, 20, false, { silent: false });
     expect(wrapper.find(".panel").text()).toBe("panel:off");
   });
 
@@ -134,7 +138,7 @@ describe("strategy results tab", () => {
     await nextTick();
     await flushPromises();
     expect(router.currentRoute.value.query).toEqual({ tab: "results", instance: "hk-1" });
-    expect(ctx.store.loadInstanceDetail).toHaveBeenLastCalledWith("hk-1", 1, 20, false);
+    expect(ctx.store.loadInstanceDetail).toHaveBeenLastCalledWith("hk-1", 1, 20, false, { silent: false });
   });
 
   it("offers to create an instance when the space has none", async () => {

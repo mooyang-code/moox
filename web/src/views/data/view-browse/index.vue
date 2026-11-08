@@ -1,14 +1,6 @@
 <template>
   <div class="moox-page view-browse-page">
     <div class="moox-inner">
-      <div v-if="!props.embedded" class="page-head">
-        <div class="page-head__title">
-          <slot name="page-title">
-            <h2>{{ props.pageTitle }}</h2>
-          </slot>
-        </div>
-      </div>
-
       <a-alert v-if="!selectedSpaceId" type="warning" show-icon>请先在顶部选择空间</a-alert>
 
       <a-spin v-else :loading="metaLoading">
@@ -25,7 +17,7 @@
             </a-tabs>
           </section>
 
-          <section v-if="!props.hideTechnicalIdentity" class="view-status-line">
+          <section class="view-status-line">
             <span>View: {{ activeView?.view_id || "-" }}</span>
             <span>Dataset: {{ currentDatasetName }} ({{ currentDatasetId }})</span>
             <span v-if="activeView?.freq">频率: {{ activeView.freq }}</span>
@@ -43,10 +35,10 @@
             <span v-if="rowsStale">；数据状态待刷新，保留上次查询数据（{{ lastRowsReadAt }}）</span>
           </a-alert>
           <a-alert v-else-if="hasQueried && !loading && tableRows.length === 0" class="query-alert" type="info" show-icon>
-            {{ props.emptyRowsDescription }}
+            {{ hasAnyFilter ? "没有符合条件的行" : props.emptyRowsDescription }}
           </a-alert>
 
-          <QueryControls :loading="loading" :mode="mode">
+          <div class="view-query-controls">
             <section v-if="activeView" class="view-query-panel">
               <div class="filter-grid">
                 <div v-if="mode === 'record'" class="filter-item record-keyword-filter">
@@ -69,15 +61,25 @@
                     :class="{ 'empty-filter-control': filter.operator === 'empty' || filter.operator === 'not_empty' }"
                   >
                     <template v-if="filter.operator === 'range'">
-                      <a-input v-model="filter.startValue" allow-clear placeholder="开始值" @press-enter="applyQueryControls" />
+                      <a-input
+                        v-model="filter.startValue"
+                        allow-clear
+                        :placeholder="filterPlaceholder(filter.fieldName, '开始值')"
+                        @press-enter="applyQueryControls"
+                      />
                       <span class="range-separator">-</span>
-                      <a-input v-model="filter.endValue" allow-clear placeholder="结束值" @press-enter="applyQueryControls" />
+                      <a-input
+                        v-model="filter.endValue"
+                        allow-clear
+                        :placeholder="filterPlaceholder(filter.fieldName, '结束值')"
+                        @press-enter="applyQueryControls"
+                      />
                     </template>
                     <a-input
                       v-else-if="filter.operator !== 'empty' && filter.operator !== 'not_empty'"
                       v-model="filter.value"
                       allow-clear
-                      placeholder="检索值"
+                      :placeholder="filterPlaceholder(filter.fieldName, '检索值')"
                       @press-enter="applyQueryControls"
                     />
                     <span v-else class="empty-filter-placeholder">{{ filter.operator === "empty" ? "为空" : "非空" }}</span>
@@ -98,7 +100,7 @@
               <div class="query-actions">
                 <a-button size="small" type="primary" :loading="loading" @click="applyQueryControls">查询</a-button>
                 <a-button
-                  v-if="mode === 'time_series'"
+                  v-if="mode === 'time_series' && klineAvailable"
                   size="small"
                   type="outline"
                   :loading="klineLoading"
@@ -114,10 +116,11 @@
               <div v-if="$slots['query-extra']" class="query-extra">
                 <slot name="query-extra" />
               </div>
+              <p v-if="previewRangeText" class="preview-range-hint">{{ previewRangeText }}</p>
             </section>
-          </QueryControls>
+          </div>
 
-          <ResultTable :loading="loading || contextLoading" :rows="tableRows">
+          <div class="view-result-table">
             <section v-if="mode === 'time_series'" class="result-pane">
               <a-table
                 row-key="id"
@@ -174,6 +177,7 @@
                     >
                   </a-table-column>
                   <a-table-column data-index="version" :width="230">
+                    <template #cell="{ record }">{{ formatInstant(record.version, zone) }}</template>
                     <template #title
                       ><span class="sortable-title"
                         >时间<span class="sort-arrows"
@@ -208,9 +212,17 @@
                       <slot name="row-extra" :row-key="record.rawKey" :values="record.values" />
                     </template>
                   </a-table-column>
-                  <a-table-column title="操作" :width="92" align="center" fixed="right">
+                  <a-table-column title="操作" :width="120" align="center" fixed="right">
                     <template #cell="{ record }">
                       <a-button type="text" size="mini" @click="openDetail(record)">查看</a-button>
+                      <a-button
+                        v-if="klineAvailable"
+                        type="text"
+                        size="mini"
+                        :disabled="!record.rawKey?.subject_id"
+                        @click="openRowKline(record)"
+                        >K 线</a-button
+                      >
                     </template>
                   </a-table-column>
                 </template>
@@ -335,7 +347,7 @@
                 </div>
               </div>
             </section>
-          </ResultTable>
+          </div>
 
           <a-empty v-if="mode !== 'time_series' && mode !== 'record'" description="无法识别该视图的主数据集类型" />
         </template>
@@ -346,7 +358,9 @@
       <div v-if="detailRow" class="detail-body">
         <a-descriptions :column="2" bordered>
           <a-descriptions-item :label="mode === 'time_series' ? '数据ID' : '记录ID'">{{ detailRow.key }}</a-descriptions-item>
-          <a-descriptions-item :label="mode === 'time_series' ? '时间' : '版本'">{{ detailRow.version }}</a-descriptions-item>
+          <a-descriptions-item :label="mode === 'time_series' ? '时间' : '版本'">{{
+            mode === "time_series" ? formatInstant(detailRow.version, zone) : detailRow.version
+          }}</a-descriptions-item>
           <a-descriptions-item v-if="mode === 'time_series' && detailRow.seriesTag" label="市场">{{
             seriesTagMarketText(detailRow.seriesTag)
           }}</a-descriptions-item>
@@ -370,6 +384,7 @@
       :freq="klineFreq"
       :records="klineRecords"
       :loading="klineLoading"
+      :zone="zone"
       @reload="reloadKlineRecords"
     />
   </div>
@@ -400,16 +415,14 @@ import {
   recordRowsToTableRows,
   rowsToColumnNames,
   timeSeriesRowsToTableRows,
-  type BrowseTableRow
-} from "@/views/data/browse/browse-utils";
-import {
+  type BrowseTableRow,
   buildKlineChartRecords,
   buildKlineQuerySorts,
   buildViewColumnLabels,
   buildViewFilterFieldOptions,
   buildViewFilterExprs,
   buildViewSorts,
-  defaultSeriesTagForView,
+  defaultSeriesTag,
   type ViewFilterFieldOption,
   DEFAULT_KLINE_LIMIT,
   exactSeriesTagFromFilters,
@@ -423,37 +436,24 @@ import {
   type ViewFilterState,
   type ViewSortDirection
 } from "./view-browse-utils";
-import {
-  isLikelyFactorResultDataset,
-  isLikelyFactorResultDatasetId,
-  viewMatchesAttribution,
-  type OwnerModule,
-  type ViewRole
-} from "@/views/data/shared/module-attribution";
+import { viewMatchesAttribution, type OwnerModule, type ViewRole } from "@/views/data/shared/module-attribution";
 import KlineModal from "./kline-modal.vue";
-import QueryControls from "./components/query-controls.vue";
-import ResultTable from "./components/result-table.vue";
 import { loadTargetedViewCatalog } from "./composables/view-browse-catalog";
+import { formatInstant, zoneSuffix } from "@/utils/time-zone";
+import { usePolling } from "@/hooks/usePolling";
 
 defineOptions({ name: "DataViewBrowse" });
 
 const props = withDefaults(
   defineProps<{
-    embedded?: boolean;
-    pageTitle?: string;
     emptyDescription?: string;
     emptyRowsDescription?: string;
-    allowedPrimaryDatasetIds?: string[];
-    excludedPrimaryDatasetIds?: string[];
     viewOwnerModules?: OwnerModule[];
     viewRoles?: ViewRole[];
-    includeUnowned?: boolean;
-    excludeLikelyFactorDatasets?: boolean;
     autoRefreshIntervalMs?: number;
     viewIds?: string[];
     activeViewId?: string;
     refreshKey?: number;
-    hideTechnicalIdentity?: boolean;
     /** 为 false 时只加载元数据、不发查询：调用方先准备好投影与附加条件，再放行首查。 */
     queryReady?: boolean;
     /** 表格显示的系统键（数据ID、时间始终显示）与业务列及其顺序；不传时显示全部列。 */
@@ -466,23 +466,19 @@ const props = withDefaults(
     extraFilters?: ViewFilterState[];
     /** row-extra 插槽所在列的标题。 */
     rowExtraTitle?: string;
+    /** 显示和输入的时区（由调用方按空间给）：时间列、TIME 字段、TIME 筛选、K 线图都按它。 */
+    zone?: string;
   }>(),
   {
-    embedded: false,
-    pageTitle: "视图数据浏览",
+    zone: "UTC",
     emptyDescription: "暂无查询视图",
     emptyRowsDescription: "当前视图查询成功，但结果为空。",
-    allowedPrimaryDatasetIds: undefined,
-    excludedPrimaryDatasetIds: undefined,
     viewOwnerModules: undefined,
     viewRoles: undefined,
-    includeUnowned: false,
-    excludeLikelyFactorDatasets: false,
     autoRefreshIntervalMs: 0,
     viewIds: undefined,
     activeViewId: "",
     refreshKey: 0,
-    hideTechnicalIdentity: false,
     queryReady: true,
     displayColumns: undefined,
     projectColumns: undefined,
@@ -502,33 +498,12 @@ const selectedSpaceId = computed(() => spaceStore.selectedSpaceId);
 const views = ref<View[]>([]);
 const datasets = ref<Dataset[]>([]);
 const targetedViewIds = computed(() => [...new Set((props.viewIds || []).map(viewId => viewId.trim()).filter(Boolean))]);
-const datasetById = computed(() => new Map(datasets.value.map(item => [item.dataset_id, item])));
+// 给了 viewIds 时只显示这些 View；没给时按所属模块和用途筛选。
 const visibleViews = computed(() => {
   const allowedViewIds = new Set(targetedViewIds.value);
-  const allowedPrimaryDatasetIds = props.allowedPrimaryDatasetIds || [];
-  const allowedPrimary = new Set(allowedPrimaryDatasetIds.filter(Boolean));
-  const excludedPrimary = new Set((props.excludedPrimaryDatasetIds || []).filter(Boolean));
   return views.value.filter(view => {
     if (allowedViewIds.size > 0) return allowedViewIds.has(view.view_id);
-    const matchedByDataset = allowedPrimary.size > 0 && allowedPrimary.has(view.dataset_id);
-    if (!matchedByDataset && excludedPrimary.has(view.dataset_id)) {
-      return false;
-    }
-    if (props.excludeLikelyFactorDatasets && !matchedByDataset && viewUsesLikelyFactorDataset(view)) {
-      return false;
-    }
-    const matchedByAttrs = viewMatchesAttribution(view, {
-      ownerModules: props.viewOwnerModules,
-      viewRoles: props.viewRoles,
-      includeUnowned: props.includeUnowned
-    });
-    if (allowedPrimary.size > 0 && (props.viewOwnerModules?.length || props.viewRoles?.length)) {
-      return matchedByDataset || matchedByAttrs;
-    }
-    if (allowedPrimary.size > 0) {
-      return matchedByDataset;
-    }
-    return matchedByAttrs;
+    return viewMatchesAttribution(view, { ownerModules: props.viewOwnerModules, viewRoles: props.viewRoles });
   });
 });
 const viewColumns = ref<ViewColumn[]>([]);
@@ -581,7 +556,6 @@ const klineFreq = ref("");
 const klineRecords = ref<KlineChartRecord[]>([]);
 const klineLoading = ref(false);
 const klineLimit = ref(DEFAULT_KLINE_LIMIT);
-let autoRefreshTimer: ReturnType<typeof setInterval> | undefined;
 const VIEW_BROWSE_UNSCOPED_PREVIEW_WINDOW_HOURS = 24;
 const VIEW_BROWSE_SCOPED_PREVIEW_WINDOW_DAYS = 7;
 const DEFAULT_VIEW_PAGE_SIZE = 25;
@@ -653,6 +627,8 @@ const klineColumnNames = computed(() => {
   }
   return out;
 });
+// 有开高低收四列才能画 K 线（因子结果等 View 没有）：没有时不显示 K 线入口
+const klineAvailable = computed(() => ["open", "high", "low", "close"].every(name => klineColumnNames.value.includes(name)));
 const columnLabels = computed(() => {
   const labels = buildViewColumnLabels(viewColumns.value, datasetColumns.value, fields.value, activeView.value);
   for (const column of datasetColumns.value) {
@@ -723,14 +699,6 @@ async function loadMeta() {
   } finally {
     if (sequence === metaLoadSequence) metaLoading.value = false;
   }
-}
-
-function viewUsesLikelyFactorDataset(view: View) {
-  const dataset = datasetById.value.get(view.dataset_id);
-  if (dataset) {
-    return isLikelyFactorResultDataset(dataset);
-  }
-  return isLikelyFactorResultDatasetId(view.dataset_id);
 }
 
 function ensureSelectedView() {
@@ -869,16 +837,24 @@ async function loadDatasetColumns(space_id: string, view: View) {
   return results.flatMap(rsp => rsp.columns || []);
 }
 
-async function reloadRows(retainRowsOnError = false) {
+/**
+ * background：自动刷新。不弹提示、开头不清错误条（成功后才清），失败时保留上次的行。
+ * 手动操作（含父页的“刷新”）失败时页面自己弹一次提示；请求层一律静默，免得同一个错误弹两次。
+ */
+interface ReloadOptions {
+  background?: boolean;
+}
+
+async function reloadRows(retainRowsOnError = false, options: ReloadOptions = {}) {
   if (!props.queryReady) return;
   if (!retainRowsOnError || !lastRowsReadAt.value) tableColumnNames.value = preferredColumnNames.value;
   if (!activeView.value) return;
   if (mode.value === "time_series") {
-    await loadTimeSeriesViewRows(retainRowsOnError);
+    await loadTimeSeriesViewRows(retainRowsOnError, options);
     return;
   }
   if (mode.value === "record") {
-    await loadRecordViewRows(retainRowsOnError);
+    await loadRecordViewRows(retainRowsOnError, options);
   }
 }
 
@@ -887,26 +863,35 @@ async function refreshRowsInBackground() {
   if (!activeView.value && !metaLoading.value) await loadMeta();
 }
 
-async function loadTimeSeriesViewRows(retainRowsOnError = false) {
+/** 自动刷新的一轮：正在读取时跳过，不排队；视图元数据没读到时不自动重试（会弹提示），等用户点“刷新”。 */
+async function pollRows() {
+  if (loading.value || contextLoading.value || metaLoading.value || !activeView.value) return;
+  await reloadRows(true, { background: true });
+}
+
+async function loadTimeSeriesViewRows(retainRowsOnError = false, { background = false }: ReloadOptions = {}) {
   const space_id = spaceStore.requireSpaceId();
   const view = activeView.value;
   if (!view) return;
   const requestSequence = ++viewRowsRequestSequence;
   loading.value = true;
-  queryError.value = "";
+  if (!background) queryError.value = "";
   try {
     const timeRange = defaultTimeSeriesPreviewRange();
     const projection = props.projectColumns ?? explicitViewColumnNames.value;
-    const rsp = await queryTimeSeriesRows({
-      space_id,
-      view_id: view.view_id,
-      ...(timeRange ? { time_range: timeRange } : {}),
-      ...(projection.length > 0 ? { column_names: projection } : {}),
-      filter: activeFilterExprs(),
-      sorts: buildViewSorts(sortState),
-      page: { page: pagination.current, size: DEFAULT_VIEW_PAGE_SIZE },
-      total_mode: "NONE"
-    });
+    const rsp = await queryTimeSeriesRows(
+      {
+        space_id,
+        view_id: view.view_id,
+        ...(timeRange ? { time_range: timeRange } : {}),
+        ...(projection.length > 0 ? { column_names: projection } : {}),
+        filter: activeFilterExprs(),
+        sorts: buildViewSorts(sortState),
+        page: { page: pagination.current, size: DEFAULT_VIEW_PAGE_SIZE },
+        total_mode: "NONE"
+      },
+      { silentError: true }
+    );
     if (
       requestSequence !== viewRowsRequestSequence ||
       selectedSpaceId.value !== space_id ||
@@ -915,7 +900,7 @@ async function loadTimeSeriesViewRows(retainRowsOnError = false) {
       return;
     }
     const rows = rsp.rows || [];
-    tableRows.value = timeSeriesRowsToTableRows(rows).map((row, index) => ({
+    tableRows.value = timeSeriesRowsToTableRows(rows, props.zone).map((row, index) => ({
       ...row,
       freq: rows[index]?.key?.freq || "-",
       seriesTag: rows[index]?.key?.series_tag || "",
@@ -925,7 +910,8 @@ async function loadTimeSeriesViewRows(retainRowsOnError = false) {
     previewHasMore.value = !!rsp.page_result?.has_more;
     hasQueried.value = true;
     rowsStale.value = false;
-    lastRowsReadAt.value = new Date().toLocaleTimeString();
+    queryError.value = "";
+    lastRowsReadAt.value = formatInstant(Date.now(), props.zone, "clock");
   } catch (error) {
     if (
       requestSequence !== viewRowsRequestSequence ||
@@ -942,28 +928,31 @@ async function loadTimeSeriesViewRows(retainRowsOnError = false) {
       lastRowsReadAt.value = "";
     }
     hasQueried.value = true;
-    if (!viewIndexPreparing.value) Message.error(queryError.value);
+    if (!viewIndexPreparing.value && !background) Message.error(queryError.value);
   } finally {
     if (requestSequence === viewRowsRequestSequence) loading.value = false;
   }
 }
 
-async function loadRecordViewRows(retainRowsOnError = false) {
+async function loadRecordViewRows(retainRowsOnError = false, { background = false }: ReloadOptions = {}) {
   const space_id = spaceStore.requireSpaceId();
   const view = activeView.value;
   if (!view) return;
   const requestSequence = ++viewRowsRequestSequence;
   loading.value = true;
-  queryError.value = "";
+  if (!background) queryError.value = "";
   try {
-    const rsp = await searchRecordRows({
-      space_id,
-      view_id: view.view_id,
-      text_query: recordKeyword.value.trim(),
-      filter: activeFilterExprs(),
-      sorts: buildViewSorts(sortState),
-      page: { page: pagination.current, size: DEFAULT_VIEW_PAGE_SIZE }
-    });
+    const rsp = await searchRecordRows(
+      {
+        space_id,
+        view_id: view.view_id,
+        text_query: recordKeyword.value.trim(),
+        filter: activeFilterExprs(),
+        sorts: buildViewSorts(sortState),
+        page: { page: pagination.current, size: DEFAULT_VIEW_PAGE_SIZE }
+      },
+      { silentError: true }
+    );
     if (
       requestSequence !== viewRowsRequestSequence ||
       selectedSpaceId.value !== space_id ||
@@ -972,12 +961,13 @@ async function loadRecordViewRows(retainRowsOnError = false) {
       return;
     }
     const rows = rsp.rows || [];
-    tableRows.value = recordRowsToTableRows(rows);
+    tableRows.value = recordRowsToTableRows(rows, props.zone);
     tableColumnNames.value = rowsToColumnNames(rows, preferredColumnNames.value);
     previewHasMore.value = !!rsp.page_result?.has_more;
     hasQueried.value = true;
     rowsStale.value = false;
-    lastRowsReadAt.value = new Date().toLocaleTimeString();
+    queryError.value = "";
+    lastRowsReadAt.value = formatInstant(Date.now(), props.zone, "clock");
   } catch (error) {
     if (
       requestSequence !== viewRowsRequestSequence ||
@@ -994,7 +984,7 @@ async function loadRecordViewRows(retainRowsOnError = false) {
       lastRowsReadAt.value = "";
     }
     hasQueried.value = true;
-    if (!viewIndexPreparing.value) Message.error(queryError.value);
+    if (!viewIndexPreparing.value && !background) Message.error(queryError.value);
   } finally {
     if (requestSequence === viewRowsRequestSequence) loading.value = false;
   }
@@ -1054,7 +1044,7 @@ function createFilterState(option?: ViewFilterFieldOption): ViewFilterState {
     fieldName: option?.value || "",
     operator: option?.value === "series_tag" ? "eq" : "contains",
     valueType: option?.valueType || "FIELD_VALUE_TYPE_STRING",
-    value: option?.value === "series_tag" ? defaultSeriesTagForView(activeView.value) : "",
+    value: option?.value === "series_tag" ? defaultSeriesTag(tableRows.value) : "",
     startValue: "",
     endValue: ""
   };
@@ -1092,12 +1082,20 @@ function filterFieldLabel(fieldName: string) {
   return filterFieldOptions.value.find(item => item.value === fieldName)?.label || columnTitle(fieldName);
 }
 
+/** TIME 字段的输入框写清格式和时区，其余用原来的占位。 */
+function filterPlaceholder(fieldName: string, fallback: string) {
+  const type = filterValueType(fieldName);
+  return type === "FIELD_VALUE_TYPE_TIME" || type === 5
+    ? `YYYY-MM-DD HH:mm:ss（${zoneSuffix(Date.now(), props.zone)}）`
+    : fallback;
+}
+
 function activeFilterExprs(includeExtra = true) {
   const own: ViewFilterState[] = filters.value.map(filter => ({
     ...filter,
     valueType: filterValueType(filter.fieldName)
   }));
-  return buildViewFilterExprs(includeExtra ? own.concat(props.extraFilters ?? []) : own);
+  return buildViewFilterExprs(includeExtra ? own.concat(props.extraFilters ?? []) : own, props.zone);
 }
 
 const extraFiltersKey = computed(() => JSON.stringify(props.extraFilters ?? []));
@@ -1142,6 +1140,17 @@ function hasExactSubjectIDFilter() {
     filter => filter.fieldName.trim() === "subject_id" && filter.operator === "eq" && !!(filter.value || "").trim()
   );
 }
+
+/** 有任何筛选条件（含父页传入的）：结果为空时说“没有符合条件的行”，而不是“结果为空”。 */
+const hasAnyFilter = computed(() => Boolean(activeFilterExprs()) || Boolean(recordKeyword.value.trim()));
+
+/** 时序视图没有按数据时间筛选时，只查最近一段时间：写在查询区，免得以为“查不到”就是没有数据。 */
+const previewRangeText = computed(() => {
+  if (mode.value !== "time_series" || hasActiveDataTimeFilter()) return "";
+  return hasExactSubjectIDFilter()
+    ? `没有指定数据时间，只查最近 ${VIEW_BROWSE_SCOPED_PREVIEW_WINDOW_DAYS} 天`
+    : `未指定标的时只查最近 ${VIEW_BROWSE_UNSCOPED_PREVIEW_WINDOW_HOURS} 小时；指定标的（subject_id 等于）后查最近 ${VIEW_BROWSE_SCOPED_PREVIEW_WINDOW_DAYS} 天`;
+});
 
 function hasActiveDataTimeFilter() {
   return filters.value.some(filter => filter.fieldName.trim() === "data_time" && hasFilterInput(filter));
@@ -1205,7 +1214,32 @@ function openDetail(row: ViewBrowseTableRow) {
   detailVisible.value = true;
 }
 
+// 从行操作打开的 K 线：用那一行的标的和序列标签筛，不用查询区的筛选；从工具栏打开时为空。
+const klineRowFilter = ref<{ subjectId: string; seriesTag: string } | null>(null);
+
+function rowKlineFilter(subjectId: string, seriesTag: string) {
+  return buildViewFilterExprs(
+    [
+      { fieldName: "subject_id", operator: "eq", value: subjectId },
+      seriesTag ? { fieldName: "series_tag", operator: "eq", value: seriesTag } : { fieldName: "series_tag", operator: "empty" }
+    ],
+    props.zone
+  );
+}
+
+/** 行操作“K 线”：直接用这一行的标的和序列标签打开图表。 */
+async function openRowKline(record: { rawKey?: { subject_id?: string; series_tag?: string } }) {
+  const subjectId = record.rawKey?.subject_id;
+  if (!subjectId) return;
+  const seriesTag = record.rawKey?.series_tag ?? "";
+  klineRowFilter.value = { subjectId, seriesTag };
+  klineSubjectId.value = subjectId;
+  const ok = await loadKlineRecords(subjectId, seriesTag, rowKlineFilter(subjectId, seriesTag));
+  if (ok) klineVisible.value = true;
+}
+
 async function openKlineModal() {
+  klineRowFilter.value = null;
   const subjectId = klineSubjectIdFromFilters(filters.value);
   if (!subjectId) {
     Message.warning("请先在数据ID检索框输入要查看的标的");
@@ -1224,6 +1258,11 @@ async function openKlineModal() {
 }
 
 async function reloadKlineRecords() {
+  const row = klineRowFilter.value;
+  if (row) {
+    await loadKlineRecords(row.subjectId, row.seriesTag, rowKlineFilter(row.subjectId, row.seriesTag));
+    return;
+  }
   const subjectId = klineSubjectId.value || klineSubjectIdFromFilters(filters.value);
   if (!subjectId) {
     Message.warning("请先在数据ID检索框输入要查看的标的");
@@ -1241,13 +1280,13 @@ async function reloadKlineRecords() {
 // K 线加载只服务于发起时的 View：切换 View/空间、关闭弹窗或卸载都会使在途请求失效，迟到的响应不能重新打开弹窗或写入旧数据
 const klineRequestGuard = createLatestRequestGuard();
 
-async function loadKlineRecords(subjectId: string, seriesTag: string) {
+async function loadKlineRecords(subjectId: string, seriesTag: string, filterOverride?: ReturnType<typeof activeFilterExprs>) {
   const view = activeView.value;
   if (!view) return false;
   const request = klineRequestGuard.begin();
   // 发起时固定整次查询的筛选、投影列、排序与数量：加载期间修改筛选框不能让后续分页读取另一套条件
   const query = {
-    filter: activeFilterExprs(false),
+    filter: filterOverride ?? activeFilterExprs(false),
     columnNames: [...klineColumnNames.value],
     sorts: buildKlineQuerySorts(),
     limit: normalizedKlineLimit.value
@@ -1347,21 +1386,11 @@ function rowToSyntheticRecord(row: ViewBrowseTableRow): RecordRow {
   };
 }
 
-onMounted(() => {
-  loadMeta();
-  const interval = props.autoRefreshIntervalMs || 0;
-  if (interval > 0) {
-    autoRefreshTimer = setInterval(() => {
-      void refreshRowsInBackground();
-    }, interval);
-  }
-});
+onMounted(loadMeta);
+// 自动刷新（调用方给了间隔时）：页面隐藏时暂停、不叠加；后台读取失败不弹提示，保留上次的数据并标出“待刷新”
+usePolling(pollRows, props.autoRefreshIntervalMs || 60_000, () => (props.autoRefreshIntervalMs || 0) > 0);
 onBeforeUnmount(() => {
   klineRequestGuard.invalidate();
-  if (autoRefreshTimer) {
-    clearInterval(autoRefreshTimer);
-    autoRefreshTimer = undefined;
-  }
 });
 watch(selectedSpaceId, () => {
   activeViewKey.value = "";
@@ -1371,6 +1400,13 @@ watch(selectedSpaceId, () => {
 </script>
 
 <style scoped>
+.view-query-controls,
+.view-result-table {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
 .view-browse-page {
   width: 100%;
   max-width: 100%;
@@ -1385,25 +1421,6 @@ watch(selectedSpaceId, () => {
   width: 100%;
   max-width: 100%;
   min-width: 0;
-}
-
-.page-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: var(--moox-space-2);
-}
-
-.page-head__title {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-}
-
-.page-head h2 {
-  margin: 0;
-  font-size: 20px;
-  font-weight: 600;
 }
 
 .view-tabs-row {
@@ -1529,6 +1546,12 @@ watch(selectedSpaceId, () => {
 }
 
 /* 调用方追加的检索行（例如因子条件）横跨整行，放在栅格与操作按钮下方。 */
+.preview-range-hint {
+  margin: 8px 0 0;
+  color: var(--color-text-3);
+  font-size: 12px;
+}
+
 .query-extra {
   grid-column: 1 / -1;
   min-width: 0;
@@ -1559,10 +1582,6 @@ watch(selectedSpaceId, () => {
   width: 100%;
 }
 
-.result-pane :deep(.arco-pagination) {
-  margin-top: var(--moox-space-3);
-}
-
 .preview-pager {
   display: flex;
   flex-wrap: wrap;
@@ -1574,19 +1593,10 @@ watch(selectedSpaceId, () => {
   font-size: 13px;
 }
 
-.preview-pager__hint {
-  min-width: 0;
-}
-
 .preview-pager__actions {
   display: inline-flex;
   align-items: center;
   gap: 10px;
-}
-
-.record-search-bar {
-  flex: 0 1 360px;
-  min-width: 260px;
 }
 
 .detail-body {
@@ -1638,7 +1648,6 @@ watch(selectedSpaceId, () => {
 }
 
 @media (max-width: 560px) {
-  .page-head,
   .view-status-line {
     align-items: flex-start;
     flex-direction: column;

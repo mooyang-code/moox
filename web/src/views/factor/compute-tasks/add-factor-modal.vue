@@ -8,12 +8,17 @@
     @before-open="prepare"
   >
     <div class="add-factor__toolbar">
-      <a-input-search v-model="keyword" allow-clear placeholder="搜索因子 ID 或模块名" class="add-factor__search" />
+      <a-space>
+        <a-input-search v-model="keyword" allow-clear placeholder="搜索因子 ID 或模块名" class="add-factor__search" />
+        <a-select v-model="categoryId" allow-clear placeholder="全部分类" class="add-factor__category">
+          <a-option v-for="item in categories" :key="item.category_id" :value="item.category_id">{{ item.name }}</a-option>
+        </a-select>
+      </a-space>
       <span class="add-factor__count">已选 {{ selected.length }} 个</span>
     </div>
     <a-alert v-if="loadError" type="error" show-icon class="add-factor__alert">{{ loadError }}</a-alert>
     <a-spin :loading="loading" class="add-factor__spin">
-      <a-empty v-if="!rows.length && !loading" description="因子定义库里没有可选的因子，请先到「因子定义」新增" />
+      <a-empty v-if="!rows.length && !loading" description="因子定义库里没有可选的因子，请先到「因子定义」新建" />
       <div v-else class="add-factor__list" role="group" aria-label="候选因子">
         <div v-for="row in rows" :key="row.factor.factor_id" class="add-factor__item">
           <label class="add-factor__row" :class="{ 'is-disabled': row.locked }">
@@ -73,6 +78,11 @@
       </div>
     </a-spin>
     <template #footer>
+      <a-tooltip content="计算任务停用着，成员要等任务启用后才能启用" :disabled="taskEnabled">
+        <a-checkbox v-model="enableAfterAdd" :disabled="submitting || !taskEnabled" class="add-factor__enable">
+          添加后立即启用
+        </a-checkbox>
+      </a-tooltip>
       <a-space>
         <a-button :disabled="submitting" @click="visible = false">取消</a-button>
         <a-button type="primary" status="success" :loading="submitting" :disabled="!canSubmit" @click="submit">
@@ -85,10 +95,10 @@
 
 <script setup lang="ts">
 import { createSubmitScope } from "@/utils/submit-scope";
-import { computed, ref, watch, onBeforeUnmount } from "vue";
+import { computed, h, ref, watch, onBeforeUnmount } from "vue";
 import { Message } from "@arco-design/web-vue";
-import { addFactorToTask, listFactors } from "@/api/factor";
-import type { FactorDef, FactorParamDecl, FactorTaskInfo, MemberKind } from "@/api/factor/types";
+import { addFactorToTask, listFactorCategories, listFactors, setFactorMemberStatus } from "@/api/factor";
+import type { FactorCategory, FactorDef, FactorParamDecl, FactorTaskInfo, MemberKind } from "@/api/factor/types";
 import { listDatasetColumns } from "@/api/storage/metadata";
 import { selectedSpaceGeneration } from "@/api/admin/space-header";
 import { useSpaceStore } from "@/store/modules/space";
@@ -97,7 +107,8 @@ import { precheckAddFactor, type PrecheckMember, type PrecheckResult } from "./a
 
 defineOptions({ name: "FactorAddFactorModal" });
 
-const props = defineProps<{ info: FactorTaskInfo; title: string }>();
+/** presetFactorId：打开时预选这个因子（从因子编辑页“添加到计算任务”进来）。 */
+const props = defineProps<{ info: FactorTaskInfo; title: string; presetFactorId?: string }>();
 const emit = defineEmits<{ (e: "added", factorIds: string[]): void }>();
 const visible = defineModel<boolean>("visible", { default: false });
 
@@ -106,6 +117,11 @@ const PAGE_SIZE = 500;
 const factors = ref<FactorDef[]>([]);
 const sourceColumns = ref<string[] | null>(null);
 const keyword = ref("");
+const categories = ref<FactorCategory[]>([]);
+const categoryId = ref<string | undefined>();
+/** 添加后立即启用：任务已启用时默认勾上；启用后不自动补算历史。 */
+const enableAfterAdd = ref(false);
+const taskEnabled = computed(() => props.info.factor_task.status === "enabled");
 const selected = ref<string[]>([]);
 const errors = ref<Record<string, string>>({});
 const loading = ref(false);
@@ -136,25 +152,31 @@ const memberViews = computed<PrecheckMember[]>(() => [
   ...addedMembers.value
 ]);
 
+// 全部候选都做预检：已选的因子被筛选藏起来时，提交和“添加”按钮仍按它的预检结果判断。
+const allRows = computed<CandidateRow[]>(() => {
+  return factors.value.map(item => {
+    const draft = drafts.value[item.factor_id];
+    const check = precheckAddFactor({
+      candidate: item,
+      members: memberViews.value,
+      sourceColumns: sourceColumns.value,
+      kind: selected.value.includes(item.factor_id) ? draft?.kind : undefined,
+      params: selected.value.includes(item.factor_id) ? draft?.params : undefined
+    });
+    return { factor: item, decls: item.params ?? [], check, locked: !check.ok && !check.fixable };
+  });
+});
+
+/** 列表里显示的行：只按关键词和分类筛选显示，不影响已选的因子。 */
 const rows = computed<CandidateRow[]>(() => {
   const text = keyword.value.trim().toLowerCase();
-  return factors.value
-    .filter(item => !text || item.factor_id.toLowerCase().includes(text) || item.name.toLowerCase().includes(text))
-    .map(item => {
-      const draft = drafts.value[item.factor_id];
-      const check = precheckAddFactor({
-        candidate: item,
-        members: memberViews.value,
-        sourceColumns: sourceColumns.value,
-        kind: selected.value.includes(item.factor_id) ? draft?.kind : undefined,
-        params: selected.value.includes(item.factor_id) ? draft?.params : undefined
-      });
-      return { factor: item, decls: item.params ?? [], check, locked: !check.ok && !check.fixable };
-    });
+  return allRows.value
+    .filter(row => !categoryId.value || row.factor.category_id === categoryId.value)
+    .filter(row => !text || row.factor.factor_id.toLowerCase().includes(text) || row.factor.name.toLowerCase().includes(text));
 });
 
 const canSubmit = computed(
-  () => selected.value.length > 0 && selected.value.every(id => rows.value.find(row => row.factor.factor_id === id)?.check.ok)
+  () => selected.value.length > 0 && selected.value.every(id => allRows.value.find(row => row.factor.factor_id === id)?.check.ok)
 );
 
 function paramValue(factorId: string, decl: FactorParamDecl) {
@@ -203,6 +225,8 @@ async function fetchSourceColumns(spaceId: string, datasetId: string) {
 
 async function prepare() {
   keyword.value = "";
+  categoryId.value = undefined;
+  enableAfterAdd.value = taskEnabled.value;
   selected.value = [];
   addedMembers.value = [];
   drafts.value = {};
@@ -212,9 +236,16 @@ async function prepare() {
   loading.value = true;
   const { space_id: spaceId, source_dataset_id: datasetId } = props.info.factor_task;
   try {
-    const [items, columns] = await Promise.all([fetchAllFactors(), fetchSourceColumns(spaceId, datasetId).catch(() => null)]);
+    const [items, columns, categoryList] = await Promise.all([
+      fetchAllFactors(),
+      fetchSourceColumns(spaceId, datasetId).catch(() => null),
+      listFactorCategories({ silentError: true }).catch(() => [] as FactorCategory[])
+    ]);
     factors.value = items;
     sourceColumns.value = columns;
+    categories.value = categoryList;
+    const preset = props.presetFactorId;
+    if (preset && items.some(item => item.factor_id === preset)) selected.value = [preset];
   } catch (error) {
     loadError.value = error instanceof Error ? error.message : "因子定义加载失败";
     factors.value = [];
@@ -258,12 +289,15 @@ async function submit() {
   submitting.value = true;
   errors.value = {};
   const done: string[] = [];
+  const enable = enableAfterAdd.value && taskEnabled.value;
+  // 已添加但没能启用的成员键（失败原因）：成员已经在任务里，只是还停用着。
+  const enableFailures: string[] = [];
   try {
     for (const factorId of [...selected.value]) {
       if (stale()) break;
       try {
         const draft = drafts.value[factorId];
-        const row = rows.value.find(item => item.factor.factor_id === factorId);
+        const row = allRows.value.find(item => item.factor.factor_id === factorId);
         const decls = row?.decls ?? [];
         // 有参数的因子把完整参数一起提交（没改的取默认值）；成员键由服务端按参数推导并返回。
         const params = decls.length
@@ -271,6 +305,13 @@ async function submit() {
           : undefined;
         const kind = draft?.kind ?? "fixed";
         const member = await addFactorToTask(taskId, factorId, kind, params);
+        if (enable && !stale()) {
+          try {
+            await setFactorMemberStatus(taskId, member.member_key, "enabled");
+          } catch (error) {
+            enableFailures.push(`${member.member_key}（${error instanceof Error ? error.message : "启用失败"}）`);
+          }
+        }
         addedMembers.value = [
           ...addedMembers.value,
           {
@@ -300,12 +341,24 @@ async function submit() {
     for (const id of done) delete drafts.value[id];
     emit("added", done);
   }
+  if (enableFailures.length) {
+    Message.warning({ content: `已添加，但这些没能启用，请在成员列表里再启用：${enableFailures.join("、")}`, duration: 8000 });
+  }
   if (!Object.keys(errors.value).length) {
-    Message.success(`已添加 ${done.length} 个因子（已停用），在成员列表里启用后才会计算`);
+    if (!enable) Message.success(`已添加 ${done.length} 个因子（已停用），在成员列表里启用后才会计算`);
+    else if (done.length > enableFailures.length) {
+      Message.success({ content: () => addedAndEnabledText(done.length - enableFailures.length, taskId), duration: 6000 });
+    }
     visible.value = false;
   } else {
     Message.warning(`${done.length} 个已添加，${Object.keys(errors.value).length} 个失败，原因见对应行`);
   }
+}
+
+/** 启用不自动补算历史：提示里带上补算页的链接。 */
+function addedAndEnabledText(count: number, taskId: string) {
+  const href = `#/factor/tasks?tab=recalc&task=${encodeURIComponent(taskId)}`;
+  return h("span", [`已添加并启用 ${count} 个因子。历史数据需要补算：`, h("a", { href }, "去补算")]);
 }
 
 // 提交作用域：右上角关闭按钮/Esc 也能关闭弹窗，打开、关闭、卸载都使进行中的批量添加失效，新一轮打开重置提交状态
@@ -327,7 +380,16 @@ onBeforeUnmount(() => addScope.invalidate());
 }
 
 .add-factor__search {
-  max-width: 280px;
+  width: 240px;
+}
+
+.add-factor__category {
+  width: 160px;
+}
+
+.add-factor__enable {
+  float: left;
+  margin-top: 6px;
 }
 
 .add-factor__count {

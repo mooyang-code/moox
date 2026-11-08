@@ -7,7 +7,7 @@
           <InfoTip text="只读总览：看各实例最新目标是否有效、有哪些需要处理的事项；操作都跳转到对应页面完成。" />
           <span v-if="readAt" class="cell-sub">状态读取：{{ readAt }}</span>
         </div>
-        <a-button :loading="loading" @click="loadAll">
+        <a-button :loading="loading" @click="loadAll()">
           <template #icon><icon-refresh /></template>
           刷新
         </a-button>
@@ -17,13 +17,16 @@
       <template v-else>
         <a-alert v-if="loadError" type="error" show-icon class="page-alert">
           {{ loadError }}
-          <template #action><a-button size="mini" @click="loadAll">重试</a-button></template>
+          <template #action><a-button size="mini" @click="loadAll()">重试</a-button></template>
+        </a-alert>
+        <a-alert v-if="targetFailures" type="warning" class="page-alert">
+          {{ targetFailures }} 个实例的最新目标读取失败，这些实例暂时显示为没有目标。
         </a-alert>
 
         <div class="stats-strip" role="list">
           <div v-for="item in stats" :key="item.key" class="stat" role="listitem">
             <span class="stat__label">{{ item.label }}</span>
-            <span class="stat__value" :class="`is-${item.tone}`">{{ item.value }}</span>
+            <span class="stat__value" :class="loaded ? `is-${item.tone}` : ''">{{ loaded ? item.value : "—" }}</span>
             <span class="stat__hint">{{ item.hint }}</span>
           </div>
         </div>
@@ -31,7 +34,7 @@
         <div class="overview-columns">
           <section class="overview-col" aria-label="运行实例">
             <h3>运行实例与当前目标</h3>
-            <a-empty v-if="!cards.length && !loading" description="当前空间还没有策略实例">
+            <a-empty v-if="loaded && !cards.length" description="当前空间还没有策略实例">
               <template #extra>
                 <a-button type="primary" status="success" @click="go(instancesLink({ create: true }))">新建实例</a-button>
               </template>
@@ -49,16 +52,19 @@
                 <span v-else-if="!card.chips.length" class="task-card__empty">{{
                   card.state === "zero" ? "零仓位目标" : card.state === "empty" ? "当前会话尚无结果" : "暂无可展示的目标"
                 }}</span>
-                <a-tag v-for="chip in card.chips" :key="chip.instrumentId" size="small" :color="chip.short ? 'red' : 'green'">
-                  {{ chip.text }}
-                </a-tag>
-                <a-tag v-if="card.more" size="small">+{{ card.more }}</a-tag>
+                <span v-else class="task-card__targets"
+                  ><template v-for="(chip, index) in card.chips" :key="chip.instrumentId"
+                    >{{ index ? " · " : "" }}<span :class="{ 'is-short': chip.short }">{{ chip.text }}</span></template
+                  ><template v-if="card.more"> · 另有 {{ card.more }} 个</template></span
+                >
               </div>
               <footer class="task-card__links">
                 <span v-if="card.period" class="cell-sub">{{ card.period }}</span>
                 <a-link @click="go(card.links.results)">结果</a-link>
                 <a-link @click="go(detailLink(card.instanceId))">详情</a-link>
-                <a-link @click="go(card.links.replay)">回放</a-link>
+                <a-tooltip :content="POOL_REPLAY_DISABLED_TEXT" :disabled="!card.pool">
+                  <a-link :disabled="card.pool" @click="go(card.links.replay)">回放</a-link>
+                </a-tooltip>
               </footer>
             </article>
             <a-link v-if="instances.length > cards.length" @click="go(resultsLink())"
@@ -69,7 +75,8 @@
           <div class="overview-col">
             <section aria-label="待处理">
               <h3>待处理</h3>
-              <a-empty v-if="!pending.length" description="没有待处理事项" />
+              <div v-if="!loaded" class="side-list__text">—</div>
+              <a-empty v-else-if="!pending.length" description="没有待处理事项" />
               <ul v-else class="side-list">
                 <li v-for="item in pending" :key="`${item.kind}-${item.instanceId}`">
                   <a-link @click="go(item.target)">{{ item.title }}</a-link>
@@ -80,15 +87,19 @@
 
             <section aria-label="进行中的回放">
               <h3>进行中的回放</h3>
-              <a-empty v-if="!running.length" description="没有进行中的回放" />
+              <a-alert v-if="replayError" type="warning" class="page-alert">回放读取失败：{{ replayError }}</a-alert>
+              <div v-else-if="!loaded" class="side-list__text">—</div>
+              <a-empty v-else-if="!running.length" description="没有进行中的回放" />
               <ul v-else class="side-list">
                 <li v-for="replay in running" :key="replay.replay_id">
                   <a-link @click="go(replayLink({ replayId: replay.replay_id }))">{{
                     replaySourceLabel(replay, store.strategyCatalog)
                   }}</a-link>
                   <span class="side-list__text"
-                    >{{ replayStatusLabel(replay.status) }} · {{ replayRangeLabel(replay)
-                    }}<template v-if="replay.progress_time"> · 进度 {{ formatUtcTime(replay.progress_time) }}</template></span
+                    >{{ replayStatusLabel(replay.status) }} · {{ replayRangeLabel(replay, displayZone)
+                    }}<template v-if="replay.progress_time">
+                      · 进度 {{ formatInstant(replay.progress_time, displayZone) }}</template
+                    ></span
                   >
                 </li>
               </ul>
@@ -101,21 +112,28 @@
 </template>
 
 <script setup lang="ts">
+import { listLogicalAccounts } from "@/api/trade";
+import { POOL_REPLAY_DISABLED_TEXT } from "@/views/strategy/dsl";
 import { computed, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { StaleSpaceRequestError } from "@/api/admin/stale-space";
-import { listInstances, listReplays, listStrategyTargets } from "@/api/strategy";
+import { listAllInstances, listReplays, listStrategyTargets } from "@/api/strategy";
 import type { Replay, StrategyInstance, StrategyTargetSnapshot } from "@/api/strategy-types";
 import { usePolling } from "@/hooks/usePolling";
 import { useSpaceStore } from "@/store/modules/space";
 import { useStrategyStore } from "@/store/modules/strategy";
 import { RequestGate } from "@/utils/request-gate";
-import InfoTip from "@/views/factor/shared/info-tip.vue";
+import InfoTip from "@/components/info-tip/index.vue";
 import StatusBadge from "@/views/strategy/components/strategy-status-badge.vue";
 import { detailLink, instancesLink, replayLink, resultsLink, type StrategyLink } from "@/views/strategy/links";
 import { activeReplays, instanceCards, overviewStats, pendingItems } from "@/views/strategy/overview/overview-model";
-import { formatUtcTime, replayRangeLabel, replaySourceLabel, replayStatusLabel } from "@/views/strategy/replay/model";
+import { replayRangeLabel, replaySourceLabel, replayStatusLabel } from "@/views/strategy/replay/model";
 import { useNowClock } from "@/views/strategy/use-now-clock";
+import { formatInstant } from "@/utils/time-zone";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
+
+// 页面时间按当前空间登记的时区显示
+const displayZone = useDisplayZone();
 
 defineOptions({ name: "StrategyOverview" });
 
@@ -133,7 +151,14 @@ const targets = ref<Record<string, StrategyTargetSnapshot>>({});
 const replays = ref<Replay[]>([]);
 const loading = ref(false);
 const loadError = ref("");
+// 当前空间至少读到过一次：没读到时统计条显示“-”，不能显示成“需要处理 0”。
+const loaded = ref(false);
+const replayError = ref("");
+// 读取失败的实例目标数：只提示，不当成“没有目标”。
+const targetFailures = ref(0);
 const readAt = ref("");
+// 已暂停自动执行的组合账户（读不到时为空，不提示暂停）
+const pausedAccounts = ref<Set<string>>(new Set());
 const gate = new RequestGate();
 
 const input = computed(() => ({
@@ -141,38 +166,45 @@ const input = computed(() => ({
   targets: targets.value,
   replays: replays.value,
   catalog: store.strategyCatalog,
-  nowMs: nowMs.value
+  nowMs: nowMs.value,
+  pausedAccounts: pausedAccounts.value
 }));
 const stats = computed(() => overviewStats(input.value));
-const cards = computed(() => instanceCards(input.value));
+const cards = computed(() => instanceCards(input.value, displayZone.value));
 const pending = computed(() => pendingItems(input.value));
 const running = computed(() => activeReplays(replays.value));
 
-async function loadInstances(): Promise<StrategyInstance[]> {
-  const all: StrategyInstance[] = [];
-  for (let page = 1; page <= 10; page += 1) {
-    const rsp = await listInstances({ page, page_size: 200 });
-    all.push(...rsp.items);
-    if (!rsp.items.length || all.length >= rsp.page.total) break;
-  }
-  return all;
-}
-
-/** 读取实例、已启用实例的最新目标与最近的回放；单个实例的目标读取失败不影响其它实例。 */
-async function loadAll() {
+/**
+ * 读取实例、已启用实例的最新目标与最近的回放；单个实例的目标读取失败不影响其它实例。
+ * 后台轮询（background）不转刷新按钮，也不先清掉错误条，避免每 30 秒闪一下；结果出来后再更新。
+ */
+async function loadAll(options: { background?: boolean } = {}) {
   if (!spaceId.value) return;
   const token = gate.next();
-  loading.value = true;
-  loadError.value = "";
+  if (!options.background) loading.value = true;
   try {
     const [nextInstances, replayPage] = await Promise.all([
-      loadInstances(),
-      listReplays({ page: 1, page_size: 20 }, { silent: true }).catch(() => null),
-      store.strategiesComplete ? Promise.resolve() : store.loadAllStrategies(200).catch(() => undefined)
+      listAllInstances({ silent: Boolean(options.background) }),
+      listReplays({ page: 1, page_size: 20 }, { silent: true }).catch(error => {
+        if (gate.isCurrent(token)) replayError.value = error instanceof Error && error.message ? error.message : "请稍后重试";
+        return null;
+      }),
+      // 策略目录只在前台加载时补读：后台刷新不重试，免得策略模块不可用时每 30 秒弹一次
+      store.strategiesComplete || options.background ? Promise.resolve() : store.loadAllStrategies(200).catch(() => undefined),
+      listLogicalAccounts({ page: 1, size: 500 }, { silent: true })
+        .then(rsp => {
+          if (gate.isCurrent(token)) {
+            const paused = (rsp.logical_accounts || []).filter(item => item.automation_state === "PAUSED");
+            pausedAccounts.value = new Set(paused.map(item => item.logical_account_id));
+          }
+        })
+        .catch(() => undefined)
     ]);
     if (!gate.isCurrent(token)) return;
     const enabled = nextInstances.filter(item => item.enabled).slice(0, TARGET_FETCH_LIMIT);
-    const settled = await Promise.allSettled(enabled.map(item => listStrategyTargets(item.instance_id)));
+    const settled = await Promise.allSettled(
+      enabled.map(item => listStrategyTargets(item.instance_id, { silent: Boolean(options.background) }))
+    );
     if (!gate.isCurrent(token)) return;
     const nextTargets: Record<string, StrategyTargetSnapshot> = {};
     settled.forEach((result, index) => {
@@ -180,8 +212,14 @@ async function loadAll() {
     });
     instances.value = nextInstances;
     targets.value = nextTargets;
-    if (replayPage) replays.value = replayPage.items;
-    readAt.value = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+    targetFailures.value = settled.filter(result => result.status === "rejected").length;
+    if (replayPage) {
+      replays.value = replayPage.items;
+      replayError.value = "";
+    }
+    loaded.value = true;
+    loadError.value = "";
+    readAt.value = formatInstant(Date.now(), displayZone.value, "clock");
   } catch (error) {
     if (error instanceof StaleSpaceRequestError || !gate.isCurrent(token)) return;
     loadError.value = `总览读取失败：${error instanceof Error ? error.message : "未知错误"}`;
@@ -194,7 +232,11 @@ function go(target: StrategyLink) {
   void router.push(target);
 }
 
-usePolling(loadAll, 30_000, () => Boolean(spaceId.value));
+usePolling(
+  () => loadAll({ background: true }),
+  30_000,
+  () => Boolean(spaceId.value)
+);
 watch(
   spaceId,
   () => {
@@ -202,6 +244,10 @@ watch(
     targets.value = {};
     replays.value = [];
     readAt.value = "";
+    loaded.value = false;
+    loadError.value = "";
+    replayError.value = "";
+    targetFailures.value = 0;
     void loadAll();
   },
   { immediate: true }
@@ -298,6 +344,12 @@ watch(
   margin: var(--moox-space-2) 0;
 }
 
+.task-card__targets {
+  font-size: 13px;
+}
+.task-card__targets .is-short {
+  color: rgb(var(--danger-6));
+}
 .task-card__empty {
   color: var(--color-text-3);
   font-size: 12px;

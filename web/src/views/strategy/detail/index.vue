@@ -3,8 +3,8 @@
     <div class="moox-inner">
       <div class="page-head">
         <div>
-          <a-button type="text" @click="router.push(instancesLink())"
-            ><template #icon><icon-left /></template>返回运行实例</a-button
+          <a-button type="text" @click="goBackOr(router, instancesLink())"
+            ><template #icon><icon-left /></template>返回</a-button
           >
           <h2>{{ store.strategy?.name || store.instance?.strategy_id || "策略实例" }}</h2>
           <span class="mono">{{ store.instance?.instance_id || instanceId }}</span>
@@ -24,8 +24,12 @@
         >详情加载失败：{{ store.detailError
         }}<template #action><a-button size="small" @click="refreshDetail">重试</a-button></template></a-alert
       >
+      <a-alert v-if="logicalAccountError" type="warning" show-icon class="top-alert">
+        组合账户读取失败：{{ logicalAccountError }}。账户是否暂停、能否执行目标暂时无法确认。
+        <template #action><a-button size="small" @click="reloadLogicalAccount">重试</a-button></template>
+      </a-alert>
       <a-alert v-if="store.instance?.missing_factor_tasks?.length" type="warning" show-icon class="top-alert">
-        引用的因子任务
+        引用的计算任务
         {{ store.instance.missing_factor_tasks.join("、") }} 已不存在，删除实例即可清理（到运行实例列表删除）；启用会失败。
       </a-alert>
       <a-alert v-if="logicalAccount?.automation_state === 'PAUSED'" type="warning" show-icon class="top-alert">
@@ -53,12 +57,10 @@
             }}</a-tag></a-descriptions-item
           >
           <a-descriptions-item label="策略定义"
-            >{{ store.strategy?.name || definitionHint }} ·
-            <span class="mono">{{ store.instance.strategy_id }}</span></a-descriptions-item
+            >{{ store.strategy?.name || definitionHint }} · <span class="mono">{{ store.instance.strategy_id }}</span>
+            <div v-if="versionText" class="version-note">{{ versionText }}</div></a-descriptions-item
           >
-          <a-descriptions-item label="因子任务"
-            ><span class="mono">{{ tasksText(store.instance.factor_tasks) }}</span></a-descriptions-item
-          >
+          <a-descriptions-item label="计算任务"><FactorTaskLinks :tasks="store.instance.factor_tasks" /></a-descriptions-item>
           <a-descriptions-item label="运行会话"
             ><span class="mono">{{ store.instance.session_id || "无当前会话" }}</span></a-descriptions-item
           >
@@ -78,6 +80,8 @@
           :instance-id="instanceId"
           :enabled="store.instance.enabled"
           :uncertain="controlUncertain"
+          :logical-account-id="store.instance.logical_account_id"
+          :factor-tasks="store.instance.factor_tasks"
           @started="handleControlStarted"
           @changed="reconcileControl"
           @failed="handleControlFailed"
@@ -117,7 +121,8 @@
 </template>
 
 <script setup lang="ts">
-import { tasksText } from "@/views/strategy/market-mode";
+import { goBackOr } from "@/utils/navigate-back";
+import FactorTaskLinks from "@/views/strategy/components/factor-task-links.vue";
 import { useLogicalAccount } from "@/views/strategy/components/use-logical-account";
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
@@ -130,6 +135,7 @@ import StatusBadge from "@/views/strategy/components/strategy-status-badge.vue";
 import StrategyFactorParams from "@/views/strategy/components/strategy-factor-params.vue";
 import { parseFactorBinding } from "@/views/strategy/factor-params-model";
 import { instancesLink, replayLink } from "@/views/strategy/links";
+import { runningVersionText } from "@/views/strategy/model";
 import { useInstanceResults } from "@/views/strategy/use-instance-results";
 
 defineOptions({ name: "StrategyDetail" });
@@ -144,7 +150,7 @@ const autoRefresh = ref(true);
 function leaveIfOtherSpace() {
   const currentSpaceId = spaceStore.selectedSpaceId;
   if (store.instance && currentSpaceId && store.instance.space_id !== currentSpaceId) {
-    store.stopPolling();
+    // 离开本页后组件卸载，轮询随之停止
     store.clearDetail();
     router.replace(instancesLink());
     return true;
@@ -173,15 +179,23 @@ const {
     controlUncertain.value = false;
   }
 });
-const logicalAccount = useLogicalAccount(computed(() => store.instance?.logical_account_id));
+const {
+  account: logicalAccount,
+  error: logicalAccountError,
+  reload: reloadLogicalAccount
+} = useLogicalAccount(computed(() => store.instance?.logical_account_id));
 
 // 研究回放不支持策略池（Strategy 的 StartReplay 直接拒绝），按钮禁用并说明原因。
 const POOL_REPLAY_REASON = "研究回放暂不支持策略池：成员的净值与分配比例要在池实例启用后的预热与运行中查看";
 const isPoolInstance = computed(() => poolMembers(store.strategy?.dsl_yaml || "") !== null);
-// 引用的因子任务已经不在的实例不再读因子参数：读取只会报错。
+// 引用的计算任务已经不在的实例不再读因子参数：读取只会报错。
 const hasFactors = computed(
   () =>
     Boolean(store.instance && parseFactorBinding(store.instance.resolved_json)) && !store.instance?.missing_factor_tasks?.length
+);
+// 实际运行的 DSL 版本（本会话最新结果的 dsl_hash），定义改过时提示停用再启用后生效
+const versionText = computed(() =>
+  store.instance ? runningVersionText(store.instance.session_id, store.results, store.strategy?.dsl_hash) : ""
 );
 const definitionHint = computed(() =>
   store.strategyStatus === "missing" ? "定义已删除" : store.strategyStatus === "error" ? "定义读取失败" : "定义读取中"
@@ -195,8 +209,10 @@ const definitionEmptyText = computed(() =>
 );
 
 async function refreshDetail() {
+  const account = reloadLogicalAccount();
   if (controlUncertain.value) await reconcileControl();
   else await refresh();
+  await account;
 }
 /** 启停结果未知时重新读取实例，读到最新状态后解除“状态未知”。 */
 async function reconcileControl() {
@@ -224,6 +240,12 @@ watch(
 </script>
 
 <style scoped>
+.version-note {
+  margin-top: 2px;
+  color: var(--color-text-3);
+  font-size: 12px;
+}
+
 .page-head {
   display: flex;
   align-items: flex-start;

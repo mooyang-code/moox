@@ -34,7 +34,7 @@
           <span>{{ group.label }}</span>
           <span class="muted"
             >{{ group.total }} 个标的<template v-if="group.effectiveFrom">
-              · {{ localTimeText(group.effectiveFrom) }} 起生效</template
+              · {{ timeText(group.effectiveFrom) }} 起生效</template
             ></span
           >
         </div>
@@ -51,7 +51,12 @@
 import { computed, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import type { CollectorFunctionStatus } from "@/api/collector/runtime-status";
-import { cronText, datasetLabel, functionStateInfo, localTimeText } from "./runtime-status-model";
+import { cronText, datasetLabel, functionStateInfo } from "./runtime-status-model";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
+import { formatInstant } from "@/utils/time-zone";
+
+const displayZone = useDisplayZone();
+const timeText = (value?: string) => formatInstant(value, displayZone.value);
 
 const props = defineProps<{ fn: CollectorFunctionStatus | null; datasetNames: Map<string, string> }>();
 const emit = defineEmits<{ (event: "close"): void }>();

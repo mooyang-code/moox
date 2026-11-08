@@ -37,7 +37,7 @@ test("列表按环境分页签，只列组合账户，三角展开执行账户�
   await expect(page.getByText("未加入组合的执行账户 1 个")).toBeVisible();
   await page.locator(".arco-table-expand-btn").first().click();
   await expect(page.getByText("币安模拟").first()).toBeVisible();
-  await expect(page.getByText("Binance · 现货、永续")).toBeVisible();
+  await expect(page.getByText("币安 · 现货、永续")).toBeVisible();
   await expect(page).toHaveURL(/#\/trading\/accounts$/);
 
   await page.getByRole("tab", { name: "测试网" }).click();
@@ -266,7 +266,7 @@ test("资金流水、关闭模拟账户对话框的提示不超出外框，成�
   expect((a?.x ?? 0) + (a?.width ?? 0)).toBeLessThanOrEqual((b?.x ?? 0) + (b?.width ?? 0) + 0.5);
 
   await openDetail(page, "la-paper-1", "settings");
-  const cell = page.locator(".tx-detail .arco-table-td .tx-nowrap").filter({ hasText: "Binance" }).first();
+  const cell = page.locator(".tx-detail .arco-table-td .tx-nowrap").filter({ hasText: "币安" }).first();
   expect((await cell.boundingBox())?.height).toBeLessThan(26);
   await page.getByRole("button", { name: "关闭模拟账户" }).click();
   const dialog = page.locator(".arco-modal:visible");

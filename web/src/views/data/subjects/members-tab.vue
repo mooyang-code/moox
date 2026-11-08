@@ -7,13 +7,9 @@
     <div class="filter-bar">
       <div class="filter-query">
         <a-input v-model="keyword" class="keyword-input" allow-clear placeholder="搜索对象 ID 或名称" @press-enter="onSearch" />
-        <a-select v-model="statusFilter" class="status-select" placeholder="状态">
+        <a-select v-model="statusFilter" class="status-select" placeholder="状态" @change="onSearch">
           <a-option v-for="item in statusOptions" :key="item.value" :value="item.value">{{ item.label }}</a-option>
         </a-select>
-        <a-button type="primary" @click="onSearch">
-          <template #icon><icon-search /></template>
-          查询
-        </a-button>
       </div>
       <a-space class="filter-actions">
         <a-button :loading="loading" @click="reload">
@@ -24,15 +20,15 @@
           <template #icon><icon-plus /></template>
           批量加入
         </a-button>
-        <a-button v-if="selectedTagId && canEditMembers" :disabled="!selectedKeys.length" @click="removeSelected">
-          移出标签
-        </a-button>
         <a-button v-if="selectedTagId && canEditMembers" :disabled="!selectedKeys.length" @click="restoreSelected">
           恢复为有效
         </a-button>
+        <a-button v-if="selectedTagId && canEditMembers" status="danger" :disabled="!selectedKeys.length" @click="removeSelected">
+          移出标签
+        </a-button>
         <a-button v-if="!selectedTagId" type="primary" status="success" @click="openSubjectCreate">
           <template #icon><icon-plus /></template>
-          新增对象
+          新建对象
         </a-button>
         <a-button v-if="!selectedTagId && selectedKeys.length" :disabled="!manualTags.length" @click="openSelectedAdd">
           加入标签
@@ -100,7 +96,7 @@
           </template>
         </a-table-column>
         <a-table-column v-if="selectedTagId" title="失效时间" :width="180">
-          <template #cell="{ record }">{{ formatTime(record.inactive_at) }}</template>
+          <template #cell="{ record }">{{ formatTime(record.inactive_at, displayZone) }}</template>
         </a-table-column>
         <a-table-column v-if="!selectedTagId" title="状态" :width="90">
           <template #cell="{ record }">
@@ -142,7 +138,7 @@
     <a-modal
       v-model:visible="subjectVisible"
       width="640px"
-      :title="subjectEditing ? '编辑数据对象' : '新增数据对象'"
+      :title="subjectEditing ? '编辑数据对象' : '新建数据对象'"
       @before-ok="submitSubject"
     >
       <a-form :model="subjectForm" auto-label-width>
@@ -172,6 +168,8 @@ import { createSubmitScope } from "@/utils/submit-scope";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import { computed, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
+import { confirmRemoveMembers } from "./member-actions";
+import { useSpaceStore } from "@/store/modules/space";
 import {
   addTagMembers,
   listTagMembers,
@@ -183,8 +181,13 @@ import {
 import type { Subject, Tag, TagMember } from "@/api/storage/types";
 import { mergeAttributes, subjectCurrency, subjectMarket, subjectType, tagSource } from "@/views/data/shared/catalog-attributes";
 import { applyPageResult, defaultPagination, formatTime, statusColor, statusLabel } from "@/views/data/shared/metadata-utils";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
 
+// 页面时间按当前空间登记的时区显示
+const displayZone = useDisplayZone();
 const props = defineProps<{ spaceId: string; initialTagId?: string }>();
+// 所选标签写进页面 URL（?tag=），由父页面同步
+const emit = defineEmits<{ tagChange: [tagId: string] }>();
 
 const tags = ref<Tag[]>([]);
 const rows = ref<TagMember[]>([]);
@@ -249,9 +252,15 @@ function emptySubject(): SubjectFormState {
     name: "",
     market: "",
     currency: "",
-    timezone: "Asia/Shanghai",
+    // 标的默认用所在空间登记的时区
+    timezone: spaceZone(),
     status: "active"
   };
+}
+
+/** 当前标签页所属空间登记的时区，没有时用 UTC。 */
+function spaceZone(): string {
+  return useSpaceStore().spaces.find(item => item.space_id === props.spaceId)?.timezone || "UTC";
 }
 
 function toSubjectPayload(spaceId: string): Subject {
@@ -308,6 +317,7 @@ async function load() {
 async function onTagChange(key: string | number) {
   const tagId = String(key);
   selectedTagId.value = tagId === ALL_TAG_KEY ? "" : tagId;
+  emit("tagChange", selectedTagId.value);
   statusFilter.value = "";
   pagination.current = 1;
   await reload();
@@ -365,12 +375,16 @@ function parseIds(value: string) {
   ];
 }
 
-async function removeSelected() {
+function removeSelected() {
   const ids = selectedSubjectIds();
-  if (!selectedTagId.value || !ids.length) return;
-  await removeTagMembers(props.spaceId, selectedTagId.value, ids);
-  Message.success("已移出标签");
-  await load();
+  const tagId = selectedTagId.value;
+  const spaceId = props.spaceId;
+  if (!tagId || !ids.length) return;
+  confirmRemoveMembers(
+    ids.length,
+    () => removeTagMembers(spaceId, tagId, ids),
+    () => void load()
+  );
 }
 
 async function restoreSelected() {
@@ -421,7 +435,7 @@ function openSubjectEdit(subject: Subject) {
     subject_type: subjectType(subject),
     market: subjectMarket(subject),
     currency: subjectCurrency(subject),
-    timezone: subject.timezone || "Asia/Shanghai"
+    timezone: subject.timezone || spaceZone()
   });
   subjectVisible.value = true;
 }
@@ -459,7 +473,8 @@ function onPageSizeChange(pageSize: number) {
 watch(
   () => props.initialTagId,
   value => {
-    if (value !== undefined) {
+    // 自己切标签时父页面会把同一个值写回来，不再重读一遍
+    if (value !== undefined && value !== selectedTagId.value) {
       selectedTagId.value = value;
       statusFilter.value = "";
       pagination.current = 1;

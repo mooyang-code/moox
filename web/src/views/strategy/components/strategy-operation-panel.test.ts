@@ -62,4 +62,21 @@ describe("strategy instance controls", () => {
     await wrapper.find("button").trigger("click");
     expect(confirm).not.toHaveBeenCalled();
   });
+
+  it("绑了组合账户的实例启用时用写明账户和环境的确认框，停用仍走通用确认", async () => {
+    const open = vi.fn();
+    const withDialog = { ...stubs, InstanceEnableDialog: { template: "<div />", methods: { open } } };
+    const props = { instanceId: "i-1", enabled: false, logicalAccountId: "la-1", factorTasks: { crypto: "t1" } };
+    const wrapper = mount(StrategyOperationPanel, { props, global: { stubs: withDialog } });
+    await wrapper.find("button").trigger("click");
+    expect(open).toHaveBeenCalledWith(
+      { instance_id: "i-1", logical_account_id: "la-1", factor_tasks: { crypto: "t1" } },
+      expect.any(Object)
+    );
+    expect(confirm).not.toHaveBeenCalled();
+    await wrapper.setProps({ enabled: true });
+    await wrapper.find("button").trigger("click");
+    expect(confirm).toHaveBeenCalledTimes(1);
+    expect(open).toHaveBeenCalledTimes(1);
+  });
 });

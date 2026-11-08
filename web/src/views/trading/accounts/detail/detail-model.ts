@@ -30,7 +30,8 @@ export interface MemberTotals {
 
 /** 启用成员的资金合计。没有任何成员给出权益时，权益和可用资金为 null。 */
 export function memberTotals(accounts: readonly TradingAccount[]): MemberTotals {
-  const withSnapshot = accounts.filter(item => item.snapshot);
+  // 后端总会带 snapshot，首次同步前里面的权益是空串：这种按没读到算，不能当成 0
+  const withSnapshot = accounts.filter(item => item.snapshot?.equity);
   return {
     equity: withSnapshot.length ? withSnapshot.reduce((sum, item) => sum + num(item.snapshot?.equity), 0) : null,
     available: withSnapshot.length ? withSnapshot.reduce((sum, item) => sum + num(item.snapshot?.available_funds), 0) : null,
@@ -43,6 +44,11 @@ export function memberTotals(accounts: readonly TradingAccount[]): MemberTotals 
 export function paperInitialBalance(accounts: readonly TradingAccount[]): number | null {
   const paper = accounts.filter(item => item.paper);
   return paper.length ? paper.reduce((sum, item) => sum + num(item.paper?.initial_balance), 0) : null;
+}
+
+/** 较初始资金的变化：还没读到权益（首次同步前）时为 null，不能把权益当 0 算成 −100%。 */
+export function equityChangeOf(equity: number | null, initial: number | null): number | null {
+  return equity === null || !initial ? null : equity - initial;
 }
 
 /** 清仓预览：要平掉的持仓个数和价值（永续取标记价，现货取估值）。accountId 为空表示整个组合。 */
@@ -70,7 +76,35 @@ export function isFlattenRunning(action: OperatorAction | null): boolean {
 
 export const actionTypeLabels: Record<string, string> = {
   FLATTEN: "清仓",
+  REDUCE: "减仓",
+  DELIST_FLATTEN: "下架清仓",
   MANUAL_ORDER: "接管并下单",
   SUBMIT_ORDER: "下单",
   CANCEL_ORDER: "撤单"
 };
+
+/** 刷新页面后接回跟踪：最近的人工操作里还在进行中的那一个（记录按时间倒序）。 */
+export function runningAction(actions: OperatorAction[] | undefined): OperatorAction | null {
+  return (actions || []).find(action => action.status === "RUNNING") ?? null;
+}
+
+/** 订单状态的配色：订单列表和订单详情共用。 */
+export function orderStateTone(state: string): "ok" | "bad" | "warn" | "run" | "" {
+  switch (state) {
+    case "FILLED":
+      return "ok";
+    case "REJECTED":
+    case "EXPIRED":
+      return "bad";
+    case "PARTIALLY_FILLED":
+    case "CANCELING":
+    case "SUBMIT_UNKNOWN":
+    case "CANCEL_UNKNOWN":
+      return "warn";
+    case "CANCELED":
+    case "PARTIALLY_CANCELED":
+      return "";
+    default:
+      return "run";
+  }
+}

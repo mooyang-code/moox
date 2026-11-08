@@ -1,4 +1,5 @@
 import axios from "axios";
+import type { AxiosRequestConfig } from "axios";
 import { Message } from "@arco-design/web-vue";
 import { gatewayOrigin } from "@/api/gateway";
 import { isRetInfoSuccess } from "../ret-info";
@@ -60,15 +61,15 @@ function invalidateStorageReadCache(): void {
   storageReadGeneration += 1;
 }
 
-function assertSuccess(retInfo?: RetInfo) {
+function assertSuccess(retInfo: RetInfo | undefined, silent: boolean) {
   if (!retInfo) {
     const error = new Error("Storage 响应缺少 ret_info");
-    Message.error(error.message);
+    if (!silent) Message.error(error.message);
     throw error;
   }
   if (!isRetInfoSuccess(retInfo.code)) {
     const error = new Error(retInfo.msg || `Storage 请求失败: ${retInfo.code}`);
-    Message.error(error.message);
+    if (!silent) Message.error(error.message);
     throw error;
   }
 }
@@ -76,6 +77,8 @@ function assertSuccess(retInfo?: RetInfo) {
 /** 调用选项：spaceId 显式指定请求所属空间（X-Space-Id），用于读取当前所选空间以外的元数据。 */
 export interface StorageCallOptions {
   spaceId?: string;
+  /** 为 true 时失败不弹全局提示，由调用方自己显示（后台读取、可有可无的附加信息）。 */
+  silentError?: boolean;
 }
 
 async function callStorage<TReq extends object, TRsp extends { ret_info: RetInfo }>(
@@ -105,11 +108,15 @@ async function callStorage<TReq extends object, TRsp extends { ret_info: RetInfo
     const url = `/api/admin/storage/${method}`;
     const body = { auth_info: getStorageAuthInfo(), ...req };
     // 显式空间的请求带上自己的 X-Space-Id，签名客户端不再注入当前所选空间。
-    const rsp = options.spaceId
-      ? await storageClient.post<TRsp>(url, body, { headers: { "X-Space-Id": options.spaceId } })
+    const silentError = Boolean(options.silentError);
+    const config: AxiosRequestConfig = {};
+    if (options.spaceId) config.headers = { "X-Space-Id": options.spaceId };
+    if (silentError) config.silentError = true;
+    const rsp = Object.keys(config).length
+      ? await storageClient.post<TRsp>(url, body, config)
       : await storageClient.post<TRsp>(url, body);
     try {
-      assertSuccess(rsp.data.ret_info);
+      assertSuccess(rsp.data.ret_info, silentError);
     } catch (error) {
       // DeleteTag returns the blocking dataset references alongside ret_info.
       if (method === "DeleteTag" && error instanceof Error) {
@@ -157,7 +164,9 @@ storageClient.interceptors.response.use(
   },
   error => {
     if (error instanceof StaleSpaceRequestError) return Promise.reject(error);
-    Message.error(explainTransportError(error, "Storage 请求失败"));
+    // 静默时也要把网络错误改写成中文（页面会把 error.message 显示在自己的错误条里），只是不弹全局提示。
+    const message = explainTransportError(error, "Storage 请求失败");
+    if (!error?.config?.silentError) Message.error(message);
     return Promise.reject(error);
   }
 );

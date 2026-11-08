@@ -160,11 +160,10 @@ describe("overview model", () => {
     const [card] = taskCards([value], label);
     expect(card.title).toBe("现货K线 · 1m");
     expect(card.health.key).toBe("ok");
-    expect(card.chips.map(chip => [chip.factorId, chip.label])).toEqual([
-      ["A", "正常"],
-      ["B", "降级 · 2 个对象失败"],
-      ["C", "已跳过"],
-      ["D", "已停用"]
+    expect(card.summary).toBe("正常 1 · 降级 1 · 已跳过 1 · 已停用 1");
+    expect(card.abnormal).toEqual([
+      { factorId: "B", text: "降级 · 2 个对象失败" },
+      { factorId: "C", text: "已跳过" }
     ]);
   });
 
@@ -247,9 +246,11 @@ describe("overview page contract", () => {
     }
   });
 
-  it("fans out recalc queries per enabled set and polls through usePolling", () => {
+  it("fans out recalc queries per enabled set and polls them in the same round as useFactorScope", () => {
     expect(page).toContain("listRecalcJobs");
     expect(page).toContain("recalcQueryTasks");
-    expect(page).toContain("usePolling");
+    // 只有 useFactorScope 一个 10 秒轮询，补算作业并进同一轮
+    expect(page).toContain("extraPoll: () => loadJobs(true)");
+    expect(page).not.toContain("usePolling(");
   });
 });
