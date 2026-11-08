@@ -8,6 +8,7 @@ import { resultsLink, type StrategyLink } from "@/views/strategy/links";
 import { percent, rankTargets, targetStateTag } from "@/views/strategy/model";
 import { pendingItems, stateOf } from "@/views/strategy/overview/overview-model";
 import { sortInstancesForResults } from "@/views/strategy/results/results-model";
+import { marketTime } from "@/utils/time-zone";
 
 /** 首页统一的状态色：正常、需要关注、异常、无观测。 */
 export type Tone = "ok" | "warn" | "bad" | "idle";
@@ -58,40 +59,17 @@ export function toMillis(value?: string | number | null): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-/** 相对时间：刚刚、N 分钟前、N 小时前、N 天前。 */
-export function relativeTime(value: string | number | null | undefined, nowMs: number): string {
+/** 相对时间：刚刚、N 分钟前、N 小时前、N 天前；晚于现在（时钟偏差）时写 zone 下的绝对时间。 */
+export function relativeTime(value: string | number | null | undefined, nowMs: number, zone = "UTC"): string {
   const at = toMillis(value);
   if (at === null) return "—";
   const diff = Math.round((nowMs - at) / 1000);
-  if (diff < 0) return shortTime(value, nowMs);
+  if (diff < 0) return marketTime(at, zone, nowMs);
   if (diff < 5) return "刚刚";
   if (diff < 60) return `${diff} 秒前`;
   if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前`;
   if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前`;
   return `${Math.floor(diff / 86400)} 天前`;
-}
-
-/** 短时间：当天只写时分，其他日期写月-日 时分。 */
-export function shortTime(value: string | number | null | undefined, nowMs: number): string {
-  const at = toMillis(value);
-  if (at === null) return "—";
-  const date = new Date(at);
-  const now = new Date(nowMs);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  const time = `${pad(date.getHours())}:${pad(date.getMinutes())}`;
-  return date.toDateString() === now.toDateString() ? time : `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${time}`;
-}
-
-/** 精确到秒的时间：当天只写时分秒，其他日期写月-日 时分秒（本地时区）。 */
-export function clockTime(value: string | number | null | undefined, nowMs: number): string {
-  const at = toMillis(value);
-  if (at === null) return "—";
-  const date = new Date(at);
-  const pad = (n: number) => String(n).padStart(2, "0");
-  const time = `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
-  return date.toDateString() === new Date(nowMs).toDateString()
-    ? time
-    : `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${time}`;
 }
 
 /** 把文本里的数据集 / View 内部 ID 换成名称（名称未知时保留原 ID）。 */
@@ -194,7 +172,8 @@ export interface FactorRow {
 const FACTOR_TONE: Record<string, Tone> = { ok: "ok", lagging: "warn", degraded: "warn", failed: "bad" };
 
 /** 因子计算任务：任务名（没有时用数据集名称）· 频率、启用因子数、最近周期与滞后。 */
-export function factorRows(sets: FactorTaskInfo[], spaceId: string, names: NameBook, nowMs: number): FactorRow[] {
+/** zone 是当前空间的时区，最近周期按它显示。 */
+export function factorRows(sets: FactorTaskInfo[], spaceId: string, names: NameBook, nowMs: number, zone: string): FactorRow[] {
   return sets
     .filter(info => info.factor_task.space_id === spaceId)
     .map(info => {
@@ -209,7 +188,7 @@ export function factorRows(sets: FactorTaskInfo[], spaceId: string, names: NameB
         factors: (info.members || []).filter(member => member.status === "enabled").length,
         health,
         tone: FACTOR_TONE[health.key] || "idle",
-        lastPeriod: info.last_run?.last_period_time ? shortTime(info.last_run.last_period_time, nowMs) : "—",
+        lastPeriod: periodOpenMs === null ? "—" : marketTime(periodOpenMs, zone, nowMs),
         lag: behindSeconds === null ? "—" : behindText(behindSeconds),
         behindSeconds,
         periodEndMs,
@@ -434,12 +413,13 @@ function compactTitle(title: string): string {
   return title.replace(/，将于 \d{4}-(\d{2}-\d{2} \d{2}:\d{2}) 生效/, "，$1 生效");
 }
 
-export function activityRows(items: ActivityLogItem[], names: NameBook, nowMs: number): ActivityRow[] {
+/** zone 是当前空间的时区。 */
+export function activityRows(items: ActivityLogItem[], names: NameBook, nowMs: number, zone: string): ActivityRow[] {
   return items
     .filter(item => !isNoChange(item))
     .map((item, index) => ({
       key: String(item.id ?? index),
-      when: shortTime(item.created_at, nowMs),
+      when: marketTime(toMillis(item.created_at), zone, nowMs),
       category: CATEGORY_LABELS[item.category || ""] || item.category || item.source || "",
       title: compactTitle(prettifyIds(item.title || "", names)),
       tone: item.level === "error" ? "bad" : item.level === "warning" ? "warn" : "idle"
@@ -589,8 +569,8 @@ function dataFact(freshness: FreshnessRow[]): FactCandidate | undefined {
 }
 
 /** Banner 与指标卡里的时间：写最近一根已收盘 K 线的收盘时间，精确到秒；由人对照当前时间判断是否异常，异常的换色。 */
-function closeClock(fact: FactCandidate | undefined, nowMs: number): string {
-  return fact ? clockTime(fact.atMs / 1000, nowMs) : "—";
+function closeClock(fact: FactCandidate | undefined, nowMs: number, zone: string): string {
+  return fact ? marketTime(fact.atMs, zone, nowMs, { seconds: true }) : "—";
 }
 
 /** Banner 里的三项：策略最近一期、因子计算、数据新鲜度都写具体的收盘时间；没有观测时写“—”。 */
@@ -599,6 +579,8 @@ export function bannerFacts(input: {
   factors: FactorRow[];
   freshness: FreshnessRow[];
   nowMs: number;
+  /** 当前空间的时区：收盘时间按它显示 */
+  zone: string;
 }): BannerFact[] {
   const strategy = pickFact(
     input.strategies
@@ -611,21 +593,21 @@ export function bannerFacts(input: {
     {
       key: "strategy",
       label: "策略最近一期",
-      value: closeClock(strategy, input.nowMs),
+      value: closeClock(strategy, input.nowMs, input.zone),
       tone: strategy ? strategy.tone : "idle",
       hint: "已启用实例最近一份目标所属 K 线的收盘时间；有异常实例时显示异常的那一个"
     },
     {
       key: "factor",
       label: "因子计算",
-      value: closeClock(factor, input.nowMs),
+      value: closeClock(factor, input.nowMs, input.zone),
       tone: factor ? factor.tone : "idle",
       hint: "因子任务最近一个已计算周期的收盘时间；有滞后的任务时显示落后最多的那一个"
     },
     {
       key: "data",
       label: "数据新鲜度",
-      value: closeClock(data, input.nowMs),
+      value: closeClock(data, input.nowMs, input.zone),
       tone: data ? data.tone : "idle",
       hint: "数据链路已写到的最近一根 K 线的收盘时间；有落后的数据集时显示落后最多的那一个"
     }
@@ -655,6 +637,8 @@ export function kpiCards(input: {
   alertCount: number | undefined;
   monitorError: string;
   nowMs: number;
+  /** 当前空间的时区：收盘时间按它显示 */
+  zone: string;
 }): KpiCard[] {
   const enabled = input.strategies.filter(row => row.enabled);
   const valid = enabled.filter(row => row.tone === "ok").length;
@@ -666,8 +650,8 @@ export function kpiCards(input: {
   const fresh = observed.filter(row => row.tone === "ok").length;
   const stale = observed.filter(row => row.tone === "warn" || row.tone === "bad").length;
   const monitorDown = Boolean(input.monitorError);
-  const factorTime = closeClock(factorFact(input.factors), input.nowMs);
-  const dataTime = closeClock(dataFact(input.freshness), input.nowMs);
+  const factorTime = closeClock(factorFact(input.factors), input.nowMs, input.zone);
+  const dataTime = closeClock(dataFact(input.freshness), input.nowMs, input.zone);
   return [
     {
       key: "strategy",

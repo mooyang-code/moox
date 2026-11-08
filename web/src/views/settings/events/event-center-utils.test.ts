@@ -20,9 +20,7 @@ import {
   describeScope,
   eventTitle,
   formatDuration,
-  formatMs,
   isPastDelistTime,
-  pickerValueToMs,
   notifyUrlError,
   prettyPayload,
   roundText,
@@ -120,8 +118,6 @@ describe("事件中心的文案", () => {
   });
 
   it("时间和耗时", () => {
-    expect(formatMs(0)).toBe("-");
-    expect(formatMs(new Date(2026, 10, 4, 8, 5, 9).getTime())).toBe("2026-11-04 08:05:09");
     expect(formatDuration(0)).toBe("-");
     expect(formatDuration(250)).toBe("250 毫秒");
     expect(formatDuration(1500)).toBe("1.50 秒");
@@ -268,7 +264,7 @@ describe("手工登记下架", () => {
     });
     expect(delistSnapshot({ ...form, delist_at: 500 }, 1000)).toMatchObject({ snapshot: { past: true } });
     expect(delistSnapshot({ ...form, exchange_symbol: " " }, 1000)).toEqual({ error: "请填写交易所代码" });
-    expect(delistSnapshot({ ...form, delist_at: "" }, 1000)).toEqual({ error: "请选择下架时间" });
+    expect(delistSnapshot({ ...form, delist_at: null }, 1000)).toEqual({ error: "请选择下架时间" });
   });
 
   it("不在第一页、本页读回来为空时跳到现在的最后一页", () => {
@@ -297,12 +293,8 @@ describe("手工登记下架", () => {
     expect(PAPER_ONLY_NOTE).toContain("直到这条演练记录结束");
   });
 
-  it("日期选择器按时间戳取值，兼容字符串，没选时是 0", () => {
-    expect(pickerValueToMs(1_700_000_000_000)).toBe(1_700_000_000_000);
-    expect(pickerValueToMs("2026-11-07T08:00:00Z")).toBe(Date.parse("2026-11-07T08:00:00Z"));
-    expect(pickerValueToMs("")).toBe(0);
-    expect(pickerValueToMs(null)).toBe(0);
-    expect(pickerValueToMs("不是时间")).toBe(0);
+  it("下架时间的说明写明按 UTC 填", () => {
+    expect(DELIST_TIME_HINT).toContain("按 UTC 填写");
   });
 
   it("限定范围比较不看先后，空字段等于不限", () => {

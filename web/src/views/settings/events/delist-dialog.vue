@@ -34,13 +34,7 @@
           <a-input v-model="form.exchange_symbol" placeholder="例如：FOOUSDT（币安）或 FOO-USDT-SWAP（OKX）" />
         </a-form-item>
         <a-form-item field="delist_at" label="下架时间" required>
-          <a-date-picker
-            v-model="form.delist_at"
-            show-time
-            value-format="timestamp"
-            format="YYYY-MM-DD HH:mm:ss"
-            style="width: 100%"
-          />
+          <ZonedDatePicker v-model="form.delist_at" zone="UTC" style="width: 100%" />
           <template #extra>{{ DELIST_TIME_HINT }}</template>
         </a-form-item>
         <a-form-item field="paper_only" label="仅模拟盘">
@@ -122,6 +116,9 @@
 </template>
 
 <script setup lang="ts">
+// 事件中心和空间无关，时间都按 UTC 显示
+import { formatInstant } from "@/utils/time-zone";
+import ZonedDatePicker from "@/components/zoned-date-picker/zoned-date-picker.vue";
 import { computed, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import {
@@ -142,7 +139,6 @@ import {
   confirmCheckboxText,
   createLatestGuard,
   delistSnapshot,
-  formatMs,
   holderLine,
   pastTimeNote,
   requestErrorText,
@@ -161,7 +157,8 @@ const form = reactive({
   exchange: "binance" as DelistExchange,
   market: "SPOT" as DelistMarket,
   exchange_symbol: "",
-  delist_at: "" as string | number,
+  // 毫秒时刻，按 UTC 选择
+  delist_at: null as number | null,
   paper_only: false
 });
 const phase = ref<"form" | "confirm">("form");
@@ -202,7 +199,7 @@ const summaryTitle = computed(() => {
   if (!value) return "";
   const exchange = DELIST_EXCHANGES.find(item => item.value === value.exchange)?.label ?? value.exchange;
   const market = DELIST_MARKETS.find(item => item.value === value.market)?.label ?? value.market;
-  return `${exchange} ${market} ${value.exchange_symbol}，下架时间 ${formatMs(value.delist_at_ms)}`;
+  return `${exchange} ${market} ${value.exchange_symbol}，下架时间 ${formatInstant(value.delist_at_ms, "UTC")}`;
 });
 
 const holderKey = (holder: InstrumentHolder) => `${holder.space_id}/${holder.logical_account_id}/${holder.trading_account_id}`;
@@ -224,7 +221,7 @@ watch(
     // 关掉或重新打开都换号：上一次没回来的预览响应不会再写进来。
     previewGuard.reset();
     if (!visible) return;
-    Object.assign(form, { exchange: "binance", market: "SPOT", exchange_symbol: "", delist_at: "", paper_only: false });
+    Object.assign(form, { exchange: "binance", market: "SPOT", exchange_symbol: "", delist_at: null, paper_only: false });
     phase.value = "form";
     previewing.value = false;
     submitting.value = false;

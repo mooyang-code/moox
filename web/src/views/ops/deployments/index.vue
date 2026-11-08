@@ -48,7 +48,7 @@
                 syncFor(group.host.host_id).label
               }}
               <span v-if="syncFor(group.host.host_id).pendingSince"
-                >（自 {{ formatCheckedAt(syncFor(group.host.host_id).pendingSince) }}）</span
+                >（自 {{ formatInstant(syncFor(group.host.host_id).pendingSince, displayZone) }}）</span
               >
               <span v-else-if="syncFor(group.host.host_id).label === '待同步'">（起点尚未观测）</span>
               · 组件：{{
@@ -95,7 +95,9 @@
                     <td>
                       <div v-for="instance in row.health?.instances || []" :key="`${instance.instance_id}/${instance.boot_id}`">
                         <span>{{ instance.instance_id }} · {{ instance.version || "版本未知" }}</span
-                        ><small>{{ statusLabel(instance.status) }} · {{ formatCheckedAt(instance.last_reported_at) }}</small>
+                        ><small
+                          >{{ statusLabel(instance.status) }} · {{ formatInstant(instance.last_reported_at, displayZone) }}</small
+                        >
                       </div>
                       <span v-if="!row.health?.instances?.length" class="muted">暂无上报</span>
                     </td>
@@ -140,10 +142,10 @@
           </div>
           <div v-if="currentRoutes" class="snapshot-summary">
             <p>
-              快照格式 v{{ currentRoutes.snapshot_schema_version }} · 本次编译 {{ formatCheckedAt(currentRoutes.compiled_at) }} ·
-              {{ syncFor(selectedHostId).label
+              快照格式 v{{ currentRoutes.snapshot_schema_version }} · 本次编译
+              {{ formatInstant(currentRoutes.compiled_at, displayZone) }} · {{ syncFor(selectedHostId).label
               }}<span v-if="syncFor(selectedHostId).pendingSince"
-                >（自 {{ formatCheckedAt(syncFor(selectedHostId).pendingSince) }}）</span
+                >（自 {{ formatInstant(syncFor(selectedHostId).pendingSince, displayZone) }}）</span
               >
             </p>
             <p class="hashes">
@@ -205,7 +207,8 @@
         </template>
       </div>
       <small v-if="catalog" class="muted"
-        >组件目录 v{{ catalog.version }} · {{ catalogHash }} · Monitor {{ formatCheckedAt(overview?.generated_at) }}</small
+        >组件目录 v{{ catalog.version }} · {{ catalogHash }} · Monitor
+        {{ formatInstant(overview?.generated_at, displayZone) }}</small
       >
       <a-drawer v-model:visible="drawerVisible" :width="640" title="组件详情" :footer="false">
         <template v-if="detail">
@@ -235,7 +238,8 @@
             <dd>{{ statusLabel(detail.row.health?.probe?.status) }} / {{ statusLabel(detail.row.health?.reporter?.status) }}</dd>
             <dt>登记 / 更新</dt>
             <dd>
-              {{ formatCheckedAt(detail.row.deployment.created_at) }} / {{ formatCheckedAt(detail.row.deployment.updated_at) }}
+              {{ formatInstant(detail.row.deployment.created_at, displayZone) }} /
+              {{ formatInstant(detail.row.deployment.updated_at, displayZone) }}
             </dd>
           </dl>
           <section v-if="detail.row.health?.probe?.raw_error">
@@ -256,7 +260,7 @@
           <h4>上报实例</h4>
           <p v-for="instance in detail.row.health?.instances || []" :key="`${instance.instance_id}/${instance.boot_id}`">
             {{ instance.instance_id }} · {{ instance.boot_id }} · {{ instance.version || "版本未知" }} ·
-            {{ statusLabel(instance.status) }} · {{ formatCheckedAt(instance.last_reported_at) }}
+            {{ statusLabel(instance.status) }} · {{ formatInstant(instance.last_reported_at, displayZone) }}
           </p>
           <p v-if="!detail.row.health?.instances?.length" class="muted">暂无上报</p>
         </template>
@@ -268,10 +272,15 @@
 import { computed, ref, watch } from "vue";
 import PageTitleTabs from "@/components/page-title-tabs/index.vue";
 import RawError from "@/views/ops/monitor/raw-error.vue";
-import { formatCheckedAt, statusColor, statusLabel } from "@/views/ops/monitor/health-display";
+import { statusColor, statusLabel } from "@/views/ops/monitor/health-display";
 import { componentPorts, gatewayLabel, groupRoutes, routeSync } from "./model";
 import TopologyView from "./topology-view.vue";
 import { useDeployments } from "./use-deployments";
+import { formatInstant } from "@/utils/time-zone";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
+// 页面时间按 UTC显示
+const displayZone = useDisplayZone("global");
+
 defineOptions({ name: "OpsDeployments" });
 const tabs = [
   { key: "services", label: "服务" },

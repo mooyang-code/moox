@@ -16,11 +16,11 @@
           </a-descriptions-item>
           <a-descriptions-item label="事件">{{ eventTitle(events, execution.event_name) }}</a-descriptions-item>
           <a-descriptions-item label="对象">{{ execution.subject_id }}</a-descriptions-item>
-          <a-descriptions-item label="事件发生时间">{{ formatMs(execution.occurred_at_ms) }}</a-descriptions-item>
-          <a-descriptions-item label="记录创建时间">{{ formatMs(execution.created_at_ms) }}</a-descriptions-item>
+          <a-descriptions-item label="事件发生时间">{{ formatInstant(execution.occurred_at_ms, "UTC") }}</a-descriptions-item>
+          <a-descriptions-item label="记录创建时间">{{ formatInstant(execution.created_at_ms, "UTC") }}</a-descriptions-item>
           <a-descriptions-item label="尝试次数">{{ execution.attempts }}</a-descriptions-item>
-          <a-descriptions-item label="下一次处理">{{ formatMs(execution.next_run_at_ms) }}</a-descriptions-item>
-          <a-descriptions-item label="结束时间">{{ formatMs(execution.finished_at_ms) }}</a-descriptions-item>
+          <a-descriptions-item label="下一次处理">{{ formatInstant(execution.next_run_at_ms, "UTC") }}</a-descriptions-item>
+          <a-descriptions-item label="结束时间">{{ formatInstant(execution.finished_at_ms, "UTC") }}</a-descriptions-item>
           <a-descriptions-item label="耗时">{{ formatDuration(execution.duration_ms) }}</a-descriptions-item>
           <a-descriptions-item v-if="execution.status === 'EXECUTION_STATUS_FAILED'" label="确认处理" :span="2">
             {{ execution.acknowledged ? "已确认处理，不再告警" : "还没确认，会一直告警" }}
@@ -47,7 +47,7 @@
             <template #columns>
               <a-table-column title="第几次" data-index="attempt" :width="80" />
               <a-table-column title="时间" :width="170">
-                <template #cell="{ record }">{{ formatMs(record.at_ms) }}</template>
+                <template #cell="{ record }">{{ formatInstant(record.at_ms, "UTC") }}</template>
               </a-table-column>
               <a-table-column title="状态码" :width="90">
                 <template #cell="{ record }">{{ record.http_status || "没有连上" }}</template>
@@ -95,7 +95,7 @@
                 <template #cell="{ record }">{{ record.error || record.result || "-" }}</template>
               </a-table-column>
               <a-table-column title="更新时间" :width="170">
-                <template #cell="{ record }">{{ formatMs(record.updated_at_ms) }}</template>
+                <template #cell="{ record }">{{ formatInstant(record.updated_at_ms, "UTC") }}</template>
               </a-table-column>
             </template>
           </a-table>
@@ -109,6 +109,8 @@
 </template>
 
 <script setup lang="ts">
+// 事件中心和空间无关，时间都按 UTC 显示
+import { formatInstant } from "@/utils/time-zone";
 import { computed, ref, watch } from "vue";
 import {
   getEventExecution,
@@ -129,7 +131,6 @@ import {
   executionStatusText,
   executionStatusTone,
   formatDuration,
-  formatMs,
   prettyPayload,
   roundText,
   stepStatusText,

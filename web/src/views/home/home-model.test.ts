@@ -7,7 +7,6 @@ import {
   activityRows,
   attentionItems,
   bannerFacts,
-  clockTime,
   factorRows,
   fold,
   freshnessRows,
@@ -17,7 +16,6 @@ import {
   prettifyIds,
   relativeTime,
   scopeOverviewToSpace,
-  shortTime,
   statusLine,
   strategyRows,
   systemStage,
@@ -35,7 +33,8 @@ const engineLag = (freq: string, openedSecondsAgo: number) => {
   return Math.max(0, Math.floor((openedSecondsAgo - grace) / period) - 1) * period;
 };
 
-const NOW = Date.parse("2026-10-13T10:00:00");
+// 夹具按 UTC 写，首页的空间磁贴在测试里也按 UTC 显示
+const NOW = Date.parse("2026-10-13T10:00:00Z");
 const names = { datasets: { dataset_abc: "现货K线" }, views: { view_xyz: "因子宽表" } };
 
 function instance(id: string, overrides: Partial<StrategyInstance> = {}): StrategyInstance {
@@ -82,9 +81,9 @@ describe("home formatting", () => {
     expect(relativeTime(new Date(NOW - 5 * 60_000).toISOString(), NOW)).toBe("5 分钟前");
     expect(relativeTime(new Date(NOW - 3 * 3600_000).toISOString(), NOW)).toBe("3 小时前");
     expect(relativeTime(undefined, NOW)).toBe("—");
-    expect(shortTime(new Date(NOW - 3600_000).toISOString(), NOW)).toBe("09:00");
-    expect(shortTime("2026-10-11T08:05:00", NOW)).toBe("10-11 08:05");
-    expect(shortTime(String(Math.floor((NOW - 60_000) / 1000)), NOW)).toBe("09:59");
+    // 晚于现在（时钟偏差）时写绝对时间，带时区后缀
+    expect(relativeTime(new Date(NOW + 60_000).toISOString(), NOW)).toBe("10:01 UTC");
+    expect(relativeTime(new Date(NOW + 60_000).toISOString(), NOW, "Asia/Shanghai")).toBe("18:01 UTC+8");
   });
 
   it("replaces internal dataset and view ids with names", () => {
@@ -156,12 +155,12 @@ describe("home data rows", () => {
       },
       { factor_task: { task_id: "c", space_id: "other", source_dataset_id: "x", freq: "1h", status: "enabled" }, members: [] }
     ] as unknown as FactorTaskInfo[];
-    const rows = factorRows(sets, "crypto", names, NOW);
+    const rows = factorRows(sets, "crypto", names, NOW, "UTC");
     expect(rows.map(row => [row.taskId, row.label, row.factors, row.health.label, row.tone])).toEqual([
       ["b", "现货K线 · 1m", 0, "失败", "bad"],
       ["a", "现货K线 · 1m", 2, "正常", "ok"]
     ]);
-    expect(rows[1].lastPeriod).toBe("09:59");
+    expect(rows[1].lastPeriod).toBe("09:59 UTC");
     expect(rows[1].lag).toBe("已追平");
     expect(rows[1].behindSeconds).toBe(0);
     expect(rows[0].behindSeconds).toBeGreaterThan(0);
@@ -210,7 +209,7 @@ describe("home data rows", () => {
           factors: 2,
           health: { key: "lagging", label: "滞后", color: "red" },
           tone: "warn",
-          lastPeriod: "09:00",
+          lastPeriod: "09:00 UTC",
           lag: "1 小时",
           path: "/factor"
         }
@@ -262,9 +261,10 @@ describe("home data rows", () => {
         }
       ],
       names,
-      NOW
+      NOW,
+      "UTC"
     );
-    expect(row).toMatchObject({ when: "09:00", category: "标的变更", title: "现货K线 1h：新增 1 个", tone: "idle" });
+    expect(row).toMatchObject({ when: "09:00 UTC", category: "标的变更", title: "现货K线 1h：新增 1 个", tone: "idle" });
   });
 
   it("states the overall situation in one line", () => {
@@ -360,13 +360,13 @@ describe("home tiles", () => {
       names,
       NOW
     );
-    const facts = bannerFacts({ strategies, factors, freshness, nowMs: NOW });
+    const facts = bannerFacts({ strategies, factors, freshness, nowMs: NOW, zone: "UTC" });
     expect(facts.map(fact => [fact.key, fact.value, fact.tone])).toEqual([
-      ["strategy", "09:58:00", "ok"],
-      ["factor", "09:59:00", "ok"],
-      ["data", "10-12 19:49:25", "warn"]
+      ["strategy", "09:58:00 UTC", "ok"],
+      ["factor", "09:59:00 UTC", "ok"],
+      ["data", "10-12 19:49:25 UTC", "warn"]
     ]);
-    expect(bannerFacts({ strategies: [], factors: [], freshness: [], nowMs: NOW }).map(fact => fact.value)).toEqual([
+    expect(bannerFacts({ strategies: [], factors: [], freshness: [], nowMs: NOW, zone: "UTC" }).map(fact => fact.value)).toEqual([
       "—",
       "—",
       "—"
@@ -374,11 +374,19 @@ describe("home tiles", () => {
   });
 
   it("writes the exact close time to the second and adds the date for older bars", () => {
-    const today = new Date(NOW - 125_000);
-    expect(clockTime(today.toISOString(), NOW)).toBe("09:57:55");
-    expect(clockTime(String(Math.floor((NOW - 86_400_000 - 3_600_000) / 1000)), NOW)).toBe("10-12 09:00:00");
-    expect(clockTime(null, NOW)).toBe("—");
-    expect(clockTime("bad", NOW)).toBe("—");
+    const strategy = (bar: string) =>
+      strategyRows(
+        [instance("a")],
+        { a: { ...snapshot(new Date(NOW + 60_000).toISOString(), { "BTC-USDT": "0.1" }), bar_end_time: bar } },
+        [],
+        NOW
+      );
+    const value = (bar: string, zone: string) =>
+      bannerFacts({ strategies: strategy(bar), factors: [], freshness: [], nowMs: NOW, zone })[0].value;
+    expect(value(new Date(NOW - 125_000).toISOString(), "UTC")).toBe("09:57:55 UTC");
+    expect(value(new Date(NOW - 86_400_000 - 3_600_000).toISOString(), "UTC")).toBe("10-12 09:00:00 UTC");
+    // 同一时刻在 UTC+8 已经是当天 17:57:55
+    expect(value(new Date(NOW - 125_000).toISOString(), "Asia/Shanghai")).toBe("17:57:55 UTC+8");
   });
 
   it("marks an expired strategy and shows its bar even when another instance is fresher", () => {
@@ -387,11 +395,11 @@ describe("home tiles", () => {
     const fresh = { ...snapshot(valid, { "BTC-USDT": "0.2" }), bar_end_time: new Date(NOW - 60_000).toISOString() };
     const stale = { ...snapshot(expired, { "BTC-USDT": "0.2" }), bar_end_time: new Date(NOW - 3_600_000).toISOString() };
     const strategies = strategyRows([instance("a"), instance("b")], { a: fresh, b: stale }, catalog, NOW);
-    const facts = bannerFacts({ strategies, factors: [], freshness: [], nowMs: NOW });
-    expect(facts[0]).toMatchObject({ key: "strategy", value: "09:00:00", tone: "warn" });
+    const facts = bannerFacts({ strategies, factors: [], freshness: [], nowMs: NOW, zone: "UTC" });
+    expect(facts[0]).toMatchObject({ key: "strategy", value: "09:00:00 UTC", tone: "warn" });
     const healthy = strategyRows([instance("a")], { a: fresh }, catalog, NOW);
-    expect(bannerFacts({ strategies: healthy, factors: [], freshness: [], nowMs: NOW })[0]).toMatchObject({
-      value: "09:59:00",
+    expect(bannerFacts({ strategies: healthy, factors: [], freshness: [], nowMs: NOW, zone: "UTC" })[0]).toMatchObject({
+      value: "09:59:00 UTC",
       tone: "ok"
     });
   });
@@ -410,16 +418,16 @@ describe("home tiles", () => {
     const facts = (sets: unknown[]) =>
       bannerFacts({
         strategies: [],
-        factors: factorRows(sets as FactorTaskInfo[], "crypto", names, NOW),
+        factors: factorRows(sets as FactorTaskInfo[], "crypto", names, NOW, "UTC"),
         freshness: [],
         nowMs: NOW
       })[1];
     // 1m 刚追平（09:58 开盘，09:59:00 收盘）；1h 的上一期是 08:00 开盘、09:00:00 收盘，也已追平：都正常时取最新的收盘时间。
-    expect(facts([set("a", "1m", 120), set("h", "1h", 7200)])).toMatchObject({ value: "09:59:00", tone: "ok" });
+    expect(facts([set("a", "1m", 120), set("h", "1h", 7200)])).toMatchObject({ value: "09:59:00 UTC", tone: "ok" });
     // 1m 已经 30 分钟没有产出：滞后的那个任务优先，时间是它自己的收盘时间。
-    expect(facts([set("a", "1m", 120), set("b", "1m", 1860)])).toMatchObject({ value: "09:30:00", tone: "warn" });
+    expect(facts([set("a", "1m", 120), set("b", "1m", 1860)])).toMatchObject({ value: "09:30:00 UTC", tone: "warn" });
     // 失败的任务比滞后的更靠前，并标红。
-    expect(facts([set("a", "1m", 1860), set("f", "1m", 300, "failed")])).toMatchObject({ value: "09:56:00", tone: "bad" });
+    expect(facts([set("a", "1m", 1860), set("f", "1m", 300, "failed")])).toMatchObject({ value: "09:56:00 UTC", tone: "bad" });
   });
 
   it("builds four stable KPI cards", () => {
@@ -466,12 +474,13 @@ describe("home tiles", () => {
       freshness,
       alertCount: 0,
       monitorError: "",
-      nowMs: NOW
+      nowMs: NOW,
+      zone: "UTC"
     });
     expect(cards.map(card => [card.key, card.value, card.unit, card.note, card.tone])).toEqual([
       ["strategy", "1", " / 1 有效", "2 个标的 · 40% 仓位", "ok"],
       ["factor", "0", " 个任务", "0 个因子 · 收盘 —", "idle"],
-      ["freshness", "1", " / 2 正常", "1 条落后 · 收盘 09:46:00", "warn"],
+      ["freshness", "1", " / 2 正常", "1 条落后 · 收盘 09:46:00 UTC", "warn"],
       ["alerts", "0", "", "组件、数据与主机", "idle"]
     ]);
   });
@@ -491,7 +500,7 @@ describe("home tiles", () => {
       kpiCards({
         strategies: [],
         strategyLoaded: true,
-        factors: factorRows(sets as FactorTaskInfo[], "crypto", names, NOW),
+        factors: factorRows(sets as FactorTaskInfo[], "crypto", names, NOW, "UTC"),
         factorLoaded: true,
         freshness: freshnessRows(
           { generated_at: new Date(NOW).toISOString(), pipeline: [{ name: "存储", datasets }] } as never,
@@ -500,7 +509,8 @@ describe("home tiles", () => {
         ),
         alertCount: 0,
         monitorError: "",
-        nowMs: NOW
+        nowMs: NOW,
+        zone: "UTC"
       });
     const at = (secondsAgo: number) => new Date(NOW - secondsAgo * 1000).toISOString();
     const healthy = cardsOf(
@@ -516,8 +526,8 @@ describe("home tiles", () => {
         }
       ]
     );
-    expect(healthy[1]).toMatchObject({ note: "2 个因子 · 收盘 09:59:00", tone: "ok" });
-    expect(healthy[2]).toMatchObject({ note: "收盘 09:59:00", tone: "ok" });
+    expect(healthy[1]).toMatchObject({ note: "2 个因子 · 收盘 09:59:00 UTC", tone: "ok" });
+    expect(healthy[2]).toMatchObject({ note: "收盘 09:59:00 UTC", tone: "ok" });
     const bad = cardsOf(
       [set("a", 120), set("b", 1860, "failed")],
       [
@@ -542,8 +552,8 @@ describe("home tiles", () => {
       ]
     );
     // 异常的任务 / 数据集排在前面：卡片上的时间就是它们自己的收盘时间，不会被正常的覆盖。
-    expect(bad[1]).toMatchObject({ note: "1 个异常 · 收盘 09:30:00", tone: "warn" });
-    expect(bad[2]).toMatchObject({ note: "1 条落后 · 收盘 08:01:00", tone: "warn" });
+    expect(bad[1]).toMatchObject({ note: "1 个异常 · 收盘 09:30:00 UTC", tone: "warn" });
+    expect(bad[2]).toMatchObject({ note: "1 条落后 · 收盘 08:01:00 UTC", tone: "warn" });
     expect(bad[1].hint).toContain("收盘时间");
     expect(bad[2].hint).toContain("收盘时间");
   });
@@ -557,7 +567,8 @@ describe("home tiles", () => {
       freshness: [],
       alertCount: undefined,
       monitorError: "boom",
-      nowMs: NOW
+      nowMs: NOW,
+      zone: "UTC"
     });
     expect(cards.map(card => card.value)).toEqual(["—", "—", "—", "—"]);
     expect(cards[2].note).toBe("监控数据暂不可用");
@@ -599,9 +610,9 @@ describe("home tiles", () => {
       ["1m", "已追平", "ok"],
       ["1h", "—", "idle"]
     ]);
-    const facts = bannerFacts({ strategies: [], factors: [], freshness: rows, nowMs: NOW });
+    const facts = bannerFacts({ strategies: [], factors: [], freshness: rows, nowMs: NOW, zone: "UTC" });
     // 横幅写 1h 数据集已到的最新一根的收线时间 09:00（后端按交易日历算出）；它在等待 10:00 前缺的那根，所以换成告警色。
-    expect(facts[2]).toMatchObject({ value: "09:00:00", tone: "warn" });
+    expect(facts[2]).toMatchObject({ value: "09:00:00 UTC", tone: "warn" });
   });
 
   it("counts stale data as something to handle, without repeating what a monitor alert already covers", () => {
@@ -675,7 +686,8 @@ describe("home tiles", () => {
         }
       ],
       names,
-      NOW
+      NOW,
+      "UTC"
     );
     expect(rows.map(row => row.title)).toEqual(["现货K线 1h：新增 1 个、移除 0 个标的，10-13 09:00 生效"]);
   });
@@ -719,9 +731,9 @@ describe("home tiles", () => {
       ["因子宽表", "等待 3 分钟", 180],
       ["现货K线", "已追平", 0]
     ]);
-    const facts = bannerFacts({ strategies: [], factors: [], freshness: rows, nowMs: NOW });
+    const facts = bannerFacts({ strategies: [], factors: [], freshness: rows, nowMs: NOW, zone: "UTC" });
     // 横幅写已到的最新一根的收线时间，并按状态换色。
-    expect(facts[2]).toMatchObject({ value: "09:56:00", tone: "warn" });
+    expect(facts[2]).toMatchObject({ value: "09:56:00 UTC", tone: "warn" });
   });
 
   it('reads "caught up" for factors whose last period was computed on time', () => {

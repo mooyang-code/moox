@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { alertLink, alertNote, formatCheckedAt, statusLabel } from "./health-display";
+import { alertLink, alertNote, statusLabel } from "./health-display";
 
 describe("health display", () => {
   it("uses friendly Chinese labels", () => {
@@ -8,9 +8,6 @@ describe("health display", () => {
     expect(statusLabel("disabled")).toBe("已停用");
     expect(statusLabel("unchecked")).toBe("不探测");
     expect(statusLabel("stale")).toBe("未知");
-  });
-  it("does not expose invalid timestamps", () => {
-    expect(formatCheckedAt("invalid")).toBe("暂无");
   });
   it("links each alert to the page that handles it", () => {
     expect(alertLink({ type: "host", host_id: "control", agent_id: "pwU2" })).toEqual({

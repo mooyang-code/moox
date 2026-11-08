@@ -48,7 +48,7 @@
               <span :class="['status', `status-${statusTone(record.last_execution.status)}`]">
                 {{ statusText(record.last_execution.status) }}
               </span>
-              <span class="muted">{{ formatMs(record.last_execution.at_ms) }}</span>
+              <span class="muted">{{ formatInstant(record.last_execution.at_ms, "UTC") }}</span>
             </template>
             <span v-else class="muted">还没有执行过</span>
           </template>
@@ -81,6 +81,8 @@
 </template>
 
 <script setup lang="ts">
+// 事件中心和空间无关，时间都按 UTC 显示
+import { formatInstant } from "@/utils/time-zone";
 import { computed, onActivated, onMounted, reactive, ref, watch } from "vue";
 import { Message, Modal } from "@arco-design/web-vue";
 import {
@@ -104,7 +106,6 @@ import {
   describeScope,
   eventTitle,
   formatDuration,
-  formatMs,
   pageAfterShrink,
   secretHintText,
   statusText,

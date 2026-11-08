@@ -98,15 +98,6 @@ export function roundText(round: number): string {
   }
 }
 
-const pad = (value: number) => String(value).padStart(2, "0");
-
-/** Unix 毫秒转本地时间 “YYYY-MM-DD HH:mm:ss”；没有值（0）显示 “-”。 */
-export function formatMs(ms: number): string {
-  if (!ms) return "-";
-  const date = new Date(ms);
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
-}
-
 export function formatDuration(ms: number): string {
   if (!ms) return "-";
   if (ms < 1000) return `${ms} 毫秒`;
@@ -394,7 +385,8 @@ export interface DelistFormValues {
   exchange: DelistExchange;
   market: DelistMarket;
   exchange_symbol: string;
-  delist_at: string | number;
+  /** 毫秒时刻（按 UTC 选择）；没选时为 null */
+  delist_at: number | null;
   paper_only: boolean;
 }
 
@@ -408,9 +400,9 @@ export interface DelistSnapshot extends RegisterDelistNoticeReq {
 export function delistSnapshot(form: DelistFormValues, nowMs: number): { snapshot: DelistSnapshot } | { error: string } {
   const symbol = form.exchange_symbol.trim().toUpperCase();
   if (!symbol) return { error: "请填写交易所代码" };
-  const delistAtMs = pickerValueToMs(form.delist_at);
+  const delistAtMs = form.delist_at;
   const timeError = delistTimeError(delistAtMs);
-  if (timeError) return { error: timeError };
+  if (timeError || delistAtMs === null) return { error: timeError };
   return {
     snapshot: {
       exchange: form.exchange,
@@ -447,7 +439,7 @@ export function pastTimeNote(paperOnly: boolean): string {
 
 /** 下架时间输入框下的说明。 */
 export const DELIST_TIME_HINT =
-  "填你本地的时间。填已经过去的时间时不会下单，只做核对；仍会写下架名单（禁止买入），真实下架（不打开“仅模拟盘”）结束后名单保留、不会解除。";
+  "按 UTC 填写（交易所公告的下架时间一般也给 UTC）。填已经过去的时间时不会下单，只做核对；仍会写下架名单（禁止买入），真实下架（不打开“仅模拟盘”）结束后名单保留、不会解除。";
 
 /**
  * 不在第一页、本页却读回来为空（删掉、取消了最后一页仅有的一行，或别处删了数据）：应该跳到的页码（现在的最后一页）；不用跳时返回 null。
@@ -461,14 +453,6 @@ export function pageAfterShrink(current: number, pageSize: number, total: number
 /** 系统规则是否启用读不到时的说明：不能当成已启用。 */
 export const SYSTEM_RULE_UNKNOWN_TEXT =
   "无法确认系统规则“标的即将下架时，卖出策略持有的这个币”是否启用（没有读到规则列表），登记后会不会被处理以执行记录为准。";
-
-/** 日期选择器按时间戳取值（value-format="timestamp"）；兼容字符串，没选时是 0。 */
-export function pickerValueToMs(value: string | number | null | undefined): number {
-  if (typeof value === "number") return value;
-  if (!value) return 0;
-  const ms = Date.parse(value);
-  return Number.isNaN(ms) ? 0 : ms;
-}
 
 /** 事件内容缩进展示；不是合法 JSON 时原样显示。 */
 export function prettyPayload(raw: string): string {

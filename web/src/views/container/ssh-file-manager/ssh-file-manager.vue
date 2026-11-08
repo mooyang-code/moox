@@ -89,7 +89,7 @@
         </a-table-column>
         <a-table-column title="修改时间" data-index="mod_time" :width="180">
           <template #cell="{ record }">
-            {{ record.mod_time }}
+            {{ formatInstant(record.mod_time, "UTC") }}
           </template>
         </a-table-column>
         <a-table-column title="操作" :width="80">
@@ -141,6 +141,8 @@ import { useRoute } from "vue-router";
 import { Message } from "@arco-design/web-vue";
 import { sftpList, sftpMkdir, sftpDelete, getSftpDownloadUrl, getSftpUploadUrl, type SftpFileItem } from "@/api/modules/ssh";
 import { deleteConfirmText, mkdirTitle } from "./file-actions";
+// 主机文件和空间无关，修改时间按 UTC 显示（后端返回 RFC3339）
+import { formatInstant } from "@/utils/time-zone";
 
 const props = withDefaults(
   defineProps<{
