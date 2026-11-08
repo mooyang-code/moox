@@ -75,3 +75,19 @@ func TestScopeValue(t *testing.T) {
 	_, ok = Lookup("event.unknown")
 	require.False(t, ok)
 }
+
+// 字段说明和示例一一对应：示例里的每个字段都有说明，说明里没有示例里不存在的字段。
+func TestPayloadFieldsMatchSample(t *testing.T) {
+	for _, entry := range Subscribable() {
+		described := map[string]bool{}
+		for _, field := range entry.PayloadFields {
+			require.NotEmpty(t, field.Title, "%s.%s", entry.Name(), field.Key)
+			described[field.Key] = true
+		}
+		sampled := map[string]bool{}
+		for key := range entry.Sample {
+			sampled[key] = true
+		}
+		require.Equal(t, sampled, described, entry.Name())
+	}
+}
