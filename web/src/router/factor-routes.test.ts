@@ -14,7 +14,7 @@ function findRoute(routes: RouteLike[], path: string): RouteLike | undefined {
   return undefined;
 }
 
-const reusePaths = ["/factor/definitions", "/factor/tasks", "/strategy/definitions", "/strategy/tasks"];
+const reusePaths = ["/factor/definitions", "/factor/tasks", "/strategy/definitions", "/strategy/tasks", "/data/archive"];
 
 describe("query 变化时复用的页面", () => {
   // 定义页的 ?category=、结果页的 ?fc= 和 ?task= 改写时不能重建页面，否则未进 URL 的筛选会丢失。

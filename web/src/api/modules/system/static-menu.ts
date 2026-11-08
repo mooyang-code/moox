@@ -58,6 +58,8 @@ export const systemMenu = [
   menu("0307", "03", "/data/subjects", "data-subjects", "data-subjects", "data/subjects/index", 2),
   menu("0308", "03", "/data/fields", "data-fields", "data-fields", "data/fields/index", 3),
   menu("0303", "03", "/collector/tasks", "collector-tasks", "collector-tasks", "collector/task-management/index", 4),
+  // 数据归档紧跟采集任务（sort 取采集任务 + 1）。任务详情、页签、筛选都在 query 里，query 变化时复用页面。
+  menu("0309", "03", "/data/archive", "data-archive", "data-archive", "data/archive/index", 5, { reuseOnQuery: true }),
 
   directory("0240", "0", "/factor/overview", "factor-compute", "factor-compute", 3, { svgIcon: "experiment", icon: "" }),
   menu("024001", "0240", "/factor/overview", "factor-overview", "factor-overview", "factor/overview/index", 1),

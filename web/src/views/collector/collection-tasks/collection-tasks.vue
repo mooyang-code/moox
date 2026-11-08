@@ -52,6 +52,7 @@
             <a-table-column title="任务名称" data-index="task_name" :width="240">
               <template #cell="{ record }">
                 <a-link @click="onViewDetails(record)">{{ record.task_name || record.task_id }}</a-link>
+                <ArchiveCoverageText :dataset-id="record.result?.dataset_id" />
               </template>
             </a-table-column>
             <a-table-column title="数据类型" :width="100">
@@ -500,6 +501,9 @@
             <a-descriptions-item label="最近数据时间">{{
               formatDateTime(detailData.result?.last_data_time)
             }}</a-descriptions-item>
+            <a-descriptions-item label="归档">
+              <ArchiveCoverageText :dataset-id="detailData.result?.dataset_id" />
+            </a-descriptions-item>
             <a-descriptions-item label="任务描述" :span="2">{{ detailData.description || "-" }}</a-descriptions-item>
             <a-descriptions-item v-if="detailData.last_error" label="准备信息" :span="2">
               {{ detailData.last_error }}
@@ -543,6 +547,7 @@
 </template>
 
 <script setup lang="ts">
+import ArchiveCoverageText from "@/views/data/archive/archive-coverage-text.vue";
 import { useDisplayZone } from "@/hooks/useDisplayZone";
 import { formatInstant } from "@/utils/time-zone";
 import { createSubmitScope } from "@/utils/submit-scope";

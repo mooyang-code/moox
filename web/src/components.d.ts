@@ -21,5 +21,8 @@ declare module 'vue' {
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
     SvgIcon: typeof import('./components/svg-icon/index.vue')['default']
+    TimeText: typeof import('./components/time-text/index.vue')['default']
+    ZonedDatePicker: typeof import('./components/zoned-date-picker/zoned-date-picker.vue')['default']
+    ZonedRangePicker: typeof import('./components/zoned-date-picker/zoned-range-picker.vue')['default']
   }
 }
