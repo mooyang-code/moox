@@ -168,16 +168,27 @@ describe("未完成订单的后台刷新", () => {
     expect(tab.error).toBe("");
   });
 
+  it("输入框里没提交的币名不进后台刷新", async () => {
+    vi.useFakeTimers();
+    mocks.listOrders.mockReset().mockResolvedValue({
+      ret_info: { code: 0, msg: "" },
+      orders: [{ order_id: "o-1", state: "OPEN", instrument_id: "BTC-USDT-SPOT", quantity: "1", submitted_at: "1700000000000" }]
+    });
+    nav.route = reactive({ query: { tab: "orders" } });
+    const tab = mountTab();
+    await flushPromises();
+    tab.symbol = "E";
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(mocks.listOrders).toHaveBeenCalledTimes(2);
+    expect(mocks.listOrders.mock.lastCall?.[0].instrument_id).toBeUndefined();
+  });
+
   it("没有未完成订单时不刷新", async () => {
     vi.useFakeTimers();
-    mocks.listOrders
-      .mockReset()
-      .mockResolvedValue({
-        ret_info: { code: 0, msg: "" },
-        orders: [
-          { order_id: "o-1", state: "FILLED", instrument_id: "BTC-USDT-SPOT", quantity: "1", submitted_at: "1700000000000" }
-        ]
-      });
+    mocks.listOrders.mockReset().mockResolvedValue({
+      ret_info: { code: 0, msg: "" },
+      orders: [{ order_id: "o-1", state: "FILLED", instrument_id: "BTC-USDT-SPOT", quantity: "1", submitted_at: "1700000000000" }]
+    });
     nav.route = reactive({ query: { tab: "orders" } });
     mountTab();
     await flushPromises();

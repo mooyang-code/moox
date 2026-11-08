@@ -143,6 +143,8 @@ const state = ref<string | undefined>(queryText("ostate"));
 const ownerType = ref<string | undefined>(queryText("oowner"));
 const accountId = ref<string | undefined>(queryText("oaccount"));
 const symbol = ref(queryText("osymbol") ?? "");
+// 已提交的币名：输入框打到一半时，轮询、翻页仍按上次查询的币名读，回车或点“查询”才换
+const appliedSymbol = ref(symbol.value.trim());
 // 地址里的值都是字符串，市场要转回数字，否则和可选市场比较不相等、会被重置成第一个
 const marketQuery = Number(queryText("omarket"));
 const market = ref<MarketType | undefined>([0, 1, 2, 3].includes(marketQuery) ? (marketQuery as MarketType) : undefined);
@@ -191,7 +193,7 @@ async function load(background = false) {
       {
         logical_account_id: logical.value.logical_account_id,
         trading_account_id: accountId.value,
-        instrument_id: instrumentFilter(symbol.value, market.value, logical.value.settlement_asset),
+        instrument_id: instrumentFilter(appliedSymbol.value, market.value, logical.value.settlement_asset),
         state: state.value,
         owner_type: ownerType.value || undefined,
         ...rangeParams(range.value),
@@ -214,6 +216,7 @@ async function load(background = false) {
 
 function search() {
   page.value = 1;
+  appliedSymbol.value = symbol.value.trim();
   void router.replace({
     query: {
       ...route.query,
@@ -221,8 +224,8 @@ function search() {
       ostate: state.value || undefined,
       oowner: ownerType.value || undefined,
       oaccount: accountId.value || undefined,
-      osymbol: symbol.value.trim() || undefined,
-      omarket: symbol.value.trim() ? market.value : undefined
+      osymbol: appliedSymbol.value || undefined,
+      omarket: appliedSymbol.value ? market.value : undefined
     }
   });
   void load();

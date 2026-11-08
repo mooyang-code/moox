@@ -99,7 +99,8 @@ const error = ref("");
 const requests = createLatestRequestGuard();
 
 watch(
-  () => [props.visible, props.order?.order_id] as const,
+  // 已成交数量变了（抽屉开着时订单成交）也重读成交明细
+  () => [props.visible, props.order?.order_id, props.order?.filled_quantity] as const,
   async ([visible, id]) => {
     if (!visible || !id) return;
     const request = requests.begin();
