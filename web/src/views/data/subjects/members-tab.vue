@@ -171,8 +171,8 @@
 import { createSubmitScope } from "@/utils/submit-scope";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import { computed, reactive, ref, watch } from "vue";
-import { Message, Modal } from "@arco-design/web-vue";
-import { removeMembersConfirmText } from "./member-actions";
+import { Message } from "@arco-design/web-vue";
+import { confirmRemoveMembers } from "./member-actions";
 import {
   addTagMembers,
   listTagMembers,
@@ -366,29 +366,16 @@ function parseIds(value: string) {
   ];
 }
 
-/** 移出标签会缩小引用它的采集任务的范围，先确认；失败时确认框保持打开（原因由请求层提示）。 */
 function removeSelected() {
   const ids = selectedSubjectIds();
   const tagId = selectedTagId.value;
   const spaceId = props.spaceId;
   if (!tagId || !ids.length) return;
-  Modal.confirm({
-    title: `移出 ${ids.length} 个对象？`,
-    content: removeMembersConfirmText(ids.length),
-    okText: "移出",
-    okButtonProps: { status: "danger" },
-    cancelText: "取消",
-    onBeforeOk: async () => {
-      try {
-        await removeTagMembers(spaceId, tagId, ids);
-      } catch {
-        return false;
-      }
-      Message.success("已移出标签");
-      void load();
-      return true;
-    }
-  });
+  confirmRemoveMembers(
+    ids.length,
+    () => removeTagMembers(spaceId, tagId, ids),
+    () => void load()
+  );
 }
 
 async function restoreSelected() {

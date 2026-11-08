@@ -28,4 +28,15 @@ describe("实例的组合账户", () => {
     expect(account.value).toBeNull();
     expect(api.getLogicalAccount).not.toHaveBeenCalled();
   });
+
+  it("重试能重新读取：读到后清掉错误", async () => {
+    api.getLogicalAccount.mockRejectedValueOnce(new Error("交易服务不可用"));
+    const { account, error, reload } = useLogicalAccount(ref("la-3"));
+    await flushPromises();
+    expect(error.value).toBe("交易服务不可用");
+    api.getLogicalAccount.mockResolvedValueOnce({ logical_account: { logical_account_id: "la-3", name: "备用组合" } });
+    await reload();
+    expect(account.value?.name).toBe("备用组合");
+    expect(error.value).toBe("");
+  });
 });

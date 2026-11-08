@@ -26,7 +26,7 @@
         <div class="stats-strip" role="list">
           <div v-for="item in stats" :key="item.key" class="stat" role="listitem">
             <span class="stat__label">{{ item.label }}</span>
-            <span class="stat__value" :class="loaded ? `is-${item.tone}` : ''">{{ loaded ? item.value : "-" }}</span>
+            <span class="stat__value" :class="loaded ? `is-${item.tone}` : ''">{{ loaded ? item.value : "—" }}</span>
             <span class="stat__hint">{{ item.hint }}</span>
           </div>
         </div>
@@ -34,7 +34,7 @@
         <div class="overview-columns">
           <section class="overview-col" aria-label="运行实例">
             <h3>运行实例与当前目标</h3>
-            <a-empty v-if="!cards.length && !loading" description="当前空间还没有策略实例">
+            <a-empty v-if="loaded && !cards.length" description="当前空间还没有策略实例">
               <template #extra>
                 <a-button type="primary" status="success" @click="go(instancesLink({ create: true }))">新建实例</a-button>
               </template>
@@ -72,7 +72,8 @@
           <div class="overview-col">
             <section aria-label="待处理">
               <h3>待处理</h3>
-              <a-empty v-if="!pending.length" description="没有待处理事项" />
+              <div v-if="!loaded" class="side-list__text">—</div>
+              <a-empty v-else-if="!pending.length" description="没有待处理事项" />
               <ul v-else class="side-list">
                 <li v-for="item in pending" :key="`${item.kind}-${item.instanceId}`">
                   <a-link @click="go(item.target)">{{ item.title }}</a-link>
@@ -84,6 +85,7 @@
             <section aria-label="进行中的回放">
               <h3>进行中的回放</h3>
               <a-alert v-if="replayError" type="warning" class="page-alert">回放读取失败：{{ replayError }}</a-alert>
+              <div v-else-if="!loaded" class="side-list__text">—</div>
               <a-empty v-else-if="!running.length" description="没有进行中的回放" />
               <ul v-else class="side-list">
                 <li v-for="replay in running" :key="replay.replay_id">

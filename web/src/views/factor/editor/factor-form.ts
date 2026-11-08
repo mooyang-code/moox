@@ -1,4 +1,4 @@
-import type { FactorDef, FactorInput, FactorType, ValidateFactorSpecRsp } from "@/api/factor/types";
+import type { FactorDef, FactorInput, FactorType, PreviewFactorReq, ValidateFactorSpecRsp } from "@/api/factor/types";
 import type { DatasetColumn } from "@/api/storage/types";
 import { validateFactorId } from "@/utils/factor-name";
 import { TIMESERIES_SPEC_TEMPLATE } from "./editor-template";
@@ -71,6 +71,21 @@ export type CompileState =
 /** 最近一次校验是否针对当前内容且通过（allow_partial_universe 也参与，它影响 definition_hash）。 */
 export function compiledFor(state: CompileState, form: FactorFormState) {
   return state.status === "valid" && state.spec === specKey(form);
+}
+
+/** 试算请求：和校验一样带上因子 ID，单输出因子的输出名按它推导，否则试算结果的列名和保存后的不一致。 */
+export function previewRequest(
+  form: Pick<FactorFormState, "spec" | "allow_partial_universe" | "factor_id">,
+  scope: { taskId: string; subjects: string[]; periods: number }
+): PreviewFactorReq {
+  return {
+    task_id: scope.taskId,
+    spec: form.spec,
+    subjects: scope.subjects,
+    periods: scope.periods,
+    allow_partial_universe: form.allow_partial_universe,
+    factor_id: form.factor_id.trim() || undefined
+  };
 }
 
 /** 校验结果对应的内容：定义、是否允许部分标的、因子 ID（单输出因子的输出名就是它）任一变了都要重新校验。 */

@@ -121,7 +121,7 @@
     <!-- 新建目录弹窗 -->
     <a-modal
       v-model:visible="mkdirModalVisible"
-      title="新建目录"
+      :title="mkdirTitle(currentDir, hostLabel)"
       @ok="onMkdirConfirm"
       @cancel="mkdirModalVisible = false"
       :ok-loading="mkdirLoading"
@@ -140,7 +140,7 @@ import { ref, computed, watch } from "vue";
 import { useRoute } from "vue-router";
 import { Message } from "@arco-design/web-vue";
 import { sftpList, sftpMkdir, sftpDelete, getSftpDownloadUrl, getSftpUploadUrl, type SftpFileItem } from "@/api/modules/ssh";
-import { deleteConfirmText } from "./file-actions";
+import { deleteConfirmText, mkdirTitle } from "./file-actions";
 
 const props = withDefaults(
   defineProps<{

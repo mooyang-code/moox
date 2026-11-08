@@ -29,7 +29,9 @@
                 关联策略实例
                 <a-link class="tx-mono" @click="openInstance(logical.owner_instance_id)">{{ logical.owner_instance_id }}</a-link>
               </span>
-              <span v-else>{{ logical.control_mode === 2 ? "自主下单，没有关联策略" : "尚未绑定策略" }}</span>
+              <span v-else>{{
+                logical.control_mode === 2 ? "自主下单，没有关联策略" : strategiesFailed ? "策略读取失败" : "尚未绑定策略"
+              }}</span>
               <span class="tx-muted tx-mono">{{ logical.logical_account_id }}</span>
             </div>
           </div>
@@ -366,6 +368,8 @@ const allAccounts = ref<TradingAccount[]>([]);
 const target = ref<LogicalAccountTarget | null>(null);
 const snapshot = ref<PositionSnapshot>({ swapPositions: [], spotHoldings: [] });
 const strategy = ref<StrategyLink | null>(null);
+// 关联策略读取失败：页头既没有关联策略也没有实例编号时写“策略读取失败”
+const strategiesFailed = ref(false);
 const dataVersion = ref(0);
 const syncing = ref(false);
 const orderDialog = ref<InstanceType<typeof OrderDialog>>();
@@ -459,7 +463,9 @@ async function loadFirst() {
   try {
     await reload();
     const links = await loadStrategyLinks(logical.value ? [logical.value] : []);
-    // 读取失败时保留上一次读到的关联策略；没有的话页头仍能按 owner_instance_id 链到实例
+    // 读取失败时保留上一次读到的关联策略；没有的话页头仍能按 owner_instance_id 链到实例，
+    // 两样都没有时写“策略读取失败”，不当成没有绑定
+    strategiesFailed.value = links === null;
     if (links) strategy.value = links.get(logicalId.value) ?? null;
   } catch (cause) {
     if (logical.value) return;

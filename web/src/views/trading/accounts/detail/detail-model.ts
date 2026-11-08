@@ -30,7 +30,8 @@ export interface MemberTotals {
 
 /** 启用成员的资金合计。没有任何成员给出权益时，权益和可用资金为 null。 */
 export function memberTotals(accounts: readonly TradingAccount[]): MemberTotals {
-  const withSnapshot = accounts.filter(item => item.snapshot);
+  // 后端总会带 snapshot，首次同步前里面的权益是空串：这种按没读到算，不能当成 0
+  const withSnapshot = accounts.filter(item => item.snapshot?.equity);
   return {
     equity: withSnapshot.length ? withSnapshot.reduce((sum, item) => sum + num(item.snapshot?.equity), 0) : null,
     available: withSnapshot.length ? withSnapshot.reduce((sum, item) => sum + num(item.snapshot?.available_funds), 0) : null,

@@ -227,6 +227,8 @@ describe("home page", () => {
     const wrapper = await render();
     expect(wrapper.text()).toContain("1 项读取失败");
     expect(wrapper.text()).not.toContain("运行正常");
+    expect(wrapper.find(".tile-attention .all-clear").text()).not.toContain("一切正常");
+    expect(wrapper.find(".tile-attention .all-clear").text()).toContain("另有 1 项读取失败");
     expect(wrapper.text()).toContain("读取失败 · 重试");
     expect(wrapper.text()).toContain("更新于 —");
   });

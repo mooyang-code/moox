@@ -14,6 +14,7 @@ import {
   factorChecklist,
   filterFunctions,
   formFromDefinition,
+  previewRequest,
   sourceInputColumns,
   specKey,
   type CompileState,
@@ -226,6 +227,17 @@ describe("因子 ID 与后端规则一致", () => {
   it.each(["bias", "bias_20", "ma5_ratio"])("%j 通过", id => {
     const form = valid({ factor_id: id });
     expect(failing(form).map(item => item.key)).not.toContain("factor_id");
+  });
+
+  it("试算请求带上因子 ID（去掉首尾空格），没填时不带", () => {
+    const scope = { taskId: "t1", subjects: ["BTC-USDT"], periods: 20 };
+    expect(previewRequest(valid({ factor_id: " bias_20 " }), scope)).toMatchObject({
+      task_id: "t1",
+      subjects: ["BTC-USDT"],
+      periods: 20,
+      factor_id: "bias_20"
+    });
+    expect(previewRequest(valid({ factor_id: "" }), scope).factor_id).toBeUndefined();
   });
 
   it("改了因子 ID 后旧的校验结果作废，单输出因子的输出名要按新 ID 重新推导", () => {

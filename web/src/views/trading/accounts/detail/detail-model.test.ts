@@ -29,6 +29,9 @@ describe("详情页模型", () => {
       unrealizedPnl: -2
     });
     expect(memberTotals([{} as TradingAccount]).equity).toBeNull();
+    // 首次同步前后端也会带一个权益为空串的快照
+    expect(memberTotals([account("")]).equity).toBeNull();
+    expect(memberTotals([account("0")]).equity).toBe(0);
     expect(paperInitialBalance([{ paper: { initial_balance: "1000" } } as TradingAccount])).toBe(1000);
     expect(paperInitialBalance([{} as TradingAccount])).toBeNull();
   });

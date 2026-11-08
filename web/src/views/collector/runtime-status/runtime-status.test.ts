@@ -157,6 +157,12 @@ describe("collector runtime status page", () => {
     expect(page).not.toContain("hash");
   });
 
+  it("还没读到过数据时指标写 —，表格不显示空状态", () => {
+    expect(page).toContain('{{ loaded ? summary.functions : "—" }}');
+    expect(page).toContain('{{ emptyText("还没有正在采集的数据集") }}');
+    expect(page).not.toMatch(/<div class="empty-text">[^{<]+<\/div>/);
+  });
+
   it("names the column 自动巡检 and explains it is not data latency", () => {
     expect(page).not.toContain("检查滞后");
     expect(page).toContain("自动巡检");

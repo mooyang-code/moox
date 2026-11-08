@@ -281,6 +281,7 @@ import {
   factorChecklist,
   filterFunctions,
   formFromDefinition,
+  previewRequest,
   sourceInputColumns,
   specKey,
   type CompileState
@@ -507,14 +508,9 @@ async function runPreview() {
   previewError.value = "";
   previewDone.value = false;
   try {
-    const rsp = await previewFactor({
-      task_id: previewTaskId.value,
-      spec: form.spec,
-      subjects: previewSubjects.value,
-      periods: previewPeriods.value,
-      allow_partial_universe: form.allow_partial_universe,
-      factor_id: form.factor_id.trim() || undefined
-    });
+    const rsp = await previewFactor(
+      previewRequest(form, { taskId: previewTaskId.value, subjects: previewSubjects.value, periods: previewPeriods.value })
+    );
     if (!previewGate.isCurrent(token)) return;
     previewResult.value = rsp;
     previewDone.value = true;

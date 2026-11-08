@@ -149,6 +149,8 @@ import {
   type CloudAccount
 } from "@/api/cloud-account";
 import { listSecrets, type Secret } from "@/api/admin/secret";
+import { listFunctionInstances } from "@/api/function-instance";
+import { cloudAccountDeleteText } from "./cloud-account-delete";
 
 // Props
 const props = defineProps<{
@@ -264,11 +266,17 @@ const onEdit = (record: CloudAccount) => {
   formVisible.value = true;
 };
 
-// 删除：确认框写清账户名和后果；失败时显示后端给的原因，确认框保持打开
-const confirmDelete = (record: CloudAccount) => {
+// 删除：确认框写清账户名、在用的实例数和后果；失败时显示后端给的原因，确认框保持打开
+const confirmDelete = async (record: CloudAccount) => {
+  let inUse: number | null = null;
+  try {
+    inUse = (await listFunctionInstances({ cloud_account_id: record.account_id, page_size: 1 })).total;
+  } catch {
+    inUse = null;
+  }
   Modal.confirm({
     title: `删除云账户「${record.account_name || record.account_id}」？`,
-    content: "用这个云账户部署的执行器实例之后不能再部署和更新，已有的云函数不会自动删除。",
+    content: cloudAccountDeleteText(inUse),
     okText: "删除",
     okButtonProps: { status: "danger" },
     cancelText: "取消",

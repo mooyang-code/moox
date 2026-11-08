@@ -37,36 +37,40 @@
             <div class="metric">
               <span class="metric-label">采集计划</span>
               <div class="metric-line">
-                <b class="metric-value metric-value--text">{{ planText }}</b>
-                <span class="metric-sub">{{ planSub }}</span>
+                <b class="metric-value metric-value--text">{{ loaded ? planText : "—" }}</b>
+                <span v-if="loaded" class="metric-sub">{{ planSub }}</span>
               </div>
             </div>
             <div class="metric">
               <span class="metric-label">函数</span>
               <div class="metric-line">
-                <b class="metric-value">{{ summary.functions }}</b>
-                <span class="metric-sub">下发中 {{ summary.pendingFunctions }} · 退役中 {{ summary.retiringFunctions }}</span>
+                <b class="metric-value">{{ loaded ? summary.functions : "—" }}</b>
+                <span v-if="loaded" class="metric-sub"
+                  >下发中 {{ summary.pendingFunctions }} · 退役中 {{ summary.retiringFunctions }}</span
+                >
               </div>
             </div>
             <div class="metric">
               <span class="metric-label">数据集 / 标的</span>
               <div class="metric-line">
-                <b class="metric-value">{{ summary.datasets }} / {{ summary.subjects }}</b>
-                <span class="metric-sub">正在采集</span>
+                <b class="metric-value">{{ loaded ? `${summary.datasets} / ${summary.subjects}` : "—" }}</b>
+                <span v-if="loaded" class="metric-sub">正在采集</span>
               </div>
             </div>
             <div class="metric">
               <span class="metric-label">近 24h 实时缺口</span>
               <div class="metric-line">
-                <b class="metric-value" :class="{ 'metric-value--warn': summary.gapBars > 0 }">{{ summary.gapBars }} 根</b>
-                <span class="metric-sub">{{ summary.gapSubjects }} 个标的，由自动补采修复</span>
+                <b class="metric-value" :class="{ 'metric-value--warn': summary.gapBars > 0 }">{{
+                  loaded ? `${summary.gapBars} 根` : "—"
+                }}</b>
+                <span v-if="loaded" class="metric-sub">{{ summary.gapSubjects }} 个标的，由自动补采修复</span>
               </div>
             </div>
             <div class="metric metric--link" role="button" tabindex="0" @click="goBackfills()" @keydown.enter="goBackfills()">
               <span class="metric-label">补采 <icon-right /></span>
               <div class="metric-line">
-                <b class="metric-value">{{ status.active_backfills || 0 }}</b>
-                <span class="metric-sub" :class="{ 'danger-text': (status.failed_backfills_24h || 0) > 0 }"
+                <b class="metric-value">{{ loaded ? status.active_backfills || 0 : "—" }}</b>
+                <span v-if="loaded" class="metric-sub" :class="{ 'danger-text': (status.failed_backfills_24h || 0) > 0 }"
                   >进行中 · 24h 失败 {{ status.failed_backfills_24h || 0 }}</span
                 >
               </div>
@@ -92,7 +96,9 @@
             class="clickable-table"
             @row-click="toggleDataset"
           >
-            <template #empty><div class="empty-text">还没有正在采集的数据集</div></template>
+            <template #empty
+              ><div class="empty-text">{{ emptyText("还没有正在采集的数据集") }}</div></template
+            >
             <template #columns>
               <a-table-column title="数据集">
                 <template #cell="{ record }">
@@ -233,7 +239,9 @@
             :pagination="false"
             :bordered="{ cell: true }"
           >
-            <template #empty><div class="empty-text">还没有周期统计</div></template>
+            <template #empty
+              ><div class="empty-text">{{ emptyText("还没有周期统计") }}</div></template
+            >
             <template #columns>
               <a-table-column title="周期" data-index="period" :width="180" />
               <a-table-column title="数据集" :width="220">
@@ -278,7 +286,9 @@
               :bordered="{ cell: true }"
               table-layout-fixed
             >
-              <template #empty><div class="empty-text">没有匹配的函数</div></template>
+              <template #empty
+                ><div class="empty-text">{{ emptyText("没有匹配的函数") }}</div></template
+              >
               <template #columns>
                 <a-table-column title="函数" :width="330">
                   <template #cell="{ record }">
@@ -409,6 +419,8 @@ const summary = computed(() => statusSummary(status.value));
 const loaded = ref(false);
 const loadError = ref("");
 const overall = computed(() => overallStatus({ status: status.value, loaded: loaded.value, error: loadError.value }));
+// 还没读到过数据时，表格不显示“没有数据”这类空状态，免得当成真的没有
+const emptyText = (text: string) => (loaded.value ? text : loadError.value ? "读取失败" : "读取中…");
 const datasetRows = computed(() =>
   [...(status.value.datasets || [])]
     .sort((a, b) => levelRank(b.level) - levelRank(a.level))

@@ -125,7 +125,7 @@
             <div class="tile-body">
               <div v-if="!attention.length" class="all-clear">
                 <component :is="statusIcon" :class="`is-${status.tone}`" />
-                <span>{{ overview || monitorError ? (monitorError ? "监控数据暂不可用" : "一切正常") : "读取中…" }}</span>
+                <span>{{ allClearText }}</span>
                 <small v-if="updatedAt">最近检查 {{ updatedAt }}</small>
               </div>
               <button
@@ -391,6 +391,12 @@ const status = computed(() =>
 const stage = computed(() => (monitorError.value ? undefined : systemStage(overview.value)));
 const alertCount = computed(() => (monitorError.value ? "—" : String(overview.value?.summary?.alert_count ?? 0)));
 const statusIcon = computed(() => toneIcon(status.value.tone));
+// 监控没有关注项时这一格的说明：别的格子读取失败时不能写“一切正常”
+const allClearText = computed(() => {
+  if (monitorError.value) return "监控数据暂不可用";
+  if (!overview.value) return "读取中…";
+  return failedCount.value ? `监控没有关注项，另有 ${failedCount.value} 项读取失败` : "一切正常";
+});
 const services = computed(() => serviceHealth(overview.value, monitorError.value));
 const facts = computed(() =>
   bannerFacts({ strategies: strategies.value, factors: factors.value, freshness: freshness.value, nowMs: nowMs.value })
