@@ -112,6 +112,7 @@ import {
   resampleTargetFrequency,
   resolveActiveTask,
   selectTaskIdFromQuery,
+  taskIdForDataset,
   type TaskResultState
 } from "./task-results-model";
 
@@ -255,7 +256,9 @@ async function load(options: { preserveSelection?: boolean; honorQuery?: boolean
     const listTasks = await fetchAllTasks(spaceId);
     if (sequence !== loadSequence || spaceId !== selectedSpaceId.value) return;
     tasks.value = listTasks;
-    const requestedTaskId = queryTaskId(route.query.resultTask);
+    // 没有指定 resultTask 时，?dataset=&freq=（告警、存储节点等处跳进来）按结果数据集选任务
+    const requestedTaskId =
+      queryTaskId(route.query.resultTask) || taskIdForDataset(listTasks, route.query.dataset, route.query.freq);
     const currentTaskIsOnPage = listTasks.some(task => task.task_id === activeTaskId.value);
     const requestedTaskIsOnPage = listTasks.some(task => task.task_id === requestedTaskId);
     const nextTaskId =

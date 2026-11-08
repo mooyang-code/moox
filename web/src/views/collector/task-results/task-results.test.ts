@@ -12,7 +12,8 @@ import {
   resampleEmptyDescription,
   resampleSourceTaskId,
   resampleTargetFrequency,
-  selectTaskIdFromQuery
+  selectTaskIdFromQuery,
+  taskIdForDataset
 } from "./task-results-model";
 
 describe("collector result workflow", () => {
@@ -112,5 +113,31 @@ describe("collector result workflow", () => {
     const page = fs.readFileSync(path.resolve(__dirname, "index.vue"), "utf8");
     expect(page).toContain("合成自");
     expect(page).toContain("历史合成进行中");
+  });
+});
+
+describe("按结果数据集选任务", () => {
+  it("?dataset= 找到写入这个数据集的任务；同一数据集多个任务时按周期挑；找不到时为空", () => {
+    const list = [
+      {
+        task_id: "a",
+        data_type: "kline",
+        collect_params: { frequency: "1m" },
+        result: { dataset_id: "ds" },
+        create_time: "2026-10-01T00:00:00Z"
+      },
+      {
+        task_id: "b",
+        data_type: "kline_resample",
+        collect_params: { target_frequency: "5m" },
+        result: { dataset_id: "ds" },
+        create_time: "2026-10-02T00:00:00Z"
+      }
+    ];
+    expect(taskIdForDataset(list, "ds", "1m")).toBe("a");
+    expect(taskIdForDataset(list, "ds", "5m")).toBe("b");
+    expect(taskIdForDataset(list, "ds", "")).toBe("b");
+    expect(taskIdForDataset(list, "other", "1m")).toBe("");
+    expect(taskIdForDataset(list, "", "1m")).toBe("");
   });
 });

@@ -110,3 +110,22 @@ function timestamp(value?: string) {
 function queryString(value: unknown) {
   return Array.isArray(value) ? String(value[0] || "") : String(value || "");
 }
+
+/**
+ * 按结果数据集（和周期）找任务：告警、存储节点等处带 ?dataset=&freq= 跳进来时自动选中。
+ * 同一个数据集有多个任务时按周期挑；找不到时返回空串。
+ */
+export function taskIdForDataset(tasks: CollectorTask[], datasetId: unknown, freq: unknown): string {
+  const dataset = queryString(datasetId);
+  if (!dataset) return "";
+  const matched = sortTasksByCreatedAt(tasks).filter(task => task.result?.dataset_id === dataset);
+  const wanted = queryString(freq);
+  const byFreq = wanted ? matched.find(task => taskFreq(task) === wanted) : undefined;
+  return (byFreq ?? matched[0])?.task_id ?? "";
+}
+
+function taskFreq(task: CollectorTask): string {
+  const params = task.collect_params ?? {};
+  const value = task.data_type === "kline_resample" ? params.target_frequency : params.frequency;
+  return typeof value === "string" ? value : "";
+}
