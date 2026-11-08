@@ -57,11 +57,15 @@
         <a-table-column title="耗时" :width="100"
           ><template #cell="{ record }">{{ runDurationText(record, nowMs) }}</template></a-table-column
         >
-        <a-table-column title="读取区间" :width="210">
+        <a-table-column title="读取区间 / 导入文件" :width="210">
           <template #cell="{ record }">
             <template v-if="record.kind === 'tick' || record.kind === 'range'">
               <div>{{ formatInstant(record.range_start, zone) }}</div>
               <div>～ {{ formatInstant(record.range_end, zone) }}</div>
+            </template>
+            <template v-else-if="record.kind === 'import'">
+              <div class="message">{{ importFileText(record) || "—" }}</div>
+              <div class="sub">{{ importModeText(record) }}</div>
             </template>
             <span v-else>—</span>
           </template>
@@ -97,9 +101,17 @@
           </template>
         </a-table-column>
         <a-table-column title="消息" :width="260">
-          <template #cell="{ record }"
-            ><div class="message">{{ record.message || "—" }}</div></template
-          >
+          <template #cell="{ record }">
+            <div class="message">{{ foldRunMessage(record.message).text || "—" }}</div>
+            <a-popover v-if="foldRunMessage(record.message).folded" trigger="click" position="left">
+              <a-link>查看全部</a-link>
+              <template #content>
+                <div class="message-full">
+                  <div v-for="(line, index) in runMessageLines(record.message)" :key="index">{{ line }}</div>
+                </div>
+              </template>
+            </a-popover>
+          </template>
         </a-table-column>
         <a-table-column title="操作" :width="80" fixed="right">
           <template #cell="{ record }">
@@ -124,9 +136,13 @@ import { RequestGate } from "@/utils/request-gate";
 import { formatInstant } from "@/utils/time-zone";
 import {
   RUN_STATUSES,
+  foldRunMessage,
+  importFileText,
+  importModeText,
   kindLabel,
   runActive,
   runDurationText,
+  runMessageLines,
   runStatusLabel,
   runTone,
   toNum,
@@ -242,6 +258,15 @@ function confirmCancel(run: ArchiveRun) {
 }
 
 .message {
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.message-full {
+  max-width: 560px;
+  max-height: 360px;
+  overflow-y: auto;
+  line-height: 22px;
   white-space: pre-wrap;
   word-break: break-all;
 }

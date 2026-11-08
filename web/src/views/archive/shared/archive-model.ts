@@ -139,6 +139,37 @@ export function runDurationText(run: ArchiveRun | undefined, nowMs: number): str
   return end === null ? "—" : durationText((end - start) / 1000);
 }
 
+/** 导入运行的文件名：import_file 是 "<import_id>/<文件名>"，只显示文件名；不是导入运行时为空。 */
+export function importFileText(run: Pick<ArchiveRun, "kind" | "import_file">): string {
+  if (run.kind !== "import" || !run.import_file) return "";
+  return run.import_file.slice(run.import_file.lastIndexOf("/") + 1);
+}
+
+/** 导入运行的写入方式。 */
+export const importModeText = (run: Pick<ArchiveRun, "overwrite">) => (run.overwrite ? "覆盖已有" : "只补空缺");
+
+/** 运行消息超过这么多字符时折叠，完整内容点开看（导入校验失败时最多带 20 条带行号的错误）。 */
+export const RUN_MESSAGE_FOLD_CHARS = 120;
+
+/** 折叠显示的运行消息：不超过上限时原样返回，folded 为假。 */
+export function foldRunMessage(message?: string): { text: string; folded: boolean } {
+  const chars = Array.from(message || "");
+  if (chars.length <= RUN_MESSAGE_FOLD_CHARS) return { text: message || "", folded: false };
+  return { text: `${chars.slice(0, RUN_MESSAGE_FOLD_CHARS).join("")}…`, folded: true };
+}
+
+/**
+ * 完整运行消息按条分行：worker 用“；”连接多条错误与附加说明；
+ * 导入校验失败的消息是“导入文件有 N 处错误，……：第 x 行：…；第 y 行：…”，开头的总述单独成行。
+ */
+export function runMessageLines(message?: string): string[] {
+  const text = (message || "").replace(/^(导入文件有 \d+ 处错误[^：]*)：/, "$1\n");
+  return text
+    .split(/[；\n]/)
+    .map(line => line.trim())
+    .filter(Boolean);
+}
+
 /** 读取失败像是 archive-mgr 没部署（路由不存在、连接被拒）时的补充说明。 */
 export function archiveUnavailableHint(error: string): string {
   return /404|not found|no route|unknown service|connection refused|econnrefused|不存在|找不到/i.test(error)

@@ -50,6 +50,10 @@ export interface ArchiveRun {
   partitions_uploaded?: number;
   unrecoverable?: UnrecoverableRange[];
   message?: string;
+  /** 导入的文件（kind=import）：相对归档根目录下 .import 的 "<import_id>/<文件名>" */
+  import_file?: string;
+  /** 导入时同键已存在的行是否覆盖（kind=import）；默认只补空缺 */
+  overwrite?: boolean;
 }
 
 export interface ArchiveTask {

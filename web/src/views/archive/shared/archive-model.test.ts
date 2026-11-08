@@ -8,7 +8,10 @@ import {
   backfillRangeError,
   durationText,
   exportEstimateText,
+  foldRunMessage,
   healthLabel,
+  importFileText,
+  importModeText,
   kindLabel,
   parseArchiveQuery,
   parsePreviewCsv,
@@ -20,6 +23,7 @@ import {
   remoteStateLabel,
   reviewText,
   runDurationText,
+  runMessageLines,
   runStatusLabel,
   showBackfillField,
   systemAlerts,
@@ -28,6 +32,25 @@ import {
 } from "./archive-model";
 
 describe("文案", () => {
+  it("导入运行显示文件名与写入方式，长消息折叠", () => {
+    expect(importFileText({ kind: "import", import_file: "imp_20261108_ab/import.csv.gz" })).toBe("import.csv.gz");
+    expect(importFileText({ kind: "scheduled", import_file: "x/y.csv" })).toBe("");
+    expect(importModeText({ overwrite: true })).toBe("覆盖已有");
+    expect(importModeText({})).toBe("只补空缺");
+    expect(foldRunMessage("导入 3 行")).toEqual({ text: "导入 3 行", folded: false });
+    const long =
+      "导入文件有 2 处错误，整份拒绝，什么都没有写入：第 2 行：data_time 没有按频率 1m 对齐；第 3 行：" +
+      "列 close 无法解析".repeat(20);
+    const folded = foldRunMessage(long);
+    expect(folded.folded).toBe(true);
+    expect(Array.from(folded.text).length).toBe(121);
+    expect(runMessageLines(long).slice(0, 2)).toEqual([
+      "导入文件有 2 处错误，整份拒绝，什么都没有写入",
+      "第 2 行：data_time 没有按频率 1m 对齐"
+    ]);
+    expect(runMessageLines(long)).toHaveLength(3);
+  });
+
   it("运行类型、状态、健康等级、分区状态", () => {
     expect(["scheduled", "manual", "tick", "range", "import"].map(kindLabel)).toEqual([
       "复核",
