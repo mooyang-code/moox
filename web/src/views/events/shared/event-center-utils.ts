@@ -148,7 +148,7 @@ export function sameScope(a: ScopeFilter[], b: ScopeFilter[]): boolean {
 }
 
 /** 服务启动时一定注册系统动作的处理器；事件目录里没读到“系统动作已启用”（还在加载或加载失败）时，什么都不能断言。 */
-export const SYSTEM_ACTION_UNKNOWN_TEXT = "无法确认系统动作是否启用（没有读到事件目录），下面的处理结果以处理记录为准。";
+export const SYSTEM_ACTION_UNKNOWN_TEXT = "无法确认系统动作是否启用（没有读到事件目录），下面的处理结果以执行记录为准。";
 
 /** 系统动作是否已启用：true 已启用，null 还不知道。返回要给用户看的提示；已启用时为空。 */
 export function systemActionNotice(enabled: boolean | null): string {
@@ -452,7 +452,7 @@ export function pageAfterShrink(current: number, pageSize: number, total: number
 
 /** 系统规则是否启用读不到时的说明：不能当成已启用。 */
 export const SYSTEM_RULE_UNKNOWN_TEXT =
-  "无法确认系统订阅“标的即将下架时，卖出策略持有的这个币”是否启用（没有读到订阅列表），登记后会不会被处理以处理记录为准。";
+  "无法确认系统订阅“标的即将下架时，卖出策略持有的这个币”是否启用（没有读到订阅列表），登记后会不会被处理以执行记录为准。";
 
 /** 事件内容缩进展示；不是合法 JSON 时原样显示。 */
 export function prettyPayload(raw: string): string {
@@ -477,7 +477,7 @@ export function requestErrorText(error: unknown): string {
   return typeof failure?.message === "string" && failure.message ? failure.message : "未知原因";
 }
 
-/** 处理记录页写进 URL 的状态：状态用短名（failed），告警等处可以直接带上。 */
+/** 执行记录页写进 URL 的状态：状态用短名（failed），告警等处可以直接带上。 */
 export interface ExecutionQuery {
   rule_id: string;
   status: ExecutionStatus | "";
@@ -497,7 +497,7 @@ function queryText(value: unknown): string {
   return typeof first === "string" ? first.trim() : "";
 }
 
-/** 从 URL 读处理记录页的筛选和打开的记录；认不出的状态当作不筛选。 */
+/** 从 URL 读执行记录页的筛选和打开的记录；认不出的状态当作不筛选。 */
 export function parseExecutionQuery(query: Record<string, unknown>): ExecutionQuery {
   return {
     rule_id: queryText(query.rule_id),
@@ -506,7 +506,7 @@ export function parseExecutionQuery(query: Record<string, unknown>): ExecutionQu
   };
 }
 
-/** 处理记录页的状态写回 URL；空值不写。 */
+/** 执行记录页的状态写回 URL；空值不写。 */
 export function executionQuery(state: ExecutionQuery): Record<string, string> {
   const status = Object.keys(STATUS_QUERY).find(key => STATUS_QUERY[key] === state.status);
   return {
@@ -515,3 +515,34 @@ export function executionQuery(state: ExecutionQuery): Record<string, string> {
     ...(state.execution ? { execution: state.execution } : {})
   };
 }
+
+export type EventCenterTab = "events" | "subscriptions" | "executions";
+
+/** 事件中心的页签：?tab=subscriptions / executions，其余（含缺省）是“事件”。 */
+export function eventCenterTab(value: unknown): EventCenterTab {
+  return value === "subscriptions" || value === "executions" ? value : "events";
+}
+
+/** 订阅被触发后的执行记录页签地址；rule_id 为空时不带筛选。 */
+export function executionsHref(ruleId = ""): string {
+  return `#/events?tab=executions${ruleId ? `&rule_id=${encodeURIComponent(ruleId)}` : ""}`;
+}
+
+/** 系统订阅的悬停说明：只能启用或停用，不能编辑、删除。 */
+export const SYSTEM_RULE_TIP =
+  "MooX 自带的下架处理：发现标的即将下架后立即禁止策略买入，下架前 24 小时平掉策略持有的部分。只能启用或停用。";
+
+/** “标的即将下架”事件的发现方式和系统处理流程，显示在这个事件的详情里。 */
+export const DELIST_FLOW = [
+  {
+    title: "怎么被发现",
+    text: "Collector 定时检查交易所公布的下架：币安现货读下架计划（要有币安只读 Key），币安永续和 OKX 永续读合约信息里的下架时间。检测漏掉的，或者想做演练，可以手工登记。"
+  },
+  {
+    title: "系统怎么处理",
+    text: "系统订阅启用时，发现后立即禁止策略买入这个标的；下架前 24 小时平掉策略持有的部分，下架前 2 小时复查一次，下架后再核对。每一步都记在执行记录里，失败时会告警。"
+  }
+] as const;
+
+/** 下架事件名：事件页签在这一行给“手工登记”。 */
+export const DELIST_EVENT = "event.collector.instrument.delist_scheduled";

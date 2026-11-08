@@ -49,9 +49,6 @@ export default {
     ["settings"]: "系统设置",
     ["settings-spaces"]: "空间管理",
     ["settings-secrets"]: "密钥管理",
-    ["events"]: "事件中心",
-    ["events-subscriptions"]: "事件订阅",
-    ["events-executions"]: "处理记录",
-    ["events-delist"]: "下架处理"
+    ["events"]: "事件中心"
   }
 };

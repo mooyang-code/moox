@@ -273,7 +273,7 @@ async function submit() {
       delist_at_ms: value.delist_at_ms,
       paper_only: value.paper_only
     });
-    Message.success(result.created ? "已登记，稍后可以在处理记录里看到处理进度" : "这条下架之前已经登记过");
+    Message.success(result.created ? "已登记，稍后可以在执行记录里看到处理进度" : "这条下架之前已经登记过");
     emit("update:visible", false);
   } catch (error) {
     reportControlError(error);

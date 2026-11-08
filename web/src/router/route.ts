@@ -37,22 +37,10 @@ export const staticRoutes = [
         meta: { title: "settings-secrets" }
       },
       {
-        path: "/events/subscriptions",
-        name: "events-subscriptions",
-        component: () => import("@/views/events/subscriptions/index.vue"),
-        meta: { title: "events-subscriptions" }
-      },
-      {
-        path: "/events/executions",
-        name: "events-executions",
-        component: () => import("@/views/events/executions/index.vue"),
-        meta: { title: "events-executions", reuseOnQuery: true }
-      },
-      {
-        path: "/events/delist",
-        name: "events-delist",
-        component: () => import("@/views/events/delist/index.vue"),
-        meta: { title: "events-delist" }
+        path: "/events",
+        name: "events",
+        component: () => import("@/views/events/index.vue"),
+        meta: { title: "events", reuseOnQuery: true }
       },
       {
         path: "/data/sources",

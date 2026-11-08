@@ -2,7 +2,7 @@
   <a-drawer
     :visible="visible"
     width="min(760px, 100vw)"
-    title="处理详情"
+    title="执行详情"
     :footer="false"
     unmount-on-close
     @update:visible="(value: boolean) => emit('update:visible', value)"

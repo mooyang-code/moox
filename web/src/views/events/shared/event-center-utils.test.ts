@@ -359,7 +359,7 @@ describe("系统动作重新执行的确认说明", () => {
   });
 });
 
-describe("处理记录页的 URL", () => {
+describe("执行记录页签的 URL", () => {
   it("状态用短名，认不出的当作不筛选；数组取第一个", () => {
     expect(parseExecutionQuery({ status: "failed", rule_id: "r1", execution: "x1" })).toEqual({
       status: "EXECUTION_STATUS_FAILED",

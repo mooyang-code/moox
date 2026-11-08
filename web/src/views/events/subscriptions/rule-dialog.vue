@@ -37,7 +37,7 @@
         <a-input v-model="form.notify_url" placeholder="https://example.com/hooks/moox" />
         <template #extra
           >事件发生时，向这个地址发一条 POST 请求。只支持 http 和
-          https。地址会显示在订阅列表和处理记录里，不要把令牌放进地址，接收方用验证密钥验签即可。<template
+          https。地址会显示在订阅列表和执行记录里，不要把令牌放进地址，接收方用验证密钥验签即可。<template
             v-if="rule?.secret_hint"
             >这条订阅的验证密钥末 4 位是 {{ rule.secret_hint }}。</template
           ></template
@@ -66,7 +66,8 @@ import EventInfo from "../shared/event-info.vue";
 
 defineOptions({ name: "EventRuleDialog" });
 
-const props = defineProps<{ visible: boolean; rule: EventRule | null; events: SubscribableEvent[] }>();
+/** presetEvent：新建时预选的触发事件（从事件页签点“订阅”进来）；为空时选第一个。 */
+const props = defineProps<{ visible: boolean; rule: EventRule | null; events: SubscribableEvent[]; presetEvent?: string }>();
 const emit = defineEmits<{
   "update:visible": [value: boolean];
   saved: [payload: { rule: EventRule; signingSecret: string }];
@@ -93,7 +94,10 @@ function init() {
   const rule = props.rule;
   Object.assign(form, {
     name: rule?.name ?? "",
-    event_name: rule?.event_name ?? props.events[0]?.event_name ?? "",
+    event_name:
+      rule?.event_name ??
+      (props.events.some(event => event.event_name === props.presetEvent) ? props.presetEvent : props.events[0]?.event_name) ??
+      "",
     notify_url: rule?.notify_url ?? "",
     allow_private_address: rule?.allow_private_address ?? false,
     enabled: rule?.enabled ?? true
