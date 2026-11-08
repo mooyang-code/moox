@@ -10,7 +10,10 @@ const ctx = vi.hoisted(() => ({
   targets: {} as Record<string, any>
 }));
 vi.mock("vue-router", () => ({ useRouter: () => ({ push: ctx.push }) }));
-vi.mock("@/store/modules/space", () => ({ useSpaceStore: () => ctx.space }));
+vi.mock("@/store/modules/space", () => ({
+  useSpaceStore: () => ctx.space,
+  isSystemSpace: (spaceId: string | undefined) => (spaceId || "").startsWith("mooxsys")
+}));
 vi.mock("@/store/modules/user-info", () => ({ useUserInfoStore: () => ({ account: { user: { userName: "admin123" } } }) }));
 vi.mock("@/api/monitor", () => ({ monitorApi: { getOverview: vi.fn(async () => ({ overview: ctx.overview })) } }));
 vi.mock("@/api/admin/http", () => ({ callControl: vi.fn(async () => ({ page: { total: 4 } })) }));
@@ -107,7 +110,7 @@ async function render() {
 describe("home page", () => {
   beforeEach(() => {
     ctx.push.mockReset();
-    ctx.space = reactive({ selectedSpaceId: "crypto", selectedSpace: { name: "加密货币市场" } });
+    ctx.space = reactive({ selectedSpaceId: "crypto", selectedSpace: { name: "加密货币市场" }, setSelectedSpace: vi.fn() });
     ctx.overview = {
       topology_known: true,
       summary: { components: { healthy_count: 22 } },
@@ -238,6 +241,25 @@ describe("home page", () => {
     expect(wrapper.find(".tile-attention .all-clear").text()).toContain("另有 1 项读取失败");
     expect(wrapper.text()).toContain("读取失败 · 重试");
     expect(wrapper.text()).toContain("更新于 —");
+  });
+
+  it("待处理里别的空间的告警，点开前先切到那个空间", async () => {
+    ctx.overview.alerts = [
+      {
+        id: "a1",
+        severity: "warning",
+        title: "数据中断",
+        triggered_at: new Date().toISOString(),
+        object: { type: "dataset", producer: "collector", dataset_id: "ds_cn", freq: "5m", space_id: "stockcn" }
+      }
+    ];
+    const wrapper = await render();
+    const order: string[] = [];
+    (ctx.space.setSelectedSpace as ReturnType<typeof vi.fn>).mockImplementation(() => order.push("switch"));
+    ctx.push.mockImplementation(() => order.push("push"));
+    await wrapper.find(".tile-attention .attention-line").trigger("click");
+    expect(ctx.space.setSelectedSpace).toHaveBeenCalledWith("stockcn");
+    expect(order).toEqual(["switch", "push"]);
   });
 
   it("does not claim everything is normal while data is lagging", async () => {

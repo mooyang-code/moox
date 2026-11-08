@@ -713,7 +713,7 @@ a {
   color: var(--color-text-2);
 }
 
-/* Banner：浅底色整块，状态用图标与文字颜色表达，不画边框与色条 */
+/* Banner：浅底色整块，状态用文字颜色表达，不画边框与色条 */
 .banner {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
