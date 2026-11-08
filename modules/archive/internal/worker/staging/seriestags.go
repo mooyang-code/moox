@@ -57,7 +57,7 @@ func FileSeriesTags(path string, limit int) ([]string, error) {
 			break
 		}
 		if err != nil {
-			return nil, fmt.Errorf("读取 %s: %w", path, err)
+			return nil, fmt.Errorf("读取 %s 第 %d 行: %w", path, reader.Line(), err)
 		}
 		if column < len(record) && !seen[record[column].Value] {
 			seen[record[column].Value] = true

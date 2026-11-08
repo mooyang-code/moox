@@ -363,11 +363,13 @@ func runArchiveImport(ctx context.Context, out io.Writer, f archiveFlags) error 
 	if err := archiveCall(ctx, gateway, "ImportArchiveFile", &archivepb.ImportArchiveFileReq{
 		SpaceId: f.SpaceID, DatasetId: f.DatasetID, ImportId: importID, FileName: name, Overwrite: f.Overwrite,
 	}, created, created.GetRetInfo); err != nil {
+		// 文件已经在 worker 上：不论哪种失败都给出导入 ID 与重试命令，免得重新上传整个文件。
+		hint := "排除原因后"
 		if created.GetRetInfo().GetCode() == commonpb.ErrorCode_CONFLICT {
-			return fmt.Errorf("%w\n文件已在 worker 上，导入 ID：%s（导入目录保留 7 天）；等运行结束后不用重新上传，执行：\n  %s",
-				err, importID, archiveImportRetryCommand(f, importID))
+			hint = "等运行结束后"
 		}
-		return err
+		return fmt.Errorf("%w\n文件已在 worker 上，导入 ID：%s（导入目录保留 7 天）；%s不用重新上传，执行：\n  %s",
+			err, importID, hint, archiveImportRetryCommand(f, importID))
 	}
 	if !f.Wait {
 		return printArchiveProto(out, created)
