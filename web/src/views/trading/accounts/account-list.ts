@@ -11,39 +11,55 @@ export function joinedAccountIds(logicals: readonly LogicalAccount[]): Set<strin
   return new Set(logicals.flatMap(item => (item.members || []).map(member => member.trading_account_id)));
 }
 
-/** 已关闭的模拟账户：关闭会停用账户并移出组合，之后不能再启用，也不再出现在未加入组合的列表里。 */
+/** 已关闭的模拟账户：关闭会停用账户并移出组合，之后不能再启用，也不再出现在执行账户列表里。 */
 export function isClosedPaper(account: Pick<TradingAccount, "execution_mode" | "status">): boolean {
   return account.execution_mode === 1 && account.status !== "ENABLED";
 }
 
-export function unjoinedAccounts(
+/** 执行账户子页签的一行：账户本身，以及它所在的组合（没加入组合时为空）。 */
+export interface ExecutionRow {
+  key: string;
+  account: TradingAccount;
+  logical: LogicalAccount | null;
+  priority: number | null;
+  enabled: boolean | null;
+}
+
+/** 当前环境下的执行账户（已关闭的模拟账户不列），带上所属组合；一个账户最多在一个组合里。 */
+export function executionRows(
   accounts: readonly TradingAccount[],
   logicals: readonly LogicalAccount[],
   env: Environment
-): TradingAccount[] {
-  const joined = joinedAccountIds(logicals);
-  return accounts.filter(
-    item => !joined.has(item.trading_account_id) && !isClosedPaper(item) && accountEnvironment(item) === env
-  );
-}
-
-export interface MemberRow {
-  kind: "member";
-  key: string;
-  account: TradingAccount;
-  priority: number;
-  enabled: boolean;
+): ExecutionRow[] {
+  const owner = new Map<string, { logical: LogicalAccount; priority: number; enabled: boolean }>();
+  for (const logical of logicals) {
+    for (const member of logical.members || []) {
+      owner.set(member.trading_account_id, { logical, priority: member.priority, enabled: member.enabled });
+    }
+  }
+  return accounts
+    .filter(item => !isClosedPaper(item) && accountEnvironment(item) === env)
+    .map(account => {
+      const joined = owner.get(account.trading_account_id);
+      return {
+        key: account.trading_account_id,
+        account,
+        logical: joined?.logical ?? null,
+        priority: joined?.priority ?? null,
+        enabled: joined?.enabled ?? null
+      };
+    });
 }
 
 export interface ComboRow {
-  kind: "combo";
   key: string;
   logical: LogicalAccount;
   env: Environment;
   exchangesText: string;
   equity: number | null;
   settlementAsset: string;
-  children: MemberRow[];
+  /** 组合里能找到的执行账户（含停用的成员） */
+  members: TradingAccount[];
 }
 
 function snapshotNumber(value: string | undefined): number | null {
@@ -70,29 +86,23 @@ export function comboRows(
   return logicals
     .filter(logical => logicalInEnvironment(logical, accounts, env))
     .map(logical => {
-      const children: MemberRow[] = [];
+      const members: TradingAccount[] = [];
+      const enabled: TradingAccount[] = [];
       for (const member of logical.members || []) {
         const account = accounts.get(member.trading_account_id);
-        if (account) {
-          children.push({
-            kind: "member",
-            key: `${logical.logical_account_id}/${account.trading_account_id}`,
-            account,
-            priority: member.priority,
-            enabled: member.enabled
-          });
-        }
+        if (!account) continue;
+        members.push(account);
+        if (member.enabled) enabled.push(account);
       }
-      const exchanges = [...new Set(children.map(item => exchangeLabels[item.account.exchange] || "-"))];
+      const exchanges = [...new Set(members.map(item => exchangeLabels[item.exchange] || "-"))];
       return {
-        kind: "combo" as const,
         key: logical.logical_account_id,
         logical,
         env,
         exchangesText: exchanges.length ? exchanges.join("、") : "-",
-        equity: sumEquity(children.filter(item => item.enabled).map(item => item.account)),
+        equity: sumEquity(enabled),
         settlementAsset: logical.settlement_asset,
-        children
+        members
       };
     });
 }

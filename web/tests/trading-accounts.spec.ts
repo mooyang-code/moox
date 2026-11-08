@@ -23,7 +23,10 @@ async function openDetail(page: Page, id: string, tab = "") {
   await page.goto(`/#/trading/accounts/${id}${tab ? `?tab=${tab}` : ""}`);
 }
 
-test("列表按环境分页签，只列组合账户，三角展开执行账户并显示市场", async ({ page }) => {
+const listTab = (page: Page, label: string) =>
+  page.locator(".list-tabs .arco-tabs-tab").filter({ hasText: new RegExp(`^${label}`) });
+
+test("列表按环境分页签，组合账户、执行账户分两个子页签，执行账户显示市场和所属组合", async ({ page }) => {
   await page.goto("/#/trading/accounts");
   await expect(page.getByRole("tab", { name: "模拟盘" })).toHaveAttribute("aria-selected", "true");
   for (const title of ["组合账户", "交易所", "关联策略", "自动执行", "权益", "近 24 小时", "持仓", "就绪"]) {
@@ -32,12 +35,15 @@ test("列表按环境分页签，只列组合账户，三角展开执行账户�
   await expect(page.getByText("默认策略模拟组合")).toBeVisible();
   await expect(page.getByText("动量轮动")).toBeVisible();
   await expect(page.getByText("币安测试网")).toHaveCount(0);
-  // 未加入组合的执行账户不在列表里，收进右上角链接
+  // 执行账户在自己的子页签里，组合账户页签不列
   await expect(page.getByText("OKX 模拟（未加入）")).toHaveCount(0);
-  await expect(page.getByText("未加入组合的执行账户 1 个")).toBeVisible();
-  await page.locator(".arco-table-expand-btn").first().click();
+  await listTab(page, "执行账户").click();
+  await expect(page).toHaveURL(/list=execution/);
+  await expect(page.getByText("OKX 模拟（未加入）")).toBeVisible();
   await expect(page.getByText("币安模拟").first()).toBeVisible();
   await expect(page.getByText("币安 · 现货、永续")).toBeVisible();
+  await expect(page.getByRole("row", { name: /OKX 模拟（未加入）/ }).getByText("未加入", { exact: true })).toBeVisible();
+  await listTab(page, "组合账户").click();
   await expect(page).toHaveURL(/#\/trading\/accounts$/);
 
   await page.getByRole("tab", { name: "测试网" }).click();
@@ -48,12 +54,13 @@ test("列表按环境分页签，只列组合账户，三角展开执行账户�
   await expect(page.getByText("生产组合")).toBeVisible();
 });
 
-test("未加入组合的执行账户在弹窗里加入组合", async ({ page }) => {
-  await page.goto("/#/trading/accounts");
-  await page.getByText("未加入组合的执行账户 1 个").click();
+test("未加入组合的执行账户在执行账户页签的行上加入组合", async ({ page }) => {
+  await page.goto("/#/trading/accounts?list=execution");
+  await page
+    .getByRole("row", { name: /OKX 模拟（未加入）/ })
+    .getByRole("button", { name: "加入组合" })
+    .click();
   const dialog = page.locator(".arco-modal:visible");
-  await expect(dialog.getByText("OKX 模拟（未加入）")).toBeVisible();
-  await dialog.getByRole("button", { name: "加入组合" }).first().click();
   await expect(dialog.getByText("把「OKX 模拟（未加入）」加入组合")).toBeVisible();
   // 运行中的组合不能加成员，只剩已暂停的手动组合
   await dialog.locator(".arco-select").first().click();
@@ -107,7 +114,7 @@ test("详情页六个页签用 ?tab= 直达，切换页签不重建页面", asyn
     ["orders", "订单"],
     ["fills", "成交"],
     ["ledger", "资金流水"],
-    ["settings", "执行账户与设置"]
+    ["settings", "成员与设置"]
   ]) {
     await detailTab(page, label).click();
     await expect(page).toHaveURL(new RegExp(`tab=${tab}`));
@@ -171,11 +178,11 @@ test("从详情页返回列表时重新读取，不显示缓存的旧数据", as
   await page.getByText("默认策略模拟组合").click();
   await expect(page.getByRole("heading", { name: "默认策略模拟组合" })).toBeVisible();
   await page.getByRole("button", { name: "模拟盘" }).first().click();
-  await expect(page.getByText("未加入组合的执行账户 1 个")).toBeVisible();
+  await expect(page.locator(".list-tabs")).toBeVisible();
   await expect.poll(() => calls.listLogicals).toBeGreaterThan(before);
 });
 
-test("1280 宽时列表和成员表的每一列都保持自己的宽度，数字不折行", async ({ page }) => {
+test("1280 宽时组合和执行账户列表的每一列都保持自己的宽度，数字不折行", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 720 });
   await page.goto("/#/trading/accounts");
   await expect(page.getByText("默认策略模拟组合")).toBeVisible();
@@ -189,8 +196,8 @@ test("1280 宽时列表和成员表的每一列都保持自己的宽度，数字
   expect(strategy?.width).toBeGreaterThanOrEqual(190);
   await expect(page.getByText("动量轮动")).toBeVisible();
 
-  await openDetail(page, "la-paper-1", "settings");
-  const equity = page.locator(".tx-detail .arco-table-td .tx-num").first();
+  await listTab(page, "执行账户").click();
+  const equity = page.locator(".tx-accounts .arco-table-td .tx-num").first();
   await expect(equity).toBeVisible();
   expect((await equity.boundingBox())?.height).toBeLessThan(28);
 });

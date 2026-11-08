@@ -152,7 +152,7 @@
             <template #title>未就绪</template>
             <div v-for="reason in logical.readiness_reasons" :key="reason">{{ reason }}</div>
             <template #action>
-              <a-button size="mini" @click="setTab('settings')">去看执行账户</a-button>
+              <a-button size="mini" @click="setTab('settings')">去看成员</a-button>
             </template>
           </a-alert>
         </div>
