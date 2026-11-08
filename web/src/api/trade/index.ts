@@ -4,7 +4,8 @@ export {
   isTradeInvalidParam,
   isTradeNotFound,
   isTradeSessionNotReady,
-  TradeResponseError
+  TradeResponseError,
+  withDialogErrors
 } from "./http";
 import type {
   AccountResponse,
@@ -146,13 +147,16 @@ export function listTradableInstruments(trading_account_id: string) {
   );
 }
 
-export function queryEquityCurve(req: {
-  trading_account_id?: string;
-  logical_account_id?: string;
-  start_time?: string;
-  end_time?: string;
-}) {
-  return callTrade<typeof req, { ret_info: RetInfo; points: EquityPoint[] }>("console", "QueryEquityCurve", req);
+export function queryEquityCurve(
+  req: {
+    trading_account_id?: string;
+    logical_account_id?: string;
+    start_time?: string;
+    end_time?: string;
+  },
+  options: { silent?: boolean } = {}
+) {
+  return callTrade<typeof req, { ret_info: RetInfo; points: EquityPoint[] }>("console", "QueryEquityCurve", req, options);
 }
 
 export function listHoldings(trading_account_id: string, options: { silent?: boolean } = {}) {
@@ -299,8 +303,13 @@ export function getOrder(order_id: string, options: { silent?: boolean } = {}) {
   return callTrade<{ order_id: string }, { ret_info: RetInfo; order: Order }>("console", "GetOrder", { order_id }, options);
 }
 
-export function listOrders(req: ListOrdersReq = {}) {
-  return callTrade<ListOrdersReq, { ret_info: RetInfo; orders: Order[]; page_result: PageResult }>("console", "ListOrders", req);
+export function listOrders(req: ListOrdersReq = {}, options: { silent?: boolean } = {}) {
+  return callTrade<ListOrdersReq, { ret_info: RetInfo; orders: Order[]; page_result: PageResult }>(
+    "console",
+    "ListOrders",
+    req,
+    options
+  );
 }
 
 export function listFills(req: ListFillsReq = {}) {
@@ -316,11 +325,12 @@ export function summarizeAccountPnl(req: SummarizeAccountPnlReq) {
   return callTrade<SummarizeAccountPnlReq, SummarizeAccountPnlRsp>("console", "SummarizeAccountPnl", req);
 }
 
-export function listOperatorActions(req: ListOperatorActionsReq) {
+export function listOperatorActions(req: ListOperatorActionsReq, options: { silent?: boolean } = {}) {
   return callTrade<ListOperatorActionsReq, { ret_info: RetInfo; actions?: OperatorAction[]; page_result?: PageResult }>(
     "console",
     "ListOperatorActions",
-    req
+    req,
+    options
   );
 }
 

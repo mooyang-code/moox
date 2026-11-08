@@ -9,6 +9,11 @@ export const recordRanges = [
 
 export type RecordRange = (typeof recordRanges)[number]["key"];
 
+/** 地址里的时间范围；没有或不认识时用默认的近 7 天。 */
+export function rangeFromQuery(value: unknown): RecordRange {
+  return recordRanges.find(item => item.key === value)?.key ?? "7d";
+}
+
 /** 订单、成交按时间范围分页读取；“全部”不带时间条件。 */
 export function rangeParams(range: RecordRange, now = Date.now()): { start_time?: string; end_time?: string } {
   const ms = recordRanges.find(item => item.key === range)?.ms ?? 0;

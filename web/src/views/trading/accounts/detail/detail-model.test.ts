@@ -5,7 +5,9 @@ import {
   flattenPreview,
   isFlattenRunning,
   memberTotals,
+  orderStateTone,
   paperInitialBalance,
+  runningAction,
   tabFromQuery,
   targetExpired
 } from "./detail-model";
@@ -73,5 +75,25 @@ describe("较初始资金的变化", () => {
     expect(equityChangeOf(null, 1000)).toBeNull();
     expect(equityChangeOf(1100, 1000)).toBe(100);
     expect(equityChangeOf(1100, null)).toBeNull();
+  });
+});
+
+describe("刷新后接回操作与订单配色", () => {
+  it("取最近一个进行中的操作，没有时为空", () => {
+    const actions = [
+      { action_id: "a2", status: "SUCCEEDED" },
+      { action_id: "a1", status: "RUNNING" }
+    ] as OperatorAction[];
+    expect(runningAction(actions)?.action_id).toBe("a1");
+    expect(runningAction([actions[0]])).toBeNull();
+    expect(runningAction(undefined)).toBeNull();
+  });
+
+  it("订单状态配色", () => {
+    expect(orderStateTone("FILLED")).toBe("ok");
+    expect(orderStateTone("REJECTED")).toBe("bad");
+    expect(orderStateTone("CANCEL_UNKNOWN")).toBe("warn");
+    expect(orderStateTone("CANCELED")).toBe("");
+    expect(orderStateTone("SUBMITTED")).toBe("run");
   });
 });

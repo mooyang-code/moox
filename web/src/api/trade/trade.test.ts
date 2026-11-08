@@ -217,12 +217,17 @@ describe("Trade public API", () => {
       page: { page: 2, size: 10 }
     };
     await trade.listOperatorActions(actions);
-    expect(callTrade).toHaveBeenLastCalledWith("console", "ListOperatorActions", actions);
+    expect(callTrade).toHaveBeenLastCalledWith("console", "ListOperatorActions", actions, {});
 
     await trade.listOrders({ logical_account_id: "logical-1", owner_type: "SYSTEM" });
-    expect(callTrade).toHaveBeenLastCalledWith("console", "ListOrders", {
-      logical_account_id: "logical-1",
-      owner_type: "SYSTEM"
-    });
+    expect(callTrade).toHaveBeenLastCalledWith(
+      "console",
+      "ListOrders",
+      {
+        logical_account_id: "logical-1",
+        owner_type: "SYSTEM"
+      },
+      {}
+    );
   });
 });

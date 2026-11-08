@@ -82,7 +82,7 @@
         </a-table-column>
         <a-table-column title="状态" :width="120">
           <template #cell="{ record }">
-            <StatusMark :tone="stateTone(record.state)">{{ orderStateLabels[record.state] || record.state }}</StatusMark>
+            <StatusMark :tone="orderStateTone(record.state)">{{ orderStateLabels[record.state] || record.state }}</StatusMark>
           </template>
         </a-table-column>
         <a-table-column title="来源" :width="80">
@@ -110,17 +110,20 @@
 <script setup lang="ts">
 import { useWindowSize } from "@vueuse/core";
 import { computed, inject, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import { canCancelOrderState, listOrders, orderOwnerLabels, orderStateLabels } from "@/api/trade";
 import type { MarketType, Order } from "@/api/trade";
 import { createLatestRequestGuard } from "@/utils/latest-request";
+import { usePolling } from "@/hooks/usePolling";
 import { fmtQty } from "../shared/format";
 import { instrumentName, marketLabel } from "../shared/markets";
+import { orderStateTone } from "./detail-model";
 import { instrumentFilter } from "./instrument-filter";
 import SectionBlock from "../shared/section-block.vue";
 import StatusMark from "../shared/status-mark.vue";
 import { detailContextKey } from "./context";
 import OrderDetailDrawer from "./order-detail-drawer.vue";
-import { rangeParams, recordRanges, type RecordRange } from "./record-range";
+import { rangeFromQuery, rangeParams, recordRanges, type RecordRange } from "./record-range";
 import { formatInstant } from "@/utils/time-zone";
 import { useDisplayZone } from "@/hooks/useDisplayZone";
 
@@ -131,12 +134,16 @@ const { logical, accounts, dataVersion, openCancel } = inject(detailContextKey)!
 const { width: viewportWidth } = useWindowSize();
 const isNarrow = computed(() => viewportWidth.value < 768);
 
-const range = ref<RecordRange>("7d");
-const state = ref<string>();
-const ownerType = ref<string>();
-const accountId = ref<string>();
-const symbol = ref("");
-const market = ref<MarketType>();
+// 筛选条件写在地址里（o 开头），切换页签回来、刷新页面后仍保持
+const route = useRoute();
+const router = useRouter();
+const queryText = (key: string) => (typeof route.query[key] === "string" ? (route.query[key] as string) : undefined);
+const range = ref<RecordRange>(rangeFromQuery(route.query.orange));
+const state = ref<string | undefined>(queryText("ostate"));
+const ownerType = ref<string | undefined>(queryText("oowner"));
+const accountId = ref<string | undefined>(queryText("oaccount"));
+const symbol = ref(queryText("osymbol") ?? "");
+const market = ref<MarketType | undefined>(queryText("omarket") as MarketType | undefined);
 const page = ref(1);
 const pageSize = 20;
 const total = ref(0);
@@ -166,45 +173,32 @@ watch(
   { immediate: true }
 );
 
-function stateTone(value: string) {
-  switch (value) {
-    case "FILLED":
-      return "ok";
-    case "REJECTED":
-    case "EXPIRED":
-      return "bad";
-    case "PARTIALLY_FILLED":
-    case "CANCELING":
-    case "SUBMIT_UNKNOWN":
-    case "CANCEL_UNKNOWN":
-      return "warn";
-    case "CANCELED":
-    case "PARTIALLY_CANCELED":
-      return "";
-    default:
-      return "run";
-  }
-}
-
-async function load() {
+/** background：有未完成订单时每 5 秒的后台刷新，不转加载态、不弹提示，失败时保留上次的列表。 */
+async function load(background = false) {
   const request = requests.begin();
-  loading.value = true;
-  error.value = "";
+  if (!background) {
+    loading.value = true;
+    error.value = "";
+  }
   try {
-    const rsp = await listOrders({
-      logical_account_id: logical.value.logical_account_id,
-      trading_account_id: accountId.value,
-      instrument_id: instrumentFilter(symbol.value, market.value, logical.value.settlement_asset),
-      state: state.value,
-      owner_type: ownerType.value || undefined,
-      ...rangeParams(range.value),
-      page: { page: page.value, size: pageSize }
-    });
+    const rsp = await listOrders(
+      {
+        logical_account_id: logical.value.logical_account_id,
+        trading_account_id: accountId.value,
+        instrument_id: instrumentFilter(symbol.value, market.value, logical.value.settlement_asset),
+        state: state.value,
+        owner_type: ownerType.value || undefined,
+        ...rangeParams(range.value),
+        page: { page: page.value, size: pageSize }
+      },
+      { silent: background }
+    );
     if (!request.isLatest()) return;
     orders.value = rsp.orders || [];
     total.value = rsp.page_result?.total || 0;
+    error.value = "";
   } catch (cause) {
-    if (!request.isLatest()) return;
+    if (!request.isLatest() || background) return;
     orders.value = [];
     error.value = cause instanceof Error ? cause.message : "订单读取失败";
   } finally {
@@ -214,6 +208,17 @@ async function load() {
 
 function search() {
   page.value = 1;
+  void router.replace({
+    query: {
+      ...route.query,
+      orange: range.value === "7d" ? undefined : range.value,
+      ostate: state.value || undefined,
+      oowner: ownerType.value || undefined,
+      oaccount: accountId.value || undefined,
+      osymbol: symbol.value.trim() || undefined,
+      omarket: symbol.value.trim() ? market.value : undefined
+    }
+  });
   void load();
 }
 function changePage(value: number) {
@@ -227,6 +232,12 @@ function openDrawer(order: Order) {
 
 watch(() => logical.value.logical_account_id, search, { immediate: true });
 watch(dataVersion, () => void load());
+// 列表里有未完成的订单时每 5 秒刷新一次，看着它成交或撤掉
+usePolling(
+  () => load(true),
+  5000,
+  () => orders.value.some(order => canCancelOrderState(order.state))
+);
 </script>
 
 <style src="../shared/accounts.css"></style>
