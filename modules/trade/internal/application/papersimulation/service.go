@@ -11,6 +11,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"gorm.io/gorm"
 )
@@ -42,6 +43,8 @@ type Result struct {
 
 type Service struct {
 	Store *store.Store
+	// Exchanges 校验场所支持的市场和结算资产（BINANCE、OKX 不开股票，ASHARE 只开股票、按 CNY 结算）。
+	Exchanges execution.ExchangeCatalog
 }
 
 func (s *Service) Create(ctx context.Context, command CreateCommand) (Result, error) {
@@ -57,6 +60,13 @@ func (s *Service) Create(ctx context.Context, command CreateCommand) (Result, er
 	markets, err := exchange.NormalizeMarkets(command.Markets)
 	if err != nil {
 		return Result{}, fmt.Errorf("paper simulation: %w", err)
+	}
+	if err := execution.ValidateAccount(s.Exchanges, command.Exchange, markets, command.SettlementAsset, exchange.ExecutionModePaper); err != nil {
+		return Result{}, fmt.Errorf("%w: %v", store.ErrInvalidRecord, err)
+	}
+	if slices.ContainsFunc(markets, func(market exchange.MarketType) bool { return exchange.RuleFor(market).StockFees }) {
+		// A 股只有一个佣金比例（复用 taker 费率字段），挂单、吃单一样。
+		command.MakerFeeRate = command.TakerFeeRate
 	}
 	hasLeverage := slices.ContainsFunc(markets, func(market exchange.MarketType) bool {
 		return exchange.RuleFor(market).Leverage

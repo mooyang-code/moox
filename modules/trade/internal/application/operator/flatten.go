@@ -1091,11 +1091,12 @@ func (s *Service) flattenAccount(
 		result.quotes = nil
 		result.pacedOnly = false
 		reasons := make(map[string]flattenReason)
+		canOrder, sessionReason := execution.CanOrder(s.Exchanges, account.Exchange, time.Now())
 		switch {
 		case len(account.Markets) == 0:
 			result.addError(flattenFinal{errors.New("账户没有开通任何市场")})
-		case !execution.InTradingSession(s.Exchanges, account.Exchange, time.Now()):
-			result.addError(flattenFinal{errors.New("当前不在交易时段")})
+		case !canOrder:
+			result.addError(flattenFinal{errors.New(sessionReason)})
 		default:
 			// 持仓来自余额的市场（现货、股票）和来自持仓表的市场（合约）各清各的。
 			if account.HasBalanceMarket() {

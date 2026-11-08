@@ -72,6 +72,8 @@ const (
 	ExchangeUnspecified Exchange = ""
 	ExchangeBinance     Exchange = "BINANCE"
 	ExchangeOKX         Exchange = "OKX"
+	// ExchangeAShare 是 A 股（沪深北三所），按市场命名，不按券商命名：模拟盘走 Trade 内的撮合，实盘走 QMT 执行端。
+	ExchangeAShare Exchange = "ASHARE"
 )
 
 // Valid 只检查非空。是否支持由 execution.Registry 判断，新增场所不用改这里。

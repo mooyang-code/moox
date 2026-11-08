@@ -95,6 +95,10 @@ func (s *Service) Create(
 	if s == nil || s.Store == nil {
 		return tradingaccount.Account{}, ErrServiceNotConfigured
 	}
+	// 场所校验在前：A 股实盘先报“QMT 执行端尚未接入”，不让用户先碰到凭据、检测之类的错误。
+	if err := execution.ValidateAccount(s.Exchanges, value.Exchange, value.Markets, value.SettlementAsset, value.ExecutionMode); err != nil {
+		return tradingaccount.Account{}, fmt.Errorf("%w: %v", tradingaccount.ErrInvalidAccount, err)
+	}
 	if err := value.Validate(); err != nil {
 		return tradingaccount.Account{}, err
 	}
@@ -144,6 +148,11 @@ func (s *Service) Update(
 	applyUpdate(&projected, command)
 	if err := projected.Validate(); err != nil {
 		return tradingaccount.Account{}, err
+	}
+	if command.SettlementAsset != nil {
+		if err := execution.ValidateAccount(s.Exchanges, projected.Exchange, projected.Markets, projected.SettlementAsset, projected.ExecutionMode); err != nil {
+			return tradingaccount.Account{}, fmt.Errorf("%w: %v", tradingaccount.ErrInvalidAccount, err)
+		}
 	}
 	if current.Status == exchange.AccountStatusEnabled && projected.Status != exchange.AccountStatusEnabled {
 		name, err := s.Store.LogicalAccountName(ctx, current.SpaceID, current.ID)

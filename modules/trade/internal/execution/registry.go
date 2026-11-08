@@ -2,11 +2,11 @@ package execution
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 )
@@ -25,8 +25,14 @@ type ExchangeDescriptor struct {
 	Exchange     exchange.Exchange
 	OrderTypes   []exchange.OrderType
 	FillPolicies []exchange.FillPolicy
-	// TradingSession 判断当前是否在交易时段；nil 表示全天可交易。
-	TradingSession func(time.Time) bool
+	// Markets 是场所支持开通的市场，建账户时校验；BINANCE、OKX 是现货和永续，ASHARE 只有股票。
+	Markets []exchange.MarketType
+	// SettlementAssets 是场所允许的结算资产；为空表示不限制（由市场规则自己校验）。
+	SettlementAssets []string
+	// LiveUnavailable 非空时这个场所还不能建实盘账户，内容是给人看的原因。
+	LiveUnavailable string
+	// Session 是交易时段；nil 表示全天可交易。
+	Session TradingSession
 	// Inspect 检测这个场所的密钥（账户类型、权限）；nil 表示不支持检测（券商、模拟盘）。
 	Inspect exchange.Inspector
 	// WholeAccount 报告某个账户配置是否由一个适配器同时服务全部市场（币安统一账户：一个余额接口、一条私有流），
@@ -34,23 +40,41 @@ type ExchangeDescriptor struct {
 	WholeAccount func(exchange.AccountConfig) bool
 }
 
-// InTradingSession 报告场所当前是否可以下单。
-func (d ExchangeDescriptor) InTradingSession(now time.Time) bool {
-	return d.TradingSession == nil || d.TradingSession(now)
-}
-
 // ExchangeCatalog 按场所名查询静态信息。
 type ExchangeCatalog interface {
 	Descriptor(name exchange.Exchange) (ExchangeDescriptor, bool)
 }
 
-// InTradingSession 报告账户所在场所当前是否可以下单；没有登记的场所视为全天可交易。
-func InTradingSession(exchanges ExchangeCatalog, name string, now time.Time) bool {
+// ValidateAccount 校验场所能不能建这种账户：场所已登记、支持这些市场、结算资产对得上、实盘已经接入。
+// 模拟账户和实盘账户建立时共用；只在建账户（和改结算资产）的路径上调用，不进会话绑定，
+// 库里已有的旧账户不会因此在启动时全部加载失败。目录为空（只在单元测试里）时不校验。
+func ValidateAccount(
+	exchanges ExchangeCatalog,
+	name exchange.Exchange,
+	markets []exchange.MarketType,
+	settlementAsset string,
+	mode exchange.ExecutionMode,
+) error {
 	if exchanges == nil {
-		return true
+		return nil
 	}
-	descriptor, ok := exchanges.Descriptor(exchange.Exchange(name))
-	return !ok || descriptor.InTradingSession(now)
+	descriptor, ok := exchanges.Descriptor(name)
+	if !ok {
+		return fmt.Errorf("不支持的场所 %q", name)
+	}
+	for _, market := range markets {
+		if len(descriptor.Markets) != 0 && !slices.Contains(descriptor.Markets, market) {
+			return fmt.Errorf("场所 %s 不支持开通市场 %s", name, market)
+		}
+	}
+	if len(descriptor.SettlementAssets) != 0 &&
+		!slices.Contains(descriptor.SettlementAssets, strings.ToUpper(strings.TrimSpace(settlementAsset))) {
+		return fmt.Errorf("场所 %s 的结算资产只能是 %s", name, strings.Join(descriptor.SettlementAssets, "、"))
+	}
+	if mode == exchange.ExecutionModeLive && descriptor.LiveUnavailable != "" {
+		return errors.New(descriptor.LiveUnavailable)
+	}
+	return nil
 }
 
 // Inspect 用场所登记的检测函数检测一把密钥；场所没有登记检测函数时返回错误。

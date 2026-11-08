@@ -28,6 +28,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/eventconsumer"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange/ashare"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/binance"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/httpclient"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/okx"
@@ -92,7 +93,21 @@ func initialize(
 	}()
 	secrets := secretclient.New(gateway)
 	registry := execution.NewRegistry()
-	registerBuiltins(registry)
+	// A 股公共行情整个进程一份：快照缓存、标的列表都共用；列表加载完之前用库里已有的标的。
+	ashareMarket := ashare.NewMarket(nil, func(seedCtx context.Context) ([]exchange.Instrument, error) {
+		records, listErr := tradeStore.ListInstruments(seedCtx, string(exchange.ExchangeAShare), string(exchange.MarketTypeStock))
+		if listErr != nil {
+			return nil, listErr
+		}
+		instruments := make([]exchange.Instrument, 0, len(records))
+		for _, record := range records {
+			instruments = append(instruments, instrumentFromRecord(exchange.ExchangeAShare, exchange.MarketTypeStock, record))
+		}
+		return instruments, nil
+	})
+	if err := registerBuiltins(registry, ashareMarket); err != nil {
+		return nil, err
+	}
 	tradeStore.SetModuleMetrics(registerMetricsReporter(serverInstance))
 
 	manager := &traderuntime.Manager{
@@ -356,6 +371,10 @@ func initialize(
 		}()
 	}
 	runWorker(manager.Run)
+	runWorker(func(workerCtx context.Context) error {
+		ashareMarket.RunListRefresh(workerCtx)
+		return workerCtx.Err()
+	})
 	runWorker(targetWorker.Run)
 	runWorker(operatorWorker.Run)
 	runWorker(paperMatcherWorker.Run)
@@ -453,7 +472,7 @@ func initialize(
 		},
 
 		rpc.ConsoleOptions{
-			Paper:              &papersimulation.Service{Store: tradeStore},
+			Paper:              &papersimulation.Service{Store: tradeStore, Exchanges: registry},
 			Exchanges:          registry,
 			LiveTradingEnabled: cfg.Runtime.LiveTradingEnabled,
 			MatcherReady:       paperMatcherWorker.Ready,
@@ -524,12 +543,13 @@ func initialize(
 }
 
 // registerBuiltins 是唯一的场所注册列表，新增场所时在这里加一行。
-func registerBuiltins(registry *execution.Registry) {
+func registerBuiltins(registry *execution.Registry, ashareMarket *ashare.Market) error {
 	cryptoExchange := func(name exchange.Exchange, inspect exchange.Inspector) execution.ExchangeDescriptor {
 		return execution.ExchangeDescriptor{
 			Exchange:     name,
 			OrderTypes:   []exchange.OrderType{exchange.OrderTypeMarket, exchange.OrderTypeLimit},
 			FillPolicies: []exchange.FillPolicy{exchange.FillPolicyGTC, exchange.FillPolicyIOC, exchange.FillPolicyFOK},
+			Markets:      []exchange.MarketType{exchange.MarketTypeSpot, exchange.MarketTypeSwap},
 			Inspect:      inspect,
 		}
 	}
@@ -570,7 +590,30 @@ func registerBuiltins(registry *execution.Registry) {
 		}
 		return okx.New(config, credential), nil
 	})
+	// A 股：模拟盘用腾讯快照做行情、由 Trade 撮合；实盘（仿真 TESTNET、实盘 PRODUCTION）走 QMT 执行端，尚未接入。
+	session, err := ashare.NewSession()
+	if err != nil {
+		return fmt.Errorf("A 股交易时段：%w", err)
+	}
+	registry.Register(execution.ExchangeDescriptor{
+		Exchange:         exchange.ExchangeAShare,
+		OrderTypes:       []exchange.OrderType{exchange.OrderTypeLimit},
+		FillPolicies:     []exchange.FillPolicy{exchange.FillPolicyGTC, exchange.FillPolicyIOC},
+		Markets:          []exchange.MarketType{exchange.MarketTypeStock},
+		SettlementAssets: []string{ashare.SettlementAsset},
+		LiveUnavailable:  errASharePending.Error(),
+		Session:          session,
+	}, func(config exchange.AccountConfig, _ exchange.Credential) (execution.ExecutionAdapter, error) {
+		if config.ExecutionMode == exchange.ExecutionModeLive {
+			return nil, errASharePending
+		}
+		return ashare.NewAdapter(ashareMarket), nil
+	})
+	return nil
 }
+
+// errASharePending 是 A 股实盘还不能用的原因：下单要经 QMT 执行端（第 4 批）。
+var errASharePending = errors.New("A 股实盘要通过 QMT 执行端下单，QMT 执行端尚未接入")
 
 // 模拟盘用空凭据绑定公共行情，只有实盘才要求密钥。
 func requireAPIKey(config exchange.AccountConfig, credential exchange.Credential) error {

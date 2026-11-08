@@ -11,6 +11,7 @@ import (
 
 	accountapp "github.com/mooyang-code/moox/modules/trade/internal/application/account"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange/ashare"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/binance"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
@@ -77,7 +78,7 @@ func TestExchangeCredentialPropagatesSingleSecretReadError(t *testing.T) {
 
 func TestRegisterBuiltinsBindsSupportedExchanges(t *testing.T) {
 	registry := execution.NewRegistry()
-	registerBuiltins(registry)
+	require.NoError(t, registerBuiltins(registry, ashare.NewMarket(nil, nil)))
 	for _, name := range []exchange.Exchange{
 		exchange.ExchangeBinance,
 		exchange.ExchangeOKX,
@@ -110,9 +111,37 @@ func TestRegisterBuiltinsBindsSupportedExchanges(t *testing.T) {
 	}
 }
 
+// A 股：模拟盘绑定公共行情适配器；实盘在 QMT 执行端接入前直接报错；建账户时校验场所与市场、结算资产。
+func TestRegisterBuiltinsAShare(t *testing.T) {
+	registry := execution.NewRegistry()
+	require.NoError(t, registerBuiltins(registry, ashare.NewMarket(nil, nil)))
+	config := exchange.AccountConfig{
+		TradingAccountID: "account-1", Exchange: exchange.ExchangeAShare,
+		Markets:       []exchange.MarketType{exchange.MarketTypeStock},
+		ExecutionMode: exchange.ExecutionModePaper, Environment: exchange.AccountEnvironmentProduction, SettlementAsset: "CNY",
+	}
+	adapter, err := registry.Bind(config, exchange.Credential{})
+	require.NoError(t, err)
+	_, isPublic := adapter.(*ashare.Adapter)
+	require.True(t, isPublic)
+
+	config.ExecutionMode, config.Environment = exchange.ExecutionModeLive, exchange.AccountEnvironmentTestnet
+	_, err = registry.Bind(config, exchange.Credential{})
+	require.ErrorContains(t, err, "QMT 执行端尚未接入")
+
+	stock := []exchange.MarketType{exchange.MarketTypeStock}
+	spot := []exchange.MarketType{exchange.MarketTypeSpot}
+	require.NoError(t, execution.ValidateAccount(registry, exchange.ExchangeAShare, stock, "CNY", exchange.ExecutionModePaper))
+	require.ErrorContains(t, execution.ValidateAccount(registry, exchange.ExchangeAShare, spot, "CNY", exchange.ExecutionModePaper), "不支持开通市场")
+	require.ErrorContains(t, execution.ValidateAccount(registry, exchange.ExchangeAShare, stock, "USDT", exchange.ExecutionModePaper), "结算资产只能是 CNY")
+	require.ErrorContains(t, execution.ValidateAccount(registry, exchange.ExchangeAShare, stock, "CNY", exchange.ExecutionModeLive), "QMT 执行端尚未接入")
+	require.ErrorContains(t, execution.ValidateAccount(registry, exchange.ExchangeBinance, stock, "CNY", exchange.ExecutionModePaper), "不支持开通市场")
+	require.NoError(t, execution.ValidateAccount(registry, exchange.ExchangeOKX, spot, "USDT", exchange.ExecutionModeLive))
+}
+
 func TestBinanceLiveProductionRequiresInspectedAccountMode(t *testing.T) {
 	registry := execution.NewRegistry()
-	registerBuiltins(registry)
+	require.NoError(t, registerBuiltins(registry, ashare.NewMarket(nil, nil)))
 	config := exchange.AccountConfig{
 		TradingAccountID: "account-1", Exchange: exchange.ExchangeBinance,
 		Markets:       []exchange.MarketType{exchange.MarketTypeSpot},
@@ -136,7 +165,7 @@ func TestBinanceLiveProductionRequiresInspectedAccountMode(t *testing.T) {
 // 统一账户整个账户一个适配器；普通账户按市场拆开再合成。
 func TestBindChoosesAdapterByInspectedAccountMode(t *testing.T) {
 	registry := execution.NewRegistry()
-	registerBuiltins(registry)
+	require.NoError(t, registerBuiltins(registry, ashare.NewMarket(nil, nil)))
 	both := []exchange.MarketType{exchange.MarketTypeSpot, exchange.MarketTypeSwap}
 	config := exchange.AccountConfig{
 		TradingAccountID: "account-1", Exchange: exchange.ExchangeBinance, Markets: both, MarginMode: exchange.MarginModeCross,

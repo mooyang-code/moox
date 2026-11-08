@@ -183,6 +183,19 @@ func seedFakeAccount(t *testing.T, tradeStore *store.Store, instrument exchange.
 	}))
 }
 
+// fakeSession 是测试用的交易时段：open 为真时在时段内。
+type fakeSession struct{ open *atomic.Bool }
+
+func (s fakeSession) InSession(time.Time) bool { return s.open.Load() }
+func (s fakeSession) CanOrder(time.Time) (bool, string) {
+	if s.open.Load() {
+		return true, ""
+	}
+	return false, execution.ReasonOutOfSession
+}
+func (s fakeSession) LastBreak(now time.Time) time.Time { return now.Add(-time.Minute) }
+func (s fakeSession) LastClose(now time.Time) time.Time { return now.Add(-time.Hour) }
+
 // 新增场所只注册适配器和描述信息：核心流程按规则跑通买入、T+1、交易时段和做空拒绝。
 func TestFakeExchangeRunsFullTargetLifecycle(t *testing.T) {
 	ctx := context.Background()
@@ -190,9 +203,9 @@ func TestFakeExchangeRunsFullTargetLifecycle(t *testing.T) {
 	var open atomic.Bool
 	registry := execution.NewRegistry()
 	registry.Register(execution.ExchangeDescriptor{
-		Exchange:       fakeExchangeName,
-		OrderTypes:     []exchange.OrderType{exchange.OrderTypeMarket},
-		TradingSession: func(time.Time) bool { return open.Load() },
+		Exchange:   fakeExchangeName,
+		OrderTypes: []exchange.OrderType{exchange.OrderTypeMarket},
+		Session:    fakeSession{open: &open},
 	}, func(_ exchange.AccountConfig, credential exchange.Credential) (execution.ExecutionAdapter, error) {
 		if credential.Extra["gateway"] == "" {
 			return nil, fmt.Errorf("缺少券商网关地址")

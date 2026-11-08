@@ -12,6 +12,7 @@ enum Exchange {
   EXCHANGE_UNSPECIFIED = 0;
   EXCHANGE_BINANCE = 1;
   EXCHANGE_OKX = 2;
+  EXCHANGE_ASHARE = 3;
 }
 
 enum MarketType {

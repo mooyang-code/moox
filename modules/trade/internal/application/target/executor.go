@@ -325,8 +325,8 @@ func (e *Executor) Converge(
 		now = e.Now()
 	}
 	for _, member := range members {
-		if !execution.InTradingSession(e.Exchanges, member.account.Exchange, now) {
-			target.LastError = "当前不在交易时段"
+		if ok, reason := execution.CanOrder(e.Exchanges, member.account.Exchange, now); !ok {
+			target.LastError = reason
 			if err := e.updateTarget(ctx, &target, StatusPending); err != nil {
 				return Result{}, err
 			}
