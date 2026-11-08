@@ -279,12 +279,13 @@ func TestFakeExchangeRunsFullTargetLifecycle(t *testing.T) {
 	require.Equal(t, targetapp.StatusConverged, current.Status)
 	require.Equal(t, 1, core.requestCount())
 
-	// 当日买入的不能卖。
+	// 当日买入的不能卖：顺延到次日，不算阻塞。
 	require.Equal(t, jetstream.ACK, deliver("target-sell", 3, "0"))
 	current = converge()
-	require.Equal(t, targetapp.StatusBlocked, current.Status)
+	require.Equal(t, targetapp.StatusConverged, current.Status)
 	require.Len(t, current.BlockedTargets, 1)
-	require.Contains(t, current.BlockedTargets[0].Reason, "可卖量不足")
+	require.Equal(t, "当日买入，次日可卖", current.BlockedTargets[0].Reason)
+	require.True(t, current.BlockedTargets[0].Deferred)
 	require.Equal(t, 1, core.requestCount())
 
 	// 次日可以卖出。
