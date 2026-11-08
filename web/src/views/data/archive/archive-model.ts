@@ -132,6 +132,13 @@ export function runDurationText(run: ArchiveRun | undefined, nowMs: number): str
   return end === null ? "—" : durationText((end - start) / 1000);
 }
 
+/** 读取失败像是 archive-mgr 没部署（路由不存在、连接被拒）时的补充说明。 */
+export function archiveUnavailableHint(error: string): string {
+  return /404|not found|no route|unknown service|connection refused|econnrefused|不存在|找不到/i.test(error)
+    ? "archive-mgr 是可选组件，没有部署时这里不可用"
+    : "";
+}
+
 // ---- 数据集 ----
 
 /** 时序数据集：data_kind 是枚举名或数字 2。 */

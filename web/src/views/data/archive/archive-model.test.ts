@@ -3,6 +3,7 @@ import type { ArchiveTask } from "@/api/archive";
 import type { Dataset } from "@/api/storage/types";
 import {
   archiveQueryFor,
+  archiveUnavailableHint,
   backfillFromError,
   backfillRangeError,
   durationText,
@@ -217,5 +218,13 @@ describe("URL 状态", () => {
     });
     expect(archiveQueryFor({ tab: "partitions", status: "failed" })).toEqual({});
     expect(archiveQueryFor({ create: "ds_5m" })).toEqual({ create: "ds_5m" });
+  });
+});
+
+describe("读取失败的说明", () => {
+  it("像是没部署时补一句 archive-mgr 是可选组件", () => {
+    expect(archiveUnavailableHint("Request failed with status code 404")).toContain("可选组件");
+    expect(archiveUnavailableHint("connect ECONNREFUSED 127.0.0.1:11450")).toContain("可选组件");
+    expect(archiveUnavailableHint("数据库忙")).toBe("");
   });
 });

@@ -10,6 +10,8 @@ export interface CollectorPage {
 
 export interface CollectorTaskResult {
   result_name?: string;
+  /** 结果写入的数据集；采集任务页据此显示归档状态 */
+  dataset_id?: string;
   view_id?: string;
   view_ids?: string[];
   status?: string;
