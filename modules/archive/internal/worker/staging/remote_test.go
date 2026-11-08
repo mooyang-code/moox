@@ -21,7 +21,7 @@ func exported(t *testing.T, s *Store, task Task, at time.Time, rel, sha string) 
 	if err := s.EnsureTable(ctx, task); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Stage(ctx, task, []Row{row("BTC", at, "", 1.0, 1.0, nil, nil)}, utcDay, now0); err != nil {
+	if _, err := s.Stage(ctx, task, []Row{row("BTC", at, "", 1.0, 1.0, nil, nil)}, utcDay, now0, StageReplace); err != nil {
 		t.Fatal(err)
 	}
 	key := utcDay(at).Key
@@ -114,7 +114,7 @@ func TestMetaRemoteSHAIsStoredInTaskState(t *testing.T) {
 	if err := s.SetMetaRemoteSHA(ctx, "crypto", "ds", "x"); err == nil {
 		t.Fatal("没有任务状态时应报错")
 	}
-	if err := s.BindTask(ctx, "crypto", "ds", "1"); err != nil {
+	if err := s.BindTask(ctx, Task{SpaceID: "crypto", DatasetID: "ds", Purpose: "collect", DirName: "ds"}, "1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.SetMetaRemoteSHA(ctx, "crypto", "ds", "abc"); err != nil {

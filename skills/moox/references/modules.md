@@ -156,10 +156,12 @@
   `setup attach-scf-vpc`（为函数绑定 VPC 子网）、`setup inspect-scf|invoke-scf`（检查函数网络配置、直接调用函数）、`ops tencent cls bootstrap|prepare|resolve`（日志服务，查询见 [`cls-query.md`](cls-query.md)）；写操作默认只预览，`--yes` 才执行。
 - 排查与准备：`setup host-diagnostics --host <ID>` 检查远端主机磁盘与服务进程；`setup render-runtime-config` 从 `moox.toml` 渲染 Egress、Collector 运行配置；`setup package inspect <包>` 校验部署包的组件边界、平台与摘要。
 
-## 归档（只有命令行）
+## 归档
 
 把事实数据按日 / 月导出成 CSV（或 CSV.GZ），Worker 跑在因子机。不填执行计划：每收盘 N 根（`--pull-every-bars`，默认 1）拉一次新收盘的几根，
-低于 1d 的另有每小时第 34 分的复核（推进水位），1d 及以上每天一次。
+低于 1d 的另有每小时第 34 分的复核（推进水位），1d 及以上每天一次。读取避开采集触发时刻：规则由 archive-mgr 按有任务的空间的采集频率推出并下发给 worker，`archive overview` 的 `avoidance` 可见。
+管理台“数据归档 › 归档任务”管任务、下载分区（远端已校验的）、看最新数据，“归档存储”看执行器所在主机、根目录、磁盘与避让规则；CSV 导入与按时间区间清除无法补齐区间只有命令行（`archive import`、`archive tasks clear-unrecoverable`）；整体清除任务累积的无法补齐区间在管理台任务详情“清除这些记录”和 `archive tasks update --clear-unrecoverable` 都能做。
+分区路径 `<空间>/<用途>/<目录名>/<yyyy>/<yyyymmdd>.csv.gz`（1d 及以上是月分区 `<yyyymm>`；worker 配置 `export_format: csv` 时扩展名为 `.csv`），用途 `collect`（采集结果）/ `factor`（因子结果）/ `data`，目录名建任务时定（`tasks prepare` 给建议值，`tasks create --dir-name` 可改），建好后不改；归档根目录的 `datasets.csv` 是目录与数据集的对照表。
 
 ```bash
 ./bin/moox-cli archive tasks prepare --space-id crypto --dataset-id <数据集>   # 看频率、保留期与推荐的拉取间隔
@@ -168,7 +170,13 @@
 ./bin/moox-cli archive overview | runs list|get|cancel | partitions list|get
 ./bin/moox-cli archive tasks backfill|run|update|delete ...
 ./bin/moox-cli archive worker retire --worker <ID> --yes # 退役换机后遗留的旧 worker 登记
+./bin/moox-cli archive import template --space-id crypto --dataset-id <数据集>        # 导入文件的表头
+./bin/moox-cli archive import --space-id crypto --dataset-id <数据集> --csv <文件.csv|.csv.gz> [--overwrite] --wait --yes
+./bin/moox-cli archive tasks clear-unrecoverable --space-id crypto --dataset-id <数据集> --start <RFC3339> --end <RFC3339> --yes
 ```
+
+导入：经 SSH 把文件传到 archive-worker 所在主机的 `<归档根目录>/.import/<import_id>/`，worker 先整份校验（有一行不对就整份拒绝、什么都不写，消息列前 20 条带行号的错误），再分块写入；默认同键已存在时只补空缺，`--overwrite` 覆盖（必须带齐全部值列）。
+导入不推进水位、不自动清无法补齐区间，补齐历史缺口后确认再用 `clear-unrecoverable` 清。规则细节见 `docs/模块/归档.md` 第 9 节“CSV 导入”。
 
 对象存储副本：默认用随 archive-worker 部署的内置 SeaweedFS（`moox-seaweedfs`，只听 127.0.0.1，和归档文件同盘，不防整盘故障）；要异地副本就在 `moox.toml` 写 `[archive_object_store]` 改用外部 S3（只写 endpoint、region、bucket、url_style、storage_class 与管理台密钥的 `secret_id`，不写密钥值；第一次加只能用 `config edit` 的“归档对象存储”一组）。
 worker 每次导出就把分区单次 PUT 到对象存储、读回时本地缺文件从远端取回；用外部 S3 时换机器不用拷目录。对象存储连续不可用超过 5 分钟，Monitor 推送“归档对象存储”告警。看状态：`archive tasks list` 的 `remote_pending_count` / `remote_verified_count`，

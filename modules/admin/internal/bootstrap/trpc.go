@@ -7,12 +7,14 @@ import (
 	"github.com/mooyang-code/moox/modules/admin/internal/console"
 	adminhealth "github.com/mooyang-code/moox/modules/admin/internal/health"
 	adminsecurity "github.com/mooyang-code/moox/modules/admin/internal/security"
+	"github.com/mooyang-code/moox/modules/admin/internal/service/archiveproxy"
 	authsvr "github.com/mooyang-code/moox/modules/admin/internal/service/auth"
 	authdao "github.com/mooyang-code/moox/modules/admin/internal/service/auth/dao"
 	"github.com/mooyang-code/moox/modules/admin/internal/service/gatewaycontrol"
 	secretrpc "github.com/mooyang-code/moox/modules/admin/internal/service/secret/rpc"
 	setuprpc "github.com/mooyang-code/moox/modules/admin/internal/service/setup/rpc"
 	sshrpc "github.com/mooyang-code/moox/modules/admin/internal/service/ssh/rpc"
+	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
 	sysdeployrpc "github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy/rpc"
 	adminpb "github.com/mooyang-code/moox/modules/admin/proto/admingen"
 
@@ -122,6 +124,12 @@ func RegisterTRPCServices(s *server.Server, cfg *Config, services *Services) err
 		return err
 	}
 	services.consoleGateway = gateway
+	// 归档的分区副本下载与最新数据预览：裸 HTTP 处理器，先消费与 <空间>/<数据集> 绑定的一次性 ticket，
+	// 再按拓扑里唯一启用的 archive-worker 部署转发到它的数据端口（本机直连，只出站主机经 console 网关客户端中转）。
+	if err := registerArchiveProxy(services, cfg.AdminNodeID, gateway); err != nil {
+		services.closeGateways()
+		return err
+	}
 	services.machineGateway, err = newAdminGateway(trpc.BackgroundContext(), services.DBManager.GetDB(), cfg.AdminNodeID, master, "admin")
 	if err != nil {
 		services.closeGateways()
@@ -129,5 +137,19 @@ func RegisterTRPCServices(s *server.Server, cfg *Config, services *Services) err
 	}
 
 	log.Info("TRPC 服务注册完成")
+	return nil
+}
+
+func registerArchiveProxy(services *Services, controlHostID string, gateway archiveproxy.RelayDialer) error {
+	topology, err := sysdeploy.NewTopologyDAO(services.DBManager.GetDB(), controlHostID)
+	if err != nil {
+		return err
+	}
+	proxy, err := archiveproxy.New(archiveproxy.Options{Topology: topology, Relay: gateway, ControlHostID: controlHostID})
+	if err != nil {
+		return err
+	}
+	console.RegisterRawHandler("archive", "PartitionDownload", console.RawHandler(proxy.PartitionDownload))
+	console.RegisterRawHandler("archive", "RecentRows", console.RawHandler(proxy.RecentRows))
 	return nil
 }

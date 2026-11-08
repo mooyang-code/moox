@@ -123,7 +123,7 @@ func (e *env) runner(pageRows int) *Runner {
 
 func (e *env) assignment(mutate func(*archivepb.RunAssignment)) *archivepb.RunAssignment {
 	a := &archivepb.RunAssignment{
-		RunId: "run_1", LeaseToken: "tok", Kind: "scheduled", SpaceId: "crypto", DatasetId: "ds_1m", TaskId: "1", Freq: "1m", PartitionUnit: "day", DataNodeId: "node-0",
+		RunId: "run_1", LeaseToken: "tok", Kind: "scheduled", SpaceId: "crypto", DatasetId: "ds_1m", Purpose: "collect", DirName: "kline-1m", TaskId: "1", Freq: "1m", PartitionUnit: "day", DataNodeId: "node-0",
 		Retention: "168h", IntervalSeconds: 3600, MinLookbackSeconds: 900, SpaceTz: "UTC", StagingRetentionSeconds: 72 * 3600,
 		StartedAt: e.now.Format(time.RFC3339), ScheduledAt: e.now.Format(time.RFC3339),
 	}
@@ -207,7 +207,7 @@ func TestFirstRunStagesRowsWithoutBackfillAndAdvancesTheWatermark(t *testing.T) 
 	if w, ok, _ := e.store.Watermark(context.Background(), "crypto", "ds_1m"); !ok || !w.Equal(e.now) {
 		t.Fatalf("watermark = %v %v", w, ok)
 	}
-	if _, err := os.Stat(filepath.Join(e.root, "crypto", "ds_1m", "dataset.json")); err != nil {
+	if _, err := os.Stat(filepath.Join(e.root, "crypto", "collect", "kline-1m", "dataset.json")); err != nil {
 		t.Fatalf("dataset.json: %v", err)
 	}
 }
@@ -251,7 +251,7 @@ func TestPartitionIsExportedAfterCloseAndThenFinalizedAfterTheHoldPeriod(t *test
 	e.now = time.Date(2026, 10, 17, 0, 34, 43, 0, time.UTC)
 	out = e.run(2000, nil, nil)
 	p := report(out, "2026-10-16")
-	if p == nil || p.GetStatus() != "exported" || out.Exported != 1 || p.GetFilePath() != "crypto/ds_1m/2026/20261016.csv" || p.GetFileSha256() == "" ||
+	if p == nil || p.GetStatus() != "exported" || out.Exported != 1 || p.GetFilePath() != "crypto/collect/kline-1m/2026/20261016.csv" || p.GetFileSha256() == "" ||
 		p.GetFileBytes() == 0 || p.GetExportCount() != 1 || !strings.HasPrefix(p.GetPreview(), "data_time,subject_id,series_tag,open,close\n") || p.GetRowCount() != 90 {
 		t.Fatalf("partition = %v", p)
 	}
@@ -283,7 +283,7 @@ func TestPartitionIsExportedAfterCloseAndThenFinalizedAfterTheHoldPeriod(t *test
 	if state.Status != staging.StatusFinal || st.Rows != 0 {
 		t.Fatalf("state=%+v stats=%+v", state, st)
 	}
-	if _, err := os.Stat(filepath.Join(e.root, "crypto", "ds_1m", "2026", "20261016.csv")); err != nil {
+	if _, err := os.Stat(filepath.Join(e.root, "crypto", "collect", "kline-1m", "2026", "20261016.csv")); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -299,7 +299,7 @@ func TestLateRowsReopenAFinalPartitionAndKeepEveryOriginalRow(t *testing.T) {
 	if p := report(out, "2026-10-10"); p == nil || p.GetStatus() != "final" || p.GetExportCount() != 1 || out.Exported != 1 || out.Finalized != 1 {
 		t.Fatalf("应已导出并定稿: %v out=%+v", p, out)
 	}
-	orig := readFile(t, e.root, "crypto/ds_1m/2026/20261010.csv")
+	orig := readFile(t, e.root, "crypto/collect/kline-1m/2026/20261010.csv")
 	// 用补拉区间读到一条晚到的行：先读回原文件，再写入，重新导出，包含原来的 30 行 + 1 行。
 	e.src.rows = append(e.src.rows, rows("ETH", day.Add(2*time.Hour), 1, 9)...)
 	e.now = e.now.Add(time.Hour)
@@ -477,6 +477,10 @@ func TestExecuteRejectsBadAssignmentsAndMissingColumns(t *testing.T) {
 		"bad backfill":   func(a *archivepb.RunAssignment) { a.BackfillFrom = "later" },
 		"bad retention":  func(a *archivepb.RunAssignment) { a.Retention = "soon" },
 		"bad freq":       func(a *archivepb.RunAssignment) { a.Freq = "7x" },
+		"no dir name":    func(a *archivepb.RunAssignment) { a.DirName = "" },
+		"no purpose":     func(a *archivepb.RunAssignment) { a.Purpose = "" },
+		"unsafe dir":     func(a *archivepb.RunAssignment) { a.DirName = "../x" },
+		"dot purpose":    func(a *archivepb.RunAssignment) { a.Purpose = ".import" },
 	} {
 		out, err := e.runner(10).Execute(context.Background(), e.assignment(mutate), nil)
 		if err == nil && (out == nil || out.Status != "failed") {
@@ -727,7 +731,7 @@ func TestReadBackUsesTheRecordedPathAfterTheExportFormatChanged(t *testing.T) {
 	e.src.rows = rows("BTC", day.Add(time.Hour), 30, 1)
 	e.now = time.Date(2026, 10, 14, 1, 0, 0, 0, time.UTC)
 	out := e.run(2000, func(a *archivepb.RunAssignment) { a.BackfillFrom = "2026-10-10T00:00:00Z" }, nil)
-	if p := report(out, "2026-10-10"); p.GetStatus() != "final" || p.GetFilePath() != "crypto/ds_1m/2026/20261010.csv" {
+	if p := report(out, "2026-10-10"); p.GetStatus() != "final" || p.GetFilePath() != "crypto/collect/kline-1m/2026/20261010.csv" {
 		t.Fatalf("p = %v", p)
 	}
 	e.src.rows = append(e.src.rows, rows("ETH", day.Add(2*time.Hour), 1, 9)...)
@@ -741,10 +745,10 @@ func TestReadBackUsesTheRecordedPathAfterTheExportFormatChanged(t *testing.T) {
 		t.Fatalf("out=%+v err=%v", out, err)
 	}
 	p := report(out, "2026-10-10")
-	if p.GetRowCount() != 31 || p.GetFilePath() != "crypto/ds_1m/2026/20261010.csv" || p.GetExportCount() != 2 {
+	if p.GetRowCount() != 31 || p.GetFilePath() != "crypto/collect/kline-1m/2026/20261010.csv" || p.GetExportCount() != 2 {
 		t.Fatalf("p = %v", p)
 	}
-	entries, _ := os.ReadDir(filepath.Join(e.root, "crypto", "ds_1m", "2026"))
+	entries, _ := os.ReadDir(filepath.Join(e.root, "crypto", "collect", "kline-1m", "2026"))
 	if len(entries) != 1 {
 		t.Fatalf("该分区只应有一份文件: %v", entries)
 	}
@@ -784,7 +788,7 @@ func TestExportRefusesToOverwriteAFileTheStagingDoesNotKnow(t *testing.T) {
 	e := newEnv(t)
 	day := time.Date(2026, 10, 16, 0, 0, 0, 0, time.UTC)
 	e.src.rows = rows("BTC", day.Add(23*time.Hour), 60, 1)
-	target := filepath.Join(e.root, "crypto", "ds_1m", "2026", "20261016.csv")
+	target := filepath.Join(e.root, "crypto", "collect", "kline-1m", "2026", "20261016.csv")
 	_ = os.MkdirAll(filepath.Dir(target), 0o755)
 	if err := os.WriteFile(target, []byte("old"), 0o644); err != nil {
 		t.Fatal(err)

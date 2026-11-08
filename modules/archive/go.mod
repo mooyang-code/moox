@@ -7,6 +7,7 @@ require (
 	github.com/glebarez/sqlite v1.11.0
 	github.com/minio/minio-go/v7 v7.4.1
 	github.com/mooyang-code/moox/modules/archive/proto/archivegen v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/modules/collector/proto/collectorgen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/modules/storage/proto/storagegen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/frequency v0.0.0-00010101000000-000000000000
@@ -73,6 +74,8 @@ replace github.com/mooyang-code/moox/packages/hostmetricpb => ../../packages/hos
 replace github.com/mooyang-code/moox/packages/gatewayauth => ../../packages/gatewayauth
 
 replace github.com/mooyang-code/moox/modules/archive/proto/archivegen => ./proto/archivegen
+
+replace github.com/mooyang-code/moox/modules/collector/proto/collectorgen => ../collector/proto/collectorgen
 
 replace github.com/mooyang-code/moox/packages/timerjob => ../../packages/timerjob
 

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/config"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/export"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/manager"
+	"github.com/mooyang-code/moox/modules/archive/internal/worker/pacing"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/runner"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/staging"
 	archivepb "github.com/mooyang-code/moox/modules/archive/proto/archivegen"
@@ -22,7 +24,9 @@ import (
 )
 
 const (
-	progressEvery   = 30 * time.Second
+	progressEvery = 30 * time.Second
+	// importRetention 是失败的导入在 <root>/.import 下保留的时长。
+	importRetention = 7 * 24 * time.Hour
 	rpcTimeout      = 15 * time.Second
 	completeRetries = 6
 	// maintenanceWait 是每天维护最多等待进行中的运行结束多久。
@@ -33,8 +37,8 @@ const (
 	probeKey = "_probe/absent"
 )
 
-// DiskUsage 返回路径所在文件系统的总量与可用量。
-type DiskUsage func(path string) (total, free uint64, err error)
+// DiskUsage 返回路径所在文件系统的总量、已用与可用量（可用不含 root 保留空间）。
+type DiskUsage func(path string) (total, used, free uint64, err error)
 
 // Options 是 App 的依赖。
 type Options struct {
@@ -50,6 +54,8 @@ type Options struct {
 	DiskUsage  DiskUsage
 	// Remote 是对象存储客户端；nil 表示没有配置。心跳带上它的摘要，每天维护时抽查远端副本。
 	Remote *objectstore.Client
+	// Pacer 是与 Runner 共用的节奏控制：心跳回包里的避让规则替换它的生效规则；nil 时不接收（测试）。
+	Pacer *pacing.Pacer
 }
 
 type activeRun struct {
@@ -69,10 +75,13 @@ type App struct {
 	lastHeartbeatOK time.Time
 	lastError       string
 	maintaining     bool
-	diskLow         bool
-	diskFree        uint64
-	diskTotal       uint64
-	running         map[string]*activeRun
+	// diskInsufficient：可用空间低于 worker.min_free_bytes，停止领取新运行。
+	diskInsufficient bool
+	// diskTotal、diskUsed、diskFree 是最近一次成功读到的磁盘用量；读取失败时心跳照报它们，与 diskInsufficient 的依据一致。
+	diskTotal uint64
+	diskUsed  uint64
+	diskFree  uint64
+	running   map[string]*activeRun
 	// pulling 是正在进行中的领取调用数：维护要等它们登记完运行之后再开始，否则对账时会漏掉在途的运行。
 	pulling int
 	// datasetSlots 让同一个数据集的运行在本地串行：mgr 取消一个运行后会立刻允许创建新运行，
@@ -218,25 +227,24 @@ func (a *App) probeOnce(ctx context.Context) {
 // heartbeatOnce 发送一次心跳。本实例是活动 worker 时 mgr 下发当前全部任务，返回它们（键 "space/dataset"，值 task_id）；否则返回 nil。
 func (a *App) heartbeatOnce(ctx context.Context) map[string]string {
 	cfg := a.opts.Config
-	total, free, derr := a.opts.DiskUsage(cfg.Worker.RootDir)
+	total, used, free, derr := a.opts.DiskUsage(cfg.Worker.RootDir)
 	a.mu.Lock()
 	if derr == nil {
-		a.diskTotal, a.diskFree = total, free
-		a.diskLow = int64(free) < int64(cfg.Worker.MinFreeBytes)
+		a.diskTotal, a.diskUsed, a.diskFree = total, used, free
+		a.diskInsufficient = int64(free) < int64(cfg.Worker.MinFreeBytes)
+	} else {
+		log.Warnf("archive worker read disk usage of %s: %v", cfg.Worker.RootDir, derr)
 	}
-	maintaining, diskLow := a.maintaining, a.diskLow
+	total, used, free = a.diskTotal, a.diskUsed, a.diskFree
+	maintaining := a.maintaining
 	a.mu.Unlock()
-	pacingJSON, _ := json.Marshal(map[string]any{
-		"request_seconds": cfg.Pacing.RequestSeconds, "hour_quiet": cfg.Pacing.HourQuiet,
-		"max_bytes_per_second": int64(cfg.Pacing.MaxBytesPerSecond), "max_concurrent_runs": cfg.Pacing.MaxConcurrentRuns,
-		"max_runs_per_data_node": cfg.Pacing.MaxRunsPerDataNode,
-	})
+	pacingJSON := a.pacingJSON()
 	callCtx, cancel := context.WithTimeout(ctx, rpcTimeout)
 	defer cancel()
 	rsp, err := a.opts.Manager.Heartbeat(callCtx, &archivepb.ArchiveWorkerHeartbeatReq{
 		WorkerId: cfg.Worker.WorkerID, InstanceId: a.opts.InstanceID, Version: a.opts.Version, RootDir: cfg.Worker.RootDir,
-		DiskTotalBytes: total, DiskFreeBytes: free, StagingBytes: uint64(a.opts.Staging.FileBytes()),
-		Maintaining: maintaining, DiskLow: diskLow, PacingJson: string(pacingJSON), RunningRunIds: a.runningIDs(),
+		DiskTotalBytes: total, DiskFreeBytes: free, DiskUsedBytes: used, MinFreeBytes: uint64(cfg.Worker.MinFreeBytes),
+		StagingBytes: uint64(a.opts.Staging.FileBytes()), Maintaining: maintaining, PacingJson: string(pacingJSON), RunningRunIds: a.runningIDs(),
 		ObjectStore: a.objectStoreInfo(),
 	})
 	a.mu.Lock()
@@ -254,6 +262,7 @@ func (a *App) heartbeatOnce(ctx context.Context) map[string]string {
 	}
 	a.lastError = ""
 	a.lastHeartbeatOK = a.opts.Now()
+	a.applyAvoidance(rsp.GetAvoidance())
 	a.active = rsp.GetActive()
 	if ttl := time.Duration(rsp.GetLeaseTtlSeconds()) * time.Second; ttl > 0 {
 		a.leaseTTL = ttl
@@ -274,13 +283,57 @@ func (a *App) heartbeatOnce(ctx context.Context) map[string]string {
 	return tasks
 }
 
+// pacingJSON 是心跳上报的生效节奏：避让规则取 pacer 当前值（mgr 下发或 app.yaml），其余取配置。
+func (a *App) pacingJSON() string {
+	cfg := a.opts.Config
+	rules, minuteWindow := cfg.PacingConfig().ConfigRules(), cfg.Pacing.MinuteWindow
+	if a.opts.Pacer != nil {
+		rules, minuteWindow = a.opts.Pacer.Rules(), a.opts.Pacer.MinuteWindow()
+	}
+	var hourQuiet []string
+	if rules.HourQuiet != nil {
+		hourQuiet = rules.HourQuiet[:]
+	}
+	raw, _ := json.Marshal(map[string]any{
+		"source": rules.Source, "computed_at": rules.ComputedAt, "minute_window": minuteWindow,
+		"every_minutes": rules.EveryMinutes, "before_seconds": rules.BeforeSeconds, "after_seconds": rules.AfterSeconds, "hour_quiet": hourQuiet,
+		"max_bytes_per_second": int64(cfg.Pacing.MaxBytesPerSecond), "max_concurrent_runs": cfg.Pacing.MaxConcurrentRuns,
+		"max_runs_per_data_node": cfg.Pacing.MaxRunsPerDataNode,
+	})
+	return string(raw)
+}
+
+// applyAvoidance 用心跳回包里的避让规则替换 pacer 的生效规则；没有下发或不合法时保留原规则。
+func (a *App) applyAvoidance(rules *archivepb.AvoidanceRules) {
+	if rules == nil || a.opts.Pacer == nil {
+		return
+	}
+	next := pacing.Rules{
+		EveryMinutes: int(rules.GetEveryMinutes()), BeforeSeconds: int(rules.GetBeforeSeconds()), AfterSeconds: int(rules.GetAfterSeconds()),
+		Source: "mgr", ComputedAt: rules.GetComputedAt(),
+	}
+	if rules.GetHourQuietFrom() != "" || rules.GetHourQuietUntil() != "" {
+		next.HourQuiet = &[2]string{rules.GetHourQuietFrom(), rules.GetHourQuietUntil()}
+	}
+	prev := a.opts.Pacer.Rules()
+	if err := a.opts.Pacer.SetRules(next); err != nil {
+		log.Warnf("archive worker ignored avoidance rules from mgr: %v", err)
+		return
+	}
+	if prev.Source != next.Source || prev.EveryMinutes != next.EveryMinutes || prev.BeforeSeconds != next.BeforeSeconds ||
+		prev.AfterSeconds != next.AfterSeconds || fmt.Sprint(prev.HourQuiet) != fmt.Sprint(next.HourQuiet) {
+		log.Infof("archive worker avoidance updated: every=%dm before=%ds after=%ds hour_quiet=%v basis=%s",
+			next.EveryMinutes, next.BeforeSeconds, next.AfterSeconds, next.HourQuiet, rules.GetBasis())
+	}
+}
+
 // ---- 领取与执行 ----
 
 func (a *App) pullOnce(ctx context.Context) {
 	cfg := a.opts.Config
 	a.mu.Lock()
 	free := cfg.Pacing.MaxConcurrentRuns - len(a.running) - a.pulling
-	blocked := a.maintaining || a.diskLow
+	blocked := a.maintaining || a.diskInsufficient
 	busy := map[string]uint32{}
 	for _, r := range a.running {
 		busy[r.assignment.GetDataNodeId()]++
@@ -441,11 +494,26 @@ func (a *App) execute(ctx context.Context, run *activeRun) {
 		}
 	}
 	stopTick()
-	if a.complete(ctx, req) && len(reported) > 0 {
+	confirmed := a.complete(ctx, req)
+	if confirmed && len(reported) > 0 {
 		// mgr 确认登记之后才清除待上报标记；上报失败时分区留在待上报里，下一次运行会再带上。
 		if err := a.opts.Staging.MarkReported(context.WithoutCancel(ctx), assignment.GetSpaceId(), assignment.GetDatasetId(), reported); err != nil {
 			log.Warnf("archive worker mark reported run=%s: %v", assignment.GetRunId(), err)
 		}
+	}
+	if confirmed && assignment.GetKind() == "import" && req.GetStatus() == "succeeded" {
+		a.removeImport(assignment)
+	}
+}
+
+// removeImport 在 mgr 确认导入运行成功之后删除导入目录；失败的导入保留供核对（维护时删除超过 7 天的）。
+func (a *App) removeImport(assignment *archivepb.RunAssignment) {
+	dir, _, err := runner.ImportPath(a.opts.Files.Root, assignment.GetImportFile())
+	if err != nil {
+		return
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		log.Warnf("archive worker remove import dir %s run=%s: %v", dir, assignment.GetRunId(), err)
 	}
 }
 
@@ -532,6 +600,12 @@ func (a *App) maintainOnce(ctx context.Context) {
 	} else if len(dropped) > 0 {
 		log.Infof("archive worker dropped staging state of deleted tasks: %v", dropped)
 	}
+	// 失败的导入保留导入目录供核对，超过 7 天的清掉。
+	if removed, err := a.opts.Files.CleanImports(a.opts.Now(), importRetention); err != nil {
+		log.Warnf("archive worker clean import files: %v", err)
+	} else if removed > 0 {
+		log.Infof("archive worker removed %d import directories older than 7 days", removed)
+	}
 	a.checkRemote(ctx)
 	if err := a.opts.Staging.Maintain(ctx); err != nil {
 		log.Warnf("archive worker staging maintenance: %v", err)
@@ -566,9 +640,10 @@ type Snapshot struct {
 	Active      bool
 	Running     int
 	Maintaining bool
-	DiskLow     bool
-	DiskFree    uint64
-	LastError   string
+	// DiskInsufficient：可用空间低于下限，已停止领取新运行。
+	DiskInsufficient bool
+	DiskFree         uint64
+	LastError        string
 }
 
 // Snapshot 返回当前状态：最近一次心跳成功即就绪。
@@ -577,6 +652,6 @@ func (a *App) Snapshot() Snapshot {
 	defer a.mu.Unlock()
 	return Snapshot{
 		Ready:  !a.lastHeartbeatOK.IsZero() && a.opts.Now().Sub(a.lastHeartbeatOK) < 3*a.opts.Config.Worker.HeartbeatInterval,
-		Active: a.active, Running: len(a.running), Maintaining: a.maintaining, DiskLow: a.diskLow, DiskFree: a.diskFree, LastError: a.lastError,
+		Active: a.active, Running: len(a.running), Maintaining: a.maintaining, DiskInsufficient: a.diskInsufficient, DiskFree: a.diskFree, LastError: a.lastError,
 	}
 }

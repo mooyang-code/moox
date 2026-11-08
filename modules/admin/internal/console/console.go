@@ -127,8 +127,7 @@ func (hr *HTTPRouter) handleConsoleRequest(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "too many requests", http.StatusTooManyRequests)
 		return
 	}
-	// RPC aliases and permissions come only from the shared catalog. SSH
-	// streaming routes are a separate fixed surface bound to one-time tickets.
+	// RPC 别名与权限只来自服务目录；SSH 流式路由与归档下载、最新数据是另一组固定的裸路由，绑定一次性 ticket。
 	_, rawRoute := rawRouteOperations[serviceID+"/"+method]
 	spec, allowed := hr.catalog.ConsoleService(serviceID, method)
 	if rawRoute {

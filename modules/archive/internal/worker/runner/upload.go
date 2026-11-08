@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path"
 	"strings"
 	"time"
 
@@ -17,7 +16,7 @@ import (
 )
 
 // backlogUploadBudget 是一次运行里补传之前遗留的待上传分区最多花的时间（从本次运行第一次上传起累计）。
-// 首次启用、原地升级或长时间断网后的积压分摊到之后的每次运行；本次运行导出的分区不受它限制。
+// 首次启用或长时间断网后的积压分摊到之后的每次运行；本次运行导出的分区不受它限制。
 const backlogUploadBudget = 2 * time.Minute
 
 // errLocalMismatch 是本地文件与记录不一致的失败原因：不上传，需要人工核对。
@@ -137,10 +136,14 @@ func (s *runState) uploadOne(ctx context.Context, p staging.PartitionState) (ok,
 	return marked, false, ""
 }
 
-// uploadDatasetMeta 在 dataset.json 内容变了时传到 <space>/<dataset_id>/dataset.json（覆盖旧的；它是说明文件，可以重新生成）。
+// uploadDatasetMeta 在 dataset.json 内容变了时传到 <space>/<purpose>/<dir_name>/dataset.json（覆盖旧的；它是说明文件，可以重新生成）。
 // 失败只记日志，下次再试，不进分区状态，不影响健康等级。
 func (s *runState) uploadDatasetMeta(ctx context.Context) {
-	rel := path.Join(s.task.SpaceID, s.task.DatasetID, "dataset.json")
+	rel, err := export.DatasetJSONPath(s.task.SpaceID, s.task.Purpose, s.task.DirName)
+	if err != nil {
+		log.Warnf("archive worker upload dataset.json %s/%s: %v", s.task.SpaceID, s.task.DatasetID, err)
+		return
+	}
 	file, err := os.Open(s.r.Files.Abs(rel))
 	if err != nil {
 		log.Warnf("archive worker upload dataset.json %s: %v", rel, err)

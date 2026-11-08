@@ -175,9 +175,18 @@ func (m *MgrService) CreateArchiveTask(ctx context.Context, req *archivepb.Creat
 	if err != nil {
 		return &archivepb.CreateArchiveTaskRsp{RetInfo: invalid(err)}, nil
 	}
+	dirName := strings.TrimSpace(req.GetDirName())
+	if dirName == "" {
+		if dirName, err = s.suggestedDirName(ctx, space, ds); err != nil {
+			return &archivepb.CreateArchiveTaskRsp{RetInfo: inner(err)}, nil
+		}
+	}
+	if err := validateDirName(dirName); err != nil {
+		return &archivepb.CreateArchiveTaskRsp{RetInfo: invalid(err)}, nil
+	}
 	task := store.Task{
-		MetaJSON: metaJSON(ds),
-		SpaceID:  space, DatasetID: ds.DatasetID, Freq: ds.Freq, PartitionUnit: unit, DataNodeID: ds.DataNodeID, Retention: ds.Retention,
+		MetaJSON: metaJSON(ds), Purpose: purposeOf(ds), DirName: dirName,
+		SpaceID: space, DatasetID: ds.DatasetID, Freq: ds.Freq, PartitionUnit: unit, DataNodeID: ds.DataNodeID, Retention: ds.Retention,
 		PullEveryBars: n, IntervalSeconds: int(interval / time.Second), BackfillFrom: backfill, Status: store.StatusEnabled, Creator: "console",
 	}
 	if req.GetPaused() {
@@ -185,6 +194,10 @@ func (m *MgrService) CreateArchiveTask(ctx context.Context, req *archivepb.Creat
 	}
 	created, err := s.store.CreateTask(ctx, task)
 	if err != nil {
+		var taken *store.DirNameTakenError
+		if errors.As(err, &taken) {
+			return &archivepb.CreateArchiveTaskRsp{RetInfo: conflict(err)}, nil
+		}
 		if errors.Is(err, store.ErrConflict) {
 			return &archivepb.CreateArchiveTaskRsp{RetInfo: conflict(fmt.Errorf("数据集 %s 已经有归档任务", ds.DatasetID))}, nil
 		}
@@ -266,7 +279,7 @@ func (m *MgrService) RunArchiveTaskNow(ctx context.Context, req *archivepb.RunAr
 	if err != nil {
 		return &archivepb.RunArchiveTaskNowRsp{RetInfo: invalid(err)}, nil
 	}
-	run, err := s.store.CreateRun(ctx, space, req.GetDatasetId(), store.KindManual, time.Time{}, time.Time{}, s.clock())
+	run, err := s.store.CreateRun(ctx, space, req.GetDatasetId(), store.RunSpec{Kind: store.KindManual}, s.clock())
 	if err != nil {
 		if errors.Is(err, store.ErrConflict) {
 			return &archivepb.RunArchiveTaskNowRsp{RetInfo: conflict(errors.New("任务已有排队中或运行中的运行"))}, nil
@@ -323,7 +336,7 @@ func (m *MgrService) BackfillArchiveRange(ctx context.Context, req *archivepb.Ba
 		}
 		start = clamped
 	}
-	run, err := s.store.CreateRun(ctx, space, req.GetDatasetId(), store.KindRange, start, end, now)
+	run, err := s.store.CreateRun(ctx, space, req.GetDatasetId(), store.RunSpec{Kind: store.KindRange, RangeStart: start, RangeEnd: end}, now)
 	if err != nil {
 		if errors.Is(err, store.ErrConflict) {
 			return &archivepb.BackfillArchiveRangeRsp{RetInfo: conflict(errors.New("任务已有排队中或运行中的运行"))}, nil
@@ -453,6 +466,23 @@ func (m *MgrService) PrepareArchiveTask(ctx context.Context, req *archivepb.Prep
 	if _, err := s.store.GetTask(ctx, space, ds.DatasetID); err == nil {
 		rsp.Exists = true
 	}
+	rsp.Purpose = purposeOf(ds)
+	if rsp.SuggestedDirName, err = s.suggestedDirName(ctx, space, ds); err != nil {
+		return &archivepb.PrepareArchiveTaskRsp{RetInfo: inner(err)}, nil
+	}
+	check := rsp.SuggestedDirName
+	if requested := strings.TrimSpace(req.GetDirName()); requested != "" {
+		if err := validateDirName(requested); err != nil {
+			return &archivepb.PrepareArchiveTaskRsp{RetInfo: invalid(err)}, nil
+		}
+		check = requested
+	}
+	// 冲突只看其他数据集：已有任务的数据集占用的是它自己的目录名。
+	holder, taken, err := s.store.DirNameHolder(ctx, space, rsp.Purpose, check)
+	if err != nil {
+		return &archivepb.PrepareArchiveTaskRsp{RetInfo: inner(err)}, nil
+	}
+	rsp.DirNameConflict = taken && holder != ds.DatasetID
 	return rsp, nil
 }
 
@@ -673,7 +703,7 @@ func (m *MgrService) GetArchiveOverview(ctx context.Context, _ *archivepb.GetArc
 		return &archivepb.GetArchiveOverviewRsp{RetInfo: invalid(err)}, nil
 	}
 	now := s.clock()
-	rsp := &archivepb.GetArchiveOverviewRsp{RetInfo: success()}
+	rsp := &archivepb.GetArchiveOverviewRsp{RetInfo: success(), Avoidance: avoidanceToPB(s.avoidance())}
 	workers, err := s.store.ListWorkers(ctx)
 	if err != nil {
 		return &archivepb.GetArchiveOverviewRsp{RetInfo: inner(err)}, nil

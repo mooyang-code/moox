@@ -211,7 +211,7 @@ func TestSetupInstallChecksDiskBeforeTouchingAnything(t *testing.T) {
 		h.reports[i].DiskFreeKB = 1
 	}
 	_, err := h.run(t, newSetupInstallCommand, "--space-id", "crypto", "--yes")
-	require.ErrorContains(t, err, "disk_low")
+	require.ErrorContains(t, err, "disk_insufficient")
 	require.Empty(t, h.calls, "空间不够不能开始")
 }
 

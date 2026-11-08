@@ -69,7 +69,7 @@ func diskWarnings(reports []deployscan.HostReport, control string) []string {
 		// 失败尝试的残留下一次部署会自动清掉，算作可用，否则失败后反而重试不了。
 		// 残留要到上传之后才清，所以真实可用空间至少要放得下一个安装包。
 		if report.DiskFreeKB >= 0 && (report.DiskFreeKB+report.ReclaimableKB < need || report.DiskFreeKB < minUploadKB) {
-			warnings = append(warnings, fmt.Sprintf("disk_low: %s（%s）可用磁盘 %.1f GB（另有 %.1f GB 失败残留可自动回收），部署至少要 %d GB，其中 1 GB 要真实可用", report.Host, report.Address, float64(report.DiskFreeKB)/(1<<20), float64(report.ReclaimableKB)/(1<<20), need>>20))
+			warnings = append(warnings, fmt.Sprintf("disk_insufficient: %s（%s）可用磁盘 %.1f GB（另有 %.1f GB 失败残留可自动回收），部署至少要 %d GB，其中 1 GB 要真实可用", report.Host, report.Address, float64(report.DiskFreeKB)/(1<<20), float64(report.ReclaimableKB)/(1<<20), need>>20))
 		}
 	}
 	return warnings

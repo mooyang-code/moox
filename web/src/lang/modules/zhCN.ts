@@ -37,7 +37,6 @@ export default {
     ["strategy-detail"]: "实例详情",
     ["compute-collector"]: "数据采集",
     ["collector-tasks"]: "采集任务",
-    ["data-archive"]: "数据归档",
     ["trading-accounts"]: "交易账户",
     ["trading-account-detail"]: "交易账户详情",
     ["ops"]: "资源与运维",
@@ -49,6 +48,9 @@ export default {
     ["settings"]: "系统设置",
     ["settings-spaces"]: "空间管理",
     ["settings-secrets"]: "密钥管理",
+    ["archive"]: "数据归档",
+    ["archive-tasks"]: "归档任务",
+    ["archive-storage"]: "归档存储",
     ["events"]: "事件中心"
   }
 };

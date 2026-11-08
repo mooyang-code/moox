@@ -14,19 +14,25 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/staging"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 const (
+	// datasetJSONName 是每个任务目录下的数据集说明文件名。
+	datasetJSONName = "dataset.json"
 	// previewLines 是预览的行数（表头加前 20 行）。
 	previewLines = 21
 	// previewBytes 是预览的字节上限。
 	previewBytes  = 8 << 10
 	partialSuffix = ".partial"
+	// ImportDirName 是归档根目录下存放待导入文件的目录：<root>/.import/<import_id>/<文件名>。
+	ImportDirName = ".import"
 )
 
 // Files 管理归档根目录下的分区文件。
@@ -64,16 +70,17 @@ func ext(format string) string {
 	return ".csv.gz"
 }
 
-func checkComponent(part string) error {
+// CheckComponent 检查一个路径片段（空间、用途、目录名、数据集等）不为空、不含斜杠、不以点开头，防止路径穿越。
+func CheckComponent(part string) error {
 	if part == "" || strings.ContainsAny(part, `/\`) || part == "." || part == ".." || strings.HasPrefix(part, ".") {
 		return fmt.Errorf("不安全的路径片段 %q", part)
 	}
 	return nil
 }
 
-// RelPath 返回分区文件相对归档根目录的路径：<space>/<dataset_id>/<yyyy>/<yyyymmdd>.csv.gz（日分区）
-// 或 <space>/<dataset_id>/<yyyy>/<yyyymm>.csv.gz（月分区）；format 为 csv 时扩展名为 .csv。
-func RelPath(spaceID, datasetID, partitionKey, format string) (string, error) {
+// RelPath 返回分区文件相对归档根目录的路径：<space>/<purpose>/<dir_name>/<yyyy>/<yyyymmdd>.csv.gz（日分区）
+// 或 <space>/<purpose>/<dir_name>/<yyyy>/<yyyymm>.csv.gz（月分区）；format 为 csv 时扩展名为 .csv。
+func RelPath(spaceID, purpose, dirName, partitionKey, format string) (string, error) {
 	digits := strings.ReplaceAll(partitionKey, "-", "")
 	if len(partitionKey) != 7 && len(partitionKey) != 10 || len(digits) < 6 {
 		return "", fmt.Errorf("无效的分区键 %q", partitionKey)
@@ -83,17 +90,35 @@ func RelPath(spaceID, datasetID, partitionKey, format string) (string, error) {
 			return "", fmt.Errorf("无效的分区键 %q", partitionKey)
 		}
 	}
-	for _, part := range []string{spaceID, datasetID} {
-		if err := checkComponent(part); err != nil {
+	dir, err := DatasetDir(spaceID, purpose, dirName)
+	if err != nil {
+		return "", err
+	}
+	return path.Join(dir, digits[:4], digits+ext(format)), nil
+}
+
+// DatasetDir 返回任务目录相对归档根目录的路径 <space>/<purpose>/<dir_name>（斜杠分隔），三段都必须是安全的路径片段。
+func DatasetDir(spaceID, purpose, dirName string) (string, error) {
+	for _, part := range []string{spaceID, purpose, dirName} {
+		if err := CheckComponent(part); err != nil {
 			return "", err
 		}
 	}
-	return filepath.ToSlash(filepath.Join(spaceID, datasetID, digits[:4], digits+ext(format))), nil
+	return path.Join(spaceID, purpose, dirName), nil
 }
 
-// RelPath 按本目录配置的格式返回分区文件的相对路径。
-func (f Files) RelPath(spaceID, datasetID, partitionKey string) (string, error) {
-	return RelPath(spaceID, datasetID, partitionKey, f.format())
+// DatasetJSONPath 返回任务的 dataset.json 相对归档根目录的路径（也是它在对象存储里相对 prefix 的键）。
+func DatasetJSONPath(spaceID, purpose, dirName string) (string, error) {
+	dir, err := DatasetDir(spaceID, purpose, dirName)
+	if err != nil {
+		return "", err
+	}
+	return path.Join(dir, datasetJSONName), nil
+}
+
+// RelPath 按本目录配置的格式返回任务分区文件的相对路径。
+func (f Files) RelPath(task staging.Task, partitionKey string) (string, error) {
+	return RelPath(task.SpaceID, task.Purpose, task.DirName, partitionKey, f.format())
 }
 
 // Abs 把相对路径解析到归档根目录下。
@@ -108,14 +133,15 @@ func (f Files) Write(ctx context.Context, store *staging.Store, task staging.Tas
 	rel := p.FilePath
 	if rel == "" {
 		var err error
-		if rel, err = f.RelPath(task.SpaceID, task.DatasetID, p.Key); err != nil {
+		if rel, err = f.RelPath(task, p.Key); err != nil {
 			return Info{}, err
 		}
 	}
 	final := f.Abs(rel)
 	if p.FilePath == "" {
 		if _, err := os.Stat(final); err == nil {
-			return Info{}, fmt.Errorf("分区 %s 的目标文件 %s 已存在，但本地没有它的导出记录：可能是暂存库丢失或任务重建，拒绝覆盖，需要人工核对", p.Key, rel)
+			return Info{}, fmt.Errorf("分区 %s 的目标文件 %s 已存在，但本地和 mgr 都没有它的导出记录：目录里有旧任务留下的文件（例如删除任务后用同一目录名重建），"+
+				"拒绝覆盖；先把旧文件移走，或删除任务换一个目录名重建", p.Key, rel)
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return Info{}, err
 		}
@@ -309,10 +335,12 @@ type ColumnMeta struct {
 	Attributes  map[string]string `json:"attributes,omitempty"`
 }
 
-// DatasetMeta 是 <space>/<dataset_id>/dataset.json 的内容：数据集的完整说明，方便不看线上系统也能读懂归档文件。
+// DatasetMeta 是 <space>/<purpose>/<dir_name>/dataset.json 的内容：数据集的完整说明，方便不看线上系统也能读懂归档文件。
 type DatasetMeta struct {
 	SpaceID   string `json:"space_id"`
 	DatasetID string `json:"dataset_id"`
+	Purpose   string `json:"purpose"`
+	DirName   string `json:"dir_name"`
 	// Dataset 是 Storage 里的数据集信息（名称、简介、数据来源、标的范围等），由 mgr 提供。
 	Dataset json.RawMessage `json:"dataset,omitempty"`
 	Freq    string          `json:"freq"`
@@ -340,6 +368,7 @@ type FilesMeta struct {
 // DatasetMetaInput 是生成元数据文件需要的信息。
 type DatasetMetaInput struct {
 	SpaceID, DatasetID, Freq string
+	Purpose, DirName         string
 	PartitionUnit, Timezone  string
 	// DatasetJSON 是 mgr 下发的数据集信息 JSON，可为空。
 	DatasetJSON string
@@ -379,26 +408,37 @@ func (f Files) BuildDatasetMeta(in DatasetMetaInput, now time.Time) DatasetMeta 
 		pattern = "<yyyy>/<yyyymm>" + ext(f.format())
 	}
 	return DatasetMeta{
-		SpaceID: in.SpaceID, DatasetID: in.DatasetID, Dataset: dataset, Freq: in.Freq,
+		SpaceID: in.SpaceID, DatasetID: in.DatasetID, Purpose: in.Purpose, DirName: in.DirName, Dataset: dataset, Freq: in.Freq,
 		Partition: PartitionMeta{Unit: in.PartitionUnit, Timezone: in.Timezone},
 		Files:     FilesMeta{Format: f.format(), PathPattern: pattern, Header: header},
 		Columns:   columns, UpdatedAt: now.UTC().Format(time.RFC3339),
 	}
 }
 
-// WriteDatasetJSON 写 <root>/<space>/<dataset_id>/dataset.json；除更新时间外内容没变时不重写。
+// WriteDatasetJSON 写 <root>/<space>/<purpose>/<dir_name>/dataset.json（除更新时间外内容没变时不重写），
+// 然后刷新根目录的 datasets.csv 对照表。对照表只方便人查目录，刷新失败（例如根目录是挂载点、
+// lost+found 不可读）只记警告，不让运行失败。
 func (f Files) WriteDatasetJSON(meta DatasetMeta) error {
-	for _, part := range []string{meta.SpaceID, meta.DatasetID} {
-		if err := checkComponent(part); err != nil {
-			return err
-		}
+	if err := f.writeDatasetJSON(meta); err != nil {
+		return err
 	}
-	dir := filepath.Join(f.Root, meta.SpaceID, meta.DatasetID)
+	if err := f.WriteDatasetsCSV(); err != nil {
+		log.Warnf("archive worker 刷新 %s 失败: %v", DatasetsCSVName, err)
+	}
+	return nil
+}
+
+func (f Files) writeDatasetJSON(meta DatasetMeta) error {
+	rel, err := DatasetJSONPath(meta.SpaceID, meta.Purpose, meta.DirName)
+	if err != nil {
+		return err
+	}
+	target := f.Abs(rel)
+	dir := filepath.Dir(target)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	path := filepath.Join(dir, "dataset.json")
-	if raw, err := os.ReadFile(path); err == nil {
+	if raw, err := os.ReadFile(target); err == nil {
 		var current DatasetMeta
 		if json.Unmarshal(raw, &current) == nil {
 			current.UpdatedAt = meta.UpdatedAt
@@ -417,20 +457,20 @@ func (f Files) WriteDatasetJSON(meta DatasetMeta) error {
 		return err
 	}
 	raw := bytes.TrimRight(buf.Bytes(), "\n")
-	tmp := path + partialSuffix
+	tmp := target + partialSuffix
 	if err := os.WriteFile(tmp, append(raw, '\n'), 0o644); err != nil {
 		return err
 	}
 	if err := syncFile(tmp); err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, path); err != nil {
+	if err := os.Rename(tmp, target); err != nil {
 		return err
 	}
 	return syncDir(dir)
 }
 
-// CleanPartials 启动时清理残留的 .partial 文件。
+// CleanPartials 启动时清理残留的 .partial 文件；点开头的目录（.state 暂存库、.import 待导入文件）不进去。
 func (f Files) CleanPartials() (int, error) {
 	removed := 0
 	err := filepath.WalkDir(f.Root, func(path string, entry fs.DirEntry, err error) error {
@@ -440,7 +480,7 @@ func (f Files) CleanPartials() (int, error) {
 			}
 			return err
 		}
-		if entry.IsDir() && entry.Name() == ".state" {
+		if entry.IsDir() && path != f.Root && strings.HasPrefix(entry.Name(), ".") {
 			return filepath.SkipDir
 		}
 		if !entry.IsDir() && strings.HasSuffix(entry.Name(), partialSuffix) {
@@ -452,4 +492,31 @@ func (f Files) CleanPartials() (int, error) {
 		return nil
 	})
 	return removed, err
+}
+
+// CleanImports 删除 <root>/.import 下修改时间早于 now − maxAge 的导入目录（失败的导入保留供核对，过期后清掉），返回删除的个数。
+func (f Files) CleanImports(now time.Time, maxAge time.Duration) (int, error) {
+	base := filepath.Join(f.Root, ImportDirName)
+	entries, err := os.ReadDir(base)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	removed := 0
+	for _, entry := range entries {
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		if !info.ModTime().Before(now.Add(-maxAge)) {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(base, entry.Name())); err != nil {
+			return removed, err
+		}
+		removed++
+	}
+	return removed, nil
 }

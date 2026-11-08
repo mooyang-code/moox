@@ -156,8 +156,10 @@ func writeAdminAuthFailure(w http.ResponseWriter) {
 	_ = json.NewEncoder(w).Encode(&middlewareResp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_NO_AUTH, Msg: "访问令牌无效，请退出重新登录(gateway)"}})
 }
 
+// rawRouteOperations 是裸 HTTP 路由与它接受的 ticket 操作：三个 SSH 流式路由与归档的下载、最新数据两个路由。
 var rawRouteOperations = map[string]string{
 	"ssh/WsConnect": "ssh_ws", "ssh/SftpDownload": "sftp_download", "ssh/SftpUpload": "sftp_upload",
+	"archive/PartitionDownload": authmodel.RawOperationArchiveDownload, "archive/RecentRows": authmodel.RawOperationArchiveRecent,
 }
 
 func isRawTicketPath(path string) bool {
@@ -178,13 +180,31 @@ func validateRawRouteTicket(r *http.Request, serviceID, method string) (*accessC
 	if err != nil || ticket.Operation != operation || !time.Now().Before(ticket.ExpiresAt) {
 		return nil, errors.New("invalid raw route ticket")
 	}
-	requestSessionID := r.URL.Query().Get("session_id")
-	if requestSessionID == "" || requestSessionID != ticket.ResourceSessionID || !rawSessionBelongsToUser(requestSessionID, ticket.UserID) {
-		return nil, errors.New("raw route session does not match ticket owner")
+	if err := rawTicketResourceMatches(r, ticket); err != nil {
+		return nil, err
 	}
 	session, err := store.GetSigningSession(r.Context(), ticket.SessionID)
 	if err != nil || session.UserID != ticket.UserID || !time.Now().Before(session.ExpiresAt) {
 		return nil, errors.New("invalid raw route session")
 	}
 	return &accessClaims{UserID: ticket.UserID, SessionID: ticket.SessionID, ExpiresAt: session.ExpiresAt}, nil
+}
+
+// rawTicketResourceMatches 核对请求与 ticket 绑定的资源：SSH 路由的 session_id 必须是 ticket 的会话且属于同一用户；
+// 归档路由不涉及 SSH 会话，核对 query 里的 space、dataset 与 ticket 资源 "<空间>/<数据集>" 一致（单用户，不另做空间授权）。
+func rawTicketResourceMatches(r *http.Request, ticket *authmodel.RawSessionTicket) error {
+	query := r.URL.Query()
+	switch ticket.Operation {
+	case authmodel.RawOperationArchiveDownload, authmodel.RawOperationArchiveRecent:
+		space, dataset := query.Get("space"), query.Get("dataset")
+		if !authmodel.ValidArchiveResourcePart(space) || !authmodel.ValidArchiveResourcePart(dataset) || space+"/"+dataset != ticket.ResourceSessionID {
+			return errors.New("raw route archive resource does not match ticket")
+		}
+		return nil
+	}
+	requestSessionID := query.Get("session_id")
+	if requestSessionID == "" || requestSessionID != ticket.ResourceSessionID || !rawSessionBelongsToUser(requestSessionID, ticket.UserID) {
+		return errors.New("raw route session does not match ticket owner")
+	}
+	return nil
 }

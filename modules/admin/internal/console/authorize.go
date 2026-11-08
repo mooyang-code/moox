@@ -41,8 +41,8 @@ func Authorize() filter.ServerFilter {
 			return next(ctx, req)
 		}
 		if isRawTicketPath(rpcName) {
-			// Raw SSH routes authenticate by consuming a route-bound one-time ticket
-			// in the HTTP router, where the exact URL is available.
+			// 裸路由（SSH 流式、归档下载与最新数据）靠消费与路由绑定的一次性 ticket 鉴权，
+			// 在能拿到完整 URL 的 HTTP 路由里完成。
 			return next(ctx, req)
 		}
 

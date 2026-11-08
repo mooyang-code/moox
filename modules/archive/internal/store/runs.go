@@ -55,11 +55,15 @@ type Run struct {
 	Unrecoverable []Unrecoverable
 	Message       string
 	CreatedAt     time.Time
+	// ImportFile 是导入的文件 "<import_id>/<文件名>"（kind=import）；Overwrite 表示同键已存在时覆盖。
+	ImportFile string
+	Overwrite  bool
 }
 
 const runColumns = `c_run_id, c_space_id, c_dataset_id, c_kind, c_range_start, c_range_end, c_status, c_scheduled_at, c_started_at, c_finished_at,
 c_worker_id, c_lease_token, c_lease_until, c_subjects_total, c_subjects_done, c_request_count, c_bytes_read, c_rows_read, c_rows_added,
-c_rows_changed, c_partitions_exported, c_partitions_finalized, c_unrecoverable_json, c_message, c_ctime, c_partitions_uploaded`
+c_rows_changed, c_partitions_exported, c_partitions_finalized, c_unrecoverable_json, c_message, c_ctime, c_partitions_uploaded,
+COALESCE(c_import_file, ''), c_overwrite`
 
 func scanRun(row rowScanner) (Run, error) {
 	var r Run
@@ -68,7 +72,7 @@ func scanRun(row rowScanner) (Run, error) {
 	err := row.Scan(&r.RunID, &r.SpaceID, &r.DatasetID, &r.Kind, &rangeStart, &rangeEnd, &r.Status, &scheduled, &started, &finished,
 		&r.WorkerID, &r.LeaseToken, &leaseUntil, &r.Stats.SubjectsTotal, &r.Stats.SubjectsDone, &r.Stats.RequestCount, &r.Stats.BytesRead,
 		&r.Stats.RowsRead, &r.Stats.RowsAdded, &r.Stats.RowsChanged, &r.Stats.PartitionsExported, &r.Stats.PartitionsFinalized,
-		&unrecoverable, &r.Message, &created, &r.Stats.PartitionsUploaded)
+		&unrecoverable, &r.Message, &created, &r.Stats.PartitionsUploaded, &r.ImportFile, &r.Overwrite)
 	if err != nil {
 		return Run{}, err
 	}
@@ -80,19 +84,38 @@ func scanRun(row rowScanner) (Run, error) {
 	return r, nil
 }
 
-func insertRun(ctx context.Context, tx *sql.Tx, spaceID, datasetID, kind string, rangeStart, rangeEnd, scheduledAt time.Time) (Run, error) {
+// RunSpec 是新运行的类型与参数：range、tick 带读取区间，import 带导入文件与是否覆盖。
+type RunSpec struct {
+	Kind       string
+	RangeStart time.Time
+	RangeEnd   time.Time
+	ImportFile string
+	Overwrite  bool
+}
+
+func insertRun(ctx context.Context, tx *sql.Tx, spaceID, datasetID string, spec RunSpec, scheduledAt time.Time) (Run, error) {
 	id := newID("run_")
-	if _, err := tx.ExecContext(ctx, `INSERT INTO t_archive_runs (c_run_id, c_space_id, c_dataset_id, c_kind, c_range_start, c_range_end, c_status, c_scheduled_at)
-VALUES (?, ?, ?, ?, ?, ?, 'queued', ?)`, id, spaceID, datasetID, kind, nullTime(rangeStart), nullTime(rangeEnd), fmtTime(scheduledAt)); err != nil {
+	var importFile any
+	if spec.ImportFile != "" {
+		importFile = spec.ImportFile
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO t_archive_runs (c_run_id, c_space_id, c_dataset_id, c_kind, c_range_start, c_range_end, c_status, c_scheduled_at, c_import_file, c_overwrite)
+VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)`, id, spaceID, datasetID, spec.Kind, nullTime(spec.RangeStart), nullTime(spec.RangeEnd), fmtTime(scheduledAt), importFile, spec.Overwrite); err != nil {
 		return Run{}, err
 	}
 	return scanRun(tx.QueryRowContext(ctx, queryRuns1, id))
 }
 
-// CreateRun 为任务生成一条 manual 或 range 运行（复核与到点拉取只由 TriggerDue 生成）；已有排队中或运行中的运行时返回 ErrConflict。
-func (s *Store) CreateRun(ctx context.Context, spaceID, datasetID, kind string, rangeStart, rangeEnd, now time.Time) (Run, error) {
-	if kind != KindManual && kind != KindRange {
-		return Run{}, fmt.Errorf("CreateRun 不能生成 %q 运行", kind)
+// CreateRun 为任务生成一条 manual、range 或 import 运行（复核与到点拉取只由 TriggerDue 生成）；已有排队中或运行中的运行时返回 ErrConflict。
+func (s *Store) CreateRun(ctx context.Context, spaceID, datasetID string, spec RunSpec, now time.Time) (Run, error) {
+	switch spec.Kind {
+	case KindManual, KindRange:
+	case KindImport:
+		if spec.ImportFile == "" {
+			return Run{}, errors.New("导入运行必须带导入文件")
+		}
+	default:
+		return Run{}, fmt.Errorf("CreateRun 不能生成 %q 运行", spec.Kind)
 	}
 	var run Run
 	err := s.tx(ctx, func(tx *sql.Tx) error {
@@ -104,8 +127,8 @@ func (s *Store) CreateRun(ctx context.Context, spaceID, datasetID, kind string, 
 			return ErrNotFound
 		}
 		// 排队中的到点拉取让位：取消它（它的区间由之后的复核兜底），否则 1m 任务几乎每分钟都有一条排队的 tick，
-		// 立即运行与补拉会间歇返回冲突，worker 每天维护期间更是必定冲突。
-		if _, err := tx.ExecContext(ctx, `UPDATE t_archive_runs SET c_status = 'canceled', c_finished_at = ?, c_message = '让位给立即运行或补拉区间'
+		// 立即运行、补拉与导入会间歇返回冲突，worker 每天维护期间更是必定冲突。
+		if _, err := tx.ExecContext(ctx, `UPDATE t_archive_runs SET c_status = 'canceled', c_finished_at = ?, c_message = '让位给立即运行、补拉区间或导入'
 WHERE c_space_id = ? AND c_dataset_id = ? AND c_kind = 'tick' AND c_status = 'queued'`, fmtTime(now), spaceID, datasetID); err != nil {
 			return err
 		}
@@ -116,7 +139,7 @@ WHERE c_space_id = ? AND c_dataset_id = ? AND c_kind = 'tick' AND c_status = 'qu
 		if active > 0 {
 			return ErrConflict
 		}
-		created, err := insertRun(ctx, tx, spaceID, datasetID, kind, rangeStart, rangeEnd, now)
+		created, err := insertRun(ctx, tx, spaceID, datasetID, spec, now)
 		run = created
 		return err
 	})

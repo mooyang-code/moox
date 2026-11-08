@@ -18,14 +18,19 @@ describe("归档接口封装", () => {
       [() => archive.listArchiveTasks({ page: 1, size: 100 }), "ListArchiveTasks", { page: { page: 1, size: 100 } }],
       [() => archive.prepareArchiveTask("ds"), "PrepareArchiveTask", { dataset_id: "ds" }],
       [
+        () => archive.prepareArchiveTask("ds", "binance-spot-1m"),
+        "PrepareArchiveTask",
+        { dataset_id: "ds", dir_name: "binance-spot-1m" }
+      ],
+      [
         () => archive.previewArchiveSchedule({ dataset_id: "ds", pull_every_bars: 5 }),
         "PreviewArchiveSchedule",
         { dataset_id: "ds", pull_every_bars: 5 }
       ],
       [
-        () => archive.createArchiveTask({ dataset_id: "ds", pull_every_bars: 1, backfill_from: "", paused: false }),
+        () => archive.createArchiveTask({ dataset_id: "ds", pull_every_bars: 1, backfill_from: "", paused: false, dir_name: "" }),
         "CreateArchiveTask",
-        { dataset_id: "ds", pull_every_bars: 1, backfill_from: "", paused: false }
+        { dataset_id: "ds", pull_every_bars: 1, backfill_from: "", paused: false, dir_name: "" }
       ],
       [
         () => archive.updateArchiveTask({ dataset_id: "ds", status: "paused" }),
@@ -56,7 +61,7 @@ describe("归档接口封装", () => {
         { dataset_id: "ds", partition_key: "2026-11-07" }
       ]
     ];
-    expect(cases).toHaveLength(13);
+    expect(cases).toHaveLength(14);
     for (const [run, method, body] of cases) {
       await run();
       const [service, called, req] = lastCall();

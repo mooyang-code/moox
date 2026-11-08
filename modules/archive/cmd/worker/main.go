@@ -11,6 +11,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/app"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/config"
+	"github.com/mooyang-code/moox/modules/archive/internal/worker/dataapi"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/export"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/manager"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/pacing"
@@ -109,7 +111,7 @@ func serve(parent context.Context, cfg *config.Config) (err error) {
 	worker := app.New(app.Options{
 		Config: cfg, Manager: manager.New(gateway), Staging: store, Files: files, InstanceID: instance, Version: Version,
 		Runner:    &runner.Runner{Source: source.New(gateway, secret), Staging: store, Files: files, Pace: pacer, PageRows: cfg.Pacing.PageRows, Remote: remote},
-		DiskUsage: app.StatfsDiskUsage, Remote: remote,
+		DiskUsage: app.StatfsDiskUsage, Remote: remote, Pacer: pacer,
 	})
 	ctx, stop := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -118,6 +120,15 @@ func serve(parent context.Context, cfg *config.Config) (err error) {
 		return err
 	}
 	defer func() { err = errors.Join(err, shutdownHealth()) }()
+	dataOpts := dataapi.Options{StatePath: cfg.StatePath(), Files: files, BytesPerSecond: int64(cfg.DataAPI.MaxBytesPerSecond)}
+	if remote != nil {
+		dataOpts.Remote = remote
+	}
+	shutdownData, err := serveData(config.DataAddr(), dataapi.New(dataOpts))
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, shutdownData()) }()
 	log.Infof("moox-archive-worker %s started worker_id=%s instance=%s root=%s", Version, cfg.Worker.WorkerID, instance, cfg.Worker.RootDir)
 	return worker.Run(ctx)
 }
@@ -142,16 +153,16 @@ func serveHealth(addr string, worker *app.App) (func() error, error) {
 		case !snap.Ready:
 			status = "error"
 			reasons = append(reasons, "no recent heartbeat acknowledged by archive-mgr")
-		case snap.DiskLow:
+		case snap.DiskInsufficient:
 			status = "degraded"
-			reasons = append(reasons, "disk_low")
+			reasons = append(reasons, "disk_insufficient")
 		}
 		if snap.LastError != "" {
 			reasons = append(reasons, snap.LastError)
 		}
 		return healthz.Response{
 			Module: "archive-worker", Ready: snap.Ready, Status: status, Time: time.Now().UTC(),
-			Details: map[string]any{"active": snap.Active, "running": snap.Running, "maintaining": snap.Maintaining, "disk_low": snap.DiskLow, "disk_free_bytes": snap.DiskFree, "reasons": reasons},
+			Details: map[string]any{"active": snap.Active, "running": snap.Running, "maintaining": snap.Maintaining, "disk_insufficient": snap.DiskInsufficient, "disk_free_bytes": snap.DiskFree, "reasons": reasons},
 		}
 	}
 	state.SetReady(true)
@@ -169,6 +180,29 @@ func serveHealth(addr string, worker *app.App) (func() error, error) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		return server.Shutdown(ctx)
+	}, nil
+}
+
+// serveData 在 127.0.0.1 的数据端口上提供下载与最新数据预览。下载可能持续数分钟，不设写超时；
+// 退出时等进行中的请求 5 秒，到期仍未结束就直接断开。
+func serveData(addr string, handler http.Handler) (func() error, error) {
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("监听数据端口 %s 失败: %w", addr, err)
+	}
+	server := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second}
+	go func() {
+		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Errorf("archive worker data server: %v", err)
+		}
+	}()
+	return func() error {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := server.Shutdown(ctx); err != nil {
+			return server.Close()
+		}
+		return nil
 	}, nil
 }
 

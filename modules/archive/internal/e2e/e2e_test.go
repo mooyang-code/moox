@@ -64,7 +64,8 @@ func (datasets) GetDataset(_ context.Context, space, dataset string) (service.Da
 	if dataset != "ds_1m" {
 		return service.Dataset{}, fmt.Errorf("%w: %s", service.ErrDatasetNotFound, dataset)
 	}
-	return service.Dataset{SpaceID: space, DatasetID: dataset, DataKind: "time_series", Freq: "1m", Status: "active", DataNodeID: "node-0", Retention: "forever"}, nil
+	return service.Dataset{SpaceID: space, DatasetID: dataset, Name: "现货分钟K线", DataKind: "time_series", Freq: "1m", Status: "active", DataNodeID: "node-0", Retention: "forever",
+		DataSourceID: "binance", Attributes: map[string]string{"dataset_role": "raw_collection", "market_type": "spot"}}, nil
 }
 
 type fakeStorage struct {
@@ -141,7 +142,7 @@ func TestManagerAndWorkerCompleteAFullArchiveCycle(t *testing.T) {
 		return app.New(app.Options{
 			Config: wcfg, Manager: inProcess{svc.Worker()}, Staging: stage, Files: files, InstanceID: "i1", Version: "e2e", Now: clock,
 			Runner:    &runner.Runner{Source: storage, Staging: stage, Files: files, Pace: instant{}, PageRows: 2000, Now: clock, ReadAttempts: 1},
-			DiskUsage: func(string) (uint64, uint64, error) { return 1 << 40, 1 << 39, nil },
+			DiskUsage: func(string) (uint64, uint64, uint64, error) { return 1 << 40, 1 << 38, 1 << 39, nil },
 		})
 	}
 	worker := newWorker()
@@ -183,11 +184,16 @@ func TestManagerAndWorkerCompleteAFullArchiveCycle(t *testing.T) {
 	}
 	p := parts.GetPartitions()[0]
 	if p.GetPartitionKey() != "2026-10-16" || p.GetStatus() != "exported" || p.GetRowCount() != 2*4*60 || p.GetSubjectCount() != 2 || p.GetWorkerId() != "archive-worker@e2e" ||
-		p.GetFilePath() != "crypto/ds_1m/2026/20261016.csv" || p.GetFileSha256() == "" || p.GetExportCount() != 1 || !strings.HasPrefix(p.GetPreview(), "data_time,subject_id,series_tag,close,open\n") {
+		p.GetFilePath() != "crypto/collect/binance-spot-kline-1m/2026/20261016.csv" || p.GetFileSha256() == "" || p.GetExportCount() != 1 || !strings.HasPrefix(p.GetPreview(), "data_time,subject_id,series_tag,close,open\n") {
 		t.Fatalf("partition = %v", p)
 	}
 	if info, err := os.Stat(files.Abs(p.GetFilePath())); err != nil || fileSHA(t, files.Abs(p.GetFilePath())) != p.GetFileSha256() || uint64(info.Size()) != p.GetFileBytes() {
 		t.Fatalf("登记的 sha256/大小要与磁盘文件一致: %v", err)
+	}
+	// 根目录的对照表列出这个任务目录。
+	if raw, err := os.ReadFile(files.Abs("datasets.csv")); err != nil ||
+		!strings.Contains(string(raw), "crypto,collect,binance-spot-kline-1m,ds_1m,现货分钟K线,1m\n") {
+		t.Fatalf("datasets.csv = %q, %v", raw, err)
 	}
 	list, _ := svc.Mgr().ListArchiveTasks(ctx, &archivepb.ListArchiveTasksReq{SpaceId: "crypto"})
 	task := list.GetTasks()[0]

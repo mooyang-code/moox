@@ -22,7 +22,7 @@ var (
 )
 
 // RegisterRawHandler 注册某 service 的某 method 为裸 HTTP 处理器。
-// 控制台只允许三个固定 SSH 流式路由进入此分派器，并先消费对应操作的一次性 ticket。
+// 控制台只允许 rawRouteOperations 里的固定路由（SSH 流式与归档下载、最新数据）进入此分派器，并先消费对应操作的一次性 ticket。
 func RegisterRawHandler(serviceID, method string, h RawHandler) {
 	rawHandlersMutex.Lock()
 	defer rawHandlersMutex.Unlock()

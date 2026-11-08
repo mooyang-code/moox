@@ -10,12 +10,15 @@ import (
 
 // Worker 是 worker 最近一次心跳的状态。
 type Worker struct {
-	WorkerID       string
-	InstanceID     string
-	Version        string
-	RootDir        string
+	WorkerID   string
+	InstanceID string
+	Version    string
+	RootDir    string
+	// 磁盘：总量、可用（worker 按它判断）、已用，以及 worker 配置的可用空间下限。
 	DiskTotalBytes uint64
 	DiskFreeBytes  uint64
+	DiskUsedBytes  uint64
+	MinFreeBytes   uint64
 	StagingBytes   uint64
 	Maintaining    bool
 	PacingJSON     string
@@ -29,15 +32,16 @@ type Worker struct {
 // Active 报告租约在 now 时是否有效。
 func (w Worker) Active(now time.Time) bool { return w.LeaseUntil.After(now) }
 
-const workerColumns = `c_worker_id, c_instance_id, c_version, c_root_dir, c_disk_total_bytes, c_disk_free_bytes, c_staging_bytes, c_maintaining,
-c_pacing_json, c_running_json, c_lease_until, c_last_heartbeat_at, c_object_store_json`
+const workerColumns = `c_worker_id, c_instance_id, c_version, c_root_dir, c_disk_total_bytes, c_disk_free_bytes, c_disk_used_bytes, c_min_free_bytes,
+c_staging_bytes, c_maintaining, c_pacing_json, c_running_json, c_lease_until, c_last_heartbeat_at, c_object_store_json`
 
 func scanWorker(row rowScanner) (Worker, error) {
 	var w Worker
 	var maintaining int
 	var running string
 	var lease, heartbeat timeValue
-	err := row.Scan(&w.WorkerID, &w.InstanceID, &w.Version, &w.RootDir, &w.DiskTotalBytes, &w.DiskFreeBytes, &w.StagingBytes, &maintaining,
+	err := row.Scan(&w.WorkerID, &w.InstanceID, &w.Version, &w.RootDir, &w.DiskTotalBytes, &w.DiskFreeBytes, &w.DiskUsedBytes, &w.MinFreeBytes,
+		&w.StagingBytes, &maintaining,
 		&w.PacingJSON, &running, &lease, &heartbeat, &w.ObjectStoreJSON)
 	if err != nil {
 		return Worker{}, err
@@ -98,11 +102,13 @@ func (s *Store) Heartbeat(ctx context.Context, w Worker, now time.Time, ttl time
 		}
 		if hasOwn {
 			_, err = tx.ExecContext(ctx, updateWorker,
-				w.InstanceID, w.Version, w.RootDir, w.DiskTotalBytes, w.DiskFreeBytes, w.StagingBytes, maintaining, w.PacingJSON, string(running), lease, fmtTime(now), objectStore, w.WorkerID)
+				w.InstanceID, w.Version, w.RootDir, w.DiskTotalBytes, w.DiskFreeBytes, w.DiskUsedBytes, w.MinFreeBytes, w.StagingBytes, maintaining, w.PacingJSON,
+				string(running), lease, fmtTime(now), objectStore, w.WorkerID)
 			return err
 		}
 		_, err = tx.ExecContext(ctx, insertWorker,
-			w.WorkerID, w.InstanceID, w.Version, w.RootDir, w.DiskTotalBytes, w.DiskFreeBytes, w.StagingBytes, maintaining, w.PacingJSON, string(running), lease, fmtTime(now), objectStore)
+			w.WorkerID, w.InstanceID, w.Version, w.RootDir, w.DiskTotalBytes, w.DiskFreeBytes, w.DiskUsedBytes, w.MinFreeBytes, w.StagingBytes, maintaining, w.PacingJSON,
+			string(running), lease, fmtTime(now), objectStore)
 		return err
 	})
 	return result, err
@@ -143,7 +149,8 @@ const (
 	queryWorkers1 = `SELECT ` + workerColumns + ` FROM t_archive_workers WHERE c_worker_id = ?`
 	queryWorkers2 = `SELECT ` + workerColumns + ` FROM t_archive_workers ORDER BY c_lease_until DESC, c_worker_id`
 	updateWorker  = `UPDATE t_archive_workers SET c_instance_id = ?, c_version = ?, c_root_dir = ?, c_disk_total_bytes = ?, c_disk_free_bytes = ?,
-c_staging_bytes = ?, c_maintaining = ?, c_pacing_json = ?, c_running_json = ?, c_lease_until = ?, c_last_heartbeat_at = ?, c_object_store_json = ? WHERE c_worker_id = ?`
+c_disk_used_bytes = ?, c_min_free_bytes = ?, c_staging_bytes = ?, c_maintaining = ?, c_pacing_json = ?, c_running_json = ?, c_lease_until = ?, c_last_heartbeat_at = ?, c_object_store_json = ? WHERE c_worker_id = ?`
 	insertWorker = `INSERT INTO t_archive_workers (c_worker_id, c_instance_id, c_version, c_root_dir, c_disk_total_bytes, c_disk_free_bytes,
-c_staging_bytes, c_maintaining, c_pacing_json, c_running_json, c_lease_until, c_last_heartbeat_at, c_object_store_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+c_disk_used_bytes, c_min_free_bytes, c_staging_bytes, c_maintaining, c_pacing_json, c_running_json, c_lease_until, c_last_heartbeat_at, c_object_store_json)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 )
