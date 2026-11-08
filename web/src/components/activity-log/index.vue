@@ -24,7 +24,7 @@
     >
       <template #columns>
         <a-table-column title="时间" :width="180">
-          <template #cell="{ record }">{{ formatTime(record.created_at) }}</template>
+          <template #cell="{ record }">{{ formatTime(record.created_at, zone) }}</template>
         </a-table-column>
         <a-table-column v-if="showSpace" title="空间" data-index="space_id" :width="110">
           <template #cell="{ record }">{{ record.space_id || "全局" }}</template>
@@ -64,12 +64,14 @@ const props = withDefaults(
     spaceId?: string;
     // 只看不属于任何空间的全局事件（如登录记录），与 spaceId 二选一。
     global?: boolean;
+    /** 时间的显示时区：当前空间的记录用空间时区，系统事件用 UTC。组件不自己读空间，由调用方传入。 */
+    zone?: string;
     category?: string;
     pageSize?: number;
     showFilters?: boolean;
     showSpace?: boolean;
   }>(),
-  { spaceId: "", global: false, category: "", pageSize: 20, showFilters: false, showSpace: false }
+  { spaceId: "", global: false, zone: "UTC", category: "", pageSize: 20, showFilters: false, showSpace: false }
 );
 
 const guard = createLatestRequestGuard();

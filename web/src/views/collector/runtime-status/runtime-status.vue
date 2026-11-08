@@ -23,7 +23,7 @@
               <span v-if="loadError && loaded" class="verdict-reason"
                 >最近一次读取失败：{{ loadError }}，下面是上次成功的结果</span
               >
-              <span class="muted">{{ status.generated_at ? `更新于 ${localTimeText(status.generated_at)}` : "" }}</span>
+              <span class="muted">{{ status.generated_at ? `更新于 ${timeText(status.generated_at)}` : "" }}</span>
               <a-button size="small" @click="logVisible = true">
                 <template #icon><icon-history /></template>
                 变更记录
@@ -119,7 +119,9 @@
                   <a-tooltip :content="INSPECTION_TIP"><icon-question-circle class="column-tip" /></a-tooltip>
                 </template>
                 <template #cell="{ record }">
-                  <span :style="{ color: inspectionInfo(record).color }">{{ inspectionInfo(record).text }}</span>
+                  <span :style="{ color: inspectionInfo(record, displayZone).color }">{{
+                    inspectionInfo(record, displayZone).text
+                  }}</span>
                 </template>
               </a-table-column>
               <a-table-column title="24h 实时缺口" :width="130">
@@ -156,23 +158,22 @@
                   <icon-exclamation-circle /> {{ reason }}
                 </div>
                 <div class="detail-line">
-                  首次生效 {{ localTimeText(record.effective_from) }} · 自动巡检已查至
-                  {{ record.inspected_until ? localTimeText(record.inspected_until) : "尚未巡检" }}（每 5
-                  分钟一次，发现缺口自动补采）
+                  首次生效 {{ timeText(record.effective_from) }} · 自动巡检已查至
+                  {{ record.inspected_until ? timeText(record.inspected_until) : "尚未巡检" }}（每 5 分钟一次，发现缺口自动补采）
                 </div>
                 <div class="detail-line">
                   历史缺口扫描：
                   <template v-if="!record.history_scanned_at">尚未扫描</template>
                   <template v-else-if="record.history_error"
-                    >{{ localTimeText(record.history_scanned_at) }} 失败（{{ record.history_error }}）</template
+                    >{{ timeText(record.history_scanned_at) }} 失败（{{ record.history_error }}）</template
                   >
                   <template v-else-if="record.history_gap_bars">
-                    {{ localTimeText(record.history_scanned_at) }} 发现 {{ record.history_gap_bars }} 根缺口（{{
+                    {{ timeText(record.history_scanned_at) }} 发现 {{ record.history_gap_bars }} 根缺口（{{
                       record.history_gap_subjects
                     }}
                     个标的），补采确认后行情源本来没有的部分会自动排除
                   </template>
-                  <template v-else>{{ localTimeText(record.history_scanned_at) }} 无缺口</template>
+                  <template v-else>{{ timeText(record.history_scanned_at) }} 无缺口</template>
                 </div>
                 <div v-if="record.absent_bars" class="detail-line">
                   已确认行情源没有 {{ record.absent_bars }} 根（如停牌、无成交），不算缺口、不影响健康
@@ -355,7 +356,7 @@
     <FunctionDetailDialog :fn="selectedFunction" :dataset-names="datasetNames" @close="selectedFunction = null" />
 
     <a-drawer v-model:visible="logVisible" :width="860" :footer="false" title="标的变更记录" unmount-on-close>
-      <ActivityLog :space-id="selectedSpaceId" category="collector.subject_change" :page-size="20" />
+      <ActivityLog :space-id="selectedSpaceId" :zone="displayZone" category="collector.subject_change" :page-size="20" />
     </a-drawer>
   </div>
 </template>
@@ -393,15 +394,19 @@ import {
   inspectionInfo,
   levelInfo,
   levelRank,
-  localTimeText,
   overallStatus,
   statusSummary
 } from "./runtime-status-model";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
+import { formatInstant } from "@/utils/time-zone";
 
 const router = useRouter();
 const spaceStore = useSpaceStore();
 const { selectedSpaceId } = storeToRefs(spaceStore);
 const guard = createLatestRequestGuard();
+// 运行状态的时间按当前空间登记的时区带后缀显示
+const displayZone = useDisplayZone();
+const timeText = (value?: string) => formatInstant(value, displayZone.value);
 
 const status = ref<GetCollectorStatusResponse>({});
 const statusLoading = ref(false);
@@ -478,7 +483,7 @@ const streamPeriodRows = computed(() =>
     key: `${stat.dataset_id}-${stat.frequency}-${stat.period}`,
     dataset_id: stat.dataset_id,
     frequency: stat.frequency,
-    period: new Date(Number(stat.period || 0) * 1000).toISOString().replace(".000Z", "Z"),
+    period: formatInstant(Number(stat.period || 0) * 1000, displayZone.value),
     error: stat.error || "",
     ...streamPeriodText(stat)
   }))
@@ -500,7 +505,7 @@ const planText = computed(() => {
 });
 const planSub = computed(() => {
   const plan = status.value.open || status.value.applied;
-  return plan ? `${localTimeText(plan.updated_at)} 更新` : "创建采集任务后自动生成";
+  return plan ? `${timeText(plan.updated_at)} 更新` : "创建采集任务后自动生成";
 });
 
 const selectedFunction = ref<CollectorFunctionStatus | null>(null);
