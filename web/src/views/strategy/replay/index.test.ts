@@ -257,6 +257,22 @@ describe("strategy replay page", () => {
     expect(wrapper.findAll("button.replay-row")[1].attributes("aria-current")).toBe("true");
   });
 
+  it("按此配置重新发起：用回放详情里当时的配置填表单并打开发起抽屉，不被入口预填覆盖", async () => {
+    const done = replay("r2", "done", "{}", { dsl_yaml: "name: old_version", spot_fee_bps: 7 });
+    api.listReplays.mockResolvedValue({ items: [done], page: { total: 1 } });
+    api.getReplay.mockResolvedValue(done);
+    const wrapper = mountPage();
+    await flushPromises();
+    await wrapper
+      .findAll("button")
+      .find(item => item.text() === "按此配置重新发起")!
+      .trigger("click");
+    await flushPromises();
+    expect(nav.route.query.create).toBe("1");
+    const form = (wrapper.vm as unknown as { form: Record<string, unknown> }).form;
+    expect(form).toMatchObject({ source: "dsl", dsl_yaml: "name: old_version", tasks: { spot: "ftask_a" }, spot_fee_bps: 7 });
+  });
+
   it("keeps polling the selected running replay across cycles when the list page has none", async () => {
     api.listReplays.mockResolvedValueOnce({ items: [replay("r1", "running")], page: { total: 30 } });
     api.listReplays.mockResolvedValue({ items: [replay("r9", "done")], page: { total: 30 } });

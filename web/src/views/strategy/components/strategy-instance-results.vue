@@ -62,7 +62,9 @@ const props = defineProps<{
 // 策略池的实例：已加载的结果里带 pool 明细的期，没有时整块不显示。
 const poolPeriods = computed(() => buildPoolPeriods(props.results));
 // 本会话最新一期被跳过时的那条结果：用它的跳过原因写说明和下一步
+// 只有在看本会话的第一页时，首条才是最近一期；翻到别的页或看全部历史时写通用说明
 const latestSkip = computed(() => {
+  if (props.page !== 1 || props.scope !== "session") return undefined;
   const latest = props.results.find(item => item.session_id === props.instance.session_id);
   return latest?.status === "skipped" ? latest : undefined;
 });

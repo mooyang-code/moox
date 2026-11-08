@@ -7,7 +7,7 @@
           <span>DSL 是唯一策略配置来源，保存定义不会启用任何实例。</span>
         </div>
         <a-space>
-          <a-button :loading="store.listLoading" aria-label="刷新策略定义" @click="refresh"
+          <a-button :loading="listLoading" aria-label="刷新策略定义" @click="refresh"
             ><template #icon><icon-refresh /></template>刷新</a-button
           >
           <a-button type="primary" status="success" @click="templateVisible = true">从模板新建</a-button>
@@ -16,8 +16,8 @@
           >
         </a-space>
       </div>
-      <a-alert v-if="store.error" type="error" show-icon class="top-alert"
-        >策略定义加载失败：{{ store.error
+      <a-alert v-if="listError" type="error" show-icon class="top-alert"
+        >策略定义加载失败：{{ listError
         }}<template #action><a-button size="small" @click="refresh">重试</a-button></template></a-alert
       >
       <div class="toolbar">
@@ -35,7 +35,7 @@
       <a-table
         row-key="strategy_id"
         :data="rows"
-        :loading="searching ? store.catalogLoading : store.listLoading"
+        :loading="listLoading"
         :pagination="pagination"
         :scroll="{ x: 900 }"
         @page-change="changePage"
@@ -86,7 +86,7 @@
           </a-table-column>
         </template>
         <template #empty>
-          <a-empty v-if="store.error" description="读取失败，暂无可显示的定义" />
+          <a-empty v-if="listError" description="读取失败，暂无可显示的定义" />
           <a-empty v-else description="暂无策略定义">
             <a-button type="primary" status="success" @click="router.push({ name: 'strategy-definition-new' })"
               >新建策略</a-button
@@ -153,6 +153,9 @@ const rows = computed(() =>
     ? matched.value.slice((pagination.current - 1) * pagination.pageSize, pagination.current * pagination.pageSize)
     : store.strategies
 );
+// 搜索时读的是完整目录，错误和加载态也看目录那一份
+const listError = computed(() => (searching.value ? store.catalogError : store.error));
+const listLoading = computed(() => (searching.value ? store.catalogLoading : store.listLoading));
 const detailId = computed(() => queryString(route.query.definition_id));
 
 function stateQuery(patch: { page?: number; definition_id?: string; q?: string }) {

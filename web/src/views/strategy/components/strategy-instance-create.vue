@@ -321,12 +321,9 @@ const market = computed(() => {
   if (poolRequirement.value?.markets.length) return marketsToResolved(poolRequirement.value.markets);
   return activeMarkets.value.length ? marketsToResolved(activeMarkets.value) : {};
 });
+// 预检前后的市场一致：直接按策略池成员或策略的市场写
 const marketNames = computed(() => {
-  const markets = check_result.value?.resolved_json
-    ? []
-    : poolRequirement.value?.markets.length
-      ? poolRequirement.value.markets
-      : activeMarkets.value;
+  const markets = poolRequirement.value?.markets.length ? poolRequirement.value.markets : activeMarkets.value;
   return markets.length ? markets.map(marketLabel).join("、") : "策略市场";
 });
 // 已选的账户因为市场收窄被清空：提示一句，用户重新选择后消失。
@@ -475,6 +472,8 @@ function loadMetadata() {
 
 function onStrategyChange() {
   fieldErrors.strategy_id = "";
+  // 预检作废了，“预检没有通过”的提示也不再成立
+  error.value = "";
   form.input_mode = "split";
   form.tasks = {};
   resetCheck();
@@ -489,10 +488,12 @@ function onInputModeChange() {
 }
 function onTaskChange() {
   fieldErrors.factor_tasks = "";
+  error.value = "";
   resetCheck();
 }
 function onModeChange() {
   fieldErrors.logical_account_id = "";
+  accountCleared.value = false;
   if (form.mode === "compute") form.logical_account_id = "";
 }
 
@@ -505,7 +506,7 @@ function resetCheck() {
 // 进行中的预检：预检还没回来时再点“创建”，等这一次的结果，不重复发请求。
 let checkPromise: Promise<ValidateStrategyResult | null> | null = null;
 
-/** 预检：返回本次结果；被作废（改了定义、任务、市场或关掉抽屉）时返回 null。 */
+/** 预检：返回本次结果；被作废（改了定义、任务、市场或切了空间）时返回 null。关掉抽屉不作废预检，由 submitRequest 挡住创建。 */
 function check(): Promise<ValidateStrategyResult | null> {
   // 选中的定义不在目录里（目录是旧的）：说清楚原因，不能点了没反应
   if (form.strategy_id && !selectedStrategy.value) {
@@ -565,6 +566,7 @@ function resetForm() {
   accountsError.value = "";
   fieldErrors.strategy_id = fieldErrors.factor_tasks = fieldErrors.logical_account_id = "";
   error.value = "";
+  accountCleared.value = false;
   resetCheck();
   void loadMissingMembers();
 }

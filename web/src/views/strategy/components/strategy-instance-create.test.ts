@@ -225,7 +225,7 @@ describe("strategy instance creation behavior", () => {
     release({ diagnostics: [], resolved_json: '{"market":{"select":"swap","prefer":"swap"}}', trial: null, trial_items: [] });
     await flushPromises();
     expect(api.validateStrategy.mock.calls[1][1]).toEqual({ swap: "ftask_b" });
-    expect(api.createInstance).toHaveBeenCalled();
+    expect(api.createInstance).toHaveBeenCalledTimes(1);
   });
 
   it("shows the account failure with a retry in trade mode and blocks submission without an account", async () => {
