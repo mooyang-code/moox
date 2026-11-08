@@ -913,13 +913,9 @@ async function refreshRowsInBackground() {
   if (!activeView.value && !metaLoading.value) await loadMeta();
 }
 
-/** 自动刷新的一轮：正在读取时跳过，不排队。 */
+/** 自动刷新的一轮：正在读取时跳过，不排队；视图元数据没读到时不自动重试（会弹提示），等用户点“刷新”。 */
 async function pollRows() {
-  if (loading.value || contextLoading.value || metaLoading.value) return;
-  if (!activeView.value) {
-    await loadMeta();
-    return;
-  }
+  if (loading.value || contextLoading.value || metaLoading.value || !activeView.value) return;
   await reloadRows(true, { background: true });
 }
 

@@ -169,6 +169,24 @@ describe("View result refresh", () => {
     vi.useRealTimers();
   });
 
+  it("视图元数据没读到时自动刷新不重试，不会每轮弹提示", async () => {
+    vi.useFakeTimers();
+    mocks.catalog.mockRejectedValue(new Error("Storage unavailable"));
+    const wrapper = shallowMount(ViewBrowse, {
+      props: { embedded: true, viewIds: ["view-known"], activeViewId: "view-known", autoRefreshIntervalMs: 60_000 },
+      global: { stubs: { "a-alert": { template: "<div class='alert'><slot /></div>" } } }
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    await flushPromises();
+    const calls = mocks.catalog.mock.calls.length;
+    const errors = mocks.messageError.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(mocks.catalog.mock.calls.length).toBe(calls);
+    expect(mocks.messageError.mock.calls.length).toBe(errors);
+    wrapper.unmount();
+    vi.useRealTimers();
+  });
+
   it("leaves an initial query failure empty without claiming previous data", async () => {
     mocks.queryTimeSeries.mockRejectedValue(new Error("Storage unavailable"));
     const wrapper = mountPage();
