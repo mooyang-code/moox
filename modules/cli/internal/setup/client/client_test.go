@@ -175,7 +175,6 @@ func TestApplyReturnsStableSecretFreeErrors(t *testing.T) {
 		body string
 		want string
 	}{
-		{name: "conflict", body: `{"ret_info":{"code":1,"msg":"setup_conflict"}}`, want: "setup_conflict"},
 		{name: "unexpected remote text", body: `recognizable-secret-key`, want: "setup_response_invalid"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

@@ -98,7 +98,6 @@ func TestApplySetupMapsDomainErrors(t *testing.T) {
 		code pb.ErrorCode
 		msg  string
 	}{
-		{name: "conflict", err: setup.ErrConflict, code: pb.ErrorCode_INVALID_PARAM, msg: "setup_conflict"},
 		{name: "invalid", err: setup.ErrInvalid, code: pb.ErrorCode_INVALID_PARAM, msg: "setup_invalid"},
 		{name: "storage", err: setup.ErrStorage, code: pb.ErrorCode_INNER_ERR, msg: "setup_storage_failed"},
 		{name: "unknown", err: errors.New("recognizable-secret-key"), code: pb.ErrorCode_INNER_ERR, msg: "setup_storage_failed"},

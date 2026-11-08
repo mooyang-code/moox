@@ -106,7 +106,7 @@ func TestApplyNeverOverwritesExistingExchangeKey(t *testing.T) {
 	status, err := service.Inspect(context.Background(), manifest)
 	require.NoError(t, err)
 	assert.Equal(t, "completed", status.State)
-	assert.Zero(t, status.Conflicts)
+	assert.Empty(t, status.Kept)
 }
 
 // 已在管理台删除的密钥（作废或泄露）不重建；软删除后重建还会撞 (c_secret_id, c_is_deleted) 唯一索引。
