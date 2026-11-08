@@ -13,7 +13,8 @@ import {
   isTradeInvalidParam,
   isTradeNotFound,
   isTradeSessionNotReady,
-  TradeResponseError
+  TradeResponseError,
+  withDialogErrors
 } from "./http";
 
 describe("Trade response errors", () => {
@@ -29,6 +30,15 @@ describe("Trade response errors", () => {
     await expect(callTrade("console", "ListOrders", {})).rejects.toThrow();
     await expect(callTrade("console", "GetOperatorAction", {})).rejects.toThrow();
     await expect(callTrade("console", "SubmitOrder", {}, { silent: true })).rejects.toThrow();
+    expect(messageError).toHaveBeenCalledTimes(1);
+  });
+
+  it("确认对话框提交期间的写操作出错不弹全局提示，结束后恢复", async () => {
+    client.post.mockResolvedValue({ data: { ret_info: { code: 1, msg: "暂停失败" } } });
+    await expect(withDialogErrors(() => callTrade("console", "PauseLogicalAccount", {}))).rejects.toThrow("暂停失败");
+    expect(client.post.mock.calls.at(-1)?.[2]).toEqual({ silentError: true });
+    expect(messageError).not.toHaveBeenCalled();
+    await expect(callTrade("console", "PauseLogicalAccount", {})).rejects.toThrow();
     expect(messageError).toHaveBeenCalledTimes(1);
   });
 

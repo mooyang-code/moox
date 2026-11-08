@@ -232,9 +232,7 @@
             <a-descriptions-item label="范围">
               {{ flattenTarget ? "只动这一个执行账户，组合里其他账户不动" : `组合里全部 ${enabledAccounts.length} 个执行账户` }}
             </a-descriptions-item>
-            <a-descriptions-item label="撤销订单">{{
-              flattenOrders === null ? "读取中…" : `${flattenOrders} 个未完成订单`
-            }}</a-descriptions-item>
+            <a-descriptions-item label="撤销订单">{{ flattenOrdersText }}</a-descriptions-item>
             <a-descriptions-item label="平掉持仓">
               {{ flattenInfo.positions }} 个，按市价，价值约 {{ fmtMoney(flattenInfo.value) }} {{ logical.settlement_asset }}
             </a-descriptions-item>
@@ -314,6 +312,7 @@ import {
   getLogicalAccount,
   isTradeNotFound,
   getLogicalAccountTarget,
+  listOperatorActions,
   listOrders,
   listTradingAccounts,
   orderOwnerLabels,
@@ -342,6 +341,7 @@ import {
   isFlattenRunning,
   memberTotals,
   paperInitialBalance,
+  runningAction,
   tabFromQuery,
   targetExpired
 } from "./detail-model";
@@ -463,10 +463,27 @@ async function reload(background = false) {
   if (next && request.isLatest() && id === logicalId.value) snapshot.value = next;
 }
 
+/** 刷新页面后接回进行中的操作（例如清仓）：页头继续显示进度，结束后订单、成交跟着刷新。 */
+async function resumeRunningAction() {
+  const id = logicalId.value;
+  if (!id) return;
+  try {
+    const rsp = await listOperatorActions({ logical_account_id: id, page: { page: 1, size: 20 } }, { silent: true });
+    if (id !== logicalId.value || tracker.action.value) return;
+    const running = runningAction(rsp.actions);
+    if (!running) return;
+    tracker.action.value = running;
+    tracker.start(running.action_id);
+  } catch {
+    // 只用于接回进度；读不到时不提示，操作记录页签里仍能看到
+  }
+}
+
 async function loadFirst() {
   loadError.value = "";
   try {
     await reload();
+    void resumeRunningAction();
     const links = await loadStrategyLinks(logical.value ? [logical.value] : []);
     // 读取失败时保留上一次读到的关联策略；没有的话页头仍能按 owner_instance_id 链到实例，
     // 两样都没有时写“策略读取失败”，不当成没有绑定
@@ -537,13 +554,19 @@ const pauseVisible = ref(false);
 const resumeVisible = ref(false);
 const flattenVisible = ref(false);
 const flattenTarget = ref<TradingAccount | null>(null);
-const flattenOrders = ref<number | null>(null);
+// 未完成订单数：null 表示读取中，undefined 表示读取失败
+const flattenOrders = ref<number | null | undefined>(null);
 const flattenActionId = ref("");
 const cancelVisible = ref(false);
 const cancelOrderTarget = ref<Order | null>(null);
 const cancelActionId = ref("");
 const closePaperVisible = ref(false);
 const closePaperTarget = ref<TradingAccount | null>(null);
+const flattenOrdersText = computed(() => {
+  if (flattenOrders.value === null) return "读取中…";
+  if (flattenOrders.value === undefined) return "未完成订单数读取失败，清仓时仍会全部撤销";
+  return `${flattenOrders.value} 个未完成订单`;
+});
 const flattenInfo = computed(() => flattenPreview(snapshot.value, flattenTarget.value?.trading_account_id));
 
 /** 提交期间组合账户被切走：请求已经发出，但不再改动当前页面。 */
@@ -574,11 +597,13 @@ function openFlatten(account?: TradingAccount) {
   flattenVisible.value = true;
   const id = logicalId.value;
   const scope = account ? { trading_account_id: account.trading_account_id } : { logical_account_id: id };
-  listOrders({ ...scope, only_open: true, page: { page: 1, size: 1 } })
+  listOrders({ ...scope, only_open: true, page: { page: 1, size: 1 } }, { silent: true })
     .then(rsp => {
       if (flattenVisible.value && logicalId.value === id) flattenOrders.value = rsp.page_result?.total ?? 0;
     })
-    .catch(() => undefined);
+    .catch(() => {
+      if (flattenVisible.value && logicalId.value === id) flattenOrders.value = undefined;
+    });
 }
 
 async function submitFlatten(reason: string) {

@@ -105,6 +105,11 @@ describe("Trade public API", () => {
     expect(trade.canCancelOrderState("CANCELING")).toBe(true);
     expect(trade.canCancelOrderState("CANCEL_UNKNOWN")).toBe(true);
     expect(trade.canCancelOrderState("FILLED")).toBe(false);
+    // 未完成订单比可撤单多“等待提交”“提交中”：订单页签据此决定是否后台刷新
+    expect(trade.isActiveOrderState("PENDING")).toBe(true);
+    expect(trade.isActiveOrderState("SUBMITTING")).toBe(true);
+    expect(trade.canCancelOrderState("PENDING")).toBe(false);
+    expect(trade.isActiveOrderState("FILLED")).toBe(false);
   });
 
   it("exposes canonical Chinese order state labels", () => {
@@ -217,12 +222,17 @@ describe("Trade public API", () => {
       page: { page: 2, size: 10 }
     };
     await trade.listOperatorActions(actions);
-    expect(callTrade).toHaveBeenLastCalledWith("console", "ListOperatorActions", actions);
+    expect(callTrade).toHaveBeenLastCalledWith("console", "ListOperatorActions", actions, {});
 
     await trade.listOrders({ logical_account_id: "logical-1", owner_type: "SYSTEM" });
-    expect(callTrade).toHaveBeenLastCalledWith("console", "ListOrders", {
-      logical_account_id: "logical-1",
-      owner_type: "SYSTEM"
-    });
+    expect(callTrade).toHaveBeenLastCalledWith(
+      "console",
+      "ListOrders",
+      {
+        logical_account_id: "logical-1",
+        owner_type: "SYSTEM"
+      },
+      {}
+    );
   });
 });

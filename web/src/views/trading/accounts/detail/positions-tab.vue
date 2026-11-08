@@ -100,7 +100,7 @@
 <script setup lang="ts">
 import { useWindowSize } from "@vueuse/core";
 import { computed, inject, ref } from "vue";
-import { useRoute } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { fmtQty } from "../shared/format";
 import { marketLabel, marketOfInstrument } from "../shared/markets";
 import SectionBlock from "../shared/section-block.vue";
@@ -121,7 +121,10 @@ const { width: viewportWidth } = useWindowSize();
 const isNarrow = computed(() => viewportWidth.value < 768);
 const route = useRoute();
 
+const router = useRouter();
 const filter = ref<PositionFilter>(route.query.filter === "off" ? "off" : "all");
+// filter=off 只是概览“查看未到位”带过来的一次性入口：读到后从地址里去掉，之后切换筛选、换页签都不再带着它
+if (route.query.filter !== undefined) void router.replace({ query: { ...route.query, filter: undefined } });
 const search = ref("");
 const page = ref(1);
 

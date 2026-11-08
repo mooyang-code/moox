@@ -6,7 +6,17 @@
     <template v-if="order">
       <a-descriptions :column="1" size="small" :label-style="{ width: '96px' }">
         <a-descriptions-item label="状态">
-          <StatusMark :tone="stateTone(order.state)">{{ orderStateLabels[order.state] || order.state }}</StatusMark>
+          <StatusMark :tone="orderStateTone(order.state)">{{ orderStateLabels[order.state] || order.state }}</StatusMark>
+          <a-button
+            v-if="canCancelOrderState(order.state)"
+            size="mini"
+            type="text"
+            status="danger"
+            class="cancel-btn"
+            @click="cancelOrder(order)"
+          >
+            撤单
+          </a-button>
         </a-descriptions-item>
         <a-descriptions-item label="市场">{{ marketLabel(order.market_type) }}</a-descriptions-item>
         <a-descriptions-item label="类型">
@@ -59,13 +69,15 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from "vue";
-import { listFills, orderOwnerLabels, orderStateLabels } from "@/api/trade";
+import { inject, ref, watch } from "vue";
+import { canCancelOrderState, listFills, orderOwnerLabels, orderStateLabels } from "@/api/trade";
 import type { Fill, Order } from "@/api/trade";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import { fmtQty } from "../shared/format";
 import { instrumentName, marketLabel } from "../shared/markets";
 import StatusMark from "../shared/status-mark.vue";
+import { detailContextKey } from "./context";
+import { orderStateTone } from "./detail-model";
 import { formatInstant } from "@/utils/time-zone";
 import { useDisplayZone } from "@/hooks/useDisplayZone";
 
@@ -73,40 +85,32 @@ import { useDisplayZone } from "@/hooks/useDisplayZone";
 const displayZone = useDisplayZone();
 const props = defineProps<{ visible: boolean; order: Order | null; accountName: (id: string) => string }>();
 const emit = defineEmits<{ "update:visible": [value: boolean] }>();
+const { openCancel } = inject(detailContextKey)!;
+
+/** 撤单走详情页统一的确认框；抽屉先关上，撤单结果在订单列表里刷新。 */
+function cancelOrder(order: Order) {
+  emit("update:visible", false);
+  openCancel(order);
+}
 
 const fills = ref<Fill[]>([]);
 const loading = ref(false);
 const error = ref("");
 const requests = createLatestRequestGuard();
 
-function stateTone(state: string) {
-  switch (state) {
-    case "FILLED":
-      return "ok";
-    case "REJECTED":
-    case "EXPIRED":
-      return "bad";
-    case "PARTIALLY_FILLED":
-    case "CANCELING":
-    case "SUBMIT_UNKNOWN":
-    case "CANCEL_UNKNOWN":
-      return "warn";
-    case "CANCELED":
-    case "PARTIALLY_CANCELED":
-      return "";
-    default:
-      return "run";
-  }
-}
-
 watch(
-  () => [props.visible, props.order?.order_id] as const,
-  async ([visible, id]) => {
+  // 已成交数量变了（抽屉开着时订单成交）也重读成交明细
+  () => [props.visible, props.order?.order_id, props.order?.filled_quantity] as const,
+  async ([visible, id], previous) => {
     if (!visible || !id) return;
     const request = requests.begin();
-    loading.value = true;
+    // 同一个订单因成交数量变化重读时保留已有明细，读到后再替换，避免每次轮询闪一下
+    const sameOrder = previous?.[0] && previous[1] === id;
+    if (!sameOrder) {
+      loading.value = true;
+      fills.value = [];
+    }
     error.value = "";
-    fills.value = [];
     try {
       const rsp = await listFills({
         order_id: id,
@@ -126,6 +130,9 @@ watch(
 
 <style src="../shared/accounts.css"></style>
 <style scoped>
+.cancel-btn {
+  margin-left: var(--moox-space-2);
+}
 .fills-title {
   margin: var(--moox-space-4) 0 var(--moox-space-2);
   font-size: 14px;

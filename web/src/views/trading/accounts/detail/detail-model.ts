@@ -76,7 +76,35 @@ export function isFlattenRunning(action: OperatorAction | null): boolean {
 
 export const actionTypeLabels: Record<string, string> = {
   FLATTEN: "清仓",
+  REDUCE: "减仓",
+  DELIST_FLATTEN: "下架清仓",
   MANUAL_ORDER: "接管并下单",
   SUBMIT_ORDER: "下单",
   CANCEL_ORDER: "撤单"
 };
+
+/** 刷新页面后接回跟踪：最近的人工操作里还在进行中的那一个（记录按时间倒序）。 */
+export function runningAction(actions: OperatorAction[] | undefined): OperatorAction | null {
+  return (actions || []).find(action => action.status === "RUNNING") ?? null;
+}
+
+/** 订单状态的配色：订单列表和订单详情共用。 */
+export function orderStateTone(state: string): "ok" | "bad" | "warn" | "run" | "" {
+  switch (state) {
+    case "FILLED":
+      return "ok";
+    case "REJECTED":
+    case "EXPIRED":
+      return "bad";
+    case "PARTIALLY_FILLED":
+    case "CANCELING":
+    case "SUBMIT_UNKNOWN":
+    case "CANCEL_UNKNOWN":
+      return "warn";
+    case "CANCELED":
+    case "PARTIALLY_CANCELED":
+      return "";
+    default:
+      return "run";
+  }
+}

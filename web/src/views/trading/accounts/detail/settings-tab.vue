@@ -218,6 +218,7 @@ import ConfirmDialog from "../shared/confirm-dialog.vue";
 import { accountEnvironment } from "../shared/environment";
 import { fmtMoney } from "../shared/format";
 import { marketsText } from "../shared/markets";
+import { positionCount } from "../shared/position-snapshot";
 import MemberSettings from "../shared/member-settings.vue";
 import { eligibleAccounts } from "../shared/membership";
 import SectionBlock from "../shared/section-block.vue";
@@ -283,9 +284,8 @@ const hasBinanceLive = computed(() =>
   })
 );
 const candidates = computed(() => eligibleAccounts(allAccounts.value, allLogicals.value, logical.value, env.value));
-const hasPositions = computed(
-  () => snapshot.value.swapPositions.length > 0 || snapshot.value.spotHoldings.some(item => item.instrument_id)
-);
+// 和页头“清仓”按钮同一口径：零数量的现货余额不算持仓
+const hasPositions = computed(() => positionCount(snapshot.value) > 0);
 const nameDirty = computed(() => comboName.value.trim() !== "" && comboName.value.trim() !== logical.value.name);
 
 // 候选账户要排除所有组合里的成员，所以读全部组合；成员变化后重读。
