@@ -84,7 +84,7 @@ describe("page layout standards", () => {
     expect(secrets).not.toContain('class="filter-bar"');
     expect(secrets.indexOf('placeholder="搜索名称或描述"')).toBeLessThan(secrets.indexOf('placeholder="分类"'));
     expect(secrets.indexOf('placeholder="分类"')).toBeLessThan(secrets.indexOf('placeholder="状态"'));
-    expect(secrets.indexOf('placeholder="状态"')).toBeLessThan(secrets.indexOf("新增秘钥"));
+    expect(secrets.indexOf('placeholder="状态"')).toBeLessThan(secrets.indexOf("新建密钥"));
     expectMargin(secrets, ".page-head", "margin-bottom", 5);
   });
 
@@ -96,7 +96,7 @@ describe("page layout standards", () => {
     expect(host).toContain("PageTitleTabs");
     expect(host).toContain("<keep-alive>");
     expect(computeTasks).toContain("新建计算任务");
-    expect(definitions).toContain("新增因子");
+    expect(definitions).toContain("新建因子");
     expect(definitions).not.toContain('class="filters"');
   });
 

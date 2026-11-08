@@ -97,15 +97,15 @@ const skipReasons: Record<string, string> = {
 const skipNextSteps: Record<string, string> = {
   factor_changed: "停用再启用实例，按新的因子定义重新固化",
   previous_version_unknown: "通常下一期自动恢复；持续出现时停用再启用实例",
-  factor_missing: "等上游因子任务产出，通常自动恢复；持续出现时查看因子任务",
-  factor_skipped: "上游因子本期跳过，通常自动恢复；持续出现时查看因子任务",
-  market_missing: "等另一个市场的因子任务产出，通常自动恢复",
-  market_failed: "上游因子失败比例过高，查看因子任务的失败原因",
-  no_data: "本期没有数据，通常自动恢复；持续出现时查看采集和因子任务",
+  factor_missing: "等上游计算任务产出，通常自动恢复；持续出现时查看计算任务",
+  factor_skipped: "上游因子本期跳过，通常自动恢复；持续出现时查看计算任务",
+  market_missing: "等另一个市场的计算任务产出，通常自动恢复",
+  market_failed: "上游因子失败比例过高，查看计算任务的失败原因",
+  no_data: "本期没有数据，通常自动恢复；持续出现时查看采集和计算任务",
   universe_too_small: "可用标的太少：检查数据覆盖，或调整策略的标的池",
-  too_many_missing: "缺数比例过高：检查采集和因子任务的覆盖",
+  too_many_missing: "缺数比例过高：检查采集和计算任务的覆盖",
   config_error: "检查策略定义，改好后停用再启用实例",
-  ambiguous_series: "同一标的有多个序列：检查因子任务用的数据集",
+  ambiguous_series: "同一标的有多个序列：检查计算任务用的数据集",
   history_insufficient: "历史覆盖不足：等数据积累，或补采、补算历史",
   out_of_order: "周期乱序，通常自动恢复",
   expired: "周期已过期，通常自动恢复",
@@ -286,7 +286,7 @@ export interface ResolvedColumn {
   definition_hash: string;
 }
 
-/** 一个市场绑定的因子任务与结果 View。 */
+/** 一个市场绑定的计算任务与结果 View。 */
 export interface ResolvedTask {
   market: string;
   factor_task_id: string;

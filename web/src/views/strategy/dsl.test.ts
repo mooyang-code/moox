@@ -93,8 +93,8 @@ rules:
 });
 
 describe("market 预览", () => {
-  it("没写 market 时按因子任务的市场，写了就说明选币范围与下单市场", () => {
-    expect(parseDSL(rankedTemplate).preview?.market).toBe("按因子任务的市场");
+  it("没写 market 时按计算任务的市场，写了就说明选币范围与下单市场", () => {
+    expect(parseDSL(rankedTemplate).preview?.market).toBe("按计算任务的市场");
     expect(parseDSL("name: a\nmarket: {select: spot}\nrules:\n  - {id: r, type: rank}\n").preview?.market).toBe("选币范围 现货");
     expect(parseDSL(mixedMarketTemplate).preview?.market).toBe("选币范围 现货与永续，优先在永续下单");
   });
@@ -193,7 +193,7 @@ describe("策略池", () => {
     );
     expect(list).toEqual(
       expect.arrayContaining([
-        "策略池不写 market：成员各自显式写 market，池要绑定的因子任务是成员所需市场的并集",
+        "策略池不写 market：成员各自显式写 market，池要绑定的计算任务是成员所需市场的并集",
         "策略池必须写 bar：成员的周期要与池一致",
         "策略池不写 universe：标的范围由各成员自己的 universe 决定",
         "策略池不支持 factor_params：多个成员可能给同一个可变成员写参数，会冲突"

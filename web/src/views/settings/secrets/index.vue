@@ -2,7 +2,7 @@
   <div class="moox-page">
     <div class="moox-inner">
       <div class="page-head">
-        <h2>秘钥管理</h2>
+        <h2>密钥管理</h2>
         <a-space wrap>
           <a-input-search
             v-model="filters.keyword"
@@ -21,7 +21,7 @@
           </a-select>
           <a-button type="primary" status="success" @click="openCreate">
             <template #icon><icon-plus /></template>
-            新增秘钥
+            新建密钥
           </a-button>
           <a-button @click="rootCaVisible = true">
             <template #icon><icon-safe /></template>
@@ -59,11 +59,11 @@
           <a-table-column title="提供方" data-index="provider" :width="110" />
           <a-table-column title="类型" data-index="secret_type" :width="110" />
           <a-table-column title="标识 (Key ID)" data-index="key_id" :width="200" :ellipsis="true" :tooltip="true" />
-          <a-table-column title="秘钥值" :width="140">
+          <a-table-column title="密钥值" :width="140">
             <template #cell>
               <a-space>
                 <span>******</span>
-                <a-tooltip content="秘钥已加密存储，列表不展示明文">
+                <a-tooltip content="密钥已加密存储，列表不展示明文">
                   <icon-info-circle />
                 </a-tooltip>
               </a-space>
@@ -134,10 +134,10 @@
           <a-form-item field="key_id" label="标识 (Key ID)">
             <a-input v-model="form.key_id" placeholder="公开标识，如 SecretId / 用户名 / API Key" />
           </a-form-item>
-          <a-form-item field="secret_value" label="秘钥值" :required="!editing">
+          <a-form-item field="secret_value" label="密钥值" :required="!editing">
             <a-input-password
               v-model="form.secret_value"
-              :placeholder="editing ? '留空表示不修改秘钥值' : '输入秘钥值'"
+              :placeholder="editing ? '留空表示不修改密钥值' : '输入密钥值'"
               allow-clear
             />
           </a-form-item>
@@ -165,18 +165,18 @@
       <!-- 换了主机登录时用来安装 HTTPS 信任：下载根证书、核对指纹、各系统的安装命令 -->
       <root-ca-dialog v-model:visible="rootCaVisible" />
 
-      <!-- 导出：全部秘钥连同明文用口令加密成迁移包，在服务端完成，浏览器只拿到密文 -->
+      <!-- 导出：全部密钥连同明文用口令加密成迁移包，在服务端完成，浏览器只拿到密文 -->
       <a-modal
         v-model:visible="exportVisible"
         width="min(560px, 100vw)"
-        title="导出全部秘钥"
+        title="导出全部密钥"
         ok-text="导出"
         :ok-loading="exporting"
         @before-ok="submitExport"
         @close="resetExport"
       >
         <a-alert type="warning" class="transfer-alert">
-          迁移包包含全部秘钥的明文（系统秘钥与配置备份除外），用下面的口令加密；在新环境“导入”时需要同一口令。
+          迁移包包含全部密钥的明文（系统密钥与配置备份除外），用下面的口令加密；在新环境“导入”时需要同一口令。
           口令丢失无法找回，迁移包和口令请分开保管。
         </a-alert>
         <a-form :model="exportForm" auto-label-width>
@@ -189,11 +189,11 @@
         </a-form>
       </a-modal>
 
-      <!-- 导入：按 secret_id 导入迁移包，引用这些秘钥的配置迁移后仍然有效 -->
+      <!-- 导入：按 secret_id 导入迁移包，引用这些密钥的配置迁移后仍然有效 -->
       <a-modal
         v-model:visible="importVisible"
         width="min(600px, 100vw)"
-        title="导入秘钥"
+        title="导入密钥"
         :ok-text="importResult ? '完成' : '导入'"
         :ok-loading="importing"
         :hide-cancel="!!importResult"
@@ -214,7 +214,7 @@
           <a-form-item label="迁移包" required>
             <a-space>
               <a-button @click="pickFile">选择文件</a-button>
-              <span class="transfer-file">{{ importForm.fileName || "从秘钥管理“导出全部”得到的 .json 文件" }}</span>
+              <span class="transfer-file">{{ importForm.fileName || "从密钥管理“导出全部”得到的 .json 文件" }}</span>
             </a-space>
             <input ref="fileInput" type="file" accept=".json,application/json" hidden @change="onFileChange" />
           </a-form-item>
@@ -313,7 +313,7 @@ function openTestConnection(record: Secret) {
   testVisible.value = true;
 }
 
-const modalTitle = computed(() => (editing.value ? "编辑秘钥" : "新增秘钥"));
+const modalTitle = computed(() => (editing.value ? "编辑密钥" : "新建密钥"));
 
 async function load() {
   loading.value = true;
@@ -375,7 +375,7 @@ function openEdit(record: Secret) {
 
 async function submit(): Promise<boolean> {
   if (!form.name) {
-    Message.warning("请填写秘钥名称");
+    Message.warning("请填写密钥名称");
     return false;
   }
   if (!form.category) {
@@ -383,7 +383,7 @@ async function submit(): Promise<boolean> {
     return false;
   }
   if (!editing.value && !form.secret_value) {
-    Message.warning("请输入秘钥值");
+    Message.warning("请输入密钥值");
     return false;
   }
   // JSON 校验
@@ -408,7 +408,7 @@ async function submit(): Promise<boolean> {
         provider: form.provider,
         secret_type: form.secret_type
       });
-      Message.success("秘钥已更新");
+      Message.success("密钥已更新");
     } else {
       await createSecret({
         name: form.name,
@@ -420,7 +420,7 @@ async function submit(): Promise<boolean> {
         secret_value: form.secret_value,
         extra_config: form.extra_config
       });
-      Message.success("秘钥已创建");
+      Message.success("密钥已创建");
     }
     await load();
     return true;
@@ -433,17 +433,17 @@ async function submit(): Promise<boolean> {
 
 async function remove(record: Secret) {
   if (!record.secret_id) {
-    Message.warning("秘钥标识缺失，无法删除");
+    Message.warning("密钥标识缺失，无法删除");
     return;
   }
   await deleteSecret(record.secret_id);
-  Message.success("秘钥已删除");
+  Message.success("密钥已删除");
   await load();
 }
 
 async function toggleStatus(record: Secret) {
   if (!record.secret_id) {
-    Message.warning("秘钥标识缺失，无法操作");
+    Message.warning("密钥标识缺失，无法操作");
     return;
   }
   const newStatus = record.status === "active" ? "inactive" : "active";
@@ -488,7 +488,7 @@ async function submitExport(): Promise<boolean> {
   try {
     const rsp = await exportSecrets(exportForm.passphrase);
     saveTextFile(exportFileName(new Date()), rsp.bundle);
-    Message.success(`已导出 ${rsp.count || 0} 个秘钥`);
+    Message.success(`已导出 ${rsp.count || 0} 个密钥`);
     resetExport();
     return true;
   } catch (error) {

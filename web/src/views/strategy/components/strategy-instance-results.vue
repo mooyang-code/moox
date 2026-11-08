@@ -7,7 +7,7 @@
       skipAdvice(latestSkip?.skip_reason)
     }}</a-alert>
     <a-alert v-else-if="instance.enabled && targetState === 'expired'" type="warning" show-icon class="results-alert">
-      目标已过期：最近一期之后没有产出新结果，多半是上游因子任务没有产出。查看因子任务：
+      目标已过期：最近一期之后没有产出新结果，多半是上游计算任务没有产出。查看计算任务：
       <a-link v-for="taskId in upstreamTasks" :key="taskId" :href="`#/factor/tasks?detail=${encodeURIComponent(taskId)}`">{{
         taskId
       }}</a-link>

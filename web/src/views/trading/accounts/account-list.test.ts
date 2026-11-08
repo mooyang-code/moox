@@ -33,7 +33,7 @@ describe("账户列表模型", () => {
     const logicals = [logical("p", ["a", "b"]), logical("n", ["t"], { execution_mode: 2 })];
     const paper = comboRows(logicals, accounts, "paper");
     expect(paper).toHaveLength(1);
-    expect(paper[0]).toMatchObject({ equity: 150, exchangesText: "Binance、OKX" });
+    expect(paper[0]).toMatchObject({ equity: 150, exchangesText: "币安、OKX" });
     expect(paper[0].children).toHaveLength(2);
     expect(comboRows(logicals, accounts, "testnet").map(row => row.key)).toEqual(["n"]);
     expect(comboRows(logicals, accounts, "prod")).toEqual([]);

@@ -33,7 +33,7 @@ export function arrivalChains(overview: HealthOverview | undefined, names: NameB
     .sort((a, b) => a.spaceId.localeCompare(b.spaceId) || a.label.localeCompare(b.label, "zh-CN"));
 }
 
-/** 因子任务选项：一个源数据集上有多个任务时才需要选择（只有一个时服务端默认查它）。 */
+/** 计算任务选项：一个源数据集上有多个任务时才需要选择（只有一个时服务端默认查它）。 */
 export function arrivalTaskOptions(history: ArrivalHistory | undefined) {
   return (history?.tasks || [])
     .filter(task => task.task_id)

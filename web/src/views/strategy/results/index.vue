@@ -52,7 +52,7 @@
                 <span class="cell-sub"
                   >定义 <span class="mono">{{ store.strategy?.name || current.strategy_id }}</span></span
                 >
-                <span class="cell-sub">因子任务 <FactorTaskLinks :tasks="current.factor_tasks" /></span>
+                <span class="cell-sub">计算任务 <FactorTaskLinks :tasks="current.factor_tasks" /></span>
                 <span class="cell-sub"
                   >会话 <span class="mono">{{ current.session_id || "无当前会话" }}</span></span
                 >

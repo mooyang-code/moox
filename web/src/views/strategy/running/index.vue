@@ -55,7 +55,7 @@
               <div class="cell-sub mono">{{ record.instance_id }}</div></template
             ></a-table-column
           >
-          <a-table-column title="因子任务" :width="200" :ellipsis="true" :tooltip="true"
+          <a-table-column title="计算任务" :width="200" :ellipsis="true" :tooltip="true"
             ><template #cell="{ record }"><FactorTaskLinks :tasks="record.factor_tasks" /></template
           ></a-table-column>
           <a-table-column title="模式" :width="130"

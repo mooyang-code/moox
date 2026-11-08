@@ -15,7 +15,7 @@ import { instanceTasks, marketLabel } from "@/views/strategy/market-mode";
 
 defineOptions({ name: "FactorTaskLinks" });
 
-/** 实例绑定的因子任务：每个任务链到计算任务页的详情（?detail=）。 */
+/** 实例绑定的计算任务：每个任务链到计算任务页的详情（?detail=）。 */
 const props = defineProps<{ tasks: Record<string, string> | undefined }>();
 const items = computed(() => instanceTasks(props.tasks));
 </script>

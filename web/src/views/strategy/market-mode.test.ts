@@ -11,7 +11,7 @@ import {
 } from "./market-mode";
 
 describe("市场模式", () => {
-  it("按 DSL 的 market 读出需要绑定的因子任务", () => {
+  it("按 DSL 的 market 读出需要绑定的计算任务", () => {
     expect(marketRequirement("name: a\nmarket: {select: spot, prefer: spot}\n")).toEqual({ declared: true, markets: ["spot"] });
     expect(marketRequirement("name: a\nmarket: {select: swap}\n")).toEqual({ declared: true, markets: ["swap"] });
     expect(marketRequirement("name: a\nmarket: {select: both, prefer: swap}\n")).toEqual({
@@ -37,7 +37,7 @@ describe("市场模式", () => {
     expect(parseFactorTasks("multi=ftask_u")).toEqual({ multi: "ftask_u" });
   });
 
-  it("因子任务在 URL 里往返：只认三个市场，坏项忽略", () => {
+  it("计算任务在 URL 里往返：只认三个市场，坏项忽略", () => {
     expect(formatFactorTasks({ swap: "ftask_b", spot: "ftask_a" })).toBe("spot=ftask_a,swap=ftask_b");
     expect(formatFactorTasks(undefined)).toBe("");
     expect(parseFactorTasks("spot=ftask_a,swap=ftask_b")).toEqual({ spot: "ftask_a", swap: "ftask_b" });
@@ -51,7 +51,7 @@ describe("市场模式", () => {
     expect(positionLabel("BTC-USDT")).toBe("BTC-USDT");
   });
 
-  it("实例的因子任务按现货、永续、股票排列并展示", () => {
+  it("实例的计算任务按现货、永续、股票排列并展示", () => {
     const tasks = { swap: "ftask_swap", spot: "ftask_spot" };
     expect(instanceTasks(tasks)).toEqual([
       { market: "spot", taskId: "ftask_spot" },

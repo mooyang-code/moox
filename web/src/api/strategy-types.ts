@@ -26,7 +26,7 @@ export interface Strategy {
   updated_at: string;
 }
 
-/** 实例：定义 + 一个或两个因子任务（市场 → 任务，创建时选定，永久独占，不可改）+ 可选的组合账户；启用时固化 resolved_json。 */
+/** 实例：定义 + 一个或两个计算任务（市场 → 任务，创建时选定，永久独占，不可改）+ 可选的组合账户；启用时固化 resolved_json。 */
 export interface StrategyInstance {
   instance_id: string;
   strategy_id: string;
@@ -100,7 +100,7 @@ export interface ValidateStrategyResult {
   trial_items: StrategyResultItem[];
 }
 
-/** 回放在一个市场读取的因子任务与它的结果 View。 */
+/** 回放在一个市场读取的计算任务与它的结果 View。 */
 export interface ReplayTask {
   factor_task_id: string;
   view_id: string;
@@ -112,7 +112,7 @@ export interface Replay {
   strategy_id: string;
   dsl_yaml: string;
   space_id: string;
-  /** 各市场（spot | swap | equity）读取的因子任务与结果 View。 */
+  /** 各市场（spot | swap | equity）读取的计算任务与结果 View。 */
   tasks: Record<string, ReplayTask>;
   start_time: string;
   end_time: string;
@@ -160,7 +160,7 @@ export interface StartReplayRequest {
   strategy_id?: string;
   dsl_yaml?: string;
   instance_id?: string;
-  /** 市场 → 回放读取的因子任务；从实例发起时可省略（读实例关联的任务），给了必须一致。 */
+  /** 市场 → 回放读取的计算任务；从实例发起时可省略（读实例关联的任务），给了必须一致。 */
   factor_tasks: Record<string, string>;
   start_time: string;
   end_time: string;

@@ -11,8 +11,8 @@ describe("metadata catalog pages", () => {
     );
     expect(toolbar).toContain("<h2>");
     expect(toolbar).toContain("<a-input-search");
-    expect(toolbar).toContain("新增");
-    expect(toolbar.indexOf("<a-input-search")).toBeLessThan(toolbar.indexOf("新增"));
+    expect(toolbar).toContain("新建");
+    expect(toolbar.indexOf("<a-input-search")).toBeLessThan(toolbar.indexOf("新建"));
     expect(sources).toContain('@search="onSearch"');
     expect(sources).toContain('@clear="onSearch"');
     expect(sources).toContain("keyword: searchKeyword.value.trim() || undefined");

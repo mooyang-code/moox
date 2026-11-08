@@ -4,7 +4,7 @@ import { TASK_KEY_ORDER, marketRequirement } from "@/views/strategy/market-mode"
 import { freqSeconds } from "@/views/factor/shared/health";
 import { addDays, msToWallClock, wallClockToMs } from "@/utils/time-zone";
 
-/** 回放表单的状态：来源三选一（实例会话 / 已保存定义 / DSL 草稿），其余为各市场的因子任务、区间与两个手续费。 */
+/** 回放表单的状态：来源三选一（实例会话 / 已保存定义 / DSL 草稿），其余为各市场的计算任务、区间与两个手续费。 */
 export interface ReplayFormState {
   source: "definition" | "dsl";
   strategy_id: string;
@@ -12,7 +12,7 @@ export interface ReplayFormState {
   instance_id: string;
   /** 策略没写 market 时只读一个任务，市场由用户选定。 */
   single_market: string;
-  /** 市场 → 因子任务；从实例发起时预填实例关联的任务。 */
+  /** 市场 → 计算任务；从实例发起时预填实例关联的任务。 */
   tasks: Record<string, string>;
   /** 回放区间 [起, 止)，毫秒时刻；在页面里按空间时区选择 */
   range: [number, number] | null;
@@ -52,14 +52,14 @@ export function replayFactorTasks(form: ReplayFormState, strategies: Strategy[])
   return Object.fromEntries(replayMarkets(form, strategies).map(market => [market, form.tasks[market] ?? ""]));
 }
 
-/** 发起前的本地校验，返回第一条错误（没有则为空串）：来源与各市场的因子任务、区间、两个手续费范围。 */
+/** 发起前的本地校验，返回第一条错误（没有则为空串）：来源与各市场的计算任务、区间、两个手续费范围。 */
 export function validateReplayForm(form: ReplayFormState, strategies: Strategy[] = []): string {
   if (!replaySourceOf(form)) return "请选择定义、粘贴 DSL 文本或从实例详情进入";
   const markets = replayMarkets(form, strategies);
   // 从实例发起且入口没有带任务：不给 factor_tasks，后端读实例关联的任务。
   const omitted = Boolean(form.instance_id) && !markets.length;
-  if (!omitted && !markets.length) return "请选择策略的因子任务（策略没写 market 时先选任务所属的市场）";
-  if (markets.some(market => !form.tasks[market])) return "请为策略用到的每个市场选择因子任务";
+  if (!omitted && !markets.length) return "请选择策略的计算任务（策略没写 market 时先选任务所属的市场）";
+  if (markets.some(market => !form.tasks[market])) return "请为策略用到的每个市场选择计算任务";
   if (!form.range) return "请选择回放区间";
   if (form.range[1] <= form.range[0]) return "结束时间必须晚于开始时间";
   for (const fee of [Number(form.spot_fee_bps), Number(form.swap_fee_bps)]) {
@@ -68,7 +68,7 @@ export function validateReplayForm(form: ReplayFormState, strategies: Strategy[]
   return "";
 }
 
-/** 选的因子任务都是日线时区间只选日期（按空间时区的整天）；没选任务或有日内任务时选到分钟。 */
+/** 选的计算任务都是日线时区间只选日期（按空间时区的整天）；没选任务或有日内任务时选到分钟。 */
 export function replayDateOnly(
   form: ReplayFormState,
   strategies: Strategy[],

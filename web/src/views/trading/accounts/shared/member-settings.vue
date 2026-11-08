@@ -6,7 +6,7 @@
           <a-input v-model="name" :max-length="64" />
         </a-form-item>
         <template v-if="!paper">
-          <a-form-item label="交易所密钥" extra="从「系统设置 / 秘钥管理」里选，不在这里填密钥原文">
+          <a-form-item label="交易所密钥" extra="从「系统设置 / 密钥管理」里选，不在这里填密钥原文">
             <a-select v-model="secretId" :loading="secretsLoading" placeholder="选择密钥">
               <a-option v-for="item in secrets" :key="item.secretId" :value="item.secretId">{{ item.name }}</a-option>
               <a-option v-if="secretId && !secrets.some(item => item.secretId === secretId)" :value="secretId">{{

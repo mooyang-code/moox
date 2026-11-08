@@ -2,7 +2,7 @@
   <a-modal
     :visible="visible"
     width="520px"
-    :title="editing ? '编辑字段组' : '新增字段组'"
+    :title="editing ? '编辑字段组' : '新建字段组'"
     :ok-loading="saving"
     @cancel="$emit('close')"
     @ok="submit"

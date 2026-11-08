@@ -78,7 +78,7 @@
       </div>
     </a-spin>
     <template #footer>
-      <a-tooltip content="因子任务停用着，成员要等任务启用后才能启用" :disabled="taskEnabled">
+      <a-tooltip content="计算任务停用着，成员要等任务启用后才能启用" :disabled="taskEnabled">
         <a-checkbox v-model="enableAfterAdd" :disabled="submitting || !taskEnabled" class="add-factor__enable">
           添加后立即启用
         </a-checkbox>

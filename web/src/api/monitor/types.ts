@@ -304,7 +304,7 @@ export interface ArrivalHistorySeries {
   lateness_limit_seconds?: number | string;
   points?: ArrivalHistoryPoint[];
 }
-/** 源数据集上的一个因子任务：task_id 由结果数据集 ID 反解，name 就是结果数据集的名称。 */
+/** 源数据集上的一个计算任务：task_id 由结果数据集 ID 反解，name 就是结果数据集的名称。 */
 export interface ArrivalTask {
   task_id?: string;
   name?: string;
@@ -317,7 +317,7 @@ export interface ArrivalHistory {
   start_at?: string;
   end_at?: string;
   series?: ArrivalHistorySeries[];
-  /** 这个源数据集 + 周期上的全部因子任务；有多个又没选定任务时，曲线里没有因子环节，由页面选择后再查。 */
+  /** 这个源数据集 + 周期上的全部计算任务；有多个又没选定任务时，曲线里没有因子环节，由页面选择后再查。 */
   tasks?: ArrivalTask[];
   /** 这一天早于 7 天的保留期，曲线可能不完整。 */
   retention_truncated?: boolean;

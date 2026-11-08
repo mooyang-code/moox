@@ -1,7 +1,7 @@
 <template>
   <section v-if="binding" class="factor-params" aria-label="因子参数">
     <a-descriptions :column="{ xs: 1, md: 2 }" bordered size="small">
-      <a-descriptions-item label="因子任务">
+      <a-descriptions-item label="计算任务">
         <a-link @click="openResults"
           ><span class="mono">{{ binding.taskId }}</span></a-link
         >

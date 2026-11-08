@@ -141,7 +141,7 @@ export async function setFactorCategory(factor_id: string, category_id: string) 
   return rsp.factor;
 }
 
-/** 读取因子任务里各可变成员最近一次被接受的提交（只读）。 */
+/** 读取计算任务里各可变成员最近一次被接受的提交（只读）。 */
 export function getFactorParams(params: GetFactorParamsReq) {
   return callFactor<GetFactorParamsReq, FactorRetRsp<GetFactorParamsRsp>>("GetFactorParams", params);
 }
@@ -181,7 +181,7 @@ export function validateFactorSpec(spec: string, allow_partial_universe = false,
   );
 }
 
-/** 在因子任务的源数据上试算：少量标的、最近若干期，不写结果。 */
+/** 在计算任务的源数据上试算：少量标的、最近若干期，不写结果。 */
 export function previewFactor(params: PreviewFactorReq) {
   return callFactor<PreviewFactorReq, PreviewFactorRsp>("PreviewFactor", params);
 }

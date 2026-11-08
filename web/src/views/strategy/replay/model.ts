@@ -121,7 +121,7 @@ export function mergeBars(known: ReplayBar[], incoming: ReplayBar[]): ReplayBar[
   return merged.sort((a, b) => Date.parse(a.bar_end_time) - Date.parse(b.bar_end_time));
 }
 
-/** 回放读取的因子任务的展示文本：单任务只写 ID，多任务写成 现货 xxx、永续 yyy。 */
+/** 回放读取的计算任务的展示文本：单任务只写 ID，多任务写成 现货 xxx、永续 yyy。 */
 export function replayTasksText(replay: Pick<Replay, "tasks">): string {
   return tasksText(Object.fromEntries(Object.entries(replay.tasks ?? {}).map(([market, task]) => [market, task.factor_task_id])));
 }

@@ -42,7 +42,7 @@
           <a-dropdown trigger="click">
             <a-button class="node-menu" size="mini" type="text"><icon-more /></a-button>
             <template #content>
-              <a-doption @click="$emit('create', root.group_id)">新增子组</a-doption>
+              <a-doption @click="$emit('create', root.group_id)">新建子组</a-doption>
               <a-doption @click="$emit('edit', root)">编辑</a-doption>
               <a-doption class="danger-option" @click="$emit('delete', root)">删除</a-doption>
             </template>

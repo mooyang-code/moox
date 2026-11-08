@@ -32,8 +32,8 @@
         />
       </a-form-item>
     </template>
-    <a-form-item v-if="form.instance_id" label="因子任务">
-      <span class="mono">{{ tasksText(form.tasks) || "读取实例关联的因子任务" }}</span>
+    <a-form-item v-if="form.instance_id" label="计算任务">
+      <span class="mono">{{ tasksText(form.tasks) || "读取实例关联的计算任务" }}</span>
       <span class="muted task-note">（按实例关联的任务，不能更改）</span>
     </a-form-item>
     <template v-else>
@@ -41,14 +41,14 @@
         <a-radio-group v-model="form.single_market" type="button" size="small">
           <a-radio v-for="item in MARKET_ORDER" :key="item" :value="item">{{ marketLabel(item) }}</a-radio>
         </a-radio-group>
-        <template #extra>策略没有写 market，只读一个因子任务：先选任务的数据所属的市场（要与任务源数据集的市场一致）。</template>
+        <template #extra>策略没有写 market，只读一个计算任务：先选任务的数据所属的市场（要与任务源数据集的市场一致）。</template>
       </a-form-item>
-      <a-form-item v-for="market in markets" :key="market" :label="`${marketLabel(market)}因子任务`" required>
+      <a-form-item v-for="market in markets" :key="market" :label="`${marketLabel(market)}计算任务`" required>
         <a-select
           v-model="form.tasks[market]"
           allow-search
           :loading="tasksLoading"
-          :placeholder="`选择${marketLabel(market)}因子任务`"
+          :placeholder="`选择${marketLabel(market)}计算任务`"
         >
           <a-option v-for="task in taskChoices(market)" :key="task.task_id" :value="task.task_id"
             >{{ task.name || task.task_id }}（{{ task.task_id }} · {{ task.freq || "无周期" }}）</a-option

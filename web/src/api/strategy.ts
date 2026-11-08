@@ -195,7 +195,7 @@ function isInvalidParam(code: unknown): boolean {
   return code === 1 || code === "1" || code === "INVALID_PARAM";
 }
 
-/** 校验 DSL；给出 factor_tasks（市场 → 因子任务）时按任务的结果 View 解析绑定并在最新周期试算一次（读全部绑定的 View，不落库）。 */
+/** 校验 DSL；给出 factor_tasks（市场 → 计算任务）时按任务的结果 View 解析绑定并在最新周期试算一次（读全部绑定的 View，不落库）。 */
 export async function validateStrategy(
   dsl_yaml: string,
   factor_tasks: Record<string, string> = {}

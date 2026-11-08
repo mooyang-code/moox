@@ -18,9 +18,9 @@ describe("page toolbar cleanup contract", () => {
     expect(deployments).toMatch(/\.deployments-content\s*\{[\s\S]*?margin-top:\s*var\(--moox-space-3\);/);
 
     const secrets = read("settings/secrets/index.vue");
-    expect(secrets).not.toContain("统一管理 admin 本地秘钥");
+    expect(secrets).not.toContain("统一管理 admin 本地密钥");
     expect(secrets).not.toContain("<icon-refresh />");
-    expect(secrets.indexOf("<h2>秘钥管理</h2>")).toBeLessThan(secrets.indexOf('placeholder="搜索名称或描述"'));
+    expect(secrets.indexOf("<h2>密钥管理</h2>")).toBeLessThan(secrets.indexOf('placeholder="搜索名称或描述"'));
 
     const fields = read("data/fields/index.vue");
     expect(fields).not.toContain('class="field-total"');

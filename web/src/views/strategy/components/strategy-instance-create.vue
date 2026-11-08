@@ -37,31 +37,31 @@
         </a-radio-group>
         <template #extra
           >策略没有写
-          market，只绑一个因子任务：先选任务的数据所属的市场（必须与任务源数据集的市场一致，创建前的预检会核对）。</template
+          market，只绑一个计算任务：先选任务的数据所属的市场（必须与任务源数据集的市场一致，创建前的预检会核对）。</template
         >
       </a-form-item>
       <p v-else-if="activeMarkets.length && !unifiedMode" class="meta-hint mode-hint">
         {{ poolRequirement ? "策略池要绑定各成员所需市场的并集：" : "策略的市场模式需要绑定："
-        }}{{ activeMarkets.map(marketLabel).join("、") }} 的因子任务{{
+        }}{{ activeMarkets.map(marketLabel).join("、") }} 的计算任务{{
           activeMarkets.length > 1 ? "（现货、永续各一个，两个任务的周期、日历和用到的列要一致）" : ""
         }}。
       </p>
       <a-form-item v-if="canUnified" label="输入方式">
         <a-radio-group v-model="form.input_mode" type="button" @change="onInputModeChange">
-          <a-radio value="split">{{ activeMarkets.length > 1 ? "现货、永续各一个因子任务" : "市场自己的因子任务" }}</a-radio>
-          <a-radio value="unified">统一数据集上的一个因子任务</a-radio>
+          <a-radio value="split">{{ activeMarkets.length > 1 ? "现货、永续各一个计算任务" : "市场自己的计算任务" }}</a-radio>
+          <a-radio value="unified">统一数据集上的一个计算任务</a-radio>
         </a-radio-group>
         <template #extra
-          >统一数据集把现货、永续放在同一个数据集里（用 series_tag 区分），一个因子任务、一个 View
+          >统一数据集把现货、永续放在同一个数据集里（用 series_tag 区分），一个计算任务、一个 View
           同时覆盖两个市场，策略到达即求值；
-          分开时现货、永续各有自己的数据集与因子任务，策略等两边都到齐再求值。统一数据集上的任务暂不支持
+          分开时现货、永续各有自己的数据集与计算任务，策略等两边都到齐再求值。统一数据集上的任务暂不支持
           factor_params（带可变成员的任务在这种方式下不能选），也不能进策略池。</template
         >
       </a-form-item>
       <a-form-item
         v-for="market in taskKeys"
         :key="market"
-        :label="`${marketLabel(market)}因子任务`"
+        :label="`${marketLabel(market)}计算任务`"
         required
         :validate-status="fieldErrors.factor_tasks ? 'error' : undefined"
         :help="market === taskKeys[0] ? fieldErrors.factor_tasks : undefined"
@@ -73,8 +73,8 @@
           :loading="tasksLoading"
           :placeholder="
             market === UNIFIED_TASK_KEY
-              ? '选择一个统一数据集上运行中、还没有关联实例的因子任务'
-              : '选择一个运行中、还没有关联实例的因子任务'
+              ? '选择一个统一数据集上运行中、还没有关联实例的计算任务'
+              : '选择一个运行中、还没有关联实例的计算任务'
           "
           @change="onTaskChange"
         >
@@ -90,7 +90,7 @@
         </a-select>
       </a-form-item>
       <p v-if="tasksError" class="meta-hint meta-error">
-        因子任务列表读取失败：{{ tasksError }}<a-link @click="loadTasksList">重试</a-link>
+        计算任务列表读取失败：{{ tasksError }}<a-link @click="loadTasksList">重试</a-link>
       </p>
       <p v-if="datasetsError" class="meta-hint meta-error">
         数据集信息读取失败（{{ datasetsError }}），暂时分不出哪些任务在统一数据集上；<a-link @click="loadDatasetsList"
@@ -98,12 +98,12 @@
         >
       </p>
       <p v-else-if="unifiedMode && !tasksLoading && !taskChoices(UNIFIED_TASK_KEY).length" class="meta-hint">
-        当前空间没有可用的统一数据集因子任务：任务的源数据集要是统一数据集（market_type 为 multi），任务运行中且还没有关联实例。
+        当前空间没有可用的统一数据集计算任务：任务的源数据集要是统一数据集（market_type 为 multi），任务运行中且还没有关联实例。
       </p>
       <p v-else-if="!tasksLoading && !tasks.length" class="meta-hint">
-        当前空间没有可用的因子任务：任务必须处于运行中，且还没有关联策略实例。请先到「因子」模块创建并启用任务。
+        当前空间没有可用的计算任务：任务必须处于运行中，且还没有关联策略实例。请先到「因子」模块创建并启用任务。
       </p>
-      <p v-else class="meta-hint">一个因子任务只能被一个实例独占使用，关联创建后不能修改，也不能删除实例。</p>
+      <p v-else class="meta-hint">一个计算任务只能被一个实例独占使用，关联创建后不能修改，也不能删除实例。</p>
       <p v-if="varBlockReason && hasVarMemberTasks" class="meta-hint">标为“有可变成员，不可选”的任务：{{ varBlockReason }}。</p>
       <div v-for="item in selectedTasks" :key="item.task.taskId" class="task-columns">
         <div class="task-columns__head">
@@ -187,7 +187,7 @@
       <ResultItems :result="check_result.trial" :items="check_result.trial_items" />
     </section>
     <a-alert type="info" show-icon class="confirm-note"
-      >创建后实例保持停用。启用时后台会把因子任务与实例永久关联，并重新解析 结果
+      >创建后实例保持停用。启用时后台会把计算任务与实例永久关联，并重新解析 结果
       View、列与成员契约，固化为会话快照；绑定组合账户的实例在启用时认领账户会话。</a-alert
     >
     <template #footer>
@@ -244,15 +244,15 @@ const form = reactive({
   strategy_id: "",
   // 策略没有写 market 时只绑一个任务，市场由用户选定。
   single_market: "",
-  // 输入方式：split 是各市场各一个因子任务，unified 是统一数据集上的一个因子任务（只有策略写了 market、不是策略池时可选）。
+  // 输入方式：split 是各市场各一个计算任务，unified 是统一数据集上的一个计算任务（只有策略写了 market、不是策略池时可选）。
   input_mode: "split" as "split" | "unified",
-  // 任务键（市场，或统一数据集的 multi）→ 因子任务。
+  // 任务键（市场，或统一数据集的 multi）→ 计算任务。
   tasks: {} as Record<string, string>,
   logical_account_id: "",
   mode: "compute" as "compute" | "trade"
 });
 const tasks = ref<TaskOption[]>([]);
-// 统一数据集（market_type 为 multi）的数据集 ID：因子任务的源数据集在其中的任务在统一数据集上。
+// 统一数据集（market_type 为 multi）的数据集 ID：计算任务的源数据集在其中的任务在统一数据集上。
 const unifiedDatasetIds = ref<ReadonlySet<string>>(new Set());
 const accounts = ref<LogicalAccount[]>([]);
 // 成员执行账户：用来在账户选项前写测试网还是生产；读不到时为 null，选项只写“实盘”。
@@ -418,7 +418,7 @@ async function loadTasksList() {
     if (requestId !== tasksRequest || props.spaceId !== spaceId) return;
     tasks.value = availableTasks(infos, spaceId);
   } catch (err) {
-    if (requestId === tasksRequest) tasksError.value = err instanceof Error ? err.message : "因子任务加载失败";
+    if (requestId === tasksRequest) tasksError.value = err instanceof Error ? err.message : "计算任务加载失败";
   } finally {
     if (requestId === tasksRequest) tasksLoading.value = false;
   }
@@ -580,8 +580,8 @@ async function submit() {
     : tasksSelected.value
       ? ""
       : unifiedMode.value
-        ? "请选择统一数据集上的因子任务"
-        : `请为${activeMarkets.value.map(marketLabel).join("、")}各选一个因子任务`;
+        ? "请选择统一数据集上的计算任务"
+        : `请为${activeMarkets.value.map(marketLabel).join("、")}各选一个计算任务`;
   fieldErrors.logical_account_id = form.mode === "trade" && !form.logical_account_id ? "请选择组合账户，或改为“仅计算”" : "";
   if (fieldErrors.strategy_id || fieldErrors.factor_tasks || fieldErrors.logical_account_id) return;
   const spaceId = props.spaceId;

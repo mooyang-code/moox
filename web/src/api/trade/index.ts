@@ -334,7 +334,7 @@ export function listOperatorActions(req: ListOperatorActionsReq, options: { sile
   );
 }
 
-export const exchangeLabels: Record<number, string> = { 0: "-", 1: "Binance", 2: "OKX" };
+export const exchangeLabels: Record<number, string> = { 0: "-", 1: "币安", 2: "OKX" };
 export const orderStateLabels: Record<string, string> = {
   PENDING: "等待提交",
   SUBMITTING: "提交中",

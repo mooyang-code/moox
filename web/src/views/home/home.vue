@@ -328,7 +328,7 @@ const counts = reactive<Record<string, number | null>>({
 });
 const spaceLoadGate = new RequestGate();
 
-// 实时部分：监控概览、因子任务、策略实例与目标、最近动态，定时刷新。
+// 实时部分：监控概览、计算任务、策略实例与目标、最近动态，定时刷新。
 const overview = ref<HealthOverview>();
 const monitorError = ref("");
 const factorTasks = ref<FactorTaskInfo[]>([]);
@@ -515,7 +515,7 @@ async function loadSpaceScoped() {
 }
 
 /**
- * 实时部分：监控概览、因子任务、策略实例与最新目标、最近动态。
+ * 实时部分：监控概览、计算任务、策略实例与最新目标、最近动态。
  * 动态多取一些（30 条）：“新增 0、移除 0”的无变化记录会被过滤掉，仍要凑满磁贴的固定条数。
  */
 async function loadLive() {

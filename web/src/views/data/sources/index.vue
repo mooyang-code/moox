@@ -14,7 +14,7 @@
           />
           <a-button type="primary" status="success" :disabled="!selectedSpaceId" @click="openCreate">
             <template #icon><icon-plus /></template>
-            新增来源
+            新建来源
           </a-button>
         </a-space>
       </div>
@@ -133,7 +133,7 @@ const form = reactive<DataSource>({
   status: "active"
 });
 
-const modalTitle = computed(() => (editing.value ? "编辑数据源" : "新增数据源"));
+const modalTitle = computed(() => (editing.value ? "编辑数据源" : "新建数据源"));
 
 const loadRequests = createLatestRequestGuard();
 

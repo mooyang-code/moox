@@ -294,7 +294,7 @@ function alertTone(alert: HealthAlert): "warn" | "bad" {
   return /critical|error|fatal|p0|p1|high|严重|紧急/i.test(alert.severity || "") ? "bad" : "warn";
 }
 
-/** 待处理：监控告警、策略实例与因子任务的问题合在一起，严重的在前。 */
+/** 待处理：监控告警、策略实例与计算任务的问题合在一起，严重的在前。 */
 export function attentionItems(input: {
   alerts: HealthAlert[];
   strategy: { instances: StrategyInstance[]; targets: Record<string, StrategyTargetSnapshot>; catalog: Strategy[] };
@@ -641,7 +641,7 @@ export function kpiCards(input: {
         : factorBad
           ? `${factorBad} 个异常 · 收盘 ${factorTime}`
           : `${factorCount} 个因子 · 收盘 ${factorTime}`,
-      hint: "因子任务最近一个已计算周期的收盘时间；有异常的任务时是异常最重的那一个",
+      hint: "计算任务最近一个已计算周期的收盘时间；有异常的任务时是异常最重的那一个",
       target: "/factor/tasks?tab=results"
     },
     {
