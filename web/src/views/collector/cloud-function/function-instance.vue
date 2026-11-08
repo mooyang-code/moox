@@ -213,8 +213,8 @@
       @refresh="loadData"
     />
 
-    <!-- 实例详情弹窗 -->
-    <a-modal v-model:visible="instanceDetailVisible" title="云函数实例详情" :width="800" :footer="false" :mask-closable="true">
+    <!-- 实例详情抽屉（里面还能再打开代码包详情，用抽屉免得弹窗叠弹窗） -->
+    <a-drawer v-model:visible="instanceDetailVisible" title="云函数实例详情" width="min(800px, 100vw)" :footer="false">
       <div v-if="selectedInstanceDetail">
         <a-descriptions :column="2" bordered :label-style="{ fontWeight: 'bold', width: '140px' }">
           <a-descriptions-item label="实例ID">
@@ -300,7 +300,7 @@
           </a-descriptions-item>
         </a-descriptions>
       </div>
-    </a-modal>
+    </a-drawer>
 
     <!-- 代码包详情弹窗 -->
     <a-modal
