@@ -560,6 +560,20 @@ describe("strategy instance creation behavior", () => {
         .map(item => item.attributes("value"))
     ).toEqual(["", "acc_both"]);
     expect((accountSelect().element as HTMLSelectElement).value).toBe("");
+    expect(wrapper.text()).toContain("之前选的组合账户不支持策略的市场，已清空");
+  });
+
+  it("预检前按 DSL 的市场先筛账户；一个都没有时写原因", async () => {
+    api.listLogicalAccounts.mockResolvedValue({
+      logical_accounts: [{ logical_account_id: "acc_spot", name: "现货户", space_id: "crypto", control_mode: 1, markets: [1] }],
+      page_result: { has_more: false }
+    });
+    const { wrapper, flushPromises } = await open({ presetStrategyId: "s1" });
+    runModeGroup(wrapper).vm.$emit("update:modelValue", "trade");
+    await flushPromises();
+    const options = wrapper.findAll("select").at(-1)!.findAll("option");
+    expect(options.map(item => item.attributes("value"))).toEqual([""]);
+    expect(wrapper.text()).toContain("没有可交易永续的策略驱动组合账户");
   });
 
   describe("策略池实例", () => {

@@ -139,7 +139,13 @@
         :validate-status="fieldErrors.logical_account_id ? 'error' : undefined"
         :help="fieldErrors.logical_account_id"
       >
-        <a-select v-model="form.logical_account_id" allow-search :loading="accountsLoading" placeholder="选择接收目标的组合账户">
+        <a-select
+          v-model="form.logical_account_id"
+          allow-search
+          :loading="accountsLoading"
+          placeholder="选择接收目标的组合账户"
+          @change="accountCleared = false"
+        >
           <a-option
             v-for="option in accountOptions"
             :key="option.account.logical_account_id"
@@ -154,6 +160,10 @@
           >
           <span v-else-if="market.noAccount">{{ market.noAccount }}，请改为“仅计算”。</span>
           <span v-else-if="!accountsLoading && !accounts.length">当前空间没有可用的组合账户，请先在交易模块创建。</span>
+          <span v-else-if="!accountsLoading && !accountOptions.length"
+            >没有可交易{{ marketNames }}的策略驱动组合账户，请先在交易模块创建，或改为“仅计算”。</span
+          >
+          <span v-else-if="accountCleared">之前选的组合账户不支持策略的市场，已清空，请重新选择。</span>
         </template>
       </a-form-item>
       <a-form-item label="实例 ID（可选）"><a-input v-model="form.instance_id" placeholder="留空自动生成" /></a-form-item>
@@ -258,15 +268,6 @@ let checkRequest = 0;
 const selectedStrategy = computed(() => props.strategies.find(item => item.strategy_id === form.strategy_id));
 const preview = computed(() => (selectedStrategy.value ? parseDSL(selectedStrategy.value.dsl_yaml).preview : null));
 
-// 只列策略驱动且可交易市场包含策略输出市场的组合账户，已被其他实例占用的显示但不可选；没有交易账户的市场（A 股）列表为空。
-// 预检之前策略池就按成员市场的并集过滤；预检之后以服务端解析出的市场为准。
-const market = computed(() =>
-  check_result.value?.resolved_json || !poolRequirement.value?.markets.length
-    ? resolvedMarkets(check_result.value?.resolved_json)
-    : marketsToResolved(poolRequirement.value.markets)
-);
-const accountOptions = computed(() => logicalAccountOptions(accounts.value, market.value, tradingAccounts.value));
-
 // 策略的市场模式决定要绑定哪些市场的任务；没写 market 时只绑一个，市场由用户选。
 const singleMarkets = ["spot", "swap", "equity"];
 // 策略池：成员引用的策略定义先从目录里找，目录里没有的按需读取（memberDefinitions：null 表示读取失败或不存在）。
@@ -310,15 +311,36 @@ async function loadMissingMembers() {
   );
 }
 watch(selectedStrategy, () => void loadMissingMembers(), { immediate: true });
+const activeMarkets = computed(() =>
+  requirement.value.declared ? requirement.value.markets : form.single_market ? [form.single_market] : []
+);
+// 只列策略驱动且可交易市场包含策略输出市场的组合账户，已被其他实例占用的显示但不可选；没有交易账户的市场（A 股）列表为空。
+// 预检之后以服务端解析出的市场为准；预检之前策略池按成员市场的并集，其余按 DSL 的市场（没写 market 时按选的市场）先筛。
+const market = computed(() => {
+  if (check_result.value?.resolved_json) return resolvedMarkets(check_result.value.resolved_json);
+  if (poolRequirement.value?.markets.length) return marketsToResolved(poolRequirement.value.markets);
+  return activeMarkets.value.length ? marketsToResolved(activeMarkets.value) : {};
+});
+const marketNames = computed(() => {
+  const markets = check_result.value?.resolved_json
+    ? []
+    : poolRequirement.value?.markets.length
+      ? poolRequirement.value.markets
+      : activeMarkets.value;
+  return markets.length ? markets.map(marketLabel).join("、") : "策略市场";
+});
+// 已选的账户因为市场收窄被清空：提示一句，用户重新选择后消失。
+const accountCleared = ref(false);
+const accountOptions = computed(() => logicalAccountOptions(accounts.value, market.value, tradingAccounts.value));
 // 预检或成员定义读到后账户列表会收窄：已选的账户不在新列表里（或变成不可选）时清掉，不能悄悄提交不符合的账户。
 watch(accountOptions, options => {
   if (!form.logical_account_id) return;
   const kept = options.find(option => option.account.logical_account_id === form.logical_account_id);
-  if (!kept || kept.disabledReason) form.logical_account_id = "";
+  if (!kept || kept.disabledReason) {
+    form.logical_account_id = "";
+    accountCleared.value = true;
+  }
 });
-const activeMarkets = computed(() =>
-  requirement.value.declared ? requirement.value.markets : form.single_market ? [form.single_market] : []
-);
 // 统一数据集：策略写了 market（统一数据集没有可当默认值的市场）、不是策略池时可以选统一数据集上的任务。
 const canUnified = computed(() => !poolRequirement.value && requirement.value.declared && requirement.value.markets.length > 0);
 const unifiedMode = computed(() => canUnified.value && form.input_mode === "unified");
