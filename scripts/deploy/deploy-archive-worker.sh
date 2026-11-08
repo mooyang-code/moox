@@ -173,9 +173,9 @@ SW_PREFIX=moox-archive/
 SW_UNIT=moox-seaweedfs.service
 SW_DIR="${SW_DIR:-$(dirname "${DEPLOY_DIR}")/seaweedfs}"
 
-# weed shell 的退出码不可信、master 连不上会卡住：外层限时，按输出文本判断。
+# weed shell 的退出码不可信、master 连不上会卡住：外层限时，按输出文本判断；-logtostderr 免得每次在 /tmp 留日志文件。
 sw_shell() {
-  printf '%s\n' "$1" | timeout 20 "${SW_DIR}/bin/weed" shell -master="127.0.0.1:${SW_MASTER}" -filer="127.0.0.1:${SW_FILER}" 2>&1 || true
+  printf '%s\n' "$1" | timeout 20 "${SW_DIR}/bin/weed" -logtostderr=true shell -master="127.0.0.1:${SW_MASTER}" -filer="127.0.0.1:${SW_FILER}" 2>&1 || true
 }
 
 sw_listening() {
@@ -191,7 +191,7 @@ if [[ "${BUILTIN_OS}" -eq 1 ]]; then
     [[ -x "${SW_DIR}/bin/weed" ]] || fail "missing ${SW_DIR}/bin/weed; deploy with --binary from the release package"
   fi
   mkdir -p "${SW_DIR}/bin" "${SW_DIR}/data" "${SW_DIR}/config"
-  chmod 0700 "${SW_DIR}/config"
+  chmod 0700 "${SW_DIR}" "${SW_DIR}/config"
   # 访问密钥只在本机生成一次，之后一直沿用；s3.json 与 worker 的凭据都由它派生。
   sw_keys="${SW_DIR}/config/s3-credentials.env"
   if [[ ! -s "${sw_keys}" ]]; then
