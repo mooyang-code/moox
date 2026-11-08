@@ -5,7 +5,6 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
-	"time"
 )
 
 func MarketExecutionPrice(side exchange.Side, quote execution.MarketQuote, slippageBPS shared.Decimal) (shared.Decimal, error) {
@@ -30,10 +29,6 @@ func MarketExecutionPrice(side exchange.Side, quote execution.MarketQuote, slipp
 		factor = shared.MustDecimal("1").Sub(slippageBPS.Div(shared.MustDecimal("10000")))
 	}
 	return base.Mul(factor), nil
-}
-
-func QuoteFresh(quote execution.MarketQuote, now time.Time, maxAge time.Duration) bool {
-	return !quote.SourceTime.IsZero() && !quote.SourceTime.After(now) && now.Sub(quote.SourceTime) <= maxAge
 }
 
 func LimitMarketable(side exchange.Side, limit, last shared.Decimal) bool {

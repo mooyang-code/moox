@@ -47,13 +47,12 @@ type LastPrice struct {
 	At    time.Time
 }
 
-// usable 报告最后已知价在 now 时是否还能用。
-func (p LastPrice) usable(now time.Time, maxAge time.Duration) bool {
+// usable 报告最后已知价现在还能不能用：fresh 按报价新鲜度的规则判断取价时间（见 QuoteFresh，A 股时段外用收盘价）。
+func (p LastPrice) usable(fresh func(time.Time) bool) bool {
 	if p.At.IsZero() || p.Price.Cmp(shared.Zero()) <= 0 {
 		return false
 	}
-	age := now.Sub(p.At)
-	return age <= maxAge && age >= -maxAge
+	return fresh(p.At)
 }
 
 // DegradedValue 是降级估值的结果；How 是给关注项和日志看的说法（“按最后已知价计”等）。
@@ -65,18 +64,18 @@ type DegradedValue struct {
 // LastFillPrice 返回这个资产在本账户最近一笔成交的价格；没有成交时 found 为假。
 type LastFillPrice func(context.Context) (price shared.Decimal, found bool, err error)
 
-// DegradedPrice 按文件开头的规则给一笔取不到新鲜报价的受管现货定价。cause 是取不到价的原因，报错时原样返回
+// DegradedPrice 按文件开头的规则给一笔取不到新鲜报价的受管现货定价。fresh 判断最后已知价的取价时间还新不新鲜
+// （时段内按 LastPriceMaxAge，A 股时段外按收盘价规则）。cause 是取不到价的原因，报错时原样返回
 // （标的仍在交易时就是取价错误本身，调用方可以按错误类型判断）。
 func DegradedPrice(
 	ctx context.Context,
 	failure ValuationFailure,
 	last LastPrice,
-	now time.Time,
-	maxAge time.Duration,
+	fresh func(time.Time) bool,
 	lastFill LastFillPrice,
 	cause error,
 ) (DegradedValue, error) {
-	if last.usable(now, maxAge) {
+	if last.usable(fresh) {
 		return DegradedValue{Price: last.Price, How: "按最后已知价计"}, nil
 	}
 	if failure.ZeroAllowed() {

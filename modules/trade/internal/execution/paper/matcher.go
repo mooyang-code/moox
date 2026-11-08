@@ -12,6 +12,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"gorm.io/gorm"
 )
@@ -44,6 +45,10 @@ func (e *CandidateError) Error() string { return "paper " + e.Stage + ": " + e.E
 func (e *CandidateError) Unwrap() error { return e.Err }
 
 var errStaleCandidate = errors.New("paper matcher: stale candidate")
+
+// outOfSessionReason 是休市后撤掉没撮合过的订单时写的原因。
+const outOfSessionReason = "不在交易时段"
+
 var errBusyCandidate = errors.New("paper matcher: account is busy")
 
 type Decision struct {
@@ -62,8 +67,10 @@ type Matcher struct {
 	DecideContext func(context.Context, store.OrderRecord) (Decision, error)
 	Enqueue       func(string)
 	// WakeTarget 在成交入账后唤醒目标收敛，下一笔子单不必等定时器。
-	WakeTarget       func(spaceID, logicalAccountID string)
-	Refresh          func(context.Context, string) error
+	WakeTarget func(spaceID, logicalAccountID string)
+	Refresh    func(context.Context, string) error
+	// Exchanges 提供场所的交易时段：时段外（A 股午休、收盘后）不扫挂单，也不检查盘口新鲜度；为空时全天撮合。
+	Exchanges        execution.ExchangeCatalog
 	Now              func() time.Time
 	CandidateTimeout time.Duration
 	PageSize         int
@@ -189,8 +196,11 @@ func (m *Matcher) Scan(ctx context.Context) error {
 		return err
 	}
 	enabled := make(map[string]bool, len(accounts))
+	inSession := make(map[string]bool, len(accounts))
+	now := m.now()
 	for _, account := range accounts {
 		enabled[account.TradingAccountID] = true
+		inSession[account.TradingAccountID] = execution.InSession(m.Exchanges, account.Exchange, now)
 	}
 	m.accountsMu.Lock()
 	for accountID := range m.accounts {
@@ -245,7 +255,14 @@ func (m *Matcher) Scan(ctx context.Context) error {
 				}
 				generation := m.AccountState(candidate.TradingAccountID).Generation
 				decision := Decision{Rest: candidate.OrderType == string(exchange.OrderTypeLimit) && candidate.TimeInForce == string(exchange.FillPolicyGTC)}
-				if m.DecideContext != nil {
+				if open, known := inSession[candidate.TradingAccountID]; known && !open {
+					// 时段外不撮合：挂着的单留到开盘；还没撮合过的单（休市前一刻发出的）按下单时的价格成交会用到旧价，整笔撤掉。
+					if !candidate.FirstMatchPending {
+						cancel()
+						continue
+					}
+					decision = Decision{Cancel: true, Reason: outOfSessionReason}
+				} else if m.DecideContext != nil {
 					decision, err = m.DecideContext(candidateCtx, candidate)
 				} else if m.Decide != nil {
 					decision, err = m.Decide(candidate)
@@ -471,4 +488,11 @@ func (m *Matcher) matchOrder(ctx context.Context, candidate store.OrderRecord, d
 		m.WakeTarget(candidate.SpaceID, candidate.LogicalAccountID)
 	}
 	return err
+}
+
+func (m *Matcher) now() time.Time {
+	if m.Now != nil {
+		return m.Now()
+	}
+	return time.Now()
 }

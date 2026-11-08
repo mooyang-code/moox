@@ -129,6 +129,7 @@ func initialize(
 			MaxChildNotional: shared.MustDecimal(maxChildNotional),
 			MaxLeverage:      shared.MustDecimal("20"),
 			FeeBufferRate:    shared.MustDecimal("0.002"),
+			Quotes:           manager,
 		},
 	}
 	balanceMetrics, err := tradeobservability.DefaultBalanceMetrics()
@@ -136,7 +137,7 @@ func initialize(
 		return nil, fmt.Errorf("register trade balance metrics: %w", err)
 	}
 	manager.OnSessionRemoved = balanceMetrics.Remove
-	equityService := &equityapp.Service{Store: tradeStore, Adapters: manager}
+	equityService := &equityapp.Service{Store: tradeStore, Adapters: manager, Exchanges: registry}
 	equitySampler := traderuntime.NewEquitySampler(equityService)
 	registerEquitySamplerTimer(serverInstance, equitySampler)
 	fillReducer := &consumer.Reducer{Store: tradeStore, Enqueue: equitySampler.Enqueue}
@@ -145,9 +146,10 @@ func initialize(
 		Fills: fillReducer, Orders: orderService, Metrics: balanceMetrics, Equity: equityService,
 	}
 	paperMatcher := &executionpaper.Matcher{
-		Store:   tradeStore,
-		Reducer: fillReducer,
-		Enqueue: equitySampler.Enqueue,
+		Store:     tradeStore,
+		Reducer:   fillReducer,
+		Enqueue:   equitySampler.Enqueue,
+		Exchanges: registry,
 	}
 	paperMatcher.Refresh = func(refreshCtx context.Context, tradingAccountID string) error {
 		adapter, adapterErr := manager.Adapter(tradingAccountID)
@@ -188,13 +190,13 @@ func initialize(
 		}
 		return nil
 	}
-	paperMatcher.DecideContext = (&executionpaper.Decider{Store: tradeStore, Adapters: manager}).Decide
+	paperMatcher.DecideContext = (&executionpaper.Decider{Store: tradeStore, Adapters: manager, Exchanges: registry}).Decide
 	paperMatcherWorker := traderuntime.NewPaperMatcherWorker(paperMatcher, time.Second)
 	orderService.Syncer = accountSyncer{service: syncService}
 	targetExecutor := &targetapp.Executor{
 		Exchanges: registry,
 		Store:     tradeStore, Orders: orderService,
-		Prices:     targetapp.ExchangePriceSource{Adapters: manager},
+		Prices:     targetapp.ExchangePriceSource{Adapters: manager, Exchanges: registry},
 		OnReversal: noteTargetReversal(tradeStore),
 		Observe:    &telemetry.ExecutionMetrics{},
 		// 每秒最多一批：永续每批 16 单、现货 8 单，约为交易所下单限额的 80%。
@@ -210,9 +212,10 @@ func initialize(
 	}
 	observeRateLimits()
 	weightResolver := &targetapp.WeightResolver{
-		Store:  tradeStore,
-		Prices: targetapp.ExchangePriceSource{Adapters: manager},
-		Equity: equityService,
+		Store:     tradeStore,
+		Exchanges: registry,
+		Prices:    targetapp.ExchangePriceSource{Adapters: manager, Exchanges: registry},
+		Equity:    equityService,
 	}
 	// 生命周期在 registerHealth 里才创建，门禁先建好，创建后绑定；绑定之前放行。
 	lifeGate := &lifecycleGate{}
@@ -224,7 +227,7 @@ func initialize(
 	paperMatcher.WakeTarget = targetWorker.WakeTarget
 	logicalAccounts := &logicalapp.Service{
 		Store: tradeStore, Syncer: accountSyncer{service: syncService},
-		Prices: targetapp.ExchangePriceSource{Adapters: manager},
+		Prices: targetapp.ExchangePriceSource{Adapters: manager, Exchanges: registry},
 		// 策略会话释放、重绑、认领删掉目标前，由执行器撤掉组合里还没结束的目标挂单。
 		TargetOrders: targetExecutor,
 	}
@@ -240,7 +243,7 @@ func initialize(
 		Exchanges: registry, Wake: targetWorker.Wake,
 		Store: tradeStore, Orders: orderService,
 		Syncer: accountSyncer{service: syncService},
-		Prices: targetapp.ExchangePriceSource{Adapters: manager},
+		Prices: targetapp.ExchangePriceSource{Adapters: manager, Exchanges: registry},
 	}
 	// 保证金率监控：每分钟检查一次实盘账户；它复用资金维护的定时任务外壳（定时、门禁、超时一样）。
 	marginService := &marginmonitor.Service{
@@ -316,7 +319,9 @@ func initialize(
 				return nil, bindErr
 			}
 			marketData = publicAdapter
-			adapter = &executionpaper.Adapter{Account: record, Store: tradeStore, MarketData: publicAdapter, Wake: paperMatcherWorker.Wake}
+			adapter = &executionpaper.Adapter{
+				Account: record, Store: tradeStore, MarketData: publicAdapter, Exchanges: registry, Wake: paperMatcherWorker.Wake,
+			}
 		} else {
 			var bindErr error
 			adapter, bindErr = registry.Bind(accountConfig, credential)
@@ -383,6 +388,17 @@ func initialize(
 	runWorker(fundWorker.Run)
 	runWorker(marginWorker.Run)
 	runWorker((&traderuntime.AttentionWorker{Store: tradeStore, Executor: targetExecutor}).Run)
+	// 收盘撤单：A 股日收盘后先全量同步，再把收盘前提交、仍在途的订单按已撤结束；重启后第一轮就补做。
+	sessionCloser := &orderapp.SessionCloser{
+		Store: tradeStore, Exchanges: registry,
+		Sync: func(syncCtx context.Context, tradingAccountID string) error {
+			_, syncErr := syncService.SyncAccountFull(syncCtx, tradingAccountID)
+			return syncErr
+		},
+	}
+	runWorker(func(workerCtx context.Context) error {
+		return runSessionClose(workerCtx, sessionCloser, lifeGate.Open)
+	})
 	if eventBus != nil {
 		client := eventBus
 		runWorker(func(workerCtx context.Context) error {
@@ -478,7 +494,7 @@ func initialize(
 			MatcherReady:       paperMatcherWorker.Ready,
 			Holdings:           &rpc.HoldingQuery{Store: tradeStore, Adapters: manager},
 			Adapters:           manager,
-			Delist:             &delistapp.Service{Store: tradeStore, OnChanged: targetWorker.Wake, Prices: targetapp.ExchangePriceSource{Adapters: manager}},
+			Delist:             &delistapp.Service{Store: tradeStore, OnChanged: targetWorker.Wake, Prices: targetapp.ExchangePriceSource{Adapters: manager, Exchanges: registry}},
 			FlattenInstrument: func(callCtx context.Context, command rpc.FlattenInstrumentCommand) (store.OperatorActionRecord, bool, error) {
 				result, flattenErr := operatorService.FlattenLogicalAccount(callCtx, operatorapp.FlattenCommand{
 					SpaceID: command.SpaceID, ActionID: command.ActionID, LogicalAccountID: command.LogicalAccountID,
@@ -540,6 +556,29 @@ func initialize(
 	})
 	cleanupStore = false
 	return serverInstance, nil
+}
+
+// sessionCloseInterval 是收盘撤单的扫描间隔：没有要撤的单时每轮只读一次各 A 股账户的在途订单。
+const sessionCloseInterval = 30 * time.Second
+
+// runSessionClose 定时跑收盘撤单；生命周期门禁关着（暂停、恢复追赶）时跳过这一轮。
+func runSessionClose(ctx context.Context, closer *orderapp.SessionCloser, gate func() bool) error {
+	ticker := time.NewTicker(sessionCloseInterval)
+	defer ticker.Stop()
+	for {
+		if gate == nil || gate() {
+			runCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+			if err := closer.Run(runCtx); err != nil && ctx.Err() == nil {
+				log.WarnContextf(ctx, "收盘撤单没有完成，下一轮重试：%v", err)
+			}
+			cancel()
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 // registerBuiltins 是唯一的场所注册列表，新增场所时在这里加一行。

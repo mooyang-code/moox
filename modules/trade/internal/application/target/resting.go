@@ -11,6 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/ordersettings"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 )
 
@@ -41,7 +42,7 @@ func (s ExchangePriceSource) Book(ctx context.Context, tradingAccountID string, 
 	if err != nil {
 		return shared.Zero(), shared.Zero(), err
 	}
-	if !quote.SourceTime.IsZero() && time.Since(quote.SourceTime) > bookQuoteMaxAge {
+	if !quote.SourceTime.IsZero() && !execution.QuoteFresh(s.Exchanges, exchangeOf(adapter), quote.SourceTime, s.now(), bookQuoteMaxAge) {
 		return shared.Zero(), shared.Zero(), fmt.Errorf("买一卖一报价已过期")
 	}
 	return quote.Bid, quote.Ask, nil

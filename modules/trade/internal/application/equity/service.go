@@ -25,6 +25,8 @@ type Service struct {
 	}
 	Now          func() time.Time
 	SourceMaxAge time.Duration
+	// Exchanges 提供场所的交易时段：A 股时段外报价按收盘价判断新鲜度；为空时全天按时段内处理。
+	Exchanges execution.ExchangeCatalog
 
 	// missingSettlementWarned 记录缺结算币明细告警的时间（执行账户 -> 毫秒），同一个账户一小时只告警一次。
 	// degradedWarned 记录受管资产估值降级告警的时间（执行账户 + 资产 -> 毫秒），同样一小时一次。
@@ -85,6 +87,14 @@ func (s *Service) sourceFresh(sourceMillis int64) bool {
 	}
 	age := s.now().Sub(time.UnixMilli(sourceMillis).UTC())
 	return age <= s.sourceMaxAge() && age >= -s.sourceMaxAge()
+}
+
+// quoteFresh 是报价时间的新鲜度判断：时段内同 sourceFresh；A 股时段外用收盘价（execution.QuoteFresh）。
+// 只用于报价；余额、持仓的同步时间仍按 sourceFresh（夜里同步一直失败不能算新鲜）。
+func (s *Service) quoteFresh(account store.TradingAccountRecord) func(time.Time) bool {
+	return func(at time.Time) bool {
+		return execution.QuoteFresh(s.Exchanges, account.Exchange, at, s.now(), s.sourceMaxAge())
+	}
 }
 
 func MinuteBucket(at time.Time) int64 { return at.UTC().Truncate(time.Minute).UnixMilli() }
@@ -301,6 +311,14 @@ func (s *Service) unifiedSnapshot(ctx context.Context, account store.TradingAcco
 				byAsset[strings.ToUpper(instrument.BaseAsset)] = instrument
 			}
 		}
+		inSession := execution.InSession(s.Exchanges, account.Exchange, s.now())
+		keys := make([]exchange.SymbolKey, 0, len(held))
+		for _, balance := range held {
+			if instrument, ok := byAsset[strings.ToUpper(balance.Asset)]; ok {
+				keys = append(keys, exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol))
+			}
+		}
+		execution.PrefetchQuotes(ctx, prices, keys)
 		for _, balance := range held {
 			price, quoteTime, err := s.heldPrice(ctx, prices, account, byAsset, balance.Asset)
 			if err != nil {
@@ -308,8 +326,9 @@ func (s *Service) unifiedSnapshot(ctx context.Context, account store.TradingAcco
 			}
 			equity = equity.Add(decimal(balance.Total).Mul(price))
 			// 新鲜度取决于最旧的输入：新报价不能让旧余额看起来是最新的。降级估值（quoteTime 为 0）不参与，
-			// 否则一个下架零头会让整个组合的权益一直判为过期。
-			if quoteTime > 0 && (snapshot.ExchangeUpdatedAt <= 0 || quoteTime < snapshot.ExchangeUpdatedAt) {
+			// 否则一个下架零头会让整个组合的权益一直判为过期。时段外（A 股夜里、午休、周末）有效的收盘价也不参与：
+			// 它本来就早于余额同步时间，拉低后整个组合的权益会判为过期，账户整夜未就绪。
+			if quoteTime > 0 && inSession && (snapshot.ExchangeUpdatedAt <= 0 || quoteTime < snapshot.ExchangeUpdatedAt) {
 				snapshot.ExchangeUpdatedAt = quoteTime
 			}
 		}
@@ -344,7 +363,7 @@ func (s *Service) heldPrice(
 	}
 	symbol := instrument.ExchangeSymbol
 	quote, quoteErr := prices.GetReferencePrice(ctx, exchange.NewSymbolKey(instrument.MarketType, symbol))
-	if quoteErr == nil && !s.sourceFresh(quote.UpdatedAt.UnixMilli()) {
+	if quoteErr == nil && !s.quoteFresh(account)(quote.UpdatedAt) {
 		quoteErr = fmt.Errorf("equity: stale Spot quote for %s", symbol)
 	}
 	if quoteErr == nil && quote.Price.Cmp(shared.Zero()) <= 0 {
@@ -387,7 +406,7 @@ func (s *Service) degradedPrice(
 			return latestFillPrice(ctx, s.Store, account, *instrument)
 		}
 	}
-	value, err := execution.DegradedPrice(ctx, failure, s.lastPrice(account.TradingAccountID, asset), s.now(), s.sourceMaxAge(), lastFill, cause)
+	value, err := execution.DegradedPrice(ctx, failure, s.lastPrice(account.TradingAccountID, asset), s.quoteFresh(account), lastFill, cause)
 	if err != nil {
 		return shared.Zero(), 0, err
 	}

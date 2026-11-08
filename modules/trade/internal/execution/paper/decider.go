@@ -20,7 +20,9 @@ type DeciderAdapters interface {
 type Decider struct {
 	Store    *store.Store
 	Adapters DeciderAdapters
-	Now      func() time.Time
+	// Exchanges 提供场所的交易时段，撮合报价的新鲜度按它判断；为空时全天按时段内处理。
+	Exchanges execution.ExchangeCatalog
+	Now       func() time.Time
 }
 
 func (d *Decider) now() time.Time {
@@ -38,6 +40,25 @@ func (d *Decider) Decide(ctx context.Context, candidate store.OrderRecord) (Deci
 	paperConfig, configErr := d.Store.GetPaperAccountConfig(ctx, candidate.SpaceID, candidate.TradingAccountID)
 	if configErr != nil {
 		return Decision{}, storageError(configErr)
+	}
+	account, accountErr := d.Store.GetTradingAccountByID(ctx, candidate.TradingAccountID)
+	if accountErr != nil {
+		return Decision{}, storageError(accountErr)
+	}
+	rule := exchange.RuleFor(candidate.MarketType)
+	if rule.PriceLimits {
+		// 有涨跌停的市场（A 股）：停牌，或没有对手价（涨停没有卖一、跌停没有买一）时成交不了。吃单整笔撤掉，
+		// 执行器按现有逻辑提高滑点后重试；GTC 限价单继续挂着。首次撮合用的是下单时记下的价格，这里也要看实时盘口。
+		quote, quoteErr := adapter.GetQuote(ctx, exchange.NewSymbolKey(candidate.MarketType, candidate.ExchangeSymbol))
+		if quoteErr != nil {
+			return Decision{}, fmt.Errorf("paper reference quote unavailable: %w", quoteErr)
+		}
+		if reason := noCounterparty(exchange.Side(candidate.Side), quote); reason != "" {
+			if candidate.TimeInForce == string(exchange.FillPolicyGTC) {
+				return Decision{Rest: true}, nil
+			}
+			return Decision{Cancel: true, Reason: reason}, nil
+		}
 	}
 	isMarket := candidate.OrderType == string(exchange.OrderTypeMarket)
 	isLimit := candidate.OrderType == string(exchange.OrderTypeLimit)
@@ -70,9 +91,10 @@ func (d *Decider) Decide(ctx context.Context, candidate store.OrderRecord) (Deci
 	}
 	if book.Cmp(shared.Zero()) <= 0 {
 		quote, quoteErr := adapter.GetQuote(ctx, exchange.NewSymbolKey(candidate.MarketType, candidate.ExchangeSymbol))
-		if quoteErr == nil && !QuoteFresh(quote, d.now(), 10*time.Second) {
+		if quoteErr == nil && !execution.QuoteFresh(d.Exchanges, account.Exchange, quote.SourceTime, d.now(), matchQuoteMaxAge) {
 			quoteErr = errors.New("paper public quote is stale")
 		}
+
 		if quoteErr == nil {
 			// 市价单直接按实时行情加滑点成交；限价单这里只取对手方最优价，成交价在下面按限价规则定。
 			bookSlippage := shared.Zero()
@@ -125,14 +147,19 @@ func (d *Decider) Decide(ctx context.Context, candidate store.OrderRecord) (Deci
 	if feeErr != nil || feeRate.IsNegative() {
 		return Decision{}, fmt.Errorf("paper: invalid fee rate %q", feeRateRaw)
 	}
-	fee = price.Mul(shared.MustDecimal(candidate.Quantity)).Mul(feeRate)
-	realizedPnL := shared.Zero()
-	account, accountErr := d.Store.GetTradingAccountByID(ctx, candidate.TradingAccountID)
-	if accountErr != nil {
-		return Decision{}, storageError(accountErr)
+	notional := price.Mul(shared.MustDecimal(candidate.Quantity))
+	fee = notional.Mul(feeRate)
+	if rule.StockFees {
+		// A 股：佣金按 taker 费率字段、最低 5 元，卖出加印花税，双向过户费；和下单预留、下单容量用同一个函数。
+		takerRate, rateErr := shared.ParseDecimal(paperConfig.TakerFeeRate)
+		if rateErr != nil || takerRate.IsNegative() {
+			return Decision{}, fmt.Errorf("paper: invalid fee rate %q", paperConfig.TakerFeeRate)
+		}
+		fee = exchange.StockFee(exchange.Side(candidate.Side), notional, takerRate)
 	}
-	if candidate.MarketType == string(exchange.MarketTypeSpot) {
-		// 现货手续费按成交额（报价币）计价：扣费币种必须是交易对的报价币，而不是账户结算币，
+	realizedPnL := shared.Zero()
+	if rule.PositionFromBalance {
+		// 现货、股票手续费按成交额（报价币）计价：扣费币种必须是交易对的报价币，而不是账户结算币，
 		// 否则 USDT 结算账户在 ETH/BTC 上会把 BTC 计价的手续费记成 USDT。
 		instrument, instrumentErr := d.Store.GetInstrumentByIDForAccount(ctx, account.SpaceID, account.TradingAccountID, candidate.InstrumentID)
 		if instrumentErr != nil {
@@ -144,9 +171,9 @@ func (d *Decider) Decide(ctx context.Context, candidate store.OrderRecord) (Deci
 	} else if account.SettlementAsset != "" {
 		feeAsset = account.SettlementAsset
 	}
-	// 现货卖单卖的是冻结的币本身，撮合时不用再看资金，不读快照：账户里别的币估值失败不能连累卖单。
-	spotSell := candidate.MarketType == string(exchange.MarketTypeSpot) && candidate.Side != string(exchange.SideBuy)
-	if !candidate.ReduceOnly && !spotSell {
+	// 现货、股票卖单卖的是冻结的资产本身，撮合时不用再看资金，不读快照：账户里别的资产估值失败不能连累卖单。
+	balanceSell := rule.PositionFromBalance && candidate.Side != string(exchange.SideBuy)
+	if !candidate.ReduceOnly && !balanceSell {
 		snapshot, snapshotErr := adapter.GetAccountSnapshot(ctx)
 		if snapshotErr != nil {
 			return Decision{}, snapshotErr
@@ -155,7 +182,7 @@ func (d *Decider) Decide(ctx context.Context, candidate store.OrderRecord) (Deci
 			return Decision{Cancel: true, Reason: "paper reservation insufficient at match"}, nil
 		}
 	}
-	if candidate.MarketType == string(exchange.MarketTypeSwap) {
+	if !rule.PositionFromBalance {
 		position, found, positionErr := d.Store.GetPosition(ctx, account.SpaceID, account.TradingAccountID, exchange.NewSymbolKey(candidate.MarketType, candidate.ExchangeSymbol), string(exchange.PositionSideNet))
 		if positionErr != nil {
 			return Decision{}, storageError(positionErr)
@@ -187,6 +214,22 @@ func (d *Decider) Decide(ctx context.Context, candidate store.OrderRecord) (Deci
 	}}, nil
 }
 
+// matchQuoteMaxAge 是时段内撮合报价的最长时延。
+const matchQuoteMaxAge = 10 * time.Second
+
+// noCounterparty 返回有涨跌停的市场里这一方向成交不了的原因：停牌；买单没有卖一（涨停）；卖单没有买一（跌停）。能成交时返回空串。
+func noCounterparty(side exchange.Side, quote execution.MarketQuote) string {
+	switch {
+	case quote.Halted:
+		return "停牌"
+	case side == exchange.SideBuy && quote.Ask.Cmp(shared.Zero()) <= 0:
+		return "没有卖一，成交不了"
+	case side == exchange.SideSell && quote.Bid.Cmp(shared.Zero()) <= 0:
+		return "没有买一，成交不了"
+	}
+	return ""
+}
+
 // limitTakerPrice 是可立即成交的限价单的吃单价：对手方最优价加滑点，买单不高于限价、卖单不低于限价。
 func limitTakerPrice(side exchange.Side, book, slippageBPS, limit shared.Decimal) shared.Decimal {
 	factor := slippageBPS.Div(shared.MustDecimal("10000"))
@@ -210,7 +253,8 @@ func paperReservationSufficient(
 	snapshot exchange.AccountSnapshot,
 	price, fee shared.Decimal,
 ) bool {
-	if candidate.MarketType != string(exchange.MarketTypeSpot) && candidate.MarketType != string(exchange.MarketTypeSwap) {
+	rule := exchange.RuleFor(candidate.MarketType)
+	if !rule.PositionFromBalance && !rule.UsesMargin {
 		return true
 	}
 	reserved, err := shared.ParseDecimal(candidate.RemainingReservedQuantity)
@@ -222,7 +266,7 @@ func paperReservationSufficient(
 		return false
 	}
 	required := price.Mul(quantity).Add(fee)
-	if candidate.MarketType == string(exchange.MarketTypeSwap) {
+	if rule.UsesMargin {
 		leverage := account.LeverageSettings[candidate.InstrumentID]
 		if leverage == "" && account.ExecutionMode == string(exchange.ExecutionModePaper) {
 			leverage = account.LeverageSettings["*"]

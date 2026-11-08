@@ -21,7 +21,9 @@ var (
 // HTTPStatusError 带着上游的 HTTP 状态码，errors.Is(err, ErrHTTPStatus) 为真。
 type HTTPStatusError struct{ Status int }
 
-func (e *HTTPStatusError) Error() string { return fmt.Sprintf("%v: status=%d", ErrHTTPStatus, e.Status) }
+func (e *HTTPStatusError) Error() string {
+	return fmt.Sprintf("%v: status=%d", ErrHTTPStatus, e.Status)
+}
 func (e *HTTPStatusError) Unwrap() error { return ErrHTTPStatus }
 
 func statusError(status int) error {
