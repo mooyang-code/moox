@@ -64,9 +64,13 @@
               </a-space>
             </div>
             <div class="muted detail-info">
-              {{ sourceLabel(selected) }}
+              <a-link v-if="selected.strategy_id" @click="router.push(definitionsLink(selected.strategy_id))">{{
+                sourceLabel(selected)
+              }}</a-link>
+              <template v-else>{{ sourceLabel(selected) }}</template>
               <template v-if="selected.instance_id">
-                · 实例 <span class="mono">{{ selected.instance_id }}</span
+                · 实例
+                <a-link class="mono" @click="router.push(detailLink(selected.instance_id))">{{ selected.instance_id }}</a-link
                 >，会话 <span class="mono">{{ selected.session_id }}</span></template
               >
               · 因子任务 {{ replayTasksText(selected) }} · 区间 {{ replayRangeLabel(selected, displayZone) }} · 手续费
@@ -292,7 +296,7 @@ import { useStrategyStore } from "@/store/modules/strategy";
 import { percent, shortHash, skipReasonLabel } from "@/views/strategy/model";
 import { sameQuery } from "@/views/strategy/query";
 import InfoTip from "@/views/factor/shared/info-tip.vue";
-import { STRATEGY_TASKS_ROUTE, normalizeTaskTab } from "@/views/strategy/links";
+import { STRATEGY_TASKS_ROUTE, definitionsLink, detailLink, normalizeTaskTab } from "@/views/strategy/links";
 import ReplayCreateDrawer from "@/views/strategy/replay/replay-create-drawer.vue";
 import { parseFactorTasks } from "@/views/strategy/market-mode";
 import {

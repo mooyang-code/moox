@@ -269,12 +269,14 @@
 </template>
 
 <script setup lang="ts">
+import { useUnsavedGuard } from "@/hooks/useUnsavedGuard";
+import { goBackOr } from "@/utils/navigate-back";
 import { useDisplayZone } from "@/hooks/useDisplayZone";
 import { formatInstant } from "@/utils/time-zone";
 import { createSubmitScope } from "@/utils/submit-scope";
 import { StaleSpaceRequestError } from "@/api/admin/stale-space";
 import { computed, onMounted, reactive, ref, watch, onBeforeUnmount } from "vue";
-import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { Message } from "@arco-design/web-vue";
 import {
   createFactor,
@@ -670,7 +672,7 @@ async function save() {
     // 保存期间用户已确认离开页面或切换了因子：因子已保存，但不能再把用户带走
     if (!submission.isCurrent()) return;
     // 新建后留在编辑页（地址换成编辑页），方便接着添加到计算任务；编辑保存后回列表
-    if (editing.value) await router.push("/factor/definitions");
+    if (editing.value) goBackOr(router, "/factor/definitions");
     else await router.replace(`/factor/definitions/${encodeURIComponent(payload.factor_id)}/edit`);
   } catch (error) {
     if (!submission.isCurrent()) return;
@@ -680,14 +682,16 @@ async function save() {
   }
 }
 
+/** 返回、取消：有站内来源时回到原处，否则回定义列表。 */
 function leave() {
-  void router.push("/factor/definitions");
+  goBackOr(router, "/factor/definitions");
 }
 
 /** 在用的因子不能改：带着当前定义进入新建页，ID 预填 <原 ID>_v2。 */
 function saveAsNew() {
   setPendingCopy({ ...form, factor_id: copyFactorId(form.factor_id) });
-  void router.push("/factor/definitions/new");
+  // 用 replace：新建页的上一页仍是进编辑页之前的那页（通常是列表），保存或返回时不会回到不能改的旧因子
+  void router.replace("/factor/definitions/new");
 }
 
 // 添加到计算任务：先选任务，再打开和计算任务页一样的添加弹窗，预选这个因子。
@@ -724,9 +728,8 @@ function openTask(taskId: string) {
   void router.push(taskId ? { path: "/factor/tasks", query: { detail: taskId } } : "/factor/tasks");
 }
 
-const confirmLeave = () => committed.value || !dirty.value || window.confirm("当前因子定义尚未保存，确认离开？");
-onBeforeRouteLeave(() => confirmLeave());
-onBeforeRouteUpdate(() => confirmLeave());
+// 站内离开、刷新、关标签页前都提示未保存的修改；保存后放行
+useUnsavedGuard(() => !committed.value && dirty.value, { leave: "当前因子定义尚未保存，确认离开？" });
 
 watch(factorId, () => void load());
 watch(() => [form.spec, form.allow_partial_universe, form.factor_id], scheduleValidate, { immediate: true });

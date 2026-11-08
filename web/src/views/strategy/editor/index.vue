@@ -91,11 +91,13 @@
 </template>
 
 <script setup lang="ts">
+import { useUnsavedGuard } from "@/hooks/useUnsavedGuard";
+import { goBackOr } from "@/utils/navigate-back";
 import { createSubmitScope } from "@/utils/submit-scope";
 import { StaleSpaceRequestError } from "@/api/admin/stale-space";
 import { computed, onMounted, ref, watch, onBeforeUnmount } from "vue";
 import { Message } from "@arco-design/web-vue";
-import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { createStrategy, getStrategy, updateStrategy } from "@/api/strategy";
 import { useSpaceStore } from "@/store/modules/space";
 import { useStrategyStore } from "@/store/modules/strategy";
@@ -201,16 +203,14 @@ async function save() {
     if (submission.isCurrent()) saving.value = false;
   }
 }
+/** 返回：有站内来源时回到原处，否则回定义列表。 */
 function leave() {
-  router.push({ name: "strategy-definitions" });
+  goBackOr(router, { name: "strategy-definitions" });
 }
-onBeforeRouteLeave(() => {
-  if (!dirty.value || window.confirm("当前 DSL 尚未保存，确认离开？")) return true;
-  return false;
-});
-onBeforeRouteUpdate(() => {
-  if (!dirty.value || window.confirm("当前 DSL 尚未保存，确认切换策略定义？")) return true;
-  return false;
+// 站内离开、刷新、关标签页前都提示未保存的修改；保存后放行
+useUnsavedGuard(() => dirty.value, {
+  leave: "当前 DSL 尚未保存，确认离开？",
+  update: "当前 DSL 尚未保存，确认切换策略定义？"
 });
 watch(
   () => route.params.strategyId,

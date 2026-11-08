@@ -80,7 +80,7 @@
                     v-if="record.action === 'retry'"
                     size="mini"
                     type="text"
-                    :loading="busy"
+                    :loading="busyTaskIds.has(record.task_id)"
                     @click="retryActivation(record.info.factor_task)"
                   >
                     重试激活
@@ -90,14 +90,14 @@
                     content="停用后不再接收周期事件；结果数据集和 View 保留，确认停用？"
                     @ok="toggleStatus(record.info.factor_task, 'disabled')"
                   >
-                    <a-button size="mini" type="text" status="danger" :loading="busy">停用</a-button>
+                    <a-button size="mini" type="text" status="danger" :loading="busyTaskIds.has(record.task_id)">停用</a-button>
                   </a-popconfirm>
                   <a-popconfirm
                     v-if="record.action === 'enable'"
                     :content="ENABLE_ENGINE_HINT"
                     @ok="toggleStatus(record.info.factor_task, 'enabled')"
                   >
-                    <a-button size="mini" type="text" status="success" :loading="busy">启用</a-button>
+                    <a-button size="mini" type="text" status="success" :loading="busyTaskIds.has(record.task_id)">启用</a-button>
                   </a-popconfirm>
                   <a-tooltip :content="record.remove.reason" :disabled="!record.remove.disabled">
                     <span>
@@ -124,7 +124,7 @@
 
     <TaskDetailDrawer
       :info="detailInfo"
-      :busy="busy"
+      :busy="busyTaskIds.has(detailInfo?.factor_task.task_id ?? '')"
       @close="closeDetail"
       @retry="retryActivation"
       @toggle-status="toggleStatus"
@@ -135,7 +135,7 @@
       v-model:visible="deleteVisible"
       title="删除计算任务"
       :width="560"
-      :ok-loading="busy"
+      :ok-loading="busyTaskIds.has(target?.task_id ?? '')"
       :ok-button-props="{ status: 'danger', disabled: !deleteConfirmed }"
       :on-before-ok="confirmDelete"
     >
@@ -190,7 +190,8 @@ const statusOptions = [
 
 const filters = reactive<TaskFilters>({ keyword: "", status: "" });
 const createVisible = ref(false);
-const busy = ref(false);
+// 正在操作的计算任务：按行记录，操作一行时别的行的按钮不跟着转圈；连点两行时两行都保持转圈直到各自结束
+const busyTaskIds = reactive(new Set<string>());
 
 const filteredTasks = computed(() => filterTasks(store.tasks, filters, (set: FactorTask) => store.taskLabel(set)));
 
@@ -241,8 +242,8 @@ async function onCreated(taskId: string) {
   openDetail(taskId);
 }
 
-async function run(action: () => Promise<unknown>, success: string, failure: string) {
-  busy.value = true;
+async function run(taskId: string, action: () => Promise<unknown>, success: string, failure: string) {
+  busyTaskIds.add(taskId);
   try {
     await action();
     Message.success(success);
@@ -252,12 +253,13 @@ async function run(action: () => Promise<unknown>, success: string, failure: str
     Message.error(error instanceof Error ? error.message : failure);
     return false;
   } finally {
-    busy.value = false;
+    busyTaskIds.delete(taskId);
   }
 }
 
 function toggleStatus(set: FactorTask, next: "enabled" | "disabled") {
   return run(
+    set.task_id,
     () => setFactorTaskStatus(set.task_id, next),
     next === "enabled" ? "计算任务已启用" : "计算任务已停用",
     "更新计算任务状态失败"
@@ -266,6 +268,7 @@ function toggleStatus(set: FactorTask, next: "enabled" | "disabled") {
 
 function retryActivation(set: FactorTask) {
   return run(
+    set.task_id,
     () =>
       createFactorTask({
         task_id: set.task_id,
@@ -297,6 +300,7 @@ async function confirmDelete() {
   const current = target.value;
   if (!current || !deleteConfirmed.value) return false;
   const ok = await run(
+    current.task_id,
     () => deleteFactorTask(current.task_id, purge.value),
     purge.value ? "计算任务已删除，结果数据集清理中" : "计算任务已删除",
     "删除计算任务失败"

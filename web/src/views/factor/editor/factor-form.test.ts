@@ -202,12 +202,12 @@ describe("editor page contract", () => {
 
   it("新建保存后换到编辑页的地址（留在编辑页），编辑保存后回列表；编辑页能添加到计算任务并预选这个因子", () => {
     expect(page).toContain("else await router.replace(`/factor/definitions/${encodeURIComponent(payload.factor_id)}/edit`)");
-    expect(page).toContain('if (editing.value) await router.push("/factor/definitions")');
+    expect(page).toContain('if (editing.value) goBackOr(router, "/factor/definitions")');
     expect(page).toContain(':preset-factor-id="factorId"');
   });
 
-  it("editor registers onBeforeRouteLeave", () => {
-    expect(page).toContain("onBeforeRouteLeave");
+  it("editor protects unsaved changes on leave, reload and tab close", () => {
+    expect(page).toContain("useUnsavedGuard(");
   });
 
   it("editor edits the YAML spec in the code editor and compiles it on the server", () => {

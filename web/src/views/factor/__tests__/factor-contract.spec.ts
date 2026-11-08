@@ -168,7 +168,7 @@ describe("factor pages contract", () => {
     expect(factorEditor).toContain("insertTemplate('cross_section')");
     expect(factorEditor).not.toContain('v-model="form.factor_type"');
     expect(factorEditor).not.toContain("createFactorTask");
-    expect(factorEditor).toContain("onBeforeRouteLeave");
+    expect(factorEditor).toContain("useUnsavedGuard(");
   });
 
   it("loads recalc jobs from the backend and renders degraded notes separately from errors", () => {
