@@ -361,13 +361,6 @@ export const orderOwnerLabels: Record<string, string> = {
   SYSTEM: "系统"
 };
 
-export function formatTimestamp(value?: string): string {
-  if (!value) return "-";
-  const milliseconds = Number(value);
-  if (!Number.isFinite(milliseconds) || milliseconds <= 0) return "-";
-  return new Date(milliseconds).toLocaleString();
-}
-
 export function parseFlattenResult(action?: OperatorAction): import("./types").FlattenResult | null {
   if (!action?.result_json) return null;
   try {

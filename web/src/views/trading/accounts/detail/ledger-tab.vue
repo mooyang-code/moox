@@ -8,7 +8,14 @@
       <a-select v-if="showMarket" v-model="market" style="width: 150px" @change="load">
         <a-option v-for="item in accountMarkets" :key="item" :value="item">{{ marketLabel(item) }}</a-option>
       </a-select>
-      <a-range-picker v-model="range" value-format="timestamp" :allow-clear="false" style="width: 320px" @change="load" />
+      <ZonedRangePicker
+        v-model="range"
+        :zone="displayZone"
+        :show-time="false"
+        :allow-clear="false"
+        style="width: 320px"
+        @update:model-value="load"
+      />
       <a-select v-model="typeFilter" placeholder="全部类型" allow-clear style="width: 150px">
         <a-option v-for="item in ledgerTypeOptions" :key="item.value" :value="item.value">{{ item.label }}</a-option>
       </a-select>
@@ -34,7 +41,7 @@
       <template #columns>
         <a-table-column title="时间" :width="150">
           <template #cell="{ record }"
-            ><span class="tx-muted tx-nowrap">{{ fmtClock(record.time, true) }}</span></template
+            ><span class="tx-muted tx-nowrap">{{ formatInstant(record.time, displayZone) }}</span></template
           >
         </a-table-column>
         <a-table-column title="类型" :width="110">
@@ -62,7 +69,7 @@
 <script setup lang="ts">
 import { computed, inject, ref, watch } from "vue";
 import { getExecutionCapabilities, listAccountLedger, type LedgerEntry, type MarketType } from "@/api/trade";
-import { fmtClock, fmtSigned } from "../shared/format";
+import { fmtSigned } from "../shared/format";
 import {
   amountClass,
   defaultLedgerMarket,
@@ -73,8 +80,13 @@ import {
 } from "../shared/ledger";
 import { marketLabel } from "../shared/markets";
 import SectionBlock from "../shared/section-block.vue";
+import ZonedRangePicker from "@/components/zoned-date-picker/zoned-range-picker.vue";
 import { detailContextKey } from "./context";
+import { formatInstant } from "@/utils/time-zone";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
 
+// 交易页的时间按当前空间登记的时区显示
+const displayZone = useDisplayZone();
 const { logical, accounts } = inject(detailContextKey)!;
 
 // 一次最多取的条数：多了交易所要连续翻页，容易撞上限频和超时。
@@ -82,7 +94,7 @@ const LEDGER_LIMIT = 500;
 
 const accountId = ref("");
 const market = ref<MarketType>(1);
-const range = ref<number[]>(defaultLedgerRange());
+const range = ref<[number, number] | null>(defaultLedgerRange(displayZone.value));
 const typeFilter = ref<string>();
 const entries = ref<LedgerEntry[]>([]);
 const hasMore = ref(false);
@@ -139,8 +151,9 @@ async function load() {
       trading_account_id: accountId.value,
       // 账户只开通一个市场时可以省略，多个市场时必须指明；模拟盘不看市场
       market_type: showMarket.value ? market.value : undefined,
-      start_time: String(range.value[0]),
-      end_time: String(range.value[1]),
+      // 结束是所选最后一天的次日零点，可能晚于现在：截到现在再给交易所
+      start_time: String(range.value![0]),
+      end_time: String(Math.min(range.value![1], Date.now())),
       limit: LEDGER_LIMIT
     });
     if (current !== token) return;
@@ -162,7 +175,7 @@ watch(
   () => {
     accountId.value = memberOptions.value[0]?.id ?? "";
     market.value = defaultLedgerMarket(accountMarkets.value);
-    range.value = defaultLedgerRange();
+    range.value = defaultLedgerRange(displayZone.value);
     typeFilter.value = undefined;
     void load();
   },

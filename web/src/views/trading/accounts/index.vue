@@ -82,7 +82,9 @@
                 </a-tooltip>
                 <StatusMark v-else tone="run">运行中</StatusMark>
               </template>
-              <span v-else class="tx-muted tx-nowrap">同步于 {{ fmtClock(record.account.last_sync_at) }}</span>
+              <span v-else class="tx-muted tx-nowrap"
+                >同步于 {{ formatInstant(record.account.last_sync_at, displayZone, "minute") }}</span
+              >
             </template>
           </a-table-column>
           <a-table-column title="权益" :width="170" align="right">
@@ -159,13 +161,17 @@ import { createLatestRequestGuard } from "@/utils/latest-request";
 import { accountMapOf, comboRows, equityChange, unjoinedAccounts, type ComboRow, type MemberRow } from "./account-list";
 import CreateAccount from "./create/index.vue";
 import { environmentFromQuery, environmentLabel, environmentTabs, type Environment } from "./shared/environment";
-import { fmtClock, fmtMoney, fmtPercent, pnlClass } from "./shared/format";
+import { fmtMoney, fmtPercent, pnlClass } from "./shared/format";
 import { marketsText } from "./shared/markets";
 import { loadPositionSnapshot, positionCount } from "./shared/position-snapshot";
 import StatusMark from "./shared/status-mark.vue";
 import { loadStrategyLinks, type StrategyLink } from "./shared/strategy-link";
 import UnjoinedDialog from "./unjoined-dialog.vue";
+import { formatInstant } from "@/utils/time-zone";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
 
+// 交易页的时间按当前空间登记的时区显示
+const displayZone = useDisplayZone();
 defineOptions({ name: "trading-accounts" });
 
 // 各列宽度之和：窄屏时表格横向滚动，每一列都保持自己的宽度，不会被挤成 0

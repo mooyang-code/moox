@@ -19,9 +19,9 @@
           <a-descriptions-item label="状态">
             <StatusMark :tone="targetTone">{{ targetStateLabels[target.status.toUpperCase()] || "未知" }}</StatusMark>
           </a-descriptions-item>
-          <a-descriptions-item label="K 线时间">{{ fmtClock(target.bar_end_time, true) }}</a-descriptions-item>
+          <a-descriptions-item label="K 线时间">{{ formatInstant(target.bar_end_time, displayZone) }}</a-descriptions-item>
           <a-descriptions-item label="有效至">
-            {{ fmtClock(target.valid_until, true) }}
+            {{ formatInstant(target.valid_until, displayZone) }}
             <span class="tx-muted">（{{ targetExpired ? "已过期" : "尚未过期" }}）</span>
           </a-descriptions-item>
           <a-descriptions-item label="目标">{{ targetCoins }} 个币</a-descriptions-item>
@@ -80,7 +80,7 @@ import { exchangeLabels, targetStateLabels } from "@/api/trade";
 import EnvMark from "../shared/env-mark.vue";
 import EquityCurve from "../shared/equity-curve.vue";
 import { accountEnvironment } from "../shared/environment";
-import { fmtClock, fmtMoney } from "../shared/format";
+import { fmtMoney } from "../shared/format";
 import { marketsText } from "../shared/markets";
 import SectionBlock from "../shared/section-block.vue";
 import StatusMark from "../shared/status-mark.vue";
@@ -88,7 +88,11 @@ import { detailContextKey } from "./context";
 import OperatorActions from "./operator-actions.vue";
 import PnlBreakdown from "./pnl-breakdown.vue";
 import { targetCoinCount } from "./positions-model";
+import { formatInstant } from "@/utils/time-zone";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
 
+// 交易页的时间按当前空间登记的时区显示
+const displayZone = useDisplayZone();
 const context = inject(detailContextKey)!;
 const { logical, target, targetExpired, snapshot, coinRows, accounts, flattenRunning, syncAccounts, openFlatten } = context;
 const route = useRoute();

@@ -1,4 +1,5 @@
 import type { EquityPoint } from "@/api/trade/types";
+import { formatInstant, msToWallClock, zoneSuffix } from "@/utils/time-zone";
 
 export interface EquitySeriesPoint {
   time: number;
@@ -13,4 +14,31 @@ export function toEquitySeries(points: EquityPoint[]): EquitySeriesPoint[] {
 
 export function equityRange(days: number, now: number) {
   return { start_time: String(now - days * 86_400_000), end_time: String(now) };
+}
+
+/**
+ * 横轴和提示框：VChart 的时间轴只认本地和 UTC，这里用毫秒的线性轴，刻度和提示框按显示时区格式化，
+ * 时区写在轴标题上。
+ */
+export function equityChartParts(series: EquitySeriesPoint[], zone: string) {
+  const first = series[0]?.time ?? Date.now();
+  const last = series[series.length - 1]?.time ?? first;
+  const title = { value: (datum?: { time?: number }) => formatInstant(datum?.time, zone) };
+  const content = [{ key: "权益", value: (datum?: { value?: number }) => String(datum?.value ?? "") }];
+  return {
+    axes: [
+      {
+        orient: "bottom" as const,
+        type: "linear" as const,
+        zero: false,
+        nice: false,
+        min: first,
+        max: last,
+        title: { visible: true, text: `时间（${zoneSuffix(first, zone)}）` },
+        label: { formatMethod: (text: string | string[]) => msToWallClock(Number(text), zone, "minute").slice(5) }
+      },
+      { orient: "left" as const, type: "linear" as const }
+    ],
+    tooltip: { mark: { title, content }, dimension: { title, content } }
+  };
 }

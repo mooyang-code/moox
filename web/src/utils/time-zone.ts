@@ -137,6 +137,12 @@ export function wallClockToMs(text: string, timeZone?: string | null): number | 
   return valid[0] ?? before;
 }
 
+/** 日期字符串 YYYY-MM-DD 加减天数（纯日历运算，和时区无关）。 */
+export function addDays(date: string, days: number): string {
+  const [y, m, d] = date.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, d) + days * 86_400_000).toISOString().slice(0, 10);
+}
+
 // 以下三个保留给运维监控按市场显示的时间（到达图、链路收线时间）。
 
 /** 市场时区的日期 YYYY-MM-DD。 */

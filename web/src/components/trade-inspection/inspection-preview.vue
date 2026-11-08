@@ -6,7 +6,7 @@
       {{ message }}
       <a-button size="mini" type="text" @click="run">重新检测</a-button>
     </a-alert>
-    <inspection-result v-else-if="view" :view="view" />
+    <inspection-result v-else-if="view" :view="view" :zone="displayZone" />
     <p v-else class="inspection-preview-hint">选好交易所、环境和密钥后会立即检测账户类型和权限。</p>
   </div>
 </template>
@@ -15,6 +15,7 @@
 import { ref, watch } from "vue";
 import type { Exchange, MarketType } from "@/api/trade/types";
 import InspectionResult from "./inspection-result.vue";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
 import type { InspectionView } from "./inspection";
 import { previewAllowsNext, runPreview, type PreviewState } from "./inspection-actions";
 
@@ -23,6 +24,8 @@ defineOptions({ name: "TradeInspectionPreview" });
 // 新建账户第二步的内嵌检测：选完密钥立即检测并展示结果。父组件按 change 事件里的 allowNext 禁用“下一步”：
 // 有阻断项、检测没完成（没有结论）、还没检测，都不放行。
 const props = defineProps<{ exchange: Exchange; environment: 1 | 2; secretId: string; markets?: MarketType[] }>();
+// 检测时间：交易页按当前空间的时区
+const displayZone = useDisplayZone();
 const emit = defineEmits<{ change: [payload: { state: PreviewState; allowNext: boolean; view: InspectionView | null }] }>();
 
 const state = ref<PreviewState>("idle");

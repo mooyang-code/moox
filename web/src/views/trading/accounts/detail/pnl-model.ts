@@ -1,5 +1,6 @@
 import type { PnlAmount, SummarizeAccountPnlReq, SummarizeAccountPnlRsp } from "@/api/trade";
-import { fmtClock, pnlClass } from "../shared/format";
+import { pnlClass } from "../shared/format";
+import { formatInstant } from "@/utils/time-zone";
 import { rangeParams, recordRanges, type RecordRange } from "./record-range";
 
 /** 收益拆解可选的时间范围：不含“全部”（不带时间时后端只算近 7 天，界面写“全部”会误导）；后端拒绝超过 90 天的范围，选项都不能超过。 */
@@ -54,20 +55,21 @@ function amountViews(list: PnlAmount[] | undefined, signed: boolean, colored: bo
   }));
 }
 
-function fundingNotice(rsp: SummarizeAccountPnlRsp): PnlNotice | null {
+function fundingNotice(rsp: SummarizeAccountPnlRsp, zone: string): PnlNotice | null {
   const note = rsp.funding_note?.trim() ?? "";
   if (!rsp.funding_available) {
     return { level: "info", text: `没有统计资金费：${note || "这个账户没有资金费数据"}` };
   }
   if (rsp.funding_truncated) {
-    const from = Number(rsp.funding_from) > 0 ? `从 ${fmtClock(rsp.funding_from, true)} 起` : "只统计了其中一段";
+    const from = Number(rsp.funding_from) > 0 ? `从 ${formatInstant(rsp.funding_from, zone)} 起` : "只统计了其中一段";
     return { level: "warn", text: `资金费只是一部分（${from}），不是所选时间范围的完整合计${note ? `。${note}` : ""}` };
   }
   return note ? { level: "info", text: note } : null;
 }
 
 /** 后端是 proto3 JSON：空数组、false、0 都不出现，这里统一补成空数组和 false。 */
-export function buildPnlView(rsp: SummarizeAccountPnlRsp): PnlView {
+/** zone 是显示时区（当前空间），用于资金费只统计了一段时的起点时间。 */
+export function buildPnlView(rsp: SummarizeAccountPnlRsp, zone: string): PnlView {
   const fundingAvailable = Boolean(rsp.funding_available);
   return {
     rows: [
@@ -88,6 +90,6 @@ export function buildPnlView(rsp: SummarizeAccountPnlRsp): PnlView {
       }
     ],
     fillCount: Number(rsp.fill_count) || 0,
-    notice: fundingNotice(rsp)
+    notice: fundingNotice(rsp, zone)
   };
 }

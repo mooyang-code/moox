@@ -65,7 +65,7 @@
             <div class="v tx-num">
               {{ fmtMoney(totals.equity) }}<small>{{ logical.settlement_asset }}</small>
             </div>
-            <div class="d">同步于 {{ fmtClock(latestSync) }}</div>
+            <div class="d">同步于 {{ formatInstant(latestSync, displayZone, "minute") }}</div>
           </div>
           <div v-if="initialBalance">
             <div class="k">较初始资金</div>
@@ -203,12 +203,12 @@
         >
           <a-descriptions v-if="target" :column="1" size="small" class="dialog-block">
             <a-descriptions-item label="当前目标"
-              >{{ formatTimestamp(String(target.bar_end_time || "")) }} 的 K 线，{{
+              >{{ formatInstant(target.bar_end_time, displayZone) }} 的 K 线，{{
                 target.targets.length
               }}
               个标的</a-descriptions-item
             >
-            <a-descriptions-item label="有效至">{{ fmtClock(target.valid_until, true) }}</a-descriptions-item>
+            <a-descriptions-item label="有效至">{{ formatInstant(target.valid_until, displayZone) }}</a-descriptions-item>
             <a-descriptions-item label="暂停原因">{{ logical.pause_reason || "未填写" }}</a-descriptions-item>
           </a-descriptions>
           <p class="dialog-text">
@@ -309,7 +309,6 @@ import {
   exchangeLabels,
   flattenLogicalAccount,
   flattenTradingAccount,
-  formatTimestamp,
   getLogicalAccount,
   isTradeNotFound,
   getLogicalAccountTarget,
@@ -327,7 +326,7 @@ import { accountMapOf } from "../account-list";
 import ConfirmDialog from "../shared/confirm-dialog.vue";
 import EnvMark from "../shared/env-mark.vue";
 import { environmentFromQuery, environmentLabel, logicalEnvironment } from "../shared/environment";
-import { fmtClock, fmtMoney, fmtPercent, fmtQty, fmtSigned, pnlClass } from "../shared/format";
+import { fmtMoney, fmtPercent, fmtQty, fmtSigned, pnlClass } from "../shared/format";
 import { instrumentName, marketLabel } from "../shared/markets";
 import { loadPositionSnapshot, positionCount, type PositionSnapshot } from "../shared/position-snapshot";
 import { loadStrategyLinks, type StrategyLink } from "../shared/strategy-link";
@@ -352,7 +351,11 @@ import OverviewTab from "./overview-tab.vue";
 import PositionsTab from "./positions-tab.vue";
 import { buildCoinRows, targetCoinCount } from "./positions-model";
 import SettingsTab from "./settings-tab.vue";
+import { formatInstant } from "@/utils/time-zone";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
 
+// 交易页的时间按当前空间登记的时区显示
+const displayZone = useDisplayZone();
 defineOptions({ name: "trading-account-detail" });
 
 const route = useRoute();

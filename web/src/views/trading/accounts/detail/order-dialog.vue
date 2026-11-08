@@ -60,7 +60,9 @@
         <a-input v-model="manualForm.limit_price" />
       </a-form-item>
       <a-form-item label="原因" required><a-input v-model="manualForm.reason" /></a-form-item>
-      <a-form-item label="提交截止时间"><a-input v-model="manualForm.deadline_at" type="datetime-local" /></a-form-item>
+      <a-form-item label="提交截止时间">
+        <ZonedDatePicker v-model="manualForm.deadline_at" :zone="displayZone" allow-clear style="width: 100%" />
+      </a-form-item>
     </a-form>
     <a-form v-if="tier.requiresName" :model="{}" layout="vertical">
       <a-form-item :label="`输入组合名称「${logical.name}」确认`">
@@ -84,12 +86,17 @@ import type { ExecutionCapabilities, LogicalAccount, SubmitOrderReq, TradableIns
 import { createClientId } from "@/utils/client-id";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import EnvMark from "../shared/env-mark.vue";
+import ZonedDatePicker from "@/components/zoned-date-picker/zoned-date-picker.vue";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
 import { confirmTier, nameConfirmed, type Environment } from "../shared/environment";
 import { instrumentName, marketLabel, marketOfInstrument } from "../shared/markets";
 import { instrumentRuleHint, orderRuleError } from "../shared/order-rules";
 import type { ActionTracker } from "./action-tracker";
 
 defineOptions({ name: "trading-order-dialog" });
+
+// 截止时间按当前空间登记的时区选择
+const displayZone = useDisplayZone();
 
 const props = defineProps<{
   logical: LogicalAccount;
@@ -121,7 +128,8 @@ const manualForm = reactive({
   quantity: "",
   limit_price: "",
   reason: "",
-  deadline_at: ""
+  // 毫秒时刻，按空间时区选择；不填为 null
+  deadline_at: null as number | null
 });
 
 const tier = computed(() => confirmTier(props.env));
@@ -206,7 +214,7 @@ function openManual(accountId: string, instrumentId = "", prefill: { side?: 1 | 
     quantity: prefill.quantity ?? "",
     limit_price: "",
     reason: "",
-    deadline_at: ""
+    deadline_at: null
   });
   memberId.value = accountId;
   loadMember();
@@ -248,8 +256,8 @@ async function submitManual() {
       Message.warning(ruleError);
       return false;
     }
-    const deadline = manualForm.deadline_at ? new Date(manualForm.deadline_at).getTime() : undefined;
-    if (deadline !== undefined && (!Number.isFinite(deadline) || deadline <= Date.now())) {
+    const deadline = manualForm.deadline_at ?? undefined;
+    if (deadline !== undefined && deadline <= Date.now()) {
       Message.warning("提交截止时间必须晚于当前时间");
       return false;
     }

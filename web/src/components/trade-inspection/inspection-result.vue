@@ -19,7 +19,7 @@
     <a-descriptions :column="1" size="small" bordered class="inspection-rows">
       <a-descriptions-item v-for="row in rows" :key="row.label" :label="row.label">{{ row.value }}</a-descriptions-item>
       <a-descriptions-item v-if="view.inspectedAt" label="检测时间">{{
-        formatInspectedAt(view.inspectedAt)
+        formatInstant(view.inspectedAt, zone)
       }}</a-descriptions-item>
     </a-descriptions>
   </div>
@@ -27,19 +27,17 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
+import { formatInstant } from "@/utils/time-zone";
 import { inspectionFailureNote, inspectionRows, inspectionVerdict, type InspectionView } from "./inspection";
 
 defineOptions({ name: "TradeInspectionResult" });
 
-const props = defineProps<{ view: InspectionView }>();
+// zone 由调用方给：交易页按空间时区，密钥页按 UTC
+const props = defineProps<{ view: InspectionView; zone: string }>();
 
 const verdict = computed(() => inspectionVerdict(props.view));
 const rows = computed(() => inspectionRows(props.view));
 const failureNote = computed(() => inspectionFailureNote(props.view));
-
-function formatInspectedAt(millis: number): string {
-  return new Date(millis).toLocaleString("zh-CN", { hour12: false });
-}
 </script>
 
 <style scoped>

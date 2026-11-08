@@ -47,7 +47,8 @@ describe("收益拆解视图", () => {
         funding_fees: [{ asset: "USDT", amount: "-0.8" }],
         fill_count: "12",
         funding_available: true
-      })
+      }),
+      "UTC"
     );
     expect(view.fillCount).toBe(12);
     const [fees, realized, funding] = view.rows;
@@ -65,7 +66,7 @@ describe("收益拆解视图", () => {
   });
 
   it("proto3 省略零值：没有数组、没有布尔时按空和 false 处理", () => {
-    const view = buildPnlView(rsp());
+    const view = buildPnlView(rsp(), "UTC");
     expect(view.fillCount).toBe(0);
     expect(view.rows.map(row => row.amounts)).toEqual([[], [], []]);
     // funding_available 缺省就是 false：说明没统计资金费，不是资金费为 0
@@ -75,7 +76,8 @@ describe("收益拆解视图", () => {
 
   it("资金费不可用时不显示金额，用 funding_note 说明原因", () => {
     const view = buildPnlView(
-      rsp({ funding_available: false, funding_fees: [{ asset: "USDT", amount: "9" }], funding_note: "模拟盘没有资金费流水" })
+      rsp({ funding_available: false, funding_fees: [{ asset: "USDT", amount: "9" }], funding_note: "模拟盘没有资金费流水" }),
+      "UTC"
     );
     expect(view.rows[2].amounts).toEqual([]);
     expect(view.notice).toEqual({ level: "info", text: "没有统计资金费：模拟盘没有资金费流水" });
@@ -86,26 +88,27 @@ describe("收益拆解视图", () => {
       rsp({
         funding_available: true,
         funding_truncated: true,
-        funding_from: String(new Date(2026, 9, 1, 8, 30, 15).getTime()),
+        funding_from: String(Date.parse("2026-10-01T08:30:15Z")),
         funding_note: "流水太多，只取到最近一部分",
         funding_fees: [{ asset: "USDT", amount: "1" }]
-      })
+      }),
+      "UTC"
     );
     expect(view.rows[2].amounts).toHaveLength(1);
     expect(view.notice?.level).toBe("warn");
-    expect(view.notice?.text).toContain("10-01 08:30:15 起");
+    expect(view.notice?.text).toContain("从 2026-10-01 08:30:15 UTC 起");
     expect(view.notice?.text).toContain("不是所选时间范围的完整合计");
     expect(view.notice?.text).toContain("流水太多，只取到最近一部分");
   });
 
   it("截断但没给起点时也要警告", () => {
-    const view = buildPnlView(rsp({ funding_available: true, funding_truncated: true }));
+    const view = buildPnlView(rsp({ funding_available: true, funding_truncated: true }), "UTC");
     expect(view.notice?.level).toBe("warn");
     expect(view.notice?.text).toContain("只统计了其中一段");
   });
 
   it("资金费完整但后端附了说明时，作为灰字提示", () => {
-    const view = buildPnlView(rsp({ funding_available: true, funding_note: "按 UTC 结算" }));
+    const view = buildPnlView(rsp({ funding_available: true, funding_note: "按 UTC 结算" }), "UTC");
     expect(view.notice).toEqual({ level: "info", text: "按 UTC 结算" });
   });
 });

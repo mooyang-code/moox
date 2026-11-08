@@ -19,7 +19,7 @@
 
 <script setup lang="ts">
 import { computed, useAttrs, type StyleValue } from "vue";
-import { msToWallClock, wallClockToMs, zoneSuffix } from "@/utils/time-zone";
+import { addDays, msToWallClock, wallClockToMs, zoneSuffix } from "@/utils/time-zone";
 
 /**
  * 按指定时区选时间范围：对外的 v-model 是 [起, 止) 两个毫秒时刻，起始含、结束不含。
@@ -43,18 +43,11 @@ const props = withDefaults(
 );
 const emit = defineEmits<{ "update:modelValue": [value: [number, number] | null] }>();
 
-const DAY = 86_400_000;
 const attrs = useAttrs();
 const pickerAttrs = computed(() =>
   Object.fromEntries(Object.entries(attrs).filter(([key]) => key !== "class" && key !== "style"))
 );
 const format = computed(() => (props.showTime ? "YYYY-MM-DD HH:mm" : "YYYY-MM-DD"));
-
-/** 日期字符串的下一天（纯日历运算，和时区无关）。 */
-function nextDate(date: string): string {
-  const [y, m, d] = date.split("-").map(Number);
-  return new Date(Date.UTC(y, m - 1, d) + DAY).toISOString().slice(0, 10);
-}
 
 /** 毫秒范围换成交给 Arco 的墙钟：只选日期时止是不含的下一天零点，显示时退回到前一天。 */
 function toWall(range: [number, number]): [string, string] {
@@ -75,7 +68,7 @@ function onChange(value: unknown) {
   }
   const [start, end] = value as [string, string];
   const from = wallClockToMs(start, props.zone);
-  const to = wallClockToMs(props.showTime ? end : nextDate(end), props.zone);
+  const to = wallClockToMs(props.showTime ? end : addDays(end, 1), props.zone);
   emit("update:modelValue", from === null || to === null ? null : [from, to]);
 }
 </script>

@@ -38,7 +38,10 @@ import { createLatestRequestGuard } from "@/utils/latest-request";
 import SectionBlock from "../shared/section-block.vue";
 import { detailContextKey } from "./context";
 import { buildPnlView, pnlRanges, pnlRequest, type PnlRange, type PnlView } from "./pnl-model";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
 
+// 交易页的时间按当前空间登记的时区显示
+const displayZone = useDisplayZone();
 const { logical, dataVersion } = inject(detailContextKey)!;
 
 const range = ref<PnlRange>("7d");
@@ -54,7 +57,7 @@ async function load() {
   try {
     const rsp = await summarizeAccountPnl(pnlRequest(logical.value.logical_account_id, range.value));
     if (!request.isLatest()) return;
-    view.value = buildPnlView(rsp);
+    view.value = buildPnlView(rsp, displayZone.value);
   } catch (cause) {
     if (!request.isLatest()) return;
     view.value = null;

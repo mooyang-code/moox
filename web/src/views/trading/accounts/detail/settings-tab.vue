@@ -62,7 +62,7 @@
           </a-table-column>
           <a-table-column title="最近同步" :width="120">
             <template #cell="{ record }"
-              ><span class="tx-muted">{{ fmtClock(record.account.last_sync_at) }}</span></template
+              ><span class="tx-muted">{{ formatInstant(record.account.last_sync_at, displayZone, "minute") }}</span></template
             >
           </a-table-column>
           <a-table-column title="操作" :width="190" :fixed="isNarrow ? undefined : 'right'">
@@ -214,7 +214,7 @@ import FundSettingsForm from "../../settings/fund-settings-form.vue";
 import OrderSettingsForm from "../../settings/order-settings-form.vue";
 import ConfirmDialog from "../shared/confirm-dialog.vue";
 import { accountEnvironment } from "../shared/environment";
-import { fmtClock, fmtMoney } from "../shared/format";
+import { fmtMoney } from "../shared/format";
 import { marketsText } from "../shared/markets";
 import MemberSettings from "../shared/member-settings.vue";
 import { eligibleAccounts } from "../shared/membership";
@@ -222,7 +222,11 @@ import SectionBlock from "../shared/section-block.vue";
 import StatusMark from "../shared/status-mark.vue";
 import { detailContextKey } from "./context";
 import MemberDialog from "./member-dialog.vue";
+import { formatInstant } from "@/utils/time-zone";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
 
+// 交易页的时间按当前空间登记的时区显示
+const displayZone = useDisplayZone();
 const {
   logical,
   accounts,
