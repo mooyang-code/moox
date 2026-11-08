@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -14,6 +15,7 @@ import (
 	"github.com/mooyang-code/moox/modules/archive/internal/objectstore"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/pacing"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"gopkg.in/yaml.v3"
 )
 
@@ -68,6 +70,7 @@ type Config struct {
 	Staging         StagingSection                   `yaml:"staging"`
 	Pacing          PacingSection                    `yaml:"pacing"`
 	Health          HealthSection                    `yaml:"health"`
+	DataAPI         DataAPISection                   `yaml:"data_api"`
 	Maintenance     MaintenanceSection               `yaml:"maintenance"`
 	// ObjectStore 是导出文件的对象存储副本；整段省略（nil）表示不使用。
 	ObjectStore *objectstore.Config `yaml:"object_store"`
@@ -109,6 +112,14 @@ type HealthSection struct {
 	Addr string `yaml:"addr"`
 }
 
+// DataAPISection 是数据端口：分区副本下载与最新数据预览。只听 127.0.0.1，不验签，外部只能经 control 中转进入。
+type DataAPISection struct {
+	// Listen 是监听地址，主机必须是 127.0.0.1，端口必须是服务目录里 archive-worker 的 relay_http 端口。
+	Listen string `yaml:"listen"`
+	// MaxBytesPerSecond 是全部下载共享的带宽上限（与运行的节奏带宽分开计）。
+	MaxBytesPerSecond ByteSize `yaml:"max_bytes_per_second"`
+}
+
 // MaintenanceSection 是每天的维护时刻（本机时区）。
 type MaintenanceSection struct {
 	At string `yaml:"at"`
@@ -129,6 +140,7 @@ func Default() *Config {
 			MaxBytesPerSecond: ByteSize(512 << 10), MaxConcurrentRuns: 4, MaxRunsPerDataNode: 2, PageRows: 500,
 		},
 		Health:      HealthSection{Addr: "127.0.0.1:11418"},
+		DataAPI:     DataAPISection{Listen: "127.0.0.1:" + strconv.Itoa(DataPort()), MaxBytesPerSecond: ByteSize(2 << 20)},
 		Maintenance: MaintenanceSection{At: "04:17:43"},
 	}
 }
@@ -212,6 +224,9 @@ func (c *Config) Validate() error {
 	if strings.TrimSpace(c.Health.Addr) == "" {
 		return fmt.Errorf("health.addr 不能为空")
 	}
+	if err := c.DataAPI.validate(); err != nil {
+		return err
+	}
 	if _, err := ParseClock(c.Maintenance.At); err != nil {
 		return fmt.Errorf("maintenance.at: %w", err)
 	}
@@ -219,6 +234,33 @@ func (c *Config) Validate() error {
 		if err := c.ObjectStore.Validate(); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// DataPort 返回服务目录里 archive-worker 的 relay_http 端口（Admin 直连与中转都连这个端口）。
+func DataPort() int {
+	catalog, err := servicecatalog.LoadEmbedded()
+	if err != nil {
+		panic(fmt.Sprintf("内嵌服务目录无效: %v", err))
+	}
+	component, ok := catalog.Component(Caller)
+	if !ok || component.RelayHTTP == nil {
+		panic("内嵌服务目录没有 archive-worker 的 relay_http 端口")
+	}
+	return component.RelayHTTP.Port
+}
+
+func (d DataAPISection) validate() error {
+	host, port, err := net.SplitHostPort(strings.TrimSpace(d.Listen))
+	if err != nil || host != "127.0.0.1" {
+		return fmt.Errorf("data_api.listen 必须是 127.0.0.1:<端口>（数据端口不验签，只能听回环地址）")
+	}
+	if port != strconv.Itoa(DataPort()) {
+		return fmt.Errorf("data_api.listen 的端口必须是 %d（服务目录里登记的数据端口）", DataPort())
+	}
+	if d.MaxBytesPerSecond < ByteSize(64<<10) {
+		return fmt.Errorf("data_api.max_bytes_per_second 不能小于 64KB")
 	}
 	return nil
 }

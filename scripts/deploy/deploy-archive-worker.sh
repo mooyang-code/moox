@@ -341,6 +341,10 @@ pacing:
 health:
   addr: 127.0.0.1:11418
 
+data_api:
+  listen: 127.0.0.1:11428
+  max_bytes_per_second: 2MB
+
 maintenance:
   at: "04:17:43"
 EOF2

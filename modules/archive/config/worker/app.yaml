@@ -34,6 +34,11 @@ pacing:
 health:
   addr: 127.0.0.1:11418
 
+# 数据端口：分区副本下载与最新数据预览。只听回环地址、不验签，控制台经 Admin（只出站主机上经 control 中转）进入。
+data_api:
+  listen: 127.0.0.1:11428
+  max_bytes_per_second: 2MB          # 全部下载共享，与 pacing 的带宽分开计
+
 maintenance:
   at: "04:17:43"                     # 每天维护时刻（本机时区）
 

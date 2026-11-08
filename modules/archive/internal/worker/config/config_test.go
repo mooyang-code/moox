@@ -44,6 +44,9 @@ func TestLoadAppliesTheDocumentedDefaults(t *testing.T) {
 		cfg.Staging.CacheSize != 256<<20 || cfg.Worker.ExportFormat != "csv.gz" || cfg.Health.Addr != "127.0.0.1:11418" || cfg.Maintenance.At != "04:17:43" {
 		t.Fatalf("defaults = %+v", cfg)
 	}
+	if cfg.DataAPI.Listen != "127.0.0.1:11428" || cfg.DataAPI.MaxBytesPerSecond != 2<<20 {
+		t.Fatalf("data_api = %+v", cfg.DataAPI)
+	}
 	if cfg.StatePath() != filepath.Join(testRoot, ".state", "staging.db") {
 		t.Fatalf("state path = %s", cfg.StatePath())
 	}
@@ -71,6 +74,9 @@ func TestLoadRejectsBadSettings(t *testing.T) {
 		"small cache":     "",
 		"two documents":   "---\nworker:\n  worker_id: x\n",
 		"export formats":  "",
+		"public data api": "data_api:\n  listen: 0.0.0.0:11428\n",
+		"data api port":   "data_api:\n  listen: 127.0.0.1:11429\n",
+		"slow data api":   "data_api:\n  max_bytes_per_second: 1KB\n",
 	} {
 		body := base
 		switch name {

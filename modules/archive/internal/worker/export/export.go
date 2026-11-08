@@ -67,7 +67,8 @@ func ext(format string) string {
 	return ".csv.gz"
 }
 
-func checkComponent(part string) error {
+// CheckComponent 检查一个路径片段（空间、用途、目录名、数据集等）不为空、不含斜杠、不以点开头，防止路径穿越。
+func CheckComponent(part string) error {
 	if part == "" || strings.ContainsAny(part, `/\`) || part == "." || part == ".." || strings.HasPrefix(part, ".") {
 		return fmt.Errorf("不安全的路径片段 %q", part)
 	}
@@ -96,7 +97,7 @@ func RelPath(spaceID, purpose, dirName, partitionKey, format string) (string, er
 // DatasetDir 返回任务目录相对归档根目录的路径 <space>/<purpose>/<dir_name>（斜杠分隔），三段都必须是安全的路径片段。
 func DatasetDir(spaceID, purpose, dirName string) (string, error) {
 	for _, part := range []string{spaceID, purpose, dirName} {
-		if err := checkComponent(part); err != nil {
+		if err := CheckComponent(part); err != nil {
 			return "", err
 		}
 	}

@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -402,6 +403,44 @@ func TestGetTimeoutIsNotReportedAsCancellation(t *testing.T) {
 	}
 	_, _, err := e.client.Get(t.Context(), "slow.csv.gz", &bytes.Buffer{})
 	if err == nil || errors.Is(err, context.Canceled) || !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "超时") {
+		t.Fatalf("超时错误 = %v", err)
+	}
+}
+
+// Open 边读边返回对象内容与大小；对象不存在报 ErrNotFound；本地计时器超时不报成取消。
+func TestOpenStreamsObjectAndClassifiesErrors(t *testing.T) {
+	e := newEnv(t, URLStylePath, false, nil)
+	content := bytes.Repeat([]byte("archive-"), 20000)
+	e.srv.Put(DefaultPrefix+"p.csv.gz", content)
+	stream, err := e.client.Open(t.Context(), "p.csv.gz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stream.Size != int64(len(content)) {
+		t.Fatalf("size = %d", stream.Size)
+	}
+	got, err := io.ReadAll(stream)
+	if err != nil || !bytes.Equal(got, content) {
+		t.Fatalf("read = %d bytes, %v", len(got), err)
+	}
+	if err := stream.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.client.Open(t.Context(), "missing.csv.gz"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing object = %v", err)
+	}
+
+	saved := transferBase
+	transferBase = 50 * time.Millisecond
+	t.Cleanup(func() { transferBase = saved })
+	e.srv.Hook = func(r *http.Request, _ string) (int, string, bool) {
+		if r.Method == http.MethodGet {
+			time.Sleep(300 * time.Millisecond)
+		}
+		return 0, "", false
+	}
+	_, err = e.client.Open(t.Context(), "p.csv.gz")
+	if err == nil || errors.Is(err, context.Canceled) || !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("超时错误 = %v", err)
 	}
 }
