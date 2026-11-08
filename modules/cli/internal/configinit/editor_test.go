@@ -463,3 +463,56 @@ func TestEditorKeepsThePrivateKeyFile(t *testing.T) {
 		t.Fatalf("保存后应保留每台主机的私钥路径:\n%s", plain)
 	}
 }
+
+// 归档对象存储一组：打开保存时新增整段，关掉保存时整段删除，必填项缺了拒绝保存。
+func TestEditorAddsAndDropsTheArchiveObjectStoreSection(t *testing.T) {
+	h := startEditor(t, nil)
+	_, reply, _ := h.call("config/form", struct{}{}, nil)
+	form := *reply.Form
+	if os := form.ArchiveObjectStore; os.Enabled || os.Prefix != "moox-archive/" || os.URLStyle != "virtual" || !os.UseTLS || os.StorageClass != "STANDARD_IA" {
+		t.Fatalf("没配时的默认值 = %+v", os)
+	}
+	before := h.plain()
+	bad := form
+	bad.ArchiveObjectStore = FormObjectStore{Enabled: true, Endpoint: "https://cos.ap-nanjing.myqcloud.com", Region: "ap-nanjing", Bucket: "b-1", URLStyle: "virtual", SecretID: "s3-1"}
+	if status, reply, _ := h.call("config/update", bad, nil); status != http.StatusUnprocessableEntity || !strings.Contains(reply.Message, "endpoint") {
+		t.Fatalf("地址带协议应拒绝: %d %+v", status, reply)
+	}
+	bad.ArchiveObjectStore.Endpoint, bad.ArchiveObjectStore.SecretID = "cos.ap-nanjing.myqcloud.com", ""
+	if status, reply, _ := h.call("config/update", bad, nil); status != http.StatusUnprocessableEntity || !strings.Contains(reply.Message, "secret_id") {
+		t.Fatalf("缺 secret_id 应拒绝: %d %+v", status, reply)
+	}
+	if h.plain() != before {
+		t.Fatal("校验不过时文件不能变")
+	}
+
+	form.ArchiveObjectStore = FormObjectStore{Enabled: true, Endpoint: "cos.ap-nanjing.myqcloud.com", Region: "ap-nanjing", Bucket: "moox-archive-1250000000",
+		Prefix: "moox-archive/", URLStyle: "virtual", UseTLS: true, StorageClass: "STANDARD_IA", SecretID: "secret_s3_writer"}
+	if status, _, text := h.call("config/update", form, nil); status != http.StatusOK {
+		t.Fatalf("保存: %d %s", status, text)
+	}
+	manifest, err := setupconfig.Parse([]byte(h.plain()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := manifest.ArchiveObjectStore
+	if got == nil || got.Endpoint != "cos.ap-nanjing.myqcloud.com" || got.Bucket != "moox-archive-1250000000" || !got.TLS() || got.StorageClass != "STANDARD_IA" || got.SecretID != "secret_s3_writer" || got.URLStyle != "virtual" {
+		t.Fatalf("写入的段 = %+v", got)
+	}
+	_, reply, _ = h.call("config/form", struct{}{}, nil)
+	if os := reply.Form.ArchiveObjectStore; !os.Enabled || os.SecretID != "secret_s3_writer" {
+		t.Fatalf("回读 = %+v", os)
+	}
+
+	form.ArchiveObjectStore.Enabled = false
+	if status, _, text := h.call("config/update", form, nil); status != http.StatusOK {
+		t.Fatalf("关闭: %d %s", status, text)
+	}
+	after := h.plain()
+	if strings.Contains(after, "\n[archive_object_store]") || strings.Contains(after, "secret_s3_writer") || !strings.Contains(after, "# [archive_object_store]") {
+		t.Fatalf("关闭后应整段删除:\n%s", after)
+	}
+	if manifest, err := setupconfig.Parse([]byte(after)); err != nil || manifest.ArchiveObjectStore != nil {
+		t.Fatalf("关闭后 = %+v %v", manifest.ArchiveObjectStore, err)
+	}
+}

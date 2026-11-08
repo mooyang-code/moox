@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -290,7 +291,8 @@ func finishedPartition(key string, status string) Partition {
 	return p
 }
 
-func TestClaimRunsOnlyGivesAPartitionedTaskToItsWorker(t *testing.T) {
+// M3：任务不再钉死在登记分区的 worker 上，换了活动 worker 也能领取，登记的 worker 跟着最近一次上报变。
+func TestClaimRunsGivesAPartitionedTaskToAnyActiveWorker(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
 	mustTask(t, s, "crypto", "ds1", true)
@@ -306,11 +308,17 @@ func TestClaimRunsOnlyGivesAPartitionedTaskToItsWorker(t *testing.T) {
 	if _, err := s.CreateRun(ctx, "crypto", "ds1", KindManual, time.Time{}, time.Time{}, t0.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	if other, _ := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w2", FreeSlots: 1, Now: t0, LeaseTTL: time.Minute}); len(other) != 0 {
-		t.Fatalf("分区登记在 w1 的任务不能派给 w2: %+v", other)
+	other, _ := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w2", FreeSlots: 1, Now: t0, LeaseTTL: time.Minute})
+	if len(other) != 1 {
+		t.Fatalf("分区登记在 w1 的任务也应能派给 w2: %+v", other)
 	}
-	if mine, _ := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w1", FreeSlots: 1, Now: t0, LeaseTTL: time.Minute}); len(mine) != 1 {
-		t.Fatal("w1 仍可领取")
+	c2 := other[0]
+	if err := s.CompleteRun(ctx, CompleteRequest{RunID: c2.Run.RunID, WorkerID: "w2", LeaseToken: c2.Run.LeaseToken, Status: RunSucceeded, Now: t0,
+		Partitions: []Partition{finishedPartition("2026-10-16", PartitionExported)}}); err != nil {
+		t.Fatalf("w2 的上报应被接受: %v", err)
+	}
+	if got, _ := s.GetPartition(ctx, "crypto", "ds1", "2026-10-16"); got.WorkerID != "w2" {
+		t.Fatalf("登记的 worker 应变成 w2: %q", got.WorkerID)
 	}
 }
 
@@ -411,16 +419,18 @@ func TestCompleteRunRejectsWrongLeaseOrFinishedRunsAndBadPartitions(t *testing.T
 	}
 }
 
-func TestCompletedPartitionsAreOwnedByOneWorkerAndReopenKeepsTheFile(t *testing.T) {
+func TestReopenKeepsTheFileAndTheRemoteCopy(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
 	mustTask(t, s, "crypto", "ds1", true)
 	c := mustClaim(t, s, "w1", t0)
+	final := finishedPartition("2026-10-14", PartitionFinal)
+	final.Remote = Remote{Key: "crypto/ds1/2026-10-14.abc.csv.gz", SHA256: "abc", ETag: "md5", UploadedAt: t0, VerifiedAt: t0}
 	if err := s.CompleteRun(ctx, CompleteRequest{RunID: c.Run.RunID, WorkerID: "w1", LeaseToken: c.Run.LeaseToken, Status: RunSucceeded, Now: t0,
-		Partitions: []Partition{finishedPartition("2026-10-14", PartitionFinal)}}); err != nil {
+		Partitions: []Partition{final}}); err != nil {
 		t.Fatal(err)
 	}
-	// 晚到的行把已定稿的分区重新打开：状态回到 open，文件信息保留，定稿时间清空。
+	// 晚到的行把已定稿的分区重新打开：状态回到 open，文件信息与远端副本保留，定稿时间清空。
 	if _, err := s.CreateRun(ctx, "crypto", "ds1", KindRange, t0.Add(-time.Hour), t0, t0); err != nil {
 		t.Fatal(err)
 	}
@@ -434,22 +444,178 @@ func TestCompletedPartitionsAreOwnedByOneWorkerAndReopenKeepsTheFile(t *testing.
 	if got.Status != PartitionOpen || got.RowCount != 101 || got.FilePath == "" || got.FileSHA256 != "abc" || !got.FinalizedAt.IsZero() || got.ExportCount != 1 {
 		t.Fatalf("reopened = %+v", got)
 	}
+	if got.Remote.Key != final.Remote.Key || got.Remote.SHA256 != "abc" || !got.Remote.VerifiedAt.Equal(t0) || !got.Replicated() {
+		t.Fatalf("open 不带文件时远端副本应沿用: %+v", got.Remote)
+	}
 	if got, _ := s.GetTask(ctx, "crypto", "ds1"); !got.LastSuccessAt.Equal(c.Run.StartedAt) {
 		t.Fatalf("补拉区间不推进最近成功时间: %s", got.LastSuccessAt)
 	}
-	// 另一个 worker 上报同一个分区必须被拒绝。
-	if _, err := s.CreateRun(ctx, "crypto", "ds1", KindRange, t0.Add(-time.Hour), t0, t0); err != nil {
+}
+
+// upsert 直接登记一个分区（绕过运行）。
+func upsert(t *testing.T, s *Store, p Partition) error {
+	t.Helper()
+	p.SpaceID, p.DatasetID = "crypto", "ds1"
+	if p.WorkerID == "" {
+		p.WorkerID = "w1"
+	}
+	return s.tx(context.Background(), func(tx *sql.Tx) error { return upsertPartition(context.Background(), tx, p) })
+}
+
+func TestUpsertPartitionReplacesRemoteFieldsAndKeepsTheFileSize(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	mustTask(t, s, "crypto", "ds1", true)
+	p := finishedPartition("2026-10-14", PartitionExported)
+	p.Remote = Remote{Key: "k1", SHA256: "abc", ETag: "e1", UploadedAt: t0, VerifiedAt: t0, Error: ""}
+	if err := upsert(t, s, p); err != nil {
 		t.Fatal(err)
 	}
-	c3 := mustClaim(t, s, "w1", t0)
-	if err := s.tx(ctx, func(tx *sql.Tx) error {
-		p := finishedPartition("2026-10-14", PartitionExported)
-		p.SpaceID, p.DatasetID, p.WorkerID = "crypto", "ds1", "w2"
-		return upsertPartition(ctx, tx, p)
-	}); !errors.Is(err, ErrConflict) {
-		t.Fatalf("不同 worker 上报同一分区: %v", err)
+	// 带文件的上报整体替换远端字段：远端只有旧版本、新版本上传失败。
+	p2 := p
+	p2.FileSHA256, p2.Remote = "def", Remote{Key: "k1", SHA256: "abc", ETag: "e1", UploadedAt: t0, VerifiedAt: t0, Error: "上传失败"}
+	if err := upsert(t, s, p2); err != nil {
+		t.Fatal(err)
 	}
-	_ = c3
+	got, _ := s.GetPartition(ctx, "crypto", "ds1", "2026-10-14")
+	if got.Remote.Error != "上传失败" || got.Replicated() || got.FileSHA256 != "def" {
+		t.Fatalf("远端字段应整体替换: %+v", got)
+	}
+	// 有对象键却没有 sha256：拒绝。
+	bad := p
+	bad.Remote = Remote{Key: "k2"}
+	if err := upsert(t, s, bad); err == nil {
+		t.Fatal("remote_key 非空、remote_sha256 为空应被拒")
+	}
+	// 文件大小与预览兜底：本地缺文件时上报 0、没有重新导出时不带预览，路径与 sha256 不变 → 保留登记的值。
+	zero := p2
+	zero.FileBytes, zero.Preview = 0, ""
+	if err := upsert(t, s, zero); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.GetPartition(ctx, "crypto", "ds1", "2026-10-14"); got.FileBytes != 1234 || got.Preview != p2.Preview {
+		t.Fatalf("file_bytes 与预览不应被冲成空: %d %q", got.FileBytes, got.Preview)
+	}
+	// sha256 变了就按上报值写。
+	changed := p2
+	changed.FileBytes, changed.FileSHA256 = 0, "fff"
+	if err := upsert(t, s, changed); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.GetPartition(ctx, "crypto", "ds1", "2026-10-14"); got.FileBytes != 0 {
+		t.Fatalf("sha256 变了应按上报值写: %d", got.FileBytes)
+	}
+}
+
+func TestTaskPartitionsAlsoSendsOldUnreplicatedPartitionsWhenTheObjectStoreIsOn(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	mustTask(t, s, "crypto", "ds1", true)
+	day := func(key string, start time.Time) Partition {
+		p := finishedPartition(key, PartitionFinal)
+		p.RangeStart, p.RangeEnd = start, start.AddDate(0, 0, 1)
+		return p
+	}
+	old := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	replicated := day("2026-01-01", old)
+	replicated.Remote = Remote{Key: "k", SHA256: replicated.FileSHA256, VerifiedAt: t0}
+	stale := day("2026-01-02", old.AddDate(0, 0, 1))
+	stale.Remote = Remote{Key: "k", SHA256: "older", VerifiedAt: t0}
+	pending := day("2026-01-03", old.AddDate(0, 0, 2))
+	openOld := finishedPartition("2026-01-04", PartitionOpen)
+	openOld.RangeStart, openOld.RangeEnd = old.AddDate(0, 0, 3), old.AddDate(0, 0, 4)
+	recent := day("2026-10-16", time.Date(2026, 10, 16, 0, 0, 0, 0, time.UTC))
+	recent.Remote = Remote{Key: "k", SHA256: recent.FileSHA256, VerifiedAt: t0}
+	for _, p := range []Partition{replicated, stale, pending, openOld, recent} {
+		if err := upsert(t, s, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	since := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	// 没启用对象存储：所有分区都“未复制”，只下发保留期以内的，下发量不随年份增长。
+	if plain, err := s.TaskPartitions(ctx, "crypto", "ds1", since, false); err != nil || len(plain) != 1 || plain[0].PartitionKey != "2026-10-16" {
+		t.Fatalf("未启用时只下发保留期以内的: %+v %v", plain, err)
+	}
+	got, err := s.TaskPartitions(ctx, "crypto", "ds1", since, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keys []string
+	for _, p := range got {
+		keys = append(keys, p.PartitionKey)
+	}
+	if strings.Join(keys, ",") != "2026-01-02,2026-01-03,2026-10-16" {
+		t.Fatalf("下发的分区 = %v（早于保留期、已复制的与没有文件的不下发）", keys)
+	}
+	if got[0].Remote.SHA256 != "older" {
+		t.Fatalf("下发的登记要带远端字段: %+v", got[0].Remote)
+	}
+}
+
+func TestRemoteBacklogsCountsUnreplicatedPartitionsAndTheLatestError(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	mustTask(t, s, "crypto", "ds1", true)
+	a := finishedPartition("2026-10-14", PartitionFinal)
+	a.ExportedAt = t0.Add(-80 * time.Hour)
+	a.Remote = Remote{Error: "旧错误"}
+	b := finishedPartition("2026-10-15", PartitionExported)
+	b.ExportedAt = t0.Add(-30 * time.Hour)
+	c := finishedPartition("2026-10-16", PartitionExported)
+	c.Remote = Remote{Key: "k", SHA256: c.FileSHA256, VerifiedAt: t0}
+	open := finishedPartition("2026-10-17", PartitionOpen)
+	for _, p := range []Partition{a, b, c, open} {
+		if err := upsert(t, s, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 让 b 的错误更新得更晚（c_mtime 精确到秒）。
+	if _, err := s.db.ExecContext(ctx, `UPDATE t_archive_partitions SET c_mtime = '2000-01-01 00:00:00' WHERE c_partition_key = '2026-10-14'`); err != nil {
+		t.Fatal(err)
+	}
+	b.Remote.Error = "新错误"
+	if err := upsert(t, s, b); err != nil {
+		t.Fatal(err)
+	}
+	backlogs, err := s.RemoteBacklogs(ctx, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := backlogs["crypto/ds1"]
+	if got.Unreplicated != 2 || !got.OldestExportedAt.Equal(a.ExportedAt) || got.OldestKey != "2026-10-14" || got.LastError != "新错误" || got.ErrorKey != "2026-10-15" {
+		t.Fatalf("backlog = %+v", got)
+	}
+	if other, _ := s.RemoteBacklogs(ctx, "stockcn"); len(other) != 0 {
+		t.Fatalf("按空间过滤: %+v", other)
+	}
+}
+
+func TestHeartbeatStoresTheObjectStoreSummaryAndRunsStoreUploads(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	summary := `{"endpoint":"cos.ap-nanjing.myqcloud.com","bucket":"b-1"}`
+	if _, err := s.Heartbeat(ctx, Worker{WorkerID: "w1", InstanceID: "i1", ObjectStoreJSON: summary}, t0, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	workers, _ := s.ListWorkers(ctx)
+	if len(workers) != 1 || workers[0].ObjectStoreJSON != summary {
+		t.Fatalf("workers = %+v", workers)
+	}
+	if _, err := s.Heartbeat(ctx, Worker{WorkerID: "w1", InstanceID: "i1"}, t0.Add(time.Second), time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if workers, _ := s.ListWorkers(ctx); workers[0].ObjectStoreJSON != "{}" {
+		t.Fatalf("没配对象存储时存 {}: %q", workers[0].ObjectStoreJSON)
+	}
+	mustTask(t, s, "crypto", "ds1", true)
+	c := mustClaim(t, s, "w1", t0)
+	if err := s.CompleteRun(ctx, CompleteRequest{RunID: c.Run.RunID, WorkerID: "w1", LeaseToken: c.Run.LeaseToken, Status: RunSucceeded, Now: t0,
+		Stats: RunStats{PartitionsUploaded: 3}}); err != nil {
+		t.Fatal(err)
+	}
+	if run, _ := s.GetRun(ctx, c.Run.RunID); run.Stats.PartitionsUploaded != 3 {
+		t.Fatalf("partitions_uploaded = %d", run.Stats.PartitionsUploaded)
+	}
 }
 
 func TestProgressRenewsLeaseAndSignalsCancellation(t *testing.T) {

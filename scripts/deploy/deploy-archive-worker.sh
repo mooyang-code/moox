@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # Installs moox-archive-worker as a systemd user unit on the Linux machine that
 # runs it. The worker only dials out: to the fixed native Access for archive-mgr
-# and Storage. moox-cli unpacks the release package, uploads the credentials and
-# runs this script (setup deploy-unit --profile archive-worker).
+# and Storage, and (optionally) to a standard S3 object store for partition copies.
+# moox-cli unpacks the release package, uploads the credentials and runs this
+# script (setup deploy-unit --profile archive-worker). The rendered config is
+# checked with the new binary (check-config) before it replaces the old one and
+# before the service restarts; a bad config leaves the old config and process alone.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
@@ -19,6 +22,13 @@ EXPORT_FORMAT="csv.gz"
 PAGE_ROWS="500"
 SKIP_BUILD=0
 NO_START=0
+OS_ENDPOINT=""
+OS_REGION=""
+OS_BUCKET=""
+OS_PREFIX="moox-archive/"
+OS_URL_STYLE=""
+OS_USE_TLS="true"
+OS_STORAGE_CLASS=""
 SYSTEMD_USER_DIR="${MOOX_SYSTEMD_USER_DIR:-${HOME}/.config/systemd/user}"
 
 usage() {
@@ -43,9 +53,20 @@ Options:
   --skip-build              Reuse <dir>/bin/moox-archive-worker.
   --no-start                Install files only; do not (re)start the service.
 
+Object store copies (all optional; an empty --object-store-endpoint disables them):
+  --object-store-endpoint <host[:port]>     S3 endpoint without scheme, e.g. cos.ap-nanjing.myqcloud.com
+  --object-store-region <region>            Required when enabled (COS: ap-nanjing, R2: auto)
+  --object-store-bucket <bucket>            Required when enabled (COS bucket names carry the APPID)
+  --object-store-prefix <prefix>            Key prefix ending in /. Default: moox-archive/
+  --object-store-url-style virtual|path     Required when enabled
+  --object-store-use-tls true|false         Default: true
+  --object-store-storage-class <class>      Sent as x-amz-storage-class, e.g. STANDARD_IA. Default: bucket default
+
 Credentials expected in the secrets directory (regular files, mode 0600):
   access-archive-worker.key          External archive-worker signing key exported by Admin
   storage-primary-auth.secret        MOOX_STORAGE_PRIMARY_AUTH_SECRET of the Storage deployment
+  archive-object-store.env           Only with --object-store-endpoint: ACCESS_KEY_ID= / SECRET_ACCESS_KEY= lines
+                                     (projected by moox-cli from the Admin secret named in [archive_object_store])
 EOF2
 }
 
@@ -71,6 +92,13 @@ while [[ $# -gt 0 ]]; do
     --health-env) HEALTH_ENV="$2"; shift 2 ;;
     --export-format) EXPORT_FORMAT="$2"; shift 2 ;;
     --page-rows) PAGE_ROWS="$2"; shift 2 ;;
+    --object-store-endpoint) OS_ENDPOINT="$2"; shift 2 ;;
+    --object-store-region) OS_REGION="$2"; shift 2 ;;
+    --object-store-bucket) OS_BUCKET="$2"; shift 2 ;;
+    --object-store-prefix) OS_PREFIX="$2"; shift 2 ;;
+    --object-store-url-style) OS_URL_STYLE="$2"; shift 2 ;;
+    --object-store-use-tls) OS_USE_TLS="$2"; shift 2 ;;
+    --object-store-storage-class) OS_STORAGE_CLASS="$2"; shift 2 ;;
     --skip-build) SKIP_BUILD=1; shift ;;
     --no-start) NO_START=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -84,6 +112,16 @@ done
 [[ "${ACCESS_KEY_ID}" =~ ^[A-Za-z0-9._@:-]+$ && ${#ACCESS_KEY_ID} -le 128 ]] || fail "--access-key-id must be the assigned credential identifier"
 [[ "${EXPORT_FORMAT}" == "csv" || "${EXPORT_FORMAT}" == "csv.gz" ]] || fail "--export-format must be csv or csv.gz"
 [[ "${PAGE_ROWS}" =~ ^[0-9]+$ && "${PAGE_ROWS}" -ge 1 && "${PAGE_ROWS}" -le 2000 ]] || fail "--page-rows must be 1..2000"
+if [[ -n "${OS_ENDPOINT}" ]]; then
+  # 只做最基本的格式检查，严格校验由 worker 的 check-config 负责。
+  [[ "${OS_ENDPOINT}" =~ ^[A-Za-z0-9.-]+(:[0-9]+)?$ ]] || fail "--object-store-endpoint must be host[:port] without a scheme"
+  [[ "${OS_REGION}" =~ ^[A-Za-z0-9_-]+$ ]] || fail "--object-store-region is required"
+  [[ "${OS_BUCKET}" =~ ^[a-z0-9][a-z0-9.-]+$ ]] || fail "--object-store-bucket is required"
+  [[ "${OS_URL_STYLE}" == "virtual" || "${OS_URL_STYLE}" == "path" ]] || fail "--object-store-url-style must be virtual or path"
+  [[ "${OS_USE_TLS}" == "true" || "${OS_USE_TLS}" == "false" ]] || fail "--object-store-use-tls must be true or false"
+  [[ "${OS_PREFIX}" =~ ^[A-Za-z0-9._/-]+/$ ]] || fail "--object-store-prefix must end with /"
+  [[ -z "${OS_STORAGE_CLASS}" || "${OS_STORAGE_CLASS}" =~ ^[A-Z_]+$ ]] || fail "--object-store-storage-class must be like STANDARD_IA"
+fi
 mkdir -p "${DEPLOY_DIR}"
 DEPLOY_DIR="$(cd "${DEPLOY_DIR}" && pwd -P)"
 SECRETS_DIR="${SECRETS_DIR:-${DEPLOY_DIR}/secrets}"
@@ -109,16 +147,37 @@ chmod 0700 "${SECRETS_DIR}"
 for secret in access-archive-worker.key storage-primary-auth.secret; do
   require_secret "${secret}"
 done
+if [[ -n "${OS_ENDPOINT}" ]]; then
+  require_secret archive-object-store.env
+fi
 
+# 健康检查凭据由 moox-cli 按集群运行身份渲染后传入（Monitor 经中转探测时用同一把）；重复部署不带 --health-env 时沿用已有的。
+health_env="${SECRETS_DIR}/health-auth.env"
+if [[ -n "${HEALTH_ENV}" ]]; then
+  [[ -f "${HEALTH_ENV}" && ! -L "${HEALTH_ENV}" ]] || fail "missing --health-env file ${HEALTH_ENV}"
+  [[ "$(file_mode "${HEALTH_ENV}")" == 600 ]] || fail "--health-env file ${HEALTH_ENV} must have mode 0600"
+  for var in MOOX_HEALTH_AUTH_VERSION MOOX_HEALTH_AUTH_ACCESS_KEY MOOX_HEALTH_AUTH_SECRET_KEY; do
+    grep -Eq "^${var}=[^[:space:]]+$" "${HEALTH_ENV}" || fail "--health-env file lacks ${var}"
+  done
+  (umask 077; cp "${HEALTH_ENV}" "${health_env}.new" && mv -f "${health_env}.new" "${health_env}")
+fi
+[[ -s "${health_env}" ]] || fail "--health-env is required for the first deployment"
+health_access="$(sed -n 's/^MOOX_HEALTH_AUTH_ACCESS_KEY=//p' "${health_env}")"
+health_secret="$(sed -n 's/^MOOX_HEALTH_AUTH_SECRET_KEY=//p' "${health_env}")"
+[[ -n "${health_access}" && -n "${health_secret}" ]] || fail "invalid ${health_env}"
+
+# 新二进制先放在 .new，和新配置一起经 check-config 校验通过后才替换。
+candidate="${DEPLOY_DIR}/bin/moox-archive-worker"
 if [[ -n "${BINARY}" ]]; then
   [[ -f "${BINARY}" ]] || fail "missing binary ${BINARY}"
   install -m 0755 "${BINARY}" "${DEPLOY_DIR}/bin/moox-archive-worker.new"
-  mv -f "${DEPLOY_DIR}/bin/moox-archive-worker.new" "${DEPLOY_DIR}/bin/moox-archive-worker"
+  candidate="${DEPLOY_DIR}/bin/moox-archive-worker.new"
 fi
-[[ -x "${DEPLOY_DIR}/bin/moox-archive-worker" ]] || fail "missing ${DEPLOY_DIR}/bin/moox-archive-worker"
+[[ -x "${candidate}" ]] || fail "missing ${candidate}"
 
+config_new="${DEPLOY_DIR}/config/app.yaml.new"
 umask 077
-cat >"${DEPLOY_DIR}/config/app.yaml" <<EOF2
+cat >"${config_new}" <<EOF2
 # Rendered by scripts/deploy/deploy-archive-worker.sh; edit the flags, not this file.
 gateway_client:
   access_address: "${ACCESS_ADDRESS}"
@@ -156,22 +215,36 @@ health:
 maintenance:
   at: "04:17:43"
 EOF2
+if [[ -n "${OS_ENDPOINT}" ]]; then
+  cat >>"${config_new}" <<EOF2
+
+object_store:
+  endpoint: "${OS_ENDPOINT}"
+  region: "${OS_REGION}"
+  bucket: "${OS_BUCKET}"
+  prefix: "${OS_PREFIX}"
+  url_style: ${OS_URL_STYLE}
+  use_tls: ${OS_USE_TLS}
+  credentials_file: ${SECRETS_DIR}/archive-object-store.env
+EOF2
+  if [[ -n "${OS_STORAGE_CLASS}" ]]; then
+    printf '  storage_class: %s\n' "${OS_STORAGE_CLASS}" >>"${config_new}"
+  fi
+fi
 umask 022
 
-# 健康检查凭据由 moox-cli 按集群运行身份渲染后传入（Monitor 经中转探测时用同一把）；重复部署不带 --health-env 时沿用已有的。
-health_env="${SECRETS_DIR}/health-auth.env"
-if [[ -n "${HEALTH_ENV}" ]]; then
-  [[ -f "${HEALTH_ENV}" && ! -L "${HEALTH_ENV}" ]] || fail "missing --health-env file ${HEALTH_ENV}"
-  [[ "$(file_mode "${HEALTH_ENV}")" == 600 ]] || fail "--health-env file ${HEALTH_ENV} must have mode 0600"
-  for var in MOOX_HEALTH_AUTH_VERSION MOOX_HEALTH_AUTH_ACCESS_KEY MOOX_HEALTH_AUTH_SECRET_KEY; do
-    grep -Eq "^${var}=[^[:space:]]+$" "${HEALTH_ENV}" || fail "--health-env file lacks ${var}"
-  done
-  (umask 077; cp "${HEALTH_ENV}" "${health_env}.new" && mv -f "${health_env}.new" "${health_env}")
+if ! "${candidate}" check-config --config "${config_new}"; then
+  rm -f "${config_new}" "${DEPLOY_DIR}/bin/moox-archive-worker.new"
+  fail "the rendered config did not pass check-config; the installed config, binary and service are unchanged"
 fi
-[[ -s "${health_env}" ]] || fail "--health-env is required for the first deployment"
-health_access="$(sed -n 's/^MOOX_HEALTH_AUTH_ACCESS_KEY=//p' "${health_env}")"
-health_secret="$(sed -n 's/^MOOX_HEALTH_AUTH_SECRET_KEY=//p' "${health_env}")"
-[[ -n "${health_access}" && -n "${health_secret}" ]] || fail "invalid ${health_env}"
+mv -f "${config_new}" "${DEPLOY_DIR}/config/app.yaml"
+if [[ -n "${BINARY}" ]]; then
+  mv -f "${DEPLOY_DIR}/bin/moox-archive-worker.new" "${DEPLOY_DIR}/bin/moox-archive-worker"
+fi
+if [[ -z "${OS_ENDPOINT}" ]]; then
+  # 不启用对象存储：删掉残留的凭据，免得留下用不到的密钥。
+  rm -f "${SECRETS_DIR}/archive-object-store.env"
+fi
 
 render_template() {
   sed -e "s#__ROOT__#${DEPLOY_DIR}#g" -e "s#__SECRETS__#${SECRETS_DIR}#g" -e "s#__HEALTH_ACCESS_KEY__#${health_access}#g" \

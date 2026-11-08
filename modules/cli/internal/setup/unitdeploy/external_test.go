@@ -258,3 +258,56 @@ func TestExternalStopScriptFailsWhenSystemdIsUnreachable(t *testing.T) {
 	require.NoError(t, os.WriteFile(filepath.Join(bin, "systemctl"), []byte("#!/bin/sh\ncase \"$2\" in is-active) echo inactive; exit 3;; is-enabled) echo disabled; exit 1;; esac\nexit 0\n"), 0o755))
 	require.NoError(t, run(), "systemd 可达且服务已停止、未自启")
 }
+
+func TestDeployExternalArchiveWorkerProjectsTheObjectStoreCredential(t *testing.T) {
+	const objectStoreSecret = "ObjectStoreSecretValue-0123456789"
+	in, target, _ := externalFixture(t, "archive-worker", false)
+	in.manifest.Paths.ArchiveRoot = "/data/moox/archive"
+	plain := true
+	in.manifest.ArchiveObjectStore = &setupconfig.ArchiveObjectStore{Endpoint: "cos.ap-nanjing.myqcloud.com", Region: "ap-nanjing", Bucket: "moox-archive-1250000000",
+		Prefix: "moox-archive/", URLStyle: "virtual", UseTLS: &plain, StorageClass: "STANDARD_IA", SecretID: "secret_s3"}
+	in.objectStoreEnv = []byte("ACCESS_KEY_ID=AKIDx\nSECRET_ACCESS_KEY=" + objectStoreSecret + "\n")
+	_, err := deployExternal(t.Context(), in)
+	require.NoError(t, err)
+	stage := "/data/moox/bootstrap-input/external/archive-worker-export1"
+	assert.Equal(t, in.objectStoreEnv, target.uploads[stage+"/secrets/archive-object-store.env"], "凭据随其他凭据一起上传")
+	var script, placed string
+	for _, argv := range target.runs {
+		line := strings.Join(argv, " ")
+		if argv[0] == "bash" {
+			script = line
+		}
+		if strings.Contains(line, "install -m 0600") {
+			placed = line
+		}
+	}
+	assert.Contains(t, placed, "archive-object-store.env", "凭据装进安装目录的 secrets")
+	for _, want := range []string{
+		"--object-store-endpoint cos.ap-nanjing.myqcloud.com", "--object-store-region ap-nanjing", "--object-store-bucket moox-archive-1250000000",
+		"--object-store-prefix moox-archive/", "--object-store-url-style virtual", "--object-store-use-tls true", "--object-store-storage-class STANDARD_IA",
+	} {
+		assert.Contains(t, script, want)
+	}
+	assert.NotContains(t, script, objectStoreSecret, "密钥不出现在命令行")
+	assert.NotContains(t, script, "secret_s3")
+}
+
+func TestDeployExternalArchiveWorkerWithoutObjectStoreSendsNoCredentialOrFlags(t *testing.T) {
+	in, target, _ := externalFixture(t, "archive-worker", false)
+	in.manifest.Paths.ArchiveRoot = "/data/moox/archive"
+	_, err := deployExternal(t.Context(), in)
+	require.NoError(t, err)
+	stage := "/data/moox/bootstrap-input/external/archive-worker-export1"
+	assert.NotContains(t, target.uploads, stage+"/secrets/archive-object-store.env")
+	for _, argv := range target.runs {
+		assert.NotContains(t, strings.Join(argv, " "), "--object-store-")
+	}
+	// 因子引擎不受影响：即使 manifest 配了对象存储。
+	engine, engineTarget, _ := externalFixture(t, "factor-engine", false)
+	engine.manifest.ArchiveObjectStore = &setupconfig.ArchiveObjectStore{Endpoint: "e", Region: "r", Bucket: "bbb", URLStyle: "path", SecretID: "s"}
+	_, err = deployExternal(t.Context(), engine)
+	require.NoError(t, err)
+	for _, argv := range engineTarget.runs {
+		assert.NotContains(t, strings.Join(argv, " "), "--object-store-")
+	}
+}

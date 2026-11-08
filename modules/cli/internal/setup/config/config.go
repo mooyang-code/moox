@@ -341,6 +341,8 @@ type Manifest struct {
 	Factors            FactorSetup               `toml:"factors"`
 	SCFPlan            SCFPlan                   `toml:"scf_plan"`
 	HostCatalog        map[string]HostDefinition `toml:"hosts"`
+	// ArchiveObjectStore 为 nil 表示归档不使用对象存储。
+	ArchiveObjectStore *ArchiveObjectStore `toml:"archive_object_store"`
 }
 
 type Snapshot struct {
@@ -680,6 +682,11 @@ func validate(manifest *Manifest) error {
 	}
 	if err := validateFactorSetup(&manifest.Factors); err != nil {
 		return err
+	}
+	if manifest.ArchiveObjectStore != nil {
+		if err := manifest.ArchiveObjectStore.Validate(); err != nil {
+			return err
+		}
 	}
 	policy := manifest.StoragePolicy()
 	if err := policy.Validate(); err != nil {

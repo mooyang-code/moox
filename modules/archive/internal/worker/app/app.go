@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/archive/internal/objectstore"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/config"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/export"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/manager"
@@ -43,6 +44,8 @@ type Options struct {
 	Now        func() time.Time
 	Sleep      func(ctx context.Context, d time.Duration) error
 	DiskUsage  DiskUsage
+	// Remote 是对象存储客户端；nil 表示没有配置。心跳带上它的摘要，每天维护时抽查远端副本。
+	Remote *objectstore.Client
 }
 
 type activeRun struct {
@@ -198,6 +201,7 @@ func (a *App) heartbeatOnce(ctx context.Context) map[string]string {
 		WorkerId: cfg.Worker.WorkerID, InstanceId: a.opts.InstanceID, Version: a.opts.Version, RootDir: cfg.Worker.RootDir,
 		DiskTotalBytes: total, DiskFreeBytes: free, StagingBytes: uint64(a.opts.Staging.FileBytes()),
 		Maintaining: maintaining, DiskLow: diskLow, PacingJson: string(pacingJSON), RunningRunIds: a.runningIDs(),
+		ObjectStore: a.objectStoreInfo(),
 	})
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -392,7 +396,7 @@ func (a *App) execute(ctx context.Context, run *activeRun) {
 			req.Status, req.Message = outcome.Status, outcome.Message
 			req.SubjectsDone, req.RequestCount, req.BytesRead, req.RowsRead = outcome.Progress.SubjectsDone, outcome.Progress.RequestCount, outcome.Progress.BytesRead, outcome.Progress.RowsRead
 			req.RowsAdded, req.RowsChanged = outcome.RowsAdded, outcome.RowsChanged
-			req.PartitionsExported, req.PartitionsFinalized = outcome.Exported, outcome.Finalized
+			req.PartitionsExported, req.PartitionsFinalized, req.PartitionsUploaded = outcome.Exported, outcome.Finalized, outcome.Uploaded
 			req.Partitions, req.Unrecoverable = outcome.Partitions, outcome.Unrecoverable
 			reported = outcome.ReportedKeys
 			if !outcome.FinalUntil.IsZero() {
@@ -492,9 +496,19 @@ func (a *App) maintainOnce(ctx context.Context) {
 	} else if len(dropped) > 0 {
 		log.Infof("archive worker dropped staging state of deleted tasks: %v", dropped)
 	}
+	a.checkRemote(ctx)
 	if err := a.opts.Staging.Maintain(ctx); err != nil {
 		log.Warnf("archive worker staging maintenance: %v", err)
 	}
+}
+
+// objectStoreInfo 返回心跳里的对象存储摘要；没有配置时为空。
+func (a *App) objectStoreInfo() *archivepb.ObjectStoreInfo {
+	if a.opts.Remote == nil {
+		return nil
+	}
+	info := a.opts.Remote.Info()
+	return &archivepb.ObjectStoreInfo{Endpoint: info.Endpoint, Bucket: info.Bucket, Prefix: info.Prefix, StorageClass: info.StorageClass, UrlStyle: info.URLStyle}
 }
 
 // Snapshot 是健康检查用的状态。

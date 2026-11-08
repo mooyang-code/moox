@@ -127,6 +127,11 @@
 ./bin/moox-cli archive worker retire --worker <ID> --yes # 退役换机后遗留的旧 worker 登记
 ```
 
+对象存储副本（可选）：`moox.toml` 的 `[archive_object_store]`（只写 endpoint、region、bucket、url_style、storage_class 与管理台密钥的 `secret_id`，不写密钥值；第一次加只能用 `config edit` 的“归档对象存储”一组）。
+配了之后 worker 每次导出就把分区单次 PUT 到对象存储、读回时本地缺文件从远端取回，换机器不用拷目录。看状态：`archive tasks list` 的 `remote_pending_count` / `remote_verified_count`，
+`archive partitions get` 的 `remote_state`（off / none / verified / failed / pending），`archive runs list` 的 `partitions_uploaded`。导出超过 24 小时没有已校验的远端副本算需关注、超过 3 天算异常。
+密钥、桶与权限的准备见 `docs/部署与运维.md` 的“归档对象存储”；worker 侧细节见 `docs/模块/归档.md` 第 9 节。
+
 ## 系统暂停、恢复与重置（只有命令行）
 
 ```bash

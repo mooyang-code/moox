@@ -75,6 +75,7 @@ table.kv th { width: 140px; color: var(--muted); font-size: 13.5px; border-botto
 label.f { display: block; min-width: 0; }
 label.f > span { display: block; font-size: 13px; color: var(--ink-2); margin-bottom: 6px; font-weight: 500; }
 label.f > small { display: block; font-size: 12px; color: var(--faint); margin-top: 6px; }
+label.check { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; font-size: 14px; color: var(--ink-2); }
 input[type=text], input[type=password], input[type=number], select { width: 100%; height: 34px; padding: 0 10px; border: 1px solid var(--line-2); border-radius: 6px;
   background: var(--field); color: var(--ink); font: inherit; font-size: 13.5px; }
 input:focus, select:focus { outline: none; border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-tint); }
@@ -320,6 +321,34 @@ button.primary:hover { filter: brightness(1.08); background: var(--brand); }
     root.append(block('告警通知', '行情中断、服务异常时推送的群机器人。',
       el('div', { class: 'fields two' }, [field('发送到', ctl.channel), field('机器人 Webhook 地址', webhook.node)])));
 
+    var os3 = form.archive_object_store || {};
+    ctl.os = {
+      enabled: el('input', { type: 'checkbox' }),
+      endpoint: input({ placeholder: 'cos.ap-nanjing.myqcloud.com' }, os3.endpoint),
+      region: input({ placeholder: 'ap-nanjing' }, os3.region),
+      bucket: input({ placeholder: 'moox-archive-1250000000' }, os3.bucket),
+      prefix: input({ placeholder: 'moox-archive/' }, os3.prefix),
+      urlStyle: el('select', {}, [el('option', { value: 'virtual', text: '虚拟主机风格（virtual）' }), el('option', { value: 'path', text: '路径风格（path）' })]),
+      useTLS: el('select', {}, [el('option', { value: 'true', text: 'HTTPS' }), el('option', { value: 'false', text: 'HTTP（只用于内网自建存储）' })]),
+      storageClass: input({ placeholder: '留空用桶的默认' }, os3.storage_class),
+      secretID: input({}, os3.secret_id)
+    };
+    ctl.os.enabled.checked = !!os3.enabled;
+    ctl.os.urlStyle.value = os3.url_style || 'virtual';
+    ctl.os.useTLS.value = os3.use_tls === false ? 'false' : 'true';
+    [ctl.os.enabled, ctl.os.urlStyle, ctl.os.useTLS].forEach(function (node) { node.addEventListener('change', function () { state.dirty = true; }); });
+    var osFields = el('div', { class: 'fields two' }, [
+      field('对象存储地址', ctl.os.endpoint, '主机名，可带端口，不写 https://'), field('地域', ctl.os.region, 'COS 填地域，R2 填 auto'),
+      field('桶名', ctl.os.bucket, 'COS 的桶名带 APPID'), field('对象键前缀', ctl.os.prefix, '权限策略按它限定，以 / 结尾'),
+      field('地址风格', ctl.os.urlStyle, 'COS 新建的桶只接受虚拟主机风格'), field('协议', ctl.os.useTLS),
+      field('存储类型', ctl.os.storageClass, '例如 STANDARD_IA（低频）'), field('密钥 secret_id', ctl.os.secretID, '管理台“设置 › 密钥”里那条的 secret_id，不是密钥值')
+    ]);
+    var syncOS = function () { osFields.hidden = !ctl.os.enabled.checked; };
+    ctl.os.enabled.addEventListener('change', syncOS);
+    syncOS();
+    root.append(block('归档对象存储', '归档 worker 导出分区后传一份到标准 S3 接口的对象存储（例如腾讯云 COS）。关闭后保存会删掉这一段；改动在下次部署 archive-worker 时生效。',
+      el('div', {}, [el('label', { class: 'check' }, [ctl.os.enabled, el('span', { text: '启用' })]), osFields])));
+
     var hosts = el('div');
     form.hosts.forEach(function (host) {
       var user = input({}, host.ssh_user), port = input({ type: 'number', min: '1', max: '65535' }, host.ssh_port || 22);
@@ -381,6 +410,11 @@ button.primary:hover { filter: brightness(1.08); background: var(--brand); }
       admin: { username: ctl.adminUser.value.trim(), password: ctl.adminPass.value },
       tencent: { secret_id: ctl.secretId.value.trim(), secret_key: ctl.secretKey.value },
       notification: { channel_type: ctl.channel.value, webhook_url: ctl.webhook.value.trim() },
+      archive_object_store: {
+        enabled: ctl.os.enabled.checked, endpoint: ctl.os.endpoint.value.trim(), region: ctl.os.region.value.trim(), bucket: ctl.os.bucket.value.trim(),
+        prefix: ctl.os.prefix.value.trim(), url_style: ctl.os.urlStyle.value, use_tls: ctl.os.useTLS.value === 'true',
+        storage_class: ctl.os.storageClass.value.trim(), secret_id: ctl.os.secretID.value.trim()
+      },
       hosts: ctl.hosts.map(function (h) { return { id: h.id, ssh_user: h.user.value.trim(), ssh_port: num(h.port), ssh_password: h.pass.value }; }),
       retention: {
         view_rows_per_series: num(ctl.viewBars), max_view_file_bytes: num(ctl.viewFileBytes), defaults: defaults,

@@ -36,6 +36,8 @@ message ArchiveRun {
   uint32 partitions_finalized = 21;
   repeated UnrecoverableRange unrecoverable = 22;
   string message = 23;
+  // partitions_uploaded：本次运行上传到对象存储并校验通过的分区数。
+  uint32 partitions_uploaded = 24;
 }
 
 // UnrecoverableRange 是超出线上保留期、无法补齐的区间（按序列合并）。
@@ -88,6 +90,10 @@ message ArchiveTask {
   repeated UnrecoverableRange unrecoverable = 29;
   // 分区登记被拒的原因（上报的行数或标的数比已登记的少）；非空时任务为异常，下一次被接受的完成上报清空。
   string blocked_reason = 30;
+  // remote_verified_count：有文件且远端是当前版本、已校验的分区数；remote_pending_count：有文件但不满足上一条的分区数（含失败的）。
+  // 没有启用对象存储时两者都是 0。
+  uint32 remote_verified_count = 31;
+  uint32 remote_pending_count = 32;
 }
 
 // ArchivePartition 是一个任务的一个分区（本地日；1d 及以上为月）。
@@ -114,6 +120,15 @@ message ArchivePartition {
   string exported_at = 19;
   string finalized_at = 20;
   string last_run_id = 21;
+  // 远端副本：remote_key 是相对对象存储 prefix 的键；remote_sha256 等于 file_sha256 且 remote_verified_at 非空时远端是当前版本。
+  string remote_key = 22;
+  string remote_sha256 = 23;
+  string remote_etag = 24;
+  string remote_uploaded_at = 25;
+  string remote_verified_at = 26;
+  string remote_error = 27;
+  // remote_state（mgr 计算）：off 未启用对象存储、none 没有文件、verified 已校验、failed 失败、pending 待上传。
+  string remote_state = 28;
 }
 
 // ArchiveWorkerInfo 是 worker 最近一次心跳的状态。
@@ -132,6 +147,16 @@ message ArchiveWorkerInfo {
   string last_heartbeat_at = 12;
   // active：租约未过期。
   bool active = 13;
+  ObjectStoreInfo object_store = 14;
+}
+
+// ObjectStoreInfo 是 worker 使用的对象存储摘要，不含任何凭据；endpoint 为空表示没有配置对象存储。
+message ObjectStoreInfo {
+  string endpoint = 1;
+  string bucket = 2;
+  string prefix = 3;
+  string storage_class = 4;
+  string url_style = 5;
 }
 
 // TaskRef 是一个归档任务的身份。
@@ -360,6 +385,7 @@ message ArchiveWorkerHeartbeatReq {
   bool disk_low = 9;
   string pacing_json = 10;
   repeated string running_run_ids = 11;
+  ObjectStoreInfo object_store = 12;
 }
 message ArchiveWorkerHeartbeatRsp {
   common.RetInfo ret_info = 1;
@@ -467,6 +493,13 @@ message PartitionReport {
   string last_changed_at = 15;
   string exported_at = 16;
   string finalized_at = 17;
+  // 远端副本（worker 上报与 mgr 下发两个方向都用），含义同 ArchivePartition。
+  string remote_key = 18;
+  string remote_sha256 = 19;
+  string remote_etag = 20;
+  string remote_uploaded_at = 21;
+  string remote_verified_at = 22;
+  string remote_error = 23;
 }
 
 message CompleteArchiveRunReq {
@@ -489,6 +522,7 @@ message CompleteArchiveRunReq {
   repeated PartitionReport partitions = 16;
   // 定稿边界：此时间之前的分区均已定稿；空串表示不更新。
   string final_until = 17;
+  uint32 partitions_uploaded = 18;
 }
 message CompleteArchiveRunRsp {
   common.RetInfo ret_info = 1;

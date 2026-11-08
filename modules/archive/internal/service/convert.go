@@ -1,6 +1,7 @@
 package service
 
 import (
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -34,6 +35,7 @@ func runToPB(r store.Run) *archivepb.ArchiveRun {
 		WorkerId: r.WorkerID, LeaseUntil: fmtRFC(r.LeaseUntil), SubjectsTotal: r.Stats.SubjectsTotal, SubjectsDone: r.Stats.SubjectsDone,
 		RequestCount: r.Stats.RequestCount, BytesRead: r.Stats.BytesRead, RowsRead: r.Stats.RowsRead, RowsAdded: r.Stats.RowsAdded,
 		RowsChanged: r.Stats.RowsChanged, PartitionsExported: r.Stats.PartitionsExported, PartitionsFinalized: r.Stats.PartitionsFinalized, Message: r.Message,
+		PartitionsUploaded: r.Stats.PartitionsUploaded,
 	}
 	for _, item := range r.Unrecoverable {
 		out.Unrecoverable = append(out.Unrecoverable, &archivepb.UnrecoverableRange{SubjectId: item.SubjectID, SeriesTag: item.SeriesTag, StartTime: item.StartTime, EndTime: item.EndTime})
@@ -41,13 +43,64 @@ func runToPB(r store.Run) *archivepb.ArchiveRun {
 	return out
 }
 
-func partitionToPB(p store.Partition) *archivepb.ArchivePartition {
+// 远端副本状态（remote_state）。
+const (
+	RemoteOff      = "off"
+	RemoteNone     = "none"
+	RemoteVerified = "verified"
+	RemoteFailed   = "failed"
+	RemotePending  = "pending"
+)
+
+// remoteState 按 4.3 节的口径计算分区的远端副本状态；remoteEnabled 为假时一律 off。
+func remoteState(p store.Partition, remoteEnabled bool) string {
+	switch {
+	case !remoteEnabled:
+		return RemoteOff
+	case p.FilePath == "":
+		return RemoteNone
+	case p.Replicated():
+		return RemoteVerified
+	case p.Remote.Error != "":
+		return RemoteFailed
+	default:
+		return RemotePending
+	}
+}
+
+func partitionToPB(p store.Partition, remoteEnabled bool) *archivepb.ArchivePartition {
 	return &archivepb.ArchivePartition{
 		SpaceId: p.SpaceID, DatasetId: p.DatasetID, PartitionKey: p.PartitionKey, RangeStart: fmtRFC(p.RangeStart), RangeEnd: fmtRFC(p.RangeEnd),
 		Status: p.Status, WorkerId: p.WorkerID, RowCount: p.RowCount, SubjectCount: p.SubjectCount, MinDataTime: fmtRFC(p.MinDataTime), MaxDataTime: fmtRFC(p.MaxDataTime),
 		FilePath: p.FilePath, FileBytes: p.FileBytes, FileSha256: p.FileSHA256, Columns: append([]string(nil), p.Columns...), Preview: p.Preview,
 		ExportCount: p.ExportCount, LastChangedAt: fmtRFC(p.LastChangedAt), ExportedAt: fmtRFC(p.ExportedAt), FinalizedAt: fmtRFC(p.FinalizedAt), LastRunId: p.LastRunID,
+		RemoteKey: p.Remote.Key, RemoteSha256: p.Remote.SHA256, RemoteEtag: p.Remote.ETag, RemoteUploadedAt: fmtRFC(p.Remote.UploadedAt),
+		RemoteVerifiedAt: fmtRFC(p.Remote.VerifiedAt), RemoteError: p.Remote.Error, RemoteState: remoteState(p, remoteEnabled),
 	}
+}
+
+// objectStoreJSON 是 t_archive_workers.c_object_store_json 的格式（字段名同 ObjectStoreInfo）。
+type objectStoreJSON struct {
+	Endpoint     string `json:"endpoint,omitempty"`
+	Bucket       string `json:"bucket,omitempty"`
+	Prefix       string `json:"prefix,omitempty"`
+	StorageClass string `json:"storage_class,omitempty"`
+	URLStyle     string `json:"url_style,omitempty"`
+}
+
+func objectStoreToJSON(info *archivepb.ObjectStoreInfo) string {
+	raw, _ := json.Marshal(objectStoreJSON{
+		Endpoint: info.GetEndpoint(), Bucket: info.GetBucket(), Prefix: info.GetPrefix(), StorageClass: info.GetStorageClass(), URLStyle: info.GetUrlStyle(),
+	})
+	return string(raw)
+}
+
+func objectStoreFromJSON(text string) *archivepb.ObjectStoreInfo {
+	var v objectStoreJSON
+	if text != "" {
+		_ = json.Unmarshal([]byte(text), &v)
+	}
+	return &archivepb.ObjectStoreInfo{Endpoint: v.Endpoint, Bucket: v.Bucket, Prefix: v.Prefix, StorageClass: v.StorageClass, UrlStyle: v.URLStyle}
 }
 
 func workerToPB(w store.Worker, now time.Time) *archivepb.ArchiveWorkerInfo {
@@ -55,6 +108,7 @@ func workerToPB(w store.Worker, now time.Time) *archivepb.ArchiveWorkerInfo {
 		WorkerId: w.WorkerID, InstanceId: w.InstanceID, Version: w.Version, RootDir: w.RootDir, DiskTotalBytes: w.DiskTotalBytes,
 		DiskFreeBytes: w.DiskFreeBytes, StagingBytes: w.StagingBytes, Maintaining: w.Maintaining, PacingJson: w.PacingJSON,
 		RunningRunIds: append([]string(nil), w.RunningRunIDs...), LeaseUntil: fmtRFC(w.LeaseUntil), LastHeartbeatAt: fmtRFC(w.LastHeartbeat), Active: w.Active(now),
+		ObjectStore: objectStoreFromJSON(w.ObjectStoreJSON),
 	}
 }
 

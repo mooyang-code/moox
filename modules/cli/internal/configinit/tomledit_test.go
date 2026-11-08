@@ -60,3 +60,43 @@ func TestPutKeyInsertsMissingKeysAndSections(t *testing.T) {
 		t.Fatal("删除不存在的键不应改动")
 	}
 }
+
+func TestDropSectionRemovesTheWholeSectionWithItsComments(t *testing.T) {
+	sample := `[admin]
+username = "admin"
+
+# 归档对象存储（可选）
+[archive_object_store]
+endpoint = "cos.ap-nanjing.myqcloud.com"
+# 段内注释
+secret_id = "s3-1"
+
+# 下一段的说明
+[storage_retention]
+view_rows_per_series = 5000
+`
+	got := strings.Join(dropSection(strings.Split(sample, "\n"), "archive_object_store"), "\n")
+	want := `[admin]
+username = "admin"
+
+# 下一段的说明
+[storage_retention]
+view_rows_per_series = 5000
+`
+	if got != want {
+		t.Fatalf("删段结果:\n%s\nwant:\n%s", got, want)
+	}
+	// 段在文件末尾。
+	tail := "[admin]\nusername = \"admin\"\n\n[archive_object_store]\nendpoint = \"x\"\n"
+	if got := strings.Join(dropSection(strings.Split(tail, "\n"), "archive_object_store"), "\n"); got != "[admin]\nusername = \"admin\"\n" {
+		t.Fatalf("删末尾的段: %q", got)
+	}
+	// 没有该段：不动；不碰名字相近的子表。
+	if got := strings.Join(dropSection(strings.Split(sample, "\n"), "missing"), "\n"); got != sample {
+		t.Fatal("没有该段时不应改动")
+	}
+	nested := "[hosts]\n[hosts.storage]\naddress = \"x\"\n"
+	if got := strings.Join(dropSection(strings.Split(nested, "\n"), "hosts.storage"), "\n"); got != "[hosts]\n" {
+		t.Fatalf("只删指定的子表: %q", got)
+	}
+}

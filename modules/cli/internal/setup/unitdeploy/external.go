@@ -9,6 +9,7 @@ import (
 	"path"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
@@ -68,7 +69,13 @@ type externalInstall struct {
 	source       setupssh.Client
 	// disabled 为 true 表示主机或该部署在 Admin 里已停用：只安装文件，不启动也不开机自启。
 	disabled bool
+	// objectStoreEnv 是归档 worker 的对象存储凭据文件内容（manifest 配了 [archive_object_store] 时由调用方从 Admin 读出），
+	// 为空表示不启用对象存储。
+	objectStoreEnv []byte
 }
+
+// objectStoreEnvFile 是对象存储凭据在 worker secrets 目录里的文件名。
+const objectStoreEnvFile = "archive-object-store.env"
 
 func deployExternal(ctx context.Context, in externalInstall) (UnitResult, error) {
 	var result UnitResult
@@ -93,6 +100,9 @@ func deployExternal(ctx context.Context, in externalInstall) (UnitResult, error)
 		program.keyFile:               []byte(credentials.Secret + "\n"),
 		"storage-primary-auth.secret": []byte(in.identity.StoragePrimarySecret + "\n"),
 		"health-auth.env":             []byte(healthEnvironment(in.identity)),
+	}
+	if len(in.objectStoreEnv) > 0 {
+		secrets[objectStoreEnvFile] = append([]byte(nil), in.objectStoreEnv...)
 	}
 	if program.eventBus != "" {
 		for _, name := range []string{program.eventBus + ".yaml", "ca.pem"} {
@@ -165,6 +175,7 @@ done`, append([]string{stage, installSecrets}, moves...)...); err != nil {
 		arguments = append(arguments, "--engine-id", "factor-engine@"+in.host.Name, "--eventbus-url", in.manifest.EventBusURLFor(in.host.Name))
 	case "archive-worker":
 		arguments = append(arguments, "--worker-id", "archive-worker@"+in.host.Name, "--root-dir", in.manifest.Paths.Resolved().ArchiveRoot)
+		arguments = append(arguments, objectStoreArguments(in.manifest.ArchiveObjectStore, len(in.objectStoreEnv) > 0)...)
 	}
 	if in.disabled {
 		arguments = append(arguments, "--no-start")
@@ -186,6 +197,24 @@ done`, append([]string{stage, installSecrets}, moves...)...); err != nil {
 		Components: []unitruntime.Status{{ID: profile, State: state, Ready: !in.disabled}},
 	}
 	return result, nil
+}
+
+// objectStoreArguments 是安装脚本的 --object-store-* 参数；没有配置或没有凭据时为空（脚本据此不启用对象存储、删掉残留凭据）。
+func objectStoreArguments(store *setupconfig.ArchiveObjectStore, hasCredential bool) []string {
+	if store == nil || !hasCredential {
+		return nil
+	}
+	args := []string{
+		"--object-store-endpoint", store.Endpoint, "--object-store-region", store.Region, "--object-store-bucket", store.Bucket,
+		"--object-store-url-style", store.URLStyle, "--object-store-use-tls", strconv.FormatBool(store.TLS()),
+	}
+	if store.Prefix != "" {
+		args = append(args, "--object-store-prefix", store.Prefix)
+	}
+	if store.StorageClass != "" {
+		args = append(args, "--object-store-storage-class", store.StorageClass)
+	}
+	return args
 }
 
 // verifyExternal 核对 systemd 用户服务的实际状态和 linger：启用时必须 enabled 且 active，停用时必须 disabled 且 inactive。

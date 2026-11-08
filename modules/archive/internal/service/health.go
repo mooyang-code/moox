@@ -35,7 +35,16 @@ type healthInput struct {
 	Lookback        time.Duration
 	SpaceTZ         string
 	SpaceLocalClose string
+	// RemoteEnabled：worker 报告启用了对象存储，远端副本规则才生效；Remote 是该任务未复制分区的汇总。
+	RemoteEnabled bool
+	Remote        store.RemoteBacklog
 }
+
+// 远端副本规则：最早一个未复制分区（按当前版本的导出时间）超过 24 小时需关注，超过 3 天异常。
+const (
+	remoteWarnAfter  = 24 * time.Hour
+	remoteErrorAfter = 72 * time.Hour
+)
 
 // consecutiveSkipsWarn 是连续跳过多少次算需关注：每分钟检查一次，复核运行期间跳过几次是常态。
 const consecutiveSkipsWarn = 10
@@ -79,7 +88,14 @@ func evaluateHealth(in healthInput) (string, string) {
 			errs = append(errs, fmt.Sprintf("有到期的运行等待，活动 worker 已离线超过 %s", workerOfflineLimit))
 		}
 	}
+	remoteErr, remoteWarn := remoteReason(in)
+	if remoteErr != "" {
+		errs = append(errs, remoteErr)
+	}
 	// 需关注。
+	if remoteWarn != "" {
+		warns = append(warns, remoteWarn)
+	}
 	// 复核失败单独看：到点拉取每分钟一条，一次成功的拉取会把失败的复核盖住。
 	for _, r := range []struct {
 		run   *store.Run
@@ -114,6 +130,30 @@ func evaluateHealth(in healthInput) (string, string) {
 	default:
 		return HealthOK, ""
 	}
+}
+
+// remoteReason 按远端副本规则返回异常或需关注的原因（至多一条非空）。
+func remoteReason(in healthInput) (errReason, warnReason string) {
+	b := in.Remote
+	if !in.RemoteEnabled || b.Unreplicated == 0 || b.OldestExportedAt.IsZero() {
+		return "", ""
+	}
+	age := in.Now.Sub(b.OldestExportedAt)
+	if age <= remoteWarnAfter {
+		return "", ""
+	}
+	window := "24 小时"
+	if age > remoteErrorAfter {
+		window = "3 天"
+	}
+	reason := fmt.Sprintf("共 %d 个分区还没有已校验的远端副本，最早的 %s 导出已超过 %s", b.Unreplicated, b.OldestKey, window)
+	if b.LastError != "" {
+		reason += "；最近错误：" + b.LastError
+	}
+	if age > remoteErrorAfter {
+		return reason, ""
+	}
+	return "", reason
 }
 
 func overduePartitions(in healthInput) int {

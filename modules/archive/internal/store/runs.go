@@ -32,6 +32,8 @@ type RunStats struct {
 	RowsChanged         uint64
 	PartitionsExported  uint32
 	PartitionsFinalized uint32
+	// PartitionsUploaded 是本次运行上传到对象存储并校验通过的分区数。
+	PartitionsUploaded uint32
 }
 
 // Run 是一次归档运行。
@@ -57,7 +59,7 @@ type Run struct {
 
 const runColumns = `c_run_id, c_space_id, c_dataset_id, c_kind, c_range_start, c_range_end, c_status, c_scheduled_at, c_started_at, c_finished_at,
 c_worker_id, c_lease_token, c_lease_until, c_subjects_total, c_subjects_done, c_request_count, c_bytes_read, c_rows_read, c_rows_added,
-c_rows_changed, c_partitions_exported, c_partitions_finalized, c_unrecoverable_json, c_message, c_ctime`
+c_rows_changed, c_partitions_exported, c_partitions_finalized, c_unrecoverable_json, c_message, c_ctime, c_partitions_uploaded`
 
 func scanRun(row rowScanner) (Run, error) {
 	var r Run
@@ -66,7 +68,7 @@ func scanRun(row rowScanner) (Run, error) {
 	err := row.Scan(&r.RunID, &r.SpaceID, &r.DatasetID, &r.Kind, &rangeStart, &rangeEnd, &r.Status, &scheduled, &started, &finished,
 		&r.WorkerID, &r.LeaseToken, &leaseUntil, &r.Stats.SubjectsTotal, &r.Stats.SubjectsDone, &r.Stats.RequestCount, &r.Stats.BytesRead,
 		&r.Stats.RowsRead, &r.Stats.RowsAdded, &r.Stats.RowsChanged, &r.Stats.PartitionsExported, &r.Stats.PartitionsFinalized,
-		&unrecoverable, &r.Message, &created)
+		&unrecoverable, &r.Message, &created, &r.Stats.PartitionsUploaded)
 	if err != nil {
 		return Run{}, err
 	}
@@ -243,7 +245,7 @@ type Claimed struct {
 }
 
 // ClaimRuns 在一个事务里按计划时刻从早到晚选出不超过空闲槽数和 DataNode 并发上限的排队运行，写入运行租约后返回。
-// 已有分区登记的任务只派给分区登记的那个 worker_id。
+// 任务派给任何持有活动租约的 worker：分区登记带着远端副本，新 worker 按登记恢复，读回时本地缺文件就从对象存储取回。
 func (s *Store) ClaimRuns(ctx context.Context, req ClaimRequest) ([]Claimed, error) {
 	if req.FreeSlots <= 0 {
 		return nil, nil
@@ -262,7 +264,7 @@ func (s *Store) ClaimRuns(ctx context.Context, req ClaimRequest) ([]Claimed, err
 				return nil
 			}
 		}
-		rows, err := tx.QueryContext(ctx, queryRuns6, req.WorkerID)
+		rows, err := tx.QueryContext(ctx, queryRuns6)
 		if err != nil {
 			return err
 		}
@@ -411,9 +413,7 @@ WHERE x.c_space_id = t.c_space_id AND x.c_dataset_id = t.c_dataset_id AND x.c_ki
 ORDER BY x.c_scheduled_at DESC, x.c_id DESC LIMIT 1)
 FROM t_archive_tasks t WHERE (? = '' OR t.c_space_id = ?))`
 	queryRuns5 = `SELECT ` + workerColumns + ` FROM t_archive_workers WHERE c_worker_id = ?`
-	queryRuns6 = `SELECT ` + runColumns + ` FROM t_archive_runs r WHERE c_status = 'queued'
-AND NOT EXISTS (SELECT 1 FROM t_archive_partitions p WHERE p.c_space_id = r.c_space_id AND p.c_dataset_id = r.c_dataset_id AND p.c_worker_id != ?)
-ORDER BY c_scheduled_at, c_id`
+	queryRuns6 = `SELECT ` + runColumns + ` FROM t_archive_runs WHERE c_status = 'queued' ORDER BY c_scheduled_at, c_id`
 	queryRuns7 = `SELECT ` + taskColumns + ` FROM t_archive_tasks WHERE c_space_id = ? AND c_dataset_id = ?`
 )
 
