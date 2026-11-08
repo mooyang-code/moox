@@ -11,6 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/ashare"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution/paper"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/stretchr/testify/require"
 )
@@ -134,10 +135,16 @@ func (f *stockFixture) target(t *testing.T, targets ...store.InstrumentTarget) s
 // holding 写入一笔股票持仓：total 是总数，available 是可卖数量（T+1 当日买入的不在里面）。
 func (f *stockFixture) holding(t *testing.T, asset, total, available string) {
 	t.Helper()
+	f.holdingLocked(t, asset, total, available, "0")
+}
+
+// holdingLocked 同 holding，另带挂单冻结的数量：当日买入 = 总数 − 冻结 − 可卖。
+func (f *stockFixture) holdingLocked(t *testing.T, asset, total, available, locked string) {
+	t.Helper()
 	account, err := f.store.GetTradingAccountByID(context.Background(), "stock-a")
 	require.NoError(t, err)
 	account.Snapshot.Balances = append(account.Snapshot.Balances, store.AssetBalance{
-		Wallet: "UNIFIED", Asset: asset, Available: available, Total: total,
+		Wallet: "UNIFIED", Asset: asset, Available: available, Total: total, Locked: locked,
 	})
 	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.UpdateTradingAccountSync(account.SpaceID, account.TradingAccountID, store.TradingAccountSyncState{
@@ -353,12 +360,17 @@ func TestStockOutOfSessionReasons(t *testing.T) {
 
 func TestClampToPriceBandUsesWiderOfRatioAndTicks(t *testing.T) {
 	instrument := stockInstrument("600000.XSHG", "100", "100")
-	// 低价股：2% × 90% 不到 9 个价位，按价位放宽。
-	require.Equal(t, "1.09", ClampToPriceBand(shared.MustDecimal("1.2"), shared.MustDecimal("1"), exchange.SideBuy, instrument).String())
-	require.Equal(t, "0.91", ClampToPriceBand(shared.MustDecimal("0.8"), shared.MustDecimal("1"), exchange.SideSell, instrument).String())
-	// 高价股按比例：100 × 1.018。
-	require.Equal(t, "101.8", ClampToPriceBand(shared.MustDecimal("110"), shared.MustDecimal("100"), exchange.SideBuy, instrument).String())
-	require.Equal(t, "98.2", ClampToPriceBand(shared.MustDecimal("90"), shared.MustDecimal("100"), exchange.SideSell, instrument).String())
+	// 低价股：2% 不到 10 个价位，按价位放宽（精确值，不留余量）。
+	require.Equal(t, "1.1", ClampToPriceBand(shared.MustDecimal("1.2"), shared.MustDecimal("1"), exchange.SideBuy, instrument).String())
+	require.Equal(t, "0.9", ClampToPriceBand(shared.MustDecimal("0.8"), shared.MustDecimal("1"), exchange.SideSell, instrument).String())
+	// 高价股按比例：100 × 1.02。
+	require.Equal(t, "102", ClampToPriceBand(shared.MustDecimal("110"), shared.MustDecimal("100"), exchange.SideBuy, instrument).String())
+	require.Equal(t, "98", ClampToPriceBand(shared.MustDecimal("90"), shared.MustDecimal("100"), exchange.SideSell, instrument).String())
+	// 基准价：买入看卖一、卖出看买一，没有时退回最新价。
+	quote := Quote{Price: shared.MustDecimal("10"), Bid: shared.MustDecimal("9.98"), Ask: shared.MustDecimal("10.01")}
+	require.Equal(t, "10.01", CageBasis(quote, exchange.SideBuy).String())
+	require.Equal(t, "9.98", CageBasis(quote, exchange.SideSell).String())
+	require.Equal(t, "10", CageBasis(Quote{Price: shared.MustDecimal("10")}, exchange.SideBuy).String())
 	// 加密货币没有价位数，行为不变。
 	crypto := store.InstrumentRecord{MarketType: "SPOT", PriceTick: "0.01", MaxBuyPriceRatio: "1.02", MinSellPriceRatio: "0.98"}
 	require.Equal(t, "1.01", ClampToPriceBand(shared.MustDecimal("1.2"), shared.MustDecimal("1"), exchange.SideBuy, crypto).String())
@@ -418,4 +430,67 @@ func TestExchangePriceSourceCarriesLimitsForStock(t *testing.T) {
 	require.Equal(t, "9", quote.LimitDown.String())
 	require.True(t, quote.Halted)
 	require.Equal(t, stockNow, quote.UpdatedAt)
+}
+
+// 高价股：一手 14.5 万元超过默认的单笔上限 10 万元，按一手下单，不能记成“单笔子单上限低于交易所最小数量”。
+func TestStockHighPriceBuysOneLotAboveChildCap(t *testing.T) {
+	fixture := newStockFixture(t)
+	fixture.quotes["600519.XSHG"] = Quote{
+		Price: shared.MustDecimal("1450"), UpdatedAt: stockNow, LimitUp: shared.MustDecimal("1595"), LimitDown: shared.MustDecimal("1305"),
+		Bid: shared.MustDecimal("1449.9"), Ask: shared.MustDecimal("1450"),
+	}
+	fixture.target(t, store.InstrumentTarget{InstrumentID: "600519.XSHG", Quantity: "1000"})
+
+	result, current := fixture.converge(t)
+
+	require.Equal(t, StatusConverging, result.Status)
+	require.Empty(t, current.BlockedTargets)
+	require.Len(t, fixture.orders.specs, 1)
+	require.Equal(t, "100", fixture.orders.specs[0].Quantity.String())
+}
+
+// 只剩顺延项的目标：有效期内 60 秒后再看一次（停牌复牌、涨跌停打开），不是 CONVERGED 之后就不管。
+func TestStockDeferredTargetRetriesWithinValidity(t *testing.T) {
+	fixture := newStockFixture(t)
+	fixture.quotes["600519.XSHG"] = Quote{Price: shared.MustDecimal("10"), UpdatedAt: stockNow, Halted: true}
+	fixture.target(t, store.InstrumentTarget{InstrumentID: "600519.XSHG", Quantity: "1000"})
+
+	result, _ := fixture.converge(t)
+
+	require.Equal(t, StatusConverged, result.Status)
+	require.Equal(t, marketDeferralRetry, result.RetryAfter)
+}
+
+// 挂单冻结的部分不是 T+1：卖不出时照常记“可卖量不足”，不写成“当日买入，次日可卖”。
+func TestStockLockedByOrdersIsNotT1(t *testing.T) {
+	fixture := newStockFixture(t)
+	fixture.holdingLocked(t, "600519.XSHG", "300", "0", "300")
+	fixture.target(t, store.InstrumentTarget{InstrumentID: "600519.XSHG", Quantity: "0"})
+
+	_, current := fixture.converge(t)
+
+	require.Len(t, current.BlockedTargets, 1)
+	require.False(t, current.BlockedTargets[0].Deferred)
+	require.Contains(t, current.BlockedTargets[0].Reason, "可卖量不足")
+}
+
+// 时段外 TargetWorker 每秒都来：状态和原因没变时不再写库。
+func TestStockOutOfSessionDoesNotRewritePendingTarget(t *testing.T) {
+	fixture := newStockFixture(t)
+	fixture.now = time.Date(2026, 11, 6, 4, 0, 0, 0, time.UTC) // 12:00 午休
+	fixture.target(t, store.InstrumentTarget{InstrumentID: "600519.XSHG", Quantity: "1000"})
+	_, first := fixture.converge(t)
+	require.Equal(t, execution.ReasonOutOfSession, first.LastError)
+	time.Sleep(1100 * time.Millisecond)
+	_, second := fixture.converge(t)
+	require.Equal(t, first.UpdatedAt, second.UpdatedAt)
+}
+
+// 休市时被模拟撮合撤掉、一股没成交的 IOC 不算一次伪市价尝试。
+func TestPseudoMarketAttemptsSkipOutOfSessionCancel(t *testing.T) {
+	children := []store.TargetChildOrder{
+		{OrderType: "LIMIT", TimeInForce: "IOC", State: "CANCELED", Quantity: "100", FilledQuantity: "0", ExchangeOrderID: "x1"},
+		{OrderType: "LIMIT", TimeInForce: "IOC", State: "CANCELED", Quantity: "100", FilledQuantity: "0", ExchangeOrderID: "x2", RejectReason: paper.OutOfSessionReason},
+	}
+	require.Equal(t, 1, pseudoMarketAttempts(children))
 }

@@ -5,6 +5,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
+	"time"
 )
 
 func MarketExecutionPrice(side exchange.Side, quote execution.MarketQuote, slippageBPS shared.Decimal) (shared.Decimal, error) {
@@ -36,4 +37,13 @@ func LimitMarketable(side exchange.Side, limit, last shared.Decimal) bool {
 		return last.Cmp(limit) <= 0
 	}
 	return last.Cmp(limit) >= 0
+}
+
+// strictQuoteFresh 是撮合和估值用的报价新鲜度：没有交易时段的场所（加密货币）保持原来的判断——报价时间不能晚于现在、
+// 不超过 maxAge；有交易时段的场所（A 股）按 execution.QuoteFresh，时段外用收盘价。
+func strictQuoteFresh(exchanges execution.ExchangeCatalog, name string, at, now time.Time, maxAge time.Duration) bool {
+	if execution.HasSession(exchanges, name) {
+		return execution.QuoteFresh(exchanges, name, at, now, maxAge)
+	}
+	return !at.IsZero() && !at.After(now) && now.Sub(at) <= maxAge
 }

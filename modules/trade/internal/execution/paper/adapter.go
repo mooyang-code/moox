@@ -57,10 +57,15 @@ func (a *Adapter) PrefetchQuotes(ctx context.Context, keys []exchange.SymbolKey)
 	return nil
 }
 
-// quoteFresh 判断报价时间是否新鲜：时段内 maxAge；A 股时段外用收盘价（execution.QuoteFresh）。
-func (a *Adapter) quoteFresh(maxAge time.Duration) func(time.Time) bool {
+// lastPriceFresh 判断降级用的最后已知价还能不能用：A 股时段外用收盘价（execution.QuoteFresh）；
+// 没有交易时段的场所保持原来的判断，取价时间前后 maxAge 以内。
+func (a *Adapter) lastPriceFresh(maxAge time.Duration) func(time.Time) bool {
 	return func(at time.Time) bool {
-		return execution.QuoteFresh(a.Exchanges, a.Account.Exchange, at, a.now(), maxAge)
+		if execution.HasSession(a.Exchanges, a.Account.Exchange) {
+			return execution.QuoteFresh(a.Exchanges, a.Account.Exchange, at, a.now(), maxAge)
+		}
+		age := a.now().Sub(at)
+		return age <= maxAge && age >= -maxAge
 	}
 }
 
@@ -308,7 +313,7 @@ func (a *Adapter) degradedPrice(
 			return price, parseErr == nil, nil
 		}
 	}
-	value, err := execution.DegradedPrice(ctx, failure, a.lastPrice(asset), a.quoteFresh(execution.LastPriceMaxAge), lastFill, cause)
+	value, err := execution.DegradedPrice(ctx, failure, a.lastPrice(asset), a.lastPriceFresh(execution.LastPriceMaxAge), lastFill, cause)
 	if err != nil {
 		return shared.Zero(), err
 	}
@@ -331,7 +336,7 @@ func (a *Adapter) valuationQuote(ctx context.Context, key exchange.SymbolKey) (s
 	if err != nil {
 		return shared.Zero(), err
 	}
-	if !a.quoteFresh(valuationQuoteMaxAge)(quote.UpdatedAt) {
+	if !strictQuoteFresh(a.Exchanges, a.Account.Exchange, quote.UpdatedAt, a.now(), valuationQuoteMaxAge) {
 		return shared.Zero(), fmt.Errorf("paper: valuation quote is stale for %s", key)
 	}
 	if quote.Price.Cmp(shared.Zero()) <= 0 {

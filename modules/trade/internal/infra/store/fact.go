@@ -759,13 +759,15 @@ type TargetChildOrder struct {
 	Attempt          int    `gorm:"column:c_attempt"`
 	// ExchangeOrderID 为空表示交易所从没确认收到这笔单（例如查无此单退回待提交、随后丢弃）。
 	ExchangeOrderID string `gorm:"column:c_exchange_order_id"`
+	RejectReason    string `gorm:"column:c_reject_reason"`
 }
 
 // sqlTargetChildOrders 取同一目标、同一标的提交过的子单。c_submitted_at 前面的 + 让 SQLite 不拿它挑索引：
 // 否则规划器会选 idx_trade_orders_target_hourly（只按组合和提交时间），扫遍组合里所有目标的子单；
 // 走 idx_trade_orders_logical_owner_state 只扫这一份目标的子单。
 const sqlTargetChildOrders = `
-	SELECT c_trading_account_id, c_side, c_order_type, c_time_in_force, c_state, c_quantity, c_filled_quantity, c_attempt, c_exchange_order_id
+	SELECT c_trading_account_id, c_side, c_order_type, c_time_in_force, c_state, c_quantity, c_filled_quantity, c_attempt,
+		c_exchange_order_id, c_reject_reason
 	FROM t_trade_orders
 	WHERE c_space_id = ? AND c_logical_account_id = ? AND c_owner_type = 'TARGET' AND c_owner_id = ?
 		AND c_instrument_id = ? AND +c_submitted_at > 0

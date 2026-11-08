@@ -33,6 +33,8 @@ type ExchangeDescriptor struct {
 	LiveUnavailable string
 	// Session 是交易时段；nil 表示全天可交易。
 	Session TradingSession
+	// SessionHours 是给人看的下单时段说明，手动下单不在时段内时写进提示。
+	SessionHours string
 	// Inspect 检测这个场所的密钥（账户类型、权限）；nil 表示不支持检测（券商、模拟盘）。
 	Inspect exchange.Inspector
 	// WholeAccount 报告某个账户配置是否由一个适配器同时服务全部市场（币安统一账户：一个余额接口、一条私有流），

@@ -24,7 +24,7 @@ const (
 	fakeInstrument   = "600519.XSHG"
 )
 
-// fakeCore 是 A 股假券商：市价单立即成交，当日买入的数量计入 Locked，次日才可卖。
+// fakeCore 是 A 股假券商：市价单立即成交，当日买入的数量不算可卖（Total 里有、Available 里没有），次日才可卖。
 type fakeCore struct {
 	*fakeExchange
 	snapshots int
@@ -70,7 +70,7 @@ func (b *fakeCore) PlaceOrder(ctx context.Context, request exchange.OrderRequest
 	return b.orders[request.ClientOrderID], nil
 }
 
-// moveBalances 调整现金和持仓；买入的数量计入 Locked，所以当日不可卖。调用方持有 b.mu。
+// moveBalances 调整现金和持仓；买入的数量不计入 Available，所以当日不可卖（Locked 只表示挂单冻结，这里没有）。调用方持有 b.mu。
 func (b *fakeCore) moveBalances(cash, total, available shared.Decimal) {
 	b.touch()
 	balances := b.account.Balances
@@ -79,13 +79,12 @@ func (b *fakeCore) moveBalances(cash, total, available shared.Decimal) {
 	b.account.AvailableFunds = balances[0].Available
 	if len(balances) == 1 {
 		b.account.Balances = append(balances, exchange.AssetBalance{Wallet: exchange.WalletSpot,
-			Asset: fakeInstrument, Available: available, Locked: total.Sub(available), Total: total,
+			Asset: fakeInstrument, Available: available, Total: total,
 		})
 		return
 	}
 	balances[1].Total = balances[1].Total.Add(total)
 	balances[1].Available = balances[1].Available.Add(available)
-	balances[1].Locked = balances[1].Total.Sub(balances[1].Available)
 }
 
 // touch 让快照时间晚于成交时间，同步才认为余额已覆盖这笔成交。
@@ -100,7 +99,6 @@ func (b *fakeCore) settle() {
 	defer b.mu.Unlock()
 	b.touch()
 	b.account.Balances[1].Available = b.account.Balances[1].Total
-	b.account.Balances[1].Locked = shared.Zero()
 }
 
 func (b *fakeCore) requestCount() int {

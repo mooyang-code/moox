@@ -121,13 +121,26 @@ func TestMarketQuoteFromSnapshot(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestMarketQuoteUnavailable(t *testing.T) {
-	market := &Market{Quotes: func(context.Context, []string) (map[string]cnstock.Quote, error) {
+// 腾讯故障：批量预取失败后 2 秒内单只取价直接返回同一个错误，不再逐只请求（每只都要等超时）；过了 2 秒再试。
+func TestMarketQuoteUnavailableIsCachedBriefly(t *testing.T) {
+	now := cst("2026-11-06 10:00:00")
+	calls := 0
+	market := &Market{Now: func() time.Time { return now }, Quotes: func(context.Context, []string) (map[string]cnstock.Quote, error) {
+		calls++
 		return nil, cnstock.ErrTimeout
 	}}
-	_, err := market.GetQuote(context.Background(), exchange.NewSymbolKey(exchange.MarketTypeStock, "600519.XSHG"))
-	require.ErrorIs(t, err, cnstock.ErrTimeout)
-	require.ErrorContains(t, err, "A 股行情不可用")
+	keys := []exchange.SymbolKey{exchange.NewSymbolKey(exchange.MarketTypeStock, "600519.XSHG"), exchange.NewSymbolKey(exchange.MarketTypeStock, "000001.XSHE")}
+	require.ErrorIs(t, market.PrefetchQuotes(context.Background(), keys), cnstock.ErrTimeout)
+	for _, key := range keys {
+		_, err := market.GetQuote(context.Background(), key)
+		require.ErrorIs(t, err, cnstock.ErrTimeout)
+		require.ErrorContains(t, err, "A 股行情不可用")
+	}
+	require.Equal(t, 1, calls)
+	now = now.Add(3 * time.Second)
+	_, err := market.GetQuote(context.Background(), keys[0])
+	require.Error(t, err)
+	require.Equal(t, 2, calls)
 }
 
 func TestLoadInstrumentsUsesSeedUntilListLoads(t *testing.T) {

@@ -1443,6 +1443,7 @@ func (s *Service) flattenSpot(
 		if total.Cmp(shared.Zero()) <= 0 {
 			continue
 		}
+		balanceTotal := total
 		instrument, found := index.spot[balance.Asset]
 		if !found {
 			if !scope.narrow() {
@@ -1497,15 +1498,33 @@ func (s *Service) flattenSpot(
 			result.addError(flattenFinal{ruleErr})
 			continue
 		}
-		// 总量不是零头而可用余额卖不出去，说明还有余额被挂单占着，下一轮再试。
-		// 减仓只卖超出目标数量的部分（此时 total 已经是超出部分）。
-		if available.Cmp(total) > 0 {
-			available = total
-		}
-		quantity := exposure.FloorToStep(available, step)
-		if quantityRuleReason(quantity, instrument) != "" || exposure.SpotDust(quantity, price, instrument) {
-			reasons[key] = flattenReason{text: "可用余额不足，部分余额仍被挂单占用"}
-			continue
+		var quantity shared.Decimal
+		if exchange.RuleFor(instrument.MarketType).BoardLot {
+			// 整手市场（A 股）：和目标执行器同一个卖出规则，卖出全部可卖数量时零股一次卖完；只因 T+1 卖不出的部分
+			// （当日买入 = 总数 − 冻结 − 可卖）这一轮不再重试，原因写明。
+			quantity, _ = targetapp.SellQuantity(instrument, total, available)
+			if quantity.IsZero() {
+				locked, _ := decimalOrZero(balance.Locked)
+				bought := balanceTotal.Sub(locked).Sub(available)
+				if later, _ := targetapp.SellQuantity(instrument, total, available.Add(bought)); exchange.RuleFor(instrument.MarketType).T1 &&
+					bought.Cmp(shared.Zero()) > 0 && !later.IsZero() {
+					reasons[key] = flattenReason{text: "当日买入，次日可卖", final: true}
+					continue
+				}
+				reasons[key] = flattenReason{text: "可用余额不足，部分余额仍被挂单占用"}
+				continue
+			}
+		} else {
+			// 总量不是零头而可用余额卖不出去，说明还有余额被挂单占着，下一轮再试。
+			// 减仓只卖超出目标数量的部分（此时 total 已经是超出部分）。
+			if available.Cmp(total) > 0 {
+				available = total
+			}
+			quantity = exposure.FloorToStep(available, step)
+			if quantityRuleReason(quantity, instrument) != "" || exposure.SpotDust(quantity, price, instrument) {
+				reasons[key] = flattenReason{text: "可用余额不足，部分余额仍被挂单占用"}
+				continue
+			}
 		}
 		if !s.waitFlattenReady(ctx, command.SpaceID, account.TradingAccountID) {
 			result.addError(&orderapp.AccountExecutionError{TradingAccountID: account.TradingAccountID, Operation: "flatten_wait_ready", Err: errWaitingBalance})
@@ -1637,9 +1656,11 @@ func (s *Service) placeOrContinueFlattenChildWithQuote(
 		},
 	}
 	spec.PositionSide = exchange.RuleFor(instrument.MarketType).PositionSide
-	if delist {
-		// 3% 滑点可能超出交易所的价格偏离限制（币安 PERCENT_PRICE），和目标执行器的伪市价单用同一个夹价函数，免得被拒。
-		limit := targetapp.ClampToPriceBand(delistLimitPrice(quote.Price, side, instrument.PriceTick), quote.Price, side, instrument)
+	if delist || exchange.RuleFor(instrument.MarketType).PriceLimits {
+		// 3% 滑点可能超出交易所的价格偏离限制（币安 PERCENT_PRICE、A 股价格笼子），和目标执行器的伪市价单用同一个夹价函数，免得被拒。
+		// A 股没有市价单：清仓同样发限价 IOC，再截到涨跌停价之间。
+		limit := targetapp.ClampToPriceBand(delistLimitPrice(quote.Price, side, instrument.PriceTick), targetapp.CageBasis(quote, side), side, instrument)
+		limit = targetapp.ClampToPriceLimits(limit, quote)
 		spec.Type, spec.FillPolicy, spec.LimitPrice = exchange.OrderTypeLimit, exchange.FillPolicyIOC, &limit
 	}
 	placed, err := s.Orders.Place(ctx, command.SpaceID, spec)

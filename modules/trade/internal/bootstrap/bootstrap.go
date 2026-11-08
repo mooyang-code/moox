@@ -642,6 +642,7 @@ func registerBuiltins(registry *execution.Registry, ashareMarket *ashare.Market)
 		SettlementAssets: []string{ashare.SettlementAsset},
 		LiveUnavailable:  errASharePending.Error(),
 		Session:          session,
+		SessionHours:     "A 股 09:30-11:30、13:00-14:57",
 	}, func(config exchange.AccountConfig, _ exchange.Credential) (execution.ExecutionAdapter, error) {
 		if config.ExecutionMode == exchange.ExecutionModeLive {
 			return nil, errASharePending

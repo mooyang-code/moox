@@ -93,7 +93,7 @@ func TestParseTencentRecordedCloseSamples(t *testing.T) {
 	main := quotes["600519.XSHG"]
 	want := Quote{
 		InstrumentID: "600519.XSHG", Last: "1453.00", PrevClose: "1452.00",
-		Bid: "1452.00", BidVolume: "2", Ask: "1453.00", AskVolume: "2",
+		Bid: "1452.00", Ask: "1453.00",
 		LimitUp: "1597.20", LimitDown: "1306.80", Time: cst("2026-11-06 16:14:58"),
 	}
 	if main != want {
@@ -118,6 +118,10 @@ func TestParseTencentRecordedCloseSamples(t *testing.T) {
 	delisted := quotes["002505.XSHE"]
 	if !delisted.Delisted || delisted.LimitUp != "" || delisted.LimitDown != "" {
 		t.Fatalf("退市样例 = %+v", delisted)
+	}
+	// 北交所旧代码换号后，旧代码上的状态是 C，按退市处理。
+	if renamed := quotes["430047.XBSE"]; !renamed.Delisted {
+		t.Fatalf("旧代码换号样例 = %+v", renamed)
 	}
 	if beijing := quotes["920045.XBSE"]; beijing.Last != "298.00" || beijing.LimitUp != "432.26" {
 		t.Fatalf("北交所样例 = %+v", beijing)

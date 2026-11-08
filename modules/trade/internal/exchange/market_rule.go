@@ -46,3 +46,14 @@ var marketRules = map[MarketType]MarketRule{
 func RuleFor[T ~string](market T) MarketRule {
 	return marketRules[MarketType(market)]
 }
+
+// MarketsWhere 按固定顺序返回规则满足条件的市场，例如有 T+1 的市场。
+func MarketsWhere(match func(MarketRule) bool) []MarketType {
+	var result []MarketType
+	for _, market := range marketOrder {
+		if match(marketRules[market]) {
+			result = append(result, market)
+		}
+	}
+	return result
+}

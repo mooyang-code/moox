@@ -40,6 +40,23 @@ func sessionOf(exchanges ExchangeCatalog, name string) TradingSession {
 	return descriptor.Session
 }
 
+// HasSession 报告场所是否登记了交易时段。没有登记的场所（加密货币）各处报价新鲜度保持原来的判断，不改用 QuoteFresh。
+func HasSession(exchanges ExchangeCatalog, name string) bool {
+	return sessionOf(exchanges, name) != nil
+}
+
+// SessionHours 返回场所登记的交易时段说明（如“A 股 09:30-11:30、13:00-14:57”），没有登记时为空串。
+func SessionHours(exchanges ExchangeCatalog, name string) string {
+	if exchanges == nil {
+		return ""
+	}
+	descriptor, ok := exchanges.Descriptor(exchange.Exchange(name))
+	if !ok {
+		return ""
+	}
+	return descriptor.SessionHours
+}
+
 // CanOrder 报告账户所在场所当前能否发新单；没有登记时段的场所全天可以。
 func CanOrder(exchanges ExchangeCatalog, name string, now time.Time) (bool, string) {
 	session := sessionOf(exchanges, name)

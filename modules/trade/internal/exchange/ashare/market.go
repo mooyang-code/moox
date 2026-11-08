@@ -52,6 +52,8 @@ type Market struct {
 
 	quoteMu sync.Mutex
 	quotes  map[string]cachedQuote
+	// failed 是最近一次取价失败的代码和失败原因：腾讯故障时 2 秒内不再逐只重试（每只都要等超时），直接返回同一个错误。
+	failed map[string]failedQuote
 
 	listMu      sync.RWMutex
 	instruments []exchange.Instrument
@@ -60,6 +62,11 @@ type Market struct {
 type cachedQuote struct {
 	quote     cnstock.Quote
 	fetchedAt time.Time
+}
+
+type failedQuote struct {
+	err error
+	at  time.Time
 }
 
 // NewMarket 用腾讯快照和东方财富列表构造；client 为空时用各自的默认超时。
@@ -176,10 +183,12 @@ func (m *Market) LoadInstruments(ctx context.Context) ([]exchange.Instrument, er
 	return nil, errListPending
 }
 
-// PrefetchQuotes 一次取回一批标的的快照（腾讯每次最多 60 只，超过分批），2 秒内取过的不再取。
+// PrefetchQuotes 一次取回一批标的的快照（腾讯每次最多 60 只，超过分批），2 秒内取过的不再取；
+// 2 秒内取价失败过的代码也不再请求，直接返回那次的错误。
 func (m *Market) PrefetchQuotes(ctx context.Context, keys []exchange.SymbolKey) error {
 	now := m.now()
 	var missing []string
+	var recentFailure error
 	seen := make(map[string]struct{}, len(keys))
 	m.quoteMu.Lock()
 	for _, key := range keys {
@@ -190,30 +199,45 @@ func (m *Market) PrefetchQuotes(ctx context.Context, keys []exchange.SymbolKey) 
 			continue
 		}
 		seen[key.Symbol] = struct{}{}
-		if cached, ok := m.quotes[key.Symbol]; !ok || now.Sub(cached.fetchedAt) > quoteReuse {
-			missing = append(missing, key.Symbol)
+		if cached, ok := m.quotes[key.Symbol]; ok && now.Sub(cached.fetchedAt) <= quoteReuse {
+			continue
 		}
+		if failure, ok := m.failed[key.Symbol]; ok && now.Sub(failure.at) <= quoteReuse {
+			recentFailure = failure.err
+			continue
+		}
+		missing = append(missing, key.Symbol)
 	}
 	m.quoteMu.Unlock()
 	if len(missing) == 0 {
-		return nil
+		return recentFailure
 	}
 	if m.Quotes == nil {
 		return errors.New("A 股行情来源未配置")
 	}
 	fetched, err := m.Quotes(ctx, missing)
-	if err != nil {
-		return fmt.Errorf("A 股行情不可用：%w", err)
-	}
 	m.quoteMu.Lock()
 	defer m.quoteMu.Unlock()
+	if err != nil {
+		err = fmt.Errorf("A 股行情不可用：%w", err)
+		if m.failed == nil {
+			m.failed = make(map[string]failedQuote)
+		}
+		for _, id := range missing {
+			m.failed[id] = failedQuote{err: err, at: now}
+		}
+		return err
+	}
 	if m.quotes == nil {
 		m.quotes = make(map[string]cachedQuote)
+	}
+	for _, id := range missing {
+		delete(m.failed, id)
 	}
 	for id, quote := range fetched {
 		m.quotes[id] = cachedQuote{quote: quote, fetchedAt: now}
 	}
-	return nil
+	return recentFailure
 }
 
 func (m *Market) snapshot(ctx context.Context, key exchange.SymbolKey) (cachedQuote, error) {

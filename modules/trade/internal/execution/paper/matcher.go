@@ -46,8 +46,8 @@ func (e *CandidateError) Unwrap() error { return e.Err }
 
 var errStaleCandidate = errors.New("paper matcher: stale candidate")
 
-// outOfSessionReason 是休市后撤掉没撮合过的订单时写的原因。
-const outOfSessionReason = "不在交易时段"
+// OutOfSessionReason 是休市后撤掉没撮合过的订单时写的原因；目标执行器据此不把它算作一次伪市价尝试。
+const OutOfSessionReason = "不在交易时段"
 
 var errBusyCandidate = errors.New("paper matcher: account is busy")
 
@@ -261,7 +261,7 @@ func (m *Matcher) Scan(ctx context.Context) error {
 						cancel()
 						continue
 					}
-					decision = Decision{Cancel: true, Reason: outOfSessionReason}
+					decision = Decision{Cancel: true, Reason: OutOfSessionReason}
 				} else if m.DecideContext != nil {
 					decision, err = m.DecideContext(candidateCtx, candidate)
 				} else if m.Decide != nil {

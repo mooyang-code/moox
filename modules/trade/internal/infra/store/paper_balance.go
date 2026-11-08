@@ -198,9 +198,13 @@ func (tx *Tx) normalizePaperFillSettlement(record *FillRecord) error {
 	return validateOrDeriveIdentity(&record.SettlementAsset, settlement, "paper fill settlement asset")
 }
 
-// paperT1BuysSQL 读一个模拟账户在某个时刻之后的买入成交（T+1 只看当日买入）。
-const paperT1BuysSQL = `SELECT c_market_type, c_exchange_symbol, c_quantity FROM t_order_fills
- WHERE c_space_id = ? AND c_trading_account_id = ? AND c_side = 'BUY' AND c_traded_at >= ?`
+// paperT1BuysSQL 一次读出一个模拟账户在某个时刻之后、在给定市场上的买入成交和它们的基础资产（T+1 只看当日买入），
+// 不在写事务里逐笔查标的。
+const paperT1BuysSQL = `SELECT i.c_base_asset AS c_base_asset, f.c_quantity AS c_quantity
+ FROM t_order_fills f
+ JOIN t_trade_instruments i ON i.c_exchange = ? AND i.c_environment = ? AND i.c_market_type = f.c_market_type
+  AND i.c_exchange_symbol = f.c_exchange_symbol
+ WHERE f.c_space_id = ? AND f.c_trading_account_id = ? AND f.c_side = 'BUY' AND f.c_traded_at >= ? AND f.c_market_type IN ?`
 
 // PaperT1Bought 返回 since 之后买入、按 T+1 当天还不能卖的数量（资产 -> 数量），只算有 T+1 规则的市场（股票）。
 func (s *Store) PaperT1Bought(ctx context.Context, spaceID, accountID string, since int64) (map[string]shared.Decimal, error) {
@@ -215,32 +219,32 @@ func (s *Store) PaperT1Bought(ctx context.Context, spaceID, accountID string, si
 
 // PaperT1Bought 是 Store.PaperT1Bought 的事务内版本：下单资金检查在写事务里读余额，T+1 也要在同一个事务里扣。
 func (tx *Tx) PaperT1Bought(spaceID, accountID string, since int64) (map[string]shared.Decimal, error) {
+	result := make(map[string]shared.Decimal)
+	markets := exchange.MarketsWhere(func(rule exchange.MarketRule) bool { return rule.T1 })
+	if len(markets) == 0 {
+		return result, nil
+	}
 	identity, err := tx.accountIdentity(spaceID, accountID)
 	if err != nil {
 		return nil, err
 	}
-	var rows []struct {
-		MarketType     string `gorm:"column:c_market_type"`
-		ExchangeSymbol string `gorm:"column:c_exchange_symbol"`
-		Quantity       string `gorm:"column:c_quantity"`
+	names := make([]string, len(markets))
+	for i, market := range markets {
+		names[i] = string(market)
 	}
-	if err := tx.db.Raw(paperT1BuysSQL, spaceID, accountID, since).Scan(&rows).Error; err != nil {
+	var rows []struct {
+		BaseAsset string `gorm:"column:c_base_asset"`
+		Quantity  string `gorm:"column:c_quantity"`
+	}
+	if err := tx.db.Raw(paperT1BuysSQL, identity.Exchange, identity.Environment, spaceID, accountID, since, names).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
-	result := make(map[string]shared.Decimal)
 	for _, row := range rows {
-		if !exchange.RuleFor(row.MarketType).T1 {
-			continue
-		}
 		quantity, err := shared.ParseDecimal(row.Quantity)
-		if err != nil {
+		if err != nil || row.BaseAsset == "" {
 			return nil, fmt.Errorf("%w: paper fill quantity", ErrInvalidRecord)
 		}
-		instrument, err := tx.GetInstrumentInEnvironment(identity.Exchange, identity.Environment, row.MarketType, row.ExchangeSymbol)
-		if err != nil {
-			return nil, err
-		}
-		result[instrument.BaseAsset] = result[instrument.BaseAsset].Add(quantity)
+		result[row.BaseAsset] = result[row.BaseAsset].Add(quantity)
 	}
 	return result, nil
 }

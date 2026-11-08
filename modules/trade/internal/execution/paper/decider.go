@@ -91,7 +91,7 @@ func (d *Decider) Decide(ctx context.Context, candidate store.OrderRecord) (Deci
 	}
 	if book.Cmp(shared.Zero()) <= 0 {
 		quote, quoteErr := adapter.GetQuote(ctx, exchange.NewSymbolKey(candidate.MarketType, candidate.ExchangeSymbol))
-		if quoteErr == nil && !execution.QuoteFresh(d.Exchanges, account.Exchange, quote.SourceTime, d.now(), matchQuoteMaxAge) {
+		if quoteErr == nil && !strictQuoteFresh(d.Exchanges, account.Exchange, quote.SourceTime, d.now(), matchQuoteMaxAge) {
 			quoteErr = errors.New("paper public quote is stale")
 		}
 

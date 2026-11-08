@@ -19,11 +19,9 @@ const (
 	tencentFieldLast      = 3
 	tencentFieldPrevClose = 4
 	tencentFieldBid       = 9
-	tencentFieldBidVolume = 10 // 单位：手
 	tencentFieldAsk       = 19
-	tencentFieldAskVolume = 20 // 单位：手
 	tencentFieldTime      = 30 // YYYYMMDDHHMMSS，北京时间
-	tencentFieldStatus    = 40 // 空：正常；S：停牌；D：退市
+	tencentFieldStatus    = 40 // 空：正常；S：停牌；D：退市；C：北交所旧代码已换号
 	tencentFieldLimitUp   = 47 // 涨停价，没有涨跌停时是 -1
 	tencentFieldLimitDown = 48 // 跌停价
 	tencentMinFields      = 49
@@ -32,6 +30,8 @@ const (
 const (
 	tencentStatusHalted   = "S"
 	tencentStatusDelisted = "D"
+	// tencentStatusRenamed 是北交所旧代码（43、83、87 开头）换成 920 号段后旧代码上的状态（2026-11-08 样例 430047），当退市处理。
+	tencentStatusRenamed = "C"
 )
 
 // TencentBatchLimit 是一次快照请求最多带的代码数。
@@ -40,7 +40,8 @@ const TencentBatchLimit = 60
 // DefaultTencentBaseURL 是腾讯实时快照的地址。
 const DefaultTencentBaseURL = "https://qt.gtimg.cn"
 
-var shanghai = mustLoadLocation("Asia/Shanghai")
+// shanghai 是北京时间（没有夏令时，用固定时差，不依赖系统时区库）。
+var shanghai = time.FixedZone("CST", 8*60*60)
 
 // Quote 是一只股票的实时快照。价格是十进制文本（原样取自上游，不经过浮点数），为空表示上游没有给出。
 type Quote struct {
@@ -48,16 +49,14 @@ type Quote struct {
 	Last         string
 	PrevClose    string
 	// Bid、Ask 是买一、卖一价；没有挂单时为空（上游给 0.00）。
-	Bid       string
-	BidVolume string
-	Ask       string
-	AskVolume string
+	Bid string
+	Ask string
 	// LimitUp、LimitDown 是当天的涨停价、跌停价；没有涨跌停限制时为空。
 	LimitUp   string
 	LimitDown string
 	// Time 是行情时间。
 	Time time.Time
-	// Halted 为真表示停牌；Delisted 为真表示已退市。两者都不能交易。
+	// Halted 为真表示停牌；Delisted 为真表示已退市（含北交所旧代码已换号）。两者都不能交易。
 	Halted   bool
 	Delisted bool
 }
@@ -99,15 +98,14 @@ func ParseTencent(body []byte) ([]Quote, error) {
 			InstrumentID: instrumentID,
 			Time:         at.UTC(),
 			Halted:       fields[tencentFieldStatus] == tencentStatusHalted,
-			Delisted:     fields[tencentFieldStatus] == tencentStatusDelisted,
+			Delisted:     fields[tencentFieldStatus] == tencentStatusDelisted || fields[tencentFieldStatus] == tencentStatusRenamed,
 		}
 		for _, item := range []struct {
 			target *string
 			index  int
 		}{
 			{&quote.Last, tencentFieldLast}, {&quote.PrevClose, tencentFieldPrevClose},
-			{&quote.Bid, tencentFieldBid}, {&quote.BidVolume, tencentFieldBidVolume},
-			{&quote.Ask, tencentFieldAsk}, {&quote.AskVolume, tencentFieldAskVolume},
+			{&quote.Bid, tencentFieldBid}, {&quote.Ask, tencentFieldAsk},
 			{&quote.LimitUp, tencentFieldLimitUp}, {&quote.LimitDown, tencentFieldLimitDown},
 		} {
 			text, err := positiveDecimal(fields[item.index])
@@ -160,6 +158,7 @@ type TencentClient struct {
 }
 
 // Snapshot 取一批股票的快照，超过 TencentBatchLimit 只时分批请求。返回的快照按标的 ID 索引；上游不认识的代码不在结果里。
+// 行情时间取“腾讯给的时间”和“收到响应的时刻”中较早的一个：本机时钟慢于上游时，报价不会显得来自未来。
 func (c TencentClient) Snapshot(ctx context.Context, instrumentIDs []string) (map[string]Quote, error) {
 	result := make(map[string]Quote, len(instrumentIDs))
 	for start := 0; start < len(instrumentIDs); start += TencentBatchLimit {
@@ -180,7 +179,11 @@ func (c TencentClient) Snapshot(ctx context.Context, instrumentIDs []string) (ma
 		if err != nil {
 			return nil, err
 		}
+		received := time.Now().UTC()
 		for _, quote := range quotes {
+			if quote.Time.After(received) {
+				quote.Time = received
+			}
 			result[quote.InstrumentID] = quote
 		}
 	}
@@ -217,12 +220,4 @@ func (c TencentClient) fetch(ctx context.Context, symbols []string) ([]byte, err
 		return nil, fmt.Errorf("%w：读取响应：%v", ErrProtocol, err)
 	}
 	return body, nil
-}
-
-func mustLoadLocation(name string) *time.Location {
-	location, err := time.LoadLocation(name)
-	if err != nil {
-		panic(err)
-	}
-	return location
 }

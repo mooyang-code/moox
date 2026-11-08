@@ -158,7 +158,7 @@ func TestMatcherSkipsOutsideSession(t *testing.T) {
 	fresh, err := s.GetOrder(context.Background(), "s", "fresh")
 	require.NoError(t, err)
 	require.Equal(t, "CANCELED", fresh.State)
-	require.Equal(t, outOfSessionReason, fresh.RejectReason)
+	require.Equal(t, OutOfSessionReason, fresh.RejectReason)
 	resting, err := s.GetOrder(context.Background(), "s", "resting")
 	require.NoError(t, err)
 	require.Equal(t, "OPEN", resting.State)
