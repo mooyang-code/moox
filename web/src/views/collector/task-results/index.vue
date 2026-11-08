@@ -9,7 +9,7 @@
           {{ detailError }}<span v-if="activeLastStatusReadAt">；保留上次读取的结果状态（{{ activeLastStatusReadAt }}）</span>
         </a-alert>
 
-        <a-empty v-if="!resultTabs.length && !detailError && !loadError" description="暂无采集任务">
+        <a-empty v-if="!resultTabs.length && !detailError && !loadError && !loading" description="暂无采集任务">
           <template #extra>
             <a-button type="primary" status="success" @click="goToTasks">新建采集任务</a-button>
           </template>

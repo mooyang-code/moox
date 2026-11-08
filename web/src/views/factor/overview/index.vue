@@ -58,27 +58,26 @@
           <div class="overview-col">
             <section aria-label="待处理">
               <h3>待处理</h3>
-              <p v-if="sideNote" class="side-note">{{ sideNote }}</p>
-              <a-empty v-else-if="!pending.length" description="没有待处理事项" />
-              <ul v-else class="side-list">
+              <ul v-if="pending.length" class="side-list">
                 <li v-for="item in pending" :key="`${item.kind}-${item.taskId}-${item.target.query.job || ''}`">
                   <a-link @click="go(item.target)">{{ item.title }}</a-link>
                   <span class="side-list__text">{{ item.text }}</span>
                 </li>
               </ul>
+              <p v-else-if="sideNote" class="side-note">{{ sideNote }}</p>
+              <a-empty v-else description="没有待处理事项" />
             </section>
 
             <section aria-label="进行中的补算">
               <h3>进行中的补算</h3>
-              <p v-if="jobsError" class="side-note">补算作业读取失败：{{ jobsError }}</p>
-              <p v-else-if="!jobsLoaded" class="side-note">读取中…</p>
-              <a-empty v-else-if="!running.length" description="没有进行中的补算" />
-              <ul v-else class="side-list">
+              <ul v-if="running.length" class="side-list">
                 <li v-for="job in running" :key="job.job_id">
                   <a-link @click="go(recalcTarget(job))">{{ job.members.join(", ") || "全部已启用因子" }}</a-link>
                   <a-progress :percent="progressPercent(job) / 100" size="small" />
                 </li>
               </ul>
+              <p v-else-if="runningNote" class="side-note">{{ runningNote }}</p>
+              <a-empty v-else description="没有进行中的补算" />
             </section>
           </div>
         </div>
@@ -118,11 +117,24 @@ const split = computed(() => splitRecalcJobs(jobs.value));
 const running = computed(() => split.value.running);
 const pending = computed(() => pendingItems(sets.value, split.value.failed, labelOf));
 const stats = computed(() => statsStrip(store.engine, running.value.length));
-/** “待处理”来自计算任务和失败的补算：任一项没读到时写明原因，不显示“没有待处理事项”。 */
+/** 计算任务没读到时写明原因；只在任务列表为空时算失败，后台刷新偶尔失败时沿用已读到的任务。 */
+const tasksNote = computed(() => {
+  if (store.loadError && !store.tasks.length) return "计算任务读取失败，见上方提示";
+  if (!store.isLoadedFor(spaceId.value)) return "读取中…";
+  return "";
+});
+/** “待处理”来自计算任务和失败的补算：没有可列的事项时，任一项没读到就写明原因，不显示“没有待处理事项”。 */
 const sideNote = computed(() => {
-  if (store.loadError) return "计算任务读取失败，见上方提示";
+  if (tasksNote.value) return tasksNote.value;
   if (jobsError.value) return `补算作业读取失败：${jobsError.value}`;
-  if (!store.isLoadedFor(spaceId.value) || !jobsLoaded.value) return "读取中…";
+  if (!jobsLoaded.value) return "读取中…";
+  return "";
+});
+/** “进行中的补算”同理：任务或补算作业没读到时不显示“没有进行中的补算”。 */
+const runningNote = computed(() => {
+  if (jobsError.value) return `补算作业读取失败：${jobsError.value}`;
+  if (tasksNote.value) return tasksNote.value;
+  if (!jobsLoaded.value) return "读取中…";
   return "";
 });
 

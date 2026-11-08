@@ -196,8 +196,8 @@ const busyTaskIds = reactive(new Set<string>());
 const filteredTasks = computed(() => filterTasks(store.tasks, filters, (set: FactorTask) => store.taskLabel(set)));
 /** 空表的说法：读取失败、筛选无结果、确实没有，三种分开写。 */
 const emptyText = computed(() => {
-  if (store.loadError) return "计算任务读取失败，见上方提示";
   if (store.tasks.length) return "没有符合筛选条件的计算任务";
+  if (store.loadError) return "计算任务读取失败，见上方提示";
   return "当前空间没有计算任务";
 });
 

@@ -14,6 +14,7 @@
           </template>
         </a-empty>
 
+        <a-spin v-else-if="!store.tasks.length && store.loading" class="recalc-loading" />
         <template v-else-if="store.tasks.length">
           <TaskTabs :model-value="store.currentTaskId" class="recalc-tabs" @change="onTaskChange" />
           <div class="result-toolbar">
@@ -253,6 +254,12 @@ watch(
 
 .recalc-alert {
   margin-bottom: var(--moox-space-3);
+}
+
+.recalc-loading {
+  display: flex;
+  justify-content: center;
+  padding: var(--moox-space-8);
 }
 
 .recalc-tabs {
