@@ -100,7 +100,9 @@ export async function downloadArchivePartition(
   const url = await rawURL("archive_download", "PartitionDownload", params);
   const response = await fetch(url, { signal, cache: "no-store" });
   if (!response.ok) throw await rawError(response);
-  const total = Number(response.headers.get("Content-Length") || 0);
+  // 链路上某层做了内容压缩时，Content-Length 是压缩后的长度，与读到的（已解压）字节数不可比，不核对
+  const encoding = (response.headers.get("Content-Encoding") || "identity").trim().toLowerCase();
+  const total = encoding === "identity" ? Number(response.headers.get("Content-Length") || 0) : 0;
   const chunks: BlobPart[] = [];
   let received = 0;
   try {
