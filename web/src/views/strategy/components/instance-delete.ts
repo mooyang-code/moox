@@ -22,10 +22,18 @@ export interface DeleteTaskLine {
   factorTask?: FactorTask;
 }
 
-/** 确认框正文：逐个列出将要删除的因子任务与结果数据集，最后写明结果数据不可恢复。 */
-export function instanceDeleteLines(tasks: DeleteTaskLine[]): string[] {
-  const lines = ["将一起删除下面的因子任务和它们的结果数据集："];
-  for (const task of tasks) {
+/** 任务是否随实例删除：绑定到此实例的，以及因子服务里已经没有的（上次删除时已删掉）；其余（没绑定、绑定到别的实例）保留。 */
+export function deletedWithInstance(instanceId: string, task: DeleteTaskLine): boolean {
+  return !task.factorTask || task.factorTask.bound_instance_id === instanceId;
+}
+
+/** 确认框正文：分两组列出将删除的因子任务与数据集、保留的因子任务（写明原因），最后写明结果数据不可恢复。 */
+export function instanceDeleteLines(instanceId: string, tasks: DeleteTaskLine[]): string[] {
+  const removed = tasks.filter(task => deletedWithInstance(instanceId, task));
+  const kept = tasks.filter(task => !deletedWithInstance(instanceId, task));
+  const lines = ["将删除的因子任务和数据集："];
+  if (!removed.length) lines.push("无");
+  for (const task of removed) {
     const market = marketLabel(task.market);
     if (!task.factorTask) {
       lines.push(`${market}：${task.taskId}（已删除）`);
@@ -33,6 +41,10 @@ export function instanceDeleteLines(tasks: DeleteTaskLine[]): string[] {
     }
     const name = task.factorTask.name ? `「${task.factorTask.name}」` : "";
     lines.push(`${market}：因子任务 ${task.taskId}${name}，结果数据集 ${task.factorTask.result_dataset_id || "-"}`);
+  }
+  if (kept.length) {
+    lines.push("保留的因子任务（只去掉实例对它的引用）：");
+    for (const task of kept) lines.push(`${marketLabel(task.market)}：因子任务 ${task.taskId}，未绑定到此实例`);
   }
   lines.push("结果数据不可恢复。交易模块里的历史目标和订单保留。");
   return lines;
@@ -84,7 +96,7 @@ export async function confirmInstanceDelete(instance: StrategyInstance, hooks: I
       h(
         "div",
         { class: "instance-delete-confirm" },
-        instanceDeleteLines(tasks).map(line => h("p", line))
+        instanceDeleteLines(instance.instance_id, tasks).map(line => h("p", line))
       ),
     okText: "确认删除",
     cancelText: "取消",

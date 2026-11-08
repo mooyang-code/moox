@@ -19,14 +19,16 @@ import (
 // strategyInstanceDeleteIncomplete 是删除超时或中途失败时的提示：删除每一步都幂等，重试安全。
 const strategyInstanceDeleteIncomplete = "删除未完成，请稍后重试"
 
-// strategyDeleteTask 是预览里的一个因子任务：随实例删除的任务与它的结果数据集。
+// strategyDeleteTask 是预览里的一个因子任务。
 type strategyDeleteTask struct {
 	Market          string `json:"market"`
 	TaskID          string `json:"task_id"`
 	Name            string `json:"name,omitempty"`
 	ResultDatasetID string `json:"result_dataset_id,omitempty"`
-	// State：to_delete 将删除；already_deleted 上次删除时已经删掉了。
-	State string `json:"state"`
+	// State：to_delete 绑定到此实例，连同结果数据集一起删除；already_deleted 上次删除时已经删掉了；
+	// kept 没绑定到此实例（例如公共任务），保留不动，只去掉实例对它的引用。
+	State  string `json:"state"`
+	Reason string `json:"reason,omitempty"`
 }
 
 // strategyDeleteInstance 是 GetStrategyInstance 里删除要用到的字段（CLI 不依赖策略模块的协议包，按 JSON 取）。
@@ -49,9 +51,10 @@ func newStrategyInstanceDeleteCommand() *cobra.Command {
 	var yes bool
 	cmd := &cobra.Command{
 		Use:   "delete",
-		Short: "删除已停用的策略实例，连同它关联的因子任务和结果数据集（默认只预览，--yes 才执行）",
-		Long: "删除已停用、没有运行会话的策略实例，连同它关联的因子任务和任务的结果数据集，结果数据不可恢复。\n" +
-			"结果数据集有归档任务时拒绝，先在归档页删掉归档任务。不带 --yes 只列出将要删除的因子任务和数据集；\n" +
+		Short: "删除已停用的策略实例，连同绑定到它的因子任务和结果数据集（默认只预览，--yes 才执行）",
+		Long: "删除已停用、没有运行会话的策略实例，连同绑定到它的因子任务和任务的结果数据集，结果数据不可恢复；\n" +
+			"没绑定到它的任务（例如公共任务）保留不动。有回放或补算在进行、结果数据集有归档任务时拒绝。\n" +
+			"不带 --yes 只分两组列出将删除和保留的因子任务；\n" +
 			"中途失败或超时后再执行一次即可接着删完。Trade 里的历史目标与订单不删。\n\n" +
 			"对应接口：trpc.moox.strategy.StrategyMgr DeleteStrategyInstance（破坏性，默认只预览）。",
 		Args: cobra.NoArgs,
@@ -88,10 +91,19 @@ func runStrategyInstanceDelete(ctx context.Context, cmd *cobra.Command, gateway 
 	if err != nil {
 		return err
 	}
+	deleted, kept := []strategyDeleteTask{}, []strategyDeleteTask{}
+	for _, task := range tasks {
+		if task.State == "kept" {
+			kept = append(kept, task)
+		} else {
+			deleted = append(deleted, task)
+		}
+	}
 	if !yes {
 		preview := map[string]any{
 			"action": "delete_strategy_instance", "space_id": spaceID, "instance_id": instance.InstanceID, "strategy_id": instance.StrategyID,
-			"factor_tasks": tasks, "warning": "因子任务和结果数据集会一起删除，结果数据不可恢复；Trade 里的历史目标与订单不删",
+			"delete_factor_tasks": deleted, "keep_factor_tasks": kept,
+			"warning": "delete_factor_tasks 里的因子任务和结果数据集会一起删除，结果数据不可恢复；keep_factor_tasks 保留不动；Trade 里的历史目标与订单不删",
 		}
 		if instance.LogicalAccountID != "" {
 			preview["logical_account_id"] = instance.LogicalAccountID
@@ -115,7 +127,7 @@ func runStrategyInstanceDelete(ctx context.Context, cmd *cobra.Command, gateway 
 		}
 		return err
 	}
-	return printJSON(cmd.OutOrStdout(), map[string]any{"status": "deleted", "instance_id": instanceID, "factor_tasks": tasks})
+	return printJSON(cmd.OutOrStdout(), map[string]any{"status": "deleted", "instance_id": instanceID, "delete_factor_tasks": deleted, "keep_factor_tasks": kept})
 }
 
 // readStrategyDeleteInstance 读取实例；实例不存在时 found 为假。
@@ -140,7 +152,8 @@ func readStrategyDeleteInstance(ctx context.Context, client *adminclient.Client,
 	}
 }
 
-// strategyDeleteTasks 按市场列出实例的因子任务与结果数据集；Factor 里已经不存在的任务标为已删除。
+// strategyDeleteTasks 按市场列出实例的因子任务与结果数据集，按绑定分组：绑定到此实例的将删除，没绑定的保留，
+// Factor 里已经不存在的标为已删除。
 func strategyDeleteTasks(ctx context.Context, gateway commandGateway, spaceID string, instance strategyDeleteInstance) ([]strategyDeleteTask, error) {
 	var tasks []strategyDeleteTask
 	for _, market := range []string{"spot", "swap", "equity", "multi"} {
@@ -156,6 +169,9 @@ func strategyDeleteTasks(ctx context.Context, gateway commandGateway, spaceID st
 		switch rsp.GetRetInfo().GetCode() {
 		case commonpb.ErrorCode_SUCCESS:
 			task.Name, task.ResultDatasetID = rsp.GetFactorTask().GetName(), rsp.GetFactorTask().GetResultDatasetId()
+			if rsp.GetFactorTask().GetBoundInstanceId() != instance.InstanceID {
+				task.State, task.Reason = "kept", "未绑定到此实例"
+			}
 		case commonpb.ErrorCode_NOT_FOUND:
 			task.State = "already_deleted"
 		default:

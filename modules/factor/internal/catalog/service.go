@@ -242,11 +242,11 @@ func (s *Service) DeleteTask(ctx context.Context, taskID string, purge bool) err
 
 // DeleteBoundTask 删除关联到 instanceID 的任务，连同全部成员和结果数据集（策略服务删除实例时调用）。
 // 按 DeleteTask 的顺序分三段执行，每段都幂等，中途失败后重试能接着做完：
-//  1. 任务锁下核对关联的实例并停用任务；
+//  1. 任务锁下核对关联的实例、确认没有补算在排队或执行，再停用任务；
 //  2. 逐个成员按“定义锁 → 任务锁”的固定顺序加锁，已启用的先停用，再删除；
 //  3. 任务锁下再次核对，确认已停用、没有成员后带 purge 删除结果数据集，最后删除任务记录。
 //
-// 任务不存在返回成功；关联的不是 instanceID（包括还没有关联任何实例）则拒绝。
+// 任务不存在返回成功；关联的不是 instanceID（包括还没有关联任何实例）、有补算在进行都拒绝。
 func (s *Service) DeleteBoundTask(ctx context.Context, taskID, instanceID string) error {
 	taskID, instanceID = strings.TrimSpace(taskID), strings.TrimSpace(instanceID)
 	if taskID == "" || instanceID == "" {
@@ -286,6 +286,9 @@ func (s *Service) DeleteBoundTask(ctx context.Context, taskID, instanceID string
 	if task.Status != domain.TaskStatusDisabled {
 		return fmt.Errorf("%w: 因子任务 %s 在删除过程中被重新启用，请重试", store.ErrConflict, taskID)
 	}
+	if err := s.requireNoActiveRecalc(ctx, taskID); err != nil {
+		return err
+	}
 	count, err := s.db.CountMembers(ctx, taskID)
 	if err != nil {
 		return err
@@ -316,6 +319,10 @@ func (s *Service) disableBoundTask(ctx context.Context, taskID, instanceID strin
 	if err := requireBoundTo(task, instanceID); err != nil {
 		return false, err
 	}
+	// 补算会往结果数据集里写：在停用任务、删成员之前就拒绝，这次调用什么也不改。停用之后补算不再接受新作业。
+	if err := s.requireNoActiveRecalc(ctx, taskID); err != nil {
+		return false, err
+	}
 	if task.Status == domain.TaskStatusEnabled {
 		if err := s.db.SetTaskStatus(ctx, taskID, domain.TaskStatusEnabled, domain.TaskStatusDisabled); err != nil {
 			return false, err
@@ -323,6 +330,22 @@ func (s *Service) disableBoundTask(ctx context.Context, taskID, instanceID strin
 	}
 	s.markReady(taskID, false)
 	return true, nil
+}
+
+// requireNoActiveRecalc 拒绝删除有补算正在排队或执行的任务。
+func (s *Service) requireNoActiveRecalc(ctx context.Context, taskID string) error {
+	jobs, err := s.db.ListRecalcJobs(ctx, store.RecalcJobFilter{TaskID: taskID, Statuses: []string{store.RecalcStatusAccepted, store.RecalcStatusRunning}})
+	if err != nil {
+		return err
+	}
+	if len(jobs) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(jobs))
+	for _, job := range jobs {
+		ids = append(ids, job.JobID)
+	}
+	return fmt.Errorf("%w: 因子任务 %s 有补算正在进行（%s），请先取消补算", store.ErrConflict, taskID, strings.Join(ids, "、"))
 }
 
 // removeBoundMember 停用并删除一个成员；成员已经不在了算成功。
@@ -353,8 +376,7 @@ func requireBoundTo(task domain.FactorTask, instanceID string) error {
 	case instanceID:
 		return nil
 	case "":
-		return fmt.Errorf("%w: 因子任务 %s 还没有关联策略实例 %s（实例从未启用过），不能随实例删除；先在因子任务页停用并删除这个任务（选“同时清理结果数据集”），再重新删除实例",
-			store.ErrConflict, task.TaskID, instanceID)
+		return fmt.Errorf("%w: 因子任务 %s 还没有关联策略实例 %s，不能随实例删除", store.ErrConflict, task.TaskID, instanceID)
 	default:
 		return fmt.Errorf("%w: 因子任务 %s 关联的是策略实例 %s，不是 %s", store.ErrConflict, task.TaskID, task.BoundInstanceID, instanceID)
 	}

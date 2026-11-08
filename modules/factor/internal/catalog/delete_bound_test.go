@@ -109,3 +109,30 @@ func TestDeleteBoundTaskRejectsUnboundTask(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, domain.TaskStatusEnabled, stored.Status)
 }
+
+// 有补算在排队或执行：拒绝，任务、成员与数据集都不动；补算结束后再删能做完。
+func TestDeleteBoundTaskRejectsActiveRecalc(t *testing.T) {
+	ctx := context.Background()
+	svc, db, meta := boundTaskWithEnabledMember(t)
+	job, err := db.CreateRecalcJob(ctx, store.RecalcJob{RequestID: "req-1", TaskID: testTaskID(), StartTime: 1, EndTime: 100, Status: store.RecalcStatusAccepted})
+	require.NoError(t, err)
+
+	err = svc.DeleteBoundTask(ctx, testTaskID(), "inst-1")
+	require.ErrorIs(t, err, store.ErrConflict)
+	require.ErrorContains(t, err, "请先取消补算")
+	require.ErrorContains(t, err, job.JobID)
+	stored, err := db.GetTask(ctx, testTaskID())
+	require.NoError(t, err)
+	require.Equal(t, domain.TaskStatusEnabled, stored.Status, "拒绝时不停用任务")
+	count, err := db.CountMembers(ctx, testTaskID())
+	require.NoError(t, err)
+	require.Equal(t, 1, count)
+	require.NotContains(t, meta.writeOps, "delete")
+
+	_, err = db.UpdateRecalcJob(ctx, job.JobID, func(current *store.RecalcJob) error {
+		current.Status = store.RecalcStatusCancelled
+		return nil
+	})
+	require.NoError(t, err)
+	require.NoError(t, svc.DeleteBoundTask(ctx, testTaskID(), "inst-1"))
+}

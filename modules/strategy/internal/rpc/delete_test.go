@@ -23,6 +23,12 @@ type fakeFactorTasks struct {
 	listErr   error
 	// block 为真时读取一直等到 ctx 结束（模拟 Factor 很慢）。
 	block bool
+	// recalc 是任务正在进行的补算作业。
+	recalc map[string][]string
+}
+
+func (f *fakeFactorTasks) ActiveRecalcJobs(_ context.Context, taskID string) ([]string, error) {
+	return f.recalc[taskID], nil
 }
 
 func (f *fakeFactorTasks) GetFactorTask(ctx context.Context, taskID string) (input.FactorTaskRecord, error) {
@@ -132,7 +138,7 @@ func TestDeleteStrategyInstanceRejectsEnabledInstance(t *testing.T) {
 	}
 }
 
-// 有归档任务、任务关联的不是本实例：拒绝，而且在删任何任务之前。
+// 有归档任务、有回放或补算在进行：拒绝，而且在删任何任务之前。
 func TestDeleteStrategyInstanceRejectsBeforeDeletingAnything(t *testing.T) {
 	h, tasks, archives := deleteHarness(t)
 	archives.datasets = map[string]bool{"dataset_of_ftask_i1": true}
@@ -146,19 +152,95 @@ func TestDeleteStrategyInstanceRejectsBeforeDeletingAnything(t *testing.T) {
 	archives.err = errors.New("no route")
 	rsp = h.deleteInstance("i1")
 	requireFail(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg(), "读不到归档任务")
-
 	archives.err = nil
-	tasks.bound["ftask_i1"] = ""
+
+	tasks.recalc = map[string][]string{"ftask_i1": {"job-1"}}
 	rsp = h.deleteInstance("i1")
-	requireFail(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg(), "还没有关联本实例")
-	tasks.bound["ftask_i1"] = "other"
+	requireFail(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg(), "请先取消补算")
+	if rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_INVALID_PARAM || !strings.Contains(rsp.GetRetInfo().GetMsg(), "job-1") {
+		t.Fatalf("补算在进行应按参数错误拒绝并列出作业：%+v", rsp.GetRetInfo())
+	}
+	tasks.recalc = nil
+
+	instanceID, sessionID := "i1", "sess-old"
+	if err := h.service.Store.CreateReplay(h.ctx, store.Replay{
+		ReplayID: "rep-1", InstanceID: &instanceID, SessionID: &sessionID, DSLYaml: demoDSL, DSLHash: "sha256:x", Calendar: "crypto_24x7", SpaceID: "crypto",
+		Tasks:     map[string]store.ReplayTask{"spot": {FactorTaskID: "ftask_i1", ViewID: "view_factor_i1", ViewGeneration: "idx@1"}},
+		StartTime: h.now.Add(-48 * time.Hour), EndTime: h.now, CreatedAt: h.now,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	rsp = h.deleteInstance("i1")
-	requireFail(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg(), "关联的是实例 other")
+	requireFail(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg(), "请先取消回放")
 	if len(tasks.deleted) != 0 {
 		t.Fatalf("拒绝时不能删任何任务：%v", tasks.deleted)
 	}
 	if _, err := h.service.Store.GetInstance(h.ctx, "i1"); err != nil {
 		t.Fatal(err)
+	}
+	cancelled, _ := h.service.CancelReplay(h.ctx, &strategypb.CancelReplayReq{ReplayId: "rep-1"})
+	requireOK(t, int32(cancelled.GetRetInfo().GetCode()), cancelled.GetRetInfo().GetMsg())
+	rsp = h.deleteInstance("i1")
+	requireOK(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg())
+}
+
+// 从没启用过的实例：任务没有绑定到它，任务保留，只删实例；任务可以登记到新实例上。
+func TestDeleteNeverEnabledInstanceKeepsTasks(t *testing.T) {
+	h := newHarness(t)
+	tasks := &fakeFactorTasks{bound: map[string]string{"ftask_spot_1m": ""}}
+	h.service.Tasks, h.service.Archives = tasks, &fakeArchives{datasets: map[string]bool{"dataset_of_ftask_spot_1m": true}}
+	h.createStrategy("s1", demoDSL)
+	requireOK(t, int32(h.createInstance("i0", "s1", "ftask_spot_1m", "", false).GetRetInfo().GetCode()), "")
+	rsp := h.deleteInstance("i0")
+	requireOK(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg())
+	if len(tasks.deleted) != 0 || tasks.bound["ftask_spot_1m"] != "" {
+		t.Fatalf("没绑定的任务要保留（归档任务也不影响）：deleted=%v", tasks.deleted)
+	}
+	if _, err := h.service.Store.GetInstance(h.ctx, "i0"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("实例应已删除：%v", err)
+	}
+	again := h.createInstance("i0b", "s1", "ftask_spot_1m", "", false)
+	requireOK(t, int32(again.GetRetInfo().GetCode()), again.GetRetInfo().GetMsg())
+}
+
+// 实例引用的任务绑定在别的实例上：任务保留，只删本实例。
+func TestDeleteInstanceKeepsTaskBoundElsewhere(t *testing.T) {
+	h, tasks, _ := deleteHarness(t)
+	tasks.bound["ftask_i1"] = "other"
+	rsp := h.deleteInstance("i1")
+	requireOK(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg())
+	if len(tasks.deleted) != 0 || tasks.bound["ftask_i1"] != "other" {
+		t.Fatalf("绑定在别的实例上的任务要保留：deleted=%v", tasks.deleted)
+	}
+	if _, err := h.service.Store.GetInstance(h.ctx, "i1"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("实例应已删除：%v", err)
+	}
+}
+
+// 混合：启用到一半，现货任务已绑定到本实例、永续任务还没绑定——只删现货任务，永续任务保留；
+// 补算与归档只看要删的任务。
+func TestDeleteHalfEnabledInstanceDeletesOnlyBoundTask(t *testing.T) {
+	h := newHarness(t)
+	tasks := &fakeFactorTasks{bound: map[string]string{"ftask_mix_spot": "", "ftask_mix_swap": ""},
+		recalc: map[string][]string{"ftask_mix_swap": {"job-keep"}}}
+	archives := &fakeArchives{datasets: map[string]bool{"dataset_of_ftask_mix_swap": true}}
+	h.service.Tasks, h.service.Archives = tasks, archives
+	h.createStrategy("s1", demoDSL)
+	created, err := h.service.CreateStrategyInstance(h.ctx, &strategypb.CreateStrategyInstanceReq{Instance: &strategypb.StrategyInstance{
+		InstanceId: "imix", StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_mix_spot", "swap": "ftask_mix_swap"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireOK(t, int32(created.GetRetInfo().GetCode()), created.GetRetInfo().GetMsg())
+	tasks.bound["ftask_mix_spot"] = "imix"
+	rsp := h.deleteInstance("imix")
+	requireOK(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg())
+	if len(tasks.deleted) != 1 || tasks.deleted[0] != "ftask_mix_spot" {
+		t.Fatalf("只删绑定到本实例的任务：%v", tasks.deleted)
+	}
+	if _, ok := tasks.bound["ftask_mix_swap"]; !ok {
+		t.Fatal("没绑定的永续任务要保留")
 	}
 }
 

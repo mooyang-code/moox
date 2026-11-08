@@ -104,7 +104,7 @@
         当前空间没有可用的因子任务：任务必须处于运行中，且还没有关联策略实例。请先到「因子」模块创建并启用任务。
       </p>
       <p v-else class="meta-hint">
-        一个因子任务只能被一个实例独占使用，关联创建后不能修改；删除已停用的实例时，任务和它的结果数据会一起删除。
+        一个因子任务只能被一个实例独占使用，关联创建后不能修改；删除已停用的实例时，绑定到它的任务和结果数据会一起删除。
       </p>
       <p v-if="varBlockReason && hasVarMemberTasks" class="meta-hint">标为“有可变成员，不可选”的任务：{{ varBlockReason }}。</p>
       <div v-for="item in selectedTasks" :key="item.task.taskId" class="task-columns">

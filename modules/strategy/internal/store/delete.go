@@ -25,6 +25,8 @@ const (
 	sqlDeleteInstanceTasks           = `DELETE FROM t_strategy_instance_tasks WHERE c_instance_id = ?`
 	// sqlDeleteStoppedInstance 只删已停用、没有会话的实例。
 	sqlDeleteStoppedInstance = `DELETE FROM t_strategy_instances WHERE c_instance_id = ? AND c_enabled = 0 AND c_session_id IS NULL`
+	// sqlSelectActiveInstanceReplays 列出实例还在排队或执行的回放。
+	sqlSelectActiveInstanceReplays = `SELECT c_replay_id FROM t_strategy_replays WHERE c_instance_id = ? AND c_status IN ('pending', 'running') ORDER BY c_replay_id`
 	// sqlDeleteViewsAgePassed 删除一组 View（JSON 数组参数）的年龄探针记录。
 	sqlDeleteViewsAgePassed = `DELETE FROM t_strategy_age_passed WHERE c_space_id = ? AND c_view_id IN (SELECT value FROM json_each(?))`
 )
@@ -40,6 +42,13 @@ var instanceScopedDeletes = []string{
 	sqlDeleteInstanceReplays,
 	sqlDeleteInstanceDisplaySettings,
 	sqlDeleteInstanceTasks,
+}
+
+// ActiveInstanceReplays 返回实例还在排队或执行的回放 ID。
+func (s *Store) ActiveInstanceReplays(ctx context.Context, instanceID string) ([]string, error) {
+	var ids []string
+	err := s.db.WithContext(ctx).Raw(sqlSelectActiveInstanceReplays, strings.TrimSpace(instanceID)).Scan(&ids).Error
+	return ids, err
 }
 
 // DeleteInstance 在一个事务里删除已停用、没有会话的实例在策略库里的全部记录：会话、结果与明细、到达记录、回放、外显设置、

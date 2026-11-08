@@ -127,6 +127,31 @@ func (c *RPCClient) ListFactorTaskIDs(ctx context.Context) (map[string]bool, err
 	return nil, fmt.Errorf("列出因子任务失败：超过 %d 页仍没有取完", factorTaskMaxPages)
 }
 
+// ActiveRecalcJobs 返回任务正在排队或执行的补算作业 ID。
+func (c *RPCClient) ActiveRecalcJobs(ctx context.Context, taskID string) ([]string, error) {
+	if c == nil || c.Factor == nil {
+		return nil, errors.New("Factor 客户端未配置")
+	}
+	var ids []string
+	for page := uint32(1); page <= factorTaskMaxPages; page++ {
+		rsp, err := c.Factor.ListRecalcJobs(ctx, &factorpb.ListRecalcJobsReq{TaskId: taskID, Statuses: []string{"accepted", "running"},
+			Page: &commonpb.Page{Page: page, Size: factorTaskPageSize}})
+		if err != nil {
+			return nil, transport("查询补算作业", err)
+		}
+		if err := retError("查询补算作业", rsp.GetRetInfo()); err != nil {
+			return nil, err
+		}
+		for _, job := range rsp.GetJobs() {
+			ids = append(ids, job.GetJobId())
+		}
+		if !rsp.GetPageResult().GetHasMore() || len(rsp.GetJobs()) == 0 {
+			return ids, nil
+		}
+	}
+	return nil, fmt.Errorf("查询补算作业失败：超过 %d 页仍没有取完", factorTaskMaxPages)
+}
+
 // DeleteBoundTask 删除关联到实例的因子任务，连同成员与结果数据集；任务不存在也返回成功。
 func (c *RPCClient) DeleteBoundTask(ctx context.Context, taskID, instanceID string) error {
 	if c == nil || c.Factor == nil {

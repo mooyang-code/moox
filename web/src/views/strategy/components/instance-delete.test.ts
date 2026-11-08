@@ -55,18 +55,35 @@ describe("instance delete flow", () => {
     expect(canDeleteInstance({ enabled: false, session_id: "s" })).toBe(false);
   });
 
-  it("lists tasks and datasets and says the data cannot be recovered", () => {
-    const lines = instanceDeleteLines([
+  it("lists deleted and kept tasks in two groups", () => {
+    const lines = instanceDeleteLines("i-1", [
       {
         market: "spot",
         taskId: "ftask_spot",
-        factorTask: { name: "现货因子", result_dataset_id: "dataset_factor_spot" } as never
+        factorTask: { name: "现货因子", result_dataset_id: "dataset_factor_spot", bound_instance_id: "i-1" } as never
       },
-      { market: "swap", taskId: "ftask_swap" }
+      { market: "swap", taskId: "ftask_swap" },
+      {
+        market: "multi",
+        taskId: "ftask_spot_1m",
+        factorTask: { name: "公共", result_dataset_id: "dataset_shared", bound_instance_id: "" } as never
+      }
+    ]).join("\n");
+    expect(lines).toContain("将删除的因子任务和数据集");
+    expect(lines).toContain("ftask_spot「现货因子」，结果数据集 dataset_factor_spot");
+    expect(lines).toContain("ftask_swap（已删除）");
+    expect(lines).toContain("保留的因子任务");
+    expect(lines).toContain("ftask_spot_1m，未绑定到此实例");
+    expect(lines).not.toContain("dataset_shared");
+    expect(lines).toContain("结果数据不可恢复");
+  });
+
+  it("says nothing is deleted when no task is bound to the instance", () => {
+    const lines = instanceDeleteLines("i-1", [
+      { market: "spot", taskId: "ftask_spot_1m", factorTask: { bound_instance_id: "" } as never }
     ]);
-    expect(lines.join("\n")).toContain("ftask_spot「现货因子」，结果数据集 dataset_factor_spot");
-    expect(lines.join("\n")).toContain("ftask_swap（已删除）");
-    expect(lines.at(-1)).toContain("结果数据不可恢复");
+    expect(lines[1]).toBe("无");
+    expect(lines.join("\n")).toContain("未绑定到此实例");
   });
 
   it("confirms before deleting and reports success", async () => {

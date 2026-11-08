@@ -1804,7 +1804,7 @@ func (x *DeleteFactorTaskRsp) GetRetInfo() *commonpb.RetInfo {
 
 // DeleteBoundTask 删除策略实例关联的任务（只给策略服务删除实例时用）：核对关联的实例 → 停用任务 → 删除全部成员 →
 // 带 purge 删除结果数据集 → 删除任务记录。每一步都幂等，中途失败后重试能接着做完；任务不存在返回成功，
-// 任务关联的不是 bound_instance_id（包括还没有关联任何实例）则拒绝。
+// 任务关联的不是 bound_instance_id（包括还没有关联任何实例）、有补算正在排队或执行时拒绝，拒绝时什么也不改。
 type DeleteBoundTaskReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache

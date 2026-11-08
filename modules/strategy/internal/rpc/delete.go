@@ -21,6 +21,8 @@ type FactorTaskAdmin interface {
 	GetFactorTask(ctx context.Context, taskID string) (input.FactorTaskRecord, error)
 	// ListFactorTaskIDs 列出 Factor 里现有的全部任务 ID。
 	ListFactorTaskIDs(ctx context.Context) (map[string]bool, error)
+	// ActiveRecalcJobs 返回任务正在排队或执行的补算作业 ID。
+	ActiveRecalcJobs(ctx context.Context, taskID string) ([]string, error)
 	// DeleteBoundTask 删除关联到实例的任务，连同成员与结果数据集；任务不存在也返回成功。
 	DeleteBoundTask(ctx context.Context, taskID, instanceID string) error
 }
@@ -39,9 +41,18 @@ type pendingTask struct {
 	ResultDatasetID string
 }
 
-// DeleteStrategyInstance 删除已停用、没有会话的实例，连同它关联的因子任务与结果数据集，最后在一个事务里删掉实例在策略库里的全部记录。
-// 全程持有实例锁，并发的启用会被挡住。所有拒绝（关联的不是本实例、结果数据集有归档任务）都在删第一个任务之前做完；
-// 已经删掉的部分算成功，中途失败（例如超时）后再删一次即可接着做完。Trade 里的影子目标、目标回执与订单不删。
+// taskPlan 是实例登记的因子任务分组：Delete 是绑定到本实例、要一起删除的；Keep 是没绑定或绑定到别的实例的
+// （例如公共任务），保留不动，只去掉本实例的引用；Gone 是 Factor 里已经没有的（上次删除时已删掉）。
+type taskPlan struct {
+	Delete []pendingTask
+	Keep   []string
+	Gone   []string
+}
+
+// DeleteStrategyInstance 删除已停用、没有会话的实例，连同绑定到它的因子任务与结果数据集，最后在一个事务里删掉实例在策略库里的全部记录。
+// 没绑定或绑定到别的实例的任务保留不动，只去掉本实例的引用。全程持有实例锁，并发的启用会被挡住。
+// 所有拒绝（有回放在进行、任务有补算在进行、结果数据集有归档任务）都在删第一个任务之前做完；已经删掉的部分算成功，
+// 中途失败（例如超时）后再删一次即可接着做完。Trade 里的影子目标、目标回执与订单不删。
 func (s *Service) DeleteStrategyInstance(ctx context.Context, req *strategypb.DeleteStrategyInstanceReq) (*strategypb.DeleteStrategyInstanceRsp, error) {
 	if err := s.ready(); err != nil {
 		return &strategypb.DeleteStrategyInstanceRsp{RetInfo: failure(err)}, nil
@@ -74,20 +85,31 @@ func (s *Service) DeleteStrategyInstance(ctx context.Context, req *strategypb.De
 	if instance.SessionID != nil {
 		return &strategypb.DeleteStrategyInstanceRsp{RetInfo: invalid(errors.New("实例的启用或停用操作尚未完成，稍后再删除"))}, nil
 	}
-	pending, err := s.pendingTasks(ctx, instance)
+	if err := s.checkNoActiveReplays(ctx, instance.InstanceID); err != nil {
+		return &strategypb.DeleteStrategyInstanceRsp{RetInfo: deleteError(err)}, nil
+	}
+	plan, err := s.planTasks(ctx, instance)
 	if err != nil {
 		return &strategypb.DeleteStrategyInstanceRsp{RetInfo: deleteError(err)}, nil
 	}
-	if err := s.checkNotArchived(ctx, instance.SpaceID, pending); err != nil {
+	if err := s.checkNoActiveRecalc(ctx, plan.Delete); err != nil {
 		return &strategypb.DeleteStrategyInstanceRsp{RetInfo: deleteError(err)}, nil
 	}
-	for _, task := range pending {
+	if err := s.checkNotArchived(ctx, instance.SpaceID, plan.Delete); err != nil {
+		return &strategypb.DeleteStrategyInstanceRsp{RetInfo: deleteError(err)}, nil
+	}
+	for _, task := range plan.Delete {
 		if err := s.Tasks.DeleteBoundTask(ctx, task.TaskID, instance.InstanceID); err != nil {
 			return &strategypb.DeleteStrategyInstanceRsp{RetInfo: failure(fmt.Errorf("删除因子任务 %s 未完成（实例还在，可以重新执行删除）：%w", task.TaskID, err))}, nil
 		}
 	}
-	viewIDs := make([]string, 0, len(instance.FactorTasks))
-	for _, taskID := range input.TaskIDs(instance.FactorTasks) {
+	// 年龄探针按 View 存：删掉的任务与上次已删的任务清掉它们的 View；保留的任务的 View 还在用，不动。
+	viewIDs := make([]string, 0, len(plan.Delete)+len(plan.Gone))
+	cleared := append([]string(nil), plan.Gone...)
+	for _, task := range plan.Delete {
+		cleared = append(cleared, task.TaskID)
+	}
+	for _, taskID := range cleared {
 		if viewID, err := input.ViewIDOfTask(taskID); err == nil {
 			viewIDs = append(viewIDs, viewID)
 		}
@@ -110,27 +132,56 @@ func deleteError(err error) *commonpb.RetInfo {
 	return failure(err)
 }
 
-// pendingTasks 读取实例登记的每个因子任务：已经删掉的跳过；关联的不是本实例（包括实例从未启用、任务还没有关联）的拒绝。
-func (s *Service) pendingTasks(ctx context.Context, instance store.Instance) ([]pendingTask, error) {
-	var pending []pendingTask
+// checkNoActiveReplays 拒绝删除还有回放在排队或执行的实例：回放正在读实例任务的结果数据。
+func (s *Service) checkNoActiveReplays(ctx context.Context, instanceID string) error {
+	replays, err := s.Store.ActiveInstanceReplays(ctx, instanceID)
+	if err != nil {
+		return fmt.Errorf("读取实例的回放失败，暂不能删除：%w", err)
+	}
+	if len(replays) > 0 {
+		return rejection{fmt.Errorf("实例有回放正在进行（%s），请先取消回放，再删除实例", strings.Join(replays, "、"))}
+	}
+	return nil
+}
+
+// planTasks 逐个读实例登记的因子任务，按绑定分组：只有绑定到本实例的任务随实例删除。
+func (s *Service) planTasks(ctx context.Context, instance store.Instance) (taskPlan, error) {
+	var plan taskPlan
 	for _, taskID := range input.TaskIDs(instance.FactorTasks) {
 		task, err := s.Tasks.GetFactorTask(ctx, taskID)
 		if errors.Is(err, input.ErrFactorTaskNotFound) {
+			plan.Gone = append(plan.Gone, taskID)
 			continue
 		}
 		if err != nil {
-			return nil, fmt.Errorf("读取因子任务 %s 失败，暂不能删除：%w", taskID, err)
+			return taskPlan{}, fmt.Errorf("读取因子任务 %s 失败，暂不能删除：%w", taskID, err)
 		}
-		switch task.BoundInstanceID {
-		case instance.InstanceID:
-		case "":
-			return nil, rejection{fmt.Errorf("因子任务 %s 还没有关联本实例（实例从未启用过），不能随实例删除；先在因子任务页停用并删除这个任务（选“同时清理结果数据集”），再重新删除实例", taskID)}
-		default:
-			return nil, rejection{fmt.Errorf("因子任务 %s 关联的是实例 %s，不是本实例，不能随本实例删除", taskID, task.BoundInstanceID)}
+		if task.BoundInstanceID != instance.InstanceID {
+			plan.Keep = append(plan.Keep, taskID)
+			continue
 		}
-		pending = append(pending, pendingTask{TaskID: taskID, ResultDatasetID: task.ResultDatasetID})
+		plan.Delete = append(plan.Delete, pendingTask{TaskID: taskID, ResultDatasetID: task.ResultDatasetID})
 	}
-	return pending, nil
+	return plan, nil
+}
+
+// checkNoActiveRecalc 拒绝删除有补算在排队或执行的任务（补算会往结果数据集里写）。Factor 的 DeleteBoundTask 自己也会拒绝，
+// 这里先查一遍，保证拒绝发生在删第一个任务之前。
+func (s *Service) checkNoActiveRecalc(ctx context.Context, tasks []pendingTask) error {
+	var busy []string
+	for _, task := range tasks {
+		jobs, err := s.Tasks.ActiveRecalcJobs(ctx, task.TaskID)
+		if err != nil {
+			return fmt.Errorf("查询因子任务 %s 的补算失败，暂不能删除：%w", task.TaskID, err)
+		}
+		if len(jobs) > 0 {
+			busy = append(busy, fmt.Sprintf("%s（%s）", task.TaskID, strings.Join(jobs, "、")))
+		}
+	}
+	if len(busy) > 0 {
+		return rejection{fmt.Errorf("因子任务 %s 有补算正在进行，请先取消补算，再删除实例", strings.Join(busy, "、"))}
+	}
+	return nil
 }
 
 // checkNotArchived 拒绝删除有归档任务的结果数据集：archive-mgr 不能按数据集过滤，分页拉回空间内全部归档任务后在本地筛选。
