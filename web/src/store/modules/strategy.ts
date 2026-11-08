@@ -9,7 +9,8 @@ import {
   listInstances,
   listStrategies,
   listStrategyResults,
-  listStrategyTargets
+  listStrategyTargets,
+  type RequestOptions
 } from "@/api/strategy";
 import type {
   Strategy,
@@ -64,8 +65,6 @@ export const useStrategyStore = defineStore("strategy", () => {
   const loadedResultPage = ref(1);
   const loadedResultAllHistory = ref(false);
   const operationLoading = ref(false);
-  const poller = ref<ReturnType<typeof setInterval> | null>(null);
-  let pollingBusy = false;
   let detailRequest = 0;
   let resultRequest = 0;
   let strategiesRequest = 0;
@@ -120,15 +119,19 @@ export const useStrategyStore = defineStore("strategy", () => {
     catalogLoading.value = false;
   }
 
-  async function loadInstances(params: Parameters<typeof listInstances>[0] = {}) {
+  /** background：后台刷新，不转加载态、不先清错误、不弹全局提示。 */
+  async function loadInstances(params: Parameters<typeof listInstances>[0] = {}, options: { background?: boolean } = {}) {
     const requestId = ++instancesRequest;
-    instancesLoading.value = true;
-    instancesError.value = "";
+    if (!options.background) {
+      instancesLoading.value = true;
+      instancesError.value = "";
+    }
     try {
-      const result = await listInstances(params);
+      const result = await listInstances(params, { silent: options.background });
       if (requestId !== instancesRequest) return;
       instances.value = result.items;
       totalInstances.value = result.page.total;
+      instancesError.value = "";
     } catch (err) {
       if (requestId === instancesRequest) instancesError.value = errorMessage(err, "策略实例加载失败");
       throw err;
@@ -147,21 +150,30 @@ export const useStrategyStore = defineStore("strategy", () => {
   }
 
   /** 读取实例详情：实例 → 定义 → 最新目标；历史结果异步加载，不阻塞目标显示。 */
-  async function loadInstanceDetail(instanceId: string, page = 1, pageSize = 20, allHistory = false) {
+  async function loadInstanceDetail(
+    instanceId: string,
+    page = 1,
+    pageSize = 20,
+    allHistory = false,
+    /** 后台轮询传 { silent: true }：失败不弹全局提示，错误记在 detailError、resultsError 里由页面显示 */
+    options: RequestOptions = {}
+  ) {
     const requestId = ++detailRequest;
     const resultRequestId = ++resultRequest;
     const hadInstance = instance.value?.instance_id === instanceId;
     detailLoading.value = true;
-    detailError.value = "";
+    // 后台轮询不先清掉错误条（否则每轮闪一下），读取成功后再清
+    if (!options.silent) detailError.value = "";
     try {
-      const current = await getInstance(instanceId);
+      const current = await getInstance(instanceId, options);
       if (requestId !== detailRequest) return false;
       instance.value = current;
+      detailError.value = "";
       // 定义读取失败不阻断实例详情，但要区分“已删除”与“读取失败”：只有服务端确认 NOT_FOUND 才算已删除。
       let definition: Strategy | null = null;
       let definitionStatus: StrategyDefinitionStatus = "loaded";
       try {
-        definition = await getStrategy(current.strategy_id);
+        definition = await getStrategy(current.strategy_id, options);
       } catch (err) {
         definitionStatus = isNotFound(err) ? "missing" : "error";
       }
@@ -170,11 +182,15 @@ export const useStrategyStore = defineStore("strategy", () => {
       strategyStatus.value = definitionStatus;
       const resultTask =
         current.session_id || allHistory
-          ? listStrategyResults(instanceId, {
-              session_id: allHistory ? undefined : current.session_id,
-              page,
-              page_size: pageSize
-            })
+          ? listStrategyResults(
+              instanceId,
+              {
+                session_id: allHistory ? undefined : current.session_id,
+                page,
+                page_size: pageSize
+              },
+              options
+            )
           : Promise.resolve(null);
       // 首次读取该实例时显示结果加载态；后台轮询刷新不遮罩，失败时保留上次的数据并提示。
       const firstLoad = !hadInstance;
@@ -195,7 +211,7 @@ export const useStrategyStore = defineStore("strategy", () => {
         .finally(() => {
           if (requestId === detailRequest && resultRequestId === resultRequest) resultsLoading.value = false;
         });
-      const targets = await listStrategyTargets(instanceId);
+      const targets = await listStrategyTargets(instanceId, options);
       if (requestId !== detailRequest) return false;
       targetSnapshot.value = targets;
       return true;
@@ -264,25 +280,6 @@ export const useStrategyStore = defineStore("strategy", () => {
     }
   }
 
-  function startPolling(callback: () => void | Promise<void>, interval = 10000) {
-    stopPolling();
-    poller.value = setInterval(async () => {
-      if (pollingBusy || (typeof document !== "undefined" && document.visibilityState !== "visible")) return;
-      pollingBusy = true;
-      try {
-        await callback();
-      } finally {
-        pollingBusy = false;
-      }
-    }, interval);
-  }
-
-  function stopPolling() {
-    if (poller.value) clearInterval(poller.value);
-    poller.value = null;
-    pollingBusy = false;
-  }
-
   function clearDetail() {
     detailRequest += 1;
     resultRequest += 1;
@@ -336,8 +333,6 @@ export const useStrategyStore = defineStore("strategy", () => {
     loadResultPage,
     loadResultDetail,
     removeStrategy,
-    startPolling,
-    stopPolling,
     clearDetail
   };
 });

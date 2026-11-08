@@ -51,11 +51,12 @@ describe("host workbench deep links", () => {
     mocks.getCurrentMetrics.mockReset().mockResolvedValue({ metrics: [], storage_available: true, data_gap: false });
   });
 
-  it("opens the terminal for a host_id link on the hosts tab", async () => {
+  it("URL 带 host_id 挂载时不建立 SSH 连接，终端只在点击时打开（刷新也不会自动连上）", async () => {
     mocks.query = { host_id: "control" };
     const wrapper = mountWorkbench();
     await flushPromises();
-    expect(terminal()?.textContent).toBe("control");
+    expect(terminal()).toBeNull();
+    expect(mocks.createSSHSession).not.toHaveBeenCalled();
     wrapper.unmount();
   });
 

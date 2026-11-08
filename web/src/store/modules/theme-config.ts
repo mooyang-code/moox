@@ -105,6 +105,26 @@ const themeConfig = () => {
   };
 };
 
+// 只持久化布局偏好：refreshPage 是刷新当前页时的临时开关，存下来的 false 会让主区域在重载后一直空白
 export const useThemeConfig = defineStore("theme-config", themeConfig, {
-  persist: persistedstateConfig("theme-config")
+  persist: persistedstateConfig("theme-config", [
+    "collapsed",
+    "language",
+    "darkMode",
+    "isAccordion",
+    "isBreadcrumb",
+    "isTabs",
+    "isFooter",
+    "watermark",
+    "watermarkStyle",
+    "watermarkRotate",
+    "watermarkGap",
+    "layoutType",
+    "colorWeakMode",
+    "grayMode",
+    "asideDark",
+    "transitionPage",
+    "themeColor",
+    "presetColors"
+  ])
 });

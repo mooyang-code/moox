@@ -95,7 +95,9 @@ async function mockGateway(route: Route) {
   if (method === "ListTags") {
     return route.fulfill({
       json: ok({
-        tags: [{ space_id: "crypto", tag_id: "manual", tag_name: "手工标签", mode: "manual", active_count: 1, inactive_count: 0 }],
+        tags: [
+          { space_id: "crypto", tag_id: "manual", tag_name: "手工标签", mode: "manual", active_count: 1, inactive_count: 0 }
+        ],
         page_result: { page: 1, size: 200, total: 1, has_more: false }
       })
     });

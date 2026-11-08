@@ -35,7 +35,7 @@
     <section class="jobs-section">
       <header class="jobs-section__header">
         <h3>作业列表</h3>
-        <a-button size="small" :loading="loading" @click="reload">刷新</a-button>
+        <a-button size="small" :loading="loading" @click="reload()">刷新</a-button>
       </header>
       <a-table
         :data="jobs"
@@ -106,7 +106,7 @@
 
 <script setup lang="ts">
 import TimeText from "@/components/time-text/index.vue";
-import { onBeforeUnmount, reactive, ref, watch } from "vue";
+import { reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { cancelKlineResampleJob, listKlineResampleJobs, submitKlineResampleJob, type ResampleJob } from "@/api/collector";
 import {
@@ -121,6 +121,7 @@ import {
   validateResampleRange
 } from "./resample-jobs";
 import { useDisplayZone } from "@/hooks/useDisplayZone";
+import { usePolling } from "@/hooks/usePolling";
 import ZonedRangePicker from "@/components/zoned-date-picker/zoned-range-picker.vue";
 
 const props = defineProps<{ visible: boolean; spaceId: string; taskId: string; taskName: string; targetFrequency: string }>();
@@ -132,20 +133,20 @@ const submitting = ref(false);
 // 合成范围按 K 线的时刻：显示和选择都按当前空间登记的时区，提交时换成 UTC
 const displayZone = useDisplayZone();
 const form = reactive({ range: null as [number, number] | null, subjects: "" });
-let timer: ReturnType<typeof setInterval> | undefined;
 let requestToken = 0;
 
-async function reload() {
+/** background：后台轮询，不转加载态、不弹提示，失败时保留上次的列表。 */
+async function reload(background = false) {
   if (!props.spaceId || !props.taskId) return;
   const token = ++requestToken;
-  loading.value = true;
+  if (!background) loading.value = true;
   try {
-    const list = await listKlineResampleJobs(props.spaceId, props.taskId, "", 50);
+    const list = await listKlineResampleJobs(props.spaceId, props.taskId, "", 50, { silentError: background });
     if (token === requestToken) jobs.value = list;
   } catch (error) {
-    if (token === requestToken) Message.error(error instanceof Error ? error.message : "获取历史合成作业失败");
+    if (token === requestToken && !background) Message.error(error instanceof Error ? error.message : "获取历史合成作业失败");
   } finally {
-    if (token === requestToken) loading.value = false;
+    if (token === requestToken && !background) loading.value = false;
   }
 }
 
@@ -184,27 +185,23 @@ async function cancel(job: ResampleJob) {
   }
 }
 
-function stopPolling() {
-  if (timer) clearInterval(timer);
-  timer = undefined;
-}
-
-// 抽屉打开时每 5 秒刷新一次作业进度；关闭时停止。
+// 抽屉打开时每 5 秒刷新一次作业进度（页面隐藏时暂停）；关闭时停止。
+usePolling(
+  () => reload(true),
+  5000,
+  () => props.visible
+);
 watch(
   () => props.visible,
   visible => {
-    stopPolling();
     if (!visible) return;
     form.range = defaultResampleRange(displayZone.value);
     form.subjects = "";
     jobs.value = [];
     void reload();
-    timer = setInterval(() => void reload(), 5000);
   },
   { immediate: true }
 );
-
-onBeforeUnmount(stopPolling);
 </script>
 
 <style scoped lang="scss">

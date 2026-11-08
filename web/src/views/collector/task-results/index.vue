@@ -62,6 +62,7 @@
             v-else-if="activeViewReadable && activeViewIds.length > 0"
             embedded
             :zone="displayZone"
+            :auto-refresh-interval-ms="60000"
             :view-ids="activeViewIds"
             :active-view-id="activeViewIds[0]"
             :refresh-key="viewRefreshKey"
@@ -319,18 +320,23 @@ async function loadTaskDetail(taskId: string, options: { includeInTabs?: boolean
   }
 }
 
+/** 别的页签的参数（任务页的筛选、补采的作业等）：本页签写 URL 时原样保留。 */
+function otherTabsQuery() {
+  return Object.fromEntries(Object.entries(route.query).filter(([key]) => key !== "tab" && key !== "resultTask"));
+}
+
 async function keepResultSelection(taskId: string) {
   // 页面被缓存（停用）后，在途请求返回也不能再把路由写回结果页。
   if (!pageActive) return;
   const requestedTaskId = queryTaskId(route.query.resultTask);
   if (requestedTaskId === taskId && route.query.tab === "results") return;
-  await router.replace({ path: "/collector/tasks", query: buildResultsQuery(taskId) });
+  await router.replace({ path: "/collector/tasks", query: { ...otherTabsQuery(), ...buildResultsQuery(taskId) } });
 }
 
 function onTaskChange(value: string | number) {
   const taskId = String(value);
   activeTaskId.value = taskId;
-  void router.replace({ path: "/collector/tasks", query: buildResultsQuery(taskId) });
+  void router.replace({ path: "/collector/tasks", query: { ...otherTabsQuery(), ...buildResultsQuery(taskId) } });
   void loadTaskDetail(taskId);
 }
 
@@ -352,14 +358,19 @@ async function refreshActiveTask() {
   if (ownershipVerified && taskId === activeTaskId.value) viewRefreshKey.value += 1;
 }
 
+/** 切回采集任务页签：只去掉 tab，其余参数（包括本页的 resultTask）保留，切回来还是同一个任务。 */
+function withoutTab() {
+  return Object.fromEntries(Object.entries(route.query).filter(([key]) => key !== "tab"));
+}
+
 function goToTasks() {
-  void router.replace({ path: "/collector/tasks", query: { tab: "tasks" } });
+  void router.replace({ path: "/collector/tasks", query: withoutTab() });
 }
 
 function goToTaskDetail() {
   void router.replace({
     path: "/collector/tasks",
-    query: { tab: "tasks", ...(activeTaskId.value ? { taskId: activeTaskId.value } : {}) }
+    query: { ...withoutTab(), ...(activeTaskId.value ? { detail: activeTaskId.value } : {}) }
   });
 }
 

@@ -139,6 +139,30 @@ describe("collector task result page deep links", () => {
     wrapper.unmount();
   });
 
+  it("跳回采集任务页签时只去掉 tab，resultTask 等参数保留，切回来还是同一个任务", async () => {
+    mocks.routeQuery.resultTask = "known";
+    mocks.routeQuery.keyword = "btc";
+    mocks.getTaskDetail.mockResolvedValue({
+      task: { task_id: "known", task_name: "Known task", result: { view_id: "view-known", status: "ready" } }
+    });
+    const wrapper = mount(TaskResultsPage, {
+      global: { stubs: { "a-tabs": true, "a-alert": true, "a-empty": true, "a-spin": true, ViewBrowse: true } }
+    });
+    await flushPromises();
+    const vm = wrapper.vm as unknown as { goToTasks(): void; goToTaskDetail(): void };
+    vm.goToTaskDetail();
+    expect(mocks.routerReplace).toHaveBeenLastCalledWith({
+      path: "/collector/tasks",
+      query: { resultTask: "known", keyword: "btc", detail: "known" }
+    });
+    vm.goToTasks();
+    expect(mocks.routerReplace).toHaveBeenLastCalledWith({
+      path: "/collector/tasks",
+      query: { resultTask: "known", keyword: "btc" }
+    });
+    wrapper.unmount();
+  });
+
   it("renders the local task list while the selected task detail is pending", async () => {
     mocks.routeQuery.resultTask = "known";
     const detail = deferred<{ task: { task_id: string; task_name: string } }>();

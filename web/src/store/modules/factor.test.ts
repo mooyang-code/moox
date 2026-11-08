@@ -130,7 +130,7 @@ describe("factor store", () => {
     const store = useFactorStore();
     await store.load("crypto");
     expect(store.datasetNames).toEqual({ d: "现货K线" });
-    expect(listDatasets).toHaveBeenCalledWith(expect.objectContaining({ space_id: "crypto" }));
+    expect(listDatasets).toHaveBeenCalledWith(expect.objectContaining({ space_id: "crypto" }), { silentError: true });
 
     // 同一空间的后续刷新不重复拉取；切到另一个空间则重新加载并替换映射
     await store.reload();

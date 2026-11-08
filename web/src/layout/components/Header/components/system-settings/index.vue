@@ -79,7 +79,7 @@ const {
   watermarkGap,
   darkMode
 } = storeToRefs(themeStore);
-const { tabsList, cacheRoutes } = storeToRefs(routerStore);
+const { tabsList } = storeToRefs(routerStore);
 const route = useRoute();
 const props = defineProps({
   systemOpen: {
@@ -95,13 +95,12 @@ const onWatermarkGap = (e: number) => {
 
 /*
   是否关闭tabs栏
-  如果关闭，那么所有tabs全部取消、所有页面缓存全部取消
+  如果关闭，那么所有tabs全部取消
   如果开启，那么添加当前路由到tabs
 */
 const tabsChange = (value: string | number | boolean) => {
   if (!value) {
     tabsList.value = [];
-    cacheRoutes.value = [];
   } else {
     currentlyRoute(route);
   }

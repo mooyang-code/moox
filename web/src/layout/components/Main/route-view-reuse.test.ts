@@ -1,5 +1,22 @@
 import { flushPromises, mount } from "@vue/test-utils";
-import { describe, expect, it } from "vitest";
+import ArcoVue from "@arco-design/web-vue";
+import { describe, expect, it, vi } from "vitest";
+
+// 主题配置用了自动导入的 ref，测试里换成一个只有主视图要用的字段的 store
+vi.mock("@/store/modules/theme-config", async () => {
+  const { defineStore } = await import("pinia");
+  const { ref } = await import("vue");
+  return {
+    useThemeConfig: defineStore("theme-config-test", () => ({
+      refreshPage: ref(true),
+      isTabs: ref(false),
+      watermark: ref(""),
+      watermarkStyle: ref({ fontSize: 12, color: "" }),
+      watermarkRotate: ref(0),
+      watermarkGap: ref([100, 100])
+    }))
+  };
+});
 import { defineComponent, h } from "vue";
 import { createMemoryHistory, createRouter, RouterView } from "vue-router";
 import { routeViewKey } from "./route-view-key";
@@ -59,5 +76,27 @@ describe("route view reuse with a real router", () => {
     await router.push("/reuse");
     await flushPromises();
     expect(counts.reuse).toBe(2);
+  });
+
+  it("跨路径导航时旧页面停留到新页面就绪，不被替换成“页面切换中”", async () => {
+    const { router } = setup();
+    let release: () => void = () => undefined;
+    router.beforeEach(to => (to.path === "/plain" ? new Promise<void>(resolve => (release = resolve)) : undefined));
+    await router.push("/reuse");
+    const { default: Main } = await import("./index.vue");
+    const wrapper = mount(Main, {
+      global: { plugins: [router, ArcoVue], stubs: { Tabs: true, MainTransition: { template: "<div><slot /></div>" } } }
+    });
+    await flushPromises();
+    expect(wrapper.text()).toContain("reuse");
+    const navigation = router.push("/plain");
+    await flushPromises();
+    // 守卫还没放行：旧页面还在，没有加载提示
+    expect(wrapper.text()).toContain("reuse");
+    expect(wrapper.text()).not.toContain("页面切换中");
+    release();
+    await navigation;
+    await flushPromises();
+    expect(wrapper.text()).toContain("plain");
   });
 });

@@ -247,9 +247,11 @@ describe("overview page contract", () => {
     }
   });
 
-  it("fans out recalc queries per enabled set and polls through usePolling", () => {
+  it("fans out recalc queries per enabled set and polls them in the same round as useFactorScope", () => {
     expect(page).toContain("listRecalcJobs");
     expect(page).toContain("recalcQueryTasks");
-    expect(page).toContain("usePolling");
+    // 只有 useFactorScope 一个 10 秒轮询，补算作业并进同一轮
+    expect(page).toContain("extraPoll: () => loadJobs(true)");
+    expect(page).not.toContain("usePolling(");
   });
 });

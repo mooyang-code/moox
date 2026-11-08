@@ -53,9 +53,7 @@ describe("Trade public API", () => {
 
   it("uses canonical unified account RPC names", async () => {
     await trade.listTradingAccounts({ page: { page: 1, size: 20 } });
-    expect(callTrade).toHaveBeenLastCalledWith("console", "ListTradingAccounts", {
-      page: { page: 1, size: 20 }
-    });
+    expect(callTrade).toHaveBeenLastCalledWith("console", "ListTradingAccounts", { page: { page: 1, size: 20 } }, {});
 
     await trade.syncTradingAccount("account-1");
     expect(callTrade).toHaveBeenLastCalledWith("console", "SyncTradingAccount", {
@@ -179,9 +177,7 @@ describe("Trade public API", () => {
 
   it("reads current quantity targets and parses per-account flatten progress", async () => {
     await trade.getLogicalAccountTarget("logical-1");
-    expect(callTrade).toHaveBeenCalledWith("console", "GetLogicalAccountTarget", {
-      logical_account_id: "logical-1"
-    });
+    expect(callTrade).toHaveBeenCalledWith("console", "GetLogicalAccountTarget", { logical_account_id: "logical-1" }, {});
     expect(
       trade.parseFlattenResult({
         action_id: "action-1",

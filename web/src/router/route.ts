@@ -58,7 +58,7 @@ export const staticRoutes = [
         path: "/data/fields",
         name: "data-fields",
         component: () => import("@/views/data/fields/index.vue"),
-        meta: { title: "data-fields" }
+        meta: { title: "data-fields", reuseOnQuery: true }
       },
       {
         path: "/data/archive",
@@ -148,7 +148,7 @@ export const staticRoutes = [
         path: "/collector/tasks",
         name: "collector-tasks",
         component: () => import("@/views/collector/task-management/index.vue"),
-        meta: { title: "collector-tasks" }
+        meta: { title: "collector-tasks", reuseOnQuery: true }
       },
       {
         path: "/trading/accounts",
@@ -166,19 +166,19 @@ export const staticRoutes = [
         path: "/ops/monitor",
         name: "ops-monitor",
         component: () => import("@/views/ops/monitor/index.vue"),
-        meta: { title: "ops-monitor" }
+        meta: { title: "ops-monitor", reuseOnQuery: true }
       },
       {
         path: "/ops/deployments",
         name: "ops-deployments",
         component: () => import("@/views/ops/deployments/index.vue"),
-        meta: { title: "ops-deployments" }
+        meta: { title: "ops-deployments", reuseOnQuery: true }
       },
       {
         path: "/ops/hosts",
         name: "ops-hosts",
         component: () => import("@/views/ops/host-workbench/index.vue"),
-        meta: { title: "ops-hosts" }
+        meta: { title: "ops-hosts", reuseOnQuery: true }
       },
       {
         path: "/ops/storage/nodes",

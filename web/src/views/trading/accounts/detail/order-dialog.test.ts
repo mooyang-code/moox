@@ -256,7 +256,7 @@ describe("下单对话框", () => {
     expect(tracker.action.value?.status).toBe("RUNNING");
     expect(tracker.submittedOrder.value).toBeNull();
     expect(mocks.getOrder).not.toHaveBeenCalled();
-    expect(mocks.getOperatorAction).toHaveBeenCalledWith("action");
+    expect(mocks.getOperatorAction).toHaveBeenCalledWith("action", { silent: true });
   });
 
   it("生产环境要输入组合名称才能提交", async () => {

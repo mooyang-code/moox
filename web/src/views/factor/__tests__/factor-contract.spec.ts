@@ -124,7 +124,7 @@ describe("factor pages contract", () => {
     expect(taskHost).toContain("PageTitleTabs");
     expect(factorScope).toContain("route.query.task");
     expect(factorScope).toContain("usePolling");
-    expect(overviewPage).toContain("usePolling");
+    expect(overviewPage).toContain("extraPoll");
   });
 
   it("changes member status only through setFactorMemberStatus without a backfill job", () => {

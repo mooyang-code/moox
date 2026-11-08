@@ -138,11 +138,12 @@ interface HostHistoryPoint {
   snapshot?: HostSnapshot;
 }
 
-export const getCurrentMetrics = () => {
+export const getCurrentMetrics = (options: { silentError?: boolean } = {}) => {
   return callControl<Record<string, never>, { agents?: HostAgent[]; storage_available?: boolean; data_gap?: boolean }>(
     "monitor",
     "ListHostAgents",
-    {}
+    {},
+    options
   ).then(response => ({
     metrics: (response.agents ?? []).map(agent => toHostMetrics(agent, response.storage_available !== false)),
     storage_available: response.storage_available !== false,

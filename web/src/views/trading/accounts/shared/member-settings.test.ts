@@ -1,6 +1,6 @@
 import { flushPromises, mount } from "@vue/test-utils";
 import ArcoVue from "@arco-design/web-vue";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type { TradingAccount } from "@/api/trade";
 
 vi.mock("./exchange-secrets", () => ({
@@ -39,9 +39,11 @@ const liveAccount = {
   live: { environment: 1, credential_secret_id: "s1" }
 } as unknown as TradingAccount;
 
+// 文件结束前等弹窗动画的帧回调跑完：否则 jsdom 环境销毁后回调还会触发，报未处理的错误（CI 机器慢时出现）。
 afterEach(() => {
   document.body.innerHTML = "";
 });
+afterAll(() => new Promise(resolve => setTimeout(resolve, 100)));
 
 const mountIt = (account: TradingAccount) => mount(MemberSettings, { props: { account }, global: { plugins: [ArcoVue] } });
 

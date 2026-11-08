@@ -165,11 +165,14 @@ async function load(options: { silent?: boolean } = {}) {
   if (!options.silent) loading.value = true;
   try {
     const statuses = segmentStatuses(segment.value);
-    const rsp = await listRecalcJobs({
-      task_id: current.task_id,
-      ...(statuses ? { statuses } : {}),
-      page: { page: pagination.current, size: pagination.pageSize }
-    });
+    const rsp = await listRecalcJobs(
+      {
+        task_id: current.task_id,
+        ...(statuses ? { statuses } : {}),
+        page: { page: pagination.current, size: pagination.pageSize }
+      },
+      { silentError: Boolean(options.silent) }
+    );
     if (!gate.isCurrent(token)) return;
     jobs.value = rsp.jobs || [];
     applyPageResult(pagination, rsp.page_result);

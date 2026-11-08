@@ -38,7 +38,8 @@ describe("collector result workflow", () => {
     expect(results).toContain(":active-view-id=");
     expect(results).toContain(":view-ids=");
     expect(results).not.toContain("hide-technical-identity");
-    expect(results).not.toContain("auto-refresh-interval-ms");
+    // 采集结果每 60 秒后台刷新（ViewBrowse 内部用 usePolling，读取失败不弹提示）
+    expect(results).toContain(':auto-refresh-interval-ms="60000"');
     expect(results).not.toContain("result-context");
     expect(browse).toContain('v-if="!props.hideTechnicalIdentity" class="view-status-line"');
     expect(browse).toContain("<KlineModal");

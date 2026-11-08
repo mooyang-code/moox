@@ -1,4 +1,4 @@
-import { callStorage as callView } from "./http";
+import { callStorage as callView, type StorageCallOptions } from "./http";
 import type {
   FilterSpec,
   Page,
@@ -40,16 +40,16 @@ export interface SearchRecordRowsReq {
   page?: Page;
 }
 
-export function queryTimeSeriesRows(req: QueryTimeSeriesRowsReq) {
+export function queryTimeSeriesRows(req: QueryTimeSeriesRowsReq, options: StorageCallOptions = {}) {
   return callView<
     QueryTimeSeriesRowsReq,
     { ret_info: RetInfo; columns: ResultColumn[]; rows: TimeSeriesRow[]; page_result: PageResult }
-  >("QueryTimeSeriesRows", req);
+  >("QueryTimeSeriesRows", req, options);
 }
 
-export function searchRecordRows(req: SearchRecordRowsReq) {
+export function searchRecordRows(req: SearchRecordRowsReq, options: StorageCallOptions = {}) {
   return callView<
     SearchRecordRowsReq,
     { ret_info: RetInfo; columns: ResultColumn[]; rows: RecordRow[]; page_result: PageResult }
-  >("SearchRecordRows", req);
+  >("SearchRecordRows", req, options);
 }

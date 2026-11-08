@@ -22,7 +22,7 @@ describe("SysDeploy v2", () => {
       };
     });
     expect(await listAllDeploymentHosts()).toHaveLength(103);
-    expect(call).toHaveBeenNthCalledWith(2, "sysdeploy", "ListHosts", { page: { page: 2, size: 100 } });
+    expect(call).toHaveBeenNthCalledWith(2, "sysdeploy", "ListHosts", { page: { page: 2, size: 100 } }, {});
   });
   it("rejects broken or changing pagination rather than displaying a partial topology", async () => {
     call.mockResolvedValue({ deployments: [], page_result: { has_more: true } });
@@ -46,7 +46,7 @@ describe("SysDeploy v2", () => {
   it("exposes only read requests and no status mutation", async () => {
     call.mockResolvedValue({});
     await getHostRoutes("storage");
-    expect(call.mock.calls).toEqual([["sysdeploy", "GetHostRoutes", { host_id: "storage" }]]);
+    expect(call.mock.calls).toEqual([["sysdeploy", "GetHostRoutes", { host_id: "storage" }, {}]]);
     const api = await import("./sysdeploy");
     expect(api).not.toHaveProperty("setHostStatus");
     expect(api).not.toHaveProperty("setDeploymentStatus");

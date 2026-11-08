@@ -1,4 +1,4 @@
-import { defineComponent } from "vue";
+import { defineComponent, reactive } from "vue";
 import { Message, Modal } from "@arco-design/web-vue";
 import { mount, flushPromises, type VueWrapper } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
@@ -9,6 +9,16 @@ import { listAllDatasets } from "@/api/storage/metadata";
 import HealthMonitor from "./index.vue";
 
 vi.mock("@/api/admin/http", () => ({ callControl: vi.fn() }));
+// 展开状态在 URL 里：路由换成可控的假实现
+const nav = vi.hoisted(() => ({ route: { query: {} as Record<string, string> } }));
+vi.mock("vue-router", () => ({
+  useRoute: () => nav.route,
+  useRouter: () => ({
+    replace: ({ query }: { query: Record<string, string> }) => {
+      nav.route.query = query;
+    }
+  })
+}));
 vi.mock("@visactor/vchart", () => ({
   default: class {
     renderSync() {
@@ -70,6 +80,7 @@ describe("monitor page", () => {
   beforeEach(() => {
     mockedCallControl.mockReset();
     setActivePinia(createPinia());
+    nav.route = reactive({ query: {} });
   });
   afterEach(() => {
     vi.restoreAllMocks();
@@ -176,6 +187,26 @@ describe("monitor page", () => {
     await timeline.find(".link-button").trigger("click");
     expect(timeline.findAll(".incident")).toHaveLength(2);
     expect(timeline.text()).toContain("29 秒后恢复 · 闪断");
+  });
+
+  it("带 ?expand= 打开时数据链路是展开的；点展开写进 URL", async () => {
+    nav.route.query = { expand: "pipeline" };
+    const page = render({
+      ...healthy,
+      pipeline: [
+        {
+          id: "storage",
+          status: "healthy",
+          datasets: [
+            { producer: "storage", space_id: "crypto", dataset_id: "dataset_abc", freq: "1m", status: "healthy", timezone: "UTC" }
+          ]
+        }
+      ]
+    });
+    await flushPromises();
+    expect(page.find('[aria-label="数据链路"] .link-button').text()).toBe("只看需要关注的");
+    await page.find('[aria-label="数据链路"] .link-button').trigger("click");
+    expect(nav.route.query.expand).toBeUndefined();
   });
 
   it("shows only the latest incidents until expanded", async () => {
@@ -415,6 +446,6 @@ describe("monitor page", () => {
   it("uses the structured overview endpoint", async () => {
     mockedCallControl.mockResolvedValue({ overview: healthy });
     await monitorApi.getOverview({ space_id: "crypto" });
-    expect(mockedCallControl).toHaveBeenLastCalledWith("monitor", "GetHealthOverview", { space_id: "crypto" });
+    expect(mockedCallControl).toHaveBeenLastCalledWith("monitor", "GetHealthOverview", { space_id: "crypto" }, expect.anything());
   });
 });

@@ -3,7 +3,8 @@ import { onActivated, onBeforeUnmount, onDeactivated, onMounted, toValue, type M
 
 /**
  * 在 active 为真且页面可见时按间隔执行 task；上一次未结束不会叠加，组件卸载自动停止。
- * 被 KeepAlive 缓存（deactivated）时暂停；可见性或激活恢复时立即补一次，避免切回标签页后长时间显示旧状态。
+ * 页面隐藏时暂停，恢复可见时立即补一次。失活暂停只对页面内部的 keep-alive（例如因子计算任务的页签）有效：
+ * 全局没有页面缓存，离开页面就卸载。
  */
 export function usePolling(task: () => Promise<unknown> | unknown, intervalMs: number, active: MaybeRefOrGetter<boolean> = true) {
   let timer: number | undefined;

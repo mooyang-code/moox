@@ -123,6 +123,70 @@ describe("View result refresh", () => {
     wrapper.unmount();
   });
 
+  it("自动刷新失败不弹提示、错误条不闪；手动刷新失败只由页面提示一次", async () => {
+    vi.useFakeTimers();
+    const wrapper = shallowMount(ViewBrowse, {
+      props: {
+        embedded: true,
+        viewIds: ["view-known"],
+        activeViewId: "view-known",
+        refreshKey: 0,
+        autoRefreshIntervalMs: 60_000
+      },
+      global: {
+        stubs: {
+          "a-alert": { template: "<div class='alert'><slot /></div>" },
+          ResultTable: { props: ["rows"], template: "<div />" }
+        }
+      }
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    await flushPromises();
+    expect(mocks.queryTimeSeries).toHaveBeenCalledTimes(1);
+    expect(mocks.queryTimeSeries.mock.lastCall?.[1]).toEqual({ silentError: true });
+
+    // 手动刷新失败：页面提示一次（请求层静默，不会弹两次），错误条出现
+    mocks.queryTimeSeries.mockRejectedValueOnce(new Error("Storage unavailable"));
+    await wrapper.setProps({ refreshKey: 1 });
+    await flushPromises();
+    expect(mocks.messageError).toHaveBeenCalledTimes(1);
+    expect(wrapper.text()).toContain("Storage unavailable");
+
+    // 自动刷新再失败：不弹提示，请求开始时也不清掉错误条
+    let rejectPoll!: (error: Error) => void;
+    mocks.queryTimeSeries.mockImplementationOnce(() => new Promise((_resolve, reject) => (rejectPoll = reject)));
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(wrapper.text()).toContain("Storage unavailable");
+    rejectPoll(new Error("Storage unavailable"));
+    await flushPromises();
+    expect(mocks.messageError).toHaveBeenCalledTimes(1);
+
+    // 自动刷新成功后错误条消失
+    await vi.advanceTimersByTimeAsync(60_000);
+    await flushPromises();
+    expect(wrapper.text()).not.toContain("Storage unavailable");
+    wrapper.unmount();
+    vi.useRealTimers();
+  });
+
+  it("视图元数据没读到时自动刷新不重试，不会每轮弹提示", async () => {
+    vi.useFakeTimers();
+    mocks.catalog.mockRejectedValue(new Error("Storage unavailable"));
+    const wrapper = shallowMount(ViewBrowse, {
+      props: { embedded: true, viewIds: ["view-known"], activeViewId: "view-known", autoRefreshIntervalMs: 60_000 },
+      global: { stubs: { "a-alert": { template: "<div class='alert'><slot /></div>" } } }
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    await flushPromises();
+    const calls = mocks.catalog.mock.calls.length;
+    const errors = mocks.messageError.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(mocks.catalog.mock.calls.length).toBe(calls);
+    expect(mocks.messageError.mock.calls.length).toBe(errors);
+    wrapper.unmount();
+    vi.useRealTimers();
+  });
+
   it("leaves an initial query failure empty without claiming previous data", async () => {
     mocks.queryTimeSeries.mockRejectedValue(new Error("Storage unavailable"));
     const wrapper = mountPage();

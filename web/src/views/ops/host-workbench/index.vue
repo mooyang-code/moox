@@ -57,7 +57,6 @@ import type { DeploymentHost } from "@/api/admin/types";
 import { getCurrentMetrics, type HostMetrics } from "@/api/modules/host-monitor";
 import { createSSHSession, disconnectSSHSession } from "@/api/modules/ssh";
 import { buildHostMonitorRows } from "./host-monitor-mapping";
-import { sshAvailability } from "./host-workbench-utils";
 
 const route = useRoute();
 const router = useRouter();
@@ -158,13 +157,8 @@ watch(
   }
 );
 
-onMounted(async () => {
-  await loadMonitorData();
-  // 只有主机列表页签的 host_id 链接才直接打开终端；监控页签的 host_id 只用来定位主机，不能建连。
-  const hostId = typeof route.query.host_id === "string" ? route.query.host_id : "";
-  const target = hosts.value.find(item => item.host_id === hostId);
-  if (activeTab.value === "hosts" && target && sshAvailability(target).ok) openTerminal(hostId);
-});
+// 终端只在点击时打开：URL 里的 host_id 只用来定位主机，挂载、刷新、切页签都不会建立 SSH 连接（O4）
+onMounted(loadMonitorData);
 
 onBeforeUnmount(() => {
   fileManagerRequest += 1;

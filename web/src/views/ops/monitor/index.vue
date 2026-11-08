@@ -8,7 +8,7 @@
         </div>
         <a-space>
           <span class="muted">告警推送：{{ notificationLabel }}</span>
-          <a-button :loading="loading" @click="refresh">刷新</a-button>
+          <a-button :loading="loading" @click="refresh()">刷新</a-button>
           <a-button type="outline" @click="openNotification">消息通知设置</a-button>
         </a-space>
       </header>
@@ -41,7 +41,7 @@
                 type="button"
                 class="alert-line__main"
                 :aria-expanded="expandedAlert === line.key"
-                @click="expandedAlert = expandedAlert === line.key ? '' : line.key"
+                @click="toggleAlert(line.key)"
               >
                 <span class="dot" />
                 <span class="alert-line__title">{{ line.title }}</span>
@@ -239,12 +239,7 @@
             </div>
             <footer v-if="pipelineView === 'table'" class="tile-foot">
               <span v-if="!datasetGroups.length" class="muted">{{ pipelineQuiet }}</span>
-              <button
-                v-if="allDatasetRows.length"
-                type="button"
-                class="link-button"
-                @click="expanded.pipeline = !expanded.pipeline"
-              >
+              <button v-if="allDatasetRows.length" type="button" class="link-button" @click="toggleExpand('pipeline')">
                 {{ expanded.pipeline ? "只看需要关注的" : `展开全部 ${allDatasetRows.length} 条` }}
               </button>
             </footer>
@@ -275,7 +270,7 @@
             </ul>
             <footer class="tile-foot">
               <span v-if="!businessRows.length" class="muted">{{ businessQuiet }}</span>
-              <button v-if="businessCount" type="button" class="link-button" @click="expanded.business = !expanded.business">
+              <button v-if="businessCount" type="button" class="link-button" @click="toggleExpand('business')">
                 {{ expanded.business ? "只看需要关注的" : `展开全部 ${businessCount} 项` }}
               </button>
             </footer>
@@ -385,6 +380,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { Message, Modal } from "@arco-design/web-vue";
+import { useRoute, useRouter } from "vue-router";
 import { monitorApi, type HealthComponent, type HealthOverview, type NotificationChannel } from "@/api/monitor";
 import { listAllDatasets, listAllViews } from "@/api/storage/metadata";
 import { usePolling } from "@/hooks/usePolling";
@@ -422,9 +418,29 @@ const error = ref("");
 const loadedAt = ref("");
 const clockMs = ref(Date.now());
 const names = reactive<NameBook>({ datasets: {}, views: {} });
-const expandedAlert = ref("");
+// 展开状态写进 URL（?expand=pipeline,business&alert=<key>）：切到别的标签页再回来、刷新后仍是展开的
+const route = useRoute();
+const router = useRouter();
+const firstQuery = (value: unknown) => String((Array.isArray(value) ? value[0] : value) ?? "");
+const expandSet = computed(() => new Set(firstQuery(route.query.expand).split(",").filter(Boolean)));
+const expandedAlert = computed(() => firstQuery(route.query.alert));
+function writeQuery(patch: Record<string, string | undefined>) {
+  const next = Object.fromEntries(
+    Object.entries({ ...route.query, ...patch }).filter(([, value]) => value !== undefined && value !== "")
+  );
+  void router.replace({ query: next });
+}
+function toggleExpand(key: "pipeline" | "business") {
+  const set = new Set(expandSet.value);
+  if (set.has(key)) set.delete(key);
+  else set.add(key);
+  writeQuery({ expand: [...set].sort().join(",") || undefined });
+}
+function toggleAlert(key: string) {
+  writeQuery({ alert: expandedAlert.value === key ? undefined : key });
+}
 const showAllIncidents = ref(false);
-const expanded = reactive({ pipeline: false, business: false });
+const expanded = computed(() => ({ pipeline: expandSet.value.has("pipeline"), business: expandSet.value.has("business") }));
 /** 数据链路的视图：表格（各数据集当前状态）或曲线（一条链路某一天逐根 K 线的到达延迟）。 */
 const pipelineView = ref<"table" | "chart">("table");
 const detailVisible = ref(false);
@@ -487,7 +503,7 @@ const datasetGroups = computed(() =>
         id: stage.id,
         label: stage.label,
         summary: `${stage.rows.length} 个数据集${attention ? ` · ${attention} 个需要关注` : ""}`,
-        rows: expanded.pipeline ? stage.rows : stage.rows.filter(row => row.attention)
+        rows: expanded.value.pipeline ? stage.rows : stage.rows.filter(row => row.attention)
       };
     })
     .filter(group => group.rows.length)
@@ -498,7 +514,7 @@ const pipelineQuiet = computed(() =>
 const business = computed(() => businessKinds(overview.value, names, nowMs.value));
 const businessCount = computed(() => business.value.reduce((sum, kind) => sum + kind.total, 0));
 const businessRows = computed(() =>
-  business.value.flatMap(kind => (expanded.business ? kind.items : kind.items.filter(item => item.attention)))
+  business.value.flatMap(kind => (expanded.value.business ? kind.items : kind.items.filter(item => item.attention)))
 );
 const businessQuiet = computed(() => (businessCount.value ? "没有需要关注的业务检查" : "暂无业务检查"));
 const notificationLabel = computed(() => {
@@ -517,11 +533,12 @@ function othersText(titles: string[]) {
   return titles.length > 2 ? `${titles.slice(0, 2).join("、")} 等 ${titles.length} 项` : titles.join("、");
 }
 
-async function refresh() {
+/** background：30 秒的后台刷新，不弹全局提示，失败写在页面上（保留上次的数据）。 */
+async function refresh(background = false) {
   const request = refreshGuard.begin();
   loading.value = true;
   try {
-    const rsp = await monitorApi.getOverview();
+    const rsp = await monitorApi.getOverview({}, { silentError: background });
     if (!rsp.overview) throw new Error("健康概览响应缺失");
     if (request.isLatest()) {
       overview.value = rsp.overview;
@@ -638,7 +655,11 @@ const notificationScope = createSubmitScope({ global: true });
 watch(notificationVisible, () => notificationScope.invalidate());
 
 // 编辑通知设置时暂停轮询，避免刷新打断表单。
-usePolling(refresh, 30000, () => !notificationVisible.value);
+usePolling(
+  () => refresh(true),
+  30000,
+  () => !notificationVisible.value
+);
 let clock: number | undefined;
 onMounted(() => {
   void refresh();

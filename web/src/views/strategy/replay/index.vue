@@ -305,6 +305,7 @@ import { buildReplayQuery, parseReplayQuery, type ReplayQueryState } from "@/vie
 import ReplayRecordList from "@/views/strategy/replay/replay-record-list.vue";
 import { formatInstant, msToWallClock, zoneSuffix } from "@/utils/time-zone";
 import { useDisplayZone } from "@/hooks/useDisplayZone";
+import { usePolling } from "@/hooks/usePolling";
 import {
   equitySeries,
   equitySummary,
@@ -392,8 +393,6 @@ function loadChartLibrary() {
   chartLibrary ??= import("@visactor/vchart");
   return chartLibrary;
 }
-let poll: ReturnType<typeof setInterval> | null = null;
-let polling = false;
 // generation 随空间切换递增：旧空间发出的请求返回后一律丢弃；selectRequest 让被新选择取代的详情请求作废。
 // listSeq 是列表请求的发出序号，listApplied 是已应用的最新序号：晚返回的旧请求（或旧页）不能覆盖新结果；
 // listLoadingSeq 只跟踪手动加载，决定加载状态何时结束；tableLoadingRequest 同样只跟踪表格的手动加载。
@@ -887,15 +886,13 @@ function applyRouteSelection() {
   if (replayId && replayId !== selectedId.value) void select(replayId, { tablePage: barPage });
 }
 
-function startPolling() {
-  poll = setInterval(async () => {
-    clock.value = Date.now();
-    if (awaitingMetrics.value && clock.value > awaitingMetrics.value.until) awaitingMetrics.value = null;
-    if (polling) return;
-    if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
-    // 所选回放不在当前列表页时也要刷新：轮询条件看列表与所选回放两处。
-    if (!replays.value.some(item => item.status === "pending" || item.status === "running") && !selectedNeedsRefresh()) return;
-    polling = true;
+// 每 5 秒一轮（usePolling：页面隐藏时暂停、上一轮没结束不叠加）。
+async function pollTick() {
+  clock.value = Date.now();
+  if (awaitingMetrics.value && clock.value > awaitingMetrics.value.until) awaitingMetrics.value = null;
+  // 所选回放不在当前列表页时也要刷新：轮询条件看列表与所选回放两处。
+  if (!replays.value.some(item => item.status === "pending" || item.status === "running") && !selectedNeedsRefresh()) return;
+  {
     const gen = generation;
     const seq = ++listSeq;
     const page = replayPage.value;
@@ -908,11 +905,10 @@ function startPolling() {
       if (gen === generation) pollFailures.value = 0;
     } catch {
       if (gen === generation) pollFailures.value += 1;
-    } finally {
-      polling = false;
     }
-  }, 5000);
+  }
 }
+usePolling(pollTick, 5000);
 
 onMounted(() => {
   // 策略定义按空间授权：空间尚未初始化时请求会被拒绝，由下面的空间监听在就绪后补载。
@@ -922,7 +918,6 @@ onMounted(() => {
   }
   loadTasks();
   loadReplays();
-  startPolling();
 });
 watch(
   () => parsed.value.create,
@@ -994,7 +989,6 @@ watch(
   }
 );
 onBeforeUnmount(() => {
-  if (poll) clearInterval(poll);
   // 作废进行中的请求：返回后不再翻页读取、不再渲染图表。
   generation += 1;
   selectRequest += 1;

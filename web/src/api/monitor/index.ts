@@ -4,8 +4,9 @@ import type { ArrivalHistory, HealthOverview, NotificationChannel } from "./type
 const SERVICE = "monitor";
 
 export const monitorApi = {
-  getOverview(req: { space_id?: string } = {}) {
-    return callControl<typeof req, { overview?: HealthOverview }>(SERVICE, "GetHealthOverview", req);
+  /** 后台轮询传 { silentError: true }：失败不弹全局提示，由页面自己显示。 */
+  getOverview(req: { space_id?: string } = {}, options: { silentError?: boolean } = {}) {
+    return callControl<typeof req, { overview?: HealthOverview }>(SERVICE, "GetHealthOverview", req, options);
   },
   /** 列出全部推送渠道（含完整 Webhook URL）。 */
   listNotificationChannels() {

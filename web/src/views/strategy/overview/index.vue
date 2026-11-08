@@ -166,10 +166,10 @@ const cards = computed(() => instanceCards(input.value, displayZone.value));
 const pending = computed(() => pendingItems(input.value));
 const running = computed(() => activeReplays(replays.value));
 
-async function loadInstances(): Promise<StrategyInstance[]> {
+async function loadInstances(silent: boolean): Promise<StrategyInstance[]> {
   const all: StrategyInstance[] = [];
   for (let page = 1; page <= 10; page += 1) {
-    const rsp = await listInstances({ page, page_size: 200 });
+    const rsp = await listInstances({ page, page_size: 200 }, { silent });
     all.push(...rsp.items);
     if (!rsp.items.length || all.length >= rsp.page.total) break;
   }
@@ -186,16 +186,19 @@ async function loadAll(options: { background?: boolean } = {}) {
   if (!options.background) loading.value = true;
   try {
     const [nextInstances, replayPage] = await Promise.all([
-      loadInstances(),
+      loadInstances(Boolean(options.background)),
       listReplays({ page: 1, page_size: 20 }, { silent: true }).catch(error => {
         if (gate.isCurrent(token)) replayError.value = error instanceof Error && error.message ? error.message : "请稍后重试";
         return null;
       }),
-      store.strategiesComplete ? Promise.resolve() : store.loadAllStrategies(200).catch(() => undefined)
+      // 策略目录只在前台加载时补读：后台刷新不重试，免得策略模块不可用时每 30 秒弹一次
+      store.strategiesComplete || options.background ? Promise.resolve() : store.loadAllStrategies(200).catch(() => undefined)
     ]);
     if (!gate.isCurrent(token)) return;
     const enabled = nextInstances.filter(item => item.enabled).slice(0, TARGET_FETCH_LIMIT);
-    const settled = await Promise.allSettled(enabled.map(item => listStrategyTargets(item.instance_id)));
+    const settled = await Promise.allSettled(
+      enabled.map(item => listStrategyTargets(item.instance_id, { silent: Boolean(options.background) }))
+    );
     if (!gate.isCurrent(token)) return;
     const nextTargets: Record<string, StrategyTargetSnapshot> = {};
     settled.forEach((result, index) => {

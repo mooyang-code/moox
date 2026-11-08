@@ -45,12 +45,14 @@ export interface FactorScopeOptions {
   /** 轮询；默认 10 秒，false 关闭。 */
   poll?: boolean;
   pollMs?: number;
+  /** 和计算任务、引擎状态同一轮刷新的其他读取 */
+  extraPoll?: () => Promise<unknown>;
 }
 
 /**
  * 因子页面共用的样板：空间切换加载、?task= 与 store 同步、轮询。
- * 主区域是 keep-alive；因子页面声明了 reuseOnQuery，query 变化时组件不重建。只在空间 id 变化时 reset + load，
- * 同一空间重新挂载直接复用 store。失活期间不跟随 ?task=，重新激活时按 URL 补同步一次。
+ * 因子页面声明了 reuseOnQuery，query 变化时组件不重建。只在空间 id 变化时 reset + load，同一空间重新挂载直接复用 store。
+ * 计算任务页内部用 keep-alive 缓存页签：失活期间不跟随 ?task=，重新激活时按 URL 补同步一次。
  */
 export function useFactorScope(options: FactorScopeOptions = {}) {
   const requireSet = options.requireSet ?? false;
@@ -133,8 +135,9 @@ export function useFactorScope(options: FactorScopeOptions = {}) {
   }
 
   if (options.poll !== false) {
+    // 页面要一起刷新的其他数据（例如总览的补算作业）放进同一轮，不再各自开一个定时器
     usePolling(
-      () => Promise.all([store.reload(), store.refreshEngine()]),
+      () => Promise.all([store.reload(), store.refreshEngine(), options.extraPoll?.()]),
       options.pollMs ?? 10_000,
       () => Boolean(spaceId.value)
     );

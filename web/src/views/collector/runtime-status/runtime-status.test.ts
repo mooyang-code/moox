@@ -150,7 +150,7 @@ describe("collector runtime status page", () => {
   const page = readFileSync(resolve(__dirname, "runtime-status.vue"), "utf8");
 
   it("leads with the overall verdict, dataset health and the function list", () => {
-    expect(page).toContain("getCollectorStatus(spaceId)");
+    expect(page).toContain("getCollectorStatus(spaceId, { silentError: background })");
     expect(page.indexOf('class="status-card"')).toBeLessThan(page.indexOf("<h3>数据集健康</h3>"));
     expect(page.indexOf("<h3>数据集健康</h3>")).toBeLessThan(page.indexOf('class="function-section"'));
     expect(page).toContain('category="collector.subject_change"');

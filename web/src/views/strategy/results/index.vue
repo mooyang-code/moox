@@ -39,7 +39,7 @@
 
           <a-alert v-if="store.detailError" type="error" show-icon class="page-alert">
             实例读取失败：{{ store.detailError }}
-            <template #action><a-button size="mini" @click="load">重试</a-button></template>
+            <template #action><a-button size="mini" @click="load()">重试</a-button></template>
           </a-alert>
 
           <template v-if="current">

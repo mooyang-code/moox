@@ -124,7 +124,10 @@ export async function callTrade<TReq extends object, TRsp extends { ret_info: Re
   req: TReq,
   options: { silent?: boolean } = {}
 ): Promise<TRsp> {
-  const rsp = await tradeClient.post<TRsp>(`/api/admin/${tradeServiceMap[group]}/${method}`, req);
+  // silent 同时管传输错误：后台轮询失败不弹全局提示，由页面自己显示
+  const rsp = await tradeClient.post<TRsp>(`/api/admin/${tradeServiceMap[group]}/${method}`, req, {
+    silentError: Boolean(options.silent)
+  });
   try {
     assertSuccess(rsp.data);
   } catch (error) {
@@ -148,7 +151,9 @@ tradeClient.interceptors.response.use(
     return rsp;
   },
   error => {
-    Message.error(explainTransportError(error, "Trade 请求失败"));
+    // 静默时也要把网络错误改写成中文（调用方会把 error.message 显示在自己的对话框里），只是不弹全局提示。
+    const message = explainTransportError(error, "Trade 请求失败");
+    if (!error?.config?.silentError) Message.error(message);
     return Promise.reject(error);
   }
 );

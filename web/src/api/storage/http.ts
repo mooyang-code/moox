@@ -164,7 +164,9 @@ storageClient.interceptors.response.use(
   },
   error => {
     if (error instanceof StaleSpaceRequestError) return Promise.reject(error);
-    if (!error?.config?.silentError) Message.error(explainTransportError(error, "Storage 请求失败"));
+    // 静默时也要把网络错误改写成中文（页面会把 error.message 显示在自己的错误条里），只是不弹全局提示。
+    const message = explainTransportError(error, "Storage 请求失败");
+    if (!error?.config?.silentError) Message.error(message);
     return Promise.reject(error);
   }
 );

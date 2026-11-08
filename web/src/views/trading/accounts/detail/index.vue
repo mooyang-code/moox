@@ -298,6 +298,7 @@
 <script setup lang="ts">
 import TimeText from "@/components/time-text/index.vue";
 import { computed, onBeforeUnmount, provide, ref, watch } from "vue";
+import { usePolling } from "@/hooks/usePolling";
 import { useRoute, useRouter } from "vue-router";
 import { Message } from "@arco-design/web-vue";
 import { useSpaceStore } from "@/store/modules/space";
@@ -442,23 +443,23 @@ const actionAlertType = computed(() => {
 
 // 同一时刻只认最新一次读取：空间切换、页签切换后迟到的响应不能覆盖当前数据。
 const reloads = createLatestRequestGuard();
-let poller: ReturnType<typeof setInterval> | null = null;
-
-async function reload() {
+/** background：每 5 秒的后台刷新，不弹全局提示；失败保留上次的数据，下一轮再试。 */
+async function reload(background = false) {
   const id = logicalId.value;
   if (!id) return;
   const request = reloads.begin();
+  const options = { silent: background };
   const [logicalRsp, targetRsp, accountRsp] = await Promise.all([
-    getLogicalAccount(id),
-    getLogicalAccountTarget(id).catch(() => ({ target: undefined })),
-    listTradingAccounts({ page: { page: 1, size: 200 } })
+    getLogicalAccount(id, options),
+    getLogicalAccountTarget(id, options).catch(() => ({ target: undefined })),
+    listTradingAccounts({ page: { page: 1, size: 200 } }, options)
   ]);
   if (!request.isLatest() || id !== logicalId.value) return;
   loadError.value = "";
   logical.value = logicalRsp.logical_account;
   target.value = targetRsp.target || null;
   allAccounts.value = accountRsp.accounts || [];
-  const next = await loadPositionSnapshot(logicalRsp.logical_account, accounts.value).catch(() => null);
+  const next = await loadPositionSnapshot(logicalRsp.logical_account, accounts.value, options).catch(() => null);
   if (next && request.isLatest() && id === logicalId.value) snapshot.value = next;
 }
 
@@ -481,23 +482,8 @@ async function loadFirst() {
   }
 }
 
-function startPolling() {
-  stopPolling();
-  let busy = false;
-  poller = setInterval(() => {
-    if (busy || document.hidden) return;
-    busy = true;
-    void reload()
-      .catch(() => undefined)
-      .finally(() => {
-        busy = false;
-      });
-  }, 5000);
-}
-function stopPolling() {
-  if (poller) clearInterval(poller);
-  poller = null;
-}
+// 每 5 秒后台刷新（页面隐藏时暂停、不叠加）
+usePolling(() => reload(true), 5000);
 
 watch(
   logicalId,
@@ -519,9 +505,7 @@ watch(
     if (next && previous && next !== previous) backToList();
   }
 );
-startPolling();
 onBeforeUnmount(() => {
-  stopPolling();
   reloads.invalidate();
 });
 

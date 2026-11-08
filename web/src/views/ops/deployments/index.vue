@@ -3,7 +3,7 @@
     <div class="moox-inner">
       <div class="page-head">
         <PageTitleTabs v-model="tab" :items="tabs" aria-label="服务部署" />
-        <a-button :loading="loading" aria-label="刷新部署状态" @click="refresh">刷新</a-button>
+        <a-button :loading="loading" aria-label="刷新部署状态" @click="refresh()">刷新</a-button>
       </div>
       <p class="muted">
         主机与组件的新增、部署、启停和移除都通过 moox skill 操作（让 Agent 使用 moox skill
@@ -20,10 +20,9 @@
           <div class="filters">
             <a-input v-model="search" allow-clear placeholder="搜索主机、组件名称或 ID" aria-label="搜索部署" />
             <a-select v-model="filter" aria-label="部署状态筛选">
-              <a-option value="all">全部</a-option><a-option value="abnormal">异常</a-option
-              ><a-option value="disabled">已停用</a-option>
+              <a-option value="enabled">启用中</a-option><a-option value="abnormal">异常</a-option
+              ><a-option value="disabled">已停用</a-option><a-option value="all">全部</a-option>
             </a-select>
-            <a-checkbox v-model="showDisabled">显示已停用</a-checkbox>
           </div>
           <section v-for="group in visibleGroups" :key="group.host.host_id" class="host-group" :data-host-id="group.host.host_id">
             <div class="host-heading">
@@ -301,7 +300,6 @@ const {
   monitorError,
   search,
   filter,
-  showDisabled,
   selectedHostId,
   groups,
   visibleGroups,

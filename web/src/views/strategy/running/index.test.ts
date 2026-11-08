@@ -112,7 +112,10 @@ describe("strategy running page", () => {
   it("restores filters, page and the quick detail from the URL with one request", async () => {
     const { wrapper } = await setup({ strategy_id: "s1", enabled: "false", page: "2", instance_id: "i1" });
     expect(api.loadInstances).toHaveBeenCalledTimes(1);
-    expect(api.loadInstances).toHaveBeenCalledWith({ strategy_id: "s1", enabled: false, page: 2, page_size: 20 });
+    expect(api.loadInstances).toHaveBeenCalledWith(
+      { strategy_id: "s1", enabled: false, page: 2, page_size: 20 },
+      { background: false }
+    );
     expect(wrapper.find(".quick").text()).toBe("quick:i1");
     expect(wrapper.find(".create").text()).toBe("create:false:s1");
   });
@@ -145,7 +148,10 @@ describe("strategy running page", () => {
     await wrapper.find(".goto-3").trigger("click");
     await flushPromises();
     expect(router.currentRoute.value.query).toEqual({ page: "3", strategy_id: "s1" });
-    expect(api.loadInstances).toHaveBeenLastCalledWith({ strategy_id: "s1", enabled: undefined, page: 3, page_size: 20 });
+    expect(api.loadInstances).toHaveBeenLastCalledWith(
+      { strategy_id: "s1", enabled: undefined, page: 3, page_size: 20 },
+      { background: false }
+    );
   });
 
   it("keeps the deep link when the space initializes but clears it on a real switch", async () => {
@@ -165,7 +171,10 @@ describe("strategy running page", () => {
     expect(api.clearInstances).toHaveBeenCalledTimes(2);
     expect(router.currentRoute.value.query).toEqual({});
     expect(api.loadInstances).toHaveBeenCalledTimes(2);
-    expect(api.loadInstances).toHaveBeenLastCalledWith({ strategy_id: undefined, enabled: undefined, page: 1, page_size: 20 });
+    expect(api.loadInstances).toHaveBeenLastCalledWith(
+      { strategy_id: undefined, enabled: undefined, page: 1, page_size: 20 },
+      { background: false }
+    );
   });
 
   it("shows a catalog failure without marking the instance list as failed", async () => {
@@ -187,7 +196,10 @@ describe("strategy running page", () => {
     expect(vm.togglingId).toBe("i5");
     await hooks.onSettled(false);
     expect(api.loadInstances).toHaveBeenCalledTimes(1);
-    expect(api.loadInstances).toHaveBeenLastCalledWith({ strategy_id: undefined, enabled: undefined, page: 2, page_size: 20 });
+    expect(api.loadInstances).toHaveBeenLastCalledWith(
+      { strategy_id: undefined, enabled: undefined, page: 2, page_size: 20 },
+      { background: false }
+    );
     expect(vm.togglingId).toBe("");
   });
 
@@ -217,7 +229,10 @@ describe("strategy running page", () => {
     await flushPromises();
     expect(router.currentRoute.value.query).toEqual({});
     expect(api.loadInstances).toHaveBeenCalledTimes(1);
-    expect(api.loadInstances).toHaveBeenLastCalledWith({ strategy_id: undefined, enabled: undefined, page: 1, page_size: 20 });
+    expect(api.loadInstances).toHaveBeenLastCalledWith(
+      { strategy_id: undefined, enabled: undefined, page: 1, page_size: 20 },
+      { background: false }
+    );
   });
 
   it("clears instances left over from another space when the page mounts", async () => {

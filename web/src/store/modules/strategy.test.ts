@@ -56,6 +56,23 @@ describe("strategy store", () => {
     });
   });
 
+  it("后台刷新开始时不清错误条，成功后才清", async () => {
+    api.getInstance.mockRejectedValueOnce(new Error("策略模块不可用"));
+    const store = useStrategyStore();
+    await expect(store.loadInstanceDetail("instance-1")).rejects.toThrow();
+    expect(store.detailError).toBe("策略模块不可用");
+
+    const pending = deferred<ReturnType<typeof instance>>();
+    api.getInstance.mockReturnValueOnce(pending.promise);
+    api.listStrategyTargets.mockResolvedValue({ targets: [] });
+    api.listStrategyResults.mockResolvedValue({ items: [], page: { total: 0 } });
+    const silent = store.loadInstanceDetail("instance-1", 1, 20, false, { silent: true });
+    expect(store.detailError).toBe("策略模块不可用");
+    pending.resolve(instance());
+    await silent;
+    expect(store.detailError).toBe("");
+  });
+
   it("does not query history when the current instance has no session", async () => {
     api.getInstance.mockResolvedValue(instance({ session_id: "" }));
     api.listStrategyTargets.mockResolvedValue({ targets: [], session_id: "", bar_end_time: "", valid_until: "", result_id: "" });

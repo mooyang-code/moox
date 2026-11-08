@@ -1,7 +1,6 @@
 const baseMeta = {
   hide: false,
   disable: false,
-  keepAlive: true,
   affix: false,
   link: "",
   iframe: false,
@@ -56,8 +55,11 @@ export const systemMenu = [
   }),
   menu("0306", "03", "/data/sources", "data-sources", "data-sources", "data/sources/index", 1),
   menu("0307", "03", "/data/subjects", "data-subjects", "data-subjects", "data/subjects/index", 2),
-  menu("0308", "03", "/data/fields", "data-fields", "data-fields", "data/fields/index", 3),
-  menu("0303", "03", "/collector/tasks", "collector-tasks", "collector-tasks", "collector/task-management/index", 4),
+  // 菜单路由会覆盖 route.ts 里的同名声明（已在浏览器核对）：字段页的筛选、采集任务的页签与筛选都在 query 里，query 变化时复用页面。
+  menu("0308", "03", "/data/fields", "data-fields", "data-fields", "data/fields/index", 3, { reuseOnQuery: true }),
+  menu("0303", "03", "/collector/tasks", "collector-tasks", "collector-tasks", "collector/task-management/index", 4, {
+    reuseOnQuery: true
+  }),
   // 数据归档紧跟采集任务（sort 取采集任务 + 1）。任务详情、页签、筛选都在 query 里，query 变化时复用页面。
   menu("0309", "03", "/data/archive", "data-archive", "data-archive", "data/archive/index", 5, { reuseOnQuery: true }),
 
@@ -94,9 +96,12 @@ export const systemMenu = [
   }),
 
   directory("06", "0", "/ops/monitor", "ops", "ops", 6, { svgIcon: "defend", icon: "" }),
-  menu("0607", "06", "/ops/monitor", "ops-monitor", "ops-monitor", "ops/monitor/index", 1),
-  menu("0601", "06", "/ops/hosts", "ops-hosts", "ops-hosts", "ops/host-workbench/index", 3),
-  menu("0600", "06", "/ops/deployments", "ops-deployments", "ops-deployments", "ops/deployments/index", 2),
+  // 展开状态、页签、筛选、定位的主机都在 query 里：query 变化时复用页面（菜单与 route.ts 两处都写）
+  menu("0607", "06", "/ops/monitor", "ops-monitor", "ops-monitor", "ops/monitor/index", 1, { reuseOnQuery: true }),
+  menu("0601", "06", "/ops/hosts", "ops-hosts", "ops-hosts", "ops/host-workbench/index", 3, { reuseOnQuery: true }),
+  menu("0600", "06", "/ops/deployments", "ops-deployments", "ops-deployments", "ops/deployments/index", 2, {
+    reuseOnQuery: true
+  }),
   menu("0606", "06", "/ops/storage/nodes", "ops-storage", "ops-storage", "ops/storage/index", 4),
   menu("0608", "06", "/ops/activity", "ops-activity", "ops-activity", "ops/activity/index", 5),
 

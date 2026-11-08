@@ -86,7 +86,6 @@ import { computed, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { listRecalcJobs } from "@/api/factor";
 import type { FactorTask, FactorTaskInfo, RecalcJob } from "@/api/factor/types";
-import { usePolling } from "@/hooks/usePolling";
 import { RequestGate } from "@/utils/request-gate";
 import InfoTip from "@/views/factor/shared/info-tip.vue";
 import { useFactorScope } from "@/views/factor/shared/use-factor-scope";
@@ -96,7 +95,8 @@ import { pendingItems, recalcQueryTasks, splitRecalcJobs, statsStrip, taskCards,
 defineOptions({ name: "FactorOverview" });
 
 const router = useRouter();
-const { store, spaceId, reload } = useFactorScope();
+// 补算作业和计算任务、引擎状态同一轮刷新
+const { store, spaceId, reload } = useFactorScope({ extraPoll: () => loadJobs(true) });
 
 const jobs = ref<RecalcJob[]>([]);
 const refreshing = ref(false);
@@ -110,8 +110,8 @@ const running = computed(() => split.value.running);
 const pending = computed(() => pendingItems(sets.value, split.value.failed, labelOf));
 const stats = computed(() => statsStrip(store.engine, running.value.length));
 
-/** ListRecalcJobs 必须带 task_id：只对已启用的计算任务扇出，页面失活时不轮询。 */
-async function loadJobs() {
+/** ListRecalcJobs 必须带 task_id：只对已启用的计算任务扇出。 */
+async function loadJobs(background = false) {
   const token = gate.next();
   const ids = recalcQueryTasks(sets.value);
   if (!ids.length) {
@@ -121,7 +121,10 @@ async function loadJobs() {
   try {
     const results = await Promise.all(
       ids.map(taskId =>
-        listRecalcJobs({ task_id: taskId, statuses: ["accepted", "running", "failed"], page: { page: 1, size: 20 } })
+        listRecalcJobs(
+          { task_id: taskId, statuses: ["accepted", "running", "failed"], page: { page: 1, size: 20 } },
+          { silentError: background }
+        )
       )
     );
     if (gate.isCurrent(token)) jobs.value = results.flatMap(rsp => rsp.jobs || []);
@@ -147,7 +150,6 @@ function recalcTarget(job: RecalcJob): RouteTarget {
   return { path: "/factor/tasks", query: { tab: "recalc", task: job.task_id, job: job.job_id } };
 }
 
-usePolling(loadJobs, 10_000, () => Boolean(spaceId.value));
 watch(
   () => recalcQueryTasks(sets.value).join(","),
   () => void loadJobs(),

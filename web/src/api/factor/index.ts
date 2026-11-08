@@ -51,8 +51,8 @@ export function deleteFactorTask(task_id: string, purge = false) {
   return callFactor<{ task_id: string; purge: boolean }, FactorRetRsp>("DeleteFactorTask", { task_id, purge });
 }
 
-export function listFactorTasks(params: ListFactorTasksReq = {}) {
-  return callFactor<ListFactorTasksReq, FactorRetRsp<ListFactorTasksRsp>>("ListFactorTasks", params);
+export function listFactorTasks(params: ListFactorTasksReq = {}, options: { silentError?: boolean } = {}) {
+  return callFactor<ListFactorTasksReq, FactorRetRsp<ListFactorTasksRsp>>("ListFactorTasks", params, options);
 }
 
 export async function createFactor(factor: FactorInput) {
@@ -160,12 +160,12 @@ export async function cancelRecalcJob(job_id: string) {
   return rsp.job;
 }
 
-export function listRecalcJobs(params: ListRecalcJobsReq) {
-  return callFactor<ListRecalcJobsReq, FactorRetRsp<ListRecalcJobsRsp>>("ListRecalcJobs", params);
+export function listRecalcJobs(params: ListRecalcJobsReq, options: { silentError?: boolean } = {}) {
+  return callFactor<ListRecalcJobsReq, FactorRetRsp<ListRecalcJobsRsp>>("ListRecalcJobs", params, options);
 }
 
-export function getFactorStatus() {
-  return callFactor<Record<string, never>, EngineStatus>("GetStatus", {});
+export function getFactorStatus(options: { silentError?: boolean } = {}) {
+  return callFactor<Record<string, never>, EngineStatus>("GetStatus", {}, options);
 }
 
 /** 编译一个定义：定义不合法时 valid=false，诊断带字段路径与行列（不是接口错误）。 */

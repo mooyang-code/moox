@@ -3,7 +3,7 @@ import path from "node:path";
 const read = file => fs.readFileSync(path.join(process.cwd(), file), "utf8");
 const source = read("src/views/ops/deployments/index.vue");
 const api = read("src/api/admin/sysdeploy.ts");
-for (const token of ["PageTitleTabs", 'aria-label="服务部署"', "网关路由", "受保护", "显示已停用", "上报实例", "compiled_at", "routeSync", "moox skill"]) {
+for (const token of ["PageTitleTabs", 'aria-label="服务部署"', "网关路由", "受保护", "部署状态筛选", "上报实例", "compiled_at", "routeSync", "moox skill"]) {
   if (!source.includes(token)) throw new Error(`deployment page missing ${token}`);
 }
 for (const method of ["GetCatalog", "ListHosts", "ListDeployments", "GetHostRoutes", "GetDirectory"]) {

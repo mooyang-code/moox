@@ -207,9 +207,23 @@ describe("deployment page", () => {
     expect(page.findAll(".host-group[data-host-id]")).toHaveLength(0);
     expect(page.find(".drawer").exists()).toBe(false);
   });
+  it("状态筛选写进 URL（?filter=），默认的“启用中”不写；带 filter 打开时按它筛选", async () => {
+    const { page, router } = await render();
+    await page.get('[aria-label="部署状态筛选"]').setValue("disabled");
+    await flushPromises();
+    expect(router.currentRoute.value.query.filter).toBe("disabled");
+    await page.get('[aria-label="部署状态筛选"]').setValue("enabled");
+    await flushPromises();
+    expect(router.currentRoute.value.query.filter).toBeUndefined();
+    wrapper?.unmount();
+    const reopened = await render({ filter: "abnormal" });
+    expect(reopened.page.find('[data-host-id="c-main"] [data-component-id="access"]').exists()).toBe(false);
+  });
+
   it("filters services by health without treating enabled deployments as online", async () => {
     const { page } = await render();
     await page.get('[aria-label="部署状态筛选"]').setValue("abnormal");
+    await flushPromises();
     expect(page.find('[data-host-id="c-main"] [data-component-id="access"]').exists()).toBe(false);
     expect(page.find('[data-host-id="storage"] [data-component-id="access"]').exists()).toBe(true);
   });
@@ -252,13 +266,15 @@ describe("deployment page", () => {
     expect(page.text()).toContain("monitor unavailable");
     expect(page.text()).not.toContain("没有符合筛选条件的路由");
   });
-  it("shows a disabled host only when disabled entries are requested and labels it as disabled", async () => {
+  it("shows a disabled host only when the filter includes disabled entries and labels it as disabled", async () => {
     vi.mocked(listAllDeploymentHosts).mockResolvedValue(
       hostRows.map(host => (host.host_id === "storage" ? { ...host, status: "disabled" } : host))
     );
     const { page } = await render();
     expect(page.find('[data-host-id="storage"]').exists()).toBe(false);
-    await page.get('input[type="checkbox"]').setValue(true);
+    // 筛选选“全部”才列出已停用的（原来的“显示已停用”复选框和“已停用”筛选重复，已去掉）
+    await page.get('[aria-label="部署状态筛选"]').setValue("all");
+    await flushPromises();
     expect(page.get('[data-host-id="storage"]').text()).toContain("已停用");
     expect(page.findAll('[role="switch"]')).toHaveLength(0);
   });

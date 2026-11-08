@@ -365,7 +365,8 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onActivated, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
+import { usePolling } from "@/hooks/usePolling";
 import { Message } from "@arco-design/web-vue";
 import { storeToRefs } from "pinia";
 import ActivityLog from "@/components/activity-log/index.vue";
@@ -402,6 +403,7 @@ import {
 import { useDisplayZone } from "@/hooks/useDisplayZone";
 import { formatInstant } from "@/utils/time-zone";
 
+const route = useRoute();
 const router = useRouter();
 const spaceStore = useSpaceStore();
 const { selectedSpaceId } = storeToRefs(spaceStore);
@@ -526,13 +528,14 @@ function datasetFunctionText(record: CollectorDatasetStatus) {
   return functions.length > 3 ? `${functions.slice(0, 3).join("、")} 等` : functions.join("、");
 }
 
-async function loadStatus() {
+/** background：60 秒的自动刷新，不转加载态、不弹全局提示；失败写在页面上，保留上次的结果。 */
+async function loadStatus(background = false) {
   const spaceId = selectedSpaceId.value || "";
   if (!spaceId) return;
   const request = guard.begin();
-  statusLoading.value = true;
+  if (!background) statusLoading.value = true;
   try {
-    const data = await getCollectorStatus(spaceId);
+    const data = await getCollectorStatus(spaceId, { silentError: background });
     if (!request.isLatest() || spaceId !== (selectedSpaceId.value || "")) return;
     status.value = data;
     loaded.value = true;
@@ -549,6 +552,12 @@ async function loadStatus() {
 function refreshAll() {
   void loadStatus();
 }
+
+usePolling(
+  () => loadStatus(true),
+  60_000,
+  () => Boolean(selectedSpaceId.value)
+);
 
 function toggleDataset(record: { key: string }) {
   expandedKeys.value = expandedKeys.value.includes(record.key)
@@ -569,7 +578,11 @@ function openRange(mode: "check" | "backfill", datasetId = "") {
 
 /** 打开补采 Tab；带上作业 ID 时直接展开它的详情。 */
 function goBackfills(jobId?: string) {
-  void router.push({ path: "/collector/tasks", query: { tab: "backfills", ...(jobId ? { job: jobId } : {}) } });
+  // 别的页签的参数原样保留；补采自己的筛选从默认开始
+  const others = Object.fromEntries(
+    Object.entries(route.query).filter(([key]) => !["tab", "segment", "dataset", "job"].includes(key))
+  );
+  void router.push({ path: "/collector/tasks", query: { ...others, tab: "backfills", ...(jobId ? { job: jobId } : {}) } });
 }
 
 function onJobSubmitted(jobId: string) {

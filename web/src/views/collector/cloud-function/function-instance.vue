@@ -530,7 +530,10 @@ watch(selectedSpaceId, async (spaceId, oldSpaceId) => {
   await loadData();
 });
 
+// 删除要续租并等后端任务结束：离开页面时中止这两个循环，不在后台一直跑完
+const deleteAbort = new AbortController();
 onBeforeUnmount(() => {
+  deleteAbort.abort();
   listGuard.invalidate();
   batchPoller.dispose();
   currentBatchChangeStatus.value = null;
@@ -652,11 +655,12 @@ const batchDelete = () => {
 const executeBatchDelete = async (request: SubmitDeleteFunctionInstancesRequest) => {
   try {
     const total = request.instance_ids.length;
-    const rsp = await deleteFunctionInstances(request);
+    const rsp = await deleteFunctionInstances(request, { signal: deleteAbort.signal });
     clearDeleteSelection();
     await loadData();
     Message.success(`已删除 ${rsp.processed_count} / ${total} 个实例`);
   } catch (error: any) {
+    if (deleteAbort.signal.aborted) return;
     console.error("批量删除失败:", error);
     Message.error("批量删除失败: " + (error?.message || "未知错误"));
   }
@@ -808,14 +812,18 @@ function deleteInstanceText(record: FunctionInstance) {
 const onDelete = async (record: FunctionInstance) => {
   try {
     const snapshot = updateDeleteSelection({}, [record], true);
-    const rsp = await deleteFunctionInstances({
-      space_id: selectedSpaceId.value ?? "",
-      instance_ids: [record.instance_id],
-      instance_snapshots: captureDeleteSelection([record.instance_id], snapshot)
-    });
+    const rsp = await deleteFunctionInstances(
+      {
+        space_id: selectedSpaceId.value ?? "",
+        instance_ids: [record.instance_id],
+        instance_snapshots: captureDeleteSelection([record.instance_id], snapshot)
+      },
+      { signal: deleteAbort.signal }
+    );
     await loadData();
     Message.success(rsp.processed_count > 0 ? "删除成功" : "实例无需删除");
   } catch (error: any) {
+    if (deleteAbort.signal.aborted) return;
     Message.error("删除失败: " + (error?.message || "未知错误"));
   }
 };
