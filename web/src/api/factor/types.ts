@@ -99,6 +99,8 @@ export interface PreviewFactorReq {
   subjects?: string[];
   periods?: number;
   allow_partial_universe?: boolean;
+  /** 这份定义的因子 ID：单输出因子的输出名就是它，为空时后端按草稿处理 */
+  factor_id?: string;
 }
 
 export interface PreviewRow {

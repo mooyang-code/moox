@@ -23,9 +23,13 @@ export async function clearBrowserSession(): Promise<void> {
   await clearSigningSessions();
 }
 
+/** 会话过期：清掉会话并带着当前地址去登录页，登录后回到原页面。 */
 export async function expireBrowserSession(message?: string): Promise<AuthSessionExpiredError> {
   await clearBrowserSession();
-  if (window.location.hash !== "#/login") window.location.hash = "#/login";
+  const current = window.location.hash.replace(/^#/, "");
+  if (!current.startsWith("/login")) {
+    window.location.hash = current && current !== "/" ? `#/login?redirect=${encodeURIComponent(current)}` : "#/login";
+  }
   return new AuthSessionExpiredError(message);
 }
 

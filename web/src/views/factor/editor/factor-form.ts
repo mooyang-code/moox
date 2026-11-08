@@ -1,14 +1,22 @@
 import type { FactorDef, FactorInput, FactorType, ValidateFactorSpecRsp } from "@/api/factor/types";
 import type { DatasetColumn } from "@/api/storage/types";
+import { validateFactorId } from "@/utils/factor-name";
 import { TIMESERIES_SPEC_TEMPLATE } from "./editor-template";
 
 export const RESERVED_COLUMNS = ["subject_id", "freq", "data_time", "series_tag"];
 
-const IDENTIFIER = /^[A-Za-z_][A-Za-z0-9_]*$/;
 /** 与后端 validateName 一致：1～64 个字符、首尾无空白、不含控制字符。 */
 const NAME_MAX = 64;
 
-export const isIdentifier = (value: string) => IDENTIFIER.test(value);
+/** 因子 ID 的规则和后端（packages/factorname）一致：小写字母开头，词之间单个下划线，最多 24 个字符。 */
+function factorIdError(id: string): string {
+  try {
+    validateFactorId(id);
+    return "";
+  } catch (error) {
+    return error instanceof Error ? error.message : "因子 ID 不合法";
+  }
+}
 
 function isSystemColumn(column: DatasetColumn) {
   const origin = column.origin_type;
@@ -65,8 +73,9 @@ export function compiledFor(state: CompileState, form: FactorFormState) {
   return state.status === "valid" && state.spec === specKey(form);
 }
 
+/** 校验结果对应的内容：定义、是否允许部分标的、因子 ID（单输出因子的输出名就是它）任一变了都要重新校验。 */
 export function specKey(form: FactorFormState) {
-  return `${form.allow_partial_universe ? 1 : 0}\u0000${form.spec}`;
+  return `${form.allow_partial_universe ? 1 : 0}\u0000${form.factor_id.trim()}\u0000${form.spec}`;
 }
 
 /** 编译诊断的可读文本：字段路径与行列在前。 */
@@ -134,11 +143,7 @@ export function factorChecklist(form: FactorFormState, compile: CompileState): C
   const id = form.factor_id.trim();
   const derivedType = compiledFor(compile, form) && compile.status === "valid" ? compile.result.factor_type : undefined;
   return [
-    item(
-      "factor_id",
-      "因子 ID 合法（全局唯一由后端保存时检查）",
-      !id ? "因子 ID 不能为空" : isIdentifier(id) ? "" : "因子 ID 必须以字母或下划线开头，仅含字母数字下划线"
-    ),
+    item("factor_id", "因子 ID 合法（全局唯一由后端保存时检查）", !id ? "因子 ID 不能为空" : factorIdError(id)),
     item("name", "展示名 1～64 个字符", checkName(form.name)),
     item("spec", "表达式编译通过", compileMessage(compile, form)),
     item(

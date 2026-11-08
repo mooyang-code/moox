@@ -45,6 +45,11 @@ export function paperInitialBalance(accounts: readonly TradingAccount[]): number
   return paper.length ? paper.reduce((sum, item) => sum + num(item.paper?.initial_balance), 0) : null;
 }
 
+/** 较初始资金的变化：还没读到权益（首次同步前）时为 null，不能把权益当 0 算成 −100%。 */
+export function equityChangeOf(equity: number | null, initial: number | null): number | null {
+  return equity === null || !initial ? null : equity - initial;
+}
+
 /** 清仓预览：要平掉的持仓个数和价值（永续取标记价，现货取估值）。accountId 为空表示整个组合。 */
 export function flattenPreview(snapshot: PositionSnapshot, accountId?: string) {
   const swaps = snapshot.swapPositions.filter(item => !accountId || item.trading_account_id === accountId);

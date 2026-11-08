@@ -3,10 +3,6 @@
     <a-spin :loading="loading">
       <div class="moox-inner">
         <a-space class="cloud-function-action-bar" wrap>
-          <a-button type="primary" status="danger" @click="batchDelete" :disabled="batchChangeProcessing">
-            <template #icon><icon-delete /></template>
-            <span>批量删除</span>
-          </a-button>
           <a-button type="outline" @click="onCloudAccountManage">
             <template #icon><icon-settings /></template>
             <span>云账户管理</span>
@@ -104,6 +100,9 @@
           <div style="font-size: 12px; color: #86909c">
             提示：批量操作只会对当前选中的实例生效。切换页面时会保留其他页的选择状态。
           </div>
+          <template #action>
+            <a-button size="small" status="danger" @click="batchDelete">删除已选实例</a-button>
+          </template>
         </a-alert>
 
         <FunctionInstanceTable :loading="loading" :selected-count="selectedKeys.length">
@@ -177,8 +176,9 @@
               <a-table-column title="操作" :width="56" align="center" fixed="right">
                 <template #cell="{ record }">
                   <a-popconfirm
-                    content="确定要删除该实例吗？删除后将无法恢复。"
-                    ok-text="确定"
+                    :content="deleteInstanceText(record)"
+                    ok-text="删除"
+                    :ok-button-props="{ status: 'danger' }"
                     cancel-text="取消"
                     @ok="() => onDelete(record)"
                     position="tr"
@@ -637,7 +637,7 @@ const batchDelete = () => {
 
   Modal.warning({
     title: "批量删除确认",
-    content: `确定要删除选中的 ${selectedKeys.value.length} 个实例吗？删除后将无法恢复。`,
+    content: `删除选中的 ${selectedKeys.value.length} 个实例：会同时删掉云端的云函数并清掉登记，删除后无法恢复。`,
     hideCancel: false,
     onOk: async () => {
       await executeBatchDelete(request);
@@ -795,6 +795,12 @@ const clearDeleteSelection = () => {
 };
 
 // 单个操作（保留原有实现）
+
+/** 单个删除的说明：删除会连云端的云函数一起删（后端 SubmitDeleteFunctionInstances），不只是清登记。 */
+function deleteInstanceText(record: FunctionInstance) {
+  const where = record.region ? `（${record.region}）` : "";
+  return `删除实例「${record.instance_id}」${where}？会同时删掉云端的云函数并清掉登记，删除后无法恢复。`;
+}
 
 const onDelete = async (record: FunctionInstance) => {
   try {

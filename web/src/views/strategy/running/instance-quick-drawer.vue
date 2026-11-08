@@ -28,7 +28,8 @@
           <a-descriptions-item label="模式"
             >{{ instance.logical_account_id ? "交易模式" : "仅计算" }}
             <span v-if="instance.logical_account_id" class="mono"
-              >· {{ logicalAccount?.name || instance.logical_account_id }}</span
+              >· {{ logicalAccount?.name || instance.logical_account_id
+              }}<template v-if="logicalAccountError">（账户读取失败）</template></span
             ></a-descriptions-item
           >
           <a-descriptions-item label="当前会话"
@@ -65,13 +66,17 @@ const props = defineProps<{ instanceId: string; strategies: Strategy[] }>();
 const emit = defineEmits<{ close: []; openDetail: [string]; results: [string]; replay: [StrategyInstance] }>();
 
 const instance = ref<StrategyInstance | null>(null);
-const logicalAccount = useLogicalAccount(computed(() => instance.value?.logical_account_id));
+const { account: logicalAccount, error: logicalAccountError } = useLogicalAccount(
+  computed(() => instance.value?.logical_account_id)
+);
 const loading = ref(false);
 const error = ref("");
 const readAt = ref("-");
 const gate = new RequestGate();
 const strategyName = computed(
-  () => props.strategies.find(item => item.strategy_id === instance.value?.strategy_id)?.name || "定义已删除或未加载"
+  () =>
+    props.strategies.find(item => item.strategy_id === instance.value?.strategy_id)?.name ||
+    `${instance.value?.strategy_id || ""}（名称未加载）`
 );
 
 async function load() {

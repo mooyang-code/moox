@@ -16,18 +16,6 @@
             </template>
           </a-input-password>
         </a-form-item>
-        <a-form-item field="verifyCode" :hide-asterisk="true">
-          <div class="verifyCode">
-            <a-input style="width: 160px" v-model="form.verifyCode" allow-clear placeholder="请输入验证码" />
-            <VerifyCode :content-height="30" :font-size-max="30" :content-width="110" @verify-code-change="verifyCodeChange" />
-          </div>
-        </a-form-item>
-        <a-form-item field="remember">
-          <div class="remember">
-            <a-checkbox v-model="form.remember">记住密码</a-checkbox>
-            <div class="forgot-password">忘记密码</div>
-          </div>
-        </a-form-item>
         <a-form-item>
           <a-button long type="primary" html-type="submit" :loading="loginLoading">
             {{ loginLoading ? "登录中..." : "登录" }}
@@ -43,7 +31,8 @@
 
 <script setup lang="ts">
 import { validatePasswordInput } from "./login-validation";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
+import { safeRedirect } from "@/utils/safe-redirect";
 import { useUserInfoStore } from "@/store/modules/user-info";
 import { loginAPI } from "@/api/modules/user/index";
 import { useRoutesConfigStore } from "@/store/modules/route-config";
@@ -54,6 +43,7 @@ import RootCaDialog from "@/components/root-ca/root-ca-dialog.vue";
 let userStores = useUserInfoStore();
 const routeStore = useRoutesConfigStore();
 const router = useRouter();
+const route = useRoute();
 
 // 表单引用
 const formRef = ref();
@@ -61,9 +51,7 @@ const formRef = ref();
 // 移除写死的账号密码，提高安全性
 const form = ref({
   username: "",
-  password: "",
-  verifyCode: "",
-  remember: false
+  password: ""
 });
 
 // 验证字符串格式的函数（类似后端的validateStringFormat）
@@ -140,9 +128,6 @@ const rules = ref({
   ]
 });
 
-const verifyCode = ref("");
-const verifyCodeChange = (code: string) => (verifyCode.value = code);
-
 // 添加登录状态
 const loginLoading = ref(false);
 const rootCaVisible = ref(false);
@@ -200,8 +185,7 @@ const onLogin = async () => {
     // 使用新的安全登录方法
     let res = await loginAPI({
       username: form.value.username,
-      password: form.value.password,
-      verifyCode: form.value.verifyCode
+      password: form.value.password
     });
 
     // 检查登录是否成功 - 使用新的ret_info协议格式
@@ -228,15 +212,8 @@ const onLogin = async () => {
 
     Message.success("登录成功");
 
-    // 跳转首页
-    router.replace("/home");
-
-    // 如果选择了记住密码，保存用户名（不保存密码）
-    if (form.value.remember) {
-      localStorage.setItem("remembered_username", form.value.username);
-    } else {
-      localStorage.removeItem("remembered_username");
-    }
+    // 会话过期被带到登录页时回到原页面，否则回首页
+    void router.replace(safeRedirect(route.query.redirect) || "/home");
   } catch (error: unknown) {
     console.error("❌ 登录失败:", error);
 
@@ -245,43 +222,15 @@ const onLogin = async () => {
 
     const loginErrorMessage = getErrorMessage(error, "登录失败");
     Message.error(loginErrorMessage);
-
-    // 登录失败时刷新验证码
-    verifyCodeChange("");
   } finally {
     loginLoading.value = false;
   }
 };
-
-// 页面加载时恢复记住的用户名
-onMounted(() => {
-  const rememberedUsername = localStorage.getItem("remembered_username");
-  if (rememberedUsername) {
-    form.value.username = rememberedUsername;
-    form.value.remember = true;
-  }
-});
 </script>
 
 <style lang="scss" scoped>
 .login_form_box {
   margin-top: 28px;
-  .verifyCode {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    width: 100%;
-  }
-  .remember {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    width: 100%;
-    .forgot-password {
-      color: $color-primary;
-      cursor: pointer;
-    }
-  }
 }
 .ca-entry {
   margin-bottom: 8px;

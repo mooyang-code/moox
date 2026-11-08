@@ -7,7 +7,7 @@
           <InfoTip text="只读总览：看各实例最新目标是否有效、有哪些需要处理的事项；操作都跳转到对应页面完成。" />
           <span v-if="readAt" class="cell-sub">状态读取：{{ readAt }}</span>
         </div>
-        <a-button :loading="loading" @click="loadAll">
+        <a-button :loading="loading" @click="loadAll()">
           <template #icon><icon-refresh /></template>
           刷新
         </a-button>
@@ -17,13 +17,16 @@
       <template v-else>
         <a-alert v-if="loadError" type="error" show-icon class="page-alert">
           {{ loadError }}
-          <template #action><a-button size="mini" @click="loadAll">重试</a-button></template>
+          <template #action><a-button size="mini" @click="loadAll()">重试</a-button></template>
+        </a-alert>
+        <a-alert v-if="targetFailures" type="warning" class="page-alert">
+          {{ targetFailures }} 个实例的最新目标读取失败，这些实例暂时显示为没有目标。
         </a-alert>
 
         <div class="stats-strip" role="list">
           <div v-for="item in stats" :key="item.key" class="stat" role="listitem">
             <span class="stat__label">{{ item.label }}</span>
-            <span class="stat__value" :class="`is-${item.tone}`">{{ item.value }}</span>
+            <span class="stat__value" :class="loaded ? `is-${item.tone}` : ''">{{ loaded ? item.value : "-" }}</span>
             <span class="stat__hint">{{ item.hint }}</span>
           </div>
         </div>
@@ -80,7 +83,8 @@
 
             <section aria-label="进行中的回放">
               <h3>进行中的回放</h3>
-              <a-empty v-if="!running.length" description="没有进行中的回放" />
+              <a-alert v-if="replayError" type="warning" class="page-alert">回放读取失败：{{ replayError }}</a-alert>
+              <a-empty v-else-if="!running.length" description="没有进行中的回放" />
               <ul v-else class="side-list">
                 <li v-for="replay in running" :key="replay.replay_id">
                   <a-link @click="go(replayLink({ replayId: replay.replay_id }))">{{
@@ -133,6 +137,11 @@ const targets = ref<Record<string, StrategyTargetSnapshot>>({});
 const replays = ref<Replay[]>([]);
 const loading = ref(false);
 const loadError = ref("");
+// 当前空间至少读到过一次：没读到时统计条显示“-”，不能显示成“需要处理 0”。
+const loaded = ref(false);
+const replayError = ref("");
+// 读取失败的实例目标数：只提示，不当成“没有目标”。
+const targetFailures = ref(0);
 const readAt = ref("");
 const gate = new RequestGate();
 
@@ -158,16 +167,21 @@ async function loadInstances(): Promise<StrategyInstance[]> {
   return all;
 }
 
-/** 读取实例、已启用实例的最新目标与最近的回放；单个实例的目标读取失败不影响其它实例。 */
-async function loadAll() {
+/**
+ * 读取实例、已启用实例的最新目标与最近的回放；单个实例的目标读取失败不影响其它实例。
+ * 后台轮询（background）不转刷新按钮，也不先清掉错误条，避免每 30 秒闪一下；结果出来后再更新。
+ */
+async function loadAll(options: { background?: boolean } = {}) {
   if (!spaceId.value) return;
   const token = gate.next();
-  loading.value = true;
-  loadError.value = "";
+  if (!options.background) loading.value = true;
   try {
     const [nextInstances, replayPage] = await Promise.all([
       loadInstances(),
-      listReplays({ page: 1, page_size: 20 }, { silent: true }).catch(() => null),
+      listReplays({ page: 1, page_size: 20 }, { silent: true }).catch(error => {
+        if (gate.isCurrent(token)) replayError.value = error instanceof Error && error.message ? error.message : "请稍后重试";
+        return null;
+      }),
       store.strategiesComplete ? Promise.resolve() : store.loadAllStrategies(200).catch(() => undefined)
     ]);
     if (!gate.isCurrent(token)) return;
@@ -180,7 +194,13 @@ async function loadAll() {
     });
     instances.value = nextInstances;
     targets.value = nextTargets;
-    if (replayPage) replays.value = replayPage.items;
+    targetFailures.value = settled.filter(result => result.status === "rejected").length;
+    if (replayPage) {
+      replays.value = replayPage.items;
+      replayError.value = "";
+    }
+    loaded.value = true;
+    loadError.value = "";
     readAt.value = new Date().toLocaleTimeString("zh-CN", { hour12: false });
   } catch (error) {
     if (error instanceof StaleSpaceRequestError || !gate.isCurrent(token)) return;
@@ -194,7 +214,11 @@ function go(target: StrategyLink) {
   void router.push(target);
 }
 
-usePolling(loadAll, 30_000, () => Boolean(spaceId.value));
+usePolling(
+  () => loadAll({ background: true }),
+  30_000,
+  () => Boolean(spaceId.value)
+);
 watch(
   spaceId,
   () => {
@@ -202,6 +226,10 @@ watch(
     targets.value = {};
     replays.value = [];
     readAt.value = "";
+    loaded.value = false;
+    loadError.value = "";
+    replayError.value = "";
+    targetFailures.value = 0;
     void loadAll();
   },
   { immediate: true }

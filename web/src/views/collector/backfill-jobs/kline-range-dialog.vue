@@ -89,10 +89,10 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { Message } from "@arco-design/web-vue";
+import { Message, Modal } from "@arco-design/web-vue";
 import { checkKline, submitKlineBackfill, type CheckKlineResponse } from "@/api/collector/runtime-status";
 import { seriesTagDisplay } from "@/views/data/shared/series-market";
-import { quickRange, toRFC3339, utcText } from "./backfill-model";
+import { backfillScopeSummary, quickRange, toRFC3339, utcText } from "./backfill-model";
 
 const props = defineProps<{
   visible: boolean;
@@ -169,6 +169,32 @@ async function submitBackfill(request: { dataset_id?: string; subject_id?: strin
   if (created.job_id) emit("submitted", created.job_id);
 }
 
+/** 没选数据集或整段重拉时，先弹范围摘要确认（这种补采量大、会占满采集函数）。 */
+function confirmLargeBackfill(request: { dataset_id?: string; subject_id?: string; from: string; to: string }, force: boolean) {
+  const summary = backfillScopeSummary({
+    datasetLabel: request.dataset_id
+      ? props.datasetOptions.find(item => item.value === request.dataset_id)?.label || request.dataset_id
+      : "",
+    datasetCount: props.datasetOptions.length,
+    subjectId: request.subject_id || "",
+    from: request.from,
+    to: request.to,
+    force
+  });
+  if (!summary) return Promise.resolve(true);
+  return new Promise<boolean>(resolve => {
+    Modal.confirm({
+      title: force ? "确认整段重拉？" : "确认补采全部数据集？",
+      content: summary,
+      okText: "开始补采",
+      okButtonProps: { status: "warning" },
+      cancelText: "取消",
+      onOk: () => resolve(true),
+      onCancel: () => resolve(false)
+    });
+  });
+}
+
 async function onSubmit(): Promise<boolean> {
   const request = rangeRequest();
   if (!request) return false;
@@ -180,6 +206,7 @@ async function onSubmit(): Promise<boolean> {
       // 留在弹窗里展示结果。
       return false;
     }
+    if (!(await confirmLargeBackfill(request, form.value.force))) return false;
     await submitBackfill(request, form.value.force);
     close();
     return true;

@@ -33,7 +33,7 @@ const column = (name: string, patch: Partial<DatasetColumn> = {}): DatasetColumn
 
 const valid = (patch: Partial<FactorFormState> = {}): FactorFormState => ({
   ...blankFactorForm(),
-  factor_id: "Bias",
+  factor_id: "bias",
   name: "Bias 偏离",
   spec: "outputs:\n  bias_20: close / ts_mean(close, 20) - 1\n",
   ...patch
@@ -214,5 +214,24 @@ describe("editor page contract", () => {
     expect(page).toContain("referenceDatasetId");
     expect(fs.readFileSync(path.resolve(__dirname, "factor-form.ts"), "utf8")).not.toContain("referenceDatasetId");
     expect(buildFactorPayload(valid())).not.toHaveProperty("referenceDatasetId");
+  });
+});
+
+describe("因子 ID 与后端规则一致", () => {
+  it.each(["Bias", "a__b", "_bias", "bias_", "1bias", "a".repeat(25)])("%j 在保存前检查里不通过", id => {
+    const form = valid({ factor_id: id });
+    expect(failing(form).map(item => item.key)).toContain("factor_id");
+  });
+
+  it.each(["bias", "bias_20", "ma5_ratio"])("%j 通过", id => {
+    const form = valid({ factor_id: id });
+    expect(failing(form).map(item => item.key)).not.toContain("factor_id");
+  });
+
+  it("改了因子 ID 后旧的校验结果作废，单输出因子的输出名要按新 ID 重新推导", () => {
+    const form = valid({ factor_id: "bias" });
+    const compile = ok(form);
+    expect(compiledFor(compile, form)).toBe(true);
+    expect(compiledFor(compile, { ...form, factor_id: "bias_20" })).toBe(false);
   });
 });

@@ -10,8 +10,8 @@
                 <template #icon><component :is="overall.info.icon" /></template>
                 {{ overall.info.text }}
               </a-tag>
-              <span v-if="!overall.reasons.length" class="muted">采集计划已生效，各数据集的自动检查都跟得上。</span>
-              <span v-else class="verdict-reason">{{ overall.reasons[0] }}</span>
+              <span v-if="overall.healthy" class="muted">采集计划已生效，各数据集的自动检查都跟得上。</span>
+              <span v-else-if="overall.reasons.length" class="verdict-reason">{{ overall.reasons[0] }}</span>
               <a-tooltip v-if="overall.reasons.length > 1">
                 <template #content>
                   <div v-for="reason in overall.reasons" :key="reason">{{ reason }}</div>
@@ -20,6 +20,9 @@
               </a-tooltip>
             </div>
             <a-space>
+              <span v-if="loadError && loaded" class="verdict-reason"
+                >最近一次读取失败：{{ loadError }}，下面是上次成功的结果</span
+              >
               <span class="muted">{{ status.generated_at ? `更新于 ${localTimeText(status.generated_at)}` : "" }}</span>
               <a-button size="small" @click="logVisible = true">
                 <template #icon><icon-history /></template>
@@ -381,6 +384,7 @@ import {
   levelInfo,
   levelRank,
   localTimeText,
+  overallStatus,
   statusSummary
 } from "./runtime-status-model";
 
@@ -401,11 +405,10 @@ const rangeDataset = ref("");
 const logVisible = ref(false);
 
 const summary = computed(() => statusSummary(status.value));
-const overall = computed(() => ({
-  level: status.value.level || "ok",
-  info: levelInfo(status.value.level),
-  reasons: status.value.reasons || []
-}));
+// 读取失败时不能显示成“正常”：loaded 表示当前空间至少读到过一次。
+const loaded = ref(false);
+const loadError = ref("");
+const overall = computed(() => overallStatus({ status: status.value, loaded: loaded.value, error: loadError.value }));
 const datasetRows = computed(() =>
   [...(status.value.datasets || [])]
     .sort((a, b) => levelRank(b.level) - levelRank(a.level))
@@ -513,10 +516,12 @@ async function loadStatus() {
     const data = await getCollectorStatus(spaceId);
     if (!request.isLatest() || spaceId !== (selectedSpaceId.value || "")) return;
     status.value = data;
+    loaded.value = true;
+    loadError.value = "";
     // 行高要等数据渲染后才能量到。
     void nextTick(fitFunctionPageSize);
   } catch (error) {
-    if (request.isLatest()) console.error("获取运行状态失败:", error);
+    if (request.isLatest()) loadError.value = error instanceof Error && error.message ? error.message : "请稍后重试";
   } finally {
     if (request.isLatest()) statusLoading.value = false;
   }
@@ -579,6 +584,8 @@ watch(functionFilters, () => (functionPage.value = 1), { deep: true });
 watch(selectedSpaceId, () => {
   guard.invalidate();
   status.value = {};
+  loaded.value = false;
+  loadError.value = "";
   expandedKeys.value = [];
   functionFilters.value = { keyword: "", region: "", market: "", abnormalOnly: false };
   void loadStatus();

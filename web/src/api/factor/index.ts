@@ -169,11 +169,12 @@ export function getFactorStatus() {
 }
 
 /** 编译一个定义：定义不合法时 valid=false，诊断带字段路径与行列（不是接口错误）。 */
-export function validateFactorSpec(spec: string, allow_partial_universe = false) {
-  return callFactor<{ spec: string; allow_partial_universe: boolean }, ValidateFactorSpecRsp>("ValidateFactorSpec", {
-    spec,
-    allow_partial_universe
-  });
+/** factor_id 为空时后端按草稿处理；单输出因子的输出名就是因子 ID，所以编辑器要带上它。 */
+export function validateFactorSpec(spec: string, allow_partial_universe = false, factor_id = "") {
+  return callFactor<{ spec: string; allow_partial_universe: boolean; factor_id?: string }, ValidateFactorSpecRsp>(
+    "ValidateFactorSpec",
+    { spec, allow_partial_universe, ...(factor_id ? { factor_id } : {}) }
+  );
 }
 
 /** 在因子任务的源数据上试算：少量标的、最近若干期，不写结果。 */

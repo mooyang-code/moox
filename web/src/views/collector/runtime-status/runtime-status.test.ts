@@ -14,6 +14,7 @@ import {
   functionStateInfo,
   inspectionInfo,
   levelInfo,
+  overallStatus,
   statusSummary
 } from "./runtime-status-model";
 
@@ -215,5 +216,26 @@ describe("WS 推送执行端", () => {
       done: "0.42 秒"
     });
     expect(streamPeriodText({ arrived: 0, expected: 2, missing: 2 }).done).toBe("零到达");
+  });
+});
+
+describe("运行状态的顶部结论", () => {
+  it("还没读到时显示读取中，不说正常", () => {
+    const result = overallStatus({ status: {}, loaded: false, error: "" });
+    expect(result.info.text).toBe("读取中");
+    expect(result.healthy).toBe(false);
+  });
+
+  it("首次读取失败时显示无法读取和原因，不说正常", () => {
+    const result = overallStatus({ status: {}, loaded: false, error: "网络错误" });
+    expect(result.level).toBe("error");
+    expect(result.info.text).toBe("无法读取运行状态");
+    expect(result.reasons).toEqual(["网络错误"]);
+    expect(result.healthy).toBe(false);
+  });
+
+  it("读到了且没有问题时才算正常", () => {
+    expect(overallStatus({ status: { level: "ok" }, loaded: true, error: "" }).healthy).toBe(true);
+    expect(overallStatus({ status: { level: "warn", reasons: ["慢"] }, loaded: true, error: "" }).healthy).toBe(false);
   });
 });

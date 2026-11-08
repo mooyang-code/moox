@@ -51,7 +51,7 @@
             <a-form class="editor-form" layout="vertical" :model="form" :disabled="readOnly">
               <div class="editor-form__row">
                 <a-form-item field="factor_id" label="因子 ID" required>
-                  <a-input v-model="form.factor_id" :disabled="editing || readOnly" placeholder="Bias" />
+                  <a-input v-model="form.factor_id" :disabled="editing || readOnly" placeholder="bias_20" />
                 </a-form-item>
                 <a-form-item field="name" label="展示名" required>
                   <a-input v-model="form.name" :max-length="64" placeholder="Bias 偏离" />
@@ -462,7 +462,7 @@ async function validateNow() {
   const key = specKey(form);
   compile.value = { status: "checking" };
   try {
-    const result = await validateFactorSpec(form.spec, form.allow_partial_universe);
+    const result = await validateFactorSpec(form.spec, form.allow_partial_universe, form.factor_id.trim());
     if (!validateGate.isCurrent(token)) return;
     if (result.valid) {
       compile.value = { status: "valid", spec: key, result };
@@ -512,7 +512,8 @@ async function runPreview() {
       spec: form.spec,
       subjects: previewSubjects.value,
       periods: previewPeriods.value,
-      allow_partial_universe: form.allow_partial_universe
+      allow_partial_universe: form.allow_partial_universe,
+      factor_id: form.factor_id.trim() || undefined
     });
     if (!previewGate.isCurrent(token)) return;
     previewResult.value = rsp;
@@ -641,7 +642,7 @@ onBeforeRouteLeave(() => confirmLeave());
 onBeforeRouteUpdate(() => confirmLeave());
 
 watch(factorId, () => void load());
-watch(() => [form.spec, form.allow_partial_universe], scheduleValidate, { immediate: true });
+watch(() => [form.spec, form.allow_partial_universe, form.factor_id], scheduleValidate, { immediate: true });
 watch(
   () => store.tasks.map((info: FactorTaskInfo) => info.factor_task.task_id),
   ids => {

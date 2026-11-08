@@ -76,7 +76,7 @@ export function statsStrip(status: EngineStatus | null | undefined, runningRecal
       key: "recalc",
       label: "进行中补算",
       value: String(runningRecalc),
-      hint: "启用回填与手动补算",
+      hint: "启用后需要手动补算历史",
       tone: runningRecalc ? "info" : "muted"
     }
   ];

@@ -20,6 +20,10 @@
       这是策略驱动的组合，提交前会暂停整个组合账户并取消活动目标订单，恢复前策略目标不会执行。
     </a-alert>
     <a-alert v-if="submissionError" type="warning" class="section">{{ submissionError }}</a-alert>
+    <a-alert v-if="memberLoadError" type="error" class="section">
+      读取这个执行账户的下单能力失败：{{ memberLoadError }}
+      <template #action><a-button size="mini" @click="loadMember">重试</a-button></template>
+    </a-alert>
     <a-form :model="manualForm" auto-label-width :disabled="!!pendingSubmission">
       <a-form-item v-if="memberOptions.length > 1" label="执行账户" required>
         <a-select v-model="memberId" @change="loadMember">
@@ -102,6 +106,8 @@ const typedName = ref("");
 const memberId = ref("");
 const capabilities = ref<ExecutionCapabilities | null>(null);
 const instruments = ref<TradableInstrument[]>([]);
+// 下单能力或可交易标的读取失败：订单类型、标的会是空的，要在对话框里说明原因并给重试，不能等提交时才提示。
+const memberLoadError = ref("");
 const pendingSubmission = ref<{ mode: 1 | 2; request: SubmitOrderReq } | null>(null);
 const capabilityRequests = createLatestRequestGuard();
 const manualForm = reactive({
@@ -153,21 +159,21 @@ function loadMember() {
   manualForm.instrument_id = "";
   capabilities.value = null;
   instruments.value = [];
+  memberLoadError.value = "";
   const request = capabilityRequests.begin();
+  const failed = (cause: unknown) => {
+    if (request.isLatest()) memberLoadError.value = cause instanceof Error && cause.message ? cause.message : "请稍后重试";
+  };
   getExecutionCapabilities(accountId)
     .then(response => {
       if (request.isLatest()) capabilities.value = response.capabilities;
     })
-    .catch(() => {
-      if (request.isLatest()) capabilities.value = null;
-    });
+    .catch(failed);
   listTradableInstruments(accountId)
     .then(response => {
       if (request.isLatest()) instruments.value = response.instruments || [];
     })
-    .catch(() => {
-      if (request.isLatest()) instruments.value = [];
-    });
+    .catch(failed);
 }
 
 /** 打开下单对话框。有结果不明的旧请求时，只能对同一个执行账户重试原请求。 */

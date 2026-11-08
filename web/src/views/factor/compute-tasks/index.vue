@@ -20,12 +20,10 @@
             <a-select v-model="filters.status" allow-clear placeholder="全部状态" class="tasks-status">
               <a-option v-for="option in statusOptions" :key="option.value" :value="option.value">{{ option.label }}</a-option>
             </a-select>
-            <a-tooltip :disabled="createSupported" content="因子计算目前只支持 crypto 空间的连续周期日历">
-              <a-button type="primary" status="success" :disabled="!createSupported" @click="createVisible = true">
-                <template #icon><icon-plus /></template>
-                新建计算任务
-              </a-button>
-            </a-tooltip>
+            <a-button type="primary" status="success" @click="createVisible = true">
+              <template #icon><icon-plus /></template>
+              新建计算任务
+            </a-button>
           </a-space>
         </div>
 
@@ -227,8 +225,6 @@ function closeDetail() {
 }
 
 const spaceStore = useSpaceStore();
-// 因子周期日历目前只实现了 crypto 空间（与后端 periodclock.ForSpace 一致）。
-const createSupported = computed(() => spaceStore.selectedSpaceId === "crypto");
 
 async function onCreated(taskId: string) {
   // 刷新期间切换空间：创建的任务属于原空间，不能把它的 ID 写进新空间的详情路由

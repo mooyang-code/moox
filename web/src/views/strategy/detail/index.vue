@@ -24,6 +24,9 @@
         >详情加载失败：{{ store.detailError
         }}<template #action><a-button size="small" @click="refreshDetail">重试</a-button></template></a-alert
       >
+      <a-alert v-if="logicalAccountError" type="warning" show-icon class="top-alert">
+        组合账户读取失败：{{ logicalAccountError }}。账户是否暂停、能否执行目标暂时无法确认。
+      </a-alert>
       <a-alert v-if="logicalAccount?.automation_state === 'PAUSED'" type="warning" show-icon class="top-alert">
         组合账户已暂停，目标不会执行，需要到组合账户恢复自动执行。
         <template #action>
@@ -171,7 +174,9 @@ const {
     controlUncertain.value = false;
   }
 });
-const logicalAccount = useLogicalAccount(computed(() => store.instance?.logical_account_id));
+const { account: logicalAccount, error: logicalAccountError } = useLogicalAccount(
+  computed(() => store.instance?.logical_account_id)
+);
 
 // 研究回放不支持策略池（Strategy 的 StartReplay 直接拒绝），按钮禁用并说明原因。
 const POOL_REPLAY_REASON = "研究回放暂不支持策略池：成员的净值与分配比例要在池实例启用后的预热与运行中查看";

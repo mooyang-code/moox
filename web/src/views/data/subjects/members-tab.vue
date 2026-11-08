@@ -24,11 +24,11 @@
           <template #icon><icon-plus /></template>
           批量加入
         </a-button>
-        <a-button v-if="selectedTagId && canEditMembers" :disabled="!selectedKeys.length" @click="removeSelected">
-          移出标签
-        </a-button>
         <a-button v-if="selectedTagId && canEditMembers" :disabled="!selectedKeys.length" @click="restoreSelected">
           恢复为有效
+        </a-button>
+        <a-button v-if="selectedTagId && canEditMembers" status="danger" :disabled="!selectedKeys.length" @click="removeSelected">
+          移出标签
         </a-button>
         <a-button v-if="!selectedTagId" type="primary" status="success" @click="openSubjectCreate">
           <template #icon><icon-plus /></template>
@@ -171,7 +171,8 @@
 import { createSubmitScope } from "@/utils/submit-scope";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import { computed, reactive, ref, watch } from "vue";
-import { Message } from "@arco-design/web-vue";
+import { Message, Modal } from "@arco-design/web-vue";
+import { removeMembersConfirmText } from "./member-actions";
 import {
   addTagMembers,
   listTagMembers,
@@ -365,12 +366,29 @@ function parseIds(value: string) {
   ];
 }
 
-async function removeSelected() {
+/** 移出标签会缩小引用它的采集任务的范围，先确认；失败时确认框保持打开（原因由请求层提示）。 */
+function removeSelected() {
   const ids = selectedSubjectIds();
-  if (!selectedTagId.value || !ids.length) return;
-  await removeTagMembers(props.spaceId, selectedTagId.value, ids);
-  Message.success("已移出标签");
-  await load();
+  const tagId = selectedTagId.value;
+  const spaceId = props.spaceId;
+  if (!tagId || !ids.length) return;
+  Modal.confirm({
+    title: `移出 ${ids.length} 个对象？`,
+    content: removeMembersConfirmText(ids.length),
+    okText: "移出",
+    okButtonProps: { status: "danger" },
+    cancelText: "取消",
+    onBeforeOk: async () => {
+      try {
+        await removeTagMembers(spaceId, tagId, ids);
+      } catch {
+        return false;
+      }
+      Message.success("已移出标签");
+      void load();
+      return true;
+    }
+  });
 }
 
 async function restoreSelected() {

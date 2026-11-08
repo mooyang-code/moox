@@ -1,4 +1,5 @@
 import NProgress from "@/config/nprogress";
+import { loginLocation } from "@/utils/safe-redirect";
 import pinia from "@/store/index";
 import { createRouter, createWebHashHistory } from "vue-router";
 import { staticRoutes, notFoundAndNoPower } from "@/router/route.ts";
@@ -56,8 +57,8 @@ router.beforeEach(async (to: any, _from: any, next: any) => {
     // 1、去登录页，无token，放行
     next();
   } else if (!token.value) {
-    // 2、没有token，直接重定向到登录页
-    next("/login");
+    // 2、没有token（含会话失效、刚被登出），带着原地址去登录页，登录后回来
+    next(loginLocation(to.fullPath));
   } else if (to.path === "/login" && token.value) {
     // 3、去登录页，有token，检查token是否有效
     // 如果用户信息为空，说明token可能无效，允许进入登录页
@@ -99,8 +100,8 @@ router.beforeEach(async (to: any, _from: any, next: any) => {
         // 确保完全清除用户状态，避免死循环
         await store.logOut();
 
-        // 直接跳转到登录页，不做任何其他检查
-        next("/login");
+        // 跳转到登录页，带着原地址，登录后回来
+        next(loginLocation(to.fullPath));
         return;
       }
     } else {

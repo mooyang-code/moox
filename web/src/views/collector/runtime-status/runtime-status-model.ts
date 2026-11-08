@@ -17,6 +17,32 @@ export function levelInfo(level?: string) {
   return levels[(level as HealthLevel) || "ok"] || levels.ok;
 }
 
+export interface OverallStatus {
+  /** 状态卡的配色：unknown 是还没读到 */
+  level: HealthLevel | "unknown";
+  info: { text: string; color: string; icon: string };
+  reasons: string[];
+  /** 读到了并且一切正常：只有这时才写“各数据集的自动检查都跟得上” */
+  healthy: boolean;
+}
+
+/** 顶部结论：没读到时不能说正常；读取失败但有上次结果时照旧显示上次结果，由页面另写失败提示。 */
+export function overallStatus(input: { status: GetCollectorStatusResponse; loaded: boolean; error: string }): OverallStatus {
+  if (!input.loaded) {
+    return input.error
+      ? {
+          level: "error",
+          info: { text: "无法读取运行状态", color: "red", icon: "icon-close-circle" },
+          reasons: [input.error],
+          healthy: false
+        }
+      : { level: "unknown", info: { text: "读取中", color: "gray", icon: "icon-clock-circle" }, reasons: [], healthy: false };
+  }
+  const level = input.status.level || "ok";
+  const reasons = input.status.reasons || [];
+  return { level, info: levelInfo(level), reasons, healthy: level === "ok" && !reasons.length };
+}
+
 export function levelRank(level?: string) {
   return level === "error" ? 2 : level === "warn" ? 1 : 0;
 }

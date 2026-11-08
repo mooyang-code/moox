@@ -16,6 +16,7 @@ import {
   kpiCards,
   prettifyIds,
   relativeTime,
+  scopeOverviewToSpace,
   shortTime,
   statusLine,
   strategyRows,
@@ -823,5 +824,58 @@ describe("systemStage", () => {
     });
     expect(stage?.issues).toEqual(["a", "b", "c", "另有 2 项"]);
     expect(stage?.recovered).toBe(true);
+  });
+});
+
+describe("首页读取失败与空间范围", () => {
+  it("监控以外有读取失败时不说“运行正常”，写明几项读取失败", () => {
+    expect(statusLine({ attention: [], overview: {}, monitorError: "", failed: 2 })).toEqual({
+      tone: "warn",
+      text: "2 项读取失败"
+    });
+    expect(statusLine({ attention: [], overview: undefined, monitorError: "boom", failed: 1 }).text).toBe(
+      "监控数据暂不可用 · 1 项读取失败"
+    );
+    const warn = { key: "k", tone: "warn" as const, source: "监控", title: "t", detail: "", when: "", target: "" };
+    expect(statusLine({ attention: [warn], overview: {}, monitorError: "", failed: 1 }).text).toBe("1 项需要处理 · 1 项读取失败");
+    expect(statusLine({ attention: [], overview: {}, monitorError: "", failed: 0 }).text).toBe("运行正常");
+  });
+
+  it("数据新鲜度只保留当前空间的数据集", () => {
+    const overview: HealthOverview = {
+      pipeline: [
+        {
+          name: "入库",
+          datasets: [
+            { dataset_id: "a", space_id: "crypto" },
+            { dataset_id: "b", space_id: "stockcn" }
+          ]
+        }
+      ]
+    } as HealthOverview;
+    const scoped = scopeOverviewToSpace(overview, "crypto");
+    expect(scoped?.pipeline?.[0].datasets?.map(item => item.dataset_id)).toEqual(["a"]);
+    expect(overview.pipeline?.[0].datasets).toHaveLength(2);
+    expect(scopeOverviewToSpace(undefined, "crypto")).toBeUndefined();
+  });
+
+  it("别的空间的告警在标题前写空间名，当前空间的不加", () => {
+    const base = {
+      strategy: { instances: [], targets: {}, catalog: [] },
+      factors: [],
+      freshness: [],
+      names,
+      nowMs: NOW,
+      alertTarget: () => "",
+      spaceLabel: (id: string) => (id === "crypto" ? "" : "A股市场")
+    };
+    const items = attentionItems({
+      ...base,
+      alerts: [
+        { id: "a1", title: "数据中断", object: { space_id: "stockcn" } },
+        { id: "a2", title: "延迟", object: { space_id: "crypto" } }
+      ]
+    });
+    expect(items.map(item => item.title)).toEqual(["A股市场 · 数据中断", "延迟"]);
   });
 });

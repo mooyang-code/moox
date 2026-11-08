@@ -118,6 +118,16 @@ afterEach(() => {
 });
 
 describe("下单对话框", () => {
+  it("读取下单能力失败时在对话框里写明原因，重试成功后清掉", async () => {
+    mocks.getExecutionCapabilities.mockRejectedValueOnce(new Error("交易服务不可用"));
+    await openEntry();
+    expect(document.body.textContent).toContain("读取这个执行账户的下单能力失败：交易服务不可用");
+    const retry = [...document.querySelectorAll<HTMLButtonElement>("button")].find(item => item.textContent?.trim() === "重试");
+    retry?.click();
+    await flushPromises();
+    expect(document.body.textContent).not.toContain("读取这个执行账户的下单能力失败");
+  });
+
   it("自主下单走普通提交并带绝对截止时间，不接管；请求带标的所在市场", async () => {
     const vm = await openEntry();
     expect(document.body.textContent).not.toContain("提交前会暂停整个组合账户");

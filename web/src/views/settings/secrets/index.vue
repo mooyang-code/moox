@@ -86,13 +86,13 @@
                 <a-button v-if="canTestConnection(record)" size="mini" type="text" @click="openTestConnection(record)">
                   测试连接
                 </a-button>
-                <a-popconfirm :content="toggleConfirmText(record)" @ok="toggleStatus(record)">
+                <a-popconfirm :content="secretToggleText(record)" @ok="toggleStatus(record)">
                   <a-button size="mini" type="text">
                     {{ record.status === "active" ? "禁用" : "启用" }}
                   </a-button>
                 </a-popconfirm>
                 <a-button size="mini" type="text" @click="openEdit(record)">编辑</a-button>
-                <a-popconfirm content="确认删除该秘钥？" @ok="remove(record)">
+                <a-popconfirm :content="secretDeleteText(record)" :ok-button-props="{ status: 'danger' }" @ok="remove(record)">
                   <a-button size="mini" type="text" status="danger">删除</a-button>
                 </a-popconfirm>
               </a-space>
@@ -246,6 +246,7 @@ import RootCaDialog from "@/components/root-ca/root-ca-dialog.vue";
 import InspectionTestDialog from "@/components/trade-inspection/inspection-test-dialog.vue";
 import { canTestConnection } from "@/components/trade-inspection/inspection-request";
 import { defaultPagination, formatTime } from "@/views/data/shared/metadata-utils";
+import { secretDeleteText, secretToggleText } from "./secret-actions";
 import { MIN_PASSPHRASE_LENGTH, exportFileName, importSummary, passphraseError, saveTextFile } from "./secret-transfer";
 
 defineOptions({ name: "SettingsSecrets" });
@@ -431,10 +432,6 @@ async function remove(record: Secret) {
   await deleteSecret(record.secret_id);
   Message.success("秘钥已删除");
   await load();
-}
-
-function toggleConfirmText(record: Secret) {
-  return `确认${record.status === "active" ? "禁用" : "启用"}该秘钥？`;
 }
 
 async function toggleStatus(record: Secret) {

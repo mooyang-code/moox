@@ -1,6 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { StrategyInstance } from "@/api/strategy-types";
-import { buildStrategyLinks } from "./strategy-link";
+
+const api = vi.hoisted(() => ({ listInstances: vi.fn(), listStrategies: vi.fn() }));
+vi.mock("@/api/strategy", () => api);
+import { buildStrategyLinks, loadStrategyLinks } from "./strategy-link";
 
 const instance = (id: string, extra: Partial<StrategyInstance> = {}) =>
   ({
@@ -43,5 +46,13 @@ describe("关联策略取哪个实例", () => {
   it("没有实例引用时不返回；策略定义查不到时退回策略编号", () => {
     expect(link([])).toBeUndefined();
     expect(link([instance("x", { strategy_id: "st-unknown" })])?.name).toBe("st-unknown");
+  });
+});
+
+describe("读取关联策略", () => {
+  it("读取失败时返回 null，页面据此写“策略读取失败”而不是“尚未绑定策略”", async () => {
+    api.listInstances.mockRejectedValueOnce(new Error("策略服务不可用"));
+    api.listStrategies.mockResolvedValueOnce({ items: [] });
+    expect(await loadStrategyLinks([])).toBeNull();
   });
 });
