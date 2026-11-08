@@ -376,7 +376,7 @@ describe("monitor page", () => {
     const feishu = "https://open.feishu.cn/open-apis/bot/v2/hook/0f6c3c1e-1234-4abc-9def-111111111111";
     const page = render({ ...healthy, notification: { channel_count: 1, channel_types: ["wecom"] } });
     await flushPromises();
-    expect(page.text()).toContain("告警推送：企业微信 ✓");
+    expect(page.text()).toContain("告警推送：企业微信（已配置）");
 
     mockedCallControl.mockResolvedValueOnce({ channels: [{ channel_id: "nc_1", channel_type: "wecom", webhook_url: wecom }] });
     const settings = page.findAll("button").find(button => button.text() === "消息通知设置");
@@ -418,7 +418,7 @@ describe("monitor page", () => {
         .findAll(".notification-list__url")
         .map(item => item.text())
     ).toEqual([feishu]);
-    expect(page.text()).toContain("告警推送：飞书 ✓");
+    expect(page.text()).toContain("告警推送：飞书（已配置）");
   });
 
   it("always labels component chips with their names", async () => {

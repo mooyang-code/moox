@@ -136,9 +136,12 @@ describe("home page", () => {
     const wrapper = await render();
     const text = wrapper.text();
     expect(text).toContain("运行正常");
-    expect(wrapper.find(".health-card").text()).toContain("22/22 组件");
-    expect(text).toContain("加密货币市场");
+    // 首页只回答“有没有问题、去哪处理”：没有问候语和日期、没有健康卡和横幅事实行、“一切正常”只用文字
+    expect(wrapper.find(".health-card").exists()).toBe(false);
+    expect(wrapper.find(".banner-facts").exists()).toBe(false);
+    expect(text).not.toMatch(/早上好|下午好|晚上好|凌晨好|星期/);
     expect(wrapper.find(".tile-attention .all-clear").text()).toContain("一切正常");
+    expect(wrapper.find(".tile-attention .all-clear svg, .tile-attention .all-clear [class*='icon-']").exists()).toBe(false);
     expect(wrapper.findAll(".attention-line")).toHaveLength(0);
     expect(text).not.toMatch(/驾驶舱|Quant\.|Think\.|Pattern\./);
   });
@@ -256,9 +259,7 @@ describe("home page", () => {
     expect(wrapper.text()).not.toContain("运行正常");
     expect(wrapper.find(".tile-attention .attention-line").text()).toContain("入库 · 现货K线 · 1m");
     expect(wrapper.find(".tile-attention .attention-line").text()).toContain("14 小时 42 分");
-    // 横幅写具体的收盘时间（精确到秒），落后的换成警示色，由人对照当前时间判断。
-    const dataFact = wrapper.findAll(".banner-facts span").find(item => item.text().startsWith("数据新鲜度"));
-    expect(dataFact?.text()).toMatch(/^数据新鲜度 (\d{2}-\d{2} )?\d{2}:\d{2}:\d{2} UTC$/);
-    expect(dataFact?.find("b").classes()).toContain("is-warn");
+    // 新鲜度磁贴只列不正常的行
+    expect(wrapper.find('[aria-label="数据新鲜度"]').text()).toContain("现货K线");
   });
 });

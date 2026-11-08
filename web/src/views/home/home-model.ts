@@ -528,6 +528,11 @@ export function fold<T>(items: T[], limit: number): { shown: T[]; hidden: number
   return { shown: items.slice(0, limit), hidden: Math.max(0, items.length - limit) };
 }
 
+/** 落后量的写法：0 为“已追平”，否则“落后 X”。 */
+function behindText(seconds: number): string {
+  return seconds === 0 ? "已追平" : `落后 ${humanizeDuration(seconds)}`;
+}
+
 const TONE_ICON: Record<Tone, string> = {
   ok: "icon-check-circle-fill",
   warn: "icon-exclamation-circle-fill",
@@ -537,20 +542,6 @@ const TONE_ICON: Record<Tone, string> = {
 
 export function toneIcon(tone: Tone): string {
   return TONE_ICON[tone];
-}
-
-export interface BannerFact {
-  key: string;
-  label: string;
-  value: string;
-  tone: Tone;
-  /** 鼠标悬停时说明这个数字的口径。 */
-  hint?: string;
-}
-
-/** 落后量的写法：0 为“已追平”，否则“落后 X”。 */
-function behindText(seconds: number): string {
-  return seconds === 0 ? "已追平" : `落后 ${humanizeDuration(seconds)}`;
 }
 
 interface FactCandidate {
@@ -586,47 +577,6 @@ function dataFact(freshness: FreshnessRow[]): FactCandidate | undefined {
 /** Banner 与指标卡里的时间：写最近一根已收盘 K 线的收盘时间，精确到秒；由人对照当前时间判断是否异常，异常的换色。 */
 function closeClock(fact: FactCandidate | undefined, nowMs: number, zone: string): string {
   return fact ? marketTime(fact.atMs, zone, nowMs, { seconds: true }) : "—";
-}
-
-/** Banner 里的三项：策略最近一期、因子计算、数据新鲜度都写具体的收盘时间；没有观测时写“—”。 */
-export function bannerFacts(input: {
-  strategies: StrategyRow[];
-  factors: FactorRow[];
-  freshness: FreshnessRow[];
-  nowMs: number;
-  /** 当前空间的时区：收盘时间按它显示 */
-  zone: string;
-}): BannerFact[] {
-  const strategy = pickFact(
-    input.strategies
-      .filter(row => row.enabled && row.lastBarMs !== null)
-      .map(row => ({ tone: row.tone, atMs: row.lastBarMs as number, behind: 0 }))
-  );
-  const factor = factorFact(input.factors);
-  const data = dataFact(input.freshness);
-  return [
-    {
-      key: "strategy",
-      label: "策略最近一期",
-      value: closeClock(strategy, input.nowMs, input.zone),
-      tone: strategy ? strategy.tone : "idle",
-      hint: "已启用实例最近一份目标所属 K 线的收盘时间；有异常实例时显示异常的那一个"
-    },
-    {
-      key: "factor",
-      label: "因子计算",
-      value: closeClock(factor, input.nowMs, input.zone),
-      tone: factor ? factor.tone : "idle",
-      hint: "因子任务最近一个已计算周期的收盘时间；有滞后的任务时显示落后最多的那一个"
-    },
-    {
-      key: "data",
-      label: "数据新鲜度",
-      value: closeClock(data, input.nowMs, input.zone),
-      tone: data ? data.tone : "idle",
-      hint: "数据链路已写到的最近一根 K 线的收盘时间；有落后的数据集时显示落后最多的那一个"
-    }
-  ];
 }
 
 export interface KpiCard {

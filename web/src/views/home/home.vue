@@ -10,12 +10,12 @@
       <template v-else>
         <section class="banner" :class="`is-${status.tone}`">
           <div class="banner-main">
-            <div class="banner-meta">
-              {{ greeting }}，{{ userName }} · {{ todayText }}<template v-if="spaceName"> · {{ spaceName }}</template>
-            </div>
             <div class="banner-status">
-              <span class="status-icon" :class="`is-${status.tone}`"><component :is="statusIcon" /></span>
               <h2>{{ status.text }}</h2>
+              <span class="banner-time"
+                >更新于 {{ updatedAt || "—" }}
+                <a class="refresh" :class="{ 'is-busy': refreshing }" @click="manualRefresh">刷新</a></span
+              >
             </div>
             <div v-if="stage" class="banner-stage" :title="stage.issues.join('\n')">
               <span class="stage-dot" :class="`is-${stage.color}`" />
@@ -23,30 +23,12 @@
               <small v-if="stage.recovered" class="stage-recovered">已自动恢复</small>
               <small v-for="issue in stage.issues" :key="issue" class="stage-issue">{{ issue }}</small>
             </div>
-            <div class="banner-facts">
-              <span v-for="fact in facts" :key="fact.key" :title="fact.hint"
-                >{{ fact.label }} <b :class="`is-${fact.tone}`">{{ fact.value }}</b></span
-              >
-            </div>
             <nav class="banner-links" aria-label="常用入口">
               <button v-for="link in quickLinks" :key="link.label" type="button" class="quick" @click="go(link.target)">
                 <component :is="link.icon" />{{ link.label }}
               </button>
             </nav>
           </div>
-          <aside class="health-card" aria-label="系统健康">
-            <span class="health-card__label">系统健康</span>
-            <div class="health-card__value">
-              <strong>{{ services.percent === undefined ? "—" : `${services.percent}%` }}</strong>
-              <span v-if="services.available">{{ services.healthy }}/{{ services.total }} 组件</span>
-            </div>
-            <div class="meter"><i :class="`is-${services.tone}`" :style="{ width: `${services.percent || 0}%` }" /></div>
-            <span class="health-card__foot">{{ hosts.length }} 台主机 · {{ alertCount }} 告警</span>
-            <span class="health-card__foot health-card__time"
-              >更新于 {{ updatedAt || "—" }}
-              <a class="refresh" :class="{ 'is-busy': refreshing }" @click="manualRefresh">刷新</a></span
-            >
-          </aside>
         </section>
 
         <section class="kpis" aria-label="关键指标">
@@ -124,7 +106,6 @@
             </header>
             <div class="tile-body">
               <div v-if="!attention.length" class="all-clear">
-                <component :is="statusIcon" :class="`is-${status.tone}`" />
                 <span>{{ allClearText }}</span>
                 <small v-if="updatedAt">最近检查 {{ updatedAt }}</small>
               </div>
@@ -193,6 +174,7 @@
               <p v-if="!freshness.length" class="tile-empty">
                 {{ monitorError ? "监控数据暂不可用" : overview ? "暂无数据链路观测" : "读取中…" }}
               </p>
+              <p v-else-if="!foldedFreshness.shown.length" class="tile-empty">{{ freshness.length }} 条数据链路都正常</p>
               <button
                 v-for="row in foldedFreshness.shown"
                 :key="row.key"
@@ -224,6 +206,7 @@
               <p v-if="!hosts.length" class="tile-empty">
                 {{ monitorError ? "监控数据暂不可用" : overview ? "没有上报的主机" : "读取中…" }}
               </p>
+              <p v-else-if="!foldedHosts.shown.length" class="tile-empty">{{ hosts.length }} 台主机都正常</p>
               <template v-else>
                 <div class="line line-head host-cols"><span>主机</span><span>CPU</span><span>内存</span><span>磁盘</span></div>
                 <button
@@ -289,7 +272,6 @@ import type { Strategy, StrategyInstance, StrategyTargetSnapshot } from "@/api/s
 import { listTradingAccounts } from "@/api/trade";
 import { usePolling } from "@/hooks/usePolling";
 import { isSystemSpace, useSpaceStore } from "@/store/modules/space";
-import { useUserInfoStore } from "@/store/modules/user-info";
 import { RequestGate } from "@/utils/request-gate";
 import { datasetMatchesAttribution, isLikelyFactorResultDataset } from "@/views/data/shared/module-attribution";
 import { alertHref } from "@/views/ops/monitor/health-display";
@@ -298,7 +280,6 @@ import {
   TILE_LIMITS,
   activityRows,
   attentionItems,
-  bannerFacts,
   factorRows,
   fold,
   freshnessRows,
@@ -308,7 +289,6 @@ import {
   statusLine,
   strategyRows,
   systemStage,
-  toneIcon,
   type HomeTarget,
   type NameBook
 } from "./home-model";
@@ -320,11 +300,9 @@ const TARGET_FETCH_LIMIT = 12;
 
 const router = useRouter();
 const spaceStore = useSpaceStore();
-const userStore = useUserInfoStore();
 const selectedSpaceId = computed(() => spaceStore.selectedSpaceId);
 // 空间磁贴（因子、策略、数据新鲜度、动态）按当前空间的时区；告警、主机等全局部分按 UTC
 const displayZone = useDisplayZone();
-const spaceName = computed(() => spaceStore.selectedSpace?.name || "");
 
 const nowMs = ref(Date.now());
 const updatedAt = ref("");
@@ -367,9 +345,20 @@ const freshness = computed(() =>
   freshnessRows(scopeOverviewToSpace(overview.value, selectedSpaceId.value || ""), names, nowMs.value)
 );
 const hosts = computed(() => hostRows(overview.value?.hosts || []));
-const foldedFreshness = computed(() => fold(freshness.value, TILE_LIMITS.freshness));
+// 新鲜度和主机两格只列不正常的行：首页只回答“有没有问题、去哪处理”
+const foldedFreshness = computed(() =>
+  fold(
+    freshness.value.filter(row => row.tone !== "ok"),
+    TILE_LIMITS.freshness
+  )
+);
 const foldedFactors = computed(() => fold(factors.value, TILE_LIMITS.factors));
-const foldedHosts = computed(() => fold(hosts.value, TILE_LIMITS.hosts));
+const foldedHosts = computed(() =>
+  fold(
+    hosts.value.filter(row => row.tone !== "ok"),
+    TILE_LIMITS.hosts
+  )
+);
 const foldedAttention = computed(() => fold(attention.value, TILE_LIMITS.attention));
 const activity = computed(() =>
   activityRows(activityItems.value, names, nowMs.value, displayZone.value).slice(0, TILE_LIMITS.activity)
@@ -395,8 +384,6 @@ const status = computed(() =>
   })
 );
 const stage = computed(() => (monitorError.value ? undefined : systemStage(overview.value)));
-const alertCount = computed(() => (monitorError.value ? "—" : String(overview.value?.summary?.alert_count ?? 0)));
-const statusIcon = computed(() => toneIcon(status.value.tone));
 // 监控没有关注项时这一格的说明：别的格子读取失败时不能写“一切正常”
 const allClearText = computed(() => {
   if (monitorError.value) return "监控数据暂不可用";
@@ -404,15 +391,6 @@ const allClearText = computed(() => {
   return failedCount.value ? `监控没有关注项，另有 ${failedCount.value} 项读取失败` : "一切正常";
 });
 const services = computed(() => serviceHealth(overview.value, monitorError.value));
-const facts = computed(() =>
-  bannerFacts({
-    strategies: strategies.value,
-    factors: factors.value,
-    freshness: freshness.value,
-    nowMs: nowMs.value,
-    zone: displayZone.value
-  })
-);
 const kpis = computed(() =>
   kpiCards({
     strategies: strategies.value,
@@ -434,18 +412,6 @@ function stepStrategy(delta: number) {
   const total = strategies.value.length;
   if (total > 1) strategyIndex.value = (strategyIndex.value + delta + total) % total;
 }
-
-const userName = computed(() => userStore.account.user?.userName || "Trader");
-const greeting = computed(() => {
-  const hour = new Date(nowMs.value).getHours();
-  return hour < 6 ? "凌晨好" : hour < 12 ? "早上好" : hour < 18 ? "下午好" : "晚上好";
-});
-
-const todayText = computed(() => {
-  const date = new Date(nowMs.value);
-  const weekday = ["日", "一", "二", "三", "四", "五", "六"][date.getDay()];
-  return `${date.getMonth() + 1} 月 ${date.getDate()} 日 星期${weekday}`;
-});
 
 const quickLinks: { label: string; icon: string; target: HomeTarget }[] = [
   { label: "K 线浏览", icon: "icon-bar-chart", target: "/collector/tasks?tab=results" },
@@ -753,11 +719,6 @@ a {
   gap: var(--moox-space-2);
 }
 
-.banner-meta {
-  color: var(--color-text-3);
-  font-size: 12px;
-}
-
 .banner-status {
   display: flex;
   align-items: center;
@@ -770,10 +731,9 @@ a {
   font-weight: 600;
 }
 
-.status-icon {
-  display: inline-flex;
-  font-size: 26px;
-  color: var(--tone);
+.banner-time {
+  color: var(--color-text-3);
+  font-size: 12px;
 }
 
 .banner-stage {
@@ -833,19 +793,6 @@ a {
   color: var(--color-text-3);
 }
 
-.banner-facts {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 20px;
-  color: var(--color-text-2);
-  font-size: 13px;
-}
-
-.banner-facts b {
-  color: var(--tone, var(--color-text-1));
-  font-weight: 600;
-}
-
 .banner-links {
   display: flex;
   flex-wrap: wrap;
@@ -869,43 +816,6 @@ a {
 
 .quick:hover {
   color: rgb(var(--primary-6));
-}
-
-.health-card {
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-  gap: 6px;
-  padding: 12px 14px;
-  border-radius: 8px;
-  background: var(--color-bg-2);
-}
-
-.health-card__label,
-.health-card__foot {
-  color: var(--color-text-3);
-  font-size: 12px;
-}
-
-.health-card__value {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-}
-
-.health-card__value strong {
-  font-size: 26px;
-  font-weight: 600;
-}
-
-.health-card__value span {
-  color: var(--color-text-3);
-  font-size: 12px;
-}
-
-.health-card__time {
-  display: flex;
-  justify-content: space-between;
 }
 
 .refresh.is-busy {

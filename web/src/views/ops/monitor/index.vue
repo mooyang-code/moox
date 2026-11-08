@@ -522,7 +522,7 @@ const notificationLabel = computed(() => {
   const count = summary?.channel_count || 0;
   if (!count) return "未配置";
   const platforms = [...new Set((summary?.channel_types || []).map(type => channelName(type)))].join("、");
-  return count > 1 ? `${platforms}（${count} 个渠道）` : `${platforms} ✓`;
+  return count > 1 ? `${platforms}（${count} 个渠道）` : `${platforms}（已配置）`;
 });
 
 function channelName(type?: string) {
