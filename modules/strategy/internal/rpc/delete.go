@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
@@ -123,7 +124,7 @@ func (s *Service) pendingTasks(ctx context.Context, instance store.Instance) ([]
 		switch task.BoundInstanceID {
 		case instance.InstanceID:
 		case "":
-			return nil, rejection{fmt.Errorf("因子任务 %s 还没有关联本实例（实例从未启用过），不能随实例删除；可以先在因子任务页删除这个任务，再重新删除实例", taskID)}
+			return nil, rejection{fmt.Errorf("因子任务 %s 还没有关联本实例（实例从未启用过），不能随实例删除；先在因子任务页停用并删除这个任务（选“同时清理结果数据集”），再重新删除实例", taskID)}
 		default:
 			return nil, rejection{fmt.Errorf("因子任务 %s 关联的是实例 %s，不是本实例，不能随本实例删除", taskID, task.BoundInstanceID)}
 		}
@@ -170,32 +171,58 @@ func (s *Service) checkTasksExist(ctx context.Context, instance store.Instance) 
 	return nil
 }
 
-// markMissingTasks 给停用实例标出已在 Factor 删除的因子任务（删除未完成）。只在有停用实例时列一次全部任务；
-// 读不到 Factor 时不标，只写日志，不让列表和详情因此报错。
-func (s *Service) markMissingTasks(ctx context.Context, instances []store.Instance, items []*strategypb.StrategyInstance) {
+// missingTasksBudget 是列表与详情里检查因子任务还在不在的时间预算：列表与详情的路由超时只有 5 秒，Factor 慢时宁可不标，
+// 也不能拖到超时报错。
+const missingTasksBudget = 1500 * time.Millisecond
+
+// markMissingTasks 给停用实例标出已在 Factor 删除的因子任务（删除未完成）。perTask 为真（详情）时逐个读任务，否则（列表）
+// 列一次全部任务；读不到 Factor 或超出预算时不标，只写日志，不让列表和详情因此报错。
+func (s *Service) markMissingTasks(ctx context.Context, instances []store.Instance, items []*strategypb.StrategyInstance, perTask bool) {
 	if s.Tasks == nil {
 		return
 	}
-	needed := false
-	for _, instance := range instances {
-		needed = needed || (!instance.Enabled && len(instance.FactorTasks) > 0)
-	}
-	if !needed {
-		return
-	}
-	existing, err := s.Tasks.ListFactorTaskIDs(ctx)
-	if err != nil {
-		log.Warnf("检查实例的因子任务是否还在失败，本次不标出删除未完成的实例：%v", input.RawCause(err))
-		return
-	}
+	var checked []int
 	for i, instance := range instances {
-		if instance.Enabled {
-			continue
+		if !instance.Enabled && len(instance.FactorTasks) > 0 {
+			checked = append(checked, i)
 		}
-		for _, taskID := range input.TaskIDs(instance.FactorTasks) {
-			if !existing[taskID] {
-				items[i].MissingFactorTasks = append(items[i].MissingFactorTasks, taskID)
+	}
+	if len(checked) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, missingTasksBudget)
+	defer cancel()
+	var exists func(taskID string) (bool, error)
+	if perTask {
+		exists = func(taskID string) (bool, error) {
+			_, err := s.Tasks.GetFactorTask(ctx, taskID)
+			if errors.Is(err, input.ErrFactorTaskNotFound) {
+				return false, nil
+			}
+			return err == nil, err
+		}
+	} else {
+		existing, err := s.Tasks.ListFactorTaskIDs(ctx)
+		if err != nil {
+			log.Warnf("检查实例的因子任务是否还在失败，本次不标出删除未完成的实例：%v", input.RawCause(err))
+			return
+		}
+		exists = func(taskID string) (bool, error) { return existing[taskID], nil }
+	}
+	missing := make(map[int][]string, len(checked))
+	for _, i := range checked {
+		for _, taskID := range input.TaskIDs(instances[i].FactorTasks) {
+			found, err := exists(taskID)
+			if err != nil {
+				log.Warnf("检查实例 %s 的因子任务 %s 是否还在失败，本次不标出删除未完成：%v", instances[i].InstanceID, taskID, input.RawCause(err))
+				return
+			}
+			if !found {
+				missing[i] = append(missing[i], taskID)
 			}
 		}
+	}
+	for i, taskIDs := range missing {
+		items[i].MissingFactorTasks = taskIDs
 	}
 }

@@ -51,8 +51,11 @@ export function deleteFactorTask(task_id: string, purge = false) {
   return callFactor<{ task_id: string; purge: boolean }, FactorRetRsp>("DeleteFactorTask", { task_id, purge });
 }
 
-export function listFactorTasks(params: ListFactorTasksReq = {}) {
-  return callFactor<ListFactorTasksReq, FactorRetRsp<ListFactorTasksRsp>>("ListFactorTasks", params);
+/** silent 为 true 时失败不弹全局错误提示，由调用方自己提示。 */
+export function listFactorTasks(params: ListFactorTasksReq = {}, options: { silent?: boolean } = {}) {
+  type Rsp = FactorRetRsp<ListFactorTasksRsp>;
+  if (options.silent) return callFactor<ListFactorTasksReq, Rsp>("ListFactorTasks", params, { silentError: true });
+  return callFactor<ListFactorTasksReq, Rsp>("ListFactorTasks", params);
 }
 
 export async function createFactor(factor: FactorInput) {

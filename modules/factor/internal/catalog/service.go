@@ -353,7 +353,7 @@ func requireBoundTo(task domain.FactorTask, instanceID string) error {
 	case instanceID:
 		return nil
 	case "":
-		return fmt.Errorf("%w: 因子任务 %s 还没有关联策略实例 %s（实例从未启用过），不能随实例删除；可以先在因子任务页删除这个任务，再重新删除实例",
+		return fmt.Errorf("%w: 因子任务 %s 还没有关联策略实例 %s（实例从未启用过），不能随实例删除；先在因子任务页停用并删除这个任务（选“同时清理结果数据集”），再重新删除实例",
 			store.ErrConflict, task.TaskID, instanceID)
 	default:
 		return fmt.Errorf("%w: 因子任务 %s 关联的是策略实例 %s，不是 %s", store.ErrConflict, task.TaskID, task.BoundInstanceID, instanceID)

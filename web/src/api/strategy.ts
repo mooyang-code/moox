@@ -191,8 +191,8 @@ export async function listStrategies(params: PageRequest = {}): Promise<PageResu
   };
 }
 
-/** ErrorCode.INVALID_PARAM = 1：请求内容本身有问题（DSL 不合法、绑定无法解析）。 */
-function isInvalidParam(code: unknown): boolean {
+/** ErrorCode.INVALID_PARAM = 1：请求内容本身有问题（DSL 不合法、绑定无法解析、删除被拒绝）。 */
+export function isInvalidParam(code: unknown): boolean {
   return code === 1 || code === "1" || code === "INVALID_PARAM";
 }
 

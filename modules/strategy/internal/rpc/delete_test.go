@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
@@ -20,9 +21,15 @@ type fakeFactorTasks struct {
 	deleted   []string
 	deleteErr error
 	listErr   error
+	// block 为真时读取一直等到 ctx 结束（模拟 Factor 很慢）。
+	block bool
 }
 
-func (f *fakeFactorTasks) GetFactorTask(_ context.Context, taskID string) (input.FactorTaskRecord, error) {
+func (f *fakeFactorTasks) GetFactorTask(ctx context.Context, taskID string) (input.FactorTaskRecord, error) {
+	if f.block {
+		<-ctx.Done()
+		return input.FactorTaskRecord{}, ctx.Err()
+	}
 	instanceID, ok := f.bound[taskID]
 	if !ok {
 		return input.FactorTaskRecord{}, fmt.Errorf("%w：%s", input.ErrFactorTaskNotFound, taskID)
@@ -30,7 +37,11 @@ func (f *fakeFactorTasks) GetFactorTask(_ context.Context, taskID string) (input
 	return input.FactorTaskRecord{TaskID: taskID, ResultDatasetID: "dataset_of_" + taskID, BoundInstanceID: instanceID}, nil
 }
 
-func (f *fakeFactorTasks) ListFactorTaskIDs(context.Context) (map[string]bool, error) {
+func (f *fakeFactorTasks) ListFactorTaskIDs(ctx context.Context) (map[string]bool, error) {
+	if f.block {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
 	if f.listErr != nil {
 		return nil, f.listErr
 	}
@@ -218,5 +229,22 @@ func TestDeleteStrategyInstanceWithLogicalAccount(t *testing.T) {
 	sort.Strings(tasks.deleted)
 	if len(tasks.deleted) != 1 {
 		t.Fatalf("应删除关联的任务：%v", tasks.deleted)
+	}
+}
+
+// Factor 很慢时列表与详情在预算内照常返回，只是不标删除未完成。
+func TestListAndGetInstanceDoNotWaitForSlowFactor(t *testing.T) {
+	h, tasks, _ := deleteHarness(t)
+	tasks.block = true
+	started := time.Now()
+	listed, _ := h.service.ListStrategyInstances(h.ctx, &strategypb.ListStrategyInstancesReq{})
+	requireOK(t, int32(listed.GetRetInfo().GetCode()), listed.GetRetInfo().GetMsg())
+	detail, _ := h.service.GetStrategyInstance(h.ctx, &strategypb.GetStrategyInstanceReq{InstanceId: "i1"})
+	requireOK(t, int32(detail.GetRetInfo().GetCode()), detail.GetRetInfo().GetMsg())
+	if elapsed := time.Since(started); elapsed > 2*missingTasksBudget+time.Second {
+		t.Fatalf("列表与详情不应等 Factor 超过预算：%v", elapsed)
+	}
+	if len(listed.GetInstances()[0].GetMissingFactorTasks()) != 0 || len(detail.GetInstance().GetMissingFactorTasks()) != 0 {
+		t.Fatal("读不到 Factor 时不标删除未完成")
 	}
 }

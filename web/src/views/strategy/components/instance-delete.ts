@@ -2,7 +2,8 @@ import { h } from "vue";
 import { Message, Modal } from "@arco-design/web-vue";
 import { listFactorTasks } from "@/api/factor";
 import type { FactorTask } from "@/api/factor/types";
-import { deleteInstance } from "@/api/strategy";
+import { ControlRequestError } from "@/api/admin/http";
+import { deleteInstance, isInvalidParam } from "@/api/strategy";
 import type { StrategyInstance } from "@/api/strategy-types";
 import { instanceTasks, marketLabel } from "@/views/strategy/market-mode";
 
@@ -37,17 +38,19 @@ export function instanceDeleteLines(tasks: DeleteTaskLine[]): string[] {
   return lines;
 }
 
-/** 超时或中途失败：删除可能已经做了一部分，再删一次即可接着做完。 */
+/**
+ * 删除失败时是否要提示“删除未完成，请稍后重试”：只有服务端明确拒绝（参数错误，例如实例没停用、数据集有归档任务）原样显示，
+ * 其余（超时、连接中断、框架错误、中途失败）删除都可能已经做了一部分，再删一次即可接着做完。
+ */
 export function isDeleteIncomplete(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error ?? "");
-  return /timeout|超时|可以重新执行删除/i.test(message);
+  return !(error instanceof ControlRequestError && isInvalidParam(error.response?.ret_info?.code));
 }
 
 /** 列出因子服务里的全部任务（按页取完），用来在确认框里写出任务名称和结果数据集。 */
 async function loadFactorTasks(): Promise<Map<string, FactorTask>> {
   const tasks = new Map<string, FactorTask>();
   for (let page = 1; page <= 50; page++) {
-    const rsp = await listFactorTasks({ page: { page, size: 200 } });
+    const rsp = await listFactorTasks({ page: { page, size: 200 } }, { silent: true });
     for (const info of rsp.factor_tasks ?? []) tasks.set(info.factor_task.task_id, info.factor_task);
     if (!rsp.page_result?.has_more || !(rsp.factor_tasks ?? []).length) break;
   }

@@ -178,7 +178,11 @@ const logicalAccount = useLogicalAccount(computed(() => store.instance?.logical_
 // 研究回放不支持策略池（Strategy 的 StartReplay 直接拒绝），按钮禁用并说明原因。
 const POOL_REPLAY_REASON = "研究回放暂不支持策略池：成员的净值与分配比例要在池实例启用后的预热与运行中查看";
 const isPoolInstance = computed(() => poolMembers(store.strategy?.dsl_yaml || "") !== null);
-const hasFactors = computed(() => Boolean(store.instance && parseFactorBinding(store.instance.resolved_json)));
+// 删除未完成的实例（因子任务已删）不再读因子参数：任务不在了，读取只会报错。
+const hasFactors = computed(
+  () =>
+    Boolean(store.instance && parseFactorBinding(store.instance.resolved_json)) && !store.instance?.missing_factor_tasks?.length
+);
 const definitionHint = computed(() =>
   store.strategyStatus === "missing" ? "定义已删除" : store.strategyStatus === "error" ? "定义读取失败" : "定义读取中"
 );

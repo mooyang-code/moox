@@ -195,7 +195,7 @@ func (s *Service) GetStrategyInstance(ctx context.Context, req *strategypb.GetSt
 		return &strategypb.GetStrategyInstanceRsp{RetInfo: invalid(errors.New("实例不在当前空间"))}, nil
 	}
 	item := instanceProto(instance)
-	s.markMissingTasks(ctx, []store.Instance{instance}, []*strategypb.StrategyInstance{item})
+	s.markMissingTasks(ctx, []store.Instance{instance}, []*strategypb.StrategyInstance{item}, true)
 	return &strategypb.GetStrategyInstanceRsp{RetInfo: success(), Instance: item}, nil
 }
 
@@ -229,7 +229,7 @@ func (s *Service) ListStrategyInstances(ctx context.Context, req *strategypb.Lis
 	for _, value := range values[start:end] {
 		items = append(items, instanceProto(value))
 	}
-	s.markMissingTasks(ctx, values[start:end], items)
+	s.markMissingTasks(ctx, values[start:end], items, false)
 	return &strategypb.ListStrategyInstancesRsp{RetInfo: success(), Instances: items, Total: int64(len(values)), Page: int32(page), PageSize: int32(size)}, nil
 }
 

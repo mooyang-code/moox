@@ -11,10 +11,14 @@ const api = vi.hoisted(() => {
     Message: { success: vi.fn(), error: vi.fn(), info: vi.fn(), loading: vi.fn(() => ({ close })) }
   };
 });
-vi.mock("@/api/strategy", () => ({ deleteInstance: api.deleteInstance }));
+vi.mock("@/api/strategy", () => ({
+  deleteInstance: api.deleteInstance,
+  isInvalidParam: (code: unknown) => code === 1 || code === "INVALID_PARAM"
+}));
 vi.mock("@/api/factor", () => ({ listFactorTasks: api.listFactorTasks }));
 vi.mock("@arco-design/web-vue", () => ({ Message: api.Message, Modal: { confirm: api.confirm } }));
 
+import { ControlRequestError } from "@/api/admin/http";
 import type { StrategyInstance } from "@/api/strategy-types";
 import {
   DELETE_CANCELED_TIP,
@@ -95,10 +99,17 @@ describe("instance delete flow", () => {
     expect(hooks.onSettled).toHaveBeenCalledWith(false);
   });
 
+  it("treats framework errors as an unknown outcome", async () => {
+    api.deleteInstance.mockRejectedValue(new Error("框架错误(101)"));
+    await confirmInstanceDelete(instance);
+    lastDialog().onOk();
+    await flushPromises();
+    expect(api.Message.error.mock.calls[0][0]).toContain(DELETE_INCOMPLETE_TIP);
+  });
+
   it("shows a refusal as is", async () => {
-    api.deleteInstance.mockRejectedValue(
-      new Error("结果数据集 dataset_factor_spot 有归档任务，请先到归档页删除这些归档任务，再删除实例")
-    );
+    const message = "结果数据集 dataset_factor_spot 有归档任务，请先到归档页删除这些归档任务，再删除实例";
+    api.deleteInstance.mockRejectedValue(new ControlRequestError(message, { ret_info: { code: 1, msg: message } } as never));
     await confirmInstanceDelete(instance);
     lastDialog().onOk();
     await flushPromises();
