@@ -239,6 +239,8 @@
 </template>
 
 <script setup lang="ts">
+import { useDisplayZone } from "@/hooks/useDisplayZone";
+import { formatInstant } from "@/utils/time-zone";
 import { createSubmitScope } from "@/utils/submit-scope";
 import { StaleSpaceRequestError } from "@/api/admin/stale-space";
 import { computed, onMounted, reactive, ref, watch, onBeforeUnmount } from "vue";
@@ -292,6 +294,8 @@ import { createLatestRequestGuard } from "@/utils/latest-request";
 
 defineOptions({ name: "FactorEditor" });
 
+// 页面时间按当前空间登记的时区显示
+const displayZone = useDisplayZone();
 const PAGE_SIZE = 500;
 /** 输入停止多久后校验定义。 */
 const VALIDATE_DELAY_MS = 400;
@@ -401,9 +405,9 @@ const enabledUsages = computed(() =>
 );
 const readOnly = computed(() => editing.value && enabledUsages.value.length > 0);
 
+/** 试算结果的数据时间按空间时区带后缀。 */
 function formatTime(value: string) {
-  const at = new Date(value);
-  return Number.isNaN(at.getTime()) ? value : at.toLocaleString("zh-CN", { hour12: false });
+  return formatInstant(value, displayZone.value);
 }
 
 function formatCell(value: number | null) {

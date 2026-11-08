@@ -151,6 +151,7 @@
 </template>
 
 <script setup lang="ts">
+import { useDisplayZone } from "@/hooks/useDisplayZone";
 import { selectedSpaceGeneration } from "@/api/admin/space-header";
 import { useSpaceStore } from "@/store/modules/space";
 import { computed, reactive, ref } from "vue";
@@ -176,6 +177,8 @@ import TaskDetailDrawer from "./task-detail-drawer.vue";
 
 defineOptions({ name: "FactorComputeTasks" });
 
+// 页面时间按当前空间登记的时区显示
+const displayZone = useDisplayZone();
 const route = useRoute();
 const { store, spaceId, navigate, reload } = useFactorScope();
 
@@ -203,7 +206,7 @@ const rows = computed(() =>
     statusTag: taskStatusTag(info.factor_task.status),
     action: setActionKind(info.factor_task),
     remove: deleteState(info),
-    lastPeriod: info.last_run?.last_period_time ? formatPeriod(info.last_run.last_period_time) : "-",
+    lastPeriod: info.last_run?.last_period_time ? formatPeriod(info.last_run.last_period_time, displayZone.value) : "-",
     lag: barLagText(info.factor_task.freq, info.last_run)
   }))
 );

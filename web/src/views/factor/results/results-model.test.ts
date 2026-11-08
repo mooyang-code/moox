@@ -71,8 +71,8 @@ describe("results model", () => {
         ]
       }
     );
-    expect(resultSummary(value)).toMatchObject({ total: 4, complete: 2, degraded: 1, skipped: 1, hasPeriod: true });
-    expect(resultSummary(info())).toMatchObject({ total: 0, hasPeriod: false });
+    expect(resultSummary(value, "UTC")).toMatchObject({ total: 4, complete: 2, degraded: 1, skipped: 1, hasPeriod: true });
+    expect(resultSummary(info(), "UTC")).toMatchObject({ total: 0, hasPeriod: false });
   });
 
   it("resolves the active set: preferred, else first available", () => {

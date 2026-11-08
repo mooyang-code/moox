@@ -1,3 +1,4 @@
+import { formatInstant } from "@/utils/time-zone";
 import type { FactorTask, TaskRunSummary } from "@/api/factor/types";
 import { taskStatusTag } from "./status";
 
@@ -70,7 +71,8 @@ export function formatLag(raw?: number | string) {
   return `${(value / 86400).toFixed(1)} 天`;
 }
 
-export function formatPeriod(raw?: number | string) {
+/** 因子周期（Unix 秒）按空间时区带后缀显示。 */
+export function formatPeriod(raw: number | string | undefined, zone: string) {
   const unixSeconds = Number(raw);
-  return unixSeconds ? new Date(unixSeconds * 1000).toLocaleString() : "-";
+  return unixSeconds ? formatInstant(unixSeconds * 1000, zone) : "-";
 }

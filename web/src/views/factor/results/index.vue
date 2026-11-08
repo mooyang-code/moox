@@ -103,6 +103,8 @@
 </template>
 
 <script setup lang="ts">
+import { useDisplayZone } from "@/hooks/useDisplayZone";
+import { formatInstant } from "@/utils/time-zone";
 import { computed, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { Message } from "@arco-design/web-vue";
@@ -132,6 +134,8 @@ import ColumnSettingsDrawer from "./column-settings-drawer.vue";
 
 defineOptions({ name: "FactorResults" });
 
+// 页面时间按当前空间登记的时区显示
+const displayZone = useDisplayZone();
 const route = useRoute();
 const router = useRouter();
 const { store, spaceId, selectTask, navigate, reload } = useFactorScope({ requireSet: true });
@@ -147,7 +151,7 @@ const activeTaskId = ref("");
 const activeInfo = computed(() =>
   available.value.find((item: FactorTaskInfo) => item.factor_task.task_id === activeTaskId.value)
 );
-const summary = computed(() => resultSummary(activeInfo.value ?? {}));
+const summary = computed(() => resultSummary(activeInfo.value ?? {}, displayZone.value));
 
 const resultView = ref<View | null>(null);
 const viewLoading = ref(false);
@@ -186,7 +190,7 @@ const valuesVisible = ref(false);
 const valuesRowKey = ref<TimeSeriesKey>();
 
 function stamp() {
-  readAt.value = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+  readAt.value = formatInstant(Date.now(), displayZone.value, "clock");
 }
 
 async function loadResultView() {

@@ -20,7 +20,7 @@ export function resolveActiveTaskId(sets: FactorTaskInfo[], preferred: string) {
   return sets.find(item => item.factor_task.task_id === preferred)?.factor_task.task_id ?? sets[0]?.factor_task.task_id ?? "";
 }
 
-export function resultSummary(info: Pick<FactorTaskInfo, "last_run">) {
+export function resultSummary(info: Pick<FactorTaskInfo, "last_run">, zone: string) {
   const states = info.last_run?.factors || [];
   const period = info.last_run?.last_period_time;
   return {
@@ -29,6 +29,6 @@ export function resultSummary(info: Pick<FactorTaskInfo, "last_run">) {
     degraded: states.filter(state => state.status === "degraded").length,
     skipped: states.filter(state => state.status === "skipped").length,
     hasPeriod: Boolean(period),
-    lastPeriod: formatPeriod(period)
+    lastPeriod: formatPeriod(period, zone)
   };
 }
