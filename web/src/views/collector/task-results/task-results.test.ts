@@ -53,7 +53,7 @@ describe("collector result workflow", () => {
     const results = fs.readFileSync(path.resolve(__dirname, "index.vue"), "utf8");
     expect(results).toContain('v-for="tab in resultTabs"');
     expect(results).toContain(':key="tab.taskId"');
-    expect(results).toContain(':title="tab.title"');
+    expect(results).toContain(':label="tab.title"');
     expect(tabs.map(tab => tab.taskId)).toEqual(["newer", "older"]);
     expect(tabs.map(tab => tab.title)).toEqual(["新任务", "旧任务"]);
   });
@@ -61,7 +61,7 @@ describe("collector result workflow", () => {
   it("keeps unknown list state stale until the selected task is inspected", () => {
     expect(getTaskResultState({ task_id: "unknown", result: { view_id: "view-unknown", status: "unknown" } })).toBe("stale");
     const results = fs.readFileSync(path.resolve(__dirname, "index.vue"), "utf8");
-    expect(results).toContain("pageSize: 100");
+    expect(results).toContain("TASK_PAGE_SIZE = 100");
     expect(results).toContain("GetTaskDetail({ space_id: spaceId, task_id: taskId })");
     expect(results).toContain("保留上次读取的结果状态");
     expect(results).not.toContain("保留上次已确认结果");

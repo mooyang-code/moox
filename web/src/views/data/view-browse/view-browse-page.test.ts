@@ -187,6 +187,20 @@ describe("View result refresh", () => {
     vi.useRealTimers();
   });
 
+  it("行操作“K 线”用这一行的标的和序列标签查，不用查询区的筛选", async () => {
+    const wrapper = mountPage();
+    await flushPromises();
+    mocks.queryTimeSeries.mockClear();
+    await (wrapper.vm as unknown as { openRowKline(record: unknown): Promise<void> }).openRowKline({
+      rawKey: { subject_id: "ETHUSDT", series_tag: "market:swap" }
+    });
+    await flushPromises();
+    const filter = JSON.stringify(mocks.queryTimeSeries.mock.calls[0]?.[0]?.filter);
+    expect(filter).toContain("ETHUSDT");
+    expect(filter).toContain("market:swap");
+    wrapper.unmount();
+  });
+
   it("leaves an initial query failure empty without claiming previous data", async () => {
     mocks.queryTimeSeries.mockRejectedValue(new Error("Storage unavailable"));
     const wrapper = mountPage();

@@ -220,9 +220,12 @@
                       <slot name="row-extra" :row-key="record.rawKey" :values="record.values" />
                     </template>
                   </a-table-column>
-                  <a-table-column title="操作" :width="92" align="center" fixed="right">
+                  <a-table-column title="操作" :width="120" align="center" fixed="right">
                     <template #cell="{ record }">
                       <a-button type="text" size="mini" @click="openDetail(record)">查看</a-button>
+                      <a-button type="text" size="mini" :disabled="!record.rawKey?.subject_id" @click="openRowKline(record)"
+                        >K 线</a-button
+                      >
                     </template>
                   </a-table-column>
                 </template>
@@ -1265,7 +1268,32 @@ function openDetail(row: ViewBrowseTableRow) {
   detailVisible.value = true;
 }
 
+// 从行操作打开的 K 线：用那一行的标的和序列标签筛，不用查询区的筛选；从工具栏打开时为空。
+const klineRowFilter = ref<{ subjectId: string; seriesTag: string } | null>(null);
+
+function rowKlineFilter(subjectId: string, seriesTag: string) {
+  return buildViewFilterExprs(
+    [
+      { fieldName: "subject_id", operator: "eq", value: subjectId },
+      seriesTag ? { fieldName: "series_tag", operator: "eq", value: seriesTag } : { fieldName: "series_tag", operator: "empty" }
+    ],
+    props.zone
+  );
+}
+
+/** 行操作“K 线”：直接用这一行的标的和序列标签打开图表。 */
+async function openRowKline(record: { rawKey?: { subject_id?: string; series_tag?: string } }) {
+  const subjectId = record.rawKey?.subject_id;
+  if (!subjectId) return;
+  const seriesTag = record.rawKey?.series_tag ?? "";
+  klineRowFilter.value = { subjectId, seriesTag };
+  klineSubjectId.value = subjectId;
+  const ok = await loadKlineRecords(subjectId, seriesTag, rowKlineFilter(subjectId, seriesTag));
+  if (ok) klineVisible.value = true;
+}
+
 async function openKlineModal() {
+  klineRowFilter.value = null;
   const subjectId = klineSubjectIdFromFilters(filters.value);
   if (!subjectId) {
     Message.warning("请先在数据ID检索框输入要查看的标的");
@@ -1284,6 +1312,11 @@ async function openKlineModal() {
 }
 
 async function reloadKlineRecords() {
+  const row = klineRowFilter.value;
+  if (row) {
+    await loadKlineRecords(row.subjectId, row.seriesTag, rowKlineFilter(row.subjectId, row.seriesTag));
+    return;
+  }
   const subjectId = klineSubjectId.value || klineSubjectIdFromFilters(filters.value);
   if (!subjectId) {
     Message.warning("请先在数据ID检索框输入要查看的标的");
@@ -1301,13 +1334,13 @@ async function reloadKlineRecords() {
 // K 线加载只服务于发起时的 View：切换 View/空间、关闭弹窗或卸载都会使在途请求失效，迟到的响应不能重新打开弹窗或写入旧数据
 const klineRequestGuard = createLatestRequestGuard();
 
-async function loadKlineRecords(subjectId: string, seriesTag: string) {
+async function loadKlineRecords(subjectId: string, seriesTag: string, filterOverride?: ReturnType<typeof activeFilterExprs>) {
   const view = activeView.value;
   if (!view) return false;
   const request = klineRequestGuard.begin();
   // 发起时固定整次查询的筛选、投影列、排序与数量：加载期间修改筛选框不能让后续分页读取另一套条件
   const query = {
-    filter: activeFilterExprs(false),
+    filter: filterOverride ?? activeFilterExprs(false),
     columnNames: [...klineColumnNames.value],
     sorts: buildKlineQuerySorts(),
     limit: normalizedKlineLimit.value
