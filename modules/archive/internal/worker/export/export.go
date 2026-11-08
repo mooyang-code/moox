@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/staging"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 const (
@@ -413,13 +414,14 @@ func (f Files) BuildDatasetMeta(in DatasetMetaInput, now time.Time) DatasetMeta 
 }
 
 // WriteDatasetJSON 写 <root>/<space>/<purpose>/<dir_name>/dataset.json（除更新时间外内容没变时不重写），
-// 然后刷新根目录的 datasets.csv 对照表。
+// 然后刷新根目录的 datasets.csv 对照表。对照表只方便人查目录，刷新失败（例如根目录是挂载点、
+// lost+found 不可读）只记警告，不让运行失败。
 func (f Files) WriteDatasetJSON(meta DatasetMeta) error {
 	if err := f.writeDatasetJSON(meta); err != nil {
 		return err
 	}
 	if err := f.WriteDatasetsCSV(); err != nil {
-		return fmt.Errorf("写 %s 失败: %w", DatasetsCSVName, err)
+		log.Warnf("archive worker 刷新 %s 失败: %v", DatasetsCSVName, err)
 	}
 	return nil
 }
