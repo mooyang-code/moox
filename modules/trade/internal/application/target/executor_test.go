@@ -972,14 +972,15 @@ func (f *targetFixture) instruments() []store.InstrumentRecord {
 	return values
 }
 
-// fixtureValidUntil 是测试目标的有效期：取真实时间和测试时钟里较晚的那个再加两小时。
-// 只按真实时间加一小时时，测试把时钟拨到“下一个整点”后，在整点刚过的几秒内跑会被判成目标已过期。
+// fixtureValidUntil 是测试目标的有效期：取真实时间和测试时钟里较晚的那个再加 90 分钟。
+// 只按真实时间加一小时时，测试把时钟拨到“下一个整点”后，在整点刚过的几秒内跑会被判成目标已过期；
+// 也不能到两小时，过期用例会把时钟拨后两小时。
 func fixtureValidUntil(now time.Time) int64 {
 	base := time.Now()
 	if now.After(base) {
 		base = now
 	}
-	return base.Add(2 * time.Hour).UnixMilli()
+	return base.Add(90 * time.Minute).UnixMilli()
 }
 
 func (f *targetFixture) target(t *testing.T, targets []store.InstrumentTarget) {
