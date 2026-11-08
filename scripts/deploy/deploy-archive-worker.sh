@@ -45,7 +45,7 @@ Options:
   --dir <path>              Install directory (binary, config, logs). Default: ~/moox/archive-worker.
   --root-dir <path>         Archive root: partition files and the .state staging database live here. Absolute path, required.
   --secrets-dir <path>      Directory holding the worker credentials. Default: <dir>/secrets.
-  --worker-id <id>          Stable worker id. setup deploy-unit always passes archive-worker@<moox.toml host ID>; moox-cli archive import requires that form. Default for manual runs: archive-worker@<short hostname>.
+  --worker-id <id>          Stable worker id. setup deploy-unit always passes archive-worker@<moox.toml host ID> (CSV import checks the worker id against it). Default for manual runs: archive-worker@<short hostname>.
   --access-address <addr>   Fixed native Access host:port for archive-mgr and Storage.
   --access-id <id>          Access identity, e.g. access@storage.
   --access-key-id <id>      KeyID assigned by Admin keys export --caller archive-worker.
