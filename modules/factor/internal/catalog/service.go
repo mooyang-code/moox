@@ -240,6 +240,126 @@ func (s *Service) DeleteTask(ctx context.Context, taskID string, purge bool) err
 	return s.db.DeleteTask(ctx, taskID)
 }
 
+// DeleteBoundTask 删除关联到 instanceID 的任务，连同全部成员和结果数据集（策略服务删除实例时调用）。
+// 按 DeleteTask 的顺序分三段执行，每段都幂等，中途失败后重试能接着做完：
+//  1. 任务锁下核对关联的实例并停用任务；
+//  2. 逐个成员按“定义锁 → 任务锁”的固定顺序加锁，已启用的先停用，再删除；
+//  3. 任务锁下再次核对，确认已停用、没有成员后带 purge 删除结果数据集，最后删除任务记录。
+//
+// 任务不存在返回成功；关联的不是 instanceID（包括还没有关联任何实例）则拒绝。
+func (s *Service) DeleteBoundTask(ctx context.Context, taskID, instanceID string) error {
+	taskID, instanceID = strings.TrimSpace(taskID), strings.TrimSpace(instanceID)
+	if taskID == "" || instanceID == "" {
+		return errors.New("task_id 和 bound_instance_id 不能为空")
+	}
+	if s.metadata == nil {
+		return errors.New("缺少 Storage 元数据客户端，不能删除结果数据集")
+	}
+	found, err := s.disableBoundTask(ctx, taskID, instanceID)
+	if err != nil || !found {
+		return err
+	}
+	members, err := s.db.ListMembers(ctx, taskID, "")
+	if err != nil {
+		return err
+	}
+	for _, member := range members {
+		if err := s.removeBoundMember(ctx, taskID, member.MemberKey); err != nil {
+			return fmt.Errorf("删除因子任务 %s 的成员 %s：%w", taskID, member.MemberKey, err)
+		}
+	}
+	unlock, err := s.locks.LockContext(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	task, err := s.db.GetTask(ctx, taskID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if err := requireBoundTo(task, instanceID); err != nil {
+		return err
+	}
+	if task.Status != domain.TaskStatusDisabled {
+		return fmt.Errorf("%w: 因子任务 %s 在删除过程中被重新启用，请重试", store.ErrConflict, taskID)
+	}
+	count, err := s.db.CountMembers(ctx, taskID)
+	if err != nil {
+		return err
+	}
+	if count != 0 {
+		return fmt.Errorf("%w: 因子任务 %s 在删除过程中加了新成员，请重试", store.ErrConflict, taskID)
+	}
+	if err := s.metadata.DeleteDataset(ctx, task.SpaceID, task.ResultDatasetID); err != nil {
+		return fmt.Errorf("删除因子任务 %s 的结果数据集 %s：%w", taskID, task.ResultDatasetID, err)
+	}
+	return s.db.DeleteBoundTask(ctx, taskID, instanceID)
+}
+
+// disableBoundTask 在任务锁下核对关联的实例并停用任务；任务不存在时 found 为假。
+func (s *Service) disableBoundTask(ctx context.Context, taskID, instanceID string) (found bool, err error) {
+	unlock, err := s.locks.LockContext(ctx, taskID)
+	if err != nil {
+		return false, err
+	}
+	defer unlock()
+	task, err := s.db.GetTask(ctx, taskID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if err := requireBoundTo(task, instanceID); err != nil {
+		return false, err
+	}
+	if task.Status == domain.TaskStatusEnabled {
+		if err := s.db.SetTaskStatus(ctx, taskID, domain.TaskStatusEnabled, domain.TaskStatusDisabled); err != nil {
+			return false, err
+		}
+	}
+	s.markReady(taskID, false)
+	return true, nil
+}
+
+// removeBoundMember 停用并删除一个成员；成员已经不在了算成功。
+func (s *Service) removeBoundMember(ctx context.Context, taskID, memberKey string) error {
+	unlock, _, err := s.lockExistingMember(ctx, taskID, memberKey)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	member, err := s.db.GetMember(ctx, taskID, memberKey)
+	if err != nil {
+		return err
+	}
+	if member.Status == domain.MemberStatusEnabled {
+		if err := s.db.SetMemberStatus(ctx, taskID, memberKey, member.Status, domain.MemberStatusDisabled); err != nil {
+			return err
+		}
+	}
+	return s.db.RemoveMember(ctx, taskID, memberKey)
+}
+
+// requireBoundTo 拒绝关联的不是 instanceID 的任务。
+func requireBoundTo(task domain.FactorTask, instanceID string) error {
+	switch task.BoundInstanceID {
+	case instanceID:
+		return nil
+	case "":
+		return fmt.Errorf("%w: 因子任务 %s 还没有关联策略实例 %s（实例从未启用过），不能随实例删除；可以先在因子任务页删除这个任务，再重新删除实例",
+			store.ErrConflict, task.TaskID, instanceID)
+	default:
+		return fmt.Errorf("%w: 因子任务 %s 关联的是策略实例 %s，不是 %s", store.ErrConflict, task.TaskID, task.BoundInstanceID, instanceID)
+	}
+}
+
 // GetTask returns a factor task with all of its members (any status) and their definitions.
 func (s *Service) GetTask(ctx context.Context, taskID string) (domain.FactorTask, []domain.TaskMember, error) {
 	set, err := s.db.GetTask(ctx, taskID)

@@ -191,6 +191,35 @@ func (s *Store) DeleteTask(ctx context.Context, taskID string) error {
 	return fmt.Errorf("%w: factor task %q is bound to a strategy instance", ErrConflict, taskID)
 }
 
+// sqlDeleteBoundTask 删除关联到指定实例的任务记录（成员必须已经删完，外键会拒绝还有成员的任务）。
+const sqlDeleteBoundTask = `DELETE FROM t_factor_tasks WHERE c_task_id = ? AND c_bound_instance_id = ?`
+
+// DeleteBoundTask 删除关联到 instanceID 的任务记录。任务不存在返回 gorm.ErrRecordNotFound，
+// 还有成员或关联的不是这个实例时返回 ErrConflict。
+func (s *Store) DeleteBoundTask(ctx context.Context, taskID, instanceID string) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("factor database is not open")
+	}
+	taskID, instanceID = strings.TrimSpace(taskID), strings.TrimSpace(instanceID)
+	if taskID == "" || instanceID == "" {
+		return fmt.Errorf("任务 ID 和关联的实例 ID 不能为空")
+	}
+	result := s.db.WithContext(ctx).Exec(sqlDeleteBoundTask, taskID, instanceID)
+	if result.Error != nil {
+		if isForeignKeyConstraint(result.Error) {
+			return fmt.Errorf("%w: 因子任务 %s 还有成员", ErrConflict, taskID)
+		}
+		return result.Error
+	}
+	if result.RowsAffected > 0 {
+		return nil
+	}
+	if _, err := s.GetTask(ctx, taskID); err != nil {
+		return err
+	}
+	return fmt.Errorf("%w: 因子任务 %s 关联的不是策略实例 %s", ErrConflict, taskID, instanceID)
+}
+
 const setColumns = `c_task_id, c_space_id, c_name, c_source_dataset_id, c_freq, c_result_dataset_id, c_bound_instance_id, c_status, c_ctime, c_mtime`
 
 func marshalStringSlice(values []string) (string, error) {

@@ -73,6 +73,8 @@ type FactorMgrService interface {
 
 	BindFactorTask(ctx context.Context, req *BindFactorTaskReq) (*BindFactorTaskRsp, error)
 
+	DeleteBoundTask(ctx context.Context, req *DeleteBoundTaskReq) (*DeleteBoundTaskRsp, error)
+
 	SubmitFactorParams(ctx context.Context, req *SubmitFactorParamsReq) (*SubmitFactorParamsRsp, error)
 
 	GetFactorParams(ctx context.Context, req *GetFactorParamsReq) (*GetFactorParamsRsp, error)
@@ -572,6 +574,24 @@ func FactorMgrService_BindFactorTask_Handler(svr interface{}, ctx context.Contex
 	return rsp, nil
 }
 
+func FactorMgrService_DeleteBoundTask_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &DeleteBoundTaskReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(FactorMgrService).DeleteBoundTask(ctx, reqbody.(*DeleteBoundTaskReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 func FactorMgrService_SubmitFactorParams_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
 	req := &SubmitFactorParamsReq{}
 	filters, err := f(req)
@@ -792,6 +812,10 @@ var FactorMgrServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.factor.FactorMgr/BindFactorTask",
 			Func: FactorMgrService_BindFactorTask_Handler,
+		},
+		{
+			Name: "/trpc.moox.factor.FactorMgr/DeleteBoundTask",
+			Func: FactorMgrService_DeleteBoundTask_Handler,
 		},
 		{
 			Name: "/trpc.moox.factor.FactorMgr/SubmitFactorParams",
@@ -1074,6 +1098,9 @@ func (s *UnimplementedFactorMgr) SetFactorCategory(ctx context.Context, req *Set
 func (s *UnimplementedFactorMgr) BindFactorTask(ctx context.Context, req *BindFactorTaskReq) (*BindFactorTaskRsp, error) {
 	return nil, errors.New("rpc BindFactorTask of service FactorMgr is not implemented")
 }
+func (s *UnimplementedFactorMgr) DeleteBoundTask(ctx context.Context, req *DeleteBoundTaskReq) (*DeleteBoundTaskRsp, error) {
+	return nil, errors.New("rpc DeleteBoundTask of service FactorMgr is not implemented")
+}
 func (s *UnimplementedFactorMgr) SubmitFactorParams(ctx context.Context, req *SubmitFactorParamsReq) (*SubmitFactorParamsRsp, error) {
 	return nil, errors.New("rpc SubmitFactorParams of service FactorMgr is not implemented")
 }
@@ -1179,6 +1206,8 @@ type FactorMgrClientProxy interface {
 	SetFactorCategory(ctx context.Context, req *SetFactorCategoryReq, opts ...client.Option) (rsp *SetFactorCategoryRsp, err error)
 
 	BindFactorTask(ctx context.Context, req *BindFactorTaskReq, opts ...client.Option) (rsp *BindFactorTaskRsp, err error)
+
+	DeleteBoundTask(ctx context.Context, req *DeleteBoundTaskReq, opts ...client.Option) (rsp *DeleteBoundTaskRsp, err error)
 
 	SubmitFactorParams(ctx context.Context, req *SubmitFactorParamsReq, opts ...client.Option) (rsp *SubmitFactorParamsRsp, err error)
 
@@ -1736,6 +1765,26 @@ func (c *FactorMgrClientProxyImpl) BindFactorTask(ctx context.Context, req *Bind
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &BindFactorTaskRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *FactorMgrClientProxyImpl) DeleteBoundTask(ctx context.Context, req *DeleteBoundTaskReq, opts ...client.Option) (*DeleteBoundTaskRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.factor.FactorMgr/DeleteBoundTask")
+	msg.WithCalleeServiceName(FactorMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("factor")
+	msg.WithCalleeService("FactorMgr")
+	msg.WithCalleeMethod("DeleteBoundTask")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &DeleteBoundTaskRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

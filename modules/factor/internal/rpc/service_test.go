@@ -13,6 +13,7 @@ import (
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/client"
 	"trpc.group/trpc-go/trpc-go/codec"
 	"trpc.group/trpc-go/trpc-go/server"
@@ -277,7 +278,7 @@ func TestFactorMgrExposesOnlyNewContract(t *testing.T) {
 	want := []string{
 		"CreateFactorTask", "SetFactorTaskStatus", "DeleteFactorTask", "GetFactorTask", "ListFactorTasks",
 		"CreateFactor", "UpdateFactor", "DeleteFactor", "GetFactor", "ListFactors",
-		"AddTaskMember", "RemoveTaskMember", "SetTaskMemberStatus", "BindFactorTask",
+		"AddTaskMember", "RemoveTaskMember", "SetTaskMemberStatus", "BindFactorTask", "DeleteBoundTask",
 		"RecalcFactors", "ListRecalcJobs", "GetRecalcJob", "CancelRecalcJob", "GetStatus",
 		"ValidateFactorSpec", "PreviewFactor", "ListFactorFunctions", "NotifyPeriodsFilled",
 		"ListFactorCategories", "UpsertFactorCategory", "DeleteFactorCategory", "SetFactorCategory",
@@ -309,6 +310,7 @@ type catalogFake struct {
 	boundTask         string
 	boundInstance     string
 	addKind           string
+	deletedBound      []string
 }
 
 func (f *catalogFake) CreateTask(_ context.Context, in domain.FactorTask) (domain.FactorTask, error) {
@@ -322,7 +324,7 @@ func (f *catalogFake) SetTaskStatus(_ context.Context, _, status string) (domain
 func (f *catalogFake) DeleteTask(context.Context, string, bool) error { return nil }
 func (f *catalogFake) GetTask(context.Context, string) (domain.FactorTask, []domain.TaskMember, error) {
 	if f.set.TaskID == "" {
-		return domain.FactorTask{}, nil, errors.New("set not found")
+		return domain.FactorTask{}, nil, gorm.ErrRecordNotFound
 	}
 	return f.set, f.members, nil
 }
@@ -381,6 +383,10 @@ func (f *catalogFake) BindTask(_ context.Context, taskID, instanceID string) (do
 	task := f.set
 	task.TaskID, task.BoundInstanceID = taskID, instanceID
 	return task, f.err
+}
+func (f *catalogFake) DeleteBoundTask(_ context.Context, taskID, instanceID string) error {
+	f.deletedBound = append(f.deletedBound, taskID+"@"+instanceID)
+	return f.err
 }
 func (f *catalogFake) SubmitParams(_ context.Context, writer, taskID string, period time.Time, requestID string, submissions []catalog.MemberSubmission) ([]store.ParamSubmitOutcome, error) {
 	f.writer, f.submitTask, f.submitPeriod, f.submitRequest, f.submissions = writer, taskID, period, requestID, submissions
@@ -482,4 +488,33 @@ func TestMutationGateRejectsWritesButNotReads(t *testing.T) {
 	recalc, err := service.RecalcFactors(ctx, &factorpb.RecalcFactorsReq{})
 	require.NoError(t, err)
 	require.Contains(t, recalc.GetRetInfo().GetMsg(), "已暂停")
+}
+
+func TestDeleteBoundTaskMissingTaskSucceeds(t *testing.T) {
+	fake := &catalogFake{}
+	svc := NewService(fake, &recalcFake{})
+	rsp, err := svc.DeleteBoundTask(context.Background(), &factorpb.DeleteBoundTaskReq{TaskId: "ftask_gone", BoundInstanceId: "inst"})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	require.Empty(t, fake.deletedBound, "任务已经不在了，不再调用目录删除")
+}
+
+func TestDeleteBoundTaskConflictIsInvalidParam(t *testing.T) {
+	fake := &catalogFake{set: domain.FactorTask{TaskID: "ftask_a", SpaceID: "crypto"}, err: store.ErrConflict}
+	svc := NewService(fake, &recalcFake{})
+	rsp, err := svc.DeleteBoundTask(context.Background(), &factorpb.DeleteBoundTaskReq{TaskId: "ftask_a", BoundInstanceId: "inst"})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+	require.Equal(t, []string{"ftask_a@inst"}, fake.deletedBound)
+
+	rsp, err = svc.DeleteBoundTask(context.Background(), &factorpb.DeleteBoundTaskReq{TaskId: "ftask_a"})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
+}
+
+func TestGetFactorTaskMissingIsNotFound(t *testing.T) {
+	svc := NewService(&catalogFake{}, &recalcFake{})
+	rsp, err := svc.GetFactorTask(context.Background(), &factorpb.GetFactorTaskReq{TaskId: "ftask_gone"})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_NOT_FOUND, rsp.GetRetInfo().GetCode())
 }

@@ -125,6 +125,25 @@ func TestDeleteTaskFailsWhenMembersExist(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// DeleteBoundTask 只删关联到指定实例的任务：别的实例、还没关联、还有成员都拒绝；任务不存在返回 ErrRecordNotFound。
+func TestDeleteBoundTaskRequiresSameInstanceAndNoMembers(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	require.NoError(t, s.CreateTask(ctx, testTask("task_a", domain.TaskStatusDisabled)))
+	require.ErrorIs(t, s.DeleteBoundTask(ctx, "task_a", "inst-1"), ErrConflict, "还没关联")
+	_, err := s.BindTask(ctx, "task_a", "inst-1")
+	require.NoError(t, err)
+	addTestMember(t, s, "task_a", "factor_close", domain.MemberStatusDisabled)
+
+	require.ErrorIs(t, s.DeleteBoundTask(ctx, "task_a", "inst-2"), ErrConflict)
+	require.ErrorIs(t, s.DeleteBoundTask(ctx, "task_a", "inst-1"), ErrConflict, "还有成员")
+	require.NoError(t, s.RemoveMember(ctx, "task_a", "factor_close"))
+	require.NoError(t, s.DeleteBoundTask(ctx, "task_a", "inst-1"))
+	_, err = s.GetTask(ctx, "task_a")
+	require.ErrorIs(t, err, gorm.ErrRecordNotFound)
+	require.ErrorIs(t, s.DeleteBoundTask(ctx, "task_a", "inst-1"), gorm.ErrRecordNotFound)
+}
+
 func TestTaskCRUDAndFactorCRUD(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
