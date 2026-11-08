@@ -66,11 +66,14 @@ export function alertNote(object?: HealthObject): AlertNote | null {
   };
 }
 
-/** 事件中心关注项按种类跳转：通知失败、系统动作失败看失败的处理记录；发现下架看下架处理页；认不出的看全部处理记录。 */
+/**
+ * 事件中心关注项按种类跳转：通知失败看失败的处理记录；发现下架看下架处理页；其余看全部处理记录。
+ * 系统动作处理失败不带失败筛选：它还包括记录未结束时有步骤失败、连续暂时失败、取消后善后未完成、下架后留有零头，
+ * 这些记录的状态不是“失败”。
+ */
 function eventCenterLink(kind?: string): { href: string; label: string } {
   switch (kind) {
     case "execution_failed":
-    case "action_failed":
       return { href: "#/events/executions?status=failed", label: "查看失败的处理记录" };
     case "delist_detected":
       return { href: "#/events/delist", label: "查看下架处理" };

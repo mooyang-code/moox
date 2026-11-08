@@ -20,7 +20,8 @@ describe("health display", () => {
     const eventCenter = (attention_kind?: string) =>
       alertLink({ type: "business", kind: "event_center_attention", attention_kind });
     expect(eventCenter("execution_failed").href).toBe("#/events/executions?status=failed");
-    expect(eventCenter("action_failed").href).toBe("#/events/executions?status=failed");
+    // 系统动作处理失败的记录不一定是“失败”状态（善后未完成、步骤失败等），不带筛选
+    expect(eventCenter("action_failed").href).toBe("#/events/executions");
     expect(eventCenter("delist_detected").href).toBe("#/events/delist");
     expect(eventCenter("something_new")).toEqual({ href: "#/events/executions", label: "查看处理记录" });
     expect(eventCenter().href).toBe("#/events/executions");

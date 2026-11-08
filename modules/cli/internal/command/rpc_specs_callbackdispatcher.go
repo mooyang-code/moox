@@ -1,7 +1,7 @@
 package command
 
 // 事件中心（CallbackDispatcherService）：事件规则与执行记录。事件中心是全局服务，不分空间。
-// 新建通知地址规则（CreateEventRule）不提供命令：返回里有验证密钥明文，请用户在管理台「系统设置 › 事件中心」新建，
+// 新建通知地址规则（CreateEventRule）不提供命令：返回里有验证密钥明文，请用户在管理台「事件中心 › 事件订阅」新建，
 // 密钥只在那里显示一次，不经过 Agent。换验证密钥也在管理台：删掉规则重新新建。
 
 const callbackDispatcher = "trpc.moox.callbackdispatcher.CallbackDispatcherService"

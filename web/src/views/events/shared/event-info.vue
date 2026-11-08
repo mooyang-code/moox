@@ -3,6 +3,7 @@
     <p v-if="event.description" class="event-info__desc">{{ event.description }}</p>
     <template v-if="event.payload_fields.length">
       <h4 class="event-info__title">data 里的字段</h4>
+      <p class="event-info__desc">值为空的字段不会出现在推送里。</p>
       <a-table :data="event.payload_fields" row-key="field" size="small" :pagination="false" :bordered="{ cell: true }">
         <template #columns>
           <a-table-column title="字段" data-index="field" :width="180" />

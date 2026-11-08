@@ -309,6 +309,25 @@ describe("处理记录的 URL", () => {
     expect(mocks.listEventExecutions).toHaveBeenCalledTimes(2);
   });
 
+  it("带 execution= 打开（刷新浏览器）时打开详情并读取；详情开着时自动刷新暂停", async () => {
+    vi.useFakeTimers();
+    mocks.listEventExecutions.mockResolvedValue({ executions: [], page_result: { total: 0 } });
+    mocks.listAllEventRules.mockResolvedValue([]);
+    mocks.listSubscribableEvents.mockResolvedValue({ events, availableSystemActions: [] });
+    mocks.getEventExecution.mockReturnValue(new Promise(() => undefined));
+    await mountPage(EventExecutions, "/events/executions?execution=x1");
+    expect(mocks.getEventExecution).toHaveBeenCalledWith("x1");
+    expect(mocks.listEventExecutions).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(mocks.listEventExecutions).toHaveBeenCalledTimes(1);
+
+    (wrapper!.vm as unknown as { onDrawerVisible(visible: boolean): void }).onDrawerVisible(false);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(mocks.listEventExecutions).toHaveBeenCalledTimes(2);
+    expect(mocks.listEventExecutions.mock.lastCall?.[1]).toEqual({ silentError: true });
+    vi.useRealTimers();
+  });
+
   it("从别处带着新的筛选跳进来（页面复用）时按新的 URL 重读", async () => {
     mocks.listEventExecutions.mockResolvedValue({ executions: [], page_result: { total: 0 } });
     mocks.listAllEventRules.mockResolvedValue([]);
