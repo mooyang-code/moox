@@ -77,7 +77,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, ref } from "vue";
+import { onShown } from "@/hooks/useOnShown";
 import { useRouter } from "vue-router";
 import type { SubscribableEvent } from "@/api/callback-dispatcher";
 import DelistDialog from "../shared/delist-dialog.vue";
@@ -120,12 +121,13 @@ function subscribe(event: SubscribableEvent) {
 async function reload() {
   loading.value = true;
   loadFailed.value = false;
-  await Promise.all([loadEvents(), loadRules()]);
-  loadFailed.value = !events.value.length;
+  const [eventsOk] = await Promise.all([loadEvents(), loadRules()]);
+  loadFailed.value = !eventsOk;
   loading.value = false;
 }
 
-onMounted(() => void reload());
+// 页签在 keep-alive 里：每次切回都重读（订阅页签里停用了系统订阅、新建了订阅，这里的状态和条数要跟上）
+onShown(() => void reload());
 </script>
 
 <style scoped>

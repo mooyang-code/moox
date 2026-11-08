@@ -101,6 +101,7 @@
 // 事件中心和空间无关，时间都按 UTC 显示
 import { formatInstant } from "@/utils/time-zone";
 import { onMounted, reactive, ref, watch } from "vue";
+import { onShown } from "@/hooks/useOnShown";
 import { useRoute, useRouter } from "vue-router";
 import { Message, Modal } from "@arco-design/web-vue";
 import {
@@ -157,6 +158,8 @@ const acting = ref("");
 let loadSeq = 0;
 /** background：自动刷新，不转加载态、不弹提示，失败时保留上次的列表。 */
 async function load(background = false) {
+  // 前台读取进行中时，后台刷新（含切回页签时的那一次）不再重复发，免得把前台读取的结果和错误提示作废
+  if (background && loading.value) return;
   const seq = ++loadSeq;
   if (!background) loading.value = true;
   try {
@@ -294,9 +297,11 @@ onMounted(() => {
   filters.status = initial.status;
   detailId.value = initial.execution;
   drawerVisible.value = Boolean(initial.execution);
-  void loadOptions();
   void load();
 });
+
+// 订阅下拉和事件名每次切回都重读：订阅页签里可能刚新建了订阅
+onShown(() => void loadOptions());
 
 // 每 30 秒自动刷新；打开详情时暂停，免得列表在背后跳动。
 usePolling(

@@ -16,14 +16,24 @@ export function useEventCatalog() {
   const systemRuleState = ref<"loading" | "ok" | "failed">("loading");
   const systemRuleEnabled = computed(() => systemRule.value?.enabled ?? null);
 
-  async function loadEvents() {
-    try {
-      const catalog = await listSubscribableEvents();
-      events.value = catalog.events;
-      systemActionEnabled.value = catalog.availableSystemActions.includes("SYSTEM_ACTION_SELL_DELISTED_HOLDINGS") ? true : null;
-    } catch (error) {
-      reportControlError(error);
-    }
+  // 进行中的目录请求：同时有几处要读（例如订阅页签首次挂载又带着预选事件）时只发一次
+  let eventsRequest: Promise<boolean> | null = null;
+  /** 读事件目录，返回是否读到（失败时已弹出提示）。 */
+  function loadEvents(): Promise<boolean> {
+    eventsRequest ??= (async () => {
+      try {
+        const catalog = await listSubscribableEvents();
+        events.value = catalog.events;
+        systemActionEnabled.value = catalog.availableSystemActions.includes("SYSTEM_ACTION_SELL_DELISTED_HOLDINGS") ? true : null;
+        return true;
+      } catch (error) {
+        reportControlError(error);
+        return false;
+      } finally {
+        eventsRequest = null;
+      }
+    })();
+    return eventsRequest;
   }
 
   // 连续读取只认最后一次。

@@ -107,7 +107,8 @@
 <script setup lang="ts">
 // 事件中心和空间无关，时间都按 UTC 显示
 import { formatInstant } from "@/utils/time-zone";
-import { onMounted, reactive, ref, watch } from "vue";
+import { reactive, ref, watch } from "vue";
+import { onShown } from "@/hooks/useOnShown";
 import { useRoute, useRouter } from "vue-router";
 import { Message, Modal } from "@arco-design/web-vue";
 import {
@@ -299,8 +300,9 @@ async function sendTest(rule: EventRule) {
   }
 }
 
-onMounted(() => {
-  void loadEvents();
+// 每次切回都重读列表：执行记录页签里重新执行、取消之后，“最近一次执行”要跟上
+onShown(() => {
+  if (!events.value.length) void loadEvents();
   void load();
 });
 </script>

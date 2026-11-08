@@ -19,6 +19,15 @@ const sample = {
 
 const events = [
   {
+    event_name: "event.storage.dataset.period.completed",
+    version: 1,
+    title: "数据集一期完成",
+    description: "数据集的某一个周期数据已经写完整",
+    scope_fields: [],
+    sample_json: "",
+    payload_fields: []
+  },
+  {
     event_name: DELIST,
     version: 1,
     title: "标的即将下架",

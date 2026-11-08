@@ -39,9 +39,9 @@ test("事件页签：下架事件的详情写处理方式和系统订阅状态�
   await expect(dialog.locator(".arco-select-view-value").first()).toContainText("标的即将下架");
 });
 
-test("事件订阅：新建时显示字段说明和示例；列表里点事件名打开同样的说明", async ({ page }) => {
-  await page.goto("/#/events?tab=subscriptions");
-  await page.getByRole("button", { name: "新建订阅" }).click();
+test("订阅页签：新建时显示字段说明和示例；列表里点事件名打开同样的说明", async ({ page }) => {
+  // 带 ?new= 进来：打开新建并预选“标的即将下架”（目录里排第一的是别的事件）
+  await page.goto("/#/events?tab=subscriptions&new=event.collector.instrument.delist_scheduled");
   const dialog = page.locator(".arco-modal").filter({ hasText: "新建订阅" });
   await expect(dialog.getByText("交易所：binance 或 okx")).toBeVisible();
   await expect(dialog.locator("pre")).toContainText('"exchange_symbol": "FOOUSDT"');
