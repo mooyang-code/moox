@@ -64,6 +64,8 @@ type ApplyResult struct {
 	SpacesCreated   int                 `json:"spaces_created"`
 	SpacesUnchanged int                 `json:"spaces_unchanged"`
 	ExchangeKeys    []ExchangeKeyResult `json:"exchange_keys,omitempty"`
+	// Kept 是与 moox.toml 不一致、以管理台为准保留的项（admin、tencent_cloud、space:<ID>）。
+	Kept []string `json:"kept,omitempty"`
 }
 
 type StatusResult struct {
@@ -72,7 +74,7 @@ type StatusResult struct {
 	Secrets      int                 `json:"secrets"`
 	Spaces       int                 `json:"spaces"`
 	Missing      int                 `json:"missing"`
-	Conflicts    int                 `json:"conflicts"`
+	Kept         []string            `json:"kept,omitempty"`
 	ExchangeKeys []ExchangeKeyResult `json:"exchange_keys,omitempty"`
 }
 
@@ -113,8 +115,8 @@ func (c *Client) ApplyWithSpaces(
 		Action: response.GetAction(), Users: int(response.GetUsers()),
 		Secrets: int(response.GetSecrets()),
 		Spaces:  int(response.GetSpaces()), SpacesCreated: int(response.GetSpacesCreated()),
-		SpacesUnchanged: int(response.GetSpacesUnchanged()),
-		ExchangeKeys:    exchangeKeyResults(response.GetExchangeKeys()),
+		SpacesUnchanged: int(response.GetSpacesUnchanged()), Kept: response.GetKept(),
+		ExchangeKeys: exchangeKeyResults(response.GetExchangeKeys()),
 	}, nil
 }
 
@@ -150,7 +152,7 @@ func (c *Client) StatusWithSpaces(
 	return StatusResult{
 		State: response.GetState(), Users: int(response.GetUsers()), Secrets: int(response.GetSecrets()),
 		Spaces:  int(response.GetSpaces()),
-		Missing: int(response.GetMissing()), Conflicts: int(response.GetConflicts()),
+		Missing: int(response.GetMissing()), Kept: response.GetKept(),
 		ExchangeKeys: exchangeKeyResults(response.GetExchangeKeys()),
 	}, nil
 }
@@ -180,7 +182,7 @@ func checkRetInfo(retInfo *pb.RetInfo) error {
 		return nil
 	}
 	switch strings.TrimSpace(retInfo.GetMsg()) {
-	case "setup_conflict", "setup_invalid", "setup_storage_failed":
+	case "setup_invalid", "setup_storage_failed":
 		return fmt.Errorf("%s", retInfo.GetMsg())
 	default:
 		return fmt.Errorf("setup_remote_failed")

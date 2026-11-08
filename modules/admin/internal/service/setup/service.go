@@ -10,9 +10,8 @@ import (
 const tencentSecretID = "tencent-default"
 
 var (
-	ErrConflict = errors.New("setup_conflict")
-	ErrStorage  = errors.New("setup_storage_failed")
-	ErrInvalid  = errors.New("setup_invalid")
+	ErrStorage = errors.New("setup_storage_failed")
+	ErrInvalid = errors.New("setup_invalid")
 )
 
 type Admin struct {
@@ -78,6 +77,8 @@ type Result struct {
 	SpacesCreated   int
 	SpacesUnchanged int
 	ExchangeKeys    []ExchangeKeyResult
+	// Kept 同 Status.Kept：这些项本次没有改写。
+	Kept []string
 }
 
 type Status struct {
@@ -86,8 +87,9 @@ type Status struct {
 	Secrets int
 	Spaces  int
 	// Missing 只统计真正缺失的记录；交易所密钥“已存在”和“已在管理台删除”都算完成。
-	Missing      int
-	Conflicts    int
+	Missing int
+	// Kept 是库里已有、与 moox.toml 不一致而以管理台为准保留的项（admin、tencent_cloud、space:<ID>）。
+	Kept         []string
 	ExchangeKeys []ExchangeKeyResult
 }
 

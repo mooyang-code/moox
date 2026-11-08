@@ -34,23 +34,34 @@ func (s *Service) Apply(ctx context.Context, manifest Manifest) (Result, error) 
 	}
 	created := 0
 	err = s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		n, err := s.ensureAdmin(ctx, tx, manifest.Admin)
+		// 管理员、腾讯云密钥、业务空间与 moox.toml 不一致时以管理台为准：不改、不报错，记进 Kept（安装后在管理台改过密码、换过密钥都属正常）。
+		result.Kept = result.Kept[:0]
+		n, kept, err := s.ensureAdmin(ctx, tx, manifest.Admin)
 		if err != nil {
 			return err
 		}
 		created += n
-		n, err = s.ensureTencentSecret(ctx, tx, manifest.TencentCloud)
+		if kept {
+			result.Kept = append(result.Kept, keptAdmin)
+		}
+		n, kept, err = s.ensureTencentSecret(ctx, tx, manifest.TencentCloud)
 		if err != nil {
 			return err
 		}
 		created += n
+		if kept {
+			result.Kept = append(result.Kept, keptTencentCloud)
+		}
 		for _, space := range spaces {
-			n, err = s.ensureSpace(ctx, tx, space)
+			n, kept, err = s.ensureSpace(ctx, tx, space)
 			if err != nil {
 				return err
 			}
 			created += n
 			result.SpacesCreated += n
+			if kept {
+				result.Kept = append(result.Kept, keptSpacePrefix+space.SpaceID)
+			}
 		}
 		// 交易所密钥只建不改，不进整体冲突判断：已存在或已在管理台删除的都原样保留。
 		result.ExchangeKeys = result.ExchangeKeys[:0]
@@ -72,10 +83,8 @@ func (s *Service) Apply(ctx context.Context, manifest Manifest) (Result, error) 
 			if inspectErr == nil && status.State == "completed" {
 				result.Action = "unchanged"
 				result.ExchangeKeys = status.ExchangeKeys
+				result.Kept = status.Kept
 				return result, nil
-			}
-			if inspectErr == nil && status.State == "conflict" {
-				return Result{}, ErrConflict
 			}
 		}
 		return Result{}, normalized
@@ -106,18 +115,18 @@ func (s *Service) Inspect(ctx context.Context, manifest Manifest) (Status, error
 		if err != nil {
 			return err
 		}
-		status.add(state)
+		status.add(state, keptAdmin)
 		state, err = s.inspectTencentSecret(ctx, tx, manifest.TencentCloud)
 		if err != nil {
 			return err
 		}
-		status.add(state)
+		status.add(state, keptTencentCloud)
 		for _, space := range spaces {
 			state, err = s.inspectSpace(ctx, tx, space)
 			if err != nil {
 				return err
 			}
-			status.add(state)
+			status.add(state, keptSpacePrefix+space.SpaceID)
 		}
 		for _, key := range keys {
 			keyState, err := s.inspectExchangeKey(ctx, tx, key)
@@ -126,7 +135,7 @@ func (s *Service) Inspect(ctx context.Context, manifest Manifest) (Status, error
 			}
 			// 只有真正缺失的密钥算 Missing；已存在、已在管理台删除都算完成，否则 setup init 会永远报未完成。
 			if keyState == ExchangeKeyMissing {
-				status.add(recordMissing)
+				status.add(recordMissing, "")
 			}
 			status.ExchangeKeys = append(status.ExchangeKeys, ExchangeKeyResult{SecretID: exchangeKeyID(key), State: keyState, ReadOnly: key.ReadOnly})
 		}
@@ -136,9 +145,7 @@ func (s *Service) Inspect(ctx context.Context, manifest Manifest) (Status, error
 	if err != nil {
 		return Status{}, normalizeError(err)
 	}
-	if status.Conflicts > 0 {
-		status.State = "conflict"
-	} else if status.Missing > 0 {
+	if status.Missing > 0 {
 		status.State = "incomplete"
 	}
 	return status, nil
@@ -183,29 +190,34 @@ type recordState uint8
 const (
 	recordMatch recordState = iota
 	recordMissing
-	recordConflict
+	// recordKept 是库里已有、但与 moox.toml 不一致：以管理台为准保留，不改写。
+	recordKept
 )
 
-func (s *Status) add(state recordState) {
+// Kept 里的名称：管理员、腾讯云密钥、业务空间（space:<ID>）。
+const (
+	keptAdmin        = "admin"
+	keptTencentCloud = "tencent_cloud"
+	keptSpacePrefix  = "space:"
+)
+
+func (s *Status) add(state recordState, name string) {
 	switch state {
 	case recordMissing:
 		s.Missing++
-	case recordConflict:
-		s.Conflicts++
+	case recordKept:
+		s.Kept = append(s.Kept, name)
 	}
 }
 
-func (s *Service) ensureAdmin(ctx context.Context, tx *gorm.DB, input Admin) (int, error) {
+func (s *Service) ensureAdmin(ctx context.Context, tx *gorm.DB, input Admin) (int, bool, error) {
 	state, err := s.inspectAdmin(ctx, tx, input)
-	if err != nil || state == recordMatch {
-		return 0, err
-	}
-	if state == recordConflict {
-		return 0, ErrConflict
+	if err != nil || state == recordMatch || state == recordKept {
+		return 0, state == recordKept, err
 	}
 	hash, err := mooxsecurity.HashPassword(input.Password)
 	if err != nil {
-		return 0, ErrInvalid
+		return 0, false, ErrInvalid
 	}
 	now := time.Now()
 	user := &authmodel.User{
@@ -213,12 +225,12 @@ func (s *Service) ensureAdmin(ctx context.Context, tx *gorm.DB, input Admin) (in
 		CreatedAt: now, UpdatedAt: now,
 	}
 	if err := tx.WithContext(ctx).Create(user).Error; err != nil {
-		return 0, ErrStorage
+		return 0, false, ErrStorage
 	}
 	if err := s.afterWrite("admin"); err != nil {
-		return 0, err
+		return 0, false, err
 	}
-	return 1, nil
+	return 1, false, nil
 }
 
 func (s *Service) inspectAdmin(ctx context.Context, tx *gorm.DB, input Admin) (recordState, error) {
@@ -228,33 +240,30 @@ func (s *Service) inspectAdmin(ctx context.Context, tx *gorm.DB, input Admin) (r
 		if mooxsecurity.VerifyPassword(input.Password, user.PasswordHash) {
 			return recordMatch, nil
 		}
-		return recordConflict, nil
+		return recordKept, nil
 	}
 	if !errors.Is(err, gorm.ErrRecordNotFound) {
-		return recordConflict, ErrStorage
+		return recordKept, ErrStorage
 	}
 	// 系统只有一个超级用户：库里已有别的用户就是冲突。
 	var otherUsers int64
 	if err := tx.WithContext(ctx).Model(&authmodel.User{}).Count(&otherUsers).Error; err != nil {
-		return recordConflict, ErrStorage
+		return recordKept, ErrStorage
 	}
 	if otherUsers > 0 {
-		return recordConflict, nil
+		return recordKept, nil
 	}
 	return recordMissing, nil
 }
 
-func (s *Service) ensureTencentSecret(ctx context.Context, tx *gorm.DB, input TencentCloud) (int, error) {
+func (s *Service) ensureTencentSecret(ctx context.Context, tx *gorm.DB, input TencentCloud) (int, bool, error) {
 	state, err := s.inspectTencentSecret(ctx, tx, input)
-	if err != nil || state == recordMatch {
-		return 0, err
-	}
-	if state == recordConflict {
-		return 0, ErrConflict
+	if err != nil || state == recordMatch || state == recordKept {
+		return 0, state == recordKept, err
 	}
 	encrypted, err := mooxsecurity.Encrypt(input.SecretKey, s.encryptionKey)
 	if err != nil {
-		return 0, ErrStorage
+		return 0, false, ErrStorage
 	}
 	now := time.Now()
 	secret := &secretmodel.Secret{
@@ -263,12 +272,12 @@ func (s *Service) ensureTencentSecret(ctx context.Context, tx *gorm.DB, input Te
 		ExtraConfig: "{}", Status: "active", Creator: "setup", CreateTime: now, ModifyTime: now,
 	}
 	if err := tx.WithContext(ctx).Create(secret).Error; err != nil {
-		return 0, ErrStorage
+		return 0, false, ErrStorage
 	}
 	if err := s.afterWrite("secret"); err != nil {
-		return 0, err
+		return 0, false, err
 	}
-	return 1, nil
+	return 1, false, nil
 }
 
 func (s *Service) inspectTencentSecret(ctx context.Context, tx *gorm.DB, input TencentCloud) (recordState, error) {
@@ -278,27 +287,24 @@ func (s *Service) inspectTencentSecret(ctx context.Context, tx *gorm.DB, input T
 		return recordMissing, nil
 	}
 	if err != nil {
-		return recordConflict, ErrStorage
+		return recordKept, ErrStorage
 	}
 	plain, err := mooxsecurity.Decrypt(secret.SecretValue, s.encryptionKey)
 	if err != nil {
-		return recordConflict, ErrStorage
+		return recordKept, ErrStorage
 	}
 	metadataMatches := secret.Name == "Tencent Cloud Default" && secret.Category == "cloud" && secret.Provider == "tencent" &&
 		secret.SecretType == "api_key" && secret.KeyID == strings.TrimSpace(input.SecretID) && secret.Status == "active"
 	if metadataMatches && secretEqual(plain, input.SecretKey) {
 		return recordMatch, nil
 	}
-	return recordConflict, nil
+	return recordKept, nil
 }
 
-func (s *Service) ensureSpace(ctx context.Context, tx *gorm.DB, input Space) (int, error) {
+func (s *Service) ensureSpace(ctx context.Context, tx *gorm.DB, input Space) (int, bool, error) {
 	state, err := s.inspectSpace(ctx, tx, input)
-	if err != nil || state == recordMatch {
-		return 0, err
-	}
-	if state == recordConflict {
-		return 0, ErrConflict
+	if err != nil || state == recordMatch || state == recordKept {
+		return 0, state == recordKept, err
 	}
 	now := time.Now()
 	item := &adminspace.Space{
@@ -308,12 +314,12 @@ func (s *Service) ensureSpace(ctx context.Context, tx *gorm.DB, input Space) (in
 		CreatedAt: now, UpdatedAt: now,
 	}
 	if err := tx.WithContext(ctx).Create(item).Error; err != nil {
-		return 0, ErrStorage
+		return 0, false, ErrStorage
 	}
 	if err := s.afterWrite("space:" + input.SpaceID); err != nil {
-		return 0, err
+		return 0, false, err
 	}
-	return 1, nil
+	return 1, false, nil
 }
 
 func (s *Service) inspectSpace(ctx context.Context, tx *gorm.DB, input Space) (recordState, error) {
@@ -325,11 +331,11 @@ func (s *Service) inspectSpace(ctx context.Context, tx *gorm.DB, input Space) (r
 		return recordMissing, nil
 	}
 	if err != nil {
-		return recordConflict, ErrStorage
+		return recordKept, ErrStorage
 	}
 	storedAttributes, err := canonicalJSONObject(stored.Attributes)
 	if err != nil {
-		return recordConflict, nil
+		return recordKept, nil
 	}
 	if stored.SpaceID == input.SpaceID &&
 		stored.Name == input.Name &&
@@ -341,7 +347,7 @@ func (s *Service) inspectSpace(ctx context.Context, tx *gorm.DB, input Space) (r
 		storedAttributes == input.AttributesJSON {
 		return recordMatch, nil
 	}
-	return recordConflict, nil
+	return recordKept, nil
 }
 
 func secretEqual(left, right string) bool {
@@ -409,8 +415,6 @@ func (s *Service) afterWrite(stage string) error {
 
 func normalizeError(err error) error {
 	switch {
-	case errors.Is(err, ErrConflict):
-		return ErrConflict
 	case errors.Is(err, ErrInvalid):
 		return ErrInvalid
 	default:

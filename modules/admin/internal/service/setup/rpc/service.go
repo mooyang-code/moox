@@ -41,6 +41,7 @@ func (s *Service) ApplySetup(ctx context.Context, request *pb.ApplySetupReq) (*p
 		Spaces: int32(result.Spaces), SpacesCreated: int32(result.SpacesCreated),
 		SpacesUnchanged: int32(result.SpacesUnchanged),
 		ExchangeKeys:    exchangeKeyResultsToPB(result.ExchangeKeys),
+		Kept:            result.Kept,
 	}, nil
 }
 
@@ -57,7 +58,7 @@ func (s *Service) GetSetupStatus(ctx context.Context, request *pb.GetSetupStatus
 	return &pb.GetSetupStatusRsp{
 		RetInfo: setupRetOK(), State: status.State,
 		Users: int32(status.Users), Secrets: int32(status.Secrets),
-		Missing: int32(status.Missing), Conflicts: int32(status.Conflicts), Spaces: int32(status.Spaces),
+		Missing: int32(status.Missing), Kept: status.Kept, Spaces: int32(status.Spaces),
 		ExchangeKeys: exchangeKeyResultsToPB(status.ExchangeKeys),
 	}, nil
 }
@@ -152,8 +153,6 @@ func spaceFromPB(space *pb.SetupSpace) setup.Space {
 
 func mapSetupError(err error) (pb.ErrorCode, string) {
 	switch {
-	case errors.Is(err, setup.ErrConflict):
-		return pb.ErrorCode_INVALID_PARAM, "setup_conflict"
 	case errors.Is(err, setup.ErrInvalid):
 		return pb.ErrorCode_INVALID_PARAM, "setup_invalid"
 	case errors.Is(err, setup.ErrBackupInvalid):
