@@ -61,6 +61,12 @@ export const staticRoutes = [
         meta: { title: "data-fields" }
       },
       {
+        path: "/data/archive",
+        name: "data-archive",
+        component: () => import("@/views/data/archive/index.vue"),
+        meta: { title: "data-archive", reuseOnQuery: true }
+      },
+      {
         path: "/factor/overview",
         name: "factor-overview",
         component: () => import("@/views/factor/overview/index.vue"),

@@ -40,6 +40,7 @@ export default {
     ["data-import"]: "数据导入",
     ["compute-collector"]: "数据采集",
     ["collector-tasks"]: "采集任务",
+    ["data-archive"]: "数据归档",
     ["trading-accounts"]: "交易账户",
     ["trading-account-detail"]: "交易账户详情",
     ["ops"]: "资源与运维",

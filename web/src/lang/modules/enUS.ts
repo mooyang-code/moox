@@ -40,6 +40,7 @@ export default {
     ["strategy-detail"]: "strategy detail",
     ["compute-collector"]: "data collection",
     ["collector-tasks"]: "collection tasks",
+    ["data-archive"]: "data archive",
     ["trading-accounts"]: "trading accounts",
     ["trading-account-detail"]: "trading account detail",
     ["ops"]: "operations",
