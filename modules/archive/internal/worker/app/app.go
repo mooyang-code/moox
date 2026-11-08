@@ -71,8 +71,11 @@ type App struct {
 	maintaining     bool
 	// diskInsufficient：可用空间低于 worker.min_free_bytes，停止领取新运行。
 	diskInsufficient bool
-	diskFree         uint64
-	running          map[string]*activeRun
+	// diskTotal、diskUsed、diskFree 是最近一次成功读到的磁盘用量；读取失败时心跳照报它们，与 diskInsufficient 的依据一致。
+	diskTotal uint64
+	diskUsed  uint64
+	diskFree  uint64
+	running   map[string]*activeRun
 	// pulling 是正在进行中的领取调用数：维护要等它们登记完运行之后再开始，否则对账时会漏掉在途的运行。
 	pulling int
 	// datasetSlots 让同一个数据集的运行在本地串行：mgr 取消一个运行后会立刻允许创建新运行，
@@ -221,9 +224,12 @@ func (a *App) heartbeatOnce(ctx context.Context) map[string]string {
 	total, used, free, derr := a.opts.DiskUsage(cfg.Worker.RootDir)
 	a.mu.Lock()
 	if derr == nil {
-		a.diskFree = free
+		a.diskTotal, a.diskUsed, a.diskFree = total, used, free
 		a.diskInsufficient = int64(free) < int64(cfg.Worker.MinFreeBytes)
+	} else {
+		log.Warnf("archive worker read disk usage of %s: %v", cfg.Worker.RootDir, derr)
 	}
+	total, used, free = a.diskTotal, a.diskUsed, a.diskFree
 	maintaining := a.maintaining
 	a.mu.Unlock()
 	pacingJSON, _ := json.Marshal(map[string]any{

@@ -152,7 +152,9 @@ type harness struct {
 	cfg   *config.Config
 	now   time.Time
 	free  uint64
-	slept []time.Duration
+	// diskErr 非空时 DiskUsage 返回它（模拟 statfs 失败）。
+	diskErr error
+	slept   []time.Duration
 }
 
 func newHarness(t *testing.T) *harness {
@@ -175,7 +177,12 @@ func newHarness(t *testing.T) *harness {
 			h.now = h.now.Add(d)
 			return ctx.Err()
 		},
-		DiskUsage: func(string) (uint64, uint64, uint64, error) { return 200 << 30, 90 << 30, h.free, nil },
+		DiskUsage: func(string) (uint64, uint64, uint64, error) {
+			if h.diskErr != nil {
+				return 0, 0, 0, h.diskErr
+			}
+			return 200 << 30, 90 << 30, h.free, nil
+		},
 	})
 	return h
 }
@@ -268,6 +275,15 @@ func TestHeartbeatReportsStateAndAppliesTheManagersInstructions(t *testing.T) {
 	}
 	if !h.app.Snapshot().DiskInsufficient {
 		t.Fatal("可用空间低于 min_free_bytes 应记为磁盘不足")
+	}
+	// 读不到磁盘用量时沿用上一次的数值与判断，心跳不报 0（否则页面会按“可用低于下限”误报）。
+	h.diskErr = errors.New("statfs failed")
+	h.app.heartbeatOnce(ctx)
+	if last := h.mgr.heartbeats[len(h.mgr.heartbeats)-1]; last.GetDiskTotalBytes() != 200<<30 || last.GetDiskUsedBytes() != 90<<30 || last.GetDiskFreeBytes() != 1<<30 {
+		t.Fatalf("读取失败时应沿用上一次的数值: %v", last)
+	}
+	if !h.app.Snapshot().DiskInsufficient {
+		t.Fatal("读取失败时沿用上一次的判断")
 	}
 }
 
