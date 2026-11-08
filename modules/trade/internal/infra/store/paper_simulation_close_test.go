@@ -39,5 +39,5 @@ func TestClosePaperSimulationDoesNotInventValuationTimestamp(t *testing.T) {
 	require.Zero(t, account.Snapshot.ExchangeUpdatedAt)
 	require.Empty(t, account.Snapshot.Equity)
 	require.Equal(t, "100000", account.Snapshot.AvailableFunds)
-	require.Equal(t, []AssetBalance{{Asset: "USDT", Total: "100000", Available: "100000", Locked: "0"}}, account.Snapshot.Balances)
+	require.Equal(t, []AssetBalance{{Wallet: "UNIFIED", Asset: "USDT", Total: "100000", Available: "100000", Locked: "0", Borrowed: "0"}}, account.Snapshot.Balances)
 }

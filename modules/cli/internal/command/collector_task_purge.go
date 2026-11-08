@@ -206,7 +206,7 @@ func init() {
 	flags := collectorTaskPurgeCmd.Flags()
 	flags.StringVar(&collectorTaskPurgeFlagsValue.File, "file", "./moox.toml", "部署配置文件；用于解析数据库路径和操作员 SSH 网关")
 	flags.StringVar(&collectorTaskPurgeFlagsValue.AuthFile, "storage-auth-file", "secrets/storage-internal-auth.env", "Storage 内部鉴权文件")
-	flags.StringVar(&collectorTaskPurgeFlagsValue.DBPath, "db-path", "", "Collector SQLite 数据库路径；默认取 MOOX_COLLECTOR_DB_PATH 或 ./data/moox_collector.db")
+	flags.StringVar(&collectorTaskPurgeFlagsValue.DBPath, "db-path", "", "Collector SQLite 数据库路径；默认：--file 能加载时取 <ControlRoot>/current/collector/data/moox_collector.db，--file 传空时才取 MOOX_COLLECTOR_DB_PATH，再回退 ./data/moox_collector.db")
 	flags.StringVar(&collectorTaskPurgeFlagsValue.SpaceID, "space-id", "", "只清理指定空间；留空表示清理全部空间")
 	flags.StringVar(&collectorTaskPurgeFlagsValue.StopCommand, "stop-command", "", "执行 apply 时首先停止 Collector 写入的本地命令")
 	flags.StringVar(&collectorTaskPurgeFlagsValue.BackupDir, "backup-dir", "", "备份目录；默认写入数据库所在目录")
@@ -229,7 +229,8 @@ func runCollectorTaskPurge(ctx context.Context, flags collectorTaskPurgeFlags) (
 		}
 		if dbPath == "" {
 			paths := snapshot.Manifest.Paths.Resolved()
-			dbPath = filepath.Join(paths.ControlRoot, "data", "moox_collector.db")
+			// 组件的工作目录是 <ControlRoot>/current/<组件>，Collector 默认的相对路径 ./data/moox_collector.db 落在它下面的 data/。
+			dbPath = filepath.Join(paths.ControlRoot, "current", "collector", "data", "moox_collector.db")
 		}
 	}
 	if dbPath == "" {

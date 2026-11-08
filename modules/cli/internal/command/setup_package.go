@@ -14,7 +14,7 @@ func newSetupPackageCommand() *cobra.Command {
 	command := &cobra.Command{
 		Use:   "package",
 		Short: "按组件边界打包已编译的部署制品",
-		Long:  "打包 host、control、eventbus、storage、access、egress-proxy、trade、collector-stream、factor-engine 或 archive-worker。仅收集已编译的 Linux 制品与版本库中的配置模板，不读取 moox.toml 或运行密钥；配置渲染和身份材料由部署流程注入。",
+		Long:  "打包 host、control、eventbus、storage、access、egress-proxy、trade、collector-stream、callback-dispatcher、factor-engine 或 archive-worker。仅收集已编译的 Linux 制品与版本库中的配置模板，不读取 moox.toml 或运行密钥；配置渲染和身份材料由部署流程注入。",
 		Args:  cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
 			root := options.RepositoryRoot
@@ -37,7 +37,7 @@ func newSetupPackageCommand() *cobra.Command {
 		},
 	}
 	command.Flags().StringVar(&options.RepositoryRoot, "repo-root", "", "配置模板所在的 Git worktree（默认当前目录）")
-	command.Flags().StringVar(&options.Profile, "profile", "", "部署包类型：host/control/eventbus/storage/access/egress-proxy/trade/collector-stream/factor-engine/archive-worker")
+	command.Flags().StringVar(&options.Profile, "profile", "", "部署包类型：host/control/eventbus/storage/access/egress-proxy/trade/collector-stream/callback-dispatcher/factor-engine/archive-worker")
 	command.Flags().StringVar(&options.BinaryDirectory, "binary-dir", "", "已编译制品目录（默认 ./bin）")
 	command.Flags().StringVar(&options.Output, "output", "", "输出 .tar.gz 文件")
 	command.Flags().StringVar(&options.GOOS, "goos", "linux", "目标操作系统")

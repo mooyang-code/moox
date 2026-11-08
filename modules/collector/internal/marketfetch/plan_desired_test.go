@@ -64,7 +64,7 @@ func TestBuildDesiredStateShardsAndIndexes(t *testing.T) {
 		}
 		// 序号必须等于规范排序后的下标。
 		for _, subject := range dataset.Copies[0].Subjects {
-			if want := state.Datasets["ds_spot_1m|1m"].index[subject.ID]; want != subject.Index {
+			if want, _ := state.Datasets["ds_spot_1m|1m"].seriesIndex(subject.ID, PlanSeriesTag("crypto", function.Plan.Market)); want != subject.Index {
 				t.Fatalf("%s index=%d want %d", subject.ID, subject.Index, want)
 			}
 		}

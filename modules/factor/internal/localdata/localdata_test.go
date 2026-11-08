@@ -23,6 +23,8 @@ func at(m int) time.Time { return t0.Add(time.Duration(m) * time.Minute) }
 type bar struct {
 	at            time.Time
 	close, volume float64
+	// tag 是行的 series_tag：单序列测试用空串，统一数据集的测试用 putTag 写现货、永续两条序列。
+	tag string
 }
 
 // fakeStorage 是内存里的 Storage：保存行、变更日志与列定义，同时充当管线写结果的 Store。
@@ -34,6 +36,8 @@ type fakeStorage struct {
 	markers []storageio.PeriodMarker
 	// retention 是源数据集的保留期（如 "8d"）；空表示 forever。
 	retention string
+	// marketType 是源数据集的 market_type 属性；统一数据集为 "multi"。
+	marketType string
 }
 
 func newFakeStorage() *fakeStorage {
@@ -41,14 +45,18 @@ func newFakeStorage() *fakeStorage {
 }
 
 func (f *fakeStorage) put(subject string, base float64, minutes ...int) {
+	f.putTag(subject, "", base, minutes...)
+}
+
+func (f *fakeStorage) putTag(subject, tag string, base float64, minutes ...int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	lo, hi := at(minutes[0]), at(minutes[0])
 	for _, m := range minutes {
-		b := bar{at: at(m), close: base + float64(m), volume: 10}
+		b := bar{at: at(m), close: base + float64(m), volume: 10, tag: tag}
 		replaced := false
 		for i, r := range f.rows[subject] {
-			if r.at.Equal(b.at) {
+			if r.at.Equal(b.at) && r.tag == tag {
 				f.rows[subject][i], replaced = b, true
 			}
 		}
@@ -79,7 +87,7 @@ func (f *fakeStorage) GetDataset(context.Context, string, string) (storageio.Dat
 	if retention == "" {
 		retention = "forever"
 	}
-	return storageio.DatasetInfo{Retention: retention}, nil
+	return storageio.DatasetInfo{Retention: retention, Attributes: map[string]string{"market_type": f.marketType}}, nil
 }
 
 func (f *fakeStorage) ReadWindow(_ context.Context, req storageio.ReadRequest) (map[string]*storageio.Frame, error) {
@@ -89,12 +97,17 @@ func (f *fakeStorage) ReadWindow(_ context.Context, req storageio.ReadRequest) (
 	for _, subject := range req.Subjects {
 		frame := &storageio.Frame{SubjectID: subject, Columns: append([]string{"data_time", "series_tag"}, req.Columns...)}
 		rows := append([]bar(nil), f.rows[subject]...)
-		sort.Slice(rows, func(i, j int) bool { return rows[i].at.Before(rows[j].at) })
+		sort.Slice(rows, func(i, j int) bool {
+			if !rows[i].at.Equal(rows[j].at) {
+				return rows[i].at.Before(rows[j].at)
+			}
+			return rows[i].tag < rows[j].tag
+		})
 		for _, r := range rows {
 			if r.at.Before(req.Start) || !r.at.Before(req.End) {
 				continue
 			}
-			row := []any{r.at, ""}
+			row := []any{r.at, r.tag}
 			for _, c := range req.Columns {
 				if c == "close" {
 					row = append(row, r.close)
@@ -150,7 +163,19 @@ func (f *fakeStorage) WriteRows(_ context.Context, _, _, _ string, rows []storag
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for _, r := range rows {
-		f.results[r.SubjectID+r.DataTime.Format(time.RFC3339)] = r
+		key := r.SubjectID + r.DataTime.Format(time.RFC3339) + r.SeriesTag
+		// 与 UpsertFields 一致：只更新请求带的字段，没带的字段保留已有的值。
+		if old, ok := f.results[key]; ok {
+			merged := make(map[string]any, len(old.Fields)+len(r.Fields))
+			for name, value := range old.Fields {
+				merged[name] = value
+			}
+			for name, value := range r.Fields {
+				merged[name] = value
+			}
+			r.Fields = merged
+		}
+		f.results[key] = r
 	}
 	return nil
 }

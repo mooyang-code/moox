@@ -26,21 +26,14 @@ func (tx *Tx) ClosePaperSimulation(spaceID, tradingAccountID string) error {
 	for _, current := range orders {
 		switch current.State {
 		case "OPEN":
-			if err := tx.CancelPaperOrder(current, current.Version, "paper simulation closed"); err != nil {
+			if err := tx.CancelPaperOrder(current, current.Version, "模拟账户已关闭"); err != nil {
 				return err
 			}
 		default:
 			// Closing is terminal for a Paper fixture. Orders that are still in
 			// submission/cancel handshakes are rejected and their reservation is
 			// released rather than being retried through an exchange adapter.
-			result := tx.db.Exec(`
-				UPDATE t_trade_orders
-				SET c_state='CANCELED', c_first_match_pending=0,
-				    c_remaining_reserved_quantity='0', c_reject_reason=?,
-				    c_finished_at=CAST(strftime('%s','now') AS INTEGER)*1000,
-				    c_version=c_version+1, c_mtime=CURRENT_TIMESTAMP
-				WHERE c_space_id=? AND c_order_id=? AND c_version=?`,
-				"paper simulation closed", current.SpaceID, current.OrderID, current.Version)
+			result := tx.db.Exec(execCancelClosedPaperOrder, "模拟账户已关闭", current.SpaceID, current.OrderID, current.Version)
 			if result.Error != nil {
 				return result.Error
 			}
@@ -58,11 +51,7 @@ func (tx *Tx) ClosePaperSimulation(spaceID, tradingAccountID string) error {
 	var logicalRows []struct {
 		LogicalAccountID string `gorm:"column:c_logical_account_id"`
 	}
-	if err := tx.db.Raw(`
-		SELECT c_logical_account_id
-		FROM t_logical_account_members
-		WHERE c_space_id = ? AND c_trading_account_id = ?
-	`, spaceID, tradingAccountID).Scan(&logicalRows).Error; err != nil {
+	if err := tx.db.Raw(sqlPaperAccountLogicalIDs, spaceID, tradingAccountID).Scan(&logicalRows).Error; err != nil {
 		return err
 	}
 	for _, row := range logicalRows {
@@ -70,18 +59,12 @@ func (tx *Tx) ClosePaperSimulation(spaceID, tradingAccountID string) error {
 		if logicalID == "" {
 			continue
 		}
-		result := tx.db.Exec(`
-			UPDATE t_logical_accounts SET c_automation_state = 'PAUSED', c_pause_reason = ?, c_mtime = CURRENT_TIMESTAMP
-			WHERE c_space_id = ? AND c_logical_account_id = ?
-		`, "paper simulation closed", spaceID, logicalID)
+		result := tx.db.Exec(execPausePaperLogicalAccount, "模拟账户已关闭，自动执行已暂停", spaceID, logicalID)
 		if result.Error != nil {
 			return result.Error
 		}
 		// 关闭后账户不再持仓和下单，移出成员，组合账户里其他成员不受影响。
-		if err := tx.db.Exec(`
-			DELETE FROM t_logical_account_members
-			WHERE c_space_id = ? AND c_logical_account_id = ? AND c_trading_account_id = ?
-		`, spaceID, logicalID, tradingAccountID).Error; err != nil {
+		if err := tx.db.Exec(execRemovePaperMember, spaceID, logicalID, tradingAccountID).Error; err != nil {
 			return err
 		}
 	}
@@ -102,13 +85,13 @@ func (tx *Tx) refreshClosedPaperBalances(account TradingAccountRecord) error {
 	snapshot.Balances = make([]AssetBalance, 0, len(assets))
 	for _, asset := range assets {
 		total := projection.Totals[asset].String()
-		snapshot.Balances = append(snapshot.Balances, AssetBalance{Asset: asset, Total: total, Available: total, Locked: "0"})
+		snapshot.Balances = append(snapshot.Balances, AssetBalance{Wallet: string(exchange.WalletUnified), Asset: asset, Total: total, Available: total, Locked: "0", Borrowed: "0"})
 	}
 	// Closing must work without quotes. Cash is authoritative, but mark-based
 	// valuation remains cached and none of its freshness timestamps advance.
 	cash := projection.Totals[account.SettlementAsset]
 	snapshot.AvailableFunds = cash.String()
-	if !exchange.RuleFor(account.MarketType).PositionFromBalance {
+	if account.HasPositionMarket() {
 		margin, unrealized, valuedAt, err := tx.closedPaperPositionValuation(account)
 		if err != nil {
 			return err
@@ -119,6 +102,17 @@ func (tx *Tx) refreshClosedPaperBalances(account TradingAccountRecord) error {
 		snapshot.ExchangeUpdatedAt = valuedAt
 		snapshot.Equity = equity.String()
 		snapshot.AvailableFunds = equity.Sub(margin).String()
+		// 单一资金池：结算币这一行是现货买单看的，扣保证金和浮亏、浮盈不能花在现货上，与模拟盘适配器的快照一致。
+		spotAvailable := cash.Sub(margin)
+		if unrealized.IsNegative() {
+			spotAvailable = spotAvailable.Add(unrealized)
+		}
+		// 只合约的账户没有现货买单，这一行保持原样（总额），不改显示。
+		for i := range snapshot.Balances {
+			if account.HasBalanceMarket() && snapshot.Balances[i].Asset == account.SettlementAsset {
+				snapshot.Balances[i].Available = spotAvailable.String()
+			}
+		}
 	}
 	encoded, err := encodeSnapshot(snapshot)
 	if err != nil {
@@ -200,3 +194,19 @@ func (tx *Tx) SetTradingAccountStatus(spaceID, tradingAccountID, status string) 
 	`, status, spaceID, tradingAccountID)
 	return requireUpdated(result.Error, result.RowsAffected, "trading account status")
 }
+
+// 以下 SQL 整条写成常量，不在调用处拼接或内联。
+const (
+	execCancelClosedPaperOrder = `UPDATE t_trade_orders
+		SET c_state = 'CANCELED', c_first_match_pending = 0,
+		    c_remaining_reserved_quantity = '0', c_reject_reason = ?,
+		    c_finished_at = CAST(strftime('%s', 'now') AS INTEGER) * 1000,
+		    c_version = c_version + 1, c_mtime = CURRENT_TIMESTAMP
+		WHERE c_space_id = ? AND c_order_id = ? AND c_version = ?`
+	sqlPaperAccountLogicalIDs = `SELECT c_logical_account_id FROM t_logical_account_members
+		WHERE c_space_id = ? AND c_trading_account_id = ?`
+	execPausePaperLogicalAccount = `UPDATE t_logical_accounts SET c_automation_state = 'PAUSED', c_pause_reason = ?, c_mtime = CURRENT_TIMESTAMP
+		WHERE c_space_id = ? AND c_logical_account_id = ?`
+	execRemovePaperMember = `DELETE FROM t_logical_account_members
+		WHERE c_space_id = ? AND c_logical_account_id = ? AND c_trading_account_id = ?`
+)

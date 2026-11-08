@@ -84,7 +84,7 @@ func TestMigrateWritesBackupAndReencryptsCurrentFormat(t *testing.T) {
 	manifest, err := setupconfig.Parse(plain)
 	require.NoError(t, err)
 	require.Equal(t, "海外机", manifest.HostByID("overseas").Label)
-	require.Equal(t, []string{"trade", "access", "egress-proxy", "collector-stream"}, manifest.Deployments["overseas"])
+	require.Equal(t, []string{"trade", "access", "egress-proxy", "collector-stream", "callback-dispatcher"}, manifest.Deployments["overseas"])
 	require.NotContains(t, string(plain), "legacy-1")
 	require.NotContains(t, string(plain), "factor_type")
 	require.Contains(t, string(plain), "# 主机命名", "注释保持不动")
@@ -331,6 +331,106 @@ func TestMigrateAddDeploymentRejectsUnknownHostAndComponent(t *testing.T) {
 	require.Error(t, err, "未知组件由配置校验拒绝")
 }
 
+// [deployments] 里主机的列表是单引号或多行写法时也按 TOML 读到原有组件，写回时不丢。
+func TestMigrateAddDeploymentReadsSingleQuotedAndMultilineArrays(t *testing.T) {
+	line := regexp.MustCompile(`(?m)^storage = \[.*\]\n`)
+	for name, replacement := range map[string]string{
+		"单引号": "storage = ['storage-primary', 'storage-node', 'storage-view', 'access'] # 单引号\n",
+		"多行":  "storage = [\n  'storage-primary',\n  \"storage-node\",\n  'storage-view',\n  'access',\n]\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			text := sampleText(t)
+			require.True(t, line.MatchString(text))
+			path, root, keys := migrateFixture(t, line.ReplaceAllString(text, replacement))
+			report, err := MigrateFile(path, MigrateOptions{
+				RepoRoot: root, Keys: keys, Write: true,
+				AddDeploymentHost: "storage", AddDeploymentComponents: []string{"access", "eventbus"},
+			})
+			require.NoError(t, err)
+			require.Equal(t, map[string][]string{"storage": {"eventbus"}}, report.AddedDeployments)
+			sealed, err := os.ReadFile(path)
+			require.NoError(t, err)
+			plain, err := configcrypt.Decrypt(sealed, keys)
+			require.NoError(t, err)
+			snapshot, err := setupconfig.Parse(plain)
+			require.NoError(t, err)
+			require.Equal(t, []string{"storage-primary", "storage-node", "storage-view", "access", "eventbus"}, snapshot.Deployments["storage"])
+		})
+	}
+}
+
+// --add-egress-domain 把域名追加到 [egress_proxy] http_domains：已在名单里（同名或被 *. 后缀覆盖）的不重复，重复执行没有改动。
+func TestMigrateAddsEgressDomains(t *testing.T) {
+	path, root, keys := migrateFixture(t, sampleText(t))
+	report, err := MigrateFile(path, MigrateOptions{
+		RepoRoot: root, Keys: keys, Write: true,
+		AddEgressDomains: []string{"openapi.okx.com", "fapi.binance.com", " WWW.OKX.COM ", "*.okx.com"},
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"www.okx.com", "*.okx.com"}, report.AddedEgressDomains)
+	sealed, err := os.ReadFile(path)
+	require.NoError(t, err)
+	plain, err := configcrypt.Decrypt(sealed, keys)
+	require.NoError(t, err)
+	manifest, err := setupconfig.Parse(plain)
+	require.NoError(t, err)
+	require.Equal(t, []string{"*.binance.com", "data-api.binance.vision", "openapi.okx.com", "www.okx.com", "*.okx.com"}, manifest.EgressProxy.HTTPDomains)
+	require.Equal(t, 1, strings.Count(string(plain), "http_domains"))
+
+	again, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, AddEgressDomains: []string{"openapi.okx.com", "www.okx.com"}})
+	require.NoError(t, err)
+	require.Empty(t, again.AddedEgressDomains)
+	require.False(t, again.Changed, "重复执行不产生改动")
+}
+
+// 没写 http_domains（多行写法也一样）时从默认名单开始追加，不丢掉默认的币安与 OKX 域名。
+func TestMigrateAddEgressDomainStartsFromDefaultsAndReplacesMultilineArray(t *testing.T) {
+	text := sampleText(t)
+	line := regexp.MustCompile(`(?m)^http_domains = .*\n`)
+	require.True(t, line.MatchString(text))
+
+	path, root, keys := migrateFixture(t, line.ReplaceAllString(text, ""))
+	report, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, AddEgressDomains: []string{"www.okx.com"}})
+	require.NoError(t, err)
+	require.Equal(t, []string{"www.okx.com"}, report.AddedEgressDomains)
+
+	multiline := line.ReplaceAllString(text, "http_domains = [\n  \"*.binance.com\",\n  \"openapi.okx.com\",\n]\n")
+	path, root, keys = migrateFixture(t, multiline)
+	_, err = MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, Write: true, AddEgressDomains: []string{"www.okx.com"}})
+	require.NoError(t, err)
+	sealed, err := os.ReadFile(path)
+	require.NoError(t, err)
+	plain, err := configcrypt.Decrypt(sealed, keys)
+	require.NoError(t, err)
+	manifest, err := setupconfig.Parse(plain)
+	require.NoError(t, err)
+	require.Equal(t, []string{"*.binance.com", "openapi.okx.com", "www.okx.com"}, manifest.EgressProxy.HTTPDomains)
+}
+
+// 单引号写法（TOML 字面字符串）也能读到原有域名，写回时不丢。
+func TestMigrateAddEgressDomainReadsSingleQuotedArray(t *testing.T) {
+	text := regexp.MustCompile(`(?m)^http_domains = .*\n`).ReplaceAllString(sampleText(t), "http_domains = ['*.binance.com', 'openapi.okx.com'] # 单引号\n")
+	path, root, keys := migrateFixture(t, text)
+	report, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, Write: true, AddEgressDomains: []string{"www.okx.com", "fapi.binance.com"}})
+	require.NoError(t, err)
+	require.Equal(t, []string{"www.okx.com"}, report.AddedEgressDomains, "fapi.binance.com 已被 *.binance.com 覆盖")
+	sealed, err := os.ReadFile(path)
+	require.NoError(t, err)
+	plain, err := configcrypt.Decrypt(sealed, keys)
+	require.NoError(t, err)
+	manifest, err := setupconfig.Parse(plain)
+	require.NoError(t, err)
+	require.Equal(t, []string{"*.binance.com", "openapi.okx.com", "www.okx.com"}, manifest.EgressProxy.HTTPDomains)
+}
+
+func TestMigrateAddEgressDomainRejectsInvalidDomain(t *testing.T) {
+	path, root, keys := migrateFixture(t, sampleText(t))
+	for _, bad := range []string{"https://openapi.okx.com", "127.0.0.1", "okx"} {
+		_, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, AddEgressDomains: []string{bad}})
+		require.ErrorContains(t, err, "不是合法域名", bad)
+	}
+}
+
 func TestMigrateSetsHostReachability(t *testing.T) {
 	path, root, keys := migrateFixture(t, legacyFactorText(t, "factor"))
 	_, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, Write: true})
@@ -386,4 +486,44 @@ func TestMigrateRemovesTLSMode(t *testing.T) {
 	if strings.Contains(string(migrated), "tls_mode") || len(report.RemovedTLSMode) != 1 || report.RemovedTLSMode[0] != "control" {
 		t.Fatalf("没有删掉 tls_mode：%s %+v", migrated, report)
 	}
+}
+
+// 整条重写时保留原条目首行、末行的行尾注释；多行数组中间几行的注释保不住，报告里列出条目位置。
+func TestMigrateRewriteKeepsTrailingComments(t *testing.T) {
+	decrypt := func(t *testing.T, path string, keys *configcrypt.MemoryStore) string {
+		t.Helper()
+		sealed, err := os.ReadFile(path)
+		require.NoError(t, err)
+		plain, err := configcrypt.Decrypt(sealed, keys)
+		require.NoError(t, err)
+		_, err = setupconfig.Parse(plain)
+		require.NoError(t, err)
+		return string(plain)
+	}
+	t.Run("单行条目的行尾注释", func(t *testing.T) {
+		text := regexp.MustCompile(`(?m)^http_domains = .*\n`).ReplaceAllString(sampleText(t), "http_domains = ['*.binance.com', 'openapi.okx.com'] # 走海外机 \"出口\"\n")
+		path, root, keys := migrateFixture(t, text)
+		report, err := MigrateFile(path, MigrateOptions{RepoRoot: root, Keys: keys, Write: true, AddEgressDomains: []string{"www.okx.com"}})
+		require.NoError(t, err)
+		require.Empty(t, report.DroppedComments)
+		require.Contains(t, decrypt(t, path, keys), `http_domains = ["*.binance.com", "openapi.okx.com", "www.okx.com"]   # 走海外机 "出口"`)
+	})
+	t.Run("多行条目首行末行保留、中间几行提示", func(t *testing.T) {
+		line := regexp.MustCompile(`(?m)^storage = \[.*\]\n`)
+		text := line.ReplaceAllString(sampleText(t), "storage = [ # 存储机\n  'storage-primary', # 主库\n  'storage-node',\n  'storage-view',\n  'access',\n] # 末行\n")
+		path, root, keys := migrateFixture(t, text)
+		report, err := MigrateFile(path, MigrateOptions{
+			RepoRoot: root, Keys: keys, Write: true,
+			AddDeploymentHost: "storage", AddDeploymentComponents: []string{"eventbus"},
+		})
+		require.NoError(t, err)
+		require.Equal(t, []string{"[deployments] storage：该条目中间几行的注释已去掉"}, report.DroppedComments)
+		plain := decrypt(t, path, keys)
+		require.Contains(t, plain, `storage = ["storage-primary", "storage-node", "storage-view", "access", "eventbus"]   # 存储机 # 末行`)
+		require.NotContains(t, plain, "# 主库")
+	})
+	t.Run("井号在字符串里不算注释", func(t *testing.T) {
+		require.Empty(t, lineComment(`a = ["x#y", 'z#w']`))
+		require.Equal(t, "# 真注释", lineComment(`a = ["x\"#y"] # 真注释`))
+	})
 }

@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -117,8 +118,7 @@ func IsReleaseSettled(err error) bool {
 	return errors.As(err, &coded) && coded.StatusCode() == 5
 }
 
-// ErrMarketMismatch 表示策略的市场与组合账户的市场不一致。Trade 收到无后缀标的时按账户市场补后缀，
-// 所以必须在绑定时拦住，否则合约策略绑到现货账户会直接买现货。
+// ErrMarketMismatch 表示策略的市场不在组合账户可交易的市场里，在绑定时拦住，不让策略绑到没有对应市场的账户上。
 var ErrMarketMismatch = errors.New("策略市场与组合账户市场不一致")
 
 // IsOwnerConflict 判断错误是否为所有权冲突（Trade 错误码 14）。
@@ -146,7 +146,7 @@ func IsPermanentClaimError(err error) bool {
 }
 
 // ClaimSession 以实例 + 会话身份认领账户所有权。
-func (c *Client) ClaimSession(ctx context.Context, spaceID, logicalAccountID, instanceID, sessionID, marketType string) error {
+func (c *Client) ClaimSession(ctx context.Context, spaceID, logicalAccountID, instanceID, sessionID string, markets []string) error {
 	if err := validateIdentity(spaceID, logicalAccountID, instanceID, sessionID); err != nil {
 		return err
 	}
@@ -154,7 +154,7 @@ func (c *Client) ClaimSession(ctx context.Context, spaceID, logicalAccountID, in
 	if err != nil {
 		return err
 	}
-	if err := checkMarket(marketType, account.GetMarketType()); err != nil {
+	if err := checkMarkets(markets, account.GetMarkets()); err != nil {
 		return err
 	}
 	expectedFence := account.GetAuthFence()
@@ -229,19 +229,29 @@ func (c *Client) readAuthFence(ctx context.Context, spaceID, logicalAccountID st
 	return account.GetAuthFence(), nil
 }
 
-// checkMarket 比对策略市场（spot、swap）与组合账户市场。
-func checkMarket(marketType string, accountMarket tradepb.MarketType) error {
-	var want tradepb.MarketType
-	switch marketType {
-	case "spot":
-		want = tradepb.MarketType_MARKET_TYPE_SPOT
-	case "swap":
-		want = tradepb.MarketType_MARKET_TYPE_SWAP
-	default:
-		return fmt.Errorf("%w：策略市场 %q 不受支持", ErrMarketMismatch, marketType)
+// checkMarkets 检查策略要输出的每个市场（spot、swap、equity）都在组合账户可交易的市场里（启用成员已开通市场的并集）。
+func checkMarkets(markets []string, accountMarkets []tradepb.MarketType) error {
+	if len(accountMarkets) == 0 {
+		return fmt.Errorf("%w：组合账户还没有启用的成员", ErrMarketMismatch)
 	}
-	if want != accountMarket {
-		return fmt.Errorf("%w：策略是 %s，组合账户是 %s", ErrMarketMismatch, marketType, accountMarket)
+	if len(markets) == 0 {
+		return fmt.Errorf("%w：策略没有要输出的市场", ErrMarketMismatch)
+	}
+	for _, market := range markets {
+		var want tradepb.MarketType
+		switch market {
+		case "spot":
+			want = tradepb.MarketType_MARKET_TYPE_SPOT
+		case "swap":
+			want = tradepb.MarketType_MARKET_TYPE_SWAP
+		case "equity":
+			want = tradepb.MarketType_MARKET_TYPE_STOCK
+		default:
+			return fmt.Errorf("%w：策略市场 %q 不受支持", ErrMarketMismatch, market)
+		}
+		if !slices.Contains(accountMarkets, want) {
+			return fmt.Errorf("%w：策略要输出 %s，组合账户可交易的市场是 %v", ErrMarketMismatch, market, accountMarkets)
+		}
 	}
 	return nil
 }

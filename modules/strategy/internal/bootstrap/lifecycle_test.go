@@ -29,7 +29,7 @@ func TestTriggerGateFollowsLifecycleStage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gate := triggerGate(life)
+	gate := triggerGate(life, nil)
 	ctx := context.Background()
 	// 模块自身还没做第一次检查：暂时未就绪，事件稍后重投，不能丢弃。
 	if gate("i1") != trigger.ModeWait {
@@ -73,7 +73,7 @@ func TestTriggerGateCatchupModeAndReleaseBoundary(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	gate := triggerGate(life)
+	gate := triggerGate(life, nil)
 	if gate("i1") != trigger.ModeLive {
 		t.Fatal("运行中是正式模式")
 	}
@@ -124,8 +124,8 @@ func TestAutoConfirmOnlyObserverInstances(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, instance := range []store.Instance{
-		{InstanceID: "observer", StrategyID: "s", SpaceID: "crypto", FactorTaskID: "ftask_a", CreatedAt: now, UpdatedAt: now},
-		{InstanceID: "trader", StrategyID: "s", SpaceID: "crypto", FactorTaskID: "ftask_b", LogicalAccountID: &account, CreatedAt: now, UpdatedAt: now},
+		{InstanceID: "observer", StrategyID: "s", SpaceID: "crypto", FactorTasks: map[string]string{"spot": "ftask_a"}, CreatedAt: now, UpdatedAt: now},
+		{InstanceID: "trader", StrategyID: "s", SpaceID: "crypto", FactorTasks: map[string]string{"spot": "ftask_b"}, LogicalAccountID: &account, CreatedAt: now, UpdatedAt: now},
 	} {
 		if err := db.CreateInstance(ctx, instance); err != nil {
 			t.Fatal(err)
@@ -194,7 +194,7 @@ func TestTriggerGateWaitsWhileModuleNotReadyAndStartupRefreshReleasesQuickly(t *
 			t.Fatal(err)
 		}
 	}
-	gate := triggerGate(life)
+	gate := triggerGate(life, nil)
 	if gate("i1") != trigger.ModeLive {
 		t.Fatal("模块与实例都就绪时正式求值")
 	}

@@ -25,7 +25,7 @@ import (
 var (
 	collectorDataTables = []string{
 		"t_collector_kline_backfill_jobs", "t_collector_kline_backfill_chunks", "t_collector_backfill_watermarks",
-		"t_collector_history_scans", "t_collector_source_absences", "t_collector_resample_snapshots", "t_collector_resample_jobs", "t_collector_backfill_notices", "t_collector_event_outbox",
+		"t_collector_history_scans", "t_collector_source_absences", "t_collector_resample_snapshots", "t_collector_resample_jobs", "t_collector_backfill_notices", "t_collector_event_outbox", "t_collector_delist_notices",
 		"t_collector_stream_workers", "t_collector_tag_sync_runs",
 	}
 	collectorConfigTables = []string{

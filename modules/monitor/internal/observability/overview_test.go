@@ -1049,7 +1049,7 @@ func seedServiceTopology(t *testing.T, repositories *store.Repositories, hostID,
 	require.NoError(t, err)
 }
 
-// 生产者按设计只产出部分结果（空洞保护、历史不足、预热）时，数据集显示降级与“积累中”，而不是“尚无成功运行 / 成功过期”；
+// 生产者按设计只产出部分结果（历史不足、预热）时，数据集显示降级与“积累中”，而不是“尚无成功运行 / 成功过期”；
 // 只有部分结果仍按期出现才算积累，部分结果也断了就回到原来的判断，停掉的生产者不会被误当成积累。
 func TestDatasetStatusReportsWarmingWhilePartialRunsKeepArriving(t *testing.T) {
 	now := time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)

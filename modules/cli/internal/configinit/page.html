@@ -143,6 +143,16 @@ table.review tr + tr th, table.review tr + tr td { border-top: 1px solid var(--l
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; margin-right: 12px; }
 .muted { color: var(--muted); }
 
+.xkey { border: 1px solid var(--line); border-radius: 6px; padding: 14px 16px; margin-bottom: 12px; }
+.xkey .fields { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 560px) { .xkey .fields { grid-template-columns: 1fr; } }
+.xkey .tail { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+.xkey .tail label { display: flex; gap: 8px; align-items: center; font-size: 13px; color: var(--ink-2); cursor: pointer; }
+.xkey .tail input { accent-color: var(--brand); }
+.xkey .tail button { margin-left: auto; }
+.xkey .id { order: 3; flex-basis: 100%; font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--faint); word-break: break-all; }
+.xkey-empty { margin: 0 0 12px; color: var(--muted); font-size: 13px; }
+
 .footer { position: fixed; left: 0; right: 0; bottom: 0; background: var(--panel); border-top: 1px solid var(--line); z-index: 10; }
 .footer-in { max-width: 1040px; margin: 0 auto; padding: 14px 28px; display: flex; align-items: center; gap: 12px; }
 .footer .note { color: var(--muted); font-size: 12.5px; margin-right: auto; }
@@ -312,13 +322,27 @@ button.ghost.away { visibility: hidden; }
     </section>
 
     <section class="page" id="page-5" hidden>
+      <h1>交易所密钥</h1>
+      <p class="lede">可以不填。在海外服务器上下单，或者让 MooX 检测币安现货下架，需要交易所的 API 密钥；现在不填也行，以后可以在管理台「设置 › 秘钥管理」里添加。</p>
+      <div class="block">
+        <div><h2>API 密钥<span class="opt">可选</span></h2>
+          <p>每把密钥对应一个交易所和一个环境。<b>只读密钥</b>（只开读取权限）用来检测币安现货下架，不能下单；用来下单的密钥不要开提现权限。</p>
+          <p>这里不检测密钥：密钥通常绑定了海外服务器的 IP，在这台电脑上检测多半通不过。<b>部署完成后，在海外机上检测这把密钥</b>。</p></div>
+        <div>
+          <div id="exchange-keys"></div>
+          <div class="actions-inline"><button type="button" class="small" id="add-exchange-key">添加一把密钥</button><span class="hint">写进密钥管理之后以管理台为准：以后在这里改，不会覆盖管理台里已有的密钥。</span></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="page" id="page-6" hidden>
       <h1>确认</h1>
       <p class="lede">检查一遍，确认后回到 Agent 开始部署。密码和密钥不会在这里显示。</p>
       <div class="block"><div><h2>服务器</h2></div><table class="review" id="review-servers"></table></div>
       <div class="block"><div><h2>账号与通知</h2></div><table class="review" id="review-account"></table></div>
     </section>
 
-    <section class="page finish" id="page-6" hidden>
+    <section class="page finish" id="page-7" hidden>
       <div class="mark">✓</div>
       <h1>配置完成</h1>
       <p class="lede">配置已加密保存在这台电脑上，可以关闭这个页面，回到 Agent 继续部署。</p>
@@ -340,7 +364,9 @@ button.ghost.away { visibility: hidden; }
 (function () {
   'use strict';
   var boot = JSON.parse(document.getElementById('boot').textContent);
-  var STEPS = ['腾讯云账号', '服务器', '免密登录', '管理员与告警', '确认'];
+  // 页面编号与步骤一一对应；第 5 页（交易所密钥）只有配了海外服务器才显示，前进和后退都跳过隐藏的页。
+  var STEPS = ['腾讯云账号', '服务器', '免密登录', '管理员与告警', '交易所密钥', '确认'];
+  var STEP_EXCHANGE = 5, STEP_REVIEW = 6, STEP_DONE = 7;
   var state = { step: 1, account: null, found: {}, login: {}, report: null, finished: false };
   var blocks = {};
 
@@ -375,25 +401,32 @@ button.ghost.away { visibility: hidden; }
   function showAlert(message) { var box = $('alert'); box.textContent = message; box.hidden = !message; if (message) window.scrollTo(0, 0); }
 
   // ---------- 步骤条 ----------
+  function exchangeVisible() { return cloudEnabled('overseas'); }
+  function visibleSteps() {
+    var list = [];
+    for (var n = 1; n <= STEPS.length; n++) if (n !== STEP_EXCHANGE || exchangeVisible()) list.push(n);
+    return list;
+  }
+  function neighbor(n, delta) { var list = visibleSteps(); return list[list.indexOf(n) + delta] || n; }
   function renderSteps() {
     var list = $('steps');
     list.replaceChildren();
-    STEPS.forEach(function (name, i) {
-      var n = i + 1, cls = n < state.step ? 'done' : n === state.step ? 'current' : '';
+    visibleSteps().forEach(function (n, i) {
+      var cls = n < state.step ? 'done' : n === state.step ? 'current' : '';
       var sub = n === 1 && state.account ? '已验证' : n === 2 && n < state.step ? serverCount() + ' 台' : '';
-      var li = el('li', { class: cls }, [el('span', { class: 'dot', text: n < state.step ? '✓' : String(n) }),
-        el('span', { class: 'label' }, [name, sub ? el('span', { class: 'sub', text: sub }) : null])]);
+      var li = el('li', { class: cls }, [el('span', { class: 'dot', text: n < state.step ? '✓' : String(i + 1) }),
+        el('span', { class: 'label' }, [STEPS[n - 1], sub ? el('span', { class: 'sub', text: sub }) : null])]);
       if (n < state.step) li.addEventListener('click', function () { go(n); });
       list.append(li);
     });
   }
   function go(n) {
     state.step = n;
-    for (var i = 1; i <= 6; i++) $('page-' + i).hidden = i !== n;
+    for (var i = 1; i <= STEP_DONE; i++) $('page-' + i).hidden = i !== n;
     $('back').classList.toggle('away', n === 1);
-    $('next').textContent = n === 5 ? '确认并完成' : '下一步';
+    $('next').textContent = n === STEP_REVIEW ? '确认并完成' : '下一步';
     if (n === 3) renderLogins();
-    if (n === 5) renderReview();
+    if (n === STEP_REVIEW) renderReview();
     showAlert('');
     renderSteps();
     window.scrollTo(0, 0);
@@ -719,8 +752,86 @@ button.ghost.away { visibility: hidden; }
       admin: { username: $('admin-username').value.trim(), password: $('admin-password').value },
       tencent: keys(),
       notification: { channel_type: $('notify-type').value, webhook_url: $('notify-url').value.trim() },
-      servers: { storage: serverPayload('storage'), control: serverPayload('control'), overseas: serverPayload('overseas'), factor: blocks.factor.toggle.checked ? factorTarget() : null }
+      servers: { storage: serverPayload('storage'), control: serverPayload('control'), overseas: serverPayload('overseas'), factor: blocks.factor.toggle.checked ? factorTarget() : null },
+      // 没配海外服务器时这一步是隐藏的，不发送任何交易所密钥。
+      exchange_keys: exchangeVisible() ? exchangeEntries() : []
     };
+  }
+
+  // ---------- 交易所密钥 ----------
+  var exchangeRows = [];
+  function exchangeID(entry) { return ('exchange-' + entry.exchange + '-' + entry.environment + '-' + entry.name).toLowerCase(); }
+  function option(value, text) { return el('option', { value: value, text: text || value }); }
+  function addExchangeKey() {
+    var row = {
+      name: el('input', { type: 'text', autocomplete: 'off', spellcheck: 'false', placeholder: '例如 readonly 或 main' }),
+      exchange: el('select', {}, [option('binance', '币安 Binance'), option('okx', 'OKX')]),
+      environment: el('select', {}, [option('production', '正式环境'), option('testnet', '测试网')]),
+      apiKey: el('input', { type: 'password', autocomplete: 'new-password', spellcheck: 'false', 'data-secret': '' }),
+      secretKey: el('input', { type: 'password', autocomplete: 'new-password', spellcheck: 'false', 'data-secret': '' }),
+      passphrase: el('input', { type: 'password', autocomplete: 'new-password', spellcheck: 'false', 'data-secret': '' }),
+      readonly: el('input', { type: 'checkbox' })
+    };
+    var id = el('span', { class: 'id' });
+    var passphraseField = el('label', { class: 'f' }, [el('span', { text: 'Passphrase' }), row.passphrase, el('small', { text: 'OKX 创建 API 时设置的口令' })]);
+    var remove = el('button', { type: 'button', class: 'small', text: '删除' });
+    row.node = el('div', { class: 'xkey' }, [
+      el('div', { class: 'fields' }, [
+        el('label', { class: 'f' }, [el('span', { text: '名称' }), row.name, el('small', { text: '小写字母、数字、连字符' })]),
+        el('label', { class: 'f' }, [el('span', { text: '交易所' }), row.exchange]),
+        el('label', { class: 'f' }, [el('span', { text: '环境' }), row.environment]),
+        el('label', { class: 'f' }, [el('span', { text: 'API Key' }), row.apiKey]),
+        el('label', { class: 'f' }, [el('span', { text: 'Secret Key' }), row.secretKey]),
+        passphraseField,
+        el('div', { class: 'tail' }, [
+          el('label', {}, [row.readonly, '只读密钥（只用来检测币安现货下架，不能建下单账户）']),
+          id, remove])
+      ])
+    ]);
+    function sync() {
+      passphraseField.hidden = row.exchange.value !== 'okx';
+      var entry = rowEntry(row);
+      id.textContent = entry.name ? '固定 ID：' + exchangeID(entry) : '';
+      renderExchangeEmpty();
+    }
+    [row.name, row.exchange, row.environment].forEach(function (node) { node.addEventListener('input', sync); node.addEventListener('change', sync); });
+    remove.addEventListener('click', function () {
+      exchangeRows.splice(exchangeRows.indexOf(row), 1);
+      row.node.remove();
+      renderExchangeEmpty();
+    });
+    exchangeRows.push(row);
+    $('exchange-keys').append(row.node);
+    sync();
+    return row;
+  }
+  function renderExchangeEmpty() {
+    var existing = $('exchange-empty');
+    if (exchangeRows.length) { if (existing) existing.remove(); return; }
+    if (!existing) $('exchange-keys').append(el('p', { class: 'xkey-empty', id: 'exchange-empty', text: '还没有添加密钥。不需要下单、也不检测币安现货下架时，这一步可以直接跳过。' }));
+  }
+  function rowEntry(row) {
+    return {
+      name: row.name.value.trim(), exchange: row.exchange.value, environment: row.environment.value,
+      api_key: row.apiKey.value.trim(), secret_key: row.secretKey.value,
+      passphrase: row.exchange.value === 'okx' ? row.passphrase.value : '', readonly: row.readonly.checked
+    };
+  }
+  // 整行都空着的当作没填，其余原样提交，格式校验以服务端为准。
+  function exchangeEntries() {
+    return exchangeRows.map(rowEntry).filter(function (e) { return e.name || e.api_key || e.secret_key || e.passphrase; });
+  }
+  function checkExchangeKeys() {
+    var seen = {}, entries = exchangeEntries();
+    for (var i = 0; i < entries.length; i++) {
+      var e = entries[i], title = '第 ' + (i + 1) + ' 把密钥';
+      if (!/^[a-z0-9-]{1,40}$/.test(e.name)) return title + '的名称只能用小写字母、数字和连字符（最长 40 个字符）';
+      if (!e.api_key || !e.secret_key) return title + '要填写 API Key 和 Secret Key';
+      if (e.exchange === 'okx' && !e.passphrase) return title + '是 OKX 密钥，要填写 Passphrase';
+      if (seen[exchangeID(e)]) return title + '和前面的重复：同一交易所、环境下名称不能相同';
+      seen[exchangeID(e)] = true;
+    }
+    return '';
   }
   function renderReview() {
     var t = $('review-servers');
@@ -742,6 +853,12 @@ button.ghost.away { visibility: hidden; }
       el('tr', {}, [el('th', { text: '腾讯云' }), el('td', { text: state.account ? accountText(state.account) : '' })]),
       el('tr', {}, [el('th', { text: '管理员' }), el('td', { text: $('admin-username').value.trim() })]),
       el('tr', {}, [el('th', { text: '告警' }), $('notify-url').value.trim() ? el('td', { text: $('notify-type').selectedOptions[0].textContent }) : el('td', { class: 'muted', text: '暂不配置，稍后在管理台添加' })]));
+    if (exchangeVisible()) {
+      var entries = exchangeEntries();
+      a.append(el('tr', {}, [el('th', { text: '交易所密钥' }), entries.length
+        ? el('td', {}, entries.map(function (e) { return el('div', {}, [el('span', { class: 'mono', text: exchangeID(e) }), e.readonly ? '只读' : '']); }).concat([el('div', { class: 'muted', text: '部署完成后，在海外机上检测这些密钥' })]))
+        : el('td', { class: 'muted', text: '暂不录入，以后在管理台添加' })]));
+    }
   }
   function osName(report) {
     var names = { linux: 'Linux', darwin: 'macOS', windows: 'Windows' };
@@ -749,7 +866,7 @@ button.ghost.away { visibility: hidden; }
   }
 
   // ---------- 翻页 ----------
-  $('back').addEventListener('click', function () { if (state.step > 1) go(state.step - 1); });
+  $('back').addEventListener('click', function () { if (state.step > 1) go(neighbor(state.step, -1)); });
   $('next').addEventListener('click', function () {
     var button = $('next');
     showAlert('');
@@ -779,14 +896,20 @@ button.ghost.away { visibility: hidden; }
     }
     if (state.step === 4) {
       if (!$('admin-username').value.trim() || !$('admin-password').value) { showAlert('请填写管理员用户名和密码'); return; }
-      go(5);
+      go(neighbor(4, 1));
       return;
     }
-    if (state.step === 5) {
+    if (state.step === STEP_EXCHANGE) {
+      var invalid = checkExchangeKeys();
+      if (invalid) { showAlert(invalid); return; }
+      go(STEP_REVIEW);
+      return;
+    }
+    if (state.step === STEP_REVIEW) {
       button.disabled = true; button.textContent = '正在完成…';
       post('submit', gather()).then(function () {
         state.finished = true;
-        go(6);
+        go(STEP_DONE);
         $('footer').hidden = true; $('steps').hidden = true; $('timer').hidden = true; $('layout').classList.add('solo');
       }, function (err) { showAlert(err.message); button.textContent = '确认并完成'; }).finally(function () { button.disabled = false; });
     }
@@ -825,6 +948,10 @@ button.ghost.away { visibility: hidden; }
   setInterval(tick, 1000);
 
   renderServers();
+  $('add-exchange-key').addEventListener('click', function () { addExchangeKey().name.focus(); });
+  renderExchangeEmpty();
+  // 海外服务器开关决定交易所密钥这一步是否出现，步骤条要跟着变。
+  if (blocks.overseas && blocks.overseas.toggle) blocks.overseas.toggle.addEventListener('change', renderSteps);
   go(1);
 
   // ---------- 欢迎屏 ----------

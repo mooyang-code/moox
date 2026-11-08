@@ -44,13 +44,13 @@ func (e *tradeResetEnv) seedAccounts(t *testing.T) {
 	t.Helper()
 	require.NoError(t, e.db.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
-			SpaceID: "space-1", TradingAccountID: "paper-1", Name: "paper", Exchange: "BINANCE", MarketType: "SPOT",
+			SpaceID: "space-1", TradingAccountID: "paper-1", Name: "paper", Exchange: "BINANCE", Markets: []string{"SPOT"},
 			ExecutionMode: "PAPER", Environment: "PAPER", SettlementAsset: "USDT", Status: "ENABLED",
 		}); err != nil {
 			return err
 		}
 		return tx.CreateTradingAccount(store.TradingAccountRecord{
-			SpaceID: "space-1", TradingAccountID: "live-1", Name: "live", Exchange: "BINANCE", MarketType: "SPOT",
+			SpaceID: "space-1", TradingAccountID: "live-1", Name: "live", Exchange: "BINANCE", Markets: []string{"SPOT"},
 			ExecutionMode: "LIVE", Environment: "PRODUCTION", SettlementAsset: "USDT", Status: "ENABLED", CredentialSecretID: "secret-1",
 		})
 	}))
@@ -60,8 +60,8 @@ func (e *tradeResetEnv) setPosition(t *testing.T, account, qty string) {
 	t.Helper()
 	sqlDB, err := e.db.SQLDB()
 	require.NoError(t, err)
-	_, err = sqlDB.Exec(`INSERT OR REPLACE INTO t_trading_positions (c_space_id, c_trading_account_id, c_instrument_id, c_exchange_symbol, c_position_side, c_signed_quantity)
-		VALUES ('space-1', ?, 'BTC-USDT', 'BTC-USDT', 'NET', ?)`, account, qty)
+	_, err = sqlDB.Exec(`INSERT OR REPLACE INTO t_trading_positions (c_space_id, c_trading_account_id, c_market_type, c_instrument_id, c_exchange_symbol, c_position_side, c_signed_quantity)
+		VALUES ('space-1', ?, 'SPOT', 'BTC-USDT', 'BTC-USDT', 'NET', ?)`, account, qty)
 	require.NoError(t, err)
 }
 
@@ -189,16 +189,16 @@ func TestLiveSpotHoldingsOnlyCountsManagedAssetsAboveMinimum(t *testing.T) {
 	defer tradeStore.Close()
 	require.NoError(t, tradeStore.Transaction(ctx, func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
-			SpaceID: "space-1", TradingAccountID: "account-1", Name: "spot", Exchange: "BINANCE", MarketType: "SPOT",
+			SpaceID: "space-1", TradingAccountID: "account-1", Name: "spot", Exchange: "BINANCE", Markets: []string{"SPOT"},
 			ExecutionMode: "LIVE", Environment: "TESTNET", CredentialSecretID: "secret-1", SettlementAsset: "USDT", Status: "ENABLED",
 			Snapshot: store.TradingAccountSnapshot{Balances: []store.AssetBalance{
-				{Asset: "USDT", Total: "100"}, {Asset: "BNB", Total: "5"}, {Asset: "BTC", Total: "0.0001"}, {Asset: "ETH", Total: "2"},
+				{Wallet: "UNIFIED", Asset: "USDT", Total: "100"}, {Wallet: "UNIFIED", Asset: "BNB", Total: "5"}, {Wallet: "UNIFIED", Asset: "BTC", Total: "0.0001"}, {Wallet: "UNIFIED", Asset: "ETH", Total: "2"},
 			}},
 		}); err != nil {
 			return err
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
-			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical", ExecutionMode: "LIVE", MarketType: "SPOT",
+			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical", ExecutionMode: "LIVE",
 			SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "test",
 		}); err != nil {
 			return err

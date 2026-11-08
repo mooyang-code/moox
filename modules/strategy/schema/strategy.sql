@@ -16,13 +16,12 @@ CREATE TABLE IF NOT EXISTS t_strategy_def_versions (
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
--- 实例：定义 + 因子任务 + 可选组合账户；启用时固化解析结果。因子任务在创建时写定，不能修改；
--- 读取的 View 是该任务结果数据集的默认 View，由任务 ID 推导。实例不删除，只有启用和停止
+-- 实例：定义 + 因子任务（见 t_strategy_instance_tasks）+ 可选组合账户；启用时固化解析结果。因子任务在创建时写定，不能修改；
+-- 读取的 View 是任务结果数据集的默认 View，由任务 ID 推导。实例不删除，只有启用和停止
 CREATE TABLE IF NOT EXISTS t_strategy_instances (
     c_instance_id TEXT NOT NULL PRIMARY KEY,
     c_strategy_id TEXT NOT NULL,
     c_space_id TEXT NOT NULL,
-    c_factor_task_id TEXT NOT NULL,
     c_logical_account_id TEXT,
     c_enabled INTEGER NOT NULL DEFAULT 0,
     c_session_id TEXT,
@@ -39,15 +38,28 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_t_strategy_instances_account
 ON t_strategy_instances (c_space_id, c_logical_account_id)
 WHERE c_enabled = 1 AND c_logical_account_id IS NOT NULL;
 
--- 一个因子任务只能被一个实例独占
-CREATE UNIQUE INDEX IF NOT EXISTS ux_t_strategy_instances_factor_task ON t_strategy_instances (c_factor_task_id);
+-- 实例绑定的因子任务：每个市场（spot、swap、equity）一个，统一数据集上的任务登记为 multi（同时覆盖现货与永续）；一个因子任务只能被一个实例独占
+CREATE TABLE IF NOT EXISTS t_strategy_instance_tasks (
+    c_instance_id TEXT NOT NULL,
+    c_market TEXT NOT NULL,
+    c_factor_task_id TEXT NOT NULL,
+    PRIMARY KEY (c_instance_id, c_market),
+    CHECK (c_market IN ('spot', 'swap', 'equity', 'multi')),
+    UNIQUE (c_factor_task_id),
+    FOREIGN KEY (c_instance_id) REFERENCES t_strategy_instances (c_instance_id)
+);
 
--- 每次启用产生一个会话，固化当时的 DSL 版本与绑定解析
+-- 每次启用产生一个会话，固化当时的 DSL 版本与绑定解析。
+-- 策略池会话另有：c_members_json 是固化的成员（策略 ID、DSL 文本与哈希、各自的绑定解析），非池为空串；
+-- c_warm_state 是预热完成时的引擎状态，c_warmed_through 是预热推进到的最后一期（bar_end，毫秒），NULL 表示预热还没完成
 CREATE TABLE IF NOT EXISTS t_strategy_sessions (
     c_session_id TEXT NOT NULL PRIMARY KEY,
     c_instance_id TEXT NOT NULL,
     c_dsl_hash TEXT NOT NULL,
     c_resolved_json TEXT NOT NULL,
+    c_members_json TEXT NOT NULL DEFAULT '',
+    c_warm_state TEXT NOT NULL DEFAULT '',
+    c_warmed_through INTEGER,
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_closed_at DATETIME,
     FOREIGN KEY (c_instance_id) REFERENCES t_strategy_instances (c_instance_id),
@@ -98,11 +110,29 @@ CREATE INDEX IF NOT EXISTS idx_t_strategy_results_params_pending
 ON t_strategy_results (c_instance_id, c_session_id, c_bar_end_time)
 WHERE c_next_params_json <> '' AND c_params_delivered_at IS NULL AND c_params_error = '';
 
--- 解释明细：各规则 E(r) 中每个标的的最终阶段、分数、名次、权重与原因；c_ctime 与所属结果相同，按天数清理
+-- 汇合求值用的到达记录：绑定两个因子任务的实例要等两个 View 的就绪事件都到齐才求值，每个 View 的原始 ViewDataReady 事件
+-- 按字节保存（就绪判断要用整条事件）；(实例, 会话, bar_end, View) 唯一，重复投递幂等。c_ctime 是到达时间，按天数清理
+CREATE TABLE IF NOT EXISTS t_strategy_ready_events (
+    c_instance_id TEXT NOT NULL,
+    c_session_id TEXT NOT NULL,
+    c_view_id TEXT NOT NULL,
+    c_bar_end_time INTEGER NOT NULL,
+    c_event_id TEXT NOT NULL,
+    c_event_bytes BLOB NOT NULL,
+    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (c_instance_id, c_session_id, c_bar_end_time, c_view_id),
+    FOREIGN KEY (c_session_id) REFERENCES t_strategy_sessions (c_session_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_t_strategy_ready_events_ctime ON t_strategy_ready_events (c_ctime);
+
+-- 解释明细：各规则 E(r) 中每个标的的最终阶段、分数、名次、权重与原因；c_market 是入选的权重进入的市场，其余是所选行所在的市场；
+-- c_ctime 与所属结果相同，按天数清理
 CREATE TABLE IF NOT EXISTS t_strategy_result_items (
     c_result_id TEXT NOT NULL,
     c_rule_id TEXT NOT NULL,
     c_instrument_id TEXT NOT NULL,
+    c_market TEXT NOT NULL DEFAULT '',
     c_stage TEXT NOT NULL,
     c_score REAL,
     c_rank INTEGER,
@@ -115,7 +145,9 @@ CREATE TABLE IF NOT EXISTS t_strategy_result_items (
 
 CREATE INDEX IF NOT EXISTS idx_t_strategy_result_items_ctime ON t_strategy_result_items (c_ctime);
 
--- 回放任务：基于因子任务结果 View 的研究回放（c_view_id 由 c_factor_task_id 推导），按天数与每个空间的个数清理；c_view_generation 是提交时校验区间所用的活动索引代次
+-- 回放任务：基于因子任务结果 View 的研究回放，按天数与每个空间的个数清理；c_tasks_json 是市场（spot、swap、equity）→
+-- {factor_task_id, view_id, view_generation}：结果 View 由任务推导，view_generation 是提交时校验区间所用的活动索引代次；
+-- 费率分两列：c_spot_fee_bps 用于现货与股票，c_swap_fee_bps 用于永续
 CREATE TABLE IF NOT EXISTS t_strategy_replays (
     c_replay_id TEXT NOT NULL PRIMARY KEY,
     c_strategy_id TEXT,
@@ -123,14 +155,13 @@ CREATE TABLE IF NOT EXISTS t_strategy_replays (
     c_session_id TEXT,
     c_dsl_yaml TEXT NOT NULL,
     c_dsl_hash TEXT NOT NULL,
-    c_view_generation TEXT NOT NULL,
     c_calendar TEXT NOT NULL,
     c_space_id TEXT NOT NULL,
-    c_factor_task_id TEXT NOT NULL,
-    c_view_id TEXT NOT NULL,
+    c_tasks_json TEXT NOT NULL,
     c_start_time INTEGER NOT NULL,
     c_end_time INTEGER NOT NULL,
-    c_fee_bps REAL NOT NULL DEFAULT 0,
+    c_spot_fee_bps REAL NOT NULL DEFAULT 0,
+    c_swap_fee_bps REAL NOT NULL DEFAULT 0,
     c_factors_json TEXT NOT NULL DEFAULT '{}',
     c_status TEXT NOT NULL,
     c_progress_time INTEGER,
@@ -139,12 +170,14 @@ CREATE TABLE IF NOT EXISTS t_strategy_replays (
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK (c_status IN ('pending', 'running', 'done', 'failed', 'cancelled')),
-    CHECK (c_fee_bps >= 0 AND c_fee_bps <= 1000)
+    CHECK (c_spot_fee_bps >= 0 AND c_spot_fee_bps <= 1000),
+    CHECK (c_swap_fee_bps >= 0 AND c_swap_fee_bps <= 1000)
 );
 
 CREATE INDEX IF NOT EXISTS idx_t_strategy_replays_space ON t_strategy_replays (c_space_id, c_ctime);
 
--- 回放每期一行：目标、理论持仓账本、摘要与曲线字段，随所属回放清理
+-- 回放每期一行：目标、理论持仓账本、摘要与曲线字段，随所属回放清理；c_spot_value 是期末现货类持仓市值之和，
+-- c_swap_value 是永续持仓的净名义价值（多头为正、空头为负）
 CREATE TABLE IF NOT EXISTS t_strategy_replay_bars (
     c_replay_id TEXT NOT NULL,
     c_bar_end_time INTEGER NOT NULL,
@@ -156,6 +189,8 @@ CREATE TABLE IF NOT EXISTS t_strategy_replay_bars (
     c_equity REAL,
     c_turnover REAL,
     c_fee REAL,
+    c_spot_value REAL NOT NULL DEFAULT 0,
+    c_swap_value REAL NOT NULL DEFAULT 0,
     c_holdings INTEGER NOT NULL DEFAULT 0,
     c_frozen INTEGER NOT NULL DEFAULT 0,
     c_skip_reason TEXT NOT NULL DEFAULT '',
@@ -165,15 +200,17 @@ CREATE TABLE IF NOT EXISTS t_strategy_replay_bars (
     FOREIGN KEY (c_replay_id) REFERENCES t_strategy_replays (c_replay_id) ON DELETE CASCADE
 );
 
--- 年龄探针通过的标的：上市时间只会越来越久，通过一次后跨周期、跨重启复用；c_index_id 是 View 的活动索引，索引重建后旧行作废
+-- 年龄探针通过的标的：上市时间只会越来越久，通过一次后跨周期、跨重启复用；c_index_id 是 View 的活动索引，索引重建后旧行作废；
+-- c_market 是探针判断的市场（统一数据集的一个 View 里现货、永续各有各的历史，老的现货币新上永续时不能用现货的历史通过永续的年龄检查）
 CREATE TABLE IF NOT EXISTS t_strategy_age_passed (
     c_space_id TEXT NOT NULL,
     c_view_id TEXT NOT NULL,
     c_index_id TEXT NOT NULL,
     c_min_age_bars INTEGER NOT NULL,
+    c_market TEXT NOT NULL,
     c_subject_id TEXT NOT NULL,
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (c_space_id, c_view_id, c_index_id, c_min_age_bars, c_subject_id)
+    PRIMARY KEY (c_space_id, c_view_id, c_index_id, c_min_age_bars, c_market, c_subject_id)
 );
 
 -- 实例的外显设置：只存隐藏的内容（默认全部展示）。只影响控制台展示与默认导出，不影响 View 的列和策略能读到的数据，

@@ -91,32 +91,32 @@ func (f *Fallback) checkTask(ctx context.Context, collection domain.CollectionTa
 	if err != nil {
 		return 0, err
 	}
-	subjects, err := SourceSubjects(ctx, f.Source, task)
-	if err != nil || len(subjects) == 0 {
+	members, err := SourceMembers(ctx, f.Source, task)
+	if err != nil || members.Count() == 0 {
 		return 0, err
 	}
-	if err := f.Engine.EnsureSnapshot(ctx, task, subjects); err != nil {
+	if err := f.Engine.EnsureSnapshot(ctx, task, members); err != nil {
 		log.WarnContextf(ctx, "[Collector] resample snapshot registration failed task=%s: %v", task.Spec.TaskID, err)
 	}
 	buckets, err := task.Clock.ClosedBefore(now.Add(-cfg.Grace), cfg.LookbackBars)
 	if err != nil {
 		return 0, err
 	}
-	missing, err := f.missing(ctx, task, buckets, subjects)
+	missing, err := f.missing(ctx, task, buckets, members)
 	if err != nil {
 		return 0, err
 	}
 	used := 0
 	for _, bucket := range buckets {
 		list := missing[bucket.Key.Unix()]
-		if len(list) == 0 {
+		if list.Count() == 0 {
 			continue
 		}
 		if used >= budget {
 			break
 		}
 		used++
-		result, err := f.Engine.RunBucket(ctx, task, bucket, list, "")
+		result, err := f.Engine.RunBucketMembers(ctx, task, bucket, list, "")
 		if err != nil {
 			return used, err
 		}
@@ -127,16 +127,17 @@ func (f *Fallback) checkTask(ctx context.Context, collection domain.CollectionTa
 	return used, nil
 }
 
-// missing 读目标数据集，返回每个桶（以键的 Unix 秒索引）里还没有行的标的。
-func (f *Fallback) missing(ctx context.Context, task *Task, buckets []barclock.Bucket, subjects []string) (map[int64][]string, error) {
-	out := map[int64][]string{}
+// missing 读目标数据集，返回每个桶（以键的 Unix 秒索引）里还没有行的序列，按源序列分组。
+func (f *Fallback) missing(ctx context.Context, task *Task, buckets []barclock.Bucket, members Members) (map[int64]Members, error) {
+	out := map[int64]Members{}
 	if len(buckets) == 0 {
 		return out, nil
 	}
-	keys := make([]*storagepb.RowKey, 0, len(buckets)*len(subjects))
+	series := members.Series()
+	keys := make([]*storagepb.RowKey, 0, len(buckets)*len(series))
 	for _, bucket := range buckets {
-		for _, subject := range subjects {
-			keys = append(keys, rowKey(task.Spec.SpaceID, task.Spec.TargetDatasetID, subject, task.Spec.TargetFrequency.Storage, bucket.Key, task.Spec.SourceSeriesTag))
+		for _, item := range series {
+			keys = append(keys, rowKey(task.Spec.SpaceID, task.Spec.TargetDatasetID, item.SubjectID, task.Spec.TargetFrequency.Storage, bucket.Key, item.SeriesTag))
 		}
 	}
 	present := map[string]struct{}{}
@@ -150,17 +151,20 @@ func (f *Fallback) missing(ctx context.Context, task *Task, buckets []barclock.B
 			return nil, fmt.Errorf("read target rows: %w", err)
 		}
 		for _, row := range rows {
-			if series := row.GetKey().GetTimeSeries(); series != nil {
-				if at, parseErr := time.Parse(time.RFC3339Nano, series.GetDataTime()); parseErr == nil {
-					present[fmt.Sprintf("%s\x00%d", series.GetSubjectId(), at.Unix())] = struct{}{}
+			if key := row.GetKey().GetTimeSeries(); key != nil {
+				if at, parseErr := time.Parse(time.RFC3339Nano, key.GetDataTime()); parseErr == nil {
+					present[fmt.Sprintf("%s\x00%s\x00%d", key.GetSubjectId(), key.GetSeriesTag(), at.Unix())] = struct{}{}
 				}
 			}
 		}
 	}
 	for _, bucket := range buckets {
-		for _, subject := range subjects {
-			if _, ok := present[fmt.Sprintf("%s\x00%d", subject, bucket.Key.Unix())]; !ok {
-				out[bucket.Key.Unix()] = append(out[bucket.Key.Unix()], subject)
+		for _, item := range series {
+			if _, ok := present[fmt.Sprintf("%s\x00%s\x00%d", item.SubjectID, item.SeriesTag, bucket.Key.Unix())]; !ok {
+				if out[bucket.Key.Unix()] == nil {
+					out[bucket.Key.Unix()] = Members{}
+				}
+				out[bucket.Key.Unix()][item.SeriesTag] = append(out[bucket.Key.Unix()][item.SeriesTag], item.SubjectID)
 			}
 		}
 	}

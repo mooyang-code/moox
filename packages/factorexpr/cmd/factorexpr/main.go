@@ -407,8 +407,8 @@ func grid(rows []csvRow, freq time.Duration) ([]time.Time, error) {
 	return times, nil
 }
 
-// gapMask 复现流水线的空洞检查（modules/factor/internal/pipeline/gapcheck.go）：因子在某标的某时刻的回看窗口
-// （按因子的回看，从该标的第一根 K 线起算，之前的头部不算空洞）里，该标的任一序列缺了 K 线，这个因子在该标的该时刻的全部输出都屏蔽。
+// gapMask 是这个离线工具自己的空洞屏蔽：因子在某标的某时刻的回看窗口（按因子的回看，从该标的第一根 K 线起算，之前的头部不算空洞）里，
+// 该标的任一序列缺了 K 线，这个因子在该标的该时刻的全部输出都屏蔽。生产不这样做：因子引擎先按填充规则补齐缺的 K 线再计算，不屏蔽。
 // 返回 masked[因子][标的] 为需要屏蔽的网格下标集合。
 func gapMask(panel *exec.Panel, lookbacks map[string]int, pad, length int) map[string]map[string]map[int]bool {
 	series := panel.Series()

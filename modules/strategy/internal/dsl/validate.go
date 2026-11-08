@@ -58,6 +58,17 @@ func Validate(s *Strategy) error {
 		}
 		s.Bar = string(bar)
 	}
+	if s.MarketDeclared {
+		if err := validateMarketCombination(&s.Market); err != nil {
+			return err
+		}
+	}
+	if s.Pool != nil {
+		if err := validatePool(s); err != nil {
+			return err
+		}
+		return validatePortfolio(&s.Portfolio)
+	}
 	if s.Universe.MinAgeBars < 0 {
 		return errors.New("universe.min_age_bars 不能为负数")
 	}
@@ -99,7 +110,14 @@ func Validate(s *Strategy) error {
 	if totalBudget.Cmp(s.Portfolio.Leverage) > 0 {
 		return fmt.Errorf("各规则 weight.total 之和 %s 超过 portfolio.leverage %s", totalBudget.String(), s.Portfolio.Leverage.String())
 	}
-	return validateTrancheStrategy(s)
+	if err := validateTrancheStrategy(s); err != nil {
+		return err
+	}
+	// 显式写了 market 时，保存就按这个模式校验做空、杠杆、tranche 与 factor_params，不必等到启用；没写时模式取决于绑定的任务，启用时再校验。
+	if s.MarketDeclared {
+		return ValidateMode(*s, s.Market)
+	}
+	return nil
 }
 
 // includeOnlyUniverse 返回只由 include 构成的白名单去掉 exclude 后的标的数。

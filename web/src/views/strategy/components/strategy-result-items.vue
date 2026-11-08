@@ -20,11 +20,15 @@
         <span>预算 {{ percent(row.summary.budget) }} · 已分配 {{ percent(row.summary.allocated) }}</span>
       </div>
     </div>
-    <a-space v-if="summary.gross || summary.cash" class="totals" wrap>
+    <a-space v-if="summary.gross || summary.cash || summary.spotNet || summary.swapNet" class="totals" wrap>
       <a-tag>基础集合 {{ summary.universe }}</a-tag>
       <a-tag>gross {{ percent(summary.gross) }}</a-tag>
       <a-tag>net {{ percent(summary.net) }}</a-tag>
-      <a-tag color="arcoblue">现金 {{ percent(summary.cash) }}</a-tag>
+      <template v-if="summary.spotNet || summary.swapNet">
+        <a-tag>现货净 {{ percent(summary.spotNet) }}</a-tag>
+        <a-tag>永续净 {{ percent(summary.swapNet) }}</a-tag>
+      </template>
+      <a-tag v-else color="arcoblue">现金 {{ percent(summary.cash) }}</a-tag>
       <a-tag>换手 {{ percent(summary.turnover) }}</a-tag>
     </a-space>
     <a-alert v-for="note in summary.notes" :key="note" type="info" class="note">{{ note }}</a-alert>
@@ -37,10 +41,13 @@
       >
       <a-input v-model="keyword" allow-clear placeholder="标的" size="small" />
     </div>
-    <a-table :row-key="rowKey" size="small" :data="filtered" :pagination="{ pageSize: 50 }" :scroll="{ x: 760 }">
+    <a-table :row-key="rowKey" size="small" :data="filtered" :pagination="{ pageSize: 50 }" :scroll="{ x: 840 }">
       <template #columns>
         <a-table-column title="规则" data-index="rule_id" :width="150" :ellipsis="true" :tooltip="true" />
         <a-table-column title="标的" data-index="instrument_id" :width="170" :ellipsis="true" :tooltip="true" />
+        <a-table-column title="市场" :width="80"
+          ><template #cell="{ record }">{{ marketLabel(record.market) }}</template></a-table-column
+        >
         <a-table-column title="阶段" :width="100"
           ><template #cell="{ record }"
             ><a-tag size="small" :color="stageColor(record.stage)">{{ stageLabel(record.stage) }}</a-tag></template
@@ -66,6 +73,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import type { StrategyResult, StrategyResultItem } from "@/api/strategy-types";
+import { marketLabel } from "@/views/strategy/market-mode";
 import {
   itemReasonLabel,
   parseSummary,

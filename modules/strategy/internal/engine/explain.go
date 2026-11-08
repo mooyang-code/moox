@@ -22,7 +22,8 @@ const (
 	StageWeighted = "weighted"
 	// StageDropped：曾被选中或持有但被剔除（filter_after、exit、score 无效）。
 	StageDropped = "dropped"
-	// StageHeld：因 K 线空洞缺数的已持仓标的，持仓数量保持不动（不求值、不调仓），原因 gap_hold。
+	// StageHeld：因只缺上一根、所在市场本期不可用而缺数的已持仓标的，持仓数量保持不动（不求值、不调仓），
+	// 原因分别是 prev_hold、market_hold。
 	StageHeld = "held"
 )
 
@@ -30,11 +31,13 @@ const (
 type Item struct {
 	RuleID       string `json:"rule_id"`
 	InstrumentID string `json:"instrument_id"`
-	Stage        string `json:"stage"`
-	Score        string `json:"score,omitempty"`
-	Rank         int    `json:"rank,omitempty"`
-	Weight       string `json:"weight,omitempty"`
-	Reason       string `json:"reason,omitempty"`
+	// Market 是标的所在的市场：入选的权重取它进入的市场，其余取所选行所在的市场；没有行的冻结标的取上期持仓所在的市场。
+	Market string `json:"market,omitempty"`
+	Stage  string `json:"stage"`
+	Score  string `json:"score,omitempty"`
+	Rank   int    `json:"rank,omitempty"`
+	Weight string `json:"weight,omitempty"`
+	Reason string `json:"reason,omitempty"`
 }
 
 // sortItems 按规则声明顺序、标的 id 排序，保证解释明细可重复。

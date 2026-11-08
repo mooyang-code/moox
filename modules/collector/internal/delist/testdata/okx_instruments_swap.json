@@ -1,0 +1,62 @@
+{
+  "code": "0",
+  "msg": "",
+  "data": [
+    {
+      "alias": "",
+      "baseCcy": "",
+      "category": "1",
+      "ctMult": "",
+      "ctType": "linear",
+      "ctVal": "0.01",
+      "ctValCcy": "BTC",
+      "expTime": "",
+      "instFamily": "BTC-USDT",
+      "instId": "BTC-USDT-SWAP",
+      "instType": "SWAP",
+      "lever": "100",
+      "listTime": "1611916828000",
+      "lotSz": "1",
+      "maxIcebergSz": "100000000.0000000000000000",
+      "maxLmtAmt": "20000000",
+      "maxLmtSz": "100000000",
+      "maxMktAmt": "",
+      "maxMktSz": "85000",
+      "maxStopSz": "85000",
+      "maxTriggerSz": "100000000.0000000000000000",
+      "maxTwapSz": "100000000.0000000000000000",
+      "minSz": "1",
+      "quoteCcy": "",
+      "settleCcy": "USDT",
+      "state": "live",
+      "tickSz": "0.1",
+      "uly": "BTC-USDT"
+    },
+    {
+      "ctType": "linear",
+      "expTime": "1793865600000",
+      "instFamily": "FOO-USDT",
+      "instId": "FOO-USDT-SWAP",
+      "instType": "SWAP",
+      "settleCcy": "USDT",
+      "state": "live",
+      "uly": "FOO-USDT"
+    },
+    {
+      "ctType": "inverse",
+      "expTime": "1793865600000",
+      "instId": "BAR-USD-SWAP",
+      "instType": "SWAP",
+      "settleCcy": "BAR",
+      "state": "live"
+    },
+    {
+      "ctType": "linear",
+      "expTime": "1500000000000",
+      "instId": "OLD-USDT-SWAP",
+      "instType": "SWAP",
+      "settleCcy": "USDT",
+      "state": "expired"
+    }
+  ]
+}

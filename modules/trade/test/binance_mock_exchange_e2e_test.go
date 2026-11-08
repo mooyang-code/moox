@@ -13,7 +13,6 @@ import (
 
 	targetapp "github.com/mooyang-code/moox/modules/trade/internal/application/target"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/eventconsumer"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/binance"
@@ -30,7 +29,7 @@ func TestBinanceHTTPMockTargetToFilledOrderConvergesEndToEnd(t *testing.T) {
 	adapter := binance.New(exchange.AccountConfig{
 		TradingAccountID: testAccount,
 		Exchange:         exchange.ExchangeBinance,
-		MarketType:       exchange.MarketTypeSpot,
+		Markets:          []exchange.MarketType{exchange.MarketTypeSpot},
 		ExecutionMode:    exchange.ExecutionModeLive,
 		Environment:      exchange.AccountEnvironmentTestnet,
 		SettlementAsset:  "USDT",
@@ -57,15 +56,17 @@ func TestBinanceHTTPMockTargetToFilledOrderConvergesEndToEnd(t *testing.T) {
 	)
 	require.Equal(t, jetstream.ACK, handled.Decision, handled.Err)
 
+	// 这里只卖 0.01（约 0.1%），低于默认最小调仓比例。
+	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.SetLogicalAccountOrderSettings(testSpace, testLogicalAccount,
+			`{"order_mode":"MARKET","min_notional_spot":"0","min_notional_swap":"0","max_child_notional":"1000000","rebalance_threshold_ratio":"0.0001"}`)
+	}))
 	executor := &targetapp.Executor{
 		Store: f.store, Orders: f.orders,
 		Prices: targetapp.ExchangePriceSource{
 			Adapters: adapterSource{adapter: adapter},
 		},
-		Now:              func() time.Time { return now },
-		MaxChildNotional: shared.MustDecimal("1000000"),
-		// 这里只卖 0.01（约 0.1%），低于默认最小调仓比例。
-		MinRebalanceRatio: shared.MustDecimal("0.0001"),
+		Now: func() time.Time { return now },
 	}
 	first, err := executor.Converge(
 		context.Background(),

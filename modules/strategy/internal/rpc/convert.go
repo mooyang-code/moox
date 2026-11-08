@@ -22,7 +22,7 @@ func definitionProto(value store.Definition) *strategypb.Strategy {
 
 func instanceProto(value store.Instance) *strategypb.StrategyInstance {
 	return &strategypb.StrategyInstance{
-		InstanceId: value.InstanceID, StrategyId: value.StrategyID, SpaceId: value.SpaceID, FactorTaskId: value.FactorTaskID,
+		InstanceId: value.InstanceID, StrategyId: value.StrategyID, SpaceId: value.SpaceID, FactorTasks: value.FactorTasks,
 		LogicalAccountId: dereference(value.LogicalAccountID), Enabled: value.Enabled, SessionId: dereference(value.SessionID),
 		ResolvedJson: string(value.ResolvedJSON), Health: value.Health, CreatedAt: formatTime(value.CreatedAt), UpdatedAt: formatTime(value.UpdatedAt),
 	}
@@ -53,7 +53,7 @@ func targetProtos(raw json.RawMessage) []*strategypb.InstrumentTarget {
 	}
 	out := make([]*strategypb.InstrumentTarget, 0, len(targets))
 	for _, target := range targets {
-		out = append(out, &strategypb.InstrumentTarget{InstrumentId: target.InstrumentID, TargetWeight: target.TargetWeight})
+		out = append(out, &strategypb.InstrumentTarget{InstrumentId: target.InstrumentID, TargetWeight: target.TargetWeight, Market: target.Market})
 	}
 	return out
 }
@@ -61,7 +61,7 @@ func targetProtos(raw json.RawMessage) []*strategypb.InstrumentTarget {
 func itemProtos(items []store.ResultItem) []*strategypb.StrategyResultItem {
 	out := make([]*strategypb.StrategyResultItem, 0, len(items))
 	for _, item := range items {
-		row := &strategypb.StrategyResultItem{RuleId: item.RuleID, InstrumentId: item.InstrumentID, Stage: item.Stage, Reason: item.Reason, Weight: dereference(item.Weight)}
+		row := &strategypb.StrategyResultItem{RuleId: item.RuleID, InstrumentId: item.InstrumentID, Market: item.Market, Stage: item.Stage, Reason: item.Reason, Weight: dereference(item.Weight)}
 		if item.Score != nil {
 			row.Score = strconv.FormatFloat(*item.Score, 'g', -1, 64)
 		}
@@ -75,10 +75,16 @@ func itemProtos(items []store.ResultItem) []*strategypb.StrategyResultItem {
 
 func replayProto(value store.Replay) *strategypb.Replay {
 	replay := &strategypb.Replay{
-		ReplayId: value.ReplayID, StrategyId: dereference(value.StrategyID), DslYaml: value.DSLYaml, SpaceId: value.SpaceID, FactorTaskId: value.FactorTaskID, ViewId: value.ViewID,
-		StartTime: formatTime(value.StartTime), EndTime: formatTime(value.EndTime), FeeBps: value.FeeBps, Status: value.Status,
+		ReplayId: value.ReplayID, StrategyId: dereference(value.StrategyID), DslYaml: value.DSLYaml, SpaceId: value.SpaceID,
+		StartTime: formatTime(value.StartTime), EndTime: formatTime(value.EndTime), SpotFeeBps: value.SpotFeeBps, SwapFeeBps: value.SwapFeeBps, Status: value.Status,
 		MetricsJson: string(value.MetricsJSON), Error: value.Error, CreatedAt: formatTime(value.CreatedAt), UpdatedAt: formatTime(value.UpdatedAt),
 		DslHash: value.DSLHash, InstanceId: dereference(value.InstanceID), SessionId: dereference(value.SessionID), Calendar: value.Calendar,
+	}
+	if len(value.Tasks) > 0 {
+		replay.Tasks = make(map[string]*strategypb.ReplayTask, len(value.Tasks))
+		for market, task := range value.Tasks {
+			replay.Tasks[market] = &strategypb.ReplayTask{FactorTaskId: task.FactorTaskID, ViewId: task.ViewID}
+		}
 	}
 	if value.ProgressTime != nil {
 		replay.ProgressTime = formatTime(*value.ProgressTime)
@@ -89,7 +95,7 @@ func replayProto(value store.Replay) *strategypb.Replay {
 func replayBarProto(value store.ReplayBar) *strategypb.ReplayBar {
 	return &strategypb.ReplayBar{
 		BarEndTime: formatTime(value.BarEndTime), Status: value.Status, Targets: targetProtos(value.TargetsJSON), PositionsJson: string(value.PositionsJSON), SummaryJson: string(value.SummaryJSON),
-		BarReturn: value.Return, Equity: value.Equity, Turnover: value.Turnover, Fee: value.Fee,
+		BarReturn: value.Return, Equity: value.Equity, Turnover: value.Turnover, Fee: value.Fee, SpotValue: value.SpotValue, SwapValue: value.SwapValue,
 		Holdings: int32(value.Holdings), Frozen: int32(value.Frozen), SkipReason: value.SkipReason, Unfilled: int32(value.Unfilled), Liquidated: int32(value.Liquidated),
 	}
 }

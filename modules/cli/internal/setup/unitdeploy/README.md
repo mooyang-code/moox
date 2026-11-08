@@ -61,7 +61,7 @@ Linux 场景还在运行中的控制主机验证真实主机部署、按角色�
 PID 保持、暂停保留、缺失进程修复、激活完成窗口接管及回滚后新建候选。其他两台主机仍
 只参与拓扑；这不是三主机实际安装验收。
 
-`setup deploy-unit --host HOST --profile eventbus|access|egress-proxy|trade|collector-stream|storage|factor-engine|archive-worker` 使用同一持久
+`setup deploy-unit --host HOST --profile eventbus|access|egress-proxy|trade|collector-stream|callback-dispatcher|storage|factor-engine|archive-worker` 使用同一持久
 状态与操作员身份，只选择该主机在对应软件包内实际部署的组件。`factor-engine`、`archive-worker` 是外部程序：软件包随 release 交付，
 经 SSH 以 systemd 用户服务安装并核对 linger，主机或部署已停用时只安装文件、不启动。出口配置和 Storage
 策略由可信配置快照产生，配置字节及私有环境摘要绑定原始操作；重试拒绝变更后重新接管。

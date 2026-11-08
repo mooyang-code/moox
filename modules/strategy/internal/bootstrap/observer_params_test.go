@@ -12,7 +12,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
-const tunedResolvedJSON = `{"completion_kind":"factor_period.computed","view_id":"view_factor_a","factor_task_id":"ftask_a","dataset_id":"ds","bar":"1h","calendar":"crypto_24x7","spot":true,"columns":{},"view_columns":["close"],"factor_params":{"f__var":[{"name":"window","type":"int","min":5,"max":60,"default":20}]}}`
+const tunedResolvedJSON = `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"view_id":"view_factor_a","factor_task_id":"ftask_a","dataset_id":"ds"}},"bar":"1h","calendar":"crypto_24x7","columns":{},"view_columns":["close"],"factor_params":{"f__var":[{"name":"window","type":"int","min":5,"max":60,"default":20}]}}`
 
 // commitParams 给实例的当前会话提交第 bar 期的结果，附上下一期参数；delivered 为真时同时记为已送达。
 func commitParams(t *testing.T, repo *store.Store, instanceID string, bar int, delivered bool) {

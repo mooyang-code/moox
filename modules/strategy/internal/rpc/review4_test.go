@@ -55,7 +55,7 @@ func TestRebindFollowsConcurrentRebind(t *testing.T) {
 			case <-time.After(100 * time.Millisecond):
 			}
 			session := "session-enabling"
-			if err := h.service.Store.OpenSession(h.ctx, store.Session{SessionID: session, InstanceID: "i1", DSLHash: dsl.Hash([]byte(third)), ResolvedJSON: `{"view_id":"view_factor_i1","factor_task_id":"ftask_i1"}`, CreatedAt: h.now}, third); err != nil {
+			if err := h.service.Store.OpenSession(h.ctx, store.Session{SessionID: session, InstanceID: "i1", DSLHash: dsl.Hash([]byte(third)), ResolvedJSON: `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"view_id":"view_factor_i1","factor_task_id":"ftask_i1"}}}`, CreatedAt: h.now}, third); err != nil {
 				t.Fatal(err)
 			}
 			if err := h.service.Store.SetInstanceEnabled(h.ctx, "i1", false, &session, nil, h.now); err != nil {
@@ -65,7 +65,7 @@ func TestRebindFollowsConcurrentRebind(t *testing.T) {
 			got := <-done
 			requireFail(t, got.code, got.msg, "")
 			after, err := h.service.Store.GetInstance(h.ctx, "i1")
-			if err != nil || after.StrategyID != "s3" || after.FactorTaskID != "ftask_i1" || after.SessionID == nil || *after.SessionID != session {
+			if err != nil || after.StrategyID != "s3" || after.FactorTasks["spot"] != "ftask_i1" || after.SessionID == nil || *after.SessionID != session {
 				t.Fatalf("启用中的实例不应被改绑：%+v err=%v", after, err)
 			}
 		})
@@ -102,7 +102,7 @@ func TestReconcileDisabledSkipsSessionChangedSinceSnapshot(t *testing.T) {
 			t.Error(err)
 		}
 		_ = h.service.Store.CloseSession(h.ctx, staleSession, h.now)
-		if err := h.service.Store.OpenSession(h.ctx, store.Session{SessionID: replacement, InstanceID: "i1", DSLHash: dsl.Hash([]byte(demoDSL)), ResolvedJSON: `{"view_id":"view_factor_i1","factor_task_id":"ftask_i1"}`, CreatedAt: h.now}, demoDSL); err != nil {
+		if err := h.service.Store.OpenSession(h.ctx, store.Session{SessionID: replacement, InstanceID: "i1", DSLHash: dsl.Hash([]byte(demoDSL)), ResolvedJSON: `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"view_id":"view_factor_i1","factor_task_id":"ftask_i1"}}}`, CreatedAt: h.now}, demoDSL); err != nil {
 			t.Error(err)
 		}
 		if err := h.service.Store.SetInstanceEnabled(h.ctx, "i1", false, &replacement, nil, h.now); err != nil {
@@ -186,10 +186,10 @@ func TestStartReplayRecordsHashAndIndex(t *testing.T) {
 	h := newHarness(t)
 	h.createStrategy("s1", demoDSL)
 	h.resolver.view.ActiveIndexID, h.resolver.view.Generation = "idx_a", "idx_a@b7"
-	started, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTaskId: "ftask_a", StartTime: "2026-09-02T00:00:00Z", EndTime: "2026-09-03T00:00:00Z"})
+	started, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_a"}, StartTime: "2026-09-02T00:00:00Z", EndTime: "2026-09-03T00:00:00Z"})
 	requireOK(t, int32(started.GetRetInfo().GetCode()), started.GetRetInfo().GetMsg())
 	stored, err := h.service.Store.GetReplay(h.ctx, started.GetReplay().GetReplayId())
-	if err != nil || stored.DSLHash != dsl.Hash([]byte(demoDSL)) || stored.ViewGeneration != "idx_a@b7" {
+	if err != nil || stored.DSLHash != dsl.Hash([]byte(demoDSL)) || stored.Tasks["spot"].ViewGeneration != "idx_a@b7" {
 		t.Fatalf("回放应记录版本哈希与活动索引：%+v err=%v", stored, err)
 	}
 	if started.GetReplay().GetDslHash() != stored.DSLHash {

@@ -13,7 +13,6 @@ func TestNewLogicalAccountStartsPaused(t *testing.T) {
 		"logical-1",
 		"main",
 		exchange.ExecutionModePaper,
-		exchange.MarketTypeSpot,
 		"USDT",
 		"",
 	)
@@ -25,7 +24,7 @@ func TestNewLogicalAccountStartsPaused(t *testing.T) {
 }
 
 func TestManualAccountRejectsStrategyOwnershipAndAutomation(t *testing.T) {
-	a, err := New("space", "logical", "manual", exchange.ExecutionModePaper, exchange.MarketTypeSpot, "USDT", ControlManual)
+	a, err := New("space", "logical", "manual", exchange.ExecutionModePaper, "USDT", ControlManual)
 	require.NoError(t, err)
 	require.Equal(t, ControlManual, a.ControlMode)
 	require.NoError(t, a.Validate())
@@ -36,7 +35,7 @@ func TestManualAccountRejectsStrategyOwnershipAndAutomation(t *testing.T) {
 }
 
 func TestNewRejectsUnknownControlMode(t *testing.T) {
-	_, err := New("space", "logical", "name", exchange.ExecutionModePaper, exchange.MarketTypeSpot, "USDT", "unknown")
+	_, err := New("space", "logical", "name", exchange.ExecutionModePaper, "USDT", "unknown")
 	require.Error(t, err)
 }
 
@@ -44,8 +43,8 @@ func TestLogicalAccountAutomationStateAndReasonMustAgree(t *testing.T) {
 	valid := Account{
 		ControlMode: ControlStrategy,
 		SpaceID:     "space-1", ID: "logical-1", Name: "main",
-		ExecutionMode: exchange.ExecutionModePaper,
-		MarketType:    exchange.MarketTypeSpot, SettlementAsset: "USDT",
+		ExecutionMode:   exchange.ExecutionModePaper,
+		SettlementAsset: "USDT",
 		AutomationState: AutomationPaused, PauseReason: "manual",
 	}
 	require.NoError(t, valid.Validate())

@@ -75,7 +75,7 @@ func tradeCatchup(accounts accountLister, worker interface{ Quiesce(context.Cont
 			}
 			total++
 			fresh := account.LastSyncAt > 0 && at.Sub(time.UnixMilli(account.LastSyncAt)) <= accountSyncFreshness
-			if fresh && account.Ready && account.LastError == "" && account.BalancePendingUntil == 0 {
+			if fresh && account.Ready && account.LastError == "" && !account.HasBalancePending() {
 				done++
 				continue
 			}

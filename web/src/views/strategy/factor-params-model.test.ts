@@ -27,8 +27,7 @@ describe("parseFactorBinding", () => {
   it("reads the task, result view and the variable members with their parameters", () => {
     const binding = parseFactorBinding(
       JSON.stringify({
-        factor_task_id: "ftask_a",
-        view_id: "view_factor_a",
+        tasks: { spot: { factor_task_id: "ftask_a", view_id: "view_factor_a" } },
         factor_params: { ma__var: [{ name: "span" }], bias__var: [{ name: "window" }, { name: "k" }] }
       })
     );
@@ -45,7 +44,7 @@ describe("parseFactorBinding", () => {
     expect(parseFactorBinding("not json")).toBeNull();
     expect(parseFactorBinding(undefined)).toBeNull();
     // 没有可变成员的实例仍然关联着任务。
-    expect(parseFactorBinding('{"factor_task_id":"ftask_a"}')).toMatchObject({ members: [], params: {} });
+    expect(parseFactorBinding('{"tasks":{"spot":{"factor_task_id":"ftask_a"}}}')).toMatchObject({ members: [], params: {} });
   });
 });
 

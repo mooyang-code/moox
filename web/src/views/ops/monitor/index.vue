@@ -48,6 +48,9 @@
                 <span v-if="group.lines.length === 1" class="duration">{{ line.duration }}</span>
               </button>
               <p class="alert-line__reason">{{ line.reason }}</p>
+              <div v-if="line.note.length" class="alert-line__note">
+                <p v-for="text in line.note" :key="text">{{ text }}</p>
+              </div>
               <div class="alert-line__foot">
                 <span class="chip">{{ line.layer }}</span>
                 <a class="locator" :href="line.link.href">{{ line.link.label }} →</a>
@@ -857,8 +860,19 @@ a {
 .alert-line__foot {
   display: flex;
   justify-content: space-between;
+  gap: 12px;
   margin: 6px 0 0 13px;
   font-size: 12px;
+}
+.alert-line__note {
+  margin: 4px 0 0 13px;
+  color: var(--color-text-2);
+  font-size: 12px;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.alert-line__note p {
+  margin: 2px 0 0;
 }
 .alert-line__detail {
   margin: 8px 0 0 13px;

@@ -16,8 +16,12 @@ func FactorNotifier(gateway gatewayclient.Invoker) func(context.Context, []Fille
 		}
 		request := &factorpb.NotifyPeriodsFilledReq{}
 		for _, item := range filled {
-			request.Filled = append(request.Filled, &factorpb.PeriodsFilled{SpaceId: item.SpaceID, DatasetId: item.DatasetID, Frequency: item.Frequency,
-				From: item.From.Unix(), To: item.To.Unix(), AbsentSubjects: item.Absent})
+			message := &factorpb.PeriodsFilled{SpaceId: item.SpaceID, DatasetId: item.DatasetID, Frequency: item.Frequency,
+				From: item.From.Unix(), To: item.To.Unix(), AbsentSubjects: item.Absent}
+			for _, series := range item.AbsentSeries {
+				message.AbsentSeries = append(message.AbsentSeries, &factorpb.SeriesRef{SubjectId: series.SubjectID, SeriesTag: series.SeriesTag})
+			}
+			request.Filled = append(request.Filled, message)
 		}
 		metadata := gatewayclient.CallMetadataFromContext(ctx)
 		metadata.SpaceID = filled[0].SpaceID

@@ -92,7 +92,7 @@ func TestEngineConfigComputeSection(t *testing.T) {
 }
 
 // 账本的默认值与目录按配置根目录解析；本地存储、窗口、内存、同步的默认值与校验。
-func TestEngineConfigGapSeriesDefaultsAndValidation(t *testing.T) {
+func TestEngineConfigLedgerAndSeriesStoreDefaults(t *testing.T) {
 	path := writeEngineConfig(t, minimalEngineConfig)
 	root := filepath.Dir(filepath.Dir(path))
 	cfg, err := Load(path)

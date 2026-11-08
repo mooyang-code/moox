@@ -21,6 +21,7 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/tradeowner"
 	"github.com/mooyang-code/moox/modules/strategy/internal/trigger"
 	"github.com/mooyang-code/moox/modules/strategy/internal/trigger/eventconsumer"
+	"github.com/mooyang-code/moox/modules/strategy/internal/warmup"
 	strategypb "github.com/mooyang-code/moox/modules/strategy/proto/strategygen"
 	"github.com/mooyang-code/moox/modules/strategy/schema"
 	"github.com/mooyang-code/moox/packages/commonpb"
@@ -87,6 +88,13 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	var replayClient input.Client = &ranged
 	service := &rpc.Service{Store: db, Resolver: input.Service{Client: inputClient, Sets: live, ReadyWait: factorTaskReadyWait, ReadyStep: factorTaskReadyStep}}
 	service.Owner = tradeowner.New(cfg.Trade, gateway)
+	// 策略池启用后在后台预热：用回放的历史读取从启用时刻往前推进到最新已收盘的一期。
+	warm := &warmup.Manager{Store: db, Client: replayClient, ChunkBars: cfg.Replay.ChunkBars, Logf: log.Infof}
+	closers = append(closers, func() error {
+		warm.Close()
+		return nil
+	})
+	service.Warmer = warm
 	runner := &replay.Runner{Store: db, Client: replayClient, ChunkBars: cfg.Replay.ChunkBars, MissingPriceLiquidateBars: cfg.Replay.MissingPriceLiquidateBars, Logf: log.Infof}
 	service.Replays = runner
 
@@ -108,6 +116,10 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 		log.Warnf("启动对账：%v%s", err, tradeDetail(err))
 	}
 	cancelReconcile()
+	// 进程在预热中途重启：会话里还没有预热结果的池实例从头重新预热（先于开始消费事件，门禁立刻拦住它们的事件）。
+	if err := warm.Resume(ctx); err != nil {
+		return nil, nil, fmt.Errorf("恢复策略池预热失败：%w", err)
+	}
 	if err := eventRuntime.Start(ctx); err != nil {
 		return nil, nil, err
 	}
@@ -119,7 +131,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	var handlerRef atomic.Pointer[trigger.Handler]
 	life, err := newLifecycle(cfg.Database, lifecycleDeps{
 		db: db, eventConnected: eventRuntime.Connected, consumerReady: func() bool { return consumer == nil || consumer.Ready() },
-		handler: &handlerRef,
+		handler: &handlerRef, warm: warm,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("打开策略生命周期状态：%w", err)
@@ -127,7 +139,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	if inputClient != nil {
 		meta := input.NewMetaCache()
 		meta.Ages = db
-		handler := &trigger.Handler{Store: db, Loader: input.Loader{Client: inputClient, Meta: meta}, AttemptBudget: cfg.Evaluation.AttemptBudget, Observer: observer, Logf: log.Infof, Gate: triggerGate(life), ReleasedAt: releasedAt(life)}
+		handler := &trigger.Handler{Store: db, Loader: input.Loader{Client: inputClient, Meta: meta}, AttemptBudget: cfg.Evaluation.AttemptBudget, Observer: observer, Logf: log.Infof, Gate: triggerGate(life, warm), ReleasedAt: releasedAt(life), EnsureWarm: warm.Ensure}
 		handlerRef.Store(handler)
 		// EventBus 暂不可用时消费者在后台重试连接，进程照常启动（未就绪），与出站投递的容错一致。
 		connect := func(ctx context.Context) (*jetstream.Client, error) {
@@ -153,7 +165,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 		return nil
 	})
 	loops.Add(5)
-	submitter := &paramsubmit.Submitter{Store: db, Factors: live, Allowed: paramSubmitAllowed(triggerGate(life)), OnResult: observer.ParamSubmitted,
+	submitter := &paramsubmit.Submitter{Store: db, Factors: live, Allowed: paramSubmitAllowed(triggerGate(life, warm)), OnResult: observer.ParamSubmitted,
 		OnError: func(requestID string, err error) { log.Warnf("因子参数提交 %s 未完成：%v", requestID, err) }}
 	go func() {
 		defer loops.Done()
@@ -187,7 +199,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	healthState := health.New("strategy", "strategy", "", "")
 	healthState.SnapshotFunc = withLifecycle(strategyHealthSnapshot(db, eventRuntime, healthState, consumer), life)
 	healthState.SetReady(true)
-	if err := health.Register(s.Service("trpc.moox.strategy.Health"), healthState, append(lifecycleRoutes(life), (&trigger.ReplayEvaluator{Store: db, Client: inputClient}).Routes()...)...); err != nil {
+	if err := health.Register(s.Service("trpc.moox.strategy.Health"), healthState, append(lifecycleRoutes(life, warm), (&trigger.ReplayEvaluator{Store: db, Client: inputClient}).Routes()...)...); err != nil {
 		return nil, nil, fmt.Errorf("注册策略健康检查失败：%w", err)
 	}
 	keep = true
@@ -242,6 +254,11 @@ func retentionLoop(ctx context.Context, repo *store.Store, cfg RetentionConfig) 
 			log.Warnf("清理过期解释明细失败：%v", err)
 		} else if deleted > 0 {
 			log.Infof("已清理 %d 条过期解释明细", deleted)
+		}
+		if deleted, err := repo.DeleteReadyEventsBefore(ctx, now.AddDate(0, 0, -cfg.ReadyEventsDays)); err != nil {
+			log.Warnf("清理过期就绪事件记录失败：%v", err)
+		} else if deleted > 0 {
+			log.Infof("已清理 %d 条过期就绪事件记录", deleted)
 		}
 		if deleted, err := repo.DeleteReplaysBefore(ctx, now.AddDate(0, 0, -cfg.ReplaysDays)); err != nil {
 			log.Warnf("清理过期回放失败：%v", err)

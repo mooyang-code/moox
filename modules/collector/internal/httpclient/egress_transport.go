@@ -114,9 +114,14 @@ func (t *EgressTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 	headers := map[string]string{}
 	for name, values := range req.Header {
-		switch textproto.CanonicalMIMEHeaderKey(name) {
+		switch canonical := textproto.CanonicalMIMEHeaderKey(name); canonical {
 		case "Accept", "Accept-Language", "Content-Type", "User-Agent":
 			headers[name] = strings.Join(values, ", ")
+		case "X-Mbx-Apikey":
+			// 币安行情数据类接口的 API Key 头（只读 Key 的公开标识）：只对 api.binance.com 放行，其余域名一律丢弃；不记录它的值。
+			if strings.EqualFold(req.URL.Hostname(), "api.binance.com") {
+				headers[name] = strings.Join(values, ", ")
+			}
 		}
 	}
 	budget := 60 * time.Second

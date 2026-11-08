@@ -136,7 +136,7 @@ func TestExternalLogicalAccountTargetIsConsumedIntoTradeStore(t *testing.T) {
 	require.NotEmpty(t, receipt.RequestHash)
 	require.Equal(t, "100000", receipt.Equity)
 	require.JSONEq(t, `[{"instrument_id":"BTC-USDT","target_weight":"0.5"}]`, receipt.WeightsJSON)
-	executor := &targetapp.Executor{Store: f.store, Orders: f.orders, Prices: prices, Now: func() time.Time { return testNow }, MaxChildNotional: shared.MustDecimal("1000000")}
+	executor := &targetapp.Executor{Store: f.store, Orders: f.orders, Prices: prices, Now: func() time.Time { return testNow }}
 	worker := &traderuntime.TargetWorker{Store: f.store, Executor: executor, Interval: time.Hour, Now: func() time.Time { return testNow }}
 	workerCtx, stopWorker := context.WithCancel(ctx)
 	workerDone := make(chan error, 1)

@@ -78,7 +78,7 @@ func TestRemoveMemberRejectsActiveOrdersOrPositions(t *testing.T) {
 	_, err := service.RemoveMember(
 		context.Background(), "space-1", "logical-1", "account-a",
 	)
-	require.ErrorIs(t, err, ErrMemberHasExposure)
+	require.ErrorIs(t, err, ErrRemovalHasExposure)
 }
 
 type authFailingSyncer struct{}
@@ -102,7 +102,7 @@ func TestRemoveMemberWhenSyncFailsUsesLocalRecords(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, UnverifiedRemovalWarning, warning)
 
-	// 本地还有持仓：同步失败时不能移除，返回同步错误。
+	// 本地还有持仓：同步失败时不能移除，按“有持仓不能移出”报，同步失败的原因附在后面。
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.PutLogicalAccountMember(store.LogicalAccountMemberRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", TradingAccountID: "account-b", Enabled: true,
@@ -116,7 +116,9 @@ func TestRemoveMemberWhenSyncFailsUsesLocalRecords(t *testing.T) {
 		})
 	}))
 	_, err = service.RemoveMember(context.Background(), "space-1", "logical-1", "account-b")
-	require.ErrorContains(t, err, "invalid api key")
+	require.ErrorIs(t, err, ErrRemovalHasExposure)
+	require.ErrorContains(t, err, "凭证失效")
+	require.NotContains(t, err.Error(), "invalid api key", "给前端的原因不带交易所英文原文")
 }
 
 func TestDisableMemberCannotAdoptAwayExistingExposure(t *testing.T) {
@@ -499,8 +501,8 @@ func logicalAccountServiceFixture(t *testing.T) (*Service, *store.Store) {
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
-			ExecutionMode: "LIVE",
-			MarketType:    "SWAP", SettlementAsset: "USDT",
+			ExecutionMode:   "LIVE",
+			SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {
 			return err
@@ -533,14 +535,14 @@ func (noopAccountSyncer) SyncAccount(context.Context, string) error { return nil
 func logicalFixtureAccount(id string) store.TradingAccountRecord {
 	return store.TradingAccountRecord{
 		SpaceID: "space-1", TradingAccountID: id, Name: id,
-		Exchange: "BINANCE", MarketType: "SWAP",
-		ExecutionMode: "LIVE", Environment: "TESTNET", CredentialSecretID: "secret-1",
+		Exchange: "BINANCE", Markets: []string{"SWAP"},
+		ExecutionMode: "LIVE", Environment: "TESTNET", CredentialSecretID: "secret-" + id,
 		SettlementAsset: "USDT", MarginMode: "CROSS",
 		Status: "ENABLED", Ready: true,
 		LeverageSettings: store.LeverageSettings{"BTCUSDT": "5"},
 		Snapshot: store.TradingAccountSnapshot{
 			AvailableFunds: "1000",
-			Balances: []store.AssetBalance{{
+			Balances: []store.AssetBalance{{Wallet: "UNIFIED",
 				Asset: "USDT", Available: "1000", Total: "1000",
 			}},
 		},
@@ -666,7 +668,7 @@ func TestAddMemberRejectsAccountOwnedByAnotherGroupBeforeSync(t *testing.T) {
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-2", Name: "other",
-			ExecutionMode: "LIVE", MarketType: "SWAP", SettlementAsset: "USDT",
+			ExecutionMode: "LIVE", SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
 		})
 	}))

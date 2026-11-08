@@ -21,7 +21,7 @@ func TestRepositoryPersistsAccountAndLeverage(t *testing.T) {
 	repository := Repository{Store: tradeStore}
 	value := tradingaccount.Account{
 		ID: "account-1", SpaceID: "space-1", Name: "main",
-		Exchange: exchange.ExchangeOKX, MarketType: exchange.MarketTypeSwap,
+		Exchange: exchange.ExchangeOKX, Markets: []exchange.MarketType{exchange.MarketTypeSwap},
 		ExecutionMode:      exchange.ExecutionModeLive,
 		Environment:        exchange.AccountEnvironmentTestnet,
 		CredentialSecretID: "secret-1", SettlementAsset: "USDT",

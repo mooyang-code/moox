@@ -97,7 +97,7 @@ portfolio:
 // signal 规则同样按 max_missing 守门：池中缺数比例过高时整期跳过、沿用前序状态，不能把大面积缺数当作退出清仓。
 func TestSignalTooManyMissingSkips(t *testing.T) {
 	program := compile(t, strings.Replace(signalStrategy, "max_missing: 1", "max_missing: 0.2", 1), "sig")
-	previous := State{Rules: map[string]RuleState{"s": {Held: []string{"A"}}}, Targets: map[string]string{"A": "1"}}
+	previous := State{Rules: map[string]RuleState{"s": {Held: []string{"A"}}}, Targets: map[string]string{"A|swap": "1"}}
 	decision := evaluate(t, program, frameOf(program, map[string]Row{"A": values("other", 1), "B": values("sig", 1)}), previous)
 	assertSkipped(t, decision, SkipTooManyMissing)
 	if decision.State.Rules["s"].Held[0] != "A" {

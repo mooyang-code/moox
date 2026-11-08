@@ -167,6 +167,15 @@ func (s *Store) writeSubject(snap kvReader, batch *pebble.Batch, src Source, g g
 	if err != nil {
 		return res, err
 	}
+	if w.Scoped {
+		kept := existing[:0:0]
+		for _, tb := range existing {
+			if _, ok := byTag[tb.tag]; ok {
+				kept = append(kept, tb)
+			}
+		}
+		existing = kept
+	}
 	bounds := map[string]tagBounds{}
 	tags := map[string]struct{}{}
 	for _, tb := range existing {

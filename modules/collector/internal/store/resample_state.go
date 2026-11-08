@@ -47,10 +47,13 @@ type ResampleSnapshot struct {
 	TaskID        string
 	EffectiveFrom int64
 	SeriesHash    string
-	Subjects      []string
+	// Subjects 是快照里的全部标的（去重、升序）。
+	Subjects []string
+	// Members 只在统一数据集（源有多个 series_tag）时有值：每个 series_tag 下的成员标的；单序列任务为空，成员就是 Subjects。
+	Members map[string][]string
 }
 
-// ResampleJob 是一个历史合成作业。Subjects 为空表示全部标的。
+// ResampleJob 是一个历史合成作业。Subjects 为空表示全部标的；SeriesTags 为空表示任务的全部源序列。
 type ResampleJob struct {
 	JobID          string
 	SpaceID        string
@@ -58,6 +61,7 @@ type ResampleJob struct {
 	RequestID      string
 	Origin         string
 	Subjects       []string
+	SeriesTags     []string
 	Start, End     time.Time
 	NextBucket     time.Time
 	NotBefore      time.Time
@@ -84,6 +88,8 @@ type BackfillNotice struct {
 	DatasetID string
 	Frequency string
 	SubjectID string
+	// SeriesTag 是被补写的序列；单序列数据集为空（事件里不带 series_tags）。
+	SeriesTag string
 	Start     time.Time
 	End       time.Time
 	Origin    string
@@ -109,6 +115,7 @@ type resampleSnapshotRow struct {
 	EffectiveFrom int64     `gorm:"column:c_effective_from"`
 	SeriesHash    string    `gorm:"column:c_series_hash"`
 	Subjects      string    `gorm:"column:c_subjects"`
+	Members       string    `gorm:"column:c_members"`
 	CreatedAt     time.Time `gorm:"column:c_ctime"`
 }
 
@@ -122,6 +129,7 @@ type resampleJobRow struct {
 	RequestID      string    `gorm:"column:c_request_id"`
 	Origin         string    `gorm:"column:c_origin"`
 	Subjects       string    `gorm:"column:c_subjects"`
+	SeriesTags     string    `gorm:"column:c_series_tags"`
 	Start          time.Time `gorm:"column:c_start"`
 	End            time.Time `gorm:"column:c_end"`
 	NextBucket     time.Time `gorm:"column:c_next_bucket"`
@@ -147,6 +155,7 @@ func (row resampleJobRow) job() ResampleJob {
 		LastError: row.LastError, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 	}
 	_ = json.Unmarshal([]byte(row.Subjects), &job.Subjects)
+	_ = json.Unmarshal([]byte(row.SeriesTags), &job.SeriesTags)
 	_ = json.Unmarshal([]byte(row.SkippedSamples), &job.SkippedSamples)
 	return job
 }
@@ -157,6 +166,7 @@ type backfillNoticeRow struct {
 	DatasetID string    `gorm:"column:c_dataset_id"`
 	Frequency string    `gorm:"column:c_frequency"`
 	SubjectID string    `gorm:"column:c_subject_id"`
+	SeriesTag string    `gorm:"column:c_series_tag"`
 	Start     time.Time `gorm:"column:c_start"`
 	End       time.Time `gorm:"column:c_end"`
 	Origin    string    `gorm:"column:c_origin"`
@@ -168,9 +178,19 @@ type backfillNoticeRow struct {
 func (backfillNoticeRow) TableName() string { return "t_collector_backfill_notices" }
 
 func (row backfillNoticeRow) notice() BackfillNotice {
-	return BackfillNotice{ID: row.ID, SpaceID: row.SpaceID, DatasetID: row.DatasetID, Frequency: row.Frequency, SubjectID: row.SubjectID,
+	return BackfillNotice{ID: row.ID, SpaceID: row.SpaceID, DatasetID: row.DatasetID, Frequency: row.Frequency, SubjectID: row.SubjectID, SeriesTag: row.SeriesTag,
 		Start: row.Start.UTC(), End: row.End.UTC(), Origin: row.Origin, JobID: row.JobID, BatchID: row.BatchID}
 }
+
+// 发件箱事件的发布状态（t_collector_event_outbox.c_published）。
+const (
+	// OutboxPending 还没发布，发布协程会取走它。
+	OutboxPending = 0
+	// OutboxPublished 已经发布成功。
+	OutboxPublished = 1
+	// OutboxDead 是死信：事件无法解码，不再被当作待发布，只上报关注项等人工处理。
+	OutboxDead = 2
+)
 
 type eventOutboxRow struct {
 	ID           int64     `gorm:"column:c_id;primaryKey;autoIncrement"`
@@ -179,7 +199,7 @@ type eventOutboxRow struct {
 	EventName    string    `gorm:"column:c_event_name"`
 	SubjectToken string    `gorm:"column:c_subject_token"`
 	Payload      []byte    `gorm:"column:c_payload"`
-	Published    bool      `gorm:"column:c_published"`
+	Published    int       `gorm:"column:c_published"`
 	CreatedAt    time.Time `gorm:"column:c_ctime"`
 }
 
@@ -206,7 +226,11 @@ func (r *ResampleStateRepository) AddSnapshot(ctx context.Context, snapshot Resa
 		return err
 	}
 	subjects, _ := json.Marshal(snapshot.Subjects)
-	row := resampleSnapshotRow{SpaceID: snapshot.SpaceID, TaskID: snapshot.TaskID, EffectiveFrom: snapshot.EffectiveFrom, SeriesHash: snapshot.SeriesHash, Subjects: string(subjects)}
+	members := []byte("{}")
+	if len(snapshot.Members) > 0 {
+		members, _ = json.Marshal(snapshot.Members)
+	}
+	row := resampleSnapshotRow{SpaceID: snapshot.SpaceID, TaskID: snapshot.TaskID, EffectiveFrom: snapshot.EffectiveFrom, SeriesHash: snapshot.SeriesHash, Subjects: string(subjects), Members: string(members)}
 	return r.db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&row).Error
 }
 
@@ -239,6 +263,7 @@ func snapshotFromRow(row resampleSnapshotRow, err error) (ResampleSnapshot, bool
 	}
 	snapshot := ResampleSnapshot{SpaceID: row.SpaceID, TaskID: row.TaskID, EffectiveFrom: row.EffectiveFrom, SeriesHash: row.SeriesHash}
 	_ = json.Unmarshal([]byte(row.Subjects), &snapshot.Subjects)
+	_ = json.Unmarshal([]byte(row.Members), &snapshot.Members)
 	return snapshot, true, nil
 }
 
@@ -284,10 +309,12 @@ func (r *ResampleStateRepository) SubmitJob(ctx context.Context, job ResampleJob
 				merged.End = maxTime(merged.End, job.End)
 				merged.NotBefore = maxTime(merged.NotBefore, job.NotBefore)
 				merged.Subjects = unionSubjects(merged.Subjects, job.Subjects)
+				merged.SeriesTags = unionSubjects(merged.SeriesTags, job.SeriesTags)
 				subjects, _ := json.Marshal(merged.Subjects)
+				seriesTags, _ := json.Marshal(merged.SeriesTags)
 				if err := tx.Model(&resampleJobRow{}).Where("c_id = ?", row.ID).Updates(map[string]any{
 					"c_start": merged.Start, "c_next_bucket": merged.NextBucket, "c_end": merged.End, "c_not_before": merged.NotBefore,
-					"c_subjects": string(subjects), "c_total_buckets": 0, "c_mtime": time.Now().UTC(),
+					"c_subjects": string(subjects), "c_series_tags": string(seriesTags), "c_total_buckets": 0, "c_mtime": time.Now().UTC(),
 				}).Error; err != nil {
 					return err
 				}
@@ -296,8 +323,9 @@ func (r *ResampleStateRepository) SubmitJob(ctx context.Context, job ResampleJob
 			}
 		}
 		subjects, _ := json.Marshal(sortedUnique(job.Subjects))
+		seriesTags, _ := json.Marshal(sortedUnique(job.SeriesTags))
 		row := resampleJobRow{
-			JobID: job.JobID, SpaceID: job.SpaceID, TaskID: job.TaskID, RequestID: job.RequestID, Origin: job.Origin, Subjects: string(subjects),
+			JobID: job.JobID, SpaceID: job.SpaceID, TaskID: job.TaskID, RequestID: job.RequestID, Origin: job.Origin, Subjects: string(subjects), SeriesTags: string(seriesTags),
 			Start: job.Start.UTC(), End: job.End.UTC(), NextBucket: job.Start.UTC(), NotBefore: job.NotBefore.UTC(), Status: ResampleJobQueued,
 			TotalBuckets: job.TotalBuckets, SkippedSamples: "[]",
 		}
@@ -540,7 +568,7 @@ func addNoticesTx(tx *gorm.DB, notices []BackfillNotice) error {
 	}
 	rows := make([]backfillNoticeRow, len(notices))
 	for i, notice := range notices {
-		rows[i] = backfillNoticeRow{SpaceID: notice.SpaceID, DatasetID: notice.DatasetID, Frequency: notice.Frequency, SubjectID: notice.SubjectID,
+		rows[i] = backfillNoticeRow{SpaceID: notice.SpaceID, DatasetID: notice.DatasetID, Frequency: notice.Frequency, SubjectID: notice.SubjectID, SeriesTag: notice.SeriesTag,
 			Start: notice.Start.UTC(), End: notice.End.UTC(), Origin: notice.Origin, JobID: notice.JobID}
 	}
 	return tx.CreateInBatches(&rows, 200).Error
@@ -595,7 +623,7 @@ func (r *ResampleStateRepository) PendingEvents(ctx context.Context, limit int) 
 		limit = 100
 	}
 	var rows []eventOutboxRow
-	if err := r.db.WithContext(ctx).Where("c_published = ?", false).Order("c_id").Limit(limit).Find(&rows).Error; err != nil {
+	if err := r.db.WithContext(ctx).Where("c_published = ?", OutboxPending).Order("c_id").Limit(limit).Find(&rows).Error; err != nil {
 		return nil, err
 	}
 	out := make([]OutboxEvent, len(rows))
@@ -610,7 +638,25 @@ func (r *ResampleStateRepository) MarkPublished(ctx context.Context, id int64) e
 	if err := r.ready(); err != nil {
 		return err
 	}
-	return r.db.WithContext(ctx).Model(&eventOutboxRow{}).Where("c_id = ?", id).Update("c_published", true).Error
+	return r.db.WithContext(ctx).Model(&eventOutboxRow{}).Where("c_id = ?", id).Update("c_published", OutboxPublished).Error
+}
+
+// MarkDead 把无法解码的发件箱事件标成死信（OutboxDead）：它不再被当作待发布，不会堵住后面的事件。
+func (r *ResampleStateRepository) MarkDead(ctx context.Context, id int64) error {
+	if err := r.ready(); err != nil {
+		return err
+	}
+	return r.db.WithContext(ctx).Model(&eventOutboxRow{}).Where("c_id = ?", id).Update("c_published", OutboxDead).Error
+}
+
+// DeadEvents 返回被标成死信的发件箱事件个数。
+func (r *ResampleStateRepository) DeadEvents(ctx context.Context) (int64, error) {
+	if err := r.ready(); err != nil {
+		return 0, err
+	}
+	var count int64
+	err := r.db.WithContext(ctx).Model(&eventOutboxRow{}).Where("c_published = ?", OutboxDead).Count(&count).Error
+	return count, err
 }
 
 // CleanupNotices 删除早于 before 的通知与已发布事件，返回删除的行数。没有事件总线时通知不会成批，也靠它清理。
@@ -624,6 +670,6 @@ func (r *ResampleStateRepository) CleanupNotices(ctx context.Context, before tim
 		return 0, result.Error
 	}
 	total += result.RowsAffected
-	result = r.db.WithContext(ctx).Where("c_published = ? AND c_ctime < ?", true, before.UTC()).Delete(&eventOutboxRow{})
+	result = r.db.WithContext(ctx).Where("c_published <> ? AND c_ctime < ?", OutboxPending, before.UTC()).Delete(&eventOutboxRow{})
 	return total + result.RowsAffected, result.Error
 }

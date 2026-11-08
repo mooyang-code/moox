@@ -48,7 +48,7 @@ func ledgerServer(t *testing.T, adapters adapterMap) *ConsoleServer {
 	t.Cleanup(func() { _ = tradeStore.Close() })
 	if err := tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.CreateTradingAccount(store.TradingAccountRecord{
-			SpaceID: "space-1", TradingAccountID: "account-1", Name: "paper", Exchange: "BINANCE", MarketType: "SWAP",
+			SpaceID: "space-1", TradingAccountID: "account-1", Name: "paper", Exchange: "BINANCE", Markets: []string{"SWAP"},
 			ExecutionMode: "PAPER", Environment: "PAPER", SettlementAsset: "USDT", MarginMode: "CROSS", Status: "ENABLED",
 		})
 	}); err != nil {
@@ -95,5 +95,40 @@ func TestListAccountLedgerUnsupportedAndUnavailable(t *testing.T) {
 		&tradepb.ListAccountLedgerReq{TradingAccountId: "account-1"})
 	if rsp.GetRetInfo().GetCode() != tradepb.ErrorCode_NOT_FOUND {
 		t.Fatalf("other space rsp = %+v", rsp)
+	}
+}
+
+func TestLedgerCapabilityOnlyFalseWhenExchangeHasNoLedger(t *testing.T) {
+	if ledgerCapability(nil) != true || ledgerCapability(errLedgerUnavailable) != true || ledgerCapability(errServiceUnavailable) != true {
+		t.Fatal("没有错误、会话未就绪、服务不可用都不算不支持流水")
+	}
+	if ledgerCapability(errLedgerUnsupported) {
+		t.Fatal("交易所没有流水接口时应该是不支持")
+	}
+}
+
+func TestGetExecutionCapabilitiesLedgerFlag(t *testing.T) {
+	for name, tc := range map[string]struct {
+		adapters adapterMap
+		want     bool
+	}{
+		"支持":          {adapterMap{"account-1": &ledgerAdapter{supported: true}}, true},
+		"交易所没有流水接口":   {adapterMap{"account-1": &ledgerAdapter{supported: false}}, false},
+		"会话还没建立不算不支持": {adapterMap{}, true},
+	} {
+		server := ledgerServer(t, tc.adapters)
+		registry := execution.NewRegistry()
+		registry.Register(execution.ExchangeDescriptor{Exchange: exchange.ExchangeBinance, OrderTypes: testDescriptor.OrderTypes}, func(exchange.AccountConfig, exchange.Credential) (execution.ExecutionAdapter, error) {
+			return nil, nil
+		})
+		server.Exchanges = registry
+		rsp, err := server.GetExecutionCapabilities(spacecontext.WithSpaceID(context.Background(), "space-1"),
+			&tradepb.GetExecutionCapabilitiesReq{TradingAccountId: "account-1"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := rsp.GetCapabilities().GetLedger(); got != tc.want {
+			t.Fatalf("%s: ledger = %v, want %v", name, got, tc.want)
+		}
 	}
 }

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 )
 
@@ -43,15 +42,11 @@ func decodeNextParams(row resultRow) (ParamDelivery, error) {
 		Period: time.Unix(next.Period, 0).UTC(), Members: next.Members}, nil
 }
 
-// PendingParamDeliveries 返回每个启用实例当前会话里待投递的参数（设计 8.3）：只投会话里最新一条带参数的结果，
-// 并且它还没送达也没被因子侧明确拒绝；更早的未送达记录被覆盖，不再投递。实例停用或换了会话后，旧会话的记录不再投递。
-func (s *Store) PendingParamDeliveries(ctx context.Context, limit int) ([]ParamDelivery, error) {
-	if limit <= 0 {
-		limit = 50
-	}
-	var rows []resultRow
-	err := s.db.WithContext(ctx).Raw(`
-		SELECT `+qualifiedResultColumns("r")+`
+// 参数投递的 SQL：整条写成常量，不在调用处拼接。
+const (
+	// sqlListPendingParamDeliveries 列出每个启用实例当前会话里最新一条带参数、还没送达也没被拒绝的结果；列清单与 resultRow 一一对应。
+	sqlListPendingParamDeliveries = `
+		SELECT r.c_result_id, r.c_instance_id, r.c_session_id, r.c_bar_end_time, r.c_valid_until, r.c_status, r.c_skip_reason, r.c_dsl_hash, r.c_input_json, r.c_targets_json, r.c_rule_states_json, r.c_summary_json, r.c_event_data, r.c_publish_status, r.c_ctime, r.c_next_params_json, r.c_params_delivered_at, r.c_params_error
 		FROM t_strategy_results r
 		JOIN t_strategy_instances i ON i.c_instance_id = r.c_instance_id AND i.c_session_id = r.c_session_id AND i.c_enabled = 1
 		WHERE r.c_next_params_json <> '' AND r.c_params_delivered_at IS NULL AND r.c_params_error = ''
@@ -60,8 +55,26 @@ func (s *Store) PendingParamDeliveries(ctx context.Context, limit int) ([]ParamD
 			WHERE c_instance_id = r.c_instance_id AND c_session_id = r.c_session_id AND c_next_params_json <> ''
 		  )
 		ORDER BY r.c_ctime, r.c_result_id
-		LIMIT ?
-	`, limit).Scan(&rows).Error
+		LIMIT ?`
+	// sqlMarkParamsDelivered 记下参数已送达并清空拒绝原因（只写还没送达的结果）。
+	sqlMarkParamsDelivered = `UPDATE t_strategy_results SET c_params_delivered_at = ?, c_params_error = '' WHERE c_result_id = ? AND c_params_delivered_at IS NULL`
+	// sqlMarkParamsRejected 记下参数被拒绝的原因（只写还没送达的结果）。
+	sqlMarkParamsRejected = `UPDATE t_strategy_results SET c_params_error = ? WHERE c_result_id = ? AND c_params_delivered_at IS NULL`
+	// sqlSelectRecentParamUndelivered 按周期倒序读出最近 n 条带参数的结果是否未送达（1 为未送达）。
+	sqlSelectRecentParamUndelivered = `
+		SELECT CASE WHEN c_params_delivered_at IS NULL THEN 1 ELSE 0 END FROM t_strategy_results
+		WHERE c_instance_id = ? AND c_session_id = ? AND c_next_params_json <> ''
+		ORDER BY c_bar_end_time DESC LIMIT ?`
+)
+
+// PendingParamDeliveries 返回每个启用实例当前会话里待投递的参数（设计 8.3）：只投会话里最新一条带参数的结果，
+// 并且它还没送达也没被因子侧明确拒绝；更早的未送达记录被覆盖，不再投递。实例停用或换了会话后，旧会话的记录不再投递。
+func (s *Store) PendingParamDeliveries(ctx context.Context, limit int) ([]ParamDelivery, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	var rows []resultRow
+	err := s.db.WithContext(ctx).Raw(sqlListPendingParamDeliveries, limit).Scan(&rows).Error
 	if err != nil {
 		return nil, err
 	}
@@ -82,7 +95,7 @@ func (s *Store) MarkParamsDelivered(ctx context.Context, resultID string, at tim
 	if err != nil {
 		return err
 	}
-	return s.db.WithContext(ctx).Exec(`UPDATE t_strategy_results SET c_params_delivered_at = ?, c_params_error = '' WHERE c_result_id = ? AND c_params_delivered_at IS NULL`, now, resultID).Error
+	return s.db.WithContext(ctx).Exec(sqlMarkParamsDelivered, now, resultID).Error
 }
 
 // MarkParamsRejected 记下参数被因子侧明确拒绝的原因：不再重试，也不算送达（连续没有送达会触发告警）。
@@ -90,7 +103,7 @@ func (s *Store) MarkParamsRejected(ctx context.Context, resultID, reason string)
 	if reason == "" {
 		reason = "被因子侧拒绝"
 	}
-	return s.db.WithContext(ctx).Exec(`UPDATE t_strategy_results SET c_params_error = ? WHERE c_result_id = ? AND c_params_delivered_at IS NULL`, reason, resultID).Error
+	return s.db.WithContext(ctx).Exec(sqlMarkParamsRejected, reason, resultID).Error
 }
 
 // ParamDeliveryStale 报告实例当前会话里最近 n 条带参数的结果是否都没有送达：不足 n 条时为 false（还谈不上"连续没有送达"）。
@@ -99,11 +112,7 @@ func (s *Store) ParamDeliveryStale(ctx context.Context, instanceID, sessionID st
 		return false, nil
 	}
 	var undelivered []int
-	err := s.db.WithContext(ctx).Raw(`
-		SELECT CASE WHEN c_params_delivered_at IS NULL THEN 1 ELSE 0 END FROM t_strategy_results
-		WHERE c_instance_id = ? AND c_session_id = ? AND c_next_params_json <> ''
-		ORDER BY c_bar_end_time DESC LIMIT ?
-	`, instanceID, sessionID, n).Scan(&undelivered).Error
+	err := s.db.WithContext(ctx).Raw(sqlSelectRecentParamUndelivered, instanceID, sessionID, n).Scan(&undelivered).Error
 	if err != nil || len(undelivered) < n {
 		return false, err
 	}
@@ -113,13 +122,4 @@ func (s *Store) ParamDeliveryStale(ctx context.Context, instanceID, sessionID st
 		}
 	}
 	return true, nil
-}
-
-// qualifiedResultColumns 给结果表的列名加上表别名前缀。
-func qualifiedResultColumns(alias string) string {
-	columns := strings.Split(resultColumns, ",")
-	for i, column := range columns {
-		columns[i] = alias + "." + strings.TrimSpace(column)
-	}
-	return strings.Join(columns, ", ")
 }

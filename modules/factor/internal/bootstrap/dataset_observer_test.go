@@ -107,7 +107,7 @@ func TestFactorDatasetObserverAcceptsSamePeriodUpgradedByRepair(t *testing.T) {
 	require.Equal(t, 2.0, runs())
 }
 
-// 空洞跳过的一期首次观测时已经是正式结果（推进了水位），补齐后升级为成功：水位不再前进，观察器主动补报一次。
+// 有标的跳过（记入跳过账本）的一期首次观测时已经是正式结果（推进了水位），补齐后升级为成功：水位不再前进，观察器主动补报一次。
 func TestFactorDatasetObserverFlushesWhenFormalPeriodTurnsSuccessful(t *testing.T) {
 	registry := prometheus.NewRegistry()
 	datasets, err := report.NewDatasetMetrics(registry, "factor")
@@ -115,7 +115,7 @@ func TestFactorDatasetObserverFlushesWhenFormalPeriodTurnsSuccessful(t *testing.
 	period := time.Date(2026, 10, 16, 15, 0, 0, 0, time.UTC)
 	partial := domain.TaskRunSummary{
 		TaskID: "spot_1h", LastPeriodTime: period.Unix(), CompletedAt: period.Add(time.Hour).Unix(), LastStatus: "degraded", FailedSubjects: []string{"A"},
-		Factors: []domain.FactorPeriodState{{FactorID: "f1", Status: "degraded", FailedSubjects: []string{"A"}, GapSubjects: []string{"A"}}},
+		Factors: []domain.FactorPeriodState{{FactorID: "f1", Status: "degraded", FailedSubjects: []string{"A"}}},
 	}
 	engine := &fakeEngineView{
 		sets: []domain.EngineTask{{Set: domain.FactorTask{TaskID: "spot_1h", SpaceID: "crypto", ResultDatasetID: "dataset_factor_spot_1h", Freq: "1h"}, ResultReady: true}},
@@ -166,28 +166,22 @@ func requireDatasetValue(t *testing.T, registry *prometheus.Registry, name, data
 	require.Equal(t, want, got, "%s for %s", name, datasetID)
 }
 
-// 失败只来自回看窗口空洞或预热中的运行记为 partial（数据积累中，Monitor 不告警）；
-// 有空洞与预热之外的失败是意外的不完整，仍记 incomplete；失败与完整照旧。
+// 失败只来自预热中的运行记为 partial（数据积累中，Monitor 不告警）；
+// 有预热之外的失败是意外的不完整，仍记 incomplete；失败与完整照旧。
 func TestDatasetResultClassifiesRunsThatAreIncompleteOnlyBecauseDataIsAccumulating(t *testing.T) {
-	gapOnly := domain.TaskRunSummary{
-		LastStatus: "degraded", FailedSubjects: []string{"A", "B"},
-		Factors: []domain.FactorPeriodState{{FactorID: "f1", FailedSubjects: []string{"A", "B"}, GapSubjects: []string{"A", "B"}}},
-	}
-	require.Equal(t, "partial", datasetResult(gapOnly))
-
 	warmingOnly := domain.TaskRunSummary{LastStatus: "degraded", WarmingSubjects: 507, FailedSubjects: []string{"A", "B", "C"}}
 	require.Equal(t, "partial", datasetResult(warmingOnly), "预热中的标的也列在失败标的里")
 
 	mixed := domain.TaskRunSummary{
-		LastStatus: "degraded", WarmingSubjects: 1, FailedSubjects: []string{"A", "B"},
-		Factors: []domain.FactorPeriodState{{FactorID: "f1", FailedSubjects: []string{"A"}, GapSubjects: []string{"A"}}},
+		LastStatus: "degraded", WarmingSubjects: 2, FailedSubjects: []string{"A", "B"},
+		Factors: []domain.FactorPeriodState{{FactorID: "f1", FailedSubjects: []string{"A", "B"}}},
 	}
-	require.Equal(t, "partial", datasetResult(mixed), "A 是空洞，B 是预热中的标的（预热标的也列在失败标的里）")
+	require.Equal(t, "partial", datasetResult(mixed), "A、B 都是预热中的标的（预热标的也列在失败标的里）")
 	mixed.FailedSubjects = []string{"A", "B", "C"}
-	require.Equal(t, "incomplete", datasetResult(mixed), "C 既不是空洞也不是预热：意外的失败")
+	require.Equal(t, "incomplete", datasetResult(mixed), "失败标的多于预热中的标的：有意外的失败")
 
 	realFailure := domain.TaskRunSummary{LastStatus: "degraded", FailedSubjects: []string{"A"}, Factors: []domain.FactorPeriodState{{FactorID: "f1", FailedSubjects: []string{"A"}}}}
-	require.Equal(t, "incomplete", datasetResult(realFailure), "没有空洞也没有预热的降级是意外的")
+	require.Equal(t, "incomplete", datasetResult(realFailure), "没有预热的降级是意外的")
 
 	require.Equal(t, "error", datasetResult(domain.TaskRunSummary{LastStatus: "failed", WarmingSubjects: 3}))
 	require.Equal(t, "success", datasetResult(domain.TaskRunSummary{LastStatus: "complete"}))

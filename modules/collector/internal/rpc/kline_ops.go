@@ -77,7 +77,7 @@ func (s *Service) CheckKline(ctx context.Context, req *pb.CheckKlineReq) (*pb.Ch
 	}
 	rsp := &pb.CheckKlineRsp{RetInfo: retOK(), Expected: int32(result.Expected), Missing: int32(result.Missing), Absent: int32(result.Absent), Truncated: result.Truncated}
 	for _, gap := range result.Gaps {
-		rsp.Gaps = append(rsp.Gaps, &pb.KlineGap{DatasetId: gap.DatasetID, Frequency: gap.Frequency, SubjectId: gap.SubjectID, From: gap.From.Format(time.RFC3339), To: gap.To.Format(time.RFC3339), Missing: int32(gap.Missing)})
+		rsp.Gaps = append(rsp.Gaps, &pb.KlineGap{DatasetId: gap.DatasetID, Frequency: gap.Frequency, SubjectId: gap.SubjectID, SeriesTag: gap.SeriesTag, From: gap.From.Format(time.RFC3339), To: gap.To.Format(time.RFC3339), Missing: int32(gap.Missing)})
 	}
 	return rsp, nil
 }
@@ -134,7 +134,7 @@ func (s *Service) GetKlineBackfill(ctx context.Context, req *pb.GetKlineBackfill
 	rsp := &pb.GetKlineBackfillRsp{RetInfo: retOK(), Job: jobToPB(*status, names)}
 	for _, chunk := range status.Failed {
 		rsp.FailedChunks = append(rsp.FailedChunks, &pb.KlineBackfillChunk{
-			DatasetId: chunk.DatasetID, Frequency: chunk.Frequency, SubjectId: chunk.SubjectID, From: chunk.From.UTC().Format(time.RFC3339), To: chunk.To.UTC().Format(time.RFC3339),
+			DatasetId: chunk.DatasetID, Frequency: chunk.Frequency, SubjectId: chunk.SubjectID, SeriesTag: chunk.SeriesTag, From: chunk.From.UTC().Format(time.RFC3339), To: chunk.To.UTC().Format(time.RFC3339),
 			Status: chunk.Status, Attempts: int32(chunk.Attempts), LastError: chunk.LastError, Rows: int32(chunk.Rows), DatasetName: names[chunk.DatasetID],
 		})
 	}

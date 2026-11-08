@@ -28,7 +28,7 @@ const hosts: DeploymentHost[] = [
 const layout: Record<string, string[]> = {
   control: ["console-proxy", "web-host", "admin", "eventbus", "monitor", "collector", "cloudfunction", "factor-mgr", "strategy"],
   storage: ["storage-primary", "storage-node", "storage-view", "access", "archive-worker"],
-  overseas: ["trade", "access", "egress-proxy", "collector-stream"],
+  overseas: ["trade", "access", "egress-proxy", "collector-stream", "callback-dispatcher"],
   factor: ["factor-engine"]
 };
 const deployments: ComponentDeployment[] = hosts.flatMap(host =>

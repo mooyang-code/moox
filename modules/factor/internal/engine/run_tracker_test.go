@@ -110,8 +110,8 @@ func TestRunTrackerUpgradesLatestPeriodOnceRepairIsDone(t *testing.T) {
 	clean := pipeline.Outcome{
 		Status: "degraded", Warming: 2, FailedSubjects: []string{"BTC", "ETH"},
 		Factors: []storageio.FactorState{
-			{MemberKey: "ma", FactorID: "ma", Status: "degraded", FailedSubjects: []string{"BTC", "ETH"}, GapSubjects: []string{"ETH"}},
-			{MemberKey: "rank", FactorID: "rank", Status: "skipped", GapSubjects: []string{"BTC"}},
+			{MemberKey: "ma", FactorID: "ma", Status: "degraded", FailedSubjects: []string{"BTC", "ETH"}},
+			{MemberKey: "rank", FactorID: "rank", Status: "skipped", FailedSubjects: []string{"BTC"}},
 		},
 	}
 	next := period.Add(time.Hour)
@@ -136,7 +136,7 @@ func TestRunTrackerKeepsUnwrittenItemsOfSkippedFactor(t *testing.T) {
 	tracker := newRunTracker()
 	tracker.record("fset", testAxis("1m"), period, "degraded", pipeline.Outcome{
 		Status:  "degraded",
-		Factors: []storageio.FactorState{{MemberKey: "rank", FactorID: "rank", Status: "skipped", GapSubjects: []string{"A"}}, {MemberKey: "ma", FactorID: "ma", Status: "degraded", FailedSubjects: []string{"A"}, GapSubjects: []string{"A"}}},
+		Factors: []storageio.FactorState{{MemberKey: "rank", FactorID: "rank", Status: "skipped", FailedSubjects: []string{"A"}}, {MemberKey: "ma", FactorID: "ma", Status: "degraded", FailedSubjects: []string{"A"}}},
 	}, period.Add(time.Hour))
 	at := func(factor, subject string) pipeline.ItemKey {
 		return pipeline.ItemKey{Member: factor, Subject: subject, Period: period}

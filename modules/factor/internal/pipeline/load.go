@@ -8,6 +8,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
+	"github.com/mooyang-code/moox/packages/seriesset"
 )
 
 // Load 取得一个计划的列式输入。数据都来自本地：实时周期由数据层先把本期标的从 Storage 同步到本地（只拉增量），
@@ -27,6 +28,7 @@ func (r *Runner) Load(ctx context.Context, plan Plan) (LoadResult, error) {
 	}
 	if len(subjects) == 0 {
 		result.FailedSubjects = uniqueSorted(plan.UpstreamFailed)
+		result.FailedSeries = append([]seriesset.Series(nil), plan.ExpectedSeries...)
 		return result, nil
 	}
 	if !plan.TargetStart.Before(plan.TargetEnd) {
@@ -46,6 +48,10 @@ func (r *Runner) Load(ctx context.Context, plan Plan) (LoadResult, error) {
 	for _, subject := range result.WarmingSubjects {
 		failedTask[subject] = struct{}{}
 	}
+	if plan.multi() {
+		classifySeries(plan, data, &result)
+		return result, nil
+	}
 	for _, subject := range subjects {
 		if _, failed := failedTask[subject]; !failed {
 			result.Available = append(result.Available, subject)
@@ -56,6 +62,38 @@ func (r *Runner) Load(ctx context.Context, plan Plan) (LoadResult, error) {
 	}
 	result.FailedSubjects = uniqueSorted(result.FailedSubjects)
 	return result, nil
+}
+
+// classifySeries 统一数据集：把期望序列分成本期可用与不可用的。标的整体失败（同步失败、预热中，failedSubject）或这条序列自己
+// 不可用（上游失败、本期数据还没到）的序列不可用，其余可用；一个市场的缺数不连累另一个市场。
+// 标的口径沿用原有定义：有不可用序列的标的记入 FailedSubjects，至少有一条可用序列的标的才是 Available。
+func classifySeries(plan Plan, data DataResult, result *LoadResult) {
+	failedSubject := make(map[string]struct{}, len(data.Failed)+len(result.WarmingSubjects))
+	for _, subject := range data.Failed {
+		failedSubject[subject] = struct{}{}
+	}
+	for _, subject := range result.WarmingSubjects {
+		failedSubject[subject] = struct{}{}
+	}
+	unavailable := seriesSet(plan.UpstreamFailedSeries)
+	for _, item := range data.FailedSeries {
+		unavailable[item] = struct{}{}
+	}
+	for _, item := range plan.ExpectedSeries {
+		if _, whole := failedSubject[item.SubjectID]; whole {
+			result.FailedSeries = append(result.FailedSeries, item)
+		} else if _, bad := unavailable[item]; bad {
+			result.FailedSeries = append(result.FailedSeries, item)
+		} else {
+			result.AvailableSeries = append(result.AvailableSeries, item)
+		}
+	}
+	result.Available = seriesSubjects(result.AvailableSeries)
+	failed := append(seriesSubjects(result.FailedSeries), plan.UpstreamFailed...)
+	for subject := range failedSubject {
+		failed = append(failed, subject)
+	}
+	result.FailedSubjects = uniqueSorted(failed)
 }
 
 // WarmupStatuses 返回各任务内存窗口的载入状态。

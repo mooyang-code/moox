@@ -9,7 +9,10 @@ import {
   parseMetrics,
   parseUtcInput,
   recentUtcRange,
-  replayStatusLabel
+  replayFeeText,
+  replayStatusLabel,
+  replayTasksText,
+  replayUsesSwap
 } from "./model";
 
 describe("replay model helpers", () => {
@@ -142,6 +145,52 @@ describe("replay model helpers", () => {
     });
     expect(parseBarDetail({ ...bar, summary_json: '{"ledger":{"buy_scale":0}}' }).buyScale).toBe(0);
     expect(parseBarDetail({ ...bar, summary_json: '{"ledger":{"buy_scale":0.4}}' }).buyScale).toBe(0.4);
+  });
+
+  it("labels positions by market, orders by absolute value and keeps shorts negative", () => {
+    const bar = {
+      bar_end_time: "2026-09-01T01:00:00Z",
+      status: "ok",
+      targets: [],
+      positions_json:
+        '{"cash":10,"positions":{"A|spot":{"quantity":1,"last_price":10,"value":10},"B|swap":{"quantity":-5,"last_price":20,"value":-100}}}',
+      summary_json: '{"ledger":{"unfilled":["C|swap"],"liquidated":["D|spot"]}}',
+      bar_return: 0,
+      equity: 20,
+      turnover: 0,
+      fee: 0,
+      spot_value: 10,
+      swap_value: -100,
+      holdings: 2,
+      frozen: 0,
+      skip_reason: "",
+      unfilled: 1,
+      liquidated: 1
+    };
+    const detail = parseBarDetail(bar);
+    expect(detail.positions.map(position => position.label)).toEqual(["B（永续）", "A（现货）"]);
+    expect(detail.positions[0]).toMatchObject({ id: "B|swap", value: -100, quantity: -5 });
+    expect(detail.unfilled).toEqual(["C（永续）"]);
+    expect(detail.liquidated).toEqual(["D（现货）"]);
+  });
+
+  it("describes the replay tasks and fees by market", () => {
+    const single = { tasks: { spot: { factor_task_id: "ftask_a", view_id: "v" } }, spot_fee_bps: 10, swap_fee_bps: 0 };
+    const mixed = {
+      tasks: { swap: { factor_task_id: "ftask_b", view_id: "w" }, spot: { factor_task_id: "ftask_a", view_id: "v" } },
+      spot_fee_bps: 10,
+      swap_fee_bps: 5
+    };
+    expect(replayTasksText(single)).toBe("ftask_a");
+    expect(replayTasksText(mixed)).toBe("现货 ftask_a、永续 ftask_b");
+    expect(replayFeeText(single)).toBe("10 bps");
+    expect(replayFeeText(mixed)).toBe("现货 10 bps、永续 5 bps");
+    expect(replayUsesSwap(single)).toBe(false);
+    expect(replayUsesSwap(mixed)).toBe(true);
+    expect(replayUsesSwap(null)).toBe(false);
+    const unified = { tasks: { multi: { factor_task_id: "ftask_u", view_id: "u" } }, spot_fee_bps: 10, swap_fee_bps: 5 };
+    expect(replayUsesSwap(unified), "统一数据集的任务同时带现货与永续").toBe(true);
+    expect(replayFeeText(unified)).toBe("现货 10 bps、永续 5 bps");
   });
 
   it("summarizes the equity curve in text", () => {

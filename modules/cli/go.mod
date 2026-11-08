@@ -24,6 +24,8 @@ replace github.com/mooyang-code/moox/packages/factorname => ../../packages/facto
 
 replace github.com/mooyang-code/moox/packages/seriesformat => ../../packages/seriesformat
 
+replace github.com/mooyang-code/moox/packages/seriesset => ../../packages/seriesset
+
 replace github.com/mooyang-code/moox/packages/lifecycle => ../../packages/lifecycle
 
 replace github.com/mooyang-code/moox/packages/sysctl => ../../packages/sysctl
@@ -59,6 +61,7 @@ require (
 	github.com/mooyang-code/moox/packages/seriesformat v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/seriesimport v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/seriesreplay v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/seriesset v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/servicecatalog v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/storagepolicy v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/sysctl v0.0.0-00010101000000-000000000000

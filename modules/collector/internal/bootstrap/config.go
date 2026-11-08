@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/eventbus"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/subjectsync"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
@@ -30,10 +31,14 @@ type Config struct {
 	SCFPlan            SCFPlanConfig                      `yaml:"scf_plan"`
 	CollectorRetention CollectorRetentionConfig           `yaml:"collector_retention"`
 	KlineResample      KlineResampleConfig                `yaml:"kline_resample"`
-	Health             HealthConfig                       `yaml:"health"`
-	DNS                DNSConfig                          `yaml:"dns"`
-	EgressProxy        EgressProxyConfig                  `yaml:"egress_proxy"`
-	SubjectSync        subjectsync.Config                 `yaml:"subject_sync"`
+	// EventBus 是 Collector 到 EventBus 的连接，K 线合成与下架检测共用；不配置时不发布任何事件，合成只靠兜底检查。
+	EventBus    eventbus.Config   `yaml:"event_bus"`
+	Health      HealthConfig      `yaml:"health"`
+	DNS         DNSConfig         `yaml:"dns"`
+	EgressProxy EgressProxyConfig `yaml:"egress_proxy"`
+	// Delist 是下架检测的开关，安装时按拓扑渲染：没有出口代理（没配海外机）时关掉自动检测。
+	Delist      DelistConfig       `yaml:"delist"`
+	SubjectSync subjectsync.Config `yaml:"subject_sync"`
 	// Stream 是 WS 推送采集的 Collector 侧参数（截止、提交预留随计划下发给 collector-stream）。
 	Stream StreamConfig `yaml:"stream"`
 }
@@ -125,21 +130,10 @@ type KlineResampleConfig struct {
 	// HistoryBucketsPerRound 是历史合成作业每轮最多推进的桶数；HistoryMaxJobs 是每轮最多推进的作业数。
 	HistoryBucketsPerRound int `yaml:"history_buckets_per_round"`
 	HistoryMaxJobs         int `yaml:"history_max_jobs"`
+	// LegacyEventBus 只用来识别旧配置：EventBus 连接已经移到顶层 event_bus，旧位置出现就给出明确的报错（见 validateKlineResample）。
+	LegacyEventBus any `yaml:"event_bus"`
 	// MaxReadKeys 是单次读取源/目标行的键数上限。
 	MaxReadKeys int `yaml:"max_read_keys"`
-	// EventBus 配置后，合成订阅源数据集的周期完成事件与补采完成事件，并发布补采完成事件；不配置则只靠兜底检查。
-	EventBus ResampleEventBusConfig `yaml:"event_bus"`
-}
-
-// ResampleEventBusConfig 是合成使用的事件总线连接。凭据文件存放用户名与密码，权限必须是 0600。
-type ResampleEventBusConfig struct {
-	URLs           []string `yaml:"urls"`
-	CredentialFile string   `yaml:"credential_file"`
-}
-
-// Enabled 报告是否配置了事件总线。
-func (c ResampleEventBusConfig) Enabled() bool {
-	return len(c.URLs) > 0 || strings.TrimSpace(c.CredentialFile) != ""
 }
 
 // HealthConfig controls the lightweight HTTP health endpoint.
@@ -154,6 +148,12 @@ type DNSConfig struct {
 	RefreshInterval time.Duration `yaml:"refresh_interval"`
 	ResolveTimeout  time.Duration `yaml:"resolve_timeout"`
 	Nameservers     []string      `yaml:"nameservers"`
+}
+
+// DelistConfig 控制下架检测。AutoDetect 为 false 时不轮询币安现货、币安 U 本位、OKX 永续三个来源，
+// 手工登记（collector delist register）照常可用。默认 true：配置里没写时保持自动检测。
+type DelistConfig struct {
+	AutoDetect bool `yaml:"auto_detect"`
 }
 
 // EgressProxyConfig selects HTTP domains and DNS snapshots through the shared gateway.
@@ -291,6 +291,9 @@ func (c *Config) validateEgressProxy() error {
 
 func (c *Config) validateKlineResample() error {
 	k := c.KlineResample
+	if k.LegacyEventBus != nil {
+		return fmt.Errorf("kline_resample.event_bus 已经移到顶层 event_bus：K 线合成与下架检测共用一条 EventBus 连接。请用新版 setup（unitinstall）重新渲染配置，或把这一段从 kline_resample 下移到顶层")
+	}
 	if k.ScanTimeout <= 0 || k.ExecTimeout <= 0 || k.FallbackGrace <= 0 {
 		return fmt.Errorf("kline_resample durations must be positive")
 	}
@@ -333,6 +336,7 @@ func Default() *Config {
 		SCFPlan:     defaultSCFPlan(),
 		SubjectSync: subjectsync.DefaultConfig(),
 		Stream:      defaultStreamConfig(),
+		Delist:      DelistConfig{AutoDetect: true},
 		SCFAccess:   gatewayclient.ExternalFileConfig{Address: "access.example.test:11004", InstanceID: "access@storage", Caller: "scf-collector", KeyFile: "../../secrets/caller-scf-collector.key"},
 		CollectorRetention: CollectorRetentionConfig{
 			MaintenanceInterval: "1m", MaintenanceOffset: "35s", MaintenanceTimeout: "20s", MaxRowsPerPass: 50000,
@@ -350,7 +354,7 @@ func Default() *Config {
 			RefreshInterval: 5 * time.Minute,
 			ResolveTimeout:  5 * time.Second,
 		},
-		EgressProxy: EgressProxyConfig{Domains: []string{"*.binance.com", "data-api.binance.vision"}, DNS: EgressDNSConfig{
+		EgressProxy: EgressProxyConfig{Domains: []string{"*.binance.com", "data-api.binance.vision", "openapi.okx.com"}, DNS: EgressDNSConfig{
 			RefreshInterval: 5 * time.Minute,
 			RequestTimeout:  3 * time.Second,
 			CacheTTL:        5 * time.Minute,

@@ -2,6 +2,9 @@ package order
 
 import "github.com/mooyang-code/moox/modules/trade/internal/execution/paper"
 
+// OperationDiscardPendingLock 是丢弃待提交订单时等交易账户锁没等到的 AccountExecutionError.Operation。
+const OperationDiscardPendingLock = "discard_pending_lock"
+
 // AccountExecutionError identifies a failed account dependency, not a failed
 // persistence operation. Callers can isolate this account while keeping shared
 // storage failures visible to worker readiness.

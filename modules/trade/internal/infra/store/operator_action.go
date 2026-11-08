@@ -296,3 +296,41 @@ func canonicalJSON(raw string, label string) (string, error) {
 	}
 	return string(data), nil
 }
+
+// OperatorActionQuery 是人工操作记录的查询条件。
+type OperatorActionQuery struct {
+	LogicalAccountID string
+	ActionType       string
+	StartTime        int64
+	EndTime          int64
+	Offset           int
+	Limit            int
+}
+
+// ListOperatorActions 按创建时间倒序列出组合的人工操作记录（人工单、撤单、清仓、减仓、下架清仓）。
+func (s *Store) ListOperatorActions(ctx context.Context, spaceID string, query OperatorActionQuery) ([]OperatorActionRecord, int64, error) {
+	db := s.db.WithContext(ctx).Table("t_operator_actions").
+		Where("c_space_id = ? AND c_logical_account_id = ?", spaceID, query.LogicalAccountID)
+	if query.ActionType != "" {
+		db = db.Where("c_action_type = ?", query.ActionType)
+	}
+	if query.StartTime > 0 {
+		db = db.Where("c_ctime >= datetime(? / 1000, 'unixepoch')", query.StartTime)
+	}
+	if query.EndTime > 0 {
+		db = db.Where("c_ctime <= datetime(? / 1000, 'unixepoch')", query.EndTime)
+	}
+	var total int64
+	if err := db.Count(&total).Error; err != nil {
+		return nil, 0, err
+	}
+	var rows []operatorActionRow
+	if err := db.Order("c_ctime DESC, c_action_id DESC").Offset(query.Offset).Limit(query.Limit).Find(&rows).Error; err != nil {
+		return nil, 0, err
+	}
+	records := make([]OperatorActionRecord, 0, len(rows))
+	for _, row := range rows {
+		records = append(records, operatorActionRecord(row))
+	}
+	return records, total, nil
+}

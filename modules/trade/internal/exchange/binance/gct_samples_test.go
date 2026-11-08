@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 )
 
@@ -50,6 +51,14 @@ func TestRecordedExchangeInfoFilters(t *testing.T) {
 				instrument.MinExchangeQuantity.IsZero() || instrument.PriceTick.IsZero() {
 				t.Fatalf("%s: BTCUSDT rules = %+v", test.file, instrument)
 			}
+			// 价格偏离限制：合约 PERCENT_PRICE（1.05 / 0.95），现货 PERCENT_PRICE_BY_SIDE（买看 bidMultiplierUp、卖看 askMultiplierDown）。
+			if instrument.MaxBuyPriceRatio.Cmp(shared.MustDecimal("1")) <= 0 || instrument.MinSellPriceRatio.IsZero() ||
+				instrument.MinSellPriceRatio.Cmp(shared.MustDecimal("1")) >= 0 {
+				t.Fatalf("%s: BTCUSDT price band = %s / %s", test.file, instrument.MaxBuyPriceRatio, instrument.MinSellPriceRatio)
+			}
+			if test.market == exchange.MarketTypeSwap && (instrument.MaxBuyPriceRatio.String() != "1.05" || instrument.MinSellPriceRatio.String() != "0.95") {
+				t.Fatalf("futures price band = %s / %s", instrument.MaxBuyPriceRatio, instrument.MinSellPriceRatio)
+			}
 		}
 		if !found {
 			t.Fatalf("%s: BTCUSDT missing from %+v", test.file, instruments)
@@ -74,7 +83,7 @@ func TestRecordedSpotOrders(t *testing.T) {
 		t.Fatalf("open orders = %+v", open)
 	}
 
-	order, err := adapter.GetOrder(context.Background(), "BTCUSDT", "eliteOrder")
+	order, err := adapter.GetOrder(context.Background(), exchange.NewSymbolKey(exchange.MarketTypeSpot, "BTCUSDT"), "eliteOrder")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +92,7 @@ func TestRecordedSpotOrders(t *testing.T) {
 	}
 
 	// 撤单回执的 clientOrderId 是撤单请求自己的单号，返回值必须是被撤订单的单号；部分成交后撤销。
-	canceled, err := adapter.CancelOrder(context.Background(), "LTCBTC", "myOrder1")
+	canceled, err := adapter.CancelOrder(context.Background(), exchange.NewSymbolKey(exchange.MarketTypeSpot, "LTCBTC"), "myOrder1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +108,7 @@ func TestRecordedFuturesBooks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if book := books["BTCUSDT"]; book.Bid.String() != "11495.46" || book.Ask.String() != "11495.47" {
+	if book := books[exchange.SymbolKey{Market: exchange.MarketTypeSwap, Symbol: "BTCUSDT"}]; book.Bid.String() != "11495.46" || book.Ask.String() != "11495.47" {
 		t.Fatalf("books = %+v", books)
 	}
 }

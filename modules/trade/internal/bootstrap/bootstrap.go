@@ -2,9 +2,9 @@ package bootstrap
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"gorm.io/gorm"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -13,13 +13,18 @@ import (
 	accountapp "github.com/mooyang-code/moox/modules/trade/internal/application/account"
 	"github.com/mooyang-code/moox/modules/trade/internal/application/accountsync"
 	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
+	delistapp "github.com/mooyang-code/moox/modules/trade/internal/application/delist"
 	equityapp "github.com/mooyang-code/moox/modules/trade/internal/application/equity"
+	"github.com/mooyang-code/moox/modules/trade/internal/application/fundmaint"
 	logicalapp "github.com/mooyang-code/moox/modules/trade/internal/application/logicalaccount"
+	"github.com/mooyang-code/moox/modules/trade/internal/application/marginmonitor"
 	operatorapp "github.com/mooyang-code/moox/modules/trade/internal/application/operator"
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
 	papersimulation "github.com/mooyang-code/moox/modules/trade/internal/application/papersimulation"
 	targetapp "github.com/mooyang-code/moox/modules/trade/internal/application/target"
+	walletapp "github.com/mooyang-code/moox/modules/trade/internal/application/wallet"
 	"github.com/mooyang-code/moox/modules/trade/internal/config"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/ordersettings"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/eventconsumer"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
@@ -46,8 +51,8 @@ import (
 
 var startedAt = time.Now()
 
-// maxChildNotional 是单笔子单的金额上限，下单校验和目标拆单共用。
-const maxChildNotional = "100000"
+// maxChildNotional 是下单校验的单笔金额硬上限；目标拆单的单笔上限在组合的下单设置里，不能超过它。
+const maxChildNotional = ordersettings.MaxChildNotionalCeiling
 
 func Initialize(ctx context.Context, serverInstance *server.Server) (*server.Server, error) {
 	cfg, err := config.Load("./config/app.yaml")
@@ -97,6 +102,7 @@ func initialize(
 	accounts := &accountapp.Service{
 		Store: accountapp.Repository{Store: tradeStore}, Secrets: secrets,
 		SessionState: manager, SymbolConfigs: manager, Exchanges: registry, LiveTradingEnabled: cfg.Runtime.LiveTradingEnabled,
+		Inspector: registry,
 	}
 	orderService := &orderapp.Service{
 		Store: tradeStore, Adapters: manager, SymbolConfig: manager, RequestSync: manager.RequestSync,
@@ -121,7 +127,7 @@ func initialize(
 	fillReducer := &consumer.Reducer{Store: tradeStore, Enqueue: equitySampler.Enqueue}
 	syncService := &accountsync.Service{
 		Store: tradeStore, Adapters: manager, SessionState: manager,
-		Fills: fillReducer, Orders: orderService, Metrics: balanceMetrics,
+		Fills: fillReducer, Orders: orderService, Metrics: balanceMetrics, Equity: equityService,
 	}
 	paperMatcher := &executionpaper.Matcher{
 		Store:   tradeStore,
@@ -141,6 +147,11 @@ func initialize(
 		if accountErr != nil {
 			return executionpaper.InfrastructureError{Err: accountErr}
 		}
+		// 模拟盘快照的权益同样按统一公式落库（与实盘同步、权益采样一致）；估值失败保留适配器的值。
+		refreshed := store.SnapshotFromExchange(snapshot)
+		if equity, equityErr := equityService.ValueEquity(refreshCtx, account, refreshed, adapter); equityErr == nil {
+			refreshed.Equity = equity
+		}
 		err := tradeStore.Transaction(refreshCtx, func(tx *store.Tx) error {
 			// The paper snapshot is reconstructed from the same SQLite facts that
 			// back reservations. Advance the sync watermark together with it so
@@ -152,7 +163,7 @@ func initialize(
 				account.SpaceID,
 				tradingAccountID,
 				account.FillCursors,
-				paperSnapshotRecord(snapshot),
+				refreshed,
 				at,
 				at,
 			)
@@ -168,15 +179,19 @@ func initialize(
 	targetExecutor := &targetapp.Executor{
 		Exchanges: registry,
 		Store:     tradeStore, Orders: orderService,
-		Prices:           targetapp.ExchangePriceSource{Adapters: manager},
-		MaxChildNotional: shared.MustDecimal(maxChildNotional),
-		OnReversal:       noteTargetReversal(tradeStore),
-		Observe:          &telemetry.ExecutionMetrics{},
+		Prices:     targetapp.ExchangePriceSource{Adapters: manager},
+		OnReversal: noteTargetReversal(tradeStore),
+		Observe:    &telemetry.ExecutionMetrics{},
 		// 每秒最多一批：永续每批 16 单、现货 8 单，约为交易所下单限额的 80%。
 		MinBatchInterval: time.Second,
 		// 模拟盘没有交易所限频，批间隔缩短到 0.3 秒。
 		PaperMinBatchInterval: 300 * time.Millisecond,
 		RateStatus:            adapterRateStatus(manager),
+		// 普通账户的第 4、6 阶段：钱包划转与归集；统一账户、OKX、模拟盘不会调用。
+		Transfers: targetapp.NewWalletTransfer(&walletapp.Service{
+			Store: tradeStore, Adapters: manager,
+			RequestSync: func(accountID string) { manager.RequestSync(accountID) },
+		}),
 	}
 	observeRateLimits()
 	weightResolver := &targetapp.WeightResolver{
@@ -195,15 +210,51 @@ func initialize(
 	logicalAccounts := &logicalapp.Service{
 		Store: tradeStore, Syncer: accountSyncer{service: syncService},
 		Prices: targetapp.ExchangePriceSource{Adapters: manager},
+		// 策略会话释放、重绑、认领删掉目标前，由执行器撤掉组合里还没结束的目标挂单。
+		TargetOrders: targetExecutor,
+	}
+	inspectionWorker := &traderuntime.InspectionWorker{Store: tradeStore, Accounts: accounts, Logical: logicalAccounts}
+	// 资金维护（BNB 抵扣与补买、小额兑 BNB、稳定币调平）：每小时一次，资金设置变更后马上一次。
+	fundService := &fundmaint.Service{Store: tradeStore, Adapters: manager, Orders: orderService}
+	fundWorker := &traderuntime.FundWorker{Maintainer: fundService, Interval: time.Hour, Gate: lifeGate.Open}
+	logicalAccounts.OnFundSettingsChanged = func(spaceID, logicalAccountID string) {
+		fundService.Invalidate(context.Background(), spaceID, logicalAccountID)
+		fundWorker.Wake(spaceID, logicalAccountID)
 	}
 	operatorService := &operatorapp.Service{
-		Exchanges: registry,
-		Store:     tradeStore, Orders: orderService,
+		Exchanges: registry, Wake: targetWorker.Wake,
+		Store: tradeStore, Orders: orderService,
 		Syncer: accountSyncer{service: syncService},
 		Prices: targetapp.ExchangePriceSource{Adapters: manager},
 	}
+	// 保证金率监控：每分钟检查一次实盘账户；它复用资金维护的定时任务外壳（定时、门禁、超时一样）。
+	marginService := &marginmonitor.Service{
+		Store: tradeStore,
+		Reduce: func(
+			callCtx context.Context, spaceID, actionID, logicalAccountID string, ratio shared.Decimal, reason string,
+		) (store.OperatorActionRecord, error) {
+			result, reduceErr := operatorService.FlattenLogicalAccount(callCtx, operatorapp.FlattenCommand{
+				SpaceID: spaceID, ActionID: actionID, LogicalAccountID: logicalAccountID, Reason: reason, ReduceRatio: ratio,
+			})
+			return result.Action, reduceErr
+		},
+		Collect: func(
+			callCtx context.Context, spaceID, logicalAccountID, idempotencyKey string, accounts []store.TradingAccountRecord,
+		) (bool, error) {
+			// 归集用执行器的钱包划转；还没接入划转时监控只告警一次，请用户手动划转。
+			if targetExecutor.Transfers == nil {
+				return false, marginmonitor.ErrTransferUnavailable
+			}
+			// 风控划转没有目标：TargetID 为空串（见 wallet_transfer.sql）。idempotencyKey（风控减仓的动作号 margin-<组合>-<时间>）
+			// 是这次风控事件的幂等键：钱包按它做幂等（划转记录的本地引用号带着它），不同风控事件的归集互不影响。
+			return targetExecutor.Transfers.CollectForRisk(callCtx, spaceID, logicalAccountID, idempotencyKey, accounts)
+		},
+		Pause: logicalAccounts.PauseIf,
+	}
+	marginWorker := &traderuntime.FundWorker{Maintainer: marginService, Interval: time.Minute, Gate: lifeGate.Open, Name: "保证金率监控"}
 	operatorWorker := &traderuntime.OperatorWorker{
 		Actions: tradeStore, Resumer: operatorService, Interval: time.Second,
+		ActionScoped: operatorapp.ActionScopedError,
 	}
 	manager.NewSession = func(record store.TradingAccountRecord) (traderuntime.ManagedSession, error) {
 		credential := exchange.Credential{}
@@ -218,12 +269,18 @@ func initialize(
 			if credentialErr != nil {
 				return nil, credentialErr
 			}
+			// 同一个密钥 ID 下直接改了密钥内容会绕过检测：绑定前核对密钥指纹，对不上就不绑定并立即重新检测。
+			if fingerprintErr := verifyCredentialFingerprint(record, credential); fingerprintErr != nil {
+				recheckInspection(inspectionWorker, record.SpaceID, record.TradingAccountID)
+				return nil, fingerprintErr
+			}
 		}
 		accountConfig := exchange.AccountConfig{
 			TradingAccountID: record.TradingAccountID,
 			Exchange:         exchange.Exchange(record.Exchange),
-			MarketType:       exchange.MarketType(record.MarketType),
+			Markets:          marketTypes(record.Markets),
 			ExecutionMode:    exchange.ExecutionMode(record.ExecutionMode),
+			AccountMode:      exchange.AccountMode(record.AccountMode),
 			Environment:      exchange.AccountEnvironment(record.Environment),
 			SettlementAsset:  record.SettlementAsset,
 			MarginMode:       exchange.MarginMode(record.MarginMode),
@@ -253,7 +310,7 @@ func initialize(
 			}
 			marketData = adapter
 			// 没有私有流的场所不订阅，会话改为短周期同步。
-			accountEvents, _ = adapter.(execution.AccountEventSource)
+			accountEvents = execution.AccountEventsOf(adapter)
 		}
 		return &traderuntime.ExchangeSession{
 			Account: record, Adapter: adapter, MarketData: marketData, AccountEvents: accountEvents,
@@ -261,8 +318,11 @@ func initialize(
 			PaperMatcherReady:     paperMatcherWorker.Ready,
 			PaperAccountState:     paperMatcher.AccountState,
 			PaperAccountRecovered: paperMatcher.RecoverAccount,
-			OnReady:               equitySampler.Enqueue,
-			SyncInterval:          30 * time.Second,
+			OnReady: func(tradingAccountID string) {
+				equitySampler.Enqueue(tradingAccountID)
+				fundWorker.AccountReady(tradingAccountID)
+			},
+			SyncInterval: 30 * time.Second,
 		}, nil
 	}
 
@@ -300,6 +360,9 @@ func initialize(
 	runWorker(operatorWorker.Run)
 	runWorker(paperMatcherWorker.Run)
 	runWorker(equitySampler.Run)
+	runWorker(inspectionWorker.Run)
+	runWorker(fundWorker.Run)
+	runWorker(marginWorker.Run)
 	runWorker((&traderuntime.AttentionWorker{Store: tradeStore, Executor: targetExecutor}).Run)
 	if eventBus != nil {
 		client := eventBus
@@ -315,7 +378,7 @@ func initialize(
 	}
 	rpc.RegisterAll(
 		serverInstance,
-		&rpc.AccountServer{Accounts: accounts, Sync: syncService, Store: tradeStore},
+		&rpc.AccountServer{Accounts: accounts, Sync: syncService, Store: tradeStore, AfterInspection: inspectionWorker.Handle},
 		&rpc.LogicalAccountServer{
 			LogicalAccounts: logicalAccounts,
 			Store:           tradeStore,
@@ -396,6 +459,23 @@ func initialize(
 			MatcherReady:       paperMatcherWorker.Ready,
 			Holdings:           &rpc.HoldingQuery{Store: tradeStore, Adapters: manager},
 			Adapters:           manager,
+			Delist:             &delistapp.Service{Store: tradeStore, OnChanged: targetWorker.Wake, Prices: targetapp.ExchangePriceSource{Adapters: manager}},
+			FlattenInstrument: func(callCtx context.Context, command rpc.FlattenInstrumentCommand) (store.OperatorActionRecord, bool, error) {
+				result, flattenErr := operatorService.FlattenLogicalAccount(callCtx, operatorapp.FlattenCommand{
+					SpaceID: command.SpaceID, ActionID: command.ActionID, LogicalAccountID: command.LogicalAccountID,
+					Reason: command.Reason, InstrumentID: command.InstrumentID, Exchange: command.Exchange,
+					DeadlineAt: command.DeadlineAt,
+				})
+				return result.Action, result.Unblocked, flattenErr
+			},
+			ReduceAccount: func(
+				callCtx context.Context, spaceID, actionID, logicalAccountID string, ratio shared.Decimal, reason string,
+			) (store.OperatorActionRecord, error) {
+				result, reduceErr := operatorService.FlattenLogicalAccount(callCtx, operatorapp.FlattenCommand{
+					SpaceID: spaceID, ActionID: actionID, LogicalAccountID: logicalAccountID, Reason: reason, ReduceRatio: ratio,
+				})
+				return result.Action, reduceErr
+			},
 			FlattenAccount: func(
 				callCtx context.Context, spaceID, actionID, tradingAccountID, reason string,
 			) (store.OperatorActionRecord, error) {
@@ -445,24 +525,38 @@ func initialize(
 
 // registerBuiltins 是唯一的场所注册列表，新增场所时在这里加一行。
 func registerBuiltins(registry *execution.Registry) {
-	cryptoExchange := func(name exchange.Exchange) execution.ExchangeDescriptor {
+	cryptoExchange := func(name exchange.Exchange, inspect exchange.Inspector) execution.ExchangeDescriptor {
 		return execution.ExchangeDescriptor{
 			Exchange:     name,
 			OrderTypes:   []exchange.OrderType{exchange.OrderTypeMarket, exchange.OrderTypeLimit},
 			FillPolicies: []exchange.FillPolicy{exchange.FillPolicyGTC, exchange.FillPolicyIOC, exchange.FillPolicyFOK},
+			Inspect:      inspect,
 		}
 	}
-	registry.Register(cryptoExchange(exchange.ExchangeBinance), func(
+	binanceDescriptor := cryptoExchange(exchange.ExchangeBinance, binance.Inspect)
+	// 统一账户整个账户一个适配器（一个余额接口、一条私有流）；普通账户按市场各一个，由注册表合成。
+	binanceDescriptor.WholeAccount = func(config exchange.AccountConfig) bool {
+		return config.AccountMode == exchange.AccountModeBinancePortfolioMargin
+	}
+	registry.Register(binanceDescriptor, func(
 		config exchange.AccountConfig,
 		credential exchange.Credential,
 	) (execution.ExecutionAdapter, error) {
 		if err := requireAPIKey(config, credential); err != nil {
 			return nil, err
 		}
+		if err := requireInspectedMode(config); err != nil {
+			return nil, err
+		}
+		if config.AccountMode == exchange.AccountModeBinancePortfolioMargin {
+			if config.Environment == exchange.AccountEnvironmentTestnet {
+				return nil, errors.New("币安测试网没有统一账户")
+			}
+			return binance.NewPortfolioMargin(config, credential), nil
+		}
 		return binance.New(config, credential), nil
 	})
-	okxExchange := cryptoExchange(exchange.ExchangeOKX)
-	okxExchange.UnifiedAccount = true
+	okxExchange := cryptoExchange(exchange.ExchangeOKX, okx.Inspect)
 	registry.Register(okxExchange, func(
 		config exchange.AccountConfig,
 		credential exchange.Credential,
@@ -487,6 +581,51 @@ func requireAPIKey(config exchange.AccountConfig, credential exchange.Credential
 	return nil
 }
 
+// verifyCredentialFingerprint 核对账户检测结果里记录的密钥指纹和现在读到的密钥是否一致：
+// 检测通过的是当时那把密钥；同一个密钥 ID 下改了密钥内容、或账户从来没检测过，都不能直接绑定。
+func verifyCredentialFingerprint(record store.TradingAccountRecord, credential exchange.Credential) error {
+	inspection, err := exchange.ParseInspection(record.InspectionJSON)
+	if err != nil {
+		return fmt.Errorf("账户的检测结果读不出来，需要重新检测：%w", err)
+	}
+	if inspection.InspectedAt.IsZero() || inspection.CredentialFingerprint == "" {
+		return errors.New("账户的密钥还没有检测过，正在检测，通过后才会绑定")
+	}
+	if inspection.CredentialFingerprint != exchange.CredentialFingerprint(credential.APIKey) {
+		return errors.New("密钥内容与检测时不一致（同一个密钥 ID 下改了密钥），正在重新检测，通过后才会绑定")
+	}
+	return nil
+}
+
+// recheckInspections 记录正在重新检测的账户，避免会话每次重试绑定都再起一个检测。
+var recheckInspections sync.Map
+
+// recheckInspection 在后台立即重新检测一个账户；检测通过后写入新的指纹，会话下次重试绑定就能通过。
+func recheckInspection(worker *traderuntime.InspectionWorker, spaceID, accountID string) {
+	if _, running := recheckInspections.LoadOrStore(accountID, struct{}{}); running {
+		return
+	}
+	go func() {
+		defer recheckInspections.Delete(accountID)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := worker.CheckAccount(ctx, spaceID, accountID); err != nil {
+			log.Warnf("交易账户 %s 密钥内容变化后重新检测没有完成：%v", accountID, err)
+		}
+	}()
+}
+
+// requireInspectedMode：币安生产环境的实盘账户必须先检测出账户类型（统一账户和普通账户的接口完全不同），不能按默认值猜。
+// 测试网跳过检测，一律按普通账户。
+func requireInspectedMode(config exchange.AccountConfig) error {
+	if config.ExecutionMode == exchange.ExecutionModeLive &&
+		config.Environment == exchange.AccountEnvironmentProduction &&
+		config.AccountMode == exchange.AccountModeUnspecified {
+		return errors.New("账户类型还没有检测出来：请先在管理台对这个账户“重新检测”")
+	}
+	return nil
+}
+
 func exchangeCredential(
 	ctx context.Context,
 	secrets accountapp.SecretSource,
@@ -506,19 +645,7 @@ func exchangeCredential(
 			secretID,
 		)
 	}
-	extra := map[string]string{}
-	if strings.TrimSpace(value.ExtraConfig) != "" {
-		if err := json.Unmarshal([]byte(value.ExtraConfig), &extra); err != nil {
-			return exchange.Credential{}, fmt.Errorf(
-				"trade bootstrap: decode credential extra config: %w",
-				err,
-			)
-		}
-	}
-	return exchange.Credential{
-		APIKey: value.KeyID, APISecret: value.SecretValue,
-		Passphrase: extra["passphrase"], Extra: extra,
-	}, nil
+	return accountapp.CredentialFromSecret(value)
 }
 
 type accountSyncer struct {
@@ -555,7 +682,10 @@ func (s instrumentSource) GetInstrument(
 	if err != nil {
 		return exchange.Instrument{}, err
 	}
-	return instrumentFromRecord(exchangeName, market, record), nil
+	if record.MarketType != string(market) {
+		return exchange.Instrument{}, fmt.Errorf("标的 %s 属于市场 %s，不是 %s", symbol, record.MarketType, market)
+	}
+	return instrumentFromRecord(exchangeName, exchange.MarketType(record.MarketType), record), nil
 }
 
 func (s instrumentSource) GetInstrumentForAccount(
@@ -573,7 +703,10 @@ func (s instrumentSource) GetInstrumentForAccount(
 	if err != nil {
 		return exchange.Instrument{}, err
 	}
-	return instrumentFromRecord(exchangeName, market, record), nil
+	if record.MarketType != string(market) {
+		return exchange.Instrument{}, fmt.Errorf("标的 %s 属于市场 %s，不是 %s", symbol, record.MarketType, market)
+	}
+	return instrumentFromRecord(exchangeName, exchange.MarketType(record.MarketType), record), nil
 }
 
 func instrumentFromRecord(exchangeName exchange.Exchange, market exchange.MarketType, record store.InstrumentRecord) exchange.Instrument {
@@ -586,6 +719,7 @@ func instrumentFromRecord(exchangeName exchange.Exchange, market exchange.Market
 		ExchangeQuantityStep: decimal(record.ExchangeQuantityStep),
 		MinExchangeQuantity:  decimal(record.MinExchangeQuantity),
 		PriceTick:            decimal(record.PriceTick), MinNotional: decimal(record.MinNotional),
+		MaxBuyPriceRatio: decimal(record.MaxBuyPriceRatio), MinSellPriceRatio: decimal(record.MinSellPriceRatio),
 		Status: record.Status, ExchangeUpdatedAt: time.UnixMilli(record.ExchangeUpdatedAt),
 	}
 }
@@ -594,44 +728,13 @@ type positionSource struct {
 	store *store.Store
 }
 
+// GetPosition 按内部标的 ID 取持仓；标的 ID 自带市场，现货和合约同名的交易所代码不会串。
 func (s positionSource) GetPosition(
 	ctx context.Context,
 	tradingAccountID string,
-	symbol string,
+	instrumentID string,
 ) (exchange.Position, error) {
-	account, err := s.store.GetTradingAccountByID(ctx, tradingAccountID)
-	if err != nil {
-		return exchange.Position{}, err
-	}
-	record, found, err := s.store.GetPosition(
-		ctx,
-		account.SpaceID,
-		tradingAccountID,
-		symbol,
-		string(exchange.PositionSideNet),
-	)
-	if err != nil {
-		return exchange.Position{}, err
-	}
-	if !found {
-		return exchange.Position{
-			TradingAccountID: tradingAccountID, ExchangeSymbol: symbol,
-			PositionSide: exchange.PositionSideNet,
-		}, nil
-	}
-	return exchange.Position{
-		TradingAccountID: tradingAccountID, ExchangeSymbol: symbol,
-		PositionSide:   exchange.PositionSide(record.PositionSide),
-		SignedQuantity: decimal(record.SignedQuantity),
-		EntryPrice:     decimal(record.EntryPrice), MarkPrice: decimal(record.MarkPrice),
-		Leverage:          decimal(record.Leverage),
-		MarginMode:        exchange.MarginMode(record.MarginMode),
-		UsedMargin:        decimal(record.UsedMargin),
-		LiquidationPrice:  decimal(record.LiquidationPrice),
-		UnrealizedPnL:     decimal(record.UnrealizedPnL),
-		RealizedPnL:       decimal(record.RealizedPnL),
-		ExchangeUpdatedAt: time.UnixMilli(record.ExchangeUpdatedAt),
-	}, nil
+	return s.GetPositionForAccount(ctx, tradingAccountID, instrumentID)
 }
 
 func (s positionSource) GetPositionForAccount(
@@ -643,23 +746,23 @@ func (s positionSource) GetPositionForAccount(
 	if err != nil {
 		return exchange.Position{}, err
 	}
-	record, found, err := s.store.GetPosition(ctx, account.SpaceID, tradingAccountID, symbol, string(exchange.PositionSideNet))
+	instrument, err := s.store.GetInstrumentByIDForAccount(ctx, account.SpaceID, tradingAccountID, symbol)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return exchange.Position{TradingAccountID: tradingAccountID, InstrumentID: symbol, PositionSide: exchange.PositionSideNet}, nil
+		}
+		return exchange.Position{}, err
+	}
+	key := exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol)
+	record, found, err := s.store.GetPosition(ctx, account.SpaceID, tradingAccountID, key, string(exchange.PositionSideNet))
 	if err != nil {
 		return exchange.Position{}, err
 	}
 	if !found {
-		if instrument, instrumentErr := s.store.GetInstrumentByIDForAccount(ctx, account.SpaceID, tradingAccountID, symbol); instrumentErr == nil {
-			record, found, err = s.store.GetPosition(ctx, account.SpaceID, tradingAccountID, instrument.ExchangeSymbol, string(exchange.PositionSideNet))
-			if err != nil {
-				return exchange.Position{}, err
-			}
-		}
-	}
-	if !found {
-		return exchange.Position{TradingAccountID: tradingAccountID, InstrumentID: symbol, ExchangeSymbol: symbol, PositionSide: exchange.PositionSideNet}, nil
+		return exchange.Position{TradingAccountID: tradingAccountID, Market: key.Market, InstrumentID: symbol, ExchangeSymbol: key.Symbol, PositionSide: exchange.PositionSideNet}, nil
 	}
 	return exchange.Position{
-		TradingAccountID: tradingAccountID, InstrumentID: record.InstrumentID,
+		TradingAccountID: tradingAccountID, Market: exchange.MarketType(record.MarketType), InstrumentID: record.InstrumentID,
 		ExchangeSymbol: record.ExchangeSymbol,
 		PositionSide:   exchange.PositionSide(record.PositionSide), SignedQuantity: decimal(record.SignedQuantity),
 		EntryPrice: decimal(record.EntryPrice), MarkPrice: decimal(record.MarkPrice), Leverage: decimal(record.Leverage),
@@ -667,6 +770,14 @@ func (s positionSource) GetPositionForAccount(
 		LiquidationPrice: decimal(record.LiquidationPrice), UnrealizedPnL: decimal(record.UnrealizedPnL),
 		RealizedPnL: decimal(record.RealizedPnL), ExchangeUpdatedAt: time.UnixMilli(record.ExchangeUpdatedAt),
 	}, nil
+}
+
+func marketTypes(markets []string) []exchange.MarketType {
+	result := make([]exchange.MarketType, len(markets))
+	for i, market := range markets {
+		result[i] = exchange.MarketType(market)
+	}
+	return result
 }
 
 func decimal(value string) shared.Decimal {
@@ -678,20 +789,6 @@ func decimal(value string) shared.Decimal {
 		return shared.Zero()
 	}
 	return parsed
-}
-
-func paperSnapshotRecord(snapshot exchange.AccountSnapshot) store.TradingAccountSnapshot {
-	balances := make([]store.AssetBalance, 0, len(snapshot.Balances))
-	for _, balance := range snapshot.Balances {
-		balances = append(balances, store.AssetBalance{
-			Asset: balance.Asset, Available: balance.Available.String(), Locked: balance.Locked.String(), Total: balance.Total.String(),
-		})
-	}
-	return store.TradingAccountSnapshot{
-		Balances: balances, Equity: snapshot.Equity.String(), AvailableFunds: snapshot.AvailableFunds.String(),
-		UsedMargin: snapshot.UsedMargin.String(), MaintenanceMargin: snapshot.MaintenanceMargin.String(),
-		UnrealizedPnL: snapshot.UnrealizedPnL.String(), ExchangeUpdatedAt: snapshot.ExchangeUpdatedAt.UnixMilli(),
-	}
 }
 
 func registerMetricsReporter(serverInstance *server.Server) *report.ModuleMetrics {

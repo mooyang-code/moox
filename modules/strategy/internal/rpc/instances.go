@@ -39,11 +39,12 @@ func (s *Service) CreateStrategyInstance(ctx context.Context, req *strategypb.Cr
 	if v.GetSpaceId() != "" && v.GetSpaceId() != scoped {
 		return &strategypb.CreateStrategyInstanceRsp{RetInfo: invalid(errors.New("实例不在当前空间"))}, nil
 	}
-	if strings.TrimSpace(v.GetStrategyId()) == "" || strings.TrimSpace(v.GetFactorTaskId()) == "" {
-		return &strategypb.CreateStrategyInstanceRsp{RetInfo: invalid(errors.New("strategy_id 与 factor_task_id 不能为空"))}, nil
+	if strings.TrimSpace(v.GetStrategyId()) == "" {
+		return &strategypb.CreateStrategyInstanceRsp{RetInfo: invalid(errors.New("strategy_id 不能为空"))}, nil
 	}
-	if _, err := input.ViewIDOfTask(v.GetFactorTaskId()); err != nil {
-		return &strategypb.CreateStrategyInstanceRsp{RetInfo: invalid(fmt.Errorf("factor_task_id 不合法：%w", err))}, nil
+	factorTasks, err := normalizeFactorTasks(v.GetFactorTasks())
+	if err != nil {
+		return &strategypb.CreateStrategyInstanceRsp{RetInfo: invalid(err)}, nil
 	}
 	instanceID := strings.TrimSpace(v.GetInstanceId())
 	if instanceID == "" {
@@ -57,7 +58,7 @@ func (s *Service) CreateStrategyInstance(ctx context.Context, req *strategypb.Cr
 	}
 	defer unlock()
 	now := s.nowTime()
-	instance := store.Instance{InstanceID: instanceID, StrategyID: v.GetStrategyId(), SpaceID: scoped, FactorTaskID: strings.TrimSpace(v.GetFactorTaskId()), LogicalAccountID: optionalString(v.GetLogicalAccountId()), CreatedAt: now, UpdatedAt: now}
+	instance := store.Instance{InstanceID: instanceID, StrategyID: v.GetStrategyId(), SpaceID: scoped, FactorTasks: factorTasks, LogicalAccountID: optionalString(v.GetLogicalAccountId()), CreatedAt: now, UpdatedAt: now}
 	if existing, err := s.Store.GetInstance(ctx, instanceID); err == nil {
 		return createRetryResponse(existing, instance, v.GetEnabled()), nil
 	} else if !errors.Is(err, store.ErrNotFound) {
@@ -65,6 +66,15 @@ func (s *Service) CreateStrategyInstance(ctx context.Context, req *strategypb.Cr
 	}
 	if def, err := s.Store.GetDefinition(ctx, instance.StrategyID); err != nil || def.DeletedAt != nil {
 		return &strategypb.CreateStrategyInstanceRsp{RetInfo: invalid(fmt.Errorf("策略定义 %s 不存在", instance.StrategyID))}, nil
+	}
+	// 创建时就按任务源数据集核对“市场 → 任务”：任务一旦关联实例就永久占住，填错了实例启用不了又删不掉。
+	if s.Resolver == nil {
+		return &strategypb.CreateStrategyInstanceRsp{RetInfo: invalid(errDependenciesUnavailable)}, nil
+	}
+	if err := input.CheckRegisteredMarkets(ctx, factorTasks, func(ctx context.Context, taskID string) (string, error) {
+		return s.Resolver.TaskMarket(ctx, scoped, taskID)
+	}); err != nil {
+		return &strategypb.CreateStrategyInstanceRsp{RetInfo: invalid(err)}, nil
 	}
 	if v.GetEnabled() && instance.LogicalAccountID != nil && s.Owner == nil {
 		return &strategypb.CreateStrategyInstanceRsp{RetInfo: invalid(errors.New("未接线 Trade，不能启用绑定账户的实例"))}, nil
@@ -81,7 +91,7 @@ func (s *Service) CreateStrategyInstance(ctx context.Context, req *strategypb.Cr
 		if getErr != nil {
 			return &strategypb.CreateStrategyInstanceRsp{
 				RetInfo:  invalid(fmt.Errorf("实例 %q 已创建但状态不可读，请先查看实例再用 SetStrategyInstanceEnabled 启用：%w", instanceID, errors.Join(err, fmt.Errorf("读取已创建的实例：%w", getErr)))),
-				Instance: &strategypb.StrategyInstance{InstanceId: instanceID, StrategyId: instance.StrategyID, SpaceId: instance.SpaceID, FactorTaskId: instance.FactorTaskID},
+				Instance: &strategypb.StrategyInstance{InstanceId: instanceID, StrategyId: instance.StrategyID, SpaceId: instance.SpaceID, FactorTasks: instance.FactorTasks},
 			}
 		}
 		return &strategypb.CreateStrategyInstanceRsp{RetInfo: invalid(fmt.Errorf("实例 %q 已创建；请查看实例并用 SetStrategyInstanceEnabled 启用：%w", instanceID, err)), Instance: instanceProto(current)}
@@ -101,7 +111,7 @@ func (s *Service) CreateStrategyInstance(ctx context.Context, req *strategypb.Cr
 // createRetryResponse 处理重复创建：配置一致时返回现有实例，启用状态不同时提示用显式启用接口。
 func createRetryResponse(existing, requested store.Instance, desiredEnabled bool) *strategypb.CreateStrategyInstanceRsp {
 	sameAccount := (existing.LogicalAccountID == nil && requested.LogicalAccountID == nil) || (existing.LogicalAccountID != nil && requested.LogicalAccountID != nil && *existing.LogicalAccountID == *requested.LogicalAccountID)
-	if existing.SpaceID != requested.SpaceID || existing.StrategyID != requested.StrategyID || existing.FactorTaskID != requested.FactorTaskID || !sameAccount {
+	if existing.SpaceID != requested.SpaceID || existing.StrategyID != requested.StrategyID || !store.SameTasks(existing.FactorTasks, requested.FactorTasks) || !sameAccount {
 		return &strategypb.CreateStrategyInstanceRsp{RetInfo: invalid(errors.New("instance_id 与已有实例的配置冲突"))}
 	}
 	response := &strategypb.CreateStrategyInstanceRsp{RetInfo: success(), Instance: instanceProto(existing)}
@@ -138,8 +148,10 @@ func (s *Service) UpdateStrategyInstance(ctx context.Context, req *strategypb.Up
 	if current.SpaceID != scoped {
 		return &strategypb.UpdateStrategyInstanceRsp{RetInfo: invalid(errors.New("实例不在当前空间"))}, nil
 	}
-	if task := strings.TrimSpace(v.GetFactorTaskId()); task != "" && task != current.FactorTaskID {
-		return &strategypb.UpdateStrategyInstanceRsp{RetInfo: invalid(errors.New("实例的因子任务在创建时写定，不能修改"))}, nil
+	if len(v.GetFactorTasks()) > 0 {
+		if tasks, err := normalizeFactorTasks(v.GetFactorTasks()); err != nil || !store.SameTasks(tasks, current.FactorTasks) {
+			return &strategypb.UpdateStrategyInstanceRsp{RetInfo: invalid(errors.New("实例的因子任务在创建时写定，不能修改"))}, nil
+		}
 	}
 	updated := current
 	updated.StrategyID = strings.TrimSpace(v.GetStrategyId())
@@ -290,10 +302,13 @@ func (s *Service) enable(ctx context.Context, instance store.Instance) (store.In
 		return instance, fmt.Errorf("策略定义 %s 不存在", instance.StrategyID)
 	}
 	sessionID := ""
+	// poolSession 为真表示这次启用用的会话是策略池会话（带成员快照）：启用成功后要开始预热。直接用这里已有的成员快照判断，
+	// 不再重读会话——重读失败会让预热没有启动，门禁又看不到任务，事件就被一直重投。
+	poolSession := false
 	var resolvedJSON json.RawMessage
 	if instance.SessionID != nil && strings.TrimSpace(*instance.SessionID) != "" {
 		previous := *instance.SessionID
-		if session, err := s.Store.GetSession(ctx, previous); err == nil && session.ClosedAt == nil && session.DSLHash == definition.DSLHash && sessionTask(session) == instance.FactorTaskID {
+		if session, err := s.Store.GetSession(ctx, previous); err == nil && session.ClosedAt == nil && session.DSLHash == definition.DSLHash && store.SameTasks(sessionTasks(session), instance.FactorTasks) {
 			resolved, err := input.ParseResolved([]byte(session.ResolvedJSON))
 			if err != nil {
 				return reload(), err
@@ -303,6 +318,7 @@ func (s *Service) enable(ctx context.Context, instance store.Instance) (store.In
 			}
 			sessionID = session.SessionID
 			resolvedJSON = json.RawMessage(session.ResolvedJSON)
+			poolSession = session.MembersJSON != ""
 		} else {
 			if instance.LogicalAccountID != nil {
 				if err := s.Owner.ReleaseSession(ctx, instance.SpaceID, *instance.LogicalAccountID, instance.InstanceID, previous); err != nil && !tradeowner.IsReleaseSettled(err) {
@@ -323,25 +339,49 @@ func (s *Service) enable(ctx context.Context, instance store.Instance) (store.In
 		if s.Resolver == nil {
 			return reload(), errors.New("Storage 与 Factor 依赖未配置，不能启用实例")
 		}
-		resolved, _, err := s.Resolver.ResolveInstance(ctx, instance.InstanceID, instance.SpaceID, instance.FactorTaskID, strategy)
-		if err != nil {
-			return reload(), err
-		}
-		if err := checkLiveCalendar(resolved, s.nowTime()); err != nil {
-			return reload(), err
-		}
-		if err := s.Resolver.CheckCoverage(ctx, instance.SpaceID, resolved, s.nowTime()); err != nil {
-			return reload(), err
+		var resolved input.Resolved
+		membersJSON := ""
+		if strategy.IsPool() {
+			members, err := s.checkPool(ctx, strategy)
+			if err != nil {
+				return reload(), err
+			}
+			pooled, err := s.Resolver.ResolvePoolInstance(ctx, instance.InstanceID, instance.SpaceID, instance.FactorTasks, strategy, members)
+			if err != nil {
+				return reload(), err
+			}
+			if err := checkLiveCalendar(pooled.Resolved, s.nowTime()); err != nil {
+				return reload(), err
+			}
+			if err := s.Resolver.CheckPoolCoverage(ctx, instance.SpaceID, pooled, s.nowTime()); err != nil {
+				return reload(), err
+			}
+			if membersJSON, err = pooled.MembersJSON(); err != nil {
+				return reload(), err
+			}
+			resolved = pooled.Resolved
+		} else {
+			var err error
+			if resolved, _, err = s.Resolver.ResolveInstance(ctx, instance.InstanceID, instance.SpaceID, instance.FactorTasks, strategy); err != nil {
+				return reload(), err
+			}
+			if err := checkLiveCalendar(resolved, s.nowTime()); err != nil {
+				return reload(), err
+			}
+			if err := s.Resolver.CheckCoverage(ctx, instance.SpaceID, resolved, s.nowTime()); err != nil {
+				return reload(), err
+			}
 		}
 		resolvedJSON, err = json.Marshal(resolved)
 		if err != nil {
 			return reload(), err
 		}
+		poolSession = membersJSON != ""
 		if sessionID, err = store.NewID(); err != nil {
 			return reload(), err
 		}
 		now := s.nowTime()
-		if err := s.Store.OpenSession(ctx, store.Session{SessionID: sessionID, InstanceID: instance.InstanceID, DSLHash: definition.DSLHash, ResolvedJSON: string(resolvedJSON), CreatedAt: now}, definition.DSLYaml); err != nil {
+		if err := s.Store.OpenSession(ctx, store.Session{SessionID: sessionID, InstanceID: instance.InstanceID, DSLHash: definition.DSLHash, ResolvedJSON: string(resolvedJSON), MembersJSON: membersJSON, CreatedAt: now}, definition.DSLYaml); err != nil {
 			return reload(), fmt.Errorf("写入会话快照失败：%w", err)
 		}
 		// 先把会话写到停用状态的实例上再联系 Trade：认领响应丢失时，启动对账能释放这个确定的身份。
@@ -356,7 +396,7 @@ func (s *Service) enable(ctx context.Context, instance store.Instance) (store.In
 		if err != nil {
 			return reload(), err
 		}
-		if err := s.Owner.ClaimSession(ctx, instance.SpaceID, *instance.LogicalAccountID, instance.InstanceID, sessionID, resolved.MarketType); err != nil {
+		if err := s.Owner.ClaimSession(ctx, instance.SpaceID, *instance.LogicalAccountID, instance.InstanceID, sessionID, resolved.Market.Markets()); err != nil {
 			if tradeowner.IsPermanentClaimError(err) {
 				_ = s.Store.CloseSession(ctx, sessionID, s.nowTime())
 				if clearErr := s.Store.ClearInstanceSession(ctx, instance.InstanceID, sessionID, s.nowTime()); clearErr != nil {
@@ -372,6 +412,9 @@ func (s *Service) enable(ctx context.Context, instance store.Instance) (store.In
 		}
 		return reload(), err
 	}
+	if poolSession && s.Warmer != nil {
+		s.Warmer.Start(ctx, instance.InstanceID, sessionID)
+	}
 	return reload(), nil
 }
 
@@ -386,15 +429,48 @@ func checkLiveCalendar(resolved input.Resolved, now time.Time) error {
 	return nil
 }
 
-// sessionTask 返回会话固化的解析结果里的因子任务（与存储层启用时的核对口径一致）；解析失败时返回空串。
-func sessionTask(session store.Session) string {
-	var resolved struct {
-		FactorTaskID string `json:"factor_task_id"`
+// sessionTasks 返回会话固化的解析结果里的因子任务（市场 → 任务，与存储层启用时的核对口径一致）；解析失败时返回空表。
+func sessionTasks(session store.Session) map[string]string {
+	resolved, err := input.ParseResolved([]byte(session.ResolvedJSON))
+	if err != nil {
+		return map[string]string{}
 	}
-	if err := json.Unmarshal([]byte(session.ResolvedJSON), &resolved); err != nil {
-		return ""
+	tasks := make(map[string]string, len(resolved.Tasks))
+	for market, task := range resolved.Tasks {
+		tasks[market] = task.FactorTaskID
 	}
-	return resolved.FactorTaskID
+	return tasks
+}
+
+// normalizeFactorTasks 校验并规范化请求里的 factor_tasks（市场 → 因子任务）：一个或两个，市场只能是 spot、swap、equity，
+// 统一数据集（同时放现货与永续）上的任务登记为 multi；股票、multi 都不能与其他市场混用，任务 ID 必须合法且不重复。
+func normalizeFactorTasks(raw map[string]string) (map[string]string, error) {
+	if len(raw) == 0 {
+		return nil, errors.New("factor_tasks 不能为空：按市场（spot、swap、equity）给出因子任务，统一数据集上的任务写 multi")
+	}
+	tasks := make(map[string]string, len(raw))
+	seen := map[string]string{}
+	for market, taskID := range raw {
+		market, taskID = strings.TrimSpace(market), strings.TrimSpace(taskID)
+		if market != dsl.MarketSpot && market != dsl.MarketSwap && market != dsl.MarketEquity && market != input.MarketMulti {
+			return nil, fmt.Errorf("factor_tasks 的市场 %q 不受支持，只能是 spot、swap、equity 或 multi（统一数据集上的任务）", market)
+		}
+		if _, err := input.ViewIDOfTask(taskID); err != nil {
+			return nil, fmt.Errorf("factor_tasks 的 %s 任务 ID 不合法：%w", market, err)
+		}
+		if other, dup := seen[taskID]; dup {
+			return nil, fmt.Errorf("因子任务 %s 同时登记在 %s 和 %s 市场", taskID, other, market)
+		}
+		seen[taskID] = market
+		tasks[market] = taskID
+	}
+	if _, equity := tasks[dsl.MarketEquity]; equity && len(tasks) > 1 {
+		return nil, errors.New("股票（equity）不能与现货、永续混用")
+	}
+	if _, unified := tasks[input.MarketMulti]; unified && len(tasks) > 1 {
+		return nil, errors.New("统一数据集上的任务（multi）已同时覆盖现货与永续，不能再绑定其他任务")
+	}
+	return tasks, nil
 }
 
 // disable 执行停用流程：先落库再释放 Trade；释放确认前保留会话，供重启对账恢复。
@@ -412,6 +488,9 @@ func (s *Service) disable(ctx context.Context, instance store.Instance) (store.I
 	}
 	if err := s.Store.DisableInstance(ctx, instance.InstanceID, instance.SessionID, pending, "", s.nowTime()); err != nil {
 		return reload(), err
+	}
+	if s.Warmer != nil {
+		s.Warmer.Stop(instance.InstanceID)
 	}
 	if releaseNeeded {
 		if s.Owner == nil {

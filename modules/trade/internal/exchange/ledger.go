@@ -21,6 +21,17 @@ const (
 	LedgerOther       LedgerType = "OTHER"
 )
 
+// MarketScoped 报告这类流水是否属于某个市场：成交、手续费、已实现盈亏、资金费、强平按市场区分；
+// 划转、利息等是账户级的，不属于某个市场。
+func (t LedgerType) MarketScoped() bool {
+	switch t {
+	case LedgerTrade, LedgerFee, LedgerRealizedPnL, LedgerFundingFee, LedgerLiquidation:
+		return true
+	default:
+		return false
+	}
+}
+
 // LedgerEntry 是一条资金流水：某个资产余额的一次变动。只用于展示和对账，不参与交易决策。
 type LedgerEntry struct {
 	// ID 是交易所流水号，同一账户内唯一。
@@ -31,7 +42,9 @@ type LedgerEntry struct {
 	ExchangeType string
 	Asset        string
 	// Amount 是余额变动，正数为增加。
-	Amount         shared.Decimal
+	Amount shared.Decimal
+	// Market 是流水所属的市场；账户级的流水（例如划转）为空。
+	Market         MarketType
 	ExchangeSymbol string
 	TradeID        string
 	Info           string
@@ -39,9 +52,11 @@ type LedgerEntry struct {
 
 // LedgerQuery 是资金流水查询：[Start, End] 时间窗内最新的至多 Limit 条。
 type LedgerQuery struct {
-	Start time.Time
-	End   time.Time
-	Limit int
+	// Market 是要查流水的市场；账户只有一个市场支持流水时可以不写。
+	Market MarketType
+	Start  time.Time
+	End    time.Time
+	Limit  int
 }
 
 // LedgerPage 是一页资金流水，按时间倒序；HasMore 表示窗口内还有更早的记录没取到。

@@ -141,6 +141,31 @@ max_rows_per_pass = 50000
 channel_type = "wecom"
 webhook_url = ""
 
+# 交易所密钥（可选）：每把写成一段 [[exchange_keys]]，setup apply 把它们写进密钥管理。下面是注释掉的样例，只有取消注释才会生效：
+# 取消注释前先换成真实密钥，否则占位值会被写进密钥管理。
+#   name         只允许小写字母、数字和连字符，同一交易所、环境下不能重复；固定 ID 是 exchange-<交易所>-<环境>-<名称>。
+#   exchange     binance 或 okx；environment 是 production 或 testnet。
+#   api_key、secret_key（OKX 还要 passphrase）  随整个文件加密保存，config get 默认打码。
+#   readonly     只读密钥设为 true：不能用来建交易账户，apply 后也不做交易账户检测。Collector 检测币安现货下架读的就是
+#                name = "readonly" 的币安生产只读 Key（固定 ID exchange-binance-production-readonly）。
+# 只建不改：密钥管理里已有这个 ID 时不覆盖（以管理台为准），已在管理台删除的不重建；删掉这里的条目也不会删除密钥管理里的密钥。
+# 只有配了海外服务器（Trade 所在主机）才用得上。写入后，Trade 部署完成再检测：moox-cli trade inspect-credential。
+# [[exchange_keys]]
+# name = "readonly"
+# exchange = "binance"
+# environment = "production"
+# api_key = "填入币安只读 API Key"
+# secret_key = "填入币安只读 Secret Key"
+# readonly = true
+#
+# [[exchange_keys]]
+# name = "main"
+# exchange = "okx"
+# environment = "production"
+# api_key = "填入 OKX API Key"
+# secret_key = "填入 OKX Secret Key"
+# passphrase = "填入 OKX Passphrase"
+
 # setup init 导入因子：先导入因子定义，再按任务建立因子任务并把成员加入任务、按 status 启用。
 # 定义（factors.definitions）引用 source_dir 下 YAML 因子库文件里的一个因子（factor_id + file），
 # 展示名与表达式都来自库文件，类型、输入列、输出列与回看由 FactorMgr 编译得到；定义是全局的，不含数据集、
@@ -377,12 +402,13 @@ control = ["console-proxy", "web-host", "admin", "monitor", "collector", "cloudf
 # 客户端与它同机时连回环地址，否则连它所在主机的对外地址。
 storage = ["storage-primary", "storage-node", "storage-view", "access", "eventbus"]
 # collector-stream 接收交易所 WS 推送并提供本地执行端，必须放在能直连交易所的海外机；首次安装用 setup deploy-unit --profile collector-stream。
-overseas = ["trade", "access", "egress-proxy", "collector-stream"]
+# callback-dispatcher 是事件中心：接收事件并向你配置的接口发通知，部署主机必须能访问到你的接口；首次安装用 setup deploy-unit --profile callback-dispatcher。
+overseas = ["trade", "access", "egress-proxy", "collector-stream", "callback-dispatcher"]
 # factor-engine 与 archive-worker 是外部程序组件，由 setup deploy-unit 以 systemd 用户服务安装，停用主机或部署时 CLI 同时停掉服务。
 factor = ["factor-engine", "archive-worker"]
 
 [egress_proxy]
-http_domains = ["*.binance.com", "data-api.binance.vision"]
+http_domains = ["*.binance.com", "data-api.binance.vision", "openapi.okx.com"]
 
 [egress_proxy.dns]
 refresh_interval_seconds = 300

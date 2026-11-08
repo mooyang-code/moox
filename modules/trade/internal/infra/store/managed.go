@@ -3,8 +3,13 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
+	"time"
 
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/fundsettings"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"gorm.io/gorm"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // ListManagedInstruments 返回账户上有成交的策略或人工订单涉及的标的。
@@ -20,7 +25,8 @@ func (s *Store) ListManagedInstruments(ctx context.Context, spaceID, tradingAcco
 }
 
 // ManagedAssets 返回持仓来自余额的账户里归 MooX 管理的资产：结算资产、当前目标里的标的、
-// 有成交的策略或人工订单涉及的标的。其他资产不估值，也不卖出。
+// 有成交的策略或人工订单涉及的标的，再减去组合资金设置里的排除资产
+// （BNB 保留、稳定币保证金、保证金币、底仓）。其他资产不估值，也不卖出。
 func (s *Store) ManagedAssets(ctx context.Context, spaceID, tradingAccountID string) (map[string]struct{}, error) {
 	account, err := s.GetTradingAccountByID(ctx, tradingAccountID)
 	if err != nil {
@@ -34,6 +40,12 @@ func (s *Store) ManagedAssets(ctx context.Context, spaceID, tradingAccountID str
 	for _, instrumentID := range instrumentIDs {
 		managed[instrumentID] = struct{}{}
 	}
+	// 设置按账户所属组合读（含停用成员，和清仓同一个入口）：数值字段坏了按默认处理，排除字段坏了报错、不下单。
+	settings, settingsErr := s.FundSettingsForAccount(ctx, spaceID, tradingAccountID)
+	if settingsErr != nil {
+		return nil, settingsErr
+	}
+	// 目标里的标的只在成员启用时并入受管资产。
 	logical, _, err := s.FindLogicalAccountByTradingAccount(ctx, spaceID, tradingAccountID)
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
@@ -53,9 +65,61 @@ func (s *Store) ManagedAssets(ctx context.Context, spaceID, tradingAccountID str
 	}
 	assets := map[string]struct{}{account.SettlementAsset: {}}
 	for _, instrument := range instruments {
-		if _, ok := managed[instrument.InstrumentID]; ok {
+		// 只有持仓来自余额的市场（现货）的标的会让基础资产变成受管资产：
+		// 合约标的的持仓在持仓表里，不能让 BTC 合约变成“受管的 BTC 现货”。
+		if !exchange.RuleFor(instrument.MarketType).PositionFromBalance {
+			continue
+		}
+		if _, ok := managed[instrument.InstrumentID]; ok && !settings.ExcludedFromManaged(instrument.BaseAsset) {
 			assets[instrument.BaseAsset] = struct{}{}
 		}
 	}
 	return assets, nil
+}
+
+// ErrFundSettingsUnreadable 表示资金设置里排除字段读不出来，无法确定排除哪些资产：这个组合不能下单。
+var ErrFundSettingsUnreadable = errors.New("资金设置的排除字段无法解析")
+
+// ResolveFundSettings 是执行器、受管资产、清仓共用的资金设置读取入口：逐字段宽松解析，
+// 数值字段坏了取默认值并按组合限频告警（一小时一次）；排除字段坏了返回 ErrFundSettingsUnreadable，
+// 调用方不能下单，同样按组合限频打交易关注项。
+func (s *Store) ResolveFundSettings(logical LogicalAccountRecord) (fundsettings.Settings, error) {
+	settings, warning, err := fundsettings.ParseLenient(logical.FundSettingsJSON)
+	if err != nil {
+		if s.shouldWarnFundSettings(logical.LogicalAccountID) {
+			log.Warnf("交易关注项：组合 %s 的资金设置排除字段无法解析，该组合暂停下单：%v", logical.LogicalAccountID, err)
+		}
+		return fundsettings.Settings{}, fmt.Errorf("%w: 组合 %s：%v", ErrFundSettingsUnreadable, logical.LogicalAccountID, err)
+	}
+	if warning != nil && s.shouldWarnFundSettings(logical.LogicalAccountID) {
+		log.Warnf("交易关注项：组合 %s 的资金设置有字段无法解析，已按默认值处理：%v", logical.LogicalAccountID, warning)
+	}
+	return settings, nil
+}
+
+// FundSettingsForAccount 取执行账户所属组合的资金设置：只有账户不在任何组合里（没有记录）才取默认值，
+// 其他读错误（数据库忙、超时）原样返回，不能悄悄按默认设置继续。
+func (s *Store) FundSettingsForAccount(ctx context.Context, spaceID, tradingAccountID string) (fundsettings.Settings, error) {
+	logical, _, err := s.FindLogicalAccountMembership(ctx, spaceID, tradingAccountID)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		settings, _, _ := fundsettings.ParseLenient("")
+		return settings, nil
+	}
+	if err != nil {
+		return fundsettings.Settings{}, err
+	}
+	return s.ResolveFundSettings(logical)
+}
+
+func (s *Store) shouldWarnFundSettings(logicalAccountID string) bool {
+	s.fundWarnMu.Lock()
+	defer s.fundWarnMu.Unlock()
+	if s.fundWarned == nil {
+		s.fundWarned = make(map[string]time.Time)
+	}
+	if last, ok := s.fundWarned[logicalAccountID]; ok && time.Since(last) < time.Hour {
+		return false
+	}
+	s.fundWarned[logicalAccountID] = time.Now()
+	return true
 }

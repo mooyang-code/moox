@@ -1,3 +1,4 @@
+import { MARKET_ORDER, marketLabel } from "@/views/strategy/market-mode";
 import type { InstrumentTarget, StrategyInstance, StrategyResult, StrategyTargetSnapshot } from "@/api/strategy-types";
 
 export type TargetState = "inactive" | "unknown" | "empty" | "expired" | "zero" | "valid";
@@ -33,6 +34,11 @@ export function targetStateTag(state: TargetState): { label: string; color: stri
   )[state];
 }
 
+function marketRank(market: string): number {
+  const index = MARKET_ORDER.indexOf(market as (typeof MARKET_ORDER)[number]);
+  return index < 0 ? MARKET_ORDER.length : index;
+}
+
 /** 目标按权重绝对值从大到小排列，并给出相对最大权重的比例（0~1），用于权重条。 */
 export function rankTargets(targets: InstrumentTarget[]): { target: InstrumentTarget; weight: number; ratio: number }[] {
   const rows = targets.map(target => ({ target, weight: Number(target.target_weight) }));
@@ -40,7 +46,12 @@ export function rankTargets(targets: InstrumentTarget[]): { target: InstrumentTa
   const max = Math.max(0, ...valid.map(row => Math.abs(row.weight)));
   return rows
     .map(row => ({ ...row, weight: Number.isFinite(row.weight) ? row.weight : 0 }))
-    .sort((a, b) => Math.abs(b.weight) - Math.abs(a.weight) || a.target.instrument_id.localeCompare(b.target.instrument_id))
+    .sort(
+      (a, b) =>
+        Math.abs(b.weight) - Math.abs(a.weight) ||
+        a.target.instrument_id.localeCompare(b.target.instrument_id) ||
+        marketRank(a.target.market) - marketRank(b.target.market)
+    )
     .map(row => ({ ...row, ratio: max > 0 ? Math.abs(row.weight) / max : 0 }));
 }
 
@@ -81,7 +92,11 @@ const skipReasons: Record<string, string> = {
   history_insufficient: "历史覆盖不足",
   out_of_order: "乱序周期",
   expired: "周期已过期",
-  infra_retry_exhausted: "读取重试耗尽"
+  infra_retry_exhausted: "读取重试耗尽",
+  market_missing: "另一个市场的数据未到",
+  market_failed: "市场整体失败（因子失败比例过高）",
+  catchup: "恢复追赶中，不发目标（就绪时照常求值、只推进规则状态）",
+  pool_warmup_failed: "策略池预热失败"
 };
 
 export function skipReasonLabel(reason?: string): string {
@@ -104,7 +119,10 @@ const itemReasons: Record<string, string> = {
   no_row: "本期无行",
   score_invalid: "分数无效",
   not_expected: "已不在预期集合",
+  period_skipped: "本期整期跳过，未求值",
   holding: "延续批次持有",
+  prev_hold: "只缺上一根，保持持仓不动",
+  market_hold: "所在市场本期不可用，保持持仓不动",
   stop_loss: "固定止损",
   trailing_stop: "跟踪止损",
   take_profit: "止盈",
@@ -120,11 +138,12 @@ function reasonText(reason: string): string {
   if (reason.startsWith("missing:")) return `缺少 ${reason.slice("missing:".length)}`;
   if (reason.startsWith("factor_failed:")) return `上游因子失败（${reason.slice("factor_failed:".length)}）`;
   if (reason.startsWith("source_failed:")) return `上游数据失败（${reason.slice("source_failed:".length)}）`;
+  if (reason.startsWith("market_unavailable:")) return `市场本期不可用（${reason.slice("market_unavailable:".length)}）`;
   if (reason.startsWith("score_error:")) return `分数计算出错：${reason.slice("score_error:".length)}`;
   return itemReasons[reason] ?? reason;
 }
 
-/** 解释明细的原因：已知代码给出中文说明并附原文，带前缀的原因（holding:、tranche:、missing:、factor_failed:、source_failed:、score_error:）逐段翻译。 */
+/** 解释明细的原因：已知代码给出中文说明并附原文，带前缀的原因（holding:、tranche:、missing:、factor_failed:、source_failed:、market_unavailable:、score_error:）逐段翻译。 */
 export function itemReasonLabel(reason?: string): string {
   if (!reason) return "-";
   const text = reasonText(reason);
@@ -139,6 +158,7 @@ const stages: Record<string, { label: string; color: string }> = {
   idle: { label: "未触发", color: "gray" },
   weighted: { label: "入选", color: "green" },
   dropped: { label: "被剔除", color: "orange" },
+  held: { label: "保持持仓", color: "orange" },
   stopped: { label: "止损止盈", color: "red" }
 };
 
@@ -150,16 +170,17 @@ export function stageColor(stage: string): string {
   return stages[stage]?.color ?? "blue";
 }
 
-/** 解释明细的阶段顺序：入选的放最前面，其次是止损止盈、被剔除、打分未入选，最后是缺数、未触发、被过滤和年龄不足。 */
+/** 解释明细的阶段顺序：入选的放最前面，其次是保持持仓、止损止盈、被剔除、打分未入选，最后是缺数、未触发、被过滤和年龄不足。 */
 const stageOrder: Record<string, number> = {
   weighted: 0,
-  stopped: 1,
-  dropped: 2,
-  scored: 3,
-  missing: 4,
-  idle: 5,
-  filtered: 6,
-  aged_out: 7
+  held: 1,
+  stopped: 2,
+  dropped: 3,
+  scored: 4,
+  missing: 5,
+  idle: 6,
+  filtered: 7,
+  aged_out: 8
 };
 
 /** 解释明细排序：按阶段，再按名次（无名次的在后），最后按标的；入选的几个标的不会淹没在几百个被过滤的标的里。 */
@@ -198,6 +219,9 @@ export interface ResultSummary {
   rules: Record<string, RuleSummary>;
   gross: string;
   net: string;
+  /** 混合市场策略分市场的净敞口；此时 cash 没有意义，后端不填。 */
+  spotNet: string;
+  swapNet: string;
   cash: string;
   turnover: string;
   notes: string[];
@@ -220,6 +244,8 @@ export function parseSummary(raw?: string): ResultSummary {
     rules: value.rules && typeof value.rules === "object" ? value.rules : {},
     gross: value.gross ?? "",
     net: value.net ?? "",
+    spotNet: value.spot_net ?? "",
+    swapNet: value.swap_net ?? "",
     cash: value.cash ?? "",
     turnover: value.turnover ?? "",
     notes: Array.isArray(value.notes) ? value.notes : []
@@ -238,14 +264,21 @@ export interface ResolvedColumn {
   definition_hash: string;
 }
 
-export interface ResolvedBinding {
+/** 一个市场绑定的因子任务与结果 View。 */
+export interface ResolvedTask {
+  market: string;
+  factor_task_id: string;
   view_id: string;
   dataset_id: string;
   source_dataset_id: string;
+}
+
+export interface ResolvedBinding {
+  /** 市场模式：select 取 spot | swap | both | equity，prefer 取 spot | swap | equity。 */
+  market: { select: string; prefer: string };
+  tasks: ResolvedTask[];
   bar: string;
   calendar: string;
-  market_type: string;
-  spot: boolean;
   min_age_bars: number;
   columns: ResolvedColumn[];
 }
@@ -253,7 +286,16 @@ export interface ResolvedBinding {
 /** 解析启用时固化的绑定（resolved_json）；未启用过的实例返回 null。 */
 export function parseResolved(raw?: string): ResolvedBinding | null {
   const value = parseObject(raw);
-  if (!value.view_id) return null;
+  const tasks = Object.entries((value.tasks ?? {}) as Record<string, any>)
+    .map(([market, task]) => ({
+      market,
+      factor_task_id: task?.factor_task_id ?? "",
+      view_id: task?.view_id ?? "",
+      dataset_id: task?.dataset_id ?? "",
+      source_dataset_id: task?.source_dataset_id ?? ""
+    }))
+    .sort((a, b) => MARKET_ORDER.indexOf(a.market as any) - MARKET_ORDER.indexOf(b.market as any));
+  if (!tasks.length) return null;
   const columns = Object.entries((value.columns ?? {}) as Record<string, any>)
     .map(([name, binding]) => ({
       name,
@@ -266,13 +308,10 @@ export function parseResolved(raw?: string): ResolvedBinding | null {
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
   return {
-    view_id: value.view_id,
-    dataset_id: value.dataset_id ?? "",
-    source_dataset_id: value.source_dataset_id ?? "",
+    market: { select: value.market?.select ?? "", prefer: value.market?.prefer ?? "" },
+    tasks,
     bar: value.bar ?? "",
     calendar: value.calendar ?? "",
-    market_type: value.market_type ?? "",
-    spot: Boolean(value.spot),
     min_age_bars: Number(value.min_age_bars ?? 0),
     columns
   };
@@ -294,9 +333,16 @@ type ResultLike = Pick<
   "result_id" | "session_id" | "status" | "bar_end_time" | "created_at" | "targets" | "skip_reason"
 >;
 
+/** 混合市场策略显示分市场净敞口（现金没有意义），其余显示现金比例。 */
+export function cashOrNetText(summary: Pick<ResultSummary, "cash" | "spotNet" | "swapNet">): string {
+  if (summary.spotNet || summary.swapNet) return `现货净 ${percent(summary.spotNet)} · 永续净 ${percent(summary.swapNet)}`;
+  return percent(summary.cash);
+}
+
 /**
  * 按 K 线结束时间从旧到新比较同一会话内相邻的 ok 结果，得到每期的目标成员变化与产出延迟。
- * 比较的是目标标的集合（不含权重），也不代表账户实际持仓。
+ * 比较的是目标集合（不含权重），按（标的、市场）区分：同一个币从现货换到永续也算一进一出；也不代表账户实际持仓。
+ * 本页结果涉及多个市场时，变化里的标的带上市场名。
  * 不同会话的结果互不比较：每个会话的首期 comparable 为 false；分页边界上最旧的一期同理。
  * 跳过期不改变该会话的比较基线，成员变化跨过跳过期比较。
  */
@@ -304,18 +350,30 @@ export function buildResultInsights(results: ResultLike[]): Record<string, Resul
   const ordered = [...results].sort((a, b) => Date.parse(a.bar_end_time) - Date.parse(b.bar_end_time));
   const insights: Record<string, ResultInsight> = {};
   const baselines = new Map<string, Set<string>>();
+  const markets = new Set(ordered.flatMap(item => item.targets.map(target => target.market || "")));
+  const keyOf = (target: InstrumentTarget) => `${target.instrument_id}\u0000${target.market || ""}`;
+  const labelOf = (key: string) => {
+    const [id, market] = key.split("\u0000");
+    return markets.size > 1 && market ? `${id}（${marketLabel(market)}）` : id;
+  };
   for (const item of ordered) {
     const barEnd = Date.parse(item.bar_end_time);
     const created = Date.parse(item.created_at);
     const delayMs = Number.isFinite(barEnd) && Number.isFinite(created) ? created - barEnd : null;
     const insight: ResultInsight = { added: [], removed: [], comparable: false, delayMs };
     if (item.status === "ok") {
-      const current = new Set(item.targets.map(target => target.instrument_id));
+      const current = new Set(item.targets.map(keyOf));
       const previous = baselines.get(item.session_id);
       if (previous) {
         insight.comparable = true;
-        insight.added = [...current].filter(id => !previous.has(id)).sort();
-        insight.removed = [...previous].filter(id => !current.has(id)).sort();
+        insight.added = [...current]
+          .filter(key => !previous.has(key))
+          .map(labelOf)
+          .sort();
+        insight.removed = [...previous]
+          .filter(key => !current.has(key))
+          .map(labelOf)
+          .sort();
       }
       baselines.set(item.session_id, current);
     }

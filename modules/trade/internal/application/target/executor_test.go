@@ -23,6 +23,7 @@ type targetOrderServiceStub struct {
 	specs        []orderdomain.OrderSpec
 	submitted    []string
 	canceled     []string
+	cancelErr    error
 	discarded    []string
 	resolved     []string
 	afterPlace   func()
@@ -97,6 +98,9 @@ func (s *targetOrderServiceStub) Cancel(
 	orderID string,
 ) (orderdomain.Order, error) {
 	s.canceled = append(s.canceled, orderID)
+	if s.cancelErr != nil {
+		return orderdomain.Order{}, s.cancelErr
+	}
 	return orderdomain.Order{ID: shared.OrderID(orderID)}, nil
 }
 
@@ -140,11 +144,7 @@ type targetPriceStub struct {
 	err   error
 }
 
-func (s targetPriceStub) LatestPrice(
-	context.Context,
-	string,
-	string,
-) (Quote, error) {
+func (s targetPriceStub) LatestPrice(context.Context, string, exchange.SymbolKey) (Quote, error) {
 	return Quote{Price: s.price, UpdatedAt: time.UnixMilli(2_000)}, s.err
 }
 
@@ -394,8 +394,8 @@ func TestTargetExecutorSplitsCapacityAfterConfirmedFill(t *testing.T) {
 func TestTargetExecutorChildNotionalBelowStepCannotPlace(t *testing.T) {
 	fixture := newTargetFixture(t, exchange.MarketTypeSwap)
 	fixture.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "1"}})
+	fixture.setOrderSettings(t, `{"order_mode":"MARKET","min_notional_spot":"0","min_notional_swap":"0","max_child_notional":"0.000001"}`)
 	executor := fixture.executor()
-	executor.MaxChildNotional = shared.MustDecimal("0.000001")
 	result, err := executor.Converge(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
 	require.Equal(t, StatusBlocked, result.Status)
@@ -409,8 +409,8 @@ func TestTargetExecutorChildCapBelowMinimumReductionCannotPlace(t *testing.T) {
 	instrument := fixture.instruments()[0]
 	instrument.MinExchangeQuantity = "100"
 	require.NoError(t, fixture.store.Transaction(context.Background(), func(tx *store.Tx) error { return tx.UpsertInstrument(instrument) }))
+	fixture.setOrderSettings(t, `{"order_mode":"MARKET","min_notional_spot":"0","min_notional_swap":"0","max_child_notional":"5"}`)
 	executor := fixture.executor()
-	executor.MaxChildNotional = shared.MustDecimal("5")
 	result, err := executor.Converge(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
 	require.Equal(t, StatusBlocked, result.Status)
@@ -853,6 +853,17 @@ func TestTargetExecutorReducesBeforeAddingAcrossInstruments(t *testing.T) {
 	require.Equal(t, exchange.SideSell, fixture.orders.specs[0].Side)
 }
 
+// legacyOrderSettings 让下单行为和下单设置出现之前一致：市价单、不设配置的最小下单额。
+const legacyOrderSettings = `{"order_mode":"MARKET","min_notional_spot":"0","min_notional_swap":"0"}`
+
+// setOrderSettings 改写组合账户的下单设置（JSON 原文，不经校验）。
+func (f *targetFixture) setOrderSettings(t *testing.T, document string) {
+	t.Helper()
+	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.SetLogicalAccountOrderSettings("space-1", "logical-1", document)
+	}))
+}
+
 type targetFixture struct {
 	path   string
 	t      *testing.T
@@ -884,7 +895,7 @@ func newTargetFixture(t *testing.T, market exchange.MarketType) *targetFixture {
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
 			OwnerInstanceID: "runner-1", OwnerSessionID: "session-1", ExecutionMode: "PAPER",
-			MarketType: string(market), SettlementAsset: "USDT",
+			SettlementAsset: "USDT", OrderSettingsJSON: legacyOrderSettings,
 			AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {
 			return err
@@ -915,7 +926,7 @@ func (f *targetFixture) account(
 ) store.TradingAccountRecord {
 	return store.TradingAccountRecord{
 		SpaceID: "space-1", TradingAccountID: id, Name: id,
-		Exchange: exchangeName, MarketType: string(f.market),
+		Exchange: exchangeName, Markets: []string{string(f.market)},
 		ExecutionMode: "PAPER", Environment: "PAPER",
 		SettlementAsset: "USDT", MarginMode: map[bool]string{
 			true: "CROSS", false: "",
@@ -926,7 +937,7 @@ func (f *targetFixture) account(
 		},
 		Snapshot: store.TradingAccountSnapshot{
 			AvailableFunds: "100000",
-			Balances: []store.AssetBalance{{
+			Balances: []store.AssetBalance{{Wallet: "UNIFIED",
 				Asset: "USDT", Available: "100000", Total: "100000",
 			}},
 		},
@@ -1025,7 +1036,7 @@ func (f *targetFixture) setBalance(
 	t.Helper()
 	account, err := f.store.GetTradingAccountByID(context.Background(), accountID)
 	require.NoError(t, err)
-	account.Snapshot.Balances = append(account.Snapshot.Balances, store.AssetBalance{
+	account.Snapshot.Balances = append(account.Snapshot.Balances, store.AssetBalance{Wallet: "UNIFIED",
 		Asset: asset, Available: total, Total: total,
 	})
 	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {

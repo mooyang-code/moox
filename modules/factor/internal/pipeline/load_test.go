@@ -136,7 +136,7 @@ func TestBuildPanelCopiesWindowRunsAndFilledColumn(t *testing.T) {
 
 	// 网格从 t0+8m 开始、长度 8：窗口只覆盖网格的后 4 格。
 	grid := computeGrid{start: t0.Add(8 * time.Minute), duration: time.Minute, first: 7, last: 7}
-	panel, err := buildPanel(grid, []string{"close", serieswindow.FilledColumn}, []string{"BTC"}, view)
+	panel, err := buildPanel(grid, []string{"close", serieswindow.FilledColumn}, []string{"BTC"}, view, nil)
 	require.NoError(t, err)
 	index, _ := panel.SeriesIndex(execKey("BTC", ""))
 	for tt := 0; tt < 2; tt++ {
@@ -149,7 +149,7 @@ func TestBuildPanelCopiesWindowRunsAndFilledColumn(t *testing.T) {
 	require.Equal(t, []float64{0, 0, 1, 0}, []float64{panel.Value(1, index, 2), panel.Value(1, index, 3), panel.Value(1, index, 4), panel.Value(1, index, 5)})
 	require.False(t, panel.Present(index, 6))
 
-	_, err = buildPanel(grid, []string{"volume"}, []string{"BTC"}, view)
+	_, err = buildPanel(grid, []string{"volume"}, []string{"BTC"}, view, nil)
 	require.ErrorContains(t, err, "窗口缺少输入列")
 }
 

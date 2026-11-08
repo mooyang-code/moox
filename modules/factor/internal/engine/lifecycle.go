@@ -292,8 +292,21 @@ func (r *Runtime) autoConfirmTask(ref lifecycle.Ref, since time.Time) bool {
 }
 
 // runConfirmsWarmup 报告一期的结果能否作为预热完成的证据。
+//
+// 统一数据集（多个 series_tag）上截面因子只跳过一部分 tag 时成员记 degraded 并列出跳过的 tag：缺数的序列是行情本身的状况，
+// 不说明窗口没载入完，所以这样的 degraded 成员算作已完成；这时这一期因缺数序列而记的失败标的、整期 degraded 也不拦。
+// 预热中、整个计算失败的成员仍然不算。
 func runConfirmsWarmup(run trackedRun, members []domain.MemberDef) bool {
-	if run.status != "complete" || run.warming > 0 || len(run.failedSubjects) > 0 || run.rows == 0 || len(members) == 0 {
+	if run.warming > 0 || run.rows == 0 || len(members) == 0 || run.status == "failed" {
+		return false
+	}
+	partialSkip := false
+	for _, factor := range run.factors {
+		if factor.Status == "degraded" && len(factor.SkippedSeriesTags) > 0 {
+			partialSkip = true
+		}
+	}
+	if !partialSkip && (run.status != "complete" || len(run.failedSubjects) > 0) {
 		return false
 	}
 	if len(run.factors) != len(members) {
@@ -305,7 +318,12 @@ func runConfirmsWarmup(run trackedRun, members []domain.MemberDef) bool {
 	}
 	for _, factor := range run.factors {
 		member, ok := want[factor.MemberKey]
-		if !ok || factor.Status != "complete" || len(factor.FailedSubjects) > 0 || len(factor.GapSubjects) > 0 {
+		if !ok {
+			return false
+		}
+		if factor.Status == "degraded" && len(factor.SkippedSeriesTags) > 0 {
+			// 只跳过一部分 series_tag 的截面因子：算作已完成。
+		} else if factor.Status != "complete" || len(factor.FailedSubjects) > 0 || len(factor.FailedSeries) > 0 {
 			return false
 		}
 		// 证据要绑定成员的契约：成员键已经带了固定参数，再核对类型与定义哈希，成员删除重加成不同的定义或类型后，

@@ -2,9 +2,10 @@
 """迁移策略上线后的验证工具（只依赖 Python 标准库，对生产只读）。用法见 references/strategy-migration.md。
 
 子命令：
-  targets    导出策略实例每期的目标权重（只取 ok 的期）→ JSON {名称: {bar_end: {标的: 权重}}}
+  targets    导出策略实例每期的目标权重（只取 ok 的期）→ JSON {名称: {bar_end: {"市场:标的": 权重}}}
+             同一个标的的现货、永续是两个目标，键是 (market, instrument_id)，写成 "swap:BTC-USDT"
   summary    各实例的结果状态、跳过原因与规则状态体积（稳定性验收）
-  compare    把 targets 的结果与参考框架算出的权重 CSV（bar_end,instrument_id,weight）逐期比对（语义一致验收）
+  compare    把 targets 的结果与参考框架算出的权重 CSV（bar_end,market,instrument_id,weight）逐期比对（语义一致验收）
   latency    按 bar_end 关联因子引擎与策略日志，给出端到端分段耗时的 p50 / p95（冷启动与稳态分开）
   task-lag   因子任务从收盘到完成的耗时，按是否落在边界分钟分组（对照其他任务有没有被拖慢）
 
@@ -42,7 +43,9 @@ for iid in ids:
             "FROM t_strategy_results WHERE c_instance_id = ? ORDER BY c_bar_end_time", (iid,)):
         item = {"bar": bar, "status": status, "reason": reason, "state_bytes": len(states or "")}
         if mode == "targets" and status == "ok":
-            item["targets"] = {t["instrument_id"]: t["target_weight"] for t in json.loads(targets or "[]")}
+            # 同一个标的的现货、永续是两个目标：键取 (market, instrument_id)，只用 instrument_id 会互相覆盖
+            item["targets"] = {"%s:%s" % (t.get("market", ""), t["instrument_id"]): t["target_weight"]
+                               for t in json.loads(targets or "[]")}
         rows.append(item)
     out[iid] = rows
 print(json.dumps(out))
@@ -158,11 +161,15 @@ def truncate(value, step):
 def read_reference(path, trunc):
     out = {}
     with open(path, newline='', encoding='utf-8') as f:
-        for row in csv.DictReader(f):
+        reader = csv.DictReader(f)
+        missing = {'bar_end', 'market', 'instrument_id', 'weight'} - set(reader.fieldnames or [])
+        if missing:
+            fail(f'{path} 缺少列 {sorted(missing)}：参考 CSV 要写成 bar_end,market,instrument_id,weight（market 取 spot、swap 或 equity）')
+        for row in reader:
             bar = parse_time(row['bar_end']).strftime('%Y-%m-%dT%H:%M:%SZ')
             value = truncate(float(row['weight']), trunc)
             if value != 0:
-                out.setdefault(bar, {})[row['instrument_id']] = value
+                out.setdefault(bar, {})[f"{row['market'].strip()}:{row['instrument_id']}"] = value
     return out
 
 
@@ -394,7 +401,7 @@ def main():
     p = sub.add_parser('compare', help='与参考框架的权重逐期比对')
     p.add_argument('--targets', required=True, help='targets 子命令的输出')
     p.add_argument('--name', required=True, help='targets 里的名称')
-    p.add_argument('--reference', required=True, help='参考权重 CSV：bar_end（K 线收盘，RFC3339 UTC）,instrument_id,weight')
+    p.add_argument('--reference', required=True, help='参考权重 CSV：bar_end（K 线收盘，RFC3339 UTC）,market（spot、swap 或 equity）,instrument_id,weight')
     p.add_argument('--since')
     p.add_argument('--until')
     p.add_argument('--trunc', type=float, default=0.0, help='参考权重按此粒度向零截断（与 moox 输出精度一致，例如 1e-4）')

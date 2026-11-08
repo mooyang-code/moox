@@ -66,6 +66,10 @@ func TestSetupPrivateHTTPTransactionE2E(t *testing.T) {
 	require.Equal(t, "created", apply.GetAction())
 	require.Equal(t, int32(2), apply.GetSpaces())
 	require.Equal(t, int32(2), apply.GetSpacesCreated())
+	require.Equal(t, int32(2), apply.GetSecrets(), "腾讯云一把加一把交易所密钥")
+	require.Len(t, apply.GetExchangeKeys(), 1)
+	assert.Equal(t, "exchange-binance-production-readonly", apply.GetExchangeKeys()[0].GetSecretId())
+	assert.Equal(t, "created", apply.GetExchangeKeys()[0].GetState())
 
 	var user authmodel.User
 	require.NoError(t, manager.GetDB().Where("c_username = ?", "admin").First(&user).Error)
@@ -88,6 +92,8 @@ func TestSetupPrivateHTTPTransactionE2E(t *testing.T) {
 	postSetupProto(t, privateServer.URL+"/trpc.moox.admin.Setup/ApplySetup", request, retry)
 	assert.Equal(t, "unchanged", retry.GetAction())
 	assert.Equal(t, int32(2), retry.GetSpacesUnchanged())
+	require.Len(t, retry.GetExchangeKeys(), 1)
+	assert.Equal(t, "exists", retry.GetExchangeKeys()[0].GetState(), "交易所密钥只建不改")
 
 	status := &pb.GetSetupStatusRsp{}
 	postSetupProto(t, privateServer.URL+"/trpc.moox.admin.Setup/GetSetupStatus", setupStatusRequest(request), status)
@@ -131,13 +137,16 @@ func setupApplyRequest() *pb.ApplySetupReq {
 			{SpaceId: "stockcn", Name: "A股市场", Owner: "quant", Market: "CN", Timezone: "Asia/Shanghai", Status: "active", AttributesJson: "{}"},
 			{SpaceId: "crypto", Name: "加密货币市场", Owner: "quant", Market: "crypto", Timezone: "UTC", Status: "active", AttributesJson: "{}"},
 		},
+		ExchangeKeys: []*pb.SetupExchangeKey{
+			{Name: "readonly", Exchange: "binance", Environment: "production", ApiKey: "ro-e2e-key", SecretKey: "ro-e2e-secret", Readonly: true},
+		},
 	}
 }
 
 func setupStatusRequest(request *pb.ApplySetupReq) *pb.GetSetupStatusReq {
 	return &pb.GetSetupStatusReq{
 		Admin: request.Admin, TencentCloud: request.TencentCloud,
-		Spaces: request.Spaces,
+		Spaces: request.Spaces, ExchangeKeys: request.ExchangeKeys,
 	}
 }
 

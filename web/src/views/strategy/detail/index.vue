@@ -13,7 +13,8 @@
         <div class="page-actions">
           <a-switch v-model="autoRefresh" size="small" aria-label="自动刷新" /><span class="muted" aria-hidden="true"
             >自动刷新</span
-          ><a-button :disabled="!store.instance" @click="openReplay">回放</a-button
+          ><span v-if="isPoolInstance" class="muted" :title="POOL_REPLAY_REASON">策略池暂不支持回放</span
+          ><a-button :disabled="!store.instance || isPoolInstance" @click="openReplay">回放</a-button
           ><a-button :loading="refreshing" aria-label="刷新实例详情" @click="refreshDetail"
             ><template #icon><icon-refresh /></template>刷新</a-button
           >
@@ -30,8 +31,7 @@
             size="small"
             @click="
               router.push({
-                path: '/trading/accounts',
-                query: { view: 'strategy', logical_account_id: logicalAccount?.logical_account_id }
+                path: `/trading/accounts/${logicalAccount?.logical_account_id}`
               })
             "
             >去恢复</a-button
@@ -53,7 +53,7 @@
             <span class="mono">{{ store.instance.strategy_id }}</span></a-descriptions-item
           >
           <a-descriptions-item label="因子任务"
-            ><span class="mono">{{ store.instance.factor_task_id }}</span></a-descriptions-item
+            ><span class="mono">{{ tasksText(store.instance.factor_tasks) }}</span></a-descriptions-item
           >
           <a-descriptions-item label="运行会话"
             ><span class="mono">{{ store.instance.session_id || "无当前会话" }}</span></a-descriptions-item
@@ -63,8 +63,7 @@
               v-if="store.instance.logical_account_id"
               @click="
                 router.push({
-                  path: '/trading/accounts',
-                  query: { view: 'strategy', logical_account_id: store.instance.logical_account_id }
+                  path: `/trading/accounts/${store.instance.logical_account_id}`
                 })
               "
               >{{ logicalAccount?.name || store.instance.logical_account_id }}</a-link
@@ -96,7 +95,9 @@
         />
         <a-collapse :bordered="false" class="extra-sections">
           <a-collapse-item key="bindings" header="输入绑定（会话固化的结果 View 列与成员契约）"
-            ><ResolvedTable :resolved-json="store.instance.resolved_json"
+            ><ResolvedTable
+              :resolved-json="store.instance.resolved_json"
+              :pool="poolMembers(store.strategy?.dsl_yaml || '') !== null"
           /></a-collapse-item>
           <a-collapse-item v-if="hasFactors" key="factor-params" header="因子参数（最近一次提交、各期投递状态与外显设置）">
             <StrategyFactorParams :instance="store.instance" />
@@ -112,6 +113,7 @@
 </template>
 
 <script setup lang="ts">
+import { tasksText } from "@/views/strategy/market-mode";
 import { useLogicalAccount } from "@/views/strategy/components/use-logical-account";
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
@@ -119,6 +121,7 @@ import { useSpaceStore } from "@/store/modules/space";
 import InstanceResults from "@/views/strategy/components/strategy-instance-results.vue";
 import OperationPanel from "@/views/strategy/components/strategy-operation-panel.vue";
 import ResolvedTable from "@/views/strategy/components/strategy-resolved-table.vue";
+import { poolMembers } from "@/views/strategy/market-mode";
 import StatusBadge from "@/views/strategy/components/strategy-status-badge.vue";
 import StrategyFactorParams from "@/views/strategy/components/strategy-factor-params.vue";
 import { parseFactorBinding } from "@/views/strategy/factor-params-model";
@@ -168,6 +171,9 @@ const {
 });
 const logicalAccount = useLogicalAccount(computed(() => store.instance?.logical_account_id));
 
+// 研究回放不支持策略池（Strategy 的 StartReplay 直接拒绝），按钮禁用并说明原因。
+const POOL_REPLAY_REASON = "研究回放暂不支持策略池：成员的净值与分配比例要在池实例启用后的预热与运行中查看";
+const isPoolInstance = computed(() => poolMembers(store.strategy?.dsl_yaml || "") !== null);
 const hasFactors = computed(() => Boolean(store.instance && parseFactorBinding(store.instance.resolved_json)));
 const definitionHint = computed(() =>
   store.strategyStatus === "missing" ? "定义已删除" : store.strategyStatus === "error" ? "定义读取失败" : "定义读取中"
@@ -196,8 +202,8 @@ function handleControlFailed() {
   controlUncertain.value = true;
 }
 function openReplay() {
-  if (store.instance)
-    router.push(replayLink({ instanceId: store.instance.instance_id, factorTaskId: store.instance.factor_task_id }));
+  if (store.instance && !isPoolInstance.value)
+    router.push(replayLink({ instanceId: store.instance.instance_id, factorTasks: store.instance.factor_tasks }));
 }
 onMounted(start);
 watch(

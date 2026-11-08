@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/glebarez/sqlite"
 	"github.com/mooyang-code/moox/modules/trade/schema"
@@ -33,6 +34,10 @@ type Store struct {
 	executionLocks        sync.Map
 	logicalMembershipLock sync.Mutex
 	metrics               *report.ModuleMetrics
+
+	// fundWarned 记录资金设置告警的时间（组合 -> 时间），同一个组合一小时只告警一次。
+	fundWarnMu sync.Mutex
+	fundWarned map[string]time.Time
 
 	// 很少变化、写入点明确的数据缓存在内存里：标的定义按场所缓存整份，账户身份按账户缓存。
 	// 标的和账户的写入都会清掉对应缓存，下单时不必每笔都查库。
@@ -167,6 +172,8 @@ func validateExistingTradeSchema(db *gorm.DB) error {
 		"t_paper_balance_projections": {}, "t_paper_asset_balances": {}, "t_shadow_targets": {}, "t_replay_sessions": {}, "t_replay_periods": {}, "t_replay_orders": {},
 		"t_logical_account_equity_points":   {},
 		"t_logical_account_target_receipts": {},
+		"t_trade_wallet_transfers":          {},
+		"t_trade_blocked_instruments":       {},
 	}
 	for _, table := range tables {
 		if _, found := approved[table]; !found {

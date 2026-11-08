@@ -44,7 +44,7 @@ $S ledger --host control      # 发布台账：谁在什么时候装了哪个提
 | 每台主机 | `host` | `host-gateway` `host-agent` |
 | 存储机 | `eventbus` | `eventbus`（2026-10-27 起在存储机，见下） |
 | 存储机、海外机 | `access` | `access` |
-| 海外机 | `trade`、`egress-proxy`、`collector-stream` | `trade`、`egress-proxy`、`collector-stream` |
+| 海外机 | `trade`、`egress-proxy`、`collector-stream`、`callback-dispatcher` | `trade`、`egress-proxy`、`collector-stream`、`callback-dispatcher`（事件中心；所在主机按 `[deployments]`，默认海外机） |
 | 因子机 | systemd 用户单元 | `moox-factor-engine`、`moox-archive-worker`（原生安装目录为 `<部署根>/<组件>`，见下） |
 
 **EventBus 单元在存储机**（`/data/moox/eventbus/releases/eventbus-manual-20261027` + `current`，2026-10-27 从控制机迁来，手工搭成，布局与 `eventbus` profile 一致）。
@@ -53,7 +53,7 @@ $S ledger --host control      # 发布台账：谁在什么时候装了哪个提
 装到控制机 `prod` 单元的二进制，`reseal` 依赖这一点：新版 `moox-runtime` 按 `control` profile 校验清单，计划里多出 `eventbus` 会报 `preparation receipt requires a valid unit selection`。
 
 构建目标是 `scripts/build/build.sh` 的参数，和组件 id 基本一致（`host-gateway` 目标同时产出 server、cli 和 `moox-runtime`；`admin`、`monitor`、`collector`、
-`factor-mgr`、`strategy`、`trade`、`cloudfunction` 目标同时产出对应的 `-cli`；`storage-cli`、`factor-engine`、`hostagent` 是独立目标）。
+`factor-mgr`、`strategy`、`trade`、`cloudfunction`、`callback-dispatcher` 目标同时产出对应的 `-cli`；`storage-cli`、`factor-engine`、`hostagent` 是独立目标）。
 CGO 只有 Storage 需要（DuckDB），脚本对 `storage`、`storage-cgo`、`storage-primary`、`storage-node` 目标自动在 Docker 编译镜像里开启 CGO 构建（`storage-cli` 仍是纯 Go），其余一律在本机交叉编译且关闭 CGO；**不要在宿主机上直接 `CGO_ENABLED=1` 交叉编译 Storage**，需要先启动 Docker（macOS：`colima start`）。
 
 ## 标准流程（单个或几个组件）
@@ -143,6 +143,13 @@ $S catalog-changed --host control                    # 用台账里最近一次 
 3. 把这次手工改动写进文档（例如 Admin 的 `trpc.moox.ops.SysDeploy` 服务端 `timeout` 已手工改为 300000），否则下次重建发布目录会丢。
 
 目录里的方法超时（`method_timeouts_ms`）要和服务端 `trpc_go.yaml` 的 `timeout` 配套：服务端不小于目录。
+
+### Collector 的 `delist.auto_detect`
+
+Collector 读配置时不接受不认识的键，旧版本的 Collector 不认识 `delist` 段，读到就启动失败。因此：
+
+1. 先换 Collector 二进制，再渲染（`setup apply` 等）或手改 `config/app.yaml` 的 `delist` 段；渲染只替换配置里已有的 `delist` 段、不新增，旧配置里没有这一段时要按上面的办法手工加上（没配海外机时写 `auto_detect: false`）。
+2. 回滚到旧版本 Collector 之前，先删掉 `config/app.yaml` 里的 `delist` 段。
 
 ## 不走 `native-release.sh` 的组件
 

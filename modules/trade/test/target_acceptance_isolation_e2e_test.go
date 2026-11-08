@@ -32,7 +32,7 @@ type blockedTargetPrice struct {
 	once    sync.Once
 }
 
-func (p *blockedTargetPrice) LatestPrice(ctx context.Context, _, _ string) (targetapp.Quote, error) {
+func (p *blockedTargetPrice) LatestPrice(ctx context.Context, _ string, _ exchange.SymbolKey) (targetapp.Quote, error) {
 	p.once.Do(func() { close(p.entered) })
 	select {
 	case <-ctx.Done():
@@ -57,9 +57,10 @@ func TestBlockedTargetQuoteDoesNotBlockOtherAccountAcceptance(t *testing.T) {
 	require.Equal(t, jetstream.ACK, accepted.Decision, accepted.Err)
 	require.NoError(t, f.store.Transaction(ctx, func(tx *store.Tx) error {
 		return tx.CreateLogicalAccount(store.LogicalAccountRecord{
-			SpaceID: testSpace, LogicalAccountID: "logical-other", Name: "Other logical account",
+			OrderSettingsJSON: legacyOrderSettings,
+			SpaceID:           testSpace, LogicalAccountID: "logical-other", Name: "Other logical account",
 			OwnerInstanceID: "instance-other", OwnerSessionID: "session-other",
-			ExecutionMode: "PAPER", MarketType: "SPOT", SettlementAsset: "USDT",
+			ExecutionMode: "PAPER", SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
 		})
 	}))

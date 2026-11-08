@@ -124,6 +124,11 @@ func (s *Submitter) deliver(ctx context.Context, delivery store.ParamDelivery) e
 	if err != nil {
 		return err
 	}
+	// 动态参数回写只用于只绑一个因子任务的实例（双任务的成员键可能重名，写入会冲突）。
+	taskIDs := input.TaskIDs(instance.FactorTasks)
+	if len(taskIDs) != 1 {
+		return s.reject(ctx, delivery, "绑定了多个因子任务的实例不支持回写参数")
+	}
 	members := map[string]map[string]input.ParamValue{}
 	if err := json.Unmarshal(delivery.Members, &members); err != nil {
 		return s.reject(ctx, delivery, "待投递的参数无法解析")
@@ -131,7 +136,7 @@ func (s *Submitter) deliver(ctx context.Context, delivery store.ParamDelivery) e
 	callCtx, cancel := context.WithTimeout(ctx, submissionTimeout)
 	defer cancel()
 	results, err := s.Factors.SubmitFactorParams(callCtx, input.ParamSubmission{
-		RequestID: delivery.ResultID, Writer: delivery.InstanceID, TaskID: instance.FactorTaskID,
+		RequestID: delivery.ResultID, Writer: delivery.InstanceID, TaskID: taskIDs[0],
 		PeriodTime: delivery.Period, Members: members,
 	})
 	if err != nil {

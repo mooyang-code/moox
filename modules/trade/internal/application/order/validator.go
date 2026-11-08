@@ -21,7 +21,7 @@ var (
 	ErrInsufficientFunds  = errors.New("可用资金不足")
 	ErrLeverageLimit      = errors.New("杠杆超过上限")
 	ErrReduceOnly         = errors.New("只减仓订单无效")
-	ErrValidatorConfig    = errors.New("trade order: validator is not configured")
+	ErrValidatorConfig    = errors.New("下单校验未配置")
 )
 
 type AccountEligibility interface {
@@ -98,23 +98,31 @@ func (v Validator) validateOptions(ctx context.Context, spaceID string, spec ord
 	if account.SpaceID != spaceID {
 		return Validation{}, ErrAccountOwnership
 	}
-	if err := spec.Validate(account.MarketType, now, v.MaxReferenceAge); err != nil {
+	// 订单的市场由标的 ID 决定，必须是账户已开通的市场。
+	market := account.MarketForInstrument(spec.InstrumentID)
+	if market == "" {
+		return Validation{}, fmt.Errorf("%w: 标的 %s 缺少市场后缀 -SPOT 或 -SWAP", ErrInstrumentDisabled, spec.InstrumentID)
+	}
+	if !account.SupportsMarket(market) {
+		return Validation{}, fmt.Errorf("%w: 账户没有开通市场 %s", ErrInstrumentDisabled, market)
+	}
+	if err := spec.Validate(market, now, v.MaxReferenceAge); err != nil {
 		return Validation{}, err
 	}
 	var instrument exchange.Instrument
 	if scoped, ok := v.Instruments.(AccountInstrumentSource); ok {
-		instrument, err = scoped.GetInstrumentForAccount(ctx, account.ID, account.Exchange, account.MarketType, spec.InstrumentID)
+		instrument, err = scoped.GetInstrumentForAccount(ctx, account.ID, account.Exchange, market, spec.InstrumentID)
 	} else {
-		instrument, err = v.Instruments.GetInstrument(ctx, account.Exchange, account.MarketType, spec.InstrumentID)
+		instrument, err = v.Instruments.GetInstrument(ctx, account.Exchange, market, spec.InstrumentID)
 	}
 	if err != nil {
 		return Validation{}, err
 	}
-	if instrument.Status != "TRADING" && instrument.Status != "live" {
+	if !exchange.StatusTradable(instrument.Status) {
 		return Validation{}, ErrInstrumentDisabled
 	}
 	exchangeQuantity := spec.Quantity
-	if exchange.RuleFor(account.MarketType).ContractValue {
+	if exchange.RuleFor(market).ContractValue {
 		if instrument.ContractValue.Cmp(shared.Zero()) <= 0 {
 			return Validation{}, ErrQuantityRule
 		}
@@ -134,8 +142,13 @@ func (v Validator) validateOptions(ctx context.Context, spaceID string, spec ord
 		orderNotional = spec.Quantity.Mul(*spec.LimitPrice)
 	}
 	// 合约全平只查最小数量。
-	if !capacity && !spec.ReducePositionOnly && instrument.MinNotional.Cmp(shared.Zero()) > 0 &&
-		orderNotional.Cmp(instrument.MinNotional) < 0 {
+	// 最小名义金额：交易所给了就用它，没给（OKX）用 minSz × 合约面值 × 价格折算。
+	orderPrice := spec.ReferencePrice
+	if spec.Type == exchange.OrderTypeLimit {
+		orderPrice = *spec.LimitPrice
+	}
+	if minNotional := instrument.MinNotionalAt(orderPrice); !capacity && !spec.ReducePositionOnly &&
+		minNotional.Cmp(shared.Zero()) > 0 && orderNotional.Cmp(minNotional) < 0 {
 		return Validation{}, ErrQuantityRule
 	}
 	if !capacity && v.MaxChildNotional.Cmp(shared.Zero()) > 0 &&
@@ -154,7 +167,7 @@ func (v Validator) validateOptions(ctx context.Context, spaceID string, spec ord
 		// taker, while a resting GTC LIMIT may later be maker.
 		feeRate = maxDecimal(account.Paper.MakerFeeRate, account.Paper.TakerFeeRate)
 	}
-	if rule := exchange.RuleFor(account.MarketType); !rule.UsesMargin {
+	if rule := exchange.RuleFor(market); !rule.UsesMargin {
 		if spec.Side == exchange.SideBuy {
 			result.ReservedAsset = instrument.QuoteAsset
 			reserveNotional := referenceNotional
@@ -173,14 +186,11 @@ func (v Validator) validateOptions(ctx context.Context, spaceID string, spec ord
 			result.ReservedQuantity = spec.Quantity
 		}
 		if !capacity && !(deferPaperFunds && account.ExecutionMode == exchange.ExecutionModePaper) &&
-			availableBalance(account.Snapshot, result.ReservedAsset).Cmp(result.ReservedQuantity) < 0 {
+			availableFunds(account, market, result.ReservedAsset).Cmp(result.ReservedQuantity) < 0 {
 			return Validation{}, ErrInsufficientFunds
 		}
 	} else {
 		leverage, found := account.LeverageSettings[spec.InstrumentID]
-		if !found && instrument.ExchangeSymbol != "" {
-			leverage, found = account.LeverageSettings[instrument.ExchangeSymbol]
-		}
 		if !found {
 			leverage, found = account.LeverageSettings["*"]
 		}
@@ -223,7 +233,7 @@ func (v Validator) validateOptions(ctx context.Context, spaceID string, spec ord
 			}
 		}
 		if !capacity && !(deferPaperFunds && account.ExecutionMode == exchange.ExecutionModePaper) &&
-			account.Snapshot.AvailableFunds.Cmp(result.ReservedQuantity) < 0 {
+			availableFunds(account, market, result.ReservedAsset).Cmp(result.ReservedQuantity) < 0 {
 			return Validation{}, ErrInsufficientFunds
 		}
 	}
@@ -287,9 +297,41 @@ func withFeeBuffer(amount, rate shared.Decimal) shared.Decimal {
 	return amount.Add(amount.Mul(rate))
 }
 
-func availableBalance(snapshot exchange.AccountSnapshot, asset string) shared.Decimal {
+// availableFunds 返回订单所在钱包里某个资产的可用资金。普通账户的现货、合约钱包分开算；
+// 统一账户的合约和 OKX、模拟盘共用一个钱包，保证金按账户级可用资金算；只开通合约的账户同样如此。
+func availableFunds(account tradingaccount.Account, market exchange.MarketType, asset string) shared.Decimal {
+	// 统一账户、OKX、模拟盘各市场共用一个资金池：开通了合约时结算币看账户级可用资金（已扣保证金），其他资产加总各钱包。
+	if account.SharesFundsAcrossMarkets() {
+		// 未核对（实盘前 V3 实测确认）：币安统一账户的现货（杠杆账户）买单是否只能用杠杆钱包里的结算币。
+		// 官方文档只写了 /papi/v1/asset-collection 把资产“从期货账户转到杠杆账户”，没有写明杠杆下单不能直接用 UM 钱包；
+		// 若实测确认只能用杠杆钱包，这里要改看杠杆钱包可用额，资金不足时先归集再下单。
+		if account.HasLeverageMarket() && asset == account.SettlementAsset {
+			return account.Snapshot.AvailableFunds
+		}
+		return availablePool(account.Snapshot, asset)
+	}
+	wallet := account.WalletFor(market)
+	if exchange.RuleFor(market).UsesMargin && (len(account.Markets) == 1 || wallet == exchange.WalletUnified) {
+		return account.Snapshot.AvailableFunds
+	}
+	return availableBalance(account.Snapshot, wallet, asset)
+}
+
+// availablePool 加总资产在各钱包的可用余额。
+func availablePool(snapshot exchange.AccountSnapshot, asset string) shared.Decimal {
+	total := shared.Zero()
 	for _, balance := range snapshot.Balances {
 		if balance.Asset == asset {
+			total = total.Add(balance.Available)
+		}
+	}
+	return total
+}
+
+// availableBalance 取指定钱包里资产的可用余额；快照没有钱包信息（空钱包）的余额当作属于任何钱包。
+func availableBalance(snapshot exchange.AccountSnapshot, wallet exchange.Wallet, asset string) shared.Decimal {
+	for _, balance := range snapshot.Balances {
+		if balance.Asset == asset && (balance.Wallet == wallet || balance.Wallet == exchange.WalletUnspecified) {
 			return balance.Available
 		}
 	}

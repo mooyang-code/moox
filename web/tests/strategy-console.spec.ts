@@ -54,13 +54,11 @@ test("strategy definitions render the DSL v3 contract", async ({ page }) => {
 test("instance detail distinguishes valid target weight from trade fills and explains skipped periods", async ({ page }) => {
   await installShell(page);
   const resolved = JSON.stringify({
-    view_id: "view_factor_1h",
-    dataset_id: "ds",
+    market: { select: "spot", prefer: "spot" },
+    tasks: { spot: { factor_task_id: "ftask_ma", view_id: "view_factor_1h", dataset_id: "ds" } },
     bar: "1h",
     calendar: "crypto_24x7",
-    spot: true,
-    market_type: "spot",
-    columns: { ma_20: { source: "factor", factor_id: "ma", definition_hash: "sha256:abc" } },
+    columns: { ma_20: { source: "factor", member: "ma_20", factor_id: "ma", definition_hash: "sha256:abc" } },
     view_columns: ["ma_20"]
   });
   await page.route("**/api/admin/strategy/GetStrategyInstance", route =>
@@ -71,7 +69,7 @@ test("instance detail distinguishes valid target weight from trade fills and exp
           instance_id: "instance-paper",
           strategy_id: "momentum",
           space_id: "space-1",
-          view_id: "view_factor_1h",
+          factor_tasks: { spot: "ftask_ma" },
           logical_account_id: "logical-paper",
           enabled: true,
           session_id: "session-1",
@@ -150,43 +148,75 @@ test("组合账户暂停时展示待执行目标和逐账户清仓结果", async
   const logicalAccount = {
     logical_account_id: "logical-paper",
     name: "Paper 组合",
+    control_mode: 1,
     execution_mode: 1,
-    market_type: 1,
+    markets: [1],
     settlement_asset: "USDT",
     automation_state: "PAUSED",
     pause_reason: "manual review",
-    owner_runner_id: "runner-paper",
+    owner_instance_id: "instance-paper",
     ready: true,
     readiness_reasons: [],
     members: [{ trading_account_id: "binance-paper", enabled: true, priority: 0 }]
   };
+  const account = {
+    trading_account_id: "binance-paper",
+    name: "币安模拟",
+    exchange: 1,
+    markets: [1],
+    execution_mode: 1,
+    settlement_asset: "USDT",
+    status: "ENABLED",
+    ready: true,
+    paper: { initial_balance: "1000", maker_fee_rate: "0", taker_fee_rate: "0", slippage_bps: "0" },
+    snapshot: { equity: "1000", available_funds: "900", used_margin: "0", unrealized_pnl: "0" }
+  };
+  const ok = (data: object) => ({ ret_info: { code: 0 }, ...data });
   await page.route("**/api/admin/trade/ListLogicalAccounts", route =>
-    route.fulfill({
-      json: { ret_info: { code: 0 }, logical_accounts: [logicalAccount], page_result: { page: 1, size: 20, total: 1 } }
-    })
+    route.fulfill({ json: ok({ logical_accounts: [logicalAccount], page_result: { page: 1, size: 20, total: 1 } }) })
+  );
+  await page.route("**/api/admin/trade/ListTradingAccounts", route =>
+    route.fulfill({ json: ok({ accounts: [account], page_result: { page: 1, size: 200, total: 1 } }) })
   );
   await page.route("**/api/admin/trade/GetLogicalAccount", route =>
-    route.fulfill({ json: { ret_info: { code: 0 }, logical_account: logicalAccount } })
+    route.fulfill({ json: ok({ logical_account: logicalAccount }) })
+  );
+  await page.route("**/api/admin/trade/ListHoldings", route =>
+    route.fulfill({
+      json: ok({
+        holdings: [
+          {
+            trading_account_id: "binance-paper",
+            asset: "ETH",
+            instrument_id: "ETH-USDT-SPOT",
+            quantity: "1.8",
+            market_value: "3600"
+          }
+        ]
+      })
+    })
+  );
+  await page.route("**/api/admin/trade/ListOrders", route =>
+    route.fulfill({ json: ok({ orders: [], page_result: { total: 0 } }) })
   );
   await page.route("**/api/admin/trade/GetLogicalAccountTarget", route =>
     route.fulfill({
-      json: {
-        ret_info: { code: 0 },
+      json: ok({
         target: {
           target_id: "result-8",
           logical_account_id: "logical-paper",
           runner_id: "runner-paper",
           command_sequence: "8",
           targets: [{ instrument_id: "ETH-USDT-SPOT", quantity: "2" }],
-          status: "ACKED"
+          status: "CONVERGING",
+          valid_until: String(Date.now() + 3_600_000)
         }
-      }
+      })
     })
   );
   await page.route("**/api/admin/trade/FlattenLogicalAccount", route =>
     route.fulfill({
-      json: {
-        ret_info: { code: 0 },
+      json: ok({
         action: {
           action_id: "flatten-1",
           logical_account_id: "logical-paper",
@@ -204,17 +234,17 @@ test("组合账户暂停时展示待执行目标和逐账户清仓结果", async
             ]
           })
         }
-      }
+      })
     })
   );
-  await page.goto("/#/trading/accounts?view=strategy&logical_account_id=logical-paper");
-  await expect(page.getByRole("tab", { name: "组合账户", exact: true })).toHaveAttribute("aria-selected", "true");
-  await expect(page.getByText("当前完整目标序号 8 已保存但不会执行；恢复后会继续收敛。")).toBeVisible();
-  await page.getByRole("button", { name: "逐账户清仓" }).click();
-  const modal = page.locator(".arco-modal:visible").filter({ hasText: "逐账户清仓" });
-  await modal.locator("input").nth(0).fill("flatten-1");
-  await modal.locator("input").nth(1).fill("risk cleanup");
-  await modal.getByRole("button", { name: "确定" }).click();
-  await expect(page.getByText("0.2 (minimum quantity)")).toBeVisible();
-  await expect(page.getByText("部分完成").first()).toBeVisible();
+  await page.goto("/#/trading/accounts/logical-paper");
+  await expect(page.getByRole("heading", { name: "Paper 组合" })).toBeVisible();
+  await expect(page.getByText("自动执行已暂停")).toBeVisible();
+  await expect(page.getByText("当前目标仍有效，恢复后继续调整持仓。")).toBeVisible();
+  await page.getByRole("button", { name: "清仓", exact: true }).click();
+  const modal = page.locator(".arco-modal:visible");
+  await modal.locator(".arco-form-item").filter({ hasText: "原因" }).locator("input").fill("risk cleanup");
+  await modal.getByRole("button", { name: "开始清仓" }).click();
+  await expect(page.getByText(/剩余 ETH-USDT 0\.2（minimum quantity）/)).toBeVisible();
+  await expect(page.getByText("清仓部分完成")).toBeVisible();
 });

@@ -16,7 +16,7 @@ import (
 
 func TestSpotSubscriptionUsesSignedWebSocketAPIRequest(t *testing.T) {
 	adapter := New(
-		exchange.AccountConfig{MarketType: exchange.MarketTypeSpot},
+		exchange.AccountConfig{Markets: []exchange.MarketType{exchange.MarketTypeSpot}},
 		exchange.Credential{APIKey: "key", APISecret: "secret"},
 	)
 	request := adapter.newSpotSubscriptionRequest(1_700_000_000_000)

@@ -135,6 +135,11 @@ type Observability struct {
 	DeliverPolicy string `toml:"deliver_policy"`
 }
 
+// DefaultEgressHTTPDomains 是 moox.toml 没写 [egress_proxy] http_domains 时使用的出口代理 HTTP 白名单。
+func DefaultEgressHTTPDomains() []string {
+	return []string{"*.binance.com", "data-api.binance.vision", "openapi.okx.com"}
+}
+
 // EgressProxy separates upstream policy from service deployment.
 type EgressProxy struct {
 	HTTPDomains []string  `toml:"http_domains"`
@@ -233,6 +238,70 @@ func (m Manifest) RequireNotification() error {
 type Notification struct {
 	ChannelType string `toml:"channel_type"`
 	WebhookURL  string `toml:"webhook_url"`
+}
+
+// ExchangeKey 是一条 [[exchange_keys]]：交易所 API 密钥。setup apply 把它写进 SecretMgr（只建不改，见 ID）。
+// 字段名必须是 api_key、secret_key、passphrase：config get 按这些名字自动打码。
+type ExchangeKey struct {
+	// Name 只允许 [a-z0-9-]，是固定 ID 的最后一段。
+	Name string `toml:"name"`
+	// Exchange 是小写交易所名：binance、okx。
+	Exchange string `toml:"exchange"`
+	// Environment 是 production 或 testnet。
+	Environment string `toml:"environment"`
+	APIKey      string `toml:"api_key"`
+	SecretKey   string `toml:"secret_key"`
+	// Passphrase 只有 OKX 用。
+	Passphrase string `toml:"passphrase"`
+	// ReadOnly 为 true 表示只读密钥（例如 Collector 检测币安现货下架用的那把）：不能用来建执行账户，apply 后也不做交易账户检测。
+	ReadOnly bool `toml:"readonly"`
+}
+
+// ID 是密钥在 SecretMgr 里的固定秘钥 ID：exchange-<交易所>-<环境>-<名称>，三段一律小写。
+// Collector 读币安只读 Key 用的 exchange-binance-production-readonly 就是它；规则与 Admin 的 ExchangeSecretID 一致。
+func (k ExchangeKey) ID() string {
+	return strings.ToLower("exchange-" + k.Exchange + "-" + k.Environment + "-" + k.Name)
+}
+
+var exchangeKeyNamePattern = regexp.MustCompile(`^[a-z0-9-]{1,40}$`)
+
+// validateExchangeKeys 规整并校验 [[exchange_keys]]：交易所、环境小写化；名称只允许 [a-z0-9-]（不替用户改大小写）；
+// 固定 ID 不能重复；OKX 必须有 passphrase（Trade 遇到缺 passphrase 的 OKX 密钥会拒绝启动）。
+func validateExchangeKeys(keys []ExchangeKey) error {
+	seen := map[string]int{}
+	for i := range keys {
+		key := &keys[i]
+		key.Name = strings.TrimSpace(key.Name)
+		key.Exchange = strings.ToLower(strings.TrimSpace(key.Exchange))
+		key.Environment = strings.ToLower(strings.TrimSpace(key.Environment))
+		key.APIKey = strings.TrimSpace(key.APIKey)
+		where := fmt.Sprintf("exchange_keys[%d]", i)
+		if !exchangeKeyNamePattern.MatchString(key.Name) {
+			return fmt.Errorf("config_invalid: %s.name 只允许小写字母、数字和连字符（1～40 个字符）", where)
+		}
+		if key.Exchange != "binance" && key.Exchange != "okx" {
+			return fmt.Errorf("config_invalid: %s.exchange 只能是 binance 或 okx", where)
+		}
+		if key.Environment != "production" && key.Environment != "testnet" {
+			return fmt.Errorf("config_invalid: %s.environment 只能是 production 或 testnet", where)
+		}
+		if key.APIKey == "" || key.SecretKey == "" {
+			return fmt.Errorf("config_invalid: %s 的 api_key 与 secret_key 都必须填写", where)
+		}
+		if key.Exchange == "okx" && key.Passphrase == "" {
+			return fmt.Errorf("config_invalid: %s 是 OKX 密钥，必须填写 passphrase", where)
+		}
+		for _, field := range []struct{ name, value string }{{"api_key", key.APIKey}, {"secret_key", key.SecretKey}, {"passphrase", key.Passphrase}} {
+			if len(field.value) > 512 || strings.ContainsAny(field.value, "\x00\r\n") {
+				return fmt.Errorf("config_invalid: %s.%s 含有换行或超过 512 字节", where, field.name)
+			}
+		}
+		if previous, dup := seen[key.ID()]; dup {
+			return fmt.Errorf("config_invalid: %s 与 exchange_keys[%d] 重复：同一交易所、环境下的 name 不能相同（固定 ID 是 %s）", where, previous, key.ID())
+		}
+		seen[key.ID()] = i
+	}
+	return nil
 }
 
 // Host is an execution target projected from one canonical host definition.
@@ -338,6 +407,7 @@ type Manifest struct {
 	LocalLogs          LocalLogs                 `toml:"local_logs"`
 	Observability      Observability             `toml:"observability"`
 	Notification       Notification              `toml:"notification"`
+	ExchangeKeys       []ExchangeKey             `toml:"exchange_keys"`
 	Factors            FactorSetup               `toml:"factors"`
 	SCFPlan            SCFPlan                   `toml:"scf_plan"`
 	HostCatalog        map[string]HostDefinition `toml:"hosts"`
@@ -601,7 +671,7 @@ func decodeStrict(raw []byte, out *Manifest) error {
 		out.Factors.SourceDir = "./modules/factor/factors"
 	}
 	if !md.IsDefined("egress_proxy", "http_domains") {
-		out.EgressProxy.HTTPDomains = []string{"*.binance.com", "data-api.binance.vision"}
+		out.EgressProxy.HTTPDomains = DefaultEgressHTTPDomains()
 	}
 	if !md.IsDefined("egress_proxy", "dns", "refresh_interval_seconds") {
 		out.EgressProxy.DNS.RefreshIntervalSeconds = 300
@@ -677,6 +747,9 @@ func validate(manifest *Manifest) error {
 	manifest.Notification.WebhookURL = strings.TrimSpace(manifest.Notification.WebhookURL)
 	if manifest.Notification.WebhookURL != "" && !validNotificationWebhook(manifest.Notification.ChannelType, manifest.Notification.WebhookURL) {
 		return fmt.Errorf("config_invalid: notification.webhook_url must use HTTPS and match an approved %s platform host", manifest.Notification.ChannelType)
+	}
+	if err := validateExchangeKeys(manifest.ExchangeKeys); err != nil {
+		return err
 	}
 	if err := validateFactorSetup(&manifest.Factors); err != nil {
 		return err

@@ -40,7 +40,7 @@ mkdir -p "${STAGE}/${BUNDLE}"
 git -C "${ROOT}" archive "${COMMIT}" | tar -x -C "${STAGE}/${BUNDLE}"
 
 server_targets=(admin host-gateway eventbus console-proxy egress-proxy web-host cloudfunction collector collector-stream collector-scf
-  factor-mgr factor-engine archive-mgr archive-worker strategy strategy-cli trade trade-cli monitor monitor-cli
+  factor-mgr factor-engine archive-mgr archive-worker strategy strategy-cli trade trade-cli callback-dispatcher callback-dispatcher-cli monitor monitor-cli
   hostagent access storage-cli storage)
 VERSION="${VERSION}" GIT_COMMIT="${COMMIT:0:8}" \
   bash "${ROOT}/scripts/build/build-linux-local.sh" --out "${STAGE}/binaries" "${server_targets[@]}"
@@ -63,7 +63,7 @@ done
 # 3. 部署单元包：用本机的 moox-cli 打包，文件排序、时间戳为 0，同一提交结果相同
 BINARIES="${STAGE}/binaries"
 LOCAL_CLI="${STAGE}/cli-$(go env GOOS)-$(go env GOARCH)/moox-cli"
-units=(host control eventbus storage access egress-proxy trade collector-stream factor-engine archive-worker)
+units=(host control eventbus storage access egress-proxy trade collector-stream callback-dispatcher factor-engine archive-worker)
 mkdir -p "${STAGE}/unit-results"
 for unit in "${units[@]}"; do
   "${LOCAL_CLI}" setup package --repo-root "${ROOT}" --profile "${unit}" --binary-dir "${BINARIES}" --goos linux --goarch amd64 \

@@ -3,6 +3,7 @@ package input
 import (
 	"context"
 	"errors"
+	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"strings"
 	"testing"
 	"time"
@@ -10,7 +11,7 @@ import (
 
 // A 股日线索引统计的行键不是上海零点（按 UTC 零点写行）：提交回放时就报出，而不是规整后通过、执行时每根都缺数据。
 func TestCoverageBoundsRejectsUTCMidnightStockKeys(t *testing.T) {
-	resolved := Resolved{ViewID: "view_stock", Bar: "1d", Calendar: "cn_stock"}
+	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {ViewID: "view_stock"}}, Bar: "1d", Calendar: "cn_stock"}
 	view := ViewInfo{ViewID: "view_stock", IndexedFrom: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), IndexedTo: time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC), SeriesBars: 5000}
 	if _, err := CoverageBounds(view, resolved, testNow); err == nil || !strings.Contains(err.Error(), "不是上海时间零点") {
 		t.Fatalf("UTC 零点的行键应报错：%v", err)
@@ -23,7 +24,7 @@ func TestCoverageBoundsRejectsUTCMidnightStockKeys(t *testing.T) {
 // 日历末日只有在当前时间已过日历、并且索引里确有之后的数据时才算写完；当前时间还在日历之内时，日历之外的行是误写的
 // 未来数据：最晚一根夹到已闭合的最后一根，不算超出日历。
 func TestToClosedRequiresRealDaysBeyondCalendar(t *testing.T) {
-	resolved := Resolved{ViewID: "view_stock", Bar: "1d", Calendar: "cn_stock"}
+	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {ViewID: "view_stock"}}, Bar: "1d", Calendar: "cn_stock"}
 	view := ViewInfo{ViewID: "view_stock", IndexedFrom: stockDay(t, 2026, 1, 5), IndexedTo: stockDay(t, 2027, 1, 8), SeriesBars: 5000}
 	inside := time.Date(2026, 12, 31, 10, 0, 0, 0, shanghai(t))
 	bounds, err := CoverageBounds(view, resolved, inside)
@@ -43,13 +44,13 @@ func TestToClosedRequiresRealDaysBeyondCalendar(t *testing.T) {
 // 当前时间还在日历之内，索引里一行误写的远期数据：不报“数据超出日历”，回放也不延伸到还没发生的 bar。
 func TestFutureRowsAreClampedToNow(t *testing.T) {
 	now := time.Date(2026, 10, 9, 10, 0, 0, 0, shanghai(t))
-	stock := Resolved{ViewID: "view_stock", Bar: "1d", Calendar: "cn_stock"}
+	stock := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {ViewID: "view_stock"}}, Bar: "1d", Calendar: "cn_stock"}
 	view := ViewInfo{ViewID: "view_stock", IndexedFrom: stockDay(t, 2026, 1, 5), IndexedTo: stockDay(t, 2027, 6, 1), SeriesBars: 100}
 	end, err := ReplayWindow(stock, nil, view, stockDay(t, 2026, 9, 1), stockDay(t, 2027, 1, 1), now)
 	if err != nil || !end.Equal(stockDay(t, 2026, 10, 8)) {
 		t.Fatalf("终点应截到 10-08（已闭合的最后一根）之前：%s err=%v", end, err)
 	}
-	crypto := Resolved{ViewID: "view_factor_1h", Bar: "1h", Calendar: DefaultCalendar}
+	crypto := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {ViewID: "view_factor_1h"}}, Bar: "1h", Calendar: DefaultCalendar}
 	future := ViewInfo{ViewID: "view_factor_1h", IndexedFrom: barStart.Add(-500 * time.Hour), IndexedTo: barStart.Add(48 * time.Hour), SeriesBars: 5000}
 	bounds, err := CoverageBounds(future, crypto, barStart.Add(30*time.Minute))
 	if err != nil || !bounds.To.Equal(barStart.Add(-time.Hour)) {
@@ -61,7 +62,7 @@ func TestFutureRowsAreClampedToNow(t *testing.T) {
 // 估得偏早；扣完一根都不剩时报历史不足。
 func TestCoverageStartDiscountsRowsBeyondCalendar(t *testing.T) {
 	now := time.Date(2027, 1, 20, 0, 0, 0, 0, time.UTC)
-	resolved := Resolved{ViewID: "view_stock", Bar: "1d", Calendar: "cn_stock"}
+	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {ViewID: "view_stock"}}, Bar: "1d", Calendar: "cn_stock"}
 	view := ViewInfo{ViewID: "view_stock", IndexedFrom: stockDay(t, 2026, 1, 5), IndexedTo: stockDay(t, 2027, 1, 4), SeriesBars: 10}
 	// 日历之外最多 4 个交易日（01-01 至 01-04），日历之内只能确定保留 6 根：覆盖起点是末日往前 5 个交易日。
 	want, err := HistoryStart("cn_stock", "1d", stockDay(t, 2026, 12, 31), 6)
@@ -83,7 +84,7 @@ func TestCoverageStartDiscountsRowsBeyondCalendar(t *testing.T) {
 
 // A 股的回放报错按上海日期写时间，不写成前一日 16:00 UTC。
 func TestStockReplayErrorsUseShanghaiDates(t *testing.T) {
-	resolved := Resolved{ViewID: "view_stock", Bar: "1d", Calendar: "cn_stock", MinAgeBars: 5}
+	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {ViewID: "view_stock"}}, Bar: "1d", Calendar: "cn_stock", MinAgeBars: 5}
 	view := ViewInfo{ViewID: "view_stock", IndexedFrom: stockDay(t, 2026, 9, 1), IndexedTo: stockDay(t, 2026, 10, 9), SeriesBars: 5000}
 	_, err := ReplayWindow(resolved, nil, view, stockDay(t, 2026, 9, 1), stockDay(t, 2026, 10, 9), testNow)
 	var early *EarlyStartError

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"strings"
 	"time"
 
@@ -137,7 +138,7 @@ func (s *Service) SubmitOrder(ctx context.Context, command SubmitOrderCommand) (
 		}
 		return ManualOrderResult{Action: action}, err
 	}
-	quote, err := s.Prices.LatestPrice(ctx, command.TradingAccountID, instrument.ExchangeSymbol)
+	quote, err := s.Prices.LatestPrice(ctx, command.TradingAccountID, exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol))
 	if err != nil {
 		return s.deferSubmission(ctx, action, err)
 	}
@@ -242,6 +243,20 @@ func submissionAccountError(err error) bool {
 	return allSubmissionErrors(err, func(leaf error) bool {
 		_, account := leaf.(*orderapp.AccountExecutionError)
 		return account || leaf == ErrCancelUnconfirmed || leaf == orderdomain.ErrReferencePriceStale || leaf == orderapp.ErrAccountNotReady || leaf == tradingaccount.ErrAccountNotExecutable
+	})
+}
+
+// ActionScopedError 报告动作恢复返回的错误是否只关乎这个动作：每一支都是账户、交易所侧的错误、业务校验错误或清仓终结原因。
+// 工作线程（runtime.OperatorWorker.ActionScoped）据此只把它记在这个动作上，不让一个动作反复失败拖垮整个 Trade 的就绪；
+// 掺着数据库等共享故障的照样算共享故障。
+//
+// 另外两类也只关乎这个动作：成员在发起之后被移出组合（ErrNotInLogicalAccount，动作按失败结束）；store.ErrConflict
+// （订单版本冲突、成交单号冲突、会话 CAS 落空等比较后写入落空，多半是私有流或别的动作并发改了同一行，下次恢复重读即可）。
+// ErrConflict 不算业务错误（submissionBusinessError），清仓照样重试。store 不会把 SQLite 忙、锁等待映射成 ErrConflict。
+func ActionScopedError(err error) bool {
+	return err != nil && allSubmissionErrors(err, func(leaf error) bool {
+		return submissionAccountError(leaf) || submissionBusinessError(leaf) || isFlattenFinal(leaf) ||
+			leaf == ErrNotInLogicalAccount || leaf == store.ErrConflict
 	})
 }
 

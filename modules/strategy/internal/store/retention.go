@@ -9,15 +9,39 @@ import (
 // retentionBatch 是每条删除语句处理的明细行数；分批执行，避免单连接上的长事务阻塞事件处理与接口。
 var retentionBatch int64 = 5000
 
+// 清理的 SQL：整条写成常量，不在调用处拼接；删除都按 rowid 分批，单条语句的工作量有界。
+const (
+	// sqlDeleteResultItemsBefore 分批删除创建时间早于截止时间的解释明细。
+	sqlDeleteResultItemsBefore = `
+		DELETE FROM t_strategy_result_items
+		WHERE rowid IN (SELECT rowid FROM t_strategy_result_items WHERE c_ctime < ? LIMIT ?)`
+	// sqlSelectFinishedReplaysBefore 取一批创建时间早于截止时间、已结束的回放。
+	sqlSelectFinishedReplaysBefore = `
+		SELECT c_replay_id FROM t_strategy_replays
+		WHERE c_ctime < ? AND c_status IN ('done', 'failed', 'cancelled')
+		ORDER BY c_ctime LIMIT 20`
+	// sqlSelectFinishedReplaysBeyond 取每个空间里排在最近 keep 个之后的已结束回放。
+	sqlSelectFinishedReplaysBeyond = `
+		SELECT c_replay_id FROM (
+			SELECT c_replay_id, ROW_NUMBER() OVER (PARTITION BY c_space_id ORDER BY c_ctime DESC, c_replay_id DESC) AS c_rank
+			FROM t_strategy_replays
+			WHERE c_status IN ('done', 'failed', 'cancelled')
+		)
+		WHERE c_rank > ?`
+	// sqlDeleteReplayBarsBatch 分批删除一个回放的周期记录。
+	sqlDeleteReplayBarsBatch = `
+		DELETE FROM t_strategy_replay_bars
+		WHERE rowid IN (SELECT rowid FROM t_strategy_replay_bars WHERE c_replay_id = ? LIMIT ?)`
+	// sqlDeleteReplay 删除回放任务本身。
+	sqlDeleteReplay = `DELETE FROM t_strategy_replays WHERE c_replay_id = ?`
+)
+
 // DeleteResultItemsBefore 删除创建时间早于 cutoff 的解释明细；结果主表永久保留。
 // 明细自带 c_ctime 索引，每次只扫描新过期的行，耗时不随历史结果增长。
 func (s *Store) DeleteResultItemsBefore(ctx context.Context, cutoff time.Time) (int64, error) {
 	var total int64
 	for {
-		result := s.db.WithContext(ctx).Exec(`
-			DELETE FROM t_strategy_result_items
-			WHERE rowid IN (SELECT rowid FROM t_strategy_result_items WHERE c_ctime < ? LIMIT ?)
-		`, cutoff.UTC(), retentionBatch)
+		result := s.db.WithContext(ctx).Exec(sqlDeleteResultItemsBefore, cutoff.UTC(), retentionBatch)
 		if result.Error != nil {
 			return total, result.Error
 		}
@@ -34,11 +58,7 @@ func (s *Store) DeleteReplaysBefore(ctx context.Context, cutoff time.Time) (int6
 	var deleted int64
 	for {
 		var ids []string
-		if err := s.db.WithContext(ctx).Raw(`
-			SELECT c_replay_id FROM t_strategy_replays
-			WHERE c_ctime < ? AND c_status IN ('done', 'failed', 'cancelled')
-			ORDER BY c_ctime LIMIT 20
-		`, cutoff.UTC()).Scan(&ids).Error; err != nil {
+		if err := s.db.WithContext(ctx).Raw(sqlSelectFinishedReplaysBefore, cutoff.UTC()).Scan(&ids).Error; err != nil {
 			return deleted, err
 		}
 		if len(ids) == 0 {
@@ -61,14 +81,7 @@ func (s *Store) DeleteReplaysBeyond(ctx context.Context, keep int) (int64, error
 		return 0, errors.New("每个空间保留的回放数必须大于 0")
 	}
 	var ids []string
-	if err := s.db.WithContext(ctx).Raw(`
-		SELECT c_replay_id FROM (
-			SELECT c_replay_id, ROW_NUMBER() OVER (PARTITION BY c_space_id ORDER BY c_ctime DESC, c_replay_id DESC) AS c_rank
-			FROM t_strategy_replays
-			WHERE c_status IN ('done', 'failed', 'cancelled')
-		)
-		WHERE c_rank > ?
-	`, keep).Scan(&ids).Error; err != nil {
+	if err := s.db.WithContext(ctx).Raw(sqlSelectFinishedReplaysBeyond, keep).Scan(&ids).Error; err != nil {
 		return 0, err
 	}
 	var deleted int64
@@ -85,10 +98,7 @@ func (s *Store) DeleteReplaysBeyond(ctx context.Context, keep int) (int64, error
 // deleteReplay 先分批删除回放的周期记录，再删除任务本身，单条语句不会长时间占住唯一的数据库连接。
 func (s *Store) deleteReplay(ctx context.Context, replayID string) (int64, error) {
 	for {
-		result := s.db.WithContext(ctx).Exec(`
-			DELETE FROM t_strategy_replay_bars
-			WHERE rowid IN (SELECT rowid FROM t_strategy_replay_bars WHERE c_replay_id = ? LIMIT ?)
-		`, replayID, retentionBatch)
+		result := s.db.WithContext(ctx).Exec(sqlDeleteReplayBarsBatch, replayID, retentionBatch)
 		if result.Error != nil {
 			return 0, result.Error
 		}
@@ -96,6 +106,6 @@ func (s *Store) deleteReplay(ctx context.Context, replayID string) (int64, error
 			break
 		}
 	}
-	result := s.db.WithContext(ctx).Exec(`DELETE FROM t_strategy_replays WHERE c_replay_id = ?`, replayID)
+	result := s.db.WithContext(ctx).Exec(sqlDeleteReplay, replayID)
 	return result.RowsAffected, result.Error
 }

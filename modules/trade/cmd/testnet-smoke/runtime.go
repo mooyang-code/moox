@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	accountapp "github.com/mooyang-code/moox/modules/trade/internal/application/account"
@@ -18,12 +19,73 @@ type smokeIdentity struct {
 	LogicalAccountID string
 }
 
-func smokeIdentityFor(exchangeName exchange.Exchange) smokeIdentity {
+// smokeMarkets 是冒烟账户开通的市场：币安现货、合约测试网是两套域名和两把密钥，一个账户只开一个市场；
+// OKX 模拟盘一把密钥同时能做现货和永续，一个账户同时开通两个市场（--market 只决定这一次演练哪个市场）。
+func smokeMarkets(exchangeName exchange.Exchange, market exchange.MarketType) []exchange.MarketType {
+	if exchangeName == exchange.ExchangeOKX {
+		return []exchange.MarketType{exchange.MarketTypeSpot, exchange.MarketTypeSwap}
+	}
+	return []exchange.MarketType{market}
+}
+
+func smokeMarketStrings(exchangeName exchange.Exchange, market exchange.MarketType) []string {
+	var out []string
+	for _, item := range smokeMarkets(exchangeName, market) {
+		out = append(out, string(item))
+	}
+	return out
+}
+
+// smokeIdentityFor 币安每个（交易所、市场）一个独立的账户（现货、合约各用各的测试网账户）；OKX 只有一个账户。
+func smokeIdentityFor(exchangeName exchange.Exchange, market exchange.MarketType) smokeIdentity {
 	name := strings.ToLower(string(exchangeName))
+	if exchangeName != exchange.ExchangeOKX {
+		name += "-" + strings.ToLower(string(market))
+	}
 	return smokeIdentity{
 		AccountID:        "testnet-smoke-" + name,
 		LogicalAccountID: "testnet-smoke-logical-" + name,
 	}
+}
+
+// smokeAccountMode 是测试网账户的类型：币安测试网跳过检测，一律按普通账户；OKX 模拟盘是统一账户。
+func smokeAccountMode(exchangeName exchange.Exchange) string {
+	if exchangeName == exchange.ExchangeOKX {
+		return string(exchange.AccountModeOKXUnified)
+	}
+	return string(exchange.AccountModeBinanceStandard)
+}
+
+// smokeMarginMode：开通合约的账户一律全仓，只有现货为空。
+func smokeMarginMode(markets []exchange.MarketType) string {
+	if hasLeverageMarket(markets) {
+		return string(exchange.MarginModeCross)
+	}
+	return ""
+}
+
+func hasLeverageMarket(markets []exchange.MarketType) bool {
+	for _, market := range markets {
+		if exchange.RuleFor(market).Leverage {
+			return true
+		}
+	}
+	return false
+}
+
+func smokeLeverage(markets []exchange.MarketType) store.LeverageSettings {
+	if hasLeverageMarket(markets) {
+		// 测试网冒烟固定 1 倍杠杆，不放大测试单的风险。
+		return store.LeverageSettings{store.DefaultLeverageKey: "1"}
+	}
+	return store.LeverageSettings{}
+}
+
+func smokeAccountName(options smokeOptions) string {
+	if options.Exchange == exchange.ExchangeOKX {
+		return "Testnet smoke OKX"
+	}
+	return "Testnet smoke " + string(options.Exchange) + " " + string(options.MarketType)
 }
 
 func seedSmokeStore(
@@ -37,7 +99,11 @@ func seedSmokeStore(
 			options.Exchange != exchange.ExchangeOKX) {
 		return smokeIdentity{}, errors.New("testnet smoke store requires a supported TESTNET Exchange")
 	}
-	identity := smokeIdentityFor(options.Exchange)
+	if options.MarketType != exchange.MarketTypeSpot && options.MarketType != exchange.MarketTypeSwap {
+		return smokeIdentity{}, errors.New("testnet smoke store requires a SPOT or SWAP market")
+	}
+	identity := smokeIdentityFor(options.Exchange, options.MarketType)
+	markets := smokeMarketStrings(options.Exchange, options.MarketType)
 	existing, err := database.GetTradingAccount(
 		ctx,
 		smokeSpaceID,
@@ -47,14 +113,14 @@ func seedSmokeStore(
 	case err == nil:
 		if existing.SpaceID != smokeSpaceID ||
 			existing.Exchange != string(options.Exchange) ||
-			existing.MarketType != string(exchange.MarketTypeSpot) ||
+			!slices.Equal(existing.Markets, markets) ||
 			existing.ExecutionMode != string(exchange.ExecutionModeLive) ||
 			existing.Environment != string(exchange.AccountEnvironmentTestnet) ||
 			existing.CredentialSecretID != options.SecretID ||
 			existing.SettlementAsset != "USDT" ||
 			existing.Status != string(exchange.AccountStatusEnabled) {
 			return smokeIdentity{}, errors.New(
-				"existing smoke account must remain an enabled TESTNET LIVE SPOT account",
+				"existing smoke account must remain an enabled TESTNET LIVE account of the same market",
 			)
 		}
 		return identity, validateSmokeLogicalAccount(ctx, database, identity)
@@ -64,23 +130,24 @@ func seedSmokeStore(
 	err = database.Transaction(ctx, func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
 			SpaceID: smokeSpaceID, TradingAccountID: identity.AccountID,
-			Name:     "Testnet smoke " + string(options.Exchange),
-			Exchange: string(options.Exchange), MarketType: string(exchange.MarketTypeSpot),
+			Name:     smokeAccountName(options),
+			Exchange: string(options.Exchange), Markets: markets,
 			ExecutionMode:      string(exchange.ExecutionModeLive),
+			AccountMode:        smokeAccountMode(options.Exchange),
 			Environment:        string(exchange.AccountEnvironmentTestnet),
 			CredentialSecretID: options.SecretID,
 			SettlementAsset:    "USDT",
+			MarginMode:         smokeMarginMode(smokeMarkets(options.Exchange, options.MarketType)),
 			Status:             string(exchange.AccountStatusEnabled),
-			LeverageSettings:   store.LeverageSettings{},
+			LeverageSettings:   smokeLeverage(smokeMarkets(options.Exchange, options.MarketType)),
 			FillCursors:        store.FillCursors{},
 		}); err != nil {
 			return err
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: smokeSpaceID, LogicalAccountID: identity.LogicalAccountID,
-			Name:            "Testnet smoke " + string(options.Exchange),
+			Name:            smokeAccountName(options),
 			ExecutionMode:   string(exchange.ExecutionModeLive),
-			MarketType:      string(exchange.MarketTypeSpot),
 			SettlementAsset: "USDT",
 			AutomationState: "PAUSED",
 			PauseReason:     "testnet smoke isolation",
@@ -113,7 +180,6 @@ func validateSmokeLogicalAccount(
 	}
 	if logical.SpaceID != smokeSpaceID ||
 		logical.ExecutionMode != string(exchange.ExecutionModeLive) ||
-		logical.MarketType != string(exchange.MarketTypeSpot) ||
 		logical.SettlementAsset != "USDT" ||
 		logical.AutomationState != "PAUSED" {
 		return errors.New("existing smoke LogicalAccount is not isolated and PAUSED")

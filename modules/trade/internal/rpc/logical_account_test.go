@@ -34,7 +34,6 @@ func TestLogicalAccountRPCCreatesPausedAccountAndClaimsOwner(t *testing.T) {
 	ctx := spacecontext.WithSpaceID(context.Background(), "space-1")
 	created, err := handler.CreateLogicalAccount(ctx, &tradepb.CreateLogicalAccountReq{
 		Name: "main", ExecutionMode: tradepb.ExecutionMode_EXECUTION_MODE_PAPER,
-		MarketType:      tradepb.MarketType_MARKET_TYPE_SPOT,
 		SettlementAsset: "USDT",
 	})
 	if err != nil {
@@ -122,7 +121,7 @@ func TestReleaseLogicalAccountOwnerMapsOwnerConflict(t *testing.T) {
 		return tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "main",
 			OwnerInstanceID: "runner-1", OwnerSessionID: "session-1", ExecutionMode: "PAPER",
-			MarketType: "SPOT", SettlementAsset: "USDT",
+			SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "test",
 		})
 	}))

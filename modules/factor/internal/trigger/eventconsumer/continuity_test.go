@@ -217,7 +217,7 @@ func TestContinuityIgnoresConfirmedAbsences(t *testing.T) {
 	universe := subjectsN(20)
 	h.event(0, universe, nil)
 	missing := []string{"S00", "S01", "S02", "S03"}
-	h.cont.NoteAbsent(h.taskID, minuteAt(1), minuteAt(2), time.Minute, missing)
+	h.cont.NoteAbsent(h.taskID, minuteAt(1), minuteAt(2), time.Minute, missing, nil)
 	h.event(1, universe, missing)
 	require.Len(t, h.runner.plans, 2)
 	require.Empty(t, h.runner.plans[1].UpstreamFailed)
@@ -264,12 +264,12 @@ func TestContinuityExcludesConfirmedAbsencesFromComputation(t *testing.T) {
 	h := newContinuityHarness(t)
 	universe := subjectsN(20)
 	h.event(0, universe, nil)
-	h.cont.NoteAbsent(h.taskID, minuteAt(1), minuteAt(2), time.Minute, []string{"S00"})
+	h.cont.NoteAbsent(h.taskID, minuteAt(1), minuteAt(2), time.Minute, []string{"S00"}, nil)
 	h.event(1, universe, []string{"S00"})
 	require.NotContains(t, h.runner.plans[1].Expected, "S00")
 	require.Len(t, h.runner.plans[1].Expected, 19)
 
-	h.cont.NoteAbsent(h.taskID, minuteAt(2), minuteAt(3), time.Minute, universe)
+	h.cont.NoteAbsent(h.taskID, minuteAt(2), minuteAt(3), time.Minute, universe, nil)
 	h.event(2, universe, universe)
 	require.Len(t, h.runner.plans, 2, "全部确认没有：这一期没有可算的")
 	require.Equal(t, minuteAt(2), h.state().CommittedThrough)
@@ -303,7 +303,7 @@ func TestContinuityNoteAbsentConcurrentWithAdvance(t *testing.T) {
 	go func() {
 		defer close(done)
 		for i := 0; i < 200; i++ {
-			h.cont.NoteAbsent(h.taskID, minuteAt(1), minuteAt(20), time.Minute, []string{fmt.Sprintf("X%03d", i)})
+			h.cont.NoteAbsent(h.taskID, minuteAt(1), minuteAt(20), time.Minute, []string{fmt.Sprintf("X%03d", i)}, nil)
 		}
 	}()
 	h.event(20, universe, nil)

@@ -116,6 +116,24 @@ func TestCriticalAlertLinesCountEachComponentOnce(t *testing.T) {
 	require.Equal(t, []string{"storage/host-agent storage / host-agent", "overseas 主机 overseas"}, lines)
 }
 
+// 不配币安只读 Key 的全新安装：Monitor 把这一项报成 warning 告警和 degraded 业务检查，验收不把它当成故障。
+func TestCriticalAlertLinesSkipReadonlyKeyMissing(t *testing.T) {
+	overview := &monitorpb.HealthOverview{
+		Alerts: []*monitorpb.HealthAlert{
+			{Id: "collector_attention:delist_readonly_key_missing", Severity: "warning", Title: "下架检测缺少币安只读 Key",
+				Object: &monitorpb.HealthObject{Type: "business", Kind: "collector_attention", AttentionKind: "delist_readonly_key_missing"}},
+			{Id: "collector_attention:delist_source_failed", Severity: "critical", Title: "下架检测来源连续失败",
+				Object: &monitorpb.HealthObject{Type: "business", Kind: "collector_attention", AttentionKind: "delist_source_failed"}},
+		},
+		BusinessChecks: []*monitorpb.HealthBusinessCheck{
+			{CheckId: "collector_attention:delist_readonly_key_missing", Name: "下架检测缺少币安只读 Key", Status: "degraded"},
+		},
+	}
+	lines := criticalAlertLines(doctorcli.BuildAlertsReport(overview).Items)
+	require.Len(t, lines, 1)
+	require.Contains(t, lines[0], "下架检测来源连续失败")
+}
+
 func TestSetupVerifyMonitorErrorKeepsOtherChecks(t *testing.T) {
 	checks := verify.Evaluate(verify.Input{Now: time.Now(), MonitorError: "connection refused"})
 	last := checks[len(checks)-1]

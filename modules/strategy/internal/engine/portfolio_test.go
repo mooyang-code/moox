@@ -3,6 +3,8 @@ package engine
 import (
 	"strings"
 	"testing"
+
+	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 )
 
 // S5：两条规则选中同一标的、合计超过 portfolio.max_weight：超出留现金，gross 不超过 leverage。
@@ -31,7 +33,7 @@ portfolio:
 	if len(decision.Summary.Notes) != 1 || !strings.Contains(decision.Summary.Notes[0], "max_weight") {
 		t.Fatalf("应记录裁剪说明：%v", decision.Summary.Notes)
 	}
-	if decision.State.Targets["X"] != "0.6" {
+	if decision.State.Targets["X|swap"] != "0.6" {
 		t.Fatalf("状态中的目标应为裁剪后的值：%v", decision.State.Targets)
 	}
 }
@@ -52,18 +54,20 @@ portfolio:
   leverage: 1.2
 `
 
-// S21（引擎部分）：现货 View 上合成 Σw > 1 则 skipped(config_error)；合约 View 允许。
-func TestS21SpotRejectsWeightSumAboveOne(t *testing.T) {
-	program := compile(t, leveredStrategy, "m", "n")
-	frame := frameOf(program, map[string]Row{"X": values("m", 2, "n", 1), "Y": values("m", 1, "n", 2)})
-	frame.Spot = true
-	spot := evaluate(t, program, frame, State{})
-	assertSkipped(t, spot, SkipConfigError)
-	if len(spot.Summary.Notes) == 0 || !strings.Contains(spot.Summary.Notes[0], "超过 1") {
-		t.Fatalf("应说明原因：%v", spot.Summary.Notes)
+// 现货上合成 Σw > 1 时按比例缩小，多出的部分留作现金（以前是整期跳过）；合约允许 gross 超过 1。
+func TestSpotScalesWeightSumAboveOne(t *testing.T) {
+	spotProgram := compileIn(t, dsl.SingleMarket(dsl.MarketSpot), leveredStrategy, "m", "n")
+	frame := frameOf(spotProgram, map[string]Row{"X": values("m", 2, "n", 1), "Y": values("m", 1, "n", 2)})
+	spot := evaluate(t, spotProgram, frame, State{})
+	assertOK(t, spot)
+	assertWeights(t, spot, map[string]string{"X": "0.5", "Y": "0.5"})
+	assertDecimal(t, "gross", spot.Summary.Gross, "1")
+	assertDecimal(t, "cash", spot.Summary.Cash, "0")
+	if len(spot.Summary.Notes) == 0 || !strings.Contains(spot.Summary.Notes[0], "现货预算") {
+		t.Fatalf("应说明按比例缩小的原因：%v", spot.Summary.Notes)
 	}
-	frame.Spot = false
-	swap := evaluate(t, program, frame, State{})
+	swapProgram := compile(t, leveredStrategy, "m", "n")
+	swap := evaluate(t, swapProgram, frameOf(swapProgram, map[string]Row{"X": values("m", 2, "n", 1), "Y": values("m", 1, "n", 2)}), State{})
 	assertOK(t, swap)
 	assertWeights(t, swap, map[string]string{"X": "0.6", "Y": "0.6"})
 	assertDecimal(t, "gross", swap.Summary.Gross, "1.2")
@@ -72,7 +76,7 @@ func TestS21SpotRejectsWeightSumAboveOne(t *testing.T) {
 
 // 做空取负：现货拒绝负权重，合约 gross 按绝对值计算。
 func TestShortSideNegativeWeights(t *testing.T) {
-	program := compile(t, `name: short
+	const raw = `name: short
 rules:
   - id: s
     type: rank
@@ -80,12 +84,12 @@ rules:
     select: {bottom: 1}
     weight: {total: 0.5}
     side: short
-`, "m")
-	frame := frameOf(program, map[string]Row{"X": values("m", 2), "Y": values("m", 1)})
-	frame.Spot = true
-	assertSkipped(t, evaluate(t, program, frame, State{}), SkipConfigError)
-	frame.Spot = false
-	decision := evaluate(t, program, frame, State{})
+`
+	spotProgram := compileIn(t, dsl.SingleMarket(dsl.MarketSpot), raw, "m")
+	rows := map[string]Row{"X": values("m", 2), "Y": values("m", 1)}
+	assertSkipped(t, evaluate(t, spotProgram, frameOf(spotProgram, rows), State{}), SkipConfigError)
+	program := compile(t, raw, "m")
+	decision := evaluate(t, program, frameOf(program, rows), State{})
 	assertOK(t, decision)
 	assertWeights(t, decision, map[string]string{"Y": "-0.5"})
 	assertDecimal(t, "gross", decision.Summary.Gross, "0.5")
@@ -105,7 +109,7 @@ rules:
     select: {top: 2}
     weight: {total: 0.5}
 `, "m")
-	previous := State{Targets: map[string]string{"X": "0.5"}}
+	previous := State{Targets: map[string]string{"X|swap": "0.5"}}
 	decision := evaluate(t, program, frameOf(program, map[string]Row{"X": values("m", 1), "Y": values("m", 2)}), previous)
 	assertOK(t, decision)
 	assertWeights(t, decision, map[string]string{"X": "0.25", "Y": "0.25"})

@@ -7,6 +7,7 @@ const collectMgr = "trpc.moox.collector.CollectMgr"
 
 func init() {
 	rpcGroupShort["collector data-type"] = "采集数据类型配置"
+	rpcGroupShort["collector delist"] = "标的下架：手工登记（自动发现由 Collector 的下架检测负责）"
 
 	registerRPCSpecs(
 		rpcSpec{Path: []string{"collector", "task", "list"}, Short: "列出采集任务", Service: collectMgr, Method: "GetTaskList", SpaceField: "space_id", Page: rpcPageSize,
@@ -27,6 +28,9 @@ func init() {
 
 		rpcSpec{Path: []string{"collector", "subjects", "status"}, Short: "各标签最近一次标的同步的状态", Service: collectMgr, Method: "ListTagSyncStatus", SpaceField: "space_id"},
 		rpcSpec{Path: []string{"collector", "subjects", "listers"}, Short: "列出可用的标的来源（交易所列表器）", Service: collectMgr, Method: "ListSubjectListers", NoSpace: true},
+		rpcSpec{Path: []string{"collector", "delist", "register"}, Destructive: true, Short: "手工登记标的下架，补漏报或演练（会发布“标的即将下架”事件，事件中心的系统规则随即禁止买入，到 T−24h 会自动卖出策略持有的实盘仓位；默认只预览，--yes 前向用户确认标的和下架时间；演练用 --paper-only）", Service: collectMgr, Method: "RegisterDelistNotice",
+			Flags: []rpcFlag{reqFlag("exchange", "exchange", "交易所，小写：binance、okx"), reqFlag("market", "market", "市场：SPOT 现货、SWAP 永续"), reqFlag("symbol", "exchange_symbol", "交易所代码，如 FOOUSDT、FOO-USDT-SWAP"),
+				{Name: "delist-at-ms", Field: "delist_at_ms", Kind: rpcInt, Usage: "下架时间（Unix 毫秒）", Required: true}, boolFlag("paper-only", "paper_only", "仅模拟盘：只处理模拟盘组合，用于演练")}},
 		rpcSpec{Path: []string{"collector", "resample", "preview"}, Short: "预览合成的源任务与目标频率是否可行", Service: collectMgr, Method: "PreviewKlineResampleSource", SpaceField: "space_id",
 			Flags: []rpcFlag{reqFlag("source-task-id", "source_task_id", "源采集任务 ID"), reqFlag("target-frequency", "target_frequency", "目标频率，如 5m")}},
 	)

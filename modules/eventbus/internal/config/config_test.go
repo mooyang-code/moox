@@ -108,7 +108,7 @@ func TestRepositoryConfigDeclaresInfrastructureOnly(t *testing.T) {
 			assert.Equal(t, []string{"moox.event.trade.target.weight_requested.v1.>"}, stream.Subjects)
 		}
 		if stream.Name == "MOOX_COLLECTOR" {
-			assert.Equal(t, []string{"moox.event.collector.kline.backfilled.v1.>"}, stream.Subjects)
+			assert.Equal(t, []string{"moox.event.collector.kline.backfilled.v1.>", "moox.event.collector.instrument.delist_scheduled.v1.>"}, stream.Subjects)
 		}
 		if stream.Name == "MOOX_STORAGE" {
 			assert.Equal(t, []string{

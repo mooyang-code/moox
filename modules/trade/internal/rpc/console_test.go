@@ -19,7 +19,7 @@ func TestConsoleQueryEquityCurveReadsOnlyRequestedSpace(t *testing.T) {
 	defer tradeStore.Close()
 	account := store.TradingAccountRecord{
 		SpaceID: "space-1", TradingAccountID: "account-1", Name: "paper",
-		Exchange: string(exchange.ExchangeBinance), MarketType: string(exchange.MarketTypeSpot),
+		Exchange: string(exchange.ExchangeBinance), Markets: []string{string(exchange.MarketTypeSpot)},
 		ExecutionMode: string(exchange.ExecutionModePaper), SettlementAsset: "USDT",
 		Status: string(exchange.AccountStatusEnabled), PaperConfig: &store.PaperAccountConfigRecord{
 			SpaceID: "space-1", TradingAccountID: "account-1", InitialBalance: "1000",

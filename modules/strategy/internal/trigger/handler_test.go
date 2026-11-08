@@ -59,6 +59,24 @@ type fakeLoader struct {
 	calls       int
 	invalidated int
 	onLoad      func()
+	// lastBar 是最近一次装配收到的参数。
+	lastBar input.Bar
+	// prices 是各周期（bar_start）的收盘价（标的|市场 → 价格），LoadPrices 按请求的键返回其中有价的。
+	prices      map[int64]map[string]float64
+	priceCalls  int
+	priceKeysAt [][]string
+}
+
+func (l *fakeLoader) LoadPrices(_ context.Context, _ string, _ input.Resolved, bar input.Bar, keys []string) (map[string]float64, error) {
+	l.priceCalls++
+	l.priceKeysAt = append(l.priceKeysAt, keys)
+	out := map[string]float64{}
+	for _, key := range keys {
+		if price, ok := l.prices[bar.BarStart.Unix()][key]; ok {
+			out[key] = price
+		}
+	}
+	return out, nil
 }
 
 // Invalidate 记录处理器在 ErrStale 后丢弃事件内缓存的次数。
@@ -84,7 +102,8 @@ func (l *fakeLoader) LoadBar(_ context.Context, spaceID string, resolved input.R
 		return input.Loaded{}, err
 	}
 	rows := l.frames[bar.BarStart.Unix()]
-	frame := engine.Frame{BarEnd: boundary.BarEnd, BarIndex: boundary.BarIndex, Spot: resolved.Spot, Rows: map[string]engine.Row{}, Expected: map[string][]string{}, AgedOut: map[string][]string{}}
+	frameRows := map[string]engine.Row{}
+	frame := engine.Frame{BarEnd: boundary.BarEnd, BarIndex: boundary.BarIndex, Expected: map[string][]string{}, AgedOut: map[string][]string{}}
 	sets := input.Sets{Expected: map[string][]string{}, AgedOut: map[string][]string{}, Subjects: map[string]input.Subject{}}
 	ids := make([]string, 0, len(rows))
 	for id, values := range rows {
@@ -100,9 +119,14 @@ func (l *fakeLoader) LoadBar(_ context.Context, spaceID string, resolved input.R
 		if len(row.Previous) == 0 {
 			row.Previous = nil
 		}
-		frame.Rows[id] = row
+		frameRows[id] = row
 		sets.Subjects[id] = input.Subject{SubjectID: id, Active: true}
 	}
+	frame.Markets = map[string]engine.MarketInput{}
+	for _, market := range resolved.Markets() {
+		frame.Markets[market] = engine.MarketInput{Rows: frameRows}
+	}
+	l.lastBar = bar
 	frame.Universe = ids
 	frame.Expected["r"] = ids
 	sets.Universe = ids
@@ -130,7 +154,7 @@ type harness struct {
 
 func newHarness(t *testing.T, dslYaml string, account *string) *harness {
 	t.Helper()
-	resolved := input.Resolved{ViewID: "view_factor_a", FactorTaskID: "ftask_a", DatasetID: "ds", Bar: "1h", Calendar: input.DefaultCalendar, Spot: true, Columns: map[string]input.ColumnBinding{"m": {Source: input.SourceFactor, Member: "f", FactorID: "f", DefinitionHash: "h1"}}, Factors: map[string]string{"f": "h1|fixed"}, ViewColumns: []string{"close", "m"}}
+	resolved := input.Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]input.TaskBinding{"spot": {ViewID: "view_factor_a", FactorTaskID: "ftask_a", DatasetID: "ds"}}, Bar: "1h", Calendar: input.DefaultCalendar, Columns: map[string]input.ColumnBinding{"m": {Source: input.SourceFactor, Member: "f", FactorID: "f", DefinitionHash: "h1"}}, Factors: map[string]string{"f": "h1|fixed"}, ViewColumns: []string{"close", "m"}}
 	return newHarnessWith(t, dslYaml, account, resolved)
 }
 
@@ -150,7 +174,11 @@ func newHarnessWith(t *testing.T, dslYaml string, account *string, resolved inpu
 	if err := repo.CreateDefinition(ctx, store.Definition{StrategyID: "s1", Name: "demo", DSLYaml: dslYaml, DSLHash: hash, CreatedAt: bar0}); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.CreateInstance(ctx, store.Instance{InstanceID: "i1", StrategyID: "s1", SpaceID: "space", FactorTaskID: "ftask_a", LogicalAccountID: account, CreatedAt: bar0}); err != nil {
+	tasks := map[string]string{}
+	for market, task := range resolved.Tasks {
+		tasks[market] = task.FactorTaskID
+	}
+	if err := repo.CreateInstance(ctx, store.Instance{InstanceID: "i1", StrategyID: "s1", SpaceID: "space", FactorTasks: tasks, LogicalAccountID: account, CreatedAt: bar0}); err != nil {
 		t.Fatal(err)
 	}
 	raw, _ := json.Marshal(resolved)
@@ -477,7 +505,7 @@ func TestHandlePreviousBarVersionEvidence(t *testing.T) {
 		t.Fatalf("首期应为 previous_version_unknown：%+v", first)
 	}
 	var record store.InputRecord
-	if err := json.Unmarshal(first.InputJSON, &record); err != nil || record.Factors["f"] != "h1|fixed" {
+	if err := json.Unmarshal(first.InputJSON, &record); err != nil || record.Views["view_factor_a"].Factors["f"] != "h1|fixed" {
 		t.Fatalf("首期应记录本期指纹：%s err=%v", first.InputJSON, err)
 	}
 	h.now = barStart(2).Add(90 * time.Minute)

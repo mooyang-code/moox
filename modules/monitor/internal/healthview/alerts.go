@@ -42,6 +42,10 @@ func alertObject(spaceID, checkID string, facts observability.Overview) *pb.Heal
 			}
 		}
 	}
+	// 关注项检查按登记过的种类给出 attention_kind，前端不用再从告警编号里截取。
+	if len(parts) == 2 && observability.AttentionCheckName(parts[0], parts[1]) != "" {
+		object.AttentionKind = parts[1]
+	}
 	if len(parts) >= 4 && parts[0] == "dataset" {
 		object.Type, object.Producer, object.DatasetId, object.Freq = "dataset", parts[1], strings.Join(parts[2:len(parts)-1], ":"), parts[len(parts)-1]
 	}
@@ -60,10 +64,13 @@ func alertObject(spaceID, checkID string, facts observability.Overview) *pb.Heal
 }
 
 // alertSeverity 区分告警轻重：critical 表示服务不可用、数据中断、主机失联或网关异常；
-// warning 表示还在工作但有风险，例如资源超过阈值、运行指标上报中断、采集任务清单过期、指标序列新增过快。
+// warning 表示还在工作但有风险，例如资源超过阈值、运行指标上报中断、采集任务清单过期、指标序列新增过快、
+// 只需提醒的关注项（缺币安只读 Key：现货下架改为手工登记）。
 func alertSeverity(checkID string, object *pb.HealthObject) string {
 	switch {
 	case object.Kind == "reporter", object.Kind == "metrics_ingest", checkID == monmetrics.TaskResultInventoryCheckID:
+		return "warning"
+	case object.AttentionKind != "" && observability.AttentionIsWarning(object.Kind, object.AttentionKind):
 		return "warning"
 	case object.Type == "host" && hostmetrics.MetricLabel(object.Kind) != "":
 		return "warning"

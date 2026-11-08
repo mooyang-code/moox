@@ -64,7 +64,7 @@
 | 子策略模板 | `tranche:` 一节，用 `{列名}` 占位 | 选项（`hold_count`、`score`、`sizing`、`candidates.require_volume`）都要显式写出与原框架一致的取值，见 `docs/模块/策略.md` 的"tranche 规则"；同类策略可以做成策略模板（"策略模板"一节） |
 | 加权合并 | `stg_weight` 归一化后乘以规则预算 | `portfolio.leverage` 要留出余量：按数量持有会让 Σw 略大于 1 |
 | 上市年龄门槛 | `universe.min_age_bars` | 例如"去掉每个标的前 999 根"写成 `min_age_bars: 999` |
-| 实时运行 | 策略实例（关联因子任务；观察期不挂账户） | tranche 规则只能绑定合约 View，不支持回放 |
+| 实时运行 | 策略实例（关联因子任务；观察期不挂账户） | tranche 规则只用单个市场（纯永续或纯现货按权重持有），不支持回放 |
 
 **先查能不能配置出来**：tranche 规则的选项和 `stop` 止损止盈覆盖了批次持仓类策略的常见变体，先对照 `docs/模块/策略.md` 的选项表；只有确实缺一种机制时才编码，而且只给已有环节加选项。
 
@@ -161,7 +161,8 @@ DSL 要逐字节和提交的内容一致；DSL 超过 64 KiB 时，同时验证�
 
 **参考运行器**（放在 `local/`）：对原框架的**副本**打必要的补丁后运行，常见的有三类——第三方库版本兼容（例如 pandas 2 的
 `Series.between(inclusive=...)` 只接受字符串）、关掉计时与日志输出、去掉上面第 1 条的"起点回退"。因子列预先用原版因子函数算好，
-每个子策略分别跑出持仓，按 `stg_weight` 加权合并后写成 `bar_end,instrument_id,weight`（instrument_id 用 MooX 的 `BTC-USDT` 写法，不截断）。
+每个子策略分别跑出持仓，按 `stg_weight` 加权合并后写成 `bar_end,market,instrument_id,weight`（market 取 `spot`、`swap` 或 `equity`，
+instrument_id 用 MooX 的 `BTC-USDT` 写法，不截断；同一个标的的现货和永续是两行，`targets` 的输出也按 `市场:标的` 区分）。
 
 **比对**（`strategy_check.py`，只读）：
 

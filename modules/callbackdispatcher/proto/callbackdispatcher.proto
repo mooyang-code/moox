@@ -1,0 +1,304 @@
+syntax = "proto3";
+
+package trpc.moox.callbackdispatcher;
+
+import "moox_common.proto";
+
+option go_package = "github.com/mooyang-code/moox/modules/callbackdispatcher/proto/callbackdispatchergen;callbackdispatcherpb";
+
+// CallbackDispatcherService 是管理台「事件中心」的后端：管理事件规则，查看、重试、取消执行记录。
+// loopback 11460 提供原生 tRPC，由主机网关按调用方 ACL 转发；本服务是全局服务，不分空间。
+// 时间一律用 Unix 毫秒。
+//
+// 响应设计：每个响应首字段 common.RetInfo（code/msg），code=SUCCESS(0) 表示成功。
+
+// 规则动作的种类。
+enum ActionType {
+  ACTION_TYPE_UNSPECIFIED = 0;
+  // 向用户自己的接口发 POST。
+  ACTION_TYPE_NOTIFY_URL = 1;
+  // MooX 自带的处理，见 SystemAction。
+  ACTION_TYPE_SYSTEM = 2;
+}
+
+// 系统动作。第一版只有一个，由服务自带的系统规则使用，用户不能新建。
+enum SystemAction {
+  SYSTEM_ACTION_UNSPECIFIED = 0;
+  // 标的即将下架时：一发现就禁止买入，下架前 24 小时平掉策略持有的这个标的。
+  SYSTEM_ACTION_SELL_DELISTED_HOLDINGS = 1;
+}
+
+// 执行记录的状态。
+enum ExecutionStatus {
+  EXECUTION_STATUS_UNSPECIFIED = 0;
+  EXECUTION_STATUS_PENDING = 1;
+  EXECUTION_STATUS_RUNNING = 2;
+  EXECUTION_STATUS_SUCCEEDED = 3;
+  EXECUTION_STATUS_FAILED = 4;
+  EXECUTION_STATUS_CANCELED = 5;
+}
+
+// 限定范围里的一项：field 取事件目录里该事件的 scope_fields，values 之间是“或”，不同 field 之间是“且”。
+message ScopeFilter {
+  string field = 1;
+  repeated string values = 2;
+}
+
+// 事件目录里一个可限定的字段。
+message ScopeField {
+  // 字段名：space_id、subject、exchange、market、exchange_symbol。
+  string field = 1;
+  // 界面上的字段名。
+  string title = 2;
+  // 建议的取值（例如交易所只有 binance、okx）；为空表示自由填写。
+  repeated string options = 3;
+}
+
+// 一个可以配置规则的事件。
+message SubscribableEvent {
+  string event_name = 1;
+  uint32 version = 2;
+  // 界面名。
+  string title = 3;
+  string description = 4;
+  repeated ScopeField scope_fields = 5;
+}
+
+// 规则最近一次执行的结果。
+message RuleLastExecution {
+  ExecutionStatus status = 1;
+  int64 at_ms = 2;
+}
+
+message EventRule {
+  string rule_id = 1;
+  string name = 2;
+  string event_name = 3;
+  repeated ScopeFilter scope = 4;
+  ActionType action_type = 5;
+  // 通知地址，仅 ACTION_TYPE_NOTIFY_URL。
+  string notify_url = 6;
+  // 允许通知地址解析到内网地址。
+  bool allow_private_address = 7;
+  // 验证密钥的末 4 位，用于辨认；完整密钥只在创建时返回一次。
+  string secret_hint = 8;
+  SystemAction system_action = 9;
+  // 服务自带的系统规则：只能启停，不能改、不能删。
+  bool system = 10;
+  bool enabled = 11;
+  int64 created_at_ms = 12;
+  int64 updated_at_ms = 13;
+  RuleLastExecution last_execution = 14;
+}
+
+message ListSubscribableEventsReq {}
+message ListSubscribableEventsRsp {
+  common.RetInfo ret_info = 1;
+  repeated SubscribableEvent events = 2;
+  // 已经上线（注册了处理器）的系统动作。没在里面的系统动作只记录执行记录，不会真的禁止买入或平仓。
+  repeated SystemAction available_system_actions = 3;
+}
+
+message ListEventRulesReq {
+  common.Page page = 1;
+}
+message ListEventRulesRsp {
+  common.RetInfo ret_info = 1;
+  repeated EventRule rules = 2;
+  common.PageResult page_result = 3;
+}
+
+message GetEventRuleReq {
+  string rule_id = 1;
+}
+message GetEventRuleRsp {
+  common.RetInfo ret_info = 1;
+  EventRule rule = 2;
+}
+
+// 创建通知地址规则；系统动作规则由服务自带，不能新建。
+message CreateEventRuleReq {
+  string name = 1;
+  string event_name = 2;
+  repeated ScopeFilter scope = 3;
+  string notify_url = 4;
+  bool allow_private_address = 5;
+  // 不带时默认启用。
+  optional bool enabled = 6;
+}
+message CreateEventRuleRsp {
+  common.RetInfo ret_info = 1;
+  EventRule rule = 2;
+  // 验证密钥，只在创建时完整返回这一次。
+  string signing_secret = 3;
+}
+
+// 限定范围的整体替换值：带上这个消息就用 items 替换原来的范围（items 为空表示不限），不带表示不改。
+message ScopeFilters {
+  repeated ScopeFilter items = 1;
+}
+
+// 更新规则：只改请求里带了的字段。系统规则只允许改 enabled；
+// 通知地址规则不能改触发事件和验证密钥（要换密钥就删掉重建）。
+message UpdateEventRuleReq {
+  string rule_id = 1;
+  optional string name = 2;
+  ScopeFilters scope = 3;
+  optional string notify_url = 4;
+  optional bool allow_private_address = 5;
+  optional bool enabled = 6;
+}
+message UpdateEventRuleRsp {
+  common.RetInfo ret_info = 1;
+  EventRule rule = 2;
+}
+
+message DeleteEventRuleReq {
+  string rule_id = 1;
+}
+message DeleteEventRuleRsp {
+  common.RetInfo ret_info = 1;
+}
+
+// 用一条示例事件对通知地址规则立即发一次；不写执行记录。
+message TestEventRuleReq {
+  string rule_id = 1;
+}
+message TestEventRuleRsp {
+  common.RetInfo ret_info = 1;
+  // 对方返回的状态码；没连上时为 0。
+  int32 http_status = 2;
+  int64 duration_ms = 3;
+  // 对方返回内容的前 1KB，或失败原因。
+  string response_snippet = 4;
+  bool success = 5;
+}
+
+message EventExecution {
+  string execution_id = 1;
+  string rule_id = 2;
+  string rule_name = 3;
+  ActionType action_type = 4;
+  string event_id = 5;
+  string event_name = 6;
+  string space_id = 7;
+  string subject_id = 8;
+  ExecutionStatus status = 9;
+  uint32 attempts = 10;
+  string last_error = 11;
+  int64 occurred_at_ms = 12;
+  int64 created_at_ms = 13;
+  int64 finished_at_ms = 14;
+  // 最近一次尝试的耗时。
+  int64 duration_ms = 15;
+  // 下一次重试或推进的时间；已结束的为 0。
+  int64 next_run_at_ms = 16;
+  // 失败后用户已确认处理。
+  bool acknowledged = 17;
+  // 系统动作已取消，但取消后的善后（解除禁止买入）还没做成：这时可以再取消一次重做善后。
+  bool cleanup_pending = 18;
+}
+
+// 通知地址的一次尝试。
+message DeliveryAttempt {
+  uint32 attempt = 1;
+  int64 at_ms = 2;
+  // 对方返回的状态码；没连上时为 0。
+  int32 http_status = 3;
+  int64 duration_ms = 4;
+  // 对方返回内容的前 1KB。
+  string response_snippet = 5;
+  string error = 6;
+}
+
+enum DelistStepKind {
+  DELIST_STEP_KIND_UNSPECIFIED = 0;
+  DELIST_STEP_KIND_BLOCK = 1;
+  DELIST_STEP_KIND_FLATTEN = 2;
+  DELIST_STEP_KIND_VERIFY = 3;
+}
+
+// 下架处理的一步：某一轮对某个组合账户做的事。
+message DelistStep {
+  uint32 round = 1;
+  DelistStepKind kind = 2;
+  string space_id = 3;
+  string logical_account_id = 4;
+  string exchange = 5;
+  // Trade 的操作号。
+  string operator_action_id = 6;
+  string status = 7;
+  uint32 attempts = 8;
+  string result = 9;
+  string error = 10;
+  int64 updated_at_ms = 11;
+}
+
+message EventExecutionDetail {
+  EventExecution execution = 1;
+  // 触发这次执行的事件内容（JSON）。
+  string payload_json = 2;
+  repeated DeliveryAttempt attempts = 3;
+  repeated DelistStep delist_steps = 4;
+}
+
+message ListEventExecutionsReq {
+  string rule_id = 1;
+  ExecutionStatus status = 2;
+  common.Page page = 3;
+}
+message ListEventExecutionsRsp {
+  common.RetInfo ret_info = 1;
+  repeated EventExecution executions = 2;
+  common.PageResult page_result = 3;
+}
+
+message GetEventExecutionReq {
+  string execution_id = 1;
+}
+message GetEventExecutionRsp {
+  common.RetInfo ret_info = 1;
+  EventExecutionDetail detail = 2;
+}
+
+// 重新执行一条失败的记录。
+message RetryEventExecutionReq {
+  string execution_id = 1;
+}
+message RetryEventExecutionRsp {
+  common.RetInfo ret_info = 1;
+  EventExecution execution = 2;
+}
+
+// 取消一条还没结束的记录；对下架动作，同时解除禁止。
+message CancelEventExecutionReq {
+  string execution_id = 1;
+}
+message CancelEventExecutionRsp {
+  common.RetInfo ret_info = 1;
+  EventExecution execution = 2;
+}
+
+// 确认已处理，清除这条记录引起的告警。
+message AcknowledgeEventExecutionReq {
+  string execution_id = 1;
+}
+message AcknowledgeEventExecutionRsp {
+  common.RetInfo ret_info = 1;
+  EventExecution execution = 2;
+}
+
+service CallbackDispatcherService {
+  rpc ListSubscribableEvents(ListSubscribableEventsReq) returns (ListSubscribableEventsRsp);
+  rpc ListEventRules(ListEventRulesReq) returns (ListEventRulesRsp);
+  rpc GetEventRule(GetEventRuleReq) returns (GetEventRuleRsp);
+  rpc CreateEventRule(CreateEventRuleReq) returns (CreateEventRuleRsp);
+  rpc UpdateEventRule(UpdateEventRuleReq) returns (UpdateEventRuleRsp);
+  rpc DeleteEventRule(DeleteEventRuleReq) returns (DeleteEventRuleRsp);
+  rpc TestEventRule(TestEventRuleReq) returns (TestEventRuleRsp);
+  rpc ListEventExecutions(ListEventExecutionsReq) returns (ListEventExecutionsRsp);
+  rpc GetEventExecution(GetEventExecutionReq) returns (GetEventExecutionRsp);
+  rpc RetryEventExecution(RetryEventExecutionReq) returns (RetryEventExecutionRsp);
+  rpc CancelEventExecution(CancelEventExecutionReq) returns (CancelEventExecutionRsp);
+  rpc AcknowledgeEventExecution(AcknowledgeEventExecutionReq) returns (AcknowledgeEventExecutionRsp);
+}

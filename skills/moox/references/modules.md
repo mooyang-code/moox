@@ -3,7 +3,7 @@
 每个模块列出：做什么、在哪台机器、常用命令、细节文档。管理台上的操作和各模块的主要操作都有专用命令；
 没有专用命令的底层接口才用 `moox-cli gateway call`，请求写法见 [`api-recipes.md`](api-recipes.md)。
 命令都在产物包（或仓库）根目录执行，默认读取当前目录的 `moox.toml`（`--file` 指定），不需要手工建隧道或设置环境变量。
-交易模块尚未完工：只能查询（`trade …`），不代用户创建账户、下单或清仓。
+交易模块已支持现货、永续多市场执行与人工下单，但 Agent 只用 `trade …` 查询：不代用户创建或修改账户、下单、撤单、清仓、减仓或解除下架禁止，也不向交易所下真实订单；实盘前须先跑测试网冒烟，币安统一账户的现货买单资金来源等要等用户本人小额实测（`docs/模块/交易.md` 第 12 节）。
 
 **通用约定**
 
@@ -22,6 +22,24 @@
 | Dataset（数据集） | 某来源的一类数据（某频率的 K 线、因子结果等），绑定到 Storage 的 DataNode |
 | Field / 列 | 数据集的字段；因子结果是结果数据集的列 |
 | View | 面向查询的宽表，由 Storage 异步构建，可重建 |
+
+## 事件中心
+
+- **做什么**：接收 EventBus 里可以配置规则的事件（数据集一期完成、View 数据就绪、K 线补写、标的即将下架），按用户配置的规则向用户自己的接口发通知（带 HMAC 签名，失败自动重试），或者执行系统动作（标的下架时禁止买入、下架前平仓；处理器随交易计划 T27 之后上线）。管理台叫「事件中心」。
+- **在哪**：独立单元 `callback-dispatcher`，默认海外机（`[deployments]` 决定）；该主机必须能访问到用户的通知地址。
+- **常用**：
+
+```bash
+./bin/moox-cli event catalog                                      # 可配置的事件与可限定的范围
+./bin/moox-cli event rules list|get|update|delete|test            # 事件规则；新建规则返回验证密钥明文，Agent 不新建，请用户在管理台「系统设置 › 事件中心」新建
+./bin/moox-cli event executions list|get|retry|cancel|ack         # 执行记录：失败重试、取消（下架处理会同时解除禁止）、确认
+./bin/moox-cli collector delist register --exchange binance --market SPOT --symbol FOOUSDT --delist-at-ms <毫秒> [--paper-only] --yes   # 手工登记下架（会触发系统规则）
+```
+
+- 手工登记下架的后果：登记后立即禁止买入，到下架前 24 小时（T−24h，已不足 24 小时的立即）会自动卖出策略持有的实盘仓位；`--yes` 前先向用户确认标的和下架时间；演练用 `--paper-only`（只平模拟盘组合，但同样全局禁止买入这个标的，直到演练记录结束）。管理台「系统设置 › 事件中心」的“手工登记下架”效果相同。
+
+- 库文件没有迁移：事件中心启动时发现表结构是旧的（报“数据库是旧版本的结构”）就拒绝启动，要先停服务、删库文件（`data/moox_callback_dispatcher.db*`）再启动，和用户确认后再做。
+- 设计与排查：[`docs/模块/事件中心.md`](../../../docs/模块/事件中心.md)；告警（`event_center_attention`）见 [`monitor-attention.md`](monitor-attention.md)。
 
 ## 采集
 
@@ -87,7 +105,32 @@
   `strategy list|show|validate|create|update|delete`、`strategy instance list|show|create|update|enable|disable`、`strategy result list|show`、`strategy target list`、
   `strategy template list|show|save|delete|render`、`strategy display get|set`；策略服务里的历史回放 `strategy replay start|list|show|bars|cancel`；
   逐期回放（因子 → 策略 → 纸面成交）用 `./bin/moox-cli replay start|status|report …`。迁移整套 Python 选币策略：[`strategy-migration.md`](strategy-migration.md)。
-- **注意**：一个因子任务只能关联一个实例；改定义前先停用引用它的实例。不挂账户的实例只计算目标、不下单。
+- **市场模式**：DSL 顶层 `market` 的 `select`（从现货、永续还是两边选币）与 `prefer`（两边都能交易时优先在哪个市场下单）只有 5 种合法组合，
+  决定实例要绑几个因子任务（[`strategy-dsl.md`](strategy-dsl.md) 的“market：市场模式”）。
+- **双任务与统一数据集**：同时涉及现货和永续时有两种绑法——现货、永续各绑一个因子任务（`--factor-task spot=… --factor-task swap=…`，两个结果 View 本期都到齐才求值，
+  一个市场的因子本期被跳过时只让这个市场不可用）；或绑统一数据集（同一数据集里放现货、永续两条序列）上的一个任务，写 `--factor-task multi=…`，只能单独绑定，到达即求值，
+  不支持 `factor_params`、不能进策略池、不支持闭环回放。
+- **策略池**：定义里写 `strategy_pool`（与 `rules` 互斥），成员引用已有策略定义，各自在模拟账本里算净值，按 `fixed` 比例或 `rotation` 轮动分配资金；
+  启用后先预热，预热完成前不求值、不能 `confirm`；研究回放与闭环回放不支持（[`strategy-dsl.md`](strategy-dsl.md) 的“strategy_pool：策略池”）。
+- **注意**：一个因子任务只能关联一个实例，绑定在创建实例时选定、之后不能改；改定义前先停用引用它的实例。不挂账户的实例只计算目标、不下单。
+
+## 交易（只读）
+
+- **做什么**：执行账户与组合账户、目标收敛下单、订单成交持仓、模拟盘；实盘风控：下架名单（名单标的只减不增，下架前由事件中心清仓）、保证金率监控（目前只监控币安生产环境的实盘账户，跌破阈值自动暂停组合并按比例减仓）。
+- **在哪**：独立单元 `trade`，默认海外机（`[deployments]` 决定）。
+- **常用**（都是只读，写操作由用户在管理台做）：
+
+```bash
+./bin/moox-cli trade logical list|show|target                      # 组合账户与当前策略目标
+./bin/moox-cli trade order list --logical-account-id <ID> [--owner-type TARGET|OPERATOR|EXTERNAL|SYSTEM]   # 订单，可按来源过滤
+./bin/moox-cli trade actions --logical-account-id <ID> [--action-type REDUCE]   # 人工操作记录（清仓、减仓、下架清仓…）
+./bin/moox-cli trade pnl --logical-account-id <ID>                 # 收益拆解：手续费、已实现盈亏、资金费（时间范围最长 90 天，取不全时标明截断）
+./bin/moox-cli trade blocked list                                  # 下架名单（全局）
+./bin/moox-cli trade holders --exchange EXCHANGE_BINANCE --market-type MARKET_TYPE_SPOT --exchange-symbol FOOUSDT   # 策略持有某标的的执行账户（跨空间）
+```
+
+- **注意**：Agent 不创建实盘账户、不下单、不清仓减仓、不解除下架禁止；保证金率监控的阈值在组合的资金设置里，触发后组合会自动暂停，等用户确认安全后在管理台手动恢复。
+- 设计与排查：[`docs/模块/交易.md`](../../../docs/模块/交易.md)；告警（`trade_attention`，含 `margin_ratio_low`）见 [`monitor-attention.md`](monitor-attention.md)。
 
 ## 监控
 

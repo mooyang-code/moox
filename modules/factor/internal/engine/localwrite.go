@@ -171,7 +171,11 @@ func (w *localWriter) write(ctx context.Context, req WriteRequest) (WriteRespons
 	if opts.RecordPending && opts.PendingReason == "" {
 		opts.PendingReason = "import"
 	}
-	results, err := w.data.WriteLocal(ctx, src, []seriesstore.SubjectWrite{{Subject: subject, From: from, To: to, Rows: rows}}, opts)
+	scoped, err := w.unifiedSubject(ctx, src)
+	if err != nil {
+		return WriteResponse{}, http.StatusInternalServerError, err
+	}
+	results, err := w.data.WriteLocal(ctx, src, []seriesstore.SubjectWrite{{Subject: subject, From: from, To: to, Rows: rows, Scoped: scoped}}, opts)
 	if err != nil {
 		var gap *seriesstore.GapError
 		switch {
@@ -195,6 +199,12 @@ func (w *localWriter) write(ctx context.Context, req WriteRequest) (WriteRespons
 		out.Earliest, out.Latest = axis.Format(res.Earliest), axis.Format(res.Latest)
 	}
 	return out, http.StatusOK, nil
+}
+
+// unifiedSubject 判断这次写入是不是统一数据集（数据集属性 market_type=multi，同一数据集里有现货、永续两个市场的序列）：
+// 是则只替换本批出现的 tag，现货、永续可以分两次导入互不覆盖；否则（单市场）保持原来的整段替换，标的的全部序列按这一批重写。
+func (w *localWriter) unifiedSubject(ctx context.Context, src seriesstore.Source) (bool, error) {
+	return w.data.UnifiedDataset(ctx, src)
 }
 
 // datasetFields 返回数据集的本地字段表（含类型与填充规则），缓存 1 分钟。

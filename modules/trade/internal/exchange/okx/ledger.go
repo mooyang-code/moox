@@ -112,7 +112,7 @@ func (a *Adapter) ListLedger(ctx context.Context, query exchange.LedgerQuery) (e
 }
 
 func (a *Adapter) billInMarket(instType string) bool {
-	if a.config.MarketType == exchange.MarketTypeSwap {
+	if a.config.Market() == exchange.MarketTypeSwap {
 		return instType == "SWAP" || instType == "FUTURES"
 	}
 	return instType == "SPOT" || instType == "MARGIN"

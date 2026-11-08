@@ -40,12 +40,7 @@ describe("page toolbar cleanup contract", () => {
       "container/ssh-hosts/ssh-hosts.vue": ['@click="reset"'],
       "data/subjects/index.vue": ['<a-button :disabled="!selectedSpaceId" @click="load">', '<a-button @click="loadSymbols">'],
       "settings/secrets/index.vue": ['<a-button @click="load">'],
-      "settings/spaces/index.vue": ['<a-button @click="load">'],
-      "trading/account-overview/account-overview.vue": ['<a-button @click="loadAccounts">'],
-      "trading/trade-record/trade-record.vue": [
-        '<a-button size="small" @click="loadOrders">',
-        '<a-button size="small" @click="loadTrades">'
-      ]
+      "settings/spaces/index.vue": ['<a-button @click="load">']
     };
 
     for (const [relativePath, markers] of Object.entries(forbiddenToolbarMarkers)) {

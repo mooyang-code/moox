@@ -9,8 +9,10 @@ import (
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
+	"github.com/mooyang-code/moox/modules/strategy/internal/quant"
 	"github.com/mooyang-code/moox/modules/strategy/internal/readiness"
 	"github.com/mooyang-code/moox/packages/factorname"
+	"github.com/mooyang-code/moox/packages/seriesset"
 )
 
 // Loader 为一个启用实例装配一期输入。
@@ -23,9 +25,17 @@ type Loader struct {
 // Bar 是一期的输入参数。
 type Bar struct {
 	BarStart time.Time
-	// EventUniverse 为 nil 表示没有事件名单（试算），基础集合取数据集全部活跃标的；非 nil（含空列表）以名单为准。
-	EventUniverse []string
-	Readiness     readiness.Result
+	// EventUniverse 是各市场 View 就绪事件里的标的名单（市场 → 名单）。没有某个市场的条目（含整个为 nil，如试算）表示没有事件名单，
+	// 该市场的基础集合取数据集全部活跃标的；有条目（含空列表）以名单为准。
+	EventUniverse map[string][]string
+	// Readiness 是各市场 View 的就绪结论（市场 → 结论）。
+	Readiness map[string]readiness.Result
+	// Unavailable 是本期整体不可用的市场（市场 → 原因）：那个市场的因子本期被跳过，不读它的行，它的标的记缺失原因“市场不可用”，
+	// 已持仓的标的冻结。
+	Unavailable map[string]string
+	// Held 是上期在各市场持有非零目标（多空都算）的标的（市场 → 标的）：判断一个市场的因子失败比例时，持仓豁免年龄剔除
+	// （与单市场守门、选币池构造一致：年龄剔除只拦新进入的标的）。没有上期状态（试算）时为空。
+	Held map[string]map[string]struct{}
 }
 
 // Loaded 是装配完成的一期输入。
@@ -37,13 +47,41 @@ type Loaded struct {
 	Steps []Step
 }
 
+// hasRows 报告任一市场本期有行。
+func (l Loaded) hasRows() bool {
+	for _, market := range l.Frame.Markets {
+		if len(market.Rows) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // Step 是一个读取步骤及其耗时。
 type Step struct {
 	Name string
 	Took time.Duration
 }
 
-// LoadBar 读取绑定 View 的一期数据：集合划分 → 当期行（以及可选的上一根）→ 引擎帧。
+// marketLoad 是 LoadBar 读取一个市场的中间结果。
+type marketLoad struct {
+	market string
+	// key 是这个市场的行所在的任务键（方式 A 就是市场自己，方式 B 是 multi，两个市场共用统一数据集的一个 View）。
+	key  string
+	view ViewInfo
+	// active 是该市场的活跃标的；universe 是本期该市场的基础集合（事件名单 ∩ 活跃标的）。
+	active   map[string]Subject
+	universe map[string]Subject
+	// unavailable 非空表示该市场本期整体不可用（不读行）。
+	unavailable string
+	revision    uint64
+	current     map[string]Row
+	previous    map[string]Row
+}
+
+// LoadBar 读取绑定 View 的一期数据：集合划分 → 当期行（以及可选的上一根）→ 引擎帧。绑定了多个 View 时每个市场读一份，
+// 引擎帧按市场分别带行，选币池构造与定市场在引擎里完成（见 engine.Evaluate）。统一数据集（方式 B）只有一个 View：读一次全部序列，
+// 按 series_tag 对应的市场拆成各市场的行，活跃状态与标的全集按市场的标签成员判断，之后与方式 A 走同一条路径。
 // 索引或修订号变化返回 ErrStale；配置性问题返回 *SkipError；其余错误视为基础设施错误。
 func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, program *dsl.Program, bar Bar) (Loaded, error) {
 	if l.Client == nil || program == nil {
@@ -55,44 +93,83 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 	}
 	var steps []Step
 	mark := func(name string, began time.Time) { steps = append(steps, Step{Name: name, Took: time.Since(began)}) }
+	markets := resolved.Markets()
+	// 一个任务键一个结果 View：方式 A 里键就是市场，方式 B 里统一数据集的 View 服务策略涉及的全部市场。
+	keys := resolved.TaskKeys()
+	marketsOfKey := make(map[string][]string, len(keys))
+	for _, market := range markets {
+		key := resolved.TaskKey(market)
+		marketsOfKey[key] = append(marketsOfKey[key], market)
+	}
+	// keyDown 报告一个 View 服务的市场本期都不可用（不读它）。
+	keyDown := func(key string) bool {
+		for _, market := range marketsOfKey[key] {
+			if bar.Unavailable[market] == "" {
+				return false
+			}
+		}
+		return true
+	}
 	// 标的修订号与 View 彼此独立：并行读取，View 校验之后再等修订号结果。数据集取启用时固化的绑定，
 	// 与 View 实际的数据集不一致时下面的校验会先报配置变化。
 	revalidator, canRevalidate := l.Client.(interface {
 		Revalidate(ctx context.Context, spaceID, datasetID string) error
 	})
-	var revalidated chan error
+	revalidated := make(map[string]chan error, len(keys))
 	if canRevalidate {
-		revalidated = make(chan error, 1)
-		go func() { revalidated <- revalidator.Revalidate(ctx, spaceID, resolved.DatasetID) }()
+		for _, key := range keys {
+			if keyDown(key) {
+				continue
+			}
+			done := make(chan error, 1)
+			revalidated[key] = done
+			go func(datasetID string) { done <- revalidator.Revalidate(ctx, spaceID, datasetID) }(resolved.Tasks[key].DatasetID)
+		}
 	}
-	began := time.Now()
-	view, err := l.Client.GetView(ctx, spaceID, resolved.ViewID)
-	mark("View", began)
-	if err != nil {
-		return Loaded{}, err
-	}
-	if view.Status != "" && view.Status != "active" {
-		return Loaded{}, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("View %s 的状态是 %s，不再提供数据，请重新绑定实例", resolved.ViewID, view.Status)}
-	}
-	if view.ActiveIndexID == "" {
-		return Loaded{}, fmt.Errorf("View %s 没有活动索引", resolved.ViewID)
-	}
-	if view.DatasetID != resolved.DatasetID || !strings.EqualFold(view.Frequency, resolved.Bar) {
-		return Loaded{}, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("View %s 的数据集或周期已变化（%s/%s → %s/%s），请重新启用实例", resolved.ViewID, resolved.DatasetID, resolved.Bar, view.DatasetID, view.Frequency)}
-	}
-	if missing := MissingColumns(view, program, resolved.MinAgeBars); len(missing) > 0 {
-		return Loaded{}, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("列 %s 已不存在于 View %s，请重新启用实例", strings.Join(missing, "、"), resolved.ViewID)}
-	}
-	// 标的元数据缓存按 Storage 的标的修订号校验；必须先于标的绑定、标签与标签成员的读取。
-	if canRevalidate {
-		began = time.Now()
-		err := <-revalidated
-		mark("修订号等待", began)
+	views := make(map[string]ViewInfo, len(keys))
+	for _, key := range keys {
+		task := resolved.Tasks[key]
+		if keyDown(key) {
+			views[key] = ViewInfo{ViewID: task.ViewID, DatasetID: task.DatasetID, Frequency: resolved.Bar}
+			continue
+		}
+		began := time.Now()
+		view, err := l.Client.GetView(ctx, spaceID, task.ViewID)
+		mark("View", began)
 		if err != nil {
 			return Loaded{}, err
 		}
+		if view.Status != "" && view.Status != "active" {
+			return Loaded{}, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("View %s 的状态是 %s，不再提供数据，请重新绑定实例", task.ViewID, view.Status)}
+		}
+		if view.ActiveIndexID == "" {
+			return Loaded{}, fmt.Errorf("View %s 没有活动索引", task.ViewID)
+		}
+		if view.DatasetID != task.DatasetID || !strings.EqualFold(view.Frequency, resolved.Bar) {
+			return Loaded{}, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("View %s 的数据集或周期已变化（%s/%s → %s/%s），请重新启用实例", task.ViewID, task.DatasetID, resolved.Bar, view.DatasetID, view.Frequency)}
+		}
+		if missing := MissingColumns(view, program, resolved.MinAgeBars); len(missing) > 0 {
+			return Loaded{}, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("列 %s 已不存在于 View %s，请重新启用实例", strings.Join(missing, "、"), task.ViewID)}
+		}
+		views[key] = view
 	}
-	began = time.Now()
+	loads := make([]*marketLoad, 0, len(markets))
+	for _, market := range markets {
+		key := resolved.TaskKey(market)
+		loads = append(loads, &marketLoad{market: market, key: key, view: views[key], unavailable: bar.Unavailable[market]})
+	}
+	// 标的元数据缓存按 Storage 的标的修订号校验；必须先于标的绑定、标签与标签成员的读取。
+	for _, key := range keys {
+		if done, ok := revalidated[key]; ok {
+			began := time.Now()
+			err := <-done
+			mark("修订号等待", began)
+			if err != nil {
+				return Loaded{}, err
+			}
+		}
+	}
+	began := time.Now()
 	// 标签只在启用时校验过：运行期被删除时成员列表为空，exclude_tags 悄悄失效、按标签选池变空，必须报出来。
 	for _, tag := range referencedTags(program.Strategy) {
 		if _, err := l.Client.GetTag(ctx, spaceID, tag); err != nil {
@@ -104,114 +181,433 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 	}
 	mark("标签", began)
 	// 年龄探针需要覆盖统计；事件路径只读 Storage 缓存的统计，不触发全量统计，未知时由探针的确认查询兜底。
-	// 覆盖统计只在探针前用到：与标的、集合和行读取并行，探针前再取结果。
-	var covered chan struct {
+	// 覆盖统计只在探针前用到：与标的、集合和行读取并行，探针前再取结果。一个 View 只读一次。
+	covered := make(map[string]chan struct {
 		view ViewInfo
 		err  error
-	}
+	})
 	if resolved.MinAgeBars > 0 {
-		covered = make(chan struct {
-			view ViewInfo
-			err  error
-		}, 1)
-		go func(view ViewInfo) {
-			withCoverage, err := WithCoverage(ctx, l.Client, spaceID, view, false)
-			covered <- struct {
+		for _, key := range keys {
+			if keyDown(key) {
+				continue
+			}
+			done := make(chan struct {
 				view ViewInfo
 				err  error
-			}{withCoverage, err}
-		}(view)
+			}, 1)
+			covered[key] = done
+			go func(view ViewInfo) {
+				withCoverage, err := WithCoverage(ctx, l.Client, spaceID, view, false)
+				done <- struct {
+					view ViewInfo
+					err  error
+				}{withCoverage, err}
+			}(views[key])
+		}
 	}
 	began = time.Now()
-	subjects, err := l.Client.ListDatasetSubjects(ctx, spaceID, view.DatasetID)
-	mark("标的", began)
-	if err != nil {
-		return Loaded{}, err
+	var mergedActive []Subject
+	var mergedUniverse []string
+	hasEventUniverse := false
+	unifiedSubjects := map[string]map[string][]Subject{}
+	for _, load := range loads {
+		var subjects []Subject
+		if resolved.Unified() {
+			// 统一数据集：标的与活跃状态按市场判断（标签成员加标签的市场类型），同一个 View 里每个市场各取自己的。
+			byMarket, ok := unifiedSubjects[load.key]
+			if !ok {
+				if byMarket, err = l.unifiedMarketSubjects(ctx, spaceID, load.view.DatasetID, markets); err != nil {
+					return Loaded{}, err
+				}
+				unifiedSubjects[load.key] = byMarket
+			}
+			subjects = byMarket[load.market]
+		} else if subjects, err = l.Client.ListDatasetSubjects(ctx, spaceID, load.view.DatasetID); err != nil {
+			return Loaded{}, err
+		}
+		load.active = make(map[string]Subject, len(subjects))
+		for _, subject := range subjects {
+			if subject.Active {
+				load.active[subject.SubjectID] = subject
+			}
+		}
+		load.universe = make(map[string]Subject, len(load.active))
+		if names, ok := bar.EventUniverse[load.market]; ok && names != nil {
+			hasEventUniverse = hasEventUniverse || resolved.Market.Select == dsl.MarketBoth || resolved.Market.Select == load.market
+			for _, id := range names {
+				if subject, ok := load.active[id]; ok {
+					load.universe[id] = subject
+				}
+			}
+		} else {
+			for id, subject := range load.active {
+				load.universe[id] = subject
+			}
+		}
+		// 基础集合只由选币市场构成：select 为单个市场时，另一个市场只提供可用标记（决定下单市场），它独有的标的不进入集合。
+		if resolved.Market.Select != dsl.MarketBoth && resolved.Market.Select != load.market {
+			continue
+		}
+		mergedActive = append(mergedActive, subjects...)
+		for id := range load.universe {
+			mergedUniverse = append(mergedUniverse, id)
+		}
 	}
-	activeSubjects := make(map[string]Subject, len(subjects))
-	for _, subject := range subjects {
-		if subject.Active {
-			activeSubjects[subject.SubjectID] = subject
+	mark("标的", began)
+	var eventUniverse []string
+	if hasEventUniverse {
+		eventUniverse = uniqueSorted(mergedUniverse)
+		if eventUniverse == nil {
+			eventUniverse = []string{}
 		}
 	}
 	members := func(ctx context.Context, tagID string) ([]string, error) {
 		return l.Client.ListTagMembers(ctx, spaceID, tagID)
 	}
 	began = time.Now()
-	sets, err := BuildSets(ctx, members, program.Strategy, subjects, bar.EventUniverse)
+	sets, err := BuildSets(ctx, members, program.Strategy, mergedActive, eventUniverse)
 	mark("集合", began)
 	if err != nil {
 		return Loaded{}, err
 	}
 	instruments := sets.Instruments()
-	selected := make([]Subject, 0, len(instruments))
-	for _, id := range instruments {
-		if subject, ok := sets.Subjects[id]; ok {
-			selected = append(selected, subject)
-		}
-	}
 	columns := append([]string(nil), program.Columns...)
 	columns = uniqueSorted(append(columns, program.PreviousColumns...))
 	if len(program.ParamRefs) > 0 {
 		columns = uniqueSorted(append(columns, factorname.ParamsColumn))
 	}
-	query := Query{ViewID: resolved.ViewID, DatasetID: view.DatasetID, Frequency: view.Frequency, Subjects: selected, Start: boundary.StorageStart, End: boundary.StorageStart.Add(time.Nanosecond), Columns: columns, ExpectedIndexID: view.ActiveIndexID}
 	// 上一根与当期合并成一次范围读取：相邻两根之间没有别的根，少一次往返，也保证两根取自同一修订号。
+	start := boundary.StorageStart
 	if program.UsesPreviousBar && !boundary.PreviousStart.IsZero() {
-		query.Start = boundary.PreviousStart
+		start = boundary.PreviousStart
 	}
-	began = time.Now()
-	rangeRows, revision, err := l.Client.QueryRows(ctx, spaceID, query)
-	mark("当期与上一根行", began)
-	if err != nil {
-		return Loaded{}, err
-	}
-	var currentRows, previousRows []Row
-	for _, row := range rangeRows {
-		switch {
-		case row.DataTime.Equal(boundary.StorageStart):
-			currentRows = append(currentRows, row)
-		case !boundary.PreviousStart.IsZero() && row.DataTime.Equal(boundary.PreviousStart):
-			previousRows = append(previousRows, row)
+	for _, key := range keys {
+		var group []*marketLoad
+		for _, load := range loads {
+			if load.key == key && load.unavailable == "" {
+				group = append(group, load)
+			}
 		}
-	}
-	current, err := groupRows(currentRows)
-	if err != nil {
-		return Loaded{}, err
-	}
-	if covered != nil {
+		if len(group) == 0 {
+			continue
+		}
+		// 每个市场要读的标的；方式 B 里一个 View 读一次全部序列（selector 不带 series_tag），再按市场拆行。
+		wanted := make(map[string]map[string]struct{}, len(group))
+		selectedByID := make(map[string]Subject)
+		for _, load := range group {
+			wanted[load.market] = make(map[string]struct{}, len(instruments))
+			for _, id := range instruments {
+				if subject, ok := load.universe[id]; ok {
+					wanted[load.market][id] = struct{}{}
+					if resolved.Unified() {
+						subject.SeriesTag = ""
+					}
+					selectedByID[id] = subject
+				}
+			}
+		}
+		selected := make([]Subject, 0, len(selectedByID))
+		for _, id := range sortedKeys(selectedByID) {
+			selected = append(selected, selectedByID[id])
+		}
+		first := group[0]
+		query := Query{ViewID: first.view.ViewID, DatasetID: first.view.DatasetID, Frequency: first.view.Frequency, Subjects: selected, Start: start, End: boundary.StorageStart.Add(time.Nanosecond), Columns: columns, ExpectedIndexID: first.view.ActiveIndexID}
 		began = time.Now()
-		result := <-covered
-		mark("覆盖统计等待", began)
-		if result.err != nil {
-			return Loaded{}, result.err
+		rangeRows, revision, err := l.Client.QueryRows(ctx, spaceID, query)
+		mark("当期与上一根行", began)
+		if err != nil {
+			return Loaded{}, err
 		}
-		view = result.view
+		perMarket := make(map[string][]Row, len(group))
+		for _, row := range rangeRows {
+			market := ""
+			if resolved.Unified() {
+				if row.SubjectID == "" {
+					continue
+				}
+				market = seriesset.SeriesTagMarket(row.SeriesTag)
+				if market != dsl.MarketSpot && market != dsl.MarketSwap {
+					if involvedIn(wanted, row.SubjectID) {
+						return Loaded{}, &SkipError{Reason: SkipAmbiguousSeries, Detail: fmt.Sprintf("标的 %s 的序列 %q 无法判断所属市场", row.SubjectID, row.SeriesTag)}
+					}
+					continue
+				}
+				if _, ok := wanted[market][row.SubjectID]; !ok {
+					continue
+				}
+			} else {
+				market = first.market
+			}
+			perMarket[market] = append(perMarket[market], row)
+		}
+		for _, load := range group {
+			var currentRows, previousRows []Row
+			for _, row := range perMarket[load.market] {
+				switch {
+				case row.DataTime.Equal(boundary.StorageStart):
+					currentRows = append(currentRows, row)
+				case !boundary.PreviousStart.IsZero() && row.DataTime.Equal(boundary.PreviousStart):
+					previousRows = append(previousRows, row)
+				}
+			}
+			if load.current, err = groupRows(currentRows, resolved.Unified(), load.market); err != nil {
+				return Loaded{}, err
+			}
+			load.revision = revision
+			if len(previousRows) > 0 {
+				if load.previous, err = groupRows(previousRows, resolved.Unified(), load.market); err != nil {
+					return Loaded{}, err
+				}
+			}
+		}
+	}
+	// 统一数据集只有一个 series_tag 的一期，按标的的失败名单被原样带到了每个市场（见 readiness.Result.ForMarket），其实只属于有行的那个市场：
+	// 读完行之后，本期一行也没有的市场丢掉这些名单，按无行处理。否则这个市场会因为另一个市场的失败被判成整体失败，
+	// 而另一个市场没有失败时它又按无行处理，结论随无关的失败而变。
+	ready := make(map[string]readiness.Result, len(loads))
+	for _, load := range loads {
+		result := bar.Readiness[load.market]
+		if load.unavailable == "" && len(load.current) == 0 {
+			result = result.DropUnattributed()
+		}
+		ready[load.market] = result
+	}
+	// 多个市场时，某个因子在一个市场本期的标的上全部失败（例如时序因子在永续整体晚到），与这个市场的因子被整体跳过没有区别：按这个市场
+	// 不可用处理，已持仓的冻结。否则逐币的 factor_failed 不冻结，缺数比例又被另一个市场的行摊薄，持有的永续会被卖成现货。
+	// 放在读完行之后、年龄探针之前（整体失败的市场不做探针）：只统计本次实际读行的标的（instruments ∩ 这个市场的基础集合：策略池被收窄、
+	// 排除名单里的标的没读行，它们的失败不能算进来），并且只看有行（失败序列写的是 NULL 行）或在失败名单里的标的，因子没有期望的序列
+	// （没有行也不在失败名单里）不参与，方式 B 里两个市场共用事件名单，这类标的会混进基础集合。单市场策略保持原来的缺数处理。
+	if len(loads) > 1 {
+		for _, load := range loads {
+			if load.unavailable == "" {
+				if detail := wholeMarketFailure(load, ready[load.market], instruments, nil, quant.Decimal{}, false); detail != "" {
+					markUnavailable(load, detail)
+				}
+			}
+		}
+		if err := skipWhenSelectionUnavailable(resolved, loads); err != nil {
+			return Loaded{}, err
+		}
+	}
+	for _, key := range keys {
+		if done, ok := covered[key]; ok {
+			began = time.Now()
+			result := <-done
+			mark("覆盖统计等待", began)
+			if result.err != nil {
+				return Loaded{}, result.err
+			}
+			for _, load := range loads {
+				if load.key == key {
+					load.view = result.view
+				}
+			}
+		}
 	}
 	began = time.Now()
-	err = sets.ApplyAge(ctx, resolved.MinAgeBars, NewAgeProbe(l.Client, spaceID, resolved, view, activeSubjects, bar.BarStart, revision, l.Meta))
+	agePassed := make(map[string]map[string]struct{}, len(loads))
+	err = sets.ApplyAge(ctx, resolved.MinAgeBars, func(ctx context.Context, ids []string) (map[string]struct{}, error) {
+		passed := make(map[string]struct{}, len(ids))
+		for _, load := range loads {
+			if load.unavailable != "" {
+				continue
+			}
+			var inMarket []string
+			for _, id := range ids {
+				if _, ok := load.universe[id]; ok {
+					inMarket = append(inMarket, id)
+				}
+			}
+			probe := NewAgeProbe(l.Client, spaceID, resolved, load.view, load.market, load.active, bar.BarStart, load.revision, l.Meta)
+			got, err := probe(ctx, inMarket)
+			if err != nil {
+				return nil, err
+			}
+			agePassed[load.market] = got
+			for id := range got {
+				passed[id] = struct{}{}
+			}
+		}
+		return passed, nil
+	})
 	mark("年龄探针", began)
 	if err != nil {
 		return Loaded{}, err
 	}
-	previous := map[string]Row{}
-	if len(previousRows) > 0 {
-		if previous, err = groupRows(previousRows); err != nil {
+	// 失败的标的占比超过 max_missing 也按这个市场不可用处理：多市场策略里，逐币的 factor_failed 不冻结，没持仓的币又会退回另一个市场的行，
+	// 缺数分母被摊薄，持有的永续照样被卖。分母与单市场守门尽量一致：只统计本次读行的标的，并扣掉在这个市场年龄不够的（年龄剔除的标的不算缺数），
+	// 但上期在这个市场持仓的豁免（年龄剔除只拦新进入的标的）。判为不可用的市场清掉已读的行和年龄剔除记录，规则级的年龄剔除集合也按剩下的市场重算。
+	if len(loads) > 1 {
+		cleared := false
+		for _, load := range loads {
+			if load.unavailable != "" {
+				continue
+			}
+			passed, probed := agePassed[load.market]
+			include := func(id string) bool {
+				if !probed {
+					return true
+				}
+				if _, ok := passed[id]; ok {
+					return true
+				}
+				_, held := bar.Held[load.market][id]
+				return held
+			}
+			if detail := wholeMarketFailure(load, ready[load.market], instruments, include, program.Strategy.Portfolio.MaxMissing, true); detail != "" {
+				markUnavailable(load, detail)
+				if _, probed := agePassed[load.market]; probed {
+					delete(agePassed, load.market)
+					cleared = true
+				}
+			}
+		}
+		if cleared && resolved.MinAgeBars > 0 {
+			// 不可用市场的探针结果不再作数：只在它那里通过年龄的标的，规则级也按年龄剔除记（与因子被跳过、全部失败而没做探针的市场口径一致）。
+			_ = sets.ApplyAge(ctx, resolved.MinAgeBars, func(context.Context, []string) (map[string]struct{}, error) {
+				passed := make(map[string]struct{})
+				for _, got := range agePassed {
+					for id := range got {
+						passed[id] = struct{}{}
+					}
+				}
+				return passed, nil
+			})
+		}
+		if err := skipWhenSelectionUnavailable(resolved, loads); err != nil {
 			return Loaded{}, err
 		}
 	}
-	frame := engine.Frame{BarEnd: boundary.BarEnd, BarIndex: boundary.BarIndex, Spot: resolved.Spot, Rows: make(map[string]engine.Row, len(current)), Universe: sets.Universe, Expected: sets.Expected, AgedOut: sets.AgedOut, FailedColumns: failedColumns(resolved, program, bar.Readiness)}
-	for subjectID, row := range current {
-		if _, ok := sets.Subjects[subjectID]; !ok {
-			continue
+	frame := engine.Frame{BarEnd: boundary.BarEnd, BarIndex: boundary.BarIndex, Markets: make(map[string]engine.MarketInput, len(loads)), Universe: sets.Universe, Expected: sets.Expected, AgedOut: sets.AgedOut}
+	for _, load := range loads {
+		input := engine.MarketInput{Rows: make(map[string]engine.Row, len(load.current))}
+		for subjectID, row := range load.current {
+			if _, ok := sets.Subjects[subjectID]; !ok {
+				continue
+			}
+			// 多个市场时，某个市场里年龄不够的标的不用这个市场的行（例如老币刚上线永续，不能用现货的历史直接通过永续的年龄检查）：
+			// 这里只记下，由选币池构造决定（已持仓的标的豁免，见 engine.MarketInput.AgedOut）。
+			if passed, probed := agePassed[load.market]; probed && len(loads) > 1 {
+				if _, inUniverse := load.universe[subjectID]; inUniverse {
+					if _, ok := passed[subjectID]; !ok {
+						if input.AgedOut == nil {
+							input.AgedOut = make(map[string]struct{})
+						}
+						input.AgedOut[subjectID] = struct{}{}
+					}
+				}
+			}
+			engineRow := engine.Row{Values: row.Values, Params: row.Params}
+			if prev, ok := load.previous[subjectID]; ok {
+				engineRow.Previous = prev.Values
+			}
+			input.Rows[subjectID] = engineRow
 		}
-		engineRow := engine.Row{Values: row.Values, Params: row.Params}
-		if prev, ok := previous[subjectID]; ok {
-			engineRow.Previous = prev.Values
+		if load.unavailable != "" {
+			input.Failed = marketUnavailable(program, load.universe, bar.Held[load.market])
+		} else {
+			input.Failed = failedColumns(resolved, program, ready[load.market])
 		}
-		frame.Rows[subjectID] = engineRow
+		frame.Markets[load.market] = input
 	}
 	return Loaded{Frame: frame, Sets: sets, Boundary: boundary, Steps: steps}, nil
+}
+
+// markUnavailable 把一个市场记为本期不可用，并清掉已读的行：必须清，不清的话没持仓的标的会取到不可用市场的行，
+// 在引擎里记成 market_unavailable 缺数，而不是退回另一个市场的行。
+func markUnavailable(load *marketLoad, detail string) {
+	load.unavailable, load.current, load.previous = detail, nil, nil
+}
+
+// wholeMarketFailure 判断一个市场本期是否整体失败：某个因子成员在这个市场里失败的标的每个都失败（ratioCheck 为假），或占比严格大于 max_missing
+// （ratioCheck 为真，含全部失败）。只统计 instruments 里属于这个市场基础集合、并且有行或在失败名单里的标的（include 非空时还要满足它）；
+// 每个因子成员各自统计，只看它自己的失败名单。返回说明，空串表示不是整体失败。
+func wholeMarketFailure(load *marketLoad, result readiness.Result, instruments []string, include func(id string) bool, maxMissing quant.Decimal, ratioCheck bool) string {
+	for _, factorID := range sortedKeys(result.FailedByFactor) {
+		failed := make(map[string]struct{}, len(result.FailedByFactor[factorID]))
+		for _, id := range result.FailedByFactor[factorID] {
+			failed[id] = struct{}{}
+		}
+		relevant, failedCount := 0, 0
+		for _, id := range instruments {
+			if _, ok := load.universe[id]; !ok {
+				continue // 没有为这个市场读行的标的
+			}
+			if include != nil && !include(id) {
+				continue
+			}
+			_, isFailed := failed[id]
+			_, hasRow := load.current[id]
+			if !isFailed && !hasRow {
+				continue // 因子没有期望这条序列
+			}
+			relevant++
+			if isFailed {
+				failedCount++
+			}
+		}
+		if relevant == 0 || failedCount == 0 {
+			continue
+		}
+		if failedCount == relevant {
+			return fmt.Sprintf("成员 %s 在%s市场本期读取的标的全部失败（%d 个），按这个市场不可用处理", factorID, load.market, failedCount)
+		}
+		if !ratioCheck {
+			continue
+		}
+		ratio := quant.Must(fmt.Sprint(failedCount)).Div(quant.Must(fmt.Sprint(relevant)))
+		if ratio.Cmp(maxMissing) > 0 {
+			return fmt.Sprintf("成员 %s 在%s市场本期失败的标的占 %d/%d，超过缺数上限 %s，按这个市场不可用处理", factorID, load.market, failedCount, relevant, maxMissing.String())
+		}
+	}
+	return ""
+}
+
+// skipWhenSelectionUnavailable 在没有可用的市场、或选币市场不可用（没有候选池）时整期跳过，原因是 market_failed（数据类原因，不计实例故障，不归入“积累中”）；
+// 只有下单市场不可用时选币照常。说明里列出每个不可用市场各自的原因（有的来自因子被跳过，有的来自整体失败）。
+func skipWhenSelectionUnavailable(resolved Resolved, loads []*marketLoad) error {
+	var details []string
+	selectDown := false
+	for _, load := range loads {
+		if load.unavailable == "" {
+			continue
+		}
+		details = append(details, fmt.Sprintf("%s市场：%s", load.market, load.unavailable))
+		if selectMarket := resolved.Market.Select; selectMarket != dsl.MarketBoth && load.market == selectMarket {
+			selectDown = true
+		}
+	}
+	if selectDown || (len(details) > 0 && len(details) == len(loads)) {
+		return &SkipError{Reason: SkipMarketFailed, Detail: strings.Join(details, "；")}
+	}
+	return nil
+}
+
+// involvedIn 报告标的是否是某个市场本期要读的标的。
+func involvedIn(wanted map[string]map[string]struct{}, subjectID string) bool {
+	for _, ids := range wanted {
+		if _, ok := ids[subjectID]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// marketUnavailable 构造整个市场本期不可用的失败证据：该市场基础集合里每个标的、以及上期在这个市场持仓的标的（held），在每个引用列上都记
+// market_unavailable。持仓要单独补上：它可能已不在这个市场本期的基础集合里（例如永续标签刚移除了它），没有证据时引擎会借用另一个市场的行
+// 重新排名（永续空头用现货的因子值），而不是冻结。
+func marketUnavailable(program *dsl.Program, universe map[string]Subject, held map[string]struct{}) map[string]map[string]string {
+	failed := make(map[string]map[string]string)
+	for _, column := range uniqueSorted(append(append([]string(nil), program.Columns...), program.PreviousColumns...)) {
+		failed[column] = make(map[string]string, len(universe)+len(held))
+		for id := range universe {
+			failed[column][id] = engine.FailedMarket
+		}
+		for id := range held {
+			failed[column][id] = engine.FailedMarket
+		}
+	}
+	return failed
 }
 
 // MissingColumns 返回策略需要、但 View 已不提供的列：当期列、bars[-1] 列，以及 min_age_bars 探针读取的 close。
@@ -236,8 +632,9 @@ func MissingColumns(view ViewInfo, program *dsl.Program, minAgeBars int) []strin
 	return missing
 }
 
-// groupRows 按标的归并行；同一标的出现多个序列标签视为配置错误。
-func groupRows(rows []Row) (map[string]Row, error) {
+// groupRows 按标的归并行；同一标的出现多个序列标签视为配置错误。统一数据集上的行已经按市场拆开，这里只在同一个市场内判断，
+// 错误说明里带上市场（现货、永续两条序列并存是正常的，同一个市场里出现两个序列才有歧义）。
+func groupRows(rows []Row, unified bool, market string) (map[string]Row, error) {
 	grouped := make(map[string]Row, len(rows))
 	tags := make(map[string]string, len(rows))
 	for _, row := range rows {
@@ -245,7 +642,11 @@ func groupRows(rows []Row) (map[string]Row, error) {
 			continue
 		}
 		if tag, seen := tags[row.SubjectID]; seen && tag != row.SeriesTag {
-			return nil, &SkipError{Reason: SkipAmbiguousSeries, Detail: fmt.Sprintf("标的 %s 在同一周期有多个序列（%s、%s）", row.SubjectID, tag, row.SeriesTag)}
+			detail := fmt.Sprintf("标的 %s 在同一周期有多个序列（%s、%s）", row.SubjectID, tag, row.SeriesTag)
+			if unified {
+				detail = fmt.Sprintf("标的 %s 在同一周期的%s市场有多个序列（%s、%s）", row.SubjectID, market, tag, row.SeriesTag)
+			}
+			return nil, &SkipError{Reason: SkipAmbiguousSeries, Detail: detail}
 		}
 		tags[row.SubjectID] = row.SeriesTag
 		grouped[row.SubjectID] = row
@@ -253,7 +654,7 @@ func groupRows(rows []Row) (map[string]Row, error) {
 	return grouped, nil
 }
 
-// failedColumns 把就绪判定的失败标的映射到列：因子失败 → 该因子产出的被引用列（factor_failed；因 K 线空洞失败的记 factor_gap）；
+// failedColumns 把就绪判定的失败标的映射到列：因子失败 → 该因子产出的被引用列（factor_failed）；
 // View 级失败（K 线 View 声明的失败标的）→ 全部引用列（source_failed）。
 func failedColumns(resolved Resolved, program *dsl.Program, result readiness.Result) map[string]map[string]string {
 	failed := make(map[string]map[string]string)
@@ -266,17 +667,9 @@ func failedColumns(resolved Resolved, program *dsl.Program, result readiness.Res
 		}
 	}
 	for factorID, subjects := range result.FailedByFactor {
-		gap := make(map[string]bool, len(result.GapByFactor[factorID]))
-		for _, subject := range result.GapByFactor[factorID] {
-			gap[subject] = true
-		}
 		for _, column := range resolved.ColumnsOfFactor(factorID) {
 			for _, subject := range subjects {
-				reason := engine.FailedFactor
-				if gap[subject] {
-					reason = engine.FailedGap
-				}
-				add(column, subject, reason)
+				add(column, subject, engine.FailedFactor)
 			}
 		}
 	}

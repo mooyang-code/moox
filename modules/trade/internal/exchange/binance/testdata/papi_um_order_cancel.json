@@ -1,0 +1,19 @@
+{
+  "clientOrderId": "myOrder1",
+  "cumQty": "0",
+  "executedQty": "0",
+  "orderId": 4611875134427365000,
+  "origQty": "0.40",
+  "price": "0",
+  "reduceOnly": false,
+  "side": "BUY",
+  "positionSide": "SHORT",
+  "status": "CANCELED",
+  "symbol": "BTCUSDT",
+  "timeInForce": "GTC",
+  "type": "LIMIT",
+  "updateTime": 1571110484038,
+  "selfTradePreventionMode": "EXPIRE_MAKER",
+  "goodTillDate": 0,
+  "priceMatch": "NONE"
+}

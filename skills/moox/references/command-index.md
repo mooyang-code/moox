@@ -80,6 +80,7 @@
 | `collector resample jobs` | 查看历史合成作业；带 --job-id 查看单个作业，否则按任务、状态列出最近的作业 |
 | `collector resample preview` | 预览合成的源任务与目标频率是否可行 |
 | `collector status` | 查看空间的采集运行状态：总体健康、各数据集的自动巡检进度与缺口、补采汇总 |
+| `collector delist register` | 手工登记标的下架，补漏报或演练（会发布“标的即将下架”事件，事件中心的系统规则随即禁止买入，到 T−24h 会自动卖出策略持有的实盘仓位；默认只预览，--yes 前向用户确认标的和下架时间；演练用 --paper-only） |
 | `collector subjects exclude` | 把标的从采集计划里临时去掉（交易所公告下架、数据异常等） |
 | `collector subjects exclusions` | 列出空间当前生效的排除（设置人、原因、设置与到期时间） |
 | `collector subjects listers` | 列出可用的标的来源（交易所列表器） |
@@ -128,6 +129,22 @@
 | `doctor alerts` | 读取 Monitor 的告警与不健康项，供 Agent 处理 |
 | `doctor bootstrap` | 检查新部署各模块的安装与配置 |
 | `doctor diagnose` | 按 Monitor 的事实诊断模块 |
+
+## event：事件中心：事件规则（事件发生时通知你的接口）与执行记录（调用 CallbackDispatcherService）
+
+| 命令 | 说明 |
+| --- | --- |
+| `event catalog` | 列出可以配置规则的事件，以及每个事件可限定的范围字段 |
+| `event executions ack` | 确认失败的记录已处理，清除它引起的告警 |
+| `event executions cancel` | 取消还没结束的执行；对下架处理同时解除禁止买入（默认只预览，--yes 才执行） |
+| `event executions get` | 查看一条执行记录（每次尝试的状态码、耗时；下架处理的各轮步骤） |
+| `event executions list` | 列出执行记录 |
+| `event executions retry` | 重新执行一条失败的记录 |
+| `event rules delete` | 删除事件规则（默认只预览，--yes 才执行；系统规则不能删除） |
+| `event rules get` | 查看一条事件规则 |
+| `event rules list` | 列出事件规则 |
+| `event rules test` | 用一条示例事件向通知地址发一次，返回状态码和耗时（不写执行记录） |
+| `event rules update` | 修改事件规则，只改给出的字段（系统规则只能改 --enabled） |
 
 ## eventbus：EventBus：流、消费者与事件概览（调用 EventBusMgr，只读）
 
@@ -316,7 +333,7 @@
 
 | 命令 | 说明 |
 | --- | --- |
-| `setup apply` | 写入初始用户与云凭据 |
+| `setup apply` | 写入初始用户、云凭据与交易所密钥（`[[exchange_keys]]`，只建不改）；Trade 已部署时逐把检测（只读和已在管理台删除的跳过，检测没完成只提示稍后重试，不影响退出码），没部署时提示部署后用 `trade inspect-credential` |
 | `setup attach-scf-vpc` | 为腾讯云函数绑定 VPC 子网（默认只预览，--yes 才绑定） |
 | `setup bootstrap` | 通过已核验 SSH 初始化核心或完整控制服务 |
 | `setup build-linux` | 在本机 Docker 里构建需要 CGO 的 Linux 二进制 |
@@ -400,7 +417,7 @@
 | `strategy replay cancel` | 取消回放 |
 | `strategy replay list` | 列出策略历史回放 |
 | `strategy replay show` | 查看一次回放 |
-| `strategy replay start` | 开始一次策略历史回放 |
+| `strategy replay start` | 开始一次策略历史回放（支持现货、永续与混合市场） |
 | `strategy result list` | 列出实例每期的结果 |
 | `strategy result show` | 查看一期结果 |
 | `strategy show` | 查看一个策略定义 |
@@ -425,24 +442,29 @@
 | `system resume` | 系统恢复：先追赶补采，全部追平后统一放行 |
 | `system status` | 查看各模块的阶段与恢复追赶进度 |
 
-## trade：交易：只读查询（账户、订单、成交、持仓、权益）；写操作不提供命令
+## trade：交易：只读查询（账户、订单、成交、持仓、权益、收益拆解、操作记录、下架名单）；写操作不提供命令
 
 | 命令 | 说明 |
 | --- | --- |
 | `trade account list` | 列出交易账户 |
 | `trade account show` | 查看交易账户 |
 | `trade action` | 查看一次操作的执行结果 |
+| `trade actions` | 列出组合的人工操作记录（人工单、撤单、清仓、减仓、下架清仓）；`--action-type` 按类型过滤 |
+| `trade blocked list` | 列出下架名单（全局，名单里的标的只减不增） |
 | `trade capabilities` | 查看交易账户的执行能力 |
+| `trade inspect-credential` | 检测一把交易所密钥的账户类型和权限（只读，不落库，不下单）；`--markets` 指定要开通的市场 |
 | `trade instruments` | 列出交易账户可下单的标的 |
 | `trade equity` | 查询权益曲线 |
 | `trade fills` | 列出成交 |
+| `trade holders` | 列出策略持有某个标的的执行账户（跨空间，全局；零头和模拟盘有标记）；`--exchange`、`--market-type`、`--exchange-symbol` 必填 |
 | `trade holdings` | 列出账户的持仓明细 |
-| `trade ledger` | 查询交易账户的资金流水（手续费、资金费、已实现盈亏、划转） |
+| `trade ledger` | 查询交易账户的资金流水（手续费、资金费、已实现盈亏、划转）；`--market-type` 指定市场 |
 | `trade logical list` | 列出逻辑账户 |
 | `trade logical show` | 查看逻辑账户 |
 | `trade logical target` | 查看逻辑账户当前的目标 |
-| `trade order list` | 列出订单 |
+| `trade order list` | 列出订单；`--owner-type` 按来源过滤（TARGET、OPERATOR、EXTERNAL、SYSTEM） |
 | `trade order show` | 查看订单 |
+| `trade pnl` | 收益拆解：手续费、已实现盈亏（成交表汇总）与资金费（交易所流水，时间范围最长 90 天，取不全时标明截断） |
 | `trade positions` | 列出持仓 |
 
 ## udf：自定义算子（wasm UDF）：new → build → publish → preview → activate

@@ -13,10 +13,18 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/readiness"
 )
 
+// single 返回帧里唯一一个市场的输入。
+func single(frame engine.Frame) engine.MarketInput {
+	for _, market := range frame.Markets {
+		return market
+	}
+	return engine.MarketInput{}
+}
+
 // rowIDs 返回帧中有行的标的（排序）。
 func rowIDs(frame engine.Frame) []string {
-	ids := make([]string, 0, len(frame.Rows))
-	for id := range frame.Rows {
+	ids := make([]string, 0, len(single(frame).Rows))
+	for id := range single(frame).Rows {
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
@@ -33,7 +41,7 @@ func rowsAt(at time.Time, values map[string]map[string]float64) []Row {
 
 func TestLoadBarBuildsFrameWithPreviousBar(t *testing.T) {
 	client := newFakeClient("spot")
-	resolved, program, err := Resolve(context.Background(), client, "space", "ftask_1h", parseStrategy(t, exampleDSL))
+	resolved, program, err := Resolve(context.Background(), client, "space", []string{"ftask_1h"}, parseStrategy(t, exampleDSL))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,29 +57,29 @@ func TestLoadBarBuildsFrameWithPreviousBar(t *testing.T) {
 		return rows, 9, nil
 	}
 	loader := Loader{Client: client}
-	loaded, err := loader.LoadBar(context.Background(), "space", resolved, program, Bar{BarStart: barStart, EventUniverse: []string{"BTC-USDT", "ETH-USDT", "SOL-USDT"}, Readiness: readiness.Result{FailedByFactor: map[string][]string{"qv": {"SOL-USDT"}}}})
+	loaded, err := loader.LoadBar(context.Background(), "space", resolved, program, Bar{BarStart: barStart, EventUniverse: map[string][]string{resolved.Market.Select: []string{"BTC-USDT", "ETH-USDT", "SOL-USDT"}}, Readiness: map[string]readiness.Result{resolved.Market.Select: {FailedByFactor: map[string][]string{"qv": {"SOL-USDT"}}}}})
 	if err != nil {
 		t.Fatalf("装配失败：%v", err)
 	}
 	frame := loaded.Frame
-	if !frame.BarEnd.Equal(barStart.Add(time.Hour)) || !frame.Spot {
+	if !frame.BarEnd.Equal(barStart.Add(time.Hour)) {
 		t.Fatalf("帧元数据不符：%+v loaded=%+v", frame, loaded)
 	}
 	if !reflect.DeepEqual(rowIDs(frame), []string{"BTC-USDT", "ETH-USDT"}) {
 		t.Fatalf("帧中的标的不符：%v", rowIDs(frame))
 	}
-	btc := frame.Rows["BTC-USDT"]
+	btc := single(frame).Rows["BTC-USDT"]
 	if btc.Values["close"] != 101 || btc.Previous["close"] != 99 {
 		t.Fatalf("BTC 的当期与上一根不符：%+v", btc)
 	}
-	if frame.Rows["ETH-USDT"].Previous != nil {
-		t.Fatalf("没有上一根的标的 Previous 应为空：%+v", frame.Rows["ETH-USDT"])
+	if single(frame).Rows["ETH-USDT"].Previous != nil {
+		t.Fatalf("没有上一根的标的 Previous 应为空：%+v", single(frame).Rows["ETH-USDT"])
 	}
-	if _, failed := frame.FailedColumns["quote_volume_mean_20"]["SOL-USDT"]; !failed {
-		t.Fatalf("因子失败应映射到其产出列：%v", frame.FailedColumns)
+	if _, failed := single(frame).Failed["quote_volume_mean_20"]["SOL-USDT"]; !failed {
+		t.Fatalf("因子失败应映射到其产出列：%v", single(frame).Failed)
 	}
-	if _, failed := frame.FailedColumns["ma_20"]["SOL-USDT"]; failed {
-		t.Fatalf("因子失败不应映射到其他因子的列：%v", frame.FailedColumns)
+	if _, failed := single(frame).Failed["ma_20"]["SOL-USDT"]; failed {
+		t.Fatalf("因子失败不应映射到其他因子的列：%v", single(frame).Failed)
 	}
 	if len(client.queries) != 1 || !client.queries[0].Start.Equal(barStart.Add(-time.Hour)) || !client.queries[0].End.Equal(barStart.Add(time.Nanosecond)) {
 		t.Fatalf("当期与上一根应合并成一次范围读取：%+v", client.queries)
@@ -89,25 +97,25 @@ func TestLoadBarBuildsFrameWithPreviousBar(t *testing.T) {
 
 func TestLoadBarMapsViewLevelFailuresToAllColumns(t *testing.T) {
 	client := newFakeClient("spot")
-	resolved, program, err := Resolve(context.Background(), client, "space", "ftask_1h", parseStrategy(t, exampleDSL))
+	resolved, program, err := Resolve(context.Background(), client, "space", []string{"ftask_1h"}, parseStrategy(t, exampleDSL))
 	if err != nil {
 		t.Fatal(err)
 	}
 	client.rows = func(query Query) ([]Row, uint64, error) { return nil, 1, nil }
-	loaded, err := Loader{Client: client}.LoadBar(context.Background(), "space", resolved, program, Bar{BarStart: barStart, Readiness: readiness.Result{FailedSubjects: []string{"ETH-USDT"}}})
+	loaded, err := Loader{Client: client}.LoadBar(context.Background(), "space", resolved, program, Bar{BarStart: barStart, Readiness: map[string]readiness.Result{resolved.Market.Select: readiness.Result{FailedSubjects: []string{"ETH-USDT"}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, column := range []string{"close", "ma_20", "bias_q_20"} {
-		if _, failed := loaded.Frame.FailedColumns[column]["ETH-USDT"]; !failed {
-			t.Fatalf("View 级失败应映射到列 %s：%v", column, loaded.Frame.FailedColumns)
+		if _, failed := single(loaded.Frame).Failed[column]["ETH-USDT"]; !failed {
+			t.Fatalf("View 级失败应映射到列 %s：%v", column, single(loaded.Frame).Failed)
 		}
 	}
 }
 
 func TestLoadBarRejectsAmbiguousSeriesAndPropagatesStale(t *testing.T) {
 	client := newFakeClient("spot")
-	resolved, program, err := Resolve(context.Background(), client, "space", "ftask_1h", parseStrategy(t, exampleDSL))
+	resolved, program, err := Resolve(context.Background(), client, "space", []string{"ftask_1h"}, parseStrategy(t, exampleDSL))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +143,7 @@ func TestLoadBarRejectsAmbiguousSeriesAndPropagatesStale(t *testing.T) {
 
 func TestLoadBarDetectsConfigDrift(t *testing.T) {
 	client := newFakeClient("spot")
-	resolved, program, err := Resolve(context.Background(), client, "space", "ftask_1h", parseStrategy(t, exampleDSL))
+	resolved, program, err := Resolve(context.Background(), client, "space", []string{"ftask_1h"}, parseStrategy(t, exampleDSL))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +177,7 @@ rules:
     select: {top: 1}
     weight: {total: 1}
 `)
-	resolved, program, err := Resolve(context.Background(), client, "space", "ftask_1h", strategy)
+	resolved, program, err := Resolve(context.Background(), client, "space", []string{"ftask_1h"}, strategy)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,7 +211,7 @@ rules:
 func TestLoadBarPinsProbeRevisionAndChecksCoverage(t *testing.T) {
 	client := newFakeClient("spot")
 	strategy := parseStrategy(t, strings.Replace(exampleDSL, "universe:\n", "universe:\n  min_age_bars: 24\n", 1))
-	resolved, program, err := Resolve(context.Background(), client, "space", "ftask_1h", strategy)
+	resolved, program, err := Resolve(context.Background(), client, "space", []string{"ftask_1h"}, strategy)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,7 +244,7 @@ func TestLoadBarPinsProbeRevisionAndChecksCoverage(t *testing.T) {
 // View 被停用或删除是确定性的配置问题，记 config_error，不按基础设施错误重试。
 func TestLoadBarRejectsInactiveView(t *testing.T) {
 	client := newFakeClient("spot")
-	resolved, program, err := Resolve(context.Background(), client, "space", "ftask_1h", parseStrategy(t, exampleDSL))
+	resolved, program, err := Resolve(context.Background(), client, "space", []string{"ftask_1h"}, parseStrategy(t, exampleDSL))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,7 +267,7 @@ func TestLoadBarProbesAgeOnTheTaskResultView(t *testing.T) {
 	factorView.IndexedFrom, factorView.IndexedTo = barStart, barStart
 	client.views["view_factor_1h"] = factorView
 	strategy := parseStrategy(t, strings.Replace(exampleDSL, "universe:\n", "universe:\n  min_age_bars: 24\n", 1))
-	resolved, program, err := Resolve(context.Background(), client, "space", "ftask_1h", strategy)
+	resolved, program, err := Resolve(context.Background(), client, "space", []string{"ftask_1h"}, strategy)
 	if err != nil {
 		t.Fatal(err)
 	}

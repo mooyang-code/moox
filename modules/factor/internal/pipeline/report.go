@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
+	"github.com/mooyang-code/moox/packages/seriesset"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -31,6 +32,16 @@ func outcomeFor(plan Plan, loaded LoadResult, computation Computation) Outcome {
 		if state.Status != "complete" {
 			outcome.Status = "degraded"
 		}
+	}
+	if plan.ExpectedSeriesDerived && !plan.FillOnly {
+		for _, state := range outcome.Factors {
+			if state.Status == "skipped" || len(state.SkippedSeriesTags) > 0 {
+				outcome.DerivedSkipped = true
+			}
+		}
+	}
+	if plan.multi() {
+		outcome.FailedSeries = uniqueSeriesSorted(append(append([]seriesset.Series(nil), plan.UpstreamFailedSeries...), loaded.FailedSeries...))
 	}
 	if len(outcome.FailedSubjects) > 0 {
 		outcome.Status = "degraded"
@@ -61,11 +72,15 @@ func (r *Runner) Report(ctx context.Context, plan Plan, outcome Outcome) error {
 		SourceDatasetID: plan.Set.SourceDatasetID, Frequency: plan.Set.Freq,
 		PeriodTime: target.Unix(), Status: outcome.Status,
 		UniverseSubjects: uniqueSorted(plan.Expected), FailedSubjects: uniqueSorted(outcome.FailedSubjects),
+		UniverseSeries: plan.ExpectedSeries, FailedSeries: outcome.FailedSeries,
 		Factors:        append([]storageio.FactorState(nil), outcome.Factors...),
 		TriggerEventID: plan.TriggerEventID, ComputedAt: time.Now().UTC(),
 	}
 	if err := r.store.ReportComputed(ctx, marker); err != nil {
 		return fmt.Errorf("report factor period computed: %w", err)
+	}
+	if sink, ok := r.cfg.GapSink.(ReportedSink); ok {
+		sink.PeriodReported()
 	}
 	return nil
 }
@@ -84,6 +99,16 @@ func (r *Runner) Run(ctx context.Context, plan Plan) (Outcome, error) {
 	}
 	if _, err := planTarget(r.clock, plan); err != nil {
 		return Outcome{}, err
+	}
+	if plan.Mode == ModeRecalc && len(plan.ExpectedSeries) == 0 && len(plan.Members) > 0 {
+		// 补算类计划没有冻结的序列全集：统一数据集上由数据层按本地存储构造，单序列数据集不受影响。
+		if expecter, ok := r.data.(SeriesExpecter); ok {
+			series, err := expecter.ExpectedSeries(ctx, plan)
+			if err != nil {
+				return Outcome{StageDurations: outcome.StageDurations}, fmt.Errorf("构造补算的期望序列: %w", err)
+			}
+			plan.ExpectedSeries, plan.ExpectedSeriesDerived = series, len(series) > 0
+		}
 	}
 	outcome.StageDurations["plan"] = time.Since(planStarted)
 	loaded := LoadResult{Frames: map[string]*storageio.Frame{}, Available: append([]string(nil), plan.Available...)}

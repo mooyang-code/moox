@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -127,7 +128,7 @@ func (m *Manager) ReadyFor(account tradingaccount.Account) bool {
 	}
 	current := store.TradingAccountRecord{
 		SpaceID: account.SpaceID, TradingAccountID: account.ID,
-		Exchange: string(account.Exchange), MarketType: string(account.MarketType),
+		Exchange: string(account.Exchange), Markets: marketStrings(account.Markets),
 		ExecutionMode:      string(account.ExecutionMode),
 		Environment:        environment,
 		CredentialSecretID: account.CredentialSecretID,
@@ -151,7 +152,7 @@ func (m *Manager) ReadyFor(account tradingaccount.Account) bool {
 func (m *Manager) EnsureSymbolConfig(
 	ctx context.Context,
 	tradingAccountID string,
-	symbol string,
+	symbol exchange.SymbolKey,
 	leverage shared.Decimal,
 ) error {
 	session, err := m.symbolConfigSession(tradingAccountID)
@@ -174,16 +175,24 @@ func (m *Manager) RequestSync(tradingAccountID string) bool {
 	return ok && session.RequestSync()
 }
 
-// ForgetSymbolConfig 让标的下次开仓前重新设置，符号是默认杠杆键时清空全部记录。
-func (m *Manager) ForgetSymbolConfig(tradingAccountID, symbol string) {
+// ForgetSymbolConfig 让标的下次开仓前重新设置。
+func (m *Manager) ForgetSymbolConfig(tradingAccountID string, symbol exchange.SymbolKey) {
 	if session, err := m.symbolConfigSession(tradingAccountID); err == nil {
 		session.ForgetSymbolConfig(symbol)
 	}
 }
 
+// ForgetAllSymbolConfigs 让账户的全部标的下次开仓前重新设置。
+func (m *Manager) ForgetAllSymbolConfigs(tradingAccountID string) {
+	if session, err := m.symbolConfigSession(tradingAccountID); err == nil {
+		session.ForgetAllSymbolConfigs()
+	}
+}
+
 type symbolConfigSession interface {
-	EnsureSymbolConfig(ctx context.Context, symbol string, leverage shared.Decimal) error
-	ForgetSymbolConfig(symbol string)
+	EnsureSymbolConfig(ctx context.Context, symbol exchange.SymbolKey, leverage shared.Decimal) error
+	ForgetSymbolConfig(symbol exchange.SymbolKey)
+	ForgetAllSymbolConfigs()
 }
 
 func (m *Manager) symbolConfigSession(tradingAccountID string) (symbolConfigSession, error) {
@@ -328,6 +337,14 @@ func (m *Manager) reconcile(ctx context.Context) error {
 	return nil
 }
 
+func marketStrings(markets []exchange.MarketType) []string {
+	result := make([]string, len(markets))
+	for i, market := range markets {
+		result[i] = string(market)
+	}
+	return result
+}
+
 func sameSessionConfig(
 	left store.TradingAccountRecord,
 	right store.TradingAccountRecord,
@@ -335,10 +352,13 @@ func sameSessionConfig(
 	return left.SpaceID == right.SpaceID &&
 		left.TradingAccountID == right.TradingAccountID &&
 		left.Exchange == right.Exchange &&
-		left.MarketType == right.MarketType &&
+		slices.Equal(left.Markets, right.Markets) &&
 		left.ExecutionMode == right.ExecutionMode &&
+		left.AccountMode == right.AccountMode &&
 		left.Environment == right.Environment &&
 		left.CredentialSecretID == right.CredentialSecretID &&
+		// 同一个密钥 ID 下改了密钥内容：重新检测会写入新的指纹，会话随之重建、绑定检测过的新密钥。
+		inspectionFingerprint(left) == inspectionFingerprint(right) &&
 		left.SettlementAsset == right.SettlementAsset &&
 		left.MarginMode == right.MarginMode &&
 		left.Status == right.Status &&
@@ -409,4 +429,13 @@ func (m *Manager) stopAll() {
 		delete(m.sessions, id)
 	}
 	m.mu.Unlock()
+}
+
+// inspectionFingerprint 取账户检测结果里记录的密钥指纹；没有检测结果为空串。
+func inspectionFingerprint(account store.TradingAccountRecord) string {
+	inspection, err := exchange.ParseInspection(account.InspectionJSON)
+	if err != nil {
+		return ""
+	}
+	return inspection.CredentialFingerprint
 }

@@ -969,7 +969,7 @@ func datasetStatus(now time.Time, key datasetKey, value datasetValues, policy re
 	case !marketIdle && runLag > 0 && now.Sub(runFrom) > runLag:
 		item.Status, item.Reason = "stale", "run stale"
 	case warmingNow(now, item, successLag):
-		// 生产者仍在按设计只产出部分结果（空洞保护、历史不足、预热）：页面显示降级，但不是故障，不告警。
+		// 生产者仍在按设计只产出部分结果（历史不足、预热）：页面显示降级，但不是故障，不告警。
 		item.Status, item.Reason = "degraded", DatasetReasonWarming
 	case item.LastSuccessAt.IsZero():
 		item.Status, item.Reason = "degraded", "尚无成功运行"
@@ -996,8 +996,8 @@ func laterTime(left, right time.Time) time.Time {
 	return left
 }
 
-// DatasetReasonWarming 是“数据积累中”的原因码：生产者报告最近一次运行只按设计产出了部分结果（窗口空洞保护、
-// 历史不足、预热中），而且此后没有更新的成功。状态仍是 degraded，页面照常展示；告警检查把它当作通过。
+// DatasetReasonWarming 是“数据积累中”的原因码：生产者报告最近一次运行只按设计产出了部分结果（历史不足、
+// 预热中），而且此后没有更新的成功。状态仍是 degraded，页面照常展示；告警检查把它当作通过。
 const DatasetReasonWarming = "warming"
 
 // warmingNow 判断数据集是否处在“积累中”：最近一次产出是部分结果（比最近一次成功更新），并且部分结果仍按期出现——
@@ -1084,41 +1084,103 @@ func (b Builder) buildBusinessChecks(ctx context.Context, spaceID string) ([]Bus
 		return nil, err
 	}
 	out = append(out, balances...)
-	attention, err := b.buildTradeAttentionStatuses(ctx)
-	if err != nil {
-		return nil, err
+	for _, source := range attentionSources {
+		attention, err := b.buildAttentionStatuses(ctx, source)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, attention...)
 	}
-	out = append(out, attention...)
 	return out, nil
 }
 
 // TradeAttentionNames 是 Trade 上报的需要人看的情况。
 var TradeAttentionNames = map[string]string{
-	"target_rejected":   "交易目标被拒绝",
-	"auto_paused":       "组合账户自动暂停",
-	"target_blocked":    "交易目标持续阻塞",
-	"account_not_ready": "执行账户持续未就绪",
-	"target_expired":    "交易目标连续过期",
-	"target_reversal":   "同一目标内反向下单",
-	"rate_limited":      "交易所接口限流",
-	"turnover_high":     "组合账户成交额异常偏高",
-	"unknown_results":   "下单结果未知偏多",
+	"target_rejected":           "交易目标被拒绝",
+	"auto_paused":               "组合账户自动暂停",
+	"target_blocked":            "交易目标持续阻塞",
+	"account_not_ready":         "执行账户持续未就绪",
+	"target_expired":            "交易目标连续过期",
+	"target_reversal":           "同一目标内反向下单",
+	"rate_limited":              "交易所接口限流",
+	"turnover_high":             "组合账户成交额异常偏高",
+	"unknown_results":           "下单结果未知偏多",
+	"inspection_blocked":        "交易账户密钥检测发现阻断项",
+	"inspection_failing":        "交易账户密钥检测连续失败",
+	"transfer_shortfall":        "合约钱包可划转资金不足，现货买入被缩小",
+	"transfer_failing":          "钱包划转或归集出问题",
+	"margin_ratio_low":          "合约保证金率过低",
+	"valuation_degraded":        "估值降级（有持仓取不到价）",
+	"flatten_orders_unsettled":  "清仓结束时有子单没收拾掉，需人工核对",
+	"release_orders_unverified": "释放会话时没能撤单，只按本地记录释放",
+	"release_orders_stuck":      "释放会话持续失败，目标单没撤下",
+	"orders_instrument_gone":    "标的已下架的订单需人工核对成交",
 }
 
-// buildTradeAttentionStatuses 把 Trade 的关注项变成业务检查。detail 标签带账户名和原因，
+// EventCenterAttentionNames 是事件中心上报的需要人看的情况。
+var EventCenterAttentionNames = map[string]string{
+	"execution_failed": "事件通知失败",
+	"delist_detected":  "发现标的即将下架",
+	"action_failed":    "系统动作处理失败",
+}
+
+// CollectorAttentionNames 是 Collector 上报的需要人看的情况（下架检测）。
+var CollectorAttentionNames = map[string]string{
+	"delist_source_failed":        "下架检测来源连续失败",
+	"delist_readonly_key_missing": "下架检测缺少币安只读 Key",
+	"event_outbox_stuck":          "Collector 事件发件箱积压",
+	"eventbus_consumer_failed":    "Collector EventBus 消费者启动失败",
+}
+
+// warningAttention 是只需提醒、不算故障的关注项（检查 ID）：功能还在，只少了一部分。
+// 例如缺币安只读 Key 时只是现货下架改为手工登记，不能挡住安装验收。
+// 这些关注项触发时业务检查是 degraded（需关注），告警级别是 warning；其余关注项是 down 和 critical。
+var warningAttention = map[string]bool{
+	"collector_attention:delist_readonly_key_missing": true,
+}
+
+// AttentionIsWarning 报告关注项触发时是否只算提醒（warning），不算故障。
+func AttentionIsWarning(check, kind string) bool {
+	return warningAttention[check+":"+kind]
+}
+
+// attentionSource 描述一个模块的关注项指标：指标名、业务检查的种类（检查 ID 的前缀）和 kind 到检查名的对照。
+type attentionSource struct {
+	metric string
+	check  string
+	names  map[string]string
+}
+
+var attentionSources = []attentionSource{
+	{"moox_trade_attention_active", "trade_attention", TradeAttentionNames},
+	{"moox_callbackdispatcher_attention_active", "event_center_attention", EventCenterAttentionNames},
+	{"moox_collector_attention_active", "collector_attention", CollectorAttentionNames},
+}
+
+// AttentionCheckName 返回关注项检查的名字；不是关注项检查或种类未知时返回空。
+func AttentionCheckName(check, kind string) string {
+	for _, source := range attentionSources {
+		if source.check == check {
+			return source.names[kind]
+		}
+	}
+	return ""
+}
+
+// buildAttentionStatuses 把一个模块的关注项变成业务检查。detail 标签带对象名和原因，
 // 内容变化后旧序列不再更新，所以只看没有过期的序列。
-func (b Builder) buildTradeAttentionStatuses(ctx context.Context) ([]BusinessStatus, error) {
+func (b Builder) buildAttentionStatuses(ctx context.Context, source attentionSource) ([]BusinessStatus, error) {
 	if b.Metrics == nil || b.Metrics.Catalog() == nil {
 		return nil, nil
 	}
-	series, _, err := b.Metrics.Catalog().ListSeries(ctx, "", "moox_trade_attention_active", "", 0, 500)
+	series, _, err := b.Metrics.Catalog().ListSeries(ctx, "", source.metric, "", 0, 500)
 	if err != nil {
 		return nil, err
 	}
-	statuses := make(map[string]BusinessStatus, len(TradeAttentionNames))
+	statuses := make(map[string]BusinessStatus, len(source.names))
 	for _, item := range series {
 		kind := labelValue(item.LabelsJSON, "kind")
-		if _, known := TradeAttentionNames[kind]; !known || item.IsStale {
+		if _, known := source.names[kind]; !known || item.IsStale {
 			continue
 		}
 		latest, err := b.Metrics.Latest(ctx, item.SeriesID)
@@ -1129,11 +1191,14 @@ func (b Builder) buildTradeAttentionStatuses(ctx context.Context) ([]BusinessSta
 			continue
 		}
 		status := BusinessStatus{
-			SpaceID: "crypto", Kind: "trade_attention", Module: kind, Status: "healthy", Reason: "正常",
+			SpaceID: "crypto", Kind: source.check, Module: kind, Status: "healthy", Reason: "正常",
 			LastCheckedAt: latest.ObservedAt,
 		}
 		if latest.Value > 0 {
 			status.Status, status.Reason = "down", labelValue(item.LabelsJSON, "detail")
+			if AttentionIsWarning(source.check, kind) {
+				status.Status = "degraded"
+			}
 		}
 		if current, ok := statuses[kind]; !ok || status.LastCheckedAt.After(current.LastCheckedAt) {
 			statuses[kind] = status
@@ -1728,7 +1793,7 @@ func businessKind(check domain.Check) string {
 		return ""
 	}
 	switch kind {
-	case "market_canary", "subject_tag", "balance", "trade_attention", "module", "kline_freshness", "console-page":
+	case "market_canary", "subject_tag", "balance", "trade_attention", "event_center_attention", "collector_attention", "module", "kline_freshness", "console-page":
 		return kind
 	default:
 		return ""
@@ -1744,6 +1809,10 @@ func businessModule(checkID string) string {
 		return "collector"
 	case "balance", "trade_attention":
 		return "trade"
+	case "event_center_attention":
+		return "callback-dispatcher"
+	case "collector_attention":
+		return "collector"
 	case "module":
 		for _, check := range report.BuiltInModuleHealthChecks() {
 			if check.ID == id {

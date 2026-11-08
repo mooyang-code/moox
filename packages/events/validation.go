@@ -122,11 +122,73 @@ func validateDatasetPeriodCompleted(message *eventpb.EventMessage, value proto.M
 	if payload.GetStatus() == "complete" && len(failed) != 0 {
 		return fmt.Errorf("%s complete status has failed_subjects", label)
 	}
+	if err := validatePeriodSeries(payload, subjects, failed, label); err != nil {
+		return err
+	}
 	// 明细对 Storage 是不透明字节：只要求有明细就有类型，不解析内容。
 	if (len(payload.GetDetail()) != 0) != (payload.GetDetailType() != "") || (payload.GetDetailType() != "" && !validRequiredToken(payload.GetDetailType())) {
 		return fmt.Errorf("%s detail and detail_type must be provided together", label)
 	}
 	return validateCommittedPositions(payload.GetCommittedPositions(), label)
+}
+
+// validatePeriodSeries 校验按序列的全集与失败名单：序列不重复、失败名单是全集的子集；
+// 有序列全集时，它包含的标的必须正好是 universe_subject_ids；没有全集（单序列数据集）时不能带失败序列。
+// 失败序列的标的必须在 failed_subjects 里：标的口径沿用原有定义（统一数据集执行计划 3.4），有一条序列失败的标的就记入失败标的，
+// 只读按标的字段的消费方（单市场任务、K 线 View）才不会把失败序列的标的当成可用。
+func validatePeriodSeries(payload *storagepb.DatasetPeriodCompleted, subjects, failedSubjects map[string]struct{}, label string) error {
+	universe := make(map[string]struct{}, len(payload.GetUniverseSeries()))
+	seenSubjects := make(map[string]struct{}, len(subjects))
+	for i, series := range payload.GetUniverseSeries() {
+		key, err := seriesRefKey(series)
+		if err != nil {
+			return fmt.Errorf("%s universe_series item %d: %w", label, i, err)
+		}
+		if _, ok := universe[key]; ok {
+			return fmt.Errorf("%s universe_series item %q is duplicated", label, series.GetSubjectId()+"/"+series.GetSeriesTag())
+		}
+		universe[key] = struct{}{}
+		if _, ok := subjects[series.GetSubjectId()]; !ok {
+			return fmt.Errorf("%s universe_series subject %q is not in universe_subject_ids", label, series.GetSubjectId())
+		}
+		seenSubjects[series.GetSubjectId()] = struct{}{}
+	}
+	if len(universe) != 0 && len(seenSubjects) != len(subjects) {
+		return fmt.Errorf("%s universe_series does not cover every subject in universe_subject_ids", label)
+	}
+	failed := make(map[string]struct{}, len(payload.GetFailedSeries()))
+	for i, series := range payload.GetFailedSeries() {
+		key, err := seriesRefKey(series)
+		if err != nil {
+			return fmt.Errorf("%s failed_series item %d: %w", label, i, err)
+		}
+		if _, ok := failed[key]; ok {
+			return fmt.Errorf("%s failed_series item %q is duplicated", label, series.GetSubjectId()+"/"+series.GetSeriesTag())
+		}
+		failed[key] = struct{}{}
+		if _, ok := universe[key]; !ok {
+			return fmt.Errorf("%s failed_series %q is not in universe_series", label, series.GetSubjectId()+"/"+series.GetSeriesTag())
+		}
+		if _, ok := failedSubjects[series.GetSubjectId()]; !ok {
+			return fmt.Errorf("%s failed_series subject %q is not in failed_subjects", label, series.GetSubjectId())
+		}
+	}
+	if payload.GetStatus() == "complete" && len(failed) != 0 {
+		return fmt.Errorf("%s complete status has failed_series", label)
+	}
+	return nil
+}
+
+// seriesRefKey 校验一条序列引用并返回它的键。series_tag 与行键里的 series_tag 同一套规则（validateSeriesTag），
+// 否则事件里的序列可能对不上 Storage 实际存下的序列。
+func seriesRefKey(series *storagepb.SeriesRef) (string, error) {
+	if series == nil || !validRequiredToken(series.GetSubjectId()) || !validRequiredToken(series.GetSeriesTag()) {
+		return "", fmt.Errorf("subject_id and series_tag are required")
+	}
+	if err := validateSeriesTag(series.GetSeriesTag()); err != nil {
+		return "", fmt.Errorf("series_tag: %w", err)
+	}
+	return series.GetSubjectId() + "\x00" + series.GetSeriesTag(), nil
 }
 
 func validateViewDataReady(message *eventpb.EventMessage, value proto.Message) error {
@@ -202,6 +264,14 @@ func validateCollectorKlineBackfilled(message *eventpb.EventMessage, value proto
 	for _, subject := range payload.GetSubjectIds() {
 		if !validRequiredToken(subject) {
 			return fmt.Errorf("collector kline backfilled subject_id %q is invalid", subject)
+		}
+	}
+	if _, err := validateUniqueTokens(payload.GetSeriesTags(), false, "collector kline backfilled series_tags"); err != nil {
+		return err
+	}
+	for _, tag := range payload.GetSeriesTags() {
+		if err := validateSeriesTag(tag); err != nil {
+			return fmt.Errorf("collector kline backfilled series_tag %q: %w", tag, err)
 		}
 	}
 	start, end := payload.GetStart(), payload.GetEnd()
@@ -312,7 +382,8 @@ func validateLogicalAccountTargetWeightRequested(message *eventpb.EventMessage, 
 	if !payload.GetValidUntil().AsTime().After(payload.GetEffectiveAt().AsTime()) {
 		return fmt.Errorf("trade target weight valid_until must be after effective_at")
 	}
-	seenInstruments := make(map[string]struct{}, len(payload.GetTargets()))
+	type instrumentKey struct{ instrumentID, marketType string }
+	seenInstruments := make(map[instrumentKey]struct{}, len(payload.GetTargets()))
 	gross := new(big.Rat)
 	for i, target := range payload.GetTargets() {
 		if target == nil {
@@ -322,10 +393,15 @@ func validateLogicalAccountTargetWeightRequested(message *eventpb.EventMessage, 
 		if strings.TrimSpace(instrumentID) == "" || strings.TrimSpace(instrumentID) != instrumentID {
 			return fmt.Errorf("trade target weight %d instrument_id is empty", i)
 		}
-		if _, exists := seenInstruments[instrumentID]; exists {
-			return fmt.Errorf("trade target weight instrument_id %q is duplicated", instrumentID)
+		marketType := target.GetMarketType()
+		if !validTargetMarketType(marketType) {
+			return fmt.Errorf("trade target weight %d market_type %q must be SPOT, SWAP or STOCK", i, marketType)
 		}
-		seenInstruments[instrumentID] = struct{}{}
+		key := instrumentKey{instrumentID: instrumentID, marketType: marketType}
+		if _, exists := seenInstruments[key]; exists {
+			return fmt.Errorf("trade target weight instrument_id %q market_type %s is duplicated", instrumentID, marketType)
+		}
+		seenInstruments[key] = struct{}{}
 		targetWeight := target.GetTargetWeight()
 		if len(targetWeight) > maxTargetWeightLength || !decimalTargetWeightPattern.MatchString(targetWeight) {
 			return fmt.Errorf("trade target weight %d target_weight is not decimal", i)
@@ -349,6 +425,11 @@ func validateLogicalAccountTargetWeightRequested(message *eventpb.EventMessage, 
 		return fmt.Errorf("trade target weight logical_account_id does not match subject_id")
 	}
 	return nil
+}
+
+// validTargetMarketType 判断目标里的市场是否是 Trade 认识的三种市场之一。
+func validTargetMarketType(value string) bool {
+	return value == "SPOT" || value == "SWAP" || value == "STOCK"
 }
 
 func validateStorageRow(row *storagepb.RowUpsert) error {

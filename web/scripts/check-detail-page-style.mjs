@@ -27,9 +27,8 @@ const pageShellFiles = [
   "src/views/collector/task-results/index.vue",
   "src/views/collector/runtime-status/runtime-status.vue",
   "src/views/collector/backfill-jobs/index.vue",
-  "src/views/trading/account-overview/account-overview.vue",
-  "src/views/trading/position-detail/position-detail.vue",
-  "src/views/trading/trade-record/trade-record.vue",
+  "src/views/trading/accounts/index.vue",
+  "src/views/trading/accounts/detail/index.vue",
   "src/views/container/ssh-hosts/ssh-hosts.vue",
   "src/views/ops/storage/nodes.vue"
 ];

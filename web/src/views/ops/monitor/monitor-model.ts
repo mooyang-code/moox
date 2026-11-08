@@ -17,7 +17,7 @@ import {
   type NameBook,
   type Tone
 } from "@/views/home/home-model";
-import { alertLink, hostHref, statusLabel } from "./health-display";
+import { alertLink, alertNote, hostHref, statusLabel } from "./health-display";
 import { marketTime } from "./market-time";
 
 /** 触发时间相差不超过 60 秒的告警多半是同一个原因（服务重启、网络抖动），合并成一组展示。 */
@@ -73,6 +73,8 @@ export interface AlertLine {
   recovering: boolean;
   facts: Fact[];
   link: { href: string; label: string };
+  /** 要先看说明的告警的处理说明（几段文字），显示在原因下面；没有时为空数组。 */
+  note: string[];
 }
 
 export interface AlertGroup {
@@ -191,6 +193,7 @@ export function expectedBar(item: HealthDataset, delay: BarDelay, nowMs: number)
 }
 
 function alertLine(alert: HealthAlert, names: NameBook, nowMs: number): AlertLine {
+  const note = alertNote(alert.object);
   const startedMs = toMillis(alert.triggered_at);
   const facts: Fact[] = [
     { label: "触发时间", value: shortTime(alert.triggered_at, nowMs) },
@@ -209,7 +212,8 @@ function alertLine(alert: HealthAlert, names: NameBook, nowMs: number): AlertLin
     duration: since(startedMs, nowMs),
     recovering: Boolean(alert.recovering),
     facts,
-    link: alertLink(alert.object)
+    link: note?.link ?? alertLink(alert.object),
+    note: note?.lines ?? []
   };
 }
 
@@ -651,6 +655,8 @@ const KIND_LABELS: Record<string, string> = {
   module: "模块运行",
   balance: "账户余额同步",
   trade_attention: "交易关注项",
+  event_center_attention: "事件中心关注项",
+  collector_attention: "采集关注项",
   "console-page": "控制台页面",
   subject_tag: "标的标签巡检"
 };

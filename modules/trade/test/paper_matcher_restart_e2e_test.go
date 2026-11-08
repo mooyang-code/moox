@@ -45,7 +45,7 @@ func TestPaperMatcherRestingGTCRecoversAfterSQLiteRestart(t *testing.T) {
 		Store:   restarted,
 		Reducer: reducer,
 		Decide: func(candidate store.OrderRecord) (paperexec.Decision, error) {
-			return paperexec.Decision{Fill: exchange.Fill{
+			return paperexec.Decision{Fill: exchange.Fill{Market: exchange.MarketTypeSpot,
 				ExchangeTradeID: "restart-trade",
 				ExchangeOrderID: candidate.ExchangeOrderID,
 				ClientOrderID:   candidate.ClientOrderID,

@@ -29,12 +29,12 @@ func openFillStore(t *testing.T, market exchange.MarketType) *store.Store {
 	require.NoError(t, s.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
 			SpaceID: testSpace, TradingAccountID: testAccount, Name: "primary",
-			Exchange: string(exchange.ExchangeBinance), MarketType: string(market),
+			Exchange: string(exchange.ExchangeBinance), Markets: []string{string(market)},
 			ExecutionMode:      string(exchange.ExecutionModePaper),
 			Environment:        string(exchange.AccountEnvironmentPaper),
 			CredentialSecretID: "secret-1", SettlementAsset: "USDT",
 			MarginMode: string(exchange.MarginModeCross), Status: string(exchange.AccountStatusEnabled),
-			LeverageSettings: store.LeverageSettings{testSymbol: "10"},
+			LeverageSettings: store.LeverageSettings{store.DefaultLeverageKey: "10"},
 		}); err != nil {
 			return err
 		}
@@ -86,7 +86,7 @@ func fillSource() Source {
 }
 
 func spotFill(id string, quantity string) exchange.Fill {
-	return exchange.Fill{
+	return exchange.Fill{Market: exchange.MarketTypeSpot,
 		ExchangeTradeID: id, ExchangeOrderID: "exchange-order-1",
 		ClientOrderID: "client-1", ExchangeSymbol: testSymbol, Side: exchange.SideBuy,
 		Quantity: shared.MustDecimal(quantity), Price: shared.MustDecimal("100"),
@@ -280,7 +280,7 @@ func TestReducerApplyFillSwapRecordsPnLAndEstimatesPosition(t *testing.T) {
 			MarginMode: string(exchange.MarginModeCross),
 		})
 	}))
-	fill := exchange.Fill{
+	fill := exchange.Fill{Market: exchange.MarketTypeSwap,
 		ExchangeTradeID: "swap-trade", ExchangeOrderID: "exchange-order-1",
 		ClientOrderID: "client-1", ExchangeSymbol: testSymbol, Side: exchange.SideBuy,
 		PositionSide: exchange.PositionSideNet, Quantity: shared.MustDecimal("2"),
@@ -313,7 +313,7 @@ func TestReducerApplyFillSwapRecordsPnLAndEstimatesPosition(t *testing.T) {
 func TestReducerApplyFillCreatesFirstSwapPosition(t *testing.T) {
 	s := openFillStore(t, exchange.MarketTypeSwap)
 	seedFillOrder(t, s, exchange.MarketTypeSwap, order.Open, "1", "10")
-	fill := exchange.Fill{
+	fill := exchange.Fill{Market: exchange.MarketTypeSwap,
 		ExchangeTradeID: "first-swap-trade", ExchangeOrderID: "exchange-order-1",
 		ClientOrderID: "client-1", ExchangeSymbol: testSymbol, Side: exchange.SideBuy,
 		PositionSide: exchange.PositionSideNet, Quantity: shared.MustDecimal("1"),
@@ -398,7 +398,7 @@ func TestPaperMatcherFillAtSnapshotCoveredMillisecondStillProjectsPosition(t *te
 	tradedAt := time.Now().Truncate(time.Millisecond)
 	paperSource := Source{SpaceID: testSpace, TradingAccountID: testAccount, Kind: OriginPaperMatcher}
 	newFill := func(id string) exchange.Fill {
-		return exchange.Fill{
+		return exchange.Fill{Market: exchange.MarketTypeSwap,
 			ExchangeTradeID: id, ExchangeOrderID: "exchange-order-1", ClientOrderID: "client-1", ExchangeSymbol: testSymbol,
 			Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet, Quantity: shared.MustDecimal("1"),
 			Price: shared.MustDecimal("100"), SettlementAsset: "USDT", TradedAt: tradedAt,
@@ -410,7 +410,7 @@ func TestPaperMatcherFillAtSnapshotCoveredMillisecondStillProjectsPosition(t *te
 	require.True(t, applied)
 	// 一次同步把持仓覆盖时间标记到这一毫秒
 	require.NoError(t, s.Transaction(context.Background(), func(tx *store.Tx) error {
-		position, found, getErr := tx.GetPosition(testSpace, testAccount, testSymbol, string(exchange.PositionSideNet))
+		position, found, getErr := tx.GetPosition(testSpace, testAccount, exchange.SymbolKey{Market: exchange.MarketTypeSwap, Symbol: testSymbol}, string(exchange.PositionSideNet))
 		require.NoError(t, getErr)
 		require.True(t, found)
 		position.ExchangeUpdatedAt = tradedAt.UnixMilli()

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,7 +18,9 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 	"gorm.io/gorm"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 var ErrServiceConfig = errors.New("trade account sync: service is not configured")
@@ -34,6 +37,12 @@ type SessionState interface {
 
 type Metrics interface {
 	Observe(tradingAccountID string, now time.Time, maxDifference float64, err error)
+}
+
+// EquityValuer 按统一权益公式（与权益采样同一个实现）算账户快照的权益。适配器给的 Equity 各按各的口径
+// （币安现货没有、合约是 totalMarginBalance、统一账户是 accountEquity、OKX 只有结算币 cashBal），不能直接落库展示。
+type EquityValuer interface {
+	ValueEquity(ctx context.Context, account store.TradingAccountRecord, snapshot store.TradingAccountSnapshot, prices execution.ReferencePriceSource) (string, error)
 }
 
 type Result struct {
@@ -61,6 +70,8 @@ type Snapshot struct {
 	PositionsReadAt time.Time
 	FillCursors     store.FillCursors
 	Ready           bool
+	// Prices 是读这份快照的适配器，按统一公式估权益时用它取受管现货的参考价；为空时不重算权益。
+	Prices execution.ReferencePriceSource
 }
 
 // positionLagGrace 是持仓滞后保护期：持仓接口可能比成交落后数秒，这段时间内的本地持仓不删、不被更旧的 REST 覆盖，
@@ -91,6 +102,7 @@ type Service struct {
 	Fills          *consumer.Reducer
 	Orders         *orderapp.Service
 	Metrics        Metrics
+	Equity         EquityValuer
 	Wake           func()
 	Now            func() time.Time
 	LateFillWindow time.Duration
@@ -193,7 +205,7 @@ func (s *Service) syncAccountLocked(
 	// 轻量同步不读全部挂单（永续 40 权重、现货 80 权重），挂单由私有流和对账维护。
 	var openOrders []exchange.Order
 	if mode != syncLight {
-		openOrders, err = adapter.ListOpenOrders(ctx)
+		openOrders, err = s.listOpenOrders(ctx, adapter, account, mode)
 		if err != nil {
 			result, failErr := s.fail(ctx, account, accountDependencyError(tradingAccountID, "list_open_orders", err))
 			return result, 0, failErr
@@ -224,14 +236,14 @@ func (s *Service) syncAccountLocked(
 	}
 	maxDifference := maxBalanceDifference(
 		account.Snapshot.Balances,
-		snapshotRecord(accountSnapshot).Balances,
+		store.SnapshotFromExchange(accountSnapshot).Balances,
 	)
 	instruments, err := s.Store.ListInstrumentsForAccount(ctx, account.TradingAccountID)
 	if err != nil {
 		result, failErr := s.fail(ctx, account, err)
 		return result, maxDifference, failErr
 	}
-	var symbols []string
+	var symbols []exchange.SymbolKey
 	switch mode {
 	case syncFull:
 		symbols, err = s.BoundedFullSymbols(ctx, account, openOrders, localOrders, positions, instruments, accountSnapshot)
@@ -247,35 +259,54 @@ func (s *Service) syncAccountLocked(
 	}
 	fills := make([]exchange.Fill, 0)
 	cursors := cloneCursors(account.FillCursors)
-	for _, symbol := range symbols {
-		rows, cursor, listErr := adapter.ListRecentFills(ctx, shared.ExchangeSymbol(symbol), cursors[symbol])
+	var warnings []string
+	var goneSymbols []exchange.SymbolKey
+	for _, key := range symbols {
+		rows, cursor, listErr := adapter.ListRecentFills(ctx, key, cursors[key.String()])
+		if exchange.IsInstrumentNotFound(listErr) {
+			// 交易所确认标的不存在（已下架）：没有成交可拉，跳过这个标的、记提示，不让整次同步失败。
+			// 未结束的单、成交缺口、成交游标、和交易所不一致的本地持仓都会把下架标的带进来，不跳过的话账户永远同步不过去。
+			// 成交游标原样保留：删掉的话标的一旦又查得到（误报、重新上市），币安会从 fromId=0 把全部历史成交重拉一遍。
+			// 这个标的上的成交缺口再也补不上，在入账快照之前收掉（见 settleGoneFillGaps）。
+			warnings = append(warnings, fmt.Sprintf("标的 %s 在交易所已不存在，跳过成交查询", key))
+			goneSymbols = append(goneSymbols, key)
+			continue
+		}
 		if listErr != nil {
 			result, failErr := s.fail(ctx, account, accountDependencyError(tradingAccountID, "list_fills", listErr))
 			return result, maxDifference, failErr
 		}
 		fills = append(fills, rows...)
 		if strings.TrimSpace(cursor) != "" {
-			cursors[symbol] = cursor
+			cursors[key.String()] = cursor
 		}
 	}
+	settledGaps, err := s.settleGoneFillGaps(ctx, account, goneSymbols)
+	if err != nil {
+		result, failErr := s.fail(ctx, account, err)
+		return result, maxDifference, failErr
+	}
+	warnings = append(warnings, settledGaps...)
 
 	orders := append([]exchange.Order(nil), openOrders...)
 	// 外部订单可能没有客户端订单号，挂单要同时按交易所订单号比对。
+	// 订单号是各市场各自的序列，现货和合约可能撞号，所以都带上市场。
 	openByClient := make(map[string]struct{}, len(openOrders))
 	openByExchange := make(map[string]struct{}, len(openOrders))
 	for _, current := range openOrders {
-		openByClient[current.ClientOrderID] = struct{}{}
-		openByExchange[current.ExchangeOrderID] = struct{}{}
+		openByClient[orderIdentityKey(current.Market, current.ClientOrderID)] = struct{}{}
+		openByExchange[orderIdentityKey(current.Market, current.ExchangeOrderID)] = struct{}{}
 	}
-	var missing []store.OrderRecord
+	var missing, gone []store.OrderRecord
 	for _, local := range localOrders {
 		if mode == syncLight || orderdomain.State(local.State).Terminal() {
 			continue
 		}
-		if _, found := openByClient[local.ClientOrderID]; found {
+		localMarket := exchange.MarketType(local.MarketType)
+		if _, found := openByClient[orderIdentityKey(localMarket, local.ClientOrderID)]; found {
 			continue
 		}
-		if _, found := openByExchange[local.ExchangeOrderID]; found && local.ExchangeOrderID != "" {
+		if _, found := openByExchange[orderIdentityKey(localMarket, local.ExchangeOrderID)]; found && local.ExchangeOrderID != "" {
 			continue
 		}
 		current, lookupErr := lookupLocalOrder(ctx, adapter, local)
@@ -285,6 +316,12 @@ func (s *Service) syncAccountLocked(
 		case exchange.IsKind(lookupErr, exchange.ErrorOrderNotFound):
 			if s.orderMissingOnExchange(local, lookupErr) {
 				missing = append(missing, local)
+			}
+			continue
+		case exchange.IsInstrumentNotFound(lookupErr):
+			// 标的已下架，这笔单再也查不到：能结束的按过期结束（见 closeInstrumentGone），其余跳过，都不让整次同步失败。
+			if s.instrumentGoneClosable(local) {
+				gone = append(gone, local)
 			}
 			continue
 		default:
@@ -299,11 +336,12 @@ func (s *Service) syncAccountLocked(
 	result, err := s.applySnapshot(ctx, account.TradingAccountID, Snapshot{
 		Fills: fills, Orders: orders, Positions: positions,
 		Account: accountSnapshot, AccountReadAt: accountReadAt, PositionsReadAt: positionsReadAt,
-		FillCursors: cursors, Ready: ready,
+		FillCursors: cursors, Ready: ready, Prices: adapter,
 	})
 	if err != nil {
 		return result, maxDifference, err
 	}
+	result.Warnings = append(result.Warnings, warnings...)
 	for _, local := range missing {
 		// 迟到成交仍可入账，领域模型允许已撤销订单继续应用成交。
 		if err := s.Fills.ConfirmCancel(ctx, local.SpaceID, local.OrderID); err != nil {
@@ -311,14 +349,120 @@ func (s *Service) syncAccountLocked(
 		}
 		result.Warnings = append(result.Warnings, fmt.Sprintf("订单 %s 在交易所已不存在，按已撤销处理", local.OrderID))
 	}
+	for _, local := range gone {
+		closed, err := s.closeInstrumentGone(ctx, local)
+		if err != nil {
+			return result, maxDifference, err
+		}
+		if !closed {
+			continue
+		}
+		result.OrdersUpdated++
+		result.Warnings = append(result.Warnings, fmt.Sprintf("订单 %s 的标的已下架，按过期结束，需人工核对", local.OrderID))
+		detail := fmt.Sprintf("执行账户 %s：订单 %s（%s %s）的标的已下架，交易所查不到，已按过期结束，需人工核对成交",
+			account.Name, local.OrderID, local.MarketType, local.ExchangeSymbol)
+		telemetry.Note(telemetry.AttentionOrdersInstrumentGone, detail, s.now())
+		log.WarnContextf(ctx, "交易关注项：%s", detail)
+	}
 	return result, maxDifference, nil
+}
+
+// InstrumentGoneReason 是标的已下架、交易所查不到的订单按过期结束时写进原因字段的说明，也是“需人工核对”的标记。
+const InstrumentGoneReason = "标的已下架，交易所查不到这笔单，成交以持仓/余额同步为准，需人工核对"
+
+// instrumentGoneClosable 报告交易所确认标的不存在时，这笔本地未结束订单能否直接按过期结束：发出过的单
+// （结果未知、挂单中、部分成交、撤单中、撤单结果未知）都算；提交中的要过了 5 分钟（避开正在进行的提交）；
+// 待提交的从没发到交易所，交给下单流程（提交时会被交易所拒绝）。
+func (s *Service) instrumentGoneClosable(local store.OrderRecord) bool {
+	switch orderdomain.State(local.State) {
+	case orderdomain.SubmitUnknown, orderdomain.Open, orderdomain.PartiallyFilled, orderdomain.Canceling, orderdomain.CancelUnknown:
+		return true
+	case orderdomain.Submitting:
+		since := local.CreatedAt
+		if submitted := time.UnixMilli(local.SubmittedAt); local.SubmittedAt > 0 && submitted.After(since) {
+			since = submitted
+		}
+		return !since.IsZero() && s.now().Sub(since) >= missingOrderGrace
+	}
+	return false
+}
+
+// closeInstrumentGone 把标的已下架、交易所查不到的订单落成 EXPIRED，原因写 InstrumentGoneReason，并释放剩余资金预留。
+// 这笔单到底成交了多少已经查不到：持仓、余额照常以交易所同步结果为准，迟到的成交仍可入账（领域模型允许已过期订单应用成交）。
+// 调用方持有账户锁；订单已经结束（例如私有流抢先更新）时不动，返回 false。
+func (s *Service) closeInstrumentGone(ctx context.Context, local store.OrderRecord) (bool, error) {
+	closed := false
+	err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
+		record, err := tx.GetOrder(local.SpaceID, local.OrderID)
+		if err != nil {
+			return err
+		}
+		if !s.instrumentGoneClosable(record) {
+			return nil
+		}
+		expected := record.Version
+		record.State = string(orderdomain.Expired)
+		record.RejectReason = InstrumentGoneReason
+		record.RemainingReservedQuantity = "0"
+		record.FinishedAt = s.now().UnixMilli()
+		record.Version++
+		closed = true
+		return tx.UpdateOrder(record, expected)
+	})
+	return closed && err == nil, err
+}
+
+// InstrumentGoneFillGapReason 是已下架标的上成交缺口被收掉时日志和关注项里的说明。
+const InstrumentGoneFillGapReason = "标的已下架，成交明细缺失，以持仓/余额同步为准"
+
+// settleGoneFillGaps 收掉已下架标的上的成交缺口：订单的观察累计成交量（下单回执、订单快照抬高的）领先已入账成交明细，
+// 而交易所对这个标的查成交只回“标的不存在”，明细再也补不上，不收掉的话账户每次同步都判有缺口、一直未就绪。
+// 在同一个事务里把这些标的上观察成交量大于已入账成交量的订单（含已结束的单）压回已入账值，每笔记关注项、写日志，
+// 要人工到交易所核对实际成交。必须在入账快照（applySnapshot）之前做，调用方持有账户锁。返回给同步结果的提示。
+func (s *Service) settleGoneFillGaps(ctx context.Context, account store.TradingAccountRecord, keys []exchange.SymbolKey) ([]string, error) {
+	if len(keys) == 0 {
+		return nil, nil
+	}
+	settled := make(map[exchange.SymbolKey][]string, len(keys))
+	err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
+		clear(settled)
+		for _, key := range keys {
+			ids, err := tx.SettleFillGapsOfGoneInstrument(account.SpaceID, account.TradingAccountID, key)
+			if err != nil {
+				return err
+			}
+			if len(ids) > 0 {
+				settled[key] = ids
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	var warnings []string
+	for _, key := range keys {
+		for _, orderID := range settled[key] {
+			warnings = append(warnings, fmt.Sprintf("订单 %s 的%s，成交缺口已收掉，需人工核对", orderID, InstrumentGoneFillGapReason))
+			detail := fmt.Sprintf("执行账户 %s：订单 %s（%s %s）%s，观察到的累计成交已压回已入账值，需人工核对成交",
+				account.Name, orderID, key.Market, key.Symbol, InstrumentGoneFillGapReason)
+			telemetry.Note(telemetry.AttentionOrdersInstrumentGone, detail, s.now())
+			log.WarnContextf(ctx, "交易关注项：%s", detail)
+		}
+	}
+	return warnings, nil
+}
+
+// orderIdentityKey 是“市场:订单号”，用于在同一批订单里按订单号去重或比对。
+func orderIdentityKey(market exchange.MarketType, id string) string {
+	return string(market) + ":" + id
 }
 
 func lookupLocalOrder(ctx context.Context, adapter execution.ExecutionAdapter, local store.OrderRecord) (exchange.Order, error) {
 	if local.ExchangeOrderID != "" {
-		return adapter.GetOrderByExchangeID(ctx, local.ExchangeSymbol, local.ExchangeOrderID)
+		return adapter.GetOrderByExchangeID(ctx, exchange.NewSymbolKey(local.MarketType, local.ExchangeSymbol), local.ExchangeOrderID)
 	}
-	return adapter.GetOrder(ctx, shared.ExchangeSymbol(local.ExchangeSymbol), local.ClientOrderID)
+	return adapter.GetOrder(ctx, exchange.NewSymbolKey(local.MarketType, local.ExchangeSymbol), local.ClientOrderID)
 }
 
 // orderMissingOnExchange 判断本地活动订单是否可以按已撤销处理。只认交易所明确的不存在错误码，
@@ -340,17 +484,20 @@ func (s *Service) orderMissingOnExchange(local store.OrderRecord, lookupErr erro
 }
 
 func maxBalanceDifference(before, after []store.AssetBalance) float64 {
-	previous := make(map[string]float64, len(before))
+	// 同一资产可能出现在多个钱包里，按（钱包，资产）比较。
+	type balanceKey struct{ wallet, asset string }
+	previous := make(map[balanceKey]float64, len(before))
 	for _, balance := range before {
-		previous[balance.Asset] = parseBalance(balance.Total)
+		previous[balanceKey{balance.Wallet, balance.Asset}] = parseBalance(balance.Total)
 	}
 	var maximum float64
 	for _, balance := range after {
+		key := balanceKey{balance.Wallet, balance.Asset}
 		current := parseBalance(balance.Total)
-		old := previous[balance.Asset]
+		old := previous[key]
 		denominator := math.Max(math.Abs(current), 1e-12)
 		maximum = max(maximum, math.Abs(current-old)/denominator)
-		delete(previous, balance.Asset)
+		delete(previous, key)
 	}
 	for _, old := range previous {
 		if old != 0 {
@@ -395,6 +542,23 @@ func (s *Service) ApplySnapshot(
 	}
 	s.wakeTargets()
 	return result, nil
+}
+
+// unifiedEquity 用统一公式重算刚采用的完整快照的权益。估值失败（例如受管现货暂时取不到价）不让同步失败：
+// 沿用上一次落库的权益，没有就保留适配器给的值，并写日志；下一轮同步再算。
+func (s *Service) unifiedEquity(ctx context.Context, account store.TradingAccountRecord, previous string, prices execution.ReferencePriceSource) string {
+	if s.Equity == nil || prices == nil {
+		return account.Snapshot.Equity
+	}
+	equity, err := s.Equity.ValueEquity(ctx, account, account.Snapshot, prices)
+	if err == nil {
+		return equity
+	}
+	log.WarnContextf(ctx, "账户 %s 按统一公式估算权益失败，沿用上一次的值：%v", account.TradingAccountID, err)
+	if previous != "" {
+		return previous
+	}
+	return account.Snapshot.Equity
 }
 
 func (s *Service) applySnapshot(
@@ -466,7 +630,12 @@ func (s *Service) applySnapshot(
 	}
 	// 空持仓/缺失持仓的删除边界：持仓列表是先于本轮成交读取的，不能用后取的余额时间当边界，
 	// 否则刚补录成交投影出的持仓会被当作“交易所没有”而删除。边界不晚于本轮最早成交之前。
+	// 边界取持仓读取时间：账户快照时间是各钱包里最早的（现货钱包几天没变动时会很旧），
+	// 用它会让交易所已经平掉（强平、ADL、手工平）的合约仓永远删不掉。
 	positionDeleteBefore := snapshot.Account.ExchangeUpdatedAt.UnixMilli()
+	if !snapshot.PositionsReadAt.IsZero() {
+		positionDeleteBefore = snapshot.PositionsReadAt.UnixMilli()
+	}
 	for _, fill := range snapshot.Fills {
 		if earliest := fill.TradedAt.UnixMilli() - 1; earliest < positionDeleteBefore {
 			positionDeleteBefore = earliest
@@ -506,7 +675,9 @@ func (s *Service) applySnapshot(
 		freshness = account.Snapshot.ExchangeUpdatedAt
 	}
 	if snapshotTime >= freshness {
-		account.Snapshot = snapshotRecord(snapshot.Account)
+		previousEquity := account.Snapshot.Equity
+		account.Snapshot = store.SnapshotFromExchange(snapshot.Account)
+		account.Snapshot.Equity = s.unifiedEquity(ctx, account, previousEquity, snapshot.Prices)
 		account.SnapshotSourceTime = snapshotTime
 		result.AccountSnapshotUpdated = true
 	} else {
@@ -528,7 +699,6 @@ func (s *Service) applySnapshot(
 	if latestErr != nil {
 		return Result{}, latestErr
 	}
-	pending := latest.BalancePendingUntil
 	// 订单累计成交仍领先本地成交明细时，余额没有被这些成交的明细解释，不能恢复准入（与水位是否为零无关：
 	// 首次导入的终态外部订单、由首笔成交触发的导入都可能在水位为零时留下缺口）。
 	gaps, gapErr := s.Store.CountOrdersWithFillGap(ctx, account.SpaceID, account.TradingAccountID)
@@ -539,15 +709,11 @@ func (s *Service) applySnapshot(
 	if hasGap {
 		result.Warnings = append(result.Warnings, fmt.Sprintf("%d 个订单的累计成交仍领先已入账的成交明细", gaps))
 	}
-	clearPending := result.AccountSnapshotUpdated && snapshotTime >= pending && !hasGap
-	// 现货持仓来自余额：内容比待确认水位旧的 REST 余额（交易所更新时间更早）不能恢复准入，
-	// 否则会按成交前的余额重复下单。读取时间更晚不代表内容更新。
-	if clearPending && pending > 0 && exchange.RuleFor(account.MarketType).PositionFromBalance &&
-		snapshot.Account.ExchangeUpdatedAt.UnixMilli() < pending {
-		clearPending = false
-	}
+	// 水位按钱包记：合约成交只让合约钱包等确认，现货钱包的余额不必追上它。
+	covered := coveredWallets(latest, snapshot.Account, snapshotTime, result.AccountSnapshotUpdated && !hasGap)
+	stillPending := len(latest.BalancePending) > len(covered)
 	readinessCause := ""
-	if (pending > 0 || hasGap) && !clearPending {
+	if stillPending || hasGap {
 		snapshot.Ready = false
 		result.Ready = false
 		result.BalancePending = true
@@ -557,7 +723,7 @@ func (s *Service) applySnapshot(
 	// LastSyncAt 同时是资金预留的抵扣边界：只有余额快照真正被采用且没有遗留待确认水位时才能推进；
 	// 否则已提交订单的预留会被误认为已反映在余额中，导致可用资金被高估。
 	syncBoundary := now
-	if (!result.AccountSnapshotUpdated || ((pending > 0 || hasGap) && !clearPending)) && account.LastSyncAt > 0 {
+	if (!result.AccountSnapshotUpdated || stillPending || hasGap) && account.LastSyncAt > 0 {
 		syncBoundary = account.LastSyncAt
 	}
 	err = s.Store.Transaction(ctx, func(tx *store.Tx) error {
@@ -571,8 +737,8 @@ func (s *Service) applySnapshot(
 		); err != nil {
 			return err
 		}
-		if clearPending && pending > 0 {
-			if err := tx.ClearBalancePendingThrough(account.SpaceID, account.TradingAccountID, snapshotTime); err != nil {
+		for _, wallet := range covered {
+			if err := tx.ClearBalancePendingThrough(account.SpaceID, account.TradingAccountID, wallet, snapshotTime); err != nil {
 				return err
 			}
 		}
@@ -588,6 +754,45 @@ func (s *Service) applySnapshot(
 		return Result{}, err
 	}
 	return result, nil
+}
+
+// coveredWallets 返回被本次完整余额快照覆盖的待确认钱包：快照读取时间不早于水位；
+// 钱包里放着现货持仓（持仓来自余额）时，余额内容的交易所更新时间也不能早于水位，
+// 否则会按成交前的余额重复下单。读取时间更晚不代表内容更新。
+func coveredWallets(
+	account store.TradingAccountRecord,
+	snapshot exchange.AccountSnapshot,
+	snapshotTime int64,
+	adopted bool,
+) []exchange.Wallet {
+	if !adopted {
+		return nil
+	}
+	var covered []exchange.Wallet
+	for name, until := range account.BalancePending {
+		wallet := exchange.Wallet(name)
+		if snapshotTime < until {
+			continue
+		}
+		if walletHoldsBalancePositions(account, wallet) {
+			contentTime := snapshot.ExchangeUpdatedAt
+			if at, found := snapshot.WalletUpdatedAt[wallet]; found {
+				contentTime = at
+			}
+			if contentTime.UnixMilli() < until {
+				continue
+			}
+		}
+		covered = append(covered, wallet)
+	}
+	return covered
+}
+
+// walletHoldsBalancePositions 报告钱包里是否放着持仓来自余额的市场（现货、股票）。
+func walletHoldsBalancePositions(account store.TradingAccountRecord, wallet exchange.Wallet) bool {
+	return slices.ContainsFunc(account.Markets, func(market string) bool {
+		return exchange.RuleFor(market).PositionFromBalance && account.WalletFor(market) == wallet
+	})
 }
 
 func (s *Service) resolveUnknownOrders(
@@ -728,7 +933,7 @@ func (s *Service) ApplyPosition(
 	}
 	return s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		if at := position.ExchangeUpdatedAt.UnixMilli(); at > 0 {
-			if err := tx.RaiseBalancePending(account.SpaceID, account.TradingAccountID, at); err != nil {
+			if err := tx.RaiseBalancePending(account.SpaceID, account.TradingAccountID, account.WalletFor(string(position.Market)), at); err != nil {
 				return err
 			}
 		}
@@ -740,6 +945,25 @@ func (s *Service) ApplyPosition(
 			"private position update awaiting sync",
 		)
 	})
+}
+
+// privateUpdateWallets 返回私有账户更新涉及的钱包：快照里出现的钱包；快照没带余额明细时，账户所有市场的钱包都要等确认。
+func privateUpdateWallets(account store.TradingAccountRecord, snapshot exchange.AccountSnapshot) []exchange.Wallet {
+	var wallets []exchange.Wallet
+	add := func(wallet exchange.Wallet) {
+		if wallet.Valid() && !slices.Contains(wallets, wallet) {
+			wallets = append(wallets, wallet)
+		}
+	}
+	for _, balance := range snapshot.Balances {
+		add(balance.Wallet)
+	}
+	if len(wallets) == 0 {
+		for _, market := range account.Markets {
+			add(account.WalletFor(market))
+		}
+	}
+	return wallets
 }
 
 func (s *Service) ApplyAccountSnapshot(
@@ -777,8 +1001,10 @@ func (s *Service) ApplyAccountSnapshot(
 			}
 		}
 		// 私有更新只合并了部分字段：完整余额快照覆盖这个时间之前，不能恢复准入
-		if err := tx.RaiseBalancePending(account.SpaceID, account.TradingAccountID, snapshot.ExchangeUpdatedAt.UnixMilli()); err != nil {
-			return err
+		for _, wallet := range privateUpdateWallets(account, snapshot) {
+			if err := tx.RaiseBalancePending(account.SpaceID, account.TradingAccountID, wallet, snapshot.ExchangeUpdatedAt.UnixMilli()); err != nil {
+				return err
+			}
 		}
 		return tx.UpdateTradingAccountReadiness(
 			account.SpaceID,
@@ -833,7 +1059,7 @@ func (s *Service) setReady(
 	if cause != nil && !errors.Is(cause, context.Canceled) {
 		lastError = cause.Error()
 	}
-	if ready && account.BalancePendingUntil > 0 {
+	if ready && account.HasBalancePending() {
 		// 还有未被完整余额快照覆盖的成交或私有更新：不能仅凭会话就绪恢复准入
 		ready, lastError = false, awaitingBalanceReason
 	}
@@ -889,7 +1115,7 @@ func (s *Service) ensureOrderForFill(
 			ctx,
 			account.SpaceID,
 			account.TradingAccountID,
-			fill.ExchangeSymbol,
+			exchange.SymbolKey{Market: fill.Market, Symbol: fill.ExchangeSymbol},
 			fill.ExchangeOrderID,
 		); err == nil {
 			return record.OwnerType == string(orderdomain.OwnerExternal), nil
@@ -902,6 +1128,7 @@ func (s *Service) ensureOrderForFill(
 			ctx,
 			account.SpaceID,
 			account.TradingAccountID,
+			fill.Market,
 			fill.ClientOrderID,
 		); err == nil {
 			return record.OwnerType == string(orderdomain.OwnerExternal), nil
@@ -916,9 +1143,9 @@ func (s *Service) ensureOrderForFill(
 	var current exchange.Order
 	var lookupErr error
 	if fill.ClientOrderID != "" {
-		current, lookupErr = adapter.GetOrder(ctx, shared.ExchangeSymbol(fill.ExchangeSymbol), fill.ClientOrderID)
+		current, lookupErr = adapter.GetOrder(ctx, exchange.NewSymbolKey(fill.Market, fill.ExchangeSymbol), fill.ClientOrderID)
 	} else {
-		current, lookupErr = adapter.GetOrderByExchangeID(ctx, fill.ExchangeSymbol, fill.ExchangeOrderID)
+		current, lookupErr = adapter.GetOrderByExchangeID(ctx, exchange.NewSymbolKey(fill.Market, fill.ExchangeSymbol), fill.ExchangeOrderID)
 	}
 	if lookupErr != nil {
 		if !exchange.IsKind(lookupErr, exchange.ErrorOrderNotFound) {
@@ -929,7 +1156,7 @@ func (s *Service) ensureOrderForFill(
 		}
 		current = exchange.Order{
 			ExchangeOrderID: fill.ExchangeOrderID, ClientOrderID: fill.ClientOrderID,
-			ExchangeSymbol: fill.ExchangeSymbol, OrderType: exchange.OrderTypeMarket,
+			Market: fill.Market, ExchangeSymbol: fill.ExchangeSymbol, OrderType: exchange.OrderTypeMarket,
 			Side: fill.Side, PositionSide: fill.PositionSide,
 			Quantity: syntheticQuantity, Status: exchange.OrderStatusOpen,
 			CreatedAt: fill.TradedAt, UpdatedAt: fill.TradedAt,
@@ -939,6 +1166,7 @@ func (s *Service) ensureOrderForFill(
 	// lookup adapters return a cached order without the requested symbol (or
 	// with a stale one); never let that collapse fills from two instruments.
 	current.ExchangeSymbol = fill.ExchangeSymbol
+	current.Market = fill.Market
 	batchFilled := syntheticQuantity
 	if batchFilled.Cmp(shared.Zero()) <= 0 {
 		batchFilled = fill.Quantity
@@ -955,10 +1183,10 @@ func (s *Service) ensureOrderForFill(
 
 func fillBatchKey(fill exchange.Fill) string {
 	if fill.ExchangeOrderID != "" {
-		return fill.ExchangeSymbol + "\x00exchange\x00" + fill.ExchangeOrderID
+		return string(fill.Market) + "\x00" + fill.ExchangeSymbol + "\x00exchange\x00" + fill.ExchangeOrderID
 	}
 	if fill.ClientOrderID != "" {
-		return fill.ExchangeSymbol + "\x00client\x00" + fill.ClientOrderID
+		return string(fill.Market) + "\x00" + fill.ExchangeSymbol + "\x00client\x00" + fill.ClientOrderID
 	}
 	return ""
 }
@@ -976,6 +1204,7 @@ func (s *Service) applyOrder(
 			ctx,
 			account.SpaceID,
 			account.TradingAccountID,
+			current.Market,
 			current.ClientOrderID,
 		)
 	case current.ExchangeOrderID != "":
@@ -983,7 +1212,7 @@ func (s *Service) applyOrder(
 			ctx,
 			account.SpaceID,
 			account.TradingAccountID,
-			current.ExchangeSymbol,
+			exchange.SymbolKey{Market: current.Market, Symbol: current.ExchangeSymbol},
 			current.ExchangeOrderID,
 		)
 	default:
@@ -1051,7 +1280,7 @@ func (s *Service) observeOrderFills(
 		if !ahead {
 			return nil
 		}
-		if err := tx.RaiseBalancePending(account.SpaceID, account.TradingAccountID, until); err != nil {
+		if err := tx.RaiseBalancePending(account.SpaceID, account.TradingAccountID, account.WalletFor(record.MarketType), until); err != nil {
 			return err
 		}
 		return tx.UpdateTradingAccountReadiness(
@@ -1163,20 +1392,22 @@ func (s *Service) importExternalOrder(
 ) (store.OrderRecord, error) {
 	if strings.TrimSpace(current.ExchangeOrderID) == "" ||
 		strings.TrimSpace(current.ExchangeSymbol) == "" ||
+		!current.Market.Valid() ||
+		!account.SupportsMarket(string(current.Market)) ||
 		!current.Side.Valid() ||
 		current.Quantity.Cmp(shared.Zero()) <= 0 {
 		return store.OrderRecord{}, fmt.Errorf("trade account sync: incomplete external order")
 	}
 	clientOrderID := current.ClientOrderID
 	if strings.TrimSpace(clientOrderID) == "" {
-		clientOrderID = "external-" + current.ExchangeSymbol + "-" + current.ExchangeOrderID
+		clientOrderID = "external-" + string(current.Market) + "-" + current.ExchangeSymbol + "-" + current.ExchangeOrderID
 	}
 	environment := account.Environment
 	if account.ExecutionMode == "PAPER" || environment == "" {
 		environment = "PRODUCTION"
 	}
 	instrument, err := s.Store.GetInstrumentInEnvironment(
-		ctx, account.Exchange, environment, account.MarketType, current.ExchangeSymbol,
+		ctx, account.Exchange, environment, string(current.Market), current.ExchangeSymbol,
 	)
 	if err != nil {
 		return store.OrderRecord{}, err
@@ -1208,7 +1439,7 @@ func (s *Service) importExternalOrder(
 	} else {
 		tif = exchange.TimeInForceUnspecified
 	}
-	positionSide := exchange.RuleFor(account.MarketType).PositionSide
+	positionSide := exchange.RuleFor(current.Market).PositionSide
 	referenceAt := current.CreatedAt
 	if referenceAt.IsZero() {
 		referenceAt = current.UpdatedAt
@@ -1238,11 +1469,11 @@ func (s *Service) importExternalOrder(
 	}
 	record := store.OrderRecord{
 		SpaceID: account.SpaceID,
-		OrderID: "external:" + account.TradingAccountID + ":" +
+		OrderID: "external:" + account.TradingAccountID + ":" + string(current.Market) + ":" +
 			current.ExchangeSymbol + ":" + current.ExchangeOrderID,
 		TradingAccountID: account.TradingAccountID,
 		ClientOrderID:    clientOrderID, ExchangeOrderID: current.ExchangeOrderID,
-		Exchange: account.Exchange, MarketType: account.MarketType,
+		Exchange: account.Exchange, MarketType: string(current.Market),
 		ExchangeSymbol: current.ExchangeSymbol, OrderType: string(orderType),
 		TimeInForce: string(tif), Side: string(current.Side),
 		PositionSide: string(positionSide), Quantity: current.Quantity.String(),
@@ -1263,6 +1494,7 @@ func (s *Service) importExternalOrder(
 			ctx,
 			account.SpaceID,
 			account.TradingAccountID,
+			current.Market,
 			clientOrderID,
 		)
 	}
@@ -1415,58 +1647,48 @@ func cloneCursors(current store.FillCursors) store.FillCursors {
 	return result
 }
 
-func snapshotRecord(snapshot exchange.AccountSnapshot) store.TradingAccountSnapshot {
-	balances := make([]store.AssetBalance, 0, len(snapshot.Balances))
-	for _, balance := range snapshot.Balances {
-		balances = append(balances, store.AssetBalance{
-			Asset: balance.Asset, Available: balance.Available.String(),
-			Locked: balance.Locked.String(), Total: balance.Total.String(),
-		})
-	}
-	return store.TradingAccountSnapshot{
-		Balances: balances, Equity: snapshot.Equity.String(),
-		AvailableFunds:    snapshot.AvailableFunds.String(),
-		UsedMargin:        snapshot.UsedMargin.String(),
-		MaintenanceMargin: snapshot.MaintenanceMargin.String(),
-		UnrealizedPnL:     snapshot.UnrealizedPnL.String(),
-		ExchangeUpdatedAt: snapshot.ExchangeUpdatedAt.UnixMilli(),
-	}
-}
-
 func mergePrivateSnapshot(
 	current store.TradingAccountSnapshot,
 	update exchange.AccountSnapshot,
 ) store.TradingAccountSnapshot {
-	incoming := snapshotRecord(update)
+	incoming := store.SnapshotFromExchange(update)
 	if update.Present.Balances {
+		type balanceKey struct{ wallet, asset string }
 		balances := make(
-			map[string]store.AssetBalance,
+			map[balanceKey]store.AssetBalance,
 			len(current.Balances)+len(incoming.Balances),
 		)
-		order := make([]string, 0, len(current.Balances)+len(incoming.Balances))
+		order := make([]balanceKey, 0, len(current.Balances)+len(incoming.Balances))
 		for _, balance := range current.Balances {
-			if _, found := balances[balance.Asset]; !found {
-				order = append(order, balance.Asset)
+			key := balanceKey{balance.Wallet, balance.Asset}
+			if _, found := balances[key]; !found {
+				order = append(order, key)
 			}
-			balances[balance.Asset] = balance
+			balances[key] = balance
 		}
 		for _, balance := range incoming.Balances {
-			if _, found := balances[balance.Asset]; !found {
-				order = append(order, balance.Asset)
+			key := balanceKey{balance.Wallet, balance.Asset}
+			if _, found := balances[key]; !found {
+				order = append(order, key)
 			}
-			balances[balance.Asset] = balance
+			balances[key] = balance
+			// 私有流只带来部分钱包的余额：这些钱包的更新时间跟着推进，其他钱包保持原样。
+			if current.WalletUpdatedAt == nil {
+				current.WalletUpdatedAt = make(map[string]int64)
+			}
+			current.WalletUpdatedAt[balance.Wallet] = incoming.ExchangeUpdatedAt
 		}
 		current.Balances = current.Balances[:0]
-		for _, asset := range order {
-			current.Balances = append(current.Balances, balances[asset])
+		for _, key := range order {
+			current.Balances = append(current.Balances, balances[key])
 		}
 	}
+	// 权益不跟私有推送：推送里的 Equity 是适配器口径，统一权益由随后的完整同步按公式重算。
 	for _, field := range []struct {
 		present     bool
 		destination *string
 		source      string
 	}{
-		{update.Present.Equity, &current.Equity, incoming.Equity},
 		{update.Present.AvailableFunds, &current.AvailableFunds, incoming.AvailableFunds},
 		{update.Present.UsedMargin, &current.UsedMargin, incoming.UsedMargin},
 		{
@@ -1480,6 +1702,10 @@ func mergePrivateSnapshot(
 			*field.destination = field.source
 		}
 	}
+	if update.Present.MaintenanceMargin {
+		// 维持保证金被私有事件更新了，上一次完整读到的 uniMMR 已经过期：清掉，监控退回用权益和维持保证金自己算。
+		current.UniMMR = ""
+	}
 	current.ExchangeUpdatedAt = incoming.ExchangeUpdatedAt
 	return current
 }
@@ -1491,7 +1717,7 @@ func positionRecord(
 	exchangeSymbol := position.ExchangeSymbol
 	return store.PositionRecord{
 		SpaceID: account.SpaceID, TradingAccountID: account.TradingAccountID,
-		InstrumentID: position.InstrumentID, ExchangeSymbol: exchangeSymbol,
+		MarketType: string(position.Market), InstrumentID: position.InstrumentID, ExchangeSymbol: exchangeSymbol,
 		PositionSide:   string(position.PositionSide),
 		SignedQuantity: position.SignedQuantity.String(),
 		EntryPrice:     position.EntryPrice.String(), MarkPrice: position.MarkPrice.String(),

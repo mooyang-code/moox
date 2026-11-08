@@ -33,17 +33,19 @@ type importOptions struct {
 	Subject              string
 	TimeColumn           string
 	SeriesTag            string
-	BatchRows            int
-	AllowMissing         bool
-	Recalc               bool
-	DryRun               bool
-	Targets              []string
-	Manifest             string
-	AuthFile             string
-	ViewID               string
-	Engine               string
-	JobDB                string
-	JobID                string
+	// FileSeriesTags 是导入包清单里文件单独指定的 series_tag（文件路径 → tag）。
+	FileSeriesTags map[string]string
+	BatchRows      int
+	AllowMissing   bool
+	Recalc         bool
+	DryRun         bool
+	Targets        []string
+	Manifest       string
+	AuthFile       string
+	ViewID         string
+	Engine         string
+	JobDB          string
+	JobID          string
 	// TailRows 与 Pack、MinRows 见初始数据导入执行计划：Storage 只写每个文件最后 TailRows 行（且在保留期内）、
 	// 按导入包清单预检、要求每个文件至少 MinRows 行。
 	TailRows int
@@ -211,7 +213,7 @@ func runImportCommand(ctx context.Context, opts importOptions) error {
 	defer cps.Close()
 	request := runner.Request{
 		Space: opts.Space, Dataset: opts.Dataset, Freq: opts.Freq, Paths: opts.Paths, Format: opts.Format, Subject: opts.Subject,
-		TimeColumn: opts.TimeColumn, SeriesTag: opts.SeriesTag, BatchRows: opts.BatchRows, AllowMissing: opts.AllowMissing,
+		TimeColumn: opts.TimeColumn, SeriesTag: opts.SeriesTag, FileSeriesTags: opts.FileSeriesTags, BatchRows: opts.BatchRows, AllowMissing: opts.AllowMissing,
 		Recalc: opts.Recalc, DryRun: opts.DryRun, JobID: opts.JobID, Step: step,
 		TailRows: opts.TailRows, TailCutoff: limits.tailCutoff(),
 	}
@@ -244,7 +246,7 @@ func writeImportSummary(summary runner.Summary) error {
 	return encoder.Encode(summary)
 }
 
-// applyImportPack 从导入包清单补全空间、数据集、频率、series_tag 与文件清单；命令行同时给了不一致的值就拒绝。
+// applyImportPack 从导入包清单补全空间、数据集、频率、series_tag（文件可单独指定）与文件清单；命令行同时给了不一致的值就拒绝。
 func applyImportPack(opts *importOptions) (*importPack, error) {
 	pack, err := loadImportPack(opts.Pack)
 	if err != nil {
@@ -271,6 +273,7 @@ func applyImportPack(opts *importOptions) (*importPack, error) {
 		return nil, errors.New("用了 --pack 必须同时给 --min-rows（该数据源的回看数量，见因子引擎 engine.yaml：7×24 市场 window.lookback，有交易时段的市场 window.session_lookback，有 lookback_overrides 时取覆盖值）：行数不够时因子窗口凑不满，这是预检的硬约束")
 	}
 	opts.Paths = pack.paths()
+	opts.FileSeriesTags = pack.fileSeriesTags()
 	return pack, nil
 }
 

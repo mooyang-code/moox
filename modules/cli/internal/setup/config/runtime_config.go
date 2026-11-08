@@ -55,6 +55,15 @@ func RenderCollectorRuntimeConfig(snapshot *Snapshot, existing []byte) ([]byte, 
 	if err != nil {
 		return nil, err
 	}
+	// 下架自动检测要经出口代理访问币安、OKX：没配海外机时关掉，免得三个来源一直失败；手工登记不受影响。
+	// 只替换模板里已有的 delist 段、不新增：新版 Collector 的模板（config/app.yaml）自带这一段，全新安装照常写入；
+	// 旧版 Collector 的配置没有这一段、也不认识它，渲染时新增会让还没换二进制的 Collector 启动失败。
+	rendered, err = replaceExistingYAMLMapping(rendered, "delist", orderedMapping(
+		mappingField{"auto_detect", snapshot.Manifest.HasEgressProxy()},
+	))
+	if err != nil {
+		return nil, err
+	}
 	rendered, err = replaceYAMLMapping(rendered, "scf_region_blacklists", nil)
 	if err != nil {
 		return nil, err
@@ -189,6 +198,18 @@ func orderedMapping(fields ...mappingField) *yaml.Node {
 		node.Content = append(node.Content, scalarNode(field.key), valueNode(field.value))
 	}
 	return node
+}
+
+// replaceExistingYAMLMapping 只替换顶层已有的键；没有这个键时原样返回，不新增。
+func replaceExistingYAMLMapping(existing []byte, key string, value *yaml.Node) ([]byte, error) {
+	var top map[string]any
+	if err := yaml.Unmarshal(existing, &top); err != nil {
+		return nil, fmt.Errorf("runtime_config: parse yaml: %w", err)
+	}
+	if _, ok := top[key]; !ok {
+		return existing, nil
+	}
+	return replaceYAMLMapping(existing, key, value)
 }
 
 func replaceYAMLMapping(existing []byte, key string, value *yaml.Node) ([]byte, error) {

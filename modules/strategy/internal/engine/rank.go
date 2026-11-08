@@ -132,6 +132,11 @@ func evaluateRank(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous R
 		// 含冻结成员的批次延后重建：冻结成员不在候选里，现在重建会丢掉它的份额，保持结束后它就会被卖掉。
 		// 延后期间不推进批次的 EstablishedBar，保持解除后由「已满 bars 根未重建」的补建逻辑重建，建仓序号仍按 offset 对齐。
 		rebuild = withoutFrozenBatches(rebuild, previous, sets.frozen)
+		if sets.waived {
+			// 不守门的一期没有可用候选，重建会建出空批次（首根 ok bar 上全部批次都是空的），永续恢复后要等各批次到期才配满；
+			// 这一期不重建，沿用上期批次，到期没重建的批次在之后第一根 ok bar 上补建。
+			rebuild = nil
+		}
 	}
 	// 本期要用分数选择时（普通规则，或 holding 要建仓、补建批次的 bar），分数全部无效说明表达式本身有问题；
 	// holding 的其余 bar 只延续批次、不使用本期分数，不能因此整期跳过。

@@ -40,9 +40,8 @@ export default {
     ["strategy-detail"]: "strategy detail",
     ["compute-collector"]: "data collection",
     ["collector-tasks"]: "collection tasks",
-    ["trading-accounts"]: "account overview",
-    ["trading-positions"]: "positions",
-    ["trading-orders"]: "orders",
+    ["trading-accounts"]: "trading accounts",
+    ["trading-account-detail"]: "trading account detail",
     ["ops"]: "operations",
     ["ops-monitor"]: "monitoring and alerts",
     ["ops-deployments"]: "service deployments",
@@ -51,6 +50,7 @@ export default {
     ["ops-activity"]: "activity log",
     ["settings"]: "settings",
     ["settings-spaces"]: "spaces",
-    ["settings-secrets"]: "secrets"
+    ["settings-secrets"]: "secrets",
+    ["settings-events"]: "event center"
   }
 };

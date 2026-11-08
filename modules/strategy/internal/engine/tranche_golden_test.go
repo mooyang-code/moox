@@ -77,7 +77,7 @@ func TestTrancheMatchesReferenceGolden(t *testing.T) {
 		t.Run(golden.Name, func(t *testing.T) {
 			strategy, err := dsl.Parse([]byte(golden.DSL))
 			require.NoError(t, err)
-			program, err := dsl.Compile(strategy, columns)
+			program, err := compileMode(strategy, columns)
 			require.NoError(t, err)
 			rule := &program.Rules[0]
 			var state RuleState

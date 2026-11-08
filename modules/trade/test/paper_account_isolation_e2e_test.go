@@ -33,7 +33,7 @@ func TestPaperAccountIsolationWithProductionDeciderE2E(t *testing.T) {
 			markets := map[string]*fakeExchange{}
 			accounts := map[string]store.TradingAccountRecord{}
 			for _, id := range []string{"a", "b"} {
-				account := store.TradingAccountRecord{SpaceID: testSpace, TradingAccountID: id, Name: id, Exchange: "BINANCE", MarketType: "SPOT", ExecutionMode: "PAPER", SettlementAsset: "USDT", Status: "ENABLED"}
+				account := store.TradingAccountRecord{SpaceID: testSpace, TradingAccountID: id, Name: id, Exchange: "BINANCE", Markets: []string{"SPOT"}, ExecutionMode: "PAPER", SettlementAsset: "USDT", Status: "ENABLED"}
 				require.NoError(t, s.Transaction(ctx, func(tx *store.Tx) error { return tx.CreateTradingAccount(account) }))
 				account, err = s.GetTradingAccountByID(ctx, id)
 				require.NoError(t, err)

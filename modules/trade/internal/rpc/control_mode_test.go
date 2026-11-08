@@ -17,7 +17,7 @@ func TestLogicalAccountControlModeRPC(t *testing.T) {
 			s := openRPCStore(t)
 			h := &LogicalAccountServer{LogicalAccounts: &logicalapp.Service{Store: s}, Store: s, NewID: func() string { return "logical-1" }}
 			ctx := spacecontext.WithSpaceID(context.Background(), "space-1")
-			rsp, err := h.CreateLogicalAccount(ctx, &tradepb.CreateLogicalAccountReq{Name: "account", ExecutionMode: tradepb.ExecutionMode_EXECUTION_MODE_PAPER, MarketType: tradepb.MarketType_MARKET_TYPE_SPOT, SettlementAsset: "USDT", ControlMode: mode})
+			rsp, err := h.CreateLogicalAccount(ctx, &tradepb.CreateLogicalAccountReq{Name: "account", ExecutionMode: tradepb.ExecutionMode_EXECUTION_MODE_PAPER, SettlementAsset: "USDT", ControlMode: mode})
 			require.NoError(t, err)
 			if mode == 99 {
 				require.Equal(t, tradepb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
@@ -49,7 +49,7 @@ func TestPaperSimulationControlModeRPC(t *testing.T) {
 			s := openRPCStore(t)
 			h := &ConsoleServer{Store: s, LogicalAccountServer: &LogicalAccountServer{Store: s, LogicalAccounts: &logicalapp.Service{Store: s}}, Paper: &papersimulation.Service{Store: s}}
 			ctx := spacecontext.WithSpaceID(context.Background(), "space-1")
-			rsp, err := h.CreatePaperSimulation(ctx, &tradepb.CreatePaperSimulationReq{AccountName: "paper", LogicalAccountName: "logical", Exchange: tradepb.Exchange_EXCHANGE_BINANCE, MarketType: tradepb.MarketType_MARKET_TYPE_SPOT, SettlementAsset: "USDT", InitialBalance: "1000", MakerFeeRate: "0", TakerFeeRate: "0", SlippageBps: "0", ControlMode: mode})
+			rsp, err := h.CreatePaperSimulation(ctx, &tradepb.CreatePaperSimulationReq{AccountName: "paper", LogicalAccountName: "logical", Exchange: tradepb.Exchange_EXCHANGE_BINANCE, Markets: []tradepb.MarketType{tradepb.MarketType_MARKET_TYPE_SPOT}, SettlementAsset: "USDT", InitialBalance: "1000", MakerFeeRate: "0", TakerFeeRate: "0", SlippageBps: "0", ControlMode: mode})
 			require.NoError(t, err)
 			if mode == 99 {
 				require.Equal(t, tradepb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
@@ -75,7 +75,7 @@ func TestManualControlModeClaimConflictIsConsistent(t *testing.T) {
 	db := openRPCStore(t)
 	ctx := spacecontext.WithSpaceID(context.Background(), "space-1")
 	h := &LogicalAccountServer{Store: db, LogicalAccounts: &logicalapp.Service{Store: db}, NewID: func() string { return "manual-1" }}
-	created, err := h.CreateLogicalAccount(ctx, &tradepb.CreateLogicalAccountReq{Name: "manual", ExecutionMode: tradepb.ExecutionMode_EXECUTION_MODE_PAPER, MarketType: tradepb.MarketType_MARKET_TYPE_SPOT, SettlementAsset: "USDT", ControlMode: tradepb.ControlMode_CONTROL_MODE_MANUAL})
+	created, err := h.CreateLogicalAccount(ctx, &tradepb.CreateLogicalAccountReq{Name: "manual", ExecutionMode: tradepb.ExecutionMode_EXECUTION_MODE_PAPER, SettlementAsset: "USDT", ControlMode: tradepb.ControlMode_CONTROL_MODE_MANUAL})
 	require.NoError(t, err)
 	require.Equal(t, tradepb.ErrorCode_SUCCESS, created.GetRetInfo().GetCode())
 	before, err := db.GetLogicalAccount(ctx, "space-1", "manual-1")

@@ -31,25 +31,45 @@ rules:
 
 // fakeResolver 按因子任务返回固定的解析结果；swap 结尾的任务视为合约。view 是回放区间校验使用的覆盖范围。
 type fakeResolver struct {
-	calls       int
-	bound       []string
-	err         error
-	columns     []string
-	loaded      input.Loaded
-	loadErr     error
-	view        input.ViewInfo
-	coverageErr error
+	calls         int
+	taskMarkets   map[string]string
+	taskMarketErr error
+	// resolvedTasks 记下最近一次 Resolve 收到的任务（按市场先后）。
+	resolvedTasks []string
+	bound         []string
+	err           error
+	columns       []string
+	loaded        input.Loaded
+	loadErr       error
+	view          input.ViewInfo
+	coverageErr   error
 	// onResolve 在每次解析开始时调用，用来模拟解析期间的并发修改。
 	onResolve func()
 	// calendar 非空时解析结果使用该日历的日线（例如 cn_stock）。
 	calendar string
 }
 
+// TaskMarket：后缀 swap 的任务是永续，其余现货；taskMarkets 里登记的优先。
+func (f *fakeResolver) TaskMarket(_ context.Context, _, taskID string) (string, error) {
+	if market, ok := f.taskMarkets[taskID]; ok {
+		return market, nil
+	}
+	if f.taskMarketErr != nil {
+		return "", f.taskMarketErr
+	}
+	if strings.HasSuffix(taskID, "swap") {
+		return "swap", nil
+	}
+	return "spot", nil
+}
+
 func (f *fakeResolver) CheckCoverage(context.Context, string, input.Resolved, time.Time) error {
 	return f.coverageErr
 }
 
-func (f *fakeResolver) Resolve(_ context.Context, _, taskID string, strategy dsl.Strategy) (input.Resolved, *dsl.Program, error) {
+func (f *fakeResolver) Resolve(_ context.Context, _ string, taskIDs []string, strategy dsl.Strategy) (input.Resolved, *dsl.Program, error) {
+	taskID := taskIDs[0]
+	f.resolvedTasks = taskIDs
 	f.calls++
 	if f.onResolve != nil {
 		f.onResolve()
@@ -61,20 +81,30 @@ func (f *fakeResolver) Resolve(_ context.Context, _, taskID string, strategy dsl
 	if columns == nil {
 		columns = []string{"close"}
 	}
+	// 一个任务：后缀 swap 的是永续，其余现货；两个任务：现货、永续各一个，市场模式是 both/spot。
+	mode := dsl.SingleMarket("spot")
+	if strings.HasSuffix(taskID, "swap") {
+		mode = dsl.SingleMarket("swap")
+	}
+	tasks := map[string]input.TaskBinding{}
+	for i, id := range taskIDs {
+		viewID, err := input.ViewIDOfTask(id)
+		if err != nil {
+			return input.Resolved{}, nil, err
+		}
+		market := mode.Select
+		if len(taskIDs) == 2 {
+			market = []string{"spot", "swap"}[i]
+			mode = dsl.Market{Select: dsl.MarketBoth, Prefer: dsl.MarketSpot}
+		}
+		tasks[market] = input.TaskBinding{ViewID: viewID, FactorTaskID: id, DatasetID: "ds"}
+	}
+	strategy.Market = mode
 	program, err := dsl.Compile(strategy, columns)
 	if err != nil {
 		return input.Resolved{}, nil, err
 	}
-	viewID, err := input.ViewIDOfTask(taskID)
-	if err != nil {
-		return input.Resolved{}, nil, err
-	}
-	spot := !strings.HasSuffix(taskID, "swap")
-	marketType := "spot"
-	if !spot {
-		marketType = "swap"
-	}
-	resolved := input.Resolved{ViewID: viewID, FactorTaskID: taskID, DatasetID: "ds", Bar: "1h", Calendar: input.DefaultCalendar, Spot: spot, MarketType: marketType, Columns: map[string]input.ColumnBinding{}, Factors: map[string]string{}, ViewColumns: columns}
+	resolved := input.Resolved{Market: mode, Tasks: tasks, Bar: "1h", Calendar: input.DefaultCalendar, Columns: map[string]input.ColumnBinding{}, Factors: map[string]string{}, ViewColumns: columns}
 	if f.calendar != "" {
 		resolved.Calendar, resolved.Bar = f.calendar, "1d"
 	}
@@ -82,18 +112,23 @@ func (f *fakeResolver) Resolve(_ context.Context, _, taskID string, strategy dsl
 }
 
 // ResolveInstance 记下启用时关联任务的实例，其余与 Resolve 相同。
-func (f *fakeResolver) ResolveInstance(ctx context.Context, instanceID, spaceID, taskID string, strategy dsl.Strategy) (input.Resolved, *dsl.Program, error) {
-	f.bound = append(f.bound, instanceID+"@"+taskID)
-	return f.Resolve(ctx, spaceID, taskID, strategy)
+func (f *fakeResolver) ResolveInstance(ctx context.Context, instanceID, spaceID string, tasks map[string]string, strategy dsl.Strategy) (input.Resolved, *dsl.Program, error) {
+	taskIDs := input.TaskIDs(tasks)
+	f.bound = append(f.bound, instanceID+"@"+taskIDs[0])
+	return f.Resolve(ctx, spaceID, taskIDs, strategy)
 }
 
 func (f *fakeResolver) LoadLatest(context.Context, string, input.Resolved, *dsl.Program, time.Time) (input.Loaded, error) {
 	return f.loaded, f.loadErr
 }
 
-func (f *fakeResolver) ReplayWindow(_ context.Context, _ string, resolved input.Resolved, program *dsl.Program, start, end, now time.Time) (time.Time, string, error) {
+func (f *fakeResolver) ReplayWindow(_ context.Context, _ string, resolved input.Resolved, program *dsl.Program, start, end, now time.Time) (time.Time, map[string]string, error) {
 	end, err := input.ReplayWindow(resolved, program, f.view, start, end, now)
-	return end, f.view.Generation, err
+	generations := make(map[string]string, len(resolved.Tasks))
+	for market := range resolved.Tasks {
+		generations[market] = f.view.Generation
+	}
+	return end, generations, err
 }
 
 // fakeOwner 记录认领与释放；claimErr 让下一次认领失败。
@@ -108,7 +143,7 @@ type fakeOwner struct {
 	onRelease func(instance, session string)
 }
 
-func (f *fakeOwner) ClaimSession(_ context.Context, _, account, instance, session, _ string) error {
+func (f *fakeOwner) ClaimSession(_ context.Context, _, account, instance, session string, _ []string) error {
 	f.claims = append(f.claims, session)
 	if f.claimErr != nil {
 		return f.claimErr
@@ -197,9 +232,17 @@ func (h *harness) createStrategy(id, raw string) *strategypb.Strategy {
 	return rsp.GetStrategy()
 }
 
+// taskMap 把测试里的单个因子任务 ID 变成请求的 factor_tasks（现货）；空串表示不给。
+func taskMap(taskID string) map[string]string {
+	if taskID == "" {
+		return nil
+	}
+	return map[string]string{"spot": taskID}
+}
+
 func (h *harness) createInstance(id, strategyID, taskID, account string, enabled bool) *strategypb.CreateStrategyInstanceRsp {
 	h.t.Helper()
-	rsp, err := h.service.CreateStrategyInstance(h.ctx, &strategypb.CreateStrategyInstanceReq{Instance: &strategypb.StrategyInstance{InstanceId: id, StrategyId: strategyID, FactorTaskId: taskID, LogicalAccountId: account, Enabled: enabled}})
+	rsp, err := h.service.CreateStrategyInstance(h.ctx, &strategypb.CreateStrategyInstanceReq{Instance: &strategypb.StrategyInstance{InstanceId: id, StrategyId: strategyID, FactorTasks: taskMap(taskID), LogicalAccountId: account, Enabled: enabled}})
 	if err != nil {
 		h.t.Fatal(err)
 	}
@@ -427,33 +470,35 @@ func TestValidateStrategy(t *testing.T) {
 	plain, _ := h.service.ValidateStrategy(h.ctx, &strategypb.ValidateStrategyReq{DslYaml: demoDSL})
 	requireOK(t, int32(plain.GetRetInfo().GetCode()), plain.GetRetInfo().GetMsg())
 	h.resolver.err = errors.New("列 momentum_99 不存在于 View view_a；可用列：close")
-	missing, _ := h.service.ValidateStrategy(h.ctx, &strategypb.ValidateStrategyReq{DslYaml: demoDSL, FactorTaskId: "ftask_a"})
+	missing, _ := h.service.ValidateStrategy(h.ctx, &strategypb.ValidateStrategyReq{DslYaml: demoDSL, FactorTasks: map[string]string{"spot": "ftask_a"}})
 	requireFail(t, int32(missing.GetRetInfo().GetCode()), missing.GetRetInfo().GetMsg(), "momentum_99")
 	h.resolver.err = nil
-	frame := engine.Frame{BarEnd: h.now, Rows: map[string]engine.Row{"BTC-USDT": {Values: map[string]float64{"close": 2}}, "ETH-USDT": {Values: map[string]float64{"close": 1}}}, Universe: []string{"BTC-USDT", "ETH-USDT"}, Expected: map[string][]string{"r": {"BTC-USDT", "ETH-USDT"}}, AgedOut: map[string][]string{}}
+	frame := engine.Frame{BarEnd: h.now, Markets: map[string]engine.MarketInput{"spot": {Rows: map[string]engine.Row{"BTC-USDT": {Values: map[string]float64{"close": 2}}, "ETH-USDT": {Values: map[string]float64{"close": 1}}}}}, Universe: []string{"BTC-USDT", "ETH-USDT"}, Expected: map[string][]string{"r": {"BTC-USDT", "ETH-USDT"}}, AgedOut: map[string][]string{}}
 	h.resolver.loaded = input.Loaded{Frame: frame, Boundary: input.PeriodBoundaries{BarEnd: h.now, StorageStart: h.now.Add(-time.Hour)}}
-	trial, _ := h.service.ValidateStrategy(h.ctx, &strategypb.ValidateStrategyReq{DslYaml: demoDSL, FactorTaskId: "ftask_a"})
+	trial, _ := h.service.ValidateStrategy(h.ctx, &strategypb.ValidateStrategyReq{DslYaml: demoDSL, FactorTasks: map[string]string{"spot": "ftask_a"}})
 	requireOK(t, int32(trial.GetRetInfo().GetCode()), trial.GetRetInfo().GetMsg())
 	if trial.GetTrial().GetStatus() != "ok" || len(trial.GetTrial().GetTargets()) != 1 || trial.GetTrial().GetTargets()[0].GetInstrumentId() != "BTC-USDT" || len(trial.GetTrialItems()) != 2 || trial.GetResolvedJson() == "" {
 		t.Fatalf("试算结果不符：%+v", trial)
 	}
 	h.resolver.loadErr = fmt.Errorf("View view_a 最近三个周期都没有数据")
-	empty, _ := h.service.ValidateStrategy(h.ctx, &strategypb.ValidateStrategyReq{DslYaml: demoDSL, FactorTaskId: "ftask_a"})
+	empty, _ := h.service.ValidateStrategy(h.ctx, &strategypb.ValidateStrategyReq{DslYaml: demoDSL, FactorTasks: map[string]string{"spot": "ftask_a"}})
 	requireOK(t, int32(empty.GetRetInfo().GetCode()), empty.GetRetInfo().GetMsg())
 	if len(empty.GetDiagnostics()) == 0 || !strings.Contains(empty.GetDiagnostics()[0], "试算未完成") {
 		t.Fatalf("没有数据时应给出诊断：%+v", empty.GetDiagnostics())
 	}
 }
 
-// S26：对源数据集 market_type=swap 的 View 发起回放被拒绝；现货 View 可以发起、查询、取消。
-func TestS26StartReplayRejectsSwap(t *testing.T) {
+// S26：登记的市场必须与任务的源数据集一致（把永续任务填在现货下被拒绝）；现货回放可以发起、查询、取消。
+func TestS26StartReplayChecksTaskMarkets(t *testing.T) {
 	h := newHarness(t)
 	h.createStrategy("s1", demoDSL)
-	swap, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTaskId: "ftask_swap", StartTime: "2026-09-01T00:00:00Z", EndTime: "2026-09-02T00:00:00Z"})
-	requireFail(t, int32(swap.GetRetInfo().GetCode()), swap.GetRetInfo().GetMsg(), "只支持现货")
-	badRange, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTaskId: "ftask_a", StartTime: "2026-09-02T00:00:00Z", EndTime: "2026-09-01T00:00:00Z"})
+	swap, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_swap"}, StartTime: "2026-09-01T00:00:00Z", EndTime: "2026-09-02T00:00:00Z"})
+	requireFail(t, int32(swap.GetRetInfo().GetCode()), swap.GetRetInfo().GetMsg(), "登记为 spot 市场")
+	empty, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", StartTime: "2026-09-01T00:00:00Z", EndTime: "2026-09-02T00:00:00Z"})
+	requireFail(t, int32(empty.GetRetInfo().GetCode()), empty.GetRetInfo().GetMsg(), "factor_tasks 不能为空")
+	badRange, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_a"}, StartTime: "2026-09-02T00:00:00Z", EndTime: "2026-09-01T00:00:00Z"})
 	requireFail(t, int32(badRange.GetRetInfo().GetCode()), badRange.GetRetInfo().GetMsg(), "晚于")
-	started, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTaskId: "ftask_a", StartTime: "2026-09-01", EndTime: "2026-09-02", FeeBps: 10})
+	started, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_a"}, StartTime: "2026-09-01", EndTime: "2026-09-02", SpotFeeBps: 10})
 	requireOK(t, int32(started.GetRetInfo().GetCode()), started.GetRetInfo().GetMsg())
 	if started.GetReplay().GetStatus() != store.ReplayPending || started.GetReplay().GetDslYaml() != demoDSL || started.GetReplay().GetStrategyId() != "s1" {
 		t.Fatalf("回放任务不符：%+v", started.GetReplay())
@@ -555,14 +600,14 @@ func TestStoreErrorsAreNormalized(t *testing.T) {
 func TestStartReplayValidatesWindowSynchronously(t *testing.T) {
 	h := newHarness(t)
 	h.createStrategy("s1", demoDSL)
-	both, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", DslYaml: demoDSL, FactorTaskId: "ftask_a", StartTime: "2026-09-01", EndTime: "2026-09-02"})
+	both, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", DslYaml: demoDSL, FactorTasks: map[string]string{"spot": "ftask_a"}, StartTime: "2026-09-01", EndTime: "2026-09-02"})
 	requireFail(t, int32(both.GetRetInfo().GetCode()), both.GetRetInfo().GetMsg(), "只能给出其一")
-	neither, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{FactorTaskId: "ftask_a", StartTime: "2026-09-01", EndTime: "2026-09-02"})
+	neither, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{FactorTasks: map[string]string{"spot": "ftask_a"}, StartTime: "2026-09-01", EndTime: "2026-09-02"})
 	requireFail(t, int32(neither.GetRetInfo().GetCode()), neither.GetRetInfo().GetMsg(), "只能给出其一")
 	h.resolver.view = input.ViewInfo{ViewID: "view_a", ActiveIndexID: "idx", Generation: "idx@b1", IndexedFrom: time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC), IndexedTo: time.Date(2026, 9, 3, 5, 0, 0, 0, time.UTC)}
-	early, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTaskId: "ftask_a", StartTime: "2026-09-01", EndTime: "2026-09-02"})
+	early, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_a"}, StartTime: "2026-09-01", EndTime: "2026-09-02"})
 	requireFail(t, int32(early.GetRetInfo().GetCode()), early.GetRetInfo().GetMsg(), "可用起点")
-	future, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTaskId: "ftask_a", StartTime: "2026-09-02", EndTime: "2026-09-30"})
+	future, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_a"}, StartTime: "2026-09-02", EndTime: "2026-09-30"})
 	requireOK(t, int32(future.GetRetInfo().GetCode()), future.GetRetInfo().GetMsg())
 	// 最新一根的 bar_start 是 09-03 05:00：它可能还没写完，终点截到它的 bar_start，回放到它之前一根为止。
 	if end := future.GetReplay().GetEndTime(); end != "2026-09-03T05:00:00Z" {
@@ -579,10 +624,10 @@ func TestStartReplayValidatesWindowSynchronously(t *testing.T) {
 	if err != nil || len(bars) != 29 {
 		t.Fatalf("落库往返后仍应是 29 根：%d err=%v", len(bars), err)
 	}
-	badFee, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTaskId: "ftask_a", StartTime: "2026-09-02", EndTime: "2026-09-03", FeeBps: 1500})
+	badFee, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_a"}, StartTime: "2026-09-02", EndTime: "2026-09-03", SpotFeeBps: 1500})
 	requireFail(t, int32(badFee.GetRetInfo().GetCode()), badFee.GetRetInfo().GetMsg(), "fee_bps")
 	h.resolver.view.IndexedFrom = time.Date(2023, 1, 1, 0, 0, 0, 0, time.UTC)
-	tooLong, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTaskId: "ftask_a", StartTime: "2023-01-02", EndTime: "2026-09-30"})
+	tooLong, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_a"}, StartTime: "2023-01-02", EndTime: "2026-09-30"})
 	requireFail(t, int32(tooLong.GetRetInfo().GetCode()), tooLong.GetRetInfo().GetMsg(), "20000")
 }
 
@@ -640,4 +685,23 @@ func TestGetStrategyResultFailsWhenSnapshotReadErrors(t *testing.T) {
 	if failed.GetRetInfo().GetCode() == 0 {
 		t.Fatalf("快照读取出错应失败：%+v", failed.GetRetInfo())
 	}
+}
+
+// 研究回放支持永续与两个市场的策略：回放记录按市场保存任务、View 与索引代次，费率分现货与永续两个。
+func TestStartReplaySupportsSwapAndDualTasks(t *testing.T) {
+	h := newHarness(t)
+	h.createStrategy("s1", demoDSL)
+	swap, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"swap": "ftask_swap"}, StartTime: "2026-09-01", EndTime: "2026-09-02", SwapFeeBps: 5})
+	requireOK(t, int32(swap.GetRetInfo().GetCode()), swap.GetRetInfo().GetMsg())
+	if tasks := swap.GetReplay().GetTasks(); len(tasks) != 1 || tasks["swap"].GetFactorTaskId() != "ftask_swap" || swap.GetReplay().GetSwapFeeBps() != 5 {
+		t.Fatalf("永续回放的任务与费率不符：%+v", swap.GetReplay())
+	}
+	both, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_a", "swap": "ftask_swap"}, StartTime: "2026-09-01", EndTime: "2026-09-02", SpotFeeBps: 10, SwapFeeBps: 5})
+	requireOK(t, int32(both.GetRetInfo().GetCode()), both.GetRetInfo().GetMsg())
+	stored, err := h.service.Store.GetReplay(h.ctx, both.GetReplay().GetReplayId())
+	if err != nil || len(stored.Tasks) != 2 || stored.Tasks["spot"].FactorTaskID != "ftask_a" || stored.Tasks["swap"].FactorTaskID != "ftask_swap" || stored.Tasks["swap"].ViewGeneration == "" || stored.SpotFeeBps != 10 || stored.SwapFeeBps != 5 {
+		t.Fatalf("双任务回放的记录不符：%+v err=%v", stored, err)
+	}
+	badFee, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"swap": "ftask_swap"}, StartTime: "2026-09-01", EndTime: "2026-09-02", SwapFeeBps: 1500})
+	requireFail(t, int32(badFee.GetRetInfo().GetCode()), badFee.GetRetInfo().GetMsg(), "swap_fee_bps")
 }

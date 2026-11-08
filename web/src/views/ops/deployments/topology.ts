@@ -40,6 +40,7 @@ const LAYER_OF: Record<string, TopologyLayer> = {
   "archive-mgr": "business",
   strategy: "business",
   trade: "business",
+  "callback-dispatcher": "business",
   "egress-proxy": "business",
   "storage-primary": "storage",
   "storage-node": "storage",

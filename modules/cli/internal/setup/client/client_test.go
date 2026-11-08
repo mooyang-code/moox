@@ -2,6 +2,7 @@ package client
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"os"
@@ -33,6 +34,12 @@ func clientSnapshot(t *testing.T) *setupconfig.Snapshot {
 
 func clientSnapshotWithPath(t *testing.T) (*setupconfig.Snapshot, string) {
 	t.Helper()
+	return clientSnapshotWithExtra(t, "")
+}
+
+// clientSnapshotWithExtra 在基础配置后面追加一段 TOML（例如 [[exchange_keys]]）。
+func clientSnapshotWithExtra(t *testing.T, extra string) (*setupconfig.Snapshot, string) {
+	t.Helper()
 	root := t.TempDir()
 	body := `[admin]
 username = "admin"
@@ -63,7 +70,7 @@ password = "recognizable-compute-password"
 [deployments]
 control = ["admin", "console-proxy", "web-host", "eventbus"]
 compute = []
-`
+` + extra
 	path := filepath.Join(root, "moox.toml")
 	require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
 	snapshot, err := setupconfig.Load(path, root)
@@ -191,4 +198,107 @@ func TestApplyDetectsManifestMutationBeforeRequest(t *testing.T) {
 	_, err := New(forwarder).Apply(context.Background(), snapshot)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "config_changed")
+}
+
+func TestApplyAndStatusCarryExchangeKeysBothWays(t *testing.T) {
+	extra := `
+[[exchange_keys]]
+name = "readonly"
+exchange = "binance"
+environment = "production"
+api_key = "recognizable-api-key"
+secret_key = "recognizable-exchange-secret"
+readonly = true
+
+[[exchange_keys]]
+name = "main"
+exchange = "okx"
+environment = "testnet"
+api_key = "okx-key"
+secret_key = "okx-secret"
+passphrase = "recognizable-passphrase"
+`
+	snapshot, _ := clientSnapshotWithExtra(t, extra)
+	var applyRequest pb.ApplySetupReq
+	var statusRequest pb.GetSetupStatusReq
+	results := []*pb.SetupExchangeKeyResult{
+		{SecretId: "exchange-binance-production-readonly", State: "created", Readonly: true},
+		{SecretId: "exchange-okx-testnet-main", State: "deleted"},
+	}
+	forwarder := &fakeForwarder{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		body, _ := io.ReadAll(request.Body)
+		var response []byte
+		if request.URL.Path == "/trpc.moox.admin.Setup/ApplySetup" {
+			_ = protojson.Unmarshal(body, &applyRequest)
+			response, _ = protojson.Marshal(&pb.ApplySetupRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, Action: "created", Users: 1, Secrets: 3, ExchangeKeys: results})
+		} else {
+			_ = protojson.Unmarshal(body, &statusRequest)
+			response, _ = protojson.Marshal(&pb.GetSetupStatusRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, State: "completed", Users: 1, Secrets: 3, ExchangeKeys: results})
+		}
+		_, _ = w.Write(response)
+	})}
+
+	applied, err := New(forwarder).Apply(context.Background(), snapshot)
+	require.NoError(t, err)
+	require.Len(t, applyRequest.GetExchangeKeys(), 2)
+	first := applyRequest.GetExchangeKeys()[0]
+	assert.Equal(t, "readonly", first.GetName())
+	assert.Equal(t, "binance", first.GetExchange())
+	assert.Equal(t, "production", first.GetEnvironment())
+	assert.Equal(t, "recognizable-api-key", first.GetApiKey())
+	assert.Equal(t, "recognizable-exchange-secret", first.GetSecretKey())
+	assert.True(t, first.GetReadonly())
+	assert.Equal(t, "recognizable-passphrase", applyRequest.GetExchangeKeys()[1].GetPassphrase())
+	assert.Equal(t, 3, applied.Secrets)
+	assert.Equal(t, []ExchangeKeyResult{
+		{SecretID: "exchange-binance-production-readonly", State: "created", ReadOnly: true, Note: "已写入密钥管理"},
+		{SecretID: "exchange-okx-testnet-main", State: "deleted", Note: "已在管理台删除，未重建"},
+	}, applied.ExchangeKeys)
+
+	status, err := New(forwarder).Status(context.Background(), snapshot)
+	require.NoError(t, err)
+	assert.Len(t, statusRequest.GetExchangeKeys(), 2, "状态查询也要带上密钥，Admin 才能按固定 ID 判断")
+	assert.Equal(t, "completed", status.State)
+	assert.Equal(t, "deleted", status.ExchangeKeys[1].State)
+
+	// 打印出来的结果里没有密钥值。
+	raw, err := json.Marshal(applied)
+	require.NoError(t, err)
+	for _, value := range []string{"recognizable-api-key", "recognizable-exchange-secret", "recognizable-passphrase"} {
+		assert.NotContains(t, string(raw), value)
+	}
+}
+
+// 旧的 Admin 不认识 exchange_keys 字段，会静默丢掉它并返回成功：CLI 要能发现，不能让用户以为密钥已经写入。
+func TestApplyAndStatusFailWhenAdminIgnoresExchangeKeys(t *testing.T) {
+	extra := `
+[[exchange_keys]]
+name = "readonly"
+exchange = "binance"
+environment = "production"
+api_key = "k"
+secret_key = "s"
+readonly = true
+`
+	snapshot, _ := clientSnapshotWithExtra(t, extra)
+	forwarder := &fakeForwarder{handler: http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		var response []byte
+		if request.URL.Path == "/trpc.moox.admin.Setup/ApplySetup" {
+			response, _ = protojson.Marshal(&pb.ApplySetupRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, Action: "created", Users: 1, Secrets: 1})
+		} else {
+			response, _ = protojson.Marshal(&pb.GetSetupStatusRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, State: "completed", Users: 1, Secrets: 1})
+		}
+		_, _ = w.Write(response)
+	})}
+	_, err := New(forwarder).Apply(context.Background(), snapshot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "先升级管理后台")
+	_, err = New(forwarder).Status(context.Background(), snapshot)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "setup_admin_outdated")
+
+	// 没有交易所密钥时不受影响。
+	plain, _ := clientSnapshotWithExtra(t, "")
+	_, err = New(forwarder).Apply(context.Background(), plain)
+	require.NoError(t, err)
 }

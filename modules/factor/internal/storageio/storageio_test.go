@@ -608,10 +608,11 @@ func TestDeleteFactorResultDatasetRefusesExtraViewsAndKeepsRows(t *testing.T) {
 	require.Empty(t, metadata.deleteRequests)
 }
 
-func TestMarkerToProtoCarriesGapSubjects(t *testing.T) {
+// 周期明细里成员的失败标的去重排序后写出。
+func TestMarkerToProtoSortsFailedSubjects(t *testing.T) {
 	marker := PeriodMarker{
 		SpaceID: "crypto", ResultDatasetID: "factor_result", SourceDatasetID: "bars", Frequency: "1m", PeriodTime: 1791115200, Status: "degraded", UniverseSubjects: []string{"BTC", "ETH"}, FailedSubjects: []string{"BTC", "ETH"},
-		Factors: []FactorState{{FactorID: "momentum", MemberKey: "momentum", MemberKind: "fixed", Status: "degraded", FailedSubjects: []string{"ETH", "BTC"}, GapSubjects: []string{"ETH", "ETH"}, SourceHash: "s", DefinitionHash: "d"}},
+		Factors: []FactorState{{FactorID: "momentum", MemberKey: "momentum", MemberKind: "fixed", Status: "degraded", FailedSubjects: []string{"ETH", "BTC", "ETH"}, SourceHash: "s", DefinitionHash: "d"}},
 	}
 	protoMarker, err := markerToProto(marker)
 	require.NoError(t, err)
@@ -621,7 +622,6 @@ func TestMarkerToProtoCarriesGapSubjects(t *testing.T) {
 	got := detail.GetFactors()
 	require.Len(t, got, 1)
 	require.Equal(t, []string{"BTC", "ETH"}, got[0].GetFailedSubjects())
-	require.Equal(t, []string{"ETH"}, got[0].GetGapSubjects(), "gap_subjects 与 failed_subjects 一样去重排序")
 }
 
 func TestCarriedTimeAndJSONFieldsKeepTheirStorageType(t *testing.T) {

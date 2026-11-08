@@ -286,43 +286,14 @@ func buildBusinessFreshnessReporterWithInterval(
 			items[item.spaceID+"\x00"+item.checkID] = item
 		}
 		for _, business := range overview.BusinessChecks {
-			if business.Kind != "balance" && business.Kind != "trade_attention" && business.Kind != "market_fetch" && business.Kind != "data_delivery" && business.Kind != "view_file" && business.Kind != "worker_presence" && business.Kind != "archive_task" && business.Kind != "archive_coverage" && business.Kind != "metrics_ingest" && business.Kind != "factor_watermark" && business.Kind != "factor_params" && business.Kind != "storage_rejection" {
+			if business.Kind != "balance" && business.Kind != "trade_attention" && business.Kind != "event_center_attention" && business.Kind != "collector_attention" && business.Kind != "market_fetch" && business.Kind != "data_delivery" && business.Kind != "view_file" && business.Kind != "worker_presence" && business.Kind != "archive_task" && business.Kind != "archive_coverage" && business.Kind != "metrics_ingest" && business.Kind != "factor_watermark" && business.Kind != "factor_params" && business.Kind != "storage_rejection" {
 				continue
 			}
 			spaceID := business.SpaceID
 			if spaceID == "" {
 				spaceID = "crypto"
 			}
-			checkID, name := "balance:"+business.Module, "账户余额同步 "+business.Module
-			if business.Kind == "market_fetch" {
-				checkID, name = "market_fetch:"+business.Module, "行情采集 "+business.Module+" 协调"
-				switch business.Module {
-				case "collector_stream":
-					name = "行情推送 collector-stream 心跳"
-				case "collector_stream_missing":
-					name = "行情推送连续缺失"
-				}
-			} else if business.Kind == "trade_attention" {
-				checkID, name = "trade_attention:"+business.Module, monitorobservability.TradeAttentionNames[business.Module]
-			} else if business.Kind == "storage_rejection" {
-				checkID, name = "storage_rejection:"+business.Module, "存储截止拒绝"
-			} else if business.Kind == "factor_watermark" {
-				checkID, name = "factor_watermark:"+business.Module, "因子连续水位"
-			} else if business.Kind == "factor_params" {
-				checkID, name = "factor_params:"+business.Module, "策略参数投递"
-			} else if business.Kind == "data_delivery" {
-				checkID, name = "data_delivery:"+business.Module, "数据投递队列"
-			} else if business.Kind == "view_file" {
-				checkID, name = "view_file:"+business.Module, "View 索引文件大小"
-			} else if business.Kind == "metrics_ingest" {
-				checkID, name = "metrics_ingest:"+business.Module, "指标序列数量保护"
-			} else if business.Kind == "worker_presence" {
-				checkID, name = "worker_presence:"+business.Module, monitorobservability.WorkerPresenceName(business.Module)
-			} else if business.Kind == "archive_task" {
-				checkID, name = "archive_task:"+business.Module, monitorobservability.ArchiveTaskCheckName(business.Module)
-			} else if business.Kind == "archive_coverage" {
-				checkID, name = "archive_coverage:"+business.Module, monitorobservability.ArchiveCoverageCheckName
-			}
+			checkID, name := businessCheckIdentity(business)
 			item := businessFreshnessItem{spaceID: spaceID, checkID: checkID, name: name, success: business.Status == "healthy", reason: business.Reason}
 			items[item.spaceID+"\x00"+item.checkID] = item
 		}
@@ -619,4 +590,39 @@ func relayItem(signal monitorobservability.GatewaySignal, downSince map[string]t
 		return item, false
 	}
 	return item, true
+}
+
+// businessCheckIdentity 返回业务检查在告警里的检查 ID 与名称。
+func businessCheckIdentity(business monitorobservability.BusinessStatus) (checkID, name string) {
+	checkID, name = "balance:"+business.Module, "账户余额同步 "+business.Module
+	if business.Kind == "market_fetch" {
+		checkID, name = "market_fetch:"+business.Module, "行情采集 "+business.Module+" 协调"
+		switch business.Module {
+		case "collector_stream":
+			name = "行情推送 collector-stream 心跳"
+		case "collector_stream_missing":
+			name = "行情推送连续缺失"
+		}
+	} else if attention := monitorobservability.AttentionCheckName(business.Kind, business.Module); attention != "" {
+		checkID, name = business.Kind+":"+business.Module, attention
+	} else if business.Kind == "storage_rejection" {
+		checkID, name = "storage_rejection:"+business.Module, "存储截止拒绝"
+	} else if business.Kind == "factor_watermark" {
+		checkID, name = "factor_watermark:"+business.Module, "因子连续水位"
+	} else if business.Kind == "factor_params" {
+		checkID, name = "factor_params:"+business.Module, "策略参数投递"
+	} else if business.Kind == "data_delivery" {
+		checkID, name = "data_delivery:"+business.Module, "数据投递队列"
+	} else if business.Kind == "view_file" {
+		checkID, name = "view_file:"+business.Module, "View 索引文件大小"
+	} else if business.Kind == "metrics_ingest" {
+		checkID, name = "metrics_ingest:"+business.Module, "指标序列数量保护"
+	} else if business.Kind == "worker_presence" {
+		checkID, name = "worker_presence:"+business.Module, monitorobservability.WorkerPresenceName(business.Module)
+	} else if business.Kind == "archive_task" {
+		checkID, name = "archive_task:"+business.Module, monitorobservability.ArchiveTaskCheckName(business.Module)
+	} else if business.Kind == "archive_coverage" {
+		checkID, name = "archive_coverage:"+business.Module, monitorobservability.ArchiveCoverageCheckName
+	}
+	return checkID, name
 }

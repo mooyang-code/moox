@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   buildResultInsights,
   buildResultOverview,
+  cashOrNetText,
   deriveTargetState,
   formatDelay,
   itemReasonLabel,
@@ -38,10 +39,14 @@ describe("strategy model helpers", () => {
     expect(percent("x")).toBe("-");
     expect(shortHash("sha256:0123456789abcdef")).toBe("0123456789ab…");
     expect(skipReasonLabel("previous_version_unknown")).toContain("上一根版本未知");
+    expect(skipReasonLabel("pool_warmup_failed")).toBe("策略池预热失败（pool_warmup_failed）");
+    expect(skipReasonLabel("market_missing")).toContain("另一个市场的数据未到");
+    expect(skipReasonLabel("market_failed")).toContain("市场整体失败");
     expect(skipReasonLabel("custom")).toBe("custom");
     expect(skipReasonLabel("no_data")).toBe("本期无数据（no_data）");
     expect(skipReasonLabel("history_insufficient")).toContain("历史覆盖不足");
     expect(stageLabel("weighted")).toBe("入选");
+    expect(stageLabel("held")).toBe("保持持仓");
   });
 
   it("parses summaries and resolved bindings defensively", () => {
@@ -53,10 +58,12 @@ describe("strategy model helpers", () => {
     expect(summary.notes).toEqual(["n"]);
     expect(parseSummary("not json").rules).toEqual({});
     const resolved = parseResolved(
-      '{"view_id":"v","bar":"1h","calendar":"crypto_24x7","spot":true,"columns":{"ma_20":{"source":"factor","factor_id":"ma","definition_hash":"sha256:x"},"close":{"source":"dataset"}}}'
+      '{"market":{"select":"both","prefer":"swap"},"tasks":{"swap":{"view_id":"v2","factor_task_id":"t2"},"spot":{"view_id":"v","factor_task_id":"t1"}},"bar":"1h","calendar":"crypto_24x7","columns":{"ma_20":{"source":"factor","factor_id":"ma","definition_hash":"sha256:x"},"close":{"source":"dataset"}}}'
     );
     expect(resolved?.columns.map(column => column.name)).toEqual(["close", "ma_20"]);
     expect(resolved?.columns[1]).toMatchObject({ factor_id: "ma", definition_hash: "sha256:x" });
+    expect(resolved?.market).toEqual({ select: "both", prefer: "swap" });
+    expect(resolved?.tasks.map(task => `${task.market}:${task.view_id}`)).toEqual(["spot:v", "swap:v2"]);
     expect(parseResolved("{}")).toBeNull();
   });
 
@@ -73,6 +80,10 @@ describe("strategy model helpers", () => {
     expect(itemReasonLabel("missing:close")).toBe("缺少 close（missing:close）");
     expect(itemReasonLabel("factor_failed:ma_20")).toContain("上游因子失败（ma_20）");
     expect(itemReasonLabel("source_failed:close")).toContain("上游数据失败（close）");
+    expect(itemReasonLabel("market_unavailable:m")).toBe("市场本期不可用（m）（market_unavailable:m）");
+    expect(itemReasonLabel("prev_hold")).toBe("只缺上一根，保持持仓不动（prev_hold）");
+    expect(itemReasonLabel("market_hold")).toBe("所在市场本期不可用，保持持仓不动（market_hold）");
+    expect(itemReasonLabel("period_skipped")).toBe("本期整期跳过，未求值（period_skipped）");
     expect(itemReasonLabel("custom_reason")).toBe("custom_reason");
   });
 });
@@ -96,6 +107,30 @@ describe("result insights", () => {
     expect(insights.b).toMatchObject({ comparable: true, added: [], removed: [] });
     expect(insights.c).toMatchObject({ comparable: true, added: ["C"], removed: ["B"] });
     expect(insights.c.delayMs).toBe(2000);
+  });
+
+  it("按（标的、市场）比较目标变化：同一个币从现货换到永续算一进一出，多个市场时带上市场名", () => {
+    const mixed = (id: string, minute: number, targets: [string, string][]) => ({
+      ...ok(id, minute, []),
+      targets: targets.map(([instrument_id, market]) => ({ instrument_id, market, target_weight: "0.2" }))
+    });
+    const insights = buildResultInsights([
+      mixed("a", 1, [
+        ["BTC", "spot"],
+        ["ETH", "swap"]
+      ]),
+      mixed("b", 2, [
+        ["BTC", "swap"],
+        ["ETH", "swap"]
+      ])
+    ]);
+    expect(insights.b).toMatchObject({ comparable: true, added: ["BTC（永续）"], removed: ["BTC（现货）"] });
+  });
+
+  it("混合市场显示分市场净敞口，其余显示现金", () => {
+    expect(cashOrNetText(parseSummary('{"spot_net":"0.3","swap_net":"-0.2"}'))).toBe("现货净 30.00% · 永续净 -20.00%");
+    expect(cashOrNetText(parseSummary('{"cash":"0.1"}'))).toBe("10.00%");
+    expect(skipReasonLabel("catchup")).toBe("恢复追赶中，不发目标（就绪时照常求值、只推进规则状态）（catchup）");
   });
 
   it("never compares results across sessions", () => {

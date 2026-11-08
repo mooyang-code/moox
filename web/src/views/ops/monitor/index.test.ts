@@ -124,6 +124,30 @@ describe("monitor page", () => {
     expect(group.find(".raw-error pre").text()).toBe("metrics stale");
   });
 
+  it("shows the readonly-key note under the reason and links to the secrets page", async () => {
+    const page = render({
+      ...healthy,
+      alerts: [
+        {
+          id: "readonly",
+          severity: "warning",
+          title: "下架检测缺少币安只读 Key",
+          reason: "币安现货：没有读到只读 Key",
+          triggered_at: "2026-10-16T02:58:20Z",
+          object: { type: "business", kind: "collector_attention", attention_kind: "delist_readonly_key_missing" }
+        }
+      ]
+    });
+    await flushPromises();
+    const line = page.find(".alert-line");
+    const html = line.html();
+    // 说明紧跟在原因下面，在底部的分层标签与链接之前
+    expect(html.indexOf("alert-line__reason")).toBeLessThan(html.indexOf("alert-line__note"));
+    expect(html.indexOf("alert-line__note")).toBeLessThan(html.indexOf("alert-line__foot"));
+    expect(line.findAll(".alert-line__note p")).toHaveLength(4);
+    expect(line.find(".locator").attributes("href")).toBe("#/settings/secrets");
+  });
+
   it("folds flaps in the 48-hour timeline", async () => {
     const page = render({
       ...healthy,

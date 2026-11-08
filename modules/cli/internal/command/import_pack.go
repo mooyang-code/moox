@@ -36,9 +36,11 @@ const (
 
 // importPack 是 manifest.json 的内容。
 type importPack struct {
-	SpaceID   string           `json:"space_id"`
-	DatasetID string           `json:"dataset_id"`
-	Freq      string           `json:"freq"`
+	SpaceID   string `json:"space_id"`
+	DatasetID string `json:"dataset_id"`
+	Freq      string `json:"freq"`
+	// SeriesTag 是清单里文件默认使用的 series_tag；文件可以用自己的 series_tag 覆盖
+	// （统一数据集的现货、永续文件放在同一个包里，各写各的 tag）。
 	SeriesTag string           `json:"series_tag"`
 	Files     []importPackFile `json:"files"`
 
@@ -48,6 +50,8 @@ type importPack struct {
 type importPackFile struct {
 	SubjectID string `json:"subject_id"`
 	File      string `json:"file"`
+	// SeriesTag 非空时覆盖清单的 series_tag。
+	SeriesTag string `json:"series_tag,omitempty"`
 	Rows      int    `json:"rows"`
 	FirstUTC  string `json:"first_utc"`
 	LastUTC   string `json:"last_utc"`
@@ -85,11 +89,35 @@ func (p *importPack) paths() []string {
 	return out
 }
 
+// seriesTagOf 返回文件实际使用的 series_tag：文件自己的优先，否则取清单的。
+func (p *importPack) seriesTagOf(file importPackFile) string {
+	if file.SeriesTag != "" {
+		return file.SeriesTag
+	}
+	return p.SeriesTag
+}
+
+// fileSeriesTags 返回文件路径到 series_tag 的映射，只含单独指定了 series_tag 的文件。
+func (p *importPack) fileSeriesTags() map[string]string {
+	var out map[string]string
+	for _, file := range p.Files {
+		if file.SeriesTag == "" {
+			continue
+		}
+		if out == nil {
+			out = map[string]string{}
+		}
+		out[filepath.Join(p.dir, file.File)] = file.SeriesTag
+	}
+	return out
+}
+
 // checkImportPackFiles 核对每个文件存在、标的与文件名一致、sha256 一致；返回全部问题而不是第一个。
 func checkImportPackFiles(pack *importPack) []string {
 	var problems []string
 	seen := map[string]bool{}
 	for _, file := range pack.Files {
+		seriesKey := file.SubjectID + "\x00" + pack.seriesTagOf(file)
 		path := filepath.Join(pack.dir, file.File)
 		subject := strings.TrimSuffix(filepath.Base(file.File), filepath.Ext(file.File))
 		switch {
@@ -98,10 +126,10 @@ func checkImportPackFiles(pack *importPack) []string {
 			continue
 		case file.SubjectID != subject:
 			problems = append(problems, fmt.Sprintf("%s：清单的 subject_id %q 与文件名 %q 不一致", file.File, file.SubjectID, subject))
-		case seen[file.SubjectID]:
-			problems = append(problems, fmt.Sprintf("%s：标的 %s 在清单里重复", file.File, file.SubjectID))
+		case seen[seriesKey]:
+			problems = append(problems, fmt.Sprintf("%s：标的 %s（series_tag %q）在清单里重复", file.File, file.SubjectID, pack.seriesTagOf(file)))
 		}
-		seen[file.SubjectID] = true
+		seen[seriesKey] = true
 		sum, err := fileSHA256(path)
 		if err != nil {
 			problems = append(problems, fmt.Sprintf("%s：%v", file.File, err))

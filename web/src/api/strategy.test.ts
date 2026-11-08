@@ -48,16 +48,16 @@ describe("strategy API", () => {
 
   it("creates a disabled instance bound to one factor task", async () => {
     callControl.mockResolvedValueOnce({
-      instance: { instance_id: "i-1", strategy_id: "s-1", space_id: "space-1", factor_task_id: "ftask_a", enabled: false }
+      instance: { instance_id: "i-1", strategy_id: "s-1", space_id: "space-1", factor_tasks: { swap: "ftask_a" }, enabled: false }
     });
-    const instance = await createInstance({ strategy_id: "s-1", factor_task_id: "ftask_a", logical_account_id: "" });
+    const instance = await createInstance({ strategy_id: "s-1", factor_tasks: { swap: "ftask_a" }, logical_account_id: "" });
     expect(callControl).toHaveBeenCalledWith(
       "strategy",
       "CreateStrategyInstance",
-      { instance: { strategy_id: "s-1", factor_task_id: "ftask_a", logical_account_id: "", enabled: false } },
+      { instance: { strategy_id: "s-1", factor_tasks: { swap: "ftask_a" }, logical_account_id: "", enabled: false } },
       undefined
     );
-    expect(instance).toMatchObject({ instance_id: "i-1", factor_task_id: "ftask_a", resolved_json: "{}", health: "ok" });
+    expect(instance).toMatchObject({ instance_id: "i-1", factor_tasks: { swap: "ftask_a" }, resolved_json: "{}", health: "ok" });
   });
 
   it("reads results with status, skip reason and explanation items", async () => {
@@ -102,10 +102,13 @@ describe("strategy API", () => {
         diagnostics: ["列 momentum_99 不存在于 View view_a", "规则 r2 引用了未知列", ""]
       })
     );
-    const result = await validateStrategy("name: x", "ftask_a");
+    const result = await validateStrategy("name: x", { spot: "ftask_a" });
     expect(result.diagnostics).toEqual(["列 momentum_99 不存在于 View view_a", "规则 r2 引用了未知列"]);
     expect(result.trial).toBeNull();
-    expect(callControl).toHaveBeenCalledWith("strategy", "ValidateStrategy", { dsl_yaml: "name: x", factor_task_id: "ftask_a" });
+    expect(callControl).toHaveBeenCalledWith("strategy", "ValidateStrategy", {
+      dsl_yaml: "name: x",
+      factor_tasks: { spot: "ftask_a" }
+    });
   });
 
   it("falls back to the error message when a rejected validation carries no diagnostics", async () => {
@@ -146,7 +149,13 @@ describe("strategy API", () => {
 
   it("starts a replay with the requested window and fee", async () => {
     callControl.mockResolvedValueOnce({
-      replay: { replay_id: "p1", status: "pending", fee_bps: 10, dsl_hash: "sha256:x" },
+      replay: {
+        replay_id: "p1",
+        status: "pending",
+        spot_fee_bps: 10,
+        tasks: { spot: { factor_task_id: "ftask_a", view_id: "view_factor_a" } },
+        dsl_hash: "sha256:x"
+      },
       bar_count: 30,
       first_bar_end: "2026-09-01T01:00:00Z",
       last_bar_end: "2026-09-02T06:00:00Z"
@@ -154,13 +163,20 @@ describe("strategy API", () => {
     await expect(
       startReplay({
         instance_id: "i-1",
-        factor_task_id: "ftask_a",
+        factor_tasks: { spot: "ftask_a" },
         start_time: "2026-09-01T00:00:00Z",
         end_time: "2026-09-30T00:00:00Z",
-        fee_bps: 10
+        spot_fee_bps: 10,
+        swap_fee_bps: 0
       })
     ).resolves.toMatchObject({
-      replay: { replay_id: "p1", status: "pending", fee_bps: 10, dsl_hash: "sha256:x" },
+      replay: {
+        replay_id: "p1",
+        status: "pending",
+        spot_fee_bps: 10,
+        tasks: { spot: { factor_task_id: "ftask_a" } },
+        dsl_hash: "sha256:x"
+      },
       bar_count: 30,
       last_bar_end: "2026-09-02T06:00:00Z"
     });

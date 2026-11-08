@@ -82,9 +82,12 @@
           <a-table-column title="更新时间" :width="180">
             <template #cell="{ record }">{{ formatTime(record.modify_time) }}</template>
           </a-table-column>
-          <a-table-column title="操作" :width="200" align="center" :fixed="'right'">
+          <a-table-column title="操作" :width="260" align="center" :fixed="'right'">
             <template #cell="{ record }">
               <a-space>
+                <a-button v-if="canTestConnection(record)" size="mini" type="text" @click="openTestConnection(record)">
+                  测试连接
+                </a-button>
                 <a-popconfirm :content="toggleConfirmText(record)" @ok="toggleStatus(record)">
                   <a-button size="mini" type="text">
                     {{ record.status === "active" ? "禁用" : "启用" }}
@@ -146,6 +149,14 @@
           </a-form-item>
         </a-form>
       </a-modal>
+
+      <!-- 交易所密钥的测试连接：只读检测账户类型和权限，不下单、不落库 -->
+      <inspection-test-dialog
+        v-model:visible="testVisible"
+        :secret-id="testSecret.secretId"
+        :secret-name="testSecret.name"
+        :provider="testSecret.provider"
+      />
 
       <!-- 换了主机登录时用来安装 HTTPS 信任：下载根证书、核对指纹、各系统的安装命令 -->
       <root-ca-dialog v-model:visible="rootCaVisible" />
@@ -235,6 +246,8 @@ import {
 } from "@/api/admin/secret";
 import { reportControlError } from "@/api/admin/http";
 import RootCaDialog from "@/components/root-ca/root-ca-dialog.vue";
+import InspectionTestDialog from "@/components/trade-inspection/inspection-test-dialog.vue";
+import { canTestConnection } from "@/components/trade-inspection/inspection-request";
 import { useUserInfoStore } from "@/store/modules/user-info";
 import { defaultPagination, formatTime } from "@/views/data/shared/metadata-utils";
 import { MIN_PASSPHRASE_LENGTH, exportFileName, importSummary, passphraseError, saveTextFile } from "./secret-transfer";
@@ -287,6 +300,14 @@ const form = reactive({
   secret_value: "",
   extra_config: "{}"
 });
+
+const testVisible = ref(false);
+const testSecret = reactive({ secretId: "", name: "", provider: "" });
+
+function openTestConnection(record: Secret) {
+  Object.assign(testSecret, { secretId: record.secret_id ?? "", name: record.name, provider: record.provider ?? "" });
+  testVisible.value = true;
+}
 
 const modalTitle = computed(() => (editing.value ? "编辑秘钥" : "新增秘钥"));
 
