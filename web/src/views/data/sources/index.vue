@@ -76,7 +76,7 @@
           </a-form-item>
           <a-form-item v-if="attributeEntries(form).length" label="属性">
             <a-table
-              :data="attributeEntries(form).map(([key, value]) => ({ key, value }))"
+              :data="formAttributeRows"
               row-key="key"
               size="small"
               :pagination="false"
@@ -159,6 +159,9 @@ async function load() {
     if (request.isLatest()) loading.value = false;
   }
 }
+
+// 编辑弹窗里的属性小表格
+const formAttributeRows = computed(() => attributeEntries(form).map(([key, value]) => ({ key, value })));
 
 function attributeEntries(source: Pick<DataSource, "attributes">): Array<[string, string]> {
   return Object.entries(source.attributes || {});

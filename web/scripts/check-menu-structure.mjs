@@ -72,7 +72,7 @@ assert(zhCN.includes('["factor-tasks"]: "计算任务"'), "factor-tasks zh-CN la
 
 assertNotVisible("data-assets");
 assert(dataCollection.parentId === "0", "compute-collector must be a root menu");
-assert(dataCollection.path === "/data/sources", "compute-collector default path must be /data/sources");
+assert(dataCollection.path === "/collector/tasks", "compute-collector default path must be /collector/tasks");
 assert(factorCompute.parentId === "0", "factor-compute must be a root menu");
 assert(factorCompute.sort > dataCollection.sort, "factor-compute must appear after data collection");
 assert(factorCompute.sort < trading.sort, "factor-compute must appear before trading");
@@ -136,7 +136,8 @@ assert(dataSubjects.sort < dataFields.sort, "subjects must appear before base fi
 const collectorTasks = findMenu("collector-tasks");
 assert(collectorTasks.parentId === dataCollection.id, "collector-tasks must be under data collection");
 assert(collectorTasks.path === "/collector/tasks", "collector-tasks path must be canonical");
-assert(dataFields.sort < collectorTasks.sort, "base fields must appear before collection tasks");
+// 采集任务排第一（数据归档紧跟其后，见下），数据源、数据对象、基础字段排在后面
+assert(collectorTasks.sort < dataSources.sort, "collection tasks must appear before data sources");
 assert(routes.includes('path: "/collector/tasks"'), "collector tasks route must exist");
 
 // 数据归档紧跟采集任务：按 sort 排序后两者相邻、它在后；不写死 sort 数值，目录里调整顺序时不用改这里。

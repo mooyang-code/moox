@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildViewFilterExprs, buildViewFilterFieldOptions, defaultSeriesTagForView } from "./view-browse-utils";
+import { buildViewFilterExprs, buildViewFilterFieldOptions, defaultSeriesTag } from "./view-browse-utils";
 
 const double = "FIELD_VALUE_TYPE_DOUBLE" as const;
 
@@ -64,11 +64,11 @@ describe("buildViewFilterFieldOptions 指定搜索列", () => {
   });
 });
 
-describe("defaultSeriesTagForView", () => {
-  it("A股空间的 View 默认 series_tag 为 default，其他空间留空", () => {
-    expect(defaultSeriesTagForView({ space_id: "stockcn" })).toBe("default");
-    expect(defaultSeriesTagForView({ space_id: "crypto" })).toBe("");
-    expect(defaultSeriesTagForView(undefined)).toBe("");
+describe("defaultSeriesTag", () => {
+  it("当前结果只有一种序列标签时用它，有多种或没有结果时不填", () => {
+    expect(defaultSeriesTag([{ seriesTag: "default" }, { seriesTag: "default" }])).toBe("default");
+    expect(defaultSeriesTag([{ seriesTag: "market:spot" }, { seriesTag: "market:swap" }])).toBe("");
+    expect(defaultSeriesTag([])).toBe("");
   });
 });
 

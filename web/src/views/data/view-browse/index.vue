@@ -427,7 +427,7 @@ import {
   buildViewFilterFieldOptions,
   buildViewFilterExprs,
   buildViewSorts,
-  defaultSeriesTagForView,
+  defaultSeriesTag,
   type ViewFilterFieldOption,
   DEFAULT_KLINE_LIMIT,
   exactSeriesTagFromFilters,
@@ -1098,7 +1098,7 @@ function createFilterState(option?: ViewFilterFieldOption): ViewFilterState {
     fieldName: option?.value || "",
     operator: option?.value === "series_tag" ? "eq" : "contains",
     valueType: option?.valueType || "FIELD_VALUE_TYPE_STRING",
-    value: option?.value === "series_tag" ? defaultSeriesTagForView(activeView.value) : "",
+    value: option?.value === "series_tag" ? defaultSeriesTag(tableRows.value) : "",
     startValue: "",
     endValue: ""
   };

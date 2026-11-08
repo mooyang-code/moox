@@ -49,19 +49,21 @@ const directory = (
 export const systemMenu = [
   menu("01", "0", "/home", "home", "home", "home/home", 1, { affix: true, svgIcon: "home", icon: "" }),
 
-  directory("03", "0", "/data/sources", "compute-collector", "compute-collector", 2, {
+  // 最常用的“采集任务”排第一、作为目录落地页，数据归档紧跟在它后面；数据源、数据对象、基础字段排在后面。
+  directory("03", "0", "/collector/tasks", "compute-collector", "compute-collector", 2, {
     svgIcon: "functions",
     icon: ""
   }),
-  menu("0306", "03", "/data/sources", "data-sources", "data-sources", "data/sources/index", 1),
-  menu("0307", "03", "/data/subjects", "data-subjects", "data-subjects", "data/subjects/index", 2),
-  // 菜单路由会覆盖 route.ts 里的同名声明（已在浏览器核对）：字段页的筛选、采集任务的页签与筛选都在 query 里，query 变化时复用页面。
-  menu("0308", "03", "/data/fields", "data-fields", "data-fields", "data/fields/index", 3, { reuseOnQuery: true }),
-  menu("0303", "03", "/collector/tasks", "collector-tasks", "collector-tasks", "collector/task-management/index", 4, {
+  // 目录下的菜单项会替换 route.ts 的同名路由（已在浏览器核对）：采集任务的页签与筛选、字段页的筛选都在 query 里，query 变化时复用页面。
+  menu("0303", "03", "/collector/tasks", "collector-tasks", "collector-tasks", "collector/task-management/index", 1, {
     reuseOnQuery: true
   }),
-  // 数据归档紧跟采集任务（sort 取采集任务 + 1）。任务详情、页签、筛选都在 query 里，query 变化时复用页面。
-  menu("0309", "03", "/data/archive", "data-archive", "data-archive", "data/archive/index", 5, { reuseOnQuery: true }),
+  // 任务详情、页签、筛选都在 query 里，query 变化时复用页面。
+  menu("0309", "03", "/data/archive", "data-archive", "data-archive", "data/archive/index", 2, { reuseOnQuery: true }),
+  menu("0306", "03", "/data/sources", "data-sources", "data-sources", "data/sources/index", 3),
+  // 页签和所选标签在 query 里：query 变化时复用页面
+  menu("0307", "03", "/data/subjects", "data-subjects", "data-subjects", "data/subjects/index", 4, { reuseOnQuery: true }),
+  menu("0308", "03", "/data/fields", "data-fields", "data-fields", "data/fields/index", 5, { reuseOnQuery: true }),
 
   directory("0240", "0", "/factor/overview", "factor-compute", "factor-compute", 3, { svgIcon: "experiment", icon: "" }),
   menu("024001", "0240", "/factor/overview", "factor-overview", "factor-overview", "factor/overview/index", 1),

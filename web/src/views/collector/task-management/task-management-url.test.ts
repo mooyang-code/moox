@@ -43,4 +43,13 @@ describe("采集任务的页签容器", () => {
     await flushPromises();
     expect(ctx.route.query).toEqual({ tab: "results" });
   });
+
+  it("从菜单进来（地址没有参数）默认看运行状态；带参数的链接照原样打开", async () => {
+    setup({});
+    await flushPromises();
+    expect(ctx.route.query).toEqual({ tab: "status" });
+    setup({ detail: "t1" });
+    await flushPromises();
+    expect(ctx.route.query).toEqual({ detail: "t1" });
+  });
 });

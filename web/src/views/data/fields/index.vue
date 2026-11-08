@@ -38,7 +38,9 @@
         </div>
       </div>
 
-      <a-alert class="field-policy-alert" type="info" show-icon> 字段注册后不能删除；不再使用时可以停用，或者隐藏（列从查询结果和列清单里隐藏，数据保留，重新启用后恢复）。 </a-alert>
+      <a-alert class="field-policy-alert" type="info" show-icon>
+        字段注册后不能删除；不再使用时可以停用，或者隐藏（列从查询结果和列清单里隐藏，数据保留，重新启用后恢复）。
+      </a-alert>
       <a-alert v-if="!selectedSpaceId" type="warning" show-icon>请先在顶部选择空间</a-alert>
       <template v-else>
         <section class="field-workbench">

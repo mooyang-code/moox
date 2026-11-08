@@ -64,7 +64,7 @@ export const staticRoutes = [
         path: "/data/subjects",
         name: "data-subjects",
         component: () => import("@/views/data/subjects/index.vue"),
-        meta: { title: "data-subjects" }
+        meta: { title: "data-subjects", reuseOnQuery: true }
       },
       {
         path: "/data/fields",
