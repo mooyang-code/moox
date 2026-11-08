@@ -1,6 +1,6 @@
 <template>
   <a-drawer :width="340" :visible="props.systemOpen" @ok="handleCancel" @cancel="handleCancel" unmount-on-close>
-    <template #title> 系统设置 </template>
+    <template #title> 布局设置 </template>
     <div>
       <div>
         <div class="title">界面设置</div>

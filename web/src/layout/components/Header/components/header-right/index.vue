@@ -1,7 +1,8 @@
 <template>
+  <!-- 窄屏只留用户菜单：语言、明暗、全屏、布局与主题设置收起，不盖住左边的空间选择 -->
   <div class="header_setting" :class="isMobile && 'head-absolute-fix'">
     <!-- 国际化 -->
-    <a-dropdown trigger="hover" @select="onLange">
+    <a-dropdown v-if="!isMobile" trigger="hover" @select="onLange">
       <a-button size="mini" type="text" class="icon_btn" id="system-language">
         <template #icon>
           <icon-language :size="18" />
@@ -13,7 +14,7 @@
       </template>
     </a-dropdown>
     <!-- 切换黑夜模式 -->
-    <a-tooltip :content="$t(`system.${!darkMode ? 'switch-to-night-mode' : 'switch-to-daytime-mode'}`)">
+    <a-tooltip v-if="!isMobile" :content="$t(`system.${!darkMode ? 'switch-to-night-mode' : 'switch-to-daytime-mode'}`)">
       <a-button size="mini" type="text" class="icon_btn" id="system-dark" @click="onNightMode">
         <template #icon>
           <icon-sun-fill :size="18" v-if="!darkMode" />
@@ -22,7 +23,7 @@
       </a-button>
     </a-tooltip>
     <!-- 全屏 -->
-    <a-tooltip :content="$t(`system.${fullScreen ? 'full-screen' : 'exit-full-screen'}`)">
+    <a-tooltip v-if="!isMobile" :content="$t(`system.${fullScreen ? 'full-screen' : 'exit-full-screen'}`)">
       <a-button size="mini" type="text" class="icon_btn" id="system-fullscreen" @click="onFullScreen">
         <template #icon>
           <icon-fullscreen :size="18" v-if="fullScreen" />
@@ -30,8 +31,8 @@
         </template>
       </a-button>
     </a-tooltip>
-    <!-- 系统设置 -->
-    <a-tooltip :content="$t(`system.system-settings`)">
+    <!-- 布局设置 -->
+    <a-tooltip v-if="!isMobile" :content="$t(`system.system-settings`)">
       <a-button size="mini" type="text" class="icon_btn" id="system-settings" @click="onSystemSetting">
         <template #icon>
           <icon-settings :size="18" />
@@ -39,7 +40,7 @@
       </a-button>
     </a-tooltip>
     <!-- 主题设置 -->
-    <a-tooltip :content="$t(`system.theme-settings`)">
+    <a-tooltip v-if="!isMobile" :content="$t(`system.theme-settings`)">
       <a-button size="mini" type="text" class="icon_btn" id="system-theme" @click="onThemeSetting">
         <template #icon>
           <icon-skin :size="18" />

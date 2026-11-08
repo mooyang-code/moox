@@ -3,7 +3,7 @@
     <div class="moox-inner">
       <a-radio-group v-model="scope" type="button" class="activity-scope">
         <a-radio value="space">当前空间</a-radio>
-        <a-radio value="global">全局</a-radio>
+        <a-radio value="global">系统事件</a-radio>
       </a-radio-group>
       <a-alert v-if="scope === 'space' && !selectedSpaceId" type="warning">请先在顶部选择空间。</a-alert>
       <ActivityLog

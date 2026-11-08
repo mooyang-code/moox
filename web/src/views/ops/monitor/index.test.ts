@@ -102,6 +102,28 @@ describe("monitor page", () => {
     expect(page.text()).toContain("最近 48 小时没有告警");
   });
 
+  it("告警对象在别的空间时，点链接先切到那个空间；同一空间不切", async () => {
+    const { useSpaceStore } = await import("@/store/modules/space");
+    const store = useSpaceStore();
+    store.selectedSpaceId = "crypto";
+    const switchSpace = vi.spyOn(store, "setSelectedSpace").mockImplementation(() => undefined);
+    const alert = (id: string, space_id: string) => ({
+      id,
+      severity: "warning",
+      title: id,
+      triggered_at: "2026-10-16T02:58:20Z",
+      object: { type: "dataset" as const, producer: "collector", dataset_id: `ds_${id}`, freq: "5m", space_id }
+    });
+    const page = render({ ...healthy, alerts: [alert("a", "stockcn"), alert("b", "crypto")] });
+    await flushPromises();
+    const links = page.findAll("a.locator");
+    await links[0].trigger("click");
+    expect(switchSpace).toHaveBeenCalledWith("stockcn");
+    switchSpace.mockClear();
+    await links[1].trigger("click");
+    expect(switchSpace).not.toHaveBeenCalled();
+  });
+
   it("lists alerts grouped by trigger time and expands their evidence", async () => {
     const page = render({
       ...healthy,
@@ -376,7 +398,7 @@ describe("monitor page", () => {
     const feishu = "https://open.feishu.cn/open-apis/bot/v2/hook/0f6c3c1e-1234-4abc-9def-111111111111";
     const page = render({ ...healthy, notification: { channel_count: 1, channel_types: ["wecom"] } });
     await flushPromises();
-    expect(page.text()).toContain("告警推送：企业微信 ✓");
+    expect(page.text()).toContain("告警推送：企业微信（已配置）");
 
     mockedCallControl.mockResolvedValueOnce({ channels: [{ channel_id: "nc_1", channel_type: "wecom", webhook_url: wecom }] });
     const settings = page.findAll("button").find(button => button.text() === "消息通知设置");
@@ -418,7 +440,7 @@ describe("monitor page", () => {
         .findAll(".notification-list__url")
         .map(item => item.text())
     ).toEqual([feishu]);
-    expect(page.text()).toContain("告警推送：飞书 ✓");
+    expect(page.text()).toContain("告警推送：飞书（已配置）");
   });
 
   it("always labels component chips with their names", async () => {

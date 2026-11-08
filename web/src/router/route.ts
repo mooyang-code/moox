@@ -195,7 +195,7 @@ export const staticRoutes = [
       {
         path: "/ops/storage/nodes",
         name: "ops-storage",
-        component: () => import("@/views/ops/storage/index.vue"),
+        component: () => import("@/views/ops/storage/nodes.vue"),
         meta: { title: "ops-storage" }
       }
     ]

@@ -7,7 +7,7 @@
         :options="spaceOptions"
         @change="onSpaceChange"
         placeholder="请选择空间"
-        style="width: 220px; margin-left: var(--moox-space-4)"
+        :style="{ width: isMobile ? '150px' : '220px', marginLeft: 'var(--moox-space-4)' }"
         allow-search
         :loading="loading"
       >
@@ -53,6 +53,7 @@
 </template>
 
 <script setup lang="ts">
+import { useDevicesSize } from "@/hooks/useDevicesSize";
 import { onMounted, computed, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import ButtonCollapsed from "@/layout/components/Header/components/button-collapsed/index.vue";
@@ -64,6 +65,8 @@ import { storeToRefs } from "pinia";
 import type { Space } from "@/api/admin/types";
 
 const spaceStore = useSpaceStore();
+// 窄屏缩短空间选择框，右侧只留用户菜单，两者不重叠
+const { isMobile } = useDevicesSize();
 const { spaces, selectedSpaceId, loading } = storeToRefs(spaceStore);
 
 const spaceOptions = computed(() => {

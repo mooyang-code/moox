@@ -1,4 +1,5 @@
 import type { ActivityLogItem } from "@/api/admin/activity";
+import { ACTIVITY_CATEGORY_LABELS } from "@/components/activity-log/activity-log";
 import type { FactorTaskInfo } from "@/api/factor/types";
 import type { HealthAlert, HealthHost, HealthOverview, LifecycleColor } from "@/api/monitor";
 import type { Strategy, StrategyInstance, StrategyTargetSnapshot } from "@/api/strategy-types";
@@ -220,7 +221,6 @@ export interface StrategyRow {
   lastBar: string;
   /** lastBar 的完整时间（悬停用） */
   lastBarTitle: string;
-  lastBarMs: number | null;
   link: StrategyLink;
 }
 
@@ -271,7 +271,6 @@ export function strategyRows(
       cash: snapshot && instance.enabled ? { text: percent(cashRatio, 1), ratio: barMax > 0 ? cashRatio / barMax : 0 } : null,
       lastBar: snapshot?.bar_end_time ? relativeTime(snapshot.bar_end_time, nowMs, zone) : "—",
       lastBarTitle: snapshot?.bar_end_time ? fullTime(snapshot.bar_end_time, zone) : "",
-      lastBarMs: toMillis(snapshot?.bar_end_time),
       link: resultsLink(instance.instance_id)
     };
   });
@@ -287,6 +286,8 @@ export interface AttentionItem {
   /** when 的完整时间（悬停用） */
   whenTitle?: string;
   target: HomeTarget;
+  /** 告警对象所在的空间：和当前空间不同时，点开前先切过去（例如别的空间的数据集告警）。 */
+  spaceId?: string;
 }
 
 function alertTone(alert: HealthAlert): "warn" | "bad" {
@@ -316,7 +317,8 @@ export function attentionItems(input: {
       detail: prettifyIds(alert.reason || "", input.names),
       when: relativeTime(alert.triggered_at, input.nowMs),
       whenTitle: fullTime(alert.triggered_at),
-      target: input.alertTarget(alert)
+      target: input.alertTarget(alert),
+      ...(alert.object?.space_id ? { spaceId: alert.object.space_id } : {})
     };
   });
   for (const item of pendingItems({ ...input.strategy, replays: [], nowMs: input.nowMs })) {
@@ -402,11 +404,6 @@ export function hostRows(hosts: HealthHost[]): HostRow[] {
   });
 }
 
-const CATEGORY_LABELS: Record<string, string> = {
-  "collector.fetch_plan_applied": "采集计划",
-  "collector.subject_change": "标的变更"
-};
-
 export interface ActivityRow {
   key: string;
   when: string;
@@ -435,7 +432,7 @@ export function activityRows(items: ActivityLogItem[], names: NameBook, nowMs: n
       key: String(item.id ?? index),
       when: marketTime(toMillis(item.created_at), zone, nowMs),
       whenTitle: fullTime(item.created_at, zone),
-      category: CATEGORY_LABELS[item.category || ""] || item.category || item.source || "",
+      category: ACTIVITY_CATEGORY_LABELS[item.category || ""] || item.category || item.source || "",
       title: compactTitle(prettifyIds(item.title || "", names)),
       tone: item.level === "error" ? "bad" : item.level === "warning" ? "warn" : "idle"
     }));
@@ -528,6 +525,11 @@ export function fold<T>(items: T[], limit: number): { shown: T[]; hidden: number
   return { shown: items.slice(0, limit), hidden: Math.max(0, items.length - limit) };
 }
 
+/** 落后量的写法：0 为“已追平”，否则“落后 X”。 */
+function behindText(seconds: number): string {
+  return seconds === 0 ? "已追平" : `落后 ${humanizeDuration(seconds)}`;
+}
+
 const TONE_ICON: Record<Tone, string> = {
   ok: "icon-check-circle-fill",
   warn: "icon-exclamation-circle-fill",
@@ -539,20 +541,6 @@ export function toneIcon(tone: Tone): string {
   return TONE_ICON[tone];
 }
 
-export interface BannerFact {
-  key: string;
-  label: string;
-  value: string;
-  tone: Tone;
-  /** 鼠标悬停时说明这个数字的口径。 */
-  hint?: string;
-}
-
-/** 落后量的写法：0 为“已追平”，否则“落后 X”。 */
-function behindText(seconds: number): string {
-  return seconds === 0 ? "已追平" : `落后 ${humanizeDuration(seconds)}`;
-}
-
 interface FactCandidate {
   tone: Tone;
   atMs: number;
@@ -560,7 +548,7 @@ interface FactCandidate {
   behind: number;
 }
 
-/** 选出 Banner 要展示的那一行：状态最差的优先，同样差时落后最多的优先；都正常则取时间最新的。 */
+/** 选出指标卡要展示的那一行：状态最差的优先，同样差时落后最多的优先；都正常则取时间最新的。 */
 function pickFact(candidates: FactCandidate[]): FactCandidate | undefined {
   return [...candidates].sort(
     (a, b) => FRESHNESS_RANK[a.tone] - FRESHNESS_RANK[b.tone] || b.behind - a.behind || b.atMs - a.atMs
@@ -583,50 +571,9 @@ function dataFact(freshness: FreshnessRow[]): FactCandidate | undefined {
   );
 }
 
-/** Banner 与指标卡里的时间：写最近一根已收盘 K 线的收盘时间，精确到秒；由人对照当前时间判断是否异常，异常的换色。 */
+/** 指标卡里的时间：写最近一根已收盘 K 线的收盘时间，精确到秒；由人对照当前时间判断是否异常，异常的换色。 */
 function closeClock(fact: FactCandidate | undefined, nowMs: number, zone: string): string {
   return fact ? marketTime(fact.atMs, zone, nowMs, { seconds: true }) : "—";
-}
-
-/** Banner 里的三项：策略最近一期、因子计算、数据新鲜度都写具体的收盘时间；没有观测时写“—”。 */
-export function bannerFacts(input: {
-  strategies: StrategyRow[];
-  factors: FactorRow[];
-  freshness: FreshnessRow[];
-  nowMs: number;
-  /** 当前空间的时区：收盘时间按它显示 */
-  zone: string;
-}): BannerFact[] {
-  const strategy = pickFact(
-    input.strategies
-      .filter(row => row.enabled && row.lastBarMs !== null)
-      .map(row => ({ tone: row.tone, atMs: row.lastBarMs as number, behind: 0 }))
-  );
-  const factor = factorFact(input.factors);
-  const data = dataFact(input.freshness);
-  return [
-    {
-      key: "strategy",
-      label: "策略最近一期",
-      value: closeClock(strategy, input.nowMs, input.zone),
-      tone: strategy ? strategy.tone : "idle",
-      hint: "已启用实例最近一份目标所属 K 线的收盘时间；有异常实例时显示异常的那一个"
-    },
-    {
-      key: "factor",
-      label: "因子计算",
-      value: closeClock(factor, input.nowMs, input.zone),
-      tone: factor ? factor.tone : "idle",
-      hint: "因子任务最近一个已计算周期的收盘时间；有滞后的任务时显示落后最多的那一个"
-    },
-    {
-      key: "data",
-      label: "数据新鲜度",
-      value: closeClock(data, input.nowMs, input.zone),
-      tone: data ? data.tone : "idle",
-      hint: "数据链路已写到的最近一根 K 线的收盘时间；有落后的数据集时显示落后最多的那一个"
-    }
-  ];
 }
 
 export interface KpiCard {

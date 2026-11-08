@@ -10,7 +10,10 @@ const ctx = vi.hoisted(() => ({
   targets: {} as Record<string, any>
 }));
 vi.mock("vue-router", () => ({ useRouter: () => ({ push: ctx.push }) }));
-vi.mock("@/store/modules/space", () => ({ useSpaceStore: () => ctx.space }));
+vi.mock("@/store/modules/space", () => ({
+  useSpaceStore: () => ctx.space,
+  isSystemSpace: (spaceId: string | undefined) => (spaceId || "").startsWith("mooxsys")
+}));
 vi.mock("@/store/modules/user-info", () => ({ useUserInfoStore: () => ({ account: { user: { userName: "admin123" } } }) }));
 vi.mock("@/api/monitor", () => ({ monitorApi: { getOverview: vi.fn(async () => ({ overview: ctx.overview })) } }));
 vi.mock("@/api/admin/http", () => ({ callControl: vi.fn(async () => ({ page: { total: 4 } })) }));
@@ -107,7 +110,7 @@ async function render() {
 describe("home page", () => {
   beforeEach(() => {
     ctx.push.mockReset();
-    ctx.space = reactive({ selectedSpaceId: "crypto", selectedSpace: { name: "加密货币市场" } });
+    ctx.space = reactive({ selectedSpaceId: "crypto", selectedSpace: { name: "加密货币市场" }, setSelectedSpace: vi.fn() });
     ctx.overview = {
       topology_known: true,
       summary: { components: { healthy_count: 22 } },
@@ -136,9 +139,15 @@ describe("home page", () => {
     const wrapper = await render();
     const text = wrapper.text();
     expect(text).toContain("运行正常");
-    expect(wrapper.find(".health-card").text()).toContain("22/22 组件");
-    expect(text).toContain("加密货币市场");
+    // 首页只回答“有没有问题、去哪处理”：没有问候语和日期、没有健康卡和横幅事实行、“一切正常”只用文字
+    expect(wrapper.find(".health-card").exists()).toBe(false);
+    expect(wrapper.find(".banner-facts").exists()).toBe(false);
+    expect(text).not.toMatch(/早上好|下午好|晚上好|凌晨好|星期/);
     expect(wrapper.find(".tile-attention .all-clear").text()).toContain("一切正常");
+    // 新鲜度、主机两格只列不正常的行：都正常时写一句
+    expect(wrapper.find('[aria-label="数据新鲜度"]').text()).toContain("1 条数据链路都正常");
+    expect(wrapper.find('[aria-label="主机工作台"]').text()).toContain("1 台主机都正常");
+    expect(wrapper.find(".tile-attention .all-clear svg, .tile-attention .all-clear [class*='icon-']").exists()).toBe(false);
     expect(wrapper.findAll(".attention-line")).toHaveLength(0);
     expect(text).not.toMatch(/驾驶舱|Quant\.|Think\.|Pattern\./);
   });
@@ -146,7 +155,7 @@ describe("home page", () => {
   it("puts the quick links in the banner and links them to their pages", async () => {
     const wrapper = await render();
     const links = wrapper.findAll(".banner .quick");
-    expect(links.map(link => link.text())).toEqual(["K 线浏览", "因子结果", "策略结果", "策略回放", "交易账户", "监控告警"]);
+    expect(links.map(link => link.text())).toEqual(["采集结果", "因子结果", "策略结果", "策略回放", "交易账户", "监控告警"]);
     await links[0].trigger("click");
     expect(ctx.push).toHaveBeenCalledWith("/collector/tasks?tab=results");
   });
@@ -234,6 +243,25 @@ describe("home page", () => {
     expect(wrapper.text()).toContain("更新于 —");
   });
 
+  it("待处理里别的空间的告警，点开前先切到那个空间", async () => {
+    ctx.overview.alerts = [
+      {
+        id: "a1",
+        severity: "warning",
+        title: "数据中断",
+        triggered_at: new Date().toISOString(),
+        object: { type: "dataset", producer: "collector", dataset_id: "ds_cn", freq: "5m", space_id: "stockcn" }
+      }
+    ];
+    const wrapper = await render();
+    const order: string[] = [];
+    (ctx.space.setSelectedSpace as ReturnType<typeof vi.fn>).mockImplementation(() => order.push("switch"));
+    ctx.push.mockImplementation(() => order.push("push"));
+    await wrapper.find(".tile-attention .attention-line").trigger("click");
+    expect(ctx.space.setSelectedSpace).toHaveBeenCalledWith("stockcn");
+    expect(order).toEqual(["switch", "push"]);
+  });
+
   it("does not claim everything is normal while data is lagging", async () => {
     ctx.overview.pipeline = [
       {
@@ -256,9 +284,8 @@ describe("home page", () => {
     expect(wrapper.text()).not.toContain("运行正常");
     expect(wrapper.find(".tile-attention .attention-line").text()).toContain("入库 · 现货K线 · 1m");
     expect(wrapper.find(".tile-attention .attention-line").text()).toContain("14 小时 42 分");
-    // 横幅写具体的收盘时间（精确到秒），落后的换成警示色，由人对照当前时间判断。
-    const dataFact = wrapper.findAll(".banner-facts span").find(item => item.text().startsWith("数据新鲜度"));
-    expect(dataFact?.text()).toMatch(/^数据新鲜度 (\d{2}-\d{2} )?\d{2}:\d{2}:\d{2} UTC$/);
-    expect(dataFact?.find("b").classes()).toContain("is-warn");
+    // 新鲜度磁贴只列不正常的行
+    expect(wrapper.find('[aria-label="数据新鲜度"]').text()).toContain("现货K线");
+    expect(wrapper.find('[aria-label="数据新鲜度"]').text()).not.toContain("都正常");
   });
 });

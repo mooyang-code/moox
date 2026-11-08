@@ -113,7 +113,7 @@ export const systemMenu = [
   menu("0600", "06", "/ops/deployments", "ops-deployments", "ops-deployments", "ops/deployments/index", 2, {
     reuseOnQuery: true
   }),
-  menu("0606", "06", "/ops/storage/nodes", "ops-storage", "ops-storage", "ops/storage/index", 4),
+  menu("0606", "06", "/ops/storage/nodes", "ops-storage", "ops-storage", "ops/storage/nodes", 4),
   menu("0608", "06", "/ops/activity", "ops-activity", "ops-activity", "ops/activity/index", 5),
 
   directory("07", "0", "/settings/spaces", "settings", "settings", 8, { svgIcon: "set", icon: "" }),

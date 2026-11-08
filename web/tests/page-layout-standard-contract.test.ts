@@ -132,7 +132,6 @@ describe("page layout standards", () => {
     const collectorTasks = read("collector/collection-tasks/collection-tasks.vue");
     const taskResults = read("collector/task-results/index.vue");
     const deployments = read("ops/deployments/index.vue");
-    const storage = read("ops/storage/index.vue");
     const storageNodes = read("ops/storage/nodes.vue");
 
     expectMargin(subjects, ".subjects-content", "margin-top", 12);
@@ -146,7 +145,6 @@ describe("page layout standards", () => {
     expectMargin(deployments, ".deployments-content", "margin-top", 12);
     expectMargin(deployments, ".filters", "margin-bottom", 8);
 
-    expectMargin(storage, ".storage-config-content", "margin-top", 12);
     expect(storageNodes).toContain(".page-head");
   });
 
