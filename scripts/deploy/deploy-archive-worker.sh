@@ -164,10 +164,10 @@ fi
 
 # ---------------------------------------------------------------- 内置对象存储（SeaweedFS）
 # 端口固定、只听 127.0.0.1；gRPC 端口为 HTTP 端口 + 10000。
-SW_MASTER=11460
-SW_FILER=11462
-SW_S3=11463
-SW_PORTS=(11460 11461 11462 11463 21460 21461 21462 21463)
+SW_MASTER=11470
+SW_FILER=11472
+SW_S3=11473
+SW_PORTS=(11470 11471 11472 11473 21470 21471 21472 21473)
 SW_BUCKET=moox-archive
 SW_PREFIX=moox-archive/
 SW_UNIT=moox-seaweedfs.service

@@ -136,7 +136,7 @@ cat >"${tmp}/swbin/systemctl" <<EOF
 echo "\$@" >>"${tmp}/sw-systemctl.log"
 case "\$*" in
   *is-active*) [ -e "${sw_state}/active" ] ;;
-  *restart*|*" start "*) touch "${sw_state}/active"; touch "${sw_state}/port-11463" ;;
+  *restart*|*" start "*) touch "${sw_state}/active"; touch "${sw_state}/port-11473" ;;
   *disable*) rm -f "${sw_state}/active" ;;
 esac
 exit \${?}
@@ -153,7 +153,7 @@ cat >"${tmp}/pkg/weed" <<EOF
 cmd="\$(cat)"
 echo "\${cmd}" >>"${tmp}/sw-weed.log"
 case "\${cmd}" in
-  cluster.check) echo "checking master 127.0.0.1:11460 to volume server 127.0.0.1:11461.21461 ... ok round trip 0.4ms" ;;
+  cluster.check) echo "checking master 127.0.0.1:11470 to volume server 127.0.0.1:11471.21471 ... ok round trip 0.4ms" ;;
   s3.bucket.list) [ -e "${sw_state}/bucket" ] && printf '  moox-archive\tsize:0\n' ;;
   s3.bucket.create*) if [ -e "${sw_state}/bucket" ]; then echo "error: bucket moox-archive already exists"; else touch "${sw_state}/bucket"; fi ;;
 esac
@@ -178,15 +178,15 @@ if PATH="${tmp}/swbin:${PATH}" bash "${SCRIPT}" "${args[@]}" --binary "${tmp}/pk
   fail "the built-in object store must require weed next to --binary"
 fi
 # 端口被别的程序占用：失败。
-touch "${sw_state}/port-11461"
+touch "${sw_state}/port-11471"
 if PATH="${tmp}/swbin:${PATH}" bash "${SCRIPT}" "${b_args[@]}" >"${tmp}/sw-bad3.log" 2>&1; then
   fail "a busy port must stop the built-in object store"
 fi
-grep -q 'port 11461' "${tmp}/sw-bad3.log" || fail "the busy port must be named"
+grep -q 'port 11471' "${tmp}/sw-bad3.log" || fail "the busy port must be named"
 grep -qF 'cos.ap-nanjing.myqcloud.com' "${config}" || fail "the worker config must stay unchanged when the built-in object store fails"
 grep -qF 'AKIDnew' "${secrets}/archive-object-store.env" || fail "the worker credential must stay unchanged when the built-in object store fails"
 [[ ! -e "${secrets}/archive-object-store.env.new" && ! -e "${deploy}/config/app.yaml.new.check" ]] || fail "rejected candidates must be cleaned up"
-rm -f "${sw_state}/port-11461"
+rm -f "${sw_state}/port-11471"
 
 # 首次部署：生成密钥、派生 s3.json 与 worker 凭据（都 0600），--no-start 也启动 SeaweedFS 并建桶。
 : >"${tmp}/sw-systemctl.log"
@@ -206,14 +206,14 @@ grep -qF 'arn:aws:s3:::moox-archive/moox-archive/*' "${sw_dir}/config/s3.json" |
 grep -q 'DeleteObject\|"Write"' "${sw_dir}/config/s3.json" && fail "the policy must not allow deletes"
 python3 -I -c 'import json,sys; c=json.load(open(sys.argv[1])); json.loads(c["policies"][0]["content"])' "${sw_dir}/config/s3.json" || fail "s3.json and its policy must be valid JSON"
 grep -q "${access}\|${secret}" "${tmp}/sw-ok.log" && fail "the generated key must not be printed"
-for want in 'endpoint: "127.0.0.1:11463"' 'region: "us-east-1"' 'bucket: "moox-archive"' 'prefix: "moox-archive/"' 'url_style: path' 'use_tls: false' \
+for want in 'endpoint: "127.0.0.1:11473"' 'region: "us-east-1"' 'bucket: "moox-archive"' 'prefix: "moox-archive/"' 'url_style: path' 'use_tls: false' \
   "credentials_file: ${secrets}/archive-object-store.env"; do
   grep -qF -- "${want}" "${config}" || fail "built-in object_store misses: ${want}"
 done
 grep -q 'storage_class' "${config}" && fail "the built-in object store has no storage class"
 [[ -s "${sw_unit}" ]] || fail "moox-seaweedfs.service was not rendered"
 grep -q '__[A-Z_]*__' "${sw_unit}" && fail "unrendered placeholder in moox-seaweedfs.service"
-for want in "-dir=${sw_dir}/data" '-ip.bind=127.0.0.1' '-master.telemetry=false' '-s3.port=11463' '-s3.port.iceberg=0' '-s3.port.lance=0' "-s3.config=${sw_dir}/config/s3.json"; do
+for want in "-dir=${sw_dir}/data" '-ip.bind=127.0.0.1' '-master.telemetry=false' '-s3.port=11473' '-s3.port.iceberg=0' '-s3.port.lance=0' "-s3.config=${sw_dir}/config/s3.json"; do
   grep -qF -- "${want}" "${sw_unit}" || fail "moox-seaweedfs.service misses: ${want}"
 done
 grep -q 'restart moox-seaweedfs.service' "${tmp}/sw-systemctl.log" || fail "a fresh install must (re)start SeaweedFS"
