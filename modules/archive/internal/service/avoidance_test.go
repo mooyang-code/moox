@@ -62,16 +62,16 @@ func TestAvoidanceRefreshReadsOnlySpacesWithTasks(t *testing.T) {
 		t.Fatalf("avoidance = %+v", a)
 	}
 
+	// 新建了任务（有任务的空间变了）：不等 10 分钟，下一次维护就重算。
 	requireOK(t, h.createOnly("ds_1m", nil).GetRetInfo())
-	requireOK(t, h.createOnly("cn_1m", func(r *archivepb.CreateArchiveTaskReq) { r.SpaceId = "stockcn" }).GetRetInfo())
-	// 上次成功不到 10 分钟：不刷新。
-	h.now = h.now.Add(9 * time.Minute)
+	h.now = h.now.Add(time.Minute)
 	if err := h.svc.Maintain(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if calls := collector.takeCalls(); len(calls) != 0 {
-		t.Fatalf("不到 10 分钟不应刷新: %v", calls)
+	if calls := collector.takeCalls(); strings.Join(calls, ",") != "crypto" {
+		t.Fatalf("新建首个任务后应立即读取: %v", calls)
 	}
+	requireOK(t, h.createOnly("cn_1m", func(r *archivepb.CreateArchiveTaskReq) { r.SpaceId = "stockcn" }).GetRetInfo())
 	h.now = h.now.Add(time.Minute)
 	if err := h.svc.Maintain(ctx); err != nil {
 		t.Fatal(err)
@@ -80,6 +80,15 @@ func TestAvoidanceRefreshReadsOnlySpacesWithTasks(t *testing.T) {
 	if calls := collector.takeCalls(); strings.Join(calls, ",") != "crypto,stockcn" {
 		t.Fatalf("calls = %v", calls)
 	}
+	// 空间不变且上次成功不到 10 分钟：不刷新。
+	h.now = h.now.Add(9 * time.Minute)
+	if err := h.svc.Maintain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if calls := collector.takeCalls(); len(calls) != 0 {
+		t.Fatalf("不到 10 分钟不应刷新: %v", calls)
+	}
+	h.now = h.now.Add(-9 * time.Minute)
 	a := h.svc.avoidance()
 	if a.EveryMinutes != 1 || a.HourQuiet == nil || !a.ComputedAt.Equal(h.now) || !strings.Contains(a.Basis, "crypto：1m、1h；stockcn：5m") {
 		t.Fatalf("avoidance = %+v", a)

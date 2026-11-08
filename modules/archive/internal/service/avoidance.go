@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -35,8 +36,9 @@ type avoidanceState struct {
 	current *schedule.Avoidance
 	// spaces 是各空间最近一次成功读到的频率。
 	spaces map[string]schedule.SpaceFrequencies
-	// lastOK 是最近一次全部空间都读取成功的时间。
-	lastOK time.Time
+	// lastOK 是最近一次全部空间都读取成功的时间；lastSpaces 是那次计算用的空间（有归档任务的空间）。
+	lastOK     time.Time
+	lastSpaces string
 	// refreshing 防止上一轮刷新未结束时重入。
 	refreshing bool
 }
@@ -52,13 +54,18 @@ func (s *Service) avoidance() *schedule.Avoidance {
 	return s.avoid.current
 }
 
-// maybeRefreshAvoidance 距上次成功满 10 分钟时刷新避让规则。
+// maybeRefreshAvoidance 距上次成功满 10 分钟、或有归档任务的空间变了（如新建了第一个任务）时刷新避让规则。
 func (s *Service) maybeRefreshAvoidance(ctx context.Context, now time.Time) error {
 	if s.collector == nil {
 		return nil
 	}
+	spaces, err := s.taskSpaces(ctx)
+	if err != nil {
+		return err
+	}
+	key := strings.Join(spaces, ",")
 	s.avoid.mu.Lock()
-	due := !s.avoid.refreshing && (s.avoid.lastOK.IsZero() || now.Sub(s.avoid.lastOK) >= avoidanceRefreshEvery)
+	due := !s.avoid.refreshing && (s.avoid.lastOK.IsZero() || key != s.avoid.lastSpaces || now.Sub(s.avoid.lastOK) >= avoidanceRefreshEvery)
 	if due {
 		s.avoid.refreshing = true
 	}
@@ -71,15 +78,14 @@ func (s *Service) maybeRefreshAvoidance(ctx context.Context, now time.Time) erro
 		s.avoid.refreshing = false
 		s.avoid.mu.Unlock()
 	}()
-	return s.refreshAvoidance(ctx, now)
+	return s.refreshAvoidance(ctx, spaces, now)
 }
 
-// refreshAvoidance 并行读取有归档任务的空间的采集频率，重算避让规则。
-// 读取失败的空间沿用上次成功的结果（Basis 注明）；任一空间失败时返回错误，下次维护重试。
-func (s *Service) refreshAvoidance(ctx context.Context, now time.Time) error {
+// taskSpaces 返回有归档任务的空间（排序、去重）。
+func (s *Service) taskSpaces(ctx context.Context) ([]string, error) {
 	tasks, _, err := s.store.ListTasks(ctx, "", maxListedTasks, 0)
 	if err != nil {
-		return fmt.Errorf("列出归档任务: %w", err)
+		return nil, fmt.Errorf("列出归档任务: %w", err)
 	}
 	seen := map[string]bool{}
 	var spaces []string
@@ -90,6 +96,16 @@ func (s *Service) refreshAvoidance(ctx context.Context, now time.Time) error {
 		}
 	}
 	sort.Strings(spaces)
+	return spaces, nil
+}
+
+// refreshAvoidance 并行读取给定空间的采集频率，重算避让规则。
+// 读取失败的空间沿用上次成功的结果（Basis 注明）；任一空间失败时返回错误，下次维护重试。
+func (s *Service) refreshAvoidance(ctx context.Context, spaces []string, now time.Time) error {
+	seen := make(map[string]bool, len(spaces))
+	for _, space := range spaces {
+		seen[space] = true
+	}
 	readCtx, cancel := context.WithTimeout(ctx, avoidanceReadBudget)
 	defer cancel()
 	type result struct {
@@ -141,7 +157,7 @@ func (s *Service) refreshAvoidance(ctx context.Context, now time.Time) error {
 	if len(errs) > 0 {
 		return errors.Join(errs...)
 	}
-	s.avoid.lastOK = now
+	s.avoid.lastOK, s.avoid.lastSpaces = now, strings.Join(spaces, ",")
 	return nil
 }
 
