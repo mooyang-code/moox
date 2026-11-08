@@ -110,7 +110,7 @@ const running = computed(() => split.value.running);
 const pending = computed(() => pendingItems(sets.value, split.value.failed, labelOf));
 const stats = computed(() => statsStrip(store.engine, running.value.length));
 
-/** ListRecalcJobs 必须带 task_id：只对已启用的计算任务扇出，页面失活时不轮询。 */
+/** ListRecalcJobs 必须带 task_id：只对已启用的计算任务扇出。 */
 async function loadJobs() {
   const token = gate.next();
   const ids = recalcQueryTasks(sets.value);

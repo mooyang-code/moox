@@ -152,7 +152,7 @@
 
 <script setup lang="ts">
 import TimeText from "@/components/time-text/index.vue";
-import { computed, onActivated, onBeforeUnmount, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import PageTitleTabs from "@/components/page-title-tabs/index.vue";
 import { useSpaceStore } from "@/store/modules/space";
@@ -308,13 +308,6 @@ watch(
 onBeforeUnmount(() => {
   listRequests.invalidate();
   extraRequests.invalidate();
-});
-
-// 列表页被页面缓存：从详情页回来时（关闭模拟账户、移出成员、改名之后）重新读，不显示旧数据。
-let activatedOnce = false;
-onActivated(() => {
-  if (activatedOnce) void load();
-  activatedOnce = true;
 });
 
 void load();

@@ -2,26 +2,19 @@
   <a-watermark :content="watermark" v-bind="watermarkConfig">
     <a-layout-content class="layout-main-content">
       <Tabs v-if="isTabs" />
-      <!-- 全局路由加载状态 -->
-      <div v-if="loadingStore.routeLoading" class="global-loading-container">
-        <a-spin :size="32" tip="页面切换中..." />
-      </div>
-
-      <!-- 路由内容 -->
-      <router-view v-else v-slot="{ Component, route }">
+      <!-- 路由内容：跨路径导航时旧页面停留到新页面就绪，期间顶部有进度条；Suspense 的 fallback 只在新页面首次异步加载时出现 -->
+      <router-view v-slot="{ Component, route }">
         <MainTransition>
-          <keep-alive :include="cacheRoutes">
-            <Suspense>
-              <template #default>
-                <component :is="Component" :key="routeViewKey(route)" v-if="refreshPage" />
-              </template>
-              <template #fallback>
-                <div class="loading-container">
-                  <a-spin :size="32" tip="页面加载中..." />
-                </div>
-              </template>
-            </Suspense>
-          </keep-alive>
+          <Suspense>
+            <template #default>
+              <component :is="Component" :key="routeViewKey(route)" v-if="refreshPage" />
+            </template>
+            <template #fallback>
+              <div class="loading-container">
+                <a-spin :size="32" tip="页面加载中..." />
+              </div>
+            </template>
+          </Suspense>
         </MainTransition>
       </router-view>
     </a-layout-content>
@@ -35,13 +28,8 @@ import { routeViewKey } from "./route-view-key";
 import MainTransition from "@/components/main-transition/index.vue";
 import { storeToRefs } from "pinia";
 import { useThemeConfig } from "@/store/modules/theme-config";
-import { useRoutesConfigStore } from "@/store/modules/route-config";
-import { useLoadingStore } from "@/store/modules/loading";
 const themeStore = useThemeConfig();
 let { refreshPage, isTabs, watermark, watermarkStyle, watermarkRotate, watermarkGap } = storeToRefs(themeStore);
-const routerStore = useRoutesConfigStore();
-const { cacheRoutes } = storeToRefs(routerStore);
-const loadingStore = useLoadingStore();
 
 // 水印配置
 const watermarkConfig = computed(() => {
@@ -62,18 +50,12 @@ const watermarkConfig = computed(() => {
   min-width: 0;
 }
 
-.loading-container,
-.global-loading-container {
+.loading-container {
   display: flex;
   justify-content: center;
   align-items: center;
   height: 200px;
   width: 100%;
-}
-
-.global-loading-container {
-  height: 100%;
-  min-height: 400px;
 }
 
 // 修改左侧滚动条宽度-主要针对main窗口内的滚动条

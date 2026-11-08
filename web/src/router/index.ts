@@ -4,11 +4,9 @@ import pinia from "@/store/index";
 import { createRouter, createWebHashHistory } from "vue-router";
 import { staticRoutes, notFoundAndNoPower } from "@/router/route.ts";
 import { currentlyRoute } from "@/router/route-output";
-import { shouldShowRouteLoading } from "@/router/route-loading";
 import { storeToRefs } from "pinia";
 import { useUserInfoStore } from "@/store/modules/user-info";
 import { useRoutesConfigStore } from "@/store/modules/route-config";
-import { useLoadingStore } from "@/store/modules/loading";
 import { useRoutingMethod } from "@/hooks/useRoutingMethod";
 import { isEmptyObject } from "@/utils/index";
 /**
@@ -42,15 +40,11 @@ const router = createRouter({
 router.beforeEach(async (to: any, _from: any, next: any) => {
   NProgress.start(); // 开启进度条
   const store = useUserInfoStore(pinia);
-  const loadingStore = useLoadingStore(pinia);
   const { token, account } = storeToRefs(store);
 
   if (token.value && !(await store.hasValidSession())) {
     await store.logOut();
   }
-
-  // 显示路由加载状态（同一页面仅 query 变化时不显示，避免卸载页面内容）
-  if (shouldShowRouteLoading(to, _from)) loadingStore.showRouteLoading();
 
   // next()内部加了path等于跳转指定路由会再次触发router.beforeEach，内部无参数等于放行，不会触发router.beforeEach
   if (to.path === "/login" && !token.value) {
@@ -124,7 +118,7 @@ router.beforeEach(async (to: any, _from: any, next: any) => {
 
       // 获取外链路由的处理函数
       // 所有的路由正常放行，只不过额外判断是否是外链，如果是，则打开新窗口跳转外链
-      // 外链的页面依旧正常打开，只不过不会参与缓存与tabs显示，符合路由跳转的直觉
+      // 外链的页面依旧正常打开，只不过不进标签栏，符合路由跳转的直觉
       const { openExternalLinks } = useRoutingMethod();
       // 处理外链跳转
       openExternalLinks(to);
@@ -139,16 +133,12 @@ router.beforeEach(async (to: any, _from: any, next: any) => {
 // 路由跳转错误
 router.onError((error: any) => {
   NProgress.done();
-  const loadingStore = useLoadingStore(pinia);
-  loadingStore.hideRouteLoading();
   console.warn("路由错误", error.message);
 });
 
 // 路由加载后
 router.afterEach(() => {
   NProgress.done();
-  const loadingStore = useLoadingStore(pinia);
-  loadingStore.hideRouteLoading();
 });
 
 export default router;

@@ -80,7 +80,6 @@ const onTabs = (key: string) => {
 // 删除当前标签页并跳转到最后一个标签页
 const onDelete = (key: string) => {
   routerStore.removeTabsList(key);
-  routerStore.removeRouteName(key);
   if (tabsList.value.length == 0) return;
   if (currentRoute.value.name != key) return;
   routerPush(tabsList.value.at(-1));
@@ -94,12 +93,9 @@ const refresh = () => {
     rotateOpen.value = false;
   }, 500);
   const themeStore = useThemeConfig();
+  // 先卸载再挂载当前页，重建它
   themeStore.setRefreshPage(false);
-  currentRoute.value.meta.keepAlive && routerStore.removeRouteName(currentRoute.value.name);
-  nextTick(() => {
-    themeStore.setRefreshPage(true);
-    currentRoute.value.meta.keepAlive && routerStore.setRouteNames(currentRoute.value.name);
-  });
+  nextTick(() => themeStore.setRefreshPage(true));
 };
 
 // 关闭当前
@@ -123,8 +119,6 @@ const closeSides = (type: string) => {
   let rightNames = rightList.map((item: Menu.MenuOptions) => item.name);
   // 删除右侧
   tabsList.value = tabsList.value.filter((item: Menu.MenuOptions) => !rightNames.includes(item.name));
-  // 删除缓存
-  routerStore.removeRouteNames(rightNames);
 };
 
 // 关闭其它&关闭全部
@@ -145,8 +139,6 @@ const closeOther = (type: string) => {
   let rightNames = list.map((item: Menu.MenuOptions) => item.name);
   // 删除可关闭项
   tabsList.value = tabsList.value.filter((item: Menu.MenuOptions) => !rightNames.includes(item.name));
-  // 删除缓存
-  routerStore.removeRouteNames(rightNames);
   // 关闭全部，若当前被关闭则跳转最后一个
   if (tabsList.value.length != 0 && !currentRoute.value.meta.affix && type == "all") {
     routerPush(tabsList.value.at(-1));

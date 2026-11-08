@@ -17,7 +17,7 @@ export function linearArray(tree: any) {
 
 /**
  * 统一处理所有的路由跳转：当前路由高亮、tabs栏数据。
- * menu和tabs以及手动刷新浏览器等功能只需要跳转即可，缓存和高亮的逻辑这边负责
+ * menu和tabs以及手动刷新浏览器等功能只需要跳转即可，高亮和标签栏的逻辑这边负责
  * @param {any} current 需要跳转的路由和路由参数
  */
 export const currentlyRoute = (current: any) => {
@@ -44,14 +44,11 @@ export const currentlyRoute = (current: any) => {
   // 存入当前路由-高亮
   store.setCurrentRoute(route);
 
-  // 如果是外链路由则不做后续任何缓存操作，条件: 有外链 && 非内嵌
+  // 外链（非内嵌）不进标签栏
   if (route.meta.link && !route.meta.iframe) return;
 
   // 存入tabs栏数据，条件：开启tabs
   if (isTabs.value) store.setTabs(route);
-  // 不缓存路由 || 不渲染tabs ，符合任意条件则不缓存路由
-  if (!route.meta.keepAlive || !isTabs.value) return;
-  store.setRouteNames(route.name); // 缓存路由name
 };
 
 /**

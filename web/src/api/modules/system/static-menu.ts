@@ -1,7 +1,6 @@
 const baseMeta = {
   hide: false,
   disable: false,
-  keepAlive: true,
   affix: false,
   link: "",
   iframe: false,

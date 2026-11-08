@@ -49,8 +49,8 @@ export interface FactorScopeOptions {
 
 /**
  * 因子页面共用的样板：空间切换加载、?task= 与 store 同步、轮询。
- * 主区域是 keep-alive；因子页面声明了 reuseOnQuery，query 变化时组件不重建。只在空间 id 变化时 reset + load，
- * 同一空间重新挂载直接复用 store。失活期间不跟随 ?task=，重新激活时按 URL 补同步一次。
+ * 因子页面声明了 reuseOnQuery，query 变化时组件不重建。只在空间 id 变化时 reset + load，同一空间重新挂载直接复用 store。
+ * 计算任务页内部用 keep-alive 缓存页签：失活期间不跟随 ?task=，重新激活时按 URL 补同步一次。
  */
 export function useFactorScope(options: FactorScopeOptions = {}) {
   const requireSet = options.requireSet ?? false;

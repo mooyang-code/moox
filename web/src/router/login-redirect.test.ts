@@ -4,9 +4,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const session = vi.hoisted(() => ({ accountFails: false }));
 vi.mock("@/config/nprogress", () => ({ default: { start: vi.fn(), done: vi.fn() } }));
 vi.mock("@/router/route-output", () => ({ currentlyRoute: vi.fn() }));
-vi.mock("@/store/modules/loading", () => ({
-  useLoadingStore: () => ({ showRouteLoading: vi.fn(), hideRouteLoading: vi.fn() })
-}));
 vi.mock("@/store/modules/route-config", () => ({
   useRoutesConfigStore: () => ({ initSetRouter: vi.fn(async () => undefined) })
 }));
