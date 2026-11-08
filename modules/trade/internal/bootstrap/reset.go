@@ -16,7 +16,7 @@ import (
 
 // Trade 的重置（设计 5.2、6.1）。
 //
-//	data：清运行数据——订单、成交、持仓、权益点、目标与回执、影子目标、回放账本、纸面余额、操作记录；保留账户与逻辑账户（配置）；
+//	data：清运行数据——订单、成交、持仓、权益点、目标与回执、影子目标、回放账本、纸面余额与资金费、操作记录；保留账户与逻辑账户（配置）；
 //	all ：再清账户（交易账户、纸面配置）、逻辑账户及成员、行情标的，回到新部署的空白状态。
 //
 // 重置只清本地账本，**交易所上的仓位和订单不会因此消失**，所以实盘账户还有持仓或未完成订单时一律拒绝：
@@ -30,7 +30,7 @@ var (
 		"t_account_equity_points", "t_logical_account_equity_points",
 		"t_logical_account_targets", "t_logical_account_target_receipts", "t_shadow_targets",
 		"t_replay_sessions", "t_replay_periods", "t_replay_orders",
-		"t_paper_balance_projections", "t_paper_asset_balances", "t_operator_actions",
+		"t_paper_balance_projections", "t_paper_asset_balances", "t_paper_funding_fees", "t_operator_actions",
 		"t_trade_wallet_transfers",
 	}
 	tradeConfigTables = []string{

@@ -449,6 +449,12 @@ func (s *ExchangeSession) runPaper(ctx context.Context) error {
 	if interval <= 0 {
 		interval = 30 * time.Second
 	}
+	// 资金费在单独的协程里结算：停机后的补算要连续请求交易所，不能拖住就绪判断和同步；会话结束前等它退出。
+	fundingCtx, stopFunding := context.WithCancel(ctx)
+	var fundingDone sync.WaitGroup
+	fundingDone.Go(func() { s.runPaperFunding(fundingCtx) })
+	defer fundingDone.Wait()
+	defer stopFunding()
 	poll := time.NewTicker(100 * time.Millisecond)
 	defer poll.Stop()
 	refresh := time.NewTicker(interval)
@@ -482,6 +488,39 @@ func (s *ExchangeSession) runPaper(ctx context.Context) error {
 				return s.disconnect(ctx, err)
 			}
 			s.recoverPaperAccountAfterSync(generation, orders)
+		}
+	}
+}
+
+// paperFundingInterval 是模拟盘会话检查资金费的间隔（测试里调短）。
+var paperFundingInterval = paper.FundingCheckInterval
+
+// paperFundingSettler 是能结算永续资金费的模拟盘适配器（paper.Adapter 实现）。
+type paperFundingSettler interface {
+	SettleFunding(context.Context) (int, error)
+}
+
+// runPaperFunding 启动时先结算一次（补算停机期间的结算点），之后每分钟检查一次。
+// 失败只记日志、之后照常检查（退避由适配器负责）：取不到资金费率不影响模拟账户就绪和撮合。
+func (s *ExchangeSession) runPaperFunding(ctx context.Context) {
+	settler, ok := s.Adapter.(paperFundingSettler)
+	if !ok {
+		return
+	}
+	ticker := time.NewTicker(paperFundingInterval)
+	defer ticker.Stop()
+	for {
+		count, err := settler.SettleFunding(ctx)
+		switch {
+		case err != nil && ctx.Err() == nil:
+			log.WarnContextf(ctx, "模拟盘资金费结算失败，稍后重试：account=%s err=%v", s.Account.TradingAccountID, err)
+		case count > 0:
+			log.InfoContextf(ctx, "模拟盘资金费已结算：account=%s count=%d", s.Account.TradingAccountID, count)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
 		}
 	}
 }

@@ -33,3 +33,8 @@
 - 资金流水去重假定合约收益流水里 `incomeType=TRANSFER` 的 `tranId` 就是万向划转的 `tranId`，用它避免已完成的划转重复出现；两者不是同一个编号时会重复。未核对，V3 实测要核对。
 - 等现货钱包快照追上划转用现货账户 `GET /api/v3/account` 的 `updateTime`（`binance.go` 里取 `updateTime`）：如果划转不更新这个时间，每笔划转后要等满 2 分钟（`snapshotGrace`）才放行买入，只是慢，不会多花钱。未核对，V3 实测要核对。
 - 保证金率监控的读数（阶段 4）：统一账户直接取 `GET /papi/v1/account` 的 `uniMMR` 比阈值（官方样例 5167.92171923）；币安常见问答说明 uniMMR = 调整后权益 ÷ 维持保证金，调整后权益计入抵押率、再扣掉挂单浮亏（openLoss）；接口文档里 `accountEquity` 是计入抵押率的账户权益，`actualEquity` 是不计抵押率的权益，所以分子对应 `accountEquity` 而不是 `actualEquity`。`uniMMR` 为空时才退回自己算的 `accountEquity ÷ accountMaintMargin`（没扣挂单浮亏，有挂单时可能略高于币安的 uniMMR）。官方样例里 `uniMMR`、`accountEquity`、`actualEquity`、`accountMaintMargin` 彼此对不上，只是示例填充值，不能据此推断公式。普通账户取 `/fapi/v3/account` 的 `totalMarginBalance`（总权益）和合约持仓名义。未核对：V3 小额实测时日志同时记交易所的 `uniMMR` 和自己算的值，对照两者是否一致。
+
+## 模拟盘资金费（2026-11-07 构造）
+
+- `fapi_funding_rate.json`：`GET /fapi/v1/fundingRate`（公共接口，不带 symbol）。按官方文档的字段集构造，不是录制的原文：字段 `symbol`、`fundingTime`（毫秒）、`fundingRate`、`markPrice`，数值都是字符串；包含负费率、结算时刻不在整点（多 1 毫秒）、老记录 `markPrice` 为空串三种情况。
+- 未核对：不带 symbol 时返回记录的排序方式。适配器满页就对半拆开重查，不依赖顺序。

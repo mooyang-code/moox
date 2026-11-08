@@ -1,0 +1,26 @@
+[
+  {
+    "symbol": "BTCUSDT",
+    "fundingTime": 1730419200000,
+    "fundingRate": "0.00010000",
+    "markPrice": "70283.20000000"
+  },
+  {
+    "symbol": "ETHUSDT",
+    "fundingTime": 1730419200001,
+    "fundingRate": "-0.00003562",
+    "markPrice": "2512.34500000"
+  },
+  {
+    "symbol": "1000PEPEUSDT",
+    "fundingTime": 1730433600000,
+    "fundingRate": "0.00050000",
+    "markPrice": "0.00908510"
+  },
+  {
+    "symbol": "XRPUSDT",
+    "fundingTime": 1730433600000,
+    "fundingRate": "0.00010000",
+    "markPrice": ""
+  }
+]

@@ -170,26 +170,7 @@ func (tx *Tx) applyPaperFill(record FillRecord) error {
 		deltas[asset] = deltas[asset].Sub(fee)
 	}
 	for asset, delta := range deltas {
-		var row struct {
-			Total string `gorm:"column:c_total"`
-		}
-		result := tx.db.Raw(`SELECT c_total FROM t_paper_asset_balances WHERE c_space_id = ? AND c_trading_account_id = ? AND c_asset = ?`, record.SpaceID, record.TradingAccountID, asset).Scan(&row)
-		if result.Error != nil {
-			return result.Error
-		}
-		total := shared.Zero()
-		if result.RowsAffected != 0 {
-			total, err = shared.ParseDecimal(row.Total)
-			if err != nil {
-				return fmt.Errorf("%w: stored paper balance", ErrInvalidRecord)
-			}
-		}
-		next := total.Add(delta).String()
-		if _, err := shared.ParseDecimal(next); err != nil {
-			return fmt.Errorf("%w: paper balance precision", ErrInvalidRecord)
-		}
-		if err := tx.db.Exec(`INSERT INTO t_paper_asset_balances (c_space_id, c_trading_account_id, c_asset, c_total) VALUES (?, ?, ?, ?)
-   ON CONFLICT (c_space_id, c_trading_account_id, c_asset) DO UPDATE SET c_total = excluded.c_total`, record.SpaceID, record.TradingAccountID, asset, next).Error; err != nil {
+		if err := tx.addPaperBalance(record.SpaceID, record.TradingAccountID, asset, delta); err != nil {
 			return err
 		}
 	}

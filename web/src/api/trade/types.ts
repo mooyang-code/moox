@@ -502,7 +502,7 @@ export interface SummarizeAccountPnlRsp {
   /** 资金费，按结算资产汇总，收到为正、支付为负 */
   funding_fees?: PnlAmount[];
   fill_count?: string;
-  /** false 表示没取到资金费（模拟盘、现货、交易所不支持），原因见 funding_note */
+  /** false 表示没取到资金费（没有永续市场、交易所不支持），原因见 funding_note */
   funding_available?: boolean;
   /** true 表示资金费只是一部分：流水太多没取完 */
   funding_truncated?: boolean;

@@ -1,6 +1,6 @@
 <template>
   <SectionBlock title="资金流水" flush>
-    <template #sub>直接查交易所（模拟盘查本地成交），不落库，最长 90 天</template>
+    <template #sub>直接查交易所，不落库（模拟盘查本地成交和资金费记录），最长 90 天</template>
     <div class="toolbar">
       <a-select v-if="memberOptions.length > 1" v-model="accountId" style="width: 150px" @change="onAccountChange">
         <a-option v-for="item in memberOptions" :key="item.id" :value="item.id">{{ item.label }}</a-option>
@@ -96,7 +96,7 @@ const memberOptions = computed(() =>
     .map(member => ({ id: member.trading_account_id, label: accounts.value.get(member.trading_account_id)!.name }))
 );
 const accountMarkets = computed(() => accounts.value.get(accountId.value)?.markets || []);
-// 模拟盘由本地成交生成流水，后端不看市场，下拉没有作用
+// 模拟盘由本地成交和资金费记录生成流水，不指定市场时返回全部市场，下拉没有作用
 const showMarket = computed(() => accountMarkets.value.length > 1 && accounts.value.get(accountId.value)?.execution_mode !== 1);
 // 后端给的“能否查流水”标志（账户级）；false 时不发请求，直接说明
 const supportedByAccount = ref<Record<string, boolean>>({});
