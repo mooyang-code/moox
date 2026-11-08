@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -530,7 +531,7 @@ func (h *harness) seed(ds, taskID string) {
 	ref := func(time.Time) staging.PartitionRef {
 		return staging.PartitionRef{Key: "2026-10-17", Start: day, End: day.AddDate(0, 0, 1)}
 	}
-	if _, err := h.store.Stage(ctx, task, []staging.Row{{SubjectID: "BTC", DataTime: day, Values: []any{1.0}}}, ref, h.now); err != nil {
+	if _, err := h.store.Stage(ctx, task, []staging.Row{{SubjectID: "BTC", DataTime: day, Values: []any{1.0}}}, ref, h.now, staging.StageReplace); err != nil {
 		h.t.Fatal(err)
 	}
 }
@@ -743,5 +744,26 @@ func TestRunStartsCleansLeftoversAndStopsGracefully(t *testing.T) {
 	sort.Strings(ids)
 	if len(ids) != 0 {
 		t.Fatalf("running = %v", ids)
+	}
+}
+
+// 维护删除超过 7 天的导入目录（失败的导入留着供核对），7 天内的保留。
+func TestMaintenanceRemovesImportDirectoriesOlderThanSevenDays(t *testing.T) {
+	h := newHarness(t)
+	for name, age := range map[string]time.Duration{"imp_old": 8 * 24 * time.Hour, "imp_new": time.Hour} {
+		dir := filepath.Join(h.root, ".import", name)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(dir, h.now.Add(-age), h.now.Add(-age)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.app.maintainOnce(context.Background())
+	if _, err := os.Stat(filepath.Join(h.root, ".import", "imp_old")); !os.IsNotExist(err) {
+		t.Fatalf("超过 7 天的导入目录应删除: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(h.root, ".import", "imp_new")); err != nil {
+		t.Fatalf("7 天内的应保留: %v", err)
 	}
 }

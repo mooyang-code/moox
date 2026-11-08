@@ -21,7 +21,7 @@ func exported(t *testing.T, s *Store, task Task, at time.Time, rel, sha string) 
 	if err := s.EnsureTable(ctx, task); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Stage(ctx, task, []Row{row("BTC", at, "", 1.0, 1.0, nil, nil)}, utcDay, now0); err != nil {
+	if _, err := s.Stage(ctx, task, []Row{row("BTC", at, "", 1.0, 1.0, nil, nil)}, utcDay, now0, StageReplace); err != nil {
 		t.Fatal(err)
 	}
 	key := utcDay(at).Key

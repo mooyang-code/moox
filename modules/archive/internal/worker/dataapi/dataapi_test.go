@@ -94,7 +94,7 @@ func (e *env) partition(content []byte, replicated bool) string {
 	_, err := e.store.Stage(ctx, e.task, []staging.Row{{SubjectID: "BTCUSDT", DataTime: day0, Values: []any{1.0, true}}},
 		func(at time.Time) staging.PartitionRef {
 			return staging.PartitionRef{Key: "2026-10-15", Start: day0, End: day0.AddDate(0, 0, 1)}
-		}, day0.Add(time.Hour))
+		}, day0.Add(time.Hour), staging.StageReplace)
 	require.NoError(e.t, err)
 	sum := sha256.Sum256(content)
 	sha := hex.EncodeToString(sum[:])
@@ -301,7 +301,7 @@ func TestRecentRowsReadDatasetJSONAndPage(t *testing.T) {
 	rows = append(rows, staging.Row{SubjectID: "ETHUSDT", DataTime: day0.Add(time.Hour), Values: []any{9.0, true}})
 	_, err := e.store.Stage(t.Context(), e.task, rows, func(time.Time) staging.PartitionRef {
 		return staging.PartitionRef{Key: "2026-10-15", Start: day0, End: day0.AddDate(0, 0, 1)}
-	}, day0.Add(time.Hour))
+	}, day0.Add(time.Hour), staging.StageReplace)
 	require.NoError(t, err)
 	require.NoError(t, e.store.AdvanceWatermark(t.Context(), space, dataset, day0.Add(2*time.Hour)))
 

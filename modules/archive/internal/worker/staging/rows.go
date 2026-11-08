@@ -24,19 +24,34 @@ type PartitionRef struct {
 	End   time.Time
 }
 
-// StageResult 是一批行写入暂存区的结果。
+// StageResult 是一批行写入暂存区的结果（同一批里主键重复的行先按最后一条去重）。
 type StageResult struct {
-	Added   uint64
+	// Added 是暂存表里原来没有的行（已写入）。
+	Added uint64
+	// Changed 是同键已存在但值不同的行：StageReplace 下已覆盖，StageFillGaps 下未写入。
 	Changed uint64
+	// Same 是同键已存在且值相同的行（不产生写入）。
+	Same uint64
 }
+
+// StageMode 决定同键已存在且值不同的行怎么处理。
+type StageMode int
+
+const (
+	// StageReplace 用新值覆盖（读取 Storage 与覆盖导入）。
+	StageReplace StageMode = iota
+	// StageFillGaps 只写原来没有的行，已存在的以暂存表为准（不带 --overwrite 的导入）。
+	StageFillGaps
+)
 
 // maxParams 限制一条 INSERT 的参数个数（SQLite 默认上限 32766）。
 const maxParams = 6000
 
-// Stage 把一批行写入暂存区：先进临时表，与暂存表按主键比对，只把新增和值有变化的行写进暂存表，
-// 并在同一个事务里更新受影响分区的 last_changed_at。值没变的行不产生写入。
-// 行落在已定稿分区时报错（整批回滚）：调用方必须先用 ReopenFinal 读回原文件，否则重新导出会只剩新行。
-func (s *Store) Stage(ctx context.Context, task Task, rows []Row, partition func(time.Time) PartitionRef, now time.Time) (StageResult, error) {
+// Stage 把一批行写入暂存区：先进临时表，与暂存表按主键比对，只把新增和（StageReplace 下）值有变化的行写进暂存表，
+// 并在同一个事务里更新实际有写入的分区的 last_changed_at。值没变的行、StageFillGaps 下值不同的行都不产生写入，
+// 没有实际写入的分区不动（不会白白重新导出、重新上传）。
+// 要写入的行落在已定稿分区时报错（整批回滚）：调用方必须先用 ReopenFinal 读回原文件，否则重新导出会只剩新行。
+func (s *Store) Stage(ctx context.Context, task Task, rows []Row, partition func(time.Time) PartitionRef, now time.Time, mode StageMode) (StageResult, error) {
 	var result StageResult
 	if len(rows) == 0 {
 		return result, nil
@@ -135,7 +150,11 @@ func (s *Store) Stage(ctx context.Context, task Task, rows []Row, partition func
 FROM incoming i LEFT JOIN %s s ON i.subject_id = s.subject_id AND i.data_time = s.data_time AND i.series_tag = s.series_tag WHERE %s`, sel, table, where)); err != nil {
 			return fmt.Errorf("compare staged rows: %w", err)
 		}
-		if _, err := tx.ExecContext(ctx, fmt.Sprintf(`INSERT OR REPLACE INTO %s (subject_id, data_time, series_tag%s) SELECT subject_id, data_time, series_tag%s FROM changed`, table, valueList, valueList)); err != nil {
+		write := ""
+		if mode == StageFillGaps {
+			write = " WHERE existed = 0"
+		}
+		if _, err := tx.ExecContext(ctx, fmt.Sprintf(`INSERT OR REPLACE INTO %s (subject_id, data_time, series_tag%s) SELECT subject_id, data_time, series_tag%s FROM changed%s`, table, valueList, valueList, write)); err != nil {
 			return fmt.Errorf("write changed rows: %w", err)
 		}
 		stats, err := tx.QueryContext(ctx, `SELECT pkey, pstart, pend, SUM(existed), SUM(1 - existed) FROM changed GROUP BY pkey, pstart, pend`)
@@ -162,7 +181,19 @@ FROM incoming i LEFT JOIN %s s ON i.subject_id = s.subject_id AND i.data_time = 
 		if err := stats.Close(); err != nil {
 			return err
 		}
+		// compared 是临时表 changed 的行数（新增 + 同键不同），其余输入行同键且值相同。
+		var compared uint64
 		for _, t := range list {
+			compared += t.changed + t.added
+			result.Changed += t.changed
+			result.Added += t.added
+			written := t.added
+			if mode == StageReplace {
+				written += t.changed
+			}
+			if written == 0 {
+				continue
+			}
 			var status string
 			err := tx.QueryRowContext(ctx, `SELECT status FROM partition_state WHERE space_id = ? AND dataset_id = ? AND partition_key = ?`, task.SpaceID, task.DatasetID, t.ref.Key).Scan(&status)
 			if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -171,8 +202,6 @@ FROM incoming i LEFT JOIN %s s ON i.subject_id = s.subject_id AND i.data_time = 
 			if status == StatusFinal {
 				return fmt.Errorf("分区 %s 已定稿，写入前必须先读回原文件", t.ref.Key)
 			}
-			result.Changed += t.changed
-			result.Added += t.added
 			if _, err := tx.ExecContext(ctx, `INSERT INTO partition_state (space_id, dataset_id, partition_key, range_start, range_end, status, last_changed_at)
 VALUES (?, ?, ?, ?, ?, 'open', ?)
 ON CONFLICT (space_id, dataset_id, partition_key) DO UPDATE SET last_changed_at = excluded.last_changed_at, report_pending = 1`,
@@ -180,6 +209,7 @@ ON CONFLICT (space_id, dataset_id, partition_key) DO UPDATE SET last_changed_at 
 				return err
 			}
 		}
+		result.Same = uint64(len(unique)) - compared
 		for _, ddl := range []string{`DROP TABLE IF EXISTS temp.incoming`, `DROP TABLE IF EXISTS temp.changed`} {
 			if _, err := tx.ExecContext(ctx, ddl); err != nil {
 				return err

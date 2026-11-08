@@ -65,7 +65,7 @@ func setup(t *testing.T) (Files, *staging.Store, staging.Task, staging.Partition
 	for i := 0; i < 40; i++ {
 		rows = append(rows, staging.Row{SubjectID: "BTC", DataTime: day.Add(time.Duration(i) * time.Minute), SeriesTag: "", Values: []any{float64(i)}})
 	}
-	if _, err := store.Stage(context.Background(), task, rows, ref, day.Add(24*time.Hour)); err != nil {
+	if _, err := store.Stage(context.Background(), task, rows, ref, day.Add(24*time.Hour), staging.StageReplace); err != nil {
 		t.Fatal(err)
 	}
 	p, ok, err := store.Partition(context.Background(), "crypto", "ds_1m", "2026-10-15")
@@ -211,13 +211,14 @@ func TestDatasetJSONCarriesTheDatasetAndColumnDescriptionsAndIsRewrittenOnlyOnRe
 	}
 }
 
-func TestCleanPartialsRemovesLeftoversButNotTheStateDirectory(t *testing.T) {
+func TestCleanPartialsRemovesLeftoversButNotTheStateOrImportDirectories(t *testing.T) {
 	root := t.TempDir()
 	files := Files{Root: root}
 	keep := filepath.Join(root, ".state", "staging.db.partial")
+	upload := filepath.Join(root, ".import", "imp_1", "a.csv.partial")
 	stale := filepath.Join(root, "crypto", "ds", "2026", "ds_20261015.csv.gz.partial")
 	good := filepath.Join(root, "crypto", "ds", "2026", "ds_20261014.csv.gz")
-	for _, p := range []string{keep, stale, good} {
+	for _, p := range []string{keep, upload, stale, good} {
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -229,7 +230,7 @@ func TestCleanPartialsRemovesLeftoversButNotTheStateDirectory(t *testing.T) {
 	if err != nil || removed != 1 {
 		t.Fatalf("removed=%d err=%v", removed, err)
 	}
-	for _, p := range []string{keep, good} {
+	for _, p := range []string{keep, upload, good} {
 		if _, err := os.Stat(p); err != nil {
 			t.Fatalf("%s 不应被删除: %v", p, err)
 		}
@@ -258,5 +259,35 @@ func TestWritePlainCSV(t *testing.T) {
 	}
 	if err := files.Verify(info.Path, info.SHA256); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCleanImportsRemovesOnlyDirectoriesOlderThanTheRetention(t *testing.T) {
+	root := t.TempDir()
+	files := Files{Root: root}
+	if n, err := files.CleanImports(time.Now(), 7*24*time.Hour); err != nil || n != 0 {
+		t.Fatalf("没有 .import 目录: %d %v", n, err)
+	}
+	now := time.Date(2026, 11, 8, 0, 0, 0, 0, time.UTC)
+	for name, age := range map[string]time.Duration{"imp_old": 8 * 24 * time.Hour, "imp_new": 6 * 24 * time.Hour} {
+		dir := filepath.Join(root, ".import", name)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "a.csv"), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(dir, now.Add(-age), now.Add(-age)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n, err := files.CleanImports(now, 7*24*time.Hour); err != nil || n != 1 {
+		t.Fatalf("removed = %d %v", n, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".import", "imp_old")); !os.IsNotExist(err) {
+		t.Fatal("超过 7 天的导入目录应删除")
+	}
+	if _, err := os.Stat(filepath.Join(root, ".import", "imp_new", "a.csv")); err != nil {
+		t.Fatalf("7 天内的导入目录应保留: %v", err)
 	}
 }

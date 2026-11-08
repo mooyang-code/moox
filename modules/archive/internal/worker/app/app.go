@@ -23,7 +23,9 @@ import (
 )
 
 const (
-	progressEvery   = 30 * time.Second
+	progressEvery = 30 * time.Second
+	// importRetention 是失败的导入在 <root>/.import 下保留的时长。
+	importRetention = 7 * 24 * time.Hour
 	rpcTimeout      = 15 * time.Second
 	completeRetries = 6
 	// maintenanceWait 是每天维护最多等待进行中的运行结束多久。
@@ -581,6 +583,12 @@ func (a *App) maintainOnce(ctx context.Context) {
 		log.Warnf("archive worker reconcile staging: %v", err)
 	} else if len(dropped) > 0 {
 		log.Infof("archive worker dropped staging state of deleted tasks: %v", dropped)
+	}
+	// 失败的导入保留导入目录供核对，超过 7 天的清掉。
+	if removed, err := a.opts.Files.CleanImports(a.opts.Now(), importRetention); err != nil {
+		log.Warnf("archive worker clean import files: %v", err)
+	} else if removed > 0 {
+		log.Infof("archive worker removed %d import directories older than 7 days", removed)
 	}
 	a.checkRemote(ctx)
 	if err := a.opts.Staging.Maintain(ctx); err != nil {

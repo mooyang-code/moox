@@ -212,3 +212,77 @@ func parseValue(columnType string, f csvField) (any, error) {
 	}
 	return nil, errors.New("unsupported column type " + columnType)
 }
+
+// Cell 是 CSV 的一个字段：Null 为真表示缺失值（不带引号的空字段），空字符串写作 "" 时 Null 为假。
+type Cell struct {
+	Value string
+	Null  bool
+}
+
+// CSVReader 按归档文件的 CSV 规则逐行读取（区分缺失值与空字符串）；gzip 压缩的输入按魔数自动解压。
+type CSVReader struct {
+	r      *csvReader
+	closer io.Closer
+}
+
+// OpenCSV 打开一个 .csv 或 .csv.gz 文件（按内容的魔数判断是否压缩）。
+func OpenCSV(path string) (*CSVReader, error) {
+	reader, closer, err := openCSV(path)
+	if err != nil {
+		return nil, err
+	}
+	return &CSVReader{r: reader, closer: closer}, nil
+}
+
+// Read 读一行；文件结束返回 io.EOF。
+func (c *CSVReader) Read() ([]Cell, error) {
+	fields, err := c.r.read()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Cell, len(fields))
+	for i, f := range fields {
+		out[i] = Cell{Value: f.value, Null: f.null}
+	}
+	return out, nil
+}
+
+// Line 返回最近一次 Read 读到的记录序号（从 1 起，表头是第 1 行；字段里的换行不计）。
+func (c *CSVReader) Line() int { return c.r.line }
+
+// Close 关闭文件。
+func (c *CSVReader) Close() error { return c.closer.Close() }
+
+// ParseCell 按列类型解析一个字段，返回 Stage 所需的值（与 Row.Values 一致）：时间为 time.Time、布尔为 bool，
+// 缺失值为 nil；时间超出可存储范围时报错。与读回归档文件用同一套解析规则（parseValue），再把绑定值转回 Go 值。
+func ParseCell(columnType string, c Cell) (any, error) {
+	if columnType == TypeTime && !c.Null {
+		t, err := time.Parse(time.RFC3339Nano, c.Value)
+		if err != nil {
+			return nil, fmt.Errorf("不是 RFC3339 时间: %q", c.Value)
+		}
+		if err := CheckNanosRange(t); err != nil {
+			return nil, err
+		}
+		return t.UTC(), nil
+	}
+	bound, err := parseValue(columnType, csvField{value: c.Value, null: c.Null})
+	if err != nil {
+		return nil, fmt.Errorf("不是合法的 %s 值: %q", columnType, c.Value)
+	}
+	return unbindValue(columnType, bound), nil
+}
+
+// unbindValue 把绑定参数转回 Stage 所需的 Go 值（bindValue 的逆）：布尔 0/1 → bool，时间纳秒 → time.Time。
+func unbindValue(columnType string, bound any) any {
+	switch v := bound.(type) {
+	case int64:
+		switch columnType {
+		case TypeBool:
+			return v != 0
+		case TypeTime:
+			return fromNanos(v)
+		}
+	}
+	return bound
+}

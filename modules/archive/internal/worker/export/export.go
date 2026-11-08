@@ -31,6 +31,8 @@ const (
 	// previewBytes 是预览的字节上限。
 	previewBytes  = 8 << 10
 	partialSuffix = ".partial"
+	// ImportDirName 是归档根目录下存放待导入文件的目录：<root>/.import/<import_id>/<文件名>。
+	ImportDirName = ".import"
 )
 
 // Files 管理归档根目录下的分区文件。
@@ -468,7 +470,7 @@ func (f Files) writeDatasetJSON(meta DatasetMeta) error {
 	return syncDir(dir)
 }
 
-// CleanPartials 启动时清理残留的 .partial 文件。
+// CleanPartials 启动时清理残留的 .partial 文件；点开头的目录（.state 暂存库、.import 待导入文件）不进去。
 func (f Files) CleanPartials() (int, error) {
 	removed := 0
 	err := filepath.WalkDir(f.Root, func(path string, entry fs.DirEntry, err error) error {
@@ -478,7 +480,7 @@ func (f Files) CleanPartials() (int, error) {
 			}
 			return err
 		}
-		if entry.IsDir() && entry.Name() == ".state" {
+		if entry.IsDir() && path != f.Root && strings.HasPrefix(entry.Name(), ".") {
 			return filepath.SkipDir
 		}
 		if !entry.IsDir() && strings.HasSuffix(entry.Name(), partialSuffix) {
@@ -490,4 +492,31 @@ func (f Files) CleanPartials() (int, error) {
 		return nil
 	})
 	return removed, err
+}
+
+// CleanImports 删除 <root>/.import 下修改时间早于 now − maxAge 的导入目录（失败的导入保留供核对，过期后清掉），返回删除的个数。
+func (f Files) CleanImports(now time.Time, maxAge time.Duration) (int, error) {
+	base := filepath.Join(f.Root, ImportDirName)
+	entries, err := os.ReadDir(base)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	removed := 0
+	for _, entry := range entries {
+		info, err := entry.Info()
+		if err != nil {
+			continue
+		}
+		if !info.ModTime().Before(now.Add(-maxAge)) {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(base, entry.Name())); err != nil {
+			return removed, err
+		}
+		removed++
+	}
+	return removed, nil
 }

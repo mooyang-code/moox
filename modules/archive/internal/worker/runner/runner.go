@@ -99,6 +99,11 @@ type runState struct {
 	upload   uploadState
 	// notes 是成功时追加到运行消息里的说明（例如从对象存储取回了哪个分区）。
 	notes []string
+	// mode 是写入暂存区的方式：读取 Storage 与覆盖导入为比对替换，不覆盖的导入只补空缺。
+	mode staging.StageMode
+	// same 是同键已存在且值相同的行数；differ 是只补空缺时同键已存在但值不同、没有写入的行数（只有导入用到）。
+	same   uint64
+	differ uint64
 }
 
 func (r *Runner) now() time.Time {
@@ -166,25 +171,21 @@ func (r *Runner) Execute(ctx context.Context, a *archivepb.RunAssignment, report
 	if err = s.restorePartitions(ctx); err != nil {
 		return out, err
 	}
+	if a.GetKind() == kindImport {
+		// 导入不读 Storage：不算读取区间、不等节奏、不截保留期，也不写首次起点、续读起点与水位。
+		if err = s.prepareTable(ctx); err != nil {
+			return out, err
+		}
+		err = s.runImport(ctx, out)
+		return out, err
+	}
 	ranges, unrecoverable, err := s.readRanges(ctx)
 	if err != nil {
 		return out, err
 	}
 	// 读取起点（含首次运行的起点）已落盘，再去取列信息、建表：这一步失败重试时不会让起点后移而漏读。
-	columns, err := r.Source.Columns(ctx, a.GetSpaceId(), a.GetDatasetId())
-	if err != nil {
+	if err := s.prepareTable(ctx); err != nil {
 		return out, err
-	}
-	s.task.Columns = columns
-	s.bound = true
-	if err := r.Staging.EnsureTable(ctx, s.task); err != nil {
-		return out, err
-	}
-	if err := r.Files.WriteDatasetJSON(r.Files.BuildDatasetMeta(export.DatasetMetaInput{
-		SpaceID: a.GetSpaceId(), DatasetID: a.GetDatasetId(), Purpose: a.GetPurpose(), DirName: a.GetDirName(), Freq: a.GetFreq(), PartitionUnit: a.GetPartitionUnit(),
-		Timezone: a.GetSpaceTz(), DatasetJSON: a.GetDatasetMetaJson(), Columns: columns, Infos: r.columnMetas(a.GetSpaceId(), a.GetDatasetId()),
-	}, r.now())); err != nil {
-		return out, fmt.Errorf("写 dataset.json 失败: %w", err)
 	}
 	out.Unrecoverable = unrecoverable
 	resumable := !fixedRange(a)
@@ -224,6 +225,27 @@ func (r *Runner) Execute(ctx context.Context, a *archivepb.RunAssignment, report
 	// 上传失败不让运行失败（文件已经在本地），只写进消息；健康等级按远端副本规则反映。
 	out.Message = s.successMessage()
 	return out, nil
+}
+
+// prepareTable 取数据集的列、建暂存表并写 dataset.json；成功后任务算已绑定，可以收集分区报告。
+func (s *runState) prepareTable(ctx context.Context) error {
+	r, a := s.r, s.a
+	columns, err := r.Source.Columns(ctx, a.GetSpaceId(), a.GetDatasetId())
+	if err != nil {
+		return err
+	}
+	s.task.Columns = columns
+	s.bound = true
+	if err := r.Staging.EnsureTable(ctx, s.task); err != nil {
+		return err
+	}
+	if err := r.Files.WriteDatasetJSON(r.Files.BuildDatasetMeta(export.DatasetMetaInput{
+		SpaceID: a.GetSpaceId(), DatasetID: a.GetDatasetId(), Purpose: a.GetPurpose(), DirName: a.GetDirName(), Freq: a.GetFreq(), PartitionUnit: a.GetPartitionUnit(),
+		Timezone: a.GetSpaceTz(), DatasetJSON: a.GetDatasetMetaJson(), Columns: columns, Infos: r.columnMetas(a.GetSpaceId(), a.GetDatasetId()),
+	}, r.now())); err != nil {
+		return fmt.Errorf("写 dataset.json 失败: %w", err)
+	}
+	return nil
 }
 
 // restorePartitions 把下发的有文件的分区登记补进本地分区状态（只插入本地没有的分区，一律按 final）。
@@ -509,12 +531,17 @@ func (s *runState) stage(ctx context.Context, rows []staging.Row) error {
 		}
 		s.reopened[key] = true
 	}
-	result, err := s.r.Staging.Stage(ctx, s.task, rows, s.partitionOf, s.r.now())
+	result, err := s.r.Staging.Stage(ctx, s.task, rows, s.partitionOf, s.r.now(), s.mode)
 	if err != nil {
 		return err
 	}
 	s.added += result.Added
-	s.changed += result.Changed
+	s.same += result.Same
+	if s.mode == staging.StageFillGaps {
+		s.differ += result.Changed
+	} else {
+		s.changed += result.Changed
+	}
 	return nil
 }
 
