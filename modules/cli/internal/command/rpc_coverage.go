@@ -22,6 +22,8 @@ var handWrittenCoverage = map[string]string{
 	"trpc.moox.admin.Setup/PutConfigBackup": "config backup",
 	"trpc.moox.admin.Setup/GetConfigBackup": "config restore",
 
+	"trpc.moox.strategy.StrategyMgr/DeleteStrategyInstance": "strategy instance delete",
+
 	"trpc.moox.archive.ArchiveMgr/GetArchiveOverview":     "archive overview",
 	"trpc.moox.archive.ArchiveMgr/ListArchiveTasks":       "archive tasks list",
 	"trpc.moox.archive.ArchiveMgr/PrepareArchiveTask":     "archive tasks prepare",

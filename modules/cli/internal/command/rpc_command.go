@@ -584,6 +584,21 @@ func registerRPCSpecs(specs ...rpcSpec) {
 	rpcSpecs = append(rpcSpecs, specs...)
 }
 
+// rpcExtra 是挂在规格命令组下面的手写命令（预览要读多个服务、规格表写不出来的命令）。
+type rpcExtra struct {
+	parent []string
+	build  func() *cobra.Command
+}
+
+var rpcExtras []rpcExtra
+
+// registerRPCExtra 在包初始化时登记一条手写命令，mountRPCCommands 把它挂到 parent 组下。
+func registerRPCExtra(parent []string, build func() *cobra.Command) {
+	rpcSpecsMu.Lock()
+	defer rpcSpecsMu.Unlock()
+	rpcExtras = append(rpcExtras, rpcExtra{parent: parent, build: build})
+}
+
 func allRPCSpecs() []rpcSpec {
 	rpcSpecsMu.Lock()
 	defer rpcSpecsMu.Unlock()
@@ -592,7 +607,7 @@ func allRPCSpecs() []rpcSpec {
 
 var mountRPCOnce sync.Once
 
-// mountRPCCommands 把所有登记过的规格挂到命令树上；已存在的组复用，不存在的新建。
+// mountRPCCommands 把所有登记过的规格与手写命令挂到命令树上；已存在的组复用，不存在的新建。
 func mountRPCCommands(root *cobra.Command) {
 	mountRPCOnce.Do(func() {
 		for _, spec := range allRPCSpecs() {
@@ -604,6 +619,20 @@ func mountRPCCommands(root *cobra.Command) {
 				panic(fmt.Sprintf("命令 %s 已存在，规格 %s 不能再注册", strings.Join(spec.Path, " "), spec.key()))
 			}
 			parent.AddCommand(buildRPCCommand(spec))
+		}
+		rpcSpecsMu.Lock()
+		extras := append([]rpcExtra(nil), rpcExtras...)
+		rpcSpecsMu.Unlock()
+		for _, extra := range extras {
+			parent := root
+			for i, name := range extra.parent {
+				parent = findOrAddGroup(parent, name, strings.Join(extra.parent[:i+1], " "))
+			}
+			cmd := extra.build()
+			if existing := findChild(parent, cmd.Name()); existing != nil {
+				panic(fmt.Sprintf("命令 %s %s 已存在，不能再注册", strings.Join(extra.parent, " "), cmd.Name()))
+			}
+			parent.AddCommand(cmd)
 		}
 	})
 }
