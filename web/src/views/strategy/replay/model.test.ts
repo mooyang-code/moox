@@ -6,6 +6,8 @@ import {
   mergeBars,
   parseBarDetail,
   parseMetrics,
+  replayFormFromReplay,
+  replayMetricsLine,
   recentRange,
   replayFeeText,
   replayStatusLabel,
@@ -222,5 +224,36 @@ describe("replay model helpers", () => {
     expect(
       replayRangeLabel({ calendar: "cn_stock", start_time: "2026-10-08T03:00:00Z", end_time: "2026-10-08T05:30:00Z" }, sh)
     ).toBe("2026-10-08 11:00 UTC+8 → 2026-10-08 13:30 UTC+8");
+  });
+});
+
+describe("回放对比", () => {
+  it("列表显示累计收益和最大回撤；还没有指标时为空", () => {
+    expect(replayMetricsLine('{"bars":10,"total_return":0.1234,"max_drawdown":0.05}')).toBe("累计收益 12.34% · 最大回撤 5.00%");
+    expect(replayMetricsLine("")).toBe("");
+  });
+
+  it("按此配置重新发起：带上当时的 DSL、任务、区间和手续费；统一数据集上的任务不能在表单里选", () => {
+    const base = {
+      replay_id: "r1",
+      strategy_id: "s1",
+      dsl_yaml: "name: demo",
+      tasks: { swap: { factor_task_id: "ft1", view_id: "v1" } },
+      start_time: "2026-10-01T00:00:00Z",
+      end_time: "2026-10-02T00:00:00Z",
+      spot_fee_bps: 8,
+      swap_fee_bps: 5
+    } as never;
+    expect(replayFormFromReplay(base)).toMatchObject({
+      source: "dsl",
+      dsl_yaml: "name: demo",
+      tasks: { swap: "ft1" },
+      range: [Date.UTC(2026, 9, 1), Date.UTC(2026, 9, 2)],
+      spot_fee_bps: 8,
+      swap_fee_bps: 5
+    });
+    expect(
+      replayFormFromReplay({ ...(base as object), tasks: { multi: { factor_task_id: "u", view_id: "v" } } } as never)
+    ).toBeNull();
   });
 });

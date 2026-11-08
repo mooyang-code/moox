@@ -18,6 +18,7 @@
           </span>
           <span class="replay-line muted mono">{{ replayTasksText(item) }}</span>
           <span class="replay-line muted">{{ replayRangeLabel(item, displayZone) }}</span>
+          <span v-if="replayMetricsLine(item.metrics_json)" class="replay-line">{{ replayMetricsLine(item.metrics_json) }}</span>
           <span v-if="item.status === 'running' && item.progress_time" class="replay-line muted">
             进度 {{ formatInstant(item.progress_time, displayZone) }}
           </span>
@@ -40,6 +41,7 @@
 <script setup lang="ts">
 import type { Replay, Strategy } from "@/api/strategy-types";
 import {
+  replayMetricsLine,
   replayRangeLabel,
   replaySourceLabel,
   replayStatusColor,

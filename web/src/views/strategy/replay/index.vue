@@ -52,6 +52,7 @@
                 <span class="muted" :title="selected.dsl_hash"> · DSL {{ shortHash(selected.dsl_hash) }}</span>
               </div>
               <a-space>
+                <a-button size="small" :loading="rerunning" @click="rerunWithConfig">按此配置重新发起</a-button>
                 <a-popconfirm
                   v-if="(selected.status === 'pending' || selected.status === 'running') && selected.replay_id === selectedId"
                   content="回放不支持续跑，取消后只保留已写入的周期记录。确定取消？"
@@ -314,6 +315,7 @@ import {
   parseMetrics,
   recentRange,
   replayFeeText,
+  replayFormFromReplay,
   replayRangeLabel,
   replaySourceLabel,
   replayStatusColor,
@@ -864,6 +866,27 @@ async function cancel() {
 
 function openCreate() {
   if (!parsed.value.create) writeQuery({ create: true }, "push");
+}
+
+/** 按所选回放的配置重新发起：取回放详情里的 DSL、任务、区间和手续费，填进发起表单（DSL 用当时的原文）。 */
+const rerunning = ref(false);
+async function rerunWithConfig() {
+  const replayId = selected.value?.replay_id;
+  if (!replayId) return;
+  rerunning.value = true;
+  try {
+    const next = replayFormFromReplay(await getReplay(replayId));
+    if (!next) {
+      Message.info("这个回放用的是统一数据集上的任务，发起表单不能选，请从实例详情发起");
+      return;
+    }
+    Object.assign(form, { ...next, single_market: Object.keys(next.tasks).length === 1 ? Object.keys(next.tasks)[0] : "" });
+    openCreate();
+  } catch (err) {
+    Message.error(err instanceof Error ? err.message : "回放详情读取失败");
+  } finally {
+    rerunning.value = false;
+  }
 }
 /** 关闭创建抽屉：预填一并从 URL 清除（它们只表示创建来源，不表示分析对象）。 */
 function closeCreate() {
