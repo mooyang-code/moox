@@ -1,6 +1,6 @@
 /** 浏览器没有收到任何响应（连接被拒、被重置、TLS 校验失败等）时的提示：这类失败最常见的原因是浏览器不信任管理台的 HTTPS 证书。 */
 export const NETWORK_ERROR_MESSAGE =
-  "无法连接管理台。请检查网络；如果浏览器提示证书不安全，请先安装管理台的根证书（登录页或“秘钥管理”页的“HTTPS 根证书”），然后彻底重启浏览器";
+  "无法连接管理台。请检查网络；如果浏览器提示证书不安全，请先安装管理台的根证书（登录页或“密钥管理”页的“HTTPS 根证书”），然后彻底重启浏览器";
 
 /** 请求没有拿到响应（axios 的 ERR_NETWORK / “Network Error”），区别于服务端返回了错误。 */
 export function isNetworkFailure(error: unknown): boolean {

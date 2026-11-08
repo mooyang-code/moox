@@ -4,7 +4,11 @@ import { defineComponent, h, nextTick, reactive } from "vue";
 import { createMemoryHistory, createRouter } from "vue-router";
 
 const ctx = vi.hoisted(() => ({ store: null as any, space: null as any, listInstances: vi.fn() }));
-vi.mock("@/api/strategy", () => ({ listInstances: ctx.listInstances }));
+vi.mock("@/api/strategy", () => ({
+  listInstances: ctx.listInstances,
+  listAllInstances: (options?: unknown) =>
+    ctx.listInstances({ page: 1, page_size: 200 }, options).then((rsp: { items: unknown[] }) => rsp.items)
+}));
 vi.mock("@/store/modules/space", () => ({ useSpaceStore: () => ctx.space }));
 vi.mock("@/store/modules/strategy", () => ({ useStrategyStore: () => ctx.store }));
 vi.mock("@/views/strategy/components/strategy-instance-results.vue", () => ({

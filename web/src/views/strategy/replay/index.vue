@@ -4,7 +4,7 @@
       <div class="result-toolbar">
         <span class="result-count">
           共 {{ replayTotal }} 个回放<span v-if="readAt">；状态读取：{{ readAt }}</span>
-          <InfoTip text="基于因子任务的研究回放：现货理论账本、按当期收盘价成交，用于比较策略版本，不承诺复现实时结果。" />
+          <InfoTip text="基于计算任务的研究回放：现货理论账本、按当期收盘价成交，用于比较策略版本，不承诺复现实时结果。" />
         </span>
         <a-space wrap
           ><a-button :loading="listLoading" aria-label="刷新回放" @click="manualRefresh"
@@ -73,7 +73,7 @@
                 <a-link class="mono" @click="router.push(detailLink(selected.instance_id))">{{ selected.instance_id }}</a-link
                 >，会话 <span class="mono">{{ selected.session_id }}</span></template
               >
-              · 因子任务 {{ replayTasksText(selected) }} · 区间 {{ replayRangeLabel(selected, displayZone) }} · 手续费
+              · 计算任务 {{ replayTasksText(selected) }} · 区间 {{ replayRangeLabel(selected, displayZone) }} · 手续费
               {{ replayFeeText(selected) }}
               <template v-if="metrics?.first_bar_end">
                 · 实际首根 {{ formatInstant(metrics.first_bar_end, displayZone) }}，末根
@@ -295,7 +295,7 @@ import { useSpaceStore } from "@/store/modules/space";
 import { useStrategyStore } from "@/store/modules/strategy";
 import { percent, shortHash, skipReasonLabel } from "@/views/strategy/model";
 import { sameQuery } from "@/views/strategy/query";
-import InfoTip from "@/views/factor/shared/info-tip.vue";
+import InfoTip from "@/components/info-tip/index.vue";
 import { STRATEGY_TASKS_ROUTE, definitionsLink, detailLink, normalizeTaskTab } from "@/views/strategy/links";
 import ReplayCreateDrawer from "@/views/strategy/replay/replay-create-drawer.vue";
 import { parseFactorTasks } from "@/views/strategy/market-mode";
@@ -552,7 +552,7 @@ async function loadTasks() {
     );
     errors.tasks = "";
   } catch (err) {
-    if (gen === generation) errors.tasks = `因子任务列表加载失败：${err instanceof Error ? err.message : "未知错误"}`;
+    if (gen === generation) errors.tasks = `计算任务列表加载失败：${err instanceof Error ? err.message : "未知错误"}`;
   } finally {
     if (gen === generation) tasksLoading.value = false;
   }

@@ -87,7 +87,7 @@ describe("results page contract", () => {
   it("uses result-toolbar and ViewBrowse status-extra slot, not status-strip", () => {
     expect(page).toContain("result-toolbar");
     expect(page).toContain("#status-extra");
-    expect(page).toContain(':embedded="true"');
+    expect(page).not.toContain("embedded");
     expect(page).not.toContain("status-strip");
   });
 

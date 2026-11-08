@@ -324,9 +324,9 @@ import {
 } from "@/api/trade";
 import type { LogicalAccount, LogicalAccountTarget, Order, TradingAccount } from "@/api/trade";
 import { accountMapOf } from "../account-list";
-import ConfirmDialog from "../shared/confirm-dialog.vue";
-import EnvMark from "../shared/env-mark.vue";
-import { environmentFromQuery, environmentLabel, logicalEnvironment } from "../shared/environment";
+import ConfirmDialog from "@/components/trade-confirm/confirm-dialog.vue";
+import EnvMark from "@/components/trade-confirm/env-mark.vue";
+import { environmentFromQuery, environmentLabel, logicalEnvironment } from "@/components/trade-confirm/environment";
 import { fmtMoney, fmtPercent, fmtQty, fmtSigned, pnlClass } from "../shared/format";
 import { instrumentName, marketLabel } from "../shared/markets";
 import { loadPositionSnapshot, positionCount, type PositionSnapshot } from "../shared/position-snapshot";

@@ -151,7 +151,7 @@ describe("factor pages contract", () => {
       'v-model="usageFilter"',
       "查询",
       "toolbar-actions",
-      "新增因子"
+      "新建因子"
     ].map(text => toolbar.indexOf(text));
     expect(positions.every(position => position >= 0)).toBe(true);
     expect(positions).toEqual([...positions].sort((left, right) => left - right));

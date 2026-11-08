@@ -18,7 +18,7 @@
     </div>
     <a-alert v-if="loadError" type="error" show-icon class="add-factor__alert">{{ loadError }}</a-alert>
     <a-spin :loading="loading" class="add-factor__spin">
-      <a-empty v-if="!rows.length && !loading" description="因子定义库里没有可选的因子，请先到「因子定义」新增" />
+      <a-empty v-if="!rows.length && !loading" description="因子定义库里没有可选的因子，请先到「因子定义」新建" />
       <div v-else class="add-factor__list" role="group" aria-label="候选因子">
         <div v-for="row in rows" :key="row.factor.factor_id" class="add-factor__item">
           <label class="add-factor__row" :class="{ 'is-disabled': row.locked }">
@@ -78,7 +78,7 @@
       </div>
     </a-spin>
     <template #footer>
-      <a-tooltip content="因子任务停用着，成员要等任务启用后才能启用" :disabled="taskEnabled">
+      <a-tooltip content="计算任务停用着，成员要等任务启用后才能启用" :disabled="taskEnabled">
         <a-checkbox v-model="enableAfterAdd" :disabled="submitting || !taskEnabled" class="add-factor__enable">
           添加后立即启用
         </a-checkbox>

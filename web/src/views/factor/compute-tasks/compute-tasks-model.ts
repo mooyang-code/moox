@@ -44,24 +44,24 @@ export function memberCountText(info: Pick<FactorTaskInfo, "members">) {
   return `${enabled} / ${total}`;
 }
 
-export type SetActionKind = "retry" | "disable" | "enable" | "none";
+export type TaskActionKind = "retry" | "disable" | "enable" | "none";
 
 /** 列表行 / 抽屉上与状态相关的主动作：激活失败重试，运行中停用，已停用启用。 */
-export function setActionKind(set: Pick<FactorTask, "status">): SetActionKind {
+export function taskActionKind(set: Pick<FactorTask, "status">): TaskActionKind {
   if (set.status === "pending") return "retry";
   if (set.status === "enabled") return "disable";
   if (set.status === "disabled") return "enable";
   return "none";
 }
 
-const LOCKED_REASON = "因子任务创建中，暂不能操作";
+const LOCKED_REASON = "计算任务创建中，暂不能操作";
 const isLocked = (set: Pick<FactorTask, "status">) => set.status === "pending";
 
-/** 删除因子任务的前置条件：已停用、没有成员、没有关联策略实例（关联是永久的）。 */
+/** 删除计算任务的前置条件：已停用、没有成员、没有关联策略实例（关联是永久的）。 */
 export function deleteState(info: Pick<FactorTaskInfo, "factor_task" | "members">): ActionState {
   if (info.factor_task.bound_instance_id) return blocked("已关联策略实例（关联永久有效），不能删除");
-  if (info.factor_task.status !== "disabled") return blocked("请先停用因子任务，再删除");
-  if ((info.members || []).length > 0) return blocked("请先在「因子」里移除全部因子成员，再删除因子任务");
+  if (info.factor_task.status !== "disabled") return blocked("请先停用计算任务，再删除");
+  if ((info.members || []).length > 0) return blocked("请先在「因子」里移除全部因子成员，再删除计算任务");
   return enabledAction;
 }
 
@@ -85,7 +85,7 @@ export function memberActions(set: Pick<FactorTask, "status">, member: Pick<Fact
     toggle: isLocked(set)
       ? blocked(LOCKED_REASON)
       : !enabled && set.status === "disabled"
-        ? blocked("因子任务已停用，请先启用因子任务，再启用因子")
+        ? blocked("计算任务已停用，请先启用计算任务，再启用因子")
         : enabledAction,
     edit: enabled ? blocked("已启用的因子需要先停用，才能编辑定义") : enabledAction,
     remove: enabled ? blocked("已启用的因子需要先停用，才能移除") : enabledAction

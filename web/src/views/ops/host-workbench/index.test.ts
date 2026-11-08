@@ -23,10 +23,10 @@ vi.mock("@/api/modules/ssh", () => ({
 }));
 
 vi.mock("@/components/page-title-tabs/index.vue", () => ({ default: { template: "<div />" } }));
-vi.mock("@/views/container/ssh-hosts/ssh-hosts.vue", () => ({ default: { template: "<div />" } }));
-vi.mock("@/views/container/ssh-file-manager/ssh-file-manager.vue", () => ({ default: { template: "<div />" } }));
+vi.mock("./ssh-hosts.vue", () => ({ default: { template: "<div />" } }));
+vi.mock("./ssh-file-manager.vue", () => ({ default: { template: "<div />" } }));
 vi.mock("./host-monitor.vue", () => ({ default: { template: "<div />" } }));
-vi.mock("@/views/container/ssh-terminal/ssh-terminal.vue", () => ({
+vi.mock("./ssh-terminal.vue", () => ({
   default: { props: { initialHostId: String }, template: '<div class="terminal-stub">{{ initialHostId }}</div>' }
 }));
 

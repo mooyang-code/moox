@@ -3,10 +3,10 @@ import { parseDocument } from "yaml";
 /** 策略涉及的市场，顺序固定：现货、永续、股票。 */
 export const MARKET_ORDER = ["spot", "swap", "equity"] as const;
 
-/** 统一数据集上的因子任务登记的键：一个任务同时覆盖现货与永续（数据集的 market_type 是 multi）。 */
+/** 统一数据集上的计算任务登记的键：一个任务同时覆盖现货与永续（数据集的 market_type 是 multi）。 */
 export const UNIFIED_TASK_KEY = "multi";
 
-/** 因子任务的键，顺序固定：三个市场，然后是统一数据集上的任务。 */
+/** 计算任务的键，顺序固定：三个市场，然后是统一数据集上的任务。 */
 export const TASK_KEY_ORDER = [...MARKET_ORDER, UNIFIED_TASK_KEY] as const;
 
 export const marketLabels: Record<string, string> = {
@@ -23,12 +23,12 @@ export function marketLabel(market: string): string {
 export interface MarketRequirement {
   /** DSL 里写了 market。没写时只绑一个任务，市场由用户在创建时选定。 */
   declared: boolean;
-  /** 需要绑定因子任务的市场（现货在前）。没写 market 时为空。 */
+  /** 需要绑定计算任务的市场（现货在前）。没写 market 时为空。 */
   markets: string[];
 }
 
 /**
- * 从 DSL 文本读出市场模式需要的因子任务：select 为 both 或 prefer 与 select 不同要现货、永续各一个，其余只要一个。
+ * 从 DSL 文本读出市场模式需要的计算任务：select 为 both 或 prefer 与 select 不同要现货、永续各一个，其余只要一个。
  * 解析失败或没写 market 时 declared 为 false（后端校验保存时的写法是否合法）。
  */
 export function marketRequirement(dslYaml: string): MarketRequirement {
@@ -58,14 +58,14 @@ export function poolMembers(dslYaml: string): { id: string; strategyId: string }
 }
 
 export interface PoolRequirement {
-  /** 池要绑定因子任务的市场：各成员所需市场的并集（现货在前）；有问题时为空。 */
+  /** 池要绑定计算任务的市场：各成员所需市场的并集（现货在前）；有问题时为空。 */
   markets: string[];
   /** 阻止创建的问题（中文）：成员定义读不到、没写 market、是策略池等。 */
   problems: string[];
 }
 
 /**
- * 策略池要绑定的因子任务：成员引用的策略定义各自按 marketRequirement 解析市场，取并集。
+ * 策略池要绑定的计算任务：成员引用的策略定义各自按 marketRequirement 解析市场，取并集。
  * lookup 返回成员策略的 DSL 文本；null 表示确认不存在，undefined 表示还在读取。不是策略池时返回 null。
  */
 export function poolRequirement(
@@ -100,26 +100,26 @@ export function poolRequirement(
   return { markets: problems.length ? [] : MARKET_ORDER.filter(market => markets.has(market)), problems };
 }
 
-/** 实例绑定的因子任务，按市场先后排列（统一数据集上的任务键是 multi，排在最后）。 */
+/** 实例绑定的计算任务，按市场先后排列（统一数据集上的任务键是 multi，排在最后）。 */
 export function instanceTasks(tasks: Record<string, string> | undefined): { market: string; taskId: string }[] {
   return TASK_KEY_ORDER.filter(market => tasks?.[market]).map(market => ({ market, taskId: tasks![market] }));
 }
 
-/** 因子任务的展示文本：单任务只写 ID，多任务写成 现货 xxx、永续 yyy。 */
+/** 计算任务的展示文本：单任务只写 ID，多任务写成 现货 xxx、永续 yyy。 */
 export function tasksText(tasks: Record<string, string> | undefined): string {
   const items = instanceTasks(tasks);
   if (items.length <= 1) return items[0]?.taskId ?? "";
   return items.map(item => `${marketLabel(item.market)} ${item.taskId}`).join("、");
 }
 
-/** 因子任务写进 URL 的格式：spot=ftask_a,swap=ftask_b（按现货、永续、股票先后）；没有任务返回空串。 */
+/** 计算任务写进 URL 的格式：spot=ftask_a,swap=ftask_b（按现货、永续、股票先后）；没有任务返回空串。 */
 export function formatFactorTasks(tasks: Record<string, string> | undefined): string {
   return instanceTasks(tasks)
     .map(item => `${item.market}=${item.taskId}`)
     .join(",");
 }
 
-/** 解析 URL 里的因子任务；只认现货、永续、股票三个市场与统一数据集（multi），其余与格式不对的项忽略。 */
+/** 解析 URL 里的计算任务；只认现货、永续、股票三个市场与统一数据集（multi），其余与格式不对的项忽略。 */
 export function parseFactorTasks(raw: string): Record<string, string> {
   const tasks: Record<string, string> = {};
   for (const part of raw.split(",")) {

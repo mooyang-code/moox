@@ -1,6 +1,11 @@
 import type { LogicalAccount, TradingAccount } from "@/api/trade/types";
 import { accountMapOf, joinedAccountIds } from "../account-list";
-import { accountEnvironment, logicalEnvironment, logicalInEnvironment, type Environment } from "./environment";
+import {
+  accountEnvironment,
+  logicalEnvironment,
+  logicalInEnvironment,
+  type Environment
+} from "@/components/trade-confirm/environment";
 
 /**
  * 能加入这个组合的执行账户：环境、模拟或实盘、结算资产都和组合一致（后端的校验），

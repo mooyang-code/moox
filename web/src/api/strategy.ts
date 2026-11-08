@@ -195,7 +195,7 @@ function isInvalidParam(code: unknown): boolean {
   return code === 1 || code === "1" || code === "INVALID_PARAM";
 }
 
-/** 校验 DSL；给出 factor_tasks（市场 → 因子任务）时按任务的结果 View 解析绑定并在最新周期试算一次（读全部绑定的 View，不落库）。 */
+/** 校验 DSL；给出 factor_tasks（市场 → 计算任务）时按任务的结果 View 解析绑定并在最新周期试算一次（读全部绑定的 View，不落库）。 */
 export async function validateStrategy(
   dsl_yaml: string,
   factor_tasks: Record<string, string> = {}
@@ -246,14 +246,6 @@ export async function createInstance(instance: {
   return normalizeInstance(response.instance);
 }
 
-/** 修改实例的策略定义与组合账户；因子任务在创建时写定，不能修改。 */
-export async function updateInstance(instance: { instance_id: string; strategy_id?: string; logical_account_id?: string }) {
-  const response = await call<{ instance: typeof instance }, { instance?: StrategyInstance }>("UpdateStrategyInstance", {
-    instance
-  });
-  return normalizeInstance(response.instance);
-}
-
 export async function getInstance(instance_id: string, options: RequestOptions = {}) {
   const response = await call<{ instance_id: string }, { instance?: StrategyInstance }>(
     "GetStrategyInstance",
@@ -284,6 +276,17 @@ export async function listInstances(
     items: (response.instances ?? []).map(normalizeInstance),
     page: { total: Number(response.total ?? 0), page: response.page, page_size: response.page_size }
   };
+}
+
+/** 读当前空间的全部实例：每页 200 个，最多读 10 页（单用户场景下足够）。 */
+export async function listAllInstances(options: RequestOptions = {}): Promise<StrategyInstance[]> {
+  const all: StrategyInstance[] = [];
+  for (let page = 1; page <= 10; page += 1) {
+    const rsp = await listInstances({ page, page_size: 200 }, options);
+    all.push(...rsp.items);
+    if (!rsp.items.length || all.length >= rsp.page.total) break;
+  }
+  return all;
 }
 
 export async function setInstanceEnabled(instance_id: string, enabled: boolean) {

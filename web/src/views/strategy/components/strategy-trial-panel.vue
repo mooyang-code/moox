@@ -2,7 +2,7 @@
   <div class="trial">
     <div class="trial-head">
       <strong>试算</strong>
-      <span class="muted">在选定因子任务的结果 View 的最近一期数据上求值一次（混合市场读两个 View），结果不落库。</span>
+      <span class="muted">在选定计算任务的结果 View 的最近一期数据上求值一次（混合市场读两个 View），结果不落库。</span>
     </div>
     <div class="trial-bar">
       <a-select
@@ -22,7 +22,7 @@
         allow-search
         allow-clear
         :loading="tasksLoading"
-        :placeholder="`选择${marketLabel(market)}因子任务`"
+        :placeholder="`选择${marketLabel(market)}计算任务`"
         @popup-visible-change="ensureTasks"
       >
         <a-option v-for="task in taskChoices(market)" :key="task.taskId" :value="task.taskId"
@@ -41,14 +41,14 @@
       </template>
       <template v-else>
         策略的市场模式需要绑定：{{
-          requirement.declared ? requirement.markets.map(marketLabel).join("、") : "一个因子任务（先选它的市场）"
+          requirement.declared ? requirement.markets.map(marketLabel).join("、") : "一个计算任务（先选它的市场）"
         }}；不选任务时只校验 DSL。
       </template>
     </p>
     <div v-if="pool?.problems.length" class="muted">
       <div v-for="item in pool.problems" :key="item">{{ item }}</div>
     </div>
-    <a-alert v-if="tasksError" type="error" show-icon class="block">因子任务列表加载失败：{{ tasksError }}</a-alert>
+    <a-alert v-if="tasksError" type="error" show-icon class="block">计算任务列表加载失败：{{ tasksError }}</a-alert>
     <template v-if="result">
       <p v-if="resultSource !== source" class="trial-outdated">下面的结果对应修改前的 DSL，重新试算看新的结果。</p>
       <a-alert v-if="!result.diagnostics.length && !result.trial" type="success" show-icon class="block">DSL 校验通过</a-alert>
@@ -181,7 +181,7 @@ async function ensureTasks(visible = true) {
     loadedSpace = spaceId;
     tasksError.value = "";
   } catch (err) {
-    if (requestId === tasksRequest) tasksError.value = err instanceof Error ? err.message : "因子任务列表加载失败";
+    if (requestId === tasksRequest) tasksError.value = err instanceof Error ? err.message : "计算任务列表加载失败";
   } finally {
     if (requestId === tasksRequest) tasksLoading.value = false;
   }

@@ -1,14 +1,6 @@
 <template>
   <div class="moox-page view-browse-page">
     <div class="moox-inner">
-      <div v-if="!props.embedded" class="page-head">
-        <div class="page-head__title">
-          <slot name="page-title">
-            <h2>{{ props.pageTitle }}</h2>
-          </slot>
-        </div>
-      </div>
-
       <a-alert v-if="!selectedSpaceId" type="warning" show-icon>请先在顶部选择空间</a-alert>
 
       <a-spin v-else :loading="metaLoading">
@@ -25,7 +17,7 @@
             </a-tabs>
           </section>
 
-          <section v-if="!props.hideTechnicalIdentity" class="view-status-line">
+          <section class="view-status-line">
             <span>View: {{ activeView?.view_id || "-" }}</span>
             <span>Dataset: {{ currentDatasetName }} ({{ currentDatasetId }})</span>
             <span v-if="activeView?.freq">频率: {{ activeView.freq }}</span>
@@ -46,7 +38,7 @@
             {{ hasAnyFilter ? "没有符合条件的行" : props.emptyRowsDescription }}
           </a-alert>
 
-          <QueryControls :loading="loading" :mode="mode">
+          <div class="view-query-controls">
             <section v-if="activeView" class="view-query-panel">
               <div class="filter-grid">
                 <div v-if="mode === 'record'" class="filter-item record-keyword-filter">
@@ -126,9 +118,9 @@
               </div>
               <p v-if="previewRangeText" class="preview-range-hint">{{ previewRangeText }}</p>
             </section>
-          </QueryControls>
+          </div>
 
-          <ResultTable :loading="loading || contextLoading" :rows="tableRows">
+          <div class="view-result-table">
             <section v-if="mode === 'time_series'" class="result-pane">
               <a-table
                 row-key="id"
@@ -355,7 +347,7 @@
                 </div>
               </div>
             </section>
-          </ResultTable>
+          </div>
 
           <a-empty v-if="mode !== 'time_series' && mode !== 'record'" description="无法识别该视图的主数据集类型" />
         </template>
@@ -423,9 +415,7 @@ import {
   recordRowsToTableRows,
   rowsToColumnNames,
   timeSeriesRowsToTableRows,
-  type BrowseTableRow
-} from "@/views/data/browse/browse-utils";
-import {
+  type BrowseTableRow,
   buildKlineChartRecords,
   buildKlineQuerySorts,
   buildViewColumnLabels,
@@ -446,16 +436,8 @@ import {
   type ViewFilterState,
   type ViewSortDirection
 } from "./view-browse-utils";
-import {
-  isLikelyFactorResultDataset,
-  isLikelyFactorResultDatasetId,
-  viewMatchesAttribution,
-  type OwnerModule,
-  type ViewRole
-} from "@/views/data/shared/module-attribution";
+import { viewMatchesAttribution, type OwnerModule, type ViewRole } from "@/views/data/shared/module-attribution";
 import KlineModal from "./kline-modal.vue";
-import QueryControls from "./components/query-controls.vue";
-import ResultTable from "./components/result-table.vue";
 import { loadTargetedViewCatalog } from "./composables/view-browse-catalog";
 import { formatInstant, zoneSuffix } from "@/utils/time-zone";
 import { usePolling } from "@/hooks/usePolling";
@@ -464,21 +446,14 @@ defineOptions({ name: "DataViewBrowse" });
 
 const props = withDefaults(
   defineProps<{
-    embedded?: boolean;
-    pageTitle?: string;
     emptyDescription?: string;
     emptyRowsDescription?: string;
-    allowedPrimaryDatasetIds?: string[];
-    excludedPrimaryDatasetIds?: string[];
     viewOwnerModules?: OwnerModule[];
     viewRoles?: ViewRole[];
-    includeUnowned?: boolean;
-    excludeLikelyFactorDatasets?: boolean;
     autoRefreshIntervalMs?: number;
     viewIds?: string[];
     activeViewId?: string;
     refreshKey?: number;
-    hideTechnicalIdentity?: boolean;
     /** 为 false 时只加载元数据、不发查询：调用方先准备好投影与附加条件，再放行首查。 */
     queryReady?: boolean;
     /** 表格显示的系统键（数据ID、时间始终显示）与业务列及其顺序；不传时显示全部列。 */
@@ -495,22 +470,15 @@ const props = withDefaults(
     zone?: string;
   }>(),
   {
-    embedded: false,
     zone: "UTC",
-    pageTitle: "视图数据浏览",
     emptyDescription: "暂无查询视图",
     emptyRowsDescription: "当前视图查询成功，但结果为空。",
-    allowedPrimaryDatasetIds: undefined,
-    excludedPrimaryDatasetIds: undefined,
     viewOwnerModules: undefined,
     viewRoles: undefined,
-    includeUnowned: false,
-    excludeLikelyFactorDatasets: false,
     autoRefreshIntervalMs: 0,
     viewIds: undefined,
     activeViewId: "",
     refreshKey: 0,
-    hideTechnicalIdentity: false,
     queryReady: true,
     displayColumns: undefined,
     projectColumns: undefined,
@@ -530,33 +498,12 @@ const selectedSpaceId = computed(() => spaceStore.selectedSpaceId);
 const views = ref<View[]>([]);
 const datasets = ref<Dataset[]>([]);
 const targetedViewIds = computed(() => [...new Set((props.viewIds || []).map(viewId => viewId.trim()).filter(Boolean))]);
-const datasetById = computed(() => new Map(datasets.value.map(item => [item.dataset_id, item])));
+// 给了 viewIds 时只显示这些 View；没给时按所属模块和用途筛选。
 const visibleViews = computed(() => {
   const allowedViewIds = new Set(targetedViewIds.value);
-  const allowedPrimaryDatasetIds = props.allowedPrimaryDatasetIds || [];
-  const allowedPrimary = new Set(allowedPrimaryDatasetIds.filter(Boolean));
-  const excludedPrimary = new Set((props.excludedPrimaryDatasetIds || []).filter(Boolean));
   return views.value.filter(view => {
     if (allowedViewIds.size > 0) return allowedViewIds.has(view.view_id);
-    const matchedByDataset = allowedPrimary.size > 0 && allowedPrimary.has(view.dataset_id);
-    if (!matchedByDataset && excludedPrimary.has(view.dataset_id)) {
-      return false;
-    }
-    if (props.excludeLikelyFactorDatasets && !matchedByDataset && viewUsesLikelyFactorDataset(view)) {
-      return false;
-    }
-    const matchedByAttrs = viewMatchesAttribution(view, {
-      ownerModules: props.viewOwnerModules,
-      viewRoles: props.viewRoles,
-      includeUnowned: props.includeUnowned
-    });
-    if (allowedPrimary.size > 0 && (props.viewOwnerModules?.length || props.viewRoles?.length)) {
-      return matchedByDataset || matchedByAttrs;
-    }
-    if (allowedPrimary.size > 0) {
-      return matchedByDataset;
-    }
-    return matchedByAttrs;
+    return viewMatchesAttribution(view, { ownerModules: props.viewOwnerModules, viewRoles: props.viewRoles });
   });
 });
 const viewColumns = ref<ViewColumn[]>([]);
@@ -752,14 +699,6 @@ async function loadMeta() {
   } finally {
     if (sequence === metaLoadSequence) metaLoading.value = false;
   }
-}
-
-function viewUsesLikelyFactorDataset(view: View) {
-  const dataset = datasetById.value.get(view.dataset_id);
-  if (dataset) {
-    return isLikelyFactorResultDataset(dataset);
-  }
-  return isLikelyFactorResultDatasetId(view.dataset_id);
 }
 
 function ensureSelectedView() {
@@ -1461,6 +1400,13 @@ watch(selectedSpaceId, () => {
 </script>
 
 <style scoped>
+.view-query-controls,
+.view-result-table {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+}
+
 .view-browse-page {
   width: 100%;
   max-width: 100%;
@@ -1475,25 +1421,6 @@ watch(selectedSpaceId, () => {
   width: 100%;
   max-width: 100%;
   min-width: 0;
-}
-
-.page-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: var(--moox-space-2);
-}
-
-.page-head__title {
-  display: flex;
-  align-items: center;
-  min-width: 0;
-}
-
-.page-head h2 {
-  margin: 0;
-  font-size: 20px;
-  font-weight: 600;
 }
 
 .view-tabs-row {
@@ -1655,10 +1582,6 @@ watch(selectedSpaceId, () => {
   width: 100%;
 }
 
-.result-pane :deep(.arco-pagination) {
-  margin-top: var(--moox-space-3);
-}
-
 .preview-pager {
   display: flex;
   flex-wrap: wrap;
@@ -1670,19 +1593,10 @@ watch(selectedSpaceId, () => {
   font-size: 13px;
 }
 
-.preview-pager__hint {
-  min-width: 0;
-}
-
 .preview-pager__actions {
   display: inline-flex;
   align-items: center;
   gap: 10px;
-}
-
-.record-search-bar {
-  flex: 0 1 360px;
-  min-width: 260px;
 }
 
 .detail-body {
@@ -1734,7 +1648,6 @@ watch(selectedSpaceId, () => {
 }
 
 @media (max-width: 560px) {
-  .page-head,
   .view-status-line {
     align-items: flex-start;
     flex-direction: column;

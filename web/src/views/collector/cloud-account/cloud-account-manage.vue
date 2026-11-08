@@ -11,7 +11,7 @@
       <a-row>
         <a-button type="primary" status="success" @click="onAdd">
           <template #icon><icon-plus /></template>
-          新增云账户
+          新建云账户
         </a-button>
       </a-row>
 
@@ -79,7 +79,7 @@
     <!-- 新增/编辑弹窗 -->
     <a-modal
       v-model:visible="formVisible"
-      :title="isEdit ? '编辑云账户' : '新增云账户'"
+      :title="isEdit ? '编辑云账户' : '新建云账户'"
       :width="600"
       :mask-closable="false"
       @cancel="handleFormCancel"
@@ -390,7 +390,7 @@ const handleFormOk = async () => {
       });
     }
 
-    Message.success(isEdit.value ? "编辑成功" : "新增成功");
+    Message.success(isEdit.value ? "编辑成功" : "新建成功");
     if (!submission.isCurrent()) return;
     formVisible.value = false;
     await loadAccountList();

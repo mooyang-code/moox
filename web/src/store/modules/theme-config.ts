@@ -4,38 +4,18 @@ import persistedstateConfig from "@/store/config/index";
  * 全局配置
  * @methods setCollapsed 设置菜单折叠
  * @methods setRefreshPage 刷新页面
- * @methods setLanguage 设置语言
  */
 const themeConfig = () => {
   // 是否折叠菜单
   const collapsed = ref<boolean>(false);
   // 刷新页面
   const refreshPage = ref<boolean>(true);
-  // 系统语言
-  const language = ref<string>("zh-CN");
   // 黑暗模式
   const darkMode = ref<boolean>(false);
   // 菜单手风琴
   const isAccordion = ref<boolean>(true);
-  // 面包屑渲染
-  const isBreadcrumb = ref<boolean>(true);
   // 标签栏渲染
   const isTabs = ref<boolean>(true);
-  // 页脚渲染
-  const isFooter = ref<boolean>(true);
-  // 水印
-  const watermark = ref<string>("");
-  // 水印风格
-  const watermarkStyle = ref<{ fontSize: number; color: string }>({
-    fontSize: 12,
-    color: "rgba(0, 0, 0, 0.15)"
-  });
-  // 水印角度
-  const watermarkRotate = ref<number>(330);
-  // 水印间隙
-  const watermarkGap = ref<[number, number]>([100, 100]);
-  // 布局模式：layoutDefaults、layoutHead、layoutMixing
-  const layoutType = ref<string>("layoutDefaults");
   // 色弱模式
   const colorWeakMode = ref<boolean>(false);
   // 灰色模式
@@ -74,25 +54,13 @@ const themeConfig = () => {
   function setRefreshPage(data: boolean) {
     refreshPage.value = data;
   }
-  // 设置语言
-  function setLanguage(data: string) {
-    language.value = data;
-  }
 
   return {
     collapsed,
     refreshPage,
-    language,
     darkMode,
     isAccordion,
-    isBreadcrumb,
     isTabs,
-    isFooter,
-    watermark,
-    watermarkStyle,
-    watermarkRotate,
-    watermarkGap,
-    layoutType,
     colorWeakMode,
     grayMode,
     asideDark,
@@ -100,8 +68,7 @@ const themeConfig = () => {
     themeColor,
     presetColors,
     setCollapsed,
-    setRefreshPage,
-    setLanguage
+    setRefreshPage
   };
 };
 
@@ -109,17 +76,9 @@ const themeConfig = () => {
 export const useThemeConfig = defineStore("theme-config", themeConfig, {
   persist: persistedstateConfig("theme-config", [
     "collapsed",
-    "language",
     "darkMode",
     "isAccordion",
-    "isBreadcrumb",
     "isTabs",
-    "isFooter",
-    "watermark",
-    "watermarkStyle",
-    "watermarkRotate",
-    "watermarkGap",
-    "layoutType",
     "colorWeakMode",
     "grayMode",
     "asideDark",

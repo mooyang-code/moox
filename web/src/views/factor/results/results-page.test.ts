@@ -238,7 +238,7 @@ describe("因子结果页", () => {
     expect(browse.props("searchColumns")).toEqual(["close", "request_id"]);
   });
 
-  it("关联了策略实例的因子任务按外显设置收窄范围：隐藏的分类不能用于条件", async () => {
+  it("关联了策略实例的计算任务按外显设置收窄范围：隐藏的分类不能用于条件", async () => {
     Object.assign(hoisted.store, { tasks: [taskInfo("a", "inst-1")] });
     hoisted.getDisplay.mockResolvedValue({ categories: ["momentum"], members: [], columns: ["open"] });
     hoisted.route.query = { tab: "results", task: "a", fc: JSON.stringify([["rsi", "gt", 70]]) };

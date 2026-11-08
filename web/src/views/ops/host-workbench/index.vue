@@ -48,9 +48,9 @@ import { computed, ref, watch, onBeforeUnmount } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { Message } from "@arco-design/web-vue";
 import PageTitleTabs from "@/components/page-title-tabs/index.vue";
-import SshHosts from "@/views/container/ssh-hosts/ssh-hosts.vue";
-import SshTerminal from "@/views/container/ssh-terminal/ssh-terminal.vue";
-import SshFileManager from "@/views/container/ssh-file-manager/ssh-file-manager.vue";
+import SshHosts from "./ssh-hosts.vue";
+import SshTerminal from "./ssh-terminal.vue";
+import SshFileManager from "./ssh-file-manager.vue";
 import HostMonitor from "./host-monitor.vue";
 import { listAllDeploymentHosts } from "@/api/admin/sysdeploy";
 import type { DeploymentHost } from "@/api/admin/types";
@@ -196,17 +196,6 @@ onBeforeUnmount(() => {
   border: 0;
   border-radius: 0;
   box-shadow: none;
-}
-.monitor-table-wrap {
-  margin-top: var(--moox-space-1);
-}
-.ssh-management {
-  margin-top: var(--moox-space-4);
-  border-top: 1px solid var(--color-border-2);
-  padding-top: var(--moox-space-3);
-}
-.ssh-management :deep(.moox-page) {
-  padding: 0;
 }
 .terminal-modal-body {
   height: min(68vh, 720px);

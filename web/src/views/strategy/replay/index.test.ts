@@ -424,11 +424,11 @@ describe("strategy replay page", () => {
     api.listReplays.mockResolvedValue({ items: [], page: { total: 0 } });
     const wrapper = mountPage();
     await flushPromises();
-    expect(wrapper.text()).toContain("因子任务列表加载失败：网络错误");
+    expect(wrapper.text()).toContain("计算任务列表加载失败：网络错误");
     api.space!.selectedSpaceId = "stock";
     await nextTick();
     await flushPromises();
-    expect(wrapper.text()).not.toContain("因子任务列表加载失败");
+    expect(wrapper.text()).not.toContain("计算任务列表加载失败");
   });
 
   it("starts a replay from an unsaved DSL draft", async () => {
@@ -522,7 +522,7 @@ describe("strategy replay page", () => {
     await startButton!.trigger("click");
     await flushPromises();
     expect(api.startReplay).not.toHaveBeenCalled();
-    expect(wrapper.text()).toContain("请为策略用到的每个市场选择因子任务");
+    expect(wrapper.text()).toContain("请为策略用到的每个市场选择计算任务");
   });
 
   it("shows the per-market values, the tasks, the fees and the no-funding-fee warning for a swap replay", async () => {

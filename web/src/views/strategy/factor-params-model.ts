@@ -1,9 +1,9 @@
 import type { StrategyResult } from "@/api/strategy-types";
 import { formatInstant } from "@/utils/time-zone";
 
-/** 实例创建时选定的因子任务及其可变成员（来自启用时固化的解析结果）；解析结果里没有任务时返回 null。 */
+/** 实例创建时选定的计算任务及其可变成员（来自启用时固化的解析结果）；解析结果里没有任务时返回 null。 */
 export interface FactorBinding {
-  /** 实例关联的因子任务 ID（也是参数提交的目标）。 */
+  /** 实例关联的计算任务 ID（也是参数提交的目标）。 */
   taskId: string;
   /** 事件路由与求值用的结果 View（任务的结果 View）。 */
   viewId: string;
@@ -25,7 +25,7 @@ function parseObject(raw?: string): Record<string, any> {
 export function parseFactorBinding(resolvedJson?: string): FactorBinding | null {
   const value = parseObject(resolvedJson);
   const tasks = Object.values((value.tasks ?? {}) as Record<string, { factor_task_id?: string; view_id?: string }>);
-  // 动态参数回写只用于只绑一个因子任务的实例。
+  // 动态参数回写只用于只绑一个计算任务的实例。
   if (tasks.length !== 1 || !tasks[0]?.factor_task_id) return null;
   const declared = (value.factor_params ?? {}) as Record<string, Array<{ name?: string }>>;
   const params: Record<string, string[]> = {};

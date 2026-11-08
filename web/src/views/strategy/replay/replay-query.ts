@@ -5,7 +5,7 @@ import { buildQuery, queryPage, queryString } from "@/views/strategy/query";
 export interface ReplayPrefill {
   strategyId: string;
   instanceId: string;
-  /** 市场 → 因子任务。 */
+  /** 市场 → 计算任务。 */
   factorTasks: Record<string, string>;
 }
 

@@ -9,11 +9,7 @@ vi.mock("@/store/modules/theme-config", async () => {
   return {
     useThemeConfig: defineStore("theme-config-test", () => ({
       refreshPage: ref(true),
-      isTabs: ref(false),
-      watermark: ref(""),
-      watermarkStyle: ref({ fontSize: 12, color: "" }),
-      watermarkRotate: ref(0),
-      watermarkGap: ref([100, 100])
+      isTabs: ref(false)
     }))
   };
 });

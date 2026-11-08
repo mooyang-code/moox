@@ -86,7 +86,7 @@ export function rootCaGuides(fileName: string = ROOT_CA_FILE_NAME): RootCaGuide[
       label: "iPhone / iPad",
       commands: [],
       steps: [
-        "用 Safari 打开管理台，点登录页底部的“下载并安装根证书”（或“秘钥管理”页的“HTTPS 根证书”），再点“仅下载证书”；提示“已下载描述文件”。其它浏览器下载的证书装不上，要用 Safari。",
+        "用 Safari 打开管理台，点登录页底部的“下载并安装根证书”（或“密钥管理”页的“HTTPS 根证书”），再点“仅下载证书”；提示“已下载描述文件”。其它浏览器下载的证书装不上，要用 Safari。",
         "打开“设置 → 通用 → VPN 与设备管理”，点刚下载的描述文件，按提示安装（需要输入锁屏密码）。安装前在详情里核对 SHA-256 指纹。",
         "还要打开信任开关：“设置 → 通用 → 关于本机 → 证书信任设置”，打开这张证书的“完全信任”。少了这一步，iOS 仍然不信任它。",
         "从后台彻底划掉 Safari 再重新打开管理台，地址栏不再提示不安全即成功。"
@@ -97,7 +97,7 @@ export function rootCaGuides(fileName: string = ROOT_CA_FILE_NAME): RootCaGuide[
       label: "Android",
       commands: [],
       steps: [
-        `用 Chrome 打开管理台，点登录页底部的“下载并安装根证书”（或“秘钥管理”页的“HTTPS 根证书”），再点“仅下载证书”，得到 ${fileName}。`,
+        `用 Chrome 打开管理台，点登录页底部的“下载并安装根证书”（或“密钥管理”页的“HTTPS 根证书”），再点“仅下载证书”，得到 ${fileName}。`,
         "打开“设置 → 安全（或“密码与安全”）→ 更多安全设置 → 加密与凭据 → 安装证书 → CA 证书”，确认提示后选中下载的文件。各品牌菜单名称略有不同，可以在设置里搜索“CA 证书”。",
         "在“加密与凭据 → 受信任的凭据 → 用户”里点开这张证书，核对 SHA-256 指纹。",
         "彻底关闭 Chrome 再重新打开管理台。Chrome 会信任这里装的证书；Firefox 要在它自己的设置里打开“使用第三方 CA 证书”（设置 → 关于 Firefox，连点图标 5 次打开隐藏设置后可见）。"

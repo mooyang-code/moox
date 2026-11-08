@@ -1,6 +1,6 @@
 import type { Exchange, InspectExchangeCredentialReq, MarketType } from "@/api/trade/types";
 
-// 秘钥管理里交易所密钥的“提供方”（binance、okx）对应 Trade 的交易所枚举；其他提供方不能检测。
+// 密钥管理里交易所密钥的“提供方”（binance、okx）对应 Trade 的交易所枚举；其他提供方不能检测。
 export function exchangeFromProvider(provider: string | undefined): Exchange {
   switch ((provider ?? "").trim().toLowerCase()) {
     case "binance":
@@ -32,7 +32,7 @@ export function inspectionRequest(input: InspectionRequestInput): InspectExchang
   return request;
 }
 
-// 秘钥是否可以做测试连接：交易所分类、币安或 OKX、启用状态。
+// 密钥是否可以做测试连接：交易所分类、币安或 OKX、启用状态。
 export function canTestConnection(secret: { category?: string; provider?: string; status?: string }): boolean {
   return secret.category === "exchange" && exchangeFromProvider(secret.provider) !== 0 && secret.status === "active";
 }

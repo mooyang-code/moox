@@ -53,14 +53,6 @@ export function parseMetadata(value: unknown): Record<string, unknown> {
   return typeof value === "object" ? (value as Record<string, unknown>) : {};
 }
 
-export const getBatchChangeTypeText = (value: string) =>
-  (
-    ({
-      FUNCTION_JOB_OPERATION_CREATE_INSTANCES: "批量创建实例",
-      FUNCTION_JOB_OPERATION_DEPLOY_INSTANCES: "批量部署实例"
-    }) as Record<string, string>
-  )[value] || value;
-
 export const getProviderName = (value: string) => ({ tencent: "腾讯云", aliyun: "阿里云", aws: "AWS" })[value] || value;
 export const getFunctionTypeLabel = (value: string) =>
   ({ "scf-event": "云函数（事件型）", "scf-web": "云函数（Web型）", server: "服务器" })[value] || value;
@@ -86,11 +78,16 @@ export function getPackageTypeColor(value: number | string) {
         "3": "gray",
         PACKAGE_TYPE_COLLECTOR: "blue",
         PACKAGE_TYPE_FACTOR: "green",
-        PACKAGE_TYPE_CUSTOM: "gray"
+        PACKAGE_TYPE_CUSTOM: "gray",
+        data_collector: "blue",
+        factor_calculator: "green"
       } as Record<string, string>
     )[String(value)] || "gray"
   );
 }
+// PackageStatus 枚举：2 = 可用（已上传完成），只有可用的代码包能下载。
+export const PACKAGE_STATUS_AVAILABLE = 2;
+
 export function getPackageStatusColor(value: number | string) {
   return ({ 1: "blue", 2: "green", 3: "red", 4: "gray" } as Record<number, string>)[Number(value)] || "gray";
 }

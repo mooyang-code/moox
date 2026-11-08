@@ -1,26 +1,15 @@
 <template>
   <div>
     <LangProvider>
-      <component :is="layouts[layoutType]" />
+      <LayoutDefaults />
     </LangProvider>
   </div>
 </template>
 
 <script setup lang="ts">
-import { storeToRefs } from "pinia";
-import { useThemeConfig } from "@/store/modules/theme-config";
 import { defineAsyncComponent } from "vue";
 import LangProvider from "@/components/lang-provider/index.vue";
 
-const themeStore = useThemeConfig();
-const { layoutType } = storeToRefs(themeStore);
-
-// 引入组件-异步组件
-const layouts: any = {
-  layoutDefaults: defineAsyncComponent(() => import("@/layout/layout-defaults/index.vue")),
-  layoutHead: defineAsyncComponent(() => import("@/layout/layout-head/index.vue")),
-  layoutMixing: defineAsyncComponent(() => import("@/layout/layout-mixing/index.vue"))
-};
+// 必须异步加载：布局里的组件会引用 router，而 router/route.ts 又静态引用本文件，同步导入会形成循环依赖
+const LayoutDefaults = defineAsyncComponent(() => import("@/layout/layout-defaults/index.vue"));
 </script>
-
-<style lang="scss" scoped></style>

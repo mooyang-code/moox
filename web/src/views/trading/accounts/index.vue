@@ -161,7 +161,12 @@ import type { LogicalAccount, TradingAccount } from "@/api/trade";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import { accountMapOf, comboRows, equityChange, unjoinedAccounts, type ComboRow, type MemberRow } from "./account-list";
 import CreateAccount from "./create/index.vue";
-import { environmentFromQuery, environmentLabel, environmentTabs, type Environment } from "./shared/environment";
+import {
+  environmentFromQuery,
+  environmentLabel,
+  environmentTabs,
+  type Environment
+} from "@/components/trade-confirm/environment";
 import { fmtMoney, fmtPercent, pnlClass } from "./shared/format";
 import { marketsText } from "./shared/markets";
 import { loadPositionSnapshot, positionCount } from "./shared/position-snapshot";

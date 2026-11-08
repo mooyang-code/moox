@@ -60,17 +60,21 @@ function mountPage() {
     ].map(name => [name, true])
   );
   return shallowMount(ViewBrowse, {
-    props: { embedded: true, viewIds: ["view-known"], activeViewId: "view-known", refreshKey: 0 },
+    props: { viewIds: ["view-known"], activeViewId: "view-known", refreshKey: 0 },
     global: {
       stubs: {
         ...stubs,
         "a-button": { emits: ["click"], template: "<button @click=\"$emit('click')\"><slot /></button>" },
         "a-spin": { template: "<div><slot /></div>" },
-        "a-alert": { template: "<div class='alert'><slot /></div>" },
-        ResultTable: { props: ["rows"], template: '<div data-testid="rows">{{ rows.map(row => row.key).join(",") }}</div>' }
+        "a-alert": { template: "<div class='alert'><slot /></div>" }
       }
     }
   });
+}
+
+/** 表格当前显示的行（按 key 拼接）。 */
+function rowKeys(wrapper: { vm: unknown }): string {
+  return ((wrapper.vm as { tableRows: { key: string }[] }).tableRows || []).map(row => row.key).join(",");
 }
 
 describe("View result refresh", () => {
@@ -106,12 +110,12 @@ describe("View result refresh", () => {
     const query = mode === "record" ? mocks.queryRecords : mocks.queryTimeSeries;
     const wrapper = mountPage();
     await flushPromises();
-    const previousRows = wrapper.get("[data-testid='rows']").text();
+    const previousRows = rowKeys(wrapper);
     expect(previousRows).toBe(mode === "record" ? "record-known" : "BTC");
     query.mockRejectedValueOnce(new Error("Storage unavailable"));
     await wrapper.setProps({ refreshKey: 1 });
     await flushPromises();
-    expect(wrapper.get("[data-testid='rows']").text()).toBe(previousRows);
+    expect(rowKeys(wrapper)).toBe(previousRows);
     expect(wrapper.text()).toContain("Storage unavailable");
     expect(wrapper.text()).toContain("保留上次查询数据");
     expect(wrapper.text()).toContain("数据状态待刷新");
@@ -127,7 +131,6 @@ describe("View result refresh", () => {
     vi.useFakeTimers();
     const wrapper = shallowMount(ViewBrowse, {
       props: {
-        embedded: true,
         viewIds: ["view-known"],
         activeViewId: "view-known",
         refreshKey: 0,
@@ -135,8 +138,7 @@ describe("View result refresh", () => {
       },
       global: {
         stubs: {
-          "a-alert": { template: "<div class='alert'><slot /></div>" },
-          ResultTable: { props: ["rows"], template: "<div />" }
+          "a-alert": { template: "<div class='alert'><slot /></div>" }
         }
       }
     });
@@ -173,7 +175,7 @@ describe("View result refresh", () => {
     vi.useFakeTimers();
     mocks.catalog.mockRejectedValue(new Error("Storage unavailable"));
     const wrapper = shallowMount(ViewBrowse, {
-      props: { embedded: true, viewIds: ["view-known"], activeViewId: "view-known", autoRefreshIntervalMs: 60_000 },
+      props: { viewIds: ["view-known"], activeViewId: "view-known", autoRefreshIntervalMs: 60_000 },
       global: { stubs: { "a-alert": { template: "<div class='alert'><slot /></div>" } } }
     });
     await vi.advanceTimersByTimeAsync(0);
@@ -216,7 +218,7 @@ describe("View result refresh", () => {
     mocks.queryTimeSeries.mockRejectedValue(new Error("Storage unavailable"));
     const wrapper = mountPage();
     await flushPromises();
-    expect(wrapper.get("[data-testid='rows']").text()).toBe("");
+    expect(rowKeys(wrapper)).toBe("");
     expect(wrapper.text()).toContain("Storage unavailable");
     expect(wrapper.text()).not.toContain("保留上次查询数据");
     wrapper.unmount();
@@ -265,7 +267,7 @@ describe("View result refresh", () => {
       ?.trigger("click");
     await flushPromises();
     expect(mocks.catalog).toHaveBeenCalledTimes(2);
-    expect(wrapper.get("[data-testid='rows']").text()).toBe("BTC");
+    expect(rowKeys(wrapper)).toBe("BTC");
     expect(wrapper.text()).not.toContain("Storage unavailable");
     wrapper.unmount();
   });

@@ -13,7 +13,7 @@ const sources = [
   path.join(root, 'src/views/ops/host-workbench/host-monitor-detail.vue'),
   path.join(root, 'src/router/route.ts'),
   // 主机列表的连接、文件管理按钮按 sshAvailability 置灰
-  path.join(root, 'src/views/container/ssh-hosts/ssh-hosts.vue'),
+  path.join(root, 'src/views/ops/host-workbench/ssh-hosts.vue'),
 ].map((file) => fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : '').join('\n');
 
 const required = [

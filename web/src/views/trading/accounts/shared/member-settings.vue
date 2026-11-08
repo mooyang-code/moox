@@ -6,7 +6,7 @@
           <a-input v-model="name" :max-length="64" />
         </a-form-item>
         <template v-if="!paper">
-          <a-form-item label="交易所密钥" extra="从「系统设置 / 秘钥管理」里选，不在这里填密钥原文">
+          <a-form-item label="交易所密钥" extra="从「系统设置 / 密钥管理」里选，不在这里填密钥原文">
             <a-select v-model="secretId" :loading="secretsLoading" placeholder="选择密钥">
               <a-option v-for="item in secrets" :key="item.secretId" :value="item.secretId">{{ item.name }}</a-option>
               <a-option v-if="secretId && !secrets.some(item => item.secretId === secretId)" :value="secretId">{{
@@ -86,8 +86,8 @@ import { Message } from "@arco-design/web-vue";
 import { setLeverage, updateTradingAccount } from "@/api/trade";
 import type { TradingAccount } from "@/api/trade";
 import AccountInspectionPanel from "@/components/trade-inspection/account-inspection-panel.vue";
-import ConfirmDialog from "./confirm-dialog.vue";
-import { accountEnvironment } from "./environment";
+import ConfirmDialog from "@/components/trade-confirm/confirm-dialog.vue";
+import { accountEnvironment } from "@/components/trade-confirm/environment";
 import { fmtMoney } from "./format";
 import { loadExchangeSecrets, type ExchangeSecretOption } from "./exchange-secrets";
 import {

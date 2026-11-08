@@ -26,7 +26,7 @@
         </a-space>
       </div>
       <p class="editor-sub">
-        因子用表达式定义：类型、输入列、输出列与回看由编译推导，不需要手填。定义不属于任何计算任务；有未保存的修改时，离开页面会二次确认。
+        因子用表达式定义：类型、输入列、输出列与回看由编译推导，不需要手填。有未保存的修改时，离开页面会二次确认。
       </p>
 
       <a-alert v-if="loadError" type="error" show-icon class="editor-alert">

@@ -84,9 +84,8 @@
           </template>
         </a-table-column>
       </template>
+      <template #empty><a-empty description="暂无标签" /></template>
     </a-table>
-
-    <a-empty v-if="!loading && !rows.length" description="暂无标签" />
 
     <a-modal v-model:visible="visible" width="700px" :title="editing ? '编辑标签' : '新建标签'" @before-ok="submit">
       <a-form :model="form" auto-label-width>
@@ -166,7 +165,7 @@
 <script setup lang="ts">
 import { createSubmitScope } from "@/utils/submit-scope";
 import { createLatestRequestGuard } from "@/utils/latest-request";
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, reactive, ref, watch } from "vue";
 import { Message, Modal } from "@arco-design/web-vue";
 import { listSubjectListers, listTagSyncStatus, type SubjectLister, type TagSyncStatus } from "@/api/collector";
 import { deleteTag, listTags, upsertTag } from "@/api/storage/metadata";
@@ -384,8 +383,6 @@ watch(
   },
   { immediate: true }
 );
-
-onMounted(() => void load());
 
 // 提交作用域（重新打开才使旧提交失效，@ok 自动关闭不影响正常保存）：visible 打开/关闭都会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
 const tagScope = createSubmitScope();

@@ -34,7 +34,7 @@
           <a-radio :value="2">OKX</a-radio>
         </a-radio-group>
       </a-form-item>
-      <a-form-item v-if="form.kind !== 'paper'" label="交易所密钥" extra="先在「系统设置 / 秘钥管理」里录入，这里只选名称">
+      <a-form-item v-if="form.kind !== 'paper'" label="交易所密钥" extra="先在「系统设置 / 密钥管理」里录入，这里只选名称">
         <a-select v-model="form.secretId" :loading="secretsLoading" placeholder="选择密钥">
           <a-option v-for="item in secrets" :key="item.secretId" :value="item.secretId">{{ item.name }}</a-option>
         </a-select>
@@ -179,8 +179,8 @@ import type { LogicalAccount, MarketType } from "@/api/trade";
 import InspectionPreview from "@/components/trade-inspection/inspection-preview.vue";
 import type { InspectionView } from "@/components/trade-inspection/inspection";
 import { createSubmitScope } from "@/utils/submit-scope";
-import EnvMark from "../shared/env-mark.vue";
-import type { Environment } from "../shared/environment";
+import EnvMark from "@/components/trade-confirm/env-mark.vue";
+import type { Environment } from "@/components/trade-confirm/environment";
 import { loadExchangeSecrets, type ExchangeSecretOption } from "../shared/exchange-secrets";
 import { joinableLogicals, nextPriority } from "../shared/membership";
 import { ADOPT_EFFECT_TEXT } from "../shared/risky-actions";

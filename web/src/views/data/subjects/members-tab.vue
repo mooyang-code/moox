@@ -28,7 +28,7 @@
         </a-button>
         <a-button v-if="!selectedTagId" type="primary" status="success" @click="openSubjectCreate">
           <template #icon><icon-plus /></template>
-          新增对象
+          新建对象
         </a-button>
         <a-button v-if="!selectedTagId && selectedKeys.length" :disabled="!manualTags.length" @click="openSelectedAdd">
           加入标签
@@ -138,7 +138,7 @@
     <a-modal
       v-model:visible="subjectVisible"
       width="640px"
-      :title="subjectEditing ? '编辑数据对象' : '新增数据对象'"
+      :title="subjectEditing ? '编辑数据对象' : '新建数据对象'"
       @before-ok="submitSubject"
     >
       <a-form :model="subjectForm" auto-label-width>

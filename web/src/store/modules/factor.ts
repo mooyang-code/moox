@@ -44,18 +44,18 @@ export const useFactorStore = defineStore("factorStore", () => {
 
   const current = computed(() => tasks.value.find(item => item.factor_task.task_id === currentTaskId.value));
 
-  /** 因子任务的展示名：任务名 · 频率；没有任务名时回落为数据集名称 · 频率，再回落为 source_dataset_id。 */
+  /** 计算任务的展示名：任务名 · 频率；没有任务名时回落为数据集名称 · 频率，再回落为 source_dataset_id。 */
   function taskLabel(set: Pick<FactorTask, "source_dataset_id" | "freq"> & Partial<Pick<FactorTask, "name">>) {
     const base = set.name || datasetNames.value[set.source_dataset_id] || set.source_dataset_id;
     return `${base} · ${set.freq}`;
   }
 
-  /** 该空间的因子任务是否已经成功加载过（页面重新挂载时据此跳过重置）。 */
+  /** 该空间的计算任务是否已经成功加载过（页面重新挂载时据此跳过重置）。 */
   function isLoadedFor(nextSpaceId: string) {
     return Boolean(nextSpaceId) && loadedSpaceId.value === nextSpaceId;
   }
 
-  /** 每个空间只加载一次数据集名称；失败不影响因子任务加载，标签回落到 dataset_id。 */
+  /** 每个空间只加载一次数据集名称；失败不影响计算任务加载，标签回落到 dataset_id。 */
   async function loadDatasetNames(nextSpaceId: string, token: number) {
     if (datasetNamesSpaceId.value === nextSpaceId) return;
     try {
@@ -69,7 +69,7 @@ export const useFactorStore = defineStore("factorStore", () => {
   }
 
   /**
-   * 加载某个空间的全部因子任务；过期响应被丢弃，当前选择失效时回落到第一项。
+   * 加载某个空间的全部计算任务；过期响应被丢弃，当前选择失效时回落到第一项。
    * silent：后台刷新，不转加载态、不弹全局提示，失败记在 loadError 由页面显示。
    */
   async function load(nextSpaceId: string, options: { silent?: boolean } = {}) {

@@ -36,7 +36,7 @@
         </div>
         <div class="toolbar-actions">
           <a-button type="primary" status="success" :disabled="!spaceId" @click="createFactor">
-            <template #icon><icon-plus /></template>新增因子
+            <template #icon><icon-plus /></template>新建因子
           </a-button>
         </div>
       </div>

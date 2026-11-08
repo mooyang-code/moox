@@ -51,18 +51,18 @@ export interface AlertNote {
 /**
  * 主要靠命令行处理、要先看说明的告警：返回处理说明；其余返回 null。
  * 缺币安只读 Key：Collector 只读固定 ID exchange-binance-production-readonly，读不到分三种情况（被禁用、没有、在管理台删除过），
- * 告警分不出是哪一种，一次写全。秘钥页新增的 ID 是随机的，补不上这把 Key；setup apply 不重建在管理台删除过的密钥（见 admin 的 setup/exchange_keys.go）。
+ * 告警分不出是哪一种，一次写全。密钥页新增的 ID 是随机的，补不上这把 Key；setup apply 不重建在管理台删除过的密钥（见 admin 的 setup/exchange_keys.go）。
  */
 export function alertNote(object?: HealthObject): AlertNote | null {
   if (!readonlyKeyMissing(object)) return null;
   return {
     lines: [
-      "已有这把 Key 但被禁用：到秘钥管理页把“Binance production readonly”启用。",
+      "已有这把 Key 但被禁用：到密钥管理页把“Binance production readonly”启用。",
       "还没有这把 Key：运行 moox-cli config edit，在“交易所密钥”里添加一把币安、正式环境的密钥，名称填 readonly，勾选“只读密钥”，再运行 moox-cli setup apply 写入。",
       "在管理台删除过这把 Key：setup apply 不会重建删除过的密钥，换一个名称也不行（Collector 只读固定 ID exchange-binance-production-readonly），目前补不回来。",
       "补上之前，现货下架只能手工登记：运行 moox-cli collector delist register，或在事件中心的下架处理页点“手工登记下架”。"
     ],
-    link: { href: "#/settings/secrets", label: "已禁用的话到秘钥管理页启用" }
+    link: { href: "#/settings/secrets", label: "已禁用的话到密钥管理页启用" }
   };
 }
 

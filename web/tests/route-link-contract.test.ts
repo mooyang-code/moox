@@ -13,7 +13,7 @@ function sourceFiles(directory: string): string[] {
   });
 }
 
-/** 注册过的页面路径：静态路由、菜单条目和错误页。带参数的路由（如 /strategy/detail/:instanceId）只登记前缀。 */
+/** 注册过的页面路径：静态路由、菜单条目和 404 兜底。带参数的路由（如 /strategy/detail/:instanceId）只登记前缀。 */
 function knownPaths(): { exact: Set<string>; prefixes: string[] } {
   // /404 没有单独注册，是有意落到兜底的 not-found 路由
   const exact = new Set<string>(["/", "/login", "/404"]);
@@ -63,5 +63,12 @@ describe("站内跳转的路径都有对应的路由", () => {
       }
     }
     expect(missing).toEqual([]);
+  });
+
+  it("错误页只保留 404 兜底", () => {
+    expect(readdirSync(resolve(srcRoot, "views/error"))).toEqual(["404.vue"]);
+    const routes = read("router/route.ts");
+    expect(routes).not.toMatch(/path:\s*"\/(401|500)"/);
+    expect(routes).toContain('import("@/views/error/404.vue")');
   });
 });

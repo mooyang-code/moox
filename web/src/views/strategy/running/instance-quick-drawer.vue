@@ -22,7 +22,7 @@
           <a-descriptions-item label="状态"
             ><StatusBadge :enabled="instance.enabled" :health="instance.health"
           /></a-descriptions-item>
-          <a-descriptions-item label="因子任务"><FactorTaskLinks :tasks="instance.factor_tasks" /></a-descriptions-item>
+          <a-descriptions-item label="计算任务"><FactorTaskLinks :tasks="instance.factor_tasks" /></a-descriptions-item>
           <a-descriptions-item label="模式"
             >{{ instance.logical_account_id ? "交易模式" : "仅计算" }}
             <span v-if="instance.logical_account_id"

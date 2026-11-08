@@ -187,8 +187,9 @@ describe("templates and function reference", () => {
 describe("editor page contract", () => {
   const page = fs.readFileSync(path.resolve(__dirname, "index.vue"), "utf8");
 
-  it("editor has no 因子任务 / 源数据集 / 频率 selector", () => {
-    expect(page).not.toContain("因子任务");
+  it("editor form has no 计算任务 / 源数据集 / 频率 field", () => {
+    expect(page).not.toContain('label="计算任务"');
+    expect(page).not.toContain("task-select.vue");
     expect(page).not.toContain('label="源数据集"');
     expect(page).not.toContain('label="频率"');
     expect(page).toContain("参考数据集");

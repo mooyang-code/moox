@@ -71,7 +71,7 @@ function mountBrowse(props: Record<string, unknown> = {}, slots: Record<string, 
     "KlineModal"
   ];
   return shallowMount(ViewBrowse, {
-    props: { embedded: true, viewIds: ["view-factor"], activeViewId: "view-factor", ...props },
+    props: { viewIds: ["view-factor"], activeViewId: "view-factor", ...props },
     slots,
     global: {
       stubs: {

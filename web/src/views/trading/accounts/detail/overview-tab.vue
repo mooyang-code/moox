@@ -77,9 +77,9 @@
 import { computed, inject } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { exchangeLabels, targetStateLabels } from "@/api/trade";
-import EnvMark from "../shared/env-mark.vue";
+import EnvMark from "@/components/trade-confirm/env-mark.vue";
 import EquityCurve from "../shared/equity-curve.vue";
-import { accountEnvironment } from "../shared/environment";
+import { accountEnvironment } from "@/components/trade-confirm/environment";
 import { fmtMoney } from "../shared/format";
 import { marketsText } from "../shared/markets";
 import SectionBlock from "../shared/section-block.vue";

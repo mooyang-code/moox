@@ -100,7 +100,7 @@ describe("definitions model", () => {
         { task_id: "task_a", member_key: "ema", status: "enabled", params: { span: 20, warmup: 0 } },
         { task_id: "task_a", member_key: "ema__20_50000", status: "enabled", params: { warmup: 50000, span: 20 } }
       ],
-      () => "5m 因子任务"
+      () => "5m 计算任务"
     );
     expect(chips.map(chip => chip.paramsText)).toEqual(["span=20, warmup=0", "span=20, warmup=50000"]);
     expect(chips.map(chip => chip.key)).toEqual(["task_a/ema", "task_a/ema__20_50000"]);

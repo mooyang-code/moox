@@ -31,11 +31,11 @@ describe("health display", () => {
     expect(eventCenter("delist_detected").href).toBe("#/events/delist");
     expect(eventCenter("something_new")).toEqual({ href: "#/events/executions", label: "查看处理记录" });
     expect(eventCenter().href).toBe("#/events/executions");
-    // 缺币安只读 Key：首页跳监控页看说明；说明分三种情况写，被禁用的那种给秘钥页入口
+    // 缺币安只读 Key：首页跳监控页看说明；说明分三种情况写，被禁用的那种给密钥页入口
     const readonlyMissing = { type: "business", kind: "collector_attention", attention_kind: "delist_readonly_key_missing" };
     expect(alertLink(readonlyMissing).href).toBe("#/ops/monitor");
     const note = alertNote(readonlyMissing);
-    expect(note?.link).toEqual({ href: "#/settings/secrets", label: "已禁用的话到秘钥管理页启用" });
+    expect(note?.link).toEqual({ href: "#/settings/secrets", label: "已禁用的话到密钥管理页启用" });
     const [disabled, missing, deleted, manual] = note?.lines ?? [];
     expect(disabled).toContain("被禁用");
     expect(disabled).toContain("启用");

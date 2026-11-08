@@ -48,9 +48,6 @@ describe("create button style", () => {
 
   it("keeps compact header space launchers as blue icon buttons", () => {
     const header = readFileSync(resolve(srcRoot, "layout/components/Header/components/header-left/index.vue"), "utf8");
-    const layoutHead = readFileSync(resolve(srcRoot, "layout/layout-head/index.vue"), "utf8");
-
     expect(header).toContain('<a-button type="text" size="small" title="新建空间"');
-    expect(layoutHead).toContain('class="space-setting-button" type="text" size="small" title="新建空间"');
   });
 });

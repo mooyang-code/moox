@@ -10,7 +10,7 @@ export interface ExchangeSecretOption {
 const providers: Record<number, string> = { 1: "binance", 2: "okx" };
 
 /**
- * 秘钥管理里启用的交易所密钥，按交易所筛选；这里只选名称，不接触密钥原文。
+ * 密钥管理里启用的交易所密钥，按交易所筛选；这里只选名称，不接触密钥原文。
  * 只读密钥不能建执行账户，直接排除；给了环境（1 测试网、2 生产环境）时，再排除密钥 ID 环境段明确是另一个环境的
  * （ID 里看不出环境的照常列出，由检测判断）。
  */

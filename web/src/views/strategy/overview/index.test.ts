@@ -11,6 +11,8 @@ const ctx = vi.hoisted(() => ({
 }));
 vi.mock("@/api/strategy", () => ({
   listInstances: ctx.listInstances,
+  listAllInstances: (options?: unknown) =>
+    ctx.listInstances({ page: 1, page_size: 200 }, options).then((rsp: { items: unknown[] }) => rsp.items),
   listReplays: ctx.listReplays,
   listStrategyTargets: ctx.listStrategyTargets
 }));

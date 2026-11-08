@@ -56,7 +56,7 @@
             >{{ store.strategy?.name || definitionHint }} · <span class="mono">{{ store.instance.strategy_id }}</span>
             <div v-if="versionText" class="version-note">{{ versionText }}</div></a-descriptions-item
           >
-          <a-descriptions-item label="因子任务"><FactorTaskLinks :tasks="store.instance.factor_tasks" /></a-descriptions-item>
+          <a-descriptions-item label="计算任务"><FactorTaskLinks :tasks="store.instance.factor_tasks" /></a-descriptions-item>
           <a-descriptions-item label="运行会话"
             ><span class="mono">{{ store.instance.session_id || "无当前会话" }}</span></a-descriptions-item
           >

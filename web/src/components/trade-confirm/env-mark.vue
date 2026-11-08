@@ -8,4 +8,4 @@ import { environmentLabel, type Environment } from "./environment";
 defineProps<{ env: Environment }>();
 </script>
 
-<style src="./accounts.css"></style>
+<style src="./trade-confirm.css"></style>

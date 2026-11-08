@@ -304,7 +304,7 @@ describe("strategy instance creation behavior", () => {
     const selects = wrapper.findAll("select");
     // 定义、现货任务、永续任务三个选择框。
     expect(selects).toHaveLength(3);
-    expect(wrapper.text()).toContain("现货、永续 的因子任务");
+    expect(wrapper.text()).toContain("现货、永续 的计算任务");
     await selects[1].setValue("ftask_spot");
     await flushPromises();
     const swapOptions = wrapper
@@ -317,7 +317,7 @@ describe("strategy instance creation behavior", () => {
     await create().trigger("click");
     await flushPromises();
     expect(api.createInstance).not.toHaveBeenCalled();
-    expect(wrapper.text()).toContain("请为现货、永续各选一个因子任务");
+    expect(wrapper.text()).toContain("请为现货、永续各选一个计算任务");
     await wrapper.findAll("select")[2].setValue("ftask_swap");
     await precheck(wrapper, flushPromises);
     await create().trigger("click");
@@ -408,7 +408,7 @@ describe("strategy instance creation behavior", () => {
       unifiedTasks();
       const noMarket = [{ ...strategies[0], dsl_yaml: "name: demo\n" }];
       const { wrapper } = await open({ presetStrategyId: "s1", strategies: noMarket });
-      expect(wrapper.text()).not.toContain("统一数据集上的一个因子任务");
+      expect(wrapper.text()).not.toContain("统一数据集上的一个计算任务");
     });
 
     it("keeps listing every task and says so when the datasets cannot be read", async () => {
@@ -443,10 +443,10 @@ describe("strategy instance creation behavior", () => {
       .mockRejectedValueOnce(new Error("因子服务不可用"))
       .mockResolvedValueOnce({ factor_tasks: [taskInfo()], page_result: { has_more: false } });
     const { wrapper, flushPromises } = await open({ presetStrategyId: "s1" });
-    expect(wrapper.text()).toContain("因子任务列表读取失败：因子服务不可用");
+    expect(wrapper.text()).toContain("计算任务列表读取失败：因子服务不可用");
     await wrapper.find(".link").trigger("click");
     await flushPromises();
-    expect(wrapper.text()).not.toContain("因子任务列表读取失败");
+    expect(wrapper.text()).not.toContain("计算任务列表读取失败");
     expect(wrapper.findAll("option").some(item => item.text().includes("ftask_a"))).toBe(true);
   });
 
@@ -471,7 +471,7 @@ describe("strategy instance creation behavior", () => {
       page_result: { has_more: false }
     });
     const empty = await open({ presetStrategyId: "s1" });
-    expect(empty.wrapper.text()).toContain("没有可用的因子任务");
+    expect(empty.wrapper.text()).toContain("没有可用的计算任务");
   });
 
   it("lists the columns of the chosen task and the variable members the strategy must parameterise", async () => {
@@ -600,14 +600,14 @@ describe("strategy instance creation behavior", () => {
     it.each([
       ["纯现货池", [spotMember, spotMember], ["spot"], ["spot", "spot"]],
       ["纯永续池", [swapMember], ["swap"], ["swap", "swap"]]
-    ])("%s只要绑定一个对应市场的因子任务", async (_name, members, markets, resolvedMarket) => {
+    ])("%s只要绑定一个对应市场的计算任务", async (_name, members, markets, resolvedMarket) => {
       resolved(resolvedMarket[0], resolvedMarket[1]);
       const list = [pool(...members.map(item => item.strategy_id)), spotMember, swapMember];
       const { wrapper, flushPromises } = await open({ presetStrategyId: "pool", strategies: list });
       // 定义选择框 + 一个任务选择框，不需要先选市场
       expect(wrapper.findAll("select")).toHaveLength(2);
       expect(wrapper.text()).toContain("策略池要绑定各成员所需市场的并集");
-      expect(wrapper.text()).toContain(`${markets[0] === "spot" ? "现货" : "永续"} 的因子任务`);
+      expect(wrapper.text()).toContain(`${markets[0] === "spot" ? "现货" : "永续"} 的计算任务`);
       await wrapper.findAll("select")[1].setValue("ftask_a");
       await precheck(wrapper, flushPromises);
       await create(wrapper).trigger("click");
@@ -629,7 +629,7 @@ describe("strategy instance creation behavior", () => {
       const list = [pool("s_spot", "s_swap"), spotMember, swapMember];
       const { wrapper, flushPromises } = await open({ presetStrategyId: "pool", strategies: list });
       expect(wrapper.findAll("select")).toHaveLength(3);
-      expect(wrapper.text()).toContain("现货、永续 的因子任务");
+      expect(wrapper.text()).toContain("现货、永续 的计算任务");
       await wrapper.findAll("select")[1].setValue("ftask_spot");
       await wrapper.findAll("select")[2].setValue("ftask_swap");
       await precheck(wrapper, flushPromises);

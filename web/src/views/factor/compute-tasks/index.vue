@@ -120,7 +120,7 @@
       </template>
     </div>
 
-    <SetCreateModal v-model:visible="createVisible" @created="onCreated" />
+    <TaskCreateModal v-model:visible="createVisible" @created="onCreated" />
 
     <TaskDetailDrawer
       :info="detailInfo"
@@ -161,7 +161,7 @@ import { createFactorTask, deleteFactorTask, setFactorTaskStatus } from "@/api/f
 import type { FactorTask, FactorTaskInfo } from "@/api/factor/types";
 import { barLagText, formatPeriod } from "@/views/factor/shared/health";
 import HealthTag from "@/views/factor/shared/health-tag.vue";
-import InfoTip from "@/views/factor/shared/info-tip.vue";
+import InfoTip from "@/components/info-tip/index.vue";
 import { taskStatusTag } from "@/views/factor/shared/status";
 import { useFactorScope } from "@/views/factor/shared/use-factor-scope";
 import {
@@ -169,10 +169,10 @@ import {
   ENABLE_ENGINE_HINT,
   filterTasks,
   memberCountText,
-  setActionKind,
+  taskActionKind,
   type TaskFilters
 } from "./compute-tasks-model";
-import SetCreateModal from "./task-create-modal.vue";
+import TaskCreateModal from "./task-create-modal.vue";
 import TaskDetailDrawer from "./task-detail-drawer.vue";
 
 defineOptions({ name: "FactorComputeTasks" });
@@ -205,7 +205,7 @@ const rows = computed(() =>
     boundInstance: info.factor_task.bound_instance_id || "",
     members: memberCountText(info),
     statusTag: taskStatusTag(info.factor_task.status),
-    action: setActionKind(info.factor_task),
+    action: taskActionKind(info.factor_task),
     remove: deleteState(info),
     lastPeriod: info.last_run?.last_period_time ? formatPeriod(info.last_run.last_period_time, displayZone.value) : "-",
     lag: barLagText(info.factor_task.freq, info.last_run)

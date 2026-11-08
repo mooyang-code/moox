@@ -65,7 +65,7 @@ describe("启用绑了组合账户的实例", () => {
     const text = document.body.textContent || "";
     expect(text).toContain("主组合");
     expect(text).toContain("生产环境");
-    expect(text).toContain("因子任务 task-a 会与本实例永久关联");
+    expect(text).toContain("计算任务 task-a 会与本实例永久关联");
     expect(text).toContain("输入组合名称「主组合」确认");
     expect(vm.canSubmit).toBe(false);
     vm.typedName = "主组合";

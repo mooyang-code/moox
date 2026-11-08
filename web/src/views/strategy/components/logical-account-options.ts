@@ -1,5 +1,5 @@
 import type { LogicalAccount, TradingAccount } from "@/api/trade/types";
-import { environmentLabel, logicalEnvironment } from "@/views/trading/accounts/shared/environment";
+import { environmentLabel, logicalEnvironment } from "@/components/trade-confirm/environment";
 
 const marketTypes: Record<string, number> = { spot: 1, swap: 2 };
 
