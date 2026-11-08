@@ -279,7 +279,7 @@ func (m *MgrService) RunArchiveTaskNow(ctx context.Context, req *archivepb.RunAr
 	if err != nil {
 		return &archivepb.RunArchiveTaskNowRsp{RetInfo: invalid(err)}, nil
 	}
-	run, err := s.store.CreateRun(ctx, space, req.GetDatasetId(), store.KindManual, time.Time{}, time.Time{}, s.clock())
+	run, err := s.store.CreateRun(ctx, space, req.GetDatasetId(), store.RunSpec{Kind: store.KindManual}, s.clock())
 	if err != nil {
 		if errors.Is(err, store.ErrConflict) {
 			return &archivepb.RunArchiveTaskNowRsp{RetInfo: conflict(errors.New("任务已有排队中或运行中的运行"))}, nil
@@ -336,7 +336,7 @@ func (m *MgrService) BackfillArchiveRange(ctx context.Context, req *archivepb.Ba
 		}
 		start = clamped
 	}
-	run, err := s.store.CreateRun(ctx, space, req.GetDatasetId(), store.KindRange, start, end, now)
+	run, err := s.store.CreateRun(ctx, space, req.GetDatasetId(), store.RunSpec{Kind: store.KindRange, RangeStart: start, RangeEnd: end}, now)
 	if err != nil {
 		if errors.Is(err, store.ErrConflict) {
 			return &archivepb.BackfillArchiveRangeRsp{RetInfo: conflict(errors.New("任务已有排队中或运行中的运行"))}, nil

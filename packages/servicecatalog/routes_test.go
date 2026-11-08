@@ -346,12 +346,13 @@ func TestArchiveMgrRoutesWhenPlacedOnControl(t *testing.T) {
 			routes[route.ServicePath+"/"+route.Method] = route
 		}
 	}
-	if len(routes) != 15+4 {
-		t.Fatalf("archive-mgr routes = %d, want 19", len(routes))
+	if len(routes) != 18+4 {
+		t.Fatalf("archive-mgr routes = %d, want 22", len(routes))
 	}
-	retire := routes["trpc.moox.archive.ArchiveMgr/RetireArchiveWorker"]
-	if !slices.Equal(retire.Callers, []string{"moox-cli"}) || retire.ReadOnly {
-		t.Fatalf("RetireArchiveWorker route = %+v", retire)
+	for _, method := range []string{"RetireArchiveWorker", "PrepareArchiveImport", "ImportArchiveFile", "ClearArchiveUnrecoverable"} {
+		if route := routes["trpc.moox.archive.ArchiveMgr/"+method]; !slices.Equal(route.Callers, []string{"moox-cli"}) || route.ReadOnly {
+			t.Fatalf("%s 只给 moox-cli: %+v", method, route)
+		}
 	}
 	create := routes["trpc.moox.archive.ArchiveMgr/CreateArchiveTask"]
 	if !slices.Equal(create.Callers, []string{"console", "moox-cli"}) || create.ReadOnly {

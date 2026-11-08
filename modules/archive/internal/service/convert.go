@@ -35,7 +35,7 @@ func runToPB(r store.Run) *archivepb.ArchiveRun {
 		WorkerId: r.WorkerID, LeaseUntil: fmtRFC(r.LeaseUntil), SubjectsTotal: r.Stats.SubjectsTotal, SubjectsDone: r.Stats.SubjectsDone,
 		RequestCount: r.Stats.RequestCount, BytesRead: r.Stats.BytesRead, RowsRead: r.Stats.RowsRead, RowsAdded: r.Stats.RowsAdded,
 		RowsChanged: r.Stats.RowsChanged, PartitionsExported: r.Stats.PartitionsExported, PartitionsFinalized: r.Stats.PartitionsFinalized, Message: r.Message,
-		PartitionsUploaded: r.Stats.PartitionsUploaded,
+		PartitionsUploaded: r.Stats.PartitionsUploaded, ImportFile: r.ImportFile, Overwrite: r.Overwrite,
 	}
 	for _, item := range r.Unrecoverable {
 		out.Unrecoverable = append(out.Unrecoverable, &archivepb.UnrecoverableRange{SubjectId: item.SubjectID, SeriesTag: item.SeriesTag, StartTime: item.StartTime, EndTime: item.EndTime})

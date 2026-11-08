@@ -14,7 +14,8 @@ message ArchiveRun {
   string space_id = 2;
   string dataset_id = 3;
   // kind：scheduled（每小时或每天一次的复核，推进水位）、manual（立即运行，同复核）、
-  // tick（到点拉取新收盘的几根，读下发区间、不推进水位）、range（补拉区间）。
+  // tick（到点拉取新收盘的几根，读下发区间、不推进水位）、range（补拉区间）、
+  // import（把 moox-cli 上传的本地 CSV 导进归档，不经 Storage、不推进水位、不更新最近成功时间）。
   string kind = 4;
   string range_start = 5;
   string range_end = 6;
@@ -38,6 +39,10 @@ message ArchiveRun {
   string message = 23;
   // partitions_uploaded：本次运行上传到对象存储并校验通过的分区数。
   uint32 partitions_uploaded = 24;
+  // 导入的文件（kind=import 时有值）：相对归档根目录下 .import 的 "<import_id>/<文件名>"。
+  string import_file = 25;
+  // 导入时同键已存在的行是否覆盖（kind=import）。
+  bool overwrite = 26;
 }
 
 // UnrecoverableRange 是超出线上保留期、无法补齐的区间（按序列合并）。
@@ -376,6 +381,50 @@ message RetireArchiveWorkerRsp {
   bool retired = 2;
 }
 
+// PrepareArchiveImportReq 为导入取上传位置：活动 worker 的归档根目录与新生成的导入 ID（只给 moox-cli）。
+message PrepareArchiveImportReq {
+  string space_id = 1;
+  string dataset_id = 2;
+}
+message PrepareArchiveImportRsp {
+  common.RetInfo ret_info = 1;
+  // 活动 worker 的归档根目录与 worker ID。
+  string root_dir = 2;
+  string worker_id = 3;
+  string import_id = 4;
+  // 上传目录：<root_dir>/.import/<import_id>。
+  string import_dir = 5;
+}
+
+// ImportArchiveFileReq 为已上传到 <root>/.import/<import_id>/<file_name> 的 CSV 建一条导入运行（只给 moox-cli）。
+message ImportArchiveFileReq {
+  string space_id = 1;
+  string dataset_id = 2;
+  string import_id = 3;
+  // 文件名（.csv 或 .csv.gz，不含目录）。
+  string file_name = 4;
+  // 同键已存在时是否覆盖；默认以已归档的为准，只补空缺。
+  bool overwrite = 5;
+}
+message ImportArchiveFileRsp {
+  common.RetInfo ret_info = 1;
+  ArchiveRun run = 2;
+}
+
+// ClearArchiveUnrecoverableReq 删掉任务累积的、整段落在 [start, end) 里的无法补齐区间（只给 moox-cli）。
+// 导入补齐历史缺口后由人确认再清；区间不带标的，按时间范围自动判断会把真实缺口藏掉，所以不自动删。
+message ClearArchiveUnrecoverableReq {
+  string space_id = 1;
+  string dataset_id = 2;
+  string start = 3;
+  string end = 4;
+}
+message ClearArchiveUnrecoverableRsp {
+  common.RetInfo ret_info = 1;
+  // 删掉的区间。
+  repeated UnrecoverableRange removed = 2;
+}
+
 service ArchiveMgr {
   rpc GetArchiveOverview(GetArchiveOverviewReq) returns (GetArchiveOverviewRsp);
   rpc ListArchiveTasks(ListArchiveTasksReq) returns (ListArchiveTasksRsp);
@@ -392,6 +441,9 @@ service ArchiveMgr {
   rpc ListArchivePartitions(ListArchivePartitionsReq) returns (ListArchivePartitionsRsp);
   rpc GetArchivePartition(GetArchivePartitionReq) returns (GetArchivePartitionRsp);
   rpc RetireArchiveWorker(RetireArchiveWorkerReq) returns (RetireArchiveWorkerRsp);
+  rpc PrepareArchiveImport(PrepareArchiveImportReq) returns (PrepareArchiveImportRsp);
+  rpc ImportArchiveFile(ImportArchiveFileReq) returns (ImportArchiveFileRsp);
+  rpc ClearArchiveUnrecoverable(ClearArchiveUnrecoverableReq) returns (ClearArchiveUnrecoverableRsp);
 }
 
 // ---- ArchiveWorker：mgr 与 worker 之间的内部契约，只有外部身份 archive-worker 可以调用 ----
@@ -491,11 +543,16 @@ message RunAssignment {
   string dataset_meta_json = 22;
   // 任务最近一次成功的复核或手动运行的开始时间（即读取水位）；worker 本地没有水位时用它。
   string last_success_at = 23;
-  // 该任务在 mgr 的分区登记（只含结束时间晚于「本次开始 − 线上保留期」的，不带预览与列名）；worker 本地缺分区状态时据此补齐。
+  // 该任务在 mgr 的分区登记（只含结束时间晚于「本次开始 − 线上保留期」的，kind=import 时为全部；不带预览与列名）；
+  // worker 本地缺分区状态时据此补齐。
   repeated PartitionReport registered_partitions = 24;
   // 任务的用途与目录名：分区文件写在 <space>/<purpose>/<dir_name>/<yyyy>/ 下。
   string purpose = 25;
   string dir_name = 26;
+  // 导入的文件（kind=import）："<import_id>/<文件名>"，worker 只认 <root>/.import/<import_id>/<文件名>。
+  string import_file = 27;
+  // 导入时同键已存在的行是否覆盖（kind=import）；为真时 CSV 必须带齐数据集的全部值列。
+  bool overwrite = 28;
 }
 message PullArchiveRunRsp {
   common.RetInfo ret_info = 1;

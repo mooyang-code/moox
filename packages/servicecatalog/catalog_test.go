@@ -462,6 +462,9 @@ func TestConsoleCannotMutateDeploymentState(t *testing.T) {
 		{"trpc.moox.storage.Metadata", "UpdateDataNode"},
 		{"trpc.moox.storage.Metadata", "DeleteDataNode"},
 		{"trpc.moox.archive.ArchiveMgr", "RetireArchiveWorker"},
+		{"trpc.moox.archive.ArchiveMgr", "PrepareArchiveImport"},
+		{"trpc.moox.archive.ArchiveMgr", "ImportArchiveFile"},
+		{"trpc.moox.archive.ArchiveMgr", "ClearArchiveUnrecoverable"},
 	} {
 		if c.Allowed("console", tc.path, tc.method) {
 			t.Fatalf("console can call %s/%s", tc.path, tc.method)

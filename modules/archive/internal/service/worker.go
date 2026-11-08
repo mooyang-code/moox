@@ -88,8 +88,9 @@ func (w *WorkerService) PullArchiveRun(ctx context.Context, req *archivepb.PullA
 	for _, c := range claimed {
 		// worker 的读取都截在线上保留期内，更早的分区用不到，不下发（否则登记随年份增长、撑大响应）；
 		// 启用了对象存储时，更早但还没有已校验远端副本的分区照样下发，暂存库重建后才能补传。
+		// 导入写的多是保留期之前的分区：下发全部登记，暂存库丢失时也能先补齐本地状态，不把已有文件的分区当成新分区导出。
 		var since time.Time
-		if limit, forever, perr := parseRetention(c.Task.Retention); perr == nil && !forever {
+		if limit, forever, perr := parseRetention(c.Task.Retention); perr == nil && !forever && c.Run.Kind != store.KindImport {
 			since = c.Run.StartedAt.Add(-limit)
 		}
 		registered, err := s.store.TaskPartitions(ctx, c.Task.SpaceID, c.Task.DatasetID, since, status.remoteEnabled)
@@ -117,7 +118,7 @@ func (s *Service) assignment(c store.Claimed, registered []store.Partition) *arc
 		SpaceTz: spaceCfg.TZ, LocalClose: spaceCfg.LocalClose, StagingRetentionSeconds: uint32(s.cfg.StagingRetention / time.Second),
 		ScheduledAt: fmtRFC(c.Run.ScheduledAt), StartedAt: fmtRFC(c.Run.StartedAt), RangeStart: fmtRFC(c.Run.RangeStart), RangeEnd: fmtRFC(c.Run.RangeEnd),
 		BackfillFrom: fmtRFC(c.Task.BackfillFrom), TaskId: strconv.FormatInt(c.Task.ID, 10), DatasetMetaJson: c.Task.MetaJSON, LeaseTtlSeconds: uint32(s.cfg.Run.LeaseTTL / time.Second),
-		LastSuccessAt: fmtRFC(c.Task.LastSuccessAt), RegisteredPartitions: reports,
+		LastSuccessAt: fmtRFC(c.Task.LastSuccessAt), RegisteredPartitions: reports, ImportFile: c.Run.ImportFile, Overwrite: c.Run.Overwrite,
 	}
 }
 

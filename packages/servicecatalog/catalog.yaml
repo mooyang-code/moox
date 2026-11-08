@@ -1145,6 +1145,9 @@ components:
           - ListArchivePartitions
           - GetArchivePartition
           - RetireArchiveWorker
+          - PrepareArchiveImport
+          - ImportArchiveFile
+          - ClearArchiveUnrecoverable
         read_only_methods:
           - GetArchiveOverview
           - ListArchiveTasks
@@ -1175,6 +1178,13 @@ components:
               - moox-cli
           - methods:
               - RetireArchiveWorker
+            callers:
+              - moox-cli
+          # CSV 导入与清除无法补齐区间：只给 moox-cli（导入要经 SSH 把文件传到 worker 所在主机）。
+          - methods:
+              - PrepareArchiveImport
+              - ImportArchiveFile
+              - ClearArchiveUnrecoverable
             callers:
               - moox-cli
           - methods:

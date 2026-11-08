@@ -292,7 +292,7 @@ func (s *Store) TriggerDue(ctx context.Context, now time.Time, plan func(Task) (
 				}
 				continue
 			}
-			if _, err := insertRun(ctx, tx, task.SpaceID, task.DatasetID, p.Kind, p.RangeStart, p.RangeEnd, now); err != nil {
+			if _, err := insertRun(ctx, tx, task.SpaceID, task.DatasetID, RunSpec{Kind: p.Kind, RangeStart: p.RangeStart, RangeEnd: p.RangeEnd}, now); err != nil {
 				return err
 			}
 			if p.Kind == KindTick {
@@ -318,3 +318,40 @@ ORDER BY c_space_id, c_dataset_id LIMIT ? OFFSET ?`
 	queryTasks3    = `SELECT ` + taskColumns + ` FROM t_archive_tasks WHERE c_status = 'enabled' ORDER BY c_space_id, c_dataset_id`
 	queryTaskByDir = `SELECT c_dataset_id FROM t_archive_tasks WHERE c_space_id = ? AND c_purpose = ? AND c_dir_name = ?`
 )
+
+// ClearUnrecoverable 从任务累积的无法补齐区间里删掉整段落在 [start, end) 里的（起点不早于 start、终点不晚于 end），返回删掉的条目。
+// 只部分重叠的区间保留：区间不带标的，范围判断只能由人确认后按整段清。时间无法解析的条目保留。
+func (s *Store) ClearUnrecoverable(ctx context.Context, spaceID, datasetID string, start, end time.Time) ([]Unrecoverable, error) {
+	var removed []Unrecoverable
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		var current string
+		err := tx.QueryRowContext(ctx, `SELECT c_unrecoverable_json FROM t_archive_tasks WHERE c_space_id = ? AND c_dataset_id = ?`, spaceID, datasetID).Scan(&current)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
+		if err != nil {
+			return err
+		}
+		var items, kept []Unrecoverable
+		if current != "" && current != "[]" {
+			if err := json.Unmarshal([]byte(current), &items); err != nil {
+				return fmt.Errorf("解析任务的无法补齐区间: %w", err)
+			}
+		}
+		for _, item := range items {
+			from, ferr := time.Parse(time.RFC3339, item.StartTime)
+			until, uerr := time.Parse(time.RFC3339, item.EndTime)
+			if ferr == nil && uerr == nil && !from.Before(start) && !until.After(end) {
+				removed = append(removed, item)
+				continue
+			}
+			kept = append(kept, item)
+		}
+		if len(removed) == 0 {
+			return nil
+		}
+		_, err = tx.ExecContext(ctx, `UPDATE t_archive_tasks SET c_unrecoverable_json = ? WHERE c_space_id = ? AND c_dataset_id = ?`, mergeUnrecoverable(kept), spaceID, datasetID)
+		return err
+	})
+	return removed, err
+}

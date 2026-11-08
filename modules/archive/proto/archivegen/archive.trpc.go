@@ -48,6 +48,12 @@ type ArchiveMgrService interface {
 	GetArchivePartition(ctx context.Context, req *GetArchivePartitionReq) (*GetArchivePartitionRsp, error)
 
 	RetireArchiveWorker(ctx context.Context, req *RetireArchiveWorkerReq) (*RetireArchiveWorkerRsp, error)
+
+	PrepareArchiveImport(ctx context.Context, req *PrepareArchiveImportReq) (*PrepareArchiveImportRsp, error)
+
+	ImportArchiveFile(ctx context.Context, req *ImportArchiveFileReq) (*ImportArchiveFileRsp, error)
+
+	ClearArchiveUnrecoverable(ctx context.Context, req *ClearArchiveUnrecoverableReq) (*ClearArchiveUnrecoverableRsp, error)
 }
 
 func ArchiveMgrService_GetArchiveOverview_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
@@ -320,6 +326,60 @@ func ArchiveMgrService_RetireArchiveWorker_Handler(svr interface{}, ctx context.
 	return rsp, nil
 }
 
+func ArchiveMgrService_PrepareArchiveImport_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &PrepareArchiveImportReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(ArchiveMgrService).PrepareArchiveImport(ctx, reqbody.(*PrepareArchiveImportReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func ArchiveMgrService_ImportArchiveFile_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ImportArchiveFileReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(ArchiveMgrService).ImportArchiveFile(ctx, reqbody.(*ImportArchiveFileReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func ArchiveMgrService_ClearArchiveUnrecoverable_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &ClearArchiveUnrecoverableReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(ArchiveMgrService).ClearArchiveUnrecoverable(ctx, reqbody.(*ClearArchiveUnrecoverableReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
 // ArchiveMgrServer_ServiceDesc descriptor for server.RegisterService.
 var ArchiveMgrServer_ServiceDesc = server.ServiceDesc{
 	ServiceName: "trpc.moox.archive.ArchiveMgr",
@@ -384,6 +444,18 @@ var ArchiveMgrServer_ServiceDesc = server.ServiceDesc{
 		{
 			Name: "/trpc.moox.archive.ArchiveMgr/RetireArchiveWorker",
 			Func: ArchiveMgrService_RetireArchiveWorker_Handler,
+		},
+		{
+			Name: "/trpc.moox.archive.ArchiveMgr/PrepareArchiveImport",
+			Func: ArchiveMgrService_PrepareArchiveImport_Handler,
+		},
+		{
+			Name: "/trpc.moox.archive.ArchiveMgr/ImportArchiveFile",
+			Func: ArchiveMgrService_ImportArchiveFile_Handler,
+		},
+		{
+			Name: "/trpc.moox.archive.ArchiveMgr/ClearArchiveUnrecoverable",
+			Func: ArchiveMgrService_ClearArchiveUnrecoverable_Handler,
 		},
 	},
 }
@@ -558,6 +630,15 @@ func (s *UnimplementedArchiveMgr) GetArchivePartition(ctx context.Context, req *
 func (s *UnimplementedArchiveMgr) RetireArchiveWorker(ctx context.Context, req *RetireArchiveWorkerReq) (*RetireArchiveWorkerRsp, error) {
 	return nil, errors.New("rpc RetireArchiveWorker of service ArchiveMgr is not implemented")
 }
+func (s *UnimplementedArchiveMgr) PrepareArchiveImport(ctx context.Context, req *PrepareArchiveImportReq) (*PrepareArchiveImportRsp, error) {
+	return nil, errors.New("rpc PrepareArchiveImport of service ArchiveMgr is not implemented")
+}
+func (s *UnimplementedArchiveMgr) ImportArchiveFile(ctx context.Context, req *ImportArchiveFileReq) (*ImportArchiveFileRsp, error) {
+	return nil, errors.New("rpc ImportArchiveFile of service ArchiveMgr is not implemented")
+}
+func (s *UnimplementedArchiveMgr) ClearArchiveUnrecoverable(ctx context.Context, req *ClearArchiveUnrecoverableReq) (*ClearArchiveUnrecoverableRsp, error) {
+	return nil, errors.New("rpc ClearArchiveUnrecoverable of service ArchiveMgr is not implemented")
+}
 
 type UnimplementedArchiveWorker struct{}
 
@@ -611,6 +692,12 @@ type ArchiveMgrClientProxy interface {
 	GetArchivePartition(ctx context.Context, req *GetArchivePartitionReq, opts ...client.Option) (rsp *GetArchivePartitionRsp, err error)
 
 	RetireArchiveWorker(ctx context.Context, req *RetireArchiveWorkerReq, opts ...client.Option) (rsp *RetireArchiveWorkerRsp, err error)
+
+	PrepareArchiveImport(ctx context.Context, req *PrepareArchiveImportReq, opts ...client.Option) (rsp *PrepareArchiveImportRsp, err error)
+
+	ImportArchiveFile(ctx context.Context, req *ImportArchiveFileReq, opts ...client.Option) (rsp *ImportArchiveFileRsp, err error)
+
+	ClearArchiveUnrecoverable(ctx context.Context, req *ClearArchiveUnrecoverableReq, opts ...client.Option) (rsp *ClearArchiveUnrecoverableRsp, err error)
 }
 
 type ArchiveMgrClientProxyImpl struct {
@@ -916,6 +1003,66 @@ func (c *ArchiveMgrClientProxyImpl) RetireArchiveWorker(ctx context.Context, req
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &RetireArchiveWorkerRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *ArchiveMgrClientProxyImpl) PrepareArchiveImport(ctx context.Context, req *PrepareArchiveImportReq, opts ...client.Option) (*PrepareArchiveImportRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.archive.ArchiveMgr/PrepareArchiveImport")
+	msg.WithCalleeServiceName(ArchiveMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("archive")
+	msg.WithCalleeService("ArchiveMgr")
+	msg.WithCalleeMethod("PrepareArchiveImport")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &PrepareArchiveImportRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *ArchiveMgrClientProxyImpl) ImportArchiveFile(ctx context.Context, req *ImportArchiveFileReq, opts ...client.Option) (*ImportArchiveFileRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.archive.ArchiveMgr/ImportArchiveFile")
+	msg.WithCalleeServiceName(ArchiveMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("archive")
+	msg.WithCalleeService("ArchiveMgr")
+	msg.WithCalleeMethod("ImportArchiveFile")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ImportArchiveFileRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *ArchiveMgrClientProxyImpl) ClearArchiveUnrecoverable(ctx context.Context, req *ClearArchiveUnrecoverableReq, opts ...client.Option) (*ClearArchiveUnrecoverableRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.archive.ArchiveMgr/ClearArchiveUnrecoverable")
+	msg.WithCalleeServiceName(ArchiveMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("archive")
+	msg.WithCalleeService("ArchiveMgr")
+	msg.WithCalleeMethod("ClearArchiveUnrecoverable")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &ClearArchiveUnrecoverableRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

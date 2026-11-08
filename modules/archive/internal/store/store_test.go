@@ -40,7 +40,7 @@ func mustTask(t *testing.T, s *Store, space, dataset string, immediate bool) (Ta
 	if !immediate {
 		return created, nil
 	}
-	run, err := s.CreateRun(context.Background(), space, dataset, KindManual, time.Time{}, time.Time{}, t0)
+	run, err := s.CreateRun(context.Background(), space, dataset, RunSpec{Kind: KindManual}, t0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,17 +217,17 @@ func TestCreateRunRejectsConcurrentRunsAndUnknownTasks(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
 	mustTask(t, s, "crypto", "ds1", false)
-	run, err := s.CreateRun(ctx, "crypto", "ds1", KindRange, t0.Add(-time.Hour), t0, t0)
+	run, err := s.CreateRun(ctx, "crypto", "ds1", RunSpec{Kind: KindRange, RangeStart: t0.Add(-time.Hour), RangeEnd: t0}, t0)
 	if err != nil || run.Kind != KindRange || !run.RangeStart.Equal(t0.Add(-time.Hour)) {
 		t.Fatalf("range run = %+v err=%v", run, err)
 	}
-	if _, err := s.CreateRun(ctx, "crypto", "ds1", KindManual, time.Time{}, time.Time{}, t0); !errors.Is(err, ErrConflict) {
+	if _, err := s.CreateRun(ctx, "crypto", "ds1", RunSpec{Kind: KindManual}, t0); !errors.Is(err, ErrConflict) {
 		t.Fatalf("已有排队中的运行: %v", err)
 	}
-	if _, err := s.CreateRun(ctx, "crypto", "ds2", KindTick, t0, t0, t0); err == nil {
+	if _, err := s.CreateRun(ctx, "crypto", "ds2", RunSpec{Kind: KindTick, RangeStart: t0, RangeEnd: t0}, t0); err == nil {
 		t.Fatal("CreateRun 不能生成 tick 运行")
 	}
-	if _, err := s.CreateRun(ctx, "crypto", "nope", KindManual, time.Time{}, time.Time{}, t0); !errors.Is(err, ErrNotFound) {
+	if _, err := s.CreateRun(ctx, "crypto", "nope", RunSpec{Kind: KindManual}, t0); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("unknown task: %v", err)
 	}
 }
@@ -244,7 +244,7 @@ func TestClaimRunsOrdersByScheduleAndHonorsSlotsAndDataNodeLimits(t *testing.T) 
 		if _, err := s.CreateTask(ctx, tk); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := s.CreateRun(ctx, "crypto", name, KindManual, time.Time{}, time.Time{}, t0.Add(time.Duration(i)*time.Second)); err != nil {
+		if _, err := s.CreateRun(ctx, "crypto", name, RunSpec{Kind: KindManual}, t0.Add(time.Duration(i)*time.Second)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -306,7 +306,7 @@ func TestClaimRunsGivesAPartitionedTaskToAnyActiveWorker(t *testing.T) {
 		Partitions: []Partition{finishedPartition("2026-10-16", PartitionExported)}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.CreateRun(ctx, "crypto", "ds1", KindManual, time.Time{}, time.Time{}, t0.Add(time.Hour)); err != nil {
+	if _, err := s.CreateRun(ctx, "crypto", "ds1", RunSpec{Kind: KindManual}, t0.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	other, _ := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w2", FreeSlots: 1, Now: t0, LeaseTTL: time.Minute})
@@ -348,7 +348,7 @@ func TestCompleteRunRegistersPartitionsAndAdvancesTaskState(t *testing.T) {
 		t.Fatalf("task = %+v", got)
 	}
 	// 定稿边界只前进不回退。
-	c2, _ := s.CreateRun(ctx, "crypto", "ds1", KindManual, time.Time{}, time.Time{}, t0.Add(time.Hour))
+	c2, _ := s.CreateRun(ctx, "crypto", "ds1", RunSpec{Kind: KindManual}, t0.Add(time.Hour))
 	claimed := mustClaim(t, s, "w1", t0.Add(time.Hour))
 	if claimed.Run.RunID != c2.RunID {
 		t.Fatal("unexpected run")
@@ -432,7 +432,7 @@ func TestReopenKeepsTheFileAndTheRemoteCopy(t *testing.T) {
 		t.Fatal(err)
 	}
 	// 晚到的行把已定稿的分区重新打开：状态回到 open，文件信息与远端副本保留，定稿时间清空。
-	if _, err := s.CreateRun(ctx, "crypto", "ds1", KindRange, t0.Add(-time.Hour), t0, t0); err != nil {
+	if _, err := s.CreateRun(ctx, "crypto", "ds1", RunSpec{Kind: KindRange, RangeStart: t0.Add(-time.Hour), RangeEnd: t0}, t0); err != nil {
 		t.Fatal(err)
 	}
 	c2 := mustClaim(t, s, "w1", t0)
@@ -945,14 +945,14 @@ func TestLastSuccessOnlyMovesForward(t *testing.T) {
 	ctx := context.Background()
 	mustTask(t, s, "crypto", "ds1", true)
 	first := mustClaim(t, s, "w1", t0.Add(10*time.Minute))
-	if _, err := s.CreateRun(ctx, "crypto", "ds1", KindRange, t0.Add(-time.Hour), t0, t0); err == nil {
+	if _, err := s.CreateRun(ctx, "crypto", "ds1", RunSpec{Kind: KindRange, RangeStart: t0.Add(-time.Hour), RangeEnd: t0}, t0); err == nil {
 		t.Fatal("第一条运行还没结束，不能再生成")
 	}
 	if err := s.CompleteRun(ctx, CompleteRequest{RunID: first.Run.RunID, WorkerID: "w1", LeaseToken: first.Run.LeaseToken, Status: RunSucceeded, Now: t0.Add(11 * time.Minute)}); err != nil {
 		t.Fatal(err)
 	}
 	// 一个开始更早的运行迟到完成（例如租约过期后被重新派发的旧令牌）不能让最近成功时间回退。
-	older, _ := s.CreateRun(ctx, "crypto", "ds1", KindManual, time.Time{}, time.Time{}, t0)
+	older, _ := s.CreateRun(ctx, "crypto", "ds1", RunSpec{Kind: KindManual}, t0)
 	claimed := mustClaim(t, s, "w1", t0.Add(5*time.Minute))
 	if claimed.Run.RunID != older.RunID {
 		t.Fatal("unexpected run")
@@ -1036,7 +1036,7 @@ func TestManualRunPreemptsQueuedTick(t *testing.T) {
 	if res, _, err := s.TriggerDue(ctx, t0, fixedPlan(tick)); err != nil || res.Ticks != 1 {
 		t.Fatalf("tick = %+v %v", res, err)
 	}
-	manual, err := s.CreateRun(ctx, "crypto", "ds1", KindManual, time.Time{}, time.Time{}, t0.Add(time.Second))
+	manual, err := s.CreateRun(ctx, "crypto", "ds1", RunSpec{Kind: KindManual}, t0.Add(time.Second))
 	if err != nil {
 		t.Fatalf("排队中的 tick 应让位: %v", err)
 	}
@@ -1047,7 +1047,68 @@ func TestManualRunPreemptsQueuedTick(t *testing.T) {
 	if _, err := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w", FreeSlots: 1, Now: t0.Add(2 * time.Second), LeaseTTL: time.Minute}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.CreateRun(ctx, "crypto", "ds1", KindRange, t0.Add(-time.Hour), t0, t0.Add(3*time.Second)); !errors.Is(err, ErrConflict) {
+	if _, err := s.CreateRun(ctx, "crypto", "ds1", RunSpec{Kind: KindRange, RangeStart: t0.Add(-time.Hour), RangeEnd: t0}, t0.Add(3*time.Second)); !errors.Is(err, ErrConflict) {
 		t.Fatalf("运行中的 %s 仍应冲突: %v", manual.RunID, err)
+	}
+}
+
+func TestImportRunsNeedAFileAndAreKeptLikeOtherRuns(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	mustTask(t, s, "crypto", "ds1", false)
+	if _, err := s.CreateRun(ctx, "crypto", "ds1", RunSpec{Kind: KindImport}, t0); err == nil {
+		t.Fatal("没有导入文件的导入运行应被拒绝")
+	}
+	// 库里的 CHECK 也挡住没有导入文件的导入运行。
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO t_archive_runs (c_run_id, c_space_id, c_dataset_id, c_kind, c_scheduled_at) VALUES ('r', 'crypto', 'ds1', 'import', ?)`, fmtTime(t0)); err == nil {
+		t.Fatal("CHECK 应拒绝没有 c_import_file 的导入运行")
+	}
+	run, err := s.CreateRun(ctx, "crypto", "ds1", RunSpec{Kind: KindImport, ImportFile: "imp_1/a.csv", Overwrite: true}, t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.GetRun(ctx, run.RunID)
+	if err != nil || got.Kind != KindImport || got.ImportFile != "imp_1/a.csv" || !got.Overwrite {
+		t.Fatalf("run = %+v, %v", got, err)
+	}
+	manual, _ := s.CreateRun(ctx, "crypto", "ds1", RunSpec{Kind: KindManual}, t0)
+	if manual.RunID != "" {
+		t.Fatal("导入排队时不能再建运行")
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE t_archive_runs SET c_status = 'succeeded', c_finished_at = ? WHERE c_run_id = ?`, fmtTime(t0), run.RunID); err != nil {
+		t.Fatal(err)
+	}
+	day := 24 * time.Hour
+	// 成功的导入按“其余运行”保留 90 天，不按复核的 30 天。
+	if n, err := s.CleanupRuns(ctx, t0.AddDate(0, 0, 40), day, 30*day, 90*day); err != nil || n != 0 {
+		t.Fatalf("40 天时不应清理导入运行: %d %v", n, err)
+	}
+	if n, err := s.CleanupRuns(ctx, t0.AddDate(0, 0, 91), day, 30*day, 90*day); err != nil || n != 1 {
+		t.Fatalf("超过 90 天应清理导入运行: %d %v", n, err)
+	}
+}
+
+func TestClearUnrecoverableKeepsPartlyOverlappingRanges(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	mustTask(t, s, "crypto", "ds1", false)
+	items := `[{"start_time":"2026-10-01T00:00:00Z","end_time":"2026-10-02T00:00:00Z"},{"subject_id":"BTC","start_time":"2026-10-02T00:00:00Z","end_time":"2026-10-03T00:00:00Z"},{"start_time":"2026-10-02T12:00:00Z","end_time":"2026-10-04T00:00:00Z"}]`
+	if _, err := s.db.ExecContext(ctx, `UPDATE t_archive_tasks SET c_unrecoverable_json = ?`, items); err != nil {
+		t.Fatal(err)
+	}
+	start, end := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 10, 3, 0, 0, 0, 0, time.UTC)
+	removed, err := s.ClearUnrecoverable(ctx, "crypto", "ds1", start, end)
+	if err != nil || len(removed) != 2 || removed[1].SubjectID != "BTC" {
+		t.Fatalf("removed = %+v, %v", removed, err)
+	}
+	task, _ := s.GetTask(ctx, "crypto", "ds1")
+	if len(task.Unrecoverable) != 1 || task.Unrecoverable[0].StartTime != "2026-10-02T12:00:00Z" {
+		t.Fatalf("剩余 = %+v", task.Unrecoverable)
+	}
+	if removed, err := s.ClearUnrecoverable(ctx, "crypto", "ds1", start, end); err != nil || len(removed) != 0 {
+		t.Fatalf("再清一次应为空: %+v %v", removed, err)
+	}
+	if _, err := s.ClearUnrecoverable(ctx, "crypto", "nope", start, end); err != ErrNotFound {
+		t.Fatalf("不存在的任务: %v", err)
 	}
 }

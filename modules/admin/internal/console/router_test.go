@@ -482,6 +482,9 @@ func TestConsoleHasNoDeploymentWriteRoutes(t *testing.T) {
 		"/api/admin/storage/UpdateDataNode",
 		"/api/admin/storage/DeleteDataNode",
 		"/api/admin/archive/RetireArchiveWorker",
+		"/api/admin/archive/PrepareArchiveImport",
+		"/api/admin/archive/ImportArchiveFile",
+		"/api/admin/archive/ClearArchiveUnrecoverable",
 	} {
 		_, secret, key, sid := setupRequestAuthTest(t)
 		gateway := forwardFunc(func(context.Context, string, string, int, []byte) ([]byte, error) { return []byte(`{}`), nil })
