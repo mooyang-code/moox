@@ -61,7 +61,12 @@
                 <a-dropdown trigger="click">
                   <a-button type="text" size="mini">更多</a-button>
                   <template #content>
-                    <a-doption @click="goReplay(record.strategy_id)">发起回放</a-doption>
+                    <a-doption
+                      :disabled="isPoolStrategy(record.dsl_yaml)"
+                      :title="isPoolStrategy(record.dsl_yaml) ? POOL_REPLAY_DISABLED_TEXT : undefined"
+                      @click="goReplay(record.strategy_id)"
+                      >发起回放</a-doption
+                    >
                     <a-doption @click="confirmRemove(record)">删除</a-doption>
                   </template>
                 </a-dropdown>
@@ -98,7 +103,7 @@ import { useRoute, useRouter } from "vue-router";
 import { useSpaceStore } from "@/store/modules/space";
 import { useStrategyStore } from "@/store/modules/strategy";
 import type { Strategy } from "@/api/strategy-types";
-import { summarizeDSL } from "@/views/strategy/dsl";
+import { POOL_REPLAY_DISABLED_TEXT, isPoolStrategy, summarizeDSL } from "@/views/strategy/dsl";
 import { shortHash } from "@/views/strategy/model";
 import StrategyDefinitionDrawer from "@/views/strategy/definitions/strategy-definition-drawer.vue";
 import StrategyTemplateCreate from "@/views/strategy/definitions/strategy-template-create.vue";

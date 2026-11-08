@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { mixedMarketTemplate, parseDSL, poolTemplate, rankedTemplate, signalTemplate, summarizeDSL, tunedTemplate } from "./dsl";
+import {
+  isPoolStrategy,
+  mixedMarketTemplate,
+  parseDSL,
+  poolTemplate,
+  rankedTemplate,
+  signalTemplate,
+  summarizeDSL,
+  tunedTemplate
+} from "./dsl";
 
 describe("strategy DSL preview", () => {
   it("parses the v3 templates without diagnostics", () => {
@@ -194,5 +203,15 @@ describe("策略池", () => {
 
   it("什么都没写时提示可以写 strategy_pool", () => {
     expect(messages("name: a\n")).toContain("rules 必须是非空列表，每条规则包含 id 与 type（策略池请写 strategy_pool）");
+  });
+});
+
+describe("策略池判断（回放入口据此禁用）", () => {
+  it("策略池为真；普通策略、空文本、解析失败的为假", () => {
+    expect(isPoolStrategy(poolTemplate)).toBe(true);
+    expect(isPoolStrategy(rankedTemplate)).toBe(false);
+    expect(isPoolStrategy("")).toBe(false);
+    expect(isPoolStrategy(undefined)).toBe(false);
+    expect(isPoolStrategy("name: [")).toBe(false);
   });
 });

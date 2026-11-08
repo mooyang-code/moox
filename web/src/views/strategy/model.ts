@@ -428,3 +428,18 @@ export function formatDelay(ms: number | null | undefined): string {
   if (ms === null || ms === undefined || !Number.isFinite(ms)) return "-";
   return ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(1)}s`;
 }
+
+/**
+ * 实例实际运行的 DSL 版本：取本会话最新结果的 dsl_hash；和定义当前的 dsl_hash 不同时说明要停用再启用才生效。
+ * 本会话还没有结果时返回空串。
+ */
+export function runningVersionText(
+  sessionId: string,
+  results: Pick<StrategyResult, "session_id" | "dsl_hash">[],
+  definitionHash?: string
+) {
+  const latest = results.find(item => item.session_id === sessionId && item.dsl_hash);
+  if (!sessionId || !latest) return "";
+  const running = `运行版本 ${shortHash(latest.dsl_hash)}`;
+  return definitionHash && definitionHash !== latest.dsl_hash ? `${running}，定义已更新，停用再启用后生效` : running;
+}
