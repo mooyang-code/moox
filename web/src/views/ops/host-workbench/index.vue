@@ -44,7 +44,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch, onBeforeUnmount } from "vue";
+import { computed, ref, watch, onBeforeUnmount } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { Message } from "@arco-design/web-vue";
 import PageTitleTabs from "@/components/page-title-tabs/index.vue";
@@ -157,8 +157,15 @@ watch(
   }
 );
 
+// 主机列表只在“主机列表”页签读取，每次进入这个页签都刷新；“主机监控”页签由子组件自己读，外层不再重复读一遍。
 // 终端只在点击时打开：URL 里的 host_id 只用来定位主机，挂载、刷新、切页签都不会建立 SSH 连接（O4）
-onMounted(loadMonitorData);
+watch(
+  activeTab,
+  tab => {
+    if (tab === "hosts") void loadMonitorData();
+  },
+  { immediate: true }
+);
 
 onBeforeUnmount(() => {
   fileManagerRequest += 1;

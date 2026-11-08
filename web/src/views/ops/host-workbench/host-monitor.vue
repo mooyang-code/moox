@@ -194,14 +194,15 @@ onUnmounted(() => {
 .monitor-summary strong {
   font-size: 16px;
 }
+/* 汇总行的颜色用主题变量，暗色模式下也清楚 */
 .healthy {
-  color: #16803c;
+  color: rgb(var(--success-6));
 }
 .warning {
-  color: #d97706;
+  color: rgb(var(--warning-6));
 }
 .danger {
-  color: #dc2626;
+  color: rgb(var(--danger-6));
 }
 .monitor-alert {
   margin-bottom: var(--moox-space-2);
