@@ -147,6 +147,8 @@ func readArchiveCSVHeader(file string) ([]string, error) {
 	for i := range header {
 		header[i] = strings.TrimSpace(header[i])
 	}
+	// Excel 等工具另存的 UTF-8 CSV 开头带 BOM。
+	header[0] = strings.TrimPrefix(header[0], "\ufeff")
 	return header, nil
 }
 

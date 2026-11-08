@@ -197,11 +197,11 @@ func (r *Runner) Execute(ctx context.Context, a *archivepb.RunAssignment, report
 			break
 		}
 		// 每读完一块就导出、定稿到期的分区，暂存库不会随长回补无限变大；失败重跑从续读起点接着读。
-		if err := s.exportDue(ctx, out); err != nil {
+		if err := s.exportDue(ctx, out, time.Time{}); err != nil {
 			return out, err
 		}
 		s.uploadPending(ctx, out)
-		if err := s.finalize(ctx, out, false); err != nil {
+		if err := s.finalize(ctx, out, false, time.Time{}); err != nil {
 			return out, err
 		}
 		if resumable {
@@ -215,11 +215,11 @@ func (r *Runner) Execute(ctx context.Context, a *archivepb.RunAssignment, report
 			}
 		}
 	}
-	if err := s.exportDue(ctx, out); err != nil {
+	if err := s.exportDue(ctx, out, time.Time{}); err != nil {
 		return out, err
 	}
 	s.uploadPending(ctx, out)
-	if err := s.finalize(ctx, out, resumable); err != nil {
+	if err := s.finalize(ctx, out, resumable, time.Time{}); err != nil {
 		return out, err
 	}
 	// 上传失败不让运行失败（文件已经在本地），只写进消息；健康等级按远端副本规则反映。
@@ -551,12 +551,16 @@ func (s *runState) closeAt(p staging.PartitionState) (time.Time, error) {
 }
 
 // exportDue 导出所有到时间且需要导出的分区：运行开始 ≥ 分区收盘时间 + L。
-func (s *runState) exportDue(ctx context.Context, out *Outcome) error {
+// until 非零时只处理结束不晚于它的分区（导入分块时用：横跨下一块的分区还会写入，留到之后）。
+func (s *runState) exportDue(ctx context.Context, out *Outcome, until time.Time) error {
 	parts, err := s.r.Staging.Partitions(ctx, s.task.SpaceID, s.task.DatasetID)
 	if err != nil {
 		return err
 	}
 	for _, p := range parts {
+		if !until.IsZero() && p.End.After(until) {
+			continue
+		}
 		if !p.NeedsExport() && !s.exportedFileMissing(p) {
 			continue
 		}
@@ -589,13 +593,17 @@ func (s *runState) exportDue(ctx context.Context, out *Outcome) error {
 
 // finalize 定稿满足条件的分区：运行开始 ≥ 分区收盘时间 + L + 暂存保留期，且没有待导出的变化。
 // 定稿前确认文件还在且 sha256 与记录一致（不一致就报错，运行失败）。每个分区一个事务；advance 为真时最后单独推进读取水位。
-func (s *runState) finalize(ctx context.Context, out *Outcome, advance bool) error {
+// until 非零时只处理结束不晚于它的分区（同 exportDue）。
+func (s *runState) finalize(ctx context.Context, out *Outcome, advance bool, until time.Time) error {
 	parts, err := s.r.Staging.Partitions(ctx, s.task.SpaceID, s.task.DatasetID)
 	if err != nil {
 		return err
 	}
 	var keys []string
 	for _, p := range parts {
+		if !until.IsZero() && p.End.After(until) {
+			continue
+		}
 		if p.Status == staging.StatusFinal || p.NeedsExport() || p.ExportedAt.IsZero() {
 			continue
 		}

@@ -767,3 +767,50 @@ func TestMaintenanceRemovesImportDirectoriesOlderThanSevenDays(t *testing.T) {
 		t.Fatalf("7 天内的应保留: %v", err)
 	}
 }
+
+// 导入目录在 mgr 确认导入运行成功之后才删；上报被拒或导入失败时保留。
+func TestImportDirectoryIsRemovedOnlyAfterTheManagerConfirmsSuccess(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	place := func(id, content string) string {
+		dir := filepath.Join(h.root, ".import", id)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "import.csv"), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+	run := func(id string) {
+		h.mgr.assignments = []*archivepb.RunAssignment{assignment("run_"+id, func(a *archivepb.RunAssignment) { a.Kind, a.ImportFile = "import", id+"/import.csv" })}
+		h.app.heartbeatOnce(ctx)
+		h.app.pullOnce(ctx)
+		h.idle()
+	}
+	good := "data_time,subject_id,series_tag,close\n2026-09-01T00:00:00Z,BTC,,1\n"
+	ok := place("imp_ok", good)
+	run("imp_ok")
+	if req := h.mgr.completes[len(h.mgr.completes)-1]; req.GetStatus() != "succeeded" {
+		t.Fatalf("complete = %v", req)
+	}
+	if _, err := os.Stat(ok); !os.IsNotExist(err) {
+		t.Fatalf("确认成功后应删除导入目录: %v", err)
+	}
+	bad := place("imp_bad", "data_time,subject_id,series_tag,close\n2026-09-01T00:00:30Z,BTC,,1\n")
+	run("imp_bad")
+	if req := h.mgr.completes[len(h.mgr.completes)-1]; req.GetStatus() != "failed" {
+		t.Fatalf("complete = %v", req)
+	}
+	if _, err := os.Stat(bad); err != nil {
+		t.Fatalf("失败的导入应保留导入目录: %v", err)
+	}
+	rejected := place("imp_rejected", good)
+	h.mgr.mu.Lock()
+	h.mgr.completeErrs = []error{manager.ErrConflict}
+	h.mgr.mu.Unlock()
+	run("imp_rejected")
+	if _, err := os.Stat(rejected); err != nil {
+		t.Fatalf("mgr 没有确认时应保留导入目录: %v", err)
+	}
+}

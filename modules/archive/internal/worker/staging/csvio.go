@@ -55,7 +55,15 @@ func writeCSVRecord(w *bufio.Writer, fields []csvField) error {
 type csvReader struct {
 	r    *bufio.Reader
 	line int
+	// limit 大于 0 时是单条记录的字节上限（读外部文件时防止一条超长记录撑爆内存）。
+	limit int
 }
+
+// MaxImportRecordBytes 是 OpenCSV 读取时单条记录的字节上限。
+const MaxImportRecordBytes = 1 << 20
+
+// ErrRecordTooLong 表示一条记录超过了字节上限。
+var ErrRecordTooLong = errors.New("记录过长（超过 1MiB）")
 
 // read 读一行；文件结束返回 io.EOF。不带引号的空字段为 null。
 func (c *csvReader) read() ([]csvField, error) {
@@ -63,6 +71,7 @@ func (c *csvReader) read() ([]csvField, error) {
 	var fields []csvField
 	var buf strings.Builder
 	quoted, inQuotes, started := false, false, false
+	size := 0
 	finish := func() {
 		fields = append(fields, csvField{value: buf.String(), null: !quoted && buf.Len() == 0})
 		buf.Reset()
@@ -84,6 +93,9 @@ func (c *csvReader) read() ([]csvField, error) {
 			return nil, err
 		}
 		started = true
+		if size++; c.limit > 0 && size > c.limit {
+			return nil, ErrRecordTooLong
+		}
 		if inQuotes {
 			if b != '"' {
 				buf.WriteByte(b)
@@ -225,12 +237,13 @@ type CSVReader struct {
 	closer io.Closer
 }
 
-// OpenCSV 打开一个 .csv 或 .csv.gz 文件（按内容的魔数判断是否压缩）。
+// OpenCSV 打开一个 .csv 或 .csv.gz 文件（按内容的魔数判断是否压缩）；单条记录超过 1MiB 时 Read 返回 ErrRecordTooLong。
 func OpenCSV(path string) (*CSVReader, error) {
 	reader, closer, err := openCSV(path)
 	if err != nil {
 		return nil, err
 	}
+	reader.limit = MaxImportRecordBytes
 	return &CSVReader{r: reader, closer: closer}, nil
 }
 

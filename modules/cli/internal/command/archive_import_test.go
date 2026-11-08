@@ -223,3 +223,9 @@ func TestArchiveImportCommandIsMountedWithItsFlags(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotNil(t, clear.Flags().Lookup("start"))
 }
+
+func TestArchiveImportHeaderIgnoresAUTF8BOM(t *testing.T) {
+	header, err := readArchiveCSVHeader(writeLocalCSV(t, "a.csv", "\ufeffdata_time,subject_id,close\n"))
+	require.NoError(t, err)
+	assert.Equal(t, []string{"data_time", "subject_id", "close"}, header)
+}

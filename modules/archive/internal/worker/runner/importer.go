@@ -46,7 +46,8 @@ type importLayout struct {
 	time, subject, tag int
 	// values[i] 是第 i 个值列（task.Columns 的顺序）在表头里的下标，-1 表示文件里没有（写入 NULL，覆盖时不允许）。
 	values []int
-	// knownTags 是数据集已有的 series_tag 取值（最多 2 个）；只有一个时缺列或空值自动补它，填了别的值就拒绝。
+	// knownTags 是数据集已有的 series_tag 取值（最多 2 个）；只有一个时缺列或空值自动补它、填了别的值就拒绝；
+	// 多个时只要求文件带 series_tag 列，不校验取值。
 	knownTags []string
 }
 
@@ -74,10 +75,11 @@ func (e *importErrors) err() error {
 	return errors.New(head + "：" + strings.Join(e.items, "；"))
 }
 
-// runImport 执行 kind=import：先整份校验（不写库），通过后分块写入暂存区，再照常导出、定稿、上传。
-// 成功后删除导入目录；失败保留供核对（维护时删除超过 7 天的）。
+// runImport 执行 kind=import：先整份校验（不写库），通过后分块写入暂存区；每块之后导出、上传、定稿已经写完的分区，
+// 暂存行不随文件变大而堆积；最后再全量处理一次。导入目录由 App 在 mgr 确认运行成功之后删除，失败的保留供核对
+// （维护时删除超过 7 天的）。
 func (s *runState) runImport(ctx context.Context, out *Outcome) error {
-	dir, path, err := ImportPath(s.r.Files.Root, s.a.GetImportFile())
+	_, path, err := ImportPath(s.r.Files.Root, s.a.GetImportFile())
 	if err != nil {
 		return err
 	}
@@ -101,15 +103,11 @@ func (s *runState) runImport(ctx context.Context, out *Outcome) error {
 	if err != nil {
 		return err
 	}
-	if err := s.writeImport(ctx, path, layout); err != nil {
+	if err := s.writeImport(ctx, out, path, layout); err != nil {
 		return err
 	}
 	s.progress.SubjectsDone = uint64(len(s.subjects))
-	if err := s.exportDue(ctx, out); err != nil {
-		return err
-	}
-	s.uploadPending(ctx, out)
-	if err := s.finalize(ctx, out, false); err != nil {
+	if err := s.settleImport(ctx, out, time.Time{}); err != nil {
 		return err
 	}
 	verdict := "未覆盖"
@@ -122,10 +120,16 @@ func (s *runState) runImport(ctx context.Context, out *Outcome) error {
 		message += "；" + extra
 	}
 	out.Message = message
-	if err := os.RemoveAll(dir); err != nil {
-		out.Message += fmt.Sprintf("；删除导入目录 %s 失败: %v", dir, err)
-	}
 	return nil
+}
+
+// settleImport 导出、上传并定稿结束不晚于 until 的分区（until 为零表示全部）。
+func (s *runState) settleImport(ctx context.Context, out *Outcome, until time.Time) error {
+	if err := s.exportDue(ctx, out, until); err != nil {
+		return err
+	}
+	s.uploadPending(ctx, out)
+	return s.finalize(ctx, out, false, until)
 }
 
 // knownSeriesTags 返回数据集已有的 series_tag 取值（最多 2 个）：先看暂存表，没有暂存行时读最近一个本地分区文件。
@@ -178,6 +182,10 @@ func (s *runState) importLayout(ctx context.Context, path string) (importLayout,
 	var unknown []string
 	for i, cell := range header {
 		name := strings.TrimSpace(cell.Value)
+		if i == 0 {
+			// Excel 等工具另存的 UTF-8 CSV 开头带 BOM。
+			name = strings.TrimPrefix(name, "\ufeff")
+		}
 		layout.header = append(layout.header, name)
 		if seen[name] {
 			return importLayout{}, fmt.Errorf("表头里列 %q 重复", name)
@@ -256,9 +264,6 @@ func (s *runState) parseImportRow(layout importLayout, record []staging.Cell) (s
 		if len(layout.knownTags) == 1 && row.SeriesTag != layout.knownTags[0] {
 			return staging.Row{}, fmt.Errorf("series_tag %q 与数据集的 %q 不一致", row.SeriesTag, layout.knownTags[0])
 		}
-		if len(layout.knownTags) > 1 && !containsString(layout.knownTags, row.SeriesTag) {
-			return staging.Row{}, fmt.Errorf("series_tag %q 不是数据集已有的取值（%s 等）", row.SeriesTag, strings.Join(layout.knownTags, "、"))
-		}
 	case len(layout.knownTags) == 1:
 		row.SeriesTag = layout.knownTags[0]
 	case len(layout.knownTags) == 0:
@@ -278,15 +283,6 @@ func (s *runState) parseImportRow(layout importLayout, record []staging.Cell) (s
 		row.Values[i] = parsed
 	}
 	return row, nil
-}
-
-func containsString(items []string, want string) bool {
-	for _, item := range items {
-		if item == want {
-			return true
-		}
-	}
-	return false
 }
 
 // aligned 报告数据时间是否按频率对齐：1d 及以上是空间时区的本地零点，其余是 Unix 纪元起频率时长的整数倍。
@@ -316,8 +312,17 @@ func (p *importReporter) tick(rows uint64) bool {
 	return p.s.report != nil && p.s.report(p.s.progress)
 }
 
+// blankRecord 报告一条记录是不是空行（读出来只有一个缺失值字段）。
+func blankRecord(record []staging.Cell) bool {
+	return len(record) == 1 && record[0].Null
+}
+
+// importChunkHook 在第二遍每块写入并处理完已写完的分区之后调用（测试用：检查暂存行、模拟中途出错）。
+var importChunkHook func(s *runState, last time.Time) error
+
 // validateImport 第一遍：流式解析整份文件（不写库），检查每行能解析、按频率对齐、按 data_time 升序、
-// 同一 data_time 内主键不重复；有错就整份拒绝，返回前 20 条错误。返回行数与涉及的分区数。
+// 同一 data_time 内主键不重复；有错就整份拒绝，返回前 20 条错误。文件末尾的空行忽略，中间的空行算错误。
+// 返回行数与涉及的分区数。
 func (s *runState) validateImport(path string, layout importLayout) (rows uint64, partitions int, err error) {
 	reader, err := staging.OpenCSV(path)
 	if err != nil {
@@ -333,6 +338,8 @@ func (s *runState) validateImport(path string, layout importLayout) (rows uint64
 	var last time.Time
 	group := map[key]int{}
 	reporter := &importReporter{s: s, last: s.r.now()}
+	var records uint64
+	blank := 0 // 最近一个还没被后续数据行“确认为中间空行”的空行行号
 	for {
 		record, err := reader.Read()
 		if errors.Is(err, io.EOF) {
@@ -342,6 +349,21 @@ func (s *runState) validateImport(path string, layout importLayout) (rows uint64
 			return 0, 0, fmt.Errorf("第 %d 行：%w", reader.Line(), err)
 		}
 		line := reader.Line()
+		// 每条记录都计数并检查取消（解析失败的也算），错误很多的大文件也能及时停下。
+		records++
+		if reporter.tick(records) {
+			return 0, 0, errStopped
+		}
+		if blankRecord(record) {
+			if blank == 0 {
+				blank = line
+			}
+			continue
+		}
+		if blank != 0 {
+			problems.add(blank, "空行（只有文件末尾的空行会被忽略）")
+			blank = 0
+		}
 		row, perr := s.parseImportRow(layout, record)
 		if perr != nil {
 			problems.add(line, "%v", perr)
@@ -362,9 +384,6 @@ func (s *runState) validateImport(path string, layout importLayout) (rows uint64
 		}
 		group[k] = line
 		keys[s.partitionOf(row.DataTime).Key] = true
-		if reporter.tick(rows) {
-			return 0, 0, errStopped
-		}
 	}
 	if err := problems.err(); err != nil {
 		return 0, 0, err
@@ -376,8 +395,20 @@ func (s *runState) validateImport(path string, layout importLayout) (rows uint64
 }
 
 // writeImport 第二遍：每 importChunkRows 行一块写入暂存区（不拆开同一 data_time，同一主键不会落在两块里），
-// 落在已定稿分区时先读回原文件。
-func (s *runState) writeImport(ctx context.Context, path string, layout importLayout) error {
+// 落在已定稿分区时先读回原文件。每块之后导出、上传、定稿结束不晚于本块最后一行的分区（文件按 data_time 升序，
+// 之后的行不会再落进这些分区），横跨下一块的分区留到之后。中途出错时运行消息写明已写入多少行。
+func (s *runState) writeImport(ctx context.Context, out *Outcome, path string, layout importLayout) (err error) {
+	var staged uint64
+	defer func() {
+		if err == nil || errors.Is(err, errStopped) || errors.Is(err, context.Canceled) {
+			return
+		}
+		hint := "可用同一文件不带 --overwrite 重新导入补齐（已写入的行会算作已存在相同）"
+		if s.a.GetOverwrite() {
+			hint = "可用同一文件再次 --overwrite 导入"
+		}
+		err = fmt.Errorf("%w（已写入前 %d 行；%s）", err, staged, hint)
+	}()
 	reader, err := staging.OpenCSV(path)
 	if err != nil {
 		return err
@@ -388,7 +419,7 @@ func (s *runState) writeImport(ctx context.Context, path string, layout importLa
 	}
 	reporter := &importReporter{s: s, last: s.r.now()}
 	var chunk []staging.Row
-	var written uint64
+	var read uint64
 	flush := func() error {
 		if len(chunk) == 0 {
 			return nil
@@ -396,9 +427,19 @@ func (s *runState) writeImport(ctx context.Context, path string, layout importLa
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		err := s.stage(ctx, chunk)
+		last := chunk[len(chunk)-1].DataTime
+		if err := s.stage(ctx, chunk); err != nil {
+			return err
+		}
+		staged += uint64(len(chunk))
 		chunk = chunk[:0]
-		return err
+		if err := s.settleImport(ctx, out, last); err != nil {
+			return err
+		}
+		if importChunkHook != nil {
+			return importChunkHook(s, last)
+		}
+		return nil
 	}
 	for {
 		record, err := reader.Read()
@@ -407,6 +448,9 @@ func (s *runState) writeImport(ctx context.Context, path string, layout importLa
 		}
 		if err != nil {
 			return fmt.Errorf("第 %d 行：%w", reader.Line(), err)
+		}
+		if blankRecord(record) {
+			continue // 第一遍已确认只有文件末尾才有空行
 		}
 		row, err := s.parseImportRow(layout, record)
 		if err != nil {
@@ -419,8 +463,8 @@ func (s *runState) writeImport(ctx context.Context, path string, layout importLa
 			}
 		}
 		chunk = append(chunk, row)
-		written++
-		if reporter.tick(written) {
+		read++
+		if reporter.tick(read) {
 			return errStopped
 		}
 	}

@@ -102,8 +102,9 @@ func TestImportWritesHistoricalPartitionsAndFinalizesThemOnTheSpot(t *testing.T)
 		t.Fatalf("导入不做保留期截断: %v", out.Unrecoverable)
 	}
 	requireNoReadState(t, e)
-	if _, err := os.Stat(filepath.Join(e.root, ".import", "imp_1")); !os.IsNotExist(err) {
-		t.Fatalf("成功后应删除导入目录: %v", err)
+	// 导入目录由 App 在 mgr 确认成功之后删除，runner 不动它。
+	if _, err := os.Stat(filepath.Join(e.root, ".import", "imp_1")); err != nil {
+		t.Fatalf("runner 不应删除导入目录: %v", err)
 	}
 }
 
@@ -320,5 +321,93 @@ func TestImportPathOnlyAcceptsTheImportDirectory(t *testing.T) {
 	out := e.importRun("../etc/a.csv", false, nil)
 	if out.Status != "failed" || !strings.Contains(out.Message, "无效") {
 		t.Fatalf("out = %+v", out)
+	}
+}
+
+// 分块写入时每块之后就导出、定稿已经写完的分区：暂存行不随文件线性增长。
+func TestImportSettlesFinishedPartitionsAfterEveryChunk(t *testing.T) {
+	previous := importChunkRows
+	importChunkRows = 100
+	t.Cleanup(func() { importChunkRows, importChunkHook = previous, nil })
+	e := newEnv(t)
+	var lines []string
+	for i := 0; i < 5*1440/10; i++ { // 5 天，每 10 分钟一行
+		lines = append(lines, historyDay.Add(time.Duration(i)*10*time.Minute).Format(time.RFC3339)+",BTC,,1,1")
+	}
+	file := placeImport(t, e, "imp_1", "a.csv", historyCSV(lines...))
+	chunks := 0
+	all := staging.PartitionState{Start: historyDay.AddDate(-1, 0, 0), End: historyDay.AddDate(1, 0, 0)}
+	importChunkHook = func(s *runState, last time.Time) error {
+		chunks++
+		parts, err := s.r.Staging.Partitions(context.Background(), "crypto", "ds_1m")
+		if err != nil {
+			return err
+		}
+		for _, p := range parts {
+			if !p.End.After(last) && p.Status != staging.StatusFinal {
+				t.Errorf("第 %d 块之后，已写完的分区 %s 应已定稿: %s", chunks, p.Key, p.Status)
+			}
+		}
+		st, err := s.r.Staging.Stats(context.Background(), s.task, all)
+		if err != nil {
+			return err
+		}
+		// 暂存行只剩还没写完的那个分区（一天 144 行）里的。
+		if st.Rows > 144 {
+			t.Errorf("第 %d 块之后暂存 %d 行，应只剩当前分区的", chunks, st.Rows)
+		}
+		return nil
+	}
+	out := e.importRun(file, false, nil)
+	if out.Status != "succeeded" || out.Finalized != 5 || out.RowsAdded != 720 || chunks < 7 {
+		t.Fatalf("out = %s %q finalized=%d chunks=%d", out.Status, out.Message, out.Finalized, chunks)
+	}
+}
+
+// 第二遍中途出错时，消息写明已经写入了多少行、怎样补齐。
+func TestImportFailureInTheSecondPassTellsHowManyRowsWereWritten(t *testing.T) {
+	previous := importChunkRows
+	importChunkRows = 2
+	t.Cleanup(func() { importChunkRows, importChunkHook = previous, nil })
+	e := newEnv(t)
+	file := placeImport(t, e, "imp_1", "a.csv", historyCSV("2026-09-01T00:00:00Z,BTC,,1,1", "2026-09-01T00:01:00Z,BTC,,1,1", "2026-09-01T00:02:00Z,BTC,,1,1", "2026-09-01T00:03:00Z,BTC,,1,1"))
+	importChunkHook = func(*runState, time.Time) error { return fmt.Errorf("磁盘写满") }
+	out := e.importRun(file, false, nil)
+	if out.Status != "failed" || !strings.Contains(out.Message, "磁盘写满（已写入前 2 行；可用同一文件不带 --overwrite 重新导入补齐") {
+		t.Fatalf("out = %q", out.Message)
+	}
+	out = e.importRun(placeImport(t, e, "imp_2", "a.csv", historyCSV("2026-09-02T00:00:00Z,BTC,,1,1", "2026-09-02T00:01:00Z,BTC,,1,1", "2026-09-02T00:02:00Z,BTC,,1,1")), true, nil)
+	if !strings.Contains(out.Message, "可用同一文件再次 --overwrite 导入") {
+		t.Fatalf("out = %q", out.Message)
+	}
+}
+
+func TestImportHeaderBOMTrailingBlankLinesAndLongRecords(t *testing.T) {
+	e := newEnv(t)
+	out := e.importRun(placeImport(t, e, "imp_1", "a.csv", "\ufeff"+historyCSV("2026-09-01T00:00:00Z,BTC,,1,1")+"\n\n"), false, nil)
+	if out.Status != "succeeded" || out.RowsAdded != 1 {
+		t.Fatalf("表头的 BOM 与末尾空行应忽略: %s %q", out.Status, out.Message)
+	}
+	out = e.importRun(placeImport(t, e, "imp_2", "a.csv", historyCSV("2026-09-01T00:01:00Z,BTC,,1,1", "", "2026-09-01T00:02:00Z,BTC,,1,1")), false, nil)
+	if out.Status != "failed" || !strings.Contains(out.Message, "第 3 行：空行") {
+		t.Fatalf("中间的空行算错误: %q", out.Message)
+	}
+	long := historyCSV("2026-09-01T00:03:00Z,BTC," + strings.Repeat("x", staging.MaxImportRecordBytes) + ",1,1")
+	out = e.importRun(placeImport(t, e, "imp_3", "a.csv", long), false, nil)
+	if out.Status != "failed" || !strings.Contains(out.Message, "第 2 行：记录过长（超过 1MiB）") {
+		t.Fatalf("out = %q", out.Message)
+	}
+}
+
+// 数据集已有多个 series_tag 时只要求文件带这一列，不校验取值。
+func TestImportWithManySeriesTagsOnlyNeedsTheColumn(t *testing.T) {
+	e := newEnv(t)
+	day := time.Date(2026, 10, 17, 0, 0, 0, 0, time.UTC)
+	e.src.rows = []staging.Row{{SubjectID: "BTC", DataTime: day, SeriesTag: "a", Values: []any{1.0, 1.0}}, {SubjectID: "BTC", DataTime: day, SeriesTag: "b", Values: []any{1.0, 1.0}}}
+	e.run(2000, nil, nil)
+	e.src.requests = nil
+	out := e.importRun(placeImport(t, e, "imp_1", "a.csv", historyCSV("2026-09-01T00:00:00Z,BTC,c,1,1")), false, nil)
+	if out.Status != "succeeded" || out.RowsAdded != 1 {
+		t.Fatalf("out = %s %q", out.Status, out.Message)
 	}
 }

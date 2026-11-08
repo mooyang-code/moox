@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -493,11 +494,26 @@ func (a *App) execute(ctx context.Context, run *activeRun) {
 		}
 	}
 	stopTick()
-	if a.complete(ctx, req) && len(reported) > 0 {
+	confirmed := a.complete(ctx, req)
+	if confirmed && len(reported) > 0 {
 		// mgr 确认登记之后才清除待上报标记；上报失败时分区留在待上报里，下一次运行会再带上。
 		if err := a.opts.Staging.MarkReported(context.WithoutCancel(ctx), assignment.GetSpaceId(), assignment.GetDatasetId(), reported); err != nil {
 			log.Warnf("archive worker mark reported run=%s: %v", assignment.GetRunId(), err)
 		}
+	}
+	if confirmed && assignment.GetKind() == "import" && req.GetStatus() == "succeeded" {
+		a.removeImport(assignment)
+	}
+}
+
+// removeImport 在 mgr 确认导入运行成功之后删除导入目录；失败的导入保留供核对（维护时删除超过 7 天的）。
+func (a *App) removeImport(assignment *archivepb.RunAssignment) {
+	dir, _, err := runner.ImportPath(a.opts.Files.Root, assignment.GetImportFile())
+	if err != nil {
+		return
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		log.Warnf("archive worker remove import dir %s run=%s: %v", dir, assignment.GetRunId(), err)
 	}
 }
 
