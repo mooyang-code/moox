@@ -103,7 +103,7 @@
         </a-table-column>
       </template>
     </a-table>
-    <OrderDetailDrawer v-model:visible="drawerVisible" :order="shownOrder" :account-name="accountName" />
+    <OrderDetailDrawer v-model:visible="drawerVisible" :order="drawerOrder" :account-name="accountName" />
   </SectionBlock>
 </template>
 
@@ -111,7 +111,7 @@
 import { useWindowSize } from "@vueuse/core";
 import { computed, inject, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { canCancelOrderState, listOrders, orderOwnerLabels, orderStateLabels } from "@/api/trade";
+import { canCancelOrderState, getOrder, listOrders, orderOwnerLabels, orderStateLabels } from "@/api/trade";
 import type { MarketType, Order } from "@/api/trade";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import { usePolling } from "@/hooks/usePolling";
@@ -156,10 +156,6 @@ const loading = ref(false);
 const error = ref("");
 const drawerVisible = ref(false);
 const drawerOrder = ref<Order | null>(null);
-// 抽屉跟着列表的轮询更新：订单在后台成交或撤掉后，状态和撤单按钮随之变化
-const shownOrder = computed(
-  () => orders.value.find(order => order.order_id === drawerOrder.value?.order_id) ?? drawerOrder.value
-);
 const requests = createLatestRequestGuard();
 
 const memberOptions = computed(() =>
@@ -203,6 +199,7 @@ async function load(background = false) {
     );
     if (!request.isLatest()) return;
     orders.value = rsp.orders || [];
+    void refreshDrawerOrder();
     total.value = rsp.page_result?.total || 0;
     error.value = "";
   } catch (cause) {
@@ -234,6 +231,23 @@ function changePage(value: number) {
   page.value = value;
   void load();
 }
+/** 抽屉开着时跟着列表刷新：订单还在列表里就用新的那一行；已经不在（例如成交后被状态筛选滤掉、挤到下一页）就单独读一次。 */
+async function refreshDrawerOrder() {
+  const current = drawerOrder.value;
+  if (!drawerVisible.value || !current) return;
+  const listed = orders.value.find(order => order.order_id === current.order_id);
+  if (listed) {
+    drawerOrder.value = listed;
+    return;
+  }
+  try {
+    const rsp = await getOrder(current.order_id, { silent: true });
+    if (drawerVisible.value && drawerOrder.value?.order_id === current.order_id && rsp.order) drawerOrder.value = rsp.order;
+  } catch {
+    // 读不到时保留抽屉里的内容，下次刷新再试
+  }
+}
+
 function openDrawer(order: Order) {
   drawerOrder.value = order;
   drawerVisible.value = true;

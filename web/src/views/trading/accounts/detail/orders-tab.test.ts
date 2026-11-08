@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { computed, defineComponent, h, provide, reactive, ref } from "vue";
 import type { LogicalAccount } from "@/api/trade";
 
-const mocks = vi.hoisted(() => ({ listOrders: vi.fn() }));
+const mocks = vi.hoisted(() => ({ listOrders: vi.fn(), getOrder: vi.fn() }));
 const nav = vi.hoisted(() => ({
   route: { query: {} as Record<string, unknown> },
   replace: vi.fn()
@@ -53,6 +53,8 @@ function mountTab(markets = [1]) {
     symbol: string;
     orders: unknown[];
     error: string;
+    drawerOrder: { state: string } | null;
+    openDrawer(order: unknown): void;
     search(): void;
   };
 }
@@ -181,6 +183,21 @@ describe("未完成订单的后台刷新", () => {
     await vi.advanceTimersByTimeAsync(5000);
     expect(mocks.listOrders).toHaveBeenCalledTimes(2);
     expect(mocks.listOrders.mock.lastCall?.[0].instrument_id).toBeUndefined();
+  });
+
+  it("抽屉里的订单离开列表后单独读一次，不退回打开时的状态", async () => {
+    vi.useFakeTimers();
+    const row = { order_id: "o-1", state: "OPEN", instrument_id: "BTC-USDT-SPOT", quantity: "1", submitted_at: "1700000000000" };
+    mocks.listOrders.mockReset().mockResolvedValue({ ret_info: { code: 0, msg: "" }, orders: [row] });
+    mocks.getOrder.mockReset().mockResolvedValue({ ret_info: { code: 0, msg: "" }, order: { ...row, state: "FILLED" } });
+    nav.route = reactive({ query: { tab: "orders", ostate: "OPEN" } });
+    const tab = mountTab();
+    await flushPromises();
+    tab.openDrawer(row);
+    mocks.listOrders.mockResolvedValue({ ret_info: { code: 0, msg: "" }, orders: [] });
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(mocks.getOrder).toHaveBeenCalledWith("o-1", { silent: true });
+    expect(tab.drawerOrder?.state).toBe("FILLED");
   });
 
   it("没有未完成订单时不刷新", async () => {
