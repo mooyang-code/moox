@@ -53,15 +53,14 @@
               </div>
               <a-space>
                 <a-button size="small" :loading="rerunning" @click="rerunWithConfig">按此配置重新发起</a-button>
-                <a-popconfirm
+                <a-button
                   v-if="(selected.status === 'pending' || selected.status === 'running') && selected.replay_id === selectedId"
-                  content="回放不支持续跑，取消后只保留已写入的周期记录。确定取消？"
-                  ok-text="取消回放"
-                  cancel-text="继续运行"
-                  @ok="cancel"
+                  class="cancel-replay"
+                  status="warning"
+                  :loading="cancelling"
+                  @click="confirmCancel"
+                  >取消回放</a-button
                 >
-                  <a-button status="warning" :loading="cancelling">取消回放</a-button>
-                </a-popconfirm>
               </a-space>
             </div>
             <div class="muted detail-info">
@@ -278,7 +277,7 @@
 <script setup lang="ts">
 import { StaleSpaceRequestError } from "@/api/admin/stale-space";
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
-import { Message } from "@arco-design/web-vue";
+import { Message, Modal } from "@arco-design/web-vue";
 import type VChart from "@visactor/vchart";
 import { useRoute, useRouter } from "vue-router";
 import { cancelReplay, getReplay, listReplayBars, listReplays, startReplay } from "@/api/strategy";
@@ -841,6 +840,17 @@ async function start() {
   } finally {
     starting.value = false;
   }
+}
+
+function confirmCancel() {
+  Modal.confirm({
+    title: "取消这个回放？",
+    content: "回放不支持续跑，取消后只保留已写入的周期记录。",
+    okText: "取消回放",
+    okButtonProps: { status: "warning" },
+    cancelText: "继续运行",
+    onOk: () => void cancel()
+  });
 }
 
 async function cancel() {

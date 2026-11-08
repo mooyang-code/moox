@@ -20,11 +20,22 @@
         >策略定义加载失败：{{ store.error
         }}<template #action><a-button size="small" @click="refresh">重试</a-button></template></a-alert
       >
-      <div class="toolbar muted">共 {{ store.totalStrategies }} 条</div>
+      <div class="toolbar">
+        <a-input-search
+          v-model="keywordDraft"
+          allow-clear
+          placeholder="搜索策略名称或 ID，回车搜索"
+          class="definition-search"
+          @search="search"
+          @press-enter="search"
+          @clear="search"
+        />
+        <span class="muted">共 {{ pagination.total }} 条</span>
+      </div>
       <a-table
         row-key="strategy_id"
-        :data="store.strategies"
-        :loading="store.listLoading"
+        :data="rows"
+        :loading="searching ? store.catalogLoading : store.listLoading"
         :pagination="pagination"
         :scroll="{ x: 900 }"
         @page-change="changePage"
@@ -122,17 +133,44 @@ const route = useRoute();
 const store = useStrategyStore();
 const spaceStore = useSpaceStore();
 // URL 是分页与查看对象的唯一来源：刷新、前进后退都能恢复；定义是全局资源，切空间时保留。
-const pagination = reactive({ current: queryPage(route.query.page), pageSize: 20, total: computed(() => store.totalStrategies) });
+// 搜索词进 URL（?q=）：后端没有按名称搜索，搜索时在完整的策略目录里筛，前端分页；不搜索时按后端分页。
+const keyword = computed(() => queryString(route.query.q).trim());
+const keywordDraft = ref(keyword.value);
+const searching = computed(() => Boolean(keyword.value));
+const matched = computed(() => {
+  const text = keyword.value.toLowerCase();
+  return store.strategyCatalog.filter(
+    item => item.strategy_id.toLowerCase().includes(text) || (item.name || "").toLowerCase().includes(text)
+  );
+});
+const pagination = reactive({
+  current: queryPage(route.query.page),
+  pageSize: 20,
+  total: computed(() => (searching.value ? matched.value.length : store.totalStrategies))
+});
+const rows = computed(() =>
+  searching.value
+    ? matched.value.slice((pagination.current - 1) * pagination.pageSize, pagination.current * pagination.pageSize)
+    : store.strategies
+);
 const detailId = computed(() => queryString(route.query.definition_id));
 
-function stateQuery(patch: { page?: number; definition_id?: string }) {
+function stateQuery(patch: { page?: number; definition_id?: string; q?: string }) {
   return buildQuery(
-    { page: patch.page ?? pagination.current, definition_id: "definition_id" in patch ? patch.definition_id : detailId.value },
+    {
+      page: patch.page ?? pagination.current,
+      definition_id: "definition_id" in patch ? patch.definition_id : detailId.value,
+      q: "q" in patch ? patch.q : keyword.value
+    },
     { page: 1 }
   );
 }
 async function refresh() {
-  await store.loadStrategies({ page: pagination.current, page_size: pagination.pageSize }).catch(() => undefined);
+  if (searching.value) await store.loadAllStrategies(200).catch(() => undefined);
+  else await store.loadStrategies({ page: pagination.current, page_size: pagination.pageSize }).catch(() => undefined);
+}
+function search() {
+  void router.replace({ name: ROUTE_NAME, query: stateQuery({ q: keywordDraft.value.trim(), page: 1 }) });
 }
 function changePage(page: number) {
   void router.replace({ name: ROUTE_NAME, query: stateQuery({ page }) });
@@ -177,7 +215,12 @@ async function remove(strategyId: string) {
     Message.success("策略定义已删除");
   } catch (err) {
     Message.error(err instanceof Error ? err.message : "删除失败");
+    return;
   }
+  // 删掉后重读本页补齐；末页删空了回到上一页
+  const lastPage = Math.max(1, Math.ceil(pagination.total / pagination.pageSize));
+  if (pagination.current > lastPage) changePage(lastPage);
+  else await refresh();
 }
 // 请求按空间授权：空间初始化完成或切换后才加载，避免无空间头被拒绝且不再恢复。
 onMounted(() => {
@@ -195,9 +238,16 @@ watch(
   page => {
     if (route.name !== ROUTE_NAME || page === pagination.current) return;
     pagination.current = page;
-    if (spaceStore.selectedSpaceId) void refresh();
+    if (spaceStore.selectedSpaceId && !searching.value) void refresh();
   }
 );
+// 搜索词变化（搜索、清空、前进后退）：同步输入框；开始搜索时读完整目录
+watch(keyword, (next, previous) => {
+  if (route.name !== ROUTE_NAME) return;
+  keywordDraft.value = next;
+  if (next && !previous && !store.strategiesComplete && spaceStore.selectedSpaceId) void refresh();
+  if (!next && previous && spaceStore.selectedSpaceId) void refresh();
+});
 </script>
 
 <style scoped>
@@ -220,7 +270,14 @@ watch(
   margin-bottom: var(--moox-space-2);
 }
 .toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
   margin-bottom: 8px;
+}
+.definition-search {
+  width: 280px;
 }
 .summary {
   color: var(--color-text-2);

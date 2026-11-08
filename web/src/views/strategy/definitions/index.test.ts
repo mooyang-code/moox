@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { defineComponent, h, reactive } from "vue";
 import { createMemoryHistory, createRouter } from "vue-router";
 
-const api = vi.hoisted(() => ({ loadStrategies: vi.fn(), space: { selectedSpaceId: "space-1" } }));
+const api = vi.hoisted(() => ({ loadStrategies: vi.fn(), loadAllStrategies: vi.fn(), space: { selectedSpaceId: "space-1" } }));
 vi.mock("@/store/modules/space", () => ({ useSpaceStore: () => api.space }));
 vi.mock("@/store/modules/strategy", () => ({
   useStrategyStore: () =>
@@ -13,6 +13,13 @@ vi.mock("@/store/modules/strategy", () => ({
       listLoading: false,
       error: "",
       loadStrategies: api.loadStrategies,
+      loadAllStrategies: api.loadAllStrategies,
+      strategyCatalog: [
+        { strategy_id: "momentum_1h", name: "动量" },
+        { strategy_id: "mean_rev", name: "均值回归" }
+      ],
+      strategiesComplete: false,
+      catalogLoading: false,
       removeStrategy: vi.fn()
     })
 }));
@@ -60,6 +67,16 @@ describe("strategy definitions page URL state", () => {
   beforeEach(() => {
     api.loadStrategies.mockReset().mockResolvedValue(undefined);
     api.space.selectedSpaceId = "space-1";
+  });
+
+  it("带 ?q= 时在完整目录里按名称或 ID 搜索", async () => {
+    api.loadAllStrategies.mockReset().mockResolvedValue(undefined);
+    const { wrapper } = await setup({ q: "动量" });
+    expect(api.loadAllStrategies).toHaveBeenCalled();
+    expect(api.loadStrategies).not.toHaveBeenCalled();
+    expect((wrapper.vm as unknown as { rows: { strategy_id: string }[] }).rows.map(item => item.strategy_id)).toEqual([
+      "momentum_1h"
+    ]);
   });
 
   it("restores page and detail drawer from the URL", async () => {

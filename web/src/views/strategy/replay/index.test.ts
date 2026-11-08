@@ -29,7 +29,11 @@ vi.mock("@/api/storage/metadata", () => ({
   listAllDatasets: vi.fn(async () => [{ dataset_id: "ds_uni", attributes: { market_type: "multi" } }])
 }));
 vi.mock("@/api/admin/http", () => ({ reportControlError: api.reportControlError, serverNow: () => api.serverNow }));
-vi.mock("@arco-design/web-vue", () => ({ Message: { success: vi.fn(), error: vi.fn() } }));
+// 确认对话框直接当作点了确认
+vi.mock("@arco-design/web-vue", () => ({
+  Message: { success: vi.fn(), error: vi.fn() },
+  Modal: { confirm: vi.fn((options: { onOk?: () => void }) => options.onOk?.()) }
+}));
 // 假路由：push/replace 同步更新响应式 query，并记录导航，页面据此读写 URL 状态。
 // async 为真时 query 在若干微任务之后才生效，模拟真实路由的异步导航。
 const nav = vi.hoisted(() => ({
@@ -145,7 +149,7 @@ const stubs = {
   },
   "a-list-item": { template: '<div class="list-item"><slot /></div>' },
   "a-popconfirm": { emits: ["ok"], template: '<div class="confirm" @click="$emit(\'ok\')"><slot /></div>' },
-  "a-button": { template: "<button><slot /></button>" },
+  "a-button": { emits: ["click"], template: "<button @click=\"$emit('click')\"><slot /></button>" },
   // 表格只渲染展开行，用来检查每期明细；data-loading 反映加载遮罩。
   "a-table": {
     props: ["data", "loading"],
@@ -283,7 +287,7 @@ describe("strategy replay page", () => {
       Promise.resolve(id === "r1" ? justCancelled("r1") : replay("r2", "done", '{"bars":2,"ok_bars":2,"limitations":[]}'))
     );
     api.listReplays.mockResolvedValue({ items: [replay("r1", "cancelled"), replay("r2", "done")], page: { total: 2 } });
-    await wrapper.find(".confirm").trigger("click");
+    await wrapper.find(".cancel-replay").trigger("click");
     await flushPromises();
     expect(wrapper.text()).toContain("正在等待写入截至取消时的部分指标");
     await wrapper.findAll("button.replay-row")[1].trigger("click");
@@ -309,7 +313,7 @@ describe("strategy replay page", () => {
     await flushPromises();
     api.getReplay.mockResolvedValue(justCancelled("r1"));
     api.listReplays.mockResolvedValue({ items: [justCancelled("r1")], page: { total: 1 } });
-    await wrapper.find(".confirm").trigger("click");
+    await wrapper.find(".cancel-replay").trigger("click");
     await flushPromises();
     expect(wrapper.text()).not.toContain("正在等待写入");
     const before = api.getReplay.mock.calls.length;
@@ -325,7 +329,7 @@ describe("strategy replay page", () => {
     await flushPromises();
     api.getReplay.mockResolvedValue(justCancelled("r1"));
     api.listReplays.mockResolvedValue({ items: [justCancelled("r1")], page: { total: 1 } });
-    await wrapper.find(".confirm").trigger("click");
+    await wrapper.find(".cancel-replay").trigger("click");
     await flushPromises();
     expect(wrapper.text()).toContain("正在等待写入");
     await vi.advanceTimersByTimeAsync(125_000);
@@ -563,7 +567,7 @@ describe("strategy replay page", () => {
     const wrapper = mountPage();
     await flushPromises();
     api.getReplay.mockImplementation((id: string) => Promise.resolve(id === "r1" ? justCancelled("r1") : stale));
-    await wrapper.find(".confirm").trigger("click");
+    await wrapper.find(".cancel-replay").trigger("click");
     await flushPromises();
     expect(wrapper.text()).toContain("正在等待写入");
     // r2 早就取消、没有指标：r1 还在等待，r2 不应显示等待提示。
@@ -581,7 +585,7 @@ describe("strategy replay page", () => {
     await flushPromises();
     api.getReplay.mockResolvedValue(justCancelled("r1"));
     api.listReplays.mockResolvedValue({ items: [justCancelled("r1")], page: { total: 1 } });
-    await wrapper.find(".confirm").trigger("click");
+    await wrapper.find(".cancel-replay").trigger("click");
     await flushPromises();
     expect(wrapper.text()).not.toContain("正在等待写入");
   });
@@ -710,7 +714,7 @@ describe("strategy replay page", () => {
     await vi.advanceTimersByTimeAsync(5000);
     const pendingCancel = deferred<unknown>();
     api.cancelReplay.mockImplementationOnce(() => pendingCancel.promise);
-    await wrapper.find(".confirm").trigger("click");
+    await wrapper.find(".cancel-replay").trigger("click");
     const nextList = deferred<unknown>();
     api.listReplays.mockImplementationOnce(() => nextList.promise);
     api.space!.selectedSpaceId = "stock";
@@ -745,7 +749,7 @@ describe("strategy replay page", () => {
     const cancelledAt = new Date(Date.now() - 600_000).toISOString();
     api.getReplay.mockResolvedValue(replay("r1", "cancelled", "{}", { updated_at: cancelledAt }));
     api.listReplays.mockResolvedValue({ items: [replay("r1", "cancelled")], page: { total: 1 } });
-    await wrapper.find(".confirm").trigger("click");
+    await wrapper.find(".cancel-replay").trigger("click");
     await flushPromises();
     expect(wrapper.text()).toContain("正在等待写入");
   });
@@ -820,7 +824,7 @@ describe("strategy replay page", () => {
     await flushPromises();
     api.getReplay.mockResolvedValue(justCancelled("r1"));
     api.listReplayBars.mockClear();
-    await wrapper.find(".confirm").trigger("click");
+    await wrapper.find(".cancel-replay").trigger("click");
     await flushPromises();
     const tableCalls = api.listReplayBars.mock.calls.filter(call => !call[1]?.brief);
     expect(tableCalls.at(-1)?.[1]).toMatchObject({ page: 3 });
@@ -834,14 +838,14 @@ describe("strategy replay page", () => {
     await flushPromises();
     const failure = new Error("网络错误");
     api.cancelReplay.mockRejectedValueOnce(failure);
-    await wrapper.find(".confirm").trigger("click");
+    await wrapper.find(".cancel-replay").trigger("click");
     await flushPromises();
     expect(api.reportControlError).toHaveBeenCalledTimes(1);
     expect(api.reportControlError).toHaveBeenCalledWith(failure);
     expect(Message.error).not.toHaveBeenCalled();
     const pending = deferred<unknown>();
     api.cancelReplay.mockImplementationOnce(() => pending.promise);
-    await wrapper.find(".confirm").trigger("click");
+    await wrapper.find(".cancel-replay").trigger("click");
     api.listReplays.mockResolvedValue({ items: [], page: { total: 0 } });
     api.space!.selectedSpaceId = "stock";
     await nextTick();
@@ -939,7 +943,7 @@ describe("strategy replay page", () => {
     const wrapper = mountPage();
     await flushPromises();
     api.getReplay.mockResolvedValue(justCancelled("r1"));
-    await wrapper.find(".confirm").trigger("click");
+    await wrapper.find(".cancel-replay").trigger("click");
     await flushPromises();
     expect((wrapper.vm as any).awaitingMetrics).not.toBeNull();
     api.listReplays.mockResolvedValue({ items: [], page: { total: 0 } });
