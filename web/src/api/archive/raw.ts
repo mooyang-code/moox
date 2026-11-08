@@ -19,6 +19,7 @@ export class ArchiveRawError extends Error {
 
 /** 响应体读不出 msg 时按状态码给的说明，与 Admin 转发器、执行器数据端口的错误口径一致。 */
 const STATUS_TEXT: Record<number, string> = {
+  401: "链接已失效，请重试",
   404: "执行器上找不到这个任务或分区",
   409: "远端副本或数据集说明还没有就绪",
   429: "同时下载的数量已达上限，请稍后再试",
@@ -29,10 +30,13 @@ const STATUS_TEXT: Record<number, string> = {
 };
 
 async function rawError(response: Response): Promise<ArchiveRawError> {
+  // 401 是一次性 ticket 已用过或过期（鉴权层的响应体是 {ret_info:{code,msg}}，msg 不适合直接给人看）：重新点一次就会取新的
+  if (response.status === 401) return new ArchiveRawError(STATUS_TEXT[401], 401);
   let message = "";
   try {
-    const body = JSON.parse(await response.text()) as { msg?: unknown };
+    const body = JSON.parse(await response.text()) as { msg?: unknown; ret_info?: { msg?: unknown } };
     if (typeof body.msg === "string") message = body.msg;
+    else if (typeof body.ret_info?.msg === "string") message = body.ret_info.msg;
   } catch {
     // 不是 JSON（例如前面的代理直接返回了网页）：按状态码说明
   }

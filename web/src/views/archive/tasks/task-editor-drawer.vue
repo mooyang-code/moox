@@ -149,6 +149,7 @@ import {
   exportEstimateText,
   intervalText,
   isDailyFreq,
+  dirNameOwner,
   partitionPathPreview,
   pullEveryBarsError,
   showBackfillField
@@ -171,6 +172,8 @@ const props = defineProps<{
   spaceId: string;
   /** 当前的避让规则（概览接口），右侧说明按它写 */
   avoidance?: AvoidanceRules;
+  /** 执行器的归档根目录；有就把路径预览写成绝对路径 */
+  rootDir?: string;
 }>();
 const emit = defineEmits<{
   "update:visible": [visible: boolean];
@@ -216,7 +219,13 @@ const dirError = computed(() => {
   if (props.mode !== "create" || !prepared.value) return "";
   const local = dirNameError(form.dirName);
   if (local) return local;
-  if (dirCheck.name === form.dirName && dirCheck.conflict) return "目录名已被这个空间的其他任务使用，请改一个";
+  if (dirCheck.name === form.dirName && dirCheck.conflict) {
+    // 冲突的任务在当前空间的任务表里时写出它的数据集；找不到（例如任务表还没刷新）时泛指
+    const owner = dirNameOwner(props.tasks, prepared.value?.purpose || "", form.dirName);
+    const ownerId = owner?.dataset_id || "";
+    const name = props.datasets.find(item => item.dataset_id === ownerId)?.name || ownerId;
+    return name ? `目录名已被「${name}」使用，请改一个` : "目录名已被这个空间的其他任务使用，请改一个";
+  }
   if (dirCheck.name === form.dirName && dirCheck.error) return `检查目录名失败：${dirCheck.error}`;
   return "";
 });
@@ -226,9 +235,16 @@ const pathPreview = computed(() =>
         props.task?.space_id || props.spaceId,
         props.task?.purpose || "",
         props.task?.dir_name || "",
-        props.task?.partition_unit
+        props.task?.partition_unit,
+        props.rootDir
       )
-    : partitionPathPreview(props.spaceId, prepared.value?.purpose || "", form.dirName, prepared.value?.partition_unit)
+    : partitionPathPreview(
+        props.spaceId,
+        prepared.value?.purpose || "",
+        form.dirName,
+        prepared.value?.partition_unit,
+        props.rootDir
+      )
 );
 const avoidanceText = computed(() => avoidanceScheduleText(props.avoidance));
 
@@ -361,8 +377,8 @@ async function submit() {
     return;
   }
   if (props.mode === "create") {
-    // 改过的目录名还没检查完：不等防抖，立即检查一次再判断
-    if (prepared.value && !dirNameError(form.dirName) && dirCheck.name !== form.dirName) {
+    // 改过的目录名还没检查完、或上次检查失败：不等防抖，立即检查一次再判断
+    if (prepared.value && !dirNameError(form.dirName) && (dirCheck.name !== form.dirName || dirCheck.error)) {
       if (dirTimer) clearTimeout(dirTimer);
       await checkDirName(form.datasetId, form.dirName);
     }

@@ -305,10 +305,26 @@ export function dirNameError(name: string): string {
   return "";
 }
 
-/** 分区文件的路径预览：<空间>/<用途>/<目录名>/<年>/<年月日>.csv.gz（按月分区时文件名是年月），和 worker 的 RelPath 一致。 */
-export function partitionPathPreview(space: string, purpose: string, dirName: string, partitionUnit?: string): string {
+/**
+ * 分区文件的路径预览：<空间>/<用途>/<目录名>/<年>/<年月日>.csv.gz（按月分区时文件名是年月），和 worker 的 RelPath 一致；
+ * 给了归档根目录时写成绝对路径。
+ */
+export function partitionPathPreview(
+  space: string,
+  purpose: string,
+  dirName: string,
+  partitionUnit?: string,
+  rootDir = ""
+): string {
   const file = partitionUnit === "month" ? "<yyyymm>.csv.gz" : "<yyyymmdd>.csv.gz";
-  return [space || "<空间>", purpose || "<用途>", dirName || "<目录名>", "<yyyy>", file].join("/");
+  const rel = [space || "<空间>", purpose || "<用途>", dirName || "<目录名>", "<yyyy>", file].join("/");
+  const root = rootDir.replace(/\/+$/, "");
+  return root ? `${root}/${rel}` : rel;
+}
+
+/** 占用这个目录名的已有任务（同空间、同用途、同目录名）。 */
+export function dirNameOwner(tasks: ArchiveTask[], purpose: string, dirName: string): ArchiveTask | undefined {
+  return tasks.find(task => task.purpose === purpose && task.dir_name === dirName);
 }
 
 // ---- 最新数据 ----

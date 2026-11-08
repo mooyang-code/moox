@@ -81,6 +81,32 @@ describe("归档裸 HTTP", () => {
     ).rejects.toThrow("下载不完整");
   });
 
+  it("下载：读取中途抛错按下载不完整报错", async () => {
+    let sent = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (!sent) {
+          sent = true;
+          controller.enqueue(new Uint8Array([1, 2]));
+        } else controller.error(new TypeError("network error"));
+      }
+    });
+    fetchMock.mockResolvedValueOnce(new Response(body, { status: 200, headers: { "Content-Length": "10" } }));
+    await expect(
+      downloadArchivePartition({ space: "s", dataset: "d", partition: "2026-11-07", fallbackName: "f" })
+    ).rejects.toThrow("下载不完整：连接中断，请重试");
+  });
+
+  it("401（ticket 已用过或过期）提示链接已失效；其他错误兼容 ret_info.msg", async () => {
+    fetchMock.mockResolvedValueOnce(json(401, { ret_info: { code: 401, msg: "invalid raw route ticket" } }));
+    await expect(fetchArchiveRecentRows({ space: "s", dataset: "d", subject: "x" })).rejects.toMatchObject({
+      message: "链接已失效，请重试",
+      status: 401
+    });
+    fetchMock.mockResolvedValueOnce(json(500, { ret_info: { code: 500, msg: "读取主机拓扑失败" } }));
+    await expect(fetchArchiveRecentRows({ space: "s", dataset: "d", subject: "x" })).rejects.toThrow("读取主机拓扑失败");
+  });
+
   it("Content-Disposition 取不到文件名时为空", () => {
     expect(dispositionFileName(null)).toBe("");
     expect(dispositionFileName("attachment")).toBe("");

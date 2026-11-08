@@ -28,8 +28,11 @@
     <template v-else>
       <div v-if="error" class="load-error">读取最新数据失败：{{ error }} · <a-link @click="load(cursor)">重试</a-link></div>
       <div v-if="result" class="sub head-note">
-        <template v-if="result.staged_until">暂存库已完整读取到 {{ formatInstant(result.staged_until, zone) }}</template>
-        <template v-else>暂存库还没有完整读取过</template>；这里包括还没导出成文件的行，暂存行保留到分区定稿，至少有最近 3 天。
+        <template v-if="result.staged_until"
+          >暂存库已从 Storage 读到 {{ formatInstant(result.staged_until, zone) }}，之后的行可能还没读到</template
+        >
+        <template v-else>暂存库还没有从 Storage 读过</template>；这里包括还没导出成文件的行，暂存行保留到分区定稿，至少有最近 3
+        天。
       </div>
       <a-table
         size="small"
@@ -173,7 +176,15 @@ onBeforeUnmount(() => {
 
 const columnWidth = (column: ArchiveRecentColumn) => (column.type === "time" ? 200 : column.name === "subject_id" ? 160 : 120);
 
-void loadOptions("");
+// 标的下拉属于当前空间：切空间时重读（也包括首次）
+watch(
+  () => props.spaceId,
+  () => {
+    options.value = [];
+    void loadOptions("");
+  },
+  { immediate: true }
+);
 </script>
 
 <style scoped>

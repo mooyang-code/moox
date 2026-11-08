@@ -90,9 +90,9 @@
                 <span :title="downloadBlockedReason(record) || undefined">
                   <a-button
                     size="mini"
-                    :disabled="Boolean(downloadBlockedReason(record)) || isDownloading(record)"
-                    :loading="isDownloading(record)"
-                    @click="download(record)"
+                    :disabled="Boolean(downloadBlockedReason(record)) && !isDownloading(record)"
+                    :title="isDownloading(record) ? '点击取消下载' : undefined"
+                    @click="isDownloading(record) ? cancelDownload(record) : download(record)"
                     >{{ downloadLabel(record) }}</a-button
                   >
                 </span>
@@ -114,7 +114,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import {
   downloadArchivePartition,
@@ -200,18 +200,30 @@ function remoteTitle(partition: ArchivePartition): string | undefined {
 }
 
 // ---- 下载 ----
-// 按分区记进度（0～100，读不到总长时为 -1）；执行器同时最多 2 个下载，同一分区不重复发起
+// 按分区记进度（0～100，读不到总长时为 -1）；执行器同时最多 2 个下载，同一分区不重复发起。
+// 每个下载一个 AbortController：下载中再点按钮即取消，离开页签或关闭抽屉（组件卸载）时全部中止，中止的不弹提示也不保存。
 const downloading = ref<Record<string, number>>({});
+const controllers = new Map<string, AbortController>();
 const isDownloading = (partition: ArchivePartition) => (partition.partition_key || "") in downloading.value;
 function downloadLabel(partition: ArchivePartition) {
   const progress = downloading.value[partition.partition_key || ""];
   if (progress === undefined) return "下载";
-  return progress >= 0 ? `${progress}%` : "下载中";
+  return progress >= 0 ? `${progress}% · 取消` : "下载中 · 取消";
 }
+
+function cancelDownload(partition: ArchivePartition) {
+  controllers.get(partition.partition_key || "")?.abort();
+}
+onBeforeUnmount(() => {
+  for (const controller of controllers.values()) controller.abort();
+  controllers.clear();
+});
 
 async function download(partition: ArchivePartition) {
   const key = partition.partition_key || "";
   if (!key || isDownloading(partition)) return;
+  const controller = new AbortController();
+  controllers.set(key, controller);
   downloading.value = { ...downloading.value, [key]: -1 };
   try {
     const { blob, fileName } = await downloadArchivePartition(
@@ -224,12 +236,16 @@ async function download(partition: ArchivePartition) {
       (received, total) => {
         if (total > 0 && key in downloading.value)
           downloading.value = { ...downloading.value, [key]: Math.floor((received / total) * 100) };
-      }
+      },
+      controller.signal
     );
+    if (controller.signal.aborted) return;
     saveBlob(blob, fileName);
   } catch (cause) {
+    if (controller.signal.aborted) return;
     Message.error(`下载 ${key} 失败：${cause instanceof Error && cause.message ? cause.message : "请稍后重试"}`);
   } finally {
+    if (controllers.get(key) === controller) controllers.delete(key);
     downloading.value = Object.fromEntries(Object.entries(downloading.value).filter(([item]) => item !== key));
   }
 }

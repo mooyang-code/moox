@@ -47,7 +47,7 @@ describe("文案", () => {
     expect(["open", "exported", "final"].map(partitionStatusLabel)).toEqual(["暂存中", "已导出", "已定稿"]);
   });
 
-  it("远端副本（批 2 之后）五种状态", () => {
+  it("远端副本五种状态", () => {
     expect(remoteStateLabel("verified")).toBe("已校验");
     expect(remoteStateLabel("pending")).toBe("待上传");
     expect(remoteStateLabel("pending", "old/key")).toBe("待上传（远端只有旧版本）");

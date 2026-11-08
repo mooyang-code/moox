@@ -73,6 +73,7 @@
       :zone="displayZone"
       :space-id="spaceId"
       :avoidance="overview?.avoidance"
+      :root-dir="overview?.worker?.root_dir"
       @created="onCreated"
       @updated="refreshAfterAction"
       @open-task="openTask"

@@ -5,6 +5,7 @@ import {
   avoidanceBasisText,
   avoidanceScheduleText,
   dirNameError,
+  dirNameOwner,
   diskStatus,
   downloadBlockedReason,
   hostText,
@@ -158,6 +159,19 @@ describe("目录名", () => {
     );
     expect(partitionPathPreview("crypto", "factor", "x-1d", "month")).toBe("crypto/factor/x-1d/<yyyy>/<yyyymm>.csv.gz");
     expect(partitionPathPreview("crypto", "", "", "day")).toBe("crypto/<用途>/<目录名>/<yyyy>/<yyyymmdd>.csv.gz");
+    // 有归档根目录时写成绝对路径
+    expect(partitionPathPreview("crypto", "collect", "a-1m", "day", "/data/moox/archive/")).toBe(
+      "/data/moox/archive/crypto/collect/a-1m/<yyyy>/<yyyymmdd>.csv.gz"
+    );
+  });
+
+  it("占用目录名的任务按用途与目录名找", () => {
+    const tasks = [
+      { dataset_id: "a", purpose: "collect", dir_name: "x-1m" },
+      { dataset_id: "b", purpose: "factor", dir_name: "x-1m" }
+    ];
+    expect(dirNameOwner(tasks, "factor", "x-1m")?.dataset_id).toBe("b");
+    expect(dirNameOwner(tasks, "collect", "y-1m")).toBeUndefined();
   });
 });
 

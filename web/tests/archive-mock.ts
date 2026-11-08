@@ -122,9 +122,10 @@ const recentColumns = [
   { name: "close", type: "double" },
   { name: "note", type: "string" }
 ];
+// 第一页满 200 行（可以点“更早”），翻页后只剩 3 行
 const recentRows = (before: string | null) => {
   const end = before ? Date.parse(before) : Math.floor(NOW / MINUTE) * MINUTE + MINUTE;
-  return Array.from({ length: 3 }, (_, i) => [
+  return Array.from({ length: before ? 3 : 200 }, (_, i) => [
     iso(end - (i + 1) * MINUTE),
     "BTC-USDT",
     "",

@@ -143,7 +143,7 @@ const props = defineProps<{
   zone: string;
   nowMs: number;
   busy: Record<string, boolean>;
-  /** 批 2 之后：worker 启用了对象存储时显示远端副本 */
+  /** worker 启用了对象存储时显示远端副本 */
   remoteEnabled?: boolean;
 }>();
 const emit = defineEmits<{

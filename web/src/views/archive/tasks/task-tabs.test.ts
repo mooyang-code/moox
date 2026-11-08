@@ -76,7 +76,7 @@ describe("分区下载", () => {
       attachTo: document.body
     });
     await flushPromises();
-    return wrapper.findAll("button").filter(button => ["下载", "下载中"].includes(button.text()) || button.text().endsWith("%"));
+    return wrapper.findAll("button").filter(button => button.text() === "下载" || button.text().endsWith("取消"));
   }
 
   it("远端已校验的可下载，未就绪的置灰并在悬停里写原因；文件列显示新的相对路径", async () => {
@@ -98,7 +98,8 @@ describe("分区下载", () => {
     await flushPromises();
     expect(api.downloadArchivePartition).toHaveBeenCalledWith(
       { space: "crypto", dataset: "ds", partition: "2026-11-07", fallbackName: "binance-spot-kline-1m_2026-11-07.csv.gz" },
-      expect.any(Function)
+      expect.any(Function),
+      expect.any(AbortSignal)
     );
     expect(api.saveBlob).toHaveBeenCalledWith(blob, "a.csv.gz");
 
@@ -106,6 +107,48 @@ describe("分区下载", () => {
     await ready.trigger("click");
     await flushPromises();
     expect(api.error).toHaveBeenCalledWith("下载 2026-11-07 失败：同时下载的数量已达上限（2 个），请稍后再试");
+  });
+
+  /** 一个只在中止时结束的下载：中止时按 fetch 的行为抛 AbortError */
+  function pendingDownload() {
+    const seen: { signal?: AbortSignal; progress?: (received: number, total: number) => void } = {};
+    api.downloadArchivePartition.mockImplementationOnce(
+      (_req: unknown, progress: (received: number, total: number) => void, signal: AbortSignal) =>
+        new Promise((_resolve, reject) => {
+          Object.assign(seen, { signal, progress });
+          signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+        })
+    );
+    return seen;
+  }
+
+  it("下载中按钮显示进度与取消，点了即中止，不提示也不保存", async () => {
+    const seen = pendingDownload();
+    const [ready] = await mountPartitions([partition()]);
+    await ready.trigger("click");
+    await flushPromises();
+    seen.progress?.(12, 100);
+    await flushPromises();
+    const busy = wrapper.findAll("button").find(button => button.text() === "12% · 取消")!;
+    expect(busy.attributes("disabled")).toBeUndefined();
+    await busy.trigger("click");
+    await flushPromises();
+    expect(seen.signal?.aborted).toBe(true);
+    expect(api.saveBlob).not.toHaveBeenCalled();
+    expect(api.error).not.toHaveBeenCalled();
+    expect(wrapper.findAll("button").some(button => button.text() === "下载")).toBe(true);
+  });
+
+  it("卸载时中止且不弹出保存", async () => {
+    const seen = pendingDownload();
+    const [ready] = await mountPartitions([partition()]);
+    await ready.trigger("click");
+    await flushPromises();
+    wrapper.unmount();
+    await flushPromises();
+    expect(seen.signal?.aborted).toBe(true);
+    expect(api.saveBlob).not.toHaveBeenCalled();
+    expect(api.error).not.toHaveBeenCalled();
   });
 });
 
@@ -128,7 +171,7 @@ describe("最新数据", () => {
     return wrapper;
   }
 
-  it("按标的读取，表头写已完整读取到的时刻，null 与空串分开显示", async () => {
+  it("按标的读取，表头写读取水位，null 与空串分开显示", async () => {
     api.fetchArchiveRecentRows.mockResolvedValue({
       columns,
       rows: [row("2026-11-07T04:40:00Z")],
@@ -141,10 +184,15 @@ describe("最新数据", () => {
       expect.any(AbortSignal)
     );
     const text = wrapper.text();
-    expect(text).toContain("暂存库已完整读取到 2026-11-07 04:41:00 UTC");
+    expect(text).toContain("暂存库已从 Storage 读到 2026-11-07 04:41:00 UTC，之后的行可能还没读到");
     expect(text).not.toContain("暂存到");
     expect(text).toContain('""');
     expect(text).toContain("—");
+    wrapper.unmount();
+    api.fetchArchiveRecentRows.mockResolvedValue({ columns, rows: [], staged_until: "" });
+    mountRecent();
+    await flushPromises();
+    expect(wrapper.text()).toContain("暂存库还没有从 Storage 读过");
     // 不满一页：没有更早的行
     expect(
       wrapper
@@ -177,6 +225,16 @@ describe("最新数据", () => {
       expect.objectContaining({ before: undefined }),
       expect.any(AbortSignal)
     );
+  });
+
+  it("切空间时重读标的下拉", async () => {
+    api.fetchArchiveRecentRows.mockResolvedValue({ columns, rows: [], staged_until: "" });
+    mountRecent();
+    await flushPromises();
+    expect(api.listSubjects).toHaveBeenLastCalledWith({ space_id: "crypto", keyword: undefined, page: { page: 1, size: 20 } });
+    await wrapper.setProps({ spaceId: "stockcn" });
+    await flushPromises();
+    expect(api.listSubjects).toHaveBeenLastCalledWith({ space_id: "stockcn", keyword: undefined, page: { page: 1, size: 20 } });
   });
 
   it("读取失败显示原因与重试；没选标的时不读取", async () => {

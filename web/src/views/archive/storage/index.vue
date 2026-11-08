@@ -100,7 +100,7 @@
           <h3>避让时段</h3>
           <div class="muted intro">
             执行器读取 Storage 时避开采集函数的触发时刻；规则由 archive-mgr 按有归档任务的空间里生效的采集频率推出，约每 10
-            分钟重算，有任务的空间变化时立即重算。
+            分钟重算，有任务的空间变化时 1 分钟内重算。
           </div>
           <a-descriptions v-if="avoidance" :column="{ xs: 1, sm: 1, md: 2 }" size="small" bordered>
             <a-descriptions-item label="每分钟">{{ minuteWindowText(avoidance) }}</a-descriptions-item>

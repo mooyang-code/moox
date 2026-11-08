@@ -185,6 +185,46 @@ describe("新建时的目录名", () => {
     expect(document.body.textContent).toContain("目录名已被这个空间的其他任务使用");
   });
 
+  it("冲突时写出占用它的数据集；路径预览带归档根目录", async () => {
+    api.prepareArchiveTask.mockResolvedValue({ ...prepared, dir_name_conflict: true });
+    mountEditor({
+      mode: "create",
+      task: null,
+      presetDatasetId: "ds_1m",
+      datasets: [...datasets, { dataset_id: "ds_old", name: "旧分钟K线" }],
+      tasks: [task({ dataset_id: "ds_old", purpose: "collect", dir_name: "binance-spot-kline-1m" })],
+      spaceId: "crypto",
+      rootDir: "/data/moox/archive"
+    });
+    await flushPromises();
+    expect(document.body.textContent).toContain("目录名已被「旧分钟K线」使用，请改一个");
+    api.prepareArchiveTask.mockResolvedValue({ ...prepared, dir_name_conflict: false });
+    (wrapper.vm as unknown as { form: { dirName: string } }).form.dirName = "binance-spot-kline-1m-v2";
+    await new Promise(resolve => setTimeout(resolve, 450));
+    await flushPromises();
+    expect(document.body.textContent).toContain(
+      "/data/moox/archive/crypto/collect/binance-spot-kline-1m-v2/<yyyy>/<yyyymmdd>.csv.gz"
+    );
+  });
+
+  it("上次检查失败时提交前重新检查", async () => {
+    vi.useFakeTimers();
+    api.prepareArchiveTask.mockResolvedValue(prepared);
+    api.createArchiveTask.mockClear();
+    mountEditor({ mode: "create", task: null, presetDatasetId: "ds_1m", datasets, spaceId: "crypto" });
+    await vi.advanceTimersByTimeAsync(0);
+    await flushPromises();
+    api.prepareArchiveTask.mockRejectedValueOnce(new Error("超时"));
+    (wrapper.vm as unknown as { form: { dirName: string } }).form.dirName = "binance-spot-1m";
+    await vi.advanceTimersByTimeAsync(400);
+    await flushPromises();
+    expect(document.body.textContent).toContain("检查目录名失败：超时");
+    okButton().click();
+    await flushPromises();
+    expect(api.prepareArchiveTask).toHaveBeenLastCalledWith("ds_1m", "binance-spot-1m", { silentError: true });
+    expect(api.createArchiveTask).toHaveBeenCalledWith(expect.objectContaining({ dir_name: "binance-spot-1m" }));
+  });
+
   it("右侧说明按避让规则写；没有整点窗口时不写顺延", async () => {
     api.prepareArchiveTask.mockResolvedValue(prepared);
     mountEditor({

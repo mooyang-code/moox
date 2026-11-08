@@ -29,15 +29,15 @@ test("建归档任务：目录名默认建议值、路径预览、冲突标红�
   await expect(drawer.locator(".zoned-picker input")).not.toHaveValue("");
   const dirInput = drawer.locator(".arco-input-wrapper input").first();
   await expect(dirInput).toHaveValue("binance-spot-kline-5m");
-  await expect(drawer).toContainText("crypto/collect/binance-spot-kline-5m/<yyyy>/<yyyymmdd>.csv.gz");
+  await expect(drawer).toContainText("/data/moox/archive/crypto/collect/binance-spot-kline-5m/<yyyy>/<yyyymmdd>.csv.gz");
   await expect(drawer).toContainText("每小时 :58:00～:04:00 不拉取，这段时间的边界顺延到 :04:25");
   await expect(drawer.getByText("接下来 5 次拉取")).toBeVisible();
   // 改成已有任务的目录名：防抖后检查，标红
   await dirInput.fill("binance-spot-kline-1m");
-  await expect(drawer).toContainText("目录名已被这个空间的其他任务使用");
+  await expect(drawer).toContainText("目录名已被「现货 1 分钟 K 线」使用，请改一个");
   expect(calls.bodies.PrepareArchiveTask?.at(-1)).toMatchObject({ dir_name: "binance-spot-kline-1m" });
   await dirInput.fill("binance-spot-kline-5m");
-  await expect(drawer).not.toContainText("目录名已被这个空间的其他任务使用");
+  await expect(drawer).not.toContainText("目录名已被");
   await drawer.getByRole("button", { name: "创建" }).click();
   await expect(page).toHaveURL(/task=ds_kline_5m/);
   expect(calls.bodies.CreateArchiveTask?.[0]).toMatchObject({
@@ -89,13 +89,22 @@ test("分区下载：已校验的取 ticket 后下载，未就绪的置灰", asy
   });
 });
 
-test("最新数据：标的进 URL，表头写已完整读取到，更早翻页每次重新取 ticket", async ({ page }) => {
+test("最新数据：标的进 URL，表头写读取水位，更早翻页带 before 且重新取 ticket", async ({ page }) => {
   await page.goto("/#/archive/tasks?task=ds_kline_1m&tab=recent&subject=BTC-USDT");
   const drawer = page.locator(".arco-drawer");
   await expect(drawer.locator(".arco-tabs-tab-active")).toHaveText("最新数据");
-  await expect(drawer).toContainText("暂存库已完整读取到");
-  await expect(drawer.locator(".task-recent tbody tr")).toHaveCount(3);
+  await expect(drawer).toContainText("暂存库已从 Storage 读到");
+  await expect(drawer).toContainText("之后的行可能还没读到");
+  const rows = drawer.locator(".task-recent tbody tr");
+  await expect(rows).toHaveCount(200);
   expect(calls.bodies.RecentRows?.at(-1)).toMatchObject({ space: "crypto", dataset: "ds_kline_1m", subject: "BTC-USDT" });
+  expect(calls.bodies.RecentRows?.at(-1)).not.toHaveProperty("before");
+  const tickets = calls.bodies.IssueRawSessionTicket?.length || 0;
+  expect(calls.bodies.IssueRawSessionTicket?.at(-1)).toMatchObject({ operation: "archive_recent" });
+  await drawer.getByRole("button", { name: "更早" }).click();
+  await expect(rows).toHaveCount(3);
+  expect(calls.bodies.RecentRows?.at(-1)?.before).toBeTruthy();
+  expect(calls.bodies.IssueRawSessionTicket?.length).toBe(tickets + 1);
   expect(calls.bodies.IssueRawSessionTicket?.at(-1)).toMatchObject({ operation: "archive_recent" });
 });
 
