@@ -20,6 +20,8 @@ describe("下单规则", () => {
     expect(orderRuleError("0.001", undefined, instrument)).toContain("不能小于");
     expect(orderRuleError("0.003", "50000.15", instrument)).toContain("价格步长");
     expect(orderRuleError("abc", undefined, instrument)).toContain("正数");
+    // A 股卖出零股不在前端拦，由服务端按持仓判断
+    expect(orderRuleError("0.0015", undefined, instrument, true)).toBe("");
   });
 
   it("没有规则时只检查数量格式", () => {

@@ -295,7 +295,7 @@ func (s *ConsoleServer) ListHoldings(
 				ExchangeSymbol: value.ExchangeSymbol, Asset: value.Asset,
 				Quantity: value.Quantity.String(), AverageCost: value.AverageCost.String(),
 				MarkPrice: value.MarkPrice.String(), MarketValue: value.MarketValue.String(),
-				SourceTime: value.SourceTime.UnixMilli(),
+				SourceTime: value.SourceTime.UnixMilli(), Sellable: value.Sellable.String(),
 			}
 			if value.UnrealizedPnL != nil {
 				pnl := value.UnrealizedPnL.String()
@@ -318,6 +318,7 @@ func (s *ConsoleServer) ListHoldings(
 		holdings = append(holdings, &tradepb.Holding{
 			TradingAccountId: req.GetTradingAccountId(), Asset: balance.Asset, Quantity: balance.Total,
 			MarkPrice: markPrice, MarketValue: marketValue, SourceTime: account.Snapshot.ExchangeUpdatedAt,
+			Sellable: balance.Available,
 		})
 	}
 	return &tradepb.ListHoldingsRsp{RetInfo: success(), Holdings: holdings}, nil

@@ -32,13 +32,18 @@ func MarketExecutionPrice(side exchange.Side, quote execution.MarketQuote, slipp
 	return base.Mul(factor), nil
 }
 
-func QuoteFresh(quote execution.MarketQuote, now time.Time, maxAge time.Duration) bool {
-	return !quote.SourceTime.IsZero() && !quote.SourceTime.After(now) && now.Sub(quote.SourceTime) <= maxAge
-}
-
 func LimitMarketable(side exchange.Side, limit, last shared.Decimal) bool {
 	if side == exchange.SideBuy {
 		return last.Cmp(limit) <= 0
 	}
 	return last.Cmp(limit) >= 0
+}
+
+// strictQuoteFresh 是撮合和估值用的报价新鲜度：没有交易时段的场所（加密货币）保持原来的判断——报价时间不能晚于现在、
+// 不超过 maxAge；有交易时段的场所（A 股）按 execution.QuoteFresh，时段外用收盘价。
+func strictQuoteFresh(exchanges execution.ExchangeCatalog, name string, at, now time.Time, maxAge time.Duration) bool {
+	if execution.HasSession(exchanges, name) {
+		return execution.QuoteFresh(exchanges, name, at, now, maxAge)
+	}
+	return !at.IsZero() && !at.After(now) && now.Sub(at) <= maxAge
 }

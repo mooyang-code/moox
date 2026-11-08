@@ -12,6 +12,7 @@ enum Exchange {
   EXCHANGE_UNSPECIFIED = 0;
   EXCHANGE_BINANCE = 1;
   EXCHANGE_OKX = 2;
+  EXCHANGE_ASHARE = 3;
 }
 
 enum MarketType {
@@ -869,6 +870,8 @@ message Holding {
   string market_value = 8;
   optional string unrealized_pnl = 9;
   int64 source_time = 10;
+  // 可卖数量：A 股是总数减冻结、减当日买入（T+1）；其余市场等于可用余额。
+  string sellable = 11;
 }
 
 message ListHoldingsReq {

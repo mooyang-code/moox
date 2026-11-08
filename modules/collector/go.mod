@@ -13,6 +13,7 @@ require (
 	github.com/mooyang-code/moox/modules/factor/proto/factorgen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/modules/storage/proto/storagegen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/barclock v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/cnstock v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/cloudprovider v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/clsreporter v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000
@@ -151,6 +152,8 @@ replace github.com/mooyang-code/moox/packages/notification => ../../packages/not
 replace github.com/mooyang-code/moox/packages/marketfetchpb => ../../packages/marketfetchpb
 
 replace github.com/mooyang-code/moox/packages/barclock => ../../packages/barclock
+
+replace github.com/mooyang-code/moox/packages/cnstock => ../../packages/cnstock
 
 replace github.com/mooyang-code/moox/packages/frequency => ../../packages/frequency
 

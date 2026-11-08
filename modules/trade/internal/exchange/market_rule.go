@@ -17,6 +17,17 @@ type MarketRule struct {
 	PositionSide  PositionSide
 	// RawInstrumentID 表示标的 ID 原样使用，不拼市场后缀，如 600519.XSHG。
 	RawInstrumentID bool
+	// BoardLot 表示按整手交易：买入不足一手的差额视为已满足；卖出时余下不足一手的零股可以一次卖完。
+	// 加密货币“数量低于交易所最小值”的判断不受影响。
+	BoardLot bool
+	// PriceLimits 表示有涨跌停（绝对价，每次取自报价）和停牌：下单价截在涨跌停价之间，涨停买、跌停卖、停牌顺延。
+	PriceLimits bool
+	// T1 表示当日买入的数量次日才能卖出（按北京时间的自然日）。
+	T1 bool
+	// StockFees 表示费用按 A 股规则算（佣金最低 5 元、卖出收印花税、双向过户费），见 StockFee。
+	StockFees bool
+	// PriceCageTicks 是价格笼子的最小价位数：比例带（MaxBuyPriceRatio、MinSellPriceRatio）和这么多个最小价位取更宽的那个；0 表示只有比例带。
+	PriceCageTicks int
 }
 
 var marketRules = map[MarketType]MarketRule{
@@ -25,10 +36,24 @@ var marketRules = map[MarketType]MarketRule{
 		UsesMargin: true, CanShort: true, ReduceOnly: true, Leverage: true,
 		ContractValue: true, PositionSide: PositionSideNet,
 	},
-	MarketTypeStock: {PositionFromBalance: true, RawInstrumentID: true},
+	MarketTypeStock: {
+		PositionFromBalance: true, RawInstrumentID: true,
+		BoardLot: true, PriceLimits: true, T1: true, StockFees: true, PriceCageTicks: 10,
+	},
 }
 
 // RuleFor 返回市场规则，未知市场返回零值。数据库记录里的市场是字符串，所以接受两种类型。
 func RuleFor[T ~string](market T) MarketRule {
 	return marketRules[MarketType(market)]
+}
+
+// MarketsWhere 按固定顺序返回规则满足条件的市场，例如有 T+1 的市场。
+func MarketsWhere(match func(MarketRule) bool) []MarketType {
+	var result []MarketType
+	for _, market := range marketOrder {
+		if match(marketRules[market]) {
+			result = append(result, market)
+		}
+	}
+	return result
 }

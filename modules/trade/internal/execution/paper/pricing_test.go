@@ -32,7 +32,7 @@ func TestMarketExecutionPriceFallsBackToLastAndRejectsStaleQuote(t *testing.T) {
 	if err != nil || price.String() != "10" {
 		t.Fatalf("fallback price = %s, err = %v", price, err)
 	}
-	if QuoteFresh(quote, time.Unix(100, 0).Add(time.Second), 500*time.Millisecond) {
+	if execution.QuoteFresh(nil, "", quote.SourceTime, time.Unix(100, 0).Add(time.Second), 500*time.Millisecond) {
 		t.Fatal("expired quote reported fresh")
 	}
 }

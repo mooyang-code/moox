@@ -24,7 +24,7 @@ const (
 	fakeInstrument   = "600519.XSHG"
 )
 
-// fakeCore 是 A 股假券商：市价单立即成交，当日买入的数量计入 Locked，次日才可卖。
+// fakeCore 是 A 股假券商：市价单立即成交，当日买入的数量不算可卖（Total 里有、Available 里没有），次日才可卖。
 type fakeCore struct {
 	*fakeExchange
 	snapshots int
@@ -70,7 +70,7 @@ func (b *fakeCore) PlaceOrder(ctx context.Context, request exchange.OrderRequest
 	return b.orders[request.ClientOrderID], nil
 }
 
-// moveBalances 调整现金和持仓；买入的数量计入 Locked，所以当日不可卖。调用方持有 b.mu。
+// moveBalances 调整现金和持仓；买入的数量不计入 Available，所以当日不可卖（Locked 只表示挂单冻结，这里没有）。调用方持有 b.mu。
 func (b *fakeCore) moveBalances(cash, total, available shared.Decimal) {
 	b.touch()
 	balances := b.account.Balances
@@ -79,13 +79,12 @@ func (b *fakeCore) moveBalances(cash, total, available shared.Decimal) {
 	b.account.AvailableFunds = balances[0].Available
 	if len(balances) == 1 {
 		b.account.Balances = append(balances, exchange.AssetBalance{Wallet: exchange.WalletSpot,
-			Asset: fakeInstrument, Available: available, Locked: total.Sub(available), Total: total,
+			Asset: fakeInstrument, Available: available, Total: total,
 		})
 		return
 	}
 	balances[1].Total = balances[1].Total.Add(total)
 	balances[1].Available = balances[1].Available.Add(available)
-	balances[1].Locked = balances[1].Total.Sub(balances[1].Available)
 }
 
 // touch 让快照时间晚于成交时间，同步才认为余额已覆盖这笔成交。
@@ -100,7 +99,6 @@ func (b *fakeCore) settle() {
 	defer b.mu.Unlock()
 	b.touch()
 	b.account.Balances[1].Available = b.account.Balances[1].Total
-	b.account.Balances[1].Locked = shared.Zero()
 }
 
 func (b *fakeCore) requestCount() int {
@@ -183,6 +181,19 @@ func seedFakeAccount(t *testing.T, tradeStore *store.Store, instrument exchange.
 	}))
 }
 
+// fakeSession 是测试用的交易时段：open 为真时在时段内。
+type fakeSession struct{ open *atomic.Bool }
+
+func (s fakeSession) InSession(time.Time) bool { return s.open.Load() }
+func (s fakeSession) CanOrder(time.Time) (bool, string) {
+	if s.open.Load() {
+		return true, ""
+	}
+	return false, execution.ReasonOutOfSession
+}
+func (s fakeSession) LastBreak(now time.Time) time.Time { return now.Add(-time.Minute) }
+func (s fakeSession) LastClose(now time.Time) time.Time { return now.Add(-time.Hour) }
+
 // 新增场所只注册适配器和描述信息：核心流程按规则跑通买入、T+1、交易时段和做空拒绝。
 func TestFakeExchangeRunsFullTargetLifecycle(t *testing.T) {
 	ctx := context.Background()
@@ -190,9 +201,9 @@ func TestFakeExchangeRunsFullTargetLifecycle(t *testing.T) {
 	var open atomic.Bool
 	registry := execution.NewRegistry()
 	registry.Register(execution.ExchangeDescriptor{
-		Exchange:       fakeExchangeName,
-		OrderTypes:     []exchange.OrderType{exchange.OrderTypeMarket},
-		TradingSession: func(time.Time) bool { return open.Load() },
+		Exchange:   fakeExchangeName,
+		OrderTypes: []exchange.OrderType{exchange.OrderTypeMarket},
+		Session:    fakeSession{open: &open},
 	}, func(_ exchange.AccountConfig, credential exchange.Credential) (execution.ExecutionAdapter, error) {
 		if credential.Extra["gateway"] == "" {
 			return nil, fmt.Errorf("缺少券商网关地址")
@@ -266,12 +277,13 @@ func TestFakeExchangeRunsFullTargetLifecycle(t *testing.T) {
 	require.Equal(t, targetapp.StatusConverged, current.Status)
 	require.Equal(t, 1, core.requestCount())
 
-	// 当日买入的不能卖。
+	// 当日买入的不能卖：顺延到次日，不算阻塞。
 	require.Equal(t, jetstream.ACK, deliver("target-sell", 3, "0"))
 	current = converge()
-	require.Equal(t, targetapp.StatusBlocked, current.Status)
+	require.Equal(t, targetapp.StatusConverged, current.Status)
 	require.Len(t, current.BlockedTargets, 1)
-	require.Contains(t, current.BlockedTargets[0].Reason, "可卖量不足")
+	require.Equal(t, "当日买入，次日可卖", current.BlockedTargets[0].Reason)
+	require.True(t, current.BlockedTargets[0].Deferred)
 	require.Equal(t, 1, core.requestCount())
 
 	// 次日可以卖出。

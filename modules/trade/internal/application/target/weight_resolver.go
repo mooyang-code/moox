@@ -15,6 +15,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/fundsettings"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"gorm.io/gorm"
@@ -48,9 +49,11 @@ type ReferencePriceEvidence struct {
 }
 
 type WeightResolver struct {
-	Store       *store.Store
-	Prices      PriceSource
-	Equity      EquitySource
+	Store  *store.Store
+	Prices PriceSource
+	Equity EquitySource
+	// Exchanges 提供场所的交易时段，参考价新鲜度按它判断；为空时全天按时段内处理。
+	Exchanges   execution.ExchangeCatalog
 	Now         func() time.Time
 	MaxPriceAge time.Duration
 
@@ -158,6 +161,7 @@ func (r *WeightResolver) Resolve(ctx context.Context, _ int64, request *tradeeve
 	evidence := make([]ReferencePriceEvidence, 0, len(orderedWeights))
 	quantities := make([]store.InstrumentTarget, 0, len(orderedWeights))
 	quotes := make(map[string]resolvedQuote, len(orderedWeights))
+	// 先定每个标的由哪个成员报价，再按账户批量预取（A 股腾讯快照一次 60 只），之后逐个取价命中缓存。
 	for _, weight := range orderedWeights {
 		if weight.Hold {
 			continue
@@ -166,14 +170,32 @@ func (r *WeightResolver) Resolve(ctx context.Context, _ int64, request *tradeeve
 		if err != nil {
 			return WeightConversion{}, err
 		}
-		quote, err := r.Prices.LatestPrice(ctx, tradingAccountID, exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol))
+		quotes[weight.InstrumentID] = resolvedQuote{instrument: instrument, tradingAccountID: tradingAccountID}
+	}
+	if prefetcher, ok := r.Prices.(QuotePrefetchSource); ok {
+		byAccount := make(map[string][]exchange.SymbolKey)
+		for _, resolved := range quotes {
+			byAccount[resolved.tradingAccountID] = append(byAccount[resolved.tradingAccountID],
+				exchange.NewSymbolKey(resolved.instrument.MarketType, resolved.instrument.ExchangeSymbol))
+		}
+		for tradingAccountID, keys := range byAccount {
+			prefetcher.PrefetchQuotes(ctx, tradingAccountID, keys)
+		}
+	}
+	for _, weight := range orderedWeights {
+		if weight.Hold {
+			continue
+		}
+		resolved := quotes[weight.InstrumentID]
+		quote, err := r.Prices.LatestPrice(ctx, resolved.tradingAccountID, exchange.NewSymbolKey(resolved.instrument.MarketType, resolved.instrument.ExchangeSymbol))
 		if err != nil {
 			return WeightConversion{}, err
 		}
-		if quote.Price.Cmp(shared.Zero()) <= 0 || quote.UpdatedAt.IsZero() || !r.priceFresh(quote.UpdatedAt) {
+		if quote.Price.Cmp(shared.Zero()) <= 0 || quote.UpdatedAt.IsZero() || !r.priceFresh(resolved.instrument.Exchange, quote.UpdatedAt) {
 			return WeightConversion{}, fmt.Errorf("target weight resolver: invalid reference price for %s", weight.InstrumentID)
 		}
-		quotes[weight.InstrumentID] = resolvedQuote{instrument: instrument, tradingAccountID: tradingAccountID, quote: quote}
+		resolved.quote = quote
+		quotes[weight.InstrumentID] = resolved
 	}
 	unmanaged, err := r.unmanagedTargetValue(ctx, spaceID, members, quotes)
 	if err != nil {
@@ -350,7 +372,7 @@ func (r *WeightResolver) bnbShortfall(ctx context.Context, members []store.Logic
 			if err != nil {
 				return shared.Zero(), err
 			}
-			if quote.Price.Cmp(shared.Zero()) <= 0 || quote.UpdatedAt.IsZero() || !r.priceFresh(quote.UpdatedAt) {
+			if quote.Price.Cmp(shared.Zero()) <= 0 || quote.UpdatedAt.IsZero() || !r.priceFresh(bnb.Exchange, quote.UpdatedAt) {
 				return shared.Zero(), fmt.Errorf("target weight resolver: invalid reference price for BNB")
 			}
 			value = quantity.Mul(quote.Price)
@@ -468,13 +490,13 @@ func (r *WeightResolver) now() time.Time {
 	return time.Now().UTC()
 }
 
-func (r *WeightResolver) priceFresh(updatedAt time.Time) bool {
+// priceFresh 判断换算用的参考价是否新鲜：时段内 30 秒；A 股时段外（夜里、午休、周末）用收盘价，见 execution.QuoteFresh。
+func (r *WeightResolver) priceFresh(exchangeName string, updatedAt time.Time) bool {
 	maxAge := r.MaxPriceAge
 	if maxAge <= 0 {
 		maxAge = 30 * time.Second
 	}
-	age := r.now().Sub(updatedAt.UTC())
-	return age >= -maxAge && age <= maxAge
+	return execution.QuoteFresh(r.Exchanges, exchangeName, updatedAt.UTC(), r.now(), maxAge)
 }
 
 type orderedWeight struct {

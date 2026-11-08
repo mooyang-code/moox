@@ -15,6 +15,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	commonsrc "github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn"
+	"github.com/mooyang-code/moox/packages/cnstock"
 )
 
 type Config struct {
@@ -44,7 +45,7 @@ type Provider struct {
 
 func New(cfg Config) *Provider {
 	if cfg.BaseURL == "" {
-		cfg.BaseURL = "https://push2.eastmoney.com"
+		cfg.BaseURL = cnstock.EastMoneyPushBase
 	}
 	if cfg.KlineBaseURL == "" {
 		cfg.KlineBaseURL = eastMoneyKlineBase
@@ -256,7 +257,7 @@ func (p *Provider) FetchIndexConstituents(ctx context.Context, indexCode string)
 	if !ok {
 		return marketdata.InstrumentSnapshot{}, fmt.Errorf("%w: 东方财富没有登记指数 %q 的成分板块", marketdata.ErrInvalidRequest, indexCode)
 	}
-	snapshot, total, err := p.fetchClistSnapshot(ctx, "b:"+board, eastMoneyClistMaxPageSize, p.now().UTC())
+	snapshot, total, err := p.fetchClistSnapshot(ctx, "b:"+board, cnstock.EastMoneyClistMaxPageSize, p.now().UTC())
 	if err != nil {
 		return marketdata.InstrumentSnapshot{}, fmt.Errorf("指数 %s 成分股：%w", indexCode, err)
 	}
@@ -267,226 +268,51 @@ func (p *Provider) FetchIndexConstituents(ctx context.Context, indexCode string)
 }
 
 // fetchClistSnapshot 按筛选条件 fs 翻页取完整的标的列表，返回快照与接口自报的总数（没报时为 0）。
+// 翻页、主备地址切换和完整性校验在 packages/cnstock，这里只把每一条换成采集的标的并映射错误类型。
 func (p *Provider) fetchClistSnapshot(ctx context.Context, fs string, pageSize int, fetchedAt time.Time) (marketdata.InstrumentSnapshot, int, error) {
-	marketID := "stockcn"
-	builder := commonsrc.NewInstrumentSnapshotBuilder(p.Descriptor().ID, marketID, fetchedAt)
-	declaredTotal := 0
-	itemsSeen := 0
-	sawUnverifiedShortPage := false
-	activeBase := ""
-	for page := 1; ; page++ {
-		if page > maxInstrumentPages {
-			return marketdata.InstrumentSnapshot{}, 0, fmt.Errorf("%w: eastmoney instrument pagination exceeded %d pages", marketdata.ErrProtocol, maxInstrumentPages)
+	builder := commonsrc.NewInstrumentSnapshotBuilder(p.Descriptor().ID, "stockcn", fetchedAt)
+	result, err := cnstock.FetchClist(ctx, cnstock.ClistQuery{
+		BaseURL: p.baseURL, Filter: fs, PageSize: pageSize, HTTPClient: p.client, UserAgent: "moox-collector/1.0",
+	}, func(item cnstock.ClistItem) error {
+		instrument, err := commonsrc.InstrumentFromFields(item.Code, item.Symbol, item.Market, item.Name, item.Status)
+		if err != nil {
+			return err
 		}
-		query := url.Values{
-			"pn":     {strconv.Itoa(page)},
-			"pz":     {strconv.Itoa(pageSize)},
-			"fs":     {fs},
-			"fid":    {"f12"},
-			"fields": {"f12,f13,f14,f115,f152,f103,f128,f129"},
-		}
-		bases := []string{activeBase}
-		if activeBase == "" {
-			bases = p.instrumentPageBases()
-		}
-		var body []byte
-		var fetchErr error
-		for i, base := range bases {
-			body, fetchErr = p.fetchInstrumentPage(ctx, base, query)
-			if fetchErr == nil {
-				activeBase = base
-				break
-			}
-			if i == len(bases)-1 || !instrumentHostRetryable(fetchErr) {
-				return marketdata.InstrumentSnapshot{}, 0, fetchErr
-			}
-		}
-		var payload map[string]any
-		if err := json.Unmarshal(body, &payload); err != nil {
-			return marketdata.InstrumentSnapshot{}, 0, fmt.Errorf("%w: %v", marketdata.ErrProtocol, err)
-		}
-		data := commonsrc.ObjectAt(payload, "data")
-		if data == nil {
-			return marketdata.InstrumentSnapshot{}, 0, fmt.Errorf("%w: eastmoney instrument payload missing data", marketdata.ErrProtocol)
-		}
-		if total, ok := commonsrc.IntField(data, "total", "count", "total_count", "totalnum", "total_nums"); ok && total > 0 {
-			if declaredTotal == 0 {
-				declaredTotal = total
-			} else if declaredTotal != total {
-				return marketdata.InstrumentSnapshot{}, 0, fmt.Errorf("%w: eastmoney instrument total changed from %d to %d on page %d", marketdata.ErrProtocol, declaredTotal, total, page)
-			}
-		}
-		items := commonsrc.ItemSlice(data, "diff", "clist", "list")
-		if len(items) == 0 {
-			if diff := commonsrc.ObjectAt(data, "diff"); len(diff) > 0 {
-				keys := make([]string, 0, len(diff))
-				for key := range diff {
-					keys = append(keys, key)
-				}
-				sort.Strings(keys)
-				for _, key := range keys {
-					if item, ok := diff[key].(map[string]any); ok {
-						items = append(items, item)
-					}
-				}
-			}
-		}
-		totalPages := commonsrc.PageLimit(data, pageSize)
-		hasMore, hasMoreKnown := commonsrc.BoolField(data, "hasnext", "has_next", "hasMore", "has_more")
-		if declaredTotal == 0 && len(items) > 0 && len(items) < pageSize {
-			sawUnverifiedShortPage = true
-			if (totalPages > 0 && page < totalPages) || (hasMoreKnown && hasMore) {
-				return marketdata.InstrumentSnapshot{}, 0, fmt.Errorf("%w: eastmoney instrument page %d is short (%d < %d) before a declared terminal page", marketdata.ErrProtocol, page, len(items), pageSize)
-			}
-		}
-		itemsSeen += len(items)
-		if declaredTotal > 0 && itemsSeen > declaredTotal {
-			return marketdata.InstrumentSnapshot{}, 0, fmt.Errorf("%w: eastmoney instrument items %d exceed declared total %d on page %d", marketdata.ErrProtocol, itemsSeen, declaredTotal, page)
-		}
-		if len(items) == 0 {
-			if declaredTotal > 0 && itemsSeen != declaredTotal {
-				return marketdata.InstrumentSnapshot{}, 0, fmt.Errorf("%w: eastmoney instrument total %d does not match %d items on terminal page %d", marketdata.ErrProtocol, declaredTotal, itemsSeen, page)
-			}
-			if declaredTotal == 0 && sawUnverifiedShortPage {
-				return marketdata.InstrumentSnapshot{}, 0, fmt.Errorf("%w: eastmoney instrument ended after an unverified short page", marketdata.ErrProtocol)
-			}
-			if page == 1 || (totalPages > 0 && page < totalPages) || (hasMoreKnown && hasMore) {
-				return marketdata.InstrumentSnapshot{}, 0, fmt.Errorf("%w: eastmoney instrument page %d is empty before terminal evidence", marketdata.ErrProtocol, page)
-			}
-			// Without an explicit total or has-more marker, the extra empty page is
-			// the provider's terminal signal; a short final page is valid. Body
-			// truncation is still rejected by io.ReadAll before this point.
-			builder.NextPage()
-			break
-		}
-		for _, item := range items {
-			instrument, err := commonsrc.InstrumentFromFields(
-				commonsrc.StringField(item, "f12", "code", "symbol"),
-				commonsrc.StringField(item, "symbol", "provider_symbol"),
-				commonsrc.StringField(item, "f13", "market", "exchange"),
-				commonsrc.StringField(item, "f14", "name", "f14_name"),
-				commonsrc.StringField(item, "f107", "status", "state"),
-			)
-			if err != nil {
-				return marketdata.InstrumentSnapshot{}, 0, err
-			}
-			if err := builder.Add(instrument); err != nil {
-				return marketdata.InstrumentSnapshot{}, 0, err
-			}
-		}
+		return builder.Add(instrument)
+	})
+	if err != nil {
+		return marketdata.InstrumentSnapshot{}, 0, collectorError(err)
+	}
+	for range result.Pages {
 		builder.NextPage()
-		if totalPages := commonsrc.PageLimit(data, pageSize); totalPages > 0 {
-			if page >= totalPages {
-				// Without an explicit page count, PageLimit derives the last
-				// page from total/requested page size. Eastmoney caps pz below
-				// that size, so keep reading while a non-empty page is still
-				// short of the declared total. An explicit pagecount stays terminal.
-				_, hasExplicitPageCount := commonsrc.IntField(data, "pagecount", "page_count", "total_pages", "totalpage", "pages")
-				if !hasExplicitPageCount && declaredTotal > 0 && itemsSeen < declaredTotal && len(items) > 0 {
-					continue
-				}
-				if declaredTotal > 0 && itemsSeen != declaredTotal {
-					return marketdata.InstrumentSnapshot{}, 0, fmt.Errorf("%w: eastmoney instrument total %d does not match %d items after page %d", marketdata.ErrProtocol, declaredTotal, itemsSeen, page)
-				}
-				if declaredTotal == 0 && sawUnverifiedShortPage {
-					return marketdata.InstrumentSnapshot{}, 0, fmt.Errorf("%w: eastmoney instrument ended after an unverified short page", marketdata.ErrProtocol)
-				}
-				break
-			}
-			continue
-		}
-		if hasMore, ok := commonsrc.BoolField(data, "hasnext", "has_next", "hasMore", "has_more"); ok {
-			if !hasMore {
-				if declaredTotal > 0 && itemsSeen != declaredTotal {
-					return marketdata.InstrumentSnapshot{}, 0, fmt.Errorf("%w: eastmoney instrument total %d does not match %d items after page %d", marketdata.ErrProtocol, declaredTotal, itemsSeen, page)
-				}
-				if declaredTotal == 0 && sawUnverifiedShortPage {
-					return marketdata.InstrumentSnapshot{}, 0, fmt.Errorf("%w: eastmoney instrument ended after an unverified short page", marketdata.ErrProtocol)
-				}
-				break
-			}
-			continue
-		}
-		// A short page is not terminal evidence unless the response also
-		// carries total/page or has-more metadata. Fetch the next page and
-		// require an empty terminal response instead.
 	}
 	snapshot, err := builder.Snapshot()
-	return snapshot, declaredTotal, err
+	return snapshot, result.Total, err
 }
 
-func (p *Provider) instrumentPageBases() []string {
-	bases := []string{p.baseURL}
-	if instrumentHost(p.baseURL) == eastMoneyPushHost {
-		bases = append(bases, eastMoneyPushFallbackBase)
+// collectorError 把 cnstock 的错误类别映射回采集的错误类型；采集自己产生的错误（标的转换失败等）原样返回。
+func collectorError(err error) error {
+	var statusErr *cnstock.HTTPStatusError
+	switch {
+	case errors.As(err, &statusErr):
+		return fmt.Errorf("%w: status=%d", marketdata.ErrHTTPStatus, statusErr.Status)
+	case errors.Is(err, cnstock.ErrRateLimited):
+		return marketdata.ErrRateLimited
+	case errors.Is(err, cnstock.ErrTimeout):
+		return fmt.Errorf("%w: %v", marketdata.ErrTimeout, err)
+	case errors.Is(err, cnstock.ErrProtocol):
+		return fmt.Errorf("%w: %v", marketdata.ErrProtocol, err)
 	}
-	return bases
-}
-
-func (p *Provider) fetchInstrumentPage(ctx context.Context, base string, query url.Values) ([]byte, error) {
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(base, "/")+"/api/qt/clist/get?"+query.Encode(), nil)
-	if err != nil {
-		return nil, err
-	}
-	httpReq.Header.Set("User-Agent", "moox-collector/1.0")
-	resp, err := p.client.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", marketdata.ErrTimeout, err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusTooManyRequests {
-		return nil, marketdata.ErrRateLimited
-	}
-	if resp.StatusCode >= 400 {
-		return nil, &instrumentHTTPError{status: resp.StatusCode, err: fmt.Errorf("%w: status=%d", marketdata.ErrHTTPStatus, resp.StatusCode)}
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-	if err != nil {
-		return nil, fmt.Errorf("%w: read response body: %v", marketdata.ErrProtocol, err)
-	}
-	return body, nil
-}
-
-func instrumentHost(base string) string {
-	parsed, err := url.Parse(base)
-	if err != nil {
-		return ""
-	}
-	return parsed.Hostname()
-}
-
-func instrumentHostRetryable(err error) bool {
-	if errors.Is(err, marketdata.ErrTimeout) {
-		return true
-	}
-	var httpErr *instrumentHTTPError
-	return errors.As(err, &httpErr) && httpErr.status >= 500
-}
-
-type instrumentHTTPError struct {
-	status int
-	err    error
-}
-
-func (e *instrumentHTTPError) Error() string {
-	return e.err.Error()
-}
-
-func (e *instrumentHTTPError) Unwrap() error {
-	return e.err
+	return err
 }
 
 const (
-	maxInstrumentPages        = 128
-	eastMoneyPushHost         = "push2.eastmoney.com"
-	eastMoneyPushFallbackBase = "https://push2test.eastmoney.com"
+	eastMoneyPushHost = "push2.eastmoney.com"
 	// 5m K 线只在 push2his 有数据（push2 返回空列表），1m 两边一致：K 线统一走 push2his。
 	eastMoneyKlineHost = "push2his.eastmoney.com"
 	eastMoneyKlineBase = "https://" + eastMoneyKlineHost
 	// eastMoneyAShareFilter 是全部 A 股的 clist 筛选条件：深主板、创业板、沪主板。
 	eastMoneyAShareFilter = "m:0 t:6,m:0 t:80,m:1 t:2"
-	// eastMoneyClistMaxPageSize 是 clist 每页的实际上限：请求更大的 pz 也只返回 100 条（2026-11-04 实测）。
-	eastMoneyClistMaxPageSize = 100
 	// 成交量单位是手：同一根 5m 东方财富 6735、通达信 673500 股（2026-11-04 实测 600519），乘 100 换成股。
 	eastMoneyVolumeMultiplier = 100
 )

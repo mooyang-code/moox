@@ -58,7 +58,7 @@ func TestTradeRPCExposesOnlyApprovedServicesAndMethods(t *testing.T) {
 func TestTradeRPCUsesApprovedEnums(t *testing.T) {
 	want := map[protoreflect.Name][]protoreflect.Name{
 		"Exchange": {
-			"EXCHANGE_UNSPECIFIED", "EXCHANGE_BINANCE", "EXCHANGE_OKX",
+			"EXCHANGE_UNSPECIFIED", "EXCHANGE_BINANCE", "EXCHANGE_OKX", "EXCHANGE_ASHARE",
 		},
 		"MarketType": {
 			"MARKET_TYPE_UNSPECIFIED", "MARKET_TYPE_SPOT", "MARKET_TYPE_SWAP", "MARKET_TYPE_STOCK",

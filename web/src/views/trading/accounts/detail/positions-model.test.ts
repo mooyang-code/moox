@@ -164,3 +164,20 @@ describe("持仓与目标按币合并", () => {
     ).toBe(2);
   });
 });
+
+describe("A 股持仓", () => {
+  it("股票一行带可卖数量，T+1 顺延显示原因，行内下单用股票代码", () => {
+    const rows = buildCoinRows({
+      targets: [{ instrument_id: "600519.XSHG", quantity: "0" }],
+      blocked: [{ instrument_id: "600519.XSHG", quantity: "-300", reason: "当日买入，次日可卖", deferred: true }],
+      swapPositions: [],
+      spotHoldings: [{ asset: "600519.XSHG", quantity: "300", sellable: "100", instrument_id: "600519.XSHG" } as Holding],
+      converged: true,
+      hasTarget: true
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ coin: "600519.XSHG", stock: true, actualSpot: 300, sellable: 100, state: "ok" });
+    expect(rows[0].deferredReason).toBe("当日买入，次日可卖");
+    expect(rowOrderHints(rows[0], "CNY")).toEqual([{ market: 3, instrumentId: "600519.XSHG", side: 2, quantity: "300" }]);
+  });
+});

@@ -36,6 +36,7 @@ use (
 	./packages/barclock
 	./packages/cloudprovider
 	./packages/clsreporter
+	./packages/cnstock
 	./packages/commonpb
 	./packages/doctor
 	./packages/events

@@ -26,7 +26,9 @@
         <a-descriptions-item v-if="Number(order.finished_at)" label="结束时间">{{
           fmtClock(order.finished_at, true)
         }}</a-descriptions-item>
-        <a-descriptions-item v-if="order.reject_reason" label="拒绝原因">{{ order.reject_reason }}</a-descriptions-item>
+        <a-descriptions-item v-if="order.reject_reason" label="原因">{{
+          orderReasonText(order.reject_reason)
+        }}</a-descriptions-item>
         <a-descriptions-item label="订单编号"
           ><span class="tx-mono">{{ order.order_id }}</span></a-descriptions-item
         >
@@ -60,7 +62,7 @@
 
 <script setup lang="ts">
 import { ref, watch } from "vue";
-import { listFills, orderOwnerLabels, orderStateLabels } from "@/api/trade";
+import { listFills, orderOwnerLabels, orderReasonText, orderStateLabels } from "@/api/trade";
 import type { Fill, Order } from "@/api/trade";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import { fmtClock, fmtQty } from "../shared/format";

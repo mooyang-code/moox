@@ -119,6 +119,7 @@ func pageResult(page pageSpec, total int64) *tradepb.PageResult {
 var exchangePBNames = map[tradepb.Exchange]exchange.Exchange{
 	tradepb.Exchange_EXCHANGE_BINANCE: exchange.ExchangeBinance,
 	tradepb.Exchange_EXCHANGE_OKX:     exchange.ExchangeOKX,
+	tradepb.Exchange_EXCHANGE_ASHARE:  exchange.ExchangeAShare,
 }
 
 func exchangeFromPB(value tradepb.Exchange) exchange.Exchange {

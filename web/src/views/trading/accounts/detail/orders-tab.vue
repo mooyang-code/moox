@@ -81,6 +81,7 @@
         <a-table-column title="状态" :width="120">
           <template #cell="{ record }">
             <StatusMark :tone="stateTone(record.state)">{{ orderStateLabels[record.state] || record.state }}</StatusMark>
+            <div v-if="record.reject_reason" class="reason">{{ orderReasonText(record.reject_reason) }}</div>
           </template>
         </a-table-column>
         <a-table-column title="来源" :width="80">
@@ -108,7 +109,7 @@
 <script setup lang="ts">
 import { useWindowSize } from "@vueuse/core";
 import { computed, inject, ref, watch } from "vue";
-import { canCancelOrderState, listOrders, orderOwnerLabels, orderStateLabels } from "@/api/trade";
+import { canCancelOrderState, listOrders, orderOwnerLabels, orderReasonText, orderStateLabels } from "@/api/trade";
 import type { MarketType, Order } from "@/api/trade";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import { fmtClock, fmtQty } from "../shared/format";
@@ -225,6 +226,12 @@ watch(dataVersion, () => void load());
 
 <style src="../shared/accounts.css"></style>
 <style scoped>
+.reason {
+  margin-top: 2px;
+  color: var(--color-text-3);
+  font-size: 12px;
+}
+
 .toolbar {
   display: flex;
   flex-wrap: wrap;

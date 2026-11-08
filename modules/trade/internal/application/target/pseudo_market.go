@@ -2,12 +2,14 @@ package target
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/ordersettings"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution/paper"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/rs/xid"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -35,6 +37,10 @@ func pseudoMarketAttempts(children []store.TargetChildOrder) int {
 			break
 		}
 		if child.State == string(orderdomain.Canceled) && child.ExchangeOrderID == "" && filledErr == nil && filled.IsZero() {
+			continue
+		}
+		// 休市前一刻发出、到休市时还没撮合就被模拟撮合撤掉的单，不是一次真正的尝试。
+		if child.RejectReason == paper.OutOfSessionReason && filledErr == nil && filled.IsZero() {
 			continue
 		}
 		attempts++
@@ -66,21 +72,35 @@ func pseudoMarketPrice(reference shared.Decimal, side exchange.Side, settings or
 // 和这里用的最新成交价有差距，只用允许偏离的 90%，避免贴着边界被拒单。
 var priceBandHeadroom = shared.MustDecimal("0.9")
 
-// ClampToPriceBand 把伪市价单的限价夹在交易所的价格偏离限制里（币安 PERCENT_PRICE / PERCENT_PRICE_BY_SIDE）：
+// ClampToPriceBand 把伪市价单的限价夹在交易所的价格偏离限制里（币安 PERCENT_PRICE / PERCENT_PRICE_BY_SIDE，A 股价格笼子）：
 // 买单不高于 参考价 ×（1 + (上限倍数 − 1) × 90%），卖单不低于 参考价 ×（1 − (1 − 下限倍数) × 90%），向内取整到价格精度。
-// 标的没有给出限制（倍数为 0 或读不出来）时原样返回。
+// 市场规则给了价格笼子的价位数（A 股 10 个最小价位）时，基准价是卖一（买单）或买一（卖单），比例带和价位数都按精确值、
+// 取更宽的那个：低价股 2% 不到 10 个价位，按价位数放宽。标的没有给出限制（倍数为 0 或读不出来）时原样返回。
 func ClampToPriceBand(price, reference shared.Decimal, side exchange.Side, instrument store.InstrumentRecord) shared.Decimal {
 	one := shared.MustDecimal("1")
 	tick, tickErr := shared.ParseDecimal(instrument.PriceTick)
 	validTick := tickErr == nil && tick.Cmp(shared.Zero()) > 0
+	// 有价格笼子价位数的市场（A 股）：交易所按同一份盘口（买一卖一）判断，基准价已经是卖一、买一，不再留余量；
+	// 比例带和价位数都按精确值。其余市场照旧只用允许偏离的 90%。
+	headroom := priceBandHeadroom
+	tickBand := shared.Zero()
+	if ticks := exchange.RuleFor(instrument.MarketType).PriceCageTicks; ticks > 0 {
+		headroom = shared.MustDecimal("1")
+		if validTick {
+			tickBand = tick.Mul(shared.MustDecimal(strconv.Itoa(ticks)))
+		}
+	}
 	if side == exchange.SideBuy {
 		ratio, err := shared.ParseDecimal(instrument.MaxBuyPriceRatio)
 		if err != nil || ratio.Cmp(one) <= 0 {
 			return price
 		}
-		ceiling := reference.Mul(one.Add(ratio.Sub(one).Mul(priceBandHeadroom)))
+		ceiling := reference.Mul(one.Add(ratio.Sub(one).Mul(headroom)))
 		if validTick {
 			ceiling = floorToStep(ceiling, tick)
+		}
+		if byTicks := reference.Add(tickBand); byTicks.Cmp(ceiling) > 0 {
+			ceiling = byTicks
 		}
 		if price.Cmp(ceiling) > 0 {
 			return ceiling
@@ -91,9 +111,12 @@ func ClampToPriceBand(price, reference shared.Decimal, side exchange.Side, instr
 	if err != nil || ratio.Cmp(shared.Zero()) <= 0 || ratio.Cmp(one) >= 0 {
 		return price
 	}
-	floor := reference.Mul(one.Sub(one.Sub(ratio).Mul(priceBandHeadroom)))
+	floor := reference.Mul(one.Sub(one.Sub(ratio).Mul(headroom)))
 	if validTick {
 		floor = ceilToStep(floor, tick)
+	}
+	if byTicks := reference.Sub(tickBand); byTicks.Cmp(floor) < 0 {
+		floor = byTicks
 	}
 	if price.Cmp(floor) < 0 {
 		return floor

@@ -1167,7 +1167,7 @@ func (s *Service) prepareSubmit(
 				validation.ReservedQuantity = validation.ReservedQuantity.Add(notional.Div(validation.Leverage))
 			}
 		} else if aggregate.Spec.Side == exchange.SideBuy {
-			validation.ReservedQuantity = withFeeBuffer(notional, feeRate)
+			validation.ReservedQuantity = buyReservation(validation.Account, validation.Instrument.MarketType, notional, feeRate)
 		}
 	}
 	if releaseReservationForReduction || refreshedReference || retryRepriced {
@@ -1447,6 +1447,7 @@ func permanentValidationError(err error) bool {
 		ErrLeverageLimit,
 		ErrReduceOnly,
 		ErrCrossZero,
+		ErrPriceLimit,
 	} {
 		if errors.Is(err, target) {
 			return true
