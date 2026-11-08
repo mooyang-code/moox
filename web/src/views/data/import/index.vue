@@ -64,7 +64,7 @@
               </a-col>
               <a-col :xs="24" :md="12" :lg="8">
                 <a-form-item label="序列标签">
-                  <a-input v-model="form.series_tag" placeholder="venue:binance" />
+                  <a-input v-model="form.series_tag" placeholder="venue:binance|market:spot|source:spot_http" />
                 </a-form-item>
               </a-col>
             </a-row>

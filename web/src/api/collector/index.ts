@@ -162,6 +162,8 @@ export interface ResampleSourcePreview {
   source_dataset_id: string;
   source_frequency: string;
   source_series_tag: string;
+  // 源是统一数据集（market_type 为 multi）时各条源序列的 series_tag，此时 source_series_tag 为空。
+  source_series_tags?: string[];
   subject_count: number;
   market_id: string;
   provider: string;

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -12,6 +13,8 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
 	"github.com/mooyang-code/moox/modules/factor/internal/recalcexec"
+	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
+	"github.com/mooyang-code/moox/packages/seriesset"
 	"github.com/stretchr/testify/require"
 )
 
@@ -63,6 +66,8 @@ type fakeChunks struct {
 	// statusFor 按标的给出逐项结果，优先于 status。
 	statusFor func(subject string) pipeline.ItemStatus
 	err       error
+	// derivedSkipped 让每次运行的结果带上“推测期望缺数被跳过”标记（失效重算据此保留待办）。
+	derivedSkipped bool
 }
 
 func (f *fakeChunks) RunChunkWith(ctx context.Context, source recalcexec.SelectionSource, start, end time.Time, after func(recalcexec.Selection, pipeline.Outcome, error)) (pipeline.Outcome, error) {
@@ -74,7 +79,7 @@ func (f *fakeChunks) RunChunkWith(ctx context.Context, source recalcexec.Selecti
 		return pipeline.Outcome{}, err
 	}
 	f.calls = append(f.calls, runCall{selection: selection, start: start, end: end})
-	outcome := pipeline.Outcome{Items: map[pipeline.ItemKey]pipeline.ItemStatus{}}
+	outcome := pipeline.Outcome{Items: map[pipeline.ItemKey]pipeline.ItemStatus{}, DerivedSkipped: f.derivedSkipped}
 	for _, member := range selection.Members {
 		for _, subject := range selection.Subjects {
 			for at := start; at.Before(end); at = at.Add(time.Minute) {
@@ -97,12 +102,13 @@ func (f *fakeChunks) RunChunkWith(ctx context.Context, source recalcexec.Selecti
 
 type fakeUniverse struct {
 	subjects []string
+	series   []seriesset.Series
 	found    bool
 	err      error
 }
 
-func (f fakeUniverse) ComputedUniverse(context.Context, string, string, string, int64) ([]string, bool, error) {
-	return f.subjects, f.found, f.err
+func (f fakeUniverse) ComputedUniverse(context.Context, string, string, string, int64) (storageio.Universe, bool, error) {
+	return storageio.Universe{Subjects: f.subjects, Series: f.series}, f.found, f.err
 }
 
 type gapFixture struct {
@@ -409,4 +415,22 @@ func TestWarmingKickSinkKicksOnWarmingEntries(t *testing.T) {
 	require.NoError(t, sink.RecordGaps(context.Background(), []pipeline.GapEntry{entry, entry}))
 	require.Equal(t, 1, kicks)
 	require.Equal(t, 2, ledger.PendingCount())
+}
+
+// 记账时的唤醒必然早于这一期的 marker：marker 写完后（PeriodReported）要再唤醒一次；没有预热中跳过项时不唤醒，唤醒只补一次。
+func TestWarmingKickSinkKicksAgainAfterMarker(t *testing.T) {
+	ledger, _, err := gapledger.Open(t.TempDir(), time.Now, 0)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ledger.Close() })
+	kicks := 0
+	sink := warmingKickSink{GapSink: ledger, kick: func() { kicks++ }, pending: new(atomic.Bool)}
+	sink.PeriodReported()
+	require.Zero(t, kicks, "没有预热中跳过项时 marker 写完不唤醒")
+	entry := pipeline.GapEntry{TaskID: "fset", Subject: "ETH", Period: gapT0, Member: "ma", DefinitionHash: "h", Reason: pipeline.SkipReasonWarming}
+	require.NoError(t, sink.RecordGaps(context.Background(), []pipeline.GapEntry{entry}))
+	require.Equal(t, 1, kicks, "记账时先唤醒一次")
+	sink.PeriodReported()
+	require.Equal(t, 2, kicks, "marker 写完后再唤醒一次")
+	sink.PeriodReported()
+	require.Equal(t, 2, kicks, "只补一次")
 }

@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"math/rand/v2"
 	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"github.com/mooyang-code/moox/packages/marketcalendar"
+	"github.com/mooyang-code/moox/packages/seriesset"
 )
 
 // DefaultReplayMaxBars 是一次回放允许的最多 bar 数。
@@ -198,14 +200,14 @@ func ReplayWindow(resolved Resolved, program *dsl.Program, view ViewInfo, start,
 	// 自身所需的根数 need 不小于 SeriesBars 时没有任何一根可以回放。最新一根已经写完时它本身可以回放，交给下面按覆盖
 	// 判断。
 	if view.SeriesBars > 0 && need > 1 && need >= view.SeriesBars && (boundsErr != nil || !bounds.ToClosed) {
-		return time.Time{}, fmt.Errorf("回放的每一根连同自身需要 %d 根数据（%s），但 View %s 每个序列只保留最近 %d 根、回放又只到最新一根之前，永远无法满足", need, source, resolved.ViewID, view.SeriesBars)
+		return time.Time{}, fmt.Errorf("回放的每一根连同自身需要 %d 根数据（%s），但 View %s 每个序列只保留最近 %d 根、回放又只到最新一根之前，永远无法满足", need, source, view.ViewID, view.SeriesBars)
 	}
 	if boundsErr != nil {
-		return time.Time{}, coverageUnusable(resolved.ViewID, boundsErr, "暂不能回放")
+		return time.Time{}, coverageUnusable(view.ViewID, boundsErr, "暂不能回放")
 	}
 	coverage := coverageStart(bounds, view, resolved, time.Time{})
 	if coverage.After(bounds.To) {
-		return time.Time{}, fmt.Errorf("View %s 的数据已超出 A 股内嵌交易日历（最晚一行比日历末日 %s 晚 %d 天），每个序列只保留最近 %d 根，日历之内已不能确定还保留着哪些 bar，暂不能回放；请更新日历数据", resolved.ViewID, label(bounds.To), bounds.Beyond, view.SeriesBars)
+		return time.Time{}, fmt.Errorf("View %s 的数据已超出 A 股内嵌交易日历（最晚一行比日历末日 %s 晚 %d 天），每个序列只保留最近 %d 根，日历之内已不能确定还保留着哪些 bar，暂不能回放；请更新日历数据", view.ViewID, label(bounds.To), bounds.Beyond, view.SeriesBars)
 	}
 	latest, err := FromStorageStart(resolved.Calendar, resolved.Bar, bounds.To)
 	if err != nil {
@@ -219,13 +221,13 @@ func ReplayWindow(resolved Resolved, program *dsl.Program, view ViewInfo, start,
 		limit, last = latest.StorageStart.Add(24*time.Hour), latest.StorageStart
 	}
 	if last.IsZero() {
-		return time.Time{}, fmt.Errorf("View %s 还没有完整的 bar（最新一根 %s 可能还没写完），暂不能回放", resolved.ViewID, label(latest.StorageStart))
+		return time.Time{}, fmt.Errorf("View %s 还没有完整的 bar（最新一根 %s 可能还没写完），暂不能回放", view.ViewID, label(latest.StorageStart))
 	}
 	if end.After(limit) {
 		end = limit
 	}
 	if !end.After(start) {
-		return time.Time{}, fmt.Errorf("回放区间内没有完整的数据：View %s 最后一根完整的 bar 是 %s", resolved.ViewID, label(last))
+		return time.Time{}, fmt.Errorf("回放区间内没有完整的数据：View %s 最后一根完整的 bar 是 %s", view.ViewID, label(last))
 	}
 	// 先反向判断历史够不够：从覆盖起点往后推 need−1 根可能越过 A 股内嵌日历的末尾，会被误报成日历需要更新。
 	bound := last
@@ -240,9 +242,9 @@ func ReplayWindow(resolved Resolved, program *dsl.Program, view ViewInfo, start,
 	}
 	if bound.IsZero() || coverage.After(bound) {
 		if need > 1 {
-			return time.Time{}, fmt.Errorf("View %s 的活跃序列当前只覆盖 %s 至 %s，回放的每一根连同自身需要 %d 根数据（%s），暂不能回放", resolved.ViewID, label(coverage), label(latest.StorageStart), need, source)
+			return time.Time{}, fmt.Errorf("View %s 的活跃序列当前只覆盖 %s 至 %s，回放的每一根连同自身需要 %d 根数据（%s），暂不能回放", view.ViewID, label(coverage), label(latest.StorageStart), need, source)
 		}
-		return time.Time{}, fmt.Errorf("View %s 的活跃序列当前只覆盖 %s 至 %s，还没有可以回放的完整 bar", resolved.ViewID, label(coverage), label(latest.StorageStart))
+		return time.Time{}, fmt.Errorf("View %s 的活跃序列当前只覆盖 %s 至 %s，还没有可以回放的完整 bar", view.ViewID, label(coverage), label(latest.StorageStart))
 	}
 	earliest := coverage
 	if need > 1 {
@@ -288,11 +290,34 @@ type RangeLoader struct {
 	View     ViewInfo
 	Subjects []Subject
 	Columns  []string
+	// Memo 非空时，共用同一个 View 的几个读取器（统一数据集里每个市场一个）对同一段、同样的列与标的只读一次 Storage。
+	Memo *RowsMemo
+	// Market 非空表示读的是统一数据集（一个 View 里现货、永续用 series_tag 区分）里这个市场的行：Subjects 不带 series_tag
+	// （读全部序列），读回的行按 series_tag 对应的市场过滤，只保留这个市场的；歧义也只在这个市场内判断。为空时按 View 读全部行。
+	Market string
 	// ExpectedRevision 非零时固定读取的索引修订号（取自同一段主数据读取返回的修订号）：修订号变化时不退避重读，
 	// 直接返回 *RevisionChangedError，由调用方连同主数据一起重读，保证同一段的两次读取来自同一修订号。
 	ExpectedRevision uint64
 	// Abort 在每次退避重读之前调用，返回非空错误时放弃读取并原样返回它（例如回放已被取消）；可以为空。
 	Abort func(context.Context) error
+}
+
+// RowsMemo 暂存一段读取的原始行：统一数据集里现货、永续各有一个读取器，它们读的是同一个 View 的同一段，共用一次读取，
+// 之后各自按市场过滤。回放读完一段就 Reset，不跨段保留（行占内存）。
+type RowsMemo struct {
+	entries map[string]rowsMemoEntry
+}
+
+type rowsMemoEntry struct {
+	rows     []Row
+	revision uint64
+}
+
+// Reset 丢弃暂存的行。
+func (m *RowsMemo) Reset() {
+	if m != nil {
+		m.entries = nil
+	}
 }
 
 // RangeRows 是一段读取的结果：bar_start（Unix 秒）→ subject_id → 行；Ambiguous 记录同一标的同一周期出现多个序列的
@@ -318,14 +343,14 @@ func (l *RangeLoader) Load(ctx context.Context, start, end time.Time) (RangeRows
 	transportRetries, staleRetries := 0, 0
 	deadline := time.Now().Add(rangeStaleBudget)
 	for {
-		rows, revision, err := l.Client.QueryRows(ctx, l.SpaceID, Query{ViewID: l.View.ViewID, DatasetID: l.View.DatasetID, Frequency: l.View.Frequency, Subjects: l.Subjects, Start: start, End: end, Columns: l.Columns, ExpectedIndexID: l.View.ActiveIndexID, ExpectedRevision: l.ExpectedRevision})
+		rows, revision, err := l.queryRows(ctx, start, end)
 		if err == nil {
 			// A/B 槽位名在重建时复用，按槽位名固定的读取在两段之间重建两次（A→B→A）后会直接成功：读完还要确认代次没变。
 			// 代次不会重复，读完仍是同一代，说明这段读取期间一直是它。
 			if err := l.checkGeneration(ctx); err != nil {
 				return RangeRows{}, err
 			}
-			grouped := groupRange(rows)
+			grouped := groupRange(rows, l.Market)
 			grouped.Revision = revision
 			return grouped, nil
 		}
@@ -357,6 +382,36 @@ func (l *RangeLoader) Load(ctx context.Context, start, end time.Time) (RangeRows
 			return RangeRows{}, err
 		}
 	}
+}
+
+// subjectsKey 是标的（含 series_tag，顺序有关）内容的摘要，作暂存的键：只比个数会把标的不同的两次读取当成同一次。
+func subjectsKey(subjects []Subject) string {
+	hash := fnv.New64a()
+	for _, subject := range subjects {
+		_, _ = hash.Write([]byte(subject.SubjectID))
+		_, _ = hash.Write([]byte{0})
+		_, _ = hash.Write([]byte(subject.SeriesTag))
+		_, _ = hash.Write([]byte{1})
+	}
+	return fmt.Sprintf("%d:%x", len(subjects), hash.Sum64())
+}
+
+// queryRows 读一段原始行；有 Memo 时同样的读取只发一次。
+func (l *RangeLoader) queryRows(ctx context.Context, start, end time.Time) ([]Row, uint64, error) {
+	key := fmt.Sprintf("%s|%s|%d|%d|%d|%s|%s", l.View.ViewID, l.View.ActiveIndexID, start.UnixNano(), end.UnixNano(), l.ExpectedRevision, subjectsKey(l.Subjects), strings.Join(l.Columns, ","))
+	if l.Memo != nil {
+		if entry, ok := l.Memo.entries[key]; ok {
+			return entry.rows, entry.revision, nil
+		}
+	}
+	rows, revision, err := l.Client.QueryRows(ctx, l.SpaceID, Query{ViewID: l.View.ViewID, DatasetID: l.View.DatasetID, Frequency: l.View.Frequency, Subjects: l.Subjects, Start: start, End: end, Columns: l.Columns, ExpectedIndexID: l.View.ActiveIndexID, ExpectedRevision: l.ExpectedRevision})
+	if err == nil && l.Memo != nil {
+		if l.Memo.entries == nil {
+			l.Memo.entries = make(map[string]rowsMemoEntry)
+		}
+		l.Memo.entries[key] = rowsMemoEntry{rows: rows, revision: revision}
+	}
+	return rows, revision, err
 }
 
 // wait 等待 d，等待前后都确认是否要放弃（Abort）：取消可能就落在等待期间；ctx 结束时返回 ctx 的错误。
@@ -461,23 +516,41 @@ func sleepContext(ctx context.Context, d time.Duration) error {
 	}
 }
 
-func groupRange(rows []Row) RangeRows {
+func groupRange(rows []Row, market string) RangeRows {
 	result := RangeRows{Bars: make(map[int64]map[string]Row), Ambiguous: make(map[int64]map[string]string)}
 	tags := make(map[int64]map[string]string)
+	markAmbiguous := func(key int64, subjectID, detail string) {
+		if result.Ambiguous[key] == nil {
+			result.Ambiguous[key] = make(map[string]string)
+		}
+		result.Ambiguous[key][subjectID] = detail
+	}
 	for _, row := range rows {
 		if row.SubjectID == "" {
 			continue
 		}
 		key := row.DataTime.Unix()
+		if market != "" {
+			// 统一数据集：现货、永续两条序列并存是正常的；换不出市场的序列才有歧义，两个市场都不能用这个标的的这一根。
+			rowMarket := seriesset.SeriesTagMarket(row.SeriesTag)
+			if rowMarket != dsl.MarketSpot && rowMarket != dsl.MarketSwap {
+				markAmbiguous(key, row.SubjectID, fmt.Sprintf("标的 %s 的序列 %q 无法判断所属市场", row.SubjectID, row.SeriesTag))
+				continue
+			}
+			if rowMarket != market {
+				continue
+			}
+		}
 		if result.Bars[key] == nil {
 			result.Bars[key] = make(map[string]Row)
 			tags[key] = make(map[string]string)
 		}
 		if tag, seen := tags[key][row.SubjectID]; seen && tag != row.SeriesTag {
-			if result.Ambiguous[key] == nil {
-				result.Ambiguous[key] = make(map[string]string)
+			detail := fmt.Sprintf("标的 %s 在同一周期有多个序列（%s、%s）", row.SubjectID, tag, row.SeriesTag)
+			if market != "" {
+				detail = fmt.Sprintf("标的 %s 在同一周期的%s市场有多个序列（%s、%s）", row.SubjectID, market, tag, row.SeriesTag)
 			}
-			result.Ambiguous[key][row.SubjectID] = fmt.Sprintf("标的 %s 在同一周期有多个序列（%s、%s）", row.SubjectID, tag, row.SeriesTag)
+			markAmbiguous(key, row.SubjectID, detail)
 			continue
 		}
 		tags[key][row.SubjectID] = row.SeriesTag

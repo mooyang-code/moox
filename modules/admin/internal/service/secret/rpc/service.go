@@ -114,6 +114,34 @@ func (s *Service) GetSecretValue(ctx context.Context, req *pb.GetSecretValueReq)
 	return &pb.GetSecretValueRsp{RetInfo: retOK(), Secret: secretModelToPlainPB(secretRecord)}, nil
 }
 
+// ReadonlyExchangeKeyID 返回只读交易所 Key 的固定秘钥 ID：exchange-<交易所>-production-readonly（setup apply 按 moox.toml 的
+// [[exchange_keys]] readonly = true 写入）。
+func ReadonlyExchangeKeyID(exchange string) string {
+	return model.ExchangeSecretID(exchange, "production", "readonly")
+}
+
+// GetReadonlyExchangeKey 只返回只读交易所 Key 的公开标识 key_id，不返回秘钥值与额外配置。
+// 它是给 Collector 的专用方法：网关转发会丢掉调用方元数据，不能在 GetSecretValue 里按调用方限定，
+// 所以靠服务目录“按方法授权”，Collector 只被放行这一个方法，拿不到 Trade 的交易密钥。
+func (s *Service) GetReadonlyExchangeKey(ctx context.Context, req *pb.GetReadonlyExchangeKeyReq) (*pb.GetReadonlyExchangeKeyRsp, error) {
+	exchange := req.GetExchange()
+	if exchange != "binance" && exchange != "okx" {
+		return &pb.GetReadonlyExchangeKeyRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "exchange 只能是 binance 或 okx")}, nil
+	}
+	record, err := s.svc.GetSecret(ctx, ReadonlyExchangeKeyID(exchange))
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return &pb.GetReadonlyExchangeKeyRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "没有配置只读 Key")}, nil
+		}
+		log.ErrorContextf(ctx, "[Secret] GetReadonlyExchangeKey failed: %v", err)
+		return &pb.GetReadonlyExchangeKeyRsp{RetInfo: retErr(pb.ErrorCode_INNER_ERR, "查询只读 Key 失败")}, nil
+	}
+	if (record.Status != "" && record.Status != "active") || record.KeyID == "" {
+		return &pb.GetReadonlyExchangeKeyRsp{RetInfo: retErr(pb.ErrorCode_NOT_FOUND, "没有配置只读 Key")}, nil
+	}
+	return &pb.GetReadonlyExchangeKeyRsp{RetInfo: retOK(), KeyId: record.KeyID}, nil
+}
+
 // CreateSecret 创建秘钥。
 func (s *Service) CreateSecret(ctx context.Context, req *pb.CreateSecretReq) (*pb.CreateSecretRsp, error) {
 	secretRecord := secretPBToModel(req.GetSecret())

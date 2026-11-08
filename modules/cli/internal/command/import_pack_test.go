@@ -196,3 +196,29 @@ func TestApplyImportPackRequiresMinRows(t *testing.T) {
 		t.Fatalf("没给 --min-rows 应拒绝：%v", err)
 	}
 }
+
+// 统一数据集：同一个标的的现货、永续文件可以在同一个清单里，各自的 series_tag 覆盖清单默认值；同标的同 tag 仍算重复。
+func TestImportPackFileSeriesTagOverridesManifest(t *testing.T) {
+	const spot = "venue:binance|market:spot|source:spot_http"
+	dir := writePack(t, map[string]int{"BTC-USDT": 60}, 3*24*time.Hour)
+	pack, err := loadImportPack(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spotEntry := pack.Files[0]
+	spotEntry.SeriesTag = spot
+	pack.Files = append(pack.Files, spotEntry)
+	// 清单默认是永续；第二条覆盖成现货：同一个标的、两个 tag，不算重复。
+	pack.Files[0].SeriesTag = ""
+	if problems := checkImportPackFiles(pack); len(problems) != 0 {
+		t.Fatalf("不同 tag 的同标的文件不应报问题：%v", problems)
+	}
+	tags := pack.fileSeriesTags()
+	if len(tags) != 1 || tags[filepath.Join(dir, "5m/BTC-USDT.csv")] != spot {
+		t.Fatalf("文件级 tag 映射不对：%v", tags)
+	}
+	pack.Files[0].SeriesTag = spot
+	if problems := checkImportPackFiles(pack); len(problems) != 1 || !strings.Contains(problems[0], "重复") {
+		t.Fatalf("同标的同 tag 应报重复：%v", problems)
+	}
+}

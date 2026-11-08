@@ -14,6 +14,8 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/trigger"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
+	"github.com/mooyang-code/moox/packages/seriesset"
+	"github.com/mooyang-code/moox/packages/storagepb"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
@@ -162,6 +164,7 @@ func (h *Handler) Handle(ctx context.Context, delivery *jetstream.Delivery) jets
 	event := periodEvent{
 		periodTime: time.Unix(payload.GetPeriodTime(), 0).UTC(), eventID: message.GetEventId(),
 		universe: payload.GetUniverseSubjectIds(), failed: payload.GetFailedSubjects(),
+		universeSeries: eventSeries(payload.GetUniverseSeries()), failedSeries: eventSeries(payload.GetFailedSeries()),
 	}
 	// 同一个源数据集可以有多个任务：事件同时分给每个启用的任务，各自在自己的串行通道里计算（同一任务内部的期次仍按顺序），
 	// 全部返回后再汇总错误。任一任务遇到基础设施错误时整条事件重投；已经算完的任务靠“同一触发事件的 marker 已存在”跳过。
@@ -219,7 +222,7 @@ func (h *Handler) Handle(ctx context.Context, delivery *jetstream.Delivery) jets
 				if h.continuity != nil {
 					return pipeline.Outcome{}, h.continuity.onEvent(runnerCtx, h, current, currentMembers, event)
 				}
-				return h.computePeriod(runnerCtx, current, currentMembers, event.periodTime, event.universe, event.failed, event.eventID)
+				return h.computePeriod(runnerCtx, current, currentMembers, event.periodTime, event.scope(), event.eventID)
 			})
 			if setErr != nil {
 				taskErrs[index] = fmt.Errorf("factor task %s: %w", set.TaskID, setErr)
@@ -246,11 +249,36 @@ type periodEvent struct {
 	eventID    string
 	universe   []string
 	failed     []string
+	// universeSeries、failedSeries 是统一数据集（多个 series_tag）事件里按序列的全集与失败名单；单序列数据集为空。
+	universeSeries []seriesset.Series
+	failedSeries   []seriesset.Series
+}
+
+// periodScope 是一期要算的范围：期望全集与上游失败名单，按标的；统一数据集还带按序列的全集与失败名单（非空时按序列判断）。
+type periodScope struct {
+	universe, failed             []string
+	universeSeries, failedSeries []seriesset.Series
+}
+
+func (e periodEvent) scope() periodScope {
+	return periodScope{universe: e.universe, failed: e.failed, universeSeries: e.universeSeries, failedSeries: e.failedSeries}
+}
+
+// eventSeries 把事件里的序列名单转成引擎内部的形式。
+func eventSeries(values []*storagepb.SeriesRef) []seriesset.Series {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]seriesset.Series, len(values))
+	for i, value := range values {
+		out[i] = seriesset.Series{SubjectID: value.GetSubjectId(), SeriesTag: value.GetSeriesTag()}
+	}
+	return out
 }
 
 // computePeriod 计算一期：已经算过（同一触发事件的 marker 已存在）就跳过；开算之前先取得这一期的参数
 // （取参是幂等的：重投、重启后重算拿到同一份，直到这一期的完成标记写出）。
-func (h *Handler) computePeriod(ctx context.Context, set domain.FactorTask, members []domain.MemberDef, period time.Time, universe, failed []string, triggerEventID string) (pipeline.Outcome, error) {
+func (h *Handler) computePeriod(ctx context.Context, set domain.FactorTask, members []domain.MemberDef, period time.Time, scope periodScope, triggerEventID string) (pipeline.Outcome, error) {
 	exists, existsErr := h.store.ComputedExists(ctx, set.SpaceID, set.ResultDatasetID, triggerEventID, period.Unix())
 	if existsErr != nil {
 		return pipeline.Outcome{}, fmt.Errorf("%w: check computed factor period: %v", storageio.ErrInfra, existsErr)
@@ -273,7 +301,7 @@ func (h *Handler) computePeriod(ctx context.Context, set domain.FactorTask, memb
 		}
 		params = selected
 	}
-	plan, err := h.livePlan(ctx, set, members, params, period, universe, failed, triggerEventID)
+	plan, err := h.livePlan(ctx, set, members, params, period, scope, triggerEventID)
 	if err != nil {
 		return pipeline.Outcome{}, err
 	}
@@ -309,7 +337,7 @@ func realPeriod(set domain.FactorTask, period time.Time) (time.Time, error) {
 	return axis.FromAxis(period)
 }
 
-func (h *Handler) livePlan(ctx context.Context, set domain.FactorTask, members []domain.MemberDef, params map[string]domain.ParamSnapshot, period time.Time, universe, failed []string, triggerEventID string) (pipeline.Plan, error) {
+func (h *Handler) livePlan(ctx context.Context, set domain.FactorTask, members []domain.MemberDef, params map[string]domain.ParamSnapshot, period time.Time, scope periodScope, triggerEventID string) (pipeline.Plan, error) {
 	// 计划在轴上建立：轴是连续的，周期数学用 Continuous。
 	clock := periodclock.Continuous{}
 	columnsCtx, cancel := context.WithTimeout(ctx, h.cfg.ReadColumnTimeout)
@@ -323,7 +351,8 @@ func (h *Handler) livePlan(ctx context.Context, set domain.FactorTask, members [
 		return pipeline.Plan{}, budgetErr
 	}
 	return pipeline.BuildLivePlan(clock, pipeline.LiveInput{
-		Set: set, Members: members, Params: params, PeriodTime: period, Universe: universe, UpstreamFailed: failed,
+		Set: set, Members: members, Params: params, PeriodTime: period, Universe: scope.universe, UpstreamFailed: scope.failed,
+		UniverseSeries: scope.universeSeries, UpstreamFailedSeries: scope.failedSeries,
 		CarryColumns: carryColumns, TriggerEventID: triggerEventID, Budget: budget,
 	})
 }

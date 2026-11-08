@@ -152,13 +152,13 @@ rules:
     select: {top: 1}
     weight: {total: 1}
 `, "m")
-	previous := State{Rules: map[string]RuleState{"r": {Held: []string{"A"}}}, Targets: map[string]string{"A": "1"}}
+	previous := State{Rules: map[string]RuleState{"r": {Held: []string{"A"}}}, Targets: map[string]string{"A|swap": "1"}}
 
 	emptyPool := frameOf(program, map[string]Row{"A": values("m", 1)})
 	emptyPool.Expected["r"] = nil
 	decision := evaluate(t, program, emptyPool, previous)
 	assertSkipped(t, decision, SkipUniverseTooSmall)
-	if decision.State.Targets["A"] != "1" {
+	if decision.State.Targets["A|swap"] != "1" {
 		t.Fatalf("跳过时状态应沿用前序：%+v", decision.State)
 	}
 
@@ -207,7 +207,7 @@ rules:
     weight: {total: 0.5}
 `, "m")
 	frame := frameOf(signal, map[string]Row{"ETH-USDT": values("m", 1)})
-	previous := State{Rules: map[string]RuleState{"s": {Held: []string{"BTC-USDT"}}}, Targets: map[string]string{"BTC-USDT": "0.5"}}
+	previous := State{Rules: map[string]RuleState{"s": {Held: []string{"BTC-USDT"}}}, Targets: map[string]string{"BTC-USDT|swap": "0.5"}}
 	decision := evaluate(t, signal, frame, previous)
 	assertOK(t, decision)
 	assertWeights(t, decision, map[string]string{"ETH-USDT": "0.5"})

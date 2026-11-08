@@ -120,6 +120,7 @@ func PlanSteps(manifest setupconfig.Manifest, route string, local LocalState, sp
 	group++
 	unit("collector-stream", "collector-stream")
 	unit("trade", "trade")
+	unit("callback-dispatcher", "callback-dispatcher")
 	unit("factor-engine", "factor-engine")
 	unit("archive-worker", "archive-worker")
 	group++

@@ -3,6 +3,7 @@ package input
 import (
 	"context"
 	"errors"
+	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"strings"
 	"testing"
 	"time"
@@ -23,7 +24,7 @@ rules:
     select: {top: 1}
     weight: {total: 1}
 `)
-	resolved, _, err := Resolve(context.Background(), client, "space", "ftask_stock_1d", strategy)
+	resolved, _, err := Resolve(context.Background(), client, "space", []string{"ftask_stock_1d"}, strategy)
 	if err != nil {
 		t.Fatalf("A 股日线 View 应能解析：%v", err)
 	}
@@ -56,7 +57,7 @@ rules:
 // 覆盖起点以本期 T 与索引最新一根中较早者为基准：处理第 T 根时索引已经写入更新的 bar，
 // 不影响对第 T 根能否追溯 N 根的判断；N 恰好等于每个序列保留的根数时也能满足。
 func TestCoverageStartAnchorsAtProcessedBar(t *testing.T) {
-	resolved := Resolved{ViewID: "view_factor_1h", Bar: "1h", Calendar: DefaultCalendar, MinAgeBars: 24}
+	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {ViewID: "view_factor_1h"}}, Bar: "1h", Calendar: DefaultCalendar, MinAgeBars: 24}
 	view := ViewInfo{ViewID: "view_factor_1h", DatasetID: "ds_factor", Frequency: "1h", ActiveIndexID: "idx_a", IndexedFrom: barStart.Add(-1000 * time.Hour), IndexedTo: barStart.Add(2 * time.Hour), SeriesBars: 24}
 	if start := CoverageStartAt(view, resolved, barStart); !start.Equal(barStart.Add(-23 * time.Hour)) {
 		t.Fatalf("以 T 为基准的覆盖起点不符：%s", start)
@@ -76,7 +77,7 @@ func TestCoverageStartAnchorsAtProcessedBar(t *testing.T) {
 		return []Row{{SubjectID: "BTC-USDT", DataTime: query.Start, Values: map[string]float64{"close": 1}}}, 7, nil
 	}
 	subjects := map[string]Subject{"BTC-USDT": subject("BTC-USDT", true)}
-	satisfied, err := NewAgeProbe(client, "space", resolved, view, subjects, barStart, 0, nil)(context.Background(), []string{"BTC-USDT"})
+	satisfied, err := NewAgeProbe(client, "space", resolved, view, "spot", subjects, barStart, 0, nil)(context.Background(), []string{"BTC-USDT"})
 	if err != nil {
 		t.Fatalf("N 等于保留根数、索引已前进时不应误判历史不足：%v", err)
 	}
@@ -91,7 +92,7 @@ func TestLoadBarReadsCoverageOnlyForAgeProbe(t *testing.T) {
 	client.rows = func(query Query) ([]Row, uint64, error) {
 		return rowsAt(query.Start, map[string]map[string]float64{"ETH-USDT": {"close": 10, "ma_20": 9, "bias_q_20": 0.5, "quote_volume_mean_20": 3e6, "quote_volume_mean_q_20": 0.4}}), 11, nil
 	}
-	resolved, program, err := Resolve(context.Background(), client, "space", "ftask_1h", parseStrategy(t, exampleDSL))
+	resolved, program, err := Resolve(context.Background(), client, "space", []string{"ftask_1h"}, parseStrategy(t, exampleDSL))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +105,7 @@ func TestLoadBarReadsCoverageOnlyForAgeProbe(t *testing.T) {
 	if len(client.coverageReads) != 0 {
 		t.Fatalf("没有 min_age_bars 时不应读取覆盖统计：%v", client.coverageReads)
 	}
-	aged, agedProgram, err := Resolve(context.Background(), client, "space", "ftask_1h", parseStrategy(t, strings.Replace(exampleDSL, "universe:\n", "universe:\n  min_age_bars: 24\n", 1)))
+	aged, agedProgram, err := Resolve(context.Background(), client, "space", []string{"ftask_1h"}, parseStrategy(t, strings.Replace(exampleDSL, "universe:\n", "universe:\n  min_age_bars: 24\n", 1)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +130,7 @@ func TestLoadBarSkipsWhenReferencedTagDeleted(t *testing.T) {
 	client.rows = func(query Query) ([]Row, uint64, error) {
 		return rowsAt(query.Start, map[string]map[string]float64{"ETH-USDT": {"close": 10, "ma_20": 9, "bias_q_20": 0.5, "quote_volume_mean_20": 3e6, "quote_volume_mean_q_20": 0.4}}), 11, nil
 	}
-	resolved, program, err := Resolve(context.Background(), client, "space", "ftask_1h", parseStrategy(t, exampleDSL))
+	resolved, program, err := Resolve(context.Background(), client, "space", []string{"ftask_1h"}, parseStrategy(t, exampleDSL))
 	if err != nil {
 		t.Fatal(err)
 	}

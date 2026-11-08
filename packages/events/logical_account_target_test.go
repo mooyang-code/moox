@@ -24,6 +24,12 @@ func TestLogicalAccountTargetWeightRequiresModernIdentity(t *testing.T) {
 		{name: "bar end", mutate: func(value *tradeeventpb.LogicalAccountTargetWeightRequested) { value.BarEndTime = nil }},
 		{name: "effective at", mutate: func(value *tradeeventpb.LogicalAccountTargetWeightRequested) { value.EffectiveAt = nil }},
 		{name: "valid until", mutate: func(value *tradeeventpb.LogicalAccountTargetWeightRequested) { value.ValidUntil = nil }},
+		{name: "market missing", mutate: func(value *tradeeventpb.LogicalAccountTargetWeightRequested) { value.Targets[0].MarketType = "" }},
+		{name: "market unknown", mutate: func(value *tradeeventpb.LogicalAccountTargetWeightRequested) { value.Targets[0].MarketType = "FUTURES" }},
+		{name: "market lowercase", mutate: func(value *tradeeventpb.LogicalAccountTargetWeightRequested) { value.Targets[0].MarketType = "spot" }},
+		{name: "duplicate instrument and market", mutate: func(value *tradeeventpb.LogicalAccountTargetWeightRequested) {
+			value.Targets = append(value.Targets, &tradeeventpb.InstrumentWeightTarget{InstrumentId: "BTC-USDT", TargetWeight: "0.1", MarketType: "SPOT"})
+		}},
 	}
 	registry, err := DefaultRegistry()
 	require.NoError(t, err)
@@ -111,8 +117,24 @@ func validLogicalAccountTargetWeight() *tradeeventpb.LogicalAccountTargetWeightR
 		EffectiveAt:      bar,
 		ValidUntil:       timestamppb.New(now.Add(time.Hour)),
 		Targets: []*tradeeventpb.InstrumentWeightTarget{{
-			InstrumentId: "BTC-USDT-SPOT",
+			InstrumentId: "BTC-USDT",
 			TargetWeight: "1.25",
+			MarketType:   "SPOT",
 		}},
 	}
+}
+
+func TestLogicalAccountTargetWeightAllowsSameInstrumentInSpotAndSwap(t *testing.T) {
+	registry, err := DefaultRegistry()
+	require.NoError(t, err)
+	payload := validLogicalAccountTargetWeight()
+	payload.Targets = append(payload.Targets, &tradeeventpb.InstrumentWeightTarget{
+		InstrumentId: "BTC-USDT", TargetWeight: "-0.5", MarketType: "SWAP",
+	})
+	_, err = registry.Encode(
+		LogicalAccountTargetWeightRequested,
+		payload,
+		validationOptions("target-1", "space", "logical-1"),
+	)
+	require.NoError(t, err)
 }

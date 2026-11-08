@@ -8,6 +8,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
+	"github.com/mooyang-code/moox/packages/seriesset"
 )
 
 type LiveInput struct {
@@ -18,9 +19,12 @@ type LiveInput struct {
 	PeriodTime     time.Time
 	Universe       []string
 	UpstreamFailed []string
-	CarryColumns   []string
-	TriggerEventID string
-	Budget         time.Duration
+	// UniverseSeries、UpstreamFailedSeries 是统一数据集事件里按序列的全集与失败名单；非空时按序列处理（见 Plan.ExpectedSeries）。
+	UniverseSeries       []seriesset.Series
+	UpstreamFailedSeries []seriesset.Series
+	CarryColumns         []string
+	TriggerEventID       string
+	Budget               time.Duration
 }
 
 func BuildLivePlan(clock periodclock.Clock, input LiveInput) (Plan, error) {
@@ -68,10 +72,21 @@ func BuildLivePlan(clock periodclock.Clock, input LiveInput) (Plan, error) {
 			available = append(available, subject)
 		}
 	}
+	var expectedSeries, upstreamFailedSeries []seriesset.Series
+	if len(input.UniverseSeries) > 0 {
+		// 统一数据集：全集按序列。标的口径由序列推出：Available 是至少有一条序列没有上游失败的标的，
+		// 只有现货失败的标的、永续照常可算，所以不能因为标的出现在失败名单里就整体不读。
+		expectedSeries = uniqueSeriesSorted(input.UniverseSeries)
+		upstreamFailedSeries = intersectSeries(uniqueSeriesSorted(input.UpstreamFailedSeries), expectedSeries)
+		expected = seriesSubjects(expectedSeries)
+		upstreamFailed = seriesSubjects(upstreamFailedSeries)
+		available = seriesSubjects(differenceSeries(expectedSeries, upstreamFailedSeries))
+	}
 	return Plan{
 		Mode: ModeLive, Set: input.Set, Members: members, Params: input.Params, PeriodTime: target,
 		TargetStart: window[0], TargetEnd: target.Add(duration),
 		Expected: expected, Available: available, UpstreamFailed: upstreamFailed,
+		ExpectedSeries: expectedSeries, UpstreamFailedSeries: upstreamFailedSeries,
 		CarryColumns: uniqueSorted(input.CarryColumns), WriteCarry: true,
 		TriggerEventID: strings.TrimSpace(input.TriggerEventID), Budget: input.Budget,
 	}, nil

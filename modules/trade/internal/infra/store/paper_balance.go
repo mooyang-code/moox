@@ -139,7 +139,7 @@ func (tx *Tx) applyPaperFill(record FillRecord) error {
 	case !exchange.MarketType(record.MarketType).Valid():
 		return fmt.Errorf("%w: paper fill market", ErrInvalidRecord)
 	case rule.PositionFromBalance:
-		instrument, err := tx.GetInstrumentInEnvironment(identity.Exchange, identity.Environment, identity.MarketType, record.ExchangeSymbol)
+		instrument, err := tx.GetInstrumentInEnvironment(identity.Exchange, identity.Environment, record.MarketType, record.ExchangeSymbol)
 		if err != nil {
 			return err
 		}

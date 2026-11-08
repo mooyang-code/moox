@@ -47,7 +47,7 @@ func newStressExchange(symbols []string, seed int64) *stressExchange {
 
 func (*stressExchange) Exchange() exchange.Exchange { return exchange.ExchangeBinance }
 
-func (x *stressExchange) GetReferencePrice(context.Context, string) (exchange.ReferencePrice, error) {
+func (x *stressExchange) GetReferencePrice(context.Context, exchange.SymbolKey) (exchange.ReferencePrice, error) {
 	return exchange.ReferencePrice{Price: shared.MustDecimal("100"), UpdatedAt: testNow}, nil
 }
 
@@ -56,7 +56,7 @@ func (x *stressExchange) GetAccountSnapshot(context.Context) (exchange.AccountSn
 	x.calls["account"]++
 	x.mu.Unlock()
 	return exchange.AccountSnapshot{
-		Balances:       []exchange.AssetBalance{{Asset: "USDT", Available: shared.MustDecimal("100000000"), Total: shared.MustDecimal("100000000")}},
+		Balances:       []exchange.AssetBalance{{Wallet: exchange.WalletUnified, Asset: "USDT", Available: shared.MustDecimal("100000000"), Total: shared.MustDecimal("100000000")}},
 		Equity:         shared.MustDecimal("100000000"),
 		AvailableFunds: shared.MustDecimal("100000000"), ExchangeUpdatedAt: testNow.Add(time.Minute),
 		Present: exchange.AccountSnapshotPresence{Balances: true, Equity: true, AvailableFunds: true, UsedMargin: true, UnrealizedPnL: true},
@@ -72,7 +72,7 @@ func (x *stressExchange) ListPositionSnapshots(context.Context) ([]exchange.Posi
 		if quantity == 0 {
 			continue
 		}
-		positions = append(positions, exchange.Position{
+		positions = append(positions, exchange.Position{Market: exchange.MarketTypeSwap,
 			ExchangeSymbol: symbol, PositionSide: exchange.PositionSideNet,
 			SignedQuantity: shared.MustDecimal(strconv.FormatInt(quantity, 10)),
 			EntryPrice:     shared.MustDecimal("100"), MarkPrice: shared.MustDecimal("100"),
@@ -90,11 +90,11 @@ func (x *stressExchange) ListOpenOrders(context.Context) ([]exchange.Order, erro
 	return nil, nil
 }
 
-func (x *stressExchange) ListRecentFills(_ context.Context, symbol shared.ExchangeSymbol, cursor string) ([]exchange.Fill, string, error) {
+func (x *stressExchange) ListRecentFills(_ context.Context, symbol exchange.SymbolKey, cursor string) ([]exchange.Fill, string, error) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
 	x.calls["fills"]++
-	all := x.fills[symbol.String()]
+	all := x.fills[symbol.Symbol]
 	start, _ := strconv.Atoi(cursor)
 	if start > len(all) {
 		start = len(all)
@@ -102,7 +102,7 @@ func (x *stressExchange) ListRecentFills(_ context.Context, symbol shared.Exchan
 	return append([]exchange.Fill(nil), all[start:]...), strconv.Itoa(len(all)), nil
 }
 
-func (x *stressExchange) GetOrder(_ context.Context, _ shared.ExchangeSymbol, clientOrderID string) (exchange.Order, error) {
+func (x *stressExchange) GetOrder(_ context.Context, _ exchange.SymbolKey, clientOrderID string) (exchange.Order, error) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
 	x.calls["order"]++
@@ -134,14 +134,14 @@ func (x *stressExchange) PlaceOrder(_ context.Context, request exchange.OrderReq
 	}
 	x.trade++
 	exchangeOrderID := fmt.Sprintf("ex-%d", x.trade)
-	x.fills[request.ExchangeSymbol] = append(x.fills[request.ExchangeSymbol], exchange.Fill{
+	x.fills[request.ExchangeSymbol] = append(x.fills[request.ExchangeSymbol], exchange.Fill{Market: exchange.MarketTypeSwap,
 		ExchangeTradeID: fmt.Sprintf("trade-%d", x.trade), ExchangeOrderID: exchangeOrderID,
 		ClientOrderID: request.ClientOrderID, ExchangeSymbol: request.ExchangeSymbol,
 		Side: request.Side, PositionSide: exchange.PositionSideNet,
 		Quantity: request.Quantity, Price: shared.MustDecimal("100"),
 		SettlementAsset: "USDT", FeeAsset: "USDT", TradedAt: testNow,
 	})
-	order := exchange.Order{
+	order := exchange.Order{Market: exchange.MarketTypeSwap,
 		ExchangeOrderID: exchangeOrderID, ClientOrderID: request.ClientOrderID, ExchangeSymbol: request.ExchangeSymbol,
 		OrderType: request.OrderType, Side: request.Side, PositionSide: request.PositionSide,
 		Quantity: request.Quantity, FilledQuantity: request.Quantity, Status: exchange.OrderStatusFilled,
@@ -155,7 +155,7 @@ func (x *stressExchange) PlaceOrder(_ context.Context, request exchange.OrderReq
 	return order, nil
 }
 
-func (*stressExchange) CancelOrder(context.Context, shared.ExchangeSymbol, string) (exchange.Order, error) {
+func (*stressExchange) CancelOrder(context.Context, exchange.SymbolKey, string) (exchange.Order, error) {
 	return exchange.Order{}, nil
 }
 
@@ -200,13 +200,13 @@ func TestBatchConvergenceUnderRandomFailuresDoesNotDuplicate(t *testing.T) {
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
 			SpaceID: testSpace, TradingAccountID: testAccount, Name: "stress",
-			Exchange: string(exchange.ExchangeBinance), MarketType: string(exchange.MarketTypeSwap),
+			Exchange: string(exchange.ExchangeBinance), Markets: []string{string(exchange.MarketTypeSwap)},
 			ExecutionMode: string(exchange.ExecutionModeLive), Environment: string(exchange.AccountEnvironmentTestnet),
 			CredentialSecretID: "stress-only", SettlementAsset: "USDT", MarginMode: string(exchange.MarginModeCross),
 			Status: string(exchange.AccountStatusEnabled), Ready: true,
 			LeverageSettings: store.LeverageSettings{store.DefaultLeverageKey: "10"},
 			Snapshot: store.TradingAccountSnapshot{
-				Balances: []store.AssetBalance{{Asset: "USDT", Available: "100000000", Total: "100000000"}},
+				Balances: []store.AssetBalance{{Wallet: "UNIFIED", Asset: "USDT", Available: "100000000", Total: "100000000"}},
 				Equity:   "100000000", AvailableFunds: "100000000", ExchangeUpdatedAt: testNow.UnixMilli(),
 			},
 			SnapshotSourceTime: testNow.UnixMilli(), LastSyncAt: testNow.UnixMilli(),
@@ -227,9 +227,10 @@ func TestBatchConvergenceUnderRandomFailuresDoesNotDuplicate(t *testing.T) {
 			}
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
-			SpaceID: testSpace, LogicalAccountID: testLogicalAccount, Name: "stress logical",
+			OrderSettingsJSON: legacyOrderSettings,
+			SpaceID:           testSpace, LogicalAccountID: testLogicalAccount, Name: "stress logical",
 			OwnerInstanceID: testRunner, OwnerSessionID: "session-e2e",
-			ExecutionMode: string(exchange.ExecutionModeLive), MarketType: string(exchange.MarketTypeSwap), SettlementAsset: "USDT",
+			ExecutionMode: string(exchange.ExecutionModeLive), SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {
 			return err
@@ -272,8 +273,7 @@ func TestBatchConvergenceUnderRandomFailuresDoesNotDuplicate(t *testing.T) {
 	syncService.Orders = orders
 	executor := &targetapp.Executor{
 		Store: tradeStore, Orders: orders, Now: now,
-		Prices:           targetapp.ExchangePriceSource{Adapters: source},
-		MaxChildNotional: shared.MustDecimal("1000000"),
+		Prices: targetapp.ExchangePriceSource{Adapters: source},
 	}
 	var _ execution.ExecutionAdapter = market
 	converged := false

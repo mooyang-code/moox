@@ -45,7 +45,7 @@ func TestCalendarErrorsNameTheDay(t *testing.T) {
 		t.Fatalf("越过末尾时应报日历的最后一天：%v", err)
 	}
 	client := newFakeClient("spot")
-	probe := NewAgeProbe(client, "space", Resolved{ViewID: "view_stock", Bar: "1d", Calendar: "cn_stock", MinAgeBars: 9500}, ViewInfo{ViewID: "view_stock"}, map[string]Subject{"600000.SH": subject("600000.SH", true)}, stockDay(t, 2026, 10, 9), 0, nil)
+	probe := NewAgeProbe(client, "space", Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {ViewID: "view_stock"}}, Bar: "1d", Calendar: "cn_stock", MinAgeBars: 9500}, ViewInfo{ViewID: "view_stock"}, "spot", map[string]Subject{"600000.SH": subject("600000.SH", true)}, stockDay(t, 2026, 10, 9), 0, nil)
 	if _, err := probe(context.Background(), []string{"600000.SH"}); err == nil || strings.Contains(err.Error(), "0000-00-00") {
 		t.Fatalf("探针的 config_error 明细不应出现零值日期：%v", err)
 	}
@@ -69,7 +69,7 @@ rules:
 		t.Fatal(err)
 	}
 	for _, seriesBars := range []int{0, 10000} {
-		resolved := Resolved{ViewID: "view_stock", Bar: "1d", Calendar: "cn_stock", MinAgeBars: 5}
+		resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {ViewID: "view_stock"}}, Bar: "1d", Calendar: "cn_stock", MinAgeBars: 5}
 		view := ViewInfo{ViewID: "view_stock", IndexedFrom: stockDay(t, 1990, 12, 19), IndexedTo: stockDay(t, 2026, 10, 9), SeriesBars: seriesBars}
 		if _, err := ReplayWindow(resolved, program, view, stockDay(t, 2020, 1, 2), stockDay(t, 2020, 6, 1), testNow); err != nil {
 			t.Fatalf("数据从日历首日开始时（每序列 %d 根）回放应可以提交：%v", seriesBars, err)
@@ -79,7 +79,7 @@ rules:
 
 // A 股覆盖太短：报历史不足，而不是先往后推越过日历末尾、误报成日历需要更新。
 func TestReplayWindowStockShortCoverage(t *testing.T) {
-	resolved := Resolved{ViewID: "view_stock", Bar: "1d", Calendar: "cn_stock", MinAgeBars: 120}
+	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {ViewID: "view_stock"}}, Bar: "1d", Calendar: "cn_stock", MinAgeBars: 120}
 	view := ViewInfo{ViewID: "view_stock", IndexedFrom: stockDay(t, 2026, 9, 1), IndexedTo: stockDay(t, 2026, 10, 9), SeriesBars: 5000}
 	_, err := ReplayWindow(resolved, nil, view, stockDay(t, 2026, 9, 10), stockDay(t, 2026, 10, 9), testNow)
 	if err == nil || !strings.Contains(err.Error(), "需要 120 根数据") || strings.Contains(err.Error(), "更新日历") {
@@ -89,7 +89,7 @@ func TestReplayWindowStockShortCoverage(t *testing.T) {
 
 // 覆盖范围无法使用时说明具体原因：整体超出内嵌日历要提示更新日历，而不是“还没有数据”。
 func TestCoverageBeyondCalendarSaysWhy(t *testing.T) {
-	resolved := Resolved{ViewID: "view_stock", Bar: "1d", Calendar: "cn_stock", MinAgeBars: 5}
+	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {ViewID: "view_stock"}}, Bar: "1d", Calendar: "cn_stock", MinAgeBars: 5}
 	view := ViewInfo{ViewID: "view_stock", IndexedFrom: stockDay(t, 2027, 1, 4), IndexedTo: stockDay(t, 2027, 3, 1), SeriesBars: 5000}
 	if _, err := CoverageBounds(view, resolved, testNow); err == nil || !strings.Contains(err.Error(), "超出 A 股内嵌交易日历的范围") {
 		t.Fatalf("覆盖整体超出日历应说明原因：%v", err)
@@ -109,7 +109,7 @@ func TestCoverageBeyondCalendarSaysWhy(t *testing.T) {
 // 次日的上海零点（区间仍按“不含结束日”的整日口径）。
 func TestReplayWindowIncludesLastCalendarDay(t *testing.T) {
 	now := time.Date(2027, 1, 10, 0, 0, 0, 0, time.UTC)
-	resolved := Resolved{ViewID: "view_stock", Bar: "1d", Calendar: "cn_stock"}
+	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {ViewID: "view_stock"}}, Bar: "1d", Calendar: "cn_stock"}
 	view := ViewInfo{ViewID: "view_stock", IndexedFrom: stockDay(t, 2026, 1, 5), IndexedTo: stockDay(t, 2027, 1, 8), SeriesBars: 5000}
 	end, err := ReplayWindow(resolved, nil, view, stockDay(t, 2026, 12, 1), stockDay(t, 2027, 3, 1), now)
 	if err != nil || !end.Equal(stockDay(t, 2027, 1, 1)) {
@@ -157,7 +157,7 @@ func TestReplayRangeUsesShanghaiDates(t *testing.T) {
 
 // min_age_bars 等于每序列保留的根数时回放永远没有可用的 bar（可用起点恰是最新一根，而回放只到它之前）。
 func TestReplayWindowRejectsMinAgeEqualToSeriesBars(t *testing.T) {
-	resolved := Resolved{ViewID: "view_factor_1h", Bar: "1h", Calendar: DefaultCalendar, MinAgeBars: 100}
+	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {ViewID: "view_factor_1h"}}, Bar: "1h", Calendar: DefaultCalendar, MinAgeBars: 100}
 	view := ViewInfo{ViewID: "view_factor_1h", IndexedFrom: barStart.Add(-500 * time.Hour), IndexedTo: barStart, SeriesBars: 100}
 	if _, err := ReplayWindow(resolved, nil, view, barStart.Add(-50*time.Hour), barStart, testNow); err == nil || !strings.Contains(err.Error(), "永远无法满足") {
 		t.Fatalf("N 等于每序列根数应拒绝：%v", err)

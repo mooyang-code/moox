@@ -38,6 +38,7 @@ retention:
   result_items_days: 90
   replays_days: 90
   replays_max: 50
+  ready_events_days: 7
 replay:
   chunk_bars: 50
   page_size: 2000

@@ -157,3 +157,53 @@ func TestConfigBackupRPCs(t *testing.T) {
 		t.Fatalf("非法信封: %+v", put.GetRetInfo())
 	}
 }
+
+func TestSetupMapsExchangeKeysAndNeverEchoesTheirValues(t *testing.T) {
+	keys := []*pb.SetupExchangeKey{
+		{Name: "readonly", Exchange: "binance", Environment: "production", ApiKey: "recognizable-api-key", SecretKey: "recognizable-exchange-secret", Readonly: true},
+		{Name: "main", Exchange: "okx", Environment: "testnet", ApiKey: "okx-key", SecretKey: "okx-secret", Passphrase: "recognizable-passphrase"},
+	}
+	results := []setup.ExchangeKeyResult{
+		{SecretID: "exchange-binance-production-readonly", State: setup.ExchangeKeyCreated, ReadOnly: true},
+		{SecretID: "exchange-okx-testnet-main", State: setup.ExchangeKeyExists},
+	}
+	fake := &fakeSetupService{
+		applyResult: setup.Result{Action: "created", Users: 1, Secrets: 3, ExchangeKeys: results},
+		status:      setup.Status{State: "completed", Users: 1, Secrets: 3, ExchangeKeys: results},
+	}
+	request := setupRequest()
+	request.ExchangeKeys = keys
+	response, err := NewService(fake).ApplySetup(context.Background(), request)
+	require.NoError(t, err)
+	assert.Equal(t, int32(3), response.GetSecrets())
+	require.Len(t, fake.manifest.ExchangeKeys, 2)
+	assert.Equal(t, setup.ExchangeKey{Name: "readonly", Exchange: "binance", Environment: "production", APIKey: "recognizable-api-key", SecretKey: "recognizable-exchange-secret", ReadOnly: true}, fake.manifest.ExchangeKeys[0])
+	assert.Equal(t, "recognizable-passphrase", fake.manifest.ExchangeKeys[1].Passphrase)
+	require.Len(t, response.GetExchangeKeys(), 2)
+	assert.Equal(t, "exchange-binance-production-readonly", response.GetExchangeKeys()[0].GetSecretId())
+	assert.Equal(t, "created", response.GetExchangeKeys()[0].GetState())
+	assert.True(t, response.GetExchangeKeys()[0].GetReadonly())
+	assert.Equal(t, "exists", response.GetExchangeKeys()[1].GetState())
+
+	statusReq := statusRequest()
+	statusReq.ExchangeKeys = keys
+	status, err := NewService(fake).GetSetupStatus(context.Background(), statusReq)
+	require.NoError(t, err)
+	assert.Equal(t, "completed", status.GetState())
+	require.Len(t, fake.manifest.ExchangeKeys, 2)
+	require.Len(t, status.GetExchangeKeys(), 2)
+
+	for _, message := range []*pb.ApplySetupRsp{response} {
+		raw, err := protojson.Marshal(message)
+		require.NoError(t, err)
+		for _, value := range []string{"recognizable-api-key", "recognizable-exchange-secret", "recognizable-passphrase"} {
+			assert.NotContains(t, string(raw), value)
+		}
+	}
+
+	// 空的密钥项是非法请求。
+	request.ExchangeKeys = []*pb.SetupExchangeKey{nil}
+	response, err = NewService(fake).ApplySetup(context.Background(), request)
+	require.NoError(t, err)
+	assert.Equal(t, pb.ErrorCode_INVALID_PARAM, response.GetRetInfo().GetCode())
+}

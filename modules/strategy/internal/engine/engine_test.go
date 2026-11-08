@@ -11,14 +11,48 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/quant"
 )
 
+// testMarket 是单元测试默认的市场模式：永续（允许做空）。
+const testMarket = dsl.MarketSwap
+
+// compileMode 编译策略：DSL 没写 market 时按永续单市场处理（引擎测试不经过绑定，没有任务市场可取）。
+func compileMode(strategy dsl.Strategy, columns []string) (*dsl.Program, error) {
+	if strategy.Market.IsZero() {
+		strategy.Market = dsl.SingleMarket(testMarket)
+	}
+	return dsl.Compile(strategy, columns)
+}
+
+// inMarket 把按单市场写的帧（Rows、FailedColumns）转成 Evaluate 需要的 Markets 输入，市场取程序的单市场模式。
+func inMarket(program *dsl.Program, frame Frame) Frame {
+	if frame.Markets == nil {
+		frame.Markets = map[string]MarketInput{program.Strategy.Market.Select: {Rows: frame.Rows, Failed: frame.FailedColumns}}
+	}
+	frame.Rows, frame.FailedColumns = nil, nil
+	return frame
+}
+
+// evalFrame 对按单市场写的帧求值。
+func evalFrame(program *dsl.Program, frame Frame, previous State) (Decision, error) {
+	return Evaluate(program, inMarket(program, frame), previous)
+}
+
 // compile 解析并编译一段 DSL，columns 是 View 的全部列。
 func compile(t *testing.T, raw string, columns ...string) *dsl.Program {
+	t.Helper()
+	return compileIn(t, dsl.Market{}, raw, columns...)
+}
+
+// compileIn 按指定的市场模式编译（零值表示按测试默认的永续单市场）。
+func compileIn(t *testing.T, mode dsl.Market, raw string, columns ...string) *dsl.Program {
 	t.Helper()
 	strategy, err := dsl.Parse([]byte(raw))
 	if err != nil {
 		t.Fatalf("解析 DSL 失败：%v", err)
 	}
-	program, err := dsl.Compile(strategy, columns)
+	if !mode.IsZero() {
+		strategy.Market = mode
+	}
+	program, err := compileMode(strategy, columns)
 	if err != nil {
 		t.Fatalf("编译 DSL 失败：%v", err)
 	}
@@ -61,7 +95,7 @@ func frameOf(program *dsl.Program, rows map[string]Row) Frame {
 
 func evaluate(t *testing.T, program *dsl.Program, frame Frame, previous State) Decision {
 	t.Helper()
-	decision, err := Evaluate(program, frame, previous)
+	decision, err := evalFrame(program, frame, previous)
 	if err != nil {
 		t.Fatalf("求值失败：%v", err)
 	}
@@ -230,7 +264,6 @@ func exampleFrame(program *dsl.Program) Frame {
 	rows["LOW-USDT"] = values("close", 1, "quote_volume_mean_20", 1000, "bias_q_20", 0.9, "quote_volume_mean_q_20", 0.9)
 	rows["BTC-USDT"] = Row{Values: map[string]float64{"close": 101, "ma_20": 100}, Previous: map[string]float64{"close": 99, "ma_20": 100}}
 	frame := frameOf(program, rows)
-	frame.Spot = true
 	expected := make([]string, 0, len(alts)+1)
 	expected = append(expected, alts...)
 	expected = append(expected, "LOW-USDT")
@@ -241,7 +274,7 @@ func exampleFrame(program *dsl.Program) Frame {
 }
 
 func TestExampleStrategyEvaluatesDeterministically(t *testing.T) {
-	program := compile(t, exampleStrategy, exampleColumns...)
+	program := compileIn(t, dsl.SingleMarket(dsl.MarketSpot), exampleStrategy, exampleColumns...)
 	frame := exampleFrame(program)
 	first := evaluate(t, program, frame, State{})
 	assertOK(t, first)
@@ -283,7 +316,7 @@ func TestEvaluateRejectsNilProgram(t *testing.T) {
 
 // 组合约束失败（现货出现负权重）按 config_error 跳过，解释明细仍按规则声明顺序与标的 id 排序。
 func TestConfigErrorSkipKeepsItemsSorted(t *testing.T) {
-	program := compile(t, `name: bad
+	program := compileIn(t, dsl.SingleMarket(dsl.MarketSpot), `name: bad
 rules:
   - id: b
     type: rank
@@ -298,7 +331,6 @@ rules:
     weight: {total: 0.5}
 `, "m")
 	frame := frameOf(program, map[string]Row{"C": values("m", 3), "A": values("m", 1), "B": values("m", 2)})
-	frame.Spot = true
 	first := evaluate(t, program, frame, State{})
 	assertSkipped(t, first, SkipConfigError)
 	var order []string

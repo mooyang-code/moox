@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/strategy/internal/ledger"
+
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
@@ -16,7 +18,7 @@ import (
 // submitReplay 按 StartReplay 的做法登记并认领一个回放：记录 DSL 哈希与提交时校验区间所用的活动索引。
 func submitReplay(t *testing.T, repo *store.Store, dslYaml, indexID string, start time.Time, hours int) store.Replay {
 	t.Helper()
-	job := store.Replay{ReplayID: "p1", DSLYaml: dslYaml, DSLHash: dsl.Hash([]byte(dslYaml)), Calendar: "crypto_24x7", ViewGeneration: indexID, SpaceID: "crypto", FactorTaskID: "ftask_a", ViewID: "view_factor_a", StartTime: start, EndTime: start.Add(time.Duration(hours) * time.Hour), Factors: pinnedFactors(t, dslYaml), CreatedAt: origin}
+	job := store.Replay{ReplayID: "p1", DSLYaml: dslYaml, DSLHash: dsl.Hash([]byte(dslYaml)), Calendar: "crypto_24x7", SpaceID: "crypto", Tasks: map[string]store.ReplayTask{"spot": {FactorTaskID: "ftask_a", ViewID: "view_factor_a", ViewGeneration: indexID}}, StartTime: start, EndTime: start.Add(time.Duration(hours) * time.Hour), Factors: pinnedFactors(t, dslYaml), CreatedAt: origin}
 	if err := repo.CreateReplay(context.Background(), job); err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +193,7 @@ func TestAnnualizedThresholdByCalendar(t *testing.T) {
 	}
 	acc := newAccumulator(100, periodsPerYear("cn_stock", "1d", 24*time.Hour), minAnnualizedBars("cn_stock", "1d", 24*time.Hour))
 	for i := 0; i < 5; i++ {
-		acc.add(origin.Add(time.Duration(i)*24*time.Hour), true, "", Outcome{EquityBefore: 100 + float64(i), EquityAfter: 100 + float64(i+1)}, 0)
+		acc.add(origin.Add(time.Duration(i)*24*time.Hour), true, "", ledger.Outcome{EquityBefore: 100 + float64(i), EquityAfter: 100 + float64(i+1)}, 0)
 	}
 	if metrics := acc.finish(); metrics.AnnualizedReturn == nil {
 		t.Fatalf("A 股一整周应给出年化：%+v", metrics)

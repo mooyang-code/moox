@@ -33,8 +33,11 @@ type CollectParams struct {
 	SourceDatasetID string          `json:"source_dataset_id,omitempty"`
 	SourceFrequency string          `json:"source_frequency,omitempty"`
 	SourceSeriesTag string          `json:"source_series_tag,omitempty"`
-	TargetFrequency string          `json:"target_frequency,omitempty"`
-	Alignment       string          `json:"alignment,omitempty"`
+	// SourceSeriesTags 是统一数据集（现货加永续）作为合成源时，源数据集里要合成的各条序列的 series_tag；
+	// 单序列的源仍用 SourceSeriesTag，两者不能同时给出。
+	SourceSeriesTags []string `json:"source_series_tags,omitempty"`
+	TargetFrequency  string   `json:"target_frequency,omitempty"`
+	Alignment        string   `json:"alignment,omitempty"`
 	// SourceTaskID 是合成的源采集任务：创建时由它推导 source_dataset_id、source_frequency、source_series_tag。
 	SourceTaskID string `json:"source_task_id,omitempty"`
 	// SymbolsPerFunction 是定时模式下每个函数负责的标的数；0 表示使用默认值。
@@ -114,6 +117,17 @@ func (p *CollectParams) validatePlanOptions() error {
 	return nil
 }
 
+// SourceTags 返回合成任务要合成的源序列 series_tag：单序列的源是 SourceSeriesTag 一项，统一数据集是 SourceSeriesTags。
+func (p *CollectParams) SourceTags() []string {
+	if len(p.SourceSeriesTags) > 0 {
+		return append([]string(nil), p.SourceSeriesTags...)
+	}
+	if p.SourceSeriesTag != "" {
+		return []string{p.SourceSeriesTag}
+	}
+	return nil
+}
+
 // Normalize canonicalizes the standard collect params shape.
 func (p *CollectParams) Normalize(fallbackProvider string, fallbackMarketType string, fallbackDataType string) {
 	p.Provider = strings.ToLower(firstNonEmpty(p.Provider, fallbackProvider))
@@ -128,6 +142,10 @@ func (p *CollectParams) Normalize(fallbackProvider string, fallbackMarketType st
 	p.Frequency = strings.TrimSpace(p.Frequency)
 	p.SourceDatasetID = strings.TrimSpace(p.SourceDatasetID)
 	p.SourceSeriesTag = strings.TrimSpace(p.SourceSeriesTag)
+	p.SourceSeriesTags = normalizeTags(p.SourceSeriesTags)
+	if len(p.SourceSeriesTags) == 0 {
+		p.SourceSeriesTags = nil
+	}
 	p.Alignment = strings.ToLower(strings.TrimSpace(p.Alignment))
 	dataType := strings.ToLower(strings.TrimSpace(fallbackDataType))
 	if dataType == "kline_resample" {
@@ -171,7 +189,7 @@ func validateCollectParamsShape(raw string, fallbackDataType string) error {
 	}
 	resample := strings.EqualFold(strings.TrimSpace(fallbackDataType), "kline_resample")
 	standardOnly := []string{"frequency"}
-	resampleOnly := []string{"source_task_id", "source_dataset_id", "source_frequency", "source_series_tag", "target_frequency", "alignment"}
+	resampleOnly := []string{"source_task_id", "source_dataset_id", "source_frequency", "source_series_tag", "source_series_tags", "target_frequency", "alignment"}
 	for _, key := range standardOnly {
 		if _, exists := values[key]; exists && resample {
 			return fmt.Errorf("parse collect params: field %q is not valid for kline_resample", key)

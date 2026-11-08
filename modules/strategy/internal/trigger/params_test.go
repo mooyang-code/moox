@@ -27,13 +27,7 @@ portfolio:
 `
 
 func tunedResolved() input.Resolved {
-	return input.Resolved{
-		ViewID: "view_factor_a", FactorTaskID: "ftask_a", DatasetID: "ds", Bar: "1h", Calendar: input.DefaultCalendar, Spot: true,
-		Columns:      map[string]input.ColumnBinding{"m": {Source: input.SourceFactor, Member: "f__var", FactorID: "f", MemberKind: "var", DefinitionHash: "h1"}},
-		Factors:      map[string]string{"f__var": "h1|var"},
-		ViewColumns:  []string{"close", "m"},
-		FactorParams: map[string][]dsl.ParamDecl{"f__var": {{Name: "window", Type: "int", Min: 5, Max: 60, Default: 20}}},
-	}
+	return input.Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]input.TaskBinding{"spot": {ViewID: "view_factor_a", FactorTaskID: "ftask_a", DatasetID: "ds"}}, Bar: "1h", Calendar: input.DefaultCalendar, Columns: map[string]input.ColumnBinding{"m": {Source: input.SourceFactor, Member: "f__var", FactorID: "f", MemberKind: "var", DefinitionHash: "h1"}}, Factors: map[string]string{"f__var": "h1|var"}, ViewColumns: []string{"close", "m"}, FactorParams: map[string][]dsl.ParamDecl{"f__var": {{Name: "window", Type: "int", Min: 5, Max: 60, Default: 20}}}}
 }
 
 // 声明了 factor_params 的实例每期求出下一期的参数，随结果同事务落库；目标期次是下一根 bar，成员快照完整。

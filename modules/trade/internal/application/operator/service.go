@@ -20,16 +20,16 @@ import (
 )
 
 var (
-	ErrServiceConfig       = errors.New("trade operator: service is not configured")
-	ErrInvalidCommand      = errors.New("trade operator: invalid command")
-	ErrCancelUnconfirmed   = errors.New("trade operator: cancellation is not confirmed")
-	ErrInvalidActionResult = errors.New("trade operator: invalid persisted action result")
+	ErrServiceConfig       = errors.New("人工操作服务未配置")
+	ErrInvalidCommand      = errors.New("人工操作参数不合法")
+	ErrCancelUnconfirmed   = errors.New("撤单还没有得到交易所确认")
+	ErrInvalidActionResult = errors.New("已保存的人工操作结果无法解析")
 )
 
 type Quote = targetapp.Quote
 
 type PriceSource interface {
-	LatestPrice(context.Context, string, string) (Quote, error)
+	LatestPrice(context.Context, string, exchange.SymbolKey) (Quote, error)
 }
 
 type AccountSyncer interface {
@@ -70,6 +70,11 @@ type Service struct {
 	FlattenMaxAttempts   int
 	FlattenRetryInterval time.Duration
 	FlattenTimeout       time.Duration
+
+	// Wake 在下架清仓结束时唤醒目标重新收敛，为空时不唤醒。
+	Wake func()
+	// DelistAttemptInterval 是两笔下架清仓 IOC 单之间的最小间隔：零用默认的 3 秒，负数不限制（测试用）。
+	DelistAttemptInterval time.Duration
 }
 
 type ManualOrderCommand struct {
@@ -354,7 +359,7 @@ func (s *Service) PlaceManualOrder(
 		return ManualOrderResult{Action: action}, err
 	}
 	quote, err := s.Prices.LatestPrice(
-		ctx, command.TradingAccountID, instrument.ExchangeSymbol,
+		ctx, command.TradingAccountID, exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol),
 	)
 	if err != nil {
 		return s.deferSubmission(ctx, action, err)
@@ -406,7 +411,7 @@ func (s *Service) ResumeOperatorAction(
 		return nil
 	}
 	switch action.ActionType {
-	case "FLATTEN":
+	case "FLATTEN", "REDUCE", "DELIST_FLATTEN":
 		command, err := decodeFlattenRequest(action)
 		if err != nil {
 			return err
@@ -528,7 +533,7 @@ func (s *Service) recoverChild(ctx context.Context, action store.OperatorActionR
 		return ManualOrderResult{}, true, err
 	}
 	persistedAction = action
-	child, err := s.Store.GetOrderByClientID(ctx, command.SpaceID, command.TradingAccountID, command.ClientOrderID)
+	child, err := s.Store.GetOrderByClientID(ctx, command.SpaceID, command.TradingAccountID, exchange.MarketOfInstrumentID(command.InstrumentID), command.ClientOrderID)
 	if errors.Is(err, gorm.ErrRecordNotFound) && progress.OrderID == "" {
 		if s.manualExpired(progress) {
 			result, err := s.failManualAction(ctx, action, errors.New("manual submission deadline exceeded"), nil)

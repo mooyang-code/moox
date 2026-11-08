@@ -3,6 +3,7 @@ package input
 import (
 	"context"
 	"errors"
+	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"strings"
 	"testing"
 	"time"
@@ -29,7 +30,7 @@ func TestStockCalendarTail(t *testing.T) {
 	if _, err := FromBarEnd("cn_stock", "1d", time.Date(2027, 1, 5, 15, 0, 0, 0, shanghai(t))); err == nil || !strings.Contains(err.Error(), "超出 A 股内嵌交易日历的范围") || strings.Contains(err.Error(), "calendar") {
 		t.Fatalf("超出日历的报错应是中文：%v", err)
 	}
-	resolved := Resolved{ViewID: "view_stock", Bar: "1d", Calendar: "cn_stock", MinAgeBars: 5}
+	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {ViewID: "view_stock"}}, Bar: "1d", Calendar: "cn_stock", MinAgeBars: 5}
 	view := ViewInfo{ViewID: "view_stock", IndexedFrom: stockDay(t, 2025, 1, 2), IndexedTo: stockDay(t, 2027, 1, 6), SeriesBars: 5000}
 	end, err := ReplayWindow(resolved, nil, view, stockDay(t, 2025, 3, 3), stockDay(t, 2025, 7, 1), testNow)
 	if err != nil || !end.Equal(stockDay(t, 2025, 7, 1)) {
@@ -42,7 +43,7 @@ func TestStockCalendarTail(t *testing.T) {
 
 // A 股日线的覆盖边界落在非交易日（节假日误写的行）：最晚一根取不晚于它的交易日，最早一根取不早于它的交易日。
 func TestCoverageBoundsSnapToTradingDays(t *testing.T) {
-	resolved := Resolved{ViewID: "view_stock", Bar: "1d", Calendar: "cn_stock"}
+	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {ViewID: "view_stock"}}, Bar: "1d", Calendar: "cn_stock"}
 	// 10-03 到 10-05 整段是假期：规整后最早一根（10-08）晚于最晚一根（09-30），报出行都不在交易日上。
 	if bounds, err := CoverageBounds(ViewInfo{IndexedFrom: stockDay(t, 2026, 10, 3), IndexedTo: stockDay(t, 2026, 10, 5)}, resolved, testNow); err == nil || !strings.Contains(err.Error(), "都不在 A 股交易日上") {
 		t.Fatalf("整段落在假期内的覆盖范围应报出原因：%+v err=%v", bounds, err)
@@ -68,16 +69,16 @@ func TestResolveCalendarInheritance(t *testing.T) {
 		return client
 	}
 	resample := build(map[string]string{"source_dataset_id": "ds_source", "dataset_role": "kline_resample_result", "alignment": "epoch_utc"})
-	resolved, _, err := Resolve(context.Background(), resample, "space", "ftask_1d", strategy)
+	resolved, _, err := Resolve(context.Background(), resample, "space", []string{"ftask_1d"}, strategy)
 	if err != nil || resolved.Calendar != DefaultCalendar {
 		t.Fatalf("重采样数据集不应继承源数据集的 A 股日历：%+v err=%v", resolved, err)
 	}
 	factor := build(map[string]string{"source_dataset_id": "ds_source", "dataset_role": "factor_result"})
-	if resolved, _, err := Resolve(context.Background(), factor, "space", "ftask_1d", strategy); err != nil || resolved.Calendar != "cn_stock" {
+	if resolved, _, err := Resolve(context.Background(), factor, "space", []string{"ftask_1d"}, strategy); err != nil || resolved.Calendar != "cn_stock" {
 		t.Fatalf("因子结果应继承源数据集的日历：%+v err=%v", resolved, err)
 	}
 	misaligned := build(map[string]string{"source_dataset_id": "ds_source", "calendar": "cn_stock", "alignment": "epoch_utc"})
-	if _, _, err := Resolve(context.Background(), misaligned, "space", "ftask_1d", strategy); err == nil || !strings.Contains(err.Error(), "epoch_utc") {
+	if _, _, err := Resolve(context.Background(), misaligned, "space", []string{"ftask_1d"}, strategy); err == nil || !strings.Contains(err.Error(), "epoch_utc") {
 		t.Fatalf("按 UTC 零点对齐的数据集不能使用 A 股日历：%v", err)
 	}
 }
@@ -89,11 +90,11 @@ func TestPreviousFactorsOnlyForFactorColumns(t *testing.T) {
 rules:
   - {id: r, type: signal, pool: [BTC-USDT], entry: "bars[-1].close < bars[0].close && ma_20 > 0", exit: "close < 1", weight: 1}
 `)
-	resolved, program, err := Resolve(context.Background(), client, "space", "ftask_1h", klineOnly)
+	resolved, program, err := Resolve(context.Background(), client, "space", []string{"ftask_1h"}, klineOnly)
 	if err != nil || !program.UsesPreviousBar || len(resolved.PreviousFactors) != 0 || len(resolved.ReadinessBinding().PreviousFactors) != 0 {
 		t.Fatalf("只经 bars[-1] 读 K 线列时不应要求上一根的因子证据：%+v err=%v", resolved, err)
 	}
-	withFactor, _, err := Resolve(context.Background(), client, "space", "ftask_1h", parseStrategy(t, exampleDSL))
+	withFactor, _, err := Resolve(context.Background(), client, "space", []string{"ftask_1h"}, parseStrategy(t, exampleDSL))
 	if err != nil || len(withFactor.PreviousFactors) != 1 || withFactor.PreviousFactors[0] != "ma" {
 		t.Fatalf("经 bars[-1] 读取的因子应记录下来：%+v err=%v", withFactor.PreviousFactors, err)
 	}
@@ -102,8 +103,8 @@ rules:
 // 年龄探针的日历换算是确定性的：换算失败记 config_error，不按基础设施错误重试。
 func TestAgeProbeCalendarErrorIsConfigError(t *testing.T) {
 	client := newFakeClient("spot")
-	resolved := Resolved{ViewID: "view_stock", Bar: "1d", Calendar: "cn_stock", MinAgeBars: 9500}
-	probe := NewAgeProbe(client, "space", resolved, ViewInfo{ViewID: "view_stock"}, map[string]Subject{"600000.SH": subject("600000.SH", true)}, stockDay(t, 2026, 10, 9), 0, nil)
+	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {ViewID: "view_stock"}}, Bar: "1d", Calendar: "cn_stock", MinAgeBars: 9500}
+	probe := NewAgeProbe(client, "space", resolved, ViewInfo{ViewID: "view_stock"}, "spot", map[string]Subject{"600000.SH": subject("600000.SH", true)}, stockDay(t, 2026, 10, 9), 0, nil)
 	_, err := probe(context.Background(), []string{"600000.SH"})
 	var skip *SkipError
 	if !errors.As(err, &skip) || skip.Reason != SkipConfigError || !strings.Contains(skip.Detail, "之前没有交易日") {
@@ -113,7 +114,7 @@ func TestAgeProbeCalendarErrorIsConfigError(t *testing.T) {
 
 // 回放提交时同样拒绝永远无法满足的 min_age_bars；覆盖太短、可用起点会落在最新一根之后时直接说明历史不足。
 func TestReplayWindowRejectsUnsatisfiableHistory(t *testing.T) {
-	resolved := Resolved{ViewID: "view_factor_1h", Bar: "1h", Calendar: DefaultCalendar, MinAgeBars: 150}
+	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {ViewID: "view_factor_1h"}}, Bar: "1h", Calendar: DefaultCalendar, MinAgeBars: 150}
 	view := ViewInfo{ViewID: "view_factor_1h", IndexedFrom: barStart.Add(-500 * time.Hour), IndexedTo: barStart, SeriesBars: 100}
 	if _, err := ReplayWindow(resolved, nil, view, barStart.Add(-50*time.Hour), barStart, testNow); err == nil || !strings.Contains(err.Error(), "永远无法满足") {
 		t.Fatalf("N 超过每个序列保留的根数应拒绝：%v", err)

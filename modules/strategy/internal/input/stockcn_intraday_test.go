@@ -256,16 +256,16 @@ func TestStockIntradayTradingDayBarsAndRetention(t *testing.T) {
 func TestResolveEquityFollowsSpotLimits(t *testing.T) {
 	client := newFakeClient("equity")
 	client.tagMarkets["binance_equity"] = "equity"
-	resolved, _, err := Resolve(context.Background(), client, "space", "ftask_1h", parseStrategy(t, exampleDSL))
-	if err != nil || !resolved.Spot || resolved.MarketType != "equity" {
+	resolved, _, err := Resolve(context.Background(), client, "space", []string{"ftask_1h"}, parseStrategy(t, exampleDSL))
+	if err != nil || !resolved.SpotOnly() || resolved.Market.Select != "equity" {
 		t.Fatalf("equity 应按现货解析：%+v err=%v", resolved, err)
 	}
 	levered := parseStrategy(t, "name: levered\nrules:\n  - {id: a, type: rank, score: close, select: {top: 1}, weight: {total: 0.6}}\n  - {id: b, type: rank, score: volume, select: {top: 1}, weight: {total: 0.6}}\nportfolio:\n  leverage: 1.2\n")
-	if _, _, err := Resolve(context.Background(), client, "space", "ftask_1h", levered); err == nil || !strings.Contains(err.Error(), "leverage") {
+	if _, _, err := Resolve(context.Background(), client, "space", []string{"ftask_1h"}, levered); err == nil || !strings.Contains(err.Error(), "leverage") {
 		t.Fatalf("equity 应拒绝杠杆：%v", err)
 	}
 	short := parseStrategy(t, "name: short\nrules:\n  - {id: s, type: rank, score: close, select: {bottom: 1}, weight: {total: 0.5}, side: short}\n")
-	if _, _, err := Resolve(context.Background(), client, "space", "ftask_1h", short); err == nil || !strings.Contains(err.Error(), "做空") {
+	if _, _, err := Resolve(context.Background(), client, "space", []string{"ftask_1h"}, short); err == nil || !strings.Contains(err.Error(), "做空") {
 		t.Fatalf("equity 应拒绝做空：%v", err)
 	}
 	tranche := parseStrategy(t, `name: tranche_demo
@@ -289,7 +289,7 @@ rules:
       filter_before: []
       filter_after: []
 `)
-	if _, _, err := Resolve(context.Background(), client, "space", "ftask_1h", tranche); err == nil || !strings.Contains(err.Error(), "tranche") {
+	if _, _, err := Resolve(context.Background(), client, "space", []string{"ftask_1h"}, tranche); err == nil || !strings.Contains(err.Error(), "tranche") {
 		t.Fatalf("equity 应拒绝 tranche：%v", err)
 	}
 	// 数据集属性直接声明 equity 也接受。
@@ -297,7 +297,7 @@ rules:
 	source.Attributes = map[string]string{"market_type": "equity"}
 	source.SubjectTags = nil
 	client.datasets["ds_kline"] = source
-	if resolved, _, err := Resolve(context.Background(), client, "space", "ftask_1h", parseStrategy(t, exampleDSL)); err != nil || !resolved.Spot {
+	if resolved, _, err := Resolve(context.Background(), client, "space", []string{"ftask_1h"}, parseStrategy(t, exampleDSL)); err != nil || !resolved.SpotOnly() {
 		t.Fatalf("数据集属性 market_type=equity 应按现货解析：%+v err=%v", resolved, err)
 	}
 }
@@ -309,15 +309,15 @@ func TestResolveCNStockIntradayView(t *testing.T) {
 	client.datasets["ds_cn_factor"] = DatasetInfo{DatasetID: "ds_cn_factor", Status: "active", Frequency: "5m", Retention: "7200h", Attributes: map[string]string{"source_dataset_id": "ds_cn_kline", "dataset_role": "factor_result"}}
 	client.datasets["ds_cn_kline"] = DatasetInfo{DatasetID: "ds_cn_kline", Status: "active", Frequency: "5m", Retention: "7200h", Attributes: map[string]string{"calendar": "cn_stock", "alignment": "session", "market_type": "equity"}}
 	strategy := parseStrategy(t, "name: cn_5m\nuniverse: {min_age_bars: 9600}\nrules:\n  - {id: r, type: rank, score: close, select: {top: 1}, weight: 1}\n")
-	resolved, _, err := Resolve(context.Background(), client, "space", "ftask_cn_5m", strategy)
+	resolved, _, err := Resolve(context.Background(), client, "space", []string{"ftask_cn_5m"}, strategy)
 	if err != nil {
 		t.Fatalf("A 股 5m View 应能解析：%v", err)
 	}
-	if resolved.Calendar != "cn_stock" || resolved.Bar != "5m" || !resolved.Spot {
+	if resolved.Calendar != "cn_stock" || resolved.Bar != "5m" || !resolved.SpotOnly() {
 		t.Fatalf("解析结果不符：%+v", resolved)
 	}
 	strategy = parseStrategy(t, "name: cn_5m\nuniverse: {min_age_bars: 9601}\nrules:\n  - {id: r, type: rank, score: close, select: {top: 1}, weight: 1}\n")
-	if _, _, err := Resolve(context.Background(), client, "space", "ftask_cn_5m", strategy); err == nil || !strings.Contains(err.Error(), "9600") {
+	if _, _, err := Resolve(context.Background(), client, "space", []string{"ftask_cn_5m"}, strategy); err == nil || !strings.Contains(err.Error(), "9600") {
 		t.Fatalf("min_age_bars 超过按交易时段折算的保留根数应拒绝：%v", err)
 	}
 }

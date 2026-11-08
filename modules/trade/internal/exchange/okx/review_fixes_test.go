@@ -71,7 +71,7 @@ func TestIncrementalPushWithoutSettlementKeepsEquity(t *testing.T) {
 }
 
 func TestAccountAndPositionChannelsPushOnlyOnEvents(t *testing.T) {
-	swap := New(exchange.AccountConfig{MarketType: exchange.MarketTypeSwap}, exchange.Credential{})
+	swap := New(exchange.AccountConfig{Markets: []exchange.MarketType{exchange.MarketTypeSwap}}, exchange.Credential{})
 	for _, channel := range swap.privateChannels() {
 		switch channel["channel"] {
 		case "account", "positions":
@@ -108,7 +108,7 @@ func TestOpenOrdersPaginates(t *testing.T) {
 	}))
 	defer server.Close()
 	adapter := swapAdapter(server.URL)
-	adapter.instruments["BTC-USDT-SWAP"] = testInstrument()
+	adapter.instruments[exchange.SymbolKey{Market: exchange.MarketTypeSwap, Symbol: "BTC-USDT-SWAP"}] = testInstrument()
 	orders, err := adapter.ListOpenOrders(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -125,7 +125,7 @@ func TestCancelOrderSendsOneRequest(t *testing.T) {
 		ok(w, `[{"ordId":"42","clOrdId":"cid","sCode":"0","sMsg":""}]`)
 	}))
 	defer server.Close()
-	order, err := swapAdapter(server.URL).CancelOrder(context.Background(), "BTC-USDT-SWAP", "cid")
+	order, err := swapAdapter(server.URL).CancelOrder(context.Background(), exchange.NewSymbolKey(exchange.MarketTypeSwap, "BTC-USDT-SWAP"), "cid")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +134,7 @@ func TestCancelOrderSendsOneRequest(t *testing.T) {
 	}
 }
 
-func TestOfficialAccountPushUsesSettlementEquity(t *testing.T) {
+func TestOfficialAccountPushUsesCashBalance(t *testing.T) {
 	raw, err := os.ReadFile("testdata/account_push.json")
 	if err != nil {
 		t.Fatal(err)
@@ -147,7 +147,7 @@ func TestOfficialAccountPushUsesSettlementEquity(t *testing.T) {
 		t.Fatalf("accounts = %+v", recorder.accounts)
 	}
 	snapshot := recorder.accounts[0]
-	if snapshot.Equity.String() != "4892.951170691435" || snapshot.AvailableFunds.String() != "4734.371190691435" ||
+	if snapshot.Equity.String() != "4750.426970691436" || snapshot.ExchangeEquity.String() != "55868.06403501676" || snapshot.AvailableFunds.String() != "4734.371190691435" ||
 		!snapshot.Present.Equity || snapshot.ExchangeUpdatedAt.UnixMilli() != 1705564223311 {
 		t.Fatalf("snapshot = %+v", snapshot)
 	}

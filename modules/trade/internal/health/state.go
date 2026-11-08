@@ -77,6 +77,7 @@ func (r Readiness) Evaluate(ctx context.Context) (bool, map[string]any) {
 		"target_errors":                targetWorker.TargetErrors,
 		"operator_worker_ready":        operatorWorker.Ready,
 		"operator_worker_error":        operatorWorker.LastError,
+		"operator_action_errors":       operatorWorker.ActionErrors,
 		"paper_matcher_ready":          paperMatcherReady,
 		"paper_matcher_error":          paperMatcherError,
 		"configuration_errors":         configErrors,

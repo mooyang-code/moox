@@ -34,8 +34,8 @@ func TestFlattenFreshSyncsBeforeCancelAndClose(t *testing.T) {
 		"cancel:active-order",
 		"sync:account-a",
 		"place:" + flattenClientOrderIDForSpec(
-			"flatten-1", "account-a", "BTCUSDT", exchange.SideSell,
-			shared.MustDecimal("2"),
+			"flatten-1", "account-a", exchange.NewSymbolKey(exchange.MarketTypeSwap, "BTCUSDT"), exchange.SideSell,
+			shared.MustDecimal("2"), 0,
 		),
 		"submit:child-account-a-BTC-USDT-SWAP",
 		"sync:account-a",
@@ -122,7 +122,7 @@ func TestFlattenWaitsForCancellationConfirmation(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, fixture.orders.specs)
 	require.Equal(t, "RUNNING", result.Action.Status)
-	require.Contains(t, result.Accounts[0].Error, "cancellation is not confirmed")
+	require.Contains(t, result.Accounts[0].Error, "撤单还没有得到交易所确认")
 }
 
 func TestFlattenAttemptsEveryCancellationForOneAccount(t *testing.T) {
@@ -136,7 +136,7 @@ func TestFlattenAttemptsEveryCancellationForOneAccount(t *testing.T) {
 	}
 
 	err := fixture.service().cancelAccountOrders(
-		context.Background(), "space-1", "account-a", "flatten-1",
+		context.Background(), "space-1", "account-a", "flatten-1", flattenScope{},
 	)
 
 	require.ErrorContains(t, err, "first cancel failed")
@@ -205,9 +205,9 @@ func TestFlattenRetriesSameActionWithoutDuplicateChildren(t *testing.T) {
 		ClientOrderID: flattenClientOrderIDForSpec(
 			"flatten-1",
 			"account-a",
-			"BTCUSDT",
+			exchange.NewSymbolKey(exchange.MarketTypeSwap, "BTCUSDT"),
 			exchange.SideSell,
-			shared.MustDecimal("2"),
+			shared.MustDecimal("2"), 0,
 		),
 		ExchangeSymbol: "BTCUSDT", OrderType: "MARKET", Side: "SELL",
 		PositionSide: "NET", Quantity: "2", ReferencePrice: "100",
@@ -266,8 +266,8 @@ func TestFlattenIncludesDisabledMembersAndKeepsSpotSettlementCash(t *testing.T) 
 	account, err := fixture.store.GetTradingAccountByID(context.Background(), "account-b")
 	require.NoError(t, err)
 	account.Snapshot.Balances = []store.AssetBalance{
-		{Asset: "USDT", Available: "500", Total: "500"},
-		{Asset: "BTC", Available: "1", Total: "1"},
+		{Wallet: "UNIFIED", Asset: "USDT", Available: "500", Total: "500"},
+		{Wallet: "UNIFIED", Asset: "BTC", Available: "1", Total: "1"},
 	}
 	require.NoError(t, fixture.store.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.UpdateTradingAccountSync(

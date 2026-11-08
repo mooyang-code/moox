@@ -19,7 +19,7 @@ func shadowDelivery(t *testing.T, now time.Time, targetID string) *jetstream.Del
 	require.NoError(t, err)
 	encoded, err := registry.Encode(events.LogicalAccountTargetWeightRequested, &tradeeventpb.LogicalAccountTargetWeightRequested{
 		TargetId: targetID, InstanceId: "runner-1", SessionId: "session-1", StrategyId: "strategy-1", LogicalAccountId: "logical-1",
-		Targets:    []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", TargetWeight: "1.5"}},
+		Targets:    []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", MarketType: "SPOT", TargetWeight: "1.5"}},
 		BarEndTime: timestamppb.New(now), EffectiveAt: timestamppb.New(now), ValidUntil: timestamppb.New(now.Add(time.Hour)),
 		Shadow: true,
 	}, events.PublishOptions{EventID: targetID, OccurredAt: now, SpaceID: "space-1", SubjectID: "logical-1"})

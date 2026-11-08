@@ -27,7 +27,7 @@ const (
 	moduleHealthCheck = "strategy-targets"
 )
 
-// accumulatingReasons 是“数据还没攒够”的跳过原因：View 的历史不足以判断 min_age_bars，或上游因子这期被空洞保护跳过。
+// accumulatingReasons 是“数据还没攒够”的跳过原因：View 的历史不足以判断 min_age_bars，或上游因子这期被跳过（例如截面因子的全集缺数）。
 // 数据重置、新建因子任务之后必然出现一段，数据攒够自动恢复。只要还在积累期上限之内，这类跳过记为 partial（Monitor 显示“积累中”，
 // 不告警，也不计模块失败）；超过上限仍然不足，说明不是在积累（例如 min_age_bars 超过 View 保留根数），回到失败处理。
 var accumulatingReasons = map[string]bool{
@@ -45,6 +45,7 @@ const (
 )
 
 // failureReasons 是计入模块健康检查失败的跳过原因；其余跳过是业务上的"本期不能求值"，只通过实例的数据集新鲜度告警。
+// market_missing（绑定两个因子任务的实例里另一个市场的数据没到）属于后者：数据未到，不是模块故障。
 var failureReasons = map[string]bool{
 	trigger.SkipInfraRetryExhausted: true,
 	input.SkipConfigError:           true,

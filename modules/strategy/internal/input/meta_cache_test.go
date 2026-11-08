@@ -106,7 +106,7 @@ func TestMetaCacheRevalidateFailureIsReturned(t *testing.T) {
 // 经真实 LoadBar 连续处理多个事件：标的元数据跨事件复用，修订号变化后重读，修订号读取失败时返回错误。
 func TestLoadBarUsesMetaCacheAcrossEvents(t *testing.T) {
 	fake := newFakeClient("spot")
-	resolved, program, err := Resolve(context.Background(), fake, "space", "ftask_1h", parseStrategy(t, exampleDSL))
+	resolved, program, err := Resolve(context.Background(), fake, "space", []string{"ftask_1h"}, parseStrategy(t, exampleDSL))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +156,7 @@ func TestLoadBarUsesMetaCacheAcrossEvents(t *testing.T) {
 func TestAgeProbeCacheSkipsQueryUntilIndexChanges(t *testing.T) {
 	client := newFakeClient("spot")
 	strategy := parseStrategy(t, strings.Replace(exampleDSL, "universe:\n", "universe:\n  min_age_bars: 24\n", 1))
-	resolved, program, err := Resolve(context.Background(), client, "space", "ftask_1h", strategy)
+	resolved, program, err := Resolve(context.Background(), client, "space", []string{"ftask_1h"}, strategy)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -203,12 +203,12 @@ func TestAgeProbeCacheSkipsQueryUntilIndexChanges(t *testing.T) {
 // memoryAgeStore 是内存里的 AgeStore，用来模拟跨重启的持久化。
 type memoryAgeStore struct{ saved map[string][]string }
 
-func (m *memoryAgeStore) LoadAgePassed(_ context.Context, spaceID, viewID, indexID string, minAgeBars int) ([]string, error) {
-	return m.saved[fmt.Sprintf("%s|%s|%s|%d", spaceID, viewID, indexID, minAgeBars)], nil
+func (m *memoryAgeStore) LoadAgePassed(_ context.Context, spaceID, viewID, indexID string, minAgeBars int, market string) ([]string, error) {
+	return m.saved[fmt.Sprintf("%s|%s|%s|%d|%s", spaceID, viewID, indexID, minAgeBars, market)], nil
 }
 
-func (m *memoryAgeStore) SaveAgePassed(_ context.Context, spaceID, viewID, indexID string, minAgeBars int, ids []string, _ time.Time) error {
-	key := fmt.Sprintf("%s|%s|%s|%d", spaceID, viewID, indexID, minAgeBars)
+func (m *memoryAgeStore) SaveAgePassed(_ context.Context, spaceID, viewID, indexID string, minAgeBars int, market string, ids []string, _ time.Time) error {
+	key := fmt.Sprintf("%s|%s|%s|%d|%s", spaceID, viewID, indexID, minAgeBars, market)
 	m.saved[key] = append(m.saved[key], ids...)
 	return nil
 }
@@ -217,7 +217,7 @@ func (m *memoryAgeStore) SaveAgePassed(_ context.Context, spaceID, viewID, index
 func TestAgeProbePersistsAcrossRestart(t *testing.T) {
 	client := newFakeClient("spot")
 	strategy := parseStrategy(t, strings.Replace(exampleDSL, "universe:\n", "universe:\n  min_age_bars: 24\n", 1))
-	resolved, program, err := Resolve(context.Background(), client, "space", "ftask_1h", strategy)
+	resolved, program, err := Resolve(context.Background(), client, "space", []string{"ftask_1h"}, strategy)
 	if err != nil {
 		t.Fatal(err)
 	}

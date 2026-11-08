@@ -18,7 +18,7 @@ type valuationFacts struct {
 }
 
 func (f valuationFacts) GetTradingAccountByID(context.Context, string) (store.TradingAccountRecord, error) {
-	return store.TradingAccountRecord{SpaceID: "s", TradingAccountID: "a", MarketType: "SWAP", SettlementAsset: "USDT"}, nil
+	return store.TradingAccountRecord{SpaceID: "s", TradingAccountID: "a", Markets: []string{"SWAP"}, SettlementAsset: "USDT"}, nil
 }
 func (f valuationFacts) GetPaperBalanceSnapshot(context.Context, string, string) (store.PaperBalanceSnapshot, error) {
 	return store.PaperBalanceSnapshot{Totals: map[string]shared.Decimal{"USDT": shared.MustDecimal("1000")}}, nil
@@ -26,7 +26,7 @@ func (f valuationFacts) GetPaperBalanceSnapshot(context.Context, string, string)
 func (f valuationFacts) ListInstruments(context.Context, string, string) ([]store.InstrumentRecord, error) {
 	return nil, nil
 }
-func (f valuationFacts) ListPositions(context.Context, string, string, string) ([]store.PositionRecord, error) {
+func (f valuationFacts) ListPositions(context.Context, string, string, exchange.SymbolKey) ([]store.PositionRecord, error) {
 	return f.positions, nil
 }
 
@@ -41,11 +41,11 @@ type valuationMarket struct {
 func (m *valuationMarket) LoadInstruments(context.Context) ([]exchange.Instrument, error) {
 	return m.instruments, nil
 }
-func (m *valuationMarket) GetQuote(context.Context, shared.ExchangeSymbol) (execution.MarketQuote, error) {
+func (m *valuationMarket) GetQuote(context.Context, exchange.SymbolKey) (execution.MarketQuote, error) {
 	m.quoteCalls++
 	return execution.MarketQuote{}, nil
 }
-func (m *valuationMarket) GetReferencePrice(context.Context, string) (exchange.ReferencePrice, error) {
+func (m *valuationMarket) GetReferencePrice(context.Context, exchange.SymbolKey) (exchange.ReferencePrice, error) {
 	m.priceCalls++
 	return exchange.ReferencePrice{Price: shared.MustDecimal("110"), UpdatedAt: m.updatedAt}, nil
 }

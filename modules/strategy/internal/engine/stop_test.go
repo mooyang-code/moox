@@ -73,7 +73,7 @@ type stopRun struct {
 func newStopRun(t *testing.T, text string, columns ...string) *stopRun {
 	strategy, err := dsl.Parse([]byte(text))
 	require.NoError(t, err)
-	program, err := dsl.Compile(strategy, columns)
+	program, err := compileMode(strategy, columns)
 	require.NoError(t, err)
 	return &stopRun{t: t, program: program, bar: 100}
 }
@@ -93,7 +93,7 @@ func (r *stopRun) step(rows map[string]map[string]float64) (map[string]string, m
 		expected[rule.Rule.ID] = ids
 	}
 	frame := Frame{BarIndex: r.bar, Rows: frameRows, Universe: ids, Expected: expected, AgedOut: map[string][]string{}}
-	decision, err := Evaluate(r.program, frame, r.state)
+	decision, err := evalFrame(r.program, frame, r.state)
 	require.NoError(r.t, err)
 	require.Equal(r.t, StatusOK, decision.Status, "%v", decision.Summary.Notes)
 	r.state = decision.State
@@ -275,9 +275,9 @@ func TestStopColumns(t *testing.T) {
 	text := "name: s\nrules:\n  - id: r\n    type: rank\n    score: \"m\"\n    select: {top: 1}\n    weight: {total: 1}\n    stop: {loss: 0.1, price: extreme}\n"
 	strategy, err := dsl.Parse([]byte(text))
 	require.NoError(t, err)
-	_, err = dsl.Compile(strategy, []string{"close", "m"})
+	_, err = compileMode(strategy, []string{"close", "m"})
 	require.ErrorContains(t, err, "high")
-	program, err := dsl.Compile(strategy, []string{"close", "high", "low", "m"})
+	program, err := compileMode(strategy, []string{"close", "high", "low", "m"})
 	require.NoError(t, err)
 	require.Equal(t, []string{"m"}, program.Rules[0].Columns())
 	require.ElementsMatch(t, []string{"close", "high", "low", "m"}, program.Columns)

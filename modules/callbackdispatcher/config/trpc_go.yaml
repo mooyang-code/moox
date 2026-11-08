@@ -1,0 +1,56 @@
+global:
+  namespace: Production
+  env_name: callback-dispatcher
+
+server:
+  # 停止时等待已接纳的请求完成（毫秒）。
+  max_close_wait_time: 20000
+  filter:
+    - recovery
+    - validation
+    - prometheus
+  timeout: 15000
+  service:
+    - name: trpc.moox.callbackdispatcher.CallbackDispatcherService
+      ip: 127.0.0.1
+      port: 11460
+      network: tcp
+      protocol: trpc
+      transport: go-net
+      timeout: 15000
+    - name: trpc.moox.callbackdispatcher.Health
+      ip: 127.0.0.1
+      port: 11461
+      network: tcp
+      protocol: http_no_protocol
+      timeout: 3000
+    - name: trpc.moox.callbackdispatcher.metrics.timer
+      port: 11463
+      network: "*/30 * * * * *"
+      protocol: timer
+      timeout: 10000
+
+plugins:
+  metrics:
+    prometheus:
+      ip: 127.0.0.1
+      port: 12965
+      path: /metrics
+      enablepush: false
+  auth:
+    validation:
+      enable_error_log: false
+      server_validate_err_code: 100101
+      client_validate_err_code: 100102
+  log:
+    default:
+      - writer: file
+        level: info
+        writer_config:
+          log_path: ./logs
+          filename: trpc.log
+          roll_type: size
+          max_age: 7
+          max_size: 10
+          max_backups: 5
+          compress: false

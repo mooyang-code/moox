@@ -39,7 +39,7 @@ func TestUpdateInstanceRejectsDeletedDefinition(t *testing.T) {
 	h.createInstance("i1", "s1", "ftask_i1", "", false)
 	removed, _ := h.service.DeleteStrategy(h.ctx, &strategypb.DeleteStrategyReq{StrategyId: "s2"})
 	requireOK(t, int32(removed.GetRetInfo().GetCode()), removed.GetRetInfo().GetMsg())
-	rsp, _ := h.service.UpdateStrategyInstance(h.ctx, &strategypb.UpdateStrategyInstanceReq{Instance: &strategypb.StrategyInstance{InstanceId: "i1", StrategyId: "s2", FactorTaskId: "ftask_i1"}})
+	rsp, _ := h.service.UpdateStrategyInstance(h.ctx, &strategypb.UpdateStrategyInstanceReq{Instance: &strategypb.StrategyInstance{InstanceId: "i1", StrategyId: "s2", FactorTasks: map[string]string{"spot": "ftask_i1"}}})
 	requireFail(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg(), "s2 不存在")
 }
 
@@ -86,7 +86,7 @@ func TestReplayRecordsSourceAndTrimsList(t *testing.T) {
 	if err != nil || instance.SessionID == nil {
 		t.Fatalf("实例应已启用：%+v err=%v", instance, err)
 	}
-	started, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{InstanceId: "i1", FactorTaskId: "ftask_a", StartTime: "2026-09-02T00:00:00.0005Z", EndTime: "2026-09-03T00:00:00Z"})
+	started, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{InstanceId: "i1", FactorTasks: map[string]string{"spot": "ftask_i1"}, StartTime: "2026-09-02T00:00:00.0005Z", EndTime: "2026-09-03T00:00:00Z"})
 	requireOK(t, int32(started.GetRetInfo().GetCode()), started.GetRetInfo().GetMsg())
 	replay := started.GetReplay()
 	if replay.GetInstanceId() != "i1" || replay.GetSessionId() != *instance.SessionID || replay.GetStartTime() != "2026-09-02T00:00:00Z" {

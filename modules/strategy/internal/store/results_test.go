@@ -10,7 +10,7 @@ import (
 )
 
 func inputJSON(viewID string, factors map[string]string) json.RawMessage {
-	raw, _ := json.Marshal(InputRecord{ViewID: viewID, Bar: "1h", Calendar: "crypto_24x7", BarStart: testNow, Factors: factors})
+	raw, _ := json.Marshal(InputRecord{Views: map[string]ViewInput{viewID: {Factors: factors}}, Bar: "1h", Calendar: "crypto_24x7", BarStart: testNow})
 	return raw
 }
 
@@ -243,29 +243,29 @@ func TestAdjacentRecordTrustRules(t *testing.T) {
 	if err := repo.DisableInstance(ctx, "i1", ptr("session-1"), nil, "", testNow); err != nil {
 		t.Fatal(err)
 	}
-	if err := repo.OpenSession(ctx, Session{SessionID: "session-2", InstanceID: "i1", DSLHash: testHash, ResolvedJSON: `{"view_id":"view_factor_a","factor_task_id":"ftask_a"}`, CreatedAt: testNow}, "name: demo"); err != nil {
+	if err := repo.OpenSession(ctx, Session{SessionID: "session-2", InstanceID: "i1", DSLHash: testHash, ResolvedJSON: `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"view_id":"view_factor_a","factor_task_id":"ftask_a"}}}`, CreatedAt: testNow}, "name: demo"); err != nil {
 		t.Fatal(err)
 	}
 	attachAndEnable(t, repo, "i1", "session-2", nil)
-	record, input, found, err := repo.AdjacentRecord(ctx, "i1", "view_a", "1h", "crypto_24x7", bar1, []string{"ma"}, "session-2")
-	if err != nil || !found || record.ResultID != "old" || input.Factors["ma"] != "h1" {
+	record, input, found, err := repo.AdjacentRecord(ctx, "i1", []string{"view_a"}, "1h", "crypto_24x7", bar1, []string{"ma"}, "session-2")
+	if err != nil || !found || record.ResultID != "old" || input.Views["view_a"].Factors["ma"] != "h1" {
 		t.Fatalf("应找到旧会话的可信记录：found=%v record=%+v err=%v", found, record, err)
 	}
-	if _, _, found, err := repo.AdjacentRecord(ctx, "i1", "view_b", "1h", "crypto_24x7", bar1, []string{"ma"}, "session-2"); err != nil || found {
+	if _, _, found, err := repo.AdjacentRecord(ctx, "i1", []string{"view_b"}, "1h", "crypto_24x7", bar1, []string{"ma"}, "session-2"); err != nil || found {
 		t.Fatalf("其他 View 的记录不可信：found=%v err=%v", found, err)
 	}
-	if _, _, found, err := repo.AdjacentRecord(ctx, "i1", "view_a", "1h", "crypto_24x7", bar1, []string{"ma", "mom"}, "session-2"); err != nil || found {
+	if _, _, found, err := repo.AdjacentRecord(ctx, "i1", []string{"view_a"}, "1h", "crypto_24x7", bar1, []string{"ma", "mom"}, "session-2"); err != nil || found {
 		t.Fatalf("缺少因子指纹的记录不可信：found=%v err=%v", found, err)
 	}
-	if _, _, found, err := repo.AdjacentRecord(ctx, "i1", "view_a", "4h", "crypto_24x7", bar1, []string{"ma"}, "session-2"); err != nil || found {
+	if _, _, found, err := repo.AdjacentRecord(ctx, "i1", []string{"view_a"}, "4h", "crypto_24x7", bar1, []string{"ma"}, "session-2"); err != nil || found {
 		t.Fatalf("不同 bar 的记录不可信：found=%v err=%v", found, err)
 	}
 	// 当前会话同一根 bar 的 skipped 记录优先。
 	current := skippedResult("new", "i1", "session-2", 1, "previous_version_unknown")
 	current.InputJSON = inputJSON("view_a", map[string]string{"ma": "h2"})
 	mustCommit(t, repo, current, nil, testNow)
-	record, input, found, err = repo.AdjacentRecord(ctx, "i1", "view_a", "1h", "crypto_24x7", bar1, []string{"ma"}, "session-2")
-	if err != nil || !found || record.ResultID != "new" || input.Factors["ma"] != "h2" {
+	record, input, found, err = repo.AdjacentRecord(ctx, "i1", []string{"view_a"}, "1h", "crypto_24x7", bar1, []string{"ma"}, "session-2")
+	if err != nil || !found || record.ResultID != "new" || input.Views["view_a"].Factors["ma"] != "h2" {
 		t.Fatalf("应优先当前会话：found=%v record=%+v err=%v", found, record, err)
 	}
 }

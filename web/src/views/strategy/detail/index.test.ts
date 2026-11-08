@@ -28,7 +28,7 @@ vi.mock("@/views/strategy/components/strategy-result-table.vue", () => ({
 import DetailPage from "./index.vue";
 
 const stubs = {
-  "a-button": { template: "<button><slot /></button>" },
+  "a-button": { props: ["disabled"], template: '<button :disabled="disabled"><slot /></button>' },
   "a-switch": true,
   "a-space": { template: "<div><slot /></div>" },
   "a-alert": { template: '<div class="alert"><slot /></div>' },
@@ -107,6 +107,23 @@ describe("strategy detail page result paging", () => {
     await wrapper.find(".retry").trigger("click");
     await flushPromises();
     expect(ctx.store.loadResultPage).toHaveBeenLastCalledWith(1, 20, false);
+  });
+
+  it("策略池实例禁用回放并说明原因（后端研究回放不支持策略池）", async () => {
+    ctx.store.strategy = { strategy_id: "s", name: "池", dsl_yaml: "strategy_pool:\n  members: []\n" };
+    const wrapper = mount(DetailPage, { global: { stubs } });
+    await flushPromises();
+    const replay = wrapper.findAll("button").find(item => item.text() === "回放")!;
+    expect(replay.attributes("disabled")).toBeDefined();
+    expect(wrapper.text()).toContain("策略池暂不支持回放");
+  });
+
+  it("普通策略可以回放", async () => {
+    ctx.store.strategy = { strategy_id: "s", name: "动量", dsl_yaml: "name: demo\n" };
+    const wrapper = mount(DetailPage, { global: { stubs } });
+    await flushPromises();
+    const replay = wrapper.findAll("button").find(item => item.text() === "回放")!;
+    expect(replay.attributes("disabled")).toBeUndefined();
   });
 
   it("does not treat a result read error as an instance detail failure", async () => {

@@ -100,7 +100,7 @@ func (r *Reducer) ApplyFill(
 			source.TradingAccountID,
 			fill.ClientOrderID,
 			fill.ExchangeOrderID,
-			fill.ExchangeSymbol,
+			exchange.SymbolKey{Market: fill.Market, Symbol: fill.ExchangeSymbol},
 		)
 		if err != nil {
 			return err
@@ -148,6 +148,9 @@ func (r *Reducer) applyFillTx(
 ) error {
 	if tx == nil {
 		return errors.New("trade: Fill reducer transaction is required")
+	}
+	if fill.Market != exchange.MarketType(record.MarketType) {
+		return fmt.Errorf("trade: Fill 市场 %q 与订单市场 %q 不一致", fill.Market, record.MarketType)
 	}
 	if fill.ExchangeOrderID != "" && record.ExchangeOrderID == "" {
 		record.ExchangeOrderID = fill.ExchangeOrderID
@@ -223,7 +226,9 @@ func markBalancePendingForLiveFill(tx *store.Tx, source Source, fill exchange.Fi
 	if account.ExecutionMode == string(exchange.ExecutionModePaper) {
 		return nil
 	}
-	if err := tx.RaiseBalancePending(source.SpaceID, source.TradingAccountID, fill.TradedAt.UnixMilli()); err != nil {
+	// 水位只记在这笔成交所属市场的钱包上：合约成交不会让现货钱包一直等不到确认。
+	wallet := account.WalletFor(string(fill.Market))
+	if err := tx.RaiseBalancePending(source.SpaceID, source.TradingAccountID, wallet, fill.TradedAt.UnixMilli()); err != nil {
 		return err
 	}
 	return tx.UpdateTradingAccountReadiness(
@@ -242,6 +247,7 @@ func validateFillInput(r *Reducer, fill exchange.Fill, source Source) error {
 	}
 	if strings.TrimSpace(fill.ExchangeTradeID) == "" ||
 		strings.TrimSpace(fill.ExchangeSymbol) == "" ||
+		!fill.Market.Valid() ||
 		(strings.TrimSpace(fill.ClientOrderID) == "" &&
 			strings.TrimSpace(fill.ExchangeOrderID) == "") ||
 		!fill.Side.Valid() ||
@@ -258,8 +264,9 @@ func validateFillInput(r *Reducer, fill exchange.Fill, source Source) error {
 	return nil
 }
 
+// canonicalFillID 是成交的本地主键：账户:市场:代码:成交号。币安现货和合约的成交号是两套独立序列，必须带市场。
 func canonicalFillID(accountID string, fill exchange.Fill) string {
-	return accountID + ":" + fill.ExchangeSymbol + ":" + fill.ExchangeTradeID
+	return accountID + ":" + string(fill.Market) + ":" + fill.ExchangeSymbol + ":" + fill.ExchangeTradeID
 }
 
 func applyOrderFill(
@@ -368,13 +375,14 @@ func projectSwapPosition(
 	fromPaperMatcher bool,
 ) error {
 	exchangeSymbol := record.ExchangeSymbol
+	key := exchange.NewSymbolKey(record.MarketType, exchangeSymbol)
 	// 迟到成交：权威持仓快照（含确认为空仓而删除留下的墓碑）已经覆盖到比这笔成交更晚的时间，成交数量已体现在快照里，
 	// 不能再叠加（成交仍照常入账本）。不晚于覆盖时间即跳过（含同毫秒）：持仓版本时间就是最后一次变更（通常正是这笔成交）的时间，同毫秒的成交绝大多数已体现在快照里；
 	// 极少数同毫秒多笔成交的误差由下一次权威快照校正。
 	// paper 没有独立的交易所权威数据：它的持仓快照读的就是这张本地持仓表，成交由撮合器直接投影，
 	// 不能用“外部快照覆盖时间”跳过（否则同毫秒的独立成交会永久漏掉，也没有后续快照能纠正）。
 	if !fromPaperMatcher {
-		covered, coveredErr := tx.PositionSnapshotCoveredUntil(record.SpaceID, record.TradingAccountID, exchangeSymbol, string(exchange.PositionSideNet))
+		covered, coveredErr := tx.PositionSnapshotCoveredUntil(record.SpaceID, record.TradingAccountID, key, string(exchange.PositionSideNet))
 		if coveredErr != nil {
 			return coveredErr
 		}
@@ -383,7 +391,7 @@ func projectSwapPosition(
 		}
 	}
 	positionRecord, found, err := tx.GetPosition(
-		record.SpaceID, record.TradingAccountID, exchangeSymbol, string(exchange.PositionSideNet),
+		record.SpaceID, record.TradingAccountID, key, string(exchange.PositionSideNet),
 	)
 	if err != nil {
 		return err
@@ -394,9 +402,6 @@ func projectSwapPosition(
 			return err
 		}
 		leverage := account.LeverageSettings[record.InstrumentID]
-		if leverage == "" {
-			leverage = account.LeverageSettings[exchangeSymbol]
-		}
 		// A wildcard leverage setting is a generic account fallback. Keep the
 		// reducer independent of execution mode; Live and Paper both project the
 		// same Position facts from a normalized Fill.
@@ -408,7 +413,7 @@ func projectSwapPosition(
 		}
 		positionRecord = store.PositionRecord{
 			SpaceID: record.SpaceID, TradingAccountID: record.TradingAccountID,
-			InstrumentID: record.InstrumentID, ExchangeSymbol: exchangeSymbol,
+			MarketType: record.MarketType, InstrumentID: record.InstrumentID, ExchangeSymbol: exchangeSymbol,
 			PositionSide:   string(exchange.PositionSideNet),
 			SignedQuantity: "0", EntryPrice: "0", MarkPrice: "0",
 			Leverage: leverage, MarginMode: account.MarginMode,

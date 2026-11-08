@@ -47,6 +47,8 @@ type HistoryGap struct {
 	// Missing 是每个受影响标的在 [From, To) 内缺的根数。
 	Missing  int      `json:"missing"`
 	Subjects []string `json:"subjects"`
+	// SeriesTag 只在统一数据集时有值：缺口属于这一条序列，现货、永续的缺口分开成组。
+	SeriesTag string `json:"series_tag,omitempty"`
 }
 
 // HistoryResult 是一个数据集（某个频率）生效点之前一段历史的检查结果。
@@ -95,7 +97,12 @@ func (c *Checker) CheckHistory(ctx context.Context, spaceID, datasetID, frequenc
 	if len(bars) == 0 || len(first.Subjects) == 0 {
 		return result, nil
 	}
-	if points := len(bars) * len(first.Subjects); points > MaxCheckPoints {
+	groups := first.groups()
+	seriesCount := 0
+	for _, group := range groups {
+		seriesCount += len(group.Subjects)
+	}
+	if points := len(bars) * seriesCount; points > MaxCheckPoints {
 		return nil, fmt.Errorf("the history range covers about %d bars, above the limit %d", points, MaxCheckPoints)
 	}
 
@@ -115,8 +122,18 @@ func (c *Checker) CheckHistory(ctx context.Context, spaceID, datasetID, frequenc
 		batchSize = subjectsPerCount
 	}
 	end := bars[len(bars)-1].Add(time.Second)
-	for from := 0; from < len(first.Subjects); from += batchSize {
-		batch := first.Subjects[from:min(from+batchSize, len(first.Subjects))]
+	type historyBatch struct {
+		tag      string
+		subjects []string
+	}
+	var batches []historyBatch
+	for _, group := range groups {
+		for from := 0; from < len(group.Subjects); from += batchSize {
+			batches = append(batches, historyBatch{tag: group.Tag, subjects: group.Subjects[from:min(from+batchSize, len(group.Subjects))]})
+		}
+	}
+	for _, item := range batches {
+		batch, seriesTag := item.subjects, item.tag
 		wg.Add(1)
 		slots <- struct{}{}
 		go func() {
@@ -129,7 +146,7 @@ func (c *Checker) CheckHistory(ctx context.Context, spaceID, datasetID, frequenc
 					firstErr = err
 				}
 			}
-			absent, err := c.absentBars(ctx, spaceID, datasetID, frequencyName, batch, bars)
+			absent, err := c.absentBars(ctx, spaceID, datasetID, frequencyName, seriesTag, batch, bars)
 			if err != nil {
 				fail(err)
 				return
@@ -137,7 +154,7 @@ func (c *Checker) CheckHistory(ctx context.Context, spaceID, datasetID, frequenc
 			// 先比对根数：一根都没有的标的没有历史，根数齐全的标的没有缺口，只有其余的标的才读行定位缺口。
 			detail, complete := batch, 0
 			if counting {
-				counts, err := countPresent(ctx, counter, c.Auth, spaceID, datasetID, frequencyName, batch, bars[0], end)
+				counts, err := countPresent(ctx, counter, c.Auth, spaceID, datasetID, frequencyName, seriesTag, batch, bars[0], end)
 				if err != nil {
 					log.WarnContextf(ctx, "collector history count failed, falling back to row reads space=%s dataset=%s|%s: %v", spaceID, datasetID, frequencyName, err)
 				} else {
@@ -156,7 +173,7 @@ func (c *Checker) CheckHistory(ctx context.Context, spaceID, datasetID, frequenc
 			present := map[string]map[int64]bool{}
 			for from := 0; from < len(detail); from += subjectsPerRead {
 				chunk := detail[from:min(from+subjectsPerRead, len(detail))]
-				rows, err := c.readPresent(ctx, spaceID, datasetID, frequencyName, chunk, bars[0], end, []string{"close"}, false)
+				rows, err := c.readPresent(ctx, spaceID, datasetID, frequencyName, seriesTag, chunk, bars[0], end, []string{"close"}, false)
 				if err != nil {
 					fail(fmt.Errorf("read history %s %s %s 等 %d 个标的: %w", datasetID, frequencyName, chunk[0], len(chunk), err))
 					return
@@ -180,7 +197,7 @@ func (c *Checker) CheckHistory(ctx context.Context, spaceID, datasetID, frequenc
 					continue
 				}
 				result.WithHistory++
-				gaps = append(gaps, subjectGaps(datasetID, frequencyName, subject, frequency, bars[start:], present[subject])...)
+				gaps = append(gaps, subjectGaps(datasetID, frequencyName, subject, seriesTag, frequency, bars[start:], present[subject])...)
 			}
 		}()
 	}
@@ -212,13 +229,16 @@ func firstPresent(bars []time.Time, present map[int64]bool) int {
 
 // groupHistoryGaps 把范围相同的缺口合并成一组，按起点排序，标的按字典序。
 func groupHistoryGaps(gaps []Gap) []HistoryGap {
-	type groupKey struct{ from, to int64 }
+	type groupKey struct {
+		from, to int64
+		tag      string
+	}
 	groups := map[groupKey]*HistoryGap{}
 	for _, gap := range gaps {
-		key := groupKey{gap.From.Unix(), gap.To.Unix()}
+		key := groupKey{gap.From.Unix(), gap.To.Unix(), gap.SeriesTag}
 		group := groups[key]
 		if group == nil {
-			group = &HistoryGap{DatasetID: gap.DatasetID, Frequency: gap.Frequency, From: gap.From, To: gap.To, Missing: gap.Missing}
+			group = &HistoryGap{DatasetID: gap.DatasetID, Frequency: gap.Frequency, From: gap.From, To: gap.To, Missing: gap.Missing, SeriesTag: gap.SeriesTag}
 			groups[key] = group
 		}
 		group.Subjects = append(group.Subjects, gap.SubjectID)
@@ -232,7 +252,10 @@ func groupHistoryGaps(gaps []Gap) []HistoryGap {
 		if !out[i].From.Equal(out[j].From) {
 			return out[i].From.Before(out[j].From)
 		}
-		return out[i].To.Before(out[j].To)
+		if !out[i].To.Equal(out[j].To) {
+			return out[i].To.Before(out[j].To)
+		}
+		return out[i].SeriesTag < out[j].SeriesTag
 	})
 	return out
 }
@@ -312,7 +335,7 @@ func historyScanOf(spaceID string, at time.Time, result *HistoryResult) store.Hi
 	for _, gap := range result.Gaps {
 		scan.GapBars += gap.Missing * len(gap.Subjects)
 		for _, subject := range gap.Subjects {
-			subjects[subject] = true
+			subjects[subject] = true // 统一数据集里同一标的现货、永续同时缺时只算一个标的
 		}
 	}
 	scan.GapSubjects = len(subjects)
@@ -347,7 +370,7 @@ func (b *Backfiller) ConfirmHistory(ctx context.Context, spaceID, datasetID, fre
 	job := store.BackfillJob{SpaceID: spaceID, Source: store.BackfillSourceManual, Kind: store.BackfillKindHistory, DatasetID: datasetID, Frequency: frequency, From: scan.From, To: scan.To}
 	for _, group := range groups {
 		for _, subject := range group.Subjects {
-			gaps = append(gaps, Gap{DatasetID: datasetID, Frequency: frequency, SubjectID: subject, From: group.From, To: group.To, Missing: group.Missing})
+			gaps = append(gaps, Gap{DatasetID: datasetID, Frequency: frequency, SubjectID: subject, SeriesTag: group.SeriesTag, From: group.From, To: group.To, Missing: group.Missing})
 		}
 	}
 	if len(gaps) == 0 {
@@ -369,7 +392,11 @@ func logHistory(ctx context.Context, spaceID string, result *HistoryResult) {
 			break
 		}
 		sample := gap.Subjects[:min(len(gap.Subjects), historySampleSubjects)]
-		log.WarnContextf(ctx, "collector_history_gap space=%s dataset=%s frequency=%s from=%s to=%s missing_bars=%d subjects=%d sample=%s "+
+		series := ""
+		if gap.SeriesTag != "" {
+			series = " series_tag=" + gap.SeriesTag
+		}
+		log.WarnContextf(ctx, "collector_history_gap space=%s dataset=%s frequency=%s"+series+" from=%s to=%s missing_bars=%d subjects=%d sample=%s "+
 			"hint=该范围早于数据集最早的采集计划生效点，检查与自动补采看不到；在运行状态页点“补采确认”或用 moox-cli collector kline history-confirm --space-id %s --dataset-id %s --frequency %s 补采，行情源本来没有的 K 线会被确认并不再报告",
 			spaceID, gap.DatasetID, gap.Frequency, gap.From.Format(time.RFC3339), gap.To.Format(time.RFC3339), gap.Missing, len(gap.Subjects), strings.Join(sample, ","),
 			spaceID, gap.DatasetID, gap.Frequency)

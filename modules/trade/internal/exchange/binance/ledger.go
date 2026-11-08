@@ -31,7 +31,7 @@ type incomePayload struct {
 
 // LedgerSupported：U 本位永续有 /fapi/v1/income；现货没有统一的资金流水接口。
 func (a *Adapter) LedgerSupported() bool {
-	return a.config.MarketType == exchange.MarketTypeSwap
+	return a.config.Market() == exchange.MarketTypeSwap
 }
 
 // ListLedger 返回 [Start, End] 内最新的至多 Limit 条资金流水，按时间倒序。
@@ -82,7 +82,7 @@ func (a *Adapter) ListLedger(ctx context.Context, query exchange.LedgerQuery) (e
 }
 
 func (a *Adapter) incomePage(ctx context.Context, from, to int64) ([]incomePayload, error) {
-	raw, err := a.request(ctx, http.MethodGet, "/fapi/v1/income", url.Values{
+	raw, err := a.request(ctx, http.MethodGet, a.path("", "/fapi/v1/income"), url.Values{
 		"startTime": []string{strconv.FormatInt(from, 10)},
 		"endTime":   []string{strconv.FormatInt(to, 10)},
 		"limit":     []string{strconv.Itoa(incomePageLimit)},

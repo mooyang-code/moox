@@ -5,28 +5,31 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
+	"github.com/mooyang-code/moox/modules/strategy/internal/ledger"
 )
 
 // Metrics 是回放的绩效与局限性说明，写入 metrics_json。
 type Metrics struct {
-	Bars             int               `json:"bars"`
-	OKBars           int               `json:"ok_bars"`
-	SkippedBars      int               `json:"skipped_bars"`
-	SkipReasons      map[string]int    `json:"skip_reasons,omitempty"`
-	InitialEquity    float64           `json:"initial_equity"`
-	FinalEquity      float64           `json:"final_equity"`
-	TotalReturn      float64           `json:"total_return"`
-	AnnualizedReturn *float64          `json:"annualized_return,omitempty"`
-	MaxDrawdown      float64           `json:"max_drawdown"`
-	AverageTurnover  float64           `json:"average_turnover"`
-	AverageHoldings  float64           `json:"average_holdings"`
-	TotalFee         float64           `json:"total_fee"`
-	UnfilledBars     int               `json:"unfilled_bars"`
-	Liquidations     int               `json:"liquidations"`
-	FirstBarEnd      time.Time         `json:"first_bar_end,omitzero"`
-	LastBarEnd       time.Time         `json:"last_bar_end,omitzero"`
-	Factors          map[string]string `json:"factors,omitempty"`
-	Limitations      []string          `json:"limitations"`
+	Bars             int            `json:"bars"`
+	OKBars           int            `json:"ok_bars"`
+	SkippedBars      int            `json:"skipped_bars"`
+	SkipReasons      map[string]int `json:"skip_reasons,omitempty"`
+	InitialEquity    float64        `json:"initial_equity"`
+	FinalEquity      float64        `json:"final_equity"`
+	TotalReturn      float64        `json:"total_return"`
+	AnnualizedReturn *float64       `json:"annualized_return,omitempty"`
+	MaxDrawdown      float64        `json:"max_drawdown"`
+	AverageTurnover  float64        `json:"average_turnover"`
+	AverageHoldings  float64        `json:"average_holdings"`
+	TotalFee         float64        `json:"total_fee"`
+	UnfilledBars     int            `json:"unfilled_bars"`
+	Liquidations     int            `json:"liquidations"`
+	FirstBarEnd      time.Time      `json:"first_bar_end,omitzero"`
+	LastBarEnd       time.Time      `json:"last_bar_end,omitzero"`
+	// BankruptAt 是权益首次不超过 0（模拟爆仓）的那一期的 bar_end；没有爆仓时省略。此后各期空仓。
+	BankruptAt  time.Time         `json:"bankrupt_at,omitzero"`
+	Factors     map[string]string `json:"factors,omitempty"`
+	Limitations []string          `json:"limitations"`
 }
 
 // accumulator 逐期累计绩效。
@@ -61,7 +64,7 @@ func minAnnualizedBars(calendar, bar string, duration time.Duration) int {
 	return int((minAnnualizedSpan + duration - 1) / duration)
 }
 
-func (a *accumulator) add(barEnd time.Time, ok bool, reason string, outcome Outcome, holdings int) {
+func (a *accumulator) add(barEnd time.Time, ok bool, reason string, outcome ledger.Outcome, holdings int) {
 	m := &a.metrics
 	if m.Bars == 0 {
 		m.FirstBarEnd = barEnd
@@ -79,6 +82,9 @@ func (a *accumulator) add(barEnd time.Time, ok bool, reason string, outcome Outc
 		m.UnfilledBars++
 	}
 	m.Liquidations += len(outcome.Liquidated)
+	if outcome.Bankrupt {
+		m.BankruptAt = barEnd
+	}
 	m.TotalFee += outcome.Fee
 	a.holdingsSum += float64(holdings)
 	m.FinalEquity = outcome.EquityAfter
@@ -160,8 +166,8 @@ func periodsPerYear(calendar, bar string, duration time.Duration) float64 {
 	return float64(365*24*time.Hour) / float64(duration)
 }
 
-// limitations 是每份回放报告都要标注的局限。
-func limitations(liquidateAfter int, usesTags bool) []string {
+// limitations 是每份回放报告都要标注的局限；用到永续时再注明资金费与强平。
+func limitations(liquidateAfter int, usesTags, usesSwap bool) []string {
 	notes := []string{
 		"研究回放：按当期 close 成交的理想化假设，与实盘在 bar_end 之后成交不同",
 		"区间内历史行版本未验证：因子结果行不携带版本，只核对了回放开始时的因子定义指纹",
@@ -171,6 +177,9 @@ func limitations(liquidateAfter int, usesTags bool) []string {
 	}
 	if usesTags {
 		notes = append(notes, "标签只有当前成员关系：按标签选池存在幸存者偏差")
+	}
+	if usesSwap {
+		notes = append(notes, "永续按收盘价逐期结算盈亏、不占用现金：未计资金费，不模拟强平与保证金率")
 	}
 	return notes
 }

@@ -14,10 +14,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/BurntSushi/toml"
 	"gopkg.in/yaml.v3"
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
 	"github.com/mooyang-code/moox/modules/cli/internal/setup/configcrypt"
+	"github.com/mooyang-code/moox/packages/security/domainpolicy"
 	"github.com/mooyang-code/moox/packages/servicecatalog"
 )
 
@@ -38,6 +40,8 @@ type MigrateOptions struct {
 	// AddDeploymentHost / AddDeploymentComponents 非空时把这些组件加进该主机的 [deployments] 条目（--add-deployment 主机=组件,组件）。
 	AddDeploymentHost       string
 	AddDeploymentComponents []string
+	// AddEgressDomains 列出要追加到 [egress_proxy] http_domains 的域名（--add-egress-domain，可重复）；已在名单里的不重复。
+	AddEgressDomains []string
 	// SCFImport 非空时用这份 JSON 整体替换 [scf_plan]，并给相关主机补上 region 与 private_address（--import-scf）。
 	SCFImport string
 	// RemoveFactorTasks / RemoveFactors 列出要删除的 [[factors.tasks]]（按 id）与 [[factors.definitions]]（按 factor_id）
@@ -121,6 +125,11 @@ type MigrateReport struct {
 	Reachability map[string]string `json:"reachability,omitempty"`
 	// AddedDeployments 记录 --add-deployment 新增到各主机的组件。
 	AddedDeployments map[string][]string `json:"added_deployments,omitempty"`
+	// AddedEgressDomains 记录 --add-egress-domain 实际追加到 http_domains 的域名（已在名单里的不算）。
+	AddedEgressDomains []string `json:"added_egress_domains,omitempty"`
+	// DroppedComments 记录整条重写时注释没能保住的条目（多行数组中间几行上的注释）：首行、末行的行尾注释会接在新行后面，
+	// 中间几行的注释保不住，在这里列出条目位置，提示用户该条目的注释已去掉。
+	DroppedComments []string `json:"dropped_comments,omitempty"`
 	// RemovedFactorTasks / RemovedFactors 记录 --remove-factor-task、--remove-factor 删掉的任务 ID 与因子 ID。
 	RemovedFactorTasks []string `json:"removed_factor_tasks,omitempty"`
 	RemovedFactors     []string `json:"removed_factors,omitempty"`
@@ -201,11 +210,16 @@ func MigrateFile(path string, opts MigrateOptions) (MigrateReport, error) {
 	}
 	if opts.AddDeploymentHost != "" {
 		var added []string
-		if migrated, added, err = addHostDeployments(migrated, opts.AddDeploymentHost, opts.AddDeploymentComponents); err != nil {
+		if migrated, added, err = addHostDeployments(migrated, opts.AddDeploymentHost, opts.AddDeploymentComponents, &report.DroppedComments); err != nil {
 			return report, err
 		}
 		if len(added) > 0 {
 			report.AddedDeployments = map[string][]string{opts.AddDeploymentHost: added}
+		}
+	}
+	if len(opts.AddEgressDomains) > 0 {
+		if migrated, report.AddedEgressDomains, err = addEgressDomains(migrated, opts.AddEgressDomains, &report.DroppedComments); err != nil {
+			return report, err
 		}
 	}
 	if opts.SCFImport != "" {
@@ -1011,8 +1025,127 @@ func setHostReachability(plain []byte, host, mode string) ([]byte, error) {
 	return []byte(strings.Join(out, "\n")), nil
 }
 
+// addEgressDomains 把域名追加到 [egress_proxy] http_domains，返回实际追加的域名。
+// 已在名单里的（同名，或被已有的 *. 后缀覆盖）不重复；没写 http_domains 时从默认名单开始追加，没有 [egress_proxy] 表时新建。
+func addEgressDomains(plain []byte, domains []string, droppedComments *[]string) ([]byte, []string, error) {
+	blocks := splitBlocks(strings.Split(string(plain), "\n"))
+	i := slices.IndexFunc(blocks, func(b block) bool { return b.header == "egress_proxy" && !b.array })
+	if i < 0 {
+		blocks = append(blocks, block{header: "egress_proxy", lines: []string{"[egress_proxy]", ""}})
+		i = len(blocks) - 1
+		// 新表放在文件末尾：前一块末尾没有空行时补一行，和其它表隔开
+		if prev := blocks[i-1].lines; len(prev) > 0 && strings.TrimSpace(prev[len(prev)-1]) != "" {
+			blocks[i-1].lines = append(prev, "")
+		}
+	}
+	lines := blocks[i].lines
+	start, end := -1, -1
+	for n := 1; n < len(lines); n++ {
+		if key, _, ok := keyValue(lines[n]); ok && key == "http_domains" {
+			start, end = n, valueEnd(lines, n)
+			break
+		}
+	}
+	current := setupconfig.DefaultEgressHTTPDomains()
+	if start >= 0 {
+		// 按 TOML 解析这一项：单引号、双引号、多行数组都能读到，写回时不会丢域名。
+		var value struct {
+			HTTPDomains []string `toml:"http_domains"`
+		}
+		if _, err := toml.Decode(strings.Join(lines[start:end+1], "\n"), &value); err != nil {
+			return nil, nil, fmt.Errorf("读不出 [egress_proxy] http_domains：%w", err)
+		}
+		current = value.HTTPDomains
+	}
+	merged := slices.Clone(current)
+	var added []string
+	for _, raw := range domains {
+		domain := strings.ToLower(strings.TrimSpace(raw))
+		if _, ok := domainpolicy.Host(strings.TrimPrefix(domain, "*.")); !ok {
+			return nil, nil, fmt.Errorf("--add-egress-domain %q 不是合法域名：只能写完整域名（例如 openapi.okx.com）或 *. 开头的后缀", raw)
+		}
+		if slices.Contains(merged, domain) {
+			continue
+		}
+		if matcher, err := domainpolicy.New(merged); err == nil && !strings.HasPrefix(domain, "*.") && matcher.Allows(domain) {
+			continue
+		}
+		merged = append(merged, domain)
+		added = append(added, domain)
+	}
+	if len(added) == 0 {
+		return plain, nil, nil
+	}
+	quoted := make([]string, len(merged))
+	for n, domain := range merged {
+		quoted[n] = fmt.Sprintf("%q", domain)
+	}
+	line := "http_domains = [" + strings.Join(quoted, ", ") + "]"
+	if start >= 0 {
+		var dropped bool
+		if lines, dropped = rewriteEntry(lines, start, end, line); dropped {
+			*droppedComments = append(*droppedComments, "[egress_proxy] http_domains：该条目中间几行的注释已去掉")
+		}
+	} else {
+		lines = append(lines[:1], append([]string{line}, lines[1:]...)...)
+	}
+	blocks[i].lines = lines
+	var out []string
+	for _, b := range blocks {
+		out = append(out, b.lines...)
+	}
+	return []byte(strings.Join(out, "\n")), added, nil
+}
+
+// rewriteEntry 把 lines[start:end+1] 这一条键值整条换成一行 line：原条目首行、末行的行尾注释接在新行后面。
+// 多行数组中间几行上的注释（含整行注释）没有地方放，返回 dropped 为真，由调用方在输出里提示“该条目的注释已去掉”。
+func rewriteEntry(lines []string, start, end int, line string) ([]string, bool) {
+	var comments []string
+	for _, n := range []int{start, end} {
+		if comment := lineComment(lines[n]); comment != "" && !slices.Contains(comments, comment) {
+			comments = append(comments, comment)
+		}
+		if start == end {
+			break
+		}
+	}
+	dropped := false
+	for n := start + 1; n < end; n++ {
+		if lineComment(lines[n]) != "" {
+			dropped = true
+		}
+	}
+	if len(comments) > 0 {
+		line += "   " + strings.Join(comments, " ")
+	}
+	out := append(slices.Clone(lines[:start]), line)
+	return append(out, lines[end+1:]...), dropped
+}
+
+// lineComment 返回一行里字符串之外的 # 注释（含 #）；没有时返回空串。识别双引号（含转义）与单引号字符串。
+func lineComment(line string) string {
+	var quote rune
+	escaped := false
+	for at, r := range line {
+		switch {
+		case quote == '"' && escaped:
+			escaped = false
+		case quote == '"' && r == '\\':
+			escaped = true
+		case quote != 0 && r == quote:
+			quote = 0
+		case quote != 0:
+		case r == '"' || r == '\'':
+			quote = r
+		case r == '#':
+			return strings.TrimSpace(line[at:])
+		}
+	}
+	return ""
+}
+
 // addHostDeployments 把组件并入 [deployments] 里该主机的列表（没有就新建条目，已有的组件不重复），返回实际新增的组件。
-func addHostDeployments(plain []byte, host string, components []string) ([]byte, []string, error) {
+func addHostDeployments(plain []byte, host string, components []string, droppedComments *[]string) ([]byte, []string, error) {
 	blocks := splitBlocks(strings.Split(string(plain), "\n"))
 	if !slices.ContainsFunc(blocks, func(b block) bool { return b.header == "hosts."+host && !b.array }) {
 		return nil, nil, fmt.Errorf("moox.toml 里没有主机 %s", host)
@@ -1021,13 +1154,22 @@ func addHostDeployments(plain []byte, host string, components []string) ([]byte,
 	if i < 0 {
 		return nil, nil, errors.New("moox.toml 里没有 [deployments]")
 	}
-	var current []string
-	for _, line := range blocks[i].lines[1:] {
-		if key, value, ok := keyValue(line); ok && key == host {
-			for _, item := range regexp.MustCompile(`"([^"]+)"`).FindAllStringSubmatch(value, -1) {
-				current = append(current, item[1])
-			}
+	lines := blocks[i].lines
+	start, end := -1, -1
+	for n := 1; n < len(lines); n++ {
+		if key, _, ok := keyValue(lines[n]); ok && key == host {
+			start, end = n, valueEnd(lines, n)
+			break
 		}
+	}
+	var current []string
+	if start >= 0 {
+		// 按 TOML 解析这一项：单引号、双引号、多行数组都能读到，写回时不会丢组件。
+		var value map[string][]string
+		if _, err := toml.Decode(strings.Join(lines[start:end+1], "\n"), &value); err != nil {
+			return nil, nil, fmt.Errorf("读不出 [deployments] %s：%w", host, err)
+		}
+		current = value[host]
 	}
 	var added []string
 	merged := slices.Clone(current)
@@ -1044,7 +1186,16 @@ func addHostDeployments(plain []byte, host string, components []string) ([]byte,
 	for n, component := range merged {
 		quoted[n] = fmt.Sprintf("%q", component)
 	}
-	setBlockKey(&blocks[i], host, "["+strings.Join(quoted, ", ")+"]")
+	line := host + " = [" + strings.Join(quoted, ", ") + "]"
+	if start >= 0 {
+		var dropped bool
+		if lines, dropped = rewriteEntry(lines, start, end, line); dropped {
+			*droppedComments = append(*droppedComments, "[deployments] "+host+"：该条目中间几行的注释已去掉")
+		}
+	} else {
+		lines = append(lines[:1], append([]string{line}, lines[1:]...)...)
+	}
+	blocks[i].lines = lines
 	var out []string
 	for _, b := range blocks {
 		out = append(out, b.lines...)

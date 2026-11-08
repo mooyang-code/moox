@@ -17,7 +17,7 @@ const MaxDatasetMetricSeries = 1000
 // 一个过长的名称不能让整份指标快照被拒收。
 const MaxDatasetNameBytes = 192
 
-// partial 是按设计只产出部分结果的运行（窗口空洞保护、历史不足、预热中）：生产者在正常工作，只是数据还在积累，
+// partial 是按设计只产出部分结果的运行（历史不足、预热中）：生产者在正常工作，只是数据还在积累，
 // Monitor 据此显示“积累中”而不告警；incomplete 才是意外的不完整，仍按失败处理。
 var allowedDatasetResults = stringSet("success", "error", "empty", "rejected", "incomplete", "partial")
 

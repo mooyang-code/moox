@@ -29,6 +29,7 @@
             <span>View: {{ activeView?.view_id || "-" }}</span>
             <span>Dataset: {{ currentDatasetName }} ({{ currentDatasetId }})</span>
             <span v-if="activeView?.freq">频率: {{ activeView.freq }}</span>
+            <span v-if="currentDatasetUnified">{{ datasetMarketText("multi") }}</span>
             <span v-if="currentDatasetRetention">保留期: {{ currentDatasetRetention }}</span>
             <a-tag size="small" :color="mode === 'time_series' ? 'blue' : 'green'">{{ modeText }}</a-tag>
             <a-tag size="small" :color="activeView?.active_index_id ? 'green' : 'orange'">
@@ -156,7 +157,7 @@
                       ></template
                     >
                   </a-table-column>
-                  <a-table-column v-if="showSystemColumn('series_tag')" data-index="seriesTag" :width="180">
+                  <a-table-column v-if="showSystemColumn('series_tag')" data-index="seriesTag" :width="120">
                     <template #title
                       ><span class="sortable-title"
                         >序列标签<span class="sort-arrows"
@@ -167,6 +168,9 @@
                           </button></span
                         ></span
                       ></template
+                    >
+                    <template #cell="{ record }"
+                      ><span :title="record.seriesTag || undefined">{{ seriesTagDisplay(record.seriesTag) }}</span></template
                     >
                   </a-table-column>
                   <a-table-column data-index="version" :width="230">
@@ -343,6 +347,12 @@
         <a-descriptions :column="2" bordered>
           <a-descriptions-item :label="mode === 'time_series' ? '数据ID' : '记录ID'">{{ detailRow.key }}</a-descriptions-item>
           <a-descriptions-item :label="mode === 'time_series' ? '时间' : '版本'">{{ detailRow.version }}</a-descriptions-item>
+          <a-descriptions-item v-if="mode === 'time_series' && detailRow.seriesTag" label="市场">{{
+            seriesTagMarketText(detailRow.seriesTag)
+          }}</a-descriptions-item>
+          <a-descriptions-item v-if="mode === 'time_series' && detailRow.seriesTag" label="序列标签">{{
+            detailRow.seriesTag
+          }}</a-descriptions-item>
         </a-descriptions>
         <a-table :data="detailColumns" :pagination="false" :bordered="{ cell: true }" size="small" class="detail-table">
           <template #columns>
@@ -384,6 +394,7 @@ import type {
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import { useSpaceStore } from "@/store/modules/space";
 import { formatRetention, retentionSourceLabel } from "@/utils/retention";
+import { datasetMarketText, isUnifiedMarketType, seriesTagDisplay, seriesTagMarketText } from "@/views/data/shared/series-market";
 import {
   adaptiveColumnWidth,
   recordRowsToTableRows,
@@ -618,6 +629,9 @@ const currentDatasetRetention = computed(() => {
   if (!dataset?.retention) return "";
   return `${formatRetention(dataset.retention)}（${retentionSourceLabel(dataset.retention_source)}）`;
 });
+
+// 统一数据集（market_type 为 multi）：同一个数据集里放现货、永续两条序列。
+const currentDatasetUnified = computed(() => isUnifiedMarketType(primaryDataset.value?.attributes?.market_type));
 
 const mode = computed(() => viewModeFromPrimaryDataset(datasets.value, activeView.value?.dataset_id));
 const modeText = computed(() => {

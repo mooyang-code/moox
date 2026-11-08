@@ -22,7 +22,7 @@ type InstrumentTarget struct {
 	InstrumentID string `json:"instrument_id"`
 	// Quantity 在 Hold 为 true 时为空：保持标的不换算数量。
 	Quantity string `json:"quantity,omitempty"`
-	// Hold 为 true 表示保持该标的当前持仓数量不动（策略因数据空洞暂时无法决策），执行器对它既不加仓也不减仓。
+	// Hold 为 true 表示保持该标的当前持仓数量不动（标的所在市场本期不可用或只缺上一根，策略暂时无法决策），执行器对它既不加仓也不减仓。
 	Hold bool `json:"hold,omitempty"`
 }
 
@@ -30,6 +30,8 @@ type BlockedTarget struct {
 	InstrumentID string `json:"instrument_id"`
 	Quantity     string `json:"quantity"`
 	Reason       string `json:"reason"`
+	// Deferred 为真表示这一项不是被拦下，而是被单币每小时上限顺延到下一个整点。
+	Deferred bool `json:"deferred,omitempty"`
 }
 
 type LogicalAccountTargetRecord struct {
@@ -141,18 +143,29 @@ func (tx *Tx) AcceptLogicalAccountTarget(
 	if time.Now().UTC().UnixMilli() >= record.ValidUntil {
 		return LogicalAccountTargetRecord{}, false, fmt.Errorf("%w: target validity window", ErrTargetExpired)
 	}
-	if !exchange.RuleFor(account.MarketType).CanShort {
-		for _, target := range record.Targets {
-			if target.Hold {
-				continue
-			}
-			quantity, parseErr := shared.ParseDecimal(target.Quantity)
-			if parseErr != nil || quantity.Cmp(shared.Zero()) < 0 {
-				return LogicalAccountTargetRecord{}, false, fmt.Errorf(
-					"%w: SPOT target quantity cannot be negative",
-					ErrInvalidRecord,
-				)
-			}
+	tradable, marketsErr := tx.LogicalAccountMarkets(record.SpaceID, record.LogicalAccountID)
+	if marketsErr != nil {
+		return LogicalAccountTargetRecord{}, false, marketsErr
+	}
+	tradableMarkets := make([]exchange.MarketType, len(tradable))
+	for i, market := range tradable {
+		tradableMarkets[i] = exchange.MarketType(market)
+	}
+	for _, target := range record.Targets {
+		targetMarket := exchange.ResolveInstrumentMarket(target.InstrumentID, tradableMarkets)
+		if targetMarket == "" {
+			return LogicalAccountTargetRecord{}, false, fmt.Errorf("%w: 标的 %s 缺少市场后缀 -SPOT 或 -SWAP", ErrInvalidRecord, target.InstrumentID)
+		}
+		if target.Hold || exchange.RuleFor(targetMarket).CanShort {
+			continue
+		}
+		quantity, parseErr := shared.ParseDecimal(target.Quantity)
+		if parseErr != nil || quantity.Cmp(shared.Zero()) < 0 {
+			return LogicalAccountTargetRecord{}, false, fmt.Errorf(
+				"%w: %s 不能做空，目标数量不能为负",
+				ErrInvalidRecord,
+				target.InstrumentID,
+			)
 		}
 	}
 

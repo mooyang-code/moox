@@ -6,6 +6,7 @@ import (
 	"time"
 
 	accountapp "github.com/mooyang-code/moox/modules/trade/internal/application/account"
+	delistapp "github.com/mooyang-code/moox/modules/trade/internal/application/delist"
 	logicalapp "github.com/mooyang-code/moox/modules/trade/internal/application/logicalaccount"
 	operatorapp "github.com/mooyang-code/moox/modules/trade/internal/application/operator"
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
@@ -14,6 +15,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/runtime"
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
 	"gorm.io/gorm"
 )
@@ -32,8 +34,16 @@ func errorInfo(err error) *tradepb.RetInfo {
 	}
 	code := tradepb.ErrorCode_INNER_ERR
 	switch {
-	case errors.Is(err, operatorapp.ErrInvalidActionResult):
+	case errors.Is(err, operatorapp.ErrInvalidActionResult),
+		// 释放会话前目标挂单没撤下来：不能落到“冲突”“不存在”（策略把这两种当成已了结、不再重试）。
+		errors.Is(err, logicalapp.ErrTargetOrdersNotReleased):
 		code = tradepb.ErrorCode_INNER_ERR
+	case errors.Is(err, runtime.ErrSessionConfig):
+		// 会话还没建起来：请求没有发到交易所，稍后重试即可；前端据此等几秒重试。
+		code = tradepb.ErrorCode_TRADE_SESSION_NOT_READY
+	case errors.Is(err, logicalapp.ErrAdoptionRequired):
+		// 账户上已有持仓或挂单：前端据此提示勾选“接管已有持仓”再提交。
+		code = tradepb.ErrorCode_TRADE_ADOPTION_REQUIRED
 	case errors.Is(err, errSpaceRequired):
 		code = tradepb.ErrorCode_NO_PERMISSION
 	case errors.Is(err, gorm.ErrRecordNotFound),
@@ -49,15 +59,19 @@ func errorInfo(err error) *tradepb.RetInfo {
 		errors.Is(err, operatorapp.ErrInvalidCommand),
 		errors.Is(err, orderapp.ErrCrossZero),
 		errors.Is(err, tradingaccount.ErrInvalidAccount),
-		errors.Is(err, logicalapp.ErrAdoptionRequired),
 		errors.Is(err, logicalapp.ErrMemberHasExposure),
+		errors.Is(err, logicalapp.ErrRemovalHasExposure),
 		errors.Is(err, logicalaccount.ErrMemberElsewhere),
 		errors.Is(err, accountapp.ErrAccountInLogicalAccount),
 		errors.Is(err, operatorapp.ErrNotInLogicalAccount),
+		errors.Is(err, delistapp.ErrInvalidRequest),
+		errors.Is(err, delistapp.ErrNoMemberOfExchange),
 		errors.Is(err, errLedgerUnsupported),
 		errors.Is(err, errLedgerUnavailable),
 		errors.Is(err, logicalapp.ErrNotReady),
 		errors.Is(err, accountapp.ErrInvalidCredential),
+		errors.Is(err, accountapp.ErrInspectionBlocked),
+		errors.Is(err, accountapp.ErrReadOnlyCredential),
 		errors.Is(err, orderdomain.ErrInvalidOrder),
 		errors.Is(err, orderdomain.ErrInvalidSpec),
 		errors.Is(err, orderapp.ErrAccountOwnership),
@@ -131,6 +145,22 @@ func marketFromPB(value tradepb.MarketType) exchange.MarketType {
 	default:
 		return exchange.MarketTypeUnspecified
 	}
+}
+
+func marketsFromPB(values []tradepb.MarketType) []exchange.MarketType {
+	result := make([]exchange.MarketType, len(values))
+	for i, value := range values {
+		result[i] = marketFromPB(value)
+	}
+	return result
+}
+
+func marketsToPB[T ~string](values []T) []tradepb.MarketType {
+	result := make([]tradepb.MarketType, len(values))
+	for i, value := range values {
+		result[i] = marketToPB(string(value))
+	}
+	return result
 }
 
 func marketToPB(value string) tradepb.MarketType {
@@ -283,12 +313,14 @@ func accountToPB(value store.TradingAccountRecord) *tradepb.TradingAccount {
 		balances = append(balances, &tradepb.AssetBalance{
 			Asset: balance.Asset, Available: balance.Available,
 			Locked: balance.Locked, Total: balance.Total,
+			Wallet: balance.Wallet, Borrowed: balance.Borrowed,
 		})
 	}
 	account := &tradepb.TradingAccount{
 		TradingAccountId: value.TradingAccountID, SpaceId: value.SpaceID,
 		Name: value.Name, Exchange: exchangeToPB(value.Exchange),
-		MarketType:      marketToPB(value.MarketType),
+		Markets:     marketsToPB(value.Markets),
+		AccountMode: value.AccountMode, InspectionJson: value.InspectionJSON,
 		ExecutionMode:   executionModeToPB(value.ExecutionMode),
 		SettlementAsset: value.SettlementAsset, MarginMode: value.MarginMode,
 		Status: value.Status, Ready: value.Ready,
@@ -299,6 +331,7 @@ func accountToPB(value store.TradingAccountRecord) *tradepb.TradingAccount {
 			UsedMargin:        value.Snapshot.UsedMargin,
 			MaintenanceMargin: value.Snapshot.MaintenanceMargin,
 			UnrealizedPnl:     value.Snapshot.UnrealizedPnL,
+			ExchangeEquity:    value.Snapshot.ExchangeEquity,
 			ExchangeUpdatedAt: value.Snapshot.ExchangeUpdatedAt,
 		},
 		LastSyncAt: value.LastSyncAt, LastReadyAt: value.LastReadyAt,
@@ -325,6 +358,7 @@ func accountToPB(value store.TradingAccountRecord) *tradepb.TradingAccount {
 func logicalAccountToPB(
 	value store.LogicalAccountRecord,
 	members []store.LogicalAccountMemberRecord,
+	markets []string,
 	readiness logicalapp.Readiness,
 ) *tradepb.LogicalAccount {
 	if value.LogicalAccountID == "" {
@@ -338,6 +372,8 @@ func logicalAccountToPB(
 			Priority:         int32(member.Priority),
 		})
 	}
+	orderSettings, orderSettingsError := orderSettingsToPB(value.OrderSettingsJSON)
+	fundSettings, fundSettingsError := fundSettingsToPB(value.FundSettingsJSON)
 	return &tradepb.LogicalAccount{
 		LogicalAccountId: value.LogicalAccountID,
 		SpaceId:          value.SpaceID,
@@ -348,7 +384,7 @@ func logicalAccountToPB(
 		AuthFence:        value.AuthFence,
 		ExecutionMode:    executionModeToPB(value.ExecutionMode),
 		ControlMode:      controlModeToPB(value.ControlMode),
-		MarketType:       marketToPB(value.MarketType),
+		Markets:          marketsToPB(markets),
 		SettlementAsset:  value.SettlementAsset,
 		AutomationState:  value.AutomationState,
 		PauseReason:      value.PauseReason,
@@ -357,6 +393,8 @@ func logicalAccountToPB(
 		ReadinessReasons: append([]string(nil), readiness.Reasons...),
 		CreatedAt:        unixMilli(value.CreatedAt),
 		UpdatedAt:        unixMilli(value.UpdatedAt),
+		OrderSettings:    orderSettings, OrderSettingsError: orderSettingsError,
+		FundSettings: fundSettings, FundSettingsError: fundSettingsError,
 	}
 }
 
@@ -377,7 +415,7 @@ func orderToPB(value store.OrderRecord) *tradepb.Order {
 		ReducePositionOnly: value.ReduceOnly,
 		OwnerType:          value.OwnerType, OwnerId: value.OwnerID,
 		LogicalAccountId: value.LogicalAccountID, RunnerId: value.RunnerID,
-		State: value.State, FilledQuantity: value.FilledQuantity,
+		State: value.State, Attempt: int32(value.Attempt), FilledQuantity: value.FilledQuantity,
 		AveragePrice: value.AveragePrice, ReservedAsset: value.ReservedAsset,
 		ReservedQuantity:          value.ReservedQuantity,
 		RemainingReservedQuantity: value.RemainingReservedQuantity,
@@ -404,6 +442,7 @@ func fillToPB(value store.FillRecord) *tradepb.Fill {
 
 func positionToPB(value store.PositionRecord) *tradepb.Position {
 	return &tradepb.Position{
+		MarketType:       marketToPB(value.MarketType),
 		TradingAccountId: value.TradingAccountID, InstrumentId: value.InstrumentID, ExchangeSymbol: value.ExchangeSymbol,
 		PositionSide:   positionSideToPB(value.PositionSide),
 		SignedQuantity: value.SignedQuantity, EntryPrice: value.EntryPrice,
@@ -435,6 +474,7 @@ func logicalAccountTargetToPB(
 			InstrumentId: target.InstrumentID,
 			Quantity:     target.Quantity,
 			Reason:       target.Reason,
+			Deferred:     target.Deferred,
 		})
 	}
 	return &tradepb.LogicalAccountTarget{

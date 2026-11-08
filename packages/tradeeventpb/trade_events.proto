@@ -9,9 +9,11 @@ option go_package = "github.com/mooyang-code/moox/packages/tradeeventpb;tradeeve
 message InstrumentWeightTarget {
   string instrument_id = 1;
   string target_weight = 2;
-  // hold 为 true 表示保持该标的当前持仓数量不动（策略因数据空洞暂时无法决策）；
+  // hold 为 true 表示保持该标的当前持仓数量不动（标的所在市场本期不可用或只缺上一根，策略暂时无法决策）；
   // target_weight 是预留的预算占用，不用于换算数量。
   bool hold = 3;
+  // market_type 是该标的所属市场，必填：SPOT、SWAP 或 STOCK。同一个 instrument_id 可以按 SPOT、SWAP 各出现一次。
+  string market_type = 4;
 }
 
 message LogicalAccountTargetWeightRequested {
@@ -25,5 +27,5 @@ message LogicalAccountTargetWeightRequested {
   google.protobuf.Timestamp effective_at = 11;
   google.protobuf.Timestamp valid_until = 12;
   // shadow 为真表示预热中的策略实例发出的影子目标：Trade 只完成换算并记录，不预留资金、不下单。
-  bool shadow = 14; // 13 曾是已删除的 runner_id，不复用
+  bool shadow = 14;
 }

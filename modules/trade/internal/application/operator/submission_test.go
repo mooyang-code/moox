@@ -34,7 +34,7 @@ func (s submissionSources) ExecutionEligibility(ctx context.Context, id string) 
 	if record.Status != "ENABLED" {
 		return tradingaccount.Account{}, ErrInvalidCommand
 	}
-	return tradingaccount.Account{ID: id, SpaceID: "space-1", Exchange: exchange.ExchangeBinance, MarketType: exchange.MarketTypeSpot, ExecutionMode: exchange.ExecutionModeLive, Environment: exchange.AccountEnvironmentTestnet, Status: exchange.AccountStatusEnabled, Ready: true, SettlementAsset: "USDT", LastSyncAt: s.f.now, Snapshot: exchange.AccountSnapshot{AvailableFunds: shared.MustDecimal("100000"), Balances: []exchange.AssetBalance{{Asset: "USDT", Available: shared.MustDecimal("100000")}}}}, nil
+	return tradingaccount.Account{ID: id, SpaceID: "space-1", Exchange: exchange.ExchangeBinance, Markets: []exchange.MarketType{exchange.MarketTypeSpot}, ExecutionMode: exchange.ExecutionModeLive, Environment: exchange.AccountEnvironmentTestnet, Status: exchange.AccountStatusEnabled, Ready: true, SettlementAsset: "USDT", LastSyncAt: s.f.now, Snapshot: exchange.AccountSnapshot{AvailableFunds: shared.MustDecimal("100000"), Balances: []exchange.AssetBalance{{Wallet: exchange.WalletSpot, Asset: "USDT", Available: shared.MustDecimal("100000")}}}}, nil
 }
 
 func (s submissionSources) GetInstrument(context.Context, exchange.Exchange, exchange.MarketType, string) (exchange.Instrument, error) {
@@ -50,14 +50,14 @@ type submissionAdapter struct {
 func (a *submissionAdapter) Adapter(string) (execution.ExecutionAdapter, error) { return a, nil }
 func (a *submissionAdapter) PlaceOrder(context.Context, exchange.OrderRequest) (exchange.Order, error) {
 	a.posts++
-	return exchange.Order{ExchangeOrderID: fmt.Sprintf("exchange-%d", a.posts), Status: exchange.OrderStatusOpen}, nil
+	return exchange.Order{Market: exchange.MarketTypeSwap, ExchangeOrderID: fmt.Sprintf("exchange-%d", a.posts), Status: exchange.OrderStatusOpen}, nil
 }
-func (a *submissionAdapter) GetOrder(context.Context, shared.ExchangeSymbol, string) (exchange.Order, error) {
+func (a *submissionAdapter) GetOrder(context.Context, exchange.SymbolKey, string) (exchange.Order, error) {
 	a.queries++
-	return exchange.Order{ExchangeOrderID: "exchange-recovered", Status: exchange.OrderStatusOpen}, a.lookupErr
+	return exchange.Order{Market: exchange.MarketTypeSwap, ExchangeOrderID: "exchange-recovered", Status: exchange.OrderStatusOpen}, a.lookupErr
 }
 
-func (a *submissionAdapter) ListRecentFills(context.Context, shared.ExchangeSymbol, string) ([]exchange.Fill, string, error) {
+func (a *submissionAdapter) ListRecentFills(context.Context, exchange.SymbolKey, string) ([]exchange.Fill, string, error) {
 	return nil, "", nil
 }
 

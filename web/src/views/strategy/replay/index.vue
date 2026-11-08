@@ -69,7 +69,8 @@
                 · 实例 <span class="mono">{{ selected.instance_id }}</span
                 >，会话 <span class="mono">{{ selected.session_id }}</span></template
               >
-              · 因子任务 {{ selected.factor_task_id }} · 区间 {{ replayRangeLabel(selected) }} · 手续费 {{ selected.fee_bps }} bps
+              · 因子任务 {{ replayTasksText(selected) }} · 区间 {{ replayRangeLabel(selected) }} · 手续费
+              {{ replayFeeText(selected) }}
               <template v-if="metrics?.first_bar_end">
                 · 实际首根 {{ formatUtcTime(metrics.first_bar_end) }}，末根 {{ formatUtcTime(metrics.last_bar_end) }}</template
               >
@@ -114,6 +115,14 @@
                 <span>目标未达成期数 / 清算次数</span><strong>{{ metrics.unfilled_bars }} / {{ metrics.liquidations }}</strong>
               </div>
             </div>
+            <a-alert v-if="metrics?.bankrupt_at" type="error" show-icon class="top-alert"
+              >模拟爆仓：K 线结束于
+              {{ formatUtcTime(metrics.bankrupt_at) }}
+              的这一期权益不为正，持仓已全部平掉，此后各期空仓、权益保持不变；之后的曲线不代表策略还能继续运行。</a-alert
+            >
+            <a-alert v-if="replayUsesSwap(selected)" type="warning" class="top-alert"
+              >模拟曲线未计资金费与强平：永续按收盘价逐期结算盈亏，成交按收盘价、每期都调到目标，不模拟实盘的调仓阈值、最小下单额与拆单；它只用于比较策略，不代表实盘收益。</a-alert
+            >
             <div class="chart-wrap">
               <div ref="chartContainer" class="chart" role="img" :aria-label="chartLabel" />
               <a-empty v-if="!series.length" description="暂无周期记录" />
@@ -156,8 +165,13 @@
               <template #expand-row="{ record }">
                 <div class="bar-detail">
                   <div>
-                    现金 {{ pct(barDetail(record).cash) }}（占期末权益）· 成交额 {{ barDetail(record).traded.toFixed(4) }} ·
-                    手续费 {{ barDetail(record).fee.toFixed(6) }}
+                    现金 {{ pct(barDetail(record).cash) }}（占期末权益<template v-if="replayUsesSwap(selected)"
+                      >，含永续已结算的盈亏</template
+                    >）·
+                    <template v-if="replayUsesSwap(selected)"
+                      >现货市值 {{ record.spot_value.toFixed(4) }} · 永续净名义价值 {{ record.swap_value.toFixed(4) }} ·
+                    </template>
+                    成交额 {{ barDetail(record).traded.toFixed(4) }} · 手续费 {{ barDetail(record).fee.toFixed(6) }}
                   </div>
                   <div v-if="barDetail(record).buyScale !== null">
                     现金不足，买入按目标的 {{ pct(barDetail(record).buyScale) }} 成交
@@ -173,14 +187,14 @@
                     row-key="id"
                   >
                     <template #columns>
-                      <a-table-column title="标的" data-index="id" />
+                      <a-table-column title="标的" data-index="label" />
                       <a-table-column title="数量"
                         ><template #cell="{ record: position }">{{ position.quantity.toPrecision(6) }}</template></a-table-column
                       >
                       <a-table-column title="估值价"
                         ><template #cell="{ record: position }">{{ position.last_price }}</template></a-table-column
                       >
-                      <a-table-column title="市值"
+                      <a-table-column :title="replayUsesSwap(selected) ? '市值 / 名义价值' : '市值'"
                         ><template #cell="{ record: position }">{{ position.value.toFixed(4) }}</template></a-table-column
                       >
                       <a-table-column title="状态"
@@ -214,6 +228,12 @@
                 >
                 <a-table-column title="单边换手" :width="90"
                   ><template #cell="{ record }">{{ pct(record.turnover) }}</template></a-table-column
+                >
+                <a-table-column v-if="replayUsesSwap(selected)" title="现货市值" :width="100"
+                  ><template #cell="{ record }">{{ record.spot_value.toFixed(4) }}</template></a-table-column
+                >
+                <a-table-column v-if="replayUsesSwap(selected)" title="永续净名义价值" :width="120"
+                  ><template #cell="{ record }">{{ record.swap_value.toFixed(4) }}</template></a-table-column
                 >
                 <a-table-column title="持仓（冻结）" :width="110"
                   ><template #cell="{ record }">{{ record.holdings }}（{{ record.frozen }}）</template></a-table-column
@@ -265,6 +285,7 @@ import type { InstrumentTarget, Replay, ReplayBar } from "@/api/strategy-types";
 import { reportControlError, serverNow } from "@/api/admin/http";
 import { listFactorTasks } from "@/api/factor";
 import type { FactorTask } from "@/api/factor/types";
+import { loadUnifiedDatasetIds } from "@/views/strategy/components/unified-datasets";
 import { useSpaceStore } from "@/store/modules/space";
 import { useStrategyStore } from "@/store/modules/strategy";
 import { percent, shortHash, skipReasonLabel } from "@/views/strategy/model";
@@ -272,7 +293,13 @@ import { sameQuery } from "@/views/strategy/query";
 import InfoTip from "@/views/factor/shared/info-tip.vue";
 import { STRATEGY_TASKS_ROUTE, normalizeTaskTab } from "@/views/strategy/links";
 import ReplayCreateDrawer from "@/views/strategy/replay/replay-create-drawer.vue";
-import { type ReplayFormState, replaySourceOf, validateReplayForm } from "@/views/strategy/replay/replay-form-model";
+import { parseFactorTasks } from "@/views/strategy/market-mode";
+import {
+  type ReplayFormState,
+  replayFactorTasks,
+  replaySourceOf,
+  validateReplayForm
+} from "@/views/strategy/replay/replay-form-model";
 import { buildReplayQuery, parseReplayQuery, type ReplayQueryState } from "@/views/strategy/replay/replay-query";
 import ReplayRecordList from "@/views/strategy/replay/replay-record-list.vue";
 import {
@@ -284,10 +311,13 @@ import {
   parseMetrics,
   parseUtcInput,
   recentUtcRange,
+  replayFeeText,
   replayRangeLabel,
   replaySourceLabel,
   replayStatusColor,
-  replayStatusLabel
+  replayStatusLabel,
+  replayTasksText,
+  replayUsesSwap
 } from "@/views/strategy/replay/model";
 
 defineOptions({ name: "StrategyReplay" });
@@ -347,10 +377,12 @@ const form = reactive<ReplayFormState>({
   strategy_id: String(route.query.strategy_id || ""),
   dsl_yaml: "",
   instance_id: String(route.query.instance_id || ""),
-  factor_task_id: String(route.query.factor_task_id || ""),
+  single_market: "",
+  tasks: parseFactorTasks(String(route.query.factor_tasks || "")),
   start: presetStart,
   end: presetEnd,
-  fee_bps: 10
+  spot_fee_bps: 10,
+  swap_fee_bps: 10
 });
 let chart: VChart | null = null;
 // 图表库体积很大（约 2MB）：第一次真正要画曲线时才加载，回放列表与创建表单不必等它。
@@ -499,8 +531,13 @@ async function loadTasks() {
       items.push(...(rsp.factor_tasks || []).map(info => info.factor_task));
       if (!rsp.page_result?.has_more || !(rsp.factor_tasks || []).length) break;
     }
-    // 只列当前空间里已经建出结果数据集的任务（创建中的还没有结果 View）。
-    tasks.value = items.filter(task => task.space_id === spaceId && task.status !== "pending");
+    const unifiedIds = await loadUnifiedDatasetIds(spaceId);
+    if (gen !== generation) return;
+    // 只列当前空间里已经建出结果数据集的任务（创建中的还没有结果 View）；统一数据集上的任务要登记为 multi，这里的表单按市场选任务，
+    // 不列它们（要回放统一数据集上的实例，从实例详情发起）。
+    tasks.value = items.filter(
+      task => task.space_id === spaceId && task.status !== "pending" && !unifiedIds.has(task.source_dataset_id)
+    );
     errors.tasks = "";
   } catch (err) {
     if (gen === generation) errors.tasks = `因子任务列表加载失败：${err instanceof Error ? err.message : "未知错误"}`;
@@ -754,7 +791,7 @@ function utcLabel(time: unknown): string {
 }
 
 async function start() {
-  errors.start = validateReplayForm(form, parseUtcInput);
+  errors.start = validateReplayForm(form, parseUtcInput, strategyStore.strategyCatalog);
   const startTime = parseUtcInput(form.start);
   const endTime = parseUtcInput(form.end);
   const source = replaySourceOf(form);
@@ -765,10 +802,11 @@ async function start() {
   try {
     const started = await startReplay({
       ...source,
-      factor_task_id: form.factor_task_id,
+      factor_tasks: replayFactorTasks(form, strategyStore.strategyCatalog),
       start_time: startTime,
       end_time: endTime,
-      fee_bps: Number(form.fee_bps) || 0
+      spot_fee_bps: Number(form.spot_fee_bps) || 0,
+      swap_fee_bps: Number(form.swap_fee_bps) || 0
     });
     if (gen !== generation) return;
     Message.success(
@@ -819,14 +857,14 @@ function closeCreate() {
 }
 /** 建立创建上下文时应用入口预填；之后的翻页、选择、轮询都不会覆盖正在编辑的草稿。 */
 function applyPrefill() {
-  const { strategyId, instanceId, factorTaskId } = parsed.value.prefill;
+  const { strategyId, instanceId, factorTasks } = parsed.value.prefill;
   if (instanceId) form.instance_id = instanceId;
   else if (strategyId) {
     form.instance_id = "";
     form.strategy_id = strategyId;
     form.source = "definition";
   }
-  if (factorTaskId) form.factor_task_id = factorTaskId;
+  if (Object.keys(factorTasks).length) form.tasks = { ...factorTasks };
 }
 /** URL 里有显式 replay_id 时直接读取它（即使不在当前列表页），失败也不回退到第一条。 */
 function applyRouteSelection() {
@@ -922,7 +960,8 @@ watch(
     tasks.value = [];
     // 空间初始化（无 → 有）只是首次加载，保留深链接与预填；真正的 A → B 切换才清空对象、分页、创建上下文。
     if (previous) {
-      form.factor_task_id = "";
+      form.tasks = {};
+      form.single_market = "";
       form.instance_id = "";
       replayPage.value = 1;
       writeQuery({ replayId: "", page: 1, barPage: 1, create: false });

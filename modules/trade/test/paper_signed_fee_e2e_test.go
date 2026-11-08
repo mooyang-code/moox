@@ -16,7 +16,7 @@ func TestPaperSnapshotCreditsSignedFeeRebateExactlyOnce(t *testing.T) {
 	placed := mustPlace(t, f, marketSpec("paper-rebate", exchange.SideBuy, "0.01"))
 	opened, err := f.orders.Submit(ctx, testSpace, string(placed.ID))
 	require.NoError(t, err)
-	fill := exchange.Fill{
+	fill := exchange.Fill{Market: exchange.MarketTypeSpot,
 		ExchangeTradeID: "paper-rebate-fill", ExchangeOrderID: opened.ExchangeOrderID,
 		ClientOrderID: "paper-rebate", ExchangeSymbol: testSymbol, Side: exchange.SideBuy,
 		Quantity: shared.MustDecimal("0.01"), Price: shared.MustDecimal("50000"),

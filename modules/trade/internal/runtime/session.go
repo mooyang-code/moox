@@ -18,7 +18,8 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 )
 
-var ErrSessionConfig = errors.New("trade runtime: ExchangeSession is not configured")
+// ErrSessionConfig 是交易账户没有可用的会话（新建账户要等运行时的周期检查才建起来）；RPC 返回 TRADE_SESSION_NOT_READY。
+var ErrSessionConfig = errors.New("交易账户会话还没有启动，请稍后重试")
 
 const (
 	sessionOrderWindow        = 5 * time.Minute
@@ -30,9 +31,9 @@ var errPrivateDisconnected = errors.New("trade runtime: private stream disconnec
 
 type ExchangeSession struct {
 	symbolMu          sync.Mutex
-	configuredSymbols map[string]string
+	configuredSymbols map[exchange.SymbolKey]string
 	// symbolLocks 按标的串行设置杠杆：同一批里不同标的可以并发设置。
-	symbolLocks map[string]*sync.Mutex
+	symbolLocks map[exchange.SymbolKey]*sync.Mutex
 	// requestMu 保护 syncRequested 的替换，外部请求同步时要读它。
 	requestMu sync.Mutex
 
@@ -133,7 +134,7 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 	}
 	accountEvents := s.AccountEvents
 	if accountEvents == nil {
-		accountEvents, _ = s.Adapter.(execution.AccountEventSource)
+		accountEvents = execution.AccountEventsOf(s.Adapter)
 	}
 	if accountEvents == nil {
 		return s.runPolling(ctx)
@@ -216,11 +217,11 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 	}
 	fills := make([]exchange.Fill, 0)
 	cursors := cloneFillCursors(s.Account.FillCursors)
-	for _, symbol := range symbols {
+	for _, key := range symbols {
 		rows, cursor, listErr := s.Adapter.ListRecentFills(
 			ctx,
-			shared.ExchangeSymbol(symbol),
-			cursors[symbol],
+			key,
+			cursors[key.String()],
 		)
 		if listErr != nil {
 			return s.disconnect(ctx, listErr)
@@ -230,7 +231,7 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 		}
 		fills = append(fills, rows...)
 		if cursor != "" {
-			cursors[symbol] = cursor
+			cursors[key.String()] = cursor
 		}
 	}
 
@@ -238,6 +239,7 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 	_, err = s.Sync.ApplySnapshot(ctx, s.Account.TradingAccountID, accountsync.Snapshot{
 		Fills: fills, Orders: orders, Positions: positions,
 		Account: accountSnapshot, AccountReadAt: accountReadAt, FillCursors: cursors, Ready: false,
+		Prices: s.Adapter,
 	})
 	s.opMu.Unlock()
 	if err != nil {
@@ -532,7 +534,7 @@ func (s *ExchangeSession) refreshInstruments(ctx context.Context) {
 }
 
 // EnsureSymbolConfig 把全仓和杠杆设置到交易所，结果记在会话内存里，同一标的只设置一次。
-func (s *ExchangeSession) EnsureSymbolConfig(ctx context.Context, symbol string, leverage shared.Decimal) error {
+func (s *ExchangeSession) EnsureSymbolConfig(ctx context.Context, symbol exchange.SymbolKey, leverage shared.Decimal) error {
 	configurer, ok := s.Adapter.(execution.SymbolConfigurer)
 	if !ok || exchange.ExecutionMode(s.Account.ExecutionMode) == exchange.ExecutionModePaper {
 		return nil
@@ -546,26 +548,26 @@ func (s *ExchangeSession) EnsureSymbolConfig(ctx context.Context, symbol string,
 	if configured {
 		return nil
 	}
-	if err := configurer.SetMarginMode(ctx, shared.ExchangeSymbol(symbol), exchange.MarginModeCross); err != nil {
+	if err := configurer.SetMarginMode(ctx, symbol, exchange.MarginModeCross); err != nil {
 		return err
 	}
-	if err := configurer.SetLeverage(ctx, shared.ExchangeSymbol(symbol), leverage); err != nil {
+	if err := configurer.SetLeverage(ctx, symbol, leverage); err != nil {
 		return err
 	}
 	s.symbolMu.Lock()
 	if s.configuredSymbols == nil {
-		s.configuredSymbols = make(map[string]string)
+		s.configuredSymbols = make(map[exchange.SymbolKey]string)
 	}
 	s.configuredSymbols[symbol] = leverage.String()
 	s.symbolMu.Unlock()
 	return nil
 }
 
-func (s *ExchangeSession) symbolLock(symbol string) *sync.Mutex {
+func (s *ExchangeSession) symbolLock(symbol exchange.SymbolKey) *sync.Mutex {
 	s.symbolMu.Lock()
 	defer s.symbolMu.Unlock()
 	if s.symbolLocks == nil {
-		s.symbolLocks = make(map[string]*sync.Mutex)
+		s.symbolLocks = make(map[exchange.SymbolKey]*sync.Mutex)
 	}
 	lock, ok := s.symbolLocks[symbol]
 	if !ok {
@@ -575,15 +577,18 @@ func (s *ExchangeSession) symbolLock(symbol string) *sync.Mutex {
 	return lock
 }
 
-// ForgetSymbolConfig 让标的下次开仓前重新设置；默认杠杆变更时全部标的都要重新设置。
-func (s *ExchangeSession) ForgetSymbolConfig(symbol string) {
+// ForgetSymbolConfig 让标的下次开仓前重新设置。
+func (s *ExchangeSession) ForgetSymbolConfig(symbol exchange.SymbolKey) {
 	s.symbolMu.Lock()
 	defer s.symbolMu.Unlock()
-	if symbol == store.DefaultLeverageKey {
-		s.configuredSymbols = nil
-		return
-	}
 	delete(s.configuredSymbols, symbol)
+}
+
+// ForgetAllSymbolConfigs 让全部标的下次开仓前重新设置：账户默认杠杆变更时用。
+func (s *ExchangeSession) ForgetAllSymbolConfigs() {
+	s.symbolMu.Lock()
+	defer s.symbolMu.Unlock()
+	s.configuredSymbols = nil
 }
 
 func (s *ExchangeSession) marketData() execution.MarketDataSource {
@@ -658,7 +663,7 @@ func (s *ExchangeSession) persistInstruments(
 		}
 		for _, instrument := range instruments {
 			if instrument.Exchange != exchange.Exchange(s.Account.Exchange) ||
-				instrument.MarketType != exchange.MarketType(s.Account.MarketType) {
+				!s.Account.SupportsMarket(string(instrument.MarketType)) {
 				return fmt.Errorf("trade runtime: conflicting instrument identity")
 			}
 			if err := tx.UpsertInstrument(store.InstrumentRecord{
@@ -674,6 +679,8 @@ func (s *ExchangeSession) persistInstruments(
 				MinExchangeQuantity:  instrument.MinExchangeQuantity.String(),
 				PriceTick:            instrument.PriceTick.String(),
 				MinNotional:          instrument.MinNotional.String(), Status: instrument.Status,
+				MaxBuyPriceRatio:  instrument.MaxBuyPriceRatio.String(),
+				MinSellPriceRatio: instrument.MinSellPriceRatio.String(),
 				ExchangeUpdatedAt: instrument.ExchangeUpdatedAt.UnixMilli(),
 			}); err != nil {
 				return err
@@ -908,4 +915,13 @@ func cloneFillCursors(current store.FillCursors) store.FillCursors {
 	return result
 }
 
-var _ execution.AccountEventHandler = (*sessionHandler)(nil)
+// 编译期确认会话实现了 Manager 按类型断言使用的方法集。
+var (
+	_ execution.AccountEventHandler   = (*sessionHandler)(nil)
+	_ ManagedSession                  = (*ExchangeSession)(nil)
+	_ symbolConfigSession             = (*ExchangeSession)(nil)
+	_ interface{ RequestSync() bool } = (*ExchangeSession)(nil)
+	_ interface {
+		ExecutionAdapter() execution.ExecutionAdapter
+	} = (*ExchangeSession)(nil)
+)

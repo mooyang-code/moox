@@ -20,7 +20,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
 IDENTITY = ("data_time", "subject_id", "series_tag")
-# compare 的分类：一致、双空、暖机期新空（允许）、窗口覆盖空洞的新空（允许，引擎整因子屏蔽）、其余新空、原空新有值、离散跳变、超差。
+# compare 的分类：一致、双空、暖机期新空（允许）、窗口覆盖空洞的新空（允许：这是离线工具 factorexpr 的屏蔽，生产先填充再计算、不屏蔽）、其余新空、原空新有值、离散跳变、超差。
 BUCKETS = ("compared", "match", "both_null", "old_value_new_null_warmup", "old_value_new_null_gap", "old_value_new_null",
            "old_null_new_value", "discrete_flip", "mismatch")
 # 与因子模块支持的频率一致。
@@ -245,7 +245,7 @@ def cmd_compare(args):
 
     # 原结果覆盖输入的每一行：据此得到每条序列的第一根 K 线与存在的时刻。
     # 暖机期：距第一根不足“该输出的回看 − 1”个周期（严格窗口不满）；
-    # 窗口有空洞：按因子的回看，从第一根起算的窗口里缺了 K 线（引擎会屏蔽整个因子的输出）。
+    # 窗口有空洞：按因子的回看，从第一根起算的窗口里缺了 K 线（离线工具 factorexpr 会屏蔽整个因子的输出；生产先填充再计算、不屏蔽）。
     present = defaultdict(set)
     for key in expected:
         present[(key[1], key[2])].add(parse_time(key[0]))

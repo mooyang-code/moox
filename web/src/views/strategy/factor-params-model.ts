@@ -23,12 +23,19 @@ function parseObject(raw?: string): Record<string, any> {
 
 export function parseFactorBinding(resolvedJson?: string): FactorBinding | null {
   const value = parseObject(resolvedJson);
-  if (!value.factor_task_id) return null;
+  const tasks = Object.values((value.tasks ?? {}) as Record<string, { factor_task_id?: string; view_id?: string }>);
+  // 动态参数回写只用于只绑一个因子任务的实例。
+  if (tasks.length !== 1 || !tasks[0]?.factor_task_id) return null;
   const declared = (value.factor_params ?? {}) as Record<string, Array<{ name?: string }>>;
   const params: Record<string, string[]> = {};
   for (const [member, list] of Object.entries(declared))
     params[member] = (list ?? []).map(item => item?.name ?? "").filter(Boolean);
-  return { taskId: value.factor_task_id, viewId: value.view_id ?? "", members: Object.keys(declared).sort(), params };
+  return {
+    taskId: tasks[0].factor_task_id as string,
+    viewId: tasks[0].view_id ?? "",
+    members: Object.keys(declared).sort(),
+    params
+  };
 }
 
 /** 一个参数取值的摘要文本：统一值，有按标的覆盖时附上个数。 */

@@ -5,20 +5,22 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 )
 
 var (
-	ErrAccountNotFound       = errors.New("trade account: not found")
-	ErrAccountConflict       = errors.New("trade account: conflict")
-	ErrInvalidCredential     = errors.New("trade account: invalid Exchange credential")
-	ErrLiveTradingDisabled   = errors.New("trade account: production trading is disabled")
-	ErrPaperAccountImmutable = errors.New("trade account: paper account configuration is immutable")
-	ErrServiceNotConfigured  = errors.New("trade account: service is not configured")
+	ErrAccountNotFound       = errors.New("交易账户不存在")
+	ErrAccountConflict       = errors.New("交易账户已存在或正被修改")
+	ErrInvalidCredential     = errors.New("交易所密钥不正确")
+	ErrLiveTradingDisabled   = errors.New("生产环境实盘交易未开启")
+	ErrPaperAccountImmutable = errors.New("模拟账户的名称、杠杆、启停等配置创建后不能修改；要换参数请新建一个模拟账户")
+	ErrServiceNotConfigured  = errors.New("交易账户服务未配置")
 	// ErrAccountInLogicalAccount：停用后没有会话、同步必然失败，账户就移不出组合了，所以要先移出再停用。
 	ErrAccountInLogicalAccount = errors.New("执行账户还在组合账户里，先把它移出组合账户再停用")
 )
@@ -35,12 +37,6 @@ type ExchangeSecret struct {
 	ExtraConfig string
 }
 
-type SyncTradingAccountsOptions struct {
-	UserID     string
-	Exchange   exchange.Exchange
-	MarketType exchange.MarketType
-}
-
 type Store interface {
 	Create(context.Context, tradingaccount.Account) error
 	Get(context.Context, string) (tradingaccount.Account, error)
@@ -48,6 +44,8 @@ type Store interface {
 	SetLeverage(context.Context, string, string, shared.Decimal) error
 	// ListEnabled 返回全部启用的执行账户。
 	ListEnabled(context.Context) ([]tradingaccount.Account, error)
+	// SetInspection 写入复查的结果（账户类型和检测结果）。
+	SetInspection(ctx context.Context, id, credentialSecretID string, mode exchange.AccountMode, inspectionJSON string) error
 	// LogicalAccountName 返回执行账户所属组合账户的名称（启用或停用成员都算），不属于任何组合时返回空串。
 	LogicalAccountName(ctx context.Context, spaceID, tradingAccountID string) (string, error)
 }
@@ -58,7 +56,8 @@ type SecretSource interface {
 
 // SymbolConfigs 记录会话里已经在交易所设置过的标的。
 type SymbolConfigs interface {
-	ForgetSymbolConfig(tradingAccountID, symbol string)
+	ForgetSymbolConfig(tradingAccountID string, symbol exchange.SymbolKey)
+	ForgetAllSymbolConfigs(tradingAccountID string)
 }
 
 type SessionState interface {
@@ -72,6 +71,9 @@ type Service struct {
 	SymbolConfigs      SymbolConfigs
 	Exchanges          execution.ExchangeCatalog
 	LiveTradingEnabled bool
+	// Inspector 检测实盘密钥的账户类型和权限；实盘账户建立、换密钥、重新启用前必须检测通过。
+	Inspector Inspector
+	Now       func() time.Time
 }
 
 type UpdateCommand struct {
@@ -81,6 +83,9 @@ type UpdateCommand struct {
 	SettlementAsset    *string
 	MarginMode         *exchange.MarginMode
 	Status             *exchange.AccountStatus
+	// AccountMode、InspectionJSON 只由检测写入（换密钥或重新启用时），调用方不用设置。
+	AccountMode    *exchange.AccountMode
+	InspectionJSON *string
 }
 
 func (s *Service) Create(
@@ -102,6 +107,11 @@ func (s *Service) Create(
 		return tradingaccount.Account{}, err
 	}
 	if err := s.rejectDuplicateCredential(ctx, value); err != nil {
+		return tradingaccount.Account{}, err
+	}
+	// 必须先检测通过：账户类型和权限靠检测得到，不靠手填。
+	value, err := s.inspectForSave(ctx, value)
+	if err != nil {
 		return tradingaccount.Account{}, err
 	}
 	if err := s.Store.Create(ctx, value); err != nil {
@@ -159,6 +169,14 @@ func (s *Service) Update(
 		if err := s.rejectDuplicateCredential(ctx, projected); err != nil {
 			return tradingaccount.Account{}, err
 		}
+		// 换密钥或重新启用：必须重新检测通过才保存，账户类型随之更新。
+		inspected, err := s.inspectForSave(ctx, projected)
+		if err != nil {
+			return tradingaccount.Account{}, err
+		}
+		if projected.ExecutionMode == exchange.ExecutionModeLive {
+			command.AccountMode, command.InspectionJSON = &inspected.AccountMode, &inspected.InspectionJSON
+		}
 	}
 	if err := s.Store.Update(ctx, command); err != nil {
 		return tradingaccount.Account{}, err
@@ -166,8 +184,9 @@ func (s *Service) Update(
 	return s.Store.Get(ctx, command.TradingAccountID)
 }
 
-// rejectDuplicateCredential 防止同一把密钥建两个执行账户：两个会话看到同一批订单，
-// 会互相当成外部订单，组合账户被自动暂停。
+// rejectDuplicateCredential 保证一把密钥（交易所、环境、密钥 ID）全局只有一个启用的执行账户：
+// 两个会话看到同一批订单，会互相当成外部订单，组合账户被自动暂停。
+// 账户同时做现货和合约，所以不管市场是否相同都冲突；表上的唯一索引兜底并发。
 func (s *Service) rejectDuplicateCredential(ctx context.Context, value tradingaccount.Account) error {
 	if value.ExecutionMode != exchange.ExecutionModeLive || value.Status != exchange.AccountStatusEnabled {
 		return nil
@@ -176,34 +195,33 @@ func (s *Service) rejectDuplicateCredential(ctx context.Context, value tradingac
 	if err != nil {
 		return err
 	}
-	unified := false
-	if s.Exchanges != nil {
-		if descriptor, ok := s.Exchanges.Descriptor(value.Exchange); ok {
-			unified = descriptor.UnifiedAccount
-		}
-	}
 	for _, other := range accounts {
 		if other.ID != value.ID && other.ExecutionMode == exchange.ExecutionModeLive &&
 			other.Exchange == value.Exchange && other.Environment == value.Environment &&
-			other.CredentialSecretID == value.CredentialSecretID &&
-			(unified || other.MarketType == value.MarketType) {
-			return fmt.Errorf("%w: 账户“%s”已在使用这把密钥", tradingaccount.ErrInvalidAccount, other.Name)
+			other.CredentialSecretID == value.CredentialSecretID {
+			return fmt.Errorf("%w: 账户“%s”已在使用这把密钥，一把密钥只能对应一个执行账户", tradingaccount.ErrInvalidAccount, other.Name)
 		}
 	}
 	return nil
 }
 
+// SetLeverage 设置杠杆。leverageKey 是内部标的 ID（例如 BTC-USDT-SWAP）或账户默认杠杆的键 "*"；
+// exchangeSymbol 是该标的的（市场，交易所代码），用来让会话下次开仓前重新设置；默认杠杆影响全部标的，必须传零值键。
 func (s *Service) SetLeverage(
 	ctx context.Context,
 	tradingAccountID string,
-	symbol string,
+	leverageKey string,
+	exchangeSymbol exchange.SymbolKey,
 	leverage shared.Decimal,
 ) error {
 	if s == nil || s.Store == nil {
 		return ErrServiceNotConfigured
 	}
+	isDefault := leverageKey == store.DefaultLeverageKey
 	if strings.TrimSpace(tradingAccountID) == "" ||
-		strings.TrimSpace(symbol) == "" ||
+		strings.TrimSpace(leverageKey) == "" ||
+		(isDefault && !exchangeSymbol.IsZero()) ||
+		(!isDefault && !exchangeSymbol.Valid()) ||
 		leverage.Cmp(shared.Zero()) <= 0 {
 		return tradingaccount.ErrInvalidAccount
 	}
@@ -211,18 +229,22 @@ func (s *Service) SetLeverage(
 	if err != nil {
 		return err
 	}
-	if !exchange.RuleFor(current.MarketType).Leverage {
+	if !current.HasLeverageMarket() {
 		return tradingaccount.ErrInvalidAccount
 	}
 	if current.ExecutionMode == exchange.ExecutionModePaper {
 		return ErrPaperAccountImmutable
 	}
-	if err := s.Store.SetLeverage(ctx, tradingAccountID, symbol, leverage); err != nil {
+	if err := s.Store.SetLeverage(ctx, tradingAccountID, leverageKey, leverage); err != nil {
 		return err
 	}
 	// 不重启会话，只让该标的下次开仓前重新设置。
 	if s.SymbolConfigs != nil {
-		s.SymbolConfigs.ForgetSymbolConfig(tradingAccountID, symbol)
+		if isDefault {
+			s.SymbolConfigs.ForgetAllSymbolConfigs(tradingAccountID)
+		} else {
+			s.SymbolConfigs.ForgetSymbolConfig(tradingAccountID, exchangeSymbol)
+		}
 	}
 	return nil
 }
@@ -298,5 +320,11 @@ func applyUpdate(value *tradingaccount.Account, command UpdateCommand) {
 	}
 	if command.Status != nil {
 		value.Status = *command.Status
+	}
+	if command.AccountMode != nil {
+		value.AccountMode = *command.AccountMode
+	}
+	if command.InspectionJSON != nil {
+		value.InspectionJSON = *command.InspectionJSON
 	}
 }

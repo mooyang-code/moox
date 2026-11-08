@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/resample/eventconsumer"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/packages/events"
+	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/rs/xid"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -26,16 +27,13 @@ type resampleRuntime struct {
 	jobs      *collectorresample.JobRunner
 	publisher *collectorresample.NoticePublisher
 	state     *store.ResampleStateRepository
-	// startEvents 接上事件总线（消费者与发布器）；eventsReady 为真后不再重试。
-	startEvents func() error
-	eventsReady bool
 }
 
 // jobDrainBudget 是定时器每一轮里连续推进历史作业的预算，必须小于一分钟，让下一轮兜底检查如期开始。
 const jobDrainBudget = 40 * time.Second
 
 // newResampleRuntime 构造合成运行时；元数据或存储客户端不可用时返回错误，调用方按“合成关闭”处理。
-func newResampleRuntime(process *Runtime, dbm *store.Store, cfg *Config, source *storagesource.DatasetSource, spaceIDs []string) (*resampleRuntime, error) {
+func newResampleRuntime(process *Runtime, dbm *store.Store, cfg *Config, source *storagesource.DatasetSource, spaceIDs []string, bus *eventBusRuntime) (*resampleRuntime, error) {
 	metadataClient, err := marketstorage.NewGatewayResampleMetadataClient(process.gateway, marketstorage.InstTypeSPOT)
 	if err != nil {
 		return nil, fmt.Errorf("metadata client: %w", err)
@@ -79,6 +77,9 @@ func newResampleRuntime(process *Runtime, dbm *store.Store, cfg *Config, source 
 		return nil, err
 	}
 	runtime.publisher = &collectorresample.NoticePublisher{State: dbm.Resample(), Registry: registry}
+	if bus != nil {
+		runtime.publisher.Enabled, runtime.publisher.Wake = true, bus.relay.Wake
+	}
 	if sync, ok := localStorage.(collectorresample.DatasetSyncPoints); ok {
 		runtime.publisher.Sync = sync
 	}
@@ -92,13 +93,11 @@ func newResampleRuntime(process *Runtime, dbm *store.Store, cfg *Config, source 
 	}
 	runtime.jobs = jobs
 
-	if k.EventBus.Enabled() {
+	if bus != nil {
 		index := &collectorresample.TaskIndex{Tasks: dbm.Tasks()}
-		// 启动时事件总线可能还没起来：每分钟的定时器会重试，直到消费者和发布器都就绪。
-		runtime.startEvents = func() error {
-			consumers, startErr := eventconsumer.Start(process.ctx, eventconsumer.ConsumersConfig{
-				URLs: k.EventBus.URLs, CredentialFile: k.EventBus.CredentialFile, SpaceIDs: spaceIDs,
-			}, registry,
+		// 启动时事件总线可能还没起来：Collector 级的连接管理器每分钟重试，连上之后才创建消费者。
+		bus.hub.OnConnected("K 线合成消费者", func(_ context.Context, client *jetstream.Client) (func() error, error) {
+			consumers, startErr := eventconsumer.Start(process.ctx, client, eventconsumer.ConsumersConfig{SpaceIDs: spaceIDs}, registry,
 				&eventconsumer.PeriodHandler{Registry: registry, Trigger: &collectorresample.PeriodTrigger{Index: index, Engine: engine, Metrics: metrics}},
 				&eventconsumer.BackfilledHandler{
 					Registry: registry,
@@ -108,32 +107,12 @@ func newResampleRuntime(process *Runtime, dbm *store.Store, cfg *Config, source 
 					},
 				})
 			if startErr != nil {
-				return startErr
+				return nil, startErr
 			}
-			publisher, pubErr := consumers.Publisher(registry)
-			if pubErr != nil {
-				_ = consumers.Close()
-				return pubErr
-			}
-			process.beforeClose = append(process.beforeClose, consumers.Close)
-			runtime.publisher.Relay = publisher
-			return nil
-		}
-		runtime.connectEvents(process.ctx)
+			return consumers.Close, nil
+		})
 	}
 	return runtime, nil
-}
-
-// connectEvents 尝试接上事件总线；失败不影响合成（兜底检查每分钟补齐），下一分钟再试。
-func (r *resampleRuntime) connectEvents(ctx context.Context) {
-	if r.startEvents == nil || r.eventsReady {
-		return
-	}
-	if err := r.startEvents(); err != nil {
-		log.WarnContextf(ctx, "collector kline resample event bus not ready, retrying every minute: %v", err)
-		return
-	}
-	r.eventsReady = true
 }
 
 // prepare 在启动时做一次目标数据集准备。
@@ -145,7 +124,7 @@ func (r *resampleRuntime) prepare(ctx context.Context) {
 	}
 }
 
-// tick 是每分钟第 5 秒的定时器回调内容：准备目标数据集，兜底检查，发布补写通知，连续推进历史作业。
+// tick 是每分钟第 5 秒的定时器回调内容：准备目标数据集，兜底检查，封存补写通知，连续推进历史作业。
 func (r *resampleRuntime) tick(ctx context.Context) {
 	step := func(name string, run func(context.Context) error) {
 		stepCtx, cancel := context.WithTimeout(ctx, r.cfg.ScanTimeout)
@@ -154,7 +133,6 @@ func (r *resampleRuntime) tick(ctx context.Context) {
 			log.WarnContextf(ctx, "collector kline resample %s failed: %v", name, err)
 		}
 	}
-	r.connectEvents(ctx)
 	step("preparation", r.preparer.RunOnce)
 	for _, fallback := range r.fallbacks {
 		fallback := fallback

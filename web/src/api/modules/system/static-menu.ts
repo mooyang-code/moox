@@ -86,17 +86,10 @@ export const systemMenu = [
   }),
 
   directory("05", "0", "/trading/accounts", "trading", "trading", 5, { svgIcon: "balance-inquiry", icon: "" }),
-  menu("0501", "05", "/trading/accounts", "trading-accounts", "trading-accounts", "trading/account-workbench/index", 1),
-  menu(
-    "0502",
-    "05",
-    "/trading/positions",
-    "trading-positions",
-    "trading-positions",
-    "trading/position-detail/position-detail",
-    3
-  ),
-  menu("0503", "05", "/trading/orders", "trading-orders", "trading-orders", "trading/trade-record/trade-record", 4),
+  // 菜单路由会覆盖 route.ts 里的同名声明：环境页签用 ?env=，query 变化时复用页面。
+  menu("0501", "05", "/trading/accounts", "trading-accounts", "trading-accounts", "trading/accounts/index", 1, {
+    reuseOnQuery: true
+  }),
 
   directory("06", "0", "/ops/monitor", "ops", "ops", 6, { svgIcon: "defend", icon: "" }),
   menu("0607", "06", "/ops/monitor", "ops-monitor", "ops-monitor", "ops/monitor/index", 1),
@@ -107,5 +100,9 @@ export const systemMenu = [
 
   directory("07", "0", "/settings/spaces", "settings", "settings", 7, { svgIcon: "set", icon: "" }),
   menu("0701", "07", "/settings/spaces", "settings-spaces", "settings-spaces", "settings/spaces/index", 1),
-  menu("0702", "07", "/settings/secrets", "settings-secrets", "settings-secrets", "settings/secrets/index", 2)
+  menu("0702", "07", "/settings/secrets", "settings-secrets", "settings-secrets", "settings/secrets/index", 2),
+  // 页签用 ?tab=（告警会直接跳到执行记录），query 变化时复用页面。
+  menu("0703", "07", "/settings/events", "settings-events", "settings-events", "settings/events/index", 3, {
+    reuseOnQuery: true
+  })
 ];

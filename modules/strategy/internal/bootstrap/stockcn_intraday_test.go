@@ -37,7 +37,7 @@ func TestStockIntradayWarmupLimitCrossesLunchBreak(t *testing.T) {
 		t.Fatal(err)
 	}
 	shanghai := time.FixedZone("CST", 8*3600)
-	instance := store.Instance{InstanceID: "i1", ResolvedJSON: json.RawMessage(`{"view_id":"v","factor_task_id":"f","bar":"5m","calendar":"cn_stock"}`)}
+	instance := store.Instance{InstanceID: "i1", ResolvedJSON: json.RawMessage(`{"market":{"select":"equity","prefer":"equity"},"tasks":{"equity":{"view_id":"v","factor_task_id":"f"}},"bar":"5m","calendar":"cn_stock"}`)}
 	start := time.Date(2026, 10, 8, 10, 50, 0, 0, shanghai)
 	observer.mu.Lock()
 	defer observer.mu.Unlock()

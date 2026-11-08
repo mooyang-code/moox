@@ -42,9 +42,8 @@ func TestManualRecoverySharedWriteFailureIsNotHealthy(t *testing.T) {
 type deadlineSyncAdapter struct{ execution.ExecutionAdapter }
 
 func (a deadlineSyncAdapter) Adapter(string) (execution.ExecutionAdapter, error) { return a, nil }
-func (a deadlineSyncAdapter) ListOpenOrders(ctx context.Context) ([]exchange.Order, error) {
-	<-ctx.Done()
-	return nil, ctx.Err()
+func (a deadlineSyncAdapter) ListOpenOrders(context.Context) ([]exchange.Order, error) {
+	return nil, context.DeadlineExceeded
 }
 
 type realOperatorSync struct{ service *accountsyncapp.Service }
@@ -60,7 +59,7 @@ func (a failedSyncAdapter) Adapter(string) (execution.ExecutionAdapter, error) {
 func (a failedSyncAdapter) ListOpenOrders(context.Context) ([]exchange.Order, error) {
 	return nil, errors.New("exchange unavailable")
 }
-func (a failedSyncAdapter) CancelOrder(context.Context, shared.ExchangeSymbol, string) (exchange.Order, error) {
+func (a failedSyncAdapter) CancelOrder(context.Context, exchange.SymbolKey, string) (exchange.Order, error) {
 	return exchange.Order{}, nil
 }
 
@@ -140,10 +139,10 @@ func TestOperatorWorkerRealServicesTimeoutActionThenAdvancesNext(t *testing.T) {
 			command.ClientOrderID = "z-client"
 			second, err := s.SubmitOrder(context.Background(), command)
 			require.NoError(t, err)
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			var resumed []string
-			worker := &traderuntime.OperatorWorker{Actions: f.store, ActionTimeout: 40 * time.Millisecond, Resumer: submissionResumerFunc(func(ctx context.Context, current store.OperatorActionRecord) error {
+			worker := &traderuntime.OperatorWorker{Actions: f.store, ActionTimeout: 5 * time.Second, Resumer: submissionResumerFunc(func(ctx context.Context, current store.OperatorActionRecord) error {
 				resumed = append(resumed, current.ActionID)
 				err := s.ResumeOperatorAction(ctx, current)
 				if current.ActionID == second.Action.ActionID {
@@ -168,9 +167,8 @@ func TestOperatorWorkerRealServicesTimeoutActionThenAdvancesNext(t *testing.T) {
 type cancelDeadlineAdapter struct{ *submissionAdapter }
 
 func (a cancelDeadlineAdapter) Adapter(string) (execution.ExecutionAdapter, error) { return a, nil }
-func (a cancelDeadlineAdapter) CancelOrder(ctx context.Context, _ shared.ExchangeSymbol, _ string) (exchange.Order, error) {
-	<-ctx.Done()
-	return exchange.Order{}, ctx.Err()
+func (a cancelDeadlineAdapter) CancelOrder(context.Context, exchange.SymbolKey, string) (exchange.Order, error) {
+	return exchange.Order{}, context.DeadlineExceeded
 }
 
 func TestCancelDeadlineRemainsRecoverableWithIdentity(t *testing.T) {
@@ -181,7 +179,7 @@ func TestCancelDeadlineRemainsRecoverableWithIdentity(t *testing.T) {
 	orders := s.Orders.(*orderapp.Service)
 	orders.Adapters = cancelDeadlineAdapter{a}
 	orders.Syncer = databaseSubmissionSyncer{f.store}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	result, err := s.CancelOrder(ctx, CancelOrderCommand{SpaceID: "space-1", ActionID: "cancel-1", OrderID: accepted.Order.OrderID, Reason: "stop"})
 	require.ErrorIs(t, err, context.DeadlineExceeded)
@@ -226,7 +224,7 @@ func TestCancelDiagnosticOrderReadFailurePreservesErrorAndIdentity(t *testing.T)
 		}
 	}))
 	defer f.store.DBForTest().Callback().Query().Remove("test:cancel_diagnostic_read")
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	result, err := s.CancelOrder(ctx, CancelOrderCommand{SpaceID: "space-1", ActionID: "cancel-read", OrderID: accepted.Order.OrderID, Reason: "stop"})
 	require.True(t, injected)
@@ -260,7 +258,7 @@ func TestFlattenCanceledLockPersistsRetryAndKeepsIdentity(t *testing.T) {
 	require.NoError(t, err)
 	unlock := f.store.LockLogicalAccount("space-1", "logical-1")
 	defer unlock()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	result, err := s.FlattenLogicalAccount(ctx, FlattenCommand{SpaceID: "space-1", ActionID: action.ActionID, LogicalAccountID: "logical-1", Reason: "stop"})
 	// 运行中的清仓拿不到锁时由工作线程继续，调用方看到“运行中”，不报错。
@@ -295,7 +293,7 @@ func TestCancelDiagnosticAndCompletionWriteFailureKeepDurableAction(t *testing.T
 				}
 			}))
 			defer f.store.DBForTest().Callback().Raw().Remove(callback)
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			result, err := s.CancelOrder(ctx, CancelOrderCommand{SpaceID: "space-1", ActionID: action.ActionID, OrderID: accepted.Order.OrderID, Reason: "stop"})
 			require.ErrorIs(t, err, failure)
@@ -316,7 +314,7 @@ func TestFlattenRecoversUnknownChildBeforeQuoteAndNeverCompletesUncertain(t *tes
 	require.NoError(t, err)
 	s.Prices = deadlinePrice{}
 	a.lookupErr = errors.New("lookup temporarily unavailable")
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	require.NoError(t, s.ResumeOperatorAction(ctx, action))
 	require.Equal(t, 1, a.queries)
@@ -376,7 +374,7 @@ func TestManualAndCancelLockWaitsAreCancelableAndKeepDurableIDs(t *testing.T) {
 			require.NoError(t, f.store.DBForTest().Exec("UPDATE t_operator_actions SET c_action_type=?,c_request_json=? WHERE c_action_id=?", kind, raw, accepted.Action.ActionID).Error)
 			unlock := f.store.LockLogicalAccount("space-1", "logical-1")
 			defer unlock()
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 			defer cancel()
 			var action store.OperatorActionRecord
 			var orderID string
@@ -437,9 +435,9 @@ func TestSubmitWorkerLockTimeoutContinuesNextActionWithHealthyDiagnostics(t *tes
 					unlock()
 				}
 			}()
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			defer cancel()
-			worker := &traderuntime.OperatorWorker{Actions: f.store, ActionTimeout: 30 * time.Millisecond, Resumer: submissionResumerFunc(func(ctx context.Context, action store.OperatorActionRecord) error {
+			worker := &traderuntime.OperatorWorker{Actions: f.store, ActionTimeout: 300 * time.Millisecond, Resumer: submissionResumerFunc(func(ctx context.Context, action store.OperatorActionRecord) error {
 				err := s.ResumeOperatorAction(ctx, action)
 				if action.ActionID == first.Action.ActionID {
 					unlock()

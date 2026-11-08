@@ -3,6 +3,7 @@ package input
 import (
 	"context"
 	"errors"
+	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"strings"
 	"testing"
 	"time"
@@ -133,13 +134,13 @@ func TestSubjectSeriesTagAndTagErrors(t *testing.T) {
 		t.Fatalf("标签不存在应返回 ErrTagNotFound：%v", err)
 	}
 	strategy := parseStrategy(t, strings.Replace(exampleDSL, "exclude_tags: [stablecoins]", "exclude_tags: [no_such_tag]", 1))
-	if _, _, err := Resolve(context.Background(), newFakeClient("spot"), "space", "ftask_1h", strategy); err == nil || !strings.Contains(err.Error(), "标签 no_such_tag 不存在（ID 区分大小写）") {
+	if _, _, err := Resolve(context.Background(), newFakeClient("spot"), "space", []string{"ftask_1h"}, strategy); err == nil || !strings.Contains(err.Error(), "标签 no_such_tag 不存在（ID 区分大小写）") {
 		t.Fatalf("引用不存在的标签应拒绝启用：%v", err)
 	}
 	client := newFakeClient("spot")
 	client.tags["no_such_tag"] = nil
 	unreachable := &tagFailingClient{fakeClient: client, err: &TransportError{Operation: "读取标签 no_such_tag", Err: errors.New("dial tcp 10.0.0.1:443: i/o timeout")}}
-	if _, _, err := Resolve(context.Background(), unreachable, "space", "ftask_1h", strategy); err == nil || strings.Contains(err.Error(), "不存在") || !strings.Contains(err.Error(), "暂时不可用") {
+	if _, _, err := Resolve(context.Background(), unreachable, "space", []string{"ftask_1h"}, strategy); err == nil || strings.Contains(err.Error(), "不存在") || !strings.Contains(err.Error(), "暂时不可用") {
 		t.Fatalf("读取标签的传输失败不应报成标签不存在：%v", err)
 	}
 }
@@ -157,7 +158,7 @@ func (c *tagFailingClient) GetTag(context.Context, string, string) (TagInfo, err
 // 活跃序列可回溯的起点：索引最早时间可能来自已停更的序列（只会提前），以“最新一根往前 SeriesBars−1 根”为界。
 // min_age_bars 超过每序列保留根数、或覆盖范围未知时，启用时就拒绝。
 func TestCoverageStartAndAgeCoverage(t *testing.T) {
-	resolved := Resolved{ViewID: "view", Calendar: DefaultCalendar, Bar: "1h"}
+	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {ViewID: "view"}}, Calendar: DefaultCalendar, Bar: "1h"}
 	view := ViewInfo{IndexedFrom: barStart.Add(-10000 * time.Hour), IndexedTo: barStart, SeriesBars: 100}
 	if start := CoverageStartAt(view, resolved, time.Time{}); !start.Equal(barStart.Add(-99 * time.Hour)) {
 		t.Fatalf("活跃序列的覆盖起点应是最新一根往前 99 根：%s", start)
@@ -183,7 +184,7 @@ func TestCoverageStartAndAgeCoverage(t *testing.T) {
 
 // 回放终点截到最新一根之前（最新一根可能还没写完）；起点以活跃序列的覆盖起点为准，不被停更序列的旧行放宽。
 func TestReplayWindowUsesActiveCoverage(t *testing.T) {
-	resolved := Resolved{ViewID: "view", Calendar: DefaultCalendar, Bar: "1h"}
+	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {ViewID: "view"}}, Calendar: DefaultCalendar, Bar: "1h"}
 	view := ViewInfo{IndexedFrom: barStart.Add(-10000 * time.Hour), IndexedTo: barStart, SeriesBars: 100}
 	end, err := ReplayWindow(resolved, nil, view, barStart.Add(-50*time.Hour), barStart.Add(10*time.Hour), testNow)
 	if err != nil || !end.Equal(barStart) {

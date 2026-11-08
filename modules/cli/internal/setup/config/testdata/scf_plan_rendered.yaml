@@ -1,6 +1,8 @@
 gateway_client:
   caller: collector
   key_file: ./caller-collector.key
+delist:
+  auto_detect: false
 egress_proxy:
   domains:
     - '*.binance.com'

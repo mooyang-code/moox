@@ -11,7 +11,7 @@ import (
 )
 
 func TestBusinessUnitSelectionAndExportRolesFollowActualDeployments(t *testing.T) {
-	manifest := setupconfig.Manifest{Deployments: map[string][]string{"storage1": {"storage-primary", "storage-node"}, "view1": {"storage-view"}, "edge1": {"access", "egress-proxy"}, "trade1": {"trade"}}}
+	manifest := setupconfig.Manifest{Deployments: map[string][]string{"storage1": {"storage-primary", "storage-node"}, "view1": {"storage-view"}, "edge1": {"access", "egress-proxy"}, "trade1": {"trade"}, "notify1": {"callback-dispatcher"}}}
 	for _, test := range []struct {
 		host, profile     string
 		components, roles []string
@@ -21,6 +21,7 @@ func TestBusinessUnitSelectionAndExportRolesFollowActualDeployments(t *testing.T
 		{"edge1", "access", []string{"access"}, []string{"metrics-publisher"}},
 		{"edge1", "egress-proxy", []string{"egress-proxy"}, []string{"metrics-publisher"}},
 		{"trade1", "trade", []string{"trade"}, []string{"metrics-publisher", "trade-eventbus"}},
+		{"notify1", "callback-dispatcher", []string{"callback-dispatcher"}, []string{"callback-dispatcher-eventbus", "metrics-publisher"}},
 	} {
 		components, err := unitComponents(manifest, test.host, test.profile)
 		require.NoError(t, err)

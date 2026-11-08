@@ -69,7 +69,7 @@ describe("strategy target table", () => {
     const heads = render("valid")
       .findAll('[role="columnheader"]')
       .map(item => item.text());
-    expect(heads).toEqual(["标的", "权重分布", "目标权重", "方向"]);
+    expect(heads).toEqual(["标的", "市场", "权重分布", "目标权重", "方向"]);
   });
 
   it("summarizes sides, gross weight and the weight range", () => {
@@ -107,7 +107,7 @@ describe("strategy target table with many targets", () => {
     expect(columns).toHaveLength(2);
     expect(columns[0].findAll(".target-id")).toHaveLength(10);
     expect(columns[1].findAll(".target-id")[0].text()).toBe("T11");
-    expect(wrapper.findAll('[role="columnheader"]')).toHaveLength(8);
+    expect(wrapper.findAll('[role="columnheader"]')).toHaveLength(10);
     expect(wrapper.find(".target-range").text()).toBe("第 1–20 条，共 45 条");
     expect(wrapper.find(".pager").attributes("data-total")).toBe("45");
   });

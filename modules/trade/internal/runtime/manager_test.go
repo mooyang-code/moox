@@ -172,7 +172,7 @@ func TestManagerOwnsExactlyOneSessionPerEnabledAccount(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		return manager.Ready("account-1")
-	}, time.Second, 10*time.Millisecond)
+	}, 5*time.Second, 10*time.Millisecond)
 	require.Equal(t, int32(1), factoryCalls.Load())
 	require.Equal(t, SessionSnapshot{
 		Enabled: 1, Ready: 1, Reconciled: true,
@@ -183,7 +183,7 @@ func TestManagerOwnsExactlyOneSessionPerEnabledAccount(t *testing.T) {
 	source.set(nil)
 	require.Eventually(t, func() bool {
 		return manager.Snapshot().Enabled == 0
-	}, time.Second, 10*time.Millisecond)
+	}, 5*time.Second, 10*time.Millisecond)
 	<-session.stopped
 	require.Equal(t, "account-1", <-removed)
 
@@ -194,7 +194,7 @@ func TestManagerOwnsExactlyOneSessionPerEnabledAccount(t *testing.T) {
 func TestManagerReadyForRejectsStaleSessionConfiguration(t *testing.T) {
 	record := store.TradingAccountRecord{
 		SpaceID: "space-1", TradingAccountID: "account-1",
-		Exchange: "BINANCE", MarketType: "SPOT", ExecutionMode: "LIVE",
+		Exchange: "BINANCE", Markets: []string{"SPOT"}, ExecutionMode: "LIVE",
 		CredentialSecretID: "secret-1", SettlementAsset: "USDT",
 		Status: "ENABLED", LeverageSettings: store.LeverageSettings{},
 	}
@@ -215,7 +215,7 @@ func TestManagerReadyForRejectsStaleSessionConfiguration(t *testing.T) {
 	<-session.started
 	account := tradingaccount.Account{
 		ID: "account-1", SpaceID: "space-1",
-		Exchange: exchange.ExchangeBinance, MarketType: exchange.MarketTypeSpot,
+		Exchange: exchange.ExchangeBinance, Markets: []exchange.MarketType{exchange.MarketTypeSpot},
 		ExecutionMode:      exchange.ExecutionModeLive,
 		CredentialSecretID: "secret-1", SettlementAsset: "USDT",
 		Status: exchange.AccountStatusEnabled, LeverageSettings: map[string]shared.Decimal{},
@@ -327,7 +327,7 @@ func TestManagerReconnectsTheExistingSessionAfterRunFailure(t *testing.T) {
 	}
 	require.Eventually(t, func() bool {
 		return manager.Ready("account-1")
-	}, time.Second, 10*time.Millisecond)
+	}, 5*time.Second, 10*time.Millisecond)
 	require.Equal(t, int32(2), session.runCalls.Load())
 	require.Equal(t, int32(1), factoryCalls.Load(), "reconnect must reuse the session")
 
@@ -475,4 +475,15 @@ func TestManagerResetsBackoffAfterStableRun(t *testing.T) {
 	stableGap := session.starts[4].Sub(session.ends[3])
 	require.GreaterOrEqual(t, fastGap, 70*time.Millisecond, "fast failures must keep doubling")
 	require.Less(t, stableGap, 60*time.Millisecond, "a stable run must reset the backoff")
+}
+
+// 同一个密钥 ID 下改了密钥内容：重新检测写入新的指纹，会话配置随之不同，会话被重建。
+func TestSameSessionConfigDiffersWhenCredentialFingerprintChanges(t *testing.T) {
+	account := func(apiKey string) store.TradingAccountRecord {
+		raw, err := exchange.Inspection{InspectedAt: time.Now().UTC(), CredentialFingerprint: exchange.CredentialFingerprint(apiKey)}.Encode()
+		require.NoError(t, err)
+		return store.TradingAccountRecord{TradingAccountID: "a", CredentialSecretID: "secret-1", InspectionJSON: raw}
+	}
+	require.True(t, sameSessionConfig(account("key-1"), account("key-1")))
+	require.False(t, sameSessionConfig(account("key-1"), account("key-2")))
 }

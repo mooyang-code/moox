@@ -17,7 +17,7 @@ func TestCreateTradingAccountValidatesAndCanonicalizesTypedJSON(t *testing.T) {
 	}
 	account.Snapshot = TradingAccountSnapshot{
 		Balances: []AssetBalance{
-			{Asset: "USDT", Available: "80", Locked: "20", Total: "100"},
+			{Wallet: "FUTURES", Asset: "USDT", Available: "80", Locked: "20", Total: "100"},
 		},
 		Equity:            "100",
 		AvailableFunds:    "80",
@@ -41,9 +41,10 @@ func TestCreateTradingAccountValidatesAndCanonicalizesTypedJSON(t *testing.T) {
 		Take(&row).Error)
 	require.Equal(t, `{"BTCUSDT":"10","ETHUSDT":"5"}`, row.Leverage)
 	require.Equal(t,
-		`{"balances":[{"asset":"USDT","available":"80","locked":"20","total":"100"}],`+
-			`"equity":"100","available_funds":"80","used_margin":"20",`+
-			`"maintenance_margin":"2","unrealized_pnl":"-1.5","exchange_updated_at":123}`,
+		`{"equity":"100","available_funds":"80","used_margin":"20",`+
+			`"maintenance_margin":"2","unrealized_pnl":"-1.5","exchange_equity":"",`+
+			`"exchange_updated_at":123,"wallets":[{"wallet":"FUTURES","updated_at":123,`+
+			`"balances":[{"asset":"USDT","available":"80","locked":"20","total":"100","borrowed":""}]}]}`,
 		row.Snapshot)
 
 	got, err := s.GetTradingAccount(ctx, account.SpaceID, account.TradingAccountID)
@@ -67,7 +68,7 @@ func TestCreateTradingAccountRejectsMalformedTypedJSONValues(t *testing.T) {
 			name: "snapshot balance",
 			mutate: func(account *TradingAccountRecord) {
 				account.Snapshot.Balances = []AssetBalance{{
-					Asset: "USDT", Available: "not-a-number", Locked: "0", Total: "0",
+					Wallet: "FUTURES", Asset: "USDT", Available: "not-a-number", Locked: "0", Total: "0",
 				}}
 			},
 		},
@@ -186,7 +187,7 @@ func TestTradingAccountSettlementAssetCannotChangeWhileMember(t *testing.T) {
 		}
 		if err := tx.CreateLogicalAccount(LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
-			ExecutionMode: "PAPER", MarketType: "SPOT", SettlementAsset: "USDT",
+			ExecutionMode: "PAPER", SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {
 			return err
@@ -214,7 +215,7 @@ func TestTradingAccountSettlementAssetCannotChangeWhileMember(t *testing.T) {
 func testAccount() TradingAccountRecord {
 	return TradingAccountRecord{
 		SpaceID: "space-1", TradingAccountID: "account-1", Name: "main",
-		Exchange: "BINANCE", MarketType: "SPOT", ExecutionMode: "PAPER",
+		Exchange: "BINANCE", Markets: []string{"SPOT"}, ExecutionMode: "PAPER",
 		Environment:        "PAPER",
 		CredentialSecretID: "secret-1", SettlementAsset: "USDT",
 		Status: "ENABLED",

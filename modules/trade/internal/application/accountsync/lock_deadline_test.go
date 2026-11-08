@@ -8,7 +8,6 @@ import (
 
 	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/stretchr/testify/require"
@@ -142,6 +141,6 @@ func TestSyncUnknownTailPropagatesLockDeadline(t *testing.T) {
 func (*lockDeadlineAdapter) ListOpenOrders(context.Context) ([]exchange.Order, error) {
 	return nil, nil
 }
-func (*lockDeadlineAdapter) ListRecentFills(context.Context, shared.ExchangeSymbol, string) ([]exchange.Fill, string, error) {
+func (*lockDeadlineAdapter) ListRecentFills(context.Context, exchange.SymbolKey, string) ([]exchange.Fill, string, error) {
 	return nil, "", nil
 }

@@ -109,13 +109,20 @@ cd moox-${VER}
 3. **免密登录**：页面在本机生成 MooX 专用密钥 `~/.ssh/moox_ed25519`，逐台确认主机指纹，用户输入一次 SSH 密码装上公钥（密码不保存），
    密码或用户名填错时，页面直接让用户重新填写用户名和密码；也可以按页面给出的 `ssh-copy-id` 命令自己在终端执行；因子机在免密开通后自动做环境检测；
 4. 管理员账号与告警渠道（机器人 Webhook 可以先不填，部署完成后在管理台“监控 › 告警渠道”添加；添加之前出了问题不会通知到群里，要提醒用户补上）；
-5. 确认后写出加密的 `moox.toml`（解密密钥在系统钥匙串）。
+5. 交易所密钥（可选，只有配了海外服务器才有这一步）：币安或 OKX 的 API 密钥写成 `[[exchange_keys]]`，只读密钥勾“只读”；页面不在本机检测（密钥通常绑定了海外服务器的 IP），装完后在海外机上检测；
+6. 确认后写出加密的 `moox.toml`（解密密钥在系统钥匙串）。
 
 规则：
 
 - 命令结束后立即告诉用户：配置已保存，页面可以关，之后不用重填。
 - Agent **不打开、不填写、不读取**这个页面和 `moox.toml`；页面地址没能自动打开时，把命令打印的地址原样转给用户。
 - 之后要看或改配置用 `./bin/moox-cli config edit`（同样由用户在浏览器里操作）。
+- 填了交易所密钥的：`setup install` 把它们写进密钥管理（只建不改，管理台里已有或已删除的不动），安装结束后逐把检测：`moox-cli trade inspect-credential --exchange EXCHANGE_BINANCE --environment ACCOUNT_ENVIRONMENT_PRODUCTION --credential-secret-id exchange-binance-production-<名称>`（`readonly = true` 的不检测）。输出里有阻断项就告诉用户原因，由用户在交易所或管理台处理；`检测没有完成` 是交易所接口暂时不可用，稍后重试。
+- 币安只读 Key（可选）：Collector 的下架检测用它读币安现货下架计划，固定读名称为 `readonly` 的币安生产环境只读密钥（`exchange = "binance"`、`environment = "production"`、`name = "readonly"`、`readonly = true`，ID `exchange-binance-production-readonly`）。
+  不配也能装完：Monitor 只报一条 warning“下架检测缺少币安只读 Key”，不挡 `setup verify`；缺这把 Key 时现货下架只能手工登记：`moox-cli collector delist register`（默认只预览，`--yes` 才执行），或管理台「系统设置 › 事件中心」的“手工登记下架”。
+  登记后到下架前 24 小时（T−24h，已不足 24 小时的立即）会自动卖出策略持有的实盘仓位；`--yes` 前先向用户确认标的和下架时间；演练用 `--paper-only`（只平模拟盘组合，但同样全局禁止买入这个标的，直到演练记录结束）。
+  要补就让用户 `config edit` 加上，再 `setup apply` 写入，下一轮检测自动恢复。
+- 不配海外机（没有出口代理）时 Collector 连不上币安、OKX，安装渲染会把 Collector 的 `delist.auto_detect` 设为 false，不自动检测下架，手工登记照常可用；配了海外机时为 true。
 - 免密登录开通后，Agent 就能通过 `moox-cli` 登录这些服务器完成后续所有步骤。
 - MooX 密钥不是 OpenSSH 的默认身份文件。手工验证要写 `ssh -i ~/.ssh/moox_ed25519 <用户>@<IP>`，普通 `ssh` 询问密码不代表公钥没装上。
 

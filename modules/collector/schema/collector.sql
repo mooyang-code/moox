@@ -157,12 +157,14 @@ BEGIN
 END;
 
 -- c_missing 是上一次执行后复查仍缺的 K 线（规范化区间串）：连续两次一致才确认是行情源没有。
+-- c_series_tag 只在统一数据集（同一数据集里有多个 series_tag）时有值：补采要用该序列所属市场的路由；单序列数据集为空。
 CREATE TABLE IF NOT EXISTS t_collector_kline_backfill_chunks (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_job_id TEXT NOT NULL,
     c_dataset_id TEXT NOT NULL,
     c_frequency TEXT NOT NULL,
     c_subject_id TEXT NOT NULL,
+    c_series_tag TEXT NOT NULL DEFAULT '',
     c_from DATETIME NOT NULL,
     c_to DATETIME NOT NULL,
     c_chunk_id TEXT NOT NULL,
@@ -175,7 +177,7 @@ CREATE TABLE IF NOT EXISTS t_collector_kline_backfill_chunks (
     c_last_error TEXT NOT NULL DEFAULT '',
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CHECK (c_status IN ('pending', 'running', 'succeeded', 'failed', 'canceled')),
-    UNIQUE (c_job_id, c_dataset_id, c_frequency, c_subject_id, c_from)
+    UNIQUE (c_job_id, c_dataset_id, c_frequency, c_subject_id, c_series_tag, c_from)
 );
 
 CREATE INDEX IF NOT EXISTS idx_t_collector_kline_backfill_chunks_job ON t_collector_kline_backfill_chunks (c_job_id, c_status);
@@ -190,16 +192,18 @@ BEGIN
 END;
 
 -- 已确认“行情源没有”的 K 线：补采成功后复查仍缺且结果一致的连续区间，检查与补采都扣除。
+-- c_series_tag 只在统一数据集时有值（同一标的的现货、永续分别确认）；单序列数据集为空。
 CREATE TABLE IF NOT EXISTS t_collector_source_absences (
     c_space_id TEXT NOT NULL,
     c_dataset_id TEXT NOT NULL,
     c_frequency TEXT NOT NULL,
     c_subject_id TEXT NOT NULL,
+    c_series_tag TEXT NOT NULL DEFAULT '',
     c_from DATETIME NOT NULL,
     c_to DATETIME NOT NULL,
     c_bars INTEGER NOT NULL DEFAULT 0,
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (c_space_id, c_dataset_id, c_frequency, c_subject_id, c_from)
+    PRIMARY KEY (c_space_id, c_dataset_id, c_frequency, c_subject_id, c_series_tag, c_from)
 );
 
 -- 每个数据集最近一次历史缺口扫描（早于最早生效点的一段历史）的结果；c_gaps 是缺口分组 JSON，供确认补采。
@@ -282,6 +286,7 @@ CREATE TABLE IF NOT EXISTS t_collector_tag_sync_runs (
 
 -- 合成目标数据集的标的快照（按生效点追加）：一个目标桶落在哪份快照内，用周期提交写入；
 -- 生效点之前的桶和快照之外的标的用普通写入。c_effective_from 是 Unix 秒，等于 Storage 登记的生效点。
+-- c_members 只在统一数据集（源有多个 series_tag）时有值：series_tag 到成员标的的映射；单序列任务为 '{}'，成员就是 c_subjects。
 CREATE TABLE IF NOT EXISTS t_collector_resample_snapshots (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_space_id TEXT NOT NULL,
@@ -289,12 +294,14 @@ CREATE TABLE IF NOT EXISTS t_collector_resample_snapshots (
     c_effective_from INTEGER NOT NULL,
     c_series_hash TEXT NOT NULL,
     c_subjects TEXT NOT NULL DEFAULT '[]',
+    c_members TEXT NOT NULL DEFAULT '{}',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     UNIQUE (c_space_id, c_task_id, c_effective_from)
 );
 
 -- 历史合成作业：范围 [c_start, c_end) 按目标桶推进，c_next_bucket 是游标，进程重启后从游标继续。
 -- c_origin 取 manual（CLI、控制台）或 source_backfill（源数据补采完成后触发）；c_not_before 之前不开始。
+-- c_series_tags 是限定要合成的源序列（series_tag），'[]' 表示任务的全部源序列。
 CREATE TABLE IF NOT EXISTS t_collector_resample_jobs (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_job_id TEXT NOT NULL,
@@ -303,6 +310,7 @@ CREATE TABLE IF NOT EXISTS t_collector_resample_jobs (
     c_request_id TEXT NOT NULL,
     c_origin TEXT NOT NULL DEFAULT 'manual',
     c_subjects TEXT NOT NULL DEFAULT '[]',
+    c_series_tags TEXT NOT NULL DEFAULT '[]',
     c_start DATETIME NOT NULL,
     c_end DATETIME NOT NULL,
     c_next_bucket DATETIME NOT NULL,
@@ -335,12 +343,14 @@ END;
 
 -- 补写通知：补采分块读回确认成功（以及合成在周期结束后的补写）时，与状态更新在同一事务里记录。
 -- 发布协程按（空间、数据集、频率、来源、作业）合并成批，c_batch_id 为空表示还没有成批。
+-- c_series_tag 是被补写的序列；单序列数据集为空串，事件里不带 series_tags。
 CREATE TABLE IF NOT EXISTS t_collector_backfill_notices (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_space_id TEXT NOT NULL,
     c_dataset_id TEXT NOT NULL,
     c_frequency TEXT NOT NULL,
     c_subject_id TEXT NOT NULL,
+    c_series_tag TEXT NOT NULL DEFAULT '',
     c_start DATETIME NOT NULL,
     c_end DATETIME NOT NULL,
     c_origin TEXT NOT NULL,
@@ -353,6 +363,7 @@ CREATE INDEX IF NOT EXISTS idx_t_collector_backfill_notices_batch ON t_collector
 
 -- Collector 本地事件发件箱：事件成批后与通知的封存在同一事务里写入，发布协程推送到 JetStream，
 -- 以 c_event_id 作为 Msg-Id 去重；发布成功才标记 c_published。
+-- c_published：0 待发布，1 已发布，2 死信（事件无法解码，不再发布，上报关注项等人工处理）。
 CREATE TABLE IF NOT EXISTS t_collector_event_outbox (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_event_id TEXT NOT NULL,
@@ -366,6 +377,25 @@ CREATE TABLE IF NOT EXISTS t_collector_event_outbox (
 );
 
 CREATE INDEX IF NOT EXISTS idx_t_collector_event_outbox_pending ON t_collector_event_outbox (c_published, c_id);
+
+-- 下架检测发现（或手工登记）的下架通知：与该标的（交易所、市场、代码、范围）最近一次发布的下架时间相同时只更新最后报告时间，
+-- 不同（包括改回以前出现过的时间）就是一次新的发布，所以同一标的可以有多行；事件经上面的发件箱发布。
+-- 范围（ALL / PAPER_ONLY）是标的身份的一部分，演练登记不会挡住真实下架。
+CREATE TABLE IF NOT EXISTS t_collector_delist_notices (
+    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    c_exchange TEXT NOT NULL,
+    c_market TEXT NOT NULL,
+    c_symbol TEXT NOT NULL,
+    c_scope TEXT NOT NULL,
+    c_delist_at DATETIME NOT NULL,
+    c_source TEXT NOT NULL,
+    c_event_id TEXT NOT NULL,
+    c_first_seen_at DATETIME NOT NULL,
+    c_last_seen_at DATETIME NOT NULL,
+    UNIQUE (c_event_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_t_collector_delist_notices_instrument ON t_collector_delist_notices (c_exchange, c_market, c_symbol, c_scope, c_id);
 
 -- 已删除的旧结构：逐标的合成实例、实例写入目标、周期就绪（合成改为按数据集 × 桶批量执行，目标周期由 Storage 跟踪）。
 -- 保留这些语句让已有的库在升级后清掉旧表；新库里它们什么都不做。

@@ -6,15 +6,25 @@ import (
 	"sync"
 	"time"
 
+	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 )
 
+// paperUsesMarginPool 报告订单预留的资金是否和合约保证金共用一个资金池：模拟盘、账户开通了合约市场、
+// 预留的是结算币。这时无论订单是现货还是合约，可用资金都要扣掉合约已占用的保证金和浮亏
+// （真实统一账户同样会因保证金不足拒单），不能让现货买单按全额现金下单。
+func paperUsesMarginPool(validation Validation) bool {
+	return validation.Account.ExecutionMode == exchange.ExecutionModePaper &&
+		validation.Account.HasLeverageMarket() &&
+		validation.ReservedAsset == validation.Account.SettlementAsset
+}
+
 // The caller holds the account lock. Market valuation happens outside the
 // SQLite transaction; cash and active reservations are read inside the write.
 func (s *Service) paperMarginAdjustment(ctx context.Context, validation Validation) (shared.Decimal, error) {
-	if validation.Account.ExecutionMode != exchange.ExecutionModePaper || !exchange.RuleFor(validation.Account.MarketType).UsesMargin {
+	if !paperUsesMarginPool(validation) {
 		return shared.Zero(), nil
 	}
 	if s.Adapters == nil {
@@ -24,7 +34,39 @@ func (s *Service) paperMarginAdjustment(ctx context.Context, validation Validati
 	if err != nil {
 		return shared.Zero(), accountExecutionError(validation.Account.ID, "adapter", err)
 	}
-	snapshot, err := reusedSnapshot(ctx, validation.Account.ID, adapter.GetAccountSnapshot)
+	// 账户上有挂着的单（OPEN、部分成交）时不复用：撮合随时可能让它成交，持仓和保证金会变。
+	reusable, err := s.noRestingPaperOrders(ctx, validation)
+	if err != nil {
+		return shared.Zero(), accountExecutionError(validation.Account.ID, "snapshot", err)
+	}
+	load := adapter.GetAccountSnapshot
+	if !reusable {
+		snapshot, loadErr := load(ctx)
+		return s.marginFromSnapshot(validation, snapshot, loadErr)
+	}
+	snapshot, err := reusedSnapshot(ctx, validation.Account.ID, load)
+	return s.marginFromSnapshot(validation, snapshot, err)
+}
+
+// noRestingPaperOrders 报告账户上是否没有可能被撮合的挂单（OPEN、部分成交）。
+func (s *Service) noRestingPaperOrders(ctx context.Context, validation Validation) (bool, error) {
+	if ctx.Value(snapshotReuseKey{}) == nil {
+		return true, nil
+	}
+	orders, err := s.Store.ListActiveOrdersForAccount(ctx, validation.Account.SpaceID, validation.Account.ID)
+	if err != nil {
+		return false, err
+	}
+	for _, order := range orders {
+		// 只看模拟撮合会成交的状态：挂单和部分成交。
+		if order.State == string(orderdomain.Open) || order.State == string(orderdomain.PartiallyFilled) {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func (s *Service) marginFromSnapshot(validation Validation, snapshot exchange.AccountSnapshot, err error) (shared.Decimal, error) {
 	if err != nil {
 		return shared.Zero(), accountExecutionError(validation.Account.ID, "snapshot", err)
 	}
@@ -32,7 +74,12 @@ func (s *Service) paperMarginAdjustment(ctx context.Context, validation Validati
 		snapshot.ExchangeUpdatedAt.IsZero() || snapshot.ExchangeUpdatedAt.After(s.now()) || s.now().Sub(snapshot.ExchangeUpdatedAt) > 10*time.Second {
 		return shared.Zero(), accountExecutionError(validation.Account.ID, "snapshot", fmt.Errorf("%w: paper margin valuation unavailable", ErrServiceConfig))
 	}
-	return snapshot.UnrealizedPnL.Sub(snapshot.UsedMargin), nil
+	unrealized := snapshot.UnrealizedPnL
+	if !exchange.RuleFor(validation.Instrument.MarketType).UsesMargin && unrealized.Cmp(shared.Zero()) > 0 {
+		// 现货买入不借币：合约的浮盈不能拿来买现货，只扣浮亏和已占保证金；合约开仓才按“浮盈亏 - 保证金”。
+		unrealized = shared.Zero()
+	}
+	return unrealized.Sub(snapshot.UsedMargin), nil
 }
 
 // fundsMarginAdjustment 是下单资金检查用的保证金调整：减仓单在 checkPaperFunds 里不占新保证金，
@@ -52,8 +99,8 @@ type snapshotReuse struct {
 }
 
 // WithSnapshotReuse 让同一轮建子单里对同一执行账户的模拟盘保证金估值只算一次快照。
-// 只用于 Converge 持逻辑账户锁、循环开始时成员账户没有活动订单的连续建单这一段：PENDING 单不参与撮合，
-// 一个执行账户只属于一个启用的组合账户，这期间持仓和标记价之外的保证金因素不会变化。
+// 只用于 Converge 持逻辑账户锁的连续建单这一段：PENDING 单不参与撮合，一个执行账户只属于一个启用的组合账户，
+// 这期间持仓和标记价之外的保证金因素不会变化。账户上有挂着的单（OPEN、部分成交）时不复用，每次现算。
 // 发送阶段不能用：同批前面的子单可能已被撮合成交。
 func WithSnapshotReuse(ctx context.Context) context.Context {
 	return context.WithValue(ctx, snapshotReuseKey{}, &snapshotReuse{snapshots: make(map[string]exchange.AccountSnapshot)})

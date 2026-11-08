@@ -52,18 +52,18 @@ func (a *lagAdapter) ListOpenOrders(context.Context) ([]exchange.Order, error) {
 	a.record("open_orders")
 	return nil, nil
 }
-func (a *lagAdapter) ListRecentFills(context.Context, shared.ExchangeSymbol, string) ([]exchange.Fill, string, error) {
+func (a *lagAdapter) ListRecentFills(context.Context, exchange.SymbolKey, string) ([]exchange.Fill, string, error) {
 	a.record("fills")
 	return nil, "", nil
 }
-func (a *lagAdapter) GetOrder(context.Context, shared.ExchangeSymbol, string) (exchange.Order, error) {
+func (a *lagAdapter) GetOrder(context.Context, exchange.SymbolKey, string) (exchange.Order, error) {
 	a.record("order")
 	return exchange.Order{}, &exchange.Error{Kind: exchange.ErrorOrderNotFound}
 }
 func (*lagAdapter) PlaceOrder(context.Context, exchange.OrderRequest) (exchange.Order, error) {
 	return exchange.Order{}, nil
 }
-func (*lagAdapter) CancelOrder(context.Context, shared.ExchangeSymbol, string) (exchange.Order, error) {
+func (*lagAdapter) CancelOrder(context.Context, exchange.SymbolKey, string) (exchange.Order, error) {
 	return exchange.Order{}, nil
 }
 
@@ -96,7 +96,7 @@ func storedPosition(t *testing.T, tradeStore *store.Store) (string, bool) {
 	var quantity string
 	var found bool
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		position, ok, err := tx.GetPosition("space-1", "account-1", "BTC-USDT", "NET")
+		position, ok, err := tx.GetPosition("space-1", "account-1", exchange.SymbolKey{Market: exchange.MarketTypeSwap, Symbol: "BTC-USDT"}, "NET")
 		quantity, found = position.SignedQuantity, ok
 		return err
 	}))
@@ -130,7 +130,7 @@ func TestLightSyncOverridesStalePositionAfterGrace(t *testing.T) {
 	service, tradeStore, adapter := lightSyncFixture(t, &now)
 	filledAt := now.Add(-time.Second)
 	projectPosition(t, tradeStore, "0.5", filledAt)
-	adapter.positions = []exchange.Position{{
+	adapter.positions = []exchange.Position{{Market: exchange.MarketTypeSwap,
 		ExchangeSymbol: "BTC-USDT", PositionSide: exchange.PositionSideNet,
 		SignedQuantity: shared.MustDecimal("0.25"), EntryPrice: shared.MustDecimal("100"),
 		Leverage: shared.MustDecimal("5"), MarginMode: exchange.MarginModeCross,
@@ -175,12 +175,12 @@ func TestSpotStaleBalanceDoesNotRestoreReady(t *testing.T) {
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
 			CreatedAt: time.UnixMilli(1), SpaceID: "space-1", TradingAccountID: "spot-1", Name: "spot",
-			Exchange: "BINANCE", MarketType: "SPOT", ExecutionMode: "LIVE", Environment: "TESTNET",
+			Exchange: "BINANCE", Markets: []string{"SPOT"}, ExecutionMode: "LIVE", Environment: "TESTNET",
 			CredentialSecretID: "secret-1", SettlementAsset: "USDT", Status: "ENABLED",
 		}); err != nil {
 			return err
 		}
-		return tx.RaiseBalancePending("space-1", "spot-1", 90_000)
+		return tx.RaiseBalancePending("space-1", "spot-1", exchange.WalletSpot, 90_000)
 	}))
 	adapter := newLagAdapter(time.UnixMilli(80_000))
 	service := &Service{

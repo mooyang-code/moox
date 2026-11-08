@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/seriesset"
 )
 
 // 标签属性键。
@@ -39,6 +40,13 @@ func Index(tag *storagepb.Tag) string { return strings.TrimSpace(tag.GetAttribut
 
 // MarketType 返回标签的市场类型（小写）；未配置时为空。
 func MarketType(tag *storagepb.Tag) string { return lower(tag, KeyMarketType) }
+
+// IsSpotSwap 判断一组市场类型是否正好是现货加永续：统一数据集（同一数据集里同时放两个市场的序列）只允许这个组合。
+func IsSpotSwap(markets map[string]struct{}) bool {
+	_, spot := markets[seriesset.MarketSpot]
+	_, swap := markets[seriesset.MarketSwap]
+	return len(markets) == 2 && spot && swap
+}
 
 // Cron 返回标签的同步 cron，未配置时取缺省值。
 func Cron(tag *storagepb.Tag) string {

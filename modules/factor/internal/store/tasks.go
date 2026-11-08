@@ -69,8 +69,8 @@ func (s *Store) CreateTask(ctx context.Context, task domain.FactorTask) error {
 	return nil
 }
 
-// BindTask 把任务与策略实例永久关联：同一个实例重复调用直接成功；任务已关联别的实例、或该实例已关联别的任务时
-// 返回 ErrConflict。关联写入后不能修改或清空。
+// BindTask 把任务与策略实例永久关联：同一个实例重复调用直接成功；任务已关联别的实例时返回 ErrConflict。
+// 一个实例可以关联多个任务（例如现货、永续各一个）。关联写入后不能修改或清空。
 func (s *Store) BindTask(ctx context.Context, taskID, instanceID string) (domain.FactorTask, error) {
 	if s == nil || s.db == nil {
 		return domain.FactorTask{}, fmt.Errorf("factor database is not open")
@@ -92,9 +92,6 @@ func (s *Store) BindTask(ctx context.Context, taskID, instanceID string) (domain
 	result := s.db.WithContext(ctx).Exec(
 		"UPDATE t_factor_tasks SET c_bound_instance_id = ? WHERE c_task_id = ? AND c_bound_instance_id = ''", instanceID, taskID)
 	if result.Error != nil {
-		if isUniqueConstraint(result.Error) {
-			return domain.FactorTask{}, fmt.Errorf("%w: strategy instance %q is already bound to another factor task", ErrConflict, instanceID)
-		}
 		return domain.FactorTask{}, result.Error
 	}
 	if result.RowsAffected == 0 {
@@ -195,26 +192,6 @@ func (s *Store) DeleteTask(ctx context.Context, taskID string) error {
 }
 
 const setColumns = `c_task_id, c_space_id, c_name, c_source_dataset_id, c_freq, c_result_dataset_id, c_bound_instance_id, c_status, c_ctime, c_mtime`
-
-// GetTaskByInstance 返回策略实例关联的因子任务；没有关联时返回 gorm.ErrRecordNotFound。
-func (s *Store) GetTaskByInstance(ctx context.Context, instanceID string) (domain.FactorTask, error) {
-	if s == nil || s.db == nil {
-		return domain.FactorTask{}, fmt.Errorf("factor database is not open")
-	}
-	instanceID = strings.TrimSpace(instanceID)
-	if instanceID == "" {
-		return domain.FactorTask{}, fmt.Errorf("instance id is required")
-	}
-	var row factorTaskRow
-	result := s.db.WithContext(ctx).Raw(`SELECT `+setColumns+` FROM t_factor_tasks WHERE c_bound_instance_id = ?`, instanceID).Scan(&row)
-	if result.Error != nil {
-		return domain.FactorTask{}, result.Error
-	}
-	if result.RowsAffected == 0 {
-		return domain.FactorTask{}, gorm.ErrRecordNotFound
-	}
-	return row.domain()
-}
 
 func marshalStringSlice(values []string) (string, error) {
 	if values == nil {

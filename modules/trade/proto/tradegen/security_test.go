@@ -15,9 +15,9 @@ func TestTradeRPCExposesOnlyApprovedServicesAndMethods(t *testing.T) {
 	want := map[protoreflect.FullName][]protoreflect.Name{
 		"trpc.moox.trade.TradeConsoleService": {
 			"CreateTradingAccount", "UpdateTradingAccount", "GetTradingAccount", "ListTradingAccounts",
-			"SetLeverage", "SyncTradingAccount",
+			"SetLeverage", "SyncTradingAccount", "InspectExchangeCredential", "ReinspectTradingAccount", "ResolveWalletTransfer",
 			"CreateLogicalAccount", "GetLogicalAccount", "ListLogicalAccounts",
-			"UpdateLogicalAccount", "AddLogicalAccountMember",
+			"UpdateLogicalAccount", "UpdateLogicalAccountOrderSettings", "UpdateLogicalAccountFundSettings", "AddLogicalAccountMember",
 			"RemoveLogicalAccountMember", "ClaimLogicalAccountOwner",
 			"ReleaseLogicalAccountOwner", "RebindLogicalAccountOwner", "PauseLogicalAccount",
 			"ResumeLogicalAccount", "FlattenLogicalAccount",
@@ -26,6 +26,8 @@ func TestTradeRPCExposesOnlyApprovedServicesAndMethods(t *testing.T) {
 			"ListPositions", "CreatePaperSimulation", "ClosePaperSimulation",
 			"GetExecutionCapabilities", "ListTradableInstruments", "QueryEquityCurve", "ListHoldings",
 			"ListAccountLedger", "FlattenTradingAccount",
+			"BlockInstrument", "UnblockInstrument", "ListBlockedInstruments", "ListInstrumentHolders",
+			"FlattenInstrument", "ReduceLogicalAccount", "SummarizeAccountPnl", "ListOperatorActions",
 		},
 	}
 	services := File_trade_service_proto.Services()
@@ -131,6 +133,7 @@ func TestManualOrderRequestHasExactApprovedShape(t *testing.T) {
 		"limit_price":        10,
 		"reason":             11,
 		"deadline_at":        12,
+		"market_type":        13,
 	}
 	fields := (&PlaceManualOrderReq{}).ProtoReflect().Descriptor().Fields()
 	if fields.Len() != len(want) {
@@ -233,8 +236,12 @@ func TestScopedRequestsRejectMissingIdentity(t *testing.T) {
 		&GetTradingAccountReq{},
 		&SetLeverageReq{},
 		&SyncTradingAccountReq{},
+		&ReinspectTradingAccountReq{},
+		&ResolveWalletTransferReq{},
 		&GetLogicalAccountReq{},
 		&UpdateLogicalAccountReq{},
+		&UpdateLogicalAccountOrderSettingsReq{},
+		&UpdateLogicalAccountFundSettingsReq{},
 		&AddLogicalAccountMemberReq{},
 		&RemoveLogicalAccountMemberReq{},
 		&ClaimLogicalAccountOwnerReq{},
@@ -295,8 +302,8 @@ func TestCreateTradingAccountRequiresLiveConfig(t *testing.T) {
 	base := func() *CreateTradingAccountReq {
 		return &CreateTradingAccountReq{
 			Name: "live", Exchange: Exchange_EXCHANGE_OKX,
-			MarketType: MarketType_MARKET_TYPE_SWAP,
-			Live:       &LiveConfig{Environment: AccountEnvironment_ACCOUNT_ENVIRONMENT_TESTNET, CredentialSecretId: "secret-1"},
+			Markets: []MarketType{MarketType_MARKET_TYPE_SWAP},
+			Live:    &LiveConfig{Environment: AccountEnvironment_ACCOUNT_ENVIRONMENT_TESTNET, CredentialSecretId: "secret-1"},
 		}
 	}
 	if err := base().Validate(); err != nil {

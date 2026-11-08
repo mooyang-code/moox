@@ -70,7 +70,10 @@ func TestStartDeliversPeriodAndBackfilledEventsToTriggersAndRetriesFailures(t *t
 	registry, err := events.DefaultRegistry()
 	require.NoError(t, err)
 	triggers := &fakeTriggers{periodErrs: 1}
-	consumers, err := Start(context.Background(), ConsumersConfig{URLs: []string{server.URL()}, SpaceIDs: []string{"crypto"}, FetchMaxWait: 100 * time.Millisecond}, registry,
+	consumerClient, err := jetstream.Connect(context.Background(), jetstream.Config{URLs: []string{server.URL()}, Name: "test-consumers"})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = consumerClient.Close() })
+	consumers, err := Start(context.Background(), consumerClient, ConsumersConfig{SpaceIDs: []string{"crypto"}, FetchMaxWait: 100 * time.Millisecond}, registry,
 		&PeriodHandler{Registry: registry, Trigger: triggers, NakDelay: 100 * time.Millisecond},
 		&BackfilledHandler{Registry: registry, Trigger: triggers, NakDelay: 100 * time.Millisecond})
 	require.NoError(t, err)

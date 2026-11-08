@@ -140,7 +140,7 @@ func TestEnabledInstancesByViewMapsResultViewToTask(t *testing.T) {
 	ctx := context.Background()
 	seedEnabledInstance(t, repo, "i1", "session-1", nil)
 	got, err := repo.EnabledInstancesByView(ctx, "space", "view_factor_a")
-	if err != nil || len(got) != 1 || got[0].InstanceID != "i1" || got[0].FactorTaskID != "ftask_a" {
+	if err != nil || len(got) != 1 || got[0].InstanceID != "i1" || got[0].FactorTasks["spot"] != "ftask_a" {
 		t.Fatalf("路由不符：%+v err=%v", got, err)
 	}
 	for _, view := range []string{"view_factor_b", "view_a", "not_a_view", ""} {

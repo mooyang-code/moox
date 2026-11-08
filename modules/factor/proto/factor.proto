@@ -17,7 +17,7 @@ message FactorTask {
   string status = 8;
   string created_at = 9;
   string updated_at = 10;
-  // bound_instance_id 是关联的策略实例：独占、永久，写入后不能修改；为空表示还没有关联。
+  // bound_instance_id 是关联的策略实例：一个任务只关联一个实例，一个实例可以关联多个任务；写入后不能修改；为空表示还没有关联。
   string bound_instance_id = 11;
 }
 
@@ -106,17 +106,27 @@ message FactorMember {
   string last_submitted_at = 14;
 }
 
+// SeriesRef 是一条时间序列的身份：标的加 series_tag，与行键一致。
+message SeriesRef {
+  string subject_id = 1;
+  string series_tag = 2;
+}
+
 message FactorPeriodState {
   string factor_id = 1;
   string status = 2;
   repeated string failed_subjects = 3;
   string spec_hash = 4;
   string definition_hash = 5;
-  // gap_subjects 是 failed_subjects 中因回看窗口 K 线空洞而失败的标的（子集）。
-  repeated string gap_subjects = 6;
   string member_key = 7;
   // member_kind 是成员类型：fixed 或 var。
   string member_kind = 8;
+  // failed_series 是按序列（标的、series_tag）的失败名单，只有统一数据集（多个 series_tag）才填，
+  // failed_subjects 的口径不变。
+  repeated SeriesRef failed_series = 9;
+  // skipped_series_tags 是被跳过的 series_tag（例如截面因子的全集缺数）：这些序列的结果写 NULL。
+  // 全部 tag 都跳过时 status 为 skipped，只跳过一部分时 status 为 degraded 并在这里列出。
+  repeated string skipped_series_tags = 11;
 }
 
 // PeriodDetail 是因子结果数据集一期完成时放进 DatasetPeriodCompleted.detail 的明细（detail_type = moox.factor.PeriodDetail.v1）。
@@ -124,6 +134,9 @@ message FactorPeriodState {
 message PeriodDetail {
   string source_dataset_id = 1;
   repeated FactorPeriodState factors = 2;
+  // shared_failed_series 是所有成员的 failed_series 的交集，只放一份（永续整体晚到时每个成员的失败序列相同，逐成员复制会让标记超过事件体积上限）。
+  // 成员完整的失败序列 = shared_failed_series ∪ 该成员的 failed_series；读取方必须这样还原（共享实现：packages/seriesset 的 Union）。只有统一数据集才有。
+  repeated SeriesRef shared_failed_series = 3;
 }
 
 message TaskRunSummary {
@@ -740,6 +753,9 @@ message PeriodsFilled {
   int64 from = 4;
   int64 to = 5;
   repeated string absent_subjects = 6;
+  // absent_series 是统一数据集（同一数据集里有多个 series_tag）上按序列确认行情源没有的（标的、series_tag）：
+  // 只扣这一条序列，同标的的另一个市场照常计算；单序列数据集不带，仍用 absent_subjects。
+  repeated SeriesRef absent_series = 7;
 }
 
 // NotifyPeriodsFilled 由 Collector 在补采作业成功后调用；因子管理服务在引擎心跳响应里转交，引擎据此立即推进水位并补算。

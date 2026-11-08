@@ -93,6 +93,13 @@ table.grid input { height: 30px; font-size: 12.5px; }
 .scroll { overflow-x: auto; margin-top: 14px; }
 .row { display: flex; gap: 10px; align-items: center; margin-top: 12px; }
 .row .hint { color: var(--faint); font-size: 12.5px; }
+.xkey { padding: 12px 0; border-top: 1px dashed var(--line); }
+.xkey:first-child { border-top: none; padding-top: 0; }
+.xkey .tail { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin-top: 10px; }
+.xkey .tail .link { margin-left: auto; }
+.xkey .tail label { display: flex; gap: 8px; align-items: center; font-size: 13px; color: var(--ink-2); cursor: pointer; }
+.xkey .tail input { accent-color: var(--brand); }
+.xkey .id { order: 3; flex-basis: 100%; font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--faint); word-break: break-all; }
 
 .footer { position: fixed; left: 0; right: 0; bottom: 0; background: var(--panel); border-top: 1px solid var(--line); z-index: 10; }
 .footer-in { max-width: 1040px; margin: 0 auto; padding: 14px 28px; display: flex; align-items: center; gap: 12px; }
@@ -138,6 +145,10 @@ button.primary:hover { filter: brightness(1.08); background: var(--brand); }
         <table id="servers"><thead><tr><th>用途</th><th>IP 地址</th><th>地域</th><th>SSH 登录</th><th>SSH 密码</th></tr></thead><tbody></tbody></table>
       </div>
       <div class="block"><h2>账号与通知</h2><table class="kv" id="accounts"></table></div>
+      <div class="block" id="xkeys-block" hidden><h2>交易所密钥</h2>
+        <table id="xkeys"><thead><tr><th>名称</th><th>交易所 · 环境</th><th>固定 ID</th><th>API Key</th><th>Secret Key</th><th>Passphrase</th></tr></thead><tbody></tbody></table>
+        <p class="desc">写进密钥管理（apply）之后以管理台为准：这里改了不会覆盖已有的密钥，要换密钥请到管理台「设置 › 秘钥管理」。部署完成后在海外机上检测：<span class="mono">moox-cli trade inspect-credential</span>。</p>
+      </div>
     </section>
 
     <section id="page-edit" hidden>
@@ -265,6 +276,21 @@ button.primary:hover { filter: brightness(1.08); background: var(--brand); }
       ['告警 Webhook', view.has_webhook ? secret('notification.webhook_url') : el('span', { class: 'muted', text: '未填写' })]
     ];
     $('accounts').replaceChildren.apply($('accounts'), rows.map(function (row) { return el('tr', {}, [el('th', { text: row[0] }), el('td', {}, [row[1]])]); }));
+    // 交易所密钥：明文只在点「显示」时按序号取，概览里只有打码的 API Key。
+    var xbody = $('xkeys').tBodies[0];
+    xbody.replaceChildren();
+    (view.exchange_keys || []).forEach(function (key) {
+      var field = function (name) { return 'exchange_keys.' + key.index + '.' + name; };
+      xbody.append(el('tr', {}, [
+        el('td', {}, [key.name, key.readonly ? el('span', { class: 'muted', text: ' · 只读' }) : null]),
+        el('td', { text: key.exchange + ' · ' + key.environment }),
+        el('td', { class: 'mono', text: key.secret_id }),
+        el('td', {}, [secret(field('api_key'), key.api_key)]),
+        el('td', {}, [secret(field('secret_key'))]),
+        el('td', {}, [key.has_passphrase ? secret(field('passphrase')) : el('span', { class: 'muted', text: '—' })])
+      ]));
+    });
+    $('xkeys-block').hidden = !(view.exchange_keys || []).length;
     var privacy = $('privacy');
     privacy.replaceChildren(icon(LOCK), el('span', {}, view.encrypted
       ? ['配置加密保存在这台电脑上，密钥存放在' + view.key_store + '，', el('b', { text: '不会发给 AI，也不会发给 MooX 开发者' }), '。保存时会用管理员密码加密备份到你自己的管理后台，换电脑时可以恢复。']
@@ -348,6 +374,49 @@ button.primary:hover { filter: brightness(1.08); background: var(--brand); }
     syncOS();
     root.append(block('归档对象存储', '归档 worker 导出分区后传一份到标准 S3 接口的对象存储。不打开时用因子机上内置的 SeaweedFS（和归档文件同盘）；打开后改用这里填的外部 S3（例如腾讯云 COS）。关闭后保存会删掉这一段；改动在下次部署 archive-worker 时生效。',
       el('div', {}, [el('label', { class: 'check' }, [ctl.os.enabled, el('span', { text: '使用外部 S3' })]), osFields])));
+    ctl.xkeys = [];
+    var xkeys = el('div');
+    var xempty = el('p', { class: 'desc', text: '还没有交易所密钥。' });
+    var xadd = el('button', { type: 'button', text: '添加一把密钥' });
+    function xkeyRow(entry) {
+      var row = {
+        name: input({ placeholder: '例如 readonly 或 main' }, entry.name),
+        exchange: el('select', {}, [el('option', { value: 'binance', text: '币安 Binance' }), el('option', { value: 'okx', text: 'OKX' })]),
+        environment: el('select', {}, [el('option', { value: 'production', text: '正式环境' }), el('option', { value: 'testnet', text: '测试网' })]),
+        readonly: el('input', { type: 'checkbox' })
+      };
+      var apiKey = secretInput(entry.api_key), secretKey = secretInput(entry.secret_key), passphrase = secretInput(entry.passphrase);
+      row.apiKey = apiKey.input; row.secretKey = secretKey.input; row.passphrase = passphrase.input;
+      row.exchange.value = entry.exchange || 'binance';
+      row.environment.value = entry.environment || 'production';
+      row.readonly.checked = !!entry.readonly;
+      var id = el('span', { class: 'id' });
+      var passphraseField = field('Passphrase', passphrase.node, 'OKX 创建 API 时设置的口令');
+      var remove = el('button', { type: 'button', class: 'link', text: '删除' });
+      row.node = el('div', { class: 'xkey' }, [
+        el('div', { class: 'fields' }, [field('名称', row.name, '小写字母、数字、连字符'), field('交易所', row.exchange), field('环境', row.environment), field('API Key', apiKey.node), field('Secret Key', secretKey.node), passphraseField]),
+        el('div', { class: 'tail' }, [id, el('label', {}, [row.readonly, '只读密钥（不能建下单账户）']), remove])
+      ]);
+      function sync() {
+        passphraseField.hidden = row.exchange.value !== 'okx';
+        id.textContent = row.name.value.trim() ? '固定 ID：' + ('exchange-' + row.exchange.value + '-' + row.environment.value + '-' + row.name.value.trim()).toLowerCase() : '';
+        state.dirty = true;
+      }
+      [row.name, row.exchange, row.environment].forEach(function (node) { node.addEventListener('input', sync); node.addEventListener('change', sync); });
+      row.readonly.addEventListener('change', function () { state.dirty = true; });
+      remove.addEventListener('click', function () { ctl.xkeys.splice(ctl.xkeys.indexOf(row), 1); row.node.remove(); xempty.hidden = ctl.xkeys.length > 0; state.dirty = true; });
+      passphraseField.hidden = row.exchange.value !== 'okx';
+      id.textContent = row.name.value.trim() ? '固定 ID：' + ('exchange-' + row.exchange.value + '-' + row.environment.value + '-' + row.name.value.trim()).toLowerCase() : '';
+      ctl.xkeys.push(row);
+      xkeys.append(row.node);
+      xempty.hidden = true;
+      return row;
+    }
+    (form.exchange_keys || []).forEach(xkeyRow);
+    xempty.hidden = ctl.xkeys.length > 0;
+    xadd.addEventListener('click', function () { xkeyRow({}).name.focus(); state.dirty = true; });
+    root.append(block('交易所密钥', '写进密钥管理（setup apply）之后以管理台为准：这里改了不会覆盖已有的密钥，只在新增、或管理台里没有这把密钥时才会写入；删掉这里的条目也不会删除管理台里的密钥。部署完成后在海外机上检测密钥。',
+      el('div', {}, [xkeys, xempty, el('div', { class: 'row' }, [xadd])])));
 
     var hosts = el('div');
     form.hosts.forEach(function (host) {
@@ -415,6 +484,9 @@ button.primary:hover { filter: brightness(1.08); background: var(--brand); }
         prefix: ctl.os.prefix.value.trim(), url_style: ctl.os.urlStyle.value, use_tls: ctl.os.useTLS.value === 'true',
         storage_class: ctl.os.storageClass.value.trim(), secret_id: ctl.os.secretID.value.trim()
       },
+      exchange_keys: ctl.xkeys.map(function (k) {
+        return { name: k.name.value.trim(), exchange: k.exchange.value, environment: k.environment.value, api_key: k.apiKey.value.trim(), secret_key: k.secretKey.value, passphrase: k.exchange.value === 'okx' ? k.passphrase.value : '', readonly: k.readonly.checked };
+      }),
       hosts: ctl.hosts.map(function (h) { return { id: h.id, ssh_user: h.user.value.trim(), ssh_port: num(h.port), ssh_password: h.pass.value }; }),
       retention: {
         view_rows_per_series: num(ctl.viewBars), max_view_file_bytes: num(ctl.viewFileBytes), defaults: defaults,

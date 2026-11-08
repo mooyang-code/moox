@@ -18,7 +18,7 @@ func TestSessionTransitionRollsBackWhenTargetDeleteFails(t *testing.T) {
 				return tx.CreateLogicalAccount(LogicalAccountRecord{
 					SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "main",
 					OwnerInstanceID: "instance-1", OwnerSessionID: "session-1",
-					ExecutionMode: "PAPER", MarketType: "SPOT", SettlementAsset: "USDT",
+					ExecutionMode: "PAPER", SettlementAsset: "USDT",
 					AutomationState: "PAUSED", PauseReason: "setup",
 				})
 			}))
@@ -112,7 +112,7 @@ func TestAuthorizedSessionReplacesStaleTargetAtSameOrEarlierBar(t *testing.T) {
 				return tx.CreateLogicalAccount(LogicalAccountRecord{
 					SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "main",
 					OwnerInstanceID: "instance-1", OwnerSessionID: "session-1",
-					ExecutionMode: "PAPER", MarketType: "SPOT", SettlementAsset: "USDT",
+					ExecutionMode: "PAPER", SettlementAsset: "USDT",
 					AutomationState: "PAUSED", PauseReason: "setup",
 				})
 			}))
@@ -161,7 +161,7 @@ func TestSessionAuthorizationCASAndTargetPeriod(t *testing.T) {
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
 		return tx.CreateLogicalAccount(LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "main",
-			ExecutionMode: "PAPER", MarketType: "SPOT", SettlementAsset: "USDT",
+			ExecutionMode: "PAPER", SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "setup",
 		})
 	}))

@@ -60,12 +60,12 @@ func (a *adapterStub) ListOpenOrders(context.Context) ([]exchange.Order, error) 
 
 func (a *adapterStub) ListRecentFills(
 	context.Context,
-	shared.ExchangeSymbol,
+	exchange.SymbolKey,
 	string,
 ) ([]exchange.Fill, string, error) {
 	return a.fills, "", a.fillsErr
 }
-func (a *adapterStub) GetOrder(context.Context, shared.ExchangeSymbol, string) (exchange.Order, error) {
+func (a *adapterStub) GetOrder(context.Context, exchange.SymbolKey, string) (exchange.Order, error) {
 	a.getCalls++
 	return a.getResult, a.getErr
 }
@@ -77,7 +77,7 @@ func (a *adapterStub) PlaceOrder(_ context.Context, request exchange.OrderReques
 	}
 	return a.placeResult, a.placeErr
 }
-func (a *adapterStub) CancelOrder(context.Context, shared.ExchangeSymbol, string) (exchange.Order, error) {
+func (a *adapterStub) CancelOrder(context.Context, exchange.SymbolKey, string) (exchange.Order, error) {
 	a.cancelCalls++
 	if a.cancelHook != nil {
 		a.cancelHook()
@@ -176,10 +176,10 @@ func TestRecoverCancelUncertainErrorReloadsPrivateTerminal(t *testing.T) {
 	require.Equal(t, orderdomain.Filled, got.State)
 }
 
-func (a *adapterStub) SetLeverage(context.Context, shared.ExchangeSymbol, shared.Decimal) error {
+func (a *adapterStub) SetLeverage(context.Context, exchange.SymbolKey, shared.Decimal) error {
 	return nil
 }
-func (a *adapterStub) SetMarginMode(context.Context, shared.ExchangeSymbol, exchange.MarginMode) error {
+func (a *adapterStub) SetMarginMode(context.Context, exchange.SymbolKey, exchange.MarginMode) error {
 	return nil
 }
 func (a *adapterStub) Subscribe(_ context.Context, handler execution.AccountEventHandler) error {
@@ -319,7 +319,7 @@ func TestSubmitSubmittingQueriesExchangeBeforeRetry(t *testing.T) {
 	pending, err := service.Place(context.Background(), "space-1", testSpec(service.now()))
 	require.NoError(t, err)
 	setStoredOrderState(t, tradeStore, string(pending.ID), orderdomain.Submitting, service.now())
-	adapter.getResult = exchange.Order{ExchangeOrderID: "found-1", Status: exchange.OrderStatusOpen}
+	adapter.getResult = exchange.Order{Market: exchange.MarketTypeSwap, ExchangeOrderID: "found-1", Status: exchange.OrderStatusOpen}
 
 	got, err := service.Submit(context.Background(), "space-1", string(pending.ID))
 	require.NoError(t, err)
@@ -333,7 +333,7 @@ func TestSubmitUnknownQueriesExchangeBeforeRetry(t *testing.T) {
 	pending, err := service.Place(context.Background(), "space-1", testSpec(service.now()))
 	require.NoError(t, err)
 	setStoredOrderState(t, tradeStore, string(pending.ID), orderdomain.SubmitUnknown, service.now())
-	adapter.getResult = exchange.Order{ExchangeOrderID: "found-1", Status: exchange.OrderStatusOpen}
+	adapter.getResult = exchange.Order{Market: exchange.MarketTypeSwap, ExchangeOrderID: "found-1", Status: exchange.OrderStatusOpen}
 
 	got, err := service.Submit(context.Background(), "space-1", string(pending.ID))
 	require.NoError(t, err)
@@ -349,7 +349,7 @@ type liveQuoteAdapter struct {
 	price string
 }
 
-func (a *liveQuoteAdapter) GetQuote(context.Context, shared.ExchangeSymbol) (execution.MarketQuote, error) {
+func (a *liveQuoteAdapter) GetQuote(context.Context, exchange.SymbolKey) (execution.MarketQuote, error) {
 	price := shared.MustDecimal(a.price)
 	return execution.MarketQuote{Bid: price, Ask: price, Last: price, SourceTime: a.now()}, nil
 }
@@ -469,10 +469,10 @@ func TestPlaceGeneratesAndPersistsClientOrderIDOnce(t *testing.T) {
 func TestOrderServiceDerivesReducePositionOnlyForSwapReduction(t *testing.T) {
 	service, _, _ := newTestServiceForMarket(t, exchange.MarketTypeSwap)
 	service.Validator.Positions = positionSourceStub{
-		position: exchange.Position{SignedQuantity: shared.MustDecimal("2")},
+		position: exchange.Position{Market: exchange.MarketTypeSwap, SignedQuantity: shared.MustDecimal("2")},
 	}
 	spec := testSpec(service.now())
-	spec.PositionSide = exchange.PositionSideNet
+	spec.PositionSide, spec.InstrumentID = exchange.PositionSideNet, "BTC-USDT-SWAP"
 	spec.Side = exchange.SideSell
 
 	placed, err := service.Place(context.Background(), "space-1", spec)
@@ -483,10 +483,10 @@ func TestOrderServiceDerivesReducePositionOnlyForSwapReduction(t *testing.T) {
 func TestOrderServiceLeavesReducePositionOnlyFalseForSwapIncrease(t *testing.T) {
 	service, _, _ := newTestServiceForMarket(t, exchange.MarketTypeSwap)
 	service.Validator.Positions = positionSourceStub{
-		position: exchange.Position{SignedQuantity: shared.MustDecimal("2")},
+		position: exchange.Position{Market: exchange.MarketTypeSwap, SignedQuantity: shared.MustDecimal("2")},
 	}
 	spec := testSpec(service.now())
-	spec.PositionSide = exchange.PositionSideNet
+	spec.PositionSide, spec.InstrumentID = exchange.PositionSideNet, "BTC-USDT-SWAP"
 	spec.Side = exchange.SideBuy
 	spec.ReducePositionOnly = true
 
@@ -498,10 +498,10 @@ func TestOrderServiceLeavesReducePositionOnlyFalseForSwapIncrease(t *testing.T) 
 func TestOrderServiceRejectsManualOrderThatWouldCrossZero(t *testing.T) {
 	service, _, _ := newTestServiceForMarket(t, exchange.MarketTypeSwap)
 	service.Validator.Positions = positionSourceStub{
-		position: exchange.Position{SignedQuantity: shared.MustDecimal("2")},
+		position: exchange.Position{Market: exchange.MarketTypeSwap, SignedQuantity: shared.MustDecimal("2")},
 	}
 	spec := testSpec(service.now())
-	spec.PositionSide = exchange.PositionSideNet
+	spec.PositionSide, spec.InstrumentID = exchange.PositionSideNet, "BTC-USDT-SWAP"
 	spec.Side = exchange.SideSell
 	spec.Quantity = shared.MustDecimal("3")
 	setTestOwner(&spec, orderdomain.OwnerOperator)
@@ -513,10 +513,10 @@ func TestOrderServiceRejectsManualOrderThatWouldCrossZero(t *testing.T) {
 func TestOrderServiceRejectsTargetOrderThatWouldCrossZero(t *testing.T) {
 	service, _, _ := newTestServiceForMarket(t, exchange.MarketTypeSwap)
 	service.Validator.Positions = positionSourceStub{
-		position: exchange.Position{SignedQuantity: shared.MustDecimal("2")},
+		position: exchange.Position{Market: exchange.MarketTypeSwap, SignedQuantity: shared.MustDecimal("2")},
 	}
 	spec := testSpec(service.now())
-	spec.PositionSide = exchange.PositionSideNet
+	spec.PositionSide, spec.InstrumentID = exchange.PositionSideNet, "BTC-USDT-SWAP"
 	spec.Side = exchange.SideSell
 	spec.Quantity = shared.MustDecimal("3")
 	setTestOwner(&spec, orderdomain.OwnerTarget)
@@ -528,10 +528,10 @@ func TestOrderServiceRejectsTargetOrderThatWouldCrossZero(t *testing.T) {
 func TestOrderServiceOperatorFlattenCannotCrossZero(t *testing.T) {
 	service, _, _ := newTestServiceForMarket(t, exchange.MarketTypeSwap)
 	service.Validator.Positions = positionSourceStub{
-		position: exchange.Position{SignedQuantity: shared.MustDecimal("2")},
+		position: exchange.Position{Market: exchange.MarketTypeSwap, SignedQuantity: shared.MustDecimal("2")},
 	}
 	spec := testSpec(service.now())
-	spec.PositionSide = exchange.PositionSideNet
+	spec.PositionSide, spec.InstrumentID = exchange.PositionSideNet, "BTC-USDT-SWAP"
 	spec.Side = exchange.SideSell
 	spec.Quantity = shared.MustDecimal("3")
 	setTestOwner(&spec, orderdomain.OwnerOperator)
@@ -550,7 +550,7 @@ func TestSubmitRejectsPositionChangeThatWouldCrossZero(t *testing.T) {
 			positions := &positionSourceStub{}
 			service.Validator.Positions = positions
 			spec := testSpec(service.now())
-			spec.PositionSide = exchange.PositionSideNet
+			spec.PositionSide, spec.InstrumentID = exchange.PositionSideNet, "BTC-USDT-SWAP"
 			spec.Side = exchange.SideBuy
 			setTestOwner(&spec, owner)
 			pending, err := service.Place(context.Background(), "space-1", spec)
@@ -584,7 +584,7 @@ func TestSubmitPersistsFreshReducePositionOnlyBeforeSending(t *testing.T) {
 	positions := &positionSourceStub{}
 	service.Validator.Positions = positions
 	spec := testSpec(service.now())
-	spec.PositionSide = exchange.PositionSideNet
+	spec.PositionSide, spec.InstrumentID = exchange.PositionSideNet, "BTC-USDT-SWAP"
 	spec.Side = exchange.SideBuy
 	setTestOwner(&spec, orderdomain.OwnerOperator)
 	pending, err := service.Place(context.Background(), "space-1", spec)
@@ -618,11 +618,11 @@ func TestSubmitRejectsPreviouslyReducingOrderAfterPositionReverses(t *testing.T)
 		t.Run(string(owner), func(t *testing.T) {
 			service, _, adapter := newTestServiceForMarket(t, exchange.MarketTypeSwap)
 			positions := &positionSourceStub{
-				position: exchange.Position{SignedQuantity: shared.MustDecimal("1")},
+				position: exchange.Position{Market: exchange.MarketTypeSwap, SignedQuantity: shared.MustDecimal("1")},
 			}
 			service.Validator.Positions = positions
 			spec := testSpec(service.now())
-			spec.PositionSide = exchange.PositionSideNet
+			spec.PositionSide, spec.InstrumentID = exchange.PositionSideNet, "BTC-USDT-SWAP"
 			spec.Side = exchange.SideSell
 			setTestOwner(&spec, owner)
 			pending, err := service.Place(context.Background(), "space-1", spec)
@@ -646,11 +646,11 @@ func TestSubmitRejectsPreviouslyReducingOrderAfterPositionReverses(t *testing.T)
 func TestSubmitRejectsOperatorCloseAfterPositionShrinksBelowOrder(t *testing.T) {
 	service, _, adapter := newTestServiceForMarket(t, exchange.MarketTypeSwap)
 	positions := &positionSourceStub{
-		position: exchange.Position{SignedQuantity: shared.MustDecimal("2")},
+		position: exchange.Position{Market: exchange.MarketTypeSwap, SignedQuantity: shared.MustDecimal("2")},
 	}
 	service.Validator.Positions = positions
 	spec := testSpec(service.now())
-	spec.PositionSide = exchange.PositionSideNet
+	spec.PositionSide, spec.InstrumentID = exchange.PositionSideNet, "BTC-USDT-SWAP"
 	spec.Side = exchange.SideSell
 	spec.Quantity = shared.MustDecimal("2")
 	setTestOwner(&spec, orderdomain.OwnerOperator)
@@ -675,7 +675,7 @@ func TestConfirmedAbsentRetryRefreshesReducePositionOnly(t *testing.T) {
 	service.Now = func() time.Time { return now }
 	service.Validator.Now = func() time.Time { return now }
 	spec := testSpec(now)
-	spec.PositionSide = exchange.PositionSideNet
+	spec.PositionSide, spec.InstrumentID = exchange.PositionSideNet, "BTC-USDT-SWAP"
 	spec.Side = exchange.SideBuy
 	setTestOwner(&spec, orderdomain.OwnerOperator)
 	pending, err := service.Place(context.Background(), "space-1", spec)
@@ -725,7 +725,7 @@ func TestSubmitNonOpenSuccessSyncsWithoutSettlingAggregateResponse(t *testing.T)
 	service, _, adapter := newTestService(t)
 	syncer := &syncerStub{}
 	service.Syncer = syncer
-	adapter.placeResult = exchange.Order{
+	adapter.placeResult = exchange.Order{Market: exchange.MarketTypeSwap,
 		ExchangeOrderID: "exchange-order-1",
 		Status:          exchange.OrderStatusFilled,
 		FilledQuantity:  shared.MustDecimal("1"),
@@ -845,7 +845,7 @@ func TestServiceResolveUnknownFindsOrderOrReturnsPendingAfterWindow(t *testing.T
 	require.Equal(t, "SUBMIT_UNKNOWN", string(unknown.State))
 
 	adapter.getErr = nil
-	adapter.getResult = exchange.Order{ExchangeOrderID: "recovered-order"}
+	adapter.getResult = exchange.Order{Market: exchange.MarketTypeSwap, ExchangeOrderID: "recovered-order"}
 	resolved, err := service.ResolveUnknown(context.Background(), "space-1", string(pending.ID))
 	require.NoError(t, err)
 	require.Equal(t, "OPEN", string(resolved.State))
@@ -868,8 +868,8 @@ func TestServiceResolveUnknownFindsOrderOrReturnsPendingAfterWindow(t *testing.T
 	service.UnknownLookupWindow = time.Minute
 
 	adapter.fills = []exchange.Fill{
-		{ClientOrderID: "client-1", ExchangeOrderID: "exchange-a"},
-		{ClientOrderID: "client-1", ExchangeOrderID: "exchange-b"},
+		{Market: exchange.MarketTypeSwap, ClientOrderID: "client-1", ExchangeOrderID: "exchange-a"},
+		{Market: exchange.MarketTypeSwap, ClientOrderID: "client-1", ExchangeOrderID: "exchange-b"},
 	}
 	resolved, err = service.ResolveUnknown(context.Background(), "space-1", string(pending.ID))
 	require.NoError(t, err)
@@ -896,7 +896,7 @@ func TestServiceResolveUnknownFoundSynchronizesAuthoritativeState(t *testing.T) 
 	require.Error(t, err)
 
 	adapter.getErr = nil
-	adapter.getResult = exchange.Order{
+	adapter.getResult = exchange.Order{Market: exchange.MarketTypeSwap,
 		ExchangeOrderID: "recovered-order",
 		Status:          exchange.OrderStatusFilled,
 		FilledQuantity:  shared.MustDecimal("1"),
@@ -929,7 +929,7 @@ func TestServiceSubmitUnknownFoundSynchronizesAuthoritativeState(t *testing.T) {
 	syncer := &syncerStub{}
 	service.Syncer = syncer
 	adapter.getErr = nil
-	adapter.getResult = exchange.Order{
+	adapter.getResult = exchange.Order{Market: exchange.MarketTypeSwap,
 		ExchangeOrderID: "recovered-order",
 		Status:          exchange.OrderStatusFilled,
 		FilledQuantity:  shared.MustDecimal("1"),
@@ -1090,6 +1090,25 @@ func TestServiceCancelWaitsForAccountSyncBeforeTerminalRelease(t *testing.T) {
 	require.Equal(t, "101", record.RemainingReservedQuantity)
 }
 
+// 一批撤单不带同步：撤单照常落 CANCELING，最后由调用方同步一次。
+func TestServiceCancelWithoutSyncDefersAccountSync(t *testing.T) {
+	service, _, _ := newTestService(t)
+	syncer := &syncerStub{}
+	service.Syncer = syncer
+	placed, err := service.Place(context.Background(), "space-1", testSpec(time.Unix(1_700_000_000, 0)))
+	require.NoError(t, err)
+	placed, err = service.Submit(context.Background(), "space-1", string(placed.ID))
+	require.NoError(t, err)
+	before := syncer.calls
+
+	got, err := service.CancelWithoutSync(context.Background(), "space-1", string(placed.ID))
+	require.NoError(t, err)
+	require.Equal(t, "CANCELING", string(got.State))
+	require.Equal(t, before, syncer.calls, "撤单后不立刻同步")
+	require.NoError(t, service.SyncAfterCancel(context.Background(), "account-1"))
+	require.Equal(t, before+1, syncer.calls)
+}
+
 func TestServiceCancelRejectionRestoresOpenState(t *testing.T) {
 	service, _, adapter := newTestService(t)
 	service.Syncer = &syncerStub{}
@@ -1241,7 +1260,7 @@ func newTestServiceForMarket(
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateTradingAccount(store.TradingAccountRecord{
 			SpaceID: account.SpaceID, TradingAccountID: account.ID, Name: account.Name,
-			Exchange: string(account.Exchange), MarketType: string(account.MarketType),
+			Exchange: string(account.Exchange), Markets: []string{string(account.Markets[0])},
 			ExecutionMode:      string(account.ExecutionMode),
 			Environment:        string(account.Environment),
 			CredentialSecretID: account.CredentialSecretID,
@@ -1253,7 +1272,7 @@ func newTestServiceForMarket(
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: account.SpaceID, LogicalAccountID: "logical-1", Name: "logical",
 			OwnerInstanceID: "runner-1", OwnerSessionID: "session-1", ExecutionMode: string(account.ExecutionMode),
-			MarketType: string(account.MarketType), SettlementAsset: account.SettlementAsset,
+			SettlementAsset: account.SettlementAsset,
 			AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {
 			return err
@@ -1275,13 +1294,13 @@ func newTestServiceForMarket(
 			InstanceID: "runner-1", SessionID: "session-1", StrategyID: "strategy-1",
 			BarEndTime: 1, EffectiveAt: 1, ValidUntil: time.Now().Add(time.Hour).UnixMilli(),
 			Status: "PENDING", AcceptedAt: 1,
-			Targets: []store.InstrumentTarget{{InstrumentID: "BTCUSDT", Quantity: "1"}},
+			Targets: []store.InstrumentTarget{{InstrumentID: "BTC-USDT-" + string(instrument.MarketType), Quantity: "1"}},
 		}); err != nil {
 			return err
 		}
 		return tx.UpsertInstrument(store.InstrumentRecord{
 			Exchange: string(instrument.Exchange), MarketType: string(instrument.MarketType),
-			ExchangeSymbol: instrument.ExchangeSymbol, InstrumentID: "BTCUSDT",
+			ExchangeSymbol: instrument.ExchangeSymbol, InstrumentID: "BTC-USDT-" + string(instrument.MarketType),
 			BaseAsset: instrument.BaseAsset, QuoteAsset: instrument.QuoteAsset,
 			SettlementAsset:      instrument.SettlementAsset,
 			Linear:               instrument.Linear,
@@ -1294,8 +1313,8 @@ func newTestServiceForMarket(
 		})
 	}))
 	adapter := &adapterStub{
-		placeResult: exchange.Order{ExchangeOrderID: "exchange-order-1"},
-		getResult:   exchange.Order{ExchangeOrderID: "exchange-order-1", Status: exchange.OrderStatusOpen},
+		placeResult: exchange.Order{Market: exchange.MarketTypeSwap, ExchangeOrderID: "exchange-order-1"},
+		getResult:   exchange.Order{Market: exchange.MarketTypeSwap, ExchangeOrderID: "exchange-order-1", Status: exchange.OrderStatusOpen},
 	}
 	service := &Service{
 		Store: tradeStore,
@@ -1411,7 +1430,7 @@ func TestConfirmedAbsentMarketRetryAcceptsQuoteStampedDuringRequest(t *testing.T
 }
 
 // GetQuote 返回没有时间的报价，相当于行情已过期；需要新鲜报价的测试用 useLiveQuote。
-func (*adapterStub) GetQuote(context.Context, shared.ExchangeSymbol) (execution.MarketQuote, error) {
+func (*adapterStub) GetQuote(context.Context, exchange.SymbolKey) (execution.MarketQuote, error) {
 	return execution.MarketQuote{}, nil
 }
 
@@ -1420,18 +1439,18 @@ type symbolConfigStub struct {
 	err   error
 }
 
-func (s *symbolConfigStub) EnsureSymbolConfig(context.Context, string, string, shared.Decimal) error {
+func (s *symbolConfigStub) EnsureSymbolConfig(context.Context, string, exchange.SymbolKey, shared.Decimal) error {
 	s.calls++
 	return s.err
 }
 
 func TestSubmitRejectedSymbolConfigCountsAsExchangeRejection(t *testing.T) {
 	service, tradeStore, adapter := newTestServiceForMarket(t, exchange.MarketTypeSwap)
-	service.Validator.Positions = positionSourceStub{position: exchange.Position{SignedQuantity: shared.MustDecimal("2")}}
+	service.Validator.Positions = positionSourceStub{position: exchange.Position{Market: exchange.MarketTypeSwap, SignedQuantity: shared.MustDecimal("2")}}
 	config := &symbolConfigStub{err: &exchange.Error{Kind: exchange.ErrorRejected, Err: errors.New("leverage too high")}}
 	service.SymbolConfig = config
 	spec := testSpec(service.now())
-	spec.PositionSide = exchange.PositionSideNet
+	spec.PositionSide, spec.InstrumentID = exchange.PositionSideNet, "BTC-USDT-SWAP"
 	spec.Side = exchange.SideBuy
 	placed, err := service.Place(context.Background(), "space-1", spec)
 	require.NoError(t, err)
@@ -1450,10 +1469,10 @@ func TestSubmitRejectedSymbolConfigCountsAsExchangeRejection(t *testing.T) {
 
 func TestSubmitSymbolConfigNetworkErrorKeepsPending(t *testing.T) {
 	service, tradeStore, adapter := newTestServiceForMarket(t, exchange.MarketTypeSwap)
-	service.Validator.Positions = positionSourceStub{position: exchange.Position{SignedQuantity: shared.MustDecimal("2")}}
+	service.Validator.Positions = positionSourceStub{position: exchange.Position{Market: exchange.MarketTypeSwap, SignedQuantity: shared.MustDecimal("2")}}
 	service.SymbolConfig = &symbolConfigStub{err: errors.New("network down")}
 	spec := testSpec(service.now())
-	spec.PositionSide = exchange.PositionSideNet
+	spec.PositionSide, spec.InstrumentID = exchange.PositionSideNet, "BTC-USDT-SWAP"
 	spec.Side = exchange.SideBuy
 	placed, err := service.Place(context.Background(), "space-1", spec)
 	require.NoError(t, err)
@@ -1492,4 +1511,18 @@ func TestServiceSubmitNotAcceptedReturnsToPending(t *testing.T) {
 			require.Equal(t, "101", record.RemainingReservedQuantity)
 		})
 	}
+}
+
+// 伪市价单的尝试次数写进订单表，读回来还在。
+func TestPlacePersistsPseudoMarketAttempt(t *testing.T) {
+	service, tradeStore, _ := newTestService(t)
+	spec := testSpec(service.now())
+	spec.Attempt = 2
+
+	placed, err := service.Place(context.Background(), "space-1", spec)
+	require.NoError(t, err)
+	require.Equal(t, 2, placed.Spec.Attempt)
+	record, err := tradeStore.GetOrder(context.Background(), "space-1", string(placed.ID))
+	require.NoError(t, err)
+	require.Equal(t, 2, record.Attempt)
 }

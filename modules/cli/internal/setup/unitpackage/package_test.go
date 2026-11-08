@@ -104,6 +104,13 @@ func TestUnitPackagesHaveExactComponentBoundariesAndRepeatableDigests(t *testing
 					assert.Contains(t, ids, "archive-mgr")
 					assert.NotContains(t, ids, "trade")
 					assert.NotContains(t, ids, "access")
+					// 旧库升级脚本随 Collector 发布包交付（文档里的升级命令用这个相对位置）。
+					var paths []string
+					for _, file := range result.Manifest.Files {
+						paths = append(paths, file.Path)
+					}
+					assert.Contains(t, paths, "collector/schema/collector.sql")
+					assert.Contains(t, paths, "collector/schema/migrations/20261105-unified-dataset.sql")
 				}
 				if profile == "factor-engine" || profile == "archive-worker" {
 					// 外部程序包带安装脚本与服务模板，布局与仓库一致，不含 launchd/PowerShell 文件。

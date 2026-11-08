@@ -63,6 +63,7 @@ func (s *Service) GetDatasetPeriodCompletedMarker(ctx context.Context, req *pb.G
 			DatasetId: payload.GetDatasetId(), Frequency: payload.GetFrequency(), PeriodTime: payload.GetPeriodTime(),
 			Status: payload.GetStatus(), UniverseSubjectIds: append([]string(nil), payload.GetUniverseSubjectIds()...),
 			FailedSubjects: append([]string(nil), payload.GetFailedSubjects()...), CauseEventId: payload.GetCauseEventId(),
+			UniverseSeries: markerSeries(payload.GetUniverseSeries()), FailedSeries: markerSeries(payload.GetFailedSeries()),
 			CompletedAt: payload.GetCompletedAt(), DetailType: payload.GetDetailType(), Detail: append([]byte(nil), payload.GetDetail()...),
 		},
 	}, nil
@@ -92,4 +93,16 @@ func markerRetInfo(err error) *pb.RetInfo {
 		return retinfo.Error(pb.ErrorCode_NO_PERMISSION, permission)
 	}
 	return retinfo.Error(errorCode(err), err)
+}
+
+// markerSeries 把事件形态的序列名单转成 Storage RPC 形态。
+func markerSeries(values []*storageeventpb.SeriesRef) []*pb.SeriesRef {
+	out := make([]*pb.SeriesRef, 0, len(values))
+	for _, value := range values {
+		out = append(out, &pb.SeriesRef{SubjectId: value.GetSubjectId(), SeriesTag: value.GetSeriesTag()})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }

@@ -2,6 +2,7 @@ package accountsync
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"strings"
 	"time"
@@ -9,7 +10,9 @@ import (
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"gorm.io/gorm"
 )
 
 // rotationBatches 是轮转批次数：每轮多拉全集的十分之一，但不超过 rotationLimit 个标的。
@@ -18,6 +21,80 @@ const (
 	rotationBatches = 10
 	rotationLimit   = 20
 )
+
+// scopedOpenOrderLimit 是周期对账按标的逐个查挂单的上限：超过就退回不带 symbol 的全量查询（逐个串行查的延迟随标的数线性增长）。
+const scopedOpenOrderLimit = 20
+
+// listOpenOrders 读挂单。统一账户现货不传 symbol 的挂单查询按“当前交易中的标的数量”计权重，30 秒一次的周期对账
+// 改为只查本地未结束订单、受管（持有）资产和当前目标涉及的现货标的，每个标的权重 5；会话启动、手动全量同步和增量同步
+// （确认撤单等）仍读全部挂单；要查的标的超过 scopedOpenOrderLimit 个时也退回全量查。没有这个能力的适配器（普通账户、OKX、模拟盘）照常读全部挂单。
+func (s *Service) listOpenOrders(ctx context.Context, adapter execution.ExecutionAdapter, account store.TradingAccountRecord, mode syncMode) ([]exchange.Order, error) {
+	scoped, ok := adapter.(execution.ScopedOpenOrderSource)
+	if !ok || mode != syncReconcile {
+		return adapter.ListOpenOrders(ctx)
+	}
+	symbols, err := s.reconcileSpotSymbols(ctx, account)
+	if err != nil {
+		return nil, err
+	}
+	if len(symbols) > scopedOpenOrderLimit {
+		// 标的太多时逐个串行查（每个标的一次往返）的延迟高过一次全量查，退回全量查；权重上不比较：全量查按交易中的标的数计权重，逐个查每个 5。
+		return adapter.ListOpenOrders(ctx)
+	}
+	return scoped.ListOpenOrdersForSymbols(ctx, symbols)
+}
+
+// reconcileSpotSymbols 是周期对账要查挂单的现货标的：本地未结束的订单、持有资产对应的交易对、当前目标里的标的。
+func (s *Service) reconcileSpotSymbols(ctx context.Context, account store.TradingAccountRecord) ([]exchange.SymbolKey, error) {
+	instruments, err := s.Store.ListInstrumentsForAccount(ctx, account.TradingAccountID)
+	if err != nil {
+		return nil, err
+	}
+	localOrders, err := s.Store.ListOrdersForAccount(ctx, account.SpaceID, account.TradingAccountID, s.now().Add(-s.lateFillWindow()).UnixMilli())
+	if err != nil {
+		return nil, err
+	}
+	set := make(map[exchange.SymbolKey]struct{})
+	add := func(key exchange.SymbolKey) {
+		if key.Valid() && key.Market == exchange.MarketTypeSpot {
+			set[key] = struct{}{}
+		}
+	}
+	for _, current := range localOrders {
+		if !orderdomain.State(current.State).Terminal() {
+			add(exchange.NewSymbolKey(current.MarketType, current.ExchangeSymbol))
+		}
+	}
+	held := make(map[string]struct{})
+	for _, balance := range account.Snapshot.Balances {
+		if parseBalance(balance.Total) > 0 || parseBalance(balance.Available) > 0 || parseBalance(balance.Locked) > 0 {
+			held[balance.Asset] = struct{}{}
+		}
+	}
+	for _, key := range symbolsForAssets(account, instruments, held) {
+		add(key)
+	}
+	logicalAccountID, err := s.logicalAccountOf(ctx, account.SpaceID, account.TradingAccountID)
+	if err != nil {
+		return nil, err
+	}
+	if logicalAccountID != "" {
+		target, err := s.Store.GetLogicalAccountTarget(ctx, account.SpaceID, logicalAccountID)
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, err
+		}
+		wanted := make(map[string]struct{}, len(target.Targets))
+		for _, item := range target.Targets {
+			wanted[item.InstrumentID] = struct{}{}
+		}
+		for _, instrument := range instruments {
+			if _, ok := wanted[instrument.InstrumentID]; ok {
+				add(exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol))
+			}
+		}
+	}
+	return sortedSymbols(set), nil
+}
 
 // FullSymbols 是账户可能有成交的全部标的：有成交游标、有持仓、有挂单或近期订单的标的，
 // 以及现货持有资产对应的交易对。会话启动和手动同步拉这个全集。
@@ -28,26 +105,29 @@ func FullSymbols(
 	positions []exchange.Position,
 	instruments []store.InstrumentRecord,
 	snapshot exchange.AccountSnapshot,
-) []string {
-	set := make(map[string]struct{})
-	add := func(symbol string) {
-		if symbol != "" {
-			set[symbol] = struct{}{}
+) []exchange.SymbolKey {
+	set := make(map[exchange.SymbolKey]struct{})
+	add := func(key exchange.SymbolKey) {
+		if key.Valid() {
+			set[key] = struct{}{}
 		}
 	}
-	for symbol := range account.FillCursors {
-		add(symbol)
+	for cursorKey := range account.FillCursors {
+		// 游标的键是“市场:交易所代码”；解析不了的键是脏数据，没有标的可拉，忽略。
+		if key, err := exchange.ParseSymbolKey(cursorKey); err == nil {
+			add(key)
+		}
 	}
 	for _, current := range openOrders {
-		add(current.ExchangeSymbol)
+		add(orderKey(current))
 	}
 	for _, current := range localOrders {
-		add(current.ExchangeSymbol)
+		add(exchange.NewSymbolKey(current.MarketType, current.ExchangeSymbol))
 	}
 	for _, position := range positions {
-		add(position.ExchangeSymbol)
+		add(positionKey(position))
 	}
-	if exchange.RuleFor(account.MarketType).PositionFromBalance {
+	if account.HasBalanceMarket() {
 		held := make(map[string]struct{})
 		for _, balance := range snapshot.Balances {
 			if balance.Total.Cmp(shared.Zero()) > 0 ||
@@ -63,6 +143,14 @@ func FullSymbols(
 	return sortedSymbols(set)
 }
 
+func orderKey(current exchange.Order) exchange.SymbolKey {
+	return exchange.SymbolKey{Market: current.Market, Symbol: current.ExchangeSymbol}
+}
+
+func positionKey(position exchange.Position) exchange.SymbolKey {
+	return exchange.SymbolKey{Market: position.Market, Symbol: position.ExchangeSymbol}
+}
+
 // fullSymbolCap 是一次完整同步最多拉成交的标的数：491 个标的全拉要 2455 权重，超过永续 1 分钟额度。
 // 只有挂单、未结束订单和成交缺口涉及的标的不受限制，其余由轮转在后续对账中补齐。
 const fullSymbolCap = 60
@@ -76,48 +164,49 @@ func (s *Service) BoundedFullSymbols(
 	positions []exchange.Position,
 	instruments []store.InstrumentRecord,
 	snapshot exchange.AccountSnapshot,
-) ([]string, error) {
+) ([]exchange.SymbolKey, error) {
 	full := FullSymbols(account, openOrders, localOrders, positions, instruments, snapshot)
 	// 订单和成交缺口涉及的标的必须拉（自己的成交要入账），不受上限；
 	// 持仓、余额变化的标的按上限拉，其余由轮转补齐。本地库为空、交易所已有几百个持仓时，
 	// 每个持仓都算变化，全拉会超过 1 分钟权重额度，会话会每分钟撞一次 429。
-	set := make(map[string]struct{})
+	set := make(map[exchange.SymbolKey]struct{})
 	for _, current := range openOrders {
-		set[current.ExchangeSymbol] = struct{}{}
+		set[orderKey(current)] = struct{}{}
 	}
-	var finished []string
+	var finished []exchange.SymbolKey
 	for _, current := range localOrders {
+		key := exchange.NewSymbolKey(current.MarketType, current.ExchangeSymbol)
 		if orderdomain.State(current.State).Terminal() {
-			finished = append(finished, current.ExchangeSymbol)
+			finished = append(finished, key)
 			continue
 		}
-		set[current.ExchangeSymbol] = struct{}{}
+		set[key] = struct{}{}
 	}
 	gaps, err := s.Store.OrderSymbolsWithFillGap(ctx, account.SpaceID, account.TradingAccountID)
 	if err != nil {
 		return nil, err
 	}
-	for _, symbol := range gaps {
-		set[symbol] = struct{}{}
+	for _, key := range gaps {
+		set[key] = struct{}{}
 	}
-	delete(set, "")
+	delete(set, exchange.SymbolKey{})
 	// 可选标的按重要程度排：持仓或余额变化（可能有外部成交）优先，其次是近期已结束的订单，最后是轮转。
 	changed, err := s.changedPositionSymbols(ctx, account, positions, 0)
 	if err != nil {
 		return nil, err
 	}
-	optional := append([]string(nil), changed...)
-	if exchange.RuleFor(account.MarketType).PositionFromBalance {
+	optional := append([]exchange.SymbolKey(nil), changed...)
+	if account.HasBalanceMarket() {
 		optional = append(optional, symbolsForAssets(account, instruments, changedAssets(account.Snapshot.Balances, snapshot.Balances))...)
 	}
 	optional = append(optional, finished...)
 	optional = append(optional, s.nextRotationBatch(account.TradingAccountID, full)...)
-	for _, symbol := range optional {
+	for _, key := range optional {
 		if len(set) >= fullSymbolCap {
 			break
 		}
-		if symbol != "" {
-			set[symbol] = struct{}{}
+		if key.Valid() {
+			set[key] = struct{}{}
 		}
 	}
 	return sortedSymbols(set), nil
@@ -133,32 +222,32 @@ func (s *Service) incrementalSymbols(
 	positions []exchange.Position,
 	instruments []store.InstrumentRecord,
 	snapshot exchange.AccountSnapshot,
-	full []string,
+	full []exchange.SymbolKey,
 	rotate bool,
 	protectAfter int64,
-) ([]string, error) {
-	set := make(map[string]struct{})
+) ([]exchange.SymbolKey, error) {
+	set := make(map[exchange.SymbolKey]struct{})
 	for _, current := range openOrders {
-		set[current.ExchangeSymbol] = struct{}{}
+		set[orderKey(current)] = struct{}{}
 	}
 	for _, current := range localOrders {
 		if !orderdomain.State(current.State).Terminal() {
-			set[current.ExchangeSymbol] = struct{}{}
+			set[exchange.NewSymbolKey(current.MarketType, current.ExchangeSymbol)] = struct{}{}
 		}
 	}
 	inconsistent, err := s.inconsistentSymbols(ctx, account, positions, instruments, snapshot, protectAfter)
 	if err != nil {
 		return nil, err
 	}
-	for _, symbol := range inconsistent {
-		set[symbol] = struct{}{}
+	for _, key := range inconsistent {
+		set[key] = struct{}{}
 	}
 	if rotate {
-		for _, symbol := range s.nextRotationBatch(account.TradingAccountID, full) {
-			set[symbol] = struct{}{}
+		for _, key := range s.nextRotationBatch(account.TradingAccountID, full) {
+			set[key] = struct{}{}
 		}
 	}
-	delete(set, "")
+	delete(set, exchange.SymbolKey{})
 	return sortedSymbols(set), nil
 }
 
@@ -171,28 +260,28 @@ func (s *Service) inconsistentSymbols(
 	instruments []store.InstrumentRecord,
 	snapshot exchange.AccountSnapshot,
 	protectAfter int64,
-) ([]string, error) {
-	set := make(map[string]struct{})
+) ([]exchange.SymbolKey, error) {
+	set := make(map[exchange.SymbolKey]struct{})
 	gaps, err := s.Store.OrderSymbolsWithFillGap(ctx, account.SpaceID, account.TradingAccountID)
 	if err != nil {
 		return nil, err
 	}
-	for _, symbol := range gaps {
-		set[symbol] = struct{}{}
+	for _, key := range gaps {
+		set[key] = struct{}{}
 	}
 	changed, err := s.changedPositionSymbols(ctx, account, positions, protectAfter)
 	if err != nil {
 		return nil, err
 	}
-	for _, symbol := range changed {
-		set[symbol] = struct{}{}
+	for _, key := range changed {
+		set[key] = struct{}{}
 	}
-	if exchange.RuleFor(account.MarketType).PositionFromBalance {
-		for _, symbol := range symbolsForAssets(account, instruments, changedAssets(account.Snapshot.Balances, snapshot.Balances)) {
-			set[symbol] = struct{}{}
+	if account.HasBalanceMarket() {
+		for _, key := range symbolsForAssets(account, instruments, changedAssets(account.Snapshot.Balances, snapshot.Balances)) {
+			set[key] = struct{}{}
 		}
 	}
-	delete(set, "")
+	delete(set, exchange.SymbolKey{})
 	return sortedSymbols(set), nil
 }
 
@@ -202,89 +291,98 @@ func (s *Service) changedPositionSymbols(
 	account store.TradingAccountRecord,
 	positions []exchange.Position,
 	protectAfter int64,
-) ([]string, error) {
-	records, err := s.Store.ListPositions(ctx, account.SpaceID, account.TradingAccountID, "")
+) ([]exchange.SymbolKey, error) {
+	records, err := s.Store.ListPositions(ctx, account.SpaceID, account.TradingAccountID, exchange.SymbolKey{})
 	if err != nil {
 		return nil, err
 	}
-	local := make(map[string]shared.Decimal, len(records))
-	protected := make(map[string]struct{})
+	local := make(map[exchange.SymbolKey]shared.Decimal, len(records))
+	protected := make(map[exchange.SymbolKey]struct{})
 	for _, record := range records {
+		key := exchange.NewSymbolKey(record.MarketType, record.ExchangeSymbol)
 		if protectAfter > 0 && record.ExchangeUpdatedAt > protectAfter {
-			protected[record.ExchangeSymbol] = struct{}{}
+			protected[key] = struct{}{}
 		}
 		quantity, parseErr := shared.ParseDecimal(record.SignedQuantity)
 		if parseErr != nil {
 			return nil, parseErr
 		}
-		local[record.ExchangeSymbol] = quantity
+		local[key] = quantity
 	}
-	var symbols []string
+	var keys []exchange.SymbolKey
 	for _, position := range positions {
-		if _, ok := protected[position.ExchangeSymbol]; ok {
-			delete(local, position.ExchangeSymbol)
+		key := positionKey(position)
+		if _, ok := protected[key]; ok {
+			delete(local, key)
 			continue
 		}
-		if position.SignedQuantity.Cmp(local[position.ExchangeSymbol]) != 0 {
-			symbols = append(symbols, position.ExchangeSymbol)
+		if position.SignedQuantity.Cmp(local[key]) != 0 {
+			keys = append(keys, key)
 		}
-		delete(local, position.ExchangeSymbol)
+		delete(local, key)
 	}
-	for symbol, quantity := range local {
-		if _, ok := protected[symbol]; ok {
+	for key, quantity := range local {
+		if _, ok := protected[key]; ok {
 			continue
 		}
 		if !quantity.IsZero() {
-			symbols = append(symbols, symbol)
+			keys = append(keys, key)
 		}
 	}
-	return symbols, nil
+	return keys, nil
 }
 
-// changedAssets 比较上一份快照和本轮快照。现货没有本地持仓表，只能这样发现变化。
+// changedAssets 比较上一份快照和本轮快照，返回余额有变化的资产。现货没有本地持仓表，只能这样发现变化。
+// 同一资产可能出现在多个钱包里，所以按（钱包，资产）比较。
 func changedAssets(previous []store.AssetBalance, current []exchange.AssetBalance) map[string]struct{} {
-	before := make(map[string]shared.Decimal, len(previous))
+	type balanceKey struct{ wallet, asset string }
+	before := make(map[balanceKey]shared.Decimal, len(previous))
 	for _, balance := range previous {
 		if total, err := shared.ParseDecimal(balance.Total); err == nil {
-			before[balance.Asset] = total
+			before[balanceKey{balance.Wallet, balance.Asset}] = total
 		}
 	}
 	changed := make(map[string]struct{})
 	for _, balance := range current {
-		if balance.Total.Cmp(before[balance.Asset]) != 0 {
+		key := balanceKey{string(balance.Wallet), balance.Asset}
+		if balance.Total.Cmp(before[key]) != 0 {
 			changed[balance.Asset] = struct{}{}
 		}
-		delete(before, balance.Asset)
+		delete(before, key)
 	}
-	for asset, total := range before {
+	for key, total := range before {
 		if !total.IsZero() {
-			changed[asset] = struct{}{}
+			changed[key.asset] = struct{}{}
 		}
 	}
 	return changed
 }
 
+// symbolsForAssets 返回持有这些资产的现货（持仓来自余额的市场）交易对。
 func symbolsForAssets(
 	account store.TradingAccountRecord,
 	instruments []store.InstrumentRecord,
 	assets map[string]struct{},
-) []string {
-	var symbols []string
+) []exchange.SymbolKey {
+	var keys []exchange.SymbolKey
 	for _, instrument := range instruments {
-		if instrument.Status != "TRADING" && instrument.Status != "live" {
+		if !exchange.RuleFor(instrument.MarketType).PositionFromBalance {
+			continue
+		}
+		if !exchange.StatusTradable(instrument.Status) {
 			continue
 		}
 		if !strings.EqualFold(instrument.QuoteAsset, account.SettlementAsset) {
 			continue
 		}
 		if _, ok := assets[instrument.BaseAsset]; ok {
-			symbols = append(symbols, instrument.ExchangeSymbol)
+			keys = append(keys, exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol))
 		}
 	}
-	return symbols
+	return keys
 }
 
-func (s *Service) nextRotationBatch(tradingAccountID string, full []string) []string {
+func (s *Service) nextRotationBatch(tradingAccountID string, full []exchange.SymbolKey) []exchange.SymbolKey {
 	if len(full) == 0 {
 		return nil
 	}
@@ -296,7 +394,7 @@ func (s *Service) nextRotationBatch(tradingAccountID string, full []string) []st
 	}
 	start := s.rotation[tradingAccountID] % len(full)
 	s.rotation[tradingAccountID] = start + size
-	batch := make([]string, 0, size)
+	batch := make([]exchange.SymbolKey, 0, size)
 	for index := 0; index < size; index++ {
 		batch = append(batch, full[(start+index)%len(full)])
 	}
@@ -316,11 +414,11 @@ func fillsAfterCreation(fills []exchange.Fill, createdAt time.Time) []exchange.F
 	return kept
 }
 
-func sortedSymbols(set map[string]struct{}) []string {
-	symbols := make([]string, 0, len(set))
-	for symbol := range set {
-		symbols = append(symbols, symbol)
+func sortedSymbols(set map[exchange.SymbolKey]struct{}) []exchange.SymbolKey {
+	keys := make([]exchange.SymbolKey, 0, len(set))
+	for key := range set {
+		keys = append(keys, key)
 	}
-	sort.Strings(symbols)
-	return symbols
+	sort.Slice(keys, func(i, j int) bool { return keys[i].String() < keys[j].String() })
+	return keys
 }

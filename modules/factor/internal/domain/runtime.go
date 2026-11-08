@@ -1,6 +1,10 @@
 package domain
 
-import "time"
+import (
+	"time"
+
+	"github.com/mooyang-code/moox/packages/seriesset"
+)
 
 // FactorPeriodState is one member's outcome for the most recent live period.
 type FactorPeriodState struct {
@@ -12,8 +16,11 @@ type FactorPeriodState struct {
 	FailedSubjects []string
 	SpecHash       string
 	DefinitionHash string
-	// GapSubjects 是 FailedSubjects 中因回看窗口 K 线空洞而失败的标的（子集）。
-	GapSubjects []string
+	// FailedSeries 是按序列（标的、series_tag）的失败名单，只有统一数据集才有，口径同 FailedSubjects。
+	FailedSeries []seriesset.Series
+	// SkippedSeriesTags 是被跳过的 series_tag（截面因子全集缺数）：这些序列的结果写 NULL。
+	// 全部 tag 都跳过时 Status 为 skipped；只跳过一部分时 Status 为 degraded，并在这里列出。
+	SkippedSeriesTags []string
 }
 
 // TaskRunSummary is the latest live period of one factor task as reported by

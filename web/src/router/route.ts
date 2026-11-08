@@ -37,6 +37,12 @@ export const staticRoutes = [
         meta: { title: "settings-secrets" }
       },
       {
+        path: "/settings/events",
+        name: "settings-events",
+        component: () => import("@/views/settings/events/index.vue"),
+        meta: { title: "settings-events" }
+      },
+      {
         path: "/data/sources",
         name: "data-sources",
         component: () => import("@/views/data/sources/index.vue"),
@@ -141,20 +147,14 @@ export const staticRoutes = [
       {
         path: "/trading/accounts",
         name: "trading-accounts",
-        component: () => import("@/views/trading/account-workbench/index.vue"),
-        meta: { title: "trading-accounts" }
+        component: () => import("@/views/trading/accounts/index.vue"),
+        meta: { title: "trading-accounts", reuseOnQuery: true }
       },
       {
-        path: "/trading/positions",
-        name: "trading-positions",
-        component: () => import("@/views/trading/position-detail/position-detail.vue"),
-        meta: { title: "trading-positions" }
-      },
-      {
-        path: "/trading/orders",
-        name: "trading-orders",
-        component: () => import("@/views/trading/trade-record/trade-record.vue"),
-        meta: { title: "trading-orders" }
+        path: "/trading/accounts/:logical_account_id",
+        name: "trading-account-detail",
+        component: () => import("@/views/trading/accounts/detail/index.vue"),
+        meta: { title: "trading-account-detail", hide: true, activeMenu: "trading-accounts", reuseOnQuery: true }
       },
       {
         path: "/ops/monitor",

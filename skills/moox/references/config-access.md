@@ -12,6 +12,7 @@ moox-cli config get                                   # 整份配置（JSON，�
 moox-cli config get hosts.storage                     # 一个表
 moox-cli config get storage_retention.defaults.5m     # 一个值
 moox-cli config get factors.tasks.0                   # 数组用序号，从 0 开始
+moox-cli config get exchange_keys.0                   # 第一把交易所密钥：api_key、secret_key、passphrase 显示为 ***
 moox-cli config get hosts.storage.address
 ```
 
@@ -43,6 +44,7 @@ moox-cli config set hosts.storage.label=存储主机 --yes     # 校验通过后
 | `--set-factors-enabled true|false` | `[factors] enabled` |
 | `--set-reachability 主机ID=direct|outbound` | 主机可达性 |
 | `--add-deployment 主机ID=组件ID[,组件ID]` | 把组件并入主机的 `[deployments]` |
+| `--add-egress-domain <域名>`（可重复） | 把域名追加到 `[egress_proxy] http_domains`（已在名单里或被 `*.` 后缀覆盖的不重复；没写这项时从默认名单开始追加）；**生效要重新渲染并发布出口代理与 Collector** |
 | `--rename-host 旧ID=新ID` | 主机改名（主机表、`[deployments]`、引用一起改） |
 | `--import-scf <JSON>` | 整体替换 `[scf_plan]` |
 | `--remove-factor-task <任务ID>`、`--remove-factor <因子ID>`（都可重复） | 删除因子任务、因子定义；因子仍被留下的任务引用时报错。只改本机配置，线上已有的任务不动 |
@@ -52,6 +54,9 @@ moox-cli config set hosts.storage.label=存储主机 --yes     # 校验通过后
 ## 其余情况
 
 - 数组、数组表、大段结构（例如 `[[factors.tasks]]`）：让用户跑 `moox-cli config edit` 在本机网页里改，Agent 不填也不读。
+- 交易所密钥 `[[exchange_keys]]` 是数组表，`config set` 改不了：让用户在 `config init` 录入页（配了海外服务器时有“交易所密钥”一步）或 `config edit` 的“交易所密钥”里填写，Agent 只用 `config get exchange_keys.<序号>` 看有哪几把（名称、交易所、环境、是否只读；密钥值默认打码，不要 `--reveal`）。
+  字段：`name`（只允许小写字母、数字、连字符）、`exchange`（`binance`、`okx`）、`environment`（`production`、`testnet`）、`api_key`、`secret_key`、`passphrase`（OKX 必填）、`readonly`（可选，默认 false）。
+  `setup apply` 把它们写进密钥管理，固定 ID 为 `exchange-<交易所>-<环境>-<名称>`；**只建不改**：管理台里已有这个 ID 的不覆盖（以管理台为准），已在管理台删除的不重建，从 `moox.toml` 删掉条目也不会删除管理台里的密钥。部署 Trade 之后用 `trade inspect-credential` 检测。
 - 手写的明文 `moox.toml`：`moox-cli config encrypt` 加密。
 - 新电脑：`moox-cli config restore` 从管理台恢复。
 - `config get` 报“这台电脑上没有解密 moox.toml 的密钥”：文件来自另一台电脑或钥匙串条目被删，用 `config restore`；不要重新生成密钥覆盖。

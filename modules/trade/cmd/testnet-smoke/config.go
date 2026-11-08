@@ -39,7 +39,7 @@ func parseOptions(args []string, getenv func(string) string) (smokeOptions, erro
 	var maxNotional string
 	var market, environment string
 	flags.StringVar(&options.Phase, "phase", "", "submit, recover or facts")
-	flags.StringVar(&market, "market", "SPOT", "facts phase: SPOT or SWAP")
+	flags.StringVar(&market, "market", "SPOT", "market to exercise: SPOT or SWAP (币安现货、合约测试网是两套域名和两把密钥，分别用各自的 --secret-id 各跑一次)")
 	flags.StringVar(&environment, "environment", "TESTNET", "facts phase: TESTNET or PRODUCTION")
 	flags.StringVar(&exchangeName, "exchange", "", "BINANCE or OKX")
 	flags.StringVar(&options.SecretID, "secret-id", "", "Admin Exchange Secret ID")
@@ -60,7 +60,7 @@ func parseOptions(args []string, getenv func(string) string) (smokeOptions, erro
 		return options, errors.New("phase must be submit, recover or facts")
 	}
 	options.MarketType = exchange.MarketType(strings.ToUpper(strings.TrimSpace(market)))
-	if !options.MarketType.Valid() {
+	if options.MarketType != exchange.MarketTypeSpot && options.MarketType != exchange.MarketTypeSwap {
 		return options, errors.New("market must be SPOT or SWAP")
 	}
 	options.Exchange = exchange.Exchange(strings.ToUpper(strings.TrimSpace(exchangeName)))
@@ -73,8 +73,11 @@ func parseOptions(args []string, getenv func(string) string) (smokeOptions, erro
 		return options, errors.New("SKIP: Exchange Testnet secret ID is required")
 	}
 	if readOnly {
-		// 只读阶段不写库也不下单，可以用生产密钥核对真实接口。
+		// 只读阶段不写库也不下单，可以用生产密钥核对真实接口；环境写错不能悄悄落到生产端点，必须是 TESTNET 或 PRODUCTION。
 		options.Environment = exchange.AccountEnvironment(strings.ToUpper(strings.TrimSpace(environment)))
+		if options.Environment != exchange.AccountEnvironmentTestnet && options.Environment != exchange.AccountEnvironmentProduction {
+			return options, errors.New("environment must be TESTNET or PRODUCTION")
+		}
 		return options, nil
 	}
 	if strings.TrimSpace(options.Database) == "" {
@@ -84,9 +87,12 @@ func parseOptions(args []string, getenv func(string) string) (smokeOptions, erro
 		return options, errors.New("restart state path is required")
 	}
 	if options.ExchangeSymbol == "" {
-		if options.Exchange == exchange.ExchangeBinance {
+		switch {
+		case options.Exchange == exchange.ExchangeBinance:
 			options.ExchangeSymbol = "BTCUSDT"
-		} else {
+		case options.MarketType == exchange.MarketTypeSwap:
+			options.ExchangeSymbol = "BTC-USDT-SWAP"
+		default:
 			options.ExchangeSymbol = "BTC-USDT"
 		}
 	}
@@ -98,17 +104,22 @@ func parseOptions(args []string, getenv func(string) string) (smokeOptions, erro
 	return options, nil
 }
 
+// passiveOrder 是被动测试单：价格比参考价低 10%，不会成交。Quantity 是基础资产数量（下单命令用的单位）。
 type passiveOrder struct {
 	Price    shared.Decimal
 	Quantity shared.Decimal
 }
 
+// planPassiveBuy 按交易所规则规划被动买单。quantityStep、minQuantity 是交易所数量单位（OKX 永续是张），
+// contractValue 是每张折合的基础资产数量（现货和币安合约为 1，缺失按 1）；名义金额 = 价格 × 数量 × 合约面值，
+// 不能漏掉合约面值，否则永续的安全上限差几个数量级。
 func planPassiveBuy(
 	reference shared.Decimal,
 	priceTick shared.Decimal,
 	quantityStep shared.Decimal,
 	minQuantity shared.Decimal,
 	minNotional shared.Decimal,
+	contractValue shared.Decimal,
 	maxNotional shared.Decimal,
 ) (passiveOrder, error) {
 	if reference.Cmp(shared.Zero()) <= 0 ||
@@ -118,18 +129,22 @@ func planPassiveBuy(
 		maxNotional.Cmp(shared.Zero()) <= 0 {
 		return passiveOrder{}, errors.New("invalid test order constraints")
 	}
+	if contractValue.Cmp(shared.Zero()) <= 0 {
+		contractValue = shared.MustDecimal("1")
+	}
 	price := floorToStep(reference.Mul(shared.MustDecimal("0.9")), priceTick)
 	if price.Cmp(shared.Zero()) <= 0 {
 		return passiveOrder{}, errors.New("passive test price rounded to zero")
 	}
 	quantity := ceilToStep(minQuantity, quantityStep)
 	if minNotional.Cmp(shared.Zero()) > 0 {
-		required := ceilToStep(minNotional.Div(price), quantityStep)
+		required := ceilToStep(minNotional.Div(price.Mul(contractValue)), quantityStep)
 		if required.Cmp(quantity) > 0 {
 			quantity = required
 		}
 	}
-	notional := price.Mul(quantity)
+	base := quantity.Mul(contractValue)
+	notional := price.Mul(base)
 	if notional.Cmp(maxNotional) > 0 {
 		return passiveOrder{}, fmt.Errorf(
 			"minimum test order notional %s exceeds safety cap %s",
@@ -137,7 +152,7 @@ func planPassiveBuy(
 			maxNotional,
 		)
 	}
-	return passiveOrder{Price: price, Quantity: quantity}, nil
+	return passiveOrder{Price: price, Quantity: base}, nil
 }
 
 func floorToStep(value, step shared.Decimal) shared.Decimal {
@@ -167,6 +182,7 @@ type smokeState struct {
 	Version           int                         `json:"version"`
 	Exchange          exchange.Exchange           `json:"exchange"`
 	Environment       exchange.AccountEnvironment `json:"environment"`
+	MarketType        exchange.MarketType         `json:"market_type"`
 	SpaceID           string                      `json:"space_id"`
 	AccountID         string                      `json:"account_id"`
 	LogicalAccountID  string                      `json:"logical_account_id"`
@@ -180,7 +196,7 @@ type smokeState struct {
 }
 
 func writeState(path string, state smokeState) error {
-	if err := validateState(state, state.Exchange); err != nil {
+	if err := validateState(state, state.Exchange, state.MarketType); err != nil {
 		return err
 	}
 	raw, err := json.MarshalIndent(state, "", "  ")
@@ -210,7 +226,7 @@ func writeState(path string, state smokeState) error {
 	return os.Rename(name, path)
 }
 
-func readState(path string, expected exchange.Exchange) (smokeState, error) {
+func readState(path string, expected exchange.Exchange, market exchange.MarketType) (smokeState, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return smokeState{}, err
@@ -221,13 +237,13 @@ func readState(path string, expected exchange.Exchange) (smokeState, error) {
 	if err := decoder.Decode(&state); err != nil {
 		return smokeState{}, err
 	}
-	if err := validateState(state, expected); err != nil {
+	if err := validateState(state, expected, market); err != nil {
 		return smokeState{}, err
 	}
 	return state, nil
 }
 
-func validateState(state smokeState, expected exchange.Exchange) error {
+func validateState(state smokeState, expected exchange.Exchange, market exchange.MarketType) error {
 	if state.Version != 1 {
 		return errors.New("unsupported smoke state version")
 	}
@@ -236,6 +252,9 @@ func validateState(state smokeState, expected exchange.Exchange) error {
 	}
 	if state.Exchange != expected {
 		return errors.New("smoke state exchange mismatch")
+	}
+	if state.MarketType != market || (market != exchange.MarketTypeSpot && market != exchange.MarketTypeSwap) {
+		return errors.New("smoke state market mismatch")
 	}
 	if state.SpaceID != smokeSpaceID ||
 		strings.TrimSpace(state.AccountID) == "" ||

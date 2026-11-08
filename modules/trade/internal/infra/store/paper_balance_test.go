@@ -118,7 +118,7 @@ func TestPaperBalanceRejectsAmbiguousFillAssetsAtomically(t *testing.T) {
 			s := openTestStore(t)
 			fill := seedPaperBalanceOrder(t, s)
 			if name == "swap settlement mismatch" || name == "swap missing fee asset" {
-				require.NoError(t, s.db.Exec("UPDATE t_trading_accounts SET c_market_type = 'SWAP'").Error)
+				require.NoError(t, s.db.Exec("UPDATE t_trading_accounts SET c_markets = 'SWAP'").Error)
 				require.NoError(t, s.db.Exec("UPDATE t_trade_orders SET c_market_type = 'SWAP'").Error)
 				fill.RealizedPnL = "10"
 			}
@@ -147,7 +147,7 @@ func TestPaperBalanceRejectsAmbiguousFillAssetsAtomically(t *testing.T) {
 func TestPaperBalanceSwapSettlementNormalizationRetainsActualFeeAsset(t *testing.T) {
 	s := openTestStore(t)
 	fill := seedPaperBalanceOrder(t, s)
-	require.NoError(t, s.db.Exec("UPDATE t_trading_accounts SET c_market_type = 'SWAP'").Error)
+	require.NoError(t, s.db.Exec("UPDATE t_trading_accounts SET c_markets = 'SWAP'").Error)
 	require.NoError(t, s.db.Exec("UPDATE t_trade_orders SET c_market_type = 'SWAP'").Error)
 	fill.SettlementAsset, fill.FeeAsset, fill.Fee, fill.RealizedPnL = "", "BNB", "-0.1", "10"
 	for _, expectedInserted := range []bool{true, false} {
@@ -170,7 +170,7 @@ func TestPaperBalanceSellAndSwapCashFlows(t *testing.T) {
 			s := openTestStore(t)
 			fill := seedPaperBalanceOrder(t, s)
 			if market == "SWAP" {
-				require.NoError(t, s.db.Exec("UPDATE t_trading_accounts SET c_market_type = 'SWAP'").Error)
+				require.NoError(t, s.db.Exec("UPDATE t_trading_accounts SET c_markets = 'SWAP'").Error)
 				require.NoError(t, s.db.Exec("UPDATE t_trade_orders SET c_market_type = 'SWAP', c_side = 'SELL'").Error)
 			} else {
 				require.NoError(t, s.db.Exec("UPDATE t_trade_orders SET c_side = 'SELL'").Error)

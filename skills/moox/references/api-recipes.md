@@ -2,7 +2,7 @@
 
 管理台上的每个操作都有对应的 `moox-cli` 专用命令（下面按页面列出）。专用命令把参数映射到请求字段，帮你省去拼 JSON，并对破坏性操作默认只预览。
 只有底层接口（Storage 数据面）没有专用命令，才用 `moox-cli gateway call` 直接调用内部服务（见文末）。
-交易模块尚未完工：只能查询，不代用户创建账户、下单或清仓。
+交易模块已支持现货、永续多市场执行与人工下单，但交易的写操作由用户在管理台自己做，`trade` 命令只提供查询：Agent 不代用户创建或修改账户、下单、撤单、清仓、减仓或解除下架禁止，也不向交易所下真实订单。
 
 ## 通用约定
 
@@ -30,7 +30,7 @@
 | 因子 › 因子定义 | 定义、分类、校验与试算 | `factor list|show|create|update|delete|validate|preview|functions`、`factor category list|upsert|delete|assign` |
 | 因子 › 计算任务 | 任务、成员、补算、状态 | `factor task list|show|create|enable|disable|delete|params`、`factor member add|remove|enable|disable`、`factor recalc submit|list|show|cancel`、`factor status`；阶段 `lifecycle …`；自定义算子 `udf …` |
 | 策略 | 定义、实例、结果、回放、模板 | `strategy list|show|validate|create|update|delete`、`strategy instance list|show|create|update|enable|disable`、`strategy result list|show`、`strategy target list`、`strategy replay start|list|show|bars|cancel`、`strategy template list|show|save|delete|render`、`strategy display get|set` |
-| 交易（只读） | 账户、订单、成交、持仓、权益 | `trade account list|show`、`trade logical list|show|target`、`trade order list|show`、`trade fills|positions|holdings|equity|capabilities|action` |
+| 交易（只读） | 账户、订单、成交、持仓、权益、收益拆解、操作记录、下架名单与持有者 | `trade account list|show`、`trade logical list|show|target`、`trade order list|show`、`trade fills|positions|holdings|equity|capabilities|action|actions|pnl|holders`、`trade blocked list` |
 | 运维 › 监控 | 总览、到达历史、主机资源、告警屏蔽 | `monitor health|arrival|hosts|host-metrics|mute|unmute|mute-status`、`doctor alerts`、`eventbus overview|streams|consumers|consumer|events` |
 | 运维 › 主机、部署 | 查询；增删启停只走 setup | `host list|deployments|routes|catalog|directory`、`host agent status|snapshot|run-once --host`、`setup hosts|host|deployment|remove-host|sync-deployments …` |
 | 运维 › 存储节点 | 登记查询与修改 | `storage node list|show|update|delete` |
@@ -47,9 +47,9 @@
 ./bin/moox-cli factor recalc submit --task-id <任务> --from 2026-10-01T00:00:00Z --to 2026-10-02T00:00:00Z
 
 # 策略：校验 DSL、创建定义与实例（实例新建后停用，确认无误再启用）
-./bin/moox-cli strategy validate --dsl-file s.yaml --factor-task-id <任务>
+./bin/moox-cli strategy validate --dsl-file s.yaml --factor-task spot=<任务>
 ./bin/moox-cli strategy create --dsl-file s.yaml
-./bin/moox-cli strategy instance create --strategy-id <ID> --factor-task-id <任务>
+./bin/moox-cli strategy instance create --strategy-id <ID> --factor-task spot=<任务>   # 混合市场再加 --factor-task swap=<任务>；统一数据集上的任务写 --factor-task multi=<任务>
 ./bin/moox-cli strategy instance enable --instance-id <ID>        # 先预览，确认后加 --yes
 
 # 破坏性：先预览，给用户确认后再加 --yes
@@ -74,6 +74,18 @@
 - **写方法不带 `--yes` 只预览**（输出将要发出的请求）：把预览给用户看，确认后再加 `--yes`；`gateway methods` 标为“写”的都算，只读方法不受影响。
 - **`gateway call` 不能调用返回密钥明文或完整 webhook 的方法**（`SecretMgr.GetSecretValue`、`MonitorMgr.ListNotificationChannels`），也拒绝密钥的新建、修改、启停、删除（`CreateSecret`、`UpdateSecret`、`ToggleSecretStatus`、`DeleteSecret`，由用户在管理台操作）：云账户凭证由专用命令在进程内使用，告警渠道用 `config notification` 查看（地址已打码）。
 - 请求字段以 `modules/<模块>/proto/*.proto` 为准；分页字段因服务而异（策略用 `{"page":{"page":1,"page_size":50}}`，其余用 `{"page":{"page":1,"size":50}}`）。
+
+### 人工结束钱包划转记录（`trpc.moox.trade.TradeConsoleService` 的 `ResolveWalletTransfer`）
+
+币安普通账户的钱包划转超过 10 分钟还没有对账出结果时，监控会发 `transfer_failing` 告警，这个账户在此期间不会再发起新的划转。告警标签是固定文字（只有账户名，不带划转编号和金额，带变化的值会让指标序列不断增长）；划转编号、金额和资产只在 Trade 日志正文里：用 `setup logs --host <Trade 所在主机> --component trade --lines 2000` 搜“交易划转”和“划转编号”。这是**用户自己判断**的操作：先请用户到交易所的划转记录里核对这笔划转有没有到账，用户确认结果后再调用，Agent 不代用户判断到账与否。
+
+```bash
+# 不带 --yes 只预览请求；用户确认后加 --yes。result 到账填 COMPLETED，没到账填 FAILED；note 是核对说明（可不写）
+./bin/moox-cli gateway call trpc.moox.trade.TradeConsoleService ResolveWalletTransfer --space-id crypto --data '{"transfer_id":"<Trade 日志里的划转编号>","result":"COMPLETED"}' --yes
+```
+
+- 只处理超过 10 分钟的未结记录；已经被自动对账或另一次人工处理结束的记录原样返回（`already_settled` 为真），不报错。
+- 记 `FAILED` 不计入连续失败，这个目标可以重新发起划转；记 `COMPLETED` 之后照常等现货钱包快照追上再买入。
 
 ## 密钥（trpc.moox.ops.SecretMgr）
 

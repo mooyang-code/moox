@@ -48,6 +48,55 @@ func TestRenderCollectorRuntimeConfigIncludesRetentionPolicy(t *testing.T) {
 	require.Equal(t, 25000, retention["max_rows_per_pass"])
 }
 
+// 下架自动检测要经出口代理：配了海外机（有 egress-proxy）为 true，没配为 false；模板里原来的值被覆盖。
+func TestRenderCollectorDelistAutoDetectFollowsEgressProxy(t *testing.T) {
+	template := []byte("delist:\n  auto_detect: true\n")
+	for name, tc := range map[string]struct {
+		deployments map[string][]string
+		want        bool
+	}{
+		"有海外机":  {map[string][]string{"control": {"admin", "collector"}, "overseas": {"egress-proxy", "trade"}}, true},
+		"没配海外机": {map[string][]string{"control": {"admin", "collector"}}, false},
+	} {
+		rendered, err := RenderCollectorRuntimeConfig(&Snapshot{Manifest: Manifest{Deployments: tc.deployments}}, template)
+		require.NoError(t, err, name)
+		var got map[string]any
+		require.NoError(t, yaml.Unmarshal(rendered, &got), name)
+		require.Equal(t, tc.want, got["delist"].(map[string]any)["auto_detect"], name)
+	}
+}
+
+// 全新安装以仓库里新版 Collector 的模板为底：模板自带 delist 段，渲染后按拓扑写入正确的值。
+func TestRenderCollectorDelistFromShippedTemplate(t *testing.T) {
+	template, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "collector", "config", "app.yaml"))
+	require.NoError(t, err)
+	require.Contains(t, string(template), "\ndelist:\n", "新版 Collector 模板应自带 delist 段")
+	for name, tc := range map[string]struct {
+		deployments map[string][]string
+		want        bool
+	}{
+		"有海外机":  {map[string][]string{"control": {"admin", "collector"}, "overseas": {"egress-proxy", "trade"}}, true},
+		"没配海外机": {map[string][]string{"control": {"admin", "collector"}}, false},
+	} {
+		rendered, err := RenderCollectorRuntimeConfig(&Snapshot{Manifest: Manifest{Deployments: tc.deployments}}, template)
+		require.NoError(t, err, name)
+		var got map[string]any
+		require.NoError(t, yaml.Unmarshal(rendered, &got), name)
+		require.Equal(t, tc.want, got["delist"].(map[string]any)["auto_detect"], name)
+	}
+}
+
+// 旧版 Collector 的配置没有 delist 段：渲染不新增，免得还没换二进制的 Collector 读到不认识的键。
+func TestRenderCollectorDoesNotAddDelistToOldConfig(t *testing.T) {
+	deployments := map[string][]string{"control": {"admin", "collector"}, "overseas": {"egress-proxy", "trade"}}
+	rendered, err := RenderCollectorRuntimeConfig(&Snapshot{Manifest: Manifest{Deployments: deployments}}, []byte("database:\n  path: ./collector.db\n"))
+	require.NoError(t, err)
+	var got map[string]any
+	require.NoError(t, yaml.Unmarshal(rendered, &got))
+	require.NotContains(t, got, "delist")
+	require.Equal(t, "./collector.db", got["database"].(map[string]any)["path"])
+}
+
 func TestWriteRenderedRuntimeConfigPreservesModeAndReplacesAtomically(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "trade", "app.yaml")
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))

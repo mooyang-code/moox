@@ -11,6 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/mooyang-code/moox/packages/factorname"
+	"github.com/mooyang-code/moox/packages/seriesset"
 )
 
 type resultKey struct {
@@ -42,6 +43,14 @@ func (r *Runner) AssembleWithReport(plan Plan, loaded LoadResult, computation Co
 		return nil, AssembleReport{}, err
 	}
 	applied := make(map[ItemKey]bool)
+	appliedSeries := make(map[seriesItem]bool) // 统一数据集：每条序列各自取得有效值的项；单序列计划不记
+	multi := plan.multi()
+	markApplied := func(member domain.MemberDef, subject, tag string, at time.Time) {
+		applied[ItemKey{Member: member.Key, Subject: subject, Period: at.UTC()}] = true
+		if multi {
+			appliedSeries[seriesItem{ItemKey: ItemKey{Member: member.Key, Subject: subject, Period: at.UTC()}, tag: tag}] = true
+		}
+	}
 	failedItems := make(map[ItemKey]bool) // 任一序列失败的项：不能因为另一序列成功就确认
 	rows := make(map[resultKey]*assembledRow)
 	factorColumns := make([]string, 0)
@@ -105,20 +114,40 @@ func (r *Runner) AssembleWithReport(plan Plan, loaded LoadResult, computation Co
 		}
 	}
 
-	failedFactorSubjects := make(map[string]map[string]struct{})
+	failedFactorSubjects := make(map[string]map[failTarget]struct{})
+	// failSubject 记录成员在整个标的上失败：单序列数据集标的的全部行写 NULL；统一数据集按这个标的的各条可用序列分别记失败。
+	failSubject := func(member domain.MemberDef, subject string) {
+		if !plan.multi() {
+			markFactorSubjectFailure(computation, failedFactorSubjects, member, subject)
+			return
+		}
+		for _, item := range loaded.AvailableSeries {
+			if item.SubjectID == subject {
+				markFactorSeriesFailure(computation, failedFactorSubjects, member, item)
+			}
+		}
+	}
+	// failApply 记录一行结果值无效：单序列数据集标的整体失败（原有行为）；统一数据集只记这条序列，不连累另一个市场。
+	failApply := func(member domain.MemberDef, subject, tag string) {
+		if plan.multi() {
+			markFactorSeriesFailure(computation, failedFactorSubjects, member, seriesset.Series{SubjectID: subject, SeriesTag: tag})
+			return
+		}
+		markFactorSubjectFailure(computation, failedFactorSubjects, member, subject)
+	}
 	for _, member := range plan.Members {
 		bySubject := computation.Results[member.Key]
 		if member.Factor.FactorType == domain.FactorTypeCrossSection {
 			if item, ok := bySubject[""]; ok {
 				if item.Err != nil {
 					for _, subject := range plan.Available {
-						markFactorSubjectFailure(computation, failedFactorSubjects, member, subject)
+						failSubject(member, subject)
 					}
 					continue
 				}
 				if err := validateResultColumns(item, member, true); err != nil {
 					for _, subject := range plan.Available {
-						markFactorSubjectFailure(computation, failedFactorSubjects, member, subject)
+						failSubject(member, subject)
 					}
 					continue
 				}
@@ -134,10 +163,10 @@ func (r *Runner) AssembleWithReport(plan Plan, loaded LoadResult, computation Co
 						continue
 					}
 					if applyFactorValues(plan, rows, resultKey{subject: subject, at: at.UTC(), tag: tag}, member, outputs, factorColumns) {
-						applied[ItemKey{Member: member.Key, Subject: subject, Period: at.UTC()}] = true
+						markApplied(member, subject, tag, at)
 					} else {
 						failedItems[ItemKey{Member: member.Key, Subject: subject, Period: at.UTC()}] = true
-						markFactorSubjectFailure(computation, failedFactorSubjects, member, subject)
+						failApply(member, subject, tag)
 					}
 				}
 			}
@@ -146,11 +175,11 @@ func (r *Runner) AssembleWithReport(plan Plan, loaded LoadResult, computation Co
 
 		for subject, item := range bySubject {
 			if item.Err != nil {
-				markFactorSubjectFailure(computation, failedFactorSubjects, member, subject)
+				failSubject(member, subject)
 				continue
 			}
 			if err := validateResultColumns(item, member, false); err != nil {
-				markFactorSubjectFailure(computation, failedFactorSubjects, member, subject)
+				failSubject(member, subject)
 				continue
 			}
 			for rowNo, result := range item.Rows {
@@ -162,10 +191,10 @@ func (r *Runner) AssembleWithReport(plan Plan, loaded LoadResult, computation Co
 					continue
 				}
 				if applyFactorValues(plan, rows, resultKey{subject: subject, at: at.UTC(), tag: tag}, member, outputs, factorColumns) {
-					applied[ItemKey{Member: member.Key, Subject: subject, Period: at.UTC()}] = true
+					markApplied(member, subject, tag, at)
 				} else {
 					failedItems[ItemKey{Member: member.Key, Subject: subject, Period: at.UTC()}] = true
-					markFactorSubjectFailure(computation, failedFactorSubjects, member, subject)
+					failApply(member, subject, tag)
 				}
 			}
 		}
@@ -178,12 +207,49 @@ func (r *Runner) AssembleWithReport(plan Plan, loaded LoadResult, computation Co
 				delete(row.params, member.Key)
 			}
 		}
+		// 统一数据集里只跳过一部分 series_tag（成员状态 degraded）：只去掉这些 tag 的行的参数，输出列同样保持预置的 NULL。
+		if skipped := computation.FactorStates[member.Key].SkippedSeriesTags; len(skipped) > 0 && !plan.FillOnly {
+			for key, row := range rows {
+				if tagIn(skipped, key.tag) {
+					delete(row.params, member.Key)
+				}
+			}
+		}
+		// 期望序列是数据层推测的（补算、失效重算）：被跳过的 tag 不能确定真的缺数（可能只是晚到或刚下架），
+		// 不把这些行写成 NULL，输出列与 __params 保持已有的值，不覆盖实时路径算好的结果。
+		if plan.ExpectedSeriesDerived && !plan.FillOnly {
+			state := computation.FactorStates[member.Key]
+			for key, row := range rows {
+				if state.Status != "skipped" && !tagIn(state.SkippedSeriesTags, key.tag) {
+					continue
+				}
+				for _, column := range member.OutputColumns() {
+					delete(row.fields, column)
+				}
+				if base, ok := plan.BaseParams[RowKey{Subject: key.subject, At: key.at, Tag: key.tag}][member.Key]; ok {
+					row.params[member.Key] = base
+				}
+			}
+		}
+		// 上游判为失败的序列（统一数据集事件的 failed_series）：本地即使已有这一期的源行，这条序列的结果也写 NULL、不记参数
+		// （统一数据集执行计划 3.5“一个 tag 失败，只把这条序列的行写成 NULL”）。计算时它们已不进面板；这里只记失败范围，
+		// 不改成员状态（失败序列已在 Compute 里记进成员状态，截面因子可能因此是 skipped，不能被改回 degraded）。
+		if multi && !plan.FillOnly && len(plan.UpstreamFailedSeries) > 0 {
+			if failedFactorSubjects[member.Key] == nil {
+				failedFactorSubjects[member.Key] = make(map[failTarget]struct{})
+			}
+			for _, item := range plan.UpstreamFailedSeries {
+				failedFactorSubjects[member.Key][failTarget{subject: item.SubjectID, tag: item.SeriesTag}] = struct{}{}
+			}
+		}
 		failedSubjects := failedFactorSubjects[member.Key]
 		if len(failedSubjects) == 0 || plan.FillOnly {
 			continue
 		}
 		for key, row := range rows {
-			if _, failed := failedSubjects[key.subject]; !failed {
+			_, wholeSubject := failedSubjects[failTarget{subject: key.subject}]
+			_, thisSeries := failedSubjects[failTarget{subject: key.subject, tag: key.tag}]
+			if !wholeSubject && !thisSeries {
 				continue
 			}
 			for _, column := range member.OutputColumns() {
@@ -218,6 +284,9 @@ func (r *Runner) AssembleWithReport(plan Plan, loaded LoadResult, computation Co
 		}
 		return out[i].SeriesTag < out[j].SeriesTag
 	})
+	if plan.multi() {
+		r.failUnavailableSeriesItems(plan, loaded, computation, appliedSeries, failedItems)
+	}
 	for key := range failedItems {
 		delete(applied, key)
 	}
@@ -440,11 +509,68 @@ func normalizeNumeric(value any) any {
 	return value
 }
 
-func markFactorSubjectFailure(computation Computation, failed map[string]map[string]struct{}, member domain.MemberDef, subject string) {
+// failTarget 是成员失败的范围：tag 为空表示这个标的的全部序列（单序列数据集的原有口径），否则只是这一条序列。
+type failTarget struct{ subject, tag string }
+
+// markFactorSeriesFailure 记录成员在统一数据集的一条序列上失败：只把这条序列的行写成 NULL，另一个 tag 的行不动。
+func markFactorSeriesFailure(computation Computation, failed map[string]map[failTarget]struct{}, member domain.MemberDef, series seriesset.Series) {
 	if failed[member.Key] == nil {
-		failed[member.Key] = make(map[string]struct{})
+		failed[member.Key] = make(map[failTarget]struct{})
 	}
-	failed[member.Key][subject] = struct{}{}
+	failed[member.Key][failTarget{subject: series.SubjectID, tag: series.SeriesTag}] = struct{}{}
+	state := computation.FactorStates[member.Key]
+	state.MemberKey, state.MemberKind, state.FactorID = member.Key, member.Kind, member.Factor.FactorID
+	state.Status = "degraded"
+	state.SourceHash = member.Factor.SpecHash
+	state.FailedSubjects = uniqueSorted(append(state.FailedSubjects, series.SubjectID))
+	state.FailedSeries = uniqueSeriesSorted(append(state.FailedSeries, series))
+	computation.FactorStates[member.Key] = state
+}
+
+// seriesItem 是统一数据集里（成员、标的、周期、series_tag）一条序列上的结果项。
+type seriesItem struct {
+	ItemKey
+	tag string
+}
+
+// failUnavailableSeriesItems 统一数据集：这个 (成员, 标的, 周期) 要期望且可用的每条序列在该周期都取得有效值才算写成，
+// 缺一条（序列整段缺数、所在 tag 被跳过、或这一周期那条序列没有行/没有取得值）就记为失败——
+// 不能因为另一个市场的序列成功就确认（补算与缺口恢复据此保留待办），与单序列数据集“缺这一根就是失败”同一口径。
+func (r *Runner) failUnavailableSeriesItems(plan Plan, loaded LoadResult, computation Computation, appliedSeries map[seriesItem]bool, failedItems map[ItemKey]bool) {
+	targets, err := r.itemTargets(plan)
+	if err != nil {
+		return
+	}
+	missing := seriesSet(differenceSeries(plan.ExpectedSeries, loaded.AvailableSeries))
+	for _, member := range plan.Members {
+		skipped := computation.FactorStates[member.Key].SkippedSeriesTags
+		for _, item := range plan.ExpectedSeries {
+			_, isMissing := missing[item]
+			unavailable := isMissing || tagIn(skipped, item.SeriesTag)
+			for _, target := range targets {
+				key := ItemKey{Member: member.Key, Subject: item.SubjectID, Period: target.UTC()}
+				if unavailable || !appliedSeries[seriesItem{ItemKey: key, tag: item.SeriesTag}] {
+					failedItems[key] = true
+				}
+			}
+		}
+	}
+}
+
+func tagIn(tags []string, tag string) bool {
+	for _, item := range tags {
+		if item == tag {
+			return true
+		}
+	}
+	return false
+}
+
+func markFactorSubjectFailure(computation Computation, failed map[string]map[failTarget]struct{}, member domain.MemberDef, subject string) {
+	if failed[member.Key] == nil {
+		failed[member.Key] = make(map[failTarget]struct{})
+	}
+	failed[member.Key][failTarget{subject: subject}] = struct{}{}
 	state := computation.FactorStates[member.Key]
 	state.MemberKey, state.MemberKind, state.FactorID = member.Key, member.Kind, member.Factor.FactorID
 	state.Status = "degraded"

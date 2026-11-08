@@ -159,12 +159,22 @@ func Open(path string) (*Store, error) {
 	return store, nil
 }
 
+// 连接检查与 schema 比对用的 SQL：整条写成常量，不在调用处拼接。建表 SQL 来自 schema 包，不在这里。
+const (
+	// sqlPing 检查连接可用。
+	sqlPing = "SELECT 1"
+	// sqlSelectSchemaObjects 读出策略表及其显式索引的定义。
+	sqlSelectSchemaObjects = `
+		SELECT type, name, tbl_name, sql FROM sqlite_master
+		WHERE type IN ('table', 'index') AND sql IS NOT NULL AND (tbl_name = 't_strategies' OR tbl_name LIKE 't_strategy_%')`
+)
+
 // Ping 检查数据库是否可用。
 func (s *Store) Ping(ctx context.Context) error {
 	if s == nil || s.db == nil {
 		return errors.New("策略数据库未打开")
 	}
-	return s.db.WithContext(ctx).Exec("SELECT 1").Error
+	return s.db.WithContext(ctx).Exec(sqlPing).Error
 }
 
 // SQLDB 返回底层数据库连接（重置时备份与清表用，由生命周期的重置实现调用）。
@@ -249,10 +259,7 @@ func expectedSchemaObjects() (map[string]schemaObject, error) {
 // readSchemaObjects 读出策略表及其显式索引（自动索引没有 SQL，随表定义一起比较）。
 func readSchemaObjects(db *gorm.DB) (map[string]schemaObject, error) {
 	var objects []schemaObject
-	if err := db.Raw(`
-		SELECT type, name, tbl_name, sql FROM sqlite_master
-		WHERE type IN ('table', 'index') AND sql IS NOT NULL AND (tbl_name = 't_strategies' OR tbl_name LIKE 't_strategy_%')
-	`).Scan(&objects).Error; err != nil {
+	if err := db.Raw(sqlSelectSchemaObjects).Scan(&objects).Error; err != nil {
 		return nil, fmt.Errorf("读取策略数据库表失败：%w", err)
 	}
 	byKey := make(map[string]schemaObject, len(objects))

@@ -445,6 +445,7 @@ func (m *ViewMetrics) SetViewFileOverLimitCount(count int64) {
 }
 
 // ObserveViewDatasetOutput records a successful active View index commit.
+// 跟踪的序列达到上限时，只在第一次返回 ErrViewSeriesLimit，之后的新序列静默丢弃（见 viewSubjectTracker.limitReported）。
 func (m *ViewMetrics) ObserveViewDatasetOutput(observation ViewDatasetObservation) error {
 	return m.viewSubjects.observe(observation)
 }

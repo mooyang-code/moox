@@ -6,6 +6,8 @@ use (
 	./modules/admin/proto/admingen
 	./modules/archive
 	./modules/archive/proto/archivegen
+	./modules/callbackdispatcher
+	./modules/callbackdispatcher/proto/callbackdispatchergen
 	./modules/cli
 	./modules/cloudfunction
 	./modules/cloudfunction/proto/cloudfunctiongen
@@ -53,6 +55,7 @@ use (
 	./packages/marketcalendar
 	./packages/marketfetchpb
 	./packages/metricspb
+	./packages/netguard
 	./packages/notification
 	./packages/report
 	./packages/requestauth

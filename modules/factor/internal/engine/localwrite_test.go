@@ -17,7 +17,18 @@ import (
 )
 
 // writeStorage 只提供数据集字段；本地写入接口不会读 Storage 的行。
-type writeStorage struct{ localdata.Storage }
+type writeStorage struct {
+	localdata.Storage
+	// multi 为真时源数据集的 market_type 是 multi（统一数据集）。
+	multi bool
+}
+
+func (w writeStorage) GetDataset(context.Context, string, string) (storageio.DatasetInfo, error) {
+	if w.multi {
+		return storageio.DatasetInfo{Attributes: map[string]string{"market_type": "multi"}}, nil
+	}
+	return storageio.DatasetInfo{Attributes: map[string]string{"market_type": "spot"}}, nil
+}
 
 func (writeStorage) ListColumns(context.Context, string, string) ([]storageio.ColumnInfo, error) {
 	return []storageio.ColumnInfo{
@@ -31,17 +42,27 @@ func (writeStorage) ListDatasetSubjects(context.Context, string, string) ([]stri
 	return []string{"BTC", "ETH"}, nil
 }
 
+func (contractStorage) GetDataset(context.Context, string, string) (storageio.DatasetInfo, error) {
+	return storageio.DatasetInfo{Attributes: map[string]string{"market_type": "spot"}}, nil
+}
+
 func (contractStorage) ListDatasetSubjects(context.Context, string, string) ([]string, error) {
 	return []string{"BTCUSDT"}, nil
 }
 
 func newTestWriter(t *testing.T) (*localWriter, *seriesstore.Store) {
 	t.Helper()
+	return newTestWriterFor(t, false)
+}
+
+// newTestWriterFor 造本地写入器；multi 为真时数据集是统一数据集（market_type=multi）。
+func newTestWriterFor(t *testing.T, multi bool) (*localWriter, *seriesstore.Store) {
+	t.Helper()
 	store, err := seriesstore.Open(seriesstore.Options{Dir: t.TempDir(), BlockCacheBytes: 8 << 20, DisableSync: true})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
-	data := localdata.New(localdata.Config{Store: store, Storage: writeStorage{}})
-	return newLocalWriter(data, writeStorage{}), store
+	data := localdata.New(localdata.Config{Store: store, Storage: writeStorage{multi: multi}})
+	return newLocalWriter(data, writeStorage{multi: multi}), store
 }
 
 func wireRequest(minutes ...int) WriteRequest {

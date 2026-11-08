@@ -1,5 +1,11 @@
 import { callTrade } from "./http";
-export { TradeResponseError } from "./http";
+export {
+  isTradeAdoptionRequired,
+  isTradeInvalidParam,
+  isTradeNotFound,
+  isTradeSessionNotReady,
+  TradeResponseError
+} from "./http";
 import type {
   AccountResponse,
   AddLogicalAccountMemberReq,
@@ -7,12 +13,15 @@ import type {
   CreatePaperSimulationReq,
   CreateLogicalAccountReq,
   TradingAccount,
+  ExchangeInspection,
   ExecutionCapabilities,
   EquityPoint,
   Fill,
   Holding,
+  InspectExchangeCredentialReq,
   LedgerEntry,
   ListAccountLedgerReq,
+  ListOperatorActionsReq,
   ListTradingAccountsReq,
   ListFillsReq,
   ListOrdersReq,
@@ -21,12 +30,15 @@ import type {
   LogicalAccountResponse,
   LogicalAccountTarget,
   OperatorAction,
+  OperatorActionType,
   Order,
   Page,
   PageResult,
   PlaceManualOrderReq,
   SubmitOrderReq,
   Position,
+  SummarizeAccountPnlReq,
+  SummarizeAccountPnlRsp,
   TradableInstrument,
   RetInfo,
   UpdateTradingAccountReq
@@ -79,6 +91,24 @@ export function syncTradingAccount(trading_account_id: string) {
   >("console", "SyncTradingAccount", { trading_account_id });
 }
 
+// 只读检测一把交易所密钥，不落库；检测没有完成（超时、限频）时返回业务错误，不代表密钥有问题。
+export function inspectExchangeCredential(req: InspectExchangeCredentialReq) {
+  return callTrade<InspectExchangeCredentialReq, { ret_info: RetInfo; inspection: ExchangeInspection }>(
+    "console",
+    "InspectExchangeCredential",
+    req,
+    { silent: true }
+  );
+}
+
+// 对已有账户重新检测，结果写回账户类型和检测结果。
+export function reinspectTradingAccount(trading_account_id: string) {
+  return callTrade<
+    { trading_account_id: string },
+    { ret_info: RetInfo; inspection: ExchangeInspection; account: TradingAccount; mode_changed: boolean }
+  >("console", "ReinspectTradingAccount", { trading_account_id }, { silent: true });
+}
+
 export function createPaperSimulation(req: CreatePaperSimulationReq) {
   return callTrade<CreatePaperSimulationReq, { ret_info: RetInfo; account: TradingAccount; logical_account: LogicalAccount }>(
     "console",
@@ -92,7 +122,7 @@ export function closePaperSimulation(trading_account_id: string) {
   return callTrade<
     { trading_account_id: string },
     { ret_info: RetInfo; account: TradingAccount; logical_account: LogicalAccount }
-  >("console", "ClosePaperSimulation", { trading_account_id });
+  >("console", "ClosePaperSimulation", { trading_account_id }, { silent: true });
 }
 
 export function getExecutionCapabilities(trading_account_id: string) {
@@ -161,6 +191,15 @@ export function listLogicalAccounts(page: Page = {}) {
   );
 }
 
+export function updateLogicalAccount(logical_account_id: string, name: string) {
+  return callTrade<{ logical_account_id: string; name: string }, LogicalAccountResponse>(
+    "console",
+    "UpdateLogicalAccount",
+    { logical_account_id, name },
+    { silent: true }
+  );
+}
+
 export function addLogicalAccountMember(req: AddLogicalAccountMemberReq) {
   return callTrade<AddLogicalAccountMemberReq, LogicalAccountResponse>("console", "AddLogicalAccountMember", req, {
     silent: true
@@ -171,7 +210,8 @@ export function removeLogicalAccountMember(logical_account_id: string, trading_a
   return callTrade<{ logical_account_id: string; trading_account_id: string }, LogicalAccountResponse>(
     "console",
     "RemoveLogicalAccountMember",
-    { logical_account_id, trading_account_id }
+    { logical_account_id, trading_account_id },
+    { silent: true }
   );
 }
 
@@ -191,7 +231,8 @@ export function resumeLogicalAccount(logical_account_id: string) {
   return callTrade<{ logical_account_id: string }, LogicalAccountResponse & { warning?: string }>(
     "console",
     "ResumeLogicalAccount",
-    { logical_account_id }
+    { logical_account_id },
+    { silent: true }
   );
 }
 
@@ -254,14 +295,20 @@ export function listPositions(req: ListPositionsReq) {
   return callTrade<ListPositionsReq, { ret_info: RetInfo; positions: Position[] }>("console", "ListPositions", req);
 }
 
+/** 收益拆解：手续费、已实现盈亏按资产分别汇总，资金费从交易所即查，不折算 */
+export function summarizeAccountPnl(req: SummarizeAccountPnlReq) {
+  return callTrade<SummarizeAccountPnlReq, SummarizeAccountPnlRsp>("console", "SummarizeAccountPnl", req);
+}
+
+export function listOperatorActions(req: ListOperatorActionsReq) {
+  return callTrade<ListOperatorActionsReq, { ret_info: RetInfo; actions?: OperatorAction[]; page_result?: PageResult }>(
+    "console",
+    "ListOperatorActions",
+    req
+  );
+}
+
 export const exchangeLabels: Record<number, string> = { 0: "-", 1: "Binance", 2: "OKX" };
-export const marketTypeLabels: Record<number, string> = { 0: "-", 1: "SPOT", 2: "SWAP" };
-export const orderSideLabels: Record<number, string> = { 0: "-", 1: "买入", 2: "卖出" };
-export const orderSideColors: Record<number, string> = { 0: "gray", 1: "red", 2: "green" };
-export const logicalAutomationStateLabels: Record<string, string> = {
-  ACTIVE: "运行中",
-  PAUSED: "已暂停"
-};
 export const orderStateLabels: Record<string, string> = {
   PENDING: "等待提交",
   SUBMITTING: "提交中",
@@ -282,6 +329,15 @@ export const actionStateLabels: Record<string, string> = {
   PARTIAL: "部分完成",
   FAILED: "失败"
 };
+/** 操作记录里的完整类型名；页头进度条另有一套短名（detail-model 的 actionTypeLabels） */
+export const operatorActionTypeLabels: Record<OperatorActionType, string> = {
+  MANUAL_ORDER: "人工下单",
+  SUBMIT_ORDER: "提交订单",
+  CANCEL_ORDER: "撤单",
+  FLATTEN: "整组清仓",
+  REDUCE: "按比例减仓",
+  DELIST_FLATTEN: "下架清仓"
+};
 export const targetStateLabels: Record<string, string> = {
   PENDING: "等待执行",
   CONVERGING: "收敛中",
@@ -297,7 +353,8 @@ export function canCancelOrderState(state: string): boolean {
 export const orderOwnerLabels: Record<string, string> = {
   TARGET: "策略",
   OPERATOR: "人工",
-  EXTERNAL: "外部"
+  EXTERNAL: "外部",
+  SYSTEM: "系统"
 };
 
 export function formatTimestamp(value?: string): string {

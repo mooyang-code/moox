@@ -1,0 +1,28 @@
+# MooX 事件中心（callback-dispatcher）服务配置。
+# 事件中心是全局服务：消费 EventBus 事件，按用户配置的规则向用户接口发通知或执行系统动作。
+
+gateway_client:
+  caller: callback-dispatcher
+  key_id: ""
+  key_file: ../../secrets/caller-callback-dispatcher.key
+
+database:
+  path: ./data/moox_callback_dispatcher.db
+
+# EventBus 连接；安装时由 unitinstall 改写为实际地址和凭据路径。
+eventbus:
+  urls: ["nats://127.0.0.1:4222"]
+  credential_file: ~/.config/moox/eventbus/callback-dispatcher-eventbus.yaml
+
+# 通知投递：失败后按固定间隔重试，从第一次失败起超过 retry_window 就置为失败。
+delivery:
+  # 每轮最多同时处理的执行记录数。
+  worker_batch: 8
+  poll_interval: 1s
+  connect_timeout: 3s
+  request_timeout: 10s
+  retry_window: 24h
+
+# 执行记录与事件回执的保留时间。
+retention:
+  execution_days: 30

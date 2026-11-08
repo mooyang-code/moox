@@ -48,6 +48,8 @@ func eventBusRole(id string) string {
 		return "factor-eventbus"
 	case "collector":
 		return "collector-eventbus"
+	case "callback-dispatcher":
+		return "callback-dispatcher-eventbus"
 	}
 	return ""
 }
@@ -281,14 +283,14 @@ func projectEventBus(root *os.Root, options *PrepareOptions, components []string
 				return err
 			}
 		} else if id == "collector" {
-			bus := member(member(document, "kline_resample"), "event_bus")
+			bus := member(document, "event_bus")
 			if err := setValue(bus, "urls", []string{options.EventBusURL}); err != nil {
 				return err
 			}
 			if err := setValue(bus, "credential_file", credential); err != nil {
 				return err
 			}
-		} else if id == "strategy" || id == "trade" || id == "factor-engine" {
+		} else if id == "strategy" || id == "trade" || id == "factor-engine" || id == "callback-dispatcher" {
 			bus := member(document, "eventbus")
 			if err := setValue(bus, "urls", []string{options.EventBusURL}); err != nil {
 				return err

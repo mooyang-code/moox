@@ -6,6 +6,7 @@
       "last_checked_at": "2026-10-09T12:00:00Z",
       "object": {
         "agent_id": "PHYSICAL01",
+        "attention_kind": "",
         "component_id": "",
         "dataset_id": "",
         "freq": "",
@@ -28,6 +29,7 @@
       "last_checked_at": "2026-10-09T12:00:00Z",
       "object": {
         "agent_id": "PHYSICAL01",
+        "attention_kind": "",
         "component_id": "",
         "dataset_id": "",
         "freq": "",

@@ -16,12 +16,12 @@ type expiryPriceSource struct{ t *testing.T }
 
 type expiryAdvancingPriceSource struct{ fixture *targetFixture }
 
-func (s expiryAdvancingPriceSource) LatestPrice(context.Context, string, string) (Quote, error) {
+func (s expiryAdvancingPriceSource) LatestPrice(context.Context, string, exchange.SymbolKey) (Quote, error) {
 	s.fixture.now = time.UnixMilli(2000)
 	return Quote{Price: shared.MustDecimal("100"), UpdatedAt: s.fixture.now}, nil
 }
 
-func (s expiryPriceSource) LatestPrice(context.Context, string, string) (Quote, error) {
+func (s expiryPriceSource) LatestPrice(context.Context, string, exchange.SymbolKey) (Quote, error) {
 	s.t.Fatal("expired or future target must not fetch market data")
 	return Quote{}, nil
 }

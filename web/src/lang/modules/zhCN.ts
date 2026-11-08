@@ -40,9 +40,8 @@ export default {
     ["data-import"]: "数据导入",
     ["compute-collector"]: "数据采集",
     ["collector-tasks"]: "采集任务",
-    ["trading-accounts"]: "账户总览",
-    ["trading-positions"]: "持仓详情",
-    ["trading-orders"]: "交易明细",
+    ["trading-accounts"]: "交易账户",
+    ["trading-account-detail"]: "交易账户详情",
     ["ops"]: "资源与运维",
     ["ops-monitor"]: "监控告警",
     ["ops-deployments"]: "服务部署",
@@ -51,6 +50,7 @@ export default {
     ["ops-activity"]: "活动日志",
     ["settings"]: "系统设置",
     ["settings-spaces"]: "空间管理",
-    ["settings-secrets"]: "秘钥管理"
+    ["settings-secrets"]: "秘钥管理",
+    ["settings-events"]: "事件中心"
   }
 };

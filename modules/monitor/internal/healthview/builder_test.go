@@ -120,6 +120,7 @@ func TestUnknownTopologyNeverInventsComponentsAndNamesNeverMatchSubstrings(t *te
 	object := alertObject("crypto", "business:random-factor-collector", observability.Overview{})
 	require.Equal(t, "business", object.Type)
 	require.Empty(t, object.ComponentId)
+	require.Empty(t, object.AttentionKind)
 	require.Equal(t, "random-factor-collector", componentName(observability.Overview{}, "random-factor-collector"))
 	require.Equal(t, "监控上报正常；健康检查正常", ChineseReason("reporter fresh; health check ok"))
 }
@@ -216,4 +217,23 @@ func TestOnlyTheLatestAgentOfEachRegisteredHostSummarizesTheHost(t *testing.T) {
 	view = projectFacts(facts)
 	require.Len(t, view.Alerts, 1)
 	require.Equal(t, "host-presence:NEW1", view.Alerts[0].Id, "只有当前选中的采集器失联才告警")
+}
+
+// 关注项检查带上种类（attention_kind），只认 Monitor 登记过的检查和种类。
+func TestAttentionAlertObjectCarriesAttentionKind(t *testing.T) {
+	object := alertObject("crypto", "collector_attention:delist_readonly_key_missing", observability.Overview{})
+	require.Equal(t, "collector_attention", object.Kind)
+	require.Equal(t, "delist_readonly_key_missing", object.AttentionKind)
+	require.Equal(t, "valuation_degraded", alertObject("crypto", "trade_attention:valuation_degraded", observability.Overview{}).AttentionKind)
+	require.Empty(t, alertObject("crypto", "collector_attention:unknown_kind", observability.Overview{}).AttentionKind)
+	require.Empty(t, alertObject("crypto", "module:delist_readonly_key_missing", observability.Overview{}).AttentionKind)
+}
+
+// 缺币安只读 Key 只是现货下架改为手工登记，告警是 warning，不挡安装验收；下架来源失败仍是 critical。
+func TestReadonlyKeyMissingAlertIsAWarning(t *testing.T) {
+	check := "collector_attention:delist_readonly_key_missing"
+	require.Equal(t, "warning", alertSeverity(check, alertObject("crypto", check, observability.Overview{})))
+	failed := "collector_attention:delist_source_failed"
+	require.Equal(t, "critical", alertSeverity(failed, alertObject("crypto", failed, observability.Overview{})))
+	require.Equal(t, "critical", alertSeverity("trade_attention:auto_paused", alertObject("crypto", "trade_attention:auto_paused", observability.Overview{})))
 }

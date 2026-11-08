@@ -3,7 +3,9 @@ package operator
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -370,7 +372,7 @@ func TestManualOrderRunningReplayFailsAfterAccountMovesLogicalAccount(t *testing
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-2", Name: "logical-2",
-			ExecutionMode: "PAPER", MarketType: "SPOT", SettlementAsset: "USDT",
+			ExecutionMode: "PAPER", SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {
 			return err
@@ -438,7 +440,7 @@ func TestManualLogicalAccountLockRevalidatesMovedEnabledMembership(t *testing.T)
 		}
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-2", Name: "logical-2",
-			ExecutionMode: "PAPER", MarketType: "SPOT", SettlementAsset: "USDT",
+			ExecutionMode: "PAPER", SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {
 			return err
@@ -659,7 +661,7 @@ func newOperatorFixture(t *testing.T, market exchange.MarketType) *operatorFixtu
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "logical",
 			OwnerInstanceID: "runner-1", OwnerSessionID: "session-1", ExecutionMode: "PAPER",
-			MarketType: string(market), SettlementAsset: "USDT",
+			SettlementAsset: "USDT",
 			AutomationState: "PAUSED", PauseReason: "configure",
 		}); err != nil {
 			return err
@@ -691,7 +693,7 @@ func (f *operatorFixture) account(id string) store.TradingAccountRecord {
 	}
 	return store.TradingAccountRecord{
 		SpaceID: "space-1", TradingAccountID: id, Name: id,
-		Exchange: exchangeName, MarketType: string(f.market),
+		Exchange: exchangeName, Markets: []string{string(f.market)},
 		ExecutionMode: "PAPER", Environment: "PAPER",
 		SettlementAsset: "USDT", MarginMode: map[bool]string{
 			true: "CROSS", false: "",
@@ -702,7 +704,7 @@ func (f *operatorFixture) account(id string) store.TradingAccountRecord {
 		},
 		Snapshot: store.TradingAccountSnapshot{
 			AvailableFunds: "100000",
-			Balances: []store.AssetBalance{{
+			Balances: []store.AssetBalance{{Wallet: "UNIFIED",
 				Asset: "USDT", Available: "100000", Total: "100000",
 			}},
 		},
@@ -762,7 +764,7 @@ func (f *operatorFixture) service() *Service {
 	return &Service{
 		Store: f.store, Orders: f.orders, Syncer: f.syncer, Prices: f.prices,
 		Now: func() time.Time { return f.now }, FlattenMaxAttempts: 1,
-		FlattenRetryInterval: -1,
+		FlattenRetryInterval: -1, DelistAttemptInterval: -1,
 	}
 }
 
@@ -786,11 +788,19 @@ func (s *operatorOrderStub) Place(
 	id := s.nextID
 	if id == "" {
 		id = "child-" + spec.TradingAccountID + "-" + spec.InstrumentID
+		// 同一个测试里下多笔时订单号不能撞：已经有同号的就加序号。
+		for n := 2; ; n++ {
+			if _, err := s.store.GetOrder(ctx, spaceID, id); err != nil {
+				break
+			}
+			id = fmt.Sprintf("child-%s-%s-%d", spec.TradingAccountID, spec.InstrumentID, n)
+		}
 	}
 	record := store.OrderRecord{
 		SpaceID: spaceID, OrderID: id,
 		TradingAccountID: spec.TradingAccountID,
-		ClientOrderID:    spec.ClientOrderID, ExchangeSymbol: spec.InstrumentID,
+		ClientOrderID:    spec.ClientOrderID, ExchangeSymbol: stubExchangeSymbol(spec.InstrumentID),
+		MarketType: string(exchange.MarketOfInstrumentID(spec.InstrumentID)), InstrumentID: spec.InstrumentID,
 		OrderType: string(spec.Type), TimeInForce: string(spec.FillPolicy),
 		Side: string(spec.Side), PositionSide: string(spec.PositionSide),
 		Quantity: spec.Quantity.String(), ReferencePrice: spec.ReferencePrice.String(),
@@ -931,13 +941,9 @@ type operatorPriceStub struct {
 	calls *[]string
 }
 
-func (s operatorPriceStub) LatestPrice(
-	_ context.Context,
-	_ string,
-	symbol string,
-) (Quote, error) {
+func (s operatorPriceStub) LatestPrice(_ context.Context, _ string, symbol exchange.SymbolKey) (Quote, error) {
 	if s.calls != nil {
-		*s.calls = append(*s.calls, symbol)
+		*s.calls = append(*s.calls, symbol.Symbol)
 	}
 	return s.quote, s.err
 }
@@ -949,4 +955,10 @@ func traceIndex(trace []string, expected string) int {
 		}
 	}
 	return -1
+}
+
+// stubExchangeSymbol 把内部标的 ID（BTC-USDT-SWAP）还原成测试夹具里的交易所代码（BTCUSDT），订单按（市场、代码）才查得到。
+func stubExchangeSymbol(instrumentID string) string {
+	symbol := strings.TrimSuffix(strings.TrimSuffix(instrumentID, "-SWAP"), "-SPOT")
+	return strings.ReplaceAll(symbol, "-", "")
 }

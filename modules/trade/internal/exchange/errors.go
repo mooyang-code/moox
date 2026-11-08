@@ -1,6 +1,7 @@
 package exchange
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -90,6 +91,24 @@ func IsConfirmedOrderMissing(err error) bool {
 	return typed.Code == "-2013" || typed.Code == "51603"
 }
 
+// IsInstrumentNotFound 报告交易所是否用明确的错误码确认标的不存在（已下架或代码错误）：
+// 币安 -1121（Invalid symbol），OKX 51001（官方错误码表 Trade Class：Instrument ID, Instrument ID code or Spread ID doesn't exist.，
+// 见 https://www.okx.com/docs-v5/en/#error-code-rest-api-public-trade-class）。
+// Kind 仍是 ErrorRejected，下单路径按拒单处理不受影响；估值路径据此把下架零头降级处理，不阻断采样。
+func IsInstrumentNotFound(err error) bool {
+	var typed *Error
+	if !errors.As(err, &typed) || typed == nil || typed.Kind != ErrorRejected {
+		return false
+	}
+	return typed.Code == CodeBinanceInvalidSymbol || typed.Code == CodeOKXInstrumentNotFound
+}
+
+// 标的不存在的错误码。
+const (
+	CodeBinanceInvalidSymbol  = "-1121"
+	CodeOKXInstrumentNotFound = "51001"
+)
+
 // rejectCodeMessages 是常见拒单错误码的中文说明，其余错误显示交易所原文。
 var rejectCodeMessages = map[string]string{
 	"-1013": "价格或数量不符合交易规则",
@@ -125,4 +144,44 @@ func RejectMessage(err error) string {
 		return "交易所返回：" + exchangeErr.Err.Error()
 	}
 	return "交易所返回：" + exchangeErr.Error()
+}
+
+// FailureSummary 把交易所调用失败转成简短的中文说明：只含错误类别、HTTP 状态和错误码，
+// 不含请求串、响应体原文（可能带签名、账户信息）。检测、划转等要把失败原因给人看的地方共用。
+func FailureSummary(err error) string {
+	var typed *Error
+	switch {
+	case errors.As(err, &typed):
+		var kind string
+		switch typed.Kind {
+		case ErrorRateLimited, ErrorOrderRateLimited, ErrorThrottled, ErrorBanned, ErrorNotSent:
+			kind = "被限频或本地限流暂停"
+		case ErrorTransportUnknown:
+			kind = "网络错误或交易所服务异常"
+		case ErrorAuthentication:
+			kind = "鉴权类错误"
+			if typed.Code == "" {
+				kind = "鉴权类错误，没有可识别的错误码"
+			}
+		case ErrorRejected:
+			kind = "被交易所拒绝"
+		case ErrorInsufficientBalance:
+			kind = "余额不足"
+		case ErrorNotReady:
+			kind = "账户会话还没准备好"
+		default:
+			kind = "交易所返回了无法判断的错误"
+		}
+		parts := []string{kind}
+		if typed.HTTPStatus != 0 {
+			parts = append(parts, fmt.Sprintf("HTTP %d", typed.HTTPStatus))
+		}
+		if typed.Code != "" {
+			parts = append(parts, "错误码 "+typed.Code)
+		}
+		return strings.Join(parts, "，")
+	case errors.Is(err, context.DeadlineExceeded):
+		return "请求超时"
+	}
+	return "没有得到交易所的明确答复"
 }

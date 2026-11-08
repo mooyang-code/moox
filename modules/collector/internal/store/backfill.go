@@ -48,13 +48,15 @@ type BackfillJob struct {
 	UpdatedAt        time.Time
 }
 
-// BackfillChunk 是补采的最小执行单位：一个数据集、一个标的、一段连续时间（至多 1000 根）。
+// BackfillChunk 是补采的最小执行单位：一个数据集、一个标的（统一数据集还要指定序列）、一段连续时间（至多 1000 根）。
 type BackfillChunk struct {
 	ID        int64
 	JobID     string
 	DatasetID string
 	Frequency string
 	SubjectID string
+	// SeriesTag 只在统一数据集（多个 series_tag）时有值：补采按该序列所属市场的路由取数；单序列数据集为空。
+	SeriesTag string
 	From      time.Time
 	To        time.Time
 	ChunkID   string
@@ -110,6 +112,7 @@ type backfillChunkRow struct {
 	DatasetID   string     `gorm:"column:c_dataset_id"`
 	Frequency   string     `gorm:"column:c_frequency"`
 	SubjectID   string     `gorm:"column:c_subject_id"`
+	SeriesTag   string     `gorm:"column:c_series_tag"`
 	From        time.Time  `gorm:"column:c_from"`
 	To          time.Time  `gorm:"column:c_to"`
 	ChunkID     string     `gorm:"column:c_chunk_id"`
@@ -127,7 +130,7 @@ func (backfillChunkRow) TableName() string { return "t_collector_kline_backfill_
 
 func (row backfillChunkRow) chunk() BackfillChunk {
 	return BackfillChunk{
-		ID: row.ID, JobID: row.JobID, DatasetID: row.DatasetID, Frequency: row.Frequency, SubjectID: row.SubjectID, From: row.From, To: row.To, ChunkID: row.ChunkID,
+		ID: row.ID, JobID: row.JobID, DatasetID: row.DatasetID, Frequency: row.Frequency, SubjectID: row.SubjectID, SeriesTag: row.SeriesTag, From: row.From, To: row.To, ChunkID: row.ChunkID,
 		Status: row.Status, Attempts: row.Attempts, Rows: row.Rows, Missing: row.Missing, StartedAt: row.StartedAt, LatestEndAt: row.LatestEndAt, LastError: row.LastError, UpdatedAt: row.UpdatedAt,
 	}
 }
@@ -187,7 +190,7 @@ func (r *BackfillRepository) CreateJob(ctx context.Context, job BackfillJob, chu
 		}
 		rows := make([]backfillChunkRow, 0, len(chunks))
 		for _, chunk := range chunks {
-			rows = append(rows, backfillChunkRow{JobID: job.JobID, DatasetID: chunk.DatasetID, Frequency: chunk.Frequency, SubjectID: chunk.SubjectID, From: chunk.From.UTC(), To: chunk.To.UTC(), ChunkID: chunk.ChunkID, Status: BackfillPending, UpdatedAt: now})
+			rows = append(rows, backfillChunkRow{JobID: job.JobID, DatasetID: chunk.DatasetID, Frequency: chunk.Frequency, SubjectID: chunk.SubjectID, SeriesTag: chunk.SeriesTag, From: chunk.From.UTC(), To: chunk.To.UTC(), ChunkID: chunk.ChunkID, Status: BackfillPending, UpdatedAt: now})
 		}
 		return tx.CreateInBatches(&rows, 200).Error
 	})
@@ -376,7 +379,7 @@ func (r *BackfillRepository) FinishChunk(ctx context.Context, id int64, attempt 
 			origin = BackfillKindForce
 		}
 		return addNoticesTx(tx, []BackfillNotice{{
-			SpaceID: job.SpaceID, DatasetID: chunk.DatasetID, Frequency: chunk.Frequency, SubjectID: chunk.SubjectID,
+			SpaceID: job.SpaceID, DatasetID: chunk.DatasetID, Frequency: chunk.Frequency, SubjectID: chunk.SubjectID, SeriesTag: chunk.SeriesTag,
 			Start: chunk.From, End: chunk.To, Origin: origin, JobID: chunk.JobID,
 		}})
 	})

@@ -42,7 +42,7 @@ func TestNewUsesFixedEnvironmentEndpoints(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			config := exchange.AccountConfig{
-				Environment: test.environment, MarketType: exchange.MarketTypeSpot,
+				Environment: test.environment, Markets: []exchange.MarketType{exchange.MarketTypeSpot},
 			}
 			adapter := New(config, exchange.Credential{})
 			if adapter.spot.BaseURL != test.spot || adapter.swap.BaseURL != test.swap {
@@ -54,7 +54,7 @@ func TestNewUsesFixedEnvironmentEndpoints(t *testing.T) {
 			if got := privateStreamEndpoint(config); got != test.spotStream {
 				t.Fatalf("SPOT stream = %q, want %q", got, test.spotStream)
 			}
-			config.MarketType = exchange.MarketTypeSwap
+			config.Markets = []exchange.MarketType{exchange.MarketTypeSwap}
 			if got := privateStreamEndpoint(config); got != test.swapStream {
 				t.Fatalf("SWAP stream = %q, want %q", got, test.swapStream)
 			}
@@ -193,7 +193,7 @@ func TestGetReferencePriceUsesMarketTicker(t *testing.T) {
 
 	before := time.Now()
 	quote, err := testAdapter(exchange.MarketTypeSpot, server.URL).
-		GetReferencePrice(context.Background(), "BTCUSDT")
+		GetReferencePrice(context.Background(), exchange.NewSymbolKey(exchange.MarketTypeSpot, "BTCUSDT"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,7 +212,7 @@ func TestGetTerminalOrderAndTypedErrors(t *testing.T) {
 		}))
 		defer server.Close()
 		order, err := testAdapter(exchange.MarketTypeSpot, server.URL).
-			GetOrder(context.Background(), "BTCUSDT", "cid")
+			GetOrder(context.Background(), exchange.NewSymbolKey(exchange.MarketTypeSpot, "BTCUSDT"), "cid")
 		if err != nil || order.Status != exchange.OrderStatusFilled ||
 			order.AveragePrice.String() != "100" {
 			t.Fatalf("order=%+v err=%v", order, err)
@@ -225,7 +225,7 @@ func TestGetTerminalOrderAndTypedErrors(t *testing.T) {
 		}))
 		defer server.Close()
 		_, err := testAdapter(exchange.MarketTypeSpot, server.URL).
-			GetOrder(context.Background(), "BTCUSDT", "cid")
+			GetOrder(context.Background(), exchange.NewSymbolKey(exchange.MarketTypeSpot, "BTCUSDT"), "cid")
 		if !exchange.IsKind(err, exchange.ErrorRateLimited) {
 			t.Fatalf("error = %v", err)
 		}
@@ -236,7 +236,7 @@ func TestGetTerminalOrderAndTypedErrors(t *testing.T) {
 		}))
 		defer server.Close()
 		order, err := testAdapter(exchange.MarketTypeSpot, server.URL).
-			GetOrder(context.Background(), "BTCUSDT", "cid")
+			GetOrder(context.Background(), exchange.NewSymbolKey(exchange.MarketTypeSpot, "BTCUSDT"), "cid")
 		if err != nil || !order.AveragePrice.IsZero() {
 			t.Fatalf("order=%+v err=%v", order, err)
 		}
@@ -268,7 +268,7 @@ func TestListRecentFillsNormalizesSwap(t *testing.T) {
 	}))
 	defer server.Close()
 	fills, cursor, err := testAdapter(exchange.MarketTypeSwap, server.URL).
-		ListRecentFills(context.Background(), "BTCUSDT", "6")
+		ListRecentFills(context.Background(), exchange.NewSymbolKey(exchange.MarketTypeSwap, "BTCUSDT"), "6")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -321,7 +321,7 @@ func TestListRecentFillsConsumesEveryCatchUpPage(t *testing.T) {
 	defer server.Close()
 
 	fills, cursor, err := testAdapter(exchange.MarketTypeSpot, server.URL).
-		ListRecentFills(context.Background(), "BTCUSDT", "")
+		ListRecentFills(context.Background(), exchange.NewSymbolKey(exchange.MarketTypeSpot, "BTCUSDT"), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -365,13 +365,14 @@ func TestSwapAccountSnapshotUsesAssetUpdateTime(t *testing.T) {
 		switch request.URL.Path {
 		case "/fapi/v1/positionSide/dual":
 			_, _ = io.WriteString(writer, `{"dualSidePosition":false}`)
-		case "/fapi/v1/multiAssetsMargin":
-			_, _ = io.WriteString(writer, `{"multiAssetsMargin":false}`)
+		case "/fapi/v3/positionRisk":
+			// 未实现盈亏只取持仓接口，不取账户接口的 totalUnrealizedProfit。
+			_, _ = io.WriteString(writer, `[{"symbol":"BTCUSDT","positionSide":"BOTH","positionAmt":"1","entryPrice":"100","markPrice":"90","unRealizedProfit":"-10","initialMargin":"20","notional":"90"}]`)
 		case "/fapi/v3/account":
 			_, _ = io.WriteString(writer, `{
 				"totalWalletBalance":"100","totalMarginBalance":"90","availableBalance":"80",
 				"totalInitialMargin":"20","totalMaintMargin":"2",
-				"totalUnrealizedProfit":"-10",
+				"totalUnrealizedProfit":"999",
 				"assets":[
 					{"asset":"USDT","walletBalance":"100","availableBalance":"80",
 					 "initialMargin":"20","unrealizedProfit":"1","updateTime":1700000000000}
@@ -395,32 +396,30 @@ func TestSwapAccountSnapshotUsesAssetUpdateTime(t *testing.T) {
 	}
 }
 
-func TestSwapAccountSnapshotRejectsMultiAssetsMode(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(
-		writer http.ResponseWriter,
-		request *http.Request,
-	) {
+// 普通账户允许多资产模式（保证金币需要）：不再因 multiAssetsMargin=true 拒绝，也不再请求这个接口。
+func TestSwapAccountSnapshotAcceptsMultiAssetsMode(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
 		case "/fapi/v1/positionSide/dual":
 			_, _ = io.WriteString(writer, `{"dualSidePosition":false}`)
-		case "/fapi/v1/multiAssetsMargin":
-			_, _ = io.WriteString(writer, `{"multiAssetsMargin":true}`)
+		case "/fapi/v3/positionRisk":
+			_, _ = io.WriteString(writer, `[]`)
+		case "/fapi/v3/account":
+			_, _ = writer.Write(sample(t, "fapi_account_v3.json"))
 		default:
 			t.Fatalf("unexpected path %s", request.URL.Path)
 		}
 	}))
 	defer server.Close()
-	_, err := testAdapter(exchange.MarketTypeSwap, server.URL).
-		GetAccountSnapshot(context.Background())
-	if !exchange.IsKind(err, exchange.ErrorRejected) {
-		t.Fatalf("error = %v", err)
+	if _, err := testAdapter(exchange.MarketTypeSwap, server.URL).GetAccountSnapshot(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 }
 
 func testAdapter(market exchange.MarketType, baseURL string) *Adapter {
 	config := exchange.AccountConfig{
 		TradingAccountID: "account-1", Exchange: exchange.ExchangeBinance,
-		MarketType: market, ExecutionMode: exchange.ExecutionModeLive,
+		Markets: []exchange.MarketType{market}, ExecutionMode: exchange.ExecutionModeLive,
 		SettlementAsset: "USDT",
 	}
 	if market == exchange.MarketTypeSwap {

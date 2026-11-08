@@ -7,9 +7,13 @@ export {}
 
 declare module 'vue' {
   export interface GlobalComponents {
+    AccountInspectionPanel: typeof import('./components/trade-inspection/account-inspection-panel.vue')['default']
     ActivityLog: typeof import('./components/activity-log/index.vue')['default']
     CodeBlock: typeof import('./components/code-block/index.vue')['default']
     CodeEditor: typeof import('./components/code-editor/index.vue')['default']
+    InspectionPreview: typeof import('./components/trade-inspection/inspection-preview.vue')['default']
+    InspectionResult: typeof import('./components/trade-inspection/inspection-result.vue')['default']
+    InspectionTestDialog: typeof import('./components/trade-inspection/inspection-test-dialog.vue')['default']
     LangProvider: typeof import('./components/lang-provider/index.vue')['default']
     MainTransition: typeof import('./components/main-transition/index.vue')['default']
     PageTitleTabs: typeof import('./components/page-title-tabs/index.vue')['default']

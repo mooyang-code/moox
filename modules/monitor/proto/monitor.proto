@@ -44,6 +44,9 @@ message HealthObject {
   string kind = 7;
   string space_id = 8;
   string producer = 9;
+  // attention_kind 是关注项检查（kind 为 trade_attention、event_center_attention、collector_attention，检查 ID 形如 <kind>:<种类>）的种类，
+  // 例如 delist_readonly_key_missing；只填 Monitor 登记过的种类，前端据此决定处理入口。
+  string attention_kind = 10;
 }
 // severity：critical 表示服务不可用或数据中断，warning 表示资源吃紧、指标上报中断等需要关注的风险。
 message HealthAlert {

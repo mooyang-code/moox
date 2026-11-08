@@ -32,6 +32,8 @@ const (
 	OwnerTarget   OwnerType = "TARGET"
 	OwnerOperator OwnerType = "OPERATOR"
 	OwnerExternal OwnerType = "EXTERNAL"
+	// OwnerSystem 是系统自己发起的订单，例如 BNB 补买和稳定币调平；不暂停组合，也不算本目标的子单。
+	OwnerSystem OwnerType = "SYSTEM"
 )
 
 type OrderOwner struct {
@@ -60,6 +62,10 @@ func (o OrderOwner) Validate() error {
 		if o.RunnerID != nil {
 			return invalidSpec("EXTERNAL cannot have runner ownership")
 		}
+	case OwnerSystem:
+		if strings.TrimSpace(o.LogicalAccountID) == "" || o.RunnerID != nil {
+			return invalidSpec("SYSTEM requires logical account without runner")
+		}
 	default:
 		return invalidSpec("unsupported order owner type")
 	}
@@ -72,6 +78,8 @@ type OrderSpec struct {
 	ReferencePriceAt   time.Time
 	ReducePositionOnly bool
 	Owner              OrderOwner
+	// Attempt 是伪市价单的第几次尝试，从 0 开始，写进订单表的 c_attempt；不参与订单身份比较。
+	Attempt int
 	// PositionBefore 是目标子单下单前该执行账户在这个标的上的持仓，用于发现持仓没反映已成交子单。
 	// 只是记录，不参与订单身份比较。
 	PositionBefore string

@@ -29,9 +29,11 @@ type ConfigForm struct {
 	} `json:"notification"`
 	// ArchiveObjectStore 是 [archive_object_store]：关闭时整段删除。
 	ArchiveObjectStore FormObjectStore `json:"archive_object_store"`
-	Hosts              []FormHost      `json:"hosts"`
-	Retention          FormRetention   `json:"retention"`
-	Logs               struct {
+	// ExchangeKeys 是交易所密钥的完整列表：保存时整体替换配置里的全部 [[exchange_keys]]；不带这个字段（nil）则不改。
+	ExchangeKeys []ExchangeKeyEntry `json:"exchange_keys"`
+	Hosts        []FormHost         `json:"hosts"`
+	Retention    FormRetention      `json:"retention"`
+	Logs         struct {
 		MaxSizeMB   int `json:"max_size_mb"`
 		BackupCount int `json:"backup_count"`
 	} `json:"logs"`
@@ -110,6 +112,7 @@ func formFrom(m setupconfig.Manifest) ConfigForm {
 			UseTLS: s.TLS(), StorageClass: s.StorageClass, SecretID: s.SecretID,
 		}
 	}
+	form.ExchangeKeys = exchangeKeyEntries(m)
 	view := describe(m, false, "")
 	for _, server := range view.Servers {
 		host := m.HostCatalog[server.ID]
@@ -270,6 +273,14 @@ func applyForm(plain []byte, current setupconfig.Manifest, form ConfigForm) ([]b
 	}
 	set("local_logs", "max_size_mb", strconv.Itoa(form.Logs.MaxSizeMB))
 	set("local_logs", "backup_count", strconv.Itoa(form.Logs.BackupCount))
+	// 表单没有带交易所密钥列表（nil）时保持原样；带了空列表（[]）才表示全部删除，免得漏传字段把密钥清掉。
+	if form.ExchangeKeys != nil {
+		entries, err := normalizeExchangeKeyEntries(form.ExchangeKeys)
+		if err != nil {
+			return nil, err
+		}
+		lines = replaceExchangeKeys(lines, entries)
+	}
 	return []byte(strings.Join(lines, "\n")), nil
 }
 

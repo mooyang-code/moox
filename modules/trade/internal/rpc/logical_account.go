@@ -42,7 +42,6 @@ func (h *LogicalAccountServer) CreateLogicalAccount(
 		h.logicalAccountID(),
 		req.GetName(),
 		executionModeFromPB(req.GetExecutionMode()),
-		marketFromPB(req.GetMarketType()),
 		req.GetSettlementAsset(),
 		controlModeFromPB(req.GetControlMode()),
 	)
@@ -337,7 +336,7 @@ func (h *LogicalAccountServer) FlattenLogicalAccount(
 	}
 	if h.Flatten == nil {
 		return &tradepb.FlattenLogicalAccountRsp{
-			RetInfo: errorInfo(fmt.Errorf("trade RPC: flatten service is not configured")),
+			RetInfo: errorInfo(fmt.Errorf("清仓服务未配置")),
 		}, nil
 	}
 	action, err := h.Flatten(
@@ -366,7 +365,13 @@ func (h *LogicalAccountServer) logicalAccount(
 		true,
 	)
 	if err != nil {
-		return logicalAccountToPB(record, nil, logicalapp.Readiness{
+		return logicalAccountToPB(record, nil, nil, logicalapp.Readiness{
+			Reasons: []string{err.Error()},
+		})
+	}
+	markets, err := h.Store.LogicalAccountMarkets(ctx, record.SpaceID, record.LogicalAccountID)
+	if err != nil {
+		return logicalAccountToPB(record, members, nil, logicalapp.Readiness{
 			Reasons: []string{err.Error()},
 		})
 	}
@@ -378,7 +383,7 @@ func (h *LogicalAccountServer) logicalAccount(
 	if err != nil {
 		readiness = logicalapp.Readiness{Reasons: []string{err.Error()}}
 	}
-	return logicalAccountToPB(record, members, readiness)
+	return logicalAccountToPB(record, members, markets, readiness)
 }
 
 func (h *LogicalAccountServer) logicalAccountID() string {

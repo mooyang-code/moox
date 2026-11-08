@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/binance"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/okx"
@@ -15,7 +14,7 @@ import (
 // runFactsPhase 只读核对交易所接口：标的、报价、账户、持仓、挂单、成交。不写库，不下单。
 func runFactsPhase(ctx context.Context, options smokeOptions, credential exchange.Credential) error {
 	config := exchange.AccountConfig{
-		TradingAccountID: "facts", Exchange: options.Exchange, MarketType: options.MarketType,
+		TradingAccountID: "facts", Exchange: options.Exchange, Markets: []exchange.MarketType{options.MarketType},
 		ExecutionMode: exchange.ExecutionModeLive, Environment: options.Environment, SettlementAsset: "USDT",
 	}
 	if exchange.RuleFor(options.MarketType).Leverage {
@@ -35,7 +34,7 @@ func runFactsPhase(ctx context.Context, options smokeOptions, credential exchang
 		return fmt.Errorf("LoadInstruments: %w", err)
 	}
 	fmt.Printf("标的 %d 个\n", len(instruments))
-	symbol := shared.ExchangeSymbol(options.ExchangeSymbol)
+	symbol := exchange.NewSymbolKey(options.MarketType, options.ExchangeSymbol)
 	quote, err := adapter.GetQuote(ctx, symbol)
 	if err != nil {
 		return fmt.Errorf("GetQuote: %w", err)

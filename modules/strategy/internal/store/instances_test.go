@@ -16,29 +16,29 @@ func TestInstanceRoundTripAndEnabledAccountUniqueness(t *testing.T) {
 		t.Fatal(err)
 	}
 	account := "acct-1"
-	first := Instance{InstanceID: "i1", StrategyID: "s1", SpaceID: "space", FactorTaskID: "ftask_a", LogicalAccountID: &account, CreatedAt: testNow}
+	first := Instance{InstanceID: "i1", StrategyID: "s1", SpaceID: "space", FactorTasks: map[string]string{"spot": "ftask_a"}, LogicalAccountID: &account, CreatedAt: testNow}
 	second := first
-	second.InstanceID, second.FactorTaskID = "i2", "ftask_b"
+	second.InstanceID, second.FactorTasks = "i2", map[string]string{"spot": "ftask_b"}
 	for _, instance := range []Instance{first, second} {
 		if err := repo.CreateInstance(ctx, instance); err != nil {
 			t.Fatal(err)
 		}
 	}
 	got, err := repo.GetInstance(ctx, "i1")
-	if err != nil || got.Enabled || got.SessionID != nil || got.FactorTaskID != "ftask_a" || got.Health != HealthOK || string(got.ResolvedJSON) != "{}" || *got.LogicalAccountID != account {
+	if err != nil || got.Enabled || got.SessionID != nil || got.FactorTasks["spot"] != "ftask_a" || got.Health != HealthOK || string(got.ResolvedJSON) != "{}" || *got.LogicalAccountID != account {
 		t.Fatalf("实例不符：%+v err=%v", got, err)
 	}
 	session, secondSession := "session-1", "session-2"
 	for _, opened := range []Session{
-		{SessionID: session, InstanceID: "i1", ResolvedJSON: `{"view_id":"view_factor_a","factor_task_id":"ftask_a"}`},
-		{SessionID: secondSession, InstanceID: "i2", ResolvedJSON: `{"view_id":"view_factor_b","factor_task_id":"ftask_b"}`},
+		{SessionID: session, InstanceID: "i1", ResolvedJSON: `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"view_id":"view_factor_a","factor_task_id":"ftask_a"}}}`},
+		{SessionID: secondSession, InstanceID: "i2", ResolvedJSON: `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"view_id":"view_factor_b","factor_task_id":"ftask_b"}}}`},
 	} {
 		opened.DSLHash, opened.CreatedAt = testHash, testNow
 		if err := repo.OpenSession(ctx, opened, "name: demo"); err != nil {
 			t.Fatal(err)
 		}
 	}
-	attachAndEnable(t, repo, "i1", session, json.RawMessage(`{"view_id":"view_factor_a","factor_task_id":"ftask_a"}`))
+	attachAndEnable(t, repo, "i1", session, json.RawMessage(`{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"view_id":"view_factor_a","factor_task_id":"ftask_a"}}}`))
 	if err := repo.SetInstanceEnabled(ctx, "i2", false, &secondSession, nil, testNow); err != nil {
 		t.Fatal(err)
 	}
@@ -46,7 +46,7 @@ func TestInstanceRoundTripAndEnabledAccountUniqueness(t *testing.T) {
 		t.Fatal("同一账户不能被两个启用实例占用")
 	}
 	enabled, err := repo.GetInstance(ctx, "i1")
-	if err != nil || !enabled.Enabled || *enabled.SessionID != session || string(enabled.ResolvedJSON) != `{"view_id":"view_factor_a","factor_task_id":"ftask_a"}` {
+	if err != nil || !enabled.Enabled || *enabled.SessionID != session || string(enabled.ResolvedJSON) != `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"view_id":"view_factor_a","factor_task_id":"ftask_a"}}}` {
 		t.Fatalf("启用后的实例不符：%+v err=%v", enabled, err)
 	}
 	byView, err := repo.EnabledInstancesByView(ctx, "space", "view_factor_a")
@@ -67,11 +67,11 @@ func TestSetInstanceEnabledHandshakeSemantics(t *testing.T) {
 		t.Fatal(err)
 	}
 	account := "acct-1"
-	if err := repo.CreateInstance(ctx, Instance{InstanceID: "i1", StrategyID: "s1", SpaceID: "space", FactorTaskID: "ftask_a", LogicalAccountID: &account, CreatedAt: testNow}); err != nil {
+	if err := repo.CreateInstance(ctx, Instance{InstanceID: "i1", StrategyID: "s1", SpaceID: "space", FactorTasks: map[string]string{"spot": "ftask_a"}, LogicalAccountID: &account, CreatedAt: testNow}); err != nil {
 		t.Fatal(err)
 	}
 	session := "session-1"
-	if err := repo.OpenSession(ctx, Session{SessionID: session, InstanceID: "i1", DSLHash: testHash, ResolvedJSON: `{"view_id":"view_factor_a","factor_task_id":"ftask_a"}`, CreatedAt: testNow}, "name: demo"); err != nil {
+	if err := repo.OpenSession(ctx, Session{SessionID: session, InstanceID: "i1", DSLHash: testHash, ResolvedJSON: `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"view_id":"view_factor_a","factor_task_id":"ftask_a"}}}`, CreatedAt: testNow}, "name: demo"); err != nil {
 		t.Fatal(err)
 	}
 	// 启用前必须先把会话写到实例上（启用流程先写会话再联系 Trade）。
@@ -107,7 +107,7 @@ func TestSetInstanceEnabledHandshakeSemantics(t *testing.T) {
 	if err != nil || pending.Enabled || pending.SessionID == nil {
 		t.Fatalf("停用中应保留会话：%+v err=%v", pending, err)
 	}
-	if err := repo.UpdateInstance(ctx, Instance{InstanceID: "i1", StrategyID: "s1", SpaceID: "space", FactorTaskID: "ftask_a", UpdatedAt: testNow}); err == nil {
+	if err := repo.UpdateInstance(ctx, Instance{InstanceID: "i1", StrategyID: "s1", SpaceID: "space", FactorTasks: map[string]string{"spot": "ftask_a"}, UpdatedAt: testNow}); err == nil {
 		t.Fatal("停用操作未完成时不应可修改")
 	}
 	if err := repo.ClearInstanceSession(ctx, "i1", "wrong", testNow); !errors.Is(err, ErrNotFound) {
@@ -120,14 +120,14 @@ func TestSetInstanceEnabledHandshakeSemantics(t *testing.T) {
 	if err != nil || cleared.SessionID != nil {
 		t.Fatalf("会话应已清空：%+v err=%v", cleared, err)
 	}
-	if err := repo.UpdateInstance(ctx, Instance{InstanceID: "i1", StrategyID: "s1", SpaceID: "space", FactorTaskID: "ftask_b", UpdatedAt: testNow}); err == nil || !strings.Contains(err.Error(), "不能修改") {
+	if err := repo.UpdateInstance(ctx, Instance{InstanceID: "i1", StrategyID: "s1", SpaceID: "space", FactorTasks: map[string]string{"spot": "ftask_b"}, UpdatedAt: testNow}); err == nil || !strings.Contains(err.Error(), "不能修改") {
 		t.Fatalf("因子任务在创建时写定，不应可改：%v", err)
 	}
-	if err := repo.UpdateInstance(ctx, Instance{InstanceID: "i1", StrategyID: "s1", SpaceID: "space", FactorTaskID: "ftask_a", UpdatedAt: testNow}); err != nil {
+	if err := repo.UpdateInstance(ctx, Instance{InstanceID: "i1", StrategyID: "s1", SpaceID: "space", FactorTasks: map[string]string{"spot": "ftask_a"}, UpdatedAt: testNow}); err != nil {
 		t.Fatal(err)
 	}
 	updated, err := repo.GetInstance(ctx, "i1")
-	if err != nil || updated.FactorTaskID != "ftask_a" || updated.LogicalAccountID != nil {
+	if err != nil || updated.FactorTasks["spot"] != "ftask_a" || updated.LogicalAccountID != nil {
 		t.Fatalf("修改后的实例不符：%+v err=%v", updated, err)
 	}
 	if err := repo.SetInstanceHealth(ctx, "i1", HealthDegraded, testNow); err != nil {
@@ -136,7 +136,7 @@ func TestSetInstanceEnabledHandshakeSemantics(t *testing.T) {
 	if degraded, err := repo.GetInstance(ctx, "i1"); err != nil || degraded.Health != HealthDegraded {
 		t.Fatalf("健康状态应为 degraded：%+v err=%v", degraded, err)
 	}
-	if err := repo.OpenSession(ctx, Session{SessionID: other, InstanceID: "i1", DSLHash: testHash, ResolvedJSON: `{"view_id":"view_factor_a","factor_task_id":"ftask_a"}`, CreatedAt: testNow}, "name: demo"); err != nil {
+	if err := repo.OpenSession(ctx, Session{SessionID: other, InstanceID: "i1", DSLHash: testHash, ResolvedJSON: `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"view_id":"view_factor_a","factor_task_id":"ftask_a"}}}`, CreatedAt: testNow}, "name: demo"); err != nil {
 		t.Fatal(err)
 	}
 	attachAndEnable(t, repo, "i1", other, nil)
@@ -150,7 +150,7 @@ func TestSessionLifecycle(t *testing.T) {
 	ctx := context.Background()
 	seedEnabledInstance(t, repo, "i1", "session-1", nil)
 	session, err := repo.GetSession(ctx, "session-1")
-	if err != nil || session.InstanceID != "i1" || session.DSLHash != testHash || session.ClosedAt != nil || session.ResolvedJSON != `{"view_id":"view_factor_a","factor_task_id":"ftask_a"}` {
+	if err != nil || session.InstanceID != "i1" || session.DSLHash != testHash || session.ClosedAt != nil || session.ResolvedJSON != `{"market":{"select":"spot","prefer":"spot"},"tasks":{"spot":{"view_id":"view_factor_a","factor_task_id":"ftask_a"}}}` {
 		t.Fatalf("会话不符：%+v err=%v", session, err)
 	}
 	if version, err := repo.GetDefinitionVersion(ctx, testHash); err != nil || version.DSLYaml != "name: demo" {
@@ -209,5 +209,82 @@ func TestDisableInstanceClosesSessionAtomically(t *testing.T) {
 	closed, _ := repo.GetSession(ctx, session)
 	if instance.Enabled || instance.SessionID != nil || closed.ClosedAt == nil {
 		t.Fatalf("应停用、清空并关闭会话：%+v %+v", instance, closed)
+	}
+}
+
+// 实例可以绑定现货、永续两个因子任务；一个任务只能属于一个实例；事件按任意一个任务路由到实例。
+func TestInstanceBindsTwoFactorTasksExclusively(t *testing.T) {
+	repo := openTestStore(t)
+	ctx := context.Background()
+	if err := repo.CreateDefinition(ctx, Definition{StrategyID: "s1", Name: "demo", DSLYaml: "name: demo", DSLHash: testHash, CreatedAt: testNow}); err != nil {
+		t.Fatal(err)
+	}
+	dual := Instance{InstanceID: "i1", StrategyID: "s1", SpaceID: "space", FactorTasks: map[string]string{"spot": "ftask_spot", "swap": "ftask_swap"}, CreatedAt: testNow}
+	if err := repo.CreateInstance(ctx, dual); err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.GetInstance(ctx, "i1")
+	if err != nil || len(got.FactorTasks) != 2 || got.FactorTasks["spot"] != "ftask_spot" || got.FactorTasks["swap"] != "ftask_swap" {
+		t.Fatalf("实例应记下两个任务：%+v err=%v", got, err)
+	}
+	clash := Instance{InstanceID: "i2", StrategyID: "s1", SpaceID: "space", FactorTasks: map[string]string{"swap": "ftask_swap"}, CreatedAt: testNow}
+	if err := repo.CreateInstance(ctx, clash); err == nil {
+		t.Fatal("一个因子任务只能被一个实例绑定")
+	}
+	if _, err := repo.GetInstance(ctx, "i2"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("创建失败的实例不应留下记录：%v", err)
+	}
+	for _, bad := range []map[string]string{nil, {"spot": "a", "swap": "b", "equity": "c"}, {"futures": "a"}, {"spot": " "}} {
+		if err := repo.CreateInstance(ctx, Instance{InstanceID: "i3", StrategyID: "s1", SpaceID: "space", FactorTasks: bad, CreatedAt: testNow}); err == nil {
+			t.Fatalf("非法的因子任务绑定应被拒绝：%v", bad)
+		}
+	}
+	// 修改实例：任务集合必须不变。
+	changed := dual
+	changed.UpdatedAt = testNow
+	changed.FactorTasks = map[string]string{"spot": "ftask_spot"}
+	if err := repo.UpdateInstance(ctx, changed); err == nil {
+		t.Fatal("实例的因子任务创建时写定，不能修改")
+	}
+	changed.FactorTasks = dual.FactorTasks
+	if err := repo.UpdateInstance(ctx, changed); err != nil {
+		t.Fatal(err)
+	}
+	session := "session-1"
+	if err := repo.OpenSession(ctx, Session{SessionID: session, InstanceID: "i1", DSLHash: testHash, ResolvedJSON: `{"market":{"select":"both","prefer":"spot"},"tasks":{"spot":{"view_id":"view_factor_spot","factor_task_id":"ftask_spot"},"swap":{"view_id":"view_factor_swap","factor_task_id":"ftask_swap"}}}`, CreatedAt: testNow}, "name: demo"); err != nil {
+		t.Fatal(err)
+	}
+	attachAndEnable(t, repo, "i1", session, nil)
+	for _, view := range []string{"view_factor_spot", "view_factor_swap"} {
+		instances, err := repo.EnabledInstancesByView(ctx, "space", view)
+		if err != nil || len(instances) != 1 || instances[0].InstanceID != "i1" || len(instances[0].FactorTasks) != 2 {
+			t.Fatalf("View %s 的事件应路由到实例：%+v err=%v", view, instances, err)
+		}
+	}
+}
+
+// 统一数据集上的任务登记为 multi：一个实例只绑这一个任务，会话固化的任务键也是 multi。
+func TestInstanceBindsUnifiedTask(t *testing.T) {
+	repo := openTestStore(t)
+	ctx := context.Background()
+	if err := repo.CreateDefinition(ctx, Definition{StrategyID: "s1", Name: "demo", DSLYaml: "name: demo", DSLHash: testHash, CreatedAt: testNow}); err != nil {
+		t.Fatal(err)
+	}
+	unified := Instance{InstanceID: "iu", StrategyID: "s1", SpaceID: "space", FactorTasks: map[string]string{"multi": "ftask_unified"}, CreatedAt: testNow}
+	if err := repo.CreateInstance(ctx, unified); err != nil {
+		t.Fatalf("统一数据集上的任务应能登记为 multi：%v", err)
+	}
+	got, err := repo.GetInstance(ctx, "iu")
+	if err != nil || got.FactorTasks["multi"] != "ftask_unified" {
+		t.Fatalf("实例应记下 multi 任务：%+v err=%v", got, err)
+	}
+	session := "session-unified"
+	if err := repo.OpenSession(ctx, Session{SessionID: session, InstanceID: "iu", DSLHash: testHash, ResolvedJSON: `{"market":{"select":"both","prefer":"swap"},"tasks":{"multi":{"view_id":"view_factor_unified","factor_task_id":"ftask_unified"}}}`, CreatedAt: testNow}, "name: demo"); err != nil {
+		t.Fatal(err)
+	}
+	attachAndEnable(t, repo, "iu", session, nil)
+	instances, err := repo.EnabledInstancesByView(ctx, "space", "view_factor_unified")
+	if err != nil || len(instances) != 1 || instances[0].InstanceID != "iu" {
+		t.Fatalf("事件应按统一数据集的 View 路由到实例：%+v err=%v", instances, err)
 	}
 }

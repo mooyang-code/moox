@@ -29,7 +29,7 @@ func TestPaperMatcherRestartAndCASE2E(t *testing.T) {
 	s := openUnifiedE2EStore(t)
 	ctx := context.Background()
 	require.NoError(t, s.Transaction(ctx, func(tx *store.Tx) error {
-		if err := tx.CreateTradingAccount(store.TradingAccountRecord{SpaceID: "space-1", TradingAccountID: "paper-1", Name: "paper", Exchange: "BINANCE", MarketType: "SPOT", ExecutionMode: "PAPER", Environment: "PAPER", SettlementAsset: "USDT", Status: "ENABLED"}); err != nil {
+		if err := tx.CreateTradingAccount(store.TradingAccountRecord{SpaceID: "space-1", TradingAccountID: "paper-1", Name: "paper", Exchange: "BINANCE", Markets: []string{"SPOT"}, ExecutionMode: "PAPER", Environment: "PAPER", SettlementAsset: "USDT", Status: "ENABLED"}); err != nil {
 			return err
 		}
 		if err := tx.UpsertInstrument(store.InstrumentRecord{Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "BTCUSDT", InstrumentID: "btc-usdt", BaseAsset: "BTC", QuoteAsset: "USDT", SettlementAsset: "USDT", ExchangeQuantityStep: "0.001", PriceTick: "0.1", Status: "TRADING"}); err != nil {
@@ -78,7 +78,7 @@ func TestPaperMatcherProductionAdapterFillAndRestartE2E(t *testing.T) {
 
 	reducer := &consumer.Reducer{Store: s, Now: func() time.Time { return testNow }}
 	matcher := &paperexec.Matcher{Store: s, Reducer: reducer, DecideContext: func(ctx context.Context, candidate store.OrderRecord) (paperexec.Decision, error) {
-		quote, err := adapter.GetQuote(ctx, shared.ExchangeSymbol(candidate.ExchangeSymbol))
+		quote, err := adapter.GetQuote(ctx, exchange.NewSymbolKey(candidate.MarketType, candidate.ExchangeSymbol))
 		if err != nil {
 			return paperexec.Decision{}, err
 		}
@@ -86,7 +86,7 @@ func TestPaperMatcherProductionAdapterFillAndRestartE2E(t *testing.T) {
 		if err != nil {
 			return paperexec.Decision{}, err
 		}
-		return paperexec.Decision{Fill: exchange.Fill{
+		return paperexec.Decision{Fill: exchange.Fill{Market: exchange.MarketTypeSpot,
 			ExchangeTradeID: "paper-match-trade", ExchangeOrderID: candidate.ExchangeOrderID,
 			ClientOrderID: candidate.ClientOrderID, ExchangeSymbol: candidate.ExchangeSymbol,
 			Side: exchange.SideBuy, Quantity: shared.MustDecimal("1"),
@@ -116,7 +116,7 @@ func (m deterministicMarketData) LoadInstruments(context.Context) ([]exchange.In
 	return []exchange.Instrument{m.instrument}, nil
 }
 
-func (deterministicMarketData) GetQuote(context.Context, shared.ExchangeSymbol) (execution.MarketQuote, error) {
+func (deterministicMarketData) GetQuote(context.Context, exchange.SymbolKey) (execution.MarketQuote, error) {
 	return execution.MarketQuote{
 		Bid: shared.MustDecimal("100"), Ask: shared.MustDecimal("101"), Last: shared.MustDecimal("100.5"),
 		SourceTime: testNow,
@@ -127,7 +127,7 @@ func TestEquitySamplerCoalescesAndPaperSimulationClosesE2E(t *testing.T) {
 	ctx := context.Background()
 	s := openUnifiedE2EStore(t)
 	service := &papersimulation.Service{Store: s}
-	created, err := service.Create(ctx, papersimulation.CreateCommand{SpaceID: "space-1", AccountName: "account", LogicalAccountName: "logical", Exchange: exchange.ExchangeBinance, MarketType: exchange.MarketTypeSpot, SettlementAsset: "USDT", InitialBalance: shared.MustDecimal("1000"), MakerFeeRate: shared.Zero(), TakerFeeRate: shared.MustDecimal("0.001"), SlippageBPS: shared.MustDecimal("5")})
+	created, err := service.Create(ctx, papersimulation.CreateCommand{SpaceID: "space-1", AccountName: "account", LogicalAccountName: "logical", Exchange: exchange.ExchangeBinance, Markets: []exchange.MarketType{exchange.MarketTypeSpot}, SettlementAsset: "USDT", InitialBalance: shared.MustDecimal("1000"), MakerFeeRate: shared.Zero(), TakerFeeRate: shared.MustDecimal("0.001"), SlippageBPS: shared.MustDecimal("5")})
 	require.NoError(t, err)
 	var mu sync.Mutex
 	var sampled []string
@@ -162,8 +162,8 @@ func openUnifiedE2EStore(t *testing.T) *store.Store {
 	return s
 }
 
-func (m deterministicMarketData) GetReferencePrice(ctx context.Context, symbol string) (exchange.ReferencePrice, error) {
-	quote, err := m.GetQuote(ctx, shared.ExchangeSymbol(symbol))
+func (m deterministicMarketData) GetReferencePrice(ctx context.Context, symbol exchange.SymbolKey) (exchange.ReferencePrice, error) {
+	quote, err := m.GetQuote(ctx, exchange.SymbolKey(symbol))
 	if err != nil {
 		return exchange.ReferencePrice{}, err
 	}

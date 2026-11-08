@@ -75,6 +75,9 @@ type Request struct {
 	// TimeColumn 是时间列名，默认 data_time；SeriesTag 统一指定 series_tag。
 	TimeColumn string
 	SeriesTag  string
+	// FileSeriesTags 按文件（与 Paths 展开后的路径一致）单独指定 series_tag，覆盖 SeriesTag：
+	// 统一数据集的现货、永续文件可以放在同一次导入里，各用自己的 tag。
+	FileSeriesTags map[string]string
 	// BatchRows 是每批最多行数（不会拆开同一个时间点）。
 	BatchRows    int
 	AllowMissing bool
@@ -250,8 +253,16 @@ func (r Request) batchRows() int {
 	return r.BatchRows
 }
 
-func (r Request) options(meta Meta) seriesformat.Options {
-	return seriesformat.Options{Fields: meta.Fields, TimeColumn: r.TimeColumn, SeriesTag: r.SeriesTag}
+// seriesTagFor 返回文件使用的统一 series_tag：文件单独指定的优先，否则取 SeriesTag；都没有就是空（按文件里的 series_tag 列）。
+func (r Request) seriesTagFor(file string) string {
+	if tag, ok := r.FileSeriesTags[file]; ok {
+		return tag
+	}
+	return r.SeriesTag
+}
+
+func (r Request) options(file string, meta Meta) seriesformat.Options {
+	return seriesformat.Options{Fields: meta.Fields, TimeColumn: r.TimeColumn, SeriesTag: r.seriesTagFor(file)}
 }
 
 // scan 流式读完一个文件做通用校验，返回连续性报告；启用尾部窗口时同时返回最后 TailRows 行的时间（升序，可能含同一时间的多行）。
@@ -261,7 +272,7 @@ func scan(ctx context.Context, d seriesformat.Decoder, file string, req Request,
 		return seriesformat.Report{}, nil, err
 	}
 	defer f.Close()
-	r, err := d.Open(f, req.options(meta))
+	r, err := d.Open(f, req.options(file, meta))
 	if err != nil {
 		return seriesformat.Report{}, nil, err
 	}
@@ -348,7 +359,7 @@ func writeFile(ctx context.Context, d seriesformat.Decoder, file, subject string
 		return err
 	}
 	defer f.Close()
-	r, err := d.Open(f, req.options(meta))
+	r, err := d.Open(f, req.options(file, meta))
 	if err != nil {
 		return err
 	}
@@ -459,7 +470,7 @@ func writeFile(ctx context.Context, d seriesformat.Decoder, file, subject string
 }
 
 // rebatcher 按时间边界切批：一批至少 max 行时才结束，并且不拆开同一个时间点的行
-// （整段替换按 [起点, 终点) 区间删除所有序列，拆开会让后一批删掉前一批刚写的行）。
+// （整段替换按 [起点, 终点) 区间删除这一批出现的序列，拆开会让后一批删掉前一批刚写的行）。
 type rebatcher struct {
 	r     seriesformat.BatchReader
 	max   int
@@ -588,6 +599,10 @@ func stableJobID(req Request, files []string) string {
 		info, err := os.Stat(f)
 		if err != nil {
 			continue
+		}
+		// 文件单独指定的 series_tag 进身份：同一批文件改了 tag 再导入，不能沿用旧 tag 的断点。
+		if tag, ok := req.FileSeriesTags[f]; ok {
+			fmt.Fprintf(h, "%s|", tag)
 		}
 		fmt.Fprintf(h, "%s|%d|%d;", f, info.Size(), info.ModTime().UnixNano())
 	}

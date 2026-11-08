@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
@@ -158,7 +159,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 		OnCompileError:  func(taskID, factorID string) { r.metrics.CompileErrors.WithLabelValues(taskID, factorID).Inc() },
 		MemoryAdmission: r.admit, AdmissionTimeout: cfg.Pipeline.PeriodBudgetMax, UDF: r.udf.Host(),
 	}
-	// 跳过账本与恢复始终开启：预热中被跳过的周期也靠它补算。gap.enabled 只控制回看窗口的空洞检查。
+	// 跳过账本与恢复始终开启：预热中、数据取不到而跳过的周期都靠它补算。
 	ledger, expired, err := gapledger.Open(cfg.Gap.LedgerDir, time.Now, cfg.Gap.GiveUpAfter)
 	if err != nil {
 		return nil, fmt.Errorf("open factor gap ledger: %w", err)
@@ -175,7 +176,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 		default:
 		}
 	}
-	pipelineConfig.GapSink = warmingKickSink{GapSink: ledger, kick: kickGap}
+	pipelineConfig.GapSink = warmingKickSink{GapSink: ledger, kick: kickGap, pending: new(atomic.Bool)}
 	watermarks, err := watermark.Open(cfg.Watermark.StateFile)
 	if err != nil {
 		return nil, fmt.Errorf("open factor watermarks: %w", err)
@@ -235,7 +236,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 			return err
 		}}
 	filler := &gapFiller{
-		ledger: r.gap, sets: r.catalog, source: r.storage, exec: executor, universe: r.storage, clock: clock,
+		ledger: r.gap, sets: r.catalog, source: r.storage, exec: executor, universe: r.storage, unified: r.data.UnifiedTask, clock: clock,
 		active: r.active, cfg: cfg.Gap, now: time.Now, onGaveUp: func(n int) { r.metrics.GapGaveUp.Add(float64(n)) },
 		kick: gapKick, warmup: r.pipeline.WarmupStatuses, filled: r.filled.covers,
 		// 补齐的最新一期记入运行摘要（并立刻补发心跳）：预热中跳过的那一期补算后，因子管理服务马上把它记为完成。

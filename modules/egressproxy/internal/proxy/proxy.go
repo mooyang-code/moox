@@ -66,13 +66,21 @@ func New(options Options) (*Proxy, error) {
 func (p *Proxy) Close() { p.client.CloseIdleConnections() }
 
 var requestHeaders = map[string]bool{"Accept": true, "Accept-Language": true, "Content-Type": true, "User-Agent": true}
+
+// apiKeyHeader 是币安行情数据类接口（如 /sapi/v1/spot/delist-schedule）要求的 API Key 请求头，值是只读 Key 的公开标识。
+// 只对 api.binance.com 放行：别的域名即使请求里带了也丢弃。本文件不记录任何请求头的值。
+const (
+	apiKeyHeader = "X-Mbx-Apikey"
+	apiKeyHost   = "api.binance.com"
+)
+
 var responseHeaders = map[string]bool{
 	"Content-Type": true, "Cache-Control": true, "Etag": true, "Last-Modified": true,
 	"Retry-After": true, "Expires": true, "Date": true,
 	"X-Mbx-Used-Weight": true, "X-Mbx-Used-Weight-1m": true,
 }
 
-func filterRequestHeaders(values map[string]string) (http.Header, error) {
+func filterRequestHeaders(host string, values map[string]string) (http.Header, error) {
 	if len(values) > 64 {
 		return nil, errors.New("too many request headers")
 	}
@@ -84,7 +92,7 @@ func filterRequestHeaders(values map[string]string) (http.Header, error) {
 			return nil, errors.New("request headers exceed limit")
 		}
 		canonical := textproto.CanonicalMIMEHeaderKey(key)
-		if !requestHeaders[canonical] {
+		if !requestHeaders[canonical] && !(canonical == apiKeyHeader && host == apiKeyHost) {
 			continue
 		}
 		if len(output.Values(canonical)) != 0 || strings.ContainsAny(value, "\x00\r\n") {
@@ -126,7 +134,7 @@ func (p *Proxy) Do(ctx context.Context, req *egresspb.DoReq) (*egresspb.DoRsp, e
 	if _, err := url.ParseQuery(req.Query); err != nil {
 		return doError(commonpb.ErrorCode_INVALID_PARAM, "invalid encoded query")
 	}
-	headers, err := filterRequestHeaders(req.Headers)
+	headers, err := filterRequestHeaders(host, req.Headers)
 	if err != nil {
 		return doError(commonpb.ErrorCode_INVALID_PARAM, err.Error())
 	}

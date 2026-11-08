@@ -1,6 +1,7 @@
 package observability
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -11,9 +12,9 @@ import (
 )
 
 const (
-	// Bound the subjects tracked per process so a malformed or runaway View
-	// cannot grow the tracker without limit.
-	maxViewSubjectObservations     = 20000
+	// maxViewSeriesObservations 是每个进程跟踪的序列（标的加 series_tag）上限，免得格式错误或失控的 View 让跟踪表无限增长。
+	// 按 2 万个标的估算：统一数据集每个标的有现货、永续两条序列，所以是 4 万条序列。
+	maxViewSeriesObservations      = 40000
 	maxViewDatasetMetricLabelBytes = 256
 	// ViewLaggingSubjectsReported caps the named lagging subjects per View;
 	// the count metric still covers all of them.
@@ -37,6 +38,9 @@ type ViewDatasetObservation struct {
 	DataTime  time.Time
 }
 
+// ErrViewSeriesLimit 表示跟踪的序列已达上限，新序列不再跟踪。
+var ErrViewSeriesLimit = errors.New("storage view series observation limit exceeded")
+
 type viewSubjectScope struct {
 	spaceID, viewID, datasetID, freq string
 }
@@ -48,18 +52,34 @@ type viewSubjectState struct {
 	// written since the restart.
 	trackedSince int64
 	latest       int64
-	subjects     map[string]int64
+	// series holds the latest output bar of each (subject, series_tag). A
+	// unified Dataset carries several series per subject (spot and swap); one
+	// of them falling behind must not be hidden by another that is current.
+	series map[viewSeries]int64
+	// subjects counts the series of each distinct subject.
+	subjects map[string]int
 }
 
-// viewSubjectTracker keeps each View subject's latest output bar in memory and
+type viewSeries struct {
+	subjectID, seriesTag string
+}
+
+// viewSubjectTracker keeps each View series' latest output bar in memory and
 // reports a per-View summary when metrics are gathered: the View's latest bar,
 // how many subjects it tracks, how many trail that bar, and the most lagging
-// ones by name. Updating it on the write path is a map write, not a metric
-// series.
+// ones by name. A subject trails when any of its series trails, and is named
+// with its oldest series' bar, so Monitor keeps judging by subject while a
+// market that falls behind still shows. Updating it on the write path is a map
+// write, not a metric series.
 type viewSubjectTracker struct {
 	mu       sync.Mutex
 	scopes   map[viewSubjectScope]*viewSubjectState
 	observed int
+	// limit 是跟踪的序列上限，默认 maxViewSeriesObservations；测试可以调小。
+	limit int
+	// limitReported 表示这次超限已经返回过 ErrViewSeriesLimit：之后新序列静默丢弃，
+	// 调用方不会每次写入、每条序列都打一条日志；retain 释放额度回到上限以下后重新计。
+	limitReported bool
 
 	latestDesc         *prometheus.Desc
 	trackedSinceDesc   *prometheus.Desc
@@ -72,6 +92,7 @@ func newViewSubjectTracker() *viewSubjectTracker {
 	labels := []string{"space_id", "view_id", "dataset_id", "freq"}
 	return &viewSubjectTracker{
 		scopes: make(map[viewSubjectScope]*viewSubjectState),
+		limit:  maxViewSeriesObservations,
 		latestDesc: prometheus.NewDesc("moox_storage_view_output_latest_data_time_seconds",
 			"Latest output bar committed to an active View by any subject.", labels, nil),
 		trackedSinceDesc: prometheus.NewDesc("moox_storage_view_output_tracked_since_data_time_seconds",
@@ -95,18 +116,24 @@ func (t *viewSubjectTracker) observe(observation ViewDatasetObservation) error {
 	defer t.mu.Unlock()
 	state := t.scopes[scope]
 	if state == nil {
-		state = &viewSubjectState{bar: bar, trackedSince: dataTime, subjects: make(map[string]int64)}
+		state = &viewSubjectState{bar: bar, trackedSince: dataTime, series: make(map[viewSeries]int64), subjects: make(map[string]int)}
 		t.scopes[scope] = state
 	}
-	previous, known := state.subjects[subjectID]
+	key := viewSeries{subjectID: subjectID, seriesTag: strings.TrimSpace(observation.SeriesTag)}
+	previous, known := state.series[key]
 	if !known {
-		if t.observed >= maxViewSubjectObservations {
-			return fmt.Errorf("storage view subject observation limit exceeded: %d", maxViewSubjectObservations)
+		if t.observed >= t.limit {
+			if t.limitReported {
+				return nil
+			}
+			t.limitReported = true
+			return fmt.Errorf("%w: 已跟踪 %d 条序列，之后的新序列不再跟踪（不再逐条报告）", ErrViewSeriesLimit, t.limit)
 		}
 		t.observed++
+		state.subjects[subjectID]++
 	}
 	if !known || dataTime > previous {
-		state.subjects[subjectID] = dataTime
+		state.series[key] = dataTime
 	}
 	if dataTime > state.latest {
 		state.latest = dataTime
@@ -123,8 +150,11 @@ func (t *viewSubjectTracker) retain(active map[ViewKey]struct{}) {
 		if _, keep := active[ViewKey{SpaceID: scope.spaceID, ViewID: scope.viewID}]; keep {
 			continue
 		}
-		t.observed -= len(state.subjects)
+		t.observed -= len(state.series)
 		delete(t.scopes, scope)
+	}
+	if t.observed < t.limit {
+		t.limitReported = false
 	}
 }
 
@@ -146,11 +176,19 @@ func (t *viewSubjectTracker) Collect(ch chan<- prometheus.Metric) {
 	for scope, state := range t.scopes {
 		labels := []string{scope.spaceID, scope.viewID, scope.datasetID, scope.freq}
 		cutoff := state.latest - int64((state.bar+viewSubjectLagTolerance)/time.Second)
-		var behind []lagging
-		for subjectID, dataTime := range state.subjects {
-			if dataTime < cutoff {
-				behind = append(behind, lagging{subjectID: subjectID, dataTime: dataTime})
+		// A subject trails when any of its series trails; it is named with the oldest bar among them.
+		oldest := make(map[string]int64)
+		for key, dataTime := range state.series {
+			if dataTime >= cutoff {
+				continue
 			}
+			if previous, ok := oldest[key.subjectID]; !ok || dataTime < previous {
+				oldest[key.subjectID] = dataTime
+			}
+		}
+		behind := make([]lagging, 0, len(oldest))
+		for subjectID, dataTime := range oldest {
+			behind = append(behind, lagging{subjectID: subjectID, dataTime: dataTime})
 		}
 		ch <- prometheus.MustNewConstMetric(t.latestDesc, prometheus.GaugeValue, float64(state.latest), labels...)
 		ch <- prometheus.MustNewConstMetric(t.trackedSinceDesc, prometheus.GaugeValue, float64(state.trackedSince), labels...)

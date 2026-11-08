@@ -151,21 +151,14 @@ func TestCheckKeepsExistingHashesWhenAnotherFactorIsMissing(t *testing.T) {
 	}
 }
 
-func TestCheckCollectsGapSubjectsByFactor(t *testing.T) {
+// degraded 成员的失败标的按因子去重排序后给出。
+func TestCheckCollectsFailedSubjectsByFactor(t *testing.T) {
 	binding := Binding{Factors: map[string]string{"ma": "h1|fixed"}}
-	gapState := state("ma", "degraded", "h1", "ETH-USDT", "SOL-USDT")
-	gapState.GapSubjects = []string{"SOL-USDT", "SOL-USDT"}
-	result := Check(binding, nil, factorEvent(gapState))
+	result := Check(binding, nil, factorEvent(state("ma", "degraded", "h1", "SOL-USDT", "ETH-USDT", "SOL-USDT")))
 	if result.Reason != "" {
 		t.Fatalf("不应跳过：%s", result.Reason)
 	}
 	if !reflect.DeepEqual(result.FailedByFactor, map[string][]string{"ma": {"ETH-USDT", "SOL-USDT"}}) {
 		t.Fatalf("失败标的不符：%v", result.FailedByFactor)
-	}
-	if !reflect.DeepEqual(result.GapByFactor, map[string][]string{"ma": {"SOL-USDT"}}) {
-		t.Fatalf("空洞标的应去重并只含 gap_subjects：%v", result.GapByFactor)
-	}
-	if got := Check(binding, nil, factorEvent(state("ma", "degraded", "h1", "ETH-USDT"))); len(got.GapByFactor) != 0 {
-		t.Fatalf("没有 gap_subjects 时 GapByFactor 应为空：%v", got.GapByFactor)
 	}
 }

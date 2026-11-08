@@ -28,19 +28,21 @@ import (
 const defaultSetupFile = "./moox.toml"
 
 type setupDeps struct {
-	bootstrapAdmin        setupAdminBootstrap
-	bootstrapControl      setupControlBootstrap
-	deployHost            setupHostDeploy
-	deployUnit            setupUnitDeploy
-	buildRelease          setupReleaseBuild
-	load                  func(string) (*setupconfig.Snapshot, error)
-	loadInitBundle        func(string) (setupInitBundle, error)
-	validate              func(context.Context, *setupconfig.Snapshot) (setupvalidate.Result, error)
-	trustHost             func(context.Context, *setupconfig.Snapshot, string, string) error
-	apply                 func(context.Context, *setupconfig.Snapshot) (setupclient.ApplyResult, error)
-	status                func(context.Context, *setupconfig.Snapshot) (setupclient.StatusResult, error)
-	applySpaces           func(context.Context, *setupconfig.Snapshot, []setupclient.Space) (setupclient.ApplyResult, error)
-	statusSpaces          func(context.Context, *setupconfig.Snapshot, []setupclient.Space) (setupclient.StatusResult, error)
+	bootstrapAdmin   setupAdminBootstrap
+	bootstrapControl setupControlBootstrap
+	deployHost       setupHostDeploy
+	deployUnit       setupUnitDeploy
+	buildRelease     setupReleaseBuild
+	load             func(string) (*setupconfig.Snapshot, error)
+	loadInitBundle   func(string) (setupInitBundle, error)
+	validate         func(context.Context, *setupconfig.Snapshot) (setupvalidate.Result, error)
+	trustHost        func(context.Context, *setupconfig.Snapshot, string, string) error
+	apply            func(context.Context, *setupconfig.Snapshot) (setupclient.ApplyResult, error)
+	status           func(context.Context, *setupconfig.Snapshot) (setupclient.StatusResult, error)
+	applySpaces      func(context.Context, *setupconfig.Snapshot, []setupclient.Space) (setupclient.ApplyResult, error)
+	statusSpaces     func(context.Context, *setupconfig.Snapshot, []setupclient.Space) (setupclient.StatusResult, error)
+	// inspectExchangeKey 经网关调 Trade 检测一把交易所密钥，返回原始响应；测试里替换。
+	inspectExchangeKey    func(context.Context, *setupconfig.Snapshot, setupconfig.ExchangeKey) ([]byte, error)
 	registerCloudAccounts func(context.Context, *setupconfig.Snapshot) (*setupCloudAccountSummary, error)
 	provisionCLS          func(context.Context, *setupconfig.Snapshot) (*setupCLSSummary, error)
 	ensureSCFPlan         func(context.Context, *setupconfig.Snapshot) (*setupSCFPlanSummary, error)
@@ -659,7 +661,7 @@ func newSetupTrustBrowserCommand(deps setupDeps) *cobra.Command {
 
 func newSetupApplyCommand(deps setupDeps) *cobra.Command {
 	var file string
-	cmd := &cobra.Command{Use: "apply", Short: "写入初始用户与云凭据", RunE: func(cmd *cobra.Command, _ []string) error {
+	cmd := &cobra.Command{Use: "apply", Short: "写入初始用户、云凭据与交易所密钥（Trade 已部署时再检测交易所密钥）", RunE: func(cmd *cobra.Command, _ []string) error {
 		snapshot, err := deps.load(file)
 		if err != nil {
 			return err
@@ -682,10 +684,12 @@ func newSetupApplyCommand(deps setupDeps) *cobra.Command {
 		if err := snapshot.VerifyUnchanged(); err != nil {
 			return fmt.Errorf("config_changed")
 		}
+		// 交易所密钥写入后再检测：检测结果只展示，不影响退出码（密钥已经写入，检测只说明它能不能建执行账户）。
 		return writeSetupJSON(cmd, struct {
 			setupclient.ApplyResult
-			LoginAPI string `json:"login_api"`
-		}{ApplyResult: applied, LoginAPI: login.LoginAPI})
+			LoginAPI         string             `json:"login_api"`
+			ExchangeKeyCheck []exchangeKeyCheck `json:"exchange_key_checks,omitempty"`
+		}{ApplyResult: applied, LoginAPI: login.LoginAPI, ExchangeKeyCheck: inspectApplied(cmd.Context(), deps, snapshot, applied.ExchangeKeys)})
 	}}
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
 	return cmd
@@ -791,6 +795,9 @@ func completeSetupDeps(deps setupDeps) setupDeps {
 	if deps.statusSpaces == nil {
 		deps.statusSpaces = defaults.statusSpaces
 	}
+	if deps.inspectExchangeKey == nil {
+		deps.inspectExchangeKey = defaults.inspectExchangeKey
+	}
 	if deps.registerCloudAccounts == nil {
 		deps.registerCloudAccounts = defaults.registerCloudAccounts
 	}
@@ -875,6 +882,7 @@ func defaultSetupDeps() setupDeps {
 		status:                defaultSetupStatus,
 		applySpaces:           defaultSetupApplyWithSpaces,
 		statusSpaces:          defaultSetupStatusWithSpaces,
+		inspectExchangeKey:    defaultInspectExchangeKey,
 		registerCloudAccounts: defaultSetupRegisterCloudAccounts,
 		provisionCLS:          defaultSetupProvisionCLS,
 		ensureSCFPlan:         defaultSetupEnsureSCFPlan,
@@ -1226,6 +1234,11 @@ func clearSetupSecrets(snapshot *setupconfig.Snapshot) {
 	snapshot.Manifest.TencentCloud.SecretID = ""
 	snapshot.Manifest.TencentCloud.SecretKey = ""
 	snapshot.Manifest.Notification.WebhookURL = ""
+	for i := range snapshot.Manifest.ExchangeKeys {
+		snapshot.Manifest.ExchangeKeys[i].APIKey = ""
+		snapshot.Manifest.ExchangeKeys[i].SecretKey = ""
+		snapshot.Manifest.ExchangeKeys[i].Passphrase = ""
+	}
 	for id, definition := range snapshot.Manifest.HostCatalog {
 		definition.SSH.Password = ""
 		snapshot.Manifest.HostCatalog[id] = definition

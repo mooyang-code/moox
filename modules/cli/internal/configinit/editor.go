@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -60,6 +61,20 @@ type Overview struct {
 	Admin      string       `json:"admin"`
 	Channel    string       `json:"channel"`
 	HasWebhook bool         `json:"has_webhook"`
+	// ExchangeKeys 是 [[exchange_keys]] 的概览，顺序与配置里一致；明文只在 reveal 时按序号给出。
+	ExchangeKeys []ExchangeKeyView `json:"exchange_keys"`
+}
+
+// ExchangeKeyView 是一把交易所密钥的概览：只给出打码的 API Key，Secret Key 与 passphrase 只说有没有。
+type ExchangeKeyView struct {
+	Index         int    `json:"index"`
+	Name          string `json:"name"`
+	Exchange      string `json:"exchange"`
+	Environment   string `json:"environment"`
+	ReadOnly      bool   `json:"readonly"`
+	SecretID      string `json:"secret_id"`
+	APIKey        string `json:"api_key"`
+	HasPassphrase bool   `json:"has_passphrase"`
 }
 
 // ServerView 是一台主机的概览。
@@ -241,6 +256,26 @@ func (e *editorSession) reveal(w http.ResponseWriter, r *http.Request) {
 		value = m.TencentCloud.SecretKey
 	case field == "notification.webhook_url":
 		value = m.Notification.WebhookURL
+	case strings.HasPrefix(field, "exchange_keys."):
+		// 按序号取：exchange_keys.<序号>.api_key | secret_key | passphrase。
+		parts := strings.Split(field, ".")
+		index, err := strconv.Atoi(parts[1])
+		if len(parts) != 3 || err != nil || index < 0 || index >= len(m.ExchangeKeys) {
+			reply(w, http.StatusNotFound, response{Message: "没有这把交易所密钥"})
+			return
+		}
+		key := m.ExchangeKeys[index]
+		switch parts[2] {
+		case "api_key":
+			value = key.APIKey
+		case "secret_key":
+			value = key.SecretKey
+		case "passphrase":
+			value = key.Passphrase
+		default:
+			reply(w, http.StatusNotFound, response{Message: "没有这一项"})
+			return
+		}
 	case strings.HasPrefix(field, "hosts.") && strings.HasSuffix(field, ".password"):
 		host, ok := m.HostCatalog[strings.TrimSuffix(strings.TrimPrefix(field, "hosts."), ".password")]
 		if !ok {
@@ -411,6 +446,13 @@ func describe(m setupconfig.Manifest, encrypted bool, where string) Overview {
 		Region: regionName(m.TencentCloud.Region), Admin: m.Admin.Username,
 		Channel: map[string]string{"wecom": "企业微信群机器人", "feishu": "飞书群机器人"}[m.Notification.ChannelType], HasWebhook: m.Notification.WebhookURL != "",
 	}
+	view.ExchangeKeys = make([]ExchangeKeyView, 0, len(m.ExchangeKeys))
+	for i, key := range m.ExchangeKeys {
+		view.ExchangeKeys = append(view.ExchangeKeys, ExchangeKeyView{
+			Index: i, Name: key.Name, Exchange: key.Exchange, Environment: key.Environment, ReadOnly: key.ReadOnly,
+			SecretID: key.ID(), APIKey: maskID(key.APIKey), HasPassphrase: key.Passphrase != "",
+		})
+	}
 	ids := make([]string, 0, len(m.HostCatalog))
 	for id := range m.HostCatalog {
 		ids = append(ids, id)
@@ -426,7 +468,7 @@ func describe(m setupconfig.Manifest, encrypted bool, where string) Overview {
 		for _, use := range []struct {
 			label      string
 			components []string
-		}{{"管理台", []string{"admin"}}, {"数据存储", []string{"storage-primary"}}, {"海外接入与交易", []string{"trade", "egress-proxy", "collector-stream"}}, {"因子计算", []string{"factor-engine"}}} {
+		}{{"管理台", []string{"admin"}}, {"数据存储", []string{"storage-primary"}}, {"海外接入与交易", []string{"trade", "egress-proxy", "collector-stream", "callback-dispatcher"}}, {"因子计算", []string{"factor-engine"}}} {
 			for _, component := range use.components {
 				if slices.Contains(placed, component) {
 					server.Uses = append(server.Uses, use.label)

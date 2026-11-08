@@ -38,7 +38,7 @@ func (s *proxyStub) ReleaseLogicalAccountOwner(_ context.Context, _ *tradepb.Rel
 }
 
 func account(owner, session string) *tradepb.LogicalAccount {
-	return &tradepb.LogicalAccount{LogicalAccountId: "logical-1", MarketType: tradepb.MarketType_MARKET_TYPE_SWAP, SpaceId: "space-1", OwnerInstanceId: owner, OwnerSessionId: session, AuthFence: "fence-7"}
+	return &tradepb.LogicalAccount{LogicalAccountId: "logical-1", Markets: []tradepb.MarketType{tradepb.MarketType_MARKET_TYPE_SWAP}, SpaceId: "space-1", OwnerInstanceId: owner, OwnerSessionId: session, AuthFence: "fence-7"}
 }
 
 func TestClaimSessionCarriesAuthFenceAndChecksOwner(t *testing.T) {
@@ -47,14 +47,14 @@ func TestClaimSessionCarriesAuthFenceAndChecksOwner(t *testing.T) {
 		claimResponse: &tradepb.ClaimLogicalAccountOwnerRsp{RetInfo: &tradepb.RetInfo{}, LogicalAccount: account("instance-1", "session-1")},
 	}
 	owner := &Client{proxy: stub, timeout: time.Second}
-	if err := owner.ClaimSession(context.Background(), "space-1", "logical-1", "instance-1", "session-1", "swap"); err != nil {
+	if err := owner.ClaimSession(context.Background(), "space-1", "logical-1", "instance-1", "session-1", []string{"swap"}); err != nil {
 		t.Fatal(err)
 	}
 	if stub.claimRequest.GetExpectedAuthFence() != "fence-7" || stub.claimRequest.GetInstanceId() != "instance-1" || stub.claimRequest.GetSessionId() != "session-1" {
 		t.Fatalf("认领请求不符：%+v", stub.claimRequest)
 	}
 	stub.claimResponse = &tradepb.ClaimLogicalAccountOwnerRsp{RetInfo: &tradepb.RetInfo{}, LogicalAccount: account("instance-other", "session-1")}
-	if err := owner.ClaimSession(context.Background(), "space-1", "logical-1", "instance-1", "session-1", "swap"); err == nil || !strings.Contains(err.Error(), "所有者") {
+	if err := owner.ClaimSession(context.Background(), "space-1", "logical-1", "instance-1", "session-1", []string{"swap"}); err == nil || !strings.Contains(err.Error(), "所有者") {
 		t.Fatalf("所有者不符应报错：%v", err)
 	}
 }
@@ -114,7 +114,7 @@ func TestClientEnforcesTimeoutAndIdentity(t *testing.T) {
 	if time.Since(started) > time.Second {
 		t.Fatal("超时耗时过长")
 	}
-	if err := owner.ClaimSession(context.Background(), "", "logical-1", "instance-1", "session-1", "swap"); err == nil || !strings.Contains(err.Error(), "space_id") {
+	if err := owner.ClaimSession(context.Background(), "", "logical-1", "instance-1", "session-1", []string{"swap"}); err == nil || !strings.Contains(err.Error(), "space_id") {
 		t.Fatalf("缺少 space_id 应在传输前报错：%v", err)
 	}
 	if err := owner.ReleaseSession(context.Background(), "space-1", "logical-1", "instance-1", ""); err == nil || !strings.Contains(err.Error(), "session_id") {
@@ -135,15 +135,29 @@ func TestConfigValidate(t *testing.T) {
 	}
 }
 
-func TestCheckMarketRejectsMismatch(t *testing.T) {
-	if err := checkMarket("swap", tradepb.MarketType_MARKET_TYPE_SWAP); err != nil {
+func TestCheckMarketsRequiresEveryMarketInLogicalAccountMarkets(t *testing.T) {
+	swap, spot, stock := tradepb.MarketType_MARKET_TYPE_SWAP, tradepb.MarketType_MARKET_TYPE_SPOT, tradepb.MarketType_MARKET_TYPE_STOCK
+	if err := checkMarkets([]string{"swap"}, []tradepb.MarketType{swap}); err != nil {
 		t.Fatalf("相同市场不应报错：%v", err)
 	}
-	err := checkMarket("swap", tradepb.MarketType_MARKET_TYPE_SPOT)
-	if !errors.Is(err, ErrMarketMismatch) || !IsPermanentClaimError(err) {
-		t.Fatalf("市场不一致应是永久拒绝：%v", err)
+	// 组合同时可交易现货和合约时，单市场策略和混合市场策略都能绑。
+	for _, markets := range [][]string{{"spot"}, {"swap"}, {"spot", "swap"}} {
+		if err := checkMarkets(markets, []tradepb.MarketType{spot, swap}); err != nil {
+			t.Fatalf("市场 %v 在组合可交易的市场里，不应报错：%v", markets, err)
+		}
 	}
-	if err := checkMarket("", tradepb.MarketType_MARKET_TYPE_SWAP); !errors.Is(err, ErrMarketMismatch) {
+	if err := checkMarkets([]string{"equity"}, []tradepb.MarketType{stock}); err != nil {
+		t.Fatalf("股票策略绑股票组合不应报错：%v", err)
+	}
+	// 混合市场策略只要有一个市场不在组合里就拒绝。
+	err := checkMarkets([]string{"spot", "swap"}, []tradepb.MarketType{spot})
+	if !errors.Is(err, ErrMarketMismatch) || !IsPermanentClaimError(err) {
+		t.Fatalf("有市场不在组合可交易的市场里应是永久拒绝：%v", err)
+	}
+	if err := checkMarkets([]string{"swap"}, nil); !errors.Is(err, ErrMarketMismatch) || !strings.Contains(err.Error(), "还没有启用的成员") {
+		t.Fatalf("组合没有启用的成员应有专门提示：%v", err)
+	}
+	if err := checkMarkets([]string{""}, []tradepb.MarketType{swap}); !errors.Is(err, ErrMarketMismatch) {
 		t.Fatalf("未知市场应被拒绝：%v", err)
 	}
 }

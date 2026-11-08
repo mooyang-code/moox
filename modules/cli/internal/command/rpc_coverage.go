@@ -1,11 +1,12 @@
 package command
 
 const (
-	tradeWriteReason  = "交易模块尚未完工：不提供写操作命令，Agent 不代用户创建账户、下单、撤单或清仓"
-	secretWriteReason = "密钥的新建、修改、启停与删除由用户在管理台“设置 › 密钥”操作（明文不经过 Agent；gateway call 也拒绝这些方法）"
-	sshReason         = "管理台的交互式 SSH 终端与文件管理；命令行用 host exec、host get、host put 代替"
-	authReason        = "管理台的登录与会话；moox-cli 用自己的网关身份，不需要登录"
-	spaceDupReason    = "与 SpaceMgr 同名；管理台走 SpaceMgr（space 命令），Storage 里的空间元数据由 metadata apply 与 setup 维护"
+	tradeWriteReason     = "交易的写操作由用户在管理台自己做，不提供命令：Agent 不代用户创建账户、下单、撤单或清仓"
+	walletTransferReason = "人工结束一条钱包划转记录要先到交易所核对划转记录再判断到账与否，Agent 不代用户判断；用户确认后用 gateway call 调用"
+	secretWriteReason    = "密钥的新建、修改、启停与删除由用户在管理台“设置 › 密钥”操作（明文不经过 Agent；gateway call 也拒绝这些方法）"
+	sshReason            = "管理台的交互式 SSH 终端与文件管理；命令行用 host exec、host get、host put 代替"
+	authReason           = "管理台的登录与会话；moox-cli 用自己的网关身份，不需要登录"
+	spaceDupReason       = "与 SpaceMgr 同名；管理台走 SpaceMgr（space 命令），Storage 里的空间元数据由 metadata apply 与 setup 维护"
 )
 
 // handWrittenCoverage 记录不是规格表生成、而是手写实现的命令各自覆盖了管理台的哪些接口（接口 → 命令路径）。
@@ -94,6 +95,8 @@ var consoleOnly = map[string]string{
 	"trpc.moox.ops.Ssh/SftpMkdir":         sshReason,
 	"trpc.moox.ops.Ssh/SftpDelete":        sshReason,
 
+	"trpc.moox.callbackdispatcher.CallbackDispatcherService/CreateEventRule": "返回验证密钥明文，请在管理台「系统设置 › 事件中心」新建，密钥只在那里显示一次，不经过 Agent",
+
 	"trpc.moox.ops.SecretMgr/CreateSecret":       secretWriteReason,
 	"trpc.moox.ops.SecretMgr/UpdateSecret":       secretWriteReason,
 	"trpc.moox.ops.SecretMgr/DeleteSecret":       secretWriteReason,
@@ -109,21 +112,27 @@ var consoleOnly = map[string]string{
 	"trpc.moox.storage.Metadata/DeleteSpace": spaceDupReason,
 	"trpc.moox.storage.Metadata/ListSpaces":  spaceDupReason,
 
-	"trpc.moox.trade.TradeConsoleService/CreateTradingAccount":       tradeWriteReason,
-	"trpc.moox.trade.TradeConsoleService/UpdateTradingAccount":       tradeWriteReason,
-	"trpc.moox.trade.TradeConsoleService/SetLeverage":                tradeWriteReason,
-	"trpc.moox.trade.TradeConsoleService/SyncTradingAccount":         tradeWriteReason,
-	"trpc.moox.trade.TradeConsoleService/CreateLogicalAccount":       tradeWriteReason,
-	"trpc.moox.trade.TradeConsoleService/UpdateLogicalAccount":       tradeWriteReason,
-	"trpc.moox.trade.TradeConsoleService/AddLogicalAccountMember":    tradeWriteReason,
-	"trpc.moox.trade.TradeConsoleService/RemoveLogicalAccountMember": tradeWriteReason,
-	"trpc.moox.trade.TradeConsoleService/PauseLogicalAccount":        tradeWriteReason,
-	"trpc.moox.trade.TradeConsoleService/ResumeLogicalAccount":       tradeWriteReason,
-	"trpc.moox.trade.TradeConsoleService/FlattenLogicalAccount":      tradeWriteReason,
-	"trpc.moox.trade.TradeConsoleService/FlattenTradingAccount":      tradeWriteReason,
-	"trpc.moox.trade.TradeConsoleService/PlaceManualOrder":           tradeWriteReason,
-	"trpc.moox.trade.TradeConsoleService/SubmitOrder":                tradeWriteReason,
-	"trpc.moox.trade.TradeConsoleService/CancelOrder":                tradeWriteReason,
-	"trpc.moox.trade.TradeConsoleService/CreatePaperSimulation":      tradeWriteReason,
-	"trpc.moox.trade.TradeConsoleService/ClosePaperSimulation":       tradeWriteReason,
+	"trpc.moox.trade.TradeConsoleService/CreateTradingAccount":              tradeWriteReason,
+	"trpc.moox.trade.TradeConsoleService/UpdateTradingAccount":              tradeWriteReason,
+	"trpc.moox.trade.TradeConsoleService/SetLeverage":                       tradeWriteReason,
+	"trpc.moox.trade.TradeConsoleService/SyncTradingAccount":                tradeWriteReason,
+	"trpc.moox.trade.TradeConsoleService/ReinspectTradingAccount":           tradeWriteReason,
+	"trpc.moox.trade.TradeConsoleService/ResolveWalletTransfer":             walletTransferReason,
+	"trpc.moox.trade.TradeConsoleService/CreateLogicalAccount":              tradeWriteReason,
+	"trpc.moox.trade.TradeConsoleService/UpdateLogicalAccount":              tradeWriteReason,
+	"trpc.moox.trade.TradeConsoleService/UpdateLogicalAccountOrderSettings": tradeWriteReason,
+	"trpc.moox.trade.TradeConsoleService/UpdateLogicalAccountFundSettings":  tradeWriteReason,
+	"trpc.moox.trade.TradeConsoleService/AddLogicalAccountMember":           tradeWriteReason,
+	"trpc.moox.trade.TradeConsoleService/RemoveLogicalAccountMember":        tradeWriteReason,
+	"trpc.moox.trade.TradeConsoleService/PauseLogicalAccount":               tradeWriteReason,
+	"trpc.moox.trade.TradeConsoleService/ResumeLogicalAccount":              tradeWriteReason,
+	"trpc.moox.trade.TradeConsoleService/FlattenLogicalAccount":             tradeWriteReason,
+	"trpc.moox.trade.TradeConsoleService/FlattenTradingAccount":             tradeWriteReason,
+	"trpc.moox.trade.TradeConsoleService/PlaceManualOrder":                  tradeWriteReason,
+	"trpc.moox.trade.TradeConsoleService/SubmitOrder":                       tradeWriteReason,
+	"trpc.moox.trade.TradeConsoleService/CancelOrder":                       tradeWriteReason,
+	"trpc.moox.trade.TradeConsoleService/CreatePaperSimulation":             tradeWriteReason,
+	"trpc.moox.trade.TradeConsoleService/ClosePaperSimulation":              tradeWriteReason,
+	"trpc.moox.trade.TradeConsoleService/ReduceLogicalAccount":              tradeWriteReason,
+	"trpc.moox.trade.TradeConsoleService/UnblockInstrument":                 "解除下架禁止只由事件中心的取消执行或管理台操作：解除后策略会恢复买入，Agent 不代用户解除",
 }

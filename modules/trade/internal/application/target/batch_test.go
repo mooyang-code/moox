@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/ordersettings"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/stretchr/testify/require"
@@ -114,10 +115,16 @@ func TestBatchIntervalForPaperMembers(t *testing.T) {
 	executor := &Executor{MinBatchInterval: time.Second, PaperMinBatchInterval: 300 * time.Millisecond}
 	paper := memberState{account: store.TradingAccountRecord{ExecutionMode: string(exchange.ExecutionModePaper)}}
 	live := memberState{account: store.TradingAccountRecord{ExecutionMode: string(exchange.ExecutionModeLive)}}
-	require.Equal(t, 300*time.Millisecond, executor.batchInterval([]memberState{paper, paper}))
-	require.Equal(t, time.Second, executor.batchInterval([]memberState{paper, live}))
+	defaults := ordersettings.Default()
+	require.Equal(t, 300*time.Millisecond, executor.batchInterval([]memberState{paper, paper}, defaults))
+	require.Equal(t, time.Second, executor.batchInterval([]memberState{paper, live}, defaults))
 	executor.PaperMinBatchInterval = 0
-	require.Equal(t, time.Second, executor.batchInterval([]memberState{paper}))
+	require.Equal(t, time.Second, executor.batchInterval([]memberState{paper}, defaults))
+	// 下单设置里写了批间隔就用设置的，实盘、模拟盘都一样。
+	configured, err := ordersettings.Parse(`{"batch_interval_seconds":5}`)
+	require.NoError(t, err)
+	require.Equal(t, 5*time.Second, executor.batchInterval([]memberState{paper}, configured))
+	require.Equal(t, 5*time.Second, executor.batchInterval([]memberState{live}, configured))
 }
 
 // 权重用到 90% 或接口暂停时不发新批，也不算阻塞。

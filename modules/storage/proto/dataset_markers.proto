@@ -12,6 +12,12 @@ message CommittedPosition {
   uint64 sequence = 3;
 }
 
+// SeriesRef 是一条时间序列的身份：标的加 series_tag，与行键一致。
+message SeriesRef {
+  string subject_id = 1;
+  string series_tag = 2;
+}
+
 // DatasetPeriodCompletedMarker 是 producer 来源的周期完成报告（Storage RPC 形态），在结果行都已提交之后追加。
 // space_id 由外层请求携带；detail 是写入方自定义的明细，Storage 原样保存并透传。
 message DatasetPeriodCompletedMarker {
@@ -25,6 +31,10 @@ message DatasetPeriodCompletedMarker {
   google.protobuf.Timestamp completed_at = 8;
   string detail_type = 9;
   bytes detail = 10;
+  // universe_series、failed_series 是按序列的全集与失败名单：写入方的数据集含多个 series_tag 时才填，
+  // Storage 原样保存并带进周期完成事件。
+  repeated SeriesRef universe_series = 11;
+  repeated SeriesRef failed_series = 12;
 }
 
 // DatasetSyncPointMarker orders an import/catchup request after its row writes.

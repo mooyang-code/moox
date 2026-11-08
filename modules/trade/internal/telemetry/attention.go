@@ -23,13 +23,42 @@ const (
 	AttentionTurnoverHigh = "turnover_high"
 	// AttentionUnknownResults 是 1 分钟内下单结果未知偏多。
 	AttentionUnknownResults = "unknown_results"
+	// AttentionInspectionBlocked 是交易账户的密钥检测发现阻断项（提现权限、疑似统一账户旧密钥等）。
+	AttentionInspectionBlocked = "inspection_blocked"
+	// AttentionInspectionFailing 是密钥复查连续多次没有检测成功。
+	AttentionInspectionFailing = "inspection_failing"
+	// AttentionTransferShortfall 是普通账户合约钱包可划转的资金不够，现货买入被按比例缩小。
+	AttentionTransferShortfall = "transfer_shortfall"
+	// AttentionTransferFailing 是钱包划转、归集出了问题：连续失败、查询持续失败、未结划转迟迟没确认。
+	AttentionTransferFailing = "transfer_failing"
+	// AttentionMarginRatioLow 是实盘账户保证金率跌到阈值以下，风控已暂停组合并减仓，等用户确认安全后手动恢复。
+	AttentionMarginRatioLow = "margin_ratio_low"
+	// AttentionValuationDegraded 是受管资产取不到价（已下架、停止交易、交易所确认标的不存在或暂时取价失败），
+	// 权益按最后已知价或 0 计，没有阻断采样。
+	AttentionValuationDegraded = "valuation_degraded"
+	// AttentionFlattenOrdersUnsettled 是清仓、减仓、下架清仓结束时有子单没收拾掉（收尾满 30 分钟仍解析不出结果、
+	// 交易所确认标的不存在），动作照常结束，这些子单要人工到交易所核对。
+	AttentionFlattenOrdersUnsettled = "flatten_orders_unsettled"
+	// AttentionReleaseOrdersUnverified 是释放策略会话时凭证失效、交易账户已停用或异常、标的已不存在，目标单没能撤下或确认，
+	// 只按本地记录释放，这些单要人工到交易所核对。
+	AttentionReleaseOrdersUnverified = "release_orders_unverified"
+	// AttentionReleaseOrdersStuck 是释放策略会话连续失败超过 10 分钟（例如交易账户启用但会话一直建不起来）：目标单没撤下，
+	// 会话还没释放，策略仍在重试。
+	AttentionReleaseOrdersStuck = "release_orders_stuck"
+	// AttentionOrdersInstrumentGone 是账户同步发现订单的标的已下架、交易所查不到（币安 -1121、OKX 51001）：未结束的单
+	// 已按过期结束并释放资金预留；订单（含已结束的单）的累计成交领先已入账成交明细的，缺口已按已入账值收掉（成交明细缺失）。
+	// 这些单实际成交了多少要人工到交易所核对，持仓、余额以同步结果为准。
+	AttentionOrdersInstrumentGone = "orders_instrument_gone"
 )
 
 // attentionKinds 里每种情况都要上报，恢复后 Monitor 才能看到值回到 0。
 var attentionKinds = []string{
 	AttentionTargetRejected, AttentionAutoPaused, AttentionTargetBlocked,
 	AttentionAccountNotReady, AttentionTargetExpired, AttentionTargetReversal,
-	AttentionRateLimited, AttentionTurnoverHigh, AttentionUnknownResults,
+	AttentionRateLimited, AttentionTurnoverHigh, AttentionUnknownResults, AttentionMarginRatioLow,
+	AttentionInspectionBlocked, AttentionInspectionFailing, AttentionTransferShortfall, AttentionTransferFailing,
+	AttentionValuationDegraded, AttentionFlattenOrdersUnsettled, AttentionReleaseOrdersUnverified, AttentionReleaseOrdersStuck,
+	AttentionOrdersInstrumentGone,
 }
 
 // maxAttentionDetail 是标签的字节上限：Monitor 超过 512 字节会拒收整份上报。
@@ -78,6 +107,13 @@ func Note(kind, detail string, at time.Time) {
 		notes[kind] = map[string]time.Time{}
 	}
 	notes[kind][detail] = at
+}
+
+// Forget 删掉一条关注项：情况已经解除，不必等保留窗口过去。
+func Forget(kind, detail string) {
+	notesMu.Lock()
+	defer notesMu.Unlock()
+	delete(notes[kind], detail)
 }
 
 // NoteTargetRejection 记录一次被拒绝的目标。

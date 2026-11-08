@@ -345,10 +345,10 @@ rules:
 portfolio:
   min_universe: 3
 `, "m")
-	previous := State{Rules: map[string]RuleState{"r": {Held: []string{"A"}}}, Targets: map[string]string{"A": "1"}}
+	previous := State{Rules: map[string]RuleState{"r": {Held: []string{"A"}}}, Targets: map[string]string{"A|swap": "1"}}
 	decision := evaluate(t, program, frameOf(program, map[string]Row{"A": values("m", 1), "B": values("m", 2)}), previous)
 	assertSkipped(t, decision, SkipUniverseTooSmall)
-	if decision.State.Rules["r"].Held[0] != "A" || decision.State.Targets["A"] != "1" {
+	if decision.State.Rules["r"].Held[0] != "A" || decision.State.Targets["A|swap"] != "1" {
 		t.Fatalf("跳过时状态应沿用前序：%+v", decision.State)
 	}
 	if decision.Summary.Rules["r"].Available != 2 {
@@ -516,10 +516,10 @@ rules:
     select: {top: 1}
     weight: {total: 1}
 `, "x", "y")
-	previous := State{Rules: map[string]RuleState{"r": {Held: []string{"A"}}}, Targets: map[string]string{"A": "1"}}
+	previous := State{Rules: map[string]RuleState{"r": {Held: []string{"A"}}}, Targets: map[string]string{"A|swap": "1"}}
 	decision := evaluate(t, program, frameOf(program, map[string]Row{"A": values("x", 1, "y", 0), "B": values("x", 2, "y", 0)}), previous)
 	assertSkipped(t, decision, SkipConfigError)
-	if decision.State.Targets["A"] != "1" {
+	if decision.State.Targets["A|swap"] != "1" {
 		t.Fatalf("跳过时应沿用前序：%+v", decision.State)
 	}
 	// 求值出错导致跳过时，解释明细仍覆盖全部 E(r)，每个标的恰好一条。
@@ -640,13 +640,13 @@ portfolio:
 	assertOK(t, decision)
 	// rank 份额 A:B:C = 3:2:1，总 0.9 → 0.45/0.3/0.15；A 超 cap 0.4，余量 0.05 按 B:C = 2:1 分给 B、C → B 0.3333、C 0.1667；
 	// 再剔除 B：A 0.4、C 0.1667，其余留现金。
-	c := quant.Must(decision.State.Targets["C"])
+	c := quant.Must(decision.State.Targets["C|swap"])
 	if c.Cmp(quant.Must("0.16")) < 0 || c.Cmp(quant.Must("0.17")) > 0 {
-		t.Fatalf("C 应约为 0.1667（先 cap 再 filter_after），实际 %s", decision.State.Targets["C"])
+		t.Fatalf("C 应约为 0.1667（先 cap 再 filter_after），实际 %s", decision.State.Targets["C|swap"])
 	}
 	// cap 份额 = cap / total 有定点除法的舍入误差，A 允许相差 1e-12。
-	a := quant.Must(decision.State.Targets["A"])
+	a := quant.Must(decision.State.Targets["A|swap"])
 	if a.Cmp(quant.Must("0.399999999999")) < 0 || a.Cmp(quant.Must("0.4")) > 0 {
-		t.Fatalf("A 应为 cap 0.4：%s", decision.State.Targets["A"])
+		t.Fatalf("A 应为 cap 0.4：%s", decision.State.Targets["A|swap"])
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 
+	delistapp "github.com/mooyang-code/moox/modules/trade/internal/application/delist"
 	holdingapp "github.com/mooyang-code/moox/modules/trade/internal/application/holding"
 	papersimulation "github.com/mooyang-code/moox/modules/trade/internal/application/papersimulation"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
@@ -16,8 +17,8 @@ import (
 )
 
 var (
-	errServiceUnavailable = errors.New("trade RPC: service is not configured")
-	errInvalidCurveTarget = errors.New("trade RPC: exactly one equity curve target is required")
+	errServiceUnavailable = errors.New("交易服务未配置")
+	errInvalidCurveTarget = errors.New("权益曲线要指定且只能指定一个账户或组合")
 )
 
 // ConsoleServer is the single public business service. The existing handlers
@@ -34,6 +35,10 @@ type ConsoleServer struct {
 	Exchanges          execution.ExchangeCatalog
 	Adapters           AdapterSource
 	FlattenAccount     FlattenTradingAccountFunc
+	// Delist 是下架名单与持有者查询；FlattenInstrumentAction 发起单标的下架清仓；ReduceAccount 发起按比例减仓。
+	Delist                  *delistapp.Service
+	FlattenInstrumentAction FlattenInstrumentFunc
+	ReduceAccount           ReduceLogicalAccountFunc
 }
 
 type HoldingQueryService interface {
@@ -79,8 +84,9 @@ func (s *ConsoleServer) CreatePaperSimulation(
 	result, err := s.Paper.Create(ctx, papersimulation.CreateCommand{
 		SpaceID: spaceID, AccountName: strings.TrimSpace(req.GetAccountName()),
 		LogicalAccountName: strings.TrimSpace(req.GetLogicalAccountName()),
-		ControlMode:        controlModeFromPB(req.GetControlMode()),
-		Exchange:           exchangeFromPB(req.GetExchange()), MarketType: marketFromPB(req.GetMarketType()),
+		LogicalAccountID:   strings.TrimSpace(req.GetLogicalAccountId()), Priority: int(req.GetPriority()),
+		ControlMode: controlModeFromPB(req.GetControlMode()),
+		Exchange:    exchangeFromPB(req.GetExchange()), Markets: marketsFromPB(req.GetMarkets()),
 		SettlementAsset: strings.TrimSpace(req.GetSettlementAsset()), MarginMode: exchange.MarginMode(req.GetMarginMode()),
 		InitialBalance: initial, MakerFeeRate: maker, TakerFeeRate: taker, SlippageBPS: slippage,
 	})
@@ -157,9 +163,8 @@ func (s *ConsoleServer) GetExecutionCapabilities(
 		CanPlaceOrder: value.CanPlaceOrder, UnavailableReason: value.UnavailableReason,
 		CanClosePaperSimulation: value.CanClosePaperSimulation,
 	}
-	if _, ledgerErr := s.ledgerSource(accountRecord.TradingAccountID); ledgerErr == nil {
-		capabilities.Ledger = true
-	}
+	_, ledgerErr := s.ledgerSource(accountRecord.TradingAccountID)
+	capabilities.Ledger = ledgerCapability(ledgerErr)
 	for _, item := range value.OrderTypes {
 		capabilities.OrderTypes = append(capabilities.OrderTypes, orderTypeToPB(string(item)))
 	}
@@ -194,7 +199,7 @@ func (s *ConsoleServer) ListTradableInstruments(
 	}
 	rsp := &tradepb.ListTradableInstrumentsRsp{RetInfo: success()}
 	for _, record := range records {
-		if record.Status != "TRADING" && record.Status != "live" {
+		if !exchange.StatusTradable(record.Status) {
 			continue
 		}
 		if record.SettlementAsset != "" && record.SettlementAsset != account.SettlementAsset {
@@ -275,8 +280,8 @@ func (s *ConsoleServer) ListHoldings(
 	if err != nil {
 		return &tradepb.ListHoldingsRsp{RetInfo: errorInfo(err)}, nil
 	}
-	if !exchange.RuleFor(account.MarketType).PositionFromBalance {
-		return &tradepb.ListHoldingsRsp{RetInfo: invalidInfo(errors.New("holdings are only available for SPOT accounts"))}, nil
+	if !account.HasBalanceMarket() {
+		return &tradepb.ListHoldingsRsp{RetInfo: invalidInfo(errors.New("只有开通现货的账户才有持币明细"))}, nil
 	}
 	if s.Holdings != nil {
 		values, err := s.Holdings.List(ctx, spaceID, req.GetTradingAccountId())
@@ -321,7 +326,7 @@ func (s *ConsoleServer) ListHoldings(
 func domainAccountForCapabilities(record store.TradingAccountRecord) tradingaccount.Account {
 	value := tradingaccount.Account{
 		ID: record.TradingAccountID, SpaceID: record.SpaceID, Name: record.Name,
-		Exchange: exchange.Exchange(record.Exchange), MarketType: exchange.MarketType(record.MarketType),
+		Exchange: exchange.Exchange(record.Exchange), Markets: marketTypes(record.Markets),
 		ExecutionMode: exchange.ExecutionMode(record.ExecutionMode), Environment: exchange.AccountEnvironment(record.Environment),
 		CredentialSecretID: record.CredentialSecretID, SettlementAsset: record.SettlementAsset,
 		MarginMode: exchange.MarginMode(record.MarginMode), Status: exchange.AccountStatus(record.Status), Ready: record.Ready,
@@ -340,6 +345,14 @@ func domainAccountForCapabilities(record store.TradingAccountRecord) tradingacco
 		value.LeverageSettings[key] = decimalValue(raw)
 	}
 	return value
+}
+
+func marketTypes(markets []string) []exchange.MarketType {
+	result := make([]exchange.MarketType, len(markets))
+	for i, market := range markets {
+		result[i] = exchange.MarketType(market)
+	}
+	return result
 }
 
 func decimalValue(raw string) shared.Decimal {

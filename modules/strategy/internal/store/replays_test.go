@@ -9,7 +9,7 @@ import (
 )
 
 func newReplay(id string, created time.Time) Replay {
-	return Replay{ReplayID: id, DSLYaml: "name: demo", DSLHash: testHash, Calendar: "crypto_24x7", ViewGeneration: "idx", SpaceID: "space", FactorTaskID: "ftask_a", ViewID: "view_factor_a", StartTime: testNow, EndTime: testNow.Add(24 * time.Hour), FeeBps: 10, CreatedAt: created}
+	return Replay{ReplayID: id, DSLYaml: "name: demo", DSLHash: testHash, Calendar: "crypto_24x7", SpaceID: "space", Tasks: map[string]ReplayTask{"spot": {FactorTaskID: "ftask_a", ViewID: "view_factor_a", ViewGeneration: "idx"}}, StartTime: testNow, EndTime: testNow.Add(24 * time.Hour), SpotFeeBps: 10, CreatedAt: created}
 }
 
 func TestReplayLifecycle(t *testing.T) {
@@ -22,7 +22,7 @@ func TestReplayLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := repo.GetReplay(ctx, "p1")
-	if err != nil || got.Status != ReplayPending || got.FeeBps != 10 || got.ProgressTime != nil || string(got.MetricsJSON) != "{}" {
+	if err != nil || got.Status != ReplayPending || got.SpotFeeBps != 10 || got.ProgressTime != nil || string(got.MetricsJSON) != "{}" {
 		t.Fatalf("回放不符：%+v err=%v", got, err)
 	}
 	claimed, found, err := repo.ClaimNextReplay(ctx, testNow)

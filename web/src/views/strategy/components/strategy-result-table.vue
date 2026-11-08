@@ -16,7 +16,7 @@
     :data="results"
     :loading="loading"
     :pagination="pagination"
-    :scroll="{ x: 1350 }"
+    :scroll="{ x: 1440 }"
     @page-change="changePage"
   >
     <template #columns>
@@ -46,9 +46,9 @@
           record.status === "ok" ? percent(parseSummary(record.summary_json).gross) : "-"
         }}</template></a-table-column
       >
-      <a-table-column title="现金" :width="92"
+      <a-table-column title="现金 / 分市场净敞口" :width="180"
         ><template #cell="{ record }">{{
-          record.status === "ok" ? percent(parseSummary(record.summary_json).cash) : "-"
+          record.status === "ok" ? cashOrNetText(parseSummary(record.summary_json)) : "-"
         }}</template></a-table-column
       >
       <a-table-column title="产出延迟" :width="92"
@@ -86,7 +86,10 @@
           <a-tab-pane key="items" title="逐标的解释"><ResultItems :result="detail.result" :items="detail.items" /></a-tab-pane>
           <a-tab-pane key="targets" title="目标权重"><TargetList :targets="detail.result.targets" /></a-tab-pane>
           <a-tab-pane key="binding" title="当时的绑定"
-            ><ResolvedTable :resolved-json="detail.resolved_json" empty-text="会话快照缺失"
+            ><ResolvedTable
+              :resolved-json="detail.resolved_json"
+              :pool="poolMembers(detail.dsl_yaml || '') !== null"
+              empty-text="会话快照缺失"
           /></a-tab-pane>
           <a-tab-pane key="dsl" title="当时的 DSL">
             <pre class="code-block">{{ detail.dsl_yaml || "DSL 版本缺失" }}</pre>
@@ -102,10 +105,13 @@ import { computed, defineComponent, h, ref } from "vue";
 import type { InstrumentTarget, StrategyResult, StrategyResultDetail } from "@/api/strategy-types";
 import { useStrategyStore } from "@/store/modules/strategy";
 import ResolvedTable from "@/views/strategy/components/strategy-resolved-table.vue";
+import { poolMembers } from "@/views/strategy/market-mode";
 import ResultItems from "@/views/strategy/components/strategy-result-items.vue";
 import ResultOverview from "@/views/strategy/components/strategy-result-overview.vue";
+import { marketLabel } from "@/views/strategy/market-mode";
 import {
   buildResultInsights,
+  cashOrNetText,
   formatDelay,
   formatStrategyTime,
   parseSummary,
@@ -157,7 +163,10 @@ const TargetList = defineComponent({
             "div",
             { class: "target-list" },
             listProps.targets.map(target =>
-              h("div", { class: "target-row" }, [h("span", target.instrument_id), h("strong", percent(target.target_weight))])
+              h("div", { class: "target-row" }, [
+                h("span", target.market ? `${target.instrument_id}（${marketLabel(target.market)}）` : target.instrument_id),
+                h("strong", percent(target.target_weight))
+              ])
             )
           )
         : h("div", { class: "muted" }, "无目标（转为现金或本期跳过）");

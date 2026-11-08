@@ -102,3 +102,13 @@ func (d Decimal) RoundDown(scale int) Decimal {
 	whole := new(big.Int).Quo(scaled.Num(), scaled.Denom())
 	return Decimal{v: new(big.Rat).SetFrac(whole, factor)}
 }
+
+// FloorToStep 把正数向下取整到步长的整数倍；值或步长不为正时返回 0。
+func FloorToStep(value, step Decimal) Decimal {
+	if value.Cmp(Zero()) <= 0 || step.Cmp(Zero()) <= 0 {
+		return Zero()
+	}
+	units := new(big.Rat).Quo(value.rat(), step.rat())
+	whole := new(big.Int).Quo(units.Num(), units.Denom())
+	return Decimal{v: new(big.Rat).Mul(new(big.Rat).SetInt(whole), step.rat())}
+}

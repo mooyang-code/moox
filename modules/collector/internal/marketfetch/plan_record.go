@@ -328,11 +328,19 @@ func BuildPlanContent(previous map[string]*PlanFunction, previousDatasets map[st
 			return nil, false, err
 		}
 		change.P = p
-		oldSubjects := subjectsOfDataset(previous, key)
+		// 新增与移除按序列比较：统一数据集（同一数据集里有多个市场的序列）的标的用“标的@市场”标注，
+		// 新上永续、现货里本来就有的标的不会漏掉；单序列数据集仍是标的名本身。
+		current := desired.Datasets[key]
+		perMarket := current != nil && distinctSeriesTags(current.Series) > 1
+		oldSubjects := subjectsOfDataset(previous, key, perMarket)
 		newSubjects := map[string]struct{}{}
-		if current := desired.Datasets[key]; current != nil {
+		if current != nil {
 			for _, series := range current.Series {
-				newSubjects[series.SubjectID] = struct{}{}
+				label := series.SubjectID
+				if perMarket {
+					label += "@" + seriesset.SeriesTagMarket(series.SeriesTag)
+				}
+				newSubjects[label] = struct{}{}
 			}
 		}
 		for subject := range newSubjects {
@@ -372,8 +380,8 @@ func plansEqual(left, right *Plan) bool {
 	return bytes.Equal([]byte(mustJSON(left)), []byte(mustJSON(right)))
 }
 
-// subjectsOfDataset 汇总已生效状态里所有函数负责的该数据集的标的。
-func subjectsOfDataset(functions map[string]*PlanFunction, key string) map[string]struct{} {
+// subjectsOfDataset 汇总已生效状态里所有函数负责的该数据集的标的；perMarket 为真时标的带上函数所在的市场（“标的@市场”）。
+func subjectsOfDataset(functions map[string]*PlanFunction, key string, perMarket bool) map[string]struct{} {
 	result := map[string]struct{}{}
 	for _, function := range functions {
 		if function == nil {
@@ -381,11 +389,24 @@ func subjectsOfDataset(functions map[string]*PlanFunction, key string) map[strin
 		}
 		if copy := activeCopy(findPlanDataset(function.Plan, key)); copy != nil {
 			for _, subject := range copy.Subjects {
-				result[subject.ID] = struct{}{}
+				label := subject.ID
+				if perMarket {
+					label += "@" + strings.ToLower(function.Plan.Market.MarketType)
+				}
+				result[label] = struct{}{}
 			}
 		}
 	}
 	return result
+}
+
+// distinctSeriesTags 返回序列里不同 series_tag 的个数。
+func distinctSeriesTags(series []seriesset.Series) int {
+	tags := map[string]struct{}{}
+	for _, item := range series {
+		tags[item.SeriesTag] = struct{}{}
+	}
+	return len(tags)
 }
 
 // TransitionalPlan 是函数在变更窗口内使用的计划：变化的数据集同时带旧份与从 P 起的新份。

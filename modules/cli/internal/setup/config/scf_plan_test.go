@@ -152,7 +152,8 @@ func TestSCFPlanRenderedCollectorConfigMatchesTheSharedFixture(t *testing.T) {
 	// 与默认部署一致的出口与保留策略，使产物是 Collector 能真实加载的完整配置。
 	manifest.EgressProxy = EgressProxy{HTTPDomains: []string{"*.binance.com"}, DNS: EgressDNS{Domains: []string{"fapi.binance.com"}, RefreshIntervalSeconds: 300, RequestTimeoutMS: 3000, LookupTimeoutMS: 1500, ProbeTimeoutMS: 500, ProbePort: 443, CacheTTLSeconds: 300, MaxIPsPerDomain: 4}}
 	manifest.CollectorRetention = CollectorRetention{MaintenanceInterval: "1m", MaintenanceOffset: "35s", MaintenanceTimeout: "20s", MaxRowsPerPass: 50000}
-	rendered, err := RenderCollectorRuntimeConfig(&Snapshot{Manifest: manifest}, []byte("gateway_client:\n  caller: collector\n  key_file: ./caller-collector.key\n"))
+	// 模板与新版 Collector 的 config/app.yaml 一样带 delist 段（渲染只替换、不新增）。
+	rendered, err := RenderCollectorRuntimeConfig(&Snapshot{Manifest: manifest}, []byte("gateway_client:\n  caller: collector\n  key_file: ./caller-collector.key\ndelist:\n  auto_detect: true\n"))
 	require.NoError(t, err)
 	if os.Getenv("MOOX_UPDATE_GOLDEN") == "1" {
 		require.NoError(t, os.WriteFile(scfPlanRenderedFixture, rendered, 0o644))

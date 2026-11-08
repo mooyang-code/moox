@@ -3,7 +3,6 @@ import {
   buildCollectionTaskParams,
   buildCollectionTaskPayload,
   parseKlineResampleParams,
-  collectionSourceMatches,
   collectionTaskNameError,
   collectionTaskResultLabel,
   normalizeCollectionTask,
@@ -101,6 +100,24 @@ describe("collection task params", () => {
     expect(parseCollectionTaskInput(task)).toMatchObject({ provider: "moox", market: "spot", sourceTaskId: "task-1m" });
   });
 
+  it("统一数据集的合成源：读出 source_series_tags，source_series_tag 为空", () => {
+    const params = {
+      source_task_id: "task-uni",
+      source_dataset_id: "uni-bars",
+      source_frequency: "1m",
+      source_series_tags: ["venue:binance|market:spot", "venue:binance|market:swap"],
+      target_frequency: "5m"
+    };
+    expect(parseKlineResampleParams(params)).toMatchObject({
+      source_series_tag: "",
+      source_series_tags: ["venue:binance|market:spot", "venue:binance|market:swap"]
+    });
+    expect(
+      parseCollectionTaskInput({ data_type: "kline_resample", tag_ids: [], collect_params: params }).sourceSeriesTags
+    ).toEqual(["venue:binance|market:spot", "venue:binance|market:swap"]);
+    expect(parseKlineResampleParams({ ...params, source_series_tags: undefined })).not.toHaveProperty("source_series_tags");
+  });
+
   it("emits result_config separately from the task payload", () => {
     const task = buildCollectionTaskPayload(
       {
@@ -158,21 +175,6 @@ describe("collection task params", () => {
       frequency: "5m",
       provider: "moox"
     });
-  });
-
-  it("matches resample source options by market and supported frequency", () => {
-    const source = {
-      source_id: "source-bars",
-      data_source_id: "crypto",
-      data_kind: "DATA_KIND_TIME_SERIES",
-      attributes: { market_type: "spot" },
-      freq: "1h"
-    };
-
-    expect(collectionSourceMatches(source, "binance", "kline", "spot", "1h")).toBe(true);
-    expect(collectionSourceMatches(source, "binance", "kline", "swap", "1h")).toBe(false);
-    expect(collectionSourceMatches(source, "binance", "kline", "spot", "4h")).toBe(false);
-    expect(collectionSourceMatches(source, "binance", "kline_resample", "spot", "1h")).toBe(true);
   });
 });
 

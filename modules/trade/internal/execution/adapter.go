@@ -16,15 +16,22 @@ type ExecutionAdapter interface {
 	GetAccountSnapshot(context.Context) (exchange.AccountSnapshot, error)
 	ListPositionSnapshots(context.Context) ([]exchange.Position, error)
 	ListOpenOrders(context.Context) ([]exchange.Order, error)
-	ListRecentFills(context.Context, shared.ExchangeSymbol, string) ([]exchange.Fill, string, error)
-	GetOrder(context.Context, shared.ExchangeSymbol, string) (exchange.Order, error)
+	ListRecentFills(context.Context, exchange.SymbolKey, string) ([]exchange.Fill, string, error)
+	GetOrder(context.Context, exchange.SymbolKey, string) (exchange.Order, error)
 	PlaceOrder(context.Context, exchange.OrderRequest) (exchange.Order, error)
-	CancelOrder(context.Context, shared.ExchangeSymbol, string) (exchange.Order, error)
+	CancelOrder(context.Context, exchange.SymbolKey, string) (exchange.Order, error)
 }
 
 // ExchangeOrderLookup 按交易所订单号查询订单。外部订单可能没有客户端订单号。
 type ExchangeOrderLookup interface {
-	GetOrderByExchangeID(context.Context, string, string) (exchange.Order, error)
+	GetOrderByExchangeID(context.Context, exchange.SymbolKey, string) (exchange.Order, error)
+}
+
+// ScopedOpenOrderSource 是挂单查询可以按标的收窄的场所才实现的能力：统一账户现货不传 symbol 的挂单查询
+// 按“当前交易中的标的数量”计权重，周期对账改为只查给定标的（每个权重 5）；没有这个能力的适配器照常查全部挂单。
+// 返回给定现货标的的挂单和全部合约挂单；其余现货标的上的外部挂单只在会话启动、手动全量同步时才会发现。
+type ScopedOpenOrderSource interface {
+	ListOpenOrdersForSymbols(context.Context, []exchange.SymbolKey) ([]exchange.Order, error)
 }
 
 // LedgerSource 是能查询资金流水（手续费、资金费、已实现盈亏、划转等）的场所才实现的能力，只读、即查即用。
@@ -36,6 +43,19 @@ type LedgerSource interface {
 
 // SymbolConfigurer 是需要按标的设置杠杆和保证金模式的场所才实现的能力。
 type SymbolConfigurer interface {
-	SetLeverage(context.Context, shared.ExchangeSymbol, shared.Decimal) error
-	SetMarginMode(context.Context, shared.ExchangeSymbol, exchange.MarginMode) error
+	SetLeverage(context.Context, exchange.SymbolKey, shared.Decimal) error
+	SetMarginMode(context.Context, exchange.SymbolKey, exchange.MarginMode) error
+}
+
+// FeeDiscountConfigurer 是支持“用 BNB 抵扣手续费”开关的场所才实现的能力（币安）。
+// 普通账户现货、合约各有一个开关，统一账户的合约和现货分别走不同接口；实现要把它们一起设置。
+type FeeDiscountConfigurer interface {
+	SetBNBFeeDiscount(ctx context.Context, enabled bool) error
+	GetBNBFeeDiscount(ctx context.Context) (bool, error)
+}
+
+// DustConverter 是支持把小额资产兑换成 BNB 的场所才实现的能力（币安，现货或统一账户的杠杆钱包）。
+type DustConverter interface {
+	ListDust(ctx context.Context) ([]exchange.DustAsset, error)
+	ConvertDust(ctx context.Context, assets []string) (exchange.DustConversion, error)
 }

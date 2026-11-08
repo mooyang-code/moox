@@ -15,6 +15,10 @@ const (
 	ActionSubmitOrder ActionType = "SUBMIT_ORDER"
 	ActionCancelOrder ActionType = "CANCEL_ORDER"
 	ActionFlatten     ActionType = "FLATTEN"
+	// ActionReduce 按比例减仓，清仓就是比例为 100% 的减仓。
+	ActionReduce ActionType = "REDUCE"
+	// ActionDelistFlatten 对单个下架标的清仓，不暂停组合。
+	ActionDelistFlatten ActionType = "DELIST_FLATTEN"
 )
 
 type Status string
@@ -51,7 +55,9 @@ func validType(value ActionType) bool {
 	return value == ActionManualOrder ||
 		value == ActionSubmitOrder ||
 		value == ActionCancelOrder ||
-		value == ActionFlatten
+		value == ActionFlatten ||
+		value == ActionReduce ||
+		value == ActionDelistFlatten
 }
 
 func validStatus(value Status) bool {

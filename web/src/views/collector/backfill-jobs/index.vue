@@ -170,6 +170,11 @@
               >
             </a-table-column>
             <a-table-column title="标的" data-index="subject_id" :width="120" />
+            <a-table-column title="市场" :width="80">
+              <template #cell="{ record }"
+                ><span :title="record.series_tag || undefined">{{ seriesTagDisplay(record.series_tag) }}</span></template
+              >
+            </a-table-column>
             <a-table-column title="范围（UTC）" :width="230">
               <template #cell="{ record }">{{ utcText(record.from) }} ~ {{ utcText(record.to) }}</template>
             </a-table-column>
@@ -204,6 +209,7 @@ import {
 import { usePolling } from "@/hooks/usePolling";
 import { useSpaceStore } from "@/store/modules/space";
 import { createLatestRequestGuard } from "@/utils/latest-request";
+import { seriesTagDisplay } from "@/views/data/shared/series-market";
 import KlineRangeDialog from "./kline-range-dialog.vue";
 import {
   JOB_SEGMENTS,
@@ -246,7 +252,7 @@ const rangeMode = ref<"check" | "backfill">("check");
 const failedRows = computed(() =>
   (detail.value?.failed_chunks || []).map((item, index) => ({
     ...item,
-    key: `${item.dataset_id}|${item.subject_id}|${item.from}|${index}`
+    key: `${item.dataset_id}|${item.subject_id}|${item.series_tag ?? ""}|${item.from}|${index}`
   }))
 );
 const rowClass = (record: KlineBackfillJob) =>

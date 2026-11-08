@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 )
@@ -17,14 +16,14 @@ type Stub struct{}
 
 func (Stub) LoadInstruments(context.Context) ([]exchange.Instrument, error) { return nil, nil }
 
-func (Stub) GetQuote(context.Context, shared.ExchangeSymbol) (execution.MarketQuote, error) {
+func (Stub) GetQuote(context.Context, exchange.SymbolKey) (execution.MarketQuote, error) {
 	return execution.MarketQuote{}, errUnsupported
 }
 
-func (Stub) GetReferencePrice(context.Context, string) (exchange.ReferencePrice, error) {
+func (Stub) GetReferencePrice(context.Context, exchange.SymbolKey) (exchange.ReferencePrice, error) {
 	return exchange.ReferencePrice{}, errUnsupported
 }
 
-func (Stub) GetOrderByExchangeID(context.Context, string, string) (exchange.Order, error) {
+func (Stub) GetOrderByExchangeID(context.Context, exchange.SymbolKey, string) (exchange.Order, error) {
 	return exchange.Order{}, &exchange.Error{Kind: exchange.ErrorOrderNotFound, Err: errUnsupported}
 }
