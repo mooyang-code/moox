@@ -43,7 +43,9 @@
 
         <section class="detail-section">
           <h3>使用情况</h3>
-          <span v-if="!chips.length" class="detail-empty">未被使用</span>
+          <span v-if="!chips.length" class="detail-empty">{{
+            otherUsage ? `只有其他空间在用：${otherUsage} 个成员` : "未被使用"
+          }}</span>
           <ul v-else class="usage-list">
             <li v-for="chip in chips" :key="chip.key">
               <a-link @click="emit('openTask', chip.taskId)">{{ chip.label }}</a-link>
@@ -109,6 +111,8 @@ function openResults(taskId: string) {
 const store = useFactorStore();
 const factor = ref<FactorDef | null>(null);
 const usages = ref<FactorUsage[]>([]);
+// 其他空间引用这个因子的成员数（只给数量）
+const otherUsage = ref(0);
 const loading = ref(false);
 const error = ref("");
 const gate = new RequestGate();
@@ -124,6 +128,7 @@ async function load(factorId: string) {
   const token = gate.next();
   factor.value = null;
   usages.value = [];
+  otherUsage.value = 0;
   error.value = "";
   if (!factorId) {
     loading.value = false;
@@ -135,6 +140,7 @@ async function load(factorId: string) {
     if (!gate.isCurrent(token)) return;
     factor.value = rsp.factor;
     usages.value = rsp.usages || [];
+    otherUsage.value = rsp.other_space_usage_count ?? 0;
   } catch (e) {
     if (gate.isCurrent(token)) error.value = e instanceof Error ? e.message : "因子详情加载失败";
   } finally {

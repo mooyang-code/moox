@@ -706,10 +706,18 @@ function openAddModal() {
   if (pickedTask.value) addVisible.value = true;
 }
 
-function onAddedToTask() {
+/** 添加到计算任务之后：只刷新“在用的计算任务”，不重置表单和试算结果。 */
+async function onAddedToTask() {
   void store.reload();
-  // 重新读取定义，刷新“在用的计算任务”
-  void load();
+  const id = factorId.value;
+  try {
+    const rsp = await getFactor(id);
+    if (id !== factorId.value) return;
+    usages.value = rsp.usages || [];
+    otherSpaceEnabled.value = rsp.other_space_enabled_count ?? 0;
+  } catch {
+    // 只用于刷新使用情况；读不到时保留原样，下次进入页面再读。
+  }
 }
 
 function openTask(taskId: string) {

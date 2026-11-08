@@ -152,26 +152,31 @@ const memberViews = computed<PrecheckMember[]>(() => [
   ...addedMembers.value
 ]);
 
+// 全部候选都做预检：已选的因子被筛选藏起来时，提交和“添加”按钮仍按它的预检结果判断。
+const allRows = computed<CandidateRow[]>(() => {
+  return factors.value.map(item => {
+    const draft = drafts.value[item.factor_id];
+    const check = precheckAddFactor({
+      candidate: item,
+      members: memberViews.value,
+      sourceColumns: sourceColumns.value,
+      kind: selected.value.includes(item.factor_id) ? draft?.kind : undefined,
+      params: selected.value.includes(item.factor_id) ? draft?.params : undefined
+    });
+    return { factor: item, decls: item.params ?? [], check, locked: !check.ok && !check.fixable };
+  });
+});
+
+/** 列表里显示的行：只按关键词和分类筛选显示，不影响已选的因子。 */
 const rows = computed<CandidateRow[]>(() => {
   const text = keyword.value.trim().toLowerCase();
-  return factors.value
-    .filter(item => !categoryId.value || item.category_id === categoryId.value)
-    .filter(item => !text || item.factor_id.toLowerCase().includes(text) || item.name.toLowerCase().includes(text))
-    .map(item => {
-      const draft = drafts.value[item.factor_id];
-      const check = precheckAddFactor({
-        candidate: item,
-        members: memberViews.value,
-        sourceColumns: sourceColumns.value,
-        kind: selected.value.includes(item.factor_id) ? draft?.kind : undefined,
-        params: selected.value.includes(item.factor_id) ? draft?.params : undefined
-      });
-      return { factor: item, decls: item.params ?? [], check, locked: !check.ok && !check.fixable };
-    });
+  return allRows.value
+    .filter(row => !categoryId.value || row.factor.category_id === categoryId.value)
+    .filter(row => !text || row.factor.factor_id.toLowerCase().includes(text) || row.factor.name.toLowerCase().includes(text));
 });
 
 const canSubmit = computed(
-  () => selected.value.length > 0 && selected.value.every(id => rows.value.find(row => row.factor.factor_id === id)?.check.ok)
+  () => selected.value.length > 0 && selected.value.every(id => allRows.value.find(row => row.factor.factor_id === id)?.check.ok)
 );
 
 function paramValue(factorId: string, decl: FactorParamDecl) {
@@ -292,7 +297,7 @@ async function submit() {
       if (stale()) break;
       try {
         const draft = drafts.value[factorId];
-        const row = rows.value.find(item => item.factor.factor_id === factorId);
+        const row = allRows.value.find(item => item.factor.factor_id === factorId);
         const decls = row?.decls ?? [];
         // 有参数的因子把完整参数一起提交（没改的取默认值）；成员键由服务端按参数推导并返回。
         const params = decls.length

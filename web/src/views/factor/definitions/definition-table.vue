@@ -42,7 +42,8 @@
       </a-table-column>
       <a-table-column title="使用情况" :width="240">
         <template #cell="{ record }">
-          <span v-if="!record.chips.length" class="usage-empty">未被使用</span>
+          <span v-if="record.otherUsage" class="usage-empty">{{ record.otherUsage }}</span>
+          <span v-else-if="!record.chips.length" class="usage-empty">未被使用</span>
           <div v-else class="usage-chips">
             <button
               v-for="chip in record.chips"

@@ -26,17 +26,29 @@ export interface ActionState {
 
 const allowed: ActionState = { disabled: false, reason: "" };
 
+/** 在用：本空间有引用，或其他空间有引用（只知道数量）。 */
+function inUse(item: Pick<FactorInfo, "usages" | "other_space_usage_count">) {
+  return item.usages.length > 0 || (item.other_space_usage_count ?? 0) > 0;
+}
+
 export function usageCounts(items: FactorInfo[]) {
-  const using = items.filter(item => item.usages.length > 0).length;
+  const using = items.filter(inUse).length;
   return { all: items.length, using, idle: items.length - using };
+}
+
+/** 没有本空间引用、但有其他空间引用时的说明；否则为空串。 */
+export function otherSpaceUsageText(item: Pick<FactorInfo, "usages" | "other_space_usage_count">) {
+  const other = item.other_space_usage_count ?? 0;
+  return !item.usages.length && other > 0 ? `其他空间有 ${other} 个成员在用` : "";
 }
 
 export function filterDefinitions(items: FactorInfo[], filters: DefinitionFilters) {
   const keyword = filters.keyword.trim().toLowerCase();
-  return items.filter(({ factor, usages }) => {
+  return items.filter(item => {
+    const { factor } = item;
     if (filters.type && factor.factor_type !== filters.type) return false;
-    if (filters.usage === "using" && !usages.length) return false;
-    if (filters.usage === "idle" && usages.length) return false;
+    if (filters.usage === "using" && !inUse(item)) return false;
+    if (filters.usage === "idle" && inUse(item)) return false;
     if (filters.category && categoryOf(factor) !== filters.category) return false;
     if (!keyword) return true;
     return factor.factor_id.toLowerCase().includes(keyword) || factor.name.toLowerCase().includes(keyword);
@@ -147,6 +159,8 @@ export interface DefinitionRow {
   category: string;
   paramNames: string;
   chips: UsageChip[];
+  /** 只有其他空间在用时的说明。 */
+  otherUsage: string;
   edit: ActionState;
   remove: ActionState;
 }
@@ -163,6 +177,7 @@ export function definitionRows(
     category: categoryName(categories, item.factor.category_id),
     paramNames: (item.factor.params ?? []).map(param => param.name).join(", ") || "-",
     chips: usageChips(item.usages, labelOf),
+    otherUsage: otherSpaceUsageText(item),
     edit: definitionEditState(item),
     remove: definitionDeleteState(item)
   }));

@@ -124,4 +124,13 @@ describe("添加因子弹窗", () => {
     await flushPromises();
     expect(vm.rows.map(row => row.factor.factor_id)).toEqual(["f2"]);
   });
+
+  it("已选的因子被筛选藏起来时仍能提交", async () => {
+    const vm = await open("enabled", "f1");
+    vm.categoryId = "volume";
+    await flushPromises();
+    expect((vm as unknown as { canSubmit: boolean }).canSubmit).toBe(true);
+    await vm.submit();
+    expect(api.addFactorToTask).toHaveBeenCalledWith("t1", "f1", "fixed", undefined);
+  });
 });

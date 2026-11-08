@@ -10,6 +10,7 @@ import {
   definitionDeleteState,
   definitionEditState,
   filterDefinitions,
+  otherSpaceUsageText,
   orderedCategories,
   usageChips,
   usageCounts
@@ -134,6 +135,13 @@ describe("definitions model", () => {
     });
     expect(definitionEditState(foreign(0, 1)).disabled).toBe(false);
     expect(definitionDeleteState(foreign(0, 1)).disabled).toBe(true);
+  });
+
+  it("只有其他空间在用的因子算作在用：计数、筛选和说明一致", () => {
+    const foreignOnly = { factor: def("f9"), usages: [], other_space_usage_count: 2 } as never;
+    expect(usageCounts([foreignOnly])).toEqual({ all: 1, using: 1, idle: 0 });
+    expect(filterDefinitions([foreignOnly], { keyword: "", type: "", usage: "idle", category: "" } as never)).toEqual([]);
+    expect(otherSpaceUsageText(foreignOnly)).toBe("其他空间有 2 个成员在用");
   });
 
   it("unused definition can be edited and deleted", () => {
