@@ -468,10 +468,10 @@ func (m *MultiMarket) SupportsFundingRates() bool {
 }
 
 // ListFundingRates 交给永续市场的适配器查。
-func (m *MultiMarket) ListFundingRates(ctx context.Context, start, end time.Time) ([]exchange.FundingRate, error) {
+func (m *MultiMarket) ListFundingRates(ctx context.Context, start, end time.Time, symbols []string) ([]exchange.FundingRate, error) {
 	source := FundingRatesOf(m.adapters[exchange.MarketTypeSwap])
 	if source == nil {
 		return nil, &exchange.Error{Kind: exchange.ErrorRejected, Err: fmt.Errorf("账户的永续市场不支持资金费率查询")}
 	}
-	return source.ListFundingRates(ctx, start, end)
+	return source.ListFundingRates(ctx, start, end, symbols)
 }

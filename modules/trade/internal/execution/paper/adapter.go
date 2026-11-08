@@ -57,9 +57,8 @@ type Adapter struct {
 	// lastPrices 是现货持仓最近一次取到的估值价和取价时间（资产 -> 价格），取不到价时在保留时间内用它估值。
 	priceMu    sync.Mutex
 	lastPrices map[string]execution.LastPrice
-	// fundingHour 是资金费已经查过的最近一个整点（只在内存里，重启后从表里最大的结算时刻重新开始）。
-	fundingMu   sync.Mutex
-	fundingHour time.Time
+	// funding 是资金费结算的内存进度。
+	funding fundingProgress
 }
 
 // blockedSetSource 是能读下架名单的事实存储（*store.Store 实现）；测试替身没有实现时当作名单为空。

@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -168,6 +169,21 @@ func TestReduceLogicalAccountPassesTheRatio(t *testing.T) {
 
 // ---- T29 ----
 
+// liveLedgerServer 和 ledgerServer 一样，但 account-1 是实盘永续账户：实盘的资金费才走交易所流水翻页。
+func liveLedgerServer(t *testing.T, adapters adapterMap) *ConsoleServer {
+	t.Helper()
+	tradeStore, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tradeStore.Close() })
+	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.CreateTradingAccount(store.TradingAccountRecord{
+			SpaceID: "space-1", TradingAccountID: "account-1", Name: "live", Exchange: "BINANCE", Markets: []string{"SWAP"},
+			ExecutionMode: "LIVE", Environment: "PRODUCTION", CredentialSecretID: "secret-1", SettlementAsset: "USDT", MarginMode: "CROSS", Status: "ENABLED",
+		})
+	}))
+	return &ConsoleServer{Store: tradeStore, Adapters: adapters}
+}
+
 type pnlLedgerAdapter struct {
 	execution.ExecutionAdapter
 	pages []exchange.LedgerPage
@@ -189,7 +205,7 @@ func funding(id string, at int64, amount string) exchange.LedgerEntry {
 }
 
 func TestSummarizeAccountPnlFundingPagesAndMarksTruncation(t *testing.T) {
-	server := ledgerServer(t, nil)
+	server := liveLedgerServer(t, nil)
 	end := time.Now().UTC()
 	adapter := &pnlLedgerAdapter{pages: []exchange.LedgerPage{
 		{HasMore: true, Entries: []exchange.LedgerEntry{funding("1", end.Add(-time.Hour).UnixMilli(), "-0.3"), {ID: "2", Time: end.Add(-2 * time.Hour), Type: exchange.LedgerTrade, Asset: "USDT", Amount: shared.MustDecimal("5")}}},
@@ -212,7 +228,7 @@ func TestSummarizeAccountPnlFundingPagesAndMarksTruncation(t *testing.T) {
 
 // 翻页挪不动、没取完：标明截断并写明说明。
 func TestSummarizeAccountPnlTruncatesIncompletePages(t *testing.T) {
-	server := ledgerServer(t, nil)
+	server := liveLedgerServer(t, nil)
 	end := time.Now().UTC()
 	stuck := exchange.LedgerPage{HasMore: true, Entries: []exchange.LedgerEntry{funding("1", end.Add(-time.Hour).UnixMilli(), "1")}}
 	adapter := &pnlLedgerAdapter{pages: []exchange.LedgerPage{stuck}}
@@ -231,17 +247,17 @@ func TestSummarizeAccountPnlTruncatesIncompletePages(t *testing.T) {
 
 // 多个账户都没取完时，统计起点取各账户已取到的最老时间里最晚的一个（这之后所有账户才都取全了），不是最早的。
 func TestSummarizeAccountPnlFundingFromIsTheLatestOfTheOldestTimes(t *testing.T) {
-	server := ledgerServer(t, nil)
+	server := liveLedgerServer(t, nil)
 	require.NoError(t, server.Store.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.CreateTradingAccount(store.TradingAccountRecord{
-			SpaceID: "space-1", TradingAccountID: "account-2", Name: "paper-2", Exchange: "BINANCE", Markets: []string{"SWAP"},
-			ExecutionMode: "PAPER", Environment: "PAPER", SettlementAsset: "USDT", MarginMode: "CROSS", Status: "ENABLED",
+			SpaceID: "space-1", TradingAccountID: "account-2", Name: "live-2", Exchange: "BINANCE", Markets: []string{"SWAP"},
+			ExecutionMode: "LIVE", Environment: "PRODUCTION", CredentialSecretID: "secret-2", SettlementAsset: "USDT", MarginMode: "CROSS", Status: "ENABLED",
 		})
 	}))
 	require.NoError(t, server.Store.Transaction(context.Background(), func(tx *store.Tx) error {
 		if err := tx.CreateLogicalAccount(store.LogicalAccountRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "l", OwnerInstanceID: "r", OwnerSessionID: "s",
-			ExecutionMode: "PAPER", SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "x",
+			ExecutionMode: "LIVE", SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "x",
 		}); err != nil {
 			return err
 		}
@@ -275,7 +291,7 @@ func TestSummarizeAccountPnlFundingFromIsTheLatestOfTheOldestTimes(t *testing.T)
 }
 
 func TestSummarizeAccountPnlWithoutLedgerExplainsWhy(t *testing.T) {
-	server := ledgerServer(t, adapterMap{})
+	server := liveLedgerServer(t, adapterMap{})
 	ctx := spacecontext.WithSpaceID(context.Background(), "space-1")
 	rsp, err := server.SummarizeAccountPnl(ctx, &tradepb.SummarizeAccountPnlReq{TradingAccountId: "account-1"})
 	require.NoError(t, err)

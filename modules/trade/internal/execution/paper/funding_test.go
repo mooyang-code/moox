@@ -27,7 +27,6 @@ func (f *fundingFacts) LatestPaperFundingSettlement(context.Context, string, str
 func (f *fundingFacts) PaperSwapActivity(_ context.Context, _, _ string, since int64) (store.PaperSwapActivity, error) {
 	f.since = append(f.since, since)
 	activity := f.activity
-	activity.Since = since
 	var fills []store.PaperSwapFill
 	for _, fill := range f.activity.Fills {
 		if fill.TradedAt >= since {
@@ -44,20 +43,24 @@ func (f *fundingFacts) SettlePaperFunding(_ context.Context, _, _ string, rates 
 	return out, nil
 }
 
-type fundingWindowCall struct{ start, end time.Time }
+type fundingWindowCall struct {
+	start, end time.Time
+	symbols    []string
+}
 
 // fundingMarket 是能查资金费率的公共行情替身：按查询窗口返回 rates 里落在窗口内的记录。
 type fundingMarket struct {
 	PublicMarketData
 	rates []exchange.FundingRate
 	calls []fundingWindowCall
-	err   error
+	// failAt 是第几次调用（从 1 起）返回错误；为 0 不出错。
+	failAt int
 }
 
-func (m *fundingMarket) ListFundingRates(_ context.Context, start, end time.Time) ([]exchange.FundingRate, error) {
-	m.calls = append(m.calls, fundingWindowCall{start, end})
-	if m.err != nil {
-		return nil, m.err
+func (m *fundingMarket) ListFundingRates(_ context.Context, start, end time.Time, symbols []string) ([]exchange.FundingRate, error) {
+	m.calls = append(m.calls, fundingWindowCall{start, end, symbols})
+	if m.failAt == len(m.calls) {
+		return nil, errors.New("限流")
 	}
 	var out []exchange.FundingRate
 	for _, rate := range m.rates {
@@ -79,6 +82,22 @@ func swapPaperAdapter(facts *fundingFacts, market *fundingMarket, now *time.Time
 	}
 }
 
+// requireContiguousSegments 断言查询按不超过 4 小时的段首尾相接，从 start 到 end。
+func requireContiguousSegments(t *testing.T, calls []fundingWindowCall, start, end time.Time) {
+	t.Helper()
+	if len(calls) == 0 || !calls[0].start.Equal(start) || !calls[len(calls)-1].end.Equal(end) {
+		t.Fatalf("calls = %+v", calls)
+	}
+	for i, call := range calls {
+		if call.end.Sub(call.start) >= fundingSegment {
+			t.Fatalf("第 %d 段超过 4 小时：%+v", i, call)
+		}
+		if i > 0 && !calls[i-1].end.Add(time.Millisecond).Equal(call.start) {
+			t.Fatalf("第 %d 段和上一段没有首尾相接：%+v", i, calls[i-1:i+1])
+		}
+	}
+}
+
 func TestSettleFundingBackfillsAtMostSevenDaysAndFiltersRates(t *testing.T) {
 	now := time.Date(2026, 11, 7, 10, 0, 30, 0, time.UTC)
 	hour := time.Date(2026, 11, 7, 9, 0, 0, 0, time.UTC)
@@ -95,46 +114,51 @@ func TestSettleFundingBackfillsAtMostSevenDaysAndFiltersRates(t *testing.T) {
 		t.Fatal(err)
 	}
 	floor := now.Add(-FundingBackfillLimit)
-	if len(market.calls) != 1 || !market.calls[0].start.Equal(floor) || !market.calls[0].end.Equal(now.Add(-fundingSettleDelay)) {
-		t.Fatalf("calls = %+v", market.calls)
+	requireContiguousSegments(t, market.calls, floor, now.Add(-fundingSettleDelay))
+	if got := market.calls[0].symbols; len(got) != 1 || got[0] != "BTCUSDT" {
+		t.Fatalf("只查持有过的合约，symbols = %v", got)
 	}
 	if len(facts.since) != 1 || facts.since[0] != floor.UnixMilli() {
 		t.Fatalf("since = %+v", facts.since)
 	}
-	if len(facts.settled) != 1 || len(facts.settled[0]) != 2 ||
-		!facts.settled[0][0].FundingTime.Equal(now.Add(-6*24*time.Hour)) || !facts.settled[0][1].FundingTime.Equal(hour) {
-		t.Fatalf("settled = %+v", facts.settled)
+	var settled []exchange.FundingRate
+	for _, batch := range facts.settled {
+		settled = append(settled, batch...)
+	}
+	if len(settled) != 2 || !settled[0].FundingTime.Equal(now.Add(-6*24*time.Hour)) || !settled[1].FundingTime.Equal(hour) {
+		t.Fatalf("settled = %+v", settled)
+	}
+	if len(facts.settled) != len(market.calls) {
+		t.Fatalf("每段查完就入账：settled=%d calls=%d", len(facts.settled), len(market.calls))
 	}
 
 	// 同一个整点不再查交易所（10:00:50 往前 1 分钟仍在 9 点这一小时）。
+	calls := len(market.calls)
 	now = now.Add(20 * time.Second)
 	if _, err := adapter.SettleFunding(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(market.calls) != 1 {
-		t.Fatalf("同一整点又查了一次：%+v", market.calls)
+	if len(market.calls) != calls {
+		t.Fatalf("同一整点又查了一次：%+v", market.calls[calls:])
 	}
 	// 过了下一个整点：从上一个整点起回看，晚公布的记录也能补上。
 	now = time.Date(2026, 11, 7, 11, 1, 0, 0, time.UTC)
 	if _, err := adapter.SettleFunding(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(market.calls) != 2 || !market.calls[1].start.Equal(hour) || !market.calls[1].end.Equal(now.Add(-fundingSettleDelay)) {
-		t.Fatalf("calls = %+v", market.calls)
-	}
+	requireContiguousSegments(t, market.calls[calls:], hour, now.Add(-fundingSettleDelay))
 }
 
-func TestSettleFundingResumesFromLatestSettlement(t *testing.T) {
+// 重启后从表里最大结算时刻所在整点的前一个小时开始：同一整点里还没结算的合约也能补上。
+func TestSettleFundingResumesBeforeTheLatestSettlementHour(t *testing.T) {
 	now := time.Date(2026, 11, 7, 10, 5, 0, 0, time.UTC)
-	latest := time.Date(2026, 11, 6, 16, 0, 0, 0, time.UTC)
+	latest := time.Date(2026, 11, 6, 16, 0, 0, 1_000_000, time.UTC)
 	facts := &fundingFacts{latest: latest.UnixMilli(), activity: store.PaperSwapActivity{Positions: map[string]shared.Decimal{"BTCUSDT": shared.MustDecimal("-2")}}}
 	market := &fundingMarket{}
 	if _, err := swapPaperAdapter(facts, market, &now).SettleFunding(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(market.calls) != 1 || !market.calls[0].start.Equal(latest) {
-		t.Fatalf("calls = %+v", market.calls)
-	}
+	requireContiguousSegments(t, market.calls, time.Date(2026, 11, 6, 15, 0, 0, 0, time.UTC), now.Add(-fundingSettleDelay))
 }
 
 func TestSettleFundingSkipsHoursWithoutPositions(t *testing.T) {
@@ -169,21 +193,43 @@ func TestSettleFundingSkipsHoursWithoutPositions(t *testing.T) {
 	}
 }
 
-func TestSettleFundingRetriesAfterFailure(t *testing.T) {
+// 中途失败：已入账的段不重做；退避期内不再请求，退避时间逐次翻倍；退避过后从失败那一段接着查。
+func TestSettleFundingResumesFailedSegmentWithBackoff(t *testing.T) {
 	now := time.Date(2026, 11, 7, 10, 5, 0, 0, time.UTC)
 	facts := &fundingFacts{activity: store.PaperSwapActivity{Positions: map[string]shared.Decimal{"BTCUSDT": shared.MustDecimal("1")}}}
-	market := &fundingMarket{err: errors.New("限流")}
+	market := &fundingMarket{failAt: 3}
 	adapter := swapPaperAdapter(facts, market, &now)
 	if _, err := adapter.SettleFunding(context.Background()); err == nil {
 		t.Fatal("取不到费率要报错")
 	}
-	market.err = nil
+	if len(market.calls) != 3 || len(facts.settled) != 2 {
+		t.Fatalf("前两段已入账：calls=%d settled=%d", len(market.calls), len(facts.settled))
+	}
+	failed := market.calls[2]
+	// 退避 1 分钟内不请求。
+	now = now.Add(30 * time.Second)
+	if _, err := adapter.SettleFunding(context.Background()); err != nil || len(market.calls) != 3 {
+		t.Fatalf("退避期内又请求了：err=%v calls=%d", err, len(market.calls))
+	}
+	// 退避过后再失败一次：从失败那一段接着查，下一次退避 2 分钟。
+	now = now.Add(31 * time.Second)
+	market.failAt = 4
+	if _, err := adapter.SettleFunding(context.Background()); err == nil {
+		t.Fatal("第二次也失败")
+	}
+	if !market.calls[3].start.Equal(failed.start) {
+		t.Fatalf("没有从失败那一段接着查：%+v", market.calls[3])
+	}
+	now = now.Add(time.Minute + 30*time.Second)
+	if _, err := adapter.SettleFunding(context.Background()); err != nil || len(market.calls) != 4 {
+		t.Fatalf("第二次退避是 2 分钟：err=%v calls=%d", err, len(market.calls))
+	}
+	now = now.Add(time.Minute)
+	market.failAt = 0
 	if _, err := adapter.SettleFunding(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if len(market.calls) != 2 || len(facts.settled) != 1 {
-		t.Fatalf("失败后同一整点要重试：calls=%d settled=%d", len(market.calls), len(facts.settled))
-	}
+	requireContiguousSegments(t, market.calls[4:], failed.start, now.Add(-fundingSettleDelay))
 }
 
 func TestSettleFundingNeedsSwapAndFundingSource(t *testing.T) {

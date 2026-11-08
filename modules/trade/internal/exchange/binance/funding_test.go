@@ -64,7 +64,8 @@ func fundingServer(t *testing.T, body []byte, rows []fundingRatePayload) (*httpt
 func TestFundingRatesParseSample(t *testing.T) {
 	server, requests := fundingServer(t, sample(t, "fapi_funding_rate.json"), nil)
 	start := time.UnixMilli(1730419200000)
-	rates, err := testAdapter(exchange.MarketTypeSwap, server.URL).ListFundingRates(context.Background(), start, start.Add(fundingRateChunk-time.Millisecond))
+	rates, err := testAdapter(exchange.MarketTypeSwap, server.URL).ListFundingRates(context.Background(), start, start.Add(fundingRateChunk-time.Millisecond),
+		[]string{"BTCUSDT", "ETHUSDT", "1000PEPEUSDT", "XRPUSDT"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +103,11 @@ func TestFundingRatesSplitFullPagesAndChunks(t *testing.T) {
 		fundingRatePayload{Symbol: "BUSDT", FundingTime: later, FundingRate: "-0.0002", MarkPrice: "3"},
 	)
 	server, requests := fundingServer(t, nil, rows)
-	rates, err := testAdapter(exchange.MarketTypeSwap, server.URL).ListFundingRates(context.Background(), time.UnixMilli(base), time.UnixMilli(later))
+	symbols := []string{"AUSDT", "BUSDT"}
+	for i := 0; i < 1500; i++ {
+		symbols = append(symbols, "S"+strconv.Itoa(i)+"USDT")
+	}
+	rates, err := testAdapter(exchange.MarketTypeSwap, server.URL).ListFundingRates(context.Background(), time.UnixMilli(base), time.UnixMilli(later), symbols)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +134,7 @@ func TestFundingRatesRejectSameMillisecondOverflow(t *testing.T) {
 		rows = append(rows, fundingRatePayload{Symbol: "S" + strconv.Itoa(i) + "USDT", FundingTime: base, FundingRate: "0.0001", MarkPrice: "1"})
 	}
 	server, _ := fundingServer(t, nil, rows)
-	if _, err := testAdapter(exchange.MarketTypeSwap, server.URL).ListFundingRates(context.Background(), time.UnixMilli(base), time.UnixMilli(base+10)); err == nil {
+	if _, err := testAdapter(exchange.MarketTypeSwap, server.URL).ListFundingRates(context.Background(), time.UnixMilli(base), time.UnixMilli(base+10), []string{"S1USDT"}); err == nil {
 		t.Fatal("同一毫秒满页时不能当作完整结果")
 	}
 }
@@ -139,7 +144,7 @@ func TestFundingRatesOnlyForSwap(t *testing.T) {
 	if execution.FundingRatesOf(spot) != nil {
 		t.Fatal("现货适配器不应提供资金费率")
 	}
-	if _, err := spot.ListFundingRates(context.Background(), time.Now(), time.Now()); err == nil {
+	if _, err := spot.ListFundingRates(context.Background(), time.Now(), time.Now(), []string{"BTCUSDT"}); err == nil {
 		t.Fatal("现货查询资金费率应被拒绝")
 	}
 	swap := testAdapter(exchange.MarketTypeSwap, "http://127.0.0.1:1")
@@ -162,5 +167,28 @@ func TestFundingRatesOnlyForSwap(t *testing.T) {
 	}
 	if execution.FundingRatesOf(spotOnly) != nil {
 		t.Fatal("没开永续的组合适配器不应提供资金费率")
+	}
+}
+
+// 只返回、只严格解析要结算的合约：别的合约格式不对只跳过；要结算的合约格式不对整段报错，不能悄悄少算。
+func TestFundingRatesOnlyParseWantedSymbols(t *testing.T) {
+	base := int64(1730419200000)
+	rows := []fundingRatePayload{
+		{Symbol: "BTCUSDT", FundingTime: base, FundingRate: "0.0001", MarkPrice: "70000"},
+		{Symbol: "BADUSDT", FundingTime: base, FundingRate: "not-a-number", MarkPrice: "1"},
+		{Symbol: "", FundingTime: base, FundingRate: "0.0001", MarkPrice: "1"},
+		{Symbol: "ETHUSDT", FundingTime: base, FundingRate: "0.0002", MarkPrice: "2500"},
+	}
+	server, _ := fundingServer(t, nil, rows)
+	adapter := testAdapter(exchange.MarketTypeSwap, server.URL)
+	rates, err := adapter.ListFundingRates(context.Background(), time.UnixMilli(base), time.UnixMilli(base), []string{"BTCUSDT"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rates) != 1 || rates[0].ExchangeSymbol != "BTCUSDT" {
+		t.Fatalf("rates = %+v", rates)
+	}
+	if _, err := adapter.ListFundingRates(context.Background(), time.UnixMilli(base), time.UnixMilli(base), []string{"BTCUSDT", "BADUSDT"}); err == nil {
+		t.Fatal("要结算的合约格式不对时应报错")
 	}
 }

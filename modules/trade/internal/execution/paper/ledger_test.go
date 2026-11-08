@@ -127,3 +127,52 @@ func TestPaperLedgerCutsAtTheOldestFetchedFundingFee(t *testing.T) {
 		t.Fatalf("page = %+v", page)
 	}
 }
+
+func swapFill(id string, at int64, fee string) store.FillRecord {
+	return store.FillRecord{FillID: id, ExchangeTradeID: "t" + id, MarketType: "SWAP", ExchangeSymbol: "BTCUSDT", Fee: fee, FeeAsset: "USDT", SettlementAsset: "USDT", RealizedPnL: "0", TradedAt: at}
+}
+
+func fundingFee(at int64) store.PaperFundingFeeRecord {
+	return store.PaperFundingFeeRecord{ExchangeSymbol: "BTCUSDT", SettledAt: at, Amount: "-1", Asset: "USDT"}
+}
+
+// 只有成交没取完：早于已取到的最老成交的资金费不能返回，否则下一页从它往前翻，会漏掉中间没取到的成交。
+func TestPaperLedgerCutsAtTheOldestFetchedFillWhenOnlyFillsAreTruncated(t *testing.T) {
+	facts := &ledgerFillsAndFunding{
+		ledgerFills: ledgerFills{fills: []store.FillRecord{
+			swapFill("4", 4_000, "0"), swapFill("3", 3_000, "0"), swapFill("2", 2_000, "0"), swapFill("1", 1_000, "0.01"),
+		}},
+		fees: []store.PaperFundingFeeRecord{fundingFee(2_500), fundingFee(500)},
+	}
+	adapter := &Adapter{Account: store.TradingAccountRecord{SpaceID: "s", TradingAccountID: "paper-1"}, Store: facts}
+	page, err := adapter.ListLedger(context.Background(), exchange.LedgerQuery{Start: time.UnixMilli(0), End: time.UnixMilli(10_000), Limit: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !page.HasMore || len(page.Entries) != 1 || page.Entries[0].Time.UnixMilli() != 2_500 {
+		t.Fatalf("page = %+v", page)
+	}
+}
+
+// 两路都没取完、各自最老的时间不同：按较晚的那个截断，返回的流水都不早于它。
+func TestPaperLedgerCutsAtTheLaterOldestWhenBothAreTruncated(t *testing.T) {
+	facts := &ledgerFillsAndFunding{
+		ledgerFills: ledgerFills{fills: []store.FillRecord{
+			swapFill("5", 5_000, "0"), swapFill("4", 4_900, "0"), swapFill("1", 1_000, "0.01"), swapFill("0", 900, "0.01"),
+		}},
+		fees: []store.PaperFundingFeeRecord{fundingFee(4_500), fundingFee(4_000), fundingFee(3_500), fundingFee(3_000)},
+	}
+	adapter := &Adapter{Account: store.TradingAccountRecord{SpaceID: "s", TradingAccountID: "paper-1"}, Store: facts}
+	page, err := adapter.ListLedger(context.Background(), exchange.LedgerQuery{Start: time.UnixMilli(0), End: time.UnixMilli(10_000), Limit: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !page.HasMore || len(page.Entries) != 3 {
+		t.Fatalf("page = %+v", page)
+	}
+	for index, want := range []int64{4_500, 4_000, 3_500} {
+		if page.Entries[index].Time.UnixMilli() != want || page.Entries[index].Type != exchange.LedgerFundingFee {
+			t.Fatalf("entries = %+v", page.Entries)
+		}
+	}
+}

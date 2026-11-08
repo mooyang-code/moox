@@ -21,8 +21,11 @@ func (a *fundingSettlerAdapter) SettleFunding(context.Context) (int, error) {
 	return 0, errors.New("交易所暂时不可用")
 }
 
-// 会话一启动就先结算一次（补算停机期间的结算点）；失败只记日志，不退出，取消后协程结束。
+// 会话一启动就先结算一次（补算停机期间的结算点）；出错之后照常继续检查，取消后协程结束。
 func TestPaperFundingRunsAtStartAndSurvivesErrors(t *testing.T) {
+	previous := paperFundingInterval
+	paperFundingInterval = 10 * time.Millisecond
+	t.Cleanup(func() { paperFundingInterval = previous })
 	adapter := &fundingSettlerAdapter{}
 	session := &ExchangeSession{Account: store.TradingAccountRecord{TradingAccountID: "paper-1"}, Adapter: adapter}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -32,11 +35,11 @@ func TestPaperFundingRunsAtStartAndSurvivesErrors(t *testing.T) {
 		close(done)
 	}()
 	deadline := time.Now().Add(2 * time.Second)
-	for adapter.calls.Load() == 0 && time.Now().Before(deadline) {
+	for adapter.calls.Load() < 3 && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
 	}
-	if adapter.calls.Load() != 1 {
-		t.Fatalf("calls = %d", adapter.calls.Load())
+	if adapter.calls.Load() < 3 {
+		t.Fatalf("每次都出错，仍要继续检查：calls = %d", adapter.calls.Load())
 	}
 	cancel()
 	select {

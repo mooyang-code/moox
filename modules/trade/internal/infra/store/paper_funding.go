@@ -35,12 +35,11 @@ type PaperSwapFill struct {
 // PaperSwapActivity 是推算结算时刻持仓用的数据：当前的永续持仓，以及某个时刻起（含）的永续成交，按时间升序。
 // 模拟盘的持仓只由本地成交投影（重置时成交和持仓一起清），所以任一时刻的持仓都能由当前持仓减去之后的成交推出来。
 type PaperSwapActivity struct {
-	Since     int64
 	Positions map[string]shared.Decimal
 	Fills     []PaperSwapFill
 }
 
-// Sweep 返回从 Since 起按时间向前推进的持仓：先由当前持仓减去 Since 起的全部成交得到 Since 时刻的持仓，再逐笔加回。
+// Sweep 返回从读取起点起按时间向前推进的持仓：先由当前持仓减去起点之后的全部成交得到起点时刻的持仓，再逐笔加回。
 func (a PaperSwapActivity) Sweep() *PaperPositionSweep {
 	positions := make(map[string]shared.Decimal, len(a.Positions))
 	for symbol, quantity := range a.Positions {
@@ -52,7 +51,7 @@ func (a PaperSwapActivity) Sweep() *PaperPositionSweep {
 	return &PaperPositionSweep{positions: positions, fills: a.Fills}
 }
 
-// Symbols 返回当前有持仓或 Since 起有成交的合约：只有它们可能在 Since 之后的结算点上有持仓。
+// Symbols 返回当前有持仓或读取起点之后有成交的合约：只有它们可能在起点之后的结算点上有持仓。
 func (a PaperSwapActivity) Symbols() map[string]struct{} {
 	symbols := make(map[string]struct{}, len(a.Positions)+len(a.Fills))
 	for symbol, quantity := range a.Positions {
@@ -121,7 +120,7 @@ func (s *Store) PaperSwapActivity(ctx context.Context, spaceID, tradingAccountID
 }
 
 func (tx *Tx) paperSwapActivity(spaceID, tradingAccountID string, since int64) (PaperSwapActivity, error) {
-	result := PaperSwapActivity{Since: since, Positions: map[string]shared.Decimal{}}
+	result := PaperSwapActivity{Positions: map[string]shared.Decimal{}}
 	var positions []struct {
 		Symbol   string `gorm:"column:c_exchange_symbol"`
 		Quantity string `gorm:"column:c_signed_quantity"`
@@ -164,7 +163,7 @@ func (tx *Tx) paperSwapActivity(spaceID, tradingAccountID string, since int64) (
 
 // SettlePaperFunding 在一个事务里结算一批资金费：按结算时刻的持仓算金额，插入记录并改结算资产余额。
 // 唯一键（账户、合约、结算时刻）保证幂等：已经结算过的记录不再插入，也不再改余额。持仓为零、标记价格缺失的记录跳过。
-// 返回本次新插入的记录。
+// 余额改动按资产累加，事务末尾每个资产只写一次，事务里不逐条读改写余额。返回本次新插入的记录。
 func (s *Store) SettlePaperFunding(ctx context.Context, spaceID, tradingAccountID string, rates []exchange.FundingRate) ([]PaperFundingFeeRecord, error) {
 	if len(rates) == 0 {
 		return nil, nil
@@ -196,6 +195,7 @@ func (s *Store) SettlePaperFunding(ctx context.Context, spaceID, tradingAccountI
 			return err
 		}
 		positions := activity.Sweep()
+		deltas := map[string]shared.Decimal{}
 		for _, rate := range ordered {
 			settledAt := rate.FundingTime.UnixMilli()
 			if rate.ExchangeSymbol == "" || settledAt <= 0 || rate.MarkPrice.Cmp(shared.Zero()) <= 0 {
@@ -220,10 +220,13 @@ func (s *Store) SettlePaperFunding(ctx context.Context, spaceID, tradingAccountI
 			if result.RowsAffected == 0 {
 				continue
 			}
-			if err := tx.addPaperBalance(spaceID, tradingAccountID, record.Asset, amount); err != nil {
+			deltas[record.Asset] = deltas[record.Asset].Add(amount)
+			inserted = append(inserted, record)
+		}
+		for asset, delta := range deltas {
+			if err := tx.addPaperBalance(spaceID, tradingAccountID, asset, delta); err != nil {
 				return err
 			}
-			inserted = append(inserted, record)
 		}
 		return nil
 	})
@@ -261,6 +264,37 @@ func (s *Store) ListPaperFundingFees(ctx context.Context, spaceID, tradingAccoun
 		})
 	}
 	return records, total, nil
+}
+
+// SummarizePaperFundingFees 按资产汇总 [start, end] 内的资金费，逐行用十进制累加（金额是字符串，不能让数据库按浮点求和），按资产排序。
+// 收益拆解直接用它：不经过流水翻页，记录再多也不截断。
+func (s *Store) SummarizePaperFundingFees(ctx context.Context, spaceID, tradingAccountID string, start, end int64) ([]AssetAmount, error) {
+	rows, err := s.db.WithContext(ctx).Raw(querySummarizePaperFundingFees, spaceID, tradingAccountID, start, end).Rows()
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	totals := map[string]shared.Decimal{}
+	for rows.Next() {
+		var asset, raw string
+		if err := rows.Scan(&asset, &raw); err != nil {
+			return nil, err
+		}
+		amount, err := shared.ParseDecimal(raw)
+		if err != nil {
+			return nil, fmt.Errorf("%w: paper funding amount", ErrInvalidRecord)
+		}
+		totals[asset] = totals[asset].Add(amount)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	result := make([]AssetAmount, 0, len(totals))
+	for asset, amount := range totals {
+		result = append(result, AssetAmount{Asset: asset, Amount: amount})
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].Asset < result[j].Asset })
+	return result, nil
 }
 
 // addPaperBalance 把一笔变动加到模拟账户某个资产的余额上；资产还没有余额行时从零开始。
@@ -309,6 +343,8 @@ const (
 		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_settled_at >= ? AND c_settled_at <= ?
 		ORDER BY c_settled_at DESC, c_exchange_symbol DESC
 		LIMIT ?`
+	querySummarizePaperFundingFees = `SELECT c_asset, c_amount FROM t_paper_funding_fees
+		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_settled_at >= ? AND c_settled_at <= ?`
 	queryPaperAssetBalance = `SELECT c_total FROM t_paper_asset_balances
 		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_asset = ?`
 	execUpsertPaperAssetBalance = `INSERT INTO t_paper_asset_balances (c_space_id, c_trading_account_id, c_asset, c_total) VALUES (?, ?, ?, ?)

@@ -176,7 +176,6 @@ func TestPaperFundingLedgerQueryIsNewestFirst(t *testing.T) {
 
 func TestPaperSwapSweepAndExposure(t *testing.T) {
 	activity := PaperSwapActivity{
-		Since:     100,
 		Positions: map[string]shared.Decimal{"BTCUSDT": shared.MustDecimal("0")},
 		Fills: []PaperSwapFill{
 			{ExchangeSymbol: "BTCUSDT", TradedAt: 200, Delta: shared.MustDecimal("1")},

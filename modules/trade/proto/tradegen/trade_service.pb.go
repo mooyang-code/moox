@@ -9728,7 +9728,7 @@ func (x *PnlAmount) GetAmount() string {
 	return ""
 }
 
-// 收益拆解：手续费和已实现盈亏从成交表汇总，资金费从资金流水汇总（实盘即查交易所，模拟盘读本地资金费记录）。
+// 收益拆解：手续费和已实现盈亏从成交表汇总，资金费实盘即查交易所流水，模拟盘直接汇总本地资金费记录。
 type SummarizeAccountPnlReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
