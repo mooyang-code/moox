@@ -543,6 +543,8 @@
 </template>
 
 <script setup lang="ts">
+import { useDisplayZone } from "@/hooks/useDisplayZone";
+import { formatInstant } from "@/utils/time-zone";
 import { createSubmitScope } from "@/utils/submit-scope";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
@@ -604,6 +606,8 @@ type EditorForm = {
   creator: string;
 };
 
+// 页面时间按当前空间登记的时区显示
+const displayZone = useDisplayZone();
 const loading = ref(false);
 const submitLoading = ref(false);
 const loadingSourceTasks = ref(false);
@@ -864,10 +868,9 @@ function taskRouteSummary(task: CollectionTaskRecord): string {
   return "-";
 }
 
+/** 采集任务属于空间：时间按空间时区带后缀。 */
 function formatDateTime(value?: string) {
-  if (!value) return "-";
-  const date = new Date(value);
-  return Number.isNaN(date.valueOf()) ? value : date.toLocaleString("zh-CN");
+  return formatInstant(value, displayZone.value);
 }
 
 function resultStatusLabel(task: CollectionTaskRecord) {

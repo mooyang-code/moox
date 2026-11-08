@@ -291,10 +291,10 @@
             <span v-else>-</span>
           </a-descriptions-item>
           <a-descriptions-item label="创建时间">
-            {{ formatDateTime(selectedInstanceDetail.create_time) }}
+            {{ formatDateTime(selectedInstanceDetail.create_time, displayZone) }}
           </a-descriptions-item>
           <a-descriptions-item label="更新时间">
-            {{ formatDateTime(selectedInstanceDetail.modify_time) }}
+            {{ formatDateTime(selectedInstanceDetail.modify_time, displayZone) }}
           </a-descriptions-item>
         </a-descriptions>
       </div>
@@ -346,9 +346,9 @@
         <!-- 审计信息 -->
         <a-descriptions title="审计信息" :column="2" bordered size="medium" style="margin-bottom: var(--moox-space-4)">
           <a-descriptions-item label="创建者">{{ packageDetail.created_by }}</a-descriptions-item>
-          <a-descriptions-item label="创建时间">{{ formatDateTime(packageDetail.created_time) }}</a-descriptions-item>
+          <a-descriptions-item label="创建时间">{{ formatDateTime(packageDetail.created_time, "UTC") }}</a-descriptions-item>
           <a-descriptions-item label="最后部署时间" :span="2">
-            {{ packageDetail.last_deploy_time ? formatDateTime(packageDetail.last_deploy_time) : "-" }}
+            {{ packageDetail.last_deploy_time ? formatDateTime(packageDetail.last_deploy_time, "UTC") : "-" }}
           </a-descriptions-item>
         </a-descriptions>
 
@@ -382,6 +382,7 @@
 </template>
 
 <script setup lang="ts">
+import { useDisplayZone } from "@/hooks/useDisplayZone";
 import { ref, reactive, computed, onMounted, onBeforeUnmount, h, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { storeToRefs } from "pinia";
@@ -427,6 +428,8 @@ import {
 } from "./function-instance-model";
 
 // 状态管理
+// 页面时间按当前空间登记的时区显示
+const displayZone = useDisplayZone();
 const spaceStore = useSpaceStore();
 const { selectedSpaceId } = storeToRefs(spaceStore);
 const route = useRoute();
@@ -852,7 +855,7 @@ const timerEnabledLabel = () => {
 };
 const timerDateTimeText = () => {
   const value = timerMetadataText("runtime_config_reconciled_at");
-  return value === "-" ? "-" : formatDateTime(value);
+  return value === "-" ? "-" : formatDateTime(value, displayZone.value);
 };
 
 // 代码包详情

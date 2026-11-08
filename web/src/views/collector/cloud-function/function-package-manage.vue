@@ -349,6 +349,7 @@
 </template>
 
 <script setup lang="ts">
+import { formatInstant } from "@/utils/time-zone";
 // PackageStatus 枚举：2 = 可用（已上传完成）。
 const PACKAGE_STATUS_AVAILABLE = 2;
 import { ref, watch, reactive, computed, onMounted } from "vue";
@@ -1071,17 +1072,8 @@ const formatFileSize = (size: number) => {
   return (size / (1024 * 1024 * 1024)).toFixed(1) + "GB";
 };
 
-const formatTime = (time: string | undefined) => {
-  if (!time) return "-";
-  return new Date(time).toLocaleString("zh-CN", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit"
-  });
-};
+// 代码包、云账户是全局对象：时间按 UTC 带后缀
+const formatTime = (time: string | undefined) => formatInstant(time, "UTC");
 </script>
 
 <style scoped>

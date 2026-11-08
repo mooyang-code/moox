@@ -1,4 +1,5 @@
 import { PACKAGE_STATUS_LABEL, PACKAGE_TYPE_LABEL } from "@/api/function-package";
+import { formatInstant } from "@/utils/time-zone";
 
 export interface FunctionInstance {
   instance_id: string;
@@ -121,23 +122,10 @@ export function formatFileSize(size: number) {
   return `${(size / (1024 * 1024 * 1024)).toFixed(1)}GB`;
 }
 
-export function formatDateTime(value?: string) {
-  if (!value) return "-";
-  try {
-    return new Date(value).toLocaleString("zh-CN", {
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit"
-    });
-  } catch {
-    return value;
-  }
+/** 带时区后缀的时间：执行器属于空间，用空间时区；代码包这类全局对象用 UTC。 */
+export function formatDateTime(value: string | undefined, zone: string) {
+  return formatInstant(value, zone);
 }
-
-export const formatTime = formatDateTime;
 
 export function formatMetadata(metadata: string | Record<string, unknown>) {
   if (!metadata) return "-";

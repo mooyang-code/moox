@@ -101,10 +101,12 @@ describe("collector result workflow", () => {
     expect(resampleSourceTaskId(resample)).toBe("src-1");
     expect(resampleTargetFrequency(resample)).toBe("45m");
 
-    expect(resampleEmptyDescription({ ...resample, prepare_state: "waiting_view" }, 45)).toBe("正在准备结果数据集，请稍后刷新");
+    expect(resampleEmptyDescription({ ...resample, prepare_state: "waiting_view" }, 45, "UTC")).toBe(
+      "正在准备结果数据集，请稍后刷新"
+    );
     // 45m 网格上 10:20 之后的下一个边界是 10:30。
-    expect(resampleEmptyDescription(resample, 45, new Date("2026-10-22T10:20:00Z"))).toContain("预计 10:30 UTC");
-    expect(resampleEmptyDescription(resample, 1440, new Date("2026-10-22T10:20:00Z"))).toContain("预计 10-23 00:00 UTC");
+    expect(resampleEmptyDescription(resample, 45, "UTC", Date.parse("2026-10-22T10:20:00Z"))).toContain("预计 10:30 UTC");
+    expect(resampleEmptyDescription(resample, 1440, "UTC", Date.parse("2026-10-22T10:20:00Z"))).toContain("预计 10-23 00:00 UTC");
 
     const page = fs.readFileSync(path.resolve(__dirname, "index.vue"), "utf8");
     expect(page).toContain("合成自");

@@ -138,6 +138,7 @@
 </template>
 
 <script setup lang="ts">
+import { formatInstant } from "@/utils/time-zone";
 import { createSubmitScope } from "@/utils/submit-scope";
 import { ref, watch, reactive } from "vue";
 import { Message, Modal } from "@arco-design/web-vue";
@@ -424,17 +425,8 @@ const getProviderColor = (provider: string) => {
   return colorMap[provider] || "gray";
 };
 
-const formatTime = (time: string | undefined) => {
-  if (!time) return "-";
-  return new Date(time).toLocaleString("zh-CN", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit"
-  });
-};
+// 代码包、云账户是全局对象：时间按 UTC 带后缀
+const formatTime = (time: string | undefined) => formatInstant(time, "UTC");
 
 // 提交作用域（重新打开才使旧提交失效，@ok 自动关闭不影响正常保存）：formVisible 打开/关闭都会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
 const accountScope = createSubmitScope({ global: true });
