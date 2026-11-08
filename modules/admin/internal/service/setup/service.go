@@ -10,8 +10,8 @@ import (
 const tencentSecretID = "tencent-default"
 
 var (
-	ErrStorage  = errors.New("setup_storage_failed")
-	ErrInvalid  = errors.New("setup_invalid")
+	ErrStorage = errors.New("setup_storage_failed")
+	ErrInvalid = errors.New("setup_invalid")
 )
 
 type Admin struct {

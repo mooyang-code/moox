@@ -116,7 +116,7 @@ func (c *Client) ApplyWithSpaces(
 		Secrets: int(response.GetSecrets()),
 		Spaces:  int(response.GetSpaces()), SpacesCreated: int(response.GetSpacesCreated()),
 		SpacesUnchanged: int(response.GetSpacesUnchanged()), Kept: response.GetKept(),
-		ExchangeKeys:    exchangeKeyResults(response.GetExchangeKeys()),
+		ExchangeKeys: exchangeKeyResults(response.GetExchangeKeys()),
 	}, nil
 }
 
