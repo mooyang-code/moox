@@ -186,7 +186,7 @@ func TestStatusDistinguishesTradingNonTradingAndOutOfCoverage(t *testing.T) {
 		})
 	}
 
-	for _, value := range []string{"1990-12-18", "2028-01-03"} {
+	for _, value := range []string{"1990-12-18", "2028-01-01"} {
 		date := mustDate(t, value)
 		status, err := calendar.Status(date)
 		if status != OutOfCoverage || !errors.Is(err, ErrOutOfCoverage) {
@@ -228,7 +228,7 @@ func TestPreviousAndNextTradingDayAreStrictAndBounded(t *testing.T) {
 	if _, err := calendar.PrevTradingDay(mustDate(t, "1990-12-18")); !errors.Is(err, ErrOutOfCoverage) {
 		t.Fatalf("PrevTradingDay(早于首日) 出错：%v，期望 ErrOutOfCoverage", err)
 	}
-	if _, err := calendar.NextTradingDay(mustDate(t, "2028-01-03")); !errors.Is(err, ErrOutOfCoverage) {
+	if _, err := calendar.NextTradingDay(mustDate(t, "2028-01-01")); !errors.Is(err, ErrOutOfCoverage) {
 		t.Fatalf("NextTradingDay(晚于末日) 出错：%v，期望 ErrOutOfCoverage", err)
 	}
 }

@@ -45,8 +45,8 @@ func TestToClosedRequiresRealDaysBeyondCalendar(t *testing.T) {
 func TestFutureRowsAreClampedToNow(t *testing.T) {
 	now := time.Date(2026, 10, 9, 10, 0, 0, 0, shanghai(t))
 	stock := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {ViewID: "view_stock"}}, Bar: "1d", Calendar: "cn_stock"}
-	view := ViewInfo{ViewID: "view_stock", IndexedFrom: stockDay(t, 2026, 1, 5), IndexedTo: stockDay(t, 2027, 6, 1), SeriesBars: 100}
-	end, err := ReplayWindow(stock, nil, view, stockDay(t, 2026, 9, 1), stockDay(t, 2027, 1, 1), now)
+	view := ViewInfo{ViewID: "view_stock", IndexedFrom: stockDay(t, 2026, 1, 5), IndexedTo: stockDay(t, 2028, 6, 1), SeriesBars: 100}
+	end, err := ReplayWindow(stock, nil, view, stockDay(t, 2026, 9, 1), stockDay(t, 2028, 1, 1), now)
 	if err != nil || !end.Equal(stockDay(t, 2026, 10, 8)) {
 		t.Fatalf("终点应截到 10-08（已闭合的最后一根）之前：%s err=%v", end, err)
 	}

@@ -2,13 +2,14 @@
 //
 // AkShare 的日历要等交易所公告后才更新，而 Strategy 会提前两个交易日判定日历过期，等不起；
 // 国办通知每年 11 月前后发布，交易所休市安排与之一致：节假日的工作日休市，调休补班的周末照样休市。
-// 交易所 12 月发布休市安排后要核对一遍，有出入以交易所为准，改 closures 后重新生成。
+// 交易所 12 月发布休市安排后要核对一遍，有出入以交易所为准，改 closures 后用同一条命令重新生成：
+// 数据里已有这一年时，先去掉这一年的交易日再按 closures 重算。
 //
 // 用法（在 packages/marketcalendar 目录下）：go run ./internal/gencn -year 2027
+// 交易所公布的年度日历已进 AkShare 时，也可以改用 scripts/marketdata/update-calendar.sh 整体替换。
 package main
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -17,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -53,7 +55,7 @@ type manifest struct {
 }
 
 func main() {
-	year := flag.Int("year", 0, "要追加的年份，必须紧接现有数据的最后一年")
+	year := flag.Int("year", 0, "要生成的年份：紧接现有数据的下一年，或者现有数据的最后一年（重新生成）")
 	dir := flag.String("data", "data", "日历数据目录")
 	flag.Parse()
 	if err := run(*year, *dir); err != nil {
@@ -85,8 +87,23 @@ func run(year int, dir string) error {
 	if err != nil {
 		return fmt.Errorf("最后一个交易日格式不对：%w", err)
 	}
-	if last.Year() != year-1 {
-		return fmt.Errorf("现有数据止于 %s，只能追加 %d 年", last.Format(time.DateOnly), last.Year()+1)
+	switch last.Year() {
+	case year - 1:
+	case year:
+		// 重新生成：去掉这一年已有的交易日，前一年必须还有数据。
+		prefix := fmt.Sprintf("%04d-", year)
+		kept := data.TradingDays[:0]
+		for _, day := range data.TradingDays {
+			if !strings.HasPrefix(day, prefix) {
+				kept = append(kept, day)
+			}
+		}
+		data.TradingDays = kept
+		if len(data.TradingDays) == 0 {
+			return fmt.Errorf("去掉 %d 年后没有剩余的交易日", year)
+		}
+	default:
+		return fmt.Errorf("现有数据止于 %s，只能追加 %d 年或重新生成 %d 年", last.Format(time.DateOnly), last.Year()+1, last.Year())
 	}
 
 	closedSet := make(map[string]struct{}, len(closed))
@@ -140,7 +157,7 @@ func run(year int, dir string) error {
 
 // baseSource 去掉上一次生成时追加的说明，只保留最初的数据来源，免得每年越拼越长。
 func baseSource(source string) string {
-	if index := bytes.IndexRune([]byte(source), '；'); index >= 0 {
+	if index := strings.IndexRune(source, '；'); index >= 0 {
 		return source[:index]
 	}
 	return source
