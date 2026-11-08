@@ -137,6 +137,26 @@ describe("测试网、生产环境下的设置要先确认", () => {
     wrapper.unmount();
   });
 
+  it("确认框打开期间 5 秒轮询换了账户对象：已输入的名称还在，提交的仍是打开时的请求", async () => {
+    const wrapper = mountLive(prodAccount);
+    await flushPromises();
+    const vm = wrapper.vm as unknown as SettingsVM;
+    vm.secretId = "s2";
+    vm.save();
+    await flushPromises();
+    await typeName("生产主账户");
+    await wrapper.setProps({ account: { ...prodAccount, last_sync_at: "later" } as TradingAccount });
+    await flushPromises();
+    expect(document.querySelector<HTMLInputElement>(".tx-confirm input")?.value).toBe("生产主账户");
+    confirmButton("更换")?.click();
+    await flushPromises();
+    expect(api.updateTradingAccount).toHaveBeenCalledWith(
+      { trading_account_id: "prod-1", name: undefined, credential_secret_id: "s2" },
+      { silent: true }
+    );
+    wrapper.unmount();
+  });
+
   it("只改名称不用确认", async () => {
     const wrapper = mountLive(prodAccount);
     await flushPromises();
