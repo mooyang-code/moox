@@ -1,7 +1,7 @@
 import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
 import ArcoVue from "@arco-design/web-vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { TradeResponseError, type LogicalAccount } from "@/api/trade";
+import { TradeResponseError, type LogicalAccount, type TradingAccount } from "@/api/trade";
 
 const mocks = vi.hoisted(() => ({ addLogicalAccountMember: vi.fn() }));
 vi.mock("@/api/trade", async () => ({
@@ -16,8 +16,12 @@ Object.defineProperty(window, "matchMedia", {
 });
 
 interface DialogVM {
+  openAdd(): void;
   openEdit(member: { trading_account_id: string; enabled: boolean; priority: number }, name: string): void;
   save(): Promise<boolean>;
+  runPending(): Promise<void>;
+  visible: boolean;
+  confirmVisible: boolean;
   form: { enabled: boolean; adopt_existing_exposure: boolean };
   adoptionNeeded: boolean;
 }
@@ -41,7 +45,7 @@ afterEach(() => {
 describe("编辑组合成员", () => {
   it("重新启用已停用成员时后端要求接管：提示并显示“接管”勾选，勾上后重试带上接管", async () => {
     wrapper = mount(MemberDialog, {
-      props: { logical, candidates: [] },
+      props: { logical, candidates: [], env: "paper" },
       global: { plugins: [ArcoVue] },
       attachTo: document.body
     });
@@ -65,5 +69,66 @@ describe("编辑组合成员", () => {
     expect(mocks.addLogicalAccountMember).toHaveBeenLastCalledWith(
       expect.objectContaining({ trading_account_id: "ta-1", enabled: true, adopt_existing_exposure: true })
     );
+  });
+
+  it("生产组合里改优先级先确认，不用输入名称；确认后才保存并关掉对话框", async () => {
+    wrapper = mount(MemberDialog, {
+      props: {
+        logical: { ...logical, members: [{ trading_account_id: "ta-1", enabled: true, priority: 1 }] },
+        candidates: [],
+        env: "prod"
+      },
+      global: { plugins: [ArcoVue] },
+      attachTo: document.body
+    });
+    const vm = wrapper.vm as unknown as DialogVM;
+    vm.openEdit({ trading_account_id: "ta-1", enabled: true, priority: 1 }, "执行账户一");
+    await flushPromises();
+    (vm.form as unknown as { priority: number }).priority = 3;
+    expect(await vm.save()).toBe(false);
+    await flushPromises();
+    expect(mocks.addLogicalAccountMember).not.toHaveBeenCalled();
+    expect(vm.confirmVisible).toBe(true);
+    expect(document.body.textContent).toContain("优先级：1 → 3");
+    expect(document.body.textContent).not.toContain("输入组合名称");
+    mocks.addLogicalAccountMember.mockResolvedValueOnce({});
+    await vm.runPending();
+    expect(mocks.addLogicalAccountMember).toHaveBeenCalledWith(
+      expect.objectContaining({ trading_account_id: "ta-1", priority: 3 })
+    );
+    expect(vm.visible).toBe(false);
+  });
+
+  it("生产组合里新增成员并接管已有持仓：确认框要输入组合名称", async () => {
+    const candidate = { trading_account_id: "ta-2", name: "执行账户二", exchange: 1, markets: [2] } as unknown as TradingAccount;
+    wrapper = mount(MemberDialog, {
+      props: { logical, candidates: [candidate], env: "prod" },
+      global: { plugins: [ArcoVue] },
+      attachTo: document.body
+    });
+    const vm = wrapper.vm as unknown as DialogVM;
+    vm.openAdd();
+    await flushPromises();
+    vm.form.adopt_existing_exposure = true;
+    expect(await vm.save()).toBe(false);
+    await flushPromises();
+    expect(mocks.addLogicalAccountMember).not.toHaveBeenCalled();
+    expect(document.body.textContent).toContain("接管「执行账户二」已有的持仓");
+    expect(document.body.textContent).toContain("输入组合名称「组合」确认");
+  });
+
+  it("新增成员不接管时不用确认，直接保存", async () => {
+    const candidate = { trading_account_id: "ta-2", name: "执行账户二", exchange: 1, markets: [2] } as unknown as TradingAccount;
+    wrapper = mount(MemberDialog, {
+      props: { logical, candidates: [candidate], env: "prod" },
+      global: { plugins: [ArcoVue] },
+      attachTo: document.body
+    });
+    const vm = wrapper.vm as unknown as DialogVM;
+    vm.openAdd();
+    await flushPromises();
+    mocks.addLogicalAccountMember.mockResolvedValueOnce({});
+    expect(await vm.save()).toBe(true);
+    expect(vm.confirmVisible).toBe(false);
   });
 });

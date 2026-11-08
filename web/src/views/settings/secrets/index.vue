@@ -27,16 +27,14 @@
             <template #icon><icon-safe /></template>
             HTTPS 根证书
           </a-button>
-          <template v-if="isAdmin">
-            <a-button @click="openExport">
-              <template #icon><icon-download /></template>
-              导出全部
-            </a-button>
-            <a-button @click="openImport">
-              <template #icon><icon-upload /></template>
-              导入
-            </a-button>
-          </template>
+          <a-button @click="openExport">
+            <template #icon><icon-download /></template>
+            导出全部
+          </a-button>
+          <a-button @click="openImport">
+            <template #icon><icon-upload /></template>
+            导入
+          </a-button>
         </a-space>
       </div>
 
@@ -232,7 +230,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from "vue";
 import { Message } from "@arco-design/web-vue";
-import { storeToRefs } from "pinia";
 import {
   listSecrets,
   createSecret,
@@ -248,7 +245,6 @@ import { reportControlError } from "@/api/admin/http";
 import RootCaDialog from "@/components/root-ca/root-ca-dialog.vue";
 import InspectionTestDialog from "@/components/trade-inspection/inspection-test-dialog.vue";
 import { canTestConnection } from "@/components/trade-inspection/inspection-request";
-import { useUserInfoStore } from "@/store/modules/user-info";
 import { defaultPagination, formatTime } from "@/views/data/shared/metadata-utils";
 import { MIN_PASSPHRASE_LENGTH, exportFileName, importSummary, passphraseError, saveTextFile } from "./secret-transfer";
 
@@ -464,8 +460,6 @@ function onPageSizeChange(pageSize: number) {
 }
 
 // 导出、导入只对全局管理员开放（迁移包里有全部秘钥的明文），其他用户不显示入口。
-const { account } = storeToRefs(useUserInfoStore());
-const isAdmin = computed(() => !!account.value.user?.admin);
 
 const rootCaVisible = ref(false);
 

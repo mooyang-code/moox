@@ -1,4 +1,5 @@
-export type RouteQueryValue = string | string[] | null | undefined;
+// 和 vue-router 的 LocationQuery 兼容：数组里的值也可能是 null。
+export type RouteQueryValue = string | (string | null)[] | null | undefined;
 export type RouteQuery = Record<string, RouteQueryValue>;
 
 export function getFunctionJobId(query: RouteQuery): string {

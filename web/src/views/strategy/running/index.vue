@@ -113,6 +113,7 @@
         @update:visible="value => (value ? openCreate() : closeOverlay())"
         @created="created"
       />
+      <InstanceEnableDialog ref="enableDialog" />
     </div>
   </div>
 </template>
@@ -128,6 +129,7 @@ import { useStrategyStore } from "@/store/modules/strategy";
 import StatusBadge from "@/views/strategy/components/strategy-status-badge.vue";
 import StrategyInstanceCreate from "@/views/strategy/components/strategy-instance-create.vue";
 import { confirmInstanceToggle } from "@/views/strategy/components/instance-toggle";
+import InstanceEnableDialog from "@/views/strategy/components/instance-enable-dialog.vue";
 import { formatStrategyTime } from "@/views/strategy/model";
 import InfoTip from "@/views/factor/shared/info-tip.vue";
 import { STRATEGY_TASKS_ROUTE, detailLink, normalizeTaskTab, replayLink, resultsLink } from "@/views/strategy/links";
@@ -159,6 +161,7 @@ const filters = reactive({ strategy_id: state.value.strategyId, enabled: state.v
 const pagination = computed(() => ({ current: state.value.page, pageSize: PAGE_SIZE, total: store.totalInstances }));
 const readAt = ref("");
 const togglingId = ref("");
+const enableDialog = ref<InstanceType<typeof InstanceEnableDialog> | null>(null);
 const empty = computed(() =>
   emptyKind({
     loading: store.instancesLoading,
@@ -240,13 +243,16 @@ function created(instanceId: string) {
 /** 列表行启停：与详情页共用确认对话框与请求流程，结束后（无论成败）重新读取列表以显示真实状态。 */
 function toggle(instance: StrategyInstance) {
   if (togglingId.value) return;
-  confirmInstanceToggle(instance.instance_id, !instance.enabled, {
+  const hooks = {
     onStart: () => (togglingId.value = instance.instance_id),
     onSettled: async () => {
       await refresh();
       togglingId.value = "";
     }
-  });
+  };
+  // 启用绑了组合账户的实例：确认框要写明账户和环境，生产要输入组合名称
+  if (!instance.enabled && instance.logical_account_id) enableDialog.value?.open(instance, hooks);
+  else confirmInstanceToggle(instance.instance_id, !instance.enabled, hooks);
 }
 onMounted(() => {
   // 进入页面先清掉 store 里可能属于其它空间的实例：期间在别的页面切过空间时，请求失败也不能继续显示旧空间的实例。

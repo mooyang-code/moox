@@ -9,7 +9,7 @@
         <a-space>
           <span class="muted">告警推送：{{ notificationLabel }}</span>
           <a-button :loading="loading" @click="refresh">刷新</a-button>
-          <a-button v-if="isAdmin" type="outline" @click="openNotification">消息通知设置</a-button>
+          <a-button type="outline" @click="openNotification">消息通知设置</a-button>
         </a-space>
       </header>
 
@@ -381,13 +381,11 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
-import { storeToRefs } from "pinia";
 import { Message, Modal } from "@arco-design/web-vue";
 import { monitorApi, type HealthComponent, type HealthOverview, type NotificationChannel } from "@/api/monitor";
 import { listAllDatasets, listAllViews } from "@/api/storage/metadata";
 import { usePolling } from "@/hooks/usePolling";
 import { createLatestRequestGuard } from "@/utils/latest-request";
-import { useUserInfoStore } from "@/store/modules/user-info";
 import { createSubmitScope } from "@/utils/submit-scope";
 import { relativeTime, toneIcon, type NameBook } from "@/views/home/home-model";
 import { formatCheckedAt, statusLabel } from "./health-display";
@@ -429,8 +427,6 @@ const draft = reactive({ channel_type: "wecom", webhook_url: "" });
 const adding = ref(false);
 const removing = ref("");
 // 完整的 Webhook URL 是推送凭据，读取接口只对全局管理员开放，其他用户不显示设置入口。
-const { account } = storeToRefs(useUserInfoStore());
-const isAdmin = computed(() => !!account.value.user?.admin);
 const refreshGuard = createLatestRequestGuard();
 
 const nowMs = computed(() => serverNow(overview.value, clockMs.value));

@@ -91,7 +91,9 @@ export function useInstanceResults(
     options.onReset?.();
     if (!instanceId.value) return;
     void load();
-    store.startPolling(() => (options.autoRefresh?.value === false ? undefined : load()));
+    store.startPolling(async () => {
+      if (options.autoRefresh?.value !== false) await load();
+    });
   }
 
   watch(instanceId, (next, previous) => {

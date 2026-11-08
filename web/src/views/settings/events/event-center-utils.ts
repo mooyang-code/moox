@@ -196,6 +196,11 @@ export function cancelLabel(item: EventExecution): string {
   return item.action_type === "ACTION_TYPE_SYSTEM" ? "取消并解除禁止" : "取消";
 }
 
+/** 系统动作“重新执行”前的确认说明：会再次对持有这个标的的组合禁止买入并按下架时间平仓。 */
+export function systemRetryConfirmText(item: Pick<EventExecution, "subject_id">): string {
+  return `会再次对持有 ${item.subject_id} 的组合禁止买入，并在下架前 24 小时平仓（已不足 24 小时的立即平仓）。`;
+}
+
 export function cancelConfirmText(item: EventExecution): string {
   if (item.cleanup_pending) return "这条记录已经取消，但解除禁止买入没做成。确认重试？";
   return item.action_type === "ACTION_TYPE_SYSTEM"

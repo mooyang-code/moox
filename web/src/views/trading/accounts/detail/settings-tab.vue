@@ -170,7 +170,7 @@
       </div>
     </section>
 
-    <MemberDialog ref="memberDialog" :logical="logical" :candidates="candidates" @saved="reload" />
+    <MemberDialog ref="memberDialog" :logical="logical" :candidates="candidates" :env="env" @saved="reload" />
 
     <ConfirmDialog
       v-model:visible="removeVisible"

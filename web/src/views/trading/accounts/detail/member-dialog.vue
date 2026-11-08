@@ -33,6 +33,20 @@
         <a-checkbox v-model="form.adopt_existing_exposure">接管账户里已有的持仓</a-checkbox>
       </a-form-item>
     </a-form>
+
+    <ConfirmDialog
+      v-model:visible="confirmVisible"
+      :title="pending?.title ?? ''"
+      :env="env"
+      :combo-name="logical.name"
+      :need-reason="false"
+      :name-required="pending?.nameRequired ?? true"
+      :danger="pending?.danger ?? false"
+      :confirm-text="pending?.confirmText"
+      :submit="runPending"
+    >
+      <p v-for="line in pending?.lines ?? []" :key="line" class="confirm-line">{{ line }}</p>
+    </ConfirmDialog>
   </a-modal>
 </template>
 
@@ -42,10 +56,13 @@ import { Message } from "@arco-design/web-vue";
 import { addLogicalAccountMember, exchangeLabels, isTradeAdoptionRequired } from "@/api/trade";
 import type { LogicalAccount, TradingAccount } from "@/api/trade";
 import { createSubmitScope } from "@/utils/submit-scope";
+import ConfirmDialog from "../shared/confirm-dialog.vue";
+import type { Environment } from "../shared/environment";
 import { marketsText } from "../shared/markets";
 import { nextPriority } from "../shared/membership";
+import { memberChangeConfirm, type MemberSettings, type RiskyConfirm } from "../shared/risky-actions";
 
-const props = defineProps<{ logical: LogicalAccount; candidates: TradingAccount[] }>();
+const props = defineProps<{ logical: LogicalAccount; candidates: TradingAccount[]; env: Environment }>();
 const emit = defineEmits<{ saved: [] }>();
 
 const visible = ref(false);
@@ -57,6 +74,11 @@ const adoptionNeeded = ref(false);
 const form = reactive({ trading_account_id: "", enabled: true, priority: 1, adopt_existing_exposure: false });
 // 打开和关闭都使进行中的保存失效：迟到的响应不能关闭用户重新打开的对话框。
 const scope = createSubmitScope();
+// 编辑时打开对话框那一刻的设置，用来判断改了什么；新增时为空。
+const original = ref<MemberSettings | null>(null);
+// 测试网、生产环境下改启停、优先级或接管已有持仓要先确认；确认后才真正保存。
+const confirmVisible = ref(false);
+const pending = ref<RiskyConfirm | null>(null);
 
 function openAdd() {
   scope.invalidate();
@@ -66,6 +88,7 @@ function openAdd() {
     priority: nextPriority(props.logical),
     adopt_existing_exposure: false
   });
+  original.value = null;
   editing.value = false;
   error.value = "";
   adoptionNeeded.value = false;
@@ -75,6 +98,7 @@ function openAdd() {
 function openEdit(member: { trading_account_id: string; enabled: boolean; priority: number }, name: string) {
   scope.invalidate();
   Object.assign(form, { ...member, adopt_existing_exposure: false });
+  original.value = { enabled: member.enabled, priority: member.priority };
   editing.value = true;
   editingName.value = name;
   error.value = "";
@@ -82,11 +106,39 @@ function openEdit(member: { trading_account_id: string; enabled: boolean; priori
   visible.value = true;
 }
 
+function accountName(): string {
+  if (editing.value) return editingName.value;
+  return props.candidates.find(item => item.trading_account_id === form.trading_account_id)?.name ?? form.trading_account_id;
+}
+
+/** 对话框的“确定”：需要确认时先打开确认框，对话框保持打开；不需要时直接保存。 */
 async function save() {
   if (!form.trading_account_id) {
     Message.warning("请选择执行账户");
     return false;
   }
+  const confirm =
+    props.env === "paper"
+      ? null
+      : memberChangeConfirm({
+          accountName: accountName(),
+          comboName: props.logical.name,
+          original: original.value,
+          next: { enabled: form.enabled, priority: form.priority },
+          adopt: form.adopt_existing_exposure
+        });
+  if (!confirm) return submit();
+  pending.value = confirm;
+  confirmVisible.value = true;
+  return false;
+}
+
+/** 确认框的“确认”：保存成功后连同对话框一起关掉；要求接管时回到对话框显示勾选。 */
+async function runPending() {
+  if (await submit()) visible.value = false;
+}
+
+async function submit() {
   const submission = scope.begin();
   const logicalId = props.logical.logical_account_id;
   error.value = "";
@@ -116,5 +168,9 @@ defineExpose({ openAdd, openEdit });
 <style scoped>
 .block {
   margin-bottom: var(--moox-space-3);
+}
+
+.confirm-line {
+  margin: 0 0 var(--moox-space-2);
 }
 </style>

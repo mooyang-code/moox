@@ -1,4 +1,5 @@
-import type { LogicalAccount } from "@/api/trade/types";
+import type { LogicalAccount, TradingAccount } from "@/api/trade/types";
+import { environmentLabel, logicalEnvironment } from "@/views/trading/accounts/shared/environment";
 
 const marketTypes: Record<string, number> = { spot: 1, swap: 2 };
 
@@ -37,8 +38,22 @@ export function marketsToResolved(markets: string[]): ResolvedMarkets {
   return { types: markets.map(market => marketTypes[market]).filter(Boolean), noAccount };
 }
 
+/**
+ * 选项前面的环境：模拟盘、测试网、生产。组合账户本身只区分模拟和实盘，测试网和生产要看成员执行账户；
+ * 执行账户没读到（tradingAccounts 为 null）时实盘只写“实盘”，不猜是测试网还是生产。
+ */
+export function environmentPrefix(account: LogicalAccount, tradingAccounts: ReadonlyMap<string, TradingAccount> | null): string {
+  if (account.execution_mode === 1) return environmentLabel("paper");
+  if (!tradingAccounts) return "实盘";
+  return environmentLabel(logicalEnvironment(account, tradingAccounts));
+}
+
 // 账户的可交易市场必须包含策略要输出的全部市场（交易模块用启用成员已开通市场的并集算出）。
-export function logicalAccountOptions(accounts: LogicalAccount[], markets: ResolvedMarkets = {}): LogicalAccountOption[] {
+export function logicalAccountOptions(
+  accounts: LogicalAccount[],
+  markets: ResolvedMarkets = {},
+  tradingAccounts: ReadonlyMap<string, TradingAccount> | null = null
+): LogicalAccountOption[] {
   if (markets.noAccount) return [];
   return accounts
     .filter(
@@ -53,7 +68,7 @@ export function logicalAccountOptions(accounts: LogicalAccount[], markets: Resol
       return {
         account,
         disabledReason,
-        label: `${account.name || account.logical_account_id}（${members} 个成员，${state}${suffix}）`
+        label: `${environmentPrefix(account, tradingAccounts)} · ${account.name || account.logical_account_id}（${members} 个成员，${state}${suffix}）`
       };
     });
 }

@@ -9,8 +9,7 @@ import {
   listInstances,
   listStrategies,
   listStrategyResults,
-  listStrategyTargets,
-  setInstanceEnabled
+  listStrategyTargets
 } from "@/api/strategy";
 import type {
   Strategy,
@@ -253,15 +252,6 @@ export const useStrategyStore = defineStore("strategy", () => {
     return detail;
   }
 
-  async function changeEnabled(instanceId: string, enabled: boolean) {
-    operationLoading.value = true;
-    try {
-      return await setInstanceEnabled(instanceId, enabled);
-    } finally {
-      operationLoading.value = false;
-    }
-  }
-
   async function removeStrategy(strategyId: string) {
     operationLoading.value = true;
     try {
@@ -345,7 +335,6 @@ export const useStrategyStore = defineStore("strategy", () => {
     loadInstanceDetail,
     loadResultPage,
     loadResultDetail,
-    changeEnabled,
     removeStrategy,
     startPolling,
     stopPolling,

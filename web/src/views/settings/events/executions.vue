@@ -53,7 +53,7 @@
                 type="text"
                 :disabled="Boolean(acting)"
                 :loading="acting === `retry/${record.execution_id}`"
-                @click="act('retry', record)"
+                @click="requestAct('retry', record)"
               >
                 重新执行
               </a-button>
@@ -90,14 +90,14 @@
       :refresh-token="refreshToken"
       :events="events"
       :busy="Boolean(acting)"
-      @action="(kind, item) => act(kind, item)"
+      @action="(kind, item) => requestAct(kind, item)"
     />
   </section>
 </template>
 
 <script setup lang="ts">
 import { onActivated, onMounted, reactive, ref } from "vue";
-import { Message } from "@arco-design/web-vue";
+import { Message, Modal } from "@arco-design/web-vue";
 import {
   acknowledgeEventExecution,
   cancelEventExecution,
@@ -125,7 +125,8 @@ import {
   executionStatusTone,
   formatDuration,
   formatMs,
-  pageAfterShrink
+  pageAfterShrink,
+  systemRetryConfirmText
 } from "./event-center-utils";
 
 defineOptions({ name: "EventCenterExecutions" });
@@ -201,6 +202,22 @@ function onPageSizeChange(size: number) {
 function openDetail(item: EventExecution) {
   detailId.value = item.execution_id;
   drawerVisible.value = true;
+}
+
+/** 系统动作的“重新执行”会再次禁止买入并平仓，先确认；其余操作直接执行（取消在列表里已有气泡确认）。 */
+function requestAct(kind: "retry" | "cancel" | "ack", item: EventExecution) {
+  if (kind !== "retry" || item.action_type !== "ACTION_TYPE_SYSTEM") {
+    void act(kind, item);
+    return;
+  }
+  Modal.confirm({
+    title: `重新执行「${item.subject_id}」的下架处理？`,
+    content: systemRetryConfirmText(item),
+    okText: "重新执行",
+    okButtonProps: { status: "danger" },
+    cancelText: "不执行",
+    onOk: () => act(kind, item)
+  });
 }
 
 async function act(kind: "retry" | "cancel" | "ack", item: EventExecution) {

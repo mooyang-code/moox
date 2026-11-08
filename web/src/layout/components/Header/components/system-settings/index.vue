@@ -90,7 +90,7 @@ const props = defineProps({
 
 const gapInfo = ref(watermarkGap.value);
 const onWatermarkGap = (e: number) => {
-  watermarkGap.value = watermarkGap.value.map(() => e);
+  watermarkGap.value = [e, e];
 };
 
 /*
@@ -98,8 +98,8 @@ const onWatermarkGap = (e: number) => {
   如果关闭，那么所有tabs全部取消、所有页面缓存全部取消
   如果开启，那么添加当前路由到tabs
 */
-const tabsChange = (e: boolean) => {
-  if (!e) {
+const tabsChange = (value: string | number | boolean) => {
+  if (!value) {
     tabsList.value = [];
     cacheRoutes.value = [];
   } else {
