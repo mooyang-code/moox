@@ -67,7 +67,7 @@
           <p v-if="willProcess">下面这些组合持有这个标的，会在下架前 24 小时（已不足 24 小时的立即）被平仓：</p>
           <p v-else>下面这些组合持有这个标的：</p>
           <ul class="holder-list">
-            <li v-for="holder in summary.live" :key="holderKey(holder)">生产　{{ holderLine(holder) }}</li>
+            <li v-for="holder in summary.live" :key="holderKey(holder)">实盘　{{ holderLine(holder) }}</li>
             <li v-for="holder in summary.paper" :key="holderKey(holder)">模拟盘　{{ holderLine(holder) }}</li>
           </ul>
           <template v-if="summary.dust.length">

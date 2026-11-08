@@ -8,35 +8,32 @@
           <template #action><a-button size="mini" @click="reload">重试</a-button></template>
         </a-alert>
 
-        <a-empty v-if="!store.tasks.length && !store.loading" description="当前空间没有计算任务">
+        <a-empty v-if="!store.tasks.length && !store.loading && !store.loadError" description="当前空间没有计算任务">
           <template #extra>
             <a-button @click="goTasks">前往计算任务</a-button>
           </template>
         </a-empty>
 
-        <template v-else>
+        <a-spin v-else-if="!store.tasks.length && store.loading" class="recalc-loading" />
+        <template v-else-if="store.tasks.length">
+          <TaskTabs :model-value="store.currentTaskId" class="recalc-tabs" @change="onTaskChange" />
           <div class="result-toolbar">
-            <span class="result-count">
-              共 {{ pagination.total }} 条补算作业
+            <span class="recalc-filter">
+              <a-radio-group v-model="segment" type="button" aria-label="补算状态筛选" @change="onSegmentChange">
+                <a-radio v-for="item in STATUS_SEGMENTS" :key="item.key" :value="item.key">{{ item.label }}</a-radio>
+              </a-radio-group>
               <InfoTip text="启用因子不会回填历史，启用后需要在这里手动补算；有进行中的任务时每 3 秒自动刷新。" />
             </span>
             <a-space wrap>
-              <TaskSelect :model-value="store.currentTaskId" @change="onTaskChange" />
               <a-button :loading="loading" @click="refresh">
                 <template #icon><icon-refresh /></template>
                 刷新
               </a-button>
-              <a-button type="primary" status="success" :disabled="!set" @click="createVisible = true">
+              <a-button type="primary" status="success" :disabled="!currentTask" @click="createVisible = true">
                 <template #icon><icon-plus /></template>
                 新建补算
               </a-button>
             </a-space>
-          </div>
-
-          <div class="recalc-filter">
-            <a-radio-group v-model="segment" type="button" aria-label="补算状态筛选" @change="onSegmentChange">
-              <a-radio v-for="item in STATUS_SEGMENTS" :key="item.key" :value="item.key">{{ item.label }}</a-radio>
-            </a-radio-group>
           </div>
 
           <a-table
@@ -53,10 +50,9 @@
           >
             <template #empty><a-empty description="该计算任务还没有补算作业" /></template>
             <template #columns>
-              <a-table-column title="任务" :width="260">
+              <a-table-column title="作业" :width="200">
                 <template #cell="{ record }">
-                  <div>{{ taskName(record.job.task_id) }}</div>
-                  <div class="job-id" :title="record.job.job_id">作业 {{ record.job.job_id }}</div>
+                  <div class="job-id" :title="record.job.job_id">{{ record.job.job_id }}</div>
                 </template>
               </a-table-column>
               <a-table-column title="因子" :width="180" :ellipsis="true" :tooltip="true">
@@ -112,12 +108,12 @@ import { computed, nextTick, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { Message } from "@arco-design/web-vue";
 import { cancelRecalcJob, listRecalcJobs } from "@/api/factor";
-import type { FactorTask, FactorTaskInfo, RecalcJob } from "@/api/factor/types";
+import type { FactorTask, RecalcJob } from "@/api/factor/types";
 import { usePolling } from "@/hooks/usePolling";
 import { RequestGate } from "@/utils/request-gate";
 import { applyPageResult, defaultPagination, formatTime } from "@/views/data/shared/metadata-utils";
 import InfoTip from "@/components/info-tip/index.vue";
-import TaskSelect from "@/views/factor/shared/task-select.vue";
+import TaskTabs from "@/views/factor/shared/task-tabs.vue";
 import { isActiveJob } from "@/views/factor/shared/status";
 import { useFactorScope } from "@/views/factor/shared/use-factor-scope";
 import RecalcCreateDrawer from "./recalc-create-drawer.vue";
@@ -130,15 +126,9 @@ defineOptions({ name: "FactorRecalc" });
 
 const route = useRoute();
 const router = useRouter();
-const { store, spaceId, selectTask, navigate, reload } = useFactorScope({ requireSet: true, poll: false });
+const { store, spaceId, selectTask, navigate, reload } = useFactorScope({ requireTask: true, poll: false });
 
-/** 任务列显示任务名；任务已不在当前空间的列表里时显示任务 ID。 */
-function taskName(taskId: string) {
-  const info = store.tasks.find((item: FactorTaskInfo) => item.factor_task.task_id === taskId);
-  return info ? store.taskLabel(info.factor_task) : taskId;
-}
-
-const set = computed<FactorTask | undefined>(() => store.current?.factor_task);
+const currentTask = computed<FactorTask | undefined>(() => store.current?.factor_task);
 const highlightJob = computed(() => {
   const value = route.query.job;
   return typeof value === "string" ? value : "";
@@ -163,7 +153,7 @@ const rowClass = (record: { job_id?: string }) =>
   record.job_id && record.job_id === highlightJob.value ? "recalc-row--highlight" : "";
 
 async function load(options: { silent?: boolean } = {}) {
-  const current = set.value;
+  const current = currentTask.value;
   const token = gate.next();
   if (!current) {
     jobs.value = [];
@@ -250,7 +240,7 @@ usePolling(
 );
 
 watch(
-  () => set.value?.task_id,
+  () => currentTask.value?.task_id,
   () => {
     pagination.current = 1;
     void load();
@@ -266,13 +256,25 @@ watch(
   margin-bottom: var(--moox-space-3);
 }
 
+.recalc-loading {
+  display: flex;
+  justify-content: center;
+  padding: var(--moox-space-8);
+}
+
+.recalc-tabs {
+  margin-bottom: var(--moox-space-3);
+}
+
 .recalc-filter {
-  margin-bottom: var(--moox-space-2);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--moox-space-2);
 }
 
 .job-id {
   overflow: hidden;
-  color: var(--color-text-3);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;

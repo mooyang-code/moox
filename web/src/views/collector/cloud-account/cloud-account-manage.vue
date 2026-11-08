@@ -27,11 +27,7 @@
         <template #columns>
           <a-table-column title="账户名称" data-index="account_name" :width="180"></a-table-column>
           <a-table-column title="云厂商" data-index="provider" :width="120">
-            <template #cell="{ record }">
-              <a-tag :color="getProviderColor(record.provider)">
-                {{ getProviderName(record.provider) }}
-              </a-tag>
-            </template>
+            <template #cell="{ record }">{{ providerName(record.provider) }}</template>
           </a-table-column>
           <a-table-column title="云密钥" data-index="credential_secret_id" :width="220">
             <template #cell="{ record }">
@@ -83,7 +79,7 @@
       :width="600"
       :mask-closable="false"
       @cancel="handleFormCancel"
-      @ok="handleFormOk"
+      :on-before-ok="handleFormOk"
     >
       <a-form :model="form" layout="vertical" ref="formRef">
         <a-form-item field="account_name" label="账户名称" required>
@@ -171,7 +167,6 @@ const visible = ref(props.modelValue);
 const loading = ref(false);
 const accountList = ref<CloudAccount[]>([]);
 const cloudSecrets = ref<Secret[]>([]);
-const total = ref(0);
 const formVisible = ref(false);
 const isEdit = ref(false);
 const formRef = ref();
@@ -215,7 +210,6 @@ const loadAccountList = async () => {
   try {
     const accounts = await getCloudAccountList();
     accountList.value = accounts || [];
-    total.value = accountList.value.length;
   } catch (error) {
     console.error("加载云账户列表失败:", error);
     Message.error(error instanceof Error ? error.message : "加载云账户失败：请确认已登录且 moox-cloudfunction 服务已部署");
@@ -343,21 +337,17 @@ const parseCosUrl = () => {
   }
 };
 
-// 表单确认
-const handleFormOk = async () => {
-  // 表单验证
+// 表单确认：返回 false 时弹窗不关，校验或保存失败后输入还在
+const handleFormOk = async (): Promise<boolean> => {
   const errors = await formRef.value?.validate();
-  if (errors) {
-    return;
-  }
+  if (errors) return false;
 
-  // 验证额外配置的JSON格式
   if (form.extra_config) {
     try {
       JSON.parse(form.extra_config);
     } catch {
-      Message.error("额外配置必须是有效的JSON格式");
-      return;
+      Message.error("额外配置必须是有效的 JSON");
+      return false;
     }
   }
 
@@ -391,13 +381,13 @@ const handleFormOk = async () => {
     }
 
     Message.success(isEdit.value ? "编辑成功" : "新建成功");
-    if (!submission.isCurrent()) return;
-    formVisible.value = false;
-    await loadAccountList();
+    if (!submission.isCurrent()) return false;
+    void loadAccountList();
     emit("refresh");
+    return true;
   } catch (error: any) {
-    console.error("保存云账户失败:", error);
     Message.error(error?.message || "保存云账户失败");
+    return false;
   }
 };
 
@@ -406,29 +396,13 @@ const handleCancel = () => {
   visible.value = false;
 };
 
-// 工具函数
-const getProviderName = (provider: string) => {
-  const providerMap: Record<string, string> = {
-    tencent: "腾讯云",
-    aliyun: "阿里云",
-    aws: "AWS"
-  };
-  return providerMap[provider] || provider;
-};
-
-const getProviderColor = (provider: string) => {
-  const colorMap: Record<string, string> = {
-    tencent: "blue",
-    aliyun: "orange",
-    aws: "purple"
-  };
-  return colorMap[provider] || "gray";
-};
+// 云厂商只有腾讯云
+const providerName = (provider: string) => (provider === "tencent" ? "腾讯云" : provider);
 
 // 代码包、云账户是全局对象：时间按 UTC 带后缀
 const formatTime = (time: string | undefined) => formatInstant(time, "UTC");
 
-// 提交作用域（重新打开才使旧提交失效，@ok 自动关闭不影响正常保存）：formVisible 打开/关闭都会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
+// 提交作用域：重新打开表单会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
 const accountScope = createSubmitScope({ global: true });
 watch(formVisible, open => {
   if (open) accountScope.invalidate();

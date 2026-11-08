@@ -174,7 +174,7 @@ void listLogicalAccounts({ page: 1, size: 500 })
     logicalNames.value = Object.fromEntries((response.logical_accounts || []).map(item => [item.logical_account_id, item.name]));
   })
   .catch(() => undefined);
-// URL 是已应用筛选、分页、快速详情与创建抽屉的唯一来源；filters 只是筛选框里还没点“查询”的草稿。
+// URL 是筛选、分页、快速详情与创建抽屉的唯一来源；filters 是筛选框的绑定值，改动即时写回 URL。
 const state = computed<RunningState>(() => parseRunningQuery(route.query));
 const filters = reactive({ strategy_id: state.value.strategyId, enabled: state.value.enabled as string });
 const pagination = computed(() => ({ current: state.value.page, pageSize: PAGE_SIZE, total: store.totalInstances }));

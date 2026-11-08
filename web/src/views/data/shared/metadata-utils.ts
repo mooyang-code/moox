@@ -76,10 +76,6 @@ export function jsonText(value?: string) {
   return value?.trim() || "{}";
 }
 
-export function joinList(value?: string[]) {
-  return (value || []).join(",");
-}
-
 const internalFieldPrefixPattern = /^dataset_[0-9a-z_]+__(.+)$/;
 
 export function displayFieldId(fieldId: string | undefined) {

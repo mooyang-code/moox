@@ -9,7 +9,7 @@
           {{ detailError }}<span v-if="activeLastStatusReadAt">；保留上次读取的结果状态（{{ activeLastStatusReadAt }}）</span>
         </a-alert>
 
-        <a-empty v-if="!resultTabs.length && !detailError" description="暂无采集任务">
+        <a-empty v-if="!resultTabs.length && !detailError && !loadError && !loading" description="暂无采集任务">
           <template #extra>
             <a-button type="primary" status="success" @click="goToTasks">新建采集任务</a-button>
           </template>
@@ -17,26 +17,18 @@
 
         <template v-else-if="resultTabs.length">
           <div class="result-toolbar">
-            <a-space wrap>
-              <a-select
-                :model-value="activeTaskId"
-                allow-search
-                class="result-task-select"
-                placeholder="选择采集任务"
-                @change="onTaskSelect"
-              >
-                <a-option v-for="tab in resultTabs" :key="tab.taskId" :value="tab.taskId" :label="tab.title"
+            <a-tabs :active-key="activeTaskId" type="rounded" size="medium" class="result-tabs" @change="onTaskChange">
+              <a-tab-pane v-for="tab in resultTabs" :key="tab.taskId">
+                <template #title
                   >{{ tab.title
-                  }}<span v-if="taskStateNote(tab.task)" class="result-task-note">{{ taskStateNote(tab.task) }}</span></a-option
+                  }}<span v-if="taskStateNote(tab.task)" class="result-task-note">{{ taskStateNote(tab.task) }}</span></template
                 >
-              </a-select>
-              <span class="result-count">
-                共 {{ resultTabs.length }} 个任务<span v-if="activeLastStatusReadAt"
-                  >；状态读取：{{ activeLastStatusReadAt }}</span
-                >
-              </span>
+              </a-tab-pane>
+            </a-tabs>
+            <a-space class="result-actions">
+              <span v-if="activeLastStatusReadAt" class="result-read-at">状态读取：{{ activeLastStatusReadAt }}</span>
+              <a-button :loading="detailLoading" :disabled="!activeTaskId" @click="refreshActiveTask">刷新结果</a-button>
             </a-space>
-            <a-button :loading="detailLoading" :disabled="!activeTaskId" @click="refreshActiveTask">刷新结果</a-button>
           </div>
 
           <div v-if="activeResample" class="resample-source-line">
@@ -345,11 +337,7 @@ function onTaskChange(value: string | number) {
   void loadTaskDetail(taskId);
 }
 
-function onTaskSelect(value: unknown) {
-  onTaskChange(String(value ?? ""));
-}
-
-/** 下拉选项后附的状态文字：和采集任务列表同一套口径，只在“结果异常”“结果准备中”时写。 */
+/** 任务页签后附的状态文字：和采集任务列表同一套口径，只在“结果异常”“结果准备中”时写。 */
 function taskStateNote(task: CollectorTask) {
   const label = collectionTaskResultLabel(task as Parameters<typeof collectionTaskResultLabel>[0]);
   return label === "结果异常" ? "异常" : label === "结果准备中" ? "准备中" : "";
@@ -450,11 +438,6 @@ watch(
   min-width: 0;
 }
 
-.result-task-select {
-  width: 320px;
-  max-width: 100%;
-}
-
 .result-task-note {
   margin-left: 8px;
   color: var(--color-text-3);
@@ -470,8 +453,22 @@ watch(
   margin-bottom: var(--moox-space-2);
 }
 
-.result-count {
-  color: var(--color-text-2);
+.result-tabs {
+  min-width: 0;
+  flex: 1;
+}
+
+.result-tabs :deep(.arco-tabs-content) {
+  display: none;
+}
+
+.result-actions {
+  flex: none;
+}
+
+.result-read-at {
+  color: var(--color-text-3);
+  font-size: 13px;
 }
 
 .result-refresh-warning {

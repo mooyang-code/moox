@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildQuery, queryEnum, queryPage, queryString, sameQuery } from "./query";
+import { buildQuery, queryPage, queryString, sameQuery } from "./query";
 
 describe("strategy query helpers", () => {
   it("reads the first trimmed value", () => {
@@ -15,11 +15,6 @@ describe("strategy query helpers", () => {
     expect(queryPage("1.5")).toBe(1);
     expect(queryPage("abc")).toBe(1);
     expect(queryPage(undefined)).toBe(1);
-  });
-
-  it("falls back for values outside the allowed set", () => {
-    expect(queryEnum("true", ["true", "false"] as const, "" as "true" | "false" | "")).toBe("true");
-    expect(queryEnum("x", ["true", "false"] as const, "" as "true" | "false" | "")).toBe("");
   });
 
   it("builds queries without empty values or defaults", () => {

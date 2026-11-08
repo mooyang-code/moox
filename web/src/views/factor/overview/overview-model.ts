@@ -1,5 +1,5 @@
 import type { EngineStatus, FactorTask, FactorTaskInfo, RecalcJob } from "@/api/factor/types";
-import { setHealth, type SetHealth } from "@/views/factor/shared/health";
+import { taskHealth, type TaskHealth } from "@/views/factor/shared/health";
 import { memberStatusTag, periodStatusTag } from "@/views/factor/shared/status";
 
 export interface RouteTarget {
@@ -128,7 +128,7 @@ export interface AbnormalMember {
 export interface TaskCard {
   taskId: string;
   title: string;
-  health: SetHealth;
+  health: TaskHealth;
   /** 成员状态计数，一行文字，例如“正常 3 · 降级 1”；没有成员时为空。 */
   summary: string;
   abnormal: AbnormalMember[];
@@ -158,7 +158,7 @@ export function taskCards(sets: FactorTaskInfo[], labelOf: (set: FactorTask) => 
   return sets.map(info => ({
     taskId: info.factor_task.task_id,
     title: labelOf(info.factor_task),
-    health: setHealth(info.factor_task, info.last_run),
+    health: taskHealth(info.factor_task, info.last_run),
     ...memberSummary(info),
     links: cardLinks(info.factor_task.task_id)
   }));
@@ -186,7 +186,7 @@ export function pendingItems(
     const { task_id: taskId } = info.factor_task;
     const title = labelOf(info.factor_task);
     const links = cardLinks(taskId);
-    const health = setHealth(info.factor_task, info.last_run);
+    const health = taskHealth(info.factor_task, info.last_run);
     if (health.key === "failed") {
       items.push({ kind: "failed", taskId, title, text: "最近周期计算失败", target: links.detail });
     } else if (health.key === "degraded") {

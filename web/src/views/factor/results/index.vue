@@ -8,7 +8,7 @@
           <template #action><a-button size="mini" @click="reload">重试</a-button></template>
         </a-alert>
 
-        <a-empty v-if="!available.length && !store.loading" description="暂无计算任务">
+        <a-empty v-if="!available.length && !store.loading && !store.loadError" description="暂无计算任务">
           <template #extra>
             <a-button @click="goTasks">前往计算任务</a-button>
           </template>
@@ -16,20 +16,18 @@
 
         <template v-else-if="available.length">
           <div class="result-toolbar">
-            <a-space wrap>
-              <TaskSelect :model-value="activeTaskId" :include="isResultTask" @change="onTabChange" />
-              <span class="result-count"
-                >共 {{ available.length }} 个计算任务<span v-if="readAt">；任务状态读取于 {{ readAt }}</span></span
-              >
+            <TaskTabs :model-value="activeTaskId" :include="isResultTask" class="result-tabs" @change="onTabChange" />
+            <a-space class="result-actions">
+              <span v-if="readAt" class="result-read-at">任务状态读取于 {{ readAt }}</span>
+              <a-button :loading="viewLoading" @click="refreshResults">
+                <template #icon><icon-refresh /></template>
+                刷新结果
+              </a-button>
             </a-space>
-            <a-button :loading="viewLoading" @click="refreshResults">
-              <template #icon><icon-refresh /></template>
-              刷新结果
-            </a-button>
           </div>
 
-          <a-alert v-if="scopeError" type="error" show-icon class="results-alert">
-            {{ scopeError }}
+          <a-alert v-if="viewError || scopeError" type="error" show-icon class="results-alert">
+            {{ viewError || scopeError }}
             <template #action><a-button size="mini" @click="loadResultView">重试</a-button></template>
           </a-alert>
 
@@ -77,7 +75,7 @@
             </template>
           </ViewBrowse>
           <a-spin v-else-if="viewLoading" class="results-loading" />
-          <a-empty v-else description="结果视图由 Storage 在结果数据集激活后自动创建，请稍后刷新">
+          <a-empty v-else-if="!viewError" description="结果视图由 Storage 在结果数据集激活后自动创建，请稍后刷新">
             <template #extra>
               <a-button @click="goTasks">前往计算任务</a-button>
             </template>
@@ -116,7 +114,7 @@ import { getStrategyDisplaySettings } from "@/api/strategy";
 import type { DisplayHidden } from "@/api/strategy-types";
 import { RequestGate } from "@/utils/request-gate";
 import ViewBrowse from "@/views/data/view-browse/index.vue";
-import TaskSelect from "@/views/factor/shared/task-select.vue";
+import TaskTabs from "@/views/factor/shared/task-tabs.vue";
 import { useFactorScope } from "@/views/factor/shared/use-factor-scope";
 import { pickResultView, resolveActiveTaskId, resultTasks, resultSummary } from "./results-model";
 import { buildFactorScope } from "./factor-scope";
@@ -139,10 +137,10 @@ defineOptions({ name: "FactorResults" });
 const displayZone = useDisplayZone();
 const route = useRoute();
 const router = useRouter();
-const { store, spaceId, selectTask, navigate, reload } = useFactorScope({ requireSet: true });
+const { store, spaceId, selectTask, navigate, reload } = useFactorScope({ requireTask: true });
 
 const available = computed<FactorTaskInfo[]>(() => resultTasks(store.tasks));
-// 任务下拉只列能浏览结果的任务（和补算页同一个下拉组件）
+// 任务页签只列能浏览结果的任务（补算页列全部任务）
 const isResultTask = (info: FactorTaskInfo) => resultTasks([info]).length > 0;
 const activeTaskId = ref("");
 const activeInfo = computed(() =>
@@ -163,6 +161,8 @@ const displayHidden = ref<DisplayHidden>();
 /** 原料全部就绪后才放行首查，否则首查会带着默认投影、漏掉 URL 里的因子条件。 */
 const scopeReady = ref(false);
 const scopeError = ref("");
+/** 结果视图读取失败：显示错误条和重试，不落到“请稍后刷新”的空态。 */
+const viewError = ref("");
 const scope = computed(() =>
   buildFactorScope({
     viewColumns: viewColumns.value,
@@ -196,6 +196,7 @@ async function loadResultView() {
   resultView.value = null;
   scopeReady.value = false;
   scopeError.value = "";
+  viewError.value = "";
   if (!current) {
     viewLoading.value = false;
     return;
@@ -212,7 +213,8 @@ async function loadResultView() {
     resultView.value = pickResultView(rsp.views || [], current);
     if (resultView.value) await loadScope(current, resultView.value, token);
   } catch (error) {
-    if (viewGate.isCurrent(token)) Message.error(error instanceof Error ? error.message : "结果视图加载失败");
+    if (viewGate.isCurrent(token))
+      viewError.value = `结果视图读取失败：${error instanceof Error ? error.message : String(error)}`;
   } finally {
     if (viewGate.isCurrent(token)) viewLoading.value = false;
   }
@@ -352,6 +354,19 @@ watch(
 
 .results-alert {
   margin-bottom: var(--moox-space-3);
+}
+
+.result-tabs {
+  flex: 1;
+}
+
+.result-actions {
+  flex: none;
+}
+
+.result-read-at {
+  color: var(--color-text-3);
+  font-size: 13px;
 }
 
 .results-loading {

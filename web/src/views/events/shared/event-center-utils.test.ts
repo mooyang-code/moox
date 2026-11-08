@@ -205,7 +205,7 @@ describe("手工登记下架", () => {
     ...patch
   });
 
-  it("预览结果分成生产、模拟盘和零头", () => {
+  it("预览结果分成实盘、模拟盘和零头", () => {
     const summary = summarizeHolders([
       holder({ logical_account_id: "live" }),
       holder({ logical_account_id: "paper", paper: true }),
@@ -231,11 +231,11 @@ describe("手工登记下架", () => {
     expect(confirmCheckboxText(base)).toBe("");
     expect(confirmCheckboxText({ ...base, previewFailed: true })).toBe("我知道无法确认持有情况，仍然登记");
     expect(confirmCheckboxText({ ...base, verified: false, live: 2 })).toBe("我知道无法确认持有情况，仍然登记");
-    expect(confirmCheckboxText({ ...base, live: 1 })).toBe("我确认有生产组合会被平仓，仍然登记");
-    expect(confirmCheckboxText({ ...base, live: 1, willProcess: false })).toBe("我确认有生产组合持有这个标的，仍然登记");
+    expect(confirmCheckboxText({ ...base, live: 1 })).toBe("我确认有实盘组合会被平仓，仍然登记");
+    expect(confirmCheckboxText({ ...base, live: 1, willProcess: false })).toBe("我确认有实盘组合持有这个标的，仍然登记");
     expect(confirmCheckboxText({ ...base, skipped: 1 })).toBe("我确认有账户没能判断持有情况，仍然登记");
     expect(confirmCheckboxText({ ...base, live: 1, skipped: 2 })).toBe(
-      "我确认有生产组合会被平仓，并且有账户没能判断持有情况，仍然登记"
+      "我确认有实盘组合会被平仓，并且有账户没能判断持有情况，仍然登记"
     );
   });
 

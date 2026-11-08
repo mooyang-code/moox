@@ -627,7 +627,6 @@ const loading = ref(false);
 const submitLoading = ref(false);
 const loadingSourceTasks = ref(false);
 const loadingTags = ref(false);
-const loadingTypeFields = ref(false);
 const loadingDataNodes = ref(false);
 const taskList = ref<CollectionTaskRecord[]>([]);
 const dataTypeConfigs = ref<DataTypeConfig[]>([]);
@@ -1165,7 +1164,6 @@ async function loadTaskTypeFields() {
     return;
   }
   taskTypeFields.value = [];
-  loadingTypeFields.value = true;
   try {
     const response = await GetDataTypeConfigWithFields(dataType);
     if (token !== taskTypeFieldRequestToken || editor.data_type !== dataType) return;
@@ -1175,8 +1173,6 @@ async function loadTaskTypeFields() {
       taskTypeFields.value = [];
       Message.warning(error instanceof Error ? error.message : "读取执行任务类型参数失败");
     }
-  } finally {
-    if (token === taskTypeFieldRequestToken) loadingTypeFields.value = false;
   }
 }
 
@@ -1317,7 +1313,7 @@ async function saveEditor() {
   }
 }
 
-// Identifies the newest list request so responses from a page the user already left are discarded.
+// 标记最新一次列表请求：用户已离开的那页迟到的响应直接丢弃
 let taskListGeneration = 0;
 
 async function getTaskList() {

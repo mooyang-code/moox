@@ -88,12 +88,6 @@ export const RUNTIME_OPTIONS = [
   { label: "CustomRuntime", value: "CustomRuntime" }
 ];
 
-export const PACKAGE_TYPE_OPTIONS = [
-  { label: "采集器", value: 1 },
-  { label: "因子", value: 2 },
-  { label: "自定义", value: 3 }
-];
-
 const PACKAGE_TYPE_VALUE: Record<PackageType, number> = {
   PACKAGE_TYPE_UNSPECIFIED: 0,
   PACKAGE_TYPE_COLLECTOR: 1,

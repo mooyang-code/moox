@@ -67,6 +67,7 @@
               :selected-count="selectedKeys.length"
               :groups="groups"
               :loading="batchLoading"
+              :move="groupId => applyBatch({ target_group_id: groupId })"
               @apply="applyBatch"
               @clear="selectedKeys = []"
             />
@@ -446,14 +447,18 @@ function confirmDeleteGroup(group: FieldGroup) {
   });
 }
 
+/** 批量改字段组或状态，返回是否成功（失败提示由请求层弹出）。 */
 async function applyBatch(change: { target_group_id?: string; target_status?: "active" | "disabled" | "deleted" }) {
-  if (!selectedKeys.value.length) return;
+  if (!selectedKeys.value.length) return false;
   batchLoading.value = true;
   try {
     const rsp = await batchUpdateFields({ space_id: selectedSpaceId.value, field_ids: selectedKeys.value, ...change });
     Message.success(`已更新 ${rsp.updated_count || selectedKeys.value.length} 个字段`);
     selectedKeys.value = [];
     await loadAll();
+    return true;
+  } catch {
+    return false;
   } finally {
     batchLoading.value = false;
   }

@@ -524,9 +524,8 @@ const detailRow = ref<ViewBrowseTableRow>();
 const detailVisible = ref(false);
 const recordKeyword = ref("");
 const filters = ref<ViewFilterState[]>([]);
-// Time-series previews should answer the operational question first: what is
-// the newest bar?  Without an explicit sort DuckDB returns index order, which
-// can leave the first page showing an old bar even while ingestion is healthy.
+// 时序预览先回答“最新一根是哪根”：不显式排序时 DuckDB 按索引顺序返回，
+// 采集正常时首页也可能停在一根旧 K 线上。
 const sortState = reactive<{ fieldName: string; direction: ViewSortDirection }>({ fieldName: "data_time", direction: "desc" });
 const metaLoading = ref(false);
 const metaError = ref("");
@@ -663,9 +662,8 @@ async function loadMeta() {
   metaError.value = "";
   try {
     const page = { page: 1, size: 1000 };
-    // Views and Datasets are required to render the first result page. Fields
-    // only decorate labels and can arrive afterwards; keeping them out of this
-    // critical path avoids making a slow metadata read delay the actual query.
+    // 首页结果只依赖视图和数据集；字段只用来显示列名，可以晚到，
+    // 不放进首查路径，免得元数据读得慢拖住查询。
     if (targetedViewIds.value.length > 0) {
       const catalog = await loadTargetedViewCatalog(space_id, targetedViewIds.value);
       if (sequence !== metaLoadSequence || selectedSpaceId.value !== space_id) return;
@@ -680,9 +678,7 @@ async function loadMeta() {
     ensureSelectedView();
     await loadViewContext();
 
-    // These requests are intentionally best-effort. A label catalogue outage
-    // must not hide already loaded rows or turn a usable data browser into a
-    // blocking spinner.
+    // 这几项尽力而为：标签目录读不到时，不能藏掉已读到的行，也不能让页面一直转圈。
     void listFields({ space_id, page })
       .then(fieldRsp => {
         if (sequence !== metaLoadSequence || selectedSpaceId.value !== space_id) return;
@@ -757,8 +753,7 @@ watch(
   }
 );
 
-// Coalesce requests during a query/context load into a follow-up read instead
-// of silently dropping the user's refresh while the browser is busy.
+// 查询或上下文加载期间的刷新合并成之后的一次补读，不在忙时悄悄丢掉用户的刷新。
 watch([pendingRowsRefresh, loading, contextLoading, metaLoading, () => activeView.value?.view_id], () => {
   if (!pendingRowsRefresh.value || !activeView.value || loading.value || contextLoading.value || metaLoading.value) return;
   pendingRowsRefresh.value = false;
@@ -1014,8 +1009,7 @@ async function resetQueryControls() {
 }
 
 function resetSortState() {
-  // Results are time-series data. Show the newest calculated period first so
-  // an old first page cannot make a live factor view look stalled.
+  // 结果是时序数据：最新周期排在最前，免得首页停在旧周期上，看起来像因子停算了。
   if (mode.value === "time_series") {
     sortState.fieldName = "data_time";
     sortState.direction = "desc";

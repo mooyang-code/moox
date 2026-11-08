@@ -5,10 +5,10 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import type { FactorTask, TaskRunSummary } from "@/api/factor/types";
-import { setHealth } from "./health";
+import { taskHealth } from "./health";
 
 defineOptions({ name: "FactorHealthTag" });
 
 const props = defineProps<{ set: Pick<FactorTask, "status" | "freq">; lastRun?: TaskRunSummary }>();
-const health = computed(() => setHealth(props.set, props.lastRun));
+const health = computed(() => taskHealth(props.set, props.lastRun));
 </script>
