@@ -89,6 +89,7 @@ type setupInitSummary struct {
 	SCFPlan          *setupSCFPlanSummary          `json:"scf_plan,omitempty"`
 	AdminState       string                        `json:"admin_state"`
 	LoginAPI         string                        `json:"login_api"`
+	LoginSkipped     string                        `json:"login_skipped,omitempty"`
 	Metadata         setupInitMetadataCounts       `json:"metadata"`
 	Datasets         setupDatasetActivationSummary `json:"datasets"`
 	Verification     setupInitMetadataCounts       `json:"verification"`
@@ -289,7 +290,7 @@ func runSetupInit(
 	if err != nil {
 		return setupInitSummary{}, err
 	}
-	login, err := deps.login(ctx, snapshot)
+	login, loginSkipped, err := verifySetupLogin(ctx, deps, snapshot, admin.Kept)
 	if err != nil {
 		return setupInitSummary{}, err
 	}
@@ -313,7 +314,7 @@ func runSetupInit(
 	}
 	return setupInitSummary{
 		Status: "ready", Firewall: firewall, BusinessSpaces: len(bundle.Spaces), BusinessSpaceIDs: setupSpaceIDs(bundle.Spaces),
-		Admin: admin, CloudAccounts: cloudAccounts, CLS: cls, SCFPlan: scfPlan, AdminState: adminStatus.State, LoginAPI: login.LoginAPI,
+		Admin: admin, CloudAccounts: cloudAccounts, CLS: cls, SCFPlan: scfPlan, AdminState: adminStatus.State, LoginAPI: login.LoginAPI, LoginSkipped: loginSkipped,
 		Metadata: setupInitMetadataCounts{
 			Planned: metadata.Planned, Applied: metadata.Applied, Unchanged: metadata.Unchanged,
 		},

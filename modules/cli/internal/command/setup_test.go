@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -461,4 +462,35 @@ compute = []
 	snapshot, err := setupconfig.Load(path, dir)
 	require.NoError(t, err)
 	return snapshot
+}
+
+// 管理员以管理台为准保留（管理台改过密码）时，moox.toml 的密码登不上是正常的：apply 不再做登录校验，照常成功并说明原因。
+func TestSetupApplySkipsLoginWhenTheAdministratorIsKept(t *testing.T) {
+	t.Parallel()
+	snapshot := setupSnapshot(t)
+	loginCalls := 0
+	deps := setupDeps{
+		load: func(string) (*setupconfig.Snapshot, error) { return snapshot, nil },
+		validate: func(context.Context, *setupconfig.Snapshot) (setupvalidate.Result, error) {
+			return setupvalidate.Result{Checks: []setupvalidate.Check{{Name: "config", Status: "valid"}}}, nil
+		},
+		apply: func(context.Context, *setupconfig.Snapshot) (setupclient.ApplyResult, error) {
+			return setupclient.ApplyResult{Action: "created", Users: 1, Secrets: 2, Kept: []string{"admin"}}, nil
+		},
+		login: func(context.Context, *setupconfig.Snapshot) (setupclient.LoginResult, error) {
+			loginCalls++
+			return setupclient.LoginResult{}, errors.New("login_failed")
+		},
+	}
+	cmd := newSetupCommand(deps)
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&bytes.Buffer{})
+	cmd.SetArgs([]string{"apply", "--file", "moox.toml"})
+	require.NoError(t, cmd.Execute())
+	require.Zero(t, loginCalls)
+	var result map[string]any
+	require.NoError(t, json.Unmarshal(stdout.Bytes(), &result))
+	require.Equal(t, []any{"admin"}, result["kept"])
+	require.Contains(t, result["login_skipped"], "管理台")
 }
