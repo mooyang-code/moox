@@ -104,10 +104,8 @@
                 <template #cell="{ record }">
                   <div class="dataset-cell" :title="`${record.dataset_id} · ${record.frequency}`">
                     <span v-if="record.dataset_name" class="dataset-name">{{ record.dataset_name }}</span>
-                    <template v-else>
-                      <span class="mono-text dataset-name">{{ record.dataset_id }}</span>
-                      <a-tag size="small" class="freq-tag">{{ record.frequency }}</a-tag>
-                    </template>
+                    <span v-else class="mono-text dataset-name">{{ record.dataset_id }}</span>
+                    <span class="freq-text">{{ record.frequency }}</span>
                   </div>
                 </template>
               </a-table-column>
@@ -807,8 +805,10 @@ onMounted(loadStatus);
   color: var(--color-text-3);
   cursor: help;
 }
-.freq-tag {
+.freq-text {
   flex: none;
+  color: var(--color-text-3);
+  font-size: 12px;
 }
 .dataset-detail {
   display: flex;

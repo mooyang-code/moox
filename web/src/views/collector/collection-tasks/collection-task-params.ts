@@ -1,6 +1,7 @@
 import type { CollectorTask, CollectionTaskPayload } from "@/api/collector";
 import { normalizeFrequency } from "@/utils/frequency";
 import { marketLabel } from "@/views/data/shared/series-market";
+import { getTaskResultState, getTaskResultViewIds } from "@/views/collector/task-results/task-results-model";
 
 export type CollectionTaskDataType = "kline" | "kline_resample";
 // K 线采集结果后端（taskresult.ensureColumns 的时序数据集）支持的全部输出字段；字段目录里的其他字段选了会被拒绝。
@@ -336,19 +337,16 @@ function stringArrayValue(value: unknown): string[] {
 export type CollectionTaskResultLabel = "结果可用" | "结果准备中" | "结果异常";
 
 /**
- * Result label for a task. The task list does not inspect Storage per task, so
- * it reports result status "unknown"; the label then follows the Collector's
- * own preparation state, where "ready" means the result is provisioned and
- * active. Task details carry the inspected Storage status.
+ * 采集任务列表上的结果文字：和采集结果页共用一套判定（getTaskResultState）。
+ * 列表接口不逐个检查 Storage，结果状态是 unknown（判定为待刷新）：这时按 Collector 自己的准备状态，ready 表示结果已经建好。
  */
 export function collectionTaskResultLabel(
   task: Pick<CollectionTaskRecord, "prepare_state" | "last_error" | "result">
 ): CollectionTaskResultLabel {
-  const status = String(task.result?.status || "").toLowerCase();
-  const prepareState = String(task.prepare_state || "").toLowerCase();
-  if (status === "error" || prepareState === "error" || task.last_error) return "结果异常";
-  if (!task.result?.view_id) return "结果准备中";
-  if (["active", "ready", "succeeded"].includes(status)) return "结果可用";
-  if (status === "unknown" && prepareState === "ready") return "结果可用";
+  const state = getTaskResultState(task as CollectorTask);
+  if (state === "error") return "结果异常";
+  if (state === "ready") return "结果可用";
+  const prepared = String(task.prepare_state || "").toLowerCase() === "ready";
+  if (state === "stale" && prepared && getTaskResultViewIds(task as CollectorTask).length) return "结果可用";
   return "结果准备中";
 }
