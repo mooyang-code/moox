@@ -124,3 +124,79 @@ describe("拉取预览", () => {
     expect(document.body.textContent).toContain("分区 2026-11-06 预计 2026-11-07 08:15:25 UTC+8 导出");
   });
 });
+
+describe("新建时的目录名", () => {
+  const datasets = [{ dataset_id: "ds_1m", name: "现货分钟K线", freq: "1m", retention: "840h" }];
+  const prepared = {
+    freq: "1m",
+    partition_unit: "day",
+    purpose: "collect",
+    suggested_dir_name: "binance-spot-kline-1m",
+    dir_name_conflict: false,
+    earliest_backfill_from: EARLIEST,
+    recommended_pull_every_bars: 1
+  };
+  const dirInput = () => document.querySelector<HTMLInputElement>(".arco-drawer .arco-input-wrapper input")!;
+
+  it("默认填建议值并显示完整路径预览，提交带上目录名", async () => {
+    api.prepareArchiveTask.mockResolvedValue(prepared);
+    api.createArchiveTask.mockClear();
+    mountEditor({ mode: "create", task: null, presetDatasetId: "ds_1m", datasets, spaceId: "crypto" });
+    await flushPromises();
+    expect(api.prepareArchiveTask).toHaveBeenCalledWith("ds_1m", "", { silentError: true });
+    expect(dirInput().value).toBe("binance-spot-kline-1m");
+    expect(document.body.textContent).toContain("建好后不能改");
+    expect(document.body.textContent).toContain("crypto/collect/binance-spot-kline-1m/<yyyy>/<yyyymmdd>.csv.gz");
+    okButton().click();
+    await flushPromises();
+    expect(api.createArchiveTask).toHaveBeenCalledWith(
+      expect.objectContaining({ dataset_id: "ds_1m", dir_name: "binance-spot-kline-1m" })
+    );
+  });
+
+  it("建议值已被占用时标红，不能提交", async () => {
+    api.prepareArchiveTask.mockResolvedValue({ ...prepared, dir_name_conflict: true });
+    api.createArchiveTask.mockClear();
+    mountEditor({ mode: "create", task: null, presetDatasetId: "ds_1m", datasets, spaceId: "crypto" });
+    await flushPromises();
+    expect(document.body.textContent).toContain("目录名已被这个空间的其他任务使用，请改一个");
+    okButton().click();
+    await flushPromises();
+    expect(api.createArchiveTask).not.toHaveBeenCalled();
+  });
+
+  it("改过的目录名防抖后带 dir_name 检查；不合规的不发请求", async () => {
+    vi.useFakeTimers();
+    api.prepareArchiveTask.mockResolvedValue(prepared);
+    mountEditor({ mode: "create", task: null, presetDatasetId: "ds_1m", datasets, spaceId: "crypto" });
+    await vi.advanceTimersByTimeAsync(0);
+    await flushPromises();
+    const vm = wrapper.vm as unknown as { form: { dirName: string } };
+    vm.form.dirName = "Bad_Name";
+    await vi.advanceTimersByTimeAsync(500);
+    expect(api.prepareArchiveTask).toHaveBeenCalledTimes(1);
+    expect(document.body.textContent).toContain("只能用小写字母、数字和单个连字符");
+
+    api.prepareArchiveTask.mockResolvedValue({ ...prepared, dir_name_conflict: true });
+    vm.form.dirName = "binance-spot-1m";
+    await vi.advanceTimersByTimeAsync(400);
+    await flushPromises();
+    expect(api.prepareArchiveTask).toHaveBeenLastCalledWith("ds_1m", "binance-spot-1m", { silentError: true });
+    expect(document.body.textContent).toContain("目录名已被这个空间的其他任务使用");
+  });
+
+  it("右侧说明按避让规则写；没有整点窗口时不写顺延", async () => {
+    api.prepareArchiveTask.mockResolvedValue(prepared);
+    mountEditor({
+      mode: "create",
+      task: null,
+      presetDatasetId: "ds_1m",
+      datasets,
+      spaceId: "crypto",
+      avoidance: { every_minutes: 5, before_seconds: 5, after_seconds: 25 }
+    });
+    await flushPromises();
+    expect(document.body.textContent).toContain("不避让整点，边界到了就拉取");
+    expect(document.body.textContent).not.toContain(":58");
+  });
+});

@@ -33,9 +33,9 @@ afterEach(() => vi.useRealTimers());
 describe("采集任务页的归档状态", () => {
   it("有任务写已归档和健康等级，应归档但没任务写未归档，其余不显示", async () => {
     const data = await loadArchiveCoverage("crypto");
-    expect(coverageFor(data, "ok_1m")).toEqual({ text: "已归档 · 正常", tone: "muted", link: "/data/archive?task=ok_1m" });
+    expect(coverageFor(data, "ok_1m")).toEqual({ text: "已归档 · 正常", tone: "muted", link: "/archive/tasks?task=ok_1m" });
     expect(coverageFor(data, "bad_1m")).toMatchObject({ text: "已归档 · 异常", tone: "bad" });
-    expect(coverageFor(data, "new_1m")).toEqual({ text: "未归档", tone: "warn", link: "/data/archive?create=new_1m" });
+    expect(coverageFor(data, "new_1m")).toEqual({ text: "未归档", tone: "warn", link: "/archive/tasks?create=new_1m" });
     expect(coverageFor(data, "keep")).toBeNull();
     expect(coverageFor(data, "")).toBeNull();
   });

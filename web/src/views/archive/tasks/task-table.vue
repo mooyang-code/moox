@@ -124,7 +124,7 @@ import {
   runStatusLabel,
   runTone,
   toNum
-} from "./archive-model";
+} from "../shared/archive-model";
 
 /**
  * 任务表。表格放不下的三列（下次拉取、已归档范围、最近运行）到分钟，悬停看到秒；健康原因直接写在单元格里。

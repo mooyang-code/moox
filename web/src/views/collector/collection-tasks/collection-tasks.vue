@@ -556,7 +556,7 @@
 
 <script setup lang="ts">
 import { buildResultsQuery } from "@/views/collector/task-results/task-results-model";
-import ArchiveCoverageText from "@/views/data/archive/archive-coverage-text.vue";
+import ArchiveCoverageText from "@/views/archive/shared/archive-coverage-text.vue";
 import { useDisplayZone } from "@/hooks/useDisplayZone";
 import { formatInstant } from "@/utils/time-zone";
 import { createSubmitScope } from "@/utils/submit-scope";

@@ -4,13 +4,19 @@
 import type { LocationQuery, LocationQueryRaw } from "vue-router";
 import type {
   ArchiveHealth,
+  ArchiveObjectStore,
+  ArchivePartition,
   ArchivePartitionStatus,
   ArchiveRemoteState,
   ArchiveRun,
   ArchiveRunKind,
   ArchiveRunStatus,
-  ArchiveTask
+  ArchiveTask,
+  ArchiveWorkerInfo,
+  AvoidanceRules
 } from "@/api/archive";
+import type { ComponentDeployment, DeploymentHost } from "@/api/admin/types";
+import { formatBytes } from "@/api/modules/host-monitor";
 import type { Dataset } from "@/api/storage/types";
 import { freqSeconds } from "@/views/factor/shared/health";
 import { formatInstant, toInstantMs } from "@/utils/time-zone";
@@ -29,7 +35,8 @@ const KIND_LABELS: Record<ArchiveRunKind, string> = {
   scheduled: "复核",
   manual: "立即运行",
   tick: "到点拉取",
-  range: "补拉区间"
+  range: "补拉区间",
+  import: "导入"
 };
 export const kindLabel = (kind?: string) => KIND_LABELS[kind as ArchiveRunKind] ?? (kind || "—");
 
@@ -65,7 +72,7 @@ export function runTone(status?: string): Tone {
 const PARTITION_LABELS: Record<ArchivePartitionStatus, string> = { open: "暂存中", exported: "已导出", final: "已定稿" };
 export const partitionStatusLabel = (status?: string) => PARTITION_LABELS[status as ArchivePartitionStatus] ?? (status || "—");
 
-/** 批 2 之后才有的远端副本状态；off 表示没启用对象存储，不显示。 */
+/** 远端副本状态；off 表示没启用对象存储，不显示。 */
 export function remoteStateLabel(state?: ArchiveRemoteState | string, remoteKey?: string): string {
   switch (state) {
     case "verified":
@@ -137,6 +144,180 @@ export function archiveUnavailableHint(error: string): string {
   return /404|not found|no route|unknown service|connection refused|econnrefused|不存在|找不到/i.test(error)
     ? "archive-mgr 是可选组件，没有部署时这里不可用"
     : "";
+}
+
+/** 分区“下载”按钮：只有远端副本是当前版本且已校验时可下载，否则给出置灰的原因。 */
+export function downloadBlockedReason(partition: Pick<ArchivePartition, "remote_state" | "remote_error" | "remote_key">): string {
+  switch (partition.remote_state) {
+    case "verified":
+      return "";
+    case "pending":
+      return partition.remote_key ? "远端只有旧版本，当前版本还没有上传或校验" : "远端副本还没有上传或校验";
+    case "failed":
+      return `远端副本上传失败${partition.remote_error ? `：${partition.remote_error}` : ""}`;
+    case "none":
+      return "还没有远端副本";
+    default:
+      return "执行器没有配置对象存储，只能下载远端副本";
+  }
+}
+
+// ---- 执行器与存放位置 ----
+
+/** 归档执行器在服务目录里的组件 ID。 */
+export const ARCHIVE_WORKER_COMPONENT = "archive-worker";
+
+export type WorkerHost =
+  | { state: "ok"; host: DeploymentHost }
+  | { state: "none" | "many"; host?: undefined }
+  | { state: "unknown"; host?: undefined; hostId: string };
+
+/**
+ * 执行器所在主机：拓扑里唯一启用的 archive-worker 部署（部署和主机都启用）的主机，和 Admin 的归档转发同一口径。
+ * 没有、多于一条、主机不在登记里分别给出状态，由页面写说明。
+ */
+export function resolveWorkerHost(deployments: ComponentDeployment[], hosts: DeploymentHost[]): WorkerHost {
+  const byId = new Map(hosts.map(host => [host.host_id, host]));
+  const enabled = deployments.filter(item => item.component_id === ARCHIVE_WORKER_COMPONENT && item.status === "enabled");
+  const found = enabled.flatMap(item => {
+    const host = byId.get(item.host_id);
+    return host && host.status === "enabled" ? [host] : [];
+  });
+  if (found.length === 1) return { state: "ok", host: found[0] };
+  if (found.length > 1) return { state: "many" };
+  // 部署启用了但主机不在登记里（或主机停用）：只能写主机 ID
+  return enabled.length ? { state: "unknown", hostId: enabled[0].host_id } : { state: "none" };
+}
+
+/** 主机的显示：名称（地址）。名称缺省时用主机 ID，地址缺省时用内网地址。 */
+export function hostText(host: Pick<DeploymentHost, "host_id" | "label" | "address" | "private_address">): string {
+  const name = host.label || host.host_id;
+  const address = host.address || host.private_address || "";
+  return address ? `${name}（${address}）` : name;
+}
+
+export function workerHostText(info: WorkerHost | null): string {
+  if (!info) return "";
+  if (info.state === "ok") return hostText(info.host);
+  if (info.state === "unknown") return info.hostId;
+  if (info.state === "many") return "拓扑里有多条启用的部署";
+  return "拓扑里没有启用的部署";
+}
+
+export interface DiskStatus {
+  /** “已用 137 GB / 共 1.8 TB，可用 1.6 TB” */
+  text: string;
+  /** 可用量低于下限：worker 已暂停领取新运行 */
+  insufficient: boolean;
+  /** insufficient 时的说明 */
+  warning: string;
+  /** 悬停说明：已用 + 可用小于总量的差额是 root 保留空间 */
+  title: string;
+}
+
+/**
+ * 磁盘状态。是否不足由页面判断：可用量（statfs Bavail）低于下限，和 worker 停止领取新运行用同一个数、同一个下限。
+ * 下限为 0（没上报）时不判断。
+ */
+export function diskStatus(worker: ArchiveWorkerInfo | undefined): DiskStatus | null {
+  const total = toNum(worker?.disk_total_bytes);
+  if (!worker || total <= 0) return null;
+  const used = toNum(worker.disk_used_bytes);
+  const free = toNum(worker.disk_free_bytes);
+  const minFree = toNum(worker.min_free_bytes);
+  const insufficient = minFree > 0 && free < minFree;
+  const reserved = total - used - free;
+  const title = [
+    `总量 ${formatBytes(total)}，已用 ${formatBytes(used)}，可用 ${formatBytes(free)}`,
+    reserved > 0 ? `已用 + 可用比总量少 ${formatBytes(reserved)}，是文件系统给 root 的保留空间，普通进程用不了` : "",
+    minFree > 0 ? `可用低于 ${formatBytes(minFree)} 时执行器暂停领取新运行` : ""
+  ]
+    .filter(Boolean)
+    .join("\n");
+  return {
+    text: `已用 ${formatBytes(used)} / 共 ${formatBytes(total)}，可用 ${formatBytes(free)}`,
+    insufficient,
+    warning: insufficient ? `磁盘空间不足（可用低于下限 ${formatBytes(minFree)}），已暂停领取新运行` : "",
+    title
+  };
+}
+
+/** 内置 SeaweedFS 只听执行器本机 127.0.0.1:11473；没有“是否内置”字段，按地址判断。 */
+export function isBuiltinObjectStore(endpoint?: string): boolean {
+  return /^(https?:\/\/)?(127\.0\.0\.1|localhost):11473\/?$/i.test((endpoint || "").trim());
+}
+
+export function storageClassText(store: Pick<ArchiveObjectStore, "storage_class">): string {
+  if (!store.storage_class) return "默认";
+  return store.storage_class === "STANDARD_IA" ? "低频（STANDARD_IA）" : store.storage_class;
+}
+
+// ---- 避让时段 ----
+
+/** "04:00" → 下一个检查时刻 ":04:25"（mgr 每分钟第 25 秒检查）。 */
+function nextCheckAfter(mmss: string): string {
+  const match = /^(\d{2}):(\d{2})$/.exec(mmss);
+  if (!match) return "";
+  let minute = Number(match[1]);
+  if (Number(match[2]) > 25) minute = (minute + 1) % 60;
+  return `:${String(minute).padStart(2, "0")}:25`;
+}
+
+export const hasHourQuiet = (rules: AvoidanceRules) => Boolean(rules.hour_quiet_from && rules.hour_quiet_until);
+
+/** 每分钟的秒窗口：不限秒、每分钟只在第 25～55 秒读取、每 N 分钟的触发时刻前后不读取。 */
+export function minuteWindowText(rules: AvoidanceRules): string {
+  const every = rules.every_minutes || 0;
+  const before = rules.before_seconds || 0;
+  const after = rules.after_seconds || 0;
+  if (every <= 0) return "不限秒";
+  if (every === 1) return `每分钟只在第 ${after}～${60 - before} 秒读取`;
+  return `每 ${every} 分钟的触发时刻前 ${before} 秒到后 ${after} 秒不读取`;
+}
+
+export function hourQuietText(rules: AvoidanceRules): string {
+  return hasHourQuiet(rules) ? `每小时 :${rules.hour_quiet_from}～:${rules.hour_quiet_until} 不拉取` : "不避让整点";
+}
+
+/** 新建抽屉里的说明：拉取何时检查、整点窗口里的边界顺延到哪；没读到规则时为空。 */
+export function avoidanceScheduleText(rules: AvoidanceRules | undefined): string {
+  if (!rules) return "";
+  const hour = hasHourQuiet(rules)
+    ? `${hourQuietText(rules)}，这段时间的边界顺延到 ${nextCheckAfter(rules.hour_quiet_until || "")}`
+    : "不避让整点，边界到了就拉取";
+  return `每分钟第 25 秒检查；${hour}；执行器读取 Storage 时${minuteWindowText(rules)}。`;
+}
+
+/** 依据：computed_at 为空表示还没算出过，用的是启动默认值。 */
+export function avoidanceBasisText(rules: AvoidanceRules): string {
+  return rules.basis || (rules.computed_at ? "—" : "未取到采集频率，使用默认值");
+}
+
+// ---- 目录名 ----
+
+const DIR_NAME_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+
+/** 目录名：小写字母、数字，用单个连字符分隔，最长 64 个字符；和后端同一规则。 */
+export function dirNameError(name: string): string {
+  if (!name) return "请填写目录名";
+  if (name.length > 64) return "目录名最长 64 个字符";
+  if (!DIR_NAME_PATTERN.test(name)) return "只能用小写字母、数字和单个连字符，不能以连字符开头或结尾";
+  return "";
+}
+
+/** 分区文件的路径预览：<空间>/<用途>/<目录名>/<年>/<年月日>.csv.gz（按月分区时文件名是年月），和 worker 的 RelPath 一致。 */
+export function partitionPathPreview(space: string, purpose: string, dirName: string, partitionUnit?: string): string {
+  const file = partitionUnit === "month" ? "<yyyymm>.csv.gz" : "<yyyymmdd>.csv.gz";
+  return [space || "<空间>", purpose || "<用途>", dirName || "<目录名>", "<yyyy>", file].join("/");
+}
+
+// ---- 最新数据 ----
+
+/** 最新数据的单元格：缺失值（null）与空字符串分开显示，时间按空间时区。 */
+export function recentCellText(value: string | null, type: string, zone: string): string {
+  if (value === null) return "—";
+  if (value === "") return '""';
+  return type === "time" ? formatInstant(value, zone) : value;
 }
 
 // ---- 数据集 ----
@@ -290,7 +471,8 @@ export function parsePreviewCsv(text: string): { header: string[]; rows: string[
 
 // ---- URL 状态 ----
 
-export type DetailTab = "runs" | "partitions";
+export type DetailTab = "runs" | "partitions" | "recent";
+const DETAIL_TABS: DetailTab[] = ["runs", "partitions", "recent"];
 
 export interface ArchiveQuery {
   /** 任务详情的 dataset_id */
@@ -307,6 +489,8 @@ export interface ArchiveQuery {
   to: string;
   /** 预览的分区键 */
   partition: string;
+  /** 最新数据的标的 */
+  subject: string;
   /** 打开新建抽屉并预选的数据集 */
   create: string;
 }
@@ -319,7 +503,7 @@ export function parseArchiveQuery(query: LocationQuery): ArchiveQuery {
   const status = first(query.status);
   return {
     task: first(query.task),
-    tab: first(query.tab) === "partitions" ? "partitions" : "runs",
+    tab: (DETAIL_TABS as string[]).includes(first(query.tab)) ? (first(query.tab) as DetailTab) : "runs",
     status: (RUN_STATUSES as string[]).includes(status) ? (status as ArchiveRunStatus) : "",
     ticks: first(query.ticks) === "1",
     rpage: pageNo(first(query.rpage)),
@@ -327,6 +511,7 @@ export function parseArchiveQuery(query: LocationQuery): ArchiveQuery {
     from: month(first(query.from)),
     to: month(first(query.to)),
     partition: first(query.partition),
+    subject: first(query.subject),
     create: first(query.create)
   };
 }
@@ -343,6 +528,9 @@ export function archiveQueryFor(state: Partial<ArchiveQuery>): LocationQueryRaw 
     if (state.to) out.to = state.to;
     if (state.ppage && state.ppage > 1) out.ppage = String(state.ppage);
     if (state.partition) out.partition = state.partition;
+  } else if (state.tab === "recent") {
+    out.tab = "recent";
+    if (state.subject) out.subject = state.subject;
   } else {
     if (state.status) out.status = state.status;
     if (state.ticks) out.ticks = "1";

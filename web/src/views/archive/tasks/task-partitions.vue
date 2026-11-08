@@ -81,9 +81,23 @@
             <span :title="remoteTitle(record)">{{ remoteStateLabel(record.remote_state, record.remote_key) }}</span>
           </template>
         </a-table-column>
-        <a-table-column title="操作" :width="70" fixed="right">
+        <a-table-column title="操作" :width="remoteEnabled ? 150 : 70" fixed="right">
           <template #cell="{ record }">
-            <a-button size="mini" @click="emit('update:query', { partition: record.partition_key })">预览</a-button>
+            <a-space :size="4">
+              <a-button size="mini" @click="emit('update:query', { partition: record.partition_key })">预览</a-button>
+              <template v-if="remoteEnabled">
+                <!-- 置灰的按钮收不到悬停事件，原因写在外层的 title 上 -->
+                <span :title="downloadBlockedReason(record) || undefined">
+                  <a-button
+                    size="mini"
+                    :disabled="Boolean(downloadBlockedReason(record)) || isDownloading(record)"
+                    :loading="isDownloading(record)"
+                    @click="download(record)"
+                    >{{ downloadLabel(record) }}</a-button
+                  >
+                </span>
+              </template>
+            </a-space>
           </template>
         </a-table-column>
       </template>
@@ -100,20 +114,30 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
-import { listArchivePartitions, type ArchivePartition } from "@/api/archive";
+import {
+  downloadArchivePartition,
+  listArchivePartitions,
+  saveBlob,
+  type ArchivePartition,
+  type ArchiveTask
+} from "@/api/archive";
 import { StaleSpaceRequestError } from "@/api/admin/stale-space";
 import { formatBytes } from "@/api/modules/host-monitor";
 import { RequestGate } from "@/utils/request-gate";
 import { formatInstant } from "@/utils/time-zone";
-import { partitionStatusLabel, remoteStateLabel, toNum, type ArchiveQuery } from "./archive-model";
+import { downloadBlockedReason, partitionStatusLabel, remoteStateLabel, toNum, type ArchiveQuery } from "../shared/archive-model";
 import PartitionPreview from "./partition-preview.vue";
 
-/** 分区页签：后端按分区键倒序；起止月份、页码、预览的分区都在 URL 里。不轮询，切到页签、翻页、改筛选时读取。 */
+/**
+ * 分区页签：后端按分区键倒序；起止月份、页码、预览的分区都在 URL 里。不轮询，切到页签、翻页、改筛选时读取。
+ * 远端副本已校验的分区可以下载（经 Admin 转给执行器，从对象存储读出），其余置灰并在悬停里写原因。
+ */
 const PAGE_SIZE = 50;
 
-const props = defineProps<{ datasetId: string; query: ArchiveQuery; zone: string; remoteEnabled?: boolean }>();
+const props = defineProps<{ task: ArchiveTask; spaceId: string; query: ArchiveQuery; zone: string; remoteEnabled?: boolean }>();
+const datasetId = computed(() => props.task.dataset_id || "");
 const emit = defineEmits<{ "update:query": [patch: Partial<ArchiveQuery>] }>();
 
 const partitions = ref<ArchivePartition[]>([]);
@@ -128,7 +152,7 @@ async function load() {
   loading.value = true;
   try {
     const rsp = await listArchivePartitions({
-      dataset_id: props.datasetId,
+      dataset_id: datasetId.value,
       from_month: props.query.from || undefined,
       to_month: props.query.to || undefined,
       page: { page: props.query.ppage, size: PAGE_SIZE }
@@ -148,7 +172,7 @@ async function load() {
 
 // 逐项比较：props.query 每次路由变化都是新对象，开关预览（?partition=）时不能重读分区表
 watch(
-  [() => props.datasetId, () => props.query.from, () => props.query.to, () => props.query.ppage],
+  [datasetId, () => props.query.from, () => props.query.to, () => props.query.ppage],
   () => {
     loaded.value = false;
     void load();
@@ -166,13 +190,48 @@ async function copy(text?: string) {
   }
 }
 
-// 批 2 之后：远端副本的细节放在悬停提示里
+// 远端副本的细节放在悬停提示里
 function remoteTitle(partition: ArchivePartition): string | undefined {
   if (partition.remote_state === "verified")
     return `校验于 ${formatInstant(partition.remote_verified_at, props.zone)}\n${partition.remote_key || ""}`;
   if (partition.remote_state === "failed") return partition.remote_error || undefined;
   if (partition.remote_state === "pending" && partition.remote_key) return `远端只有旧版本：${partition.remote_key}`;
   return undefined;
+}
+
+// ---- 下载 ----
+// 按分区记进度（0～100，读不到总长时为 -1）；执行器同时最多 2 个下载，同一分区不重复发起
+const downloading = ref<Record<string, number>>({});
+const isDownloading = (partition: ArchivePartition) => (partition.partition_key || "") in downloading.value;
+function downloadLabel(partition: ArchivePartition) {
+  const progress = downloading.value[partition.partition_key || ""];
+  if (progress === undefined) return "下载";
+  return progress >= 0 ? `${progress}%` : "下载中";
+}
+
+async function download(partition: ArchivePartition) {
+  const key = partition.partition_key || "";
+  if (!key || isDownloading(partition)) return;
+  downloading.value = { ...downloading.value, [key]: -1 };
+  try {
+    const { blob, fileName } = await downloadArchivePartition(
+      {
+        space: props.spaceId,
+        dataset: datasetId.value,
+        partition: key,
+        fallbackName: `${props.task.dir_name || datasetId.value}_${key}.csv.gz`
+      },
+      (received, total) => {
+        if (total > 0 && key in downloading.value)
+          downloading.value = { ...downloading.value, [key]: Math.floor((received / total) * 100) };
+      }
+    );
+    saveBlob(blob, fileName);
+  } catch (cause) {
+    Message.error(`下载 ${key} 失败：${cause instanceof Error && cause.message ? cause.message : "请稍后重试"}`);
+  } finally {
+    downloading.value = Object.fromEntries(Object.entries(downloading.value).filter(([item]) => item !== key));
+  }
 }
 </script>
 

@@ -23,7 +23,7 @@ const reusePaths = [
   "/data/subjects",
   "/data/fields",
   "/trading/accounts",
-  "/data/archive",
+  "/archive/tasks",
   "/ops/monitor",
   "/ops/deployments",
   "/ops/hosts",

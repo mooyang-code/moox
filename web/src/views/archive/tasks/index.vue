@@ -2,20 +2,21 @@
   <div class="moox-page">
     <div class="moox-inner">
       <div class="page-head">
-        <h2>数据归档</h2>
+        <h2>归档任务</h2>
         <a-button type="primary" status="success" @click="openCreate()">
           <template #icon><icon-plus /></template>
           新建归档任务
         </a-button>
       </div>
 
-      <WorkerStatus
+      <WorkerLine
         :overview="overview"
         :loaded="mainLoaded"
         :error="mainError"
         :last-ok-at="lastOkAt"
         :tasks="tasks"
         :now-ms="nowMs"
+        :host="workerHost"
         @retry="retryMain"
       />
 
@@ -45,6 +46,7 @@
     <TaskDetailDrawer
       :task="selectedTask"
       :name="selectedTask ? datasetNames[selectedTask.dataset_id || ''] : ''"
+      :space-id="spaceId"
       :query="query"
       :zone="displayZone"
       :now-ms="nowMs"
@@ -69,6 +71,8 @@
       :datasets="archivableList"
       :tasks="tasks"
       :zone="displayZone"
+      :space-id="spaceId"
+      :avoidance="overview?.avoidance"
       @created="onCreated"
       @updated="refreshAfterAction"
       @open-task="openTask"
@@ -106,17 +110,18 @@ import {
   pauseConfirmText,
   unarchivedDatasets,
   type ArchiveQuery
-} from "./archive-model";
-import { invalidateArchiveCoverage, listAllDatasets } from "./archive-coverage";
+} from "../shared/archive-model";
+import { invalidateArchiveCoverage, listAllDatasets } from "../shared/archive-coverage";
 import BackfillDialog from "./backfill-dialog.vue";
 import TaskDetailDrawer from "./task-detail-drawer.vue";
 import TaskEditorDrawer from "./task-editor-drawer.vue";
 import TaskTable from "./task-table.vue";
+import { useArchiveWorkerHost } from "../shared/use-archive-worker-host";
 import UnarchivedList from "./unarchived-list.vue";
-import WorkerStatus from "./worker-status.vue";
+import WorkerLine from "./worker-line.vue";
 
 /**
- * 数据采集 › 数据归档。状态都在 URL 里（任务详情、页签、筛选、页码、新建），不依赖页面缓存；
+ * 数据归档 › 归档任务。状态都在 URL 里（任务详情、页签、筛选、页码、新建），不依赖页面缓存；
  * 读取失败显示失败，不显示“正常”；后台轮询带 silentError，错误由页面自己显示。
  */
 const route = useRoute();
@@ -189,9 +194,13 @@ async function loadDatasets() {
 }
 
 const { tick } = usePolling(loadMain, 30_000, () => Boolean(spaceId.value));
+// 执行器所在主机与空间无关，打开页面时读一次；读取失败时状态行不写主机，重试时一并重读
+const { host: workerHost, load: loadWorkerHost } = useArchiveWorkerHost();
+void loadWorkerHost();
 
 function retryMain() {
   void loadMain();
+  if (!workerHost.value) void loadWorkerHost();
 }
 function retryDatasets() {
   void loadDatasets();
@@ -219,7 +228,7 @@ watch(
 );
 
 const taskIds = computed(() => tasks.value.map(task => task.dataset_id || ""));
-// 批 2 之后：worker 报告启用了对象存储时才显示远端副本的列
+// worker 报告启用了对象存储时才显示远端副本的列
 const remoteEnabled = computed(() => Boolean(overview.value?.worker?.object_store?.endpoint));
 const datasetNames = computed(() => Object.fromEntries(datasets.value.map(item => [item.dataset_id, item.name || ""])));
 const archivableList = computed(() => datasets.value.filter(item => archivableDataset(item, spaceId.value)));

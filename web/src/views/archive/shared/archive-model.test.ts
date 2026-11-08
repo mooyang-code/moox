@@ -29,7 +29,13 @@ import {
 
 describe("文案", () => {
   it("运行类型、状态、健康等级、分区状态", () => {
-    expect(["scheduled", "manual", "tick", "range"].map(kindLabel)).toEqual(["复核", "立即运行", "到点拉取", "补拉区间"]);
+    expect(["scheduled", "manual", "tick", "range", "import"].map(kindLabel)).toEqual([
+      "复核",
+      "立即运行",
+      "到点拉取",
+      "补拉区间",
+      "导入"
+    ]);
     expect(["queued", "running", "succeeded", "failed", "canceled"].map(runStatusLabel)).toEqual([
       "排队中",
       "运行中",

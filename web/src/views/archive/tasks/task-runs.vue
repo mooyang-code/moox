@@ -131,7 +131,7 @@ import {
   runTone,
   toNum,
   type ArchiveQuery
-} from "./archive-model";
+} from "../shared/archive-model";
 
 /**
  * 运行记录页签：状态筛选、是否列出成功的到点拉取、页码都在 URL 里。
