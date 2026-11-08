@@ -58,7 +58,10 @@ func TestCloudIsValidSecretCategory(t *testing.T) {
 func TestFormatTimeHelpers(t *testing.T) {
 	assert.Equal(t, "", formatTime(time.Time{}))
 	now := time.Date(2024, 1, 2, 3, 4, 5, 0, time.UTC)
-	assert.Equal(t, "2024-01-02 03:04:05", formatTime(now))
+	assert.Equal(t, "2024-01-02T03:04:05Z", formatTime(now))
+	// 带其他时区的时间也换成 UTC，并带上 Z
+	shanghai := time.FixedZone("UTC+8", 8*3600)
+	assert.Equal(t, "2024-01-02T03:04:05Z", formatTime(time.Date(2024, 1, 2, 11, 4, 5, 0, shanghai)))
 }
 
 func TestSecretModelConversions(t *testing.T) {
