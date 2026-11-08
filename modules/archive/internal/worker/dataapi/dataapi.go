@@ -252,6 +252,10 @@ func (s *Server) recent(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "before 必须是 RFC3339 时间")
 			return
 		}
+		if err := staging.CheckNanosRange(before); err != nil {
+			writeError(w, http.StatusBadRequest, "before 超出可查询范围（1678～2261 年）")
+			return
+		}
 	}
 	limit := DefaultRecentLimit
 	if raw := query.Get("limit"); raw != "" {
@@ -297,7 +301,12 @@ func (s *Server) recent(w http.ResponseWriter, r *http.Request) {
 	}
 	// staged_until 是扫描水位：暂存库已从 Storage 读到的时刻，之前的行都在暂存库或已定稿的文件里。
 	resp := recentResponse{Columns: rows.Columns, Rows: rows.Rows}
-	if watermark, ok, err := store.Watermark(ctx, space, dataset); err == nil && ok {
+	watermark, ok, err := store.Watermark(ctx, space, dataset)
+	switch {
+	case err != nil:
+		// 水位只用于页面提示，读取失败不影响返回的行。
+		log.Warnf("archive data api: 读取 %s/%s 的扫描水位失败: %v", space, dataset, err)
+	case ok:
 		resp.StagedUntil = watermark.UTC().Format(time.RFC3339)
 	}
 	w.Header().Set("Content-Type", "application/json")

@@ -56,7 +56,7 @@ func (s *Store) Stage(ctx context.Context, task Task, rows []Row, partition func
 		if len(row.Values) != len(task.Columns) {
 			return result, fmt.Errorf("row %s@%s has %d values, want %d", row.SubjectID, row.DataTime.Format(time.RFC3339Nano), len(row.Values), len(task.Columns))
 		}
-		if err := checkNanosRange(row.DataTime); err != nil {
+		if err := CheckNanosRange(row.DataTime); err != nil {
 			return result, fmt.Errorf("标的 %s 的 data_time: %w", row.SubjectID, err)
 		}
 		k := key{row.SubjectID, nanos(row.DataTime), row.SeriesTag}

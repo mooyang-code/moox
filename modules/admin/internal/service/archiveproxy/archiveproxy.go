@@ -23,8 +23,12 @@ import (
 // Component 是归档 worker 在服务目录里的组件 ID。
 const Component = "archive-worker"
 
-// RecentTimeout 是最新数据预览的转发超时；下载不另设超时，受 Console 服务的超时上限约束。
-const RecentTimeout = 15 * time.Second
+const (
+	// RecentTimeout 是最新数据预览的转发超时；下载不另设整体超时，受 Console 服务的超时上限约束。
+	RecentTimeout = 15 * time.Second
+	// ResponseHeaderTimeout 只限制等 worker 响应头的时间（worker 卡住时不让下载一直挂着），不限制正文传输。
+	ResponseHeaderTimeout = 90 * time.Second
+)
 
 // unsupportedHost 是 worker 装在 control 与只出站主机以外时的中文错误。
 const unsupportedHost = "归档执行器所在主机不支持网页下载与预览（只支持 control 与只出站主机）"
@@ -49,6 +53,8 @@ type Options struct {
 	Port int
 	// DialLocal 连接本机地址，默认 net.Dialer（测试替换）。
 	DialLocal func(ctx context.Context, address string) (net.Conn, error)
+	// RecentTimeout 是预览的转发超时，为 0 时取 RecentTimeout（测试缩短）。
+	RecentTimeout time.Duration
 }
 
 // Proxy 是两个裸 HTTP 处理器的实现。
@@ -71,6 +77,9 @@ func New(opts Options) (*Proxy, error) {
 			return nil, errors.New("服务目录里没有 archive-worker 的 relay_http 端口")
 		}
 		opts.Port = component.RelayHTTP.Port
+	}
+	if opts.RecentTimeout == 0 {
+		opts.RecentTimeout = RecentTimeout
 	}
 	if opts.DialLocal == nil {
 		dialer := &net.Dialer{Timeout: 5 * time.Second}
@@ -134,9 +143,9 @@ func (p *Proxy) PartitionDownload(w http.ResponseWriter, r *http.Request) {
 	p.forward(w, r, "/v1/partition", []string{"space", "dataset", "partition"}, 0)
 }
 
-// RecentRows 转发 GET /v1/recent（space、dataset、subject、before、limit），15 秒超时。
+// RecentRows 转发 GET /v1/recent（space、dataset、subject、before、limit），默认 15 秒超时。
 func (p *Proxy) RecentRows(w http.ResponseWriter, r *http.Request) {
-	p.forward(w, r, "/v1/recent", []string{"space", "dataset", "subject", "before", "limit"}, RecentTimeout)
+	p.forward(w, r, "/v1/recent", []string{"space", "dataset", "subject", "before", "limit"}, p.opts.RecentTimeout)
 }
 
 // passHeaders 是透传给浏览器的响应头。
@@ -178,16 +187,18 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, path string, par
 	}
 	// 每个请求一条连接：中转流与本机连接都不复用；不读代理环境变量，不自动解压（下载要原样交给浏览器核对 sha256）。
 	transport := &http.Transport{
-		Proxy:              nil,
-		DialContext:        func(ctx context.Context, _, _ string) (net.Conn, error) { return dial(ctx) },
-		DisableKeepAlives:  true,
-		DisableCompression: true,
+		Proxy:                 nil,
+		DialContext:           func(ctx context.Context, _, _ string) (net.Conn, error) { return dial(ctx) },
+		DisableKeepAlives:     true,
+		DisableCompression:    true,
+		ResponseHeaderTimeout: ResponseHeaderTimeout,
 	}
 	defer transport.CloseIdleConnections()
 	response, err := (&http.Client{Transport: transport}).Do(request)
 	if err != nil {
 		log.ErrorContextf(ctx, "[archive proxy] 连接归档执行器失败 %s: %v", path, err)
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		var netErr net.Error
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) || (errors.As(err, &netErr) && netErr.Timeout()) {
 			writeError(w, http.StatusGatewayTimeout, "归档执行器响应超时")
 			return
 		}
@@ -201,6 +212,10 @@ func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, path string, par
 		}
 	}
 	w.WriteHeader(response.StatusCode)
+	// 先把响应头发给浏览器：下载能立刻开始显示，浏览器断开时也能尽早发现并取消转给 worker 的请求。
+	if flusher, ok := w.(http.Flusher); ok {
+		flusher.Flush()
+	}
 	if _, err := io.Copy(w, response.Body); err != nil {
 		// 已经写出响应头：返回后写出的字节少于 Content-Length，浏览器得到不完整的下载。
 		log.WarnContextf(ctx, "[archive proxy] 转发 %s 中断: %v", path, err)

@@ -333,11 +333,13 @@ func TestRecentRowsReadDatasetJSONAndPage(t *testing.T) {
 	require.Equal(t, "true", *got.Rows[1][4])
 
 	for name, change := range map[string]func(url.Values){
-		"limit too large": func(q url.Values) { q.Set("limit", "501") },
-		"limit zero":      func(q url.Values) { q.Set("limit", "0") },
-		"bad before":      func(q url.Values) { q.Set("before", "yesterday") },
-		"no subject":      func(q url.Values) { q.Del("subject") },
-		"bad space":       func(q url.Values) { q.Set("space", ".state") },
+		"limit too large":  func(q url.Values) { q.Set("limit", "501") },
+		"limit zero":       func(q url.Values) { q.Set("limit", "0") },
+		"bad before":       func(q url.Values) { q.Set("before", "yesterday") },
+		"before too late":  func(q url.Values) { q.Set("before", "2300-01-01T00:00:00Z") },
+		"before too early": func(q url.Values) { q.Set("before", "1600-01-01T00:00:00Z") },
+		"no subject":       func(q url.Values) { q.Del("subject") },
+		"bad space":        func(q url.Values) { q.Set("space", ".state") },
 	} {
 		q := url.Values{"space": {space}, "dataset": {dataset}, "subject": {"BTCUSDT"}}
 		change(q)

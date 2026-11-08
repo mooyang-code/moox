@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -112,10 +111,9 @@ type HealthSection struct {
 	Addr string `yaml:"addr"`
 }
 
-// DataAPISection 是数据端口：分区副本下载与最新数据预览。只听 127.0.0.1，不验签，外部只能经 control 中转进入。
+// DataAPISection 是数据端口：分区副本下载与最新数据预览。固定监听 127.0.0.1:<服务目录 relay_http 端口>（见 DataAddr），
+// 不验签，外部只能经 control 中转进入。
 type DataAPISection struct {
-	// Listen 是监听地址，主机必须是 127.0.0.1，端口必须是服务目录里 archive-worker 的 relay_http 端口。
-	Listen string `yaml:"listen"`
 	// MaxBytesPerSecond 是全部下载共享的带宽上限（与运行的节奏带宽分开计）。
 	MaxBytesPerSecond ByteSize `yaml:"max_bytes_per_second"`
 }
@@ -140,7 +138,7 @@ func Default() *Config {
 			MaxBytesPerSecond: ByteSize(512 << 10), MaxConcurrentRuns: 4, MaxRunsPerDataNode: 2, PageRows: 500,
 		},
 		Health:      HealthSection{Addr: "127.0.0.1:11418"},
-		DataAPI:     DataAPISection{Listen: "127.0.0.1:" + strconv.Itoa(DataPort()), MaxBytesPerSecond: ByteSize(2 << 20)},
+		DataAPI:     DataAPISection{MaxBytesPerSecond: ByteSize(2 << 20)},
 		Maintenance: MaintenanceSection{At: "04:17:43"},
 	}
 }
@@ -251,16 +249,19 @@ func DataPort() int {
 	return component.RelayHTTP.Port
 }
 
+// DataAddr 返回数据端口的监听地址：只听回环地址，端口取服务目录登记的 relay_http 端口，没有可配余地。
+func DataAddr() string {
+	return "127.0.0.1:" + strconv.Itoa(DataPort())
+}
+
+// minDataBytesPerSecond 是数据端口限速的下限：同时最多 2 个下载（dataapi.MaxDownloads）平分带宽，
+// 每个下载从对象存储读取的超时按 128KiB/s 估算（objectstore.TransferTimeout），低于 2 × 128KiB/s
+// 时大分区会在读完之前因超时被中断。
+const minDataBytesPerSecond = ByteSize(2 * 128 << 10)
+
 func (d DataAPISection) validate() error {
-	host, port, err := net.SplitHostPort(strings.TrimSpace(d.Listen))
-	if err != nil || host != "127.0.0.1" {
-		return fmt.Errorf("data_api.listen 必须是 127.0.0.1:<端口>（数据端口不验签，只能听回环地址）")
-	}
-	if port != strconv.Itoa(DataPort()) {
-		return fmt.Errorf("data_api.listen 的端口必须是 %d（服务目录里登记的数据端口）", DataPort())
-	}
-	if d.MaxBytesPerSecond < ByteSize(64<<10) {
-		return fmt.Errorf("data_api.max_bytes_per_second 不能小于 64KB")
+	if d.MaxBytesPerSecond < minDataBytesPerSecond {
+		return fmt.Errorf("data_api.max_bytes_per_second 不能小于 256KB（2 个并发下载 × 对象存储读取超时估算用的 128KiB/s）")
 	}
 	return nil
 }

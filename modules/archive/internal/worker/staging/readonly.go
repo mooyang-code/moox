@@ -74,7 +74,7 @@ func (s *Store) Recent(ctx context.Context, task Task, subject string, before ti
 	}
 	where, args := "subject_id = ?", []any{subject}
 	if !before.IsZero() {
-		if err := checkNanosRange(before); err != nil {
+		if err := CheckNanosRange(before); err != nil {
 			return out, err
 		}
 		where += " AND data_time < ?"

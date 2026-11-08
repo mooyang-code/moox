@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/admin/internal/service/sysdeploy"
 	"github.com/stretchr/testify/require"
@@ -185,4 +186,57 @@ func TestTruncatedWorkerDownloadStaysTruncated(t *testing.T) {
 	body, err := io.ReadAll(resp.Body)
 	require.Error(t, err)
 	require.Less(t, len(body), 1000)
+}
+
+// 浏览器中途断开时，经 Admin 转发的请求也要取消：worker 处理器的 r.Context() 被取消，不再白白读对象存储。
+func TestClientDisconnectCancelsWorkerRequest(t *testing.T) {
+	started, cancelled := make(chan struct{}), make(chan struct{})
+	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "1000000")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(make([]byte, 100))
+		w.(http.Flusher).Flush()
+		close(started)
+		select {
+		case <-r.Context().Done():
+			close(cancelled)
+		case <-time.After(10 * time.Second):
+		}
+	}))
+	t.Cleanup(worker.Close)
+	p, _, _ := newProxy(t, topology("control", ""), worker.Listener.Addr().String())
+	admin := httptest.NewServer(http.HandlerFunc(p.PartitionDownload))
+	t.Cleanup(admin.Close)
+	ctx, cancel := context.WithCancel(context.Background())
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, admin.URL+"/?space=crypto&dataset=ds&partition=2026-10-15", nil)
+	require.NoError(t, err)
+	resp, err := http.DefaultClient.Do(request)
+	require.NoError(t, err)
+	<-started
+	cancel()
+	_ = resp.Body.Close()
+	select {
+	case <-cancelled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("客户端断开后 worker 的请求没有被取消")
+	}
+}
+
+// 预览超过转发超时（测试缩短到 50ms）返回 504。
+func TestRecentTimeoutReturnsGatewayTimeout(t *testing.T) {
+	release := make(chan struct{})
+	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-release:
+		}
+	}))
+	t.Cleanup(func() { close(release); worker.Close() })
+	relay := &fakeRelay{address: worker.Listener.Addr().String()}
+	p, err := New(Options{Topology: topology("factor", ""), Relay: relay, ControlHostID: "control", RecentTimeout: 50 * time.Millisecond})
+	require.NoError(t, err)
+	rec := httptest.NewRecorder()
+	p.RecentRows(rec, httptest.NewRequest(http.MethodGet, "/x?space=crypto&dataset=ds&subject=BTC", nil))
+	require.Equal(t, http.StatusGatewayTimeout, rec.Code)
+	require.Contains(t, rec.Body.String(), "响应超时")
 }

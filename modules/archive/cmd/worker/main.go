@@ -124,7 +124,7 @@ func serve(parent context.Context, cfg *config.Config) (err error) {
 	if remote != nil {
 		dataOpts.Remote = remote
 	}
-	shutdownData, err := serveData(cfg.DataAPI.Listen, dataapi.New(dataOpts))
+	shutdownData, err := serveData(config.DataAddr(), dataapi.New(dataOpts))
 	if err != nil {
 		return err
 	}
