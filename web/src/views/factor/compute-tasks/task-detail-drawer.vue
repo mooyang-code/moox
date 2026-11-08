@@ -37,7 +37,9 @@
           <a-descriptions-item label="计算任务 ID">{{ set.task_id }}</a-descriptions-item>
           <a-descriptions-item label="频率">{{ set.freq }}</a-descriptions-item>
           <a-descriptions-item label="关联策略实例">
-            <template v-if="set.bound_instance_id">{{ set.bound_instance_id }}</template>
+            <a-link v-if="set.bound_instance_id" :href="`#/strategy/detail/${encodeURIComponent(set.bound_instance_id)}`">{{
+              set.bound_instance_id
+            }}</a-link>
             <span v-else class="detail-hint">尚未关联：创建策略实例时选择这个任务，关联后永久有效</span>
           </a-descriptions-item>
           <a-descriptions-item label="源数据集" :span="2">{{ sourceName }}（{{ set.source_dataset_id }}）</a-descriptions-item>

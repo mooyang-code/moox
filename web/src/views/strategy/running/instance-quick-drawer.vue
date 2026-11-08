@@ -22,14 +22,15 @@
           <a-descriptions-item label="状态"
             ><StatusBadge :enabled="instance.enabled" :health="instance.health"
           /></a-descriptions-item>
-          <a-descriptions-item label="因子任务"
-            ><span class="mono">{{ tasksText(instance.factor_tasks) }}</span></a-descriptions-item
-          >
+          <a-descriptions-item label="因子任务"><FactorTaskLinks :tasks="instance.factor_tasks" /></a-descriptions-item>
           <a-descriptions-item label="模式"
             >{{ instance.logical_account_id ? "交易模式" : "仅计算" }}
-            <span v-if="instance.logical_account_id" class="mono"
-              >· {{ logicalAccount?.name || instance.logical_account_id
-              }}<template v-if="logicalAccountError">（账户读取失败）</template></span
+            <span v-if="instance.logical_account_id"
+              >·
+              <a class="mono" :href="`#/trading/accounts/${encodeURIComponent(instance.logical_account_id)}`">{{
+                logicalAccount?.name || instance.logical_account_id
+              }}</a
+              ><template v-if="logicalAccountError">（账户读取失败）</template></span
             ></a-descriptions-item
           >
           <a-descriptions-item label="当前会话"
@@ -53,8 +54,8 @@
 </template>
 
 <script setup lang="ts">
+import FactorTaskLinks from "@/views/strategy/components/factor-task-links.vue";
 import { POOL_REPLAY_DISABLED_TEXT, isPoolStrategy } from "@/views/strategy/dsl";
-import { tasksText } from "@/views/strategy/market-mode";
 import { useLogicalAccount } from "@/views/strategy/components/use-logical-account";
 import { computed, ref, watch } from "vue";
 import { StaleSpaceRequestError } from "@/api/admin/stale-space";

@@ -52,9 +52,7 @@
                 <span class="cell-sub"
                   >定义 <span class="mono">{{ store.strategy?.name || current.strategy_id }}</span></span
                 >
-                <span class="cell-sub"
-                  >因子任务 <span class="mono">{{ tasksText(current.factor_tasks) }}</span></span
-                >
+                <span class="cell-sub">因子任务 <FactorTaskLinks :tasks="current.factor_tasks" /></span>
                 <span class="cell-sub"
                   >会话 <span class="mono">{{ current.session_id || "无当前会话" }}</span></span
                 >
@@ -94,8 +92,8 @@
 </template>
 
 <script setup lang="ts">
+import FactorTaskLinks from "@/views/strategy/components/factor-task-links.vue";
 import { POOL_REPLAY_DISABLED_TEXT, isPoolStrategy } from "@/views/strategy/dsl";
-import { tasksText } from "@/views/strategy/market-mode";
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { StaleSpaceRequestError } from "@/api/admin/stale-space";

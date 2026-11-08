@@ -56,10 +56,8 @@
             ></a-table-column
           >
           <a-table-column title="因子任务" :width="200" :ellipsis="true" :tooltip="true"
-            ><template #cell="{ record }"
-              ><span class="mono">{{ tasksText(record.factor_tasks) }}</span></template
-            ></a-table-column
-          >
+            ><template #cell="{ record }"><FactorTaskLinks :tasks="record.factor_tasks" /></template
+          ></a-table-column>
           <a-table-column title="模式" :width="130"
             ><template #cell="{ record }"
               ><a-tag :color="record.logical_account_id ? 'orange' : 'blue'">{{
@@ -124,7 +122,7 @@
 </template>
 
 <script setup lang="ts">
-import { tasksText } from "@/views/strategy/market-mode";
+import FactorTaskLinks from "@/views/strategy/components/factor-task-links.vue";
 import { listLogicalAccounts } from "@/api/trade";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";

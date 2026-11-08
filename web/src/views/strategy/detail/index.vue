@@ -56,9 +56,7 @@
             >{{ store.strategy?.name || definitionHint }} · <span class="mono">{{ store.instance.strategy_id }}</span>
             <div v-if="versionText" class="version-note">{{ versionText }}</div></a-descriptions-item
           >
-          <a-descriptions-item label="因子任务"
-            ><span class="mono">{{ tasksText(store.instance.factor_tasks) }}</span></a-descriptions-item
-          >
+          <a-descriptions-item label="因子任务"><FactorTaskLinks :tasks="store.instance.factor_tasks" /></a-descriptions-item>
           <a-descriptions-item label="运行会话"
             ><span class="mono">{{ store.instance.session_id || "无当前会话" }}</span></a-descriptions-item
           >
@@ -119,7 +117,7 @@
 </template>
 
 <script setup lang="ts">
-import { tasksText } from "@/views/strategy/market-mode";
+import FactorTaskLinks from "@/views/strategy/components/factor-task-links.vue";
 import { useLogicalAccount } from "@/views/strategy/components/use-logical-account";
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
