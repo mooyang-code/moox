@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS t_strategy_def_versions (
 );
 
 -- 实例：定义 + 因子任务（见 t_strategy_instance_tasks）+ 可选组合账户；启用时固化解析结果。因子任务在创建时写定，不能修改；
--- 读取的 View 是任务结果数据集的默认 View，由任务 ID 推导。实例不删除，只有启用和停止
+-- 读取的 View 是任务结果数据集的默认 View，由任务 ID 推导。只有已停用、没有会话的实例能删除，删除时连同它在本库的全部记录
 CREATE TABLE IF NOT EXISTS t_strategy_instances (
     c_instance_id TEXT NOT NULL PRIMARY KEY,
     c_strategy_id TEXT NOT NULL,

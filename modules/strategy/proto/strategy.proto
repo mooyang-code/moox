@@ -17,7 +17,7 @@ message Strategy {
 }
 
 // StrategyInstance 把定义绑定到一个空间、一个或两个（现货、永续各一个）因子任务和可选的组合账户。因子任务在创建时写定、
-// 不能修改，实例第一次启用时才与任务正式关联（一个任务只关联一个实例，永久）；读取的 View 是任务结果数据集的默认 View，
+// 不能修改，实例第一次启用时才与任务正式关联（一个任务只关联一个实例，直到随实例删除）；读取的 View 是任务结果数据集的默认 View，
 // 由任务 ID 推导。
 message StrategyInstance {
   string instance_id = 1;
@@ -35,6 +35,9 @@ message StrategyInstance {
   string health = 9;                     // ok | degraded
   string created_at = 10;
   string updated_at = 11;
+  // 已在 Factor 删除的因子任务（只对停用实例检查）：非空表示上次删除实例没有做完，实例还在，再执行一次删除即可。
+  // 读不到 Factor 时不检查，留空。
+  repeated string missing_factor_tasks = 12;
 }
 
 message InstrumentTarget {
@@ -164,6 +167,10 @@ message ListStrategyInstancesReq { PageRequest page = 1; string strategy_id = 2;
 message ListStrategyInstancesRsp { common.RetInfo ret_info = 1; repeated StrategyInstance instances = 2; int64 total = 3; int32 page = 4; int32 page_size = 5; }
 message SetStrategyInstanceEnabledReq { string instance_id = 1; bool enabled = 2; }
 message SetStrategyInstanceEnabledRsp { common.RetInfo ret_info = 1; StrategyInstance instance = 2; }
+// DeleteStrategyInstanceReq 删除已停用、没有会话的实例，连同它关联的因子任务和任务的结果数据集（不可恢复）。
+// 结果数据集有归档任务时拒绝；实例不存在返回成功。中途失败（例如超时）后再删一次即可接着做完。Trade 里的历史不删。
+message DeleteStrategyInstanceReq { string instance_id = 1; }
+message DeleteStrategyInstanceRsp { common.RetInfo ret_info = 1; }
 
 message ListStrategyResultsReq { PageRequest page = 1; string instance_id = 2; string session_id = 3; }
 message ListStrategyResultsRsp { common.RetInfo ret_info = 1; repeated StrategyResult results = 2; int64 total = 3; int32 page = 4; int32 page_size = 5; }
@@ -255,6 +262,7 @@ service StrategyMgr {
   rpc GetStrategyInstance(GetStrategyInstanceReq) returns (GetStrategyInstanceRsp);
   rpc ListStrategyInstances(ListStrategyInstancesReq) returns (ListStrategyInstancesRsp);
   rpc SetStrategyInstanceEnabled(SetStrategyInstanceEnabledReq) returns (SetStrategyInstanceEnabledRsp);
+  rpc DeleteStrategyInstance(DeleteStrategyInstanceReq) returns (DeleteStrategyInstanceRsp);
   rpc ListStrategyResults(ListStrategyResultsReq) returns (ListStrategyResultsRsp);
   rpc GetStrategyResult(GetStrategyResultReq) returns (GetStrategyResultRsp);
   rpc ListStrategyTargets(ListStrategyTargetsReq) returns (ListStrategyTargetsRsp);

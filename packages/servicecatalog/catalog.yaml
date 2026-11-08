@@ -996,6 +996,7 @@ components:
           - DeleteFactorCategory
           - SetFactorCategory
           - BindFactorTask
+          - DeleteBoundTask
           - SubmitFactorParams
           - GetFactorParams
           - PublishUdf
@@ -1052,7 +1053,7 @@ components:
             callers:
               - console
               - moox-cli
-          # 策略实例与因子任务的永久关联和参数提交（因子动态调参）：只有策略服务是参数写入方。
+          # 策略实例与因子任务的关联、参数提交（因子动态调参）和随实例删除任务：只有策略服务是参数写入方。
           - methods:
               - GetFactorTask
               - ListFactorTasks
@@ -1062,6 +1063,7 @@ components:
               - GetStatus
               - ListFactorCategories
               - BindFactorTask
+              - DeleteBoundTask
               - SubmitFactorParams
               - GetFactorParams
             callers:
@@ -1181,6 +1183,11 @@ components:
               - GetArchivePartition
             callers:
               - monitor
+          # 删除策略实例前确认结果数据集没有归档任务（只读）。
+          - methods:
+              - ListArchiveTasks
+            callers:
+              - strategy
       - path: trpc.moox.archive.ArchiveWorker
         port: 11408
         timeout_ms: 60000
@@ -1228,6 +1235,9 @@ components:
         port: 11430
         console_name: strategy
         timeout_ms: 5000
+        # 删除实例要删因子任务和结果数据集，与策略服务端的超时（trpc_go.yaml 30 秒）一致。
+        method_timeouts_ms:
+          DeleteStrategyInstance: 30000
         max_body_bytes: 4194304
         methods:
           - CreateStrategy
@@ -1241,6 +1251,7 @@ components:
           - GetStrategyInstance
           - ListStrategyInstances
           - SetStrategyInstanceEnabled
+          - DeleteStrategyInstance
           - ListStrategyResults
           - GetStrategyResult
           - ListStrategyTargets
@@ -1285,6 +1296,7 @@ components:
               - GetStrategyInstance
               - ListStrategyInstances
               - SetStrategyInstanceEnabled
+              - DeleteStrategyInstance
               - ListStrategyResults
               - GetStrategyResult
               - ListStrategyTargets

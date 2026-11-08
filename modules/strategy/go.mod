@@ -6,6 +6,7 @@ require (
 	github.com/expr-lang/expr v1.17.8
 	github.com/glebarez/go-sqlite v1.21.2
 	github.com/glebarez/sqlite v1.11.0
+	github.com/mooyang-code/moox/modules/archive/proto/archivegen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/modules/factor/proto/factorgen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/modules/storage/proto/storagegen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/modules/strategy/proto/strategygen v0.0.0-00010101000000-000000000000
@@ -147,6 +148,8 @@ replace github.com/mooyang-code/moox/packages/metricspb => ../../packages/metric
 replace github.com/mooyang-code/moox/packages/marketcalendar => ../../packages/marketcalendar
 
 replace github.com/mooyang-code/moox/packages/barclock => ../../packages/barclock
+
+replace github.com/mooyang-code/moox/modules/archive/proto/archivegen => ../archive/proto/archivegen
 
 replace github.com/mooyang-code/moox/modules/factor/proto/factorgen => ../factor/proto/factorgen
 
