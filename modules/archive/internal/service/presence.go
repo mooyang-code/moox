@@ -28,6 +28,23 @@ func (s *Service) Presence(ctx context.Context) (state int, workerID string, las
 	return report.EvaluatePresence(required, lastHeartbeat, s.clock(), report.DefaultPresenceTimeout), workerID, lastHeartbeat, nil
 }
 
+// ObjectStoreState 评估最近一次心跳的 worker 的对象存储可用状态（见 report.EvaluateObjectStore）。
+// worker 没有配置对象存储、或在线状态不新鲜（2 分钟内没有心跳）时 ok 为 false，不上报。
+func (s *Service) ObjectStoreState(ctx context.Context) (workerID string, state int, probeError string, ok bool, err error) {
+	worker, found, err := s.store.LatestWorker(ctx)
+	if err != nil || !found {
+		return "", 0, "", false, err
+	}
+	now := s.clock()
+	info := objectStoreFromJSON(worker.ObjectStoreJSON)
+	if info.GetEndpoint() == "" || report.EvaluatePresence(true, worker.LastHeartbeat, now, report.DefaultPresenceTimeout) != report.PresenceOnline {
+		return "", 0, "", false, nil
+	}
+	// 时间由 worker 按 RFC3339 写入；解析不了按可用处理。
+	since, _ := time.Parse(time.RFC3339, info.GetUnavailableSince())
+	return worker.WorkerID, report.EvaluateObjectStore(since, now), info.GetProbeError(), true, nil
+}
+
 // TaskHealthLevels 返回全部任务的健康等级，供指标上报（Monitor 据此告警）。
 func (s *Service) TaskHealthLevels(ctx context.Context) ([]report.ArchiveTaskLevel, error) {
 	tasks, _, err := s.store.ListTasks(ctx, "", maxListedTasks, 0)

@@ -217,6 +217,8 @@ case "${TARGET_MODULE}" in
   archive-worker)
     # 纯 Go（暂存库是 SQLite），可在任意平台交叉编译 Linux / macOS / Windows 版本。
     build_go modules/archive ./cmd/worker moox-archive-worker 0
+    # Linux 版本随包带上内置对象存储 SeaweedFS 的 weed（固定版本，见 seaweedfs-sha256.txt）。
+    if [[ "${TARGET_GOOS}" == "linux" ]]; then bash "${ROOT}/scripts/build/fetch-seaweedfs.sh" "${TARGET_GOARCH}" "${BIN_DIR}"; fi
     ;;
   strategy)
     build_go modules/strategy ./cmd/server moox-strategy 0

@@ -538,23 +538,31 @@ func TestCompleteArchiveRunRegistersPartitionsAndRejectsBadReports(t *testing.T)
 	run2, _ := h.mgr.RunArchiveTaskNow(ctx, &archivepb.RunArchiveTaskNowReq{SpaceId: "crypto", DatasetId: "ds_1m"})
 	requireOK(t, run2.GetRetInfo())
 	h.heartbeat("w2", "other")
-	// 分区登记在 w1：即使 w1 的租约过期、w2 接管，这个任务也不会派给 w2。
+	// M3：分区登记在 w1，w1 的租约过期、w2 接管后，任务照样派给 w2，上报被接受，登记的 worker 变成 w2。
 	h.now = h.now.Add(2 * time.Minute)
 	if hb := h.heartbeat("w2", "other"); !hb.GetActive() {
 		t.Fatal("w1 租约过期后 w2 应接管")
 	}
-	if runs := h.pull("w2", "other", 1); len(runs) != 0 {
-		t.Fatalf("分区登记在 w1 的任务不能派给 w2: %v", runs)
+	runs := h.pull("w2", "other", 1)
+	if len(runs) != 1 {
+		t.Fatalf("分区登记在 w1 的任务也应派给 w2: %v", runs)
+	}
+	if regs := runs[0].GetRegisteredPartitions(); len(regs) != 1 || regs[0].GetFileSha256() != "abc" {
+		t.Fatalf("下发的登记 = %v", regs)
+	}
+	done, _ := h.worker.CompleteArchiveRun(ctx, &archivepb.CompleteArchiveRunReq{WorkerId: "w2", RunId: runs[0].GetRunId(), LeaseToken: runs[0].GetLeaseToken(), Status: "succeeded",
+		Partitions: []*archivepb.PartitionReport{{PartitionKey: "2026-10-16", RangeStart: "2026-10-16T00:00:00Z", RangeEnd: "2026-10-17T00:00:00Z", Status: "exported", RowCount: 100, SubjectCount: 2,
+			FilePath: "crypto/ds_1m/2026-10-16.csv.gz", FileSha256: "abc", ExportedAt: "2026-10-17T01:05:00Z"}}})
+	requireOK(t, done.GetRetInfo())
+	part, _ := h.mgr.GetArchivePartition(context.Background(), &archivepb.GetArchivePartitionReq{SpaceId: "crypto", DatasetId: "ds_1m", PartitionKey: "2026-10-16"})
+	if part.GetPartition().GetWorkerId() != "w2" || part.GetPartition().GetFileBytes() != 10 {
+		t.Fatalf("登记的 worker 应变成 w2、大小不被冲成 0: %v", part.GetPartition())
 	}
 	overview, _ := h.mgr.GetArchiveOverview(context.Background(), &archivepb.GetArchiveOverviewReq{})
-	found := false
 	for _, alert := range overview.GetAlerts() {
-		if strings.Contains(alert, "分区登记在 worker w1") {
-			found = true
+		if strings.Contains(alert, "分区登记在 worker") {
+			t.Fatalf("总览不应再有分区归属告警: %v", overview.GetAlerts())
 		}
-	}
-	if !found {
-		t.Fatalf("总览应提示分区属于另一个 worker: %v", overview.GetAlerts())
 	}
 }
 

@@ -116,7 +116,8 @@ count=0
 for file in "${STAGE}"/*; do
   [[ -f "${file}" ]] || continue
   name="$(basename "${file}")"
-  [[ "${name}" =~ ^moox-[a-z0-9-]+$ ]] || continue
+  # weed 是 archive-worker 附带的内置对象存储（第三方预编译二进制）。
+  [[ "${name}" =~ ^moox-[a-z0-9-]+$ || "${name}" == weed ]] || continue
   cp -f "${file}" "${OUT}/${name}"
   printf 'BUILT:%s:%s\n' "${name}" "$(sha_of "${OUT}/${name}")"
   count=$((count + 1))

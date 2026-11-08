@@ -1,6 +1,7 @@
 package configinit
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -26,6 +27,8 @@ type ConfigForm struct {
 		ChannelType string `json:"channel_type"`
 		WebhookURL  string `json:"webhook_url"`
 	} `json:"notification"`
+	// ArchiveObjectStore 是 [archive_object_store]：关闭时整段删除。
+	ArchiveObjectStore FormObjectStore `json:"archive_object_store"`
 	// ExchangeKeys 是交易所密钥的完整列表：保存时整体替换配置里的全部 [[exchange_keys]]；不带这个字段（nil）则不改。
 	ExchangeKeys []ExchangeKeyEntry `json:"exchange_keys"`
 	Hosts        []FormHost         `json:"hosts"`
@@ -35,6 +38,22 @@ type ConfigForm struct {
 		BackupCount int `json:"backup_count"`
 	} `json:"logs"`
 }
+
+// FormObjectStore 是归档对象存储一组：标准 S3 接口的连接参数与管理台密钥的 secret_id（不含密钥值）。
+type FormObjectStore struct {
+	Enabled      bool   `json:"enabled"`
+	Endpoint     string `json:"endpoint"`
+	Region       string `json:"region"`
+	Bucket       string `json:"bucket"`
+	Prefix       string `json:"prefix"`
+	URLStyle     string `json:"url_style"`
+	UseTLS       bool   `json:"use_tls"`
+	StorageClass string `json:"storage_class"`
+	SecretID     string `json:"secret_id"`
+}
+
+// archiveObjectStoreSection 是 moox.toml 里归档对象存储的段名。
+const archiveObjectStoreSection = "archive_object_store"
 
 // FormHost 是一台主机的 SSH 登录方式；用途、地址、地域只读（改这些需要重新部署）。
 type FormHost struct {
@@ -85,6 +104,14 @@ func formFrom(m setupconfig.Manifest) ConfigForm {
 	form.Admin.Username, form.Admin.Password = m.Admin.Username, m.Admin.Password
 	form.Tencent.SecretID, form.Tencent.SecretKey = m.TencentCloud.SecretID, m.TencentCloud.SecretKey
 	form.Notification.ChannelType, form.Notification.WebhookURL = m.Notification.ChannelType, m.Notification.WebhookURL
+	// 没配时给出常用的默认值（低频存储、虚拟主机风格、HTTPS），开关关着。
+	form.ArchiveObjectStore = FormObjectStore{Prefix: "moox-archive/", URLStyle: "virtual", UseTLS: true, StorageClass: "STANDARD_IA"}
+	if s := m.ArchiveObjectStore; s != nil {
+		form.ArchiveObjectStore = FormObjectStore{
+			Enabled: true, Endpoint: s.Endpoint, Region: s.Region, Bucket: s.Bucket, Prefix: s.Prefix, URLStyle: s.URLStyle,
+			UseTLS: s.TLS(), StorageClass: s.StorageClass, SecretID: s.SecretID,
+		}
+	}
 	form.ExchangeKeys = exchangeKeyEntries(m)
 	view := describe(m, false, "")
 	for _, server := range view.Servers {
@@ -164,6 +191,10 @@ func applyForm(plain []byte, current setupconfig.Manifest, form ConfigForm) ([]b
 	set("tencent_cloud", "secret_key", tomlString(form.Tencent.SecretKey))
 	set("notification", "channel_type", tomlString(strings.TrimSpace(form.Notification.ChannelType)))
 	set("notification", "webhook_url", tomlString(strings.TrimSpace(form.Notification.WebhookURL)))
+	var err error
+	if lines, err = applyObjectStore(lines, form.ArchiveObjectStore); err != nil {
+		return nil, err
+	}
 
 	for _, host := range form.Hosts {
 		if _, ok := current.HostCatalog[host.ID]; !ok {
@@ -251,6 +282,35 @@ func applyForm(plain []byte, current setupconfig.Manifest, form ConfigForm) ([]b
 		lines = replaceExchangeKeys(lines, entries)
 	}
 	return []byte(strings.Join(lines, "\n")), nil
+}
+
+// applyObjectStore 写回归档对象存储一组：关闭时整段删除（连同段的说明注释）；打开时按必填规则校验后逐键写入。
+func applyObjectStore(lines []string, s FormObjectStore) ([]string, error) {
+	if !s.Enabled {
+		return dropSection(lines, archiveObjectStoreSection), nil
+	}
+	for _, field := range []struct{ name, value string }{
+		{"对象存储地址", s.Endpoint}, {"地域", s.Region}, {"桶名", s.Bucket}, {"对象键前缀", s.Prefix},
+		{"地址风格", s.URLStyle}, {"存储类型", s.StorageClass}, {"密钥 secret_id", s.SecretID},
+	} {
+		if err := checkText("归档对象存储的"+field.name, field.value, false); err != nil {
+			return nil, err
+		}
+	}
+	useTLS := s.UseTLS
+	store := setupconfig.ArchiveObjectStore{Endpoint: s.Endpoint, Region: s.Region, Bucket: s.Bucket, Prefix: s.Prefix, URLStyle: s.URLStyle,
+		UseTLS: &useTLS, StorageClass: s.StorageClass, SecretID: s.SecretID}
+	if err := store.Validate(); err != nil {
+		return nil, errors.New(strings.TrimPrefix(err.Error(), "config_invalid: "))
+	}
+	for _, kv := range []struct{ key, value string }{
+		{"endpoint", tomlString(store.Endpoint)}, {"region", tomlString(store.Region)}, {"bucket", tomlString(store.Bucket)},
+		{"prefix", tomlString(store.Prefix)}, {"url_style", tomlString(store.URLStyle)}, {"use_tls", strconv.FormatBool(useTLS)},
+		{"storage_class", tomlString(store.StorageClass)}, {"secret_id", tomlString(store.SecretID)},
+	} {
+		lines = putKey(lines, archiveObjectStoreSection, kv.key, kv.value)
+	}
+	return lines, nil
 }
 
 func retentionCell(freq, value string) error {

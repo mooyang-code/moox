@@ -112,7 +112,7 @@ func registerTimer(s *server.Server, service, name string, timeout time.Duration
 	return nil
 }
 
-// registerMetricsReporter 每 30 秒评估一次归档 worker 的在线状态与各任务的健康等级并上报指标快照，Monitor 据此告警。
+// registerMetricsReporter 每 30 秒评估一次归档 worker 的在线状态、对象存储可用状态与各任务的健康等级并上报指标快照，Monitor 据此告警。
 func registerMetricsReporter(s *server.Server, svc *service.Service) error {
 	handler, err := report.NewHandler(report.DefaultConfig("archive", "archive-mgr"))
 	if err != nil {
@@ -121,6 +121,10 @@ func registerMetricsReporter(s *server.Server, svc *service.Service) error {
 	presence, err := report.NewWorkerPresence(prometheus.DefaultRegisterer, "archive")
 	if err != nil {
 		return fmt.Errorf("create archive worker presence metric: %w", err)
+	}
+	objectStore, err := report.NewArchiveObjectStore(prometheus.DefaultRegisterer)
+	if err != nil {
+		return fmt.Errorf("create archive object store metric: %w", err)
 	}
 	taskHealth, err := report.NewArchiveTaskHealth(prometheus.DefaultRegisterer)
 	if err != nil {
@@ -131,6 +135,13 @@ func registerMetricsReporter(s *server.Server, svc *service.Service) error {
 			log.WarnContextf(ctx, "archive worker presence not evaluated: %v", err)
 		} else {
 			presence.Set(state, workerID, last)
+		}
+		if workerID, state, probeError, ok, err := svc.ObjectStoreState(ctx); err != nil {
+			log.WarnContextf(ctx, "archive object store state not evaluated: %v", err)
+		} else if ok {
+			objectStore.Set(workerID, state, probeError)
+		} else {
+			objectStore.Clear()
 		}
 		if levels, err := svc.TaskHealthLevels(ctx); err != nil {
 			log.WarnContextf(ctx, "archive task health not evaluated: %v", err)

@@ -28,6 +28,8 @@ cat >"${FAKE}/scripts/build/build.sh" <<'EOF'
 set -euo pipefail
 printf '%s goos=%s goarch=%s cgo=%s version=%s commit=%s\n' "$1" "${TARGET_GOOS}" "${TARGET_GOARCH}" "${CGO_ENABLED}" "${VERSION}" "${GIT_COMMIT}" >>"${HOST_BUILD_LOG}"
 printf 'host-binary-%s\n' "$1" >"${BIN_DIR}/moox-$1"
+# 真实的 archive-worker 目标还会放进 weed，其他非 moox- 前缀的文件不该被拷走。
+if [[ "$1" == archive-worker ]]; then printf 'weed\n' >"${BIN_DIR}/weed"; printf 'x\n' >"${BIN_DIR}/stray.txt"; fi
 EOF
 chmod +x "${FAKE}/scripts/build/build.sh"
 mkdir -p "${FAKE}/.git" "${FAKE}/web/node_modules/pkg" "${FAKE}/bin" "${FAKE}/web/dist" "${FAKE}/modules/storage"
@@ -71,6 +73,13 @@ mkdir -p "${DOCKER_FLAGS}"
 SCRIPT="${FAKE}/scripts/build/build-linux-local.sh"
 OUT="${TMP}/out"
 export VERSION=abc12345 GIT_COMMIT=abc12345
+
+# ---------------------------------------------------------------- archive-worker 带上内置对象存储的 weed
+bash "${SCRIPT}" --out "${TMP}/out-aw" archive-worker >"${TMP}/stdout.txt" 2>"${TMP}/stderr.txt" || { cat "${TMP}/stderr.txt" >&2; fail "archive-worker 应成功"; }
+[[ -f "${TMP}/out-aw/weed" && -f "${TMP}/out-aw/moox-archive-worker" ]] || fail "archive-worker 的产物要带上 weed"
+[[ ! -e "${TMP}/out-aw/stray.txt" ]] || fail "除 moox-* 与 weed 外的文件不能拷到输出目录"
+grep -q '^BUILT:weed:' "${TMP}/stdout.txt" || fail "要列出 weed"
+: >"${HOST_BUILD_LOG}"
 
 # ---------------------------------------------------------------- 不含 CGO：本机交叉编译，不碰 Docker
 bash "${SCRIPT}" --out "${OUT}" admin monitor factor-mgr >"${TMP}/stdout.txt" 2>"${TMP}/stderr.txt" || { cat "${TMP}/stderr.txt" >&2; fail "纯 Go 目标应成功"; }

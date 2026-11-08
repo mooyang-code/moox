@@ -1,5 +1,6 @@
 // Command moox-archive-worker 是归档 worker：经 Access 领取运行，读取 Storage 的时间区间数据，
-// 写入本地 SQLite 暂存区，并导出 CSV 分区文件。它只出站，可以部署在任何能访问 Access 的 Linux 或 macOS 机器上。
+// 写入本地 SQLite 暂存区，导出 CSV 分区文件，配置了对象存储时再把文件传一份到标准 S3 接口的对象存储。
+// 它只出站，可以部署在任何能访问 Access 的 Linux 或 macOS 机器上。
 package main
 
 import (
@@ -57,6 +58,10 @@ func run(args []string) error {
 			return health(args[1:])
 		case "probe":
 			return probe(args[1:])
+		case "check-config":
+			return checkConfig(args[1:])
+		case "objectstore-check":
+			return objectstoreCheck(context.Background(), os.Stdout, args[1:])
 		}
 	}
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
@@ -91,12 +96,20 @@ func serve(parent context.Context, cfg *config.Config) (err error) {
 	if err != nil {
 		return err
 	}
+	// 配置了对象存储就创建客户端；启动时不连网探测：对象存储暂时不可达不影响启动和读取归档。
+	remote, err := cfg.OpenObjectStore()
+	if err != nil {
+		return fmt.Errorf("open object store: %w", err)
+	}
+	if cfg.ObjectStore != nil && !cfg.ObjectStore.TLS() {
+		log.Warnf("archive worker object store %s uses plain HTTP (use_tls: false); only for a private network", cfg.ObjectStore.Endpoint)
+	}
 	files := export.Files{Root: cfg.Worker.RootDir, Format: cfg.Worker.ExportFormat}
 	instance := newInstanceID()
 	worker := app.New(app.Options{
 		Config: cfg, Manager: manager.New(gateway), Staging: store, Files: files, InstanceID: instance, Version: Version,
-		Runner:    &runner.Runner{Source: source.New(gateway, secret), Staging: store, Files: files, Pace: pacer, PageRows: cfg.Pacing.PageRows},
-		DiskUsage: app.StatfsDiskUsage,
+		Runner:    &runner.Runner{Source: source.New(gateway, secret), Staging: store, Files: files, Pace: pacer, PageRows: cfg.Pacing.PageRows, Remote: remote},
+		DiskUsage: app.StatfsDiskUsage, Remote: remote,
 	})
 	ctx, stop := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -157,6 +170,28 @@ func serveHealth(addr string, worker *app.App) (func() error, error) {
 		defer cancel()
 		return server.Shutdown(ctx)
 	}, nil
+}
+
+// checkConfig 完整载入并校验配置，再读一遍凭据文件（Storage 签名密钥、对象存储凭据），不连网。
+// 部署脚本在重启服务之前先跑它：配置不对就不重启，旧进程继续跑。
+func checkConfig(args []string) error {
+	fs := flag.NewFlagSet("check-config", flag.ContinueOnError)
+	configPath := fs.String("config", "config/app.yaml", "archive worker config")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	cfg, err := config.Load(*configPath)
+	if err != nil {
+		return err
+	}
+	if _, err := gatewayauth.ReadSigningSecret(cfg.StorageSecretPath()); err != nil {
+		return fmt.Errorf("read storage auth file: %w", err)
+	}
+	if _, err := cfg.OpenObjectStore(); err != nil {
+		return err
+	}
+	fmt.Printf("配置 %s 校验通过（对象存储：%s）\n", *configPath, map[bool]string{true: "已配置", false: "未配置"}[cfg.ObjectStore != nil])
+	return nil
 }
 
 // health 询问本机 worker 的就绪状态，请求用 MOOX_HEALTH_AUTH_* 环境变量签名。

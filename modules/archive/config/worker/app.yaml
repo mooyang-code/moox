@@ -11,7 +11,7 @@ gateway_client:
 storage_auth_file: ../secrets/storage-primary-auth.secret
 
 worker:
-  worker_id: archive-worker@example-host   # 换机器时整体迁移目录并沿用同一个 worker_id
+  worker_id: archive-worker@example-host   # 没配对象存储时，换机器要整体迁移目录并沿用同一个 worker_id
   root_dir: /data/moox-archive
   export_format: csv.gz             # csv.gz（默认）或 csv
   min_free_bytes: 5GB
@@ -36,3 +36,15 @@ health:
 
 maintenance:
   at: "04:17:43"                     # 每天维护时刻（本机时区）
+
+# 对象存储副本（可选，整段省略表示不使用）：每次导出后把分区文件单次 PUT 到标准 S3 接口的对象存储，
+# 读回已定稿分区时本地缺文件或校验不符就从这里取回。只用标准 S3 接口，后端可替换（COS、R2、自建）。
+# object_store:
+#   endpoint: cos.ap-nanjing.myqcloud.com   # 主机名[:端口]，不带 http://
+#   region: ap-nanjing                       # 必填；R2 填 auto
+#   bucket: moox-archive-1250000000          # COS 桶名带 APPID
+#   prefix: moox-archive/                    # 默认；权限策略按它限定
+#   url_style: virtual                       # 必填：virtual 或 path（COS 新建的桶只接受 virtual）
+#   use_tls: true
+#   storage_class: STANDARD_IA               # 可选，按 x-amz-storage-class 发送；留空用桶的默认
+#   credentials_file: ../secrets/archive-object-store.env   # ACCESS_KEY_ID / SECRET_ACCESS_KEY，0600

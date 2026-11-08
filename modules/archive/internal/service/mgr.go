@@ -46,7 +46,27 @@ func pageResult(page, size, total int) *commonpb.PageResult {
 	return &commonpb.PageResult{Page: uint32(page), Size: uint32(size), Total: uint32(total), HasMore: page*size < total, TotalState: commonpb.TotalState_EXACT}
 }
 
-// validateBackfill 校验回补起点：必须早于当前时间，且不早于「今天 − 线上保留期 + 1 天」（保留期为 forever 时不限）。
+// backfillClampSlack 是回补起点、补拉起点早于下界多少以内时夹到下界而不报错：Prepare 给出的最早值按当时的 now 计算，
+// 用户填写、提交时 now 已经后移，原样校验必被拒。
+const backfillClampSlack = time.Hour
+
+// clampToEarliest 把早于下界 earliest 不到 backfillClampSlack 的 start 夹到下界（向上取整到秒）；ok 为假表示差得更多，应拒绝。
+func clampToEarliest(start, earliest time.Time) (time.Time, bool) {
+	if !start.Before(earliest) {
+		return start, true
+	}
+	if earliest.Sub(start) >= backfillClampSlack {
+		return start, false
+	}
+	clamped := earliest.Truncate(time.Second)
+	if clamped.Before(earliest) {
+		clamped = clamped.Add(time.Second)
+	}
+	return clamped, true
+}
+
+// validateBackfill 校验回补起点：必须早于当前时间，且不早于「今天 − 线上保留期 + 1 天」（保留期为 forever 时不限）；
+// 早于下界不到 1 小时的夹到下界，返回的就是实际保存的值。
 func validateBackfill(value, retention string, now time.Time) (time.Time, error) {
 	backfill, err := parseRFC("backfill_from", value)
 	if err != nil || backfill.IsZero() {
@@ -59,8 +79,12 @@ func validateBackfill(value, retention string, now time.Time) (time.Time, error)
 	if err != nil {
 		return time.Time{}, err
 	}
-	if ok && backfill.Before(earliest) {
-		return time.Time{}, fmt.Errorf("%w：不能早于 %s（今天 − 线上保留期 + 1 天）", ErrInvalidBackfill, earliest.Format(time.RFC3339))
+	if ok {
+		clamped, within := clampToEarliest(backfill, earliest)
+		if !within {
+			return time.Time{}, fmt.Errorf("%w：不能早于 %s（今天 − 线上保留期 + 1 天）", ErrInvalidBackfill, earliest.Format(time.RFC3339))
+		}
+		backfill = clamped
 	}
 	return backfill, nil
 }
@@ -288,8 +312,16 @@ func (m *MgrService) BackfillArchiveRange(ctx context.Context, req *archivepb.Ba
 		return &archivepb.BackfillArchiveRangeRsp{RetInfo: invalid(perr)}, nil
 	}
 	// 和回补起点一样留一天余量：运行排队开始时截止点已经后移，贴着截止点的起点会被截掉一截、误记为无法补齐。
-	if earliest := now.Add(-limit).Add(24 * time.Hour); !forever && start.Before(earliest) {
-		return &archivepb.BackfillArchiveRangeRsp{RetInfo: invalid(fmt.Errorf("补拉区间不能早于 %s（今天 − 线上保留期 + 1 天）", earliest.Format(time.RFC3339)))}, nil
+	// 早于下界不到 1 小时的夹到下界（下发的就是夹取后的区间）。
+	if earliest := now.Add(-limit).Add(24 * time.Hour); !forever {
+		clamped, within := clampToEarliest(start, earliest)
+		if !within {
+			return &archivepb.BackfillArchiveRangeRsp{RetInfo: invalid(fmt.Errorf("补拉区间不能早于 %s（今天 − 线上保留期 + 1 天）", earliest.Format(time.RFC3339)))}, nil
+		}
+		if !clamped.Before(end) {
+			return &archivepb.BackfillArchiveRangeRsp{RetInfo: invalid(fmt.Errorf("补拉区间夹到下界 %s 之后为空", clamped.Format(time.RFC3339)))}, nil
+		}
+		start = clamped
 	}
 	run, err := s.store.CreateRun(ctx, space, req.GetDatasetId(), store.KindRange, start, end, now)
 	if err != nil {
@@ -370,9 +402,13 @@ func (m *MgrService) ListArchivePartitions(ctx context.Context, req *archivepb.L
 	if err != nil {
 		return &archivepb.ListArchivePartitionsRsp{RetInfo: inner(err)}, nil
 	}
+	status, err := m.svc.workerStatus(ctx, m.svc.clock())
+	if err != nil {
+		return &archivepb.ListArchivePartitionsRsp{RetInfo: inner(err)}, nil
+	}
 	rsp := &archivepb.ListArchivePartitionsRsp{RetInfo: success(), PageResult: pageResult(page, size, total)}
 	for _, p := range parts {
-		rsp.Partitions = append(rsp.Partitions, partitionToPB(p))
+		rsp.Partitions = append(rsp.Partitions, partitionToPB(p, status.remoteEnabled))
 	}
 	return rsp, nil
 }
@@ -386,7 +422,11 @@ func (m *MgrService) GetArchivePartition(ctx context.Context, req *archivepb.Get
 	if err != nil {
 		return &archivepb.GetArchivePartitionRsp{RetInfo: fail(err)}, nil
 	}
-	return &archivepb.GetArchivePartitionRsp{RetInfo: success(), Partition: partitionToPB(p)}, nil
+	status, err := m.svc.workerStatus(ctx, m.svc.clock())
+	if err != nil {
+		return &archivepb.GetArchivePartitionRsp{RetInfo: inner(err)}, nil
+	}
+	return &archivepb.GetArchivePartitionRsp{RetInfo: success(), Partition: partitionToPB(p, status.remoteEnabled)}, nil
 }
 
 func (m *MgrService) PrepareArchiveTask(ctx context.Context, req *archivepb.PrepareArchiveTaskReq) (*archivepb.PrepareArchiveTaskRsp, error) {
@@ -530,16 +570,23 @@ func (s *Service) taskViews(ctx context.Context, space string, tasks []store.Tas
 	if err != nil {
 		return nil, err
 	}
-	active, lastSeen, err := s.workerStatus(ctx, now)
+	status, err := s.workerStatus(ctx, now)
 	if err != nil {
 		return nil, err
+	}
+	var backlogs map[string]store.RemoteBacklog
+	if status.remoteEnabled {
+		if backlogs, err = s.store.RemoteBacklogs(ctx, space); err != nil {
+			return nil, err
+		}
 	}
 	out := make([]*archivepb.ArchiveTask, 0, len(tasks))
 	for _, task := range tasks {
 		key := task.SpaceID + "/" + task.DatasetID
 		view := s.taskToPB(task, now)
-		in := healthInput{Now: now, Task: task, OpenParts: openByTask[key], OldestQueued: queued[key], WorkerActive: active, WorkerLastSeen: lastSeen,
-			Lookback: s.cfg.Schedule.MinLookback, SpaceTZ: s.cfg.Space(task.SpaceID).TZ, SpaceLocalClose: s.cfg.Space(task.SpaceID).LocalClose}
+		in := healthInput{Now: now, Task: task, OpenParts: openByTask[key], OldestQueued: queued[key], WorkerActive: status.active, WorkerLastSeen: status.lastSeen,
+			Lookback: s.cfg.Schedule.MinLookback, SpaceTZ: s.cfg.Space(task.SpaceID).TZ, SpaceLocalClose: s.cfg.Space(task.SpaceID).LocalClose,
+			RemoteEnabled: status.remoteEnabled, Remote: backlogs[key]}
 		if run, ok := lastRuns[key]; ok {
 			copied := run
 			in.LastRun = &copied
@@ -552,6 +599,10 @@ func (s *Service) taskViews(ctx context.Context, space string, tasks []store.Tas
 		if sum, ok := sums[key]; ok {
 			view.PartitionCount, view.FileCount, view.TotalRows, view.TotalFileBytes = uint32(sum.Partitions), uint32(sum.Files), sum.Rows, sum.FileBytes
 			view.MinDataTime, view.MaxDataTime = fmtRFC(sum.MinDataTime), fmtRFC(sum.MaxDataTime)
+			if status.remoteEnabled {
+				pending := backlogs[key].Unreplicated
+				view.RemotePendingCount, view.RemoteVerifiedCount = uint32(pending), uint32(max(sum.Files-pending, 0))
+			}
 		}
 		view.Health, view.HealthReason = evaluateHealth(in)
 		out = append(out, view)
@@ -578,21 +629,41 @@ func (s *Service) oldestQueued(ctx context.Context, space string) (map[string]ti
 	return out, nil
 }
 
-// workerStatus 返回是否有活动 worker，以及最近一次任一 worker 的心跳时间。
-func (s *Service) workerStatus(ctx context.Context, now time.Time) (active bool, lastSeen time.Time, err error) {
+// workerState 是 worker 的汇总状态。
+type workerState struct {
+	// active：有活动 worker；lastSeen：任一 worker 最近一次心跳的时间。
+	active   bool
+	lastSeen time.Time
+	// remoteEnabled：对象存储已启用。有活动 worker 时看它，没有时看最近一次心跳的那条 worker 记录；没有任何记录时视为未启用。
+	remoteEnabled bool
+}
+
+// workerStatus 汇总 worker 的状态。
+func (s *Service) workerStatus(ctx context.Context, now time.Time) (workerState, error) {
 	workers, err := s.store.ListWorkers(ctx)
 	if err != nil {
-		return false, time.Time{}, err
+		return workerState{}, err
 	}
-	for _, w := range workers {
+	var out workerState
+	var reference *store.Worker
+	for i, w := range workers {
+		switch {
+		case w.Active(now) && (reference == nil || !reference.Active(now)):
+			reference = &workers[i]
+		case reference == nil || !reference.Active(now) && w.LastHeartbeat.After(reference.LastHeartbeat):
+			reference = &workers[i]
+		}
 		if w.Active(now) {
-			active = true
+			out.active = true
 		}
-		if w.LastHeartbeat.After(lastSeen) {
-			lastSeen = w.LastHeartbeat
+		if w.LastHeartbeat.After(out.lastSeen) {
+			out.lastSeen = w.LastHeartbeat
 		}
 	}
-	return active, lastSeen, nil
+	if reference != nil {
+		out.remoteEnabled = objectStoreFromJSON(reference.ObjectStoreJSON).GetEndpoint() != ""
+	}
+	return out, nil
 }
 
 func (m *MgrService) GetArchiveOverview(ctx context.Context, _ *archivepb.GetArchiveOverviewReq) (*archivepb.GetArchiveOverviewRsp, error) {
@@ -654,14 +725,6 @@ func (m *MgrService) GetArchiveOverview(ctx context.Context, _ *archivepb.GetArc
 	}
 	if rsp.EnabledTaskCount > 0 && activeWorker == "" {
 		rsp.Alerts = append(rsp.Alerts, "没有活动的归档 worker")
-	}
-	owners, err := s.store.PartitionWorkers(ctx)
-	if err == nil && activeWorker != "" {
-		for _, t := range tasks {
-			if owner, ok := owners[t.SpaceID+"/"+t.DatasetID]; ok && owner != activeWorker {
-				rsp.Alerts = append(rsp.Alerts, fmt.Sprintf("%s：分区登记在 worker %s，当前活动 worker 是 %s，运行不会派给它", t.DatasetID, owner, activeWorker))
-			}
-		}
 	}
 	sort.Strings(rsp.Alerts)
 	return rsp, nil

@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/archive/internal/objectstore"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/export"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/source"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/staging"
@@ -101,6 +102,8 @@ type env struct {
 	now   time.Time
 	// format 是导出格式；默认 csv（便于直接读文件），空串即生产默认的 csv.gz。
 	format string
+	// remote 是对象存储客户端；nil 表示没有配置对象存储。
+	remote *objectstore.Client
 }
 
 func newEnv(t *testing.T) *env {
@@ -115,7 +118,7 @@ func newEnv(t *testing.T) *env {
 }
 
 func (e *env) runner(pageRows int) *Runner {
-	return &Runner{Source: e.src, Staging: e.store, Files: export.Files{Root: e.root, Format: e.format}, Pace: e.pace, PageRows: pageRows, Now: func() time.Time { return e.now }, ReadAttempts: 3}
+	return &Runner{Source: e.src, Staging: e.store, Files: export.Files{Root: e.root, Format: e.format}, Pace: e.pace, PageRows: pageRows, Now: func() time.Time { return e.now }, ReadAttempts: 3, Remote: e.remote}
 }
 
 func (e *env) assignment(mutate func(*archivepb.RunAssignment)) *archivepb.RunAssignment {

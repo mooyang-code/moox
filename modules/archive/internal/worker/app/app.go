@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/archive/internal/objectstore"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/config"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/export"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/manager"
@@ -26,6 +27,10 @@ const (
 	completeRetries = 6
 	// maintenanceWait 是每天维护最多等待进行中的运行结束多久。
 	maintenanceWait = 30 * time.Minute
+	// probeEvery 是对象存储可用性探测的间隔。
+	probeEvery = time.Minute
+	// probeKey 是探测用的固定且不存在的键（客户端会加上 prefix）：返回 404 说明对象存储可用。
+	probeKey = "_probe/absent"
 )
 
 // DiskUsage 返回路径所在文件系统的总量与可用量。
@@ -43,6 +48,8 @@ type Options struct {
 	Now        func() time.Time
 	Sleep      func(ctx context.Context, d time.Duration) error
 	DiskUsage  DiskUsage
+	// Remote 是对象存储客户端；nil 表示没有配置。心跳带上它的摘要，每天维护时抽查远端副本。
+	Remote *objectstore.Client
 }
 
 type activeRun struct {
@@ -72,7 +79,10 @@ type App struct {
 	// 但旧运行要等下一次心跳才知道被取消，两个运行同时改写同一个暂存表和分区文件会丢行。
 	datasetSlots  map[string]chan struct{}
 	progressEvery time.Duration
-	wg            sync.WaitGroup
+	// probeError 是最近一次对象存储探测失败的原因，unavailableSince 是连续不可用的起点；可用时都为空。
+	probeError       string
+	unavailableSince time.Time
+	wg               sync.WaitGroup
 }
 
 // New 创建 App。
@@ -127,6 +137,10 @@ func (a *App) Run(ctx context.Context) error {
 	}
 	loop(func() time.Duration { return a.opts.Config.Worker.HeartbeatInterval }, func(ctx context.Context) { a.heartbeatOnce(ctx) })
 	loop(func() time.Duration { return a.opts.Config.Worker.PullInterval }, a.pullOnce)
+	if a.opts.Remote != nil {
+		// 单独一个循环：探测可能因超时与重试卡几十秒，不能拖住心跳。启动后立即做第一次探测。
+		loop(func() time.Duration { return probeEvery }, a.probeOnce)
+	}
 	loops.Add(1)
 	go func() {
 		defer loops.Done()
@@ -176,6 +190,31 @@ func (a *App) MaintainOnce(ctx context.Context) { a.maintainOnce(ctx) }
 // PullOnce 领取并启动一次运行（同上）。
 func (a *App) PullOnce(ctx context.Context) { a.pullOnce(ctx) }
 
+// ProbeOnce 探测一次对象存储（同上）。
+func (a *App) ProbeOnce(ctx context.Context) { a.probeOnce(ctx) }
+
+// probeOnce 对固定且不存在的键做 HEAD：404 算可用；连接失败、403、5xx 等都算不可用。结果随心跳上报。
+func (a *App) probeOnce(ctx context.Context) {
+	_, err := a.opts.Remote.Head(ctx, probeKey)
+	if ctx.Err() != nil {
+		return // 退出时被取消，不算对象存储的问题
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	// 正常是 404；有人放了这个键时 HEAD 成功，同样说明能连通且有权限。
+	if err == nil || errors.Is(err, objectstore.ErrNotFound) {
+		a.probeError, a.unavailableSince = "", time.Time{}
+		return
+	}
+	if a.probeError == "" {
+		log.Warnf("archive worker object store unavailable: %v", err)
+	}
+	a.probeError = objectstore.ErrorText(err)
+	if a.unavailableSince.IsZero() {
+		a.unavailableSince = a.opts.Now().UTC()
+	}
+}
+
 // heartbeatOnce 发送一次心跳。本实例是活动 worker 时 mgr 下发当前全部任务，返回它们（键 "space/dataset"，值 task_id）；否则返回 nil。
 func (a *App) heartbeatOnce(ctx context.Context) map[string]string {
 	cfg := a.opts.Config
@@ -198,6 +237,7 @@ func (a *App) heartbeatOnce(ctx context.Context) map[string]string {
 		WorkerId: cfg.Worker.WorkerID, InstanceId: a.opts.InstanceID, Version: a.opts.Version, RootDir: cfg.Worker.RootDir,
 		DiskTotalBytes: total, DiskFreeBytes: free, StagingBytes: uint64(a.opts.Staging.FileBytes()),
 		Maintaining: maintaining, DiskLow: diskLow, PacingJson: string(pacingJSON), RunningRunIds: a.runningIDs(),
+		ObjectStore: a.objectStoreInfo(),
 	})
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -392,7 +432,7 @@ func (a *App) execute(ctx context.Context, run *activeRun) {
 			req.Status, req.Message = outcome.Status, outcome.Message
 			req.SubjectsDone, req.RequestCount, req.BytesRead, req.RowsRead = outcome.Progress.SubjectsDone, outcome.Progress.RequestCount, outcome.Progress.BytesRead, outcome.Progress.RowsRead
 			req.RowsAdded, req.RowsChanged = outcome.RowsAdded, outcome.RowsChanged
-			req.PartitionsExported, req.PartitionsFinalized = outcome.Exported, outcome.Finalized
+			req.PartitionsExported, req.PartitionsFinalized, req.PartitionsUploaded = outcome.Exported, outcome.Finalized, outcome.Uploaded
 			req.Partitions, req.Unrecoverable = outcome.Partitions, outcome.Unrecoverable
 			reported = outcome.ReportedKeys
 			if !outcome.FinalUntil.IsZero() {
@@ -492,9 +532,32 @@ func (a *App) maintainOnce(ctx context.Context) {
 	} else if len(dropped) > 0 {
 		log.Infof("archive worker dropped staging state of deleted tasks: %v", dropped)
 	}
+	a.checkRemote(ctx)
 	if err := a.opts.Staging.Maintain(ctx); err != nil {
 		log.Warnf("archive worker staging maintenance: %v", err)
 	}
+}
+
+// objectStoreInfo 返回心跳里的对象存储摘要；没有配置时为空。
+func (a *App) objectStoreInfo() *archivepb.ObjectStoreInfo {
+	if a.opts.Remote == nil {
+		return nil
+	}
+	info := a.opts.Remote.Info()
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return &archivepb.ObjectStoreInfo{
+		Endpoint: info.Endpoint, Bucket: info.Bucket, Prefix: info.Prefix, StorageClass: info.StorageClass, UrlStyle: info.URLStyle,
+		ProbeError: a.probeError, UnavailableSince: fmtTime(a.unavailableSince),
+	}
+}
+
+// fmtTime 把时间格式化为 RFC3339（UTC），零值为空。
+func fmtTime(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
 }
 
 // Snapshot 是健康检查用的状态。

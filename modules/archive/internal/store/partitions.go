@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -34,22 +35,41 @@ type Partition struct {
 	LastRunID     string
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
+	Remote        Remote
+}
+
+// Remote 是分区在对象存储里的副本。Key 相对对象存储的 prefix；SHA256 等于分区的 FileSHA256 且 VerifiedAt 非零时，远端是当前版本。
+type Remote struct {
+	Key        string
+	SHA256     string
+	ETag       string
+	UploadedAt time.Time
+	VerifiedAt time.Time
+	Error      string
+}
+
+// Replicated 报告分区当前版本是否已有校验过的远端副本（worker 与 mgr 用同一个口径）。
+func (p Partition) Replicated() bool {
+	return p.FilePath != "" && p.Remote.SHA256 == p.FileSHA256 && !p.Remote.VerifiedAt.IsZero()
 }
 
 const partitionColumns = `c_space_id, c_dataset_id, c_partition_key, c_range_start, c_range_end, c_status, c_worker_id, c_row_count, c_subject_count,
 c_min_data_time, c_max_data_time, c_file_path, c_file_bytes, c_file_sha256, c_columns_json, c_preview, c_export_count,
-c_last_changed_at, c_exported_at, c_finalized_at, c_last_run_id, c_ctime, c_mtime`
+c_last_changed_at, c_exported_at, c_finalized_at, c_last_run_id, c_ctime, c_mtime,
+c_remote_key, c_remote_sha256, c_remote_etag, c_remote_uploaded_at, c_remote_verified_at, c_remote_error`
 
 func scanPartition(row rowScanner) (Partition, error) {
 	var p Partition
-	var rangeStart, rangeEnd, minTime, maxTime, changed, exported, finalized, created, updated timeValue
+	var rangeStart, rangeEnd, minTime, maxTime, changed, exported, finalized, created, updated, uploaded, verified timeValue
 	var columns string
 	err := row.Scan(&p.SpaceID, &p.DatasetID, &p.PartitionKey, &rangeStart, &rangeEnd, &p.Status, &p.WorkerID, &p.RowCount, &p.SubjectCount,
 		&minTime, &maxTime, &p.FilePath, &p.FileBytes, &p.FileSHA256, &columns, &p.Preview, &p.ExportCount,
-		&changed, &exported, &finalized, &p.LastRunID, &created, &updated)
+		&changed, &exported, &finalized, &p.LastRunID, &created, &updated,
+		&p.Remote.Key, &p.Remote.SHA256, &p.Remote.ETag, &uploaded, &verified, &p.Remote.Error)
 	if err != nil {
 		return Partition{}, err
 	}
+	p.Remote.UploadedAt, p.Remote.VerifiedAt = uploaded.Time, verified.Time
 	p.RangeStart, p.RangeEnd, p.MinDataTime, p.MaxDataTime = rangeStart.Time, rangeEnd.Time, minTime.Time, maxTime.Time
 	p.LastChangedAt, p.ExportedAt, p.FinalizedAt, p.CreatedAt, p.UpdatedAt = changed.Time, exported.Time, finalized.Time, created.Time, updated.Time
 	if columns != "" {
@@ -81,9 +101,15 @@ func (s *Store) ListPartitions(ctx context.Context, spaceID, datasetID, fromKey,
 	return out, total, rows.Err()
 }
 
-// TaskPartitions 按分区键升序返回一个任务结束时间晚于 since 的分区登记（since 为零表示全部）。
-func (s *Store) TaskPartitions(ctx context.Context, spaceID, datasetID string, since time.Time) ([]Partition, error) {
-	rows, err := s.db.QueryContext(ctx, queryPartitions5, spaceID, datasetID, fmtTime(since))
+// TaskPartitions 按分区键升序返回一个任务下发给 worker 的分区登记：结束时间晚于 since 的（since 为零表示全部）。
+// withUnreplicated 为真（启用了对象存储）时，再加上更早但有文件、还没有已校验远端副本的：暂存库重建后它们还要补传；
+// 已复制的旧分区不下发。没启用对象存储时所有分区都“未复制”，不加这一条，下发量才不随年份增长。
+func (s *Store) TaskPartitions(ctx context.Context, spaceID, datasetID string, since time.Time, withUnreplicated bool) ([]Partition, error) {
+	query := queryPartitions5
+	if withUnreplicated {
+		query = queryPartitions6
+	}
+	rows, err := s.db.QueryContext(ctx, query, spaceID, datasetID, fmtTime(since))
 	if err != nil {
 		return nil, err
 	}
@@ -205,11 +231,9 @@ func (s *Store) CompleteRun(ctx context.Context, req CompleteRequest) error {
 				return err
 			}
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE t_archive_runs SET c_status = ?, c_finished_at = ?, c_message = ?, c_subjects_total = ?, c_subjects_done = ?,
-c_request_count = ?, c_bytes_read = ?, c_rows_read = ?, c_rows_added = ?, c_rows_changed = ?, c_partitions_exported = ?, c_partitions_finalized = ?,
-c_unrecoverable_json = ?, c_lease_until = NULL, c_lease_token = '' WHERE c_run_id = ?`, status, fmtTime(req.Now), message,
+		if _, err := tx.ExecContext(ctx, completeRun, status, fmtTime(req.Now), message,
 			req.Stats.SubjectsTotal, req.Stats.SubjectsDone, req.Stats.RequestCount, req.Stats.BytesRead, req.Stats.RowsRead,
-			req.Stats.RowsAdded, req.Stats.RowsChanged, req.Stats.PartitionsExported, req.Stats.PartitionsFinalized,
+			req.Stats.RowsAdded, req.Stats.RowsChanged, req.Stats.PartitionsExported, req.Stats.PartitionsFinalized, req.Stats.PartitionsUploaded,
 			mergeUnrecoverable(req.Unrecoverable), req.RunID); err != nil {
 			return err
 		}
@@ -308,13 +332,10 @@ func upsertPartition(ctx context.Context, tx *sql.Tx, p Partition) error {
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
-	// 一个分区只有一份文件、一条登记：登记的 worker 不同则拒绝，避免数据分散在两台机器上。
-	if found && existing.WorkerID != p.WorkerID {
-		return fmt.Errorf("%w: partition %s belongs to worker %s", ErrConflict, p.PartitionKey, existing.WorkerID)
-	}
-	// 已有文件的分区被补写时，worker 会先读回原文件、标回 open 再重新导出：open 状态不带文件信息时沿用已登记的文件。
+	// 已有文件的分区被补写时，worker 会先读回原文件、标回 open 再重新导出：open 状态不带文件信息时沿用已登记的文件，
+	// 远端副本一并沿用（没有文件就谈不上远端副本，沿用旧值才不会把已上传的记录冲掉）。
 	if found && p.FilePath == "" {
-		p.FilePath, p.FileBytes, p.FileSHA256 = existing.FilePath, existing.FileBytes, existing.FileSHA256
+		p.FilePath, p.FileBytes, p.FileSHA256, p.Remote = existing.FilePath, existing.FileBytes, existing.FileSHA256, existing.Remote
 		if len(p.Columns) == 0 {
 			p.Columns = existing.Columns
 		}
@@ -328,8 +349,21 @@ func upsertPartition(ctx context.Context, tx *sql.Tx, p Partition) error {
 			p.ExportCount = existing.ExportCount
 		}
 	}
+	// 文件大小兜底：worker 上报的大小是上报时 stat 的，本地文件不在时为 0（按登记恢复、本地缺文件的分区）。
+	// 路径与 sha256 都没变时保留已登记的大小与预览（本次没有重新导出时 worker 不带预览），不冲成空。
+	if found && p.FilePath == existing.FilePath && p.FileSHA256 == existing.FileSHA256 {
+		if p.FileBytes == 0 {
+			p.FileBytes = existing.FileBytes
+		}
+		if p.Preview == "" {
+			p.Preview = existing.Preview
+		}
+	}
 	if p.Status != PartitionOpen && p.FilePath == "" {
 		return fmt.Errorf("partition %s is %s but has no file path", p.PartitionKey, p.Status)
+	}
+	if p.Remote.Key != "" && p.Remote.SHA256 == "" {
+		return fmt.Errorf("分区 %s 的远端副本有对象键却没有 sha256", p.PartitionKey)
 	}
 	if p.Status != PartitionFinal {
 		p.FinalizedAt = time.Time{}
@@ -343,21 +377,80 @@ func upsertPartition(ctx context.Context, tx *sql.Tx, p Partition) error {
 		columns = string(raw)
 	}
 	if !found {
-		_, err = tx.ExecContext(ctx, `INSERT INTO t_archive_partitions (c_space_id, c_dataset_id, c_partition_key, c_range_start, c_range_end, c_status, c_worker_id,
-c_row_count, c_subject_count, c_min_data_time, c_max_data_time, c_file_path, c_file_bytes, c_file_sha256, c_columns_json, c_preview, c_export_count,
-c_last_changed_at, c_exported_at, c_finalized_at, c_last_run_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		_, err = tx.ExecContext(ctx, insertPartition,
 			p.SpaceID, p.DatasetID, p.PartitionKey, fmtTime(p.RangeStart), fmtTime(p.RangeEnd), p.Status, p.WorkerID,
 			p.RowCount, p.SubjectCount, nullTime(p.MinDataTime), nullTime(p.MaxDataTime), p.FilePath, p.FileBytes, p.FileSHA256, columns, p.Preview, p.ExportCount,
-			nullTime(p.LastChangedAt), nullTime(p.ExportedAt), nullTime(p.FinalizedAt), p.LastRunID)
+			nullTime(p.LastChangedAt), nullTime(p.ExportedAt), nullTime(p.FinalizedAt), p.LastRunID,
+			p.Remote.Key, p.Remote.SHA256, p.Remote.ETag, nullTime(p.Remote.UploadedAt), nullTime(p.Remote.VerifiedAt), p.Remote.Error)
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `UPDATE t_archive_partitions SET c_range_start = ?, c_range_end = ?, c_status = ?, c_row_count = ?, c_subject_count = ?,
-c_min_data_time = ?, c_max_data_time = ?, c_file_path = ?, c_file_bytes = ?, c_file_sha256 = ?, c_columns_json = ?, c_preview = ?, c_export_count = ?,
-c_last_changed_at = ?, c_exported_at = ?, c_finalized_at = ?, c_last_run_id = ? WHERE c_space_id = ? AND c_dataset_id = ? AND c_partition_key = ?`,
-		fmtTime(p.RangeStart), fmtTime(p.RangeEnd), p.Status, p.RowCount, p.SubjectCount, nullTime(p.MinDataTime), nullTime(p.MaxDataTime),
+	// c_worker_id 写成本次上报的 worker：任务可以派给任何持有活动租约的 worker，它只用于展示与排障。
+	_, err = tx.ExecContext(ctx, updatePartition,
+		fmtTime(p.RangeStart), fmtTime(p.RangeEnd), p.Status, p.WorkerID, p.RowCount, p.SubjectCount, nullTime(p.MinDataTime), nullTime(p.MaxDataTime),
 		p.FilePath, p.FileBytes, p.FileSHA256, columns, p.Preview, p.ExportCount, nullTime(p.LastChangedAt), nullTime(p.ExportedAt),
-		nullTime(p.FinalizedAt), p.LastRunID, p.SpaceID, p.DatasetID, p.PartitionKey)
+		nullTime(p.FinalizedAt), p.LastRunID,
+		p.Remote.Key, p.Remote.SHA256, p.Remote.ETag, nullTime(p.Remote.UploadedAt), nullTime(p.Remote.VerifiedAt), p.Remote.Error,
+		p.SpaceID, p.DatasetID, p.PartitionKey)
 	return err
+}
+
+// RemoteBacklog 是一个任务还没有已校验远端副本的分区（有文件的）汇总，用于健康等级。
+type RemoteBacklog struct {
+	Unreplicated int
+	// OldestExportedAt 与 OldestKey 是其中导出时间最早的那个分区。
+	OldestExportedAt time.Time
+	OldestKey        string
+	// LastError 是该任务最近一次更新（按 c_mtime）的远端错误；ErrorKey 是它所在的分区。
+	LastError string
+	ErrorKey  string
+}
+
+// RemoteBacklogs 按任务（键 "space/dataset"）汇总未复制的分区与最近的远端错误；spaceID 为空表示全部空间。
+func (s *Store) RemoteBacklogs(ctx context.Context, spaceID string) (map[string]RemoteBacklog, error) {
+	out := map[string]RemoteBacklog{}
+	rows, err := s.db.QueryContext(ctx, queryRemoteBacklog, spaceID, spaceID)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var space, dataset string
+		var b RemoteBacklog
+		var oldest timeValue
+		if err := rows.Scan(&space, &dataset, &b.Unreplicated, &oldest); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		b.OldestExportedAt = oldest.Time
+		out[space+"/"+dataset] = b
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		return nil, err
+	}
+	for key, b := range out {
+		space, dataset, _ := strings.Cut(key, "/")
+		if err := s.db.QueryRowContext(ctx, queryRemoteOldest, space, dataset).Scan(&b.OldestKey); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return nil, err
+		}
+		out[key] = b
+	}
+	rows, err = s.db.QueryContext(ctx, queryRemoteLastError, spaceID, spaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var space, dataset, key, text string
+		if err := rows.Scan(&space, &dataset, &key, &text); err != nil {
+			return nil, err
+		}
+		// c_mtime 只精确到秒，同一秒可能有几条并列：取分区键最小的那条，结果稳定。
+		b := out[space+"/"+dataset]
+		if b.LastError == "" || key < b.ErrorKey {
+			b.LastError, b.ErrorKey = text, key
+		}
+		out[space+"/"+dataset] = b
+	}
+	return out, rows.Err()
 }
 
 // ListOpenPartitions 返回尚未导出（open）的分区登记，用于任务健康等级。
@@ -384,6 +477,36 @@ const (
 	queryPartitions3 = `SELECT ` + runColumns + ` FROM t_archive_runs WHERE c_run_id = ?`
 	queryPartitions4 = `SELECT ` + partitionColumns + ` FROM t_archive_partitions WHERE c_status = 'open' AND (? = '' OR c_space_id = ?)`
 	queryPartitions5 = `SELECT ` + partitionColumns + ` FROM t_archive_partitions WHERE c_space_id = ? AND c_dataset_id = ? AND c_range_end > ? ORDER BY c_partition_key`
+	queryPartitions6 = `SELECT ` + partitionColumns + ` FROM t_archive_partitions WHERE c_space_id = ? AND c_dataset_id = ?
+AND (c_range_end > ? OR (` + unreplicatedFilter + `))
+ORDER BY c_partition_key`
+	completeRun = `UPDATE t_archive_runs SET c_status = ?, c_finished_at = ?, c_message = ?, c_subjects_total = ?, c_subjects_done = ?,
+c_request_count = ?, c_bytes_read = ?, c_rows_read = ?, c_rows_added = ?, c_rows_changed = ?, c_partitions_exported = ?, c_partitions_finalized = ?,
+c_partitions_uploaded = ?, c_unrecoverable_json = ?, c_lease_until = NULL, c_lease_token = '' WHERE c_run_id = ?`
+	insertPartition = `INSERT INTO t_archive_partitions (c_space_id, c_dataset_id, c_partition_key, c_range_start, c_range_end, c_status, c_worker_id,
+c_row_count, c_subject_count, c_min_data_time, c_max_data_time, c_file_path, c_file_bytes, c_file_sha256, c_columns_json, c_preview, c_export_count,
+c_last_changed_at, c_exported_at, c_finalized_at, c_last_run_id,
+c_remote_key, c_remote_sha256, c_remote_etag, c_remote_uploaded_at, c_remote_verified_at, c_remote_error)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	updatePartition = `UPDATE t_archive_partitions SET c_range_start = ?, c_range_end = ?, c_status = ?, c_worker_id = ?, c_row_count = ?, c_subject_count = ?,
+c_min_data_time = ?, c_max_data_time = ?, c_file_path = ?, c_file_bytes = ?, c_file_sha256 = ?, c_columns_json = ?, c_preview = ?, c_export_count = ?,
+c_last_changed_at = ?, c_exported_at = ?, c_finalized_at = ?, c_last_run_id = ?,
+c_remote_key = ?, c_remote_sha256 = ?, c_remote_etag = ?, c_remote_uploaded_at = ?, c_remote_verified_at = ?, c_remote_error = ?
+WHERE c_space_id = ? AND c_dataset_id = ? AND c_partition_key = ?`
+)
+
+// 远端副本积压：未复制 = 有文件且 NOT (远端 sha256 = 文件 sha256 且已校验)。
+const (
+	unreplicatedFilter = `c_file_path != '' AND NOT (c_remote_sha256 = c_file_sha256 AND c_remote_verified_at IS NOT NULL)`
+	queryRemoteBacklog = `SELECT c_space_id, c_dataset_id, COUNT(*), MIN(c_exported_at) FROM t_archive_partitions
+WHERE (? = '' OR c_space_id = ?) AND ` + unreplicatedFilter + ` GROUP BY c_space_id, c_dataset_id`
+	queryRemoteOldest = `SELECT c_partition_key FROM t_archive_partitions WHERE c_space_id = ? AND c_dataset_id = ? AND ` + unreplicatedFilter + `
+ORDER BY c_exported_at, c_partition_key LIMIT 1`
+	// 每个任务最近一次更新的那条错误（按 c_mtime，不按字典序取 MAX）。
+	queryRemoteLastError = `SELECT c_space_id, c_dataset_id, c_partition_key, c_remote_error FROM t_archive_partitions p
+WHERE (? = '' OR c_space_id = ?) AND c_remote_error != ''
+AND c_mtime = (SELECT MAX(q.c_mtime) FROM t_archive_partitions q
+WHERE q.c_space_id = p.c_space_id AND q.c_dataset_id = p.c_dataset_id AND q.c_remote_error != '')`
 )
 
 // 分区列表的筛选条件固定，datasetID、fromKey、toKey 为空表示不限。

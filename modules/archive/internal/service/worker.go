@@ -28,6 +28,7 @@ func (w *WorkerService) ArchiveWorkerHeartbeat(ctx context.Context, req *archive
 		WorkerID: req.GetWorkerId(), InstanceID: req.GetInstanceId(), Version: req.GetVersion(), RootDir: req.GetRootDir(),
 		DiskTotalBytes: req.GetDiskTotalBytes(), DiskFreeBytes: req.GetDiskFreeBytes(), StagingBytes: req.GetStagingBytes(),
 		Maintaining: req.GetMaintaining(), PacingJSON: req.GetPacingJson(), RunningRunIDs: req.GetRunningRunIds(),
+		ObjectStoreJSON: objectStoreToJSON(req.GetObjectStore()),
 	}, now, ttl)
 	if err != nil {
 		return &archivepb.ArchiveWorkerHeartbeatRsp{RetInfo: inner(err)}, nil
@@ -71,6 +72,11 @@ func (w *WorkerService) PullArchiveRun(ctx context.Context, req *archivepb.PullA
 	for _, load := range req.GetBusyDataNodes() {
 		busy[load.GetDataNodeId()] += int(load.GetRunning())
 	}
+	// 先取对象存储是否启用：放在领取之后出错，已领取的运行就只能等租约过期。
+	status, err := s.workerStatus(ctx, now)
+	if err != nil {
+		return &archivepb.PullArchiveRunRsp{RetInfo: inner(err)}, nil
+	}
 	claimed, err := s.store.ClaimRuns(ctx, store.ClaimRequest{
 		WorkerID: req.GetWorkerId(), InstanceID: req.GetInstanceId(), FreeSlots: int(req.GetFreeSlots()), MaxPerDataNode: int(req.GetMaxRunsPerDataNode()),
 		BusyByDataNode: busy, Now: now, LeaseTTL: s.cfg.Run.LeaseTTL,
@@ -80,12 +86,13 @@ func (w *WorkerService) PullArchiveRun(ctx context.Context, req *archivepb.PullA
 	}
 	rsp := &archivepb.PullArchiveRunRsp{RetInfo: success()}
 	for _, c := range claimed {
-		// worker 的读取都截在线上保留期内，更早的分区用不到，不下发（否则登记随年份增长、撑大响应）。
+		// worker 的读取都截在线上保留期内，更早的分区用不到，不下发（否则登记随年份增长、撑大响应）；
+		// 启用了对象存储时，更早但还没有已校验远端副本的分区照样下发，暂存库重建后才能补传。
 		var since time.Time
 		if limit, forever, perr := parseRetention(c.Task.Retention); perr == nil && !forever {
 			since = c.Run.StartedAt.Add(-limit)
 		}
-		registered, err := s.store.TaskPartitions(ctx, c.Task.SpaceID, c.Task.DatasetID, since)
+		registered, err := s.store.TaskPartitions(ctx, c.Task.SpaceID, c.Task.DatasetID, since, status.remoteEnabled)
 		if err != nil {
 			// 运行已领取：读不到分区登记就让它照常下发会冒用残缺的本地状态，宁可让租约过期后重来。
 			return &archivepb.PullArchiveRunRsp{RetInfo: inner(err)}, nil
@@ -156,6 +163,7 @@ func (w *WorkerService) CompleteArchiveRun(ctx context.Context, req *archivepb.C
 			SubjectsTotal: req.GetSubjectsTotal(), SubjectsDone: req.GetSubjectsDone(), RequestCount: req.GetRequestCount(), BytesRead: req.GetBytesRead(),
 			RowsRead: req.GetRowsRead(), RowsAdded: req.GetRowsAdded(), RowsChanged: req.GetRowsChanged(),
 			PartitionsExported: req.GetPartitionsExported(), PartitionsFinalized: req.GetPartitionsFinalized(),
+			PartitionsUploaded: req.GetPartitionsUploaded(),
 		},
 		Unrecoverable: unrecoverable, Partitions: partitions, FinalUntil: finalUntil, Now: s.clock(),
 	})
@@ -166,12 +174,15 @@ func (w *WorkerService) CompleteArchiveRun(ctx context.Context, req *archivepb.C
 }
 
 // registeredPartitionToPB 把一条分区登记转成下发给 worker 的报告（不带预览与列名，只用来补齐本地分区状态）。
+// 必须带上远端字段：新机器据此从对象存储取回本地没有的文件。
 func registeredPartitionToPB(p store.Partition) *archivepb.PartitionReport {
 	return &archivepb.PartitionReport{
 		PartitionKey: p.PartitionKey, RangeStart: fmtRFC(p.RangeStart), RangeEnd: fmtRFC(p.RangeEnd), Status: p.Status,
 		RowCount: p.RowCount, SubjectCount: p.SubjectCount, MinDataTime: fmtRFC(p.MinDataTime), MaxDataTime: fmtRFC(p.MaxDataTime),
 		FilePath: p.FilePath, FileBytes: p.FileBytes, FileSha256: p.FileSHA256, ExportCount: p.ExportCount,
 		LastChangedAt: fmtRFC(p.LastChangedAt), ExportedAt: fmtRFC(p.ExportedAt), FinalizedAt: fmtRFC(p.FinalizedAt),
+		RemoteKey: p.Remote.Key, RemoteSha256: p.Remote.SHA256, RemoteEtag: p.Remote.ETag, RemoteUploadedAt: fmtRFC(p.Remote.UploadedAt),
+		RemoteVerifiedAt: fmtRFC(p.Remote.VerifiedAt), RemoteError: p.Remote.Error,
 	}
 }
 
@@ -196,6 +207,7 @@ func partitionsFromPB(items []*archivepb.PartitionReport) ([]store.Partition, er
 			PartitionKey: key, Status: item.GetStatus(), RowCount: item.GetRowCount(), SubjectCount: item.GetSubjectCount(), FilePath: item.GetFilePath(),
 			FileBytes: item.GetFileBytes(), FileSHA256: item.GetFileSha256(), Columns: append([]string(nil), item.GetColumns()...), Preview: item.GetPreview(),
 			ExportCount: item.GetExportCount(),
+			Remote:      store.Remote{Key: item.GetRemoteKey(), SHA256: item.GetRemoteSha256(), ETag: item.GetRemoteEtag(), Error: item.GetRemoteError()},
 		}
 		var err error
 		for _, field := range []struct {
@@ -206,6 +218,7 @@ func partitionsFromPB(items []*archivepb.PartitionReport) ([]store.Partition, er
 			{"min_data_time", item.GetMinDataTime(), &p.MinDataTime}, {"max_data_time", item.GetMaxDataTime(), &p.MaxDataTime},
 			{"last_changed_at", item.GetLastChangedAt(), &p.LastChangedAt}, {"exported_at", item.GetExportedAt(), &p.ExportedAt},
 			{"finalized_at", item.GetFinalizedAt(), &p.FinalizedAt},
+			{"remote_uploaded_at", item.GetRemoteUploadedAt(), &p.Remote.UploadedAt}, {"remote_verified_at", item.GetRemoteVerifiedAt(), &p.Remote.VerifiedAt},
 		} {
 			if *field.dest, err = parseRFC(fmt.Sprintf("分区 %s 的 %s", key, field.name), field.value); err != nil {
 				return nil, err
