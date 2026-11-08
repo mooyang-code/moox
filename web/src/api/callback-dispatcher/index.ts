@@ -76,12 +76,22 @@ export interface ScopeField {
   options: string[];
 }
 
+/** 事件 data 里的一个字段。 */
+export interface PayloadField {
+  field: string;
+  title: string;
+}
+
 export interface SubscribableEvent {
   event_name: string;
   version: number;
   title: string;
   description: string;
   scope_fields: ScopeField[];
+  /** 示例请求体（和真实推送的一致）；旧版本的服务不返回，是空串。 */
+  sample_json: string;
+  /** data 里各字段的说明；旧版本的服务不返回，是空列表。 */
+  payload_fields: PayloadField[];
 }
 
 export interface RuleLastExecution {
@@ -252,6 +262,11 @@ function normalizeEvent(raw: Partial<SubscribableEvent> & Record<string, unknown
       field: String(field.field ?? ""),
       title: String(field.title ?? ""),
       options: (field.options ?? []).map(String)
+    })),
+    sample_json: String(raw.sample_json ?? ""),
+    payload_fields: (raw.payload_fields ?? []).map(field => ({
+      field: String(field.field ?? ""),
+      title: String(field.title ?? "")
     }))
   };
 }
@@ -322,13 +337,16 @@ export async function testEventRule(ruleId: string): Promise<TestEventRuleResult
   };
 }
 
+/** silentError：后台轮询用，网络错误不弹提示。 */
 export async function listEventExecutions(
-  req: ListEventExecutionsReq
+  req: ListEventExecutionsReq,
+  options: { silentError?: boolean } = {}
 ): Promise<{ executions: EventExecution[]; page_result?: PageResult }> {
   const rsp = await callControl<ListEventExecutionsReq, { executions?: EventExecution[]; page_result?: PageResult }>(
     SERVICE,
     "ListEventExecutions",
-    req
+    req,
+    options
   );
   return {
     executions: (rsp.executions ?? []).map(item => normalizeExecution(item as never)),

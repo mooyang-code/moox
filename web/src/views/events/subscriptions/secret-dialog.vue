@@ -2,7 +2,7 @@
   <!-- 密钥只显示这一次：不许按 Esc 或点遮罩误关，只能点“我已保存密钥”或右上角关闭 -->
   <a-modal
     :visible="visible"
-    width="720px"
+    width="min(720px, 100vw)"
     title="验证密钥"
     :mask-closable="false"
     :esc-to-close="false"
@@ -11,8 +11,8 @@
     @update:visible="(value: boolean) => emit('update:visible', value)"
   >
     <a-alert type="warning" class="secret-alert">
-      规则「{{ ruleName }}」的验证密钥只在这里显示一次，关闭后无法再查看。请现在复制并保存到你的接口里；
-      要换密钥，请删掉这条规则重新创建。
+      订阅「{{ ruleName }}」的验证密钥只在这里显示一次，关闭后无法再查看。请现在复制并保存到你的接口里；
+      要换密钥，请删掉这条订阅重新创建。
     </a-alert>
     <div class="secret-row">
       <code class="secret-value">{{ secret }}</code>
@@ -20,7 +20,7 @@
     </div>
 
     <ReceiverGuide />
-    <p class="hint">请求头、请求体字段和这些说明在事件中心的「接收说明」页签里随时能看到。</p>
+    <p class="hint">请求头、请求体字段和这些说明在事件订阅页的「接收说明」里随时能看到。</p>
     <div class="actions">
       <a-button type="primary" @click="emit('update:visible', false)">我已保存密钥</a-button>
     </div>
@@ -30,7 +30,7 @@
 <script setup lang="ts">
 import { ref } from "vue";
 import { Message } from "@arco-design/web-vue";
-import ReceiverGuide from "./receiver-guide.vue";
+import ReceiverGuide from "../shared/receiver-guide.vue";
 
 defineOptions({ name: "EventSecretDialog" });
 

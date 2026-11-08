@@ -16,10 +16,15 @@ describe("health display", () => {
     });
     expect(alertLink({ type: "dataset", producer: "strategy" }).href).toBe("#/strategy/tasks");
     expect(alertLink({ type: "business", kind: "market_canary" }).label).toBe("查看采集结果");
-    expect(alertLink({ type: "business", kind: "event_center_attention" })).toEqual({
-      href: "#/settings/events?tab=executions",
-      label: "查看事件中心执行记录"
-    });
+    // 事件中心关注项按种类跳转；认不出种类时看全部处理记录
+    const eventCenter = (attention_kind?: string) =>
+      alertLink({ type: "business", kind: "event_center_attention", attention_kind });
+    expect(eventCenter("execution_failed").href).toBe("#/events/executions?status=failed");
+    // 系统动作处理失败的记录不一定是“失败”状态（善后未完成、步骤失败等），不带筛选
+    expect(eventCenter("action_failed").href).toBe("#/events/executions");
+    expect(eventCenter("delist_detected").href).toBe("#/events/delist");
+    expect(eventCenter("something_new")).toEqual({ href: "#/events/executions", label: "查看处理记录" });
+    expect(eventCenter().href).toBe("#/events/executions");
     // 缺币安只读 Key：首页跳监控页看说明；说明分三种情况写，被禁用的那种给秘钥页入口
     const readonlyMissing = { type: "business", kind: "collector_attention", attention_kind: "delist_readonly_key_missing" };
     expect(alertLink(readonlyMissing).href).toBe("#/ops/monitor");

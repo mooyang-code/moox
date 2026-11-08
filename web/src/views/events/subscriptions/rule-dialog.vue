@@ -1,8 +1,8 @@
 <template>
   <a-modal
     :visible="visible"
-    width="640px"
-    :title="rule ? '编辑规则' : '新建规则'"
+    width="min(720px, 100vw)"
+    :title="rule ? '编辑订阅' : '新建订阅'"
     :ok-loading="saving"
     :ok-button-props="{ disabled: !catalogReady }"
     @update:visible="(value: boolean) => emit('update:visible', value)"
@@ -11,7 +11,7 @@
     <a-alert v-if="!catalogReady" type="warning" class="catalog-alert">
       没有读到事件目录，暂时不能{{
         rule ? "编辑" : "新建"
-      }}规则：不知道这个事件能按哪些字段限定范围，保存会把已有的范围清掉。请关闭后刷新页面再试。
+      }}订阅：不知道这个事件能按哪些字段限定范围，保存会把已有的范围清掉。请关闭后刷新页面再试。
     </a-alert>
     <a-form :model="form" auto-label-width :disabled="!catalogReady">
       <a-form-item field="name" label="名称" required>
@@ -23,7 +23,9 @@
             {{ event.title }}
           </a-option>
         </a-select>
-        <template #extra>{{ currentEvent?.description }}</template>
+      </a-form-item>
+      <a-form-item v-if="currentEvent" hide-label>
+        <EventInfo :event="currentEvent" class="rule-event-info" />
       </a-form-item>
       <a-form-item v-for="field in currentEvent?.scope_fields ?? []" :key="field.field" :label="field.title">
         <a-select v-if="field.options.length" v-model="scopeValues[field.field]" multiple allow-clear placeholder="不选表示不限">
@@ -35,9 +37,9 @@
         <a-input v-model="form.notify_url" placeholder="https://example.com/hooks/moox" />
         <template #extra
           >事件发生时，向这个地址发一条 POST 请求。只支持 http 和
-          https。地址会显示在规则列表和执行记录里，不要把令牌放进地址，接收方用验证密钥验签即可。<template
+          https。地址会显示在订阅列表和处理记录里，不要把令牌放进地址，接收方用验证密钥验签即可。<template
             v-if="rule?.secret_hint"
-            >这条规则的验证密钥末 4 位是 {{ rule.secret_hint }}。</template
+            >这条订阅的验证密钥末 4 位是 {{ rule.secret_hint }}。</template
           ></template
         >
       </a-form-item>
@@ -59,7 +61,8 @@ import { computed, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { createEventRule, updateEventRule, type EventRule, type SubscribableEvent } from "@/api/callback-dispatcher";
 import { reportControlError } from "@/api/admin/http";
-import { notifyUrlError, sameScope, scopeFromForm, scopeToForm } from "./event-center-utils";
+import { notifyUrlError, sameScope, scopeFromForm, scopeToForm } from "../shared/event-center-utils";
+import EventInfo from "../shared/event-info.vue";
 
 defineOptions({ name: "EventRuleDialog" });
 
@@ -113,7 +116,7 @@ watch(catalogReady, (ready, wasReady) => {
 async function submit(): Promise<boolean> {
   if (!catalogReady.value) return false;
   if (!form.name.trim()) {
-    Message.warning("请填写规则名称");
+    Message.warning("请填写订阅名称");
     return false;
   }
   if (!form.event_name) {
@@ -138,7 +141,7 @@ async function submit(): Promise<boolean> {
         allow_private_address: form.allow_private_address,
         enabled: form.enabled
       });
-      Message.success("规则已更新");
+      Message.success("订阅已更新");
       emit("saved", { rule, signingSecret: "" });
     } else {
       const created = await createEventRule({
@@ -164,5 +167,9 @@ async function submit(): Promise<boolean> {
 <style scoped>
 .catalog-alert {
   margin-bottom: 12px;
+}
+
+.rule-event-info {
+  width: 100%;
 }
 </style>

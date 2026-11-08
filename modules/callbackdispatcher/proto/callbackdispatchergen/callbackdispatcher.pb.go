@@ -368,6 +368,10 @@ type SubscribableEvent struct {
 	Title       string        `protobuf:"bytes,3,opt,name=title,proto3" json:"title,omitempty"`
 	Description string        `protobuf:"bytes,4,opt,name=description,proto3" json:"description,omitempty"`
 	ScopeFields []*ScopeField `protobuf:"bytes,5,rep,name=scope_fields,json=scopeFields,proto3" json:"scope_fields,omitempty"`
+	// 示例请求体：和真实推送给通知地址的请求体格式一致（“发一条测试”发的就是它）。
+	SampleJson string `protobuf:"bytes,6,opt,name=sample_json,json=sampleJson,proto3" json:"sample_json,omitempty"`
+	// 事件 data 里各字段的说明。
+	PayloadFields []*PayloadField `protobuf:"bytes,7,rep,name=payload_fields,json=payloadFields,proto3" json:"payload_fields,omitempty"`
 }
 
 func (x *SubscribableEvent) Reset() {
@@ -437,6 +441,77 @@ func (x *SubscribableEvent) GetScopeFields() []*ScopeField {
 	return nil
 }
 
+func (x *SubscribableEvent) GetSampleJson() string {
+	if x != nil {
+		return x.SampleJson
+	}
+	return ""
+}
+
+func (x *SubscribableEvent) GetPayloadFields() []*PayloadField {
+	if x != nil {
+		return x.PayloadFields
+	}
+	return nil
+}
+
+// 事件 data 里的一个字段。
+type PayloadField struct {
+	state         protoimpl.MessageState
+	sizeCache     protoimpl.SizeCache
+	unknownFields protoimpl.UnknownFields
+
+	Field string `protobuf:"bytes,1,opt,name=field,proto3" json:"field,omitempty"`
+	// 字段的中文说明。
+	Title string `protobuf:"bytes,2,opt,name=title,proto3" json:"title,omitempty"`
+}
+
+func (x *PayloadField) Reset() {
+	*x = PayloadField{}
+	if protoimpl.UnsafeEnabled {
+		mi := &file_callbackdispatcher_proto_msgTypes[3]
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		ms.StoreMessageInfo(mi)
+	}
+}
+
+func (x *PayloadField) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PayloadField) ProtoMessage() {}
+
+func (x *PayloadField) ProtoReflect() protoreflect.Message {
+	mi := &file_callbackdispatcher_proto_msgTypes[3]
+	if protoimpl.UnsafeEnabled && x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PayloadField.ProtoReflect.Descriptor instead.
+func (*PayloadField) Descriptor() ([]byte, []int) {
+	return file_callbackdispatcher_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *PayloadField) GetField() string {
+	if x != nil {
+		return x.Field
+	}
+	return ""
+}
+
+func (x *PayloadField) GetTitle() string {
+	if x != nil {
+		return x.Title
+	}
+	return ""
+}
+
 // 规则最近一次执行的结果。
 type RuleLastExecution struct {
 	state         protoimpl.MessageState
@@ -450,7 +525,7 @@ type RuleLastExecution struct {
 func (x *RuleLastExecution) Reset() {
 	*x = RuleLastExecution{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_callbackdispatcher_proto_msgTypes[3]
+		mi := &file_callbackdispatcher_proto_msgTypes[4]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -463,7 +538,7 @@ func (x *RuleLastExecution) String() string {
 func (*RuleLastExecution) ProtoMessage() {}
 
 func (x *RuleLastExecution) ProtoReflect() protoreflect.Message {
-	mi := &file_callbackdispatcher_proto_msgTypes[3]
+	mi := &file_callbackdispatcher_proto_msgTypes[4]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -476,7 +551,7 @@ func (x *RuleLastExecution) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RuleLastExecution.ProtoReflect.Descriptor instead.
 func (*RuleLastExecution) Descriptor() ([]byte, []int) {
-	return file_callbackdispatcher_proto_rawDescGZIP(), []int{3}
+	return file_callbackdispatcher_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *RuleLastExecution) GetStatus() ExecutionStatus {
@@ -521,7 +596,7 @@ type EventRule struct {
 func (x *EventRule) Reset() {
 	*x = EventRule{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_callbackdispatcher_proto_msgTypes[4]
+		mi := &file_callbackdispatcher_proto_msgTypes[5]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -534,7 +609,7 @@ func (x *EventRule) String() string {
 func (*EventRule) ProtoMessage() {}
 
 func (x *EventRule) ProtoReflect() protoreflect.Message {
-	mi := &file_callbackdispatcher_proto_msgTypes[4]
+	mi := &file_callbackdispatcher_proto_msgTypes[5]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -547,7 +622,7 @@ func (x *EventRule) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EventRule.ProtoReflect.Descriptor instead.
 func (*EventRule) Descriptor() ([]byte, []int) {
-	return file_callbackdispatcher_proto_rawDescGZIP(), []int{4}
+	return file_callbackdispatcher_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *EventRule) GetRuleId() string {
@@ -657,7 +732,7 @@ type ListSubscribableEventsReq struct {
 func (x *ListSubscribableEventsReq) Reset() {
 	*x = ListSubscribableEventsReq{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_callbackdispatcher_proto_msgTypes[5]
+		mi := &file_callbackdispatcher_proto_msgTypes[6]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -670,7 +745,7 @@ func (x *ListSubscribableEventsReq) String() string {
 func (*ListSubscribableEventsReq) ProtoMessage() {}
 
 func (x *ListSubscribableEventsReq) ProtoReflect() protoreflect.Message {
-	mi := &file_callbackdispatcher_proto_msgTypes[5]
+	mi := &file_callbackdispatcher_proto_msgTypes[6]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -683,7 +758,7 @@ func (x *ListSubscribableEventsReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSubscribableEventsReq.ProtoReflect.Descriptor instead.
 func (*ListSubscribableEventsReq) Descriptor() ([]byte, []int) {
-	return file_callbackdispatcher_proto_rawDescGZIP(), []int{5}
+	return file_callbackdispatcher_proto_rawDescGZIP(), []int{6}
 }
 
 type ListSubscribableEventsRsp struct {
@@ -700,7 +775,7 @@ type ListSubscribableEventsRsp struct {
 func (x *ListSubscribableEventsRsp) Reset() {
 	*x = ListSubscribableEventsRsp{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_callbackdispatcher_proto_msgTypes[6]
+		mi := &file_callbackdispatcher_proto_msgTypes[7]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -713,7 +788,7 @@ func (x *ListSubscribableEventsRsp) String() string {
 func (*ListSubscribableEventsRsp) ProtoMessage() {}
 
 func (x *ListSubscribableEventsRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_callbackdispatcher_proto_msgTypes[6]
+	mi := &file_callbackdispatcher_proto_msgTypes[7]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -726,7 +801,7 @@ func (x *ListSubscribableEventsRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSubscribableEventsRsp.ProtoReflect.Descriptor instead.
 func (*ListSubscribableEventsRsp) Descriptor() ([]byte, []int) {
-	return file_callbackdispatcher_proto_rawDescGZIP(), []int{6}
+	return file_callbackdispatcher_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *ListSubscribableEventsRsp) GetRetInfo() *commonpb.RetInfo {
@@ -761,7 +836,7 @@ type ListEventRulesReq struct {
 func (x *ListEventRulesReq) Reset() {
 	*x = ListEventRulesReq{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_callbackdispatcher_proto_msgTypes[7]
+		mi := &file_callbackdispatcher_proto_msgTypes[8]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -774,7 +849,7 @@ func (x *ListEventRulesReq) String() string {
 func (*ListEventRulesReq) ProtoMessage() {}
 
 func (x *ListEventRulesReq) ProtoReflect() protoreflect.Message {
-	mi := &file_callbackdispatcher_proto_msgTypes[7]
+	mi := &file_callbackdispatcher_proto_msgTypes[8]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -787,7 +862,7 @@ func (x *ListEventRulesReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListEventRulesReq.ProtoReflect.Descriptor instead.
 func (*ListEventRulesReq) Descriptor() ([]byte, []int) {
-	return file_callbackdispatcher_proto_rawDescGZIP(), []int{7}
+	return file_callbackdispatcher_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *ListEventRulesReq) GetPage() *commonpb.Page {
@@ -810,7 +885,7 @@ type ListEventRulesRsp struct {
 func (x *ListEventRulesRsp) Reset() {
 	*x = ListEventRulesRsp{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_callbackdispatcher_proto_msgTypes[8]
+		mi := &file_callbackdispatcher_proto_msgTypes[9]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -823,7 +898,7 @@ func (x *ListEventRulesRsp) String() string {
 func (*ListEventRulesRsp) ProtoMessage() {}
 
 func (x *ListEventRulesRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_callbackdispatcher_proto_msgTypes[8]
+	mi := &file_callbackdispatcher_proto_msgTypes[9]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -836,7 +911,7 @@ func (x *ListEventRulesRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListEventRulesRsp.ProtoReflect.Descriptor instead.
 func (*ListEventRulesRsp) Descriptor() ([]byte, []int) {
-	return file_callbackdispatcher_proto_rawDescGZIP(), []int{8}
+	return file_callbackdispatcher_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *ListEventRulesRsp) GetRetInfo() *commonpb.RetInfo {
@@ -871,7 +946,7 @@ type GetEventRuleReq struct {
 func (x *GetEventRuleReq) Reset() {
 	*x = GetEventRuleReq{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_callbackdispatcher_proto_msgTypes[9]
+		mi := &file_callbackdispatcher_proto_msgTypes[10]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -884,7 +959,7 @@ func (x *GetEventRuleReq) String() string {
 func (*GetEventRuleReq) ProtoMessage() {}
 
 func (x *GetEventRuleReq) ProtoReflect() protoreflect.Message {
-	mi := &file_callbackdispatcher_proto_msgTypes[9]
+	mi := &file_callbackdispatcher_proto_msgTypes[10]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -897,7 +972,7 @@ func (x *GetEventRuleReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetEventRuleReq.ProtoReflect.Descriptor instead.
 func (*GetEventRuleReq) Descriptor() ([]byte, []int) {
-	return file_callbackdispatcher_proto_rawDescGZIP(), []int{9}
+	return file_callbackdispatcher_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *GetEventRuleReq) GetRuleId() string {
@@ -919,7 +994,7 @@ type GetEventRuleRsp struct {
 func (x *GetEventRuleRsp) Reset() {
 	*x = GetEventRuleRsp{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_callbackdispatcher_proto_msgTypes[10]
+		mi := &file_callbackdispatcher_proto_msgTypes[11]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -932,7 +1007,7 @@ func (x *GetEventRuleRsp) String() string {
 func (*GetEventRuleRsp) ProtoMessage() {}
 
 func (x *GetEventRuleRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_callbackdispatcher_proto_msgTypes[10]
+	mi := &file_callbackdispatcher_proto_msgTypes[11]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -945,7 +1020,7 @@ func (x *GetEventRuleRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetEventRuleRsp.ProtoReflect.Descriptor instead.
 func (*GetEventRuleRsp) Descriptor() ([]byte, []int) {
-	return file_callbackdispatcher_proto_rawDescGZIP(), []int{10}
+	return file_callbackdispatcher_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *GetEventRuleRsp) GetRetInfo() *commonpb.RetInfo {
@@ -980,7 +1055,7 @@ type CreateEventRuleReq struct {
 func (x *CreateEventRuleReq) Reset() {
 	*x = CreateEventRuleReq{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_callbackdispatcher_proto_msgTypes[11]
+		mi := &file_callbackdispatcher_proto_msgTypes[12]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -993,7 +1068,7 @@ func (x *CreateEventRuleReq) String() string {
 func (*CreateEventRuleReq) ProtoMessage() {}
 
 func (x *CreateEventRuleReq) ProtoReflect() protoreflect.Message {
-	mi := &file_callbackdispatcher_proto_msgTypes[11]
+	mi := &file_callbackdispatcher_proto_msgTypes[12]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1006,7 +1081,7 @@ func (x *CreateEventRuleReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateEventRuleReq.ProtoReflect.Descriptor instead.
 func (*CreateEventRuleReq) Descriptor() ([]byte, []int) {
-	return file_callbackdispatcher_proto_rawDescGZIP(), []int{11}
+	return file_callbackdispatcher_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *CreateEventRuleReq) GetName() string {
@@ -1065,7 +1140,7 @@ type CreateEventRuleRsp struct {
 func (x *CreateEventRuleRsp) Reset() {
 	*x = CreateEventRuleRsp{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_callbackdispatcher_proto_msgTypes[12]
+		mi := &file_callbackdispatcher_proto_msgTypes[13]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1078,7 +1153,7 @@ func (x *CreateEventRuleRsp) String() string {
 func (*CreateEventRuleRsp) ProtoMessage() {}
 
 func (x *CreateEventRuleRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_callbackdispatcher_proto_msgTypes[12]
+	mi := &file_callbackdispatcher_proto_msgTypes[13]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1091,7 +1166,7 @@ func (x *CreateEventRuleRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateEventRuleRsp.ProtoReflect.Descriptor instead.
 func (*CreateEventRuleRsp) Descriptor() ([]byte, []int) {
-	return file_callbackdispatcher_proto_rawDescGZIP(), []int{12}
+	return file_callbackdispatcher_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *CreateEventRuleRsp) GetRetInfo() *commonpb.RetInfo {
@@ -1127,7 +1202,7 @@ type ScopeFilters struct {
 func (x *ScopeFilters) Reset() {
 	*x = ScopeFilters{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_callbackdispatcher_proto_msgTypes[13]
+		mi := &file_callbackdispatcher_proto_msgTypes[14]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1140,7 +1215,7 @@ func (x *ScopeFilters) String() string {
 func (*ScopeFilters) ProtoMessage() {}
 
 func (x *ScopeFilters) ProtoReflect() protoreflect.Message {
-	mi := &file_callbackdispatcher_proto_msgTypes[13]
+	mi := &file_callbackdispatcher_proto_msgTypes[14]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1153,7 +1228,7 @@ func (x *ScopeFilters) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ScopeFilters.ProtoReflect.Descriptor instead.
 func (*ScopeFilters) Descriptor() ([]byte, []int) {
-	return file_callbackdispatcher_proto_rawDescGZIP(), []int{13}
+	return file_callbackdispatcher_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *ScopeFilters) GetItems() []*ScopeFilter {
@@ -1181,7 +1256,7 @@ type UpdateEventRuleReq struct {
 func (x *UpdateEventRuleReq) Reset() {
 	*x = UpdateEventRuleReq{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_callbackdispatcher_proto_msgTypes[14]
+		mi := &file_callbackdispatcher_proto_msgTypes[15]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1194,7 +1269,7 @@ func (x *UpdateEventRuleReq) String() string {
 func (*UpdateEventRuleReq) ProtoMessage() {}
 
 func (x *UpdateEventRuleReq) ProtoReflect() protoreflect.Message {
-	mi := &file_callbackdispatcher_proto_msgTypes[14]
+	mi := &file_callbackdispatcher_proto_msgTypes[15]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1207,7 +1282,7 @@ func (x *UpdateEventRuleReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateEventRuleReq.ProtoReflect.Descriptor instead.
 func (*UpdateEventRuleReq) Descriptor() ([]byte, []int) {
-	return file_callbackdispatcher_proto_rawDescGZIP(), []int{14}
+	return file_callbackdispatcher_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *UpdateEventRuleReq) GetRuleId() string {
@@ -1264,7 +1339,7 @@ type UpdateEventRuleRsp struct {
 func (x *UpdateEventRuleRsp) Reset() {
 	*x = UpdateEventRuleRsp{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_callbackdispatcher_proto_msgTypes[15]
+		mi := &file_callbackdispatcher_proto_msgTypes[16]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1277,7 +1352,7 @@ func (x *UpdateEventRuleRsp) String() string {
 func (*UpdateEventRuleRsp) ProtoMessage() {}
 
 func (x *UpdateEventRuleRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_callbackdispatcher_proto_msgTypes[15]
+	mi := &file_callbackdispatcher_proto_msgTypes[16]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1290,7 +1365,7 @@ func (x *UpdateEventRuleRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateEventRuleRsp.ProtoReflect.Descriptor instead.
 func (*UpdateEventRuleRsp) Descriptor() ([]byte, []int) {
-	return file_callbackdispatcher_proto_rawDescGZIP(), []int{15}
+	return file_callbackdispatcher_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *UpdateEventRuleRsp) GetRetInfo() *commonpb.RetInfo {
@@ -1318,7 +1393,7 @@ type DeleteEventRuleReq struct {
 func (x *DeleteEventRuleReq) Reset() {
 	*x = DeleteEventRuleReq{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_callbackdispatcher_proto_msgTypes[16]
+		mi := &file_callbackdispatcher_proto_msgTypes[17]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1331,7 +1406,7 @@ func (x *DeleteEventRuleReq) String() string {
 func (*DeleteEventRuleReq) ProtoMessage() {}
 
 func (x *DeleteEventRuleReq) ProtoReflect() protoreflect.Message {
-	mi := &file_callbackdispatcher_proto_msgTypes[16]
+	mi := &file_callbackdispatcher_proto_msgTypes[17]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1344,7 +1419,7 @@ func (x *DeleteEventRuleReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteEventRuleReq.ProtoReflect.Descriptor instead.
 func (*DeleteEventRuleReq) Descriptor() ([]byte, []int) {
-	return file_callbackdispatcher_proto_rawDescGZIP(), []int{16}
+	return file_callbackdispatcher_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *DeleteEventRuleReq) GetRuleId() string {
@@ -1365,7 +1440,7 @@ type DeleteEventRuleRsp struct {
 func (x *DeleteEventRuleRsp) Reset() {
 	*x = DeleteEventRuleRsp{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_callbackdispatcher_proto_msgTypes[17]
+		mi := &file_callbackdispatcher_proto_msgTypes[18]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1378,7 +1453,7 @@ func (x *DeleteEventRuleRsp) String() string {
 func (*DeleteEventRuleRsp) ProtoMessage() {}
 
 func (x *DeleteEventRuleRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_callbackdispatcher_proto_msgTypes[17]
+	mi := &file_callbackdispatcher_proto_msgTypes[18]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1391,7 +1466,7 @@ func (x *DeleteEventRuleRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteEventRuleRsp.ProtoReflect.Descriptor instead.
 func (*DeleteEventRuleRsp) Descriptor() ([]byte, []int) {
-	return file_callbackdispatcher_proto_rawDescGZIP(), []int{17}
+	return file_callbackdispatcher_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *DeleteEventRuleRsp) GetRetInfo() *commonpb.RetInfo {
@@ -1413,7 +1488,7 @@ type TestEventRuleReq struct {
 func (x *TestEventRuleReq) Reset() {
 	*x = TestEventRuleReq{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_callbackdispatcher_proto_msgTypes[18]
+		mi := &file_callbackdispatcher_proto_msgTypes[19]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1426,7 +1501,7 @@ func (x *TestEventRuleReq) String() string {
 func (*TestEventRuleReq) ProtoMessage() {}
 
 func (x *TestEventRuleReq) ProtoReflect() protoreflect.Message {
-	mi := &file_callbackdispatcher_proto_msgTypes[18]
+	mi := &file_callbackdispatcher_proto_msgTypes[19]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1439,7 +1514,7 @@ func (x *TestEventRuleReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TestEventRuleReq.ProtoReflect.Descriptor instead.
 func (*TestEventRuleReq) Descriptor() ([]byte, []int) {
-	return file_callbackdispatcher_proto_rawDescGZIP(), []int{18}
+	return file_callbackdispatcher_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *TestEventRuleReq) GetRuleId() string {
@@ -1466,7 +1541,7 @@ type TestEventRuleRsp struct {
 func (x *TestEventRuleRsp) Reset() {
 	*x = TestEventRuleRsp{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_callbackdispatcher_proto_msgTypes[19]
+		mi := &file_callbackdispatcher_proto_msgTypes[20]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1479,7 +1554,7 @@ func (x *TestEventRuleRsp) String() string {
 func (*TestEventRuleRsp) ProtoMessage() {}
 
 func (x *TestEventRuleRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_callbackdispatcher_proto_msgTypes[19]
+	mi := &file_callbackdispatcher_proto_msgTypes[20]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1492,7 +1567,7 @@ func (x *TestEventRuleRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TestEventRuleRsp.ProtoReflect.Descriptor instead.
 func (*TestEventRuleRsp) Descriptor() ([]byte, []int) {
-	return file_callbackdispatcher_proto_rawDescGZIP(), []int{19}
+	return file_callbackdispatcher_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *TestEventRuleRsp) GetRetInfo() *commonpb.RetInfo {
@@ -1562,7 +1637,7 @@ type EventExecution struct {
 func (x *EventExecution) Reset() {
 	*x = EventExecution{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_callbackdispatcher_proto_msgTypes[20]
+		mi := &file_callbackdispatcher_proto_msgTypes[21]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1575,7 +1650,7 @@ func (x *EventExecution) String() string {
 func (*EventExecution) ProtoMessage() {}
 
 func (x *EventExecution) ProtoReflect() protoreflect.Message {
-	mi := &file_callbackdispatcher_proto_msgTypes[20]
+	mi := &file_callbackdispatcher_proto_msgTypes[21]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1588,7 +1663,7 @@ func (x *EventExecution) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EventExecution.ProtoReflect.Descriptor instead.
 func (*EventExecution) Descriptor() ([]byte, []int) {
-	return file_callbackdispatcher_proto_rawDescGZIP(), []int{20}
+	return file_callbackdispatcher_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *EventExecution) GetExecutionId() string {
@@ -1736,7 +1811,7 @@ type DeliveryAttempt struct {
 func (x *DeliveryAttempt) Reset() {
 	*x = DeliveryAttempt{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_callbackdispatcher_proto_msgTypes[21]
+		mi := &file_callbackdispatcher_proto_msgTypes[22]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1749,7 +1824,7 @@ func (x *DeliveryAttempt) String() string {
 func (*DeliveryAttempt) ProtoMessage() {}
 
 func (x *DeliveryAttempt) ProtoReflect() protoreflect.Message {
-	mi := &file_callbackdispatcher_proto_msgTypes[21]
+	mi := &file_callbackdispatcher_proto_msgTypes[22]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1762,7 +1837,7 @@ func (x *DeliveryAttempt) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeliveryAttempt.ProtoReflect.Descriptor instead.
 func (*DeliveryAttempt) Descriptor() ([]byte, []int) {
-	return file_callbackdispatcher_proto_rawDescGZIP(), []int{21}
+	return file_callbackdispatcher_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *DeliveryAttempt) GetAttempt() uint32 {
@@ -1830,7 +1905,7 @@ type DelistStep struct {
 func (x *DelistStep) Reset() {
 	*x = DelistStep{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_callbackdispatcher_proto_msgTypes[22]
+		mi := &file_callbackdispatcher_proto_msgTypes[23]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1843,7 +1918,7 @@ func (x *DelistStep) String() string {
 func (*DelistStep) ProtoMessage() {}
 
 func (x *DelistStep) ProtoReflect() protoreflect.Message {
-	mi := &file_callbackdispatcher_proto_msgTypes[22]
+	mi := &file_callbackdispatcher_proto_msgTypes[23]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1856,7 +1931,7 @@ func (x *DelistStep) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DelistStep.ProtoReflect.Descriptor instead.
 func (*DelistStep) Descriptor() ([]byte, []int) {
-	return file_callbackdispatcher_proto_rawDescGZIP(), []int{22}
+	return file_callbackdispatcher_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *DelistStep) GetRound() uint32 {
@@ -1951,7 +2026,7 @@ type EventExecutionDetail struct {
 func (x *EventExecutionDetail) Reset() {
 	*x = EventExecutionDetail{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_callbackdispatcher_proto_msgTypes[23]
+		mi := &file_callbackdispatcher_proto_msgTypes[24]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -1964,7 +2039,7 @@ func (x *EventExecutionDetail) String() string {
 func (*EventExecutionDetail) ProtoMessage() {}
 
 func (x *EventExecutionDetail) ProtoReflect() protoreflect.Message {
-	mi := &file_callbackdispatcher_proto_msgTypes[23]
+	mi := &file_callbackdispatcher_proto_msgTypes[24]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1977,7 +2052,7 @@ func (x *EventExecutionDetail) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EventExecutionDetail.ProtoReflect.Descriptor instead.
 func (*EventExecutionDetail) Descriptor() ([]byte, []int) {
-	return file_callbackdispatcher_proto_rawDescGZIP(), []int{23}
+	return file_callbackdispatcher_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *EventExecutionDetail) GetExecution() *EventExecution {
@@ -2021,7 +2096,7 @@ type ListEventExecutionsReq struct {
 func (x *ListEventExecutionsReq) Reset() {
 	*x = ListEventExecutionsReq{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_callbackdispatcher_proto_msgTypes[24]
+		mi := &file_callbackdispatcher_proto_msgTypes[25]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -2034,7 +2109,7 @@ func (x *ListEventExecutionsReq) String() string {
 func (*ListEventExecutionsReq) ProtoMessage() {}
 
 func (x *ListEventExecutionsReq) ProtoReflect() protoreflect.Message {
-	mi := &file_callbackdispatcher_proto_msgTypes[24]
+	mi := &file_callbackdispatcher_proto_msgTypes[25]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2047,7 +2122,7 @@ func (x *ListEventExecutionsReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListEventExecutionsReq.ProtoReflect.Descriptor instead.
 func (*ListEventExecutionsReq) Descriptor() ([]byte, []int) {
-	return file_callbackdispatcher_proto_rawDescGZIP(), []int{24}
+	return file_callbackdispatcher_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *ListEventExecutionsReq) GetRuleId() string {
@@ -2084,7 +2159,7 @@ type ListEventExecutionsRsp struct {
 func (x *ListEventExecutionsRsp) Reset() {
 	*x = ListEventExecutionsRsp{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_callbackdispatcher_proto_msgTypes[25]
+		mi := &file_callbackdispatcher_proto_msgTypes[26]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -2097,7 +2172,7 @@ func (x *ListEventExecutionsRsp) String() string {
 func (*ListEventExecutionsRsp) ProtoMessage() {}
 
 func (x *ListEventExecutionsRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_callbackdispatcher_proto_msgTypes[25]
+	mi := &file_callbackdispatcher_proto_msgTypes[26]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2110,7 +2185,7 @@ func (x *ListEventExecutionsRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListEventExecutionsRsp.ProtoReflect.Descriptor instead.
 func (*ListEventExecutionsRsp) Descriptor() ([]byte, []int) {
-	return file_callbackdispatcher_proto_rawDescGZIP(), []int{25}
+	return file_callbackdispatcher_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *ListEventExecutionsRsp) GetRetInfo() *commonpb.RetInfo {
@@ -2145,7 +2220,7 @@ type GetEventExecutionReq struct {
 func (x *GetEventExecutionReq) Reset() {
 	*x = GetEventExecutionReq{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_callbackdispatcher_proto_msgTypes[26]
+		mi := &file_callbackdispatcher_proto_msgTypes[27]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -2158,7 +2233,7 @@ func (x *GetEventExecutionReq) String() string {
 func (*GetEventExecutionReq) ProtoMessage() {}
 
 func (x *GetEventExecutionReq) ProtoReflect() protoreflect.Message {
-	mi := &file_callbackdispatcher_proto_msgTypes[26]
+	mi := &file_callbackdispatcher_proto_msgTypes[27]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2171,7 +2246,7 @@ func (x *GetEventExecutionReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetEventExecutionReq.ProtoReflect.Descriptor instead.
 func (*GetEventExecutionReq) Descriptor() ([]byte, []int) {
-	return file_callbackdispatcher_proto_rawDescGZIP(), []int{26}
+	return file_callbackdispatcher_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *GetEventExecutionReq) GetExecutionId() string {
@@ -2193,7 +2268,7 @@ type GetEventExecutionRsp struct {
 func (x *GetEventExecutionRsp) Reset() {
 	*x = GetEventExecutionRsp{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_callbackdispatcher_proto_msgTypes[27]
+		mi := &file_callbackdispatcher_proto_msgTypes[28]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -2206,7 +2281,7 @@ func (x *GetEventExecutionRsp) String() string {
 func (*GetEventExecutionRsp) ProtoMessage() {}
 
 func (x *GetEventExecutionRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_callbackdispatcher_proto_msgTypes[27]
+	mi := &file_callbackdispatcher_proto_msgTypes[28]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2219,7 +2294,7 @@ func (x *GetEventExecutionRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetEventExecutionRsp.ProtoReflect.Descriptor instead.
 func (*GetEventExecutionRsp) Descriptor() ([]byte, []int) {
-	return file_callbackdispatcher_proto_rawDescGZIP(), []int{27}
+	return file_callbackdispatcher_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *GetEventExecutionRsp) GetRetInfo() *commonpb.RetInfo {
@@ -2248,7 +2323,7 @@ type RetryEventExecutionReq struct {
 func (x *RetryEventExecutionReq) Reset() {
 	*x = RetryEventExecutionReq{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_callbackdispatcher_proto_msgTypes[28]
+		mi := &file_callbackdispatcher_proto_msgTypes[29]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -2261,7 +2336,7 @@ func (x *RetryEventExecutionReq) String() string {
 func (*RetryEventExecutionReq) ProtoMessage() {}
 
 func (x *RetryEventExecutionReq) ProtoReflect() protoreflect.Message {
-	mi := &file_callbackdispatcher_proto_msgTypes[28]
+	mi := &file_callbackdispatcher_proto_msgTypes[29]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2274,7 +2349,7 @@ func (x *RetryEventExecutionReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RetryEventExecutionReq.ProtoReflect.Descriptor instead.
 func (*RetryEventExecutionReq) Descriptor() ([]byte, []int) {
-	return file_callbackdispatcher_proto_rawDescGZIP(), []int{28}
+	return file_callbackdispatcher_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *RetryEventExecutionReq) GetExecutionId() string {
@@ -2296,7 +2371,7 @@ type RetryEventExecutionRsp struct {
 func (x *RetryEventExecutionRsp) Reset() {
 	*x = RetryEventExecutionRsp{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_callbackdispatcher_proto_msgTypes[29]
+		mi := &file_callbackdispatcher_proto_msgTypes[30]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -2309,7 +2384,7 @@ func (x *RetryEventExecutionRsp) String() string {
 func (*RetryEventExecutionRsp) ProtoMessage() {}
 
 func (x *RetryEventExecutionRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_callbackdispatcher_proto_msgTypes[29]
+	mi := &file_callbackdispatcher_proto_msgTypes[30]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2322,7 +2397,7 @@ func (x *RetryEventExecutionRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RetryEventExecutionRsp.ProtoReflect.Descriptor instead.
 func (*RetryEventExecutionRsp) Descriptor() ([]byte, []int) {
-	return file_callbackdispatcher_proto_rawDescGZIP(), []int{29}
+	return file_callbackdispatcher_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *RetryEventExecutionRsp) GetRetInfo() *commonpb.RetInfo {
@@ -2351,7 +2426,7 @@ type CancelEventExecutionReq struct {
 func (x *CancelEventExecutionReq) Reset() {
 	*x = CancelEventExecutionReq{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_callbackdispatcher_proto_msgTypes[30]
+		mi := &file_callbackdispatcher_proto_msgTypes[31]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -2364,7 +2439,7 @@ func (x *CancelEventExecutionReq) String() string {
 func (*CancelEventExecutionReq) ProtoMessage() {}
 
 func (x *CancelEventExecutionReq) ProtoReflect() protoreflect.Message {
-	mi := &file_callbackdispatcher_proto_msgTypes[30]
+	mi := &file_callbackdispatcher_proto_msgTypes[31]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2377,7 +2452,7 @@ func (x *CancelEventExecutionReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelEventExecutionReq.ProtoReflect.Descriptor instead.
 func (*CancelEventExecutionReq) Descriptor() ([]byte, []int) {
-	return file_callbackdispatcher_proto_rawDescGZIP(), []int{30}
+	return file_callbackdispatcher_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *CancelEventExecutionReq) GetExecutionId() string {
@@ -2399,7 +2474,7 @@ type CancelEventExecutionRsp struct {
 func (x *CancelEventExecutionRsp) Reset() {
 	*x = CancelEventExecutionRsp{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_callbackdispatcher_proto_msgTypes[31]
+		mi := &file_callbackdispatcher_proto_msgTypes[32]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -2412,7 +2487,7 @@ func (x *CancelEventExecutionRsp) String() string {
 func (*CancelEventExecutionRsp) ProtoMessage() {}
 
 func (x *CancelEventExecutionRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_callbackdispatcher_proto_msgTypes[31]
+	mi := &file_callbackdispatcher_proto_msgTypes[32]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2425,7 +2500,7 @@ func (x *CancelEventExecutionRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CancelEventExecutionRsp.ProtoReflect.Descriptor instead.
 func (*CancelEventExecutionRsp) Descriptor() ([]byte, []int) {
-	return file_callbackdispatcher_proto_rawDescGZIP(), []int{31}
+	return file_callbackdispatcher_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *CancelEventExecutionRsp) GetRetInfo() *commonpb.RetInfo {
@@ -2454,7 +2529,7 @@ type AcknowledgeEventExecutionReq struct {
 func (x *AcknowledgeEventExecutionReq) Reset() {
 	*x = AcknowledgeEventExecutionReq{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_callbackdispatcher_proto_msgTypes[32]
+		mi := &file_callbackdispatcher_proto_msgTypes[33]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -2467,7 +2542,7 @@ func (x *AcknowledgeEventExecutionReq) String() string {
 func (*AcknowledgeEventExecutionReq) ProtoMessage() {}
 
 func (x *AcknowledgeEventExecutionReq) ProtoReflect() protoreflect.Message {
-	mi := &file_callbackdispatcher_proto_msgTypes[32]
+	mi := &file_callbackdispatcher_proto_msgTypes[33]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2480,7 +2555,7 @@ func (x *AcknowledgeEventExecutionReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AcknowledgeEventExecutionReq.ProtoReflect.Descriptor instead.
 func (*AcknowledgeEventExecutionReq) Descriptor() ([]byte, []int) {
-	return file_callbackdispatcher_proto_rawDescGZIP(), []int{32}
+	return file_callbackdispatcher_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *AcknowledgeEventExecutionReq) GetExecutionId() string {
@@ -2502,7 +2577,7 @@ type AcknowledgeEventExecutionRsp struct {
 func (x *AcknowledgeEventExecutionRsp) Reset() {
 	*x = AcknowledgeEventExecutionRsp{}
 	if protoimpl.UnsafeEnabled {
-		mi := &file_callbackdispatcher_proto_msgTypes[33]
+		mi := &file_callbackdispatcher_proto_msgTypes[34]
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		ms.StoreMessageInfo(mi)
 	}
@@ -2515,7 +2590,7 @@ func (x *AcknowledgeEventExecutionRsp) String() string {
 func (*AcknowledgeEventExecutionRsp) ProtoMessage() {}
 
 func (x *AcknowledgeEventExecutionRsp) ProtoReflect() protoreflect.Message {
-	mi := &file_callbackdispatcher_proto_msgTypes[33]
+	mi := &file_callbackdispatcher_proto_msgTypes[34]
 	if protoimpl.UnsafeEnabled && x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2528,7 +2603,7 @@ func (x *AcknowledgeEventExecutionRsp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AcknowledgeEventExecutionRsp.ProtoReflect.Descriptor instead.
 func (*AcknowledgeEventExecutionRsp) Descriptor() ([]byte, []int) {
-	return file_callbackdispatcher_proto_rawDescGZIP(), []int{33}
+	return file_callbackdispatcher_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *AcknowledgeEventExecutionRsp) GetRetInfo() *commonpb.RetInfo {
@@ -2561,7 +2636,7 @@ var file_callbackdispatcher_proto_rawDesc = []byte{
 	0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x05, 0x66, 0x69, 0x65, 0x6c, 0x64, 0x12, 0x14, 0x0a, 0x05,
 	0x74, 0x69, 0x74, 0x6c, 0x65, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x05, 0x74, 0x69, 0x74,
 	0x6c, 0x65, 0x12, 0x18, 0x0a, 0x07, 0x6f, 0x70, 0x74, 0x69, 0x6f, 0x6e, 0x73, 0x18, 0x03, 0x20,
-	0x03, 0x28, 0x09, 0x52, 0x07, 0x6f, 0x70, 0x74, 0x69, 0x6f, 0x6e, 0x73, 0x22, 0xd1, 0x01, 0x0a,
+	0x03, 0x28, 0x09, 0x52, 0x07, 0x6f, 0x70, 0x74, 0x69, 0x6f, 0x6e, 0x73, 0x22, 0xc5, 0x02, 0x0a,
 	0x11, 0x53, 0x75, 0x62, 0x73, 0x63, 0x72, 0x69, 0x62, 0x61, 0x62, 0x6c, 0x65, 0x45, 0x76, 0x65,
 	0x6e, 0x74, 0x12, 0x1d, 0x0a, 0x0a, 0x65, 0x76, 0x65, 0x6e, 0x74, 0x5f, 0x6e, 0x61, 0x6d, 0x65,
 	0x18, 0x01, 0x20, 0x01, 0x28, 0x09, 0x52, 0x09, 0x65, 0x76, 0x65, 0x6e, 0x74, 0x4e, 0x61, 0x6d,
@@ -2575,6 +2650,17 @@ var file_callbackdispatcher_proto_rawDesc = []byte{
 	0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x61, 0x6c, 0x6c, 0x62, 0x61, 0x63, 0x6b, 0x64, 0x69,
 	0x73, 0x70, 0x61, 0x74, 0x63, 0x68, 0x65, 0x72, 0x2e, 0x53, 0x63, 0x6f, 0x70, 0x65, 0x46, 0x69,
 	0x65, 0x6c, 0x64, 0x52, 0x0b, 0x73, 0x63, 0x6f, 0x70, 0x65, 0x46, 0x69, 0x65, 0x6c, 0x64, 0x73,
+	0x12, 0x1f, 0x0a, 0x0b, 0x73, 0x61, 0x6d, 0x70, 0x6c, 0x65, 0x5f, 0x6a, 0x73, 0x6f, 0x6e, 0x18,
+	0x06, 0x20, 0x01, 0x28, 0x09, 0x52, 0x0a, 0x73, 0x61, 0x6d, 0x70, 0x6c, 0x65, 0x4a, 0x73, 0x6f,
+	0x6e, 0x12, 0x51, 0x0a, 0x0e, 0x70, 0x61, 0x79, 0x6c, 0x6f, 0x61, 0x64, 0x5f, 0x66, 0x69, 0x65,
+	0x6c, 0x64, 0x73, 0x18, 0x07, 0x20, 0x03, 0x28, 0x0b, 0x32, 0x2a, 0x2e, 0x74, 0x72, 0x70, 0x63,
+	0x2e, 0x6d, 0x6f, 0x6f, 0x78, 0x2e, 0x63, 0x61, 0x6c, 0x6c, 0x62, 0x61, 0x63, 0x6b, 0x64, 0x69,
+	0x73, 0x70, 0x61, 0x74, 0x63, 0x68, 0x65, 0x72, 0x2e, 0x50, 0x61, 0x79, 0x6c, 0x6f, 0x61, 0x64,
+	0x46, 0x69, 0x65, 0x6c, 0x64, 0x52, 0x0d, 0x70, 0x61, 0x79, 0x6c, 0x6f, 0x61, 0x64, 0x46, 0x69,
+	0x65, 0x6c, 0x64, 0x73, 0x22, 0x3a, 0x0a, 0x0c, 0x50, 0x61, 0x79, 0x6c, 0x6f, 0x61, 0x64, 0x46,
+	0x69, 0x65, 0x6c, 0x64, 0x12, 0x14, 0x0a, 0x05, 0x66, 0x69, 0x65, 0x6c, 0x64, 0x18, 0x01, 0x20,
+	0x01, 0x28, 0x09, 0x52, 0x05, 0x66, 0x69, 0x65, 0x6c, 0x64, 0x12, 0x14, 0x0a, 0x05, 0x74, 0x69,
+	0x74, 0x6c, 0x65, 0x18, 0x02, 0x20, 0x01, 0x28, 0x09, 0x52, 0x05, 0x74, 0x69, 0x74, 0x6c, 0x65,
 	0x22, 0x6f, 0x0a, 0x11, 0x52, 0x75, 0x6c, 0x65, 0x4c, 0x61, 0x73, 0x74, 0x45, 0x78, 0x65, 0x63,
 	0x75, 0x74, 0x69, 0x6f, 0x6e, 0x12, 0x45, 0x0a, 0x06, 0x73, 0x74, 0x61, 0x74, 0x75, 0x73, 0x18,
 	0x01, 0x20, 0x01, 0x28, 0x0e, 0x32, 0x2d, 0x2e, 0x74, 0x72, 0x70, 0x63, 0x2e, 0x6d, 0x6f, 0x6f,
@@ -3082,7 +3168,7 @@ func file_callbackdispatcher_proto_rawDescGZIP() []byte {
 }
 
 var file_callbackdispatcher_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_callbackdispatcher_proto_msgTypes = make([]protoimpl.MessageInfo, 34)
+var file_callbackdispatcher_proto_msgTypes = make([]protoimpl.MessageInfo, 35)
 var file_callbackdispatcher_proto_goTypes = []interface{}{
 	(ActionType)(0),                      // 0: trpc.moox.callbackdispatcher.ActionType
 	(SystemAction)(0),                    // 1: trpc.moox.callbackdispatcher.SystemAction
@@ -3091,114 +3177,116 @@ var file_callbackdispatcher_proto_goTypes = []interface{}{
 	(*ScopeFilter)(nil),                  // 4: trpc.moox.callbackdispatcher.ScopeFilter
 	(*ScopeField)(nil),                   // 5: trpc.moox.callbackdispatcher.ScopeField
 	(*SubscribableEvent)(nil),            // 6: trpc.moox.callbackdispatcher.SubscribableEvent
-	(*RuleLastExecution)(nil),            // 7: trpc.moox.callbackdispatcher.RuleLastExecution
-	(*EventRule)(nil),                    // 8: trpc.moox.callbackdispatcher.EventRule
-	(*ListSubscribableEventsReq)(nil),    // 9: trpc.moox.callbackdispatcher.ListSubscribableEventsReq
-	(*ListSubscribableEventsRsp)(nil),    // 10: trpc.moox.callbackdispatcher.ListSubscribableEventsRsp
-	(*ListEventRulesReq)(nil),            // 11: trpc.moox.callbackdispatcher.ListEventRulesReq
-	(*ListEventRulesRsp)(nil),            // 12: trpc.moox.callbackdispatcher.ListEventRulesRsp
-	(*GetEventRuleReq)(nil),              // 13: trpc.moox.callbackdispatcher.GetEventRuleReq
-	(*GetEventRuleRsp)(nil),              // 14: trpc.moox.callbackdispatcher.GetEventRuleRsp
-	(*CreateEventRuleReq)(nil),           // 15: trpc.moox.callbackdispatcher.CreateEventRuleReq
-	(*CreateEventRuleRsp)(nil),           // 16: trpc.moox.callbackdispatcher.CreateEventRuleRsp
-	(*ScopeFilters)(nil),                 // 17: trpc.moox.callbackdispatcher.ScopeFilters
-	(*UpdateEventRuleReq)(nil),           // 18: trpc.moox.callbackdispatcher.UpdateEventRuleReq
-	(*UpdateEventRuleRsp)(nil),           // 19: trpc.moox.callbackdispatcher.UpdateEventRuleRsp
-	(*DeleteEventRuleReq)(nil),           // 20: trpc.moox.callbackdispatcher.DeleteEventRuleReq
-	(*DeleteEventRuleRsp)(nil),           // 21: trpc.moox.callbackdispatcher.DeleteEventRuleRsp
-	(*TestEventRuleReq)(nil),             // 22: trpc.moox.callbackdispatcher.TestEventRuleReq
-	(*TestEventRuleRsp)(nil),             // 23: trpc.moox.callbackdispatcher.TestEventRuleRsp
-	(*EventExecution)(nil),               // 24: trpc.moox.callbackdispatcher.EventExecution
-	(*DeliveryAttempt)(nil),              // 25: trpc.moox.callbackdispatcher.DeliveryAttempt
-	(*DelistStep)(nil),                   // 26: trpc.moox.callbackdispatcher.DelistStep
-	(*EventExecutionDetail)(nil),         // 27: trpc.moox.callbackdispatcher.EventExecutionDetail
-	(*ListEventExecutionsReq)(nil),       // 28: trpc.moox.callbackdispatcher.ListEventExecutionsReq
-	(*ListEventExecutionsRsp)(nil),       // 29: trpc.moox.callbackdispatcher.ListEventExecutionsRsp
-	(*GetEventExecutionReq)(nil),         // 30: trpc.moox.callbackdispatcher.GetEventExecutionReq
-	(*GetEventExecutionRsp)(nil),         // 31: trpc.moox.callbackdispatcher.GetEventExecutionRsp
-	(*RetryEventExecutionReq)(nil),       // 32: trpc.moox.callbackdispatcher.RetryEventExecutionReq
-	(*RetryEventExecutionRsp)(nil),       // 33: trpc.moox.callbackdispatcher.RetryEventExecutionRsp
-	(*CancelEventExecutionReq)(nil),      // 34: trpc.moox.callbackdispatcher.CancelEventExecutionReq
-	(*CancelEventExecutionRsp)(nil),      // 35: trpc.moox.callbackdispatcher.CancelEventExecutionRsp
-	(*AcknowledgeEventExecutionReq)(nil), // 36: trpc.moox.callbackdispatcher.AcknowledgeEventExecutionReq
-	(*AcknowledgeEventExecutionRsp)(nil), // 37: trpc.moox.callbackdispatcher.AcknowledgeEventExecutionRsp
-	(*commonpb.RetInfo)(nil),             // 38: trpc.moox.common.RetInfo
-	(*commonpb.Page)(nil),                // 39: trpc.moox.common.Page
-	(*commonpb.PageResult)(nil),          // 40: trpc.moox.common.PageResult
+	(*PayloadField)(nil),                 // 7: trpc.moox.callbackdispatcher.PayloadField
+	(*RuleLastExecution)(nil),            // 8: trpc.moox.callbackdispatcher.RuleLastExecution
+	(*EventRule)(nil),                    // 9: trpc.moox.callbackdispatcher.EventRule
+	(*ListSubscribableEventsReq)(nil),    // 10: trpc.moox.callbackdispatcher.ListSubscribableEventsReq
+	(*ListSubscribableEventsRsp)(nil),    // 11: trpc.moox.callbackdispatcher.ListSubscribableEventsRsp
+	(*ListEventRulesReq)(nil),            // 12: trpc.moox.callbackdispatcher.ListEventRulesReq
+	(*ListEventRulesRsp)(nil),            // 13: trpc.moox.callbackdispatcher.ListEventRulesRsp
+	(*GetEventRuleReq)(nil),              // 14: trpc.moox.callbackdispatcher.GetEventRuleReq
+	(*GetEventRuleRsp)(nil),              // 15: trpc.moox.callbackdispatcher.GetEventRuleRsp
+	(*CreateEventRuleReq)(nil),           // 16: trpc.moox.callbackdispatcher.CreateEventRuleReq
+	(*CreateEventRuleRsp)(nil),           // 17: trpc.moox.callbackdispatcher.CreateEventRuleRsp
+	(*ScopeFilters)(nil),                 // 18: trpc.moox.callbackdispatcher.ScopeFilters
+	(*UpdateEventRuleReq)(nil),           // 19: trpc.moox.callbackdispatcher.UpdateEventRuleReq
+	(*UpdateEventRuleRsp)(nil),           // 20: trpc.moox.callbackdispatcher.UpdateEventRuleRsp
+	(*DeleteEventRuleReq)(nil),           // 21: trpc.moox.callbackdispatcher.DeleteEventRuleReq
+	(*DeleteEventRuleRsp)(nil),           // 22: trpc.moox.callbackdispatcher.DeleteEventRuleRsp
+	(*TestEventRuleReq)(nil),             // 23: trpc.moox.callbackdispatcher.TestEventRuleReq
+	(*TestEventRuleRsp)(nil),             // 24: trpc.moox.callbackdispatcher.TestEventRuleRsp
+	(*EventExecution)(nil),               // 25: trpc.moox.callbackdispatcher.EventExecution
+	(*DeliveryAttempt)(nil),              // 26: trpc.moox.callbackdispatcher.DeliveryAttempt
+	(*DelistStep)(nil),                   // 27: trpc.moox.callbackdispatcher.DelistStep
+	(*EventExecutionDetail)(nil),         // 28: trpc.moox.callbackdispatcher.EventExecutionDetail
+	(*ListEventExecutionsReq)(nil),       // 29: trpc.moox.callbackdispatcher.ListEventExecutionsReq
+	(*ListEventExecutionsRsp)(nil),       // 30: trpc.moox.callbackdispatcher.ListEventExecutionsRsp
+	(*GetEventExecutionReq)(nil),         // 31: trpc.moox.callbackdispatcher.GetEventExecutionReq
+	(*GetEventExecutionRsp)(nil),         // 32: trpc.moox.callbackdispatcher.GetEventExecutionRsp
+	(*RetryEventExecutionReq)(nil),       // 33: trpc.moox.callbackdispatcher.RetryEventExecutionReq
+	(*RetryEventExecutionRsp)(nil),       // 34: trpc.moox.callbackdispatcher.RetryEventExecutionRsp
+	(*CancelEventExecutionReq)(nil),      // 35: trpc.moox.callbackdispatcher.CancelEventExecutionReq
+	(*CancelEventExecutionRsp)(nil),      // 36: trpc.moox.callbackdispatcher.CancelEventExecutionRsp
+	(*AcknowledgeEventExecutionReq)(nil), // 37: trpc.moox.callbackdispatcher.AcknowledgeEventExecutionReq
+	(*AcknowledgeEventExecutionRsp)(nil), // 38: trpc.moox.callbackdispatcher.AcknowledgeEventExecutionRsp
+	(*commonpb.RetInfo)(nil),             // 39: trpc.moox.common.RetInfo
+	(*commonpb.Page)(nil),                // 40: trpc.moox.common.Page
+	(*commonpb.PageResult)(nil),          // 41: trpc.moox.common.PageResult
 }
 var file_callbackdispatcher_proto_depIdxs = []int32{
 	5,  // 0: trpc.moox.callbackdispatcher.SubscribableEvent.scope_fields:type_name -> trpc.moox.callbackdispatcher.ScopeField
-	2,  // 1: trpc.moox.callbackdispatcher.RuleLastExecution.status:type_name -> trpc.moox.callbackdispatcher.ExecutionStatus
-	4,  // 2: trpc.moox.callbackdispatcher.EventRule.scope:type_name -> trpc.moox.callbackdispatcher.ScopeFilter
-	0,  // 3: trpc.moox.callbackdispatcher.EventRule.action_type:type_name -> trpc.moox.callbackdispatcher.ActionType
-	1,  // 4: trpc.moox.callbackdispatcher.EventRule.system_action:type_name -> trpc.moox.callbackdispatcher.SystemAction
-	7,  // 5: trpc.moox.callbackdispatcher.EventRule.last_execution:type_name -> trpc.moox.callbackdispatcher.RuleLastExecution
-	38, // 6: trpc.moox.callbackdispatcher.ListSubscribableEventsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	6,  // 7: trpc.moox.callbackdispatcher.ListSubscribableEventsRsp.events:type_name -> trpc.moox.callbackdispatcher.SubscribableEvent
-	1,  // 8: trpc.moox.callbackdispatcher.ListSubscribableEventsRsp.available_system_actions:type_name -> trpc.moox.callbackdispatcher.SystemAction
-	39, // 9: trpc.moox.callbackdispatcher.ListEventRulesReq.page:type_name -> trpc.moox.common.Page
-	38, // 10: trpc.moox.callbackdispatcher.ListEventRulesRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	8,  // 11: trpc.moox.callbackdispatcher.ListEventRulesRsp.rules:type_name -> trpc.moox.callbackdispatcher.EventRule
-	40, // 12: trpc.moox.callbackdispatcher.ListEventRulesRsp.page_result:type_name -> trpc.moox.common.PageResult
-	38, // 13: trpc.moox.callbackdispatcher.GetEventRuleRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	8,  // 14: trpc.moox.callbackdispatcher.GetEventRuleRsp.rule:type_name -> trpc.moox.callbackdispatcher.EventRule
-	4,  // 15: trpc.moox.callbackdispatcher.CreateEventRuleReq.scope:type_name -> trpc.moox.callbackdispatcher.ScopeFilter
-	38, // 16: trpc.moox.callbackdispatcher.CreateEventRuleRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	8,  // 17: trpc.moox.callbackdispatcher.CreateEventRuleRsp.rule:type_name -> trpc.moox.callbackdispatcher.EventRule
-	4,  // 18: trpc.moox.callbackdispatcher.ScopeFilters.items:type_name -> trpc.moox.callbackdispatcher.ScopeFilter
-	17, // 19: trpc.moox.callbackdispatcher.UpdateEventRuleReq.scope:type_name -> trpc.moox.callbackdispatcher.ScopeFilters
-	38, // 20: trpc.moox.callbackdispatcher.UpdateEventRuleRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	8,  // 21: trpc.moox.callbackdispatcher.UpdateEventRuleRsp.rule:type_name -> trpc.moox.callbackdispatcher.EventRule
-	38, // 22: trpc.moox.callbackdispatcher.DeleteEventRuleRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	38, // 23: trpc.moox.callbackdispatcher.TestEventRuleRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	0,  // 24: trpc.moox.callbackdispatcher.EventExecution.action_type:type_name -> trpc.moox.callbackdispatcher.ActionType
-	2,  // 25: trpc.moox.callbackdispatcher.EventExecution.status:type_name -> trpc.moox.callbackdispatcher.ExecutionStatus
-	3,  // 26: trpc.moox.callbackdispatcher.DelistStep.kind:type_name -> trpc.moox.callbackdispatcher.DelistStepKind
-	24, // 27: trpc.moox.callbackdispatcher.EventExecutionDetail.execution:type_name -> trpc.moox.callbackdispatcher.EventExecution
-	25, // 28: trpc.moox.callbackdispatcher.EventExecutionDetail.attempts:type_name -> trpc.moox.callbackdispatcher.DeliveryAttempt
-	26, // 29: trpc.moox.callbackdispatcher.EventExecutionDetail.delist_steps:type_name -> trpc.moox.callbackdispatcher.DelistStep
-	2,  // 30: trpc.moox.callbackdispatcher.ListEventExecutionsReq.status:type_name -> trpc.moox.callbackdispatcher.ExecutionStatus
-	39, // 31: trpc.moox.callbackdispatcher.ListEventExecutionsReq.page:type_name -> trpc.moox.common.Page
-	38, // 32: trpc.moox.callbackdispatcher.ListEventExecutionsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	24, // 33: trpc.moox.callbackdispatcher.ListEventExecutionsRsp.executions:type_name -> trpc.moox.callbackdispatcher.EventExecution
-	40, // 34: trpc.moox.callbackdispatcher.ListEventExecutionsRsp.page_result:type_name -> trpc.moox.common.PageResult
-	38, // 35: trpc.moox.callbackdispatcher.GetEventExecutionRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	27, // 36: trpc.moox.callbackdispatcher.GetEventExecutionRsp.detail:type_name -> trpc.moox.callbackdispatcher.EventExecutionDetail
-	38, // 37: trpc.moox.callbackdispatcher.RetryEventExecutionRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	24, // 38: trpc.moox.callbackdispatcher.RetryEventExecutionRsp.execution:type_name -> trpc.moox.callbackdispatcher.EventExecution
-	38, // 39: trpc.moox.callbackdispatcher.CancelEventExecutionRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	24, // 40: trpc.moox.callbackdispatcher.CancelEventExecutionRsp.execution:type_name -> trpc.moox.callbackdispatcher.EventExecution
-	38, // 41: trpc.moox.callbackdispatcher.AcknowledgeEventExecutionRsp.ret_info:type_name -> trpc.moox.common.RetInfo
-	24, // 42: trpc.moox.callbackdispatcher.AcknowledgeEventExecutionRsp.execution:type_name -> trpc.moox.callbackdispatcher.EventExecution
-	9,  // 43: trpc.moox.callbackdispatcher.CallbackDispatcherService.ListSubscribableEvents:input_type -> trpc.moox.callbackdispatcher.ListSubscribableEventsReq
-	11, // 44: trpc.moox.callbackdispatcher.CallbackDispatcherService.ListEventRules:input_type -> trpc.moox.callbackdispatcher.ListEventRulesReq
-	13, // 45: trpc.moox.callbackdispatcher.CallbackDispatcherService.GetEventRule:input_type -> trpc.moox.callbackdispatcher.GetEventRuleReq
-	15, // 46: trpc.moox.callbackdispatcher.CallbackDispatcherService.CreateEventRule:input_type -> trpc.moox.callbackdispatcher.CreateEventRuleReq
-	18, // 47: trpc.moox.callbackdispatcher.CallbackDispatcherService.UpdateEventRule:input_type -> trpc.moox.callbackdispatcher.UpdateEventRuleReq
-	20, // 48: trpc.moox.callbackdispatcher.CallbackDispatcherService.DeleteEventRule:input_type -> trpc.moox.callbackdispatcher.DeleteEventRuleReq
-	22, // 49: trpc.moox.callbackdispatcher.CallbackDispatcherService.TestEventRule:input_type -> trpc.moox.callbackdispatcher.TestEventRuleReq
-	28, // 50: trpc.moox.callbackdispatcher.CallbackDispatcherService.ListEventExecutions:input_type -> trpc.moox.callbackdispatcher.ListEventExecutionsReq
-	30, // 51: trpc.moox.callbackdispatcher.CallbackDispatcherService.GetEventExecution:input_type -> trpc.moox.callbackdispatcher.GetEventExecutionReq
-	32, // 52: trpc.moox.callbackdispatcher.CallbackDispatcherService.RetryEventExecution:input_type -> trpc.moox.callbackdispatcher.RetryEventExecutionReq
-	34, // 53: trpc.moox.callbackdispatcher.CallbackDispatcherService.CancelEventExecution:input_type -> trpc.moox.callbackdispatcher.CancelEventExecutionReq
-	36, // 54: trpc.moox.callbackdispatcher.CallbackDispatcherService.AcknowledgeEventExecution:input_type -> trpc.moox.callbackdispatcher.AcknowledgeEventExecutionReq
-	10, // 55: trpc.moox.callbackdispatcher.CallbackDispatcherService.ListSubscribableEvents:output_type -> trpc.moox.callbackdispatcher.ListSubscribableEventsRsp
-	12, // 56: trpc.moox.callbackdispatcher.CallbackDispatcherService.ListEventRules:output_type -> trpc.moox.callbackdispatcher.ListEventRulesRsp
-	14, // 57: trpc.moox.callbackdispatcher.CallbackDispatcherService.GetEventRule:output_type -> trpc.moox.callbackdispatcher.GetEventRuleRsp
-	16, // 58: trpc.moox.callbackdispatcher.CallbackDispatcherService.CreateEventRule:output_type -> trpc.moox.callbackdispatcher.CreateEventRuleRsp
-	19, // 59: trpc.moox.callbackdispatcher.CallbackDispatcherService.UpdateEventRule:output_type -> trpc.moox.callbackdispatcher.UpdateEventRuleRsp
-	21, // 60: trpc.moox.callbackdispatcher.CallbackDispatcherService.DeleteEventRule:output_type -> trpc.moox.callbackdispatcher.DeleteEventRuleRsp
-	23, // 61: trpc.moox.callbackdispatcher.CallbackDispatcherService.TestEventRule:output_type -> trpc.moox.callbackdispatcher.TestEventRuleRsp
-	29, // 62: trpc.moox.callbackdispatcher.CallbackDispatcherService.ListEventExecutions:output_type -> trpc.moox.callbackdispatcher.ListEventExecutionsRsp
-	31, // 63: trpc.moox.callbackdispatcher.CallbackDispatcherService.GetEventExecution:output_type -> trpc.moox.callbackdispatcher.GetEventExecutionRsp
-	33, // 64: trpc.moox.callbackdispatcher.CallbackDispatcherService.RetryEventExecution:output_type -> trpc.moox.callbackdispatcher.RetryEventExecutionRsp
-	35, // 65: trpc.moox.callbackdispatcher.CallbackDispatcherService.CancelEventExecution:output_type -> trpc.moox.callbackdispatcher.CancelEventExecutionRsp
-	37, // 66: trpc.moox.callbackdispatcher.CallbackDispatcherService.AcknowledgeEventExecution:output_type -> trpc.moox.callbackdispatcher.AcknowledgeEventExecutionRsp
-	55, // [55:67] is the sub-list for method output_type
-	43, // [43:55] is the sub-list for method input_type
-	43, // [43:43] is the sub-list for extension type_name
-	43, // [43:43] is the sub-list for extension extendee
-	0,  // [0:43] is the sub-list for field type_name
+	7,  // 1: trpc.moox.callbackdispatcher.SubscribableEvent.payload_fields:type_name -> trpc.moox.callbackdispatcher.PayloadField
+	2,  // 2: trpc.moox.callbackdispatcher.RuleLastExecution.status:type_name -> trpc.moox.callbackdispatcher.ExecutionStatus
+	4,  // 3: trpc.moox.callbackdispatcher.EventRule.scope:type_name -> trpc.moox.callbackdispatcher.ScopeFilter
+	0,  // 4: trpc.moox.callbackdispatcher.EventRule.action_type:type_name -> trpc.moox.callbackdispatcher.ActionType
+	1,  // 5: trpc.moox.callbackdispatcher.EventRule.system_action:type_name -> trpc.moox.callbackdispatcher.SystemAction
+	8,  // 6: trpc.moox.callbackdispatcher.EventRule.last_execution:type_name -> trpc.moox.callbackdispatcher.RuleLastExecution
+	39, // 7: trpc.moox.callbackdispatcher.ListSubscribableEventsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	6,  // 8: trpc.moox.callbackdispatcher.ListSubscribableEventsRsp.events:type_name -> trpc.moox.callbackdispatcher.SubscribableEvent
+	1,  // 9: trpc.moox.callbackdispatcher.ListSubscribableEventsRsp.available_system_actions:type_name -> trpc.moox.callbackdispatcher.SystemAction
+	40, // 10: trpc.moox.callbackdispatcher.ListEventRulesReq.page:type_name -> trpc.moox.common.Page
+	39, // 11: trpc.moox.callbackdispatcher.ListEventRulesRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	9,  // 12: trpc.moox.callbackdispatcher.ListEventRulesRsp.rules:type_name -> trpc.moox.callbackdispatcher.EventRule
+	41, // 13: trpc.moox.callbackdispatcher.ListEventRulesRsp.page_result:type_name -> trpc.moox.common.PageResult
+	39, // 14: trpc.moox.callbackdispatcher.GetEventRuleRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	9,  // 15: trpc.moox.callbackdispatcher.GetEventRuleRsp.rule:type_name -> trpc.moox.callbackdispatcher.EventRule
+	4,  // 16: trpc.moox.callbackdispatcher.CreateEventRuleReq.scope:type_name -> trpc.moox.callbackdispatcher.ScopeFilter
+	39, // 17: trpc.moox.callbackdispatcher.CreateEventRuleRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	9,  // 18: trpc.moox.callbackdispatcher.CreateEventRuleRsp.rule:type_name -> trpc.moox.callbackdispatcher.EventRule
+	4,  // 19: trpc.moox.callbackdispatcher.ScopeFilters.items:type_name -> trpc.moox.callbackdispatcher.ScopeFilter
+	18, // 20: trpc.moox.callbackdispatcher.UpdateEventRuleReq.scope:type_name -> trpc.moox.callbackdispatcher.ScopeFilters
+	39, // 21: trpc.moox.callbackdispatcher.UpdateEventRuleRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	9,  // 22: trpc.moox.callbackdispatcher.UpdateEventRuleRsp.rule:type_name -> trpc.moox.callbackdispatcher.EventRule
+	39, // 23: trpc.moox.callbackdispatcher.DeleteEventRuleRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	39, // 24: trpc.moox.callbackdispatcher.TestEventRuleRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	0,  // 25: trpc.moox.callbackdispatcher.EventExecution.action_type:type_name -> trpc.moox.callbackdispatcher.ActionType
+	2,  // 26: trpc.moox.callbackdispatcher.EventExecution.status:type_name -> trpc.moox.callbackdispatcher.ExecutionStatus
+	3,  // 27: trpc.moox.callbackdispatcher.DelistStep.kind:type_name -> trpc.moox.callbackdispatcher.DelistStepKind
+	25, // 28: trpc.moox.callbackdispatcher.EventExecutionDetail.execution:type_name -> trpc.moox.callbackdispatcher.EventExecution
+	26, // 29: trpc.moox.callbackdispatcher.EventExecutionDetail.attempts:type_name -> trpc.moox.callbackdispatcher.DeliveryAttempt
+	27, // 30: trpc.moox.callbackdispatcher.EventExecutionDetail.delist_steps:type_name -> trpc.moox.callbackdispatcher.DelistStep
+	2,  // 31: trpc.moox.callbackdispatcher.ListEventExecutionsReq.status:type_name -> trpc.moox.callbackdispatcher.ExecutionStatus
+	40, // 32: trpc.moox.callbackdispatcher.ListEventExecutionsReq.page:type_name -> trpc.moox.common.Page
+	39, // 33: trpc.moox.callbackdispatcher.ListEventExecutionsRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	25, // 34: trpc.moox.callbackdispatcher.ListEventExecutionsRsp.executions:type_name -> trpc.moox.callbackdispatcher.EventExecution
+	41, // 35: trpc.moox.callbackdispatcher.ListEventExecutionsRsp.page_result:type_name -> trpc.moox.common.PageResult
+	39, // 36: trpc.moox.callbackdispatcher.GetEventExecutionRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	28, // 37: trpc.moox.callbackdispatcher.GetEventExecutionRsp.detail:type_name -> trpc.moox.callbackdispatcher.EventExecutionDetail
+	39, // 38: trpc.moox.callbackdispatcher.RetryEventExecutionRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	25, // 39: trpc.moox.callbackdispatcher.RetryEventExecutionRsp.execution:type_name -> trpc.moox.callbackdispatcher.EventExecution
+	39, // 40: trpc.moox.callbackdispatcher.CancelEventExecutionRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	25, // 41: trpc.moox.callbackdispatcher.CancelEventExecutionRsp.execution:type_name -> trpc.moox.callbackdispatcher.EventExecution
+	39, // 42: trpc.moox.callbackdispatcher.AcknowledgeEventExecutionRsp.ret_info:type_name -> trpc.moox.common.RetInfo
+	25, // 43: trpc.moox.callbackdispatcher.AcknowledgeEventExecutionRsp.execution:type_name -> trpc.moox.callbackdispatcher.EventExecution
+	10, // 44: trpc.moox.callbackdispatcher.CallbackDispatcherService.ListSubscribableEvents:input_type -> trpc.moox.callbackdispatcher.ListSubscribableEventsReq
+	12, // 45: trpc.moox.callbackdispatcher.CallbackDispatcherService.ListEventRules:input_type -> trpc.moox.callbackdispatcher.ListEventRulesReq
+	14, // 46: trpc.moox.callbackdispatcher.CallbackDispatcherService.GetEventRule:input_type -> trpc.moox.callbackdispatcher.GetEventRuleReq
+	16, // 47: trpc.moox.callbackdispatcher.CallbackDispatcherService.CreateEventRule:input_type -> trpc.moox.callbackdispatcher.CreateEventRuleReq
+	19, // 48: trpc.moox.callbackdispatcher.CallbackDispatcherService.UpdateEventRule:input_type -> trpc.moox.callbackdispatcher.UpdateEventRuleReq
+	21, // 49: trpc.moox.callbackdispatcher.CallbackDispatcherService.DeleteEventRule:input_type -> trpc.moox.callbackdispatcher.DeleteEventRuleReq
+	23, // 50: trpc.moox.callbackdispatcher.CallbackDispatcherService.TestEventRule:input_type -> trpc.moox.callbackdispatcher.TestEventRuleReq
+	29, // 51: trpc.moox.callbackdispatcher.CallbackDispatcherService.ListEventExecutions:input_type -> trpc.moox.callbackdispatcher.ListEventExecutionsReq
+	31, // 52: trpc.moox.callbackdispatcher.CallbackDispatcherService.GetEventExecution:input_type -> trpc.moox.callbackdispatcher.GetEventExecutionReq
+	33, // 53: trpc.moox.callbackdispatcher.CallbackDispatcherService.RetryEventExecution:input_type -> trpc.moox.callbackdispatcher.RetryEventExecutionReq
+	35, // 54: trpc.moox.callbackdispatcher.CallbackDispatcherService.CancelEventExecution:input_type -> trpc.moox.callbackdispatcher.CancelEventExecutionReq
+	37, // 55: trpc.moox.callbackdispatcher.CallbackDispatcherService.AcknowledgeEventExecution:input_type -> trpc.moox.callbackdispatcher.AcknowledgeEventExecutionReq
+	11, // 56: trpc.moox.callbackdispatcher.CallbackDispatcherService.ListSubscribableEvents:output_type -> trpc.moox.callbackdispatcher.ListSubscribableEventsRsp
+	13, // 57: trpc.moox.callbackdispatcher.CallbackDispatcherService.ListEventRules:output_type -> trpc.moox.callbackdispatcher.ListEventRulesRsp
+	15, // 58: trpc.moox.callbackdispatcher.CallbackDispatcherService.GetEventRule:output_type -> trpc.moox.callbackdispatcher.GetEventRuleRsp
+	17, // 59: trpc.moox.callbackdispatcher.CallbackDispatcherService.CreateEventRule:output_type -> trpc.moox.callbackdispatcher.CreateEventRuleRsp
+	20, // 60: trpc.moox.callbackdispatcher.CallbackDispatcherService.UpdateEventRule:output_type -> trpc.moox.callbackdispatcher.UpdateEventRuleRsp
+	22, // 61: trpc.moox.callbackdispatcher.CallbackDispatcherService.DeleteEventRule:output_type -> trpc.moox.callbackdispatcher.DeleteEventRuleRsp
+	24, // 62: trpc.moox.callbackdispatcher.CallbackDispatcherService.TestEventRule:output_type -> trpc.moox.callbackdispatcher.TestEventRuleRsp
+	30, // 63: trpc.moox.callbackdispatcher.CallbackDispatcherService.ListEventExecutions:output_type -> trpc.moox.callbackdispatcher.ListEventExecutionsRsp
+	32, // 64: trpc.moox.callbackdispatcher.CallbackDispatcherService.GetEventExecution:output_type -> trpc.moox.callbackdispatcher.GetEventExecutionRsp
+	34, // 65: trpc.moox.callbackdispatcher.CallbackDispatcherService.RetryEventExecution:output_type -> trpc.moox.callbackdispatcher.RetryEventExecutionRsp
+	36, // 66: trpc.moox.callbackdispatcher.CallbackDispatcherService.CancelEventExecution:output_type -> trpc.moox.callbackdispatcher.CancelEventExecutionRsp
+	38, // 67: trpc.moox.callbackdispatcher.CallbackDispatcherService.AcknowledgeEventExecution:output_type -> trpc.moox.callbackdispatcher.AcknowledgeEventExecutionRsp
+	56, // [56:68] is the sub-list for method output_type
+	44, // [44:56] is the sub-list for method input_type
+	44, // [44:44] is the sub-list for extension type_name
+	44, // [44:44] is the sub-list for extension extendee
+	0,  // [0:44] is the sub-list for field type_name
 }
 
 func init() { file_callbackdispatcher_proto_init() }
@@ -3244,7 +3332,7 @@ func file_callbackdispatcher_proto_init() {
 			}
 		}
 		file_callbackdispatcher_proto_msgTypes[3].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*RuleLastExecution); i {
+			switch v := v.(*PayloadField); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -3256,7 +3344,7 @@ func file_callbackdispatcher_proto_init() {
 			}
 		}
 		file_callbackdispatcher_proto_msgTypes[4].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*EventRule); i {
+			switch v := v.(*RuleLastExecution); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -3268,7 +3356,7 @@ func file_callbackdispatcher_proto_init() {
 			}
 		}
 		file_callbackdispatcher_proto_msgTypes[5].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ListSubscribableEventsReq); i {
+			switch v := v.(*EventRule); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -3280,7 +3368,7 @@ func file_callbackdispatcher_proto_init() {
 			}
 		}
 		file_callbackdispatcher_proto_msgTypes[6].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ListSubscribableEventsRsp); i {
+			switch v := v.(*ListSubscribableEventsReq); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -3292,7 +3380,7 @@ func file_callbackdispatcher_proto_init() {
 			}
 		}
 		file_callbackdispatcher_proto_msgTypes[7].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ListEventRulesReq); i {
+			switch v := v.(*ListSubscribableEventsRsp); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -3304,7 +3392,7 @@ func file_callbackdispatcher_proto_init() {
 			}
 		}
 		file_callbackdispatcher_proto_msgTypes[8].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ListEventRulesRsp); i {
+			switch v := v.(*ListEventRulesReq); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -3316,7 +3404,7 @@ func file_callbackdispatcher_proto_init() {
 			}
 		}
 		file_callbackdispatcher_proto_msgTypes[9].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*GetEventRuleReq); i {
+			switch v := v.(*ListEventRulesRsp); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -3328,7 +3416,7 @@ func file_callbackdispatcher_proto_init() {
 			}
 		}
 		file_callbackdispatcher_proto_msgTypes[10].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*GetEventRuleRsp); i {
+			switch v := v.(*GetEventRuleReq); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -3340,7 +3428,7 @@ func file_callbackdispatcher_proto_init() {
 			}
 		}
 		file_callbackdispatcher_proto_msgTypes[11].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*CreateEventRuleReq); i {
+			switch v := v.(*GetEventRuleRsp); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -3352,7 +3440,7 @@ func file_callbackdispatcher_proto_init() {
 			}
 		}
 		file_callbackdispatcher_proto_msgTypes[12].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*CreateEventRuleRsp); i {
+			switch v := v.(*CreateEventRuleReq); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -3364,7 +3452,7 @@ func file_callbackdispatcher_proto_init() {
 			}
 		}
 		file_callbackdispatcher_proto_msgTypes[13].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ScopeFilters); i {
+			switch v := v.(*CreateEventRuleRsp); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -3376,7 +3464,7 @@ func file_callbackdispatcher_proto_init() {
 			}
 		}
 		file_callbackdispatcher_proto_msgTypes[14].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*UpdateEventRuleReq); i {
+			switch v := v.(*ScopeFilters); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -3388,7 +3476,7 @@ func file_callbackdispatcher_proto_init() {
 			}
 		}
 		file_callbackdispatcher_proto_msgTypes[15].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*UpdateEventRuleRsp); i {
+			switch v := v.(*UpdateEventRuleReq); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -3400,7 +3488,7 @@ func file_callbackdispatcher_proto_init() {
 			}
 		}
 		file_callbackdispatcher_proto_msgTypes[16].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*DeleteEventRuleReq); i {
+			switch v := v.(*UpdateEventRuleRsp); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -3412,7 +3500,7 @@ func file_callbackdispatcher_proto_init() {
 			}
 		}
 		file_callbackdispatcher_proto_msgTypes[17].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*DeleteEventRuleRsp); i {
+			switch v := v.(*DeleteEventRuleReq); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -3424,7 +3512,7 @@ func file_callbackdispatcher_proto_init() {
 			}
 		}
 		file_callbackdispatcher_proto_msgTypes[18].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*TestEventRuleReq); i {
+			switch v := v.(*DeleteEventRuleRsp); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -3436,7 +3524,7 @@ func file_callbackdispatcher_proto_init() {
 			}
 		}
 		file_callbackdispatcher_proto_msgTypes[19].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*TestEventRuleRsp); i {
+			switch v := v.(*TestEventRuleReq); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -3448,7 +3536,7 @@ func file_callbackdispatcher_proto_init() {
 			}
 		}
 		file_callbackdispatcher_proto_msgTypes[20].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*EventExecution); i {
+			switch v := v.(*TestEventRuleRsp); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -3460,7 +3548,7 @@ func file_callbackdispatcher_proto_init() {
 			}
 		}
 		file_callbackdispatcher_proto_msgTypes[21].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*DeliveryAttempt); i {
+			switch v := v.(*EventExecution); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -3472,7 +3560,7 @@ func file_callbackdispatcher_proto_init() {
 			}
 		}
 		file_callbackdispatcher_proto_msgTypes[22].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*DelistStep); i {
+			switch v := v.(*DeliveryAttempt); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -3484,7 +3572,7 @@ func file_callbackdispatcher_proto_init() {
 			}
 		}
 		file_callbackdispatcher_proto_msgTypes[23].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*EventExecutionDetail); i {
+			switch v := v.(*DelistStep); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -3496,7 +3584,7 @@ func file_callbackdispatcher_proto_init() {
 			}
 		}
 		file_callbackdispatcher_proto_msgTypes[24].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ListEventExecutionsReq); i {
+			switch v := v.(*EventExecutionDetail); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -3508,7 +3596,7 @@ func file_callbackdispatcher_proto_init() {
 			}
 		}
 		file_callbackdispatcher_proto_msgTypes[25].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*ListEventExecutionsRsp); i {
+			switch v := v.(*ListEventExecutionsReq); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -3520,7 +3608,7 @@ func file_callbackdispatcher_proto_init() {
 			}
 		}
 		file_callbackdispatcher_proto_msgTypes[26].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*GetEventExecutionReq); i {
+			switch v := v.(*ListEventExecutionsRsp); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -3532,7 +3620,7 @@ func file_callbackdispatcher_proto_init() {
 			}
 		}
 		file_callbackdispatcher_proto_msgTypes[27].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*GetEventExecutionRsp); i {
+			switch v := v.(*GetEventExecutionReq); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -3544,7 +3632,7 @@ func file_callbackdispatcher_proto_init() {
 			}
 		}
 		file_callbackdispatcher_proto_msgTypes[28].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*RetryEventExecutionReq); i {
+			switch v := v.(*GetEventExecutionRsp); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -3556,7 +3644,7 @@ func file_callbackdispatcher_proto_init() {
 			}
 		}
 		file_callbackdispatcher_proto_msgTypes[29].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*RetryEventExecutionRsp); i {
+			switch v := v.(*RetryEventExecutionReq); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -3568,7 +3656,7 @@ func file_callbackdispatcher_proto_init() {
 			}
 		}
 		file_callbackdispatcher_proto_msgTypes[30].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*CancelEventExecutionReq); i {
+			switch v := v.(*RetryEventExecutionRsp); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -3580,7 +3668,7 @@ func file_callbackdispatcher_proto_init() {
 			}
 		}
 		file_callbackdispatcher_proto_msgTypes[31].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*CancelEventExecutionRsp); i {
+			switch v := v.(*CancelEventExecutionReq); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -3592,7 +3680,7 @@ func file_callbackdispatcher_proto_init() {
 			}
 		}
 		file_callbackdispatcher_proto_msgTypes[32].Exporter = func(v interface{}, i int) interface{} {
-			switch v := v.(*AcknowledgeEventExecutionReq); i {
+			switch v := v.(*CancelEventExecutionRsp); i {
 			case 0:
 				return &v.state
 			case 1:
@@ -3604,6 +3692,18 @@ func file_callbackdispatcher_proto_init() {
 			}
 		}
 		file_callbackdispatcher_proto_msgTypes[33].Exporter = func(v interface{}, i int) interface{} {
+			switch v := v.(*AcknowledgeEventExecutionReq); i {
+			case 0:
+				return &v.state
+			case 1:
+				return &v.sizeCache
+			case 2:
+				return &v.unknownFields
+			default:
+				return nil
+			}
+		}
+		file_callbackdispatcher_proto_msgTypes[34].Exporter = func(v interface{}, i int) interface{} {
 			switch v := v.(*AcknowledgeEventExecutionRsp); i {
 			case 0:
 				return &v.state
@@ -3616,15 +3716,15 @@ func file_callbackdispatcher_proto_init() {
 			}
 		}
 	}
-	file_callbackdispatcher_proto_msgTypes[11].OneofWrappers = []interface{}{}
-	file_callbackdispatcher_proto_msgTypes[14].OneofWrappers = []interface{}{}
+	file_callbackdispatcher_proto_msgTypes[12].OneofWrappers = []interface{}{}
+	file_callbackdispatcher_proto_msgTypes[15].OneofWrappers = []interface{}{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: file_callbackdispatcher_proto_rawDesc,
 			NumEnums:      4,
-			NumMessages:   34,
+			NumMessages:   35,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

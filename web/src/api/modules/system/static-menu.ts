@@ -95,7 +95,16 @@ export const systemMenu = [
     reuseOnQuery: true
   }),
 
-  directory("06", "0", "/ops/monitor", "ops", "ops", 6, { svgIcon: "defend", icon: "" }),
+  // 事件中心是一级菜单，排在交易之后、运维之前。
+  directory("055", "0", "/events/subscriptions", "events", "events", 6, { svgIcon: "form", icon: "" }),
+  menu("05501", "055", "/events/subscriptions", "events-subscriptions", "events-subscriptions", "events/subscriptions/index", 1),
+  // 筛选和打开的记录在 query 里（告警会直接带失败筛选跳进来），query 变化时复用页面。
+  menu("05502", "055", "/events/executions", "events-executions", "events-executions", "events/executions/index", 2, {
+    reuseOnQuery: true
+  }),
+  menu("05503", "055", "/events/delist", "events-delist", "events-delist", "events/delist/index", 3),
+
+  directory("06", "0", "/ops/monitor", "ops", "ops", 7, { svgIcon: "defend", icon: "" }),
   // 展开状态、页签、筛选、定位的主机都在 query 里：query 变化时复用页面（菜单与 route.ts 两处都写）
   menu("0607", "06", "/ops/monitor", "ops-monitor", "ops-monitor", "ops/monitor/index", 1, { reuseOnQuery: true }),
   menu("0601", "06", "/ops/hosts", "ops-hosts", "ops-hosts", "ops/host-workbench/index", 3, { reuseOnQuery: true }),
@@ -105,11 +114,7 @@ export const systemMenu = [
   menu("0606", "06", "/ops/storage/nodes", "ops-storage", "ops-storage", "ops/storage/index", 4),
   menu("0608", "06", "/ops/activity", "ops-activity", "ops-activity", "ops/activity/index", 5),
 
-  directory("07", "0", "/settings/spaces", "settings", "settings", 7, { svgIcon: "set", icon: "" }),
+  directory("07", "0", "/settings/spaces", "settings", "settings", 8, { svgIcon: "set", icon: "" }),
   menu("0701", "07", "/settings/spaces", "settings-spaces", "settings-spaces", "settings/spaces/index", 1),
-  menu("0702", "07", "/settings/secrets", "settings-secrets", "settings-secrets", "settings/secrets/index", 2),
-  // 页签用 ?tab=（告警会直接跳到执行记录），query 变化时复用页面。
-  menu("0703", "07", "/settings/events", "settings-events", "settings-events", "settings/events/index", 3, {
-    reuseOnQuery: true
-  })
+  menu("0702", "07", "/settings/secrets", "settings-secrets", "settings-secrets", "settings/secrets/index", 2)
 ];

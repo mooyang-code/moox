@@ -25,7 +25,8 @@ const reusePaths = [
   "/data/archive",
   "/ops/monitor",
   "/ops/deployments",
-  "/ops/hosts"
+  "/ops/hosts",
+  "/events/executions"
 ];
 
 describe("query 变化时复用的页面", () => {

@@ -1,6 +1,9 @@
 import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
 import ArcoVue from "@arco-design/web-vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { defineComponent, type Component } from "vue";
+import { createMemoryHistory, createRouter, type Router } from "vue-router";
+import { createPinia, setActivePinia } from "pinia";
 import type { EventRule, SubscribableEvent } from "@/api/callback-dispatcher";
 
 const mocks = vi.hoisted(() => ({
@@ -21,10 +24,11 @@ vi.mock("@/api/callback-dispatcher", async () => ({
 }));
 vi.mock("@/api/admin/http", () => ({ reportControlError: vi.fn(), callControl: vi.fn() }));
 
-import RuleDialog from "./rule-dialog.vue";
-import EventRules from "./rules.vue";
-import ExecutionDrawer from "./execution-drawer.vue";
-import EventExecutions from "./executions.vue";
+import RuleDialog from "./subscriptions/rule-dialog.vue";
+import EventRules from "./subscriptions/index.vue";
+import ExecutionDrawer from "./executions/execution-drawer.vue";
+import EventExecutions from "./executions/index.vue";
+import EventDelist from "./delist/index.vue";
 
 Object.defineProperty(window, "matchMedia", {
   writable: true,
@@ -37,7 +41,9 @@ const events: SubscribableEvent[] = [
     version: 1,
     title: "标的即将下架",
     description: "",
-    scope_fields: [{ field: "exchange", title: "交易所", options: ["binance", "okx"] }]
+    scope_fields: [{ field: "exchange", title: "交易所", options: ["binance", "okx"] }],
+    sample_json: "",
+    payload_fields: []
   }
 ];
 
@@ -66,7 +72,26 @@ afterEach(() => {
 });
 beforeEach(() => {
   for (const mock of Object.values(mocks)) mock.mockReset();
+  setActivePinia(createPinia());
 });
+
+const Blank = defineComponent({ render: () => null });
+let router: Router;
+
+/** 带路由挂载整页：页面用 URL 保存筛选、链接到别的页。 */
+async function mountPage(page: Component, url: string, attach = false) {
+  router = createRouter({
+    history: createMemoryHistory(),
+    routes: ["/events/subscriptions", "/events/executions", "/events/delist", "/trading/accounts/:id"].map(path => ({
+      path,
+      component: Blank
+    }))
+  });
+  await router.push(url);
+  wrapper = mount(page, { global: { plugins: [ArcoVue, router] }, ...(attach ? { attachTo: document.body } : {}) });
+  await flushPromises();
+  return wrapper;
+}
 
 function okButton() {
   return [...document.querySelectorAll<HTMLButtonElement>(".arco-modal button")].find(item => item.textContent?.includes("确定"));
@@ -108,9 +133,8 @@ describe("规则列表", () => {
     mocks.listAllEventRules.mockResolvedValue([system]);
     mocks.listSubscribableEvents.mockResolvedValue({ events, availableSystemActions: [] });
     mocks.updateEventRule.mockResolvedValue({ ...system, enabled: false });
-    wrapper = mount(EventRules, { global: { plugins: [ArcoVue] }, attachTo: document.body });
-    await flushPromises();
-    (wrapper.vm as unknown as { requestToggle(rule: EventRule, enabled: boolean): void }).requestToggle(system, false);
+    await mountPage(EventRules, "/events/subscriptions", true);
+    (wrapper!.vm as unknown as { requestToggle(rule: EventRule, enabled: boolean): void }).requestToggle(system, false);
     await flushPromises();
     expect(document.body.textContent).toContain("之后发现的下架不会再处理");
     expect(mocks.updateEventRule).not.toHaveBeenCalled();
@@ -122,14 +146,14 @@ describe("规则列表", () => {
     expect(mocks.updateEventRule).toHaveBeenCalledWith({ rule_id: "sys", enabled: false });
   });
 
-  it("系统规则的状态从全部规则里取，不只看当前页", async () => {
-    const system = rule({ rule_id: "sys", system: true, enabled: false, action_type: "ACTION_TYPE_SYSTEM" });
-    mocks.listEventRules.mockResolvedValue({ rules: [rule({ rule_id: "x" })], page_result: { total: 2 } });
-    mocks.listAllEventRules.mockResolvedValue([system, rule({ rule_id: "x" })]);
+  it("最近一次处理链接到按这条订阅筛选的处理记录", async () => {
+    mocks.listEventRules.mockResolvedValue({
+      rules: [rule({ last_execution: { status: "EXECUTION_STATUS_FAILED", at_ms: 1 } })],
+      page_result: { total: 1 }
+    });
     mocks.listSubscribableEvents.mockResolvedValue({ events, availableSystemActions: [] });
-    wrapper = mount(EventRules, { global: { plugins: [ArcoVue] } });
-    await flushPromises();
-    expect((wrapper.vm as unknown as { systemRuleEnabled: boolean | null }).systemRuleEnabled).toBe(false);
+    await mountPage(EventRules, "/events/subscriptions");
+    expect(wrapper!.find('a[href="#/events/executions?rule_id=r1"]').exists()).toBe(true);
   });
 });
 
@@ -143,9 +167,8 @@ describe("规则列表的翻页与刷新", () => {
       page === 2 ? { rules: [last], page_result: { total: 11 } } : { rules: first, page_result: { total: 11 } }
     );
     mocks.deleteEventRule.mockResolvedValue({});
-    wrapper = mount(EventRules, { global: { plugins: [ArcoVue] } });
-    await flushPromises();
-    const vm = wrapper.vm as unknown as {
+    await mountPage(EventRules, "/events/subscriptions");
+    const vm = wrapper!.vm as unknown as {
       pagination: { current: number };
       onPageChange(page: number): void;
       remove(r: EventRule): Promise<void>;
@@ -159,7 +182,7 @@ describe("规则列表的翻页与刷新", () => {
     await vm.remove(last);
     await flushPromises();
     expect(vm.pagination.current).toBe(1);
-    expect((wrapper.vm as unknown as { rows: EventRule[] }).rows).toHaveLength(10);
+    expect((wrapper!.vm as unknown as { rows: EventRule[] }).rows).toHaveLength(10);
   });
 
   it("迟到的旧页响应被丢弃", async () => {
@@ -168,24 +191,33 @@ describe("规则列表的翻页与刷新", () => {
     let resolveOld!: (value: unknown) => void;
     mocks.listEventRules.mockImplementationOnce(() => new Promise(done => (resolveOld = done)));
     mocks.listEventRules.mockResolvedValue({ rules: [rule({ rule_id: "fresh" })], page_result: { total: 1 } });
-    wrapper = mount(EventRules, { global: { plugins: [ArcoVue] } });
-    await flushPromises();
-    (wrapper.vm as unknown as { refresh(): void }).refresh();
+    await mountPage(EventRules, "/events/subscriptions");
+    void (wrapper!.vm as unknown as { load(): Promise<void> }).load();
     await flushPromises();
     resolveOld({ rules: [rule({ rule_id: "stale" })], page_result: { total: 1 } });
     await flushPromises();
-    expect((wrapper.vm as unknown as { rows: EventRule[] }).rows.map(item => item.rule_id)).toEqual(["fresh"]);
+    expect((wrapper!.vm as unknown as { rows: EventRule[] }).rows.map(item => item.rule_id)).toEqual(["fresh"]);
+  });
+});
+
+describe("下架处理页", () => {
+  it("系统订阅的状态从全部订阅里取，不只看第一页", async () => {
+    const system = rule({ rule_id: "sys", name: "卖出下架币", system: true, enabled: false, action_type: "ACTION_TYPE_SYSTEM" });
+    mocks.listAllEventRules.mockResolvedValue([rule({ rule_id: "x" }), system]);
+    mocks.listSubscribableEvents.mockResolvedValue({ events, availableSystemActions: [] });
+    await mountPage(EventDelist, "/events/delist");
+    expect(wrapper!.text()).toContain("系统订阅「卖出下架币」：已停用");
   });
 
-  it("系统规则状态读不到时显示无法确认，不当成已启用", async () => {
-    mocks.listEventRules.mockResolvedValue({ rules: [], page_result: { total: 0 } });
+  it("系统订阅读取失败时写“读取失败”，登记弹窗也不当成已启用", async () => {
     mocks.listAllEventRules.mockRejectedValue(new Error("读不到"));
     mocks.listSubscribableEvents.mockResolvedValue({ events, availableSystemActions: ["SYSTEM_ACTION_SELL_DELISTED_HOLDINGS"] });
-    wrapper = mount(EventRules, { global: { plugins: [ArcoVue] }, attachTo: document.body });
+    await mountPage(EventDelist, "/events/delist", true);
+    expect(wrapper!.text()).toContain("系统订阅：读取失败");
+    expect(wrapper!.text()).not.toContain("已启用");
+    [...document.querySelectorAll<HTMLButtonElement>("button")].find(item => item.textContent?.includes("手工登记下架"))!.click();
     await flushPromises();
-    (wrapper.vm as unknown as { openDelist(): void }).openDelist();
-    await flushPromises();
-    expect(document.body.textContent).toContain("无法确认系统规则");
+    expect(document.body.textContent).toContain("无法确认系统订阅");
     expect(document.body.textContent).not.toContain("登记后，系统会立即禁止买入这个标的");
   });
 });
@@ -204,10 +236,9 @@ describe("执行记录", () => {
     mocks.listAllEventRules.mockResolvedValue([]);
     mocks.listSubscribableEvents.mockResolvedValue({ events, availableSystemActions: [] });
     mocks.cancelEventExecution.mockRejectedValue(new Error("取消失败"));
-    wrapper = mount(EventExecutions, { global: { plugins: [ArcoVue] } });
-    await flushPromises();
+    await mountPage(EventExecutions, "/events/executions");
     const calls = mocks.listEventExecutions.mock.calls.length;
-    await (wrapper.vm as unknown as { act(kind: string, item: unknown): Promise<void> }).act("cancel", execution);
+    await (wrapper!.vm as unknown as { act(kind: string, item: unknown): Promise<void> }).act("cancel", execution);
     await flushPromises();
     expect(mocks.listEventExecutions.mock.calls.length).toBe(calls + 1);
   });
@@ -227,9 +258,8 @@ describe("执行记录", () => {
     mocks.listAllEventRules.mockResolvedValue([]);
     mocks.listSubscribableEvents.mockResolvedValue({ events, availableSystemActions: [] });
     mocks.retryEventExecution.mockResolvedValue({});
-    wrapper = mount(EventExecutions, { global: { plugins: [ArcoVue] }, attachTo: document.body });
-    await flushPromises();
-    const vm = wrapper.vm as unknown as { requestAct(kind: string, item: unknown): void };
+    await mountPage(EventExecutions, "/events/executions", true);
+    const vm = wrapper!.vm as unknown as { requestAct(kind: string, item: unknown): void };
 
     vm.requestAct("retry", failed({}));
     await flushPromises();
@@ -247,6 +277,66 @@ describe("执行记录", () => {
     vm.requestAct("retry", failed({ execution_id: "x3", action_type: "ACTION_TYPE_NOTIFY_URL" }));
     await flushPromises();
     expect(mocks.retryEventExecution).toHaveBeenCalledWith("x3");
+  });
+});
+
+describe("处理记录的 URL", () => {
+  it("带 status=failed 打开时按失败筛选；打开记录、换筛选都写回 URL", async () => {
+    mocks.listEventExecutions.mockResolvedValue({ executions: [], page_result: { total: 0 } });
+    mocks.listAllEventRules.mockResolvedValue([]);
+    mocks.listSubscribableEvents.mockResolvedValue({ events, availableSystemActions: [] });
+    mocks.getEventExecution.mockReturnValue(new Promise(() => undefined));
+    await mountPage(EventExecutions, "/events/executions?status=failed&rule_id=r1");
+    expect(mocks.listEventExecutions).toHaveBeenCalledTimes(1);
+    expect(mocks.listEventExecutions.mock.calls[0][0]).toMatchObject({ rule_id: "r1", status: "EXECUTION_STATUS_FAILED" });
+
+    const vm = wrapper!.vm as unknown as {
+      openDetail(item: { execution_id: string }): void;
+      onDrawerVisible(visible: boolean): void;
+      filters: { status: string };
+      onFilterChange(): void;
+    };
+    vm.openDetail({ execution_id: "x9" });
+    await flushPromises();
+    expect(router.currentRoute.value.query).toEqual({ rule_id: "r1", status: "failed", execution: "x9" });
+    expect(mocks.listEventExecutions).toHaveBeenCalledTimes(1); // 自己写回 URL 不重读列表
+
+    vm.onDrawerVisible(false);
+    vm.filters.status = "";
+    vm.onFilterChange();
+    await flushPromises();
+    expect(router.currentRoute.value.query).toEqual({ rule_id: "r1" });
+    expect(mocks.listEventExecutions).toHaveBeenCalledTimes(2);
+  });
+
+  it("带 execution= 打开（刷新浏览器）时打开详情并读取；详情开着时自动刷新暂停", async () => {
+    vi.useFakeTimers();
+    mocks.listEventExecutions.mockResolvedValue({ executions: [], page_result: { total: 0 } });
+    mocks.listAllEventRules.mockResolvedValue([]);
+    mocks.listSubscribableEvents.mockResolvedValue({ events, availableSystemActions: [] });
+    mocks.getEventExecution.mockReturnValue(new Promise(() => undefined));
+    await mountPage(EventExecutions, "/events/executions?execution=x1");
+    expect(mocks.getEventExecution).toHaveBeenCalledWith("x1");
+    expect(mocks.listEventExecutions).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(mocks.listEventExecutions).toHaveBeenCalledTimes(1);
+
+    (wrapper!.vm as unknown as { onDrawerVisible(visible: boolean): void }).onDrawerVisible(false);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(mocks.listEventExecutions).toHaveBeenCalledTimes(2);
+    expect(mocks.listEventExecutions.mock.lastCall?.[1]).toEqual({ silentError: true });
+    vi.useRealTimers();
+  });
+
+  it("从别处带着新的筛选跳进来（页面复用）时按新的 URL 重读", async () => {
+    mocks.listEventExecutions.mockResolvedValue({ executions: [], page_result: { total: 0 } });
+    mocks.listAllEventRules.mockResolvedValue([]);
+    mocks.listSubscribableEvents.mockResolvedValue({ events, availableSystemActions: [] });
+    await mountPage(EventExecutions, "/events/executions");
+    await router.push("/events/executions?status=failed");
+    await flushPromises();
+    expect(mocks.listEventExecutions).toHaveBeenCalledTimes(2);
+    expect(mocks.listEventExecutions.mock.calls[1][0]).toMatchObject({ status: "EXECUTION_STATUS_FAILED" });
   });
 });
 

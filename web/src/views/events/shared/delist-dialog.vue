@@ -1,14 +1,14 @@
 <template>
   <a-modal
     :visible="visible"
-    width="640px"
+    width="min(640px, 100vw)"
     title="手工登记下架"
     :mask-closable="false"
     @update:visible="(value: boolean) => emit('update:visible', value)"
   >
     <template v-if="phase === 'form'">
       <a-alert v-if="systemRuleEnabled === false" type="warning" class="block-alert">
-        系统规则“标的即将下架时，卖出策略持有的这个币”已停用：新登记的下架不会被处理，不会禁止买入，也不会平仓。同一个标的已经在处理的下架照常处理，登记新的下架时间会照常改期。
+        系统订阅“标的即将下架时，卖出策略持有的这个币”已停用：新登记的下架不会被处理，不会禁止买入，也不会平仓。同一个标的已经在处理的下架照常处理，登记新的下架时间会照常改期。
       </a-alert>
       <a-alert v-else-if="systemRuleEnabled === null" type="warning" class="block-alert">
         用来补录漏报的下架，或做演练。{{ SYSTEM_RULE_UNKNOWN_TEXT }}
@@ -273,7 +273,7 @@ async function submit() {
       delist_at_ms: value.delist_at_ms,
       paper_only: value.paper_only
     });
-    Message.success(result.created ? "已登记，稍后可以在执行记录里看到处理进度" : "这条下架之前已经登记过");
+    Message.success(result.created ? "已登记，稍后可以在处理记录里看到处理进度" : "这条下架之前已经登记过");
     emit("update:visible", false);
   } catch (error) {
     reportControlError(error);

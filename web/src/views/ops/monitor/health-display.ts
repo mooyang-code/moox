@@ -60,10 +60,26 @@ export function alertNote(object?: HealthObject): AlertNote | null {
       "已有这把 Key 但被禁用：到秘钥管理页把“Binance production readonly”启用。",
       "还没有这把 Key：运行 moox-cli config edit，在“交易所密钥”里添加一把币安、正式环境的密钥，名称填 readonly，勾选“只读密钥”，再运行 moox-cli setup apply 写入。",
       "在管理台删除过这把 Key：setup apply 不会重建删除过的密钥，换一个名称也不行（Collector 只读固定 ID exchange-binance-production-readonly），目前补不回来。",
-      "补上之前，现货下架只能手工登记：运行 moox-cli collector delist register，或在事件中心点“手工登记下架”。"
+      "补上之前，现货下架只能手工登记：运行 moox-cli collector delist register，或在事件中心的下架处理页点“手工登记下架”。"
     ],
     link: { href: "#/settings/secrets", label: "已禁用的话到秘钥管理页启用" }
   };
+}
+
+/**
+ * 事件中心关注项按种类跳转：通知失败看失败的处理记录；发现下架看下架处理页；其余看全部处理记录。
+ * 系统动作处理失败不带失败筛选：它还包括记录未结束时有步骤失败、连续暂时失败、取消后善后未完成、下架后留有零头，
+ * 这些记录的状态不是“失败”。
+ */
+function eventCenterLink(kind?: string): { href: string; label: string } {
+  switch (kind) {
+    case "execution_failed":
+      return { href: "#/events/executions?status=failed", label: "查看失败的处理记录" };
+    case "delist_detected":
+      return { href: "#/events/delist", label: "查看下架处理" };
+    default:
+      return { href: "#/events/executions", label: "查看处理记录" };
+  }
 }
 
 /** 告警对象的处理入口：页面地址与链接文字。同一类关注项里的具体情况按 Monitor 给出的 attention_kind 区分。 */
@@ -94,7 +110,7 @@ export function alertLink(object?: HealthObject): { href: string; label: string 
     case "trade_attention":
       return { href: "#/trading/accounts", label: "查看交易账户" };
     case "event_center_attention":
-      return { href: "#/settings/events?tab=executions", label: "查看事件中心执行记录" };
+      return eventCenterLink(object.attention_kind);
   }
   return {
     href:

@@ -95,7 +95,7 @@ var consoleOnly = map[string]string{
 	"trpc.moox.ops.Ssh/SftpMkdir":         sshReason,
 	"trpc.moox.ops.Ssh/SftpDelete":        sshReason,
 
-	"trpc.moox.callbackdispatcher.CallbackDispatcherService/CreateEventRule": "返回验证密钥明文，请在管理台「系统设置 › 事件中心」新建，密钥只在那里显示一次，不经过 Agent",
+	"trpc.moox.callbackdispatcher.CallbackDispatcherService/CreateEventRule": "返回验证密钥明文，请在管理台「事件中心 › 事件订阅」新建，密钥只在那里显示一次，不经过 Agent",
 
 	"trpc.moox.ops.SecretMgr/CreateSecret":       secretWriteReason,
 	"trpc.moox.ops.SecretMgr/UpdateSecret":       secretWriteReason,

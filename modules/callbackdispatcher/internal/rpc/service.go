@@ -92,7 +92,7 @@ func pageResult(page, size int, total int64) *pb.PageResult {
 }
 
 // ListSubscribableEvents 返回可配置规则的事件目录，以及已经注册了处理器的系统动作。
-func (s *Service) ListSubscribableEvents(_ context.Context, _ *pb.ListSubscribableEventsReq) (*pb.ListSubscribableEventsRsp, error) {
+func (s *Service) ListSubscribableEvents(ctx context.Context, _ *pb.ListSubscribableEventsReq) (*pb.ListSubscribableEventsRsp, error) {
 	rsp := &pb.ListSubscribableEventsRsp{RetInfo: okRet()}
 	for _, name := range s.Actions.Actions() {
 		rsp.AvailableSystemActions = append(rsp.AvailableSystemActions, systemActionToPB(name))
@@ -102,9 +102,33 @@ func (s *Service) ListSubscribableEvents(_ context.Context, _ *pb.ListSubscribab
 		for _, field := range entry.Fields {
 			item.ScopeFields = append(item.ScopeFields, &pb.ScopeField{Field: field.Key, Title: field.Title, Options: append([]string(nil), field.Options...)})
 		}
+		for _, field := range entry.PayloadFields {
+			item.PayloadFields = append(item.PayloadFields, &pb.PayloadField{Field: field.Key, Title: field.Title})
+		}
+		request, err := sampleRequest(entry, "示例规则", "test-示例", s.now())
+		if err == nil {
+			var body []byte
+			body, err = delivery.BuildBody(request)
+			item.SampleJson = string(body)
+		}
+		if err != nil {
+			return &pb.ListSubscribableEventsRsp{RetInfo: internalRet(ctx, "生成示例事件失败", err)}, nil
+		}
 		rsp.Events = append(rsp.Events, item)
 	}
 	return rsp, nil
+}
+
+// sampleRequest 组装一条示例事件：“发一条测试”和事件目录里的示例请求体都用它，两边的请求体一致。
+func sampleRequest(entry catalog.Entry, ruleID, eventID string, at time.Time) (delivery.Request, error) {
+	payload, err := dispatch.SampleJSON(entry)
+	if err != nil {
+		return delivery.Request{}, err
+	}
+	return delivery.Request{
+		RuleID: ruleID, EventID: eventID, EventName: entry.Name(), EventVersion: entry.Event.Version(),
+		SpaceID: "mooxsys", SubjectID: "test", OccurredAt: at, PayloadJSON: payload,
+	}, nil
 }
 
 // ListEventRules 列出规则。
@@ -377,15 +401,11 @@ func (s *Service) TestEventRule(ctx context.Context, req *pb.TestEventRuleReq) (
 	if !ok {
 		return fail(invalid("规则的触发事件已经不在可配置的事件里"))
 	}
-	payload, err := dispatch.SampleJSON(entry)
+	request, err := sampleRequest(entry, rule.RuleID, "test-"+uuid.NewString(), s.now())
 	if err != nil {
 		return fail(internalRet(ctx, "生成示例事件失败", err))
 	}
-	now := s.now()
-	result := s.Sender.Send(ctx, delivery.Target{URL: rule.NotifyURL, Secret: rule.Secret, AllowPrivate: rule.AllowPrivate}, delivery.Request{
-		RuleID: rule.RuleID, EventID: "test-" + uuid.NewString(), EventName: entry.Name(), EventVersion: entry.Event.Version(),
-		SpaceID: "mooxsys", SubjectID: "test", OccurredAt: now, PayloadJSON: payload,
-	})
+	result := s.Sender.Send(ctx, delivery.Target{URL: rule.NotifyURL, Secret: rule.Secret, AllowPrivate: rule.AllowPrivate}, request)
 	rsp := &pb.TestEventRuleRsp{RetInfo: okRet(), HttpStatus: int32(result.StatusCode), DurationMs: result.Duration.Milliseconds(), ResponseSnippet: result.Snippet, Success: result.Class == delivery.Success}
 	if result.Err != nil {
 		rsp.ResponseSnippet = result.Err.Error()
