@@ -152,7 +152,7 @@
             <template #title>未就绪</template>
             <div v-for="reason in logical.readiness_reasons" :key="reason">{{ reason }}</div>
             <template #action>
-              <a-button size="mini" @click="setTab('settings')">去看成员</a-button>
+              <a-button size="mini" @click="setTab('overview')">去看执行账户状态</a-button>
             </template>
           </a-alert>
         </div>
@@ -532,8 +532,15 @@ function setTab(key: string) {
   void router.replace({ query: { ...route.query, tab: next === "overview" ? undefined : next } });
 }
 
+/** 回到进来时的列表子页签：从执行账户页签点“所属组合”进来的带着 ?list=execution。 */
 function backToList() {
-  void router.push({ path: "/trading/accounts", query: { env: env.value === "paper" ? undefined : env.value } });
+  void router.push({
+    path: "/trading/accounts",
+    query: {
+      env: env.value === "paper" ? undefined : env.value,
+      list: route.query.list === "execution" ? "execution" : undefined
+    }
+  });
 }
 
 function openInstance(instanceId: string) {

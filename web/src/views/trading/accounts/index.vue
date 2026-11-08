@@ -204,7 +204,7 @@ async function load() {
     // 重新读列表后权益变化和持仓数也要重读
     changes.value = {};
     counts.value = {};
-    void loadExtras(rows.value);
+    if (list.value === "combo") void loadExtras(rows.value);
     void loadStrategies(request);
   } catch (error) {
     if (request.isLatest()) loadError.value = error instanceof Error ? error.message : "读取交易账户失败，请稍后重试";
@@ -248,12 +248,14 @@ async function loadExtras(list: ComboRow[]) {
   await Promise.all([worker(), worker(), worker()]);
 }
 
-// 切换环境后，新环境里还没读过的组合补读权益变化和持仓数
-watch(env, () => void loadExtras(rows.value));
+// 权益变化和持仓数只在组合账户页签显示：切到这个页签或换环境时，补读还没读过的组合
+watch([env, list], () => {
+  if (list.value === "combo") void loadExtras(rows.value);
+});
 
 function changeEnv(key: string) {
   const next = environmentFromQuery(key);
-  void router.replace({ query: { ...route.query, env: next === "paper" ? undefined : next } });
+  void router.replace({ query: { ...route.query, env: next === "paper" ? undefined : next, account: undefined } });
 }
 
 function changeList(key: string | number) {

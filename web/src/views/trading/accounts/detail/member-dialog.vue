@@ -21,7 +21,9 @@
         </a-select>
         <template v-if="!candidates.length" #extra
           ><span class="tx-neg">没有能加入这个组合的执行账户，</span
-          ><a-link @click="openExecutionList">去执行账户页签新建或启用一个</a-link></template
+          ><a-link @click="openExecutionList">{{
+            env === "paper" ? "去执行账户页签新建一个" : "去执行账户页签新建或启用一个"
+          }}</a-link></template
         >
       </a-form-item>
       <a-form-item label="优先级" extra="数字越小越先使用，当前账户资金用完才用下一个账户">

@@ -75,7 +75,7 @@
     <template #expand-row="{ record }">
       <MemberSettings :account="record.account" @changed="emit('changed')">
         <template #actions>
-          <!-- 模拟账户不能改启停（后端拒绝）；在组合里的实盘账户要先移出组合才能停用 -->
+          <!-- 模拟账户不能改启停（后端拒绝）；在组合里的实盘账户要先移出组合才能停用，这里只给未加入组合的实盘账户启停 -->
           <template v-if="record.account.execution_mode === 2 && !record.logical">
             <a-button v-if="record.account.status !== 'ENABLED'" size="small" @click="setStatus(record.account, 'ENABLED')"
               >启用</a-button
@@ -160,7 +160,10 @@ watch(
 );
 
 function openCombo(logicalId: string) {
-  void router.push({ path: `/trading/accounts/${logicalId}`, query: { env: props.env === "paper" ? undefined : props.env } });
+  void router.push({
+    path: `/trading/accounts/${logicalId}`,
+    query: { env: props.env === "paper" ? undefined : props.env, list: "execution" }
+  });
 }
 
 async function runPending() {
