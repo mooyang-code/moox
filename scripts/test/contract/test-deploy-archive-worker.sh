@@ -184,6 +184,8 @@ if PATH="${tmp}/swbin:${PATH}" bash "${SCRIPT}" "${b_args[@]}" >"${tmp}/sw-bad3.
 fi
 grep -q 'port 11461' "${tmp}/sw-bad3.log" || fail "the busy port must be named"
 grep -qF 'cos.ap-nanjing.myqcloud.com' "${config}" || fail "the worker config must stay unchanged when the built-in object store fails"
+grep -qF 'AKIDnew' "${secrets}/archive-object-store.env" || fail "the worker credential must stay unchanged when the built-in object store fails"
+[[ ! -e "${secrets}/archive-object-store.env.new" && ! -e "${deploy}/config/app.yaml.new.check" ]] || fail "rejected candidates must be cleaned up"
 rm -f "${sw_state}/port-11461"
 
 # 首次部署：生成密钥、派生 s3.json 与 worker 凭据（都 0600），--no-start 也启动 SeaweedFS 并建桶。
@@ -194,6 +196,8 @@ for f in "${keys}" "${sw_dir}/config/s3.json" "${secrets}/archive-object-store.e
   [[ -s "${f}" && "$(mode_of "${f}")" == 600 ]] || fail "${f} must exist with mode 0600"
 done
 [[ -x "${sw_dir}/bin/weed" && -s "${sw_dir}/LICENSE" ]] || fail "weed and its license must be installed"
+[[ "$(tail -n 1 "${tmp}/check-config.log")" == "${deploy}/config/app.yaml.new.check" ]] || fail "check-config must validate a copy that points at the new credential"
+[[ ! -e "${deploy}/config/app.yaml.new.check" && ! -e "${secrets}/archive-object-store.env.new" ]] || fail "the check copy and the new credential must be cleaned up"
 cmp -s "${keys}" "${secrets}/archive-object-store.env" || fail "the worker credential must be derived from the built-in key"
 access="$(sed -n 's/^ACCESS_KEY_ID=//p' "${keys}")"; secret="$(sed -n 's/^SECRET_ACCESS_KEY=//p' "${keys}")"
 [[ "${access}" =~ ^MOOX[0-9A-F]{16}$ && "${secret}" =~ ^[0-9a-f]{40}$ ]] || fail "unexpected generated key format"

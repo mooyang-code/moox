@@ -61,7 +61,8 @@ Admin 的主机表（`t_hosts`）是主机的唯一登记处：地址、可达�
 - 主机或部署在 Admin 里已停用时，安装只落文件、不启动。
 - 归档根目录取 `moox.toml` 的 `[paths] archive_root`。
 - `moox.toml` 有 `[archive_object_store]` 时，部署 archive-worker 会从 Admin 读出 `secret_id` 指向的密钥（提供方 `s3`、已启用）投影成 `secrets/archive-object-store.env`，并在重启前用新二进制 `check-config` 校验配置；
-  读密钥失败或校验不过时部署停下，旧配置与旧进程不动。配了对象存储时换机器不用拷归档目录（读回时从远端取回），没配时仍要整体拷目录。
+  读密钥失败或校验不过时部署停下，旧配置与旧进程不动。没有这一段时部署会装好并启动内置 SeaweedFS（`moox-seaweedfs`，只听 127.0.0.1，和归档文件同盘）。
+  用外部 S3 时换机器不用拷归档目录（读回时从远端取回）；用内置 SeaweedFS 时要把归档目录和 `<部署根>/seaweedfs` 一起拷。
 - 退役一个外部程序：`setup deployment disable --component <组件> --yes`（先停服务再改登记），之后从 `[deployments]` 删除条目并 `setup sync-deployments`。
 
 ## 全新部署

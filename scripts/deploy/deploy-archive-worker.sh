@@ -204,8 +204,8 @@ if [[ "${BUILTIN_OS}" -eq 1 ]]; then
   sw_access="$(sed -n 's/^ACCESS_KEY_ID=//p' "${sw_keys}")"
   sw_secret="$(sed -n 's/^SECRET_ACCESS_KEY=//p' "${sw_keys}")"
   [[ "${sw_access}" =~ ^[A-Za-z0-9]+$ && "${sw_secret}" =~ ^[A-Za-z0-9]+$ ]] || fail "invalid ${sw_keys}"
-  # worker 凭据先写好：check-config 要读它；内容只由本机密钥决定，check-config 不过也不会留下别的值。
-  (umask 077; cp "${sw_keys}" "${SECRETS_DIR}/archive-object-store.env.new" && mv -f "${SECRETS_DIR}/archive-object-store.env.new" "${SECRETS_DIR}/archive-object-store.env")
+  # worker 凭据先写成 .new：check-config 读它，SeaweedFS 就绪后才和配置、二进制一起替换。
+  (umask 077; cp "${sw_keys}" "${SECRETS_DIR}/archive-object-store.env.new")
   OS_ENDPOINT="127.0.0.1:${SW_S3}"
   OS_REGION=us-east-1
   OS_BUCKET="${SW_BUCKET}"
@@ -362,16 +362,27 @@ EOF2
 fi
 umask 022
 
-if ! "${candidate}" check-config --config "${config_new}"; then
-  rm -f "${config_new}" "${DEPLOY_DIR}/bin/moox-archive-worker.new"
+# 内置模式下校验用的配置指向还没替换的 .new 凭据。
+config_check="${config_new}"
+if [[ "${BUILTIN_OS}" -eq 1 ]]; then
+  config_check="${config_new}.check"
+  (umask 077; sed "s#credentials_file: ${SECRETS_DIR}/archive-object-store.env\$#&.new#" "${config_new}" >"${config_check}")
+fi
+discard_candidates() {
+  rm -f "${config_new}" "${config_new}.check" "${DEPLOY_DIR}/bin/moox-archive-worker.new" "${SECRETS_DIR}/archive-object-store.env.new"
+}
+if ! "${candidate}" check-config --config "${config_check}"; then
+  discard_candidates
   fail "the rendered config did not pass check-config; the installed config, binary and service are unchanged"
 fi
+rm -f "${config_new}.check"
 if [[ "${BUILTIN_OS}" -eq 1 ]]; then
   # worker 停用（--no-start）时也启动：它不持有任务状态，worker 恢复后直接可用。
   if ! (install_seaweedfs); then
-    rm -f "${config_new}" "${DEPLOY_DIR}/bin/moox-archive-worker.new"
-    fail "the built-in object store is not ready; the installed worker config and binary are unchanged"
+    discard_candidates
+    fail "the built-in object store is not ready; the installed worker config, credentials and binary are unchanged"
   fi
+  mv -f "${SECRETS_DIR}/archive-object-store.env.new" "${SECRETS_DIR}/archive-object-store.env"
 elif [[ -f "${SYSTEMD_USER_DIR}/${SW_UNIT}" ]]; then
   # 改用外部对象存储或不用对象存储：停掉内置的，数据留着。
   systemctl --user disable --now "${SW_UNIT}" || true
