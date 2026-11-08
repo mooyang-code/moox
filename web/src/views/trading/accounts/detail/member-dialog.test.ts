@@ -19,7 +19,6 @@ interface DialogVM {
   openAdd(): void;
   openEdit(member: { trading_account_id: string; enabled: boolean; priority: number }, name: string): void;
   save(): Promise<boolean>;
-  runPending(): Promise<void>;
   visible: boolean;
   confirmVisible: boolean;
   form: { enabled: boolean; adopt_existing_exposure: boolean };
@@ -34,6 +33,15 @@ const logical = {
   automation_state: "PAUSED",
   members: [{ trading_account_id: "ta-1", enabled: false, priority: 1 }]
 } as LogicalAccount;
+
+const confirmButton = (text: string) =>
+  [...document.querySelectorAll<HTMLButtonElement>(".tx-confirm button")].find(item => item.textContent?.trim() === text);
+async function typeName(value: string) {
+  const input = document.querySelector<HTMLInputElement>(".tx-confirm input");
+  input!.value = value;
+  input!.dispatchEvent(new Event("input"));
+  await flushPromises();
+}
 
 let wrapper: VueWrapper;
 beforeEach(() => mocks.addLogicalAccountMember.mockReset());
@@ -92,7 +100,8 @@ describe("编辑组合成员", () => {
     expect(document.body.textContent).toContain("优先级：1 → 3");
     expect(document.body.textContent).not.toContain("输入组合名称");
     mocks.addLogicalAccountMember.mockResolvedValueOnce({});
-    await vm.runPending();
+    confirmButton("保存")?.click();
+    await flushPromises();
     expect(mocks.addLogicalAccountMember).toHaveBeenCalledWith(
       expect.objectContaining({ trading_account_id: "ta-1", priority: 3 })
     );
@@ -114,7 +123,19 @@ describe("编辑组合成员", () => {
     await flushPromises();
     expect(mocks.addLogicalAccountMember).not.toHaveBeenCalled();
     expect(document.body.textContent).toContain("接管「执行账户二」已有的持仓");
+    expect(document.body.textContent).toContain("不在策略目标里的会被平掉");
     expect(document.body.textContent).toContain("输入组合名称「组合」确认");
+    expect(confirmButton("确认接管")?.disabled).toBe(true);
+    confirmButton("确认接管")?.click();
+    await flushPromises();
+    expect(mocks.addLogicalAccountMember).not.toHaveBeenCalled();
+    mocks.addLogicalAccountMember.mockResolvedValueOnce({});
+    await typeName("组合");
+    confirmButton("确认接管")?.click();
+    await flushPromises();
+    expect(mocks.addLogicalAccountMember).toHaveBeenCalledWith(
+      expect.objectContaining({ trading_account_id: "ta-2", adopt_existing_exposure: true })
+    );
   });
 
   it("新增成员不接管时不用确认，直接保存", async () => {

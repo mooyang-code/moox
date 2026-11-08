@@ -90,7 +90,7 @@
         <a-form-item label="优先级" extra="数字越小越先使用">
           <a-input-number v-model="joinForm.priority" :min="0" />
         </a-form-item>
-        <a-form-item extra="只有出现在策略目标里的标的会被调整，其余资产不动">
+        <a-form-item :extra="ADOPT_EFFECT_TEXT">
           <a-checkbox v-model="joinForm.adopt">接管账户里已有的持仓</a-checkbox>
         </a-form-item>
       </a-form>
@@ -131,7 +131,7 @@ import { fmtClock, fmtMoney } from "./shared/format";
 import { marketsText } from "./shared/markets";
 import MemberSettings from "./shared/member-settings.vue";
 import { joinableLogicals, nextPriority } from "./shared/membership";
-import { accountStatusConfirm, memberChangeConfirm, type RiskyConfirm } from "./shared/risky-actions";
+import { ADOPT_EFFECT_TEXT, accountStatusConfirm, memberChangeConfirm, type RiskyConfirm } from "./shared/risky-actions";
 import StatusMark from "./shared/status-mark.vue";
 
 const props = defineProps<{

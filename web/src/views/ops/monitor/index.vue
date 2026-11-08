@@ -426,7 +426,6 @@ const channels = ref<NotificationChannel[]>([]);
 const draft = reactive({ channel_type: "wecom", webhook_url: "" });
 const adding = ref(false);
 const removing = ref("");
-// 完整的 Webhook URL 是推送凭据，读取接口只对全局管理员开放，其他用户不显示设置入口。
 const refreshGuard = createLatestRequestGuard();
 
 const nowMs = computed(() => serverNow(overview.value, clockMs.value));

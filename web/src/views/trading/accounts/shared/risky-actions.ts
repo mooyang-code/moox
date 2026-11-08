@@ -14,6 +14,24 @@ export interface RiskyConfirm {
 /** 账户默认杠杆的键：设置它影响全部标的。 */
 export const DEFAULT_LEVERAGE_KEY = "*";
 
+/**
+ * 接管已有持仓后会发生什么（和交易模块的目标执行一致）：永续按账户里的全部仓位收敛，不在目标里的按 0 平掉；
+ * 现货只调整受管资产，也就是目标里的币和 MooX 成交过的币。
+ */
+export const ADOPT_EFFECT_TEXT =
+  "永续：账户里的仓位都交给组合管理，不在策略目标里的会被平掉。现货：策略目标里的币和 MooX 成交过的币按目标调整，其余现货不动。";
+
+/**
+ * 杠杆标的的写法和后端一致：两段写法（BTC-USDT）补成永续的三段写法（BTC-USDT-SWAP），
+ * 这样确认框查到的当前倍数和真正要改的是同一个标的。
+ */
+export function normalizeLeverageInstrument(raw: string): string {
+  const value = raw.trim().toUpperCase();
+  if (value === DEFAULT_LEVERAGE_KEY) return value;
+  const parts = value.split("-");
+  return parts.length === 2 && parts[0] && parts[1] ? `${value}-SWAP` : value;
+}
+
 /** 杠杆倍数只接受正整数；返回错误文案，合法时返回空串。 */
 export function leverageError(value: string): string {
   const text = value.trim();
@@ -93,7 +111,7 @@ export function memberChangeConfirm(input: {
   }
   if (input.adopt) {
     lines.push(`把「${input.accountName}」里已有的持仓交给组合「${input.comboName}」管理。`);
-    lines.push("出现在策略目标里的标的会按目标调整，已有仓位可能被平掉或加仓；其余资产不动。");
+    lines.push(ADOPT_EFFECT_TEXT);
   }
   if (!lines.length) return null;
   const disabling = Boolean(input.original?.enabled && !input.next.enabled);

@@ -84,15 +84,25 @@ interface SettingsVM {
   confirmVisible: boolean;
   save(): void;
   saveLeverage(): void;
-  runPending(): Promise<void>;
 }
 
 const prodAccount = {
   ...liveAccount,
   trading_account_id: "prod-1",
   name: "生产主账户",
+  leverage_settings: { "*": "3", "BTC-USDT-SWAP": "3" },
   live: { environment: 2, credential_secret_id: "s1" }
 } as unknown as TradingAccount;
+
+/** 确认框里的按钮和名称输入框（ConfirmDialog 渲染在 body 下）。 */
+const confirmButton = (text: string) =>
+  [...document.querySelectorAll<HTMLButtonElement>(".tx-confirm button")].find(item => item.textContent?.trim() === text);
+async function typeName(value: string) {
+  const input = document.querySelector<HTMLInputElement>(".tx-confirm input");
+  input!.value = value;
+  input!.dispatchEvent(new Event("input"));
+  await flushPromises();
+}
 
 describe("测试网、生产环境下的设置要先确认", () => {
   const mountLive = (account: TradingAccount) =>
@@ -103,18 +113,23 @@ describe("测试网、生产环境下的设置要先确认", () => {
     api.setLeverage.mockClear();
   });
 
-  it("生产账户换密钥：先确认、要输入执行账户名称，确认后才保存且不再重复弹错", async () => {
+  it("生产账户换密钥：输入执行账户名称之前不能确认，输入后才保存且不再重复弹错", async () => {
     const wrapper = mountLive(prodAccount);
     await flushPromises();
     const vm = wrapper.vm as unknown as SettingsVM;
     vm.secretId = "s2";
     vm.save();
     await flushPromises();
-    expect(api.updateTradingAccount).not.toHaveBeenCalled();
-    expect(vm.confirmVisible).toBe(true);
     expect(document.body.textContent).toContain("交易所密钥：密钥一 → 密钥二");
     expect(document.body.textContent).toContain("输入执行账户名称「生产主账户」确认");
-    await vm.runPending();
+    expect(confirmButton("更换")?.disabled).toBe(true);
+    confirmButton("更换")?.click();
+    await flushPromises();
+    expect(api.updateTradingAccount).not.toHaveBeenCalled();
+    await typeName("生产主账户");
+    expect(confirmButton("更换")?.disabled).toBe(false);
+    confirmButton("更换")?.click();
+    await flushPromises();
     expect(api.updateTradingAccount).toHaveBeenCalledWith(
       expect.objectContaining({ trading_account_id: "prod-1", credential_secret_id: "s2" }),
       { silent: true }
@@ -151,20 +166,39 @@ describe("测试网、生产环境下的设置要先确认", () => {
     wrapper.unmount();
   });
 
-  it("合法的杠杆先确认，写明下次开仓前生效，确认后才发请求", async () => {
+  it("测试网设杠杆：确认框写明下次开仓前生效，不用输入名称，点确认才发请求", async () => {
     const wrapper = mountLive(liveAccount);
     const vm = wrapper.vm as unknown as SettingsVM;
-    vm.leverageInstrument = "btc-usdt-swap";
+    vm.leverageInstrument = "eth-usdt-swap";
     vm.leverageValue = "5";
     vm.saveLeverage();
     await flushPromises();
-    expect(vm.confirmVisible).toBe(true);
     expect(api.setLeverage).not.toHaveBeenCalled();
-    expect(document.body.textContent).toContain("BTC-USDT-SWAP：未设置 → 5×");
+    expect(document.body.textContent).toContain("ETH-USDT-SWAP：未设置 → 5×");
     expect(document.body.textContent).toContain("下次开仓前按新倍数设置到交易所");
-    await vm.runPending();
+    expect(document.querySelector(".tx-confirm input")).toBeNull();
+    confirmButton("设置")?.click();
+    await flushPromises();
     expect(api.setLeverage).toHaveBeenCalledWith(
-      { trading_account_id: "l1", instrument_id: "BTC-USDT-SWAP", leverage: "5" },
+      { trading_account_id: "l1", instrument_id: "ETH-USDT-SWAP", leverage: "5" },
+      { silent: true }
+    );
+    wrapper.unmount();
+  });
+
+  it("两段写法的标的按后端规则补成永续，确认框显示的是真正要改的那个标的的当前倍数", async () => {
+    const wrapper = mountLive(prodAccount);
+    const vm = wrapper.vm as unknown as SettingsVM;
+    vm.leverageInstrument = "btc-usdt";
+    vm.leverageValue = "5";
+    vm.saveLeverage();
+    await flushPromises();
+    expect(document.body.textContent).toContain("BTC-USDT-SWAP：3× → 5×");
+    await typeName("生产主账户");
+    confirmButton("设置")?.click();
+    await flushPromises();
+    expect(api.setLeverage).toHaveBeenCalledWith(
+      { trading_account_id: "prod-1", instrument_id: "BTC-USDT-SWAP", leverage: "5" },
       { silent: true }
     );
     wrapper.unmount();

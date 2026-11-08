@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { accountStatusConfirm, leverageConfirm, leverageError, memberChangeConfirm, secretChangeConfirm } from "./risky-actions";
+import {
+  accountStatusConfirm,
+  leverageConfirm,
+  leverageError,
+  memberChangeConfirm,
+  normalizeLeverageInstrument,
+  secretChangeConfirm
+} from "./risky-actions";
 
 describe("杠杆倍数校验", () => {
   it.each(["0", "1.5", "-1", "abc", "", "  ", "05", "1e2"])("%j 不合法", value => {
@@ -75,6 +82,15 @@ describe("组合成员的改动", () => {
     const confirm = memberChangeConfirm({ ...base, original: null, next: { enabled: true, priority: 1 }, adopt: true });
     expect(confirm?.nameRequired).toBe(true);
     expect(confirm?.lines.join("")).toContain("组合「组合甲」");
-    expect(confirm?.lines.join("")).toContain("可能被平掉或加仓");
+    expect(confirm?.lines.join("")).toContain("不在策略目标里的会被平掉");
+    expect(confirm?.lines.join("")).not.toContain("其余资产不动");
+  });
+});
+
+describe("杠杆标的写法", () => {
+  it("两段写法补成永续，三段和默认杠杆原样，统一大写", () => {
+    expect(normalizeLeverageInstrument(" btc-usdt ")).toBe("BTC-USDT-SWAP");
+    expect(normalizeLeverageInstrument("eth-usdt-swap")).toBe("ETH-USDT-SWAP");
+    expect(normalizeLeverageInstrument("*")).toBe("*");
   });
 });

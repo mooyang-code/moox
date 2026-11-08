@@ -281,7 +281,7 @@ export interface NotificationSummary {
   /** 各渠道的平台（wecom / feishu），按添加顺序，可重复。 */
   channel_types?: string[];
 }
-/** 一个告警推送渠道；告警发给全部渠道。完整的 Webhook URL 只有全局管理员能读取。 */
+/** 一个告警推送渠道；告警发给全部渠道。 */
 export interface NotificationChannel {
   channel_id?: string;
   channel_type?: string;

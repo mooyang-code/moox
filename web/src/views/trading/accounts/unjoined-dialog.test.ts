@@ -21,7 +21,6 @@ interface DialogVM {
   openJoin(account: TradingAccount): void;
   setStatus(account: TradingAccount, status: "ENABLED" | "DISABLED"): void;
   requestJoin(): void;
-  runPending(): Promise<void>;
   confirmVisible: boolean;
   joinForm: { logicalId: string; priority: number; adopt: boolean };
 }
@@ -44,6 +43,15 @@ const combo = {
   automation_state: "PAUSED",
   members: []
 } as unknown as LogicalAccount;
+
+const confirmButton = (text: string) =>
+  [...document.querySelectorAll<HTMLButtonElement>(".tx-confirm button")].find(item => item.textContent?.trim() === text);
+async function typeName(value: string) {
+  const input = document.querySelector<HTMLInputElement>(".tx-confirm input");
+  input!.value = value;
+  input!.dispatchEvent(new Event("input"));
+  await flushPromises();
+}
 
 let wrapper: VueWrapper;
 const mountIt = (env: "paper" | "prod") => {
@@ -75,7 +83,8 @@ describe("未加入组合的执行账户", () => {
     expect(api.updateTradingAccount).not.toHaveBeenCalled();
     expect(document.body.textContent).toContain("停用执行账户「生产散户」");
     expect(document.body.textContent).not.toContain("输入执行账户名称");
-    await vm.runPending();
+    confirmButton("停用")?.click();
+    await flushPromises();
     expect(api.updateTradingAccount).toHaveBeenCalledWith({ trading_account_id: "ta-9", status: "DISABLED" }, { silent: true });
   });
 
@@ -89,7 +98,10 @@ describe("未加入组合的执行账户", () => {
     expect(vm.confirmVisible).toBe(true);
     expect(api.addLogicalAccountMember).not.toHaveBeenCalled();
     expect(document.body.textContent).toContain("输入组合名称「生产组合」确认");
-    await vm.runPending();
+    expect(confirmButton("确认接管")?.disabled).toBe(true);
+    await typeName("生产组合");
+    confirmButton("确认接管")?.click();
+    await flushPromises();
     expect(api.addLogicalAccountMember).toHaveBeenCalledWith(expect.objectContaining({ adopt_existing_exposure: true }));
   });
 

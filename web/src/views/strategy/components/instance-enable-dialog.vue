@@ -30,7 +30,9 @@
         <a-descriptions-item label="账户状态">{{ logical.ready ? "就绪" : "未就绪" }}</a-descriptions-item>
         <a-descriptions-item label="因子任务">{{ factorTaskText }}</a-descriptions-item>
       </a-descriptions>
-      <p class="line">启用会固化会话快照，并认领这个组合账户的会话：之后的策略目标由它执行下单。</p>
+      <p class="line">
+        启用会固化会话快照，并认领这个组合账户的会话（会撤掉上一个会话留下的目标挂单）：之后的策略目标由它执行下单。
+      </p>
       <p class="line">因子任务 {{ factorTaskText }} 会与本实例永久关联（已关联的不变），实例不能删除。</p>
       <p v-if="paused" class="line">组合账户已暂停自动执行：启用后不会下单，直到在交易页恢复自动执行。</p>
       <a-form v-if="tier.requiresName" :model="{}" layout="vertical" class="block">

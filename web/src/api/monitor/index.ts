@@ -7,7 +7,7 @@ export const monitorApi = {
   getOverview(req: { space_id?: string } = {}) {
     return callControl<typeof req, { overview?: HealthOverview }>(SERVICE, "GetHealthOverview", req);
   },
-  /** 列出全部推送渠道（含完整 Webhook URL，只有全局管理员能调用）。 */
+  /** 列出全部推送渠道（含完整 Webhook URL）。 */
   listNotificationChannels() {
     return callControl<Record<string, never>, { channels?: NotificationChannel[] }>(SERVICE, "ListNotificationChannels", {});
   },

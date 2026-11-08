@@ -459,8 +459,6 @@ function onPageSizeChange(pageSize: number) {
   load();
 }
 
-// 导出、导入只对全局管理员开放（迁移包里有全部秘钥的明文），其他用户不显示入口。
-
 const rootCaVisible = ref(false);
 
 const exportVisible = ref(false);

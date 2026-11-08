@@ -29,7 +29,7 @@
       <a-form-item v-if="editing" label="启用" extra="停用后策略不再用它下单">
         <a-switch v-model="form.enabled" />
       </a-form-item>
-      <a-form-item v-if="!editing || adoptionNeeded" extra="只有出现在策略目标里的标的会被调整，其余资产不动">
+      <a-form-item v-if="!editing || adoptionNeeded" :extra="ADOPT_EFFECT_TEXT">
         <a-checkbox v-model="form.adopt_existing_exposure">接管账户里已有的持仓</a-checkbox>
       </a-form-item>
     </a-form>
@@ -60,7 +60,7 @@ import ConfirmDialog from "../shared/confirm-dialog.vue";
 import type { Environment } from "../shared/environment";
 import { marketsText } from "../shared/markets";
 import { nextPriority } from "../shared/membership";
-import { memberChangeConfirm, type MemberSettings, type RiskyConfirm } from "../shared/risky-actions";
+import { ADOPT_EFFECT_TEXT, memberChangeConfirm, type MemberSettings, type RiskyConfirm } from "../shared/risky-actions";
 
 const props = defineProps<{ logical: LogicalAccount; candidates: TradingAccount[]; env: Environment }>();
 const emit = defineEmits<{ saved: [] }>();

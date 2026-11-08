@@ -147,7 +147,7 @@
         </a-form-item>
         <a-form-item
           v-if="form.kind !== 'paper'"
-          extra="交易所账户里已有持仓或非结算币余额（例如抵扣手续费用的 BNB）时要勾选，否则加不进组合。只有出现在策略目标里的标的会被调整，其余资产不动"
+          :extra="`交易所账户里已有持仓或非结算币余额（例如抵扣手续费用的 BNB）时要勾选，否则加不进组合。${ADOPT_EFFECT_TEXT}`"
         >
           <a-checkbox v-model="form.adoptExisting">接管账户里已有的持仓</a-checkbox>
         </a-form-item>
@@ -183,6 +183,7 @@ import EnvMark from "../shared/env-mark.vue";
 import type { Environment } from "../shared/environment";
 import { loadExchangeSecrets, type ExchangeSecretOption } from "../shared/exchange-secrets";
 import { joinableLogicals, nextPriority } from "../shared/membership";
+import { ADOPT_EFFECT_TEXT } from "../shared/risky-actions";
 import { accountMapOf } from "../account-list";
 import type { TradingAccount } from "@/api/trade";
 import {

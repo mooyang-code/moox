@@ -356,10 +356,10 @@ describe("手工登记下架", () => {
 });
 
 describe("系统动作重新执行的确认说明", () => {
-  it("写出标的和会禁止买入、平仓", () => {
+  it("写出标的，并说明下架时间已过时只核对、不重做平仓", () => {
     const text = systemRetryConfirmText({ subject_id: "okx:SWAP:BARUSDT" });
     expect(text).toContain("okx:SWAP:BARUSDT");
-    expect(text).toContain("禁止买入");
-    expect(text).toContain("平仓");
+    expect(text).toContain("下架时间还没到时");
+    expect(text).toContain("不会重做平仓");
   });
 });

@@ -235,6 +235,7 @@ describe("执行记录", () => {
     await flushPromises();
     expect(mocks.retryEventExecution).not.toHaveBeenCalled();
     expect(document.body.textContent).toContain("会再次对持有 binance:SPOT:FOOUSDT 的组合禁止买入");
+    expect(document.body.textContent).toContain("不会重做平仓");
     const confirm = [...document.querySelectorAll<HTMLButtonElement>(".arco-modal button")].find(
       item => item.textContent?.trim() === "重新执行"
     );

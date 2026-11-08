@@ -90,7 +90,13 @@ import ConfirmDialog from "./confirm-dialog.vue";
 import { accountEnvironment } from "./environment";
 import { fmtMoney } from "./format";
 import { loadExchangeSecrets, type ExchangeSecretOption } from "./exchange-secrets";
-import { leverageConfirm, leverageError, secretChangeConfirm, type RiskyConfirm } from "./risky-actions";
+import {
+  leverageConfirm,
+  leverageError,
+  normalizeLeverageInstrument,
+  secretChangeConfirm,
+  type RiskyConfirm
+} from "./risky-actions";
 
 const props = defineProps<{ account: TradingAccount }>();
 const emit = defineEmits<{ changed: [] }>();
@@ -189,7 +195,7 @@ function save() {
 }
 
 function saveLeverage() {
-  const instrument = leverageInstrument.value.trim().toUpperCase();
+  const instrument = normalizeLeverageInstrument(leverageInstrument.value);
   if (!instrument) {
     Message.warning("请填写标的");
     return;
