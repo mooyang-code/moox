@@ -196,6 +196,7 @@ for f in "${keys}" "${sw_dir}/config/s3.json" "${secrets}/archive-object-store.e
   [[ -s "${f}" && "$(mode_of "${f}")" == 600 ]] || fail "${f} must exist with mode 0600"
 done
 [[ -x "${sw_dir}/bin/weed" && -s "${sw_dir}/LICENSE" ]] || fail "weed and its license must be installed"
+[[ "$(mode_of "${sw_dir}")" == 700 ]] || fail "the SeaweedFS home must be private (0700) like the other unit directories"
 [[ "$(tail -n 1 "${tmp}/check-config.log")" == "${deploy}/config/app.yaml.new.check" ]] || fail "check-config must validate a copy that points at the new credential"
 [[ ! -e "${deploy}/config/app.yaml.new.check" && ! -e "${secrets}/archive-object-store.env.new" ]] || fail "the check copy and the new credential must be cleaned up"
 cmp -s "${keys}" "${secrets}/archive-object-store.env" || fail "the worker credential must be derived from the built-in key"
