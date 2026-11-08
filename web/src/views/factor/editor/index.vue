@@ -12,7 +12,9 @@
         <a-space>
           <a-tooltip v-if="editing" content="先保存修改，再添加到计算任务" :disabled="!dirty">
             <span>
-              <a-button :disabled="dirty || loading" @click="openTaskPicker">添加到计算任务</a-button>
+              <a-button type="primary" status="success" :disabled="dirty || loading" @click="openTaskPicker"
+                >添加到计算任务</a-button
+              >
             </span>
           </a-tooltip>
           <a-button :disabled="saving" @click="leave">取消</a-button>
@@ -175,15 +177,8 @@
           <div class="editor-side">
             <section class="checklist" aria-label="保存前检查">
               <h3>保存前检查</h3>
-              <ul>
-                <li v-for="entry in checklist" :key="entry.key" :class="entry.ok ? 'is-ok' : 'is-fail'">
-                  <icon-check-circle-fill v-if="entry.ok" />
-                  <icon-close-circle-fill v-else />
-                  <span
-                    >{{ entry.label }}<em v-if="!entry.ok">：{{ entry.message }}</em></span
-                  >
-                </li>
-              </ul>
+              <p v-if="checklistFailures.length" class="checklist__fail">还不能保存：{{ checklistFailures.join("；") }}</p>
+              <p v-else class="checklist__ok">检查都通过了，可以保存。</p>
               <p class="checklist__note">
                 保存后因子定义不属于任何计算任务；到「计算任务」里添加并启用，加入时会按源数据集校验输入列。
               </p>
@@ -389,6 +384,8 @@ const previewGate = new RequestGate();
 
 const dirty = computed(() => JSON.stringify(form) !== original.value);
 const checklist = computed(() => factorChecklist(form, compile.value));
+// 保存前检查只写没通过的项（一行文字），都通过时一句话
+const checklistFailures = computed(() => checklistBlockers(checklist.value));
 const blockerText = computed(() =>
   readOnly.value ? "该因子正在被启用的计算任务使用，需先停用" : checklistBlockers(checklist.value)[0] || ""
 );
@@ -1034,30 +1031,19 @@ watch(factorId, () => saveScope.invalidate());
   opacity: 0.5;
 }
 
-.checklist ul {
+.checklist__fail,
+.checklist__ok {
   margin: var(--moox-space-2) 0 0;
-  padding: 0;
-  list-style: none;
-}
-
-.checklist li {
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
-  padding: 2px 0;
   font-size: 13px;
+  line-height: 1.6;
 }
 
-.checklist li.is-ok {
-  color: rgb(var(--success-6));
-}
-
-.checklist li.is-fail {
+.checklist__fail {
   color: rgb(var(--danger-6));
 }
 
-.checklist em {
-  font-style: normal;
+.checklist__ok {
+  color: var(--color-text-2);
 }
 
 .checklist__note {

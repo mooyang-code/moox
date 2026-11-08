@@ -39,10 +39,13 @@
                 <a-tag size="small" :color="card.health.color">{{ card.health.label }}</a-tag>
               </header>
               <div class="task-card__chips">
-                <span v-if="!card.chips.length" class="task-card__empty">还没有因子</span>
-                <a-tag v-for="chip in card.chips" :key="chip.factorId" size="small" :color="chip.color">
-                  {{ chip.factorId }} · {{ chip.label }}
-                </a-tag>
+                <span v-if="!card.summary" class="task-card__empty">还没有因子</span>
+                <template v-else>
+                  <span class="task-card__summary">{{ card.summary }}</span>
+                  <span v-for="item in card.abnormal" :key="item.factorId" class="task-card__abnormal">
+                    {{ item.factorId }}：{{ item.text }}
+                  </span>
+                </template>
               </div>
               <footer class="task-card__links">
                 <a-link @click="go(card.links.results)">结果</a-link>
@@ -245,9 +248,18 @@ watch(
 
 .task-card__chips {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  flex-direction: column;
+  gap: 2px;
   margin: var(--moox-space-2) 0;
+  font-size: 13px;
+}
+
+.task-card__summary {
+  color: var(--color-text-2);
+}
+
+.task-card__abnormal {
+  color: rgb(var(--warning-6));
 }
 
 .task-card__empty {

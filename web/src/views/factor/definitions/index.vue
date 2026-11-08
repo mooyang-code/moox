@@ -79,7 +79,7 @@
               :selected-keys="selectedKeys"
               :empty-text="emptyText"
               @select="selectedKeys = $event"
-              @detail="detailId = $event"
+              @detail="openDetail"
               @edit="editFactor"
               @remove="removeFactor"
               @open-task="openTask"
@@ -103,7 +103,13 @@
           @delete="confirmDeleteCategory"
         />
       </a-drawer>
-      <FactorDetailDrawer :factor-id="detailId" :categories="categories" @close="detailId = ''" @open-task="openTask" />
+      <FactorDetailDrawer
+        :factor-id="detailId"
+        :categories="categories"
+        @close="closeDetail"
+        @open-task="openTask"
+        @edit="editFactor"
+      />
     </div>
   </div>
 </template>
@@ -158,7 +164,8 @@ const mobileTreeVisible = ref(false);
 const items = ref<FactorInfo[]>([]);
 const loading = ref(false);
 const loadError = ref("");
-const detailId = ref("");
+// 打开的因子详情写进 ?detail=：刷新、后退、分享链接都能回到同一个因子
+const detailId = computed(() => (typeof route.query.detail === "string" ? route.query.detail : ""));
 const selectedKeys = ref<string[]>([]);
 const pagination = reactive({ current: 1, pageSize: 20, pageSizeOptions: [20, 50, 100], showPageSize: true, showTotal: true });
 const gate = new RequestGate();
@@ -346,6 +353,16 @@ function createFactor() {
 
 function editFactor(factorId: string) {
   void router.push(`/factor/definitions/${encodeURIComponent(factorId)}/edit`);
+}
+
+function openDetail(factorId: string) {
+  void router.replace({ path: route.path, query: { ...route.query, detail: factorId } });
+}
+
+function closeDetail() {
+  const query = { ...route.query };
+  delete query.detail;
+  void router.replace({ path: route.path, query });
 }
 
 function openTask(taskId: string) {

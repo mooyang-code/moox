@@ -213,6 +213,19 @@ describe("factor definitions page", () => {
 
     await firstRow.trigger("click");
     expect(drawer.props("factorId")).toBe("Ma");
+    expect(mocks.route!.query.detail).toBe("Ma");
+  });
+
+  it("带 ?detail= 进来时打开那个因子的详情；关掉后 URL 去掉 detail，别的参数保留", async () => {
+    mocks.spaceId!.value = "crypto";
+    mocks.route!.query = { detail: "Ma", category: "trend" };
+    const wrapper = mountPage();
+    await flushPromises();
+    const drawer = wrapper.findComponent(DrawerStub);
+    expect(drawer.props("factorId")).toBe("Ma");
+    drawer.vm.$emit("close");
+    await flushPromises();
+    expect(mocks.route!.query).toEqual({ category: "trend" });
   });
 
   it("删除当前选中的非空分类：先迁走其中的因子，再删除并回到全部", async () => {

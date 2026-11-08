@@ -3,7 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { FactorTask, FactorTaskInfo } from "@/api/factor/types";
 import type { View } from "@/api/storage/types";
-import { pickResultView, resolveActiveTaskId, resultTasks, resultSummary, resultTabTitle } from "./results-model";
+import { pickResultView, resolveActiveTaskId, resultTasks, resultSummary } from "./results-model";
 
 const set = (patch: Partial<FactorTask> = {}): FactorTask => ({
   task_id: "task_a",
@@ -51,8 +51,6 @@ describe("results model", () => {
       info({ task_id: "d", status: "deleting" })
     ];
     expect(resultTasks(sets).map(item => item.factor_task.task_id)).toEqual(["a", "c"]);
-    expect(resultTabTitle(sets[0], "现货K线 · 1m")).toBe("现货K线 · 1m");
-    expect(resultTabTitle(sets[2], "现货K线 · 1m")).toBe("现货K线 · 1m（已停用）");
   });
 
   it("status line extras: last period and normal/degraded counts", () => {

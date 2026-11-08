@@ -1193,7 +1193,7 @@ function hasExactSubjectIDFilter() {
 }
 
 /** 有任何筛选条件（含父页传入的）：结果为空时说“没有符合条件的行”，而不是“结果为空”。 */
-const hasAnyFilter = computed(() => activeFilterExprs().length > 0 || Boolean(recordKeyword.value.trim()));
+const hasAnyFilter = computed(() => Boolean(activeFilterExprs()) || Boolean(recordKeyword.value.trim()));
 
 /** 时序视图没有按数据时间筛选时，只查最近一段时间：写在查询区，免得以为“查不到”就是没有数据。 */
 const previewRangeText = computed(() => {
