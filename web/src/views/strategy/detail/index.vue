@@ -24,6 +24,10 @@
         >详情加载失败：{{ store.detailError
         }}<template #action><a-button size="small" @click="refreshDetail">重试</a-button></template></a-alert
       >
+      <a-alert v-if="store.instance?.missing_factor_tasks?.length" type="warning" show-icon class="top-alert">
+        删除未完成：因子任务
+        {{ store.instance.missing_factor_tasks.join("、") }} 已删除，实例还在。到运行实例列表再删一次即可完成，启用会失败。
+      </a-alert>
       <a-alert v-if="logicalAccount?.automation_state === 'PAUSED'" type="warning" show-icon class="top-alert">
         组合账户已暂停，目标不会执行，需要到组合账户恢复自动执行。
         <template #action>

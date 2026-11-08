@@ -63,7 +63,10 @@
             ></a-table-column
           >
           <a-table-column title="状态" :width="110"
-            ><template #cell="{ record }"><StatusBadge :enabled="record.enabled" :health="record.health" /></template
+            ><template #cell="{ record }"
+              ><StatusBadge :enabled="record.enabled" :health="record.health" />
+              <div v-if="record.missing_factor_tasks?.length" class="cell-sub delete-incomplete">
+                删除未完成<InfoTip text="因子任务已删除、实例还在。再删一次即可完成；启用会失败。" /></div></template
           ></a-table-column>
           <a-table-column title="更新时间" :width="180"
             ><template #cell="{ record }">{{ formatStrategyTime(record.updated_at) }}</template></a-table-column
@@ -79,6 +82,13 @@
                     <a-doption :disabled="togglingId === record.instance_id" @click="toggle(record)">{{
                       record.enabled ? "停用实例" : "启用实例"
                     }}</a-doption>
+                    <a-doption
+                      v-if="canDeleteInstance(record)"
+                      :disabled="togglingId === record.instance_id"
+                      class="danger-option"
+                      @click="remove(record)"
+                      >删除</a-doption
+                    >
                   </template>
                 </a-dropdown>
               </div>
@@ -128,6 +138,7 @@ import { useStrategyStore } from "@/store/modules/strategy";
 import StatusBadge from "@/views/strategy/components/strategy-status-badge.vue";
 import StrategyInstanceCreate from "@/views/strategy/components/strategy-instance-create.vue";
 import { confirmInstanceToggle } from "@/views/strategy/components/instance-toggle";
+import { canDeleteInstance, confirmInstanceDelete } from "@/views/strategy/components/instance-delete";
 import { formatStrategyTime } from "@/views/strategy/model";
 import InfoTip from "@/views/factor/shared/info-tip.vue";
 import { STRATEGY_TASKS_ROUTE, detailLink, normalizeTaskTab, replayLink, resultsLink } from "@/views/strategy/links";
@@ -248,6 +259,17 @@ function toggle(instance: StrategyInstance) {
     }
   });
 }
+/** 删除已停用的实例：确认框列出将要删除的因子任务与结果数据集；结束后（无论成败）重新读取列表。 */
+function remove(instance: StrategyInstance) {
+  if (togglingId.value) return;
+  void confirmInstanceDelete(instance, {
+    onStart: () => (togglingId.value = instance.instance_id),
+    onSettled: async () => {
+      await refresh();
+      togglingId.value = "";
+    }
+  });
+}
 onMounted(() => {
   // 进入页面先清掉 store 里可能属于其它空间的实例：期间在别的页面切过空间时，请求失败也不能继续显示旧空间的实例。
   store.clearInstances();
@@ -305,6 +327,12 @@ watch(
   .filter-status {
     width: 100%;
   }
+}
+.delete-incomplete {
+  color: rgb(var(--warning-6));
+}
+.danger-option {
+  color: rgb(var(--danger-6));
 }
 .row-actions {
   display: flex;

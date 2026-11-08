@@ -39,6 +39,8 @@ export interface StrategyInstance {
   health: "ok" | "degraded" | string;
   created_at: string;
   updated_at: string;
+  /** 已在因子服务删除的任务（只对停用实例检查）：非空表示上次删除实例没有做完，再删一次即可。 */
+  missing_factor_tasks?: string[];
 }
 
 /** 一个处理过的周期：ok 带目标，skipped 带原因。 */
