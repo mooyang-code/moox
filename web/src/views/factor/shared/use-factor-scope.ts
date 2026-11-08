@@ -45,6 +45,8 @@ export interface FactorScopeOptions {
   /** 轮询；默认 10 秒，false 关闭。 */
   poll?: boolean;
   pollMs?: number;
+  /** 和计算任务、引擎状态同一轮刷新的其他读取 */
+  extraPoll?: () => Promise<unknown>;
 }
 
 /**
@@ -133,8 +135,9 @@ export function useFactorScope(options: FactorScopeOptions = {}) {
   }
 
   if (options.poll !== false) {
+    // 页面要一起刷新的其他数据（例如总览的补算作业）放进同一轮，不再各自开一个定时器
     usePolling(
-      () => Promise.all([store.reload(), store.refreshEngine()]),
+      () => Promise.all([store.reload(), store.refreshEngine(), options.extraPoll?.()]),
       options.pollMs ?? 10_000,
       () => Boolean(spaceId.value)
     );

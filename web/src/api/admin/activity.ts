@@ -29,6 +29,6 @@ export interface ListActivityLogsResponse {
   page?: { page?: number; size?: number; total?: number; has_more?: boolean };
 }
 
-export function listActivityLogs(request: ListActivityLogsRequest) {
-  return callControl<ListActivityLogsRequest, ListActivityLogsResponse>("activity", "ListActivityLogs", request);
+export function listActivityLogs(request: ListActivityLogsRequest, options: { silentError?: boolean } = {}) {
+  return callControl<ListActivityLogsRequest, ListActivityLogsResponse>("activity", "ListActivityLogs", request, options);
 }

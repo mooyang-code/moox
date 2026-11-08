@@ -219,7 +219,8 @@ describe("home page", () => {
 
   it("reads the monitor overview for all spaces so the verdict matches the monitor page", async () => {
     await render();
-    expect(monitorApi.getOverview).toHaveBeenLastCalledWith({});
+    // 不带空间；后台读取不弹全局提示
+    expect(monitorApi.getOverview).toHaveBeenLastCalledWith({}, { silentError: true });
   });
 
   it("does not claim everything is normal when a tile fails to load, and keeps the last update time", async () => {

@@ -3,7 +3,7 @@
     <div class="moox-inner">
       <div class="page-head">
         <PageTitleTabs v-model="tab" :items="tabs" aria-label="服务部署" />
-        <a-button :loading="loading" aria-label="刷新部署状态" @click="refresh">刷新</a-button>
+        <a-button :loading="loading" aria-label="刷新部署状态" @click="refresh()">刷新</a-button>
       </div>
       <p class="muted">
         主机与组件的新增、部署、启停和移除都通过 moox skill 操作（让 Agent 使用 moox skill

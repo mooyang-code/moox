@@ -64,11 +64,12 @@ export function getTradingAccount(trading_account_id: string) {
   });
 }
 
-export function listTradingAccounts(req: ListTradingAccountsReq = {}) {
+export function listTradingAccounts(req: ListTradingAccountsReq = {}, options: { silent?: boolean } = {}) {
   return callTrade<ListTradingAccountsReq, { ret_info: RetInfo; accounts: TradingAccount[]; page_result: PageResult }>(
     "console",
     "ListTradingAccounts",
-    req
+    req,
+    options
   );
 }
 
@@ -154,10 +155,13 @@ export function queryEquityCurve(req: {
   return callTrade<typeof req, { ret_info: RetInfo; points: EquityPoint[] }>("console", "QueryEquityCurve", req);
 }
 
-export function listHoldings(trading_account_id: string) {
-  return callTrade<{ trading_account_id: string }, { ret_info: RetInfo; holdings: Holding[] }>("console", "ListHoldings", {
-    trading_account_id
-  });
+export function listHoldings(trading_account_id: string, options: { silent?: boolean } = {}) {
+  return callTrade<{ trading_account_id: string }, { ret_info: RetInfo; holdings: Holding[] }>(
+    "console",
+    "ListHoldings",
+    { trading_account_id },
+    options
+  );
 }
 
 /** 从交易所即查资金流水（手续费、资金费、已实现盈亏、划转等），按时间倒序 */
@@ -181,10 +185,13 @@ export function createLogicalAccount(req: CreateLogicalAccountReq) {
   return callTrade<CreateLogicalAccountReq, LogicalAccountResponse>("console", "CreateLogicalAccount", req, { silent: true });
 }
 
-export function getLogicalAccount(logical_account_id: string) {
-  return callTrade<{ logical_account_id: string }, LogicalAccountResponse>("console", "GetLogicalAccount", {
-    logical_account_id
-  });
+export function getLogicalAccount(logical_account_id: string, options: { silent?: boolean } = {}) {
+  return callTrade<{ logical_account_id: string }, LogicalAccountResponse>(
+    "console",
+    "GetLogicalAccount",
+    { logical_account_id },
+    options
+  );
 }
 
 export function listLogicalAccounts(page: Page = {}) {
@@ -275,11 +282,12 @@ export function getOperatorAction(action_id: string) {
   });
 }
 
-export function getLogicalAccountTarget(logical_account_id: string) {
+export function getLogicalAccountTarget(logical_account_id: string, options: { silent?: boolean } = {}) {
   return callTrade<{ logical_account_id: string }, { ret_info: RetInfo; target?: LogicalAccountTarget }>(
     "console",
     "GetLogicalAccountTarget",
-    { logical_account_id }
+    { logical_account_id },
+    options
   );
 }
 
@@ -295,8 +303,8 @@ export function listFills(req: ListFillsReq = {}) {
   return callTrade<ListFillsReq, { ret_info: RetInfo; fills: Fill[]; page_result: PageResult }>("console", "ListFills", req);
 }
 
-export function listPositions(req: ListPositionsReq) {
-  return callTrade<ListPositionsReq, { ret_info: RetInfo; positions: Position[] }>("console", "ListPositions", req);
+export function listPositions(req: ListPositionsReq, options: { silent?: boolean } = {}) {
+  return callTrade<ListPositionsReq, { ret_info: RetInfo; positions: Position[] }>("console", "ListPositions", req, options);
 }
 
 /** 收益拆解：手续费、已实现盈亏按资产分别汇总，资金费从交易所即查，不折算 */

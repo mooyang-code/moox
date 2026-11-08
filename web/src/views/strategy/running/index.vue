@@ -3,7 +3,7 @@
     <div class="moox-inner">
       <a-alert v-if="store.instancesError" type="error" show-icon class="top-alert"
         >实例加载失败：{{ store.instancesError
-        }}<template #action><a-button size="small" @click="refresh">重试</a-button></template></a-alert
+        }}<template #action><a-button size="small" @click="refresh()">重试</a-button></template></a-alert
       >
       <a-alert v-if="store.catalogError" type="warning" show-icon class="top-alert"
         >策略定义目录加载失败，定义名称与筛选项可能不完整：{{ store.catalogError
@@ -142,6 +142,7 @@ import {
 } from "@/views/strategy/running/running-model";
 import { formatInstant } from "@/utils/time-zone";
 import { useDisplayZone } from "@/hooks/useDisplayZone";
+import { usePolling } from "@/hooks/usePolling";
 
 // 页面时间按当前空间登记的时区显示
 const displayZone = useDisplayZone();
@@ -180,21 +181,30 @@ function go(next: Partial<RunningState>, mode: "push" | "replace" = "replace") {
   const target = { name: ROUTE_NAME, query: buildRunningQuery({ ...state.value, ...next }) };
   return mode === "push" ? router.push(target) : router.replace(target);
 }
-async function refresh() {
+async function refresh(background = false) {
   loadedKey = listKey(state.value);
   const { strategyId, enabled, page } = state.value;
   try {
-    await store.loadInstances({
-      strategy_id: strategyId || undefined,
-      enabled: enabled === "" ? undefined : enabled === "true",
-      page,
-      page_size: PAGE_SIZE
-    });
+    await store.loadInstances(
+      {
+        strategy_id: strategyId || undefined,
+        enabled: enabled === "" ? undefined : enabled === "true",
+        page,
+        page_size: PAGE_SIZE
+      },
+      { background }
+    );
     readAt.value = formatInstant(Date.now(), displayZone.value, "clock");
   } catch {
     // 错误已记入 store.instancesError，页面就近展示。
   }
 }
+// 每 30 秒后台刷新实例列表（页面隐藏时暂停、不叠加）
+usePolling(
+  () => refresh(true),
+  30_000,
+  () => Boolean(spaceStore.selectedSpaceId)
+);
 /** 手动刷新顺带重读策略目录：别处（如 CLI、模板新建）新建的定义也能出现在筛选和创建实例的下拉里。 */
 function manualRefresh() {
   store.invalidateStrategyCatalog();

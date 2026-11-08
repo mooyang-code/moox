@@ -170,8 +170,8 @@ export async function updateStrategy(strategy_id: string, dsl_yaml: string) {
   return normalizeStrategy(response.strategy);
 }
 
-export async function getStrategy(strategy_id: string) {
-  const response = await call<{ strategy_id: string }, { strategy?: Strategy }>("GetStrategy", { strategy_id });
+export async function getStrategy(strategy_id: string, options: RequestOptions = {}) {
+  const response = await call<{ strategy_id: string }, { strategy?: Strategy }>("GetStrategy", { strategy_id }, options);
   return normalizeStrategy(response.strategy);
 }
 
@@ -254,23 +254,32 @@ export async function updateInstance(instance: { instance_id: string; strategy_i
   return normalizeInstance(response.instance);
 }
 
-export async function getInstance(instance_id: string) {
-  const response = await call<{ instance_id: string }, { instance?: StrategyInstance }>("GetStrategyInstance", { instance_id });
+export async function getInstance(instance_id: string, options: RequestOptions = {}) {
+  const response = await call<{ instance_id: string }, { instance?: StrategyInstance }>(
+    "GetStrategyInstance",
+    { instance_id },
+    options
+  );
   return normalizeInstance(response.instance);
 }
 
 export async function listInstances(
-  params: PageRequest & { strategy_id?: string; enabled?: boolean } = {}
+  params: PageRequest & { strategy_id?: string; enabled?: boolean } = {},
+  options: RequestOptions = {}
 ): Promise<PageResult<StrategyInstance>> {
   const response = await call<
     { page: Required<PageRequest>; strategy_id?: string; enabled?: boolean },
     { instances?: StrategyInstance[]; total?: number; page?: number; page_size?: number }
-  >("ListStrategyInstances", {
-    page: pageRequest(params),
-    strategy_id: params.strategy_id || undefined,
-    // 清空筛选时下拉框给出空字符串：只在确实是布尔值时才发送。
-    enabled: typeof params.enabled === "boolean" ? params.enabled : undefined
-  });
+  >(
+    "ListStrategyInstances",
+    {
+      page: pageRequest(params),
+      strategy_id: params.strategy_id || undefined,
+      // 清空筛选时下拉框给出空字符串：只在确实是布尔值时才发送。
+      enabled: typeof params.enabled === "boolean" ? params.enabled : undefined
+    },
+    options
+  );
   return {
     items: (response.instances ?? []).map(normalizeInstance),
     page: { total: Number(response.total ?? 0), page: response.page, page_size: response.page_size }
@@ -287,12 +296,13 @@ export async function setInstanceEnabled(instance_id: string, enabled: boolean) 
 
 export async function listStrategyResults(
   instance_id: string,
-  params: PageRequest & { session_id?: string } = {}
+  params: PageRequest & { session_id?: string } = {},
+  options: RequestOptions = {}
 ): Promise<PageResult<StrategyResult>> {
   const response = await call<
     { instance_id: string; session_id?: string; page: Required<PageRequest> },
     { results?: StrategyResult[]; total?: number; page?: number; page_size?: number }
-  >("ListStrategyResults", { instance_id, session_id: params.session_id || undefined, page: pageRequest(params) });
+  >("ListStrategyResults", { instance_id, session_id: params.session_id || undefined, page: pageRequest(params) }, options);
   return {
     items: (response.results ?? []).map(normalizeResult),
     page: { total: Number(response.total ?? 0), page: response.page, page_size: response.page_size }
@@ -313,11 +323,11 @@ export async function getStrategyResult(result_id: string): Promise<StrategyResu
   };
 }
 
-export async function listStrategyTargets(instance_id: string): Promise<StrategyTargetSnapshot> {
+export async function listStrategyTargets(instance_id: string, options: RequestOptions = {}): Promise<StrategyTargetSnapshot> {
   const response = await call<
     { instance_id: string },
     { targets?: InstrumentTarget[]; session_id?: string; bar_end_time?: string; valid_until?: string; result_id?: string }
-  >("ListStrategyTargets", { instance_id });
+  >("ListStrategyTargets", { instance_id }, options);
   return {
     targets: (response.targets ?? []).map(normalizeTarget),
     session_id: response.session_id ?? "",

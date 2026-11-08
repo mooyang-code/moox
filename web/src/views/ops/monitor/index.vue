@@ -8,7 +8,7 @@
         </div>
         <a-space>
           <span class="muted">告警推送：{{ notificationLabel }}</span>
-          <a-button :loading="loading" @click="refresh">刷新</a-button>
+          <a-button :loading="loading" @click="refresh()">刷新</a-button>
           <a-button type="outline" @click="openNotification">消息通知设置</a-button>
         </a-space>
       </header>
@@ -533,11 +533,12 @@ function othersText(titles: string[]) {
   return titles.length > 2 ? `${titles.slice(0, 2).join("、")} 等 ${titles.length} 项` : titles.join("、");
 }
 
-async function refresh() {
+/** background：30 秒的后台刷新，不弹全局提示，失败写在页面上（保留上次的数据）。 */
+async function refresh(background = false) {
   const request = refreshGuard.begin();
   loading.value = true;
   try {
-    const rsp = await monitorApi.getOverview();
+    const rsp = await monitorApi.getOverview({}, { silentError: background });
     if (!rsp.overview) throw new Error("健康概览响应缺失");
     if (request.isLatest()) {
       overview.value = rsp.overview;
@@ -654,7 +655,11 @@ const notificationScope = createSubmitScope({ global: true });
 watch(notificationVisible, () => notificationScope.invalidate());
 
 // 编辑通知设置时暂停轮询，避免刷新打断表单。
-usePolling(refresh, 30000, () => !notificationVisible.value);
+usePolling(
+  () => refresh(true),
+  30000,
+  () => !notificationVisible.value
+);
 let clock: number | undefined;
 onMounted(() => {
   void refresh();

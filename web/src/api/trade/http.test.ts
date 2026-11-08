@@ -32,6 +32,17 @@ describe("Trade response errors", () => {
     expect(messageError).toHaveBeenCalledTimes(1);
   });
 
+  it("传输错误也听 silent：后台轮询的请求带上 silentError，拦截器据此不弹提示", async () => {
+    client.post.mockResolvedValue({ data: { ret_info: { code: 0 } } });
+    await callTrade("console", "GetLogicalAccount", {}, { silent: true });
+    expect(client.post.mock.calls.at(-1)?.[2]).toEqual({ silentError: true });
+    const onError = client.interceptors.response.use.mock.calls[0][1] as (error: unknown) => Promise<unknown>;
+    await expect(onError({ config: { silentError: true }, message: "Network Error" })).rejects.toBeTruthy();
+    expect(messageError).not.toHaveBeenCalled();
+    await expect(onError({ config: {}, message: "Network Error" })).rejects.toBeTruthy();
+    expect(messageError).toHaveBeenCalledTimes(1);
+  });
+
   it("retains the durable action when admission returns a retryable error", async () => {
     const response = {
       ret_info: { code: 1, msg: "market data unavailable" },

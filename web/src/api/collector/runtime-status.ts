@@ -188,15 +188,26 @@ export interface BackfillJobFilter {
   dataset_id?: string;
 }
 
-export function getCollectorStatus(spaceId: string) {
-  return callControl<{ space_id: string }, GetCollectorStatusResponse>("collector", "GetCollectorStatus", { space_id: spaceId });
+export function getCollectorStatus(spaceId: string, options: { silentError?: boolean } = {}) {
+  return callControl<{ space_id: string }, GetCollectorStatusResponse>(
+    "collector",
+    "GetCollectorStatus",
+    { space_id: spaceId },
+    options
+  );
 }
 
-export function listKlineBackfills(spaceId: string, filter: BackfillJobFilter, page = 1, size = 20) {
+export function listKlineBackfills(
+  spaceId: string,
+  filter: BackfillJobFilter,
+  page = 1,
+  size = 20,
+  options: { silentError?: boolean } = {}
+) {
   return callControl<
     { space_id: string; page: { page: number; size: number } } & BackfillJobFilter,
     { items?: KlineBackfillJob[]; page?: { total?: number; has_more?: boolean } }
-  >("collector", "ListKlineBackfills", { space_id: spaceId, page: { page, size }, ...filter });
+  >("collector", "ListKlineBackfills", { space_id: spaceId, page: { page, size }, ...filter }, options);
 }
 
 export function getKlineBackfill(spaceId: string, jobId: string) {

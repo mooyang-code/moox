@@ -548,8 +548,9 @@ async function loadLive() {
   const isCurrent = () => liveLoadGate.isCurrent(token) && selectedSpaceId.value === spaceId;
   await Promise.allSettled([
     // 不带空间：首页的健康结论要和监控页一致，别的空间断了数据也要看得到
+    // 首页每路读取的失败都写在页面上，后台读取一律不弹全局提示
     monitorApi
-      .getOverview({})
+      .getOverview({}, { silentError: true })
       .then(result => {
         if (!isCurrent()) return;
         overview.value = result.overview;
@@ -558,7 +559,7 @@ async function loadLive() {
       .catch(error => {
         if (isCurrent()) monitorError.value = error instanceof Error ? error.message : String(error);
       }),
-    listFactorTasks({ page: { page: 1, size: 500 } })
+    listFactorTasks({ page: { page: 1, size: 500 } }, { silentError: true })
       .then(rsp => {
         if (!isCurrent()) return;
         factorTasks.value = rsp.factor_tasks ?? [];
@@ -578,7 +579,7 @@ async function loadLive() {
       .catch(error => {
         if (isCurrent()) liveErrors.strategy = errorText(error);
       }),
-    listActivityLogs({ space_id: spaceId, page: { page: 1, size: 30 } })
+    listActivityLogs({ space_id: spaceId, page: { page: 1, size: 30 } }, { silentError: true })
       .then(rsp => {
         if (!isCurrent()) return;
         activityItems.value = rsp.items ?? [];
@@ -593,10 +594,10 @@ async function loadLive() {
 }
 
 async function loadStrategies(isCurrent: () => boolean) {
-  const page = await listInstances({ page: 1, page_size: 200 });
+  const page = await listInstances({ page: 1, page_size: 200 }, { silent: true });
   if (!isCurrent()) return;
   const enabled = page.items.filter(item => item.enabled).slice(0, TARGET_FETCH_LIMIT);
-  const settled = await Promise.allSettled(enabled.map(item => listStrategyTargets(item.instance_id)));
+  const settled = await Promise.allSettled(enabled.map(item => listStrategyTargets(item.instance_id, { silent: true })));
   if (!isCurrent()) return;
   const next: Record<string, StrategyTargetSnapshot> = {};
   settled.forEach((result, index) => {

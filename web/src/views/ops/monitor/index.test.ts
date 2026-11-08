@@ -446,6 +446,6 @@ describe("monitor page", () => {
   it("uses the structured overview endpoint", async () => {
     mockedCallControl.mockResolvedValue({ overview: healthy });
     await monitorApi.getOverview({ space_id: "crypto" });
-    expect(mockedCallControl).toHaveBeenLastCalledWith("monitor", "GetHealthOverview", { space_id: "crypto" });
+    expect(mockedCallControl).toHaveBeenLastCalledWith("monitor", "GetHealthOverview", { space_id: "crypto" }, expect.anything());
   });
 });

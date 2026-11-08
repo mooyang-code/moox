@@ -283,7 +283,7 @@ async function load(options: { silent?: boolean } = {}) {
   const request = guard.begin();
   if (!options.silent) loading.value = true;
   try {
-    const data = await listKlineBackfills(space, filterOf(), page.value, pageSize);
+    const data = await listKlineBackfills(space, filterOf(), page.value, pageSize, { silentError: Boolean(options.silent) });
     if (!request.isLatest() || space !== spaceId.value) return;
     jobs.value = data.items || [];
     total.value = Number(data.page?.total || 0);

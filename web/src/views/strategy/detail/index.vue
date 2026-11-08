@@ -146,7 +146,7 @@ const autoRefresh = ref(true);
 function leaveIfOtherSpace() {
   const currentSpaceId = spaceStore.selectedSpaceId;
   if (store.instance && currentSpaceId && store.instance.space_id !== currentSpaceId) {
-    store.stopPolling();
+    // 离开本页后组件卸载，轮询随之停止
     store.clearDetail();
     router.replace(instancesLink());
     return true;

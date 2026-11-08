@@ -449,6 +449,7 @@ import QueryControls from "./components/query-controls.vue";
 import ResultTable from "./components/result-table.vue";
 import { loadTargetedViewCatalog } from "./composables/view-browse-catalog";
 import { formatInstant, zoneSuffix } from "@/utils/time-zone";
+import { usePolling } from "@/hooks/usePolling";
 
 defineOptions({ name: "DataViewBrowse" });
 
@@ -599,7 +600,6 @@ const klineFreq = ref("");
 const klineRecords = ref<KlineChartRecord[]>([]);
 const klineLoading = ref(false);
 const klineLimit = ref(DEFAULT_KLINE_LIMIT);
-let autoRefreshTimer: ReturnType<typeof setInterval> | undefined;
 const VIEW_BROWSE_UNSCOPED_PREVIEW_WINDOW_HOURS = 24;
 const VIEW_BROWSE_SCOPED_PREVIEW_WINDOW_DAYS = 7;
 const DEFAULT_VIEW_PAGE_SIZE = 25;
@@ -915,16 +915,19 @@ async function loadTimeSeriesViewRows(retainRowsOnError = false) {
   try {
     const timeRange = defaultTimeSeriesPreviewRange();
     const projection = props.projectColumns ?? explicitViewColumnNames.value;
-    const rsp = await queryTimeSeriesRows({
-      space_id,
-      view_id: view.view_id,
-      ...(timeRange ? { time_range: timeRange } : {}),
-      ...(projection.length > 0 ? { column_names: projection } : {}),
-      filter: activeFilterExprs(),
-      sorts: buildViewSorts(sortState),
-      page: { page: pagination.current, size: DEFAULT_VIEW_PAGE_SIZE },
-      total_mode: "NONE"
-    });
+    const rsp = await queryTimeSeriesRows(
+      {
+        space_id,
+        view_id: view.view_id,
+        ...(timeRange ? { time_range: timeRange } : {}),
+        ...(projection.length > 0 ? { column_names: projection } : {}),
+        filter: activeFilterExprs(),
+        sorts: buildViewSorts(sortState),
+        page: { page: pagination.current, size: DEFAULT_VIEW_PAGE_SIZE },
+        total_mode: "NONE"
+      },
+      { silentError: retainRowsOnError }
+    );
     if (
       requestSequence !== viewRowsRequestSequence ||
       selectedSpaceId.value !== space_id ||
@@ -974,14 +977,17 @@ async function loadRecordViewRows(retainRowsOnError = false) {
   loading.value = true;
   queryError.value = "";
   try {
-    const rsp = await searchRecordRows({
-      space_id,
-      view_id: view.view_id,
-      text_query: recordKeyword.value.trim(),
-      filter: activeFilterExprs(),
-      sorts: buildViewSorts(sortState),
-      page: { page: pagination.current, size: DEFAULT_VIEW_PAGE_SIZE }
-    });
+    const rsp = await searchRecordRows(
+      {
+        space_id,
+        view_id: view.view_id,
+        text_query: recordKeyword.value.trim(),
+        filter: activeFilterExprs(),
+        sorts: buildViewSorts(sortState),
+        page: { page: pagination.current, size: DEFAULT_VIEW_PAGE_SIZE }
+      },
+      { silentError: retainRowsOnError }
+    );
     if (
       requestSequence !== viewRowsRequestSequence ||
       selectedSpaceId.value !== space_id ||
@@ -1373,21 +1379,11 @@ function rowToSyntheticRecord(row: ViewBrowseTableRow): RecordRow {
   };
 }
 
-onMounted(() => {
-  loadMeta();
-  const interval = props.autoRefreshIntervalMs || 0;
-  if (interval > 0) {
-    autoRefreshTimer = setInterval(() => {
-      void refreshRowsInBackground();
-    }, interval);
-  }
-});
+onMounted(loadMeta);
+// 自动刷新（调用方给了间隔时）：页面隐藏时暂停、不叠加；后台读取失败不弹提示，保留上次的数据并标出“待刷新”
+usePolling(refreshRowsInBackground, props.autoRefreshIntervalMs || 60_000, () => (props.autoRefreshIntervalMs || 0) > 0);
 onBeforeUnmount(() => {
   klineRequestGuard.invalidate();
-  if (autoRefreshTimer) {
-    clearInterval(autoRefreshTimer);
-    autoRefreshTimer = undefined;
-  }
 });
 watch(selectedSpaceId, () => {
   activeViewKey.value = "";

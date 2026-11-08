@@ -1,4 +1,5 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { usePolling } from "@/hooks/usePolling";
 import { useRoute, useRouter } from "vue-router";
 import { decodeCatalog, getCatalog, getHostRoutes, listAllDeploymentHosts, listAllDeployments } from "@/api/admin/sysdeploy";
 import type { ComponentCatalog, ComponentDeployment, DeploymentHost, HostRoutesResponse } from "@/api/admin/types";
@@ -36,8 +37,6 @@ export function useDeployments() {
   const selectedHostId = ref("");
   const drawerKey = ref("");
   const guard = createLatestRequestGuard();
-  let timer: ReturnType<typeof setInterval> | undefined;
-  let active = false;
   let appliedLocator = "";
   const query = (value: unknown) => (typeof value === "string" ? value : "");
   const tab = computed({
@@ -166,21 +165,23 @@ export function useDeployments() {
     drawerKey.value = "";
     await router.replace({ query: next });
   }
-  async function refresh() {
+  /** background：后台轮询，不弹全局提示，失败写在页面上并保留上次的数据。 */
+  async function refresh(background = false) {
     const request = guard.begin();
     loading.value = true;
+    const options = { silentError: background };
     try {
       const [rawCatalog, hostRows, deploymentItems, health] = await Promise.all([
-        getCatalog(),
-        listAllDeploymentHosts(),
-        listAllDeployments(),
+        getCatalog(options),
+        listAllDeploymentHosts(options),
+        listAllDeployments(options),
         monitorApi
-          .getOverview()
+          .getOverview({}, options)
           .then(result => ({ overview: result.overview, error: "" }))
           .catch(reason => ({ overview: undefined, error: reason instanceof Error ? reason.message : String(reason) }))
       ]);
       const definition = decodeCatalog(rawCatalog);
-      const snapshots = await loadHostRoutes(hostRows, getHostRoutes);
+      const snapshots = await loadHostRoutes(hostRows, hostId => getHostRoutes(hostId, options));
       if (!request.isLatest()) return;
       catalog.value = definition;
       catalogHash.value = rawCatalog.sha256;
@@ -200,23 +201,13 @@ export function useDeployments() {
       if (request.isLatest()) loading.value = false;
     }
   }
-  function start() {
-    if (active) return;
-    active = true;
-    void refresh();
-    timer = setInterval(() => {
-      if (!loading.value) void refresh();
-    }, 15000);
-  }
-  function stop() {
-    active = false;
+  // 每 15 秒后台刷新一次（页面隐藏时暂停、不叠加）
+  usePolling(() => refresh(true), 15_000);
+  onMounted(() => void refresh());
+  onBeforeUnmount(() => {
     guard.invalidate();
-    if (timer) clearInterval(timer);
-    timer = undefined;
     loading.value = false;
-  }
-  onMounted(start);
-  onBeforeUnmount(stop);
+  });
   return {
     tab,
     catalog,
