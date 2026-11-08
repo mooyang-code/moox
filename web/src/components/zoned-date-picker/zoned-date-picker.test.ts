@@ -83,6 +83,20 @@ describe("按时区选范围：真实操作", () => {
     expect(lastEmitted()).toEqual([end - 3_600_000, end]);
   });
 
+  it("只选日期时点两个日期格子：起是起始日零点，止是结束日的下一天零点（按所给时区）", async () => {
+    mountPicker(ZonedRangePicker, { zone: "America/New_York", modelValue: null, showTime: false });
+    await openPanel();
+    const cells = dayCells();
+    cells[0].click();
+    await flushPromises();
+    cells[6].click();
+    await flushPromises();
+    const [from, to] = lastEmitted() as [number, number];
+    const start = msToWallClock(from, "America/New_York");
+    expect(start).toMatch(/-01 00:00:00$/);
+    expect(msToWallClock(to, "America/New_York")).toBe(`${start.slice(0, 8)}08 00:00:00`);
+  });
+
   it("只选日期时结束日期整天都算在内：止是下一天零点；显示时退回前一天", () => {
     const range: [number, number] = [Date.parse("2026-10-31T16:00:00Z"), Date.parse("2026-11-07T16:00:00Z")];
     mountPicker(ZonedRangePicker, { zone: "Asia/Shanghai", modelValue: range, showTime: false });
