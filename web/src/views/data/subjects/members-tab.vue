@@ -173,6 +173,7 @@ import { createLatestRequestGuard } from "@/utils/latest-request";
 import { computed, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { confirmRemoveMembers } from "./member-actions";
+import { useSpaceStore } from "@/store/modules/space";
 import {
   addTagMembers,
   listTagMembers,
@@ -250,9 +251,15 @@ function emptySubject(): SubjectFormState {
     name: "",
     market: "",
     currency: "",
-    timezone: "Asia/Shanghai",
+    // 标的默认用所在空间登记的时区
+    timezone: spaceZone(),
     status: "active"
   };
+}
+
+/** 当前标签页所属空间登记的时区，没有时用 UTC。 */
+function spaceZone(): string {
+  return useSpaceStore().spaces.find(item => item.space_id === props.spaceId)?.timezone || "UTC";
 }
 
 function toSubjectPayload(spaceId: string): Subject {
@@ -426,7 +433,7 @@ function openSubjectEdit(subject: Subject) {
     subject_type: subjectType(subject),
     market: subjectMarket(subject),
     currency: subjectCurrency(subject),
-    timezone: subject.timezone || "Asia/Shanghai"
+    timezone: subject.timezone || spaceZone()
   });
   subjectVisible.value = true;
 }
