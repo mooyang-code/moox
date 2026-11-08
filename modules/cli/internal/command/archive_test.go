@@ -186,7 +186,7 @@ func TestArchiveAndSyncDeploymentsCommandsAreRegistered(t *testing.T) {
 	for _, c := range archiveCmd.Commands() {
 		found = append(found, c.Name())
 	}
-	assert.ElementsMatch(t, []string{"overview", "tasks", "runs", "partitions", "worker"}, found)
+	assert.ElementsMatch(t, []string{"overview", "tasks", "runs", "partitions", "worker", "import"}, found)
 	setup := newSetupCommand(defaultSetupDeps())
 	sync, _, err := setup.Find([]string{"sync-deployments"})
 	require.NoError(t, err)

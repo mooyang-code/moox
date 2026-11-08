@@ -40,6 +40,10 @@ type archiveFlags struct {
 	Page         uint32
 	PageSize     uint32
 	Yes          bool
+	// CSV、Overwrite、Wait 是 archive import 的本地文件、是否覆盖与是否等待结束。
+	CSV       string
+	Overwrite bool
+	Wait      bool
 }
 
 var archiveCmd = &cobra.Command{Use: "archive", Short: "数据归档：任务、运行与分区（调用 ArchiveMgr）"}
@@ -57,6 +61,11 @@ func archiveInvoke(ctx context.Context, out io.Writer, file, method string, req 
 	if info := ret(); info.GetCode() != commonpb.ErrorCode_SUCCESS {
 		return fmt.Errorf("%s: %s (code %d)", method, info.GetMsg(), info.GetCode())
 	}
+	return printArchiveProto(out, rsp)
+}
+
+// printArchiveProto 把响应按 proto 字段名输出成缩进的 JSON。
+func printArchiveProto(out io.Writer, rsp proto.Message) error {
 	// protojson 的输出空白是故意随机化的，先输出紧凑 JSON 再统一缩进，保证输出稳定。
 	raw, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(rsp)
 	if err != nil {
@@ -252,7 +261,7 @@ func init() {
 	workers := &cobra.Command{Use: "worker", Short: "归档 worker 登记"}
 	archiveCmd.AddCommand(
 		newArchiveLeaf("overview", "worker、正在执行的运行与告警总览", runArchiveOverview, func(*cobra.Command, *archiveFlags) {}),
-		tasks, runs, partitions, workers,
+		tasks, runs, partitions, workers, newArchiveImportCommand(),
 	)
 	workers.AddCommand(
 		newArchiveLeaf("retire", "退役一个不再使用的 worker 登记（例如换机后的旧记录）", runArchiveWorkerRetire, func(c *cobra.Command, f *archiveFlags) {
@@ -290,6 +299,12 @@ func init() {
 			bindDataset(c, f)
 			c.Flags().StringVar(&f.From, "from", "", "起始数据时间（含），RFC3339")
 			c.Flags().StringVar(&f.To, "to", "", "结束数据时间（不含），RFC3339")
+		}),
+		newArchiveLeaf("clear-unrecoverable", "删掉任务累积的、整段落在 [start, end) 里的无法补齐区间（导入补齐历史缺口后由人确认再清）", runArchiveTasksClearUnrecoverable, func(c *cobra.Command, f *archiveFlags) {
+			bindDataset(c, f)
+			c.Flags().StringVar(&f.From, "start", "", "起点（含），RFC3339")
+			c.Flags().StringVar(&f.To, "end", "", "终点（不含），RFC3339")
+			c.Flags().BoolVar(&f.Yes, "yes", false, "确认清除")
 		}),
 	)
 	runs.AddCommand(

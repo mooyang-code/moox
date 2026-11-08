@@ -15,6 +15,8 @@
 
 | 命令 | 说明 |
 | --- | --- |
+| `archive import` | 把本地 CSV（归档格式，`--csv`）作为历史数据直接导进归档，不经 Storage：同键已存在默认只补空缺，`--overwrite` 覆盖（必须带齐全部值列），有一行不对就整份拒绝；经 SSH 上传到 archive-worker 所在主机，`--wait` 等结束，`--yes` 确认 |
+| `archive import template` | 打印导入文件的表头 data_time,subject_id,series_tag,<值列…> |
 | `archive overview` | worker、正在执行的运行与告警总览 |
 | `archive partitions get` | 查看分区详情（状态、文件、sha256、预览） |
 | `archive partitions list` | 列出分区 |
@@ -22,6 +24,7 @@
 | `archive runs get` | 查看一次运行（含无法补齐的区间） |
 | `archive runs list` | 列出运行记录（默认不列成功的到点拉取，`--include-ticks` 列出全部） |
 | `archive tasks backfill` | 补拉指定数据时间区间 |
+| `archive tasks clear-unrecoverable` | 删掉任务累积的、整段落在 [start, end) 里的无法补齐区间（导入补齐历史缺口后由人确认再清，`--yes`） |
 | `archive tasks create` | 创建归档任务（下一次检查立即复核，之后按收盘拉取） |
 | `archive tasks delete` | 删除没有分区的任务 |
 | `archive tasks list` | 列出归档任务（--space-id 为空表示全部空间） |
