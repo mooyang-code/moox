@@ -18,7 +18,7 @@ import {
   type Tone
 } from "@/views/home/home-model";
 import { alertLink, alertNote, hostHref, statusLabel } from "./health-display";
-import { marketTime } from "./market-time";
+import { marketTime } from "@/utils/time-zone";
 
 /** 触发时间相差不超过 60 秒的告警多半是同一个原因（服务重启、网络抖动），合并成一组展示。 */
 export const SAME_CAUSE_WINDOW_MS = 60_000;
