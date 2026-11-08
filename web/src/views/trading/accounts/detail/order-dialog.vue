@@ -156,7 +156,11 @@ function loadMember() {
   const request = capabilityRequests.begin();
   getExecutionCapabilities(accountId)
     .then(response => {
-      if (request.isLatest()) capabilities.value = response.capabilities;
+      if (!request.isLatest()) return;
+      capabilities.value = response.capabilities;
+      // 场所不支持当前选中的下单方式时（A 股只有限价），改成它支持的第一种，不能让隐藏的市价单被提交
+      const types = response.capabilities?.order_types || [];
+      if (types.length && !types.includes(manualForm.order_type)) manualForm.order_type = types[0] as 1 | 2;
     })
     .catch(() => {
       if (request.isLatest()) capabilities.value = null;
@@ -237,7 +241,8 @@ async function submitManual() {
   }
   if (!pendingSubmission.value) {
     const limitPrice = manualForm.order_type === 2 ? manualForm.limit_price : undefined;
-    const ruleError = orderRuleError(manualForm.quantity, limitPrice, selectedInstrument.value);
+    const oddLotSell = marketOfInstrument(manualForm.instrument_id.trim()) === 3 && manualForm.side === 2;
+    const ruleError = orderRuleError(manualForm.quantity, limitPrice, selectedInstrument.value, oddLotSell);
     if (ruleError) {
       Message.warning(ruleError);
       return false;
