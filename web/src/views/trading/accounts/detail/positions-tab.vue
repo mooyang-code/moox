@@ -1,11 +1,21 @@
 <template>
   <SectionBlock title="持仓与目标" flush>
-    <template #sub>按币一行，目标来自策略，实际来自各执行账户；偏差分现货、永续各算各的</template>
+    <template #sub>{{
+      stockMode
+        ? "按股票一行，目标来自策略，实际来自各执行账户；可卖是扣掉冻结和当日买入后的数量"
+        : "按币一行，目标来自策略，实际来自各执行账户；偏差分现货、永续各算各的"
+    }}</template>
     <div class="toolbar">
       <a-radio-group v-model="filter" type="button" @change="page = 1">
         <a-radio v-for="item in filters" :key="item.key" :value="item.key">{{ item.label }} {{ item.count }}</a-radio>
       </a-radio-group>
-      <a-input-search v-model="search" allow-clear placeholder="搜索币" style="width: 200px" @input="page = 1" />
+      <a-input-search
+        v-model="search"
+        allow-clear
+        :placeholder="stockMode ? '搜索股票代码' : '搜索币'"
+        style="width: 200px"
+        @input="page = 1"
+      />
     </div>
     <a-table
       row-key="coin"
@@ -17,30 +27,35 @@
       @page-change="(value: number) => (page = value)"
     >
       <template #columns>
-        <a-table-column title="币" :width="90" fixed="left">
+        <a-table-column :title="stockMode ? '股票' : '币'" :width="stockMode ? 120 : 90" fixed="left">
           <template #cell="{ record }"
             ><strong>{{ record.coin }}</strong></template
           >
         </a-table-column>
         <a-table-column v-if="logical.control_mode === 1" title="目标">
-          <a-table-column title="现货" :width="110" align="right">
+          <a-table-column :title="spotTitle" :width="110" align="right">
             <template #cell="{ record }"
               ><span class="tx-num">{{ targetText(record.targetSpot) }}</span></template
             >
           </a-table-column>
-          <a-table-column title="永续" :width="110" align="right">
+          <a-table-column v-if="!stockMode" title="永续" :width="110" align="right">
             <template #cell="{ record }"
               ><span class="tx-num">{{ targetText(record.targetSwap) }}</span></template
             >
           </a-table-column>
         </a-table-column>
         <a-table-column title="实际">
-          <a-table-column title="现货" :width="110" align="right">
+          <a-table-column :title="spotTitle" :width="110" align="right">
             <template #cell="{ record }"
               ><span class="tx-num">{{ actualText(record.actualSpot, "spot") }}</span></template
             >
           </a-table-column>
-          <a-table-column title="永续" :width="110" align="right">
+          <a-table-column v-if="stockMode" title="可卖" :width="110" align="right">
+            <template #cell="{ record }"
+              ><span class="tx-num">{{ record.actualSpot ? fmtQty(cleanNumber(record.sellable)) : "—" }}</span></template
+            >
+          </a-table-column>
+          <a-table-column v-else title="永续" :width="110" align="right">
             <template #cell="{ record }"
               ><span class="tx-num">{{ actualText(record.actualSwap, "swap") }}</span></template
             >
@@ -56,7 +71,7 @@
                 class="tx-num"
                 :class="deviationClass(record.deviationSpot, record, 'targetSpot')"
               >
-                现货 {{ signed(record.deviationSpot) }}
+                {{ spotTitle }} {{ signed(record.deviationSpot) }}
               </div>
               <div
                 v-if="record.deviationSwap !== null"
@@ -71,7 +86,7 @@
             </template>
           </template>
         </a-table-column>
-        <a-table-column title="现货余额" :width="120" align="right">
+        <a-table-column v-if="!stockMode" title="现货余额" :width="120" align="right">
           <template #cell="{ record }"
             ><span class="tx-num">{{ record.spotBalance ? fmtQty(cleanNumber(record.spotBalance)) : "—" }}</span></template
           >
@@ -133,6 +148,9 @@ const filters = computed(() => [
   { key: "holding" as const, label: "有持仓", count: filterCoinRows(coinRows.value, "holding", "").length }
 ]);
 const rows = computed(() => filterCoinRows(coinRows.value, filter.value, search.value));
+// A 股组合：一列股票、加“可卖”列，没有永续
+const stockMode = computed(() => Boolean(logical.value.markets?.includes(3)));
+const spotTitle = computed(() => (stockMode.value ? "股票" : "现货"));
 const canOrder = computed(() => [1, 2].includes(logical.value.control_mode) && !flattenRunning.value);
 
 function targetText(cell?: TargetCell) {
@@ -141,7 +159,8 @@ function targetText(cell?: TargetCell) {
 }
 function actualText(value: number, market: "spot" | "swap") {
   if (value !== 0) return fmtQty(cleanNumber(value));
-  return logical.value.markets?.includes(market === "spot" ? 1 : 2) ? "0" : "—";
+  const opened = market === "spot" ? (stockMode.value ? 3 : 1) : 2;
+  return logical.value.markets?.includes(opened) ? "0" : "—";
 }
 function signed(value: number) {
   const clean = cleanNumber(value);

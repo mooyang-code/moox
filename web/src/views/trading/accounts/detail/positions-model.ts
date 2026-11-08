@@ -18,6 +18,9 @@ export interface CoinRow {
   deviationSwap: number | null;
   /** 现货钱包里这个币的总数，包含不受管理的部分 */
   spotBalance: number;
+  /** 股票：可卖数量（扣掉冻结和当日买入）；股票行的目标、实际、偏差记在 Spot 那一列 */
+  sellable: number;
+  stock: boolean;
   /** 被拦下的原因，没有则为空 */
   blockedReason: string;
   /** 被单币每小时上限顺延到下一个整点的说明，没有则为空：不算被拦下，状态仍按差额判断 */
@@ -49,6 +52,8 @@ function blankRow(coin: string): CoinRow {
     deviationSpot: null,
     deviationSwap: null,
     spotBalance: 0,
+    sellable: 0,
+    stock: false,
     blockedReason: "",
     deferredReason: "",
     state: "ok",
@@ -84,8 +89,10 @@ export function buildCoinRows(input: BuildCoinRowsInput): CoinRow[] {
       hold: Boolean(target.hold)
     };
     const row = rowOf(coinOf(target.instrument_id));
-    if (marketOfInstrument(target.instrument_id) === 2) row.targetSwap = cell;
+    const market = marketOfInstrument(target.instrument_id);
+    if (market === 2) row.targetSwap = cell;
     else row.targetSpot = cell;
+    if (market === 3) row.stock = true;
   }
   for (const item of input.blocked) {
     const row = rowOf(coinOf(item.instrument_id));
@@ -99,7 +106,11 @@ export function buildCoinRows(input: BuildCoinRowsInput): CoinRow[] {
     const row = rowOf(holding.asset || coinOf(holding.instrument_id));
     const quantity = Number(holding.quantity);
     row.spotBalance += quantity;
-    if (holding.instrument_id) row.actualSpot += quantity;
+    if (holding.instrument_id) {
+      row.actualSpot += quantity;
+      row.sellable += Number(holding.sellable || 0);
+      if (marketOfInstrument(holding.instrument_id) === 3) row.stock = true;
+    }
   }
 
   const result: CoinRow[] = [];
@@ -128,7 +139,7 @@ function stateOrder(row: CoinRow): number {
 }
 
 export interface OrderHint {
-  market: 1 | 2;
+  market: 1 | 2 | 3;
   instrumentId: string;
   /** 与目标有差额时预填的方向：差额为正要买入，为负要卖出；没有目标或保持当前持仓时为空 */
   side?: 1 | 2;
@@ -142,6 +153,16 @@ export interface OrderHint {
  */
 export function rowOrderHints(row: CoinRow, quote: string): OrderHint[] {
   const hints: OrderHint[] = [];
+  // 股票的标的 ID 就是代码本身（600519.XSHG），只有一个市场
+  if (row.stock) {
+    if (!row.targetSpot && row.actualSpot === 0) return hints;
+    const hint: OrderHint = { market: 3, instrumentId: row.coin };
+    if (row.deviationSpot !== null && Math.abs(row.deviationSpot) > 1e-12) {
+      hint.side = row.deviationSpot < 0 ? 1 : 2;
+      hint.quantity = String(cleanNumber(Math.abs(row.deviationSpot)));
+    }
+    return [hint];
+  }
   const markets = [
     { market: 1 as const, target: row.targetSpot, actual: row.actualSpot, deviation: row.deviationSpot, suffix: "SPOT" },
     { market: 2 as const, target: row.targetSwap, actual: row.actualSwap, deviation: row.deviationSwap, suffix: "SWAP" }
