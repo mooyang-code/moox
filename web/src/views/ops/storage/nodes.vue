@@ -166,6 +166,7 @@
 </template>
 
 <script setup lang="ts">
+import { useSpaceStore } from "@/store/modules/space";
 import { computed, onMounted, reactive, ref } from "vue";
 import { useRouter } from "vue-router";
 import { listDataNodes } from "@/api/storage/metadata";
@@ -226,11 +227,11 @@ function onDetailPageChange(page: number) {
   detailPagination.current = page;
 }
 
+/** 打开数据集的采集结果：数据集属于某个空间，先切到那个空间，结果页按 ?dataset= 选任务。 */
+const spaceStore = useSpaceStore();
 function openDataset(summary: DatasetSummary) {
-  void router.push({
-    path: "/collector/tasks",
-    query: { tab: "results", space_id: summary.space_id }
-  });
+  if (summary.space_id && summary.space_id !== spaceStore.selectedSpaceId) spaceStore.setSelectedSpace(summary.space_id);
+  void router.push({ path: "/collector/tasks", query: { tab: "results", dataset: summary.dataset_id } });
 }
 
 function onPageChange(page: number) {

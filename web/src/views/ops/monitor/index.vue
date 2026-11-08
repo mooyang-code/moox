@@ -55,7 +55,7 @@
               </div>
               <div class="alert-line__foot">
                 <span class="chip">{{ line.layer }}</span>
-                <a class="locator" :href="line.link.href">{{ line.link.label }} →</a>
+                <a class="locator" :href="line.link.href" @click="switchSpaceFor(line.link)">{{ line.link.label }} →</a>
               </div>
               <div v-if="expandedAlert === line.key" class="alert-line__detail">
                 <dl class="facts">
@@ -378,6 +378,7 @@
 </template>
 
 <script setup lang="ts">
+import { useSpaceStore } from "@/store/modules/space";
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { Message, Modal } from "@arco-design/web-vue";
 import { useRoute, useRouter } from "vue-router";
@@ -669,6 +670,12 @@ onBeforeUnmount(() => {
   if (clock !== undefined) window.clearInterval(clock);
   refreshGuard.invalidate();
 });
+
+// 告警对象属于别的空间时（例如别的空间的数据集），先切到那个空间再打开链接
+const spaceStoreForLinks = useSpaceStore();
+function switchSpaceFor(link: { href: string; spaceId?: string }) {
+  if (link.spaceId && link.spaceId !== spaceStoreForLinks.selectedSpaceId) spaceStoreForLinks.setSelectedSpace(link.spaceId);
+}
 </script>
 
 <style scoped lang="scss">

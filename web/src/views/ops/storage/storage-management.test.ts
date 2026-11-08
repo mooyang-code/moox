@@ -6,8 +6,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   listDataNodes: vi.fn(),
-  push: vi.fn()
+  push: vi.fn(),
+  space: { selectedSpaceId: "space-b", setSelectedSpace: vi.fn() }
 }));
+vi.mock("@/store/modules/space", () => ({ useSpaceStore: () => mocks.space }));
 
 vi.mock("@/api/storage/metadata", async () => {
   const actual = await vi.importActual<typeof import("@/api/storage/metadata")>("@/api/storage/metadata");
@@ -117,9 +119,11 @@ describe("storage configuration workbench", () => {
     expect(wrapper.text()).not.toContain("删除");
 
     await wrapper.find(".dataset-tag").trigger("click");
+    // 数据集属于 space-a：先切到那个空间，结果页按 ?dataset= 选任务
+    expect(mocks.space.setSelectedSpace).toHaveBeenCalledWith("space-a");
     expect(mocks.push).toHaveBeenCalledWith({
       path: "/collector/tasks",
-      query: { tab: "results", space_id: "space-a" }
+      query: { tab: "results", dataset: "dataset-a" }
     });
 
     await wrapper.find(".dataset-tag").trigger("keydown", { key: "Enter" });

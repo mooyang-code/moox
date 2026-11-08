@@ -83,7 +83,25 @@ function eventCenterLink(kind?: string): { href: string; label: string } {
 }
 
 /** 告警对象的处理入口：页面地址与链接文字。同一类关注项里的具体情况按 Monitor 给出的 attention_kind 区分。 */
-export function alertLink(object?: HealthObject): { href: string; label: string } {
+/** 告警的处理入口。spaceId：对象所在的空间，和当前空间不同时先切过去再打开（数据集属于某个空间）。 */
+export interface AlertLink {
+  href: string;
+  label: string;
+  spaceId?: string;
+}
+
+/** 采集数据集的告警：直达这个数据集的采集结果（结果页按 ?dataset=&freq= 选任务）。 */
+function collectorDatasetLink(object: HealthObject): AlertLink {
+  if (!object.dataset_id) return COLLECTOR_RESULTS;
+  const query = new URLSearchParams({
+    tab: "results",
+    dataset: object.dataset_id,
+    ...(object.freq ? { freq: object.freq } : {})
+  });
+  return { href: `#/collector/tasks?${query}`, label: "查看采集结果", ...(object.space_id ? { spaceId: object.space_id } : {}) };
+}
+
+export function alertLink(object?: HealthObject): AlertLink {
   // 读不到的情况有三种、多半要在命令行里处理：首页跳到监控告警页，那里显示三种情况的处理说明（alertNote）。
   if (readonlyKeyMissing(object)) return { href: "#/ops/monitor", label: "查看处理办法" };
   if (object?.type === "host") return { href: hostHref(object.host_id), label: "查看主机" };
@@ -96,7 +114,7 @@ export function alertLink(object?: HealthObject): { href: string; label: string 
       case "trade":
         return { href: "#/trading/accounts", label: "查看交易账户" };
       default:
-        return COLLECTOR_RESULTS;
+        return collectorDatasetLink(object);
     }
   }
   switch (object?.kind) {
