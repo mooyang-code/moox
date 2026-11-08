@@ -60,7 +60,9 @@ describe("collector task management workbench", () => {
 
   it("derives the active tab from the URL only", () => {
     const normalized = normalizeSource(fs.readFileSync(path.resolve(__dirname, "index.vue"), "utf8"));
-    expect(normalized).toContain("constactiveTab=computed<CollectorTaskTab>(()=>landingTab.value??normalizeTab(route.query.tab))");
+    expect(normalized).toContain(
+      "constactiveTab=computed<CollectorTaskTab>(()=>landingTab.value??normalizeTab(route.query.tab))"
+    );
     expect(normalized).not.toMatch(/activeTab\.value=(?!=)/);
   });
 });
