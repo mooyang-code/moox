@@ -137,8 +137,7 @@ export function viewModeFromPrimaryDataset(
   return isTimeSeriesDataKind(dataset.data_kind) ? "time_series" : "record";
 }
 
-// A View indexes one Dataset and names each dataset column after the Dataset
-// column it reads, so origin_id is the bare column name of view.dataset_id.
+// 一个视图索引一个数据集，视图里的数据集列按它读取的数据集列命名，所以 origin_id 就是 view.dataset_id 下的裸列名。
 export function buildViewColumnLabels(
   viewColumns: ViewColumn[],
   datasetColumns: DatasetColumn[],

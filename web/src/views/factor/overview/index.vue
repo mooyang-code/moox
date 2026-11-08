@@ -30,7 +30,7 @@
         <div class="overview-columns">
           <section class="overview-col" aria-label="计算任务">
             <h3>计算任务</h3>
-            <a-empty v-if="!cards.length && !store.loading" description="当前空间没有计算任务">
+            <a-empty v-if="!cards.length && !store.loading && !store.loadError" description="当前空间没有计算任务">
               <template #extra><a-button @click="go({ path: '/factor/tasks', query: {} })">前往计算任务</a-button></template>
             </a-empty>
             <article v-for="card in cards" :key="card.taskId" class="task-card">
@@ -58,24 +58,26 @@
           <div class="overview-col">
             <section aria-label="待处理">
               <h3>待处理</h3>
-              <a-empty v-if="!pending.length" description="没有待处理事项" />
-              <ul v-else class="side-list">
+              <ul v-if="pending.length" class="side-list">
                 <li v-for="item in pending" :key="`${item.kind}-${item.taskId}-${item.target.query.job || ''}`">
                   <a-link @click="go(item.target)">{{ item.title }}</a-link>
                   <span class="side-list__text">{{ item.text }}</span>
                 </li>
               </ul>
+              <p v-else-if="sideNote" class="side-note">{{ sideNote }}</p>
+              <a-empty v-else description="没有待处理事项" />
             </section>
 
             <section aria-label="进行中的补算">
               <h3>进行中的补算</h3>
-              <a-empty v-if="!running.length" description="没有进行中的补算" />
-              <ul v-else class="side-list">
+              <ul v-if="running.length" class="side-list">
                 <li v-for="job in running" :key="job.job_id">
                   <a-link @click="go(recalcTarget(job))">{{ job.members.join(", ") || "全部已启用因子" }}</a-link>
                   <a-progress :percent="progressPercent(job) / 100" size="small" />
                 </li>
               </ul>
+              <p v-else-if="runningNote" class="side-note">{{ runningNote }}</p>
+              <a-empty v-else description="没有进行中的补算" />
             </section>
           </div>
         </div>
@@ -102,6 +104,9 @@ const router = useRouter();
 const { store, spaceId, reload } = useFactorScope({ extraPoll: () => loadJobs(true) });
 
 const jobs = ref<RecalcJob[]>([]);
+// 补算作业读到过才显示“没有……”；读取失败时写明，不当成没有
+const jobsLoaded = ref(false);
+const jobsError = ref("");
 const refreshing = ref(false);
 const gate = new RequestGate();
 
@@ -112,6 +117,26 @@ const split = computed(() => splitRecalcJobs(jobs.value));
 const running = computed(() => split.value.running);
 const pending = computed(() => pendingItems(sets.value, split.value.failed, labelOf));
 const stats = computed(() => statsStrip(store.engine, running.value.length));
+/** 计算任务没读到时写明原因；只在任务列表为空时算失败，后台刷新偶尔失败时沿用已读到的任务。 */
+const tasksNote = computed(() => {
+  if (store.loadError && !store.tasks.length) return "计算任务读取失败，见上方提示";
+  if (!store.isLoadedFor(spaceId.value)) return "读取中…";
+  return "";
+});
+/** “待处理”来自计算任务和失败的补算：没有可列的事项时，任一项没读到就写明原因，不显示“没有待处理事项”。 */
+const sideNote = computed(() => {
+  if (tasksNote.value) return tasksNote.value;
+  if (jobsError.value) return `补算作业读取失败：${jobsError.value}`;
+  if (!jobsLoaded.value) return "读取中…";
+  return "";
+});
+/** “进行中的补算”同理：任务或补算作业没读到时不显示“没有进行中的补算”。 */
+const runningNote = computed(() => {
+  if (jobsError.value) return `补算作业读取失败：${jobsError.value}`;
+  if (tasksNote.value) return tasksNote.value;
+  if (!jobsLoaded.value) return "读取中…";
+  return "";
+});
 
 /** ListRecalcJobs 必须带 task_id：只对已启用的计算任务扇出。 */
 async function loadJobs(background = false) {
@@ -119,6 +144,8 @@ async function loadJobs(background = false) {
   const ids = recalcQueryTasks(sets.value);
   if (!ids.length) {
     jobs.value = [];
+    jobsLoaded.value = true;
+    jobsError.value = "";
     return;
   }
   try {
@@ -130,9 +157,13 @@ async function loadJobs(background = false) {
         )
       )
     );
-    if (gate.isCurrent(token)) jobs.value = results.flatMap(rsp => rsp.jobs || []);
-  } catch {
-    // 保留上一份快照，下一个轮询周期重试。
+    if (!gate.isCurrent(token)) return;
+    jobs.value = results.flatMap(rsp => rsp.jobs || []);
+    jobsLoaded.value = true;
+    jobsError.value = "";
+  } catch (error) {
+    // 保留上一份快照，下一个轮询周期重试；还没读到过时写明失败
+    if (gate.isCurrent(token) && !jobsLoaded.value) jobsError.value = error instanceof Error ? error.message : String(error);
   }
 }
 
@@ -155,7 +186,11 @@ function recalcTarget(job: RecalcJob): RouteTarget {
 
 watch(
   () => recalcQueryTasks(sets.value).join(","),
-  () => void loadJobs(),
+  () => {
+    jobsLoaded.value = false;
+    jobsError.value = "";
+    void loadJobs();
+  },
   { immediate: true }
 );
 </script>
@@ -165,6 +200,12 @@ watch(
 
 .overview-alert {
   margin-bottom: var(--moox-space-3);
+}
+
+.side-note {
+  margin: var(--moox-space-2) 0;
+  color: var(--color-text-3);
+  font-size: 13px;
 }
 
 .stats-strip {

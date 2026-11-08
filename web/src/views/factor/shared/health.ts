@@ -2,10 +2,10 @@ import { formatInstant } from "@/utils/time-zone";
 import type { FactorTask, TaskRunSummary } from "@/api/factor/types";
 import { taskStatusTag } from "./status";
 
-export type SetHealthKey = "pending" | "deleting" | "disabled" | "idle" | "failed" | "degraded" | "lagging" | "ok";
+export type TaskHealthKey = "pending" | "deleting" | "disabled" | "idle" | "failed" | "degraded" | "lagging" | "ok";
 
-export interface SetHealth {
-  key: SetHealthKey;
+export interface TaskHealth {
+  key: TaskHealthKey;
   label: string;
   color: string;
 }
@@ -48,7 +48,7 @@ export function barLagText(freq: string, lastRun?: Pick<TaskRunSummary, "last_pe
   return bars === 0 ? "已追平" : `落后 ${bars} 根（${formatLag(seconds)}）`;
 }
 
-export function setHealth(set: Pick<FactorTask, "status" | "freq">, lastRun?: TaskRunSummary): SetHealth {
+export function taskHealth(set: Pick<FactorTask, "status" | "freq">, lastRun?: TaskRunSummary): TaskHealth {
   if (set.status === "pending" || set.status === "disabled") {
     const tag = taskStatusTag(set.status);
     return { key: set.status, ...tag };

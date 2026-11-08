@@ -54,7 +54,8 @@ describe("collector result workflow", () => {
     const results = fs.readFileSync(path.resolve(__dirname, "index.vue"), "utf8");
     expect(results).toContain('v-for="tab in resultTabs"');
     expect(results).toContain(':key="tab.taskId"');
-    expect(results).toContain(':label="tab.title"');
+    expect(results).toContain('type="rounded"');
+    expect(results).not.toContain("<a-select");
     expect(tabs.map(tab => tab.taskId)).toEqual(["newer", "older"]);
     expect(tabs.map(tab => tab.title)).toEqual(["新任务", "旧任务"]);
   });

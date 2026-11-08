@@ -3,7 +3,7 @@ import { ACTIVITY_CATEGORY_LABELS } from "@/components/activity-log/activity-log
 import type { FactorTaskInfo } from "@/api/factor/types";
 import type { HealthAlert, HealthHost, HealthOverview, LifecycleColor } from "@/api/monitor";
 import type { Strategy, StrategyInstance, StrategyTargetSnapshot } from "@/api/strategy-types";
-import { freqSeconds, runBarLag, setHealth } from "@/views/factor/shared/health";
+import { freqSeconds, runBarLag, taskHealth } from "@/views/factor/shared/health";
 import { statusLabel } from "@/views/ops/monitor/health-display";
 import { resultsLink, type StrategyLink } from "@/views/strategy/links";
 import { percent, rankTargets, targetStateTag } from "@/views/strategy/model";
@@ -184,7 +184,7 @@ export function factorRows(sets: FactorTaskInfo[], spaceId: string, names: NameB
     .filter(info => info.factor_task.space_id === spaceId)
     .map(info => {
       const set = info.factor_task;
-      const health = setHealth(set, info.last_run);
+      const health = taskHealth(set, info.last_run);
       const behindSeconds = info.last_run?.last_period_time ? runBarLag(set.freq, info.last_run).seconds : null;
       const periodOpenMs = toMillis(info.last_run?.last_period_time);
       const periodEndMs = periodOpenMs === null ? null : periodOpenMs + freqSeconds(set.freq) * 1000;

@@ -42,7 +42,7 @@ export function buildTabQuery(query: Record<string, unknown>, tab: ComputeTaskTa
 
 export interface FactorScopeOptions {
   /** 必选计算任务的页面（计算结果、补算）：?task= → store.currentTaskId → 第一个，并把结果写回 URL。 */
-  requireSet?: boolean;
+  requireTask?: boolean;
   /** 轮询；默认 10 秒，false 关闭。 */
   poll?: boolean;
   pollMs?: number;
@@ -56,7 +56,7 @@ export interface FactorScopeOptions {
  * 计算任务页内部用 keep-alive 缓存页签：失活期间不跟随 ?task=，重新激活时按 URL 补同步一次。
  */
 export function useFactorScope(options: FactorScopeOptions = {}) {
-  const requireSet = options.requireSet ?? false;
+  const requireTask = options.requireTask ?? false;
   const route = useRoute();
   const router = useRouter();
   const store = useFactorStore();
@@ -85,13 +85,13 @@ export function useFactorScope(options: FactorScopeOptions = {}) {
     return router.replace({ path: route.path, query: merged });
   }
 
-  function hasSet(taskId: string) {
+  function hasTask(taskId: string) {
     return Boolean(taskId) && store.tasks.some((item: FactorTaskInfo) => item.factor_task.task_id === taskId);
   }
 
   function resolveSelection() {
-    if (!requireSet || !canWriteRoute()) return;
-    const resolved = [routeTaskId.value, store.currentTaskId].find(hasSet) ?? store.tasks[0]?.factor_task.task_id ?? "";
+    if (!requireTask || !canWriteRoute()) return;
+    const resolved = [routeTaskId.value, store.currentTaskId].find(hasTask) ?? store.tasks[0]?.factor_task.task_id ?? "";
     store.select(resolved);
     if (resolved !== routeTaskId.value) void navigate({ task: resolved || undefined });
   }
@@ -117,14 +117,14 @@ export function useFactorScope(options: FactorScopeOptions = {}) {
   );
 
   watch(routeTaskId, value => {
-    if (requireSet && canWriteRoute() && hasSet(value)) store.select(value);
+    if (requireTask && canWriteRoute() && hasTask(value)) store.select(value);
   });
 
   // 计算任务变了：因子条件 fc 只属于原来的任务。selectTask 自己也会去掉 fc，但它的跳转还没生效时这里会用旧 query 合并，必须同样去掉。
   watch(
     () => store.currentTaskId,
     value => {
-      if (requireSet && canWriteRoute() && value !== routeTaskId.value)
+      if (requireTask && canWriteRoute() && value !== routeTaskId.value)
         void navigate({ task: value || undefined, fc: undefined });
     }
   );
@@ -132,7 +132,7 @@ export function useFactorScope(options: FactorScopeOptions = {}) {
   /** 切换计算任务：job 与因子条件 fc 都只属于原来的任务，一并清掉。 */
   function selectTask(taskId: string) {
     store.select(taskId);
-    if (requireSet) void navigate({ task: taskId, job: undefined, fc: undefined });
+    if (requireTask) void navigate({ task: taskId, job: undefined, fc: undefined });
   }
 
   if (options.poll !== false) {

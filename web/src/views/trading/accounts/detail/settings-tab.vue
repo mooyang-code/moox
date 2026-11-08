@@ -1,9 +1,9 @@
 <template>
   <div class="settings">
-    <SectionBlock title="执行账户" flush>
+    <SectionBlock title="成员" flush>
       <template #sub>
-        点左边的三角展开单个账户的设置<template v-if="logical.control_mode === 1 && !membersEditable"
-          >；增删执行账户、改优先级和启用状态前，要先暂停自动执行</template
+        账户本身的名称、密钥、杠杆在「执行账户」页签里改<template v-if="logical.control_mode === 1 && !membersEditable"
+          >；增删成员、改优先级和启用状态前，要先暂停自动执行</template
         >
       </template>
       <template #extra>
@@ -20,13 +20,11 @@
         :data="rows"
         :pagination="false"
         :scroll="{ x: MEMBERS_WIDTH }"
-        :expandable="{ width: 40 }"
-        v-model:expanded-keys="expandedKeys"
       >
         <template #columns>
-          <a-table-column title="执行账户" :width="190">
+          <a-table-column title="执行账户" :width="220">
             <template #cell="{ record }">
-              <strong>{{ record.account.name }}</strong>
+              <a-link @click="openAccount(record.account)">{{ record.account.name }}</a-link>
               <div class="tx-muted tx-mono">{{ record.account.trading_account_id }}</div>
             </template>
           </a-table-column>
@@ -43,33 +41,9 @@
           <a-table-column title="启用" :width="70">
             <template #cell="{ record }">{{ record.enabled ? "是" : "否" }}</template>
           </a-table-column>
-          <a-table-column title="就绪" :width="140">
-            <template #cell="{ record }">
-              <StatusMark :tone="record.account.ready ? 'ok' : 'bad'">
-                {{ record.account.ready ? "就绪" : record.account.last_error || "未就绪" }}
-              </StatusMark>
-            </template>
-          </a-table-column>
-          <a-table-column title="权益" :width="120" align="right">
-            <template #cell="{ record }"
-              ><span class="tx-num tx-nowrap">{{ fmtMoney(record.account.snapshot?.equity) }}</span></template
-            >
-          </a-table-column>
-          <a-table-column title="可用资金" :width="120" align="right">
-            <template #cell="{ record }"
-              ><span class="tx-num tx-nowrap">{{ fmtMoney(record.account.snapshot?.available_funds) }}</span></template
-            >
-          </a-table-column>
-          <a-table-column title="最近同步" :width="120">
-            <template #cell="{ record }"
-              ><span class="tx-muted"
-                ><TimeText :value="record.account.last_sync_at" :zone="displayZone" precision="minute" /></span
-            ></template>
-          </a-table-column>
-          <a-table-column title="操作" :width="190" :fixed="isNarrow ? undefined : 'right'">
+          <a-table-column title="操作" :width="120" :fixed="isNarrow ? undefined : 'right'">
             <template #cell="{ record }">
               <a-space :size="0">
-                <a-button size="mini" type="text" @click="syncAccounts([record.account])">同步</a-button>
                 <a-tooltip content="先暂停自动执行" :disabled="membersEditable">
                   <a-button
                     size="mini"
@@ -92,9 +66,6 @@
               </a-space>
             </template>
           </a-table-column>
-        </template>
-        <template #expand-row="{ record }">
-          <MemberSettings :account="record.account" @changed="reload" />
         </template>
         <template #empty>组合里还没有执行账户</template>
       </a-table>
@@ -140,34 +111,16 @@
       <a-button type="primary" size="small" :loading="renaming" :disabled="!nameDirty" @click="renameCombo">保存</a-button>
     </SectionBlock>
 
-    <section class="danger-zone">
+    <section v-if="paperRows.length" class="danger-zone">
       <h3>危险操作</h3>
-      <div class="danger-row">
+      <div v-for="item in paperRows" :key="`dz-${item.account.trading_account_id}`" class="danger-row">
         <div class="danger-text">
-          <strong>清仓整个组合</strong>
+          <strong>关闭模拟账户「{{ item.account.name }}」</strong>
           <div class="tx-muted">
-            撤掉所有执行账户的未完成订单，按市价平掉全部持仓{{ logical.control_mode === 1 ? "，并暂停自动执行" : "" }}。
+            撤掉它的未完成订单，停用账户并移出组合，并暂停整个组合账户的自动执行。之后不能再下单，历史订单和成交保留。
           </div>
         </div>
-        <a-button status="danger" :disabled="flattenRunning || !hasPositions" @click="openFlatten()">清仓</a-button>
-      </div>
-      <div v-for="item in rows" :key="`dz-${item.account.trading_account_id}`" class="danger-row">
-        <template v-if="item.account.execution_mode === 1">
-          <div class="danger-text">
-            <strong>关闭模拟账户「{{ item.account.name }}」</strong>
-            <div class="tx-muted">
-              撤掉它的未完成订单，停用账户并移出组合，并暂停整个组合账户的自动执行。之后不能再下单，历史订单和成交保留。
-            </div>
-          </div>
-          <a-button status="danger" @click="openClosePaper(item.account)">关闭模拟账户</a-button>
-        </template>
-        <template v-else>
-          <div class="danger-text">
-            <strong>停用执行账户「{{ item.account.name }}」</strong>
-            <div class="tx-muted">还在组合里的执行账户不能停用，先暂停自动执行并把它移出组合。</div>
-          </div>
-          <a-button status="danger" disabled>停用</a-button>
-        </template>
+        <a-button status="danger" @click="openClosePaper(item.account)">关闭模拟账户</a-button>
       </div>
     </section>
 
@@ -199,9 +152,9 @@
 </template>
 
 <script setup lang="ts">
-import TimeText from "@/components/time-text/index.vue";
 import { useWindowSize } from "@vueuse/core";
 import { computed, inject, ref, watch } from "vue";
+import { useRouter } from "vue-router";
 import { Message } from "@arco-design/web-vue";
 import { exchangeLabels, listLogicalAccounts, removeLogicalAccountMember, updateLogicalAccount } from "@/api/trade";
 import type { LogicalAccount, TradingAccount } from "@/api/trade";
@@ -216,41 +169,22 @@ import FundSettingsForm from "../../settings/fund-settings-form.vue";
 import OrderSettingsForm from "../../settings/order-settings-form.vue";
 import ConfirmDialog from "@/components/trade-confirm/confirm-dialog.vue";
 import { accountEnvironment } from "@/components/trade-confirm/environment";
-import { fmtMoney } from "../shared/format";
 import { marketsText } from "../shared/markets";
-import { positionCount } from "../shared/position-snapshot";
-import MemberSettings from "../shared/member-settings.vue";
 import { eligibleAccounts } from "../shared/membership";
 import SectionBlock from "../shared/section-block.vue";
-import StatusMark from "../shared/status-mark.vue";
 import { detailContextKey } from "./context";
 import MemberDialog from "./member-dialog.vue";
-import { useDisplayZone } from "@/hooks/useDisplayZone";
 
-// 交易页的时间按当前空间登记的时区显示
-const displayZone = useDisplayZone();
-const {
-  logical,
-  accounts,
-  allAccounts,
-  env,
-  strategy,
-  snapshot,
-  membersEditable,
-  flattenRunning,
-  reload,
-  syncAccounts,
-  openFlatten,
-  openClosePaper
-} = inject(detailContextKey)!;
+const router = useRouter();
+const { logical, accounts, allAccounts, env, strategy, snapshot, membersEditable, reload, openClosePaper } =
+  inject(detailContextKey)!;
 // 窄屏时右侧操作列不固定，不然会盖住数据列
 const { width: viewportWidth } = useWindowSize();
 const isNarrow = computed(() => viewportWidth.value < 768);
 
-// 各列宽度之和加展开箭头列：窄屏时横向滚动，数字不折行
-const MEMBERS_WIDTH = 40 + 190 + 190 + 80 + 70 + 140 + 120 + 120 + 120 + 190;
+// 各列宽度之和：窄屏时横向滚动，不折行
+const MEMBERS_WIDTH = 220 + 190 + 80 + 70 + 120;
 const memberDialog = ref<InstanceType<typeof MemberDialog>>();
-const expandedKeys = ref<string[]>([]);
 const allLogicals = ref<LogicalAccount[]>([]);
 const comboName = ref(logical.value.name);
 const renaming = ref(false);
@@ -284,8 +218,8 @@ const hasBinanceLive = computed(() =>
   })
 );
 const candidates = computed(() => eligibleAccounts(allAccounts.value, allLogicals.value, logical.value, env.value));
-// 和页头“清仓”按钮同一口径：零数量的现货余额不算持仓
-const hasPositions = computed(() => positionCount(snapshot.value) > 0);
+// 模拟账户可以在这里关闭（会暂停整个组合）；实盘账户要先移出组合，再到执行账户页签停用
+const paperRows = computed(() => rows.value.filter(item => item.account.execution_mode === 1));
 const nameDirty = computed(() => comboName.value.trim() !== "" && comboName.value.trim() !== logical.value.name);
 
 // 候选账户要排除所有组合里的成员，所以读全部组合；成员变化后重读。
@@ -313,6 +247,14 @@ function positionCountOf(accountId: string): number {
       item => item.trading_account_id === accountId && item.instrument_id && Number(item.quantity) !== 0
     ).length
   );
+}
+
+/** 到执行账户页签并展开这个账户的设置。 */
+function openAccount(account: TradingAccount) {
+  void router.push({
+    path: "/trading/accounts",
+    query: { env: env.value === "paper" ? undefined : env.value, list: "execution", account: account.trading_account_id }
+  });
 }
 
 function openRemove(account: TradingAccount) {

@@ -162,18 +162,7 @@
       @cancel="handleUploadCancel"
     >
       <a-form :model="uploadForm" layout="vertical" ref="uploadFormRef">
-        <a-form-item field="package_type" label="函数包类型" required>
-          <a-select
-            v-model="uploadForm.package_type"
-            placeholder="请选择函数包类型"
-            @change="onPackageTypeChange"
-            :disabled="!!props.packageType"
-          >
-            <a-option v-for="type in PACKAGE_TYPE_OPTIONS" :key="type.value" :value="type.value">
-              {{ type.label }}
-            </a-option>
-          </a-select>
-        </a-form-item>
+        <a-form-item label="函数包类型">{{ getPackageTypeLabel(uploadForm.package_type) }}</a-form-item>
 
         <a-form-item field="version" label="版本号" required :status="versionValidationStatus" :feedback="versionFeedback">
           <a-input v-model="uploadForm.version" placeholder="将从上传的文件名中自动解析" readonly disabled />
@@ -264,7 +253,6 @@ import {
   deleteFunctionPackage,
   downloadPackageByURL,
   RUNTIME_OPTIONS,
-  PACKAGE_TYPE_OPTIONS,
   resolvePackageType,
   STATUS_OPTIONS,
   type FunctionPackage,
@@ -480,7 +468,7 @@ const onAdd = () => {
   uploadVisible.value = true;
 };
 
-// 包类型变化处理
+// 代码包类型对应的包名
 const packageNameForType = (packageType: number) => {
   const map: Record<number, string> = {
     1: "moox-collector",
@@ -488,15 +476,6 @@ const packageNameForType = (packageType: number) => {
     3: "custom_package"
   };
   return map[packageType] || "moox-collector";
-};
-
-const onPackageTypeChange = (value: number) => {
-  uploadForm.package_name = packageNameForType(value);
-
-  // 包类型变化时重新检查版本
-  if (uploadForm.version) {
-    checkVersionExists();
-  }
 };
 
 // 检查版本是否已存在

@@ -14,12 +14,6 @@ export function queryPage(raw: RawValue): number {
   return Number.isInteger(value) && value >= 1 ? value : 1;
 }
 
-/** 枚举值：不在允许范围内（含缺省）时取 fallback。 */
-export function queryEnum<T extends string>(raw: RawValue, allowed: readonly T[], fallback: T): T {
-  const value = queryString(raw);
-  return (allowed as readonly string[]).includes(value) ? (value as T) : fallback;
-}
-
 /** 构造 query：丢弃空值与默认值，数字与布尔转为字符串；键按字典序，便于比较。 */
 export function buildQuery(
   entries: Record<string, string | number | boolean | undefined | null>,
