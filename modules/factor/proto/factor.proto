@@ -83,7 +83,11 @@ message FactorUsage {
 
 message FactorInfo {
   FactorDef factor = 1;
+  // usages 只含调用方空间的引用；其他空间的引用只给数量，不暴露任务 ID。
   repeated FactorUsage usages = 2;
+  // 其他空间引用这个因子的成员数，以及其中启用着的成员数（内部调用看到全量引用，这两个为 0）。
+  uint32 other_space_usage_count = 3;
+  uint32 other_space_enabled_count = 4;
 }
 
 // FactorMember 是定义在因子任务中的运行实例，身份是任务内唯一的成员键（因子 ID 加参数段，规则见 packages/factorname）。
@@ -276,7 +280,10 @@ message GetFactorReq { string factor_id = 1; }
 message GetFactorRsp {
   common.RetInfo ret_info = 1;
   FactorDef factor = 2;
+  // usages 只含调用方空间的引用；其他空间的引用只给数量。
   repeated FactorUsage usages = 3;
+  uint32 other_space_usage_count = 4;
+  uint32 other_space_enabled_count = 5;
 }
 
 message ListFactorsReq {

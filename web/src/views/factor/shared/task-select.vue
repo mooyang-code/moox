@@ -21,17 +21,23 @@ import { useFactorStore } from "@/store/modules/factor";
 
 defineOptions({ name: "FactorTaskSelect" });
 
-const props = withDefaults(defineProps<{ modelValue: string; placeholder?: string }>(), { placeholder: "选择计算任务" });
+/** include：只列满足条件的任务（例如结果页只列能浏览结果的任务）。 */
+const props = withDefaults(
+  defineProps<{ modelValue: string; placeholder?: string; include?: (info: FactorTaskInfo) => boolean }>(),
+  { placeholder: "选择计算任务", include: undefined }
+);
 const emit = defineEmits<{ "update:modelValue": [taskId: string]; change: [taskId: string] }>();
 
 const store = useFactorStore();
 
 const options = computed(() =>
-  store.tasks.map((item: FactorTaskInfo) => ({
-    value: item.factor_task.task_id,
-    label: store.taskLabel(item.factor_task),
-    status: item.factor_task.status
-  }))
+  store.tasks
+    .filter((item: FactorTaskInfo) => !props.include || props.include(item))
+    .map((item: FactorTaskInfo) => ({
+      value: item.factor_task.task_id,
+      label: store.taskLabel(item.factor_task),
+      status: item.factor_task.status
+    }))
 );
 
 function onChange(value: unknown) {

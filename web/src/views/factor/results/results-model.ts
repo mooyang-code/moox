@@ -7,10 +7,6 @@ export function resultTasks(sets: FactorTaskInfo[]) {
   return sets.filter(item => item.factor_task.status === "enabled" || item.factor_task.status === "disabled");
 }
 
-export function resultTabTitle(info: Pick<FactorTaskInfo, "factor_task">, label: string) {
-  return info.factor_task.status === "disabled" ? `${label}（已停用）` : label;
-}
-
 /** 计算任务唯一输出数据集的默认结果视图。 */
 export function pickResultView(views: View[], set: Pick<FactorTask, "result_dataset_id">): View | null {
   return views.find(view => view.attributes?.view_role === "factor_result" && view.dataset_id === set.result_dataset_id) ?? null;

@@ -43,7 +43,7 @@
             <span v-if="rowsStale">；数据状态待刷新，保留上次查询数据（{{ lastRowsReadAt }}）</span>
           </a-alert>
           <a-alert v-else-if="hasQueried && !loading && tableRows.length === 0" class="query-alert" type="info" show-icon>
-            {{ props.emptyRowsDescription }}
+            {{ hasAnyFilter ? "没有符合条件的行" : props.emptyRowsDescription }}
           </a-alert>
 
           <QueryControls :loading="loading" :mode="mode">
@@ -124,6 +124,7 @@
               <div v-if="$slots['query-extra']" class="query-extra">
                 <slot name="query-extra" />
               </div>
+              <p v-if="previewRangeText" class="preview-range-hint">{{ previewRangeText }}</p>
             </section>
           </QueryControls>
 
@@ -1191,6 +1192,17 @@ function hasExactSubjectIDFilter() {
   );
 }
 
+/** 有任何筛选条件（含父页传入的）：结果为空时说“没有符合条件的行”，而不是“结果为空”。 */
+const hasAnyFilter = computed(() => Boolean(activeFilterExprs()) || Boolean(recordKeyword.value.trim()));
+
+/** 时序视图没有按数据时间筛选时，只查最近一段时间：写在查询区，免得以为“查不到”就是没有数据。 */
+const previewRangeText = computed(() => {
+  if (mode.value !== "time_series" || hasActiveDataTimeFilter()) return "";
+  return hasExactSubjectIDFilter()
+    ? `没有指定数据时间，只查最近 ${VIEW_BROWSE_SCOPED_PREVIEW_WINDOW_DAYS} 天`
+    : `未指定标的时只查最近 ${VIEW_BROWSE_UNSCOPED_PREVIEW_WINDOW_HOURS} 小时；指定标的（subject_id 等于）后查最近 ${VIEW_BROWSE_SCOPED_PREVIEW_WINDOW_DAYS} 天`;
+});
+
 function hasActiveDataTimeFilter() {
   return filters.value.some(filter => filter.fieldName.trim() === "data_time" && hasFilterInput(filter));
 }
@@ -1567,6 +1579,12 @@ watch(selectedSpaceId, () => {
 }
 
 /* 调用方追加的检索行（例如因子条件）横跨整行，放在栅格与操作按钮下方。 */
+.preview-range-hint {
+  margin: 8px 0 0;
+  color: var(--color-text-3);
+  font-size: 12px;
+}
+
 .query-extra {
   grid-column: 1 / -1;
   min-width: 0;

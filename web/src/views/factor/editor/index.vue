@@ -10,6 +10,13 @@
           <h2>{{ editing ? `编辑因子 ${factorId}` : "新建因子" }}</h2>
         </div>
         <a-space>
+          <a-tooltip v-if="editing" content="先保存修改，再添加到计算任务" :disabled="!dirty">
+            <span>
+              <a-button type="primary" status="success" :disabled="dirty || loading" @click="openTaskPicker"
+                >添加到计算任务</a-button
+              >
+            </span>
+          </a-tooltip>
           <a-button :disabled="saving" @click="leave">取消</a-button>
           <a-tooltip :content="blockerText" :disabled="!blockerText">
             <span>
@@ -30,7 +37,12 @@
         saveError
       }}</a-alert>
       <a-alert v-if="readOnly" type="warning" show-icon class="editor-alert">
-        该因子在 {{ enabledUsages.length }} 个计算任务中处于启用状态，需要先停用后才能编辑。
+        <template v-if="enabledUsages.length">
+          该因子在 {{ enabledUsages.length }} 个计算任务中处于启用状态，需要先停用后才能编辑。
+        </template>
+        <template v-if="otherSpaceEnabled">
+          其他空间有 {{ otherSpaceEnabled }} 个启用中的成员在用这个因子，需要先在那个空间停用后才能编辑。
+        </template>
         <div class="usage-row">
           <button
             v-for="chip in enabledUsages"
@@ -41,7 +53,8 @@
           >
             {{ chip.label }}
           </button>
-          <a-button size="mini" type="primary" @click="openTask('')">去计算任务</a-button>
+          <a-button v-if="enabledUsages.length" size="mini" type="primary" @click="openTask('')">去计算任务</a-button>
+          <a-button size="mini" @click="saveAsNew">另存为新因子</a-button>
         </div>
       </a-alert>
 
@@ -136,6 +149,7 @@
                 <a-button type="primary" :loading="previewing" :disabled="!canPreview" @click="runPreview">试算</a-button>
               </div>
               <a-alert v-if="previewError" type="error" show-icon class="preview__error">{{ previewError }}</a-alert>
+              <p v-if="previewOutdated" class="preview__outdated">下面的结果对应修改前的定义，重新试算看新的结果。</p>
               <a-table
                 v-if="previewRows.length"
                 :data="previewRows"
@@ -163,15 +177,8 @@
           <div class="editor-side">
             <section class="checklist" aria-label="保存前检查">
               <h3>保存前检查</h3>
-              <ul>
-                <li v-for="entry in checklist" :key="entry.key" :class="entry.ok ? 'is-ok' : 'is-fail'">
-                  <icon-check-circle-fill v-if="entry.ok" />
-                  <icon-close-circle-fill v-else />
-                  <span
-                    >{{ entry.label }}<em v-if="!entry.ok">：{{ entry.message }}</em></span
-                  >
-                </li>
-              </ul>
+              <p v-if="checklistFailures.length" class="checklist__fail">还不能保存：{{ checklistFailures.join("；") }}</p>
+              <p v-else class="checklist__ok">检查都通过了，可以保存。</p>
               <p class="checklist__note">
                 保存后因子定义不属于任何计算任务；到「计算任务」里添加并启用，加入时会按源数据集校验输入列。
               </p>
@@ -234,6 +241,29 @@
           </div>
         </div>
       </a-spin>
+      <a-modal
+        v-model:visible="taskPickerVisible"
+        title="添加到计算任务"
+        width="min(480px, 100vw)"
+        :ok-button-props="{ disabled: !pickedTaskId }"
+        ok-text="下一步"
+        @ok="openAddModal"
+      >
+        <a-select v-model="pickedTaskId" allow-search placeholder="选择计算任务">
+          <a-option v-for="info in addableTasks" :key="info.factor_task.task_id" :value="info.factor_task.task_id">
+            {{ store.taskLabel(info.factor_task) }}
+          </a-option>
+        </a-select>
+        <p v-if="!addableTasks.length" class="editor-sub">当前空间还没有可以添加因子的计算任务。</p>
+      </a-modal>
+      <AddFactorModal
+        v-if="pickedTask"
+        v-model:visible="addVisible"
+        :info="pickedTask"
+        :title="store.taskLabel(pickedTask.factor_task)"
+        :preset-factor-id="factorId"
+        @added="onAddedToTask"
+      />
     </div>
   </div>
 </template>
@@ -282,7 +312,10 @@ import {
   diagnosticText,
   factorChecklist,
   filterFunctions,
+  copyFactorId,
   formFromDefinition,
+  setPendingCopy,
+  takePendingCopy,
   previewRequest,
   sourceInputColumns,
   specKey,
@@ -290,6 +323,8 @@ import {
 } from "./factor-form";
 import { isTimeSeriesDataKind } from "@/views/data/shared/metadata-utils";
 import { useSpaceStore } from "@/store/modules/space";
+import AddFactorModal from "@/views/factor/compute-tasks/add-factor-modal.vue";
+import { addFactorState } from "@/views/factor/compute-tasks/compute-tasks-model";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 
 defineOptions({ name: "FactorEditor" });
@@ -342,10 +377,15 @@ const previewing = ref(false);
 const previewError = ref("");
 const previewDone = ref(false);
 const previewResult = ref<PreviewFactorRsp | null>(null);
+// 试算结果对应的定义：定义改了以后旧结果保留，但标明对应修改前的定义。
+const previewSpecKey = ref("");
+const previewOutdated = computed(() => Boolean(previewResult.value) && previewSpecKey.value !== specKey(form));
 const previewGate = new RequestGate();
 
 const dirty = computed(() => JSON.stringify(form) !== original.value);
 const checklist = computed(() => factorChecklist(form, compile.value));
+// 保存前检查只写没通过的项（一行文字），都通过时一句话
+const checklistFailures = computed(() => checklistBlockers(checklist.value));
 const blockerText = computed(() =>
   readOnly.value ? "该因子正在被启用的计算任务使用，需先停用" : checklistBlockers(checklist.value)[0] || ""
 );
@@ -403,7 +443,9 @@ const enabledUsages = computed(() =>
     .filter(usage => usage.status === "enabled")
     .map(usage => ({ taskId: usage.task_id, label: taskLabelOf(usage.task_id) }))
 );
-const readOnly = computed(() => editing.value && enabledUsages.value.length > 0);
+// 其他空间启用着的成员也挡住编辑（后端按全量引用校验），只是看不到是哪个任务。
+const otherSpaceEnabled = ref(0);
+const readOnly = computed(() => editing.value && (enabledUsages.value.length > 0 || otherSpaceEnabled.value > 0));
 
 /** 试算结果的数据时间按空间时区带后缀。 */
 function formatTime(value: string) {
@@ -420,6 +462,7 @@ function resetForm(next = blankFactorForm()) {
   Object.assign(form, next);
   original.value = JSON.stringify(form);
   usages.value = [];
+  otherSpaceEnabled.value = 0;
   saveError.value = "";
   previewResult.value = null;
   previewDone.value = false;
@@ -432,6 +475,9 @@ async function load() {
   committed.value = false;
   if (!editing.value) {
     resetForm();
+    // 从“另存为新因子”进来：带着原定义，算作未保存的修改（离开时会确认）
+    const copy = takePendingCopy();
+    if (copy) Object.assign(form, copy);
     loading.value = false;
     return;
   }
@@ -441,6 +487,7 @@ async function load() {
     if (!loadGate.isCurrent(token)) return;
     resetForm(formFromDefinition(rsp.factor));
     usages.value = rsp.usages || [];
+    otherSpaceEnabled.value = rsp.other_space_enabled_count ?? 0;
   } catch (error) {
     // 切换空间造成的取消不是失败：空间监听会重新加载
     if (loadGate.isCurrent(token) && !(error instanceof StaleSpaceRequestError)) {
@@ -511,12 +558,14 @@ async function runPreview() {
   previewing.value = true;
   previewError.value = "";
   previewDone.value = false;
+  const requestKey = specKey(form);
   try {
     const rsp = await previewFactor(
       previewRequest(form, { taskId: previewTaskId.value, subjects: previewSubjects.value, periods: previewPeriods.value })
     );
     if (!previewGate.isCurrent(token)) return;
     previewResult.value = rsp;
+    previewSpecKey.value = requestKey;
     previewDone.value = true;
   } catch (error) {
     if (previewGate.isCurrent(token)) {
@@ -617,10 +666,12 @@ async function save() {
     if (editing.value) await updateFactor(payload);
     else await createFactor(payload);
     committed.value = true;
-    Message.success(editing.value ? "因子已保存" : "因子已创建，到计算任务里添加并启用");
-    // 保存期间用户已确认离开页面或切换了因子：因子已保存，但不能再把用户带回列表
+    Message.success(editing.value ? "因子已保存" : "因子已创建，可以点“添加到计算任务”");
+    // 保存期间用户已确认离开页面或切换了因子：因子已保存，但不能再把用户带走
     if (!submission.isCurrent()) return;
-    await router.push("/factor/definitions");
+    // 新建后留在编辑页（地址换成编辑页），方便接着添加到计算任务；编辑保存后回列表
+    if (editing.value) await router.push("/factor/definitions");
+    else await router.replace(`/factor/definitions/${encodeURIComponent(payload.factor_id)}/edit`);
   } catch (error) {
     if (!submission.isCurrent()) return;
     saveError.value = error instanceof Error ? error.message : "保存因子失败";
@@ -631,6 +682,42 @@ async function save() {
 
 function leave() {
   void router.push("/factor/definitions");
+}
+
+/** 在用的因子不能改：带着当前定义进入新建页，ID 预填 <原 ID>_v2。 */
+function saveAsNew() {
+  setPendingCopy({ ...form, factor_id: copyFactorId(form.factor_id) });
+  void router.push("/factor/definitions/new");
+}
+
+// 添加到计算任务：先选任务，再打开和计算任务页一样的添加弹窗，预选这个因子。
+const taskPickerVisible = ref(false);
+const pickedTaskId = ref("");
+const addVisible = ref(false);
+const addableTasks = computed(() => store.tasks.filter((info: FactorTaskInfo) => !addFactorState(info.factor_task).disabled));
+const pickedTask = computed(() => store.tasks.find((info: FactorTaskInfo) => info.factor_task.task_id === pickedTaskId.value));
+
+function openTaskPicker() {
+  pickedTaskId.value = "";
+  taskPickerVisible.value = true;
+}
+
+function openAddModal() {
+  if (pickedTask.value) addVisible.value = true;
+}
+
+/** 添加到计算任务之后：只刷新“在用的计算任务”，不重置表单和试算结果。 */
+async function onAddedToTask() {
+  void store.reload();
+  const id = factorId.value;
+  try {
+    const rsp = await getFactor(id);
+    if (id !== factorId.value) return;
+    usages.value = rsp.usages || [];
+    otherSpaceEnabled.value = rsp.other_space_enabled_count ?? 0;
+  } catch {
+    // 只用于刷新使用情况；读不到时保留原样，下次进入页面再读。
+  }
 }
 
 function openTask(taskId: string) {
@@ -647,7 +734,9 @@ watch(
   () => store.tasks.map((info: FactorTaskInfo) => info.factor_task.task_id),
   ids => {
     if (previewTaskId.value && !ids.includes(previewTaskId.value)) previewTaskId.value = "";
-    if (!previewTaskId.value && ids.length) previewTaskId.value = ids[0];
+    // 默认用当前选中的计算任务（从计算任务页进来时就是那个任务）
+    if (!previewTaskId.value && ids.length)
+      previewTaskId.value = ids.includes(store.currentTaskId) ? store.currentTaskId : ids[0];
   },
   { immediate: true }
 );
@@ -870,6 +959,12 @@ watch(factorId, () => saveScope.invalidate());
   font-size: 13px;
 }
 
+.preview__outdated {
+  margin: 0 0 8px;
+  color: rgb(var(--warning-6));
+  font-size: 13px;
+}
+
 .is-null {
   color: var(--color-text-4);
 }
@@ -944,30 +1039,19 @@ watch(factorId, () => saveScope.invalidate());
   opacity: 0.5;
 }
 
-.checklist ul {
+.checklist__fail,
+.checklist__ok {
   margin: var(--moox-space-2) 0 0;
-  padding: 0;
-  list-style: none;
-}
-
-.checklist li {
-  display: flex;
-  align-items: flex-start;
-  gap: 6px;
-  padding: 2px 0;
   font-size: 13px;
+  line-height: 1.6;
 }
 
-.checklist li.is-ok {
-  color: rgb(var(--success-6));
-}
-
-.checklist li.is-fail {
+.checklist__fail {
   color: rgb(var(--danger-6));
 }
 
-.checklist em {
-  font-style: normal;
+.checklist__ok {
+  color: var(--color-text-2);
 }
 
 .checklist__note {

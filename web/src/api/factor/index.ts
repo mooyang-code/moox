@@ -106,8 +106,12 @@ export async function setFactorMemberStatus(
   return { member: rsp.member };
 }
 
-export async function listFactorCategories() {
-  const rsp = await callFactor<Record<string, never>, FactorRetRsp<{ categories: FactorCategory[] }>>("ListFactorCategories", {});
+export async function listFactorCategories(options: { silentError?: boolean } = {}) {
+  const rsp = await callFactor<Record<string, never>, FactorRetRsp<{ categories: FactorCategory[] }>>(
+    "ListFactorCategories",
+    {},
+    options
+  );
   return rsp.categories || [];
 }
 

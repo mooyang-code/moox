@@ -1,6 +1,6 @@
 import type { FactorDef, FactorInput, FactorType, PreviewFactorReq, ValidateFactorSpecRsp } from "@/api/factor/types";
 import type { DatasetColumn } from "@/api/storage/types";
-import { validateFactorId } from "@/utils/factor-name";
+import { MAX_FACTOR_ID_LEN, validateFactorId } from "@/utils/factor-name";
 import { TIMESERIES_SPEC_TEMPLATE } from "./editor-template";
 
 export const RESERVED_COLUMNS = ["subject_id", "freq", "data_time", "series_tag"];
@@ -200,4 +200,29 @@ export function filterFunctions<T extends { name: string; doc: string; signature
     fn =>
       fn.name.toLowerCase().includes(query) || fn.signature.toLowerCase().includes(query) || fn.doc.toLowerCase().includes(query)
   );
+}
+
+/**
+ * 另存为新因子时预填的 ID：原 ID 加 _v2（已经以 _vN 结尾的加一），按因子 ID 的长度上限截断原 ID，
+ * 截断后不留结尾的下划线。
+ */
+export function copyFactorId(id: string): string {
+  const match = /^(.*)_v(\d+)$/.exec(id);
+  const base = match ? match[1] : id;
+  const suffix = `_v${match ? Number(match[2]) + 1 : 2}`;
+  const head = base.slice(0, MAX_FACTOR_ID_LEN - suffix.length).replace(/_+$/, "");
+  return `${head}${suffix}`;
+}
+
+// 另存为新因子：编辑页把当前定义放在这里，新建页打开时取走（只用一次）。
+let pendingCopy: FactorFormState | null = null;
+
+export function setPendingCopy(form: FactorFormState) {
+  pendingCopy = { ...form };
+}
+
+export function takePendingCopy(): FactorFormState | null {
+  const copy = pendingCopy;
+  pendingCopy = null;
+  return copy;
 }

@@ -6,6 +6,7 @@ import {
   defaultRange,
   enabledMemberIds,
   estimateRecalc,
+  isSessionMarket,
   jobDisplay,
   progressPercent,
   quickRange,
@@ -90,6 +91,23 @@ describe("recalc model", () => {
     expect(estimateRecalc({ freq: "1h", start, end: start, factorCount: 1, subjectMode: "all", subjectCount: 0 }).periods).toBe(
       0
     );
+  });
+
+  it("按交易时段的市场（crypto 以外）注明按自然时间估算", () => {
+    expect(isSessionMarket("crypto")).toBe(false);
+    expect(isSessionMarket("stockcn")).toBe(true);
+    expect(isSessionMarket("")).toBe(false);
+    const start = Date.UTC(2026, 9, 1);
+    const text = estimateRecalc({
+      freq: "1h",
+      start,
+      end: start + 3_600_000,
+      factorCount: 1,
+      subjectMode: "all",
+      subjectCount: 0,
+      sessionMarket: true
+    }).text;
+    expect(text).toBe("将处理 1 个周期 × 1 个因子 × 全部对象（按自然时间估算，实际以交易时段为准）");
   });
 
   it("default factor selection is all enabled members", () => {

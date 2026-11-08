@@ -11,6 +11,10 @@
     <a-alert v-if="error" type="error" show-icon>{{ error }}</a-alert>
     <a-spin v-else :loading="loading" class="detail-spin">
       <template v-if="factor">
+        <a-space class="detail-actions">
+          <a-button size="small" type="primary" @click="emit('edit', factor.factor_id)">编辑</a-button>
+          <a-button size="small" @click="copyAsNew">复制为新因子</a-button>
+        </a-space>
         <a-descriptions :column="2" bordered size="small">
           <a-descriptions-item label="因子 ID">{{ factor.factor_id }}</a-descriptions-item>
           <a-descriptions-item label="展示名">{{ factor.name }}</a-descriptions-item>
@@ -39,13 +43,19 @@
 
         <section class="detail-section">
           <h3>使用情况</h3>
-          <span v-if="!chips.length" class="detail-empty">未被使用</span>
-          <a-space v-else wrap>
-            <a-tag v-for="chip in chips" :key="chip.key" class="usage-tag" @click="emit('openTask', chip.taskId)">
-              {{ chip.label }}{{ chip.memberKey ? ` · ${chip.memberKey}` : ""
-              }}{{ chip.paramsText ? ` · ${chip.paramsText}` : "" }} · {{ chip.statusLabel }}
-            </a-tag>
-          </a-space>
+          <span v-if="!chips.length" class="detail-empty">{{
+            otherUsage ? `其他空间有 ${otherUsage} 个成员在用` : "未被使用"
+          }}</span>
+          <ul v-else class="usage-list">
+            <li v-for="chip in chips" :key="chip.key">
+              <a-link @click="emit('openTask', chip.taskId)">{{ chip.label }}</a-link>
+              <span class="usage-meta"
+                >{{ chip.memberKey ? ` · ${chip.memberKey}` : "" }}{{ chip.paramsText ? ` · ${chip.paramsText}` : "" }} ·
+                {{ chip.statusLabel }}</span
+              >
+              <a-link @click="openResults(chip.taskId)">结果</a-link>
+            </li>
+          </ul>
         </section>
 
         <section class="detail-section">
@@ -66,6 +76,8 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
+import { useRouter } from "vue-router";
+import { copyFactorId, formFromDefinition, setPendingCopy } from "@/views/factor/editor/factor-form";
 import { getFactor } from "@/api/factor";
 import type { FactorCategory, FactorDef, FactorUsage } from "@/api/factor/types";
 import { categoryName, describeParam, describeParams } from "@/views/factor/shared/params";
@@ -82,11 +94,25 @@ const displayZone = useDisplayZone();
 defineOptions({ name: "FactorDetailDrawer" });
 
 const props = defineProps<{ factorId: string; categories?: FactorCategory[] }>();
-const emit = defineEmits<{ (e: "close"): void; (e: "openTask", taskId: string): void }>();
+const emit = defineEmits<{ (e: "close"): void; (e: "openTask", taskId: string): void; (e: "edit", factorId: string): void }>();
+const router = useRouter();
+
+/** 复制为新因子：带着这个定义进入新建页，ID 预填 <原 ID>_v2。 */
+function copyAsNew() {
+  if (!factor.value) return;
+  setPendingCopy({ ...formFromDefinition(factor.value), factor_id: copyFactorId(factor.value.factor_id) });
+  void router.push("/factor/definitions/new");
+}
+
+function openResults(taskId: string) {
+  void router.push({ path: "/factor/tasks", query: { tab: "results", task: taskId } });
+}
 
 const store = useFactorStore();
 const factor = ref<FactorDef | null>(null);
 const usages = ref<FactorUsage[]>([]);
+// 其他空间引用这个因子的成员数（只给数量）
+const otherUsage = ref(0);
 const loading = ref(false);
 const error = ref("");
 const gate = new RequestGate();
@@ -102,6 +128,7 @@ async function load(factorId: string) {
   const token = gate.next();
   factor.value = null;
   usages.value = [];
+  otherUsage.value = 0;
   error.value = "";
   if (!factorId) {
     loading.value = false;
@@ -113,6 +140,7 @@ async function load(factorId: string) {
     if (!gate.isCurrent(token)) return;
     factor.value = rsp.factor;
     usages.value = rsp.usages || [];
+    otherUsage.value = rsp.other_space_usage_count ?? 0;
   } catch (e) {
     if (gate.isCurrent(token)) error.value = e instanceof Error ? e.message : "因子详情加载失败";
   } finally {
@@ -137,6 +165,29 @@ watch(
   margin-top: 20px;
 }
 
+.detail-actions {
+  margin-bottom: 12px;
+}
+
+.usage-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.usage-list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 0;
+  font-size: 13px;
+}
+
+.usage-meta {
+  color: var(--color-text-3);
+}
+
 .detail-section h3 {
   margin: 0 0 8px;
   font-size: 14px;
@@ -144,10 +195,6 @@ watch(
 
 .detail-empty {
   color: var(--color-text-3);
-}
-
-.usage-tag {
-  cursor: pointer;
 }
 
 .param-list {

@@ -240,4 +240,9 @@ describe("buildTabQuery", () => {
     expect(buildTabQuery({ task: "a", detail: "a", job: "j1" }, "recalc")).toEqual({ tab: "recalc", task: "a", job: "j1" });
     expect(buildTabQuery({ task: "a", detail: "a", job: "j1" }, "tasks")).toEqual({ task: "a", detail: "a" });
   });
+
+  it("切页签保留因子条件 fc（换任务时由 selectTask 清掉）", () => {
+    expect(buildTabQuery({ task: "a", fc: "x>1" }, "recalc")).toEqual({ tab: "recalc", task: "a", fc: "x>1" });
+    expect(buildTabQuery({ task: "a", fc: "x>1" }, "results")).toEqual({ tab: "results", task: "a", fc: "x>1" });
+  });
 });

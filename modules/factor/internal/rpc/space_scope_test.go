@@ -75,9 +75,36 @@ func TestFactorUsagesAreScopedToTheCallerSpace(t *testing.T) {
 	internal, _ := svc.GetFactor(spaceCtx(""), &factorpb.GetFactorReq{FactorId: "f1"})
 	require.Len(t, internal.GetUsages(), 1, "内部调用看到全量引用")
 
+	// 其他空间的引用只给数量：管理台据此挡住删除和编辑
+	require.Equal(t, uint32(1), other.GetOtherSpaceUsageCount())
+	require.Equal(t, uint32(1), other.GetOtherSpaceEnabledCount())
+	require.Zero(t, own.GetOtherSpaceUsageCount())
+	require.Zero(t, internal.GetOtherSpaceUsageCount(), "内部调用看到全量引用，不再另算其他空间")
+
 	list, _ := svc.ListFactors(spaceCtx("crypto"), &factorpb.ListFactorsReq{})
 	require.Len(t, list.GetFactors(), 1)
 	require.Empty(t, list.GetFactors()[0].GetUsages())
+	require.Equal(t, uint32(1), list.GetFactors()[0].GetOtherSpaceEnabledCount())
 	byForeignSet, _ := svc.ListFactors(spaceCtx("crypto"), &factorpb.ListFactorsReq{TaskId: "ftask_b"})
 	require.Equal(t, commonpb.ErrorCode_INVALID_PARAM, byForeignSet.GetRetInfo().GetCode(), "不能按其他空间的任务查询成员")
+}
+
+// 其他空间停用着的引用只计入总数，不计入启用数：停用的引用不挡编辑。
+func TestOtherSpaceUsageCountsSeparateEnabled(t *testing.T) {
+	catalog := &catalogFake{
+		set: domain.FactorTask{TaskID: "ftask_b", SpaceID: "crypto"},
+		infos: []domain.FactorInfo{{
+			Factor: domain.FactorDef{FactorID: "f1"},
+			Usages: []domain.FactorUsage{
+				{TaskID: "ftask_b", MemberKey: "f1", Status: domain.MemberStatusEnabled},
+				{TaskID: "ftask_b", MemberKey: "f1__n_5", Status: domain.MemberStatusDisabled},
+			},
+		}},
+	}
+	svc := NewService(catalog, &recalcFake{})
+	rsp, _ := svc.GetFactor(spaceCtx("stockcn"), &factorpb.GetFactorReq{FactorId: "f1"})
+	require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	require.Empty(t, rsp.GetUsages())
+	require.Equal(t, uint32(2), rsp.GetOtherSpaceUsageCount())
+	require.Equal(t, uint32(1), rsp.GetOtherSpaceEnabledCount())
 }

@@ -24,7 +24,7 @@ function compactQuery(query: QueryMap): Record<string, string> {
 }
 
 /**
- * 切换「计算任务」标题 Tab 时的 query：保留 task，默认 Tab 不写 tab；
+ * 切换「计算任务」标题 Tab 时的 query：保留 task 和因子条件 fc（切回结果页时条件还在，换任务时才清），默认 Tab 不写 tab；
  * detail 只属于「计算任务」Tab，job 只属于「补算」Tab，其余一律清掉。
  */
 export function buildTabQuery(query: Record<string, unknown>, tab: ComputeTaskTab): Record<string, string> {
@@ -34,6 +34,7 @@ export function buildTabQuery(query: Record<string, unknown>, tab: ComputeTaskTa
   return compactQuery({
     tab: tab === "tasks" ? undefined : tab,
     task,
+    fc: queryString(query.fc),
     detail: tab === "tasks" ? detail : undefined,
     job: tab === "recalc" ? job : undefined
   });

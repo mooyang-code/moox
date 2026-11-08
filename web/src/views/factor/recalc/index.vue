@@ -55,7 +55,8 @@
             <template #columns>
               <a-table-column title="任务" :width="260">
                 <template #cell="{ record }">
-                  <div class="job-id" :title="record.job.job_id">{{ record.job.job_id }}</div>
+                  <div>{{ taskName(record.job.task_id) }}</div>
+                  <div class="job-id" :title="record.job.job_id">作业 {{ record.job.job_id }}</div>
                 </template>
               </a-table-column>
               <a-table-column title="因子" :width="180" :ellipsis="true" :tooltip="true">
@@ -111,7 +112,7 @@ import { computed, nextTick, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { Message } from "@arco-design/web-vue";
 import { cancelRecalcJob, listRecalcJobs } from "@/api/factor";
-import type { FactorTask, RecalcJob } from "@/api/factor/types";
+import type { FactorTask, FactorTaskInfo, RecalcJob } from "@/api/factor/types";
 import { usePolling } from "@/hooks/usePolling";
 import { RequestGate } from "@/utils/request-gate";
 import { applyPageResult, defaultPagination, formatTime } from "@/views/data/shared/metadata-utils";
@@ -130,6 +131,12 @@ defineOptions({ name: "FactorRecalc" });
 const route = useRoute();
 const router = useRouter();
 const { store, spaceId, selectTask, navigate, reload } = useFactorScope({ requireSet: true, poll: false });
+
+/** 任务列显示任务名；任务已不在当前空间的列表里时显示任务 ID。 */
+function taskName(taskId: string) {
+  const info = store.tasks.find((item: FactorTaskInfo) => item.factor_task.task_id === taskId);
+  return info ? store.taskLabel(info.factor_task) : taskId;
+}
 
 const set = computed<FactorTask | undefined>(() => store.current?.factor_task);
 const highlightJob = computed(() => {
@@ -265,6 +272,7 @@ watch(
 
 .job-id {
   overflow: hidden;
+  color: var(--color-text-3);
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;

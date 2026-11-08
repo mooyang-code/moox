@@ -5,6 +5,9 @@ import type { ValidateFactorSpecRsp } from "@/api/factor/types";
 import type { DatasetColumn } from "@/api/storage/types";
 import { CROSS_SECTION_SPEC_TEMPLATE, TIMESERIES_SPEC_TEMPLATE, isBuiltinTemplate, specTemplate } from "./editor-template";
 import {
+  copyFactorId,
+  setPendingCopy,
+  takePendingCopy,
   blankFactorForm,
   buildFactorPayload,
   checklistBlockers,
@@ -197,6 +200,12 @@ describe("editor page contract", () => {
     expect(page).toContain("updateFactor");
   });
 
+  it("新建保存后换到编辑页的地址（留在编辑页），编辑保存后回列表；编辑页能添加到计算任务并预选这个因子", () => {
+    expect(page).toContain("else await router.replace(`/factor/definitions/${encodeURIComponent(payload.factor_id)}/edit`)");
+    expect(page).toContain('if (editing.value) await router.push("/factor/definitions")');
+    expect(page).toContain(':preset-factor-id="factorId"');
+  });
+
   it("editor registers onBeforeRouteLeave", () => {
     expect(page).toContain("onBeforeRouteLeave");
   });
@@ -245,5 +254,22 @@ describe("因子 ID 与后端规则一致", () => {
     const compile = ok(form);
     expect(compiledFor(compile, form)).toBe(true);
     expect(compiledFor(compile, { ...form, factor_id: "bias_20" })).toBe(false);
+  });
+});
+
+describe("另存为新因子", () => {
+  it("ID 加 _v2，已有 _vN 的加一；超长时截断原 ID 且不留结尾下划线", () => {
+    expect(copyFactorId("bias_20")).toBe("bias_20_v2");
+    expect(copyFactorId("bias_20_v2")).toBe("bias_20_v3");
+    const long = copyFactorId("abcdefghij_klmnopqrstu_x");
+    expect(long.length).toBeLessThanOrEqual(24);
+    expect(long).toBe("abcdefghij_klmnopqrst_v2");
+    expect(copyFactorId("abcdefghijklmnopqrst_uvw")).toBe("abcdefghijklmnopqrst_v2");
+  });
+
+  it("带过去的定义只能取走一次", () => {
+    setPendingCopy({ ...blankFactorForm(), factor_id: "a_v2" });
+    expect(takePendingCopy()?.factor_id).toBe("a_v2");
+    expect(takePendingCopy()).toBeNull();
   });
 });
