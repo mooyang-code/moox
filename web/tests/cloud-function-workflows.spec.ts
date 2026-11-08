@@ -16,7 +16,7 @@ describe("cloud instance workflows", () => {
     const child = readFileSync(resolve(__dirname, "../src/views/collector/cloud-function/function-package-manage.vue"), "utf8");
 
     expect(child).toContain("workloadType?: string");
-    expect(parent).toContain(':workload-type="currentWorkloadType"');
+    expect(parent).toContain(':workload-type="WORKLOAD_TYPE"');
     expect(parent).not.toContain(":biz-type");
   });
 });

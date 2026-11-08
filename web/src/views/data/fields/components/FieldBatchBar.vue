@@ -26,7 +26,7 @@
     <a-button size="small" type="text" :disabled="loading" @click="$emit('clear')">取消选择</a-button>
   </div>
 
-  <a-modal v-model:visible="moveVisible" title="移动字段组" width="480px" :ok-loading="loading" @ok="submitMove">
+  <a-modal v-model:visible="moveVisible" title="移动字段组" width="480px" :ok-loading="loading" :on-before-ok="submitMove">
     <a-form-item label="目标字段组" required>
       <a-select v-model="targetGroupID" placeholder="请选择目标字段组">
         <a-option v-for="group in groups" :key="group.group_id" :value="group.group_id">{{

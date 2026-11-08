@@ -166,8 +166,8 @@
     <!-- 代码包版本管理弹窗 -->
     <FunctionPackageManage
       v-model="functionPackageManageVisible"
-      :package-type="currentPackageType"
-      :workload-type="currentWorkloadType"
+      :package-type="PACKAGE_TYPE"
+      :workload-type="WORKLOAD_TYPE"
       @refresh="loadData"
     />
 
@@ -345,17 +345,12 @@ const paginationConfig = computed(() => ({
   pageSizeOptions: pagination.value.pageSizeOptions
 }));
 
-// 当前页面是采集云函数实例管理页，代码包固定按采集器类型过滤。
-const currentPackageType = computed(() => 1);
-
-// Short-lived market-fetch SCF instances are registered under this shared type.
-const currentWorkloadType = computed(() => "market_fetcher");
+// 这一页管理采集用的云函数：代码包固定是采集器类型，实例都登记在“行情获取”这个业务类型下
+const PACKAGE_TYPE = 1;
+const WORKLOAD_TYPE = "market_fetcher";
 
 // 生命周期钩子
 onMounted(async () => {
-  // 根据路由设置默认的实例类型筛选条件
-  form.functionType = "";
-
   await spaceStore.loadSpaces();
   if (selectedSpaceId.value) {
     await loadData();
@@ -455,7 +450,7 @@ const loadData = async (showEmptyTip = false) => {
       cloud_account_id: form.cloudAccountId,
       region: form.region,
       function_type: form.functionType,
-      workload_type: currentWorkloadType.value, // 根据路由添加业务类型过滤
+      workload_type: WORKLOAD_TYPE,
       page: pagination.value.current,
       page_size: pagination.value.pageSize
     });
@@ -573,8 +568,6 @@ const clearDeleteSelection = () => {
   selectedKeys.value = [];
   selectedInstanceSnapshots.value = {};
 };
-
-// 单个操作（保留原有实现）
 
 /** 单个删除的说明：删除会连云端的云函数一起删（后端 SubmitDeleteFunctionInstances），不只是清登记。 */
 function deleteInstanceText(record: FunctionInstance) {

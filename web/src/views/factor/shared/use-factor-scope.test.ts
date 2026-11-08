@@ -110,12 +110,12 @@ describe("useFactorScope", () => {
     expect(store.tasks.map(item => item.factor_task.task_id)).toEqual(["x"]);
   });
 
-  it("requireSet resolves ?task= then currentTaskId then first", async () => {
+  it("requireTask resolves ?task= then currentTaskId then first", async () => {
     vi.mocked(listFactorTasks).mockResolvedValue(sets([info("a"), info("b"), info("c")]));
     const store = useFactorStore();
 
     hoisted.route.query = { task: "c" };
-    mountScope({ requireSet: true });
+    mountScope({ requireTask: true });
     await flushPromises();
     expect(store.currentTaskId).toBe("c");
   });
@@ -126,13 +126,13 @@ describe("useFactorScope", () => {
     await store.load("crypto");
     store.select("b");
     hoisted.route.query = { task: "missing" };
-    mountScope({ requireSet: true });
+    mountScope({ requireTask: true });
     await flushPromises();
     expect(store.currentTaskId).toBe("b");
 
     store.reset();
     hoisted.route.query = {};
-    mountScope({ requireSet: true });
+    mountScope({ requireTask: true });
     await flushPromises();
     expect(store.currentTaskId).toBe("a");
   });
@@ -140,7 +140,7 @@ describe("useFactorScope", () => {
   it("writes the resolved set back with router.replace", async () => {
     vi.mocked(listFactorTasks).mockResolvedValue(sets([info("a"), info("b")]));
     hoisted.route.query = { tab: "recalc" };
-    mountScope({ requireSet: true });
+    mountScope({ requireTask: true });
     await flushPromises();
     expect(hoisted.replace).toHaveBeenCalledWith({ path: "/factor/tasks", query: { tab: "recalc", task: "a" } });
   });
@@ -148,7 +148,7 @@ describe("useFactorScope", () => {
   it("optional scope leaves ?task= untouched", async () => {
     vi.mocked(listFactorTasks).mockResolvedValue(sets([info("a")]));
     const store = useFactorStore();
-    mountScope({ requireSet: false });
+    mountScope({ requireTask: false });
     await flushPromises();
     expect(hoisted.replace).not.toHaveBeenCalled();
     expect(store.tasks).toHaveLength(1);
@@ -157,7 +157,7 @@ describe("useFactorScope", () => {
   it("follows ?task= changes while active", async () => {
     vi.mocked(listFactorTasks).mockResolvedValue(sets([info("a"), info("b")]));
     const store = useFactorStore();
-    mountScope({ requireSet: true });
+    mountScope({ requireTask: true });
     await flushPromises();
     hoisted.replace.mockClear();
     hoisted.route.query = { task: "b" };
@@ -171,7 +171,7 @@ describe("useFactorScope", () => {
     hoisted.route.query = { tab: "results", task: "a" };
     const Scoped = defineComponent({
       setup() {
-        useFactorScope({ requireSet: true, poll: false });
+        useFactorScope({ requireTask: true, poll: false });
         return () => null;
       }
     });
@@ -194,7 +194,7 @@ describe("useFactorScope", () => {
   it("selectTask drops the previous set's job and factor conditions", async () => {
     vi.mocked(listFactorTasks).mockResolvedValue(sets([info("a"), info("b")]));
     hoisted.route.query = { tab: "results", task: "a", fc: "x" };
-    const { scope } = mountScope({ requireSet: true });
+    const { scope } = mountScope({ requireTask: true });
     await flushPromises();
     hoisted.replace.mockClear();
     scope.selectTask("b");
@@ -204,7 +204,7 @@ describe("useFactorScope", () => {
   it("drops the previous set's factor conditions even when the store change lands before the route update", async () => {
     vi.mocked(listFactorTasks).mockResolvedValue(sets([info("a"), info("b")]));
     hoisted.route.query = { tab: "results", task: "a", fc: "x" };
-    const { scope } = mountScope({ requireSet: true });
+    const { scope } = mountScope({ requireTask: true });
     await flushPromises();
     hoisted.replace.mockClear();
     // 路由替换是异步的：selectTask 之后 route.query 仍是旧值，store 监听随后又发起一次跳转

@@ -4,13 +4,13 @@
       <a-alert v-if="!spaceId" type="warning" show-icon>请先在顶部选择空间</a-alert>
       <template v-else>
         <div class="page-toolbar">
-          <span class="result-count">
-            共 {{ total }} 条补采作业
-            <a-tooltip
-              content="自动补采发现实时缺口时建作业；手动补采、历史缺口的补采确认也在这里。有进行中的作业时每 5 秒自动刷新。"
-            >
-              <icon-question-circle class="count-tip" />
-            </a-tooltip>
+          <span class="segment-filter">
+            <a-radio-group v-model="segment" type="button" aria-label="补采作业筛选" @change="onFilterChange">
+              <a-radio v-for="item in JOB_SEGMENTS" :key="item.key" :value="item.key">{{ item.label }}</a-radio>
+            </a-radio-group>
+            <InfoTip
+              text="自动补采发现实时缺口时建作业；手动补采、历史缺口的补采确认也在这里。有进行中的作业时每 5 秒自动刷新。"
+            />
           </span>
           <a-space wrap>
             <a-select v-model="datasetId" placeholder="全部数据集" allow-clear style="width: 220px" @change="onFilterChange">
@@ -29,12 +29,6 @@
               新建补采
             </a-button>
           </a-space>
-        </div>
-
-        <div class="segment-filter">
-          <a-radio-group v-model="segment" type="button" aria-label="补采作业筛选" @change="onFilterChange">
-            <a-radio v-for="item in JOB_SEGMENTS" :key="item.key" :value="item.key">{{ item.label }}</a-radio>
-          </a-radio-group>
         </div>
 
         <a-table
@@ -199,6 +193,7 @@
 </template>
 
 <script setup lang="ts">
+import InfoTip from "@/components/info-tip/index.vue";
 import TimeText from "@/components/time-text/index.vue";
 import { computed, onActivated, onDeactivated, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
@@ -470,19 +465,10 @@ watch(
   gap: var(--moox-space-2);
   margin-bottom: var(--moox-space-3);
 }
-.result-count {
+.segment-filter {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  color: var(--color-text-2);
-  font-size: 13px;
-}
-.count-tip {
-  color: var(--color-text-3);
-  cursor: help;
-}
-.segment-filter {
-  margin-bottom: var(--moox-space-2);
+  gap: var(--moox-space-2);
 }
 .job-id {
   display: block;

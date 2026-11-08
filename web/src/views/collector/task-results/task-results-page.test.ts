@@ -109,6 +109,27 @@ describe("collector task result page deep links", () => {
     wrapper.unmount();
   });
 
+  it("does not show the empty state when the task list fails to load", async () => {
+    mocks.getTaskList.mockRejectedValue(new Error("读取任务失败"));
+    const wrapper = mount(TaskResultsPage, {
+      global: {
+        stubs: {
+          "a-alert": { template: "<div class='alert'><slot /></div>" },
+          "a-button": true,
+          "a-empty": { template: "<div class='empty'><slot /><slot name='extra' /></div>" },
+          "a-spin": { template: "<div><slot /></div>" },
+          "a-tabs": { template: "<div><slot /></div>" },
+          ViewBrowse: true
+        }
+      }
+    });
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("读取任务失败");
+    expect(wrapper.find(".empty").exists()).toBe(false);
+    wrapper.unmount();
+  });
+
   it("renders only the View returned for a valid deep-linked task", async () => {
     mocks.routeQuery.resultTask = "known";
     mocks.getTaskDetail.mockResolvedValue({
@@ -213,7 +234,7 @@ describe("collector task result page deep links", () => {
     await flushPromises();
 
     expect(mocks.getTaskDetail).toHaveBeenCalledWith({ space_id: "crypto", task_id: "known" });
-    expect(wrapper.text()).toContain("共 1 个任务");
+    expect(wrapper.find(".result-tabs").exists()).toBe(true);
     expect(wrapper.get(".spin").attributes("data-loading")).toBe("false");
 
     detail.resolve({ task: { task_id: "known", task_name: "Known task" } });

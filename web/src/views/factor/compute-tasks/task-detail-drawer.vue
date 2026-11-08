@@ -87,7 +87,7 @@ import type { FactorTask, FactorTaskInfo } from "@/api/factor/types";
 import { listViews } from "@/api/storage/metadata";
 import { useFactorStore } from "@/store/modules/factor";
 import { RequestGate } from "@/utils/request-gate";
-import { setHealth } from "@/views/factor/shared/health";
+import { taskHealth } from "@/views/factor/shared/health";
 import HealthTag from "@/views/factor/shared/health-tag.vue";
 import { taskStatusTag } from "@/views/factor/shared/status";
 import { deleteState, ENABLE_ENGINE_HINT, taskActionKind } from "./compute-tasks-model";
@@ -111,7 +111,7 @@ const store = useFactorStore();
 const set = computed(() => props.info?.factor_task as FactorTask);
 const title = computed(() => (props.info ? store.taskLabel(set.value) : ""));
 const statusTag = computed(() => taskStatusTag(set.value?.status || ""));
-const health = computed(() => setHealth(set.value ?? { status: "pending", freq: "" }, props.info?.last_run));
+const health = computed(() => taskHealth(set.value ?? { status: "pending", freq: "" }, props.info?.last_run));
 const actionKind = computed(() => (set.value ? taskActionKind(set.value) : "none"));
 const removeState = computed(() => (props.info ? deleteState(props.info) : { disabled: true, reason: "" }));
 const sourceName = computed(() =>

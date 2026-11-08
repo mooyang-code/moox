@@ -310,7 +310,7 @@ X-MooX-Signature: sha256=9a0b...
  "rule_id": "...", "data": { ... }}`;
 
 export interface HolderSummary {
-  /** 生产组合：会被真实平仓，需要二次确认。 */
+  /** 实盘组合（测试网和生产环境，持有者里分不出这两种）：会被真实平仓，需要二次确认。 */
   live: InstrumentHolder[];
   paper: InstrumentHolder[];
   dust: InstrumentHolder[];

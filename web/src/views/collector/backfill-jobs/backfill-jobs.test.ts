@@ -48,7 +48,8 @@ describe("collector backfill page", () => {
 
   it("is a standalone tab like factor recalc: toolbar, dataset filter, segments and a job table", () => {
     expect(page).toContain('class="moox-page backfill-page"');
-    expect(page).toContain("共 {{ total }} 条补采作业");
+    expect(page).not.toContain("条补采作业");
+    expect(page).toContain("<InfoTip");
     expect(page).toContain('placeholder="全部数据集"');
     expect(page).toContain('v-for="item in JOB_SEGMENTS"');
     expect(page).toContain(
