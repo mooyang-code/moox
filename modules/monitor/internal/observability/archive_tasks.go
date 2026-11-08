@@ -104,7 +104,7 @@ func (b Builder) buildArchiveHealth(ctx context.Context, spaceID string, now tim
 			shown = shown[:5]
 		}
 		coverage.Status = "down"
-		coverage.Reason = fmt.Sprintf("%d 个有限保留期的时序数据集还没有归档任务（%s），线上过保留期的数据会被删除：用 moox-cli archive tasks create 建任务",
+		coverage.Reason = fmt.Sprintf("%d 个有限保留期的时序数据集还没有归档任务（%s），线上过保留期的数据会被删除：在“数据采集 › 数据归档”页或用 moox-cli archive tasks create 建任务",
 			len(missing), strings.Join(shown, "、"))
 	}
 	return append(out, coverage), nil
