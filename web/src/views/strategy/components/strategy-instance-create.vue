@@ -160,7 +160,6 @@
           <span v-if="accountsError" class="meta-error"
             >账户列表读取失败：{{ accountsError }}<a-link @click="loadAccountsList">重试</a-link>；也可以改为“仅计算”。</span
           >
-          <span v-else-if="market.noAccount">{{ market.noAccount }}，请改为“仅计算”。</span>
           <span v-else-if="!accountsLoading && !accounts.length">当前空间没有可用的组合账户，请先在交易模块创建。</span>
           <span v-else-if="!accountsLoading && !accountOptions.length"
             >没有可交易{{ marketNames }}的策略驱动组合账户，请先在交易模块创建，或改为“仅计算”。</span
@@ -315,7 +314,7 @@ watch(selectedStrategy, () => void loadMissingMembers(), { immediate: true });
 const activeMarkets = computed(() =>
   requirement.value.declared ? requirement.value.markets : form.single_market ? [form.single_market] : []
 );
-// 只列策略驱动且可交易市场包含策略输出市场的组合账户，已被其他实例占用的显示但不可选；没有交易账户的市场（A 股）列表为空。
+// 只列策略驱动且可交易市场包含策略输出市场的组合账户（A 股要开通了股票市场），已被其他实例占用的显示但不可选。
 // 预检之后以服务端解析出的市场为准；预检之前策略池按成员市场的并集，其余按 DSL 的市场（没写 market 时按选的市场）先筛。
 const market = computed(() => {
   if (check_result.value?.resolved_json) return resolvedMarkets(check_result.value.resolved_json);

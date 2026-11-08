@@ -15,7 +15,7 @@ export interface PageResult {
   has_more?: boolean;
 }
 
-export type Exchange = 0 | 1 | 2;
+export type Exchange = 0 | 1 | 2 | 3;
 /** 1 现货、2 永续、3 股票 */
 export type MarketType = 0 | 1 | 2 | 3;
 export type ExecutionMode = 0 | 1 | 2;
@@ -408,6 +408,8 @@ export interface Holding {
   market_value: string;
   unrealized_pnl?: string;
   source_time: string;
+  /** 可卖数量：A 股是总数减冻结、减当日买入（T+1）；其余市场等于可用余额 */
+  sellable?: string;
 }
 
 export interface ExecutionCapabilities {

@@ -76,6 +76,7 @@ func (s *Service) Capacity(ctx context.Context, spaceID string, spec orderdomain
 	}
 	whole := new(big.Int).Quo(units.Num(), units.Denom())
 	quantity = shared.MustDecimal(whole.String()).Mul(step)
+	quantity = stockBuyCapacity(validation, spec, quantity, step, available)
 	price := spec.ReferencePrice
 	if spec.Type == exchange.OrderTypeLimit {
 		price = *spec.LimitPrice
@@ -84,6 +85,30 @@ func (s *Service) Capacity(ctx context.Context, spaceID string, spec orderdomain
 		return shared.Zero(), nil
 	}
 	return quantity, nil
+}
+
+// stockBuyCapacity 给模拟盘 A 股买单把容量收到费用也付得起：佣金有最低 5 元，花费和数量不成正比，
+// 按比例算出的数量可能差几块钱，这里按 StockFee 逐个步长往下减到付得起（和预留、扣费用同一个函数）。
+func stockBuyCapacity(validation Validation, spec orderdomain.OrderSpec, quantity, step, available shared.Decimal) shared.Decimal {
+	account := validation.Account
+	if spec.Side != exchange.SideBuy || account.ExecutionMode != exchange.ExecutionModePaper || account.Paper == nil ||
+		!exchange.RuleFor(validation.Instrument.MarketType).StockFees || validation.ReservedQuantity.IsZero() {
+		return quantity
+	}
+	unit := spec.ReferencePrice
+	if spec.Type == exchange.OrderTypeLimit && spec.LimitPrice != nil {
+		unit = *spec.LimitPrice
+	} else {
+		unit = paperSlippagePrice(unit, spec.Side, account.Paper.SlippageBPS)
+	}
+	for quantity.Cmp(shared.Zero()) > 0 &&
+		exchange.StockBuyCost(quantity.Mul(unit), account.Paper.TakerFeeRate).Cmp(available) > 0 {
+		quantity = quantity.Sub(step)
+	}
+	if quantity.IsNegative() {
+		return shared.Zero()
+	}
+	return quantity
 }
 
 func minCapacity(a, b shared.Decimal) shared.Decimal {
@@ -99,7 +124,11 @@ func availableReservationFunds(tx *store.Tx, validation Validation, adjustment s
 		if err != nil {
 			return shared.Zero(), err
 		}
-		return balances.Totals[validation.ReservedAsset].Add(adjustment).Sub(balances.Reserved[validation.ReservedAsset]), nil
+		t1, err := paperT1Locked(tx, validation)
+		if err != nil {
+			return shared.Zero(), err
+		}
+		return balances.Totals[validation.ReservedAsset].Add(adjustment).Sub(balances.Reserved[validation.ReservedAsset]).Sub(t1), nil
 	}
 	market := validation.Instrument.MarketType
 	unreflected, err := tx.GetUnreflectedReservation(
@@ -111,6 +140,19 @@ func availableReservationFunds(tx *store.Tx, validation Validation, adjustment s
 		return shared.Zero(), err
 	}
 	return availableFunds(validation.Account, market, validation.ReservedAsset).Sub(unreflected), nil
+}
+
+// paperT1Locked 是模拟盘卖单当天还不能卖的数量：T+1 市场（股票）当日买入的部分。买单和其他市场返回 0。
+func paperT1Locked(tx *store.Tx, validation Validation) (shared.Decimal, error) {
+	instrument := validation.Instrument
+	if !exchange.RuleFor(instrument.MarketType).T1 || validation.ReservedAsset == "" || validation.ReservedAsset != instrument.BaseAsset {
+		return shared.Zero(), nil
+	}
+	bought, err := tx.PaperT1Bought(validation.Account.SpaceID, validation.Account.ID, exchange.T1Since(time.Now()).UnixMilli())
+	if err != nil {
+		return shared.Zero(), err
+	}
+	return bought[validation.ReservedAsset], nil
 }
 
 func (s *Service) paperReference(ctx context.Context, spec orderdomain.OrderSpec, validation Validation) (orderdomain.OrderSpec, error) {

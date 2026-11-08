@@ -152,7 +152,11 @@ func checkPaperFunds(tx *store.Tx, validation Validation, marginAdjustment, requ
 		}
 		reserved = reserved.Sub(previous)
 	}
-	available := balances.Totals[validation.ReservedAsset].Add(marginAdjustment).Sub(reserved)
+	t1, err := paperT1Locked(tx, validation)
+	if err != nil {
+		return err
+	}
+	available := balances.Totals[validation.ReservedAsset].Add(marginAdjustment).Sub(reserved).Sub(t1)
 	if available.Cmp(required) < 0 {
 		return ErrInsufficientFunds
 	}

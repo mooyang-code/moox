@@ -35,6 +35,8 @@ func New(gateway gatewayclient.Invoker) *Client { return &Client{gateway: gatewa
 var exchanges = map[string]tradepb.Exchange{
 	"binance": tradepb.Exchange_EXCHANGE_BINANCE,
 	"okx":     tradepb.Exchange_EXCHANGE_OKX,
+	// A 股下架处理还没接；补上映射只是为了不出现空串。
+	"ashare": tradepb.Exchange_EXCHANGE_ASHARE,
 }
 
 var markets = map[string]tradepb.MarketType{

@@ -37,7 +37,11 @@ func Tradable(instrument store.InstrumentRecord, settlementAsset string) bool {
 // SpotDust 判断现货余额总量是不是下不了单的零头：按步长取整后低于最小数量，
 // 或者按价格低于最小名义金额。price 不大于 0 表示拿不到报价，只比较最小数量。
 // 规则本身解析不了时不算零头，交给调用方按剩余仓位处理。
+// 整手交易的市场（A 股）没有零头：不足一手的零股可以一次卖完。
 func SpotDust(total, price shared.Decimal, instrument store.InstrumentRecord) bool {
+	if exchange.RuleFor(instrument.MarketType).BoardLot {
+		return total.Cmp(shared.Zero()) <= 0
+	}
 	step, err := shared.ParseDecimal(instrument.ExchangeQuantityStep)
 	if err != nil || step.Cmp(shared.Zero()) <= 0 {
 		return false

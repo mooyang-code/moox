@@ -35,3 +35,23 @@ func TestStockIntradayValidityCrossesLunchBreak(t *testing.T) {
 		t.Fatalf("14:00 时 11:25 那根已过有效期 13:10：%+v", result)
 	}
 }
+
+// 收盘后的目标留到次日开盘执行（计划 5.4）：15:00 那根的有效期按交易序号推进 2 根，周末、长假不占根数，
+// Trade 在下一次开盘（09:30）放行，开盘后约 10 分钟内有效。
+func TestStockCloseTargetValidityCarriesToNextOpen(t *testing.T) {
+	shanghai := time.FixedZone("CST", 8*3600)
+	for _, tc := range []struct {
+		name      string
+		barEnd    time.Time
+		wantValid time.Time
+	}{
+		{"周五收盘到周一", time.Date(2026, 11, 6, 15, 0, 0, 0, shanghai), time.Date(2026, 11, 9, 9, 40, 0, 0, shanghai)},
+		{"长假前最后一个交易日到节后第一天", time.Date(2026, 9, 30, 15, 0, 0, 0, shanghai), time.Date(2026, 10, 8, 9, 40, 0, 0, shanghai)},
+		{"普通交易日收盘到次日", time.Date(2026, 11, 9, 15, 0, 0, 0, shanghai), time.Date(2026, 11, 10, 9, 40, 0, 0, shanghai)},
+	} {
+		valid, err := advance("cn_stock", "5m", tc.barEnd, ValidBars)
+		if err != nil || !valid.Equal(tc.wantValid) {
+			t.Fatalf("%s：有效期应到 %s，实际 %s err=%v", tc.name, tc.wantValid, valid.In(shanghai), err)
+		}
+	}
+}

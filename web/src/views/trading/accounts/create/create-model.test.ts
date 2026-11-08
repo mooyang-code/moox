@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { TradeResponseError } from "@/api/trade/http";
 import {
+  applyExchangeDefaults,
   buildLiveRequest,
   buildPaperRequest,
   createDefaultForm,
@@ -10,6 +11,48 @@ import {
   toggleMarket,
   validateStep
 } from "./create-model";
+
+describe("A 股模拟账户", () => {
+  it("选 A 股后市场固定为股票、人民币结算、默认 5000 万元、佣金 0.025%，换回加密货币恢复默认", () => {
+    const form = createDefaultForm();
+    form.exchange = 3;
+    applyExchangeDefaults(form);
+    expect(form.markets).toEqual([3]);
+    expect(form.settlementAsset).toBe("CNY");
+    expect(form.initialBalance).toBe("50000000");
+    expect(form.takerFeeRate).toBe("0.00025");
+    expect(defaultFees([3])).toEqual({ maker: "0.00025", taker: "0.00025" });
+    form.exchange = 1;
+    applyExchangeDefaults(form);
+    expect(form.markets).toEqual([2]);
+    expect(form.settlementAsset).toBe("USDT");
+    expect(form.initialBalance).toBe("100000");
+  });
+
+  it("只有一个佣金比例：请求里挂单、吃单相同", () => {
+    const form = { ...createDefaultForm(), name: "a 股", exchange: 3 as const };
+    applyExchangeDefaults(form);
+    form.takerFeeRate = "0.0003";
+    expect(buildPaperRequest(form)).toMatchObject({
+      exchange: 3,
+      markets: [3],
+      settlement_asset: "CNY",
+      margin_mode: "",
+      maker_fee_rate: "0.0003",
+      taker_fee_rate: "0.0003"
+    });
+    expect(validateStep(form, 2)).toBe("");
+  });
+
+  it("A 股只开股票、只能模拟盘；加密货币场所不能开股票", () => {
+    const form = { ...createDefaultForm(), name: "a", exchange: 3 as const };
+    applyExchangeDefaults(form);
+    expect(validateStep({ ...form, markets: [1] }, 2)).toContain("只能开通股票");
+    expect(validateStep({ ...form, settlementAsset: "USDT" }, 2)).toContain("CNY");
+    expect(validateStep({ ...form, kind: "testnet", secretId: "s" }, 1)).toContain("QMT");
+    expect(validateStep({ ...createDefaultForm(), name: "b", markets: [3] }, 2)).toContain("只能在 A 股场所开通");
+  });
+});
 
 describe("新建账户", () => {
   it("模拟盘、测试网、生产环境都能选", () => {

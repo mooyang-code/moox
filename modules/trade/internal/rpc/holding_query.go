@@ -55,6 +55,9 @@ func (q *HoldingQuery) List(ctx context.Context, spaceID, accountID string) ([]h
 			TradingAccountID: accountID, Asset: balance.Asset, Quantity: quantity,
 			SourceTime: unixMillis(account.Snapshot.ExchangeUpdatedAt),
 		}
+		if available, parseErr := shared.ParseDecimal(balance.Available); parseErr == nil {
+			item.Sellable = available
+		}
 		if strings.EqualFold(balance.Asset, account.SettlementAsset) {
 			item.MarkPrice = shared.MustDecimal("1")
 			item.MarketValue = quantity

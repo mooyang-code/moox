@@ -1,10 +1,8 @@
-import type { LogicalAccount, TradingAccount } from "@/api/trade/types";
+import type { LogicalAccount, MarketType, TradingAccount } from "@/api/trade/types";
 import { environmentLabel, logicalEnvironment } from "@/components/trade-confirm/environment";
 
-const marketTypes: Record<string, number> = { spot: 1, swap: 2 };
-
-// 交易模块还没有账户的市场：实例只能“仅计算”，账户列表为空并给出提示。
-const marketsWithoutAccounts: Record<string, string> = { equity: "A 股暂无交易账户" };
+// 策略市场在交易模块里的编号：A 股（equity）对应股票市场，可以挂 A 股模拟账户。
+const marketTypes: Record<string, number> = { spot: 1, swap: 2, equity: 3 };
 
 export interface LogicalAccountOption {
   account: LogicalAccount;
@@ -12,10 +10,9 @@ export interface LogicalAccountOption {
   disabledReason: string;
 }
 
-// 策略要输出的市场：types 是这些市场在交易模块里的编号；noAccount 非空表示其中有没有交易账户的市场。校验前两者都为空，不过滤账户。
+// 策略要输出的市场：types 是这些市场在交易模块里的编号。校验前为空，不过滤账户。
 export interface ResolvedMarkets {
   types?: number[];
-  noAccount?: string;
 }
 
 // resolved_json 来自校验结果，校验前不知道市场。市场模式的 select 为 both 或 prefer 不同时要输出现货和永续两个市场。
@@ -34,8 +31,7 @@ export function resolvedMarkets(resolvedJSON?: string): ResolvedMarkets {
 
 // 市场列表对应的账户要求：账户的可交易市场要包含列表里的全部市场（策略池按成员市场的并集）。
 export function marketsToResolved(markets: string[]): ResolvedMarkets {
-  const noAccount = markets.map(market => marketsWithoutAccounts[market]).find(Boolean);
-  return { types: markets.map(market => marketTypes[market]).filter(Boolean), noAccount };
+  return { types: markets.map(market => marketTypes[market]).filter(Boolean) };
 }
 
 /**
@@ -54,11 +50,10 @@ export function logicalAccountOptions(
   markets: ResolvedMarkets = {},
   tradingAccounts: ReadonlyMap<string, TradingAccount> | null = null
 ): LogicalAccountOption[] {
-  if (markets.noAccount) return [];
   return accounts
     .filter(
       account =>
-        account.control_mode === 1 && (markets.types ?? []).every(type => (account.markets ?? []).includes(type as 1 | 2))
+        account.control_mode === 1 && (markets.types ?? []).every(type => (account.markets ?? []).includes(type as MarketType))
     )
     .map(account => {
       const members = (account.members || []).filter(member => member.enabled).length;

@@ -40,10 +40,14 @@ describe("策略绑定组合账户选项", () => {
     expect(options.map(item => item.account.logical_account_id)).toEqual(["both"]);
   });
 
-  it("A 股没有交易账户，列表为空并给出提示", () => {
+  it("A 股只列开通了股票市场的组合", () => {
     const markets = resolvedMarkets('{"market":{"select":"equity","prefer":"equity"}}');
-    expect(markets.noAccount).toBe("A 股暂无交易账户");
-    expect(logicalAccountOptions([account({}), account({ markets: [1] })], markets)).toEqual([]);
+    expect(markets.types).toEqual([3]);
+    const options = logicalAccountOptions(
+      [account({ logical_account_id: "crypto", markets: [1] }), account({ logical_account_id: "ashare", markets: [3] })],
+      markets
+    );
+    expect(options.map(item => item.account.logical_account_id)).toEqual(["ashare"]);
   });
 
   it("已被其他实例绑定的显示为不可选并写明实例", () => {
@@ -53,7 +57,7 @@ describe("策略绑定组合账户选项", () => {
   });
 
   it("从校验结果读市场模式", () => {
-    expect(resolvedMarkets('{"market":{"select":"swap","prefer":"swap"}}')).toEqual({ types: [2], noAccount: undefined });
+    expect(resolvedMarkets('{"market":{"select":"swap","prefer":"swap"}}')).toEqual({ types: [2] });
     expect(resolvedMarkets('{"market":{"select":"spot","prefer":"swap"}}').types).toEqual([1, 2]);
     expect(resolvedMarkets("bad")).toEqual({});
     expect(resolvedMarkets()).toEqual({});

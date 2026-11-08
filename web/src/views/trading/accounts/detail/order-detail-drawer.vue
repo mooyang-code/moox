@@ -36,7 +36,9 @@
         <a-descriptions-item v-if="Number(order.finished_at)" label="结束时间">{{
           formatInstant(order.finished_at, displayZone)
         }}</a-descriptions-item>
-        <a-descriptions-item v-if="order.reject_reason" label="拒绝原因">{{ order.reject_reason }}</a-descriptions-item>
+        <a-descriptions-item v-if="order.reject_reason" label="原因">{{
+          orderReasonText(order.reject_reason)
+        }}</a-descriptions-item>
         <a-descriptions-item label="订单编号"
           ><span class="tx-mono">{{ order.order_id }}</span></a-descriptions-item
         >
@@ -70,7 +72,7 @@
 
 <script setup lang="ts">
 import { inject, ref, watch } from "vue";
-import { canCancelOrderState, listFills, orderOwnerLabels, orderStateLabels } from "@/api/trade";
+import { canCancelOrderState, listFills, orderOwnerLabels, orderReasonText, orderStateLabels } from "@/api/trade";
 import type { Fill, Order } from "@/api/trade";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import { fmtQty } from "../shared/format";

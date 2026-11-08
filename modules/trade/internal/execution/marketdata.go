@@ -13,6 +13,24 @@ type MarketQuote struct {
 	Ask        shared.Decimal
 	Last       shared.Decimal
 	SourceTime time.Time
+	// LimitUp、LimitDown 是涨停价、跌停价（绝对价），只有有涨跌停的市场（A 股）才有；零值表示没有。
+	LimitUp   shared.Decimal
+	LimitDown shared.Decimal
+	// Halted 为真表示标的停牌（或已退市），不能下单。
+	Halted bool
+}
+
+// QuotePrefetcher 是能一次取一批报价的行情来源才实现的能力（A 股腾讯快照一次最多 60 只）：
+// 换算目标、模拟盘估值前先把要用的标的一次取回，之后逐个取价命中缓存，不再逐个请求。
+type QuotePrefetcher interface {
+	PrefetchQuotes(ctx context.Context, keys []exchange.SymbolKey) error
+}
+
+// PrefetchQuotes 在来源支持时批量预取报价；不支持或预取失败都不报错，之后逐个取价时照常处理失败。
+func PrefetchQuotes(ctx context.Context, source any, keys []exchange.SymbolKey) {
+	if prefetcher, ok := source.(QuotePrefetcher); ok && len(keys) > 0 {
+		_ = prefetcher.PrefetchQuotes(ctx, keys)
+	}
 }
 
 type MarketDataSource interface {

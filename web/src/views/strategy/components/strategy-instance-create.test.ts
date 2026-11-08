@@ -266,9 +266,12 @@ describe("strategy instance creation behavior", () => {
     });
   });
 
-  it("lists no account for A-share instances and says why", async () => {
+  it("lists only stock accounts for A-share instances", async () => {
     api.listLogicalAccounts.mockResolvedValue({
-      logical_accounts: [{ logical_account_id: "acc1", name: "账户一", space_id: "crypto", control_mode: 1, markets: [1] }],
+      logical_accounts: [
+        { logical_account_id: "acc1", name: "账户一", space_id: "crypto", control_mode: 1, markets: [1] },
+        { logical_account_id: "acc2", name: "A 股模拟", space_id: "crypto", control_mode: 1, markets: [3] }
+      ],
       page_result: { has_more: false }
     });
     api.validateStrategy.mockReset().mockResolvedValue({
@@ -285,13 +288,12 @@ describe("strategy instance creation behavior", () => {
       .trigger("click");
     runModeGroup(wrapper).vm.$emit("update:modelValue", "trade");
     await flushPromises();
-    expect(wrapper.text()).toContain("A 股暂无交易账户，请改为“仅计算”。");
     expect(
       wrapper
         .findAll("select")[2]
         .findAll("option")
         .map(item => item.attributes("value"))
-    ).toEqual([""]);
+    ).toEqual(["", "acc2"]);
   });
 
   it("asks for a spot and a swap task for a mixed-market strategy and keeps one task from being picked twice", async () => {

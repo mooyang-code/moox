@@ -11,6 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 )
 
 var (
@@ -22,7 +23,16 @@ var (
 	ErrLeverageLimit      = errors.New("杠杆超过上限")
 	ErrReduceOnly         = errors.New("只减仓订单无效")
 	ErrValidatorConfig    = errors.New("下单校验未配置")
+	// ErrInstrumentHalted 表示标的停牌（或已退市）。不是永久错误：执行器把它当成顺延，复牌后照常下单。
+	ErrInstrumentHalted = errors.New("停牌")
+	// ErrPriceLimit 表示委托价超出涨跌停价。执行器下单前已经把价格截在涨跌停价之间，正常路径不会遇到。
+	ErrPriceLimit = errors.New("超出涨跌停价")
 )
+
+// QuoteSource 给有涨跌停的市场（A 股）取实时报价，用来拦停牌和超出涨跌停价的委托。
+type QuoteSource interface {
+	Adapter(tradingAccountID string) (execution.ExecutionAdapter, error)
+}
 
 type AccountEligibility interface {
 	ExecutionEligibility(context.Context, string) (tradingaccount.Account, error)
@@ -66,6 +76,8 @@ type Validator struct {
 	MaxChildNotional shared.Decimal
 	MaxLeverage      shared.Decimal
 	FeeBufferRate    shared.Decimal
+	// Quotes 为空时不检查停牌和涨跌停（只在单元测试里）。
+	Quotes QuoteSource
 }
 
 func (v Validator) Validate(
@@ -132,8 +144,13 @@ func (v Validator) validateOptions(ctx context.Context, spaceID string, spec ord
 		exchangeQuantity,
 		instrument.ExchangeQuantityStep,
 		instrument.MinExchangeQuantity,
-	) {
+	) && !oddLotSell(account, market, instrument, spec) {
 		return Validation{}, ErrQuantityRule
+	}
+	if !capacity && exchange.RuleFor(market).PriceLimits {
+		if err := v.checkPriceLimits(ctx, account, instrument, spec); err != nil {
+			return Validation{}, err
+		}
 	}
 
 	referenceNotional := spec.Quantity.Mul(spec.ReferencePrice)
@@ -174,11 +191,11 @@ func (v Validator) validateOptions(ctx context.Context, spaceID string, spec ord
 			if account.ExecutionMode == exchange.ExecutionModePaper && spec.Type == exchange.OrderTypeMarket && account.Paper != nil {
 				reserveNotional = paperSlippagePrice(referenceNotional, spec.Side, account.Paper.SlippageBPS)
 			}
-			result.ReservedQuantity = withFeeBuffer(reserveNotional, feeRate)
+			result.ReservedQuantity = buyReservation(account, market, reserveNotional, feeRate)
 			if spec.Type == exchange.OrderTypeLimit {
 				result.ReservedQuantity = orderNotional
 				if account.ExecutionMode == exchange.ExecutionModePaper {
-					result.ReservedQuantity = withFeeBuffer(orderNotional, feeRate)
+					result.ReservedQuantity = buyReservation(account, market, orderNotional, feeRate)
 				}
 			}
 		} else {
@@ -279,6 +296,67 @@ func (v Validator) validateReduceOnly(ctx context.Context, spec orderdomain.Orde
 	}
 	if spec.Quantity.Cmp(position.SignedQuantity.Abs()) > 0 {
 		return ErrReduceOnly
+	}
+	return nil
+}
+
+// buyReservation 是买入要预留的结算资产：成交额加费用。模拟盘的 A 股按 StockFee 算（佣金复用 taker 费率字段，最低 5 元），
+// 和撮合扣费、下单容量是同一个函数；其余按费率比例加缓冲。
+func buyReservation(account tradingaccount.Account, market exchange.MarketType, notional, feeRate shared.Decimal) shared.Decimal {
+	if account.ExecutionMode == exchange.ExecutionModePaper && account.Paper != nil && exchange.RuleFor(market).StockFees {
+		return exchange.StockBuyCost(notional, account.Paper.TakerFeeRate)
+	}
+	return withFeeBuffer(notional, feeRate)
+}
+
+// oddLotSell 报告一笔不满足整手规则的卖单是不是合规的零股卖出：只对整手交易的市场（A 股），
+// 卖出后余下的持仓要么为 0，要么本身满足整手规则——也就是不足一手的零股一次卖完。
+func oddLotSell(account tradingaccount.Account, market exchange.MarketType, instrument exchange.Instrument, spec orderdomain.OrderSpec) bool {
+	if !exchange.RuleFor(market).BoardLot || spec.Side != exchange.SideSell || spec.Quantity.Cmp(shared.Zero()) <= 0 ||
+		!spec.Quantity.IsInteger() {
+		return false
+	}
+	remaining := totalBalance(account.Snapshot, instrument.BaseAsset).Sub(spec.Quantity)
+	if remaining.IsNegative() {
+		return false
+	}
+	return remaining.IsZero() || validQuantity(remaining, instrument.ExchangeQuantityStep, instrument.MinExchangeQuantity)
+}
+
+// totalBalance 加总资产在各钱包的总额。
+func totalBalance(snapshot exchange.AccountSnapshot, asset string) shared.Decimal {
+	total := shared.Zero()
+	for _, balance := range snapshot.Balances {
+		if balance.Asset == asset {
+			total = total.Add(balance.Total)
+		}
+	}
+	return total
+}
+
+// checkPriceLimits 给有涨跌停的市场查实时报价：停牌返回 ErrInstrumentHalted，限价超出涨跌停价返回 ErrPriceLimit。
+func (v Validator) checkPriceLimits(ctx context.Context, account tradingaccount.Account, instrument exchange.Instrument, spec orderdomain.OrderSpec) error {
+	if v.Quotes == nil {
+		return nil
+	}
+	adapter, err := v.Quotes.Adapter(account.ID)
+	if err != nil {
+		return err
+	}
+	quote, err := adapter.GetQuote(ctx, exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol))
+	if err != nil {
+		return err
+	}
+	if quote.Halted {
+		return fmt.Errorf("%w：%s", ErrInstrumentHalted, instrument.InstrumentID)
+	}
+	if spec.Type != exchange.OrderTypeLimit || spec.LimitPrice == nil {
+		return nil
+	}
+	price := *spec.LimitPrice
+	if (quote.LimitUp.Cmp(shared.Zero()) > 0 && price.Cmp(quote.LimitUp) > 0) ||
+		(quote.LimitDown.Cmp(shared.Zero()) > 0 && price.Cmp(quote.LimitDown) < 0) {
+		return fmt.Errorf("%w：委托价 %s，涨停 %s、跌停 %s", ErrPriceLimit, price, quote.LimitUp, quote.LimitDown)
 	}
 	return nil
 }

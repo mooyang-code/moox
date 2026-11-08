@@ -35,11 +35,18 @@ export function instrumentRuleHint(instrument?: TradableInstrument) {
 }
 
 // 提交前先按交易规则检查，最终结果仍以服务端校验为准。
-export function orderRuleError(quantity: string, limitPrice: string | undefined, instrument?: TradableInstrument) {
+// oddLotSell 为真（A 股卖出）时不检查整手：余下不足一手的零股可以一次卖完，是否合规由服务端按持仓判断。
+export function orderRuleError(
+  quantity: string,
+  limitPrice: string | undefined,
+  instrument?: TradableInstrument,
+  oddLotSell = false
+) {
   if (!/^\d+(\.\d+)?$/.test(quantity.trim()) || Number(quantity) <= 0) return "数量必须是正数";
   if (!instrument) return "";
-  if (!multipleOf(quantity, instrument.quantity_step)) return `数量必须是步长 ${instrument.quantity_step} 的整数倍`;
-  if (lessThan(quantity, instrument.min_quantity)) return `数量不能小于 ${instrument.min_quantity}`;
+  if (!oddLotSell && !multipleOf(quantity, instrument.quantity_step))
+    return `数量必须是步长 ${instrument.quantity_step} 的整数倍`;
+  if (!oddLotSell && lessThan(quantity, instrument.min_quantity)) return `数量不能小于 ${instrument.min_quantity}`;
   if (limitPrice === undefined) return "";
   if (!/^\d+(\.\d+)?$/.test(limitPrice.trim()) || Number(limitPrice) <= 0) return "限价必须是正数";
   if (!multipleOf(limitPrice, instrument.price_tick)) return `限价必须是价格步长 ${instrument.price_tick} 的整数倍`;

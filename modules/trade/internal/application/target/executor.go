@@ -38,15 +38,6 @@ const (
 	StatusSuperseded = "SUPERSEDED"
 )
 
-type Quote struct {
-	Price     shared.Decimal
-	UpdatedAt time.Time
-}
-
-type PriceSource interface {
-	LatestPrice(context.Context, string, exchange.SymbolKey) (Quote, error)
-}
-
 type OrderService interface {
 	Capacity(context.Context, string, orderdomain.OrderSpec) (shared.Decimal, error)
 	Place(context.Context, string, orderdomain.OrderSpec) (orderdomain.Order, error)
@@ -124,7 +115,9 @@ type memberState struct {
 	// sellable 是持仓来自余额的市场可卖出的数量，取自 Available。
 	// positions 用 Total，股票当日买入的数量算持仓但不可卖。
 	sellable map[string]shared.Decimal
-	blocked  []store.BlockedTarget
+	// t1 是有 T+1 规则的市场（股票）当日买入、当天还不能卖的数量：总数 − 冻结 − 可卖。挂单冻结的部分不在里面。
+	t1      map[string]shared.Decimal
+	blocked []store.BlockedTarget
 	// skip 是执行器不碰的标的（内部标的 ID）：名单里已经不能交易的，或正在做下架清仓的。
 	skip map[string]bool
 	// reduceOnly 是只减不增的标的：名单里还能交易的。
@@ -147,6 +140,9 @@ type placement struct {
 	// belowConfiguredMin 表示差额低于设置的最小下单额，视为已满足：跳过这个标的，不阻塞，blocked_targets 不记
 	// （和调仓阈值同口径；合约减仓、清仓不受这个门槛限制，照常下）。
 	belowConfiguredMin bool
+	// deferReason 非空表示按市场规则只能顺延（停牌、涨停、跌停、当日买入次日可卖，见 deferralReason）：
+	// 写进 blocked_targets 但不算阻塞，不告警。
+	deferReason string
 }
 
 type laneAction struct {
@@ -325,8 +321,12 @@ func (e *Executor) Converge(
 		now = e.Now()
 	}
 	for _, member := range members {
-		if !execution.InTradingSession(e.Exchanges, member.account.Exchange, now) {
-			target.LastError = "当前不在交易时段"
+		if ok, reason := execution.CanOrder(e.Exchanges, member.account.Exchange, now); !ok {
+			// 时段外 TargetWorker 每秒都会来：状态和原因都没变时不再写库。
+			if target.Status == StatusPending && target.LastError == reason {
+				return Result{Status: StatusPaused}, nil
+			}
+			target.LastError = reason
 			if err := e.updateTarget(ctx, &target, StatusPending); err != nil {
 				return Result{}, err
 			}
@@ -546,6 +546,8 @@ func (e *Executor) Converge(
 	var placedIDs []string
 	deferred := false
 	capDeferred := false
+	// marketDeferred 表示有标的按市场规则顺延（停牌、涨跌停、T+1）：定时器不扫已收敛的目标，要自己定时唤醒再看一次。
+	marketDeferred := false
 	// transferWaiting 表示有执行账户的现货买单在等划转（划转、对账、等快照、失败后退避）：它们这轮不下单，
 	// 其余账户照常下单；只要还有账户在等，目标不能定终态，也不进入归集。
 	transferWaiting := false
@@ -700,6 +702,15 @@ func (e *Executor) Converge(
 				deferred = true
 				continue
 			}
+			if placement.deferReason != "" {
+				// 停牌、涨跌停、T+1：这个标的在本阶段视为已处理，原因写进 blocked_targets，不算阻塞；目标有效期内过一会儿再看一次。
+				marketDeferred = true
+				holdCollect(stage, action)
+				deferredItems = append(deferredItems, store.BlockedTarget{
+					InstrumentID: instrumentID, Quantity: action.blockedQuantity(), Reason: placement.deferReason, Deferred: true,
+				})
+				continue
+			}
 			if placement.capDeferred {
 				// 每小时额度用完：这个标的在本阶段视为已处理，不卡后面的阶段，留到下一个整点；
 				// 原因写进目标的 blocked_targets，界面看得到为什么没下单。
@@ -795,6 +806,10 @@ func (e *Executor) Converge(
 			retryAfter = next
 		}
 	}
+	// 停牌复牌、涨跌停打开都可能在目标有效期内发生：过 60 秒再收敛一次，到期后走过期分支。
+	if marketDeferred && (retryAfter == 0 || marketDeferralRetry < retryAfter) {
+		retryAfter = marketDeferralRetry
+	}
 	if len(blocked) > 0 {
 		if err := e.updateTarget(ctx, &target, StatusBlocked); err != nil {
 			return Result{}, err
@@ -843,9 +858,35 @@ func (e *Executor) HasDifference(ctx context.Context, target store.LogicalAccoun
 		if reason == "" && e.belowConfiguredMinimumNow(ctx, env, action) {
 			continue
 		}
+		// 顺延（停牌、涨跌停、T+1）和整手市场里不足一手的差额，收敛时同样不算未到位。
+		if reason == "" && e.settledByMarketRule(ctx, action, desired[instrumentID], members) {
+			continue
+		}
 		return true, nil
 	}
 	return false, nil
+}
+
+// settledByMarketRule 判断一条标的剩下的差额是不是按市场规则顺延或视为已满足，和 Converge 下单时的判断同口径：
+// 停牌、涨跌停、只因 T+1 卖不出（deferralReason），以及整手交易的市场里不足一手的差额。取不到报价时按“没满足”处理。
+func (e *Executor) settledByMarketRule(ctx context.Context, action laneAction, desired desiredTarget, members []memberState) bool {
+	// 先按市场规则判断：没有涨跌停、T+1、整手规则的市场（加密货币）不多取一次价。
+	if rule := exchange.RuleFor(action.instrument.MarketType); !rule.PriceLimits && !rule.T1 && !rule.BoardLot {
+		return false
+	}
+	quote, err := e.Prices.LatestPrice(ctx, action.member.account.TradingAccountID,
+		exchange.NewSymbolKey(action.instrument.MarketType, action.instrument.ExchangeSymbol))
+	if err != nil || quote.Price.Cmp(shared.Zero()) <= 0 {
+		return false
+	}
+	if deferralReason(action, quote) != "" {
+		return true
+	}
+	if !exchange.RuleFor(action.instrument.MarketType).BoardLot {
+		return false
+	}
+	_, tooSmall, err := e.childQuantity(ctx, action)
+	return err == nil && tooSmall != "" && laneFinished(desired, members, action.instrument.InstrumentID)
 }
 
 // spotBuyVerdict 是 spotBuyPrecheck 的结论。
@@ -1026,6 +1067,7 @@ func (e *Executor) loadMembers(
 		blockedAssets := blockedSet.SpotBaseAssets(account.Exchange, instrumentRecords)
 		positions := make(map[string]shared.Decimal)
 		sellable := make(map[string]shared.Decimal)
+		t1 := make(map[string]shared.Decimal)
 		blocked := make([]store.BlockedTarget, 0)
 		if account.HasBalanceMarket() {
 			managed, managedErr := e.Store.ManagedAssets(ctx, spaceID, account.TradingAccountID)
@@ -1069,6 +1111,15 @@ func (e *Executor) loadMembers(
 					return nil, parseErr
 				}
 				sellable[instrumentID] = sellable[instrumentID].Add(available)
+				if exchange.RuleFor(instruments[instrumentID].MarketType).T1 {
+					locked, lockedErr := shared.ParseDecimal(balance.Locked)
+					if lockedErr != nil {
+						locked = shared.Zero()
+					}
+					if bought := quantity.Sub(locked).Sub(available); bought.Cmp(shared.Zero()) > 0 {
+						t1[instrumentID] = t1[instrumentID].Add(bought)
+					}
+				}
 			}
 		}
 		if account.HasPositionMarket() {
@@ -1111,7 +1162,7 @@ func (e *Executor) loadMembers(
 		}
 		members = append(members, memberState{
 			member: record, account: account,
-			instruments: instruments, positions: positions, sellable: sellable, blocked: blocked,
+			instruments: instruments, positions: positions, sellable: sellable, t1: t1, blocked: blocked,
 			skip: skip, reduceOnly: reduceOnly,
 		})
 	}
@@ -1275,8 +1326,9 @@ func nextLaneAction(
 				return laneAction{}, false,
 					"持仓没有对应的可交易标的", nil
 			}
-			// 反向零头下不了单，跳过这个成员继续判断。
-			if belowMinimumQuantity(position, instrument) {
+			// 反向零头下不了单，跳过这个成员继续判断；整手市场（A 股）还有可卖的零股就一次卖掉。
+			if belowMinimumQuantity(position, instrument) &&
+				!oddLotFullSell(laneAction{member: member, instrument: instrument, delta: position.Neg(), reducing: true}) {
 				continue
 			}
 			return laneAction{
@@ -1339,9 +1391,10 @@ func belowMinimumQuantity(quantity shared.Decimal, instrument store.InstrumentRe
 }
 
 // laneFinished 判断下不了单的剩余量能否算完成：目标为 0 或已有同向持仓时是零头，
-// 从空仓开新仓就达不到最小量才需要人看。
+// 从空仓开新仓就达不到最小量才需要人看（加密货币）；整手交易的市场不足一手一律视为已满足。
 func laneFinished(desired desiredTarget, members []memberState, instrumentID string) bool {
-	if desired.Quantity.IsZero() {
+	// 整手交易的市场（A 股）：买入不足一手的差额视为已满足，开新仓也一样。
+	if desired.Quantity.IsZero() || boardLotLane(members, instrumentID) {
 		return true
 	}
 	confirmed := shared.Zero()
@@ -1409,6 +1462,8 @@ func (e *Executor) placeActionMode(
 	configuredSmall := 0
 	// unfilled 表示有成员的伪市价单用满了尝试次数。
 	unfilled := false
+	// t1Deferred 表示有成员只因为 T+1 卖不出。
+	t1Deferred := false
 	candidates := placementCandidates(action, members)
 	for _, candidate := range candidates {
 		accountID := candidate.member.account.TradingAccountID
@@ -1438,6 +1493,12 @@ func (e *Executor) placeActionMode(
 		}
 		if quote.Price.Cmp(shared.Zero()) <= 0 {
 			return placement{}, &AccountError{TradingAccountID: candidate.member.account.TradingAccountID, Err: orderdomain.ErrInvalidSpec}
+		}
+		// 停牌、涨停时买、跌停时卖：整个标的顺延，不换成员（停牌和涨跌停是标的本身的状态）。
+		if exchange.RuleFor(candidate.instrument.MarketType).PriceLimits {
+			if reason := deferralReason(laneAction{instrument: candidate.instrument, delta: candidate.delta}, quote); reason != "" {
+				return placement{deferReason: reason}, nil
+			}
 		}
 		// 最小名义金额：交易所给了就用它，没给（OKX）用 minSz × 合约面值 × 价格折算。
 		minNotional, err := candidate.instrument.MinNotionalAt(quote.Price)
@@ -1476,18 +1537,21 @@ func (e *Executor) placeActionMode(
 			capacityErrors = append(capacityErrors, accountID+": "+reason)
 			continue
 		}
+		// oddFull：整手市场卖出全部可卖数量，零股一次卖完，不受最小数量限制。
+		oddFull := false
 		if candidate.reducing && exchange.RuleFor(candidate.instrument.MarketType).PositionFromBalance {
-			sellable := candidate.member.sellable[candidate.instrument.InstrumentID]
-			if quantity.Cmp(sellable) > 0 {
-				quantity = sellable
-			}
-			quantity = floorToStep(quantity, mustBaseStep(candidate.instrument))
+			quantity, oddFull = sellQuantity(candidate, quantity)
 			// 截断到可卖量后数量可能低于最小值或最小名义金额，交易所会拒单。
 			tooSmallNotional, notionalErr := belowMinimumNotional(quantity, quote.Price, minNotional)
 			if notionalErr != nil {
 				return placement{}, notionalErr
 			}
-			if belowMinimumQuantity(quantity, candidate.instrument) || tooSmallNotional {
+			if quantity.IsZero() || tooSmallNotional {
+				if t1Locked(candidate) {
+					// 只因为 T+1 卖不出：顺延到次日，不算阻塞。
+					t1Deferred = true
+					continue
+				}
 				capacityErrors = append(capacityErrors, accountID+": 可卖量不足")
 				continue
 			}
@@ -1528,14 +1592,20 @@ func (e *Executor) placeActionMode(
 		}
 		accountChildren := childrenOfAccount(children, accountID)
 		sliceLimit := env.sliceNotionalLimit(target, candidate.instrument.InstrumentID, len(accountChildren))
-		if maxQuantity := floorToStep(sliceLimit.Div(quote.Price), mustBaseStep(candidate.instrument)); quantity.Cmp(maxQuantity) > 0 {
-			quantity = maxQuantity
-		}
 		_, minimum, err := baseQuantityRules(candidate.instrument)
 		if err != nil {
 			return placement{}, err
 		}
-		if quantity.Cmp(shared.Zero()) <= 0 || quantity.Cmp(minimum) < 0 {
+		maxQuantity := floorToStep(sliceLimit.Div(quote.Price), mustBaseStep(candidate.instrument))
+		// 整手市场（A 股）单笔上限不足一手时按一手下单（拆单随机化后也一样）：高价股一手就超过默认的 10 万元上限，
+		// 否则永远下不了单。
+		if exchange.RuleFor(candidate.instrument.MarketType).BoardLot && maxQuantity.Cmp(minimum) < 0 {
+			maxQuantity = minimum
+		}
+		if quantity.Cmp(maxQuantity) > 0 {
+			quantity, oddFull = maxQuantity, false
+		}
+		if quantity.Cmp(shared.Zero()) <= 0 || (quantity.Cmp(minimum) < 0 && !oddFull) {
 			capacityErrors = append(capacityErrors, candidate.member.account.TradingAccountID+": 单笔子单上限低于交易所最小数量")
 			continue
 		}
@@ -1578,8 +1648,14 @@ func (e *Executor) placeActionMode(
 			// 限价 + IOC：价格 = 参考价 ×（1 ± 滑点），部分成交的剩余量下一轮按新的滑点再来。
 			// 默认最多 6% 的滑点比币安合约的价格过滤器（约 ±5%）宽，按标的的价格偏离限制夹住，避免最后几次被交易所拒单。
 			limit := pseudoMarketPrice(quote.Price, spec.Side, env.settings, attempt, candidate.instrument.PriceTick)
-			limit = ClampToPriceBand(limit, quote.Price, spec.Side, candidate.instrument)
+			limit = ClampToPriceBand(limit, CageBasis(quote, spec.Side), spec.Side, candidate.instrument)
+			// 涨跌停是绝对价：截在涨停价、跌停价之间（A 股；没有涨跌停的市场原样返回）。
+			limit = ClampToPriceLimits(limit, quote)
 			spec.Type, spec.FillPolicy, spec.LimitPrice = exchange.OrderTypeLimit, exchange.FillPolicyIOC, &limit
+		}
+		if candidate.resting {
+			restingLimit := ClampToPriceLimits(*spec.LimitPrice, quote)
+			spec.LimitPrice = &restingLimit
 		}
 		if !candidate.reducing {
 			capacity, err := e.Orders.Capacity(ctx, spaceID, spec)
@@ -1600,6 +1676,10 @@ func (e *Executor) placeActionMode(
 		}
 		placed, err := e.Orders.Place(ctx, spaceID, spec)
 		if err != nil {
+			if errors.Is(err, orderapp.ErrInstrumentHalted) {
+				// 下单校验看到停牌（报价在执行器取价之后变了）：顺延，不拖住整个目标。
+				return placement{deferReason: reasonHalted}, nil
+			}
 			if orderapp.IsPermanentValidationError(err) {
 				capacityErrors = append(
 					capacityErrors,
@@ -1626,6 +1706,10 @@ func (e *Executor) placeActionMode(
 	result := placement{
 		tooSmall:           len(candidates) > 0 && tooSmall == len(candidates),
 		belowConfiguredMin: configuredSmall > 0 && tooSmall == len(candidates),
+	}
+	if t1Deferred && len(capacityErrors) == 0 {
+		result.deferReason = reasonT1
+		return result, nil
 	}
 	if len(capacityErrors) == 0 {
 		result.reason = "数量低于交易所最小值"
@@ -1727,6 +1811,10 @@ func (e *Executor) childQuantity(
 	step, minimum, err := baseQuantityRules(action.instrument)
 	if err != nil {
 		return shared.Decimal{}, "", err
+	}
+	// 整手市场卖出全部可卖数量时允许零股，不按步长取整。
+	if oddLotFullSell(action) {
+		return action.member.sellable[action.instrument.InstrumentID], "", nil
 	}
 	quantity := floorToStep(action.delta.Abs(), step)
 	if quantity.IsZero() || quantity.Cmp(minimum) < 0 {

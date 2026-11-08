@@ -246,6 +246,11 @@ func (s *Service) PlaceManualOrder(
 			return result, recoverErr
 		}
 	}
+	if runningAction == nil {
+		if err := s.checkManualSession(ctx, command.TradingAccountID); err != nil {
+			return ManualOrderResult{}, err
+		}
+	}
 	logicalAccount, unlock, err := s.lockCurrentLogicalAccount(
 		ctx, command.SpaceID, command.TradingAccountID,
 	)
@@ -449,6 +454,29 @@ func (s *Service) actionOlderThan(action store.OperatorActionRecord, age time.Du
 		now = s.Now()
 	}
 	return now.Sub(action.CreatedAt) >= age
+}
+
+// checkManualSession 拒绝不在交易时段的手动下单（A 股）：模拟撮合时段外不撮合，实盘券商也不收，直接说清楚时段。
+func (s *Service) checkManualSession(ctx context.Context, tradingAccountID string) error {
+	account, err := s.Store.GetTradingAccountByID(ctx, tradingAccountID)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil
+		}
+		return err
+	}
+	now := time.Now()
+	if s.Now != nil {
+		now = s.Now()
+	}
+	if ok, _ := execution.CanOrder(s.Exchanges, account.Exchange, now); ok {
+		return nil
+	}
+	message := "不在交易时段"
+	if hours := execution.SessionHours(s.Exchanges, account.Exchange); hours != "" {
+		message += "（" + hours + "）"
+	}
+	return fmt.Errorf("%w: %s", ErrInvalidCommand, message)
 }
 
 func (s *Service) manualDeadlineFrom(created time.Time) int64 {

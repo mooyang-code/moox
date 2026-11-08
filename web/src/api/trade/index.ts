@@ -328,7 +328,7 @@ export function listOperatorActions(req: ListOperatorActionsReq, options: { sile
   );
 }
 
-export const exchangeLabels: Record<number, string> = { 0: "-", 1: "币安", 2: "OKX" };
+export const exchangeLabels: Record<number, string> = { 0: "-", 1: "币安", 2: "OKX", 3: "A 股" };
 export const orderStateLabels: Record<string, string> = {
   PENDING: "等待提交",
   SUBMITTING: "提交中",
@@ -343,6 +343,20 @@ export const orderStateLabels: Record<string, string> = {
   REJECTED: "已拒绝",
   EXPIRED: "已过期"
 };
+/** 模拟撮合写的英文原因换成中文；收盘撤单、超出涨跌停价、停牌、不在交易时段等本来就是中文，原样显示。 */
+const orderReasonTexts: Record<string, string> = {
+  "paper limit order is not marketable": "限价没能立即成交",
+  "paper reservation insufficient at match": "撮合时资金不足",
+  "paper limit price invalid": "限价无效",
+  "paper reduce-only capacity changed": "只减仓数量已变化",
+  "paper matcher reducer is not configured": "撮合未配置"
+};
+
+export function orderReasonText(reason: string | undefined): string {
+  const text = (reason || "").trim();
+  return orderReasonTexts[text] || text;
+}
+
 export const actionStateLabels: Record<string, string> = {
   RUNNING: "执行中",
   COMPLETED: "已完成",

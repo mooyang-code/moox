@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -41,7 +42,32 @@ var (
 	_ execution.ExecutionAdapter = (*Adapter)(nil)
 	_ execution.SymbolConfigurer = (*Adapter)(nil)
 	_ execution.LedgerSource     = (*Adapter)(nil)
+	_ execution.QuotePrefetcher  = (*Adapter)(nil)
+	_ execution.ExchangeIdentity = (*Adapter)(nil)
 )
+
+// Exchange 返回模拟账户所在的场所，报价新鲜度按这个场所的交易时段判断。
+func (a *Adapter) Exchange() exchange.Exchange { return exchange.Exchange(a.Account.Exchange) }
+
+// PrefetchQuotes 交给公共行情批量预取（A 股腾讯快照一次 60 只）；公共行情不支持时什么都不做。
+func (a *Adapter) PrefetchQuotes(ctx context.Context, keys []exchange.SymbolKey) error {
+	if prefetcher, ok := a.MarketData.(execution.QuotePrefetcher); ok {
+		return prefetcher.PrefetchQuotes(ctx, keys)
+	}
+	return nil
+}
+
+// lastPriceFresh 判断降级用的最后已知价还能不能用：A 股时段外用收盘价（execution.QuoteFresh）；
+// 没有交易时段的场所保持原来的判断，取价时间前后 maxAge 以内。
+func (a *Adapter) lastPriceFresh(maxAge time.Duration) func(time.Time) bool {
+	return func(at time.Time) bool {
+		if execution.HasSession(a.Exchanges, a.Account.Exchange) {
+			return execution.QuoteFresh(a.Exchanges, a.Account.Exchange, at, a.now(), maxAge)
+		}
+		age := a.now().Sub(at)
+		return age <= maxAge && age >= -maxAge
+	}
+}
 
 type Adapter struct {
 	Account store.TradingAccountRecord
@@ -49,7 +75,9 @@ type Adapter struct {
 	// MarketData is the unauthenticated production public adapter. Paper never
 	// invokes its private or order methods; it is only used for instruments and
 	// reference quotes.
-	MarketData  PublicMarketData
+	MarketData PublicMarketData
+	// Exchanges 提供场所的交易时段：A 股时段外估值报价按收盘价判断新鲜度；为空时全天按时段内处理。
+	Exchanges   execution.ExchangeCatalog
 	Wake        func()
 	Now         func() time.Time
 	mu          sync.RWMutex
@@ -110,6 +138,14 @@ func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnaps
 				}
 			}
 		}
+		// 持有的标的先批量预取报价（A 股腾讯快照一次 60 只），之后逐个估值命中缓存。
+		keys := make([]exchange.SymbolKey, 0, len(balances))
+		for asset, balance := range balances {
+			if instrument, found := byBase[asset]; found && asset != account.SettlementAsset && !balance.IsZero() {
+				keys = append(keys, exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol))
+			}
+		}
+		execution.PrefetchQuotes(ctx, a, keys)
 		for asset, balance := range balances {
 			if asset == account.SettlementAsset || balance.IsZero() {
 				continue
@@ -157,6 +193,9 @@ func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnaps
 		available = settlement.Add(unrealizedPnL).Sub(usedMargin).Sub(locked[account.SettlementAsset])
 	}
 	paperRows := paperBalances(balances, locked)
+	if err := a.applyT1(ctx, account, paperRows); err != nil {
+		return exchange.AccountSnapshot{}, err
+	}
 	if account.HasPositionMarket() && account.HasBalanceMarket() {
 		// 单一资金池里结算币这一行是现货买单看的：扣掉合约占用的保证金和浮亏，但浮盈不能花在现货上（现货不借币），
 		// 所以是 现金 + min(浮盈亏, 0) - 保证金 - 冻结。账户级的 AvailableFunds 给合约用，保持含浮盈的口径。
@@ -174,6 +213,38 @@ func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnaps
 		Balances: paperRows, Equity: equity, AvailableFunds: available, UsedMargin: usedMargin,
 		UnrealizedPnL: unrealizedPnL, ExchangeUpdatedAt: a.now(), Present: exchange.AccountSnapshotPresence{Balances: true, Equity: true, AvailableFunds: true, UsedMargin: true, UnrealizedPnL: true},
 	}, nil
+}
+
+// t1Source 是能读当日买入数量的事实存储（*store.Store 实现）；测试替身没有实现时不扣 T+1。
+type t1Source interface {
+	PaperT1Bought(ctx context.Context, spaceID, accountID string, since int64) (map[string]shared.Decimal, error)
+}
+
+// applyT1 从可用数量里扣掉当日买入（北京时间当天）的股票：T+1，当天买的次日才能卖。执行器的可卖数量取自这里。
+func (a *Adapter) applyT1(ctx context.Context, account store.TradingAccountRecord, rows []exchange.AssetBalance) error {
+	if !slices.ContainsFunc(account.Markets, func(market string) bool { return exchange.RuleFor(market).T1 }) {
+		return nil
+	}
+	source, ok := a.Store.(t1Source)
+	if !ok {
+		return nil
+	}
+	bought, err := source.PaperT1Bought(ctx, account.SpaceID, account.TradingAccountID, exchange.T1Since(a.now()).UnixMilli())
+	if err != nil {
+		return storageError(err)
+	}
+	for i := range rows {
+		quantity, found := bought[rows[i].Asset]
+		if !found {
+			continue
+		}
+		available := rows[i].Available.Sub(quantity)
+		if available.IsNegative() {
+			available = shared.Zero()
+		}
+		rows[i].Available = available
+	}
+	return nil
 }
 
 // balancePrice 给现货持有的一个币取估值价，取不到新鲜报价时和实盘权益采样用同一套降级规则（execution.DegradedPrice）：
@@ -242,7 +313,7 @@ func (a *Adapter) degradedPrice(
 			return price, parseErr == nil, nil
 		}
 	}
-	value, err := execution.DegradedPrice(ctx, failure, a.lastPrice(asset), a.now(), execution.LastPriceMaxAge, lastFill, cause)
+	value, err := execution.DegradedPrice(ctx, failure, a.lastPrice(asset), a.lastPriceFresh(execution.LastPriceMaxAge), lastFill, cause)
 	if err != nil {
 		return shared.Zero(), err
 	}
@@ -256,13 +327,16 @@ func (a *Adapter) lastPrice(asset string) execution.LastPrice {
 	return a.lastPrices[asset]
 }
 
+// valuationQuoteMaxAge 是时段内估值报价的最长时延。
+const valuationQuoteMaxAge = 10 * time.Second
+
 // valuationQuote 用参考价估值：一笔子单要算多次快照，逐持仓请求盘口会让子单间隔随持仓数变长。
 func (a *Adapter) valuationQuote(ctx context.Context, key exchange.SymbolKey) (shared.Decimal, error) {
 	quote, err := a.GetReferencePrice(ctx, key)
 	if err != nil {
 		return shared.Zero(), err
 	}
-	if !QuoteFresh(execution.MarketQuote{SourceTime: quote.UpdatedAt}, a.now(), 10*time.Second) {
+	if !strictQuoteFresh(a.Exchanges, a.Account.Exchange, quote.UpdatedAt, a.now(), valuationQuoteMaxAge) {
 		return shared.Zero(), fmt.Errorf("paper: valuation quote is stale for %s", key)
 	}
 	if quote.Price.Cmp(shared.Zero()) <= 0 {
