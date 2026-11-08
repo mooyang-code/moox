@@ -61,9 +61,13 @@
               </a-space>
               <a-space :size="16">
                 <a-link @click="router.push(detailLink(current.instance_id))">实例详情与启停</a-link>
-                <a-link @click="router.push(replayLink({ instanceId: current.instance_id, factorTasks: current.factor_tasks }))"
-                  >按会话回放</a-link
-                >
+                <a-tooltip :content="POOL_REPLAY_DISABLED_TEXT" :disabled="!currentIsPool">
+                  <a-link
+                    :disabled="currentIsPool"
+                    @click="router.push(replayLink({ instanceId: current.instance_id, factorTasks: current.factor_tasks }))"
+                    >按会话回放</a-link
+                  >
+                </a-tooltip>
               </a-space>
             </div>
             <InstanceResults
@@ -90,6 +94,7 @@
 </template>
 
 <script setup lang="ts">
+import { POOL_REPLAY_DISABLED_TEXT, isPoolStrategy } from "@/views/strategy/dsl";
 import { tasksText } from "@/views/strategy/market-mode";
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
@@ -152,6 +157,8 @@ const tabs = computed(() => {
   return list;
 });
 const current = computed(() => (store.instance && store.instance.instance_id === selectedId.value ? store.instance : null));
+// 研究回放不支持策略池：回放入口禁用（定义从实例详情一起读到的 store.strategy 里取）
+const currentIsPool = computed(() => Boolean(current.value) && isPoolStrategy(store.strategy?.dsl_yaml));
 
 function writeInstance(instanceId: string, mode: "push" | "replace" = "replace") {
   if (!isCurrentTab()) return;

@@ -53,8 +53,8 @@
             }}</a-tag></a-descriptions-item
           >
           <a-descriptions-item label="策略定义"
-            >{{ store.strategy?.name || definitionHint }} ·
-            <span class="mono">{{ store.instance.strategy_id }}</span></a-descriptions-item
+            >{{ store.strategy?.name || definitionHint }} · <span class="mono">{{ store.instance.strategy_id }}</span>
+            <div v-if="versionText" class="version-note">{{ versionText }}</div></a-descriptions-item
           >
           <a-descriptions-item label="因子任务"
             ><span class="mono">{{ tasksText(store.instance.factor_tasks) }}</span></a-descriptions-item
@@ -132,6 +132,7 @@ import StatusBadge from "@/views/strategy/components/strategy-status-badge.vue";
 import StrategyFactorParams from "@/views/strategy/components/strategy-factor-params.vue";
 import { parseFactorBinding } from "@/views/strategy/factor-params-model";
 import { instancesLink, replayLink } from "@/views/strategy/links";
+import { runningVersionText } from "@/views/strategy/model";
 import { useInstanceResults } from "@/views/strategy/use-instance-results";
 
 defineOptions({ name: "StrategyDetail" });
@@ -185,6 +186,10 @@ const {
 const POOL_REPLAY_REASON = "研究回放暂不支持策略池：成员的净值与分配比例要在池实例启用后的预热与运行中查看";
 const isPoolInstance = computed(() => poolMembers(store.strategy?.dsl_yaml || "") !== null);
 const hasFactors = computed(() => Boolean(store.instance && parseFactorBinding(store.instance.resolved_json)));
+// 实际运行的 DSL 版本（本会话最新结果的 dsl_hash），定义改过时提示停用再启用后生效
+const versionText = computed(() =>
+  store.instance ? runningVersionText(store.instance.session_id, store.results, store.strategy?.dsl_hash) : ""
+);
 const definitionHint = computed(() =>
   store.strategyStatus === "missing" ? "定义已删除" : store.strategyStatus === "error" ? "定义读取失败" : "定义读取中"
 );
@@ -228,6 +233,12 @@ watch(
 </script>
 
 <style scoped>
+.version-note {
+  margin-top: 2px;
+  color: var(--color-text-3);
+  font-size: 12px;
+}
+
 .page-head {
   display: flex;
   align-items: flex-start;

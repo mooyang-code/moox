@@ -54,8 +54,9 @@
             >{{ task.name || task.task_id }}（{{ task.task_id }} · {{ task.freq || "无周期" }}）</a-option
           >
         </a-select>
-        <template v-if="market === markets[0] && markets.length > 1" #extra
-          >现货、永续各选一个，两个任务的周期、日历和用到的列要一致。</template
+        <template v-if="market === markets[0]" #extra
+          ><template v-if="markets.length > 1">现货、永续各选一个，两个任务的周期、日历和用到的列要一致。</template
+          >统一数据集上的任务不在这里列出，要回放请从实例详情发起。</template
         >
       </a-form-item>
     </template>

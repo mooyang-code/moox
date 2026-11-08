@@ -217,3 +217,28 @@ export function equitySummary(bars: ReplayBar[], zone: string): string {
   const label = (time: number) => formatInstant(time, zone);
   return `权益曲线：共 ${points.length} 根，${label(first.time)} 权益 ${first.value.toFixed(4)}，${label(last.time)} 权益 ${last.value.toFixed(4)}，最高 ${Math.max(...values).toFixed(4)}，最低 ${Math.min(...values).toFixed(4)}`;
 }
+
+/** 回放列表里的一行指标：累计收益和最大回撤；还没有指标时为空串。 */
+export function replayMetricsLine(raw?: string): string {
+  const metrics = parseMetrics(raw);
+  if (!metrics) return "";
+  return `累计收益 ${(metrics.total_return * 100).toFixed(2)}% · 最大回撤 ${(metrics.max_drawdown * 100).toFixed(2)}%`;
+}
+
+/** 按某个回放的配置重新发起时的表单值；用了统一数据集上的任务（multi）时返回 null，要从实例详情发起。 */
+export function replayFormFromReplay(replay: Replay) {
+  const tasks = Object.fromEntries(Object.entries(replay.tasks || {}).map(([market, task]) => [market, task.factor_task_id]));
+  if ("multi" in tasks) return null;
+  const start = Date.parse(replay.start_time);
+  const end = Date.parse(replay.end_time);
+  return {
+    source: "dsl" as const,
+    strategy_id: replay.strategy_id,
+    dsl_yaml: replay.dsl_yaml,
+    instance_id: "",
+    tasks,
+    range: Number.isFinite(start) && Number.isFinite(end) ? ([start, end] as [number, number]) : null,
+    spot_fee_bps: replay.spot_fee_bps,
+    swap_fee_bps: replay.swap_fee_bps
+  };
+}

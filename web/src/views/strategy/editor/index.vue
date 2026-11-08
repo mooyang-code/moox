@@ -9,14 +9,26 @@
           <h2>{{ editing ? "编辑策略定义" : "新建策略定义" }}</h2>
           <span>这里只保存 DSL，不会创建实例或启用策略。</span>
         </div>
-        <a-space wrap
-          ><a-button :disabled="loading || saving" @click="loadTemplate('ranked')">截面选股模板</a-button
-          ><a-button :disabled="loading || saving" @click="loadTemplate('signal')">择时模板</a-button
-          ><a-button :disabled="loading || saving" @click="loadTemplate('tuned')">动态调参模板</a-button
-          ><a-button :disabled="loading || saving" @click="loadTemplate('mixed')">混合市场模板</a-button
-          ><a-button :disabled="loading || saving" @click="loadTemplate('pool')">策略池模板</a-button
-          ><a-button type="primary" :disabled="!loaded || loading" :loading="saving" @click="save">保存定义</a-button></a-space
-        >
+        <a-space wrap>
+          <a-dropdown :disabled="loading || saving" @select="onTemplateSelect">
+            <a-button :disabled="loading || saving">插入示例<icon-down /></a-button>
+            <template #content>
+              <a-doption value="ranked">截面选股</a-doption>
+              <a-doption value="signal">择时</a-doption>
+              <a-doption value="tuned">动态调参</a-doption>
+              <a-doption value="mixed">混合市场</a-doption>
+              <a-doption value="pool">策略池</a-doption>
+            </template>
+          </a-dropdown>
+          <a-button type="primary" :disabled="!loaded || loading" :loading="saving" @click="save">保存定义</a-button>
+        </a-space>
+      </div>
+      <div v-if="editing && loaded && !dirty" class="next-steps">
+        <span>定义已保存，接下来可以：</span>
+        <a-link @click="router.push(instancesLink({ strategyId, create: true }))">创建实例</a-link>
+        <a-tooltip :content="POOL_REPLAY_DISABLED_TEXT" :disabled="!parse.preview?.pool">
+          <a-link :disabled="Boolean(parse.preview?.pool)" @click="router.push(replayLink({ strategyId }))">发起回放</a-link>
+        </a-tooltip>
       </div>
       <a-alert v-if="error" type="error" show-icon class="top-alert">{{ error }}</a-alert>
       <a-grid :cols="{ xs: 1, sm: 2 }" :col-gap="20" :row-gap="16">
@@ -88,7 +100,9 @@ import { createStrategy, getStrategy, updateStrategy } from "@/api/strategy";
 import { useSpaceStore } from "@/store/modules/space";
 import { useStrategyStore } from "@/store/modules/strategy";
 import TrialPanel from "@/views/strategy/components/strategy-trial-panel.vue";
+import { instancesLink, replayLink } from "@/views/strategy/links";
 import {
+  POOL_REPLAY_DISABLED_TEXT,
   describePool,
   mixedMarketTemplate,
   parseDSL,
@@ -145,7 +159,11 @@ const templates = {
   mixed: mixedMarketTemplate,
   pool: poolTemplate
 };
-function loadTemplate(kind: keyof typeof templates) {
+type TemplateKind = keyof typeof templates;
+function onTemplateSelect(value: unknown) {
+  if (typeof value === "string" && value in templates) loadTemplate(value as TemplateKind);
+}
+function loadTemplate(kind: TemplateKind) {
   if (!loaded.value) return;
   if (dirty.value && !window.confirm("当前 DSL 尚未保存，确认替换？")) return;
   source.value = templates[kind];
@@ -165,15 +183,17 @@ async function save() {
   const submitted = source.value;
   const submission = saveScope.begin();
   try {
-    if (editing.value) await updateStrategy(strategyId.value.trim(), submitted);
-    else await createStrategy({ strategy_id: strategyId.value.trim() || undefined, dsl_yaml: submitted });
+    const saved = editing.value
+      ? await updateStrategy(strategyId.value.trim(), submitted)
+      : await createStrategy({ strategy_id: strategyId.value.trim() || undefined, dsl_yaml: submitted });
     original.value = submitted;
     // 新建或修改了定义：运行页、回放页缓存的完整目录已过期，作废后下次进入时重新读取。
     strategyStore.invalidateStrategyCatalog();
     Message.success("策略定义已保存");
-    // 保存期间用户已确认离开页面或切换了策略定义：定义已保存，但不能再把用户带回列表
+    // 保存期间用户已确认离开页面或切换了策略定义：定义已保存，但不能再把用户带走
     if (!submission.isCurrent()) return;
-    router.push({ name: "strategy-definitions" });
+    // 保存后留在本页：新建的换成编辑页地址，页头给“创建实例”“发起回放”入口
+    if (!editing.value) router.replace({ name: "strategy-definition-edit", params: { strategyId: saved.strategy_id } });
   } catch (err) {
     if (!submission.isCurrent()) return;
     error.value = err instanceof Error ? err.message : "策略定义保存失败";
@@ -240,6 +260,16 @@ watch(strategyId, () => saveScope.invalidate());
   color: var(--color-text-3);
   font-size: 12px;
 }
+.next-steps {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+  color: var(--color-text-3);
+  font-size: 13px;
+}
+
 .top-alert {
   margin-bottom: var(--moox-space-2);
 }

@@ -139,7 +139,13 @@
         :validate-status="fieldErrors.logical_account_id ? 'error' : undefined"
         :help="fieldErrors.logical_account_id"
       >
-        <a-select v-model="form.logical_account_id" allow-search :loading="accountsLoading" placeholder="选择接收目标的组合账户">
+        <a-select
+          v-model="form.logical_account_id"
+          allow-search
+          :loading="accountsLoading"
+          placeholder="选择接收目标的组合账户"
+          @change="accountCleared = false"
+        >
           <a-option
             v-for="option in accountOptions"
             :key="option.account.logical_account_id"
@@ -154,14 +160,18 @@
           >
           <span v-else-if="market.noAccount">{{ market.noAccount }}，请改为“仅计算”。</span>
           <span v-else-if="!accountsLoading && !accounts.length">当前空间没有可用的组合账户，请先在交易模块创建。</span>
+          <span v-else-if="!accountsLoading && !accountOptions.length"
+            >没有可交易{{ marketNames }}的策略驱动组合账户，请先在交易模块创建，或改为“仅计算”。</span
+          >
+          <span v-else-if="accountCleared">之前选的组合账户不支持策略的市场，已清空，请重新选择。</span>
         </template>
       </a-form-item>
       <a-form-item label="实例 ID（可选）"><a-input v-model="form.instance_id" placeholder="留空自动生成" /></a-form-item>
     </a-form>
     <div class="check-head">
       <strong>绑定预检</strong>
-      <a-button size="small" :loading="checking" :disabled="!form.strategy_id || !tasksSelected" @click="check"
-        >解析列与成员契约</a-button
+      <a-button size="small" :loading="checking" :disabled="!form.strategy_id || !tasksSelected" @click="check()"
+        >先预检</a-button
       >
     </div>
     <a-alert
@@ -172,6 +182,10 @@
       >{{ item }}</a-alert
     >
     <ResolvedTable v-if="check_result?.resolved_json" :resolved-json="check_result.resolved_json" />
+    <section v-if="check_result?.resolved_json && check_result.trial" class="check-trial">
+      <strong>按当前数据试算的第一期目标</strong>
+      <ResultItems :result="check_result.trial" :items="check_result.trial_items" />
+    </section>
     <a-alert type="info" show-icon class="confirm-note"
       >创建后实例保持停用。启用时后台会把因子任务与实例永久关联，并重新解析 结果
       View、列与成员契约，固化为会话快照；绑定组合账户的实例在启用时认领账户会话。</a-alert
@@ -199,6 +213,7 @@ import type { FactorTaskInfo } from "@/api/factor/types";
 import { availableTasks, isUnifiedTask, varMemberBlockReason, type TaskOption } from "@/views/strategy/components/task-options";
 import { isUnifiedMarketType } from "@/views/data/shared/series-market";
 import ResolvedTable from "@/views/strategy/components/strategy-resolved-table.vue";
+import ResultItems from "@/views/strategy/components/strategy-result-items.vue";
 import { logicalAccountOptions, marketsToResolved, resolvedMarkets } from "@/views/strategy/components/logical-account-options";
 import {
   UNIFIED_TASK_KEY,
@@ -253,15 +268,6 @@ let checkRequest = 0;
 const selectedStrategy = computed(() => props.strategies.find(item => item.strategy_id === form.strategy_id));
 const preview = computed(() => (selectedStrategy.value ? parseDSL(selectedStrategy.value.dsl_yaml).preview : null));
 
-// 只列策略驱动且可交易市场包含策略输出市场的组合账户，已被其他实例占用的显示但不可选；没有交易账户的市场（A 股）列表为空。
-// 预检之前策略池就按成员市场的并集过滤；预检之后以服务端解析出的市场为准。
-const market = computed(() =>
-  check_result.value?.resolved_json || !poolRequirement.value?.markets.length
-    ? resolvedMarkets(check_result.value?.resolved_json)
-    : marketsToResolved(poolRequirement.value.markets)
-);
-const accountOptions = computed(() => logicalAccountOptions(accounts.value, market.value, tradingAccounts.value));
-
 // 策略的市场模式决定要绑定哪些市场的任务；没写 market 时只绑一个，市场由用户选。
 const singleMarkets = ["spot", "swap", "equity"];
 // 策略池：成员引用的策略定义先从目录里找，目录里没有的按需读取（memberDefinitions：null 表示读取失败或不存在）。
@@ -305,15 +311,33 @@ async function loadMissingMembers() {
   );
 }
 watch(selectedStrategy, () => void loadMissingMembers(), { immediate: true });
+const activeMarkets = computed(() =>
+  requirement.value.declared ? requirement.value.markets : form.single_market ? [form.single_market] : []
+);
+// 只列策略驱动且可交易市场包含策略输出市场的组合账户，已被其他实例占用的显示但不可选；没有交易账户的市场（A 股）列表为空。
+// 预检之后以服务端解析出的市场为准；预检之前策略池按成员市场的并集，其余按 DSL 的市场（没写 market 时按选的市场）先筛。
+const market = computed(() => {
+  if (check_result.value?.resolved_json) return resolvedMarkets(check_result.value.resolved_json);
+  if (poolRequirement.value?.markets.length) return marketsToResolved(poolRequirement.value.markets);
+  return activeMarkets.value.length ? marketsToResolved(activeMarkets.value) : {};
+});
+// 预检前后的市场一致：直接按策略池成员或策略的市场写
+const marketNames = computed(() => {
+  const markets = poolRequirement.value?.markets.length ? poolRequirement.value.markets : activeMarkets.value;
+  return markets.length ? markets.map(marketLabel).join("、") : "策略市场";
+});
+// 已选的账户因为市场收窄被清空：提示一句，用户重新选择后消失。
+const accountCleared = ref(false);
+const accountOptions = computed(() => logicalAccountOptions(accounts.value, market.value, tradingAccounts.value));
 // 预检或成员定义读到后账户列表会收窄：已选的账户不在新列表里（或变成不可选）时清掉，不能悄悄提交不符合的账户。
 watch(accountOptions, options => {
   if (!form.logical_account_id) return;
   const kept = options.find(option => option.account.logical_account_id === form.logical_account_id);
-  if (!kept || kept.disabledReason) form.logical_account_id = "";
+  if (!kept || kept.disabledReason) {
+    form.logical_account_id = "";
+    accountCleared.value = true;
+  }
 });
-const activeMarkets = computed(() =>
-  requirement.value.declared ? requirement.value.markets : form.single_market ? [form.single_market] : []
-);
 // 统一数据集：策略写了 market（统一数据集没有可当默认值的市场）、不是策略池时可以选统一数据集上的任务。
 const canUnified = computed(() => !poolRequirement.value && requirement.value.declared && requirement.value.markets.length > 0);
 const unifiedMode = computed(() => canUnified.value && form.input_mode === "unified");
@@ -448,6 +472,8 @@ function loadMetadata() {
 
 function onStrategyChange() {
   fieldErrors.strategy_id = "";
+  // 预检作废了，“预检没有通过”的提示也不再成立
+  error.value = "";
   form.input_mode = "split";
   form.tasks = {};
   resetCheck();
@@ -462,10 +488,12 @@ function onInputModeChange() {
 }
 function onTaskChange() {
   fieldErrors.factor_tasks = "";
+  error.value = "";
   resetCheck();
 }
 function onModeChange() {
   fieldErrors.logical_account_id = "";
+  accountCleared.value = false;
   if (form.mode === "compute") form.logical_account_id = "";
 }
 
@@ -475,29 +503,41 @@ function resetCheck() {
   checking.value = false;
 }
 
-async function check() {
+// 进行中的预检：预检还没回来时再点“创建”，等这一次的结果，不重复发请求。
+let checkPromise: Promise<ValidateStrategyResult | null> | null = null;
+
+/** 预检：返回本次结果；被作废（改了定义、任务、市场或切了空间）时返回 null。关掉抽屉不作废预检，由 submitRequest 挡住创建。 */
+function check(): Promise<ValidateStrategyResult | null> {
   // 选中的定义不在目录里（目录是旧的）：说清楚原因，不能点了没反应
   if (form.strategy_id && !selectedStrategy.value) {
     fieldErrors.strategy_id = "策略目录里没有这条定义，请关闭抽屉、刷新实例列表后重试";
-    return;
+    return Promise.resolve(null);
   }
-  if (!selectedStrategy.value || !tasksSelected.value) return;
+  if (!selectedStrategy.value || !tasksSelected.value) return Promise.resolve(null);
+  if (checking.value && checkPromise) return checkPromise;
   const requestId = ++checkRequest;
+  const dsl = selectedStrategy.value.dsl_yaml;
   checking.value = true;
-  try {
-    const result = await validateStrategy(selectedStrategy.value.dsl_yaml, factorTasks());
-    if (requestId === checkRequest) check_result.value = result;
-  } catch (err) {
-    if (requestId === checkRequest)
+  checkPromise = (async () => {
+    try {
+      const result = await validateStrategy(dsl, factorTasks());
+      if (requestId !== checkRequest) return null;
+      check_result.value = result;
+      return result;
+    } catch (err) {
+      if (requestId !== checkRequest) return null;
       check_result.value = {
         diagnostics: [err instanceof Error ? err.message : "预检失败"],
         resolved_json: "",
         trial: null,
         trial_items: []
       };
-  } finally {
-    if (requestId === checkRequest) checking.value = false;
-  }
+      return check_result.value;
+    } finally {
+      if (requestId === checkRequest) checking.value = false;
+    }
+  })();
+  return checkPromise;
 }
 
 function resetForm() {
@@ -526,6 +566,7 @@ function resetForm() {
   accountsError.value = "";
   fieldErrors.strategy_id = fieldErrors.factor_tasks = fieldErrors.logical_account_id = "";
   error.value = "";
+  accountCleared.value = false;
   resetCheck();
   void loadMissingMembers();
 }
@@ -544,15 +585,22 @@ async function submit() {
       : unifiedMode.value
         ? "请选择统一数据集上的因子任务"
         : `请为${activeMarkets.value.map(marketLabel).join("、")}各选一个因子任务`;
-  // 一个任务关联实例后永久占住：必须先通过绑定预检（服务端会核对市场与任务是否对应），再创建。
-  if (!fieldErrors.factor_tasks && !check_result.value?.resolved_json)
-    fieldErrors.factor_tasks = "请先点击“解析列与成员契约”，预检通过后再创建（预检会核对市场与任务是否对应）";
   fieldErrors.logical_account_id = form.mode === "trade" && !form.logical_account_id ? "请选择组合账户，或改为“仅计算”" : "";
   if (fieldErrors.strategy_id || fieldErrors.factor_tasks || fieldErrors.logical_account_id) return;
   const spaceId = props.spaceId;
   const requestId = ++submitRequest;
   saving.value = true;
   try {
+    // 一个任务关联实例后永久占住：没有当前有效的预检结果就先预检（服务端会核对市场与任务是否对应），通过了才创建。
+    if (!check_result.value?.resolved_json) {
+      const result = await check();
+      // 预检被作废（等待期间改了定义、任务或市场）：不创建，按新的选择再点创建
+      if (!result || requestId !== submitRequest || props.spaceId !== spaceId) return;
+      if (!result.resolved_json) {
+        error.value = "预检没有通过（原因见下方），没有创建实例";
+        return;
+      }
+    }
     const instance = await createInstance({
       instance_id: form.instance_id.trim() || undefined,
       strategy_id: form.strategy_id,
@@ -618,6 +666,12 @@ watch(
 }
 .preview {
   margin-bottom: 16px;
+}
+.check-trial {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 12px 0;
 }
 .check-head {
   display: flex;

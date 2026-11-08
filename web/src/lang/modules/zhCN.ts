@@ -36,7 +36,7 @@ export default {
     ["strategy-tasks"]: "策略运行",
     ["strategy-definition-new"]: "新建策略",
     ["strategy-definition-edit"]: "编辑策略",
-    ["strategy-detail"]: "策略详情",
+    ["strategy-detail"]: "实例详情",
     ["data-import"]: "数据导入",
     ["compute-collector"]: "数据采集",
     ["collector-tasks"]: "采集任务",

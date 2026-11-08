@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  runningVersionText,
+  skipAdvice,
   buildResultInsights,
   buildResultOverview,
   cashOrNetText,
@@ -201,5 +203,26 @@ describe("result item ordering", () => {
       item("G", "missing")
     ]);
     expect(sorted.map(row => row.instrument_id)).toEqual(["D", "B", "F", "C", "G", "E", "A"]);
+  });
+});
+
+describe("实例实际运行的 DSL 版本", () => {
+  const result = (session_id: string, dsl_hash: string) => ({ session_id, dsl_hash });
+  it("取本会话最新结果的版本；和定义不同时提示停用再启用后生效", () => {
+    const results = [result("s2", "sha256:bbbbbbbbbbbbbbbb"), result("s1", "sha256:aaaa")];
+    expect(runningVersionText("s2", results, "sha256:bbbbbbbbbbbbbbbb")).toBe("运行版本 bbbbbbbbbbbb…");
+    expect(runningVersionText("s2", results, "sha256:cccc")).toBe("运行版本 bbbbbbbbbbbb…，定义已更新，停用再启用后生效");
+    expect(runningVersionText("s3", results, "sha256:cccc")).toBe("");
+    expect(runningVersionText("", results)).toBe("");
+  });
+});
+
+describe("跳过原因的说明和下一步", () => {
+  it("已知原因写原因和下一步；未知原因只写原因；没有原因时让看历史结果", () => {
+    expect(skipAdvice("factor_changed")).toBe(
+      "最近一期被跳过：因子定义已变化（factor_changed）。停用再启用实例，按新的因子定义重新固化。"
+    );
+    expect(skipAdvice("weird")).toBe("最近一期被跳过：weird。请在下方历史结果里看详情。");
+    expect(skipAdvice("")).toBe("最近一期被跳过，请在下方历史结果里看原因。");
   });
 });

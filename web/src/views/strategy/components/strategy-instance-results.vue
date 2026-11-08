@@ -3,9 +3,15 @@
     <a-alert v-if="!instance.enabled && instance.session_id" type="warning" show-icon class="results-alert"
       >实例已经停用，但会话仍存在。后台账户释放可能尚未完成，请不要将旧目标当作当前有效仓位。</a-alert
     >
-    <a-alert v-if="instance.health === 'degraded'" type="error" show-icon class="results-alert"
-      >最近一期被跳过。请在下方历史结果中查看具体跳过原因：数据暂时不足等情况会在后续周期自动恢复，仅当原因是因子定义版本变化时才需要停用并重新启用实例。</a-alert
-    >
+    <a-alert v-if="instance.health === 'degraded'" type="error" show-icon class="results-alert">{{
+      skipAdvice(latestSkip?.skip_reason)
+    }}</a-alert>
+    <a-alert v-else-if="instance.enabled && targetState === 'expired'" type="warning" show-icon class="results-alert">
+      目标已过期：最近一期之后没有产出新结果，多半是上游因子任务没有产出。查看因子任务：
+      <a-link v-for="taskId in upstreamTasks" :key="taskId" :href="`#/factor/tasks?detail=${encodeURIComponent(taskId)}`">{{
+        taskId
+      }}</a-link>
+    </a-alert>
     <div class="results-card">
       <TargetTable :targets="snapshot?.targets || []" :snapshot="snapshot" :state="targetState" :loading="initialLoading" />
     </div>
@@ -35,7 +41,7 @@ import type { StrategyInstance, StrategyResult, StrategyTargetSnapshot } from "@
 import PoolDetail from "@/views/strategy/components/strategy-pool-detail.vue";
 import ResultTimeline from "@/views/strategy/components/strategy-result-table.vue";
 import TargetTable from "@/views/strategy/components/strategy-target-table.vue";
-import type { TargetState } from "@/views/strategy/model";
+import { skipAdvice, type TargetState } from "@/views/strategy/model";
 import { buildPoolPeriods } from "@/views/strategy/pool-model";
 
 // 实例的结果面板：上面是当前目标，策略池的实例中间多一块策略池详情，下面直接是历史结果，不再藏在标签页里。数据由页面（useInstanceResults）提供。
@@ -55,6 +61,14 @@ const props = defineProps<{
 }>();
 // 策略池的实例：已加载的结果里带 pool 明细的期，没有时整块不显示。
 const poolPeriods = computed(() => buildPoolPeriods(props.results));
+// 本会话最新一期被跳过时的那条结果：用它的跳过原因写说明和下一步
+// 只有在看本会话的第一页时，首条才是最近一期；翻到别的页或看全部历史时写通用说明
+const latestSkip = computed(() => {
+  if (props.page !== 1 || props.scope !== "session") return undefined;
+  const latest = props.results.find(item => item.session_id === props.instance.session_id);
+  return latest?.status === "skipped" ? latest : undefined;
+});
+const upstreamTasks = computed(() => [...new Set(Object.values(props.instance.factor_tasks || {}))]);
 const emit = defineEmits<{ page: [number, "session" | "all"]; retry: [] }>();
 </script>
 

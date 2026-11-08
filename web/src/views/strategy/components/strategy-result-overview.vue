@@ -14,10 +14,10 @@
       <div class="stat">
         <span class="label">跳过原因</span>
         <span v-if="!overview.skipReasons.length" class="muted">无</span>
-        <a-space v-else wrap size="mini"
-          ><a-tag v-for="item in overview.skipReasons" :key="item.reason" size="small" color="orange"
-            >{{ skipReasonLabel(item.reason) }} × {{ item.count }}</a-tag
-          ></a-space
+        <span v-else class="skip-reasons"
+          ><template v-for="(item, index) in overview.skipReasons" :key="item.reason"
+            >{{ index ? "；" : "" }}{{ skipReasonLabel(item.reason) }} × {{ item.count }}</template
+          ></span
         >
       </div>
     </div>
@@ -73,6 +73,10 @@ const turnoverLine = computed(() =>
 </script>
 
 <style scoped>
+.skip-reasons {
+  color: rgb(var(--warning-6));
+  font-size: 13px;
+}
 .overview {
   display: grid;
   gap: 10px;

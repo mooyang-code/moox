@@ -52,16 +52,19 @@
                 <span v-else-if="!card.chips.length" class="task-card__empty">{{
                   card.state === "zero" ? "零仓位目标" : card.state === "empty" ? "当前会话尚无结果" : "暂无可展示的目标"
                 }}</span>
-                <a-tag v-for="chip in card.chips" :key="chip.instrumentId" size="small" :color="chip.short ? 'red' : 'green'">
-                  {{ chip.text }}
-                </a-tag>
-                <a-tag v-if="card.more" size="small">+{{ card.more }}</a-tag>
+                <span v-else class="task-card__targets"
+                  ><template v-for="(chip, index) in card.chips" :key="chip.instrumentId"
+                    >{{ index ? " · " : "" }}<span :class="{ 'is-short': chip.short }">{{ chip.text }}</span></template
+                  ><template v-if="card.more"> · 另有 {{ card.more }} 个</template></span
+                >
               </div>
               <footer class="task-card__links">
                 <span v-if="card.period" class="cell-sub">{{ card.period }}</span>
                 <a-link @click="go(card.links.results)">结果</a-link>
                 <a-link @click="go(detailLink(card.instanceId))">详情</a-link>
-                <a-link @click="go(card.links.replay)">回放</a-link>
+                <a-tooltip :content="POOL_REPLAY_DISABLED_TEXT" :disabled="!card.pool">
+                  <a-link :disabled="card.pool" @click="go(card.links.replay)">回放</a-link>
+                </a-tooltip>
               </footer>
             </article>
             <a-link v-if="instances.length > cards.length" @click="go(resultsLink())"
@@ -109,6 +112,8 @@
 </template>
 
 <script setup lang="ts">
+import { listLogicalAccounts } from "@/api/trade";
+import { POOL_REPLAY_DISABLED_TEXT } from "@/views/strategy/dsl";
 import { computed, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { StaleSpaceRequestError } from "@/api/admin/stale-space";
@@ -152,6 +157,8 @@ const replayError = ref("");
 // 读取失败的实例目标数：只提示，不当成“没有目标”。
 const targetFailures = ref(0);
 const readAt = ref("");
+// 已暂停自动执行的组合账户（读不到时为空，不提示暂停）
+const pausedAccounts = ref<Set<string>>(new Set());
 const gate = new RequestGate();
 
 const input = computed(() => ({
@@ -159,7 +166,8 @@ const input = computed(() => ({
   targets: targets.value,
   replays: replays.value,
   catalog: store.strategyCatalog,
-  nowMs: nowMs.value
+  nowMs: nowMs.value,
+  pausedAccounts: pausedAccounts.value
 }));
 const stats = computed(() => overviewStats(input.value));
 const cards = computed(() => instanceCards(input.value, displayZone.value));
@@ -192,7 +200,15 @@ async function loadAll(options: { background?: boolean } = {}) {
         return null;
       }),
       // 策略目录只在前台加载时补读：后台刷新不重试，免得策略模块不可用时每 30 秒弹一次
-      store.strategiesComplete || options.background ? Promise.resolve() : store.loadAllStrategies(200).catch(() => undefined)
+      store.strategiesComplete || options.background ? Promise.resolve() : store.loadAllStrategies(200).catch(() => undefined),
+      listLogicalAccounts({ page: 1, size: 500 }, { silent: true })
+        .then(rsp => {
+          if (gate.isCurrent(token)) {
+            const paused = (rsp.logical_accounts || []).filter(item => item.automation_state === "PAUSED");
+            pausedAccounts.value = new Set(paused.map(item => item.logical_account_id));
+          }
+        })
+        .catch(() => undefined)
     ]);
     if (!gate.isCurrent(token)) return;
     const enabled = nextInstances.filter(item => item.enabled).slice(0, TARGET_FETCH_LIMIT);
@@ -338,6 +354,12 @@ watch(
   margin: var(--moox-space-2) 0;
 }
 
+.task-card__targets {
+  font-size: 13px;
+}
+.task-card__targets .is-short {
+  color: rgb(var(--danger-6));
+}
 .task-card__empty {
   color: var(--color-text-3);
   font-size: 12px;

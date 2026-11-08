@@ -132,6 +132,12 @@ describe("strategy running page", () => {
     await flushPromises();
     expect(router.currentRoute.value.name).toBe("strategy-detail");
     expect(router.currentRoute.value.params.instanceId).toBe("i-new");
+    // 后退回到列表，不再带 create=1（不会重新弹出空的创建抽屉）
+    router.back();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    await flushPromises();
+    expect(router.currentRoute.value.query.create).toBeUndefined();
+    expect(router.currentRoute.value.query.strategy_id).toBe("s1");
   });
 
   it("does not reload when only the overlay changes", async () => {

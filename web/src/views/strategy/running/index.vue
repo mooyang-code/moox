@@ -257,7 +257,9 @@ function strategyName(id: string) {
   // 后端不允许删除被实例引用的定义，读不到名称只会是目录还没加载
   return store.strategyCatalog.find((item: Strategy) => item.strategy_id === id)?.name || `${id}（名称未加载）`;
 }
-function created(instanceId: string) {
+/** 创建成功：先把当前这条历史里的 create 去掉，再去详情页；否则在详情页按后退会重新弹出空的创建抽屉。 */
+async function created(instanceId: string) {
+  await go({ create: false });
   openDetail(instanceId);
 }
 /** 列表行启停：与详情页共用确认对话框与请求流程，结束后（无论成败）重新读取列表以显示真实状态。 */

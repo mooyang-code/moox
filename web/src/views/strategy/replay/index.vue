@@ -52,15 +52,15 @@
                 <span class="muted" :title="selected.dsl_hash"> · DSL {{ shortHash(selected.dsl_hash) }}</span>
               </div>
               <a-space>
-                <a-popconfirm
+                <a-button size="small" :loading="rerunning" @click="rerunWithConfig">按此配置重新发起</a-button>
+                <a-button
                   v-if="(selected.status === 'pending' || selected.status === 'running') && selected.replay_id === selectedId"
-                  content="回放不支持续跑，取消后只保留已写入的周期记录。确定取消？"
-                  ok-text="取消回放"
-                  cancel-text="继续运行"
-                  @ok="cancel"
+                  class="cancel-replay"
+                  status="warning"
+                  :loading="cancelling"
+                  @click="confirmCancel"
+                  >取消回放</a-button
                 >
-                  <a-button status="warning" :loading="cancelling">取消回放</a-button>
-                </a-popconfirm>
               </a-space>
             </div>
             <div class="muted detail-info">
@@ -277,7 +277,7 @@
 <script setup lang="ts">
 import { StaleSpaceRequestError } from "@/api/admin/stale-space";
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
-import { Message } from "@arco-design/web-vue";
+import { Message, Modal } from "@arco-design/web-vue";
 import type VChart from "@visactor/vchart";
 import { useRoute, useRouter } from "vue-router";
 import { cancelReplay, getReplay, listReplayBars, listReplays, startReplay } from "@/api/strategy";
@@ -314,6 +314,7 @@ import {
   parseMetrics,
   recentRange,
   replayFeeText,
+  replayFormFromReplay,
   replayRangeLabel,
   replaySourceLabel,
   replayStatusColor,
@@ -841,6 +842,17 @@ async function start() {
   }
 }
 
+function confirmCancel() {
+  Modal.confirm({
+    title: "取消这个回放？",
+    content: "回放不支持续跑，取消后只保留已写入的周期记录。",
+    okText: "取消回放",
+    okButtonProps: { status: "warning" },
+    cancelText: "继续运行",
+    onOk: () => void cancel()
+  });
+}
+
 async function cancel() {
   // 只能取消正在显示的回放：切换选择后详情尚未加载完成时不能作用在旧回放上。
   if (!selected.value || selected.value.replay_id !== selectedId.value) return;
@@ -864,6 +876,27 @@ async function cancel() {
 
 function openCreate() {
   if (!parsed.value.create) writeQuery({ create: true }, "push");
+}
+
+/** 按所选回放的配置重新发起：取回放详情里的 DSL、任务、区间和手续费，填进发起表单（DSL 用当时的原文）。 */
+const rerunning = ref(false);
+async function rerunWithConfig() {
+  const replayId = selected.value?.replay_id;
+  if (!replayId) return;
+  rerunning.value = true;
+  try {
+    const next = replayFormFromReplay(await getReplay(replayId));
+    if (!next) {
+      Message.info("这个回放用的是统一数据集上的任务，发起表单不能选，请从实例详情发起");
+      return;
+    }
+    Object.assign(form, { ...next, single_market: Object.keys(next.tasks).length === 1 ? Object.keys(next.tasks)[0] : "" });
+    openCreate();
+  } catch (err) {
+    Message.error(err instanceof Error ? err.message : "回放详情读取失败");
+  } finally {
+    rerunning.value = false;
+  }
 }
 /** 关闭创建抽屉：预填一并从 URL 清除（它们只表示创建来源，不表示分析对象）。 */
 function closeCreate() {
