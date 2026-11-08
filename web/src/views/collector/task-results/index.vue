@@ -17,14 +17,27 @@
 
         <template v-else-if="resultTabs.length">
           <div class="result-toolbar">
-            <span class="result-count">
-              共 {{ pagination.total }} 个任务<span v-if="activeLastStatusReadAt">；状态读取：{{ activeLastStatusReadAt }}</span>
-            </span>
+            <a-space wrap>
+              <a-select
+                :model-value="activeTaskId"
+                allow-search
+                class="result-task-select"
+                placeholder="选择采集任务"
+                @change="onTaskSelect"
+              >
+                <a-option v-for="tab in resultTabs" :key="tab.taskId" :value="tab.taskId" :label="tab.title"
+                  >{{ tab.title
+                  }}<span v-if="taskStateNote(tab.task)" class="result-task-note">{{ taskStateNote(tab.task) }}</span></a-option
+                >
+              </a-select>
+              <span class="result-count">
+                共 {{ resultTabs.length }} 个任务<span v-if="activeLastStatusReadAt"
+                  >；状态读取：{{ activeLastStatusReadAt }}</span
+                >
+              </span>
+            </a-space>
             <a-button :loading="detailLoading" :disabled="!activeTaskId" @click="refreshActiveTask">刷新结果</a-button>
           </div>
-          <a-tabs v-model:active-key="activeTaskId" type="rounded" size="medium" class="result-tabs" @change="onTaskChange">
-            <a-tab-pane v-for="tab in resultTabs" :key="tab.taskId" :title="tab.title" />
-          </a-tabs>
 
           <div v-if="activeResample" class="resample-source-line">
             合成自
@@ -71,15 +84,6 @@
             empty-description="结果准备中"
             empty-rows-description="任务已准备，尚未产生数据"
           />
-
-          <a-pagination
-            v-if="pagination.total > pagination.pageSize"
-            :current="pagination.current"
-            :page-size="pagination.pageSize"
-            :total="pagination.total"
-            size="small"
-            @change="onPageChange"
-          />
         </template>
       </a-spin>
     </div>
@@ -87,9 +91,10 @@
 </template>
 
 <script setup lang="ts">
+import { collectionTaskResultLabel } from "@/views/collector/collection-tasks/collection-task-params";
 import { useDisplayZone } from "@/hooks/useDisplayZone";
 import { formatInstant } from "@/utils/time-zone";
-import { computed, onActivated, onDeactivated, reactive, ref, watch } from "vue";
+import { computed, onActivated, onDeactivated, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { ControlRequestError } from "@/api/admin/http";
 import { AuthSessionExpiredError } from "@/api/admin/auth-errors";
@@ -108,6 +113,7 @@ import {
   resampleTargetFrequency,
   resolveActiveTask,
   selectTaskIdFromQuery,
+  taskIdForDataset,
   type TaskResultState
 } from "./task-results-model";
 
@@ -127,7 +133,7 @@ const viewRefreshKey = ref(0);
 const tasks = ref<CollectorTask[]>([]);
 const taskDetails = ref<Record<string, CollectorTask>>({});
 const activeTaskId = ref(queryTaskId(route.query.resultTask));
-const pagination = reactive({ current: 1, pageSize: 100, total: 0 });
+const TASK_PAGE_SIZE = 100;
 let loadSequence = 0;
 let detailSequence = 0;
 let loadedSpaceId = "";
@@ -211,7 +217,19 @@ function clearTaskResultCache(taskId: string) {
   tasks.value = tasks.value.filter(task => task.task_id !== taskId);
 }
 
-async function load(page = 1, options: { preserveSelection?: boolean; honorQuery?: boolean } = {}) {
+/** 读取当前空间的全部采集任务（按页读完，不再分页展示）。 */
+async function fetchAllTasks(spaceId: string) {
+  const all: CollectorTask[] = [];
+  for (let page = 1; ; page += 1) {
+    const response = await GetTaskList({ space_id: spaceId, page: { page, size: TASK_PAGE_SIZE } });
+    const batch = response.tasks || [];
+    all.push(...batch);
+    const total = response.page?.total ?? all.length;
+    if (!batch.length || all.length >= total) return all;
+  }
+}
+
+async function load() {
   const spaceId = selectedSpaceId.value;
   const sequence = ++loadSequence;
   if (!spaceId) {
@@ -219,8 +237,6 @@ async function load(page = 1, options: { preserveSelection?: boolean; honorQuery
     taskDetails.value = {};
     lastStatusReadAtByTask.value = {};
     readableViewIdsByTask.value = {};
-    pagination.current = 1;
-    pagination.total = 0;
     activeTaskId.value = "";
     loadError.value = "";
     loading.value = false;
@@ -232,31 +248,21 @@ async function load(page = 1, options: { preserveSelection?: boolean; honorQuery
     taskDetails.value = {};
     lastStatusReadAtByTask.value = {};
     readableViewIdsByTask.value = {};
-    pagination.current = 1;
     activeTaskId.value = queryTaskId(route.query.resultTask);
   }
 
   loading.value = true;
   loadError.value = "";
   try {
-    const response = await GetTaskList({
-      space_id: spaceId,
-      page: { page, size: pagination.pageSize }
-    });
+    const listTasks = await fetchAllTasks(spaceId);
     if (sequence !== loadSequence || spaceId !== selectedSpaceId.value) return;
-    const listTasks = response.tasks || [];
     tasks.value = listTasks;
-    pagination.current = response.page?.page || page;
-    pagination.total = response.page?.total ?? listTasks.length;
-    const requestedTaskId = queryTaskId(route.query.resultTask);
-    const currentTaskIsOnPage = listTasks.some(task => task.task_id === activeTaskId.value);
-    const requestedTaskIsOnPage = listTasks.some(task => task.task_id === requestedTaskId);
-    const nextTaskId =
-      options.preserveSelection && currentTaskIsOnPage
-        ? activeTaskId.value
-        : options.honorQuery !== false && requestedTaskId && !requestedTaskIsOnPage
-          ? requestedTaskId
-          : selectTaskIdFromQuery(listTasks, options.honorQuery === false ? "" : requestedTaskId);
+    // 没有指定 resultTask 时，?dataset=&freq=（告警、存储节点等处跳进来）按结果数据集选任务
+    const requestedTaskId =
+      queryTaskId(route.query.resultTask) || taskIdForDataset(listTasks, route.query.dataset, route.query.freq);
+    // 地址里指定的任务不在列表里（例如别处的深链接）时照样选它，由下面单独读详情确认；否则按列表选
+    const requestedInList = listTasks.some(task => task.task_id === requestedTaskId);
+    const nextTaskId = requestedTaskId && !requestedInList ? requestedTaskId : selectTaskIdFromQuery(listTasks, requestedTaskId);
     activeTaskId.value = nextTaskId;
     await keepResultSelection(nextTaskId);
     if (nextTaskId) {
@@ -340,9 +346,14 @@ function onTaskChange(value: string | number) {
   void loadTaskDetail(taskId);
 }
 
-function onPageChange(page: number) {
-  pagination.current = page;
-  void load(page, { honorQuery: false });
+function onTaskSelect(value: unknown) {
+  onTaskChange(String(value ?? ""));
+}
+
+/** 下拉选项后附的状态文字：和采集任务列表同一套口径，只在“结果异常”“结果准备中”时写。 */
+function taskStateNote(task: CollectorTask) {
+  const label = collectionTaskResultLabel(task as Parameters<typeof collectionTaskResultLabel>[0]);
+  return label === "结果异常" ? "异常" : label === "结果准备中" ? "准备中" : "";
 }
 
 watch(
@@ -440,9 +451,15 @@ watch(
   min-width: 0;
 }
 
-.result-tabs {
-  min-width: 0;
-  margin-bottom: var(--moox-space-3);
+.result-task-select {
+  width: 320px;
+  max-width: 100%;
+}
+
+.result-task-note {
+  margin-left: 8px;
+  color: var(--color-text-3);
+  font-size: 12px;
 }
 
 .result-toolbar {
@@ -460,9 +477,5 @@ watch(
 
 .result-refresh-warning {
   margin-bottom: var(--moox-space-3);
-}
-
-.result-tabs :deep(.arco-tabs-content) {
-  display: none;
 }
 </style>

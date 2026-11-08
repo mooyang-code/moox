@@ -147,7 +147,16 @@
         <template #columns>
           <a-table-column title="数据集 ID" data-index="dataset_id" />
           <a-table-column title="数据集名称" data-index="dataset_name" />
-          <a-table-column title="采集任务 ID" data-index="collector_task_id" />
+          <a-table-column title="采集任务 ID">
+            <template #cell="{ record }">
+              <a-link
+                v-if="record.collector_task_id"
+                :href="`#/collector/tasks?detail=${encodeURIComponent(record.collector_task_id)}`"
+                >{{ record.collector_task_id }}</a-link
+              >
+              <span v-else>-</span>
+            </template>
+          </a-table-column>
         </template>
       </a-table>
     </a-modal>

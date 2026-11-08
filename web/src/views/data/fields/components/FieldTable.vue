@@ -73,7 +73,7 @@ import { useDisplayZone } from "@/hooks/useDisplayZone";
 const displayZone = useDisplayZone();
 function fieldStatusText(status?: string) {
   if (status === "active") return "启用";
-  return status === "deleted" ? "已删除" : "停用";
+  return status === "deleted" ? "已隐藏" : "停用";
 }
 
 const props = defineProps<{

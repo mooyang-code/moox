@@ -118,9 +118,10 @@ export function viewDisplayName(view?: Pick<View, "view_id" | "name"> | null) {
   return view.name || view.view_id || "";
 }
 
-// A股空间（stockcn）的 series_tag 恒为 default，浏览时默认按它筛选；其他空间的标签区分来源，默认不填。
-export function defaultSeriesTagForView(view?: Pick<View, "space_id"> | null) {
-  return view?.space_id === "stockcn" ? "default" : "";
+// 新加“序列标签”筛选时的默认值：当前结果里只有一种序列标签时用它（例如 A 股恒为 default），有多种或还没有结果时不填。
+export function defaultSeriesTag(rows: Array<{ seriesTag?: string }>) {
+  const tags = new Set(rows.map(row => row.seriesTag ?? ""));
+  return tags.size === 1 ? [...tags][0] : "";
 }
 
 export function viewModeFromPrimaryDataset(

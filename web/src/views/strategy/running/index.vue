@@ -17,15 +17,20 @@
           />
         </span>
         <a-space wrap>
-          <a-select v-model="filters.strategy_id" allow-clear allow-search placeholder="全部策略定义" class="filter-select"
+          <a-select
+            v-model="filters.strategy_id"
+            allow-clear
+            allow-search
+            placeholder="全部策略定义"
+            class="filter-select"
+            @change="search"
             ><a-option v-for="item in store.strategyCatalog" :key="item.strategy_id" :value="item.strategy_id"
               >{{ item.name }}（{{ item.strategy_id }}）</a-option
             ></a-select
           >
-          <a-select v-model="filters.enabled" allow-clear placeholder="全部状态" class="filter-status"
+          <a-select v-model="filters.enabled" allow-clear placeholder="全部状态" class="filter-status" @change="search"
             ><a-option value="true">已启用</a-option><a-option value="false">已停用</a-option></a-select
           >
-          <a-button @click="search">查询</a-button>
           <a-button @click="reset">重置</a-button>
           <a-button :loading="store.instancesLoading" aria-label="刷新实例" @click="manualRefresh"
             ><template #icon><icon-refresh /></template>刷新</a-button

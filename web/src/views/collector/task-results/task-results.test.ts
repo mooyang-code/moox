@@ -12,7 +12,8 @@ import {
   resampleEmptyDescription,
   resampleSourceTaskId,
   resampleTargetFrequency,
-  selectTaskIdFromQuery
+  selectTaskIdFromQuery,
+  taskIdForDataset
 } from "./task-results-model";
 
 describe("collector result workflow", () => {
@@ -53,7 +54,7 @@ describe("collector result workflow", () => {
     const results = fs.readFileSync(path.resolve(__dirname, "index.vue"), "utf8");
     expect(results).toContain('v-for="tab in resultTabs"');
     expect(results).toContain(':key="tab.taskId"');
-    expect(results).toContain(':title="tab.title"');
+    expect(results).toContain(':label="tab.title"');
     expect(tabs.map(tab => tab.taskId)).toEqual(["newer", "older"]);
     expect(tabs.map(tab => tab.title)).toEqual(["新任务", "旧任务"]);
   });
@@ -61,7 +62,7 @@ describe("collector result workflow", () => {
   it("keeps unknown list state stale until the selected task is inspected", () => {
     expect(getTaskResultState({ task_id: "unknown", result: { view_id: "view-unknown", status: "unknown" } })).toBe("stale");
     const results = fs.readFileSync(path.resolve(__dirname, "index.vue"), "utf8");
-    expect(results).toContain("pageSize: 100");
+    expect(results).toContain("TASK_PAGE_SIZE = 100");
     expect(results).toContain("GetTaskDetail({ space_id: spaceId, task_id: taskId })");
     expect(results).toContain("保留上次读取的结果状态");
     expect(results).not.toContain("保留上次已确认结果");
@@ -112,5 +113,31 @@ describe("collector result workflow", () => {
     const page = fs.readFileSync(path.resolve(__dirname, "index.vue"), "utf8");
     expect(page).toContain("合成自");
     expect(page).toContain("历史合成进行中");
+  });
+});
+
+describe("按结果数据集选任务", () => {
+  it("?dataset= 找到写入这个数据集的任务；同一数据集多个任务时按周期挑；找不到时为空", () => {
+    const list = [
+      {
+        task_id: "a",
+        data_type: "kline",
+        collect_params: { frequency: "1m" },
+        result: { dataset_id: "ds" },
+        create_time: "2026-10-01T00:00:00Z"
+      },
+      {
+        task_id: "b",
+        data_type: "kline_resample",
+        collect_params: { target_frequency: "5m" },
+        result: { dataset_id: "ds" },
+        create_time: "2026-10-02T00:00:00Z"
+      }
+    ];
+    expect(taskIdForDataset(list, "ds", "1m")).toBe("a");
+    expect(taskIdForDataset(list, "ds", "5m")).toBe("b");
+    expect(taskIdForDataset(list, "ds", "")).toBe("b");
+    expect(taskIdForDataset(list, "other", "1m")).toBe("");
+    expect(taskIdForDataset(list, "", "1m")).toBe("");
   });
 });

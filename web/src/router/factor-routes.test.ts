@@ -20,6 +20,7 @@ const reusePaths = [
   "/strategy/definitions",
   "/strategy/tasks",
   "/collector/tasks",
+  "/data/subjects",
   "/data/fields",
   "/trading/accounts",
   "/data/archive",

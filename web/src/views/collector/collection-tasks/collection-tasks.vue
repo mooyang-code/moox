@@ -15,20 +15,16 @@
             @press-enter="search"
             @clear="search"
           />
-          <a-select v-model="filters.dataType" placeholder="数据类型" allow-clear style="width: 140px">
+          <a-select v-model="filters.dataType" placeholder="数据类型" allow-clear style="width: 140px" @change="search">
             <a-option v-for="config in availableDataTypeConfigs" :key="config.data_type" :value="config.data_type">
               {{ config.type_name }}
             </a-option>
           </a-select>
-          <a-select v-model="filters.enabled" placeholder="启用状态" style="width: 120px">
+          <a-select v-model="filters.enabled" placeholder="启用状态" style="width: 120px" @change="search">
             <a-option value="">全部</a-option>
             <a-option value="true">启用</a-option>
             <a-option value="false">禁用</a-option>
           </a-select>
-          <a-button type="primary" @click="search">
-            <template #icon><icon-search /></template>
-            查询
-          </a-button>
         </a-space>
 
         <a-table
@@ -517,6 +513,11 @@
             </a-descriptions-item>
           </a-descriptions>
         </section>
+        <a-space class="detail-actions">
+          <a-button type="primary" @click="openResultsFromDetail(detailData)">采集结果</a-button>
+          <a-button @click="editFromDetail(detailData)">修改</a-button>
+          <a-button v-if="detailData.data_type === 'kline_resample'" @click="jobsFromDetail(detailData)">历史合成</a-button>
+        </a-space>
       </template>
     </a-drawer>
 
@@ -554,6 +555,7 @@
 </template>
 
 <script setup lang="ts">
+import { buildResultsQuery } from "@/views/collector/task-results/task-results-model";
 import ArchiveCoverageText from "@/views/data/archive/archive-coverage-text.vue";
 import { useDisplayZone } from "@/hooks/useDisplayZone";
 import { formatInstant } from "@/utils/time-zone";
@@ -1612,6 +1614,23 @@ function onDetailCancel() {
   syncListQuery();
 }
 
+/** 详情抽屉底部的直达入口：去采集结果页签看这个任务的结果（去掉本页的 detail，其余参数保留）。 */
+function openResultsFromDetail(record: CollectionTaskRecord) {
+  detailVisible.value = false;
+  const others = Object.fromEntries(Object.entries(route.query).filter(([key]) => key !== "detail"));
+  void router.replace({ path: "/collector/tasks", query: { ...others, ...buildResultsQuery(record.task_id) } });
+}
+
+function editFromDetail(record: CollectionTaskRecord) {
+  onDetailCancel();
+  onUpdate(record);
+}
+
+function jobsFromDetail(record: CollectionTaskRecord) {
+  onDetailCancel();
+  openJobs(record);
+}
+
 // 详情里点「依赖它的合成任务」：打开该任务的详情（不在当前页时单独取）。
 function locateTask(record: CollectionTaskRecord) {
   void openDetailById(record.task_id);
@@ -1899,6 +1918,10 @@ pre {
 
 .immutable-hint {
   margin-bottom: var(--moox-space-4);
+}
+
+.detail-actions {
+  margin-top: 16px;
 }
 
 /* 编辑态不可变项的只读摘要：替代一排禁用控件，一眼可读 */

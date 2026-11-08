@@ -74,9 +74,15 @@
           </a-table-column>
           <a-table-column title="操作" :width="90" align="center">
             <template #cell="{ record }">
-              <a-button v-if="isActiveResampleJob(record.status)" size="mini" status="danger" type="text" @click="cancel(record)"
-                >取消</a-button
+              <a-popconfirm
+                v-if="isActiveResampleJob(record.status)"
+                content="取消这个合成作业？已写入的周期保留，没算完的不再继续。"
+                ok-text="取消作业"
+                cancel-text="继续"
+                @ok="cancel(record)"
               >
+                <a-button size="mini" status="danger" type="text">取消</a-button>
+              </a-popconfirm>
               <span v-else class="jobs-muted">-</span>
             </template>
           </a-table-column>

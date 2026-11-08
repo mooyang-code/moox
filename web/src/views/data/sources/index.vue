@@ -38,10 +38,11 @@
           <a-table-column title="名称" data-index="name" :width="180" />
           <a-table-column title="属性" :width="320">
             <template #cell="{ record }">
-              <a-space wrap size="mini">
-                <a-tag v-for="[key, value] in attributeEntries(record)" :key="key" size="small">{{ key }}={{ value }}</a-tag>
-                <span v-if="!attributeEntries(record).length" class="muted">—</span>
-              </a-space>
+              <div v-for="[key, value] in attributeEntries(record)" :key="key" class="attr-line">
+                <span class="attr-key">{{ key }}</span
+                >{{ value }}
+              </div>
+              <span v-if="!attributeEntries(record).length" class="muted">—</span>
             </template>
           </a-table-column>
           <a-table-column title="状态" :width="90">
@@ -74,9 +75,19 @@
             </a-select>
           </a-form-item>
           <a-form-item v-if="attributeEntries(form).length" label="属性">
-            <a-space wrap size="mini">
-              <a-tag v-for="[key, value] in attributeEntries(form)" :key="key" size="small">{{ key }}={{ value }}</a-tag>
-            </a-space>
+            <a-table
+              :data="formAttributeRows"
+              row-key="key"
+              size="small"
+              :pagination="false"
+              :bordered="{ cell: true }"
+              class="attr-table"
+            >
+              <template #columns>
+                <a-table-column title="属性" data-index="key" :width="160" />
+                <a-table-column title="值" data-index="value" />
+              </template>
+            </a-table>
           </a-form-item>
         </a-form>
       </a-modal>
@@ -148,6 +159,9 @@ async function load() {
     if (request.isLatest()) loading.value = false;
   }
 }
+
+// 编辑弹窗里的属性小表格
+const formAttributeRows = computed(() => attributeEntries(form).map(([key, value]) => ({ key, value })));
 
 function attributeEntries(source: Pick<DataSource, "attributes">): Array<[string, string]> {
   return Object.entries(source.attributes || {});
@@ -233,6 +247,20 @@ watch(visible, open => {
 </script>
 
 <style scoped>
+.attr-line {
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.attr-key {
+  margin-right: 8px;
+  color: var(--color-text-3);
+}
+
+.attr-table {
+  width: 100%;
+}
+
 .page-head {
   display: flex;
   align-items: center;

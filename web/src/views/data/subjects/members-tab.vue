@@ -7,13 +7,9 @@
     <div class="filter-bar">
       <div class="filter-query">
         <a-input v-model="keyword" class="keyword-input" allow-clear placeholder="搜索对象 ID 或名称" @press-enter="onSearch" />
-        <a-select v-model="statusFilter" class="status-select" placeholder="状态">
+        <a-select v-model="statusFilter" class="status-select" placeholder="状态" @change="onSearch">
           <a-option v-for="item in statusOptions" :key="item.value" :value="item.value">{{ item.label }}</a-option>
         </a-select>
-        <a-button type="primary" @click="onSearch">
-          <template #icon><icon-search /></template>
-          查询
-        </a-button>
       </div>
       <a-space class="filter-actions">
         <a-button :loading="loading" @click="reload">
@@ -190,6 +186,8 @@ import { useDisplayZone } from "@/hooks/useDisplayZone";
 // 页面时间按当前空间登记的时区显示
 const displayZone = useDisplayZone();
 const props = defineProps<{ spaceId: string; initialTagId?: string }>();
+// 所选标签写进页面 URL（?tag=），由父页面同步
+const emit = defineEmits<{ tagChange: [tagId: string] }>();
 
 const tags = ref<Tag[]>([]);
 const rows = ref<TagMember[]>([]);
@@ -319,6 +317,7 @@ async function load() {
 async function onTagChange(key: string | number) {
   const tagId = String(key);
   selectedTagId.value = tagId === ALL_TAG_KEY ? "" : tagId;
+  emit("tagChange", selectedTagId.value);
   statusFilter.value = "";
   pagination.current = 1;
   await reload();
@@ -474,7 +473,8 @@ function onPageSizeChange(pageSize: number) {
 watch(
   () => props.initialTagId,
   value => {
-    if (value !== undefined) {
+    // 自己切标签时父页面会把同一个值写回来，不再重读一遍
+    if (value !== undefined && value !== selectedTagId.value) {
       selectedTagId.value = value;
       statusFilter.value = "";
       pagination.current = 1;

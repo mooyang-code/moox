@@ -167,14 +167,13 @@ describe("page layout standards", () => {
       "<span>代码包版本</span>"
     ]);
     expectStrictOrder(cloudFunctionFilters, [
-      '<a-select v-model="form.cloudAccountId" placeholder="请选择云账户" style="width: 200px" allow-clear>',
-      '<a-input v-model="form.instanceId" placeholder="请输入实例ID" allow-clear />',
-      '<a-select placeholder="地区" v-model="form.region" style="width: 200px" allow-clear>',
-      '<a-select placeholder="实例类型" v-model="form.functionType" style="width: 180px" allow-clear>',
-      '<a-button type="primary" @click="search">',
-      "<icon-search />",
-      "<span>查询</span>"
+      '<a-select v-model="form.cloudAccountId" placeholder="请选择云账户" style="width: 200px" allow-clear @change="search">',
+      'v-model="form.instanceId"',
+      '<a-select placeholder="地区" v-model="form.region" style="width: 200px" allow-clear @change="search">',
+      '<a-select placeholder="实例类型" v-model="form.functionType" style="width: 180px" allow-clear @change="search">'
     ]);
+    // 下拉即时生效、文本框回车生效：工具栏不再有“查询”按钮
+    expect(cloudFunctionFilters).not.toContain("<span>查询</span>");
     expect(cloudFunctions).not.toContain('class="cloud-function-toolbar"');
     expect(cloudFunctions).not.toContain(".moox-inner .a-row");
     expect(cloudFunctions).not.toContain("<h2>云函数实例</h2>");

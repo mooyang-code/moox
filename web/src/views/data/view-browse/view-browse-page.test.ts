@@ -187,6 +187,31 @@ describe("View result refresh", () => {
     vi.useRealTimers();
   });
 
+  it("行操作“K 线”用这一行的标的和序列标签查，不用查询区的筛选", async () => {
+    const wrapper = mountPage();
+    await flushPromises();
+    const vm = wrapper.vm as unknown as {
+      filters: { fieldName: string; operator: string; value?: string }[];
+      openRowKline(record: unknown): Promise<void>;
+      reloadKlineRecords(): Promise<void>;
+    };
+    // 查询区筛的是另一个标的：行内 K 线不能用它
+    vm.filters.splice(0, vm.filters.length, { fieldName: "subject_id", operator: "eq", value: "BTCUSDT" });
+    mocks.queryTimeSeries.mockClear();
+    await vm.openRowKline({ rawKey: { subject_id: "ETHUSDT", series_tag: "market:swap" } });
+    await flushPromises();
+    const filter = JSON.stringify(mocks.queryTimeSeries.mock.calls[0]?.[0]?.filter);
+    expect(filter).toContain("ETHUSDT");
+    expect(filter).toContain("market:swap");
+    expect(filter).not.toContain("BTCUSDT");
+    // 弹窗里刷新也沿用这一行
+    mocks.queryTimeSeries.mockClear();
+    await vm.reloadKlineRecords();
+    await flushPromises();
+    expect(JSON.stringify(mocks.queryTimeSeries.mock.calls[0]?.[0]?.filter)).toContain("ETHUSDT");
+    wrapper.unmount();
+  });
+
   it("leaves an initial query failure empty without claiming previous data", async () => {
     mocks.queryTimeSeries.mockRejectedValue(new Error("Storage unavailable"));
     const wrapper = mountPage();
