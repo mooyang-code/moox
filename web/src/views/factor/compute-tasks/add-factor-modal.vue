@@ -18,7 +18,7 @@
     </div>
     <a-alert v-if="loadError" type="error" show-icon class="add-factor__alert">{{ loadError }}</a-alert>
     <a-spin :loading="loading" class="add-factor__spin">
-      <a-empty v-if="!rows.length && !loading" description="因子定义库里没有可选的因子，请先到「因子定义」新增" />
+      <a-empty v-if="!rows.length && !loading" description="因子定义库里没有可选的因子，请先到「因子定义」新建" />
       <div v-else class="add-factor__list" role="group" aria-label="候选因子">
         <div v-for="row in rows" :key="row.factor.factor_id" class="add-factor__item">
           <label class="add-factor__row" :class="{ 'is-disabled': row.locked }">

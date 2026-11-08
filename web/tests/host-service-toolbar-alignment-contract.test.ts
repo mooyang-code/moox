@@ -12,7 +12,7 @@ describe("host and service toolbar alignment", () => {
 
     expect(hosts).toContain('class="host-list-hint"');
     // 主机只读：不再有新增、编辑、删除入口，变更只通过 moox skill。
-    for (const retired of ["新增主机", "批量删除", "编辑", "删除"]) expect(hosts).not.toContain(retired);
+    for (const retired of ["新增主机", "新建主机", "批量删除", "编辑", "删除"]) expect(hosts).not.toContain(retired);
     expect(hosts).toContain("moox skill");
     expect(hosts.indexOf("host-list-hint")).toBeLessThan(hosts.indexOf("<a-table"));
     expect(hosts).toMatch(/\.host-list-hint\s*\{[\s\S]*?margin-bottom:\s*var\(--moox-space-2\);/);
@@ -24,6 +24,8 @@ describe("host and service toolbar alignment", () => {
     expect(deployments).toContain('class="filters"');
     expect(deployments).not.toContain("新增节点");
     expect(deployments).not.toContain("新增实例");
+    expect(deployments).not.toContain("新建节点");
+    expect(deployments).not.toContain("新建实例");
     expect(deployments).toMatch(/\.filters\s*\{[\s\S]*?margin-bottom:\s*var\(--moox-space-2\);/);
   });
 });

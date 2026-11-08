@@ -367,6 +367,8 @@ onMounted(async () => {
 });
 
 watch(selectedSpaceId, async (spaceId, oldSpaceId) => {
+  // 换空间时旧空间的代码包详情请求会被取消，弹窗一并关掉，不然会一直停在加载中
+  packageDetailVisible.value = false;
   if (spaceId === oldSpaceId) return;
   // 先作废所有在途请求，旧空间的响应不能再写回列表
   listGuard.invalidate();

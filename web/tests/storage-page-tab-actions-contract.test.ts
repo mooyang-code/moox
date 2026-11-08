@@ -10,6 +10,7 @@ const pages = {
 describe("storage page actions contract", () => {
   it("does not add a DataNode create action", () => {
     expect(pages.nodes).not.toContain("新增节点");
+    expect(pages.nodes).not.toContain("新建节点");
     expect(pages.nodes).not.toContain("openCreate");
   });
 

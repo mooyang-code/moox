@@ -189,6 +189,7 @@ describe("editor page contract", () => {
 
   it("editor form has no 计算任务 / 源数据集 / 频率 field", () => {
     expect(page).not.toContain('label="计算任务"');
+    expect(page).not.toContain("task-select.vue");
     expect(page).not.toContain('label="源数据集"');
     expect(page).not.toContain('label="频率"');
     expect(page).toContain("参考数据集");

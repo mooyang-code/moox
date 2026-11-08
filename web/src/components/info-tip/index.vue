@@ -9,7 +9,7 @@
 <script setup lang="ts">
 import { ref } from "vue";
 
-defineOptions({ name: "FactorInfoTip" });
+defineOptions({ name: "InfoTip" });
 
 const props = defineProps<{ text: string }>();
 const visible = ref(false);
