@@ -1,4 +1,4 @@
-import { msToWallClock, wallClockToMs } from "@/utils/time-zone";
+import { addDays, msToWallClock, wallClockToMs } from "@/utils/time-zone";
 import type { ResampleJob } from "@/api/collector";
 import { frequencyMinutes } from "@/utils/frequency";
 
@@ -60,13 +60,10 @@ export function newResampleRequestId(random: () => number = Math.random): string
   return `ui-${text}`;
 }
 
-/** 表单标注 UTC：没带时区的日期时间按 UTC 解析，避免按浏览器本地时区偏移。 */
 /** 默认范围：最近 3 天，按空间时区的零点对齐，结束时间是今天零点。返回 [起, 止) 两个毫秒时刻。 */
 export function defaultResampleRange(zone: string, now = Date.now()): [number, number] {
   const today = msToWallClock(now, zone, "date");
-  const [y, m, d] = today.split("-").map(Number);
-  const threeDaysAgo = new Date(Date.UTC(y, m - 1, d - 3)).toISOString().slice(0, 10);
-  return [wallClockToMs(threeDaysAgo, zone)!, wallClockToMs(today, zone)!];
+  return [wallClockToMs(addDays(today, -3), zone)!, wallClockToMs(today, zone)!];
 }
 
 /** 校验提交范围：返回错误文案，通过时返回空串。 */
