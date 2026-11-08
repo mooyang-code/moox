@@ -148,7 +148,7 @@ export function sameScope(a: ScopeFilter[], b: ScopeFilter[]): boolean {
 }
 
 /** 服务启动时一定注册系统动作的处理器；事件目录里没读到“系统动作已启用”（还在加载或加载失败）时，什么都不能断言。 */
-export const SYSTEM_ACTION_UNKNOWN_TEXT = "无法确认系统动作是否启用（没有读到事件目录），下面的处理结果以执行记录为准。";
+export const SYSTEM_ACTION_UNKNOWN_TEXT = "无法确认系统动作是否启用（没有读到事件目录），下面的处理结果以处理记录为准。";
 
 /** 系统动作是否已启用：true 已启用，null 还不知道。返回要给用户看的提示；已启用时为空。 */
 export function systemActionNotice(enabled: boolean | null): string {
@@ -294,7 +294,7 @@ export const BODY_FIELDS: DocRow[] = [
   { name: "space_id", desc: "事件所属的空间；下架这类不分空间的事件是 mooxsys" },
   { name: "subject", desc: "事件说的是哪个对象，例如下架事件里是 交易所:市场:代码" },
   { name: "occurred_at", desc: "事件发生的时间，UTC，RFC 3339 格式，例如 2026-11-04T08:00:00Z" },
-  { name: "rule_id", desc: "触发这次通知的规则编号" },
+  { name: "rule_id", desc: "触发这次通知的订阅编号" },
   { name: "data", desc: "事件本身的内容，字段随事件不同；“发一条测试”收到的就是一份示例" }
 ];
 
@@ -452,7 +452,7 @@ export function pageAfterShrink(current: number, pageSize: number, total: number
 
 /** 系统规则是否启用读不到时的说明：不能当成已启用。 */
 export const SYSTEM_RULE_UNKNOWN_TEXT =
-  "无法确认系统规则“标的即将下架时，卖出策略持有的这个币”是否启用（没有读到规则列表），登记后会不会被处理以执行记录为准。";
+  "无法确认系统订阅“标的即将下架时，卖出策略持有的这个币”是否启用（没有读到订阅列表），登记后会不会被处理以处理记录为准。";
 
 /** 事件内容缩进展示；不是合法 JSON 时原样显示。 */
 export function prettyPayload(raw: string): string {
@@ -475,4 +475,43 @@ export function requestErrorText(error: unknown): string {
   const failure = error as { code?: unknown; message?: unknown } | null;
   if (failure?.code === "ECONNABORTED" || failure?.code === "ETIMEDOUT") return "请求超时，交易服务没有及时响应";
   return typeof failure?.message === "string" && failure.message ? failure.message : "未知原因";
+}
+
+/** 处理记录页写进 URL 的状态：状态用短名（failed），告警等处可以直接带上。 */
+export interface ExecutionQuery {
+  rule_id: string;
+  status: ExecutionStatus | "";
+  execution: string;
+}
+
+const STATUS_QUERY: Record<string, ExecutionStatus> = {
+  pending: "EXECUTION_STATUS_PENDING",
+  running: "EXECUTION_STATUS_RUNNING",
+  succeeded: "EXECUTION_STATUS_SUCCEEDED",
+  failed: "EXECUTION_STATUS_FAILED",
+  canceled: "EXECUTION_STATUS_CANCELED"
+};
+
+function queryText(value: unknown): string {
+  const first = Array.isArray(value) ? value[0] : value;
+  return typeof first === "string" ? first.trim() : "";
+}
+
+/** 从 URL 读处理记录页的筛选和打开的记录；认不出的状态当作不筛选。 */
+export function parseExecutionQuery(query: Record<string, unknown>): ExecutionQuery {
+  return {
+    rule_id: queryText(query.rule_id),
+    status: STATUS_QUERY[queryText(query.status)] ?? "",
+    execution: queryText(query.execution)
+  };
+}
+
+/** 处理记录页的状态写回 URL；空值不写。 */
+export function executionQuery(state: ExecutionQuery): Record<string, string> {
+  const status = Object.keys(STATUS_QUERY).find(key => STATUS_QUERY[key] === state.status);
+  return {
+    ...(state.rule_id ? { rule_id: state.rule_id } : {}),
+    ...(status ? { status } : {}),
+    ...(state.execution ? { execution: state.execution } : {})
+  };
 }

@@ -39,7 +39,10 @@ import {
   executionStatusTone,
   requestErrorText,
   sameScope,
-  secretHintText
+  secretHintText,
+  executionQuery,
+  parseExecutionQuery,
+  stepStatusText
 } from "./event-center-utils";
 
 const fields: ScopeField[] = [
@@ -353,5 +356,30 @@ describe("系统动作重新执行的确认说明", () => {
     expect(text).toContain("okx:SWAP:BARUSDT");
     expect(text).toContain("下架时间还没到时");
     expect(text).toContain("不会重做平仓");
+  });
+});
+
+describe("处理记录页的 URL", () => {
+  it("状态用短名，认不出的当作不筛选；数组取第一个", () => {
+    expect(parseExecutionQuery({ status: "failed", rule_id: "r1", execution: "x1" })).toEqual({
+      status: "EXECUTION_STATUS_FAILED",
+      rule_id: "r1",
+      execution: "x1"
+    });
+    expect(parseExecutionQuery({ status: "EXECUTION_STATUS_FAILED" }).status).toBe("");
+    expect(parseExecutionQuery({ rule_id: ["r2", "r3"] }).rule_id).toBe("r2");
+    expect(parseExecutionQuery({})).toEqual({ rule_id: "", status: "", execution: "" });
+  });
+
+  it("写回时空值不写，读写来回一致", () => {
+    const state = { rule_id: "r1", status: "EXECUTION_STATUS_CANCELED" as const, execution: "" };
+    expect(executionQuery(state)).toEqual({ rule_id: "r1", status: "canceled" });
+    expect(parseExecutionQuery(executionQuery(state))).toEqual(state);
+    expect(executionQuery({ rule_id: "", status: "", execution: "" })).toEqual({});
+  });
+
+  it("下架步骤的状态都有中文", () => {
+    for (const status of ["PENDING", "RUNNING", "SUCCEEDED", "FAILED", "PARTIAL"])
+      expect(stepStatusText(status)).not.toBe(status);
   });
 });

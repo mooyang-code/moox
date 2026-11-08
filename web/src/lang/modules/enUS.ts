@@ -52,6 +52,9 @@ export default {
     ["settings"]: "settings",
     ["settings-spaces"]: "spaces",
     ["settings-secrets"]: "secrets",
-    ["settings-events"]: "event center"
+    ["events"]: "event center",
+    ["events-subscriptions"]: "subscriptions",
+    ["events-executions"]: "executions",
+    ["events-delist"]: "delisting"
   }
 };

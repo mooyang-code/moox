@@ -1,8 +1,8 @@
 <template>
   <a-drawer
     :visible="visible"
-    :width="760"
-    title="执行详情"
+    width="min(760px, 100vw)"
+    title="处理详情"
     :footer="false"
     unmount-on-close
     @update:visible="(value: boolean) => emit('update:visible', value)"
@@ -10,7 +10,7 @@
     <a-spin :loading="loading" class="drawer-spin">
       <template v-if="detail">
         <a-descriptions :column="2" size="small" bordered>
-          <a-descriptions-item label="规则">{{ execution.rule_name }}</a-descriptions-item>
+          <a-descriptions-item label="订阅">{{ execution.rule_name }}</a-descriptions-item>
           <a-descriptions-item label="状态">
             <span :class="['status', `status-${executionStatusTone(execution)}`]">{{ executionStatusText(execution) }}</span>
           </a-descriptions-item>
@@ -46,7 +46,7 @@
           <a-table :data="detail.attempts" row-key="attempt" size="small" :pagination="false" :bordered="{ cell: true }">
             <template #columns>
               <a-table-column title="第几次" data-index="attempt" :width="80" />
-              <a-table-column title="时间" :width="170">
+              <a-table-column title="时间" :width="200">
                 <template #cell="{ record }">{{ formatInstant(record.at_ms, "UTC") }}</template>
               </a-table-column>
               <a-table-column title="状态码" :width="90">
@@ -81,7 +81,10 @@
               </a-table-column>
               <a-table-column title="受影响的组合" :width="220" :ellipsis="true" :tooltip="true">
                 <template #cell="{ record }">
-                  {{ record.logical_account_id ? `${record.space_id} / ${record.logical_account_id}` : "-" }}
+                  <a-link v-if="record.logical_account_id" @click="openAccount(record)">
+                    {{ record.space_id }} / {{ record.logical_account_id }}
+                  </a-link>
+                  <template v-else>-</template>
                 </template>
               </a-table-column>
               <a-table-column title="状态" :width="110">
@@ -94,7 +97,7 @@
               <a-table-column title="结果 / 零头 / 失败原因" :width="260" :ellipsis="true" :tooltip="true">
                 <template #cell="{ record }">{{ record.error || record.result || "-" }}</template>
               </a-table-column>
-              <a-table-column title="更新时间" :width="170">
+              <a-table-column title="更新时间" :width="200">
                 <template #cell="{ record }">{{ formatInstant(record.updated_at_ms, "UTC") }}</template>
               </a-table-column>
             </template>
@@ -112,6 +115,8 @@
 // 事件中心和空间无关，时间都按 UTC 显示
 import { formatInstant } from "@/utils/time-zone";
 import { computed, ref, watch } from "vue";
+import { useRouter } from "vue-router";
+import { useSpaceStore } from "@/store/modules/space";
 import {
   getEventExecution,
   type DelistStep,
@@ -135,7 +140,7 @@ import {
   roundText,
   stepStatusText,
   stepKindText
-} from "./event-center-utils";
+} from "../shared/event-center-utils";
 
 defineOptions({ name: "EventExecutionDrawer" });
 
@@ -151,6 +156,9 @@ const emit = defineEmits<{
   "update:visible": [value: boolean];
   action: [kind: "retry" | "cancel" | "ack", item: EventExecution];
 }>();
+
+const router = useRouter();
+const spaceStore = useSpaceStore();
 
 const detail = ref<EventExecutionDetail | null>(null);
 const loading = ref(false);
@@ -176,6 +184,12 @@ async function load() {
   } finally {
     if (seq === loadSeq) loading.value = false;
   }
+}
+
+/** 组合账户属于某个空间：先切到那个空间再打开账户详情。 */
+function openAccount(step: DelistStep) {
+  spaceStore.setSelectedSpace(step.space_id);
+  void router.push(`/trading/accounts/${encodeURIComponent(step.logical_account_id)}`);
 }
 
 function emitAction(kind: "retry" | "cancel" | "ack") {

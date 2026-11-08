@@ -28,12 +28,14 @@ describe("resolveOpenKeys", () => {
         { name: "ops-logs", children: [{ name: "ops-logs-collector" }, { name: "ops-logs-factor" }] }
       ]
     },
+    { name: "events", children: [{ name: "events-subscriptions" }, { name: "events-executions" }, { name: "events-delist" }] },
     { name: "settings", children: [{ name: "settings-secrets" }] }
   ];
 
   it("opens every parent of a nested page, outermost first", () => {
     expect(resolveOpenKeys(tree, ["ops-logs-factor"])).toEqual(["ops", "ops-logs"]);
     expect(resolveOpenKeys(tree, ["settings-secrets"])).toEqual(["settings"]);
+    expect(resolveOpenKeys(tree, ["events-executions"])).toEqual(["events"]);
   });
 
   it("opens nothing for a top-level page, an unknown key or an empty tree", () => {

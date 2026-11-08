@@ -60,6 +60,7 @@ function assertNotVisible(name) {
 const dataCollection = findDirectory("compute-collector");
 const factorCompute = findDirectory("factor-compute");
 const trading = findDirectory("trading");
+const eventCenter = findDirectory("events");
 const ops = findDirectory("ops");
 
 assert(zhCN.includes('["compute-collector"]: "数据采集"'), "compute-collector zh-CN label must be 数据采集");
@@ -76,6 +77,16 @@ assert(factorCompute.parentId === "0", "factor-compute must be a root menu");
 assert(factorCompute.sort > dataCollection.sort, "factor-compute must appear after data collection");
 assert(factorCompute.sort < trading.sort, "factor-compute must appear before trading");
 assert(ops.path === "/ops/monitor", "ops default path must be /ops/monitor");
+// 事件中心是根菜单，排在交易之后、运维之前；三个子页依次是事件订阅、处理记录、下架处理
+assert(eventCenter.parentId === "0", "events must be a root menu");
+assert(trading.sort < eventCenter.sort && eventCenter.sort < ops.sort, "events must appear after trading and before ops");
+const eventMenus = ["events-subscriptions", "events-executions", "events-delist"].map(name => findMenu(name));
+for (const item of eventMenus) assert(item.parentId === eventCenter.id, `${item.title} must be under events`);
+assert(
+  eventMenus.every((item, index) => index === 0 || item.sort > eventMenus[index - 1].sort),
+  "event center menus must be ordered subscriptions -> executions -> delist"
+);
+assert(!staticMenu.includes("settings-events"), "event center must not remain under settings");
 const monitor = findMenu("ops-monitor");
 const deployments = findMenu("ops-deployments");
 const hosts = findMenu("ops-hosts");

@@ -40,6 +40,18 @@ describe("事件中心接口", () => {
     expect((await listSubscribableEvents()).availableSystemActions).toEqual(["SYSTEM_ACTION_SELL_DELISTED_HOLDINGS"]);
   });
 
+  it("事件目录的示例和字段说明：有就带上，旧版本没返回时是空的", async () => {
+    mocks.callControl.mockResolvedValue({
+      events: [
+        { event_name: "a", sample_json: '{"event":"a"}', payload_fields: [{ field: "x", title: "说明" }] },
+        { event_name: "b" }
+      ]
+    });
+    const [withSample, legacy] = (await listSubscribableEvents()).events;
+    expect(withSample).toMatchObject({ sample_json: '{"event":"a"}', payload_fields: [{ field: "x", title: "说明" }] });
+    expect(legacy).toMatchObject({ sample_json: "", payload_fields: [], scope_fields: [] });
+  });
+
   it("规则列表：枚举、缺省的布尔和范围都被规范化", async () => {
     mocks.callControl.mockResolvedValue({
       rules: [
@@ -111,11 +123,16 @@ describe("事件中心接口", () => {
       page_result: { total: 1 }
     });
     const rsp = await listEventExecutions({ rule_id: "r1", status: "EXECUTION_STATUS_FAILED", page: { page: 2, size: 20 } });
-    expect(mocks.callControl).toHaveBeenCalledWith("callback-dispatcher", "ListEventExecutions", {
-      rule_id: "r1",
-      status: "EXECUTION_STATUS_FAILED",
-      page: { page: 2, size: 20 }
-    });
+    expect(mocks.callControl).toHaveBeenCalledWith(
+      "callback-dispatcher",
+      "ListEventExecutions",
+      {
+        rule_id: "r1",
+        status: "EXECUTION_STATUS_FAILED",
+        page: { page: 2, size: 20 }
+      },
+      {}
+    );
     expect(rsp.executions[0]).toMatchObject({ status: "EXECUTION_STATUS_FAILED", attempts: 3, acknowledged: true });
   });
 
