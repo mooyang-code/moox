@@ -64,7 +64,7 @@
             <a-tag :color="result.trial.status === 'ok' ? 'green' : 'orange'">{{
               result.trial.status === "ok" ? "ok" : `跳过：${skipReasonLabel(result.trial.skip_reason)}`
             }}</a-tag>
-            <a-tag>K 线结束 {{ formatStrategyTime(result.trial.bar_end_time) }}</a-tag>
+            <a-tag>K 线结束 {{ formatInstant(result.trial.bar_end_time, displayZone) }}</a-tag>
             <a-tag v-for="target in result.trial.targets" :key="targetKey(target.instrument_id, target.market)" color="arcoblue"
               >{{ target.instrument_id }}{{ target.market ? `（${marketLabel(target.market)}）` : "" }}
               {{ percent(target.target_weight) }}</a-tag
@@ -91,7 +91,12 @@ import ResultItems from "@/views/strategy/components/strategy-result-items.vue";
 import { enabledTasks, isUnifiedTask, type TaskOption } from "@/views/strategy/components/task-options";
 import { loadUnifiedDatasetIds } from "@/views/strategy/components/unified-datasets";
 import { marketLabel, marketRequirement, poolMembers, poolRequirement, targetKey } from "@/views/strategy/market-mode";
-import { formatStrategyTime, percent, skipReasonLabel } from "@/views/strategy/model";
+import { percent, skipReasonLabel } from "@/views/strategy/model";
+import { formatInstant } from "@/utils/time-zone";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
+
+// 页面时间按当前空间登记的时区显示
+const displayZone = useDisplayZone();
 
 const props = defineProps<{ source: string; spaceId: string }>();
 const singleMarkets = ["spot", "swap", "equity"];

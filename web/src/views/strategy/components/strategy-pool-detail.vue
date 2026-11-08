@@ -87,8 +87,8 @@
     </div>
 
     <div class="range">
-      <span class="muted">{{ formatStrategyTime(periods[0].time) }}</span>
-      <span class="muted">{{ formatStrategyTime(periods[periods.length - 1].time) }}</span>
+      <span class="muted">{{ formatInstant(periods[0].time, displayZone) }}</span>
+      <span class="muted">{{ formatInstant(periods[periods.length - 1].time, displayZone) }}</span>
     </div>
 
     <div class="detail-head">
@@ -106,7 +106,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import PoolMembers from "@/views/strategy/components/strategy-pool-members.vue";
-import { formatStrategyTime, percent } from "@/views/strategy/model";
+import { percent } from "@/views/strategy/model";
 import {
   bankruptMemberIds,
   equityRange,
@@ -120,6 +120,11 @@ import {
   timingSeries,
   type PoolPeriod
 } from "@/views/strategy/pool-model";
+import { formatInstant } from "@/utils/time-zone";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
+
+// 页面时间按当前空间登记的时区显示
+const displayZone = useDisplayZone();
 
 // 策略池详情：成员净值曲线、每期分配比例、择时状态，以及可选期的成员明细。只读取已加载的结果，不请求新数据。
 // 调用方保证 periods 非空且按时间从旧到新（buildPoolPeriods 的输出）。
@@ -153,7 +158,8 @@ const headText = computed(() =>
   [`${ids.value.length} 个成员`, methodText.value, showTiming.value ? "叠加择时" : ""].filter(Boolean).join(" · ")
 );
 const rangeText = computed(
-  () => `${formatStrategyTime(props.periods[0].time)} 至 ${formatStrategyTime(props.periods[props.periods.length - 1].time)}`
+  () =>
+    `${formatInstant(props.periods[0].time, displayZone.value)} 至 ${formatInstant(props.periods[props.periods.length - 1].time, displayZone.value)}`
 );
 
 function xOf(index: number): number {
@@ -199,7 +205,7 @@ function onPick(value: unknown) {
 }
 
 function periodLabel(period: PoolPeriod): string {
-  return `${formatStrategyTime(period.time)}${period.resultStatus === "ok" ? "" : "（本期跳过）"}`;
+  return `${formatInstant(period.time, displayZone.value)}${period.resultStatus === "ok" ? "" : "（本期跳过）"}`;
 }
 </script>
 

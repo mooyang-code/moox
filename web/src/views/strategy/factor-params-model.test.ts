@@ -68,23 +68,31 @@ describe("params summaries", () => {
 
   it("lists only results that carry next params, newest first", () => {
     const envelope = JSON.stringify({ period: 1790000000, members: { bias__var: { window: { default: 20 } } } });
-    const rows = nextParamsRows([
-      result({
-        result_id: "old",
-        bar_end_time: "2026-10-26T09:00:00Z",
-        next_params_json: envelope,
-        params_delivered_at: "2026-10-26T09:01:00Z"
-      }),
-      result({ result_id: "none", bar_end_time: "2026-10-26T09:30:00Z" }),
-      result({ result_id: "new", bar_end_time: "2026-10-26T10:00:00Z", next_params_json: envelope, params_error: "被拒绝" })
-    ]);
+    const rows = nextParamsRows(
+      [
+        result({
+          result_id: "old",
+          bar_end_time: "2026-10-26T09:00:00Z",
+          next_params_json: envelope,
+          params_delivered_at: "2026-10-26T09:01:00Z"
+        }),
+        result({ result_id: "none", bar_end_time: "2026-10-26T09:30:00Z" }),
+        result({ result_id: "new", bar_end_time: "2026-10-26T10:00:00Z", next_params_json: envelope, params_error: "被拒绝" })
+      ],
+      "UTC"
+    );
     expect(rows.map(row => row.resultId)).toEqual(["new", "old"]);
-    expect(rows[0]).toMatchObject({ statusKey: "rejected", summary: "bias__var: window=20", targetText: periodText(1790000000) });
+    expect(rows[0]).toMatchObject({
+      statusKey: "rejected",
+      summary: "bias__var: window=20",
+      targetText: periodText(1790000000, "UTC")
+    });
     expect(rows[1].statusKey).toBe("delivered");
   });
 
-  it("formats unix seconds as UTC text", () => {
-    expect(periodText(0)).toBe("-");
-    expect(periodText("1790000000")).toBe("2026-09-21 14:13:20 UTC");
+  it("formats unix seconds in the display zone with a suffix", () => {
+    expect(periodText(0, "UTC")).toBe("—");
+    expect(periodText("1790000000", "UTC")).toBe("2026-09-21 14:13:20 UTC");
+    expect(periodText("1790000000", "Asia/Shanghai")).toBe("2026-09-21 22:13:20 UTC+8");
   });
 });

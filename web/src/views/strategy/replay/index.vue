@@ -69,10 +69,11 @@
                 · 实例 <span class="mono">{{ selected.instance_id }}</span
                 >，会话 <span class="mono">{{ selected.session_id }}</span></template
               >
-              · 因子任务 {{ replayTasksText(selected) }} · 区间 {{ replayRangeLabel(selected) }} · 手续费
+              · 因子任务 {{ replayTasksText(selected) }} · 区间 {{ replayRangeLabel(selected, displayZone) }} · 手续费
               {{ replayFeeText(selected) }}
               <template v-if="metrics?.first_bar_end">
-                · 实际首根 {{ formatUtcTime(metrics.first_bar_end) }}，末根 {{ formatUtcTime(metrics.last_bar_end) }}</template
+                · 实际首根 {{ formatInstant(metrics.first_bar_end, displayZone) }}，末根
+                {{ formatInstant(metrics.last_bar_end, displayZone) }}</template
               >
             </div>
             <a-alert v-if="selected.status === 'failed'" type="error" show-icon class="top-alert"
@@ -117,7 +118,7 @@
             </div>
             <a-alert v-if="metrics?.bankrupt_at" type="error" show-icon class="top-alert"
               >模拟爆仓：K 线结束于
-              {{ formatUtcTime(metrics.bankrupt_at) }}
+              {{ formatInstant(metrics.bankrupt_at, displayZone) }}
               的这一期权益不为正，持仓已全部平掉，此后各期空仓、权益保持不变；之后的曲线不代表策略还能继续运行。</a-alert
             >
             <a-alert v-if="replayUsesSwap(selected)" type="warning" class="top-alert"
@@ -209,7 +210,7 @@
               </template>
               <template #columns>
                 <a-table-column title="K 线结束（UTC）" :width="170"
-                  ><template #cell="{ record }">{{ formatUtcTime(record.bar_end_time) }}</template></a-table-column
+                  ><template #cell="{ record }">{{ formatInstant(record.bar_end_time, displayZone) }}</template></a-table-column
                 >
                 <a-table-column title="状态" :width="150"
                   ><template #cell="{ record }"
@@ -302,15 +303,15 @@ import {
 } from "@/views/strategy/replay/replay-form-model";
 import { buildReplayQuery, parseReplayQuery, type ReplayQueryState } from "@/views/strategy/replay/replay-query";
 import ReplayRecordList from "@/views/strategy/replay/replay-record-list.vue";
+import { formatInstant, msToWallClock, zoneSuffix } from "@/utils/time-zone";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
 import {
   equitySeries,
   equitySummary,
-  formatUtcTime,
   mergeBars,
   parseBarDetail,
   parseMetrics,
-  parseUtcInput,
-  recentUtcRange,
+  recentRange,
   replayFeeText,
   replayRangeLabel,
   replaySourceLabel,
@@ -333,6 +334,8 @@ const router = useRouter();
 const parsed = computed(() => parseReplayQuery(route.query));
 const spaceStore = useSpaceStore();
 const strategyStore = useStrategyStore();
+// 回放的时间按当前空间登记的时区显示和选择
+const displayZone = useDisplayZone();
 const replayPageSize = 20;
 const tablePageSize = 50;
 const seriesPageSize = 2000;
@@ -371,7 +374,6 @@ const pollFailures = ref(0);
 const awaitingMetrics = ref<{ replayId: string; until: number } | null>(null);
 const clock = ref(Date.now());
 const chartContainer = ref<HTMLElement>();
-const [presetStart, presetEnd] = recentUtcRange(30);
 const form = reactive<ReplayFormState>({
   source: "definition",
   strategy_id: String(route.query.strategy_id || ""),
@@ -379,8 +381,7 @@ const form = reactive<ReplayFormState>({
   instance_id: String(route.query.instance_id || ""),
   single_market: "",
   tasks: parseFactorTasks(String(route.query.factor_tasks || "")),
-  start: presetStart,
-  end: presetEnd,
+  range: recentRange(30),
   spot_fee_bps: 10,
   swap_fee_bps: 10
 });
@@ -446,7 +447,7 @@ const awaitingShown = computed(() => {
       clock.value <= waiting.until
   );
 });
-const chartLabel = computed(() => equitySummary(series.value));
+const chartLabel = computed(() => equitySummary(series.value, displayZone.value));
 const detailCache = new WeakMap<ReplayBar, ReturnType<typeof parseBarDetail>>();
 
 /** 一期的持仓账本与摘要（完整记录才有），按记录缓存解析结果。 */
@@ -493,7 +494,7 @@ async function loadStrategies() {
 function applyReplayList(gen: number, seq: number, page: number, result: PageResult<Replay>): boolean {
   if (gen !== generation || seq <= listApplied || page !== replayPage.value) return false;
   listApplied = seq;
-  readAt.value = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+  readAt.value = formatInstant(Date.now(), displayZone.value, "clock");
   replays.value = result.items;
   replayTotal.value = result.page.total;
   errors.list = "";
@@ -770,19 +771,28 @@ async function renderChart(rebuild: boolean) {
       xField: "time",
       yField: "value",
       axes: [
-        // 页面其余位置都按 UTC 显示：时间轴与提示框同样用 UTC，并带上时分。
-        { orient: "bottom", type: "time", layers: [{ timeFormat: "%m-%d %H:%M", timeFormatMode: "utc" }] },
+        // VChart 的时间轴只认本地和 UTC：横轴用毫秒的线性轴，刻度和提示框按空间时区格式化，时区写在轴标题上。
+        {
+          orient: "bottom",
+          type: "linear",
+          zero: false,
+          nice: false,
+          min: latest[0].time,
+          max: latest[latest.length - 1].time,
+          title: { visible: true, text: `时间（${zoneSuffix(latest[0].time, displayZone.value)}）` },
+          label: { formatMethod: (text: string | string[]) => msToWallClock(Number(text), displayZone.value, "minute").slice(5) }
+        },
         { orient: "left", type: "linear", zero: false }
       ],
       line: { style: { lineWidth: 2 } },
       point: { visible: false },
       tooltip: {
         mark: {
-          title: { value: (datum: any) => utcLabel(datum?.time) },
+          title: { value: (datum: any) => timeLabel(datum?.time) },
           content: [{ key: "权益", value: (datum: any) => Number(datum?.value).toFixed(4) }]
         },
         dimension: {
-          title: { value: (datum: any) => utcLabel(datum?.time) },
+          title: { value: (datum: any) => timeLabel(datum?.time) },
           content: [{ key: "权益", value: (datum: any) => Number(datum?.value).toFixed(4) }]
         }
       }
@@ -792,17 +802,16 @@ async function renderChart(rebuild: boolean) {
   chart.renderSync();
 }
 
-function utcLabel(time: unknown): string {
+function timeLabel(time: unknown): string {
   const value = typeof time === "number" ? time : Number(time);
-  return Number.isFinite(value) ? formatUtcTime(new Date(value).toISOString()) : "";
+  return Number.isFinite(value) ? formatInstant(value, displayZone.value) : "";
 }
 
 async function start() {
-  errors.start = validateReplayForm(form, parseUtcInput, strategyStore.strategyCatalog);
-  const startTime = parseUtcInput(form.start);
-  const endTime = parseUtcInput(form.end);
+  errors.start = validateReplayForm(form, strategyStore.strategyCatalog);
   const source = replaySourceOf(form);
-  if (errors.start || !source || !startTime || !endTime) return;
+  if (errors.start || !source || !form.range) return;
+  const [startTime, endTime] = form.range.map(ms => new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z"));
   const gen = generation;
   const picks = userPicks;
   starting.value = true;
@@ -817,7 +826,7 @@ async function start() {
     });
     if (gen !== generation) return;
     Message.success(
-      `回放已排队：共 ${started.bar_count} 根，首根 ${formatUtcTime(started.first_bar_end)}，末根 ${formatUtcTime(started.last_bar_end)}`
+      `回放已排队：共 ${started.bar_count} 根，首根 ${formatInstant(started.first_bar_end, displayZone.value)}，末根 ${formatInstant(started.last_bar_end, displayZone.value)}`
     );
     closeCreate();
     replayPage.value = 1;

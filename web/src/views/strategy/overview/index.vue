@@ -93,8 +93,10 @@
                     replaySourceLabel(replay, store.strategyCatalog)
                   }}</a-link>
                   <span class="side-list__text"
-                    >{{ replayStatusLabel(replay.status) }} · {{ replayRangeLabel(replay)
-                    }}<template v-if="replay.progress_time"> · 进度 {{ formatUtcTime(replay.progress_time) }}</template></span
+                    >{{ replayStatusLabel(replay.status) }} · {{ replayRangeLabel(replay, displayZone)
+                    }}<template v-if="replay.progress_time">
+                      · 进度 {{ formatInstant(replay.progress_time, displayZone) }}</template
+                    ></span
                   >
                 </li>
               </ul>
@@ -120,8 +122,13 @@ import InfoTip from "@/views/factor/shared/info-tip.vue";
 import StatusBadge from "@/views/strategy/components/strategy-status-badge.vue";
 import { detailLink, instancesLink, replayLink, resultsLink, type StrategyLink } from "@/views/strategy/links";
 import { activeReplays, instanceCards, overviewStats, pendingItems } from "@/views/strategy/overview/overview-model";
-import { formatUtcTime, replayRangeLabel, replaySourceLabel, replayStatusLabel } from "@/views/strategy/replay/model";
+import { replayRangeLabel, replaySourceLabel, replayStatusLabel } from "@/views/strategy/replay/model";
 import { useNowClock } from "@/views/strategy/use-now-clock";
+import { formatInstant } from "@/utils/time-zone";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
+
+// 页面时间按当前空间登记的时区显示
+const displayZone = useDisplayZone();
 
 defineOptions({ name: "StrategyOverview" });
 
@@ -155,7 +162,7 @@ const input = computed(() => ({
   nowMs: nowMs.value
 }));
 const stats = computed(() => overviewStats(input.value));
-const cards = computed(() => instanceCards(input.value));
+const cards = computed(() => instanceCards(input.value, displayZone.value));
 const pending = computed(() => pendingItems(input.value));
 const running = computed(() => activeReplays(replays.value));
 
@@ -203,7 +210,7 @@ async function loadAll(options: { background?: boolean } = {}) {
     }
     loaded.value = true;
     loadError.value = "";
-    readAt.value = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+    readAt.value = formatInstant(Date.now(), displayZone.value, "clock");
   } catch (error) {
     if (error instanceof StaleSpaceRequestError || !gate.isCurrent(token)) return;
     loadError.value = `总览读取失败：${error instanceof Error ? error.message : "未知错误"}`;

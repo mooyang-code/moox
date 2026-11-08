@@ -1,14 +1,8 @@
 import type { Replay, Strategy, StrategyInstance, StrategyTargetSnapshot } from "@/api/strategy-types";
-import {
-  deriveTargetState,
-  formatStrategyTime,
-  percent,
-  rankTargets,
-  targetStateTag,
-  type TargetState
-} from "@/views/strategy/model";
+import { deriveTargetState, percent, rankTargets, targetStateTag, type TargetState } from "@/views/strategy/model";
 import { replayLink, resultsLink, type StrategyLink } from "@/views/strategy/links";
 import { shortId, sortInstancesForResults } from "@/views/strategy/results/results-model";
+import { formatInstant } from "@/utils/time-zone";
 
 export interface OverviewInput {
   instances: StrategyInstance[];
@@ -118,7 +112,8 @@ export function overviewStats(input: OverviewInput): StatItem[] {
   ];
 }
 
-export function instanceCards(input: OverviewInput): InstanceCard[] {
+/** zone 是显示时区（当前空间）。 */
+export function instanceCards(input: OverviewInput, zone: string): InstanceCard[] {
   return sortInstancesForResults(input.instances)
     .slice(0, CARD_LIMIT)
     .map(instance => {
@@ -140,7 +135,7 @@ export function instanceCards(input: OverviewInput): InstanceCard[] {
           short: row.weight < 0
         })),
         more: Math.max(0, ranked.length - CARD_CHIP_LIMIT),
-        period: snapshot?.bar_end_time ? `最近一期 ${formatStrategyTime(snapshot.bar_end_time)}` : "",
+        period: snapshot?.bar_end_time ? `最近一期 ${formatInstant(snapshot.bar_end_time, zone)}` : "",
         links: {
           results: resultsLink(instance.instance_id),
           replay: replayLink({ instanceId: instance.instance_id, factorTasks: instance.factor_tasks })

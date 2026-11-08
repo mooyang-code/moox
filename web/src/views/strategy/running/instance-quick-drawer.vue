@@ -35,7 +35,7 @@
           <a-descriptions-item label="当前会话"
             ><span class="mono">{{ instance.session_id || "无当前会话" }}</span></a-descriptions-item
           >
-          <a-descriptions-item label="更新时间">{{ formatStrategyTime(instance.updated_at) }}</a-descriptions-item>
+          <a-descriptions-item label="更新时间">{{ formatInstant(instance.updated_at, displayZone) }}</a-descriptions-item>
           <a-descriptions-item label="读取时间">{{ readAt }}</a-descriptions-item>
         </a-descriptions>
         <a-space class="drawer-actions" wrap>
@@ -59,7 +59,11 @@ import { getInstance } from "@/api/strategy";
 import type { Strategy, StrategyInstance } from "@/api/strategy-types";
 import { RequestGate } from "@/utils/request-gate";
 import StatusBadge from "@/views/strategy/components/strategy-status-badge.vue";
-import { formatStrategyTime } from "@/views/strategy/model";
+import { formatInstant } from "@/utils/time-zone";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
+
+// 页面时间按当前空间登记的时区显示
+const displayZone = useDisplayZone();
 
 // 快速详情只读取实例本身，不加载定义、目标与历史结果；换对象先清空旧内容，迟到响应由 gate 丢弃。
 const props = defineProps<{ instanceId: string; strategies: Strategy[] }>();
@@ -93,7 +97,7 @@ async function load() {
     const loaded = await getInstance(props.instanceId);
     if (!gate.isCurrent(token)) return;
     instance.value = loaded;
-    readAt.value = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+    readAt.value = formatInstant(Date.now(), displayZone.value, "clock");
   } catch (err) {
     if (err instanceof StaleSpaceRequestError) return;
     if (gate.isCurrent(token)) {

@@ -21,7 +21,7 @@
   >
     <template #columns>
       <a-table-column title="K 线结束" :width="180"
-        ><template #cell="{ record }">{{ formatStrategyTime(record.bar_end_time) }}</template></a-table-column
+        ><template #cell="{ record }">{{ formatInstant(record.bar_end_time, displayZone) }}</template></a-table-column
       >
       <a-table-column title="状态" :width="80"
         ><template #cell="{ record }"
@@ -109,15 +109,12 @@ import { poolMembers } from "@/views/strategy/market-mode";
 import ResultItems from "@/views/strategy/components/strategy-result-items.vue";
 import ResultOverview from "@/views/strategy/components/strategy-result-overview.vue";
 import { marketLabel } from "@/views/strategy/market-mode";
-import {
-  buildResultInsights,
-  cashOrNetText,
-  formatDelay,
-  formatStrategyTime,
-  parseSummary,
-  percent,
-  skipReasonLabel
-} from "@/views/strategy/model";
+import { buildResultInsights, cashOrNetText, formatDelay, parseSummary, percent, skipReasonLabel } from "@/views/strategy/model";
+import { formatInstant } from "@/utils/time-zone";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
+
+// 页面时间按当前空间登记的时区显示
+const displayZone = useDisplayZone();
 
 const props = defineProps<{
   results: StrategyResult[];
@@ -185,7 +182,7 @@ function retryExplain() {
 async function explain(record: StrategyResult) {
   explainTarget = record;
   const requestId = ++explainRequest;
-  explainTitle.value = `结果解释 · ${formatStrategyTime(record.bar_end_time)}`;
+  explainTitle.value = `结果解释 · ${formatInstant(record.bar_end_time, displayZone.value)}`;
   explainVisible.value = true;
   explainLoading.value = true;
   explainError.value = "";

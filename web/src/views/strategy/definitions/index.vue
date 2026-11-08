@@ -50,7 +50,7 @@
           >
           <a-table-column title="更新时间" :width="170"
             ><template #cell="{ record }">{{
-              formatStrategyTime(record.updated_at || record.created_at)
+              formatInstant(record.updated_at || record.created_at, displayZone)
             }}</template></a-table-column
           >
           <a-table-column title="操作" :width="170" fixed="right">
@@ -99,11 +99,16 @@ import { useSpaceStore } from "@/store/modules/space";
 import { useStrategyStore } from "@/store/modules/strategy";
 import type { Strategy } from "@/api/strategy-types";
 import { summarizeDSL } from "@/views/strategy/dsl";
-import { formatStrategyTime, shortHash } from "@/views/strategy/model";
+import { shortHash } from "@/views/strategy/model";
 import StrategyDefinitionDrawer from "@/views/strategy/definitions/strategy-definition-drawer.vue";
 import StrategyTemplateCreate from "@/views/strategy/definitions/strategy-template-create.vue";
 import { instancesLink, replayLink } from "@/views/strategy/links";
 import { buildQuery, queryPage, queryString } from "@/views/strategy/query";
+import { formatInstant } from "@/utils/time-zone";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
+
+// 页面时间按当前空间登记的时区显示
+const displayZone = useDisplayZone();
 
 defineOptions({ name: "StrategyDefinitions" });
 const ROUTE_NAME = "strategy-definitions";

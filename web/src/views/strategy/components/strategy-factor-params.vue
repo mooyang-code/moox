@@ -26,13 +26,11 @@
       <template #columns>
         <a-table-column title="成员" data-index="member_key" :width="150" />
         <a-table-column title="目标期" :width="190">
-          <template #cell="{ record }">{{ periodText(record.last_submitted_period) }}</template>
+          <template #cell="{ record }">{{ periodText(record.last_submitted_period, displayZone) }}</template>
         </a-table-column>
         <a-table-column title="参数" data-index="summary" :ellipsis="true" :tooltip="true" />
         <a-table-column title="提交时间" :width="190">
-          <template #cell="{ record }">{{
-            record.last_submitted_at ? new Date(record.last_submitted_at).toLocaleString() : "-"
-          }}</template>
+          <template #cell="{ record }">{{ formatInstant(record.last_submitted_at, displayZone) }}</template>
         </a-table-column>
       </template>
     </a-table>
@@ -111,6 +109,11 @@ import { getStrategyDisplaySettings, listStrategyResults, setStrategyDisplaySett
 import type { DisplayHidden, StrategyInstance, StrategyResult } from "@/api/strategy-types";
 import { useSpaceStore } from "@/store/modules/space";
 import { memberParamsSummary, nextParamsRows, parseFactorBinding, periodText } from "@/views/strategy/factor-params-model";
+import { formatInstant } from "@/utils/time-zone";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
+
+// 页面时间按当前空间登记的时区显示
+const displayZone = useDisplayZone();
 
 defineOptions({ name: "StrategyFactorParams" });
 
@@ -136,7 +139,7 @@ const current = computed(() =>
     summary: memberParamsSummary({ [item.member_key]: item.params ?? {} }).replace(/^[^:]*: /, "")
   }))
 );
-const produced = computed(() => nextParamsRows(results.value));
+const produced = computed(() => nextParamsRows(results.value, displayZone.value));
 const hasHidden = computed(() => hidden.categories.length + hidden.members.length + hidden.columns.length > 0);
 
 async function load() {
