@@ -51,9 +51,10 @@ export function buildStrategyLinks(
 }
 
 /**
- * 一次取全部实例和策略建好映射，不为每个组合各查一次。查询失败时返回空映射，页面照常显示。
+ * 一次取全部实例和策略建好映射，不为每个组合各查一次。
+ * 查询失败时返回 null：页面要写“策略读取失败”，不能把每个组合都说成“尚未绑定策略”。
  */
-export async function loadStrategyLinks(logicals: readonly LogicalRef[]): Promise<Map<string, StrategyLink>> {
+export async function loadStrategyLinks(logicals: readonly LogicalRef[]): Promise<Map<string, StrategyLink> | null> {
   try {
     const [instances, strategies] = await Promise.all([
       listInstances({ page: 1, page_size: 500 }),
@@ -61,7 +62,6 @@ export async function loadStrategyLinks(logicals: readonly LogicalRef[]): Promis
     ]);
     return buildStrategyLinks(logicals, instances.items, new Map(strategies.items.map(item => [item.strategy_id, item.name])));
   } catch {
-    // 关联策略只是展示信息，取不到时留空。
-    return new Map();
+    return null;
   }
 }

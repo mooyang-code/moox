@@ -76,8 +76,11 @@
             </header>
             <div class="tile-body">
               <p v-if="!currentStrategy" class="tile-empty">
-                {{ strategyLoaded ? "还没有策略实例" : "读取中…" }}
-                <a v-if="strategyLoaded" @click="go(instancesLink({ create: true }))">新建实例</a>
+                <template v-if="strategyLoaded">
+                  还没有策略实例 <a @click="go(instancesLink({ create: true }))">新建实例</a>
+                </template>
+                <template v-else-if="liveErrors.strategy">读取失败 · <a @click="manualRefresh">重试</a></template>
+                <template v-else>读取中…</template>
               </p>
               <template v-else>
                 <button type="button" class="strategy-head" @click="go(currentStrategy.link)">
@@ -122,7 +125,7 @@
             <div class="tile-body">
               <div v-if="!attention.length" class="all-clear">
                 <component :is="statusIcon" :class="`is-${status.tone}`" />
-                <span>{{ overview || monitorError ? (monitorError ? "监控数据暂不可用" : "一切正常") : "读取中…" }}</span>
+                <span>{{ allClearText }}</span>
                 <small v-if="updatedAt">最近检查 {{ updatedAt }}</small>
               </div>
               <button
@@ -153,7 +156,11 @@
               <a @click="go('/factor/tasks?tab=results')">计算结果 →</a>
             </header>
             <div class="tile-body">
-              <p v-if="!factors.length" class="tile-empty">{{ factorLoaded ? "当前空间没有计算任务" : "读取中…" }}</p>
+              <p v-if="!factors.length" class="tile-empty">
+                <template v-if="factorLoaded">当前空间没有计算任务</template>
+                <template v-else-if="liveErrors.factor">读取失败 · <a @click="manualRefresh">重试</a></template>
+                <template v-else>读取中…</template>
+              </p>
               <template v-else>
                 <div class="line line-head factor-cols"><span>任务</span><span>最近周期</span><span>进度</span></div>
                 <button
@@ -244,7 +251,11 @@
               <a @click="go('/ops/activity')">活动日志 →</a>
             </header>
             <div class="tile-body activity-body">
-              <p v-if="!activity.length" class="tile-empty">{{ activityLoaded ? "暂无动态" : "读取中…" }}</p>
+              <p v-if="!activity.length" class="tile-empty">
+                <template v-if="activityLoaded">暂无动态</template>
+                <template v-else-if="liveErrors.activity">读取失败 · <a @click="manualRefresh">重试</a></template>
+                <template v-else>读取中…</template>
+              </p>
               <div v-for="row in activity" :key="row.key" class="line activity-line" :title="row.title">
                 <span class="muted">{{ row.when }}</span>
                 <span class="ellipsis">{{ row.title }}</span>
@@ -277,7 +288,7 @@ import { listInstances, listStrategies, listStrategyTargets } from "@/api/strate
 import type { Strategy, StrategyInstance, StrategyTargetSnapshot } from "@/api/strategy-types";
 import { listTradingAccounts } from "@/api/trade";
 import { usePolling } from "@/hooks/usePolling";
-import { useSpaceStore } from "@/store/modules/space";
+import { isSystemSpace, useSpaceStore } from "@/store/modules/space";
 import { useUserInfoStore } from "@/store/modules/user-info";
 import { RequestGate } from "@/utils/request-gate";
 import { datasetMatchesAttribution, isLikelyFactorResultDataset } from "@/views/data/shared/module-attribution";
@@ -293,6 +304,7 @@ import {
   freshnessRows,
   hostRows,
   kpiCards,
+  scopeOverviewToSpace,
   statusLine,
   strategyRows,
   systemStage,
@@ -339,11 +351,17 @@ const catalog = ref<Strategy[]>([]);
 const strategyLoaded = ref(false);
 const activityItems = ref<ActivityLogItem[]>([]);
 const activityLoaded = ref(false);
+// 监控以外各路读取的失败原因：读不到的部分不能显示成正常，也不能刷新“更新于”。
+const liveErrors = reactive({ factor: "", strategy: "", activity: "" });
+const failedCount = computed(() => Object.values(liveErrors).filter(Boolean).length);
 const liveLoadGate = new RequestGate();
 
 const factors = computed(() => factorRows(factorTasks.value, selectedSpaceId.value || "", names, nowMs.value));
 const strategies = computed(() => strategyRows(instances.value, targets.value, catalog.value, nowMs.value));
-const freshness = computed(() => freshnessRows(overview.value, names, nowMs.value));
+// 监控概览取的是全部空间：告警、主机、组件看全局，数据新鲜度只看当前空间。
+const freshness = computed(() =>
+  freshnessRows(scopeOverviewToSpace(overview.value, selectedSpaceId.value || ""), names, nowMs.value)
+);
 const hosts = computed(() => hostRows(overview.value?.hosts || []));
 const foldedFreshness = computed(() => fold(freshness.value, TILE_LIMITS.freshness));
 const foldedFactors = computed(() => fold(factors.value, TILE_LIMITS.factors));
@@ -358,15 +376,27 @@ const attention = computed(() =>
     freshness: freshness.value,
     names,
     nowMs: nowMs.value,
-    alertTarget: alert => alertHref(alert).replace(/^#/, "")
+    alertTarget: alert => alertHref(alert).replace(/^#/, ""),
+    spaceLabel
   })
 );
 const status = computed(() =>
-  statusLine({ attention: attention.value, overview: overview.value, monitorError: monitorError.value })
+  statusLine({
+    attention: attention.value,
+    overview: overview.value,
+    monitorError: monitorError.value,
+    failed: failedCount.value
+  })
 );
 const stage = computed(() => (monitorError.value ? undefined : systemStage(overview.value)));
 const alertCount = computed(() => (monitorError.value ? "—" : String(overview.value?.summary?.alert_count ?? 0)));
 const statusIcon = computed(() => toneIcon(status.value.tone));
+// 监控没有关注项时这一格的说明：别的格子读取失败时不能写“一切正常”
+const allClearText = computed(() => {
+  if (monitorError.value) return "监控数据暂不可用";
+  if (!overview.value) return "读取中…";
+  return failedCount.value ? `监控没有关注项，另有 ${failedCount.value} 项读取失败` : "一切正常";
+});
 const services = computed(() => serviceHealth(overview.value, monitorError.value));
 const facts = computed(() =>
   bannerFacts({ strategies: strategies.value, factors: factors.value, freshness: freshness.value, nowMs: nowMs.value })
@@ -432,9 +462,21 @@ function go(target: HomeTarget) {
   void router.push(target);
 }
 
-function stamp() {
+/** 告警所属空间的显示名：当前空间不加前缀，系统内部空间写“系统”。 */
+function spaceLabel(spaceId: string): string {
+  if (!spaceId || spaceId === selectedSpaceId.value) return "";
+  if (isSystemSpace(spaceId)) return "系统";
+  return (spaceStore.spaces || []).find(item => item.space_id === spaceId)?.name || spaceId;
+}
+
+/** 推进页面时钟；只有这一轮全部读到时才更新“更新于”，部分失败时保留上一次成功的时间。 */
+function stamp(allOk: boolean) {
   nowMs.value = Date.now();
-  updatedAt.value = new Date(nowMs.value).toLocaleTimeString("zh-CN", { hour12: false });
+  if (allOk) updatedAt.value = new Date(nowMs.value).toLocaleTimeString("zh-CN", { hour12: false });
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error && error.message ? error.message : String(error);
 }
 
 /** 空间范围：数据集 / View 名称、资产数量与策略定义名称。单项失败不影响其它项。 */
@@ -491,8 +533,9 @@ async function loadLive() {
   if (!spaceId) return;
   const isCurrent = () => liveLoadGate.isCurrent(token) && selectedSpaceId.value === spaceId;
   await Promise.allSettled([
+    // 不带空间：首页的健康结论要和监控页一致，别的空间断了数据也要看得到
     monitorApi
-      .getOverview({ space_id: spaceId })
+      .getOverview({})
       .then(result => {
         if (!isCurrent()) return;
         overview.value = result.overview;
@@ -501,22 +544,38 @@ async function loadLive() {
       .catch(error => {
         if (isCurrent()) monitorError.value = error instanceof Error ? error.message : String(error);
       }),
-    listFactorTasks({ page: { page: 1, size: 500 } }).then(rsp => {
-      if (!isCurrent()) return;
-      factorTasks.value = rsp.factor_tasks ?? [];
-      const own = factorTasks.value.filter(item => item.factor_task.space_id === spaceId);
-      counts.factorTasks = own.length;
-      counts.factors = own.reduce((total, item) => total + (item.members ?? []).filter(m => m.status === "enabled").length, 0);
-      factorLoaded.value = true;
-    }),
-    loadStrategies(isCurrent),
-    listActivityLogs({ space_id: spaceId, page: { page: 1, size: 30 } }).then(rsp => {
-      if (!isCurrent()) return;
-      activityItems.value = rsp.items ?? [];
-      activityLoaded.value = true;
-    })
+    listFactorTasks({ page: { page: 1, size: 500 } })
+      .then(rsp => {
+        if (!isCurrent()) return;
+        factorTasks.value = rsp.factor_tasks ?? [];
+        const own = factorTasks.value.filter(item => item.factor_task.space_id === spaceId);
+        counts.factorTasks = own.length;
+        counts.factors = own.reduce((total, item) => total + (item.members ?? []).filter(m => m.status === "enabled").length, 0);
+        factorLoaded.value = true;
+        liveErrors.factor = "";
+      })
+      .catch(error => {
+        if (isCurrent()) liveErrors.factor = errorText(error);
+      }),
+    loadStrategies(isCurrent)
+      .then(() => {
+        if (isCurrent()) liveErrors.strategy = "";
+      })
+      .catch(error => {
+        if (isCurrent()) liveErrors.strategy = errorText(error);
+      }),
+    listActivityLogs({ space_id: spaceId, page: { page: 1, size: 30 } })
+      .then(rsp => {
+        if (!isCurrent()) return;
+        activityItems.value = rsp.items ?? [];
+        activityLoaded.value = true;
+        liveErrors.activity = "";
+      })
+      .catch(error => {
+        if (isCurrent()) liveErrors.activity = errorText(error);
+      })
   ]);
-  if (isCurrent()) stamp();
+  if (isCurrent()) stamp(!monitorError.value && failedCount.value === 0);
 }
 
 async function loadStrategies(isCurrent: () => boolean) {
@@ -558,6 +617,7 @@ function resetSpace() {
   strategyLoaded.value = false;
   activityItems.value = [];
   activityLoaded.value = false;
+  Object.assign(liveErrors, { factor: "", strategy: "", activity: "" });
   updatedAt.value = "";
   strategyIndex.value = 0;
 }

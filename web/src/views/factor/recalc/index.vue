@@ -18,7 +18,7 @@
           <div class="result-toolbar">
             <span class="result-count">
               共 {{ pagination.total }} 条补算作业
-              <InfoTip text="启用因子时的历史回填与手动补算都在这里；有进行中的任务时每 3 秒自动刷新。" />
+              <InfoTip text="启用因子不会回填历史，启用后需要在这里手动补算；有进行中的任务时每 3 秒自动刷新。" />
             </span>
             <a-space wrap>
               <SetSelect :model-value="store.currentTaskId" @change="onSetChange" />

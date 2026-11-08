@@ -24,11 +24,11 @@
           <template #icon><icon-plus /></template>
           批量加入
         </a-button>
-        <a-button v-if="selectedTagId && canEditMembers" :disabled="!selectedKeys.length" @click="removeSelected">
-          移出标签
-        </a-button>
         <a-button v-if="selectedTagId && canEditMembers" :disabled="!selectedKeys.length" @click="restoreSelected">
           恢复为有效
+        </a-button>
+        <a-button v-if="selectedTagId && canEditMembers" status="danger" :disabled="!selectedKeys.length" @click="removeSelected">
+          移出标签
         </a-button>
         <a-button v-if="!selectedTagId" type="primary" status="success" @click="openSubjectCreate">
           <template #icon><icon-plus /></template>
@@ -172,6 +172,7 @@ import { createSubmitScope } from "@/utils/submit-scope";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import { computed, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
+import { confirmRemoveMembers } from "./member-actions";
 import {
   addTagMembers,
   listTagMembers,
@@ -365,12 +366,16 @@ function parseIds(value: string) {
   ];
 }
 
-async function removeSelected() {
+function removeSelected() {
   const ids = selectedSubjectIds();
-  if (!selectedTagId.value || !ids.length) return;
-  await removeTagMembers(props.spaceId, selectedTagId.value, ids);
-  Message.success("已移出标签");
-  await load();
+  const tagId = selectedTagId.value;
+  const spaceId = props.spaceId;
+  if (!tagId || !ids.length) return;
+  confirmRemoveMembers(
+    ids.length,
+    () => removeTagMembers(spaceId, tagId, ids),
+    () => void load()
+  );
 }
 
 async function restoreSelected() {

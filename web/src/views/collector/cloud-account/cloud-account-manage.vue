@@ -65,18 +65,10 @@
                   <template #icon><icon-edit /></template>
                   编辑
                 </a-button>
-                <a-popconfirm
-                  content="确定要删除该云账户吗？删除后相关的云函数实例将无法使用。"
-                  ok-text="确定"
-                  cancel-text="取消"
-                  @ok="() => onDelete(record)"
-                  position="tr"
-                >
-                  <a-button type="primary" size="mini" status="danger">
-                    <template #icon><icon-delete /></template>
-                    删除
-                  </a-button>
-                </a-popconfirm>
+                <a-button type="primary" size="mini" status="danger" @click="confirmDelete(record)">
+                  <template #icon><icon-delete /></template>
+                  删除
+                </a-button>
               </a-space>
             </template>
           </a-table-column>
@@ -148,7 +140,7 @@
 <script setup lang="ts">
 import { createSubmitScope } from "@/utils/submit-scope";
 import { ref, watch, reactive } from "vue";
-import { Message } from "@arco-design/web-vue";
+import { Message, Modal } from "@arco-design/web-vue";
 import {
   getCloudAccountList,
   createCloudAccount,
@@ -157,6 +149,10 @@ import {
   type CloudAccount
 } from "@/api/cloud-account";
 import { listSecrets, type Secret } from "@/api/admin/secret";
+import { useSpaceStore } from "@/store/modules/space";
+import { cloudAccountDeleteText, instancesUsingAccount } from "./cloud-account-delete";
+
+const spaceStore = useSpaceStore();
 
 // Props
 const props = defineProps<{
@@ -272,17 +268,31 @@ const onEdit = (record: CloudAccount) => {
   formVisible.value = true;
 };
 
-// 删除
-const onDelete = async (record: CloudAccount) => {
-  try {
-    await deleteCloudAccount(record.account_id);
-    Message.success("删除成功");
-    await loadAccountList();
-    emit("refresh");
-  } catch (error) {
-    console.error("删除云账户失败:", error);
-    Message.error("删除云账户失败");
-  }
+// 删除：确认框写清账户名、在用的实例数和后果；失败时显示后端给的原因，确认框保持打开
+const confirmDelete = async (record: CloudAccount) => {
+  const inUse = await instancesUsingAccount(
+    record.account_id,
+    spaceStore.spaces.map(space => space.space_id)
+  );
+  Modal.confirm({
+    title: `删除云账户「${record.account_name || record.account_id}」？`,
+    content: cloudAccountDeleteText(inUse),
+    okText: "删除",
+    okButtonProps: { status: "danger" },
+    cancelText: "取消",
+    onBeforeOk: async () => {
+      try {
+        await deleteCloudAccount(record.account_id);
+      } catch (error) {
+        Message.error(`删除云账户失败：${error instanceof Error && error.message ? error.message : "未知原因"}`);
+        return false;
+      }
+      Message.success("删除成功");
+      await loadAccountList();
+      emit("refresh");
+      return true;
+    }
+  });
 };
 
 // 表单取消

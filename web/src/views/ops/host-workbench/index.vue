@@ -28,7 +28,7 @@
 
       <a-modal
         v-model:visible="fileManagerVisible"
-        title="文件管理"
+        :title="fileManagerHost ? `文件管理 · ${fileManagerHost}` : '文件管理'"
         :width="960"
         :footer="false"
         :body-style="{ padding: 0, height: '70vh', overflowY: 'auto' }"
@@ -36,7 +36,7 @@
         @close="closeFileManager"
       >
         <a-spin :loading="fileManagerLoading" class="file-manager-loading">
-          <SshFileManager v-if="fileManagerSessionId" :session-id="fileManagerSessionId" />
+          <SshFileManager v-if="fileManagerSessionId" :session-id="fileManagerSessionId" :host-label="fileManagerHost" />
         </a-spin>
       </a-modal>
     </div>
@@ -80,6 +80,8 @@ const terminalHostId = ref("");
 const fileManagerVisible = ref(false);
 const fileManagerLoading = ref(false);
 const fileManagerSessionId = ref("");
+// 文件管理连着的主机：弹窗标题和删除确认里要写出来，免得在错的机器上删文件
+const fileManagerHost = ref("");
 const terminalTitle = computed(() => {
   const host = hosts.value.find(item => item.host_id === terminalHostId.value);
   if (!host) return "SSH 终端";
@@ -131,6 +133,8 @@ async function openFileManager(hostId: string) {
       return;
     }
     fileManagerSessionId.value = response.session_id;
+    const host = hosts.value.find(item => item.host_id === hostId);
+    fileManagerHost.value = host ? `${host.label || host.host_id}（${host.address}）` : hostId;
     fileManagerVisible.value = true;
   } catch (error: any) {
     if (request !== fileManagerRequest) return;

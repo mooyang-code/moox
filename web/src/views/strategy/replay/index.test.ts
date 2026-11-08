@@ -57,7 +57,8 @@ vi.mock("@/store/modules/strategy", () => ({
         { strategy_id: "s1", name: "动量" },
         { strategy_id: "s2", name: "混合", dsl_yaml: "name: m\nmarket: {select: both, prefer: spot}\n" }
       ],
-      loadAllStrategies: api.loadAllStrategies
+      loadAllStrategies: api.loadAllStrategies,
+      invalidateStrategyCatalog: vi.fn()
     })
 }));
 vi.mock("@visactor/vchart", () => ({

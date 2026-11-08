@@ -132,6 +132,14 @@ describe("strategy instance creation behavior", () => {
   const runModeGroup = (wrapper: { findAllComponents: (selector: { name: string }) => any[] }) =>
     wrapper.findAllComponents({ name: "RadioGroupStub" }).at(-1)!;
 
+  it("选中的定义不在目录里时说明原因，不会点了没反应", async () => {
+    const { wrapper, flushPromises } = await open({ presetStrategyId: "s-new" });
+    await (wrapper.vm as unknown as { check(): Promise<void> }).check();
+    await flushPromises();
+    expect(wrapper.text()).toContain("策略目录里没有这条定义");
+    expect(api.validateStrategy).not.toHaveBeenCalled();
+  });
+
   it("preselects the preset definition", async () => {
     const { wrapper } = await open({ presetStrategyId: "s1" });
     expect((wrapper.find("select").element as HTMLSelectElement).value).toBe("s1");

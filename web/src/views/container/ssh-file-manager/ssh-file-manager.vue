@@ -100,8 +100,9 @@
                 下载
               </a-button>
               <a-popconfirm
-                content="确定要删除吗？此操作不可恢复。"
-                ok-text="确定"
+                :content="deleteConfirmText(record, hostLabel)"
+                ok-text="删除"
+                :ok-button-props="{ status: 'danger' }"
                 cancel-text="取消"
                 @ok="() => deleteItem(record)"
                 position="tr"
@@ -120,7 +121,7 @@
     <!-- 新建目录弹窗 -->
     <a-modal
       v-model:visible="mkdirModalVisible"
-      title="新建目录"
+      :title="mkdirTitle(currentDir, hostLabel)"
       @ok="onMkdirConfirm"
       @cancel="mkdirModalVisible = false"
       :ok-loading="mkdirLoading"
@@ -139,10 +140,16 @@ import { ref, computed, watch } from "vue";
 import { useRoute } from "vue-router";
 import { Message } from "@arco-design/web-vue";
 import { sftpList, sftpMkdir, sftpDelete, getSftpDownloadUrl, getSftpUploadUrl, type SftpFileItem } from "@/api/modules/ssh";
+import { deleteConfirmText, mkdirTitle } from "./file-actions";
 
-const props = defineProps<{
-  sessionId?: string;
-}>();
+const props = withDefaults(
+  defineProps<{
+    sessionId?: string;
+    /** 当前连接的主机，写进删除确认里 */
+    hostLabel?: string;
+  }>(),
+  { sessionId: "", hostLabel: "" }
+);
 
 const route = useRoute();
 const DEFAULT_SFTP_DIR = "/home";
@@ -314,8 +321,7 @@ const deleteItem = async (record: SftpFileItem) => {
     Message.success("删除成功");
     refresh();
   } catch (error) {
-    console.error("删除失败:", error);
-    Message.error("删除失败");
+    Message.error(`删除失败：${error instanceof Error && error.message ? error.message : "未知原因"}`);
   }
 };
 

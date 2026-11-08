@@ -46,7 +46,14 @@ describe("installSpaceAwareSignedClient", () => {
 
     expect(error).toBeInstanceOf(AuthSessionExpiredError);
     expect(localStorage.getItem("user-info")).toBeNull();
-    expect(window.location.hash).toBe("#/login");
+    // 带着原地址去登录页，登录后回到采集任务页
+    expect(window.location.hash).toBe(`#/login?redirect=${encodeURIComponent("/collector/tasks")}`);
+  });
+
+  it("does not wrap the login page in another redirect", async () => {
+    window.location.hash = "#/login?redirect=%2Fhome";
+    await expireBrowserSession();
+    expect(window.location.hash).toBe("#/login?redirect=%2Fhome");
   });
 
   function responseErrorHandler() {

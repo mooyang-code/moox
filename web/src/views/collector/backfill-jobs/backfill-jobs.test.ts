@@ -79,3 +79,17 @@ describe("collector backfill page", () => {
     expect(dialog).toContain('emit("submitted", created.job_id)');
   });
 });
+
+describe("大范围补采的确认摘要", () => {
+  it("没选数据集或整段重拉时给出摘要，只补一个数据集的缺口时不用确认", async () => {
+    const { backfillScopeSummary } = await import("./backfill-model");
+    const base = { datasetCount: 12, subjectId: "", from: "2026-11-01T00:00:00Z", to: "2026-11-08T00:00:00Z" };
+    expect(backfillScopeSummary({ ...base, datasetLabel: "现货K线", force: false })).toBeNull();
+    expect(backfillScopeSummary({ ...base, datasetLabel: "", force: false })).toBe(
+      "补采范围：全部 12 个数据集、全部标的，共 7 天；只补缺口。"
+    );
+    expect(
+      backfillScopeSummary({ ...base, datasetLabel: "现货K线", subjectId: "BTCUSDT", to: "2026-11-01T06:00:00Z", force: true })
+    ).toBe("补采范围：数据集「现货K线」、标的 BTCUSDT，共 6 小时；范围内应有的 K 线全部重拉（不检查缺口）。");
+  });
+});

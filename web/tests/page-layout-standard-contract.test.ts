@@ -157,9 +157,10 @@ describe("page layout standards", () => {
 
     const cloudFunctionActions = extractBlock(cloudFunctions, '<a-space class="cloud-function-action-bar" wrap>', "</a-space>");
     const cloudFunctionFilters = extractBlock(cloudFunctions, '<a-space class="cloud-function-filter-bar" wrap>', "</a-space>");
+    // 批量删除不放在工具栏第一位：选中实例后才出现在“已选择 N 个实例”提示条里
+    expect(cloudFunctionActions).not.toContain("batchDelete");
+    expect(cloudFunctions).toContain('<a-button size="small" status="danger" @click="batchDelete">删除已选实例</a-button>');
     expectStrictOrder(cloudFunctionActions, [
-      '<a-button type="primary" status="danger" @click="batchDelete" :disabled="batchChangeProcessing">',
-      "<span>批量删除</span>",
       '<a-button type="outline" @click="onCloudAccountManage">',
       "<span>云账户管理</span>",
       '<a-button type="outline" @click="onFunctionPackageManage">',
@@ -210,7 +211,6 @@ describe("page layout standards", () => {
     expect(factorResults).not.toContain("status-strip");
     expect(factorResults).toContain(':embedded="true"');
     expect(factorResults).not.toContain("ViewDefinitions");
-
 
     expectMargin(viewBrowse, ".page-head", "margin-bottom", 8);
   });

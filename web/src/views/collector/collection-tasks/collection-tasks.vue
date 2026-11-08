@@ -509,10 +509,22 @@
       </template>
     </a-drawer>
 
-    <a-modal v-model:visible="deleteVisible" title="删除采集任务" :ok-loading="deleteLoading" @before-ok="handleDeleteOk">
+    <a-modal
+      v-model:visible="deleteVisible"
+      :title="deleteTarget ? `删除「${deleteTarget.task_name || deleteTarget.task_id}」` : '删除采集任务'"
+      ok-text="删除"
+      :ok-button-props="{ status: deleteResultData ? 'danger' : 'warning' }"
+      :ok-loading="deleteLoading"
+      @before-ok="handleDeleteOk"
+    >
       <a-alert type="warning" show-icon>
         删除任务会移除任务配置、实例和运行记录。结果数据默认保留；如需物理删除，请显式选择第二项。
       </a-alert>
+      <p v-if="deleteDependents.length" class="delete-dependents">
+        以它为源的合成任务：{{
+          deleteDependents.map(item => item.task_name || item.task_id).join("、")
+        }}。删除后它们收不到新的源数据。
+      </p>
       <a-radio-group v-model="deleteResultData" direction="vertical" class="delete-options">
         <a-radio :value="false">删除任务，保留结果数据</a-radio>
         <a-radio :value="true">删除任务并物理删除结果数据和数据视图</a-radio>
@@ -792,6 +804,10 @@ const frequencyHints = computed(() => {
   const source = frequencyMinutes(resamplePreview.value?.source_frequency || "");
   return (resamplePreview.value?.allowed_frequencies || []).filter(item => frequencyMinutes(item) > source);
 });
+// 要删除的任务被哪些合成任务当作源：删除确认里列出来
+const deleteDependents = computed(() =>
+  deleteTarget.value ? sourceTasks.value.filter(task => stringParam(task, "source_task_id") === deleteTarget.value?.task_id) : []
+);
 const detailDependents = computed(() =>
   detailData.value ? sourceTasks.value.filter(task => stringParam(task, "source_task_id") === detailData.value?.task_id) : []
 );
@@ -1876,5 +1892,9 @@ pre {
     flex-direction: column;
     gap: 6px;
   }
+}
+.delete-dependents {
+  margin: var(--moox-space-3) 0 0;
+  color: var(--color-text-2);
 }
 </style>

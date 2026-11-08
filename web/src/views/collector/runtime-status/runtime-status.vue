@@ -10,8 +10,8 @@
                 <template #icon><component :is="overall.info.icon" /></template>
                 {{ overall.info.text }}
               </a-tag>
-              <span v-if="!overall.reasons.length" class="muted">采集计划已生效，各数据集的自动检查都跟得上。</span>
-              <span v-else class="verdict-reason">{{ overall.reasons[0] }}</span>
+              <span v-if="overall.healthy" class="muted">采集计划已生效，各数据集的自动检查都跟得上。</span>
+              <span v-else-if="overall.reasons.length" class="verdict-reason">{{ overall.reasons[0] }}</span>
               <a-tooltip v-if="overall.reasons.length > 1">
                 <template #content>
                   <div v-for="reason in overall.reasons" :key="reason">{{ reason }}</div>
@@ -20,6 +20,9 @@
               </a-tooltip>
             </div>
             <a-space>
+              <span v-if="loadError && loaded" class="verdict-reason"
+                >最近一次读取失败：{{ loadError }}，下面是上次成功的结果</span
+              >
               <span class="muted">{{ status.generated_at ? `更新于 ${localTimeText(status.generated_at)}` : "" }}</span>
               <a-button size="small" @click="logVisible = true">
                 <template #icon><icon-history /></template>
@@ -34,36 +37,40 @@
             <div class="metric">
               <span class="metric-label">采集计划</span>
               <div class="metric-line">
-                <b class="metric-value metric-value--text">{{ planText }}</b>
-                <span class="metric-sub">{{ planSub }}</span>
+                <b class="metric-value metric-value--text">{{ loaded ? planText : "—" }}</b>
+                <span v-if="loaded" class="metric-sub">{{ planSub }}</span>
               </div>
             </div>
             <div class="metric">
               <span class="metric-label">函数</span>
               <div class="metric-line">
-                <b class="metric-value">{{ summary.functions }}</b>
-                <span class="metric-sub">下发中 {{ summary.pendingFunctions }} · 退役中 {{ summary.retiringFunctions }}</span>
+                <b class="metric-value">{{ loaded ? summary.functions : "—" }}</b>
+                <span v-if="loaded" class="metric-sub"
+                  >下发中 {{ summary.pendingFunctions }} · 退役中 {{ summary.retiringFunctions }}</span
+                >
               </div>
             </div>
             <div class="metric">
               <span class="metric-label">数据集 / 标的</span>
               <div class="metric-line">
-                <b class="metric-value">{{ summary.datasets }} / {{ summary.subjects }}</b>
-                <span class="metric-sub">正在采集</span>
+                <b class="metric-value">{{ loaded ? `${summary.datasets} / ${summary.subjects}` : "—" }}</b>
+                <span v-if="loaded" class="metric-sub">正在采集</span>
               </div>
             </div>
             <div class="metric">
               <span class="metric-label">近 24h 实时缺口</span>
               <div class="metric-line">
-                <b class="metric-value" :class="{ 'metric-value--warn': summary.gapBars > 0 }">{{ summary.gapBars }} 根</b>
-                <span class="metric-sub">{{ summary.gapSubjects }} 个标的，由自动补采修复</span>
+                <b class="metric-value" :class="{ 'metric-value--warn': summary.gapBars > 0 }">{{
+                  loaded ? `${summary.gapBars} 根` : "—"
+                }}</b>
+                <span v-if="loaded" class="metric-sub">{{ summary.gapSubjects }} 个标的，由自动补采修复</span>
               </div>
             </div>
             <div class="metric metric--link" role="button" tabindex="0" @click="goBackfills()" @keydown.enter="goBackfills()">
               <span class="metric-label">补采 <icon-right /></span>
               <div class="metric-line">
-                <b class="metric-value">{{ status.active_backfills || 0 }}</b>
-                <span class="metric-sub" :class="{ 'danger-text': (status.failed_backfills_24h || 0) > 0 }"
+                <b class="metric-value">{{ loaded ? status.active_backfills || 0 : "—" }}</b>
+                <span v-if="loaded" class="metric-sub" :class="{ 'danger-text': (status.failed_backfills_24h || 0) > 0 }"
                   >进行中 · 24h 失败 {{ status.failed_backfills_24h || 0 }}</span
                 >
               </div>
@@ -89,7 +96,9 @@
             class="clickable-table"
             @row-click="toggleDataset"
           >
-            <template #empty><div class="empty-text">还没有正在采集的数据集</div></template>
+            <template #empty
+              ><div class="empty-text">{{ emptyText("还没有正在采集的数据集") }}</div></template
+            >
             <template #columns>
               <a-table-column title="数据集">
                 <template #cell="{ record }">
@@ -230,7 +239,9 @@
             :pagination="false"
             :bordered="{ cell: true }"
           >
-            <template #empty><div class="empty-text">还没有周期统计</div></template>
+            <template #empty
+              ><div class="empty-text">{{ emptyText("还没有周期统计") }}</div></template
+            >
             <template #columns>
               <a-table-column title="周期" data-index="period" :width="180" />
               <a-table-column title="数据集" :width="220">
@@ -275,7 +286,9 @@
               :bordered="{ cell: true }"
               table-layout-fixed
             >
-              <template #empty><div class="empty-text">没有匹配的函数</div></template>
+              <template #empty
+                ><div class="empty-text">{{ emptyText("没有匹配的函数") }}</div></template
+              >
               <template #columns>
                 <a-table-column title="函数" :width="330">
                   <template #cell="{ record }">
@@ -381,6 +394,7 @@ import {
   levelInfo,
   levelRank,
   localTimeText,
+  overallStatus,
   statusSummary
 } from "./runtime-status-model";
 
@@ -401,11 +415,12 @@ const rangeDataset = ref("");
 const logVisible = ref(false);
 
 const summary = computed(() => statusSummary(status.value));
-const overall = computed(() => ({
-  level: status.value.level || "ok",
-  info: levelInfo(status.value.level),
-  reasons: status.value.reasons || []
-}));
+// 读取失败时不能显示成“正常”：loaded 表示当前空间至少读到过一次。
+const loaded = ref(false);
+const loadError = ref("");
+const overall = computed(() => overallStatus({ status: status.value, loaded: loaded.value, error: loadError.value }));
+// 还没读到过数据时，表格不显示“没有数据”这类空状态，免得当成真的没有
+const emptyText = (text: string) => (loaded.value ? text : loadError.value ? "读取失败" : "读取中…");
 const datasetRows = computed(() =>
   [...(status.value.datasets || [])]
     .sort((a, b) => levelRank(b.level) - levelRank(a.level))
@@ -513,10 +528,12 @@ async function loadStatus() {
     const data = await getCollectorStatus(spaceId);
     if (!request.isLatest() || spaceId !== (selectedSpaceId.value || "")) return;
     status.value = data;
+    loaded.value = true;
+    loadError.value = "";
     // 行高要等数据渲染后才能量到。
     void nextTick(fitFunctionPageSize);
   } catch (error) {
-    if (request.isLatest()) console.error("获取运行状态失败:", error);
+    if (request.isLatest()) loadError.value = error instanceof Error && error.message ? error.message : "请稍后重试";
   } finally {
     if (request.isLatest()) statusLoading.value = false;
   }
@@ -579,6 +596,8 @@ watch(functionFilters, () => (functionPage.value = 1), { deep: true });
 watch(selectedSpaceId, () => {
   guard.invalidate();
   status.value = {};
+  loaded.value = false;
+  loadError.value = "";
   expandedKeys.value = [];
   functionFilters.value = { keyword: "", region: "", market: "", abnormalOnly: false };
   void loadStatus();

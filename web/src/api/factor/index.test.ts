@@ -69,6 +69,12 @@ describe("FactorMgr factor-set API", () => {
     call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, valid: true });
     await validateFactorSpec("outputs:\n  x: close\n", true);
     expect(call).toHaveBeenLastCalledWith("ValidateFactorSpec", { spec: "outputs:\n  x: close\n", allow_partial_universe: true });
+    await validateFactorSpec("outputs:\n  x: close\n", false, "bias");
+    expect(call).toHaveBeenLastCalledWith("ValidateFactorSpec", {
+      spec: "outputs:\n  x: close\n",
+      allow_partial_universe: false,
+      factor_id: "bias"
+    });
     call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, columns: [], rows: [] });
     await previewFactor({ task_id: "ftask_a", spec: "outputs:\n  x: close\n", periods: 10 });
     expect(call).toHaveBeenLastCalledWith("PreviewFactor", { task_id: "ftask_a", spec: "outputs:\n  x: close\n", periods: 10 });

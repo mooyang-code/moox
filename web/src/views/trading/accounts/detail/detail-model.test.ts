@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { Holding, LogicalAccountTarget, OperatorAction, Position, TradingAccount } from "@/api/trade";
-import { flattenPreview, isFlattenRunning, memberTotals, paperInitialBalance, tabFromQuery, targetExpired } from "./detail-model";
+import {
+  equityChangeOf,
+  flattenPreview,
+  isFlattenRunning,
+  memberTotals,
+  paperInitialBalance,
+  tabFromQuery,
+  targetExpired
+} from "./detail-model";
 
 const account = (equity: string, extra: Partial<TradingAccount["snapshot"]> = {}) =>
   ({ snapshot: { equity, available_funds: "10", used_margin: "2", unrealized_pnl: "-1", ...extra } }) as TradingAccount;
@@ -21,6 +29,9 @@ describe("详情页模型", () => {
       unrealizedPnl: -2
     });
     expect(memberTotals([{} as TradingAccount]).equity).toBeNull();
+    // 首次同步前后端也会带一个权益为空串的快照
+    expect(memberTotals([account("")]).equity).toBeNull();
+    expect(memberTotals([account("0")]).equity).toBe(0);
     expect(paperInitialBalance([{ paper: { initial_balance: "1000" } } as TradingAccount])).toBe(1000);
     expect(paperInitialBalance([{} as TradingAccount])).toBeNull();
   });
@@ -54,5 +65,13 @@ describe("详情页模型", () => {
     expect(isFlattenRunning(action("FLATTEN", "COMPLETED"))).toBe(false);
     expect(isFlattenRunning(action("SUBMIT_ORDER", "RUNNING"))).toBe(false);
     expect(isFlattenRunning(null)).toBe(false);
+  });
+});
+
+describe("较初始资金的变化", () => {
+  it("还没读到权益时为空，不算成 −100%", () => {
+    expect(equityChangeOf(null, 1000)).toBeNull();
+    expect(equityChangeOf(1100, 1000)).toBe(100);
+    expect(equityChangeOf(1100, null)).toBeNull();
   });
 });

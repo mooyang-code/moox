@@ -312,16 +312,22 @@ export function attentionItems(input: {
   names: NameBook;
   nowMs: number;
   alertTarget: (alert: HealthAlert) => string;
+  /** 告警所属空间的显示名；属于当前空间或不属于任何空间时返回空串，不加前缀。 */
+  spaceLabel?: (spaceId: string) => string;
 }): AttentionItem[] {
-  const items: AttentionItem[] = input.alerts.map(alert => ({
-    key: `alert-${alert.id || alert.title}`,
-    tone: alertTone(alert),
-    source: "监控",
-    title: prettifyIds(alert.title || alert.id || "告警", input.names),
-    detail: prettifyIds(alert.reason || "", input.names),
-    when: relativeTime(alert.triggered_at, input.nowMs),
-    target: input.alertTarget(alert)
-  }));
+  const items: AttentionItem[] = input.alerts.map(alert => {
+    const space = alert.object?.space_id ? input.spaceLabel?.(alert.object.space_id) || "" : "";
+    const title = prettifyIds(alert.title || alert.id || "告警", input.names);
+    return {
+      key: `alert-${alert.id || alert.title}`,
+      tone: alertTone(alert),
+      source: "监控",
+      title: space ? `${space} · ${title}` : title,
+      detail: prettifyIds(alert.reason || "", input.names),
+      when: relativeTime(alert.triggered_at, input.nowMs),
+      target: input.alertTarget(alert)
+    };
+  });
   for (const item of pendingItems({ ...input.strategy, replays: [], nowMs: input.nowMs })) {
     items.push({
       key: `strategy-${item.kind}-${item.instanceId}`,
@@ -440,16 +446,42 @@ export function activityRows(items: ActivityLogItem[], names: NameBook, nowMs: n
     }));
 }
 
-/** 顶部状态句：有待处理时写“N 项需要处理”，否则写“运行正常”；监控不可用时如实说明。 */
-export function statusLine(input: { attention: AttentionItem[]; overview?: HealthOverview; monitorError: string }): {
+/**
+ * 顶部状态句：有待处理时写“N 项需要处理”，否则写“运行正常”；监控不可用时如实说明。
+ * failed 是监控以外读取失败的项数（因子、策略、动态）：读不到的部分不能算作正常。
+ */
+export function statusLine(input: {
+  attention: AttentionItem[];
+  overview?: HealthOverview;
+  monitorError: string;
+  failed?: number;
+}): {
   tone: Tone;
   text: string;
 } {
+  const failed = input.failed ?? 0;
+  const suffix = failed ? ` · ${failed} 项读取失败` : "";
   const bad = input.attention.filter(item => item.tone === "bad").length;
-  if (input.attention.length) return { tone: bad ? "bad" : "warn", text: `${input.attention.length} 项需要处理` };
-  if (input.monitorError) return { tone: "idle", text: "监控数据暂不可用" };
+  if (input.attention.length) return { tone: bad ? "bad" : "warn", text: `${input.attention.length} 项需要处理${suffix}` };
+  if (input.monitorError) return { tone: "idle", text: `监控数据暂不可用${suffix}` };
+  if (failed) return { tone: "warn", text: `${failed} 项读取失败` };
   if (!input.overview) return { tone: "idle", text: "正在读取状态" };
   return { tone: "ok", text: "运行正常" };
+}
+
+/**
+ * 只保留属于某个空间的数据链路：首页的数据新鲜度按当前空间看，告警和主机看全部空间。
+ * 不属于任何空间的条目照旧保留（以前按空间读概览时，后端也会一并返回它们）。
+ */
+export function scopeOverviewToSpace(overview: HealthOverview | undefined, spaceId: string): HealthOverview | undefined {
+  if (!overview) return overview;
+  return {
+    ...overview,
+    pipeline: (overview.pipeline || []).map(stage => ({
+      ...stage,
+      datasets: (stage.datasets || []).filter(item => !item.space_id || item.space_id === spaceId)
+    }))
+  };
 }
 
 /** 运行阶段的中文名。 */

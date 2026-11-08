@@ -27,7 +27,7 @@
           >
           <a-button @click="search">查询</a-button>
           <a-button @click="reset">重置</a-button>
-          <a-button :loading="store.instancesLoading" aria-label="刷新实例" @click="refresh"
+          <a-button :loading="store.instancesLoading" aria-label="刷新实例" @click="manualRefresh"
             ><template #icon><icon-refresh /></template>刷新</a-button
           >
           <a-button type="primary" status="success" :disabled="!spaceStore.selectedSpaceId" @click="openCreate"
@@ -191,6 +191,11 @@ async function refresh() {
     // 错误已记入 store.instancesError，页面就近展示。
   }
 }
+/** 手动刷新顺带重读策略目录：别处（如 CLI、模板新建）新建的定义也能出现在筛选和创建实例的下拉里。 */
+function manualRefresh() {
+  store.invalidateStrategyCatalog();
+  void Promise.all([refresh(), loadCatalog()]);
+}
 // 定义目录只用于名称与筛选项：它失败不应让整张实例表显示为读取失败。
 async function loadCatalog() {
   if (store.strategiesComplete) return;
@@ -235,7 +240,8 @@ function isCurrentTab() {
   return route.name === ROUTE_NAME && normalizeTaskTab(route.query.tab) === "instances";
 }
 function strategyName(id: string) {
-  return store.strategyCatalog.find((item: Strategy) => item.strategy_id === id)?.name || "定义已删除或未加载";
+  // 后端不允许删除被实例引用的定义，读不到名称只会是目录还没加载
+  return store.strategyCatalog.find((item: Strategy) => item.strategy_id === id)?.name || `${id}（名称未加载）`;
 }
 function created(instanceId: string) {
   openDetail(instanceId);

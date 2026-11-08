@@ -60,7 +60,7 @@
         </template>
       </a-table>
 
-      <a-modal v-model:visible="visible" width="760px" :title="modalTitle" @ok="submit">
+      <a-modal v-model:visible="visible" width="min(760px, 100vw)" :title="modalTitle" :on-before-ok="submit">
         <a-form :model="form" auto-label-width>
           <a-form-item field="data_source_id" label="来源ID" required>
             <a-input v-model="form.data_source_id" :disabled="editing" placeholder="例如 binance" />
@@ -177,27 +177,31 @@ function openEdit(record: DataSource) {
   visible.value = true;
 }
 
-async function submit() {
+/** 弹窗的“确定”：校验或保存失败时返回 false，弹窗保持打开，填的内容不丢（失败原因由请求层提示）。 */
+async function submit(): Promise<boolean> {
   const spaceId = spaceStore.requireSpaceId();
   // 表单属于打开它时的空间：切换空间后不能把它写进新空间（会覆盖新空间里相同 ID 的数据源）。
   if (form.space_id && form.space_id !== spaceId) {
     Message.warning("空间已切换，请重新打开编辑窗口");
-    visible.value = false;
-    return;
+    return true;
   }
   if (!form.data_source_id || !form.name) {
     Message.warning("请补全来源ID和名称");
-    return;
+    return false;
   }
   // 属性由写入方维护，页面不编辑但要原样带回，否则保存会把已有属性清掉。
   const payload = { ...form, space_id: spaceId };
   const submission = sourceScope.begin();
-  if (editing.value) await updateDataSource(payload);
-  else await createDataSource(payload);
+  try {
+    if (editing.value) await updateDataSource(payload);
+    else await createDataSource(payload);
+  } catch {
+    return false;
+  }
   Message.success("数据源已保存");
-  if (!submission.isCurrent()) return;
-  visible.value = false;
-  await load();
+  if (!submission.isCurrent()) return false;
+  void load();
+  return true;
 }
 
 function onPageChange(page: number) {
@@ -218,7 +222,7 @@ watch(selectedSpaceId, () => {
 });
 onMounted(load);
 
-// 提交作用域（重新打开才使旧提交失效，@ok 自动关闭不影响正常保存）：visible 打开/关闭都会使进行中的保存失效，迟到的响应不能再关闭或清空重新打开的表单
+// 提交作用域：重新打开弹窗使旧提交失效，迟到的响应不能再关闭或清空重新打开的表单
 const sourceScope = createSubmitScope();
 watch(visible, open => {
   if (open) sourceScope.invalidate();

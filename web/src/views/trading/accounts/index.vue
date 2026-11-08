@@ -62,7 +62,9 @@
                 </template>
                 <template v-else>
                   <span class="tx-muted">无</span>
-                  <div class="tx-muted">{{ record.logical.control_mode === 2 ? "自主下单" : "尚未绑定策略" }}</div>
+                  <div class="tx-muted">
+                    {{ record.logical.control_mode === 2 ? "自主下单" : strategiesFailed ? "策略读取失败" : "尚未绑定策略" }}
+                  </div>
                 </template>
               </template>
               <span v-else class="tx-muted">优先级 {{ record.priority }} · {{ record.enabled ? "启用" : "停用" }}</span>
@@ -178,6 +180,8 @@ const currentDesc = computed(() => environmentTabs.find(item => item.key === env
 const logicals = ref<LogicalAccount[]>([]);
 const accounts = ref<TradingAccount[]>([]);
 const strategies = ref<Map<string, StrategyLink>>(new Map());
+// 关联策略读取失败：列表里写“策略读取失败”，不当成没有绑定
+const strategiesFailed = ref(false);
 const loading = ref(false);
 const loadError = ref("");
 const expandedKeys = ref<string[]>([]);
@@ -221,7 +225,9 @@ async function load() {
 
 async function loadStrategies(request: { isLatest(): boolean }) {
   const links = await loadStrategyLinks(logicals.value);
-  if (request.isLatest()) strategies.value = links;
+  if (!request.isLatest()) return;
+  strategiesFailed.value = links === null;
+  strategies.value = links ?? new Map();
 }
 
 const strategyOf = (row: ComboRow) => strategies.value.get(row.key);

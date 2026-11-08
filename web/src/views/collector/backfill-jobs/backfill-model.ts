@@ -100,3 +100,24 @@ export function toRFC3339(value: string): string | null {
   const parsed = new Date(normalized);
   return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString().replace(/\.\d{3}Z$/, "Z");
 }
+
+/**
+ * 补采范围大时（没选数据集，或者勾了整段重拉）先给出范围摘要再确认：数据集数、标的、时长。
+ * 返回 null 表示不需要额外确认。
+ */
+export function backfillScopeSummary(input: {
+  datasetLabel: string;
+  datasetCount: number;
+  subjectId: string;
+  from: string;
+  to: string;
+  force: boolean;
+}): string | null {
+  if (input.datasetLabel && !input.force) return null;
+  const hours = Math.max(0, (Date.parse(input.to) - Date.parse(input.from)) / 3_600_000);
+  const span = hours >= 48 ? `${Math.round(hours / 24)} 天` : `${Math.round(hours)} 小时`;
+  const datasets = input.datasetLabel ? `数据集「${input.datasetLabel}」` : `全部 ${input.datasetCount} 个数据集`;
+  const subjects = input.subjectId ? `标的 ${input.subjectId}` : "全部标的";
+  const mode = input.force ? "范围内应有的 K 线全部重拉（不检查缺口）" : "只补缺口";
+  return `补采范围：${datasets}、${subjects}，共 ${span}；${mode}。`;
+}

@@ -476,6 +476,11 @@ function resetCheck() {
 }
 
 async function check() {
+  // 选中的定义不在目录里（目录是旧的）：说清楚原因，不能点了没反应
+  if (form.strategy_id && !selectedStrategy.value) {
+    fieldErrors.strategy_id = "策略目录里没有这条定义，请关闭抽屉、刷新实例列表后重试";
+    return;
+  }
   if (!selectedStrategy.value || !tasksSelected.value) return;
   const requestId = ++checkRequest;
   checking.value = true;

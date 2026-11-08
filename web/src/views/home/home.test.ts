@@ -57,6 +57,8 @@ vi.mock("@/api/strategy", () => ({
 vi.mock("@/api/trade", () => ({ listTradingAccounts: vi.fn(async () => ({ accounts: [], page_result: { total: 0 } })) }));
 
 import Home from "./home.vue";
+import { listFactorTasks } from "@/api/factor";
+import { monitorApi } from "@/api/monitor";
 
 const iconNames = [
   "icon-check-circle-fill",
@@ -213,6 +215,22 @@ describe("home page", () => {
     ctx.space.selectedSpaceId = "";
     const wrapper = await render();
     expect(wrapper.text()).toContain("还没有可用的空间");
+  });
+
+  it("reads the monitor overview for all spaces so the verdict matches the monitor page", async () => {
+    await render();
+    expect(monitorApi.getOverview).toHaveBeenLastCalledWith({});
+  });
+
+  it("does not claim everything is normal when a tile fails to load, and keeps the last update time", async () => {
+    vi.mocked(listFactorTasks).mockRejectedValueOnce(new Error("因子服务不可用"));
+    const wrapper = await render();
+    expect(wrapper.text()).toContain("1 项读取失败");
+    expect(wrapper.text()).not.toContain("运行正常");
+    expect(wrapper.find(".tile-attention .all-clear").text()).not.toContain("一切正常");
+    expect(wrapper.find(".tile-attention .all-clear").text()).toContain("另有 1 项读取失败");
+    expect(wrapper.text()).toContain("读取失败 · 重试");
+    expect(wrapper.text()).toContain("更新于 —");
   });
 
   it("does not claim everything is normal while data is lagging", async () => {

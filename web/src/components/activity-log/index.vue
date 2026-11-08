@@ -9,6 +9,10 @@
         查询
       </a-button>
     </a-space>
+    <a-alert v-if="loadError" type="error" class="activity-log-error">
+      操作记录读取失败：{{ loadError }}
+      <template #action><a-button size="mini" @click="load">重试</a-button></template>
+    </a-alert>
     <a-table
       row-key="id"
       size="small"
@@ -70,6 +74,8 @@ const props = withDefaults(
 
 const guard = createLatestRequestGuard();
 const loading = ref(false);
+// 读取失败时显示原因和重试，不能只留一张空表让人以为没有记录。
+const loadError = ref("");
 const items = ref<ActivityLogItem[]>([]);
 const page = ref(1);
 const total = ref(0);
@@ -98,9 +104,10 @@ async function load() {
     if (!request.isLatest()) return;
     items.value = data.items || [];
     total.value = Number(data.page?.total) || items.value.length;
+    loadError.value = "";
   } catch (error) {
     if (!request.isLatest()) return;
-    console.error("获取活动日志失败:", error);
+    loadError.value = error instanceof Error && error.message ? error.message : "请稍后重试";
   } finally {
     if (request.isLatest()) loading.value = false;
   }
@@ -151,5 +158,8 @@ defineExpose({ reload: load });
   font-size: 12px;
   white-space: pre-wrap;
   word-break: break-all;
+}
+.activity-log-error {
+  margin-bottom: var(--moox-space-2);
 }
 </style>

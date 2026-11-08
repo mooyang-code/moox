@@ -26,9 +26,12 @@
                 <span class="tx-muted">（实例 {{ strategy.instanceId }}）</span>
               </span>
               <span v-else-if="logical.owner_instance_id">
-                关联策略实例 <span class="tx-mono">{{ logical.owner_instance_id }}</span>
+                关联策略实例
+                <a-link class="tx-mono" @click="openInstance(logical.owner_instance_id)">{{ logical.owner_instance_id }}</a-link>
               </span>
-              <span v-else>{{ logical.control_mode === 2 ? "自主下单，没有关联策略" : "尚未绑定策略" }}</span>
+              <span v-else>{{
+                logical.control_mode === 2 ? "自主下单，没有关联策略" : strategiesFailed ? "策略读取失败" : "尚未绑定策略"
+              }}</span>
               <span class="tx-muted tx-mono">{{ logical.logical_account_id }}</span>
             </div>
           </div>
@@ -66,11 +69,13 @@
           </div>
           <div v-if="initialBalance">
             <div class="k">较初始资金</div>
-            <div class="v tx-num" :class="pnlClass((totals.equity ?? 0) - initialBalance)">
-              {{ fmtSigned((totals.equity ?? 0) - initialBalance) }}
+            <!-- 还没读到权益（新建账户首次同步前）时整格显示“—”，不能按 0 算成 −100% -->
+            <div class="v tx-num" :class="equityChange === null ? '' : pnlClass(equityChange)">
+              {{ equityChange === null ? "—" : fmtSigned(equityChange) }}
             </div>
             <div class="d">
-              初始 {{ fmtMoney(initialBalance, 0) }} · {{ fmtPercent(((totals.equity ?? 0) - initialBalance) / initialBalance) }}
+              初始 {{ fmtMoney(initialBalance, 0) }} ·
+              {{ equityChange === null ? "—" : fmtPercent(equityChange / initialBalance) }}
             </div>
           </div>
           <div>
@@ -331,6 +336,7 @@ import { detailContextKey, type OrderPrefill } from "./context";
 import {
   actionTypeLabels,
   detailTabs,
+  equityChangeOf,
   flattenPreview,
   isFlattenRunning,
   memberTotals,
@@ -362,6 +368,8 @@ const allAccounts = ref<TradingAccount[]>([]);
 const target = ref<LogicalAccountTarget | null>(null);
 const snapshot = ref<PositionSnapshot>({ swapPositions: [], spotHoldings: [] });
 const strategy = ref<StrategyLink | null>(null);
+// 关联策略读取失败：页头既没有关联策略也没有实例编号时写“策略读取失败”
+const strategiesFailed = ref(false);
 const dataVersion = ref(0);
 const syncing = ref(false);
 const orderDialog = ref<InstanceType<typeof OrderDialog>>();
@@ -379,6 +387,7 @@ const enabledAccounts = computed(() =>
 );
 const totals = computed(() => memberTotals(enabledAccounts.value));
 const initialBalance = computed(() => paperInitialBalance(enabledAccounts.value));
+const equityChange = computed(() => equityChangeOf(totals.value.equity, initialBalance.value));
 const latestSync = computed(() => Math.max(0, ...enabledAccounts.value.map(item => Number(item.last_sync_at) || 0)));
 const exchangesText = computed(() => {
   const names = [...new Set(enabledAccounts.value.map(item => exchangeLabels[item.exchange] || "-"))];
@@ -454,7 +463,10 @@ async function loadFirst() {
   try {
     await reload();
     const links = await loadStrategyLinks(logical.value ? [logical.value] : []);
-    strategy.value = links.get(logicalId.value) ?? null;
+    // 读取失败时保留上一次读到的关联策略；没有的话页头仍能按 owner_instance_id 链到实例，
+    // 两样都没有时写“策略读取失败”，不当成没有绑定
+    strategiesFailed.value = links === null;
+    if (links) strategy.value = links.get(logicalId.value) ?? null;
   } catch (cause) {
     if (logical.value) return;
     // 不存在和其他失败（网络、服务暂时不可用）分开说：后者可以重试，轮询读到后也会自动恢复
@@ -517,6 +529,10 @@ function setTab(key: string) {
 
 function backToList() {
   void router.push({ path: "/trading/accounts", query: { env: env.value === "paper" ? undefined : env.value } });
+}
+
+function openInstance(instanceId: string) {
+  void router.push({ name: "strategy-detail", params: { instanceId } });
 }
 
 function openStrategy() {

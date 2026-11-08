@@ -7,7 +7,7 @@
           <InfoTip text="基于因子任务的研究回放：现货理论账本、按当期收盘价成交，用于比较策略版本，不承诺复现实时结果。" />
         </span>
         <a-space wrap
-          ><a-button :loading="listLoading" aria-label="刷新回放" @click="loadReplays"
+          ><a-button :loading="listLoading" aria-label="刷新回放" @click="manualRefresh"
             ><template #icon><icon-refresh /></template>刷新</a-button
           ><a-button type="primary" @click="openCreate"
             ><template #icon><icon-plus /></template>发起回放</a-button
@@ -467,6 +467,13 @@ const tablePagination = computed(() => ({ current: tablePage.value, pageSize: ta
 
 function pct(value: number | null) {
   return value !== null && Number.isFinite(value) ? `${(value * 100).toFixed(2)}%` : "-";
+}
+
+/** 手动刷新顺带重读策略目录，别处新建的定义也能出现在发起回放的下拉里。 */
+function manualRefresh() {
+  strategyStore.invalidateStrategyCatalog();
+  void loadStrategies();
+  void loadReplays();
 }
 
 async function loadStrategies() {

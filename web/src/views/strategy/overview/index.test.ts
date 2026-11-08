@@ -79,7 +79,10 @@ describe("strategy overview page", () => {
     const wrapper = mount(OverviewPage, { global: { stubs } });
     await flushPromises();
     expect(ctx.listStrategyTargets.mock.calls.map(call => call[0]).sort()).toEqual(["a", "b"]);
-    expect(wrapper.find(".alert").exists()).toBe(false);
+    // 单个目标读取失败不算总览失败，只提示有几个实例没读到
+    expect(wrapper.findAll(".alert").map(item => item.text())).toEqual([
+      "1 个实例的最新目标读取失败，这些实例暂时显示为没有目标。"
+    ]);
     expect(wrapper.text()).toContain("BTC-USDT 25.00%");
     expect(wrapper.text()).toContain("已停用，不再产出目标");
   });
@@ -99,5 +102,18 @@ describe("strategy overview page", () => {
     const wrapper = mount(OverviewPage, { global: { stubs } });
     await flushPromises();
     expect(wrapper.find(".alert").text()).toContain("总览读取失败：网络错误");
+    // 没读到过时统计条不能显示成“需要处理 0”，下面各栏也不能显示成“没有”
+    expect(wrapper.findAll(".stat__value").every(item => item.text() === "—")).toBe(true);
+    expect(wrapper.text()).not.toContain("当前空间还没有策略实例");
+    expect(wrapper.text()).not.toContain("没有待处理事项");
+    expect(wrapper.text()).not.toContain("没有进行中的回放");
+  });
+
+  it("says the replay list failed instead of claiming there is no replay", async () => {
+    ctx.listReplays.mockRejectedValueOnce(new Error("回放服务不可用"));
+    const wrapper = mount(OverviewPage, { global: { stubs } });
+    await flushPromises();
+    expect(wrapper.text()).toContain("回放读取失败：回放服务不可用");
+    expect(wrapper.text()).not.toContain("没有进行中的回放");
   });
 });

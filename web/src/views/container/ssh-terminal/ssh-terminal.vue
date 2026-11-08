@@ -58,13 +58,13 @@
     <!-- 文件管理弹窗 -->
     <a-modal
       v-model:visible="fileManagerVisible"
-      title="文件管理"
+      :title="fileManagerHost ? `文件管理 · ${fileManagerHost}` : '文件管理'"
       :width="960"
       :footer="false"
       :body-style="{ padding: 0, height: '70vh', overflowY: 'auto' }"
       unmount-on-close
     >
-      <SshFileManager :session-id="fileManagerSessionId" />
+      <SshFileManager :session-id="fileManagerSessionId" :host-label="fileManagerHost" />
     </a-modal>
   </div>
 </template>
@@ -366,11 +366,13 @@ const disconnectCurrent = async () => {
 
 const fileManagerVisible = ref(false);
 const fileManagerSessionId = ref("");
+const fileManagerHost = ref("");
 
 const openFileManager = () => {
   const tab = activeTab.value;
   if (!tab) return;
   fileManagerSessionId.value = tab.id;
+  fileManagerHost.value = tab.hostId;
   fileManagerVisible.value = true;
 };
 

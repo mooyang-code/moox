@@ -24,6 +24,10 @@
         >详情加载失败：{{ store.detailError
         }}<template #action><a-button size="small" @click="refreshDetail">重试</a-button></template></a-alert
       >
+      <a-alert v-if="logicalAccountError" type="warning" show-icon class="top-alert">
+        组合账户读取失败：{{ logicalAccountError }}。账户是否暂停、能否执行目标暂时无法确认。
+        <template #action><a-button size="small" @click="reloadLogicalAccount">重试</a-button></template>
+      </a-alert>
       <a-alert v-if="logicalAccount?.automation_state === 'PAUSED'" type="warning" show-icon class="top-alert">
         组合账户已暂停，目标不会执行，需要到组合账户恢复自动执行。
         <template #action>
@@ -171,7 +175,11 @@ const {
     controlUncertain.value = false;
   }
 });
-const logicalAccount = useLogicalAccount(computed(() => store.instance?.logical_account_id));
+const {
+  account: logicalAccount,
+  error: logicalAccountError,
+  reload: reloadLogicalAccount
+} = useLogicalAccount(computed(() => store.instance?.logical_account_id));
 
 // 研究回放不支持策略池（Strategy 的 StartReplay 直接拒绝），按钮禁用并说明原因。
 const POOL_REPLAY_REASON = "研究回放暂不支持策略池：成员的净值与分配比例要在池实例启用后的预热与运行中查看";
@@ -189,8 +197,10 @@ const definitionEmptyText = computed(() =>
 );
 
 async function refreshDetail() {
+  const account = reloadLogicalAccount();
   if (controlUncertain.value) await reconcileControl();
   else await refresh();
+  await account;
 }
 /** 启停结果未知时重新读取实例，读到最新状态后解除“状态未知”。 */
 async function reconcileControl() {
