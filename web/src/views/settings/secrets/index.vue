@@ -12,10 +12,10 @@
             @search="onSearch"
             @clear="onSearch"
           />
-          <a-select v-model="filters.category" placeholder="分类" style="width: 140px" allow-clear @change="load">
+          <a-select v-model="filters.category" placeholder="分类" style="width: 140px" allow-clear @change="onSearch">
             <a-option v-for="item in categoryOptions" :key="item.value" :value="item.value">{{ item.label }}</a-option>
           </a-select>
-          <a-select v-model="filters.status" placeholder="状态" style="width: 120px" allow-clear @change="load">
+          <a-select v-model="filters.status" placeholder="状态" style="width: 120px" allow-clear @change="onSearch">
             <a-option value="active">启用</a-option>
             <a-option value="inactive">禁用</a-option>
           </a-select>
@@ -71,9 +71,9 @@
           </a-table-column>
           <a-table-column title="状态" :width="90">
             <template #cell="{ record }">
-              <a-tag size="small" :color="record.status === 'active' ? 'green' : 'gray'">
+              <StatusMark :tone="record.status === 'active' ? 'ok' : ''">
                 {{ record.status === "active" ? "启用" : "禁用" }}
-              </a-tag>
+              </StatusMark>
             </template>
           </a-table-column>
           <a-table-column title="创建人" data-index="creator" :width="100" />
@@ -102,7 +102,13 @@
       </a-table>
 
       <!-- 新增/编辑弹窗 -->
-      <a-modal v-model:visible="visible" width="720px" :title="modalTitle" @before-ok="submit" @cancel="visible = false">
+      <a-modal
+        v-model:visible="visible"
+        width="min(720px, 100vw)"
+        :title="modalTitle"
+        @before-ok="submit"
+        @cancel="visible = false"
+      >
         <a-form :model="form" auto-label-width>
           <a-form-item field="name" label="名称" required>
             <a-input v-model="form.name" placeholder="例如：交易所-生产环境" />
@@ -162,7 +168,7 @@
       <!-- 导出：全部秘钥连同明文用口令加密成迁移包，在服务端完成，浏览器只拿到密文 -->
       <a-modal
         v-model:visible="exportVisible"
-        width="560px"
+        width="min(560px, 100vw)"
         title="导出全部秘钥"
         ok-text="导出"
         :ok-loading="exporting"
@@ -186,7 +192,7 @@
       <!-- 导入：按 secret_id 导入迁移包，引用这些秘钥的配置迁移后仍然有效 -->
       <a-modal
         v-model:visible="importVisible"
-        width="600px"
+        width="min(600px, 100vw)"
         title="导入秘钥"
         :ok-text="importResult ? '完成' : '导入'"
         :ok-loading="importing"
@@ -228,6 +234,7 @@
 </template>
 
 <script setup lang="ts">
+import StatusMark from "@/views/trading/accounts/shared/status-mark.vue";
 import { computed, onMounted, reactive, ref } from "vue";
 import { Message } from "@arco-design/web-vue";
 import {

@@ -200,7 +200,7 @@
               <h3>
                 主机工作台<small>{{ hosts.length }}</small>
               </h3>
-              <a @click="go('/ops/monitor')">服务 {{ services.available ? `${services.healthy}/${services.total}` : "—" }} →</a>
+              <a @click="go('/ops/hosts')">全部主机 →</a>
             </header>
             <div class="tile-body">
               <p v-if="!hosts.length" class="tile-empty">
@@ -239,10 +239,17 @@
                 <template v-else-if="liveErrors.activity">读取失败 · <a @click="manualRefresh">重试</a></template>
                 <template v-else>读取中…</template>
               </p>
-              <div v-for="row in activity" :key="row.key" class="line activity-line" :title="row.title">
+              <button
+                v-for="row in activity"
+                :key="row.key"
+                type="button"
+                class="line activity-line"
+                :title="row.title"
+                @click="go('/ops/activity')"
+              >
                 <span class="muted" :title="row.whenTitle">{{ row.when }}</span>
                 <span class="ellipsis">{{ row.title }}</span>
-              </div>
+              </button>
             </div>
           </section>
         </div>
@@ -292,7 +299,6 @@ import {
   type HomeTarget,
   type NameBook
 } from "./home-model";
-import { serviceHealth } from "./service-health";
 import { formatInstant } from "@/utils/time-zone";
 import { useDisplayZone } from "@/hooks/useDisplayZone";
 
@@ -390,7 +396,6 @@ const allClearText = computed(() => {
   if (!overview.value) return "读取中…";
   return failedCount.value ? `监控没有关注项，另有 ${failedCount.value} 项读取失败` : "一切正常";
 });
-const services = computed(() => serviceHealth(overview.value, monitorError.value));
 const kpis = computed(() =>
   kpiCards({
     strategies: strategies.value,
@@ -414,7 +419,7 @@ function stepStrategy(delta: number) {
 }
 
 const quickLinks: { label: string; icon: string; target: HomeTarget }[] = [
-  { label: "K 线浏览", icon: "icon-bar-chart", target: "/collector/tasks?tab=results" },
+  { label: "采集结果", icon: "icon-bar-chart", target: "/collector/tasks?tab=results" },
   { label: "因子结果", icon: "icon-experiment", target: "/factor/tasks?tab=results" },
   { label: "策略结果", icon: "icon-compass", target: resultsLink() },
   { label: "策略回放", icon: "icon-history", target: replayLink() },

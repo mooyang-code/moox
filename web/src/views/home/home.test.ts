@@ -149,7 +149,7 @@ describe("home page", () => {
   it("puts the quick links in the banner and links them to their pages", async () => {
     const wrapper = await render();
     const links = wrapper.findAll(".banner .quick");
-    expect(links.map(link => link.text())).toEqual(["K 线浏览", "因子结果", "策略结果", "策略回放", "交易账户", "监控告警"]);
+    expect(links.map(link => link.text())).toEqual(["采集结果", "因子结果", "策略结果", "策略回放", "交易账户", "监控告警"]);
     await links[0].trigger("click");
     expect(ctx.push).toHaveBeenCalledWith("/collector/tasks?tab=results");
   });
