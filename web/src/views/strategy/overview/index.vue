@@ -52,10 +52,11 @@
                 <span v-else-if="!card.chips.length" class="task-card__empty">{{
                   card.state === "zero" ? "零仓位目标" : card.state === "empty" ? "当前会话尚无结果" : "暂无可展示的目标"
                 }}</span>
-                <a-tag v-for="chip in card.chips" :key="chip.instrumentId" size="small" :color="chip.short ? 'red' : 'green'">
-                  {{ chip.text }}
-                </a-tag>
-                <a-tag v-if="card.more" size="small">+{{ card.more }}</a-tag>
+                <span v-else class="task-card__targets"
+                  ><template v-for="(chip, index) in card.chips" :key="chip.instrumentId"
+                    >{{ index ? " · " : "" }}<span :class="{ 'is-short': chip.short }">{{ chip.text }}</span></template
+                  ><template v-if="card.more"> · 另有 {{ card.more }} 个</template></span
+                >
               </div>
               <footer class="task-card__links">
                 <span v-if="card.period" class="cell-sub">{{ card.period }}</span>
@@ -353,6 +354,12 @@ watch(
   margin: var(--moox-space-2) 0;
 }
 
+.task-card__targets {
+  font-size: 13px;
+}
+.task-card__targets .is-short {
+  color: rgb(var(--danger-6));
+}
 .task-card__empty {
   color: var(--color-text-3);
   font-size: 12px;

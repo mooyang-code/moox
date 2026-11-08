@@ -50,6 +50,7 @@
     </div>
     <a-alert v-if="tasksError" type="error" show-icon class="block">因子任务列表加载失败：{{ tasksError }}</a-alert>
     <template v-if="result">
+      <p v-if="resultSource !== source" class="trial-outdated">下面的结果对应修改前的 DSL，重新试算看新的结果。</p>
       <a-alert v-if="!result.diagnostics.length && !result.trial" type="success" show-icon class="block">DSL 校验通过</a-alert>
       <a-alert
         v-for="item in result.diagnostics"
@@ -60,16 +61,16 @@
       >
       <a-tabs v-if="result.resolved_json || result.trial" default-active-key="trial">
         <a-tab-pane v-if="result.trial" key="trial" title="试算结果">
-          <a-space wrap class="block">
-            <a-tag :color="result.trial.status === 'ok' ? 'green' : 'orange'">{{
-              result.trial.status === "ok" ? "ok" : `跳过：${skipReasonLabel(result.trial.skip_reason)}`
-            }}</a-tag>
-            <a-tag>K 线结束 {{ formatInstant(result.trial.bar_end_time, displayZone) }}</a-tag>
-            <a-tag v-for="target in result.trial.targets" :key="targetKey(target.instrument_id, target.market)" color="arcoblue"
-              >{{ target.instrument_id }}{{ target.market ? `（${marketLabel(target.market)}）` : "" }}
-              {{ percent(target.target_weight) }}</a-tag
+          <p class="block trial-line" :class="{ 'is-skipped': result.trial.status !== 'ok' }">
+            {{ result.trial.status === "ok" ? "试算通过" : `本期跳过：${skipReasonLabel(result.trial.skip_reason)}` }}，K 线结束
+            {{ formatInstant(result.trial.bar_end_time, displayZone) }}
+          </p>
+          <p v-if="result.trial.targets.length" class="block trial-line">
+            目标：<template v-for="(target, index) in result.trial.targets" :key="targetKey(target.instrument_id, target.market)"
+              >{{ index ? " · " : "" }}{{ target.instrument_id }}{{ target.market ? `（${marketLabel(target.market)}）` : "" }}
+              {{ percent(target.target_weight) }}</template
             >
-          </a-space>
+          </p>
           <ResultItems :result="result.trial" :items="result.trial_items" />
         </a-tab-pane>
         <a-tab-pane v-if="result.resolved_json" key="binding" title="绑定解析"
@@ -107,6 +108,8 @@ const tasks = ref<TaskOption[]>([]);
 const tasksLoading = ref(false);
 const running = ref(false);
 const result = ref<ValidateStrategyResult | null>(null);
+// 结果对应的 DSL：DSL 改了以后旧结果保留，但标明对应修改前的 DSL。
+const resultSource = ref("");
 const tasksError = ref("");
 let loadedSpace = "";
 // 切换空间时两个计数都递增，让旧空间的任务列表与试算结果作废。
@@ -191,9 +194,14 @@ async function run() {
     const factorTasks = Object.fromEntries(
       activeMarkets.value.flatMap(market => (selected[market] ? [[market, selected[market] as string]] : []))
     );
-    const next = await validateStrategy(props.source, factorTasks);
-    if (requestId === runRequest) result.value = next;
+    const source = props.source;
+    const next = await validateStrategy(source, factorTasks);
+    if (requestId === runRequest) {
+      result.value = next;
+      resultSource.value = source;
+    }
   } catch (err) {
+    if (requestId === runRequest) resultSource.value = props.source;
     if (requestId === runRequest)
       result.value = {
         diagnostics: [err instanceof Error ? err.message : "试算失败"],
@@ -206,12 +214,21 @@ async function run() {
   }
 }
 
-// DSL 或所选任务一变，在途的试算作废、已有结果清除：不能在当前输入下展示旧输入的校验与解释。
+// 所选任务一变，在途的试算作废、已有结果清除：不能在当前任务下展示别的任务的结果。
 watch(
-  () => [props.source, singleMarket.value, JSON.stringify(selected)],
+  () => [singleMarket.value, JSON.stringify(selected)],
   () => {
     runRequest += 1;
     result.value = null;
+    running.value = false;
+  },
+  { flush: "sync" }
+);
+// DSL 一变，在途的试算作废；已有结果保留，并标明对应修改前的 DSL。
+watch(
+  () => props.source,
+  () => {
+    runRequest += 1;
     running.value = false;
   },
   { flush: "sync" }
@@ -239,6 +256,18 @@ watch(
 </script>
 
 <style scoped>
+.trial-line {
+  margin: 0 0 6px;
+  font-size: 13px;
+}
+.trial-line.is-skipped {
+  color: rgb(var(--warning-6));
+}
+.trial-outdated {
+  margin: 0 0 8px;
+  color: rgb(var(--warning-6));
+  font-size: 13px;
+}
 .trial {
   display: grid;
   gap: 10px;

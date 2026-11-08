@@ -9,14 +9,19 @@
           <h2>{{ editing ? "编辑策略定义" : "新建策略定义" }}</h2>
           <span>这里只保存 DSL，不会创建实例或启用策略。</span>
         </div>
-        <a-space wrap
-          ><a-button :disabled="loading || saving" @click="loadTemplate('ranked')">截面选股模板</a-button
-          ><a-button :disabled="loading || saving" @click="loadTemplate('signal')">择时模板</a-button
-          ><a-button :disabled="loading || saving" @click="loadTemplate('tuned')">动态调参模板</a-button
-          ><a-button :disabled="loading || saving" @click="loadTemplate('mixed')">混合市场模板</a-button
-          ><a-button :disabled="loading || saving" @click="loadTemplate('pool')">策略池模板</a-button
-          ><a-button type="primary" :disabled="!loaded || loading" :loading="saving" @click="save">保存定义</a-button></a-space
-        >
+        <a-space wrap>
+          <a-dropdown :disabled="loading || saving" @select="onTemplateSelect">
+            <a-button :disabled="loading || saving">插入示例<icon-down /></a-button>
+            <template #content>
+              <a-doption value="ranked">截面选股</a-doption>
+              <a-doption value="signal">择时</a-doption>
+              <a-doption value="tuned">动态调参</a-doption>
+              <a-doption value="mixed">混合市场</a-doption>
+              <a-doption value="pool">策略池</a-doption>
+            </template>
+          </a-dropdown>
+          <a-button type="primary" :disabled="!loaded || loading" :loading="saving" @click="save">保存定义</a-button>
+        </a-space>
       </div>
       <div v-if="editing && loaded && !dirty" class="next-steps">
         <span>定义已保存，接下来可以：</span>
@@ -154,7 +159,11 @@ const templates = {
   mixed: mixedMarketTemplate,
   pool: poolTemplate
 };
-function loadTemplate(kind: keyof typeof templates) {
+type TemplateKind = keyof typeof templates;
+function onTemplateSelect(value: unknown) {
+  if (typeof value === "string" && value in templates) loadTemplate(value as TemplateKind);
+}
+function loadTemplate(kind: TemplateKind) {
   if (!loaded.value) return;
   if (dirty.value && !window.confirm("当前 DSL 尚未保存，确认替换？")) return;
   source.value = templates[kind];
