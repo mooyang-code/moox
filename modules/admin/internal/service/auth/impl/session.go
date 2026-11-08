@@ -2,6 +2,7 @@ package impl
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/admin/internal/service/auth/model"
@@ -12,6 +13,19 @@ import (
 
 var rawSessionOperations = map[string]struct{}{
 	"ssh_ws": {}, "sftp_download": {}, "sftp_upload": {},
+	model.RawOperationArchiveDownload: {}, model.RawOperationArchiveRecent: {},
+}
+
+// validRawResource 校验 ticket 绑定的资源：SSH 类是 SSH 会话 ID；归档类是 "<空间>/<数据集>"，恰好一个斜杠，两段非空、不以点开头。
+func validRawResource(operation, resource string) bool {
+	if resource == "" {
+		return false
+	}
+	if operation != model.RawOperationArchiveDownload && operation != model.RawOperationArchiveRecent {
+		return true
+	}
+	space, dataset, ok := strings.Cut(resource, "/")
+	return ok && model.ValidArchiveResourcePart(space) && model.ValidArchiveResourcePart(dataset)
 }
 
 func (s *AuthServiceImpl) Logout(ctx context.Context, req *pb.LogoutReq) (*pb.LogoutRsp, error) {
@@ -36,6 +50,9 @@ func (s *AuthServiceImpl) IssueRawSessionTicket(ctx context.Context, req *pb.Iss
 	}
 	if req.GetSessionId() == "" {
 		return &pb.IssueRawSessionTicketRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_INVALID_PARAM, Msg: "session_id不能为空"}}, nil
+	}
+	if !validRawResource(req.GetOperation(), req.GetSessionId()) {
+		return &pb.IssueRawSessionTicketRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_INVALID_PARAM, Msg: "归档操作的 session_id 必须是 <空间>/<数据集>"}}, nil
 	}
 	userID := string(trpc.GetMetaData(ctx, model.CtxUserID))
 	sid := string(trpc.GetMetaData(ctx, model.CtxSessionID))

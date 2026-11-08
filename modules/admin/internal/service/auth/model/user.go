@@ -1,6 +1,7 @@
 package model
 
 import (
+	"strings"
 	"time"
 )
 
@@ -43,6 +44,18 @@ type RawSessionTicket struct {
 	UserID            string    `json:"user_id"`
 	Operation         string    `json:"operation"`
 	ExpiresAt         time.Time `json:"expires_at"`
+}
+
+// 归档的两个一次性 ticket 操作：下载分区副本、查看最新暂存行。ResourceSessionID 填 "<空间>/<数据集>"，
+// 使用时核对请求里的 space、dataset 与它一致（单用户，不另做空间授权）。
+const (
+	RawOperationArchiveDownload = "archive_download"
+	RawOperationArchiveRecent   = "archive_recent"
+)
+
+// ValidArchiveResourcePart 报告空间或数据集 ID 能否作为归档 ticket 资源的一段：非空、不含斜杠、不以点开头、不超过 128 字节。
+func ValidArchiveResourcePart(part string) bool {
+	return part != "" && len(part) <= 128 && !strings.ContainsAny(part, `/\`) && !strings.HasPrefix(part, ".")
 }
 
 // LoginAttempt 登录尝试记录 (用于BadgerDB)

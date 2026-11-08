@@ -241,13 +241,18 @@ func TestConsoleAuthenticationPrecedesRemoteDispatch(t *testing.T) {
 	require.Equal(t, 1, calls)
 }
 
-func TestConsoleSSHStreamingRoutesRetainTicketOwnerAndExactBody(t *testing.T) {
+// 每条裸路由（SSH 流式与归档）都只接受一次自己操作的 ticket，并把原样的请求体与用户交给处理器。
+func TestConsoleRawRoutesRetainTicketOwnerAndExactBody(t *testing.T) {
 	for method, operation := range rawRouteOperations {
 		t.Run(method, func(t *testing.T) {
 			store, _, _, sid := setupRequestAuthTest(t)
 			SetRawSessionOwnerVerifier(func(session, user string) bool { return session == "ssh-1" && user == "u1" })
 			t.Cleanup(func() { SetRawSessionOwnerVerifier(nil) })
-			store.tickets["ticket-1"] = authmodel.RawSessionTicket{TicketID: "ticket-1", SessionID: sid, ResourceSessionID: "ssh-1", UserID: "u1", Operation: operation, ExpiresAt: time.Now().Add(time.Minute)}
+			resource, query := "ssh-1", "session_id=ssh-1"
+			if strings.HasPrefix(method, "archive/") {
+				resource, query = "crypto/ds", "space=crypto&dataset=ds"
+			}
+			store.tickets["ticket-1"] = authmodel.RawSessionTicket{TicketID: "ticket-1", SessionID: sid, ResourceSessionID: resource, UserID: "u1", Operation: operation, ExpiresAt: time.Now().Add(time.Minute)}
 			parts := strings.Split(method, "/")
 			body := []byte("--multipart\r\nstreamed bytes\x00\xff\r\n")
 			calls := 0
@@ -261,7 +266,7 @@ func TestConsoleSSHStreamingRoutesRetainTicketOwnerAndExactBody(t *testing.T) {
 			})
 			t.Cleanup(func() { rawHandlersMutex.Lock(); delete(rawHandlers[parts[0]], parts[1]); rawHandlersMutex.Unlock() })
 			router := newTestRouter(t, nil, nil).buildControlRouter()
-			path := fmt.Sprintf("/api/admin/%s?ticket=ticket-1&session_id=ssh-1", method)
+			path := fmt.Sprintf("/api/admin/%s?ticket=ticket-1&%s", method, query)
 			rr := httptest.NewRecorder()
 			router.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body)))
 			require.Equal(t, http.StatusAccepted, rr.Code)
