@@ -41,6 +41,12 @@ func TestSnapshotRelayAllowlist(t *testing.T) {
 		"duplicate port":      func(s *pb.HostGatewaySnapshot) { s.Relays[0].Ports[0].Port = healthPort },
 		"duplicate caller":    func(s *pb.HostGatewaySnapshot) { s.Relays[0].Ports[0].Callers = []string{"monitor", "monitor"} },
 		"relay on other host": func(s *pb.HostGatewaySnapshot) { s.HostId = "home" },
+		"data port to monitor": func(s *pb.HostGatewaySnapshot) {
+			s.Relays[0].Ports = append(s.Relays[0].Ports, &pb.HostGatewayRelayPort{Port: 11428, Callers: []string{"monitor", "moox-cli"}})
+		},
+		"data port widened": func(s *pb.HostGatewaySnapshot) {
+			s.Relays[0].Ports = append(s.Relays[0].Ports, &pb.HostGatewayRelayPort{Port: 11428, Callers: []string{"console", "monitor"}})
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			changed := proto.Clone(raw).(*pb.HostGatewaySnapshot)
@@ -50,4 +56,21 @@ func TestSnapshotRelayAllowlist(t *testing.T) {
 			require.ErrorIs(t, err, ErrInvalid)
 		})
 	}
+}
+
+// 新版 Admin 给出站主机上的归档 worker 编译出数据端口（只对 console）；旧版 Admin 的快照没有这一项，新网关照样接受。
+func TestSnapshotRelayAcceptsDataPortAndLegacySnapshot(t *testing.T) {
+	legacy := testsnapshot.NewWithOutbound(t, "control", "home")
+	_, err := Build("control", legacy)
+	require.NoError(t, err)
+
+	withData := proto.Clone(legacy).(*pb.HostGatewaySnapshot)
+	withData.Relays[0].Ports = append(withData.Relays[0].Ports, &pb.HostGatewayRelayPort{Port: 11428, Callers: []string{"console"}})
+	testsnapshot.Rehash(t, withData)
+	view, err := Build("control", withData)
+	require.NoError(t, err)
+	relay, ok := view.Relay("home")
+	require.True(t, ok)
+	require.True(t, relay.Allowed("console", 11428))
+	require.False(t, relay.Allowed("monitor", 11428))
 }

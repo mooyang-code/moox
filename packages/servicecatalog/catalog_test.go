@@ -122,6 +122,28 @@ func TestCatalogRejectsInvalidDefinitions(t *testing.T) {
 			component.Health = Health{Kind: "none"}
 		}},
 		{"external program with loopback health", func(c *Catalog) { componentPtr(c, "archive-worker").Health.Loopback = true }},
+		{"relay_http on a regular component", func(c *Catalog) {
+			componentPtr(c, "monitor").RelayHTTP = &RelayHTTP{Port: 11998, Callers: []string{"console"}}
+		}},
+		{"relay_http without callers", func(c *Catalog) { componentPtr(c, "archive-worker").RelayHTTP.Callers = nil }},
+		{"relay_http unknown caller", func(c *Catalog) { componentPtr(c, "archive-worker").RelayHTTP.Callers = []string{"typo"} }},
+		{"relay_http external caller", func(c *Catalog) {
+			componentPtr(c, "archive-worker").RelayHTTP.Callers = []string{"factor-engine"}
+		}},
+		{"relay_http host gateway caller", func(c *Catalog) {
+			componentPtr(c, "archive-worker").RelayHTTP.Callers = []string{"host-gateway@*"}
+		}},
+		{"relay_http duplicate caller", func(c *Catalog) {
+			componentPtr(c, "archive-worker").RelayHTTP.Callers = []string{"console", "console"}
+		}},
+		{"relay_http shares its health port", func(c *Catalog) { componentPtr(c, "archive-worker").RelayHTTP.Port = 11418 }},
+		{"relay_http uses another component's health port", func(c *Catalog) {
+			componentPtr(c, "archive-worker").RelayHTTP.Port = componentPtr(c, "factor-engine").Health.Port
+		}},
+		{"relay_http uses the gateway remote port", func(c *Catalog) {
+			componentPtr(c, "archive-worker").RelayHTTP.Port = HostGatewayRemotePort
+		}},
+		{"relay_http port out of range", func(c *Catalog) { componentPtr(c, "archive-worker").RelayHTTP.Port = 70000 }},
 		{"external program is an internal caller", func(c *Catalog) { servicePtr(c, cloud).ACL[0].Callers = []string{"factor-engine"} }},
 		{"external program outside systemd", func(c *Catalog) { componentPtr(c, "factor-engine").Doctor.Supervisor = SupervisorMooxRuntime }},
 		{"systemd unit is missing", func(c *Catalog) { componentPtr(c, "factor-engine").Doctor.Unit = "" }},
@@ -409,6 +431,17 @@ func TestExternalProgramComponents(t *testing.T) {
 				}
 			}
 		}
+	}
+	// 归档 worker 的数据端口只给控制台，计入它占用的端口。
+	worker, _ := c.Component("archive-worker")
+	if worker.RelayHTTP == nil || worker.RelayHTTP.Port != 11428 || !slices.Equal(worker.RelayHTTP.Callers, []string{"console"}) {
+		t.Fatalf("archive-worker relay_http = %+v", worker.RelayHTTP)
+	}
+	if !slices.Contains(worker.AllPorts(), 11428) || !slices.Contains(worker.AllPorts(), 11418) {
+		t.Fatalf("archive-worker ports = %v", worker.AllPorts())
+	}
+	if !c.LocalRelayPort(11428) || !c.LocalRelayPort(11418) || c.LocalRelayPort(22) {
+		t.Fatal("local relay ports must be health and relay_http ports only")
 	}
 	if err := ValidateSupervisor("", ""); err != nil {
 		t.Fatal(err)

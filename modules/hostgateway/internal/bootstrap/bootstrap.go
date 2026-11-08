@@ -341,17 +341,22 @@ func startRelayClient(ctx context.Context, cfg config.Config, material *tlsconfi
 	}
 	client, err := relay.NewClient(relay.ClientOptions{
 		HostID: cfg.Host.ID, ControlHost: cfg.Control.HostID, Target: cfg.Control.Target, TLS: tlsConfig, Credentials: credentials,
-		Active: active,
-		Allowed: func(port int) bool {
-			return strconv.Itoa(port) == remotePort || catalog.HealthPort(port)
-		},
-		Warn: func(s string) { log.Print(s) },
+		Active:  active,
+		Allowed: relayLocalPorts(catalog, remotePort),
+		Warn:    func(s string) { log.Print(s) },
 	})
 	if err != nil {
 		return err
 	}
 	go client.Run(ctx)
 	return nil
+}
+
+// relayLocalPorts 返回出站主机允许 control 接入的本机端口：网关跨主机端口、组件健康端口与外部程序的 relay_http 端口。
+func relayLocalPorts(catalog servicecatalog.Catalog, remotePort string) func(int) bool {
+	return func(port int) bool {
+		return strconv.Itoa(port) == remotePort || catalog.LocalRelayPort(port)
+	}
 }
 
 func relayStatusProto(items []relay.Status) []*pb.RelaySessionStatus {

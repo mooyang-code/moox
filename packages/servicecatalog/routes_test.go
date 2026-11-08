@@ -103,6 +103,23 @@ func TestPortCollisionIsPerHostAndDisabledDeploymentHasNoListener(t *testing.T) 
 	}
 }
 
+// relay_http 端口计入组件端口（拓扑的同主机端口冲突与部署预检都用它）；与别的组件撞端口时目录直接拒绝。
+func TestRelayHTTPPortJoinsComponentPorts(t *testing.T) {
+	c, p := mustCatalog(t), productionTopology()
+	p.Deployments = append(p.Deployments, Deployment{HostID: "control", ComponentID: "archive-worker", Status: Enabled})
+	if err := c.ValidateTopology(p); err != nil {
+		t.Fatal(err)
+	}
+	worker, _ := c.Component("archive-worker")
+	if !slices.Contains(componentPorts(worker), 11428) {
+		t.Fatalf("componentPorts misses relay_http: %v", componentPorts(worker))
+	}
+	componentPtr(&c, "monitor").Ports = append(componentPtr(&c, "monitor").Ports, 11428)
+	if err := c.ValidateTopology(p); err == nil || !strings.Contains(err.Error(), "11428") {
+		t.Fatalf("relay_http port conflict accepted: %v", err)
+	}
+}
+
 func TestCompileThreeHostRoutesAndVerificationScopes(t *testing.T) {
 	c, p := mustCatalog(t), productionTopology()
 	want := map[string]struct {
@@ -444,6 +461,46 @@ func TestOutboundFactorHostRelaysExternalProgramHealthPorts(t *testing.T) {
 	}
 	if relay.Allowed("moox-cli", 22) || relay.Allowed("monitor", 22) {
 		t.Fatal("ssh port must not be relayed")
+	}
+	// 归档 worker 的数据端口只对控制台开放。
+	if !relay.Allowed("console", 11428) || relay.Allowed("monitor", 11428) || relay.Allowed("moox-cli", 11428) || relay.Allowed("console", 11418) {
+		t.Fatalf("archive data port relay is wrong: %+v", relay.Ports)
+	}
+	if !slices.Contains(control.VerificationCallers, "console") {
+		t.Fatalf("console must be verified by control: %v", control.VerificationCallers)
+	}
+	for i := 1; i < len(relay.Ports); i++ {
+		if relay.Ports[0].Port != HostGatewayRemotePort || i > 1 && relay.Ports[i-1].Port >= relay.Ports[i].Port {
+			t.Fatalf("relay ports are not ordered: %+v", relay.Ports)
+		}
+	}
+	// 中转许可只接受目录里声明的调用方：把数据端口开给 monitor 或多加调用方都不合法；没有数据端口的旧许可仍合法。
+	for _, callers := range [][]string{{"monitor", "moox-cli"}, {"console", "monitor"}, {"admin"}} {
+		changed := RelayTarget{HostID: relay.HostID}
+		for _, port := range relay.Ports {
+			if port.Port == 11428 {
+				port.Callers = callers
+			}
+			changed.Ports = append(changed.Ports, port)
+		}
+		if c.ValidRelay(changed) {
+			t.Fatalf("relay_http port opened to %v", callers)
+		}
+	}
+	legacy := RelayTarget{HostID: relay.HostID}
+	for _, port := range relay.Ports {
+		if port.Port != 11428 {
+			legacy.Ports = append(legacy.Ports, port)
+		}
+	}
+	if !c.ValidRelay(legacy) {
+		t.Fatalf("relay without the data port rejected: %+v", legacy)
+	}
+	// 装在可直达主机上时没有中转许可，但端口照样参与同主机端口冲突检查。
+	direct := productionTopology()
+	direct.Deployments = append(direct.Deployments, Deployment{HostID: "storage", ComponentID: "archive-worker", Status: Enabled})
+	if err := c.ValidateTopology(direct); err != nil {
+		t.Fatal(err)
 	}
 	// 外部程序不是网关调用方：全部路由的调用方里没有它们，外部身份只经 access 进入。
 	for _, route := range control.Routes {
