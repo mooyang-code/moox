@@ -94,10 +94,10 @@ type StagingSection struct {
 	CacheSize ByteSize `yaml:"cache_size"`
 }
 
-// PacingSection 是节奏与并发。
+// PacingSection 是节奏与并发。RequestSeconds 与 HourQuiet 只在还没收到 mgr 下发的避让规则时使用。
 type PacingSection struct {
 	RequestSeconds [2]int `yaml:"request_seconds"`
-	// MinuteWindow 控制是否只在每分钟的 request_seconds 区间内发请求，默认 true；设为 false 则整分钟都可发（整点静默仍生效）。
+	// MinuteWindow 控制是否按秒窗口避让，默认 true；设为 false 则整分钟都可发（优先于 mgr 下发的规则，整点静默仍生效）。
 	MinuteWindow       bool          `yaml:"minute_window"`
 	HourQuiet          [2]string     `yaml:"hour_quiet"`
 	RequestInterval    time.Duration `yaml:"request_interval"`

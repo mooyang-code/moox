@@ -15,6 +15,7 @@ import (
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/config"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/export"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/manager"
+	"github.com/mooyang-code/moox/modules/archive/internal/worker/pacing"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/runner"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/staging"
 	archivepb "github.com/mooyang-code/moox/modules/archive/proto/archivegen"
@@ -50,6 +51,8 @@ type Options struct {
 	DiskUsage  DiskUsage
 	// Remote 是对象存储客户端；nil 表示没有配置。心跳带上它的摘要，每天维护时抽查远端副本。
 	Remote *objectstore.Client
+	// Pacer 是与 Runner 共用的节奏控制：心跳回包里的避让规则替换它的生效规则；nil 时不接收（测试）。
+	Pacer *pacing.Pacer
 }
 
 type activeRun struct {
@@ -232,11 +235,7 @@ func (a *App) heartbeatOnce(ctx context.Context) map[string]string {
 	total, used, free = a.diskTotal, a.diskUsed, a.diskFree
 	maintaining := a.maintaining
 	a.mu.Unlock()
-	pacingJSON, _ := json.Marshal(map[string]any{
-		"request_seconds": cfg.Pacing.RequestSeconds, "hour_quiet": cfg.Pacing.HourQuiet,
-		"max_bytes_per_second": int64(cfg.Pacing.MaxBytesPerSecond), "max_concurrent_runs": cfg.Pacing.MaxConcurrentRuns,
-		"max_runs_per_data_node": cfg.Pacing.MaxRunsPerDataNode,
-	})
+	pacingJSON := a.pacingJSON()
 	callCtx, cancel := context.WithTimeout(ctx, rpcTimeout)
 	defer cancel()
 	rsp, err := a.opts.Manager.Heartbeat(callCtx, &archivepb.ArchiveWorkerHeartbeatReq{
@@ -260,6 +259,7 @@ func (a *App) heartbeatOnce(ctx context.Context) map[string]string {
 	}
 	a.lastError = ""
 	a.lastHeartbeatOK = a.opts.Now()
+	a.applyAvoidance(rsp.GetAvoidance())
 	a.active = rsp.GetActive()
 	if ttl := time.Duration(rsp.GetLeaseTtlSeconds()) * time.Second; ttl > 0 {
 		a.leaseTTL = ttl
@@ -278,6 +278,50 @@ func (a *App) heartbeatOnce(ctx context.Context) map[string]string {
 		tasks[ref.GetSpaceId()+"/"+ref.GetDatasetId()] = ref.GetTaskId()
 	}
 	return tasks
+}
+
+// pacingJSON 是心跳上报的生效节奏：避让规则取 pacer 当前值（mgr 下发或 app.yaml），其余取配置。
+func (a *App) pacingJSON() string {
+	cfg := a.opts.Config
+	rules, minuteWindow := cfg.PacingConfig().ConfigRules(), cfg.Pacing.MinuteWindow
+	if a.opts.Pacer != nil {
+		rules, minuteWindow = a.opts.Pacer.Rules(), a.opts.Pacer.MinuteWindow()
+	}
+	var hourQuiet []string
+	if rules.HourQuiet != nil {
+		hourQuiet = rules.HourQuiet[:]
+	}
+	raw, _ := json.Marshal(map[string]any{
+		"source": rules.Source, "computed_at": rules.ComputedAt, "minute_window": minuteWindow,
+		"every_minutes": rules.EveryMinutes, "before_seconds": rules.BeforeSeconds, "after_seconds": rules.AfterSeconds, "hour_quiet": hourQuiet,
+		"max_bytes_per_second": int64(cfg.Pacing.MaxBytesPerSecond), "max_concurrent_runs": cfg.Pacing.MaxConcurrentRuns,
+		"max_runs_per_data_node": cfg.Pacing.MaxRunsPerDataNode,
+	})
+	return string(raw)
+}
+
+// applyAvoidance 用心跳回包里的避让规则替换 pacer 的生效规则；没有下发或不合法时保留原规则。
+func (a *App) applyAvoidance(rules *archivepb.AvoidanceRules) {
+	if rules == nil || a.opts.Pacer == nil {
+		return
+	}
+	next := pacing.Rules{
+		EveryMinutes: int(rules.GetEveryMinutes()), BeforeSeconds: int(rules.GetBeforeSeconds()), AfterSeconds: int(rules.GetAfterSeconds()),
+		Source: "mgr", ComputedAt: rules.GetComputedAt(),
+	}
+	if rules.GetHourQuietFrom() != "" || rules.GetHourQuietUntil() != "" {
+		next.HourQuiet = &[2]string{rules.GetHourQuietFrom(), rules.GetHourQuietUntil()}
+	}
+	prev := a.opts.Pacer.Rules()
+	if err := a.opts.Pacer.SetRules(next); err != nil {
+		log.Warnf("archive worker ignored avoidance rules from mgr: %v", err)
+		return
+	}
+	if prev.Source != next.Source || prev.EveryMinutes != next.EveryMinutes || prev.BeforeSeconds != next.BeforeSeconds ||
+		prev.AfterSeconds != next.AfterSeconds || fmt.Sprint(prev.HourQuiet) != fmt.Sprint(next.HourQuiet) {
+		log.Infof("archive worker avoidance updated: every=%dm before=%ds after=%ds hour_quiet=%v basis=%s",
+			next.EveryMinutes, next.BeforeSeconds, next.AfterSeconds, next.HourQuiet, rules.GetBasis())
+	}
 }
 
 // ---- 领取与执行 ----

@@ -127,7 +127,7 @@ func TestCompileThreeHostRoutesAndVerificationScopes(t *testing.T) {
 		callers []string
 		hash    string
 	}{
-		"control":  {198, []string{"access", "admin", "cloudfunction", "collector", "collector-stream", "console", "host-agent", "host-gateway@control", "host-gateway@overseas", "host-gateway@storage", "monitor", "moox-cli", "storage-view", "strategy", "trade"}, "4f7db0f44401b009f5ac34dc47db19682f3b0d500801e5381221ce5214d75d82"},
+		"control":  {198, []string{"access", "admin", "archive-mgr", "cloudfunction", "collector", "collector-stream", "console", "host-agent", "host-gateway@control", "host-gateway@overseas", "host-gateway@storage", "monitor", "moox-cli", "storage-view", "strategy", "trade"}, "8ec2c95c2dfbae188c184a299a4a051decece884e780de9b7713ded4a328f738"},
 		"storage":  {80, []string{"access", "archive-mgr", "collector", "collector-stream", "console", "factor-mgr", "monitor", "moox-cli", "strategy"}, "d8cbc0c0358eb28b304be9024ad5b6bb269f5589e2f67b019e8243fb482968b3"},
 		"overseas": {66, []string{"callback-dispatcher", "collector", "console", "monitor", "moox-cli", "strategy"}, "e93196a5b5ecb194054892feae7e2c22d6296e3a9c3e66ac40cc90044ca24a43"},
 	}

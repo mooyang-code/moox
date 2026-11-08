@@ -740,6 +740,11 @@ components:
               - GetTaskResultInventory
             callers:
               - monitor
+          # 归档避让：archive-mgr 只读各空间生效中的采集函数（服务的数据集与频率），据此推出避让时段。
+          - methods:
+              - GetCollectorStatus
+            callers:
+              - archive-mgr
           # 标签同步的运行状态：Monitor 的标签检查读；可选的（来源，市场类型）组合给管理台新建自动标签用。
           - methods:
               - ListTagSyncStatus
@@ -1210,6 +1215,7 @@ components:
         - archive runs and partition registry
       dependencies:
         - storage-primary
+        - collector
       transport: health_only
       functional_observability: deferred
       config_paths:

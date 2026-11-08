@@ -703,7 +703,7 @@ func (m *MgrService) GetArchiveOverview(ctx context.Context, _ *archivepb.GetArc
 		return &archivepb.GetArchiveOverviewRsp{RetInfo: invalid(err)}, nil
 	}
 	now := s.clock()
-	rsp := &archivepb.GetArchiveOverviewRsp{RetInfo: success()}
+	rsp := &archivepb.GetArchiveOverviewRsp{RetInfo: success(), Avoidance: avoidanceToPB(s.avoidance())}
 	workers, err := s.store.ListWorkers(ctx)
 	if err != nil {
 		return &archivepb.GetArchiveOverviewRsp{RetInfo: inner(err)}, nil

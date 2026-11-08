@@ -89,6 +89,10 @@ func TestReviewBoundaryAndInterval(t *testing.T) {
 }
 
 func TestPullAtShiftsOutOfTheAvoidanceWindow(t *testing.T) {
+	quiet, err := newHourQuiet(nil) // 默认规则：整点 :58～:04
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, tc := range []struct{ boundary, want time.Time }{
 		{utc(2026, 10, 17, 12, 40, 0), utc(2026, 10, 17, 12, 40, 25)},
 		{utc(2026, 10, 17, 12, 40, 30), utc(2026, 10, 17, 12, 41, 25)}, // 30s 边界落到下一分钟的第 25 秒
@@ -99,8 +103,8 @@ func TestPullAtShiftsOutOfTheAvoidanceWindow(t *testing.T) {
 		{utc(2026, 10, 17, 13, 4, 0), utc(2026, 10, 17, 13, 4, 25)},
 		{utc(2026, 10, 17, 23, 59, 0), utc(2026, 10, 18, 0, 4, 25)}, // 跨日
 	} {
-		if got := PullAt(tc.boundary); !got.Equal(tc.want) {
-			t.Fatalf("PullAt(%s) = %s, want %s", tc.boundary, got, tc.want)
+		if got := quiet.pullAt(tc.boundary); !got.Equal(tc.want) {
+			t.Fatalf("pullAt(%s) = %s, want %s", tc.boundary, got, tc.want)
 		}
 	}
 	for _, tc := range []struct {
@@ -110,9 +114,45 @@ func TestPullAtShiftsOutOfTheAvoidanceWindow(t *testing.T) {
 		{utc(2026, 10, 17, 12, 57, 59), false}, {utc(2026, 10, 17, 12, 58, 0), true}, {utc(2026, 10, 17, 13, 0, 25), true},
 		{utc(2026, 10, 17, 13, 3, 59), true}, {utc(2026, 10, 17, 13, 4, 0), false},
 	} {
-		if got := InAvoidance(tc.at); got != tc.want {
-			t.Fatalf("InAvoidance(%s) = %v", tc.at, got)
+		if got := quiet.contains(tc.at); got != tc.want {
+			t.Fatalf("contains(%s) = %v", tc.at, got)
 		}
+	}
+}
+
+// 没有整点窗口时（只有 1h 以下的频率）：到点拉取不再顺延到 :04:25，整点前后的检查照常生成运行。
+func TestNoHourQuietDoesNotShiftPulls(t *testing.T) {
+	avoid := &Avoidance{EveryMinutes: 5, BeforeSeconds: AvoidBeforeSeconds, AfterSeconds: AvoidAfterSeconds}
+	timing := Timing{Freq: "5m", Avoid: avoid}
+	pulls, err := NextPulls(timing, utc(2026, 10, 17, 12, 54, 0), 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []time.Time{utc(2026, 10, 17, 12, 55, 25), utc(2026, 10, 17, 13, 0, 25), utc(2026, 10, 17, 13, 5, 25)}
+	for i := range want {
+		if !pulls[i].Equal(want[i]) {
+			t.Fatalf("pulls = %v, want %v", pulls, want)
+		}
+	}
+	d, err := Decide(timing, utc(2026, 10, 17, 12, 55, 0), utc(2026, 10, 17, 12, 34, 0), utc(2026, 10, 17, 13, 0, 25))
+	if err != nil || d.Action != ActionTick {
+		t.Fatalf("整点检查应生成到点拉取: %+v %v", d, err)
+	}
+	// 默认规则下同一时刻落在整点窗口里，什么都不做。
+	d, err = Decide(Timing{Freq: "5m"}, utc(2026, 10, 17, 12, 55, 0), utc(2026, 10, 17, 12, 34, 0), utc(2026, 10, 17, 13, 0, 25))
+	if err != nil || d.Action != ActionNone {
+		t.Fatalf("默认规则整点应跳过: %+v %v", d, err)
+	}
+	// 预计导出时间跟着规则走：收盘 13:00 + 回看 0 → 无窗口时 13:00:25，有窗口时 13:04:25。
+	if at, _ := ExportEstimate(timing, utc(2026, 10, 17, 13, 0, 0), 0); !at.Equal(utc(2026, 10, 17, 13, 0, 25)) {
+		t.Fatalf("无整点窗口的导出估计 = %s", at)
+	}
+	if at, _ := ExportEstimate(Timing{Freq: "5m"}, utc(2026, 10, 17, 13, 0, 0), 0); !at.Equal(utc(2026, 10, 17, 13, 4, 25)) {
+		t.Fatalf("默认规则的导出估计 = %s", at)
+	}
+	// 非法规则在解析时报错。
+	if _, err := NextPulls(Timing{Freq: "5m", Avoid: &Avoidance{EveryMinutes: 7}}, utc(2026, 10, 17, 12, 0, 0), 1); err == nil {
+		t.Fatal("触发间隔不整除 60 必须报错")
 	}
 }
 

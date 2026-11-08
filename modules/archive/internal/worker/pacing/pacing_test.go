@@ -2,6 +2,7 @@ package pacing
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 )
@@ -153,4 +154,111 @@ func TestDisablingTheMinuteWindowKeepsTheHourQuietZone(t *testing.T) {
 	if got := p.AllowedAt(at(1, 58, 30)); !got.Equal(at(2, 4, 0)) {
 		t.Fatalf("整点静默应仍生效: %s", got)
 	}
+}
+
+func TestConfigRulesMatchTheRequestSeconds(t *testing.T) {
+	r := Default().ConfigRules()
+	if r.EveryMinutes != 1 || r.BeforeSeconds != 4 || r.AfterSeconds != 25 || r.HourQuiet == nil || *r.HourQuiet != [2]string{"58:00", "04:00"} || r.Source != "config" {
+		t.Fatalf("rules = %+v", r)
+	}
+	cfg := Default()
+	cfg.RequestSeconds, cfg.HourQuiet = [2]int{0, 59}, [2]string{"00:00", "00:00"}
+	if r := cfg.ConfigRules(); r.EveryMinutes != 0 || r.HourQuiet != nil {
+		t.Fatalf("整分钟可发、无静默: %+v", r)
+	}
+}
+
+func TestSetRulesReplacesTheAvoidanceWhileRunning(t *testing.T) {
+	p := mustPacer(t, Default(), &fakeClock{now: at(1, 0, 0)})
+	// mgr 下发：每 5 分钟触发、[T−5s, T+25s) 不发、不避让整点。
+	if err := p.SetRules(Rules{EveryMinutes: 5, BeforeSeconds: 5, AfterSeconds: 25, Source: "mgr"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct{ in, want time.Time }{
+		{at(1, 4, 54), at(1, 4, 54)},  // 触发前 6 秒：可发
+		{at(1, 4, 55), at(1, 5, 25)},  // :04:55～:05:25 不发
+		{at(1, 5, 10), at(1, 5, 25)},  // 触发后 10 秒
+		{at(1, 5, 25), at(1, 5, 25)},  // 触发后 25 秒起可发（半开区间）
+		{at(1, 6, 3), at(1, 6, 3)},    // 非触发分钟的开头也可发
+		{at(1, 59, 0), at(1, 59, 0)},  // 没有整点窗口
+		{at(1, 59, 57), at(2, 0, 25)}, // 整点也是触发时刻
+	} {
+		if got := p.AllowedAt(tc.in); !got.Equal(tc.want) {
+			t.Fatalf("AllowedAt(%s) = %s, want %s", tc.in.Format("15:04:05"), got.Format("15:04:05"), tc.want.Format("15:04:05"))
+		}
+	}
+	// 改回每分钟触发并加整点窗口。
+	if err := p.SetRules(Rules{EveryMinutes: 1, BeforeSeconds: 5, AfterSeconds: 25, HourQuiet: &[2]string{"58:00", "04:00"}, Source: "mgr"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := p.AllowedAt(at(1, 6, 3)); !got.Equal(at(1, 6, 25)) {
+		t.Fatalf("每分钟触发: %s", got.Format("15:04:05"))
+	}
+	if got := p.AllowedAt(at(1, 30, 55)); !got.Equal(at(1, 31, 25)) {
+		t.Fatalf("前 5 秒不发: %s", got.Format("15:04:05"))
+	}
+	if got := p.AllowedAt(at(1, 58, 30)); !got.Equal(at(2, 4, 25)) {
+		t.Fatalf("整点窗口: %s", got.Format("15:04:05"))
+	}
+	// 不限秒、无整点：随时可发。
+	if err := p.SetRules(Rules{Source: "mgr"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := p.AllowedAt(at(1, 0, 1)); !got.Equal(at(1, 0, 1)) {
+		t.Fatalf("不限秒: %s", got.Format("15:04:05"))
+	}
+	// 非法规则被拒绝，原规则保留。
+	if err := p.SetRules(Rules{EveryMinutes: 7}); err == nil {
+		t.Fatal("触发间隔不整除 60 必须报错")
+	}
+	if err := p.SetRules(Rules{EveryMinutes: 1, BeforeSeconds: 30, AfterSeconds: 30}); err == nil {
+		t.Fatal("秒窗口占满一分钟必须报错")
+	}
+	if r := p.Rules(); r.EveryMinutes != 0 || r.Source != "mgr" {
+		t.Fatalf("rules = %+v", r)
+	}
+}
+
+func TestMinuteWindowOffOverridesManagerRules(t *testing.T) {
+	cfg := Default()
+	cfg.MinuteWindow = false
+	p := mustPacer(t, cfg, &fakeClock{now: at(1, 0, 0)})
+	if err := p.SetRules(Rules{EveryMinutes: 1, BeforeSeconds: 5, AfterSeconds: 25, HourQuiet: &[2]string{"58:00", "04:00"}, Source: "mgr"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := p.AllowedAt(at(1, 10, 3)); !got.Equal(at(1, 10, 3)) {
+		t.Fatalf("minute_window=false 时整分钟可发: %s", got.Format("15:04:05"))
+	}
+	if got := p.AllowedAt(at(1, 59, 0)); !got.Equal(at(2, 4, 0)) {
+		t.Fatalf("整点窗口仍生效: %s", got.Format("15:04:05"))
+	}
+}
+
+func TestSetRulesIsSafeForConcurrentUse(t *testing.T) {
+	p := mustPacer(t, Default(), &fakeClock{now: at(1, 0, 0)})
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					_ = p.AllowedAt(time.Now())
+					_ = p.Rules()
+				}
+			}
+		}()
+	}
+	for i := 0; i < 200; i++ {
+		every := []int{1, 5, 15}[i%3]
+		if err := p.SetRules(Rules{EveryMinutes: every, BeforeSeconds: 5, AfterSeconds: 25, Source: "mgr"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	close(stop)
+	wg.Wait()
 }

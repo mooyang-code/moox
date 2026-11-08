@@ -36,7 +36,7 @@ func (w *WorkerService) ArchiveWorkerHeartbeat(ctx context.Context, req *archive
 	if result.Conflict {
 		return &archivepb.ArchiveWorkerHeartbeatRsp{RetInfo: conflict(fmt.Errorf("worker_id %q 已有另一个存活的实例，请先停止它", req.GetWorkerId()))}, nil
 	}
-	rsp := &archivepb.ArchiveWorkerHeartbeatRsp{RetInfo: success(), Active: result.Active, LeaseTtlSeconds: uint32(ttl / time.Second)}
+	rsp := &archivepb.ArchiveWorkerHeartbeatRsp{RetInfo: success(), Active: result.Active, LeaseTtlSeconds: uint32(ttl / time.Second), Avoidance: avoidanceToPB(s.avoidance())}
 	canceled, err := s.store.RunningRunIDsCanceled(ctx, req.GetWorkerId(), req.GetRunningRunIds())
 	if err != nil {
 		return &archivepb.ArchiveWorkerHeartbeatRsp{RetInfo: inner(err)}, nil

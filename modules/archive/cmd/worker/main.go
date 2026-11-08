@@ -111,7 +111,7 @@ func serve(parent context.Context, cfg *config.Config) (err error) {
 	worker := app.New(app.Options{
 		Config: cfg, Manager: manager.New(gateway), Staging: store, Files: files, InstanceID: instance, Version: Version,
 		Runner:    &runner.Runner{Source: source.New(gateway, secret), Staging: store, Files: files, Pace: pacer, PageRows: cfg.Pacing.PageRows, Remote: remote},
-		DiskUsage: app.StatfsDiskUsage, Remote: remote,
+		DiskUsage: app.StatfsDiskUsage, Remote: remote, Pacer: pacer,
 	})
 	ctx, stop := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
 	defer stop()

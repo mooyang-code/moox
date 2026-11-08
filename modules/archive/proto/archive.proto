@@ -191,6 +191,8 @@ message GetArchiveOverviewRsp {
   uint32 enabled_task_count = 6;
   uint32 queued_run_count = 7;
   repeated string alerts = 8;
+  // 当前生效的避让规则（由各空间的采集频率推出）与依据。
+  AvoidanceRules avoidance = 9;
 }
 
 message ListArchiveTasksReq {
@@ -420,6 +422,22 @@ message ArchiveWorkerHeartbeatRsp {
   repeated string cancel_run_ids = 4;
   // 当前全部任务（只在 active 为真时下发）：worker 维护时删掉不在列表里的数据集的暂存状态。
   repeated TaskRef tasks = 5;
+  // 避让规则：worker 收到后替换本地 pacing 的生效分钟、前后秒数与整点静默（pacing.minute_window=false 时仍整分钟可发）。
+  AvoidanceRules avoidance = 6;
+}
+
+// AvoidanceRules 是避开采集触发时刻的规则，由 archive-mgr 按各空间生效中的采集频率推出。
+// 触发时刻 T 是 Unix 纪元起分钟数为 every_minutes 倍数的第 0 秒，[T − before_seconds, T + after_seconds) 不发请求；
+// every_minutes 为 0 表示不限秒。hour_quiet_from/hour_quiet_until（"MM:SS"）是每小时不发请求的区间，都为空表示不避让整点。
+message AvoidanceRules {
+  uint32 every_minutes = 1;
+  uint32 before_seconds = 2;
+  uint32 after_seconds = 3;
+  string hour_quiet_from = 4;
+  string hour_quiet_until = 5;
+  // basis 是给人看的依据，computed_at 是计算时间（RFC3339）。
+  string basis = 6;
+  string computed_at = 7;
 }
 
 // DataNodeLoad 是 worker 当前在某个 DataNode 上占用的运行数。

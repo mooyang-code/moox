@@ -157,6 +157,20 @@ func TestArchiveCommandsMapToTheRightMethods(t *testing.T) {
 	}
 }
 
+// archive overview 的输出带上当前避让规则（含依据与计算时间）。
+func TestArchiveOverviewPrintsAvoidance(t *testing.T) {
+	g := &archiveFakeGateway{rsp: &archivepb.GetArchiveOverviewRsp{RetInfo: ok(), Avoidance: &archivepb.AvoidanceRules{
+		EveryMinutes: 1, BeforeSeconds: 5, AfterSeconds: 25, HourQuietFrom: "58:00", HourQuietUntil: "04:00",
+		Basis: "crypto：1m、1h；stockcn：5m（每分钟触发，有 1h 及以上，整点避让）", ComputedAt: "2026-11-08T10:00:00Z",
+	}}}
+	useArchiveGateway(t, g)
+	var out bytes.Buffer
+	require.NoError(t, runArchiveOverview(context.Background(), &out, archiveFlags{}))
+	for _, want := range []string{`"avoidance"`, `"every_minutes": 1`, `"hour_quiet_from": "58:00"`, `"basis": "crypto：1m、1h；stockcn：5m`, `"computed_at": "2026-11-08T10:00:00Z"`} {
+		assert.Contains(t, out.String(), want)
+	}
+}
+
 func TestArchiveSurfacesManagerErrors(t *testing.T) {
 	g := &archiveFakeGateway{rsp: &archivepb.CreateArchiveTaskRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_CONFLICT, Msg: "数据集已有归档任务"}}}
 	useArchiveGateway(t, g)

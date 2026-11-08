@@ -13,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/config"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/export"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/manager"
+	"github.com/mooyang-code/moox/modules/archive/internal/worker/pacing"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/runner"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/source"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/staging"
@@ -284,6 +285,53 @@ func TestHeartbeatReportsStateAndAppliesTheManagersInstructions(t *testing.T) {
 	}
 	if !h.app.Snapshot().DiskInsufficient {
 		t.Fatal("读取失败时沿用上一次的判断")
+	}
+}
+
+// 心跳回包的避让规则替换 pacer 的生效规则；心跳的 pacing_json 报生效值；没下发或不合法时保留原规则。
+func TestHeartbeatAppliesAvoidanceRulesToThePacer(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	pacer, err := pacing.New(h.cfg.PacingConfig(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.app.opts.Pacer = pacer
+	h.app.heartbeatOnce(ctx)
+	if js := h.mgr.heartbeats[0].GetPacingJson(); !strings.Contains(js, `"source":"config"`) || !strings.Contains(js, `"every_minutes":1`) {
+		t.Fatalf("未收到下发时报 app.yaml 的值: %s", js)
+	}
+	h.mgr.heartbeat = &archivepb.ArchiveWorkerHeartbeatRsp{Active: true, LeaseTtlSeconds: 30, Avoidance: &archivepb.AvoidanceRules{
+		EveryMinutes: 5, BeforeSeconds: 5, AfterSeconds: 25, Basis: "stockcn：5m", ComputedAt: "2026-11-08T10:00:00Z",
+	}}
+	h.app.heartbeatOnce(ctx) // 本次心跳报的仍是旧值，回包后替换
+	if r := pacer.Rules(); r.Source != "mgr" || r.EveryMinutes != 5 || r.HourQuiet != nil || r.ComputedAt != "2026-11-08T10:00:00Z" {
+		t.Fatalf("rules = %+v", r)
+	}
+	at := time.Date(2026, 11, 8, 10, 4, 56, 0, time.UTC)
+	if got := pacer.AllowedAt(at); !got.Equal(time.Date(2026, 11, 8, 10, 5, 25, 0, time.UTC)) {
+		t.Fatalf("AllowedAt = %s", got)
+	}
+	h.app.heartbeatOnce(ctx)
+	js := h.mgr.heartbeats[2].GetPacingJson()
+	if !strings.Contains(js, `"source":"mgr"`) || !strings.Contains(js, `"every_minutes":5`) || !strings.Contains(js, `"hour_quiet":null`) || !strings.Contains(js, `"minute_window":true`) {
+		t.Fatalf("应报生效值: %s", js)
+	}
+	// 不合法的规则被忽略；回包没有规则时保留。
+	h.mgr.heartbeat = &archivepb.ArchiveWorkerHeartbeatRsp{Active: true, LeaseTtlSeconds: 30, Avoidance: &archivepb.AvoidanceRules{EveryMinutes: 7}}
+	h.app.heartbeatOnce(ctx)
+	h.mgr.heartbeat = &archivepb.ArchiveWorkerHeartbeatRsp{Active: true, LeaseTtlSeconds: 30}
+	h.app.heartbeatOnce(ctx)
+	if r := pacer.Rules(); r.EveryMinutes != 5 {
+		t.Fatalf("应保留原规则: %+v", r)
+	}
+	// 带整点窗口的规则。
+	h.mgr.heartbeat = &archivepb.ArchiveWorkerHeartbeatRsp{Active: true, LeaseTtlSeconds: 30, Avoidance: &archivepb.AvoidanceRules{
+		EveryMinutes: 1, BeforeSeconds: 5, AfterSeconds: 25, HourQuietFrom: "58:00", HourQuietUntil: "04:00",
+	}}
+	h.app.heartbeatOnce(ctx)
+	if r := pacer.Rules(); r.HourQuiet == nil || *r.HourQuiet != [2]string{"58:00", "04:00"} {
+		t.Fatalf("rules = %+v", r)
 	}
 }
 

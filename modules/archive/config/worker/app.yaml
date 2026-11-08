@@ -21,9 +21,10 @@ worker:
 staging:
   cache_size: 256MB
 
+# request_seconds 与 hour_quiet 只在还没收到 archive-mgr 下发的避让规则时使用（mgr 按采集频率推出，心跳回包下发）。
 pacing:
   request_seconds: [25, 55]          # 每分钟内允许发起请求的秒区间
-  minute_window: true                # 是否启用上面的每分钟区间；false 则整分钟都可发请求（整点静默仍生效）
+  minute_window: true                # 是否按秒窗口避让；false 则整分钟都可发请求（优先于 mgr 下发的规则，整点静默仍生效）
   hour_quiet: ["58:00", "04:00"]     # 每小时内不发起请求的区间
   request_interval: 200ms
   max_bytes_per_second: 512KB
