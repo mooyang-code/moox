@@ -13,7 +13,8 @@ describe("密钥删除、禁用的确认说明", () => {
 
   it("下架检测用的只读密钥单独警告；删除时提示只想暂停用禁用", () => {
     const readonly = { secret_id: DELIST_READONLY_SECRET_ID, name: "只读", category: "exchange", status: "active" };
-    expect(secretDeleteText(readonly)).toContain("自动下架检测会停止");
+    expect(secretDeleteText(readonly)).toContain("自动下架检测会一直停止");
+    expect(secretDeleteText(readonly)).toContain("删除后目前补不回来");
     expect(secretDeleteText(readonly)).toContain("只想暂停请用禁用");
     expect(secretToggleText(readonly)).toContain("自动下架检测会停止");
     expect(secretToggleText(readonly)).not.toContain("只想暂停请用禁用");

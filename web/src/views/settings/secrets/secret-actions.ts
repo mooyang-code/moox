@@ -12,9 +12,9 @@ const EXCHANGE_EFFECT =
 
 function consequences(secret: Pick<Secret, "secret_id" | "category">, deleting: boolean): string {
   if (secret.secret_id === DELIST_READONLY_SECRET_ID) {
-    // 这把密钥是初始化时录入的，setup apply 不会重建它，删掉只能重新录入
+    // 采集只认这个固定 ID；删除是软删除，setup apply 不会重建，密钥页新录入的 ID 是随机的，所以删了目前补不回来
     return deleting
-      ? "这是下架检测用的币安只读密钥，删除后自动下架检测会停止，要重新录入才能恢复；只想暂停请用禁用。"
+      ? "这是下架检测用的币安只读密钥。删除后目前补不回来（setup apply 不会重建，新录入的密钥 ID 对不上），自动下架检测会一直停止；只想暂停请用禁用。"
       : "这是下架检测用的币安只读密钥，禁用后自动下架检测会停止。";
   }
   if (secret.category === "exchange") return EXCHANGE_EFFECT;

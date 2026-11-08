@@ -149,8 +149,10 @@ import {
   type CloudAccount
 } from "@/api/cloud-account";
 import { listSecrets, type Secret } from "@/api/admin/secret";
-import { listFunctionInstances } from "@/api/function-instance";
-import { cloudAccountDeleteText } from "./cloud-account-delete";
+import { useSpaceStore } from "@/store/modules/space";
+import { cloudAccountDeleteText, instancesUsingAccount } from "./cloud-account-delete";
+
+const spaceStore = useSpaceStore();
 
 // Props
 const props = defineProps<{
@@ -268,12 +270,10 @@ const onEdit = (record: CloudAccount) => {
 
 // 删除：确认框写清账户名、在用的实例数和后果；失败时显示后端给的原因，确认框保持打开
 const confirmDelete = async (record: CloudAccount) => {
-  let inUse: number | null = null;
-  try {
-    inUse = (await listFunctionInstances({ cloud_account_id: record.account_id, page_size: 1 })).total;
-  } catch {
-    inUse = null;
-  }
+  const inUse = await instancesUsingAccount(
+    record.account_id,
+    spaceStore.spaces.map(space => space.space_id)
+  );
   Modal.confirm({
     title: `删除云账户「${record.account_name || record.account_id}」？`,
     content: cloudAccountDeleteText(inUse),
