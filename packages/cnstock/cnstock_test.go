@@ -65,10 +65,7 @@ func loadSample(t *testing.T, name string) map[string]Quote {
 	if err != nil {
 		t.Fatal(err)
 	}
-	quotes, err := ParseTencent(body)
-	if err != nil {
-		t.Fatal(err)
-	}
+	quotes := ParseTencent(body)
 	result := make(map[string]Quote, len(quotes))
 	for _, quote := range quotes {
 		result[quote.InstrumentID] = quote
@@ -137,10 +134,7 @@ func TestParseTencentSkipsGBKTrailByteTilde(t *testing.T) {
 	fields[tencentFieldCode], fields[tencentFieldLast], fields[tencentFieldTime] = "600000", "10.00", "20261106150000"
 	fields[1] = "\x81\x7e\xb9\xf3" // 两个 GBK 双字节字符，第一个的尾字节是 ~
 	body := []byte(`v_sh600000="` + strings.Join(fields, "~") + `";` + "\n" + `v_pv_none_match="1";`)
-	quotes, err := ParseTencent(body)
-	if err != nil {
-		t.Fatal(err)
-	}
+	quotes := ParseTencent(body)
 	if len(quotes) != 1 || quotes[0].Last != "10.00" || !quotes[0].Time.Equal(cst("2026-11-06 15:00:00")) {
 		t.Fatalf("解析结果 = %+v", quotes)
 	}
@@ -224,5 +218,18 @@ func TestFetchClistRejectsTotalMismatch(t *testing.T) {
 	_, err := FetchClist(context.Background(), ClistQuery{BaseURL: server.URL, PageSize: 1}, func(ClistItem) error { return nil })
 	if !errors.Is(err, ErrProtocol) {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+// 一只的行格式不对只跳过这一只，其他照常返回。
+func TestParseTencentSkipsBadLine(t *testing.T) {
+	sample, err := os.ReadFile("testdata/tencent_close_20261106_a.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := append([]byte(`v_sh600000="1~浦发~600000~坏~";`+"\n"), sample...)
+	quotes := ParseTencent(body)
+	if len(quotes) != 5 {
+		t.Fatalf("应跳过坏行、保留样例里的 5 只：%d", len(quotes))
 	}
 }

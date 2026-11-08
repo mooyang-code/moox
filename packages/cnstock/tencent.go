@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -62,61 +63,74 @@ type Quote struct {
 }
 
 // ParseTencent 解析一次快照响应。上游对不认识的代码返回 v_pv_none_match="1"; 这类行跳过。
+// 某一只的行格式不对时跳过这一行、记日志，其他股票照常返回：一只坏数据不能拖垮整批，缺的那只由调用方按“取不到报价”处理。
 // 正文是 GBK：GBK 双字节字符的第二个字节可能是 0x7E（~），所以按字节切分时跳过双字节字符，股票名不需要解码。
-func ParseTencent(body []byte) ([]Quote, error) {
+func ParseTencent(body []byte) []Quote {
 	var quotes []Quote
 	for _, line := range bytes.Split(body, []byte(";")) {
 		line = bytes.TrimSpace(line)
 		if len(line) == 0 {
 			continue
 		}
-		name, value, ok := bytes.Cut(line, []byte("="))
-		if !ok || !bytes.HasPrefix(name, []byte("v_")) {
-			return nil, fmt.Errorf("%w：腾讯快照行格式不对", ErrProtocol)
-		}
-		symbol := string(bytes.TrimPrefix(name, []byte("v_")))
-		value = bytes.Trim(value, `"`)
-		if strings.HasPrefix(symbol, "pv_none_match") || len(value) <= 2 {
+		quote, ok, err := parseTencentLine(line)
+		if err != nil {
+			log.Printf("cnstock: 跳过一行腾讯快照：%v", err)
 			continue
 		}
-		fields := splitGBK(value, '~')
-		if len(fields) < tencentMinFields {
-			return nil, fmt.Errorf("%w：腾讯快照 %s 只有 %d 个字段", ErrProtocol, symbol, len(fields))
+		if ok {
+			quotes = append(quotes, quote)
 		}
-		instrumentID, err := FromTencentSymbol(symbol)
-		if err != nil {
-			return nil, fmt.Errorf("%w：%v", ErrProtocol, err)
-		}
-		if code := fields[tencentFieldCode]; !strings.HasPrefix(instrumentID, code+".") {
-			return nil, fmt.Errorf("%w：腾讯快照 %s 的代码字段是 %q", ErrProtocol, symbol, code)
-		}
-		at, err := time.ParseInLocation("20060102150405", fields[tencentFieldTime], shanghai)
-		if err != nil {
-			return nil, fmt.Errorf("%w：腾讯快照 %s 的行情时间 %q", ErrProtocol, symbol, fields[tencentFieldTime])
-		}
-		quote := Quote{
-			InstrumentID: instrumentID,
-			Time:         at.UTC(),
-			Halted:       fields[tencentFieldStatus] == tencentStatusHalted,
-			Delisted:     fields[tencentFieldStatus] == tencentStatusDelisted || fields[tencentFieldStatus] == tencentStatusRenamed,
-		}
-		for _, item := range []struct {
-			target *string
-			index  int
-		}{
-			{&quote.Last, tencentFieldLast}, {&quote.PrevClose, tencentFieldPrevClose},
-			{&quote.Bid, tencentFieldBid}, {&quote.Ask, tencentFieldAsk},
-			{&quote.LimitUp, tencentFieldLimitUp}, {&quote.LimitDown, tencentFieldLimitDown},
-		} {
-			text, err := positiveDecimal(fields[item.index])
-			if err != nil {
-				return nil, fmt.Errorf("%w：腾讯快照 %s 第 %d 个字段：%v", ErrProtocol, symbol, item.index, err)
-			}
-			*item.target = text
-		}
-		quotes = append(quotes, quote)
 	}
-	return quotes, nil
+	return quotes
+}
+
+// parseTencentLine 解析一行；ok 为假表示这一行不是报价（上游不认识的代码）。
+func parseTencentLine(line []byte) (Quote, bool, error) {
+	name, value, ok := bytes.Cut(line, []byte("="))
+	if !ok || !bytes.HasPrefix(name, []byte("v_")) {
+		return Quote{}, false, fmt.Errorf("%w：腾讯快照行格式不对", ErrProtocol)
+	}
+	symbol := string(bytes.TrimPrefix(name, []byte("v_")))
+	value = bytes.Trim(value, `"`)
+	if strings.HasPrefix(symbol, "pv_none_match") || len(value) <= 2 {
+		return Quote{}, false, nil
+	}
+	fields := splitGBK(value, '~')
+	if len(fields) < tencentMinFields {
+		return Quote{}, false, fmt.Errorf("%w：腾讯快照 %s 只有 %d 个字段", ErrProtocol, symbol, len(fields))
+	}
+	instrumentID, err := FromTencentSymbol(symbol)
+	if err != nil {
+		return Quote{}, false, fmt.Errorf("%w：%v", ErrProtocol, err)
+	}
+	if code := fields[tencentFieldCode]; !strings.HasPrefix(instrumentID, code+".") {
+		return Quote{}, false, fmt.Errorf("%w：腾讯快照 %s 的代码字段是 %q", ErrProtocol, symbol, code)
+	}
+	at, err := time.ParseInLocation("20060102150405", fields[tencentFieldTime], shanghai)
+	if err != nil {
+		return Quote{}, false, fmt.Errorf("%w：腾讯快照 %s 的行情时间 %q", ErrProtocol, symbol, fields[tencentFieldTime])
+	}
+	quote := Quote{
+		InstrumentID: instrumentID,
+		Time:         at.UTC(),
+		Halted:       fields[tencentFieldStatus] == tencentStatusHalted,
+		Delisted:     fields[tencentFieldStatus] == tencentStatusDelisted || fields[tencentFieldStatus] == tencentStatusRenamed,
+	}
+	for _, item := range []struct {
+		target *string
+		index  int
+	}{
+		{&quote.Last, tencentFieldLast}, {&quote.PrevClose, tencentFieldPrevClose},
+		{&quote.Bid, tencentFieldBid}, {&quote.Ask, tencentFieldAsk},
+		{&quote.LimitUp, tencentFieldLimitUp}, {&quote.LimitDown, tencentFieldLimitDown},
+	} {
+		text, err := positiveDecimal(fields[item.index])
+		if err != nil {
+			return Quote{}, false, fmt.Errorf("%w：腾讯快照 %s 第 %d 个字段：%v", ErrProtocol, symbol, item.index, err)
+		}
+		*item.target = text
+	}
+	return quote, true, nil
 }
 
 // positiveDecimal 校验十进制文本；0 和负数（-1 表示没有）返回空串。
@@ -175,10 +189,7 @@ func (c TencentClient) Snapshot(ctx context.Context, instrumentIDs []string) (ma
 		if err != nil {
 			return nil, err
 		}
-		quotes, err := ParseTencent(body)
-		if err != nil {
-			return nil, err
-		}
+		quotes := ParseTencent(body)
 		received := time.Now().UTC()
 		for _, quote := range quotes {
 			if quote.Time.After(received) {

@@ -189,3 +189,53 @@ func TestUntilNextRefresh(t *testing.T) {
 	require.Equal(t, 30*time.Minute, untilNextRefresh(cst("2026-11-09 08:00:00")))
 	require.Equal(t, 23*time.Hour+30*time.Minute, untilNextRefresh(cst("2026-11-09 09:00:00")))
 }
+
+// 腾讯超时要等几秒才返回：缓存时间按请求返回之后算，失败缓存和成功结果都不会写进去就过期。
+func TestMarketCacheStampsAfterRequestReturns(t *testing.T) {
+	now := cst("2026-11-06 10:00:00")
+	calls := 0
+	fail := true
+	market := &Market{Now: func() time.Time { return now }, Quotes: func(_ context.Context, ids []string) (map[string]cnstock.Quote, error) {
+		calls++
+		now = now.Add(5 * time.Second) // 请求期间时钟前进超过 2 秒
+		if fail {
+			return nil, cnstock.ErrTimeout
+		}
+		return map[string]cnstock.Quote{ids[0]: {InstrumentID: ids[0], Last: "10", Time: now}}, nil
+	}}
+	key := exchange.NewSymbolKey(exchange.MarketTypeStock, "600519.XSHG")
+	_, err := market.GetQuote(context.Background(), key)
+	require.ErrorIs(t, err, cnstock.ErrTimeout)
+	_, err = market.GetQuote(context.Background(), key)
+	require.ErrorIs(t, err, cnstock.ErrTimeout)
+	require.Equal(t, 1, calls, "失败缓存仍然生效")
+
+	now = now.Add(3 * time.Second)
+	fail = false
+	_, err = market.GetQuote(context.Background(), key)
+	require.NoError(t, err)
+	_, err = market.GetQuote(context.Background(), key)
+	require.NoError(t, err)
+	require.Equal(t, 2, calls, "成功结果也不会写进去就过期")
+}
+
+// 格式错误不是网络故障：不记失败缓存，下次照常重试；缺了的那只按“取不到报价”处理。
+func TestMarketProtocolErrorIsNotCached(t *testing.T) {
+	calls := 0
+	market := &Market{Quotes: func(context.Context, []string) (map[string]cnstock.Quote, error) {
+		calls++
+		return nil, cnstock.ErrProtocol
+	}}
+	key := exchange.NewSymbolKey(exchange.MarketTypeStock, "600519.XSHG")
+	for range 2 {
+		_, err := market.GetQuote(context.Background(), key)
+		require.ErrorIs(t, err, cnstock.ErrProtocol)
+	}
+	require.Equal(t, 2, calls)
+
+	missing := &Market{Quotes: func(context.Context, []string) (map[string]cnstock.Quote, error) {
+		return map[string]cnstock.Quote{}, nil
+	}}
+	_, err := missing.GetQuote(context.Background(), key)
+	require.ErrorContains(t, err, "没有标的")
+}

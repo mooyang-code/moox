@@ -216,15 +216,20 @@ func (m *Market) PrefetchQuotes(ctx context.Context, keys []exchange.SymbolKey) 
 		return errors.New("A 股行情来源未配置")
 	}
 	fetched, err := m.Quotes(ctx, missing)
+	// 缓存时间取请求返回之后：腾讯超时要等 5 秒才返回，用发请求前的时间写进去就已经过期。
+	stamp := m.now()
 	m.quoteMu.Lock()
 	defer m.quoteMu.Unlock()
 	if err != nil {
 		err = fmt.Errorf("A 股行情不可用：%w", err)
-		if m.failed == nil {
-			m.failed = make(map[string]failedQuote)
-		}
-		for _, id := range missing {
-			m.failed[id] = failedQuote{err: err, at: now}
+		// 只有网络类错误（超时、错误状态码、限流）才记失败缓存；其余错误下次照常重试。
+		if networkFailure(err) {
+			if m.failed == nil {
+				m.failed = make(map[string]failedQuote)
+			}
+			for _, id := range missing {
+				m.failed[id] = failedQuote{err: err, at: stamp}
+			}
 		}
 		return err
 	}
@@ -235,9 +240,14 @@ func (m *Market) PrefetchQuotes(ctx context.Context, keys []exchange.SymbolKey) 
 		delete(m.failed, id)
 	}
 	for id, quote := range fetched {
-		m.quotes[id] = cachedQuote{quote: quote, fetchedAt: now}
+		m.quotes[id] = cachedQuote{quote: quote, fetchedAt: stamp}
 	}
 	return recentFailure
+}
+
+// networkFailure 报告取价失败是不是网络类错误：超时或连不上、错误状态码、限流。
+func networkFailure(err error) bool {
+	return errors.Is(err, cnstock.ErrTimeout) || errors.Is(err, cnstock.ErrHTTPStatus) || errors.Is(err, cnstock.ErrRateLimited)
 }
 
 func (m *Market) snapshot(ctx context.Context, key exchange.SymbolKey) (cachedQuote, error) {
