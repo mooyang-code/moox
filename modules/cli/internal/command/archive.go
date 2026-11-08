@@ -40,10 +40,12 @@ type archiveFlags struct {
 	Page         uint32
 	PageSize     uint32
 	Yes          bool
-	// CSV、Overwrite、Wait 是 archive import 的本地文件、是否覆盖与是否等待结束。
+	// CSV、Overwrite、Wait 是 archive import 的本地文件、是否覆盖与是否等待结束；
+	// ImportID 非空时重试已上传的文件（跳过上传）。
 	CSV       string
 	Overwrite bool
 	Wait      bool
+	ImportID  string
 }
 
 var archiveCmd = &cobra.Command{Use: "archive", Short: "数据归档：任务、运行与分区（调用 ArchiveMgr）"}

@@ -338,12 +338,12 @@ func (s *Store) ReopenFinal(ctx context.Context, task Task, key, path string) er
 	}
 	reader, closer, err := openCSV(path)
 	if err != nil {
-		return fmt.Errorf("read archive file header %s: %w", path, err)
+		return fmt.Errorf("读取归档文件 %s 的表头: %w", path, err)
 	}
 	defer closer.Close()
 	headerFields, err := reader.read()
 	if err != nil {
-		return fmt.Errorf("read archive file header %s: %w", path, err)
+		return fmt.Errorf("读取归档文件 %s 的表头: %w", path, err)
 	}
 	columnType := map[string]string{"data_time": TypeTime, "subject_id": TypeString, "series_tag": TypeString}
 	for _, c := range task.Columns {
@@ -353,7 +353,7 @@ func (s *Store) ReopenFinal(ctx context.Context, task Task, key, path string) er
 	for _, f := range headerFields {
 		typ, ok := columnType[f.value]
 		if !ok {
-			return fmt.Errorf("archive file %s has column %q which the dataset no longer has", path, f.value)
+			return fmt.Errorf("归档文件 %s 有列 %q，数据集已经没有这一列", path, f.value)
 		}
 		names, types = append(names, quote(f.value)), append(types, typ)
 	}
@@ -376,27 +376,27 @@ func (s *Store) ReopenFinal(ctx context.Context, task Task, key, path string) er
 				break
 			}
 			if err != nil {
-				return fmt.Errorf("read back archive file %s: %w", path, err)
+				return fmt.Errorf("读回归档文件 %s 第 %d 行：%w", path, reader.line, err)
 			}
 			if len(record) != len(names) {
-				return fmt.Errorf("read back archive file %s: line %d has %d fields, want %d", path, reader.line, len(record), len(names))
+				return fmt.Errorf("读回归档文件 %s 第 %d 行：有 %d 个字段，表头是 %d 列", path, reader.line, len(record), len(names))
 			}
 			for i, f := range record {
 				value, err := parseValue(types[i], f)
 				if err != nil {
-					return fmt.Errorf("read back archive file %s: line %d column %s: %w", path, reader.line, names[i], err)
+					return fmt.Errorf("读回归档文件 %s 第 %d 行 %s 列：%w", path, reader.line, names[i], err)
 				}
 				args = append(args, value)
 			}
 			placeholders = append(placeholders, placeholder)
 			if len(placeholders) >= reopenBatchRows {
 				if err := flush(); err != nil {
-					return fmt.Errorf("read back archive file %s: %w", path, err)
+					return fmt.Errorf("读回归档文件 %s: %w", path, err)
 				}
 			}
 		}
 		if err := flush(); err != nil {
-			return fmt.Errorf("read back archive file %s: %w", path, err)
+			return fmt.Errorf("读回归档文件 %s: %w", path, err)
 		}
 		result, err := tx.ExecContext(ctx, `UPDATE partition_state SET status = 'exported', report_pending = 1, finalized_at = NULL, last_changed_at = COALESCE(exported_at, last_changed_at) WHERE space_id = ? AND dataset_id = ? AND partition_key = ? AND status = 'final'`,
 			task.SpaceID, task.DatasetID, key)

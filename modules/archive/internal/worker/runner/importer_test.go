@@ -397,6 +397,16 @@ func TestImportHeaderBOMTrailingBlankLinesAndLongRecords(t *testing.T) {
 	if out.Status != "failed" || !strings.Contains(out.Message, "第 2 行：记录过长（超过 1MiB）") {
 		t.Fatalf("out = %q", out.Message)
 	}
+	// CSV 语法错误直接失败，消息里只有一处“第 N 行”。
+	for key, tc := range map[string]struct{ row, want string }{
+		"imp_4": {"2026-09-01T00:03:00Z,BTC,a\"b,1,1", "第 2 行：字段中间出现引号"},
+		"imp_5": {"2026-09-01T00:03:00Z,BTC,\"ab,1,1", "第 2 行：引号没有闭合"},
+	} {
+		out = e.importRun(placeImport(t, e, key, "a.csv", historyCSV(tc.row)), false, nil)
+		if out.Status != "failed" || !strings.Contains(out.Message, tc.want) || strings.Count(out.Message, "行") != 1 {
+			t.Fatalf("%s: out = %q", key, out.Message)
+		}
+	}
 }
 
 // 数据集已有多个 series_tag 时只要求文件带这一列，不校验取值。

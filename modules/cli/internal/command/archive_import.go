@@ -212,7 +212,95 @@ func archiveCall(ctx context.Context, gateway commandGateway, method string, req
 	return nil
 }
 
-// runArchiveImport 把本地 CSV 导进归档：本地预检表头 → 取上传位置 → 在 worker 所在主机建目录并上传 → 建导入运行；
+// checkArchiveTaskIdle 确认任务没有排队中或运行中的运行；排队中的到点拉取（tick）会给导入让位，不算。
+func checkArchiveTaskIdle(ctx context.Context, gateway commandGateway, spaceID, datasetID string) error {
+	for _, status := range []string{"queued", "running"} {
+		rsp := &archivepb.ListArchiveRunsRsp{}
+		if err := archiveCall(ctx, gateway, "ListArchiveRuns", &archivepb.ListArchiveRunsReq{
+			SpaceId: spaceID, DatasetId: datasetID, Status: status, IncludeTicks: true, Page: &commonpb.Page{Page: 1, Size: 20},
+		}, rsp, rsp.GetRetInfo); err != nil {
+			return err
+		}
+		for _, run := range rsp.GetRuns() {
+			if run.GetStatus() == "queued" && run.GetKind() == "tick" {
+				continue
+			}
+			label := map[string]string{"queued": "排队中", "running": "运行中"}[run.GetStatus()]
+			return fmt.Errorf("任务 %s/%s 有一条%s的运行（%s，%s），等它结束后再导入；还没有上传文件", spaceID, datasetID, label, run.GetRunId(), run.GetKind())
+		}
+	}
+	return nil
+}
+
+// uploadArchiveImport 取上传位置，核对 worker 与 moox.toml 部署的主机一致后，在该主机建导入目录并上传文件，返回导入 ID。
+func uploadArchiveImport(ctx context.Context, gateway commandGateway, f archiveFlags, name string, size int64) (string, error) {
+	prepared := &archivepb.PrepareArchiveImportRsp{}
+	if err := archiveCall(ctx, gateway, "PrepareArchiveImport", &archivepb.PrepareArchiveImportReq{SpaceId: f.SpaceID, DatasetId: f.DatasetID}, prepared, prepared.GetRetInfo); err != nil {
+		return "", err
+	}
+	if prepared.GetImportDir() == "" || !path.IsAbs(prepared.GetImportDir()) {
+		return "", fmt.Errorf("PrepareArchiveImport 返回的导入目录 %q 无效", prepared.GetImportDir())
+	}
+	remote, host, err := openArchiveImportRemote(f.File)
+	if err != nil {
+		return "", err
+	}
+	defer remote.Close()
+	// worker ID 由 deploy-unit 写成 archive-worker@<主机>；对不上时传到别的主机上，worker 读不到文件。
+	if want := archiveWorkerComponent + "@" + host; prepared.GetWorkerId() != want {
+		return "", fmt.Errorf("活动的归档 worker 是 %q，而 moox.toml [deployments] 里部署 %s 的主机是 %s（对应 worker %q），两边不一致，没有上传文件；先用 moox-cli archive overview 核对活动 worker，再核对部署清单",
+			prepared.GetWorkerId(), archiveWorkerComponent, host, want)
+	}
+	// Upload 不建目录：先建好只有本用户能进的导入目录，再上传成 0600。
+	if _, err := remote.Exec(ctx, host, []string{"mkdir", "-p", "-m", "0700", prepared.GetImportDir()}, nil); err != nil {
+		return "", fmt.Errorf("在 %s 上建导入目录 %s 失败: %w", host, prepared.GetImportDir(), err)
+	}
+	src, err := os.Open(f.CSV)
+	if err != nil {
+		return "", err
+	}
+	defer src.Close()
+	target := path.Join(prepared.GetImportDir(), name)
+	if err := remote.Upload(ctx, host, src, size, target, 0o600); err != nil {
+		return "", fmt.Errorf("上传 %s 到 %s:%s 失败: %w", f.CSV, host, target, err)
+	}
+	return prepared.GetImportId(), nil
+}
+
+// archiveImportRetryCommand 返回用已上传文件重试导入的命令（参数与这次一致，含 --overwrite）。
+func archiveImportRetryCommand(f archiveFlags, importID string) string {
+	args := []string{"moox-cli", "archive", "import"}
+	if f.File != "" && f.File != "./moox.toml" {
+		args = append(args, "--file", shellArg(f.File))
+	}
+	args = append(args, "--space-id", shellArg(f.SpaceID), "--dataset-id", shellArg(f.DatasetID), "--csv", shellArg(f.CSV), "--import-id", importID)
+	if f.Overwrite {
+		args = append(args, "--overwrite")
+	}
+	if f.Wait {
+		args = append(args, "--wait")
+	}
+	return strings.Join(append(args, "--yes"), " ")
+}
+
+// shellArg 在参数含空白或 shell 特殊字符时加单引号。
+func shellArg(value string) string {
+	if value != "" && !strings.ContainsAny(value, " \t\n'\"\\$`!*?[](){}<>|&;#~") {
+		return value
+	}
+	return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'"
+}
+
+// validArchiveImportID 按目录片段规则检查 --import-id（不能含斜杠、不能以点开头），mgr 与 worker 还会再查。
+func validArchiveImportID(id string) error {
+	if strings.TrimSpace(id) != id || strings.ContainsAny(id, `/\`) || strings.HasPrefix(id, ".") || strings.ContainsRune(id, 0) {
+		return fmt.Errorf("--import-id %q 无效：不能含斜杠或首尾空白，不能以点开头", id)
+	}
+	return nil
+}
+
+// runArchiveImport 把本地 CSV 导进归档：本地预检表头 → 确认任务空闲 → 取上传位置并核对 worker 主机 →
+// 在 worker 所在主机建目录并上传 → 建导入运行；带 --import-id 时跳过上传，直接用已上传的文件建运行。
 // --wait 时轮询到运行结束。
 func runArchiveImport(ctx context.Context, out io.Writer, f archiveFlags) error {
 	if err := f.requireSpaceAndDataset(); err != nil {
@@ -224,6 +312,11 @@ func runArchiveImport(ctx context.Context, out io.Writer, f archiveFlags) error 
 	name, err := archiveImportFileName(f.CSV)
 	if err != nil {
 		return err
+	}
+	if f.ImportID != "" {
+		if err := validArchiveImportID(f.ImportID); err != nil {
+			return err
+		}
 	}
 	info, err := os.Stat(f.CSV)
 	if err != nil {
@@ -255,35 +348,25 @@ func runArchiveImport(ctx context.Context, out io.Writer, f archiveFlags) error 
 	if err := checkArchiveImportHeader(header, columns, f.Overwrite); err != nil {
 		return err
 	}
-	prepared := &archivepb.PrepareArchiveImportRsp{}
-	if err := archiveCall(ctx, gateway, "PrepareArchiveImport", &archivepb.PrepareArchiveImportReq{SpaceId: f.SpaceID, DatasetId: f.DatasetID}, prepared, prepared.GetRetInfo); err != nil {
+	// 先确认任务没有排队中或运行中的运行，免得传完大文件才发现建不了运行。
+	// 这只是预检：两次调用之间仍可能有新运行，ImportArchiveFile 冲突时下面会给出重试命令。
+	if err := checkArchiveTaskIdle(ctx, gateway, f.SpaceID, f.DatasetID); err != nil {
 		return err
 	}
-	if prepared.GetImportDir() == "" || !path.IsAbs(prepared.GetImportDir()) {
-		return fmt.Errorf("PrepareArchiveImport 返回的导入目录 %q 无效", prepared.GetImportDir())
-	}
-	remote, host, err := openArchiveImportRemote(f.File)
-	if err != nil {
-		return err
-	}
-	defer remote.Close()
-	// Upload 不建目录：先建好只有本用户能进的导入目录，再上传成 0600。
-	if _, err := remote.Exec(ctx, host, []string{"mkdir", "-p", "-m", "0700", prepared.GetImportDir()}, nil); err != nil {
-		return fmt.Errorf("在 %s 上建导入目录 %s 失败: %w", host, prepared.GetImportDir(), err)
-	}
-	src, err := os.Open(f.CSV)
-	if err != nil {
-		return err
-	}
-	defer src.Close()
-	target := path.Join(prepared.GetImportDir(), name)
-	if err := remote.Upload(ctx, host, src, info.Size(), target, 0o600); err != nil {
-		return fmt.Errorf("上传 %s 到 %s:%s 失败: %w", f.CSV, host, target, err)
+	importID := f.ImportID
+	if importID == "" {
+		if importID, err = uploadArchiveImport(ctx, gateway, f, name, info.Size()); err != nil {
+			return err
+		}
 	}
 	created := &archivepb.ImportArchiveFileRsp{}
 	if err := archiveCall(ctx, gateway, "ImportArchiveFile", &archivepb.ImportArchiveFileReq{
-		SpaceId: f.SpaceID, DatasetId: f.DatasetID, ImportId: prepared.GetImportId(), FileName: name, Overwrite: f.Overwrite,
+		SpaceId: f.SpaceID, DatasetId: f.DatasetID, ImportId: importID, FileName: name, Overwrite: f.Overwrite,
 	}, created, created.GetRetInfo); err != nil {
+		if created.GetRetInfo().GetCode() == commonpb.ErrorCode_CONFLICT {
+			return fmt.Errorf("%w\n文件已在 worker 上，导入 ID：%s（导入目录保留 7 天）；等运行结束后不用重新上传，执行：\n  %s",
+				err, importID, archiveImportRetryCommand(f, importID))
+		}
 		return err
 	}
 	if !f.Wait {
@@ -345,6 +428,7 @@ func newArchiveImportCommand() *cobra.Command {
 	cmd.Flags().StringVar(&f.CSV, "csv", "", "本地 .csv 或 .csv.gz 文件（表头用 archive import template 取）")
 	cmd.Flags().BoolVar(&f.Overwrite, "overwrite", false, "同键已存在时用文件里的值覆盖（必须带齐全部值列）；默认以已归档的为准，只补空缺")
 	cmd.Flags().BoolVar(&f.Wait, "wait", false, "等导入运行结束并打印结果")
+	cmd.Flags().StringVar(&f.ImportID, "import-id", "", "重试已上传的文件：跳过上传，直接用这个导入 ID 建运行（--csv 仍要给同一份本地文件，用来预检表头、确定文件名）")
 	cmd.Flags().BoolVar(&f.Yes, "yes", false, "确认导入")
 	cmd.AddCommand(newArchiveLeaf("template", "打印导入文件的表头 data_time,subject_id,series_tag,<值列…>", runArchiveImportTemplate, bindDataset))
 	return cmd

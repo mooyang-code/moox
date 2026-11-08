@@ -81,7 +81,7 @@ func (c *csvReader) read() ([]csvField, error) {
 		b, err := c.r.ReadByte()
 		if err == io.EOF {
 			if inQuotes {
-				return nil, fmt.Errorf("line %d: unterminated quoted field", c.line)
+				return nil, errors.New("引号没有闭合")
 			}
 			if !started {
 				return nil, io.EOF
@@ -122,7 +122,7 @@ func (c *csvReader) read() ([]csvField, error) {
 			// 容忍 \r\n 行尾。
 		case '"':
 			if buf.Len() != 0 || quoted {
-				return nil, fmt.Errorf("line %d: unexpected quote inside a field", c.line)
+				return nil, errors.New("字段中间出现引号（字段里的引号要写成两个，并把整个字段用引号括起来）")
 			}
 			quoted, inQuotes = true, true
 		default:

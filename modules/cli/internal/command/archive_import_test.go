@@ -26,6 +26,10 @@ type importFakeGateway struct {
 	calls    *[]string
 	requests map[string]proto.Message
 	runs     []string // GetArchiveRun 依次返回的状态
+	// active 按状态给 ListArchiveRuns 返回的运行；workerID 非空时替换 PrepareArchiveImport 的 worker；importConflict 时 ImportArchiveFile 返回冲突。
+	active         map[string][]*archivepb.ArchiveRun
+	workerID       string
+	importConflict bool
 }
 
 func (g *importFakeGateway) Invoke(_ context.Context, _, method string, req, rsp any) error {
@@ -40,9 +44,19 @@ func (g *importFakeGateway) Invoke(_ context.Context, _, method string, req, rsp
 			{ColumnName: "old", OriginType: pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD, Status: "disabled"},
 			{ColumnName: "freq", OriginType: pb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_SYSTEM},
 		}}
+	case "ListArchiveRuns":
+		out = &archivepb.ListArchiveRunsRsp{RetInfo: ok(), Runs: g.active[req.(*archivepb.ListArchiveRunsReq).GetStatus()]}
 	case "PrepareArchiveImport":
-		out = &archivepb.PrepareArchiveImportRsp{RetInfo: ok(), RootDir: "/data/archive", ImportId: "imp_1", ImportDir: "/data/archive/.import/imp_1"}
+		worker := "archive-worker@factor"
+		if g.workerID != "" {
+			worker = g.workerID
+		}
+		out = &archivepb.PrepareArchiveImportRsp{RetInfo: ok(), RootDir: "/data/archive", WorkerId: worker, ImportId: "imp_1", ImportDir: "/data/archive/.import/imp_1"}
 	case "ImportArchiveFile":
+		if g.importConflict {
+			out = &archivepb.ImportArchiveFileRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_CONFLICT, Msg: "任务已有排队中或运行中的运行，等它结束后再导入"}}
+			break
+		}
 		out = &archivepb.ImportArchiveFileRsp{RetInfo: ok(), Run: &archivepb.ArchiveRun{RunId: "run_1", Kind: "import", Status: "queued"}}
 	case "GetArchiveRun":
 		status := g.runs[0]
@@ -126,7 +140,7 @@ func TestArchiveImportPrechecksMakesTheDirectoryThenUploadsAndWaits(t *testing.T
 	local := writeLocalCSV(t, "我的 数据.csv.gz", "data_time,subject_id,close,open\n2026-09-01T00:00:00Z,BTC,1,1\n")
 	var out bytes.Buffer
 	require.NoError(t, runArchiveImport(context.Background(), &out, archiveFlags{SpaceID: "crypto", DatasetID: "ds", CSV: local, Overwrite: true, Wait: true, Yes: true}))
-	assert.Equal(t, []string{"ListDatasetColumns", "PrepareArchiveImport", "exec", "upload", "ImportArchiveFile", "GetArchiveRun", "GetArchiveRun", "GetArchiveRun", "close"}, *calls)
+	assert.Equal(t, []string{"ListDatasetColumns", "ListArchiveRuns", "ListArchiveRuns", "PrepareArchiveImport", "exec", "upload", "close", "ImportArchiveFile", "GetArchiveRun", "GetArchiveRun", "GetArchiveRun"}, *calls, "上传完就关掉 SSH 连接，等待运行期间不占着")
 	assert.Equal(t, "factor", r.host)
 	assert.Equal(t, []string{"mkdir", "-p", "-m", "0700", "/data/archive/.import/imp_1"}, r.argv)
 	assert.Equal(t, "/data/archive/.import/imp_1/import.csv.gz", r.dst, "上传用固定文件名，不带本地文件名里的空格与中文")
@@ -213,7 +227,7 @@ func TestArchiveImportCommandIsMountedWithItsFlags(t *testing.T) {
 	cmd, rest, err := archiveCmd.Find([]string{"import"})
 	require.NoError(t, err)
 	assert.Empty(t, rest)
-	for _, flag := range []string{"file", "space-id", "dataset-id", "csv", "overwrite", "wait", "yes"} {
+	for _, flag := range []string{"file", "space-id", "dataset-id", "csv", "overwrite", "wait", "import-id", "yes"} {
 		assert.NotNil(t, cmd.Flags().Lookup(flag), flag)
 	}
 	template, _, err := archiveCmd.Find([]string{"import", "template"})
@@ -228,4 +242,73 @@ func TestArchiveImportHeaderIgnoresAUTF8BOM(t *testing.T) {
 	header, err := readArchiveCSVHeader(writeLocalCSV(t, "a.csv", "\ufeffdata_time,subject_id,close\n"))
 	require.NoError(t, err)
 	assert.Equal(t, []string{"data_time", "subject_id", "close"}, header)
+}
+
+func TestArchiveImportRefusesToUploadWhileTheTaskHasAnActiveRun(t *testing.T) {
+	local := writeLocalCSV(t, "a.csv", "data_time,subject_id,close\n")
+	for name, tc := range map[string]struct {
+		active map[string][]*archivepb.ArchiveRun
+		want   string
+	}{
+		"排队中的复核": {map[string][]*archivepb.ArchiveRun{"queued": {{RunId: "run_q", Kind: "scheduled", Status: "queued"}}}, "排队中的运行（run_q，scheduled）"},
+		"运行中的补拉": {map[string][]*archivepb.ArchiveRun{"running": {{RunId: "run_r", Kind: "range", Status: "running"}}}, "运行中的运行（run_r，range）"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			g, _, calls := useImportFakes(t)
+			g.active = tc.active
+			err := runArchiveImport(context.Background(), io.Discard, archiveFlags{SpaceID: "crypto", DatasetID: "ds", CSV: local, Yes: true})
+			require.ErrorContains(t, err, tc.want)
+			require.ErrorContains(t, err, "还没有上传文件")
+			assert.NotContains(t, *calls, "PrepareArchiveImport")
+			assert.NotContains(t, *calls, "upload")
+			req := g.requests["ListArchiveRuns"].(*archivepb.ListArchiveRunsReq)
+			assert.Equal(t, "crypto", req.GetSpaceId())
+			assert.Equal(t, "ds", req.GetDatasetId())
+		})
+	}
+
+	// 排队中的到点拉取会给导入让位，不挡上传。
+	g, _, calls := useImportFakes(t)
+	g.active = map[string][]*archivepb.ArchiveRun{"queued": {{RunId: "run_t", Kind: "tick", Status: "queued"}}}
+	require.NoError(t, runArchiveImport(context.Background(), io.Discard, archiveFlags{SpaceID: "crypto", DatasetID: "ds", CSV: local, Yes: true}))
+	assert.Contains(t, *calls, "upload")
+}
+
+func TestArchiveImportRefusesToUploadWhenTheWorkerIsNotOnTheDeployedHost(t *testing.T) {
+	g, _, calls := useImportFakes(t)
+	g.workerID = "archive-worker@old"
+	local := writeLocalCSV(t, "a.csv", "data_time,subject_id,close\n")
+	err := runArchiveImport(context.Background(), io.Discard, archiveFlags{SpaceID: "crypto", DatasetID: "ds", CSV: local, Yes: true})
+	require.ErrorContains(t, err, `活动的归档 worker 是 "archive-worker@old"`)
+	require.ErrorContains(t, err, `主机是 factor（对应 worker "archive-worker@factor"）`)
+	assert.NotContains(t, *calls, "exec")
+	assert.NotContains(t, *calls, "upload")
+	assert.NotContains(t, *calls, "ImportArchiveFile")
+}
+
+func TestArchiveImportConflictPrintsTheImportIDAndTheRetryCommand(t *testing.T) {
+	g, _, calls := useImportFakes(t)
+	g.importConflict = true
+	local := writeLocalCSV(t, "我的 数据.csv", "data_time,subject_id,close,open\n")
+	err := runArchiveImport(context.Background(), io.Discard, archiveFlags{File: "/etc/moox.toml", SpaceID: "crypto", DatasetID: "ds", CSV: local, Overwrite: true, Yes: true})
+	require.ErrorContains(t, err, "导入 ID：imp_1")
+	require.ErrorContains(t, err, "moox-cli archive import --file /etc/moox.toml --space-id crypto --dataset-id ds --csv '"+local+"' --import-id imp_1 --overwrite --yes")
+	assert.Contains(t, *calls, "upload")
+}
+
+func TestArchiveImportWithAnImportIDSkipsTheUpload(t *testing.T) {
+	g, _, calls := useImportFakes(t)
+	local := writeLocalCSV(t, "a.csv.gz", "data_time,subject_id,close\n")
+	require.NoError(t, runArchiveImport(context.Background(), io.Discard, archiveFlags{SpaceID: "crypto", DatasetID: "ds", CSV: local, ImportID: "imp_old", Yes: true}))
+	assert.Equal(t, []string{"ListDatasetColumns", "ListArchiveRuns", "ListArchiveRuns", "ImportArchiveFile"}, *calls)
+	req := g.requests["ImportArchiveFile"].(*archivepb.ImportArchiveFileReq)
+	assert.Equal(t, "imp_old", req.GetImportId())
+	assert.Equal(t, "import.csv.gz", req.GetFileName())
+
+	for _, bad := range []string{"../x", ".hidden", "a/b", " imp"} {
+		_, _, calls := useImportFakes(t)
+		err := runArchiveImport(context.Background(), io.Discard, archiveFlags{SpaceID: "crypto", DatasetID: "ds", CSV: local, ImportID: bad, Yes: true})
+		require.ErrorContains(t, err, "--import-id", bad)
+		assert.Empty(t, *calls, bad)
+	}
 }
