@@ -17,7 +17,7 @@
         <template v-else-if="tabs.length">
           <div class="result-toolbar">
             <span class="result-count"
-              >共 {{ tabs.length }} 个计算任务<span v-if="readAt">；状态读取：{{ readAt }}</span></span
+              >共 {{ tabs.length }} 个计算任务<span v-if="readAt">；任务状态读取于 {{ readAt }}</span></span
             >
             <a-button :loading="viewLoading" @click="refreshResults">
               <template #icon><icon-refresh /></template>
@@ -276,10 +276,29 @@ function onTabChange(key: string | number) {
   selectTask(String(key));
 }
 
+/** “刷新结果”：重读任务状态，表格只重读行（不重建视图浏览，筛选和列都保留）；视图还没有时才重新找视图。 */
 async function refreshResults() {
   await store.reload();
-  await loadResultView();
+  if (!resultView.value) {
+    await loadResultView();
+    return;
+  }
   refreshKey.value += 1;
+}
+
+/** 成员变了（添加、移除）：结果列跟着变，只重读视图列，不重建视图浏览。 */
+let columnsSeq = 0;
+async function reloadViewColumns() {
+  const current = activeInfo.value?.factor_task;
+  const view = resultView.value;
+  if (!current || !view || !scopeReady.value) return;
+  const seq = ++columnsSeq;
+  try {
+    const columns = await listAllViewColumns(current.space_id, view.view_id);
+    if (seq === columnsSeq && resultView.value?.view_id === view.view_id) viewColumns.value = columns;
+  } catch {
+    // 读不到时沿用上次的列，下次成员变化或刷新时再读。
+  }
 }
 
 function goTasks() {
@@ -311,6 +330,12 @@ watch(
 );
 
 watch(() => store.tasks, stamp, { immediate: true });
+watch(
+  () => (activeInfo.value?.members ?? []).map(member => member.member_key || member.factor_id).join(","),
+  (keys, previous) => {
+    if (previous !== undefined && keys !== previous) void reloadViewColumns();
+  }
+);
 </script>
 
 <style scoped lang="scss">

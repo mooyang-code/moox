@@ -41,7 +41,7 @@
         <template v-if="otherSpaceEnabled">
           其他空间有 {{ otherSpaceEnabled }} 个启用中的成员在用这个因子，需要先在那个空间停用后才能编辑。
         </template>
-        <div v-if="enabledUsages.length" class="usage-row">
+        <div class="usage-row">
           <button
             v-for="chip in enabledUsages"
             :key="chip.taskId"
@@ -51,7 +51,8 @@
           >
             {{ chip.label }}
           </button>
-          <a-button size="mini" type="primary" @click="openTask('')">去计算任务</a-button>
+          <a-button v-if="enabledUsages.length" size="mini" type="primary" @click="openTask('')">去计算任务</a-button>
+          <a-button size="mini" @click="saveAsNew">另存为新因子</a-button>
         </div>
       </a-alert>
 
@@ -146,6 +147,7 @@
                 <a-button type="primary" :loading="previewing" :disabled="!canPreview" @click="runPreview">试算</a-button>
               </div>
               <a-alert v-if="previewError" type="error" show-icon class="preview__error">{{ previewError }}</a-alert>
+              <p v-if="previewOutdated" class="preview__outdated">下面的结果对应修改前的定义，重新试算看新的结果。</p>
               <a-table
                 v-if="previewRows.length"
                 :data="previewRows"
@@ -315,7 +317,10 @@ import {
   diagnosticText,
   factorChecklist,
   filterFunctions,
+  copyFactorId,
   formFromDefinition,
+  setPendingCopy,
+  takePendingCopy,
   previewRequest,
   sourceInputColumns,
   specKey,
@@ -377,6 +382,9 @@ const previewing = ref(false);
 const previewError = ref("");
 const previewDone = ref(false);
 const previewResult = ref<PreviewFactorRsp | null>(null);
+// 试算结果对应的定义：定义改了以后旧结果保留，但标明对应修改前的定义。
+const previewSpecKey = ref("");
+const previewOutdated = computed(() => Boolean(previewResult.value) && previewSpecKey.value !== specKey(form));
 const previewGate = new RequestGate();
 
 const dirty = computed(() => JSON.stringify(form) !== original.value);
@@ -470,6 +478,9 @@ async function load() {
   committed.value = false;
   if (!editing.value) {
     resetForm();
+    // 从“另存为新因子”进来：带着原定义，算作未保存的修改（离开时会确认）
+    const copy = takePendingCopy();
+    if (copy) Object.assign(form, copy);
     loading.value = false;
     return;
   }
@@ -550,12 +561,14 @@ async function runPreview() {
   previewing.value = true;
   previewError.value = "";
   previewDone.value = false;
+  const requestKey = specKey(form);
   try {
     const rsp = await previewFactor(
       previewRequest(form, { taskId: previewTaskId.value, subjects: previewSubjects.value, periods: previewPeriods.value })
     );
     if (!previewGate.isCurrent(token)) return;
     previewResult.value = rsp;
+    previewSpecKey.value = requestKey;
     previewDone.value = true;
   } catch (error) {
     if (previewGate.isCurrent(token)) {
@@ -674,6 +687,12 @@ function leave() {
   void router.push("/factor/definitions");
 }
 
+/** 在用的因子不能改：带着当前定义进入新建页，ID 预填 <原 ID>_v2。 */
+function saveAsNew() {
+  setPendingCopy({ ...form, factor_id: copyFactorId(form.factor_id) });
+  void router.push("/factor/definitions/new");
+}
+
 // 添加到计算任务：先选任务，再打开和计算任务页一样的添加弹窗，预选这个因子。
 const taskPickerVisible = ref(false);
 const pickedTaskId = ref("");
@@ -710,7 +729,9 @@ watch(
   () => store.tasks.map((info: FactorTaskInfo) => info.factor_task.task_id),
   ids => {
     if (previewTaskId.value && !ids.includes(previewTaskId.value)) previewTaskId.value = "";
-    if (!previewTaskId.value && ids.length) previewTaskId.value = ids[0];
+    // 默认用当前选中的计算任务（从计算任务页进来时就是那个任务）
+    if (!previewTaskId.value && ids.length)
+      previewTaskId.value = ids.includes(store.currentTaskId) ? store.currentTaskId : ids[0];
   },
   { immediate: true }
 );
@@ -930,6 +951,12 @@ watch(factorId, () => saveScope.invalidate());
 
 .preview__empty {
   color: var(--color-text-3);
+  font-size: 13px;
+}
+
+.preview__outdated {
+  margin: 0 0 8px;
+  color: rgb(var(--warning-6));
   font-size: 13px;
 }
 

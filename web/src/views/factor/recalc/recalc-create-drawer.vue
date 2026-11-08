@@ -27,6 +27,7 @@
         <a-form-item label="结束时间（不含）" required>
           <ZonedDatePicker v-model="form.end_time" :zone="displayZone" style="width: 100%" />
         </a-form-item>
+        <p v-if="sessionMarket" class="session-note">默认范围是最近 100 个周期，{{ SESSION_ESTIMATE_NOTE }}。</p>
         <div class="quick-ranges" role="group" aria-label="快捷时间范围">
           <a-tag v-for="item in quickItems" :key="item.kind" class="quick-chip" @click="applyQuick(item.kind)">{{
             item.label
@@ -50,7 +51,14 @@ import { selectedSpaceGeneration } from "@/api/admin/space-header";
 import { useSpaceStore } from "@/store/modules/space";
 import type { FactorTaskInfo, RecalcJob, RecalcSubjectMode } from "@/api/factor/types";
 import SubjectScopeFields from "@/views/factor/recalc/subject-scope-fields.vue";
-import { defaultRange, enabledMemberIds, estimateRecalc, quickRange } from "./recalc-model";
+import {
+  SESSION_ESTIMATE_NOTE,
+  defaultRange,
+  enabledMemberIds,
+  estimateRecalc,
+  isSessionMarket,
+  quickRange
+} from "./recalc-model";
 import ZonedDatePicker from "@/components/zoned-date-picker/zoned-date-picker.vue";
 import { useDisplayZone } from "@/hooks/useDisplayZone";
 
@@ -86,6 +94,7 @@ const form = reactive({
 });
 
 const freq = computed(() => props.info?.factor_task.freq || "");
+const sessionMarket = computed(() => isSessionMarket(props.info?.factor_task.space_id || ""));
 const candidates = computed(() => (props.info ? enabledMemberIds(props.info) : []));
 const estimate = computed(() =>
   estimateRecalc({
@@ -94,7 +103,8 @@ const estimate = computed(() =>
     end: form.end_time,
     factorCount: form.members.length,
     subjectMode: form.subjectMode,
-    subjectCount: form.subjects.length
+    subjectCount: form.subjects.length,
+    sessionMarket: sessionMarket.value
   })
 );
 const blocker = computed(() => {
@@ -185,6 +195,12 @@ async function submit() {
 
 .quick-chip {
   cursor: pointer;
+}
+
+.session-note {
+  margin: 0 0 8px;
+  color: var(--color-text-3);
+  font-size: 12px;
 }
 
 .estimate {
