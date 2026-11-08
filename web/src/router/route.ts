@@ -166,19 +166,19 @@ export const staticRoutes = [
         path: "/ops/monitor",
         name: "ops-monitor",
         component: () => import("@/views/ops/monitor/index.vue"),
-        meta: { title: "ops-monitor" }
+        meta: { title: "ops-monitor", reuseOnQuery: true }
       },
       {
         path: "/ops/deployments",
         name: "ops-deployments",
         component: () => import("@/views/ops/deployments/index.vue"),
-        meta: { title: "ops-deployments" }
+        meta: { title: "ops-deployments", reuseOnQuery: true }
       },
       {
         path: "/ops/hosts",
         name: "ops-hosts",
         component: () => import("@/views/ops/host-workbench/index.vue"),
-        meta: { title: "ops-hosts" }
+        meta: { title: "ops-hosts", reuseOnQuery: true }
       },
       {
         path: "/ops/storage/nodes",

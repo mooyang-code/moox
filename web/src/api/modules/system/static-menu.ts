@@ -96,9 +96,12 @@ export const systemMenu = [
   }),
 
   directory("06", "0", "/ops/monitor", "ops", "ops", 6, { svgIcon: "defend", icon: "" }),
-  menu("0607", "06", "/ops/monitor", "ops-monitor", "ops-monitor", "ops/monitor/index", 1),
-  menu("0601", "06", "/ops/hosts", "ops-hosts", "ops-hosts", "ops/host-workbench/index", 3),
-  menu("0600", "06", "/ops/deployments", "ops-deployments", "ops-deployments", "ops/deployments/index", 2),
+  // 展开状态、页签、筛选、定位的主机都在 query 里：query 变化时复用页面（菜单与 route.ts 两处都写）
+  menu("0607", "06", "/ops/monitor", "ops-monitor", "ops-monitor", "ops/monitor/index", 1, { reuseOnQuery: true }),
+  menu("0601", "06", "/ops/hosts", "ops-hosts", "ops-hosts", "ops/host-workbench/index", 3, { reuseOnQuery: true }),
+  menu("0600", "06", "/ops/deployments", "ops-deployments", "ops-deployments", "ops/deployments/index", 2, {
+    reuseOnQuery: true
+  }),
   menu("0606", "06", "/ops/storage/nodes", "ops-storage", "ops-storage", "ops/storage/index", 4),
   menu("0608", "06", "/ops/activity", "ops-activity", "ops-activity", "ops/activity/index", 5),
 

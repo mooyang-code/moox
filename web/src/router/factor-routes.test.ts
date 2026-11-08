@@ -22,7 +22,10 @@ const reusePaths = [
   "/collector/tasks",
   "/data/fields",
   "/trading/accounts",
-  "/data/archive"
+  "/data/archive",
+  "/ops/monitor",
+  "/ops/deployments",
+  "/ops/hosts"
 ];
 
 describe("query 变化时复用的页面", () => {
