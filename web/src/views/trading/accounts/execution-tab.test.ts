@@ -9,17 +9,21 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock("@/api/trade", async () => ({ ...(await vi.importActual<typeof import("@/api/trade")>("@/api/trade")), ...api }));
 vi.mock("./shared/exchange-secrets", () => ({ loadExchangeSecrets: vi.fn(async () => []) }));
-import UnjoinedDialog from "./unjoined-dialog.vue";
+vi.mock("vue-router", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+import ExecutionTab from "./execution-tab.vue";
+import JoinDialog from "./join-dialog.vue";
 
 Object.defineProperty(window, "matchMedia", {
   writable: true,
   value: vi.fn(() => ({ matches: false, addEventListener: vi.fn(), removeEventListener: vi.fn() }))
 });
 
-interface DialogVM {
-  open(): void;
-  openJoin(account: TradingAccount): void;
+interface TabVM {
   setStatus(account: TradingAccount, status: "ENABLED" | "DISABLED"): void;
+  confirmVisible: boolean;
+}
+interface JoinVM {
+  open(account: TradingAccount): void;
   requestJoin(): void;
   confirmVisible: boolean;
   joinForm: { logicalId: string; priority: number; adopt: boolean };
@@ -54,14 +58,23 @@ async function typeName(value: string) {
 }
 
 let wrapper: VueWrapper;
-const mountIt = (env: "paper" | "prod") => {
-  wrapper = mount(UnjoinedDialog, {
-    props: { env, rows: [account], logicals: [combo], accounts: [account] },
+const row = { key: "ta-9", account, logical: null, priority: null, enabled: null };
+const mountTab = () => {
+  wrapper = mount(ExecutionTab, {
+    props: { env: "prod", rows: [row], logicals: [combo], accounts: [account], loading: false },
     global: { plugins: [ArcoVue] },
     attachTo: document.body
   });
-  const vm = wrapper.vm as unknown as DialogVM;
-  vm.open();
+  return wrapper.vm as unknown as TabVM;
+};
+const mountJoin = () => {
+  wrapper = mount(JoinDialog, {
+    props: { env: "prod", logicals: [combo], accounts: [account] },
+    global: { plugins: [ArcoVue] },
+    attachTo: document.body
+  });
+  const vm = wrapper.vm as unknown as JoinVM;
+  vm.open(account);
   return vm;
 };
 
@@ -74,9 +87,17 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-describe("未加入组合的执行账户", () => {
+describe("执行账户子页签", () => {
+  it("列出所属组合，没加入的写“未加入”并给“加入组合”", async () => {
+    mountTab();
+    await flushPromises();
+    expect(wrapper.text()).toContain("生产散户");
+    expect(wrapper.text()).toContain("未加入");
+    expect(wrapper.text()).toContain("加入组合");
+  });
+
   it("停用实盘执行账户先确认，不用输入名称；确认后才发请求且不重复弹错", async () => {
-    const vm = mountIt("prod");
+    const vm = mountTab();
     vm.setStatus(account, "DISABLED");
     await flushPromises();
     expect(vm.confirmVisible).toBe(true);
@@ -89,8 +110,7 @@ describe("未加入组合的执行账户", () => {
   });
 
   it("生产环境加入组合并接管已有持仓：先确认、要输入组合名称", async () => {
-    const vm = mountIt("prod");
-    vm.openJoin(account);
+    const vm = mountJoin();
     await flushPromises();
     vm.joinForm.adopt = true;
     vm.requestJoin();
@@ -106,8 +126,7 @@ describe("未加入组合的执行账户", () => {
   });
 
   it("不接管时直接加入，不弹确认", async () => {
-    const vm = mountIt("prod");
-    vm.openJoin(account);
+    const vm = mountJoin();
     await flushPromises();
     vm.requestJoin();
     await flushPromises();

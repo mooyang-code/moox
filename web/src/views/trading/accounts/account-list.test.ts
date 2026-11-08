@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { EquityPoint, LogicalAccount, TradingAccount } from "@/api/trade/types";
-import { accountMapOf, comboRows, equityChange, unjoinedAccounts } from "./account-list";
+import { accountMapOf, comboRows, equityChange, executionRows } from "./account-list";
 
 const account = (id: string, extra: Partial<TradingAccount> = {}) =>
   ({
@@ -34,7 +34,7 @@ describe("账户列表模型", () => {
     const paper = comboRows(logicals, accounts, "paper");
     expect(paper).toHaveLength(1);
     expect(paper[0]).toMatchObject({ equity: 150, exchangesText: "币安、OKX" });
-    expect(paper[0].children).toHaveLength(2);
+    expect(paper[0].members.map(item => item.trading_account_id)).toEqual(["a", "b"]);
     expect(comboRows(logicals, accounts, "testnet").map(row => row.key)).toEqual(["n"]);
     expect(comboRows(logicals, accounts, "prod")).toEqual([]);
   });
@@ -44,22 +44,27 @@ describe("账户列表模型", () => {
     expect(comboRows([logical("p", ["a"])], accounts, "paper")[0].equity).toBeNull();
   });
 
-  it("只要在任一组合的成员里（含停用）就算已加入，未加入的按环境列出", () => {
+  it("执行账户按环境列出，带上所属组合和成员设置（含停用的成员），没加入的组合为空", () => {
     const logicals = [logical("p", ["a"])];
     logicals[0].members.push({ trading_account_id: "off", enabled: false, priority: 9 });
     const accounts = [account("a"), account("off"), account("free"), account("live", { execution_mode: 2 })];
-    expect(unjoinedAccounts(accounts, logicals, "paper").map(item => item.trading_account_id)).toEqual(["free"]);
-    expect(unjoinedAccounts(accounts, logicals, "prod").map(item => item.trading_account_id)).toEqual(["live"]);
+    const paper = executionRows(accounts, logicals, "paper");
+    expect(paper.map(row => [row.key, row.logical?.logical_account_id ?? null, row.priority, row.enabled])).toEqual([
+      ["a", "p", 0, true],
+      ["off", "p", 9, false],
+      ["free", null, null, null]
+    ]);
+    expect(executionRows(accounts, logicals, "prod").map(row => row.key)).toEqual(["live"]);
   });
 
-  it("已关闭的模拟账户（已停用）不进未加入组合的列表，停用的实盘账户还在", () => {
+  it("已关闭的模拟账户（已停用）不列，停用的实盘账户还在", () => {
     const accounts = [
       account("closed", { status: "DISABLED" }),
       account("free"),
       account("live-off", { execution_mode: 2, status: "DISABLED" })
     ];
-    expect(unjoinedAccounts(accounts, [], "paper").map(item => item.trading_account_id)).toEqual(["free"]);
-    expect(unjoinedAccounts(accounts, [], "prod").map(item => item.trading_account_id)).toEqual(["live-off"]);
+    expect(executionRows(accounts, [], "paper").map(row => row.key)).toEqual(["free"]);
+    expect(executionRows(accounts, [], "prod").map(row => row.key)).toEqual(["live-off"]);
   });
 
   it("近 24 小时变化用窗口内首尾两点，点数不足或起点为 0 时为空", () => {

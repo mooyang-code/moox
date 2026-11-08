@@ -23,7 +23,7 @@ import { runReinspect } from "./inspection-actions";
 
 defineOptions({ name: "TradeAccountInspectionPanel" });
 
-// 执行账户的检测展示：账户类型、最近一次检测结果和“重新检测”。账户页（组合详情的“执行账户与设置”页签）按账户挂一个。
+// 执行账户的检测展示：账户类型、最近一次检测结果和“重新检测”。交易账户列表的“执行账户”页签里，每个账户展开后挂一个。
 // accountId 是执行账户 ID，inspectionJson 是账户里存的最近一次检测结果（TradingAccount.inspection_json）。
 const props = defineProps<{ accountId: string; inspectionJson?: string }>();
 // 检测时间：交易页按当前空间的时区

@@ -434,7 +434,7 @@ const inventory = computed(() => [
   { label: "因子", value: counts.factors, path: "/factor/definitions" },
   { label: "计算任务", value: counts.factorTasks, path: "/factor/tasks" },
   { label: "策略实例", value: counts.instances, path: "/strategy/tasks" },
-  { label: "执行账户", value: counts.accounts, path: "/trading/accounts" },
+  { label: "执行账户", value: counts.accounts, path: "/trading/accounts?list=execution" },
   { label: "云函数实例", value: counts.nodes, path: "/collector/tasks?tab=executors" }
 ]);
 

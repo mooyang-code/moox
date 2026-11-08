@@ -20,7 +20,10 @@
           </a-option>
         </a-select>
         <template v-if="!candidates.length" #extra
-          ><span class="tx-neg">没有能加入这个组合的执行账户，先去新建一个</span></template
+          ><span class="tx-neg">没有能加入这个组合的执行账户，</span
+          ><a-link @click="openExecutionList">{{
+            env === "paper" ? "去执行账户页签新建一个" : "去执行账户页签新建或启用一个"
+          }}</a-link></template
         >
       </a-form-item>
       <a-form-item label="优先级" extra="数字越小越先使用，当前账户资金用完才用下一个账户">
@@ -52,6 +55,7 @@
 
 <script setup lang="ts">
 import { reactive, ref } from "vue";
+import { useRouter } from "vue-router";
 import { Message } from "@arco-design/web-vue";
 import { addLogicalAccountMember, exchangeLabels, isTradeAdoptionRequired } from "@/api/trade";
 import type { LogicalAccount, TradingAccount } from "@/api/trade";
@@ -63,6 +67,15 @@ import { nextPriority } from "../shared/membership";
 import { ADOPT_EFFECT_TEXT, memberChangeConfirm, type MemberSettings, type RiskyConfirm } from "../shared/risky-actions";
 
 const props = defineProps<{ logical: LogicalAccount; candidates: TradingAccount[]; env: Environment }>();
+const router = useRouter();
+
+function openExecutionList() {
+  visible.value = false;
+  void router.push({
+    path: "/trading/accounts",
+    query: { env: props.env === "paper" ? undefined : props.env, list: "execution" }
+  });
+}
 const emit = defineEmits<{ saved: [] }>();
 
 const visible = ref(false);

@@ -7,7 +7,7 @@ export const detailTabs = [
   { key: "orders", label: "订单" },
   { key: "fills", label: "成交" },
   { key: "ledger", label: "资金流水" },
-  { key: "settings", label: "执行账户与设置" }
+  { key: "settings", label: "成员与设置" }
 ] as const;
 
 export type DetailTab = (typeof detailTabs)[number]["key"];
