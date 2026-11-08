@@ -32,14 +32,3 @@ export function pnlClass(value: number | string | undefined | null): "tx-pos" | 
   if (!Number.isFinite(n) || n === 0) return "";
   return n > 0 ? "tx-pos" : "tx-neg";
 }
-
-const pad = (n: number) => String(n).padStart(2, "0");
-
-/** 毫秒时间戳转成 月-日 时:分(:秒)；缺失或为 0 时返回 —。 */
-export function fmtClock(value: number | string | undefined | null, withSeconds = false): string {
-  const ms = Number(value);
-  if (!Number.isFinite(ms) || ms <= 0) return "—";
-  const d = new Date(ms);
-  const base = `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-  return withSeconds ? `${base}:${pad(d.getSeconds())}` : base;
-}

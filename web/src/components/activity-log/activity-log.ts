@@ -1,4 +1,5 @@
 /** 活动日志的展示辅助。 */
+import { formatInstant } from "@/utils/time-zone";
 
 export function activityLevelColor(level?: string) {
   switch (level) {
@@ -11,12 +12,9 @@ export function activityLevelColor(level?: string) {
   }
 }
 
-export function activityTimeText(value?: string) {
-  if (!value) return "-";
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return value;
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${parsed.getFullYear()}-${pad(parsed.getMonth() + 1)}-${pad(parsed.getDate())} ${pad(parsed.getHours())}:${pad(parsed.getMinutes())}:${pad(parsed.getSeconds())}`;
+/** 操作记录的时间：按调用方传入的时区带后缀显示（当前空间的记录用空间时区，系统事件用 UTC）。 */
+export function activityTimeText(value: string | undefined, zone: string) {
+  return formatInstant(value, zone);
 }
 
 /** 详情是 JSON 文本：能解析就缩进展示，否则原样展示。 */
@@ -27,10 +25,4 @@ export function activityDetailText(detail?: string) {
   } catch {
     return detail;
   }
-}
-
-/** 范围选择器的本地时间文本（YYYY-MM-DD HH:mm:ss）转 ISO；兼容 Safari 的解析限制。 */
-export function rangeToISO(value: string) {
-  const parsed = new Date(value.includes("T") ? value : value.replace(" ", "T"));
-  return Number.isNaN(parsed.getTime()) ? undefined : parsed.toISOString();
 }

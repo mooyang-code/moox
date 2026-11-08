@@ -93,7 +93,8 @@ async function openEntry(env: "paper" | "prod" = "paper", instrumentId = "BTC-US
     instrument_id: instrumentId,
     quantity: "0.01",
     reason: "test",
-    deadline_at: "2030-01-01T12:00"
+    // 选择器给的是毫秒时刻（已按空间时区换算）
+    deadline_at: Date.parse("2030-01-01T12:00:00Z")
   });
   return dialog;
 }
@@ -139,7 +140,7 @@ describe("下单对话框", () => {
         client_order_id: "client",
         market_type: 1,
         position_side: undefined,
-        deadline_at: String(new Date("2030-01-01T12:00").getTime())
+        deadline_at: String(Date.parse("2030-01-01T12:00:00Z"))
       })
     );
     expect(mocks.placeManualOrder).not.toHaveBeenCalled();

@@ -393,11 +393,12 @@ func maskSecretValue(value string) string {
 	return value[:prefix] + strings.Repeat(maskChar, n-prefix-suffix) + value[n-suffix:]
 }
 
+// formatTime 输出带时区的 UTC 时间（RFC3339），前端按页面的显示时区换算；不带时区的字符串前端无法正确换算。
 func formatTime(t time.Time) string {
 	if t.IsZero() {
 		return ""
 	}
-	return t.Format("2006-01-02 15:04:05")
+	return t.UTC().Format(time.RFC3339)
 }
 
 const maskedExtraValue = "******"

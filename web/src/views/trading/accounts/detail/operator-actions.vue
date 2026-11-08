@@ -12,7 +12,7 @@
           <strong>{{ operatorActionTypeText(item.action_type) }}</strong>
           <StatusMark :tone="operatorActionTone(item.status)">{{ actionStateLabels[item.status] || item.status }}</StatusMark>
         </div>
-        <div class="tx-muted">{{ fmtClock(item.created_at, true) }} · {{ item.reason || "未填原因" }}</div>
+        <div class="tx-muted">{{ formatInstant(item.created_at, displayZone) }} · {{ item.reason || "未填原因" }}</div>
         <div v-if="operatorActionHint(item)" class="tx-muted">{{ operatorActionHint(item) }}</div>
         <div v-if="item.last_error" class="tx-neg action-error">{{ item.last_error }}</div>
       </div>
@@ -31,7 +31,7 @@ import { inject, ref, watch } from "vue";
 import { actionStateLabels, listOperatorActions } from "@/api/trade";
 import type { OperatorAction, OperatorActionType } from "@/api/trade";
 import { createLatestRequestGuard } from "@/utils/latest-request";
-import { fmtClock } from "../shared/format";
+
 import SectionBlock from "../shared/section-block.vue";
 import StatusMark from "../shared/status-mark.vue";
 import { detailContextKey } from "./context";
@@ -41,7 +41,11 @@ import {
   operatorActionTypeOptions,
   operatorActionTypeText
 } from "./operator-actions-model";
+import { formatInstant } from "@/utils/time-zone";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
 
+// 交易页的时间按当前空间登记的时区显示
+const displayZone = useDisplayZone();
 const { logical, dataVersion } = inject(detailContextKey)!;
 
 const actionType = ref<OperatorActionType>();

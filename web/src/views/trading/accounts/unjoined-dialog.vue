@@ -29,7 +29,7 @@
               <strong>{{ record.name }}</strong>
               <div class="tx-muted sub">
                 {{ exchangeLabels[record.exchange] || "-" }} · {{ marketsText(record.markets) }} · 同步于
-                {{ fmtClock(record.last_sync_at) }}
+                <TimeText :value="record.last_sync_at" :zone="displayZone" precision="minute" />
               </div>
             </template>
           </a-table-column>
@@ -118,6 +118,7 @@
 </template>
 
 <script setup lang="ts">
+import TimeText from "@/components/time-text/index.vue";
 import { computed, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { addLogicalAccountMember, exchangeLabels, updateTradingAccount } from "@/api/trade";
@@ -127,13 +128,16 @@ import { accountMapOf } from "./account-list";
 import ConfirmDialog from "./shared/confirm-dialog.vue";
 import EnvMark from "./shared/env-mark.vue";
 import { accountEnvironment, environmentLabel, type Environment } from "./shared/environment";
-import { fmtClock, fmtMoney } from "./shared/format";
+import { fmtMoney } from "./shared/format";
 import { marketsText } from "./shared/markets";
 import MemberSettings from "./shared/member-settings.vue";
 import { joinableLogicals, nextPriority } from "./shared/membership";
 import { ADOPT_EFFECT_TEXT, accountStatusConfirm, memberChangeConfirm, type RiskyConfirm } from "./shared/risky-actions";
 import StatusMark from "./shared/status-mark.vue";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
 
+// 交易页的时间按当前空间登记的时区显示
+const displayZone = useDisplayZone();
 const props = defineProps<{
   env: Environment;
   /** 当前环境下未加入组合的执行账户 */

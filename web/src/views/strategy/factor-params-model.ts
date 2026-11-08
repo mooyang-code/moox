@@ -1,4 +1,5 @@
 import type { StrategyResult } from "@/api/strategy-types";
+import { formatInstant } from "@/utils/time-zone";
 
 /** 实例创建时选定的因子任务及其可变成员（来自启用时固化的解析结果）；解析结果里没有任务时返回 null。 */
 export interface FactorBinding {
@@ -84,12 +85,13 @@ export interface NextParamsRow {
   hint: string;
 }
 
-function periodLabel(seconds: number) {
-  return seconds > 0 ? new Date(seconds * 1000).toISOString().replace("T", " ").slice(0, 19) + " UTC" : "-";
+/** 周期（Unix 秒）按显示时区写成时间；没有周期时为 “—”。 */
+function periodLabel(seconds: number, zone: string) {
+  return seconds > 0 ? formatInstant(seconds * 1000, zone) : "—";
 }
 
 /** 把结果里的 next_params_json（{period, members}）整理成表格行；没有可变成员参数的结果略过，新的在前。 */
-export function nextParamsRows(results: StrategyResult[]): NextParamsRow[] {
+export function nextParamsRows(results: StrategyResult[], zone: string): NextParamsRow[] {
   const rows: NextParamsRow[] = [];
   for (const result of results) {
     if (!result.next_params_json) continue;
@@ -101,7 +103,7 @@ export function nextParamsRows(results: StrategyResult[]): NextParamsRow[] {
     rows.push({
       resultId: result.result_id,
       barEnd: result.bar_end_time,
-      targetText: periodLabel(Number(envelope.period ?? 0)),
+      targetText: periodLabel(Number(envelope.period ?? 0), zone),
       summary: memberParamsSummary(envelope.members ?? {}),
       statusKey: status.key,
       statusLabel: status.label,
@@ -113,6 +115,6 @@ export function nextParamsRows(results: StrategyResult[]): NextParamsRow[] {
 }
 
 /** 把 Unix 秒转成与上面一致的文本。 */
-export function periodText(seconds: number | string) {
-  return periodLabel(Number(seconds));
+export function periodText(seconds: number | string, zone: string) {
+  return periodLabel(Number(seconds), zone);
 }

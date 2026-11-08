@@ -2,6 +2,8 @@ import { computed, onUnmounted, ref, watch, type Ref } from "vue";
 import { useStrategyStore } from "@/store/modules/strategy";
 import { deriveTargetState, type TargetState } from "@/views/strategy/model";
 import { useNowClock } from "@/views/strategy/use-now-clock";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
+import { formatInstant } from "@/utils/time-zone";
 
 export type ResultScope = "session" | "all";
 
@@ -23,6 +25,7 @@ export function useInstanceResults(
   } = {}
 ) {
   const store = useStrategyStore();
+  const displayZone = useDisplayZone();
   const resultPage = ref(1);
   const resultScope = ref<ResultScope>("session");
   const resultPageSize = 20;
@@ -51,7 +54,7 @@ export function useInstanceResults(
         resultPageSize,
         resultScope.value === "all"
       );
-      if (applied) readAt.value = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+      if (applied) readAt.value = formatInstant(Date.now(), displayZone.value, "clock");
       await options.onLoaded?.(applied);
       return applied;
     } catch {

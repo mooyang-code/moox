@@ -21,7 +21,7 @@
             ><span class="mono" :title="definition.dsl_hash">{{ shortHash(definition.dsl_hash) }}</span></a-descriptions-item
           >
           <a-descriptions-item label="更新时间">{{
-            formatStrategyTime(definition.updated_at || definition.created_at)
+            formatInstant(definition.updated_at || definition.created_at, displayZone)
           }}</a-descriptions-item>
           <a-descriptions-item label="摘要" :span="2">{{ summarizeDSL(definition.dsl_yaml) }}</a-descriptions-item>
         </a-descriptions>
@@ -47,7 +47,12 @@ import CodeBlock from "@/components/code-block/index.vue";
 import { useSpaceStore } from "@/store/modules/space";
 import { RequestGate } from "@/utils/request-gate";
 import { summarizeDSL } from "@/views/strategy/dsl";
-import { formatStrategyTime, shortHash } from "@/views/strategy/model";
+import { shortHash } from "@/views/strategy/model";
+import { formatInstant } from "@/utils/time-zone";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
+
+// 页面时间按当前空间登记的时区显示
+const displayZone = useDisplayZone();
 
 // definitionId 为空表示抽屉关闭；每次换对象先清空旧内容，再按 ID 读取，迟到的响应由 gate 丢弃。
 const props = defineProps<{ definitionId: string }>();

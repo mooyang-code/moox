@@ -20,18 +20,9 @@
         <a-form-item label="标的（留空表示全部）">
           <a-input v-model="form.subjectId" placeholder="BTCUSDT" allow-clear />
         </a-form-item>
-        <a-form-item
-          label="时间范围（UTC，起始含、结束不含）"
-          :validate-status="rangeError ? 'error' : undefined"
-          :help="rangeError"
-        >
-          <a-range-picker
-            v-model="form.range"
-            show-time
-            format="YYYY-MM-DD HH:mm"
-            style="width: 100%"
-            @change="rangeError = ''"
-          />
+        <a-form-item label="时间范围（起始含、结束不含）" :validate-status="rangeError ? 'error' : undefined" :help="rangeError">
+          <!-- 按当前空间的时区选墙钟，提交时换成 UTC -->
+          <ZonedRangePicker v-model="form.range" :zone="displayZone" style="width: 100%" @update:model-value="rangeError = ''" />
         </a-form-item>
         <a-space class="quick-ranges" wrap>
           <a-button v-for="item in quickRanges" :key="item.hours" size="mini" @click="applyQuick(item.hours)">{{
@@ -73,8 +64,11 @@
               ><span :title="record.series_tag || undefined">{{ seriesTagDisplay(record.series_tag) }}</span></template
             >
           </a-table-column>
-          <a-table-column title="范围（UTC）" :width="260">
-            <template #cell="{ record }">{{ utcText(record.from) }} ~ {{ utcText(record.to) }}</template>
+          <a-table-column title="范围" :width="320">
+            <template #cell="{ record }"
+              ><TimeText :value="record.from" :zone="displayZone" precision="minute" /> ~
+              <TimeText :value="record.to" :zone="displayZone" precision="minute"
+            /></template>
           </a-table-column>
           <a-table-column title="缺失根数" data-index="missing" :width="90" align="right" />
         </template>
@@ -88,11 +82,14 @@
 </template>
 
 <script setup lang="ts">
+import TimeText from "@/components/time-text/index.vue";
 import { computed, ref, watch } from "vue";
 import { Message, Modal } from "@arco-design/web-vue";
 import { checkKline, submitKlineBackfill, type CheckKlineResponse } from "@/api/collector/runtime-status";
 import { seriesTagDisplay } from "@/views/data/shared/series-market";
-import { backfillScopeSummary, quickRange, toRFC3339, utcText } from "./backfill-model";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
+import ZonedRangePicker from "@/components/zoned-date-picker/zoned-range-picker.vue";
+import { backfillScopeSummary, quickRange } from "./backfill-model";
 
 const props = defineProps<{
   visible: boolean;
@@ -113,7 +110,9 @@ const quickRanges = [
   { hours: 24 * 7, label: "最近 7 天" }
 ];
 
-const form = ref({ datasetId: "", subjectId: "", range: [] as string[], force: false, deep: false });
+// 补采按 K 线的时刻：显示和选择都按当前空间登记的时区，提交时换成 UTC
+const displayZone = useDisplayZone();
+const form = ref({ datasetId: "", subjectId: "", range: null as [number, number] | null, force: false, deep: false });
 const rangeError = ref("");
 const busy = ref(false);
 const result = ref<CheckKlineResponse | null>(null);
@@ -132,7 +131,7 @@ watch(
   () => props.visible,
   visible => {
     if (!visible) return;
-    form.value = { datasetId: props.datasetId || "", subjectId: "", range: [], force: false, deep: false };
+    form.value = { datasetId: props.datasetId || "", subjectId: "", range: null, force: false, deep: false };
     rangeError.value = "";
     result.value = null;
     checkedRequest.value = null;
@@ -149,17 +148,16 @@ function close() {
 }
 
 function rangeRequest() {
-  const [rawFrom = "", rawTo = ""] = form.value.range || [];
-  const from = toRFC3339(rawFrom);
-  const to = toRFC3339(rawTo);
-  if (!from || !to) {
+  const range = form.value.range;
+  if (!range) {
     rangeError.value = "请选择起止时间";
     return null;
   }
-  if (from >= to) {
+  if (range[0] >= range[1]) {
     rangeError.value = "起始时间要早于结束时间";
     return null;
   }
+  const [from, to] = range.map(ms => new Date(ms).toISOString());
   return { dataset_id: form.value.datasetId || undefined, subject_id: form.value.subjectId.trim() || undefined, from, to };
 }
 

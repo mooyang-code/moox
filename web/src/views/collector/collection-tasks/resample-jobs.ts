@@ -1,3 +1,4 @@
+import { addDays, msToWallClock, wallClockToMs } from "@/utils/time-zone";
 import type { ResampleJob } from "@/api/collector";
 import { frequencyMinutes } from "@/utils/frequency";
 
@@ -59,32 +60,16 @@ export function newResampleRequestId(random: () => number = Math.random): string
   return `ui-${text}`;
 }
 
-/** 表单标注 UTC：没带时区的日期时间按 UTC 解析，避免按浏览器本地时区偏移。 */
-export function parseUtcInput(raw: string): Date {
-  const text = String(raw || "").trim();
-  const hasZone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(text);
-  return new Date(
-    !hasZone && /\d{2}:\d{2}/.test(text) ? `${text.replace(" ", "T")}Z` : hasZone || !text ? text : `${text}T00:00:00Z`
-  );
-}
-
-export function formatUtcInput(date: Date | null): string {
-  return date && !Number.isNaN(date.getTime()) ? date.toISOString().replace(".000Z", "Z") : "";
-}
-
-/** 默认范围：最近 3 天（UTC 零点对齐），结束时间是今天零点。 */
-export function defaultResampleRange(now = new Date()): { start: string; end: string } {
-  const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
-  return { start: formatUtcInput(new Date(end.getTime() - 3 * 24 * 3600 * 1000)), end: formatUtcInput(end) };
+/** 默认范围：最近 3 天，按空间时区的零点对齐，结束时间是今天零点。返回 [起, 止) 两个毫秒时刻。 */
+export function defaultResampleRange(zone: string, now = Date.now()): [number, number] {
+  const today = msToWallClock(now, zone, "date");
+  return [wallClockToMs(addDays(today, -3), zone)!, wallClockToMs(today, zone)!];
 }
 
 /** 校验提交范围：返回错误文案，通过时返回空串。 */
-export function validateResampleRange(startRaw: string, endRaw: string): string {
-  const start = parseUtcInput(startRaw);
-  const end = parseUtcInput(endRaw);
-  if (Number.isNaN(start.getTime())) return "起始时间格式不正确（UTC，例如 2026-10-20 或 2026-10-20 08:00）";
-  if (Number.isNaN(end.getTime())) return "结束时间格式不正确（UTC，例如 2026-10-21 或 2026-10-21 08:00）";
-  if (end <= start) return "结束时间必须晚于起始时间";
+export function validateResampleRange(range: [number, number] | null): string {
+  if (!range) return "请选择起止时间";
+  if (range[1] <= range[0]) return "结束时间必须晚于起始时间";
   return "";
 }
 

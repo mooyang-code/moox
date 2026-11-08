@@ -50,7 +50,7 @@
             v-else-if="!detailError && (!activeViewReadable || activeViewIds.length === 0)"
             :description="
               activeResample && activeTask
-                ? resampleEmptyDescription(activeTask, activeFrequencyMinutes)
+                ? resampleEmptyDescription(activeTask, activeFrequencyMinutes, displayZone)
                 : '结果准备中，请稍后刷新'
             "
           >
@@ -61,6 +61,7 @@
           <ViewBrowse
             v-else-if="activeViewReadable && activeViewIds.length > 0"
             embedded
+            :zone="displayZone"
             :view-ids="activeViewIds"
             :active-view-id="activeViewIds[0]"
             :refresh-key="viewRefreshKey"
@@ -85,6 +86,8 @@
 </template>
 
 <script setup lang="ts">
+import { useDisplayZone } from "@/hooks/useDisplayZone";
+import { formatInstant } from "@/utils/time-zone";
 import { computed, onActivated, onDeactivated, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { ControlRequestError } from "@/api/admin/http";
@@ -107,6 +110,8 @@ import {
   type TaskResultState
 } from "./task-results-model";
 
+// 页面时间按当前空间登记的时区显示
+const displayZone = useDisplayZone();
 const route = useRoute();
 const router = useRouter();
 const spaceStore = useSpaceStore();
@@ -298,7 +303,10 @@ async function loadTaskDetail(taskId: string, options: { includeInTabs?: boolean
     } else {
       tasks.value = tasks.value.map(item => (item.task_id === taskId ? task : item));
     }
-    lastStatusReadAtByTask.value = { ...lastStatusReadAtByTask.value, [taskId]: new Date().toLocaleTimeString() };
+    lastStatusReadAtByTask.value = {
+      ...lastStatusReadAtByTask.value,
+      [taskId]: formatInstant(Date.now(), displayZone.value, "clock")
+    };
     return state === "ready";
   } catch (error) {
     if (sequence === detailSequence) {

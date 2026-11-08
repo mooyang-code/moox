@@ -65,7 +65,7 @@ describe("空间设置", () => {
     const { store, vm } = await mountPage();
     vm.openCreate();
     await flushPromises();
-    Object.assign(vm.form, { space_id: "stockus", name: "美股" });
+    Object.assign(vm.form, { space_id: "stockus", name: "美股", timezone: "America/New_York" });
     api.listSpaces.mockResolvedValue({ spaces: [space("crypto"), space("stockcn"), space("stockus")] });
     expect(await vm.submit()).toBe(true);
     await flushPromises();
@@ -79,6 +79,10 @@ describe("空间设置", () => {
     expect(await vm.submit()).toBe(false);
     expect(api.createSpace).not.toHaveBeenCalled();
     Object.assign(vm.form, { space_id: "x", name: "x" });
+    // 新建必须选时区，不再默认上海
+    expect(await vm.submit()).toBe(false);
+    expect(api.createSpace).not.toHaveBeenCalled();
+    vm.form.timezone = "UTC";
     api.createSpace.mockRejectedValueOnce(new Error("名称重复"));
     expect(await vm.submit()).toBe(false);
   });
@@ -86,5 +90,14 @@ describe("空间设置", () => {
   it("当前空间那一行标出“当前”", async () => {
     await mountPage();
     expect(document.body.textContent).toContain("crypto（当前）");
+  });
+
+  it("编辑时区为空的空间并保存时不会被写成 Asia/Shanghai", async () => {
+    const { vm } = await mountPage();
+    vm.openEdit({ ...space("crypto"), timezone: "" });
+    await flushPromises();
+    expect(vm.form.timezone).toBe("");
+    expect(await vm.submit()).toBe(false);
+    expect(api.updateSpace).not.toHaveBeenCalled();
   });
 });

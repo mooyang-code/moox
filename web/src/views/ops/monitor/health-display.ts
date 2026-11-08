@@ -30,12 +30,6 @@ export function statusColor(status?: string) {
   }
 }
 
-export function formatCheckedAt(value?: string) {
-  if (!value) return "暂无";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "暂无" : date.toLocaleString("zh-CN", { hour12: false });
-}
-
 // 主机页只按登记的 host_id 定位；历史曲线用的采集器由页面按该主机最近上报的采集器选择。
 export function hostHref(hostID?: string) {
   return "#/ops/hosts?" + new URLSearchParams({ tab: "monitor", ...(hostID ? { host_id: hostID } : {}) });

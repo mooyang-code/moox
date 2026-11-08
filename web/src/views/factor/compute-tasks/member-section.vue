@@ -88,7 +88,7 @@
       启用时加列，不自动补算历史（需要时到「补算」手动提交）；停用保留结果列。已启用的因子需先停用才能编辑定义或移除。固定参数（可变成员的默认参数）加成员之后不再改，要换参数请另加一个成员。
     </p>
     <p v-if="props.info.last_run?.last_period_time" class="member-section__hint">
-      最近周期 {{ formatPeriod(props.info.last_run.last_period_time) }}，{{
+      最近周期 {{ formatPeriod(props.info.last_run.last_period_time, displayZone) }}，{{
         barLagText(props.info.factor_task.freq, props.info.last_run)
       }}
     </p>
@@ -98,6 +98,8 @@
 </template>
 
 <script setup lang="ts">
+import { useDisplayZone } from "@/hooks/useDisplayZone";
+import { formatInstant } from "@/utils/time-zone";
 import { computed, ref } from "vue";
 import { useRouter } from "vue-router";
 import { Message } from "@arco-design/web-vue";
@@ -119,6 +121,8 @@ import {
 
 defineOptions({ name: "FactorMemberSection" });
 
+// 页面时间按当前空间登记的时区显示
+const displayZone = useDisplayZone();
 const props = defineProps<{ info: FactorTaskInfo; title: string }>();
 
 const router = useRouter();
@@ -141,7 +145,7 @@ const rows = computed(() =>
       outputs: member.output_columns?.length ? member.output_columns : member.factor.outputs,
       paramsText: paramsText(member.params),
       submissionText: submitted
-        ? `最近提交：目标期 ${formatPeriod(submitted.period)}，提交于 ${formatTime(submitted.at)}`
+        ? `最近提交：目标期 ${formatPeriod(submitted.period, displayZone.value)}，提交于 ${formatTime(submitted.at)}`
         : "尚未提交（按默认参数计算）"
     };
   })
@@ -160,7 +164,7 @@ function editDefinition(member: FactorMember) {
 }
 
 function formatTime(value?: string) {
-  return value ? new Date(value).toLocaleString() : "-";
+  return formatInstant(value, displayZone.value);
 }
 
 async function toggle(member: FactorMember, target: MemberStatus) {

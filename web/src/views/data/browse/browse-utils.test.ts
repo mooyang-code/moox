@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { DatasetColumn, ViewColumn } from "@/api/storage/types";
 
-import { rowsToColumnNames } from "./browse-utils";
+import { rowsToColumnNames, timeSeriesRowsToTableRows, typedValueText } from "./browse-utils";
 import {
   buildKlineChartRecords,
   buildViewColumnLabels,
@@ -170,5 +170,27 @@ describe("viewBoundDatasetId", () => {
         "dataset_binance_kline_1m"
       )
     ).toBe("time_series");
+  });
+});
+
+describe("时间值的显示", () => {
+  it("给了时区时 TIME 字段按它显示并带后缀，没给时原样", () => {
+    const value = { time_value: "2026-11-07T01:30:00Z" };
+    expect(typedValueText(value, "Asia/Shanghai")).toBe("2026-11-07 09:30:00 UTC+8");
+    expect(typedValueText(value)).toBe("2026-11-07T01:30:00Z");
+  });
+
+  it("时序行的 version 保留原始 data_time，字段里的 TIME 值按时区", () => {
+    const [row] = timeSeriesRowsToTableRows(
+      [
+        {
+          key: { subject_id: "BTC", freq: "1m", series_tag: "", data_time: "2026-11-07T01:30:00Z" },
+          fields: [{ field_id: "close_time", value: { time_value: "2026-11-07T01:31:00Z" } }]
+        }
+      ] as never,
+      "UTC"
+    );
+    expect(row.version).toBe("2026-11-07T01:30:00Z");
+    expect(row.values.close_time).toBe("2026-11-07 01:31:00 UTC");
   });
 });

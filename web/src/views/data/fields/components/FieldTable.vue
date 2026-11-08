@@ -47,7 +47,7 @@
         >
       </a-table-column>
       <a-table-column title="更新时间" data-index="updated_at" :width="180" sorter>
-        <template #cell="{ record }">{{ formatTime(record.updated_at) }}</template>
+        <template #cell="{ record }">{{ formatTime(record.updated_at, displayZone) }}</template>
       </a-table-column>
       <a-table-column title="操作" :width="70" align="center" fixed="right">
         <template #cell="{ record }">
@@ -67,7 +67,10 @@
 import type { Field, FieldGroup } from "@/api/storage/types";
 import { displayFieldId, fieldValueTypeOptions, formatTime, optionLabel, statusColor } from "@/views/data/shared/metadata-utils";
 import { groupPath } from "../field-workbench";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
 
+// 页面时间按当前空间登记的时区显示
+const displayZone = useDisplayZone();
 function fieldStatusText(status?: string) {
   if (status === "active") return "启用";
   return status === "deleted" ? "已删除" : "停用";

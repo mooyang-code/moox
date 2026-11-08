@@ -67,12 +67,6 @@ export function percent(value: string | number | undefined, digits = 2): string 
   return `${(number * 100).toFixed(digits)}%`;
 }
 
-export function formatStrategyTime(value?: string): string {
-  if (!value) return "-";
-  const timestamp = Date.parse(value);
-  return Number.isFinite(timestamp) ? new Date(timestamp).toLocaleString() : "时间未知";
-}
-
 export function shortHash(value?: string): string {
   if (!value) return "-";
   const hex = value.replace(/^sha256:/, "");

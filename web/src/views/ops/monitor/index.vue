@@ -21,7 +21,9 @@
           <p v-if="loaded && !overview.topology_known && groups.length">部署清单尚未完成同步，组件健康状态可能不完整</p>
         </div>
         <div class="verdict-meta">
-          <span>{{ loadedAt ? `${relativeTime(loadedAt, clockMs)}更新` : "尚未读取" }}</span>
+          <span :title="loadedAt ? fullTime(loadedAt) : undefined">{{
+            loadedAt ? `${relativeTime(loadedAt, clockMs)}更新` : "尚未读取"
+          }}</span>
           <span>每 30 秒刷新</span>
         </div>
       </section>
@@ -59,7 +61,7 @@
                 <dl class="facts">
                   <template v-for="fact in line.facts" :key="fact.label">
                     <dt>{{ fact.label }}</dt>
-                    <dd>{{ fact.value }}</dd>
+                    <dd :title="fact.title">{{ fact.value }}</dd>
                   </template>
                 </dl>
                 <RawError :value="line.rawError" />
@@ -171,7 +173,7 @@
                 <p v-for="issue in host.gatewayIssues" :key="issue.label" class="host-card__reason">
                   {{ issue.label }}：{{ issue.value }}
                 </p>
-                <small class="muted">最后上报 {{ host.lastReported }}</small>
+                <small class="muted" :title="host.lastReportedTitle">最后上报 {{ host.lastReported }}</small>
               </div>
               <p v-if="!hosts.length" class="empty">暂无主机</p>
             </div>
@@ -266,7 +268,7 @@
               <li v-for="item in businessRows" :key="item.key" :class="`is-${item.tone}`">
                 <div>
                   <span class="dot" />{{ item.title }}<em>{{ item.attention ? item.reason : item.status }}</em>
-                  <small class="muted">{{ item.spaceId }} · {{ item.checkedAt }}</small>
+                  <small class="muted" :title="item.checkedAtTitle">{{ item.spaceId }} · {{ item.checkedAt }}</small>
                 </div>
                 <RawError v-if="item.attention" :value="item.rawError" />
               </li>
@@ -327,13 +329,13 @@
           <dt>当前状态</dt>
           <dd>{{ statusLabel(selected.status) }}</dd>
           <dt>状态开始</dt>
-          <dd>{{ formatCheckedAt(selected.status_since) }}</dd>
+          <dd>{{ formatInstant(selected.status_since, displayZone) }}</dd>
           <dt>探测地址</dt>
           <dd>{{ selected.probe_url || "不探测" }}</dd>
         </dl>
         <h4>健康探测 · {{ statusLabel(selected.probe?.status) }}</h4>
         <p>
-          {{ selected.probe?.reason }}<small> · 最新检查 {{ formatCheckedAt(selected.probe?.checked_at) }}</small>
+          {{ selected.probe?.reason }}<small> · 最新检查 {{ formatInstant(selected.probe?.checked_at, displayZone) }}</small>
         </p>
         <RawError :value="selected.probe?.raw_error" />
         <div v-if="selected.recent_probes?.length" class="probe-strip" aria-label="最近探测">
@@ -342,7 +344,7 @@
             :key="probe.checked_at"
             class="probe"
             :class="`is-${classify(probe.status).tone}`"
-            :title="`${formatCheckedAt(probe.checked_at)} · ${statusLabel(probe.status)} · ${probe.reason || ''}`"
+            :title="`${formatInstant(probe.checked_at, displayZone)} · ${statusLabel(probe.status)} · ${probe.reason || ''}`"
           />
           <small class="muted">最近 {{ selected.recent_probes.length }} 次探测（最多 10 次）</small>
         </div>
@@ -350,7 +352,8 @@
           指标上报 · {{ selected.reporter?.status === "unchecked" ? "不要求上报" : statusLabel(selected.reporter?.status) }}
         </h4>
         <p>
-          {{ selected.reporter?.reason }}<small> · 最后上报 {{ formatCheckedAt(selected.reporter?.checked_at) }}</small>
+          {{ selected.reporter?.reason
+          }}<small> · 最后上报 {{ formatInstant(selected.reporter?.checked_at, displayZone) }}</small>
         </p>
         <div v-if="selected.instances?.length" class="table-scroll">
           <table>
@@ -369,7 +372,7 @@
                 </td>
                 <td>{{ item.version }}</td>
                 <td>{{ statusLabel(item.status) }}</td>
-                <td>{{ formatCheckedAt(item.last_reported_at) }}</td>
+                <td>{{ formatInstant(item.last_reported_at, displayZone) }}</td>
               </tr>
             </tbody>
           </table>
@@ -387,8 +390,8 @@ import { listAllDatasets, listAllViews } from "@/api/storage/metadata";
 import { usePolling } from "@/hooks/usePolling";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import { createSubmitScope } from "@/utils/submit-scope";
-import { relativeTime, toneIcon, type NameBook } from "@/views/home/home-model";
-import { formatCheckedAt, statusLabel } from "./health-display";
+import { fullTime, relativeTime, toneIcon, type NameBook } from "@/views/home/home-model";
+import { statusLabel } from "./health-display";
 import {
   alertGroups,
   businessKinds,
@@ -406,6 +409,11 @@ import {
 } from "./monitor-model";
 import ArrivalChart from "./arrival-chart.vue";
 import RawError from "./raw-error.vue";
+import { formatInstant } from "@/utils/time-zone";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
+
+// 页面时间按 UTC显示
+const displayZone = useDisplayZone("global");
 
 const overview = ref<HealthOverview>({});
 const loading = ref(false);

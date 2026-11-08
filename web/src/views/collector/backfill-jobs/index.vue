@@ -69,8 +69,11 @@
                 <div v-if="record.subject_id" class="muted">标的 {{ record.subject_id }}</div>
               </template>
             </a-table-column>
-            <a-table-column title="时间范围（UTC）" :width="150">
-              <template #cell="{ record }"> {{ utcText(record.from) }}<br />→ {{ utcText(record.to) }} </template>
+            <a-table-column title="时间范围" :width="190">
+              <template #cell="{ record }">
+                <TimeText :value="record.from" :zone="displayZone" precision="minute" /><br />→
+                <TimeText :value="record.to" :zone="displayZone" precision="minute" />
+              </template>
             </a-table-column>
             <a-table-column title="状态" :width="170">
               <template #cell="{ record }">
@@ -93,7 +96,7 @@
               </template>
             </a-table-column>
             <a-table-column title="创建时间" :width="170">
-              <template #cell="{ record }">{{ localTimeText(record.created_at) }}</template>
+              <template #cell="{ record }">{{ timeText(record.created_at) }}</template>
             </a-table-column>
             <a-table-column title="操作" :width="130" align="center" fixed="right">
               <template #cell="{ record }">
@@ -148,10 +151,11 @@
             >{{ jobSourceText(detail.job.source) }} · {{ jobKindText(detail.job.kind) }}</a-descriptions-item
           >
           <a-descriptions-item label="标的">{{ detail.job.subject_id || "全部" }}</a-descriptions-item>
-          <a-descriptions-item label="创建时间">{{ localTimeText(detail.job.created_at) }}</a-descriptions-item>
-          <a-descriptions-item label="范围（UTC）" :span="2"
-            >{{ utcText(detail.job.from) }} ~ {{ utcText(detail.job.to) }}</a-descriptions-item
-          >
+          <a-descriptions-item label="创建时间">{{ timeText(detail.job.created_at) }}</a-descriptions-item>
+          <a-descriptions-item label="范围" :span="2"
+            ><TimeText :value="detail.job.from" :zone="displayZone" precision="minute" /> ~
+            <TimeText :value="detail.job.to" :zone="displayZone" precision="minute"
+          /></a-descriptions-item>
           <a-descriptions-item label="分块" :span="2">
             成功 {{ detail.job.succeeded || 0 }} / 失败 {{ detail.job.failed || 0 }} / 执行中 {{ detail.job.running || 0 }} /
             未开始 {{ detail.job.pending || 0 }} / 取消 {{ detail.job.canceled || 0 }}
@@ -175,8 +179,11 @@
                 ><span :title="record.series_tag || undefined">{{ seriesTagDisplay(record.series_tag) }}</span></template
               >
             </a-table-column>
-            <a-table-column title="范围（UTC）" :width="230">
-              <template #cell="{ record }">{{ utcText(record.from) }} ~ {{ utcText(record.to) }}</template>
+            <a-table-column title="范围" :width="320">
+              <template #cell="{ record }"
+                ><TimeText :value="record.from" :zone="displayZone" precision="minute" /> ~
+                <TimeText :value="record.to" :zone="displayZone" precision="minute"
+              /></template>
             </a-table-column>
             <a-table-column title="尝试" data-index="attempts" :width="70" align="center" />
             <a-table-column title="错误">
@@ -192,6 +199,7 @@
 </template>
 
 <script setup lang="ts">
+import TimeText from "@/components/time-text/index.vue";
 import { computed, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { Message } from "@arco-design/web-vue";
@@ -220,13 +228,17 @@ import {
   jobSegments,
   jobSourceText,
   jobStatusInfo,
-  localTimeText,
   normalizeSegment,
-  utcText,
   type JobSegment
 } from "./backfill-model";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
+import { formatInstant } from "@/utils/time-zone";
 
 defineOptions({ name: "CollectorBackfillJobs" });
+
+// 补采作业的时间按当前空间登记的时区带后缀显示；范围按分钟对齐，到分钟
+const displayZone = useDisplayZone();
+const timeText = (value?: string) => formatInstant(value, displayZone.value);
 
 const route = useRoute();
 const router = useRouter();

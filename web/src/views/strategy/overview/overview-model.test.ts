@@ -75,9 +75,11 @@ describe("strategy overview model", () => {
         instances: [instance("a")],
         targets: { a: snapshot("2026-10-10T13:00:00Z", weights) },
         catalog: [{ strategy_id: "s1", name: "动量" }] as never
-      })
+      }),
+      "UTC"
     );
     expect(card.title).toBe("动量");
+    expect(card.period).toBe("最近一期 2026-10-10 11:00:00 UTC");
     expect(card.chips).toHaveLength(CARD_CHIP_LIMIT);
     expect(card.chips[0]).toEqual({ instrumentId: "SHORT", text: "SHORT -50.00%", short: true });
     expect(card.more).toBe(9 - CARD_CHIP_LIMIT);

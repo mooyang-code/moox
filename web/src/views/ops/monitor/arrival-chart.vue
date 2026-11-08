@@ -71,7 +71,7 @@ import {
   shiftArrivalAnchor,
   type ArrivalScale
 } from "./arrival-model";
-import { marketClock, marketDay, zoneLabel } from "./market-time";
+import { marketClock, marketDay, zoneSuffix } from "@/utils/time-zone";
 
 const props = defineProps<{ overview?: HealthOverview; names: NameBook; nowMs: number }>();
 
@@ -79,7 +79,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const chains = computed(() => arrivalChains(props.overview, props.names));
 const chainKey = ref("");
 const chain = computed(() => chains.value.find(item => item.key === chainKey.value));
-const zone = computed(() => zoneLabel(chain.value?.timezone, props.nowMs));
+const zone = computed(() => zoneSuffix(props.nowMs, chain.value?.timezone));
 // 到达记录保留 7 天：可选今天及之前 7 天（按市场时区）。
 const maxDay = computed(() => marketDay(props.nowMs, chain.value?.timezone));
 const minDay = computed(() => marketDay(props.nowMs - 7 * DAY_MS, chain.value?.timezone));

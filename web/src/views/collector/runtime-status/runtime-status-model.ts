@@ -5,7 +5,7 @@ import type {
   HealthLevel
 } from "@/api/collector/runtime-status";
 
-export { activityTimeText as localTimeText } from "@/components/activity-log/activity-log";
+import { marketTime } from "@/utils/time-zone";
 
 const levels: Record<HealthLevel, { text: string; color: string; icon: string }> = {
   ok: { text: "正常", color: "green", icon: "icon-check-circle" },
@@ -71,22 +71,18 @@ export function durationText(seconds?: number | string) {
   return `${Math.floor(minutes / (24 * 60))} 天`;
 }
 
-/** 巡检时间的短格式：今天只显示时分，其余显示月日时分（本地时间）。 */
-export function inspectTimeText(value: string, now = new Date()) {
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return value;
-  const pad = (n: number) => String(n).padStart(2, "0");
-  const time = `${pad(parsed.getHours())}:${pad(parsed.getMinutes())}`;
-  return parsed.toDateString() === now.toDateString() ? time : `${pad(parsed.getMonth() + 1)}-${pad(parsed.getDate())} ${time}`;
-}
-
 /**
  * 自动巡检列的展示：正常时只说“查到哪里了”，不出现时长，避免被误读为数据延迟；
  * 只有超出预期（与后端阈值一致：超过 15 分钟落后、超过 1 小时已停）时才带上时长。
  */
-export function inspectionInfo(record: { inspected_until?: string; inspect_lag_seconds?: number | string }, now = new Date()) {
+export function inspectionInfo(
+  record: { inspected_until?: string; inspect_lag_seconds?: number | string },
+  zone: string,
+  nowMs = Date.now()
+) {
   const lag = Number(record.inspect_lag_seconds || 0);
-  const base = record.inspected_until ? `已查至 ${inspectTimeText(record.inspected_until, now)}` : "尚未巡检";
+  // 按空间时区：当天只写时分，否则写月-日 时分，都带后缀
+  const base = record.inspected_until ? `已查至 ${marketTime(record.inspected_until, zone, nowMs)}` : "尚未巡检";
   if (lag > 3600) return { text: `${base} · 已停 ${durationText(lag)}`, color: "rgb(var(--danger-6))" };
   if (lag > 900) return { text: `${base} · 落后 ${durationText(lag)}`, color: "rgb(var(--warning-6))" };
   return { text: base, color: "var(--color-text-3)" };

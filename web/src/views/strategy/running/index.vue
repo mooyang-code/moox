@@ -66,7 +66,7 @@
             ><template #cell="{ record }"><StatusBadge :enabled="record.enabled" :health="record.health" /></template
           ></a-table-column>
           <a-table-column title="更新时间" :width="180"
-            ><template #cell="{ record }">{{ formatStrategyTime(record.updated_at) }}</template></a-table-column
+            ><template #cell="{ record }">{{ formatInstant(record.updated_at, displayZone) }}</template></a-table-column
           >
           <a-table-column title="操作" :width="170" fixed="right">
             <template #cell="{ record }">
@@ -130,7 +130,6 @@ import StatusBadge from "@/views/strategy/components/strategy-status-badge.vue";
 import StrategyInstanceCreate from "@/views/strategy/components/strategy-instance-create.vue";
 import { confirmInstanceToggle } from "@/views/strategy/components/instance-toggle";
 import InstanceEnableDialog from "@/views/strategy/components/instance-enable-dialog.vue";
-import { formatStrategyTime } from "@/views/strategy/model";
 import InfoTip from "@/views/factor/shared/info-tip.vue";
 import { STRATEGY_TASKS_ROUTE, detailLink, normalizeTaskTab, replayLink, resultsLink } from "@/views/strategy/links";
 import InstanceQuickDrawer from "@/views/strategy/running/instance-quick-drawer.vue";
@@ -141,6 +140,11 @@ import {
   parseRunningQuery,
   type RunningState
 } from "@/views/strategy/running/running-model";
+import { formatInstant } from "@/utils/time-zone";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
+
+// 页面时间按当前空间登记的时区显示
+const displayZone = useDisplayZone();
 
 defineOptions({ name: "StrategyRunning" });
 const ROUTE_NAME = STRATEGY_TASKS_ROUTE;
@@ -186,7 +190,7 @@ async function refresh() {
       page,
       page_size: PAGE_SIZE
     });
-    readAt.value = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+    readAt.value = formatInstant(Date.now(), displayZone.value, "clock");
   } catch {
     // 错误已记入 store.instancesError，页面就近展示。
   }

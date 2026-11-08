@@ -13,9 +13,12 @@
 import { nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { default as VChart } from "@visactor/vchart";
 import { queryEquityCurve, type EquityPoint } from "@/api/trade";
-import { equityRange, toEquitySeries } from "./equity-curve";
+import { equityChartParts, equityRange, toEquitySeries } from "./equity-curve";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
 
 const props = defineProps<{ logicalAccountId: string }>();
+// 横轴和提示框按当前空间登记的时区
+const displayZone = useDisplayZone();
 const container = ref<HTMLElement>();
 const points = ref<EquityPoint[]>([]);
 const loading = ref(false);
@@ -39,17 +42,15 @@ async function load() {
     points.value = response.points || [];
     await nextTick();
     if (seq !== requestSeq || logicalAccountId !== props.logicalAccountId || !container.value) return;
+    const series = toEquitySeries(points.value);
     chart = new VChart(
       {
         type: "line",
-        data: [{ id: "equity", values: toEquitySeries(points.value) }],
+        data: [{ id: "equity", values: series }],
         xField: "time",
         yField: "value",
         seriesField: undefined,
-        axes: [
-          { orient: "bottom", type: "time" },
-          { orient: "left", type: "linear" }
-        ],
+        ...equityChartParts(series, displayZone.value),
         line: { style: { lineWidth: 2 } },
         point: { visible: false }
       },

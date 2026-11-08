@@ -4,7 +4,6 @@ import {
   isActiveResampleJob,
   newResampleRequestId,
   parseSubjectInput,
-  parseUtcInput,
   resampleJobOriginLabel,
   resampleJobProgress,
   resampleJobStatusLabel,
@@ -41,25 +40,20 @@ describe("resample jobs", () => {
     expect(sourceCandidateReason("5m", "7m")).toBe("");
   });
 
-  it("parses naive date inputs as UTC", () => {
-    expect(parseUtcInput("2026-10-20").toISOString()).toBe("2026-10-20T00:00:00.000Z");
-    expect(parseUtcInput("2026-10-20 08:30").toISOString()).toBe("2026-10-20T08:30:00.000Z");
-    expect(parseUtcInput("2026-10-20T08:30:00+08:00").toISOString()).toBe("2026-10-20T00:30:00.000Z");
-    expect(Number.isNaN(parseUtcInput("not a time").getTime())).toBe(true);
-  });
-
   it("validates the submit range", () => {
-    expect(validateResampleRange("2026-10-20", "2026-10-21")).toBe("");
-    expect(validateResampleRange("2026-10-21", "2026-10-20")).toContain("晚于");
-    expect(validateResampleRange("x", "2026-10-20")).toContain("起始时间");
-    expect(validateResampleRange("2026-10-20", "y")).toContain("结束时间");
+    expect(validateResampleRange([1, 2])).toBe("");
+    expect(validateResampleRange([2, 1])).toContain("晚于");
+    expect(validateResampleRange(null)).toContain("起止时间");
   });
 
-  it("uses the last three UTC days as the default range", () => {
-    expect(defaultResampleRange(new Date("2026-10-22T10:20:00Z"))).toEqual({
-      start: "2026-10-19T00:00:00Z",
-      end: "2026-10-22T00:00:00Z"
-    });
+  it("默认范围是最近三天，按空间时区的零点对齐", () => {
+    const now = Date.parse("2026-10-22T10:20:00Z");
+    expect(defaultResampleRange("UTC", now)).toEqual([Date.parse("2026-10-19T00:00:00Z"), Date.parse("2026-10-22T00:00:00Z")]);
+    // A 股空间：北京时间 10-22 零点是 UTC 10-21 16:00
+    expect(defaultResampleRange("Asia/Shanghai", now)).toEqual([
+      Date.parse("2026-10-18T16:00:00Z"),
+      Date.parse("2026-10-21T16:00:00Z")
+    ]);
   });
 
   it("parses subject lists and generates distinct request ids", () => {

@@ -15,7 +15,7 @@ const api = vi.hoisted(() => ({
   serverNow: null as number | null,
   chartSpecs: [] as any[],
   charts: [] as any[],
-  space: null as null | { selectedSpaceId: string }
+  space: null as null | { selectedSpaceId: string; selectedSpace?: { timezone: string } }
 }));
 vi.mock("@/api/strategy", () => ({
   getReplay: api.getReplay,
@@ -463,7 +463,7 @@ describe("strategy replay page", () => {
     api.listReplayBars.mockResolvedValue({ items: [bar()], page: { total: 1 } });
     const wrapper = mountPage();
     await flushPromises();
-    expect(wrapper.text()).toContain("模拟爆仓：K 线结束于 2026-09-01 07:00 UTC");
+    expect(wrapper.text()).toContain("模拟爆仓：K 线结束于 2026-09-01 07:00:00 UTC");
   });
 
   it("asks for one task per market when a saved definition uses both markets", async () => {
@@ -549,8 +549,10 @@ describe("strategy replay page", () => {
     expect(wrapper.text()).toContain("现金不足，买入按目标的 50.00% 成交");
     expect(wrapper.find(".chart").attributes("aria-label")).toContain("权益曲线：共 1 根");
     const spec = api.chartSpecs[api.chartSpecs.length - 1];
-    expect(spec.axes[0].layers[0]).toMatchObject({ timeFormatMode: "utc" });
-    expect(spec.tooltip.mark.title.value({ time: Date.parse("2026-09-01T01:00:00Z") })).toBe("2026-09-01 01:00 UTC");
+    // 横轴按空间时区写刻度，时区写在轴标题上（VChart 的时间轴只认本地和 UTC）
+    expect(spec.axes[0]).toMatchObject({ type: "linear", title: { text: "时间（UTC）" } });
+    expect(spec.axes[0].label.formatMethod(String(Date.parse("2026-09-01T01:00:00Z")))).toBe("09-01 01:00");
+    expect(spec.tooltip.mark.title.value({ time: Date.parse("2026-09-01T01:00:00Z") })).toBe("2026-09-01 01:00:00 UTC");
   });
 
   it("scopes the waiting hint to the replay being waited on", async () => {
@@ -1337,7 +1339,8 @@ describe("strategy replay page", () => {
     expect(wrapper.text()).not.toContain("正在等待写入");
   });
 
-  it("shows A-share replay ranges as Shanghai dates", async () => {
+  it("shows A-share daily replay ranges as dates in the space zone", async () => {
+    api.space = reactive({ selectedSpaceId: "stockcn", selectedSpace: { timezone: "Asia/Shanghai" } });
     const stock = replay("r1", "done", "{}", {
       calendar: "cn_stock",
       start_time: "2026-08-31T16:00:00Z",
@@ -1347,8 +1350,8 @@ describe("strategy replay page", () => {
     api.getReplay.mockResolvedValue(stock);
     const wrapper = mountPage();
     await flushPromises();
-    expect(listText(wrapper)).toContain("2026-09-01 → 2026-10-01（上海日期，不含结束日）");
-    expect(wrapper.text()).toContain("区间 2026-09-01 → 2026-10-01（上海日期，不含结束日）");
+    expect(listText(wrapper)).toContain("2026-09-01 UTC+8 → 2026-10-01 UTC+8（不含结束日）");
+    expect(wrapper.text()).toContain("区间 2026-09-01 UTC+8 → 2026-10-01 UTC+8（不含结束日）");
   });
 
   it("releases the chart on unmount", async () => {
@@ -1485,8 +1488,7 @@ describe("strategy replay page URL state and create drawer", () => {
     vm.form.single_market = "spot";
     vm.form.tasks = { spot: "ftask_a" };
     vm.form.strategy_id = "s1";
-    vm.form.start = "2026-09-02 00:00";
-    vm.form.end = "2026-09-01 00:00";
+    vm.form.range = [Date.parse("2026-09-02T00:00:00Z"), Date.parse("2026-09-01T00:00:00Z")];
     await click(wrapper, "开始回放");
     expect(api.startReplay).not.toHaveBeenCalled();
     expect(wrapper.text()).toContain("结束时间必须晚于开始时间");
@@ -1503,8 +1505,14 @@ describe("strategy replay page URL state and create drawer", () => {
     vm.form.single_market = "spot";
     vm.form.tasks = { spot: "ftask_a" };
     vm.form.strategy_id = "s1";
+    // 区间是毫秒时刻（选择器按空间时区换算），提交时写成不带毫秒的 UTC RFC3339
+    vm.form.range = [Date.parse("2026-09-01T01:30:00Z"), Date.parse("2026-09-01T07:00:00Z")];
     await click(wrapper, "开始回放");
     expect(api.startReplay).toHaveBeenCalledTimes(1);
+    expect(api.startReplay.mock.calls[0][0]).toMatchObject({
+      start_time: "2026-09-01T01:30:00Z",
+      end_time: "2026-09-01T07:00:00Z"
+    });
     expect(nav.route.query).toEqual({ tab: "replay", replay_id: "r5" });
     expect(wrapper.find(".drawer").attributes("data-visible")).toBe("false");
   });

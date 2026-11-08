@@ -71,3 +71,35 @@ describe("defaultSeriesTagForView", () => {
     expect(defaultSeriesTagForView(undefined)).toBe("");
   });
 });
+
+describe("buildViewFilterExprs 时间列", () => {
+  const time = "FIELD_VALUE_TYPE_TIME" as const;
+  const conds = (value: string, zone: string) =>
+    buildViewFilterExprs([{ fieldName: "data_time", operator: "gte", value, valueType: time }], zone)?.groups[0].conds;
+
+  it("墙钟按所给时区解析，提交 UTC 的 RFC3339", () => {
+    expect(conds("2026-11-07 09:30", "Asia/Shanghai")).toEqual([
+      { column: "data_time", op: "FILTER_OP_GTE", values: [{ time_value: "2026-11-07T01:30:00Z" }] }
+    ]);
+    expect(conds("2026-11-07", "UTC")?.[0].values).toEqual([{ time_value: "2026-11-07T00:00:00Z" }]);
+  });
+
+  it("自带偏移的时间按它自己的偏移；看不懂的值不加条件", () => {
+    expect(conds("2026-11-07T09:30:00+08:00", "UTC")?.[0].values).toEqual([{ time_value: "2026-11-07T01:30:00Z" }]);
+    expect(conds("昨天", "UTC")).toBeUndefined();
+    // 纯数字不当成毫秒
+    expect(conds("20261107", "UTC")).toBeUndefined();
+  });
+});
+
+describe("记录模式的版本列", () => {
+  it("版本是任意字符串（1、v1），原样显示，不按时间格式化", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { resolve } = await import("node:path");
+    const page = readFileSync(resolve(__dirname, "index.vue"), "utf8");
+    const recordColumn = page.slice(page.lastIndexOf('<a-table-column data-index="version"'), page.indexOf(">版本<"));
+    expect(recordColumn).not.toContain("formatInstant");
+    const timeColumn = page.slice(page.indexOf('<a-table-column data-index="version"'), page.indexOf(">时间<"));
+    expect(timeColumn).toContain("formatInstant(record.version, zone)");
+  });
+});

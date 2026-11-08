@@ -1,5 +1,8 @@
 import type { Strategy } from "@/api/strategy-types";
+import type { FactorTask } from "@/api/factor/types";
 import { TASK_KEY_ORDER, marketRequirement } from "@/views/strategy/market-mode";
+import { freqSeconds } from "@/views/factor/shared/health";
+import { addDays, msToWallClock, wallClockToMs } from "@/utils/time-zone";
 
 /** 回放表单的状态：来源三选一（实例会话 / 已保存定义 / DSL 草稿），其余为各市场的因子任务、区间与两个手续费。 */
 export interface ReplayFormState {
@@ -11,8 +14,8 @@ export interface ReplayFormState {
   single_market: string;
   /** 市场 → 因子任务；从实例发起时预填实例关联的任务。 */
   tasks: Record<string, string>;
-  start: string;
-  end: string;
+  /** 回放区间 [起, 止)，毫秒时刻；在页面里按空间时区选择 */
+  range: [number, number] | null;
   /** 现货与股票的单边手续费、永续的单边手续费（bps）。 */
   spot_fee_bps: number;
   swap_fee_bps: number;
@@ -49,27 +52,39 @@ export function replayFactorTasks(form: ReplayFormState, strategies: Strategy[])
   return Object.fromEntries(replayMarkets(form, strategies).map(market => [market, form.tasks[market] ?? ""]));
 }
 
-/**
- * 发起前的本地校验，返回第一条错误（没有则为空串）：来源与各市场的因子任务、时间格式、结束晚于开始、两个手续费范围。
- * parse 把 YYYY-MM-DD HH:mm（UTC）转成 ISO 时间，格式不对返回 null。
- */
-export function validateReplayForm(
-  form: ReplayFormState,
-  parse: (value: string) => string | null,
-  strategies: Strategy[] = []
-): string {
+/** 发起前的本地校验，返回第一条错误（没有则为空串）：来源与各市场的因子任务、区间、两个手续费范围。 */
+export function validateReplayForm(form: ReplayFormState, strategies: Strategy[] = []): string {
   if (!replaySourceOf(form)) return "请选择定义、粘贴 DSL 文本或从实例详情进入";
   const markets = replayMarkets(form, strategies);
   // 从实例发起且入口没有带任务：不给 factor_tasks，后端读实例关联的任务。
   const omitted = Boolean(form.instance_id) && !markets.length;
   if (!omitted && !markets.length) return "请选择策略的因子任务（策略没写 market 时先选任务所属的市场）";
   if (markets.some(market => !form.tasks[market])) return "请为策略用到的每个市场选择因子任务";
-  const start = parse(form.start);
-  const end = parse(form.end);
-  if (!start || !end) return "时间格式应为 YYYY-MM-DD HH:mm（UTC），例如 2026-09-01 00:00";
-  if (Date.parse(end) <= Date.parse(start)) return "结束时间必须晚于开始时间";
+  if (!form.range) return "请选择回放区间";
+  if (form.range[1] <= form.range[0]) return "结束时间必须晚于开始时间";
   for (const fee of [Number(form.spot_fee_bps), Number(form.swap_fee_bps)]) {
     if (!Number.isFinite(fee) || fee < 0 || fee > 1000) return "单边手续费需在 0～1000 bps 之间";
   }
   return "";
+}
+
+/** 选的因子任务都是日线时区间只选日期（按空间时区的整天）；没选任务或有日内任务时选到分钟。 */
+export function replayDateOnly(
+  form: ReplayFormState,
+  strategies: Strategy[],
+  tasks: Pick<FactorTask, "task_id" | "freq">[]
+): boolean {
+  const chosen = Object.values(replayFactorTasks(form, strategies)).filter(Boolean);
+  if (!chosen.length) return false;
+  return chosen.every(id => freqSeconds(tasks.find(task => task.task_id === id)?.freq ?? "") === 86_400);
+}
+
+/**
+ * 只选日期时把区间吸附成和选择器显示一致的整天（按空间时区）：起点取所在日期零点，终点取 range[1] − 1 所在日期的下一天零点。
+ * 否则整点的默认区间提交后，后端只取开盘不早于起点的 bar，第一天会被跳过。
+ */
+export function wholeDays(range: [number, number], zone: string): [number, number] {
+  const start = wallClockToMs(msToWallClock(range[0], zone, "date"), zone)!;
+  const end = wallClockToMs(addDays(msToWallClock(range[1] - 1, zone, "date"), 1), zone)!;
+  return [start, end];
 }

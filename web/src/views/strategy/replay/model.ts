@@ -1,5 +1,6 @@
 import type { Replay, ReplayBar } from "@/api/strategy-types";
 import { positionLabel, tasksText } from "@/views/strategy/market-mode";
+import { formatInstant, msToWallClock, toInstantMs } from "@/utils/time-zone";
 
 export interface ReplayMetrics {
   bars: number;
@@ -80,49 +81,10 @@ export function replayStatusColor(status: string): string {
   );
 }
 
-/** 把 "YYYY-MM-DD HH:mm"（或只有日期）的 UTC 文本转为 ISO 时间；格式或日期无效时返回 null。 */
-export function parseUtcInput(text: string): string | null {
-  const match = /^(\d{4})-(\d{2})-(\d{2})(?:[ T](\d{2}):(\d{2}))?$/.exec(text.trim());
-  if (!match) return null;
-  const [, year, month, day, hour = "00", minute = "00"] = match;
-  const value = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute)));
-  if (
-    value.getUTCFullYear() !== Number(year) ||
-    value.getUTCMonth() !== Number(month) - 1 ||
-    value.getUTCDate() !== Number(day) ||
-    value.getUTCHours() !== Number(hour) ||
-    value.getUTCMinutes() !== Number(minute)
-  )
-    return null;
-  return value.toISOString().replace(/\.\d{3}Z$/, "Z");
-}
-
-/** 把时间格式化为 UTC 的 "YYYY-MM-DD HH:mm"，用于输入框。 */
-export function formatUtcInput(value: Date): string {
-  return value.toISOString().slice(0, 16).replace("T", " ");
-}
-
-/** 最近 days 天的 UTC 区间（终点取当前整点）。 */
-export function recentUtcRange(days: number, now = new Date()): [string, string] {
-  const end = new Date(now.getTime());
-  end.setUTCMinutes(0, 0, 0);
-  const start = new Date(end.getTime() - days * 24 * 3600 * 1000);
-  return [formatUtcInput(start), formatUtcInput(end)];
-}
-
-/** 按 UTC 显示时间（回放区间以 UTC 输入，列表与周期表保持一致）。 */
-export function formatUtcTime(value?: string): string {
-  if (!value) return "-";
-  const timestamp = Date.parse(value);
-  if (!Number.isFinite(timestamp)) return "时间未知";
-  return `${new Date(timestamp).toISOString().slice(0, 16).replace("T", " ")} UTC`;
-}
-
-/** 时刻所在的上海日期（YYYY-MM-DD）。 */
-function shanghaiDate(value: string): string {
-  const timestamp = Date.parse(value);
-  if (!Number.isFinite(timestamp)) return "时间未知";
-  return new Date(timestamp + 8 * 3600 * 1000).toISOString().slice(0, 10);
+/** 最近 days 天的区间（毫秒，终点取当前整点）。 */
+export function recentRange(days: number, nowMs = Date.now()): [number, number] {
+  const end = Math.floor(nowMs / 3_600_000) * 3_600_000;
+  return [end - days * 86_400_000, end];
 }
 
 /** 回放对象的说明：定义名称（或 ID），或未保存的 DSL 文本。 */
@@ -132,27 +94,18 @@ export function replaySourceLabel(replay: { strategy_id: string }, catalog: { st
   return definition ? `${definition.name}（${replay.strategy_id}）` : replay.strategy_id;
 }
 
-/** 时刻是否是上海时间零点。 */
-function isShanghaiMidnight(value: string): boolean {
-  const timestamp = Date.parse(value);
-  return Number.isFinite(timestamp) && (timestamp + 8 * 3600 * 1000) % (24 * 3600 * 1000) === 0;
-}
-
 /**
- * 回放区间的写法：A 股日线按上海日期（含起始日、不含结束日），其余按 UTC 时间。回放记录只带日历不带周期，
- * A 股日线的区间两端总是上海零点；A 股日内的区间是真实时刻，不是上海零点时按 UTC 时间写。
+ * 回放区间的写法：A 股日线的区间两端是空间时区的零点，按日期写（含起始日、不含结束日）；其余写时刻。
+ * 回放记录只带日历不带周期，A 股日内的区间是真实时刻，不是零点时按时刻写。
  */
-export function replayRangeLabel(replay: { calendar?: string; start_time: string; end_time: string }): string {
-  if (
-    replay.calendar === "cn_stock" &&
-    replay.start_time &&
-    replay.end_time &&
-    isShanghaiMidnight(replay.start_time) &&
-    isShanghaiMidnight(replay.end_time)
-  ) {
-    return `${shanghaiDate(replay.start_time)} → ${shanghaiDate(replay.end_time)}（上海日期，不含结束日）`;
+export function replayRangeLabel(replay: { calendar?: string; start_time: string; end_time: string }, zone: string): string {
+  const start = toInstantMs(replay.start_time);
+  const end = toInstantMs(replay.end_time);
+  const midnight = (ms: number) => msToWallClock(ms, zone, "clock") === "00:00:00";
+  if (replay.calendar === "cn_stock" && start !== null && end !== null && midnight(start) && midnight(end)) {
+    return `${formatInstant(start, zone, "date")} → ${formatInstant(end, zone, "date")}（不含结束日）`;
   }
-  return `${formatUtcTime(replay.start_time)} → ${formatUtcTime(replay.end_time)}`;
+  return `${formatInstant(replay.start_time, zone, "minute")} → ${formatInstant(replay.end_time, zone, "minute")}`;
 }
 
 /** 把新读到的周期记录合并到已加载的列表：按 bar_end_time 去重并保持升序。 */
@@ -255,12 +208,12 @@ export function parseBarDetail(bar: ReplayBar): ReplayBarDetail {
 }
 
 /** 权益曲线的文字摘要，供屏幕阅读器等无法查看图形的场景使用。 */
-export function equitySummary(bars: ReplayBar[]): string {
+export function equitySummary(bars: ReplayBar[], zone: string): string {
   const points = equitySeries(bars);
   if (!points.length) return "暂无权益曲线";
   const values = points.map(point => point.value);
   const first = points[0];
   const last = points[points.length - 1];
-  const label = (time: number) => formatUtcTime(new Date(time).toISOString());
+  const label = (time: number) => formatInstant(time, zone);
   return `权益曲线：共 ${points.length} 根，${label(first.time)} 权益 ${first.value.toFixed(4)}，${label(last.time)} 权益 ${last.value.toFixed(4)}，最高 ${Math.max(...values).toFixed(4)}，最低 ${Math.min(...values).toFixed(4)}`;
 }

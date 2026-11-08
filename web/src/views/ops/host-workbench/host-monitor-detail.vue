@@ -190,6 +190,7 @@
 </template>
 
 <script setup lang="ts">
+import { msToWallClock, toInstantMs } from "@/utils/time-zone";
 import { nextTick, onUnmounted, ref, watch } from "vue";
 import { default as VChart } from "@visactor/vchart";
 import {
@@ -216,12 +217,9 @@ function renderChart() {
   if (!trendChartRef.value || !historyHasRenderableData(historyData.value)) return;
   const values: Array<{ time: string; value: number; type: string }> = [];
   for (const point of historyData.value) {
-    const time = new Date(point.timestamp).toLocaleString("zh-CN", {
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit"
-    });
+    // 主机和空间无关：横轴按 UTC 预先写成“月-日 时:分”，时区写在轴标题上
+    const at = toInstantMs(point.timestamp);
+    const time = at === null ? "" : msToWallClock(at, "UTC", "minute").slice(5);
     if (point.cpu_available) values.push({ time, value: point.cpu_usage, type: "CPU" });
     if (point.memory_available) values.push({ time, value: point.memory_percent, type: "内存" });
     if (point.disk_available) values.push({ time, value: point.disk_percent, type: "文件系统" });
@@ -239,7 +237,7 @@ function renderChart() {
       legends: { visible: true, orient: "top" },
       axes: [
         { orient: "left", min: 0, max: 100 },
-        { orient: "bottom", sampling: true }
+        { orient: "bottom", sampling: true, title: { visible: true, text: "时间（UTC）" } }
       ],
       tooltip: { mark: { content: [{ key: (datum: any) => datum.type, value: (datum: any) => `${datum.value.toFixed(1)}%` }] } },
       crosshair: { xField: { visible: true } }

@@ -22,9 +22,9 @@
         <a-descriptions-item label="参考价">{{ fmtQty(order.reference_price) }}</a-descriptions-item>
         <a-descriptions-item label="来源">{{ orderOwnerLabels[order.owner_type] || order.owner_type }}</a-descriptions-item>
         <a-descriptions-item label="执行账户">{{ accountName(order.trading_account_id) }}</a-descriptions-item>
-        <a-descriptions-item label="提交时间">{{ fmtClock(order.submitted_at, true) }}</a-descriptions-item>
+        <a-descriptions-item label="提交时间">{{ formatInstant(order.submitted_at, displayZone) }}</a-descriptions-item>
         <a-descriptions-item v-if="Number(order.finished_at)" label="结束时间">{{
-          fmtClock(order.finished_at, true)
+          formatInstant(order.finished_at, displayZone)
         }}</a-descriptions-item>
         <a-descriptions-item v-if="order.reject_reason" label="拒绝原因">{{ order.reject_reason }}</a-descriptions-item>
         <a-descriptions-item label="订单编号"
@@ -40,7 +40,7 @@
       <a-table v-else size="small" row-key="fill_id" :data="fills" :pagination="false" :scroll="{ x: 460 }">
         <template #columns>
           <a-table-column title="时间" :width="130">
-            <template #cell="{ record }">{{ fmtClock(record.traded_at, true) }}</template>
+            <template #cell="{ record }">{{ formatInstant(record.traded_at, displayZone) }}</template>
           </a-table-column>
           <a-table-column title="价格" align="right"
             ><template #cell="{ record }">{{ fmtQty(record.price) }}</template></a-table-column
@@ -63,10 +63,14 @@ import { ref, watch } from "vue";
 import { listFills, orderOwnerLabels, orderStateLabels } from "@/api/trade";
 import type { Fill, Order } from "@/api/trade";
 import { createLatestRequestGuard } from "@/utils/latest-request";
-import { fmtClock, fmtQty } from "../shared/format";
+import { fmtQty } from "../shared/format";
 import { instrumentName, marketLabel } from "../shared/markets";
 import StatusMark from "../shared/status-mark.vue";
+import { formatInstant } from "@/utils/time-zone";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
 
+// 交易页的时间按当前空间登记的时区显示
+const displayZone = useDisplayZone();
 const props = defineProps<{ visible: boolean; order: Order | null; accountName: (id: string) => string }>();
 const emit = defineEmits<{ "update:visible": [value: boolean] }>();
 

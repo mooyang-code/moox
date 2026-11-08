@@ -75,6 +75,8 @@
 </template>
 
 <script setup lang="ts">
+import { useDisplayZone } from "@/hooks/useDisplayZone";
+import { formatInstant } from "@/utils/time-zone";
 import { computed, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import type { FactorTask, FactorTaskInfo } from "@/api/factor/types";
@@ -89,6 +91,8 @@ import MemberSection from "./member-section.vue";
 
 defineOptions({ name: "FactorTaskDetailDrawer" });
 
+// 页面时间按当前空间登记的时区显示
+const displayZone = useDisplayZone();
 const props = defineProps<{ info?: FactorTaskInfo; busy?: boolean }>();
 const emit = defineEmits<{
   (e: "close"): void;
@@ -140,7 +144,7 @@ watch(
 );
 
 function formatTime(value?: string) {
-  return value ? new Date(value).toLocaleString() : "-";
+  return formatInstant(value, displayZone.value);
 }
 
 function goDefinitions() {

@@ -26,7 +26,7 @@
     >
       <template #columns>
         <a-table-column title="时间" :width="170">
-          <template #cell="{ record }">{{ formatMs(record.created_at_ms) }}</template>
+          <template #cell="{ record }">{{ formatInstant(record.created_at_ms, "UTC") }}</template>
         </a-table-column>
         <a-table-column title="规则" data-index="rule_name" :width="180" :ellipsis="true" :tooltip="true" />
         <a-table-column title="事件" :width="240" :ellipsis="true" :tooltip="true">
@@ -96,6 +96,8 @@
 </template>
 
 <script setup lang="ts">
+// 事件中心和空间无关，时间都按 UTC 显示
+import { formatInstant } from "@/utils/time-zone";
 import { onActivated, onMounted, reactive, ref } from "vue";
 import { Message, Modal } from "@arco-design/web-vue";
 import {
@@ -124,7 +126,6 @@ import {
   executionStatusText,
   executionStatusTone,
   formatDuration,
-  formatMs,
   pageAfterShrink,
   systemRetryConfirmText
 } from "./event-center-utils";

@@ -87,7 +87,7 @@
                   <span class="dot" :class="`is-${currentStrategy.tone}`" />
                   <b class="ellipsis">{{ currentStrategy.name }}</b>
                   <span class="strategy-state" :class="`is-${currentStrategy.tone}`">{{ currentStrategy.state.label }}</span>
-                  <span class="strategy-when">最近一期 {{ currentStrategy.lastBar }}</span>
+                  <span class="strategy-when" :title="currentStrategy.lastBarTitle">最近一期 {{ currentStrategy.lastBar }}</span>
                 </button>
                 <p v-if="!currentStrategy.holdings.length" class="tile-empty">
                   {{ currentStrategy.enabled ? "暂无目标" : "已停用，不再产出目标" }}
@@ -140,7 +140,7 @@
                 <span class="ellipsis"
                   >{{ item.title }}<em v-if="item.detail"> · {{ item.detail }}</em></span
                 >
-                <span class="muted">{{ item.when || item.source }}</span>
+                <span class="muted" :title="item.whenTitle">{{ item.when || item.source }}</span>
               </button>
             </div>
             <footer class="tile-foot">
@@ -257,7 +257,7 @@
                 <template v-else>读取中…</template>
               </p>
               <div v-for="row in activity" :key="row.key" class="line activity-line" :title="row.title">
-                <span class="muted">{{ row.when }}</span>
+                <span class="muted" :title="row.whenTitle">{{ row.when }}</span>
                 <span class="ellipsis">{{ row.title }}</span>
               </div>
             </div>
@@ -313,6 +313,8 @@ import {
   type NameBook
 } from "./home-model";
 import { serviceHealth } from "./service-health";
+import { formatInstant } from "@/utils/time-zone";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
 
 const TARGET_FETCH_LIMIT = 12;
 
@@ -320,6 +322,8 @@ const router = useRouter();
 const spaceStore = useSpaceStore();
 const userStore = useUserInfoStore();
 const selectedSpaceId = computed(() => spaceStore.selectedSpaceId);
+// 空间磁贴（因子、策略、数据新鲜度、动态）按当前空间的时区；告警、主机等全局部分按 UTC
+const displayZone = useDisplayZone();
 const spaceName = computed(() => spaceStore.selectedSpace?.name || "");
 
 const nowMs = ref(Date.now());
@@ -356,8 +360,8 @@ const liveErrors = reactive({ factor: "", strategy: "", activity: "" });
 const failedCount = computed(() => Object.values(liveErrors).filter(Boolean).length);
 const liveLoadGate = new RequestGate();
 
-const factors = computed(() => factorRows(factorTasks.value, selectedSpaceId.value || "", names, nowMs.value));
-const strategies = computed(() => strategyRows(instances.value, targets.value, catalog.value, nowMs.value));
+const factors = computed(() => factorRows(factorTasks.value, selectedSpaceId.value || "", names, nowMs.value, displayZone.value));
+const strategies = computed(() => strategyRows(instances.value, targets.value, catalog.value, nowMs.value, displayZone.value));
 // 监控概览取的是全部空间：告警、主机、组件看全局，数据新鲜度只看当前空间。
 const freshness = computed(() =>
   freshnessRows(scopeOverviewToSpace(overview.value, selectedSpaceId.value || ""), names, nowMs.value)
@@ -367,7 +371,9 @@ const foldedFreshness = computed(() => fold(freshness.value, TILE_LIMITS.freshne
 const foldedFactors = computed(() => fold(factors.value, TILE_LIMITS.factors));
 const foldedHosts = computed(() => fold(hosts.value, TILE_LIMITS.hosts));
 const foldedAttention = computed(() => fold(attention.value, TILE_LIMITS.attention));
-const activity = computed(() => activityRows(activityItems.value, names, nowMs.value).slice(0, TILE_LIMITS.activity));
+const activity = computed(() =>
+  activityRows(activityItems.value, names, nowMs.value, displayZone.value).slice(0, TILE_LIMITS.activity)
+);
 const attention = computed(() =>
   attentionItems({
     alerts: monitorError.value ? [] : overview.value?.alerts || [],
@@ -399,7 +405,13 @@ const allClearText = computed(() => {
 });
 const services = computed(() => serviceHealth(overview.value, monitorError.value));
 const facts = computed(() =>
-  bannerFacts({ strategies: strategies.value, factors: factors.value, freshness: freshness.value, nowMs: nowMs.value })
+  bannerFacts({
+    strategies: strategies.value,
+    factors: factors.value,
+    freshness: freshness.value,
+    nowMs: nowMs.value,
+    zone: displayZone.value
+  })
 );
 const kpis = computed(() =>
   kpiCards({
@@ -410,7 +422,8 @@ const kpis = computed(() =>
     freshness: freshness.value,
     alertCount: monitorError.value ? undefined : overview.value?.summary?.alert_count,
     monitorError: monitorError.value,
-    nowMs: nowMs.value
+    nowMs: nowMs.value,
+    zone: displayZone.value
   })
 );
 
@@ -472,7 +485,8 @@ function spaceLabel(spaceId: string): string {
 /** 推进页面时钟；只有这一轮全部读到时才更新“更新于”，部分失败时保留上一次成功的时间。 */
 function stamp(allOk: boolean) {
   nowMs.value = Date.now();
-  if (allOk) updatedAt.value = new Date(nowMs.value).toLocaleTimeString("zh-CN", { hour12: false });
+  // 页面整体的更新时间属于全局部分，按 UTC
+  if (allOk) updatedAt.value = formatInstant(nowMs.value, "UTC", "clock");
 }
 
 function errorText(error: unknown): string {

@@ -42,7 +42,9 @@
       <template #columns>
         <a-table-column title="提交时间" :width="140">
           <template #cell="{ record }"
-            ><span class="tx-muted tx-nowrap">{{ fmtClock(record.submitted_at || record.created_at, true) }}</span></template
+            ><span class="tx-muted tx-nowrap">{{
+              formatInstant(record.submitted_at || record.created_at, displayZone)
+            }}</span></template
           >
         </a-table-column>
         <a-table-column v-if="memberOptions.length > 1" title="执行账户" :width="130" ellipsis tooltip>
@@ -111,7 +113,7 @@ import { computed, inject, ref, watch } from "vue";
 import { canCancelOrderState, listOrders, orderOwnerLabels, orderStateLabels } from "@/api/trade";
 import type { MarketType, Order } from "@/api/trade";
 import { createLatestRequestGuard } from "@/utils/latest-request";
-import { fmtClock, fmtQty } from "../shared/format";
+import { fmtQty } from "../shared/format";
 import { instrumentName, marketLabel } from "../shared/markets";
 import { instrumentFilter } from "./instrument-filter";
 import SectionBlock from "../shared/section-block.vue";
@@ -119,7 +121,11 @@ import StatusMark from "../shared/status-mark.vue";
 import { detailContextKey } from "./context";
 import OrderDetailDrawer from "./order-detail-drawer.vue";
 import { rangeParams, recordRanges, type RecordRange } from "./record-range";
+import { formatInstant } from "@/utils/time-zone";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
 
+// 交易页的时间按当前空间登记的时区显示
+const displayZone = useDisplayZone();
 const { logical, accounts, dataVersion, openCancel } = inject(detailContextKey)!;
 // 窄屏时右侧操作列不固定，不然会盖住数据列
 const { width: viewportWidth } = useWindowSize();

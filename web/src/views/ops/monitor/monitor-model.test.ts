@@ -173,7 +173,7 @@ describe("incident timeline", () => {
       notifyFailed: true
     });
     expect(flap.outcome).toBe("29 秒后恢复");
-    expect(flap.time).toMatch(/^\d{2}:\d{2}$/);
+    expect(flap.time).toMatch(/^\d{2}:\d{2} UTC$/);
     expect(revoked.outcome).toBe("已撤销（检查停用或移除）");
     expect(long).toMatchObject({ flap: false, reminders: 37, outcome: "3 小时 9 分后恢复" });
     expect(timeline.flaps).toBe(1);

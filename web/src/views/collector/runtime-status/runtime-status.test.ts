@@ -59,23 +59,24 @@ describe("collector runtime status helpers", () => {
   });
 
   it("describes the auto inspection by where it has reached, with a duration only when it falls behind", () => {
-    const now = new Date(2026, 9, 15, 15, 10);
-    const until = new Date(2026, 9, 15, 15, 6).toISOString();
-    expect(inspectionInfo({ inspected_until: until, inspect_lag_seconds: 120 }, now)).toEqual({
-      text: "已查至 15:06",
+    const now = Date.parse("2026-10-15T15:10:00Z");
+    const until = "2026-10-15T15:06:00Z";
+    expect(inspectionInfo({ inspected_until: until, inspect_lag_seconds: 120 }, "UTC", now)).toEqual({
+      text: "已查至 15:06 UTC",
       color: "var(--color-text-3)"
     });
-    expect(inspectionInfo({ inspected_until: until, inspect_lag_seconds: 42 * 60 }, now).text).toBe(
-      "已查至 15:06 · 落后 42 分钟"
+    expect(inspectionInfo({ inspected_until: until, inspect_lag_seconds: 42 * 60 }, "UTC", now).text).toBe(
+      "已查至 15:06 UTC · 落后 42 分钟"
     );
-    expect(inspectionInfo({ inspected_until: until, inspect_lag_seconds: 42 * 60 }, now).color).toContain("warning");
-    const stopped = inspectionInfo(
-      { inspected_until: new Date(2026, 9, 14, 13, 0).toISOString(), inspect_lag_seconds: 7200 },
-      now
-    );
-    expect(stopped.text).toBe("已查至 10-14 13:00 · 已停 2 小时");
+    expect(inspectionInfo({ inspected_until: until, inspect_lag_seconds: 42 * 60 }, "UTC", now).color).toContain("warning");
+    const stopped = inspectionInfo({ inspected_until: "2026-10-14T13:00:00Z", inspect_lag_seconds: 7200 }, "UTC", now);
+    expect(stopped.text).toBe("已查至 10-14 13:00 UTC · 已停 2 小时");
     expect(stopped.color).toContain("danger");
-    expect(inspectionInfo({ inspect_lag_seconds: 0 }, now).text).toBe("尚未巡检");
+    // A 股空间按 UTC+8：同一时刻已经是第二天
+    expect(inspectionInfo({ inspected_until: "2026-10-15T16:30:00Z" }, "Asia/Shanghai", now).text).toBe(
+      "已查至 10-16 00:30 UTC+8"
+    );
+    expect(inspectionInfo({ inspect_lag_seconds: 0 }, "UTC", now).text).toBe("尚未巡检");
   });
 
   it("translates cron expressions into Chinese and keeps the raw text when it cannot", () => {
@@ -161,6 +162,12 @@ describe("collector runtime status page", () => {
     expect(page).toContain('{{ loaded ? summary.functions : "—" }}');
     expect(page).toContain('{{ emptyText("还没有正在采集的数据集") }}');
     expect(page).not.toMatch(/<div class="empty-text">[^{<]+<\/div>/);
+  });
+
+  it("WS 区的心跳和最近消息按空间时区显示（后端给的是 RFC3339Nano）", () => {
+    expect(page).toContain("心跳 {{ timeText(status.stream.heartbeat_at) }}");
+    expect(page).toContain("{{ timeText(record.last_message_at) }}");
+    expect(page).not.toContain('data-index="last_message_at"');
   });
 
   it("names the column 自动巡检 and explains it is not data latency", () => {

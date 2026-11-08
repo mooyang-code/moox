@@ -78,8 +78,11 @@
           <a-form-item field="market" label="市场">
             <a-input v-model="form.market" placeholder="例如 CN、US、CRYPTO" />
           </a-form-item>
-          <a-form-item field="timezone" label="时区">
-            <a-input v-model="form.timezone" placeholder="例如 Asia/Shanghai" />
+          <a-form-item field="timezone" label="时区" required :extra="uncommonZoneHint(form.timezone || '')">
+            <a-select v-model="form.timezone" placeholder="选择时区：页面上这个空间的时间按它显示">
+              <a-option v-for="item in SPACE_TIMEZONES" :key="item.value" :value="item.value">{{ item.label }}</a-option>
+              <a-option v-if="uncommonZoneHint(form.timezone || '')" :value="form.timezone">{{ form.timezone }}</a-option>
+            </a-select>
           </a-form-item>
           <a-form-item field="status" label="状态">
             <a-select v-model="form.status">
@@ -97,6 +100,7 @@ import { createSubmitScope } from "@/utils/submit-scope";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { reportControlError } from "@/api/admin/http";
+import { SPACE_TIMEZONES, uncommonZoneHint } from "@/utils/space-zones";
 import { createSpace, listSpaces, updateSpace } from "@/api/admin/spaces";
 import type { Space } from "@/api/admin/types";
 import { isSystemSpace, useSpaceStore } from "@/store/modules/space";
@@ -124,7 +128,7 @@ const form = reactive<Space>({
   description: "",
   owner: "",
   market: "",
-  timezone: "Asia/Shanghai",
+  timezone: "",
   status: "active"
 });
 
@@ -149,7 +153,7 @@ function resetForm() {
     description: "",
     owner: "",
     market: "",
-    timezone: "Asia/Shanghai",
+    timezone: "",
     status: "active"
   });
 }
@@ -168,7 +172,7 @@ function openEdit(record: Space) {
     description: record.description || "",
     owner: record.owner || "",
     market: record.market || "",
-    timezone: record.timezone || "Asia/Shanghai",
+    timezone: record.timezone || "",
     status: record.status || "active"
   });
   visible.value = true;
@@ -178,6 +182,10 @@ function openEdit(record: Space) {
 async function submit(): Promise<boolean> {
   if (!form.space_id || !form.name) {
     Message.warning("请填写空间ID和名称");
+    return false;
+  }
+  if (!form.timezone) {
+    Message.warning("请选择时区：页面上这个空间的时间按它显示");
     return false;
   }
   // 固定提交快照：保存期间表单可能被关闭并重新打开去编辑另一个空间，旧提交只能用自己提交的数据

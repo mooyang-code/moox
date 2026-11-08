@@ -100,7 +100,7 @@
           </template>
         </a-table-column>
         <a-table-column v-if="selectedTagId" title="失效时间" :width="180">
-          <template #cell="{ record }">{{ formatTime(record.inactive_at) }}</template>
+          <template #cell="{ record }">{{ formatTime(record.inactive_at, displayZone) }}</template>
         </a-table-column>
         <a-table-column v-if="!selectedTagId" title="状态" :width="90">
           <template #cell="{ record }">
@@ -173,6 +173,7 @@ import { createLatestRequestGuard } from "@/utils/latest-request";
 import { computed, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { confirmRemoveMembers } from "./member-actions";
+import { useSpaceStore } from "@/store/modules/space";
 import {
   addTagMembers,
   listTagMembers,
@@ -184,7 +185,10 @@ import {
 import type { Subject, Tag, TagMember } from "@/api/storage/types";
 import { mergeAttributes, subjectCurrency, subjectMarket, subjectType, tagSource } from "@/views/data/shared/catalog-attributes";
 import { applyPageResult, defaultPagination, formatTime, statusColor, statusLabel } from "@/views/data/shared/metadata-utils";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
 
+// 页面时间按当前空间登记的时区显示
+const displayZone = useDisplayZone();
 const props = defineProps<{ spaceId: string; initialTagId?: string }>();
 
 const tags = ref<Tag[]>([]);
@@ -250,9 +254,15 @@ function emptySubject(): SubjectFormState {
     name: "",
     market: "",
     currency: "",
-    timezone: "Asia/Shanghai",
+    // 标的默认用所在空间登记的时区
+    timezone: spaceZone(),
     status: "active"
   };
+}
+
+/** 当前标签页所属空间登记的时区，没有时用 UTC。 */
+function spaceZone(): string {
+  return useSpaceStore().spaces.find(item => item.space_id === props.spaceId)?.timezone || "UTC";
 }
 
 function toSubjectPayload(spaceId: string): Subject {
@@ -426,7 +436,7 @@ function openSubjectEdit(subject: Subject) {
     subject_type: subjectType(subject),
     market: subjectMarket(subject),
     currency: subjectCurrency(subject),
-    timezone: subject.timezone || "Asia/Shanghai"
+    timezone: subject.timezone || spaceZone()
   });
   subjectVisible.value = true;
 }

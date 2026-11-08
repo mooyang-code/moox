@@ -62,8 +62,9 @@
           </a-table-column>
           <a-table-column title="最近同步" :width="120">
             <template #cell="{ record }"
-              ><span class="tx-muted">{{ fmtClock(record.account.last_sync_at) }}</span></template
-            >
+              ><span class="tx-muted"
+                ><TimeText :value="record.account.last_sync_at" :zone="displayZone" precision="minute" /></span
+            ></template>
           </a-table-column>
           <a-table-column title="操作" :width="190" :fixed="isNarrow ? undefined : 'right'">
             <template #cell="{ record }">
@@ -198,6 +199,7 @@
 </template>
 
 <script setup lang="ts">
+import TimeText from "@/components/time-text/index.vue";
 import { useWindowSize } from "@vueuse/core";
 import { computed, inject, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
@@ -214,7 +216,7 @@ import FundSettingsForm from "../../settings/fund-settings-form.vue";
 import OrderSettingsForm from "../../settings/order-settings-form.vue";
 import ConfirmDialog from "../shared/confirm-dialog.vue";
 import { accountEnvironment } from "../shared/environment";
-import { fmtClock, fmtMoney } from "../shared/format";
+import { fmtMoney } from "../shared/format";
 import { marketsText } from "../shared/markets";
 import MemberSettings from "../shared/member-settings.vue";
 import { eligibleAccounts } from "../shared/membership";
@@ -222,7 +224,10 @@ import SectionBlock from "../shared/section-block.vue";
 import StatusMark from "../shared/status-mark.vue";
 import { detailContextKey } from "./context";
 import MemberDialog from "./member-dialog.vue";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
 
+// 交易页的时间按当前空间登记的时区显示
+const displayZone = useDisplayZone();
 const {
   logical,
   accounts,
