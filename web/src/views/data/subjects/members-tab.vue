@@ -100,7 +100,7 @@
           </template>
         </a-table-column>
         <a-table-column v-if="selectedTagId" title="失效时间" :width="180">
-          <template #cell="{ record }">{{ formatTime(record.inactive_at) }}</template>
+          <template #cell="{ record }">{{ formatTime(record.inactive_at, displayZone) }}</template>
         </a-table-column>
         <a-table-column v-if="!selectedTagId" title="状态" :width="90">
           <template #cell="{ record }">
@@ -185,7 +185,10 @@ import {
 import type { Subject, Tag, TagMember } from "@/api/storage/types";
 import { mergeAttributes, subjectCurrency, subjectMarket, subjectType, tagSource } from "@/views/data/shared/catalog-attributes";
 import { applyPageResult, defaultPagination, formatTime, statusColor, statusLabel } from "@/views/data/shared/metadata-utils";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
 
+// 页面时间按当前空间登记的时区显示
+const displayZone = useDisplayZone();
 const props = defineProps<{ spaceId: string; initialTagId?: string }>();
 
 const tags = ref<Tag[]>([]);

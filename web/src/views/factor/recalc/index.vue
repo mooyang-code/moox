@@ -63,8 +63,8 @@
               </a-table-column>
               <a-table-column title="时间范围" :width="260">
                 <template #cell="{ record }">
-                  {{ formatTime(record.job.start_time) }}<br />
-                  → {{ formatTime(record.job.end_time) }}
+                  {{ formatTime(record.job.start_time, displayZone) }}<br />
+                  → {{ formatTime(record.job.end_time, displayZone) }}
                 </template>
               </a-table-column>
               <a-table-column title="状态" :width="200">
@@ -87,7 +87,7 @@
                 <template #cell="{ record }">{{ record.job.engine_id || "待领取" }}</template>
               </a-table-column>
               <a-table-column title="创建时间" :width="180">
-                <template #cell="{ record }">{{ formatTime(record.job.created_at) }}</template>
+                <template #cell="{ record }">{{ formatTime(record.job.created_at, displayZone) }}</template>
               </a-table-column>
               <a-table-column title="操作" :width="90" align="center" fixed="right">
                 <template #cell="{ record }">
@@ -121,7 +121,10 @@ import { isActiveJob } from "@/views/factor/shared/status";
 import { useFactorScope } from "@/views/factor/shared/use-factor-scope";
 import RecalcCreateDrawer from "./recalc-create-drawer.vue";
 import { STATUS_SEGMENTS, jobDisplay, progressPercent, segmentStatuses, type StatusSegment } from "./recalc-model";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
 
+// 页面时间按当前空间登记的时区显示
+const displayZone = useDisplayZone();
 defineOptions({ name: "FactorRecalc" });
 
 const route = useRoute();

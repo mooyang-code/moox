@@ -34,7 +34,7 @@
           <a-descriptions-item label="原文 Hash" :span="2">
             <span class="source-hash">{{ factor.spec_hash || "-" }}</span>
           </a-descriptions-item>
-          <a-descriptions-item label="更新时间" :span="2">{{ formatTime(factor.updated_at) }}</a-descriptions-item>
+          <a-descriptions-item label="更新时间" :span="2">{{ formatTime(factor.updated_at, displayZone) }}</a-descriptions-item>
         </a-descriptions>
 
         <section class="detail-section">
@@ -75,7 +75,10 @@ import { RequestGate } from "@/utils/request-gate";
 import { formatTime } from "@/views/data/shared/metadata-utils";
 import { factorTypeLabel } from "@/views/factor/shared/status";
 import { usageChips } from "./definitions-model";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
 
+// 页面时间按当前空间登记的时区显示
+const displayZone = useDisplayZone();
 defineOptions({ name: "FactorDetailDrawer" });
 
 const props = defineProps<{ factorId: string; categories?: FactorCategory[] }>();

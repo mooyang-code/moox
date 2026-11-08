@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Tag } from "@/api/storage/types";
 import { nextRuns, tagToFormState, toTagPayload, validateTagForm, type TagFormState } from "./tag-form";
+import { formatTime } from "@/views/data/shared/metadata-utils";
 
 function form(overrides: Partial<TagFormState> = {}): TagFormState {
   return {
@@ -78,5 +79,12 @@ describe("subject tag form", () => {
     const runs = nextRuns("0 * * * *", "UTC", 3);
     expect(runs).toHaveLength(3);
     expect(runs.every(value => value.endsWith(":00.000Z"))).toBe(true);
+  });
+});
+
+describe("定时预览的显示", () => {
+  it("按标签选的时区显示并带后缀：Asia/Shanghai 的 0 9 * * * 显示 09:00 UTC+8，不再是 01:00 的 UTC 墙钟", () => {
+    const [run] = nextRuns("0 9 * * *", "Asia/Shanghai", 1);
+    expect(formatTime(run, "Asia/Shanghai", "minute")).toMatch(/^\d{4}-\d{2}-\d{2} 09:00 UTC\+8$/);
   });
 });

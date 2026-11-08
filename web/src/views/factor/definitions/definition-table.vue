@@ -59,7 +59,7 @@
         </template>
       </a-table-column>
       <a-table-column title="更新时间" data-index="updated_at" :width="170" :sortable="{ sortDirections: ['ascend', 'descend'] }">
-        <template #cell="{ record }">{{ formatTime(record.updated_at) }}</template>
+        <template #cell="{ record }">{{ formatTime(record.updated_at, displayZone) }}</template>
       </a-table-column>
       <a-table-column title="操作" :width="90" align="center" fixed="right">
         <template #cell="{ record }">
@@ -98,7 +98,10 @@
 import { formatTime } from "@/views/data/shared/metadata-utils";
 import { factorTypeLabel } from "@/views/factor/shared/status";
 import type { DefinitionRow } from "./definitions-model";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
 
+// 页面时间按当前空间登记的时区显示
+const displayZone = useDisplayZone();
 const props = defineProps<{
   rows: DefinitionRow[];
   loading: boolean;
