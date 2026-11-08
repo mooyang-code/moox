@@ -42,8 +42,7 @@ function normalizeInstance(value: any): StrategyInstance {
     health: value?.health || "ok",
     created_at: value?.created_at ?? "",
     updated_at: value?.updated_at ?? "",
-    missing_factor_tasks: [...(value?.missing_factor_tasks ?? [])],
-    absent_factor_tasks: [...(value?.absent_factor_tasks ?? [])]
+    missing_factor_tasks: [...(value?.missing_factor_tasks ?? [])]
   };
 }
 

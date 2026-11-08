@@ -66,13 +66,8 @@
             ><template #cell="{ record }"
               ><StatusBadge :enabled="record.enabled" :health="record.health" />
               <div v-if="record.missing_factor_tasks?.length" class="cell-sub delete-incomplete">
-                删除未完成<InfoTip text="因子任务已删除、实例还在。再删一次即可完成；启用会失败。" />
-              </div>
-              <div v-if="record.absent_factor_tasks?.length" class="cell-sub delete-incomplete">
-                引用的因子任务已不存在
-              </div></template
-            ></a-table-column
-          >
+                引用的因子任务已不存在<InfoTip text="删除实例即可清理；启用会失败。" /></div></template
+          ></a-table-column>
           <a-table-column title="更新时间" :width="180"
             ><template #cell="{ record }">{{ formatStrategyTime(record.updated_at) }}</template></a-table-column
           >

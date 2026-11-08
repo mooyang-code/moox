@@ -35,11 +35,9 @@ message StrategyInstance {
   string health = 9;                     // ok | degraded
   string created_at = 10;
   string updated_at = 11;
-  // 以下两项只对停用实例检查，读不到 Factor 时留空。
-  // 关联过本实例、已在 Factor 删除的因子任务：非空表示上次删除实例没有做完，实例还在，再执行一次删除即可。
+  // 实例引用的、已在 Factor 里不存在的因子任务（只对停用实例检查，读不到 Factor 时留空）：可能是上次删除实例没做完，
+  // 也可能是任务被另外删掉。删除实例即可清理。
   repeated string missing_factor_tasks = 12;
-  // 引用的、从没关联过本实例的因子任务已在 Factor 里不存在（被另外删掉），不是删除未完成。
-  repeated string absent_factor_tasks = 13;
 }
 
 message InstrumentTarget {

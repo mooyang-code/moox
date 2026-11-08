@@ -61,7 +61,7 @@ type Instance struct {
 	ID        string
 	Enabled   bool
 	SessionID string
-	// MissingFactorTasks 非空表示上次删除实例没有做完：因子任务已删、实例还在（停用中）。
+	// MissingFactorTasks 是停用实例引用的、已不存在的因子任务（删除实例没做完，或任务被另外删掉）。
 	MissingFactorTasks []string
 }
 
@@ -220,10 +220,10 @@ func strategies(in Input) Check {
 			return check
 		}
 	}
-	// 删除未完成的实例只标注，不影响验收结果：它已停用，再删一次即可。
+	// 只标注，不影响验收结果：这些实例已停用，删除实例即可清理。
 	note := ""
 	if len(incomplete) > 0 {
-		note = "；策略实例 " + strings.Join(incomplete, "、") + " 删除未完成，用 strategy instance delete 再删一次"
+		note = "；策略实例 " + strings.Join(incomplete, "、") + " 引用的因子任务已不存在，用 strategy instance delete 删除实例即可清理"
 	}
 	if enabled == 0 {
 		check.Status, check.Code, check.Detail = Skip, "", "没有启用的策略实例"+note

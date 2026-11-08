@@ -281,7 +281,7 @@ func TestDeleteStrategyInstanceResumesAfterPartialFailure(t *testing.T) {
 	}
 	resolves := h.resolver.calls
 	enabled := h.setEnabled("i1", true)
-	requireFail(t, int32(enabled.GetRetInfo().GetCode()), enabled.GetRetInfo().GetMsg(), errTaskDeleted)
+	requireFail(t, int32(enabled.GetRetInfo().GetCode()), enabled.GetRetInfo().GetMsg(), errTaskMissing)
 	if h.resolver.calls != resolves {
 		t.Fatal("任务已删除时不应进入解析")
 	}
@@ -448,20 +448,22 @@ func TestDeleteClearsAgeRecordsOnlyForDeletedTasks(t *testing.T) {
 	}
 }
 
-// 从没关联过的任务被另外删掉：标为不存在（absent），不是删除未完成；启用报“引用的因子任务已不存在”；删除照常完成。
-func TestUnboundTaskDeletedElsewhereIsAbsentNotIncomplete(t *testing.T) {
+// 启用在关联之后失败、没写会话的实例，删到一半时与从没关联过、任务被另外删掉的实例一样：都标出引用的任务已不存在，
+// 启用报同一句提示，删除照常完成。
+func TestMissingTaskWithoutSessionIsMarked(t *testing.T) {
 	h := newHarness(t)
 	tasks := &fakeFactorTasks{bound: map[string]string{"ftask_gone": ""}}
 	h.service.Tasks, h.service.Archives = tasks, &fakeArchives{}
 	h.createStrategy("s1", demoDSL)
 	requireOK(t, int32(h.createInstance("i0", "s1", "ftask_gone", "", false).GetRetInfo().GetCode()), "")
+	// 启用时已关联任务、随后失败没写会话，再删实例时任务删掉了、实例记录没删：实例上没有任何会话。
 	delete(tasks.bound, "ftask_gone")
 	detail, _ := h.service.GetStrategyInstance(h.ctx, &strategypb.GetStrategyInstanceReq{InstanceId: "i0"})
-	if got := detail.GetInstance(); len(got.GetMissingFactorTasks()) != 0 || len(got.GetAbsentFactorTasks()) != 1 {
-		t.Fatalf("应标为不存在而不是删除未完成：%+v", got)
+	if got := detail.GetInstance().GetMissingFactorTasks(); len(got) != 1 || got[0] != "ftask_gone" {
+		t.Fatalf("没有会话的实例也要标出引用的任务已不存在：%v", got)
 	}
 	enabled := h.setEnabled("i0", true)
-	requireFail(t, int32(enabled.GetRetInfo().GetCode()), enabled.GetRetInfo().GetMsg(), "引用的因子任务 ftask_gone 已不存在")
+	requireFail(t, int32(enabled.GetRetInfo().GetCode()), enabled.GetRetInfo().GetMsg(), "ftask_gone："+errTaskMissing)
 	rsp := h.deleteInstance("i0")
 	requireOK(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg())
 }

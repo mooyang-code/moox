@@ -35,8 +35,6 @@ const (
 			WHERE json_extract(task.value, '$.factor_task_id') IN (SELECT value FROM json_each(?))
 		)))
 		ORDER BY c_replay_id`
-	// sqlSelectInstanceSessionResolved 读出实例全部会话固化的绑定解析（含各任务键的因子任务）。
-	sqlSelectInstanceSessionResolved = `SELECT c_resolved_json FROM t_strategy_sessions WHERE c_instance_id = ?`
 	// sqlDeleteViewsAgePassed 删除一组 View（JSON 数组参数）的年龄探针记录。
 	sqlDeleteViewsAgePassed = `DELETE FROM t_strategy_age_passed WHERE c_space_id = ? AND c_view_id IN (SELECT value FROM json_each(?))`
 )
@@ -63,13 +61,6 @@ func (s *Store) ActiveReplaysOfInstance(ctx context.Context, instanceID, spaceID
 	var ids []string
 	err = s.db.WithContext(ctx).Raw(sqlSelectActiveReplaysOfInstance, strings.TrimSpace(instanceID), spaceID, string(tasks)).Scan(&ids).Error
 	return ids, err
-}
-
-// SessionResolvedJSONs 返回实例全部会话固化的绑定解析：出现在里面的因子任务都已经与实例关联过（关联发生在写会话之前）。
-func (s *Store) SessionResolvedJSONs(ctx context.Context, instanceID string) ([]string, error) {
-	var values []string
-	err := s.db.WithContext(ctx).Raw(sqlSelectInstanceSessionResolved, strings.TrimSpace(instanceID)).Scan(&values).Error
-	return values, err
 }
 
 // DeleteInstance 在一个事务里删除已停用、没有会话的实例在策略库里的全部记录：会话、结果与明细、到达记录、回放、外显设置、

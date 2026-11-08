@@ -32,8 +32,8 @@ type ArchiveTasks interface {
 	ArchivedDatasets(ctx context.Context, spaceID string) (map[string]bool, error)
 }
 
-// errTaskDeleted 是启用“删除到一半”的实例时的报错：关联过的因子任务已删、实例还在。
-const errTaskDeleted = "绑定的因子任务已删除，请重新执行删除"
+// errTaskMissing 是实例引用的因子任务已不存在时的提示（删除实例做到一半，或任务被另外删掉）。
+const errTaskMissing = "引用的因子任务已不存在，删除实例即可清理"
 
 // deleteCallReserve 是删除实例给最后那个事务留的时间：调用 Factor、archive-mgr 的截止时间比请求的截止时间提前这么多。
 // 请求没有截止时间时，依赖调用最多用 deleteCallBudget。
@@ -233,44 +233,18 @@ func (s *Service) checkNotArchived(ctx context.Context, spaceID string, pending 
 	return nil
 }
 
-// boundTasks 返回关联过本实例的因子任务：当前与历次会话固化的绑定解析里出现的任务（关联发生在写会话之前）。
-func (s *Service) boundTasks(ctx context.Context, instance store.Instance) (map[string]bool, error) {
-	resolvedJSONs, err := s.Store.SessionResolvedJSONs(ctx, instance.InstanceID)
-	if err != nil {
-		return nil, err
-	}
-	bound := map[string]bool{}
-	for _, raw := range append(resolvedJSONs, string(instance.ResolvedJSON)) {
-		resolved, err := input.ParseResolved([]byte(raw))
-		if err != nil {
-			continue
-		}
-		for _, task := range resolved.Tasks {
-			bound[task.FactorTaskID] = true
-		}
-	}
-	return bound, nil
-}
-
-// checkTasksExist 在启用新建会话之前确认登记的因子任务都还在：删除实例做到一半（任务已删、实例还在）时直接给出明确的报错，
+// checkTasksExist 在启用新建会话之前确认登记的因子任务都还在：任务已不存在（删除实例做到一半，或任务被另外删掉）时直接给出明确的报错，
 // 不让解析把“View 不存在”当成“还在创建”一直重试。未接线时不检查。
 func (s *Service) checkTasksExist(ctx context.Context, instance store.Instance) error {
 	if s.Tasks == nil {
 		return nil
 	}
 	for _, taskID := range input.TaskIDs(instance.FactorTasks) {
-		_, err := s.Tasks.GetFactorTask(ctx, taskID)
-		if err != nil && !errors.Is(err, input.ErrFactorTaskNotFound) {
+		if _, err := s.Tasks.GetFactorTask(ctx, taskID); errors.Is(err, input.ErrFactorTaskNotFound) {
+			return fmt.Errorf("因子任务 %s：%s", taskID, errTaskMissing)
+		} else if err != nil {
 			return err
 		}
-		if err == nil {
-			continue
-		}
-		bound, boundErr := s.boundTasks(ctx, instance)
-		if boundErr == nil && bound[taskID] {
-			return fmt.Errorf("因子任务 %s 不存在：%s", taskID, errTaskDeleted)
-		}
-		return fmt.Errorf("引用的因子任务 %s 已不存在", taskID)
 	}
 	return nil
 }
@@ -279,8 +253,7 @@ func (s *Service) checkTasksExist(ctx context.Context, instance store.Instance) 
 // 也不能拖到超时报错。
 const missingTasksBudget = 1500 * time.Millisecond
 
-// markMissingTasks 给停用实例标出已在 Factor 删除的因子任务：关联过本实例的记为删除未完成（missing_factor_tasks），
-// 从没关联过的（被另外删掉）记为不存在（absent_factor_tasks）。perTask 为真（详情）时逐个读任务，否则（列表）列一次全部任务；
+// markMissingTasks 给停用实例标出引用的、已在 Factor 里不存在的因子任务（missing_factor_tasks）。perTask 为真（详情）时逐个读任务，否则（列表）列一次全部任务；
 // 读不到 Factor 或超出预算时不标，只写日志，不让列表和详情因此报错。
 func (s *Service) markMissingTasks(ctx context.Context, instances []store.Instance, items []*strategypb.StrategyInstance, perTask bool) {
 	if s.Tasks == nil {
@@ -309,7 +282,7 @@ func (s *Service) markMissingTasks(ctx context.Context, instances []store.Instan
 	} else {
 		existing, err := s.Tasks.ListFactorTaskIDs(ctx)
 		if err != nil {
-			log.Warnf("检查实例的因子任务是否还在失败，本次不标出删除未完成的实例：%v", input.RawCause(err))
+			log.Warnf("检查实例的因子任务是否还在失败，本次不标出引用任务已不存在的实例：%v", input.RawCause(err))
 			return
 		}
 		exists = func(taskID string) (bool, error) { return existing[taskID], nil }
@@ -319,7 +292,7 @@ func (s *Service) markMissingTasks(ctx context.Context, instances []store.Instan
 		for _, taskID := range input.TaskIDs(instances[i].FactorTasks) {
 			found, err := exists(taskID)
 			if err != nil {
-				log.Warnf("检查实例 %s 的因子任务 %s 是否还在失败，本次不标出删除未完成：%v", instances[i].InstanceID, taskID, input.RawCause(err))
+				log.Warnf("检查实例 %s 的因子任务 %s 是否还在失败，本次不标出：%v", instances[i].InstanceID, taskID, input.RawCause(err))
 				return
 			}
 			if !found {
@@ -328,17 +301,6 @@ func (s *Service) markMissingTasks(ctx context.Context, instances []store.Instan
 		}
 	}
 	for i, taskIDs := range missing {
-		bound, err := s.boundTasks(ctx, instances[i])
-		if err != nil {
-			log.Warnf("读取实例 %s 的会话失败，本次不标出删除未完成：%v", instances[i].InstanceID, err)
-			continue
-		}
-		for _, taskID := range taskIDs {
-			if bound[taskID] {
-				items[i].MissingFactorTasks = append(items[i].MissingFactorTasks, taskID)
-			} else {
-				items[i].AbsentFactorTasks = append(items[i].AbsentFactorTasks, taskID)
-			}
-		}
+		items[i].MissingFactorTasks = taskIDs
 	}
 }
