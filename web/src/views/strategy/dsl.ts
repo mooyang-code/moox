@@ -359,3 +359,11 @@ export function summarizeDSL(source: string): string {
     .join("、");
   return `${preview.bar} · ${preview.rules.length} 条规则：${rules}`;
 }
+
+/** 研究回放暂不支持策略池：回放入口据此禁用。 */
+export const POOL_REPLAY_DISABLED_TEXT = "研究回放暂不支持策略池";
+
+/** DSL 是不是策略池（解析失败的不算）。 */
+export function isPoolStrategy(dslYaml: string | undefined): boolean {
+  return Boolean(dslYaml && parseDSL(dslYaml).preview?.pool);
+}

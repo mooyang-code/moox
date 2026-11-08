@@ -37,7 +37,7 @@ describe("strategy instance creation contract", () => {
   });
 
   it("prechecks the binding through the server instead of rebuilding it locally", () => {
-    expect(source).toContain("validateStrategy(selectedStrategy.value.dsl_yaml, factorTasks())");
+    expect(source).toContain("validateStrategy(dsl, factorTasks())");
     expect(source).toContain("ResolvedTable");
     expect(source).toContain("创建请求结果未知，但实例 ID 已存在");
   });
@@ -109,7 +109,15 @@ describe("strategy instance creation behavior", () => {
   async function precheck(wrapper: { findAll: (selector: string) => any[] }, flushPromises: () => Promise<void>) {
     await wrapper
       .findAll("button")
-      .find(item => item.text() === "解析列与成员契约")!
+      .find(item => item.text() === "先预检")!
+      .trigger("click");
+    await flushPromises();
+  }
+
+  async function clickCreate(wrapper: { findAll: (selector: string) => any[] }, flushPromises: () => Promise<void>) {
+    await wrapper
+      .findAll("button")
+      .find(item => item.text() === "创建停用实例")!
       .trigger("click");
     await flushPromises();
   }
@@ -162,6 +170,62 @@ describe("strategy instance creation behavior", () => {
       factor_tasks: { swap: "ftask_a" },
       logical_account_id: ""
     });
+  });
+
+  it("没预检直接创建：先预检再创建", async () => {
+    const order: string[] = [];
+    api.validateStrategy.mockImplementation(async () => {
+      order.push("validate");
+      return { diagnostics: [], resolved_json: '{"market":{"select":"swap","prefer":"swap"}}', trial: null, trial_items: [] };
+    });
+    api.createInstance.mockImplementation(async () => {
+      order.push("create");
+      return { instance_id: "i1" };
+    });
+    const { wrapper, flushPromises } = await open({ presetStrategyId: "s1" });
+    await wrapper.findAll("select")[1].setValue("ftask_a");
+    await clickCreate(wrapper, flushPromises);
+    expect(order).toEqual(["validate", "create"]);
+    expect(wrapper.emitted("created")?.[0]).toEqual(["i1"]);
+  });
+
+  it("预检不通过：不创建，显示诊断", async () => {
+    api.validateStrategy.mockResolvedValue({
+      diagnostics: ["市场和任务对不上"],
+      resolved_json: "",
+      trial: null,
+      trial_items: []
+    });
+    const { wrapper, flushPromises } = await open({ presetStrategyId: "s1" });
+    await wrapper.findAll("select")[1].setValue("ftask_a");
+    await clickCreate(wrapper, flushPromises);
+    expect(api.createInstance).not.toHaveBeenCalled();
+    expect(wrapper.text()).toContain("市场和任务对不上");
+    expect(wrapper.text()).toContain("预检没有通过");
+  });
+
+  it("预检通过后改了任务：旧结果作废，再点创建会重新预检；预检进行中再点创建不重复发请求", async () => {
+    api.listFactorTasks.mockResolvedValue({
+      factor_tasks: [taskInfo(), taskInfo({}, "ftask_b")],
+      page_result: { has_more: false }
+    });
+    const { wrapper, flushPromises } = await open({ presetStrategyId: "s1" });
+    await wrapper.findAll("select")[1].setValue("ftask_a");
+    await precheck(wrapper, flushPromises);
+    expect(api.validateStrategy).toHaveBeenCalledTimes(1);
+    await wrapper.findAll("select")[1].setValue("ftask_b");
+    await flushPromises();
+
+    let release!: (value: unknown) => void;
+    api.validateStrategy.mockImplementationOnce(() => new Promise(resolve => (release = resolve)));
+    const create = wrapper.findAll("button").find(item => item.text() === "创建停用实例")!;
+    await create.trigger("click");
+    await create.trigger("click");
+    expect(api.validateStrategy).toHaveBeenCalledTimes(2);
+    release({ diagnostics: [], resolved_json: '{"market":{"select":"swap","prefer":"swap"}}', trial: null, trial_items: [] });
+    await flushPromises();
+    expect(api.validateStrategy.mock.calls[1][1]).toEqual({ swap: "ftask_b" });
+    expect(api.createInstance).toHaveBeenCalled();
   });
 
   it("shows the account failure with a retry in trade mode and blocks submission without an account", async () => {
@@ -217,7 +281,7 @@ describe("strategy instance creation behavior", () => {
     await wrapper.findAll("select")[1].setValue("ftask_a");
     await wrapper
       .findAll("button")
-      .find(item => item.text() === "解析列与成员契约")!
+      .find(item => item.text() === "先预检")!
       .trigger("click");
     runModeGroup(wrapper).vm.$emit("update:modelValue", "trade");
     await flushPromises();
@@ -368,7 +432,7 @@ describe("strategy instance creation behavior", () => {
     await wrapper.findAll("select")[2].setValue("ftask_swap");
     await wrapper
       .findAll("button")
-      .find(item => item.text() === "解析列与成员契约")!
+      .find(item => item.text() === "先预检")!
       .trigger("click");
     await flushPromises();
     expect(api.validateStrategy).toHaveBeenCalledWith(mixed[0].dsl_yaml, { spot: "ftask_spot", swap: "ftask_swap" });
@@ -443,7 +507,7 @@ describe("strategy instance creation behavior", () => {
     expect(wrapper.emitted("update:visible")).toBeUndefined();
   });
 
-  it("refuses to create before the binding precheck passes and without choosing a market for an undeclared strategy", async () => {
+  it("没写 market 的策略要先选市场；选了任务后点创建会先预检再创建", async () => {
     const undeclared = [{ ...strategies[0], dsl_yaml: "name: demo\n" }];
     const { wrapper, flushPromises } = await open({ presetStrategyId: "s1", strategies: undeclared });
     const create = () => wrapper.findAll("button").find(item => item.text() === "创建停用实例")!;
@@ -455,14 +519,10 @@ describe("strategy instance creation behavior", () => {
     wrapper.findComponent({ name: "RadioGroupStub" }).vm.$emit("update:modelValue", "swap");
     await flushPromises();
     await wrapper.findAll("select")[1].setValue("ftask_a");
-    // 选了任务但没有预检：不能创建。
+    // 选了任务但没有预检：点创建会先预检，通过后创建。
     await create().trigger("click");
     await flushPromises();
-    expect(wrapper.text()).toContain("请先点击“解析列与成员契约”");
-    expect(api.createInstance).not.toHaveBeenCalled();
-    await precheck(wrapper, flushPromises);
-    await create().trigger("click");
-    await flushPromises();
+    expect(api.validateStrategy).toHaveBeenCalledTimes(1);
     expect(api.createInstance).toHaveBeenCalledWith({
       instance_id: undefined,
       strategy_id: "s1",

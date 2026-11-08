@@ -160,8 +160,8 @@
     </a-form>
     <div class="check-head">
       <strong>绑定预检</strong>
-      <a-button size="small" :loading="checking" :disabled="!form.strategy_id || !tasksSelected" @click="check"
-        >解析列与成员契约</a-button
+      <a-button size="small" :loading="checking" :disabled="!form.strategy_id || !tasksSelected" @click="check()"
+        >先预检</a-button
       >
     </div>
     <a-alert
@@ -172,6 +172,10 @@
       >{{ item }}</a-alert
     >
     <ResolvedTable v-if="check_result?.resolved_json" :resolved-json="check_result.resolved_json" />
+    <section v-if="check_result?.resolved_json && check_result.trial" class="check-trial">
+      <strong>按当前数据试算的第一期目标</strong>
+      <ResultItems :result="check_result.trial" :items="check_result.trial_items" />
+    </section>
     <a-alert type="info" show-icon class="confirm-note"
       >创建后实例保持停用。启用时后台会把因子任务与实例永久关联，并重新解析 结果
       View、列与成员契约，固化为会话快照；绑定组合账户的实例在启用时认领账户会话。</a-alert
@@ -199,6 +203,7 @@ import type { FactorTaskInfo } from "@/api/factor/types";
 import { availableTasks, isUnifiedTask, varMemberBlockReason, type TaskOption } from "@/views/strategy/components/task-options";
 import { isUnifiedMarketType } from "@/views/data/shared/series-market";
 import ResolvedTable from "@/views/strategy/components/strategy-resolved-table.vue";
+import ResultItems from "@/views/strategy/components/strategy-result-items.vue";
 import { logicalAccountOptions, marketsToResolved, resolvedMarkets } from "@/views/strategy/components/logical-account-options";
 import {
   UNIFIED_TASK_KEY,
@@ -475,29 +480,41 @@ function resetCheck() {
   checking.value = false;
 }
 
-async function check() {
+// 进行中的预检：预检还没回来时再点“创建”，等这一次的结果，不重复发请求。
+let checkPromise: Promise<ValidateStrategyResult | null> | null = null;
+
+/** 预检：返回本次结果；被作废（改了定义、任务、市场或关掉抽屉）时返回 null。 */
+function check(): Promise<ValidateStrategyResult | null> {
   // 选中的定义不在目录里（目录是旧的）：说清楚原因，不能点了没反应
   if (form.strategy_id && !selectedStrategy.value) {
     fieldErrors.strategy_id = "策略目录里没有这条定义，请关闭抽屉、刷新实例列表后重试";
-    return;
+    return Promise.resolve(null);
   }
-  if (!selectedStrategy.value || !tasksSelected.value) return;
+  if (!selectedStrategy.value || !tasksSelected.value) return Promise.resolve(null);
+  if (checking.value && checkPromise) return checkPromise;
   const requestId = ++checkRequest;
+  const dsl = selectedStrategy.value.dsl_yaml;
   checking.value = true;
-  try {
-    const result = await validateStrategy(selectedStrategy.value.dsl_yaml, factorTasks());
-    if (requestId === checkRequest) check_result.value = result;
-  } catch (err) {
-    if (requestId === checkRequest)
+  checkPromise = (async () => {
+    try {
+      const result = await validateStrategy(dsl, factorTasks());
+      if (requestId !== checkRequest) return null;
+      check_result.value = result;
+      return result;
+    } catch (err) {
+      if (requestId !== checkRequest) return null;
       check_result.value = {
         diagnostics: [err instanceof Error ? err.message : "预检失败"],
         resolved_json: "",
         trial: null,
         trial_items: []
       };
-  } finally {
-    if (requestId === checkRequest) checking.value = false;
-  }
+      return check_result.value;
+    } finally {
+      if (requestId === checkRequest) checking.value = false;
+    }
+  })();
+  return checkPromise;
 }
 
 function resetForm() {
@@ -544,15 +561,22 @@ async function submit() {
       : unifiedMode.value
         ? "请选择统一数据集上的因子任务"
         : `请为${activeMarkets.value.map(marketLabel).join("、")}各选一个因子任务`;
-  // 一个任务关联实例后永久占住：必须先通过绑定预检（服务端会核对市场与任务是否对应），再创建。
-  if (!fieldErrors.factor_tasks && !check_result.value?.resolved_json)
-    fieldErrors.factor_tasks = "请先点击“解析列与成员契约”，预检通过后再创建（预检会核对市场与任务是否对应）";
   fieldErrors.logical_account_id = form.mode === "trade" && !form.logical_account_id ? "请选择组合账户，或改为“仅计算”" : "";
   if (fieldErrors.strategy_id || fieldErrors.factor_tasks || fieldErrors.logical_account_id) return;
   const spaceId = props.spaceId;
   const requestId = ++submitRequest;
   saving.value = true;
   try {
+    // 一个任务关联实例后永久占住：没有当前有效的预检结果就先预检（服务端会核对市场与任务是否对应），通过了才创建。
+    if (!check_result.value?.resolved_json) {
+      const result = await check();
+      // 预检被作废（等待期间改了定义、任务或市场）：不创建，按新的选择再点创建
+      if (!result || requestId !== submitRequest || props.spaceId !== spaceId) return;
+      if (!result.resolved_json) {
+        error.value = "预检没有通过（原因见下方），没有创建实例";
+        return;
+      }
+    }
     const instance = await createInstance({
       instance_id: form.instance_id.trim() || undefined,
       strategy_id: form.strategy_id,
@@ -618,6 +642,12 @@ watch(
 }
 .preview {
   margin-bottom: 16px;
+}
+.check-trial {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 12px 0;
 }
 .check-head {
   display: flex;
