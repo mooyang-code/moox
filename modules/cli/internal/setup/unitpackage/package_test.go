@@ -117,6 +117,14 @@ func TestUnitPackagesHaveExactComponentBoundariesAndRepeatableDigests(t *testing
 					assert.Contains(t, paths, profile+"/scripts/deploy/deploy-"+profile+".sh")
 					assert.Contains(t, paths, profile+"/deploy/systemd/user/moox-"+profile+".service.tmpl")
 					assert.Contains(t, paths, "bin/moox-"+profile)
+					if profile == "archive-worker" {
+						// 内置对象存储 SeaweedFS 随包交付：二进制、服务模板与许可证。
+						assert.Contains(t, paths, "bin/weed")
+						assert.Contains(t, paths, "archive-worker/deploy/systemd/user/moox-seaweedfs.service.tmpl")
+						assert.Contains(t, paths, "archive-worker/third_party/seaweedfs/LICENSE")
+					} else {
+						assert.NotContains(t, paths, "bin/weed")
+					}
 				}
 				for _, file := range result.Manifest.Files {
 					assert.NotContains(t, file.Path, "moox-unrelated")

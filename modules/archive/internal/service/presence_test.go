@@ -78,3 +78,54 @@ func TestRetireArchiveWorker(t *testing.T) {
 	}
 	requireCode(t, retire(" ").GetRetInfo(), commonpb.ErrorCode_INVALID_PARAM, "worker_id")
 }
+
+// 对象存储状态：探测结果经心跳落库、在总览带出；未配置对象存储或心跳不新鲜时不报；不可用满 5 分钟升为 2，恢复后回到 0。
+func TestArchiveObjectStoreState(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	beat := func(info *archivepb.ObjectStoreInfo) {
+		rsp, err := h.worker.ArchiveWorkerHeartbeat(ctx, &archivepb.ArchiveWorkerHeartbeatReq{WorkerId: "w1", InstanceId: "i1", RootDir: "/data/archive", ObjectStore: info})
+		if err != nil {
+			t.Fatal(err)
+		}
+		requireOK(t, rsp.GetRetInfo())
+	}
+	state := func() (string, int, string, bool) {
+		workerID, state, probeError, ok, err := h.svc.ObjectStoreState(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return workerID, state, probeError, ok
+	}
+	if _, _, _, ok := state(); ok {
+		t.Fatal("没有 worker 时不应上报")
+	}
+	beat(nil)
+	if _, _, _, ok := state(); ok {
+		t.Fatal("没配置对象存储时不应上报")
+	}
+	since := h.now.Add(-2 * time.Minute).UTC().Format(time.RFC3339)
+	down := &archivepb.ObjectStoreInfo{Endpoint: "127.0.0.1:11463", Bucket: "moox-archive", Prefix: "moox-archive/", UrlStyle: "path",
+		ProbeError: "查询 _probe/absent: 访问被拒绝", UnavailableSince: since}
+	beat(down)
+	overview, _ := h.mgr.GetArchiveOverview(ctx, &archivepb.GetArchiveOverviewReq{})
+	if got := overview.GetWorker().GetObjectStore(); got.GetProbeError() != down.GetProbeError() || got.GetUnavailableSince() != since {
+		t.Fatalf("总览里的对象存储 = %v", got)
+	}
+	if workerID, s, probeError, ok := state(); !ok || workerID != "w1" || s != report.ObjectStoreUnavailable || probeError != down.GetProbeError() {
+		t.Fatalf("不可用未满 5 分钟 = %s %d %s %v", workerID, s, probeError, ok)
+	}
+	h.now = h.now.Add(3 * time.Minute)
+	beat(down)
+	if _, s, _, _ := state(); s != report.ObjectStoreDown {
+		t.Fatalf("不可用满 5 分钟 state = %d", s)
+	}
+	h.now = h.now.Add(3 * time.Minute)
+	if _, _, _, ok := state(); ok {
+		t.Fatal("心跳不新鲜时不应上报")
+	}
+	beat(&archivepb.ObjectStoreInfo{Endpoint: "127.0.0.1:11463", Bucket: "moox-archive", Prefix: "moox-archive/", UrlStyle: "path"})
+	if _, s, probeError, ok := state(); !ok || s != report.ObjectStoreAvailable || probeError != "" {
+		t.Fatalf("恢复后 = %d %q %v", s, probeError, ok)
+	}
+}

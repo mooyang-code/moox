@@ -341,7 +341,7 @@ type Manifest struct {
 	Factors            FactorSetup               `toml:"factors"`
 	SCFPlan            SCFPlan                   `toml:"scf_plan"`
 	HostCatalog        map[string]HostDefinition `toml:"hosts"`
-	// ArchiveObjectStore 为 nil 表示归档不使用对象存储。
+	// ArchiveObjectStore 为 nil 表示归档用因子机上内置的 SeaweedFS；非 nil 时用这里配置的外部 S3。
 	ArchiveObjectStore *ArchiveObjectStore `toml:"archive_object_store"`
 }
 

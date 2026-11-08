@@ -127,4 +127,112 @@ grep -q 'check-config' "${tmp}/bad7.log" || fail "the failure must mention check
 [[ ! -e "${deploy}/config/app.yaml.new" && ! -e "${deploy}/bin/moox-archive-worker.new" ]] || fail "the rejected config and binary must be cleaned up"
 [[ ! -e "${tmp}/systemctl.log" ]] || fail "the service must not be restarted when check-config fails"
 
+# ---------------------------------------------------------------- 内置对象存储（SeaweedFS）
+# 桩：systemctl 记日志并按状态文件回答 is-active；ss 按标记文件回答端口占用；timeout 直接执行；weed 模拟 shell 的输出。
+sw_state="${tmp}/sw-state"
+mkdir -p "${sw_state}" "${tmp}/swbin" "${tmp}/pkg"
+cat >"${tmp}/swbin/systemctl" <<EOF
+#!/bin/sh
+echo "\$@" >>"${tmp}/sw-systemctl.log"
+case "\$*" in
+  *is-active*) [ -e "${sw_state}/active" ] ;;
+  *restart*|*" start "*) touch "${sw_state}/active"; touch "${sw_state}/port-11463" ;;
+  *disable*) rm -f "${sw_state}/active" ;;
+esac
+exit \${?}
+EOF
+cat >"${tmp}/swbin/ss" <<EOF
+#!/bin/sh
+port="\$(printf '%s' "\$*" | sed -n 's/.*sport = :\([0-9]*\).*/\1/p')"
+[ -e "${sw_state}/port-\${port}" ] && echo "LISTEN 0 4096 127.0.0.1:\${port} 0.0.0.0:*"
+exit 0
+EOF
+printf '#!/bin/sh\nshift\nexec "$@"\n' >"${tmp}/swbin/timeout"
+cat >"${tmp}/pkg/weed" <<EOF
+#!/bin/sh
+cmd="\$(cat)"
+echo "\${cmd}" >>"${tmp}/sw-weed.log"
+case "\${cmd}" in
+  cluster.check) echo "checking master 127.0.0.1:11460 to volume server 127.0.0.1:11461.21461 ... ok round trip 0.4ms" ;;
+  s3.bucket.list) [ -e "${sw_state}/bucket" ] && printf '  moox-archive\tsize:0\n' ;;
+  s3.bucket.create*) if [ -e "${sw_state}/bucket" ]; then echo "error: bucket moox-archive already exists"; else touch "${sw_state}/bucket"; fi ;;
+esac
+exit 0
+EOF
+cp "${tmp}/moox-archive-worker" "${tmp}/pkg/moox-archive-worker"
+chmod 0755 "${tmp}/swbin/"* "${tmp}/pkg/"*
+sw_dir="${tmp}/seaweedfs"
+sw_unit="${MOOX_SYSTEMD_USER_DIR}/moox-seaweedfs.service"
+mode_of() { stat -f '%Lp' "$1" 2>/dev/null || stat -c '%a' "$1"; }
+b_args=()
+for arg in "${args[@]}"; do [[ "${arg}" == "${tmp}/moox-archive-worker" ]] && b_args+=("${tmp}/pkg/moox-archive-worker") || b_args+=("${arg}"); done
+b_args+=(--builtin-object-store)
+
+# 与外部对象存储互斥。
+if PATH="${tmp}/swbin:${PATH}" bash "${SCRIPT}" "${b_args[@]}" "${os_args[@]}" >"${tmp}/sw-bad1.log" 2>&1; then
+  fail "--builtin-object-store and --object-store-endpoint must be mutually exclusive"
+fi
+# 包里没有 weed：失败，worker 配置不变。
+mkdir -p "${tmp}/pkg-noweed" && cp "${tmp}/moox-archive-worker" "${tmp}/pkg-noweed/moox-archive-worker"
+if PATH="${tmp}/swbin:${PATH}" bash "${SCRIPT}" "${args[@]}" --binary "${tmp}/pkg-noweed/moox-archive-worker" --builtin-object-store >"${tmp}/sw-bad2.log" 2>&1; then
+  fail "the built-in object store must require weed next to --binary"
+fi
+# 端口被别的程序占用：失败。
+touch "${sw_state}/port-11461"
+if PATH="${tmp}/swbin:${PATH}" bash "${SCRIPT}" "${b_args[@]}" >"${tmp}/sw-bad3.log" 2>&1; then
+  fail "a busy port must stop the built-in object store"
+fi
+grep -q 'port 11461' "${tmp}/sw-bad3.log" || fail "the busy port must be named"
+grep -qF 'cos.ap-nanjing.myqcloud.com' "${config}" || fail "the worker config must stay unchanged when the built-in object store fails"
+rm -f "${sw_state}/port-11461"
+
+# 首次部署：生成密钥、派生 s3.json 与 worker 凭据（都 0600），--no-start 也启动 SeaweedFS 并建桶。
+: >"${tmp}/sw-systemctl.log"
+PATH="${tmp}/swbin:${PATH}" bash "${SCRIPT}" "${b_args[@]}" >"${tmp}/sw-ok.log" 2>&1 || { cat "${tmp}/sw-ok.log" >&2; fail "deploy with the built-in object store failed"; }
+keys="${sw_dir}/config/s3-credentials.env"
+for f in "${keys}" "${sw_dir}/config/s3.json" "${secrets}/archive-object-store.env"; do
+  [[ -s "${f}" && "$(mode_of "${f}")" == 600 ]] || fail "${f} must exist with mode 0600"
+done
+[[ -x "${sw_dir}/bin/weed" && -s "${sw_dir}/LICENSE" ]] || fail "weed and its license must be installed"
+cmp -s "${keys}" "${secrets}/archive-object-store.env" || fail "the worker credential must be derived from the built-in key"
+access="$(sed -n 's/^ACCESS_KEY_ID=//p' "${keys}")"; secret="$(sed -n 's/^SECRET_ACCESS_KEY=//p' "${keys}")"
+[[ "${access}" =~ ^MOOX[0-9A-F]{16}$ && "${secret}" =~ ^[0-9a-f]{40}$ ]] || fail "unexpected generated key format"
+grep -qF "\"accessKey\": \"${access}\"" "${sw_dir}/config/s3.json" && grep -qF "\"secretKey\": \"${secret}\"" "${sw_dir}/config/s3.json" || fail "s3.json must carry the built-in key"
+grep -qF 'arn:aws:s3:::moox-archive/moox-archive/*' "${sw_dir}/config/s3.json" || fail "the policy must be limited to the prefix"
+grep -q 'DeleteObject\|"Write"' "${sw_dir}/config/s3.json" && fail "the policy must not allow deletes"
+python3 -I -c 'import json,sys; c=json.load(open(sys.argv[1])); json.loads(c["policies"][0]["content"])' "${sw_dir}/config/s3.json" || fail "s3.json and its policy must be valid JSON"
+grep -q "${access}\|${secret}" "${tmp}/sw-ok.log" && fail "the generated key must not be printed"
+for want in 'endpoint: "127.0.0.1:11463"' 'region: "us-east-1"' 'bucket: "moox-archive"' 'prefix: "moox-archive/"' 'url_style: path' 'use_tls: false' \
+  "credentials_file: ${secrets}/archive-object-store.env"; do
+  grep -qF -- "${want}" "${config}" || fail "built-in object_store misses: ${want}"
+done
+grep -q 'storage_class' "${config}" && fail "the built-in object store has no storage class"
+[[ -s "${sw_unit}" ]] || fail "moox-seaweedfs.service was not rendered"
+grep -q '__[A-Z_]*__' "${sw_unit}" && fail "unrendered placeholder in moox-seaweedfs.service"
+for want in "-dir=${sw_dir}/data" '-ip.bind=127.0.0.1' '-master.telemetry=false' '-s3.port=11463' '-s3.port.iceberg=0' '-s3.port.lance=0' "-s3.config=${sw_dir}/config/s3.json"; do
+  grep -qF -- "${want}" "${sw_unit}" || fail "moox-seaweedfs.service misses: ${want}"
+done
+grep -q 'restart moox-seaweedfs.service' "${tmp}/sw-systemctl.log" || fail "a fresh install must (re)start SeaweedFS"
+grep -q 'moox-archive-worker' "${tmp}/sw-systemctl.log" && fail "--no-start must not touch the worker service"
+[[ -e "${sw_state}/bucket" ]] || fail "the bucket must be created"
+
+: >"${tmp}/sw-weed.log"
+# 二次部署（--skip-build）：沿用已装的 weed 与密钥，重启 SeaweedFS，桶已存在不重建。
+: >"${tmp}/sw-systemctl.log"
+before_keys="$(cat "${keys}")"
+PATH="${tmp}/swbin:${PATH}" bash "${SCRIPT}" --dir "${deploy}" --root-dir "${archive_root}" --worker-id archive-worker@testhost \
+  --access-address access.example.test:11004 --access-id access@storage --access-key-id key-123 --skip-build --no-start --builtin-object-store \
+  >"${tmp}/sw-ok2.log" 2>&1 || { cat "${tmp}/sw-ok2.log" >&2; fail "second built-in deploy failed"; }
+[[ "$(cat "${keys}")" == "${before_keys}" ]] || fail "the built-in key must be kept across deployments"
+grep -q 'restart moox-seaweedfs.service' "${tmp}/sw-systemctl.log" || fail "every deployment must restart SeaweedFS"
+grep -q 's3.bucket.create' "${tmp}/sw-weed.log" && fail "an existing bucket must not be created again"
+
+# 改用外部对象存储：停掉 SeaweedFS，数据与密钥留着。
+: >"${tmp}/sw-systemctl.log"
+printf 'ACCESS_KEY_ID=AKIDnew\nSECRET_ACCESS_KEY=new\n' >"${secrets}/archive-object-store.env"
+chmod 0600 "${secrets}/archive-object-store.env"
+PATH="${tmp}/swbin:${PATH}" bash "${SCRIPT}" "${args[@]}" "${os_args[@]}" >"${tmp}/sw-ext.log" 2>&1 || { cat "${tmp}/sw-ext.log" >&2; fail "switching to an external object store failed"; }
+grep -q 'disable --now moox-seaweedfs.service' "${tmp}/sw-systemctl.log" || fail "switching to an external object store must stop SeaweedFS"
+[[ -d "${sw_dir}/data" && "$(cat "${keys}")" == "${before_keys}" ]] || fail "SeaweedFS data and key must stay"
+
 echo "deploy-archive-worker contract passed"

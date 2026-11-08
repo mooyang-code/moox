@@ -175,7 +175,7 @@ done`, append([]string{stage, installSecrets}, moves...)...); err != nil {
 		arguments = append(arguments, "--engine-id", "factor-engine@"+in.host.Name, "--eventbus-url", in.manifest.EventBusURLFor(in.host.Name))
 	case "archive-worker":
 		arguments = append(arguments, "--worker-id", "archive-worker@"+in.host.Name, "--root-dir", in.manifest.Paths.Resolved().ArchiveRoot)
-		arguments = append(arguments, objectStoreArguments(in.manifest.ArchiveObjectStore, len(in.objectStoreEnv) > 0)...)
+		arguments = append(arguments, objectStoreArguments(in.manifest.ArchiveObjectStore)...)
 	}
 	if in.disabled {
 		arguments = append(arguments, "--no-start")
@@ -199,10 +199,11 @@ done`, append([]string{stage, installSecrets}, moves...)...); err != nil {
 	return result, nil
 }
 
-// objectStoreArguments 是安装脚本的 --object-store-* 参数；没有配置或没有凭据时为空（脚本据此不启用对象存储、删掉残留凭据）。
-func objectStoreArguments(store *setupconfig.ArchiveObjectStore, hasCredential bool) []string {
-	if store == nil || !hasCredential {
-		return nil
+// objectStoreArguments 是安装脚本的对象存储参数：没有 [archive_object_store] 段时用包里内置的 SeaweedFS，
+// 有这一段时用外部 S3（凭据由调用方从 Admin 读出并上传）。
+func objectStoreArguments(store *setupconfig.ArchiveObjectStore) []string {
+	if store == nil {
+		return []string{"--builtin-object-store"}
 	}
 	args := []string{
 		"--object-store-endpoint", store.Endpoint, "--object-store-region", store.Region, "--object-store-bucket", store.Bucket,

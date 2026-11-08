@@ -141,8 +141,9 @@ max_rows_per_pass = 50000
 channel_type = "wecom"
 webhook_url = ""
 
-# 归档对象存储（可选）：归档 worker 导出分区后传一份到标准 S3 接口的对象存储，后端可替换（COS、R2、自建）。
-# 这里不写密钥：secret_id 是管理台“设置 › 密钥”里那条（分类 其他、提供方 s3、类型 API 密钥对）的 ID，
+# 归档对象存储：归档 worker 导出分区后传一份到标准 S3 接口的对象存储。不写这一段时用因子机上内置的 SeaweedFS
+# （随 archive-worker 部署，只听 127.0.0.1，密钥在机器上生成；和归档文件同盘，不防整盘故障）。
+# 写这一段就改用外部 S3（COS、R2 等，可放到别的机器或云上）。这里不写密钥：secret_id 是管理台“设置 › 密钥”里那条（分类 其他、提供方 s3、类型 API 密钥对）的 ID，
 # 部署 archive-worker 时由 moox-cli 取出并投影成 worker 的凭据文件。第一次加这一段用 moox-cli config edit 的“归档对象存储”一组。
 # [archive_object_store]
 # endpoint = "cos.ap-nanjing.myqcloud.com"

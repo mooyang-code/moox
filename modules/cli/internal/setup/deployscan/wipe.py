@@ -3,7 +3,7 @@
 import json, os, re, shutil, signal, stat, subprocess, sys, time
 
 CRON_MARKER = '# moox-watchdog'
-SERVICES = ('moox-factor-engine.service', 'moox-archive-worker.service')
+SERVICES = ('moox-factor-engine.service', 'moox-archive-worker.service', 'moox-seaweedfs.service')
 KILL_WAIT = 30
 MOUNTS = set()
 

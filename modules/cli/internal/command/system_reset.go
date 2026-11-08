@@ -140,7 +140,7 @@ func (r systemResetOptions) externalSteps(scope string) []sysctl.ExternalStep {
 		{Name: "archive-worker", Describe: "归档 worker：停止并删除暂存库（在 archive-worker 所在主机上执行）", After: sysctl.Archive, Commands: []string{
 			"停止 archive-worker（moox-archive-worker 进程或它的 systemd 单元）",
 			"删除它状态目录里的暂存库：rm -f <state_dir>/.state/staging.db <state_dir>/.state/staging.db-wal <state_dir>/.state/staging.db-shm（要留底先 cp）",
-			"已归档的 Parquet/CSV 文件默认不动；要彻底重来时手工清理归档目录",
+			"已归档的 Parquet/CSV 文件与内置对象存储（SeaweedFS）里的副本默认不动；要彻底重来时手工清理归档目录和 SeaweedFS 的 data 目录",
 			"系统重置全部完成后再启动 archive-worker",
 		}},
 		{Name: "storage", Describe: describe, After: sysctl.Archive, Commands: storageCommands},

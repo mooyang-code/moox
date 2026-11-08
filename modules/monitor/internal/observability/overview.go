@@ -209,6 +209,11 @@ func (b Builder) Build(ctx context.Context, spaceID string) (Overview, error) {
 		return Overview{}, err
 	}
 	out.BusinessChecks = append(out.BusinessChecks, presence...)
+	objectStore, err := b.buildArchiveObjectStore(ctx, spaceID, now)
+	if err != nil {
+		return Overview{}, err
+	}
+	out.BusinessChecks = append(out.BusinessChecks, objectStore...)
 	archive, err := b.buildArchiveHealth(ctx, spaceID, now)
 	if err != nil {
 		return Overview{}, err

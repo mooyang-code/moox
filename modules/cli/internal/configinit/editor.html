@@ -346,8 +346,8 @@ button.primary:hover { filter: brightness(1.08); background: var(--brand); }
     var syncOS = function () { osFields.hidden = !ctl.os.enabled.checked; };
     ctl.os.enabled.addEventListener('change', syncOS);
     syncOS();
-    root.append(block('归档对象存储', '归档 worker 导出分区后传一份到标准 S3 接口的对象存储（例如腾讯云 COS）。关闭后保存会删掉这一段；改动在下次部署 archive-worker 时生效。',
-      el('div', {}, [el('label', { class: 'check' }, [ctl.os.enabled, el('span', { text: '启用' })]), osFields])));
+    root.append(block('归档对象存储', '归档 worker 导出分区后传一份到标准 S3 接口的对象存储。不打开时用因子机上内置的 SeaweedFS（和归档文件同盘）；打开后改用这里填的外部 S3（例如腾讯云 COS）。关闭后保存会删掉这一段；改动在下次部署 archive-worker 时生效。',
+      el('div', {}, [el('label', { class: 'check' }, [ctl.os.enabled, el('span', { text: '使用外部 S3' })]), osFields])));
 
     var hosts = el('div');
     form.hosts.forEach(function (host) {

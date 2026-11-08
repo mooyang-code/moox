@@ -157,6 +157,10 @@ message ObjectStoreInfo {
   string prefix = 3;
   string storage_class = 4;
   string url_style = 5;
+  // probe_error 是最近一次探测失败的原因，可用时为空。
+  string probe_error = 6;
+  // unavailable_since 是连续不可用的起点（RFC3339），可用时为空。
+  string unavailable_since = 7;
 }
 
 // TaskRef 是一个归档任务的身份。

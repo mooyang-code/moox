@@ -86,11 +86,15 @@ type objectStoreJSON struct {
 	Prefix       string `json:"prefix,omitempty"`
 	StorageClass string `json:"storage_class,omitempty"`
 	URLStyle     string `json:"url_style,omitempty"`
+	// ProbeError、UnavailableSince 是 worker 最近一次探测的结果，可用时为空。
+	ProbeError       string `json:"probe_error,omitempty"`
+	UnavailableSince string `json:"unavailable_since,omitempty"`
 }
 
 func objectStoreToJSON(info *archivepb.ObjectStoreInfo) string {
 	raw, _ := json.Marshal(objectStoreJSON{
 		Endpoint: info.GetEndpoint(), Bucket: info.GetBucket(), Prefix: info.GetPrefix(), StorageClass: info.GetStorageClass(), URLStyle: info.GetUrlStyle(),
+		ProbeError: info.GetProbeError(), UnavailableSince: info.GetUnavailableSince(),
 	})
 	return string(raw)
 }
@@ -100,7 +104,10 @@ func objectStoreFromJSON(text string) *archivepb.ObjectStoreInfo {
 	if text != "" {
 		_ = json.Unmarshal([]byte(text), &v)
 	}
-	return &archivepb.ObjectStoreInfo{Endpoint: v.Endpoint, Bucket: v.Bucket, Prefix: v.Prefix, StorageClass: v.StorageClass, UrlStyle: v.URLStyle}
+	return &archivepb.ObjectStoreInfo{
+		Endpoint: v.Endpoint, Bucket: v.Bucket, Prefix: v.Prefix, StorageClass: v.StorageClass, UrlStyle: v.URLStyle,
+		ProbeError: v.ProbeError, UnavailableSince: v.UnavailableSince,
+	}
 }
 
 func workerToPB(w store.Worker, now time.Time) *archivepb.ArchiveWorkerInfo {

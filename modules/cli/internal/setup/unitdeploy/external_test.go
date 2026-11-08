@@ -292,16 +292,19 @@ func TestDeployExternalArchiveWorkerProjectsTheObjectStoreCredential(t *testing.
 	assert.NotContains(t, script, "secret_s3")
 }
 
-func TestDeployExternalArchiveWorkerWithoutObjectStoreSendsNoCredentialOrFlags(t *testing.T) {
+func TestDeployExternalArchiveWorkerWithoutObjectStoreUsesTheBuiltInOne(t *testing.T) {
 	in, target, _ := externalFixture(t, "archive-worker", false)
 	in.manifest.Paths.ArchiveRoot = "/data/moox/archive"
 	_, err := deployExternal(t.Context(), in)
 	require.NoError(t, err)
 	stage := "/data/moox/bootstrap-input/external/archive-worker-export1"
-	assert.NotContains(t, target.uploads, stage+"/secrets/archive-object-store.env")
+	assert.NotContains(t, target.uploads, stage+"/secrets/archive-object-store.env", "内置对象存储的密钥在机器上生成，不上传")
+	var script string
 	for _, argv := range target.runs {
 		assert.NotContains(t, strings.Join(argv, " "), "--object-store-")
+		script += strings.Join(argv, " ")
 	}
+	assert.Contains(t, script, "--builtin-object-store")
 	// 因子引擎不受影响：即使 manifest 配了对象存储。
 	engine, engineTarget, _ := externalFixture(t, "factor-engine", false)
 	engine.manifest.ArchiveObjectStore = &setupconfig.ArchiveObjectStore{Endpoint: "e", Region: "r", Bucket: "bbb", URLStyle: "path", SecretID: "s"}
@@ -309,5 +312,6 @@ func TestDeployExternalArchiveWorkerWithoutObjectStoreSendsNoCredentialOrFlags(t
 	require.NoError(t, err)
 	for _, argv := range engineTarget.runs {
 		assert.NotContains(t, strings.Join(argv, " "), "--object-store-")
+		assert.NotContains(t, strings.Join(argv, " "), "--builtin-object-store")
 	}
 }

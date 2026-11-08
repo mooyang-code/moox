@@ -182,9 +182,12 @@ var unitSpecs = map[string]unitComponentSpec{
 		{"deploy/systemd/user/moox-factor-engine.service.tmpl", "factor-engine/deploy/systemd/user/moox-factor-engine.service.tmpl", false},
 		{"modules/factor/config/trpc_go.engine.yaml", "factor-engine/modules/factor/config/trpc_go.engine.yaml", false},
 	}},
-	"archive-worker": {assets: []unitAsset{
+	// weed 是内置对象存储 SeaweedFS（固定版本的第三方二进制，见 scripts/build/seaweedfs-sha256.txt），由安装脚本托管成 moox-seaweedfs。
+	"archive-worker": {[]string{"weed"}, []unitAsset{
 		{"scripts/deploy/deploy-archive-worker.sh", "archive-worker/scripts/deploy/deploy-archive-worker.sh", false},
 		{"deploy/systemd/user/moox-archive-worker.service.tmpl", "archive-worker/deploy/systemd/user/moox-archive-worker.service.tmpl", false},
+		{"deploy/systemd/user/moox-seaweedfs.service.tmpl", "archive-worker/deploy/systemd/user/moox-seaweedfs.service.tmpl", false},
+		{"third_party/seaweedfs/LICENSE", "archive-worker/third_party/seaweedfs/LICENSE", false},
 	}},
 }
 
