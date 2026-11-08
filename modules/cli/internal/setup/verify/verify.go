@@ -61,6 +61,8 @@ type Instance struct {
 	ID        string
 	Enabled   bool
 	SessionID string
+	// MissingFactorTasks 是停用实例引用的、已不存在的因子任务（删除实例没做完，或任务被另外删掉）。
+	MissingFactorTasks []string
 }
 
 // Input 是一轮验收读到的数据。
@@ -204,7 +206,11 @@ func factors(in Input, marketClosed bool) Check {
 func strategies(in Input) Check {
 	check := Check{Name: "strategy", Code: CodeStrategyNotRunning}
 	enabled := 0
+	var incomplete []string
 	for _, instance := range in.Instances {
+		if len(instance.MissingFactorTasks) > 0 {
+			incomplete = append(incomplete, instance.ID)
+		}
 		if !instance.Enabled {
 			continue
 		}
@@ -214,11 +220,16 @@ func strategies(in Input) Check {
 			return check
 		}
 	}
+	// 只标注，不影响验收结果：这些实例已停用，删除实例即可清理。
+	note := ""
+	if len(incomplete) > 0 {
+		note = "；策略实例 " + strings.Join(incomplete, "、") + " 引用的因子任务已不存在，用 strategy instance delete 删除实例即可清理"
+	}
 	if enabled == 0 {
-		check.Status, check.Code, check.Detail = Skip, "", "没有启用的策略实例"
+		check.Status, check.Code, check.Detail = Skip, "", "没有启用的策略实例"+note
 		return check
 	}
-	check.Status, check.Code = Pass, ""
+	check.Status, check.Code, check.Detail = Pass, "", strings.TrimPrefix(note, "；")
 	return check
 }
 

@@ -24,6 +24,10 @@
         >详情加载失败：{{ store.detailError
         }}<template #action><a-button size="small" @click="refreshDetail">重试</a-button></template></a-alert
       >
+      <a-alert v-if="store.instance?.missing_factor_tasks?.length" type="warning" show-icon class="top-alert">
+        引用的因子任务
+        {{ store.instance.missing_factor_tasks.join("、") }} 已不存在，删除实例即可清理（到运行实例列表删除）；启用会失败。
+      </a-alert>
       <a-alert v-if="logicalAccount?.automation_state === 'PAUSED'" type="warning" show-icon class="top-alert">
         组合账户已暂停，目标不会执行，需要到组合账户恢复自动执行。
         <template #action>
@@ -174,7 +178,11 @@ const logicalAccount = useLogicalAccount(computed(() => store.instance?.logical_
 // 研究回放不支持策略池（Strategy 的 StartReplay 直接拒绝），按钮禁用并说明原因。
 const POOL_REPLAY_REASON = "研究回放暂不支持策略池：成员的净值与分配比例要在池实例启用后的预热与运行中查看";
 const isPoolInstance = computed(() => poolMembers(store.strategy?.dsl_yaml || "") !== null);
-const hasFactors = computed(() => Boolean(store.instance && parseFactorBinding(store.instance.resolved_json)));
+// 引用的因子任务已经不在的实例不再读因子参数：读取只会报错。
+const hasFactors = computed(
+  () =>
+    Boolean(store.instance && parseFactorBinding(store.instance.resolved_json)) && !store.instance?.missing_factor_tasks?.length
+);
 const definitionHint = computed(() =>
   store.strategyStatus === "missing" ? "定义已删除" : store.strategyStatus === "error" ? "定义读取失败" : "定义读取中"
 );

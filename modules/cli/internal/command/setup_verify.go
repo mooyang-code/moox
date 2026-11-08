@@ -301,9 +301,10 @@ func readStrategyInstances(ctx context.Context, gateway adminclient.GatewayForwa
 			Msg  string          `json:"msg"`
 		} `json:"ret_info"`
 		Instances []struct {
-			InstanceID string `json:"instance_id"`
-			Enabled    bool   `json:"enabled"`
-			SessionID  string `json:"session_id"`
+			InstanceID         string   `json:"instance_id"`
+			Enabled            bool     `json:"enabled"`
+			SessionID          string   `json:"session_id"`
+			MissingFactorTasks []string `json:"missing_factor_tasks"`
 		} `json:"instances"`
 	}
 	if err := json.Unmarshal(rsp, &parsed); err != nil {
@@ -315,7 +316,7 @@ func readStrategyInstances(ctx context.Context, gateway adminclient.GatewayForwa
 	}
 	instances := make([]verify.Instance, 0, len(parsed.Instances))
 	for _, item := range parsed.Instances {
-		instances = append(instances, verify.Instance{ID: item.InstanceID, Enabled: item.Enabled, SessionID: item.SessionID})
+		instances = append(instances, verify.Instance{ID: item.InstanceID, Enabled: item.Enabled, SessionID: item.SessionID, MissingFactorTasks: item.MissingFactorTasks})
 	}
 	slices.SortFunc(instances, func(a, b verify.Instance) int { return strings.Compare(a.ID, b.ID) })
 	return instances, nil

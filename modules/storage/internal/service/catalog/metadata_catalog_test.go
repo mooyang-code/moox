@@ -417,3 +417,19 @@ func TestVisibleViewColumnsHidesLogicallyDeletedColumns(t *testing.T) {
 	require.Equal(t, "close", visible[0].GetColumnName())
 	require.Len(t, visibleViewColumns(columns, nil), 2)
 }
+
+// GetDataset 只在数据集确实不存在时返回 DATASET_NOT_FOUND：读取出错是内部错误，调用方不能把它当成“已经删掉”。
+func TestGetDatasetDistinguishesMissingFromReadErrors(t *testing.T) {
+	svc, _ := newActivationService(t, newActivationReader("active", "ip://127.0.0.1:19090").dataset, &pb.DataNode{NodeId: "node-a", Status: "active", ServiceTarget: "ip://127.0.0.1:19090"}, &fakeNodeStateChecker{rsp: readyNodeState("node-a")})
+	store := svc.metadata.(*activationMetadataStore)
+	store.datasetErr = errors.New("sqlite: database is locked")
+	rsp, err := svc.GetDataset(context.Background(), &pb.GetDatasetReq{SpaceId: "space-a", DatasetId: "dataset_a"})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_INNER_ERR, rsp.GetRetInfo().GetCode())
+	require.NotContains(t, rsp.GetRetInfo().GetMsg(), "sqlite")
+
+	store.datasetErr = fmt.Errorf("metadata row not found: %w", sql.ErrNoRows)
+	rsp, err = svc.GetDataset(context.Background(), &pb.GetDatasetReq{SpaceId: "space-a", DatasetId: "dataset_a"})
+	require.NoError(t, err)
+	require.Equal(t, pb.ErrorCode_DATASET_NOT_FOUND, rsp.GetRetInfo().GetCode())
+}

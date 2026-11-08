@@ -747,6 +747,8 @@ type metadataFake struct {
 	getDatasetErr          error
 	writeOps               []string
 	views                  map[string]bool
+	// deletableErr 是 CheckDatasetDeletable 的结果（例如结果数据集还被其他 View 引用）。
+	deletableErr error
 }
 
 func newMetadataFake() *metadataFake {
@@ -892,6 +894,12 @@ func (f *metadataFake) DeleteResultView(_ context.Context, spaceID, datasetID st
 	defer f.mu.Unlock()
 	delete(f.views, resultKey(spaceID, datasetID))
 	return nil
+}
+
+func (f *metadataFake) CheckDatasetDeletable(_ context.Context, spaceID, datasetID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.deletableErr
 }
 
 func (f *metadataFake) DeleteDataset(_ context.Context, spaceID, datasetID string) error {

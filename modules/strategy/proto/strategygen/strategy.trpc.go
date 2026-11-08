@@ -41,6 +41,8 @@ type StrategyMgrService interface {
 
 	SetStrategyInstanceEnabled(ctx context.Context, req *SetStrategyInstanceEnabledReq) (*SetStrategyInstanceEnabledRsp, error)
 
+	DeleteStrategyInstance(ctx context.Context, req *DeleteStrategyInstanceReq) (*DeleteStrategyInstanceRsp, error)
+
 	ListStrategyResults(ctx context.Context, req *ListStrategyResultsReq) (*ListStrategyResultsRsp, error)
 
 	GetStrategyResult(ctx context.Context, req *GetStrategyResultReq) (*GetStrategyResultRsp, error)
@@ -260,6 +262,24 @@ func StrategyMgrService_SetStrategyInstanceEnabled_Handler(svr interface{}, ctx 
 	}
 	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
 		return svr.(StrategyMgrService).SetStrategyInstanceEnabled(ctx, reqbody.(*SetStrategyInstanceEnabledReq))
+	}
+
+	var rsp interface{}
+	rsp, err = filters.Filter(ctx, req, handleFunc)
+	if err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func StrategyMgrService_DeleteStrategyInstance_Handler(svr interface{}, ctx context.Context, f server.FilterFunc) (interface{}, error) {
+	req := &DeleteStrategyInstanceReq{}
+	filters, err := f(req)
+	if err != nil {
+		return nil, err
+	}
+	handleFunc := func(ctx context.Context, reqbody interface{}) (interface{}, error) {
+		return svr.(StrategyMgrService).DeleteStrategyInstance(ctx, reqbody.(*DeleteStrategyInstanceReq))
 	}
 
 	var rsp interface{}
@@ -590,6 +610,10 @@ var StrategyMgrServer_ServiceDesc = server.ServiceDesc{
 			Func: StrategyMgrService_SetStrategyInstanceEnabled_Handler,
 		},
 		{
+			Name: "/trpc.moox.strategy.StrategyMgr/DeleteStrategyInstance",
+			Func: StrategyMgrService_DeleteStrategyInstance_Handler,
+		},
+		{
 			Name: "/trpc.moox.strategy.StrategyMgr/ListStrategyResults",
 			Func: StrategyMgrService_ListStrategyResults_Handler,
 		},
@@ -696,6 +720,9 @@ func (s *UnimplementedStrategyMgr) ListStrategyInstances(ctx context.Context, re
 func (s *UnimplementedStrategyMgr) SetStrategyInstanceEnabled(ctx context.Context, req *SetStrategyInstanceEnabledReq) (*SetStrategyInstanceEnabledRsp, error) {
 	return nil, errors.New("rpc SetStrategyInstanceEnabled of service StrategyMgr is not implemented")
 }
+func (s *UnimplementedStrategyMgr) DeleteStrategyInstance(ctx context.Context, req *DeleteStrategyInstanceReq) (*DeleteStrategyInstanceRsp, error) {
+	return nil, errors.New("rpc DeleteStrategyInstance of service StrategyMgr is not implemented")
+}
 func (s *UnimplementedStrategyMgr) ListStrategyResults(ctx context.Context, req *ListStrategyResultsReq) (*ListStrategyResultsRsp, error) {
 	return nil, errors.New("rpc ListStrategyResults of service StrategyMgr is not implemented")
 }
@@ -771,6 +798,8 @@ type StrategyMgrClientProxy interface {
 	ListStrategyInstances(ctx context.Context, req *ListStrategyInstancesReq, opts ...client.Option) (rsp *ListStrategyInstancesRsp, err error)
 
 	SetStrategyInstanceEnabled(ctx context.Context, req *SetStrategyInstanceEnabledReq, opts ...client.Option) (rsp *SetStrategyInstanceEnabledRsp, err error)
+
+	DeleteStrategyInstance(ctx context.Context, req *DeleteStrategyInstanceReq, opts ...client.Option) (rsp *DeleteStrategyInstanceRsp, err error)
 
 	ListStrategyResults(ctx context.Context, req *ListStrategyResultsReq, opts ...client.Option) (rsp *ListStrategyResultsRsp, err error)
 
@@ -1026,6 +1055,26 @@ func (c *StrategyMgrClientProxyImpl) SetStrategyInstanceEnabled(ctx context.Cont
 	callopts = append(callopts, c.opts...)
 	callopts = append(callopts, opts...)
 	rsp := &SetStrategyInstanceEnabledRsp{}
+	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
+		return nil, err
+	}
+	return rsp, nil
+}
+
+func (c *StrategyMgrClientProxyImpl) DeleteStrategyInstance(ctx context.Context, req *DeleteStrategyInstanceReq, opts ...client.Option) (*DeleteStrategyInstanceRsp, error) {
+	ctx, msg := codec.WithCloneMessage(ctx)
+	defer codec.PutBackMessage(msg)
+	msg.WithClientRPCName("/trpc.moox.strategy.StrategyMgr/DeleteStrategyInstance")
+	msg.WithCalleeServiceName(StrategyMgrServer_ServiceDesc.ServiceName)
+	msg.WithCalleeApp("moox")
+	msg.WithCalleeServer("strategy")
+	msg.WithCalleeService("StrategyMgr")
+	msg.WithCalleeMethod("DeleteStrategyInstance")
+	msg.WithSerializationType(codec.SerializationTypePB)
+	callopts := make([]client.Option, 0, len(c.opts)+len(opts))
+	callopts = append(callopts, c.opts...)
+	callopts = append(callopts, opts...)
+	rsp := &DeleteStrategyInstanceRsp{}
 	if err := c.client.Invoke(ctx, req, rsp, callopts...); err != nil {
 		return nil, err
 	}

@@ -31,6 +31,9 @@ type DataViewClient interface {
 type FactorClient interface {
 	GetFactor(context.Context, *factorpb.GetFactorReq, ...client.Option) (*factorpb.GetFactorRsp, error)
 	BindFactorTask(context.Context, *factorpb.BindFactorTaskReq, ...client.Option) (*factorpb.BindFactorTaskRsp, error)
+	GetFactorTask(context.Context, *factorpb.GetFactorTaskReq, ...client.Option) (*factorpb.GetFactorTaskRsp, error)
+	ListFactorTasks(context.Context, *factorpb.ListFactorTasksReq, ...client.Option) (*factorpb.ListFactorTasksRsp, error)
+	DeleteBoundTask(context.Context, *factorpb.DeleteBoundTaskReq, ...client.Option) (*factorpb.DeleteBoundTaskRsp, error)
 	SubmitFactorParams(context.Context, *factorpb.SubmitFactorParamsReq, ...client.Option) (*factorpb.SubmitFactorParamsRsp, error)
 }
 
@@ -117,6 +120,19 @@ func (a *gatewayAdapter) GetFactor(ctx context.Context, request *factorpb.GetFac
 
 func (a *gatewayAdapter) BindFactorTask(ctx context.Context, request *factorpb.BindFactorTaskReq, options ...client.Option) (*factorpb.BindFactorTaskRsp, error) {
 	return invokeGateway[factorpb.BindFactorTaskRsp](ctx, a.gateway, a.factorTimeout, factorMgrService, "BindFactorTask", request, options)
+}
+
+func (a *gatewayAdapter) GetFactorTask(ctx context.Context, request *factorpb.GetFactorTaskReq, options ...client.Option) (*factorpb.GetFactorTaskRsp, error) {
+	return invokeGateway[factorpb.GetFactorTaskRsp](ctx, a.gateway, a.factorTimeout, factorMgrService, "GetFactorTask", request, options)
+}
+
+func (a *gatewayAdapter) ListFactorTasks(ctx context.Context, request *factorpb.ListFactorTasksReq, options ...client.Option) (*factorpb.ListFactorTasksRsp, error) {
+	return invokeGateway[factorpb.ListFactorTasksRsp](ctx, a.gateway, a.factorTimeout, factorMgrService, "ListFactorTasks", request, options)
+}
+
+// DeleteBoundTask 要清空结果数据集，耗时随数据量变化：不套 Factor 的单次超时，只受调用方 ctx 与服务目录的路由超时约束。
+func (a *gatewayAdapter) DeleteBoundTask(ctx context.Context, request *factorpb.DeleteBoundTaskReq, options ...client.Option) (*factorpb.DeleteBoundTaskRsp, error) {
+	return invokeGateway[factorpb.DeleteBoundTaskRsp](ctx, a.gateway, 0, factorMgrService, "DeleteBoundTask", request, options)
 }
 
 func (a *gatewayAdapter) SubmitFactorParams(ctx context.Context, request *factorpb.SubmitFactorParamsReq, options ...client.Option) (*factorpb.SubmitFactorParamsRsp, error) {

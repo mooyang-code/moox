@@ -184,7 +184,11 @@ func (s *Service) DeleteDataset(ctx context.Context, req *pb.DeleteDatasetReq) (
 func (s *Service) GetDataset(ctx context.Context, req *pb.GetDatasetReq) (*pb.GetDatasetRsp, error) {
 	item, err := s.metadata.GetDataset(ctx, req.GetSpaceId(), req.GetDatasetId())
 	if err != nil {
-		return &pb.GetDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_DATASET_NOT_FOUND, err)}, nil
+		// 只有确实不存在才报 DATASET_NOT_FOUND：调用方（例如删除结果数据集）据此认为“已经删掉”，读取出错不能混进来。
+		if errors.Is(err, sql.ErrNoRows) {
+			return &pb.GetDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_DATASET_NOT_FOUND, err)}, nil
+		}
+		return &pb.GetDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("Dataset metadata could not be read"))}, nil
 	}
 	revision, err := s.metadata.SubjectsRevision(ctx, req.GetSpaceId())
 	if err != nil {

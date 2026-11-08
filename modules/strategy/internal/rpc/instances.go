@@ -194,7 +194,9 @@ func (s *Service) GetStrategyInstance(ctx context.Context, req *strategypb.GetSt
 	if instance.SpaceID != scoped {
 		return &strategypb.GetStrategyInstanceRsp{RetInfo: invalid(errors.New("实例不在当前空间"))}, nil
 	}
-	return &strategypb.GetStrategyInstanceRsp{RetInfo: success(), Instance: instanceProto(instance)}, nil
+	item := instanceProto(instance)
+	s.markMissingTasks(ctx, []store.Instance{instance}, []*strategypb.StrategyInstance{item}, true)
+	return &strategypb.GetStrategyInstanceRsp{RetInfo: success(), Instance: item}, nil
 }
 
 func (s *Service) ListStrategyInstances(ctx context.Context, req *strategypb.ListStrategyInstancesReq) (*strategypb.ListStrategyInstancesRsp, error) {
@@ -227,6 +229,7 @@ func (s *Service) ListStrategyInstances(ctx context.Context, req *strategypb.Lis
 	for _, value := range values[start:end] {
 		items = append(items, instanceProto(value))
 	}
+	s.markMissingTasks(ctx, values[start:end], items, false)
 	return &strategypb.ListStrategyInstancesRsp{RetInfo: success(), Instances: items, Total: int64(len(values)), Page: int32(page), PageSize: int32(size)}, nil
 }
 
@@ -332,6 +335,9 @@ func (s *Service) enable(ctx context.Context, instance store.Instance) (store.In
 		}
 	}
 	if sessionID == "" {
+		if err := s.checkTasksExist(ctx, instance); err != nil {
+			return reload(), err
+		}
 		strategy, err := dsl.Parse([]byte(definition.DSLYaml))
 		if err != nil {
 			return reload(), err

@@ -73,7 +73,10 @@ type Service struct {
 	// Warmer 为空时不预热（没有策略池的部署）。
 	Warmer Warmer
 	Alerts Alerter
-	Now    func() time.Time
+	// Tasks 与 Archives 用于删除实例（以及启用前核对任务还在、标出删除未完成的实例）；为空时不能删除实例。
+	Tasks    FactorTaskAdmin
+	Archives ArchiveTasks
+	Now      func() time.Time
 
 	// locks 是按定义 ID 的锁，引用计数归零即删除，不随出现过的定义无限增长。
 	locksMu sync.Mutex

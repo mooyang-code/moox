@@ -50,7 +50,7 @@ func unknownCommand(root *cobra.Command, words []string) string {
 
 // skill、文档和报错提示是用户排障时照着敲的，里面的命令必须真实存在。
 func TestDocumentedCommandsExist(t *testing.T) {
-	mountRPCCommands(rootCmd)
+	mountCommands(rootCmd)
 	repository, err := filepath.Abs("../../../..")
 	require.NoError(t, err)
 	checked := 0
