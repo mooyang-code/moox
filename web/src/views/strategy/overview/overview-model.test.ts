@@ -112,6 +112,18 @@ describe("strategy overview model", () => {
     ]);
   });
 
+  it("绑定的组合账户已暂停时列为待处理，链接到组合账户", () => {
+    const items = pendingItems(
+      input({
+        instances: [instance("p", { logical_account_id: "acc1" }), instance("q", { logical_account_id: "acc2" })],
+        targets: { p: snapshot("2026-10-10T13:00:00Z"), q: snapshot("2026-10-10T13:00:00Z") },
+        pausedAccounts: new Set(["acc1"])
+      })
+    );
+    expect(items.map(item => [item.instanceId, item.kind])).toEqual([["p", "paused"]]);
+    expect(items[0].target).toEqual({ name: "trading-account-detail", params: { logical_account_id: "acc1" } });
+  });
+
   it("keeps only pending and running replays", () => {
     expect(activeReplays([{ status: "pending" }, { status: "failed" }, { status: "running" }] as Replay[])).toHaveLength(2);
   });

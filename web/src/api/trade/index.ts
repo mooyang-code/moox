@@ -194,11 +194,12 @@ export function getLogicalAccount(logical_account_id: string, options: { silent?
   );
 }
 
-export function listLogicalAccounts(page: Page = {}) {
+export function listLogicalAccounts(page: Page = {}, options: { silent?: boolean } = {}) {
   return callTrade<{ page: Page }, { ret_info: RetInfo; logical_accounts: LogicalAccount[]; page_result: PageResult }>(
     "console",
     "ListLogicalAccounts",
-    { page }
+    { page },
+    options
   );
 }
 

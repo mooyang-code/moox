@@ -93,6 +93,34 @@ const skipReasons: Record<string, string> = {
   pool_warmup_failed: "策略池预热失败"
 };
 
+/** 跳过原因的下一步：已知原因给出怎么处理；会自动恢复的写明不用管。 */
+const skipNextSteps: Record<string, string> = {
+  factor_changed: "停用再启用实例，按新的因子定义重新固化",
+  previous_version_unknown: "通常下一期自动恢复；持续出现时停用再启用实例",
+  factor_missing: "等上游因子任务产出，通常自动恢复；持续出现时查看因子任务",
+  factor_skipped: "上游因子本期跳过，通常自动恢复；持续出现时查看因子任务",
+  market_missing: "等另一个市场的因子任务产出，通常自动恢复",
+  market_failed: "上游因子失败比例过高，查看因子任务的失败原因",
+  no_data: "本期没有数据，通常自动恢复；持续出现时查看采集和因子任务",
+  universe_too_small: "可用标的太少：检查数据覆盖，或调整策略的标的池",
+  too_many_missing: "缺数比例过高：检查采集和因子任务的覆盖",
+  config_error: "检查策略定义，改好后停用再启用实例",
+  ambiguous_series: "同一标的有多个序列：检查因子任务用的数据集",
+  history_insufficient: "历史覆盖不足：等数据积累，或补采、补算历史",
+  out_of_order: "周期乱序，通常自动恢复",
+  expired: "周期已过期，通常自动恢复",
+  infra_retry_exhausted: "读取重试耗尽，通常下一期自动恢复；持续出现时查看存储和网关",
+  catchup: "恢复追赶中，追上后自动恢复发目标",
+  pool_warmup_failed: "检查策略池成员是否可用，改好后停用再启用实例"
+};
+
+/** 最近一期被跳过时的说明：原因和下一步。 */
+export function skipAdvice(reason?: string): string {
+  if (!reason) return "最近一期被跳过，请在下方历史结果里看原因。";
+  const next = skipNextSteps[reason];
+  return `最近一期被跳过：${skipReasonLabel(reason)}。${next ? `${next}。` : "请在下方历史结果里看详情。"}`;
+}
+
 export function skipReasonLabel(reason?: string): string {
   if (!reason) return "-";
   return skipReasons[reason] ? `${skipReasons[reason]}（${reason}）` : reason;

@@ -111,6 +111,7 @@
 </template>
 
 <script setup lang="ts">
+import { listLogicalAccounts } from "@/api/trade";
 import { POOL_REPLAY_DISABLED_TEXT } from "@/views/strategy/dsl";
 import { computed, ref, watch } from "vue";
 import { useRouter } from "vue-router";
@@ -155,6 +156,8 @@ const replayError = ref("");
 // 读取失败的实例目标数：只提示，不当成“没有目标”。
 const targetFailures = ref(0);
 const readAt = ref("");
+// 已暂停自动执行的组合账户（读不到时为空，不提示暂停）
+const pausedAccounts = ref<Set<string>>(new Set());
 const gate = new RequestGate();
 
 const input = computed(() => ({
@@ -162,7 +165,8 @@ const input = computed(() => ({
   targets: targets.value,
   replays: replays.value,
   catalog: store.strategyCatalog,
-  nowMs: nowMs.value
+  nowMs: nowMs.value,
+  pausedAccounts: pausedAccounts.value
 }));
 const stats = computed(() => overviewStats(input.value));
 const cards = computed(() => instanceCards(input.value, displayZone.value));
@@ -195,7 +199,15 @@ async function loadAll(options: { background?: boolean } = {}) {
         return null;
       }),
       // 策略目录只在前台加载时补读：后台刷新不重试，免得策略模块不可用时每 30 秒弹一次
-      store.strategiesComplete || options.background ? Promise.resolve() : store.loadAllStrategies(200).catch(() => undefined)
+      store.strategiesComplete || options.background ? Promise.resolve() : store.loadAllStrategies(200).catch(() => undefined),
+      listLogicalAccounts({ page: 1, size: 500 }, { silent: true })
+        .then(rsp => {
+          if (gate.isCurrent(token)) {
+            const paused = (rsp.logical_accounts || []).filter(item => item.automation_state === "PAUSED");
+            pausedAccounts.value = new Set(paused.map(item => item.logical_account_id));
+          }
+        })
+        .catch(() => undefined)
     ]);
     if (!gate.isCurrent(token)) return;
     const enabled = nextInstances.filter(item => item.enabled).slice(0, TARGET_FETCH_LIMIT);
