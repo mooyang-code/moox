@@ -257,7 +257,7 @@ describe("strategy replay page", () => {
     expect(wrapper.findAll("button.replay-row")[1].attributes("aria-current")).toBe("true");
   });
 
-  it("按此配置重新发起：用回放详情里当时的配置填表单并打开发起抽屉，不被入口预填覆盖", async () => {
+  it("按此配置重新发起：用回放详情里当时的配置填表单并打开发起抽屉，打开后表单不被重置", async () => {
     const done = replay("r2", "done", "{}", { dsl_yaml: "name: old_version", spot_fee_bps: 7 });
     api.listReplays.mockResolvedValue({ items: [done], page: { total: 1 } });
     api.getReplay.mockResolvedValue(done);
