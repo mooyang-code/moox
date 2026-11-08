@@ -44,7 +44,7 @@
         <section class="detail-section">
           <h3>使用情况</h3>
           <span v-if="!chips.length" class="detail-empty">{{
-            otherUsage ? `只有其他空间在用：${otherUsage} 个成员` : "未被使用"
+            otherUsage ? `其他空间有 ${otherUsage} 个成员在用` : "未被使用"
           }}</span>
           <ul v-else class="usage-list">
             <li v-for="chip in chips" :key="chip.key">

@@ -152,7 +152,7 @@ describe("因子结果页", () => {
     expect(hoisted.listViews).toHaveBeenCalledTimes(1);
     expect(hoisted.listAllViewColumns).toHaveBeenCalledTimes(2); // 刷新时也重读列
 
-    // 成员启用（成员键不变）也重读列：启用时后端才补结果列
+    // 成员启停（成员键不变）也重读列：启用时后端才补结果列
     const enabledCalls = hoisted.listAllViewColumns.mock.calls.length;
     (hoisted.store.tasks as FactorTaskInfo[])[0].members[0].status = "disabled";
     await flushPromises();
