@@ -105,6 +105,11 @@ describe("Trade public API", () => {
     expect(trade.canCancelOrderState("CANCELING")).toBe(true);
     expect(trade.canCancelOrderState("CANCEL_UNKNOWN")).toBe(true);
     expect(trade.canCancelOrderState("FILLED")).toBe(false);
+    // 未完成订单比可撤单多“等待提交”“提交中”：订单页签据此决定是否后台刷新
+    expect(trade.isActiveOrderState("PENDING")).toBe(true);
+    expect(trade.isActiveOrderState("SUBMITTING")).toBe(true);
+    expect(trade.canCancelOrderState("PENDING")).toBe(false);
+    expect(trade.isActiveOrderState("FILLED")).toBe(false);
   });
 
   it("exposes canonical Chinese order state labels", () => {

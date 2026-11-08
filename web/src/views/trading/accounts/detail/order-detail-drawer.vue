@@ -101,12 +101,16 @@ const requests = createLatestRequestGuard();
 watch(
   // 已成交数量变了（抽屉开着时订单成交）也重读成交明细
   () => [props.visible, props.order?.order_id, props.order?.filled_quantity] as const,
-  async ([visible, id]) => {
+  async ([visible, id], previous) => {
     if (!visible || !id) return;
     const request = requests.begin();
-    loading.value = true;
+    // 同一个订单因成交数量变化重读时保留已有明细，读到后再替换，避免每次轮询闪一下
+    const sameOrder = previous?.[0] && previous[1] === id;
+    if (!sameOrder) {
+      loading.value = true;
+      fills.value = [];
+    }
     error.value = "";
-    fills.value = [];
     try {
       const rsp = await listFills({
         order_id: id,

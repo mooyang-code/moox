@@ -111,7 +111,7 @@
 import { useWindowSize } from "@vueuse/core";
 import { computed, inject, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { canCancelOrderState, getOrder, listOrders, orderOwnerLabels, orderStateLabels } from "@/api/trade";
+import { canCancelOrderState, getOrder, isActiveOrderState, listOrders, orderOwnerLabels, orderStateLabels } from "@/api/trade";
 import type { MarketType, Order } from "@/api/trade";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import { usePolling } from "@/hooks/usePolling";
@@ -259,7 +259,7 @@ watch(dataVersion, () => void load());
 usePolling(
   () => load(true),
   5000,
-  () => orders.value.some(order => canCancelOrderState(order.state))
+  () => orders.value.some(order => isActiveOrderState(order.state))
 );
 </script>
 

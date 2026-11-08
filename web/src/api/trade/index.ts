@@ -372,6 +372,13 @@ export const targetStateLabels: Record<string, string> = {
   EXPIRED: "已过期"
 };
 
+/** 未完成的订单：和后端 activeOrderStates 一致（含等待提交、提交中，这两种还不能撤）。 */
+export function isActiveOrderState(state: string): boolean {
+  return ["PENDING", "SUBMITTING", "SUBMIT_UNKNOWN", "OPEN", "PARTIALLY_FILLED", "CANCELING", "CANCEL_UNKNOWN"].includes(
+    state.toUpperCase()
+  );
+}
+
 export function canCancelOrderState(state: string): boolean {
   return ["OPEN", "PARTIALLY_FILLED", "SUBMIT_UNKNOWN", "CANCELING", "CANCEL_UNKNOWN"].includes(state.toUpperCase());
 }
