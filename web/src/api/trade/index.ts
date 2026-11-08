@@ -276,10 +276,13 @@ export function cancelOrder(action_id: string, order_id: string, reason: string)
   >("console", "CancelOrder", { action_id, order_id, reason }, { silent: true });
 }
 
-export function getOperatorAction(action_id: string) {
-  return callTrade<{ action_id: string }, { ret_info: RetInfo; action: OperatorAction }>("console", "GetOperatorAction", {
-    action_id
-  });
+export function getOperatorAction(action_id: string, options: { silent?: boolean } = {}) {
+  return callTrade<{ action_id: string }, { ret_info: RetInfo; action: OperatorAction }>(
+    "console",
+    "GetOperatorAction",
+    { action_id },
+    options
+  );
 }
 
 export function getLogicalAccountTarget(logical_account_id: string, options: { silent?: boolean } = {}) {
@@ -291,8 +294,8 @@ export function getLogicalAccountTarget(logical_account_id: string, options: { s
   );
 }
 
-export function getOrder(order_id: string) {
-  return callTrade<{ order_id: string }, { ret_info: RetInfo; order: Order }>("console", "GetOrder", { order_id });
+export function getOrder(order_id: string, options: { silent?: boolean } = {}) {
+  return callTrade<{ order_id: string }, { ret_info: RetInfo; order: Order }>("console", "GetOrder", { order_id }, options);
 }
 
 export function listOrders(req: ListOrdersReq = {}) {

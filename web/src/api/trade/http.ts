@@ -151,7 +151,9 @@ tradeClient.interceptors.response.use(
     return rsp;
   },
   error => {
-    if (!error?.config?.silentError) Message.error(explainTransportError(error, "Trade 请求失败"));
+    // 静默时也要把网络错误改写成中文（调用方会把 error.message 显示在自己的对话框里），只是不弹全局提示。
+    const message = explainTransportError(error, "Trade 请求失败");
+    if (!error?.config?.silentError) Message.error(message);
     return Promise.reject(error);
   }
 );

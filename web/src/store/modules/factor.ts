@@ -21,7 +21,8 @@ async function fetchAllTasks(spaceId: string, silentError: boolean) {
 async function fetchDatasetNames(spaceId: string) {
   const names: Record<string, string> = {};
   for (let page = 1; ; page += 1) {
-    const rsp = await listDatasets({ space_id: spaceId, page: { page, size: PAGE_SIZE } });
+    // 名称只用于展示，失败时回落到 dataset_id：一律静默（读取失败时每次刷新都会重试）
+    const rsp = await listDatasets({ space_id: spaceId, page: { page, size: PAGE_SIZE } }, { silentError: true });
     const batch = rsp.datasets || [];
     for (const dataset of batch) names[dataset.dataset_id] = dataset.name;
     if (!rsp.page_result?.has_more || !batch.length) break;

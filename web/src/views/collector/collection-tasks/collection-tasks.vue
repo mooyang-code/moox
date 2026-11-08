@@ -446,7 +446,14 @@
       </template>
     </a-drawer>
 
-    <a-drawer v-model:visible="detailVisible" title="任务详情" width="640px" unmount-on-close @cancel="onDetailCancel">
+    <a-drawer
+      v-model:visible="detailVisible"
+      title="任务详情"
+      width="640px"
+      :footer="false"
+      unmount-on-close
+      @cancel="onDetailCancel"
+    >
       <template v-if="detailData">
         <section class="detail-section">
           <h4 class="detail-section__title">基本信息</h4>
@@ -845,8 +852,15 @@ watch(
   }
 );
 
+// 首次挂载在页签容器的 keep-alive 里也会触发一次激活：初始状态已由 setup 和首次加载处理，这里跳过，
+// 免得带 ?detail= 进来时列表还没回来就多取一次详情。之后每次切回来按 URL 同步，URL 里没有就写回。
+let activatedOnce = false;
 onActivated(() => {
   pageActive = true;
+  if (!activatedOnce) {
+    activatedOnce = true;
+    return;
+  }
   if (OWN_KEYS.some(key => route.query[key] !== undefined)) {
     if (readListQuery()) void getTaskList();
     syncDetailFromQuery();
@@ -1587,7 +1601,7 @@ async function openDetailById(taskId: string) {
     if (token !== detailRequestToken || spaceId !== selectedSpaceId.value) return;
     if (response.task) onViewDetails(normalizeCollectionTask(response.task));
   } catch {
-    // 取不到（已删除或不在当前空间）：去掉 URL 里的 detail，原因由请求层提示
+    // 取不到（已删除或不在当前空间）：去掉 URL 里的 detail；网络错误由请求层提示，业务错误不另提示
     if (token === detailRequestToken) syncListQuery();
   }
 }

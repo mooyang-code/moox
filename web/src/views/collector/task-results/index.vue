@@ -358,14 +358,19 @@ async function refreshActiveTask() {
   if (ownershipVerified && taskId === activeTaskId.value) viewRefreshKey.value += 1;
 }
 
+/** 切回采集任务页签：只去掉 tab，其余参数（包括本页的 resultTask）保留，切回来还是同一个任务。 */
+function withoutTab() {
+  return Object.fromEntries(Object.entries(route.query).filter(([key]) => key !== "tab"));
+}
+
 function goToTasks() {
-  void router.replace({ path: "/collector/tasks", query: otherTabsQuery() });
+  void router.replace({ path: "/collector/tasks", query: withoutTab() });
 }
 
 function goToTaskDetail() {
   void router.replace({
     path: "/collector/tasks",
-    query: { ...otherTabsQuery(), ...(activeTaskId.value ? { detail: activeTaskId.value } : {}) }
+    query: { ...withoutTab(), ...(activeTaskId.value ? { detail: activeTaskId.value } : {}) }
   });
 }
 

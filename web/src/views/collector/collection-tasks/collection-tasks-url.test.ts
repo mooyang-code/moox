@@ -1,6 +1,6 @@
 import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
 import ArcoVue from "@arco-design/web-vue";
-import { reactive } from "vue";
+import { defineComponent, h, KeepAlive, reactive, ref } from "vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const ctx = vi.hoisted(() => ({
@@ -65,8 +65,14 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
+// 和真实的页签容器一样放在 keep-alive 里：首次挂载也会触发一次激活；show 置 false 等于切到别的页签。
+const show = ref(true);
+const Other = defineComponent({ setup: () => () => h("div") });
+const Host = defineComponent({ setup: () => () => h(KeepAlive, null, [show.value ? h(CollectionTasks) : h(Other)]) });
+
 async function mountPage() {
-  wrapper = mount(CollectionTasks, {
+  show.value = true;
+  wrapper = mount(Host, {
     global: {
       plugins: [ArcoVue],
       stubs: { ResampleJobsDrawer: true, ArchiveCoverageText: true, "icon-plus": true, "icon-search": true, "icon-more": true }
@@ -93,16 +99,42 @@ describe("采集任务页的 URL 状态", () => {
     await mountPage();
     expect(api.GetTaskDetail).toHaveBeenCalledWith({ space_id: "crypto", task_id: "t9" });
     expect(document.querySelector(".arco-drawer")?.textContent).toContain("任务详情");
+    // 只读抽屉没有“确定”页脚：只能从右上角关闭，关闭时一定去掉 URL 里的 detail
+    expect(document.querySelector(".arco-drawer-footer")).toBeNull();
     (document.querySelector(".arco-drawer-close-btn") as HTMLElement).click();
     await flushPromises();
     expect(ctx.route.query.detail).toBeUndefined();
     expect(ctx.route.query.resultTask).toBe("r1");
   });
 
-  it("在当前页的任务直接打开，不再单独取", async () => {
+  it("在当前页的任务直接打开，不再单独取（首次激活不会多取一次）", async () => {
     ctx.route.query = { detail: "t1" };
     await mountPage();
     expect(api.GetTaskDetail).not.toHaveBeenCalled();
     expect(document.querySelector(".arco-drawer")?.textContent).toContain("任务详情");
+  });
+
+  it("切走再切回：URL 里有本页参数就按 URL 同步，没有就把本页的状态写回", async () => {
+    ctx.route.query = { keyword: "btc" };
+    await mountPage();
+    show.value = false;
+    await flushPromises();
+
+    // 别处把 URL 换成新的筛选：切回来按 URL 重读
+    api.GetTaskList.mockClear();
+    ctx.route.query = { keyword: "eth" };
+    await flushPromises();
+    expect(api.GetTaskList).not.toHaveBeenCalled(); // 失活期间不跟随
+    show.value = true;
+    await flushPromises();
+    expect(api.GetTaskList).toHaveBeenCalledWith(expect.objectContaining({ keyword: "eth" }));
+
+    // URL 里没有本页参数（例如别的页签只写了自己的）：切回来把本页状态写回
+    show.value = false;
+    await flushPromises();
+    ctx.route.query = { segment: "s1" };
+    show.value = true;
+    await flushPromises();
+    expect(ctx.route.query).toEqual({ segment: "s1", keyword: "eth" });
   });
 });

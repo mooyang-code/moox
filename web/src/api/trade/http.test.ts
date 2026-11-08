@@ -37,8 +37,11 @@ describe("Trade response errors", () => {
     await callTrade("console", "GetLogicalAccount", {}, { silent: true });
     expect(client.post.mock.calls.at(-1)?.[2]).toEqual({ silentError: true });
     const onError = client.interceptors.response.use.mock.calls[0][1] as (error: unknown) => Promise<unknown>;
-    await expect(onError({ config: { silentError: true }, message: "Network Error" })).rejects.toBeTruthy();
+    // 静默时不弹提示，但网络错误照样改写成中文：下单等对话框会显示 error.message
+    const silentFailure = { config: { silentError: true }, message: "Network Error" };
+    await expect(onError(silentFailure)).rejects.toBeTruthy();
     expect(messageError).not.toHaveBeenCalled();
+    expect(silentFailure.message).not.toBe("Network Error");
     await expect(onError({ config: {}, message: "Network Error" })).rejects.toBeTruthy();
     expect(messageError).toHaveBeenCalledTimes(1);
   });

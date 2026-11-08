@@ -356,8 +356,14 @@ watch(
     void load();
   }
 );
+// 首次挂载时的激活跳过：初始状态已由 setup 和首次加载处理；之后每次切回来按 URL 同步。
+let activatedOnce = false;
 onActivated(() => {
   pageActive = true;
+  if (!activatedOnce) {
+    activatedOnce = true;
+    return;
+  }
   if (OWN_KEYS.some(key => route.query[key] !== undefined)) {
     if (readQuery()) {
       page.value = 1;

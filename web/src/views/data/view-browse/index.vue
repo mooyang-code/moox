@@ -887,16 +887,24 @@ async function loadDatasetColumns(space_id: string, view: View) {
   return results.flatMap(rsp => rsp.columns || []);
 }
 
-async function reloadRows(retainRowsOnError = false) {
+/**
+ * background：自动刷新。不弹提示、开头不清错误条（成功后才清），失败时保留上次的行。
+ * 手动操作（含父页的“刷新”）失败时页面自己弹一次提示；请求层一律静默，免得同一个错误弹两次。
+ */
+interface ReloadOptions {
+  background?: boolean;
+}
+
+async function reloadRows(retainRowsOnError = false, options: ReloadOptions = {}) {
   if (!props.queryReady) return;
   if (!retainRowsOnError || !lastRowsReadAt.value) tableColumnNames.value = preferredColumnNames.value;
   if (!activeView.value) return;
   if (mode.value === "time_series") {
-    await loadTimeSeriesViewRows(retainRowsOnError);
+    await loadTimeSeriesViewRows(retainRowsOnError, options);
     return;
   }
   if (mode.value === "record") {
-    await loadRecordViewRows(retainRowsOnError);
+    await loadRecordViewRows(retainRowsOnError, options);
   }
 }
 
@@ -905,13 +913,23 @@ async function refreshRowsInBackground() {
   if (!activeView.value && !metaLoading.value) await loadMeta();
 }
 
-async function loadTimeSeriesViewRows(retainRowsOnError = false) {
+/** 自动刷新的一轮：正在读取时跳过，不排队。 */
+async function pollRows() {
+  if (loading.value || contextLoading.value || metaLoading.value) return;
+  if (!activeView.value) {
+    await loadMeta();
+    return;
+  }
+  await reloadRows(true, { background: true });
+}
+
+async function loadTimeSeriesViewRows(retainRowsOnError = false, { background = false }: ReloadOptions = {}) {
   const space_id = spaceStore.requireSpaceId();
   const view = activeView.value;
   if (!view) return;
   const requestSequence = ++viewRowsRequestSequence;
   loading.value = true;
-  queryError.value = "";
+  if (!background) queryError.value = "";
   try {
     const timeRange = defaultTimeSeriesPreviewRange();
     const projection = props.projectColumns ?? explicitViewColumnNames.value;
@@ -926,7 +944,7 @@ async function loadTimeSeriesViewRows(retainRowsOnError = false) {
         page: { page: pagination.current, size: DEFAULT_VIEW_PAGE_SIZE },
         total_mode: "NONE"
       },
-      { silentError: retainRowsOnError }
+      { silentError: true }
     );
     if (
       requestSequence !== viewRowsRequestSequence ||
@@ -946,6 +964,7 @@ async function loadTimeSeriesViewRows(retainRowsOnError = false) {
     previewHasMore.value = !!rsp.page_result?.has_more;
     hasQueried.value = true;
     rowsStale.value = false;
+    queryError.value = "";
     lastRowsReadAt.value = formatInstant(Date.now(), props.zone, "clock");
   } catch (error) {
     if (
@@ -963,19 +982,19 @@ async function loadTimeSeriesViewRows(retainRowsOnError = false) {
       lastRowsReadAt.value = "";
     }
     hasQueried.value = true;
-    if (!viewIndexPreparing.value) Message.error(queryError.value);
+    if (!viewIndexPreparing.value && !background) Message.error(queryError.value);
   } finally {
     if (requestSequence === viewRowsRequestSequence) loading.value = false;
   }
 }
 
-async function loadRecordViewRows(retainRowsOnError = false) {
+async function loadRecordViewRows(retainRowsOnError = false, { background = false }: ReloadOptions = {}) {
   const space_id = spaceStore.requireSpaceId();
   const view = activeView.value;
   if (!view) return;
   const requestSequence = ++viewRowsRequestSequence;
   loading.value = true;
-  queryError.value = "";
+  if (!background) queryError.value = "";
   try {
     const rsp = await searchRecordRows(
       {
@@ -986,7 +1005,7 @@ async function loadRecordViewRows(retainRowsOnError = false) {
         sorts: buildViewSorts(sortState),
         page: { page: pagination.current, size: DEFAULT_VIEW_PAGE_SIZE }
       },
-      { silentError: retainRowsOnError }
+      { silentError: true }
     );
     if (
       requestSequence !== viewRowsRequestSequence ||
@@ -1001,6 +1020,7 @@ async function loadRecordViewRows(retainRowsOnError = false) {
     previewHasMore.value = !!rsp.page_result?.has_more;
     hasQueried.value = true;
     rowsStale.value = false;
+    queryError.value = "";
     lastRowsReadAt.value = formatInstant(Date.now(), props.zone, "clock");
   } catch (error) {
     if (
@@ -1018,7 +1038,7 @@ async function loadRecordViewRows(retainRowsOnError = false) {
       lastRowsReadAt.value = "";
     }
     hasQueried.value = true;
-    if (!viewIndexPreparing.value) Message.error(queryError.value);
+    if (!viewIndexPreparing.value && !background) Message.error(queryError.value);
   } finally {
     if (requestSequence === viewRowsRequestSequence) loading.value = false;
   }
@@ -1381,7 +1401,7 @@ function rowToSyntheticRecord(row: ViewBrowseTableRow): RecordRow {
 
 onMounted(loadMeta);
 // 自动刷新（调用方给了间隔时）：页面隐藏时暂停、不叠加；后台读取失败不弹提示，保留上次的数据并标出“待刷新”
-usePolling(refreshRowsInBackground, props.autoRefreshIntervalMs || 60_000, () => (props.autoRefreshIntervalMs || 0) > 0);
+usePolling(pollRows, props.autoRefreshIntervalMs || 60_000, () => (props.autoRefreshIntervalMs || 0) > 0);
 onBeforeUnmount(() => {
   klineRequestGuard.invalidate();
 });

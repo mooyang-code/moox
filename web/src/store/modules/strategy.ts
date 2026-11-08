@@ -162,11 +162,13 @@ export const useStrategyStore = defineStore("strategy", () => {
     const resultRequestId = ++resultRequest;
     const hadInstance = instance.value?.instance_id === instanceId;
     detailLoading.value = true;
-    detailError.value = "";
+    // 后台轮询不先清掉错误条（否则每轮闪一下），读取成功后再清
+    if (!options.silent) detailError.value = "";
     try {
       const current = await getInstance(instanceId, options);
       if (requestId !== detailRequest) return false;
       instance.value = current;
+      detailError.value = "";
       // 定义读取失败不阻断实例详情，但要区分“已删除”与“读取失败”：只有服务端确认 NOT_FOUND 才算已删除。
       let definition: Strategy | null = null;
       let definitionStatus: StrategyDefinitionStatus = "loaded";
