@@ -13,9 +13,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import PageTitleTabs from "@/components/page-title-tabs/index.vue";
+import { useSpaceStore } from "@/store/modules/space";
 import CollectionTasks from "@/views/collector/collection-tasks/collection-tasks.vue";
 import RuntimeStatus from "@/views/collector/runtime-status/runtime-status.vue";
 import BackfillJobs from "@/views/collector/backfill-jobs/index.vue";
@@ -57,13 +58,26 @@ function normalizeTab(value: unknown): CollectorTaskTab {
   return value === "status" || value === "backfills" || value === "executors" || value === "results" ? value : "tasks";
 }
 
-// 切换 Tab 时只保留目标 Tab 自己的参数：采集结果保留所选任务，其余 Tab 的筛选参数（如补采的数据集、作业）不带过去。
+/**
+ * 各页签的参数都放在同一个 query 里、键不重叠（任务：keyword、dataType、enabled、page、detail；结果：resultTask；
+ * 补采：segment、dataset、job；执行器：job_id）。切页签只改 tab，其余参数原样保留，切回来时状态还在。
+ * 每个页签只在自己可见时写自己的键，见各页签的实现。
+ */
 function onTabChange(value: string | number) {
   const tab = normalizeTab(value);
-  const resultTask = Array.isArray(route.query.resultTask) ? route.query.resultTask[0] : route.query.resultTask;
-  const query = tab === "tasks" ? {} : tab === "results" && resultTask ? { tab, resultTask } : { tab };
-  void router.replace({ path: "/collector/tasks", query });
+  const rest = Object.fromEntries(Object.entries(route.query).filter(([key]) => key !== "tab"));
+  void router.replace({ path: "/collector/tasks", query: tab === "tasks" ? rest : { ...rest, tab } });
 }
+
+// 切空间：各页签的参数都属于旧空间（任务、结果、作业），统一在这里清掉，只保留当前页签；页签自己只重置内存里的状态。
+const spaceStore = useSpaceStore();
+watch(
+  () => spaceStore.selectedSpaceId,
+  (next, previous) => {
+    if (!previous || next === previous) return;
+    void router.replace({ path: "/collector/tasks", query: activeTab.value === "tasks" ? {} : { tab: activeTab.value } });
+  }
+);
 </script>
 
 <style scoped lang="scss">

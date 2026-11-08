@@ -58,7 +58,7 @@ export const staticRoutes = [
         path: "/data/fields",
         name: "data-fields",
         component: () => import("@/views/data/fields/index.vue"),
-        meta: { title: "data-fields" }
+        meta: { title: "data-fields", reuseOnQuery: true }
       },
       {
         path: "/data/archive",
@@ -148,7 +148,7 @@ export const staticRoutes = [
         path: "/collector/tasks",
         name: "collector-tasks",
         component: () => import("@/views/collector/task-management/index.vue"),
-        meta: { title: "collector-tasks" }
+        meta: { title: "collector-tasks", reuseOnQuery: true }
       },
       {
         path: "/trading/accounts",

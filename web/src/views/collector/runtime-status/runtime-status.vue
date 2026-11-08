@@ -365,7 +365,7 @@
 
 <script setup lang="ts">
 import { computed, nextTick, onActivated, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { useRouter } from "vue-router";
+import { useRoute, useRouter } from "vue-router";
 import { Message } from "@arco-design/web-vue";
 import { storeToRefs } from "pinia";
 import ActivityLog from "@/components/activity-log/index.vue";
@@ -402,6 +402,7 @@ import {
 import { useDisplayZone } from "@/hooks/useDisplayZone";
 import { formatInstant } from "@/utils/time-zone";
 
+const route = useRoute();
 const router = useRouter();
 const spaceStore = useSpaceStore();
 const { selectedSpaceId } = storeToRefs(spaceStore);
@@ -569,7 +570,11 @@ function openRange(mode: "check" | "backfill", datasetId = "") {
 
 /** 打开补采 Tab；带上作业 ID 时直接展开它的详情。 */
 function goBackfills(jobId?: string) {
-  void router.push({ path: "/collector/tasks", query: { tab: "backfills", ...(jobId ? { job: jobId } : {}) } });
+  // 别的页签的参数原样保留；补采自己的筛选从默认开始
+  const others = Object.fromEntries(
+    Object.entries(route.query).filter(([key]) => !["tab", "segment", "dataset", "job"].includes(key))
+  );
+  void router.push({ path: "/collector/tasks", query: { ...others, tab: "backfills", ...(jobId ? { job: jobId } : {}) } });
 }
 
 function onJobSubmitted(jobId: string) {

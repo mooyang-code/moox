@@ -55,8 +55,11 @@ export const systemMenu = [
   }),
   menu("0306", "03", "/data/sources", "data-sources", "data-sources", "data/sources/index", 1),
   menu("0307", "03", "/data/subjects", "data-subjects", "data-subjects", "data/subjects/index", 2),
-  menu("0308", "03", "/data/fields", "data-fields", "data-fields", "data/fields/index", 3),
-  menu("0303", "03", "/collector/tasks", "collector-tasks", "collector-tasks", "collector/task-management/index", 4),
+  // 菜单路由会覆盖 route.ts 里的同名声明（已在浏览器核对）：字段页的筛选、采集任务的页签与筛选都在 query 里，query 变化时复用页面。
+  menu("0308", "03", "/data/fields", "data-fields", "data-fields", "data/fields/index", 3, { reuseOnQuery: true }),
+  menu("0303", "03", "/collector/tasks", "collector-tasks", "collector-tasks", "collector/task-management/index", 4, {
+    reuseOnQuery: true
+  }),
   // 数据归档紧跟采集任务（sort 取采集任务 + 1）。任务详情、页签、筛选都在 query 里，query 变化时复用页面。
   menu("0309", "03", "/data/archive", "data-archive", "data-archive", "data/archive/index", 5, { reuseOnQuery: true }),
 

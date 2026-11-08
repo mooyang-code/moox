@@ -319,18 +319,23 @@ async function loadTaskDetail(taskId: string, options: { includeInTabs?: boolean
   }
 }
 
+/** 别的页签的参数（任务页的筛选、补采的作业等）：本页签写 URL 时原样保留。 */
+function otherTabsQuery() {
+  return Object.fromEntries(Object.entries(route.query).filter(([key]) => key !== "tab" && key !== "resultTask"));
+}
+
 async function keepResultSelection(taskId: string) {
   // 页面被缓存（停用）后，在途请求返回也不能再把路由写回结果页。
   if (!pageActive) return;
   const requestedTaskId = queryTaskId(route.query.resultTask);
   if (requestedTaskId === taskId && route.query.tab === "results") return;
-  await router.replace({ path: "/collector/tasks", query: buildResultsQuery(taskId) });
+  await router.replace({ path: "/collector/tasks", query: { ...otherTabsQuery(), ...buildResultsQuery(taskId) } });
 }
 
 function onTaskChange(value: string | number) {
   const taskId = String(value);
   activeTaskId.value = taskId;
-  void router.replace({ path: "/collector/tasks", query: buildResultsQuery(taskId) });
+  void router.replace({ path: "/collector/tasks", query: { ...otherTabsQuery(), ...buildResultsQuery(taskId) } });
   void loadTaskDetail(taskId);
 }
 
@@ -353,13 +358,13 @@ async function refreshActiveTask() {
 }
 
 function goToTasks() {
-  void router.replace({ path: "/collector/tasks", query: { tab: "tasks" } });
+  void router.replace({ path: "/collector/tasks", query: otherTabsQuery() });
 }
 
 function goToTaskDetail() {
   void router.replace({
     path: "/collector/tasks",
-    query: { tab: "tasks", ...(activeTaskId.value ? { taskId: activeTaskId.value } : {}) }
+    query: { ...otherTabsQuery(), ...(activeTaskId.value ? { detail: activeTaskId.value } : {}) }
   });
 }
 

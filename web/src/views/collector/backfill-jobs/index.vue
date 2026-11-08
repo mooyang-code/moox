@@ -200,7 +200,7 @@
 
 <script setup lang="ts">
 import TimeText from "@/components/time-text/index.vue";
-import { computed, ref, watch } from "vue";
+import { computed, onActivated, onDeactivated, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { Message } from "@arco-design/web-vue";
 import { storeToRefs } from "pinia";
@@ -318,11 +318,18 @@ function reload() {
   return load();
 }
 
+// 本页签自己的参数；别的页签的参数原样保留。页面在页签容器的 keep-alive 里，不可见时不写 URL。
+const OWN_KEYS = ["segment", "dataset", "job"];
+let pageActive = true;
+
 /** 筛选写回 URL，刷新或分享链接后保持同一视图。 */
 function syncQuery(extra: Record<string, string | undefined> = {}) {
+  if (!pageActive) return;
+  const others = Object.fromEntries(Object.entries(route.query).filter(([key]) => key !== "tab" && !OWN_KEYS.includes(key)));
   void router.replace({
     path: "/collector/tasks",
     query: {
+      ...others,
       tab: "backfills",
       segment: segment.value === "attention" ? undefined : segment.value,
       dataset: datasetId.value || undefined,
@@ -330,6 +337,37 @@ function syncQuery(extra: Record<string, string | undefined> = {}) {
     }
   });
 }
+
+/** 按 URL 改筛选（运行状态页等跳过来时带的参数、浏览器前进后退），返回是否变了。 */
+function readQuery(): boolean {
+  const nextSegment = normalizeSegment(route.query.segment);
+  const nextDataset = queryText(route.query.dataset);
+  const changed = nextSegment !== segment.value || nextDataset !== datasetId.value;
+  segment.value = nextSegment;
+  datasetId.value = nextDataset;
+  return changed;
+}
+
+watch(
+  () => [route.query.tab, route.query.segment, route.query.dataset],
+  () => {
+    if (!pageActive || route.query.tab !== "backfills" || !readQuery()) return;
+    page.value = 1;
+    void load();
+  }
+);
+onActivated(() => {
+  pageActive = true;
+  if (OWN_KEYS.some(key => route.query[key] !== undefined)) {
+    if (readQuery()) {
+      page.value = 1;
+      void load();
+    }
+  } else syncQuery();
+});
+onDeactivated(() => {
+  pageActive = false;
+});
 
 function onFilterChange() {
   page.value = 1;
@@ -400,12 +438,17 @@ watch(
 
 watch(
   spaceId,
-  () => {
+  (next, previous) => {
     guard.invalidate();
     jobs.value = [];
     total.value = 0;
     page.value = 1;
     detail.value = null;
+    // 真正切换空间时，筛选属于旧空间（数据集清单不同）：重置内存状态，URL 由页签容器统一清掉；首次进入保留 URL 里的筛选
+    if (previous && next !== previous) {
+      segment.value = "attention";
+      datasetId.value = "";
+    }
     void reload();
   },
   { immediate: true }

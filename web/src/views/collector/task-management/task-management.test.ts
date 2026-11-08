@@ -20,13 +20,6 @@ describe("collector task management workbench", () => {
     expect(normalized).toContain('typeCollectorTaskTab="tasks"|"status"|"backfills"|"executors"|"results"');
   });
 
-  it("uses the result task query only for the result tab", () => {
-    const source = fs.readFileSync(path.resolve(__dirname, "index.vue"), "utf8");
-    const normalized = normalizeSource(source);
-    expect(normalized).toContain('tab==="results"&&resultTask?{tab,resultTask}:{tab}');
-    expect(normalized).toContain("consttab=normalizeTab(value)");
-  });
-
   it("keeps one visible task menu and removes retired collector URLs", () => {
     const menu = fs.readFileSync(path.resolve(__dirname, "../../../api/modules/system/static-menu.ts"), "utf8");
     const routes = fs.readFileSync(path.resolve(__dirname, "../../../router/route.ts"), "utf8");
