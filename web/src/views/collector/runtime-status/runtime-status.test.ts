@@ -164,6 +164,12 @@ describe("collector runtime status page", () => {
     expect(page).not.toMatch(/<div class="empty-text">[^{<]+<\/div>/);
   });
 
+  it("WS 区的心跳和最近消息按空间时区显示（后端给的是 RFC3339Nano）", () => {
+    expect(page).toContain("心跳 {{ timeText(status.stream.heartbeat_at) }}");
+    expect(page).toContain("{{ timeText(record.last_message_at) }}");
+    expect(page).not.toContain('data-index="last_message_at"');
+  });
+
   it("names the column 自动巡检 and explains it is not data latency", () => {
     expect(page).not.toContain("检查滞后");
     expect(page).toContain("自动巡检");

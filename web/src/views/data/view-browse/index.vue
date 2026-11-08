@@ -283,7 +283,6 @@
                     >
                   </a-table-column>
                   <a-table-column data-index="version" :width="230">
-                    <template #cell="{ record }">{{ formatInstant(record.version, zone) }}</template>
                     <template #title
                       ><span class="sortable-title"
                         >版本<span class="sort-arrows"

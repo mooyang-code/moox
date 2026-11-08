@@ -62,8 +62,9 @@
           </a-table-column>
           <a-table-column title="最近同步" :width="120">
             <template #cell="{ record }"
-              ><span class="tx-muted">{{ formatInstant(record.account.last_sync_at, displayZone, "minute") }}</span></template
-            >
+              ><span class="tx-muted"
+                ><TimeText :value="record.account.last_sync_at" :zone="displayZone" precision="minute" /></span
+            ></template>
           </a-table-column>
           <a-table-column title="操作" :width="190" :fixed="isNarrow ? undefined : 'right'">
             <template #cell="{ record }">
@@ -198,6 +199,7 @@
 </template>
 
 <script setup lang="ts">
+import TimeText from "@/components/time-text/index.vue";
 import { useWindowSize } from "@vueuse/core";
 import { computed, inject, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
@@ -222,7 +224,6 @@ import SectionBlock from "../shared/section-block.vue";
 import StatusMark from "../shared/status-mark.vue";
 import { detailContextKey } from "./context";
 import MemberDialog from "./member-dialog.vue";
-import { formatInstant } from "@/utils/time-zone";
 import { useDisplayZone } from "@/hooks/useDisplayZone";
 
 // 交易页的时间按当前空间登记的时区显示

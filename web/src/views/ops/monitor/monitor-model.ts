@@ -10,6 +10,7 @@ import type {
 import {
   humanizeDuration,
   prettifyIds,
+  fullTime,
   relativeTime,
   toMillis,
   toSeconds,
@@ -43,8 +44,6 @@ export function serverNow(overview: HealthOverview | undefined, fallbackMs: numb
   return toMillis(overview?.generated_at) ?? fallbackMs;
 }
 
-/** 毫秒时间戳转 ISO 字符串：首页的时间工具把数字当作 Unix 秒。 */
-
 function since(startMs: number | null, nowMs: number): string {
   return startMs === null ? "—" : humanizeDuration(Math.max(0, Math.floor((nowMs - startMs) / 1000)));
 }
@@ -56,6 +55,8 @@ const LAYER_LABELS: Record<string, string> = { component: "组件", dataset: "�
 export interface Fact {
   label: string;
   value: string;
+  /** 相对时间的完整时间（悬停用） */
+  title?: string;
 }
 
 export interface AlertLine {
@@ -95,7 +96,12 @@ function datasetFacts(dataset: HealthDataset | undefined, nowMs: number): Fact[]
   if (delay.text !== "—") facts.push({ label: "到达", value: delay.text });
   const limit = toSeconds(dataset.lateness_limit_seconds);
   if (limit) facts.push({ label: "允许迟到", value: humanizeDuration(limit) });
-  if (dataset.last_success_at) facts.push({ label: "最近成功", value: relativeTime(dataset.last_success_at, nowMs) });
+  if (dataset.last_success_at)
+    facts.push({
+      label: "最近成功",
+      value: relativeTime(dataset.last_success_at, nowMs),
+      title: fullTime(dataset.last_success_at)
+    });
   return facts;
 }
 
@@ -195,7 +201,7 @@ function alertLine(alert: HealthAlert, names: NameBook, nowMs: number): AlertLin
   const startedMs = toMillis(alert.triggered_at);
   const facts: Fact[] = [
     { label: "触发时间", value: marketTime(toMillis(alert.triggered_at), "UTC", nowMs) },
-    { label: "最新检查", value: relativeTime(alert.last_checked_at, nowMs) },
+    { label: "最新检查", value: relativeTime(alert.last_checked_at, nowMs), title: fullTime(alert.last_checked_at) },
     ...datasetFacts(alert.dataset, nowMs)
   ];
   return {
@@ -669,6 +675,7 @@ export interface BusinessItem {
   reason: string;
   rawError: string;
   checkedAt: string;
+  checkedAtTitle: string;
   spaceId: string;
 }
 
@@ -705,6 +712,7 @@ export function businessKinds(overview: HealthOverview | undefined, names: NameB
       reason: prettifyIds(item.reason || "", names),
       rawError: item.raw_error || "",
       checkedAt: relativeTime(item.checked_at, nowMs),
+      checkedAtTitle: fullTime(item.checked_at),
       spaceId: item.space_id || ""
     });
     kinds.set(item.kind || "", list);
@@ -749,6 +757,7 @@ export interface HostCard {
   meters: Meter[];
   gatewayIssues: Fact[];
   lastReported: string;
+  lastReportedTitle: string;
   href: string;
 }
 
@@ -817,6 +826,7 @@ export function hostCards(overview: HealthOverview | undefined, nowMs: number): 
         value: signal.signal?.reason || statusLabel(signal.signal?.status)
       })),
     lastReported: relativeTime(host.last_reported_at, nowMs),
+    lastReportedTitle: fullTime(host.last_reported_at),
     href: hostHref(host.host_id)
   }));
 }

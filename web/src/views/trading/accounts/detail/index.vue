@@ -65,7 +65,7 @@
             <div class="v tx-num">
               {{ fmtMoney(totals.equity) }}<small>{{ logical.settlement_asset }}</small>
             </div>
-            <div class="d">同步于 {{ formatInstant(latestSync, displayZone, "minute") }}</div>
+            <div class="d">同步于 <TimeText :value="latestSync" :zone="displayZone" precision="minute" /></div>
           </div>
           <div v-if="initialBalance">
             <div class="k">较初始资金</div>
@@ -296,6 +296,7 @@
 </template>
 
 <script setup lang="ts">
+import TimeText from "@/components/time-text/index.vue";
 import { computed, onBeforeUnmount, provide, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { Message } from "@arco-design/web-vue";

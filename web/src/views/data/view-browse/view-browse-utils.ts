@@ -367,8 +367,10 @@ function typedFilterValue(value: string, valueType: FieldValueType, zone: string
     return { bool_value: value === "true" || value === "1" || value === "是" };
   }
   if (isValueType(valueType, "FIELD_VALUE_TYPE_TIME", 5)) {
-    // 墙钟（YYYY-MM-DD[ HH:mm[:ss]]）按输入时区解析；带 Z 或数字偏移的 RFC3339 原样换算；都不是时不加这个条件
-    const ms = wallClockToMs(value, zone) ?? toInstantMs(value);
+    // 墙钟（YYYY-MM-DD[ HH:mm[:ss]]）按输入时区解析；带 Z 或数字偏移的 RFC3339 按它自己的偏移换算；
+    // 都不是（例如纯数字）时不加这个条件，不能把 20261107 当成毫秒
+    const withOffset = /T.*(Z|[+-]\d{2}:?\d{2})$/i.test(value.trim());
+    const ms = wallClockToMs(value, zone) ?? (withOffset ? toInstantMs(value) : null);
     return ms === null ? undefined : { time_value: new Date(ms).toISOString().replace(/\.000Z$/, "Z") };
   }
   return { string_value: value };

@@ -8,7 +8,7 @@ import { resultsLink, type StrategyLink } from "@/views/strategy/links";
 import { percent, rankTargets, targetStateTag } from "@/views/strategy/model";
 import { pendingItems, stateOf } from "@/views/strategy/overview/overview-model";
 import { sortInstancesForResults } from "@/views/strategy/results/results-model";
-import { marketTime } from "@/utils/time-zone";
+import { formatInstant, marketTime } from "@/utils/time-zone";
 
 /** 首页统一的状态色：正常、需要关注、异常、无观测。 */
 export type Tone = "ok" | "warn" | "bad" | "idle";
@@ -57,6 +57,11 @@ export function toMillis(value?: string | number | null): number | null {
   }
   const parsed = Date.parse(String(value));
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+/** 相对时间旁的完整时间（悬停用）：和 relativeTime 一样，数字按 Unix 秒理解。 */
+export function fullTime(value: string | number | null | undefined, zone = "UTC"): string {
+  return formatInstant(toMillis(value), zone);
 }
 
 /** 相对时间：刚刚、N 分钟前、N 小时前、N 天前；晚于现在（时钟偏差）时写 zone 下的绝对时间。 */
@@ -213,6 +218,8 @@ export interface StrategyRow {
   gross: number | null;
   cash: { text: string; ratio: number } | null;
   lastBar: string;
+  /** lastBar 的完整时间（悬停用） */
+  lastBarTitle: string;
   lastBarMs: number | null;
   link: StrategyLink;
 }
@@ -224,7 +231,8 @@ export function strategyRows(
   instances: StrategyInstance[],
   targets: Record<string, StrategyTargetSnapshot>,
   catalog: Strategy[],
-  nowMs: number
+  nowMs: number,
+  zone = "UTC"
 ): StrategyRow[] {
   return sortInstancesForResults(instances).map(instance => {
     const state = stateOf(instance, targets, nowMs);
@@ -261,7 +269,8 @@ export function strategyRows(
       holdingCount: ranked.length,
       gross,
       cash: snapshot && instance.enabled ? { text: percent(cashRatio, 1), ratio: barMax > 0 ? cashRatio / barMax : 0 } : null,
-      lastBar: snapshot?.bar_end_time ? relativeTime(snapshot.bar_end_time, nowMs) : "—",
+      lastBar: snapshot?.bar_end_time ? relativeTime(snapshot.bar_end_time, nowMs, zone) : "—",
+      lastBarTitle: snapshot?.bar_end_time ? fullTime(snapshot.bar_end_time, zone) : "",
       lastBarMs: toMillis(snapshot?.bar_end_time),
       link: resultsLink(instance.instance_id)
     };
@@ -275,6 +284,8 @@ export interface AttentionItem {
   title: string;
   detail: string;
   when: string;
+  /** when 的完整时间（悬停用） */
+  whenTitle?: string;
   target: HomeTarget;
 }
 
@@ -304,6 +315,7 @@ export function attentionItems(input: {
       title: space ? `${space} · ${title}` : title,
       detail: prettifyIds(alert.reason || "", input.names),
       when: relativeTime(alert.triggered_at, input.nowMs),
+      whenTitle: fullTime(alert.triggered_at),
       target: input.alertTarget(alert)
     };
   });
@@ -398,6 +410,8 @@ const CATEGORY_LABELS: Record<string, string> = {
 export interface ActivityRow {
   key: string;
   when: string;
+  /** when 的完整时间（悬停用） */
+  whenTitle: string;
   category: string;
   title: string;
   tone: Tone;
@@ -420,6 +434,7 @@ export function activityRows(items: ActivityLogItem[], names: NameBook, nowMs: n
     .map((item, index) => ({
       key: String(item.id ?? index),
       when: marketTime(toMillis(item.created_at), zone, nowMs),
+      whenTitle: fullTime(item.created_at, zone),
       category: CATEGORY_LABELS[item.category || ""] || item.category || item.source || "",
       title: compactTitle(prettifyIds(item.title || "", names)),
       tone: item.level === "error" ? "bad" : item.level === "warning" ? "warn" : "idle"

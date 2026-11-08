@@ -87,7 +87,7 @@
                   <span class="dot" :class="`is-${currentStrategy.tone}`" />
                   <b class="ellipsis">{{ currentStrategy.name }}</b>
                   <span class="strategy-state" :class="`is-${currentStrategy.tone}`">{{ currentStrategy.state.label }}</span>
-                  <span class="strategy-when">最近一期 {{ currentStrategy.lastBar }}</span>
+                  <span class="strategy-when" :title="currentStrategy.lastBarTitle">最近一期 {{ currentStrategy.lastBar }}</span>
                 </button>
                 <p v-if="!currentStrategy.holdings.length" class="tile-empty">
                   {{ currentStrategy.enabled ? "暂无目标" : "已停用，不再产出目标" }}
@@ -140,7 +140,7 @@
                 <span class="ellipsis"
                   >{{ item.title }}<em v-if="item.detail"> · {{ item.detail }}</em></span
                 >
-                <span class="muted">{{ item.when || item.source }}</span>
+                <span class="muted" :title="item.whenTitle">{{ item.when || item.source }}</span>
               </button>
             </div>
             <footer class="tile-foot">
@@ -257,7 +257,7 @@
                 <template v-else>读取中…</template>
               </p>
               <div v-for="row in activity" :key="row.key" class="line activity-line" :title="row.title">
-                <span class="muted">{{ row.when }}</span>
+                <span class="muted" :title="row.whenTitle">{{ row.when }}</span>
                 <span class="ellipsis">{{ row.title }}</span>
               </div>
             </div>
@@ -361,7 +361,7 @@ const failedCount = computed(() => Object.values(liveErrors).filter(Boolean).len
 const liveLoadGate = new RequestGate();
 
 const factors = computed(() => factorRows(factorTasks.value, selectedSpaceId.value || "", names, nowMs.value, displayZone.value));
-const strategies = computed(() => strategyRows(instances.value, targets.value, catalog.value, nowMs.value));
+const strategies = computed(() => strategyRows(instances.value, targets.value, catalog.value, nowMs.value, displayZone.value));
 // 监控概览取的是全部空间：告警、主机、组件看全局，数据新鲜度只看当前空间。
 const freshness = computed(() =>
   freshnessRows(scopeOverviewToSpace(overview.value, selectedSpaceId.value || ""), names, nowMs.value)

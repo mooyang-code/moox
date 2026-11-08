@@ -21,7 +21,9 @@
           <p v-if="loaded && !overview.topology_known && groups.length">部署清单尚未完成同步，组件健康状态可能不完整</p>
         </div>
         <div class="verdict-meta">
-          <span>{{ loadedAt ? `${relativeTime(loadedAt, clockMs)}更新` : "尚未读取" }}</span>
+          <span :title="loadedAt ? fullTime(loadedAt) : undefined">{{
+            loadedAt ? `${relativeTime(loadedAt, clockMs)}更新` : "尚未读取"
+          }}</span>
           <span>每 30 秒刷新</span>
         </div>
       </section>
@@ -59,7 +61,7 @@
                 <dl class="facts">
                   <template v-for="fact in line.facts" :key="fact.label">
                     <dt>{{ fact.label }}</dt>
-                    <dd>{{ fact.value }}</dd>
+                    <dd :title="fact.title">{{ fact.value }}</dd>
                   </template>
                 </dl>
                 <RawError :value="line.rawError" />
@@ -171,7 +173,7 @@
                 <p v-for="issue in host.gatewayIssues" :key="issue.label" class="host-card__reason">
                   {{ issue.label }}：{{ issue.value }}
                 </p>
-                <small class="muted">最后上报 {{ host.lastReported }}</small>
+                <small class="muted" :title="host.lastReportedTitle">最后上报 {{ host.lastReported }}</small>
               </div>
               <p v-if="!hosts.length" class="empty">暂无主机</p>
             </div>
@@ -266,7 +268,7 @@
               <li v-for="item in businessRows" :key="item.key" :class="`is-${item.tone}`">
                 <div>
                   <span class="dot" />{{ item.title }}<em>{{ item.attention ? item.reason : item.status }}</em>
-                  <small class="muted">{{ item.spaceId }} · {{ item.checkedAt }}</small>
+                  <small class="muted" :title="item.checkedAtTitle">{{ item.spaceId }} · {{ item.checkedAt }}</small>
                 </div>
                 <RawError v-if="item.attention" :value="item.rawError" />
               </li>
@@ -388,7 +390,7 @@ import { listAllDatasets, listAllViews } from "@/api/storage/metadata";
 import { usePolling } from "@/hooks/usePolling";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import { createSubmitScope } from "@/utils/submit-scope";
-import { relativeTime, toneIcon, type NameBook } from "@/views/home/home-model";
+import { fullTime, relativeTime, toneIcon, type NameBook } from "@/views/home/home-model";
 import { statusLabel } from "./health-display";
 import {
   alertGroups,

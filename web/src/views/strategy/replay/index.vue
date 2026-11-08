@@ -209,7 +209,7 @@
                 </div>
               </template>
               <template #columns>
-                <a-table-column title="K 线结束（UTC）" :width="170"
+                <a-table-column title="K 线结束" :width="190"
                   ><template #cell="{ record }">{{ formatInstant(record.bar_end_time, displayZone) }}</template></a-table-column
                 >
                 <a-table-column title="状态" :width="150"
@@ -772,13 +772,12 @@ async function renderChart(rebuild: boolean) {
       yField: "value",
       axes: [
         // VChart 的时间轴只认本地和 UTC：横轴用毫秒的线性轴，刻度和提示框按空间时区格式化，时区写在轴标题上。
+        // 不固定 min/max：运行中的回放轮询追加数据时横轴跟着延伸。
         {
           orient: "bottom",
           type: "linear",
           zero: false,
           nice: false,
-          min: latest[0].time,
-          max: latest[latest.length - 1].time,
           title: { visible: true, text: `时间（${zoneSuffix(latest[0].time, displayZone.value)}）` },
           label: { formatMethod: (text: string | string[]) => msToWallClock(Number(text), displayZone.value, "minute").slice(5) }
         },

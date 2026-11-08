@@ -2,6 +2,7 @@ import type { Strategy } from "@/api/strategy-types";
 import type { FactorTask } from "@/api/factor/types";
 import { TASK_KEY_ORDER, marketRequirement } from "@/views/strategy/market-mode";
 import { freqSeconds } from "@/views/factor/shared/health";
+import { addDays, msToWallClock, wallClockToMs } from "@/utils/time-zone";
 
 /** 回放表单的状态：来源三选一（实例会话 / 已保存定义 / DSL 草稿），其余为各市场的因子任务、区间与两个手续费。 */
 export interface ReplayFormState {
@@ -76,4 +77,14 @@ export function replayDateOnly(
   const chosen = Object.values(replayFactorTasks(form, strategies)).filter(Boolean);
   if (!chosen.length) return false;
   return chosen.every(id => freqSeconds(tasks.find(task => task.task_id === id)?.freq ?? "") === 86_400);
+}
+
+/**
+ * 只选日期时把区间吸附成和选择器显示一致的整天（按空间时区）：起点取所在日期零点，终点取 range[1] − 1 所在日期的下一天零点。
+ * 否则整点的默认区间提交后，后端只取开盘不早于起点的 bar，第一天会被跳过。
+ */
+export function wholeDays(range: [number, number], zone: string): [number, number] {
+  const start = wallClockToMs(msToWallClock(range[0], zone, "date"), zone)!;
+  const end = wallClockToMs(addDays(msToWallClock(range[1] - 1, zone, "date"), 1), zone)!;
+  return [start, end];
 }

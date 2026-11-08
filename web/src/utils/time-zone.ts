@@ -143,7 +143,7 @@ export function addDays(date: string, days: number): string {
   return new Date(Date.UTC(y, m - 1, d) + days * 86_400_000).toISOString().slice(0, 10);
 }
 
-// 以下三个保留给运维监控按市场显示的时间（到达图、链路收线时间）。
+// 以下三个是短时间：同一天只写时分，跨天写月-日。运维监控按市场显示的时间、首页、运行状态、采集结果都在用。
 
 /** 市场时区的日期 YYYY-MM-DD。 */
 export function marketDay(ms: number, timeZone?: string): string {

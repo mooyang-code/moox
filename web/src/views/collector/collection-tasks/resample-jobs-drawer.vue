@@ -52,8 +52,8 @@
           </a-table-column>
           <a-table-column title="范围" :width="230">
             <template #cell="{ record }">
-              <div>{{ shortTime(record.start) }}</div>
-              <div class="jobs-muted">至 {{ shortTime(record.end) }}</div>
+              <div><TimeText :value="record.start" :zone="displayZone" precision="minute" /></div>
+              <div class="jobs-muted">至 <TimeText :value="record.end" :zone="displayZone" precision="minute" /></div>
             </template>
           </a-table-column>
           <a-table-column title="状态" :width="100" align="center">
@@ -83,7 +83,9 @@
         </template>
         <template #expand-row="{ record }">
           <div class="jobs-detail">
-            <div v-if="record.not_before && record.status === 'queued'">最早开始时间：{{ shortTime(record.not_before) }}</div>
+            <div v-if="record.not_before && record.status === 'queued'">
+              最早开始时间：<TimeText :value="record.not_before" :zone="displayZone" precision="minute" />
+            </div>
             <div v-if="record.subjects && record.subjects.length">标的：{{ record.subjects.join("、") }}</div>
             <div v-if="record.last_error" class="jobs-error">{{ record.last_error }}</div>
             <div v-if="record.skipped_samples && record.skipped_samples.length">
@@ -103,6 +105,7 @@
 </template>
 
 <script setup lang="ts">
+import TimeText from "@/components/time-text/index.vue";
 import { onBeforeUnmount, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { cancelKlineResampleJob, listKlineResampleJobs, submitKlineResampleJob, type ResampleJob } from "@/api/collector";
@@ -119,7 +122,6 @@ import {
 } from "./resample-jobs";
 import { useDisplayZone } from "@/hooks/useDisplayZone";
 import ZonedRangePicker from "@/components/zoned-date-picker/zoned-range-picker.vue";
-import { formatInstant } from "@/utils/time-zone";
 
 const props = defineProps<{ visible: boolean; spaceId: string; taskId: string; taskName: string; targetFrequency: string }>();
 const emit = defineEmits<{ (event: "update:visible", value: boolean): void }>();
@@ -132,10 +134,6 @@ const displayZone = useDisplayZone();
 const form = reactive({ range: null as [number, number] | null, subjects: "" });
 let timer: ReturnType<typeof setInterval> | undefined;
 let requestToken = 0;
-
-function shortTime(value: string) {
-  return formatInstant(value, displayZone.value, "minute");
-}
 
 async function reload() {
   if (!props.spaceId || !props.taskId) return;

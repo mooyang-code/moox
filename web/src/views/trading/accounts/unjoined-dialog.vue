@@ -29,7 +29,7 @@
               <strong>{{ record.name }}</strong>
               <div class="tx-muted sub">
                 {{ exchangeLabels[record.exchange] || "-" }} · {{ marketsText(record.markets) }} · 同步于
-                {{ formatInstant(record.last_sync_at, displayZone, "minute") }}
+                <TimeText :value="record.last_sync_at" :zone="displayZone" precision="minute" />
               </div>
             </template>
           </a-table-column>
@@ -118,6 +118,7 @@
 </template>
 
 <script setup lang="ts">
+import TimeText from "@/components/time-text/index.vue";
 import { computed, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { addLogicalAccountMember, exchangeLabels, updateTradingAccount } from "@/api/trade";
@@ -133,7 +134,6 @@ import MemberSettings from "./shared/member-settings.vue";
 import { joinableLogicals, nextPriority } from "./shared/membership";
 import { ADOPT_EFFECT_TEXT, accountStatusConfirm, memberChangeConfirm, type RiskyConfirm } from "./shared/risky-actions";
 import StatusMark from "./shared/status-mark.vue";
-import { formatInstant } from "@/utils/time-zone";
 import { useDisplayZone } from "@/hooks/useDisplayZone";
 
 // 交易页的时间按当前空间登记的时区显示

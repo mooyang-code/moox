@@ -87,13 +87,19 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, watch } from "vue";
 import type { Strategy } from "@/api/strategy-types";
 import type { FactorTask } from "@/api/factor/types";
 import ZonedRangePicker from "@/components/zoned-date-picker/zoned-range-picker.vue";
 import { useDisplayZone } from "@/hooks/useDisplayZone";
 import { recentRange } from "@/views/strategy/replay/model";
-import { type ReplayFormState, replayDateOnly, replayDslText, replayMarkets } from "@/views/strategy/replay/replay-form-model";
+import {
+  type ReplayFormState,
+  replayDateOnly,
+  replayDslText,
+  replayMarkets,
+  wholeDays
+} from "@/views/strategy/replay/replay-form-model";
 import { MARKET_ORDER, marketLabel, marketRequirement, tasksText } from "@/views/strategy/market-mode";
 
 // 表单状态由页面持有（提交与预填都在页面里），这里直接编辑同一个响应式对象。
@@ -116,6 +122,17 @@ function taskChoices(market: string) {
 
 // 选的任务都是日线时只选日期（按空间时区的整天）
 const dateOnly = computed(() => replayDateOnly(form.value, props.strategies, props.tasks));
+// 换成日线任务时，把已有的区间（默认的整点区间，或先按分钟选好的）吸附成显示的那几个整天
+watch(
+  [dateOnly, () => form.value.range, zone],
+  () => {
+    const range = form.value.range;
+    if (!dateOnly.value || !range) return;
+    const snapped = wholeDays(range, zone.value);
+    if (snapped[0] !== range[0] || snapped[1] !== range[1]) form.value.range = snapped;
+  },
+  { immediate: true }
+);
 const quickRanges = [1, 7, 30].map(days => ({ label: `近 ${days} 天`, range: () => recentRange(days) }));
 </script>
 

@@ -6,7 +6,8 @@ import {
   replayFactorTasks,
   replayMarkets,
   replaySourceOf,
-  validateReplayForm
+  validateReplayForm,
+  wholeDays
 } from "./replay-form-model";
 
 const strategies = [
@@ -99,5 +100,15 @@ describe("replay form model", () => {
       expect(validateReplayForm({ ...base, [key]: Number.NaN }, strategies)).toContain("手续费");
       expect(validateReplayForm({ ...base, [key]: 0 }, strategies)).toBe("");
     }
+  });
+
+  it("只选日期时区间吸附成显示的整天：起点零点，终点是最后一天的次日零点（按空间时区）", () => {
+    const range: [number, number] = [Date.parse("2026-10-08T10:00:00Z"), Date.parse("2026-11-07T10:00:00Z")];
+    expect(wholeDays(range, "UTC")).toEqual([Date.parse("2026-10-08T00:00:00Z"), Date.parse("2026-11-08T00:00:00Z")]);
+    // UTC+8：10-08 18:00 是 10-08 这天，11-07 18:00 是 11-07 这天
+    expect(wholeDays(range, "Asia/Shanghai")).toEqual([Date.parse("2026-10-07T16:00:00Z"), Date.parse("2026-11-07T16:00:00Z")]);
+    // 已经是整天的不变
+    const aligned: [number, number] = [Date.parse("2026-10-08T00:00:00Z"), Date.parse("2026-11-08T00:00:00Z")];
+    expect(wholeDays(aligned, "UTC")).toEqual(aligned);
   });
 });

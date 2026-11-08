@@ -215,7 +215,7 @@
               status.stream.online ? "在线" : "离线"
             }}</a-tag>
             <span class="muted mono-text"
-              >{{ status.stream.instance_id }} · 心跳 {{ status.stream.heartbeat_at }} · 已应用计划
+              >{{ status.stream.instance_id }} · 心跳 {{ timeText(status.stream.heartbeat_at) }} · 已应用计划
               {{ status.stream.applied_plan_id }}/{{ status.stream.applied_stage }}</span
             >
           </div>
@@ -227,7 +227,9 @@
               <a-table-column title="已订阅" :width="80" align="center">
                 <template #cell="{ record }">{{ record.subscribed ? "是" : "否" }}</template>
               </a-table-column>
-              <a-table-column title="最近消息" data-index="last_message_at" :width="230" />
+              <a-table-column title="最近消息" :width="230">
+                <template #cell="{ record }">{{ timeText(record.last_message_at) }}</template>
+              </a-table-column>
               <a-table-column title="重连" data-index="reconnects" :width="70" align="right" />
               <a-table-column title="地址" data-index="endpoint" />
             </template>

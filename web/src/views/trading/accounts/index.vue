@@ -83,8 +83,8 @@
                 <StatusMark v-else tone="run">运行中</StatusMark>
               </template>
               <span v-else class="tx-muted tx-nowrap"
-                >同步于 {{ formatInstant(record.account.last_sync_at, displayZone, "minute") }}</span
-              >
+                >同步于 <TimeText :value="record.account.last_sync_at" :zone="displayZone" precision="minute"
+              /></span>
             </template>
           </a-table-column>
           <a-table-column title="权益" :width="170" align="right">
@@ -151,6 +151,7 @@
 </template>
 
 <script setup lang="ts">
+import TimeText from "@/components/time-text/index.vue";
 import { computed, onActivated, onBeforeUnmount, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import PageTitleTabs from "@/components/page-title-tabs/index.vue";
@@ -167,7 +168,6 @@ import { loadPositionSnapshot, positionCount } from "./shared/position-snapshot"
 import StatusMark from "./shared/status-mark.vue";
 import { loadStrategyLinks, type StrategyLink } from "./shared/strategy-link";
 import UnjoinedDialog from "./unjoined-dialog.vue";
-import { formatInstant } from "@/utils/time-zone";
 import { useDisplayZone } from "@/hooks/useDisplayZone";
 
 // 交易页的时间按当前空间登记的时区显示

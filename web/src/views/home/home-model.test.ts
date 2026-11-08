@@ -14,6 +14,7 @@ import {
   humanizeDuration,
   kpiCards,
   prettifyIds,
+  fullTime,
   relativeTime,
   scopeOverviewToSpace,
   statusLine,
@@ -84,6 +85,12 @@ describe("home formatting", () => {
     // 晚于现在（时钟偏差）时写绝对时间，带时区后缀
     expect(relativeTime(new Date(NOW + 60_000).toISOString(), NOW)).toBe("10:01 UTC");
     expect(relativeTime(new Date(NOW + 60_000).toISOString(), NOW, "Asia/Shanghai")).toBe("18:01 UTC+8");
+  });
+
+  it("相对时间悬停显示的完整时间：数字和 relativeTime 一样按 Unix 秒", () => {
+    expect(fullTime(String(Math.floor(NOW / 1000)), "UTC")).toBe("2026-10-13 10:00:00 UTC");
+    expect(fullTime(new Date(NOW).toISOString(), "Asia/Shanghai")).toBe("2026-10-13 18:00:00 UTC+8");
+    expect(fullTime(undefined)).toBe("—");
   });
 
   it("replaces internal dataset and view ids with names", () => {

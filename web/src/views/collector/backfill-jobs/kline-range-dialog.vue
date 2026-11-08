@@ -65,7 +65,10 @@
             >
           </a-table-column>
           <a-table-column title="范围" :width="320">
-            <template #cell="{ record }">{{ rangeTime(record.from) }} ~ {{ rangeTime(record.to) }}</template>
+            <template #cell="{ record }"
+              ><TimeText :value="record.from" :zone="displayZone" precision="minute" /> ~
+              <TimeText :value="record.to" :zone="displayZone" precision="minute"
+            /></template>
           </a-table-column>
           <a-table-column title="缺失根数" data-index="missing" :width="90" align="right" />
         </template>
@@ -79,13 +82,13 @@
 </template>
 
 <script setup lang="ts">
+import TimeText from "@/components/time-text/index.vue";
 import { computed, ref, watch } from "vue";
 import { Message, Modal } from "@arco-design/web-vue";
 import { checkKline, submitKlineBackfill, type CheckKlineResponse } from "@/api/collector/runtime-status";
 import { seriesTagDisplay } from "@/views/data/shared/series-market";
 import { useDisplayZone } from "@/hooks/useDisplayZone";
 import ZonedRangePicker from "@/components/zoned-date-picker/zoned-range-picker.vue";
-import { formatInstant } from "@/utils/time-zone";
 import { backfillScopeSummary, quickRange } from "./backfill-model";
 
 const props = defineProps<{
@@ -109,7 +112,6 @@ const quickRanges = [
 
 // 补采按 K 线的时刻：显示和选择都按当前空间登记的时区，提交时换成 UTC
 const displayZone = useDisplayZone();
-const rangeTime = (value?: string) => formatInstant(value, displayZone.value, "minute");
 const form = ref({ datasetId: "", subjectId: "", range: null as [number, number] | null, force: false, deep: false });
 const rangeError = ref("");
 const busy = ref(false);
