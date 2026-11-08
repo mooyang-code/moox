@@ -222,10 +222,10 @@ func TestRunTrackerLagCountsTradingBars(t *testing.T) {
 func TestRunTrackerLagOutsideCalendarIsNotCaughtUp(t *testing.T) {
 	axis, err := periodclock.AxisFor("stockcn", "5m")
 	require.NoError(t, err)
-	last := time.Date(2026, 12, 31, 6, 55, 0, 0, time.UTC) // 日历最后一根（北京时间 14:55）
+	last := time.Date(2027, 12, 31, 6, 55, 0, 0, time.UTC) // 日历最后一根（北京时间 14:55）
 	period, err := axis.ToAxis(last)
 	require.NoError(t, err)
-	now := time.Date(2027, 1, 4, 2, 0, 0, 0, time.UTC)
+	now := time.Date(2028, 1, 4, 2, 0, 0, 0, time.UTC)
 	summary := summaryOf("ftask", trackedRun{periodTime: period, axis: axis, status: "complete"}, now)
 	require.Equal(t, last.Unix(), summary.LastPeriodTime)
 	require.Equal(t, int64(now.Sub(last)/time.Second), summary.LagSeconds)

@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/mooyang-code/moox/packages/marketcalendar"
 )
 
 func utc(value string) time.Time {
@@ -312,7 +314,12 @@ func TestSessionOrdinalRejectsNonBuckets(t *testing.T) {
 		_, err := clock.Ordinal(Bucket{Key: utc(at)})
 		require.ErrorIs(t, err, ErrNoBucket, at)
 	}
-	_, err = clock.Ordinal(Bucket{Key: utc("2027-06-01T02:00:00Z")})
+	// 日历之外取内嵌日历末日之后一周的上午，日历每年续期时不用改这里。
+	calendar, err := marketcalendar.Load("cn_stock")
+	require.NoError(t, err)
+	last := calendar.LastDate()
+	beyond := time.Date(last.Year(), last.Month(), last.Day()+7, 2, 0, 0, 0, time.UTC)
+	_, err = clock.Ordinal(Bucket{Key: beyond})
 	require.ErrorIs(t, err, ErrOutOfCoverage)
 }
 

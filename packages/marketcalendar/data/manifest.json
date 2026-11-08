@@ -1,9 +1,9 @@
 {
   "calendar_id": "cn_stock",
-  "source": "AkShare file_fold/calendar.json",
+  "source": "AkShare file_fold/calendar.json；2027 年按国务院办公厅关于2027年部分节假日安排的通知（国办发明电〔2026〕10号）生成",
   "version": 1,
-  "data_version": "2026-09-01",
+  "data_version": "2026-11-07",
   "valid_from": "1990-12-19",
-  "valid_through": "2026-12-31",
-  "sha256": "sha256:8986acbda60f6d7d50e12907c89b70b8c0cd38bab759c64ab4fc4ddfbb93c2aa"
+  "valid_through": "2027-12-31",
+  "sha256": "sha256:45bff0bb9398d71e26aa0c63216f0981f29bc02cae4bd62e50e844c941ab3e7e"
 }

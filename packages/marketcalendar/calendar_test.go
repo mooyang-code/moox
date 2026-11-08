@@ -80,8 +80,8 @@ func TestLoadEmbeddedChinaCalendarAndManifest(t *testing.T) {
 	if calendar.FirstDate().String() != "1990-12-19" {
 		t.Fatalf("FirstDate() = %s，期望 1990-12-19", calendar.FirstDate())
 	}
-	if calendar.LastDate().String() != "2026-12-31" {
-		t.Fatalf("LastDate() = %s，期望 2026-12-31", calendar.LastDate())
+	if calendar.LastDate().String() != "2027-12-31" {
+		t.Fatalf("LastDate() = %s，期望 2027-12-31", calendar.LastDate())
 	}
 	if manifest.ValidFrom != calendar.FirstDate().String() || manifest.ValidThrough != calendar.LastDate().String() {
 		t.Fatalf("清单的覆盖范围 = %s..%s，日历 = %s..%s", manifest.ValidFrom, manifest.ValidThrough, calendar.FirstDate(), calendar.LastDate())
@@ -99,6 +99,53 @@ func TestEmbeddedDataHashMatchesManifest(t *testing.T) {
 	want := "sha256:" + hex.EncodeToString(sum[:])
 	if got := manifest.SHA256; got != want {
 		t.Fatalf("清单的 SHA256 = %q，期望 %q", got, want)
+	}
+}
+
+// 2027 年的交易日按国办发明电〔2026〕10 号生成：节假日里的工作日休市，调休补班的周末照样休市。
+func TestChina2027HolidaysFollowStateCouncilNotice(t *testing.T) {
+	t.Parallel()
+
+	calendar := mustLoad(t)
+	closed := []string{
+		"2027-01-01",
+		"2027-02-05", "2027-02-08", "2027-02-09", "2027-02-10", "2027-02-11", "2027-02-12",
+		"2027-04-05",
+		"2027-05-03", "2027-05-04", "2027-05-05",
+		"2027-06-09",
+		"2027-09-15",
+		"2027-10-01", "2027-10-04", "2027-10-05", "2027-10-06", "2027-10-07",
+	}
+	// 调休补班的周日、周六：1-31、2-14、5-08、9-26、10-09。
+	makeupWeekends := []string{"2027-01-31", "2027-02-14", "2027-05-08", "2027-09-26", "2027-10-09"}
+	for _, value := range append(closed, makeupWeekends...) {
+		status, err := calendar.Status(mustDate(t, value))
+		if err != nil || status != NonTradingDay {
+			t.Fatalf("Status(%s) = %v、%v；期望休市", value, status, err)
+		}
+	}
+	open := []string{"2027-01-04", "2027-02-04", "2027-02-15", "2027-04-06", "2027-05-06", "2027-06-08", "2027-06-10", "2027-09-30", "2027-10-08", "2027-12-31"}
+	for _, value := range open {
+		status, err := calendar.Status(mustDate(t, value))
+		if err != nil || status != TradingDay {
+			t.Fatalf("Status(%s) = %v、%v；期望交易日", value, status, err)
+		}
+	}
+
+	count := 0
+	for date := mustDate(t, "2027-01-04"); ; {
+		count++
+		next, err := calendar.NextTradingDay(date)
+		if errors.Is(err, ErrNoNextTradingDay) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		date = next
+	}
+	if count != 243 {
+		t.Fatalf("2027 年交易日 = %d，期望 243（261 个工作日减 18 个休市日）", count)
 	}
 }
 
@@ -122,7 +169,7 @@ func TestStatusDistinguishesTradingNonTradingAndOutOfCoverage(t *testing.T) {
 		{name: "known trading day", date: "1992-05-04", status: TradingDay},
 		{name: "known holiday", date: "2024-10-01", status: NonTradingDay},
 		{name: "saturday", date: "2024-10-05", status: NonTradingDay},
-		{name: "valid through", date: "2026-12-31", status: TradingDay},
+		{name: "valid through", date: "2027-12-31", status: TradingDay},
 	}
 	for _, tt := range tests {
 		tt := tt
@@ -139,7 +186,7 @@ func TestStatusDistinguishesTradingNonTradingAndOutOfCoverage(t *testing.T) {
 		})
 	}
 
-	for _, value := range []string{"1990-12-18", "2027-01-01"} {
+	for _, value := range []string{"1990-12-18", "2028-01-03"} {
 		date := mustDate(t, value)
 		status, err := calendar.Status(date)
 		if status != OutOfCoverage || !errors.Is(err, ErrOutOfCoverage) {
@@ -181,7 +228,7 @@ func TestPreviousAndNextTradingDayAreStrictAndBounded(t *testing.T) {
 	if _, err := calendar.PrevTradingDay(mustDate(t, "1990-12-18")); !errors.Is(err, ErrOutOfCoverage) {
 		t.Fatalf("PrevTradingDay(早于首日) 出错：%v，期望 ErrOutOfCoverage", err)
 	}
-	if _, err := calendar.NextTradingDay(mustDate(t, "2027-01-01")); !errors.Is(err, ErrOutOfCoverage) {
+	if _, err := calendar.NextTradingDay(mustDate(t, "2028-01-03")); !errors.Is(err, ErrOutOfCoverage) {
 		t.Fatalf("NextTradingDay(晚于末日) 出错：%v，期望 ErrOutOfCoverage", err)
 	}
 }

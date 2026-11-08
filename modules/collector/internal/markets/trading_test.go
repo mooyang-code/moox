@@ -60,15 +60,15 @@ func TestTradingBarStockCN1mAndCrypto(t *testing.T) {
 }
 
 func TestTradingBarReportsCalendarCoverageErrors(t *testing.T) {
-	_, err := TradingBar("stockcn", "5m", cst("2027-01-05", "10:00"))
+	_, err := TradingBar("stockcn", "5m", cst("2028-01-05", "10:00"))
 	require.Error(t, err, "超出覆盖期必须报错，不能当作非交易")
 }
 
 func TestCheckCalendarHorizon(t *testing.T) {
-	// 内嵌日历覆盖到 2026-12-31。
+	// 内嵌日历覆盖到 2027-12-31。
 	require.NoError(t, CheckCalendarHorizon("stockcn", cst("2026-11-04", "10:00"), 14))
-	require.ErrorIs(t, CheckCalendarHorizon("stockcn", cst("2026-11-04", "10:00"), 60), ErrCalendarExpiringSoon)
-	require.ErrorIs(t, CheckCalendarHorizon("stockcn", cst("2026-12-31", "14:59"), 14), ErrCalendarExpiringSoon)
-	require.ErrorIs(t, CheckCalendarHorizon("stockcn", cst("2027-01-01", "00:00"), 14), ErrCalendarExpired)
+	require.ErrorIs(t, CheckCalendarHorizon("stockcn", cst("2027-11-04", "10:00"), 60), ErrCalendarExpiringSoon)
+	require.ErrorIs(t, CheckCalendarHorizon("stockcn", cst("2027-12-31", "14:59"), 14), ErrCalendarExpiringSoon)
+	require.ErrorIs(t, CheckCalendarHorizon("stockcn", cst("2028-01-01", "00:00"), 14), ErrCalendarExpired)
 	require.NoError(t, CheckCalendarHorizon("crypto", cst("2030-01-01", "00:00"), 14), "连续交易的市场没有日历")
 }

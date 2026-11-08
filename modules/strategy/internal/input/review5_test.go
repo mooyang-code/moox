@@ -16,22 +16,22 @@ func stockDay(t *testing.T, year int, month time.Month, day int) time.Time {
 	return time.Date(year, month, day, 0, 0, 0, 0, shanghai(t)).UTC()
 }
 
-// 内嵌 A 股日历止于 2026-12-31：最后一个交易日本身仍能换算（只是没有下一根），回放区间枚举到它为止；
+// 内嵌 A 股日历止于 2027-12-31：最后一个交易日本身仍能换算（只是没有下一根），回放区间枚举到它为止；
 // 索引最新一根超出日历时夹回日历之内，历史窗口照常可用；超出范围的报错是中文。
 func TestStockCalendarTail(t *testing.T) {
-	last, err := FromStorageStart("cn_stock", "1d", stockDay(t, 2026, 12, 31))
+	last, err := FromStorageStart("cn_stock", "1d", stockDay(t, 2027, 12, 31))
 	if err != nil || !last.NextEnd.IsZero() || last.PreviousStart.IsZero() {
 		t.Fatalf("最后一个交易日应能换算且没有下一根：%+v err=%v", last, err)
 	}
-	bars, err := ReplayBars("cn_stock", "1d", stockDay(t, 2026, 12, 28), stockDay(t, 2027, 3, 1), DefaultReplayMaxBars)
-	if err != nil || len(bars) != 4 || !bars[3].StorageStart.Equal(stockDay(t, 2026, 12, 31)) {
+	bars, err := ReplayBars("cn_stock", "1d", stockDay(t, 2027, 12, 28), stockDay(t, 2028, 3, 1), DefaultReplayMaxBars)
+	if err != nil || len(bars) != 4 || !bars[3].StorageStart.Equal(stockDay(t, 2027, 12, 31)) {
 		t.Fatalf("回放区间应枚举到日历的最后一个交易日：%d 根 err=%v", len(bars), err)
 	}
-	if _, err := FromBarEnd("cn_stock", "1d", time.Date(2027, 1, 5, 15, 0, 0, 0, shanghai(t))); err == nil || !strings.Contains(err.Error(), "超出 A 股内嵌交易日历的范围") || strings.Contains(err.Error(), "calendar") {
+	if _, err := FromBarEnd("cn_stock", "1d", time.Date(2028, 1, 5, 15, 0, 0, 0, shanghai(t))); err == nil || !strings.Contains(err.Error(), "超出 A 股内嵌交易日历的范围") || strings.Contains(err.Error(), "calendar") {
 		t.Fatalf("超出日历的报错应是中文：%v", err)
 	}
 	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {ViewID: "view_stock"}}, Bar: "1d", Calendar: "cn_stock", MinAgeBars: 5}
-	view := ViewInfo{ViewID: "view_stock", IndexedFrom: stockDay(t, 2025, 1, 2), IndexedTo: stockDay(t, 2027, 1, 6), SeriesBars: 5000}
+	view := ViewInfo{ViewID: "view_stock", IndexedFrom: stockDay(t, 2025, 1, 2), IndexedTo: stockDay(t, 2028, 1, 6), SeriesBars: 5000}
 	end, err := ReplayWindow(resolved, nil, view, stockDay(t, 2025, 3, 3), stockDay(t, 2025, 7, 1), testNow)
 	if err != nil || !end.Equal(stockDay(t, 2025, 7, 1)) {
 		t.Fatalf("索引最新一根超出日历时历史窗口应照常可用：%s err=%v", end, err)
