@@ -15,20 +15,16 @@
             @press-enter="search"
             @clear="search"
           />
-          <a-select v-model="filters.dataType" placeholder="数据类型" allow-clear style="width: 140px">
+          <a-select v-model="filters.dataType" placeholder="数据类型" allow-clear style="width: 140px" @change="search">
             <a-option v-for="config in availableDataTypeConfigs" :key="config.data_type" :value="config.data_type">
               {{ config.type_name }}
             </a-option>
           </a-select>
-          <a-select v-model="filters.enabled" placeholder="启用状态" style="width: 120px">
+          <a-select v-model="filters.enabled" placeholder="启用状态" style="width: 120px" @change="search">
             <a-option value="">全部</a-option>
             <a-option value="true">启用</a-option>
             <a-option value="false">禁用</a-option>
           </a-select>
-          <a-button type="primary" @click="search">
-            <template #icon><icon-search /></template>
-            查询
-          </a-button>
         </a-space>
 
         <a-table

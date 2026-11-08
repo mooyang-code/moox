@@ -17,13 +17,19 @@
           </a-button>
         </a-space>
         <a-space class="cloud-function-filter-bar" wrap>
-          <a-select v-model="form.cloudAccountId" placeholder="请选择云账户" style="width: 200px" allow-clear>
+          <a-select v-model="form.cloudAccountId" placeholder="请选择云账户" style="width: 200px" allow-clear @change="search">
             <a-option v-for="account in cloudAccountOptions" :key="account.account_id" :value="account.account_id">
               {{ account.account_name }} ({{ getProviderName(account.provider) }})
             </a-option>
           </a-select>
-          <a-input v-model="form.instanceId" placeholder="请输入实例ID" allow-clear />
-          <a-select placeholder="地区" v-model="form.region" style="width: 200px" allow-clear>
+          <a-input
+            v-model="form.instanceId"
+            placeholder="请输入实例ID，回车查询"
+            allow-clear
+            @press-enter="search"
+            @clear="search"
+          />
+          <a-select placeholder="地区" v-model="form.region" style="width: 200px" allow-clear @change="search">
             <a-option v-for="region in regionOptions" :key="region.code" :value="region.code">
               {{ region.name }}
               <a-tag
@@ -36,15 +42,11 @@
               </a-tag>
             </a-option>
           </a-select>
-          <a-select placeholder="实例类型" v-model="form.functionType" style="width: 180px" allow-clear>
+          <a-select placeholder="实例类型" v-model="form.functionType" style="width: 180px" allow-clear @change="search">
             <a-option value="scf-event">云函数（事件型）</a-option>
             <a-option value="scf-web">云函数（Web型）</a-option>
             <a-option value="server">服务器</a-option>
           </a-select>
-          <a-button type="primary" @click="search">
-            <template #icon><icon-search /></template>
-            <span>查询</span>
-          </a-button>
         </a-space>
 
         <!-- 批量变更进度提示 -->

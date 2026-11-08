@@ -7,13 +7,9 @@
     <div class="filter-bar">
       <div class="filter-query">
         <a-input v-model="keyword" class="keyword-input" allow-clear placeholder="搜索对象 ID 或名称" @press-enter="onSearch" />
-        <a-select v-model="statusFilter" class="status-select" placeholder="状态">
+        <a-select v-model="statusFilter" class="status-select" placeholder="状态" @change="onSearch">
           <a-option v-for="item in statusOptions" :key="item.value" :value="item.value">{{ item.label }}</a-option>
         </a-select>
-        <a-button type="primary" @click="onSearch">
-          <template #icon><icon-search /></template>
-          查询
-        </a-button>
       </div>
       <a-space class="filter-actions">
         <a-button :loading="loading" @click="reload">
