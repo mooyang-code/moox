@@ -4,7 +4,7 @@
       <div class="page-head">
         <div>
           <a-button type="text" @click="goBackOr(router, instancesLink())"
-            ><template #icon><icon-left /></template>返回运行实例</a-button
+            ><template #icon><icon-left /></template>返回</a-button
           >
           <h2>{{ store.strategy?.name || store.instance?.strategy_id || "策略实例" }}</h2>
           <span class="mono">{{ store.instance?.instance_id || instanceId }}</span>

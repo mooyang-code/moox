@@ -690,7 +690,8 @@ function leave() {
 /** 在用的因子不能改：带着当前定义进入新建页，ID 预填 <原 ID>_v2。 */
 function saveAsNew() {
   setPendingCopy({ ...form, factor_id: copyFactorId(form.factor_id) });
-  void router.push("/factor/definitions/new");
+  // 用 replace：新建页的上一页仍是进编辑页之前的那页（通常是列表），保存或返回时不会回到不能改的旧因子
+  void router.replace("/factor/definitions/new");
 }
 
 // 添加到计算任务：先选任务，再打开和计算任务页一样的添加弹窗，预选这个因子。

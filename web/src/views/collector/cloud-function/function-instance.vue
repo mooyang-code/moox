@@ -213,7 +213,7 @@
       @refresh="loadData"
     />
 
-    <!-- 实例详情抽屉（里面还能再打开代码包详情，用抽屉免得弹窗叠弹窗） -->
+    <!-- 实例详情抽屉（新做的详情一律用抽屉） -->
     <a-drawer v-model:visible="instanceDetailVisible" title="云函数实例详情" width="min(800px, 100vw)" :footer="false">
       <div v-if="selectedInstanceDetail">
         <a-descriptions :column="2" bordered :label-style="{ fontWeight: 'bold', width: '140px' }">

@@ -353,7 +353,7 @@ import { formatInstant } from "@/utils/time-zone";
 // PackageStatus 枚举：2 = 可用（已上传完成）。
 const PACKAGE_STATUS_AVAILABLE = 2;
 import { ref, watch, reactive, computed, onMounted } from "vue";
-import { Message, Modal } from "@arco-design/web-vue";
+import { Drawer, Message } from "@arco-design/web-vue";
 import {
   getFunctionPackageList,
   getFunctionPackageDetail,
@@ -397,7 +397,8 @@ let uploadSubmitToken = 0;
 const packageManageMode = computed(() => props.mode || "page");
 const standalone = computed(() => packageManageMode.value === "page");
 const visible = ref(standalone.value ? true : props.modelValue);
-const packageManageContainer = computed(() => (standalone.value ? "div" : Modal));
+// 从执行器页打开时用抽屉：里面还会再打开“上传”“代码包详情”弹窗，外层用抽屉免得弹窗叠弹窗
+const packageManageContainer = computed(() => (standalone.value ? "div" : Drawer));
 const packageManageContainerProps = computed(() => {
   if (standalone.value) {
     return {
@@ -408,7 +409,7 @@ const packageManageContainerProps = computed(() => {
   return {
     visible: visible.value,
     title: "代码包版本管理",
-    width: 1200,
+    width: "min(1200px, 100vw)",
     maskClosable: false,
     footer: false
   };
