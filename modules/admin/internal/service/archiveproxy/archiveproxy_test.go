@@ -166,3 +166,23 @@ func TestWorkerUnreachableReturnsBadGateway(t *testing.T) {
 	require.Equal(t, http.StatusBadGateway, rec.Code)
 	require.Contains(t, rec.Body.String(), "连接归档执行器失败")
 }
+
+// worker 中途断开（例如 sha256 不符扣住了末尾）时，浏览器经 Admin 拿到的也是长度不足、读取报错的响应。
+func TestTruncatedWorkerDownloadStaysTruncated(t *testing.T) {
+	worker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "1000")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(make([]byte, 400))
+	}))
+	t.Cleanup(worker.Close)
+	p, _, _ := newProxy(t, topology("control", ""), worker.Listener.Addr().String())
+	admin := httptest.NewServer(http.HandlerFunc(p.PartitionDownload))
+	t.Cleanup(admin.Close)
+	resp, err := http.Get(admin.URL + "/?space=crypto&dataset=ds&partition=2026-10-15")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	require.Equal(t, "1000", resp.Header.Get("Content-Length"))
+	body, err := io.ReadAll(resp.Body)
+	require.Error(t, err)
+	require.Less(t, len(body), 1000)
+}
