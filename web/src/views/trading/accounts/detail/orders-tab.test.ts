@@ -27,10 +27,10 @@ Object.defineProperty(window, "matchMedia", {
 
 let wrapper: VueWrapper;
 
-function mountTab() {
+function mountTab(markets = [1]) {
   const logical = ref({
     logical_account_id: "l-1",
-    markets: [1],
+    markets,
     members: [],
     settlement_asset: "USDT"
   } as unknown as LogicalAccount);
@@ -48,7 +48,13 @@ function mountTab() {
     }),
     { global: { plugins: [ArcoVue] } }
   );
-  return wrapper.findComponent(OrdersTab).vm as unknown as { state: string | undefined; symbol: string; search(): void };
+  return wrapper.findComponent(OrdersTab).vm as unknown as {
+    state: string | undefined;
+    symbol: string;
+    orders: unknown[];
+    error: string;
+    search(): void;
+  };
 }
 
 describe("订单筛选写在地址里", () => {
@@ -61,6 +67,14 @@ describe("订单筛选写在地址里", () => {
     await flushPromises();
     expect(mocks.listOrders.mock.calls[0][0]).toMatchObject({ state: "FILLED", owner_type: "SYSTEM" });
     expect(mocks.listOrders.mock.calls[0][0].start_time).toBeDefined();
+  });
+
+  it("地址里的市场读回成数字，永续不会被重置成现货", async () => {
+    mocks.listOrders.mockReset().mockResolvedValue({ ret_info: { code: 0, msg: "" }, orders: [] });
+    nav.route = reactive({ query: { tab: "orders", osymbol: "BTC", omarket: "2" } });
+    mountTab([1, 2]);
+    await flushPromises();
+    expect(mocks.listOrders.mock.calls[0][0].instrument_id).toBe("BTC-USDT-SWAP");
   });
 
   it("查询时把非默认的筛选写回地址，默认值不写", async () => {
@@ -119,5 +133,55 @@ describe("订单页的来源筛选", () => {
     tab.search();
     await flushPromises();
     expect(mocks.listOrders.mock.lastCall?.[0].owner_type).toBeUndefined();
+  });
+});
+
+describe("未完成订单的后台刷新", () => {
+  afterEach(() => {
+    wrapper?.unmount();
+    vi.useRealTimers();
+  });
+
+  it("有未完成订单时每 5 秒静默刷新，失败时保留列表、不显示错误", async () => {
+    vi.useFakeTimers();
+    const order = (state: string) => ({
+      order_id: "o-1",
+      state,
+      trading_account_id: "t-1",
+      instrument_id: "BTC-USDT-SPOT",
+      quantity: "1",
+      filled_quantity: "0",
+      submitted_at: "1700000000000"
+    });
+    const open = order("OPEN");
+    mocks.listOrders.mockReset().mockResolvedValue({ ret_info: { code: 0, msg: "" }, orders: [open] });
+    nav.route = reactive({ query: { tab: "orders" } });
+    const tab = mountTab();
+    await flushPromises();
+    expect(mocks.listOrders).toHaveBeenCalledTimes(1);
+
+    mocks.listOrders.mockRejectedValue(new Error("网络错误"));
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(mocks.listOrders).toHaveBeenCalledTimes(2);
+    expect(mocks.listOrders.mock.lastCall?.[1]).toEqual({ silent: true });
+    expect(tab.orders).toHaveLength(1);
+    expect(tab.error).toBe("");
+  });
+
+  it("没有未完成订单时不刷新", async () => {
+    vi.useFakeTimers();
+    mocks.listOrders
+      .mockReset()
+      .mockResolvedValue({
+        ret_info: { code: 0, msg: "" },
+        orders: [
+          { order_id: "o-1", state: "FILLED", instrument_id: "BTC-USDT-SPOT", quantity: "1", submitted_at: "1700000000000" }
+        ]
+      });
+    nav.route = reactive({ query: { tab: "orders" } });
+    mountTab();
+    await flushPromises();
+    await vi.advanceTimersByTimeAsync(10000);
+    expect(mocks.listOrders).toHaveBeenCalledTimes(1);
   });
 });

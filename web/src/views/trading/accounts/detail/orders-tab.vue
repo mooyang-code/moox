@@ -103,7 +103,7 @@
         </a-table-column>
       </template>
     </a-table>
-    <OrderDetailDrawer v-model:visible="drawerVisible" :order="drawerOrder" :account-name="accountName" />
+    <OrderDetailDrawer v-model:visible="drawerVisible" :order="shownOrder" :account-name="accountName" />
   </SectionBlock>
 </template>
 
@@ -143,7 +143,9 @@ const state = ref<string | undefined>(queryText("ostate"));
 const ownerType = ref<string | undefined>(queryText("oowner"));
 const accountId = ref<string | undefined>(queryText("oaccount"));
 const symbol = ref(queryText("osymbol") ?? "");
-const market = ref<MarketType | undefined>(queryText("omarket") as MarketType | undefined);
+// 地址里的值都是字符串，市场要转回数字，否则和可选市场比较不相等、会被重置成第一个
+const marketQuery = Number(queryText("omarket"));
+const market = ref<MarketType | undefined>([0, 1, 2, 3].includes(marketQuery) ? (marketQuery as MarketType) : undefined);
 const page = ref(1);
 const pageSize = 20;
 const total = ref(0);
@@ -152,6 +154,10 @@ const loading = ref(false);
 const error = ref("");
 const drawerVisible = ref(false);
 const drawerOrder = ref<Order | null>(null);
+// 抽屉跟着列表的轮询更新：订单在后台成交或撤掉后，状态和撤单按钮随之变化
+const shownOrder = computed(
+  () => orders.value.find(order => order.order_id === drawerOrder.value?.order_id) ?? drawerOrder.value
+);
 const requests = createLatestRequestGuard();
 
 const memberOptions = computed(() =>
