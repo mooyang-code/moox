@@ -12,7 +12,9 @@ const ctx = vi.hoisted(() => ({
 const api = vi.hoisted(() => ({
   getArchiveOverview: vi.fn(),
   listArchiveTasks: vi.fn(),
-  listDatasets: vi.fn()
+  listDatasets: vi.fn(),
+  deleteArchiveTask: vi.fn(async () => ({})),
+  invalidateArchiveCoverage: vi.fn()
 }));
 vi.mock("vue-router", () => ({
   useRoute: () => ctx.route,
@@ -21,7 +23,12 @@ vi.mock("vue-router", () => ({
 vi.mock("@/api/archive", async importOriginal => ({
   ...(await importOriginal<typeof import("@/api/archive")>()),
   getArchiveOverview: api.getArchiveOverview,
-  listArchiveTasks: api.listArchiveTasks
+  listArchiveTasks: api.listArchiveTasks,
+  deleteArchiveTask: api.deleteArchiveTask
+}));
+vi.mock("./archive-coverage", async importOriginal => ({
+  ...(await importOriginal<typeof import("./archive-coverage")>()),
+  invalidateArchiveCoverage: api.invalidateArchiveCoverage
 }));
 vi.mock("@/api/storage/metadata", () => ({ listDatasets: api.listDatasets }));
 vi.mock("@/store/modules/space", () => ({
@@ -32,6 +39,7 @@ vi.mock("@arco-design/web-vue", async importOriginal => {
   return { ...actual, Message: { ...actual.Message, warning: ctx.warning, success: vi.fn() } };
 });
 import ArchivePage from "./index.vue";
+import TaskEditorDrawer from "./task-editor-drawer.vue";
 import TaskTable from "./task-table.vue";
 
 Object.defineProperty(window, "matchMedia", {
@@ -108,6 +116,37 @@ describe("数据归档页", () => {
     expect(document.querySelector(".arco-drawer")).toBeNull();
   });
 
+  it("建好任务后清掉采集任务页的归档状态缓存，重读任务表再打开详情", async () => {
+    const page = await mountPage();
+    api.invalidateArchiveCoverage.mockClear();
+    api.listArchiveTasks.mockResolvedValue({ tasks: [task(), task({ dataset_id: "ds_5m", partition_count: 0 })] });
+    page.findComponent(TaskEditorDrawer).vm.$emit("created", "ds_5m");
+    await flushPromises();
+    expect(api.invalidateArchiveCoverage).toHaveBeenCalledTimes(1);
+    expect(ctx.route.query).toEqual({ task: "ds_5m" });
+    expect(ctx.warning).not.toHaveBeenCalled();
+  });
+
+  it("删除任务确认后清掉采集任务页的归档状态缓存", async () => {
+    api.listArchiveTasks.mockResolvedValue({ tasks: [task({ partition_count: 0 })] });
+    const page = await mountPage();
+    api.invalidateArchiveCoverage.mockClear();
+    await page
+      .findAll("button")
+      .find(item => item.text() === "更多")!
+      .trigger("click");
+    await flushPromises();
+    (
+      [...document.querySelectorAll(".arco-dropdown-option")].find(item => item.textContent?.includes("删除")) as HTMLElement
+    ).click();
+    await flushPromises();
+    expect(document.body.textContent).toContain("删除后这个数据集不再归档");
+    (document.querySelector(".arco-modal-footer .arco-btn-status-danger") as HTMLElement).click();
+    await flushPromises();
+    expect(api.deleteArchiveTask).toHaveBeenCalledWith("ds_1m");
+    expect(api.invalidateArchiveCoverage).toHaveBeenCalledTimes(1);
+  });
+
   it("?task= 指向存在的任务时打开详情", async () => {
     ctx.route.query = { task: "ds_1m" };
     await mountPage();
@@ -120,6 +159,7 @@ describe("任务表", () => {
     loaded: true,
     error: "",
     unarchivedCount: 0,
+    datasetsLoaded: true,
     names: {},
     zone: "UTC",
     nowMs: Date.parse("2026-11-07T04:40:00Z"),

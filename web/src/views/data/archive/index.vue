@@ -14,7 +14,7 @@
         :loaded="mainLoaded"
         :error="mainError"
         :last-ok-at="lastOkAt"
-        :task-ids="taskIds"
+        :tasks="tasks"
         :now-ms="nowMs"
         @retry="retryMain"
       />
@@ -26,6 +26,7 @@
         :loaded="mainLoaded"
         :error="mainError"
         :unarchived-count="unarchived.length"
+        :datasets-loaded="datasetsLoaded"
         :names="datasetNames"
         :zone="displayZone"
         :now-ms="nowMs"
@@ -49,6 +50,7 @@
       :now-ms="nowMs"
       :busy="busy"
       :remote-enabled="remoteEnabled"
+      :runs-refresh-key="runsRefreshKey"
       @update:query="setQuery"
       @close="setQuery({ task: '' })"
       @run="runNow"
@@ -138,6 +140,8 @@ const datasets = ref<Dataset[]>([]);
 const datasetsLoaded = ref(false);
 const datasetsError = ref("");
 const nowMs = ref(Date.now());
+// 立即运行、补拉区间成功后加 1：抽屉已经开在运行记录页签时 URL 不变，靠它让运行记录重读
+const runsRefreshKey = ref(0);
 // 行内按钮按任务记“处理中”，不共用一个 busy
 const busy = ref<Record<string, boolean>>({});
 const mainGate = new RequestGate();
@@ -277,6 +281,7 @@ function openBackfill(task: ArchiveTask) {
 function onBackfillStarted(datasetId: string) {
   void tick();
   setQuery({ task: datasetId, tab: "runs" });
+  runsRefreshKey.value += 1;
 }
 
 // ---- 行操作 ----
@@ -303,6 +308,7 @@ async function runNow(task: ArchiveTask) {
     }
     Message.success("已排队");
     setQuery({ task: id, tab: "runs" });
+    runsRefreshKey.value += 1;
     void tick();
   });
 }

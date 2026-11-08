@@ -137,6 +137,8 @@ const props = defineProps<{
   loaded: boolean;
   error: string;
   unarchivedCount: number;
+  /** 数据集读到了没有：没读到时空态不能说“没有需要归档的数据集” */
+  datasetsLoaded: boolean;
   names: Record<string, string>;
   zone: string;
   nowMs: number;
@@ -155,7 +157,11 @@ const emit = defineEmits<{
 }>();
 
 const emptyText = computed(() =>
-  props.unarchivedCount ? "还没有归档任务，从上面的未归档数据集开始建" : "这个空间没有需要归档的时序数据集"
+  !props.datasetsLoaded
+    ? "还没有归档任务"
+    : props.unarchivedCount
+      ? "还没有归档任务，从上面的未归档数据集开始建"
+      : "这个空间没有需要归档的时序数据集"
 );
 
 function onMore(action: string, task: ArchiveTask) {

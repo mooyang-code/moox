@@ -1,5 +1,5 @@
 import type { AxiosRequestConfig } from "axios";
-import { callControl } from "@/api/admin/http";
+import { callControl, reportControlError } from "@/api/admin/http";
 import type * as T from "./types";
 
 export type * from "./types";
@@ -7,10 +7,14 @@ export type * from "./types";
 /**
  * ArchiveMgr 的调用都经 Console 的 /api/admin/archive/<方法>。
  * 空间以请求头 X-Space-Id 为准（签名客户端自动带上），请求体里不写 space_id：体里的空间和头不一致会被拒绝。
- * 后台轮询的读取传 { silentError: true }，错误由页面自己显示。
+ * 后台轮询的读取传 { silentError: true }，错误由页面自己显示；其余调用失败时在这里弹提示：
+ * Console 转发的业务错误是 HTTP 200 加失败的 ret_info，不进请求层的错误拦截器，callControl 只抛错不提示。
  */
 const call = <Req extends object, Rsp>(method: string, req: Req, config?: AxiosRequestConfig) =>
-  callControl<Req, Rsp>("archive", method, req, config);
+  callControl<Req, Rsp>("archive", method, req, config).catch((error: unknown) => {
+    if (!config?.silentError) reportControlError(error);
+    throw error;
+  });
 
 export const getArchiveOverview = (config?: AxiosRequestConfig) =>
   call<Record<string, never>, T.GetArchiveOverviewRsp>("GetArchiveOverview", {}, config);

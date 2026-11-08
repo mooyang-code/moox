@@ -46,7 +46,7 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
-import type { GetArchiveOverviewRsp } from "@/api/archive";
+import type { ArchiveTask, GetArchiveOverviewRsp } from "@/api/archive";
 import { formatBytes } from "@/api/modules/host-monitor";
 import { formatInstant } from "@/utils/time-zone";
 import { relativeTime } from "@/views/home/home-model";
@@ -62,14 +62,14 @@ const props = defineProps<{
   error: string;
   /** 最近一次成功读取的时刻（毫秒） */
   lastOkAt: number | null;
-  taskIds: string[];
+  tasks: ArchiveTask[];
   nowMs: number;
 }>();
 const emit = defineEmits<{ retry: [] }>();
 
 const worker = computed(() => props.overview?.worker);
 const staleWorkers = computed(() => props.overview?.stale_workers || []);
-const alerts = computed(() => systemAlerts(props.overview?.alerts, props.taskIds));
+const alerts = computed(() => systemAlerts(props.overview?.alerts, props.tasks));
 const unavailableHint = computed(() => archiveUnavailableHint(props.error));
 const workerTitle = computed(() => {
   const w = worker.value;

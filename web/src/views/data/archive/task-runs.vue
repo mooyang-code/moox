@@ -147,6 +147,8 @@ const props = defineProps<{
   /** 任务的最近一次运行正在运行 */
   taskRunning: boolean;
   remoteEnabled?: boolean;
+  /** 变化时重读（立即运行、补拉之后 URL 可能不变） */
+  refreshKey?: number;
 }>();
 const emit = defineEmits<{ "update:query": [patch: Partial<ArchiveQuery>]; changed: [] }>();
 
@@ -184,8 +186,9 @@ async function load() {
   }
 }
 
+// 逐项比较：props.query 每次路由变化都是新对象，不能整体依赖它
 watch(
-  () => [props.datasetId, props.query.status, props.query.ticks, props.query.rpage],
+  [() => props.datasetId, () => props.query.status, () => props.query.ticks, () => props.query.rpage, () => props.refreshKey],
   () => {
     loaded.value = false;
     void load();

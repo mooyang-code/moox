@@ -92,10 +92,7 @@
           </div>
           <div v-if="preview.partition_export_estimates?.length" class="block">
             <div class="label">分区预计导出</div>
-            <div v-for="(at, index) in preview.partition_export_estimates" :key="at">
-              {{ index === 0 && preview.partition_export_estimates.length > 1 ? "上一个分区" : "当前分区" }}
-              {{ formatInstant(at, zone) }}
-            </div>
+            <div v-for="text in preview.partition_export_estimates" :key="text">{{ exportEstimateText(text, zone) }}</div>
           </div>
         </template>
         <div class="sub fixed">每分钟第 25 秒检查；每小时 :58～:04 不拉取，这段时间的边界顺延到 :04:25。</div>
@@ -125,6 +122,7 @@ import { formatInstant, toInstantMs } from "@/utils/time-zone";
 import {
   backfillFromError,
   durationText,
+  exportEstimateText,
   intervalText,
   isDailyFreq,
   pullEveryBarsError,
@@ -167,8 +165,8 @@ const submitting = ref(false);
 const prepareGuard = createLatestRequestGuard();
 const previewGuard = createLatestRequestGuard();
 let previewTimer: ReturnType<typeof setTimeout> | undefined;
-// 编辑时打开抽屉那一刻的回补起点：没改就不提交
-let originalBackfill: number | null = null;
+// 编辑时打开抽屉那一刻的回补起点：没改就不提交，也不校验（后端对没改的值保留原值，即使已超出保留期）
+const originalBackfill = ref<number | null>(null);
 
 const taskIds = computed(() => new Set(props.tasks.map(item => item.dataset_id)));
 const currentDatasetId = computed(() => (props.mode === "edit" ? props.task?.dataset_id || "" : form.datasetId));
@@ -176,7 +174,10 @@ const freq = computed(() => (props.mode === "edit" ? props.task?.freq : prepared
 const daily = computed(() => isDailyFreq(freq.value));
 const earliestMs = computed(() => toInstantMs(prepared.value?.earliest_backfill_from));
 const pullError = computed(() => (freq.value ? pullEveryBarsError(freq.value, Number(form.pullEveryBars)) : ""));
-const backfillError = computed(() => backfillFromError(form.backfillFrom, earliestMs.value, Date.now()));
+const backfillChanged = computed(() => props.mode === "create" || form.backfillFrom !== originalBackfill.value);
+const backfillError = computed(() =>
+  backfillFromError(backfillChanged.value ? form.backfillFrom : null, earliestMs.value, Date.now(), props.zone)
+);
 
 watch(
   () => props.visible,
@@ -187,11 +188,11 @@ watch(
     preview.value = null;
     previewError.value = "";
     if (props.mode === "edit" && props.task) {
-      originalBackfill = toInstantMs(props.task.backfill_from);
+      originalBackfill.value = toInstantMs(props.task.backfill_from);
       Object.assign(form, {
         datasetId: props.task.dataset_id || "",
         pullEveryBars: props.task.pull_every_bars || 1,
-        backfillFrom: originalBackfill,
+        backfillFrom: originalBackfill.value,
         enabled: true
       });
       void prepare(props.task.dataset_id || "", false);
@@ -279,7 +280,7 @@ async function submit() {
       emit("update:visible", false);
       emit("created", form.datasetId);
     } else if (props.task) {
-      const changedBackfill = form.backfillFrom !== null && form.backfillFrom !== originalBackfill;
+      const changedBackfill = form.backfillFrom !== null && form.backfillFrom !== originalBackfill.value;
       await updateArchiveTask({
         dataset_id: props.task.dataset_id || "",
         pull_every_bars: Number(form.pullEveryBars) === props.task.pull_every_bars ? 0 : Number(form.pullEveryBars) || 0,
@@ -290,7 +291,7 @@ async function submit() {
       emit("updated");
     }
   } catch {
-    // 失败原因由请求层提示，抽屉保持打开
+    // 失败原因由接口封装提示，抽屉保持打开
   } finally {
     submitting.value = false;
   }

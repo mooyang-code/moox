@@ -167,9 +167,21 @@ export function unarchivedDatasets(datasets: Dataset[], tasks: ArchiveTask[], sp
   return datasets.filter(dataset => archivableDataset(dataset, spaceId) && !archived.has(dataset.dataset_id));
 }
 
-/** 状态行下方的提醒：以“<任务的 dataset_id>：”开头的是任务健康，任务表已经显示，过滤掉。 */
-export function systemAlerts(alerts: string[] | undefined, taskIds: string[]): string[] {
-  return (alerts || []).filter(alert => !taskIds.some(id => id && alert.startsWith(`${id}：`)));
+/**
+ * 状态行下方的提醒：和某个任务的健康原因完全相同的（“<dataset_id>：<health_reason>”）任务表已经显示，过滤掉；
+ * 其余照常显示，例如“<dataset_id>：分区登记在 worker X，当前活动 worker 是 Y，运行不会派给它”不在健康原因里。
+ */
+export function systemAlerts(alerts: string[] | undefined, tasks: Pick<ArchiveTask, "dataset_id" | "health_reason">[]): string[] {
+  const shown = new Set(tasks.filter(task => task.health_reason).map(task => `${task.dataset_id}：${task.health_reason}`));
+  return (alerts || []).filter(alert => !shown.has(alert));
+}
+
+/** 分区预计导出时间：后端给的是“分区 2026-11-06：预计 2026-11-07T00:15:25Z 导出”，时刻按空间时区显示；读不懂时原样显示。 */
+export function exportEstimateText(text: string, zone: string): string {
+  const match = /^分区 (\S+)：预计 (\S+) 导出$/.exec(text.trim());
+  if (!match) return text;
+  const at = formatInstant(match[2], zone);
+  return at === "—" ? text : `分区 ${match[1]} 预计 ${at} 导出`;
 }
 
 // ---- 校验 ----
@@ -183,25 +195,30 @@ export function pullEveryBarsError(freq: string, n: number): string {
   return span * n > DAY_SECONDS ? `频率 × 拉取间隔不能超过 1 天（${freq} 最多 ${Math.floor(DAY_SECONDS / span)} 根）` : "";
 }
 
-/** 回补起点：不能早于线上还保留的最早时刻，不能晚于现在；为空表示不指定。 */
-export function backfillFromError(value: number | null, earliestMs: number | null, nowMs: number): string {
+/** 回补起点：不能早于线上还保留的最早时刻，不能晚于现在；为空表示不指定。提示里的时间按空间时区。 */
+export function backfillFromError(value: number | null, earliestMs: number | null, nowMs: number, zone: string): string {
   if (value === null) return "";
-  if (earliestMs !== null && value < earliestMs) return `不能早于 ${formatInstantUtc(earliestMs)}（线上还保留的最早数据）`;
+  if (earliestMs !== null && value < earliestMs)
+    return `不能早于 ${formatInstant(earliestMs, zone, "minute")}（线上还保留的最早数据）`;
   if (value > nowMs) return "不能晚于现在";
   return "";
 }
 
-/** 补拉区间：起点早于终点，不早于下界（今天 − 线上保留期 + 1 天），终点不晚于现在。 */
-export function backfillRangeError(range: [number, number] | null, earliestMs: number | null, nowMs: number): string {
+/** 补拉区间：起点早于终点，不早于下界（今天 − 线上保留期 + 1 天），终点不晚于现在。提示里的时间按空间时区。 */
+export function backfillRangeError(
+  range: [number, number] | null,
+  earliestMs: number | null,
+  nowMs: number,
+  zone: string
+): string {
   if (!range) return "请选择补拉区间";
   const [start, end] = range;
   if (end <= start) return "结束时间必须晚于开始时间";
-  if (earliestMs !== null && start < earliestMs) return `开始不能早于 ${formatInstantUtc(earliestMs)}（线上还保留的最早数据）`;
+  if (earliestMs !== null && start < earliestMs)
+    return `开始不能早于 ${formatInstant(earliestMs, zone, "minute")}（线上还保留的最早数据）`;
   if (end > nowMs) return "结束不能晚于现在";
   return "";
 }
-
-const formatInstantUtc = (ms: number) => formatInstant(ms, "UTC", "minute");
 
 /** 编辑时是否还能改回补起点：首次复核成功后 mgr 会清空它，worker 有了水位也不再读，改了没有效果。 */
 export function showBackfillField(task: Pick<ArchiveTask, "last_success_at">): boolean {

@@ -40,7 +40,7 @@ const quickRanges = [
   { label: "最近 1 小时", range: (): [number, number] => [Date.now() - HOUR, Date.now()] },
   { label: "最近 1 天", range: (): [number, number] => [Date.now() - 24 * HOUR, Date.now()] }
 ];
-const rangeError = computed(() => backfillRangeError(range.value, earliestMs.value, Date.now()));
+const rangeError = computed(() => backfillRangeError(range.value, earliestMs.value, Date.now(), props.zone));
 
 watch(
   () => props.visible,
@@ -64,7 +64,7 @@ const iso = (ms: number) => new Date(ms).toISOString().replace(/\.000Z$/, "Z");
 
 async function submit(): Promise<boolean> {
   const id = props.task?.dataset_id || "";
-  const error = backfillRangeError(range.value, earliestMs.value, Date.now());
+  const error = backfillRangeError(range.value, earliestMs.value, Date.now(), props.zone);
   if (error || !range.value) {
     Message.warning(error);
     return false;

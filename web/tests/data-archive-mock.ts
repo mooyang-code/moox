@@ -164,7 +164,11 @@ async function gateway(route: Route) {
           next_reviews: [1, 2, 3].map(i => iso(NOW + i * 60 * MINUTE)),
           interval_seconds: 3600,
           read_span_seconds: 4560,
-          partition_export_estimates: [iso(NOW + 10 * MINUTE), iso(NOW + DAY)]
+          // 后端给的是文本，不是时刻
+          partition_export_estimates: [
+            `分区 2026-11-06：预计 ${iso(NOW + 10 * MINUTE)} 导出`,
+            `分区 2026-11-07：预计 ${iso(NOW + DAY)} 导出`
+          ]
         })
       });
     case "CreateArchiveTask":

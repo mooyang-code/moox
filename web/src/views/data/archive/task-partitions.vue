@@ -146,8 +146,9 @@ async function load() {
   }
 }
 
+// 逐项比较：props.query 每次路由变化都是新对象，开关预览（?partition=）时不能重读分区表
 watch(
-  () => [props.datasetId, props.query.from, props.query.to, props.query.ppage],
+  [() => props.datasetId, () => props.query.from, () => props.query.to, () => props.query.ppage],
   () => {
     loaded.value = false;
     void load();

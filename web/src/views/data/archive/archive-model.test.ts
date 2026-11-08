@@ -7,6 +7,7 @@ import {
   backfillFromError,
   backfillRangeError,
   durationText,
+  exportEstimateText,
   healthLabel,
   kindLabel,
   parseArchiveQuery,
@@ -110,10 +111,25 @@ describe("未归档的数据集", () => {
     expect(unarchivedDatasets(datasets, [], "mooxsys")).toEqual([]);
   });
 
-  it("提醒里去掉任务自己的健康（任务表已显示）", () => {
-    expect(systemAlerts(["ds_1m：最近一次成功运行距今 30 天", "没有活动的归档 worker"], ["ds_1m"])).toEqual([
-      "没有活动的归档 worker"
-    ]);
+  it("提醒里只去掉和任务健康原因完全相同的（任务表已显示），其余以任务 ID 开头的照常显示", () => {
+    const tasks = [{ dataset_id: "ds_1m", health_reason: "最近一次成功运行距今 30 天" }];
+    expect(
+      systemAlerts(
+        [
+          "ds_1m：最近一次成功运行距今 30 天",
+          "ds_1m：分区登记在 worker a，当前活动 worker 是 b，运行不会派给它",
+          "没有活动的归档 worker"
+        ],
+        tasks
+      )
+    ).toEqual(["ds_1m：分区登记在 worker a，当前活动 worker 是 b，运行不会派给它", "没有活动的归档 worker"]);
+  });
+
+  it("分区预计导出时间：解析后端的文本，时刻按空间时区；读不懂时原样", () => {
+    expect(exportEstimateText("分区 2026-11-06：预计 2026-11-07T00:15:25Z 导出", "Asia/Shanghai")).toBe(
+      "分区 2026-11-06 预计 2026-11-07 08:15:25 UTC+8 导出"
+    );
+    expect(exportEstimateText("别的格式", "UTC")).toBe("别的格式");
   });
 });
 
@@ -130,15 +146,17 @@ describe("校验", () => {
   it("回补起点和补拉区间：不早于下界、不晚于现在、起点早于终点", () => {
     const now = Date.parse("2026-11-07T00:00:00Z");
     const earliest = Date.parse("2026-10-04T00:00:00Z");
-    expect(backfillFromError(null, earliest, now)).toBe("");
-    expect(backfillFromError(earliest, earliest, now)).toBe("");
-    expect(backfillFromError(earliest - 1, earliest, now)).toContain("不能早于 2026-10-04 00:00 UTC");
-    expect(backfillFromError(now + 1, earliest, now)).toBe("不能晚于现在");
-    expect(backfillRangeError(null, earliest, now)).toBe("请选择补拉区间");
-    expect(backfillRangeError([now - 10, now - 10], earliest, now)).toBe("结束时间必须晚于开始时间");
-    expect(backfillRangeError([earliest - 1, now], earliest, now)).toContain("开始不能早于");
-    expect(backfillRangeError([earliest, now + 1], earliest, now)).toBe("结束不能晚于现在");
-    expect(backfillRangeError([earliest, now], earliest, now)).toBe("");
+    expect(backfillFromError(null, earliest, now, "UTC")).toBe("");
+    expect(backfillFromError(earliest, earliest, now, "UTC")).toBe("");
+    expect(backfillFromError(earliest - 1, earliest, now, "UTC")).toContain("不能早于 2026-10-04 00:00 UTC");
+    // 提示里的时间按空间时区
+    expect(backfillFromError(earliest - 1, earliest, now, "Asia/Shanghai")).toContain("不能早于 2026-10-04 08:00 UTC+8");
+    expect(backfillFromError(now + 1, earliest, now, "UTC")).toBe("不能晚于现在");
+    expect(backfillRangeError(null, earliest, now, "UTC")).toBe("请选择补拉区间");
+    expect(backfillRangeError([now - 10, now - 10], earliest, now, "UTC")).toBe("结束时间必须晚于开始时间");
+    expect(backfillRangeError([earliest - 1, now], earliest, now, "UTC")).toContain("开始不能早于");
+    expect(backfillRangeError([earliest, now + 1], earliest, now, "UTC")).toBe("结束不能晚于现在");
+    expect(backfillRangeError([earliest, now], earliest, now, "UTC")).toBe("");
   });
 
   it("首次复核成功后编辑时不再显示回补起点", () => {

@@ -97,6 +97,7 @@
             :now-ms="nowMs"
             :task-running="task.last_run?.status === 'running'"
             :remote-enabled="remoteEnabled"
+            :refresh-key="runsRefreshKey"
             @update:query="patch => emit('update:query', patch)"
             @changed="emit('changed')"
           />
@@ -134,6 +135,8 @@ const props = defineProps<{
   nowMs: number;
   busy: Record<string, boolean>;
   remoteEnabled?: boolean;
+  /** 立即运行、补拉成功后变化：运行记录重读 */
+  runsRefreshKey?: number;
 }>();
 const emit = defineEmits<{
   "update:query": [patch: Partial<ArchiveQuery>];
