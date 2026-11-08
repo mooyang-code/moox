@@ -97,11 +97,11 @@ import { POOL_REPLAY_DISABLED_TEXT, isPoolStrategy } from "@/views/strategy/dsl"
 import { computed, onMounted, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { StaleSpaceRequestError } from "@/api/admin/stale-space";
-import { listInstances } from "@/api/strategy";
+import { listAllInstances } from "@/api/strategy";
 import type { StrategyInstance } from "@/api/strategy-types";
 import { useSpaceStore } from "@/store/modules/space";
 import { RequestGate } from "@/utils/request-gate";
-import InfoTip from "@/views/factor/shared/info-tip.vue";
+import InfoTip from "@/components/info-tip/index.vue";
 import InstanceResults from "@/views/strategy/components/strategy-instance-results.vue";
 import StatusBadge from "@/views/strategy/components/strategy-status-badge.vue";
 import { STRATEGY_TASKS_ROUTE, detailLink, instancesLink, normalizeTaskTab, replayLink } from "@/views/strategy/links";
@@ -111,7 +111,6 @@ import { useInstanceResults } from "@/views/strategy/use-instance-results";
 
 defineOptions({ name: "StrategyResults" });
 
-const PAGE_SIZE = 200;
 const route = useRoute();
 const router = useRouter();
 const spaceStore = useSpaceStore();
@@ -148,7 +147,7 @@ const {
 
 const tabs = computed(() => {
   const list = instanceTabs(instances.value, store.strategyCatalog);
-  // URL 指定的实例不在列表里（例如已删除、仍可查看历史）：单独补一个 Tab，避免选中项无处显示。
+  // URL 指定的实例不在列表里（例如链接里的实例不属于当前空间）：单独补一个 Tab，避免选中项无处显示。
   if (selectedId.value && !list.some(tab => tab.instanceId === selectedId.value)) {
     list.unshift({ instanceId: selectedId.value, title: `实例 ${selectedId.value.slice(0, 8)}`, enabled: false, health: "" });
   }
@@ -176,12 +175,7 @@ async function loadInstanceList() {
   listLoading.value = true;
   listError.value = "";
   try {
-    const all: StrategyInstance[] = [];
-    for (let page = 1; page <= 10; page += 1) {
-      const rsp = await listInstances({ page, page_size: PAGE_SIZE });
-      all.push(...rsp.items);
-      if (!rsp.items.length || all.length >= rsp.page.total) break;
-    }
+    const all = await listAllInstances();
     if (!listGate.isCurrent(token)) return;
     instances.value = all;
     listLoaded.value = true;

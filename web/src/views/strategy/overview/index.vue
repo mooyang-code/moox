@@ -117,13 +117,13 @@ import { POOL_REPLAY_DISABLED_TEXT } from "@/views/strategy/dsl";
 import { computed, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { StaleSpaceRequestError } from "@/api/admin/stale-space";
-import { listInstances, listReplays, listStrategyTargets } from "@/api/strategy";
+import { listAllInstances, listReplays, listStrategyTargets } from "@/api/strategy";
 import type { Replay, StrategyInstance, StrategyTargetSnapshot } from "@/api/strategy-types";
 import { usePolling } from "@/hooks/usePolling";
 import { useSpaceStore } from "@/store/modules/space";
 import { useStrategyStore } from "@/store/modules/strategy";
 import { RequestGate } from "@/utils/request-gate";
-import InfoTip from "@/views/factor/shared/info-tip.vue";
+import InfoTip from "@/components/info-tip/index.vue";
 import StatusBadge from "@/views/strategy/components/strategy-status-badge.vue";
 import { detailLink, instancesLink, replayLink, resultsLink, type StrategyLink } from "@/views/strategy/links";
 import { activeReplays, instanceCards, overviewStats, pendingItems } from "@/views/strategy/overview/overview-model";
@@ -174,16 +174,6 @@ const cards = computed(() => instanceCards(input.value, displayZone.value));
 const pending = computed(() => pendingItems(input.value));
 const running = computed(() => activeReplays(replays.value));
 
-async function loadInstances(silent: boolean): Promise<StrategyInstance[]> {
-  const all: StrategyInstance[] = [];
-  for (let page = 1; page <= 10; page += 1) {
-    const rsp = await listInstances({ page, page_size: 200 }, { silent });
-    all.push(...rsp.items);
-    if (!rsp.items.length || all.length >= rsp.page.total) break;
-  }
-  return all;
-}
-
 /**
  * 读取实例、已启用实例的最新目标与最近的回放；单个实例的目标读取失败不影响其它实例。
  * 后台轮询（background）不转刷新按钮，也不先清掉错误条，避免每 30 秒闪一下；结果出来后再更新。
@@ -194,7 +184,7 @@ async function loadAll(options: { background?: boolean } = {}) {
   if (!options.background) loading.value = true;
   try {
     const [nextInstances, replayPage] = await Promise.all([
-      loadInstances(Boolean(options.background)),
+      listAllInstances({ silent: Boolean(options.background) }),
       listReplays({ page: 1, page_size: 20 }, { silent: true }).catch(error => {
         if (gate.isCurrent(token)) replayError.value = error instanceof Error && error.message ? error.message : "请稍后重试";
         return null;

@@ -7,7 +7,7 @@ const read = (relativePath: string) => fs.readFileSync(path.join(viewsRoot, rela
 
 describe("host and service toolbar alignment", () => {
   it("keeps the read-only host list hint compact above the table", () => {
-    const hosts = read("container/ssh-hosts/ssh-hosts.vue");
+    const hosts = read("ops/host-workbench/ssh-hosts.vue");
     const hostWorkbench = read("ops/host-workbench/index.vue");
 
     expect(hosts).toContain('class="host-list-hint"');

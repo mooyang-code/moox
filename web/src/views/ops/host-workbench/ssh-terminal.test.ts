@@ -53,7 +53,7 @@ vi.mock("@xterm/addon-fit", () => ({
   }
 }));
 vi.mock("@xterm/xterm/css/xterm.css", () => ({}));
-vi.mock("@/views/container/ssh-file-manager/ssh-file-manager.vue", () => ({ default: { template: "<div />" } }));
+vi.mock("./ssh-file-manager.vue", () => ({ default: { template: "<div />" } }));
 
 class FakeWebSocket {
   static OPEN = 1;

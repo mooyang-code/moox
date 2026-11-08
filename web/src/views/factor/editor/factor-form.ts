@@ -36,7 +36,7 @@ export function sourceInputColumns(columns: DatasetColumn[]) {
     .sort();
 }
 
-/** 编辑器表单：定义只有标识、展示名、表达式与 allow_partial_universe；其余字段由编译推导。 */
+/** 编辑器表单：可写的只有标识、展示名、定义文本、allow_partial_universe 和分类；类型、输入列、输出列、回看与参数由编译 spec 推导，写请求里不带。 */
 export interface FactorFormState {
   factor_id: string;
   name: string;

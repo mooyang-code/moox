@@ -44,10 +44,10 @@ export function memberCountText(info: Pick<FactorTaskInfo, "members">) {
   return `${enabled} / ${total}`;
 }
 
-export type SetActionKind = "retry" | "disable" | "enable" | "none";
+export type TaskActionKind = "retry" | "disable" | "enable" | "none";
 
 /** 列表行 / 抽屉上与状态相关的主动作：激活失败重试，运行中停用，已停用启用。 */
-export function setActionKind(set: Pick<FactorTask, "status">): SetActionKind {
+export function taskActionKind(set: Pick<FactorTask, "status">): TaskActionKind {
   if (set.status === "pending") return "retry";
   if (set.status === "enabled") return "disable";
   if (set.status === "disabled") return "enable";

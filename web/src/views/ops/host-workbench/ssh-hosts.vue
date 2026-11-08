@@ -58,8 +58,8 @@
 </template>
 
 <script setup lang="ts">
-import { sshAvailability } from "@/views/ops/host-workbench/host-workbench-utils";
-import type { HostMonitorRow } from "@/views/ops/host-workbench/host-monitor-mapping";
+import { sshAvailability } from "./host-workbench-utils";
+import type { HostMonitorRow } from "./host-monitor-mapping";
 
 defineProps<{ rows: HostMonitorRow[]; loading?: boolean }>();
 const emit = defineEmits<{ connect: [hostId: string]; fileManage: [hostId: string] }>();

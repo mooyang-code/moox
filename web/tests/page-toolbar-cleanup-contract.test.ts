@@ -37,7 +37,7 @@ describe("page toolbar cleanup contract", () => {
       "collector/cloud-function/function-instance.vue": ['@click="reset"'],
       "collector/cloud-function/function-package-manage.vue": ['@click="resetSearch"'],
       "collector/collection-tasks/collection-tasks.vue": ['@click="reset"'],
-      "container/ssh-hosts/ssh-hosts.vue": ['@click="reset"'],
+      "ops/host-workbench/ssh-hosts.vue": ['@click="reset"'],
       "data/subjects/index.vue": ['<a-button :disabled="!selectedSpaceId" @click="load">', '<a-button @click="loadSymbols">'],
       "settings/secrets/index.vue": ['<a-button @click="load">'],
       "settings/spaces/index.vue": ['<a-button @click="load">']
@@ -51,6 +51,6 @@ describe("page toolbar cleanup contract", () => {
 
   it("keeps independent operational refresh controls", () => {
     expect(read("ops/host-workbench/host-monitor.vue")).toContain('aria-label="刷新主机监控"');
-    expect(read("container/ssh-file-manager/ssh-file-manager.vue")).toContain('@click="refresh"');
+    expect(read("ops/host-workbench/ssh-file-manager.vue")).toContain('@click="refresh"');
   });
 });

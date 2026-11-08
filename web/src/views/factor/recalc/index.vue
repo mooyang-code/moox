@@ -21,7 +21,7 @@
               <InfoTip text="启用因子不会回填历史，启用后需要在这里手动补算；有进行中的任务时每 3 秒自动刷新。" />
             </span>
             <a-space wrap>
-              <SetSelect :model-value="store.currentTaskId" @change="onSetChange" />
+              <TaskSelect :model-value="store.currentTaskId" @change="onTaskChange" />
               <a-button :loading="loading" @click="refresh">
                 <template #icon><icon-refresh /></template>
                 刷新
@@ -116,8 +116,8 @@ import type { FactorTask, FactorTaskInfo, RecalcJob } from "@/api/factor/types";
 import { usePolling } from "@/hooks/usePolling";
 import { RequestGate } from "@/utils/request-gate";
 import { applyPageResult, defaultPagination, formatTime } from "@/views/data/shared/metadata-utils";
-import InfoTip from "@/views/factor/shared/info-tip.vue";
-import SetSelect from "@/views/factor/shared/task-select.vue";
+import InfoTip from "@/components/info-tip/index.vue";
+import TaskSelect from "@/views/factor/shared/task-select.vue";
 import { isActiveJob } from "@/views/factor/shared/status";
 import { useFactorScope } from "@/views/factor/shared/use-factor-scope";
 import RecalcCreateDrawer from "./recalc-create-drawer.vue";
@@ -202,7 +202,7 @@ function refresh() {
   return load();
 }
 
-function onSetChange(taskId: string) {
+function onTaskChange(taskId: string) {
   selectTask(taskId);
 }
 

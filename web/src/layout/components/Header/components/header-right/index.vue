@@ -1,18 +1,6 @@
 <template>
-  <!-- 窄屏只留用户菜单：语言、明暗、全屏、布局与主题设置收起，不盖住左边的空间选择 -->
+  <!-- 窄屏只留用户菜单：明暗、全屏、布局与主题设置收起，不盖住左边的空间选择 -->
   <div class="header_setting" :class="isMobile && 'head-absolute-fix'">
-    <!-- 国际化 -->
-    <a-dropdown v-if="!isMobile" trigger="hover" @select="onLange">
-      <a-button size="mini" type="text" class="icon_btn" id="system-language">
-        <template #icon>
-          <icon-language :size="18" />
-        </template>
-      </a-button>
-      <template #content>
-        <a-doption :disabled="language === 'zh-CN'">{{ $t(`system.zh-CN`) }}</a-doption>
-        <a-doption :disabled="language === 'en-US'">{{ $t(`system.en-US`) }}</a-doption>
-      </template>
-    </a-dropdown>
     <!-- 切换黑夜模式 -->
     <a-tooltip v-if="!isMobile" :content="$t(`system.${!darkMode ? 'switch-to-night-mode' : 'switch-to-daytime-mode'}`)">
       <a-button size="mini" type="text" class="icon_btn" id="system-dark" @click="onNightMode">
@@ -50,7 +38,11 @@
     <!-- 我的 -->
     <a-dropdown trigger="hover">
       <div class="my_setting" id="system-my-setting">
-        <a-image width="32" height="32" fit="cover" :src="myImage" class="my_image" />
+        <!-- 头像不用图片：显示用户名首字，没有用户名时显示图标 -->
+        <a-avatar :size="32" class="my_avatar">
+          <template v-if="avatarText">{{ avatarText }}</template>
+          <icon-user v-else />
+        </a-avatar>
         <span class="user-nickname">{{ account.user.userName }}</span>
         <div class="icon_down">
           <icon-down style="stroke-width: 3" />
@@ -74,8 +66,6 @@
 <script setup lang="ts">
 import SystemSettings from "@/layout/components/Header/components/system-settings/index.vue";
 import ThemeSettings from "@/layout/components/Header/components/theme-settings/index.vue";
-import myImage from "@/assets/img/my-image.jpg";
-import { useI18n } from "vue-i18n";
 import { Modal } from "@arco-design/web-vue";
 import { useRouter } from "vue-router";
 import { storeToRefs } from "pinia";
@@ -85,13 +75,14 @@ import { useThemeMethods } from "@/hooks/useThemeMethods";
 import { useDevicesSize } from "@/hooks/useDevicesSize";
 import { useRoutesConfigStore } from "@/store/modules/route-config";
 
-const i18n = useI18n();
 const router = useRouter();
 const { isMobile } = useDevicesSize();
 const userStore = useUserInfoStore();
 const themeStore = useThemeConfig();
 const { account } = storeToRefs(userStore);
-const { language, darkMode } = storeToRefs(themeStore);
+const { darkMode } = storeToRefs(themeStore);
+
+const avatarText = computed(() => (account.value.user.userName || "").trim().charAt(0).toUpperCase());
 
 // 系统设置
 const systemOpen = ref(false);
@@ -123,16 +114,6 @@ const onNightMode = () => {
   darkMode.value = !darkMode.value;
   let { setDarkMode } = useThemeMethods();
   setDarkMode();
-};
-
-// 语言
-const onLange = (value: string) => {
-  if (value === "Chinese" || value === "中文") {
-    themeStore.setLanguage("zh-CN");
-  } else {
-    themeStore.setLanguage("en-US");
-  }
-  i18n.locale.value = language.value;
 };
 
 // 退出登录
@@ -188,9 +169,9 @@ const logOut = () => {
     height: 32px;
     margin-left: $margin;
     overflow: hidden;
-    .my_image {
+    .my_avatar {
+      flex-shrink: 0;
       margin-right: var(--moox-space-2);
-      border-radius: 50%;
     }
     .user-nickname {
       white-space: nowrap;

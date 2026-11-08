@@ -206,12 +206,11 @@ import { Message } from "@arco-design/web-vue";
 import { createInstance, getInstance, getStrategy, validateStrategy } from "@/api/strategy";
 import type { Strategy, ValidateStrategyResult } from "@/api/strategy-types";
 import { listFactorTasks } from "@/api/factor";
-import { listAllDatasets } from "@/api/storage/metadata";
 import { listLogicalAccounts, listTradingAccounts } from "@/api/trade";
 import type { LogicalAccount, TradingAccount } from "@/api/trade/types";
 import type { FactorTaskInfo } from "@/api/factor/types";
 import { availableTasks, isUnifiedTask, varMemberBlockReason, type TaskOption } from "@/views/strategy/components/task-options";
-import { isUnifiedMarketType } from "@/views/data/shared/series-market";
+import { readUnifiedDatasetIds } from "@/views/strategy/components/unified-datasets";
 import ResolvedTable from "@/views/strategy/components/strategy-resolved-table.vue";
 import ResultItems from "@/views/strategy/components/strategy-result-items.vue";
 import { logicalAccountOptions, marketsToResolved, resolvedMarkets } from "@/views/strategy/components/logical-account-options";
@@ -431,11 +430,9 @@ async function loadDatasetsList() {
   const requestId = ++datasetsRequest;
   datasetsError.value = "";
   try {
-    const datasets = await listAllDatasets(spaceId);
+    const ids = await readUnifiedDatasetIds(spaceId);
     if (requestId !== datasetsRequest || props.spaceId !== spaceId) return;
-    unifiedDatasetIds.value = new Set(
-      datasets.filter(item => isUnifiedMarketType(item.attributes?.market_type)).map(item => item.dataset_id)
-    );
+    unifiedDatasetIds.value = ids;
   } catch (err) {
     if (requestId === datasetsRequest) datasetsError.value = err instanceof Error ? err.message : "数据集加载失败";
   }

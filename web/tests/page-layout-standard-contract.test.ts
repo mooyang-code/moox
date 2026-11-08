@@ -151,7 +151,6 @@ describe("page layout standards", () => {
   it("normalizes special list workbenches", () => {
     const cloudFunctions = read("collector/cloud-function/function-instance.vue");
     const factorResults = read("factor/results/index.vue");
-    const viewBrowse = read("data/view-browse/index.vue");
 
     const cloudFunctionActions = extractBlock(cloudFunctions, '<a-space class="cloud-function-action-bar" wrap>', "</a-space>");
     const cloudFunctionFilters = extractBlock(cloudFunctions, '<a-space class="cloud-function-filter-bar" wrap>', "</a-space>");
@@ -206,17 +205,13 @@ describe("page layout standards", () => {
     expect(factorResults).toContain('class="result-toolbar"');
     expect(factorResults).toContain("#status-extra");
     expect(factorResults).not.toContain("status-strip");
-    expect(factorResults).toContain(':embedded="true"');
     expect(factorResults).not.toContain("ViewDefinitions");
-
-    expectMargin(viewBrowse, ".page-head", "margin-bottom", 8);
   });
 
   it("keeps dashboard page boundaries on the compact spacing rhythm", () => {
     const theme = readStyle("var/global-theme.scss");
     const globalStyle = readStyle("index.scss");
     const healthMonitor = read("ops/monitor/index.vue");
-    const dataImport = read("data/import/index.vue");
     const strategyDefinitions = read("strategy/definitions/index.vue");
     const hostMonitor = read("ops/host-workbench/host-monitor.vue");
     const packageManage = read("collector/cloud-function/function-package-manage.vue");
@@ -228,8 +223,6 @@ describe("page layout standards", () => {
     expect(healthMonitor).toContain("监控告警");
     expect(healthMonitor).toMatch(/\.health-section\s*\{[\s\S]*?margin-top:\s*24px;/);
 
-    expect(dataImport).toMatch(/\.page-head,\s*\.preview-head\s*\{[\s\S]*?margin-bottom:\s*var\(--moox-space-2\);/);
-    expect(dataImport).toMatch(/\.sync-alert\s*\{\s*margin:\s*var\(--moox-space-2\) 0;\s*\}/);
     expectMargin(strategyDefinitions, ".page-head", "margin-bottom", 8);
     expectMargin(strategyDefinitions, ".top-alert", "margin-bottom", 8);
     expect(hostMonitor).toMatch(/\.host-monitor-page\s*\{[\s\S]*?padding:\s*0 0 var\(--moox-space-5\);/);

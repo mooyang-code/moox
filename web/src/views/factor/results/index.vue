@@ -17,7 +17,7 @@
         <template v-else-if="available.length">
           <div class="result-toolbar">
             <a-space wrap>
-              <SetSelect :model-value="activeTaskId" :include="isResultTask" @change="onTabChange" />
+              <TaskSelect :model-value="activeTaskId" :include="isResultTask" @change="onTabChange" />
               <span class="result-count"
                 >共 {{ available.length }} 个计算任务<span v-if="readAt">；任务状态读取于 {{ readAt }}</span></span
               >
@@ -36,7 +36,6 @@
           <ViewBrowse
             v-if="resultView"
             :key="`${resultView.space_id}/${resultView.view_id}`"
-            :embedded="true"
             :zone="displayZone"
             :view-ids="[resultView.view_id]"
             :active-view-id="resultView.view_id"
@@ -117,7 +116,7 @@ import { getStrategyDisplaySettings } from "@/api/strategy";
 import type { DisplayHidden } from "@/api/strategy-types";
 import { RequestGate } from "@/utils/request-gate";
 import ViewBrowse from "@/views/data/view-browse/index.vue";
-import SetSelect from "@/views/factor/shared/task-select.vue";
+import TaskSelect from "@/views/factor/shared/task-select.vue";
 import { useFactorScope } from "@/views/factor/shared/use-factor-scope";
 import { pickResultView, resolveActiveTaskId, resultTasks, resultSummary } from "./results-model";
 import { buildFactorScope } from "./factor-scope";

@@ -79,7 +79,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { createSSHSession, disconnectSSHSession, resizeSSHTerminal, getSSHWebSocketUrl } from "@/api/modules/ssh";
 import { loadTerminalAppearance } from "./terminal-appearance";
-import SshFileManager from "@/views/container/ssh-file-manager/ssh-file-manager.vue";
+import SshFileManager from "./ssh-file-manager.vue";
 
 const route = useRoute();
 const props = defineProps<{ initialHostId?: string; disconnectOnUnmount?: boolean }>();

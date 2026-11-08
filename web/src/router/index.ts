@@ -2,7 +2,7 @@ import NProgress from "@/config/nprogress";
 import { loginLocation } from "@/utils/safe-redirect";
 import pinia from "@/store/index";
 import { createRouter, createWebHashHistory } from "vue-router";
-import { staticRoutes, notFoundAndNoPower } from "@/router/route.ts";
+import { staticRoutes, notFoundRoutes } from "@/router/route.ts";
 import { currentlyRoute } from "@/router/route-output";
 import { storeToRefs } from "pinia";
 import { useUserInfoStore } from "@/store/modules/user-info";
@@ -18,13 +18,10 @@ const router = createRouter({
   history: createWebHashHistory(),
   /**
    * 设置静态路由，其它的路由通过addRoute动态添加
-   * 1、staticRoutes登录页、layout页、默认页面('/')
-   * 2、notFoundAndNoPower 添加默认 401、500界面，防止提示 No match found for location with path 'xxx'
-   * 2、后端控制路由中也需要添加 notFoundAndNoPower 401、500界面
-   * 静态添加 notFoundAndNoPower 401、500界面将全屏显示
-   * 如果要 notFoundAndNoPower 在layout容器展示，则需要移除静态添加并将其添加到缓存路由树
+   * 1、staticRoutes：登录页、layout页、默认页面('/')
+   * 2、notFoundRoutes：404 兜底，防止提示 No match found for location with path 'xxx'；静态添加时全屏显示
    */
-  routes: [...staticRoutes, ...notFoundAndNoPower]
+  routes: [...staticRoutes, ...notFoundRoutes]
 });
 
 /**

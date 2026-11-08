@@ -1,6 +1,6 @@
 <template>
   <a-menu
-    :breakpoint="layoutType != 'layoutHead' ? 'xl' : undefined"
+    breakpoint="xl"
     :mode="'vertical'"
     :theme="asideDark ? 'dark' : 'light'"
     :collapsed="collapsed"
@@ -26,7 +26,7 @@ import { resolveOpenKeys, resolveSelectedKeys } from "@/layout/components/Menu/m
 const router = useRouter();
 const route = useRoute();
 const themeStore = useThemeConfig();
-const { collapsed, isAccordion, layoutType, asideDark } = storeToRefs(themeStore);
+const { collapsed, isAccordion, asideDark } = storeToRefs(themeStore);
 
 // 计算菜单选中的keys
 const selectedKeys = computed(() => resolveSelectedKeys(route));

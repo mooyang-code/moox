@@ -9,7 +9,7 @@ import {
   lastSubmission,
   memberCounts,
   memberPeriodState,
-  setActionKind
+  taskActionKind
 } from "./compute-tasks-model";
 
 const set = (patch: Partial<FactorTask> = {}): FactorTask => ({
@@ -72,9 +72,9 @@ describe("compute task list model", () => {
   });
 
   it("row status action follows the set status", () => {
-    expect(setActionKind(set({ status: "enabled" }))).toBe("disable");
-    expect(setActionKind(set({ status: "disabled" }))).toBe("enable");
-    expect(setActionKind(set({ status: "pending" }))).toBe("retry");
+    expect(taskActionKind(set({ status: "enabled" }))).toBe("disable");
+    expect(taskActionKind(set({ status: "disabled" }))).toBe("enable");
+    expect(taskActionKind(set({ status: "pending" }))).toBe("retry");
   });
 
   it("delete disabled while members exist and explains why", () => {

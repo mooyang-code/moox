@@ -145,12 +145,6 @@ export const staticRoutes = [
         meta: { title: "strategy-detail", hide: true, activeMenu: "strategy-tasks" }
       },
       {
-        path: "/data/import",
-        name: "data-import",
-        component: () => import("@/views/data/import/index.vue"),
-        meta: { title: "data-import" }
-      },
-      {
         path: "/ops/activity",
         name: "ops-activity",
         component: () => import("@/views/ops/activity/index.vue"),
@@ -202,19 +196,8 @@ export const staticRoutes = [
   }
 ];
 
-export const notFoundAndNoPower = [
-  {
-    path: "/401",
-    name: "no-access",
-    component: () => import("@/views/error/401.vue"),
-    meta: { title: "no-access", hide: true }
-  },
-  {
-    path: "/500",
-    name: "no-network",
-    component: () => import("@/views/error/500.vue"),
-    meta: { title: "no-network", hide: true }
-  },
+// 兜底路由：没有匹配的路径都落到 404 页
+export const notFoundRoutes = [
   {
     path: "/:path(.*)*",
     name: "not-found",

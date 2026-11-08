@@ -64,7 +64,6 @@ export const useStrategyStore = defineStore("strategy", () => {
   const resultsError = ref("");
   const loadedResultPage = ref(1);
   const loadedResultAllHistory = ref(false);
-  const operationLoading = ref(false);
   let detailRequest = 0;
   let resultRequest = 0;
   let strategiesRequest = 0;
@@ -269,15 +268,10 @@ export const useStrategyStore = defineStore("strategy", () => {
   }
 
   async function removeStrategy(strategyId: string) {
-    operationLoading.value = true;
-    try {
-      await deleteStrategy(strategyId);
-      strategies.value = strategies.value.filter(item => item.strategy_id !== strategyId);
-      strategyCatalog.value = strategyCatalog.value.filter(item => item.strategy_id !== strategyId);
-      totalStrategies.value = Math.max(0, totalStrategies.value - 1);
-    } finally {
-      operationLoading.value = false;
-    }
+    await deleteStrategy(strategyId);
+    strategies.value = strategies.value.filter(item => item.strategy_id !== strategyId);
+    strategyCatalog.value = strategyCatalog.value.filter(item => item.strategy_id !== strategyId);
+    totalStrategies.value = Math.max(0, totalStrategies.value - 1);
   }
 
   function clearDetail() {
@@ -317,7 +311,6 @@ export const useStrategyStore = defineStore("strategy", () => {
     instancesLoading,
     instancesError,
     detailLoading,
-    operationLoading,
     error,
     detailError,
     resultsLoading,

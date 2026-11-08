@@ -2,8 +2,6 @@ export default {
   system: {
     ["login"]: "登录",
     ["not-found"]: "未找到页面",
-    ["zh-CN"]: "中文",
-    ["en-US"]: "English",
     ["refresh"]: "刷新",
     ["close-current"]: "关闭当前",
     ["close-left-side"]: "关闭左侧",
@@ -37,7 +35,6 @@ export default {
     ["strategy-definition-new"]: "新建策略",
     ["strategy-definition-edit"]: "编辑策略",
     ["strategy-detail"]: "实例详情",
-    ["data-import"]: "数据导入",
     ["compute-collector"]: "数据采集",
     ["collector-tasks"]: "采集任务",
     ["data-archive"]: "数据归档",

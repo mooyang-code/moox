@@ -2,15 +2,18 @@ import type {
   Dataset,
   DatasetColumn,
   Field,
+  FieldValue,
   FieldValueType,
   FilterCond,
   FilterSpec,
+  RecordRow,
   SortSpec,
+  TimeSeriesRow,
   TypedValue,
   View,
   ViewColumn
 } from "@/api/storage/types";
-import { toInstantMs, wallClockToMs } from "@/utils/time-zone";
+import { formatInstant, toInstantMs, wallClockToMs } from "@/utils/time-zone";
 
 export type ViewBrowseMode = "none" | "time_series" | "record" | "missing";
 export type ViewSortDirection = "" | "asc" | "desc";
@@ -441,4 +444,110 @@ function klineFieldValue(values: Record<string, string>, fieldName: "open" | "hi
     if (entry) return entry[1];
   }
   return undefined;
+}
+
+// ---- 表格行转换：把时序行、记录行转成表格行，并估算列宽 ----
+
+export interface BrowseTableRow {
+  id: string;
+  key: string;
+  version: string;
+  seriesTag?: string;
+  values: Record<string, string>;
+}
+
+const minAdaptiveColumnWidth = 112;
+const maxAdaptiveColumnWidth = 320;
+
+export function adaptiveColumnWidth(columnName: string, label: string, rows: Array<Pick<BrowseTableRow, "values">>) {
+  const headerWidth = visualTextWidth(label || columnName);
+  const valueWidth = rows.reduce((maxWidth, row) => {
+    const value = row.values?.[columnName];
+    return Math.max(maxWidth, visualTextWidth(value || ""));
+  }, 0);
+  const rawWidth = Math.max(headerWidth, valueWidth) + 48;
+  return clamp(roundUp(rawWidth, 8), minAdaptiveColumnWidth, maxAdaptiveColumnWidth);
+}
+
+function containsCJK(value: string) {
+  return /[\u3400-\u9fff]/.test(value);
+}
+
+function visualTextWidth(value: string) {
+  return Array.from(value).reduce((sum, char) => sum + (containsCJK(char) ? 14 : 8), 0);
+}
+
+function roundUp(value: number, step: number) {
+  return Math.ceil(value / step) * step;
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+/** zone 给出时，TIME 类型的值按这个时区显示并带后缀；不给时原样显示。 */
+function fieldValueText(field?: FieldValue, zone?: string) {
+  if (!field?.value) return "-";
+  return typedValueText(field.value, zone);
+}
+
+export function typedValueText(value?: TypedValue, zone?: string): string {
+  if (!value) return "-";
+  if (value.string_value !== undefined) return value.string_value;
+  if (value.int_value !== undefined) return String(value.int_value);
+  if (value.double_value !== undefined) return String(value.double_value);
+  if (value.bool_value !== undefined) return value.bool_value ? "true" : "false";
+  if (value.time_value !== undefined) return zone ? formatInstant(value.time_value, zone) : value.time_value;
+  if (value.json_value !== undefined) return value.json_value;
+  if (value.bytes_value !== undefined) return value.bytes_value;
+  if (value.list_value?.values) return value.list_value.values.map(item => typedValueText(item, zone)).join(", ");
+  return "-";
+}
+
+export function rowsToColumnNames(rows: Array<TimeSeriesRow | RecordRow>, preferred: string[] = []) {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const name of preferred) {
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    out.push(name);
+  }
+  // 声明过的 View/Dataset 投影就是表结构：不再追加实时索引里残留的字段（例如已下线的因子输出）。
+  if (out.length > 0) return out;
+  for (const row of rows) {
+    for (const field of row.fields || []) {
+      if (!field.field_id || seen.has(field.field_id)) continue;
+      seen.add(field.field_id);
+      out.push(field.field_id);
+    }
+  }
+  return out;
+}
+
+/** version 保留原始的 data_time（排序、K 线要用），显示时再按时区格式化；zone 只用于 TIME 类型的字段值。 */
+export function timeSeriesRowsToTableRows(rows: TimeSeriesRow[], zone?: string): BrowseTableRow[] {
+  return rows.map(row => ({
+    id: `ts-${row.key?.subject_id || ""}-${row.key?.freq || ""}-${row.key?.series_tag || ""}-${row.key?.data_time || ""}`,
+    key: row.key?.subject_id || "-",
+    version: row.key?.data_time || "-",
+    seriesTag: row.key?.series_tag || "",
+    values: fieldsToValueMap(row.fields || [], zone)
+  }));
+}
+
+export function recordRowsToTableRows(rows: RecordRow[], zone?: string): BrowseTableRow[] {
+  return rows.map((row, index) => ({
+    id: `record-${index}-${row.key?.record_id || ""}-${row.key?.version || ""}`,
+    key: row.key?.record_id || "-",
+    version: row.key?.version || "-",
+    values: fieldsToValueMap(row.fields || [], zone)
+  }));
+}
+
+function fieldsToValueMap(fields: FieldValue[], zone?: string) {
+  const out: Record<string, string> = {};
+  for (const field of fields) {
+    out[field.field_id] = fieldValueText(field, zone);
+  }
+  return out;
 }

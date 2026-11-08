@@ -1,5 +1,5 @@
 <template>
-  <div id="system-breadcrumb" class="breadcrumb" v-if="!isMobile && isBreadcrumb">
+  <div id="system-breadcrumb" class="breadcrumb" v-if="!isMobile">
     <a-space direction="vertical">
       <a-breadcrumb>
         <a-breadcrumb-item v-for="(item, index) in breadcrumb" :key="item.path" :class="transition">
@@ -18,7 +18,7 @@ import { useRoutesConfigStore } from "@/store/modules/route-config";
 import { useDevicesSize } from "@/hooks/useDevicesSize";
 import { HOME_PATH } from "@/config/index";
 const themeStore = useThemeConfig();
-const { isBreadcrumb, transitionPage } = storeToRefs(themeStore);
+const { transitionPage } = storeToRefs(themeStore);
 const routesConfigStore = useRoutesConfigStore();
 const { routeList } = storeToRefs(routesConfigStore);
 const { isMobile } = useDevicesSize();

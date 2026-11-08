@@ -67,7 +67,7 @@ function normalizeTab(value: unknown): CollectorTaskTab {
 
 /**
  * 各页签的参数都放在同一个 query 里、键不重叠（任务：keyword、dataType、enabled、page、detail；结果：resultTask；
- * 补采：segment、dataset、job；执行器：job_id）。切页签只改 tab，其余参数原样保留，切回来时状态还在。
+ * 补采：segment、dataset、job；执行器没有地址参数）。切页签只改 tab，其余参数原样保留，切回来时状态还在。
  * 每个页签只在自己可见时写自己的键，见各页签的实现。
  */
 function onTabChange(value: string | number) {

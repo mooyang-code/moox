@@ -361,9 +361,3 @@ export interface RowKey {
   time_series?: TimeSeriesRowKey;
   record?: RecordRowKey;
 }
-
-export interface RowFieldUpsert {
-  key: RowKey;
-  fields: FieldValue[];
-  attributes?: Record<string, TypedValue>;
-}

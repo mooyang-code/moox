@@ -12,7 +12,6 @@ function assert(condition, message) {
 
 assert(source.includes("viewIds?: string[]"), "view browse must support an explicit View allowlist");
 assert(source.includes("activeViewId?: string"), "view browse must support an active View");
-assert(source.includes("hideTechnicalIdentity?: boolean"), "view browse must support hiding technical identity");
 assert(source.includes("visibleViews.length > 1"), "view tabs must only render when multiple Views are available");
 assert(source.includes("preview-pager"), "view browse must render the preview pager");
 assert(source.includes("DEFAULT_VIEW_PAGE_SIZE"), "view browse must use a bounded preview page size");
@@ -22,5 +21,8 @@ assert(source.includes("sortArrowClass('version', 'asc')"), "record version head
 assert(source.includes("sortArrowClass('version', 'desc')"), "record version header must expose descending sort");
 assert(source.includes("<KlineModal"), "view browse must retain K-line inspection");
 assert(source.includes("openDetail"), "view browse must retain row details");
+// ViewBrowse 只作为嵌入组件使用：不再有独立页头，表格行工具函数统一放在 view-browse 目录
+assert(!source.includes("props.embedded"), "view browse must not keep a standalone page branch");
+assert(!fs.existsSync(path.join(root, "src/views/data/browse")), "browse utilities must live in view-browse");
 
 console.log("view browse filtering, pagination, sorting, and K-line parity ok");

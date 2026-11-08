@@ -73,7 +73,6 @@
           </a-empty>
           <ViewBrowse
             v-else-if="activeViewReadable && activeViewIds.length > 0"
-            embedded
             :zone="displayZone"
             :auto-refresh-interval-ms="60000"
             :view-ids="activeViewIds"

@@ -90,7 +90,7 @@ import { useRouter } from "vue-router";
 import { listRecalcJobs } from "@/api/factor";
 import type { FactorTask, FactorTaskInfo, RecalcJob } from "@/api/factor/types";
 import { RequestGate } from "@/utils/request-gate";
-import InfoTip from "@/views/factor/shared/info-tip.vue";
+import InfoTip from "@/components/info-tip/index.vue";
 import { useFactorScope } from "@/views/factor/shared/use-factor-scope";
 import { progressPercent } from "@/views/factor/recalc/recalc-model";
 import { pendingItems, recalcQueryTasks, splitRecalcJobs, statsStrip, taskCards, type RouteTarget } from "./overview-model";

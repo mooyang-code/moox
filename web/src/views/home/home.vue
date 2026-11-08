@@ -264,7 +264,7 @@
   </div>
 </template>
 
-<script setup lang="ts" name="Home">
+<script setup lang="ts">
 import { computed, reactive, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { listActivityLogs, type ActivityLogItem } from "@/api/admin/activity";
