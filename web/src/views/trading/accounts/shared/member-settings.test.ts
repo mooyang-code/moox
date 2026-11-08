@@ -145,9 +145,19 @@ describe("测试网、生产环境下的设置要先确认", () => {
     vm.save();
     await flushPromises();
     await typeName("生产主账户");
-    await wrapper.setProps({ account: { ...prodAccount, last_sync_at: "later" } as TradingAccount });
+    // 轮询读到的新对象里密钥和名称都变了：确认框和要发的请求仍按打开时的内容
+    await wrapper.setProps({
+      account: {
+        ...prodAccount,
+        name: "服务端改名",
+        live: { environment: 2, credential_secret_id: "s3" },
+        last_sync_at: "later"
+      } as TradingAccount
+    });
     await flushPromises();
     expect(document.querySelector<HTMLInputElement>(".tx-confirm input")?.value).toBe("生产主账户");
+    expect(document.body.textContent).toContain("输入执行账户名称「生产主账户」确认");
+    expect(confirmButton("更换")?.disabled).toBe(false);
     confirmButton("更换")?.click();
     await flushPromises();
     expect(api.updateTradingAccount).toHaveBeenCalledWith(
