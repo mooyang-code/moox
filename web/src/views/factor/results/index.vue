@@ -37,6 +37,7 @@
             v-if="resultView"
             :key="`${resultView.space_id}/${resultView.view_id}`"
             :embedded="true"
+            :zone="displayZone"
             :view-ids="[resultView.view_id]"
             :active-view-id="resultView.view_id"
             :refresh-key="refreshKey"

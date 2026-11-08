@@ -69,8 +69,8 @@ export function quickRange(freq: string, kind: "periods" | "day" | "week", now =
 
 export interface EstimateInput {
   freq: string;
-  start?: number;
-  end?: number;
+  start?: number | null;
+  end?: number | null;
   factorCount: number;
   subjectMode: RecalcSubjectMode;
   subjectCount: number;
@@ -79,8 +79,7 @@ export interface EstimateInput {
 /** 提交前的汇总：周期数 × 因子数 × 对象范围（按频率与时间范围前端估算）。 */
 export function estimateRecalc({ freq, start, end, factorCount, subjectMode, subjectCount }: EstimateInput) {
   const interval = intervalMs(freq);
-  const valid = interval > 0 && start !== undefined && end !== undefined && end > start;
-  const periods = valid ? Math.floor((end - start) / interval) : 0;
+  const periods = interval > 0 && start != null && end != null && end > start ? Math.floor((end - start) / interval) : 0;
   const scope = subjectMode === "include" ? `${subjectCount} 个对象` : "全部对象";
   return { periods, factors: factorCount, text: `将处理 ${periods} 个周期 × ${factorCount} 个因子 × ${scope}` };
 }

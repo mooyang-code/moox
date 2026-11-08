@@ -10,6 +10,7 @@ import type {
   View,
   ViewColumn
 } from "@/api/storage/types";
+import { toInstantMs, wallClockToMs } from "@/utils/time-zone";
 
 export type ViewBrowseMode = "none" | "time_series" | "record" | "missing";
 export type ViewSortDirection = "" | "asc" | "desc";
@@ -194,14 +195,15 @@ const compareOps: Partial<Record<ViewFilterOperator, FilterCond["op"]>> = {
   lte: "FILTER_OP_LTE"
 };
 
-export function buildViewFilterExprs(filters: ViewFilterState[]): FilterSpec | undefined {
+/** zone 是 TIME 类型筛选值的输入时区：墙钟按它解析成 UTC 时刻再提交。 */
+export function buildViewFilterExprs(filters: ViewFilterState[], zone = "UTC"): FilterSpec | undefined {
   const out: FilterCond[] = [];
   for (const filter of filters) {
     const fieldName = filter.fieldName.trim();
     if (!fieldName) continue;
     const valueType = filter.valueType || "FIELD_VALUE_TYPE_STRING";
     const push = (op: FilterCond["op"], raw: string) => {
-      const typed = typedFilterValue(raw, valueType);
+      const typed = typedFilterValue(raw, valueType, zone);
       if (typed) out.push({ column: fieldName, op, values: [typed] });
     };
 
@@ -352,7 +354,7 @@ function isTimeSeriesDataKind(value: unknown) {
 }
 
 /** 按列类型转换检索值；数值列的值不是完整的有限数字时返回 undefined，条件整条丢弃。 */
-function typedFilterValue(value: string, valueType: FieldValueType): TypedValue | undefined {
+function typedFilterValue(value: string, valueType: FieldValueType, zone: string): TypedValue | undefined {
   if (isValueType(valueType, "FIELD_VALUE_TYPE_INT", 2)) {
     const parsed = Number(value);
     return Number.isInteger(parsed) ? { int_value: parsed } : undefined;
@@ -365,7 +367,9 @@ function typedFilterValue(value: string, valueType: FieldValueType): TypedValue 
     return { bool_value: value === "true" || value === "1" || value === "是" };
   }
   if (isValueType(valueType, "FIELD_VALUE_TYPE_TIME", 5)) {
-    return { time_value: value };
+    // 墙钟（YYYY-MM-DD[ HH:mm[:ss]]）按输入时区解析；带 Z 或数字偏移的 RFC3339 原样换算；都不是时不加这个条件
+    const ms = wallClockToMs(value, zone) ?? toInstantMs(value);
+    return ms === null ? undefined : { time_value: new Date(ms).toISOString().replace(/\.000Z$/, "Z") };
   }
   return { string_value: value };
 }

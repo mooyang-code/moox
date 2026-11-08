@@ -3,7 +3,7 @@
     <a-space v-if="showFilters" wrap class="activity-log-filters">
       <a-input v-model="filters.category" placeholder="类别，如 collector.subject_change" allow-clear style="width: 260px" />
       <a-input v-model="filters.source" placeholder="来源模块" allow-clear style="width: 150px" />
-      <a-range-picker v-model="filters.range" show-time style="width: 360px" />
+      <ZonedRangePicker v-model="filters.range" :zone="zone" style="width: 400px" />
       <a-button type="primary" @click="search">
         <template #icon><icon-search /></template>
         查询
@@ -57,7 +57,8 @@
 import { computed, onMounted, ref, watch } from "vue";
 import { listActivityLogs, type ActivityLogItem } from "@/api/admin/activity";
 import { createLatestRequestGuard } from "@/utils/latest-request";
-import { activityDetailText, activityLevelColor, activityTimeText, rangeToISO } from "./activity-log";
+import { activityDetailText, activityLevelColor, activityTimeText } from "./activity-log";
+import ZonedRangePicker from "@/components/zoned-date-picker/zoned-range-picker.vue";
 
 const props = withDefaults(
   defineProps<{
@@ -81,7 +82,8 @@ const loadError = ref("");
 const items = ref<ActivityLogItem[]>([]);
 const page = ref(1);
 const total = ref(0);
-const filters = ref({ category: props.category, source: "", range: [] as string[] });
+// range 是 [起, 止) 毫秒时刻，按调用方给的时区选择
+const filters = ref({ category: props.category, source: "", range: null as [number, number] | null });
 const detailVisible = ref(false);
 const detailText = ref("");
 
@@ -99,8 +101,8 @@ async function load() {
       global: props.global || undefined,
       category: filters.value.category.trim() || undefined,
       source: filters.value.source.trim() || undefined,
-      since: range?.[0] ? rangeToISO(range[0]) : undefined,
-      until: range?.[1] ? rangeToISO(range[1]) : undefined,
+      since: range ? new Date(range[0]).toISOString() : undefined,
+      until: range ? new Date(range[1]).toISOString() : undefined,
       page: { page: page.value, size: props.pageSize }
     });
     if (!request.isLatest()) return;

@@ -1,4 +1,5 @@
 import type { FieldValue, RecordRow, TimeSeriesRow, TypedValue } from "@/api/storage/types";
+import { formatInstant } from "@/utils/time-zone";
 
 export interface BrowseTableRow {
   id: string;
@@ -37,21 +38,22 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
 }
 
-export function fieldValueText(field?: FieldValue) {
+/** zone 给出时，TIME 类型的值按这个时区显示并带后缀；不给时原样显示。 */
+export function fieldValueText(field?: FieldValue, zone?: string) {
   if (!field?.value) return "-";
-  return typedValueText(field.value);
+  return typedValueText(field.value, zone);
 }
 
-export function typedValueText(value?: TypedValue): string {
+export function typedValueText(value?: TypedValue, zone?: string): string {
   if (!value) return "-";
   if (value.string_value !== undefined) return value.string_value;
   if (value.int_value !== undefined) return String(value.int_value);
   if (value.double_value !== undefined) return String(value.double_value);
   if (value.bool_value !== undefined) return value.bool_value ? "true" : "false";
-  if (value.time_value !== undefined) return value.time_value;
+  if (value.time_value !== undefined) return zone ? formatInstant(value.time_value, zone) : value.time_value;
   if (value.json_value !== undefined) return value.json_value;
   if (value.bytes_value !== undefined) return value.bytes_value;
-  if (value.list_value?.values) return value.list_value.values.map(item => typedValueText(item)).join(", ");
+  if (value.list_value?.values) return value.list_value.values.map(item => typedValueText(item, zone)).join(", ");
   return "-";
 }
 
@@ -76,29 +78,30 @@ export function rowsToColumnNames(rows: Array<TimeSeriesRow | RecordRow>, prefer
   return out;
 }
 
-export function timeSeriesRowsToTableRows(rows: TimeSeriesRow[]): BrowseTableRow[] {
+/** version 保留原始的 data_time（排序、K 线要用），显示时再按时区格式化；zone 只用于 TIME 类型的字段值。 */
+export function timeSeriesRowsToTableRows(rows: TimeSeriesRow[], zone?: string): BrowseTableRow[] {
   return rows.map(row => ({
     id: `ts-${row.key?.subject_id || ""}-${row.key?.freq || ""}-${row.key?.series_tag || ""}-${row.key?.data_time || ""}`,
     key: row.key?.subject_id || "-",
     version: row.key?.data_time || "-",
     seriesTag: row.key?.series_tag || "",
-    values: fieldsToValueMap(row.fields || [])
+    values: fieldsToValueMap(row.fields || [], zone)
   }));
 }
 
-export function recordRowsToTableRows(rows: RecordRow[]): BrowseTableRow[] {
+export function recordRowsToTableRows(rows: RecordRow[], zone?: string): BrowseTableRow[] {
   return rows.map((row, index) => ({
     id: `record-${index}-${row.key?.record_id || ""}-${row.key?.version || ""}`,
     key: row.key?.record_id || "-",
     version: row.key?.version || "-",
-    values: fieldsToValueMap(row.fields || [])
+    values: fieldsToValueMap(row.fields || [], zone)
   }));
 }
 
-function fieldsToValueMap(fields: FieldValue[]) {
+function fieldsToValueMap(fields: FieldValue[], zone?: string) {
   const out: Record<string, string> = {};
   for (const field of fields) {
-    out[field.field_id] = fieldValueText(field);
+    out[field.field_id] = fieldValueText(field, zone);
   }
   return out;
 }

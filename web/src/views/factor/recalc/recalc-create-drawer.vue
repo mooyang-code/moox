@@ -22,10 +22,10 @@
         <SubjectScopeFields v-model:mode="form.subjectMode" v-model:subjects="form.subjects" />
 
         <a-form-item label="开始时间" required>
-          <a-date-picker v-model="form.start_time" show-time value-format="timestamp" format="YYYY-MM-DD HH:mm:ss" />
+          <ZonedDatePicker v-model="form.start_time" :zone="displayZone" style="width: 100%" />
         </a-form-item>
         <a-form-item label="结束时间（不含）" required>
-          <a-date-picker v-model="form.end_time" show-time value-format="timestamp" format="YYYY-MM-DD HH:mm:ss" />
+          <ZonedDatePicker v-model="form.end_time" :zone="displayZone" style="width: 100%" />
         </a-form-item>
         <div class="quick-ranges" role="group" aria-label="快捷时间范围">
           <a-tag v-for="item in quickItems" :key="item.kind" class="quick-chip" @click="applyQuick(item.kind)">{{
@@ -51,6 +51,8 @@ import { useSpaceStore } from "@/store/modules/space";
 import type { FactorTaskInfo, RecalcJob, RecalcSubjectMode } from "@/api/factor/types";
 import SubjectScopeFields from "@/views/factor/recalc/subject-scope-fields.vue";
 import { defaultRange, enabledMemberIds, estimateRecalc, quickRange } from "./recalc-model";
+import ZonedDatePicker from "@/components/zoned-date-picker/zoned-date-picker.vue";
+import { useDisplayZone } from "@/hooks/useDisplayZone";
 
 defineOptions({ name: "FactorRecalcCreateDrawer" });
 
@@ -65,6 +67,7 @@ watch(visible, () => {
   submitting.value = false;
 });
 
+const displayZone = useDisplayZone();
 const quickItems = [
   { kind: "periods", label: "最近 100 个周期" },
   { kind: "day", label: "最近 1 天" },
@@ -76,8 +79,9 @@ const form = reactive({
   members: [] as string[],
   subjectMode: "all" as RecalcSubjectMode,
   subjects: [] as string[],
-  start_time: undefined as number | undefined,
-  end_time: undefined as number | undefined,
+  // 毫秒时刻：按当前空间登记的时区选择，快捷范围仍按后端的周期边界对齐
+  start_time: null as number | null,
+  end_time: null as number | null,
   request_id: ""
 });
 
@@ -102,8 +106,8 @@ const blocker = computed(() => {
 });
 
 function setRange(range: { start: number; end: number } | null) {
-  form.start_time = range?.start;
-  form.end_time = range?.end;
+  form.start_time = range?.start ?? null;
+  form.end_time = range?.end ?? null;
 }
 
 function applyQuick(kind: "periods" | "day" | "week") {
@@ -125,7 +129,7 @@ async function submit() {
     Message.warning("请至少选择一个因子");
     return false;
   }
-  if (form.start_time === undefined || form.end_time === undefined) {
+  if (form.start_time === null || form.end_time === null) {
     Message.warning("请选择补算时间范围");
     return false;
   }

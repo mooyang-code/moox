@@ -69,15 +69,25 @@
                     :class="{ 'empty-filter-control': filter.operator === 'empty' || filter.operator === 'not_empty' }"
                   >
                     <template v-if="filter.operator === 'range'">
-                      <a-input v-model="filter.startValue" allow-clear placeholder="开始值" @press-enter="applyQueryControls" />
+                      <a-input
+                        v-model="filter.startValue"
+                        allow-clear
+                        :placeholder="filterPlaceholder(filter.fieldName, '开始值')"
+                        @press-enter="applyQueryControls"
+                      />
                       <span class="range-separator">-</span>
-                      <a-input v-model="filter.endValue" allow-clear placeholder="结束值" @press-enter="applyQueryControls" />
+                      <a-input
+                        v-model="filter.endValue"
+                        allow-clear
+                        :placeholder="filterPlaceholder(filter.fieldName, '结束值')"
+                        @press-enter="applyQueryControls"
+                      />
                     </template>
                     <a-input
                       v-else-if="filter.operator !== 'empty' && filter.operator !== 'not_empty'"
                       v-model="filter.value"
                       allow-clear
-                      placeholder="检索值"
+                      :placeholder="filterPlaceholder(filter.fieldName, '检索值')"
                       @press-enter="applyQueryControls"
                     />
                     <span v-else class="empty-filter-placeholder">{{ filter.operator === "empty" ? "为空" : "非空" }}</span>
@@ -174,6 +184,7 @@
                     >
                   </a-table-column>
                   <a-table-column data-index="version" :width="230">
+                    <template #cell="{ record }">{{ formatInstant(record.version, zone) }}</template>
                     <template #title
                       ><span class="sortable-title"
                         >时间<span class="sort-arrows"
@@ -272,6 +283,7 @@
                     >
                   </a-table-column>
                   <a-table-column data-index="version" :width="230">
+                    <template #cell="{ record }">{{ formatInstant(record.version, zone) }}</template>
                     <template #title
                       ><span class="sortable-title"
                         >版本<span class="sort-arrows"
@@ -346,7 +358,9 @@
       <div v-if="detailRow" class="detail-body">
         <a-descriptions :column="2" bordered>
           <a-descriptions-item :label="mode === 'time_series' ? '数据ID' : '记录ID'">{{ detailRow.key }}</a-descriptions-item>
-          <a-descriptions-item :label="mode === 'time_series' ? '时间' : '版本'">{{ detailRow.version }}</a-descriptions-item>
+          <a-descriptions-item :label="mode === 'time_series' ? '时间' : '版本'">{{
+            mode === "time_series" ? formatInstant(detailRow.version, zone) : detailRow.version
+          }}</a-descriptions-item>
           <a-descriptions-item v-if="mode === 'time_series' && detailRow.seriesTag" label="市场">{{
             seriesTagMarketText(detailRow.seriesTag)
           }}</a-descriptions-item>
@@ -370,6 +384,7 @@
       :freq="klineFreq"
       :records="klineRecords"
       :loading="klineLoading"
+      :zone="zone"
       @reload="reloadKlineRecords"
     />
   </div>
@@ -434,6 +449,7 @@ import KlineModal from "./kline-modal.vue";
 import QueryControls from "./components/query-controls.vue";
 import ResultTable from "./components/result-table.vue";
 import { loadTargetedViewCatalog } from "./composables/view-browse-catalog";
+import { formatInstant, zoneSuffix } from "@/utils/time-zone";
 
 defineOptions({ name: "DataViewBrowse" });
 
@@ -466,9 +482,12 @@ const props = withDefaults(
     extraFilters?: ViewFilterState[];
     /** row-extra 插槽所在列的标题。 */
     rowExtraTitle?: string;
+    /** 显示和输入的时区（由调用方按空间给）：时间列、TIME 字段、TIME 筛选、K 线图都按它。 */
+    zone?: string;
   }>(),
   {
     embedded: false,
+    zone: "UTC",
     pageTitle: "视图数据浏览",
     emptyDescription: "暂无查询视图",
     emptyRowsDescription: "当前视图查询成功，但结果为空。",
@@ -915,7 +934,7 @@ async function loadTimeSeriesViewRows(retainRowsOnError = false) {
       return;
     }
     const rows = rsp.rows || [];
-    tableRows.value = timeSeriesRowsToTableRows(rows).map((row, index) => ({
+    tableRows.value = timeSeriesRowsToTableRows(rows, props.zone).map((row, index) => ({
       ...row,
       freq: rows[index]?.key?.freq || "-",
       seriesTag: rows[index]?.key?.series_tag || "",
@@ -925,7 +944,7 @@ async function loadTimeSeriesViewRows(retainRowsOnError = false) {
     previewHasMore.value = !!rsp.page_result?.has_more;
     hasQueried.value = true;
     rowsStale.value = false;
-    lastRowsReadAt.value = new Date().toLocaleTimeString();
+    lastRowsReadAt.value = formatInstant(Date.now(), props.zone, "clock");
   } catch (error) {
     if (
       requestSequence !== viewRowsRequestSequence ||
@@ -972,12 +991,12 @@ async function loadRecordViewRows(retainRowsOnError = false) {
       return;
     }
     const rows = rsp.rows || [];
-    tableRows.value = recordRowsToTableRows(rows);
+    tableRows.value = recordRowsToTableRows(rows, props.zone);
     tableColumnNames.value = rowsToColumnNames(rows, preferredColumnNames.value);
     previewHasMore.value = !!rsp.page_result?.has_more;
     hasQueried.value = true;
     rowsStale.value = false;
-    lastRowsReadAt.value = new Date().toLocaleTimeString();
+    lastRowsReadAt.value = formatInstant(Date.now(), props.zone, "clock");
   } catch (error) {
     if (
       requestSequence !== viewRowsRequestSequence ||
@@ -1092,12 +1111,20 @@ function filterFieldLabel(fieldName: string) {
   return filterFieldOptions.value.find(item => item.value === fieldName)?.label || columnTitle(fieldName);
 }
 
+/** TIME 字段的输入框写清格式和时区，其余用原来的占位。 */
+function filterPlaceholder(fieldName: string, fallback: string) {
+  const type = filterValueType(fieldName);
+  return type === "FIELD_VALUE_TYPE_TIME" || type === 5
+    ? `YYYY-MM-DD HH:mm:ss（${zoneSuffix(Date.now(), props.zone)}）`
+    : fallback;
+}
+
 function activeFilterExprs(includeExtra = true) {
   const own: ViewFilterState[] = filters.value.map(filter => ({
     ...filter,
     valueType: filterValueType(filter.fieldName)
   }));
-  return buildViewFilterExprs(includeExtra ? own.concat(props.extraFilters ?? []) : own);
+  return buildViewFilterExprs(includeExtra ? own.concat(props.extraFilters ?? []) : own, props.zone);
 }
 
 const extraFiltersKey = computed(() => JSON.stringify(props.extraFilters ?? []));
