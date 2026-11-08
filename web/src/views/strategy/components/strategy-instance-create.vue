@@ -193,8 +193,8 @@ import { createInstance, getInstance, getStrategy, validateStrategy } from "@/ap
 import type { Strategy, ValidateStrategyResult } from "@/api/strategy-types";
 import { listFactorTasks } from "@/api/factor";
 import { listAllDatasets } from "@/api/storage/metadata";
-import { listLogicalAccounts } from "@/api/trade";
-import type { LogicalAccount } from "@/api/trade/types";
+import { listLogicalAccounts, listTradingAccounts } from "@/api/trade";
+import type { LogicalAccount, TradingAccount } from "@/api/trade/types";
 import type { FactorTaskInfo } from "@/api/factor/types";
 import { availableTasks, isUnifiedTask, varMemberBlockReason, type TaskOption } from "@/views/strategy/components/task-options";
 import { isUnifiedMarketType } from "@/views/data/shared/series-market";
@@ -241,6 +241,8 @@ const tasks = ref<TaskOption[]>([]);
 // 统一数据集（market_type 为 multi）的数据集 ID：因子任务的源数据集在其中的任务在统一数据集上。
 const unifiedDatasetIds = ref<ReadonlySet<string>>(new Set());
 const accounts = ref<LogicalAccount[]>([]);
+// 成员执行账户：用来在账户选项前写测试网还是生产；读不到时为 null，选项只写“实盘”。
+const tradingAccounts = ref<ReadonlyMap<string, TradingAccount> | null>(null);
 const check_result = ref<ValidateStrategyResult | null>(null);
 let tasksRequest = 0;
 let datasetsRequest = 0;
@@ -258,7 +260,7 @@ const market = computed(() =>
     ? resolvedMarkets(check_result.value?.resolved_json)
     : marketsToResolved(poolRequirement.value.markets)
 );
-const accountOptions = computed(() => logicalAccountOptions(accounts.value, market.value));
+const accountOptions = computed(() => logicalAccountOptions(accounts.value, market.value, tradingAccounts.value));
 
 // 策略的市场模式决定要绑定哪些市场的任务；没写 market 时只绑一个，市场由用户选。
 const singleMarkets = ["spot", "swap", "equity"];
@@ -422,9 +424,15 @@ async function loadAccountsList() {
   accountsLoading.value = true;
   accountsError.value = "";
   try {
-    const nextAccounts = await loadAllAccounts();
+    const [nextAccounts, members] = await Promise.all([
+      loadAllAccounts(),
+      listTradingAccounts({ page: { page: 1, size: 200 } })
+        .then(rsp => new Map((rsp.accounts || []).map(item => [item.trading_account_id, item])))
+        .catch(() => null)
+    ]);
     if (requestId !== accountsRequest || props.spaceId !== spaceId) return;
     accounts.value = nextAccounts.filter(account => account.space_id === spaceId);
+    tradingAccounts.value = members;
   } catch (err) {
     if (requestId === accountsRequest) accountsError.value = err instanceof Error ? err.message : "账户读取失败";
   } finally {
@@ -504,6 +512,7 @@ function resetForm() {
   datasetsRequest += 1;
   datasetsError.value = "";
   accounts.value = [];
+  tradingAccounts.value = null;
   tasksRequest += 1;
   accountsRequest += 1;
   tasksLoading.value = false;

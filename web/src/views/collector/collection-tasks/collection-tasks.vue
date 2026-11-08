@@ -1396,11 +1396,6 @@ function buildCollectionTaskParamsForUpdate(input: CollectionTaskInput) {
 }
 
 async function loadDataNodes() {
-  // DataNode 列表是全局运维接口，只有全局管理员可读；普通成员使用系统默认节点。
-  if (!account.value.user?.admin) {
-    dataNodes.value = [];
-    return;
-  }
   loadingDataNodes.value = true;
   try {
     const nodes: DataNode[] = [];

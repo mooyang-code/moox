@@ -74,6 +74,8 @@
           :instance-id="instanceId"
           :enabled="store.instance.enabled"
           :uncertain="controlUncertain"
+          :logical-account-id="store.instance.logical_account_id"
+          :factor-tasks="store.instance.factor_tasks"
           @started="handleControlStarted"
           @changed="reconcileControl"
           @failed="handleControlFailed"

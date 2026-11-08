@@ -7,8 +7,4 @@ declare module "*.vue" {
 declare module "vue-i18n";
 declare module "@arco-design/color";
 declare module "nprogress";
-declare module "@/store/modules/route-config";
-declare module "@arco-design/web-vue";
-declare module "vue-router";
-declare module "pinia";
 declare module "postcss-preset-env";

@@ -12,7 +12,8 @@ const mocks = vi.hoisted(() => ({
   getEventExecution: vi.fn(),
   deleteEventRule: vi.fn(),
   listEventExecutions: vi.fn(),
-  cancelEventExecution: vi.fn()
+  cancelEventExecution: vi.fn(),
+  retryEventExecution: vi.fn()
 }));
 vi.mock("@/api/callback-dispatcher", async () => ({
   ...(await vi.importActual<typeof import("@/api/callback-dispatcher")>("@/api/callback-dispatcher")),
@@ -209,6 +210,43 @@ describe("执行记录", () => {
     await (wrapper.vm as unknown as { act(kind: string, item: unknown): Promise<void> }).act("cancel", execution);
     await flushPromises();
     expect(mocks.listEventExecutions.mock.calls.length).toBe(calls + 1);
+  });
+
+  it("系统动作的重新执行先弹窗说明后果，确认后才执行；通知类直接执行", async () => {
+    const failed = (patch: Record<string, unknown>) => ({
+      execution_id: "x2",
+      rule_name: "规则",
+      event_name: "event.collector.instrument.delist_scheduled",
+      subject_id: "binance:SPOT:FOOUSDT",
+      status: "EXECUTION_STATUS_FAILED",
+      action_type: "ACTION_TYPE_SYSTEM",
+      cleanup_pending: false,
+      ...patch
+    });
+    mocks.listEventExecutions.mockResolvedValue({ executions: [], page_result: { total: 0 } });
+    mocks.listAllEventRules.mockResolvedValue([]);
+    mocks.listSubscribableEvents.mockResolvedValue({ events, availableSystemActions: [] });
+    mocks.retryEventExecution.mockResolvedValue({});
+    wrapper = mount(EventExecutions, { global: { plugins: [ArcoVue] }, attachTo: document.body });
+    await flushPromises();
+    const vm = wrapper.vm as unknown as { requestAct(kind: string, item: unknown): void };
+
+    vm.requestAct("retry", failed({}));
+    await flushPromises();
+    expect(mocks.retryEventExecution).not.toHaveBeenCalled();
+    expect(document.body.textContent).toContain("会再次对持有 binance:SPOT:FOOUSDT 的组合禁止买入");
+    expect(document.body.textContent).toContain("不会重做平仓");
+    const confirm = [...document.querySelectorAll<HTMLButtonElement>(".arco-modal button")].find(
+      item => item.textContent?.trim() === "重新执行"
+    );
+    confirm?.click();
+    await flushPromises();
+    expect(mocks.retryEventExecution).toHaveBeenCalledWith("x2");
+
+    mocks.retryEventExecution.mockClear();
+    vm.requestAct("retry", failed({ execution_id: "x3", action_type: "ACTION_TYPE_NOTIFY_URL" }));
+    await flushPromises();
+    expect(mocks.retryEventExecution).toHaveBeenCalledWith("x3");
   });
 });
 

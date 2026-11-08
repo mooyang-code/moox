@@ -9,7 +9,8 @@ const api = vi.hoisted(() => ({
   store: null as any,
   space: null as any,
   warning: vi.fn(),
-  confirmToggle: vi.fn()
+  confirmToggle: vi.fn(),
+  enableOpen: vi.fn()
 }));
 vi.mock("@arco-design/web-vue", () => ({ Message: { success: vi.fn(), error: vi.fn() }, Modal: { warning: api.warning } }));
 vi.mock("@/views/strategy/components/instance-toggle", () => ({ confirmInstanceToggle: api.confirmToggle }));
@@ -50,6 +51,7 @@ const stubs = {
         ]);
     }
   }),
+  InstanceEnableDialog: { template: "<div />", methods: { open: api.enableOpen } },
   InstanceQuickDrawer: defineComponent({
     props: ["instanceId"],
     setup(props) {
@@ -187,6 +189,22 @@ describe("strategy running page", () => {
     expect(api.loadInstances).toHaveBeenCalledTimes(1);
     expect(api.loadInstances).toHaveBeenLastCalledWith({ strategy_id: undefined, enabled: undefined, page: 2, page_size: 20 });
     expect(vm.togglingId).toBe("");
+  });
+
+  it("enables a trade-mode instance through the dialog that names the account and environment", async () => {
+    const { wrapper } = await setup({});
+    api.confirmToggle.mockClear();
+    api.enableOpen.mockClear();
+    const vm = wrapper.vm as unknown as { toggle: (instance: unknown) => void };
+    const instance = { instance_id: "i6", enabled: false, session_id: "", logical_account_id: "la-1", factor_tasks: {} };
+    vm.toggle(instance);
+    expect(api.enableOpen).toHaveBeenCalledWith(instance, expect.any(Object));
+    expect(api.confirmToggle).not.toHaveBeenCalled();
+    // 停用、仅计算的实例仍走通用确认
+    vm.toggle({ ...instance, enabled: true });
+    vm.toggle({ ...instance, instance_id: "i7", logical_account_id: "" });
+    expect(api.confirmToggle).toHaveBeenCalledTimes(2);
+    expect(api.enableOpen).toHaveBeenCalledTimes(1);
   });
 
   it("lets only the latest of two quick space switches load the list", async () => {

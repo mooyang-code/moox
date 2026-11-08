@@ -90,15 +90,30 @@
         <a-form-item label="优先级" extra="数字越小越先使用">
           <a-input-number v-model="joinForm.priority" :min="0" />
         </a-form-item>
-        <a-form-item extra="只有出现在策略目标里的标的会被调整，其余资产不动">
+        <a-form-item :extra="ADOPT_EFFECT_TEXT">
           <a-checkbox v-model="joinForm.adopt">接管账户里已有的持仓</a-checkbox>
         </a-form-item>
       </a-form>
       <div class="footer">
         <a-button @click="mode = 'list'">返回</a-button>
-        <a-button type="primary" :loading="saving" :disabled="!joinForm.logicalId" @click="join">加入</a-button>
+        <a-button type="primary" :loading="saving" :disabled="!joinForm.logicalId" @click="requestJoin">加入</a-button>
       </div>
     </template>
+
+    <ConfirmDialog
+      v-model:visible="confirmVisible"
+      :title="pending?.title ?? ''"
+      :env="pending?.env ?? env"
+      :combo-name="pending?.name ?? ''"
+      :name-label="pending?.nameLabel"
+      :need-reason="false"
+      :name-required="pending?.nameRequired ?? true"
+      :danger="pending?.danger ?? false"
+      :confirm-text="pending?.confirmText"
+      :submit="runPending"
+    >
+      <p v-for="line in pending?.lines ?? []" :key="line" class="confirm-line">{{ line }}</p>
+    </ConfirmDialog>
   </a-modal>
 </template>
 
@@ -109,12 +124,14 @@ import { addLogicalAccountMember, exchangeLabels, updateTradingAccount } from "@
 import type { LogicalAccount, TradingAccount } from "@/api/trade";
 import { createSubmitScope } from "@/utils/submit-scope";
 import { accountMapOf } from "./account-list";
+import ConfirmDialog from "./shared/confirm-dialog.vue";
 import EnvMark from "./shared/env-mark.vue";
-import { environmentLabel, type Environment } from "./shared/environment";
+import { accountEnvironment, environmentLabel, type Environment } from "./shared/environment";
 import { fmtClock, fmtMoney } from "./shared/format";
 import { marketsText } from "./shared/markets";
 import MemberSettings from "./shared/member-settings.vue";
 import { joinableLogicals, nextPriority } from "./shared/membership";
+import { ADOPT_EFFECT_TEXT, accountStatusConfirm, memberChangeConfirm, type RiskyConfirm } from "./shared/risky-actions";
 import StatusMark from "./shared/status-mark.vue";
 
 const props = defineProps<{
@@ -134,6 +151,15 @@ const joinForm = reactive({ logicalId: "", priority: 1, adopt: false });
 const saving = ref(false);
 const error = ref("");
 const scope = createSubmitScope();
+// 测试网、生产环境下启停执行账户、接管已有持仓要先确认；模拟账户不能改启停，接管也按环境分档。
+const confirmVisible = ref(false);
+const pending = ref<(RiskyConfirm & { env: Environment; name: string; nameLabel: string; run: () => Promise<void> }) | null>(
+  null
+);
+
+async function runPending() {
+  await pending.value?.run();
+}
 
 const options = computed(() =>
   joining.value ? joinableLogicals(props.logicals, accountMapOf(props.accounts), props.env, joining.value.settlement_asset) : []
@@ -159,10 +185,50 @@ function openJoin(account: TradingAccount) {
   mode.value = "join";
 }
 
-async function setStatus(account: TradingAccount, status: "ENABLED" | "DISABLED") {
-  await updateTradingAccount({ trading_account_id: account.trading_account_id, status });
-  Message.success(status === "ENABLED" ? "已启用，等首次同步" : "已停用");
-  emit("changed");
+function setStatus(account: TradingAccount, status: "ENABLED" | "DISABLED") {
+  const accountId = account.trading_account_id;
+  pending.value = {
+    ...accountStatusConfirm({ accountName: account.name, enable: status === "ENABLED" }),
+    env: accountEnvironment(account),
+    name: account.name,
+    nameLabel: "执行账户名称",
+    run: async () => {
+      await updateTradingAccount({ trading_account_id: accountId, status }, { silent: true });
+      Message.success(status === "ENABLED" ? "已启用，等首次同步" : "已停用");
+      emit("changed");
+    }
+  };
+  confirmVisible.value = true;
+}
+
+/** 勾了接管已有持仓时先确认（模拟盘直接加入）；否则直接加入。 */
+function requestJoin() {
+  if (!joining.value || !joinForm.logicalId) return;
+  const target = options.value.find(item => item.logical_account_id === joinForm.logicalId);
+  const confirm = joinForm.adopt
+    ? memberChangeConfirm({
+        accountName: joining.value.name,
+        comboName: target?.name ?? joinForm.logicalId,
+        original: null,
+        next: { enabled: true, priority: joinForm.priority },
+        adopt: true
+      })
+    : null;
+  if (!confirm || props.env === "paper") {
+    void join();
+    return;
+  }
+  pending.value = {
+    ...confirm,
+    env: props.env,
+    name: target?.name ?? joinForm.logicalId,
+    nameLabel: "组合名称",
+    run: async () => {
+      // 确认框里只关掉确认框；加入失败的原因显示在加入表单上
+      await join();
+    }
+  };
+  confirmVisible.value = true;
 }
 
 async function join() {
@@ -212,6 +278,10 @@ defineExpose({ open });
 
 .block {
   margin-bottom: var(--moox-space-3);
+}
+
+.confirm-line {
+  margin: 0 0 var(--moox-space-2);
 }
 
 .footer {

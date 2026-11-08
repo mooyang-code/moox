@@ -21,7 +21,7 @@
       <a-form-item v-if="needReason" label="原因（必填）">
         <a-input v-model="reason" :placeholder="reasonPlaceholder" :max-length="200" allow-clear />
       </a-form-item>
-      <a-form-item v-if="tier.requiresName" :label="`输入组合名称「${comboName}」确认`">
+      <a-form-item v-if="tier.requiresName" :label="`输入${nameLabel}「${comboName}」确认`">
         <a-input v-model="typedName" autocomplete="off" />
       </a-form-item>
     </a-form>
@@ -40,8 +40,10 @@ const props = withDefaults(
     visible: boolean;
     title: string;
     env: Environment;
-    /** 生产环境要输入的组合名称 */
+    /** 生产环境要输入的名称：默认是组合名称，执行账户的操作传执行账户名称 */
     comboName: string;
+    /** 名称的说法，显示在输入框标题里 */
+    nameLabel?: string;
     confirmText?: string;
     danger?: boolean;
     needReason?: boolean;
@@ -51,7 +53,7 @@ const props = withDefaults(
     /** 提交：抛出异常表示失败，错误信息显示在对话框里；返回 false 表示失败但不显示信息 */
     submit: (reason: string) => Promise<boolean | void>;
   }>(),
-  { confirmText: "确认", danger: false, needReason: true, nameRequired: true, reasonPlaceholder: "" }
+  { nameLabel: "组合名称", confirmText: "确认", danger: false, needReason: true, nameRequired: true, reasonPlaceholder: "" }
 );
 const emit = defineEmits<{ "update:visible": [value: boolean] }>();
 

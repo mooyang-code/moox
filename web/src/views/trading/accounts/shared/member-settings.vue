@@ -62,6 +62,21 @@
         @updated="emit('changed')"
       />
     </div>
+
+    <ConfirmDialog
+      v-model:visible="confirmVisible"
+      :title="pending?.title ?? ''"
+      :env="env"
+      :combo-name="pending?.name ?? ''"
+      name-label="执行账户名称"
+      :need-reason="false"
+      :name-required="pending?.nameRequired ?? true"
+      :danger="pending?.danger ?? false"
+      :confirm-text="pending?.confirmText"
+      :submit="runPending"
+    >
+      <p v-for="line in pending?.lines ?? []" :key="line" class="confirm-line">{{ line }}</p>
+    </ConfirmDialog>
   </div>
 </template>
 
@@ -71,8 +86,17 @@ import { Message } from "@arco-design/web-vue";
 import { setLeverage, updateTradingAccount } from "@/api/trade";
 import type { TradingAccount } from "@/api/trade";
 import AccountInspectionPanel from "@/components/trade-inspection/account-inspection-panel.vue";
+import ConfirmDialog from "./confirm-dialog.vue";
+import { accountEnvironment } from "./environment";
 import { fmtMoney } from "./format";
 import { loadExchangeSecrets, type ExchangeSecretOption } from "./exchange-secrets";
+import {
+  leverageConfirm,
+  leverageError,
+  normalizeLeverageInstrument,
+  secretChangeConfirm,
+  type RiskyConfirm
+} from "./risky-actions";
 
 const props = defineProps<{ account: TradingAccount }>();
 const emit = defineEmits<{ changed: [] }>();
@@ -86,6 +110,10 @@ const saving = ref(false);
 const leverageInstrument = ref("");
 const leverageValue = ref("");
 const leverageSaving = ref(false);
+// 测试网、生产环境下换密钥、设杠杆要先确认：确认框里的内容和要执行的请求在打开时定下来，之后的 5 秒轮询不影响。
+const env = computed(() => accountEnvironment(props.account));
+const confirmVisible = ref(false);
+const pending = ref<(RiskyConfirm & { name: string; run: () => Promise<void> }) | null>(null);
 
 const dirty = computed(
   () =>
@@ -127,43 +155,72 @@ onMounted(async () => {
   }
 });
 
-async function save() {
-  saving.value = true;
-  try {
-    await updateTradingAccount({
-      trading_account_id: props.account.trading_account_id,
-      name: name.value.trim() !== props.account.name ? name.value.trim() : undefined,
-      credential_secret_id:
-        props.account.execution_mode === 2 && secretId.value !== props.account.live?.credential_secret_id
-          ? secretId.value
-          : undefined
-    });
-    Message.success("已保存");
-    emit("changed");
-  } finally {
-    saving.value = false;
-  }
+function secretName(id: string): string {
+  return secrets.value.find(item => item.secretId === id)?.name ?? id;
 }
 
-async function saveLeverage() {
-  if (!leverageInstrument.value.trim() || !leverageValue.value.trim()) {
-    Message.warning("请填写标的和倍数");
+function openConfirm(confirm: RiskyConfirm, run: () => Promise<void>) {
+  pending.value = { ...confirm, name: props.account.name, run };
+  confirmVisible.value = true;
+}
+
+async function runPending() {
+  await pending.value?.run();
+}
+
+function save() {
+  const accountId = props.account.trading_account_id;
+  const nextName = name.value.trim() !== props.account.name ? name.value.trim() : undefined;
+  const fromSecret = props.account.live?.credential_secret_id ?? "";
+  const nextSecret = props.account.execution_mode === 2 && secretId.value !== fromSecret ? secretId.value : undefined;
+  const submit = async (silent: boolean) => {
+    saving.value = true;
+    try {
+      await updateTradingAccount({ trading_account_id: accountId, name: nextName, credential_secret_id: nextSecret }, { silent });
+      Message.success("已保存");
+      emit("changed");
+    } finally {
+      saving.value = false;
+    }
+  };
+  // 只改名称不用确认；模拟账户没有密钥
+  if (nextSecret === undefined || env.value === "paper") {
+    void submit(false).catch(() => undefined);
     return;
   }
-  leverageSaving.value = true;
-  try {
-    await setLeverage({
-      trading_account_id: props.account.trading_account_id,
-      instrument_id: leverageInstrument.value.trim().toUpperCase(),
-      leverage: leverageValue.value.trim()
-    });
-    Message.success("杠杆已设置");
-    leverageInstrument.value = "";
-    leverageValue.value = "";
-    emit("changed");
-  } finally {
-    leverageSaving.value = false;
+  openConfirm(
+    secretChangeConfirm({ accountName: props.account.name, from: secretName(fromSecret), to: secretName(nextSecret) }),
+    () => submit(true)
+  );
+}
+
+function saveLeverage() {
+  const instrument = normalizeLeverageInstrument(leverageInstrument.value);
+  if (!instrument) {
+    Message.warning("请填写标的");
+    return;
   }
+  const invalid = leverageError(leverageValue.value);
+  if (invalid) {
+    Message.warning(invalid);
+    return;
+  }
+  const accountId = props.account.trading_account_id;
+  const next = leverageValue.value.trim();
+  const submit = async () => {
+    leverageSaving.value = true;
+    try {
+      await setLeverage({ trading_account_id: accountId, instrument_id: instrument, leverage: next }, { silent: true });
+      Message.success("杠杆已设置，下次开仓前生效");
+      leverageInstrument.value = "";
+      leverageValue.value = "";
+      emit("changed");
+    } finally {
+      leverageSaving.value = false;
+    }
+  };
+  // 杠杆只有实盘账户能设（模拟账户不显示这一栏），所以总是先确认
+  openConfirm(leverageConfirm({ instrument, current: props.account.leverage_settings?.[instrument], next }), submit);
 }
 </script>
 
@@ -203,5 +260,9 @@ async function saveLeverage() {
 .leverage-value {
   width: 80px;
   flex: none;
+}
+
+.confirm-line {
+  margin: 0 0 var(--moox-space-2);
 }
 </style>

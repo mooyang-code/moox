@@ -10,6 +10,7 @@ const api = vi.hoisted(() => ({
   validateStrategy: vi.fn(),
   listFactorTasks: vi.fn(),
   listLogicalAccounts: vi.fn(),
+  listTradingAccounts: vi.fn(async () => ({ accounts: [] })),
   listAllDatasets: vi.fn()
 }));
 vi.mock("@/api/strategy", () => ({
@@ -20,7 +21,7 @@ vi.mock("@/api/strategy", () => ({
 }));
 vi.mock("@/api/factor", () => ({ listFactorTasks: api.listFactorTasks }));
 vi.mock("@/api/storage/metadata", () => ({ listAllDatasets: api.listAllDatasets }));
-vi.mock("@/api/trade", () => ({ listLogicalAccounts: api.listLogicalAccounts }));
+vi.mock("@/api/trade", () => ({ listLogicalAccounts: api.listLogicalAccounts, listTradingAccounts: api.listTradingAccounts }));
 vi.mock("@arco-design/web-vue", () => ({ Message: { success: vi.fn(), info: vi.fn(), error: vi.fn() } }));
 
 const source = readFileSync(resolve(process.cwd(), "src/views/strategy/components/strategy-instance-create.vue"), "utf8");

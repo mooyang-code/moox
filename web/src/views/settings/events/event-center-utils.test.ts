@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { EventExecution, ScopeField } from "@/api/callback-dispatcher";
 import {
   actionText,
+  systemRetryConfirmText,
   systemActionNotice,
   canAcknowledge,
   canCancel,
@@ -351,5 +352,14 @@ describe("手工登记下架", () => {
     );
     expect(requestErrorText(new Error("交易服务暂时不可用"))).toBe("交易服务暂时不可用");
     expect(requestErrorText(null)).toBe("未知原因");
+  });
+});
+
+describe("系统动作重新执行的确认说明", () => {
+  it("写出标的，并说明下架时间已过时只核对、不重做平仓", () => {
+    const text = systemRetryConfirmText({ subject_id: "okx:SWAP:BARUSDT" });
+    expect(text).toContain("okx:SWAP:BARUSDT");
+    expect(text).toContain("下架时间还没到时");
+    expect(text).toContain("不会重做平仓");
   });
 });

@@ -53,8 +53,9 @@ export function createTradingAccount(req: CreateTradingAccountReq) {
   });
 }
 
-export function updateTradingAccount(req: UpdateTradingAccountReq) {
-  return callTrade<UpdateTradingAccountReq, AccountResponse>("console", "UpdateTradingAccount", req);
+/** silent：错误由调用方显示（例如确认框里），这里不再弹一次。 */
+export function updateTradingAccount(req: UpdateTradingAccountReq, options: { silent?: boolean } = {}) {
+  return callTrade<UpdateTradingAccountReq, AccountResponse>("console", "UpdateTradingAccount", req, options);
 }
 
 export function getTradingAccount(trading_account_id: string) {
@@ -71,8 +72,11 @@ export function listTradingAccounts(req: ListTradingAccountsReq = {}) {
   );
 }
 
-export function setLeverage(req: { trading_account_id: string; instrument_id: string; leverage: string }) {
-  return callTrade<typeof req, AccountResponse>("console", "SetLeverage", req);
+export function setLeverage(
+  req: { trading_account_id: string; instrument_id: string; leverage: string },
+  options: { silent?: boolean } = {}
+) {
+  return callTrade<typeof req, AccountResponse>("console", "SetLeverage", req, options);
 }
 
 export function syncTradingAccount(trading_account_id: string) {

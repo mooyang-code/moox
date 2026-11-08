@@ -6,7 +6,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { callControl } from "@/api/admin/http";
 import { monitorApi, type HealthOverview } from "@/api/monitor";
 import { listAllDatasets } from "@/api/storage/metadata";
-import { useUserInfoStore } from "@/store/modules/user-info";
 import HealthMonitor from "./index.vue";
 
 vi.mock("@/api/admin/http", () => ({ callControl: vi.fn() }));
@@ -336,8 +335,7 @@ describe("monitor page", () => {
     expect(page.findAll(".host-card")).toHaveLength(1);
   });
 
-  it("lets administrators add and delete notification channels and shows full webhook URLs", async () => {
-    useUserInfoStore().account.user = { admin: true };
+  it("adds and deletes notification channels and shows full webhook URLs", async () => {
     vi.spyOn(Message, "success").mockImplementation(() => ({ close: () => undefined }));
     vi.spyOn(Modal, "warning").mockImplementation(config => {
       config.onOk?.();
@@ -400,10 +398,10 @@ describe("monitor page", () => {
     expect(page.find('[aria-label="组件"]').text()).not.toContain("只显示状态点");
   });
 
-  it("hides notification settings from users who cannot read the webhook", async () => {
+  it("always shows notification settings: the console has a single user with full access", async () => {
     const page = render(healthy);
     await flushPromises();
-    expect(page.findAll("button").some(button => button.text() === "消息通知设置")).toBe(false);
+    expect(page.findAll("button").some(button => button.text() === "消息通知设置")).toBe(true);
   });
 
   it("stacks every health layer on its own row so no side-by-side gap appears", async () => {

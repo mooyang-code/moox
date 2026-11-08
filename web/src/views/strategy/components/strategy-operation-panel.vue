@@ -10,31 +10,49 @@
     >
       {{ currentEnabled ? "停用实例" : "启用实例" }}
     </a-button>
+    <InstanceEnableDialog ref="enableDialog" />
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { confirmInstanceToggle } from "@/views/strategy/components/instance-toggle";
+import InstanceEnableDialog from "@/views/strategy/components/instance-enable-dialog.vue";
 
-const props = defineProps<{ instanceId: string; enabled: boolean; uncertain?: boolean }>();
+const props = defineProps<{
+  instanceId: string;
+  enabled: boolean;
+  uncertain?: boolean;
+  /** 绑定的组合账户；有值时启用要用写明账户和环境的确认框 */
+  logicalAccountId?: string;
+  factorTasks?: Record<string, string>;
+}>();
 const emit = defineEmits<{ started: []; changed: []; failed: [unknown] }>();
 const loading = ref(false);
+const enableDialog = ref<InstanceType<typeof InstanceEnableDialog> | null>(null);
 const currentEnabled = computed(() => Boolean(props.enabled));
 // 用显式确认对话框而非 popconfirm：popconfirm 点外部会静默关闭，用户误以为已提交。
 function change(enabled: boolean) {
   if (loading.value || props.uncertain) return;
-  confirmInstanceToggle(props.instanceId, enabled, {
+  const hooks = {
     onStart: () => {
       loading.value = true;
       emit("started");
     },
-    onFailed: error => emit("failed", error),
+    onFailed: (error: unknown) => emit("failed", error),
     onSettled: () => {
       loading.value = false;
       emit("changed");
     }
-  });
+  };
+  if (enabled && props.logicalAccountId) {
+    enableDialog.value?.open(
+      { instance_id: props.instanceId, logical_account_id: props.logicalAccountId, factor_tasks: props.factorTasks },
+      hooks
+    );
+    return;
+  }
+  confirmInstanceToggle(props.instanceId, enabled, hooks);
 }
 </script>
 
