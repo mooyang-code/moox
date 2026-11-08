@@ -383,12 +383,15 @@ func (s *Service) GetFactor(ctx context.Context, req *factorpb.GetFactorReq) (*f
 	if err != nil {
 		return &factorpb.GetFactorRsp{RetInfo: inner(err)}, nil
 	}
-	usages, err := s.scopeUsages(ctx, info.Usages)
+	scoped, err := s.scopeUsages(ctx, info.Usages)
 	if err != nil {
 		return &factorpb.GetFactorRsp{RetInfo: invalid(err)}, nil
 	}
 	// GetFactor is the one read that always carries the spec.
-	return &factorpb.GetFactorRsp{RetInfo: success(), Factor: factorwire.DefToPB(info.Factor), Usages: usagesToPB(usages)}, nil
+	return &factorpb.GetFactorRsp{
+		RetInfo: success(), Factor: factorwire.DefToPB(info.Factor), Usages: usagesToPB(scoped.Usages),
+		OtherSpaceUsageCount: scoped.OtherCount, OtherSpaceEnabledCount: scoped.OtherEnabled,
+	}, nil
 }
 
 func (s *Service) ListFactors(ctx context.Context, req *factorpb.ListFactorsReq) (*factorpb.ListFactorsRsp, error) {
@@ -407,17 +410,18 @@ func (s *Service) ListFactors(ctx context.Context, req *factorpb.ListFactorsReq)
 	}
 	page, size := pageParams(pageFromFactorReq(req))
 	items, total := paginate(factors, page, size)
-	scoped := make([]domain.FactorInfo, len(items))
+	out := make([]*factorpb.FactorInfo, len(items))
 	for i, info := range items {
-		usages, err := s.scopeUsages(ctx, info.Usages)
+		scoped, err := s.scopeUsages(ctx, info.Usages)
 		if err != nil {
 			return &factorpb.ListFactorsRsp{RetInfo: invalid(err)}, nil
 		}
-		info.Usages = usages
-		scoped[i] = info
+		out[i] = &factorpb.FactorInfo{
+			Factor: factorDefToPBListed(info.Factor, includeSpec), Usages: usagesToPB(scoped.Usages),
+			OtherSpaceUsageCount: scoped.OtherCount, OtherSpaceEnabledCount: scoped.OtherEnabled,
+		}
 	}
-	items = scoped
-	return &factorpb.ListFactorsRsp{RetInfo: success(), Factors: factorInfosToPB(items, includeSpec), PageResult: pageResult(page, size, total)}, nil
+	return &factorpb.ListFactorsRsp{RetInfo: success(), Factors: out, PageResult: pageResult(page, size, total)}, nil
 }
 
 func (s *Service) RecalcFactors(ctx context.Context, req *factorpb.RecalcFactorsReq) (*factorpb.RecalcFactorsRsp, error) {

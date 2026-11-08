@@ -138,7 +138,7 @@ describe("FactorMgr factor-set API", () => {
   it("manages categories, factor category and the submitted params", async () => {
     call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, categories: [{ category_id: "momentum", name: "动量类" }] });
     await expect(listFactorCategories()).resolves.toEqual([{ category_id: "momentum", name: "动量类" }]);
-    expect(call).toHaveBeenLastCalledWith("ListFactorCategories", {});
+    expect(call).toHaveBeenLastCalledWith("ListFactorCategories", {}, {});
 
     call.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" }, category: { category_id: "volume", name: "成交量类" } });
     await upsertFactorCategory({ category_id: "volume", name: "成交量类" });

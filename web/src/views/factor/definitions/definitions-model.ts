@@ -69,16 +69,21 @@ export function usageChips(usages: FactorUsage[], labelOf: (taskId: string) => s
   }));
 }
 
-/** 被任一已启用成员引用时不能编辑（后端规则 D20）。 */
-export function definitionEditState(item: Pick<FactorInfo, "usages">): ActionState {
-  return item.usages.some(usage => usage.status === "enabled")
-    ? { disabled: true, reason: "被启用中的计算任务使用，需先停用" }
-    : allowed;
+type UsageCounts = Pick<FactorInfo, "usages" | "other_space_usage_count" | "other_space_enabled_count">;
+
+/** 被任一已启用成员引用时不能编辑（后端规则 D20）：其他空间的启用成员也算，只是看不到是哪个任务。 */
+export function definitionEditState(item: UsageCounts): ActionState {
+  if (item.usages.some(usage => usage.status === "enabled"))
+    return { disabled: true, reason: "被启用中的计算任务使用，需先停用" };
+  const other = item.other_space_enabled_count ?? 0;
+  return other > 0 ? { disabled: true, reason: `其他空间有 ${other} 个启用中的成员在用，需先在那个空间停用` } : allowed;
 }
 
-/** 仍被任一计算任务引用时不能删除（D21）。 */
-export function definitionDeleteState(item: Pick<FactorInfo, "usages">): ActionState {
-  return item.usages.length > 0 ? { disabled: true, reason: "仍被计算任务使用，需先从计算任务中移除" } : allowed;
+/** 仍被任一计算任务引用时不能删除（D21）：其他空间的引用（启用、停用都算）也挡住删除。 */
+export function definitionDeleteState(item: UsageCounts): ActionState {
+  if (item.usages.length > 0) return { disabled: true, reason: "仍被计算任务使用，需先从计算任务中移除" };
+  const other = item.other_space_usage_count ?? 0;
+  return other > 0 ? { disabled: true, reason: `其他空间有 ${other} 个成员在用，需先在那个空间移除` } : allowed;
 }
 
 /** 分类 ID 合法形式：小写字母开头，只含小写字母、数字、下划线，最长 32 位。 */

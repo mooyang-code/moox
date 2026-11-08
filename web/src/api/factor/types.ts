@@ -154,7 +154,11 @@ export interface FactorUsage {
 
 export interface FactorInfo {
   factor: FactorDef;
+  /** 只含当前空间的引用。 */
   usages: FactorUsage[];
+  /** 其他空间引用这个因子的成员数，以及其中启用着的成员数（只给数量）。 */
+  other_space_usage_count?: number;
+  other_space_enabled_count?: number;
 }
 
 export interface FactorMember {
@@ -317,6 +321,8 @@ export interface ListRecalcJobsRsp {
 export interface GetFactorRsp {
   factor: FactorDef;
   usages: FactorUsage[];
+  other_space_usage_count?: number;
+  other_space_enabled_count?: number;
 }
 
 export interface SetTaskMemberStatusResult {

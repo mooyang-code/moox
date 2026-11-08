@@ -63,24 +63,37 @@ func (s *Service) checkJobSpace(ctx context.Context, jobID string) error {
 	return s.checkTaskSpace(ctx, job.TaskID)
 }
 
-// scopeUsages 把因子的引用关系裁剪到调用方空间：其他空间的任务 ID 与启停状态不对外暴露。
+// scopedUsages 是裁剪到调用方空间的引用，以及被裁掉的其他空间引用的计数。
+type scopedUsages struct {
+	Usages []domain.FactorUsage
+	// OtherCount、OtherEnabled 是其他空间引用这个因子的成员数和其中启用着的成员数：管理台据此挡住删除和编辑。
+	OtherCount, OtherEnabled uint32
+}
+
+// scopeUsages 把因子的引用关系裁剪到调用方空间：其他空间的任务 ID 与启停状态不对外暴露，只给数量。
 // 因子定义本身是全局的，写入侧的“是否被引用”校验仍由 catalog 基于全量引用执行。
-func (s *Service) scopeUsages(ctx context.Context, usages []domain.FactorUsage) ([]domain.FactorUsage, error) {
+func (s *Service) scopeUsages(ctx context.Context, usages []domain.FactorUsage) (scopedUsages, error) {
 	space, scoped, err := callerSpace(ctx)
 	if err != nil {
-		return nil, err
+		return scopedUsages{}, err
 	}
 	if !scoped {
-		return usages, nil
+		return scopedUsages{Usages: usages}, nil
 	}
-	out := make([]domain.FactorUsage, 0, len(usages))
+	out := scopedUsages{Usages: make([]domain.FactorUsage, 0, len(usages))}
 	for _, usage := range usages {
 		set, _, err := s.catalog.GetTask(ctx, usage.TaskID)
 		if err != nil {
-			return nil, err
+			return scopedUsages{}, err
 		}
-		if set.SpaceID == space {
-			out = append(out, usage)
+		switch {
+		case set.SpaceID == space:
+			out.Usages = append(out.Usages, usage)
+		case usage.Status == domain.MemberStatusEnabled:
+			out.OtherCount++
+			out.OtherEnabled++
+		default:
+			out.OtherCount++
 		}
 	}
 	return out, nil

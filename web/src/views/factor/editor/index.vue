@@ -10,6 +10,11 @@
           <h2>{{ editing ? `编辑因子 ${factorId}` : "新建因子" }}</h2>
         </div>
         <a-space>
+          <a-tooltip v-if="editing" content="先保存修改，再添加到计算任务" :disabled="!dirty">
+            <span>
+              <a-button :disabled="dirty || loading" @click="openTaskPicker">添加到计算任务</a-button>
+            </span>
+          </a-tooltip>
           <a-button :disabled="saving" @click="leave">取消</a-button>
           <a-tooltip :content="blockerText" :disabled="!blockerText">
             <span>
@@ -30,8 +35,13 @@
         saveError
       }}</a-alert>
       <a-alert v-if="readOnly" type="warning" show-icon class="editor-alert">
-        该因子在 {{ enabledUsages.length }} 个计算任务中处于启用状态，需要先停用后才能编辑。
-        <div class="usage-row">
+        <template v-if="enabledUsages.length">
+          该因子在 {{ enabledUsages.length }} 个计算任务中处于启用状态，需要先停用后才能编辑。
+        </template>
+        <template v-if="otherSpaceEnabled">
+          其他空间有 {{ otherSpaceEnabled }} 个启用中的成员在用这个因子，需要先在那个空间停用后才能编辑。
+        </template>
+        <div v-if="enabledUsages.length" class="usage-row">
           <button
             v-for="chip in enabledUsages"
             :key="chip.taskId"
@@ -234,6 +244,29 @@
           </div>
         </div>
       </a-spin>
+      <a-modal
+        v-model:visible="taskPickerVisible"
+        title="添加到计算任务"
+        width="min(480px, 100vw)"
+        :ok-button-props="{ disabled: !pickedTaskId }"
+        ok-text="下一步"
+        @ok="openAddModal"
+      >
+        <a-select v-model="pickedTaskId" allow-search placeholder="选择计算任务">
+          <a-option v-for="info in addableTasks" :key="info.factor_task.task_id" :value="info.factor_task.task_id">
+            {{ store.taskLabel(info.factor_task) }}
+          </a-option>
+        </a-select>
+        <p v-if="!addableTasks.length" class="editor-sub">当前空间还没有可以添加因子的计算任务。</p>
+      </a-modal>
+      <AddFactorModal
+        v-if="pickedTask"
+        v-model:visible="addVisible"
+        :info="pickedTask"
+        :title="store.taskLabel(pickedTask.factor_task)"
+        :preset-factor-id="factorId"
+        @added="onAddedToTask"
+      />
     </div>
   </div>
 </template>
@@ -290,6 +323,8 @@ import {
 } from "./factor-form";
 import { isTimeSeriesDataKind } from "@/views/data/shared/metadata-utils";
 import { useSpaceStore } from "@/store/modules/space";
+import AddFactorModal from "@/views/factor/compute-tasks/add-factor-modal.vue";
+import { addFactorState } from "@/views/factor/compute-tasks/compute-tasks-model";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 
 defineOptions({ name: "FactorEditor" });
@@ -403,7 +438,9 @@ const enabledUsages = computed(() =>
     .filter(usage => usage.status === "enabled")
     .map(usage => ({ taskId: usage.task_id, label: taskLabelOf(usage.task_id) }))
 );
-const readOnly = computed(() => editing.value && enabledUsages.value.length > 0);
+// 其他空间启用着的成员也挡住编辑（后端按全量引用校验），只是看不到是哪个任务。
+const otherSpaceEnabled = ref(0);
+const readOnly = computed(() => editing.value && (enabledUsages.value.length > 0 || otherSpaceEnabled.value > 0));
 
 /** 试算结果的数据时间按空间时区带后缀。 */
 function formatTime(value: string) {
@@ -420,6 +457,7 @@ function resetForm(next = blankFactorForm()) {
   Object.assign(form, next);
   original.value = JSON.stringify(form);
   usages.value = [];
+  otherSpaceEnabled.value = 0;
   saveError.value = "";
   previewResult.value = null;
   previewDone.value = false;
@@ -441,6 +479,7 @@ async function load() {
     if (!loadGate.isCurrent(token)) return;
     resetForm(formFromDefinition(rsp.factor));
     usages.value = rsp.usages || [];
+    otherSpaceEnabled.value = rsp.other_space_enabled_count ?? 0;
   } catch (error) {
     // 切换空间造成的取消不是失败：空间监听会重新加载
     if (loadGate.isCurrent(token) && !(error instanceof StaleSpaceRequestError)) {
@@ -617,10 +656,12 @@ async function save() {
     if (editing.value) await updateFactor(payload);
     else await createFactor(payload);
     committed.value = true;
-    Message.success(editing.value ? "因子已保存" : "因子已创建，到计算任务里添加并启用");
-    // 保存期间用户已确认离开页面或切换了因子：因子已保存，但不能再把用户带回列表
+    Message.success(editing.value ? "因子已保存" : "因子已创建，可以点“添加到计算任务”");
+    // 保存期间用户已确认离开页面或切换了因子：因子已保存，但不能再把用户带走
     if (!submission.isCurrent()) return;
-    await router.push("/factor/definitions");
+    // 新建后留在编辑页（地址换成编辑页），方便接着添加到计算任务；编辑保存后回列表
+    if (editing.value) await router.push("/factor/definitions");
+    else await router.replace(`/factor/definitions/${encodeURIComponent(payload.factor_id)}/edit`);
   } catch (error) {
     if (!submission.isCurrent()) return;
     saveError.value = error instanceof Error ? error.message : "保存因子失败";
@@ -631,6 +672,28 @@ async function save() {
 
 function leave() {
   void router.push("/factor/definitions");
+}
+
+// 添加到计算任务：先选任务，再打开和计算任务页一样的添加弹窗，预选这个因子。
+const taskPickerVisible = ref(false);
+const pickedTaskId = ref("");
+const addVisible = ref(false);
+const addableTasks = computed(() => store.tasks.filter((info: FactorTaskInfo) => !addFactorState(info.factor_task).disabled));
+const pickedTask = computed(() => store.tasks.find((info: FactorTaskInfo) => info.factor_task.task_id === pickedTaskId.value));
+
+function openTaskPicker() {
+  pickedTaskId.value = "";
+  taskPickerVisible.value = true;
+}
+
+function openAddModal() {
+  if (pickedTask.value) addVisible.value = true;
+}
+
+function onAddedToTask() {
+  void store.reload();
+  // 重新读取定义，刷新“在用的计算任务”
+  void load();
 }
 
 function openTask(taskId: string) {

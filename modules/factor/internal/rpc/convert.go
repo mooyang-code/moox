@@ -27,16 +27,6 @@ func usagesToPB(usages []domain.FactorUsage) []*factorpb.FactorUsage {
 	return out
 }
 
-func factorInfosToPB(infos []domain.FactorInfo, includeSpec bool) []*factorpb.FactorInfo {
-	out := make([]*factorpb.FactorInfo, 0, len(infos))
-	for _, info := range infos {
-		out = append(out, &factorpb.FactorInfo{
-			Factor: factorDefToPBListed(info.Factor, includeSpec), Usages: usagesToPB(info.Usages),
-		})
-	}
-	return out
-}
-
 func memberToPB(member domain.TaskMember, includeSpec bool) *factorpb.FactorMember {
 	def := member.Def()
 	pb := &factorpb.FactorMember{

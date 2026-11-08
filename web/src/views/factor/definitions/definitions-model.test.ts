@@ -118,6 +118,24 @@ describe("definitions model", () => {
     expect(definitionDeleteState(items[1]).reason).toContain("从计算任务中移除");
   });
 
+  it("其他空间在用时：启用的挡编辑和删除，停用的只挡删除", () => {
+    const foreign = (enabled: number, total: number) => ({
+      usages: [],
+      other_space_enabled_count: enabled,
+      other_space_usage_count: total
+    });
+    expect(definitionEditState(foreign(2, 3))).toEqual({
+      disabled: true,
+      reason: "其他空间有 2 个启用中的成员在用，需先在那个空间停用"
+    });
+    expect(definitionDeleteState(foreign(2, 3))).toEqual({
+      disabled: true,
+      reason: "其他空间有 3 个成员在用，需先在那个空间移除"
+    });
+    expect(definitionEditState(foreign(0, 1)).disabled).toBe(false);
+    expect(definitionDeleteState(foreign(0, 1)).disabled).toBe(true);
+  });
+
   it("unused definition can be edited and deleted", () => {
     expect(definitionEditState(items[2])).toEqual({ disabled: false, reason: "" });
     expect(definitionDeleteState(items[2])).toEqual({ disabled: false, reason: "" });

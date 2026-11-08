@@ -2,14 +2,24 @@
   <section class="member-section" aria-label="因子成员">
     <div class="member-section__head">
       <h3>因子（启用 {{ counts.enabled }} / 共 {{ counts.total }}）</h3>
-      <a-tooltip :content="addState.reason" :disabled="!addState.disabled">
-        <span>
-          <a-button type="primary" status="success" size="small" :disabled="addState.disabled" @click="addVisible = true">
-            <template #icon><icon-plus /></template>
-            添加因子
-          </a-button>
-        </span>
-      </a-tooltip>
+      <a-space>
+        <a-button
+          v-if="disabledKeys.length && props.info.factor_task.status === 'enabled'"
+          size="small"
+          :loading="enablingAll"
+          @click="confirmEnableAll"
+        >
+          启用全部已停用
+        </a-button>
+        <a-tooltip :content="addState.reason" :disabled="!addState.disabled">
+          <span>
+            <a-button type="primary" status="success" size="small" :disabled="addState.disabled" @click="addVisible = true">
+              <template #icon><icon-plus /></template>
+              添加因子
+            </a-button>
+          </span>
+        </a-tooltip>
+      </a-space>
     </div>
 
     <a-empty v-if="!props.info.members.length" description="还没有因子。点击「添加因子」，从「因子定义」中选择。" />
@@ -102,7 +112,7 @@ import { useDisplayZone } from "@/hooks/useDisplayZone";
 import { formatInstant } from "@/utils/time-zone";
 import { computed, ref } from "vue";
 import { useRouter } from "vue-router";
-import { Message } from "@arco-design/web-vue";
+import { Message, Modal } from "@arco-design/web-vue";
 import { removeFactorFromTask, setFactorMemberStatus } from "@/api/factor";
 import type { FactorMember, FactorTaskInfo, MemberStatus } from "@/api/factor/types";
 import { useFactorStore } from "@/store/modules/factor";
@@ -153,6 +163,44 @@ const rows = computed(() =>
 
 function reload() {
   return store.reload();
+}
+
+// 已停用的成员键；任务启用着才能启用成员，所以只在任务启用时显示“启用全部已停用”。
+const disabledKeys = computed(() => rows.value.filter(row => row.member.status !== "enabled").map(row => row.key));
+const enablingAll = ref(false);
+
+function confirmEnableAll() {
+  const keys = disabledKeys.value;
+  Modal.confirm({
+    title: `启用全部已停用的因子？`,
+    content: `将启用 ${keys.length} 个成员，启用后需要手动补算历史。`,
+    okText: "启用",
+    cancelText: "不启用",
+    onOk: () => void enableAll(keys)
+  });
+}
+
+/** 逐个启用；部分失败时列出失败的成员。 */
+async function enableAll(keys: string[]) {
+  enablingAll.value = true;
+  const failures: string[] = [];
+  for (const key of keys) {
+    try {
+      await setFactorMemberStatus(props.info.factor_task.task_id, key, "enabled");
+    } catch (error) {
+      failures.push(`${key}（${error instanceof Error ? error.message : "启用失败"}）`);
+    }
+  }
+  enablingAll.value = false;
+  if (failures.length) {
+    Message.warning({
+      content: `${keys.length - failures.length} 个已启用，这些没能启用：${failures.join("、")}`,
+      duration: 8000
+    });
+  } else {
+    Message.success(`已启用 ${keys.length} 个因子（不自动补算历史，需要时到「补算」手动提交）`);
+  }
+  await reload();
 }
 
 function onAdded() {
