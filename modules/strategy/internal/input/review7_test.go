@@ -25,17 +25,17 @@ func TestCoverageBoundsRejectsUTCMidnightStockKeys(t *testing.T) {
 // 未来数据：最晚一根夹到已闭合的最后一根，不算超出日历。
 func TestToClosedRequiresRealDaysBeyondCalendar(t *testing.T) {
 	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {ViewID: "view_stock"}}, Bar: "1d", Calendar: "cn_stock"}
-	view := ViewInfo{ViewID: "view_stock", IndexedFrom: stockDay(t, 2026, 1, 5), IndexedTo: stockDay(t, 2027, 1, 8), SeriesBars: 5000}
-	inside := time.Date(2026, 12, 31, 10, 0, 0, 0, shanghai(t))
+	view := ViewInfo{ViewID: "view_stock", IndexedFrom: stockDay(t, 2026, 1, 5), IndexedTo: stockDay(t, 2028, 1, 8), SeriesBars: 5000}
+	inside := time.Date(2027, 12, 31, 10, 0, 0, 0, shanghai(t))
 	bounds, err := CoverageBounds(view, resolved, inside)
-	if err != nil || bounds.ToClosed || bounds.Beyond != 0 || !bounds.To.Equal(stockDay(t, 2026, 12, 30)) {
+	if err != nil || bounds.ToClosed || bounds.Beyond != 0 || !bounds.To.Equal(stockDay(t, 2027, 12, 30)) {
 		t.Fatalf("日历之内时未来行不算超出日历，最晚一根夹到已闭合的 12-30：%+v err=%v", bounds, err)
 	}
-	end, err := ReplayWindow(resolved, nil, view, stockDay(t, 2026, 12, 1), stockDay(t, 2027, 3, 1), inside)
-	if err != nil || !end.Equal(stockDay(t, 2026, 12, 30)) {
+	end, err := ReplayWindow(resolved, nil, view, stockDay(t, 2027, 12, 1), stockDay(t, 2028, 3, 1), inside)
+	if err != nil || !end.Equal(stockDay(t, 2027, 12, 30)) {
 		t.Fatalf("终点应截到已闭合的最后一根之前：%s err=%v", end, err)
 	}
-	after := time.Date(2027, 1, 5, 10, 0, 0, 0, shanghai(t))
+	after := time.Date(2028, 1, 5, 10, 0, 0, 0, shanghai(t))
 	if bounds, err := CoverageBounds(view, resolved, after); err != nil || !bounds.ToClosed || bounds.Beyond != 5 {
 		t.Fatalf("已过日历时日历之后的行是真的数据（扣减不超过今天）：%+v err=%v", bounds, err)
 	}
@@ -45,8 +45,8 @@ func TestToClosedRequiresRealDaysBeyondCalendar(t *testing.T) {
 func TestFutureRowsAreClampedToNow(t *testing.T) {
 	now := time.Date(2026, 10, 9, 10, 0, 0, 0, shanghai(t))
 	stock := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {ViewID: "view_stock"}}, Bar: "1d", Calendar: "cn_stock"}
-	view := ViewInfo{ViewID: "view_stock", IndexedFrom: stockDay(t, 2026, 1, 5), IndexedTo: stockDay(t, 2027, 6, 1), SeriesBars: 100}
-	end, err := ReplayWindow(stock, nil, view, stockDay(t, 2026, 9, 1), stockDay(t, 2027, 1, 1), now)
+	view := ViewInfo{ViewID: "view_stock", IndexedFrom: stockDay(t, 2026, 1, 5), IndexedTo: stockDay(t, 2028, 6, 1), SeriesBars: 100}
+	end, err := ReplayWindow(stock, nil, view, stockDay(t, 2026, 9, 1), stockDay(t, 2028, 1, 1), now)
 	if err != nil || !end.Equal(stockDay(t, 2026, 10, 8)) {
 		t.Fatalf("终点应截到 10-08（已闭合的最后一根）之前：%s err=%v", end, err)
 	}
@@ -61,11 +61,11 @@ func TestFutureRowsAreClampedToNow(t *testing.T) {
 // 索引最新一根超出内嵌日历时，真正的最新一根在日历之外：每个序列保留的根数先扣掉日历之外至多的根数，不把覆盖起点
 // 估得偏早；扣完一根都不剩时报历史不足。
 func TestCoverageStartDiscountsRowsBeyondCalendar(t *testing.T) {
-	now := time.Date(2027, 1, 20, 0, 0, 0, 0, time.UTC)
+	now := time.Date(2028, 1, 20, 0, 0, 0, 0, time.UTC)
 	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {ViewID: "view_stock"}}, Bar: "1d", Calendar: "cn_stock"}
-	view := ViewInfo{ViewID: "view_stock", IndexedFrom: stockDay(t, 2026, 1, 5), IndexedTo: stockDay(t, 2027, 1, 4), SeriesBars: 10}
+	view := ViewInfo{ViewID: "view_stock", IndexedFrom: stockDay(t, 2026, 1, 5), IndexedTo: stockDay(t, 2028, 1, 4), SeriesBars: 10}
 	// 日历之外最多 4 个交易日（01-01 至 01-04），日历之内只能确定保留 6 根：覆盖起点是末日往前 5 个交易日。
-	want, err := HistoryStart("cn_stock", "1d", stockDay(t, 2026, 12, 31), 6)
+	want, err := HistoryStart("cn_stock", "1d", stockDay(t, 2027, 12, 31), 6)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,8 +76,8 @@ func TestCoverageStartDiscountsRowsBeyondCalendar(t *testing.T) {
 	if got := coverageStart(bounds, view, resolved, time.Time{}); !got.Equal(want) {
 		t.Fatalf("覆盖起点应扣掉日历之外的根数：%s，期望 %s", got, want)
 	}
-	view.IndexedTo = stockDay(t, 2027, 1, 15)
-	if _, err := ReplayWindow(resolved, nil, view, stockDay(t, 2026, 12, 18), stockDay(t, 2027, 1, 1), now); err == nil || !strings.Contains(err.Error(), "暂不能回放") {
+	view.IndexedTo = stockDay(t, 2028, 1, 15)
+	if _, err := ReplayWindow(resolved, nil, view, stockDay(t, 2027, 12, 18), stockDay(t, 2028, 1, 1), now); err == nil || !strings.Contains(err.Error(), "暂不能回放") {
 		t.Fatalf("日历之内一根都不能确定保留时应报历史不足：%v", err)
 	}
 }

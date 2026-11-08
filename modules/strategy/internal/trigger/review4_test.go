@@ -54,8 +54,8 @@ func TestHandleLogsUnmappablePeriods(t *testing.T) {
 	}
 	// 国庆假期不是交易日：无法确定周期边界。
 	expectAck(t, deliver(time.Date(2026, 10, 5, 0, 0, 0, 0, location)))
-	// 内嵌日历只到 2026-12-31：12-30 的有效期要推到 2027 年，无法推算。
-	expectAck(t, deliver(time.Date(2026, 12, 30, 0, 0, 0, 0, location)))
+	// 内嵌日历只到 2027-12-31：12-30 的有效期要推到 2028 年，无法推算。
+	expectAck(t, deliver(time.Date(2027, 12, 30, 0, 0, 0, 0, location)))
 	if len(logs) != 2 || !strings.Contains(logs[0], "无法确定周期边界") || !strings.Contains(logs[1], "无法推算有效期") {
 		t.Fatalf("两期都应留下日志：%q", logs)
 	}

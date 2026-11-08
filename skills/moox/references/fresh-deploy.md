@@ -122,10 +122,10 @@ A 股按交易时段推进：每个交易日 48 期（09:30～11:25、13:00～14
 
 ### A 股交易日历的年度更新
 
-A 股交易日历只有一份：`packages/marketcalendar/data/cn_trading_days.json` 与 `manifest.json`（采集、因子、策略、Monitor 共用）。覆盖期到当年 12 月 31 日，交易所公布下一年休市安排后：
+A 股交易日历只有一份：`packages/marketcalendar/data/cn_trading_days.json` 与 `manifest.json`（采集、因子、策略、Monitor、CLI 共用）。覆盖期到当年 12 月 31 日，每年 11 月前后国务院公布下一年节假日安排后：
 
-1. 更新这两个文件（`manifest.json` 的 `valid_through` 与 `sha256` 要和数据一致，`go test ./packages/marketcalendar/` 校验）；
-2. 重新构建并发布 Collector、因子引擎、Strategy、Monitor，并上传新的 stockcn SCF 代码包（`moox-cli collector function upload`）。
+1. 把落在工作日上的休市日写进 `packages/marketcalendar/internal/gencn/main.go` 的 `closures`，在 `packages/marketcalendar` 下运行 `go run ./internal/gencn -year <下一年>`（调休补班的周末照样休市）；它同时重写 `manifest.json` 的 `valid_through` 与 `sha256`，`go test ./packages/marketcalendar/` 校验。交易所 12 月公布休市安排后核对一遍，有出入就改 `closures` 用同一条命令重新生成；交易所日历已进 AkShare 时也可以用 `scripts/marketdata/update-calendar.sh` 整体替换；
+2. 重新构建并发布 Collector、因子引擎、Strategy、Monitor、CLI，并上传新的 stockcn SCF 代码包（`moox-cli collector function upload`）。
 
 **必须在 12 月中旬前完成**：采集计划预检要求日历覆盖期至少还剩 14 天，否则拒绝新计划；到期前 60 天起每天告警。
 
