@@ -115,7 +115,7 @@
                 type="button"
                 class="line attention-line"
                 :title="item.detail"
-                @click="go(item.target)"
+                @click="openAttention(item)"
               >
                 <span class="dot" :class="`is-${item.tone}`" />
                 <span class="ellipsis"
@@ -200,7 +200,7 @@
               <h3>
                 主机工作台<small>{{ hosts.length }}</small>
               </h3>
-              <a @click="go('/ops/hosts')">全部主机 →</a>
+              <a @click="go('/ops/hosts?tab=monitor')">全部主机 →</a>
             </header>
             <div class="tile-body">
               <p v-if="!hosts.length" class="tile-empty">
@@ -224,7 +224,7 @@
               </template>
             </div>
             <footer class="tile-foot">
-              <a v-if="foldedHosts.hidden" @click="go('/ops/hosts')">另有 {{ foldedHosts.hidden }} 台</a>
+              <a v-if="foldedHosts.hidden" @click="go('/ops/hosts?tab=monitor')">另有 {{ foldedHosts.hidden }} 台</a>
             </footer>
           </section>
 
@@ -444,6 +444,12 @@ function fmt(value: number | null | undefined) {
 
 function go(target: HomeTarget) {
   void router.push(target);
+}
+
+/** 待处理项属于别的空间时（例如别的空间的数据集告警），先切到那个空间再打开。 */
+function openAttention(item: { target: HomeTarget; spaceId?: string }) {
+  if (item.spaceId && item.spaceId !== selectedSpaceId.value) spaceStore.setSelectedSpace(item.spaceId);
+  go(item.target);
 }
 
 /** 告警所属空间的显示名：当前空间不加前缀，系统内部空间写“系统”。 */
@@ -710,7 +716,7 @@ a {
 /* Banner：浅底色整块，状态用图标与文字颜色表达，不画边框与色条 */
 .banner {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 190px;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--moox-space-4);
   padding: var(--moox-space-4);
   border-radius: 8px;
@@ -1092,11 +1098,6 @@ button.line:hover {
   gap: 6px;
   color: var(--color-text-2);
   font-size: 13px;
-}
-
-.all-clear svg {
-  font-size: 28px;
-  color: var(--tone);
 }
 
 .all-clear small {

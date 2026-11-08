@@ -102,6 +102,28 @@ describe("monitor page", () => {
     expect(page.text()).toContain("最近 48 小时没有告警");
   });
 
+  it("告警对象在别的空间时，点链接先切到那个空间；同一空间不切", async () => {
+    const { useSpaceStore } = await import("@/store/modules/space");
+    const store = useSpaceStore();
+    store.selectedSpaceId = "crypto";
+    const switchSpace = vi.spyOn(store, "setSelectedSpace").mockImplementation(() => undefined);
+    const alert = (id: string, space_id: string) => ({
+      id,
+      severity: "warning",
+      title: id,
+      triggered_at: "2026-10-16T02:58:20Z",
+      object: { type: "dataset" as const, producer: "collector", dataset_id: `ds_${id}`, freq: "5m", space_id }
+    });
+    const page = render({ ...healthy, alerts: [alert("a", "stockcn"), alert("b", "crypto")] });
+    await flushPromises();
+    const links = page.findAll("a.locator");
+    await links[0].trigger("click");
+    expect(switchSpace).toHaveBeenCalledWith("stockcn");
+    switchSpace.mockClear();
+    await links[1].trigger("click");
+    expect(switchSpace).not.toHaveBeenCalled();
+  });
+
   it("lists alerts grouped by trigger time and expands their evidence", async () => {
     const page = render({
       ...healthy,

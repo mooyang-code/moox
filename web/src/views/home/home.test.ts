@@ -141,6 +141,9 @@ describe("home page", () => {
     expect(wrapper.find(".banner-facts").exists()).toBe(false);
     expect(text).not.toMatch(/早上好|下午好|晚上好|凌晨好|星期/);
     expect(wrapper.find(".tile-attention .all-clear").text()).toContain("一切正常");
+    // 新鲜度、主机两格只列不正常的行：都正常时写一句
+    expect(wrapper.find('[aria-label="数据新鲜度"]').text()).toContain("1 条数据链路都正常");
+    expect(wrapper.find('[aria-label="主机工作台"]').text()).toContain("1 台主机都正常");
     expect(wrapper.find(".tile-attention .all-clear svg, .tile-attention .all-clear [class*='icon-']").exists()).toBe(false);
     expect(wrapper.findAll(".attention-line")).toHaveLength(0);
     expect(text).not.toMatch(/驾驶舱|Quant\.|Think\.|Pattern\./);
@@ -261,5 +264,6 @@ describe("home page", () => {
     expect(wrapper.find(".tile-attention .attention-line").text()).toContain("14 小时 42 分");
     // 新鲜度磁贴只列不正常的行
     expect(wrapper.find('[aria-label="数据新鲜度"]').text()).toContain("现货K线");
+    expect(wrapper.find('[aria-label="数据新鲜度"]').text()).not.toContain("都正常");
   });
 });

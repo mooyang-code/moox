@@ -157,9 +157,9 @@ test.describe("DataNode management browser workflows", () => {
   test("covers the desktop node workflow and direct Dataset detail data", async ({ page }, testInfo) => {
     const fixture = makeFixture();
     await preparePage(page, fixture);
-    await page.goto("/#/ops/storage/nodes?tab=unknown");
+    await page.goto("/#/ops/storage/nodes");
 
-    await expect(page.getByRole("heading", { name: "数据节点" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "存储节点" })).toBeVisible();
     await expect(page.getByText(datasetNames[0], { exact: true })).toBeVisible();
     await expect(page.getByText(datasetNames[1], { exact: true })).toBeVisible();
 
@@ -207,30 +207,18 @@ test.describe("DataNode management browser workflows", () => {
     expect(callsFor(fixture, "ListDatasets")).toHaveLength(0);
     expect(callsFor(fixture, "GetDataNode")).toHaveLength(0);
     await page.keyboard.press("Escape");
-
-    await nodeRow.getByRole("button", { name: "编辑" }).click();
-    const editDialog = page.getByTestId("data-node-edit-modal");
-    await expect(editDialog).toBeVisible();
-    await editDialog.getByPlaceholder("节点名称").fill("行情节点 A（管理员）");
-    await editDialog.getByRole("button", { name: "确定" }).click();
-    await expect(editDialog).toBeHidden();
-    const updateCall = callsFor(fixture, "UpdateDataNode").at(-1);
-    expect(updateCall?.body).toMatchObject({ node_id: "node-a", name: "行情节点 A（管理员）", status: "active" });
-    expect(updateCall?.body).not.toHaveProperty("service_target");
-    expect(updateCall?.body).not.toHaveProperty("node");
-
-    const disabledRow = page.getByRole("row", { name: /node-b/ });
-    await disabledRow.getByRole("button", { name: "删除数据节点" }).click();
-    await expect(page.getByText("节点仍有关联 Dataset", { exact: true })).toBeVisible();
+    // 页面只读：没有编辑、删除入口
+    await expect(nodeRow.getByRole("button", { name: "编辑" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "删除数据节点" })).toHaveCount(0);
   });
 
   test("keeps the node surface usable at mobile width", async ({ page }, testInfo) => {
     const fixture = makeFixture();
     await page.setViewportSize({ width: 390, height: 844 });
     await preparePage(page, fixture);
-    await page.goto("/#/ops/storage/nodes?tab=routes");
+    await page.goto("/#/ops/storage/nodes");
 
-    await expect(page.getByRole("heading", { name: "数据节点" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "存储节点" })).toBeVisible();
     const infoButton = page.getByRole("button", { name: "数据节点说明" });
     await infoButton.focus();
     const infoTooltip = page.getByRole("tooltip").filter({ hasText: "Dataset 直接绑定 DataNode" });
@@ -251,11 +239,6 @@ test.describe("DataNode management browser workflows", () => {
     await expect(detailModal).toBeVisible();
     await expectInViewport(page, detailModal);
     await page.keyboard.press("Escape");
-
-    await nodeRow.getByRole("button", { name: "编辑" }).click();
-    const editDialog = page.getByTestId("data-node-edit-modal");
-    await expect(editDialog).toBeVisible();
-    await expectInViewport(page, editDialog);
     await page.screenshot({ path: testInfo.outputPath("storage-datanode-mobile.png"), fullPage: true });
   });
 });

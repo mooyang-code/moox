@@ -61,7 +61,7 @@ var lighthouseFirewallAddCmd = &cobra.Command{
   moox-cli ops tencent lighthouse firewall add --public-ip <lighthouse-public-ip> --ports 20201,20200,11000          # 预览
   moox-cli ops tencent lighthouse firewall add --instance-id lhins-xxxx --ports 20201 --cidr 0.0.0.0/0 --description moox-storage --yes
 
-提示：public-ip 可从云厂商控制台获取；MooX 服务部署地址以管理台“服务部署信息”页为准。`,
+提示：public-ip 可从云厂商控制台获取；MooX 服务部署地址以管理台“服务”页为准。`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		options := lighthouseFirewallAddFlags
 		options.DryRun = !options.Yes

@@ -221,7 +221,6 @@ export interface StrategyRow {
   lastBar: string;
   /** lastBar 的完整时间（悬停用） */
   lastBarTitle: string;
-  lastBarMs: number | null;
   link: StrategyLink;
 }
 
@@ -272,7 +271,6 @@ export function strategyRows(
       cash: snapshot && instance.enabled ? { text: percent(cashRatio, 1), ratio: barMax > 0 ? cashRatio / barMax : 0 } : null,
       lastBar: snapshot?.bar_end_time ? relativeTime(snapshot.bar_end_time, nowMs, zone) : "—",
       lastBarTitle: snapshot?.bar_end_time ? fullTime(snapshot.bar_end_time, zone) : "",
-      lastBarMs: toMillis(snapshot?.bar_end_time),
       link: resultsLink(instance.instance_id)
     };
   });
@@ -288,6 +286,8 @@ export interface AttentionItem {
   /** when 的完整时间（悬停用） */
   whenTitle?: string;
   target: HomeTarget;
+  /** 告警对象所在的空间：和当前空间不同时，点开前先切过去（例如别的空间的数据集告警）。 */
+  spaceId?: string;
 }
 
 function alertTone(alert: HealthAlert): "warn" | "bad" {
@@ -317,7 +317,8 @@ export function attentionItems(input: {
       detail: prettifyIds(alert.reason || "", input.names),
       when: relativeTime(alert.triggered_at, input.nowMs),
       whenTitle: fullTime(alert.triggered_at),
-      target: input.alertTarget(alert)
+      target: input.alertTarget(alert),
+      ...(alert.object?.space_id ? { spaceId: alert.object.space_id } : {})
     };
   });
   for (const item of pendingItems({ ...input.strategy, replays: [], nowMs: input.nowMs })) {
@@ -547,7 +548,7 @@ interface FactCandidate {
   behind: number;
 }
 
-/** 选出 Banner 要展示的那一行：状态最差的优先，同样差时落后最多的优先；都正常则取时间最新的。 */
+/** 选出指标卡要展示的那一行：状态最差的优先，同样差时落后最多的优先；都正常则取时间最新的。 */
 function pickFact(candidates: FactCandidate[]): FactCandidate | undefined {
   return [...candidates].sort(
     (a, b) => FRESHNESS_RANK[a.tone] - FRESHNESS_RANK[b.tone] || b.behind - a.behind || b.atMs - a.atMs
@@ -570,7 +571,7 @@ function dataFact(freshness: FreshnessRow[]): FactCandidate | undefined {
   );
 }
 
-/** Banner 与指标卡里的时间：写最近一根已收盘 K 线的收盘时间，精确到秒；由人对照当前时间判断是否异常，异常的换色。 */
+/** 指标卡里的时间：写最近一根已收盘 K 线的收盘时间，精确到秒；由人对照当前时间判断是否异常，异常的换色。 */
 function closeClock(fact: FactCandidate | undefined, nowMs: number, zone: string): string {
   return fact ? marketTime(fact.atMs, zone, nowMs, { seconds: true }) : "—";
 }
