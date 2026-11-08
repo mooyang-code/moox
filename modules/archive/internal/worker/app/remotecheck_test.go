@@ -73,12 +73,12 @@ func seedReplicated(t *testing.T, h *harness, srv *fakes3.Server, key string, co
 	}
 	start, _ := time.Parse("2006-01-02", key)
 	ref := staging.PartitionRef{Key: key, Start: start, End: start.AddDate(0, 0, 1)}
-	if _, err := h.store.Stage(ctx, task, []staging.Row{{SubjectID: "BTC", DataTime: start, Values: []any{1.0}}}, func(time.Time) staging.PartitionRef { return ref }, h.now); err != nil {
+	if _, err := h.store.Stage(ctx, task, []staging.Row{{SubjectID: "BTC", DataTime: start, Values: []any{1.0}}}, func(time.Time) staging.PartitionRef { return ref }, h.now, staging.StageReplace); err != nil {
 		t.Fatal(err)
 	}
 	sha := sha256.Sum256(content)
 	md := md5.Sum(content)
-	rel := "crypto/ds_1m/2026/" + key + ".csv"
+	rel := "crypto/collect/kline-1m/2026/" + key + ".csv"
 	if err := h.store.MarkExported(ctx, "crypto", "ds_1m", key, h.now, rel, hex.EncodeToString(sha[:])); err != nil {
 		t.Fatal(err)
 	}

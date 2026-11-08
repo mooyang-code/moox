@@ -205,7 +205,7 @@ func TestSetupValidateListsNextSteps(t *testing.T) {
 	require.NoError(t, err)
 	require.Contains(t, out, `"route":"fresh"`)
 	require.Contains(t, out, "setup bootstrap --stage admin")
-	require.Contains(t, out, "disk_low", "磁盘不够要提醒，但不阻塞：清除正好能腾空间")
+	require.Contains(t, out, "disk_insufficient", "磁盘不够要提醒，但不阻塞：清除正好能腾空间")
 }
 
 func TestSetupLogsChecksHostAndComponent(t *testing.T) {

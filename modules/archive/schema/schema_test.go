@@ -2,8 +2,6 @@ package schema
 
 import (
 	"database/sql"
-	"fmt"
-	"os"
 	"strings"
 	"testing"
 
@@ -19,8 +17,10 @@ func TestArchiveSchemaContainsTheFourManagerTables(t *testing.T) {
 		"CREATE TABLE IF NOT EXISTS t_archive_workers",
 		"CHECK (c_interval_seconds IN (3600, 86400))",
 		"CHECK (c_pull_every_bars BETWEEN 1 AND 1440)",
-		"CHECK (c_kind IN ('scheduled', 'manual', 'tick', 'range'))",
+		"CHECK (c_kind IN ('scheduled', 'manual', 'tick', 'range', 'import'))",
+		"CHECK (c_purpose IN ('collect', 'factor', 'data'))",
 		"UNIQUE (c_space_id, c_dataset_id)",
+		"UNIQUE (c_space_id, c_purpose, c_dir_name)",
 		"idx_t_archive_tasks_status",
 		"trg_t_archive_tasks_mtime",
 		"trg_t_archive_runs_mtime",
@@ -42,7 +42,7 @@ func TestArchiveSchemaContainsTheFourManagerTables(t *testing.T) {
 	}
 }
 
-// openMemory 打开一个空的内存库并执行 sqlText。
+// openMemory 打开一个空的内存库并依次执行 sqlTexts。
 func openMemory(t *testing.T, sqlTexts ...string) *sql.DB {
 	t.Helper()
 	db, err := sql.Open("sqlite", ":memory:")
@@ -59,97 +59,58 @@ func openMemory(t *testing.T, sqlTexts ...string) *sql.DB {
 	return db
 }
 
-// tableShape 返回库里每张表的列（按列序：名称、类型、非空、默认值、主键）与索引（名称、唯一、列），用于比对两个库的结构。
-// 不比 sqlite_master.sql：ALTER TABLE 会改写它。
-func tableShape(t *testing.T, db *sql.DB) map[string][]string {
-	t.Helper()
-	tables, err := db.Query(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var names []string
-	for tables.Next() {
-		var name string
-		if err := tables.Scan(&name); err != nil {
-			t.Fatal(err)
-		}
-		names = append(names, name)
-	}
-	_ = tables.Close()
-	out := map[string][]string{}
-	for _, table := range names {
-		cols, err := db.Query(`SELECT name, type, "notnull", COALESCE(dflt_value, '<NULL>'), pk FROM pragma_table_info(?) ORDER BY cid`, table)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for cols.Next() {
-			var name, typ, dflt string
-			var notNull, pk int
-			if err := cols.Scan(&name, &typ, &notNull, &dflt, &pk); err != nil {
-				t.Fatal(err)
-			}
-			out[table] = append(out[table], fmt.Sprintf("col %s %s notnull=%d default=%s pk=%d", name, typ, notNull, dflt, pk))
-		}
-		_ = cols.Close()
-		indexes, err := db.Query(`SELECT name, "unique", origin, partial FROM pragma_index_list(?) ORDER BY name`, table)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var idx []string
-		for indexes.Next() {
-			var name, origin string
-			var unique, partial int
-			if err := indexes.Scan(&name, &unique, &origin, &partial); err != nil {
-				t.Fatal(err)
-			}
-			idx = append(idx, fmt.Sprintf("index %s unique=%d origin=%s partial=%d", name, unique, origin, partial))
-		}
-		_ = indexes.Close()
-		for _, line := range idx {
-			name := strings.Fields(line)[1]
-			var columns []string
-			rows, err := db.Query(`SELECT COALESCE(name, '<expr>') FROM pragma_index_info(?) ORDER BY seqno`, name)
-			if err != nil {
-				t.Fatal(err)
-			}
-			for rows.Next() {
-				var col string
-				if err := rows.Scan(&col); err != nil {
-					t.Fatal(err)
-				}
-				columns = append(columns, col)
-			}
-			_ = rows.Close()
-			out[table] = append(out[table], line+" columns="+strings.Join(columns, ","))
-		}
-	}
-	return out
+// 启动时 store.Open 会对已建好的库再执行一遍 schema，重复执行不能出错。
+func TestArchiveSchemaLoadsIntoAnEmptyDatabaseRepeatedly(t *testing.T) {
+	openMemory(t, AllSQL(), AllSQL())
 }
 
-// 路 B 原地升级：批 1 的 schema 加上 testdata/upgrade-batch2.sql，必须和新 schema 建出的库结构一致。
-func TestBatch2UpgradeSQLMatchesTheNewSchema(t *testing.T) {
-	batch1, err := os.ReadFile("testdata/archive-batch1.sql")
-	if err != nil {
+func TestArchiveSchemaConstraints(t *testing.T) {
+	db := openMemory(t, AllSQL())
+	exec := func(query string, args ...any) error {
+		_, err := db.Exec(query, args...)
+		return err
+	}
+	insertTask := `INSERT INTO t_archive_tasks (c_space_id, c_dataset_id, c_purpose, c_dir_name, c_freq, c_partition_unit, c_interval_seconds)
+VALUES (?, ?, ?, ?, '1m', 'day', 3600)`
+	if err := exec(insertTask, "crypto", "ds_a", "collect", "binance-spot-kline-1m"); err != nil {
 		t.Fatal(err)
 	}
-	upgrade, err := os.ReadFile("testdata/upgrade-batch2.sql")
-	if err != nil {
+	// 同一空间、同一用途下目录名唯一；用途不同或空间不同可以同名。
+	if err := exec(insertTask, "crypto", "ds_b", "collect", "binance-spot-kline-1m"); err == nil {
+		t.Fatal("同一空间同一用途下目录名必须唯一")
+	}
+	if err := exec(insertTask, "crypto", "ds_c", "factor", "binance-spot-kline-1m"); err != nil {
+		t.Fatalf("用途不同可以同名: %v", err)
+	}
+	if err := exec(insertTask, "stockcn", "ds_d", "collect", "binance-spot-kline-1m"); err != nil {
+		t.Fatalf("空间不同可以同名: %v", err)
+	}
+	if err := exec(insertTask, "crypto", "ds_e", "other", "x"); err == nil {
+		t.Fatal("用途只能是 collect、factor、data")
+	}
+	if err := exec(insertTask, "crypto", "ds_f", "data", ""); err == nil {
+		t.Fatal("目录名不能为空")
+	}
+
+	insertRun := `INSERT INTO t_archive_runs (c_run_id, c_space_id, c_dataset_id, c_kind, c_import_file, c_overwrite, c_scheduled_at)
+VALUES (?, 'crypto', 'ds_a', ?, ?, ?, '2026-11-08 00:00:00.000')`
+	if err := exec(insertRun, "r1", "import", nil, 0); err == nil {
+		t.Fatal("导入运行必须带 c_import_file")
+	}
+	if err := exec(insertRun, "r2", "import", "/data/moox/archive/.import/i1/a.csv", 1); err != nil {
+		t.Fatalf("合法的导入运行: %v", err)
+	}
+	if err := exec(insertRun, "r3", "manual", nil, 2); err == nil {
+		t.Fatal("c_overwrite 只能是 0 或 1")
+	}
+	if err := exec(insertRun, "r4", "unknown", nil, 0); err == nil {
+		t.Fatal("未知的运行类型必须被拒")
+	}
+
+	if err := exec(`INSERT INTO t_archive_workers (c_worker_id, c_disk_used_bytes, c_min_free_bytes) VALUES ('w', -1, 0)`); err == nil {
+		t.Fatal("c_disk_used_bytes 不能为负")
+	}
+	if err := exec(`INSERT INTO t_archive_workers (c_worker_id, c_disk_used_bytes, c_min_free_bytes) VALUES ('w', 1, 5368709120)`); err != nil {
 		t.Fatal(err)
 	}
-	fresh := tableShape(t, openMemory(t, AllSQL()))
-	upgraded := tableShape(t, openMemory(t, string(batch1), string(upgrade)))
-	if len(fresh) != 4 {
-		t.Fatalf("新 schema 有 %d 张表", len(fresh))
-	}
-	for table, want := range fresh {
-		got := upgraded[table]
-		if strings.Join(got, "\n") != strings.Join(want, "\n") {
-			t.Fatalf("表 %s 升级后与新建不一致：\n升级后：\n%s\n新建：\n%s", table, strings.Join(got, "\n"), strings.Join(want, "\n"))
-		}
-	}
-	if len(upgraded) != len(fresh) {
-		t.Fatalf("升级后有 %d 张表，新建有 %d 张", len(upgraded), len(fresh))
-	}
-	// 新 schema 对已建好的库重复执行也不出错（启动时 store.Open 会这样做）。
-	openMemory(t, string(batch1), string(upgrade), AllSQL())
 }

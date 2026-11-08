@@ -14,6 +14,7 @@ import (
 	"github.com/mooyang-code/moox/modules/archive/internal/objectstore"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/pacing"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
+	"github.com/mooyang-code/moox/packages/servicecatalog"
 	"gopkg.in/yaml.v3"
 )
 
@@ -68,6 +69,7 @@ type Config struct {
 	Staging         StagingSection                   `yaml:"staging"`
 	Pacing          PacingSection                    `yaml:"pacing"`
 	Health          HealthSection                    `yaml:"health"`
+	DataAPI         DataAPISection                   `yaml:"data_api"`
 	Maintenance     MaintenanceSection               `yaml:"maintenance"`
 	// ObjectStore 是导出文件的对象存储副本；整段省略（nil）表示不使用。
 	ObjectStore *objectstore.Config `yaml:"object_store"`
@@ -91,10 +93,10 @@ type StagingSection struct {
 	CacheSize ByteSize `yaml:"cache_size"`
 }
 
-// PacingSection 是节奏与并发。
+// PacingSection 是节奏与并发。RequestSeconds 与 HourQuiet 只在还没收到 mgr 下发的避让规则时使用。
 type PacingSection struct {
 	RequestSeconds [2]int `yaml:"request_seconds"`
-	// MinuteWindow 控制是否只在每分钟的 request_seconds 区间内发请求，默认 true；设为 false 则整分钟都可发（整点静默仍生效）。
+	// MinuteWindow 控制是否按秒窗口避让，默认 true；设为 false 则整分钟都可发（优先于 mgr 下发的规则，整点静默仍生效）。
 	MinuteWindow       bool          `yaml:"minute_window"`
 	HourQuiet          [2]string     `yaml:"hour_quiet"`
 	RequestInterval    time.Duration `yaml:"request_interval"`
@@ -107,6 +109,13 @@ type PacingSection struct {
 // HealthSection 是健康检查监听地址。
 type HealthSection struct {
 	Addr string `yaml:"addr"`
+}
+
+// DataAPISection 是数据端口：分区副本下载与最新数据预览。固定监听 127.0.0.1:<服务目录 relay_http 端口>（见 DataAddr），
+// 不验签，外部只能经 control 中转进入。
+type DataAPISection struct {
+	// MaxBytesPerSecond 是全部下载共享的带宽上限（与运行的节奏带宽分开计）。
+	MaxBytesPerSecond ByteSize `yaml:"max_bytes_per_second"`
 }
 
 // MaintenanceSection 是每天的维护时刻（本机时区）。
@@ -129,6 +138,7 @@ func Default() *Config {
 			MaxBytesPerSecond: ByteSize(512 << 10), MaxConcurrentRuns: 4, MaxRunsPerDataNode: 2, PageRows: 500,
 		},
 		Health:      HealthSection{Addr: "127.0.0.1:11418"},
+		DataAPI:     DataAPISection{MaxBytesPerSecond: ByteSize(2 << 20)},
 		Maintenance: MaintenanceSection{At: "04:17:43"},
 	}
 }
@@ -212,6 +222,9 @@ func (c *Config) Validate() error {
 	if strings.TrimSpace(c.Health.Addr) == "" {
 		return fmt.Errorf("health.addr 不能为空")
 	}
+	if err := c.DataAPI.validate(); err != nil {
+		return err
+	}
 	if _, err := ParseClock(c.Maintenance.At); err != nil {
 		return fmt.Errorf("maintenance.at: %w", err)
 	}
@@ -219,6 +232,36 @@ func (c *Config) Validate() error {
 		if err := c.ObjectStore.Validate(); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// DataPort 返回服务目录里 archive-worker 的 relay_http 端口（Admin 直连与中转都连这个端口）。
+func DataPort() int {
+	catalog, err := servicecatalog.LoadEmbedded()
+	if err != nil {
+		panic(fmt.Sprintf("内嵌服务目录无效: %v", err))
+	}
+	component, ok := catalog.Component(Caller)
+	if !ok || component.RelayHTTP == nil {
+		panic("内嵌服务目录没有 archive-worker 的 relay_http 端口")
+	}
+	return component.RelayHTTP.Port
+}
+
+// DataAddr 返回数据端口的监听地址：只听回环地址，端口取服务目录登记的 relay_http 端口，没有可配余地。
+func DataAddr() string {
+	return "127.0.0.1:" + strconv.Itoa(DataPort())
+}
+
+// minDataBytesPerSecond 是数据端口限速的下限：同时最多 2 个下载（dataapi.MaxDownloads）平分带宽，
+// 每个下载从对象存储读取的超时按 128KiB/s 估算（objectstore.TransferTimeout），低于 2 × 128KiB/s
+// 时大分区会在读完之前因超时被中断。
+const minDataBytesPerSecond = ByteSize(2 * 128 << 10)
+
+func (d DataAPISection) validate() error {
+	if d.MaxBytesPerSecond < minDataBytesPerSecond {
+		return fmt.Errorf("data_api.max_bytes_per_second 不能小于 256KB（2 个并发下载 × 对象存储读取超时估算用的 128KiB/s）")
 	}
 	return nil
 }

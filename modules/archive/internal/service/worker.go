@@ -26,8 +26,8 @@ func (w *WorkerService) ArchiveWorkerHeartbeat(ctx context.Context, req *archive
 	ttl := s.cfg.Worker.TakeoverWait
 	result, err := s.store.Heartbeat(ctx, store.Worker{
 		WorkerID: req.GetWorkerId(), InstanceID: req.GetInstanceId(), Version: req.GetVersion(), RootDir: req.GetRootDir(),
-		DiskTotalBytes: req.GetDiskTotalBytes(), DiskFreeBytes: req.GetDiskFreeBytes(), StagingBytes: req.GetStagingBytes(),
-		Maintaining: req.GetMaintaining(), PacingJSON: req.GetPacingJson(), RunningRunIDs: req.GetRunningRunIds(),
+		DiskTotalBytes: req.GetDiskTotalBytes(), DiskFreeBytes: req.GetDiskFreeBytes(), DiskUsedBytes: req.GetDiskUsedBytes(), MinFreeBytes: req.GetMinFreeBytes(),
+		StagingBytes: req.GetStagingBytes(), Maintaining: req.GetMaintaining(), PacingJSON: req.GetPacingJson(), RunningRunIDs: req.GetRunningRunIds(),
 		ObjectStoreJSON: objectStoreToJSON(req.GetObjectStore()),
 	}, now, ttl)
 	if err != nil {
@@ -36,7 +36,7 @@ func (w *WorkerService) ArchiveWorkerHeartbeat(ctx context.Context, req *archive
 	if result.Conflict {
 		return &archivepb.ArchiveWorkerHeartbeatRsp{RetInfo: conflict(fmt.Errorf("worker_id %q 已有另一个存活的实例，请先停止它", req.GetWorkerId()))}, nil
 	}
-	rsp := &archivepb.ArchiveWorkerHeartbeatRsp{RetInfo: success(), Active: result.Active, LeaseTtlSeconds: uint32(ttl / time.Second)}
+	rsp := &archivepb.ArchiveWorkerHeartbeatRsp{RetInfo: success(), Active: result.Active, LeaseTtlSeconds: uint32(ttl / time.Second), Avoidance: avoidanceToPB(s.avoidance())}
 	canceled, err := s.store.RunningRunIDsCanceled(ctx, req.GetWorkerId(), req.GetRunningRunIds())
 	if err != nil {
 		return &archivepb.ArchiveWorkerHeartbeatRsp{RetInfo: inner(err)}, nil
@@ -88,8 +88,9 @@ func (w *WorkerService) PullArchiveRun(ctx context.Context, req *archivepb.PullA
 	for _, c := range claimed {
 		// worker 的读取都截在线上保留期内，更早的分区用不到，不下发（否则登记随年份增长、撑大响应）；
 		// 启用了对象存储时，更早但还没有已校验远端副本的分区照样下发，暂存库重建后才能补传。
+		// 导入写的多是保留期之前的分区：下发全部登记，暂存库丢失时也能先补齐本地状态，不把已有文件的分区当成新分区导出。
 		var since time.Time
-		if limit, forever, perr := parseRetention(c.Task.Retention); perr == nil && !forever {
+		if limit, forever, perr := parseRetention(c.Task.Retention); perr == nil && !forever && c.Run.Kind != store.KindImport {
 			since = c.Run.StartedAt.Add(-limit)
 		}
 		registered, err := s.store.TaskPartitions(ctx, c.Task.SpaceID, c.Task.DatasetID, since, status.remoteEnabled)
@@ -111,12 +112,13 @@ func (s *Service) assignment(c store.Claimed, registered []store.Partition) *arc
 	}
 	return &archivepb.RunAssignment{
 		RunId: c.Run.RunID, LeaseToken: c.Run.LeaseToken, Kind: c.Run.Kind, SpaceId: c.Task.SpaceID, DatasetId: c.Task.DatasetID,
+		Purpose: c.Task.Purpose, DirName: c.Task.DirName,
 		Freq: c.Task.Freq, PartitionUnit: c.Task.PartitionUnit, DataNodeId: c.Task.DataNodeID, Retention: c.Task.Retention,
 		IntervalSeconds: uint32(c.Task.IntervalSeconds), MinLookbackSeconds: uint32(s.cfg.Schedule.MinLookback / time.Second),
 		SpaceTz: spaceCfg.TZ, LocalClose: spaceCfg.LocalClose, StagingRetentionSeconds: uint32(s.cfg.StagingRetention / time.Second),
 		ScheduledAt: fmtRFC(c.Run.ScheduledAt), StartedAt: fmtRFC(c.Run.StartedAt), RangeStart: fmtRFC(c.Run.RangeStart), RangeEnd: fmtRFC(c.Run.RangeEnd),
 		BackfillFrom: fmtRFC(c.Task.BackfillFrom), TaskId: strconv.FormatInt(c.Task.ID, 10), DatasetMetaJson: c.Task.MetaJSON, LeaseTtlSeconds: uint32(s.cfg.Run.LeaseTTL / time.Second),
-		LastSuccessAt: fmtRFC(c.Task.LastSuccessAt), RegisteredPartitions: reports,
+		LastSuccessAt: fmtRFC(c.Task.LastSuccessAt), RegisteredPartitions: reports, ImportFile: c.Run.ImportFile, Overwrite: c.Run.Overwrite,
 	}
 }
 

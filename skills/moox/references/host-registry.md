@@ -51,6 +51,7 @@ Admin 的主机表（`t_hosts`）是主机的唯一登记处：地址、可达�
 
 `factor-engine` 与 `archive-worker` 是服务目录里的外部程序组件：软件包随 release 交付，由 systemd **用户服务**托管（目标机需开启 linger），
 健康检查经 control 网关中转到 11417 / 11418 的探测端口，Monitor 与 `moox-cli doctor` 按这个口径判断，调用方走 Access 的外部身份。
+归档 Worker 另有只听 127.0.0.1 的数据端口 11428（管理台下载分区与看最新数据，只有 Admin 经 control 中转进入）；只支持装在 control 或只出站主机上，装在其他可直达主机上时这两个网页功能不可用。
 
 ```bash
 ./bin/moox-cli setup release fetch --release <ID> --source-dir .   # release 里要有两个外部程序

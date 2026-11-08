@@ -55,7 +55,15 @@ func writeCSVRecord(w *bufio.Writer, fields []csvField) error {
 type csvReader struct {
 	r    *bufio.Reader
 	line int
+	// limit 大于 0 时是单条记录的字节上限（读外部文件时防止一条超长记录撑爆内存）。
+	limit int
 }
+
+// MaxImportRecordBytes 是 OpenCSV 读取时单条记录的字节上限。
+const MaxImportRecordBytes = 1 << 20
+
+// ErrRecordTooLong 表示一条记录超过了字节上限。
+var ErrRecordTooLong = errors.New("记录过长（超过 1MiB）")
 
 // read 读一行；文件结束返回 io.EOF。不带引号的空字段为 null。
 func (c *csvReader) read() ([]csvField, error) {
@@ -63,6 +71,7 @@ func (c *csvReader) read() ([]csvField, error) {
 	var fields []csvField
 	var buf strings.Builder
 	quoted, inQuotes, started := false, false, false
+	size := 0
 	finish := func() {
 		fields = append(fields, csvField{value: buf.String(), null: !quoted && buf.Len() == 0})
 		buf.Reset()
@@ -72,7 +81,7 @@ func (c *csvReader) read() ([]csvField, error) {
 		b, err := c.r.ReadByte()
 		if err == io.EOF {
 			if inQuotes {
-				return nil, fmt.Errorf("line %d: unterminated quoted field", c.line)
+				return nil, errors.New("引号没有闭合")
 			}
 			if !started {
 				return nil, io.EOF
@@ -84,6 +93,9 @@ func (c *csvReader) read() ([]csvField, error) {
 			return nil, err
 		}
 		started = true
+		if size++; c.limit > 0 && size > c.limit {
+			return nil, ErrRecordTooLong
+		}
 		if inQuotes {
 			if b != '"' {
 				buf.WriteByte(b)
@@ -110,7 +122,7 @@ func (c *csvReader) read() ([]csvField, error) {
 			// 容忍 \r\n 行尾。
 		case '"':
 			if buf.Len() != 0 || quoted {
-				return nil, fmt.Errorf("line %d: unexpected quote inside a field", c.line)
+				return nil, errors.New("字段中间出现引号（字段里的引号要写成两个，并把整个字段用引号括起来）")
 			}
 			quoted, inQuotes = true, true
 		default:
@@ -211,4 +223,79 @@ func parseValue(columnType string, f csvField) (any, error) {
 		return base64.StdEncoding.DecodeString(f.value)
 	}
 	return nil, errors.New("unsupported column type " + columnType)
+}
+
+// Cell 是 CSV 的一个字段：Null 为真表示缺失值（不带引号的空字段），空字符串写作 "" 时 Null 为假。
+type Cell struct {
+	Value string
+	Null  bool
+}
+
+// CSVReader 按归档文件的 CSV 规则逐行读取（区分缺失值与空字符串）；gzip 压缩的输入按魔数自动解压。
+type CSVReader struct {
+	r      *csvReader
+	closer io.Closer
+}
+
+// OpenCSV 打开一个 .csv 或 .csv.gz 文件（按内容的魔数判断是否压缩）；单条记录超过 1MiB 时 Read 返回 ErrRecordTooLong。
+func OpenCSV(path string) (*CSVReader, error) {
+	reader, closer, err := openCSV(path)
+	if err != nil {
+		return nil, err
+	}
+	reader.limit = MaxImportRecordBytes
+	return &CSVReader{r: reader, closer: closer}, nil
+}
+
+// Read 读一行；文件结束返回 io.EOF。
+func (c *CSVReader) Read() ([]Cell, error) {
+	fields, err := c.r.read()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Cell, len(fields))
+	for i, f := range fields {
+		out[i] = Cell{Value: f.value, Null: f.null}
+	}
+	return out, nil
+}
+
+// Line 返回最近一次 Read 读到的记录序号（从 1 起，表头是第 1 行；字段里的换行不计）。
+func (c *CSVReader) Line() int { return c.r.line }
+
+// Close 关闭文件。
+func (c *CSVReader) Close() error { return c.closer.Close() }
+
+// ParseCell 按列类型解析一个字段，返回 Stage 所需的值（与 Row.Values 一致）：时间为 time.Time、布尔为 bool，
+// 缺失值为 nil；时间超出可存储范围时报错。与读回归档文件用同一套解析规则（parseValue），再把绑定值转回 Go 值。
+func ParseCell(columnType string, c Cell) (any, error) {
+	if columnType == TypeTime && !c.Null {
+		t, err := time.Parse(time.RFC3339Nano, c.Value)
+		if err != nil {
+			return nil, fmt.Errorf("不是 RFC3339 时间: %q", c.Value)
+		}
+		if err := CheckNanosRange(t); err != nil {
+			return nil, err
+		}
+		return t.UTC(), nil
+	}
+	bound, err := parseValue(columnType, csvField{value: c.Value, null: c.Null})
+	if err != nil {
+		return nil, fmt.Errorf("不是合法的 %s 值: %q", columnType, c.Value)
+	}
+	return unbindValue(columnType, bound), nil
+}
+
+// unbindValue 把绑定参数转回 Stage 所需的 Go 值（bindValue 的逆）：布尔 0/1 → bool，时间纳秒 → time.Time。
+func unbindValue(columnType string, bound any) any {
+	switch v := bound.(type) {
+	case int64:
+		switch columnType {
+		case TypeBool:
+			return v != 0
+		case TypeTime:
+			return fromNanos(v)
+		}
+	}
+	return bound
 }

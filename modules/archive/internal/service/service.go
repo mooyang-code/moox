@@ -54,7 +54,10 @@ type Service struct {
 	store    *store.Store
 	cfg      *config.Config
 	datasets DatasetProvider
-	now      func() time.Time
+	// collector 读取各空间的采集频率，用来推出避让规则；nil 时一直用默认值。
+	collector CollectorFrequencies
+	now       func() time.Time
+	avoid     avoidanceState
 
 	mu          sync.Mutex
 	lastRefresh time.Time
@@ -88,14 +91,14 @@ func (s *Service) Worker() *WorkerService { return &WorkerService{svc: s} }
 
 func (s *Service) clock() time.Time { return s.now().UTC() }
 
-// timing 返回任务算拉取边界用的时序信息（空间时区与本地收盘时刻取自配置；时区无效时按 UTC）。
+// timing 返回任务算拉取边界用的时序信息（空间时区与本地收盘时刻取自配置，时区无效时按 UTC；避让规则取当前快照）。
 func (s *Service) timing(spaceID, freq string, pullEveryBars int) schedule.Timing {
 	spaceCfg := s.cfg.Space(spaceID)
 	loc, err := time.LoadLocation(spaceCfg.TZ)
 	if err != nil {
 		loc = time.UTC
 	}
-	return schedule.Timing{Freq: freq, PullEveryBars: pullEveryBars, Loc: loc, LocalClose: spaceCfg.LocalClose}
+	return schedule.Timing{Freq: freq, PullEveryBars: pullEveryBars, Loc: loc, LocalClose: spaceCfg.LocalClose, Avoid: s.avoidance()}
 }
 
 func success() *commonpb.RetInfo {

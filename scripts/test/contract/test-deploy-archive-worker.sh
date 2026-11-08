@@ -56,11 +56,12 @@ bash "${SCRIPT}" "${args[@]}" >"${tmp}/ok.log" 2>&1 || { cat "${tmp}/ok.log" >&2
 config="${deploy}/config/app.yaml"
 for want in 'access_address: "access.example.test:11004"' 'access_id: "access@storage"' 'caller: archive-worker' 'key_id: "key-123"' \
   "key_file: ${secrets}/access-archive-worker.key" "storage_auth_file: ${secrets}/storage-primary-auth.secret" 'worker_id: archive-worker@testhost' \
-  "root_dir: ${archive_root}" 'addr: 127.0.0.1:11418' 'export_format: csv.gz' 'page_rows: 500'; do
+  "root_dir: ${archive_root}" 'addr: 127.0.0.1:11418' 'export_format: csv.gz' 'page_rows: 500' \
+  'max_bytes_per_second: 2MB'; do
   grep -qF -- "${want}" "${config}" || fail "rendered config misses: ${want}"
 done
 # worker 严格解析配置：已删除的配置项一旦渲染出来，worker 会启动失败。
-for gone in 'export_formats' 'rebuild_ratio'; do
+for gone in 'export_formats' 'rebuild_ratio' 'listen:'; do
   grep -qF -- "${gone}" "${config}" && fail "rendered config still has removed key: ${gone}"
 done
 unit="${MOOX_SYSTEMD_USER_DIR}/moox-archive-worker.service"

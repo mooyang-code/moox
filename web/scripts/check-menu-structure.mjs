@@ -119,7 +119,8 @@ for (const retired of [
   "/ops/ssh-hosts",
   "/ops/ssh-terminal",
   "/ops/ssh-sessions",
-  "/ops/storage/archive"
+  "/ops/storage/archive",
+  "/data/archive"
 ]) {
   assert(!routes.includes(`path: "${retired}"`), `retired route ${retired} must be absent`);
 }
@@ -136,32 +137,31 @@ assert(dataSubjects.sort < dataFields.sort, "subjects must appear before base fi
 const collectorTasks = findMenu("collector-tasks");
 assert(collectorTasks.parentId === dataCollection.id, "collector-tasks must be under data collection");
 assert(collectorTasks.path === "/collector/tasks", "collector-tasks path must be canonical");
-// 采集任务排第一（数据归档紧跟其后，见下），数据源、数据对象、基础字段排在后面
+// 采集任务排第一，数据源、数据对象、基础字段排在后面
 assert(collectorTasks.sort < dataSources.sort, "collection tasks must appear before data sources");
 assert(routes.includes('path: "/collector/tasks"'), "collector tasks route must exist");
 
-// 数据归档紧跟采集任务：按 sort 排序后两者相邻、它在后；不写死 sort 数值，目录里调整顺序时不用改这里。
-const dataArchive = findMenu("data-archive");
-assert(dataArchive.parentId === dataCollection.id, "data-archive must be under data collection");
-assert(dataArchive.path === "/data/archive", "data-archive path must be /data/archive");
-assert(zhCN.includes('["data-archive"]: "数据归档"'), "data-archive zh-CN label must be 数据归档");
-const collectionMenus = [
-  ...staticMenu.matchAll(
-    new RegExp(String.raw`menu\(\s*"[^"]+",\s*"${dataCollection.id}",\s*"[^"]+",\s*"([^"]+)",\s*"[^"]+",\s*"[^"]+",\s*(\d+)`, "g")
-  )
-]
-  .map(match => ({ name: match[1], sort: Number(match[2]) }))
-  .sort((a, b) => a.sort - b.sort)
-  .map(item => item.name);
+// 数据归档是根菜单，排在交易之后、事件中心之前；下设归档任务、归档存储，归档任务带 reuseOnQuery（菜单与路由两处）。
+const archive = findDirectory("archive");
+assert(archive.parentId === "0", "archive must be a root menu");
+assert(archive.path === "/archive/tasks", "archive default path must be /archive/tasks");
+assert(trading.sort < archive.sort && archive.sort < eventCenter.sort, "archive must appear after trading and before events");
+assert(zhCN.includes('["archive"]: "数据归档"'), "archive zh-CN label must be 数据归档");
+assert(zhCN.includes('["archive-tasks"]: "归档任务"'), "archive-tasks zh-CN label must be 归档任务");
+assert(zhCN.includes('["archive-storage"]: "归档存储"'), "archive-storage zh-CN label must be 归档存储");
+const archiveTasks = findMenu("archive-tasks");
+const archiveStorage = findMenu("archive-storage");
+for (const item of [archiveTasks, archiveStorage]) assert(item.parentId === archive.id, `${item.title} must be under archive`);
+assert(archiveTasks.path === "/archive/tasks", "archive-tasks path must be /archive/tasks");
+assert(archiveStorage.path === "/archive/storage", "archive-storage path must be /archive/storage");
+assert(archiveTasks.sort < archiveStorage.sort, "archive tasks must come before archive storage");
+assert(/menu\("05801"[^)]*reuseOnQuery: true/.test(staticMenu), "archive-tasks menu must declare reuseOnQuery");
 assert(
-  collectionMenus.indexOf("data-archive") === collectionMenus.indexOf("collector-tasks") + 1,
-  "data-archive must come right after collector-tasks"
+  /path: "\/archive\/tasks",[^}]*meta: \{[^}]*reuseOnQuery: true/.test(routes),
+  "archive-tasks route must declare reuseOnQuery"
 );
-assert(/menu\("0309"[^)]*reuseOnQuery: true/.test(staticMenu), "data-archive menu must declare reuseOnQuery");
-assert(
-  /path: "\/data\/archive",[^}]*meta: \{[^}]*reuseOnQuery: true/.test(routes),
-  "data-archive route must declare reuseOnQuery"
-);
+assert(routes.includes('path: "/archive/storage"'), "archive storage route must exist");
+assert(!zhCN.includes('["data-archive"]'), "retired data-archive label must be absent");
 const collectorTabOrder = ["采集任务", "采集结果", "运行状态", "执行器", "补采"].map(label =>
   collectorTaskWorkbench.indexOf(`label: "${label}"`)
 );
@@ -235,5 +235,6 @@ assertNotVisible("data-view-list");
 assertNotVisible("data-view-browse");
 assertNotVisible("collector-datasets");
 assertNotVisible("collector-views");
+assertNotVisible("data-archive");
 
 console.log("menu structure ok");

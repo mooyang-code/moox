@@ -47,7 +47,8 @@ func (s *Service) Trigger(ctx context.Context) error {
 	return nil
 }
 
-// Maintain 是维护定时器（每分钟一次）：回收过期租约；每小时刷新各任务的保留期与 DataNode、清理运行记录；每天回收空闲页。
+// Maintain 是维护定时器（每分钟一次）：回收过期租约；每小时刷新各任务的保留期与 DataNode、清理运行记录；每天回收空闲页；
+// 最后在距上次成功满 10 分钟时刷新避让规则（读取各空间的采集频率，合计不超过 20 秒）。
 func (s *Service) Maintain(ctx context.Context) error {
 	now := s.clock()
 	expired, err := s.store.ExpireLeases(ctx, now)
@@ -93,6 +94,10 @@ func (s *Service) Maintain(ctx context.Context) error {
 			s.lastVacuum = now
 			s.mu.Unlock()
 		}
+	}
+	// 避让刷新失败只记警告：有沿用上次结果与默认值兜底，不算维护失败。
+	if err := s.maybeRefreshAvoidance(ctx, now); err != nil {
+		log.WarnContextf(ctx, "archive maintain: refresh avoidance: %v", err)
 	}
 	return firstErr
 }

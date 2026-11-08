@@ -1,0 +1,280 @@
+<template>
+  <div class="task-partitions">
+    <div class="filters">
+      <span>月份</span>
+      <a-month-picker
+        :model-value="query.from || undefined"
+        value-format="YYYY-MM"
+        placeholder="起"
+        style="width: 130px"
+        @change="(value: unknown) => emit('update:query', { from: String(value || ''), ppage: 1 })"
+      />
+      <span>～</span>
+      <a-month-picker
+        :model-value="query.to || undefined"
+        value-format="YYYY-MM"
+        placeholder="止"
+        style="width: 130px"
+        @change="(value: unknown) => emit('update:query', { to: String(value || ''), ppage: 1 })"
+      />
+    </div>
+    <div v-if="error" class="load-error">
+      读取分区失败：{{ error }}<template v-if="partitions.length">（下面是上次读到的）</template> ·
+      <a-link @click="load">重试</a-link>
+    </div>
+    <a-table
+      row-key="partition_key"
+      size="small"
+      :bordered="{ cell: true }"
+      :loading="loading && !loaded"
+      :data="partitions"
+      :scroll="{ x: 1400 }"
+      :pagination="{ current: query.ppage, pageSize: PAGE_SIZE, total, showTotal: true }"
+      @page-change="(page: number) => emit('update:query', { ppage: page })"
+    >
+      <template #empty>
+        <div class="sub">{{ loaded ? "没有分区" : error ? "读取失败" : "读取中…" }}</div>
+      </template>
+      <template #columns>
+        <!-- 分区键是本地日或月的标签，不是时刻，原样显示 -->
+        <a-table-column title="分区" data-index="partition_key" :width="110" />
+        <a-table-column title="状态" :width="80"
+          ><template #cell="{ record }">{{ partitionStatusLabel(record.status) }}</template></a-table-column
+        >
+        <a-table-column title="数据时间" :width="210">
+          <template #cell="{ record }">
+            <div>{{ formatInstant(record.min_data_time, zone) }}</div>
+            <div>～ {{ formatInstant(record.max_data_time, zone) }}</div>
+          </template>
+        </a-table-column>
+        <a-table-column title="行数" :width="90"
+          ><template #cell="{ record }">{{ toNum(record.row_count) }}</template></a-table-column
+        >
+        <a-table-column title="标的数" :width="80"
+          ><template #cell="{ record }">{{ toNum(record.subject_count) }}</template></a-table-column
+        >
+        <a-table-column title="文件" :width="300">
+          <template #cell="{ record }">
+            <a-link class="mono path" title="点击复制完整路径" @click="copy(record.file_path)">{{
+              record.file_path || "—"
+            }}</a-link>
+            <div class="sub">
+              {{ formatBytes(toNum(record.file_bytes)) }}
+              <template v-if="record.file_sha256">
+                ·
+                <a-link class="mono" title="点击复制完整 sha256" @click="copy(record.file_sha256)">{{
+                  record.file_sha256.slice(0, 12)
+                }}</a-link>
+              </template>
+            </div>
+          </template>
+        </a-table-column>
+        <a-table-column title="导出次数" data-index="export_count" :width="80" />
+        <a-table-column title="导出 / 定稿时间" :width="210">
+          <template #cell="{ record }">
+            <div>{{ formatInstant(record.exported_at, zone) }}</div>
+            <div>{{ formatInstant(record.finalized_at, zone) }}</div>
+          </template>
+        </a-table-column>
+        <a-table-column v-if="remoteEnabled" title="远端副本" :width="140">
+          <template #cell="{ record }">
+            <span :title="remoteTitle(record)">{{ remoteStateLabel(record.remote_state, record.remote_key) }}</span>
+          </template>
+        </a-table-column>
+        <a-table-column title="操作" :width="remoteEnabled ? 150 : 70" fixed="right">
+          <template #cell="{ record }">
+            <a-space :size="4">
+              <a-button size="mini" @click="emit('update:query', { partition: record.partition_key })">预览</a-button>
+              <template v-if="remoteEnabled">
+                <!-- 置灰的按钮收不到悬停事件，原因写在外层的 title 上 -->
+                <span :title="downloadBlockedReason(record) || undefined">
+                  <a-button
+                    size="mini"
+                    :disabled="Boolean(downloadBlockedReason(record)) && !isDownloading(record)"
+                    :title="isDownloading(record) ? '点击取消下载' : undefined"
+                    @click="isDownloading(record) ? cancelDownload(record) : download(record)"
+                    >{{ downloadLabel(record) }}</a-button
+                  >
+                </span>
+              </template>
+            </a-space>
+          </template>
+        </a-table-column>
+      </template>
+    </a-table>
+
+    <PartitionPreview
+      v-if="query.partition"
+      :dataset-id="datasetId"
+      :partition-key="query.partition"
+      :zone="zone"
+      @close="emit('update:query', { partition: '' })"
+    />
+  </div>
+</template>
+
+<script setup lang="ts">
+import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { Message } from "@arco-design/web-vue";
+import {
+  downloadArchivePartition,
+  listArchivePartitions,
+  saveBlob,
+  type ArchivePartition,
+  type ArchiveTask
+} from "@/api/archive";
+import { StaleSpaceRequestError } from "@/api/admin/stale-space";
+import { formatBytes } from "@/api/modules/host-monitor";
+import { RequestGate } from "@/utils/request-gate";
+import { formatInstant } from "@/utils/time-zone";
+import { downloadBlockedReason, partitionStatusLabel, remoteStateLabel, toNum, type ArchiveQuery } from "../shared/archive-model";
+import PartitionPreview from "./partition-preview.vue";
+
+/**
+ * 分区页签：后端按分区键倒序；起止月份、页码、预览的分区都在 URL 里。不轮询，切到页签、翻页、改筛选时读取。
+ * 远端副本已校验的分区可以下载（经 Admin 转给执行器，从对象存储读出），其余置灰并在悬停里写原因。
+ */
+const PAGE_SIZE = 50;
+
+const props = defineProps<{ task: ArchiveTask; spaceId: string; query: ArchiveQuery; zone: string; remoteEnabled?: boolean }>();
+const datasetId = computed(() => props.task.dataset_id || "");
+const emit = defineEmits<{ "update:query": [patch: Partial<ArchiveQuery>] }>();
+
+const partitions = ref<ArchivePartition[]>([]);
+const total = ref(0);
+const loading = ref(false);
+const loaded = ref(false);
+const error = ref("");
+const gate = new RequestGate();
+
+async function load() {
+  const token = gate.next();
+  loading.value = true;
+  try {
+    const rsp = await listArchivePartitions({
+      dataset_id: datasetId.value,
+      from_month: props.query.from || undefined,
+      to_month: props.query.to || undefined,
+      page: { page: props.query.ppage, size: PAGE_SIZE }
+    });
+    if (!gate.isCurrent(token)) return;
+    partitions.value = rsp.partitions || [];
+    total.value = Number(rsp.page_result?.total || partitions.value.length);
+    loaded.value = true;
+    error.value = "";
+  } catch (cause) {
+    if (cause instanceof StaleSpaceRequestError || !gate.isCurrent(token)) return;
+    error.value = cause instanceof Error && cause.message ? cause.message : "请稍后重试";
+  } finally {
+    if (gate.isCurrent(token)) loading.value = false;
+  }
+}
+
+// 逐项比较：props.query 每次路由变化都是新对象，开关预览（?partition=）时不能重读分区表
+watch(
+  [datasetId, () => props.query.from, () => props.query.to, () => props.query.ppage],
+  () => {
+    loaded.value = false;
+    void load();
+  },
+  { immediate: true }
+);
+
+async function copy(text?: string) {
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+    Message.success("已复制");
+  } catch {
+    Message.warning("复制失败，请手动选择");
+  }
+}
+
+// 远端副本的细节放在悬停提示里
+function remoteTitle(partition: ArchivePartition): string | undefined {
+  if (partition.remote_state === "verified")
+    return `校验于 ${formatInstant(partition.remote_verified_at, props.zone)}\n${partition.remote_key || ""}`;
+  if (partition.remote_state === "failed") return partition.remote_error || undefined;
+  if (partition.remote_state === "pending" && partition.remote_key) return `远端只有旧版本：${partition.remote_key}`;
+  return undefined;
+}
+
+// ---- 下载 ----
+// 按分区记进度（0～100，读不到总长时为 -1）；执行器同时最多 2 个下载，同一分区不重复发起。
+// 每个下载一个 AbortController：下载中再点按钮即取消，离开页签或关闭抽屉（组件卸载）时全部中止，中止的不弹提示也不保存。
+const downloading = ref<Record<string, number>>({});
+const controllers = new Map<string, AbortController>();
+const isDownloading = (partition: ArchivePartition) => (partition.partition_key || "") in downloading.value;
+function downloadLabel(partition: ArchivePartition) {
+  const progress = downloading.value[partition.partition_key || ""];
+  if (progress === undefined) return "下载";
+  return progress >= 0 ? `${progress}% · 取消` : "下载中 · 取消";
+}
+
+function cancelDownload(partition: ArchivePartition) {
+  controllers.get(partition.partition_key || "")?.abort();
+}
+onBeforeUnmount(() => {
+  for (const controller of controllers.values()) controller.abort();
+  controllers.clear();
+});
+
+async function download(partition: ArchivePartition) {
+  const key = partition.partition_key || "";
+  if (!key || isDownloading(partition)) return;
+  const controller = new AbortController();
+  controllers.set(key, controller);
+  downloading.value = { ...downloading.value, [key]: -1 };
+  try {
+    const { blob, fileName } = await downloadArchivePartition(
+      {
+        space: props.spaceId,
+        dataset: datasetId.value,
+        partition: key,
+        fallbackName: `${props.task.dir_name || datasetId.value}_${key}.csv.gz`
+      },
+      (received, total) => {
+        if (total > 0 && key in downloading.value)
+          downloading.value = { ...downloading.value, [key]: Math.floor((received / total) * 100) };
+      },
+      controller.signal
+    );
+    if (controller.signal.aborted) return;
+    saveBlob(blob, fileName);
+  } catch (cause) {
+    if (controller.signal.aborted) return;
+    Message.error(`下载 ${key} 失败：${cause instanceof Error && cause.message ? cause.message : "请稍后重试"}`);
+  } finally {
+    if (controllers.get(key) === controller) controllers.delete(key);
+    downloading.value = Object.fromEntries(Object.entries(downloading.value).filter(([item]) => item !== key));
+  }
+}
+</script>
+
+<style scoped>
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: var(--moox-space-2);
+}
+
+.sub {
+  color: var(--color-text-3);
+  font-size: 12px;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.path {
+  word-break: break-all;
+}
+
+.load-error {
+  margin-bottom: var(--moox-space-2);
+  color: rgb(var(--red-6));
+}
+</style>

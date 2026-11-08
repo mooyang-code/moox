@@ -71,6 +71,17 @@ func (c Catalog) Validate() error {
 				return err
 			}
 		}
+		if component.RelayHTTP != nil {
+			if !component.ExternalProgram {
+				return fmt.Errorf("component %q declares relay_http but is not an external program", component.ID)
+			}
+			if component.RelayHTTP.Port == HostGatewayRemotePort {
+				return fmt.Errorf("component %q relay_http cannot use the host gateway remote port", component.ID)
+			}
+			if err := addPort(component.RelayHTTP.Port); err != nil {
+				return err
+			}
+		}
 		for _, service := range component.Services {
 			if !servicePath.MatchString(service.Path) || paths[service.Path] {
 				return fmt.Errorf("invalid or duplicate service %q", service.Path)
@@ -125,6 +136,9 @@ func (c Catalog) Validate() error {
 	}
 	for _, component := range c.Components {
 		if err := validateDoctor(component, ids); err != nil {
+			return err
+		}
+		if err := c.validateRelayHTTP(component, ids, external); err != nil {
 			return err
 		}
 		for _, service := range component.Services {
@@ -197,6 +211,35 @@ func (c Catalog) Validate() error {
 	}
 	if len(c.Principals) != 0 && !ids["access"] {
 		return fmt.Errorf("external principals require the access component")
+	}
+	return nil
+}
+
+// validateRelayHTTP 校验外部程序的 relay_http：调用方只能是内置调用方（非外部组件、console、moox-cli），不重复；
+// 端口不能与目录里任何其他组件的端口相同，ValidRelay 只凭端口号区分健康端口与 relay_http 端口，撞上就有歧义。
+func (c Catalog) validateRelayHTTP(component Component, ids, external map[string]bool) error {
+	relay := component.RelayHTTP
+	if relay == nil {
+		return nil
+	}
+	if len(relay.Callers) == 0 || len(relay.Callers) > 16 {
+		return fmt.Errorf("component %q relay_http requires 1..16 callers", component.ID)
+	}
+	seen := map[string]bool{}
+	for _, caller := range relay.Callers {
+		if seen[caller] {
+			return fmt.Errorf("component %q relay_http has duplicate caller %q", component.ID, caller)
+		}
+		seen[caller] = true
+		builtin := caller == "console" || caller == "moox-cli" || ids[caller] && !external[caller]
+		if !builtin {
+			return fmt.Errorf("component %q relay_http caller %q must be a built-in caller", component.ID, caller)
+		}
+	}
+	for _, other := range c.Components {
+		if other.ID != component.ID && slices.Contains(componentPorts(other), relay.Port) {
+			return fmt.Errorf("component %q relay_http port %d is also used by %q", component.ID, relay.Port, other.ID)
+		}
 	}
 	return nil
 }

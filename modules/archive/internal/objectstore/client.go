@@ -247,6 +247,58 @@ func (c *Client) Get(ctx context.Context, key string, w io.Writer) (int64, strin
 	return n, hex.EncodeToString(h.Sum(nil)), nil
 }
 
+// Stream 是一次流式 GET 的响应体：Size 是对象大小；读完或不用时必须 Close。超时按对象大小计算，与 Get 相同。
+type Stream struct {
+	Size   int64
+	key    string
+	body   io.ReadCloser
+	ctx    context.Context
+	parent context.Context
+	limit  time.Duration
+	stop   func()
+}
+
+// Read 读响应体；本地计时器到期时报超时（不带出 context.Canceled）。
+func (s *Stream) Read(p []byte) (int, error) {
+	n, err := s.body.Read(p)
+	if err != nil && err != io.EOF {
+		if s.ctx.Err() != nil && s.parent.Err() == nil {
+			return n, fmt.Errorf("下载 %s 超时（%s）: %w", s.key, s.limit, context.DeadlineExceeded)
+		}
+		return n, classify("下载", s.key, err)
+	}
+	return n, err
+}
+
+// Close 关闭响应体并停止计时。
+func (s *Stream) Close() error {
+	err := s.body.Close()
+	s.stop()
+	return err
+}
+
+// Open 发一次 GET 并返回响应体，由调用方边读边处理（Get 要写完才返回 sha256，装不下边读边转发）。
+// 不存在时返回 ErrNotFound；先按 60 秒等响应头，拿到大小后按大小放宽超时，计时器与取消挂在 Stream.Close 上。
+func (c *Client) Open(ctx context.Context, key string) (*Stream, error) {
+	parent := ctx
+	ctx, cancel := context.WithCancel(ctx)
+	limit := TransferTimeout(0)
+	timer := time.AfterFunc(limit, cancel)
+	stop := func() { timer.Stop(); cancel() }
+	body, info, _, err := minio.Core{Client: c.mc}.GetObject(ctx, c.cfg.Bucket, c.cfg.Prefix+key, minio.GetObjectOptions{})
+	if err != nil {
+		timedOut := ctx.Err() != nil && parent.Err() == nil
+		stop()
+		if timedOut {
+			return nil, fmt.Errorf("下载 %s 超时（%s）: %w", key, limit, context.DeadlineExceeded)
+		}
+		return nil, classify("下载", key, err)
+	}
+	limit = TransferTimeout(info.Size)
+	timer.Reset(limit)
+	return &Stream{Size: info.Size, key: key, body: body, ctx: ctx, parent: parent, limit: limit, stop: stop}, nil
+}
+
 // Delete 删除对象。只给 objectstore-check 核对“权限策略不给删除”用。
 func (c *Client) Delete(ctx context.Context, key string) error {
 	ctx, cancel := context.WithTimeout(ctx, headTimeout)

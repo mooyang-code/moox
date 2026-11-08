@@ -63,3 +63,38 @@ func TestRawRouteRequiresMatchingOneTimeTicket(t *testing.T) {
 	_, err = validateRawRouteTicket(r, "ssh", "SftpDownload")
 	require.Error(t, err)
 }
+
+// 归档路由不看 SSH 会话归属，只核对 query 里的 space、dataset 与 ticket 资源一致；操作不同或资源不一致都拒绝。
+func TestArchiveRawRouteTicketMatchesSpaceAndDataset(t *testing.T) {
+	store, _, _, sid := setupRequestAuthTest(t)
+	SetRawSessionOwnerVerifier(func(string, string) bool { return false })
+	t.Cleanup(func() { SetRawSessionOwnerVerifier(nil) })
+	issue := func(id, operation, resource string) {
+		store.tickets[id] = authmodel.RawSessionTicket{TicketID: id, SessionID: sid, ResourceSessionID: resource, UserID: "u1", Operation: operation, ExpiresAt: time.Now().Add(time.Minute)}
+	}
+	issue("dl", authmodel.RawOperationArchiveDownload, "crypto/ds")
+	r := httptest.NewRequest(http.MethodGet, "/api/admin/archive/PartitionDownload?ticket=dl&space=crypto&dataset=ds&partition=2026-10-15", nil)
+	claims, err := validateRawRouteTicket(r, "archive", "PartitionDownload")
+	require.NoError(t, err)
+	assert.Equal(t, "u1", claims.UserID)
+	_, err = validateRawRouteTicket(r, "archive", "PartitionDownload")
+	require.Error(t, err, "ticket 只能用一次")
+
+	issue("rc", authmodel.RawOperationArchiveRecent, "crypto/ds")
+	_, err = validateRawRouteTicket(httptest.NewRequest(http.MethodGet, "/api/admin/archive/RecentRows?ticket=rc&space=crypto&dataset=ds&subject=BTC", nil), "archive", "RecentRows")
+	require.NoError(t, err)
+
+	for name, tc := range map[string]struct{ operation, resource, url, method string }{
+		"other dataset":   {authmodel.RawOperationArchiveDownload, "crypto/ds", "/x?ticket=t&space=crypto&dataset=other&partition=p", "PartitionDownload"},
+		"other space":     {authmodel.RawOperationArchiveDownload, "crypto/ds", "/x?ticket=t&space=stockcn&dataset=ds&partition=p", "PartitionDownload"},
+		"slash in space":  {authmodel.RawOperationArchiveDownload, "a/b/ds", "/x?ticket=t&space=a/b&dataset=ds", "PartitionDownload"},
+		"wrong operation": {authmodel.RawOperationArchiveRecent, "crypto/ds", "/x?ticket=t&space=crypto&dataset=ds", "PartitionDownload"},
+		"ssh ticket":      {"sftp_download", "crypto/ds", "/x?ticket=t&space=crypto&dataset=ds&session_id=crypto/ds", "PartitionDownload"},
+	} {
+		issue("t", tc.operation, tc.resource)
+		_, err := validateRawRouteTicket(httptest.NewRequest(http.MethodGet, tc.url, nil), "archive", tc.method)
+		require.Error(t, err, name)
+	}
+	assert.True(t, isRawTicketPath("/api/admin/archive/PartitionDownload"))
+	assert.True(t, isRawTicketPath("/api/admin/archive/RecentRows"))
+}

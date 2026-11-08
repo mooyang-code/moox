@@ -59,6 +59,24 @@ func TestArchiveCreateSendsThePullIntervalAndPrintsProtoFieldNames(t *testing.T)
 	assert.Contains(t, out.String(), `"next_pull_at": "2026-10-17T01:05:25Z"`)
 }
 
+func TestArchiveCreateAndPrepareSendTheDirNameAndPrintTheSuggestion(t *testing.T) {
+	g := &archiveFakeGateway{rsp: &archivepb.CreateArchiveTaskRsp{RetInfo: ok(), Task: &archivepb.ArchiveTask{SpaceId: "crypto", DatasetId: "ds", Purpose: "collect", DirName: "binance-perp-kline-1m"}}}
+	useArchiveGateway(t, g)
+	var out bytes.Buffer
+	require.NoError(t, runArchiveTasksCreate(context.Background(), &out, archiveFlags{SpaceID: "crypto", DatasetID: "ds", DirName: "binance-perp-kline-1m"}))
+	assert.Equal(t, "binance-perp-kline-1m", g.req.(*archivepb.CreateArchiveTaskReq).GetDirName())
+	assert.Contains(t, out.String(), `"dir_name": "binance-perp-kline-1m"`)
+
+	prep := &archiveFakeGateway{rsp: &archivepb.PrepareArchiveTaskRsp{RetInfo: ok(), Purpose: "collect", SuggestedDirName: "binance-swap-kline-1m", DirNameConflict: true}}
+	useArchiveGateway(t, prep)
+	out.Reset()
+	require.NoError(t, runArchiveTasksPrepare(context.Background(), &out, archiveFlags{SpaceID: "crypto", DatasetID: "ds", DirName: "binance-perp-kline-1m"}))
+	assert.Equal(t, "binance-perp-kline-1m", prep.req.(*archivepb.PrepareArchiveTaskReq).GetDirName())
+	assert.Contains(t, out.String(), `"suggested_dir_name": "binance-swap-kline-1m"`)
+	assert.Contains(t, out.String(), `"dir_name_conflict": true`)
+	assert.Contains(t, out.String(), `"purpose": "collect"`)
+}
+
 func TestArchivePreviewAndRunsListSendTheNewFields(t *testing.T) {
 	g := &archiveFakeGateway{rsp: &archivepb.PreviewArchiveScheduleRsp{RetInfo: ok(), NextRuns: []string{"2026-10-17T01:04:25Z"}, NextReviews: []string{"2026-10-17T01:34:25Z"}}}
 	useArchiveGateway(t, g)
@@ -139,6 +157,20 @@ func TestArchiveCommandsMapToTheRightMethods(t *testing.T) {
 	}
 }
 
+// archive overview 的输出带上当前避让规则（含依据与计算时间）。
+func TestArchiveOverviewPrintsAvoidance(t *testing.T) {
+	g := &archiveFakeGateway{rsp: &archivepb.GetArchiveOverviewRsp{RetInfo: ok(), Avoidance: &archivepb.AvoidanceRules{
+		EveryMinutes: 1, BeforeSeconds: 5, AfterSeconds: 25, HourQuietFrom: "58:00", HourQuietUntil: "04:00",
+		Basis: "crypto：1m、1h；stockcn：5m（每分钟触发，有 1h 及以上，整点避让）", ComputedAt: "2026-11-08T10:00:00Z",
+	}}}
+	useArchiveGateway(t, g)
+	var out bytes.Buffer
+	require.NoError(t, runArchiveOverview(context.Background(), &out, archiveFlags{}))
+	for _, want := range []string{`"avoidance"`, `"every_minutes": 1`, `"hour_quiet_from": "58:00"`, `"basis": "crypto：1m、1h；stockcn：5m`, `"computed_at": "2026-11-08T10:00:00Z"`} {
+		assert.Contains(t, out.String(), want)
+	}
+}
+
 func TestArchiveSurfacesManagerErrors(t *testing.T) {
 	g := &archiveFakeGateway{rsp: &archivepb.CreateArchiveTaskRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_CONFLICT, Msg: "数据集已有归档任务"}}}
 	useArchiveGateway(t, g)
@@ -154,7 +186,7 @@ func TestArchiveAndSyncDeploymentsCommandsAreRegistered(t *testing.T) {
 	for _, c := range archiveCmd.Commands() {
 		found = append(found, c.Name())
 	}
-	assert.ElementsMatch(t, []string{"overview", "tasks", "runs", "partitions", "worker"}, found)
+	assert.ElementsMatch(t, []string{"overview", "tasks", "runs", "partitions", "worker", "import"}, found)
 	setup := newSetupCommand(defaultSetupDeps())
 	sync, _, err := setup.Find([]string{"sync-deployments"})
 	require.NoError(t, err)

@@ -105,7 +105,7 @@ func TestSetupBootstrapStopsBeforeUploadWhenPrerequisitesFail(t *testing.T) {
 	command := newSetupCommand(deps)
 	command.SetOut(&bytes.Buffer{})
 	command.SetArgs([]string{"bootstrap", "--stage", "admin", "--state-dir", t.TempDir(), "--operator-dir", t.TempDir()})
-	require.ErrorContains(t, command.Execute(), "disk_low")
+	require.ErrorContains(t, command.Execute(), "disk_insufficient")
 	require.Zero(t, called)
 	require.Empty(t, diskWarnings([]deployscan.HostReport{{Host: "control", DiskFreeKB: 6 << 20, ReclaimableKB: 3 << 20}}, "control"), "失败残留下一次会自动清掉，不能挡住重试")
 	require.NotEmpty(t, diskWarnings([]deployscan.HostReport{{Host: "control", DiskFreeKB: 1 << 18, ReclaimableKB: 9 << 20}}, "control"), "上传本身要真实空间")

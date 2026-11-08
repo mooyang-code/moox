@@ -83,3 +83,26 @@ func TestIssueRawSessionTicketRejectsMissingSession(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, pb.ErrorCode_NO_AUTH, rsp.GetRetInfo().GetCode())
 }
+
+// 归档的两个操作绑定 "<空间>/<数据集>"，格式不对就拒绝签发。
+func TestIssueRawSessionTicketBindsArchiveResource(t *testing.T) {
+	svc, _, _ := newAuthServiceForLoginTest(t)
+	ctx := trpc.BackgroundContext()
+	trpc.SetMetaData(ctx, model.CtxUserID, []byte("user-login-1"))
+	trpc.SetMetaData(ctx, model.CtxSessionID, []byte("sid-1"))
+	require.NoError(t, svc.userDAO.SetSigningSession(ctx, model.RequestSigningSession{SessionID: "sid-1", UserID: "user-login-1", EncryptedSecret: "encrypted", ExpiresAt: time.Now().Add(time.Hour)}))
+	for _, operation := range []string{model.RawOperationArchiveDownload, model.RawOperationArchiveRecent} {
+		good, err := svc.IssueRawSessionTicket(ctx, &pb.IssueRawSessionTicketReq{Operation: operation, SessionId: "crypto/dataset_factor_spot_1m"})
+		require.NoError(t, err)
+		require.Equal(t, pb.ErrorCode_SUCCESS, good.GetRetInfo().GetCode())
+		ticket, err := svc.userDAO.ConsumeRawSessionTicket(ctx, good.GetTicket())
+		require.NoError(t, err)
+		assert.Equal(t, operation, ticket.Operation)
+		assert.Equal(t, "crypto/dataset_factor_spot_1m", ticket.ResourceSessionID)
+		for _, resource := range []string{"crypto", "crypto/", "/ds", "crypto/ds/x", ".state/ds", "crypto/..", "crypto/a\\b"} {
+			bad, err := svc.IssueRawSessionTicket(ctx, &pb.IssueRawSessionTicketReq{Operation: operation, SessionId: resource})
+			require.NoError(t, err)
+			assert.Equal(t, pb.ErrorCode_INVALID_PARAM, bad.GetRetInfo().GetCode(), resource)
+		}
+	}
+}

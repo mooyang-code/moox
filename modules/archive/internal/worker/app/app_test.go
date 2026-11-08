@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/config"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/export"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/manager"
+	"github.com/mooyang-code/moox/modules/archive/internal/worker/pacing"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/runner"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/source"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/staging"
@@ -152,7 +154,9 @@ type harness struct {
 	cfg   *config.Config
 	now   time.Time
 	free  uint64
-	slept []time.Duration
+	// diskErr 非空时 DiskUsage 返回它（模拟 statfs 失败）。
+	diskErr error
+	slept   []time.Duration
 }
 
 func newHarness(t *testing.T) *harness {
@@ -175,14 +179,19 @@ func newHarness(t *testing.T) *harness {
 			h.now = h.now.Add(d)
 			return ctx.Err()
 		},
-		DiskUsage: func(string) (uint64, uint64, error) { return 200 << 30, h.free, nil },
+		DiskUsage: func(string) (uint64, uint64, uint64, error) {
+			if h.diskErr != nil {
+				return 0, 0, 0, h.diskErr
+			}
+			return 200 << 30, 90 << 30, h.free, nil
+		},
 	})
 	return h
 }
 
 func assignment(runID string, mutate func(*archivepb.RunAssignment)) *archivepb.RunAssignment {
 	a := &archivepb.RunAssignment{
-		RunId: runID, LeaseToken: "tok-" + runID, Kind: "scheduled", SpaceId: "crypto", DatasetId: "ds_1m", TaskId: "1", Freq: "1m", PartitionUnit: "day", DataNodeId: "node-0",
+		RunId: runID, LeaseToken: "tok-" + runID, Kind: "scheduled", SpaceId: "crypto", DatasetId: "ds_1m", Purpose: "collect", DirName: "kline-1m", TaskId: "1", Freq: "1m", PartitionUnit: "day", DataNodeId: "node-0",
 		Retention: "168h", IntervalSeconds: 3600, MinLookbackSeconds: 900, SpaceTz: "UTC", StagingRetentionSeconds: 72 * 3600,
 		StartedAt: "2026-10-17T01:04:43Z", ScheduledAt: "2026-10-17T01:04:43Z",
 	}
@@ -238,7 +247,8 @@ func TestHeartbeatReportsStateAndAppliesTheManagersInstructions(t *testing.T) {
 	tasks := h.app.heartbeatOnce(ctx)
 	req := h.mgr.heartbeats[0]
 	if req.GetWorkerId() != "w1" || req.GetInstanceId() != "i1" || req.GetVersion() != "test" || req.GetRootDir() != h.root || req.GetDiskTotalBytes() != 200<<30 ||
-		req.GetDiskFreeBytes() != 100<<30 || req.GetDiskLow() || len(req.GetRunningRunIds()) != 1 || !strings.Contains(req.GetPacingJson(), "max_concurrent_runs") {
+		req.GetDiskFreeBytes() != 100<<30 || req.GetDiskUsedBytes() != 90<<30 || req.GetMinFreeBytes() != uint64(h.cfg.Worker.MinFreeBytes) || h.cfg.Worker.MinFreeBytes <= 0 ||
+		len(req.GetRunningRunIds()) != 1 || !strings.Contains(req.GetPacingJson(), "max_concurrent_runs") {
 		t.Fatalf("heartbeat = %v", req)
 	}
 	if !cancelled || !h.app.running["r1"].stop.Load() {
@@ -256,11 +266,73 @@ func TestHeartbeatReportsStateAndAppliesTheManagersInstructions(t *testing.T) {
 	if tasks := h.app.heartbeatOnce(ctx); tasks == nil || len(tasks) != 0 {
 		t.Fatalf("活动 worker 没有任务时应拿到空列表: %v", tasks)
 	}
-	// 磁盘低于下限：心跳上报 disk_low。
+	if h.app.Snapshot().DiskInsufficient {
+		t.Fatal("可用空间高于下限时不算磁盘不足")
+	}
+	// 可用空间低于下限：心跳照常只报数值（由 mgr 与页面按同一下限判断），worker 自己记为磁盘不足、停止领取。
 	h.free = 1 << 30
 	h.app.heartbeatOnce(ctx)
-	if !h.mgr.heartbeats[len(h.mgr.heartbeats)-1].GetDiskLow() {
-		t.Fatal("可用空间低于 min_free_bytes 应上报 disk_low")
+	if last := h.mgr.heartbeats[len(h.mgr.heartbeats)-1]; last.GetDiskFreeBytes() != 1<<30 || last.GetMinFreeBytes() <= last.GetDiskFreeBytes() {
+		t.Fatalf("heartbeat = %v", last)
+	}
+	if !h.app.Snapshot().DiskInsufficient {
+		t.Fatal("可用空间低于 min_free_bytes 应记为磁盘不足")
+	}
+	// 读不到磁盘用量时沿用上一次的数值与判断，心跳不报 0（否则页面会按“可用低于下限”误报）。
+	h.diskErr = errors.New("statfs failed")
+	h.app.heartbeatOnce(ctx)
+	if last := h.mgr.heartbeats[len(h.mgr.heartbeats)-1]; last.GetDiskTotalBytes() != 200<<30 || last.GetDiskUsedBytes() != 90<<30 || last.GetDiskFreeBytes() != 1<<30 {
+		t.Fatalf("读取失败时应沿用上一次的数值: %v", last)
+	}
+	if !h.app.Snapshot().DiskInsufficient {
+		t.Fatal("读取失败时沿用上一次的判断")
+	}
+}
+
+// 心跳回包的避让规则替换 pacer 的生效规则；心跳的 pacing_json 报生效值；没下发或不合法时保留原规则。
+func TestHeartbeatAppliesAvoidanceRulesToThePacer(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	pacer, err := pacing.New(h.cfg.PacingConfig(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.app.opts.Pacer = pacer
+	h.app.heartbeatOnce(ctx)
+	if js := h.mgr.heartbeats[0].GetPacingJson(); !strings.Contains(js, `"source":"config"`) || !strings.Contains(js, `"every_minutes":1`) {
+		t.Fatalf("未收到下发时报 app.yaml 的值: %s", js)
+	}
+	h.mgr.heartbeat = &archivepb.ArchiveWorkerHeartbeatRsp{Active: true, LeaseTtlSeconds: 30, Avoidance: &archivepb.AvoidanceRules{
+		EveryMinutes: 5, BeforeSeconds: 5, AfterSeconds: 25, Basis: "stockcn：5m", ComputedAt: "2026-11-08T10:00:00Z",
+	}}
+	h.app.heartbeatOnce(ctx) // 本次心跳报的仍是旧值，回包后替换
+	if r := pacer.Rules(); r.Source != "mgr" || r.EveryMinutes != 5 || r.HourQuiet != nil || r.ComputedAt != "2026-11-08T10:00:00Z" {
+		t.Fatalf("rules = %+v", r)
+	}
+	at := time.Date(2026, 11, 8, 10, 4, 56, 0, time.UTC)
+	if got := pacer.AllowedAt(at); !got.Equal(time.Date(2026, 11, 8, 10, 5, 25, 0, time.UTC)) {
+		t.Fatalf("AllowedAt = %s", got)
+	}
+	h.app.heartbeatOnce(ctx)
+	js := h.mgr.heartbeats[2].GetPacingJson()
+	if !strings.Contains(js, `"source":"mgr"`) || !strings.Contains(js, `"every_minutes":5`) || !strings.Contains(js, `"hour_quiet":null`) || !strings.Contains(js, `"minute_window":true`) {
+		t.Fatalf("应报生效值: %s", js)
+	}
+	// 不合法的规则被忽略；回包没有规则时保留。
+	h.mgr.heartbeat = &archivepb.ArchiveWorkerHeartbeatRsp{Active: true, LeaseTtlSeconds: 30, Avoidance: &archivepb.AvoidanceRules{EveryMinutes: 7}}
+	h.app.heartbeatOnce(ctx)
+	h.mgr.heartbeat = &archivepb.ArchiveWorkerHeartbeatRsp{Active: true, LeaseTtlSeconds: 30}
+	h.app.heartbeatOnce(ctx)
+	if r := pacer.Rules(); r.EveryMinutes != 5 {
+		t.Fatalf("应保留原规则: %+v", r)
+	}
+	// 带整点窗口的规则。
+	h.mgr.heartbeat = &archivepb.ArchiveWorkerHeartbeatRsp{Active: true, LeaseTtlSeconds: 30, Avoidance: &archivepb.AvoidanceRules{
+		EveryMinutes: 1, BeforeSeconds: 5, AfterSeconds: 25, HourQuietFrom: "58:00", HourQuietUntil: "04:00",
+	}}
+	h.app.heartbeatOnce(ctx)
+	if r := pacer.Rules(); r.HourQuiet == nil || *r.HourQuiet != [2]string{"58:00", "04:00"} {
+		t.Fatalf("rules = %+v", r)
 	}
 }
 
@@ -332,14 +404,14 @@ func TestPullHonorsSlotsLeaseMaintenanceAndDisk(t *testing.T) {
 	h.app.mu.Unlock()
 	h.app.pullOnce(ctx)
 	h.app.mu.Lock()
-	h.app.maintaining, h.app.diskLow = false, true
+	h.app.maintaining, h.app.diskInsufficient = false, true
 	h.app.mu.Unlock()
 	h.app.pullOnce(ctx)
 	if len(h.mgr.pulls) != 1 {
 		t.Fatalf("维护中或磁盘不足不应拉取: %d", len(h.mgr.pulls))
 	}
 	h.app.mu.Lock()
-	h.app.diskLow = false
+	h.app.diskInsufficient = false
 	h.app.mu.Unlock()
 	h.mgr.pullErr = errors.New("mgr down")
 	h.app.pullOnce(ctx) // 失败只记录日志
@@ -448,8 +520,8 @@ func stagedTasks(t *testing.T, h *harness, datasets ...string) map[string]bool {
 func (h *harness) seed(ds, taskID string) {
 	h.t.Helper()
 	ctx := context.Background()
-	task := staging.Task{SpaceID: "crypto", DatasetID: ds, Columns: []staging.Column{{Name: "close", Type: staging.TypeDouble}}}
-	if err := h.store.BindTask(ctx, "crypto", ds, taskID); err != nil {
+	task := staging.Task{SpaceID: "crypto", DatasetID: ds, Purpose: "collect", DirName: ds, Columns: []staging.Column{{Name: "close", Type: staging.TypeDouble}}}
+	if err := h.store.BindTask(ctx, task, taskID); err != nil {
 		h.t.Fatal(err)
 	}
 	if err := h.store.EnsureTable(ctx, task); err != nil {
@@ -459,7 +531,7 @@ func (h *harness) seed(ds, taskID string) {
 	ref := func(time.Time) staging.PartitionRef {
 		return staging.PartitionRef{Key: "2026-10-17", Start: day, End: day.AddDate(0, 0, 1)}
 	}
-	if _, err := h.store.Stage(ctx, task, []staging.Row{{SubjectID: "BTC", DataTime: day, Values: []any{1.0}}}, ref, h.now); err != nil {
+	if _, err := h.store.Stage(ctx, task, []staging.Row{{SubjectID: "BTC", DataTime: day, Values: []any{1.0}}}, ref, h.now, staging.StageReplace); err != nil {
 		h.t.Fatal(err)
 	}
 }
@@ -672,5 +744,73 @@ func TestRunStartsCleansLeftoversAndStopsGracefully(t *testing.T) {
 	sort.Strings(ids)
 	if len(ids) != 0 {
 		t.Fatalf("running = %v", ids)
+	}
+}
+
+// 维护删除超过 7 天的导入目录（失败的导入留着供核对），7 天内的保留。
+func TestMaintenanceRemovesImportDirectoriesOlderThanSevenDays(t *testing.T) {
+	h := newHarness(t)
+	for name, age := range map[string]time.Duration{"imp_old": 8 * 24 * time.Hour, "imp_new": time.Hour} {
+		dir := filepath.Join(h.root, ".import", name)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(dir, h.now.Add(-age), h.now.Add(-age)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h.app.maintainOnce(context.Background())
+	if _, err := os.Stat(filepath.Join(h.root, ".import", "imp_old")); !os.IsNotExist(err) {
+		t.Fatalf("超过 7 天的导入目录应删除: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(h.root, ".import", "imp_new")); err != nil {
+		t.Fatalf("7 天内的应保留: %v", err)
+	}
+}
+
+// 导入目录在 mgr 确认导入运行成功之后才删；上报被拒或导入失败时保留。
+func TestImportDirectoryIsRemovedOnlyAfterTheManagerConfirmsSuccess(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	place := func(id, content string) string {
+		dir := filepath.Join(h.root, ".import", id)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "import.csv"), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return dir
+	}
+	run := func(id string) {
+		h.mgr.assignments = []*archivepb.RunAssignment{assignment("run_"+id, func(a *archivepb.RunAssignment) { a.Kind, a.ImportFile = "import", id+"/import.csv" })}
+		h.app.heartbeatOnce(ctx)
+		h.app.pullOnce(ctx)
+		h.idle()
+	}
+	good := "data_time,subject_id,series_tag,close\n2026-09-01T00:00:00Z,BTC,,1\n"
+	ok := place("imp_ok", good)
+	run("imp_ok")
+	if req := h.mgr.completes[len(h.mgr.completes)-1]; req.GetStatus() != "succeeded" {
+		t.Fatalf("complete = %v", req)
+	}
+	if _, err := os.Stat(ok); !os.IsNotExist(err) {
+		t.Fatalf("确认成功后应删除导入目录: %v", err)
+	}
+	bad := place("imp_bad", "data_time,subject_id,series_tag,close\n2026-09-01T00:00:30Z,BTC,,1\n")
+	run("imp_bad")
+	if req := h.mgr.completes[len(h.mgr.completes)-1]; req.GetStatus() != "failed" {
+		t.Fatalf("complete = %v", req)
+	}
+	if _, err := os.Stat(bad); err != nil {
+		t.Fatalf("失败的导入应保留导入目录: %v", err)
+	}
+	rejected := place("imp_rejected", good)
+	h.mgr.mu.Lock()
+	h.mgr.completeErrs = []error{manager.ErrConflict}
+	h.mgr.mu.Unlock()
+	run("imp_rejected")
+	if _, err := os.Stat(rejected); err != nil {
+		t.Fatalf("mgr 没有确认时应保留导入目录: %v", err)
 	}
 }

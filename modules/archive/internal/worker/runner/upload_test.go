@@ -74,7 +74,7 @@ func TestExportedPartitionIsUploadedInTheSameRunAndReported(t *testing.T) {
 	srv := withRemote(t, e)
 	p := finalDay(t, e)
 	sha := p.GetFileSha256()
-	wantKey := "crypto/ds_1m/2026/20261010." + sha[:12] + ".csv"
+	wantKey := "crypto/collect/kline-1m/2026/20261010." + sha[:12] + ".csv"
 	if p.GetRemoteKey() != wantKey || p.GetRemoteSha256() != sha || p.GetRemoteVerifiedAt() == "" || p.GetRemoteUploadedAt() == "" || p.GetRemoteError() != "" || p.GetRemoteEtag() == "" {
 		t.Fatalf("上报的远端字段 = %v", p)
 	}
@@ -83,7 +83,7 @@ func TestExportedPartitionIsUploadedInTheSameRunAndReported(t *testing.T) {
 	if obj == nil || string(obj.Body) != string(local) || obj.ContentType != "text/csv; charset=utf-8" || obj.Meta["sha256"] != sha || obj.Meta["partition"] != "2026-10-10" {
 		t.Fatalf("远端对象 = %+v", obj)
 	}
-	meta := srv.Object(objectstore.DefaultPrefix + "crypto/ds_1m/dataset.json")
+	meta := srv.Object(objectstore.DefaultPrefix + "crypto/collect/kline-1m/dataset.json")
 	if meta == nil || meta.ContentType != "application/json" {
 		t.Fatalf("dataset.json 应一并上传: %+v", meta)
 	}
@@ -162,7 +162,7 @@ func TestBacklogBudgetIsCountedPerRunAndSkipsOnlyOlderPartitions(t *testing.T) {
 	e.run(2000, func(a *archivepb.RunAssignment) { a.BackfillFrom = "2026-10-10T00:00:00Z" }, nil)
 	srv := withRemote(t, e)
 	r := e.runner(2000)
-	s := &runState{r: r, task: staging.Task{SpaceID: "crypto", DatasetID: "ds_1m"}, exported: map[string]bool{"2026-10-11": true}}
+	s := &runState{r: r, task: staging.Task{SpaceID: "crypto", DatasetID: "ds_1m", Purpose: "collect", DirName: "kline-1m"}, exported: map[string]bool{"2026-10-11": true}}
 	out := &Outcome{}
 	// 第一次调用记下起点；时钟走过 2 分钟后再调用：只传本次导出的 10-11，遗留的 10-10 留到以后。
 	s.upload.backlogSince = e.now.Add(-backlogUploadBudget)
@@ -339,7 +339,7 @@ func TestDatasetJSONIsUploadedOnlyWhenItChangedAndAPartitionUploaded(t *testing.
 	e := newEnv(t)
 	srv := withRemote(t, e)
 	finalDay(t, e)
-	metaKey := objectstore.DefaultPrefix + "crypto/ds_1m/dataset.json"
+	metaKey := objectstore.DefaultPrefix + "crypto/collect/kline-1m/dataset.json"
 	before := string(srv.Object(metaKey).Body)
 	// 数据集说明变了，但本次没有分区上传：不传。
 	srv.Reset()

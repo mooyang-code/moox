@@ -376,7 +376,8 @@ func TestBackfillAndRunNowRules(t *testing.T) {
 func (h *harness) heartbeat(worker, instance string, running ...string) *archivepb.ArchiveWorkerHeartbeatRsp {
 	h.t.Helper()
 	rsp, err := h.worker.ArchiveWorkerHeartbeat(context.Background(), &archivepb.ArchiveWorkerHeartbeatReq{
-		WorkerId: worker, InstanceId: instance, Version: "test", RootDir: "/data/archive", DiskTotalBytes: 100, DiskFreeBytes: 60, RunningRunIds: running,
+		WorkerId: worker, InstanceId: instance, Version: "test", RootDir: "/data/archive", DiskTotalBytes: 100, DiskFreeBytes: 60, DiskUsedBytes: 35,
+		MinFreeBytes: 20, RunningRunIds: running,
 	})
 	if err != nil {
 		h.t.Fatal(err)
@@ -423,7 +424,8 @@ func TestWorkerLeaseAndPullFlow(t *testing.T) {
 	run := runs[0]
 	if run.GetLeaseToken() == "" || run.GetKind() != "manual" || run.GetFreq() != "1m" || run.GetPartitionUnit() != "day" || run.GetDataNodeId() != "node-0" ||
 		run.GetMinLookbackSeconds() != 900 || run.GetStagingRetentionSeconds() != 72*3600 || run.GetSpaceTz() != "UTC" || run.GetLocalClose() != "" ||
-		run.GetBackfillFrom() != "2026-10-15T00:00:00Z" || run.GetStartedAt() != "2026-10-17T01:00:00Z" || run.GetIntervalSeconds() != 3600 || run.GetLeaseTtlSeconds() != 600 {
+		run.GetBackfillFrom() != "2026-10-15T00:00:00Z" || run.GetStartedAt() != "2026-10-17T01:00:00Z" || run.GetIntervalSeconds() != 3600 || run.GetLeaseTtlSeconds() != 600 ||
+		run.GetPurpose() != "data" || run.GetDirName() != "ds-1m" {
 		t.Fatalf("assignment = %v", run)
 	}
 	if more := h.pull("w1", "i1", 2); len(more) != 0 {
@@ -956,7 +958,8 @@ func TestOverviewReportsWorkersRunsAndAlerts(t *testing.T) {
 	h.heartbeat("w1", "i1")
 	h.pull("w1", "i1", 1)
 	full, _ := h.mgr.GetArchiveOverview(ctx, &archivepb.GetArchiveOverviewReq{})
-	if full.GetWorker().GetWorkerId() != "w1" || !full.GetWorker().GetActive() || full.GetWorker().GetRootDir() != "/data/archive" || len(full.GetRunningRuns()) != 1 || full.GetQueuedRunCount() != 0 {
+	if full.GetWorker().GetWorkerId() != "w1" || !full.GetWorker().GetActive() || full.GetWorker().GetRootDir() != "/data/archive" || len(full.GetRunningRuns()) != 1 || full.GetQueuedRunCount() != 0 ||
+		full.GetWorker().GetDiskTotalBytes() != 100 || full.GetWorker().GetDiskFreeBytes() != 60 || full.GetWorker().GetDiskUsedBytes() != 35 || full.GetWorker().GetMinFreeBytes() != 20 {
 		t.Fatalf("overview = %v", full)
 	}
 	if len(full.GetAlerts()) != 0 {

@@ -190,7 +190,7 @@ cd moox-${VER}
 
 - 每条成功的标志是输出里的 `*-ready` 或 `"status":"ready"`。
 - `next_steps` 为空、`reasons` 也为空且 `route` 是 `upgrade`，说明安装已完成。`reasons` 不为空时把缺的步骤告诉用户：安装中途换了配置或版本的，换回原配置和原版本后补上；装好后有意新增主机或组件的，按 [`host-registry.md`](host-registry.md) 部署，不要清空。
-- 输出里有 `warnings` 时先告诉用户。`disk_low` 不拦清除，但部署会拒绝，要先腾出空间或换大磁盘。
+- 输出里有 `warnings` 时先告诉用户。`disk_insufficient` 不拦清除，但部署会拒绝，要先腾出空间或换大磁盘。
 
 元数据必须在管理台之前激活：Monitor 要等系统数据集就绪才算启动成功。
 
@@ -260,7 +260,7 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 | `target_subset_installed`、`target_identity_differs`、`target_binding_missing`、`target_partial_install`、`target_directory_invalid` | 目标机的状态和这次操作不符，比如机器不是空机 | 不要重试，也不要手动上机；回到 `setup validate` 按 `route` 处理 |
 | `target_rejected` | 目标机失败，没有已知原因 | 不要重试；用 `setup logs` 看相关组件的日志。还看不出来时，征得用户同意后单次设置 `MOOX_SETUP_DEBUG_HELPER=1` 重跑一次看原因（输出可能含路径，不要转发密钥） |
 | `deployment_incomplete` | 配置缺组件，部署到一半会卡住 | 按报错处理：能补的运行 `config migrate --add-deployment`；要重新生成的先把旧 `moox.toml` 改名，再 `config init`。然后 `setup validate` |
-| `disk_low` | 目标机磁盘不够（失败尝试的残留已算入总量，下一次部署会自动清掉；但上传安装包至少要 1 GB 真实可用空间） | 告诉用户腾出空间或换大磁盘 |
+| `disk_insufficient` | 目标机磁盘不够（失败尝试的残留已算入总量，下一次部署会自动清掉；但上传安装包至少要 1 GB 真实可用空间） | 告诉用户腾出空间或换大磁盘 |
 | `start_prerequisite_missing` | crypto 缺 collector-stream 或出口代理，其他空间没配 `[scf_plan]` | 告诉用户缺什么，按 `setup validate` 处理 |
 | `no_collection_tasks` | 这个空间没有任何 K 线任务，`--space-id` 写错或种子没写入（任务都停用时验收跳过，不报错） | 核对空间，看 `collector task list`；不要手工改数据库 |
 | `verify_read_failed` | 到超时还读不到验收数据，组件没起来或连接不通 | 看错误里的组件，用 `setup logs` 查 |

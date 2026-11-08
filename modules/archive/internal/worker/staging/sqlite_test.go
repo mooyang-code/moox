@@ -18,7 +18,7 @@ func TestStageKeepsNanosecondKeys(t *testing.T) {
 	res, err := s.Stage(ctx, task, []Row{
 		row("BTC", at.Add(100), "", 1.0, 1.0, nil, nil),
 		row("BTC", at.Add(200), "", 2.0, 2.0, nil, nil),
-	}, utcDay, now0)
+	}, utcDay, now0, StageReplace)
 	if err != nil || res.Added != 2 {
 		t.Fatalf("res = %+v err=%v", res, err)
 	}
@@ -51,7 +51,7 @@ func TestAllColumnTypesRoundTripThroughTheArchiveFile(t *testing.T) {
 		row("ETH", at, "", math.NaN(), nil, nil, nil, nil, nil, nil),
 		row("SOL", at, "", 1e21, int64(0), "line1\r\nline2", true, at, "", []byte("x")),
 	}
-	if _, err := s.Stage(ctx, task, rows, utcDay, now0); err != nil {
+	if _, err := s.Stage(ctx, task, rows, utcDay, now0, StageReplace); err != nil {
 		t.Fatal(err)
 	}
 	p, _, _ := s.Partition(ctx, "crypto", "all", "2026-10-15")
@@ -66,7 +66,7 @@ func TestAllColumnTypesRoundTripThroughTheArchiveFile(t *testing.T) {
 	if err := s.ReopenFinal(ctx, task, p.Key, file); err != nil {
 		t.Fatal(err)
 	}
-	res, err := s.Stage(ctx, task, rows, utcDay, now0.Add(2*time.Hour))
+	res, err := s.Stage(ctx, task, rows, utcDay, now0.Add(2*time.Hour), StageReplace)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,7 +91,7 @@ func TestAllColumnTypesRoundTripThroughTheArchiveFile(t *testing.T) {
 func TestReopenFinalRejectsMalformedFiles(t *testing.T) {
 	s, ctx, task := openTest(t), context.Background(), klineTask()
 	_ = s.EnsureTable(ctx, task)
-	_, _ = s.Stage(ctx, task, []Row{row("BTC", day0, "", 1.0, 1.0, nil, nil)}, utcDay, now0)
+	_, _ = s.Stage(ctx, task, []Row{row("BTC", day0, "", 1.0, 1.0, nil, nil)}, utcDay, now0, StageReplace)
 	p, _, _ := s.Partition(ctx, "crypto", "ds_1m", "2026-10-15")
 	file := filepath.Join(t.TempDir(), "p.csv")
 	exportFile(t, s, task, p, file)

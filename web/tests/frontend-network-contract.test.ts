@@ -28,6 +28,11 @@ describe("frontend network contract", () => {
     expect(source).toContain("/api/admin/ssh/WsConnect");
     expect(source).toContain("/api/admin/ssh/SftpDownload");
     expect(source).toContain("/api/admin/ssh/SftpUpload");
+    // 归档的两个裸路由用模板字符串拼方法名：核对前缀与两个方法名都在同一个文件里
+    const archiveRaw = readFileSync(resolve(root, "src/api/archive/raw.ts"), "utf8");
+    expect(archiveRaw).toContain("/api/admin/archive/${method}");
+    expect(archiveRaw).toContain('"PartitionDownload"');
+    expect(archiveRaw).toContain('"RecentRows"');
   });
 
   it("uploads to external pre-signed URLs without session credentials", () => {

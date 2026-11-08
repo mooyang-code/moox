@@ -54,7 +54,10 @@ type Column struct {
 type Task struct {
 	SpaceID   string
 	DatasetID string
-	Columns   []Column
+	// Purpose、DirName 是任务的用途与目录名：分区文件写在 <space>/<purpose>/<dir_name>/ 下。暂存表名只由空间与数据集决定。
+	Purpose string
+	DirName string
+	Columns []Column
 }
 
 // Table 返回任务的暂存表名：staged_<数据集身份的短哈希>。
@@ -121,8 +124,8 @@ func scanNanos(v sql.NullInt64) time.Time {
 	return fromNanos(v.Int64)
 }
 
-// checkNanosRange 检查时间能否用 Unix 纳秒（int64）表示：超出 1678～2261 年会溢出，零值时间也在此列。
-func checkNanosRange(t time.Time) error {
+// CheckNanosRange 检查时间能否用 Unix 纳秒（int64）表示：超出 1678～2261 年会溢出，零值时间也在此列。
+func CheckNanosRange(t time.Time) error {
 	if y := t.UTC().Year(); y < 1678 || y > 2261 {
 		return fmt.Errorf("时间 %s 超出可存储范围（1678～2261 年）", t.UTC().Format(time.RFC3339Nano))
 	}
@@ -137,7 +140,7 @@ func bindValue(columnType string, value any) (any, error) {
 	switch columnType {
 	case TypeTime:
 		if t, ok := value.(time.Time); ok {
-			if err := checkNanosRange(t); err != nil {
+			if err := CheckNanosRange(t); err != nil {
 				return nil, err
 			}
 			return nanos(t), nil
@@ -210,7 +213,7 @@ func Open(path string, opts Options) (*Store, error) {
 	return s, nil
 }
 
-// 两张永久表。新列放在各表字段列表的最后，与原地升级（testdata/upgrade-batch2.sql 的 ADD COLUMN）建出的表一致。
+// 两张永久表。task_state.purpose、dir_name 是任务的用途与目录名（绑定任务时记下）；
 // task_state.meta_remote_sha256 是已上传到对象存储的 dataset.json 的 sha256；partition_state.remote_* 是分区的远端副本，
 // remote_sha256 = file_sha256 且 remote_verified_at 非空时远端是当前版本（“已复制”，与 mgr 同一个口径）。
 const (
@@ -222,6 +225,8 @@ CREATE TABLE IF NOT EXISTS task_state (
     first_start INTEGER,
     resume_from INTEGER,
     task_id TEXT NOT NULL DEFAULT '',
+    purpose TEXT NOT NULL DEFAULT '',
+    dir_name TEXT NOT NULL DEFAULT '',
     meta_remote_sha256 TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (space_id, dataset_id)
 ) WITHOUT ROWID`
