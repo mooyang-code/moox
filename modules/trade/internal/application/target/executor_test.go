@@ -972,6 +972,16 @@ func (f *targetFixture) instruments() []store.InstrumentRecord {
 	return values
 }
 
+// fixtureValidUntil 是测试目标的有效期：取真实时间和测试时钟里较晚的那个再加两小时。
+// 只按真实时间加一小时时，测试把时钟拨到“下一个整点”后，在整点刚过的几秒内跑会被判成目标已过期。
+func fixtureValidUntil(now time.Time) int64 {
+	base := time.Now()
+	if now.After(base) {
+		base = now
+	}
+	return base.Add(2 * time.Hour).UnixMilli()
+}
+
 func (f *targetFixture) target(t *testing.T, targets []store.InstrumentTarget) {
 	t.Helper()
 	_, accepted, err := f.store.AcceptLogicalAccountTarget(
@@ -979,7 +989,7 @@ func (f *targetFixture) target(t *testing.T, targets []store.InstrumentTarget) {
 		store.LogicalAccountTargetRecord{
 			SpaceID: "space-1", LogicalAccountID: "logical-1",
 			TargetID: "target-current", InstanceID: "runner-1", SessionID: "session-1", StrategyID: "strategy-1",
-			BarEndTime: f.now.UnixMilli(), EffectiveAt: f.now.UnixMilli(), ValidUntil: time.Now().Add(time.Hour).UnixMilli(),
+			BarEndTime: f.now.UnixMilli(), EffectiveAt: f.now.UnixMilli(), ValidUntil: fixtureValidUntil(f.now),
 			Targets: targets, Status: StatusPending, AcceptedAt: f.now.UnixMilli(),
 		},
 	)

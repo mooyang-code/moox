@@ -236,7 +236,7 @@ func TestHourlyCapDeferralSurvivesANewTargetAndNeverBlocksItsReductions(t *testi
 	// 新目标（还是加仓）：额度仍是本小时已用满，继续顺延，blocked_targets 换成新目标的。
 	_, accepted, err := f.store.AcceptLogicalAccountTarget(context.Background(), store.LogicalAccountTargetRecord{
 		SpaceID: "space-1", LogicalAccountID: "logical-1", TargetID: "target-next", InstanceID: "runner-1", SessionID: "session-1", StrategyID: "strategy-1",
-		BarEndTime: f.now.UnixMilli() + 1, EffectiveAt: f.now.UnixMilli() + 1, ValidUntil: time.Now().Add(time.Hour).UnixMilli(),
+		BarEndTime: f.now.UnixMilli() + 1, EffectiveAt: f.now.UnixMilli() + 1, ValidUntil: fixtureValidUntil(f.now),
 		Targets: []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "200"}}, Status: StatusPending, AcceptedAt: f.now.UnixMilli() + 1,
 	})
 	require.NoError(t, err)
