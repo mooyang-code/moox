@@ -30,7 +30,7 @@
         </template>
       </a-button>
     </a-tooltip>
-    <!-- 系统设置 -->
+    <!-- 布局设置 -->
     <a-tooltip :content="$t(`system.system-settings`)">
       <a-button size="mini" type="text" class="icon_btn" id="system-settings" @click="onSystemSetting">
         <template #icon>

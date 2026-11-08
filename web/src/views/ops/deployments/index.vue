@@ -2,7 +2,7 @@
   <div class="moox-page deployments-page">
     <div class="moox-inner">
       <div class="page-head">
-        <PageTitleTabs v-model="tab" :items="tabs" aria-label="服务部署" />
+        <PageTitleTabs v-model="tab" :items="tabs" aria-label="服务" />
         <a-button :loading="loading" aria-label="刷新部署状态" @click="refresh()">刷新</a-button>
       </div>
       <p class="muted">

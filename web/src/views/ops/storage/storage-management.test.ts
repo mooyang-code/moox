@@ -71,16 +71,11 @@ describe("storage configuration workbench", () => {
     mocks.push.mockReset();
   });
 
-  it("keeps the DataNode page behind the storage tab surface and falls back unknown tabs to nodes", () => {
-    const source = fs.readFileSync(path.resolve(__dirname, "index.vue"), "utf8");
-    const normalized = normalizeSource(source);
-
-    expect(source).toContain("PageTitleTabs");
-    expect(source).toContain('aria-label="存储配置"');
-    expect(normalized).toContain('label:"数据节点"');
-    expect(normalized).not.toContain("归档文件");
-    expect(normalized).toContain('typeStorageConfigTab="nodes"');
-    expect(normalized).not.toContain("routes");
+  it("存储节点只有一个页面：菜单直接打开节点页，没有只有一个页签的外层", () => {
+    expect(fs.existsSync(path.resolve(__dirname, "index.vue"))).toBe(false);
+    const nodes = fs.readFileSync(path.resolve(__dirname, "nodes.vue"), "utf8");
+    expect(nodes).toContain("<h2>存储节点</h2>");
+    expect(nodes).not.toContain("PageTitleTabs");
   });
 
   it("removes the route page and route URL while keeping the single storage menu", () => {

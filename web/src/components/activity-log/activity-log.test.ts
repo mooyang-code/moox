@@ -26,3 +26,17 @@ describe("操作记录", () => {
     expect(wrapper.text()).not.toContain("操作记录读取失败");
   });
 });
+
+describe("级别与类别的显示", () => {
+  it("级别写中文，普通信息不用绿色；类别写中文名，没有登记的原样显示", async () => {
+    const { activityCategoryLabel, activityLevelColor, activityLevelText } = await import("./activity-log");
+    expect([activityLevelText("error"), activityLevelText("warning"), activityLevelText("info")]).toEqual([
+      "错误",
+      "警告",
+      "信息"
+    ]);
+    expect(activityLevelColor("info")).not.toContain("green");
+    expect(activityCategoryLabel("collector.subject_change")).toBe("标的变更");
+    expect(activityCategoryLabel("trade.custom")).toBe("trade.custom");
+  });
+});

@@ -1,4 +1,5 @@
 import type { ActivityLogItem } from "@/api/admin/activity";
+import { ACTIVITY_CATEGORY_LABELS } from "@/components/activity-log/activity-log";
 import type { FactorTaskInfo } from "@/api/factor/types";
 import type { HealthAlert, HealthHost, HealthOverview, LifecycleColor } from "@/api/monitor";
 import type { Strategy, StrategyInstance, StrategyTargetSnapshot } from "@/api/strategy-types";
@@ -402,11 +403,6 @@ export function hostRows(hosts: HealthHost[]): HostRow[] {
   });
 }
 
-const CATEGORY_LABELS: Record<string, string> = {
-  "collector.fetch_plan_applied": "采集计划",
-  "collector.subject_change": "标的变更"
-};
-
 export interface ActivityRow {
   key: string;
   when: string;
@@ -435,7 +431,7 @@ export function activityRows(items: ActivityLogItem[], names: NameBook, nowMs: n
       key: String(item.id ?? index),
       when: marketTime(toMillis(item.created_at), zone, nowMs),
       whenTitle: fullTime(item.created_at, zone),
-      category: CATEGORY_LABELS[item.category || ""] || item.category || item.source || "",
+      category: ACTIVITY_CATEGORY_LABELS[item.category || ""] || item.category || item.source || "",
       title: compactTitle(prettifyIds(item.title || "", names)),
       tone: item.level === "error" ? "bad" : item.level === "warning" ? "warn" : "idle"
     }));

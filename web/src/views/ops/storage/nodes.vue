@@ -3,7 +3,7 @@
     <div class="moox-inner">
       <div class="page-head">
         <div class="title-with-info">
-          <h2>数据节点</h2>
+          <h2>存储节点</h2>
           <a-tooltip v-model:popup-visible="nodeInfoVisible" position="right">
             <template #content>
               <div class="node-concepts">

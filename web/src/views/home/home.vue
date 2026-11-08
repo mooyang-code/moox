@@ -195,10 +195,10 @@
             </footer>
           </section>
 
-          <section class="tile tile-third" aria-label="主机资源">
+          <section class="tile tile-third" aria-label="主机工作台">
             <header class="tile-head">
               <h3>
-                主机资源<small>{{ hosts.length }}</small>
+                主机工作台<small>{{ hosts.length }}</small>
               </h3>
               <a @click="go('/ops/monitor')">服务 {{ services.available ? `${services.healthy}/${services.total}` : "—" }} →</a>
             </header>

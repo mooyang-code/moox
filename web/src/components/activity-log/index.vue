@@ -1,13 +1,26 @@
 <template>
   <div class="activity-log">
     <a-space v-if="showFilters" wrap class="activity-log-filters">
-      <a-input v-model="filters.category" placeholder="类别，如 collector.subject_change" allow-clear style="width: 260px" />
-      <a-input v-model="filters.source" placeholder="来源模块" allow-clear style="width: 150px" />
-      <ZonedRangePicker v-model="filters.range" :zone="zone" style="width: 400px" />
-      <a-button type="primary" @click="search">
-        <template #icon><icon-search /></template>
-        查询
-      </a-button>
+      <a-select
+        v-model="filters.category"
+        placeholder="全部类别"
+        allow-clear
+        allow-search
+        allow-create
+        style="width: 200px"
+        @change="search"
+      >
+        <a-option v-for="(label, value) in ACTIVITY_CATEGORY_LABELS" :key="value" :value="value">{{ label }}</a-option>
+      </a-select>
+      <a-input
+        v-model="filters.source"
+        placeholder="来源模块，回车查询"
+        allow-clear
+        style="width: 170px"
+        @press-enter="search"
+        @clear="search"
+      />
+      <ZonedRangePicker v-model="filters.range" :zone="zone" style="width: 400px" @update:model-value="search" />
     </a-space>
     <a-alert v-if="loadError" type="error" class="activity-log-error">
       操作记录读取失败：{{ loadError }}
@@ -27,16 +40,16 @@
           <template #cell="{ record }">{{ formatTime(record.created_at, zone) }}</template>
         </a-table-column>
         <a-table-column v-if="showSpace" title="空间" data-index="space_id" :width="110">
-          <template #cell="{ record }">{{ record.space_id || "全局" }}</template>
+          <template #cell="{ record }">{{ record.space_id || "系统事件" }}</template>
         </a-table-column>
-        <a-table-column title="类别" :width="220">
+        <a-table-column title="类别" :width="160">
           <template #cell="{ record }"
-            ><a-tag size="small" color="arcoblue">{{ record.category }}</a-tag></template
+            ><span :title="record.category">{{ activityCategoryLabel(record.category) }}</span></template
           >
         </a-table-column>
         <a-table-column title="级别" :width="80" align="center">
           <template #cell="{ record }"
-            ><a-tag size="small" :color="levelColor(record.level)">{{ record.level }}</a-tag></template
+            ><span :style="{ color: levelColor(record.level) }">{{ activityLevelText(record.level) }}</span></template
           >
         </a-table-column>
         <a-table-column title="内容" data-index="title" />
@@ -57,7 +70,14 @@
 import { computed, onMounted, ref, watch } from "vue";
 import { listActivityLogs, type ActivityLogItem } from "@/api/admin/activity";
 import { createLatestRequestGuard } from "@/utils/latest-request";
-import { activityDetailText, activityLevelColor, activityTimeText } from "./activity-log";
+import {
+  ACTIVITY_CATEGORY_LABELS,
+  activityCategoryLabel,
+  activityDetailText,
+  activityLevelColor,
+  activityLevelText,
+  activityTimeText
+} from "./activity-log";
 import ZonedRangePicker from "@/components/zoned-date-picker/zoned-range-picker.vue";
 
 const props = withDefaults(
