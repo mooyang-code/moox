@@ -51,11 +51,17 @@ export function deleteFactorTask(task_id: string, purge = false) {
   return callFactor<{ task_id: string; purge: boolean }, FactorRetRsp>("DeleteFactorTask", { task_id, purge });
 }
 
-/** silent 为 true 时失败不弹全局错误提示，由调用方自己提示。 */
-export function listFactorTasks(params: ListFactorTasksReq = {}, options: { silent?: boolean } = {}) {
-  type Rsp = FactorRetRsp<ListFactorTasksRsp>;
-  if (options.silent) return callFactor<ListFactorTasksReq, Rsp>("ListFactorTasks", params, { silentError: true });
-  return callFactor<ListFactorTasksReq, Rsp>("ListFactorTasks", params);
+export function listFactorTasks(params: ListFactorTasksReq = {}) {
+  return callFactor<ListFactorTasksReq, FactorRetRsp<ListFactorTasksRsp>>("ListFactorTasks", params);
+}
+
+/** 读取一个因子任务；任务不存在时抛出 ret_info.code 为 NOT_FOUND 的 ControlRequestError。silent 为 true 时失败不弹全局提示。 */
+export async function getFactorTask(task_id: string, options: { silent?: boolean } = {}) {
+  type Rsp = FactorRetRsp<{ factor_task: FactorTask }>;
+  const rsp = options.silent
+    ? await callFactor<{ task_id: string }, Rsp>("GetFactorTask", { task_id }, { silentError: true })
+    : await callFactor<{ task_id: string }, Rsp>("GetFactorTask", { task_id });
+  return rsp.factor_task;
 }
 
 export async function createFactor(factor: FactorInput) {

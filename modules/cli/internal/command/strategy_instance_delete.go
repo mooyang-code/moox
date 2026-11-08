@@ -33,17 +33,12 @@ type strategyDeleteTask struct {
 
 // strategyDeleteInstance 是 GetStrategyInstance 里删除要用到的字段（CLI 不依赖策略模块的协议包，按 JSON 取）。
 type strategyDeleteInstance struct {
-	InstanceID         string            `json:"instance_id"`
-	StrategyID         string            `json:"strategy_id"`
-	Enabled            bool              `json:"enabled"`
-	SessionID          string            `json:"session_id"`
-	LogicalAccountID   string            `json:"logical_account_id"`
-	FactorTasks        map[string]string `json:"factor_tasks"`
-	MissingFactorTasks []string          `json:"missing_factor_tasks"`
-}
-
-func init() {
-	registerRPCExtra([]string{"strategy", "instance"}, newStrategyInstanceDeleteCommand)
+	InstanceID       string            `json:"instance_id"`
+	StrategyID       string            `json:"strategy_id"`
+	Enabled          bool              `json:"enabled"`
+	SessionID        string            `json:"session_id"`
+	LogicalAccountID string            `json:"logical_account_id"`
+	FactorTasks      map[string]string `json:"factor_tasks"`
 }
 
 func newStrategyInstanceDeleteCommand() *cobra.Command {
@@ -54,13 +49,13 @@ func newStrategyInstanceDeleteCommand() *cobra.Command {
 		Short: "删除已停用的策略实例，连同绑定到它的因子任务和结果数据集（默认只预览，--yes 才执行）",
 		Long: "删除已停用、没有运行会话的策略实例，连同绑定到它的因子任务和任务的结果数据集，结果数据不可恢复；\n" +
 			"没绑定到它的任务（例如公共任务）保留不动。有回放或补算在进行、结果数据集有归档任务时拒绝。\n" +
-			"不带 --yes 只分两组列出将删除和保留的因子任务；\n" +
+			"有回放或补算在进行、结果数据集被其他 View 引用时也拒绝。不带 --yes 只分两组列出将删除和保留的因子任务；\n" +
 			"中途失败或超时后再执行一次即可接着删完。Trade 里的历史目标与订单不删。\n\n" +
 			"对应接口：trpc.moox.strategy.StrategyMgr DeleteStrategyInstance（破坏性，默认只预览）。",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if strings.TrimSpace(instanceID) == "" {
-				return errors.New("缺少 --id")
+				return errors.New("缺少 --instance-id")
 			}
 			cmd.SilenceUsage = true
 			gateway, err := openCommandGateway(cmd.Context(), file, nil)
@@ -73,7 +68,7 @@ func newStrategyInstanceDeleteCommand() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&file, "file", "./moox.toml", "部署配置文件；用于解析操作员 SSH 网关")
 	cmd.Flags().StringVar(&spaceID, "space-id", "crypto", "空间 ID")
-	cmd.Flags().StringVar(&instanceID, "id", "", "实例 ID（必填）")
+	cmd.Flags().StringVar(&instanceID, "instance-id", "", "实例 ID（必填）")
 	cmd.Flags().BoolVar(&yes, "yes", false, "确认执行；不加只列出将要删除的内容")
 	return cmd
 }
@@ -121,9 +116,12 @@ func runStrategyInstanceDelete(ctx context.Context, cmd *cobra.Command, gateway 
 		return err
 	}
 	if err := rpcRetError(response); err != nil {
-		var business *rpcBusinessError
-		if errors.As(err, &business) && strings.Contains(business.Msg, "超时") {
-			return fmt.Errorf("%s：%s", strategyInstanceDeleteIncomplete, business.Msg)
+		// incomplete 为真表示删除已经开始、没做完；为假时什么都还没删，原样报错。
+		var head struct {
+			Incomplete bool `json:"incomplete"`
+		}
+		if json.Unmarshal(response, &head) == nil && head.Incomplete {
+			return fmt.Errorf("%s：%w", strategyInstanceDeleteIncomplete, err)
 		}
 		return err
 	}

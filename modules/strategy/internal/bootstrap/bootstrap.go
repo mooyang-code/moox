@@ -91,7 +91,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg Config) (*server.Serv
 	service.Owner = tradeowner.New(cfg.Trade, gateway)
 	// 删除实例：经 Factor 删除关联的任务，删除前经 archive-mgr 确认结果数据集没有归档任务。
 	service.Tasks = live
-	service.Archives = &archivetasks.Client{Gateway: gateway, Timeout: cfg.Factor.Timeout}
+	service.Archives = &archivetasks.Client{Gateway: gateway}
 	// 策略池启用后在后台预热：用回放的历史读取从启用时刻往前推进到最新已收盘的一期。
 	warm := &warmup.Manager{Store: db, Client: replayClient, ChunkBars: cfg.Replay.ChunkBars, Logf: log.Infof}
 	closers = append(closers, func() error {

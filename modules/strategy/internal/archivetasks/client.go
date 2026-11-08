@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	archivepb "github.com/mooyang-code/moox/modules/archive/proto/archivegen"
 	"github.com/mooyang-code/moox/packages/commonpb"
@@ -20,11 +19,9 @@ const (
 	maxPages = 100
 )
 
-// Client 经网关调用 archive-mgr 的 ListArchiveTasks（只读）。
+// Client 经网关调用 archive-mgr 的 ListArchiveTasks（只读）。超时由调用方 ctx 的截止时间与服务目录的路由超时决定。
 type Client struct {
 	Gateway gatewayclient.Invoker
-	// Timeout 是单页请求的超时；零表示沿用调用方 ctx 的截止时间与服务目录的路由超时。
-	Timeout time.Duration
 }
 
 // ArchivedDatasets 分页拉回空间内的全部归档任务，返回有归档任务的数据集 ID。
@@ -36,7 +33,8 @@ func (c *Client) ArchivedDatasets(ctx context.Context, spaceID string) (map[stri
 	datasets := map[string]bool{}
 	for page := uint32(1); page <= maxPages; page++ {
 		rsp := &archivepb.ListArchiveTasksRsp{}
-		if err := c.invoke(ctx, &archivepb.ListArchiveTasksReq{SpaceId: spaceID, Page: &commonpb.Page{Page: page, Size: pageSize}}, rsp); err != nil {
+		req := &archivepb.ListArchiveTasksReq{SpaceId: spaceID, Page: &commonpb.Page{Page: page, Size: pageSize}}
+		if err := c.Gateway.Invoke(ctx, archiveMgrService, "ListArchiveTasks", req, rsp); err != nil {
 			return nil, fmt.Errorf("查询归档任务失败：%w", err)
 		}
 		if code := rsp.GetRetInfo().GetCode(); code != commonpb.ErrorCode_SUCCESS {
@@ -53,13 +51,4 @@ func (c *Client) ArchivedDatasets(ctx context.Context, spaceID string) (map[stri
 		}
 	}
 	return nil, fmt.Errorf("查询归档任务失败：超过 %d 页仍没有取完", maxPages)
-}
-
-func (c *Client) invoke(ctx context.Context, req *archivepb.ListArchiveTasksReq, rsp *archivepb.ListArchiveTasksRsp) error {
-	if c.Timeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, c.Timeout)
-		defer cancel()
-	}
-	return c.Gateway.Invoke(ctx, archiveMgrService, "ListArchiveTasks", req, rsp)
 }

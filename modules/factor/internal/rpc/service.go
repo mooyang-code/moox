@@ -37,6 +37,7 @@ type CatalogAPI interface {
 	SetTaskMemberStatus(ctx context.Context, taskID, memberKey, status string) (domain.TaskMember, error)
 	BindTask(ctx context.Context, taskID, instanceID string) (domain.FactorTask, error)
 	DeleteBoundTask(ctx context.Context, taskID, instanceID string) error
+	CheckBoundTaskDeletable(ctx context.Context, taskID, instanceID string) error
 	ListCategories(ctx context.Context) ([]domain.FactorCategory, error)
 	UpsertCategory(ctx context.Context, category domain.FactorCategory) (domain.FactorCategory, error)
 	DeleteCategory(ctx context.Context, categoryID string) error
@@ -237,7 +238,11 @@ func (s *Service) DeleteBoundTask(ctx context.Context, req *factorpb.DeleteBound
 	if err := s.checkTaskSpace(ctx, req.GetTaskId()); err != nil {
 		return &factorpb.DeleteBoundTaskRsp{RetInfo: invalid(err)}, nil
 	}
-	if err := s.catalog.DeleteBoundTask(ctx, req.GetTaskId(), req.GetBoundInstanceId()); err != nil {
+	run := s.catalog.DeleteBoundTask
+	if req.GetCheckOnly() {
+		run = s.catalog.CheckBoundTaskDeletable
+	}
+	if err := run(ctx, req.GetTaskId(), req.GetBoundInstanceId()); err != nil {
 		if errors.Is(err, store.ErrConflict) {
 			return &factorpb.DeleteBoundTaskRsp{RetInfo: invalid(err)}, nil
 		}

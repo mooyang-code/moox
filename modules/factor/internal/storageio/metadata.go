@@ -83,6 +83,8 @@ type Metadata interface {
 	UpsertColumns(ctx context.Context, spaceID, datasetID string, cols []ColumnInfo) error
 	ActivateDataset(ctx context.Context, spaceID, datasetID string) error
 	DeleteDataset(ctx context.Context, spaceID, datasetID string) error
+	// CheckDatasetDeletable 在动手删除之前确认结果数据集可以删：不存在算可以；被默认 View 之外的 View 引用时返回 ErrDatasetReferenced。
+	CheckDatasetDeletable(ctx context.Context, spaceID, datasetID string) error
 	SetDatasetSubjectTags(ctx context.Context, spaceID, datasetID string, tags []string) error
 	// EnsureResultView / DeleteResultView 由 factor-mgr 自己维护结果数据集的默认 View。
 	EnsureResultView(ctx context.Context, spaceID, datasetID string) error
@@ -349,6 +351,32 @@ func (c *Client) restoreFactorResultRows(ctx context.Context, info DatasetInfo, 
 	return responseError("restore factor result rows", rsp.GetRetInfo())
 }
 
+// ErrDatasetReferenced 表示结果数据集还被默认 View 之外的 View 引用，不能删除。
+var ErrDatasetReferenced = errors.New("结果数据集仍被其他 View 引用")
+
+func (c *Client) CheckDatasetDeletable(ctx context.Context, spaceID, datasetID string) error {
+	if err := c.metadataReady("check dataset before delete"); err != nil {
+		return err
+	}
+	current, err := c.metadata.GetDataset(ctx, &storagepb.GetDatasetReq{AuthInfo: c.auth, SpaceId: spaceID, DatasetId: datasetID})
+	if err != nil {
+		return rpcError("get dataset before delete", err)
+	}
+	if current == nil || current.GetRetInfo() == nil {
+		return fmt.Errorf("%w: get dataset before delete returned an empty response", ErrInfra)
+	}
+	if isDatasetNotFound(current.GetRetInfo().GetCode()) {
+		return nil
+	}
+	if err := responseError("get dataset before delete", current.GetRetInfo()); err != nil {
+		return err
+	}
+	if current.GetDataset().GetAttributes()["dataset_role"] != DatasetRoleFactorResult {
+		return nil
+	}
+	return c.ensureNoExtraViews(ctx, spaceID, datasetID)
+}
+
 func (c *Client) DeleteDataset(ctx context.Context, spaceID, datasetID string) error {
 	if err := c.metadataReady("delete dataset"); err != nil {
 		return err
@@ -427,7 +455,7 @@ func (c *Client) ensureNoExtraViews(ctx context.Context, spaceID, datasetID stri
 	defaultViewID := "view_" + strings.TrimPrefix(datasetID, "dataset_")
 	for _, view := range rsp.GetViews() {
 		if view.GetViewId() != defaultViewID {
-			return fmt.Errorf("结果 Dataset %s 仍被 View %s 引用，请先删除该 View 后重试", datasetID, view.GetViewId())
+			return fmt.Errorf("%w：结果数据集 %s 仍被 View %s 引用，请先删除该 View 后重试", ErrDatasetReferenced, datasetID, view.GetViewId())
 		}
 	}
 	return nil

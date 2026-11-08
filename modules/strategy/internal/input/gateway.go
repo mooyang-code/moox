@@ -33,7 +33,6 @@ type FactorClient interface {
 	BindFactorTask(context.Context, *factorpb.BindFactorTaskReq, ...client.Option) (*factorpb.BindFactorTaskRsp, error)
 	GetFactorTask(context.Context, *factorpb.GetFactorTaskReq, ...client.Option) (*factorpb.GetFactorTaskRsp, error)
 	ListFactorTasks(context.Context, *factorpb.ListFactorTasksReq, ...client.Option) (*factorpb.ListFactorTasksRsp, error)
-	ListRecalcJobs(context.Context, *factorpb.ListRecalcJobsReq, ...client.Option) (*factorpb.ListRecalcJobsRsp, error)
 	DeleteBoundTask(context.Context, *factorpb.DeleteBoundTaskReq, ...client.Option) (*factorpb.DeleteBoundTaskRsp, error)
 	SubmitFactorParams(context.Context, *factorpb.SubmitFactorParamsReq, ...client.Option) (*factorpb.SubmitFactorParamsRsp, error)
 }
@@ -129,10 +128,6 @@ func (a *gatewayAdapter) GetFactorTask(ctx context.Context, request *factorpb.Ge
 
 func (a *gatewayAdapter) ListFactorTasks(ctx context.Context, request *factorpb.ListFactorTasksReq, options ...client.Option) (*factorpb.ListFactorTasksRsp, error) {
 	return invokeGateway[factorpb.ListFactorTasksRsp](ctx, a.gateway, a.factorTimeout, factorMgrService, "ListFactorTasks", request, options)
-}
-
-func (a *gatewayAdapter) ListRecalcJobs(ctx context.Context, request *factorpb.ListRecalcJobsReq, options ...client.Option) (*factorpb.ListRecalcJobsRsp, error) {
-	return invokeGateway[factorpb.ListRecalcJobsRsp](ctx, a.gateway, a.factorTimeout, factorMgrService, "ListRecalcJobs", request, options)
 }
 
 // DeleteBoundTask 要清空结果数据集，耗时随数据量变化：不套 Factor 的单次超时，只受调用方 ctx 与服务目录的路由超时约束。

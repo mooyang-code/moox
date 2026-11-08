@@ -311,6 +311,7 @@ type catalogFake struct {
 	boundInstance     string
 	addKind           string
 	deletedBound      []string
+	checkedBound      []string
 }
 
 func (f *catalogFake) CreateTask(_ context.Context, in domain.FactorTask) (domain.FactorTask, error) {
@@ -386,6 +387,10 @@ func (f *catalogFake) BindTask(_ context.Context, taskID, instanceID string) (do
 }
 func (f *catalogFake) DeleteBoundTask(_ context.Context, taskID, instanceID string) error {
 	f.deletedBound = append(f.deletedBound, taskID+"@"+instanceID)
+	return f.err
+}
+func (f *catalogFake) CheckBoundTaskDeletable(_ context.Context, taskID, instanceID string) error {
+	f.checkedBound = append(f.checkedBound, taskID+"@"+instanceID)
 	return f.err
 }
 func (f *catalogFake) SubmitParams(_ context.Context, writer, taskID string, period time.Time, requestID string, submissions []catalog.MemberSubmission) ([]store.ParamSubmitOutcome, error) {
@@ -517,4 +522,14 @@ func TestGetFactorTaskMissingIsNotFound(t *testing.T) {
 	rsp, err := svc.GetFactorTask(context.Background(), &factorpb.GetFactorTaskReq{TaskId: "ftask_gone"})
 	require.NoError(t, err)
 	require.Equal(t, commonpb.ErrorCode_NOT_FOUND, rsp.GetRetInfo().GetCode())
+}
+
+func TestDeleteBoundTaskCheckOnlyChangesNothing(t *testing.T) {
+	fake := &catalogFake{set: domain.FactorTask{TaskID: "ftask_a", SpaceID: "crypto"}}
+	svc := NewService(fake, &recalcFake{})
+	rsp, err := svc.DeleteBoundTask(context.Background(), &factorpb.DeleteBoundTaskReq{TaskId: "ftask_a", BoundInstanceId: "inst", CheckOnly: true})
+	require.NoError(t, err)
+	require.Equal(t, commonpb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	require.Equal(t, []string{"ftask_a@inst"}, fake.checkedBound)
+	require.Empty(t, fake.deletedBound)
 }

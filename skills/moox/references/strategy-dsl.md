@@ -237,7 +237,7 @@ stop:
    ```
 
 2. **创建定义**：`moox-cli strategy create --dsl-file s.yaml`；已有定义用 `strategy update --strategy-id <ID> --dsl-file s.yaml` 修改；删除用 `strategy delete`（默认只预览）。创建后用 `strategy show --strategy-id <ID>` 读回 DSL 核对。
-3. **创建实例**：`strategy instance create --strategy-id <ID> --factor-task <市场>=<因子任务>`（可重复：市场模式含现货和永续时 `spot=…` 与 `swap=…` 两个都要给，或统一数据集上的一个任务 `multi=…`；股票策略 `equity=…`；默认停用；加 `--enable` 创建即启用）。市场必须是任务源数据集真实的市场。因子任务只能选本空间里运行中、还没被别的实例关联的任务，**创建后不能改**；已停用的实例可以用 `strategy instance delete --id <实例>` 删除，绑定到它的因子任务和结果数据集一起删除、不可恢复（没绑定到它的公共任务保留）；停用期间可以用 `strategy instance update` 改绑策略定义与账户。
+3. **创建实例**：`strategy instance create --strategy-id <ID> --factor-task <市场>=<因子任务>`（可重复：市场模式含现货和永续时 `spot=…` 与 `swap=…` 两个都要给，或统一数据集上的一个任务 `multi=…`；股票策略 `equity=…`；默认停用；加 `--enable` 创建即启用）。市场必须是任务源数据集真实的市场。因子任务只能选本空间里运行中、还没被别的实例关联的任务，**创建后不能改**；已停用的实例可以用 `strategy instance delete --instance-id <实例>` 删除，绑定到它的因子任务和结果数据集一起删除、不可恢复（没绑定到它的公共任务保留）；停用期间可以用 `strategy instance update` 改绑策略定义与账户。
    不挂账户的是观察实例：只计算目标权重、不投递，适合先验证。
 4. **启用**：`strategy instance enable --instance-id <ID>`（`disable` 停用；两者不带 `--yes` 只预览，确认后加 `--yes`）。启用时才解析列、成员契约和市场类型，列不存在或现货做空等问题在这一步被拒绝；
    任务刚建、结果 View 还没数据时可能因“还没有数据（覆盖范围未知）”被拒，等任务算出几个周期后再启用。

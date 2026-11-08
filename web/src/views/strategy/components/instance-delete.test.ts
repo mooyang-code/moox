@@ -5,28 +5,19 @@ const api = vi.hoisted(() => {
   const close = vi.fn();
   return {
     deleteInstance: vi.fn(),
-    listFactorTasks: vi.fn(),
+    getFactorTask: vi.fn(),
     confirm: vi.fn(),
     close,
     Message: { success: vi.fn(), error: vi.fn(), info: vi.fn(), loading: vi.fn(() => ({ close })) }
   };
 });
-vi.mock("@/api/strategy", () => ({
-  deleteInstance: api.deleteInstance,
-  isInvalidParam: (code: unknown) => code === 1 || code === "INVALID_PARAM"
-}));
-vi.mock("@/api/factor", () => ({ listFactorTasks: api.listFactorTasks }));
+vi.mock("@/api/strategy", () => ({ deleteInstance: api.deleteInstance }));
+vi.mock("@/api/factor", () => ({ getFactorTask: api.getFactorTask }));
 vi.mock("@arco-design/web-vue", () => ({ Message: api.Message, Modal: { confirm: api.confirm } }));
 
 import { ControlRequestError } from "@/api/admin/http";
 import type { StrategyInstance } from "@/api/strategy-types";
-import {
-  DELETE_CANCELED_TIP,
-  DELETE_INCOMPLETE_TIP,
-  canDeleteInstance,
-  confirmInstanceDelete,
-  instanceDeleteLines
-} from "./instance-delete";
+import { DELETE_INCOMPLETE_TIP, canDeleteInstance, confirmInstanceDelete, instanceDeleteLines } from "./instance-delete";
 
 const instance = {
   instance_id: "i-1",
@@ -43,9 +34,11 @@ describe("instance delete flow", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     api.deleteInstance.mockReset().mockResolvedValue(undefined);
-    api.listFactorTasks.mockReset().mockResolvedValue({
-      factor_tasks: [{ factor_task: { task_id: "ftask_spot", name: "现货因子", result_dataset_id: "dataset_factor_spot" } }],
-      page_result: { has_more: false }
+    api.getFactorTask.mockReset().mockImplementation(async (taskId: string) => {
+      if (taskId === "ftask_swap") {
+        throw new ControlRequestError("因子任务 ftask_swap 不存在", { ret_info: { code: 5, msg: "不存在" } } as never);
+      }
+      return { task_id: taskId, name: "现货因子", result_dataset_id: "dataset_factor_spot", bound_instance_id: "i-1" };
     });
   });
 
@@ -99,11 +92,19 @@ describe("instance delete flow", () => {
     expect(hooks.onSettled).toHaveBeenCalledWith(true);
   });
 
-  it("does nothing when the dialog is dismissed", async () => {
+  it("reads each task and lists a missing one as deleted", async () => {
     await confirmInstanceDelete(instance);
-    lastDialog().onCancel();
-    expect(api.Message.info).toHaveBeenCalledWith(DELETE_CANCELED_TIP);
+    expect(api.getFactorTask).toHaveBeenCalledWith("ftask_spot", { silent: true });
+    expect(api.getFactorTask).toHaveBeenCalledWith("ftask_swap", { silent: true });
+    expect(lastDialog().onCancel).toBeUndefined();
     expect(api.deleteInstance).not.toHaveBeenCalled();
+  });
+
+  it("does not open the dialog when a task cannot be read", async () => {
+    api.getFactorTask.mockRejectedValue(new Error("网络错误"));
+    await confirmInstanceDelete(instance);
+    expect(api.confirm).not.toHaveBeenCalled();
+    expect(api.Message.error.mock.calls[0][0]).toContain("读取因子任务失败");
   });
 
   it("asks to retry when the request times out", async () => {
@@ -122,6 +123,27 @@ describe("instance delete flow", () => {
     lastDialog().onOk();
     await flushPromises();
     expect(api.Message.error.mock.calls[0][0]).toContain(DELETE_INCOMPLETE_TIP);
+  });
+
+  it("asks to retry only when the server says the deletion already started", async () => {
+    const started = "删除因子任务 ftask_spot 未完成（实例还在，可以重新执行删除）";
+    api.deleteInstance.mockRejectedValue(
+      new ControlRequestError(started, { ret_info: { code: 4, msg: started }, incomplete: true } as never)
+    );
+    await confirmInstanceDelete(instance);
+    lastDialog().onOk();
+    await flushPromises();
+    expect(api.Message.error.mock.calls[0][0]).toContain(DELETE_INCOMPLETE_TIP);
+
+    vi.clearAllMocks();
+    const notStarted = "读不到归档任务，暂不能删除";
+    api.deleteInstance.mockRejectedValue(
+      new ControlRequestError(notStarted, { ret_info: { code: 4, msg: notStarted } } as never)
+    );
+    await confirmInstanceDelete(instance);
+    lastDialog().onOk();
+    await flushPromises();
+    expect(api.Message.error.mock.calls[0][0]).toBe(notStarted);
   });
 
   it("shows a refusal as is", async () => {

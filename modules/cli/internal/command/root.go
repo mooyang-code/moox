@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sync"
 
 	"github.com/spf13/cobra"
 )
@@ -70,7 +71,7 @@ func Execute() {
 	rootCmd.SetHelpCommand(helpCmd)
 
 	// 先执行命令解析，这样可以检查是否使用了--version标志
-	mountRPCCommands(rootCmd)
+	mountCommands(rootCmd)
 	err := rootCmd.Execute()
 	closeModuleHealth()
 	if err != nil {
@@ -90,4 +91,18 @@ func init() {
 	// 禁用默认的completion命令
 	rootCmd.CompletionOptions.DisableDefaultCmd = true
 
+}
+
+var mountCommandsOnce sync.Once
+
+// mountCommands 先挂上规格命令，再把挂在规格命令组下的手写命令挂上去（这些组由 mountRPCCommands 建出）。
+func mountCommands(root *cobra.Command) {
+	mountRPCCommands(root)
+	mountCommandsOnce.Do(func() {
+		instance, _, err := root.Find([]string{"strategy", "instance"})
+		if err != nil || instance == root {
+			panic("命令组 strategy instance 不存在")
+		}
+		instance.AddCommand(newStrategyInstanceDeleteCommand())
+	})
 }

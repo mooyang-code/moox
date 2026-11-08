@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -23,12 +22,22 @@ type fakeFactorTasks struct {
 	listErr   error
 	// block 为真时读取一直等到 ctx 结束（模拟 Factor 很慢）。
 	block bool
-	// recalc 是任务正在进行的补算作业。
+	// recalc 是任务正在进行的补算作业：Factor 的删除前检查据此拒绝。
 	recalc map[string][]string
+	// spaces 是任务所在的空间，没登记的在 crypto。
+	spaces  map[string]string
+	checked []string
 }
 
-func (f *fakeFactorTasks) ActiveRecalcJobs(_ context.Context, taskID string) ([]string, error) {
-	return f.recalc[taskID], nil
+func (f *fakeFactorTasks) CheckBoundTask(_ context.Context, taskID, instanceID string) error {
+	f.checked = append(f.checked, taskID)
+	if jobs := f.recalc[taskID]; len(jobs) > 0 {
+		return &input.RejectedError{Operation: "检查因子任务能否删除", Msg: "因子任务 " + taskID + " 有补算正在进行（" + strings.Join(jobs, "、") + "），请先取消补算"}
+	}
+	if f.bound[taskID] != instanceID {
+		return &input.RejectedError{Operation: "检查因子任务能否删除", Msg: "关联的不是这个实例"}
+	}
+	return nil
 }
 
 func (f *fakeFactorTasks) GetFactorTask(ctx context.Context, taskID string) (input.FactorTaskRecord, error) {
@@ -40,7 +49,11 @@ func (f *fakeFactorTasks) GetFactorTask(ctx context.Context, taskID string) (inp
 	if !ok {
 		return input.FactorTaskRecord{}, fmt.Errorf("%w：%s", input.ErrFactorTaskNotFound, taskID)
 	}
-	return input.FactorTaskRecord{TaskID: taskID, ResultDatasetID: "dataset_of_" + taskID, BoundInstanceID: instanceID}, nil
+	space := f.spaces[taskID]
+	if space == "" {
+		space = "crypto"
+	}
+	return input.FactorTaskRecord{SpaceID: space, ResultDatasetID: "dataset_of_" + taskID, BoundInstanceID: instanceID}, nil
 }
 
 func (f *fakeFactorTasks) ListFactorTaskIDs(ctx context.Context) (map[string]bool, error) {
@@ -65,7 +78,7 @@ func (f *fakeFactorTasks) DeleteBoundTask(_ context.Context, taskID, instanceID 
 		return err
 	}
 	if f.bound[taskID] != instanceID {
-		return errors.New("关联的不是这个实例")
+		return &input.RejectedError{Operation: "删除因子任务", Msg: "关联的不是这个实例"}
 	}
 	delete(f.bound, taskID)
 	f.deleted = append(f.deleted, taskID)
@@ -298,7 +311,7 @@ func TestListInstancesIgnoresFactorFailure(t *testing.T) {
 // 挂着组合账户的停用实例也能删，账户绑定随实例一起清掉。
 func TestDeleteStrategyInstanceWithLogicalAccount(t *testing.T) {
 	h := newHarness(t)
-	tasks := &fakeFactorTasks{bound: map[string]string{"ftask_acct": ""}}
+	tasks := &fakeFactorTasks{bound: map[string]string{"ftask_acct": "", "ftask_acct2": ""}}
 	h.service.Tasks, h.service.Archives = tasks, &fakeArchives{}
 	h.createStrategy("s1", demoDSL)
 	created := h.createInstance("ia", "s1", "ftask_acct", "acct-1", true)
@@ -306,11 +319,20 @@ func TestDeleteStrategyInstanceWithLogicalAccount(t *testing.T) {
 	tasks.bound["ftask_acct"] = "ia"
 	disabled := h.setEnabled("ia", false)
 	requireOK(t, int32(disabled.GetRetInfo().GetCode()), disabled.GetRetInfo().GetMsg())
+	releases := len(h.owner.releases)
 	rsp := h.deleteInstance("ia")
 	requireOK(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg())
-	sort.Strings(tasks.deleted)
-	if len(tasks.deleted) != 1 {
+	if len(tasks.deleted) != 1 || tasks.deleted[0] != "ftask_acct" {
 		t.Fatalf("应删除关联的任务：%v", tasks.deleted)
+	}
+	// 停用时已经向 Trade 释放了会话；删除不再联系 Trade，账户绑定随实例一起清掉，账户可以挂到新实例上启用。
+	if len(h.owner.releases) != releases || h.owner.owner["acct-1"] != "" {
+		t.Fatalf("删除不应再联系 Trade，账户也不应还有所有者：releases=%v owner=%v", h.owner.releases, h.owner.owner)
+	}
+	next := h.createInstance("ib", "s1", "ftask_acct2", "acct-1", true)
+	requireOK(t, int32(next.GetRetInfo().GetCode()), next.GetRetInfo().GetMsg())
+	if !next.GetInstance().GetEnabled() || !strings.HasPrefix(h.owner.owner["acct-1"], "ib/") {
+		t.Fatalf("账户应能挂到新实例上启用：%+v owner=%v", next.GetInstance(), h.owner.owner)
 	}
 }
 
@@ -329,4 +351,117 @@ func TestListAndGetInstanceDoNotWaitForSlowFactor(t *testing.T) {
 	if len(listed.GetInstances()[0].GetMissingFactorTasks()) != 0 || len(detail.GetInstance().GetMissingFactorTasks()) != 0 {
 		t.Fatal("读不到 Factor 时不标删除未完成")
 	}
+}
+
+// 本空间里按定义或 DSL 发起、读取要删的任务的回放也挡住删除；别的空间的、只读保留任务的不挡。
+func TestDeleteRejectsResearchReplayReadingDeletedTask(t *testing.T) {
+	h, tasks, _ := deleteHarness(t)
+	tasks.bound["ftask_kept"] = ""
+	strategyID := "s1"
+	create := func(id, space, taskID string) {
+		t.Helper()
+		if err := h.service.Store.CreateReplay(h.ctx, store.Replay{
+			ReplayID: id, StrategyID: &strategyID, DSLYaml: demoDSL, DSLHash: "sha256:x", Calendar: "crypto_24x7", SpaceID: space,
+			Tasks:     map[string]store.ReplayTask{"spot": {FactorTaskID: taskID, ViewID: "view_factor_x", ViewGeneration: "idx@1"}},
+			StartTime: h.now.Add(-48 * time.Hour), EndTime: h.now, CreatedAt: h.now,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	create("rep-other-space", "stockcn", "ftask_i1")
+	create("rep-kept-task", "crypto", "ftask_kept")
+	create("rep-research", "crypto", "ftask_i1")
+	rsp := h.deleteInstance("i1")
+	requireFail(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg(), "请先取消回放")
+	if !strings.Contains(rsp.GetRetInfo().GetMsg(), "rep-research") || strings.Contains(rsp.GetRetInfo().GetMsg(), "rep-other-space") || strings.Contains(rsp.GetRetInfo().GetMsg(), "rep-kept-task") {
+		t.Fatalf("只应列出读取要删任务的本空间回放：%s", rsp.GetRetInfo().GetMsg())
+	}
+	if len(tasks.deleted) != 0 || len(tasks.checked) != 0 {
+		t.Fatalf("回放挡住时不能检查或删除任务：checked=%v deleted=%v", tasks.checked, tasks.deleted)
+	}
+	cancelled, _ := h.service.CancelReplay(h.ctx, &strategypb.CancelReplayReq{ReplayId: "rep-research"})
+	requireOK(t, int32(cancelled.GetRetInfo().GetCode()), cancelled.GetRetInfo().GetMsg())
+	rsp = h.deleteInstance("i1")
+	requireOK(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg())
+}
+
+// 要删的任务不在实例的空间：在动手前拒绝。
+func TestDeleteRejectsTaskInAnotherSpace(t *testing.T) {
+	h, tasks, _ := deleteHarness(t)
+	tasks.spaces = map[string]string{"ftask_i1": "stockcn"}
+	rsp := h.deleteInstance("i1")
+	requireFail(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg(), "不是实例所在的空间")
+	if rsp.GetIncomplete() || len(tasks.deleted) != 0 {
+		t.Fatalf("什么都没删：%+v deleted=%v", rsp, tasks.deleted)
+	}
+}
+
+// 只有动手之后的失败才标 incomplete：读不到归档任务时什么都还没删；删任务时超时则是删除未完成。
+func TestDeleteMarksIncompleteOnlyAfterStarting(t *testing.T) {
+	h, tasks, archives := deleteHarness(t)
+	archives.err = errors.New("no route")
+	rsp := h.deleteInstance("i1")
+	requireFail(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg(), "读不到归档任务")
+	if rsp.GetIncomplete() {
+		t.Fatal("还没动手，不能标删除未完成")
+	}
+	archives.err = nil
+	tasks.deleteErr = context.DeadlineExceeded
+	rsp = h.deleteInstance("i1")
+	requireFail(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg(), "可以重新执行删除")
+	if !rsp.GetIncomplete() || rsp.GetRetInfo().GetCode() != commonpb.ErrorCode_INNER_ERR {
+		t.Fatalf("删任务失败应标删除未完成：%+v", rsp)
+	}
+}
+
+// 传给 DeleteInstance 的 View：清掉删掉的任务的年龄探针记录，保留的任务的记录不动。
+func TestDeleteClearsAgeRecordsOnlyForDeletedTasks(t *testing.T) {
+	h := newHarness(t)
+	tasks := &fakeFactorTasks{bound: map[string]string{"ftask_age_spot": "", "ftask_age_swap": ""}}
+	h.service.Tasks, h.service.Archives = tasks, &fakeArchives{}
+	h.createStrategy("s1", demoDSL)
+	created, err := h.service.CreateStrategyInstance(h.ctx, &strategypb.CreateStrategyInstanceReq{Instance: &strategypb.StrategyInstance{
+		InstanceId: "iage", StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_age_spot", "swap": "ftask_age_swap"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireOK(t, int32(created.GetRetInfo().GetCode()), created.GetRetInfo().GetMsg())
+	tasks.bound["ftask_age_spot"] = "iage"
+	views := map[string]string{}
+	for _, taskID := range []string{"ftask_age_spot", "ftask_age_swap"} {
+		viewID, err := input.ViewIDOfTask(taskID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		views[taskID] = viewID
+		if err := h.service.Store.SaveAgePassed(h.ctx, "crypto", viewID, "idx", 10, "spot", []string{"BTC-USDT"}, h.now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rsp := h.deleteInstance("iage")
+	requireOK(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg())
+	deleted, _ := h.service.Store.LoadAgePassed(h.ctx, "crypto", views["ftask_age_spot"], "idx", 10, "spot")
+	kept, _ := h.service.Store.LoadAgePassed(h.ctx, "crypto", views["ftask_age_swap"], "idx", 10, "spot")
+	if len(deleted) != 0 || len(kept) != 1 {
+		t.Fatalf("删掉的任务的年龄记录应清掉、保留的任务的不动：deleted=%v kept=%v", deleted, kept)
+	}
+}
+
+// 从没关联过的任务被另外删掉：标为不存在（absent），不是删除未完成；启用报“引用的因子任务已不存在”；删除照常完成。
+func TestUnboundTaskDeletedElsewhereIsAbsentNotIncomplete(t *testing.T) {
+	h := newHarness(t)
+	tasks := &fakeFactorTasks{bound: map[string]string{"ftask_gone": ""}}
+	h.service.Tasks, h.service.Archives = tasks, &fakeArchives{}
+	h.createStrategy("s1", demoDSL)
+	requireOK(t, int32(h.createInstance("i0", "s1", "ftask_gone", "", false).GetRetInfo().GetCode()), "")
+	delete(tasks.bound, "ftask_gone")
+	detail, _ := h.service.GetStrategyInstance(h.ctx, &strategypb.GetStrategyInstanceReq{InstanceId: "i0"})
+	if got := detail.GetInstance(); len(got.GetMissingFactorTasks()) != 0 || len(got.GetAbsentFactorTasks()) != 1 {
+		t.Fatalf("应标为不存在而不是删除未完成：%+v", got)
+	}
+	enabled := h.setEnabled("i0", true)
+	requireFail(t, int32(enabled.GetRetInfo().GetCode()), enabled.GetRetInfo().GetMsg(), "引用的因子任务 ftask_gone 已不存在")
+	rsp := h.deleteInstance("i0")
+	requireOK(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg())
 }

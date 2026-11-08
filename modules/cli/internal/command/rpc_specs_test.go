@@ -297,7 +297,7 @@ func TestRPCSpecsMatchProtoAndCatalog(t *testing.T) {
 }
 
 func TestRPCSpecsMountIntoCommandTree(t *testing.T) {
-	mountRPCCommands(rootCmd)
+	mountCommands(rootCmd)
 	for _, spec := range allRPCSpecs() {
 		cmd, rest, err := rootCmd.Find(spec.Path)
 		require.NoError(t, err, strings.Join(spec.Path, " "))
@@ -309,7 +309,7 @@ func TestRPCSpecsMountIntoCommandTree(t *testing.T) {
 
 // 管理台能调用的每个方法都要有专用命令，或者明确记下为什么不做命令：管理台新增接口时忘了做命令，这个测试会失败。
 func TestEveryConsoleMethodHasACommandOrAReason(t *testing.T) {
-	mountRPCCommands(rootCmd)
+	mountCommands(rootCmd)
 	catalog, err := servicecatalog.LoadEmbedded()
 	require.NoError(t, err)
 	console := map[string]bool{}
@@ -397,7 +397,7 @@ func TestProtoIndexCatchesWrongSpecs(t *testing.T) {
 
 // skill 的完整命令清单必须列出每一个叶子命令：新增命令忘了写进 skills/moox/references/command-index.md，Agent 就不知道有它。
 func TestSkillCommandIndexListsEveryCommand(t *testing.T) {
-	mountRPCCommands(rootCmd)
+	mountCommands(rootCmd)
 	raw, err := os.ReadFile(filepath.Join(repoRoot(t), "skills", "moox", "references", "command-index.md"))
 	require.NoError(t, err)
 	index := string(raw)

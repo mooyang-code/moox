@@ -25,7 +25,7 @@ func (g *deleteGateway) Forward(_ context.Context, service, method string, _ int
 	switch method {
 	case "GetStrategyInstance":
 		return []byte(`{"ret_info":{"code":0},"instance":{"instance_id":"i1","strategy_id":"s1","enabled":false,
-			"factor_tasks":{"spot":"ftask_spot","swap":"ftask_swap","multi":"ftask_shared"},"missing_factor_tasks":["ftask_swap"]}}`), nil
+			"factor_tasks":{"spot":"ftask_spot","swap":"ftask_swap","multi":"ftask_shared"}}}`), nil
 	case "DeleteStrategyInstance":
 		if g.deleteErr != nil {
 			return nil, g.deleteErr
@@ -66,7 +66,7 @@ func runStrategyDeleteCommand(t *testing.T, gateway *deleteGateway, args ...stri
 	var out bytes.Buffer
 	cmd.SetOut(&out)
 	cmd.SetErr(&bytes.Buffer{})
-	cmd.SetArgs(append([]string{"--id", "i1"}, args...))
+	cmd.SetArgs(append([]string{"--instance-id", "i1"}, args...))
 	err := cmd.Execute()
 	return out.String(), err
 }
@@ -103,8 +103,13 @@ func TestStrategyInstanceDeleteTimeoutAsksToRetry(t *testing.T) {
 	_, err := runStrategyDeleteCommand(t, &deleteGateway{deleteErr: errs.New(errs.RetClientTimeout, "client timeout")}, "--yes")
 	require.ErrorContains(t, err, strategyInstanceDeleteIncomplete)
 
-	_, err = runStrategyDeleteCommand(t, &deleteGateway{deleteRsp: `{"ret_info":{"code":4,"msg":"删除因子任务 ftask_spot 未完成：请求超时"}}`}, "--yes")
+	_, err = runStrategyDeleteCommand(t, &deleteGateway{deleteRsp: `{"ret_info":{"code":4,"msg":"删除因子任务 ftask_spot 未完成：请求超时"},"incomplete":true}`}, "--yes")
 	require.ErrorContains(t, err, strategyInstanceDeleteIncomplete)
+
+	// 还没动手就失败（例如读不到归档任务）：原样报错，不加“删除未完成”。
+	_, err = runStrategyDeleteCommand(t, &deleteGateway{deleteRsp: `{"ret_info":{"code":4,"msg":"读不到归档任务，暂不能删除"}}`}, "--yes")
+	require.ErrorContains(t, err, "读不到归档任务")
+	assert.NotContains(t, err.Error(), strategyInstanceDeleteIncomplete)
 
 	_, err = runStrategyDeleteCommand(t, &deleteGateway{deleteRsp: `{"ret_info":{"code":1,"msg":"结果数据集 x 有归档任务"}}`}, "--yes")
 	require.ErrorContains(t, err, "归档任务")

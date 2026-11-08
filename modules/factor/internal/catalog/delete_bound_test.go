@@ -2,9 +2,12 @@ package catalog
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
+	"github.com/mooyang-code/moox/modules/factor/internal/storageio"
 	"github.com/mooyang-code/moox/modules/factor/internal/store"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -135,4 +138,34 @@ func TestDeleteBoundTaskRejectsActiveRecalc(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NoError(t, svc.DeleteBoundTask(ctx, testTaskID(), "inst-1"))
+}
+
+// 结果数据集被其他 View 引用：在停用任务、删成员之前按冲突拒绝；只检查（CheckBoundTaskDeletable）也给出同样的结果。
+func TestDeleteBoundTaskRejectsReferencedDatasetBeforeChanging(t *testing.T) {
+	ctx := context.Background()
+	svc, db, meta := boundTaskWithEnabledMember(t)
+	meta.deletableErr = fmt.Errorf("%w：结果数据集 x 仍被 View view_other 引用", storageio.ErrDatasetReferenced)
+
+	err := svc.CheckBoundTaskDeletable(ctx, testTaskID(), "inst-1")
+	require.ErrorIs(t, err, store.ErrConflict)
+	err = svc.DeleteBoundTask(ctx, testTaskID(), "inst-1")
+	require.ErrorIs(t, err, store.ErrConflict)
+	require.ErrorContains(t, err, "view_other")
+	stored, err := db.GetTask(ctx, testTaskID())
+	require.NoError(t, err)
+	require.Equal(t, domain.TaskStatusEnabled, stored.Status)
+	count, err := db.CountMembers(ctx, testTaskID())
+	require.NoError(t, err)
+	require.Equal(t, 1, count)
+
+	// 读不到 Storage：按错误返回（不是冲突），同样什么也不改。
+	meta.deletableErr = errors.New("storage unavailable")
+	err = svc.DeleteBoundTask(ctx, testTaskID(), "inst-1")
+	require.Error(t, err)
+	require.NotErrorIs(t, err, store.ErrConflict)
+
+	meta.deletableErr = nil
+	require.NoError(t, svc.CheckBoundTaskDeletable(ctx, testTaskID(), "inst-1"))
+	require.NoError(t, svc.DeleteBoundTask(ctx, testTaskID(), "inst-1"))
+	require.NoError(t, svc.CheckBoundTaskDeletable(ctx, testTaskID(), "inst-1"), "任务不存在算可以删")
 }

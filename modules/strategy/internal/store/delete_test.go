@@ -139,3 +139,42 @@ func TestDeleteInstanceRejectsActiveInstance(t *testing.T) {
 		t.Fatalf("不存在的实例应返回 ErrNotFound，得到 %v", err)
 	}
 }
+
+// 每张策略表都要分好类：要么是不属于任何实例的全局表，要么在删除实例时被清理（带 c_instance_id 的表、随父表级联的明细表、
+// 按 View 清理的年龄探针表）。新增的表没有分类时测试失败，提醒在 DeleteInstance 里处理或登记为全局表。
+func TestEveryStrategyTableIsClassifiedForInstanceDeletion(t *testing.T) {
+	repo := openTestStore(t)
+	global := map[string]bool{"t_strategy_defs": true, "t_strategy_def_versions": true, "t_strategy_templates": true}
+	// 没有 c_instance_id、由 DeleteInstance 另外清理的表：结果明细随结果、回放明细随回放、年龄探针按 View。
+	cleanedOtherwise := map[string]bool{"t_strategy_result_items": true, "t_strategy_replay_bars": true, "t_strategy_age_passed": true}
+	withInstance := map[string]bool{}
+	for _, table := range tablesWithInstanceID(t, repo) {
+		withInstance[table] = true
+	}
+	var tables []string
+	if err := repo.db.Raw(`SELECT name FROM sqlite_master WHERE type = 'table' AND name LIKE 't\_strategy\_%' ESCAPE '\' ORDER BY name`).Scan(&tables).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(tables) == 0 {
+		t.Fatal("没有找到策略表")
+	}
+	for _, table := range tables {
+		if !global[table] && !cleanedOtherwise[table] && !withInstance[table] {
+			t.Errorf("表 %s 没有分类：带实例数据的要在 DeleteInstance 里删除并补进删除检查，全局表登记进 global", table)
+		}
+		if global[table] && withInstance[table] {
+			t.Errorf("表 %s 带 c_instance_id，不能登记为全局表", table)
+		}
+	}
+	statements := strings.Join(instanceScopedDeletes, "\n") + sqlDeleteViewsAgePassed
+	for table := range withInstance {
+		if table != "t_strategy_instances" && !strings.Contains(statements, "DELETE FROM "+table+" ") {
+			t.Errorf("表 %s 带 c_instance_id，但 DeleteInstance 没有删除它", table)
+		}
+	}
+	for table := range cleanedOtherwise {
+		if !strings.Contains(statements, "DELETE FROM "+table) {
+			t.Errorf("表 %s 应由 DeleteInstance 清理", table)
+		}
+	}
+}

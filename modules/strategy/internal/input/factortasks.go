@@ -68,13 +68,11 @@ type BoundTask struct {
 // ErrFactorTaskNotFound 表示因子任务在 Factor 里已经不存在（例如随实例删除到一半）。
 var ErrFactorTaskNotFound = errors.New("因子任务不存在")
 
-// FactorTaskRecord 是 GetFactorTask 返回的任务身份。
+// FactorTaskRecord 是删除实例时要看的任务信息：所在空间、结果数据集与关联的实例。
 type FactorTaskRecord struct {
-	TaskID          string
-	Name            string
+	SpaceID         string
 	ResultDatasetID string
 	BoundInstanceID string
-	Status          string
 }
 
 // GetFactorTask 读取一个因子任务；任务不存在时返回 ErrFactorTaskNotFound。
@@ -93,8 +91,7 @@ func (c *RPCClient) GetFactorTask(ctx context.Context, taskID string) (FactorTas
 		return FactorTaskRecord{}, err
 	}
 	task := rsp.GetFactorTask()
-	return FactorTaskRecord{TaskID: task.GetTaskId(), Name: task.GetName(), ResultDatasetID: task.GetResultDatasetId(),
-		BoundInstanceID: task.GetBoundInstanceId(), Status: task.GetStatus()}, nil
+	return FactorTaskRecord{SpaceID: task.GetSpaceId(), ResultDatasetID: task.GetResultDatasetId(), BoundInstanceID: task.GetBoundInstanceId()}, nil
 }
 
 // factorTaskPageSize 与 factorTaskMaxPages 是列出全部因子任务时的每页条数与翻页上限。
@@ -127,41 +124,36 @@ func (c *RPCClient) ListFactorTaskIDs(ctx context.Context) (map[string]bool, err
 	return nil, fmt.Errorf("列出因子任务失败：超过 %d 页仍没有取完", factorTaskMaxPages)
 }
 
-// ActiveRecalcJobs 返回任务正在排队或执行的补算作业 ID。
-func (c *RPCClient) ActiveRecalcJobs(ctx context.Context, taskID string) ([]string, error) {
-	if c == nil || c.Factor == nil {
-		return nil, errors.New("Factor 客户端未配置")
-	}
-	var ids []string
-	for page := uint32(1); page <= factorTaskMaxPages; page++ {
-		rsp, err := c.Factor.ListRecalcJobs(ctx, &factorpb.ListRecalcJobsReq{TaskId: taskID, Statuses: []string{"accepted", "running"},
-			Page: &commonpb.Page{Page: page, Size: factorTaskPageSize}})
-		if err != nil {
-			return nil, transport("查询补算作业", err)
-		}
-		if err := retError("查询补算作业", rsp.GetRetInfo()); err != nil {
-			return nil, err
-		}
-		for _, job := range rsp.GetJobs() {
-			ids = append(ids, job.GetJobId())
-		}
-		if !rsp.GetPageResult().GetHasMore() || len(rsp.GetJobs()) == 0 {
-			return ids, nil
-		}
-	}
-	return nil, fmt.Errorf("查询补算作业失败：超过 %d 页仍没有取完", factorTaskMaxPages)
+// RejectedError 是 Factor 明确拒绝（INVALID_PARAM）的删除：原因原样透传给调用方，不当成依赖不可用。
+type RejectedError struct {
+	Operation string
+	Msg       string
+}
+
+func (e *RejectedError) Error() string { return e.Operation + "被拒绝：" + e.Msg }
+
+// CheckBoundTask 只做 DeleteBoundTask 动手之前的全部检查（关联、补算、结果数据集能否删），不做任何修改。
+func (c *RPCClient) CheckBoundTask(ctx context.Context, taskID, instanceID string) error {
+	return c.deleteBoundTask(ctx, "检查因子任务能否删除", &factorpb.DeleteBoundTaskReq{TaskId: taskID, BoundInstanceId: instanceID, CheckOnly: true})
 }
 
 // DeleteBoundTask 删除关联到实例的因子任务，连同成员与结果数据集；任务不存在也返回成功。
 func (c *RPCClient) DeleteBoundTask(ctx context.Context, taskID, instanceID string) error {
+	return c.deleteBoundTask(ctx, "删除因子任务", &factorpb.DeleteBoundTaskReq{TaskId: taskID, BoundInstanceId: instanceID})
+}
+
+func (c *RPCClient) deleteBoundTask(ctx context.Context, operation string, req *factorpb.DeleteBoundTaskReq) error {
 	if c == nil || c.Factor == nil {
 		return errors.New("Factor 客户端未配置")
 	}
-	rsp, err := c.Factor.DeleteBoundTask(ctx, &factorpb.DeleteBoundTaskReq{TaskId: taskID, BoundInstanceId: instanceID})
+	rsp, err := c.Factor.DeleteBoundTask(ctx, req)
 	if err != nil {
-		return transport("删除因子任务", err)
+		return transport(operation, err)
 	}
-	return retError("删除因子任务", rsp.GetRetInfo())
+	if rsp.GetRetInfo().GetCode() == commonpb.ErrorCode_INVALID_PARAM {
+		return &RejectedError{Operation: operation, Msg: rsp.GetRetInfo().GetMsg()}
+	}
+	return retError(operation, rsp.GetRetInfo())
 }
 
 // FactorTasks 是任务关联与参数提交用到的 FactorMgr 接口。

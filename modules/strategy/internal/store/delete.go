@@ -25,8 +25,18 @@ const (
 	sqlDeleteInstanceTasks           = `DELETE FROM t_strategy_instance_tasks WHERE c_instance_id = ?`
 	// sqlDeleteStoppedInstance 只删已停用、没有会话的实例。
 	sqlDeleteStoppedInstance = `DELETE FROM t_strategy_instances WHERE c_instance_id = ? AND c_enabled = 0 AND c_session_id IS NULL`
-	// sqlSelectActiveInstanceReplays 列出实例还在排队或执行的回放。
-	sqlSelectActiveInstanceReplays = `SELECT c_replay_id FROM t_strategy_replays WHERE c_instance_id = ? AND c_status IN ('pending', 'running') ORDER BY c_replay_id`
+	// sqlSelectActiveReplaysOfInstance 列出还在排队或执行、会读到实例数据的回放：从实例发起的，以及本空间里按定义或 DSL 发起、
+	// 但读取的因子任务（c_tasks_json 是 市场 → {factor_task_id, …}）在要删的任务（JSON 数组参数）里的。
+	sqlSelectActiveReplaysOfInstance = `
+		SELECT c_replay_id FROM t_strategy_replays
+		WHERE c_status IN ('pending', 'running')
+		AND (c_instance_id = ? OR (c_space_id = ? AND EXISTS (
+			SELECT 1 FROM json_each(c_tasks_json) AS task
+			WHERE json_extract(task.value, '$.factor_task_id') IN (SELECT value FROM json_each(?))
+		)))
+		ORDER BY c_replay_id`
+	// sqlSelectInstanceSessionResolved 读出实例全部会话固化的绑定解析（含各任务键的因子任务）。
+	sqlSelectInstanceSessionResolved = `SELECT c_resolved_json FROM t_strategy_sessions WHERE c_instance_id = ?`
 	// sqlDeleteViewsAgePassed 删除一组 View（JSON 数组参数）的年龄探针记录。
 	sqlDeleteViewsAgePassed = `DELETE FROM t_strategy_age_passed WHERE c_space_id = ? AND c_view_id IN (SELECT value FROM json_each(?))`
 )
@@ -44,11 +54,22 @@ var instanceScopedDeletes = []string{
 	sqlDeleteInstanceTasks,
 }
 
-// ActiveInstanceReplays 返回实例还在排队或执行的回放 ID。
-func (s *Store) ActiveInstanceReplays(ctx context.Context, instanceID string) ([]string, error) {
+// ActiveReplaysOfInstance 返回还在排队或执行、会读到实例数据的回放 ID：从实例发起的，以及空间内读取 taskIDs 中任一任务的。
+func (s *Store) ActiveReplaysOfInstance(ctx context.Context, instanceID, spaceID string, taskIDs []string) ([]string, error) {
+	tasks, err := json.Marshal(append([]string{}, taskIDs...))
+	if err != nil {
+		return nil, err
+	}
 	var ids []string
-	err := s.db.WithContext(ctx).Raw(sqlSelectActiveInstanceReplays, strings.TrimSpace(instanceID)).Scan(&ids).Error
+	err = s.db.WithContext(ctx).Raw(sqlSelectActiveReplaysOfInstance, strings.TrimSpace(instanceID), spaceID, string(tasks)).Scan(&ids).Error
 	return ids, err
+}
+
+// SessionResolvedJSONs 返回实例全部会话固化的绑定解析：出现在里面的因子任务都已经与实例关联过（关联发生在写会话之前）。
+func (s *Store) SessionResolvedJSONs(ctx context.Context, instanceID string) ([]string, error) {
+	var values []string
+	err := s.db.WithContext(ctx).Raw(sqlSelectInstanceSessionResolved, strings.TrimSpace(instanceID)).Scan(&values).Error
+	return values, err
 }
 
 // DeleteInstance 在一个事务里删除已停用、没有会话的实例在策略库里的全部记录：会话、结果与明细、到达记录、回放、外显设置、

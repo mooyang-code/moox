@@ -1,13 +1,12 @@
 import { h } from "vue";
 import { Message, Modal } from "@arco-design/web-vue";
-import { listFactorTasks } from "@/api/factor";
+import { getFactorTask } from "@/api/factor";
 import type { FactorTask } from "@/api/factor/types";
 import { ControlRequestError } from "@/api/admin/http";
-import { deleteInstance, isInvalidParam } from "@/api/strategy";
+import { deleteInstance } from "@/api/strategy";
 import type { StrategyInstance } from "@/api/strategy-types";
 import { instanceTasks, marketLabel } from "@/views/strategy/market-mode";
 
-export const DELETE_CANCELED_TIP = "已取消，实例没有删除";
 export const DELETE_INCOMPLETE_TIP = "删除未完成，请稍后重试";
 
 /** 只有已停用、没有运行会话的实例能删除。 */
@@ -51,22 +50,33 @@ export function instanceDeleteLines(instanceId: string, tasks: DeleteTaskLine[])
 }
 
 /**
- * 删除失败时是否要提示“删除未完成，请稍后重试”：只有服务端明确拒绝（参数错误，例如实例没停用、数据集有归档任务）原样显示，
- * 其余（超时、连接中断、框架错误、中途失败）删除都可能已经做了一部分，再删一次即可接着做完。
+ * 删除失败时是否要提示“删除未完成，请稍后重试”：服务端答复了的，按答复里的 incomplete（删除已经开始、没做完）判断，
+ * 什么都还没删的失败（例如读不到归档任务、被拒绝）原样显示；没拿到答复的（超时、连接中断、框架错误）删除可能已经做了一部分。
  */
 export function isDeleteIncomplete(error: unknown): boolean {
-  return !(error instanceof ControlRequestError && isInvalidParam(error.response?.ret_info?.code));
+  if (error instanceof ControlRequestError && error.response?.ret_info) {
+    return Boolean((error.response as { incomplete?: boolean }).incomplete);
+  }
+  return true;
 }
 
-/** 列出因子服务里的全部任务（按页取完），用来在确认框里写出任务名称和结果数据集。 */
-async function loadFactorTasks(): Promise<Map<string, FactorTask>> {
-  const tasks = new Map<string, FactorTask>();
-  for (let page = 1; page <= 50; page++) {
-    const rsp = await listFactorTasks({ page: { page, size: 200 } }, { silent: true });
-    for (const info of rsp.factor_tasks ?? []) tasks.set(info.factor_task.task_id, info.factor_task);
-    if (!rsp.page_result?.has_more || !(rsp.factor_tasks ?? []).length) break;
-  }
-  return tasks;
+function isNotFound(error: unknown): boolean {
+  const code = error instanceof ControlRequestError ? error.response?.ret_info?.code : undefined;
+  return code === 5 || code === "5" || code === "NOT_FOUND";
+}
+
+/** 逐个读实例登记的因子任务；因子服务里已经没有的返回空。 */
+async function loadInstanceTasks(instance: StrategyInstance): Promise<DeleteTaskLine[]> {
+  return Promise.all(
+    instanceTasks(instance.factor_tasks).map(async item => {
+      try {
+        return { market: item.market, taskId: item.taskId, factorTask: await getFactorTask(item.taskId, { silent: true }) };
+      } catch (error) {
+        if (isNotFound(error)) return { market: item.market, taskId: item.taskId };
+        throw error;
+      }
+    })
+  );
 }
 
 export interface InstanceDeleteHooks {
@@ -78,18 +88,13 @@ export interface InstanceDeleteHooks {
 
 /** 删除实例的统一入口：读出将要删除的任务与数据集，确认后调用删除。 */
 export async function confirmInstanceDelete(instance: StrategyInstance, hooks: InstanceDeleteHooks = {}) {
-  let existing: Map<string, FactorTask>;
+  let tasks: DeleteTaskLine[];
   try {
-    existing = await loadFactorTasks();
+    tasks = await loadInstanceTasks(instance);
   } catch (error) {
     Message.error(`读取因子任务失败，暂不能删除：${error instanceof Error ? error.message : String(error)}`);
     return;
   }
-  const tasks = instanceTasks(instance.factor_tasks).map(item => ({
-    market: item.market,
-    taskId: item.taskId,
-    factorTask: existing.get(item.taskId)
-  }));
   Modal.confirm({
     title: `删除实例「${instance.instance_id}」`,
     content: () =>
@@ -101,8 +106,7 @@ export async function confirmInstanceDelete(instance: StrategyInstance, hooks: I
     okText: "确认删除",
     cancelText: "取消",
     okButtonProps: { status: "danger" },
-    onOk: () => void runDelete(instance.instance_id, hooks),
-    onCancel: () => Message.info(DELETE_CANCELED_TIP)
+    onOk: () => void runDelete(instance.instance_id, hooks)
   });
 }
 
