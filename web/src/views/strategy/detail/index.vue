@@ -3,7 +3,7 @@
     <div class="moox-inner">
       <div class="page-head">
         <div>
-          <a-button type="text" @click="router.push(instancesLink())"
+          <a-button type="text" @click="goBackOr(router, instancesLink())"
             ><template #icon><icon-left /></template>返回运行实例</a-button
           >
           <h2>{{ store.strategy?.name || store.instance?.strategy_id || "策略实例" }}</h2>
@@ -117,6 +117,7 @@
 </template>
 
 <script setup lang="ts">
+import { goBackOr } from "@/utils/navigate-back";
 import FactorTaskLinks from "@/views/strategy/components/factor-task-links.vue";
 import { useLogicalAccount } from "@/views/strategy/components/use-logical-account";
 import { computed, onMounted, ref, watch } from "vue";
