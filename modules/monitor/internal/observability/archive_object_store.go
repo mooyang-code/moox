@@ -21,7 +21,7 @@ func (b Builder) buildArchiveObjectStore(ctx context.Context, spaceID string, no
 	if b.Metrics == nil || b.Metrics.Catalog() == nil {
 		return nil, nil
 	}
-	series, err := b.Metrics.Catalog().FindSeriesAt(ctx, "", "", report.ArchiveObjectStoreStateMetric, "", 100, now)
+	series, err := b.Metrics.Catalog().FindSeriesAt(ctx, "", "", report.ArchiveObjectStoreStateMetric, "", 1000, now) // probe_error 在标签里，一天内可能留下多条已不上报的序列
 	if err != nil {
 		return nil, err
 	}
