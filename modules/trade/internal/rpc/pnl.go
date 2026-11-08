@@ -21,7 +21,7 @@ const (
 	fundingMaxPages  = 5
 )
 
-// SummarizeAccountPnl 收益拆解：手续费和已实现盈亏从成交表汇总，资金费从交易所流水即查。
+// SummarizeAccountPnl 收益拆解：手续费和已实现盈亏从成交表汇总，资金费从资金流水汇总（实盘即查交易所，模拟盘读本地资金费记录）。
 // 手续费按手续费资产分别列出，不折算成结算币；资金费翻页取不完或有账户查不到时标明截断。时间范围最长 90 天（请求校验里限制）。
 func (s *ConsoleServer) SummarizeAccountPnl(ctx context.Context, req *tradepb.SummarizeAccountPnlReq) (*tradepb.SummarizeAccountPnlRsp, error) {
 	spaceID, err := requiredSpace(ctx)
@@ -89,7 +89,7 @@ func pnlAmountsToPB(values []store.AssetAmount) []*tradepb.PnlAmount {
 	return result
 }
 
-// summarizeFunding 从各个有永续市场的执行账户的交易所流水里汇总资金费。
+// summarizeFunding 从各个有永续市场的执行账户的资金流水里汇总资金费。
 func (s *ConsoleServer) summarizeFunding(ctx context.Context, accounts []store.TradingAccountRecord, start, end time.Time, rsp *tradepb.SummarizeAccountPnlRsp) {
 	truncated := false
 	// 先把各账户取到的流水都收齐，算出统计起点之后再合计：起点之前只有部分账户取到的流水不能计入，否则合计和起点对不上。

@@ -46,6 +46,7 @@ var (
 	_ execution.WalletTransferer      = (*Adapter)(nil)
 	_ execution.FeeDiscountConfigurer = (*Adapter)(nil)
 	_ execution.DustConverter         = (*Adapter)(nil)
+	_ execution.FundingRateSource     = (*Adapter)(nil)
 	_ exchange.RateStatusSource       = (*Adapter)(nil)
 
 	_ execution.ExecutionAdapter      = (*PortfolioMargin)(nil)

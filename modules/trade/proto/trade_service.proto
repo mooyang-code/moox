@@ -931,7 +931,7 @@ service TradeConsoleService {
   rpc ListOperatorActions(ListOperatorActionsReq) returns (ListOperatorActionsRsp);
 }
 
-// 资金流水：手续费、资金费、已实现盈亏、划转等，从交易所即查即用，按时间倒序。
+// 资金流水：手续费、资金费、已实现盈亏、划转等，从交易所即查即用（模拟盘由本地成交和资金费记录生成），按时间倒序。
 message ListAccountLedgerReq {
   string trading_account_id = 1;
   // 毫秒时间戳；不传时默认近 7 天，最长 90 天。
@@ -1098,7 +1098,7 @@ message PnlAmount {
   string amount = 2;
 }
 
-// 收益拆解：手续费和已实现盈亏从成交表汇总，资金费从交易所流水即查。
+// 收益拆解：手续费和已实现盈亏从成交表汇总，资金费从资金流水汇总（实盘即查交易所，模拟盘读本地资金费记录）。
 message SummarizeAccountPnlReq {
   string logical_account_id = 1;
   // 只看组合里的一个执行账户。
@@ -1116,7 +1116,7 @@ message SummarizeAccountPnlRsp {
   // 资金费，按结算资产汇总，收到为正、支付为负。
   repeated PnlAmount funding_fees = 4;
   int64 fill_count = 5;
-  // 资金费是否取到了：模拟盘、现货账户或交易所不支持流水时为 false，funding_note 说明原因。
+  // 资金费是否取到了：没有永续市场或交易所不支持流水时为 false，funding_note 说明原因。
   bool funding_available = 6;
   // 资金费流水翻页没取完，或有账户的流水查不了：汇总只是一部分。
   bool funding_truncated = 7;

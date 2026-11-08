@@ -22,6 +22,7 @@ var (
 	_ WalletTransferer          = (*MultiMarket)(nil)
 	_ FeeDiscountConfigurer     = (*MultiMarket)(nil)
 	_ DustConverter             = (*MultiMarket)(nil)
+	_ FundingRateSource         = (*MultiMarket)(nil)
 	_ exchange.RateStatusSource = (*MultiMarket)(nil)
 )
 
@@ -459,4 +460,18 @@ func (m *MultiMarket) ConvertDust(ctx context.Context, assets []string) (exchang
 		merged.Converted = append(merged.Converted, part.Converted...)
 	}
 	return merged, nil
+}
+
+// SupportsFundingRates 报告永续市场的适配器是否能查资金费率；没开通永续时没有。
+func (m *MultiMarket) SupportsFundingRates() bool {
+	return FundingRatesOf(m.adapters[exchange.MarketTypeSwap]) != nil
+}
+
+// ListFundingRates 交给永续市场的适配器查。
+func (m *MultiMarket) ListFundingRates(ctx context.Context, start, end time.Time) ([]exchange.FundingRate, error) {
+	source := FundingRatesOf(m.adapters[exchange.MarketTypeSwap])
+	if source == nil {
+		return nil, &exchange.Error{Kind: exchange.ErrorRejected, Err: fmt.Errorf("账户的永续市场不支持资金费率查询")}
+	}
+	return source.ListFundingRates(ctx, start, end)
 }

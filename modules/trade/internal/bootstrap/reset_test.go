@@ -171,6 +171,11 @@ func TestTradeResetDataKeepsAccounts(t *testing.T) {
 	ctx := context.Background()
 	env.seedAccounts(t)
 	env.setPosition(t, "paper-1", "3")
+	sqlDB, err := env.db.SQLDB()
+	require.NoError(t, err)
+	_, err = sqlDB.Exec(`INSERT INTO t_paper_funding_fees (c_space_id, c_trading_account_id, c_exchange_symbol, c_settled_at, c_funding_rate, c_mark_price, c_quantity, c_amount, c_asset)
+		VALUES ('space-1', 'paper-1', 'BTCUSDT', 1730419200000, '0.0001', '70000', '3', '-21', 'USDT')`)
+	require.NoError(t, err)
 	env.pause(t)
 	plan, err := env.life.ResetPlan(ctx, lifecycle.ResetData)
 	require.NoError(t, err)
@@ -180,6 +185,7 @@ func TestTradeResetDataKeepsAccounts(t *testing.T) {
 	require.NoError(t, env.life.ResetWait(ctx))
 	require.Equal(t, 2, env.count(t, "t_trading_accounts"), "data 范围保留账户")
 	require.Zero(t, env.count(t, "t_trading_positions"))
+	require.Zero(t, env.count(t, "t_paper_funding_fees"), "重置运行数据要清掉资金费记录")
 }
 
 func TestLiveSpotHoldingsOnlyCountsManagedAssetsAboveMinimum(t *testing.T) {
