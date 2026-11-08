@@ -69,7 +69,7 @@ async function mountPage() {
   wrapper = mount(CollectionTasks, {
     global: {
       plugins: [ArcoVue],
-      stubs: { ResampleJobsDrawer: true, "icon-plus": true, "icon-search": true, "icon-more": true }
+      stubs: { ResampleJobsDrawer: true, ArchiveCoverageText: true, "icon-plus": true, "icon-search": true, "icon-more": true }
     },
     attachTo: document.body
   });
