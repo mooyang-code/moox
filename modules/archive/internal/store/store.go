@@ -27,6 +27,13 @@ var (
 	ErrHasPartitions = errors.New("archive task has partitions")
 )
 
+// DirNameTakenError 表示目录名已被同空间同用途的另一个任务使用。
+type DirNameTakenError struct{ DirName, DatasetID string }
+
+func (e *DirNameTakenError) Error() string {
+	return fmt.Sprintf("目录名 %s 已被 %s 使用，请改一个", e.DirName, e.DatasetID)
+}
+
 // timeLayout 是库内统一的时间文本格式（UTC，定宽，字典序即时间序）。
 const timeLayout = "2006-01-02 15:04:05.000"
 

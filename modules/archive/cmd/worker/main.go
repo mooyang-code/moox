@@ -142,16 +142,16 @@ func serveHealth(addr string, worker *app.App) (func() error, error) {
 		case !snap.Ready:
 			status = "error"
 			reasons = append(reasons, "no recent heartbeat acknowledged by archive-mgr")
-		case snap.DiskLow:
+		case snap.DiskInsufficient:
 			status = "degraded"
-			reasons = append(reasons, "disk_low")
+			reasons = append(reasons, "disk_insufficient")
 		}
 		if snap.LastError != "" {
 			reasons = append(reasons, snap.LastError)
 		}
 		return healthz.Response{
 			Module: "archive-worker", Ready: snap.Ready, Status: status, Time: time.Now().UTC(),
-			Details: map[string]any{"active": snap.Active, "running": snap.Running, "maintaining": snap.Maintaining, "disk_low": snap.DiskLow, "disk_free_bytes": snap.DiskFree, "reasons": reasons},
+			Details: map[string]any{"active": snap.Active, "running": snap.Running, "maintaining": snap.Maintaining, "disk_insufficient": snap.DiskInsufficient, "disk_free_bytes": snap.DiskFree, "reasons": reasons},
 		}
 	}
 	state.SetReady(true)

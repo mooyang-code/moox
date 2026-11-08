@@ -59,6 +59,24 @@ func TestArchiveCreateSendsThePullIntervalAndPrintsProtoFieldNames(t *testing.T)
 	assert.Contains(t, out.String(), `"next_pull_at": "2026-10-17T01:05:25Z"`)
 }
 
+func TestArchiveCreateAndPrepareSendTheDirNameAndPrintTheSuggestion(t *testing.T) {
+	g := &archiveFakeGateway{rsp: &archivepb.CreateArchiveTaskRsp{RetInfo: ok(), Task: &archivepb.ArchiveTask{SpaceId: "crypto", DatasetId: "ds", Purpose: "collect", DirName: "binance-perp-kline-1m"}}}
+	useArchiveGateway(t, g)
+	var out bytes.Buffer
+	require.NoError(t, runArchiveTasksCreate(context.Background(), &out, archiveFlags{SpaceID: "crypto", DatasetID: "ds", DirName: "binance-perp-kline-1m"}))
+	assert.Equal(t, "binance-perp-kline-1m", g.req.(*archivepb.CreateArchiveTaskReq).GetDirName())
+	assert.Contains(t, out.String(), `"dir_name": "binance-perp-kline-1m"`)
+
+	prep := &archiveFakeGateway{rsp: &archivepb.PrepareArchiveTaskRsp{RetInfo: ok(), Purpose: "collect", SuggestedDirName: "binance-swap-kline-1m", DirNameConflict: true}}
+	useArchiveGateway(t, prep)
+	out.Reset()
+	require.NoError(t, runArchiveTasksPrepare(context.Background(), &out, archiveFlags{SpaceID: "crypto", DatasetID: "ds", DirName: "binance-perp-kline-1m"}))
+	assert.Equal(t, "binance-perp-kline-1m", prep.req.(*archivepb.PrepareArchiveTaskReq).GetDirName())
+	assert.Contains(t, out.String(), `"suggested_dir_name": "binance-swap-kline-1m"`)
+	assert.Contains(t, out.String(), `"dir_name_conflict": true`)
+	assert.Contains(t, out.String(), `"purpose": "collect"`)
+}
+
 func TestArchivePreviewAndRunsListSendTheNewFields(t *testing.T) {
 	g := &archiveFakeGateway{rsp: &archivepb.PreviewArchiveScheduleRsp{RetInfo: ok(), NextRuns: []string{"2026-10-17T01:04:25Z"}, NextReviews: []string{"2026-10-17T01:34:25Z"}}}
 	useArchiveGateway(t, g)

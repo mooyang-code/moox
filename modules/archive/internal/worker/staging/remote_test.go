@@ -114,7 +114,7 @@ func TestMetaRemoteSHAIsStoredInTaskState(t *testing.T) {
 	if err := s.SetMetaRemoteSHA(ctx, "crypto", "ds", "x"); err == nil {
 		t.Fatal("没有任务状态时应报错")
 	}
-	if err := s.BindTask(ctx, "crypto", "ds", "1"); err != nil {
+	if err := s.BindTask(ctx, Task{SpaceID: "crypto", DatasetID: "ds", Purpose: "collect", DirName: "ds"}, "1"); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.SetMetaRemoteSHA(ctx, "crypto", "ds", "abc"); err != nil {

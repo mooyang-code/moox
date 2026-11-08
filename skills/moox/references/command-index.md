@@ -25,7 +25,7 @@
 | `archive tasks create` | 创建归档任务（下一次检查立即复核，之后按收盘拉取） |
 | `archive tasks delete` | 删除没有分区的任务 |
 | `archive tasks list` | 列出归档任务（--space-id 为空表示全部空间） |
-| `archive tasks prepare` | 查看数据集的频率、保留期、推荐的拉取间隔与最早回补起点 |
+| `archive tasks prepare` | 查看数据集的频率、保留期、推荐的拉取间隔、最早回补起点与建议的目录名 |
 | `archive tasks preview` | 预览接下来 5 次拉取、3 次复核、复核读取区间与分区导出时间 |
 | `archive tasks run` | 立即运行一次（同复核） |
 | `archive tasks update` | 修改拉取间隔、回补起点或启停任务 |

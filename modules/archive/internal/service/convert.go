@@ -113,7 +113,7 @@ func objectStoreFromJSON(text string) *archivepb.ObjectStoreInfo {
 func workerToPB(w store.Worker, now time.Time) *archivepb.ArchiveWorkerInfo {
 	return &archivepb.ArchiveWorkerInfo{
 		WorkerId: w.WorkerID, InstanceId: w.InstanceID, Version: w.Version, RootDir: w.RootDir, DiskTotalBytes: w.DiskTotalBytes,
-		DiskFreeBytes: w.DiskFreeBytes, StagingBytes: w.StagingBytes, Maintaining: w.Maintaining, PacingJson: w.PacingJSON,
+		DiskFreeBytes: w.DiskFreeBytes, DiskUsedBytes: w.DiskUsedBytes, MinFreeBytes: w.MinFreeBytes, StagingBytes: w.StagingBytes, Maintaining: w.Maintaining, PacingJson: w.PacingJSON,
 		RunningRunIds: append([]string(nil), w.RunningRunIDs...), LeaseUntil: fmtRFC(w.LeaseUntil), LastHeartbeatAt: fmtRFC(w.LastHeartbeat), Active: w.Active(now),
 		ObjectStore: objectStoreFromJSON(w.ObjectStoreJSON),
 	}
@@ -122,7 +122,7 @@ func workerToPB(w store.Worker, now time.Time) *archivepb.ArchiveWorkerInfo {
 // taskToPB 把任务转成接口消息；启用的任务带上下一次拉取时刻（算不出时留空）。
 func (s *Service) taskToPB(t store.Task, now time.Time) *archivepb.ArchiveTask {
 	out := &archivepb.ArchiveTask{
-		SpaceId: t.SpaceID, DatasetId: t.DatasetID, Freq: t.Freq, PartitionUnit: t.PartitionUnit, DataNodeId: t.DataNodeID, Retention: t.Retention,
+		SpaceId: t.SpaceID, DatasetId: t.DatasetID, Purpose: t.Purpose, DirName: t.DirName, Freq: t.Freq, PartitionUnit: t.PartitionUnit, DataNodeId: t.DataNodeID, Retention: t.Retention,
 		PullEveryBars: uint32(t.PullEveryBars), IntervalSeconds: uint32(t.IntervalSeconds), BackfillFrom: fmtRFC(t.BackfillFrom), Status: t.Status,
 		LastBoundary: fmtRFC(t.LastBoundary), LastReview: fmtRFC(t.LastReview), ConsecutiveSkips: uint32(t.ConsecutiveSkips),
 		LastSuccessAt: fmtRFC(t.LastSuccessAt), FinalUntil: fmtRFC(t.FinalUntil), Creator: t.Creator, CreatedAt: fmtRFC(t.CreatedAt), UpdatedAt: fmtRFC(t.UpdatedAt),

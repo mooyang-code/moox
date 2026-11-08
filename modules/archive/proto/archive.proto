@@ -94,6 +94,9 @@ message ArchiveTask {
   // 没有启用对象存储时两者都是 0。
   uint32 remote_verified_count = 31;
   uint32 remote_pending_count = 32;
+  // purpose：collect（采集结果）、factor（因子结果）、data（其他）；分区文件在 <space>/<purpose>/<dir_name>/ 下，建好后不改。
+  string purpose = 33;
+  string dir_name = 34;
 }
 
 // ArchivePartition 是一个任务的一个分区（本地日；1d 及以上为月）。
@@ -137,6 +140,7 @@ message ArchiveWorkerInfo {
   string instance_id = 2;
   string version = 3;
   string root_dir = 4;
+  // 磁盘（statfs）：总量、可用（不含 root 保留空间，worker 按它判断）、已用；已用 + 可用小于总量，差额是 root 保留空间。
   uint64 disk_total_bytes = 5;
   uint64 disk_free_bytes = 6;
   uint64 staging_bytes = 7;
@@ -148,6 +152,9 @@ message ArchiveWorkerInfo {
   // active：租约未过期。
   bool active = 13;
   ObjectStoreInfo object_store = 14;
+  uint64 disk_used_bytes = 15;
+  // min_free_bytes 是 worker 配置的可用空间下限：disk_free_bytes 低于它时 worker 停止领取新运行。
+  uint64 min_free_bytes = 16;
 }
 
 // ObjectStoreInfo 是 worker 使用的对象存储摘要，不含任何凭据；endpoint 为空表示没有配置对象存储。
@@ -200,6 +207,8 @@ message ListArchiveTasksRsp {
 message PrepareArchiveTaskReq {
   string space_id = 1;
   string dataset_id = 2;
+  // 要检查的目录名；为空时检查建议的目录名。不合规时返回参数错误。
+  string dir_name = 3;
 }
 message PrepareArchiveTaskRsp {
   common.RetInfo ret_info = 1;
@@ -211,6 +220,12 @@ message PrepareArchiveTaskRsp {
   // 推荐的拉取间隔（根数 N）。
   uint32 recommended_pull_every_bars = 7;
   bool exists = 8;
+  // 用途（collect、factor、data），由数据集角色决定。
+  string purpose = 9;
+  // 建议的目录名（交易所 + 品种 + 类型 + 频率）。
+  string suggested_dir_name = 10;
+  // 要检查的目录名（请求带了 dir_name 时是它，否则是建议值）已被同空间同用途的其他任务使用；不自动改名。
+  bool dir_name_conflict = 11;
 }
 
 message PreviewArchiveScheduleReq {
@@ -241,6 +256,8 @@ message CreateArchiveTaskReq {
   string backfill_from = 4;
   // 创建后是否启用；默认启用。
   bool paused = 5;
+  // 目录名（小写字母、数字与连字符，最长 64）；为空取建议值。同空间同用途内唯一，建好后不能改。
+  string dir_name = 6;
 }
 message CreateArchiveTaskRsp {
   common.RetInfo ret_info = 1;
@@ -386,10 +403,13 @@ message ArchiveWorkerHeartbeatReq {
   uint64 disk_free_bytes = 6;
   uint64 staging_bytes = 7;
   bool maintaining = 8;
-  bool disk_low = 9;
+  // 已用（statfs Blocks − Bfree）；disk_free_bytes 是可用（Bavail）。
+  uint64 disk_used_bytes = 9;
   string pacing_json = 10;
   repeated string running_run_ids = 11;
   ObjectStoreInfo object_store = 12;
+  // worker 配置的可用空间下限（worker.min_free_bytes）。
+  uint64 min_free_bytes = 13;
 }
 message ArchiveWorkerHeartbeatRsp {
   common.RetInfo ret_info = 1;
@@ -449,12 +469,15 @@ message RunAssignment {
   uint32 lease_ttl_seconds = 20;
   // 任务自增 ID（不复用）。任务删除后重建会得到新值，worker 据此丢弃旧任务遗留的水位和暂存数据。
   string task_id = 21;
-  // 数据集元数据 JSON（名称、简介、数据来源、标的范围等），由 mgr 从 Storage 读取，worker 写进 <space>/<dataset_id>/dataset.json。
+  // 数据集元数据 JSON（名称、简介、数据来源、标的范围等），由 mgr 从 Storage 读取，worker 写进 <space>/<purpose>/<dir_name>/dataset.json。
   string dataset_meta_json = 22;
   // 任务最近一次成功的复核或手动运行的开始时间（即读取水位）；worker 本地没有水位时用它。
   string last_success_at = 23;
   // 该任务在 mgr 的分区登记（只含结束时间晚于「本次开始 − 线上保留期」的，不带预览与列名）；worker 本地缺分区状态时据此补齐。
   repeated PartitionReport registered_partitions = 24;
+  // 任务的用途与目录名：分区文件写在 <space>/<purpose>/<dir_name>/<yyyy>/ 下。
+  string purpose = 25;
+  string dir_name = 26;
 }
 message PullArchiveRunRsp {
   common.RetInfo ret_info = 1;

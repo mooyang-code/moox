@@ -175,14 +175,14 @@ func newHarness(t *testing.T) *harness {
 			h.now = h.now.Add(d)
 			return ctx.Err()
 		},
-		DiskUsage: func(string) (uint64, uint64, error) { return 200 << 30, h.free, nil },
+		DiskUsage: func(string) (uint64, uint64, uint64, error) { return 200 << 30, 90 << 30, h.free, nil },
 	})
 	return h
 }
 
 func assignment(runID string, mutate func(*archivepb.RunAssignment)) *archivepb.RunAssignment {
 	a := &archivepb.RunAssignment{
-		RunId: runID, LeaseToken: "tok-" + runID, Kind: "scheduled", SpaceId: "crypto", DatasetId: "ds_1m", TaskId: "1", Freq: "1m", PartitionUnit: "day", DataNodeId: "node-0",
+		RunId: runID, LeaseToken: "tok-" + runID, Kind: "scheduled", SpaceId: "crypto", DatasetId: "ds_1m", Purpose: "collect", DirName: "kline-1m", TaskId: "1", Freq: "1m", PartitionUnit: "day", DataNodeId: "node-0",
 		Retention: "168h", IntervalSeconds: 3600, MinLookbackSeconds: 900, SpaceTz: "UTC", StagingRetentionSeconds: 72 * 3600,
 		StartedAt: "2026-10-17T01:04:43Z", ScheduledAt: "2026-10-17T01:04:43Z",
 	}
@@ -238,7 +238,8 @@ func TestHeartbeatReportsStateAndAppliesTheManagersInstructions(t *testing.T) {
 	tasks := h.app.heartbeatOnce(ctx)
 	req := h.mgr.heartbeats[0]
 	if req.GetWorkerId() != "w1" || req.GetInstanceId() != "i1" || req.GetVersion() != "test" || req.GetRootDir() != h.root || req.GetDiskTotalBytes() != 200<<30 ||
-		req.GetDiskFreeBytes() != 100<<30 || req.GetDiskLow() || len(req.GetRunningRunIds()) != 1 || !strings.Contains(req.GetPacingJson(), "max_concurrent_runs") {
+		req.GetDiskFreeBytes() != 100<<30 || req.GetDiskUsedBytes() != 90<<30 || req.GetMinFreeBytes() != uint64(h.cfg.Worker.MinFreeBytes) || h.cfg.Worker.MinFreeBytes <= 0 ||
+		len(req.GetRunningRunIds()) != 1 || !strings.Contains(req.GetPacingJson(), "max_concurrent_runs") {
 		t.Fatalf("heartbeat = %v", req)
 	}
 	if !cancelled || !h.app.running["r1"].stop.Load() {
@@ -256,11 +257,17 @@ func TestHeartbeatReportsStateAndAppliesTheManagersInstructions(t *testing.T) {
 	if tasks := h.app.heartbeatOnce(ctx); tasks == nil || len(tasks) != 0 {
 		t.Fatalf("活动 worker 没有任务时应拿到空列表: %v", tasks)
 	}
-	// 磁盘低于下限：心跳上报 disk_low。
+	if h.app.Snapshot().DiskInsufficient {
+		t.Fatal("可用空间高于下限时不算磁盘不足")
+	}
+	// 可用空间低于下限：心跳照常只报数值（由 mgr 与页面按同一下限判断），worker 自己记为磁盘不足、停止领取。
 	h.free = 1 << 30
 	h.app.heartbeatOnce(ctx)
-	if !h.mgr.heartbeats[len(h.mgr.heartbeats)-1].GetDiskLow() {
-		t.Fatal("可用空间低于 min_free_bytes 应上报 disk_low")
+	if last := h.mgr.heartbeats[len(h.mgr.heartbeats)-1]; last.GetDiskFreeBytes() != 1<<30 || last.GetMinFreeBytes() <= last.GetDiskFreeBytes() {
+		t.Fatalf("heartbeat = %v", last)
+	}
+	if !h.app.Snapshot().DiskInsufficient {
+		t.Fatal("可用空间低于 min_free_bytes 应记为磁盘不足")
 	}
 }
 
@@ -332,14 +339,14 @@ func TestPullHonorsSlotsLeaseMaintenanceAndDisk(t *testing.T) {
 	h.app.mu.Unlock()
 	h.app.pullOnce(ctx)
 	h.app.mu.Lock()
-	h.app.maintaining, h.app.diskLow = false, true
+	h.app.maintaining, h.app.diskInsufficient = false, true
 	h.app.mu.Unlock()
 	h.app.pullOnce(ctx)
 	if len(h.mgr.pulls) != 1 {
 		t.Fatalf("维护中或磁盘不足不应拉取: %d", len(h.mgr.pulls))
 	}
 	h.app.mu.Lock()
-	h.app.diskLow = false
+	h.app.diskInsufficient = false
 	h.app.mu.Unlock()
 	h.mgr.pullErr = errors.New("mgr down")
 	h.app.pullOnce(ctx) // 失败只记录日志
@@ -448,8 +455,8 @@ func stagedTasks(t *testing.T, h *harness, datasets ...string) map[string]bool {
 func (h *harness) seed(ds, taskID string) {
 	h.t.Helper()
 	ctx := context.Background()
-	task := staging.Task{SpaceID: "crypto", DatasetID: ds, Columns: []staging.Column{{Name: "close", Type: staging.TypeDouble}}}
-	if err := h.store.BindTask(ctx, "crypto", ds, taskID); err != nil {
+	task := staging.Task{SpaceID: "crypto", DatasetID: ds, Purpose: "collect", DirName: ds, Columns: []staging.Column{{Name: "close", Type: staging.TypeDouble}}}
+	if err := h.store.BindTask(ctx, task, taskID); err != nil {
 		h.t.Fatal(err)
 	}
 	if err := h.store.EnsureTable(ctx, task); err != nil {

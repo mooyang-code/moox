@@ -26,8 +26,8 @@ func (w *WorkerService) ArchiveWorkerHeartbeat(ctx context.Context, req *archive
 	ttl := s.cfg.Worker.TakeoverWait
 	result, err := s.store.Heartbeat(ctx, store.Worker{
 		WorkerID: req.GetWorkerId(), InstanceID: req.GetInstanceId(), Version: req.GetVersion(), RootDir: req.GetRootDir(),
-		DiskTotalBytes: req.GetDiskTotalBytes(), DiskFreeBytes: req.GetDiskFreeBytes(), StagingBytes: req.GetStagingBytes(),
-		Maintaining: req.GetMaintaining(), PacingJSON: req.GetPacingJson(), RunningRunIDs: req.GetRunningRunIds(),
+		DiskTotalBytes: req.GetDiskTotalBytes(), DiskFreeBytes: req.GetDiskFreeBytes(), DiskUsedBytes: req.GetDiskUsedBytes(), MinFreeBytes: req.GetMinFreeBytes(),
+		StagingBytes: req.GetStagingBytes(), Maintaining: req.GetMaintaining(), PacingJSON: req.GetPacingJson(), RunningRunIDs: req.GetRunningRunIds(),
 		ObjectStoreJSON: objectStoreToJSON(req.GetObjectStore()),
 	}, now, ttl)
 	if err != nil {
@@ -111,6 +111,7 @@ func (s *Service) assignment(c store.Claimed, registered []store.Partition) *arc
 	}
 	return &archivepb.RunAssignment{
 		RunId: c.Run.RunID, LeaseToken: c.Run.LeaseToken, Kind: c.Run.Kind, SpaceId: c.Task.SpaceID, DatasetId: c.Task.DatasetID,
+		Purpose: c.Task.Purpose, DirName: c.Task.DirName,
 		Freq: c.Task.Freq, PartitionUnit: c.Task.PartitionUnit, DataNodeId: c.Task.DataNodeID, Retention: c.Task.Retention,
 		IntervalSeconds: uint32(c.Task.IntervalSeconds), MinLookbackSeconds: uint32(s.cfg.Schedule.MinLookback / time.Second),
 		SpaceTz: spaceCfg.TZ, LocalClose: spaceCfg.LocalClose, StagingRetentionSeconds: uint32(s.cfg.StagingRetention / time.Second),

@@ -23,6 +23,7 @@ type archiveFlags struct {
 	File         string
 	SpaceID      string
 	DatasetID    string
+	DirName      string
 	PullEvery    uint32
 	BackfillFrom string
 	Paused       bool
@@ -95,7 +96,7 @@ func runArchiveTasksPrepare(ctx context.Context, out io.Writer, f archiveFlags) 
 		return err
 	}
 	rsp := &archivepb.PrepareArchiveTaskRsp{}
-	return archiveInvoke(ctx, out, f.File, "PrepareArchiveTask", &archivepb.PrepareArchiveTaskReq{SpaceId: f.SpaceID, DatasetId: f.DatasetID}, rsp, rsp.GetRetInfo)
+	return archiveInvoke(ctx, out, f.File, "PrepareArchiveTask", &archivepb.PrepareArchiveTaskReq{SpaceId: f.SpaceID, DatasetId: f.DatasetID, DirName: f.DirName}, rsp, rsp.GetRetInfo)
 }
 
 func runArchiveTasksPreview(ctx context.Context, out io.Writer, f archiveFlags) error {
@@ -114,7 +115,7 @@ func runArchiveTasksCreate(ctx context.Context, out io.Writer, f archiveFlags) e
 	}
 	rsp := &archivepb.CreateArchiveTaskRsp{}
 	return archiveInvoke(ctx, out, f.File, "CreateArchiveTask", &archivepb.CreateArchiveTaskReq{
-		SpaceId: f.SpaceID, DatasetId: f.DatasetID, PullEveryBars: f.PullEvery, BackfillFrom: f.BackfillFrom, Paused: f.Paused,
+		SpaceId: f.SpaceID, DatasetId: f.DatasetID, PullEveryBars: f.PullEvery, BackfillFrom: f.BackfillFrom, Paused: f.Paused, DirName: f.DirName,
 	}, rsp, rsp.GetRetInfo)
 }
 
@@ -261,7 +262,10 @@ func init() {
 	)
 	tasks.AddCommand(
 		newArchiveLeaf("list", "列出归档任务（--space-id 为空表示全部空间）", runArchiveTasksList, func(c *cobra.Command, f *archiveFlags) { bindSpace(c, f); bindPaging(c, f) }),
-		newArchiveLeaf("prepare", "查看数据集的频率、保留期、推荐的拉取间隔与最早回补起点", runArchiveTasksPrepare, bindDataset),
+		newArchiveLeaf("prepare", "查看数据集的频率、保留期、推荐的拉取间隔、最早回补起点与建议的目录名", runArchiveTasksPrepare, func(c *cobra.Command, f *archiveFlags) {
+			bindDataset(c, f)
+			c.Flags().StringVar(&f.DirName, "dir-name", "", "检查这个目录名是否已被同空间同用途的其他任务使用；为空检查建议的目录名")
+		}),
 		newArchiveLeaf("preview", "预览接下来 5 次拉取、3 次复核、复核读取区间与分区导出时间", runArchiveTasksPreview, func(c *cobra.Command, f *archiveFlags) {
 			bindSchedule(c, f, "默认 1")
 		}),
@@ -269,6 +273,7 @@ func init() {
 			bindSchedule(c, f, "默认 1")
 			c.Flags().StringVar(&f.BackfillFrom, "backfill-from", "", "首次运行回补的数据起点，RFC3339；不早于线上保留期")
 			c.Flags().BoolVar(&f.Paused, "paused", false, "创建后先停用")
+			c.Flags().StringVar(&f.DirName, "dir-name", "", "目录名（小写字母、数字与连字符，最长 64）；为空取 prepare 给出的建议值。建好后不能改")
 		}),
 		newArchiveLeaf("update", "修改拉取间隔、回补起点或启停任务", runArchiveTasksUpdate, func(c *cobra.Command, f *archiveFlags) {
 			bindSchedule(c, f, "不修改")

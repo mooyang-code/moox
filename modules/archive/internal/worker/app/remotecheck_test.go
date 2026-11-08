@@ -78,7 +78,7 @@ func seedReplicated(t *testing.T, h *harness, srv *fakes3.Server, key string, co
 	}
 	sha := sha256.Sum256(content)
 	md := md5.Sum(content)
-	rel := "crypto/ds_1m/2026/" + key + ".csv"
+	rel := "crypto/collect/kline-1m/2026/" + key + ".csv"
 	if err := h.store.MarkExported(ctx, "crypto", "ds_1m", key, h.now, rel, hex.EncodeToString(sha[:])); err != nil {
 		t.Fatal(err)
 	}

@@ -64,14 +64,17 @@ ON CONFLICT (space_id, dataset_id) DO UPDATE SET scan_watermark = excluded.scan_
 	return err
 }
 
-// BindTask 把数据集的暂存状态绑定到任务 ID。本地已绑定的 ID 与 taskID 不同，说明任务被删除后重建过：
-// 旧任务遗留的水位、起点、暂存数据和分区状态一律丢弃，新任务从自己的设置开始。
-func (s *Store) BindTask(ctx context.Context, spaceID, datasetID, taskID string) error {
+// BindTask 把数据集的暂存状态绑定到任务 ID，并记下任务的用途与目录名。本地已绑定的 ID 与 taskID 不同，说明任务被删除后重建过：
+// 旧任务遗留的水位、起点、暂存数据和分区状态一律丢弃，新任务从自己的设置开始。目录名建好后不改，同一任务 ID 不会变。
+func (s *Store) BindTask(ctx context.Context, task Task, taskID string) error {
 	if taskID == "" {
 		return errors.New("运行缺少 task_id")
 	}
+	if task.Purpose == "" || task.DirName == "" {
+		return errors.New("运行缺少用途或目录名")
+	}
 	var stored string
-	err := s.db.QueryRowContext(ctx, `SELECT task_id FROM task_state WHERE space_id = ? AND dataset_id = ?`, spaceID, datasetID).Scan(&stored)
+	err := s.db.QueryRowContext(ctx, `SELECT task_id FROM task_state WHERE space_id = ? AND dataset_id = ?`, task.SpaceID, task.DatasetID).Scan(&stored)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return err
 	}
@@ -79,11 +82,22 @@ func (s *Store) BindTask(ctx context.Context, spaceID, datasetID, taskID string)
 		return nil
 	}
 	// 没有 task_state 记录（或未绑定）时也可能留有其他状态，一并清掉再绑定。
-	if err := s.DropTask(ctx, spaceID, datasetID); err != nil {
+	if err := s.DropTask(ctx, task.SpaceID, task.DatasetID); err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO task_state (space_id, dataset_id, task_id) VALUES (?, ?, ?)`, spaceID, datasetID, taskID)
+	_, err = s.db.ExecContext(ctx, `INSERT INTO task_state (space_id, dataset_id, task_id, purpose, dir_name) VALUES (?, ?, ?, ?, ?)`,
+		task.SpaceID, task.DatasetID, taskID, task.Purpose, task.DirName)
 	return err
+}
+
+// TaskDir 返回绑定任务时记下的用途与目录名；数据集没有绑定过任务时 ok 为假。
+func (s *Store) TaskDir(ctx context.Context, spaceID, datasetID string) (purpose, dirName string, ok bool, err error) {
+	err = s.db.QueryRowContext(ctx, `SELECT purpose, dir_name FROM task_state WHERE space_id = ? AND dataset_id = ? AND task_id != ''`,
+		spaceID, datasetID).Scan(&purpose, &dirName)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", false, nil
+	}
+	return purpose, dirName, err == nil, err
 }
 
 // Reconcile 按 mgr 下发的当前全部任务对账：keep 的键是 "space/dataset"，值是任务 ID。

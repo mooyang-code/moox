@@ -31,7 +31,7 @@ func openTest(t *testing.T) *Store {
 }
 
 func klineTask() Task {
-	return Task{SpaceID: "crypto", DatasetID: "ds_1m", Columns: []Column{{"open", TypeDouble}, {"close", TypeDouble}, {"note", TypeString}, {"n", TypeInt}}}
+	return Task{SpaceID: "crypto", DatasetID: "ds_1m", Purpose: "collect", DirName: "binance-spot-kline-1m", Columns: []Column{{"open", TypeDouble}, {"close", TypeDouble}, {"note", TypeString}, {"n", TypeInt}}}
 }
 
 func utcDay(at time.Time) PartitionRef {
@@ -574,24 +574,35 @@ func TestNewDatabaseUsesIncrementalVacuumAndMaintainReturnsFreePages(t *testing.
 
 func TestBindTaskDropsStateOfAnotherTaskID(t *testing.T) {
 	s, ctx, task := openTest(t), context.Background(), klineTask()
-	if err := s.BindTask(ctx, "crypto", "ds_1m", ""); err == nil {
+	if err := s.BindTask(ctx, task, ""); err == nil {
 		t.Fatal("缺少 task_id 必须报错")
 	}
-	if err := s.BindTask(ctx, "crypto", "ds_1m", "7"); err != nil {
+	if err := s.BindTask(ctx, Task{SpaceID: "crypto", DatasetID: "ds_1m"}, "7"); err == nil {
+		t.Fatal("缺少用途或目录名必须报错")
+	}
+	if _, _, ok, err := s.TaskDir(ctx, "crypto", "ds_1m"); ok || err != nil {
+		t.Fatalf("还没绑定时没有目录: ok=%v err=%v", ok, err)
+	}
+	if err := s.BindTask(ctx, task, "7"); err != nil {
 		t.Fatal(err)
+	}
+	if purpose, dir, ok, err := s.TaskDir(ctx, "crypto", "ds_1m"); err != nil || !ok || purpose != "collect" || dir != "binance-spot-kline-1m" {
+		t.Fatalf("TaskDir = %q %q %v %v", purpose, dir, ok, err)
 	}
 	_ = s.EnsureTable(ctx, task)
 	_, _ = s.Stage(ctx, task, []Row{row("BTC", day0, "", 1.0, 1.0, nil, nil)}, utcDay, now0)
 	_ = finalizeAll(ctx, s, task, nil, now0, now0)
 	// 同一任务再次绑定：保留全部状态。
-	if err := s.BindTask(ctx, "crypto", "ds_1m", "7"); err != nil {
+	if err := s.BindTask(ctx, task, "7"); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok, _ := s.Watermark(ctx, "crypto", "ds_1m"); !ok {
 		t.Fatal("同一任务不应丢水位")
 	}
 	// 任务重建：旧水位、暂存表与分区状态全部丢弃。
-	if err := s.BindTask(ctx, "crypto", "ds_1m", "8"); err != nil {
+	rebuilt := task
+	rebuilt.DirName = "binance-spot-kline-1m-v2"
+	if err := s.BindTask(ctx, rebuilt, "8"); err != nil {
 		t.Fatal(err)
 	}
 	parts, _ := s.Partitions(ctx, "crypto", "ds_1m")
@@ -603,13 +614,16 @@ func TestBindTaskDropsStateOfAnotherTaskID(t *testing.T) {
 	if stored != "8" {
 		t.Fatalf("task_id = %q", stored)
 	}
+	if _, dir, _, _ := s.TaskDir(ctx, "crypto", "ds_1m"); dir != "binance-spot-kline-1m-v2" {
+		t.Fatalf("重建后的目录名 = %q", dir)
+	}
 }
 
 func TestReconcileDropsDatasetsThatAreNotInTheTaskList(t *testing.T) {
 	s, ctx := openTest(t), context.Background()
 	for _, ds := range []string{"keep", "gone", "recreated"} {
-		task := Task{SpaceID: "crypto", DatasetID: ds, Columns: klineTask().Columns}
-		_ = s.BindTask(ctx, "crypto", ds, "1")
+		task := Task{SpaceID: "crypto", DatasetID: ds, Purpose: "collect", DirName: ds, Columns: klineTask().Columns}
+		_ = s.BindTask(ctx, task, "1")
 		_ = s.EnsureTable(ctx, task)
 		if _, err := s.Stage(ctx, task, []Row{row("BTC", day0, "", 1.0, 1.0, nil, nil)}, utcDay, now0); err != nil {
 			t.Fatal(err)

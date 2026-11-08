@@ -33,8 +33,8 @@ const (
 	probeKey = "_probe/absent"
 )
 
-// DiskUsage 返回路径所在文件系统的总量与可用量。
-type DiskUsage func(path string) (total, free uint64, err error)
+// DiskUsage 返回路径所在文件系统的总量、已用与可用量（可用不含 root 保留空间）。
+type DiskUsage func(path string) (total, used, free uint64, err error)
 
 // Options 是 App 的依赖。
 type Options struct {
@@ -69,10 +69,10 @@ type App struct {
 	lastHeartbeatOK time.Time
 	lastError       string
 	maintaining     bool
-	diskLow         bool
-	diskFree        uint64
-	diskTotal       uint64
-	running         map[string]*activeRun
+	// diskInsufficient：可用空间低于 worker.min_free_bytes，停止领取新运行。
+	diskInsufficient bool
+	diskFree         uint64
+	running          map[string]*activeRun
 	// pulling 是正在进行中的领取调用数：维护要等它们登记完运行之后再开始，否则对账时会漏掉在途的运行。
 	pulling int
 	// datasetSlots 让同一个数据集的运行在本地串行：mgr 取消一个运行后会立刻允许创建新运行，
@@ -218,13 +218,13 @@ func (a *App) probeOnce(ctx context.Context) {
 // heartbeatOnce 发送一次心跳。本实例是活动 worker 时 mgr 下发当前全部任务，返回它们（键 "space/dataset"，值 task_id）；否则返回 nil。
 func (a *App) heartbeatOnce(ctx context.Context) map[string]string {
 	cfg := a.opts.Config
-	total, free, derr := a.opts.DiskUsage(cfg.Worker.RootDir)
+	total, used, free, derr := a.opts.DiskUsage(cfg.Worker.RootDir)
 	a.mu.Lock()
 	if derr == nil {
-		a.diskTotal, a.diskFree = total, free
-		a.diskLow = int64(free) < int64(cfg.Worker.MinFreeBytes)
+		a.diskFree = free
+		a.diskInsufficient = int64(free) < int64(cfg.Worker.MinFreeBytes)
 	}
-	maintaining, diskLow := a.maintaining, a.diskLow
+	maintaining := a.maintaining
 	a.mu.Unlock()
 	pacingJSON, _ := json.Marshal(map[string]any{
 		"request_seconds": cfg.Pacing.RequestSeconds, "hour_quiet": cfg.Pacing.HourQuiet,
@@ -235,8 +235,8 @@ func (a *App) heartbeatOnce(ctx context.Context) map[string]string {
 	defer cancel()
 	rsp, err := a.opts.Manager.Heartbeat(callCtx, &archivepb.ArchiveWorkerHeartbeatReq{
 		WorkerId: cfg.Worker.WorkerID, InstanceId: a.opts.InstanceID, Version: a.opts.Version, RootDir: cfg.Worker.RootDir,
-		DiskTotalBytes: total, DiskFreeBytes: free, StagingBytes: uint64(a.opts.Staging.FileBytes()),
-		Maintaining: maintaining, DiskLow: diskLow, PacingJson: string(pacingJSON), RunningRunIds: a.runningIDs(),
+		DiskTotalBytes: total, DiskFreeBytes: free, DiskUsedBytes: used, MinFreeBytes: uint64(cfg.Worker.MinFreeBytes),
+		StagingBytes: uint64(a.opts.Staging.FileBytes()), Maintaining: maintaining, PacingJson: string(pacingJSON), RunningRunIds: a.runningIDs(),
 		ObjectStore: a.objectStoreInfo(),
 	})
 	a.mu.Lock()
@@ -280,7 +280,7 @@ func (a *App) pullOnce(ctx context.Context) {
 	cfg := a.opts.Config
 	a.mu.Lock()
 	free := cfg.Pacing.MaxConcurrentRuns - len(a.running) - a.pulling
-	blocked := a.maintaining || a.diskLow
+	blocked := a.maintaining || a.diskInsufficient
 	busy := map[string]uint32{}
 	for _, r := range a.running {
 		busy[r.assignment.GetDataNodeId()]++
@@ -566,9 +566,10 @@ type Snapshot struct {
 	Active      bool
 	Running     int
 	Maintaining bool
-	DiskLow     bool
-	DiskFree    uint64
-	LastError   string
+	// DiskInsufficient：可用空间低于下限，已停止领取新运行。
+	DiskInsufficient bool
+	DiskFree         uint64
+	LastError        string
 }
 
 // Snapshot 返回当前状态：最近一次心跳成功即就绪。
@@ -577,6 +578,6 @@ func (a *App) Snapshot() Snapshot {
 	defer a.mu.Unlock()
 	return Snapshot{
 		Ready:  !a.lastHeartbeatOK.IsZero() && a.opts.Now().Sub(a.lastHeartbeatOK) < 3*a.opts.Config.Worker.HeartbeatInterval,
-		Active: a.active, Running: len(a.running), Maintaining: a.maintaining, DiskLow: a.diskLow, DiskFree: a.diskFree, LastError: a.lastError,
+		Active: a.active, Running: len(a.running), Maintaining: a.maintaining, DiskInsufficient: a.diskInsufficient, DiskFree: a.diskFree, LastError: a.lastError,
 	}
 }

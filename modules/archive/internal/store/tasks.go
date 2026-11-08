@@ -12,9 +12,12 @@ import (
 // Task 是一个归档任务。
 type Task struct {
 	// ID 是自增主键，删除后不复用，用作任务实例标识。
-	ID            int64
-	SpaceID       string
-	DatasetID     string
+	ID        int64
+	SpaceID   string
+	DatasetID string
+	// Purpose 是用途（collect、factor、data），DirName 是空间与用途内唯一的目录名；分区文件在 <space>/<purpose>/<dir_name>/ 下，建好后不改。
+	Purpose       string
+	DirName       string
 	Freq          string
 	PartitionUnit string
 	DataNodeID    string
@@ -42,7 +45,7 @@ type Task struct {
 	BlockedReason string
 }
 
-const taskColumns = `c_id, c_space_id, c_dataset_id, c_freq, c_partition_unit, c_data_node_id, c_retention, c_meta_json, c_pull_every_bars,
+const taskColumns = `c_id, c_space_id, c_dataset_id, c_purpose, c_dir_name, c_freq, c_partition_unit, c_data_node_id, c_retention, c_meta_json, c_pull_every_bars,
 c_interval_seconds, c_backfill_from, c_status, c_last_boundary, c_last_review, c_consecutive_skips, c_last_success_at, c_final_until,
 c_creator, c_ctime, c_mtime, c_unrecoverable_json, c_blocked_reason`
 
@@ -52,7 +55,7 @@ func scanTask(row rowScanner) (Task, error) {
 	var t Task
 	var backfill, lastBoundary, lastReview, lastSuccess, finalUntil, created, updated timeValue
 	var unrecoverable string
-	err := row.Scan(&t.ID, &t.SpaceID, &t.DatasetID, &t.Freq, &t.PartitionUnit, &t.DataNodeID, &t.Retention, &t.MetaJSON, &t.PullEveryBars,
+	err := row.Scan(&t.ID, &t.SpaceID, &t.DatasetID, &t.Purpose, &t.DirName, &t.Freq, &t.PartitionUnit, &t.DataNodeID, &t.Retention, &t.MetaJSON, &t.PullEveryBars,
 		&t.IntervalSeconds, &backfill, &t.Status, &lastBoundary, &lastReview, &t.ConsecutiveSkips, &lastSuccess, &finalUntil,
 		&t.Creator, &created, &updated, &unrecoverable, &t.BlockedReason)
 	if err != nil {
@@ -66,20 +69,44 @@ func scanTask(row rowScanner) (Task, error) {
 	return t, nil
 }
 
-// CreateTask 创建任务；两个边界为空，启用的任务在下一次检查时立即复核。数据集已有任务返回 ErrConflict。
+// CreateTask 创建任务；两个边界为空，启用的任务在下一次检查时立即复核。
+// 数据集已有任务返回 ErrConflict；目录名已被同空间同用途的其他任务使用返回 ErrDirNameTaken（检查与插入在同一事务里）。
 func (s *Store) CreateTask(ctx context.Context, task Task) (Task, error) {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO t_archive_tasks (c_space_id, c_dataset_id, c_freq, c_partition_unit, c_data_node_id, c_retention, c_meta_json,
-c_pull_every_bars, c_interval_seconds, c_backfill_from, c_status, c_consecutive_skips, c_creator)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
-		task.SpaceID, task.DatasetID, task.Freq, task.PartitionUnit, task.DataNodeID, task.Retention, task.MetaJSON,
-		task.PullEveryBars, task.IntervalSeconds, nullTime(task.BackfillFrom), task.Status, task.Creator)
-	if err != nil {
-		if isUnique(err) {
-			return Task{}, ErrConflict
+	err := s.tx(ctx, func(tx *sql.Tx) error {
+		var holder string
+		err := tx.QueryRowContext(ctx, queryTaskByDir, task.SpaceID, task.Purpose, task.DirName).Scan(&holder)
+		switch {
+		case err == nil && holder != task.DatasetID:
+			return &DirNameTakenError{DirName: task.DirName, DatasetID: holder}
+		case err == nil:
+			return ErrConflict
+		case !errors.Is(err, sql.ErrNoRows):
+			return err
 		}
+		_, err = tx.ExecContext(ctx, `INSERT INTO t_archive_tasks (c_space_id, c_dataset_id, c_purpose, c_dir_name, c_freq, c_partition_unit, c_data_node_id,
+c_retention, c_meta_json, c_pull_every_bars, c_interval_seconds, c_backfill_from, c_status, c_consecutive_skips, c_creator)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
+			task.SpaceID, task.DatasetID, task.Purpose, task.DirName, task.Freq, task.PartitionUnit, task.DataNodeID,
+			task.Retention, task.MetaJSON, task.PullEveryBars, task.IntervalSeconds, nullTime(task.BackfillFrom), task.Status, task.Creator)
+		if err != nil && isUnique(err) {
+			// 目录名在上面已查过，这里撞上的只能是数据集已有任务。
+			return ErrConflict
+		}
+		return err
+	})
+	if err != nil {
 		return Task{}, err
 	}
 	return s.GetTask(ctx, task.SpaceID, task.DatasetID)
+}
+
+// DirNameHolder 返回空间内某个用途下使用 dirName 的任务的数据集 ID；没有任务使用时 ok 为假。
+func (s *Store) DirNameHolder(ctx context.Context, spaceID, purpose, dirName string) (datasetID string, ok bool, err error) {
+	err = s.db.QueryRowContext(ctx, queryTaskByDir, spaceID, purpose, dirName).Scan(&datasetID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", false, nil
+	}
+	return datasetID, err == nil, err
 }
 
 // GetTask 读取一个任务。
@@ -288,5 +315,6 @@ const (
 	queryTasks1 = `SELECT ` + taskColumns + ` FROM t_archive_tasks WHERE c_space_id = ? AND c_dataset_id = ?`
 	queryTasks2 = `SELECT ` + taskColumns + ` FROM t_archive_tasks WHERE (? = '' OR c_space_id = ?)
 ORDER BY c_space_id, c_dataset_id LIMIT ? OFFSET ?`
-	queryTasks3 = `SELECT ` + taskColumns + ` FROM t_archive_tasks WHERE c_status = 'enabled' ORDER BY c_space_id, c_dataset_id`
+	queryTasks3    = `SELECT ` + taskColumns + ` FROM t_archive_tasks WHERE c_status = 'enabled' ORDER BY c_space_id, c_dataset_id`
+	queryTaskByDir = `SELECT c_dataset_id FROM t_archive_tasks WHERE c_space_id = ? AND c_purpose = ? AND c_dir_name = ?`
 )

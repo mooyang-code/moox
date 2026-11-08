@@ -127,11 +127,14 @@ func (r *Runner) Execute(ctx context.Context, a *archivepb.RunAssignment, report
 	if err != nil {
 		return nil, err
 	}
+	if _, err := export.DatasetDir(a.GetSpaceId(), a.GetPurpose(), a.GetDirName()); err != nil {
+		return nil, fmt.Errorf("run %s 的任务目录无效（用途 %q、目录名 %q）: %w", a.GetRunId(), a.GetPurpose(), a.GetDirName(), err)
+	}
 	s := &runState{
 		r: r, a: a, loc: loc, unit: a.GetPartitionUnit(), started: started.UTC(),
 		lookback: time.Duration(a.GetMinLookbackSeconds()) * time.Second, span: span, hold: time.Duration(a.GetStagingRetentionSeconds()) * time.Second,
 		report: report, subjects: map[string]struct{}{}, reopened: map[string]bool{}, previews: map[string]string{}, exported: map[string]bool{},
-		task: staging.Task{SpaceID: a.GetSpaceId(), DatasetID: a.GetDatasetId()},
+		task: staging.Task{SpaceID: a.GetSpaceId(), DatasetID: a.GetDatasetId(), Purpose: a.GetPurpose(), DirName: a.GetDirName()},
 	}
 	out = &Outcome{Status: "succeeded"}
 	defer func() {
@@ -156,7 +159,7 @@ func (r *Runner) Execute(ctx context.Context, a *archivepb.RunAssignment, report
 		}
 	}()
 	// 任务被删除后重建时，旧任务的水位和暂存数据不能带到新任务上。
-	if err = r.Staging.BindTask(ctx, a.GetSpaceId(), a.GetDatasetId(), a.GetTaskId()); err != nil {
+	if err = r.Staging.BindTask(ctx, s.task, a.GetTaskId()); err != nil {
 		return out, err
 	}
 	// 暂存库丢失后，按 mgr 的登记补齐本地缺的分区状态：已有文件的分区不会被当成新分区从残缺数据导出。
@@ -178,7 +181,7 @@ func (r *Runner) Execute(ctx context.Context, a *archivepb.RunAssignment, report
 		return out, err
 	}
 	if err := r.Files.WriteDatasetJSON(r.Files.BuildDatasetMeta(export.DatasetMetaInput{
-		SpaceID: a.GetSpaceId(), DatasetID: a.GetDatasetId(), Freq: a.GetFreq(), PartitionUnit: a.GetPartitionUnit(),
+		SpaceID: a.GetSpaceId(), DatasetID: a.GetDatasetId(), Purpose: a.GetPurpose(), DirName: a.GetDirName(), Freq: a.GetFreq(), PartitionUnit: a.GetPartitionUnit(),
 		Timezone: a.GetSpaceTz(), DatasetJSON: a.GetDatasetMetaJson(), Columns: columns, Infos: r.columnMetas(a.GetSpaceId(), a.GetDatasetId()),
 	}, r.now())); err != nil {
 		return out, fmt.Errorf("写 dataset.json 失败: %w", err)

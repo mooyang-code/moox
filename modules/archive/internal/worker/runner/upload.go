@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path"
 	"strings"
 	"time"
 
@@ -137,10 +136,14 @@ func (s *runState) uploadOne(ctx context.Context, p staging.PartitionState) (ok,
 	return marked, false, ""
 }
 
-// uploadDatasetMeta 在 dataset.json 内容变了时传到 <space>/<dataset_id>/dataset.json（覆盖旧的；它是说明文件，可以重新生成）。
+// uploadDatasetMeta 在 dataset.json 内容变了时传到 <space>/<purpose>/<dir_name>/dataset.json（覆盖旧的；它是说明文件，可以重新生成）。
 // 失败只记日志，下次再试，不进分区状态，不影响健康等级。
 func (s *runState) uploadDatasetMeta(ctx context.Context) {
-	rel := path.Join(s.task.SpaceID, s.task.DatasetID, "dataset.json")
+	rel, err := export.DatasetJSONPath(s.task.SpaceID, s.task.Purpose, s.task.DirName)
+	if err != nil {
+		log.Warnf("archive worker upload dataset.json %s/%s: %v", s.task.SpaceID, s.task.DatasetID, err)
+		return
+	}
 	file, err := os.Open(s.r.Files.Abs(rel))
 	if err != nil {
 		log.Warnf("archive worker upload dataset.json %s: %v", rel, err)

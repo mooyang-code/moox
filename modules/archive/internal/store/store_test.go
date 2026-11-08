@@ -22,9 +22,10 @@ func openTest(t *testing.T) *Store {
 	return s
 }
 
+// task 返回一个测试任务；目录名按数据集取，同一空间里多个任务不会撞目录名。
 func task(space, dataset string) Task {
 	return Task{
-		SpaceID: space, DatasetID: dataset, Freq: "1m", PartitionUnit: "day", DataNodeID: "node-0", Retention: "168h",
+		SpaceID: space, DatasetID: dataset, Purpose: "collect", DirName: "dir-" + strings.ReplaceAll(dataset, "_", "-"), Freq: "1m", PartitionUnit: "day", DataNodeID: "node-0", Retention: "168h",
 		PullEveryBars: 1, IntervalSeconds: 3600, Status: StatusEnabled, Creator: "tester",
 	}
 }
@@ -587,6 +588,70 @@ func TestRemoteBacklogsCountsUnreplicatedPartitionsAndTheLatestError(t *testing.
 	}
 	if other, _ := s.RemoteBacklogs(ctx, "stockcn"); len(other) != 0 {
 		t.Fatalf("按空间过滤: %+v", other)
+	}
+}
+
+func TestCreateTaskKeepsDirNamesUniquePerSpaceAndPurpose(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	first := task("crypto", "ds1")
+	first.DirName = "binance-spot-kline-1m"
+	created, err := s.CreateTask(ctx, first)
+	if err != nil || created.Purpose != "collect" || created.DirName != "binance-spot-kline-1m" {
+		t.Fatalf("created = %+v err=%v", created, err)
+	}
+	second := task("crypto", "ds2")
+	second.DirName = first.DirName
+	var taken *DirNameTakenError
+	if _, err := s.CreateTask(ctx, second); !errors.As(err, &taken) || taken.DatasetID != "ds1" || !strings.Contains(err.Error(), "已被 ds1 使用") {
+		t.Fatalf("同空间同用途的目录名冲突应返回 DirNameTakenError: %v", err)
+	}
+	// 用途不同、空间不同都可以同名。
+	second.Purpose = "factor"
+	if _, err := s.CreateTask(ctx, second); err != nil {
+		t.Fatal(err)
+	}
+	other := task("stockcn", "ds1")
+	other.DirName = first.DirName
+	if _, err := s.CreateTask(ctx, other); err != nil {
+		t.Fatal(err)
+	}
+	// 数据集已有任务（即便目录名一样）仍是 ErrConflict。
+	if _, err := s.CreateTask(ctx, first); !errors.Is(err, ErrConflict) {
+		t.Fatalf("重复创建应返回 ErrConflict: %v", err)
+	}
+	if holder, ok, err := s.DirNameHolder(ctx, "crypto", "collect", "binance-spot-kline-1m"); err != nil || !ok || holder != "ds1" {
+		t.Fatalf("DirNameHolder = %q %v %v", holder, ok, err)
+	}
+	if _, ok, err := s.DirNameHolder(ctx, "crypto", "collect", "unused"); err != nil || ok {
+		t.Fatalf("没人用的目录名: %v %v", ok, err)
+	}
+	// 修改任务与每小时的数据集刷新都不动用途与目录名。
+	if _, err := s.UpdateTask(ctx, "crypto", "ds1", TaskUpdate{PullEveryBars: 5, Status: StatusPaused}, t0); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpdateTaskDataset(ctx, "crypto", "ds1", "node-1", "720h", `{"name":"x"}`); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.GetTask(ctx, "crypto", "ds1"); got.Purpose != "collect" || got.DirName != "binance-spot-kline-1m" {
+		t.Fatalf("task = %+v", got)
+	}
+}
+
+func TestHeartbeatStoresDiskUsageAndTheFreeSpaceFloor(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	w := Worker{WorkerID: "w1", InstanceID: "i1", DiskTotalBytes: 2000, DiskFreeBytes: 1600, DiskUsedBytes: 300, MinFreeBytes: 500}
+	if _, err := s.Heartbeat(ctx, w, t0, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	w.DiskFreeBytes, w.DiskUsedBytes = 400, 1500
+	if _, err := s.Heartbeat(ctx, w, t0.Add(time.Second), time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	workers, _ := s.ListWorkers(ctx)
+	if len(workers) != 1 || workers[0].DiskTotalBytes != 2000 || workers[0].DiskFreeBytes != 400 || workers[0].DiskUsedBytes != 1500 || workers[0].MinFreeBytes != 500 {
+		t.Fatalf("workers = %+v", workers)
 	}
 }
 

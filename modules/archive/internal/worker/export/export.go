@@ -14,6 +14,7 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -22,6 +23,8 @@ import (
 )
 
 const (
+	// datasetJSONName 是每个任务目录下的数据集说明文件名。
+	datasetJSONName = "dataset.json"
 	// previewLines 是预览的行数（表头加前 20 行）。
 	previewLines = 21
 	// previewBytes 是预览的字节上限。
@@ -71,9 +74,9 @@ func checkComponent(part string) error {
 	return nil
 }
 
-// RelPath 返回分区文件相对归档根目录的路径：<space>/<dataset_id>/<yyyy>/<yyyymmdd>.csv.gz（日分区）
-// 或 <space>/<dataset_id>/<yyyy>/<yyyymm>.csv.gz（月分区）；format 为 csv 时扩展名为 .csv。
-func RelPath(spaceID, datasetID, partitionKey, format string) (string, error) {
+// RelPath 返回分区文件相对归档根目录的路径：<space>/<purpose>/<dir_name>/<yyyy>/<yyyymmdd>.csv.gz（日分区）
+// 或 <space>/<purpose>/<dir_name>/<yyyy>/<yyyymm>.csv.gz（月分区）；format 为 csv 时扩展名为 .csv。
+func RelPath(spaceID, purpose, dirName, partitionKey, format string) (string, error) {
 	digits := strings.ReplaceAll(partitionKey, "-", "")
 	if len(partitionKey) != 7 && len(partitionKey) != 10 || len(digits) < 6 {
 		return "", fmt.Errorf("无效的分区键 %q", partitionKey)
@@ -83,17 +86,35 @@ func RelPath(spaceID, datasetID, partitionKey, format string) (string, error) {
 			return "", fmt.Errorf("无效的分区键 %q", partitionKey)
 		}
 	}
-	for _, part := range []string{spaceID, datasetID} {
+	dir, err := DatasetDir(spaceID, purpose, dirName)
+	if err != nil {
+		return "", err
+	}
+	return path.Join(dir, digits[:4], digits+ext(format)), nil
+}
+
+// DatasetDir 返回任务目录相对归档根目录的路径 <space>/<purpose>/<dir_name>（斜杠分隔），三段都必须是安全的路径片段。
+func DatasetDir(spaceID, purpose, dirName string) (string, error) {
+	for _, part := range []string{spaceID, purpose, dirName} {
 		if err := checkComponent(part); err != nil {
 			return "", err
 		}
 	}
-	return filepath.ToSlash(filepath.Join(spaceID, datasetID, digits[:4], digits+ext(format))), nil
+	return path.Join(spaceID, purpose, dirName), nil
 }
 
-// RelPath 按本目录配置的格式返回分区文件的相对路径。
-func (f Files) RelPath(spaceID, datasetID, partitionKey string) (string, error) {
-	return RelPath(spaceID, datasetID, partitionKey, f.format())
+// DatasetJSONPath 返回任务的 dataset.json 相对归档根目录的路径（也是它在对象存储里相对 prefix 的键）。
+func DatasetJSONPath(spaceID, purpose, dirName string) (string, error) {
+	dir, err := DatasetDir(spaceID, purpose, dirName)
+	if err != nil {
+		return "", err
+	}
+	return path.Join(dir, datasetJSONName), nil
+}
+
+// RelPath 按本目录配置的格式返回任务分区文件的相对路径。
+func (f Files) RelPath(task staging.Task, partitionKey string) (string, error) {
+	return RelPath(task.SpaceID, task.Purpose, task.DirName, partitionKey, f.format())
 }
 
 // Abs 把相对路径解析到归档根目录下。
@@ -108,14 +129,15 @@ func (f Files) Write(ctx context.Context, store *staging.Store, task staging.Tas
 	rel := p.FilePath
 	if rel == "" {
 		var err error
-		if rel, err = f.RelPath(task.SpaceID, task.DatasetID, p.Key); err != nil {
+		if rel, err = f.RelPath(task, p.Key); err != nil {
 			return Info{}, err
 		}
 	}
 	final := f.Abs(rel)
 	if p.FilePath == "" {
 		if _, err := os.Stat(final); err == nil {
-			return Info{}, fmt.Errorf("分区 %s 的目标文件 %s 已存在，但本地没有它的导出记录：可能是暂存库丢失或任务重建，拒绝覆盖，需要人工核对", p.Key, rel)
+			return Info{}, fmt.Errorf("分区 %s 的目标文件 %s 已存在，但本地和 mgr 都没有它的导出记录：目录里有旧任务留下的文件（例如删除任务后用同一目录名重建），"+
+				"拒绝覆盖；先把旧文件移走，或删除任务换一个目录名重建", p.Key, rel)
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return Info{}, err
 		}
@@ -309,10 +331,12 @@ type ColumnMeta struct {
 	Attributes  map[string]string `json:"attributes,omitempty"`
 }
 
-// DatasetMeta 是 <space>/<dataset_id>/dataset.json 的内容：数据集的完整说明，方便不看线上系统也能读懂归档文件。
+// DatasetMeta 是 <space>/<purpose>/<dir_name>/dataset.json 的内容：数据集的完整说明，方便不看线上系统也能读懂归档文件。
 type DatasetMeta struct {
 	SpaceID   string `json:"space_id"`
 	DatasetID string `json:"dataset_id"`
+	Purpose   string `json:"purpose"`
+	DirName   string `json:"dir_name"`
 	// Dataset 是 Storage 里的数据集信息（名称、简介、数据来源、标的范围等），由 mgr 提供。
 	Dataset json.RawMessage `json:"dataset,omitempty"`
 	Freq    string          `json:"freq"`
@@ -340,6 +364,7 @@ type FilesMeta struct {
 // DatasetMetaInput 是生成元数据文件需要的信息。
 type DatasetMetaInput struct {
 	SpaceID, DatasetID, Freq string
+	Purpose, DirName         string
 	PartitionUnit, Timezone  string
 	// DatasetJSON 是 mgr 下发的数据集信息 JSON，可为空。
 	DatasetJSON string
@@ -379,26 +404,36 @@ func (f Files) BuildDatasetMeta(in DatasetMetaInput, now time.Time) DatasetMeta 
 		pattern = "<yyyy>/<yyyymm>" + ext(f.format())
 	}
 	return DatasetMeta{
-		SpaceID: in.SpaceID, DatasetID: in.DatasetID, Dataset: dataset, Freq: in.Freq,
+		SpaceID: in.SpaceID, DatasetID: in.DatasetID, Purpose: in.Purpose, DirName: in.DirName, Dataset: dataset, Freq: in.Freq,
 		Partition: PartitionMeta{Unit: in.PartitionUnit, Timezone: in.Timezone},
 		Files:     FilesMeta{Format: f.format(), PathPattern: pattern, Header: header},
 		Columns:   columns, UpdatedAt: now.UTC().Format(time.RFC3339),
 	}
 }
 
-// WriteDatasetJSON 写 <root>/<space>/<dataset_id>/dataset.json；除更新时间外内容没变时不重写。
+// WriteDatasetJSON 写 <root>/<space>/<purpose>/<dir_name>/dataset.json（除更新时间外内容没变时不重写），
+// 然后刷新根目录的 datasets.csv 对照表。
 func (f Files) WriteDatasetJSON(meta DatasetMeta) error {
-	for _, part := range []string{meta.SpaceID, meta.DatasetID} {
-		if err := checkComponent(part); err != nil {
-			return err
-		}
+	if err := f.writeDatasetJSON(meta); err != nil {
+		return err
 	}
-	dir := filepath.Join(f.Root, meta.SpaceID, meta.DatasetID)
+	if err := f.WriteDatasetsCSV(); err != nil {
+		return fmt.Errorf("写 %s 失败: %w", DatasetsCSVName, err)
+	}
+	return nil
+}
+
+func (f Files) writeDatasetJSON(meta DatasetMeta) error {
+	rel, err := DatasetJSONPath(meta.SpaceID, meta.Purpose, meta.DirName)
+	if err != nil {
+		return err
+	}
+	target := f.Abs(rel)
+	dir := filepath.Dir(target)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	path := filepath.Join(dir, "dataset.json")
-	if raw, err := os.ReadFile(path); err == nil {
+	if raw, err := os.ReadFile(target); err == nil {
 		var current DatasetMeta
 		if json.Unmarshal(raw, &current) == nil {
 			current.UpdatedAt = meta.UpdatedAt
@@ -417,14 +452,14 @@ func (f Files) WriteDatasetJSON(meta DatasetMeta) error {
 		return err
 	}
 	raw := bytes.TrimRight(buf.Bytes(), "\n")
-	tmp := path + partialSuffix
+	tmp := target + partialSuffix
 	if err := os.WriteFile(tmp, append(raw, '\n'), 0o644); err != nil {
 		return err
 	}
 	if err := syncFile(tmp); err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, path); err != nil {
+	if err := os.Rename(tmp, target); err != nil {
 		return err
 	}
 	return syncDir(dir)
