@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -14,6 +15,7 @@ import (
 	factorpb "github.com/mooyang-code/moox/modules/factor/proto/factorgen"
 	"github.com/mooyang-code/moox/packages/commonpb"
 	"github.com/mooyang-code/moox/packages/factorexpr"
+	"gorm.io/gorm"
 )
 
 var _ factorpb.FactorMgrService = (*Service)(nil)
@@ -34,6 +36,8 @@ type CatalogAPI interface {
 	RemoveTaskMember(ctx context.Context, taskID, memberKey string) error
 	SetTaskMemberStatus(ctx context.Context, taskID, memberKey, status string) (domain.TaskMember, error)
 	BindTask(ctx context.Context, taskID, instanceID string) (domain.FactorTask, error)
+	DeleteBoundTask(ctx context.Context, taskID, instanceID string) error
+	CheckBoundTaskDeletable(ctx context.Context, taskID, instanceID string) error
 	ListCategories(ctx context.Context) ([]domain.FactorCategory, error)
 	UpsertCategory(ctx context.Context, category domain.FactorCategory) (domain.FactorCategory, error)
 	DeleteCategory(ctx context.Context, categoryID string) error
@@ -217,16 +221,50 @@ func (s *Service) DeleteFactorTask(ctx context.Context, req *factorpb.DeleteFact
 	return &factorpb.DeleteFactorTaskRsp{RetInfo: success()}, nil
 }
 
+// DeleteBoundTask 删除关联到策略实例的任务，连同成员和结果数据集；任务不存在返回成功（重试幂等）。
+func (s *Service) DeleteBoundTask(ctx context.Context, req *factorpb.DeleteBoundTaskReq) (*factorpb.DeleteBoundTaskRsp, error) {
+	if err := s.mutationAllowed(); err != nil {
+		return &factorpb.DeleteBoundTaskRsp{RetInfo: unavailable(err)}, nil
+	}
+	if req == nil || strings.TrimSpace(req.GetTaskId()) == "" || strings.TrimSpace(req.GetBoundInstanceId()) == "" {
+		return &factorpb.DeleteBoundTaskRsp{RetInfo: invalid(fmt.Errorf("task_id 和 bound_instance_id 不能为空"))}, nil
+	}
+	// 空间核对要先读到任务：已经删掉的任务直接算成功。
+	if _, _, err := s.catalog.GetTask(ctx, req.GetTaskId()); errors.Is(err, gorm.ErrRecordNotFound) {
+		return &factorpb.DeleteBoundTaskRsp{RetInfo: success()}, nil
+	} else if err != nil {
+		return &factorpb.DeleteBoundTaskRsp{RetInfo: inner(err)}, nil
+	}
+	if err := s.checkTaskSpace(ctx, req.GetTaskId()); err != nil {
+		return &factorpb.DeleteBoundTaskRsp{RetInfo: invalid(err)}, nil
+	}
+	run := s.catalog.DeleteBoundTask
+	if req.GetCheckOnly() {
+		run = s.catalog.CheckBoundTaskDeletable
+	}
+	if err := run(ctx, req.GetTaskId(), req.GetBoundInstanceId()); err != nil {
+		if errors.Is(err, store.ErrConflict) {
+			return &factorpb.DeleteBoundTaskRsp{RetInfo: invalid(err)}, nil
+		}
+		return &factorpb.DeleteBoundTaskRsp{RetInfo: inner(err)}, nil
+	}
+	return &factorpb.DeleteBoundTaskRsp{RetInfo: success()}, nil
+}
+
 func (s *Service) GetFactorTask(ctx context.Context, req *factorpb.GetFactorTaskReq) (*factorpb.GetFactorTaskRsp, error) {
 	if req == nil || strings.TrimSpace(req.GetTaskId()) == "" {
 		return &factorpb.GetFactorTaskRsp{RetInfo: invalid(fmt.Errorf("task_id is required"))}, nil
 	}
-	if err := s.checkTaskSpace(ctx, req.GetTaskId()); err != nil {
-		return &factorpb.GetFactorTaskRsp{RetInfo: invalid(err)}, nil
-	}
+	// 任务不存在返回 NOT_FOUND：策略服务据此识别“随实例删除了一半”的任务。
 	set, members, err := s.catalog.GetTask(ctx, req.GetTaskId())
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return &factorpb.GetFactorTaskRsp{RetInfo: notFound(fmt.Errorf("因子任务 %s 不存在", strings.TrimSpace(req.GetTaskId())))}, nil
+	}
 	if err != nil {
 		return &factorpb.GetFactorTaskRsp{RetInfo: inner(err)}, nil
+	}
+	if err := s.checkTaskSpace(ctx, req.GetTaskId()); err != nil {
+		return &factorpb.GetFactorTaskRsp{RetInfo: invalid(err)}, nil
 	}
 	summary := s.latestRun(set.TaskID)
 	return &factorpb.GetFactorTaskRsp{
@@ -596,6 +634,10 @@ func invalid(err error) *commonpb.RetInfo {
 // unavailable 表示服务暂时不接受这个操作（暂停、重置中）。
 func unavailable(err error) *commonpb.RetInfo {
 	return &commonpb.RetInfo{Code: commonpb.ErrorCode_INNER_ERR, Msg: err.Error()}
+}
+
+func notFound(err error) *commonpb.RetInfo {
+	return &commonpb.RetInfo{Code: commonpb.ErrorCode_NOT_FOUND, Msg: err.Error()}
 }
 
 func inner(err error) *commonpb.RetInfo {

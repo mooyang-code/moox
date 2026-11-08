@@ -41,6 +41,7 @@ func TestAllSQLCreatesLogicalAccountTargetAndOperatorTablesWithoutLedger(t *test
 		"t_replay_periods",
 		"t_replay_orders",
 		"t_paper_asset_balances",
+		"t_paper_funding_fees",
 		"t_account_equity_points",
 		"t_logical_account_equity_points",
 		"t_logical_account_target_receipts",
@@ -55,7 +56,7 @@ func TestEachSQLLoadsIntoEmptyDatabase(t *testing.T) {
 	for name, sql := range map[string]string{
 		"account.sql": accountSQL, "instrument.sql": instrumentSQL,
 		"logical_account.sql": logicalAccountSQL, "paper_account_config.sql": paperAccountConfigSQL,
-		"paper_balance.sql": paperBalanceSQL, "equity.sql": equitySQL,
+		"paper_balance.sql": paperBalanceSQL, "paper_funding.sql": paperFundingSQL, "equity.sql": equitySQL,
 		"target_receipt.sql": targetReceiptSQL, "execution.sql": executionSQL,
 		"wallet_transfer.sql": walletTransferSQL, "blocked_instrument.sql": blockedInstrumentSQL,
 	} {

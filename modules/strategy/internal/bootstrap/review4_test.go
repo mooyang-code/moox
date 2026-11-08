@@ -13,7 +13,7 @@ const stockResolvedJSON = `{"market":{"select":"spot","prefer":"spot"},"tasks":{
 func TestStockCalendarWarning(t *testing.T) {
 	repo := openStore(t)
 	ctx := context.Background()
-	expired := time.Date(2027, 1, 4, 0, 0, 0, 0, time.UTC)
+	expired := time.Date(2028, 1, 4, 0, 0, 0, 0, time.UTC)
 	if warning, down := stockCalendarWarning(ctx, repo, expired); warning != "" || down {
 		t.Fatalf("没有实例使用 A 股日历时不应告警：%q %v", warning, down)
 	}
@@ -25,14 +25,14 @@ func TestStockCalendarWarning(t *testing.T) {
 	if warning, down := stockCalendarWarning(ctx, repo, time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC)); warning != "" || down {
 		t.Fatalf("日历有效期内不应告警：%q %v", warning, down)
 	}
-	// 内嵌日历止于 2026-12-31：12-30、12-31 的周期推不出有效期（往后 2 根），实际可用到 12-29。
-	if warning, down := stockCalendarWarning(ctx, repo, time.Date(2026, 12, 15, 0, 0, 0, 0, time.UTC)); !strings.Contains(warning, "2026-12-29 之后的周期将无法处理") || down {
+	// 内嵌日历止于 2027-12-31：12-30、12-31 的周期推不出有效期（往后 2 根），实际可用到 12-29。
+	if warning, down := stockCalendarWarning(ctx, repo, time.Date(2027, 12, 15, 0, 0, 0, 0, time.UTC)); !strings.Contains(warning, "2027-12-29 之后的周期将无法处理") || down {
 		t.Fatalf("可用截止日前 30 天内应提醒但仍就绪：%q %v", warning, down)
 	}
-	if warning, down := stockCalendarWarning(ctx, repo, time.Date(2026, 12, 29, 6, 0, 0, 0, time.UTC)); down || warning == "" {
+	if warning, down := stockCalendarWarning(ctx, repo, time.Date(2027, 12, 29, 6, 0, 0, 0, time.UTC)); down || warning == "" {
 		t.Fatalf("可用截止日当天仍应就绪：%q %v", warning, down)
 	}
-	if warning, down := stockCalendarWarning(ctx, repo, time.Date(2026, 12, 30, 1, 0, 0, 0, time.UTC)); !strings.Contains(warning, "已无法推算有效期") || !down {
+	if warning, down := stockCalendarWarning(ctx, repo, time.Date(2027, 12, 30, 1, 0, 0, 0, time.UTC)); !strings.Contains(warning, "已无法推算有效期") || !down {
 		t.Fatalf("过了可用截止日应报未就绪（日历本身还没到期）：%q %v", warning, down)
 	}
 	if warning, down := stockCalendarWarning(ctx, repo, expired); !strings.Contains(warning, "无法求值") || !down {

@@ -19,7 +19,7 @@ func TestEnableRejectsExpiredStockCalendar(t *testing.T) {
 	h.resolver.calendar = "cn_stock"
 	h.createStrategy("s1", demoDSL)
 	requireOK(t, int32(h.createInstance("i1", "s1", "ftask_i1", "", false).GetRetInfo().GetCode()), "")
-	h.now = time.Date(2026, 12, 30, 2, 0, 0, 0, time.UTC) // 上海 10:00，已过 12-29 的截止日
+	h.now = time.Date(2027, 12, 30, 2, 0, 0, 0, time.UTC) // 上海 10:00，已过 12-29 的截止日
 	rsp := h.setEnabled("i1", true)
 	requireFail(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg(), "不能启用实例")
 	requireFail(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg(), "无法推算有效期")

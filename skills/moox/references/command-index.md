@@ -407,6 +407,7 @@
 | `strategy display get` | 查看实例的展示设置 |
 | `strategy display set` | 设置实例要隐藏的分类、成员与列 |
 | `strategy instance create` | 创建策略实例（默认停用，确认无误再 enable；也可加 --enable 创建即启用） |
+| `strategy instance delete` | 删除已停用的策略实例，连同绑定到它的因子任务和结果数据集（默认只预览，--yes 才执行） |
 | `strategy instance disable` | 停用策略实例（默认只预览，--yes 才执行） |
 | `strategy instance enable` | 启用策略实例（挂了账户的实例启用后会按目标下单；默认只预览，--yes 才执行） |
 | `strategy instance list` | 列出策略实例（--space-id 过滤空间，默认 crypto） |

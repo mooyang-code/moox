@@ -99,7 +99,7 @@ func TestSetupPrivateHTTPTransactionE2E(t *testing.T) {
 	postSetupProto(t, privateServer.URL+"/trpc.moox.admin.Setup/GetSetupStatus", setupStatusRequest(request), status)
 	assert.Equal(t, "completed", status.GetState())
 	assert.Zero(t, status.GetMissing())
-	assert.Zero(t, status.GetConflicts())
+	assert.Empty(t, status.GetKept())
 	assert.Equal(t, int32(2), status.GetSpaces())
 
 	require.NoError(t, manager.GetDB().Where("c_space_id = ?", "crypto").Delete(&adminspace.Space{}).Error)
@@ -107,11 +107,13 @@ func TestSetupPrivateHTTPTransactionE2E(t *testing.T) {
 	postSetupProto(t, privateServer.URL+"/trpc.moox.admin.Setup/ApplySetup", request, partial)
 	assert.Equal(t, "created", partial.GetAction())
 
-	conflicting := proto.Clone(request).(*pb.ApplySetupReq)
-	conflicting.TencentCloud.SecretKey = "different-cloud-secret"
-	conflict := &pb.ApplySetupRsp{}
-	postSetupProto(t, privateServer.URL+"/trpc.moox.admin.Setup/ApplySetup", conflicting, conflict)
-	assert.Equal(t, "setup_conflict", conflict.GetRetInfo().GetMsg())
+	// moox.toml 里的腾讯云密钥和管理台不一致：以管理台为准保留，照常成功并在 kept 里说明。
+	differing := proto.Clone(request).(*pb.ApplySetupReq)
+	differing.TencentCloud.SecretKey = "different-cloud-secret"
+	kept := &pb.ApplySetupRsp{}
+	postSetupProto(t, privateServer.URL+"/trpc.moox.admin.Setup/ApplySetup", differing, kept)
+	assert.Equal(t, "success", kept.GetRetInfo().GetMsg())
+	assert.Equal(t, []string{"tencent_cloud"}, kept.GetKept())
 
 	var setupTables int64
 	require.NoError(t, manager.GetDB().Raw("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='t_system_setup'").Scan(&setupTables).Error)

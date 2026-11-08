@@ -30,7 +30,7 @@ type FactStore interface {
 	ListInstruments(context.Context, string, string) ([]store.InstrumentRecord, error)
 }
 
-// PublicMarketData 是模拟盘用的公共行情。
+// PublicMarketData 是模拟盘用的公共行情。能查资金费率（execution.FundingRatesOf）时，永续持仓按它结算资金费。
 type PublicMarketData interface {
 	execution.MarketDataSource
 	execution.ReferencePriceSource
@@ -57,6 +57,8 @@ type Adapter struct {
 	// lastPrices 是现货持仓最近一次取到的估值价和取价时间（资产 -> 价格），取不到价时在保留时间内用它估值。
 	priceMu    sync.Mutex
 	lastPrices map[string]execution.LastPrice
+	// funding 是资金费结算的内存进度。
+	funding fundingProgress
 }
 
 // blockedSetSource 是能读下架名单的事实存储（*store.Store 实现）；测试替身没有实现时当作名单为空。

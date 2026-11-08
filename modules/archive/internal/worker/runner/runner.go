@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/archive/internal/objectstore"
 	"github.com/mooyang-code/moox/modules/archive/internal/schedule"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/export"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/source"
@@ -49,7 +50,9 @@ type Outcome struct {
 	RowsChanged uint64
 	Exported    uint32
 	Finalized   uint32
-	Partitions  []*archivepb.PartitionReport
+	// Uploaded 是本次运行上传到对象存储并校验通过的分区数。
+	Uploaded   uint32
+	Partitions []*archivepb.PartitionReport
 	// ReportedKeys 是 Partitions 里的分区键；mgr 确认登记之后调用方据此清除待上报标记。
 	ReportedKeys  []string
 	Unrecoverable []*archivepb.UnrecoverableRange
@@ -66,6 +69,8 @@ type Runner struct {
 	Now      func() time.Time
 	// ReadAttempts 是单页读取失败时的尝试次数（含第一次）。
 	ReadAttempts int
+	// Remote 是对象存储客户端；nil 表示没有配置对象存储（不上传，读回时也不取回）。
+	Remote *objectstore.Client
 }
 
 // errStopped 表示运行被取消。
@@ -89,6 +94,11 @@ type runState struct {
 	changed  uint64
 	reopened map[string]bool
 	previews map[string]string
+	// exported 是本次运行导出的分区：它们总要尝试上传，不受补传预算限制。
+	exported map[string]bool
+	upload   uploadState
+	// notes 是成功时追加到运行消息里的说明（例如从对象存储取回了哪个分区）。
+	notes []string
 }
 
 func (r *Runner) now() time.Time {
@@ -120,7 +130,7 @@ func (r *Runner) Execute(ctx context.Context, a *archivepb.RunAssignment, report
 	s := &runState{
 		r: r, a: a, loc: loc, unit: a.GetPartitionUnit(), started: started.UTC(),
 		lookback: time.Duration(a.GetMinLookbackSeconds()) * time.Second, span: span, hold: time.Duration(a.GetStagingRetentionSeconds()) * time.Second,
-		report: report, subjects: map[string]struct{}{}, reopened: map[string]bool{}, previews: map[string]string{},
+		report: report, subjects: map[string]struct{}{}, reopened: map[string]bool{}, previews: map[string]string{}, exported: map[string]bool{},
 		task: staging.Task{SpaceID: a.GetSpaceId(), DatasetID: a.GetDatasetId()},
 	}
 	out = &Outcome{Status: "succeeded"}
@@ -186,6 +196,7 @@ func (r *Runner) Execute(ctx context.Context, a *archivepb.RunAssignment, report
 		if err := s.exportDue(ctx, out); err != nil {
 			return out, err
 		}
+		s.uploadPending(ctx, out)
 		if err := s.finalize(ctx, out, false); err != nil {
 			return out, err
 		}
@@ -203,9 +214,12 @@ func (r *Runner) Execute(ctx context.Context, a *archivepb.RunAssignment, report
 	if err := s.exportDue(ctx, out); err != nil {
 		return out, err
 	}
+	s.uploadPending(ctx, out)
 	if err := s.finalize(ctx, out, resumable); err != nil {
 		return out, err
 	}
+	// 上传失败不让运行失败（文件已经在本地），只写进消息；健康等级按远端副本规则反映。
+	out.Message = s.successMessage()
 	return out, nil
 }
 
@@ -219,6 +233,7 @@ func (s *runState) restorePartitions(ctx context.Context) error {
 		state := staging.PartitionState{
 			Key: p.GetPartitionKey(), Status: p.GetStatus(), FilePath: p.GetFilePath(), SHA256: p.GetFileSha256(),
 			ExportCount: p.GetExportCount(), RowCount: p.GetRowCount(), SubjectCount: p.GetSubjectCount(),
+			Remote: staging.Remote{Key: p.GetRemoteKey(), SHA256: p.GetRemoteSha256(), ETag: p.GetRemoteEtag(), Error: p.GetRemoteError()},
 		}
 		var err error
 		for _, item := range []struct {
@@ -228,6 +243,7 @@ func (s *runState) restorePartitions(ctx context.Context) error {
 			{p.GetRangeStart(), &state.Start}, {p.GetRangeEnd(), &state.End}, {p.GetLastChangedAt(), &state.LastChangedAt},
 			{p.GetExportedAt(), &state.ExportedAt}, {p.GetFinalizedAt(), &state.FinalizedAt},
 			{p.GetMinDataTime(), &state.MinDataTime}, {p.GetMaxDataTime(), &state.MaxDataTime},
+			{p.GetRemoteUploadedAt(), &state.Remote.UploadedAt}, {p.GetRemoteVerifiedAt(), &state.Remote.VerifiedAt},
 		} {
 			if *item.dest, err = parseOptionalTime(item.value); err != nil {
 				return fmt.Errorf("分区登记 %s: %w", p.GetPartitionKey(), err)
@@ -479,9 +495,11 @@ func (s *runState) stage(ctx context.Context, rows []staging.Row) error {
 		if !ok || p.Status != staging.StatusFinal {
 			continue
 		}
-		// 用导出时记下的路径读回，先确认文件没有被改动或截断。
+		// 用导出时记下的路径读回，先确认文件没有被改动或截断；本地缺文件或校验不符时从对象存储取回。
 		if err := s.r.Files.Verify(p.FilePath, p.SHA256); err != nil {
-			return fmt.Errorf("读回已定稿分区 %s: %w", key, err)
+			if err := s.fetchFinal(ctx, p, err); err != nil {
+				return fmt.Errorf("读回已定稿分区 %s: %w", key, err)
+			}
 		}
 		if err := s.r.Staging.ReopenFinal(ctx, s.task, key, s.r.Files.Abs(p.FilePath)); err != nil {
 			return fmt.Errorf("读回已定稿分区 %s: %w", key, err)
@@ -533,6 +551,7 @@ func (s *runState) exportDue(ctx context.Context, out *Outcome) error {
 		}
 
 		s.previews[p.Key] = info.Preview
+		s.exported[p.Key] = true
 		out.Exported++
 	}
 	return nil
@@ -603,11 +622,14 @@ func (s *runState) partitionReports(ctx context.Context, out *Outcome) ([]*archi
 		}
 		if p.FilePath != "" {
 			report.FilePath, report.FileSha256, report.Columns = p.FilePath, p.SHA256, names
+			// 本地文件不在时大小为 0：mgr 在路径与 sha256 不变时保留已登记的大小。
 			if info, err := os.Stat(s.r.Files.Abs(p.FilePath)); err == nil {
 				report.FileBytes = uint64(info.Size())
 			}
 			report.Preview = s.previews[p.Key] // 本次没有重新导出时留空，mgr 保留已登记的预览
 		}
+		report.RemoteKey, report.RemoteSha256, report.RemoteEtag, report.RemoteError = p.Remote.Key, p.Remote.SHA256, p.Remote.ETag, p.Remote.Error
+		report.RemoteUploadedAt, report.RemoteVerifiedAt = formatTime(p.Remote.UploadedAt), formatTime(p.Remote.VerifiedAt)
 		reports = append(reports, report)
 	}
 	sort.Slice(reports, func(i, j int) bool { return reports[i].PartitionKey < reports[j].PartitionKey })

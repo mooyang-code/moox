@@ -22,13 +22,15 @@ type Worker struct {
 	RunningRunIDs  []string
 	LeaseUntil     time.Time
 	LastHeartbeat  time.Time
+	// ObjectStoreJSON 是心跳带来的对象存储摘要（ObjectStoreInfo 的 JSON，不含凭据）；endpoint 为空表示没有配置。
+	ObjectStoreJSON string
 }
 
 // Active 报告租约在 now 时是否有效。
 func (w Worker) Active(now time.Time) bool { return w.LeaseUntil.After(now) }
 
 const workerColumns = `c_worker_id, c_instance_id, c_version, c_root_dir, c_disk_total_bytes, c_disk_free_bytes, c_staging_bytes, c_maintaining,
-c_pacing_json, c_running_json, c_lease_until, c_last_heartbeat_at`
+c_pacing_json, c_running_json, c_lease_until, c_last_heartbeat_at, c_object_store_json`
 
 func scanWorker(row rowScanner) (Worker, error) {
 	var w Worker
@@ -36,7 +38,7 @@ func scanWorker(row rowScanner) (Worker, error) {
 	var running string
 	var lease, heartbeat timeValue
 	err := row.Scan(&w.WorkerID, &w.InstanceID, &w.Version, &w.RootDir, &w.DiskTotalBytes, &w.DiskFreeBytes, &w.StagingBytes, &maintaining,
-		&w.PacingJSON, &running, &lease, &heartbeat)
+		&w.PacingJSON, &running, &lease, &heartbeat, &w.ObjectStoreJSON)
 	if err != nil {
 		return Worker{}, err
 	}
@@ -90,15 +92,17 @@ func (s *Store) Heartbeat(ctx context.Context, w Worker, now time.Time, ttl time
 		} else if hasOwn {
 			lease = nullTime(own.LeaseUntil)
 		}
+		objectStore := w.ObjectStoreJSON
+		if objectStore == "" {
+			objectStore = "{}"
+		}
 		if hasOwn {
-			_, err = tx.ExecContext(ctx, `UPDATE t_archive_workers SET c_instance_id = ?, c_version = ?, c_root_dir = ?, c_disk_total_bytes = ?, c_disk_free_bytes = ?,
-c_staging_bytes = ?, c_maintaining = ?, c_pacing_json = ?, c_running_json = ?, c_lease_until = ?, c_last_heartbeat_at = ? WHERE c_worker_id = ?`,
-				w.InstanceID, w.Version, w.RootDir, w.DiskTotalBytes, w.DiskFreeBytes, w.StagingBytes, maintaining, w.PacingJSON, string(running), lease, fmtTime(now), w.WorkerID)
+			_, err = tx.ExecContext(ctx, updateWorker,
+				w.InstanceID, w.Version, w.RootDir, w.DiskTotalBytes, w.DiskFreeBytes, w.StagingBytes, maintaining, w.PacingJSON, string(running), lease, fmtTime(now), objectStore, w.WorkerID)
 			return err
 		}
-		_, err = tx.ExecContext(ctx, `INSERT INTO t_archive_workers (c_worker_id, c_instance_id, c_version, c_root_dir, c_disk_total_bytes, c_disk_free_bytes,
-c_staging_bytes, c_maintaining, c_pacing_json, c_running_json, c_lease_until, c_last_heartbeat_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			w.WorkerID, w.InstanceID, w.Version, w.RootDir, w.DiskTotalBytes, w.DiskFreeBytes, w.StagingBytes, maintaining, w.PacingJSON, string(running), lease, fmtTime(now))
+		_, err = tx.ExecContext(ctx, insertWorker,
+			w.WorkerID, w.InstanceID, w.Version, w.RootDir, w.DiskTotalBytes, w.DiskFreeBytes, w.StagingBytes, maintaining, w.PacingJSON, string(running), lease, fmtTime(now), objectStore)
 		return err
 	})
 	return result, err
@@ -134,26 +138,12 @@ func (s *Store) ListWorkers(ctx context.Context) ([]Worker, error) {
 	return out, rows.Err()
 }
 
-// PartitionWorkers 返回任务分区登记过的 worker_id（用于总览提示）。
-func (s *Store) PartitionWorkers(ctx context.Context) (map[string]string, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT c_space_id, c_dataset_id, MIN(c_worker_id) FROM t_archive_partitions GROUP BY c_space_id, c_dataset_id`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := map[string]string{}
-	for rows.Next() {
-		var space, dataset, worker string
-		if err := rows.Scan(&space, &dataset, &worker); err != nil {
-			return nil, err
-		}
-		out[space+"/"+dataset] = worker
-	}
-	return out, rows.Err()
-}
-
 // 以下查询语句整条写成常量，避免在调用处拼接 SQL。
 const (
 	queryWorkers1 = `SELECT ` + workerColumns + ` FROM t_archive_workers WHERE c_worker_id = ?`
 	queryWorkers2 = `SELECT ` + workerColumns + ` FROM t_archive_workers ORDER BY c_lease_until DESC, c_worker_id`
+	updateWorker  = `UPDATE t_archive_workers SET c_instance_id = ?, c_version = ?, c_root_dir = ?, c_disk_total_bytes = ?, c_disk_free_bytes = ?,
+c_staging_bytes = ?, c_maintaining = ?, c_pacing_json = ?, c_running_json = ?, c_lease_until = ?, c_last_heartbeat_at = ?, c_object_store_json = ? WHERE c_worker_id = ?`
+	insertWorker = `INSERT INTO t_archive_workers (c_worker_id, c_instance_id, c_version, c_root_dir, c_disk_total_bytes, c_disk_free_bytes,
+c_staging_bytes, c_maintaining, c_pacing_json, c_running_json, c_lease_until, c_last_heartbeat_at, c_object_store_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 )

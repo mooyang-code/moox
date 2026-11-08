@@ -214,6 +214,18 @@ message DeleteFactorTaskReq {
 }
 message DeleteFactorTaskRsp { common.RetInfo ret_info = 1; }
 
+// DeleteBoundTask 删除策略实例关联的任务（只给策略服务删除实例时用）：核对关联的实例 → 停用任务 → 删除全部成员 →
+// 带 purge 删除结果数据集 → 删除任务记录。每一步都幂等，中途失败后重试能接着做完；任务不存在返回成功，
+// 任务关联的不是 bound_instance_id（包括还没有关联任何实例）、有补算正在排队或执行、结果数据集被其他 View 引用时
+// 拒绝（INVALID_PARAM），拒绝时什么也不改。
+message DeleteBoundTaskReq {
+  string task_id = 1;
+  string bound_instance_id = 2;
+  // check_only 为真时只做删除前的全部检查，不做任何修改：策略服务对实例的每个任务先查一遍，再开始删第一个。
+  bool check_only = 3;
+}
+message DeleteBoundTaskRsp { common.RetInfo ret_info = 1; }
+
 message GetFactorTaskReq { string task_id = 1; }
 message GetFactorTaskRsp {
   common.RetInfo ret_info = 1;
@@ -483,7 +495,8 @@ message SetFactorCategoryRsp {
   FactorDef factor = 2;
 }
 
-// BindFactorTask 把任务与策略实例永久关联（独占）：同一个实例重复调用直接成功，换一个实例则拒绝；写入后不能修改或清空。
+// BindFactorTask 把任务与策略实例关联（独占）：同一个实例重复调用直接成功，换一个实例则拒绝；写入后不能修改或清空，
+// 只随 DeleteBoundTask 与任务一起删除。
 message BindFactorTaskReq {
   string task_id = 1;
   string instance_id = 2;
@@ -569,6 +582,7 @@ service FactorMgr {
   rpc DeleteFactorCategory(DeleteFactorCategoryReq) returns (DeleteFactorCategoryRsp);
   rpc SetFactorCategory(SetFactorCategoryReq) returns (SetFactorCategoryRsp);
   rpc BindFactorTask(BindFactorTaskReq) returns (BindFactorTaskRsp);
+  rpc DeleteBoundTask(DeleteBoundTaskReq) returns (DeleteBoundTaskRsp);
   rpc SubmitFactorParams(SubmitFactorParamsReq) returns (SubmitFactorParamsRsp);
   rpc GetFactorParams(GetFactorParamsReq) returns (GetFactorParamsRsp);
   // 自定义算子（wasm UDF）：发布一个版本（未启用）、查看、切换启用版本。

@@ -41,7 +41,8 @@ function normalizeInstance(value: any): StrategyInstance {
     resolved_json: value?.resolved_json || "{}",
     health: value?.health || "ok",
     created_at: value?.created_at ?? "",
-    updated_at: value?.updated_at ?? ""
+    updated_at: value?.updated_at ?? "",
+    missing_factor_tasks: [...(value?.missing_factor_tasks ?? [])]
   };
 }
 
@@ -295,6 +296,11 @@ export async function setInstanceEnabled(instance_id: string, enabled: boolean) 
     { instance_id, enabled }
   );
   return normalizeInstance(response.instance);
+}
+
+/** 删除已停用的实例，连同它关联的计算任务和结果数据集；失败由调用方提示（超时时删除可能已做了一部分，重试安全）。 */
+export async function deleteInstance(instance_id: string) {
+  await call<{ instance_id: string }, Record<string, never>>("DeleteStrategyInstance", { instance_id }, { silent: true });
 }
 
 export async function listStrategyResults(

@@ -8321,7 +8321,7 @@ func (x *ListHoldingsRsp) GetHoldings() []*Holding {
 	return nil
 }
 
-// 资金流水：手续费、资金费、已实现盈亏、划转等，从交易所即查即用，按时间倒序。
+// 资金流水：手续费、资金费、已实现盈亏、划转等，从交易所即查即用（模拟盘由本地成交和资金费记录生成），按时间倒序。
 type ListAccountLedgerReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
@@ -9728,7 +9728,7 @@ func (x *PnlAmount) GetAmount() string {
 	return ""
 }
 
-// 收益拆解：手续费和已实现盈亏从成交表汇总，资金费从交易所流水即查。
+// 收益拆解：手续费和已实现盈亏从成交表汇总，资金费实盘即查交易所流水，模拟盘直接汇总本地资金费记录。
 type SummarizeAccountPnlReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
@@ -9815,7 +9815,7 @@ type SummarizeAccountPnlRsp struct {
 	// 资金费，按结算资产汇总，收到为正、支付为负。
 	FundingFees []*PnlAmount `protobuf:"bytes,4,rep,name=funding_fees,json=fundingFees,proto3" json:"funding_fees,omitempty"`
 	FillCount   int64        `protobuf:"varint,5,opt,name=fill_count,json=fillCount,proto3" json:"fill_count,omitempty"`
-	// 资金费是否取到了：模拟盘、现货账户或交易所不支持流水时为 false，funding_note 说明原因。
+	// 资金费是否取到了：没有永续市场或交易所不支持流水时为 false，funding_note 说明原因。
 	FundingAvailable bool `protobuf:"varint,6,opt,name=funding_available,json=fundingAvailable,proto3" json:"funding_available,omitempty"`
 	// 资金费流水翻页没取完，或有账户的流水查不了：汇总只是一部分。
 	FundingTruncated bool   `protobuf:"varint,7,opt,name=funding_truncated,json=fundingTruncated,proto3" json:"funding_truncated,omitempty"`

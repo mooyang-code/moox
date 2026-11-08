@@ -175,12 +175,22 @@ func writePartial(ctx context.Context, store *staging.Store, task staging.Task, 
 	return hex.EncodeToString(hash.Sum(nil)), nil
 }
 
+// Verify 的两种可以从对象存储取回的失败；其余错误（权限、读盘错误）不在此列，要人看。
+var (
+	ErrFileMissing      = errors.New("归档文件不存在")
+	ErrChecksumMismatch = errors.New("归档文件的 sha256 与记录不一致")
+)
+
 // Verify 确认相对路径 rel 的文件存在且 sha256 等于 want；读回与定稿前用它确认原文件完好。
+// 文件不存在时返回的错误包含 ErrFileMissing，sha256 不符时包含 ErrChecksumMismatch。
 func (f Files) Verify(rel, want string) error {
 	if rel == "" || want == "" {
 		return fmt.Errorf("文件路径或 sha256 未记录（%q）", rel)
 	}
 	file, err := os.Open(f.Abs(rel))
+	if errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("打开归档文件 %s: %w", rel, ErrFileMissing)
+	}
 	if err != nil {
 		return fmt.Errorf("打开归档文件 %s: %w", rel, err)
 	}
@@ -190,9 +200,57 @@ func (f Files) Verify(rel, want string) error {
 		return fmt.Errorf("读取归档文件 %s: %w", rel, err)
 	}
 	if got := hex.EncodeToString(hash.Sum(nil)); got != want {
-		return fmt.Errorf("归档文件 %s 的 sha256 是 %s，与记录的 %s 不一致：文件被改动或损坏，需要人工核对", rel, got, want)
+		return fmt.Errorf("归档文件 %s 的 sha256 是 %s，与记录的 %s 不一致：文件被改动或损坏，需要人工核对: %w", rel, got, want, ErrChecksumMismatch)
 	}
 	return nil
+}
+
+// Quarantine 把 rel 改名为 <文件>.bad-<unix 秒> 保留下来供人工查看（不自动删），返回新的相对路径。
+func (f Files) Quarantine(rel string, now time.Time) (string, error) {
+	bad := fmt.Sprintf("%s.bad-%d", rel, now.Unix())
+	if err := os.Rename(f.Abs(rel), f.Abs(bad)); err != nil {
+		return "", err
+	}
+	return bad, syncDir(filepath.Dir(f.Abs(rel)))
+}
+
+// Restore 把 fetch 写出的内容原子地放到 rel：写 <文件>.partial，算 sha256，不等于 want 就删掉 partial 并报错；
+// 相符则 fsync → rename → fsync 目录。
+func (f Files) Restore(rel, want string, fetch func(w io.Writer) error) error {
+	final := f.Abs(rel)
+	if err := os.MkdirAll(filepath.Dir(final), 0o755); err != nil {
+		return err
+	}
+	partial := final + partialSuffix
+	err := func() error {
+		file, err := os.OpenFile(partial, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+		if err != nil {
+			return err
+		}
+		hash := sha256.New()
+		if err := fetch(io.MultiWriter(file, hash)); err != nil {
+			_ = file.Close()
+			return err
+		}
+		if got := hex.EncodeToString(hash.Sum(nil)); got != want {
+			_ = file.Close()
+			return fmt.Errorf("取回的 %s 的 sha256 是 %s，与记录的 %s 不一致: %w", rel, got, want, ErrChecksumMismatch)
+		}
+		if err := file.Sync(); err != nil {
+			_ = file.Close()
+			return err
+		}
+		return file.Close()
+	}()
+	if err != nil {
+		_ = os.Remove(partial)
+		return err
+	}
+	if err := os.Rename(partial, final); err != nil {
+		_ = os.Remove(partial)
+		return err
+	}
+	return syncDir(filepath.Dir(final))
 }
 
 func syncFile(path string) error {

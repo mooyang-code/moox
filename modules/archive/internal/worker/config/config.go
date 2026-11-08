@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/archive/internal/objectstore"
 	"github.com/mooyang-code/moox/modules/archive/internal/worker/pacing"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"gopkg.in/yaml.v3"
@@ -68,7 +69,9 @@ type Config struct {
 	Pacing          PacingSection                    `yaml:"pacing"`
 	Health          HealthSection                    `yaml:"health"`
 	Maintenance     MaintenanceSection               `yaml:"maintenance"`
-	sourcePath      string
+	// ObjectStore 是导出文件的对象存储副本；整段省略（nil）表示不使用。
+	ObjectStore *objectstore.Config `yaml:"object_store"`
+	sourcePath  string
 }
 
 // WorkerSection 是 worker 本身的设置。
@@ -212,7 +215,75 @@ func (c *Config) Validate() error {
 	if _, err := ParseClock(c.Maintenance.At); err != nil {
 		return fmt.Errorf("maintenance.at: %w", err)
 	}
+	if c.ObjectStore != nil {
+		if err := c.ObjectStore.Validate(); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// ObjectStoreCredentialsPath 返回对象存储凭据文件的绝对路径（相对配置文件所在目录）；没有配置对象存储时为空。
+func (c *Config) ObjectStoreCredentialsPath() string {
+	if c.ObjectStore == nil {
+		return ""
+	}
+	return c.resolve(c.ObjectStore.CredentialsFile)
+}
+
+// OpenObjectStore 读取凭据并创建对象存储客户端；没有配置时返回 nil。不连网。
+func (c *Config) OpenObjectStore(opts ...objectstore.Option) (*objectstore.Client, error) {
+	if c.ObjectStore == nil {
+		return nil, nil
+	}
+	creds, err := objectstore.LoadCredentials(c.ObjectStoreCredentialsPath())
+	if err != nil {
+		return nil, err
+	}
+	return objectstore.New(*c.ObjectStore, creds, opts...)
+}
+
+// LoadObjectStore 只解析并校验配置文件里的 object_store 段（未知字段照旧拒绝），其余段忽略：
+// objectstore-check 在本机冒烟时用一份只写了这一段的临时配置。没有这一段时报错。
+func LoadObjectStore(path string) (*Config, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("读取 worker 配置 %s 失败: %w", path, err)
+	}
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return nil, err
+	}
+	var sections map[string]yaml.Node
+	if err := yaml.Unmarshal(raw, &sections); err != nil {
+		return nil, fmt.Errorf("解析 worker 配置 %s 失败: %w", path, err)
+	}
+	node, ok := sections["object_store"]
+	if !ok {
+		return nil, fmt.Errorf("worker 配置 %s 没有 object_store 段", path)
+	}
+	section, err := yaml.Marshal(&node)
+	if err != nil {
+		return nil, err
+	}
+	var store objectstore.Config
+	decoder := yaml.NewDecoder(bytes.NewReader(section))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&store); err != nil {
+		return nil, fmt.Errorf("解析 worker 配置 %s 的 object_store 段失败: %w", path, err)
+	}
+	if err := store.Validate(); err != nil {
+		return nil, err
+	}
+	return &Config{ObjectStore: &store, sourcePath: absolute}, nil
+}
+
+// resolve 把相对路径解析到配置文件所在目录。
+func (c *Config) resolve(path string) string {
+	if filepath.IsAbs(path) {
+		return path
+	}
+	return filepath.Join(filepath.Dir(c.sourcePath), path)
 }
 
 // PacingConfig 转成节奏包的配置。
@@ -239,10 +310,7 @@ func (c *Config) StatePath() string {
 
 // StorageSecretPath 返回 Storage 鉴权文件的绝对路径（相对配置文件所在目录）。
 func (c *Config) StorageSecretPath() string {
-	if filepath.IsAbs(c.StorageAuthFile) {
-		return c.StorageAuthFile
-	}
-	return filepath.Join(filepath.Dir(c.sourcePath), c.StorageAuthFile)
+	return c.resolve(c.StorageAuthFile)
 }
 
 // OpenGateway 打开经 Access 的外部网关客户端。

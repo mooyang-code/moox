@@ -160,7 +160,7 @@ func TestStockIntradayRejectsOffGridAndOutOfCalendar(t *testing.T) {
 	if _, err := FromBarEnd("cn_stock", "5m", shAt(t, 10, 8, 13, 0)); err == nil || !strings.Contains(err.Error(), "终点") {
 		t.Fatalf("13:00 不是任何一根的 bar_end：%v", err)
 	}
-	if _, err := AdvanceBarEnd("cn_stock", "5m", shAt(t, 12, 31, 15, 0), 1); !errors.Is(err, marketcalendar.ErrNoNextTradingDay) {
+	if _, err := AdvanceBarEnd("cn_stock", "5m", time.Date(2027, 12, 31, 15, 0, 0, 0, shanghai(t)).UTC(), 1); !errors.Is(err, marketcalendar.ErrNoNextTradingDay) {
 		t.Fatalf("越过日历末尾应报之后没有交易日：%v", err)
 	}
 	if _, err := HistoryStart("cn_stock", "5m", shAt(t, 10, 8, 9, 30), 1_000_000_000); !errors.Is(err, marketcalendar.ErrNoPreviousTradingDay) {
@@ -181,7 +181,7 @@ func TestStockIntradayFloorAndCeil(t *testing.T) {
 		"起点":   {shAt(t, 10, 8, 10, 0), shAt(t, 10, 8, 10, 0)},
 		"午休":   {shAt(t, 10, 8, 12, 0), shAt(t, 10, 8, 11, 25)},
 		"假期":   {shAt(t, 10, 5, 10, 0), shAt(t, 9, 30, 14, 55)},
-		"日历之外": {time.Date(2027, 1, 5, 10, 0, 0, 0, shanghai(t)), shAt(t, 12, 31, 14, 55)},
+		"日历之外": {time.Date(2028, 1, 5, 10, 0, 0, 0, shanghai(t)), time.Date(2027, 12, 31, 14, 55, 0, 0, shanghai(t)).UTC()},
 	} {
 		got, err := FloorStorageStart("cn_stock", "5m", tc.at)
 		if err != nil {

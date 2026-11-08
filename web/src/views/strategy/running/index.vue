@@ -66,7 +66,10 @@
             ></a-table-column
           >
           <a-table-column title="状态" :width="110"
-            ><template #cell="{ record }"><StatusBadge :enabled="record.enabled" :health="record.health" /></template
+            ><template #cell="{ record }"
+              ><StatusBadge :enabled="record.enabled" :health="record.health" />
+              <div v-if="record.missing_factor_tasks?.length" class="cell-sub delete-incomplete">
+                引用的计算任务已不存在<InfoTip text="删除实例即可清理；启用会失败。" /></div></template
           ></a-table-column>
           <a-table-column title="更新时间" :width="180"
             ><template #cell="{ record }">{{ formatInstant(record.updated_at, displayZone) }}</template></a-table-column
@@ -82,6 +85,13 @@
                     <a-doption :disabled="togglingId === record.instance_id" @click="toggle(record)">{{
                       record.enabled ? "停用实例" : "启用实例"
                     }}</a-doption>
+                    <a-doption
+                      v-if="canDeleteInstance(record)"
+                      :disabled="togglingId === record.instance_id"
+                      class="danger-option"
+                      @click="remove(record)"
+                      >删除</a-doption
+                    >
                   </template>
                 </a-dropdown>
               </div>
@@ -133,6 +143,7 @@ import StatusBadge from "@/views/strategy/components/strategy-status-badge.vue";
 import StrategyInstanceCreate from "@/views/strategy/components/strategy-instance-create.vue";
 import { confirmInstanceToggle } from "@/views/strategy/components/instance-toggle";
 import InstanceEnableDialog from "@/views/strategy/components/instance-enable-dialog.vue";
+import { canDeleteInstance, confirmInstanceDelete } from "@/views/strategy/components/instance-delete";
 import InfoTip from "@/components/info-tip/index.vue";
 import { STRATEGY_TASKS_ROUTE, detailLink, normalizeTaskTab, replayLink, resultsLink } from "@/views/strategy/links";
 import InstanceQuickDrawer from "@/views/strategy/running/instance-quick-drawer.vue";
@@ -279,6 +290,17 @@ function toggle(instance: StrategyInstance) {
   if (!instance.enabled && instance.logical_account_id) enableDialog.value?.open(instance, hooks);
   else confirmInstanceToggle(instance.instance_id, !instance.enabled, hooks);
 }
+/** 删除已停用的实例：确认框列出将要删除的计算任务与结果数据集；结束后（无论成败）重新读取列表。 */
+function remove(instance: StrategyInstance) {
+  if (togglingId.value) return;
+  void confirmInstanceDelete(instance, {
+    onStart: () => (togglingId.value = instance.instance_id),
+    onSettled: async () => {
+      await refresh();
+      togglingId.value = "";
+    }
+  });
+}
 onMounted(() => {
   // 进入页面先清掉 store 里可能属于其它空间的实例：期间在别的页面切过空间时，请求失败也不能继续显示旧空间的实例。
   store.clearInstances();
@@ -336,6 +358,12 @@ watch(
   .filter-status {
     width: 100%;
   }
+}
+.delete-incomplete {
+  color: rgb(var(--warning-6));
+}
+.danger-option {
+  color: rgb(var(--danger-6));
 }
 .row-actions {
   display: flex;

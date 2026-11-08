@@ -7,7 +7,7 @@ except ImportError:  # minimal python3 packages may lack this module
     sqlite3 = None
 
 CRON_MARKER = '# moox-watchdog'
-SERVICES = ('moox-factor-engine.service', 'moox-archive-worker.service')
+SERVICES = ('moox-factor-engine.service', 'moox-archive-worker.service', 'moox-seaweedfs.service')
 OPEN_ORDERS = "'PENDING', 'SUBMITTING', 'SUBMIT_UNKNOWN', 'OPEN', 'PARTIALLY_FILLED', 'CANCELING', 'CANCEL_UNKNOWN'"
 EXTERNAL_MARKERS = ('bin/moox-factor-engine', 'bin/moox-archive-worker')
 MOUNTS = set()

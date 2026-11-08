@@ -378,7 +378,19 @@ func DeployUnit(ctx context.Context, snapshot *setupconfig.Snapshot, options Uni
 		if err != nil {
 			return result, err
 		}
-		registered, stateErr := setupclient.New(gateway).DeploymentState(ctx, host.Name, options.Profile)
+		admin := setupclient.New(gateway)
+		registered, stateErr := admin.DeploymentState(ctx, host.Name, options.Profile)
+		// 归档 worker 配了对象存储：在同一个网关上读出 Admin 里的密钥，投影成 worker 的凭据文件（用完清零）。
+		var objectStoreEnv []byte
+		if stateErr == nil && options.Profile == "archive-worker" && manifest.ArchiveObjectStore != nil {
+			credential, err := admin.ObjectStoreSecret(ctx, manifest.ArchiveObjectStore.SecretID)
+			if err != nil {
+				stateErr = fmt.Errorf("读取归档对象存储密钥: %w", err)
+			} else {
+				objectStoreEnv = credential.Env()
+			}
+		}
+		defer clear(objectStoreEnv)
 		if err := errors.Join(stateErr, gateway.Close()); err != nil {
 			return result, err
 		}
@@ -388,7 +400,8 @@ func DeployUnit(ctx context.Context, snapshot *setupconfig.Snapshot, options Uni
 		result, err = deployExternal(ctx, externalInstall{
 			options: options, manifest: manifest, host: host, control: control, identity: identity, operation: operation,
 			localClients: localClients, target: target, source: source,
-			disabled: !registered.HostEnabled || !registered.DeploymentEnabled,
+			disabled:       !registered.HostEnabled || !registered.DeploymentEnabled,
+			objectStoreEnv: objectStoreEnv,
 		})
 		if err != nil {
 			return result, err

@@ -21,7 +21,7 @@ const (
 	fundingMaxPages  = 5
 )
 
-// SummarizeAccountPnl 收益拆解：手续费和已实现盈亏从成交表汇总，资金费从交易所流水即查。
+// SummarizeAccountPnl 收益拆解：手续费和已实现盈亏从成交表汇总，资金费实盘即查交易所流水，模拟盘直接汇总本地资金费记录。
 // 手续费按手续费资产分别列出，不折算成结算币；资金费翻页取不完或有账户查不到时标明截断。时间范围最长 90 天（请求校验里限制）。
 func (s *ConsoleServer) SummarizeAccountPnl(ctx context.Context, req *tradepb.SummarizeAccountPnlReq) (*tradepb.SummarizeAccountPnlRsp, error) {
 	spaceID, err := requiredSpace(ctx)
@@ -89,7 +89,8 @@ func pnlAmountsToPB(values []store.AssetAmount) []*tradepb.PnlAmount {
 	return result
 }
 
-// summarizeFunding 从各个有永续市场的执行账户的交易所流水里汇总资金费。
+// summarizeFunding 汇总各个有永续市场的执行账户的资金费：实盘翻页取交易所流水；模拟盘直接按资产汇总本地资金费记录，
+// 不经过流水翻页，记录再多也不截断。
 func (s *ConsoleServer) summarizeFunding(ctx context.Context, accounts []store.TradingAccountRecord, start, end time.Time, rsp *tradepb.SummarizeAccountPnlRsp) {
 	truncated := false
 	// 先把各账户取到的流水都收齐，算出统计起点之后再合计：起点之前只有部分账户取到的流水不能计入，否则合计和起点对不上。
@@ -101,8 +102,17 @@ func (s *ConsoleServer) summarizeFunding(ctx context.Context, accounts []store.T
 	// 所有账户的流水查询共用一个期限：要明显小于网关给这个接口的调用超时，到点后没查的账户记为截断。
 	ctx, cancel := context.WithTimeout(ctx, ledgerQueryTimeout)
 	defer cancel()
+	var paperAccounts []store.TradingAccountRecord
 	for _, account := range accounts {
 		if !account.SupportsMarket(string(exchange.MarketTypeSwap)) {
+			continue
+		}
+		if account.ExecutionMode == string(exchange.ExecutionModePaper) {
+			// 第一版只有币安的模拟永续结算资金费。
+			if account.Exchange != string(exchange.ExchangeBinance) {
+				notes = append(notes, fmt.Sprintf("账户 %s：%s 模拟盘暂不结算资金费", account.Name, account.Exchange))
+			}
+			paperAccounts = append(paperAccounts, account)
 			continue
 		}
 		source, err := s.ledgerSource(account.TradingAccountID)
@@ -126,7 +136,7 @@ func (s *ConsoleServer) summarizeFunding(ctx context.Context, accounts []store.T
 		}
 		collected = append(collected, entries...)
 	}
-	if queried == 0 {
+	if queried == 0 && len(paperAccounts) == 0 {
 		rsp.FundingAvailable = false
 		if len(notes) == 0 {
 			notes = append(notes, "没有开通永续市场的账户，没有资金费")
@@ -151,6 +161,21 @@ func (s *ConsoleServer) summarizeFunding(ctx context.Context, accounts []store.T
 			assets = append(assets, entry.Asset)
 		}
 		totals[entry.Asset] = totals[entry.Asset].Add(entry.Amount)
+	}
+	// 模拟盘按同一个统计起点汇总，合计和起点对得上。
+	for _, account := range paperAccounts {
+		amounts, err := s.Store.SummarizePaperFundingFees(ctx, account.SpaceID, account.TradingAccountID, from.UnixMilli(), end.UnixMilli())
+		if err != nil {
+			notes = append(notes, fmt.Sprintf("账户 %s 的资金费记录读取失败：%v", account.Name, err))
+			rsp.FundingTruncated = true
+			continue
+		}
+		for _, amount := range amounts {
+			if _, seen := totals[amount.Asset]; !seen {
+				assets = append(assets, amount.Asset)
+			}
+			totals[amount.Asset] = totals[amount.Asset].Add(amount.Amount)
+		}
 	}
 	sort.Strings(assets)
 	for _, asset := range assets {

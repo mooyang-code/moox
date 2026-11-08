@@ -193,11 +193,11 @@ func TestContinuousAxisIsIdentity(t *testing.T) {
 // 交易日历最后一天的收盘时刻也能作排他终点：换算不需要日历之外的下一根。
 func TestSessionEndOfCalendar(t *testing.T) {
 	axis := stockAxis(t)
-	end, err := axis.EndToAxis(cst(t, "2026-12-31 15:00"))
+	end, err := axis.EndToAxis(cst(t, "2027-12-31 15:00"))
 	require.NoError(t, err)
 	closedAt, err := axis.FromAxisEnd(end)
 	require.NoError(t, err)
-	require.Equal(t, cst(t, "2026-12-31 15:00"), closedAt)
+	require.Equal(t, cst(t, "2027-12-31 15:00"), closedAt)
 	_, err = axis.FromAxis(end)
 	require.Error(t, err, "下一根在日历之外")
 }

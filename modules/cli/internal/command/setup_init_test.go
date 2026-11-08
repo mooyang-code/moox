@@ -211,11 +211,11 @@ func TestSetupInitStopsAfterAdminFailure(t *testing.T) {
 		},
 		applySpaces: func(context.Context, *setupconfig.Snapshot, []setupclient.Space) (setupclient.ApplyResult, error) {
 			stages = append(stages, "admin-apply")
-			return setupclient.ApplyResult{}, errors.New("setup_conflict")
+			return setupclient.ApplyResult{}, errors.New("setup_invalid")
 		},
 	})
 	cmd.SetArgs([]string{"init", "--storage-host", "compute"})
-	require.ErrorContains(t, cmd.Execute(), "setup_conflict")
+	require.ErrorContains(t, cmd.Execute(), "setup_invalid")
 	assert.Equal(t, []string{"load-bundle", "load-config", "firewall", "admin-apply"}, stages)
 }
 

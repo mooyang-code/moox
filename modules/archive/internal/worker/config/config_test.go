@@ -171,3 +171,59 @@ func TestMinuteWindowDefaultsOnAndCanBeSwitchedOff(t *testing.T) {
 		t.Fatalf("minute_window: false 应关闭: %+v", off.Pacing)
 	}
 }
+
+const objectStoreSection = `object_store:
+  endpoint: cos.ap-nanjing.myqcloud.com
+  region: ap-nanjing
+  bucket: moox-archive-1250000000
+  url_style: virtual
+  storage_class: STANDARD_IA
+  credentials_file: ../secrets/archive-object-store.env
+`
+
+func TestObjectStoreSectionIsOptionalAndValidated(t *testing.T) {
+	cfg, err := Load(write(t, base))
+	if err != nil || cfg.ObjectStore != nil || cfg.ObjectStoreCredentialsPath() != "" {
+		t.Fatalf("省略整段表示不使用: %+v %v", cfg.ObjectStore, err)
+	}
+	if client, err := cfg.OpenObjectStore(); client != nil || err != nil {
+		t.Fatalf("没配时不创建客户端: %v %v", client, err)
+	}
+	path := write(t, base+objectStoreSection)
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.ObjectStore.Prefix != "moox-archive/" || !cfg.ObjectStore.TLS() || cfg.ObjectStore.StorageClass != "STANDARD_IA" {
+		t.Fatalf("object_store = %+v", cfg.ObjectStore)
+	}
+	if want := filepath.Join(filepath.Dir(filepath.Dir(path)), "secrets", "archive-object-store.env"); cfg.ObjectStoreCredentialsPath() != want {
+		t.Fatalf("凭据路径 = %s, want %s", cfg.ObjectStoreCredentialsPath(), want)
+	}
+	if _, err := cfg.OpenObjectStore(); err == nil {
+		t.Fatal("凭据文件不存在时应报错")
+	}
+	for name, section := range map[string]string{
+		"未知字段":         objectStoreSection + "  part_size: 64MiB\n",
+		"url_style 缺失": strings.Replace(objectStoreSection, "  url_style: virtual\n", "", 1),
+		"region 缺失":    strings.Replace(objectStoreSection, "  region: ap-nanjing\n", "", 1),
+	} {
+		if _, err := Load(write(t, base+section)); err == nil {
+			t.Fatalf("%s：应被拒", name)
+		}
+	}
+}
+
+func TestLoadObjectStoreReadsOnlyThatSection(t *testing.T) {
+	// 只有 object_store 段（本机冒烟的临时配置）：完整的 worker 校验会因缺 gateway_client 失败，这里不受影响。
+	cfg, err := LoadObjectStore(write(t, "pacing: {whatever: 1}\n"+objectStoreSection))
+	if err != nil || cfg.ObjectStore.Bucket != "moox-archive-1250000000" {
+		t.Fatalf("cfg=%+v err=%v", cfg, err)
+	}
+	if _, err := LoadObjectStore(write(t, base)); err == nil || !strings.Contains(err.Error(), "没有 object_store 段") {
+		t.Fatalf("缺段应报错: %v", err)
+	}
+	if _, err := LoadObjectStore(write(t, objectStoreSection+"  mystery: 1\n")); err == nil {
+		t.Fatal("段内未知字段应被拒")
+	}
+}

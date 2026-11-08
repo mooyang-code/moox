@@ -103,3 +103,28 @@ func setKey(lines []string, section, key, value string) ([]string, error) {
 	}
 	return putKey(lines, section, key, value), nil
 }
+
+// dropSection 删除整个 [section] 段：标题行、段内的键与注释，连同紧挨在标题上方的注释行（段的说明）。
+// 紧挨在下一段标题上方的注释属于下一段，保留；删除处不留连续的空行。没有该段时不动。不删子表（[section.x]）。
+func dropSection(lines []string, section string) []string {
+	start, end := sectionRange(lines, section)
+	if start < 0 {
+		return lines
+	}
+	isComment := func(i int) bool { return strings.HasPrefix(strings.TrimSpace(lines[i]), "#") }
+	if end < len(lines) {
+		for end-1 > start && isComment(end-1) {
+			end--
+		}
+	} else if lines[end-1] == "" && end-1 > start {
+		end-- // 保留文件末尾的换行
+	}
+	for start > 0 && isComment(start-1) {
+		start--
+	}
+	out := append(append([]string(nil), lines[:start]...), lines[end:]...)
+	for start > 0 && start < len(out) && strings.TrimSpace(out[start-1]) == "" && strings.TrimSpace(out[start]) == "" {
+		out = append(out[:start], out[start+1:]...)
+	}
+	return out
+}

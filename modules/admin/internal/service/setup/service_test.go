@@ -80,15 +80,21 @@ func TestApplyIdenticalSpaceCanonicalJSONIsUnchanged(t *testing.T) {
 	assert.Equal(t, 1, result.SpacesUnchanged)
 }
 
-func TestApplyRejectsConflictingSpace(t *testing.T) {
+// 业务空间与 moox.toml 不一致时以管理台为准：不改写、不报错，记进 Kept。
+func TestApplyKeepsADifferentSpace(t *testing.T) {
 	service := NewService(setupDB(t), testEncryptionKey)
 	manifest := setupSpaceManifest()
 	_, err := service.Apply(context.Background(), manifest)
 	require.NoError(t, err)
 
 	manifest.Spaces[0].Name = "不同名称"
-	_, err = service.Apply(context.Background(), manifest)
-	require.ErrorIs(t, err, ErrConflict)
+	result, err := service.Apply(context.Background(), manifest)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"space:" + manifest.Spaces[0].SpaceID}, result.Kept)
+	status, err := service.Inspect(context.Background(), manifest)
+	require.NoError(t, err)
+	assert.Equal(t, "completed", status.State)
+	assert.Equal(t, []string{"space:" + manifest.Spaces[0].SpaceID}, status.Kept)
 }
 
 func TestApplyRollsBackSpaceOnLaterFailure(t *testing.T) {
@@ -151,7 +157,7 @@ func TestApplyCreatesAllRecordsAndInspectCompletes(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "completed", status.State)
 	assert.Equal(t, 0, status.Missing)
-	assert.Equal(t, 0, status.Conflicts)
+	assert.Empty(t, status.Kept)
 
 	var setupTables int64
 	require.NoError(t, db.Raw("SELECT count(*) FROM sqlite_master WHERE type='table' AND name='t_system_setup'").Scan(&setupTables).Error)
@@ -225,23 +231,41 @@ func TestApplyCompletesMatchingPartialState(t *testing.T) {
 	assert.Equal(t, int64(1), secrets)
 }
 
-func TestApplyRejectsDifferentInitialAdministrator(t *testing.T) {
-	db := setupDB(t)
-	hash, err := mooxsecurity.HashPassword("other-password")
-	require.NoError(t, err)
-	require.NoError(t, db.Create(&authmodel.User{
-		UserID: "other-user", Username: "other-admin", PasswordHash: hash,
-	}).Error)
+// 管理台改过管理员密码、或库里已有别的超级用户：以管理台为准，不新建、不改写，其余照常写入。
+func TestApplyKeepsTheConsoleAdministrator(t *testing.T) {
+	for name, user := range map[string]authmodel.User{
+		"changed_password": {UserID: "u1", Username: testManifest().Admin.Username},
+		"other_user":       {UserID: "u2", Username: "other-admin"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			db := setupDB(t)
+			hash, err := mooxsecurity.HashPassword("changed-in-console")
+			require.NoError(t, err)
+			user.PasswordHash = hash
+			require.NoError(t, db.Create(&user).Error)
 
-	_, err = NewService(db, testEncryptionKey).Apply(context.Background(), testManifest())
-	require.ErrorIs(t, err, ErrConflict)
+			result, err := NewService(db, testEncryptionKey).Apply(context.Background(), testManifest())
+			require.NoError(t, err)
+			assert.Equal(t, []string{"admin"}, result.Kept)
+			var stored authmodel.User
+			require.NoError(t, db.Where("c_user_id = ?", user.UserID).First(&stored).Error)
+			assert.True(t, mooxsecurity.VerifyPassword("changed-in-console", stored.PasswordHash), "管理台的密码不能被改写")
+			var users, secrets int64
+			require.NoError(t, db.Model(&authmodel.User{}).Count(&users).Error)
+			require.NoError(t, db.Model(&secretmodel.Secret{}).Count(&secrets).Error)
+			assert.Equal(t, int64(1), users)
+			assert.Equal(t, int64(1), secrets, "腾讯云密钥照常写入")
 
-	status, inspectErr := NewService(db, testEncryptionKey).Inspect(context.Background(), testManifest())
-	require.NoError(t, inspectErr)
-	assert.Equal(t, "conflict", status.State)
+			status, err := NewService(db, testEncryptionKey).Inspect(context.Background(), testManifest())
+			require.NoError(t, err)
+			assert.Equal(t, "completed", status.State)
+			assert.Equal(t, []string{"admin"}, status.Kept)
+		})
+	}
 }
 
-func TestApplyConflictRollsBackEarlierWrites(t *testing.T) {
+// 管理台换过腾讯云密钥：保留管理台的，管理员与交易所密钥照常写入（本来的问题：一项不一致就整体回滚，交易所密钥写不进去）。
+func TestApplyKeepsTheConsoleTencentSecretAndStillWritesTheRest(t *testing.T) {
 	db := setupDB(t)
 	encrypted, err := mooxsecurity.Encrypt("different-secret", testEncryptionKey)
 	require.NoError(t, err)
@@ -250,11 +274,16 @@ func TestApplyConflictRollsBackEarlierWrites(t *testing.T) {
 		SecretType: "api_key", KeyID: "different-id", SecretValue: encrypted, ExtraConfig: "{}", Status: "active",
 	}).Error)
 
-	_, err = NewService(db, testEncryptionKey).Apply(context.Background(), testManifest())
-	require.ErrorIs(t, err, ErrConflict)
+	result, err := NewService(db, testEncryptionKey).Apply(context.Background(), testManifest())
+	require.NoError(t, err)
+	assert.Equal(t, "created", result.Action)
+	assert.Equal(t, []string{"tencent_cloud"}, result.Kept)
+	var stored secretmodel.Secret
+	require.NoError(t, db.Where("c_secret_id = ?", tencentSecretID).First(&stored).Error)
+	assert.Equal(t, "different-id", stored.KeyID, "管理台的腾讯云密钥不能被改写")
 	var users int64
 	require.NoError(t, db.Model(&authmodel.User{}).Count(&users).Error)
-	assert.Zero(t, users, "user insert before secret conflict must roll back")
+	assert.Equal(t, int64(1), users)
 }
 
 func TestApplyInjectedFailureRollsBackAllWrites(t *testing.T) {

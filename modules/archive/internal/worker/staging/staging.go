@@ -201,7 +201,20 @@ func Open(path string, opts Options) (*Store, error) {
 		return nil, err
 	}
 	s := &Store{db: db, path: path, opts: opts}
-	for _, ddl := range []string{`
+	for _, ddl := range []string{taskStateDDL, partitionStateDDL} {
+		if _, err := db.Exec(ddl); err != nil {
+			_ = db.Close()
+			return nil, fmt.Errorf("create staging state tables: %w", err)
+		}
+	}
+	return s, nil
+}
+
+// 两张永久表。新列放在各表字段列表的最后，与原地升级（testdata/upgrade-batch2.sql 的 ADD COLUMN）建出的表一致。
+// task_state.meta_remote_sha256 是已上传到对象存储的 dataset.json 的 sha256；partition_state.remote_* 是分区的远端副本，
+// remote_sha256 = file_sha256 且 remote_verified_at 非空时远端是当前版本（“已复制”，与 mgr 同一个口径）。
+const (
+	taskStateDDL = `
 CREATE TABLE IF NOT EXISTS task_state (
     space_id TEXT NOT NULL,
     dataset_id TEXT NOT NULL,
@@ -209,8 +222,10 @@ CREATE TABLE IF NOT EXISTS task_state (
     first_start INTEGER,
     resume_from INTEGER,
     task_id TEXT NOT NULL DEFAULT '',
+    meta_remote_sha256 TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (space_id, dataset_id)
-) WITHOUT ROWID`, `
+) WITHOUT ROWID`
+	partitionStateDDL = `
 CREATE TABLE IF NOT EXISTS partition_state (
     space_id TEXT NOT NULL,
     dataset_id TEXT NOT NULL,
@@ -229,16 +244,18 @@ CREATE TABLE IF NOT EXISTS partition_state (
     max_data_time INTEGER,
     finalized_at INTEGER,
     report_pending INTEGER NOT NULL DEFAULT 1,
+    remote_key TEXT NOT NULL DEFAULT '',
+    remote_sha256 TEXT NOT NULL DEFAULT '',
+    remote_etag TEXT NOT NULL DEFAULT '',
+    remote_uploaded_at INTEGER,
+    remote_verified_at INTEGER,
+    remote_error TEXT NOT NULL DEFAULT '',
+    remote_attempts INTEGER NOT NULL DEFAULT 0,
+    remote_retry_at INTEGER,
     CHECK (status IN ('open', 'exported', 'final')),
     PRIMARY KEY (space_id, dataset_id, partition_key)
-) WITHOUT ROWID`} {
-		if _, err := db.Exec(ddl); err != nil {
-			_ = db.Close()
-			return nil, fmt.Errorf("create staging state tables: %w", err)
-		}
-	}
-	return s, nil
-}
+) WITHOUT ROWID`
+)
 
 func openDB(path string, opts Options) (*sql.DB, error) {
 	pragmas := []string{

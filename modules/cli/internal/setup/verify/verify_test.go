@@ -105,6 +105,28 @@ func TestStrategyRules(t *testing.T) {
 	require.Equal(t, Skip, status(Evaluate(in), "strategy"))
 }
 
+// 引用的因子任务已不存在的停用实例只在说明里标出，不改变检查结果。
+func TestStrategyMarksIncompleteDeletion(t *testing.T) {
+	in := healthy()
+	in.Instances = append(in.Instances, Instance{ID: "gone", MissingFactorTasks: []string{"ftask_x"}})
+	var check Check
+	for _, item := range Evaluate(in) {
+		if item.Name == "strategy" {
+			check = item
+		}
+	}
+	require.Equal(t, Pass, check.Status)
+	require.Contains(t, check.Detail, "gone 引用的因子任务已不存在")
+
+	in.Instances = in.Instances[1:]
+	for _, item := range Evaluate(in) {
+		if item.Name == "strategy" {
+			require.Equal(t, Skip, item.Status)
+			require.Contains(t, item.Detail, "删除实例即可清理")
+		}
+	}
+}
+
 func TestNoEnabledTasksFails(t *testing.T) {
 	checks := Evaluate(Input{Now: now})
 	require.Equal(t, Fail, checks[0].Status)

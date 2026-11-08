@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -677,7 +678,7 @@ func newSetupApplyCommand(deps setupDeps) *cobra.Command {
 		if err := snapshot.VerifyUnchanged(); err != nil {
 			return fmt.Errorf("config_changed")
 		}
-		login, err := deps.login(cmd.Context(), snapshot)
+		login, loginSkipped, err := verifySetupLogin(cmd.Context(), deps, snapshot, applied.Kept)
 		if err != nil {
 			return err
 		}
@@ -688,8 +689,9 @@ func newSetupApplyCommand(deps setupDeps) *cobra.Command {
 		return writeSetupJSON(cmd, struct {
 			setupclient.ApplyResult
 			LoginAPI         string             `json:"login_api"`
+			LoginSkipped     string             `json:"login_skipped,omitempty"`
 			ExchangeKeyCheck []exchangeKeyCheck `json:"exchange_key_checks,omitempty"`
-		}{ApplyResult: applied, LoginAPI: login.LoginAPI, ExchangeKeyCheck: inspectApplied(cmd.Context(), deps, snapshot, applied.ExchangeKeys)})
+		}{ApplyResult: applied, LoginAPI: login.LoginAPI, LoginSkipped: loginSkipped, ExchangeKeyCheck: inspectApplied(cmd.Context(), deps, snapshot, applied.ExchangeKeys)})
 	}}
 	cmd.Flags().StringVar(&file, "file", defaultSetupFile, "初始化配置文件")
 	return cmd
@@ -903,6 +905,18 @@ func defaultSetupDeps() setupDeps {
 			return setupclient.VerifyPublicLoginWithCAFile(ctx, baseURL, snapshot.Manifest.Admin.Username, snapshot.Manifest.Admin.Password, tlstrust.CAPath(snapshot.Manifest.ControlHost().Address))
 		},
 	}
+}
+
+// loginSkippedKeptAdmin 是管理员以管理台为准保留时跳过登录校验的说明。
+const loginSkippedKeptAdmin = "管理员以管理台为准（管理台改过密码或用户名），没有用 moox.toml 的密码校验登录"
+
+// verifySetupLogin 用 moox.toml 的管理员校验管理台能登录；管理员被保留（kept 含 admin）时 moox.toml 的密码不是现在的密码，跳过校验并返回说明。
+func verifySetupLogin(ctx context.Context, deps setupDeps, snapshot *setupconfig.Snapshot, kept []string) (setupclient.LoginResult, string, error) {
+	if slices.Contains(kept, "admin") {
+		return setupclient.LoginResult{}, loginSkippedKeptAdmin, nil
+	}
+	login, err := deps.login(ctx, snapshot)
+	return login, "", err
 }
 
 var storageSecretValuePattern = regexp.MustCompile(`^[A-Za-z0-9._~+/=-]+$`)

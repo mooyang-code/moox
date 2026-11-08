@@ -65,15 +65,15 @@ func TestQueueTruncationIsNoted(t *testing.T) {
 func TestRecheckReportsCoverageReason(t *testing.T) {
 	repo := openStore(t)
 	shanghai := time.FixedZone("CST", 8*3600)
-	client := &fakeClient{marketType: "spot", indexedFrom: time.Date(2027, 1, 4, 0, 0, 0, 0, shanghai), indexedTo: time.Date(2027, 3, 1, 0, 0, 0, 0, shanghai)}
+	client := &fakeClient{marketType: "spot", indexedFrom: time.Date(2028, 1, 4, 0, 0, 0, 0, shanghai), indexedTo: time.Date(2028, 3, 1, 0, 0, 0, 0, shanghai)}
 	runner := &Runner{Store: repo, Client: client}
 	view, err := client.GetView(context.Background(), "crypto", "view_factor_a")
 	if err != nil {
 		t.Fatal(err)
 	}
 	resolved := input.Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]input.TaskBinding{"spot": {ViewID: "view_factor_a"}}, Bar: "1d", Calendar: "cn_stock"}
-	job := store.Replay{ReplayID: "p1", SpaceID: "crypto", Tasks: map[string]store.ReplayTask{"spot": {FactorTaskID: "ftask_a", ViewID: "view_factor_a", ViewGeneration: "idx"}}, EndTime: time.Date(2027, 2, 1, 0, 0, 0, 0, shanghai)}
-	_, _, err = runner.recheckView(context.Background(), job, "spot", resolved, nil, view, time.Date(2026, 12, 1, 0, 0, 0, 0, shanghai), job.EndTime, true, nil)
+	job := store.Replay{ReplayID: "p1", SpaceID: "crypto", Tasks: map[string]store.ReplayTask{"spot": {FactorTaskID: "ftask_a", ViewID: "view_factor_a", ViewGeneration: "idx"}}, EndTime: time.Date(2028, 2, 1, 0, 0, 0, 0, shanghai)}
+	_, _, err = runner.recheckView(context.Background(), job, "spot", resolved, nil, view, time.Date(2027, 12, 1, 0, 0, 0, 0, shanghai), job.EndTime, true, nil)
 	if err == nil || !strings.Contains(err.Error(), "超出 A 股内嵌交易日历") || strings.Contains(err.Error(), "暂时未知") {
 		t.Fatalf("复查应说明具体原因：%v", err)
 	}

@@ -73,6 +73,7 @@ CREATE TABLE IF NOT EXISTS t_archive_runs (
     c_message TEXT NOT NULL DEFAULT '',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_partitions_uploaded INTEGER NOT NULL DEFAULT 0,
     CHECK (c_kind IN ('scheduled', 'manual', 'tick', 'range')),
     CHECK (c_status IN ('queued', 'running', 'succeeded', 'failed', 'canceled')),
     CHECK (c_kind NOT IN ('tick', 'range') OR (c_range_start IS NOT NULL AND c_range_end IS NOT NULL)),
@@ -95,6 +96,8 @@ BEGIN
 END;
 
 -- 归档分区：每个任务每个本地日（1d 及以上为月，归月规则见 8.1）一行；open 只在 worker 暂存区，exported 已有文件且可能重写，final 已定稿
+-- c_worker_id 是最近一次登记该分区的 worker（只用于展示与排障）；c_remote_* 是对象存储副本，c_remote_key 相对对象存储的 prefix，
+-- c_remote_sha256 = c_file_sha256 且 c_remote_verified_at 非空时远端是当前版本（“已复制”）
 CREATE TABLE IF NOT EXISTS t_archive_partitions (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_space_id TEXT NOT NULL,
@@ -120,6 +123,12 @@ CREATE TABLE IF NOT EXISTS t_archive_partitions (
     c_last_run_id TEXT NOT NULL DEFAULT '',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_remote_key TEXT NOT NULL DEFAULT '',
+    c_remote_sha256 TEXT NOT NULL DEFAULT '',
+    c_remote_etag TEXT NOT NULL DEFAULT '',
+    c_remote_uploaded_at DATETIME,
+    c_remote_verified_at DATETIME,
+    c_remote_error TEXT NOT NULL DEFAULT '',
     CHECK (c_status IN ('open', 'exported', 'final')),
     CHECK (c_status = 'open' OR c_file_path != ''),
     CHECK (c_row_count >= 0),
@@ -130,8 +139,6 @@ CREATE TABLE IF NOT EXISTS t_archive_partitions (
     UNIQUE (c_space_id, c_dataset_id, c_partition_key)
 );
 
-CREATE INDEX IF NOT EXISTS idx_t_archive_partitions_worker ON t_archive_partitions (c_worker_id, c_status);
-
 CREATE TRIGGER IF NOT EXISTS trg_t_archive_partitions_mtime
 AFTER UPDATE ON t_archive_partitions
 FOR EACH ROW
@@ -140,7 +147,7 @@ BEGIN
     UPDATE t_archive_partitions SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
 END;
 
--- 归档 worker：同一时刻只有一个 worker 持有活动租约（c_lease_until 未过期）；心跳刷新磁盘、暂存库与正在执行的运行
+-- 归档 worker：同一时刻只有一个 worker 持有活动租约（c_lease_until 未过期）；心跳刷新磁盘、暂存库、正在执行的运行与对象存储摘要
 CREATE TABLE IF NOT EXISTS t_archive_workers (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_worker_id TEXT NOT NULL,
@@ -157,6 +164,7 @@ CREATE TABLE IF NOT EXISTS t_archive_workers (
     c_last_heartbeat_at DATETIME,
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_object_store_json TEXT NOT NULL DEFAULT '{}',
     CHECK (c_disk_total_bytes >= 0),
     CHECK (c_disk_free_bytes >= 0),
     CHECK (c_staging_bytes >= 0),

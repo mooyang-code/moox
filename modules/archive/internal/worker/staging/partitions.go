@@ -33,6 +33,30 @@ type PartitionState struct {
 	FinalizedAt  time.Time
 	// ReportPending 为真表示分区的最新状态还没有被 mgr 确认登记。
 	ReportPending bool
+	// Remote 是分区在对象存储里的副本。
+	Remote Remote
+}
+
+// Remote 是分区的远端副本状态。Key 相对对象存储的 prefix；Attempts 与 RetryAt 是上传失败后的退避，只在本地。
+type Remote struct {
+	Key        string
+	SHA256     string
+	ETag       string
+	UploadedAt time.Time
+	VerifiedAt time.Time
+	Error      string
+	Attempts   int
+	RetryAt    time.Time
+}
+
+// Replicated 报告当前版本是否已有校验过的远端副本（与 mgr 同一个口径）。
+func (p PartitionState) Replicated() bool {
+	return p.FilePath != "" && p.Remote.SHA256 == p.SHA256 && !p.Remote.VerifiedAt.IsZero()
+}
+
+// RemoteIsCurrent 报告远端有当前版本的对象（读回时可以从它取回）。
+func (p PartitionState) RemoteIsCurrent() bool {
+	return p.Remote.Key != "" && p.SHA256 != "" && p.Remote.SHA256 == p.SHA256
 }
 
 // NeedsExport 报告分区是否需要导出：从未导出，或导出之后又有变化。
@@ -43,19 +67,33 @@ func (p PartitionState) NeedsExport() bool {
 	return p.ExportedAt.IsZero() || p.LastChangedAt.After(p.ExportedAt)
 }
 
-const partitionColumns = `partition_key, range_start, range_end, status, last_changed_at, exported_at, file_path, file_sha256, export_count, row_count, subject_count, min_data_time, max_data_time, finalized_at, report_pending`
+const partitionColumns = `partition_key, range_start, range_end, status, last_changed_at, exported_at, file_path, file_sha256, export_count, row_count, subject_count, min_data_time, max_data_time, finalized_at, report_pending,
+remote_key, remote_sha256, remote_etag, remote_uploaded_at, remote_verified_at, remote_error, remote_attempts, remote_retry_at`
 
 func scanPartition(row interface{ Scan(...any) error }) (PartitionState, error) {
+	p, _, _, err := scanPartitionWith(row, false)
+	return p, err
+}
+
+// scanPartitionWith 扫描 partitionColumns；withTask 为真时前面多两列 space_id、dataset_id。
+func scanPartitionWith(row interface{ Scan(...any) error }, withTask bool) (PartitionState, string, string, error) {
 	var p PartitionState
+	var space, dataset string
 	var start, end, changed, rows, subjects, pending int64
-	var exported, minTime, maxTime, finalized sql.NullInt64
-	if err := row.Scan(&p.Key, &start, &end, &p.Status, &changed, &exported, &p.FilePath, &p.SHA256, &p.ExportCount, &rows, &subjects, &minTime, &maxTime, &finalized, &pending); err != nil {
-		return PartitionState{}, err
+	var exported, minTime, maxTime, finalized, uploaded, verified, retry sql.NullInt64
+	targets := []any{&p.Key, &start, &end, &p.Status, &changed, &exported, &p.FilePath, &p.SHA256, &p.ExportCount, &rows, &subjects, &minTime, &maxTime, &finalized, &pending,
+		&p.Remote.Key, &p.Remote.SHA256, &p.Remote.ETag, &uploaded, &verified, &p.Remote.Error, &p.Remote.Attempts, &retry}
+	if withTask {
+		targets = append([]any{&space, &dataset}, targets...)
+	}
+	if err := row.Scan(targets...); err != nil {
+		return PartitionState{}, "", "", err
 	}
 	p.Start, p.End, p.LastChangedAt = fromNanos(start), fromNanos(end), fromNanos(changed)
 	p.ExportedAt, p.MinDataTime, p.MaxDataTime, p.FinalizedAt = scanNanos(exported), scanNanos(minTime), scanNanos(maxTime), scanNanos(finalized)
 	p.RowCount, p.SubjectCount, p.ReportPending = uint64(rows), uint64(subjects), pending != 0
-	return p, nil
+	p.Remote.UploadedAt, p.Remote.VerifiedAt, p.Remote.RetryAt = scanNanos(uploaded), scanNanos(verified), scanNanos(retry)
+	return p, space, dataset, nil
 }
 
 // Partitions 按分区键升序返回任务的全部分区状态。
@@ -161,10 +199,10 @@ func (s *Store) ExportCSV(ctx context.Context, task Task, p PartitionState, out 
 	return w.Flush()
 }
 
-// MarkExported 记录分区已导出：导出时间、文件相对路径与 sha256。
+// MarkExported 记录分区已导出：导出时间、文件相对路径与 sha256。新版本文件应当立刻尝试上传，不继承旧版本的退避：
+// 上传失败次数、重试时刻与错误清零（远端字段保留，sha256 变了就自动成为“待上传”）。
 func (s *Store) MarkExported(ctx context.Context, spaceID, datasetID, key string, exportedAt time.Time, relPath, sha string) error {
-	result, err := s.db.ExecContext(ctx, `UPDATE partition_state SET status = 'exported', exported_at = ?, file_path = ?, file_sha256 = ?, export_count = export_count + 1, report_pending = 1
-WHERE space_id = ? AND dataset_id = ? AND partition_key = ? AND status != 'final'`,
+	result, err := s.db.ExecContext(ctx, markExported,
 		nanos(exportedAt), relPath, sha, spaceID, datasetID, key)
 	if err != nil {
 		return err
@@ -217,6 +255,7 @@ WHERE space_id = ? AND dataset_id = ? AND partition_key = ?`, rows, subjects, mi
 }
 
 // RestorePartitions 按 mgr 下发的分区登记补齐本地缺的分区状态（暂存库丢失后重建用）：只插入本地没有的分区键，report_pending 为 0。
+// 远端副本字段一并恢复：远端是当前版本的就是“已上传”，不是的就是“待上传”。
 // 按“有没有文件”判断，不看登记状态：有文件路径的一律按 final 恢复（统计、路径、sha256、导出次数取登记值；登记不是 final
 // 或没有定稿时间时定稿时间取 now）。它的暂存行已随暂存库丢失，按未定稿恢复会在定稿时从空暂存表算出 0 行；按 final 恢复后，
 // 再读到它的行会先读回原文件合并。没有文件的不恢复（行只在丢掉的暂存库里，重读即可）。返回插入的分区数。
@@ -238,12 +277,13 @@ func (s *Store) RestorePartitions(ctx context.Context, spaceID, datasetID string
 			if changed.IsZero() || changed.After(p.ExportedAt) {
 				changed = p.ExportedAt
 			}
-			result, err := tx.ExecContext(ctx, `INSERT INTO partition_state (space_id, dataset_id, partition_key, range_start, range_end, status, last_changed_at, exported_at,
-    file_path, file_sha256, export_count, row_count, subject_count, min_data_time, max_data_time, finalized_at, report_pending)
-VALUES (?, ?, ?, ?, ?, 'final', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
-ON CONFLICT (space_id, dataset_id, partition_key) DO NOTHING`,
+			if p.Remote.Key != "" && p.Remote.SHA256 == "" {
+				return fmt.Errorf("分区 %s 的登记有远端对象键却没有 sha256，无法恢复", p.Key)
+			}
+			result, err := tx.ExecContext(ctx, restorePartition,
 				spaceID, datasetID, p.Key, nanos(p.Start), nanos(p.End), nanos(changed), nanos(p.ExportedAt),
-				p.FilePath, p.SHA256, p.ExportCount, int64(p.RowCount), int64(p.SubjectCount), nullNanos(p.MinDataTime), nullNanos(p.MaxDataTime), nanos(finalized))
+				p.FilePath, p.SHA256, p.ExportCount, int64(p.RowCount), int64(p.SubjectCount), nullNanos(p.MinDataTime), nullNanos(p.MaxDataTime), nanos(finalized),
+				p.Remote.Key, p.Remote.SHA256, p.Remote.ETag, nullNanos(p.Remote.UploadedAt), nullNanos(p.Remote.VerifiedAt), p.Remote.Error)
 			if err != nil {
 				return fmt.Errorf("恢复分区 %s: %w", p.Key, err)
 			}
@@ -405,4 +445,12 @@ const (
 	queryPartitions1 = `SELECT ` + partitionColumns + ` FROM partition_state WHERE space_id = ? AND dataset_id = ? ORDER BY partition_key`
 	queryPartitions2 = `SELECT ` + partitionColumns + ` FROM partition_state WHERE space_id = ? AND dataset_id = ? AND partition_key = ?`
 	queryPartitions3 = `SELECT ` + partitionColumns + ` FROM partition_state WHERE space_id = ? AND dataset_id = ? AND report_pending = 1 ORDER BY partition_key`
+	markExported     = `UPDATE partition_state SET status = 'exported', exported_at = ?, file_path = ?, file_sha256 = ?, export_count = export_count + 1, report_pending = 1,
+    remote_attempts = 0, remote_retry_at = NULL, remote_error = ''
+WHERE space_id = ? AND dataset_id = ? AND partition_key = ? AND status != 'final'`
+	restorePartition = `INSERT INTO partition_state (space_id, dataset_id, partition_key, range_start, range_end, status, last_changed_at, exported_at,
+    file_path, file_sha256, export_count, row_count, subject_count, min_data_time, max_data_time, finalized_at, report_pending,
+    remote_key, remote_sha256, remote_etag, remote_uploaded_at, remote_verified_at, remote_error)
+VALUES (?, ?, ?, ?, ?, 'final', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)
+ON CONFLICT (space_id, dataset_id, partition_key) DO NOTHING`
 )

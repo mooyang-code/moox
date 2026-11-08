@@ -62,6 +62,8 @@ message ApplySetupRsp {
   int32 spaces_created = 7;
   int32 spaces_unchanged = 8;
   repeated SetupExchangeKeyResult exchange_keys = 9;
+  // kept 是库里已有、与 moox.toml 不一致而以管理台为准保留（没有改写）的项：admin、tencent_cloud、space:<ID>。
+  repeated string kept = 10;
 }
 
 message GetSetupStatusReq {
@@ -77,9 +79,10 @@ message GetSetupStatusRsp {
   int32 users = 3;
   int32 secrets = 4;
   int32 missing = 6;
-  int32 conflicts = 7;
   int32 spaces = 8;
   repeated SetupExchangeKeyResult exchange_keys = 9;
+  // kept 同 ApplySetupRsp.kept。
+  repeated string kept = 10;
 }
 
 // 配置备份：CLI 用管理员密码派生的密钥加密整份 moox.toml 后上传，服务端只保存密文信封（解不开），
