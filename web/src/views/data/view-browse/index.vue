@@ -108,7 +108,7 @@
               <div class="query-actions">
                 <a-button size="small" type="primary" :loading="loading" @click="applyQueryControls">查询</a-button>
                 <a-button
-                  v-if="mode === 'time_series'"
+                  v-if="mode === 'time_series' && klineAvailable"
                   size="small"
                   type="outline"
                   :loading="klineLoading"
@@ -223,7 +223,12 @@
                   <a-table-column title="操作" :width="120" align="center" fixed="right">
                     <template #cell="{ record }">
                       <a-button type="text" size="mini" @click="openDetail(record)">查看</a-button>
-                      <a-button type="text" size="mini" :disabled="!record.rawKey?.subject_id" @click="openRowKline(record)"
+                      <a-button
+                        v-if="klineAvailable"
+                        type="text"
+                        size="mini"
+                        :disabled="!record.rawKey?.subject_id"
+                        @click="openRowKline(record)"
                         >K 线</a-button
                       >
                     </template>
@@ -675,6 +680,8 @@ const klineColumnNames = computed(() => {
   }
   return out;
 });
+// 有开高低收四列才能画 K 线（因子结果等 View 没有）：没有时不显示 K 线入口
+const klineAvailable = computed(() => ["open", "high", "low", "close"].every(name => klineColumnNames.value.includes(name)));
 const columnLabels = computed(() => {
   const labels = buildViewColumnLabels(viewColumns.value, datasetColumns.value, fields.value, activeView.value);
   for (const column of datasetColumns.value) {

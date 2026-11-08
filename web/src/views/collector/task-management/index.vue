@@ -13,7 +13,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import PageTitleTabs from "@/components/page-title-tabs/index.vue";
 import { useSpaceStore } from "@/store/modules/space";
@@ -38,7 +38,14 @@ const route = useRoute();
 const router = useRouter();
 // 当前 Tab 只由 URL 决定：点击时只改 URL，不先切换本地状态，避免新 Tab 在跳转完成前
 // 按旧 query 写回 URL 而取消这次跳转。
-const activeTab = computed<CollectorTaskTab>(() => normalizeTab(route.query.tab));
+// 从菜单进来（地址里没有任何参数）时默认看“运行状态”；带参数的链接（任务详情、筛选、别的页签）照原样打开。
+// 在 setup 里同步决定，首次渲染就是运行状态，不会先挂载“采集任务”页签白发请求；地址写回后以地址为准。
+// 只在进入页面时判断一次：之后在“采集任务”页签里清空筛选，地址也会变成没有参数，不能把用户切走。
+const landingTab = ref<CollectorTaskTab | null>(Object.keys(route.query).length ? null : "status");
+if (landingTab.value) {
+  void router.replace({ path: "/collector/tasks", query: { tab: landingTab.value } }).finally(() => (landingTab.value = null));
+}
+const activeTab = computed<CollectorTaskTab>(() => landingTab.value ?? normalizeTab(route.query.tab));
 
 // 运行状态页占满可视高度，由函数列表在表格内部滚动。
 const fillHeight = computed(() => activeTab.value === "status");
@@ -68,12 +75,6 @@ function onTabChange(value: string | number) {
   const rest = Object.fromEntries(Object.entries(route.query).filter(([key]) => key !== "tab"));
   void router.replace({ path: "/collector/tasks", query: tab === "tasks" ? rest : { ...rest, tab } });
 }
-
-// 从菜单进来（地址里没有任何参数）时默认看“运行状态”；带参数的链接（任务详情、筛选、别的页签）照原样打开。
-// 只在进入页面时判断一次：之后在“采集任务”页签里清空筛选，地址也会变成没有参数，不能把用户切走。
-onMounted(() => {
-  if (!Object.keys(route.query).length) void router.replace({ path: "/collector/tasks", query: { tab: "status" } });
-});
 
 // 切空间：各页签的参数都属于旧空间（任务、结果、作业），统一在这里清掉，只保留当前页签；页签自己只重置内存里的状态。
 const spaceStore = useSpaceStore();

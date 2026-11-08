@@ -16,7 +16,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import PageTitleTabs from "@/components/page-title-tabs/index.vue";
 import { useSpaceStore } from "@/store/modules/space";
@@ -37,7 +37,9 @@ const route = useRoute();
 const router = useRouter();
 const selectedSpaceId = computed(() => spaceStore.selectedSpaceId);
 // 页签和所选标签都在 URL 里（?tab=members&tag=）：刷新、后退、分享链接都能回到同一处
-const activeTab = computed<SubjectTab>(() => (route.query.tab === "members" ? "members" : "tags"));
+// 换空间时先同步切回“标签”页签（地址写回是异步的），免得成员页签拿新空间多读一轮再跳走
+const switchingTab = ref<SubjectTab | null>(null);
+const activeTab = computed<SubjectTab>(() => switchingTab.value ?? (route.query.tab === "members" ? "members" : "tags"));
 const selectedTagId = computed(() => (typeof route.query.tag === "string" ? route.query.tag : ""));
 
 function writeQuery(tab: SubjectTab, tagId: string) {
@@ -54,9 +56,16 @@ function openMembers(tagId: string) {
 }
 
 // 换空间：标签属于原来的空间，回到标签页签
-watch(selectedSpaceId, (next, previous) => {
-  if (previous && next !== previous && route.path === "/data/subjects") writeQuery("tags", "");
-});
+watch(
+  selectedSpaceId,
+  (next, previous) => {
+    if (!previous || next === previous || route.path !== "/data/subjects") return;
+    switchingTab.value = "tags";
+    const query = { ...route.query, tab: undefined, tag: undefined };
+    void router.replace({ path: route.path, query }).finally(() => (switchingTab.value = null));
+  },
+  { flush: "sync" }
+);
 </script>
 
 <style scoped>

@@ -27,7 +27,7 @@
               >
                 <a-option v-for="tab in resultTabs" :key="tab.taskId" :value="tab.taskId" :label="tab.title"
                   >{{ tab.title
-                  }}<span v-if="taskStateNote(tab.state)" class="result-task-note">{{ taskStateNote(tab.state) }}</span></a-option
+                  }}<span v-if="taskStateNote(tab.task)" class="result-task-note">{{ taskStateNote(tab.task) }}</span></a-option
                 >
               </a-select>
               <span class="result-count">
@@ -91,6 +91,7 @@
 </template>
 
 <script setup lang="ts">
+import { collectionTaskResultLabel } from "@/views/collector/collection-tasks/collection-task-params";
 import { useDisplayZone } from "@/hooks/useDisplayZone";
 import { formatInstant } from "@/utils/time-zone";
 import { computed, onActivated, onDeactivated, ref, watch } from "vue";
@@ -228,7 +229,7 @@ async function fetchAllTasks(spaceId: string) {
   }
 }
 
-async function load(options: { preserveSelection?: boolean; honorQuery?: boolean } = {}) {
+async function load() {
   const spaceId = selectedSpaceId.value;
   const sequence = ++loadSequence;
   if (!spaceId) {
@@ -259,14 +260,9 @@ async function load(options: { preserveSelection?: boolean; honorQuery?: boolean
     // 没有指定 resultTask 时，?dataset=&freq=（告警、存储节点等处跳进来）按结果数据集选任务
     const requestedTaskId =
       queryTaskId(route.query.resultTask) || taskIdForDataset(listTasks, route.query.dataset, route.query.freq);
-    const currentTaskIsOnPage = listTasks.some(task => task.task_id === activeTaskId.value);
-    const requestedTaskIsOnPage = listTasks.some(task => task.task_id === requestedTaskId);
-    const nextTaskId =
-      options.preserveSelection && currentTaskIsOnPage
-        ? activeTaskId.value
-        : options.honorQuery !== false && requestedTaskId && !requestedTaskIsOnPage
-          ? requestedTaskId
-          : selectTaskIdFromQuery(listTasks, options.honorQuery === false ? "" : requestedTaskId);
+    // 地址里指定的任务不在列表里（例如别处的深链接）时照样选它，由下面单独读详情确认；否则按列表选
+    const requestedInList = listTasks.some(task => task.task_id === requestedTaskId);
+    const nextTaskId = requestedTaskId && !requestedInList ? requestedTaskId : selectTaskIdFromQuery(listTasks, requestedTaskId);
     activeTaskId.value = nextTaskId;
     await keepResultSelection(nextTaskId);
     if (nextTaskId) {
@@ -354,9 +350,10 @@ function onTaskSelect(value: unknown) {
   onTaskChange(String(value ?? ""));
 }
 
-/** 下拉选项后附的状态文字：异常、准备中、待刷新；正常的不写。 */
-function taskStateNote(state: string) {
-  return ({ error: "异常", preparing: "准备中", stale: "待刷新" } as Record<string, string>)[state] ?? "";
+/** 下拉选项后附的状态文字：和采集任务列表同一套口径，只在“结果异常”“结果准备中”时写。 */
+function taskStateNote(task: CollectorTask) {
+  const label = collectionTaskResultLabel(task as Parameters<typeof collectionTaskResultLabel>[0]);
+  return label === "结果异常" ? "异常" : label === "结果准备中" ? "准备中" : "";
 }
 
 watch(

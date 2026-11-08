@@ -71,9 +71,7 @@ describe("collector task result page deep links", () => {
           "a-alert": { template: "<div class='alert'><slot /></div>" },
           "a-button": true,
           "a-empty": { template: "<div class='empty'><slot /><slot name='extra' /></div>" },
-          "a-pagination": true,
           "a-spin": { template: "<div><slot /></div>" },
-          "a-tab-pane": true,
           "a-tabs": { template: "<div><slot /></div>" },
           ViewBrowse: { template: "<div data-testid='view-browse' />" }
         }
@@ -97,9 +95,7 @@ describe("collector task result page deep links", () => {
           "a-alert": { template: "<div class='alert'><slot /></div>" },
           "a-button": true,
           "a-empty": { template: "<div class='empty'><slot /><slot name='extra' /></div>" },
-          "a-pagination": true,
           "a-spin": { template: "<div><slot /></div>" },
-          "a-tab-pane": true,
           "a-tabs": { template: "<div><slot /></div>" },
           ViewBrowse: { template: "<div data-testid='view-browse' />" }
         }
@@ -124,9 +120,7 @@ describe("collector task result page deep links", () => {
           "a-alert": true,
           "a-button": true,
           "a-empty": true,
-          "a-pagination": true,
           "a-spin": { template: "<div><slot /></div>" },
-          "a-tab-pane": true,
           "a-tabs": { template: "<div><slot /></div>" },
           ViewBrowse: { props: ["viewIds"], template: "<div data-testid='view-browse'>{{ viewIds.join(',') }}</div>" }
         }
@@ -163,6 +157,40 @@ describe("collector task result page deep links", () => {
     wrapper.unmount();
   });
 
+  it("?dataset=&freq= 按结果数据集选任务并写回 resultTask；任务超过一页时读完", async () => {
+    mocks.routeQuery = reactive({ tab: "results", dataset: "ds_5m", freq: "5m" });
+    mocks.getTaskList.mockReset().mockImplementation(async ({ page }: { page: { page: number } }) =>
+      page.page === 1
+        ? {
+            tasks: Array.from({ length: 100 }, (_, index) => ({
+              task_id: `t${index}`,
+              create_time: "2026-10-01T00:00:00Z",
+              result: { dataset_id: `ds_${index}` }
+            })),
+            page: { page: 1, size: 100, total: 101 }
+          }
+        : {
+            tasks: [
+              { task_id: "target", data_type: "kline", collect_params: { frequency: "5m" }, result: { dataset_id: "ds_5m" } }
+            ],
+            page: { page: 2, size: 100, total: 101 }
+          }
+    );
+    mocks.getTaskDetail.mockResolvedValue({
+      task: { task_id: "target", result: { dataset_id: "ds_5m", view_id: "v", status: "ready" } }
+    });
+    const wrapper = mount(TaskResultsPage, {
+      global: { stubs: { "a-alert": true, "a-empty": true, "a-spin": { template: "<div><slot /></div>" }, ViewBrowse: true } }
+    });
+    await flushPromises();
+    expect(mocks.getTaskList).toHaveBeenCalledTimes(2);
+    expect(mocks.routerReplace).toHaveBeenLastCalledWith({
+      path: "/collector/tasks",
+      query: expect.objectContaining({ tab: "results", resultTask: "target" })
+    });
+    wrapper.unmount();
+  });
+
   it("renders the local task list while the selected task detail is pending", async () => {
     mocks.routeQuery.resultTask = "known";
     const detail = deferred<{ task: { task_id: string; task_name: string } }>();
@@ -173,12 +201,10 @@ describe("collector task result page deep links", () => {
           "a-alert": true,
           "a-button": true,
           "a-empty": true,
-          "a-pagination": true,
           "a-spin": {
             props: ["loading"],
             template: '<div class="spin" :data-loading="String(loading)"><slot /></div>'
           },
-          "a-tab-pane": true,
           "a-tabs": { template: "<div><slot /></div>" },
           ViewBrowse: true
         }
@@ -206,9 +232,7 @@ describe("collector task result page deep links", () => {
           "a-alert": { template: "<div><slot /></div>" },
           "a-button": true,
           "a-empty": true,
-          "a-pagination": true,
           "a-spin": { template: "<div><slot /></div>" },
-          "a-tab-pane": true,
           "a-tabs": { template: "<div><slot /></div>" },
           ViewBrowse: { template: "<div data-testid='view-browse' />" }
         }
@@ -236,9 +260,7 @@ describe("collector task result page deep links", () => {
             template: '<button :disabled="disabled" @click="$emit(\'click\')"><slot /></button>'
           },
           "a-empty": true,
-          "a-pagination": true,
           "a-spin": { template: "<div><slot /></div>" },
-          "a-tab-pane": true,
           "a-tabs": { template: "<div><slot /></div>" },
           ViewBrowse: {
             name: "ViewBrowse",
@@ -276,9 +298,7 @@ describe("collector task result page deep links", () => {
           "a-alert": { template: "<div><slot /></div>" },
           "a-button": { emits: ["click"], template: "<button @click=\"$emit('click')\"><slot /></button>" },
           "a-empty": true,
-          "a-pagination": true,
           "a-spin": { template: "<div><slot /></div>" },
-          "a-tab-pane": true,
           "a-tabs": { template: "<div><slot /></div>" },
           ViewBrowse: {
             props: ["refreshKey"],
@@ -319,9 +339,7 @@ describe("collector task result page deep links", () => {
           "a-alert": { template: "<div><slot /></div>" },
           "a-button": { emits: ["click"], template: "<button @click=\"$emit('click')\"><slot /></button>" },
           "a-empty": true,
-          "a-pagination": true,
           "a-spin": { template: "<div><slot /></div>" },
-          "a-tab-pane": true,
           "a-tabs": { template: "<div><slot /></div>" },
           ViewBrowse: { template: '<div data-testid="view-browse">view-known</div>' }
         }
@@ -361,9 +379,7 @@ describe("collector task result page deep links", () => {
           "a-alert": { template: "<div><slot /></div>" },
           "a-button": { emits: ["click"], template: "<button @click=\"$emit('click')\"><slot /></button>" },
           "a-empty": true,
-          "a-pagination": true,
           "a-spin": { template: "<div><slot /></div>" },
-          "a-tab-pane": true,
           "a-tabs": { template: "<div><slot /></div>" },
           ViewBrowse: { template: '<div data-testid="view-browse">view-known</div>' }
         }
@@ -400,9 +416,7 @@ describe("collector task result page deep links", () => {
           "a-alert": { template: "<div><slot /></div>" },
           "a-button": { emits: ["click"], template: "<button @click=\"$emit('click')\"><slot /></button>" },
           "a-empty": true,
-          "a-pagination": true,
           "a-spin": { template: "<div><slot /></div>" },
-          "a-tab-pane": true,
           "a-tabs": { template: "<div><slot /></div>" },
           ViewBrowse: { template: '<div data-testid="view-browse">view-known</div>' }
         }
@@ -441,9 +455,7 @@ describe("collector task result page deep links", () => {
           "a-alert": { template: "<div><slot /></div>" },
           "a-button": { emits: ["click"], template: "<button @click=\"$emit('click')\"><slot /></button>" },
           "a-empty": true,
-          "a-pagination": true,
           "a-spin": { template: "<div><slot /></div>" },
-          "a-tab-pane": true,
           "a-tabs": { template: "<div><slot /></div>" },
           ViewBrowse: { template: '<div data-testid="view-browse">view-known</div>' }
         }
@@ -473,9 +485,7 @@ describe("collector task result page deep links", () => {
           "a-alert": true,
           "a-button": true,
           "a-empty": true,
-          "a-pagination": true,
           "a-spin": { template: "<div><slot /></div>" },
-          "a-tab-pane": true,
           "a-tabs": { template: "<div><slot /></div>" },
           ViewBrowse: { template: "<div data-testid='view-browse' />" }
         }
