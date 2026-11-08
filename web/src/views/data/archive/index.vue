@@ -116,7 +116,7 @@ import UnarchivedList from "./unarchived-list.vue";
 import WorkerStatus from "./worker-status.vue";
 
 /**
- * 数据采集 › 数据归档。状态都在 URL 里（任务详情、页签、筛选、页码、新建），不依赖 keepAlive；
+ * 数据采集 › 数据归档。状态都在 URL 里（任务详情、页签、筛选、页码、新建），不依赖页面缓存；
  * 读取失败显示失败，不显示“正常”；后台轮询带 silentError，错误由页面自己显示。
  */
 const route = useRoute();
