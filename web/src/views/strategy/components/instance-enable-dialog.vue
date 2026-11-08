@@ -49,14 +49,14 @@ import { computed, ref } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { getLogicalAccount, listTradingAccounts } from "@/api/trade";
 import type { LogicalAccount, TradingAccount } from "@/api/trade/types";
-import EnvMark from "@/views/trading/accounts/shared/env-mark.vue";
+import EnvMark from "@/components/trade-confirm/env-mark.vue";
 import {
   confirmTier,
   environmentLabel,
   logicalEnvironment,
   nameConfirmed,
   type Environment
-} from "@/views/trading/accounts/shared/environment";
+} from "@/components/trade-confirm/environment";
 import { TOGGLE_CANCELED_TIP, toggleInstance, type EnableTarget, type InstanceToggleHooks } from "./instance-toggle";
 
 const visible = ref(false);

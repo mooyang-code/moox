@@ -59,12 +59,6 @@ export function updateTradingAccount(req: UpdateTradingAccountReq, options: { si
   return callTrade<UpdateTradingAccountReq, AccountResponse>("console", "UpdateTradingAccount", req, options);
 }
 
-export function getTradingAccount(trading_account_id: string) {
-  return callTrade<{ trading_account_id: string }, AccountResponse>("console", "GetTradingAccount", {
-    trading_account_id
-  });
-}
-
 export function listTradingAccounts(req: ListTradingAccountsReq = {}, options: { silent?: boolean } = {}) {
   return callTrade<ListTradingAccountsReq, { ret_info: RetInfo; accounts: TradingAccount[]; page_result: PageResult }>(
     "console",

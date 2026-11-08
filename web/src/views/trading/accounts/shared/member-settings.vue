@@ -86,8 +86,8 @@ import { Message } from "@arco-design/web-vue";
 import { setLeverage, updateTradingAccount } from "@/api/trade";
 import type { TradingAccount } from "@/api/trade";
 import AccountInspectionPanel from "@/components/trade-inspection/account-inspection-panel.vue";
-import ConfirmDialog from "./confirm-dialog.vue";
-import { accountEnvironment } from "./environment";
+import ConfirmDialog from "@/components/trade-confirm/confirm-dialog.vue";
+import { accountEnvironment } from "@/components/trade-confirm/environment";
 import { fmtMoney } from "./format";
 import { loadExchangeSecrets, type ExchangeSecretOption } from "./exchange-secrets";
 import {

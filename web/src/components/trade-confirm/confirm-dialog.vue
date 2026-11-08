@@ -96,7 +96,7 @@ async function handleOk() {
 }
 </script>
 
-<style src="./accounts.css"></style>
+<style src="./trade-confirm.css"></style>
 <style scoped>
 .tx-confirm-block {
   margin-top: var(--moox-space-3);

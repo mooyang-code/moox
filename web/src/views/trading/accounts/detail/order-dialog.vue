@@ -85,10 +85,10 @@ import {
 import type { ExecutionCapabilities, LogicalAccount, SubmitOrderReq, TradableInstrument, TradingAccount } from "@/api/trade";
 import { createClientId } from "@/utils/client-id";
 import { createLatestRequestGuard } from "@/utils/latest-request";
-import EnvMark from "../shared/env-mark.vue";
+import EnvMark from "@/components/trade-confirm/env-mark.vue";
 import ZonedDatePicker from "@/components/zoned-date-picker/zoned-date-picker.vue";
 import { useDisplayZone } from "@/hooks/useDisplayZone";
-import { confirmTier, nameConfirmed, type Environment } from "../shared/environment";
+import { confirmTier, nameConfirmed, type Environment } from "@/components/trade-confirm/environment";
 import { instrumentName, marketLabel, marketOfInstrument } from "../shared/markets";
 import { instrumentRuleHint, orderRuleError } from "../shared/order-rules";
 import type { ActionTracker } from "./action-tracker";

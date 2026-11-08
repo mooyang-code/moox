@@ -125,9 +125,9 @@ import { addLogicalAccountMember, exchangeLabels, updateTradingAccount } from "@
 import type { LogicalAccount, TradingAccount } from "@/api/trade";
 import { createSubmitScope } from "@/utils/submit-scope";
 import { accountMapOf } from "./account-list";
-import ConfirmDialog from "./shared/confirm-dialog.vue";
-import EnvMark from "./shared/env-mark.vue";
-import { accountEnvironment, environmentLabel, type Environment } from "./shared/environment";
+import ConfirmDialog from "@/components/trade-confirm/confirm-dialog.vue";
+import EnvMark from "@/components/trade-confirm/env-mark.vue";
+import { accountEnvironment, environmentLabel, type Environment } from "@/components/trade-confirm/environment";
 import { fmtMoney } from "./shared/format";
 import { marketsText } from "./shared/markets";
 import MemberSettings from "./shared/member-settings.vue";

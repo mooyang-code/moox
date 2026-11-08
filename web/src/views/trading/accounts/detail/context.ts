@@ -1,6 +1,6 @@
 import type { ComputedRef, InjectionKey, Ref } from "vue";
 import type { LogicalAccount, LogicalAccountTarget, Order, TradingAccount } from "@/api/trade";
-import type { Environment } from "../shared/environment";
+import type { Environment } from "@/components/trade-confirm/environment";
 import type { PositionSnapshot } from "../shared/position-snapshot";
 import type { StrategyLink } from "../shared/strategy-link";
 import type { ActionTracker } from "./action-tracker";

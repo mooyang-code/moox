@@ -214,8 +214,8 @@ import {
 } from "@/api/trade/settings";
 import FundSettingsForm from "../../settings/fund-settings-form.vue";
 import OrderSettingsForm from "../../settings/order-settings-form.vue";
-import ConfirmDialog from "../shared/confirm-dialog.vue";
-import { accountEnvironment } from "../shared/environment";
+import ConfirmDialog from "@/components/trade-confirm/confirm-dialog.vue";
+import { accountEnvironment } from "@/components/trade-confirm/environment";
 import { fmtMoney } from "../shared/format";
 import { marketsText } from "../shared/markets";
 import { positionCount } from "../shared/position-snapshot";
