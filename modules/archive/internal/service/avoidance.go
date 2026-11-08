@@ -15,10 +15,12 @@ import (
 )
 
 const (
-	// avoidanceRefreshEvery 是避让规则的刷新间隔（距上次成功）；没成功过或上次有空间失败时每次维护都重试。
+	// avoidanceRefreshEvery 是避让规则的刷新间隔（距上次成功）；没成功过或上次有空间失败时隔 avoidanceRetryAfter 重试。
 	avoidanceRefreshEvery = 10 * time.Minute
 	// avoidanceReadBudget 是一次刷新读取全部空间的总时长上限（各空间并行）。
 	avoidanceReadBudget = 20 * time.Second
+	// avoidanceRetryAfter 是读取失败后至少隔多久再读：Collector 不可用时不让每分钟的维护都卡满读取上限。
+	avoidanceRetryAfter = 3 * time.Minute
 )
 
 // CollectorFrequencies 读取空间生效中的采集函数服务的频率（来自 CollectMgr.GetCollectorStatus）。
@@ -41,6 +43,8 @@ type avoidanceState struct {
 	lastSpaces string
 	// refreshing 防止上一轮刷新未结束时重入。
 	refreshing bool
+	// lastFailed 是最近一次读取失败的时间；成功后清零。
+	lastFailed time.Time
 }
 
 // avoidance 返回当前生效的避让规则快照（调用方不得修改）。
@@ -54,7 +58,8 @@ func (s *Service) avoidance() *schedule.Avoidance {
 	return s.avoid.current
 }
 
-// maybeRefreshAvoidance 距上次成功满 10 分钟、或有归档任务的空间变了（如新建了第一个任务）时刷新避让规则。
+// maybeRefreshAvoidance 距上次成功满 10 分钟、或有归档任务的空间变了（如新建了第一个任务）时刷新避让规则；
+// 上次读取失败时至少隔 3 分钟再读。
 func (s *Service) maybeRefreshAvoidance(ctx context.Context, now time.Time) error {
 	if s.collector == nil {
 		return nil
@@ -65,7 +70,8 @@ func (s *Service) maybeRefreshAvoidance(ctx context.Context, now time.Time) erro
 	}
 	key := strings.Join(spaces, ",")
 	s.avoid.mu.Lock()
-	due := !s.avoid.refreshing && (s.avoid.lastOK.IsZero() || key != s.avoid.lastSpaces || now.Sub(s.avoid.lastOK) >= avoidanceRefreshEvery)
+	due := !s.avoid.refreshing && (s.avoid.lastOK.IsZero() || key != s.avoid.lastSpaces || now.Sub(s.avoid.lastOK) >= avoidanceRefreshEvery) &&
+		(s.avoid.lastFailed.IsZero() || now.Sub(s.avoid.lastFailed) >= avoidanceRetryAfter)
 	if due {
 		s.avoid.refreshing = true
 	}
@@ -100,7 +106,7 @@ func (s *Service) taskSpaces(ctx context.Context) ([]string, error) {
 }
 
 // refreshAvoidance 并行读取给定空间的采集频率，重算避让规则。
-// 读取失败的空间沿用上次成功的结果（Basis 注明）；任一空间失败时返回错误，下次维护重试。
+// 读取失败的空间沿用上次成功的结果（Basis 注明）；任一空间失败时返回错误，3 分钟后重试。
 func (s *Service) refreshAvoidance(ctx context.Context, spaces []string, now time.Time) error {
 	seen := make(map[string]bool, len(spaces))
 	for _, space := range spaces {
@@ -155,9 +161,10 @@ func (s *Service) refreshAvoidance(ctx context.Context, spaces []string, now tim
 	}
 	s.avoid.current = &computed
 	if len(errs) > 0 {
+		s.avoid.lastFailed = now
 		return errors.Join(errs...)
 	}
-	s.avoid.lastOK, s.avoid.lastSpaces = now, strings.Join(spaces, ",")
+	s.avoid.lastOK, s.avoid.lastSpaces, s.avoid.lastFailed = now, strings.Join(spaces, ","), time.Time{}
 	return nil
 }
 

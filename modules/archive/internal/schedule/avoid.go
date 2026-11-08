@@ -54,6 +54,7 @@ type SpaceFrequencies struct {
 // ComputeAvoidance 由各空间的采集频率推出避让规则（纯函数）。spaces 只应包含有归档任务的空间。
 //   - 低于 1h 的频率取分钟数（不足 1 分钟按 1 分钟），N = 它们与 60 的最大公约数；没有时不限秒。
 //   - 有任何 ≥ 1h 的频率时加整点窗口 :58～:04。
+//   - 无法识别的频率按最保守的口径计入（每分钟触发、有整点窗口）；不足 1 分钟的频率在分钟内的其余触发不避让，Basis 注明。
 //   - 读取失败的空间沿用上一次成功的频率；从没成功过的空间按默认值（每分钟触发、有整点）计入。
 //   - 全部空间都从没成功过时整体使用默认值。
 func ComputeAvoidance(spaces []SpaceFrequencies, now time.Time) Avoidance {
@@ -88,16 +89,25 @@ func ComputeAvoidance(spaces []SpaceFrequencies, now time.Time) Avoidance {
 			parts = append(parts, fmt.Sprintf("%s：读取失败，按默认值", sp.SpaceID))
 			continue
 		}
-		freqs, minutes, hour := classifyFreqs(sp.Freqs)
-		for _, m := range minutes {
+		c := classifyFreqs(sp.Freqs)
+		for _, m := range c.minutes {
 			gcd, hasMinute = greatestCommonDivisor(gcd, m), true
 		}
-		hasHour = hasHour || hour
+		hasHour = hasHour || c.hasHour
 		part := sp.SpaceID + "："
-		if len(freqs) == 0 {
+		if len(c.display) == 0 && len(c.unknown) == 0 {
 			part += "没有生效的采集函数"
 		} else {
-			part += strings.Join(freqs, "、")
+			part += strings.Join(append(append([]string(nil), c.display...), c.unknown...), "、")
+		}
+		if len(c.unknown) > 0 {
+			// 认不出的频率不知道何时触发：按最保守的口径计入（每分钟触发，并且有整点窗口）。
+			gcd, hasMinute, hasHour = 1, true, true
+			part += fmt.Sprintf("（有无法识别的频率 %s，按最保守处理）", strings.Join(c.unknown, "、"))
+		}
+		for _, sub := range c.subMinute {
+			// 规则只避开整分钟的触发时刻；不足 1 分钟的频率在分钟内的其他触发（如 30s 的第 30 秒）不在避让范围内。
+			part += fmt.Sprintf("（%s 的%s触发不在避让范围内）", sub.name, sub.label)
 		}
 		if sp.Failed {
 			part += fmt.Sprintf("（读取失败，沿用 %s 的结果）", sp.FetchedAt.UTC().Format("01-02 15:04 UTC"))
@@ -126,8 +136,22 @@ func ComputeAvoidance(spaces []SpaceFrequencies, now time.Time) Avoidance {
 	return out
 }
 
-// classifyFreqs 去重并按时长排序，返回显示用的频率、低于 1h 的分钟数，以及是否有 ≥ 1h 的频率。无法解析的频率忽略。
-func classifyFreqs(raw []string) (display []string, minutes []int, hasHour bool) {
+// freqClasses 是一个空间的频率分类结果。
+type freqClasses struct {
+	// display 是能识别的频率（去重、按时长排序）；minutes 是其中低于 1h 的分钟数（不足 1 分钟按 1）；hasHour 表示有 ≥ 1h 的频率。
+	display []string
+	minutes []int
+	hasHour bool
+	// unknown 是无法识别的频率（去重、按出现顺序）。
+	unknown []string
+	// subMinute 是不足 1 分钟的频率与它在分钟内除第 0 秒外的触发秒（如 30s → "第 30 秒"）。
+	subMinute []subMinuteFreq
+}
+
+type subMinuteFreq struct{ name, label string }
+
+// classifyFreqs 去重并按时长排序，把频率分成能识别的与无法识别的。
+func classifyFreqs(raw []string) (out freqClasses) {
 	type item struct {
 		name string
 		d    time.Duration
@@ -135,32 +159,45 @@ func classifyFreqs(raw []string) (display []string, minutes []int, hasHour bool)
 	seen := map[string]bool{}
 	var items []item
 	for _, value := range raw {
-		f, err := frequency.Parse(strings.TrimSpace(value))
-		if err != nil || seen[string(f)] {
+		value = strings.TrimSpace(value)
+		f, err := frequency.Parse(value)
+		var d time.Duration
+		if err == nil {
+			d = f.NominalDuration()
+		}
+		if err != nil || d <= 0 {
+			if value != "" && !seen["?"+value] {
+				seen["?"+value] = true
+				out.unknown = append(out.unknown, value)
+			}
+			continue
+		}
+		if seen[string(f)] {
 			continue
 		}
 		seen[string(f)] = true
-		d := f.NominalDuration()
-		if d <= 0 {
-			continue
-		}
 		items = append(items, item{string(f), d})
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].d < items[j].d })
 	for _, it := range items {
-		display = append(display, it.name)
+		out.display = append(out.display, it.name)
 		if it.d >= time.Hour {
-			hasHour = true
+			out.hasHour = true
 			continue
 		}
 		// 不足 1 分钟的频率（如 30s）按每分钟触发计。
 		m := int(it.d / time.Minute)
 		if m < 1 {
 			m = 1
+			var seconds []string
+			for s := it.d; s < time.Minute; s += it.d {
+				seconds = append(seconds, strconv.Itoa(int(s/time.Second)))
+			}
+			out.subMinute = append(out.subMinute, subMinuteFreq{it.name, "第 " + strings.Join(seconds, "、") + " 秒"})
 		}
-		minutes = append(minutes, m)
+		out.minutes = append(out.minutes, m)
 	}
-	return display, minutes, hasHour
+	return out
 }
 
 func greatestCommonDivisor(a, b int) int {

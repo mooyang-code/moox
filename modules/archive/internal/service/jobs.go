@@ -95,11 +95,9 @@ func (s *Service) Maintain(ctx context.Context) error {
 			s.mu.Unlock()
 		}
 	}
+	// 避让刷新失败只记警告：有沿用上次结果与默认值兜底，不算维护失败。
 	if err := s.maybeRefreshAvoidance(ctx, now); err != nil {
 		log.WarnContextf(ctx, "archive maintain: refresh avoidance: %v", err)
-		if firstErr == nil {
-			firstErr = err
-		}
 	}
 	return firstErr
 }

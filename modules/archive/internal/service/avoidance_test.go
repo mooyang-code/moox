@@ -105,24 +105,42 @@ func TestAvoidanceRefreshReadsOnlySpacesWithTasks(t *testing.T) {
 		t.Fatalf("overview avoidance = %v", overview.GetAvoidance())
 	}
 
-	// stockcn 读取失败：沿用上次结果并注明，返回错误；下次维护（不等 10 分钟）重试。
+	// stockcn 读取失败：沿用上次结果并注明；维护本身不算失败（避让有沿用与默认值兜底）。
 	collector.mu.Lock()
 	collector.fail["stockcn"] = true
 	collector.freqs["crypto"] = []string{"1m"}
 	collector.mu.Unlock()
 	h.now = h.now.Add(10 * time.Minute)
-	if err := h.svc.Maintain(ctx); err == nil || !strings.Contains(err.Error(), "stockcn") {
-		t.Fatalf("部分失败应返回错误: %v", err)
+	if err := h.svc.Maintain(ctx); err != nil {
+		t.Fatalf("避让读取失败不应让维护失败: %v", err)
+	}
+	if err := h.svc.refreshAvoidance(ctx, []string{"crypto", "stockcn"}, h.now); err == nil || !strings.Contains(err.Error(), "stockcn") {
+		t.Fatalf("部分失败时刷新本身应返回错误: %v", err)
 	}
 	a = h.svc.avoidance()
 	if a.EveryMinutes != 1 || a.HourQuiet != nil || !strings.Contains(a.Basis, "stockcn：5m（读取失败，沿用") {
 		t.Fatalf("avoidance = %+v", a)
 	}
 	collector.takeCalls()
+	// 失败后 3 分钟内不再读（Collector 不可用时不让每分钟的维护都卡满读取上限），满 3 分钟重试。
+	h.now = h.now.Add(2 * time.Minute)
+	_ = h.svc.Maintain(ctx)
+	if calls := collector.takeCalls(); len(calls) != 0 {
+		t.Fatalf("失败后 3 分钟内不应重试: %v", calls)
+	}
 	h.now = h.now.Add(time.Minute)
 	_ = h.svc.Maintain(ctx)
 	if calls := collector.takeCalls(); len(calls) != 2 {
-		t.Fatalf("失败后下次维护应重试: %v", calls)
+		t.Fatalf("失败满 3 分钟应重试: %v", calls)
+	}
+	// 恢复后成功一次就清掉失败时间：之后按 10 分钟刷新。
+	collector.mu.Lock()
+	collector.fail["stockcn"] = false
+	collector.mu.Unlock()
+	h.now = h.now.Add(3 * time.Minute)
+	_ = h.svc.Maintain(ctx)
+	if calls := collector.takeCalls(); len(calls) != 2 || strings.Contains(h.svc.avoidance().Basis, "读取失败") {
+		t.Fatalf("恢复后应重读并去掉失败说明: %v %s", calls, h.svc.avoidance().Basis)
 	}
 }
 
@@ -140,8 +158,8 @@ func TestAvoidanceDefaultsUntilFirstSuccessAndRespectsTheBudget(t *testing.T) {
 	h.svc.collector = collector
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	if err := h.svc.Maintain(ctx); err == nil {
-		t.Fatal("读取超时应返回错误")
+	if err := h.svc.Maintain(ctx); err != nil {
+		t.Fatalf("读取超时不应让维护失败: %v", err)
 	}
 	if a := h.svc.avoidance(); a.EveryMinutes != 1 || a.HourQuiet == nil || !strings.Contains(a.Basis, "未取到采集频率，使用默认值") {
 		t.Fatalf("从没成功过应使用默认值: %+v", a)
