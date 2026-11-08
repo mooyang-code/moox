@@ -49,7 +49,7 @@ const directory = (
 export const systemMenu = [
   menu("01", "0", "/home", "home", "home", "home/home", 1, { affix: true, svgIcon: "home", icon: "" }),
 
-  // 最常用的“采集任务”排第一、作为目录落地页，数据归档紧跟在它后面；数据源、数据对象、基础字段排在后面。
+  // 最常用的“采集任务”排第一、作为目录落地页；数据源、数据对象、基础字段排在后面。
   directory("03", "0", "/collector/tasks", "compute-collector", "compute-collector", 2, {
     svgIcon: "functions",
     icon: ""
@@ -58,8 +58,6 @@ export const systemMenu = [
   menu("0303", "03", "/collector/tasks", "collector-tasks", "collector-tasks", "collector/task-management/index", 1, {
     reuseOnQuery: true
   }),
-  // 任务详情、页签、筛选都在 query 里，query 变化时复用页面。
-  menu("0309", "03", "/data/archive", "data-archive", "data-archive", "data/archive/index", 2, { reuseOnQuery: true }),
   menu("0306", "03", "/data/sources", "data-sources", "data-sources", "data/sources/index", 3),
   // 页签和所选标签在 query 里：query 变化时复用页面
   menu("0307", "03", "/data/subjects", "data-subjects", "data-subjects", "data/subjects/index", 4, { reuseOnQuery: true }),
@@ -97,8 +95,14 @@ export const systemMenu = [
     reuseOnQuery: true
   }),
 
-  // 事件中心是一级菜单，排在交易之后、运维之前。
-  directory("055", "0", "/events/subscriptions", "events", "events", 6, { svgIcon: "form", icon: "" }),
+  // 数据归档是一级菜单，排在交易之后、事件中心之前。
+  directory("058", "0", "/archive/tasks", "archive", "archive", 6, { svgIcon: "folder-menu", icon: "" }),
+  // 任务详情、页签、筛选都在 query 里，query 变化时复用页面。
+  menu("05801", "058", "/archive/tasks", "archive-tasks", "archive-tasks", "archive/tasks/index", 1, { reuseOnQuery: true }),
+  menu("05802", "058", "/archive/storage", "archive-storage", "archive-storage", "archive/storage/index", 2),
+
+  // 事件中心是一级菜单，排在数据归档之后、运维之前。
+  directory("055", "0", "/events/subscriptions", "events", "events", 7, { svgIcon: "form", icon: "" }),
   menu("05501", "055", "/events/subscriptions", "events-subscriptions", "events-subscriptions", "events/subscriptions/index", 1),
   // 筛选和打开的记录在 query 里（告警会直接带失败筛选跳进来），query 变化时复用页面。
   menu("05502", "055", "/events/executions", "events-executions", "events-executions", "events/executions/index", 2, {
@@ -106,7 +110,7 @@ export const systemMenu = [
   }),
   menu("05503", "055", "/events/delist", "events-delist", "events-delist", "events/delist/index", 3),
 
-  directory("06", "0", "/ops/monitor", "ops", "ops", 7, { svgIcon: "defend", icon: "" }),
+  directory("06", "0", "/ops/monitor", "ops", "ops", 8, { svgIcon: "defend", icon: "" }),
   // 展开状态、页签、筛选、定位的主机都在 query 里：query 变化时复用页面（菜单与 route.ts 两处都写）
   menu("0607", "06", "/ops/monitor", "ops-monitor", "ops-monitor", "ops/monitor/index", 1, { reuseOnQuery: true }),
   menu("0601", "06", "/ops/hosts", "ops-hosts", "ops-hosts", "ops/host-workbench/index", 3, { reuseOnQuery: true }),
@@ -116,7 +120,7 @@ export const systemMenu = [
   menu("0606", "06", "/ops/storage/nodes", "ops-storage", "ops-storage", "ops/storage/nodes", 4),
   menu("0608", "06", "/ops/activity", "ops-activity", "ops-activity", "ops/activity/index", 5),
 
-  directory("07", "0", "/settings/spaces", "settings", "settings", 8, { svgIcon: "set", icon: "" }),
+  directory("07", "0", "/settings/spaces", "settings", "settings", 9, { svgIcon: "set", icon: "" }),
   menu("0701", "07", "/settings/spaces", "settings-spaces", "settings-spaces", "settings/spaces/index", 1),
   menu("0702", "07", "/settings/secrets", "settings-secrets", "settings-secrets", "settings/secrets/index", 2)
 ];

@@ -29,7 +29,13 @@ import {
 
 describe("文案", () => {
   it("运行类型、状态、健康等级、分区状态", () => {
-    expect(["scheduled", "manual", "tick", "range"].map(kindLabel)).toEqual(["复核", "立即运行", "到点拉取", "补拉区间"]);
+    expect(["scheduled", "manual", "tick", "range", "import"].map(kindLabel)).toEqual([
+      "复核",
+      "立即运行",
+      "到点拉取",
+      "补拉区间",
+      "导入"
+    ]);
     expect(["queued", "running", "succeeded", "failed", "canceled"].map(runStatusLabel)).toEqual([
       "排队中",
       "运行中",
@@ -41,7 +47,7 @@ describe("文案", () => {
     expect(["open", "exported", "final"].map(partitionStatusLabel)).toEqual(["暂存中", "已导出", "已定稿"]);
   });
 
-  it("远端副本（批 2 之后）五种状态", () => {
+  it("远端副本五种状态", () => {
     expect(remoteStateLabel("verified")).toBe("已校验");
     expect(remoteStateLabel("pending")).toBe("待上传");
     expect(remoteStateLabel("pending", "old/key")).toBe("待上传（远端只有旧版本）");

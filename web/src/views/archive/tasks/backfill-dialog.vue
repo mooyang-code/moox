@@ -23,7 +23,7 @@ import { backfillArchiveRange, prepareArchiveTask, type ArchiveTask } from "@/ap
 import ZonedRangePicker from "@/components/zoned-date-picker/zoned-range-picker.vue";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import { toInstantMs } from "@/utils/time-zone";
-import { backfillRangeError } from "./archive-model";
+import { backfillRangeError } from "../shared/archive-model";
 
 /** 补拉区间：按空间时区选起止，下界是今天 − 线上保留期 + 1 天（Prepare 给出，和后端补拉校验同口径），上界是现在。 */
 const props = defineProps<{ visible: boolean; task: ArchiveTask | null; zone: string }>();
@@ -51,7 +51,7 @@ watch(
     prepareError.value = "";
     const request = guard.begin();
     try {
-      const rsp = await prepareArchiveTask(props.task.dataset_id, { silentError: true });
+      const rsp = await prepareArchiveTask(props.task.dataset_id, "", { silentError: true });
       if (request.isLatest()) earliestMs.value = toInstantMs(rsp.earliest_backfill_from);
     } catch (cause) {
       if (request.isLatest()) prepareError.value = cause instanceof Error && cause.message ? cause.message : "请稍后重试";

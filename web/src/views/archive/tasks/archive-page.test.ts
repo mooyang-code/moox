@@ -14,7 +14,9 @@ const api = vi.hoisted(() => ({
   listArchiveTasks: vi.fn(),
   listDatasets: vi.fn(),
   deleteArchiveTask: vi.fn(async () => ({})),
-  invalidateArchiveCoverage: vi.fn()
+  invalidateArchiveCoverage: vi.fn(),
+  listDeployments: vi.fn(),
+  listAllDeploymentHosts: vi.fn()
 }));
 vi.mock("vue-router", () => ({
   useRoute: () => ctx.route,
@@ -26,11 +28,15 @@ vi.mock("@/api/archive", async importOriginal => ({
   listArchiveTasks: api.listArchiveTasks,
   deleteArchiveTask: api.deleteArchiveTask
 }));
-vi.mock("./archive-coverage", async importOriginal => ({
-  ...(await importOriginal<typeof import("./archive-coverage")>()),
+vi.mock("../shared/archive-coverage", async importOriginal => ({
+  ...(await importOriginal<typeof import("../shared/archive-coverage")>()),
   invalidateArchiveCoverage: api.invalidateArchiveCoverage
 }));
 vi.mock("@/api/storage/metadata", () => ({ listDatasets: api.listDatasets }));
+vi.mock("@/api/admin/sysdeploy", () => ({
+  listDeployments: api.listDeployments,
+  listAllDeploymentHosts: api.listAllDeploymentHosts
+}));
 vi.mock("@/store/modules/space", () => ({
   useSpaceStore: () => ({ selectedSpaceId: "crypto", selectedSpace: { timezone: "UTC" } })
 }));
@@ -70,6 +76,12 @@ beforeEach(() => {
   api.getArchiveOverview.mockReset().mockResolvedValue({ worker: { worker_id: "archive-worker@factor", active: true } });
   api.listArchiveTasks.mockReset().mockResolvedValue({ tasks: [task()] });
   api.listDatasets.mockReset().mockResolvedValue({ datasets: [], page_result: {} });
+  api.listDeployments
+    .mockReset()
+    .mockResolvedValue({ deployments: [{ host_id: "factor", component_id: "archive-worker", status: "enabled" }] });
+  api.listAllDeploymentHosts
+    .mockReset()
+    .mockResolvedValue([{ host_id: "factor", label: "因子机", address: "192.168.0.103", status: "enabled" }]);
 });
 afterEach(() => {
   wrapper?.unmount();
@@ -77,12 +89,36 @@ afterEach(() => {
 });
 
 async function mountPage() {
-  wrapper = mount(ArchivePage, { global: { plugins: [ArcoVue], stubs: { "icon-plus": true } }, attachTo: document.body });
+  wrapper = mount(ArchivePage, {
+    global: {
+      plugins: [ArcoVue],
+      stubs: { "icon-plus": true, "router-link": { props: ["to"], template: '<a :href="to"><slot /></a>' } }
+    },
+    attachTo: document.body
+  });
   await flushPromises();
   return wrapper;
 }
 
-describe("数据归档页", () => {
+describe("归档任务页", () => {
+  it("顶部一行：在线与否、所在主机、磁盘不足，链到归档存储", async () => {
+    api.getArchiveOverview.mockResolvedValue({
+      worker: {
+        worker_id: "archive-worker@factor",
+        active: true,
+        disk_total_bytes: "100",
+        disk_free_bytes: "1",
+        min_free_bytes: "10"
+      }
+    });
+    const page = await mountPage();
+    const line = page.find(".worker-line").text();
+    expect(line).toContain("归档执行器 在线");
+    expect(line).toContain("所在主机 因子机（192.168.0.103）");
+    expect(line).toContain("磁盘空间不足");
+    expect(page.find('.worker-line a[href="/archive/storage"]').exists()).toBe(true);
+  });
+
   it("首次读取失败：显示失败和重试，不出现“正常”，也不显示空表", async () => {
     api.getArchiveOverview.mockRejectedValue(new Error("connect ECONNREFUSED"));
     const page = await mountPage();

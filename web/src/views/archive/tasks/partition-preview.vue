@@ -38,7 +38,7 @@ import { getArchivePartition, type ArchivePartition } from "@/api/archive";
 import { StaleSpaceRequestError } from "@/api/admin/stale-space";
 import { RequestGate } from "@/utils/request-gate";
 import { formatInstant } from "@/utils/time-zone";
-import { parsePreviewCsv } from "./archive-model";
+import { parsePreviewCsv } from "../shared/archive-model";
 
 /** 分区预览（?partition=）：列名和前 20 行；CSV 解析失败就显示原文。失败只在这里显示。 */
 const props = defineProps<{ datasetId: string; partitionKey: string; zone: string }>();

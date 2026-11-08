@@ -50,6 +50,9 @@
         <a-descriptions-item label="线上保留 / DataNode"
           >{{ formatRetention(task.retention) }} / {{ task.data_node_id || "—" }}</a-descriptions-item
         >
+        <a-descriptions-item label="归档目录">
+          <span class="mono">{{ taskDir(task) }}</span>
+        </a-descriptions-item>
         <a-descriptions-item label="创建"
           >{{ task.creator || "—" }} · {{ formatInstant(task.created_at, zone) }}</a-descriptions-item
         >
@@ -84,10 +87,7 @@
         </a-table>
       </div>
 
-      <a-tabs
-        :active-key="query.tab"
-        @change="(key: string | number) => emit('update:query', { tab: String(key) === 'partitions' ? 'partitions' : 'runs' })"
-      >
+      <a-tabs :active-key="query.tab" @change="(key: string | number) => emit('update:query', { tab: tabOf(key) })">
         <a-tab-pane key="runs" title="运行记录">
           <TaskRuns
             v-if="query.tab === 'runs'"
@@ -105,11 +105,22 @@
         <a-tab-pane key="partitions" title="分区">
           <TaskPartitions
             v-if="query.tab === 'partitions'"
-            :dataset-id="task.dataset_id || ''"
+            :task="task"
+            :space-id="spaceId"
             :query="query"
             :zone="zone"
             :remote-enabled="remoteEnabled"
             @update:query="patch => emit('update:query', patch)"
+          />
+        </a-tab-pane>
+        <a-tab-pane key="recent" title="最新数据">
+          <TaskRecent
+            v-if="query.tab === 'recent'"
+            :space-id="spaceId"
+            :dataset-id="task.dataset_id || ''"
+            :subject="query.subject"
+            :zone="zone"
+            @update:subject="subject => emit('update:query', { subject })"
           />
         </a-tab-pane>
       </a-tabs>
@@ -122,14 +133,24 @@ import { Message, Modal } from "@arco-design/web-vue";
 import { updateArchiveTask, type ArchiveTask } from "@/api/archive";
 import { formatInstant } from "@/utils/time-zone";
 import { formatRetention } from "@/utils/retention";
-import { healthLabel, healthTone, intervalText, isDailyFreq, partitionUnitText, type ArchiveQuery } from "./archive-model";
+import {
+  healthLabel,
+  healthTone,
+  intervalText,
+  isDailyFreq,
+  partitionUnitText,
+  type ArchiveQuery,
+  type DetailTab
+} from "../shared/archive-model";
 import TaskPartitions from "./task-partitions.vue";
+import TaskRecent from "./task-recent.vue";
 import TaskRuns from "./task-runs.vue";
 
 /** 任务详情（?task=）：数据来自任务表那一行，轮询刷新任务表时一并更新；页签、筛选、页码都在 URL 里。 */
 const props = defineProps<{
   task: ArchiveTask | undefined;
   name: string;
+  spaceId: string;
   query: ArchiveQuery;
   zone: string;
   nowMs: number;
@@ -148,6 +169,13 @@ const emit = defineEmits<{
   remove: [task: ArchiveTask];
   changed: [];
 }>();
+
+const tabOf = (key: string | number): DetailTab =>
+  String(key) === "partitions" ? "partitions" : String(key) === "recent" ? "recent" : "runs";
+
+/** 任务目录（相对归档根目录）：<空间>/<用途>/<目录名> */
+const taskDir = (task: ArchiveTask) =>
+  task.dir_name ? [task.space_id || props.spaceId, task.purpose, task.dir_name].filter(Boolean).join("/") : "—";
 
 function confirmClearUnrecoverable() {
   const id = props.task?.dataset_id || "";

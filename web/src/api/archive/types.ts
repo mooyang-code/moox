@@ -3,18 +3,18 @@
  * - 字段都可选：protojson 省略零值；
  * - uint64 经 protojson 是字符串，写成 number | string，显示前用 toNum 转换；uint32 是数字；
  * - 时间是 RFC3339（UTC）字符串，空串表示没有。
- * - 标“批 2 之后才有”的字段在对象存储（远端副本）上线前不出现。
  */
 import type { Page, PageResult } from "@/api/storage/types";
 
 export type { Page, PageResult };
 
-export type ArchiveRunKind = "scheduled" | "manual" | "tick" | "range";
+/** import：moox-cli 导入本地 CSV */
+export type ArchiveRunKind = "scheduled" | "manual" | "tick" | "range" | "import";
 export type ArchiveRunStatus = "queued" | "running" | "succeeded" | "failed" | "canceled";
 export type ArchiveTaskStatus = "enabled" | "paused";
 export type ArchiveHealth = "ok" | "warning" | "error" | "paused";
 export type ArchivePartitionStatus = "open" | "exported" | "final";
-/** 批 2 之后才有 */
+/** off：没启用对象存储；none：还没有远端副本；verified：远端是当前版本且已校验 */
 export type ArchiveRemoteState = "off" | "none" | "pending" | "verified" | "failed";
 
 /** 超出线上保留期、无法补齐的区间 */
@@ -47,7 +47,6 @@ export interface ArchiveRun {
   rows_changed?: number | string;
   partitions_exported?: number;
   partitions_finalized?: number;
-  /** 批 2 之后才有 */
   partitions_uploaded?: number;
   unrecoverable?: UnrecoverableRange[];
   message?: string;
@@ -87,10 +86,12 @@ export interface ArchiveTask {
   last_run?: ArchiveRun;
   unrecoverable?: UnrecoverableRange[];
   blocked_reason?: string;
-  /** 批 2 之后才有 */
   remote_verified_count?: number;
-  /** 批 2 之后才有 */
   remote_pending_count?: number;
+  /** 用途：collect（采集结果）、factor（因子结果）、data（其他） */
+  purpose?: string;
+  /** 归档目录名，空间内唯一，建好后不改；分区路径 <空间>/<用途>/<目录名>/<年>/<文件> */
+  dir_name?: string;
 }
 
 export interface ArchivePartition {
@@ -117,22 +118,24 @@ export interface ArchivePartition {
   exported_at?: string;
   finalized_at?: string;
   last_run_id?: string;
-  /** 批 2 之后才有 */
   remote_state?: ArchiveRemoteState;
-  /** 批 2 之后才有 */
   remote_key?: string;
-  /** 批 2 之后才有 */
+  remote_sha256?: string;
   remote_verified_at?: string;
-  /** 批 2 之后才有 */
   remote_error?: string;
 }
 
-/** 批 2 之后才有：worker 报告的对象存储配置 */
+/** worker 报告的对象存储配置；endpoint 为空表示没启用 */
 export interface ArchiveObjectStore {
   endpoint?: string;
   bucket?: string;
   prefix?: string;
   storage_class?: string;
+  url_style?: string;
+  /** 最近一次探测失败的原因，空表示正常 */
+  probe_error?: string;
+  /** 连续探测失败的起始时刻 */
+  unavailable_since?: string;
 }
 
 export interface ArchiveWorkerInfo {
@@ -140,8 +143,14 @@ export interface ArchiveWorkerInfo {
   instance_id?: string;
   version?: string;
   root_dir?: string;
+  /** 磁盘总量（statfs Blocks） */
   disk_total_bytes?: number | string;
+  /** 可用量（statfs Bavail），worker 按它和 min_free_bytes 判断是否暂停领取新运行 */
   disk_free_bytes?: number | string;
+  /** 已用量（Blocks − Bfree）；已用 + 可用小于总量，差额是 root 保留空间 */
+  disk_used_bytes?: number | string;
+  /** 可用量下限（worker 配置） */
+  min_free_bytes?: number | string;
   staging_bytes?: number | string;
   maintaining?: boolean;
   pacing_json?: string;
@@ -150,8 +159,22 @@ export interface ArchiveWorkerInfo {
   last_heartbeat_at?: string;
   /** 租约未过期 */
   active?: boolean;
-  /** 批 2 之后才有 */
   object_store?: ArchiveObjectStore;
+}
+
+/**
+ * 避开采集触发时刻的规则，由 archive-mgr 按各空间生效中的采集频率推出。
+ * 触发时刻是分钟数为 every_minutes 倍数的第 0 秒，[触发 − before_seconds, 触发 + after_seconds) 不发请求；every_minutes 为 0 表示不限秒。
+ * hour_quiet_from / hour_quiet_until（"MM:SS"）是每小时不发请求的区间，都为空表示不避让整点。computed_at 为空表示还在用启动默认值。
+ */
+export interface AvoidanceRules {
+  every_minutes?: number;
+  before_seconds?: number;
+  after_seconds?: number;
+  hour_quiet_from?: string;
+  hour_quiet_until?: string;
+  basis?: string;
+  computed_at?: string;
 }
 
 export interface GetArchiveOverviewRsp {
@@ -163,6 +186,7 @@ export interface GetArchiveOverviewRsp {
   enabled_task_count?: number;
   queued_run_count?: number;
   alerts?: string[];
+  avoidance?: AvoidanceRules;
 }
 
 export interface ListArchiveTasksRsp {
@@ -178,6 +202,11 @@ export interface PrepareArchiveTaskRsp {
   data_node_id?: string;
   recommended_pull_every_bars?: number;
   exists?: boolean;
+  purpose?: string;
+  /** 按“交易所 + 品种 + 类型 + 频率”生成的建议目录名 */
+  suggested_dir_name?: string;
+  /** 请求里的目录名（为空时是建议值）已被空间内其他任务使用 */
+  dir_name_conflict?: boolean;
 }
 
 export interface PreviewArchiveScheduleReq {
@@ -199,6 +228,8 @@ export interface CreateArchiveTaskReq {
   /** 空串表示不指定 */
   backfill_from: string;
   paused: boolean;
+  /** 空表示取建议值 */
+  dir_name: string;
 }
 
 export interface UpdateArchiveTaskReq {
@@ -255,4 +286,19 @@ export interface ListArchivePartitionsRsp {
 
 export interface GetArchivePartitionRsp {
   partition?: ArchivePartition;
+}
+
+/** 最新数据的一列：data_time、subject_id、series_tag 在前，值列按数据集说明（dataset.json）的顺序在后 */
+export interface ArchiveRecentColumn {
+  name: string;
+  /** double、int、string、bool、time、bytes */
+  type: string;
+}
+
+export interface ArchiveRecentRowsRsp {
+  columns?: ArchiveRecentColumn[];
+  /** 单元格按归档 CSV 的规则格式化（时间 RFC3339 UTC、布尔 true/false），缺失值为 null，与空字符串不同 */
+  rows?: (string | null)[][];
+  /** 扫描水位：暂存库已从 Storage 完整读到的时刻；之后可能还有行没读到 */
+  staged_until?: string;
 }

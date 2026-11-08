@@ -38,6 +38,27 @@
         </a-alert>
 
         <a-form-item
+          v-if="mode === 'create'"
+          label="目录名"
+          required
+          :validate-status="dirError ? 'error' : undefined"
+          :help="dirError || undefined"
+        >
+          <a-input v-model="form.dirName" :max-length="64" :disabled="!prepared" placeholder="选好数据集后给出建议值" />
+          <template v-if="!dirError" #extra>
+            <div>建好后不能改。{{ dirCheck.checking ? "检查中…" : "" }}</div>
+            <div class="mono path">{{ pathPreview }}</div>
+          </template>
+        </a-form-item>
+        <a-form-item v-else label="目录名">
+          <span class="mono">{{ task?.dir_name || "—" }}</span>
+          <template #extra>
+            <div>建好后不能改</div>
+            <div class="mono path">{{ pathPreview }}</div>
+          </template>
+        </a-form-item>
+
+        <a-form-item
           label="拉取间隔（每收盘多少根拉取一次）"
           :validate-status="pullError ? 'error' : undefined"
           :help="pullError || undefined"
@@ -95,7 +116,7 @@
             <div v-for="text in preview.partition_export_estimates" :key="text">{{ exportEstimateText(text, zone) }}</div>
           </div>
         </template>
-        <div class="sub fixed">每分钟第 25 秒检查；每小时 :58～:04 不拉取，这段时间的边界顺延到 :04:25。</div>
+        <div class="sub fixed">{{ avoidanceText || "避让时段读取中" }}</div>
         <div class="sub">到点拉取只读新收盘的几根，补采由复核兜底。</div>
       </aside>
     </div>
@@ -111,6 +132,7 @@ import {
   previewArchiveSchedule,
   updateArchiveTask,
   type ArchiveTask,
+  type AvoidanceRules,
   type PrepareArchiveTaskRsp,
   type PreviewArchiveScheduleRsp
 } from "@/api/archive";
@@ -120,18 +142,23 @@ import { createLatestRequestGuard } from "@/utils/latest-request";
 import { formatRetention } from "@/utils/retention";
 import { formatInstant, toInstantMs } from "@/utils/time-zone";
 import {
+  avoidanceScheduleText,
   backfillFromError,
+  dirNameError,
   durationText,
   exportEstimateText,
   intervalText,
   isDailyFreq,
+  dirNameOwner,
+  partitionPathPreview,
   pullEveryBarsError,
   showBackfillField
-} from "./archive-model";
+} from "../shared/archive-model";
 
 /**
  * 新建 / 编辑归档任务。新建：选数据集后 Prepare 给出推荐的拉取间隔与最早回补起点（默认就填它）；
  * 编辑：数据集不可改，回补起点只在还没有成功的复核时可改。右侧按数据集与间隔防抖预览接下来的拉取与复核。
+ * 目录名：新建时默认填建议值，可改；改过的值防抖后用 Prepare 带 dir_name 检查是否被占用，冲突时标红；建好后不能改。
  */
 const props = defineProps<{
   visible: boolean;
@@ -142,6 +169,11 @@ const props = defineProps<{
   datasets: Dataset[];
   tasks: ArchiveTask[];
   zone: string;
+  spaceId: string;
+  /** 当前的避让规则（概览接口），右侧说明按它写 */
+  avoidance?: AvoidanceRules;
+  /** 执行器的归档根目录；有就把路径预览写成绝对路径 */
+  rootDir?: string;
 }>();
 const emit = defineEmits<{
   "update:visible": [visible: boolean];
@@ -155,8 +187,13 @@ const form = reactive({
   datasetId: "",
   pullEveryBars: 1 as number | undefined,
   backfillFrom: null as number | null,
-  enabled: true
+  enabled: true,
+  dirName: ""
 });
+/** 目录名的占用检查：name 是检查过的目录名，conflict 是它的结果 */
+const dirCheck = reactive({ name: "", conflict: false, checking: false, error: "" });
+const dirGuard = createLatestRequestGuard();
+let dirTimer: ReturnType<typeof setTimeout> | undefined;
 const prepared = ref<PrepareArchiveTaskRsp | null>(null);
 const prepareError = ref("");
 const preview = ref<PreviewArchiveScheduleRsp | null>(null);
@@ -178,6 +215,38 @@ const backfillChanged = computed(() => props.mode === "create" || form.backfillF
 const backfillError = computed(() =>
   backfillFromError(backfillChanged.value ? form.backfillFrom : null, earliestMs.value, Date.now(), props.zone)
 );
+const dirError = computed(() => {
+  if (props.mode !== "create" || !prepared.value) return "";
+  const local = dirNameError(form.dirName);
+  if (local) return local;
+  if (dirCheck.name === form.dirName && dirCheck.conflict) {
+    // 冲突的任务在当前空间的任务表里时写出它的数据集；找不到（例如任务表还没刷新）时泛指
+    const owner = dirNameOwner(props.tasks, prepared.value?.purpose || "", form.dirName);
+    const ownerId = owner?.dataset_id || "";
+    const name = props.datasets.find(item => item.dataset_id === ownerId)?.name || ownerId;
+    return name ? `目录名已被「${name}」使用，请改一个` : "目录名已被这个空间的其他任务使用，请改一个";
+  }
+  if (dirCheck.name === form.dirName && dirCheck.error) return `检查目录名失败：${dirCheck.error}`;
+  return "";
+});
+const pathPreview = computed(() =>
+  props.mode === "edit"
+    ? partitionPathPreview(
+        props.task?.space_id || props.spaceId,
+        props.task?.purpose || "",
+        props.task?.dir_name || "",
+        props.task?.partition_unit,
+        props.rootDir
+      )
+    : partitionPathPreview(
+        props.spaceId,
+        prepared.value?.purpose || "",
+        form.dirName,
+        prepared.value?.partition_unit,
+        props.rootDir
+      )
+);
+const avoidanceText = computed(() => avoidanceScheduleText(props.avoidance));
 
 watch(
   () => props.visible,
@@ -193,11 +262,12 @@ watch(
         datasetId: props.task.dataset_id || "",
         pullEveryBars: props.task.pull_every_bars || 1,
         backfillFrom: originalBackfill.value,
-        enabled: true
+        enabled: true,
+        dirName: props.task.dir_name || ""
       });
       void prepare(props.task.dataset_id || "", false);
     } else {
-      Object.assign(form, { datasetId: props.presetDatasetId, pullEveryBars: 1, backfillFrom: null, enabled: true });
+      Object.assign(form, { datasetId: props.presetDatasetId, pullEveryBars: 1, backfillFrom: null, enabled: true, dirName: "" });
       if (props.presetDatasetId) void prepare(props.presetDatasetId, true);
     }
   },
@@ -213,17 +283,57 @@ async function prepare(datasetId: string, fill: boolean) {
   const request = prepareGuard.begin();
   prepared.value = null;
   prepareError.value = "";
+  resetDirCheck();
   if (!datasetId) return;
   try {
-    const rsp = await prepareArchiveTask(datasetId, { silentError: true });
+    const rsp = await prepareArchiveTask(datasetId, "", { silentError: true });
     if (!request.isLatest()) return;
     prepared.value = rsp;
     if (fill) {
       form.pullEveryBars = rsp.recommended_pull_every_bars || 1;
       form.backfillFrom = toInstantMs(rsp.earliest_backfill_from);
+      // 建议值的占用情况已经在这次 Prepare 里
+      form.dirName = rsp.suggested_dir_name || "";
+      Object.assign(dirCheck, { name: form.dirName, conflict: Boolean(rsp.dir_name_conflict), error: "" });
     }
   } catch (cause) {
     if (request.isLatest()) prepareError.value = cause instanceof Error && cause.message ? cause.message : "请稍后重试";
+  }
+}
+
+function resetDirCheck() {
+  if (dirTimer) clearTimeout(dirTimer);
+  dirGuard.invalidate();
+  Object.assign(dirCheck, { name: "", conflict: false, checking: false, error: "" });
+}
+
+/** 改目录名后防抖 400ms 检查占用；不合规的不发请求（后端会当参数错误）；只更新检查结果，不动表单其他字段。 */
+watch(() => form.dirName, onDirNameChange);
+function onDirNameChange() {
+  if (props.mode !== "create") return;
+  if (dirTimer) clearTimeout(dirTimer);
+  dirGuard.invalidate();
+  dirCheck.checking = false;
+  const name = form.dirName;
+  if (!form.datasetId || dirNameError(name) || name === dirCheck.name) return;
+  dirCheck.checking = true;
+  dirTimer = setTimeout(() => void checkDirName(form.datasetId, name), 400);
+}
+
+async function checkDirName(datasetId: string, name: string) {
+  const request = dirGuard.begin();
+  try {
+    const rsp = await prepareArchiveTask(datasetId, name, { silentError: true });
+    if (request.isLatest()) Object.assign(dirCheck, { name, conflict: Boolean(rsp.dir_name_conflict), error: "" });
+  } catch (cause) {
+    if (request.isLatest())
+      Object.assign(dirCheck, {
+        name,
+        conflict: false,
+        error: cause instanceof Error && cause.message ? cause.message : "请稍后重试"
+      });
+  } finally {
+    if (request.isLatest()) dirCheck.checking = false;
   }
 }
 
@@ -236,7 +346,10 @@ watch([currentDatasetId, () => form.pullEveryBars, () => props.visible], () => {
   if (!props.visible || !currentDatasetId.value) return;
   previewTimer = setTimeout(() => void loadPreview(), 400);
 });
-onBeforeUnmount(() => previewTimer && clearTimeout(previewTimer));
+onBeforeUnmount(() => {
+  if (previewTimer) clearTimeout(previewTimer);
+  if (dirTimer) clearTimeout(dirTimer);
+});
 
 async function loadPreview() {
   const request = previewGuard.begin();
@@ -263,6 +376,17 @@ async function submit() {
     Message.warning(form.datasetId ? "这个数据集已有归档任务" : "请选择数据集");
     return;
   }
+  if (props.mode === "create") {
+    // 改过的目录名还没检查完、或上次检查失败：不等防抖，立即检查一次再判断
+    if (prepared.value && !dirNameError(form.dirName) && (dirCheck.name !== form.dirName || dirCheck.error)) {
+      if (dirTimer) clearTimeout(dirTimer);
+      await checkDirName(form.datasetId, form.dirName);
+    }
+    if (dirError.value || !prepared.value) {
+      Message.warning(dirError.value || "数据集信息还没读到");
+      return;
+    }
+  }
   if (pullError.value || backfillError.value) {
     Message.warning(pullError.value || backfillError.value);
     return;
@@ -274,7 +398,8 @@ async function submit() {
         dataset_id: form.datasetId,
         pull_every_bars: Number(form.pullEveryBars) || 1,
         backfill_from: iso(form.backfillFrom),
-        paused: !form.enabled
+        paused: !form.enabled,
+        dir_name: form.dirName
       });
       Message.success("归档任务已创建");
       emit("update:visible", false);
@@ -359,5 +484,13 @@ h4 {
 
 .is-bad {
   color: rgb(var(--red-6));
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.path {
+  word-break: break-all;
 }
 </style>

@@ -61,11 +61,11 @@ export function coverageFor(data: ArchiveCoverageData | null, datasetId?: string
     return {
       text: `已归档 · ${healthLabel(task.health)}`,
       tone: task.health === "ok" ? "muted" : healthTone(task.health),
-      link: `/data/archive?task=${encodeURIComponent(datasetId)}`
+      link: `/archive/tasks?task=${encodeURIComponent(datasetId)}`
     };
   }
   return data.archivable.has(datasetId)
-    ? { text: "未归档", tone: "warn", link: `/data/archive?create=${encodeURIComponent(datasetId)}` }
+    ? { text: "未归档", tone: "warn", link: `/archive/tasks?create=${encodeURIComponent(datasetId)}` }
     : null;
 }
 

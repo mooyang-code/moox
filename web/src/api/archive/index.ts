@@ -3,6 +3,7 @@ import { callControl, reportControlError } from "@/api/admin/http";
 import type * as T from "./types";
 
 export type * from "./types";
+export * from "./raw";
 
 /**
  * ArchiveMgr 的调用都经 Console 的 /api/admin/archive/<方法>。
@@ -22,8 +23,13 @@ export const getArchiveOverview = (config?: AxiosRequestConfig) =>
 export const listArchiveTasks = (page: T.Page, config?: AxiosRequestConfig) =>
   call<{ page: T.Page }, T.ListArchiveTasksRsp>("ListArchiveTasks", { page }, config);
 
-export const prepareArchiveTask = (datasetId: string, config?: AxiosRequestConfig) =>
-  call<{ dataset_id: string }, T.PrepareArchiveTaskRsp>("PrepareArchiveTask", { dataset_id: datasetId }, config);
+/** dirName 为空时检查建议的目录名；不为空时检查它是否已被占用（不合规的目录名返回参数错误）。 */
+export const prepareArchiveTask = (datasetId: string, dirName = "", config?: AxiosRequestConfig) =>
+  call<{ dataset_id: string; dir_name?: string }, T.PrepareArchiveTaskRsp>(
+    "PrepareArchiveTask",
+    dirName ? { dataset_id: datasetId, dir_name: dirName } : { dataset_id: datasetId },
+    config
+  );
 
 export const previewArchiveSchedule = (req: T.PreviewArchiveScheduleReq, config?: AxiosRequestConfig) =>
   call<T.PreviewArchiveScheduleReq, T.PreviewArchiveScheduleRsp>("PreviewArchiveSchedule", req, config);
