@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { nextTick, reactive } from "vue";
 
 const api = vi.hoisted(() => ({
+  getInstance: vi.fn(),
   getReplay: vi.fn(),
   listReplays: vi.fn(),
   listReplayBars: vi.fn(),
@@ -18,6 +19,7 @@ const api = vi.hoisted(() => ({
   space: null as null | { selectedSpaceId: string; selectedSpace?: { timezone: string } }
 }));
 vi.mock("@/api/strategy", () => ({
+  getInstance: api.getInstance,
   getReplay: api.getReplay,
   listReplays: api.listReplays,
   listReplayBars: api.listReplayBars,
@@ -215,6 +217,7 @@ describe("strategy replay page", () => {
     nav.async = false;
     nav.history.length = 0;
     for (const fn of [
+      api.getInstance,
       api.getReplay,
       api.listReplays,
       api.listReplayBars,
@@ -604,6 +607,27 @@ describe("strategy replay page", () => {
     expect(section.text()).toContain("只覆盖当前已加载的周期表当前页");
     expect(section.text()).toContain("漂移起点，系数置为起始比例");
     expect(wrapper.text()).toContain("模拟曲线按 funding_rate 列计资金费、未计强平");
+  });
+
+  it("从实例发起时读回实例引用的定义，表单据此判断是不是策略池；读不到时按不是池处理", async () => {
+    nav.route = reactive({
+      name: "strategy-tasks",
+      query: { tab: "replay", create: "1", instance_id: "i1", factor_tasks: "swap=ftask_b" }
+    });
+    api.listReplays.mockResolvedValue({ items: [], page: { total: 0 } });
+    api.getInstance.mockResolvedValue({ instance_id: "i1", strategy_id: "s2" });
+    const wrapper = mountPage();
+    await flushPromises();
+    const vm = wrapper.vm as any;
+    expect(api.getInstance).toHaveBeenCalledWith("i1", { silent: true });
+    expect(vm.form.instance_id).toBe("i1");
+    expect(vm.form.instance_strategy_id).toBe("s2");
+
+    api.getInstance.mockReset();
+    api.getInstance.mockRejectedValue(new Error("实例不存在"));
+    const failed = mountPage();
+    await flushPromises();
+    expect((failed.vm as any).form.instance_strategy_id).toBe("");
   });
 
   it("单策略回放不显示池明细", async () => {
@@ -1459,6 +1483,7 @@ describe("strategy replay page URL state and create drawer", () => {
     nav.async = false;
     nav.history.length = 0;
     for (const fn of [
+      api.getInstance,
       api.getReplay,
       api.listReplays,
       api.listReplayBars,

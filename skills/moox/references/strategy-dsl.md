@@ -78,7 +78,7 @@ rules:
 
 ```yaml
 name: 双策略轮动
-bar: 1h                                     # 必须写，成员的 bar 要一致
+bar: 1h                                     # 必须写；成员写了 bar 的要与池一致
 strategy_pool:
   members:
     - {id: a, strategy: strategy_xxx}       # id 是 snake_case；strategy 是已有策略的 ID
@@ -95,7 +95,7 @@ strategy_pool:
 portfolio: {leverage: 1, max_weight: 0.1}
 ```
 
-- 现货、永续成员必须显式写 `market`；股票策略不写 `market`，池绑定 `equity` 任务时按股票成员处理（股票与现货、永续成员不能混用，股票池只做多、`leverage ≤ 1`，停牌不清算）。成员不能是池、不能用 `factor_params`、`bar` 与池一致；池不写 `market`、`universe`、`factor_params`。
+- 现货、永续成员必须显式写 `market`；股票策略不写 `market`，池绑定 `equity` 任务时按股票成员处理（股票与现货、永续成员不能混用，股票池只做多、`leverage ≤ 1`，停牌不清算）。成员不能是池、不能用 `factor_params`、不能写 `sources` 与 `market.reference`，写了 `bar` 的要与池一致（这些保存池定义时就检查）；没写 `market` 的现货、永续成员保存时放行，启用时拒绝。池不写 `market`、`universe`、`factor_params`。
 - 组合约束（按成员汇总的分配比例，要求每个成员单方向：规则全部做多或全部做空）：
   ```yaml
   strategy_pool:
@@ -109,7 +109,7 @@ portfolio: {leverage: 1, max_weight: 0.1}
       bands:
         - {min: -0.1, max: 0.3, adjust: auto, pivot: 1.0}   # adjust：reduce_larger / raise_smaller / auto（auto 必须写 pivot）
         - {when_gross_below: 1.0, min: 0, max: 0, adjust: raise_smaller}
-    gross: {min: 1.0, max: 1.8}             # 总敞口区间；第一根不放大；max 不超过 portfolio.leverage
+    gross: {min: 1.0, max: 1.8}             # 总敞口区间（min、max 至少写一个）；第一根不放大；min、max 都不超过 portfolio.leverage
   ```
   超出区间按超出方向修正：净敞口高于 `max` 时 `reduce_larger` 缩多头、`raise_smaller` 放大空头；低于 `min` 时反过来。三者只改合成用的比例，步长仍按约束之前的比例算。
 - 漂移分配（`method: drift`，要求每个成员单方向；不能写 `timing`、`step`、`rotation`）：分配系数随成员持仓的名义价值漂移，再按两侧各自的规则拉回 `ratios` 的侧内构成：
@@ -152,7 +152,7 @@ portfolio: {leverage: 1, max_weight: 0.1}
 | `portfolio.max_weight` | 组合级单币上限，同一个币的现货、永续**合计**（绝对值之和，“现货多 + 永续空”的对冲也按绝对值之和截断）；两边都不为零时按比例缩小，只有一边时取上限，超出部分留现金 |
 | `portfolio.min_universe` | rank 规则进入 filter 的可用标的少于它则整期跳过 |
 | `portfolio.max_missing` | 任一规则缺数占比超过它则整期跳过，默认 0.2 |
-| `portfolio.limits` | `{long_max, short_max, overflow: {to}}`：单标的多头、空头上限（占权益，同一标的各市场同方向合计），在规则相加（池合成）之后、`max_weight` 之前执行；超出部分转给 `to` 指向的规则（池里是成员）本期同方向的其他标的，按它的权重比例分，最多三轮，剩下的留现金；不写 `overflow` 时留现金 |
+| `portfolio.limits` | `{long_max, short_max, overflow: {to}}`：单标的多头、空头上限（占权益，同一标的各市场同方向合计），在规则相加（池合成）之后、`max_weight` 之前执行；超出部分转给 `to` 指向的规则（池里是成员）本期同方向的其他标的，按它的权重比例分，最多三轮，剩下的留现金；已截到上限的标的、冻结标的不作为去向，池里本期比例为 0 的成员没有可分的标的；不写 `overflow` 时留现金 |
 
 ## 2. 规则类型
 
@@ -177,7 +177,7 @@ portfolio: {leverage: 1, max_weight: 0.1}
   weight: {total: 1, method: equal, cap: 0.05}   # method: equal | rank；cap 是规则内单标的上限
 ```
 
-- 保存时要求 `cap × 选中数量 ≥ total`（预算分得完；`top`/`bottom` 写比例时跳过这项检查，分不完的留现金）。`select.top` 写成大于标的数的值就等于全选。
+- 保存时要求 `cap × 选中数量 ≥ total`（预算分得完；写了 `then` 时选中数量取 `then` 的个数；个数要到运行时才知道的写法跳过这项检查，即 `then` 写比例，或没写 `then` 而 `top`/`bottom` 写比例，分不完的留现金）。`select.top` 写成大于标的数的值就等于全选。
 - `select` 的扩展：`top: 0.1`（(0, 1) 是比例，分母是通过 filter 且分数有效的样本数）配 `count_round: floor | ceil | round`、`count_min`；`range: [10, 13]` 名次闭区间（与 top/bottom、buffer 互斥）；`group: {by: 列, max: 3}` 或 `{by: 列, quotas: [2, 1], rest: 1}` 分组名额（分组值 NaN 的不入选）；`then: {score: "表达式", top: 5}` 在第一段结果上二次排序（与 buffer、hold 互斥；`top`、`bottom` 也可以写 (0, 1) 的比例，分母是第一段选中且分数有效的个数，配 `count_round`、`count_min`）。
 - `holding: {bars, offsets}` 分批换仓，与 `buffer` 互斥；`anchor: "<RFC3339 的 bar_start>"`（A 股可写交易日期）只改相位。日历换仓写 `holding: {calendar: trading_days | week | month, every: 5（仅 trading_days）, days: [1, -1], at: first | last}`，与 bars/offsets 互斥；建仓 bar 没有 ok 决策时在之后第一根 ok bar 补建。`filter_after` 只剔除不补位，剔除的权重留现金。
 - `hold: {entry, exit, max_bars, cooldown_bars}` 进出场持有：持有中 exit 为真、不满足 filter、持满 max_bars、止损、缺数即出场（stop 优先），空位按名次从 entry 为真且 exit 不为真的候选里补，目标数取 `select` 换算的个数（持有多于目标不裁减）。持有标的只缺 score、entry 的列时不出场。与 buffer、holding.bars/offsets、then、range、filter_after 互斥；可与 `holding.calendar`（只能一个 days）同写，只在建仓 bar 判进出场。
@@ -327,7 +327,8 @@ stop:
 | 现象 | 原因 | 处理 |
 | --- | --- | --- |
 | 保存即拒绝，提示未知字段 | 解析严格，拼错键名或写了不存在的字段 | 按本文字段名核对 |
-| 池定义被拒，提示成员不存在或不能进池 | 成员没写 `market`、是池、用了 `factor_params`，或 `bar` 与池不一致 | 先修好成员策略再引用 |
+| 池定义保存被拒，提示成员不存在或不能进池 | 成员是池、用了 `factor_params`、写了 `sources` 或 `market.reference`，或 `bar` 与池不一致 | 先修好成员策略再引用 |
+| 池实例启用被拒，提示成员没有显式写 market | 现货、永续成员必须写 `market`；只有池绑定 `equity` 任务时，成员按股票成员处理、可以不写 | 给成员策略补上 `market` |
 | 提示 `cap × 选中数量 < total` | 预算分不完 | 调大 `cap` 或 `select.top`，或调小 `total` |
 | 提示使用了 `max_age_bars` 必须写 `allow_empty: true` | 只保留新标的的规则经常没有候选，不写会让整期守门跳过 | 在这条规则上写 `allow_empty: true` |
 | 提示互斥（hold 与 buffer / then / range / filter_after / holding.bars，range 与 top、buffer，then 与 buffer，calendar 与 bars） | 这些写法语义冲突 | 按提示二选一 |
