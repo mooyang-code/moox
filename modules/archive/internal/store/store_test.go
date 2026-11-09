@@ -346,6 +346,26 @@ func TestImportCoexistsWithQueuedRunsButTaskRunsOneAtATime(t *testing.T) {
 	}
 }
 
+// 同一次领取里，同一任务只领计划时刻更早的那条（不限 DataNode 名额时也一样）。
+func TestClaimRunsTakesOneRunPerTaskWithinOneClaim(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	if _, err := s.CreateTask(ctx, task("crypto", "ds1")); err != nil {
+		t.Fatal(err)
+	}
+	manual, err := s.CreateRun(ctx, "crypto", "ds1", RunSpec{Kind: KindManual}, t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateRun(ctx, "crypto", "ds1", RunSpec{Kind: KindImport, ImportFile: "imp_0123456789abcdef01234567/import.csv"}, t0.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w1", FreeSlots: 3, Now: t0, LeaseTTL: time.Minute})
+	if err != nil || len(claimed) != 1 || claimed[0].Run.RunID != manual.RunID {
+		t.Fatalf("claimed = %+v err=%v", claimed, err)
+	}
+}
+
 // 同一次领取里，排在前面的 import 不计入 DataNode 占用：上限 1 时后面的普通运行仍能领到。
 func TestClaimRunsImportDoesNotConsumeDataNodeSlotWithinOneClaim(t *testing.T) {
 	s := openTest(t)
