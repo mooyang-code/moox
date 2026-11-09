@@ -75,7 +75,7 @@
                         : rule.type === "tranche"
                           ? `批次持仓（${rule.subStrategies} 个子策略）`
                           : rule.type
-                  }}
+                  }}{{ rule.market ? ` · 只用${RULE_MARKET_LABELS[rule.market]}` : "" }}
                 </div></a-descriptions-item
               >
             </a-descriptions>
@@ -105,6 +105,7 @@ import TrialPanel from "@/views/strategy/components/strategy-trial-panel.vue";
 import { instancesLink, replayLink } from "@/views/strategy/links";
 import {
   POOL_REPLAY_DISABLED_TEXT,
+  RULE_MARKET_LABELS,
   describePool,
   mixedMarketTemplate,
   parseDSL,
