@@ -42,9 +42,7 @@
         <a-space class="drawer-actions" wrap>
           <a-button type="primary" @click="emit('results', instance.instance_id)">查看运行结果</a-button>
           <a-button @click="emit('openDetail', instance.instance_id)">打开完整详情</a-button>
-          <a-tooltip :content="POOL_REPLAY_DISABLED_TEXT" :disabled="!isPool">
-            <a-button :disabled="isPool" @click="emit('replay', instance)">按实例会话回放</a-button>
-          </a-tooltip>
+          <a-button @click="emit('replay', instance)">按实例会话回放</a-button>
           <a-button :loading="loading" @click="load">刷新</a-button>
         </a-space>
         <div class="muted">当前目标与历史结果在「运行结果」查看；启停可在列表「更多」菜单或完整详情中操作。</div>
@@ -55,7 +53,6 @@
 
 <script setup lang="ts">
 import FactorTaskLinks from "@/views/strategy/components/factor-task-links.vue";
-import { POOL_REPLAY_DISABLED_TEXT, isPoolStrategy } from "@/views/strategy/dsl";
 import { useLogicalAccount } from "@/views/strategy/components/use-logical-account";
 import { computed, ref, watch } from "vue";
 import { StaleSpaceRequestError } from "@/api/admin/stale-space";
@@ -74,10 +71,6 @@ const props = defineProps<{ instanceId: string; strategies: Strategy[] }>();
 const emit = defineEmits<{ close: []; openDetail: [string]; results: [string]; replay: [StrategyInstance] }>();
 
 const instance = ref<StrategyInstance | null>(null);
-// 研究回放不支持策略池：回放入口禁用
-const isPool = computed(() =>
-  isPoolStrategy(props.strategies.find(item => item.strategy_id === instance.value?.strategy_id)?.dsl_yaml)
-);
 const { account: logicalAccount, error: logicalAccountError } = useLogicalAccount(
   computed(() => instance.value?.logical_account_id)
 );

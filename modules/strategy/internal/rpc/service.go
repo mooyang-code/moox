@@ -39,6 +39,8 @@ type Resolver interface {
 	LoadLatest(ctx context.Context, spaceID string, resolved input.Resolved, program *dsl.Program, now time.Time) (input.Loaded, error)
 	// ReplayWindow 校验并截断回放区间，返回截断后的终点与各市场校验所用的活动索引代次（市场 → 代次）。
 	ReplayWindow(ctx context.Context, spaceID string, resolved input.Resolved, program *dsl.Program, start, end, now time.Time) (time.Time, map[string]string, error)
+	// PoolReplayWindow 是策略池回放的区间校验：按每个成员各自的回看要求校验起点、截断终点，返回值同 ReplayWindow。
+	PoolReplayWindow(ctx context.Context, spaceID string, pooled input.PoolResolved, start, end, now time.Time) (time.Time, map[string]string, error)
 }
 
 // Owner 是 Trade 组合账户的会话所有权接口。

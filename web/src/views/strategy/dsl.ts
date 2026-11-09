@@ -174,7 +174,7 @@ export const RULE_MARKET_LABELS: Record<string, string> = { spot: "现货", swap
 /** 策略池的预览：成员、分配方式、择时与步长。 */
 export interface DSLPoolPreview {
   memberIds: string[];
-  /** fixed、rotation，或写错的原文；没写为空串。 */
+  /** fixed、rotation、drift，或写错的原文；没写为空串。 */
   method: string;
   /** 轮动取前几名；fixed 或没写为 0。 */
   top: number;
@@ -182,6 +182,10 @@ export interface DSLPoolPreview {
   timingWindow: number;
   /** 步长上限的原文；没写为空串。 */
   step: string;
+  /** drift 的漂移起点（allocation.start 或 allocation.initial.at 的原文）；没写时不出现。 */
+  driftStart?: string;
+  /** 写了的组合约束与条件转移、波动冻结（说明文字，书写顺序固定）；都没写时不出现。 */
+  extras?: string[];
 }
 
 export interface DSLPreview {
@@ -308,10 +312,10 @@ function inspectPool(value: Record<string, any>, diagnostics: DSLDiagnostic[]): 
   const method = typeof allocation.method === "string" ? allocation.method : "";
   let top = 0;
   if (!method) {
-    report("strategy_pool.allocation.method 必须写 fixed 或 rotation");
-  } else if (method === "fixed") {
+    report("strategy_pool.allocation.method 必须写 fixed、rotation 或 drift");
+  } else if (method === "fixed" || method === "drift") {
     const ratios = allocation.ratios && typeof allocation.ratios === "object" ? allocation.ratios : null;
-    if (!ratios) report("allocation.method 是 fixed，需要写 ratios（成员 id → 比例）");
+    if (!ratios) report(`allocation.method 是 ${method}，需要写 ratios（成员 id → 比例）`);
     else for (const id of memberIds) if (!(id in ratios)) report(`allocation.ratios 缺少成员 ${id} 的比例（不分配请写 0）`);
   } else if (method === "rotation") {
     const factors = allocation.rotation?.factors;
@@ -327,29 +331,78 @@ function inspectPool(value: Record<string, any>, diagnostics: DSLDiagnostic[]): 
       top = 0;
     }
   } else {
-    report("strategy_pool.allocation.method 只能是 fixed 或 rotation");
+    report("strategy_pool.allocation.method 只能是 fixed、rotation 或 drift");
   }
+  inspectPoolOptions(pool, allocation, method, report);
   const timingWindow = Number(pool.timing?.window);
+  const driftStart = allocation.start ?? allocation.initial?.at;
+  const extras = [
+    allocation.switch !== undefined && "条件转移",
+    pool.exposure !== undefined && "净敞口区间",
+    pool.gross !== undefined && "总杠杆区间",
+    pool.freeze !== undefined && "波动冻结"
+  ].filter((item): item is string => Boolean(item));
   return {
     memberIds,
     method,
     top,
     timingWindow: Number.isInteger(timingWindow) && timingWindow > 0 ? timingWindow : 0,
-    step: pool.step === undefined || pool.step === null ? "" : String(pool.step)
+    step: pool.step === undefined || pool.step === null ? "" : String(pool.step),
+    ...(method === "drift" && driftStart !== undefined && driftStart !== null ? { driftStart: String(driftStart) } : {}),
+    ...(extras.length ? { extras } : {})
   };
 }
 
-/** 策略池的一句话说明：3 个成员，轮动（前 1 名），择时 24 根，步长 0.2。 */
+const poolRebalanceModes = ["none", "every_bar", "periodic", "threshold", "both"];
+
+/** drift 与组合约束的本地互斥预检；数值范围、时刻是否落在 bar 起点等由服务端校验。 */
+function inspectPoolOptions(
+  pool: Record<string, any>,
+  allocation: Record<string, any>,
+  method: string,
+  report: (message: string) => void
+) {
+  if (method === "drift") {
+    const conflicts = [
+      pool.timing !== undefined && "timing",
+      pool.step !== undefined && "step",
+      allocation.rotation !== undefined && "rotation"
+    ].filter(Boolean);
+    if (conflicts.length) report(`drift 不能写 ${conflicts.join("、")}：漂移分配按成员持仓的价值变化调整比例`);
+    if (allocation.start !== undefined && allocation.initial !== undefined)
+      report("allocation.start 与 allocation.initial 只能写一个");
+    const sides = allocation.sides && typeof allocation.sides === "object" ? allocation.sides : {};
+    for (const [side, config] of Object.entries(sides) as [string, any][]) {
+      if (side !== "long" && side !== "short") report(`allocation.sides 只能写 long、short，不能写 ${side}`);
+      else if (config?.rebalance !== undefined && !poolRebalanceModes.includes(String(config.rebalance)))
+        report(`allocation.sides.${side}.rebalance 只能是 ${poolRebalanceModes.join("、")}`);
+    }
+  } else if (method) {
+    const driftOnly = [
+      allocation.start !== undefined && "allocation.start",
+      allocation.initial !== undefined && "allocation.initial",
+      allocation.sides !== undefined && "allocation.sides",
+      pool.freeze !== undefined && "freeze"
+    ].filter(Boolean);
+    if (driftOnly.length) report(`${driftOnly.join("、")} 只能与 method: drift 一起写`);
+  }
+  if (method === "rotation" && allocation.switch !== undefined) report("allocation.switch 只能与 fixed 或 drift 一起写");
+}
+
+/** 策略池的一句话说明：3 个成员，轮动（前 1 名），择时 24 根，步长 0.2；drift 写起点，再列出组合约束与冻结。 */
 export function describePool(pool: DSLPoolPreview): string {
   const method =
     pool.method === "rotation"
       ? `轮动${pool.top ? `（前 ${pool.top} 名）` : ""}`
       : pool.method === "fixed"
         ? "固定比例"
-        : "分配方式未定";
+        : pool.method === "drift"
+          ? `漂移分配${pool.driftStart ? `（起点 ${pool.driftStart}）` : ""}`
+          : "分配方式未定";
   const parts = [`${pool.memberIds.length} 个成员`, method];
   if (pool.timingWindow) parts.push(`择时 ${pool.timingWindow} 根`);
   if (pool.step) parts.push(`步长 ${pool.step}`);
+  parts.push(...(pool.extras ?? []));
   return parts.join("，");
 }
 
@@ -404,12 +457,4 @@ export function summarizeDSL(source: string): string {
     )
     .join("、");
   return `${preview.bar} · ${preview.rules.length} 条规则：${rules}`;
-}
-
-/** 研究回放暂不支持策略池：回放入口据此禁用。 */
-export const POOL_REPLAY_DISABLED_TEXT = "研究回放暂不支持策略池";
-
-/** DSL 是不是策略池（解析失败的不算）。 */
-export function isPoolStrategy(dslYaml: string | undefined): boolean {
-  return Boolean(dslYaml && parseDSL(dslYaml).preview?.pool);
 }

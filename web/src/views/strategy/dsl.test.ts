@@ -1,14 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  isPoolStrategy,
-  mixedMarketTemplate,
-  parseDSL,
-  poolTemplate,
-  rankedTemplate,
-  signalTemplate,
-  summarizeDSL,
-  tunedTemplate
-} from "./dsl";
+import { mixedMarketTemplate, parseDSL, poolTemplate, rankedTemplate, signalTemplate, summarizeDSL, tunedTemplate } from "./dsl";
 
 describe("strategy DSL preview", () => {
   it("parses the v3 templates without diagnostics", () => {
@@ -179,9 +170,9 @@ describe("策略池", () => {
     expect(messages(`${head}strategy_pool: {allocation: {method: fixed}}\n`)).toContain(
       "strategy_pool.members 必须是非空列表，每个成员写 id 与 strategy"
     );
-    expect(messages(`${head}${members}`)).toContain("strategy_pool.allocation.method 必须写 fixed 或 rotation");
+    expect(messages(`${head}${members}`)).toContain("strategy_pool.allocation.method 必须写 fixed、rotation 或 drift");
     expect(messages(`${head}${members}  allocation: {method: other}\n`)).toContain(
-      "strategy_pool.allocation.method 只能是 fixed 或 rotation"
+      "strategy_pool.allocation.method 只能是 fixed、rotation 或 drift"
     );
     const broken = `${head}strategy_pool:\n  members:\n    - {id: a}\n    - {strategy: s}\n    - {id: a, strategy: s}\n  allocation: {method: fixed, ratios: {a: 1}}\n`;
     const list = messages(broken);
@@ -224,12 +215,52 @@ describe("策略池", () => {
   });
 });
 
-describe("策略池判断（回放入口据此禁用）", () => {
-  it("策略池为真；普通策略、空文本、解析失败的为假", () => {
-    expect(isPoolStrategy(poolTemplate)).toBe(true);
-    expect(isPoolStrategy(rankedTemplate)).toBe(false);
-    expect(isPoolStrategy("")).toBe(false);
-    expect(isPoolStrategy(undefined)).toBe(false);
-    expect(isPoolStrategy("name: [")).toBe(false);
+describe("策略池的漂移分配与组合约束", () => {
+  const head = "name: p\nbar: 1h\n";
+  const members = "strategy_pool:\n  members:\n    - {id: a, strategy: s_a}\n    - {id: b, strategy: s_b}\n";
+  const drift = `${head}${members}  allocation:\n    method: drift\n    ratios: {a: 0.6, b: 0.4}\n`;
+  const messages = (source: string) => parseDSL(source).diagnostics.map(item => item.message);
+
+  it("drift 没有诊断，摘要写漂移起点与写了的约束、冻结", () => {
+    const source = `${drift}    start: "2026-01-17T07:00:00Z"\n    sides: {long: {rebalance: every_bar}}\n    switch:\n      - when: {empty: b}\n        move: {from: a, to: [b]}\n  exposure: {bands: [{min: 0, max: 0.3, adjust: auto, pivot: 1}]}\n  gross: {min: 1, max: 1.5}\n  freeze: {watch: long, window_bars: 1, threshold: 0.1, bars: 4}\n`;
+    expect(messages(source)).toEqual([]);
+    expect(parseDSL(source).preview?.pool).toMatchObject({ method: "drift", driftStart: "2026-01-17T07:00:00Z" });
+    expect(summarizeDSL(source)).toBe(
+      "1h · 策略池：2 个成员，漂移分配（起点 2026-01-17T07:00:00Z），条件转移，净敞口区间，总杠杆区间，波动冻结"
+    );
+    const initial = `${drift}    initial: {at: "2026-01-17", ratios: {a: 0.5, b: 0.5}}\n`;
+    expect(summarizeDSL(initial)).toBe("1h · 策略池：2 个成员，漂移分配（起点 2026-01-17）");
+    expect(summarizeDSL(drift)).toBe("1h · 策略池：2 个成员，漂移分配");
+  });
+
+  it("drift 也要写覆盖所有成员的 ratios", () => {
+    expect(messages(`${head}${members}  allocation: {method: drift}\n`)).toContain(
+      "allocation.method 是 drift，需要写 ratios（成员 id → 比例）"
+    );
+    expect(messages(`${head}${members}  allocation: {method: drift, ratios: {a: 1}}\n`)).toContain(
+      "allocation.ratios 缺少成员 b 的比例（不分配请写 0）"
+    );
+  });
+
+  it("drift 不能写 timing、step、rotation；start 与 initial 二选一；rebalance 写错报错", () => {
+    expect(messages(`${drift}  timing: {window: 3}\n  step: 0.2\n`)).toContain(
+      "drift 不能写 timing、step：漂移分配按成员持仓的价值变化调整比例"
+    );
+    expect(messages(`${drift}    start: "2026-01-17"\n    initial: {at: "2026-01-17", ratios: {a: 1, b: 0}}\n`)).toContain(
+      "allocation.start 与 allocation.initial 只能写一个"
+    );
+    expect(messages(`${drift}    sides: {long: {rebalance: weekly}, middle: {rebalance: none}}\n`)).toEqual(
+      expect.arrayContaining([
+        "allocation.sides.long.rebalance 只能是 none、every_bar、periodic、threshold、both",
+        "allocation.sides 只能写 long、short，不能写 middle"
+      ])
+    );
+  });
+
+  it("drift 专用的字段写在 fixed、rotation 下报错；rotation 不能写 switch", () => {
+    const fixed = `${head}${members}  allocation:\n    method: fixed\n    ratios: {a: 0.6, b: 0.4}\n    start: "2026-01-17"\n    sides: {long: {rebalance: none}}\n  freeze: {watch: long, window_bars: 1, threshold: 0.1, bars: 1}\n`;
+    expect(messages(fixed)).toContain("allocation.start、allocation.sides、freeze 只能与 method: drift 一起写");
+    const rotation = `${head}${members}  allocation:\n    method: rotation\n    rotation: {factors: [{name: return, window: 3}], top: 1}\n    switch: [{when: {empty: a}, move: {from: a, to: [b]}}]\n`;
+    expect(messages(rotation)).toContain("allocation.switch 只能与 fixed 或 drift 一起写");
   });
 });

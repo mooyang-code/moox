@@ -2,7 +2,8 @@
 """迁移策略上线后的验证工具（只依赖 Python 标准库，对生产只读）。用法见 references/strategy-migration.md。
 
 子命令：
-  targets    导出策略实例每期的目标权重（只取 ok 的期）→ JSON {名称: {bar_end: {"市场:标的": 权重}}}
+  targets    导出策略实例（--instance）或研究回放（--replay，含策略池回放）每期的目标权重（只取 ok 的期）
+             → JSON {名称: {bar_end: {"市场:标的": 权重}}}
              同一个标的的现货、永续是两个目标，键是 (market, instrument_id)，写成 "swap:BTC-USDT"
   summary    各实例的结果状态、跳过原因与规则状态体积（稳定性验收）
   compare    把 targets 的结果与参考框架算出的权重 CSV（bar_end,market,instrument_id,weight）逐期比对（语义一致验收）
@@ -31,18 +32,26 @@ STRATEGY_LOG = '/data/moox/prod/current/strategy/logs/trpc.log'
 UTC = dt.timezone.utc
 
 # 在策略库上执行的只读查询；本地直接执行，远程经 SSH 交给控制机上的 python3。
+# mode 为 replay 时 ids 是回放 ID：读回放每期的记录（ListReplayBars 读的同一张表），回放不存在时该 ID 的结果为 null。
 DB_SCRIPT = r'''
 import json, sqlite3, sys
 db, mode, ids = sys.argv[1], sys.argv[2], sys.argv[3:]
 c = sqlite3.connect("file:%s?mode=ro" % db, uri=True)
 out = {}
 for iid in ids:
+    if mode == "replay":
+        if c.execute("SELECT 1 FROM t_strategy_replays WHERE c_replay_id = ?", (iid,)).fetchone() is None:
+            out[iid] = None
+            continue
+        query = ("SELECT c_bar_end_time, c_status, c_skip_reason, c_targets_json, '' "
+                 "FROM t_strategy_replay_bars WHERE c_replay_id = ? ORDER BY c_bar_end_time")
+    else:
+        query = ("SELECT c_bar_end_time, c_status, c_skip_reason, c_targets_json, c_rule_states_json "
+                 "FROM t_strategy_results WHERE c_instance_id = ? ORDER BY c_bar_end_time")
     rows = []
-    for bar, status, reason, targets, states in c.execute(
-            "SELECT c_bar_end_time, c_status, c_skip_reason, c_targets_json, c_rule_states_json "
-            "FROM t_strategy_results WHERE c_instance_id = ? ORDER BY c_bar_end_time", (iid,)):
+    for bar, status, reason, targets, states in c.execute(query, (iid,)):
         item = {"bar": bar, "status": status, "reason": reason, "state_bytes": len(states or "")}
-        if mode == "targets" and status == "ok":
+        if mode in ("targets", "replay") and status == "ok":
             # 同一个标的的现货、永续是两个目标：键取 (market, instrument_id)，只用 instrument_id 会互相覆盖
             item["targets"] = {"%s:%s" % (t.get("market", ""), t["instrument_id"]): t["target_weight"]
                                for t in json.loads(targets or "[]")}
@@ -119,9 +128,22 @@ def pct(values, q):
 
 
 def cmd_targets(args):
-    instances = parse_pairs(args.instance, '--instance')
-    data = query_db(args, 'targets', list(instances.values()))
-    out = {name: {iso(r['bar']): r['targets'] for r in data[iid] if r['status'] == 'ok'} for name, iid in instances.items()}
+    instances = parse_pairs(args.instance, '--instance') if args.instance else {}
+    replays = parse_pairs(args.replay, '--replay') if args.replay else {}
+    if not instances and not replays:
+        fail('至少给一个 --instance 或 --replay')
+    if set(instances) & set(replays):
+        fail(f'名称重复：{sorted(set(instances) & set(replays))}')
+    out = {}
+    if instances:
+        data = query_db(args, 'targets', list(instances.values()))
+        out.update({name: {iso(r['bar']): r['targets'] for r in data[iid] if r['status'] == 'ok'} for name, iid in instances.items()})
+    if replays:
+        data = query_db(args, 'replay', list(replays.values()))
+        for name, rid in replays.items():
+            if data.get(rid) is None:
+                fail(f'回放 {rid} 不存在')
+            out[name] = {iso(r['bar']): r['targets'] for r in data[rid] if r['status'] == 'ok'}
     text = json.dumps(out, ensure_ascii=False, sort_keys=True)
     if args.output:
         with open(args.output, 'w', encoding='utf-8') as f:
@@ -389,6 +411,7 @@ def main():
 
     p = sub.add_parser('targets', help='导出每期目标权重')
     db_args(p)
+    p.add_argument('--replay', action='append', help='名称=回放ID，可重复：导出研究回放（含策略池回放）每期的目标权重，再用 compare 比对')
     p.add_argument('--output')
     p.set_defaults(func=cmd_targets)
 

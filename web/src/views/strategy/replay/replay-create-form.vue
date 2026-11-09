@@ -37,6 +37,9 @@
       <span class="muted task-note">（按实例关联的任务，不能更改）</span>
     </a-form-item>
     <template v-else>
+      <a-alert v-if="pool?.problems.length" type="warning" show-icon class="pool-alert"
+        ><div v-for="item in pool.problems" :key="item">{{ item }}</div></a-alert
+      >
       <a-form-item v-if="!declared" label="任务所属的市场" required>
         <a-radio-group v-model="form.single_market" type="button" size="small">
           <a-radio v-for="item in MARKET_ORDER" :key="item" :value="item">{{ marketLabel(item) }}</a-radio>
@@ -55,6 +58,7 @@
           >
         </a-select>
         <template v-if="market === markets[0]" #extra
+          ><template v-if="pool">策略池按成员所需市场的并集读任务。</template
           ><template v-if="markets.length > 1">现货、永续各选一个，两个任务的周期、日历和用到的列要一致。</template
           >统一数据集上的任务不在这里列出，要回放请从实例详情发起。</template
         >
@@ -75,6 +79,7 @@
             dateOnly ? "日线任务按日期回放：起止两天都含在内。" : "含开始时刻、不含结束时刻。A 股日线任务按日期回放（只选日期）。"
           }}
         </div>
+        <div v-if="driftHint" class="muted range-hint">{{ driftHint }}</div>
       </div>
     </a-form-item>
     <a-form-item :label="usesSwap ? '现货单边手续费（bps）' : '单边手续费（bps）'">
@@ -82,9 +87,13 @@
     </a-form-item>
     <a-form-item v-if="usesSwap" label="永续单边手续费（bps）">
       <a-input-number v-model="form.swap_fee_bps" :min="0" :max="1000" :step="1" />
-      <template #extra>模拟曲线未计强平；永续按收盘价逐期结算盈亏，资金费要在下面写资金费列才计入。</template>
+      <template #extra
+        >模拟曲线未计强平；永续按收盘价逐期结算盈亏，{{
+          pool ? "资金费按池 DSL 的 fees.funding_column 结算。" : "资金费要在下面写资金费列才计入。"
+        }}</template
+      >
     </a-form-item>
-    <a-form-item v-if="usesSwap" label="资金费列（可选）">
+    <a-form-item v-if="usesSwap && !pool" label="资金费列（可选）">
       <a-input v-model="form.funding_column" placeholder="funding_rate" allow-clear />
       <template #extra>写了就按这一列（本根累计的资金费率）给永续持仓结算资金费：上一根收盘调仓之前的持仓乘本根费率。</template>
     </a-form-item>
@@ -101,11 +110,13 @@ import { recentRange } from "@/views/strategy/replay/model";
 import {
   type ReplayFormState,
   replayDateOnly,
-  replayDslText,
+  replayDeclared,
+  replayDriftHint,
   replayMarkets,
+  replayPool,
   wholeDays
 } from "@/views/strategy/replay/replay-form-model";
-import { MARKET_ORDER, marketLabel, marketRequirement, tasksText } from "@/views/strategy/market-mode";
+import { MARKET_ORDER, marketLabel, tasksText } from "@/views/strategy/market-mode";
 
 // 表单状态由页面持有（提交与预填都在页面里），这里直接编辑同一个响应式对象。
 const form = defineModel<ReplayFormState>({ required: true });
@@ -113,8 +124,10 @@ const props = defineProps<{ strategies: Strategy[]; tasks: FactorTask[]; tasksLo
 // 区间按当前空间登记的时区选择
 const zone = useDisplayZone();
 
-// 策略的 market 决定要读哪些市场的任务；没写 market 时只读一个，市场由用户选。
-const declared = computed(() => marketRequirement(replayDslText(form.value, props.strategies)).declared);
+// 策略的 market 决定要读哪些市场的任务（策略池取成员市场的并集）；没写 market 时只读一个，市场由用户选。
+const pool = computed(() => replayPool(form.value, props.strategies));
+const declared = computed(() => replayDeclared(form.value, props.strategies));
+const driftHint = computed(() => replayDriftHint(form.value, props.strategies));
 const markets = computed(() => replayMarkets(form.value, props.strategies));
 // 统一数据集上的任务同时覆盖现货与永续，永续费率也要填。
 const usesSwap = computed(() => markets.value.includes("swap") || markets.value.includes("multi"));
@@ -144,6 +157,9 @@ const quickRanges = [1, 7, 30].map(days => ({ label: `近 ${days} 天`, range: (
 <style scoped>
 .instance-alert {
   width: 100%;
+}
+.pool-alert {
+  margin-bottom: 12px;
 }
 .range-block {
   display: grid;

@@ -26,9 +26,7 @@
       <div v-if="editing && loaded && !dirty" class="next-steps">
         <span>定义已保存，接下来可以：</span>
         <a-link @click="router.push(instancesLink({ strategyId, create: true }))">创建实例</a-link>
-        <a-tooltip :content="POOL_REPLAY_DISABLED_TEXT" :disabled="!parse.preview?.pool">
-          <a-link :disabled="Boolean(parse.preview?.pool)" @click="router.push(replayLink({ strategyId }))">发起回放</a-link>
-        </a-tooltip>
+        <a-link @click="router.push(replayLink({ strategyId }))">发起回放</a-link>
       </div>
       <a-alert v-if="error" type="error" show-icon class="top-alert">{{ error }}</a-alert>
       <a-grid :cols="{ xs: 1, sm: 2 }" :col-gap="20" :row-gap="16">
@@ -104,7 +102,6 @@ import { useStrategyStore } from "@/store/modules/strategy";
 import TrialPanel from "@/views/strategy/components/strategy-trial-panel.vue";
 import { instancesLink, replayLink } from "@/views/strategy/links";
 import {
-  POOL_REPLAY_DISABLED_TEXT,
   RULE_MARKET_LABELS,
   describePool,
   mixedMarketTemplate,

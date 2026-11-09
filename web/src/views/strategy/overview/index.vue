@@ -62,9 +62,7 @@
                 <span v-if="card.period" class="cell-sub">{{ card.period }}</span>
                 <a-link @click="go(card.links.results)">结果</a-link>
                 <a-link @click="go(detailLink(card.instanceId))">详情</a-link>
-                <a-tooltip :content="POOL_REPLAY_DISABLED_TEXT" :disabled="!card.pool">
-                  <a-link :disabled="card.pool" @click="go(card.links.replay)">回放</a-link>
-                </a-tooltip>
+                <a-link @click="go(card.links.replay)">回放</a-link>
               </footer>
             </article>
             <a-link v-if="instances.length > cards.length" @click="go(resultsLink())"
@@ -113,7 +111,6 @@
 
 <script setup lang="ts">
 import { listLogicalAccounts } from "@/api/trade";
-import { POOL_REPLAY_DISABLED_TEXT } from "@/views/strategy/dsl";
 import { computed, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { StaleSpaceRequestError } from "@/api/admin/stale-space";

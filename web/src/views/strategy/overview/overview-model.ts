@@ -3,7 +3,6 @@ import { deriveTargetState, percent, rankTargets, targetStateTag, type TargetSta
 import { replayLink, resultsLink, type StrategyLink } from "@/views/strategy/links";
 import { shortId, sortInstancesForResults } from "@/views/strategy/results/results-model";
 import { formatInstant } from "@/utils/time-zone";
-import { isPoolStrategy } from "@/views/strategy/dsl";
 
 export interface OverviewInput {
   instances: StrategyInstance[];
@@ -44,8 +43,6 @@ export interface InstanceCard {
   chips: TargetChip[];
   more: number;
   period: string;
-  /** 策略池：研究回放不支持，回放入口禁用。 */
-  pool: boolean;
   links: { results: StrategyLink; replay: StrategyLink };
 }
 
@@ -128,7 +125,6 @@ export function instanceCards(input: OverviewInput, zone: string): InstanceCard[
       return {
         instanceId: instance.instance_id,
         title: definitionName(instance, input.catalog),
-        pool: isPoolStrategy(input.catalog.find(item => item.strategy_id === instance.strategy_id)?.dsl_yaml),
         subtitle: instance.instance_id,
         enabled: instance.enabled,
         health: instance.health,

@@ -10,6 +10,8 @@ import {
   replayMetricsLine,
   recentRange,
   replayFeeText,
+  replayFunding,
+  replayPoolPeriods,
   replayStatusLabel,
   replayTasksText,
   replayUsesSwap
@@ -260,5 +262,72 @@ describe("回放对比", () => {
     expect(replayFormFromReplay({ ...(base as object), funding_column: "funding_rate" } as never)).toMatchObject({
       funding_column: "funding_rate"
     });
+  });
+});
+
+describe("策略池回放", () => {
+  const bar = (time: string, summary: unknown, status = "ok") =>
+    ({
+      bar_end_time: time,
+      status,
+      targets: [],
+      positions_json: "{}",
+      summary_json: typeof summary === "string" ? summary : JSON.stringify(summary),
+      bar_return: 0,
+      equity: 1,
+      turnover: 0,
+      fee: 0,
+      spot_value: 0,
+      swap_value: 0,
+      holdings: 0,
+      frozen: 0,
+      skip_reason: "",
+      unfilled: 0,
+      liquidated: 0
+    }) as never;
+  const decision = (ratio: string) => ({
+    decision: {
+      pool: { method: "drift", members: [{ id: "a", status: "ok", ratio, drifted: "0.31" }], drift: { phase: "drift" } },
+      limits: [{ instrument_id: "BTC", side: "long", excess: "0.1", round: 1 }]
+    },
+    ledger: {}
+  });
+
+  it("池明细在每期 summary_json 的 decision 下，按时间从旧到新整理", () => {
+    const periods = replayPoolPeriods(
+      [bar("2026-09-01T02:00:00Z", decision("0.4"), "skipped"), bar("2026-09-01T01:00:00Z", decision("0.3"))],
+      "rp1"
+    );
+    expect(periods.map(item => [item.time, item.sessionId, item.resultStatus, item.members[0].ratio])).toEqual([
+      ["2026-09-01T01:00:00Z", "rp1", "ok", 0.3],
+      ["2026-09-01T02:00:00Z", "rp1", "skipped", 0.4]
+    ]);
+    expect(periods[0]).toMatchObject({ method: "drift", drift: { phase: "drift" } });
+    expect(periods[0].members[0].drifted).toBe(0.31);
+    expect(periods[0].limits).toEqual([{ instrumentId: "BTC", side: "long", excess: 0.1, round: 1, to: "" }]);
+  });
+
+  it("单策略回放、brief 记录与损坏的摘要没有池明细", () => {
+    expect(
+      replayPoolPeriods(
+        [
+          bar("2026-09-01T01:00:00Z", { decision: { rules: {} }, ledger: {} }),
+          bar("2026-09-01T02:00:00Z", "{}"),
+          bar("2026-09-01T03:00:00Z", "{坏的"),
+          bar("2026-09-01T04:00:00Z", { pool: { members: [{ id: "a" }] } })
+        ],
+        "r"
+      )
+    ).toEqual([]);
+  });
+
+  it("资金费列：单策略回放取回放任务上的，策略池回放取池 DSL 的 fees.funding_column", () => {
+    expect(replayFunding({ funding_column: "funding_rate", dsl_yaml: "" })).toBe("funding_rate");
+    expect(
+      replayFunding({ funding_column: "", dsl_yaml: "strategy_pool:\n  fees: {swap_bps: 5, funding_column: funding_rate}\n" })
+    ).toBe("funding_rate");
+    expect(replayFunding({ funding_column: "", dsl_yaml: "strategy_pool:\n  fees: {swap_bps: 5}\n" })).toBe("");
+    expect(replayFunding({ funding_column: "", dsl_yaml: "name: [" })).toBe("");
+    expect(replayFunding({ funding_column: "" } as never)).toBe("");
   });
 });

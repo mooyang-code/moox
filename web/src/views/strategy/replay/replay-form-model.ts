@@ -1,6 +1,7 @@
 import type { Strategy } from "@/api/strategy-types";
 import type { FactorTask } from "@/api/factor/types";
-import { TASK_KEY_ORDER, marketRequirement } from "@/views/strategy/market-mode";
+import { TASK_KEY_ORDER, marketRequirement, poolRequirement, type PoolRequirement } from "@/views/strategy/market-mode";
+import { parseDSL } from "@/views/strategy/dsl";
 import { freqSeconds } from "@/views/factor/shared/health";
 import { addDays, msToWallClock, wallClockToMs } from "@/utils/time-zone";
 
@@ -38,15 +39,39 @@ export function replayDslText(form: ReplayFormState, strategies: Strategy[]): st
   return form.source === "dsl" ? form.dsl_yaml : (strategies.find(item => item.strategy_id === form.strategy_id)?.dsl_yaml ?? "");
 }
 
+/** 回放对象是策略池时，池要绑定的计算任务（成员所需市场的并集，成员在定义列表里查）；不是策略池或从实例发起时返回 null。 */
+export function replayPool(form: ReplayFormState, strategies: Strategy[]): PoolRequirement | null {
+  return poolRequirement(
+    replayDslText(form, strategies),
+    id => strategies.find(item => item.strategy_id === id)?.dsl_yaml ?? null
+  );
+}
+
+/** 要读的市场是否由 DSL 决定：写了 market，或是策略池（成员市场的并集）；否则要先选任务所属的市场。 */
+export function replayDeclared(form: ReplayFormState, strategies: Strategy[]): boolean {
+  return Boolean(replayPool(form, strategies)) || marketRequirement(replayDslText(form, strategies)).declared;
+}
+
 /**
- * 回放要读取任务的市场（现货、永续、股票先后，统一数据集上的任务键是 multi）：从实例发起时就是预填的实例任务的键；否则按策略 DSL 的 market 读出，
- * 没写 market 时只读一个任务，市场取用户选的。
+ * 回放要读取任务的市场（现货、永续、股票先后，统一数据集上的任务键是 multi）：从实例发起时就是预填的实例任务的键；策略池取成员市场的并集；
+ * 否则按策略 DSL 的 market 读出，没写 market 时只读一个任务，市场取用户选的。
  */
 export function replayMarkets(form: ReplayFormState, strategies: Strategy[]): string[] {
   if (form.instance_id) return TASK_KEY_ORDER.filter(market => form.tasks[market]);
+  const pool = replayPool(form, strategies);
+  if (pool) return pool.markets;
   const requirement = marketRequirement(replayDslText(form, strategies));
   if (requirement.declared) return requirement.markets;
   return form.single_market ? [form.single_market] : [];
+}
+
+/** drift 池的回放起点说明：写了漂移起点时起点必须选它，没写时漂移从区间的第一根开始；不是 drift 池时为空串。 */
+export function replayDriftHint(form: ReplayFormState, strategies: Strategy[]): string {
+  const pool = parseDSL(replayDslText(form, strategies)).preview?.pool;
+  if (pool?.method !== "drift") return "";
+  return pool.driftStart
+    ? `drift 池：起点必须选漂移起点 ${pool.driftStart}，结果才与实时可比。`
+    : "drift 池：漂移从区间的第一根开始。";
 }
 
 /** 提交用的 factor_tasks：只含回放要读的市场；从实例发起且没有预填任务时为空，由后端读实例关联的任务。 */
@@ -57,6 +82,8 @@ export function replayFactorTasks(form: ReplayFormState, strategies: Strategy[])
 /** 发起前的本地校验，返回第一条错误（没有则为空串）：来源与各市场的计算任务、区间、两个手续费范围。 */
 export function validateReplayForm(form: ReplayFormState, strategies: Strategy[] = []): string {
   if (!replaySourceOf(form)) return "请选择定义、粘贴 DSL 文本或从实例详情进入";
+  const pool = replayPool(form, strategies);
+  if (pool?.problems.length) return `策略池的成员还不能回放：${pool.problems.join("；")}`;
   const markets = replayMarkets(form, strategies);
   // 从实例发起且入口没有带任务：不给 factor_tasks，后端读实例关联的任务。
   const omitted = Boolean(form.instance_id) && !markets.length;
@@ -72,8 +99,9 @@ export function validateReplayForm(form: ReplayFormState, strategies: Strategy[]
   return "";
 }
 
-/** 提交用的资金费列：只在回放读取永续（含统一数据集）时带上，表单里隐藏的旧值不提交；没写时为空串。 */
+/** 提交用的资金费列：只在回放读取永续（含统一数据集）时带上，表单里隐藏的旧值不提交；策略池的资金费写在池 DSL 里，不提交；没写时为空串。 */
 export function replayFundingColumn(form: ReplayFormState, strategies: Strategy[] = []): string {
+  if (replayPool(form, strategies)) return "";
   const markets = replayMarkets(form, strategies);
   if (!markets.includes("swap") && !markets.includes("multi")) return "";
   return (form.funding_column ?? "").trim();
