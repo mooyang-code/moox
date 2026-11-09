@@ -152,7 +152,7 @@ portfolio: {leverage: 1, max_weight: 0.1}
 | `portfolio.max_weight` | 组合级单币上限，同一个币的现货、永续**合计**（绝对值之和，“现货多 + 永续空”的对冲也按绝对值之和截断）；两边都不为零时按比例缩小，只有一边时取上限，超出部分留现金 |
 | `portfolio.min_universe` | rank 规则进入 filter 的可用标的少于它则整期跳过 |
 | `portfolio.max_missing` | 任一规则缺数占比超过它则整期跳过，默认 0.2 |
-| `portfolio.limits` | `{long_max, short_max, overflow: {to}}`：单标的多头、空头上限（占权益，同一标的各市场同方向合计），在规则相加（池合成）之后、`max_weight` 之前执行；超出部分转给 `to` 指向的规则（池里是成员）本期同方向的其他标的，按它的权重比例分，最多三轮，剩下的留现金；不写 `overflow` 时留现金 |
+| `portfolio.limits` | `{long_max, short_max, overflow: {to}}`：单标的多头、空头上限（占权益，同一标的各市场同方向合计），在规则相加（池合成）之后、`max_weight` 之前执行；超出部分转给 `to` 指向的规则（池里是成员）本期同方向的其他标的，按它的权重比例分，最多三轮，剩下的留现金；已截到上限的标的、冻结标的不作为去向，池里本期比例为 0 的成员没有可分的标的；不写 `overflow` 时留现金 |
 
 ## 2. 规则类型
 
