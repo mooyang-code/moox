@@ -52,6 +52,8 @@ type Node struct {
 	Value    float64   // Op == OpConst；布尔常量为 1 或 0
 	IsInt    bool      // 常量是否为整数
 	Args     []*Node   // 序列、常量或参数子节点
+	// Subject 是字符串字面量参数（只有 cs_ref 的参考标的），参与规范文本与去重键。
+	Subject string
 	// Ints 是窗口、位移等整数参数；IntParams 与它等长，非空的位置由同名参数提供（Ints 里是默认值）。
 	Ints      []int
 	IntParams []string
@@ -123,6 +125,10 @@ func (n *Node) writeCanonical(b *strings.Builder) {
 		separate()
 		arg.writeCanonical(b)
 	}
+	if n.Subject != "" {
+		separate()
+		b.WriteString(strconv.Quote(n.Subject))
+	}
 	for i, value := range n.Ints {
 		separate()
 		if i < len(n.IntParams) && n.IntParams[i] != "" {
@@ -180,6 +186,11 @@ const NaNLiteral = "nan"
 func newNaN() *Node {
 	return &Node{Op: OpConst, Kind: KindNumberConst, Value: math.NaN(), size: 1, nanLiteral: true}
 }
+
+// opSubject 只在编译期出现：字符串字面量参数的占位节点，apply 把它的值写进算子节点的 Subject，不进入表达式树。
+const opSubject = "subject"
+
+func newSubject(value string) *Node { return &Node{Op: opSubject, Subject: value} }
 
 func newBool(value bool) *Node {
 	node := &Node{Op: OpConst, Kind: KindBoolConst, size: 1}

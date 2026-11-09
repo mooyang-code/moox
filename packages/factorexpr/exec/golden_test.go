@@ -24,6 +24,7 @@ type goldenData struct {
 		Tags     []string     `json:"tags"`
 		Times    int          `json:"times"`
 		V        [][]*float64 `json:"v"`
+		W        [][]*float64 `json:"w"`
 		Cases    []struct {
 			Expr   string       `json:"expr"`
 			Tol    float64      `json:"tol"`
@@ -133,7 +134,7 @@ func TestCrossMatchesPandas(t *testing.T) {
 	for i, subject := range data.Subjects {
 		keys = append(keys, SeriesKey{Subject: subject, Tag: data.Tags[i]})
 	}
-	panel, err := NewPanel(data.Times, []string{"v"}, keys)
+	panel, err := NewPanel(data.Times, []string{"v", "w"}, keys)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,6 +142,7 @@ func TestCrossMatchesPandas(t *testing.T) {
 		s, _ := panel.SeriesIndex(key)
 		for tm, v := range data.V[i] {
 			panel.Set(0, s, tm, value(v))
+			panel.Set(1, s, tm, value(data.W[i][tm]))
 			panel.MarkPresent(s, tm)
 		}
 	}

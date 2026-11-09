@@ -21,6 +21,9 @@ var purityExpressions = []string{
 	"delay(x, 3)", "delta(x, 2)", "pct_change(x, 2)", "cs_rank(x)", "cs_zscore(x)", "cs_demean(x)", "cs_scale(x)",
 	"where(ema(x, 20) > 0, 1, 0)", "ts_rank(ts_mean(x, 5) - y, 10)", "cs_rank(ts_mean(x, 5))",
 	"where(y > 0, x / y, 0)", "abs(x) + sqrt(abs(y)) * log(abs(x) + 1)",
+	"floor(x) + ceil(y) + round(x * y)", "where(x > 0, x, nan)",
+	"cs_mean(x)", "cs_sum(x)", "cs_count(x > y)", "cs_std(x)", "cs_median(x)", "cs_quantile(x, 0.3)", "cs_min(x)", "cs_max(x)",
+	`cs_ref(x, "S002")`, "ts_mean(cs_mean(x), 5)", "cs_rank(where(x > 0, x, nan))",
 }
 
 // purityPanel 生成多序列、两个 series_tag 的面板：含 NaN、常数段，第一条序列放入 Codex 审查给出的 EMA 反例。

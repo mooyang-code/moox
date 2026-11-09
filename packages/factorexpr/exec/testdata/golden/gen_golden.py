@@ -6,7 +6,8 @@
 
 内容：
 - rolling：各时序算子在一条序列上的结果，pandas 严格窗口（min_periods = n）；
-- cross：各截面算子在 12 个标的 × 30 个时刻上的结果（按时刻与 series_tag 分组）。
+- cross：各截面算子在 12 个标的 × 30 个时刻上的结果（按时刻与 series_tag 分组）；逐行变换类用 v，
+  聚合广播类用 w（在 v 上挖出整组为 NaN 的截面）。
 
 约定：结果里的 NaN 与 ±Inf 写成 null（与 factorexpr 把非有限值记为 NaN 一致）。
 """
@@ -152,14 +153,53 @@ cross_cases = {
     "cs_demean(v)": frame["v"] - mean,
     "cs_scale(v)": frame["v"] / group.transform(lambda s: s.abs().sum()),
 }
+
+# 聚合广播类截面函数用 w：在 v 上再挖出整组为 NaN 的截面（不调用 rng，v 与上面的期望值不变）。
+w = v.copy()
+w[7:12, 15] = np.nan  # venue:b 整组 NaN
+w[0:7, 20] = np.nan  # venue:a 整组 NaN
+w[1:6, 22] = np.nan  # venue:a 只剩 S00、S06 两个有效值
+wframe = frame.assign(w=[w[s, t] for s in range(S) for t in range(T)])
+wgroup = wframe.groupby(["time", "tag"])["w"]
+# 布尔条件保留 NaN（严格三值）：w 为 NaN 的行条件也是 NaN，不计数。
+wframe["c"] = np.where(np.isnan(wframe["w"]), np.nan, (wframe["w"] > 0).astype(float))
+cgroup = wframe.groupby(["time", "tag"])["c"]
+
+
+def reference(subject):
+    ref = wframe[wframe["subject"] == subject].set_index(["time", "tag"])["w"]
+    keys = list(zip(wframe["time"], wframe["tag"]))
+    return pd.Series([ref.get(key, np.nan) for key in keys], index=wframe.index)
+
+
+wmedian = wgroup.transform("median")
+masked = wframe["w"].where(wframe["w"] > 0)  # where(w > 0, w, nan)
+aggregate_cases = {
+    "cs_mean(w)": wgroup.transform("mean"),
+    "cs_sum(w)": wgroup.transform(lambda s: s.sum(min_count=1)),  # 全 NaN 为 NaN，不是 0
+    "cs_count(w > 0)": cgroup.transform(lambda s: s.sum(min_count=1)),
+    "cs_std(w)": wgroup.transform("std"),
+    "cs_median(w)": wmedian,
+    "cs_min(w)": wgroup.transform("min"),
+    "cs_max(w)": wgroup.transform("max"),
+    'cs_ref(w, "S03")': reference("S03"),
+    'cs_ref(w, "S09")': reference("S09"),
+    "abs(w - cs_median(w))": (wframe["w"] - wmedian).abs(),
+    "cs_rank(where(w > 0, w, nan))": masked.groupby([wframe["time"], wframe["tag"]]).rank(pct=True),
+    "w - cs_mean(w)": wframe["w"] - wgroup.transform("mean"),
+}
+for q in (0, 0.25, 0.9, 1):
+    aggregate_cases[f"cs_quantile(w, {q})"] = wgroup.transform(lambda s, q=q: s.quantile(q))
+
 cross = {
     "subjects": subjects,
     "tags": tags,
     "times": T,
     "v": [clean(v[s]) for s in range(S)],
+    "w": [clean(w[s]) for s in range(S)],
     "cases": [],
 }
-for expression, values in cross_cases.items():
+for expression, values in list(cross_cases.items()) + list(aggregate_cases.items()):
     matrix = values.to_numpy().reshape(S, T)
     cross["cases"].append({"expr": expression, "tol": 1e-12, "expect": [clean(matrix[s]) for s in range(S)]})
 

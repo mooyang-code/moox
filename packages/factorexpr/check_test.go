@@ -272,3 +272,87 @@ func TestNaNLiteral(t *testing.T) {
 		t.Fatalf("canonical differs: %q vs %q", a, b)
 	}
 }
+
+// 聚合广播类截面函数的编译期检查：cs_quantile 的 q 只收 0～1 的字面量，cs_count 只收布尔序列，cs_ref 的标的只收字符串字面量。
+func TestAggregateChecks(t *testing.T) {
+	valid := []struct {
+		expression, canonical string
+	}{
+		{`cs_quantile(close, 0.9)`, "cs_quantile(close,0.9)"},
+		{`cs_count(close > open)`, "cs_count(gt(close,open))"},
+		{`close - cs_median(close)`, "sub(close,cs_median(close))"},
+		{`cs_ref(close, "BTC-USDT")`, `cs_ref(close,"BTC-USDT")`},
+		{`cs_ref(close, "600519.XSHG")`, `cs_ref(close,"600519.XSHG")`},
+		{`c and cs_count(c) <= ceil(cs_count(close > 0) * 0.04)`, ""},
+	}
+	for _, tc := range valid {
+		text := outputSpec(tc.expression)
+		if strings.HasPrefix(tc.expression, "c and") {
+			text = "let:\n  c: close > open\noutput: where(" + tc.expression + ", 1, 0)\n"
+		}
+		factor, err := Compile(text)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.expression, err)
+		}
+		if factor.Type != FactorTypeCrossSection {
+			t.Errorf("%s: type = %s", tc.expression, factor.Type)
+		}
+		if tc.canonical != "" {
+			if got := factor.Outputs[0].Root.Canonical(); got != tc.canonical {
+				t.Errorf("%s: canonical = %s, want %s", tc.expression, got, tc.canonical)
+			}
+		}
+	}
+	invalid := []struct {
+		name, text, want string
+	}{
+		{"quantile param", "params: {q: {type: float, min: 0, max: 1, default: 0.5}}\noutput: cs_quantile(close, q)\n", "只能写字面量，不能使用参数 q"},
+		{"quantile out of range", outputSpec(`cs_quantile(close, 1.5)`), "0～1 之间的常量"},
+		{"quantile nan", outputSpec(`cs_quantile(close, nan)`), "不能是 nan"},
+		{"quantile series", outputSpec(`cs_quantile(close, volume)`), "0～1 之间的常量"},
+		{"count number", outputSpec(`cs_count(close)`), "需要布尔序列"},
+		{"count constant", outputSpec(`cs_count(true) + close`), "必须依赖输入列"},
+		{"mean constant", outputSpec(`cs_mean(1) + close`), "必须依赖输入列"},
+		{"mean bool", outputSpec(`cs_mean(close > 1)`), "需要数值序列"},
+		{"ref identifier", outputSpec(`cs_ref(close, btc)`), "必须是标的 ID 的字符串字面量"},
+		{"ref number", outputSpec(`cs_ref(close, 1)`), "必须是标的 ID 的字符串字面量"},
+		{"ref empty", outputSpec(`cs_ref(close, "")`), "标的 ID 不能为空"},
+		{"ref bad character", outputSpec(`cs_ref(close, "BTC USDT")`), "不允许的字符"},
+		{"ref too long", outputSpec(`cs_ref(close, "` + strings.Repeat("A", MaxSubjectLiteralRunes+1) + `")`), "超过 64 个字符"},
+		{"ref missing subject", outputSpec(`cs_ref(close)`), "需要 2 个参数"},
+		{"string elsewhere", outputSpec(`cs_mean("BTC-USDT")`), "只有 cs_ref 的标的参数可以写字符串"},
+		{"string in let", "let:\n  s: '\"BTC-USDT\"'\noutput: cs_ref(close, s)\n", "不允许使用字符串"},
+	}
+	for _, tc := range invalid {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Compile(tc.text)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want containing %q", err, tc.want)
+			}
+		})
+	}
+	// 参考标的进入规范文本（定义哈希）与 RefSubjects；不同参考标的的两个 cs_ref 是不同的节点。
+	factor := mustCompile(t, "outputs:\n  a: cs_ref(close, \"ETH-USDT\")\n  b: cs_ref(close, \"BTC-USDT\") + cs_ref(close, \"ETH-USDT\")\n")
+	if got := strings.Join(factor.RefSubjects, ","); got != "BTC-USDT,ETH-USDT" {
+		t.Fatalf("RefSubjects = %s", got)
+	}
+	if !strings.Contains(factor.CanonicalText(), `add(cs_ref(close,"BTC-USDT"),cs_ref(close,"ETH-USDT"))`) {
+		t.Fatalf("canonical = %s", factor.CanonicalText())
+	}
+	program, err := NewProgram([]ProgramInput{{FactorID: "f", Factor: factor}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs := 0
+	for _, node := range program.Nodes {
+		if node.Op == "cs_ref" {
+			refs++
+		}
+	}
+	if refs != 2 {
+		t.Fatalf("program has %d cs_ref nodes, want 2 (same subject shared, different subjects kept apart)", refs)
+	}
+	if mustCompile(t, outputSpec(`ts_mean(close, 5)`)).RefSubjects != nil {
+		t.Fatal("RefSubjects should be empty without cs_ref")
+	}
+}

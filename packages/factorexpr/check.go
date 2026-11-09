@@ -166,7 +166,19 @@ func lowerCall(src *exprSource, call *ast.CallNode, sc *scope) (*Node, error) {
 		return nil, src.errAt(call, "函数 %s 需要 %d～%d 个参数，写了 %d 个", fn.Name, required, len(fn.Args), len(call.Arguments))
 	}
 	args := make([]*Node, 0, len(call.Arguments))
-	for _, argument := range call.Arguments {
+	for i, argument := range call.Arguments {
+		if fn.Args[i].Kind == ArgSubject {
+			// 字符串字面量只在这个位置截获；其余位置照常编译，遇到字符串由 rejectNode 拒绝。
+			literal, ok := argument.(*ast.StringNode)
+			if !ok {
+				return nil, src.errAt(argument, "函数 %s 的参数 %s 必须是标的 ID 的字符串字面量，例如 \"BTC-USDT\"", fn.Name, fn.Args[i].Name)
+			}
+			if err := ValidateSubjectLiteral(literal.Value); err != nil {
+				return nil, src.errAt(argument, "函数 %s 的参数 %s：%v", fn.Name, fn.Args[i].Name, err)
+			}
+			args = append(args, newSubject(literal.Value))
+			continue
+		}
 		arg, err := lower(src, argument, sc)
 		if err != nil {
 			return nil, err
@@ -204,6 +216,9 @@ func apply(src *exprSource, node ast.Node, fn *Function, args []*Node, argNodes 
 		}
 		arg, at := args[i], argNodes[i]
 		switch spec.Kind {
+		case ArgSubject:
+			result.Subject = arg.Subject
+			continue
 		case ArgNumber:
 			if !arg.Kind.isNumber() {
 				return nil, src.errAt(at, "%s%s 需要数值，得到%s", label, spec.Name, arg.Kind.describe())
@@ -403,6 +418,30 @@ type Factor struct {
 	Type     FactorType
 	// UDFs 是引用的自定义算子版本，按名称排序、去重。
 	UDFs []UDFRef
+	// RefSubjects 是 cs_ref 引用的参考标的，排序、去重；加成员与启用任务时要求它们在任务的标的范围内。
+	RefSubjects []string
+}
+
+// MaxSubjectLiteralRunes 是标的 ID 字面量的最大长度。
+const MaxSubjectLiteralRunes = 64
+
+// ValidateSubjectLiteral 校验标的 ID 字面量的写法：非空，只含字母、数字和 . _ - : 四种符号，最长 MaxSubjectLiteralRunes 个字符。
+// 只检查写法；标的是否存在、是否在任务的标的范围内，由加成员与启用任务时校验。
+func ValidateSubjectLiteral(subject string) error {
+	if subject == "" {
+		return fmt.Errorf("标的 ID 不能为空")
+	}
+	if len(subject) > MaxSubjectLiteralRunes {
+		return fmt.Errorf("标的 ID %q 超过 %d 个字符", subject, MaxSubjectLiteralRunes)
+	}
+	for _, r := range subject {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '_', r == '-', r == ':':
+		default:
+			return fmt.Errorf("标的 ID %q 含有不允许的字符 %q：只能包含字母、数字和 . _ - :", subject, r)
+		}
+	}
+	return nil
 }
 
 // Param 返回名为 name 的参数声明。
@@ -573,6 +612,7 @@ func CompileSpecWith(spec *Spec, env UDFEnv) (*Factor, error) {
 
 func (f *Factor) derive() {
 	columns := map[string]bool{}
+	subjects := map[string]bool{}
 	udfs := map[string]string{}
 	visited := map[*Node]bool{}
 	var walk func(*Node)
@@ -583,6 +623,9 @@ func (f *Factor) derive() {
 		visited[node] = true
 		if node.Op == OpColumn {
 			columns[node.Column] = true
+		}
+		if node.Subject != "" {
+			subjects[node.Subject] = true
 		}
 		if udf := node.Function.UDF(); udf != nil {
 			udfs[udf.Name] = udf.Hash
@@ -605,6 +648,11 @@ func (f *Factor) derive() {
 		f.InputColumns = append(f.InputColumns, column)
 	}
 	sort.Strings(f.InputColumns)
+	f.RefSubjects = nil
+	for subject := range subjects {
+		f.RefSubjects = append(f.RefSubjects, subject)
+	}
+	sort.Strings(f.RefSubjects)
 	f.UDFs = nil
 	for name, hash := range udfs {
 		f.UDFs = append(f.UDFs, UDFRef{Name: name, Hash: hash})

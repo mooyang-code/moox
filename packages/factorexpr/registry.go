@@ -44,6 +44,8 @@ const (
 	ArgInteger
 	// ArgConstant 是分位数等：编译期数值常量。
 	ArgConstant
+	// ArgSubject 是标的 ID：只能写字符串字面量（cs_ref 的参考标的），表达式里其他位置都不允许字符串。
+	ArgSubject
 )
 
 // ArgSpec 描述一个参数。Min、Max 只对编译期常量参数有效（闭区间）。
@@ -69,6 +71,9 @@ type Function struct {
 	Lookback string
 	Doc      string
 	Example  string
+	// Broadcast 为真表示聚合广播类截面算子（Category 仍是 CategoryCrossSection）：每个截面算出一个统计量，
+	// 写给截面里的每一行，包括输入为 NaN 的行；其余截面算子是逐行变换类，输入为 NaN 的行输出 NaN。
+	Broadcast bool
 	// back 返回在子节点回看之上额外需要的行数（同时决定需求区间向前扩展多少），shift 返回需求区间整体向前平移的行数
 	// （只有 delay 不为 0）。参数是整数常量参数，按 Args 中出现的顺序排列。
 	back  func(ints []int) int
@@ -182,6 +187,13 @@ func cross(name, doc, example string) *Function {
 		Lookback: "L(x)", Doc: doc, Example: example}
 }
 
+// aggregate 登记聚合广播类截面算子：有效样本（非 NaN）上算出一个统计量，广播到同一截面（同一 data_time、同一 series_tag、
+// 成员标的范围之内）的每一行；没有有效样本时整个截面为 NaN。
+func aggregate(name string, args []ArgSpec, doc, example string) *Function {
+	return &Function{Name: name, Category: CategoryCrossSection, Args: args, Result: ResultNumber, Broadcast: true,
+		Lookback: "L(x)", Doc: doc, Example: example}
+}
+
 var functionList = []*Function{
 	// 逐元素
 	elementwise("abs", []ArgSpec{argX}, ResultNumber, "绝对值", "abs(close - open)"),
@@ -279,6 +291,21 @@ var functionList = []*Function{
 	cross("cs_zscore", "截面标准化 (x − mean) / std（ddof=1）；样本少于 2 或标准差为 0 时为 NaN", "cs_zscore(pct_change(close, 20))"),
 	cross("cs_demean", "截面去均值 x − mean", "cs_demean(pct_change(close))"),
 	cross("cs_scale", "截面缩放 x / sum(|x|)；分母为 0 时为 NaN", "cs_scale(cs_demean(x))"),
+
+	// 截面：聚合广播
+	aggregate("cs_mean", []ArgSpec{argSeries}, "截面均值，广播到截面每一行（含输入为 NaN 的行）；没有有效样本时为 NaN", "cs_mean(pct_change(close))"),
+	aggregate("cs_sum", []ArgSpec{argSeries}, "截面求和，广播到截面每一行；没有有效样本时为 NaN", "cs_sum(volume)"),
+	aggregate("cs_count", []ArgSpec{{Name: "c", Kind: ArgBoolSeries}}, "截面里条件为真的个数，c 为 NaN 的行不计；广播到截面每一行；c 全为 NaN 时为 NaN",
+		"cs_count(close > open)"),
+	aggregate("cs_std", []ArgSpec{argSeries}, "截面样本标准差（ddof=1），广播到截面每一行；有效样本少于 2 时为 NaN", "cs_std(pct_change(close))"),
+	aggregate("cs_median", []ArgSpec{argSeries}, "截面中位数，广播到截面每一行；没有有效样本时为 NaN", "abs(close - cs_median(close))"),
+	aggregate("cs_quantile", []ArgSpec{argSeries, {Name: "q", Kind: ArgConstant, Min: 0, Max: 1, LiteralOnly: true}},
+		"截面 q 分位数，线性插值（与 ts_quantile 同口径），广播到截面每一行；q 只能写 0～1 的字面量，不能用参数", "cs_quantile(volume, 0.9)"),
+	aggregate("cs_min", []ArgSpec{argSeries}, "截面最小值，广播到截面每一行；没有有效样本时为 NaN", "cs_min(close)"),
+	aggregate("cs_max", []ArgSpec{argSeries}, "截面最大值，广播到截面每一行；没有有效样本时为 NaN", "cs_max(close)"),
+	aggregate("cs_ref", []ArgSpec{argSeries, {Name: "subject", Kind: ArgSubject}},
+		"同一截面里参考标的的 x，广播到截面每一行；参考标的本期不在截面里或 x 为 NaN 时整个截面为 NaN。标的写成字符串字面量，加成员和启用任务时校验它在任务的标的范围内",
+		`pct_change(close) - pct_change(cs_ref(close, "BTC-USDT"))`),
 }
 
 // 运算符：只能用运算符写，不能按名字调用。

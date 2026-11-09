@@ -29,6 +29,8 @@ type ProgramNode struct {
 	Param string
 	Value float64
 	Args  []int
+	// Subject 是 cs_ref 的参考标的（字符串字面量参数）。
+	Subject string
 	// Ints、Floats 是整数与数值参数（参数槽的位置是默认值）；IntParams、FloatParams 与之等长，非空的位置是参数槽。
 	Ints        []int
 	IntParams   []string
@@ -134,7 +136,7 @@ func NewProgram(inputs []ProgramInput) (*Program, error) {
 				args[i] = visit(arg)
 			}
 			candidate := &ProgramNode{
-				Op: node.Op, Kind: node.Kind, Function: node.Function, Column: node.Column, Value: node.Value, Args: args,
+				Op: node.Op, Kind: node.Kind, Function: node.Function, Column: node.Column, Value: node.Value, Args: args, Subject: node.Subject,
 				Ints: append([]int(nil), node.Ints...), Floats: append([]float64(nil), node.Floats...),
 				Scalar: node.Scalar, Cross: node.cross, Back: node.back, Shift: node.shift, Lookback: node.Lookback,
 			}
@@ -206,6 +208,9 @@ func programKey(node *ProgramNode) string {
 			b.WriteByte(',')
 		}
 		b.WriteString(strconv.Itoa(arg))
+	}
+	if node.Subject != "" {
+		b.WriteString(";s=" + strconv.Quote(node.Subject))
 	}
 	b.WriteString(";")
 	for i, value := range node.Ints {
