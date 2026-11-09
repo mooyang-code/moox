@@ -113,7 +113,9 @@ func WithLocks(locks SetLocker) Option { return func(cfg *config) { cfg.locks = 
 
 // WithHistory 设置历史截面标的的来源（数据层）：有 cross_section_history: observed 成员时，分块按“标的 + 历史截面标的”
 // 估算内存并收窄，分块的计划带上同一份名单，管线的内存预检与选块用的序列数一致。
-func WithHistory(source pipeline.HistorySource) Option { return func(cfg *config) { cfg.history = source } }
+func WithHistory(source pipeline.HistorySource) Option {
+	return func(cfg *config) { cfg.history = source }
+}
 
 // Executor runs a recalc window in chunks without touching any job store; the
 // caller persists progress through ProgressFunc.
@@ -594,7 +596,7 @@ func mergeOutcome(into, next pipeline.Outcome) pipeline.Outcome {
 func plan(selection Selection, seg segment, start time.Time, history []string) pipeline.Plan {
 	return pipeline.Plan{
 		HistorySubjects: history,
-		Mode: pipeline.ModeRecalc, Set: selection.Set, Members: selection.Members, Params: seg.params, BaseParams: seg.base,
+		Mode:            pipeline.ModeRecalc, Set: selection.Set, Members: selection.Members, Params: seg.params, BaseParams: seg.base,
 		TargetStart: start, TargetEnd: seg.end,
 		Expected:       append([]string(nil), selection.Subjects...),
 		Available:      append([]string(nil), selection.Subjects...),

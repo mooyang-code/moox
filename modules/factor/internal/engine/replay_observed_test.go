@@ -47,8 +47,10 @@ func (localStoreData) WindowStatuses() []pipeline.WarmupStatus { return nil }
 
 type discardStore struct{ storageio.Store }
 
-func (discardStore) WriteRows(context.Context, string, string, string, []storageio.ResultRow) error { return nil }
-func (discardStore) ReportComputed(context.Context, storageio.PeriodMarker) error               { return nil }
+func (discardStore) WriteRows(context.Context, string, string, string, []storageio.ResultRow) error {
+	return nil
+}
+func (discardStore) ReportComputed(context.Context, storageio.PeriodMarker) error { return nil }
 
 // 回放支持 observed：数据到不了回放终点（已下架）的 GONE 被排除在回放标的之外，但仍出现在它还有数据的历史截面里；
 // 每期的值与按本地存储走实时计算路径的结果逐位相同。
