@@ -67,9 +67,9 @@ func TestImportArchiveFileValidatesAndYieldsQueuedTicks(t *testing.T) {
 	if got.Status != store.RunCanceled || !strings.Contains(got.Message, "导入") {
 		t.Fatalf("排队的 tick 应让位给导入: %+v", got)
 	}
-	// 同一任务只能有一条排队或运行中的运行。
+	// 已有一条排队中的导入：第二条导入冲突。
 	dup, _ := h.mgr.ImportArchiveFile(ctx, &archivepb.ImportArchiveFileReq{SpaceId: "crypto", DatasetId: "ds_1m", ImportId: id, FileName: "import.csv"})
-	requireCode(t, dup.GetRetInfo(), commonpb.ErrorCode_CONFLICT, "排队中或运行中")
+	requireCode(t, dup.GetRetInfo(), commonpb.ErrorCode_CONFLICT, "运行中的运行或排队中的导入")
 	missing, _ := h.mgr.ImportArchiveFile(ctx, &archivepb.ImportArchiveFileReq{SpaceId: "crypto", DatasetId: "nope", ImportId: id, FileName: "import.csv"})
 	requireCode(t, missing.GetRetInfo(), commonpb.ErrorCode_NOT_FOUND, "")
 }

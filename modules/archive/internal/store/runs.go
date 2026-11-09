@@ -106,7 +106,7 @@ VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)`, id, spaceID, datasetID, spec.Kind
 	return scanRun(tx.QueryRowContext(ctx, queryRuns1, id))
 }
 
-// CreateRun 为任务生成一条 manual、range 或 import 运行（复核与到点拉取只由 TriggerDue 生成）；已有排队中或运行中的运行时返回 ErrConflict。
+// CreateRun 为任务生成一条 manual、range 或 import 运行（复核与到点拉取只由 TriggerDue 生成）；冲突规则见函数内，冲突时返回 ErrConflict。
 func (s *Store) CreateRun(ctx context.Context, spaceID, datasetID string, spec RunSpec, now time.Time) (Run, error) {
 	switch spec.Kind {
 	case KindManual, KindRange:
@@ -132,8 +132,15 @@ func (s *Store) CreateRun(ctx context.Context, spaceID, datasetID string, spec R
 WHERE c_space_id = ? AND c_dataset_id = ? AND c_kind = 'tick' AND c_status = 'queued'`, fmtTime(now), spaceID, datasetID); err != nil {
 			return err
 		}
+		// 立即运行、补拉区间：任务有排队中或运行中的运行就冲突。
+		// 导入：只在有运行中的运行、或已有一条排队中的导入时冲突；排队中的复核、立即运行、补拉不挡导入
+		// （长回补期间复核要排几个小时）。同一任务不会并行执行，由 ClaimRuns 跳过已有运行中运行的任务保证。
+		blocking := `SELECT COUNT(*) FROM t_archive_runs WHERE c_space_id = ? AND c_dataset_id = ? AND c_status IN ('queued', 'running')`
+		if spec.Kind == KindImport {
+			blocking = `SELECT COUNT(*) FROM t_archive_runs WHERE c_space_id = ? AND c_dataset_id = ? AND (c_status = 'running' OR (c_status = 'queued' AND c_kind = 'import'))`
+		}
 		var active int
-		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM t_archive_runs WHERE c_space_id = ? AND c_dataset_id = ? AND c_status IN ('queued', 'running')`, spaceID, datasetID).Scan(&active); err != nil {
+		if err := tx.QueryRowContext(ctx, blocking, spaceID, datasetID).Scan(&active); err != nil {
 			return err
 		}
 		if active > 0 {
@@ -307,9 +314,29 @@ func (s *Store) ClaimRuns(ctx context.Context, req ClaimRequest) ([]Claimed, err
 		for node, count := range req.BusyByDataNode {
 			busy[node] = count
 		}
+		// 同一任务同时只执行一条运行：导入可以和排队中的复核并存，领取时跳过已有运行中运行的任务（含本次刚领到的）。
+		runningTasks := map[string]bool{}
+		taskRows, err := tx.QueryContext(ctx, `SELECT DISTINCT c_space_id, c_dataset_id FROM t_archive_runs WHERE c_status = 'running'`)
+		if err != nil {
+			return err
+		}
+		for taskRows.Next() {
+			var space, dataset string
+			if err := taskRows.Scan(&space, &dataset); err != nil {
+				_ = taskRows.Close()
+				return err
+			}
+			runningTasks[space+"/"+dataset] = true
+		}
+		if err := taskRows.Close(); err != nil {
+			return err
+		}
 		for _, run := range queued {
 			if len(claimed) >= req.FreeSlots {
 				break
+			}
+			if runningTasks[run.SpaceID+"/"+run.DatasetID] {
+				continue
 			}
 			task, err := scanTask(tx.QueryRowContext(ctx, queryRuns7, run.SpaceID, run.DatasetID))
 			if errors.Is(err, sql.ErrNoRows) {
@@ -332,6 +359,7 @@ WHERE c_run_id = ? AND c_status = 'queued'`, fmtTime(req.Now), req.WorkerID, tok
 			if readsStorage {
 				busy[task.DataNodeID]++
 			}
+			runningTasks[run.SpaceID+"/"+run.DatasetID] = true
 			claimed = append(claimed, Claimed{Run: run, Task: task})
 		}
 		return nil

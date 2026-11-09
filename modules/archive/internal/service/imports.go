@@ -94,7 +94,7 @@ func (m *MgrService) ImportArchiveFile(ctx context.Context, req *archivepb.Impor
 	run, err := s.store.CreateRun(ctx, space, req.GetDatasetId(), store.RunSpec{Kind: store.KindImport, ImportFile: file, Overwrite: req.GetOverwrite()}, s.clock())
 	if err != nil {
 		if errors.Is(err, store.ErrConflict) {
-			return &archivepb.ImportArchiveFileRsp{RetInfo: conflict(errors.New("任务已有排队中或运行中的运行，等它结束后再导入"))}, nil
+			return &archivepb.ImportArchiveFileRsp{RetInfo: conflict(errors.New("任务有运行中的运行或排队中的导入，等它结束后再导入"))}, nil
 		}
 		return &archivepb.ImportArchiveFileRsp{RetInfo: fail(err)}, nil
 	}
