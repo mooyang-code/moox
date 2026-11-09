@@ -279,6 +279,9 @@ func apply(src *exprSource, node ast.Node, fn *Function, args []*Node, argNodes 
 				continue
 			}
 			if arg.Kind != KindNumberConst || arg.Value < spec.Min || arg.Value > spec.Max {
+				if spec.LiteralOnly {
+					return nil, src.errAt(at, "%s%s 必须是 %s～%s 之间的字面量", label, spec.Name, formatFloat(spec.Min), formatFloat(spec.Max))
+				}
 				return nil, src.errAt(at, "%s%s 必须是 %s～%s 之间的常量或单个参数", label, spec.Name, formatFloat(spec.Min), formatFloat(spec.Max))
 			}
 			result.Floats = append(result.Floats, arg.Value)
@@ -597,8 +600,11 @@ func CompileSpecWith(spec *Spec, env UDFEnv) (*Factor, error) {
 			return nil, parsed.src.errAt(parsed.root, "输出必须依赖输入列，不能是常量")
 		case root.Kind == KindBool || root.Kind == KindBoolConst:
 			return nil, parsed.src.errAt(parsed.root, "输出必须是数值；布尔值请用 where(c, 1, 0) 转换")
-		case root.Scalar:
+		case root.Scalar && root.hasParam():
 			return nil, parsed.src.errAt(parsed.root, "输出必须依赖输入列，不能只由参数决定")
+		case root.Scalar:
+			// 没有折叠成常量的常量运算（例如结果为 NaN 的条件 nan > 0）。
+			return nil, parsed.src.errAt(parsed.root, "输出必须依赖输入列，不能只由常量决定")
 		}
 		total = addSize(total, root.size)
 		if total > MaxFactorNodes {

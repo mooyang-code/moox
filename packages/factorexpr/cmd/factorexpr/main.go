@@ -1,7 +1,7 @@
 // Command factorexpr 是因子表达式的离线工具：列出函数、编译检查定义、在 K 线 CSV 上试算。
 // 它与引擎使用同一个编译器和执行器，用于把旧的 Python 因子转写成表达式之后逐值核对（见 skills/moox/references/factor-dsl.md）。
 //
-//	factorexpr functions [--json]
+//	factorexpr functions [--json | --markdown]
 //	factorexpr check --library lib.yaml [--factor-id ID ...]
 //	factorexpr eval --library lib.yaml --factor-id ID [--factor-id ID ...] --input bars.csv --freq 1m [--output out.csv]
 package main

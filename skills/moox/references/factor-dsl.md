@@ -231,7 +231,7 @@ let:
 ### 宽松窗口算子（`*_relaxed`）
 
 引擎的时序算子默认是**严格窗口**：窗口里没凑满、或有 NaN，结果就是 NaN。宽松窗口算子是底层能力，让序列开头、窗口还没攒满时也能出值：
-`ema_relaxed(x, n, k)`，以及每个滚动算子的 `_relaxed` 版本：`ts_sum`、`ts_mean`、`ts_min`、`ts_max`、`ts_std`、`ts_var`、`ts_zscore`、`ts_rank`、
+`ema_relaxed(x, n, k)`，以及下列滚动算子的 `_relaxed` 版本（`ts_slope`、`ts_rsquare`、`ts_resi`、`ts_decay_linear` 没有宽松版）：`ts_sum`、`ts_mean`、`ts_min`、`ts_max`、`ts_std`、`ts_var`、`ts_zscore`、`ts_rank`、
 `ts_median`、`ts_skew`、`ts_kurt`、`ts_argmax`、`ts_argmin`、`ts_product`、`ts_count` 的 `(x, n, m)`，`ts_quantile_relaxed(x, n, q, m)`，
 `ts_corr_relaxed(x, y, n, m)`、`ts_cov_relaxed(x, y, n, m)`。
 

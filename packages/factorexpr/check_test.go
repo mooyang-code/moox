@@ -253,6 +253,7 @@ func TestNaNLiteral(t *testing.T) {
 		{"quantile", outputSpec(`ts_quantile(close, 20, nan)`), "参数 q 不能是 nan"},
 		{"constant output", outputSpec(`nan`), "不能是常量"},
 		{"zero over zero", outputSpec(`close + 0 / 0`), "常量运算的结果不是有限数"},
+		{"constant condition output", outputSpec(`where(nan > 0, 1, 0)`), "不能只由常量决定"},
 		{"param name", "params: {nan: {type: int, min: 1, max: 9, default: 5}}\noutput: close\n", "保留字"},
 		{"let name", "let:\n  nan: close\noutput: close\n", "保留字"},
 		{"called as function", outputSpec(`nan(close)`), "未知的函数 nan"},
@@ -307,9 +308,9 @@ func TestAggregateChecks(t *testing.T) {
 		name, text, want string
 	}{
 		{"quantile param", "params: {q: {type: float, min: 0, max: 1, default: 0.5}}\noutput: cs_quantile(close, q)\n", "只能写字面量，不能使用参数 q"},
-		{"quantile out of range", outputSpec(`cs_quantile(close, 1.5)`), "0～1 之间的常量"},
+		{"quantile out of range", outputSpec(`cs_quantile(close, 1.5)`), "0～1 之间的字面量"},
 		{"quantile nan", outputSpec(`cs_quantile(close, nan)`), "不能是 nan"},
-		{"quantile series", outputSpec(`cs_quantile(close, volume)`), "0～1 之间的常量"},
+		{"quantile series", outputSpec(`cs_quantile(close, volume)`), "0～1 之间的字面量"},
 		{"count number", outputSpec(`cs_count(close)`), "需要布尔序列"},
 		{"count constant", outputSpec(`cs_count(true) + close`), "必须依赖输入列"},
 		{"mean constant", outputSpec(`cs_mean(1) + close`), "必须依赖输入列"},

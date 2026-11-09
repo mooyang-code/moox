@@ -88,6 +88,19 @@ func (n *Node) HasParamSlots() bool {
 	return false
 }
 
+// hasParam 报告子树里是否引用了参数。
+func (n *Node) hasParam() bool {
+	if n.Op == OpParam {
+		return true
+	}
+	for _, arg := range n.Args {
+		if arg.hasParam() {
+			return true
+		}
+	}
+	return false
+}
+
 // CrossSection 报告该节点的子树里是否有截面算子。
 func (n *Node) CrossSection() bool { return n.cross }
 
