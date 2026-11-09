@@ -189,7 +189,7 @@ func evaluateRank(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous R
 	pick := func(eligible, bufferHeld []string) []string {
 		sel := rule.Rule.Select
 		eligible = inRange(sel, eligible, rankOf)
-		chosen, skipped := selectWithBuffer(eligible, rankOf, count, sel.Buffer, bufferHeld, newGroupQuota(sel.Group, eligible, frame.Rows))
+		chosen, skipped := selectWithBuffer(eligible, rankOf, count, sel.Buffer, bufferHeld, newGroupQuota(sel.Group, eligible, frame.Rows, nil))
 		final, rejected := applyThen(rule, chosen, frame.Rows)
 		for id, reason := range skipped {
 			skipReasons[id] = reason

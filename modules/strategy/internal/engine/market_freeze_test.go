@@ -252,3 +252,42 @@ portfolio: {max_missing: 1}
 		}
 	}
 }
+
+// hold 加分组名额：永续整体不可用时，持有的永续 A 冻结且本根没有行，仍按记下的分组值占所属组的名额，同组的 C 不能入场，空位由别组的 B 补上。
+func TestHoldFrozenWithoutRowOccupiesGroupSlot(t *testing.T) {
+	mode := dsl.Market{Select: dsl.MarketBoth, Prefer: dsl.MarketSwap}
+	program := compileIn(t, mode, `name: g
+rules:
+  - id: r
+    type: rank
+    score: "m"
+    select: {top: 2, group: {by: g, max: 1}}
+    hold: {}
+    weight: {total: 1}
+portfolio: {max_missing: 1}
+`, "m", "g")
+	rows := map[string]map[string]float64{dsl.MarketSpot: {"B": 2, "C": 9}}
+	down := map[string]string{"A": FailedMarket, "B": FailedMarket, "C": FailedMarket}
+	frame := marketFrame(program, rows, map[string]map[string]map[string]string{dsl.MarketSwap: {"m": down, "g": down}})
+	frame.Markets[dsl.MarketSpot].Rows["B"].Values["g"] = 2
+	frame.Markets[dsl.MarketSpot].Rows["C"].Values["g"] = 1
+	frame.Expected["r"] = []string{"A", "B", "C"}
+	previous := State{
+		Rules:   map[string]RuleState{"r": {Held: []string{"A"}, Hold: &HoldState{Entered: map[string]int64{"A": 0}, Groups: map[string]float64{"A": 1}}}},
+		Targets: map[string]string{"A|swap": "0.5"},
+	}
+	decision, err := Evaluate(program, frame, previous)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertOK(t, decision)
+	if got := holdsOf(decision); got["A|swap"] != "0.5(hold)" || got["B|spot"] == "" || got["C|spot"] != "" {
+		t.Fatalf("A 应冻结并占组 1 的名额，C 不能入场、B 补位：%v", got)
+	}
+	if item := findItem(t, decision, "r", "C"); item.Reason != reasonGroupFull {
+		t.Fatalf("C 应因组名额已满跳过：%+v", item)
+	}
+	if groups := decision.State.Rules["r"].Hold.Groups; groups["A"] != 1 || groups["B"] != 2 {
+		t.Fatalf("状态应记下持有标的的分组值：%v", groups)
+	}
+}

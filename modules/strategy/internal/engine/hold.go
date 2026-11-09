@@ -35,6 +35,8 @@ type HoldState struct {
 	Decided  int64            `json:"decided,omitempty"`
 	// Weights 是与日历同写时上一次判进出场定下的基准权重（持有标的 → 份额，预算按 1 计，含 cap）；非建仓 bar 沿用它配权。
 	Weights map[string]string `json:"weights,omitempty"`
+	// Groups 是写了 select.group 时持有标的最近一次已知的分组值：冻结且本根没有行时，用它占所属组的名额。
+	Groups map[string]float64 `json:"groups,omitempty"`
 }
 
 // holdDecision 报告本根是否判 filter、exit、max_bars 与补位，并返回之后记下的“上次判进出场的序号”。
@@ -209,7 +211,7 @@ func evaluateHold(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous R
 		if note := capShortNote(rule, target); note != "" {
 			result.notes = append(result.notes, note)
 		}
-		quota := newGroupQuota(rule.Rule.Select.Group, append(append([]string(nil), ordered...), sortedMissingFromRank(held, rankOf)...), frame.Rows)
+		quota := newGroupQuota(rule.Rule.Select.Group, append(append([]string(nil), ordered...), sortedMissingFromRank(held, rankOf)...), frame.Rows, prior.Groups)
 		for _, id := range rankedFirst(held, rankOf) {
 			quota.admit(id) // 持有标的先占各组名额
 		}
@@ -320,6 +322,16 @@ func evaluateHold(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous R
 	sort.Strings(held)
 	result.state.Held = held
 	state := &HoldState{Decided: decided, Weights: base}
+	if group := rule.Rule.Select.Group; group != nil {
+		for _, id := range held {
+			if value, ok := groupValue(group, id, frame.Rows, prior.Groups); ok {
+				if state.Groups == nil {
+					state.Groups = make(map[string]float64, len(held))
+				}
+				state.Groups[id] = value
+			}
+		}
+	}
 	if len(entered) > 0 {
 		state.Entered = make(map[string]int64, len(held))
 		for _, id := range held {

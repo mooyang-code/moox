@@ -25,15 +25,16 @@ type groupQuota struct {
 
 // newGroupQuota 按候选（已按名次排好）建立分组名额；规则没写 group 时返回 nil。分组值取自本期行，NaN 与缺值不属于任何组。
 // quotas 写法按组内最优名次给组排序：第 i 个出现的组名额是 quotas[i]，其余组是 rest。
-func newGroupQuota(group *dsl.SelectGroup, ordered []string, rows map[string]Row) *groupQuota {
+// known 是本根没有分组值的标的沿用的分组值（hold 规则记下的持仓分组，冻结且没有行时用），可为 nil。
+func newGroupQuota(group *dsl.SelectGroup, ordered []string, rows map[string]Row, known map[string]float64) *groupQuota {
 	if group == nil {
 		return nil
 	}
 	quota := &groupQuota{key: make(map[string]float64, len(ordered)), used: map[float64]int{}}
 	order := map[float64]int{}
 	for _, id := range ordered {
-		value, ok := rows[id].Values[group.By]
-		if !ok || math.IsNaN(value) {
+		value, ok := groupValue(group, id, rows, known)
+		if !ok {
 			continue
 		}
 		quota.key[id] = value
@@ -52,6 +53,15 @@ func newGroupQuota(group *dsl.SelectGroup, ordered []string, rows map[string]Row
 		}
 	}
 	return quota
+}
+
+// groupValue 返回标的的分组值：本根行里的有效值，没有时取 known 里记下的值。
+func groupValue(group *dsl.SelectGroup, id string, rows map[string]Row, known map[string]float64) (float64, bool) {
+	if value, ok := rows[id].Values[group.By]; ok && !math.IsNaN(value) {
+		return value, true
+	}
+	value, ok := known[id]
+	return value, ok
 }
 
 // admit 尝试让标的占用所属组的一个名额；不能入选时返回原因。nil 表示没有分组限制。
