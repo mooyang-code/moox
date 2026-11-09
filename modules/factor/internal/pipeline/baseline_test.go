@@ -30,7 +30,7 @@ import (
 const baselineOutputsPath = "testdata/baseline/factor_outputs.csv"
 
 // baselineUpdate 报告本次是否重新生成基线金样。
-func baselineUpdate() bool { return os.Getenv("UPDATE_BASELINE") != "" }
+func baselineUpdate() bool { return os.Getenv("UPDATE_BASELINE") == "1" }
 
 // baselineStart 是第一个目标周期；合成数据从它往前 baselineHistory 根开始。
 var baselineStart = time.Date(2026, 10, 5, 0, 0, 0, 0, time.UTC)

@@ -20,7 +20,7 @@ import (
 // 五种市场模式（含市场不可用时的冻结）与统一数据集。金样由当前代码生成，默认只比对；有意改变结果时用 UPDATE_BASELINE=1 重新生成。
 
 // baselineUpdate 报告本次是否重新生成基线金样。
-func baselineUpdate() bool { return os.Getenv("UPDATE_BASELINE") != "" }
+func baselineUpdate() bool { return os.Getenv("UPDATE_BASELINE") == "1" }
 
 // baselineJSON 把值编码成规范的 JSON：对象键排序、两个空格缩进、不转义 HTML 字符，数值保留原文。数组顺序不动（顺序有语义）。
 func baselineJSON(t *testing.T, value any) []byte {
