@@ -123,6 +123,9 @@ func bindViews(ctx context.Context, client Client, spaceID string, views []resol
 	if err := CheckCalendar(resolved.Calendar, resolved.Bar); err != nil {
 		return Resolved{}, nil, fmt.Errorf("日历 %s 与周期 %s 的组合不受支持：%w", resolved.Calendar, resolved.Bar, err)
 	}
+	if err := CheckHoldingAnchors(resolved.Calendar, resolved.Bar, strategy); err != nil {
+		return Resolved{}, nil, err
+	}
 	for _, item := range views {
 		if bars, ok := retentionBars(item.dataset.Retention, resolved.Calendar, resolved.Bar); ok && strategy.Universe.MinAgeBars > bars {
 			return Resolved{}, nil, fmt.Errorf("universe.min_age_bars=%d 超过 View 的保留根数 %d", strategy.Universe.MinAgeBars, bars)

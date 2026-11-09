@@ -38,12 +38,15 @@ type MarketInput struct {
 // 为每个标的选出一行写入 Rows、RowMarket，并合并失败证据写入 FailedColumns，规则只看这几项。
 type Frame struct {
 	BarEnd time.Time
-	// BarIndex 是该 bar 在日历中的序号，只用于 holding 的 offset 计算。
+	// BarIndex 是该 bar 在日历中的序号，用于 holding 的换仓、止损冷却与 hold 的持有计数。
 	BarIndex int64
 	Markets  map[string]MarketInput
 	Universe []string
 	Expected map[string][]string
 	AgedOut  map[string][]string
+	// Holdings 是写了 holding.anchor 或 holding.calendar 的规则的换仓时钟（规则 id → 时钟），由输入层按交易日历算好；
+	// 其余规则不出现，引擎按锚点 0 与 bars/offsets 计算。
+	Holdings map[string]HoldingClock
 
 	// 以下由选币池构造填入。Rows 每个标的一行，RowMarket 是这一行所属的市场；FailedColumns 是合并后的失败证据
 	// （列名 → 标的 → 原因），引用该列的规则把这些标的视为缺数，明细原因为“<原因>:<列>”。
@@ -63,6 +66,13 @@ const (
 	FailedSource = "source_failed"
 	FailedMarket = "market_unavailable"
 )
+
+// HoldingClock 是一条 holding 规则本根的换仓时钟。Anchor 是 holding.anchor 换成的 bar 序号（bars/offsets 写法的相位起点，
+// 没写为 0）；Scheduled 是日历写法每个批次（holding.days 的值）最近一个应建仓 bar 的序号（不晚于本根），还没有过应建仓 bar 的批次不出现。
+type HoldingClock struct {
+	Anchor    int64
+	Scheduled map[int]int64
+}
 
 // HoldingBatch 是 holding 规则在某个偏移建立的一个批次；BaseWeights 之和不超过 1，
 // filter_after 剔除与缺数移除的份额留作现金。

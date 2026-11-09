@@ -86,10 +86,16 @@ type Weight struct {
 	HasCap bool
 }
 
-// Holding 是 rank 规则的分批换仓：每 Bars 根为一个周期，在 Offsets 指定的偏移处重建对应批次。
+// Holding 是 rank 规则的分批换仓（见 holding.go）：每 Bars 根为一个周期，在 Offsets 指定的偏移处重建对应批次；
+// 写了 Calendar 时改按交易日历换仓，Days 的每个值是一个批次。Anchor 是相位锚点（某根 bar 的 bar_start）。
 type Holding struct {
-	Bars    int
-	Offsets []int
+	Bars     int
+	Offsets  []int
+	Anchor   string
+	Calendar string
+	Every    int
+	Days     []int
+	At       string
 }
 
 // Rule 是一条规则。rank 规则使用 Filter、Score、Select、Weight、FilterAfter、Holding；

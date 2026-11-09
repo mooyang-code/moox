@@ -736,7 +736,11 @@ func evaluateBar(ctx context.Context, program *dsl.Program, resolved input.Resol
 			}
 		}
 	}
-	frame := engine.Frame{BarEnd: bar.BarEnd, BarIndex: bar.BarIndex, Markets: make(map[string]engine.MarketInput, len(readers)), Universe: sets.Universe, Expected: sets.Expected, AgedOut: sets.AgedOut}
+	holdings, err := input.HoldingClocks(resolved.Calendar, resolved.Bar, program.Strategy, bar)
+	if err != nil {
+		return skippedDecision(state, input.SkipConfigError, err.Error()), nil
+	}
+	frame := engine.Frame{BarEnd: bar.BarEnd, BarIndex: bar.BarIndex, Markets: make(map[string]engine.MarketInput, len(readers)), Universe: sets.Universe, Expected: sets.Expected, AgedOut: sets.AgedOut, Holdings: holdings}
 	for _, reader := range readers {
 		current := segments[reader.market].rows.Bars[key]
 		previous := segments[reader.market].rows.Bars[bar.PreviousStart.Unix()]

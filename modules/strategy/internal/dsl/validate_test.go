@@ -339,3 +339,46 @@ rules:
 		t.Fatalf("then.score 返回布尔时编译应报错：%v", err)
 	}
 }
+
+// S5 换仓相位与日历周期：互斥与非法值。
+func TestValidateHoldingCalendarOptions(t *testing.T) {
+	t.Parallel()
+	holding := func(body string) string { return rankRule("select: {top: 1}, weight: 1, holding: " + body) }
+	runOptionCases(t, map[string]optionCase{
+		"calendar 与 bars":        {holding("{calendar: week, days: [1], bars: 5}"), "calendar 与 bars、offsets 只能写一种"},
+		"calendar 非法":            {holding("{calendar: year, days: [1]}"), "trading_days、week 或 month"},
+		"trading_days 缺 every":   {holding("{calendar: trading_days, days: [1]}"), "holding.every 必须在 1 到"},
+		"every 配 week":           {holding("{calendar: week, every: 2, days: [1]}"), "every 只能与 calendar: trading_days"},
+		"days 为空":                {holding("{calendar: week, days: []}"), "days 不能为空"},
+		"days 超出 every":          {holding("{calendar: trading_days, every: 5, days: [6]}"), "1 到 every=5"},
+		"trading_days 写倒数":       {holding("{calendar: trading_days, every: 5, days: [-1]}"), "1 到 every=5"},
+		"week 的 days 越界":         {holding("{calendar: week, days: [8]}"), "1 到 7 之间，或 -1 到 -7"},
+		"month 的 days 越界":        {holding("{calendar: month, days: [-32]}"), "1 到 31 之间，或 -1 到 -31"},
+		"days 重复":                {holding("{calendar: month, days: [1, 1]}"), "重复值 1"},
+		"at 非法":                  {holding("{calendar: week, days: [1], at: noon}"), "first 或 last"},
+		"at 配 bars":              {holding("{bars: 4, offsets: [0], at: last}"), "只能与 holding.calendar 一起写"},
+		"anchor 配 week":          {holding("{calendar: week, days: [1], anchor: \"2024-01-01\"}"), "anchor 不能与 calendar: week"},
+		"anchor 写法非法":            {holding("{bars: 4, offsets: [0], anchor: \"yesterday\"}"), "RFC3339"},
+		"calendar 与 buffer":      {rankRule("select: {top: 1, buffer: 1}, weight: 1, holding: {calendar: week, days: [1]}"), "holding 和 select.buffer"},
+		"写了 market 时锚点不是 bar 起点": {"name: x\nbar: 4h\nmarket: {select: swap, prefer: swap}\nrules:\n  - {id: a, type: rank, score: close, select: {top: 1}, weight: 1, holding: {bars: 3, offsets: [0], anchor: \"2024-01-01T01:00:00Z\"}}\n", "不是 4h 周期的 bar 起点"},
+	})
+}
+
+// S5：正常写法保存通过。
+func TestValidateHoldingCalendarAccepted(t *testing.T) {
+	t.Parallel()
+	for _, body := range []string{
+		"{calendar: trading_days, every: 5, days: [1, 3], anchor: \"2024-01-02\", at: first}",
+		"{calendar: week, days: [1, -1]}",
+		"{calendar: month, days: [-1]}",
+		"{bars: 4, offsets: [0, 2], anchor: \"2024-01-01T04:00:00Z\"}",
+	} {
+		strategy, err := Parse([]byte("name: x\nbar: 4h\nmarket: {select: swap, prefer: swap}\nrules:\n  - {id: a, type: rank, score: close, select: {top: 1}, weight: 1, holding: " + body + "}\n"))
+		if err != nil {
+			t.Fatalf("Parse(%s) = %v", body, err)
+		}
+		if len(strategy.Rules[0].Holding.BatchKeys()) == 0 {
+			t.Fatalf("批次键不能为空：%s", body)
+		}
+	}
+}

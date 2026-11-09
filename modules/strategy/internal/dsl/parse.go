@@ -376,29 +376,6 @@ func decodeWeight(node *yaml.Node, path string) (Weight, error) {
 	return weight, nil
 }
 
-func decodeHolding(node *yaml.Node, path string) (Holding, error) {
-	fields, err := mappingFields(node, path)
-	if err != nil {
-		return Holding{}, err
-	}
-	var holding Holding
-	for _, f := range fields {
-		fieldPath := path + "." + f.key
-		switch f.key {
-		case "bars":
-			holding.Bars, err = scalarInt(f.value, fieldPath)
-		case "offsets":
-			holding.Offsets, err = intList(f.value, fieldPath)
-		default:
-			return Holding{}, fmt.Errorf("%s 包含未知字段 %q", path, f.key)
-		}
-		if err != nil {
-			return Holding{}, err
-		}
-	}
-	return holding, nil
-}
-
 // defaultPortfolio 是省略 portfolio 字段时的取值；显式写出的 0 不会被默认值覆盖。
 func defaultPortfolio() Portfolio {
 	return Portfolio{Leverage: quant.One(), MaxMissing: quant.Must(DefaultMaxMissing)}

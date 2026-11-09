@@ -113,6 +113,9 @@ func Validate(s *Strategy) error {
 	if err := validateTrancheStrategy(s); err != nil {
 		return err
 	}
+	if err := validateAnchorAlignment(s); err != nil {
+		return err
+	}
 	// 显式写了 market 时，保存就按这个模式校验做空、杠杆、tranche 与 factor_params，不必等到启用；没写时模式取决于绑定的任务，启用时再校验。
 	if s.MarketDeclared {
 		return ValidateMode(*s, s.Market)
@@ -290,32 +293,6 @@ func analyzeStages(prefix string, sources []stageSource) error {
 		if _, err := Analyze(item.source, item.stage); err != nil {
 			return fmt.Errorf("%s 的 %s 表达式无效：%w", prefix, item.stage, err)
 		}
-	}
-	return nil
-}
-
-func validateHolding(prefix string, holding *Holding) error {
-	if holding.Bars <= 0 {
-		return fmt.Errorf("%s 的 holding.bars 必须大于 0", prefix)
-	}
-	if holding.Bars > MaxCount {
-		return fmt.Errorf("%s 的 holding.bars 不能超过 %d", prefix, MaxCount)
-	}
-	if len(holding.Offsets) == 0 {
-		return fmt.Errorf("%s 的 holding.offsets 不能为空", prefix)
-	}
-	if len(holding.Offsets) > MaxHoldingOffsets {
-		return fmt.Errorf("%s 的 holding.offsets 不能超过 %d 个", prefix, MaxHoldingOffsets)
-	}
-	seen := make(map[int]struct{}, len(holding.Offsets))
-	for _, offset := range holding.Offsets {
-		if offset < 0 || offset >= holding.Bars {
-			return fmt.Errorf("%s 的 holding.offsets 必须在 0 到 bars-1 之间", prefix)
-		}
-		if _, exists := seen[offset]; exists {
-			return fmt.Errorf("%s 的 holding.offsets 包含重复值 %d", prefix, offset)
-		}
-		seen[offset] = struct{}{}
 	}
 	return nil
 }

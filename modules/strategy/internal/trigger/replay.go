@@ -354,9 +354,13 @@ func (e *ReplayEvaluator) Evaluate(ctx context.Context, req ReplayEvaluateReques
 
 	// 闭环回放只支持单个现货任务：帧里只有这一个市场。
 	rows := make(map[string]engine.Row, len(req.Rows))
+	holdings, err := input.HoldingClocks(resolved.Calendar, resolved.Bar, program.Strategy, boundary)
+	if err != nil {
+		return skipped(input.SkipConfigError, err.Error())
+	}
 	frame := engine.Frame{
 		BarEnd: boundary.BarEnd, BarIndex: boundary.BarIndex,
-		Universe: sets.Universe, Expected: sets.Expected, AgedOut: sets.AgedOut,
+		Universe: sets.Universe, Expected: sets.Expected, AgedOut: sets.AgedOut, Holdings: holdings,
 	}
 	for subject, row := range req.Rows {
 		if _, ok := sets.Subjects[subject]; !ok {

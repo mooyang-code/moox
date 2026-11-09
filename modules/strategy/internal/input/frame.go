@@ -478,7 +478,11 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 			return Loaded{}, err
 		}
 	}
-	frame := engine.Frame{BarEnd: boundary.BarEnd, BarIndex: boundary.BarIndex, Markets: make(map[string]engine.MarketInput, len(loads)), Universe: sets.Universe, Expected: sets.Expected, AgedOut: sets.AgedOut}
+	holdings, err := HoldingClocks(resolved.Calendar, resolved.Bar, program.Strategy, boundary)
+	if err != nil {
+		return Loaded{}, &SkipError{Reason: SkipConfigError, Detail: err.Error()}
+	}
+	frame := engine.Frame{BarEnd: boundary.BarEnd, BarIndex: boundary.BarIndex, Markets: make(map[string]engine.MarketInput, len(loads)), Universe: sets.Universe, Expected: sets.Expected, AgedOut: sets.AgedOut, Holdings: holdings}
 	for _, load := range loads {
 		input := engine.MarketInput{Rows: make(map[string]engine.Row, len(load.current))}
 		for subjectID, row := range load.current {

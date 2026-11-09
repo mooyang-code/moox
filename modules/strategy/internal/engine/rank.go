@@ -128,7 +128,7 @@ func evaluateRank(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous R
 		if frame.BarIndex < 0 {
 			return ruleResult{}, fmt.Errorf("holding 需要非负的 bar 序号，当前为 %d", frame.BarIndex)
 		}
-		rebuild = holdingRebuilds(rule.Rule.Holding, frame.BarIndex, previous)
+		rebuild = holdingRebuilds(rule.Rule.Holding, frame.BarIndex, frame.Holdings[rule.Rule.ID], previous)
 		// 含冻结成员的批次延后重建：冻结成员不在候选里，现在重建会丢掉它的份额，保持结束后它就会被卖掉。
 		// 延后期间不推进批次的 EstablishedBar，保持解除后由「已满 bars 根未重建」的补建逻辑重建，建仓序号仍按 offset 对齐。
 		rebuild = withoutFrozenBatches(rebuild, previous, sets.frozen)
@@ -332,15 +332,28 @@ func withoutExcluded(ids []string, stops *stopTracker) []string {
 	return kept
 }
 
-// holdingRebuilds 按配置顺序返回本期要建立或重建的批次 offset：bar 序号对 bars 取模落在其上的批次；还没有建立的
-// 批次（启用后的第一根 ok bar）；已满 bars 根却没能按时重建的批次（建仓 bar 没有产生 ok 决策）。
-func holdingRebuilds(holding *dsl.Holding, barIndex int64, previous RuleState) []int {
+// holdingRebuilds 按配置顺序返回本期要建立或重建的批次：
+//   - bars/offsets 写法：(bar 序号 − 锚点序号) 对 bars 取模落在 offset 上的批次；还没有建立的批次（启用后的第一根 ok bar）；
+//     已满 bars 根却没能按时重建的批次（建仓 bar 没有产生 ok 决策）。锚点只决定相位，没写时为 0，与按 bar 序号取模相同。
+//   - 日历写法：还没有建立的批次；建仓序号早于输入层给出的“最近一个应建仓的序号”的批次（本根就是建仓 bar，或之前的建仓 bar
+//     没有产生 ok 决策，在之后第一根 ok bar 上补建；到下一个建仓 bar 仍没补上，就按下一个建仓 bar 正常重建）。
+func holdingRebuilds(holding *dsl.Holding, barIndex int64, clock HoldingClock, previous RuleState) []int {
 	established := make(map[int]int64, len(previous.Batches))
 	for _, batch := range previous.Batches {
 		established[batch.Offset] = batch.EstablishedBar
 	}
-	current := int(barIndex % int64(holding.Bars))
-	rebuild := make([]int, 0, len(holding.Offsets))
+	rebuild := make([]int, 0, len(holding.BatchKeys()))
+	if holding.IsCalendar() {
+		for _, day := range holding.Days {
+			at, built := established[day]
+			last, scheduled := clock.Scheduled[day]
+			if !built || (scheduled && at < last) {
+				rebuild = append(rebuild, day)
+			}
+		}
+		return rebuild
+	}
+	current := int(floorMod(barIndex-clock.Anchor, int64(holding.Bars)))
 	for _, offset := range holding.Offsets {
 		at, built := established[offset]
 		if offset == current || !built || barIndex-at >= int64(holding.Bars) {
@@ -348,6 +361,23 @@ func holdingRebuilds(holding *dsl.Holding, barIndex int64, previous RuleState) [
 		}
 	}
 	return rebuild
+}
+
+// establishedBar 返回本期重建的批次记下的建仓序号：最近一个应建仓的 bar，而不是本期，节奏不随补建漂移。
+// 日历写法取输入层给出的序号（还没有过应建仓 bar 时取本期）；bars/offsets 写法按锚点与 offset 对齐。
+func establishedBar(holding *dsl.Holding, barIndex int64, clock HoldingClock, key int) int64 {
+	if holding.IsCalendar() {
+		if last, ok := clock.Scheduled[key]; ok {
+			return last
+		}
+		return barIndex
+	}
+	return barIndex - floorMod(barIndex-clock.Anchor-int64(key), int64(holding.Bars))
+}
+
+// floorMod 是向下取整的取模，结果在 [0, m)：锚点晚于当前时差值为负。
+func floorMod(value, m int64) int64 {
+	return (value%m + m) % m
 }
 
 // holdingOutcome 是分批换仓一期的结果。
@@ -406,8 +436,8 @@ func evaluateHolding(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previou
 	for _, batch := range previous.Batches {
 		previousByOffset[batch.Offset] = batch
 	}
-	batches := make([]HoldingBatch, 0, len(holding.Offsets))
-	for _, offset := range holding.Offsets {
+	batches := make([]HoldingBatch, 0, len(holding.BatchKeys()))
+	for _, offset := range holding.BatchKeys() {
 		batch, carried := previousByOffset[offset]
 		if !carried || containsInt(rebuild, offset) {
 			continue
@@ -465,8 +495,7 @@ func evaluateHolding(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previou
 			outcome.fresh[id] = struct{}{}
 		}
 		for _, target := range rebuild {
-			// 补建与首次建立的批次把建仓序号记为它最近一个应建仓的 bar（offset 对齐），而不是本期：节奏不随补建漂移。
-			established := frame.BarIndex - ((frame.BarIndex-int64(target))%int64(holding.Bars)+int64(holding.Bars))%int64(holding.Bars)
+			established := establishedBar(holding, frame.BarIndex, frame.Holdings[rule.Rule.ID], target)
 			weights := make(map[string]string, len(raw))
 			var opened map[string]StopEntry
 			for id, value := range raw {
@@ -486,7 +515,7 @@ func evaluateHolding(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previou
 		}
 	}
 	sort.Slice(batches, func(i, j int) bool { return batches[i].Offset < batches[j].Offset })
-	sortedOffsets := append([]int(nil), holding.Offsets...)
+	sortedOffsets := append([]int(nil), holding.BatchKeys()...)
 	sort.Ints(sortedOffsets)
 	offsetKeys := make([]string, 0, len(sortedOffsets))
 	for _, value := range sortedOffsets {
