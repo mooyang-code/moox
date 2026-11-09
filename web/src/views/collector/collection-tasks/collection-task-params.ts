@@ -73,11 +73,6 @@ export function pruneFundingRate(fields: string[], dropped: boolean): string[] {
   return fields.filter(id => id !== FUNDING_RATE_FIELD_ID);
 }
 
-/** 条件不满足时从已选输出字段里去掉资金费率。 */
-export function dropUnavailableFundingRate(fields: string[], available: boolean): string[] {
-  return available ? fields : fields.filter(id => id !== FUNDING_RATE_FIELD_ID);
-}
-
 export type CollectionTaskMarket = "spot" | "swap" | "equity" | "multi";
 
 export interface CollectionTaskInput {

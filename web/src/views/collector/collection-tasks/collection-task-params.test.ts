@@ -4,7 +4,6 @@ import {
   buildCollectionTaskPayload,
   parseKlineResampleParams,
   collectionTaskNameError,
-  dropUnavailableFundingRate,
   fundingRateFieldAvailable,
   pruneFundingRate,
   shouldDropFundingRate,
@@ -239,10 +238,5 @@ describe("funding rate output field", () => {
     expect(pruneFundingRate(kept, false)).toBe(kept);
     const plain = ["close"];
     expect(pruneFundingRate(plain, true)).toBe(plain);
-  });
-
-  it("drops the selection when the condition no longer holds", () => {
-    expect(dropUnavailableFundingRate(["close", "funding_rate"], false)).toEqual(["close"]);
-    expect(dropUnavailableFundingRate(["close", "funding_rate"], true)).toEqual(["close", "funding_rate"]);
   });
 });
