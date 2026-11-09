@@ -492,6 +492,25 @@ func TestDriftStartAndInitialRatios(t *testing.T) {
 	requireCoefficients(t, "start 的起点", decisions[0], rebalanceStart)
 }
 
+// 写了 initial 时池在 at 之前已经推进过（起点前的根），漂移起点那一根仍按“初始化那一根”处理：gross 不放大，之后照常放大。
+func TestDriftStartBarDoesNotScaleUpGross(t *testing.T) {
+	body := "  allocation:\n    method: drift\n    ratios: {l1: 0.3, l2: 0.2, s: 0.5}\n    initial: {at: \"2026-01-01T02:00:00Z\", ratios: {l1: 0.2, l2: 0.1, s: 0.2}}\n  gross: {min: 0.8}\n"
+	cfg := driftConfig(t, body, engine.PoolClock{Start: 3, HasStart: true}, rebalanceMembers...)
+	decisions, _ := runDrift(t, cfg, engine.State{}, []driftStep{rebalanceBar(1, 10), rebalanceBar(2, 10), rebalanceBar(3, 10), rebalanceBar(4, 10)})
+	if len(decisions[1].Summary.Pool.Adjustments) != 1 {
+		t.Fatalf("起点之前、池第一根之后的根照常放大：%+v", decisions[1].Summary.Pool.Adjustments)
+	}
+	if adjustments := decisions[2].Summary.Pool.Adjustments; len(adjustments) != 0 {
+		t.Fatalf("漂移起点那一根不放大：%+v", adjustments)
+	}
+	requireCoefficients(t, "漂移起点", decisions[2], map[string]float64{"l1": 0.2, "l2": 0.1, "s": 0.2})
+	adjustments := decisions[3].Summary.Pool.Adjustments
+	if len(adjustments) != 1 || adjustments[0].Kind != "gross" || math.Abs(adjustments[0].Factor-0.8/0.5) > 1e-12 {
+		t.Fatalf("起点之后总敞口 0.5 低于 0.8 应放大：%+v", adjustments)
+	}
+	requireCoefficients(t, "起点之后放大", decisions[3], map[string]float64{"l1": 0.2 * (0.8 / 0.5), "l2": 0.1 * (0.8 / 0.5), "s": 0.2 * (0.8 / 0.5)})
+}
+
 // 预热里一段空缺超过补齐上限 maxFill（4096 根）：净值序列只补到上限、再截到窗口所需的长度，漂移按相对上一次估值价的累计收益计算。
 func TestDriftLongGapBeyondMaxFill(t *testing.T) {
 	body := "  allocation:\n    method: drift\n    ratios: {l1: 0.3, l2: 0.2, s: 0.5}\n  freeze: {watch: [l1], window_bars: 3, threshold: 0.5, bars: 1}\n"
