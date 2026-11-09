@@ -11,9 +11,12 @@ import (
 )
 
 type goldenData struct {
-	Length  int        `json:"length"`
-	X       []*float64 `json:"x"`
-	Y       []*float64 `json:"y"`
+	Length int        `json:"length"`
+	X      []*float64 `json:"x"`
+	Y      []*float64 `json:"y"`
+	// Z、U 开头带 NaN（序列还没开始），用于宽松窗口算子。
+	Z       []*float64 `json:"z"`
+	U       []*float64 `json:"u"`
 	Rolling []struct {
 		Expr   string     `json:"expr"`
 		Tol    float64    `json:"tol"`
@@ -103,7 +106,7 @@ func singleSeriesPanel(t *testing.T, length int, columns map[string][]*float64) 
 // 各时序算子与 pandas 严格窗口的结果一致（设计 12.1 的 pandas 锚点）。
 func TestRollingMatchesPandas(t *testing.T) {
 	data := loadGolden(t)
-	panel := singleSeriesPanel(t, data.Length, map[string][]*float64{"x": data.X, "y": data.Y})
+	panel := singleSeriesPanel(t, data.Length, map[string][]*float64{"x": data.X, "y": data.Y, "z": data.Z, "u": data.U})
 	for _, tc := range data.Rolling {
 		t.Run(tc.Expr, func(t *testing.T) {
 			program := compileProgram(t, map[string]string{"o": tc.Expr})

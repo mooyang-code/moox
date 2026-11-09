@@ -67,19 +67,11 @@ func sortedAggregate(fn func(sorted []float64) float64) Aggregate {
 
 var aggregates = map[string]Aggregate{
 	// 均值、和、标准差与时序算子共用同一套精确求和与两遍法。
-	"cs_mean": onValid(1, func(valid []float64) float64 { m, _ := mean(valid); return m }),
+	"cs_mean": onValid(1, meanValue),
 	"cs_sum":  onValid(1, exactSum),
-	"cs_std":  onValid(2, func(valid []float64) float64 { return math.Sqrt(variance(valid)) }),
+	"cs_std":  onValid(2, stdDev),
 	// cs_count 的输入是布尔（1、0、NaN）：计真值个数。
-	"cs_count": onValid(1, func(valid []float64) float64 {
-		count := 0.0
-		for _, v := range valid {
-			if v != 0 {
-				count++
-			}
-		}
-		return count
-	}),
+	"cs_count":  onValid(1, countTrue),
 	"cs_median": sortedAggregate(median),
 	"cs_min":    onValid(1, windowMin),
 	"cs_max":    onValid(1, windowMax),

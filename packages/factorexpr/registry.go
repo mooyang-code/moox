@@ -170,8 +170,15 @@ func rolling(name string, args []ArgSpec, doc, example string) *Function {
 
 // relaxedWindow 登记 (x, n, m) 形式的宽松窗口算子：回看按 n 推导，m 是序列开头最少的有效值个数。
 func relaxedWindow(name string, minimum int, doc, example string) *Function {
-	return &Function{Name: name, Category: CategoryTimeSeries,
-		Args:   []ArgSpec{argSeries, window(minimum), {Name: "m", Kind: ArgInteger, Min: float64(minimum), Max: MaxWindow}},
+	return relaxed(name, []ArgSpec{argSeries}, minimum, nil, doc, example)
+}
+
+// relaxed 登记宽松窗口算子，参数依次是 series、窗口 n、consts（例如 ts_quantile_relaxed 的 q）与 m。m 的下限沿用严格版本
+// 对 n 的下限（minimum），且不能大于 n。整数参数依次为 [n, m]。
+func relaxed(name string, series []ArgSpec, minimum int, consts []ArgSpec, doc, example string) *Function {
+	args := append(append([]ArgSpec(nil), series...), window(minimum))
+	args = append(append(args, consts...), ArgSpec{Name: "m", Kind: ArgInteger, Min: float64(minimum), Max: MaxWindow})
+	return &Function{Name: name, Category: CategoryTimeSeries, Args: args,
 		Result: ResultNumber, Lookback: "L(x)+n−1", Doc: doc, Example: example,
 		back: func(ints []int) int { return ints[0] - 1 },
 		validate: func(ints []int, _ []float64) string {
@@ -285,6 +292,25 @@ var functionList = []*Function{
 	relaxedWindow("ts_std_relaxed", 2, "窗口内样本标准差（ddof=1）；序列开头的宽松窗口规则同 ts_mean_relaxed，m ≥ 2", "ts_std_relaxed(close, 20, 2)"),
 	relaxedWindow("ts_min_relaxed", 1, "窗口内最小值；序列开头的宽松窗口规则同 ts_mean_relaxed", "ts_min_relaxed(low, 20, 1)"),
 	relaxedWindow("ts_max_relaxed", 1, "窗口内最大值；序列开头的宽松窗口规则同 ts_mean_relaxed", "ts_max_relaxed(high, 20, 1)"),
+	relaxedWindow("ts_sum_relaxed", 1, "窗口内求和；序列开头的宽松窗口规则同 ts_mean_relaxed", "ts_sum_relaxed(volume, 20, 1)"),
+	relaxed("ts_count_relaxed", []ArgSpec{{Name: "c", Kind: ArgBoolSeries}}, 1, nil,
+		"窗口内条件为真的个数；序列开头的宽松窗口规则同 ts_mean_relaxed", "ts_count_relaxed(close > open, 20, 5)"),
+	relaxedWindow("ts_median_relaxed", 1, "窗口内中位数；序列开头的宽松窗口规则同 ts_mean_relaxed", "ts_median_relaxed(volume, 20, 1)"),
+	relaxed("ts_quantile_relaxed", []ArgSpec{argSeries}, 1, []ArgSpec{{Name: "q", Kind: ArgConstant, Min: 0, Max: 1}},
+		"窗口内 q 分位数，线性插值；序列开头的宽松窗口规则同 ts_mean_relaxed", "ts_quantile_relaxed(close, 20, 0.9, 5)"),
+	relaxedWindow("ts_rank_relaxed", 1, "当期值在窗口内的百分位，分母是窗口内的有效个数（pandas rolling(n, min_periods=m).rank(pct=True)）；序列开头的宽松窗口规则同 ts_mean_relaxed",
+		"ts_rank_relaxed(close, 20, 5)"),
+	relaxedWindow("ts_var_relaxed", 2, "窗口内样本方差（ddof=1）；序列开头的宽松窗口规则同 ts_mean_relaxed，m ≥ 2", "ts_var_relaxed(close, 20, 2)"),
+	relaxedWindow("ts_zscore_relaxed", 2, "(x − ts_mean) / ts_std；序列开头的宽松窗口规则同 ts_mean_relaxed，m ≥ 2", "ts_zscore_relaxed(close, 20, 5)"),
+	relaxedWindow("ts_skew_relaxed", 3, "窗口内无偏偏度；序列开头的宽松窗口规则同 ts_mean_relaxed，m ≥ 3", "ts_skew_relaxed(pct_change(close), 20, 5)"),
+	relaxedWindow("ts_kurt_relaxed", 4, "窗口内无偏超额峰度；序列开头的宽松窗口规则同 ts_mean_relaxed，m ≥ 4", "ts_kurt_relaxed(pct_change(close), 20, 5)"),
+	relaxedWindow("ts_argmax_relaxed", 1, "窗口内最大值距今的根数（0 为当期，并列取最早的一根）；序列开头的宽松窗口规则同 ts_mean_relaxed", "ts_argmax_relaxed(high, 20, 1)"),
+	relaxedWindow("ts_argmin_relaxed", 1, "窗口内最小值距今的根数（0 为当期，并列取最早的一根）；序列开头的宽松窗口规则同 ts_mean_relaxed", "ts_argmin_relaxed(low, 20, 1)"),
+	relaxedWindow("ts_product_relaxed", 1, "窗口内连乘；序列开头的宽松窗口规则同 ts_mean_relaxed", "ts_product_relaxed(1 + pct_change(close), 5, 1)"),
+	relaxed("ts_corr_relaxed", []ArgSpec{{Name: "x", Kind: ArgSeries}, {Name: "y", Kind: ArgSeries}}, 2, nil,
+		"窗口内相关系数；从两条序列都开始的位置起取共同的有效尾段，有效对数 ≥ m 才出值，尾段里再出现 NaN 时为 NaN，m ≥ 2", "ts_corr_relaxed(close, volume, 20, 5)"),
+	relaxed("ts_cov_relaxed", []ArgSpec{{Name: "x", Kind: ArgSeries}, {Name: "y", Kind: ArgSeries}}, 2, nil,
+		"窗口内样本协方差（ddof=1）；共同有效尾段的规则同 ts_corr_relaxed，m ≥ 2", "ts_cov_relaxed(close, volume, 20, 5)"),
 
 	// 截面
 	cross("cs_rank", "截面百分位（名次 / 有效样本数，并列取平均名次）；按 (data_time, series_tag) 分组，排除 NaN", "cs_rank(ts_mean(volume, 20))"),

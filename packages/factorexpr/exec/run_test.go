@@ -24,6 +24,10 @@ var purityExpressions = []string{
 	"floor(x) + ceil(y) + round(x * y)", "where(x > 0, x, nan)",
 	"cs_mean(x)", "cs_sum(x)", "cs_count(x > y)", "cs_std(x)", "cs_median(x)", "cs_quantile(x, 0.3)", "cs_min(x)", "cs_max(x)",
 	`cs_ref(x, "S002")`, "ts_mean(cs_mean(x), 5)", "cs_rank(where(x > 0, x, nan))",
+	"ts_sum_relaxed(x, 7, 2)", "ts_count_relaxed(x > y, 7, 2)", "ts_median_relaxed(x, 8, 3)", "ts_quantile_relaxed(x, 9, 0.3, 2)",
+	"ts_rank_relaxed(x, 7, 2)", "ts_var_relaxed(x, 7, 2)", "ts_zscore_relaxed(x, 7, 3)", "ts_skew_relaxed(x, 9, 3)",
+	"ts_kurt_relaxed(x, 9, 4)", "ts_argmax_relaxed(x, 7, 1)", "ts_argmin_relaxed(x, 7, 1)", "ts_product_relaxed(x / 100, 5, 2)",
+	"ts_corr_relaxed(x, y, 9, 3)", "ts_cov_relaxed(x, y, 9, 3)",
 }
 
 // purityPanel 生成多序列、两个 series_tag 的面板：含 NaN、常数段，第一条序列放入 Codex 审查给出的 EMA 反例。

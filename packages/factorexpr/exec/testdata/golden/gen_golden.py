@@ -5,7 +5,8 @@
     python3 packages/factorexpr/exec/testdata/golden/gen_golden.py
 
 内容：
-- rolling：各时序算子在一条序列上的结果，pandas 严格窗口（min_periods = n）；
+- rolling：各时序算子在一条序列上的结果，pandas 严格窗口（min_periods = n）；宽松窗口算子在开头带 NaN 的序列 z、u 上，
+  pandas rolling(n, min_periods=m)；
 - cross：各截面算子在 12 个标的 × 30 个时刻上的结果（按时刻与 series_tag 分组）；逐行变换类用 v，
   聚合广播类用 w（在 v 上挖出整组为 NaN 的截面）。
 
@@ -130,6 +131,43 @@ for expression, alpha in (("ema(x, 5)", 2 / 6), ("ema(x, 20)", 2 / 21), ("sma(x,
     assert diff.max() < 1e-8, (expression, diff.max())
     add(expression, expected, 1e-12)
 
+# ---------------------------------------------------------------- 宽松窗口算子
+# 另用一个随机数发生器生成 z、u，不影响上面 x、y 与下面截面数据的取值。z、u 开头分别有 25、37 根 NaN（序列还没开始），
+# 之后没有 NaN：pandas rolling(n, min_periods=m) 在这种序列上与宽松窗口的定义一致（pandas 会跳过中途的 NaN，宽松窗口不跳过，
+# 所以中途 NaN 的口径由 ops 的单元测试覆盖）。两个序列参数时 pandas 只用两边都有效的行，等于共同的有效尾段。
+relaxed_rng = np.random.default_rng(20261108)
+z = 100 * np.exp(np.cumsum(relaxed_rng.normal(0, 0.01, N)))
+u = 50 + np.cumsum(relaxed_rng.normal(0, 0.5, N))
+z[:25] = np.nan
+u[:37] = np.nan
+zs, us = pd.Series(z), pd.Series(u)
+zcond = np.where(np.isnan(z), np.nan, (z > np.nanmedian(z)).astype(float))
+
+
+def relaxed_apply(series, n, m, fn):
+    return series.rolling(n, min_periods=m).apply(lambda w: fn(w[~np.isnan(w)]), raw=True)
+
+
+for n, m in ((5, 1), (5, 3), (20, 4), (20, 20)):
+    r = zs.rolling(n, min_periods=m)
+    m2, m3, m4 = max(m, 2), max(m, 3), max(m, 4)
+    add(f"ts_sum_relaxed(z, {n}, {m})", r.sum())
+    add(f"ts_median_relaxed(z, {n}, {m})", r.median())
+    add(f"ts_rank_relaxed(z, {n}, {m})", r.rank(pct=True))
+    add(f"ts_product_relaxed(z / 100, {n}, {m})", relaxed_apply(zs / 100, n, m, np.prod))
+    add(f"ts_argmax_relaxed(z, {n}, {m})", relaxed_apply(zs, n, m, lambda w: len(w) - 1 - np.argmax(w)))
+    add(f"ts_argmin_relaxed(z, {n}, {m})", relaxed_apply(zs, n, m, lambda w: len(w) - 1 - np.argmin(w)))
+    add(f"ts_count_relaxed(z > {float(np.nanmedian(z))!r}, {n}, {m})", pd.Series(zcond).rolling(n, min_periods=m).sum())
+    for q in (0, 0.3, 1):
+        add(f"ts_quantile_relaxed(z, {n}, {q}, {m})", r.quantile(q))
+    r2 = zs.rolling(n, min_periods=m2)
+    add(f"ts_var_relaxed(z, {n}, {m2})", r2.var(), MOMENT_TOL)
+    add(f"ts_zscore_relaxed(z, {n}, {m2})", (zs - r2.mean()) / r2.std(), MOMENT_TOL)
+    add(f"ts_corr_relaxed(z, u, {n}, {m2})", zs.rolling(n, min_periods=m2).corr(us), MOMENT_TOL)
+    add(f"ts_cov_relaxed(z, u, {n}, {m2})", zs.rolling(n, min_periods=m2).cov(us), MOMENT_TOL)
+    add(f"ts_skew_relaxed(z, {n}, {m3})", zs.rolling(n, min_periods=m3).skew(), MOMENT_TOL)
+    add(f"ts_kurt_relaxed(z, {n}, {m4})", zs.rolling(n, min_periods=m4).kurt(), MOMENT_TOL)
+
 # ---------------------------------------------------------------- 截面算子
 S, T = 12, 30
 tags = ["venue:a"] * 7 + ["venue:b"] * 5
@@ -204,6 +242,6 @@ for expression, values in list(cross_cases.items()) + list(aggregate_cases.items
     cross["cases"].append({"expr": expression, "tol": 1e-12, "expect": [clean(matrix[s]) for s in range(S)]})
 
 OUT.write_text(json.dumps({"pandas": pd.__version__, "numpy": np.__version__, "length": N,
-                           "x": clean(x), "y": clean(y), "rolling": rolling, "cross": cross},
+                           "x": clean(x), "y": clean(y), "z": clean(z), "u": clean(u), "rolling": rolling, "cross": cross},
                           separators=(",", ":")) + "\n")
 print(f"wrote {OUT} ({OUT.stat().st_size} bytes): {len(rolling)} rolling cases, {len(cross['cases'])} cross cases")

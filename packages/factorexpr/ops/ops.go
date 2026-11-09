@@ -110,56 +110,24 @@ func byWindow(fn func(n int) func(w []float64) float64) Rolling {
 }
 
 var rolling = map[string]Rolling{
-	"ts_sum":  byWindow(func(int) func([]float64) float64 { return exactSum }),
-	"ts_mean": byWindow(func(int) func([]float64) float64 { return func(w []float64) float64 { m, _ := mean(w); return m } }),
-	"ts_min":  byWindow(func(int) func([]float64) float64 { return windowMin }),
-	"ts_max":  byWindow(func(int) func([]float64) float64 { return windowMax }),
-	"ts_product": byWindow(func(int) func([]float64) float64 {
-		return func(w []float64) float64 {
-			product := 1.0
-			for _, v := range w {
-				product *= v
-			}
-			return product
-		}
-	}),
-	"ts_var": byWindow(func(int) func([]float64) float64 { return variance }),
-	"ts_std": byWindow(func(int) func([]float64) float64 {
-		return func(w []float64) float64 { return math.Sqrt(variance(w)) }
-	}),
-	"ts_zscore": byWindow(func(int) func([]float64) float64 {
-		return func(w []float64) float64 {
-			m, constant := mean(w)
-			if constant {
-				return nan
-			}
-			sd := math.Sqrt(variance(w))
-			if sd == 0 {
-				return nan
-			}
-			return (w[len(w)-1] - m) / sd
-		}
-	}),
+	"ts_sum":          byWindow(func(int) func([]float64) float64 { return exactSum }),
+	"ts_mean":         byWindow(func(int) func([]float64) float64 { return meanValue }),
+	"ts_min":          byWindow(func(int) func([]float64) float64 { return windowMin }),
+	"ts_max":          byWindow(func(int) func([]float64) float64 { return windowMax }),
+	"ts_product":      byWindow(func(int) func([]float64) float64 { return product }),
+	"ts_var":          byWindow(func(int) func([]float64) float64 { return variance }),
+	"ts_std":          byWindow(func(int) func([]float64) float64 { return stdDev }),
+	"ts_zscore":       byWindow(func(int) func([]float64) float64 { return zscoreLast }),
 	"ts_rank":         byWindow(func(int) func([]float64) float64 { return rankLast }),
 	"ts_skew":         byWindow(func(int) func([]float64) float64 { return skew }),
 	"ts_kurt":         byWindow(func(int) func([]float64) float64 { return kurt }),
-	"ts_argmax":       byWindow(func(int) func([]float64) float64 { return argExtreme(func(a, b float64) bool { return a > b }) }),
-	"ts_argmin":       byWindow(func(int) func([]float64) float64 { return argExtreme(func(a, b float64) bool { return a < b }) }),
+	"ts_argmax":       byWindow(func(int) func([]float64) float64 { return argMax }),
+	"ts_argmin":       byWindow(func(int) func([]float64) float64 { return argMin }),
 	"ts_decay_linear": byWindow(func(n int) func([]float64) float64 { return decayLinear(n) }),
-	"ts_count": byWindow(func(int) func([]float64) float64 {
-		return func(w []float64) float64 {
-			count := 0.0
-			for _, v := range w {
-				if v != 0 {
-					count++
-				}
-			}
-			return count
-		}
-	}),
-	"ts_slope":   byWindow(func(int) func([]float64) float64 { return func(w []float64) float64 { return regression(w).slope } }),
-	"ts_rsquare": byWindow(func(int) func([]float64) float64 { return func(w []float64) float64 { return regression(w).rsquare } }),
-	"ts_resi":    byWindow(func(int) func([]float64) float64 { return func(w []float64) float64 { return regression(w).resi } }),
+	"ts_count":        byWindow(func(int) func([]float64) float64 { return countTrue }),
+	"ts_slope":        byWindow(func(int) func([]float64) float64 { return func(w []float64) float64 { return regression(w).slope } }),
+	"ts_rsquare":      byWindow(func(int) func([]float64) float64 { return func(w []float64) float64 { return regression(w).rsquare } }),
+	"ts_resi":         byWindow(func(int) func([]float64) float64 { return func(w []float64) float64 { return regression(w).resi } }),
 	"ts_corr": func(ints []int, _ []float64) SeriesKernel {
 		return windowed2(ints[0], correlation)
 	},
