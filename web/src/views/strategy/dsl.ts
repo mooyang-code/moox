@@ -123,7 +123,7 @@ portfolio:
  */
 export const poolTemplate = `# 策略池示例：把已有的策略定义当作成员，按成员的模拟净值轮动分配资金。
 # strategy 里的 strategy_trend_a、strategy_trend_b 是占位，请换成实际的策略定义 ID。
-# 成员必须显式写 market，bar 要与池一致，不能是策略池，不能用 factor_params。
+# 现货、永续成员必须显式写 market（股票成员不写，池绑定 equity 任务）；bar 要与池一致，不能是策略池，不能用 factor_params。
 # 池本身不写 market、universe、factor_params，必须写 bar。
 # 池要绑定的计算任务是各成员所需市场的并集：成员都是现货就绑一个现货任务，混有永续就现货、永续各绑一个。
 # 启用后先在后台预热成员净值，预热完成前不能确认运行。
@@ -147,7 +147,7 @@ strategy_pool:
   # 每期每个成员的比例变化上限
   step: 0.2
   # 成员模拟账本的单边手续费（基点），可省略
-  # fees: {spot_bps: 10, swap_bps: 5}
+  # fees: {spot_bps: 10, swap_bps: 5, equity_bps: 3}，永续计资金费再写 funding_column: funding_rate
 
 portfolio:
   leverage: 1
@@ -282,7 +282,8 @@ const rotationFactorNames = ["return", "ma_ratio", "drawdown"];
 function inspectPool(value: Record<string, any>, diagnostics: DSLDiagnostic[]): DSLPoolPreview | undefined {
   const report = (message: string) => diagnostics.push({ message });
   if (value.rules !== undefined) report("rules 与 strategy_pool 只能写一个：策略池的逻辑都在成员策略里");
-  if (value.market !== undefined) report("策略池不写 market：成员各自显式写 market，池要绑定的计算任务是成员所需市场的并集");
+  if (value.market !== undefined)
+    report("策略池不写 market：现货、永续成员各自写 market（股票成员不写），池要绑定的计算任务是成员所需市场的并集");
   if (value.bar === undefined) report("策略池必须写 bar：成员的周期要与池一致");
   if (value.universe !== undefined) report("策略池不写 universe：标的范围由各成员自己的 universe 决定");
   if (value.factor_params !== undefined) report("策略池不支持 factor_params：多个成员可能给同一个可变成员写参数，会冲突");

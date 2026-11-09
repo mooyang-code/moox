@@ -51,6 +51,8 @@ type Replay struct {
 	// SpotFeeBps 是现货与股票的单边手续费，SwapFeeBps 是永续的（基点）。
 	SpotFeeBps float64
 	SwapFeeBps float64
+	// FundingColumn 非空时永续持仓按 View 里的这一列（本根累计的资金费率）结算资金费；空串表示不计。
+	FundingColumn string
 	// Factors 是发起回放时固化的因子定义指纹；执行时与当时的定义比对，排队期间变化即拒绝执行。
 	Factors      map[string]string
 	Status       string
@@ -91,32 +93,33 @@ type ReplayBar struct {
 }
 
 type replayRow struct {
-	ReplayID     string         `gorm:"column:c_replay_id"`
-	StrategyID   sql.NullString `gorm:"column:c_strategy_id"`
-	InstanceID   sql.NullString `gorm:"column:c_instance_id"`
-	SessionID    sql.NullString `gorm:"column:c_session_id"`
-	DSLYaml      string         `gorm:"column:c_dsl_yaml"`
-	DSLHash      string         `gorm:"column:c_dsl_hash"`
-	Calendar     string         `gorm:"column:c_calendar"`
-	SpaceID      string         `gorm:"column:c_space_id"`
-	TasksJSON    string         `gorm:"column:c_tasks_json"`
-	StartTime    int64          `gorm:"column:c_start_time"`
-	EndTime      int64          `gorm:"column:c_end_time"`
-	SpotFeeBps   float64        `gorm:"column:c_spot_fee_bps"`
-	SwapFeeBps   float64        `gorm:"column:c_swap_fee_bps"`
-	FactorsJSON  string         `gorm:"column:c_factors_json"`
-	Status       string         `gorm:"column:c_status"`
-	ProgressTime sql.NullInt64  `gorm:"column:c_progress_time"`
-	MetricsJSON  string         `gorm:"column:c_metrics_json"`
-	Error        string         `gorm:"column:c_error"`
-	CreatedAt    time.Time      `gorm:"column:c_ctime"`
-	UpdatedAt    time.Time      `gorm:"column:c_mtime"`
+	ReplayID      string         `gorm:"column:c_replay_id"`
+	StrategyID    sql.NullString `gorm:"column:c_strategy_id"`
+	InstanceID    sql.NullString `gorm:"column:c_instance_id"`
+	SessionID     sql.NullString `gorm:"column:c_session_id"`
+	DSLYaml       string         `gorm:"column:c_dsl_yaml"`
+	DSLHash       string         `gorm:"column:c_dsl_hash"`
+	Calendar      string         `gorm:"column:c_calendar"`
+	SpaceID       string         `gorm:"column:c_space_id"`
+	TasksJSON     string         `gorm:"column:c_tasks_json"`
+	StartTime     int64          `gorm:"column:c_start_time"`
+	EndTime       int64          `gorm:"column:c_end_time"`
+	SpotFeeBps    float64        `gorm:"column:c_spot_fee_bps"`
+	SwapFeeBps    float64        `gorm:"column:c_swap_fee_bps"`
+	FundingColumn string         `gorm:"column:c_funding_column"`
+	FactorsJSON   string         `gorm:"column:c_factors_json"`
+	Status        string         `gorm:"column:c_status"`
+	ProgressTime  sql.NullInt64  `gorm:"column:c_progress_time"`
+	MetricsJSON   string         `gorm:"column:c_metrics_json"`
+	Error         string         `gorm:"column:c_error"`
+	CreatedAt     time.Time      `gorm:"column:c_ctime"`
+	UpdatedAt     time.Time      `gorm:"column:c_mtime"`
 }
 
 func (r replayRow) replay() Replay {
 	replay := Replay{
 		ReplayID: r.ReplayID, StrategyID: nullableString(r.StrategyID), InstanceID: nullableString(r.InstanceID), SessionID: nullableString(r.SessionID), DSLYaml: r.DSLYaml, DSLHash: r.DSLHash, Calendar: r.Calendar, SpaceID: r.SpaceID,
-		StartTime: fromMillis(r.StartTime), EndTime: fromMillis(r.EndTime), SpotFeeBps: r.SpotFeeBps, SwapFeeBps: r.SwapFeeBps, Status: r.Status,
+		StartTime: fromMillis(r.StartTime), EndTime: fromMillis(r.EndTime), SpotFeeBps: r.SpotFeeBps, SwapFeeBps: r.SwapFeeBps, FundingColumn: r.FundingColumn, Status: r.Status,
 		MetricsJSON: json.RawMessage(r.MetricsJSON), Error: r.Error, CreatedAt: r.CreatedAt.UTC(), UpdatedAt: r.UpdatedAt.UTC(),
 	}
 	if r.ProgressTime.Valid {
@@ -136,18 +139,18 @@ func (r replayRow) replay() Replay {
 const (
 	// sqlInsertReplay 写入一条排队中的回放。
 	sqlInsertReplay = `
-	INSERT INTO t_strategy_replays (c_replay_id, c_strategy_id, c_instance_id, c_session_id, c_dsl_yaml, c_dsl_hash, c_calendar, c_space_id, c_tasks_json, c_start_time, c_end_time, c_spot_fee_bps, c_swap_fee_bps, c_factors_json, c_status, c_progress_time, c_metrics_json, c_error, c_ctime, c_mtime)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, '{}', '', ?, ?)`
+	INSERT INTO t_strategy_replays (c_replay_id, c_strategy_id, c_instance_id, c_session_id, c_dsl_yaml, c_dsl_hash, c_calendar, c_space_id, c_tasks_json, c_start_time, c_end_time, c_spot_fee_bps, c_swap_fee_bps, c_funding_column, c_factors_json, c_status, c_progress_time, c_metrics_json, c_error, c_ctime, c_mtime)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, '{}', '', ?, ?)`
 	// sqlCountActiveReplays 统计空间内排队与运行中的回放。
 	sqlCountActiveReplays = `SELECT COUNT(*) FROM t_strategy_replays WHERE c_space_id = ? AND c_status IN ('pending', 'running')`
 	// sqlSelectReplayByID 按回放 ID 读取回放。
-	sqlSelectReplayByID = `SELECT c_replay_id, c_strategy_id, c_instance_id, c_session_id, c_dsl_yaml, c_dsl_hash, c_calendar, c_space_id, c_tasks_json, c_start_time, c_end_time, c_spot_fee_bps, c_swap_fee_bps, c_factors_json, c_status, c_progress_time, c_metrics_json, c_error, c_ctime, c_mtime FROM t_strategy_replays WHERE c_replay_id = ?`
+	sqlSelectReplayByID = `SELECT c_replay_id, c_strategy_id, c_instance_id, c_session_id, c_dsl_yaml, c_dsl_hash, c_calendar, c_space_id, c_tasks_json, c_start_time, c_end_time, c_spot_fee_bps, c_swap_fee_bps, c_funding_column, c_factors_json, c_status, c_progress_time, c_metrics_json, c_error, c_ctime, c_mtime FROM t_strategy_replays WHERE c_replay_id = ?`
 	// sqlCountReplaysOfSpace 统计空间内的全部回放。
 	sqlCountReplaysOfSpace = `SELECT COUNT(*) FROM t_strategy_replays WHERE c_space_id = ?`
 	// sqlListReplaysOfSpace 按创建时间倒序分页列出空间内的回放，不读取 DSL 全文（c_dsl_yaml 返回空串）。
-	sqlListReplaysOfSpace = `SELECT c_replay_id, c_strategy_id, c_instance_id, c_session_id, '' AS c_dsl_yaml, c_dsl_hash, c_calendar, c_space_id, c_tasks_json, c_start_time, c_end_time, c_spot_fee_bps, c_swap_fee_bps, c_factors_json, c_status, c_progress_time, c_metrics_json, c_error, c_ctime, c_mtime FROM t_strategy_replays WHERE c_space_id = ? ORDER BY c_ctime DESC, c_replay_id LIMIT ? OFFSET ?`
+	sqlListReplaysOfSpace = `SELECT c_replay_id, c_strategy_id, c_instance_id, c_session_id, '' AS c_dsl_yaml, c_dsl_hash, c_calendar, c_space_id, c_tasks_json, c_start_time, c_end_time, c_spot_fee_bps, c_swap_fee_bps, c_funding_column, c_factors_json, c_status, c_progress_time, c_metrics_json, c_error, c_ctime, c_mtime FROM t_strategy_replays WHERE c_space_id = ? ORDER BY c_ctime DESC, c_replay_id LIMIT ? OFFSET ?`
 	// sqlSelectNextPendingReplay 读取最早的一条排队中的回放。
-	sqlSelectNextPendingReplay = `SELECT c_replay_id, c_strategy_id, c_instance_id, c_session_id, c_dsl_yaml, c_dsl_hash, c_calendar, c_space_id, c_tasks_json, c_start_time, c_end_time, c_spot_fee_bps, c_swap_fee_bps, c_factors_json, c_status, c_progress_time, c_metrics_json, c_error, c_ctime, c_mtime FROM t_strategy_replays WHERE c_status = 'pending' ORDER BY c_ctime, c_replay_id LIMIT 1`
+	sqlSelectNextPendingReplay = `SELECT c_replay_id, c_strategy_id, c_instance_id, c_session_id, c_dsl_yaml, c_dsl_hash, c_calendar, c_space_id, c_tasks_json, c_start_time, c_end_time, c_spot_fee_bps, c_swap_fee_bps, c_funding_column, c_factors_json, c_status, c_progress_time, c_metrics_json, c_error, c_ctime, c_mtime FROM t_strategy_replays WHERE c_status = 'pending' ORDER BY c_ctime, c_replay_id LIMIT 1`
 	// sqlClaimReplay 比较交换把排队中的回放改为运行中。
 	sqlClaimReplay = `UPDATE t_strategy_replays SET c_status = 'running', c_mtime = ? WHERE c_replay_id = ? AND c_status = 'pending'`
 	// sqlUpdateReplayProgress 推进运行中回放的进度。
@@ -223,7 +226,7 @@ func (s *Store) CreateReplay(ctx context.Context, replay Replay) error {
 		if active >= MaxActiveReplays {
 			return fmt.Errorf("空间 %s 已有 %d 个排队或运行中的回放，请等它们完成或取消后再发起", replay.SpaceID, active)
 		}
-		return tx.Exec(sqlInsertReplay, replay.ReplayID, stringValue(replay.StrategyID), stringValue(replay.InstanceID), stringValue(replay.SessionID), replay.DSLYaml, replay.DSLHash, replay.Calendar, replay.SpaceID, string(tasksJSON), millis(replay.StartTime), millis(replay.EndTime), replay.SpotFeeBps, replay.SwapFeeBps, string(factorsJSON), now, now).Error
+		return tx.Exec(sqlInsertReplay, replay.ReplayID, stringValue(replay.StrategyID), stringValue(replay.InstanceID), stringValue(replay.SessionID), replay.DSLYaml, replay.DSLHash, replay.Calendar, replay.SpaceID, string(tasksJSON), millis(replay.StartTime), millis(replay.EndTime), replay.SpotFeeBps, replay.SwapFeeBps, replay.FundingColumn, string(factorsJSON), now, now).Error
 	})
 }
 

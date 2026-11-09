@@ -123,6 +123,8 @@ export interface Replay {
   /** 现货与股票的单边手续费、永续的单边手续费（bps）。 */
   spot_fee_bps: number;
   swap_fee_bps: number;
+  /** 永续持仓结算资金费用的列（本根累计的资金费率）；空串表示不计。 */
+  funding_column: string;
   status: "pending" | "running" | "done" | "failed" | "cancelled" | string;
   progress_time: string;
   metrics_json: string;
@@ -170,6 +172,8 @@ export interface StartReplayRequest {
   end_time: string;
   spot_fee_bps: number;
   swap_fee_bps: number;
+  /** 可选：永续持仓按这一列结算资金费；不写不计。 */
+  funding_column?: string;
 }
 
 /** 发起回放的结果：任务与实际回放的根数、首末根 bar_end。 */

@@ -249,6 +249,11 @@ func decodeSelectThen(node *yaml.Node, path string) (*SelectThen, error) {
 
 var columnNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
+// ValidColumnName 报告 name 是普通列名（不是表达式，也不是以 __ 开头的内部列）。
+func ValidColumnName(name string) bool {
+	return columnNamePattern.MatchString(name) && !strings.HasPrefix(name, "__")
+}
+
 // checkColumnName 检查直接写列名的字段（例如 select.group.by）：只能是普通列名，不能是表达式或保留名称。
 func checkColumnName(name, path string) error {
 	if !columnNamePattern.MatchString(name) || strings.HasPrefix(name, "__") || name == identifierBars || name == identifierScore || name == identifierInstrument {

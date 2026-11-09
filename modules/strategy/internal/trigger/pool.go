@@ -110,10 +110,10 @@ func (h *Handler) evaluatePool(ctx context.Context, p *period, key string, ready
 	if err != nil {
 		return nil, input.Loaded{}, h.commitSkipped(ctx, p, input.SkipConfigError, err.Error())
 	}
-	var prices map[string]float64
+	var prices, funding map[string]float64
 	skip, terminal, err := h.withReads(ctx, p, key, func() error {
 		var readErr error
-		prices, readErr = p.loader.LoadPrices(ctx, p.instance.SpaceID, rt.resolved, input.Bar{BarStart: p.boundary.StorageStart}, keys)
+		prices, funding, readErr = p.loader.LoadPrices(ctx, p.instance.SpaceID, rt.resolved, input.Bar{BarStart: p.boundary.StorageStart}, keys, rt.pool.config.Spec.Fees.FundingColumn)
 		return readErr
 	})
 	if terminal || err != nil {
@@ -123,7 +123,7 @@ func (h *Handler) evaluatePool(ctx context.Context, p *period, key string, ready
 		return nil, input.Loaded{}, h.commitSkipped(ctx, p, skip.Reason, skip.Detail)
 	}
 	stepStart := h.now()
-	decision, err := pool.Step(rt.pool.config, previous, pool.Input{BarIndex: p.boundary.BarIndex, Prices: prices, Members: results})
+	decision, err := pool.Step(rt.pool.config, previous, pool.Input{BarIndex: p.boundary.BarIndex, Prices: prices, Funding: funding, Members: results})
 	p.timing.evalRun += h.now().Sub(stepStart)
 	if err != nil {
 		return nil, input.Loaded{}, h.commitSkipped(ctx, p, input.SkipConfigError, err.Error())

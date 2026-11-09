@@ -2,6 +2,7 @@
 package ledger
 
 import (
+	"errors"
 	"math"
 	"sort"
 
@@ -33,7 +34,12 @@ type Position struct {
 //
 // 现货按现金成交，权益里计入市值。永续不占用现金，按收盘价逐期结算：每期有价时把 Quantity × (收盘价 − 上期价) 记入现金，
 // 权益 = 现金 + 现货市值，成交只改数量并扣手续费。这样永续的盈利可以用来买现货，亏损会减少现金（现金可以为负，此时现货买入被缩减为 0，
-// 目标权重按缩小后的权益折算，现货随后被卖出补回现金）。没有价格的永续持仓冻结，不结算。不计资金费，不模拟强平与保证金率。
+// 目标权重按缩小后的权益折算，现货随后被卖出补回现金）。没有价格的永续持仓冻结，不结算。不模拟强平与保证金率。
+//
+// 资金费（只在 Step.Funding 非 nil 时计）：第 k 根的费率是这一根开盘时刻的结算，那一刻持有的是第 k−1 根收盘调仓之前的仓位，
+// 所以每根估值后把永续持仓的带符号名义价值存成 FundingBasis，下一根按它乘本根费率结算进现金（费率为正时多头付、空头收）。
+//
+// 每根依次调用 Mark（估值与结算）和 Rebalance（清算与调仓）；Step 是两者的合写。
 type Ledger struct {
 	Cash      float64              `json:"cash"`
 	Positions map[string]*Position `json:"positions"`
@@ -44,6 +50,10 @@ type Ledger struct {
 	// Bankrupt 在持仓期间权益降到不超过 0 时置位（模拟爆仓）：之后各期忽略目标，可成交的持仓全部平掉、不再开仓，空仓直到结束。
 	// 没有这条规则时负权益会让“目标权重 × 权益”变成反向持仓，账户靠反向持仓“复活”。
 	Bankrupt bool `json:"bankrupt,omitempty"`
+	// FundingBasis 是上一根估值后、调仓前各永续持仓的带符号名义价值（按上一根收盘价），本根据此结算资金费；只在计资金费时记录。
+	FundingBasis map[string]float64 `json:"funding_basis,omitempty"`
+	// marked 为真表示本根已经估值、还没有调仓：同一根不能重复估值。
+	marked bool
 }
 
 // NewLedger 用初始现金构造账本；spotFeeBps 与 swapFeeBps 是现货类与永续的单边手续费（基点）。
@@ -52,21 +62,25 @@ func NewLedger(initialCash, spotFeeBps, swapFeeBps float64, liquidateAfter int) 
 }
 
 // Step 的输入：当期各（标的, 市场）的收盘价（只含有价的）与目标权重，键是 engine.TargetKey。OK 为 false 表示本期 skipped。
+// Funding 是本根累计的资金费率（键是永续的 engine.TargetKey，只含有值的）；nil 表示不计资金费，空映射表示计资金费但本根没有费率。
 type Step struct {
 	Prices  map[string]float64
 	Targets map[string]float64
 	OK      bool
+	Funding map[string]float64
 }
 
 // Outcome 是一期账本变化。
 type Outcome struct {
-	EquityBefore float64  `json:"equity_before"`
-	EquityAfter  float64  `json:"equity_after"`
-	Traded       float64  `json:"traded"`
-	Fee          float64  `json:"fee"`
-	Turnover     float64  `json:"turnover"`
-	Unfilled     []string `json:"unfilled,omitempty"`
-	Liquidated   []string `json:"liquidated,omitempty"`
+	EquityBefore float64 `json:"equity_before"`
+	EquityAfter  float64 `json:"equity_after"`
+	Traded       float64 `json:"traded"`
+	Fee          float64 `json:"fee"`
+	Turnover     float64 `json:"turnover"`
+	// Funding 是本根结算的资金费（正数为支出、负数为收入），已经计入 EquityBefore。
+	Funding    float64  `json:"funding,omitempty"`
+	Unfilled   []string `json:"unfilled,omitempty"`
+	Liquidated []string `json:"liquidated,omitempty"`
 	// BuyScale 只在现金不足、现货买入被按比例缩减时给出（现金为 0 时为 0）。
 	BuyScale *float64 `json:"buy_scale,omitempty"`
 	// Bankrupt 只在权益首次降到不超过 0 的那一期为真（模拟爆仓）；此后各期空仓。
@@ -116,13 +130,36 @@ func (l *Ledger) values() (spot, swap float64) {
 	return spot, swap
 }
 
-// Step 推进一期：先按当期价格估值（永续按价差结算进现金；无价持仓冻结并累计缺价期数）；skipped 期到此为止。
-// ok 期依次：清算缺价达到阈值的冻结持仓 → 按总权益迭代扣费后的目标金额 → 先卖现货、再调永续、最后买现货
-// （现货买入受现金约束，按比例缩减；永续不占用现金，不缩减）。
+// Step 推进一期，等于依次调用 Mark 与 Rebalance（不能与它们混用）。
 func (l *Ledger) Step(step Step) Outcome {
+	return l.rebalance(l.mark(step.Prices, step.Funding), step)
+}
+
+// Mark 是一期的估值：永续按价差结算进现金，无价持仓冻结并累计缺价期数，按上一根的快照结算资金费，判定爆仓。
+// 同一根重复调用报错；之后必须调用 Rebalance（skipped 期也要调用，只做收尾）。
+func (l *Ledger) Mark(prices, funding map[string]float64) (Outcome, error) {
+	if l.marked {
+		return Outcome{}, errors.New("账本本根已经估值，同一根不能重复调用 Mark")
+	}
+	outcome := l.mark(prices, funding)
+	l.marked = true
+	return outcome, nil
+}
+
+// Rebalance 是一期的调仓，outcome 是本根 Mark 的结果。ok 期依次：清算缺价达到阈值的冻结持仓 → 按总权益迭代扣费后的目标金额 →
+// 先卖现货、再调永续、最后买现货（现货买入受现金约束，按比例缩减；永续不占用现金，不缩减）；skipped 期只做收尾。
+func (l *Ledger) Rebalance(outcome Outcome, step Step) (Outcome, error) {
+	if !l.marked {
+		return Outcome{}, errors.New("账本本根还没有估值，调仓前必须先调用 Mark")
+	}
+	l.marked = false
+	return l.rebalance(outcome, step), nil
+}
+
+func (l *Ledger) mark(prices, funding map[string]float64) Outcome {
 	for _, id := range l.sortedIDs() {
 		position := l.Positions[id]
-		if price, ok := step.Prices[id]; ok && price > 0 {
+		if price, ok := prices[id]; ok && price > 0 {
 			if isSwapKey(id) {
 				l.Cash += position.Quantity * (price - position.LastPrice)
 			}
@@ -135,11 +172,53 @@ func (l *Ledger) Step(step Step) Outcome {
 		}
 		position.Value = position.Quantity * position.LastPrice
 	}
-	outcome := Outcome{EquityBefore: l.Equity()}
+	outcome := Outcome{}
+	if funding != nil {
+		outcome.Funding = l.settleFunding(funding)
+	}
+	outcome.EquityBefore = l.Equity()
 	// 有持仓（或现金已为负）时权益不超过 0 即爆仓；空账户的零权益不算。
 	if !l.Bankrupt && outcome.EquityBefore <= 0 && (len(l.Positions) > 0 || l.Cash < 0) {
 		l.Bankrupt, outcome.Bankrupt = true, true
 	}
+	return outcome
+}
+
+// settleFunding 按上一根的快照结算本根的资金费，并记下新快照（本根估值后、调仓前的永续名义价值），返回支出（收入为负）。
+// 快照里的仓位在上一根收盘时平掉了也照付；上一根收盘新开的仓位不在快照里，不付。费率缺失或无效时按 0。
+func (l *Ledger) settleFunding(funding map[string]float64) float64 {
+	paid := 0.0
+	for _, key := range l.FundingKeys() {
+		rate, ok := funding[key]
+		if !ok || math.IsNaN(rate) || math.IsInf(rate, 0) {
+			continue
+		}
+		paid += l.FundingBasis[key] * rate
+	}
+	l.Cash -= paid
+	l.FundingBasis = nil
+	for _, id := range l.sortedIDs() {
+		if position := l.Positions[id]; isSwapKey(id) && position.Value != 0 {
+			if l.FundingBasis == nil {
+				l.FundingBasis = make(map[string]float64)
+			}
+			l.FundingBasis[id] = position.Value
+		}
+	}
+	return paid
+}
+
+// FundingKeys 返回下一根结算资金费要读费率的永续键（上一根估值后的快照，含之后平掉的仓位）。
+func (l *Ledger) FundingKeys() []string {
+	keys := make([]string, 0, len(l.FundingBasis))
+	for key := range l.FundingBasis {
+		keys = append(keys, key)
+	}
+	sortKeys(keys)
+	return keys
+}
+
+func (l *Ledger) rebalance(outcome Outcome, step Step) Outcome {
 	dust := dustRatio * math.Max(outcome.EquityBefore, 1)
 	if !step.OK {
 		outcome.EquityAfter = outcome.EquityBefore

@@ -401,7 +401,7 @@ func (s *Service) poolMemberDefs(ctx context.Context, pool dsl.Strategy) ([]inpu
 	return defs, nil
 }
 
-// checkPool 在保存与校验策略池时核对成员：都存在、都能进池（不嵌套、显式写 market、没有 factor_params、周期一致），
+// checkPool 在保存与校验策略池时核对成员：都存在、都能进池（不嵌套、没有 factor_params、周期一致；没写 market 的成员保存时放行，启用时按绑定的任务判断），
 // 返回成员定义。不是策略池时什么也不做。
 func (s *Service) checkPool(ctx context.Context, strategy dsl.Strategy) ([]input.PoolMemberDef, error) {
 	members, err := s.poolMemberDefs(ctx, strategy)

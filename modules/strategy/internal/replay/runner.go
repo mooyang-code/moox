@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"sort"
 	"strconv"
@@ -241,6 +242,23 @@ func newMarketReader(market string, task store.ReplayTask, subjects []input.Subj
 	return &marketReader{market: market, task: task, subjects: subjects, rows: rows, history: history, passed: make(map[int]map[string]struct{}), listed: listed}
 }
 
+// checkFundingColumn 确认永续的 View 有资金费列（column 为空时不检查）。
+func checkFundingColumn(views map[string]input.ViewInfo, column string) error {
+	if column == "" {
+		return nil
+	}
+	view, ok := views[dsl.MarketSwap]
+	if !ok {
+		return fmt.Errorf("没有绑定永续的 View，资金费列 %s 不起作用", column)
+	}
+	for _, item := range view.Columns {
+		if item.Name == column {
+			return nil
+		}
+	}
+	return fmt.Errorf("永续的 View %s 没有资金费列 %s", view.ViewID, column)
+}
+
 // loadMarketViews 读取绑定的每个市场的结果 View（要有 close 列，账本按它估值）与数据集的全部标的绑定（含已停用，回放中都视为活跃）。
 // 统一数据集里现货、永续共用一个 View：每个市场各取一份（View 与标的相同，标的不带 series_tag，读全部序列，读回的行再按市场过滤）。
 func loadMarketViews(ctx context.Context, client input.Client, spaceID string, resolved input.Resolved) (map[string]input.ViewInfo, map[string][]input.Subject, error) {
@@ -307,6 +325,9 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 	if err != nil {
 		return Metrics{}, err
 	}
+	if err := checkFundingColumn(views, job.FundingColumn); err != nil {
+		return Metrics{}, err
+	}
 	// 退避之前和之后都确认回放没有被取消：写入密集的 View 上一段读取可能退避很久，取消要尽快生效。
 	abort := r.abortHook(job.ReplayID)
 	// 开始前总是按精确统计复查起点并截断终点：排队期间可能重建过索引（新一代只保留最近的根数），
@@ -328,11 +349,18 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 	}
 	acc := newAccumulator(r.initialEquity(), periodsPerYear(resolved.Calendar, resolved.Bar, freq.NominalDuration()), minAnnualizedBars(resolved.Calendar, resolved.Bar, freq.NominalDuration()))
 	acc.metrics.Factors = resolved.Factors
-	acc.metrics.Limitations = limitations(r.liquidateAfter(), usesTags(strategy), slices.Contains(markets, dsl.MarketSwap))
+	acc.metrics.Limitations = limitations(r.liquidateAfter(), usesTags(strategy), slices.Contains(markets, dsl.MarketSwap), job.FundingColumn)
 	if end.Before(job.EndTime) {
 		acc.setNote(noteTruncated, fmt.Sprintf("排队期间 View 重建了索引，回放区间的终点按新索引截短：区间内最后一根 K 线结束于 %s", input.BarEndLabel(resolved.Calendar, resolved.Bar, bars[len(bars)-1].BarEnd)))
 	}
 	columns := uniqueStrings(append(append([]string{"close"}, program.MainColumns()...), program.PreviousColumns...))
+	// 计资金费时永续的行另读费率列；统一数据集两个市场共用一个 View 与读取缓存，两边都读这一列，查询才相同。
+	columnsOf := func(market string) []string {
+		if job.FundingColumn == "" || (market != dsl.MarketSwap && !resolved.Unified()) {
+			return columns
+		}
+		return uniqueStrings(append(append([]string(nil), columns...), job.FundingColumn))
+	}
 	readers := make([]*marketReader, 0, len(markets))
 	// 统一数据集里两个市场共用一个 View：同一段的读取只发一次，各市场再按 series_tag 过滤。
 	var memo *input.RowsMemo
@@ -346,7 +374,7 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 			loaderMarket = market
 		}
 		readers = append(readers, newMarketReader(market, job.Tasks[resolved.TaskKey(market)], subjects[market],
-			&input.RangeLoader{Client: r.Client, SpaceID: job.SpaceID, View: view, Subjects: subjects[market], Columns: columns, Market: loaderMarket, Memo: memo, Abort: abort},
+			&input.RangeLoader{Client: r.Client, SpaceID: job.SpaceID, View: view, Subjects: subjects[market], Columns: columnsOf(market), Market: loaderMarket, Memo: memo, Abort: abort},
 			&input.RangeLoader{Client: r.Client, SpaceID: job.SpaceID, View: view, Subjects: subjects[market], Columns: []string{"close"}, Market: loaderMarket, Memo: memo, Abort: abort}))
 	}
 	if err := attachSources(ctx, r.Client, job.SpaceID, resolved, program, readers, memo, abort); err != nil {
@@ -389,7 +417,7 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 				weight, _ := strconv.ParseFloat(target.Weight.String(), 64)
 				targets[engine.TargetKey(target.InstrumentID, target.Market)] = weight
 			}
-			outcome := book.Step(ledger.Step{Prices: prices, Targets: targets, OK: ok})
+			outcome := book.Step(ledger.Step{Prices: prices, Targets: targets, OK: ok, Funding: barFunding(readers, segments, bar.StorageStart.Unix(), job.FundingColumn)})
 			if ok {
 				state = decision.State
 			}
@@ -430,6 +458,30 @@ func barPrices(readers []*marketReader, segments map[string]marketSegment, key i
 		}
 	}
 	return prices
+}
+
+// barFunding 是一根 bar 上各永续（标的，市场）本根累计的资金费率：column 为空时返回 nil（不计资金费），否则返回非 nil 的映射，
+// 只含有有效值的键；同一标的有多个序列时按缺值处理（与 barPrices 一致）。
+func barFunding(readers []*marketReader, segments map[string]marketSegment, key int64, column string) map[string]float64 {
+	if column == "" {
+		return nil
+	}
+	funding := make(map[string]float64)
+	for _, market := range readers {
+		if market.market != dsl.MarketSwap {
+			continue
+		}
+		rows := segments[market.market].rows
+		for subjectID, row := range rows.Bars[key] {
+			if _, ambiguous := rows.Ambiguous[key][subjectID]; ambiguous {
+				continue
+			}
+			if rate, ok := row.Values[column]; ok && !math.IsNaN(rate) && !math.IsInf(rate, 0) {
+				funding[engine.TargetKey(subjectID, market.market)] = rate
+			}
+		}
+	}
+	return funding
 }
 
 // 按 key 替换的局限说明：同一件事只保留最新的一条。

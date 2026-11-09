@@ -37,8 +37,9 @@ const (
 	MaxPoolFeeBps = 1000
 
 	// 成员账本手续费的默认值（基点），与研究回放界面的默认值一致。
-	DefaultPoolSpotFeeBps = 10
-	DefaultPoolSwapFeeBps = 5
+	DefaultPoolSpotFeeBps   = 10
+	DefaultPoolSwapFeeBps   = 5
+	DefaultPoolEquityFeeBps = 3
 )
 
 // StrategyPool 是策略池的定义。
@@ -52,6 +53,9 @@ type StrategyPool struct {
 	HasStep bool
 	// Fees 是成员模拟账本的手续费。
 	Fees PoolFees
+	// Exposure 与 Gross 是净敞口区间与总杠杆区间（见 pool_constraints.go），没写时为空。
+	Exposure *PoolExposure
+	Gross    *PoolGross
 }
 
 // PoolMember 是池的一个成员：引用已有策略定义，启用时固化其 DSL 与版本。
@@ -66,6 +70,8 @@ type PoolAllocation struct {
 	// Ratios 是 fixed 用的固定比例（成员 id → 比例），可以不归一，总敞口受 portfolio.leverage 约束。
 	Ratios   map[string]quant.Decimal
 	Rotation *PoolRotation
+	// Switch 是条件转移（按顺序判断，第一个成立的生效），只用于 fixed。
+	Switch []PoolSwitch
 }
 
 // PoolRotation 是 rotation 的参数：多个因子在成员之间排名，按因子权重加权，取前 Top 名（并列的平分）平分 1。
@@ -88,10 +94,18 @@ type PoolTiming struct {
 	Window int
 }
 
-// PoolFees 是成员账本的单边手续费（基点）。
+// PoolFees 是成员账本的单边手续费（基点）与资金费列。股票成员的账本用 EquityBps；FundingColumn 非空时永续持仓按这一列
+// （本根累计的资金费率）结算资金费。
 type PoolFees struct {
-	SpotBps float64
-	SwapBps float64
+	SpotBps       float64
+	SwapBps       float64
+	EquityBps     float64
+	FundingColumn string
+}
+
+// defaultPoolFees 是没写 fees 或只写了一部分时的取值。
+func defaultPoolFees() PoolFees {
+	return PoolFees{SpotBps: DefaultPoolSpotFeeBps, SwapBps: DefaultPoolSwapFeeBps, EquityBps: DefaultPoolEquityFeeBps}
 }
 
 // IsPool 报告策略是策略池。
@@ -120,12 +134,34 @@ func (p StrategyPool) MaxWindow() int {
 	return longest
 }
 
-// MaxHoldBars 返回策略里最长的持有期：rank 规则的 holding.bars，tranche 子策略的 hold_period；没有持有期时为 0。
-func (s Strategy) MaxHoldBars() int {
+// BarClock 是换算日历周期用的每日根数：PerDay 是一个交易日的 bar 数，Stock 为真表示 A 股交易日历（周、月按交易日估算）。
+type BarClock struct {
+	PerDay int
+	Stock  bool
+}
+
+// 一个日历周期内最多的交易日数（估算预热期数用）：A 股一周 5 个、一月 23 个交易日，加密一周 7 天、一月 31 天。
+const (
+	stockWeekDays  = 5
+	stockMonthDays = 23
+	cryptoWeekDays = 7
+	cryptoMonthDay = 31
+)
+
+// MaxHoldBars 返回策略里最长的持有期（bar 数）：rank 规则的 holding.bars、hold.max_bars，tranche 子策略的 hold_period，
+// 以及日历换仓一个周期内最多的 bar 数（clock 换算，见 BarClock）；没有持有期时为 0。
+func (s Strategy) MaxHoldBars(clock BarClock) int {
 	longest := 0
+	perDay := max(clock.PerDay, 1)
 	for _, rule := range s.Rules {
 		if rule.Holding != nil {
 			longest = max(longest, rule.Holding.Bars)
+			if rule.Holding.IsCalendar() {
+				longest = max(longest, calendarPeriodDays(rule.Holding, clock.Stock)*perDay)
+			}
+		}
+		if rule.Hold != nil {
+			longest = max(longest, rule.Hold.MaxBars)
 		}
 		if rule.Tranche != nil {
 			for _, sub := range rule.Tranche.Subs {
@@ -136,12 +172,30 @@ func (s Strategy) MaxHoldBars() int {
 	return longest
 }
 
-// PoolWarmBars 是策略池预热需要推进的期数：轮动因子与择时里最长的窗口、成员里最长的持有期，取大者再加 1。
-// 窗口决定成员净值序列要读满多少期；持有期决定长持有期的成员从空仓起步时前段净值的偏差要多久才消化，所以也要算进去。
-func PoolWarmBars(pool Strategy, members []Strategy) int {
+// calendarPeriodDays 是日历换仓一个周期内最多的交易日数。
+func calendarPeriodDays(holding *Holding, stock bool) int {
+	switch holding.Calendar {
+	case CalendarTradingDays:
+		return holding.Every
+	case CalendarWeek:
+		if stock {
+			return stockWeekDays
+		}
+		return cryptoWeekDays
+	default:
+		if stock {
+			return stockMonthDays
+		}
+		return cryptoMonthDay
+	}
+}
+
+// PoolWarmBars 是策略池预热需要推进的期数：轮动因子与择时里最长的窗口、成员里最长的持有期（含 hold.max_bars 与日历周期），
+// 取大者再加 1。窗口决定成员净值序列要读满多少期；持有期决定长持有期的成员从空仓起步时前段净值的偏差要多久才消化，所以也要算进去。
+func PoolWarmBars(pool Strategy, members []Strategy, clock BarClock) int {
 	longest := pool.Pool.MaxWindow()
 	for _, member := range members {
-		longest = max(longest, member.MaxHoldBars())
+		longest = max(longest, member.MaxHoldBars(clock))
 	}
 	return longest + 1
 }
@@ -162,7 +216,7 @@ func decodeStrategyPool(node *yaml.Node) (*StrategyPool, error) {
 	if err != nil {
 		return nil, err
 	}
-	pool := &StrategyPool{Fees: PoolFees{SpotBps: DefaultPoolSpotFeeBps, SwapBps: DefaultPoolSwapFeeBps}}
+	pool := &StrategyPool{Fees: defaultPoolFees()}
 	for _, f := range fields {
 		path := "strategy_pool." + f.key
 		switch f.key {
@@ -177,6 +231,10 @@ func decodeStrategyPool(node *yaml.Node) (*StrategyPool, error) {
 			pool.HasStep = err == nil
 		case "fees":
 			pool.Fees, err = decodePoolFees(f.value, path)
+		case "exposure":
+			pool.Exposure, err = decodePoolExposure(f.value, path)
+		case "gross":
+			pool.Gross, err = decodePoolGross(f.value, path)
 		default:
 			return nil, fmt.Errorf("strategy_pool 包含未知字段 %q", f.key)
 		}
@@ -232,6 +290,8 @@ func decodePoolAllocation(node *yaml.Node, path string) (PoolAllocation, error) 
 			allocation.Ratios, err = decodePoolRatios(f.value, fieldPath)
 		case "rotation":
 			allocation.Rotation, err = decodePoolRotation(f.value, fieldPath)
+		case "switch":
+			allocation.Switch, err = decodePoolSwitch(f.value, fieldPath)
 		default:
 			return PoolAllocation{}, fmt.Errorf("%s 包含未知字段 %q", path, f.key)
 		}
@@ -336,11 +396,17 @@ func decodePoolFees(node *yaml.Node, path string) (PoolFees, error) {
 	if err != nil {
 		return PoolFees{}, err
 	}
-	fees := PoolFees{SpotBps: DefaultPoolSpotFeeBps, SwapBps: DefaultPoolSwapFeeBps}
+	fees := defaultPoolFees()
 	for _, f := range fields {
+		if f.key == "funding_column" {
+			if fees.FundingColumn, err = scalarRequiredText(f.value, path+"."+f.key); err != nil {
+				return PoolFees{}, err
+			}
+			continue
+		}
 		var value quant.Decimal
 		switch f.key {
-		case "spot_bps", "swap_bps":
+		case "spot_bps", "swap_bps", "equity_bps":
 			value, err = scalarDecimal(f.value, path+"."+f.key)
 		default:
 			return PoolFees{}, fmt.Errorf("%s 包含未知字段 %q", path, f.key)
@@ -349,10 +415,13 @@ func decodePoolFees(node *yaml.Node, path string) (PoolFees, error) {
 			return PoolFees{}, err
 		}
 		bps, _ := strconv.ParseFloat(value.String(), 64)
-		if f.key == "spot_bps" {
+		switch f.key {
+		case "spot_bps":
 			fees.SpotBps = bps
-		} else {
+		case "swap_bps":
 			fees.SwapBps = bps
+		default:
+			fees.EquityBps = bps
 		}
 	}
 	return fees, nil
@@ -364,7 +433,7 @@ func validatePool(s *Strategy) error {
 		return errors.New("rules 与 strategy_pool 只能写一个：策略池的逻辑都在成员策略里")
 	}
 	if s.MarketDeclared {
-		return errors.New("策略池不写 market：成员各自显式写 market，池要绑定的因子任务是成员所需市场的并集")
+		return errors.New("策略池不写 market：现货、永续成员各自写 market（股票成员不写），池要绑定的因子任务是成员所需市场的并集")
 	}
 	if s.Bar == "" {
 		return errors.New("策略池必须写 bar：成员的周期要与池一致")
@@ -409,12 +478,19 @@ func validatePool(s *Strategy) error {
 	if pool.HasStep && (pool.Step.IsZero() || pool.Step.IsNegative() || pool.Step.Cmp(MaxLeverage) > 0) {
 		return fmt.Errorf("strategy_pool.step 必须大于 0 且不超过 %s", MaxLeverage.String())
 	}
-	for name, fee := range map[string]float64{"spot_bps": pool.Fees.SpotBps, "swap_bps": pool.Fees.SwapBps} {
+	for name, fee := range map[string]float64{"spot_bps": pool.Fees.SpotBps, "swap_bps": pool.Fees.SwapBps, "equity_bps": pool.Fees.EquityBps} {
 		if fee < 0 || fee > MaxPoolFeeBps {
 			return fmt.Errorf("strategy_pool.fees.%s 必须在 0 到 %d 之间", name, MaxPoolFeeBps)
 		}
 	}
-	return nil
+	if column := pool.Fees.FundingColumn; column != "" && !ValidColumnName(column) {
+		return fmt.Errorf("strategy_pool.fees.funding_column %q 必须是 View 里的列名", column)
+	}
+	leverage, _ := strconv.ParseFloat(s.Portfolio.Leverage.String(), 64)
+	if err := validatePoolConstraints(pool, ids, leverage); err != nil {
+		return err
+	}
+	return validateLimitsTarget(s.Portfolio, ids, "池的成员 id")
 }
 
 func validatePoolAllocation(pool *StrategyPool, ids map[string]struct{}) error {
@@ -486,14 +562,13 @@ func validatePoolRotation(rotation *PoolRotation, members int) error {
 	return nil
 }
 
-// ValidatePoolMember 校验一个成员策略能不能进池：不能是池（不嵌套）、必须显式写 market（股票策略不允许写 market，所以不能进池）、
-// 不能用 factor_params、写了 bar 的要与池一致。
+// ValidatePoolMember 校验一个成员策略能不能进池：不能是池（不嵌套）、不能用 factor_params、写了 bar 的要与池一致。
+// 加密成员必须显式写 market；股票策略不允许写 market，保存时分不出来，没写 market 的成员一律放行，启用时按池绑定的任务判断
+// （绑的是 equity 任务就按股票成员处理，否则拒绝，见 InferPoolMemberMarkets）。
 func ValidatePoolMember(pool Strategy, id string, member Strategy) error {
 	switch {
 	case member.IsPool():
 		return fmt.Errorf("成员 %s 引用的策略本身是策略池，策略池不能嵌套", id)
-	case !member.MarketDeclared:
-		return fmt.Errorf("成员 %s 引用的策略没有显式写 market：池成员必须写 market（股票策略不能进池）", id)
 	case len(member.FactorParams) > 0:
 		return fmt.Errorf("成员 %s 引用的策略用了 factor_params：多个成员可能给同一个可变成员写参数，池成员不能用", id)
 	case len(member.Sources) > 0:
@@ -508,14 +583,18 @@ func ValidatePoolMember(pool Strategy, id string, member Strategy) error {
 
 // UnionMarket 返回策略池的有效市场模式：成员市场的并集。只涉及一个市场时就是该市场的单市场模式，涉及现货与永续时是
 // select=both、prefer=spot（只用来表示“两个市场都涉及”：决定要绑定的因子任务、账户要求的可交易市场与组合约束的口径，
-// 成员各自的选币与下单仍按成员自己的模式）。
+// 成员各自的选币与下单仍按成员自己的模式）。成员是股票时为股票模式（股票与加密成员不能混用，由 ValidatePoolMembers 拒绝）；
+// 还没确定市场的成员（没写 market，保存时）不参与。
 func UnionMarket(modes []Market) Market {
-	spot, swap := false, false
+	spot, swap, equity := false, false, false
 	for _, mode := range modes {
 		spot = spot || mode.Has(MarketSpot)
 		swap = swap || mode.Has(MarketSwap)
+		equity = equity || mode.Has(MarketEquity)
 	}
 	switch {
+	case equity:
+		return SingleMarket(MarketEquity)
 	case spot && swap:
 		return Market{Select: MarketBoth, Prefer: MarketSpot}
 	case swap:
@@ -532,6 +611,7 @@ func ValidatePoolMembers(pool Strategy, members map[string]Strategy) (Market, er
 		return Market{}, errors.New("不是策略池")
 	}
 	modes := make([]Market, 0, len(pool.Pool.Members))
+	equity, crypto := "", ""
 	for _, member := range pool.Pool.Members {
 		strategy, ok := members[member.ID]
 		if !ok {
@@ -540,11 +620,51 @@ func ValidatePoolMembers(pool Strategy, members map[string]Strategy) (Market, er
 		if err := ValidatePoolMember(pool, member.ID, strategy); err != nil {
 			return Market{}, err
 		}
+		switch {
+		case strategy.Market.Has(MarketEquity):
+			equity = member.ID
+		case !strategy.Market.IsZero():
+			crypto = member.ID
+		}
 		modes = append(modes, strategy.Market)
+	}
+	if equity != "" && crypto != "" {
+		return Market{}, fmt.Errorf("股票成员 %s 与现货、永续成员 %s 不能放在同一个池里", equity, crypto)
 	}
 	union := UnionMarket(modes)
 	if !union.Has(MarketSwap) && pool.Portfolio.Leverage.Cmp(quant.One()) > 0 {
+		if union.Has(MarketEquity) {
+			return Market{}, fmt.Errorf("股票池只做多，不允许 portfolio.leverage 大于 1（当前 %s）", pool.Portfolio.Leverage.String())
+		}
 		return Market{}, fmt.Errorf("成员只涉及现货，不允许 portfolio.leverage 大于 1（当前 %s），加杠杆需要永续市场", pool.Portfolio.Leverage.String())
 	}
+	if pool.Pool.Fees.FundingColumn != "" && !union.Has(MarketSwap) {
+		return Market{}, errors.New("成员都不涉及永续，strategy_pool.fees.funding_column 不起作用，请删掉")
+	}
+	if err := validatePoolSides(*pool.Pool, members); err != nil {
+		return Market{}, err
+	}
 	return union, nil
+}
+
+// InferPoolMemberMarkets 在启用时按池绑定的任务确定没写 market 的成员的市场：绑的是 equity 任务就是股票成员，否则拒绝
+// （加密成员必须显式写 market）。返回填好市场的成员副本，members 不变。
+func InferPoolMemberMarkets(members map[string]Strategy, boundEquity bool) (map[string]Strategy, error) {
+	out := make(map[string]Strategy, len(members))
+	ids := make([]string, 0, len(members))
+	for id := range members {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		strategy := members[id]
+		if !strategy.MarketDeclared {
+			if !boundEquity {
+				return nil, fmt.Errorf("成员 %s 引用的策略没有显式写 market：现货、永续成员必须写 market，只有股票成员（池绑定 equity 任务）可以不写", id)
+			}
+			strategy.Market = SingleMarket(MarketEquity)
+		}
+		out[id] = strategy
+	}
+	return out, nil
 }

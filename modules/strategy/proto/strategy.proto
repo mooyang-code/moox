@@ -108,6 +108,7 @@ message Replay {
   map<string, ReplayTask> tasks = 20;    // 市场（spot | swap | equity）→ 读取的因子任务与结果 View
   double spot_fee_bps = 21;              // 现货与股票的单边手续费
   double swap_fee_bps = 22;              // 永续的单边手续费
+  string funding_column = 23;            // 永续持仓结算资金费用的列（本根累计的资金费率）；空串表示不计
 }
 
 // ReplayBar 是回放中一个周期的记录。
@@ -207,6 +208,7 @@ message StartReplayReq {
   map<string, string> factor_tasks = 8;  // 市场（spot | swap | equity，统一数据集上的任务写 multi）→ 回放读取的因子任务；市场要与任务的源数据集一致，策略要用到的市场都要给出
   double spot_fee_bps = 9;               // 现货与股票的单边手续费（基点）
   double swap_fee_bps = 10;              // 永续的单边手续费（基点）
+  string funding_column = 11;            // 可选：永续持仓按 View 里的这一列（本根累计的资金费率，例如 funding_rate）结算资金费；策略池不能写，改写池 DSL 的 fees.funding_column
 }
 message StartReplayRsp { common.RetInfo ret_info = 1; Replay replay = 2; int32 bar_count = 3; string first_bar_end = 4; string last_bar_end = 5; }
 message GetReplayReq { string replay_id = 1; }

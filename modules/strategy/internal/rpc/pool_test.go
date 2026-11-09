@@ -116,8 +116,12 @@ func TestPoolDefinitionChecksMembers(t *testing.T) {
 	requireFail(t, int32(stillMissing.GetRetInfo().GetCode()), stillMissing.GetRetInfo().GetMsg(), "成员 b 引用的策略 member_swap 不存在")
 	h.createStrategy("no_market", "name: no_market\nbar: 1h\n"+poolRules)
 	h.createStrategy("other_bar", "name: other_bar\nbar: 5m\nmarket: {select: swap}\n"+poolRules)
-	noMarket := createPool(strings.Replace(poolDefDSL, "member_swap", "no_market", 1))
-	requireFail(t, int32(noMarket.GetRetInfo().GetCode()), noMarket.GetRetInfo().GetMsg(), "没有显式写 market")
+	// 股票策略不写 market，保存时分不出股票与加密：没写 market 的成员保存时放行，启用时按池绑定的任务判断（见 dsl.InferPoolMemberMarkets）。
+	noMarket, err := h.service.CreateStrategy(h.ctx, &strategypb.CreateStrategyReq{Strategy: &strategypb.Strategy{StrategyId: "pool_no_market", DslYaml: strings.Replace(poolDefDSL, "member_swap", "no_market", 1)}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireOK(t, int32(noMarket.GetRetInfo().GetCode()), noMarket.GetRetInfo().GetMsg())
 	otherBar := createPool(strings.Replace(poolDefDSL, "member_swap", "other_bar", 1))
 	requireFail(t, int32(otherBar.GetRetInfo().GetCode()), otherBar.GetRetInfo().GetMsg(), "与池的 bar 1h 不一致")
 	h.createStrategy("member_swap", swapMemberDSL)
@@ -140,6 +144,9 @@ func TestPoolEnableFreezesMembers(t *testing.T) {
 	// 任务并集不齐：成员需要现货与永续，只绑一个现货任务。
 	one := createPoolInstance(h, "p_one", "pool_1", map[string]string{"spot": "ftask_p1"}, true)
 	requireFail(t, int32(one.GetRetInfo().GetCode()), one.GetRetInfo().GetMsg(), "")
+	// S8：股票成员可以进池，但股票任务不能与现货、永续任务绑在同一个池上。
+	mixed := createPoolInstance(h, "p_mixed", "pool_1", map[string]string{"spot": "ftask_p3", "equity": "ftask_p3eq"}, true)
+	requireFail(t, int32(mixed.GetRetInfo().GetCode()), mixed.GetRetInfo().GetMsg(), "不能与现货、永续混用")
 	created := createPoolInstance(h, "p1", "pool_1", map[string]string{"spot": "ftask_p2", "swap": "ftask_p2swap"}, true)
 	requireOK(t, int32(created.GetRetInfo().GetCode()), created.GetRetInfo().GetMsg())
 	instance := created.GetInstance()

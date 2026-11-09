@@ -147,6 +147,8 @@ type Portfolio struct {
 	HasMaxWeight bool
 	MinUniverse  int
 	MaxMissing   quant.Decimal
+	// Limits 是单标的分方向上限与超限转移（见 limits.go），没写时为空。
+	Limits *PortfolioLimits
 }
 
 // Hash 返回 DSL 文本的内容哈希，作为定义版本标识。

@@ -388,7 +388,7 @@ rules:
 		t.Fatal(err)
 	}
 	// 择时窗口 5、成员持有期 12：取大者 12，再加 1。
-	if got := WarmBars(strategy, []*dsl.Program{plain}); got != 13 {
+	if got := WarmBars(input.Resolved{Calendar: "crypto_24x7", Bar: "1h"}, strategy, []*dsl.Program{plain}); got != 13 {
 		t.Fatalf("预热期数 %d，期望 13", got)
 	}
 }
@@ -430,7 +430,7 @@ func TestFirstLivePeriodAfterWarmUpMatchesOneLongRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := pool.NewConfig(strategy, resolved.Market)
+	cfg, err := pool.NewConfig(strategy, resolved.Market, input.MemberStrategies(members, programs))
 	if err != nil {
 		t.Fatal(err)
 	}

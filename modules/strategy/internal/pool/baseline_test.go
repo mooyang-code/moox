@@ -130,7 +130,7 @@ func (s baselinePoolScenario) config(t *testing.T) Config {
 	t.Helper()
 	strategy, err := dsl.Parse([]byte(s.dsl()))
 	require.NoError(t, err, "解析池失败：\n%s", s.dsl())
-	cfg, err := NewConfig(strategy, s.mode)
+	cfg, err := NewConfig(strategy, s.mode, nil)
 	require.NoError(t, err)
 	return cfg
 }

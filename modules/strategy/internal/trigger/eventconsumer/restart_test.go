@@ -30,8 +30,8 @@ func (unusedLoader) LoadBar(context.Context, string, input.Resolved, *dsl.Progra
 	return input.Loaded{}, errors.New("测试中不应读取输入")
 }
 
-func (unusedLoader) LoadPrices(context.Context, string, input.Resolved, input.Bar, []string) (map[string]float64, error) {
-	return nil, errors.New("测试中不应读取价格")
+func (unusedLoader) LoadPrices(context.Context, string, input.Resolved, input.Bar, []string, string) (map[string]float64, map[string]float64, error) {
+	return nil, nil, errors.New("测试中不应读取价格")
 }
 
 // encodedBody 按发布器的方式序列化事件信封。

@@ -11,6 +11,7 @@ import (
 	// 内嵌时区数据：主机缺少 tzdata 时 A 股的上海时区仍然可用。
 	_ "time/tzdata"
 
+	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"github.com/mooyang-code/moox/packages/marketcalendar"
 )
 
@@ -215,6 +216,19 @@ func TradingDayBars(calendarID, frequency string) int {
 		return 0
 	}
 	return clock.tradingDayBars()
+}
+
+// WarmClock 返回估算预热期数用的每日根数（见 dsl.BarClock）：A 股取交易日的根数，加密取一天的根数（周期长于一天时按 1）。
+func WarmClock(calendarID, frequency string) dsl.BarClock {
+	if perDay := TradingDayBars(calendarID, frequency); perDay > 0 {
+		return dsl.BarClock{PerDay: perDay, Stock: true}
+	}
+	if clock, err := clockFor(calendarID, frequency); err == nil {
+		if fixed, ok := clock.(fixedClock); ok && fixed.duration > 0 && fixed.duration < 24*time.Hour {
+			return dsl.BarClock{PerDay: int(24 * time.Hour / fixed.duration)}
+		}
+	}
+	return dsl.BarClock{PerDay: 1}
 }
 
 // fixedClock 是 crypto 24x7 的定长周期：bar 按 Unix 纪元对齐。

@@ -169,6 +169,8 @@ type Summary struct {
 	Cash     string   `json:"cash,omitempty"`
 	Turnover string   `json:"turnover,omitempty"`
 	Notes    []string `json:"notes,omitempty"`
+	// Limits 是 portfolio.limits 本期的超限截断明细（标的、方向、超出量与去向），没有超限时为空。
+	Limits []LimitOverflow `json:"limits,omitempty"`
 	// Pool 是策略池本期的明细（成员净值、分配比例、择时与贡献），非池为空。
 	Pool *PoolSummary `json:"pool,omitempty"`
 }
@@ -180,6 +182,34 @@ type PoolSummary struct {
 	Timing bool   `json:"timing,omitempty"`
 	// Members 按池里的成员顺序。
 	Members []PoolMemberSummary `json:"members"`
+	// Adjustments 是本期净敞口区间（exposure）各段与总杠杆区间（gross）做的修正，按执行顺序；没有修正时为空。
+	Adjustments []PoolAdjustment `json:"adjustments,omitempty"`
+	// Switch 是本期生效的条件转移，没有时为空。
+	Switch *PoolSwitch `json:"switch,omitempty"`
+}
+
+// PoolAdjustment 是一次组合约束修正。Kind 是 exposure 或 gross；Band 是 exposure 的段号（从 1 数）；Side 是被缩放的一侧
+// （long、short，gross 整体缩放时为 all）；Factor 是缩放倍数；Long、Short 是修正前后多头、空头敞口（按成员汇总的分配比例）。
+// Note 说明无法修正的情况（例如要放大的一侧为 0）。
+type PoolAdjustment struct {
+	Kind        string  `json:"kind"`
+	Band        int     `json:"band,omitempty"`
+	Side        string  `json:"side"`
+	Factor      float64 `json:"factor"`
+	LongBefore  float64 `json:"long_before"`
+	ShortBefore float64 `json:"short_before"`
+	LongAfter   float64 `json:"long_after"`
+	ShortAfter  float64 `json:"short_after"`
+	Note        string  `json:"note,omitempty"`
+}
+
+// PoolSwitch 是生效的一条条件转移：Index 是 allocation.switch 里的序号（从 0 数），Empty 是条件成员，From 的比例 Moved 转给了 To。
+type PoolSwitch struct {
+	Index int      `json:"index"`
+	Empty string   `json:"empty"`
+	From  string   `json:"from"`
+	To    []string `json:"to"`
+	Moved string   `json:"moved"`
 }
 
 // PoolMemberSummary 是一个成员一期的明细。
@@ -198,6 +228,9 @@ type PoolMemberSummary struct {
 	Timing      string `json:"timing,omitempty"`
 	RatioBefore string `json:"ratio_before"`
 	Ratio       string `json:"ratio"`
+	// Composed 是实际用于合成的比例：写了 exposure、gross 或 switch 且它与 Ratio 不同时才给出（Ratio 仍是步长之后、组合约束之前的值，
+	// 也是下一期步长限制用的上期比例）。
+	Composed string `json:"composed,omitempty"`
 	// Rank 是轮动的综合名次分（各因子名次按权重加权，越小越靠前），只有 rotation 且历史足够时才有。
 	Rank *float64 `json:"rank,omitempty"`
 	// Gross 与 Net 是成员目标乘比例之后的总敞口与净敞口；Targets 是各（标的|市场）的贡献权重（比例 × 成员目标权重）。

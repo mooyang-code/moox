@@ -167,18 +167,26 @@ func periodsPerYear(calendar, bar string, duration time.Duration) float64 {
 }
 
 // limitations 是每份回放报告都要标注的局限；用到永续时再注明资金费与强平。
-func limitations(liquidateAfter int, usesTags, usesSwap bool) []string {
+func limitations(liquidateAfter int, usesTags, usesSwap bool, fundingColumn string) []string {
 	notes := []string{
 		"研究回放：按当期 close 成交的理想化假设，与实盘在 bar_end 之后成交不同",
 		"区间内历史行版本未验证：因子结果行不携带版本，只核对了回放开始时的因子定义指纹",
 		"基础集合取每期有行的标的，与实时事件名单可能不同；数据集的全部标的绑定（含已停用）都参与读取",
 		"手续费只按实际成交额计；不含滑点与盘口冲击",
-		"持有标的连续缺价 " + itoa(liquidateAfter) + " 期后在 ok 期按最后价清算（研究假设）",
+	}
+	// 清算阈值为 0 表示不清算（股票成员的账本：停牌时按最后价格保持持仓）。
+	if liquidateAfter > 0 {
+		notes = append(notes, "持有标的连续缺价 "+itoa(liquidateAfter)+" 期后在 ok 期按最后价清算（研究假设）")
+	} else {
+		notes = append(notes, "缺价（停牌）的持仓按最后价格保持，不清算；成员净值只用于分配")
 	}
 	if usesTags {
 		notes = append(notes, "标签只有当前成员关系：按标签选池存在幸存者偏差")
 	}
-	if usesSwap {
+	switch {
+	case usesSwap && fundingColumn != "":
+		notes = append(notes, "永续按收盘价逐期结算盈亏、不占用现金：资金费按 "+fundingColumn+" 列结算（上一根收盘调仓之前的持仓乘本根费率），不模拟强平与保证金率")
+	case usesSwap:
 		notes = append(notes, "永续按收盘价逐期结算盈亏、不占用现金：未计资金费，不模拟强平与保证金率")
 	}
 	return notes

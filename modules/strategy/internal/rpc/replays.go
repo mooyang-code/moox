@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"time"
 
@@ -79,6 +80,13 @@ func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayRe
 	if s.Resolver == nil {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(errors.New("Storage 与 Factor 依赖未配置，不能回放"))}, nil
 	}
+	fundingColumn := strings.TrimSpace(req.GetFundingColumn())
+	if fundingColumn != "" && strategy.IsPool() {
+		return &strategypb.StartReplayRsp{RetInfo: invalid(errors.New("策略池的资金费不在回放任务上写：请写在池 DSL 的 strategy_pool.fees.funding_column，成员账本都按它结算"))}, nil
+	}
+	if fundingColumn != "" && !dsl.ValidColumnName(fundingColumn) {
+		return &strategypb.StartReplayRsp{RetInfo: invalid(fmt.Errorf("funding_column %q 必须是 View 里的列名", fundingColumn))}, nil
+	}
 	if strategy.IsPool() {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(errors.New("研究回放暂不支持策略池：成员的净值与分配比例要在池实例启用后的预热与运行中查看"))}, nil
 	}
@@ -100,6 +108,14 @@ func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayRe
 	}
 	if err := input.CheckResolvedMarkets(resolved, tasks); err != nil {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(err)}, nil
+	}
+	if fundingColumn != "" && !resolved.Market.Has(dsl.MarketSwap) {
+		return &strategypb.StartReplayRsp{RetInfo: invalid(fmt.Errorf("策略不涉及永续（市场 %s），资金费只对永续持仓结算，不要写 funding_column", resolved.Market))}, nil
+	}
+	// 只绑一个 View（纯永续、统一数据集）时 ViewColumns 就是这个 View 的列，提交时就能确认资金费列存在；现货、永续两个 View 时
+	// ViewColumns 是交集（现货没有这一列），留到执行时按永续的 View 检查。
+	if fundingColumn != "" && (resolved.Market.Single() || resolved.Unified()) && !slices.Contains(resolved.ViewColumns, fundingColumn) {
+		return &strategypb.StartReplayRsp{RetInfo: invalid(fmt.Errorf("永续的 View 没有资金费列 %s", fundingColumn))}, nil
 	}
 	// A 股日线按上海日期回放：区间两端换成所在上海日期的零点，记录与执行都用换算后的区间。
 	if start, end, err = input.ReplayRange(resolved.Calendar, resolved.Bar, start, end); err != nil {
@@ -126,7 +142,7 @@ func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayRe
 	for key, task := range bindings {
 		replayTasks[key] = store.ReplayTask{FactorTaskID: task.FactorTaskID, ViewID: task.ViewID, ViewGeneration: generations[key]}
 	}
-	replay := store.Replay{ReplayID: replayID, StrategyID: source.strategyID, InstanceID: source.instanceID, SessionID: source.sessionID, DSLYaml: source.dslYaml, DSLHash: dsl.Hash([]byte(source.dslYaml)), Calendar: resolved.Calendar, SpaceID: scoped, Tasks: replayTasks, StartTime: start, EndTime: end, SpotFeeBps: req.GetSpotFeeBps(), SwapFeeBps: req.GetSwapFeeBps(), Factors: resolved.Factors, CreatedAt: s.nowTime()}
+	replay := store.Replay{ReplayID: replayID, StrategyID: source.strategyID, InstanceID: source.instanceID, SessionID: source.sessionID, DSLYaml: source.dslYaml, DSLHash: dsl.Hash([]byte(source.dslYaml)), Calendar: resolved.Calendar, SpaceID: scoped, Tasks: replayTasks, StartTime: start, EndTime: end, SpotFeeBps: req.GetSpotFeeBps(), SwapFeeBps: req.GetSwapFeeBps(), FundingColumn: fundingColumn, Factors: resolved.Factors, CreatedAt: s.nowTime()}
 	if err := s.Store.CreateReplay(ctx, replay); err != nil {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(err)}, nil
 	}

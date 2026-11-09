@@ -125,7 +125,12 @@
               {{ formatInstant(metrics.bankrupt_at, displayZone) }}
               的这一期权益不为正，持仓已全部平掉，此后各期空仓、权益保持不变；之后的曲线不代表策略还能继续运行。</a-alert
             >
-            <a-alert v-if="replayUsesSwap(selected)" type="warning" class="top-alert"
+            <a-alert v-if="replayUsesSwap(selected) && selected?.funding_column" type="warning" class="top-alert"
+              >模拟曲线按
+              {{ selected.funding_column }}
+              列计资金费、未计强平：永续按收盘价逐期结算盈亏，成交按收盘价、每期都调到目标，不模拟实盘的调仓阈值、最小下单额与拆单；它只用于比较策略，不代表实盘收益。</a-alert
+            >
+            <a-alert v-else-if="replayUsesSwap(selected)" type="warning" class="top-alert"
               >模拟曲线未计资金费与强平：永续按收盘价逐期结算盈亏，成交按收盘价、每期都调到目标，不模拟实盘的调仓阈值、最小下单额与拆单；它只用于比较策略，不代表实盘收益。</a-alert
             >
             <div class="chart-wrap">
@@ -302,6 +307,7 @@ import { parseFactorTasks } from "@/views/strategy/market-mode";
 import {
   type ReplayFormState,
   replayFactorTasks,
+  replayFundingColumn,
   replaySourceOf,
   validateReplayForm
 } from "@/views/strategy/replay/replay-form-model";
@@ -389,7 +395,8 @@ const form = reactive<ReplayFormState>({
   tasks: parseFactorTasks(String(route.query.factor_tasks || "")),
   range: recentRange(30),
   spot_fee_bps: 10,
-  swap_fee_bps: 10
+  swap_fee_bps: 10,
+  funding_column: ""
 });
 let chart: VChart | null = null;
 // 图表库体积很大（约 2MB）：第一次真正要画曲线时才加载，回放列表与创建表单不必等它。
@@ -817,6 +824,7 @@ async function start() {
   const [startTime, endTime] = form.range.map(ms => new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z"));
   const gen = generation;
   const picks = userPicks;
+  const fundingColumn = replayFundingColumn(form, strategyStore.strategyCatalog);
   starting.value = true;
   try {
     const started = await startReplay({
@@ -825,7 +833,8 @@ async function start() {
       start_time: startTime,
       end_time: endTime,
       spot_fee_bps: Number(form.spot_fee_bps) || 0,
-      swap_fee_bps: Number(form.swap_fee_bps) || 0
+      swap_fee_bps: Number(form.swap_fee_bps) || 0,
+      ...(fundingColumn ? { funding_column: fundingColumn } : {})
     });
     if (gen !== generation) return;
     Message.success(

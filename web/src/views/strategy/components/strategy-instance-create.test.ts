@@ -728,12 +728,14 @@ describe("strategy instance creation behavior", () => {
       expect(api.validateStrategy).not.toHaveBeenCalled();
     });
 
-    it("成员没写 market 时给出中文提示并禁止提交，其他成员没问题也不例外", async () => {
+    it("没写 market 的成员（按股票成员处理）与现货成员混用时给出中文提示并禁止提交", async () => {
       const { wrapper, flushPromises } = await open({
         presetStrategyId: "pool",
         strategies: [pool("s_spot", "s_plain"), spotMember, noMarketMember]
       });
-      expect(wrapper.text()).toContain("成员 m1 引用的策略 s_plain 没有显式写 market，池成员必须写 market");
+      expect(wrapper.text()).toContain(
+        "成员 m1 引用的策略没有写 market，按股票成员处理；股票成员不能与现货、永续成员放在同一个池里"
+      );
       expect(wrapper.findAll("select")).toHaveLength(1);
       await create(wrapper).trigger("click");
       await flushPromises();

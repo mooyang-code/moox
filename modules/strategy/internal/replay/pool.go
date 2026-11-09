@@ -123,6 +123,9 @@ func RunPool(ctx context.Context, run PoolRun) (PoolRunResult, error) {
 	if err != nil {
 		return PoolRunResult{}, err
 	}
+	if err := checkFundingColumn(views, run.Config.Spec.Fees.FundingColumn); err != nil {
+		return PoolRunResult{}, err
+	}
 	end, err := run.checkWindow(ctx, views)
 	if err != nil {
 		return PoolRunResult{}, err
@@ -145,6 +148,14 @@ func RunPool(ctx context.Context, run PoolRun) (PoolRunResult, error) {
 		columns = append(columns, program.PreviousColumns...)
 	}
 	columns = uniqueStrings(columns)
+	// 写了 fees.funding_column 时永续的行另读这一列（成员账本结算资金费）；现货的 View 没有这一列。
+	fundingColumn := run.Config.Spec.Fees.FundingColumn
+	columnsOf := func(market string) []string {
+		if fundingColumn == "" || market != dsl.MarketSwap {
+			return columns
+		}
+		return uniqueStrings(append(append([]string(nil), columns...), fundingColumn))
+	}
 	job := store.Replay{ReplayID: "pool", SpaceID: run.SpaceID, Tasks: make(map[string]store.ReplayTask, len(resolved.Tasks))}
 	for market, task := range resolved.Tasks {
 		job.Tasks[market] = store.ReplayTask{FactorTaskID: task.FactorTaskID, ViewID: task.ViewID, ViewGeneration: views[market].Generation}
@@ -155,7 +166,7 @@ func RunPool(ctx context.Context, run PoolRun) (PoolRunResult, error) {
 		for _, market := range member.Resolved.Markets() {
 			view := views[market]
 			item.readers = append(item.readers, newMarketReader(market, job.Tasks[market], subjects[market],
-				&input.RangeLoader{Client: shared, SpaceID: run.SpaceID, View: view, Subjects: subjects[market], Columns: columns, Abort: abort},
+				&input.RangeLoader{Client: shared, SpaceID: run.SpaceID, View: view, Subjects: subjects[market], Columns: columnsOf(market), Abort: abort},
 				&input.RangeLoader{Client: shared, SpaceID: run.SpaceID, View: view, Subjects: subjects[market], Columns: []string{"close"}, Abort: abort}))
 		}
 		item.reader = &segmentReader{runner: runner, job: job, resolved: item.resolved, program: item.program, end: end, acc: newAccumulator(1, 1, 1), abort: abort, markets: item.readers, switches: maxIndexSwitches}
@@ -195,7 +206,9 @@ func RunPool(ctx context.Context, run PoolRun) (PoolRunResult, error) {
 				}
 				results = append(results, pool.MemberResult{ID: member.id, Decision: &decision})
 			}
-			decision, err := pool.Step(run.Config, state, pool.Input{BarIndex: bar.BarIndex, Prices: barPrices(priceReaders, priceSegments, bar.StorageStart.Unix()), Members: results})
+			key := bar.StorageStart.Unix()
+			decision, err := pool.Step(run.Config, state, pool.Input{BarIndex: bar.BarIndex, Prices: barPrices(priceReaders, priceSegments, key),
+				Funding: barFunding(priceReaders, priceSegments, key, fundingColumn), Members: results})
 			if err != nil {
 				return PoolRunResult{}, fmt.Errorf("%s：%w", input.BarEndLabel(resolved.Calendar, resolved.Bar, bar.BarEnd), err)
 			}

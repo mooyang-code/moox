@@ -30,6 +30,8 @@ type Config struct {
 	Portfolio dsl.Portfolio
 	// Mode 是池的有效市场模式（成员市场的并集，见 dsl.UnionMarket）。
 	Mode dsl.Market
+	// Sides 是各成员的方向（成员 id → long、short；混合方向为空串），条件转移与组合约束按它汇总多头、空头敞口。
+	Sides map[string]string
 	// Degrading 非空时报告一个跳过原因是否需要人工处理：所有成员都没通过时，池的跳过原因优先取这类原因（实例据此标 degraded）。
 	Degrading func(reason string) bool
 }
@@ -52,12 +54,30 @@ func (c Config) PickSkipReason(reasonOf func(id string) string) (id, reason stri
 	return id, reason, ok
 }
 
-// NewConfig 从池的策略定义构造配置；mode 是成员市场的并集。
-func NewConfig(strategy dsl.Strategy, mode dsl.Market) (Config, error) {
+// NewConfig 从池的策略定义构造配置；mode 是成员市场的并集，members 是成员 id → 成员策略（判定成员方向用）。
+// 池写了 switch、exposure 或 gross 时每个成员都必须给出且是单方向的。
+func NewConfig(strategy dsl.Strategy, mode dsl.Market, members map[string]dsl.Strategy) (Config, error) {
 	if !strategy.IsPool() {
 		return Config{}, errors.New("不是策略池")
 	}
-	return Config{Spec: *strategy.Pool, Portfolio: strategy.Portfolio, Mode: mode}, nil
+	sides := dsl.MemberSides(*strategy.Pool, members)
+	if strategy.Pool.NeedsSingleSide() {
+		for _, id := range strategy.Pool.MemberIDs() {
+			if sides[id] == "" {
+				return Config{}, fmt.Errorf("成员 %s 不是单方向的（或缺少成员定义）：写了 allocation.switch、exposure 或 gross 时每个成员都必须全部做多或全部做空", id)
+			}
+		}
+	}
+	return Config{Spec: *strategy.Pool, Portfolio: strategy.Portfolio, Mode: mode, Sides: sides}, nil
+}
+
+// newLedger 构造一个成员的模拟账本：股票池的费率用 fees.equity_bps，停牌（缺价）时按最后价格保持持仓、不清算；
+// 加密池缺价 LiquidateBars 期后清算。
+func (c Config) newLedger() *ledger.Ledger {
+	if c.Mode.Select == dsl.MarketEquity {
+		return ledger.NewLedger(InitialEquity, c.Spec.Fees.EquityBps, c.Spec.Fees.SwapBps, 0)
+	}
+	return ledger.NewLedger(InitialEquity, c.Spec.Fees.SpotBps, c.Spec.Fees.SwapBps, LiquidateBars)
 }
 
 // MemberIDs 返回成员 id（按池里的顺序）。
@@ -107,6 +127,9 @@ type Input struct {
 	// Prices 是本期各（标的|市场）的收盘价（只含有价的），键是 engine.TargetKey；成员账本的估值与成交都用它，
 	// 要覆盖账本里全部持仓的键，而不只是成员本期预期的标的。
 	Prices map[string]float64
+	// Funding 是本期各永续键本根累计的资金费率（键是 engine.TargetKey，只含有值的）：池写了 fees.funding_column 时，
+	// 调用方按 FundingKeys 读取这一列放进来；没写时不用。
+	Funding map[string]float64
 	// Members 是各成员本期的结果，覆盖池的全部成员。
 	Members []MemberResult
 }
@@ -154,18 +177,39 @@ func Step(cfg Config, previous engine.State, in Input) (engine.Decision, error) 
 	// 比例只用上一期末为止的净值序列：本期的成员账本在下面才推进。
 	alloc := allocate(cfg.Spec, ids, state.Series, bankrupt, previousRatios)
 
+	// 成员的有效目标：通过的取本期目标，没通过的沿用上期目标；条件转移按它判断“空”。
+	memberTargets := make(map[string]map[string]quant.Decimal, len(ids))
+	empty := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		weights, err := memberWeights(results[id], previous.Members[id])
+		if err != nil {
+			return engine.Decision{}, fmt.Errorf("成员 %s：%w", id, err)
+		}
+		memberTargets[id] = weights
+		empty[id] = true
+		for _, weight := range weights {
+			if !weight.IsZero() {
+				empty[id] = false
+				break
+			}
+		}
+	}
+	// 合成用的比例：净敞口与总杠杆区间、条件转移之后的值（见 constraints.go），不写回 State.Ratios。
+	ratios, adjustments, err := constrain(cfg, ids, alloc.ratio, state.Started)
+	if err != nil {
+		return engine.Decision{}, err
+	}
+	ratios, switched := applySwitch(cfg, ratios, empty)
+
 	contributions := make(map[string]quant.Decimal)
 	frozen := make(map[string]struct{})
 	perMember := make(map[string]map[string]quant.Decimal, len(ids))
 	for _, id := range ids {
 		result := results[id]
-		weights, err := memberWeights(result, previous.Members[id])
-		if err != nil {
-			return engine.Decision{}, fmt.Errorf("成员 %s：%w", id, err)
-		}
+		weights := memberTargets[id]
 		scaled := make(map[string]quant.Decimal, len(weights))
 		for key, weight := range weights {
-			share := weight.Mul(alloc.ratio[id])
+			share := weight.Mul(ratios[id])
 			scaled[key] = share
 			contributions[key] = contributions[key].Add(share)
 		}
@@ -182,20 +226,31 @@ func Step(cfg Config, previous engine.State, in Input) (engine.Decision, error) 
 	if state.Series == nil {
 		state.Series = make(map[string][]float64, len(ids))
 	}
+	var funding map[string]float64
+	if cfg.Spec.Fees.FundingColumn != "" {
+		funding = in.Funding
+		if funding == nil {
+			funding = map[string]float64{}
+		}
+	}
 	for _, id := range ids {
 		book := state.Ledgers[id]
 		if book == nil {
-			book = ledger.NewLedger(InitialEquity, cfg.Spec.Fees.SpotBps, cfg.Spec.Fees.SwapBps, LiquidateBars)
+			book = cfg.newLedger()
 			state.Ledgers[id] = book
 		}
-		outcome := book.Step(ledger.Step{Prices: in.Prices, Targets: floatTargets(results[id]), OK: results[id].passed()})
+		outcome := book.Step(ledger.Step{Prices: in.Prices, Targets: floatTargets(results[id]), OK: results[id].passed(), Funding: funding})
 		series := append(state.Series[id], outcome.EquityAfter)
 		if len(series) > keep {
 			series = append([]float64(nil), series[len(series)-keep:]...)
 		}
 		state.Series[id] = series
 	}
-	composed, err := engine.ComposeTargets(cfg.Portfolio, cfg.Mode, contributions, frozen, previous)
+	var groups map[string]map[string]quant.Decimal
+	if cfg.Portfolio.Limits != nil {
+		groups = perMember
+	}
+	composed, err := engine.ComposeTargets(cfg.Portfolio, cfg.Mode, contributions, groups, frozen, previous)
 	if err != nil {
 		return engine.Decision{}, err
 	}
@@ -219,6 +274,12 @@ func Step(cfg Config, previous engine.State, in Input) (engine.Decision, error) 
 	composed.State = next
 	composed.Items = items
 	composed.Summary.Pool = summary(cfg, ids, results, state, &alloc, perMember)
+	composed.Summary.Pool.Adjustments, composed.Summary.Pool.Switch = adjustments, switched
+	for i, id := range ids {
+		if used := ratios[id].String(); used != alloc.ratio[id].String() {
+			composed.Summary.Pool.Members[i].Composed = used
+		}
+	}
 	return composed, nil
 }
 
@@ -439,6 +500,9 @@ func PriceKeys(previous engine.State, members []MemberResult) ([]string, error) 
 			seen[key] = struct{}{}
 		}
 	}
+	for _, key := range FundingKeys(state) {
+		seen[key] = struct{}{}
+	}
 	for _, member := range members {
 		if !member.passed() {
 			continue
@@ -453,6 +517,23 @@ func PriceKeys(previous engine.State, members []MemberResult) ([]string, error) 
 	}
 	sort.Strings(keys)
 	return keys, nil
+}
+
+// FundingKeys 返回本期结算资金费要读费率的永续键：各成员账本上一根估值后的快照（含之后平掉的仓位），排序。
+// 没写 fees.funding_column 时账本不记快照，返回空。
+func FundingKeys(state State) []string {
+	seen := map[string]struct{}{}
+	for _, book := range state.Ledgers {
+		for _, key := range book.FundingKeys() {
+			seen[key] = struct{}{}
+		}
+	}
+	keys := make([]string, 0, len(seen))
+	for key := range seen {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // SkippedSummary 构造池本期被跳过时的摘要（成员状态与原因、账本与比例沿用上期）：就绪判断阶段所有成员都没通过、不经过 Step 时用它，
