@@ -103,7 +103,7 @@ export const systemMenu = [
 
   // 事件中心是一级菜单（只有这一页），排在数据归档之后、运维之前。页签（事件 / 订阅 / 执行记录）、执行记录的筛选和打开的记录
   // 都在 query 里（告警会直接带失败筛选跳进来），query 变化时复用页面。
-  menu("055", "0", "/events", "events", "events", "events/index", 7, { svgIcon: "form", icon: "", reuseOnQuery: true }),
+  menu("055", "0", "/events", "events", "events", "events/index", 7, { svgIcon: "bell", icon: "", reuseOnQuery: true }),
 
   directory("06", "0", "/ops/monitor", "ops", "ops", 8, { svgIcon: "defend", icon: "" }),
   // 展开状态、页签、筛选、定位的主机都在 query 里：query 变化时复用页面（菜单与 route.ts 两处都写）
