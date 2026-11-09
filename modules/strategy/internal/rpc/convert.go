@@ -68,6 +68,9 @@ func itemProtos(items []store.ResultItem) []*strategypb.StrategyResultItem {
 		if item.Rank != nil {
 			row.Rank = int32(*item.Rank)
 		}
+		if item.Scale != nil {
+			row.Scale = strconv.FormatFloat(*item.Scale, 'g', -1, 64)
+		}
 		out = append(out, row)
 	}
 	return out

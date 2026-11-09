@@ -10,11 +10,13 @@ import (
 // 冻结的标的（因市场不可用或只缺上一根而缺数的已持仓标的，见 freeze.go）既不算可用也不算缺数：规则对它们不求值，持仓保持不动；
 // 但守门仍把它们计入缺数比例，保护中的标的不能伪装成可用。
 type ruleSets struct {
-	expected  []string
-	agedOut   map[string]struct{}
-	available []string
-	missing   map[string]string
-	frozen    map[string]struct{}
+	expected []string
+	agedOut  map[string]struct{}
+	// agedOutReason 是 agedOut 里不按 min_age_bars 剔除的标的的明细原因（见 Frame.AgedOutReasons）。
+	agedOutReason map[string]string
+	available     []string
+	missing       map[string]string
+	frozen        map[string]struct{}
 	// holdReason 是冻结标的的明细原因（prev_hold 或 market_hold，见 frozenSet）。
 	holdReason map[string]string
 	// waived 表示规则本期不守门（永续整体不可用时的空头规则，见 waivesShortGuard）：规则只保持冻结的持仓，holding 规则不重建批次。
@@ -39,15 +41,13 @@ func partitionRule(rule *dsl.CompiledRule, frame Frame, held []string, frozen ma
 		}
 		sets.agedOut[id] = struct{}{}
 	}
+	sets.agedOutReason = frame.AgedOutReasons[rule.Rule.ID]
 	expected := append([]string(nil), frame.Expected[rule.Rule.ID]...)
 	sort.Strings(expected)
 	sets.expected = expected
 	columns := rule.Columns()
 	previousColumns := rule.PreviousColumns()
-	heldColumns, heldPrevious := columns, previousColumns
-	if rule.Rule.Type == dsl.RuleTypeSignal && rule.Exit != nil {
-		heldColumns, heldPrevious = rule.Exit.AllColumns(), rule.Exit.AllPreviousColumns()
-	}
+	heldCurrent, heldPrevious := heldColumns(rule)
 	for _, id := range expected {
 		if _, aged := sets.agedOut[id]; aged {
 			continue
@@ -63,10 +63,14 @@ func partitionRule(rule *dsl.CompiledRule, frame Frame, held []string, frozen ma
 		}
 		current, previous := columns, previousColumns
 		if _, isHeld := heldSet[id]; isHeld {
-			current, previous = heldColumns, heldPrevious
+			current, previous = heldCurrent, heldPrevious
 		}
 		if reason := missingReason(id, row, current, previous, frame.FailedColumns); reason != "" {
 			sets.missing[id] = reason
+			continue
+		}
+		if _, valid := scaleOf(rule, id, row); !valid {
+			sets.missing[id] = reasonScaleInvalid
 			continue
 		}
 		sets.available = append(sets.available, id)
@@ -83,6 +87,13 @@ func missingReason(id string, row Row, columns, previousColumns []string, failed
 	return causes[0].text
 }
 
+// 年龄剔除的明细原因：ReasonAgedOutMax 是已通过 max_age_bars、不再算新标的；ReasonAgeMarkets 是 age_markets: all 的规则里
+// 标的没在全部绑定市场列出，或某个市场本期整体不可用。
+const (
+	ReasonAgedOutMax = "aged_out_max"
+	ReasonAgeMarkets = "age_markets"
+)
+
 // reasonVolumeZero 是 tranche 规则里本期有行但 volume 为 0、不作为候选的标的的明细原因。
 const reasonVolumeZero = "volume_zero"
 
@@ -95,7 +106,11 @@ func (s ruleSets) items(ruleID string) []Item {
 	}
 	for _, id := range s.expected {
 		if _, aged := s.agedOut[id]; aged {
-			items = append(items, Item{RuleID: ruleID, InstrumentID: id, Stage: StageAgedOut, Reason: "min_age_bars"})
+			reason := "min_age_bars"
+			if special, ok := s.agedOutReason[id]; ok {
+				reason = special
+			}
+			items = append(items, Item{RuleID: ruleID, InstrumentID: id, Stage: StageAgedOut, Reason: reason})
 			continue
 		}
 		if _, held := s.frozen[id]; held {

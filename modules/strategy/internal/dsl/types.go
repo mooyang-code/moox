@@ -47,13 +47,16 @@ type Strategy struct {
 	FactorParams map[string]map[string]ParamExpr
 }
 
-// Universe 是策略级默认标的池：省略即 all。
+// Universe 是策略级默认标的池：省略即 all。规则可以写规则级 universe 逐项覆盖（见 universe.go）。
+// MinAgeBars、MaxAgeBars 是年龄下限与上限（只保留年龄小于上限的新标的）；AgeMarkets 为 all 时要求在全部绑定市场上判断年龄。
 type Universe struct {
 	Tags        []string
 	ExcludeTags []string
 	Include     []string
 	Exclude     []string
 	MinAgeBars  int
+	MaxAgeBars  int
+	AgeMarkets  string
 }
 
 // Pool 是规则级标的池。Explicit 为 true 时替代 universe 的标签与黑白名单。
@@ -63,12 +66,19 @@ type Pool struct {
 	Tags     []string
 }
 
-// Select 描述选择阶段：top 或 bottom 二选一，where 可选，buffer 是排名缓冲区。
+// Select 描述选择阶段（见 select.go）：top、bottom、range 三选一；top/bottom 是正整数个数或 (0, 1) 的比例，比例按
+// CountRound 取整后与 CountMin 取大；Range 是名次闭区间（未写时为零值）；Group 限制每组入选个数；Then 在第一段的结果上二次排序。
+// where 可选，buffer 是排名缓冲区。
 type Select struct {
-	Top    int
-	Bottom int
-	Where  string
-	Buffer int
+	Top        float64
+	Bottom     float64
+	CountRound string
+	CountMin   int
+	Range      [2]int
+	Group      *SelectGroup
+	Then       *SelectThen
+	Where      string
+	Buffer     int
 }
 
 // Weight 描述配权：Total 是规则预算上限，Cap 是规则内单标的上限（HasCap 为 false 表示不限）。
@@ -79,19 +89,28 @@ type Weight struct {
 	HasCap bool
 }
 
-// Holding 是 rank 规则的分批换仓：每 Bars 根为一个周期，在 Offsets 指定的偏移处重建对应批次。
+// Holding 是 rank 规则的分批换仓（见 holding.go）：每 Bars 根为一个周期，在 Offsets 指定的偏移处重建对应批次；
+// 写了 Calendar 时改按交易日历换仓，Days 的每个值是一个批次。Anchor 是相位锚点（某根 bar 的 bar_start）。
 type Holding struct {
-	Bars    int
-	Offsets []int
+	Bars     int
+	Offsets  []int
+	Anchor   string
+	Calendar string
+	Every    int
+	Days     []int
+	At       string
 }
 
 // Rule 是一条规则。rank 规则使用 Filter、Score、Select、Weight、FilterAfter、Holding；
 // signal 规则使用 Pool、Entry、Exit、Weight；tranche 规则使用 Weight（只有 total）与 Tranche。
 type Rule struct {
-	ID          string
-	Name        string
-	Type        string
-	Pool        Pool
+	ID   string
+	Name string
+	Type string
+	Pool Pool
+	// Universe 是规则级 universe（见 universe.go）；AllowEmpty 为真时这条规则不参与整期守门，候选为空或缺数时只是不出目标。
+	Universe    *RuleUniverse
+	AllowEmpty  bool
 	Filter      string
 	Score       string
 	Select      Select
@@ -102,6 +121,11 @@ type Rule struct {
 	Entry       string
 	Exit        string
 	Holding     *Holding
+	// Hold 是 rank 规则的进出场持有（见 hold.go）。
+	Hold *Hold
+	// Scale 是规则输出权重上的仓位系数；OnMissing 是持有标的缺数时的冻结保持（见 scale.go，tranche 规则不支持 on_missing）。
+	Scale     *Scale
+	OnMissing *OnMissing
 	// Stop 是 rank、signal 规则的止损止盈（见 stop.go）；tranche 规则写在子策略模板里。
 	Stop *Stop
 	// Tranche 是 tranche 规则的子策略模板与参数表（见 tranche.go）。

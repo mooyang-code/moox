@@ -225,7 +225,11 @@ type Resolved struct {
 	// PreviousFactors 是经 bars[-1] 读取的因子列所属的成员（排序）：只有它们需要上一根的版本证据。由编译结果派生
 	// （Resolve 与 Compile 填入），不进快照。
 	PreviousFactors []string `json:"-"`
-	MinAgeBars      int      `json:"min_age_bars,omitempty"`
+	// MinAgeBars 是策略级 universe.min_age_bars：没写规则级年龄字段的规则按它判断，双市场按市场剔除行也只按它（见 age.go）。
+	MinAgeBars int `json:"min_age_bars,omitempty"`
+	// RuleAges 是各规则的年龄要求；只在有规则的要求不同于“策略级 min_age_bars、按下单市场判断”时填写（规则级年龄字段、max_age_bars、
+	// age_markets: all），否则为空，各规则按 MinAgeBars。
+	RuleAges map[string]AgeRule `json:"rule_ages,omitempty"`
 	// ViewColumns 是各 View 共有的列（排序）：DSL 引用的列必须在每个绑定的 View 里都存在。
 	ViewColumns []string `json:"view_columns"`
 }
@@ -324,7 +328,9 @@ type Sets struct {
 	Universe []string
 	Expected map[string][]string
 	AgedOut  map[string][]string
-	Subjects map[string]Subject
+	// AgedOutReasons 是 AgedOut 里不按 min_age_bars 剔除的标的的明细原因（见 engine.Frame.AgedOutReasons）。
+	AgedOutReasons map[string]map[string]string
+	Subjects       map[string]Subject
 	// Notes 记录装配过程中的说明（例如事件未携带名单）。
 	Notes []string
 }

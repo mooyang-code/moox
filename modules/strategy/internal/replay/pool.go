@@ -154,11 +154,9 @@ func RunPool(ctx context.Context, run PoolRun) (PoolRunResult, error) {
 		item := &poolMemberRun{id: member.ID, resolved: member.Resolved, program: run.Programs[i]}
 		for _, market := range member.Resolved.Markets() {
 			view := views[market]
-			item.readers = append(item.readers, &marketReader{
-				market: market, task: job.Tasks[market], subjects: subjects[market], passed: make(map[string]struct{}),
-				rows:    &input.RangeLoader{Client: shared, SpaceID: run.SpaceID, View: view, Subjects: subjects[market], Columns: columns, Abort: abort},
-				history: &input.RangeLoader{Client: shared, SpaceID: run.SpaceID, View: view, Subjects: subjects[market], Columns: []string{"close"}, Abort: abort},
-			})
+			item.readers = append(item.readers, newMarketReader(market, job.Tasks[market], subjects[market],
+				&input.RangeLoader{Client: shared, SpaceID: run.SpaceID, View: view, Subjects: subjects[market], Columns: columns, Abort: abort},
+				&input.RangeLoader{Client: shared, SpaceID: run.SpaceID, View: view, Subjects: subjects[market], Columns: []string{"close"}, Abort: abort}))
 		}
 		item.reader = &segmentReader{runner: runner, job: job, resolved: item.resolved, program: item.program, end: end, acc: newAccumulator(1, 1, 1), abort: abort, markets: item.readers, switches: maxIndexSwitches}
 		members = append(members, item)

@@ -8,6 +8,9 @@
         <a-descriptions-item label="上市年龄">{{
           binding.min_age_bars ? `${binding.min_age_bars} 根` : "不限"
         }}</a-descriptions-item>
+        <a-descriptions-item v-if="binding.rule_ages.length" label="规则年龄" :span="3">{{
+          binding.rule_ages.map(age => `${age.rule_id}：${ruleAgeText(age)}`).join("；")
+        }}</a-descriptions-item>
       </a-descriptions>
       <a-table row-key="market" size="small" :data="binding.tasks" :pagination="false" class="binding-tasks">
         <template #columns>
@@ -68,7 +71,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import { marketLabel } from "@/views/strategy/market-mode";
-import { parseResolved, shortHash } from "@/views/strategy/model";
+import { parseResolved, ruleAgeText, shortHash } from "@/views/strategy/model";
 
 /** 因子列的来源：成员键（与定义不同时带上定义 ID，可变成员标注“可变”）和输出名。 */
 function factorText(column: { member?: string; member_kind?: string; factor_id: string; output_name: string }) {

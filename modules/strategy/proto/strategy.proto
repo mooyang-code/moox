@@ -78,6 +78,7 @@ message StrategyResultItem {
   string weight = 6;
   string reason = 7;
   string market = 8;                     // 入选的权重取它进入的市场，其余取所选行所在的市场（spot | swap | equity）
+  string scale = 9;                      // 乘在输出权重上的仓位系数（weight 已乘过）；规则没写 scale 时为空
 }
 
 // ReplayTask 是研究回放在一个市场读取的因子任务及其结果 View。

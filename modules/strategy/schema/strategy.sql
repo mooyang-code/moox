@@ -127,7 +127,7 @@ CREATE TABLE IF NOT EXISTS t_strategy_ready_events (
 CREATE INDEX IF NOT EXISTS idx_t_strategy_ready_events_ctime ON t_strategy_ready_events (c_ctime);
 
 -- 解释明细：各规则 E(r) 中每个标的的最终阶段、分数、名次、权重与原因；c_market 是入选的权重进入的市场，其余是所选行所在的市场；
--- c_ctime 与所属结果相同，按天数清理
+-- c_scale 是乘在输出权重上的仓位系数（c_weight 已乘过，规则没写 scale 时为空）；c_ctime 与所属结果相同，按天数清理
 CREATE TABLE IF NOT EXISTS t_strategy_result_items (
     c_result_id TEXT NOT NULL,
     c_rule_id TEXT NOT NULL,
@@ -138,6 +138,7 @@ CREATE TABLE IF NOT EXISTS t_strategy_result_items (
     c_rank INTEGER,
     c_weight TEXT,
     c_reason TEXT NOT NULL DEFAULT '',
+    c_scale REAL,
     c_ctime DATETIME NOT NULL,
     PRIMARY KEY (c_result_id, c_rule_id, c_instrument_id),
     FOREIGN KEY (c_result_id) REFERENCES t_strategy_results (c_result_id) ON DELETE CASCADE

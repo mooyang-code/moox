@@ -82,7 +82,11 @@ portfolio: {leverage: 1, max_weight: 0.1}
 | 字段 | 说明 |
 | --- | --- |
 | `universe.tags` / `include` | 任一非空时取并集作白名单；都为空表示全部；再减去 `exclude_tags` 与 `exclude` |
-| `universe.min_age_bars` | 标的在这么多根之前已有数据才参与；对所有规则生效 |
+| `universe.min_age_bars` | 标的在这么多根之前已有数据才参与；规则没写规则级 `min_age_bars` 时生效 |
+| `universe.max_age_bars` | 只保留年龄小于这么多根的新标的；写了它的规则必须同时写 `allow_empty: true` |
+| `universe.age_markets` | `each`（默认）任一市场通过即算通过；`all` 要求在绑定的全部市场上都通过 |
+| 规则级 `universe` | 规则里写 `universe`，写了的字段逐项覆盖策略级；写了显式 `pool` 的规则只能写年龄类字段 |
+| 规则级 `allow_empty` | `true` 时这条规则不参与整期守门（`universe_too_small`、`min_universe`、`max_missing`），候选为空只是不出目标 |
 | `portfolio.leverage` | gross 上限，默认 1；纯现货与股票不允许大于 1，只有市场模式含永续才可以；各规则 `weight.total` 之和不超过它 |
 | `portfolio.max_weight` | 组合级单币上限，同一个币的现货、永续**合计**（绝对值之和，“现货多 + 永续空”的对冲也按绝对值之和截断）；两边都不为零时按比例缩小，只有一边时取上限，超出部分留现金 |
 | `portfolio.min_universe` | rank 规则进入 filter 的可用标的少于它则整期跳过 |
@@ -94,8 +98,8 @@ portfolio: {leverage: 1, max_weight: 0.1}
 
 | `type` | 用途 | 关键字段 |
 | --- | --- | --- |
-| `rank` | 截面选股 | `filter`、`score`、`select`、`weight`，可选 `holding`、`filter_after`、`side`、`stop` |
-| `signal` | 固定池择时 | `pool`、`entry`、`exit`、`weight`，可选 `stop` |
+| `rank` | 截面选股 | `filter`、`score`、`select`、`weight`，可选 `holding`、`hold`、`filter_after`、`side`、`stop`、`scale`、`on_missing` |
+| `signal` | 固定池择时 | `pool`、`entry`、`exit`、`weight`，可选 `stop`、`scale`、`on_missing` |
 | `tranche` | 批次持仓：每根 K 线按本期选币新开一批，每批持有 h 期，多批叠加 | `tranche` 子策略模板、可选 `params` 参数表、`weight`，见第 4 节 |
 
 含 `tranche` 规则的策略只能全部是 `tranche` 规则，且不能写 `factor_params`；只能用在单个市场的策略（`spot/spot` 按权重持有且不做空，或 `swap/swap`），双市场模式启用被拒（S1 暂不支持双市场 tranche：市场不可用时无法冻结持仓）。
@@ -111,8 +115,11 @@ portfolio: {leverage: 1, max_weight: 0.1}
   weight: {total: 1, method: equal, cap: 0.05}   # method: equal | rank；cap 是规则内单标的上限
 ```
 
-- 保存时要求 `cap × 选中数量 ≥ total`（预算分得完）。`select.top` 写成大于标的数的值就等于全选。
-- `holding: {bars, offsets}` 分批换仓，与 `buffer` 互斥。`filter_after` 只剔除不补位，剔除的权重留现金。
+- 保存时要求 `cap × 选中数量 ≥ total`（预算分得完；`top`/`bottom` 写比例时跳过这项检查，分不完的留现金）。`select.top` 写成大于标的数的值就等于全选。
+- `select` 的扩展：`top: 0.1`（(0, 1) 是比例，分母是通过 filter 且分数有效的样本数）配 `count_round: floor | ceil | round`、`count_min`；`range: [10, 13]` 名次闭区间（与 top/bottom、buffer 互斥）；`group: {by: 列, max: 3}` 或 `{by: 列, quotas: [2, 1], rest: 1}` 分组名额（分组值 NaN 的不入选）；`then: {score: "表达式", top: 5}` 在第一段结果上二次排序（与 buffer、hold 互斥）。
+- `holding: {bars, offsets}` 分批换仓，与 `buffer` 互斥；`anchor: "<RFC3339 的 bar_start>"`（A 股可写交易日期）只改相位。日历换仓写 `holding: {calendar: trading_days | week | month, every: 5（仅 trading_days）, days: [1, -1], at: first | last}`，与 bars/offsets 互斥；建仓 bar 没有 ok 决策时在之后第一根 ok bar 补建。`filter_after` 只剔除不补位，剔除的权重留现金。
+- `hold: {entry, exit, max_bars, cooldown_bars}` 进出场持有：持有中 exit 为真、不满足 filter、持满 max_bars、止损、缺数即出场（stop 优先），空位按名次从 entry 为真且 exit 不为真的候选里补，目标数取 `select` 换算的个数（持有多于目标不裁减）。持有标的只缺 score、entry 的列时不出场。与 buffer、holding.bars/offsets、then、range、filter_after 互斥；可与 `holding.calendar`（只能一个 days）同写，只在建仓 bar 判进出场。
+- `scale: {expr, max}` 在规则配权（含 cap）之后逐标的乘系数，截到 [0, max]（max 默认 1、上限 10），乘掉的留现金；系数为 NaN 按缺数处理。`on_missing: {keep_bars: N}`（rank、signal；tranche 不支持）让持有标的本根缺数时冻结保持，连续缺数超过 N 根才移出。
 - `side` 取 `long`（默认）或 `short`；空头只走永续，纯现货与股票不允许做空。
 
 ### signal 规则
@@ -258,6 +265,10 @@ stop:
 | 保存即拒绝，提示未知字段 | 解析严格，拼错键名或写了不存在的字段 | 按本文字段名核对 |
 | 池定义被拒，提示成员不存在或不能进池 | 成员没写 `market`、是池、用了 `factor_params`，或 `bar` 与池不一致 | 先修好成员策略再引用 |
 | 提示 `cap × 选中数量 < total` | 预算分不完 | 调大 `cap` 或 `select.top`，或调小 `total` |
+| 提示使用了 `max_age_bars` 必须写 `allow_empty: true` | 只保留新标的的规则经常没有候选，不写会让整期守门跳过 | 在这条规则上写 `allow_empty: true` |
+| 提示互斥（hold 与 buffer / then / range / filter_after / holding.bars，range 与 top、buffer，then 与 buffer，calendar 与 bars） | 这些写法语义冲突 | 按提示二选一 |
+| 启用被拒，提示 holding.anchor 不是 bar 起点 | 锚点要写某根 bar 的 bar_start（A 股日线是上海 0 点，可直接写交易日期） | 改成 bar 起点或交易日期 |
+| tranche 规则写 `on_missing` 被拒 | tranche 不走冻结保持 | 去掉 `on_missing` |
 | 启用被拒，提示列不存在 | 规则引用的列不在因子任务结果里 | 按成员键推导列名；默认参数的成员省略参数段 |
 | 含参数表的 DSL 被拒（超 64 KiB） | 参数表很大 | 含参数表的策略上限是 1 MiB，仍超出就拆成多条规则或多个策略 |
 | tranche 策略启用被拒 | 混用了 `rank` 规则、`factor_params`，用在双市场模式，或纯现货里做空 / 按数量持有 | tranche 只能全部是 tranche 规则、只用单市场模式；纯现货只能 `sizing.method: weight` 且不做空 |

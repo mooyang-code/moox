@@ -173,7 +173,7 @@ func decodeStrategy(root *yaml.Node) (Strategy, error) {
 			strategy.Market, err = decodeMarket(f.value)
 			strategy.MarketDeclared = err == nil
 		case "universe":
-			strategy.Universe, err = decodeUniverse(f.value)
+			strategy.Universe, _, err = decodeUniverse(f.value, "universe")
 		case "rules":
 			rulesSeen = true
 			strategy.Rules, err = decodeRules(f.value)
@@ -199,35 +199,6 @@ func decodeStrategy(root *yaml.Node) (Strategy, error) {
 		return Strategy{}, errors.New("策略 DSL 缺少 rules（或 strategy_pool）")
 	}
 	return strategy, nil
-}
-
-func decodeUniverse(node *yaml.Node) (Universe, error) {
-	fields, err := mappingFields(node, "universe")
-	if err != nil {
-		return Universe{}, err
-	}
-	var universe Universe
-	for _, f := range fields {
-		path := "universe." + f.key
-		switch f.key {
-		case "tags":
-			universe.Tags, err = stringList(f.value, path)
-		case "exclude_tags":
-			universe.ExcludeTags, err = stringList(f.value, path)
-		case "include":
-			universe.Include, err = stringList(f.value, path)
-		case "exclude":
-			universe.Exclude, err = stringList(f.value, path)
-		case "min_age_bars":
-			universe.MinAgeBars, err = scalarInt(f.value, path)
-		default:
-			return Universe{}, fmt.Errorf("universe 包含未知字段 %q", f.key)
-		}
-		if err != nil {
-			return Universe{}, err
-		}
-	}
-	return universe, nil
 }
 
 func decodeRules(node *yaml.Node) ([]Rule, error) {
@@ -265,6 +236,10 @@ func decodeRule(node *yaml.Node, path string) (Rule, error) {
 			rule.Type, err = scalarRequiredText(f.value, fieldPath)
 		case "pool":
 			rule.Pool, err = decodePool(f.value, fieldPath)
+		case "universe":
+			rule.Universe, err = decodeRuleUniverse(f.value, fieldPath)
+		case "allow_empty":
+			rule.AllowEmpty, err = scalarBool(f.value, fieldPath)
 		case "filter":
 			rule.Filter, err = scalarRequiredText(f.value, fieldPath)
 		case "score":
@@ -286,6 +261,12 @@ func decodeRule(node *yaml.Node, path string) (Rule, error) {
 			var holding Holding
 			holding, err = decodeHolding(f.value, fieldPath)
 			rule.Holding = &holding
+		case "hold":
+			rule.Hold, err = decodeHold(f.value, fieldPath)
+		case "scale":
+			rule.Scale, err = decodeScale(f.value, fieldPath)
+		case "on_missing":
+			rule.OnMissing, err = decodeOnMissing(f.value, fieldPath)
 		case "stop":
 			rule.Stop, err = decodeStop(f.value, fieldPath)
 		case "candidates":
@@ -339,33 +320,6 @@ func decodePool(node *yaml.Node, path string) (Pool, error) {
 	}
 }
 
-func decodeSelect(node *yaml.Node, path string) (Select, error) {
-	fields, err := mappingFields(node, path)
-	if err != nil {
-		return Select{}, err
-	}
-	var sel Select
-	for _, f := range fields {
-		fieldPath := path + "." + f.key
-		switch f.key {
-		case "top":
-			sel.Top, err = scalarInt(f.value, fieldPath)
-		case "bottom":
-			sel.Bottom, err = scalarInt(f.value, fieldPath)
-		case "buffer":
-			sel.Buffer, err = scalarInt(f.value, fieldPath)
-		case "where":
-			sel.Where, err = scalarRequiredText(f.value, fieldPath)
-		default:
-			return Select{}, fmt.Errorf("%s 包含未知字段 %q", path, f.key)
-		}
-		if err != nil {
-			return Select{}, err
-		}
-	}
-	return sel, nil
-}
-
 func decodeWeight(node *yaml.Node, path string) (Weight, error) {
 	if node == nil {
 		return Weight{}, fmt.Errorf("%s 必须是数字或对象", path)
@@ -401,29 +355,6 @@ func decodeWeight(node *yaml.Node, path string) (Weight, error) {
 		}
 	}
 	return weight, nil
-}
-
-func decodeHolding(node *yaml.Node, path string) (Holding, error) {
-	fields, err := mappingFields(node, path)
-	if err != nil {
-		return Holding{}, err
-	}
-	var holding Holding
-	for _, f := range fields {
-		fieldPath := path + "." + f.key
-		switch f.key {
-		case "bars":
-			holding.Bars, err = scalarInt(f.value, fieldPath)
-		case "offsets":
-			holding.Offsets, err = intList(f.value, fieldPath)
-		default:
-			return Holding{}, fmt.Errorf("%s 包含未知字段 %q", path, f.key)
-		}
-		if err != nil {
-			return Holding{}, err
-		}
-	}
-	return holding, nil
 }
 
 // defaultPortfolio 是省略 portfolio 字段时的取值；显式写出的 0 不会被默认值覆盖。

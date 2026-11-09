@@ -177,7 +177,7 @@ func TestPresenceSkipsRowsOffCalendar(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	satisfied, err := ages.probe(resolved, period)(context.Background(), []string{"600000.SH"})
+	satisfied, err := ages.probe(resolved.MinAgeBars, period)(context.Background(), []string{"600000.SH"})
 	if err != nil || len(satisfied) != 1 {
 		t.Fatalf("交易日的行应满足年龄：%v err=%v", satisfied, err)
 	}

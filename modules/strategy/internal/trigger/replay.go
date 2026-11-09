@@ -89,7 +89,9 @@ type ReplayBinding struct {
 	Bar        string `json:"bar"`
 	Calendar   string `json:"calendar"`
 	Spot       bool   `json:"spot"`
-	MinAgeBars int    `json:"min_age_bars,omitempty"`
+	// MinAgeBars 是策略里最长的年龄判定根数（Resolved.LongestAge：策略级与各规则 min_age_bars、max_age_bars 的最大值），
+	// 告诉因子引擎要带回多长的本地历史；JSON 字段名沿用 min_age_bars。
+	MinAgeBars int `json:"min_age_bars,omitempty"`
 	// Factors 是策略引用的因子及其定义指纹（回放期间因子定义变了，回放服务据此拒绝继续）。
 	Factors map[string]string `json:"factors"`
 	// Columns 是策略引用的列：列名 → 来源（数据集列，或因子的某个输出）。
@@ -149,6 +151,9 @@ func (e *ReplayEvaluator) Bind(ctx context.Context, instanceID string) (ReplayBi
 	if !resolved.SpotOnly() {
 		return ReplayBinding{}, fmt.Errorf("闭环回放第一版只支持单个现货任务的实例；这个实例的市场模式是 %s（绑定了 %s 的任务），暂不支持回放", resolved.Market, strings.Join(resolved.Markets(), "、"))
 	}
+	if err := resolved.CheckAgeMarkets(); err != nil {
+		return ReplayBinding{}, err
+	}
 	task := resolved.Primary()
 	e.mu.Lock()
 	if e.bindings == nil {
@@ -178,7 +183,7 @@ func (e *ReplayEvaluator) Bind(ctx context.Context, instanceID string) (ReplayBi
 	sort.Strings(columns)
 	return ReplayBinding{
 		InstanceID: instanceID, StrategyID: instance.StrategyID, SpaceID: instance.SpaceID, ViewID: task.ViewID,
-		DSLHash: definition.DSLHash, Bar: resolved.Bar, Calendar: resolved.Calendar, Spot: true, MinAgeBars: resolved.MinAgeBars,
+		DSLHash: definition.DSLHash, Bar: resolved.Bar, Calendar: resolved.Calendar, Spot: true, MinAgeBars: resolved.LongestAge(),
 		Factors: resolved.Factors, Columns: resolved.Columns, SourceColumns: columns, PreviousDepth: depth,
 		FactorTaskID: task.FactorTaskID, Tuned: len(program.Params) > 0,
 	}, nil
@@ -335,16 +340,22 @@ func (e *ReplayEvaluator) Evaluate(ctx context.Context, req ReplayEvaluateReques
 		}
 		return ReplayDecision{}, err
 	}
-	probe := func(_ context.Context, instruments []string) (map[string]struct{}, error) {
+	// 闭环回放只有一个现货市场：年龄是因子引擎给出的本地根数。
+	market := resolved.Market.Select
+	probe := func(_ context.Context, n int, instruments []string) (map[string]map[string]struct{}, error) {
 		aged := make(map[string]struct{}, len(instruments))
 		for _, id := range instruments {
-			if row, ok := req.Rows[id]; ok && row.AgeBars >= resolved.MinAgeBars {
+			if row, ok := req.Rows[id]; ok && row.AgeBars >= n {
 				aged[id] = struct{}{}
 			}
 		}
-		return aged, nil
+		return map[string]map[string]struct{}{market: aged}, nil
 	}
-	if err := sets.ApplyAge(ctx, resolved.MinAgeBars, probe); err != nil {
+	listed := make(map[string]struct{}, len(req.Rows))
+	for id := range req.Rows {
+		listed[id] = struct{}{}
+	}
+	if _, err := sets.ApplyAge(ctx, resolved, input.AgeListed{market: listed}, probe); err != nil {
 		var skip *input.SkipError
 		if errors.As(err, &skip) {
 			return skipped(skip.Reason, skip.Detail)
@@ -354,9 +365,13 @@ func (e *ReplayEvaluator) Evaluate(ctx context.Context, req ReplayEvaluateReques
 
 	// 闭环回放只支持单个现货任务：帧里只有这一个市场。
 	rows := make(map[string]engine.Row, len(req.Rows))
+	holdings, err := input.HoldingClocks(resolved.Calendar, resolved.Bar, program.Strategy, boundary)
+	if err != nil {
+		return skipped(input.SkipConfigError, err.Error())
+	}
 	frame := engine.Frame{
 		BarEnd: boundary.BarEnd, BarIndex: boundary.BarIndex,
-		Universe: sets.Universe, Expected: sets.Expected, AgedOut: sets.AgedOut,
+		Universe: sets.Universe, Expected: sets.Expected, AgedOut: sets.AgedOut, AgedOutReasons: sets.AgedOutReasons, Holdings: holdings,
 	}
 	for subject, row := range req.Rows {
 		if _, ok := sets.Subjects[subject]; !ok {

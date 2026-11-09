@@ -79,31 +79,25 @@ func BuildSets(ctx context.Context, members Membership, strategy dsl.Strategy, s
 		}
 		return set
 	}
-	// universe 过滤后的默认集合。
-	var defaultExpected []string
-	defaultComputed := false
-	computeDefault := func() ([]string, error) {
-		if defaultComputed {
-			return defaultExpected, nil
-		}
-		defaultComputed = true
-		// 白名单 = tags 成员 ∪ include；两者都为空时不设白名单（全部 U）。
+	// filtered 返回 universe 过滤后的集合：白名单 = tags 成员 ∪ include，两者都为空时不设白名单（全部 U）；再去掉 exclude_tags 与 exclude。
+	filtered := func(u dsl.Universe) ([]string, error) {
 		var whitelist map[string]struct{}
-		if len(strategy.Universe.Tags) > 0 || len(strategy.Universe.Include) > 0 {
-			tagged, err := membersOf(strategy.Universe.Tags)
+		if len(u.Tags) > 0 || len(u.Include) > 0 {
+			tagged, err := membersOf(u.Tags)
 			if err != nil {
 				return nil, err
 			}
 			whitelist = tagged
-			for id := range listed(strategy.Universe.Include) {
+			for id := range listed(u.Include) {
 				whitelist[id] = struct{}{}
 			}
 		}
-		excludedTags, err := membersOf(strategy.Universe.ExcludeTags)
+		excludedTags, err := membersOf(u.ExcludeTags)
 		if err != nil {
 			return nil, err
 		}
-		exclude := listed(strategy.Universe.Exclude)
+		exclude := listed(u.Exclude)
+		var out []string
 		for _, subject := range universe {
 			if whitelist != nil && !inSet(subject, whitelist) {
 				continue
@@ -111,10 +105,22 @@ func BuildSets(ctx context.Context, members Membership, strategy dsl.Strategy, s
 			if inSet(subject, excludedTags) || inSet(subject, exclude) {
 				continue
 			}
-			defaultExpected = append(defaultExpected, subject.SubjectID)
+			out = append(out, subject.SubjectID)
 		}
-		sort.Strings(defaultExpected)
-		return defaultExpected, nil
+		sort.Strings(out)
+		return out, nil
+	}
+	// 策略级 universe 的默认集合只算一次，给没有改写标的范围的规则共用；改写了标签或黑白名单的规则按合并后的 universe 各算一份。
+	var defaultExpected []string
+	defaultComputed := false
+	computeDefault := func() ([]string, error) {
+		if defaultComputed {
+			return defaultExpected, nil
+		}
+		defaultComputed = true
+		var err error
+		defaultExpected, err = filtered(strategy.Universe)
+		return defaultExpected, err
 	}
 	for _, rule := range strategy.Rules {
 		var expected []string
@@ -136,6 +142,11 @@ func BuildSets(ctx context.Context, members Membership, strategy dsl.Strategy, s
 					expected = append(expected, subject.SubjectID)
 				}
 			}
+		case rule.Universe.OverridesMembers():
+			var err error
+			if expected, err = filtered(strategy.RuleUniverse(rule)); err != nil {
+				return Sets{}, err
+			}
 		default:
 			var err error
 			if expected, err = computeDefault(); err != nil {
@@ -146,30 +157,6 @@ func BuildSets(ctx context.Context, members Membership, strategy dsl.Strategy, s
 		sets.Expected[rule.ID] = append([]string(nil), expected...)
 	}
 	return sets, nil
-}
-
-// ApplyAge 用年龄探针计算各规则的 G(r)：∪E(r) 中探针未返回的标的视为不满足 min_age_bars。
-func (s *Sets) ApplyAge(ctx context.Context, minAgeBars int, probe AgeProbe) error {
-	if minAgeBars <= 0 {
-		return nil
-	}
-	if probe == nil {
-		return fmt.Errorf("策略设置了 min_age_bars，但没有年龄探针")
-	}
-	aged, err := probe(ctx, s.Instruments())
-	if err != nil {
-		return err
-	}
-	for ruleID, expected := range s.Expected {
-		var out []string
-		for _, id := range expected {
-			if _, ok := aged[id]; !ok {
-				out = append(out, id)
-			}
-		}
-		s.AgedOut[ruleID] = out
-	}
-	return nil
 }
 
 // ageProbeColumn 是年龄探针读取的列：只要该列在目标窗口内有行，就认为标的已有足够历史。
@@ -191,29 +178,29 @@ func AgeWindow(calendar, bar string, barStart time.Time, minAgeBars int) (time.T
 	return from, target.Add(time.Nanosecond), nil
 }
 
-// NewAgeProbe 构造每期一次的探针查询：读取年龄窗口内的 close 列，有行即满足。
+// NewAgeProbe 构造每期一次、判定 n 根年龄的探针查询：读取年龄窗口内的 close 列，有行即满足。
 // revision 应与当期主查询一致；活跃序列的覆盖起点（CoverageStartAt）晚于目标根时无法判断年龄，返回 history_insufficient。
 // market 是探针判断的市场：统一数据集上一个 View 里现货、永续各有各的历史，只有这个市场自己的序列有行才算年龄足够
 // （老的现货币新上永续时，不能用现货的历史直接通过永续的年龄检查），通过记录也按（标的、市场）保存；方式 A 里 View 本身就决定了市场。
-func NewAgeProbe(client Client, spaceID string, resolved Resolved, view ViewInfo, market string, subjects map[string]Subject, barStart time.Time, revision uint64, meta *MetaCache) AgeProbe {
+func NewAgeProbe(client Client, spaceID string, resolved Resolved, n int, view ViewInfo, market string, subjects map[string]Subject, barStart time.Time, revision uint64, meta *MetaCache) AgeProbe {
 	return func(ctx context.Context, instruments []string) (map[string]struct{}, error) {
-		if resolved.MinAgeBars <= 0 || len(instruments) == 0 {
+		if n <= 0 || len(instruments) == 0 {
 			all := make(map[string]struct{}, len(instruments))
 			for _, id := range instruments {
 				all[id] = struct{}{}
 			}
 			return all, nil
 		}
-		from, to, err := AgeWindow(resolved.Calendar, resolved.Bar, barStart, resolved.MinAgeBars)
+		from, to, err := AgeWindow(resolved.Calendar, resolved.Bar, barStart, n)
 		if err != nil {
 			// 日历换算是确定性的（数据不变、重试结果不变）：记 config_error，而不是按基础设施错误重试到预算耗尽。
-			return nil, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("min_age_bars=%d 的探针窗口无法换算：%v", resolved.MinAgeBars, err)}
+			return nil, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("%s 的探针窗口无法换算：%v", resolved.AgeLabel(n), err)}
 		}
 		if target, start := to.Add(-time.Nanosecond), CoverageStartAt(view, resolved, barStart); !start.IsZero() && target.Before(start) {
-			return nil, &SkipError{Reason: SkipHistoryInsufficient, Detail: fmt.Sprintf("min_age_bars=%d 需要 %s 的数据，但 View %s 的活跃序列当前最早只覆盖到 %s", resolved.MinAgeBars, PeriodLabel(resolved.Calendar, resolved.Bar, target), view.ViewID, PeriodLabel(resolved.Calendar, resolved.Bar, start))}
+			return nil, &SkipError{Reason: SkipHistoryInsufficient, Detail: fmt.Sprintf("%s 需要 %s 的数据，但 View %s 的活跃序列当前最早只覆盖到 %s", resolved.AgeLabel(n), PeriodLabel(resolved.Calendar, resolved.Bar, target), view.ViewID, PeriodLabel(resolved.Calendar, resolved.Bar, start))}
 		}
 		// 已证明年龄足够的标的直接放行，只探针其余的；全部已知时不发查询。
-		cacheKey := AgeKey{SpaceID: spaceID, ViewID: view.ViewID, IndexID: view.ActiveIndexID, MinAgeBars: resolved.MinAgeBars, Market: market}
+		cacheKey := AgeKey{SpaceID: spaceID, ViewID: view.ViewID, IndexID: view.ActiveIndexID, MinAgeBars: n, Market: market}
 		candidates := instruments
 		var hits []string
 		if meta != nil {
@@ -278,7 +265,7 @@ func NewAgeProbe(client Client, spaceID string, resolved Resolved, view ViewInfo
 				present = rowsOfMarket(present, market)
 			}
 			if len(present) == 0 {
-				return nil, &SkipError{Reason: SkipHistoryInsufficient, Detail: fmt.Sprintf("min_age_bars=%d 的探针窗口 %s 至 %s 内整个数据集都没有数据（历史缺口），无法判断上市时间", resolved.MinAgeBars, PeriodLabel(resolved.Calendar, resolved.Bar, from), PeriodLabel(resolved.Calendar, resolved.Bar, to.Add(-time.Nanosecond)))}
+				return nil, &SkipError{Reason: SkipHistoryInsufficient, Detail: fmt.Sprintf("%s 的探针窗口 %s 至 %s 内整个数据集都没有数据（历史缺口），无法判断上市时间", resolved.AgeLabel(n), PeriodLabel(resolved.Calendar, resolved.Bar, from), PeriodLabel(resolved.Calendar, resolved.Bar, to.Add(-time.Nanosecond)))}
 			}
 		}
 		return satisfied, nil

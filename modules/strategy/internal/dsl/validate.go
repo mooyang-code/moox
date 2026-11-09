@@ -69,11 +69,8 @@ func Validate(s *Strategy) error {
 		}
 		return validatePortfolio(&s.Portfolio)
 	}
-	if s.Universe.MinAgeBars < 0 {
-		return errors.New("universe.min_age_bars 不能为负数")
-	}
-	if s.Universe.MinAgeBars > MaxCount {
-		return fmt.Errorf("universe.min_age_bars 不能超过 %d", MaxCount)
+	if err := validateUniverseAges("universe", s.Universe); err != nil {
+		return err
 	}
 	if err := validatePortfolio(&s.Portfolio); err != nil {
 		return err
@@ -94,13 +91,17 @@ func Validate(s *Strategy) error {
 		if _, exists := ids[rule.ID]; exists {
 			return fmt.Errorf("规则 id %q 重复", rule.ID)
 		}
+		if err := validateRuleUniverse("规则 "+rule.ID, s, rule); err != nil {
+			return err
+		}
 		// rank 规则的可用标的数达不到 min_universe 时整期跳过：固定写出的 pool、或只由 include 构成的白名单
-		// 比它还小，这条规则就永远无法运行。
-		if rule.Type == RuleTypeRank && rule.Pool.Explicit && len(rule.Pool.Fixed) > 0 && len(rule.Pool.Fixed) < s.Portfolio.MinUniverse {
+		// 比它还小，这条规则就永远无法运行。写了 allow_empty 的规则不参与守门，不做这项检查。
+		universe := s.RuleUniverse(*rule)
+		if rule.Type == RuleTypeRank && !rule.AllowEmpty && rule.Pool.Explicit && len(rule.Pool.Fixed) > 0 && len(rule.Pool.Fixed) < s.Portfolio.MinUniverse {
 			return fmt.Errorf("规则 %s 的 pool 只有 %d 个标的，少于 portfolio.min_universe=%d，这条规则永远无法通过守门", rule.ID, len(rule.Pool.Fixed), s.Portfolio.MinUniverse)
 		}
-		if rule.Type == RuleTypeRank && !rule.Pool.Explicit && len(s.Universe.Tags) == 0 && len(s.Universe.Include) > 0 {
-			if size := includeOnlyUniverse(s.Universe); size < s.Portfolio.MinUniverse {
+		if rule.Type == RuleTypeRank && !rule.AllowEmpty && !rule.Pool.Explicit && len(universe.Tags) == 0 && len(universe.Include) > 0 {
+			if size := includeOnlyUniverse(universe); size < s.Portfolio.MinUniverse {
 				return fmt.Errorf("规则 %s 使用的 universe 只由 include 给出 %d 个标的（去掉 exclude 后），少于 portfolio.min_universe=%d，这条规则永远无法通过守门", rule.ID, size, s.Portfolio.MinUniverse)
 			}
 		}
@@ -111,6 +112,9 @@ func Validate(s *Strategy) error {
 		return fmt.Errorf("各规则 weight.total 之和 %s 超过 portfolio.leverage %s", totalBudget.String(), s.Portfolio.Leverage.String())
 	}
 	if err := validateTrancheStrategy(s); err != nil {
+		return err
+	}
+	if err := validateAnchorAlignment(s); err != nil {
 		return err
 	}
 	// 显式写了 market 时，保存就按这个模式校验做空、杠杆、tranche 与 factor_params，不必等到启用；没写时模式取决于绑定的任务，启用时再校验。
@@ -186,6 +190,17 @@ func validateRule(rule *Rule) error {
 	if rule.Stop != nil && rule.Type == RuleTypeTranche {
 		return fmt.Errorf("%s 是 tranche 规则，stop 写在 tranche 子策略模板里", prefix)
 	}
+	if rule.OnMissing != nil && rule.Type == RuleTypeTranche {
+		return fmt.Errorf("%s 是 tranche 规则，不支持 on_missing：tranche 的持仓按自己的持有计数到期，不走冻结保持", prefix)
+	}
+	if rule.Scale != nil {
+		if _, err := Analyze(rule.Scale.Expr, StageScale); err != nil {
+			return fmt.Errorf("%s 的 %s 表达式无效：%w", prefix, StageScale, err)
+		}
+	}
+	if rule.Hold != nil && rule.Type != RuleTypeRank {
+		return fmt.Errorf("%s 不是 rank 规则，不能写 hold", prefix)
+	}
 	if rule.Tranche != nil && rule.Type != RuleTypeTranche {
 		return fmt.Errorf("%s 不是 tranche 规则，不能写 candidates、tranche 或 params", prefix)
 	}
@@ -234,22 +249,15 @@ func validateRankRule(prefix string, rule *Rule) error {
 	if !rule.HasSelect {
 		return fmt.Errorf("%s 缺少 select", prefix)
 	}
+	if err := validateSelectCount(prefix, &rule.Select); err != nil {
+		return err
+	}
+	if rule.Hold != nil {
+		if err := validateHold(prefix, rule); err != nil {
+			return err
+		}
+	}
 	sel := rule.Select
-	if sel.Top < 0 || sel.Bottom < 0 || sel.Buffer < 0 {
-		return fmt.Errorf("%s 的 select.top、bottom、buffer 不能为负数", prefix)
-	}
-	if sel.Top > MaxCount || sel.Bottom > MaxCount || sel.Buffer > MaxCount {
-		return fmt.Errorf("%s 的 select.top、bottom、buffer 不能超过 %d", prefix, MaxCount)
-	}
-	if (sel.Top > 0) == (sel.Bottom > 0) {
-		return fmt.Errorf("%s 的 select 必须且只能设置 top 或 bottom 之一", prefix)
-	}
-	// 单次配权能覆盖的标的数：就是选中数量。holding 规则的每个批次各自按 cap/total 配权（见 engine 的
-	// baseShares + applyCapRat），批次之间互不补足，所以这里不能乘批次数放宽。
-	slots := sel.Top
-	if sel.Bottom > 0 {
-		slots = sel.Bottom
-	}
 	if rule.Holding != nil {
 		if sel.Buffer > 0 {
 			return fmt.Errorf("%s 不能同时使用 holding 和 select.buffer", prefix)
@@ -258,7 +266,17 @@ func validateRankRule(prefix string, rule *Rule) error {
 			return err
 		}
 	}
-	if rule.Weight.HasCap && rule.Weight.Cap.Mul(quant.Must(fmt.Sprint(slots))).Cmp(rule.Weight.Total) < 0 {
+	// 单次配权能覆盖的标的数：就是选中数量（写了 then 时是二次排序取的个数）。holding 规则的每个批次各自按 cap/total 配权（见 engine 的
+	// baseShares + applyCapRat），批次之间互不补足，所以这里不能乘批次数放宽。写比例时个数要到运行时才知道，保存时不做这项检查，
+	// 运行时分不完的预算按 cap 语义留现金。
+	slots, fixed := sel.FixedCount()
+	if sel.Then != nil {
+		if !fixed || sel.Then.Count() < slots {
+			slots = sel.Then.Count()
+		}
+		fixed = true
+	}
+	if fixed && rule.Weight.HasCap && rule.Weight.Cap.Mul(quant.Must(fmt.Sprint(slots))).Cmp(rule.Weight.Total) < 0 {
 		return fmt.Errorf("%s 的 weight.cap 乘以最多可持有的标的数小于 weight.total，预算永远分不完", prefix)
 	}
 	return analyzeStages(prefix, rule.stageSources())
@@ -292,32 +310,6 @@ func analyzeStages(prefix string, sources []stageSource) error {
 		if _, err := Analyze(item.source, item.stage); err != nil {
 			return fmt.Errorf("%s 的 %s 表达式无效：%w", prefix, item.stage, err)
 		}
-	}
-	return nil
-}
-
-func validateHolding(prefix string, holding *Holding) error {
-	if holding.Bars <= 0 {
-		return fmt.Errorf("%s 的 holding.bars 必须大于 0", prefix)
-	}
-	if holding.Bars > MaxCount {
-		return fmt.Errorf("%s 的 holding.bars 不能超过 %d", prefix, MaxCount)
-	}
-	if len(holding.Offsets) == 0 {
-		return fmt.Errorf("%s 的 holding.offsets 不能为空", prefix)
-	}
-	if len(holding.Offsets) > MaxHoldingOffsets {
-		return fmt.Errorf("%s 的 holding.offsets 不能超过 %d 个", prefix, MaxHoldingOffsets)
-	}
-	seen := make(map[int]struct{}, len(holding.Offsets))
-	for _, offset := range holding.Offsets {
-		if offset < 0 || offset >= holding.Bars {
-			return fmt.Errorf("%s 的 holding.offsets 必须在 0 到 bars-1 之间", prefix)
-		}
-		if _, exists := seen[offset]; exists {
-			return fmt.Errorf("%s 的 holding.offsets 包含重复值 %d", prefix, offset)
-		}
-		seen[offset] = struct{}{}
 	}
 	return nil
 }

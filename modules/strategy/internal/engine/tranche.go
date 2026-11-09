@@ -65,6 +65,7 @@ func partitionTranche(rule *dsl.CompiledRule, frame Frame, held []string) ruleSe
 			sets.agedOut[id] = struct{}{}
 		}
 	}
+	sets.agedOutReason = frame.AgedOutReasons[rule.Rule.ID]
 	expected := append([]string(nil), frame.Expected[rule.Rule.ID]...)
 	sort.Strings(expected)
 	sets.expected = expected
@@ -82,6 +83,9 @@ func partitionTranche(rule *dsl.CompiledRule, frame Frame, held []string) ruleSe
 		if requireVolume {
 			columns = append(columns, "volume")
 		}
+		if rule.Scale != nil {
+			columns = append(columns, rule.Scale.AllColumns()...)
+		}
 		reason := ""
 		for _, column := range columns {
 			if failure, failed := frame.FailedColumns[column][id]; failed {
@@ -91,6 +95,11 @@ func partitionTranche(rule *dsl.CompiledRule, frame Frame, held []string) ruleSe
 			if _, present := row.Values[column]; !present {
 				reason = "missing:" + column
 				break
+			}
+		}
+		if reason == "" && rule.Scale != nil {
+			if _, valid := scaleOf(rule, id, row); !valid {
+				reason = reasonScaleInvalid
 			}
 		}
 		if reason != "" {

@@ -62,6 +62,9 @@
         <a-table-column title="权重" :width="100"
           ><template #cell="{ record }">{{ record.weight ? percent(record.weight) : "-" }}</template></a-table-column
         >
+        <a-table-column v-if="hasScale" title="系数" :width="80"
+          ><template #cell="{ record }">{{ record.scale || "-" }}</template></a-table-column
+        >
         <a-table-column title="原因" data-index="reason" :ellipsis="true" :tooltip="true"
           ><template #cell="{ record }">{{ itemReasonLabel(record.reason) }}</template></a-table-column
         >
@@ -92,6 +95,8 @@ const summary = computed(() => parseSummary(props.result.summary_json));
 const ruleRows = computed(() => Object.entries(summary.value.rules).map(([id, value]) => ({ id, summary: value })));
 const ruleIds = computed(() => [...new Set(props.items.map(item => item.rule_id))]);
 const stages = computed(() => [...new Set(props.items.map(item => item.stage))]);
+// 系数列只在有规则写了 scale 时显示；权重列已是乘系数之后的值。
+const hasScale = computed(() => props.items.some(item => item.scale));
 const detail = computed(() => {
   try {
     return JSON.parse(props.result.input_json || "{}").detail || "";

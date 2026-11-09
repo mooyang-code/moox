@@ -238,3 +238,235 @@ func offsetsList(n int) string {
 	}
 	return strings.Join(parts, ", ")
 }
+
+// rankRule 返回只有一条 rank 规则 a 的 DSL；body 是规则里 id、type、score 之外的字段（flow 写法）。
+func rankRule(body string) string {
+	return "name: x\nrules:\n  - {id: a, type: rank, score: close, " + body + "}\n"
+}
+
+// optionCase 是第 3 期新增字段的一条保存校验用例：dsl 应被拒绝，错误包含 want。
+type optionCase struct {
+	dsl  string
+	want string
+}
+
+func runOptionCases(t *testing.T, cases map[string]optionCase) {
+	t.Helper()
+	for name, tc := range cases {
+		tc := tc
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			_, err := Parse([]byte(tc.dsl))
+			if err == nil {
+				t.Fatalf("Parse() 不应接受：%s", tc.dsl)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("错误 = %v，应包含 %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// S1 选择数量：互斥与非法值。
+func TestValidateSelectOptions(t *testing.T) {
+	t.Parallel()
+	runOptionCases(t, map[string]optionCase{
+		"top 写 1 以上的小数":        {rankRule("select: {top: 2.5}, weight: 1"), "正整数或 0～1 之间的比例"},
+		"top 为负":               {rankRule("select: {top: -0.1}, weight: 1"), "不能为负数"},
+		"count_round 非法":       {rankRule("select: {top: 0.1, count_round: up}, weight: 1"), "floor、ceil 或 round"},
+		"count_min 配整数 top":    {rankRule("select: {top: 3, count_min: 1}, weight: 1"), "写成比例时"},
+		"count_min 为负":         {rankRule("select: {top: 0.1, count_min: -1}, weight: 1"), "count_min 必须在"},
+		"range 与 top 同写":       {rankRule("select: {top: 2, range: [1, 3]}, weight: 1"), "range 与 top、bottom 只能写一个"},
+		"range 倒序":             {rankRule("select: {range: [5, 3]}, weight: 1"), "结束名次不小于起始"},
+		"range 从 0 开始":         {rankRule("select: {range: [0, 3]}, weight: 1"), "名次从 1 开始"},
+		"range 不是两项":           {rankRule("select: {range: [1, 2, 3]}, weight: 1"), "两个整数"},
+		"range 写小数":            {rankRule("select: {range: [1.5, 3]}, weight: 1"), "必须是整数"},
+		"range 与 buffer":       {rankRule("select: {range: [1, 3], buffer: 1}, weight: 1"), "range 不能与 buffer"},
+		"group max 与 quotas":   {rankRule("select: {top: 3, group: {by: g, max: 1, quotas: [1]}}, weight: 1"), "max 与 quotas 只能写一个"},
+		"group 缺 by":           {rankRule("select: {top: 3, group: {max: 1}}, weight: 1"), "缺少 by"},
+		"group 缺名额":            {rankRule("select: {top: 3, group: {by: g}}, weight: 1"), "max 或 quotas"},
+		"group by 写表达式":        {rankRule("select: {top: 3, group: {by: \"g + 1\", max: 1}}, weight: 1"), "必须是 View 里的列名"},
+		"group max 为 0":        {rankRule("select: {top: 3, group: {by: g, max: 0}}, weight: 1"), "max 必须在 1 到"},
+		"group rest 配 max":     {rankRule("select: {top: 3, group: {by: g, max: 1, rest: 1}}, weight: 1"), "rest 只能与 quotas"},
+		"group quotas 为负":      {rankRule("select: {top: 3, group: {by: g, quotas: [1, -1]}}, weight: 1"), "quotas[1] 必须在"},
+		"group 未知字段":           {rankRule("select: {top: 3, group: {by: g, max: 1, size: 2}}, weight: 1"), "未知字段"},
+		"then 与 buffer":        {rankRule("select: {top: 3, buffer: 1, then: {score: close, top: 1}}, weight: 1"), "then 不能与 buffer"},
+		"then 缺 score":         {rankRule("select: {top: 3, then: {top: 1}}, weight: 1"), "缺少 score"},
+		"then top 与 bottom 同写": {rankRule("select: {top: 3, then: {score: close, top: 1, bottom: 1}}, weight: 1"), "top 或 bottom 之一"},
+		"then 用 score 标识符":     {rankRule("select: {top: 3, then: {score: \"score\", top: 1}}, weight: 1"), "score 只能"},
+		"then 个数按 cap 检查":      {rankRule("select: {top: 3, then: {score: close, top: 2}}, weight: {total: 1, cap: 0.4}"), "分不完"},
+	})
+}
+
+// S1 选择数量：正常写法保存通过，个数换算与引用列正确；写比例时跳过 cap 的保存检查。
+func TestValidateSelectOptionsAccepted(t *testing.T) {
+	t.Parallel()
+	strategy, err := Parse([]byte(`name: x
+rules:
+  - id: a
+    type: rank
+    score: close
+    select: {top: 0.1, count_round: ceil, count_min: 2, group: {by: ind, quotas: [2, 1], rest: 1}}
+    weight: {total: 0.5, cap: 0.1}
+  - id: b
+    type: rank
+    score: close
+    select: {range: [3, 6], group: {by: ind, max: 1}, then: {score: "rank(-close)", top: 3}}
+    weight: 0.5
+`))
+	if err != nil {
+		t.Fatalf("Parse() = %v", err)
+	}
+	sel := strategy.Rules[0].Select
+	if !sel.IsRatio() || sel.Count(25) != 3 || sel.Count(5) != 2 {
+		t.Fatalf("比例换算不对：%+v", sel)
+	}
+	if count, fixed := strategy.Rules[1].Select.FixedCount(); !fixed || count != 4 || strategy.Rules[1].Select.Then.Count() != 3 {
+		t.Fatalf("range 的个数应为 4：%d %v", count, fixed)
+	}
+	columns, err := ReferencedColumns(strategy)
+	if err != nil || strings.Join(columns, ",") != "close,ind" {
+		t.Fatalf("引用列应包含 group.by：%v %v", columns, err)
+	}
+	if _, err := Compile(strategy, []string{"close"}); err == nil || !strings.Contains(err.Error(), `"ind"`) {
+		t.Fatalf("group.by 的列不存在时编译应报错：%v", err)
+	}
+	boolean, err := Parse([]byte(rankRule(`select: {top: 3, then: {score: "close > 1", top: 1}}, weight: 1`)))
+	if err != nil {
+		t.Fatalf("Parse() = %v", err)
+	}
+	if _, err := Compile(boolean, []string{"close"}); err == nil || !strings.Contains(err.Error(), "select.then.score") {
+		t.Fatalf("then.score 返回布尔时编译应报错：%v", err)
+	}
+}
+
+// S5 换仓相位与日历周期：互斥与非法值。
+func TestValidateHoldingCalendarOptions(t *testing.T) {
+	t.Parallel()
+	holding := func(body string) string { return rankRule("select: {top: 1}, weight: 1, holding: " + body) }
+	runOptionCases(t, map[string]optionCase{
+		"calendar 与 bars":        {holding("{calendar: week, days: [1], bars: 5}"), "calendar 与 bars、offsets 只能写一种"},
+		"calendar 非法":            {holding("{calendar: year, days: [1]}"), "trading_days、week 或 month"},
+		"trading_days 缺 every":   {holding("{calendar: trading_days, days: [1]}"), "holding.every 必须在 1 到"},
+		"every 配 week":           {holding("{calendar: week, every: 2, days: [1]}"), "every 只能与 calendar: trading_days"},
+		"days 为空":                {holding("{calendar: week, days: []}"), "days 不能为空"},
+		"days 超出 every":          {holding("{calendar: trading_days, every: 5, days: [6]}"), "1 到 every=5"},
+		"trading_days 写倒数":       {holding("{calendar: trading_days, every: 5, days: [-1]}"), "1 到 every=5"},
+		"week 的 days 越界":         {holding("{calendar: week, days: [8]}"), "1 到 7 之间，或 -1 到 -7"},
+		"month 的 days 越界":        {holding("{calendar: month, days: [-32]}"), "1 到 31 之间，或 -1 到 -31"},
+		"days 重复":                {holding("{calendar: month, days: [1, 1]}"), "重复值 1"},
+		"at 非法":                  {holding("{calendar: week, days: [1], at: noon}"), "first 或 last"},
+		"at 配 bars":              {holding("{bars: 4, offsets: [0], at: last}"), "只能与 holding.calendar 一起写"},
+		"anchor 配 week":          {holding("{calendar: week, days: [1], anchor: \"2024-01-01\"}"), "anchor 不能与 calendar: week"},
+		"anchor 写法非法":            {holding("{bars: 4, offsets: [0], anchor: \"yesterday\"}"), "RFC3339"},
+		"calendar 与 buffer":      {rankRule("select: {top: 1, buffer: 1}, weight: 1, holding: {calendar: week, days: [1]}"), "holding 和 select.buffer"},
+		"写了 market 时锚点不是 bar 起点": {"name: x\nbar: 4h\nmarket: {select: swap, prefer: swap}\nrules:\n  - {id: a, type: rank, score: close, select: {top: 1}, weight: 1, holding: {bars: 3, offsets: [0], anchor: \"2024-01-01T01:00:00Z\"}}\n", "不是 4h 周期的 bar 起点"},
+	})
+}
+
+// S5：正常写法保存通过。
+func TestValidateHoldingCalendarAccepted(t *testing.T) {
+	t.Parallel()
+	for _, body := range []string{
+		"{calendar: trading_days, every: 5, days: [1, 3], anchor: \"2024-01-02\", at: first}",
+		"{calendar: week, days: [1, -1]}",
+		"{calendar: month, days: [-1]}",
+		"{bars: 4, offsets: [0, 2], anchor: \"2024-01-01T04:00:00Z\"}",
+	} {
+		strategy, err := Parse([]byte("name: x\nbar: 4h\nmarket: {select: swap, prefer: swap}\nrules:\n  - {id: a, type: rank, score: close, select: {top: 1}, weight: 1, holding: " + body + "}\n"))
+		if err != nil {
+			t.Fatalf("Parse(%s) = %v", body, err)
+		}
+		if len(strategy.Rules[0].Holding.BatchKeys()) == 0 {
+			t.Fatalf("批次键不能为空：%s", body)
+		}
+	}
+}
+
+// S2 进出场持有：互斥与非法值。
+func TestValidateHoldOptions(t *testing.T) {
+	t.Parallel()
+	runOptionCases(t, map[string]optionCase{
+		"hold 与 buffer":           {rankRule("select: {top: 2, buffer: 1}, weight: 1, hold: {exit: \"close > 1\"}"), "hold 不能与 select.buffer"},
+		"hold 与 then":             {rankRule("select: {top: 2, then: {score: close, top: 1}}, weight: 1, hold: {}"), "hold 不能与 select.then"},
+		"hold 与 range":            {rankRule("select: {range: [1, 2]}, weight: 1, hold: {}"), "hold 不能与 select.range"},
+		"hold 与 filter_after":     {rankRule("select: {top: 2}, filter_after: \"close > 1\", weight: 1, hold: {}"), "hold 不能与 filter_after"},
+		"hold 与 holding.bars":     {rankRule("select: {top: 2}, weight: 1, hold: {}, holding: {bars: 4, offsets: [0]}"), "hold 不能与 holding 的 bars/offsets"},
+		"hold 与日历多个批次":            {rankRule("select: {top: 2}, weight: 1, hold: {}, holding: {calendar: week, days: [1, 3]}"), "holding.days 只能有一个值"},
+		"hold.max_bars 为负":        {rankRule("select: {top: 2}, weight: 1, hold: {max_bars: -1}"), "hold.max_bars 必须在 0 到"},
+		"hold.cooldown_bars 超过上限": {rankRule("select: {top: 2}, weight: 1, hold: {cooldown_bars: 10001}"), "hold.cooldown_bars 必须在 0 到"},
+		"hold 未知字段":               {rankRule("select: {top: 2}, weight: 1, hold: {keep: 1}"), "未知字段"},
+		"hold.entry 用截面函数":        {rankRule("select: {top: 2}, weight: 1, hold: {entry: \"rank(close) > 0.5\"}"), "只能在 score"},
+		"signal 写 hold":           {"name: x\nrules:\n  - {id: a, type: signal, pool: [A], entry: \"close > 1\", exit: \"close < 1\", weight: 1, hold: {}}\n", "不能写 hold"},
+	})
+	strategy, err := Parse([]byte(rankRule("select: {top: 0.1, group: {by: ind, max: 2}}, weight: 1, hold: {entry: \"a > 0\", exit: \"b > 0\", max_bars: 720, cooldown_bars: 3}, holding: {calendar: week, days: [1]}")))
+	if err != nil {
+		t.Fatalf("Parse() = %v", err)
+	}
+	columns, err := ReferencedColumns(strategy)
+	if err != nil || strings.Join(columns, ",") != "a,b,close,ind" {
+		t.Fatalf("hold 的 entry、exit 列应计入引用列：%v %v", columns, err)
+	}
+}
+
+// S3 规则级标的池、年龄上限、跨市场年龄、允许空选择：互斥与非法值。
+func TestValidateRuleUniverseOptions(t *testing.T) {
+	t.Parallel()
+	runOptionCases(t, map[string]optionCase{
+		"max_age_bars 不写 allow_empty":     {rankRule("select: {top: 1}, weight: 1, universe: {max_age_bars: 30}"), "必须同时写 allow_empty: true"},
+		"策略级 max_age_bars 不写 allow_empty": {"name: x\nuniverse: {max_age_bars: 30}\nrules:\n  - {id: a, type: rank, score: close, select: {top: 1}, weight: 1}\n", "必须同时写 allow_empty: true"},
+		"max_age_bars 为负":                 {rankRule("select: {top: 1}, weight: 1, allow_empty: true, universe: {max_age_bars: -1}"), "max_age_bars 不能为负数"},
+		"max_age_bars 超过上限":               {rankRule("select: {top: 1}, weight: 1, allow_empty: true, universe: {max_age_bars: 10001}"), "max_age_bars 不能超过"},
+		"min 不小于 max":                     {rankRule("select: {top: 1}, weight: 1, allow_empty: true, universe: {min_age_bars: 30, max_age_bars: 30}"), "min_age_bars 必须小于 max_age_bars"},
+		"继承的 min 不小于规则 max":               {"name: x\nuniverse: {min_age_bars: 40}\nrules:\n  - {id: a, type: rank, score: close, select: {top: 1}, weight: 1, allow_empty: true, universe: {max_age_bars: 30}}\n", "实际使用的 universe.min_age_bars 必须小于"},
+		"age_markets 非法":                  {rankRule("select: {top: 1}, weight: 1, universe: {age_markets: any}"), "each 或 all"},
+		"显式 pool 写标签":                     {rankRule("pool: [A, B], select: {top: 1}, weight: 1, universe: {tags: [x]}"), "规则级 universe 只能写 min_age_bars"},
+		"规则 universe 未知字段":                {rankRule("select: {top: 1}, weight: 1, universe: {size: 3}"), "未知字段"},
+		"allow_empty 不是布尔":                {rankRule("select: {top: 1}, weight: 1, allow_empty: 1"), "true 或 false"},
+		"策略池写 max_age_bars":               {"name: p\nbar: 1h\nuniverse: {max_age_bars: 3}\nstrategy_pool:\n  members: [{id: a, strategy: s1}]\n  allocation: {method: fixed, ratios: {a: 1}}\n", "策略池不写 universe"},
+	})
+	// 显式 pool 的规则可以写年龄类字段；allow_empty 的规则不受 pool 小于 min_universe 的保存检查限制。
+	strategy, err := Parse([]byte("name: x\nportfolio: {min_universe: 5}\nrules:\n  - {id: a, type: rank, pool: [A, B], score: close, select: {top: 1}, weight: 1, allow_empty: true, universe: {min_age_bars: 1, max_age_bars: 20, age_markets: all}}\n"))
+	if err != nil {
+		t.Fatalf("Parse() = %v", err)
+	}
+	merged := strategy.RuleUniverse(strategy.Rules[0])
+	if merged.MinAgeBars != 1 || merged.MaxAgeBars != 20 || !merged.AllMarkets() || !strategy.HasRuleAges() || strategy.LongestAgeBars() != 20 {
+		t.Fatalf("规则级年龄字段不对：%+v", merged)
+	}
+	plain, err := Parse([]byte("name: x\nuniverse: {min_age_bars: 5}\nrules:\n  - {id: a, type: rank, score: close, select: {top: 1}, weight: 1, universe: {exclude: [B]}}\n"))
+	if err != nil || plain.HasRuleAges() {
+		t.Fatalf("只改标的范围不算规则级年龄：%v", err)
+	}
+}
+
+// S6 仓位系数与缺数冻结：非法值与互斥。
+func TestValidateScaleOptions(t *testing.T) {
+	t.Parallel()
+	runOptionCases(t, map[string]optionCase{
+		"scale 缺 expr":         {rankRule("select: {top: 1}, weight: 1, scale: {max: 1}"), "缺少 expr"},
+		"scale.max 为 0":        {rankRule("select: {top: 1}, weight: 1, scale: {expr: c, max: 0}"), "max 必须在 (0, 10]"},
+		"scale.max 超过 10":      {rankRule("select: {top: 1}, weight: 1, scale: {expr: c, max: 11}"), "max 必须在 (0, 10]"},
+		"scale 用截面函数":          {rankRule("select: {top: 1}, weight: 1, scale: {expr: \"rank(c)\"}"), "只能在 score"},
+		"scale 未知字段":           {rankRule("select: {top: 1}, weight: 1, scale: {expr: c, min: 0}"), "未知字段"},
+		"keep_bars 为 0":        {rankRule("select: {top: 1}, weight: 1, on_missing: {keep_bars: 0}"), "keep_bars 必须在 1 到 1000"},
+		"keep_bars 超过上限":       {rankRule("select: {top: 1}, weight: 1, on_missing: {keep_bars: 1001}"), "keep_bars 必须在 1 到 1000"},
+		"on_missing 未知字段":      {rankRule("select: {top: 1}, weight: 1, on_missing: {cash: true}"), "未知字段"},
+		"tranche 写 on_missing": {"name: x\nrules:\n  - id: t\n    type: tranche\n    weight: 1\n    on_missing: {keep_bars: 3}\n    tranche: {hold_period: 1, long_factors: [{column: close}], long_coin_num: 1, long_weight: 1, stg_weight: 1}\n", "不支持 on_missing"},
+	})
+	strategy, err := Parse([]byte(rankRule("select: {top: 1}, weight: 1, scale: {expr: \"coef\", max: 2}, on_missing: {keep_bars: 5}")))
+	if err != nil {
+		t.Fatalf("Parse() = %v", err)
+	}
+	if strategy.Rules[0].Scale.Max != 2 || strategy.Rules[0].OnMissing.KeepBars != 5 || !strategy.HasOnMissing() {
+		t.Fatalf("scale、on_missing 解析不对：%+v", strategy.Rules[0])
+	}
+	columns, err := ReferencedColumns(strategy)
+	if err != nil || strings.Join(columns, ",") != "close,coef" {
+		t.Fatalf("scale 的列应计入引用列：%v %v", columns, err)
+	}
+	defaulted, err := Parse([]byte(rankRule("select: {top: 1}, weight: 1, scale: {expr: coef}")))
+	if err != nil || defaulted.Rules[0].Scale.Max != 1 {
+		t.Fatalf("scale.max 默认 1：%v", err)
+	}
+}

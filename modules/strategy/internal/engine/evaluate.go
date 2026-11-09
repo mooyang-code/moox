@@ -34,7 +34,7 @@ func evaluateFrame(program *dsl.Program, mode dsl.Market, frame Frame, previous 
 		Summary: Summary{Universe: len(frame.Universe), Rules: make(map[string]RuleSummary, len(program.Rules))},
 	}
 	// 因所在市场本期不可用（或只缺上一根）缺数的已持仓标的在所有规则里冻结：不求值、不调仓，持仓数量保持不动（见 freeze.go）。
-	frozen, holdReasons := frozenSet(program, frame, previous, held)
+	frozen, holdReasons, streaks := frozenSet(program, frame, previous, held)
 	// 第一遍：集合划分与守门。守门失败也要给出全部规则的集合摘要与缺数明细，便于排查。
 	partitions := make([]ruleSets, len(program.Rules))
 	skipReason, skipNote := "", ""
@@ -65,6 +65,10 @@ func evaluateFrame(program *dsl.Program, mode dsl.Market, frame Frame, previous 
 		}
 		if sets.waived {
 			decision.Summary.Notes = append(decision.Summary.Notes, fmt.Sprintf("永续本期整体不可用，空头规则 %s 不守门：冻结的空头保持不动，不新开空头", rule.Rule.ID))
+			continue
+		}
+		// allow_empty 的规则不参与任何整期守门：候选为空或缺数时这条规则本期只是不出目标，预算留现金。
+		if rule.Rule.AllowEmpty {
 			continue
 		}
 		if reason := guard(program.Strategy.Portfolio, rule.Rule.Type, sets, guardedFrozen(mode, sets, previous.Rules[rule.Rule.ID].Held)); reason != "" {
@@ -102,6 +106,10 @@ func evaluateFrame(program *dsl.Program, mode dsl.Market, frame Frame, previous 
 			}
 			return skipped(decision, previous, SkipConfigError, fmt.Sprintf("规则 %s：%v", rule.Rule.ID, err))
 		}
+		applyScale(rule, frame, &result, tolerance)
+		if streak := streaks[rule.Rule.ID]; len(streak) > 0 {
+			result.state.MissingStreak = streak
+		}
 		allocated := quant.Zero()
 		for id, weight := range result.weights {
 			key := TargetKey(id, contributionMarket(mode, frame, held, id, weight.IsNegative()))
@@ -125,11 +133,11 @@ func evaluateFrame(program *dsl.Program, mode dsl.Market, frame Frame, previous 
 }
 
 // mergeStopItems 追加规则的求值明细。止损的标的可能已经有集合划分给出的明细（例如 signal 持仓的 exit 因子缺失、
-// 但 close 已达止损线）：这时改写那一条，原因附上原有原因，保证每个（规则, 标的）只有一条。
+// 但 close 已达止损线），hold 规则缺数出场的持仓也已经有缺数明细：这时改写那一条，原因附上原有原因，保证每个（规则, 标的）只有一条。
 func mergeStopItems(items, ruleItems []Item) []Item {
 	var index map[string]int
 	for _, item := range ruleItems {
-		if item.Stage == StageStopped {
+		if item.Stage == StageStopped || item.Reason == reasonExitMissing {
 			if index == nil {
 				index = make(map[string]int, len(items))
 				for i, existing := range items {

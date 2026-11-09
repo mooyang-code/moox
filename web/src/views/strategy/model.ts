@@ -148,7 +148,22 @@ const itemReasons: Record<string, string> = {
   stop_loss: "固定止损",
   trailing_stop: "跟踪止损",
   take_profit: "止盈",
-  cooldown: "止损后冷却中，不能入场"
+  cooldown: "止损后冷却中，不能入场",
+  aged_out_max: "已不是新标的（超过 max_age_bars）",
+  age_markets: "没在全部绑定市场上市，或某个市场本期不可用（age_markets: all）",
+  scale_invalid: "仓位系数无效，按缺数处理",
+  missing_kept: "本期缺数，按 on_missing 保持持仓不动",
+  group_full: "所属组名额已满",
+  group_none: "分组值为空，不属于任何组",
+  "select.then": "二次排序未取到",
+  hold_kept: "继续持有",
+  hold_entered: "新入场",
+  hold_not_entered: "入场条件不成立",
+  hold_cooling: "出场后冷却中，不能入场",
+  exit_condition: "触发 hold.exit 出场",
+  exit_max_bars: "持满 max_bars 出场",
+  exit_filter: "不再满足 filter，出场",
+  exit_missing: "缺数出场"
 };
 
 function reasonText(reason: string): string {
@@ -162,10 +177,12 @@ function reasonText(reason: string): string {
   if (reason.startsWith("source_failed:")) return `上游数据失败（${reason.slice("source_failed:".length)}）`;
   if (reason.startsWith("market_unavailable:")) return `市场本期不可用（${reason.slice("market_unavailable:".length)}）`;
   if (reason.startsWith("score_error:")) return `分数计算出错：${reason.slice("score_error:".length)}`;
+  if (reason.startsWith("exit_stop:")) return `止损出场：${reasonText(reason.slice("exit_stop:".length))}`;
+  if (reason.startsWith("select.then:")) return `二次排序分数无效：${reasonText(reason.slice("select.then:".length))}`;
   return itemReasons[reason] ?? reason;
 }
 
-/** 解释明细的原因：已知代码给出中文说明并附原文，带前缀的原因（holding:、tranche:、missing:、factor_failed:、source_failed:、market_unavailable:、score_error:）逐段翻译。 */
+/** 解释明细的原因：已知代码给出中文说明并附原文，带前缀的原因（holding:、tranche:、missing:、factor_failed:、source_failed:、market_unavailable:、score_error:、exit_stop:、select.then:）逐段翻译。 */
 export function itemReasonLabel(reason?: string): string {
   if (!reason) return "-";
   const text = reasonText(reason);
@@ -173,7 +190,7 @@ export function itemReasonLabel(reason?: string): string {
 }
 
 const stages: Record<string, { label: string; color: string }> = {
-  aged_out: { label: "年龄不足", color: "gray" },
+  aged_out: { label: "年龄剔除", color: "gray" },
   missing: { label: "缺数", color: "red" },
   filtered: { label: "被过滤", color: "gray" },
   scored: { label: "未入选", color: "blue" },
@@ -192,7 +209,7 @@ export function stageColor(stage: string): string {
   return stages[stage]?.color ?? "blue";
 }
 
-/** 解释明细的阶段顺序：入选的放最前面，其次是保持持仓、止损止盈、被剔除、打分未入选，最后是缺数、未触发、被过滤和年龄不足。 */
+/** 解释明细的阶段顺序：入选的放最前面，其次是保持持仓、止损止盈、被剔除、打分未入选，最后是缺数、未触发、被过滤和年龄剔除（原因区分年龄不足、已不是新标的、未在全部市场上市）。 */
 const stageOrder: Record<string, number> = {
   weighted: 0,
   held: 1,
@@ -302,6 +319,8 @@ export interface ResolvedBinding {
   bar: string;
   calendar: string;
   min_age_bars: number;
+  /** 各规则的年龄要求；只在有规则不同于策略级 min_age_bars 时出现。 */
+  rule_ages: { rule_id: string; min_bars: number; max_bars: number; all_markets: boolean }[];
   columns: ResolvedColumn[];
 }
 
@@ -335,8 +354,25 @@ export function parseResolved(raw?: string): ResolvedBinding | null {
     bar: value.bar ?? "",
     calendar: value.calendar ?? "",
     min_age_bars: Number(value.min_age_bars ?? 0),
+    rule_ages: Object.entries((value.rule_ages ?? {}) as Record<string, any>)
+      .map(([ruleID, age]) => ({
+        rule_id: ruleID,
+        min_bars: Number(age?.min_bars ?? 0),
+        max_bars: Number(age?.max_bars ?? 0),
+        all_markets: Boolean(age?.all_markets)
+      }))
+      .sort((a, b) => a.rule_id.localeCompare(b.rule_id)),
     columns
   };
+}
+
+/** 一条规则年龄要求的说明：上市满 N 根、上市不满 M 根、按全部市场判断。 */
+export function ruleAgeText(age: { min_bars: number; max_bars: number; all_markets: boolean }): string {
+  const parts: string[] = [];
+  if (age.min_bars) parts.push(`满 ${age.min_bars} 根`);
+  if (age.max_bars) parts.push(`不满 ${age.max_bars} 根`);
+  if (age.all_markets) parts.push("全部市场");
+  return parts.length ? parts.join("，") : "不限";
 }
 
 export interface ResultInsight {

@@ -76,6 +76,11 @@ func ResultItems(items []engine.Item) []store.ResultItem {
 			weight := item.Weight
 			row.Weight = &weight
 		}
+		if item.Scale != "" {
+			if scale, err := strconv.ParseFloat(item.Scale, 64); err == nil {
+				row.Scale = &scale
+			}
+		}
 		out = append(out, row)
 	}
 	return out

@@ -104,6 +104,8 @@ type ResultItem struct {
 	Rank   *int
 	Weight *string
 	Reason string
+	// Scale 是乘在输出权重上的仓位系数（Weight 已乘过）；规则没写 scale 时为空。
+	Scale *float64
 }
 
 type resultRow struct {
@@ -146,7 +148,7 @@ const (
 	INSERT INTO t_strategy_results (c_result_id, c_instance_id, c_session_id, c_bar_end_time, c_valid_until, c_status, c_skip_reason, c_dsl_hash, c_input_json, c_targets_json, c_rule_states_json, c_summary_json, c_event_data, c_publish_status, c_ctime, c_next_params_json, c_params_delivered_at, c_params_error)
 	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, '')`
 	// sqlInsertResultItem 写入一条解释明细。
-	sqlInsertResultItem = `INSERT INTO t_strategy_result_items (c_result_id, c_rule_id, c_instrument_id, c_market, c_stage, c_score, c_rank, c_weight, c_reason, c_ctime) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	sqlInsertResultItem = `INSERT INTO t_strategy_result_items (c_result_id, c_rule_id, c_instrument_id, c_market, c_stage, c_score, c_rank, c_weight, c_reason, c_scale, c_ctime) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	// readLatest 的两个变体：本会话最新的处理记录（ok 或 skipped）、最新的 ok 记录。同一实例、同一会话内 bar_end 唯一（表约束），
 	// 按 bar_end 倒序取一条即可直接走索引。
@@ -174,7 +176,7 @@ const (
 	sqlListResultsOfInstance  = `SELECT c_result_id, c_instance_id, c_session_id, c_bar_end_time, c_valid_until, c_status, c_skip_reason, c_dsl_hash, c_input_json, c_targets_json, c_rule_states_json, c_summary_json, c_event_data, c_publish_status, c_ctime, c_next_params_json, c_params_delivered_at, c_params_error FROM t_strategy_results WHERE c_instance_id = ? ORDER BY c_bar_end_time DESC, c_ctime DESC, c_result_id DESC LIMIT ? OFFSET ?`
 	sqlListResultsOfSession   = `SELECT c_result_id, c_instance_id, c_session_id, c_bar_end_time, c_valid_until, c_status, c_skip_reason, c_dsl_hash, c_input_json, c_targets_json, c_rule_states_json, c_summary_json, c_event_data, c_publish_status, c_ctime, c_next_params_json, c_params_delivered_at, c_params_error FROM t_strategy_results WHERE c_instance_id = ? AND c_session_id = ? ORDER BY c_bar_end_time DESC, c_ctime DESC, c_result_id DESC LIMIT ? OFFSET ?`
 	// sqlListResultItems 读取一个结果的解释明细，按规则与标的排序。
-	sqlListResultItems = `SELECT c_rule_id, c_instrument_id, c_market, c_stage, c_score, c_rank, c_weight, c_reason FROM t_strategy_result_items WHERE c_result_id = ? ORDER BY c_rule_id, c_instrument_id`
+	sqlListResultItems = `SELECT c_rule_id, c_instrument_id, c_market, c_stage, c_score, c_rank, c_weight, c_reason, c_scale FROM t_strategy_result_items WHERE c_result_id = ? ORDER BY c_rule_id, c_instrument_id`
 	// sqlListPendingResults 按创建顺序列出待投递的结果。
 	sqlListPendingResults = `SELECT c_result_id, c_instance_id, c_session_id, c_bar_end_time, c_valid_until, c_status, c_skip_reason, c_dsl_hash, c_input_json, c_targets_json, c_rule_states_json, c_summary_json, c_event_data, c_publish_status, c_ctime, c_next_params_json, c_params_delivered_at, c_params_error FROM t_strategy_results WHERE c_publish_status = 'pending' ORDER BY c_ctime, c_result_id LIMIT ?`
 	// sqlSelectPendingResultByID 读取一条仍待投递的结果。
@@ -358,9 +360,12 @@ func insertItems(tx *gorm.DB, resultID string, createdAt time.Time, items []Resu
 			}
 		}
 		for _, item := range items[start:end] {
-			var score, rank, weight any
+			var score, rank, weight, scale any
 			if item.Score != nil {
 				score = *item.Score
+			}
+			if item.Scale != nil {
+				scale = *item.Scale
 			}
 			if item.Rank != nil {
 				rank = *item.Rank
@@ -368,7 +373,7 @@ func insertItems(tx *gorm.DB, resultID string, createdAt time.Time, items []Resu
 			if item.Weight != nil {
 				weight = *item.Weight
 			}
-			if err := tx.Exec(sqlInsertResultItem, resultID, item.RuleID, item.InstrumentID, item.Market, item.Stage, score, rank, weight, item.Reason, createdAt).Error; err != nil {
+			if err := tx.Exec(sqlInsertResultItem, resultID, item.RuleID, item.InstrumentID, item.Market, item.Stage, score, rank, weight, item.Reason, scale, createdAt).Error; err != nil {
 				return err
 			}
 		}
@@ -521,6 +526,7 @@ func (s *Store) ListResultItems(ctx context.Context, resultID string) ([]ResultI
 		Rank         sql.NullInt64   `gorm:"column:c_rank"`
 		Weight       sql.NullString  `gorm:"column:c_weight"`
 		Reason       string          `gorm:"column:c_reason"`
+		Scale        sql.NullFloat64 `gorm:"column:c_scale"`
 	}
 	if err := s.db.WithContext(ctx).Raw(sqlListResultItems, resultID).Scan(&rows).Error; err != nil {
 		return nil, err
@@ -535,6 +541,10 @@ func (s *Store) ListResultItems(ctx context.Context, resultID string) ([]ResultI
 		if row.Rank.Valid {
 			rank := int(row.Rank.Int64)
 			item.Rank = &rank
+		}
+		if row.Scale.Valid {
+			scale := row.Scale.Float64
+			item.Scale = &scale
 		}
 		items = append(items, item)
 	}

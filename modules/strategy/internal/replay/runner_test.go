@@ -27,6 +27,7 @@ type fakeClient struct {
 	indexedFrom time.Time
 	indexedTo   time.Time
 	missing     map[string]map[int]bool // 标的 → 小时 → 无行
+	nullMom     map[string]map[int]bool // 标的 → 小时 → 有行但 mom 为空
 	ambiguous   map[int]bool            // 小时 → 标的 A 在该小时有两个序列
 	panicOnRows bool
 	queries     int
@@ -205,7 +206,11 @@ func (f *fakeClient) QueryRows(_ context.Context, _ string, query input.Query) (
 				continue
 			}
 			value := f.priceAt(subject.SubjectID, hour)
-			rows = append(rows, input.Row{SubjectID: subject.SubjectID, DataTime: at, SeriesTag: "venue:binance", Values: map[string]float64{"close": value, "mom": value - f.priceAt(subject.SubjectID, hour-1)}})
+			values := map[string]float64{"close": value, "mom": value - f.priceAt(subject.SubjectID, hour-1)}
+			if f.nullMom[subject.SubjectID][hour] {
+				delete(values, "mom")
+			}
+			rows = append(rows, input.Row{SubjectID: subject.SubjectID, DataTime: at, SeriesTag: "venue:binance", Values: values})
 			if subject.SubjectID == "A" && f.ambiguous[hour] {
 				rows = append(rows, input.Row{SubjectID: "A", DataTime: at, SeriesTag: "venue:other", Values: map[string]float64{"close": value * 2, "mom": 0}})
 			}

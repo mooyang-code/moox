@@ -38,12 +38,18 @@ type MarketInput struct {
 // 为每个标的选出一行写入 Rows、RowMarket，并合并失败证据写入 FailedColumns，规则只看这几项。
 type Frame struct {
 	BarEnd time.Time
-	// BarIndex 是该 bar 在日历中的序号，只用于 holding 的 offset 计算。
+	// BarIndex 是该 bar 在日历中的序号，用于 holding 的换仓、止损冷却与 hold 的持有计数。
 	BarIndex int64
 	Markets  map[string]MarketInput
 	Universe []string
 	Expected map[string][]string
 	AgedOut  map[string][]string
+	// AgedOutReasons 是 AgedOut 里不按 min_age_bars 剔除的标的的明细原因（规则 id → 标的 → 原因）：超过 max_age_bars 记
+	// ReasonAgedOutMax，age_markets: all 的规则里没在全部绑定市场列出（或某个市场本期不可用）记 ReasonAgeMarkets；其余记 min_age_bars。
+	AgedOutReasons map[string]map[string]string
+	// Holdings 是写了 holding.anchor 或 holding.calendar 的规则的换仓时钟（规则 id → 时钟），由输入层按交易日历算好；
+	// 其余规则不出现，引擎按锚点 0 与 bars/offsets 计算。
+	Holdings map[string]HoldingClock
 
 	// 以下由选币池构造填入。Rows 每个标的一行，RowMarket 是这一行所属的市场；FailedColumns 是合并后的失败证据
 	// （列名 → 标的 → 原因），引用该列的规则把这些标的视为缺数，明细原因为“<原因>:<列>”。
@@ -63,6 +69,13 @@ const (
 	FailedSource = "source_failed"
 	FailedMarket = "market_unavailable"
 )
+
+// HoldingClock 是一条 holding 规则本根的换仓时钟。Anchor 是 holding.anchor 换成的 bar 序号（bars/offsets 写法的相位起点，
+// 没写为 0）；Scheduled 是日历写法每个批次（holding.days 的值）最近一个应建仓 bar 的序号（不晚于本根），还没有过应建仓 bar 的批次不出现。
+type HoldingClock struct {
+	Anchor    int64
+	Scheduled map[int]int64
+}
 
 // HoldingBatch 是 holding 规则在某个偏移建立的一个批次；BaseWeights 之和不超过 1，
 // filter_after 剔除与缺数移除的份额留作现金。
@@ -86,6 +99,10 @@ type RuleState struct {
 	Cooldown map[string]int64     `json:"cooldown,omitempty"`
 	// Tranche 是 tranche 规则的开仓记录（见 tranche.go）。
 	Tranche *TrancheState `json:"tranche,omitempty"`
+	// Hold 是 rank 规则 hold 块的入场序号、冷却与上次判进出场的序号（见 hold.go）。
+	Hold *HoldState `json:"hold,omitempty"`
+	// MissingStreak 是写了 on_missing 的规则里，按缺数冻结保持的持有标的已连续缺数的根数（标的 → 根数）；数据恢复即清零。
+	MissingStreak map[string]int `json:"missing_streak,omitempty"`
 }
 
 // State 是一次 ok 决策之后的全部状态：各规则状态与组合目标权重（供换手统计）。
