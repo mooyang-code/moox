@@ -317,7 +317,7 @@ var functionList = []*Function{
 	relaxedWindow("ts_argmin_relaxed", 1, "窗口内最小值距今的根数（0 为当期，并列取最早的一根）；序列开头的宽松窗口规则同 ts_mean_relaxed", "ts_argmin_relaxed(low, 20, 1)"),
 	relaxedWindow("ts_product_relaxed", 1, "窗口内连乘；序列开头的宽松窗口规则同 ts_mean_relaxed", "ts_product_relaxed(1 + pct_change(close), 5, 1)"),
 	relaxed("ts_corr_relaxed", []ArgSpec{{Name: "x", Kind: ArgSeries}, {Name: "y", Kind: ArgSeries}}, 2, nil,
-		"窗口内相关系数；从两条序列都开始的位置起取共同的有效尾段，有效对数 ≥ m 才出值，尾段里再出现 NaN 时为 NaN，m ≥ 2", "ts_corr_relaxed(close, volume, 20, 5)"),
+		"窗口内相关系数；任一条序列在窗口里有效值之后又出现 NaN（中途缺失）时为 NaN，否则从两条序列都开始的位置起取共同的有效尾段，有效对数 ≥ m 才出值，m ≥ 2", "ts_corr_relaxed(close, volume, 20, 5)"),
 	relaxed("ts_cov_relaxed", []ArgSpec{{Name: "x", Kind: ArgSeries}, {Name: "y", Kind: ArgSeries}}, 2, nil,
 		"窗口内样本协方差（ddof=1）；共同有效尾段的规则同 ts_corr_relaxed，m ≥ 2", "ts_cov_relaxed(close, volume, 20, 5)"),
 

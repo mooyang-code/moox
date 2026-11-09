@@ -71,41 +71,23 @@ func relaxedSortedWindow(n, m int, fn func(sorted []float64) float64) SeriesKern
 	}
 }
 
-// leadingNaN 返回窗口开头连续 NaN 的个数。
-func leadingNaN(w []float64) int {
-	start := 0
-	for start < len(w) && math.IsNaN(w[start]) {
-		start++
-	}
-	return start
-}
-
-// relaxedWindowed2 是两个序列参数的宽松窗口：从两条序列都开始的位置起取共同的有效尾段，尾段里还有 NaN 时输出 NaN，
-// 尾段不少于 m 对时输出 fn(尾段)。窗口里没有 NaN 时与 windowed2 调用同一个 fn，结果逐位一致。
+// relaxedWindowed2 是两个序列参数的宽松窗口：两条窗口各自按 validTail 取有效段，任一条有中途 NaN（有效值之后再出现 NaN）
+// 或全是 NaN 时输出 NaN；再取两段中较短的长度作为共同的有效尾段，不少于 m 对时输出 fn(尾段)，否则输出 NaN。
+// 窗口里没有 NaN 时尾段就是整个窗口，与 windowed2 调用同一个 fn，结果逐位一致。
 func relaxedWindowed2(n, m int, fn func(x, y []float64) float64) SeriesKernel {
 	return func(out []float64, outStart int, in []Series) {
 		x, y := in[0], in[1]
 		for i := range out {
 			t := outStart + i
-			wx, wy := x.Window(t, n), y.Window(t, n)
-			start := max(leadingNaN(wx), leadingNaN(wy))
-			tx, ty := wx[start:], wy[start:]
-			if len(tx) < m || containsNaN(tx) || containsNaN(ty) {
+			tx, ty := validTail(x.Window(t, n)), validTail(y.Window(t, n))
+			common := min(len(tx), len(ty))
+			if tx == nil || ty == nil || common < m {
 				out[i] = nan
 				continue
 			}
-			out[i] = factorexpr.Finite(fn(tx, ty))
+			out[i] = factorexpr.Finite(fn(tx[len(tx)-common:], ty[len(ty)-common:]))
 		}
 	}
-}
-
-func containsNaN(w []float64) bool {
-	for _, v := range w {
-		if math.IsNaN(v) {
-			return true
-		}
-	}
-	return false
 }
 
 // relaxedSmoothing 是 truncatedSmoothing 的部分窗口版本：窗口最老的有效值作为递推初值。窗口里没有 NaN 时，

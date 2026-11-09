@@ -136,7 +136,7 @@ rules:
 | 时序 | `ts_argmin_relaxed` | x（序列）、n（常量 1～100000）、m（常量 1～100000） | L(x)+n−1 | 窗口内最小值距今的根数（0 为当期，并列取最早的一根）；序列开头的宽松窗口规则同 ts_mean_relaxed |
 | 时序 | `ts_bars_since` | c（布尔序列）、n（常量 1～100000） | L(x)+n−1 | 最近 n 根里 c 最后一次为真距今的根数，当根为真记 0；c 为 NaN 不算为真；没有为 NaN |
 | 时序 | `ts_corr` | x（序列）、y（序列）、n（常量 2～100000） | L(x)+n−1 | 窗口内相关系数；任一方标准差为 0 时为 NaN |
-| 时序 | `ts_corr_relaxed` | x（序列）、y（序列）、n（常量 2～100000）、m（常量 2～100000） | L(x)+n−1 | 窗口内相关系数；从两条序列都开始的位置起取共同的有效尾段，有效对数 ≥ m 才出值，尾段里再出现 NaN 时为 NaN，m ≥ 2 |
+| 时序 | `ts_corr_relaxed` | x（序列）、y（序列）、n（常量 2～100000）、m（常量 2～100000） | L(x)+n−1 | 窗口内相关系数；任一条序列在窗口里有效值之后又出现 NaN（中途缺失）时为 NaN，否则从两条序列都开始的位置起取共同的有效尾段，有效对数 ≥ m 才出值，m ≥ 2 |
 | 时序 | `ts_count` | c（布尔序列）、n（常量 1～100000） | L(x)+n−1 | 窗口内条件为真的个数 |
 | 时序 | `ts_count_relaxed` | c（布尔序列）、n（常量 1～100000）、m（常量 1～100000） | L(x)+n−1 | 窗口内条件为真的个数；序列开头的宽松窗口规则同 ts_mean_relaxed |
 | 时序 | `ts_cov` | x（序列）、y（序列）、n（常量 2～100000） | L(x)+n−1 | 窗口内样本协方差（ddof=1） |
@@ -237,7 +237,7 @@ let:
 
 - `ts_*_relaxed(x, n, m)` 对应 pandas `rolling(n, min_periods=m)`：窗口开头是 NaN（序列还没开始）时，有效值不少于 `m` 个就出值；`m ≤ n`，
   m 的下限沿用严格版本对 n 的下限（`ts_std`、`ts_var`、`ts_zscore`、`ts_corr`、`ts_cov` 为 2，`ts_skew` 为 3，`ts_kurt` 为 4）。
-  `ts_rank_relaxed` 的百分位分母是窗口内的有效个数；`ts_corr_relaxed`、`ts_cov_relaxed` 从两条序列都开始的位置起取共同的有效尾段，有效对数 ≥ m 才出值。
+  `ts_rank_relaxed` 的百分位分母是窗口内的有效个数；`ts_corr_relaxed`、`ts_cov_relaxed` 的任一条序列在窗口里有中途 NaN 时为 NaN，否则从两条序列都开始的位置起取共同的有效尾段，有效对数 ≥ m 才出值。
 - `ema_relaxed(x, n, k)` 对应 `ewm(span=n, adjust=False)` 从序列首根递推；`k` 的含义同 `ema`。
 - 有效值之后再出现 NaN 仍为 NaN（pandas 的 `min_periods` 会跳过中途 NaN，这里不跳过）；窗口没有 NaN 时与严格算子逐位一致，只影响序列开头。
 - **何时用**：只在需要与外部（pandas）因子在上市初期逐值对齐时用。**新写因子默认用严格算子。**
@@ -261,16 +261,21 @@ let:
 | `(s - s.rolling(n).mean()) / s.rolling(n).std()` | `ts_zscore(s, n)` 或照原式写 |
 | `s.shift(k)` / `s.diff(k)` / `s.pct_change(k)` | `delay(s, k)` / `delta(s, k)` / `pct_change(s, k)` |
 | `s.ewm(span=n, adjust=False).mean()` | `ema(s, n)`；n 很大、要精确对齐时用 `ema(s, n, k)` 固定预热根数；新上市标的需要从首根递推时用 `ema_relaxed(s, n, k)`（见第 6 节第 1 条） |
-| `s.rolling(n, min_periods=m).mean()` / `.std()` / `.min()` / `.max()`，下游依赖序列开头的值 | `ts_mean_relaxed(s, n, m)` / `ts_std_relaxed` / `ts_min_relaxed` / `ts_max_relaxed` |
+| `s.rolling(n, min_periods=m).<统计>()`，下游依赖序列开头的值 | 对应严格算子的 `_relaxed` 版本，例如 `ts_mean_relaxed(s, n, m)`、`ts_quantile_relaxed(s, n, q, m)`、`ts_corr_relaxed(s, t, n, m)`；有哪些、口径如何见第 3 节“宽松窗口算子” |
 | `s.ewm(alpha=m/n, adjust=False).mean()`（国君 SMA） | `sma(s, n, m)` |
 | `np.where(c, a, b)` | `where(c, a, b)` 或 `c ? a : b`（注意第 6 节的 NaN 差异） |
 | `s.clip(lo, hi)` / `s.abs()` / `np.log(s)` / `np.sqrt(s)` / `np.sign(s)` | `clip(s, lo, hi)` / `abs(s)` / `log(s)` / `sqrt(s)` / `sign(s)` |
 | `np.maximum(a, b)` / `np.minimum(a, b)` | `max(a, b)` / `min(a, b)` |
+| `np.floor(s)` / `np.ceil(s)` | `floor(s)` / `ceil(s)` |
+| `np.round(s)`、`s.round()`、Python 3 的 `round()` | **不等价**：它们是银行家舍入（2.5 → 2、3.5 → 4），DSL 的 `round` 在 0.5 处远离零（2.5 → 3）；只在没有恰好 .5 的值时一致，否则用 `where` 按原口径写，并在验收里单独核对 |
 | `s.fillna(v)` / `s.isna()` | `fill_nan(s, v)` / `is_nan(s)` |
 | `(c).rolling(n).sum()`（布尔计数） | `ts_count(c, n)` |
 | `df.groupby(["data_time", "series_tag"])[x].rank(pct=True)` | `cs_rank(x)` |
 | 截面 `(x - mean) / std`（ddof=1） | `cs_zscore(x)` |
 | 截面 `x - mean` / `x / x.abs().sum()` | `cs_demean(x)` / `cs_scale(x)` |
+| `df.groupby(["data_time", "series_tag"])[x].transform("mean")` / `"sum"` / `"median"` / `"std"` / `"min"` / `"max"` | `cs_mean(x)` / `cs_sum(x)` / `cs_median(x)` / `cs_std(x)` / `cs_min(x)` / `cs_max(x)`（整组 NaN 时为 NaN；pandas 的 `sum` 给 0，要用 `min_count=1` 才一致） |
+| 同上，`transform("count")` 数条件为真的行 / `transform(lambda s: s.quantile(q))` | `cs_count(c)`（c 为布尔） / `cs_quantile(x, q)`（q 只收字面量） |
+| 截面里取指定标的的值，例如按 `data_time` 合并 `df[df.subject_id == "BTC-USDT"][x]` | `cs_ref(x, "BTC-USDT")` |
 | `params["window"]`、`params["windows"]` + `output_names` | `params: {window: {type: int, min: 2, max: 120, default: 20}}`，每个旧窗口值对应一个成员（固定参数不同的成员，或可变成员 `ma_fast`、`ma_slow`）或一个共用参数的输出，输出名固定 |
 
 ### `rolling(n).apply(内置函数)`
@@ -299,13 +304,17 @@ let:
 
 - **自定义 lambda 要在窗口内二次遍历**：例如平均绝对偏差 `np.abs(w - w.mean()).mean()`，要先算窗口均值，再逐根处理，表达式写不出来。
 - **跳过 NaN 的函数**：例如 `np.nanmean`、`np.nanstd`。引擎是严格窗口，只有"序列开头的 NaN"能用 `_relaxed` 算子处理。
+  截面上不受这条限制：`cs_*` 本身就跳过输入为 NaN 的标的。
 - **非线性的自定义权重**：例如 `np.average(w, weights=...)`。
 - **窗口长度来自运算**：例如窗口写成 `2 * n + 1`。换算要在参数层面做，做法是拆成多个参数，例如 `ewm(com=n)` 与 `ewm(com=3n)` 换成 `ema(close, short_span)` 与 `ema(close, long_span)`，转换脚本里按 `span = 2·com + 1` 换算后写进成员参数。
 
 遇到这些写法，按下面"不支持"的规则处理。确实常用的（如 MAD、`nanmean`），可以在 `packages/factorexpr` 里新增函数。
 新增后要发布 factor-mgr 和因子引擎，并重新编译本机的 `moox-cli`。
 
-**不支持、不能硬转的写法**：不定长窗口（`expanding()`、`cumsum()`、`cummax()`）、前向填充（`ffill`）、未来数据（`shift(-k)`）、
+**前向填充（`ffill`）**：有界替代是 `ts_last_valid(x, n)`，只在最近 n 根里找最后一个有效值，与无限期前向填充有差别（最近一次有效值落在窗口外时为 NaN）；
+n 按最长的缺值间隔取，验收时统计窗口内没有有效值的点数，告诉用户差别。
+
+**不支持、不能硬转的写法**：不定长窗口（`expanding()`、`cumsum()`、`cummax()`）、未来数据（`shift(-k)`）、
 `ewm(adjust=True)`、`rank` 的非 average 并列方式、上面列出的那几类 `rolling().apply`、跨标的的时序运算、读取外部文件或网络。
 遇到这些先告诉用户，给出等价或近似的候选写法（例如用足够长的固定窗口代替 `expanding`），由用户决定；绝不悄悄换成近似公式。
 
