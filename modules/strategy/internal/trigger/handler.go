@@ -268,7 +268,14 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 		}
 	}
 	calendar, bar := rt.resolved.Calendar, rt.resolved.Bar
-	taskKey, bound := rt.resolved.TaskKeyOfView(payload.GetViewId())
+	taskKey, sourceName, reference, bound := rt.resolved.ViewRole(payload.GetViewId())
+	switch {
+	case bound && reference:
+		// 参考市场只用于年龄判定，按需读取，不等它的就绪事件。
+		return nil
+	case bound && sourceName != "":
+		return h.sourceArrival(ctx, loader, instance, rt, message, payload, sourceName, periodTime)
+	}
 	if !bound {
 		if h.firstDrop(message.GetEventId(), instance.InstanceID) {
 			h.logf("实例 %s 的绑定里没有 View %s，本期丢弃", instance.InstanceID, payload.GetViewId())
@@ -319,7 +326,7 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 		}
 		return h.commitSkipped(ctx, p, store.SkipOutOfOrder, fmt.Sprintf("已处理到 %s", input.BarEndLabel(calendar, bar, latest.BarEndTime)))
 	}
-	if len(rt.resolved.Tasks) > 1 || rt.pool != nil {
+	if rt.resolved.Gathers() || rt.pool != nil {
 		// 更早的期各 View 都已记下、只是还没求值（例如门禁等待期间都被记下，放行后先重投了较晚的一期；策略池预热期间到达的事件）：
 		// 按 bar 顺序先把它们求值，再处理当期。
 		if err := h.processPending(ctx, loader, instance, rt, processedThrough(rt, latest, hasLatest), boundary.BarEnd); err != nil {
@@ -337,7 +344,7 @@ func (h *Handler) process(ctx context.Context, loader Loader, instance store.Ins
 		return nil
 	}
 	p.events = events
-	if len(rt.resolved.Tasks) > 1 {
+	if rt.resolved.Gathers() {
 		// 汇合之后再取上一条结果：补处理更早的期、补记 market_missing 都发生在汇合里，当期提交的比较交换要对着它们之后的状态，
 		// 否则会冲突并把当期多求值一次（例如“第 1 期齐、第 2 期缺、第 3 期齐”应只装配 2 次）。
 		if latest, hasLatest, err = h.Store.LatestProcessed(ctx, instance.InstanceID, rt.sessionID); err != nil {
@@ -571,9 +578,15 @@ func (h *Handler) withReads(ctx context.Context, p *period, key string, read fun
 func (h *Handler) loadInput(ctx context.Context, p *period, key string, resolved input.Resolved, program *dsl.Program, ready mergedReadiness, previous engine.State) (loaded input.Loaded, skip *input.SkipError, terminal bool, err error) {
 	skip, terminal, err = h.withReads(ctx, p, key, func() error {
 		var readErr error
-		loaded, readErr = p.loader.LoadBar(ctx, p.instance.SpaceID, resolved, program, input.Bar{BarStart: p.boundary.StorageStart, EventUniverse: p.eventUniverses(resolved), Readiness: ready.Results, Unavailable: ready.Unavailable, Held: previous.HeldMarkets()})
+		loaded, readErr = p.loader.LoadBar(ctx, p.instance.SpaceID, resolved, program, input.Bar{BarStart: p.boundary.StorageStart, EventUniverse: p.eventUniverses(resolved), Readiness: ready.Results, Unavailable: ready.Unavailable, Held: previous.HeldMarkets(), SourceDown: ready.SourceDown})
 		return readErr
 	})
+	// 附加来源读到的修订号写进本期的输入记录（只有写了来源的实例才有）。
+	for viewID, revision := range loaded.SourceRevisions {
+		view := p.input.Views[viewID]
+		view.Revision = revision
+		p.input.Views[viewID] = view
+	}
 	return loaded, skip, terminal, err
 }
 

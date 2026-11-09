@@ -43,7 +43,7 @@ func (s *Service) ValidateStrategy(ctx context.Context, req *strategypb.Validate
 	if strategy.IsPool() {
 		return s.validatePool(ctx, rsp, scoped, tasks, strategy, members), nil
 	}
-	resolved, program, err := s.Resolver.Resolve(ctx, scoped, input.TaskIDs(tasks), strategy)
+	resolved, program, err := s.Resolver.Resolve(ctx, scoped, tasks, strategy)
 	if err != nil {
 		return &strategypb.ValidateStrategyRsp{RetInfo: invalid(err), Diagnostics: []string{err.Error()}}, nil
 	}

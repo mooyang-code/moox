@@ -36,6 +36,8 @@ type Bar struct {
 	// Held 是上期在各市场持有非零目标（多空都算）的标的（市场 → 标的）：判断一个市场的因子失败比例时，持仓豁免年龄剔除
 	// （与单市场守门、选币池构造一致：年龄剔除只拦新进入的标的）。没有上期状态（试算）时为空。
 	Held map[string]map[string]struct{}
+	// SourceDown 是本期不读的附加来源（来源名 → 原因）：汇合 bar 上来源的因子被整体跳过，它的列按缺数处理。
+	SourceDown map[string]string
 }
 
 // Loaded 是装配完成的一期输入。
@@ -45,6 +47,8 @@ type Loaded struct {
 	Boundary PeriodBoundaries
 	// Steps 是读取各步骤的耗时（按发生顺序），用来定位一期读取时间花在哪。
 	Steps []Step
+	// SourceRevisions 是本期读附加来源时各来源 View 的修订号（View → 修订号），写进本期的输入记录；没有来源时为空。
+	SourceRevisions map[string]uint64
 }
 
 // hasRows 报告任一市场本期有行。
@@ -271,7 +275,7 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 		return Loaded{}, err
 	}
 	instruments := sets.Instruments()
-	columns := append([]string(nil), program.Columns...)
+	columns := append([]string(nil), program.MainColumns()...)
 	columns = uniqueSorted(append(columns, program.PreviousColumns...))
 	if len(program.ParamRefs) > 0 {
 		columns = uniqueSorted(append(columns, factorname.ParamsColumn))
@@ -405,15 +409,26 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 		}
 	}
 	began = time.Now()
+	references, err := l.loadReferences(ctx, spaceID, resolved)
+	if err != nil {
+		return Loaded{}, err
+	}
 	// 每个需要的 N 在各市场各判定一次；规则按自己的上下限与 age_markets 取剔除集合（见 age.go）。
-	// 每个绑定市场本期列出的标的（含本期不可用的市场）：age_markets: all 与 max_age_bars 的保守口径要用。
-	listed := make(AgeListed, len(loads))
+	// 每个绑定市场本期列出的标的（含本期不可用的市场）：age_markets: all 与 max_age_bars 的保守口径要用。参考市场列出的是它的全部活跃标的。
+	listed := make(AgeListed, len(loads)+len(references))
 	for _, load := range loads {
 		ids := make(map[string]struct{}, len(load.universe))
 		for id := range load.universe {
 			ids[id] = struct{}{}
 		}
 		listed[load.market] = ids
+	}
+	for _, reference := range references {
+		ids := make(map[string]struct{}, len(reference.active))
+		for id := range reference.active {
+			ids[id] = struct{}{}
+		}
+		listed[reference.market] = ids
 	}
 	agePassed, err := sets.ApplyAge(ctx, resolved, listed, func(ctx context.Context, n int, ids []string) (map[string]map[string]struct{}, error) {
 		passed := make(map[string]map[string]struct{}, len(loads))
@@ -433,6 +448,21 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 				return nil, err
 			}
 			passed[load.market] = got
+		}
+		// 参考市场只做探针，修订号不固定。
+		for _, reference := range references {
+			var inMarket []string
+			for _, id := range ids {
+				if _, ok := reference.active[id]; ok {
+					inMarket = append(inMarket, id)
+				}
+			}
+			probe := NewAgeProbe(l.Client, spaceID, resolved, n, reference.view, reference.market, reference.active, bar.BarStart, 0, l.Meta)
+			got, err := probe(ctx, inMarket)
+			if err != nil {
+				return nil, err
+			}
+			passed[reference.market] = got
 		}
 		return passed, nil
 	})
@@ -516,7 +546,19 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 		}
 		frame.Markets[load.market] = input
 	}
-	return Loaded{Frame: frame, Sets: sets, Boundary: boundary, Steps: steps}, nil
+	unavailable := make(map[string]string, len(loads))
+	for _, load := range loads {
+		unavailable[load.market] = load.unavailable
+	}
+	began = time.Now()
+	revisions, err := l.mergeSources(ctx, spaceID, resolved, program, boundary.BarEnd, bar.SourceDown, &frame, unavailable)
+	if err != nil {
+		return Loaded{}, err
+	}
+	if resolved.HasSources() {
+		mark("附加来源", began)
+	}
+	return Loaded{Frame: frame, Sets: sets, Boundary: boundary, Steps: steps, SourceRevisions: revisions}, nil
 }
 
 // markUnavailable 把一个市场记为本期不可用，并清掉已读的行：必须清，不清的话没持仓的标的会取到不可用市场的行，
@@ -622,7 +664,7 @@ func MissingColumns(view ViewInfo, program *dsl.Program, minAgeBars int) []strin
 	for _, column := range view.Columns {
 		available[column.Name] = struct{}{}
 	}
-	required := append(append([]string(nil), program.Columns...), program.PreviousColumns...)
+	required := append(append([]string(nil), program.MainColumns()...), program.PreviousColumns...)
 	if minAgeBars > 0 {
 		required = append(required, ageProbeColumn)
 	}

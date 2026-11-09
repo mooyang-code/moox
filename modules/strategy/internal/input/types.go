@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
@@ -232,6 +233,10 @@ type Resolved struct {
 	RuleAges map[string]AgeRule `json:"rule_ages,omitempty"`
 	// ViewColumns 是各 View 共有的列（排序）：DSL 引用的列必须在每个绑定的 View 里都存在。
 	ViewColumns []string `json:"view_columns"`
+	// References 是参考市场（市场 → 任务）：只用于 age_markets: all 的年龄判定，不在 Tasks 里、不读行、不参与选择与下单（见 sources.go）。
+	References map[string]TaskBinding `json:"references,omitempty"`
+	// Sources 是附加列来源（来源名 → 绑定，见 sources.go）。
+	Sources map[string]SourceBinding `json:"sources,omitempty"`
 }
 
 // MarketMulti 是统一数据集上的因子任务登记的“市场”：一个任务同时覆盖现货与永续，不是真实的市场，也不会出现在 Frame 里。
@@ -243,15 +248,11 @@ func (r Resolved) Unified() bool {
 	return ok
 }
 
-// TaskKeys 返回绑定的任务键（现货、永续、股票、统一数据集的先后）：方式 A 的键是市场，方式 B 只有一个键 multi。
-// 一个键对应一个因子任务、一个结果 View。
+// TaskKeys 返回主帧绑定的任务键（现货、永续在前，其余按名字）：方式 A 的键是市场，方式 B 只有一个键 multi。
+// 一个键对应一个因子任务、一个结果 View；附加来源与参考市场不在其中（见 AllTasks）。
 func (r Resolved) TaskKeys() []string {
-	keys := make([]string, 0, len(r.Tasks))
-	for _, key := range []string{dsl.MarketSpot, dsl.MarketSwap, dsl.MarketEquity, MarketMulti} {
-		if _, ok := r.Tasks[key]; ok {
-			keys = append(keys, key)
-		}
-	}
+	keys := sortedKeys(r.Tasks)
+	sort.SliceStable(keys, func(i, j int) bool { return marketOrder(keys[i]) < marketOrder(keys[j]) })
 	return keys
 }
 

@@ -290,7 +290,7 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 		return Metrics{}, err
 	}
 	tasks := replayTaskIDs(job)
-	resolved, program, err := input.Resolve(ctx, r.Client, job.SpaceID, input.TaskIDs(tasks), strategy)
+	resolved, program, err := input.ResolveTasks(ctx, r.Client, job.SpaceID, tasks, strategy)
 	if err != nil {
 		return Metrics{}, err
 	}

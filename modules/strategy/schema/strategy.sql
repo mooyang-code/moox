@@ -38,12 +38,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS ux_t_strategy_instances_account
 ON t_strategy_instances (c_space_id, c_logical_account_id)
 WHERE c_enabled = 1 AND c_logical_account_id IS NOT NULL;
 
--- 实例绑定的因子任务：每个市场（spot、swap、equity）一个，统一数据集上的任务登记为 multi（同时覆盖现货与永续）；一个因子任务只能被一个实例独占
+-- 实例绑定的因子任务：每个市场（spot、swap、equity）一个，统一数据集上的任务登记为 multi（同时覆盖现货与永续）；一个因子任务只能被一个实例独占。
+-- c_source 是附加列来源名，空串表示主帧（参考市场的任务也登记在主帧下，由 DSL 的 market.reference 区分）
 CREATE TABLE IF NOT EXISTS t_strategy_instance_tasks (
     c_instance_id TEXT NOT NULL,
+    c_source TEXT NOT NULL DEFAULT '',
     c_market TEXT NOT NULL,
     c_factor_task_id TEXT NOT NULL,
-    PRIMARY KEY (c_instance_id, c_market),
+    PRIMARY KEY (c_instance_id, c_source, c_market),
     CHECK (c_market IN ('spot', 'swap', 'equity', 'multi')),
     UNIQUE (c_factor_task_id),
     FOREIGN KEY (c_instance_id) REFERENCES t_strategy_instances (c_instance_id)
@@ -110,7 +112,8 @@ CREATE INDEX IF NOT EXISTS idx_t_strategy_results_params_pending
 ON t_strategy_results (c_instance_id, c_session_id, c_bar_end_time)
 WHERE c_next_params_json <> '' AND c_params_delivered_at IS NULL AND c_params_error = '';
 
--- 汇合求值用的到达记录：绑定两个因子任务的实例要等两个 View 的就绪事件都到齐才求值，每个 View 的原始 ViewDataReady 事件
+-- 汇合求值用的到达记录：绑定两个因子任务的实例要等两个 View 的就绪事件都到齐才求值；写了附加来源的实例在主帧收盘时刻等于来源
+-- 收盘时刻的那一根还要等来源的事件（c_bar_end_time 是主帧的 bar_end）。每个 View 的原始 ViewDataReady 事件
 -- 按字节保存（就绪判断要用整条事件）；(实例, 会话, bar_end, View) 唯一，重复投递幂等。c_ctime 是到达时间，按天数清理
 CREATE TABLE IF NOT EXISTS t_strategy_ready_events (
     c_instance_id TEXT NOT NULL,
@@ -146,9 +149,10 @@ CREATE TABLE IF NOT EXISTS t_strategy_result_items (
 
 CREATE INDEX IF NOT EXISTS idx_t_strategy_result_items_ctime ON t_strategy_result_items (c_ctime);
 
--- 回放任务：基于因子任务结果 View 的研究回放，按天数与每个空间的个数清理；c_tasks_json 是市场（spot、swap、equity）→
+-- 回放任务：基于因子任务结果 View 的研究回放，按天数与每个空间的个数清理；c_tasks_json 是任务键（市场，附加来源为 来源名:市场）→
 -- {factor_task_id, view_id, view_generation}：结果 View 由任务推导，view_generation 是提交时校验区间所用的活动索引代次；
--- 费率分两列：c_spot_fee_bps 用于现货与股票，c_swap_fee_bps 用于永续
+-- 费率分两列：c_spot_fee_bps 用于现货与股票，c_swap_fee_bps 用于永续；
+-- c_members_json 是策略池回放固化的成员快照（单策略回放为 NULL），c_funding_column 是单策略回放计资金费用的列名（空串表示不计）
 CREATE TABLE IF NOT EXISTS t_strategy_replays (
     c_replay_id TEXT NOT NULL PRIMARY KEY,
     c_strategy_id TEXT,
@@ -164,6 +168,8 @@ CREATE TABLE IF NOT EXISTS t_strategy_replays (
     c_spot_fee_bps REAL NOT NULL DEFAULT 0,
     c_swap_fee_bps REAL NOT NULL DEFAULT 0,
     c_factors_json TEXT NOT NULL DEFAULT '{}',
+    c_members_json TEXT,
+    c_funding_column TEXT NOT NULL DEFAULT '',
     c_status TEXT NOT NULL,
     c_progress_time INTEGER,
     c_metrics_json TEXT NOT NULL DEFAULT '{}',

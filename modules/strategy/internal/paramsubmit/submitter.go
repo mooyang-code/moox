@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"github.com/mooyang-code/moox/modules/strategy/internal/input"
 	"github.com/mooyang-code/moox/modules/strategy/internal/store"
 	"github.com/mooyang-code/moox/packages/commonpb"
@@ -124,8 +125,14 @@ func (s *Submitter) deliver(ctx context.Context, delivery store.ParamDelivery) e
 	if err != nil {
 		return err
 	}
-	// 动态参数回写只用于只绑一个因子任务的实例（双任务的成员键可能重名，写入会冲突）。
-	taskIDs := input.TaskIDs(instance.FactorTasks)
+	// 动态参数回写只用于只绑一个主帧因子任务的实例（双任务的成员键可能重名，写入会冲突）；附加来源的任务不接受参数
+	// （写了 sources 的策略，factor_params 只作用于主帧任务；写了参考市场的策略不支持 factor_params，保存时已拒绝）。
+	var taskIDs []string
+	for key, taskID := range instance.FactorTasks {
+		if source, _ := dsl.SplitTaskKey(key); source == "" {
+			taskIDs = append(taskIDs, taskID)
+		}
+	}
 	if len(taskIDs) != 1 {
 		return s.reject(ctx, delivery, "绑定了多个因子任务的实例不支持回写参数")
 	}

@@ -435,46 +435,57 @@ func checkLiveCalendar(resolved input.Resolved, now time.Time) error {
 	return nil
 }
 
-// sessionTasks 返回会话固化的解析结果里的因子任务（市场 → 任务，与存储层启用时的核对口径一致）；解析失败时返回空表。
+// sessionTasks 返回会话固化的解析结果里的全部因子任务（任务键 → 任务：主帧、参考市场与附加来源，与存储层启用时的核对口径一致）；
+// 解析失败时返回空表。
 func sessionTasks(session store.Session) map[string]string {
 	resolved, err := input.ParseResolved([]byte(session.ResolvedJSON))
 	if err != nil {
 		return map[string]string{}
 	}
-	tasks := make(map[string]string, len(resolved.Tasks))
-	for market, task := range resolved.Tasks {
-		tasks[market] = task.FactorTaskID
-	}
-	return tasks
+	return resolved.AllTasks()
 }
 
-// normalizeFactorTasks 校验并规范化请求里的 factor_tasks（市场 → 因子任务）：一个或两个，市场只能是 spot、swap、equity，
-// 统一数据集（同时放现货与永续）上的任务登记为 multi；股票、multi 都不能与其他市场混用，任务 ID 必须合法且不重复。
+// normalizeFactorTasks 校验并规范化请求里的 factor_tasks（任务键 → 因子任务）：键是市场（spot、swap、equity，统一数据集上的任务登记为
+// multi），附加来源的任务写 来源名:市场；主帧与参考市场的任务里股票、multi 都不能与其他市场混用，任务 ID 必须合法且不重复，个数见
+// store.ValidateTaskKeys。
 func normalizeFactorTasks(raw map[string]string) (map[string]string, error) {
 	if len(raw) == 0 {
-		return nil, errors.New("factor_tasks 不能为空：按市场（spot、swap、equity）给出因子任务，统一数据集上的任务写 multi")
+		return nil, errors.New("factor_tasks 不能为空：按市场（spot、swap、equity）给出因子任务，统一数据集上的任务写 multi，附加来源写 来源名:市场")
 	}
 	tasks := make(map[string]string, len(raw))
 	seen := map[string]string{}
-	for market, taskID := range raw {
-		market, taskID = strings.TrimSpace(market), strings.TrimSpace(taskID)
+	for key, taskID := range raw {
+		key, taskID = strings.TrimSpace(key), strings.TrimSpace(taskID)
+		source, market := dsl.SplitTaskKey(key)
 		if market != dsl.MarketSpot && market != dsl.MarketSwap && market != dsl.MarketEquity && market != input.MarketMulti {
-			return nil, fmt.Errorf("factor_tasks 的市场 %q 不受支持，只能是 spot、swap、equity 或 multi（统一数据集上的任务）", market)
+			return nil, fmt.Errorf("factor_tasks 的市场 %q 不受支持，只能是 spot、swap、equity 或 multi（统一数据集上的任务）；附加来源写 来源名:市场", market)
+		}
+		if strings.Contains(key, ":") && !dsl.ValidSourceName(source) {
+			return nil, fmt.Errorf("factor_tasks 的键 %q 不合法：来源名必须是小写字母开头的 snake_case", key)
 		}
 		if _, err := input.ViewIDOfTask(taskID); err != nil {
-			return nil, fmt.Errorf("factor_tasks 的 %s 任务 ID 不合法：%w", market, err)
+			return nil, fmt.Errorf("factor_tasks 的 %s 任务 ID 不合法：%w", key, err)
 		}
 		if other, dup := seen[taskID]; dup {
-			return nil, fmt.Errorf("因子任务 %s 同时登记在 %s 和 %s 市场", taskID, other, market)
+			return nil, fmt.Errorf("因子任务 %s 同时登记在 %s 和 %s", taskID, other, key)
 		}
-		seen[taskID] = market
-		tasks[market] = taskID
+		seen[taskID] = key
+		tasks[key] = taskID
 	}
-	if _, equity := tasks[dsl.MarketEquity]; equity && len(tasks) > 1 {
+	plain := 0
+	for key := range tasks {
+		if source, _ := dsl.SplitTaskKey(key); source == "" {
+			plain++
+		}
+	}
+	if _, equity := tasks[dsl.MarketEquity]; equity && plain > 1 {
 		return nil, errors.New("股票（equity）不能与现货、永续混用")
 	}
-	if _, unified := tasks[input.MarketMulti]; unified && len(tasks) > 1 {
+	if _, unified := tasks[input.MarketMulti]; unified && plain > 1 {
 		return nil, errors.New("统一数据集上的任务（multi）已同时覆盖现货与永续，不能再绑定其他任务")
+	}
+	if err := store.ValidateTaskKeys(tasks); err != nil {
+		return nil, err
 	}
 	return tasks, nil
 }

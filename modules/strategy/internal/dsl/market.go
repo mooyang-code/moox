@@ -101,6 +101,9 @@ func validateReferenceMarkets(s *Strategy) error {
 	if len(s.ReferenceMarkets) == 0 {
 		return nil
 	}
+	if len(s.FactorParams) > 0 {
+		return errors.New("写了 market.reference 的策略不支持 factor_params：参考市场要另外绑定一个任务，参数回写只支持只绑一个任务的实例")
+	}
 	for _, market := range s.ReferenceMarkets {
 		switch {
 		case market != MarketSpot && market != MarketSwap:

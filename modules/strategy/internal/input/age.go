@@ -33,10 +33,10 @@ func ruleAges(strategy dsl.Strategy) map[string]AgeRule {
 	return ages
 }
 
-// CheckAgeMarkets 检查 age_markets: all 只用在绑定了两个市场的实例上（统一数据集，或现货、永续两个任务）：只绑一个市场时它与 each
-// 没有区别，用户却以为在核对另一个市场，所以直接拒绝。单市场加参考市场（只用于年龄判定）以后再做。
+// CheckAgeMarkets 检查 age_markets: all 只用在绑定了两个市场的实例上（统一数据集、现货永续两个任务，或单市场加参考市场）：只绑一个市场时
+// 它与 each 没有区别，用户却以为在核对另一个市场，所以直接拒绝。
 func (r Resolved) CheckAgeMarkets() error {
-	if len(r.Market.Markets()) >= 2 {
+	if len(r.Market.Markets()) >= 2 || len(r.References) > 0 {
 		return nil
 	}
 	ids := make([]string, 0)
@@ -49,7 +49,7 @@ func (r Resolved) CheckAgeMarkets() error {
 		return nil
 	}
 	sort.Strings(ids)
-	return fmt.Errorf("规则 %s 写了 age_markets: all，但实例只绑定了 %s 一个市场：all 要在全部绑定市场上判断年龄，只有一个市场时与 each 相同；单市场加参考市场以后支持，现在请去掉 age_markets: all 或绑定现货、永续两个市场", strings.Join(ids, "、"), strings.Join(r.Market.Markets(), "、"))
+	return fmt.Errorf("规则 %s 写了 age_markets: all，但实例只绑定了 %s 一个市场：all 要在全部绑定市场上判断年龄，只有一个市场时与 each 相同；请去掉 age_markets: all，或用 market.reference 绑定另一个市场作参考", strings.Join(ids, "、"), strings.Join(r.Market.Markets(), "、"))
 }
 
 // AgeLabel 说明 n 根的年龄判定来自哪些字段，供报错提示该改哪里：例如“年龄判定 24 根（universe.min_age_bars=24）”、
@@ -178,8 +178,13 @@ func (s *Sets) ApplyAgePassed(resolved Resolved, listed AgeListed, passed AgePas
 		if rule.MinBars <= 0 && rule.MaxBars <= 0 {
 			continue
 		}
-		// inScope 报告 each 口径要看的市场：写了规则级市场时只看它，否则看全部市场。
-		inScope := func(market string) bool { return rule.Market == "" || market == rule.Market }
+		// inScope 报告 each 口径要看的市场：写了规则级市场时只看它，否则看模式涉及的全部市场；参考市场只用于 all，不在其中。
+		inScope := func(market string) bool {
+			if _, reference := resolved.References[market]; reference {
+				return false
+			}
+			return rule.Market == "" || market == rule.Market
+		}
 		passAny := func(n int, id string) bool {
 			for market, ids := range passed[n] {
 				if _, ok := ids[id]; ok && inScope(market) {

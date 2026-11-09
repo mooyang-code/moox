@@ -54,10 +54,12 @@ var (
 	ErrResultCASConflict = errors.New("策略结果比较交换冲突")
 )
 
-// ViewInput 是结果中保存的一个 View 的输入摘要：收到的事件与各因子成员的契约指纹。
+// ViewInput 是结果中保存的一个 View 的输入摘要：收到的事件与各因子成员的契约指纹。附加来源的 View 另记本期读取时的修订号
+// （汇合 bar 上还有来源的事件与指纹；非汇合 bar 只有修订号）。
 type ViewInput struct {
-	EventID string            `json:"event_id,omitempty"`
-	Factors map[string]string `json:"factors,omitempty"`
+	EventID  string            `json:"event_id,omitempty"`
+	Factors  map[string]string `json:"factors,omitempty"`
+	Revision uint64            `json:"revision,omitempty"`
 }
 
 // InputRecord 是结果中保存的输入摘要（c_input_json 的结构）：每个绑定的 View 一份。

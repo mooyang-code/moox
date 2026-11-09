@@ -44,7 +44,7 @@ type Replay struct {
 	DSLHash  string
 	Calendar string
 	SpaceID  string
-	// Tasks 是各任务键（市场 spot、swap、equity，统一数据集上的任务是 multi）读取的因子任务与结果 View。
+	// Tasks 是各任务键（市场 spot、swap、equity，统一数据集上的任务是 multi；附加来源是 来源名:市场）读取的因子任务与结果 View。
 	Tasks     map[string]ReplayTask
 	StartTime time.Time
 	EndTime   time.Time
@@ -179,15 +179,16 @@ func (s *Store) CreateReplay(ctx context.Context, replay Replay) error {
 	if strings.TrimSpace(replay.ReplayID) == "" || strings.TrimSpace(replay.SpaceID) == "" || strings.TrimSpace(replay.DSLYaml) == "" || strings.TrimSpace(replay.DSLHash) == "" || strings.TrimSpace(replay.Calendar) == "" {
 		return errors.New("回放缺少 replay_id、space_id、DSL 文本、版本哈希或日历")
 	}
-	if len(replay.Tasks) == 0 || len(replay.Tasks) > 2 {
-		return errors.New("回放需要读取一个或两个因子任务")
+	taskIDs := make(map[string]string, len(replay.Tasks))
+	for key, task := range replay.Tasks {
+		taskIDs[key] = task.FactorTaskID
 	}
-	for market, task := range replay.Tasks {
-		if market != "spot" && market != "swap" && market != "equity" && market != "multi" {
-			return fmt.Errorf("回放的市场 %q 不受支持，只能是 spot、swap、equity 或 multi", market)
-		}
-		if strings.TrimSpace(task.FactorTaskID) == "" || strings.TrimSpace(task.ViewID) == "" || strings.TrimSpace(task.ViewGeneration) == "" {
-			return fmt.Errorf("回放的 %s 任务缺少因子任务、view_id 或 View 索引代次", market)
+	if err := ValidateTaskKeys(taskIDs); err != nil {
+		return fmt.Errorf("回放的因子任务：%w", err)
+	}
+	for key, task := range replay.Tasks {
+		if strings.TrimSpace(task.ViewID) == "" || strings.TrimSpace(task.ViewGeneration) == "" {
+			return fmt.Errorf("回放的 %s 任务缺少 view_id 或 View 索引代次", key)
 		}
 	}
 	if replay.StartTime.IsZero() || replay.EndTime.IsZero() || !replay.EndTime.After(replay.StartTime) {

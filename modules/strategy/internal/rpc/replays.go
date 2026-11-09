@@ -94,7 +94,7 @@ func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayRe
 	} else if active >= store.MaxActiveReplays {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(fmt.Errorf("空间 %s 已有 %d 个排队或运行中的回放，请等它们完成或取消后再发起", scoped, active))}, nil
 	}
-	resolved, program, err := s.Resolver.Resolve(ctx, scoped, input.TaskIDs(tasks), strategy)
+	resolved, program, err := s.Resolver.Resolve(ctx, scoped, tasks, strategy)
 	if err != nil {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(err)}, nil
 	}
@@ -121,9 +121,10 @@ func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayRe
 	if err != nil {
 		return &strategypb.StartReplayRsp{RetInfo: failure(err)}, nil
 	}
-	replayTasks := make(map[string]store.ReplayTask, len(resolved.Tasks))
-	for market, task := range resolved.Tasks {
-		replayTasks[market] = store.ReplayTask{FactorTaskID: task.FactorTaskID, ViewID: task.ViewID, ViewGeneration: generations[market]}
+	bindings := resolved.AllTaskBindings()
+	replayTasks := make(map[string]store.ReplayTask, len(bindings))
+	for key, task := range bindings {
+		replayTasks[key] = store.ReplayTask{FactorTaskID: task.FactorTaskID, ViewID: task.ViewID, ViewGeneration: generations[key]}
 	}
 	replay := store.Replay{ReplayID: replayID, StrategyID: source.strategyID, InstanceID: source.instanceID, SessionID: source.sessionID, DSLYaml: source.dslYaml, DSLHash: dsl.Hash([]byte(source.dslYaml)), Calendar: resolved.Calendar, SpaceID: scoped, Tasks: replayTasks, StartTime: start, EndTime: end, SpotFeeBps: req.GetSpotFeeBps(), SwapFeeBps: req.GetSwapFeeBps(), Factors: resolved.Factors, CreatedAt: s.nowTime()}
 	if err := s.Store.CreateReplay(ctx, replay); err != nil {

@@ -67,7 +67,8 @@ func (f *fakeResolver) CheckCoverage(context.Context, string, input.Resolved, ti
 	return f.coverageErr
 }
 
-func (f *fakeResolver) Resolve(_ context.Context, _ string, taskIDs []string, strategy dsl.Strategy) (input.Resolved, *dsl.Program, error) {
+func (f *fakeResolver) Resolve(_ context.Context, _ string, registered map[string]string, strategy dsl.Strategy) (input.Resolved, *dsl.Program, error) {
+	taskIDs := input.TaskIDs(registered)
 	taskID := taskIDs[0]
 	f.resolvedTasks = taskIDs
 	f.calls++
@@ -115,7 +116,7 @@ func (f *fakeResolver) Resolve(_ context.Context, _ string, taskIDs []string, st
 func (f *fakeResolver) ResolveInstance(ctx context.Context, instanceID, spaceID string, tasks map[string]string, strategy dsl.Strategy) (input.Resolved, *dsl.Program, error) {
 	taskIDs := input.TaskIDs(tasks)
 	f.bound = append(f.bound, instanceID+"@"+taskIDs[0])
-	return f.Resolve(ctx, spaceID, taskIDs, strategy)
+	return f.Resolve(ctx, spaceID, tasks, strategy)
 }
 
 func (f *fakeResolver) LoadLatest(context.Context, string, input.Resolved, *dsl.Program, time.Time) (input.Loaded, error) {

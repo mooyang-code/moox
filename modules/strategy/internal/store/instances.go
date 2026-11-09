@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 	"github.com/mooyang-code/moox/packages/factorname"
 	"gorm.io/gorm"
 )
@@ -26,7 +27,8 @@ type Instance struct {
 	InstanceID string
 	StrategyID string
 	SpaceID    string
-	// FactorTasks 是市场（spot、swap、equity）→ 因子任务 ID；统一数据集上的任务登记为 multi。
+	// FactorTasks 是任务键 → 因子任务 ID：主帧与参考市场的任务键是市场（spot、swap、equity），统一数据集上的任务登记为 multi；
+	// 附加来源的任务键是 来源名:市场（见 dsl.TaskKey）。
 	FactorTasks      map[string]string
 	LogicalAccountID *string
 	Enabled          bool
@@ -64,15 +66,15 @@ const (
 	// sqlSelectInstanceByID 按实例 ID 读取实例。
 	sqlSelectInstanceByID = `SELECT c_instance_id, c_strategy_id, c_space_id, c_logical_account_id, c_enabled, c_session_id, c_resolved_json, c_health, c_ctime, c_mtime FROM t_strategy_instances WHERE c_instance_id = ?`
 	// sqlSelectTasksOfInstance 读取一个实例绑定的因子任务。
-	sqlSelectTasksOfInstance = `SELECT c_market, c_factor_task_id FROM t_strategy_instance_tasks WHERE c_instance_id = ?`
+	sqlSelectTasksOfInstance = `SELECT c_source, c_market, c_factor_task_id FROM t_strategy_instance_tasks WHERE c_instance_id = ?`
 	// sqlSelectTasksOfInstances 按实例 ID 的 JSON 数组一次读出一批实例绑定的因子任务。
-	sqlSelectTasksOfInstances = `SELECT c_instance_id, c_market, c_factor_task_id FROM t_strategy_instance_tasks WHERE c_instance_id IN (SELECT value FROM json_each(?))`
+	sqlSelectTasksOfInstances = `SELECT c_instance_id, c_source, c_market, c_factor_task_id FROM t_strategy_instance_tasks WHERE c_instance_id IN (SELECT value FROM json_each(?))`
 	// sqlInsertInstance 新建停用、无会话、健康的实例。
 	sqlInsertInstance = `
 		INSERT INTO t_strategy_instances (c_instance_id, c_strategy_id, c_space_id, c_logical_account_id, c_enabled, c_session_id, c_resolved_json, c_health, c_ctime, c_mtime)
 		VALUES (?, ?, ?, ?, 0, NULL, ?, 'ok', ?, ?)`
-	// sqlInsertInstanceTask 登记实例在一个市场绑定的因子任务。
-	sqlInsertInstanceTask = `INSERT INTO t_strategy_instance_tasks (c_instance_id, c_market, c_factor_task_id) VALUES (?, ?, ?)`
+	// sqlInsertInstanceTask 登记实例在一个（来源, 市场）绑定的因子任务。
+	sqlInsertInstanceTask = `INSERT INTO t_strategy_instance_tasks (c_instance_id, c_source, c_market, c_factor_task_id) VALUES (?, ?, ?, ?)`
 	// sqlUpdateInstance 修改停用实例的定义与账户绑定，并清空绑定解析、恢复健康。
 	sqlUpdateInstance = `
 		UPDATE t_strategy_instances SET c_strategy_id = ?, c_logical_account_id = ?, c_resolved_json = '{}', c_health = 'ok', c_mtime = ?
@@ -125,19 +127,54 @@ func validateInstanceIdentity(instance Instance) error {
 	if strings.TrimSpace(instance.InstanceID) == "" || strings.TrimSpace(instance.StrategyID) == "" || strings.TrimSpace(instance.SpaceID) == "" {
 		return errors.New("实例缺少 instance_id、strategy_id 或 space_id")
 	}
-	if len(instance.FactorTasks) == 0 || len(instance.FactorTasks) > 2 {
-		return errors.New("实例需要绑定一个或两个因子任务")
-	}
-	for market, taskID := range instance.FactorTasks {
-		if market != "spot" && market != "swap" && market != "equity" && market != "multi" {
-			return fmt.Errorf("factor_tasks 的市场 %q 不受支持，只能是 spot、swap、equity 或 multi", market)
-		}
-		if strings.TrimSpace(taskID) == "" {
-			return fmt.Errorf("factor_tasks 的 %s 任务不能为空", market)
-		}
+	if err := ValidateTaskKeys(instance.FactorTasks); err != nil {
+		return err
 	}
 	if instance.LogicalAccountID != nil && strings.TrimSpace(*instance.LogicalAccountID) == "" {
 		return errors.New("logical_account_id 不能为空字符串")
+	}
+	return nil
+}
+
+// 任务个数上限：主帧与参考市场至多两个（模式市场数 + 参考市场数），附加来源至多两个、每个至多两个市场（与主帧的市场一致）。
+// 与策略相关的精确个数由启用时的解析核对。
+const (
+	maxPlainTasks      = 2
+	maxSources         = dsl.MaxSources
+	maxMarketsInSource = 2
+)
+
+// ValidateTaskKeys 校验实例登记的因子任务：键是市场或 来源名:市场，市场只能是 spot、swap、equity、multi，任务 ID 不能为空，个数不超过上限。
+func ValidateTaskKeys(tasks map[string]string) error {
+	plain := 0
+	sources := map[string]int{}
+	for key, taskID := range tasks {
+		source, market := dsl.SplitTaskKey(key)
+		if market != "spot" && market != "swap" && market != "equity" && market != "multi" {
+			return fmt.Errorf("factor_tasks 的市场 %q 不受支持，只能是 spot、swap、equity 或 multi（附加来源写作 来源名:市场）", market)
+		}
+		if strings.Contains(key, ":") && !dsl.ValidSourceName(source) {
+			return fmt.Errorf("factor_tasks 的键 %q 不合法：来源名必须是小写字母开头的 snake_case", key)
+		}
+		if strings.TrimSpace(taskID) == "" {
+			return fmt.Errorf("factor_tasks 的 %s 任务不能为空", key)
+		}
+		if source == "" {
+			plain++
+		} else {
+			sources[source]++
+		}
+	}
+	if plain == 0 || plain > maxPlainTasks {
+		return fmt.Errorf("实例需要按市场绑定一个或两个主帧（含参考市场）因子任务，实际 %d 个", plain)
+	}
+	if len(sources) > maxSources {
+		return fmt.Errorf("实例至多绑定 %d 个附加来源，实际 %d 个", maxSources, len(sources))
+	}
+	for source, count := range sources {
+		if count > maxMarketsInSource {
+			return fmt.Errorf("附加来源 %s 至多绑定 %d 个市场的任务，实际 %d 个", source, maxMarketsInSource, count)
+		}
 	}
 	return nil
 }
@@ -164,9 +201,10 @@ func readInstance(tx *gorm.DB, instanceID string) (instanceRow, error) {
 	return row, nil
 }
 
-// instanceTasks 读取一个实例绑定的因子任务（市场 → 任务）。
+// instanceTasks 读取一个实例绑定的因子任务（任务键 → 任务）。
 func instanceTasks(tx *gorm.DB, instanceID string) (map[string]string, error) {
 	var rows []struct {
+		Source       string `gorm:"column:c_source"`
 		Market       string `gorm:"column:c_market"`
 		FactorTaskID string `gorm:"column:c_factor_task_id"`
 	}
@@ -175,7 +213,7 @@ func instanceTasks(tx *gorm.DB, instanceID string) (map[string]string, error) {
 	}
 	tasks := make(map[string]string, len(rows))
 	for _, row := range rows {
-		tasks[row.Market] = row.FactorTaskID
+		tasks[dsl.TaskKey(row.Source, row.Market)] = row.FactorTaskID
 	}
 	return tasks, nil
 }
@@ -196,6 +234,7 @@ func withTasks(tx *gorm.DB, rows []instanceRow) ([]Instance, error) {
 	}
 	var taskRows []struct {
 		InstanceID   string `gorm:"column:c_instance_id"`
+		Source       string `gorm:"column:c_source"`
 		Market       string `gorm:"column:c_market"`
 		FactorTaskID string `gorm:"column:c_factor_task_id"`
 	}
@@ -207,7 +246,7 @@ func withTasks(tx *gorm.DB, rows []instanceRow) ([]Instance, error) {
 		if byInstance[taskRow.InstanceID] == nil {
 			byInstance[taskRow.InstanceID] = map[string]string{}
 		}
-		byInstance[taskRow.InstanceID][taskRow.Market] = taskRow.FactorTaskID
+		byInstance[taskRow.InstanceID][dsl.TaskKey(taskRow.Source, taskRow.Market)] = taskRow.FactorTaskID
 	}
 	for _, row := range rows {
 		instance := row.instance()
@@ -237,8 +276,9 @@ func (s *Store) CreateInstance(ctx context.Context, instance Instance) error {
 		if err := tx.Exec(sqlInsertInstance, instance.InstanceID, instance.StrategyID, instance.SpaceID, stringValue(instance.LogicalAccountID), resolved, now, now).Error; err != nil {
 			return err
 		}
-		for market, taskID := range instance.FactorTasks {
-			if err := tx.Exec(sqlInsertInstanceTask, instance.InstanceID, market, strings.TrimSpace(taskID)).Error; err != nil {
+		for key, taskID := range instance.FactorTasks {
+			source, market := dsl.SplitTaskKey(key)
+			if err := tx.Exec(sqlInsertInstanceTask, instance.InstanceID, source, market, strings.TrimSpace(taskID)).Error; err != nil {
 				return err
 			}
 		}
@@ -515,16 +555,7 @@ func requireMatchingSession(tx *gorm.DB, instance instanceRow, sessionID string)
 	if err := tx.Raw(sqlSelectLiveDefinitionHash, instance.StrategyID).Scan(&definitionHash).Error; err != nil {
 		return err
 	}
-	var resolved struct {
-		Tasks map[string]struct {
-			FactorTaskID string `json:"factor_task_id"`
-		} `json:"tasks"`
-	}
-	_ = json.Unmarshal([]byte(session.ResolvedJSON), &resolved)
-	sessionTasks := make(map[string]string, len(resolved.Tasks))
-	for market, task := range resolved.Tasks {
-		sessionTasks[market] = task.FactorTaskID
-	}
+	sessionTasks := SessionTasks([]byte(session.ResolvedJSON))
 	tasks, err := instanceTasks(tx, instance.InstanceID)
 	if err != nil {
 		return err
@@ -533,6 +564,35 @@ func requireMatchingSession(tx *gorm.DB, instance instanceRow, sessionID string)
 		return errors.New("实例在启用期间被修改，请重新启用")
 	}
 	return nil
+}
+
+// SessionTasks 从会话固化的绑定解析（resolved_json）里取出全部任务键 → 因子任务：主帧的 tasks、参考市场 references 与附加来源
+// sources（任务键 来源名:市场）。无法解析时返回空表。
+func SessionTasks(resolvedJSON []byte) map[string]string {
+	type task struct {
+		FactorTaskID string `json:"factor_task_id"`
+	}
+	var resolved struct {
+		Tasks      map[string]task `json:"tasks"`
+		References map[string]task `json:"references"`
+		Sources    map[string]struct {
+			Tasks map[string]task `json:"tasks"`
+		} `json:"sources"`
+	}
+	_ = json.Unmarshal(resolvedJSON, &resolved)
+	tasks := make(map[string]string, len(resolved.Tasks)+len(resolved.References))
+	for key, item := range resolved.Tasks {
+		tasks[key] = item.FactorTaskID
+	}
+	for market, item := range resolved.References {
+		tasks[market] = item.FactorTaskID
+	}
+	for name, source := range resolved.Sources {
+		for market, item := range source.Tasks {
+			tasks[dsl.TaskKey(name, market)] = item.FactorTaskID
+		}
+	}
+	return tasks
 }
 
 // requireLiveDefinition 在写实例的事务里确认引用的定义存在且未删除：与软删除定义在同一连接上串行，

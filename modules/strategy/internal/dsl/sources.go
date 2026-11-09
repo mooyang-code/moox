@@ -164,3 +164,25 @@ func checkSourceColumnClash(strategy Strategy, available map[string]struct{}) er
 func errUndeclaredSource(name string) error {
 	return errors.New("不允许使用属性访问，只能引用列名、bars[0].列名、bars[-1].列名，或已在 sources 声明的 来源名.列名（" + name + " 不是已声明的来源）")
 }
+
+// TaskKey 返回实例登记因子任务用的键：主帧与参考市场的任务就是市场，附加来源的任务是 来源名:市场。
+func TaskKey(source, market string) string {
+	if source == "" {
+		return market
+	}
+	return source + ":" + market
+}
+
+// SplitTaskKey 把任务键拆成来源名与市场；主帧与参考市场的键返回空来源名。
+func SplitTaskKey(key string) (source, market string) {
+	if i := strings.IndexByte(key, ':'); i >= 0 {
+		return key[:i], key[i+1:]
+	}
+	return "", key
+}
+
+// ValidSourceName 报告来源名的写法合法：小写字母开头的 snake_case，且不是表达式的保留标识符。
+func ValidSourceName(name string) bool {
+	_, reserved := reservedSourceNames[name]
+	return sourceNamePattern.MatchString(name) && !reserved
+}

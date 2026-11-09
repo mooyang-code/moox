@@ -55,6 +55,11 @@ func Resolve(ctx context.Context, client Client, spaceID string, taskIDs []strin
 	return bindViews(ctx, client, spaceID, views, strategy)
 }
 
+// bindViews 在已解析的主帧 View 上绑定并编译一个没有附加来源、参考市场的策略（见 bindViewsWith）。
+func bindViews(ctx context.Context, client Client, spaceID string, views []resolvedView, strategy dsl.Strategy) (Resolved, *dsl.Program, error) {
+	return bindViewsWith(ctx, client, spaceID, views, strategy, boundTasks{})
+}
+
 // resolveViews 解析每个因子任务的结果 View 与数据集，按市场先后（现货、永续）排序；两个任务的市场不能相同。bar 是 DSL 的周期断言。
 func resolveViews(ctx context.Context, client Client, spaceID string, taskIDs []string, bar string) ([]resolvedView, error) {
 	var views []resolvedView
@@ -78,8 +83,12 @@ func resolveViews(ctx context.Context, client Client, spaceID string, taskIDs []
 	return views, nil
 }
 
-// bindViews 在已解析的 View 上绑定并编译一个策略：校验周期与日历一致、确定市场模式、校验列与成员契约。
-func bindViews(ctx context.Context, client Client, spaceID string, views []resolvedView, strategy dsl.Strategy) (Resolved, *dsl.Program, error) {
+// bindViewsWith 在已解析的主帧 View 上绑定并编译一个策略：校验周期与日历一致、确定市场模式、校验列与成员契约；bound 里的参考市场与
+// 附加来源任务一并解析（DSL 声明了却没有登记任务时报错）。
+func bindViewsWith(ctx context.Context, client Client, spaceID string, views []resolvedView, strategy dsl.Strategy, bound boundTasks) (Resolved, *dsl.Program, error) {
+	if len(bound.references) != len(strategy.ReferenceMarkets) || len(bound.sources) != len(strategy.Sources) {
+		return Resolved{}, nil, errors.New("DSL 写了附加来源或参考市场，需要按任务键登记它们的因子任务")
+	}
 	resolved := Resolved{Tasks: map[string]TaskBinding{}, Columns: map[string]ColumnBinding{}, Factors: map[string]string{}, MinAgeBars: strategy.Universe.MinAgeBars, RuleAges: ruleAges(strategy)}
 	for _, item := range views {
 		resolved.Tasks[item.market] = TaskBinding{ViewID: item.view.ViewID, FactorTaskID: item.taskID, DatasetID: item.view.DatasetID, SourceDatasetID: sourceDatasetID(item)}
@@ -126,11 +135,15 @@ func bindViews(ctx context.Context, client Client, spaceID string, views []resol
 	if err := CheckHoldingAnchors(resolved.Calendar, resolved.Bar, strategy); err != nil {
 		return Resolved{}, nil, err
 	}
+	referenceViews, err := bindReferences(ctx, client, spaceID, &resolved, bound.references)
+	if err != nil {
+		return Resolved{}, nil, err
+	}
 	if err := resolved.CheckAgeMarkets(); err != nil {
 		return Resolved{}, nil, err
 	}
 	longest := resolved.LongestAge()
-	for _, item := range views {
+	for _, item := range append(append([]resolvedView(nil), views...), referenceViews...) {
 		if bars, ok := retentionBars(item.dataset.Retention, resolved.Calendar, resolved.Bar); ok && longest > bars {
 			return Resolved{}, nil, fmt.Errorf("年龄判定需要 %d 根（min_age_bars、max_age_bars 的最大值），超过 View 的保留根数 %d", longest, bars)
 		}
@@ -147,10 +160,12 @@ func bindViews(ctx context.Context, client Client, spaceID string, views []resol
 	if err := checkReferences(ctx, client, spaceID, viewInfos, strategy); err != nil {
 		return Resolved{}, nil, err
 	}
-	referenced, err := dsl.ReferencedColumns(strategy)
+	allReferenced, err := dsl.ReferencedColumns(strategy)
 	if err != nil {
 		return Resolved{}, nil, err
 	}
+	// 来源列（来源名.列名）在来源的 View 里核对（见 bindSources），主帧只核对自己的列。
+	referenced := dsl.ColumnsBySource(allReferenced)[""]
 	// 先报缺列：任务刚改动成员时结果 View 的列由 Storage 异步补齐，此时可变成员也还看不全，缺列是可重试的暂态。
 	resolved.ViewColumns = commonColumns(views)
 	for _, item := range views {
@@ -255,7 +270,10 @@ func bindViews(ctx context.Context, client Client, spaceID string, views []resol
 			}
 		}
 	}
-	program, err := dsl.Compile(strategy, resolved.ViewColumns)
+	if err := bindSources(ctx, client, spaceID, &resolved, strategy, bound.sources, allReferenced); err != nil {
+		return Resolved{}, nil, err
+	}
+	program, err := dsl.Compile(strategy, resolved.CompileColumns())
 	if err != nil {
 		return Resolved{}, nil, err
 	}
@@ -452,6 +470,12 @@ func CheckCoverage(ctx context.Context, client Client, spaceID string, resolved 
 			return err
 		}
 	}
+	// 参考市场只用于年龄判定：它的历史同样要够，否则运行期按 history_insufficient 跳过。
+	for _, market := range sortedKeys(resolved.References) {
+		if err := checkViewCoverage(ctx, client, spaceID, resolved, resolved.References[market].ViewID, now); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -645,7 +669,7 @@ func Compile(resolved Resolved, dslYaml string) (Resolved, *dsl.Program, error) 
 		return resolved, nil, err
 	}
 	strategy.Market = resolved.Market
-	program, err := dsl.Compile(strategy, resolved.ViewColumns)
+	program, err := dsl.Compile(strategy, resolved.CompileColumns())
 	if err != nil {
 		return resolved, nil, err
 	}
@@ -672,6 +696,21 @@ func ParseResolved(raw []byte) (Resolved, error) {
 	for market, task := range resolved.Tasks {
 		if task.ViewID == "" || task.FactorTaskID == "" {
 			return Resolved{}, fmt.Errorf("resolved_json 的 %s 任务缺少 view_id 或 factor_task_id", market)
+		}
+	}
+	for market, task := range resolved.References {
+		if task.ViewID == "" || task.FactorTaskID == "" {
+			return Resolved{}, fmt.Errorf("resolved_json 的参考市场 %s 任务缺少 view_id 或 factor_task_id", market)
+		}
+	}
+	for name, source := range resolved.Sources {
+		if source.Bar == "" || source.Calendar == "" || len(source.Tasks) != len(resolved.Tasks) {
+			return Resolved{}, fmt.Errorf("resolved_json 的来源 %s 缺少 bar、calendar，或任务与主帧不一致", name)
+		}
+		for key := range resolved.Tasks {
+			if task := source.Tasks[key]; task.ViewID == "" || task.FactorTaskID == "" {
+				return Resolved{}, fmt.Errorf("resolved_json 的来源 %s 缺少 %s 任务", name, key)
+			}
 		}
 	}
 	if resolved.Columns == nil {

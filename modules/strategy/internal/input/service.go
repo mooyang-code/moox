@@ -22,15 +22,15 @@ type Service struct {
 }
 
 // ResolveInstance 启用实例时的解析（设计 8.1）：先把每个任务与实例永久关联（幂等：第一次启用时写入，以后只是核对原来的关联），
-// 要求任务已启用；再解析绑定——DSL 引用的列都存在，任务的可变成员与 factor_params 一一对应。tasks 是实例登记的市场 → 因子任务，
-// 解析出的市场必须与登记一致。任务刚加成员时，结果 View 的列由 Storage 异步补齐，所以列不存在时在限定时间内重试。
+// 要求任务已启用；再解析绑定——DSL 引用的列都存在，任务的可变成员与 factor_params 一一对应。tasks 是实例登记的任务键 → 因子任务
+// （附加来源的键是 来源名:市场），解析出的市场必须与登记一致。任务刚加成员时，结果 View 的列由 Storage 异步补齐，所以列不存在时在限定时间内重试。
 func (s Service) ResolveInstance(ctx context.Context, instanceID, spaceID string, tasks map[string]string, strategy dsl.Strategy) (Resolved, *dsl.Program, error) {
 	if err := dsl.Validate(&strategy); err != nil {
 		return Resolved{}, nil, err
 	}
 	var program *dsl.Program
-	resolved, err := s.bindAndResolve(ctx, instanceID, spaceID, tasks, func(taskIDs []string) (Resolved, error) {
-		resolved, compiled, err := Resolve(ctx, s.Client, spaceID, taskIDs, strategy)
+	resolved, err := s.bindAndResolve(ctx, instanceID, spaceID, tasks, func() (Resolved, error) {
+		resolved, compiled, err := ResolveTasks(ctx, s.Client, spaceID, tasks, strategy)
 		program = compiled
 		return resolved, err
 	})
@@ -43,9 +43,9 @@ func (s Service) ResolvePoolInstance(ctx context.Context, instanceID, spaceID st
 		return PoolResolved{}, err
 	}
 	var out PoolResolved
-	_, err := s.bindAndResolve(ctx, instanceID, spaceID, tasks, func(taskIDs []string) (Resolved, error) {
+	_, err := s.bindAndResolve(ctx, instanceID, spaceID, tasks, func() (Resolved, error) {
 		var err error
-		out, err = ResolvePool(ctx, s.Client, spaceID, taskIDs, pool, members)
+		out, err = ResolvePool(ctx, s.Client, spaceID, TaskIDs(tasks), pool, members)
 		return out.Resolved, err
 	})
 	return out, err
@@ -60,7 +60,7 @@ func (s Service) ResolvePool(ctx context.Context, spaceID string, taskIDs []stri
 }
 
 // bindAndResolve 完成启用解析里与策略无关的部分：核对登记的市场、把任务与实例关联，再在限定时间内重试 resolve（任务的结果 View 还没补齐列时）。
-func (s Service) bindAndResolve(ctx context.Context, instanceID, spaceID string, tasks map[string]string, resolve func(taskIDs []string) (Resolved, error)) (Resolved, error) {
+func (s Service) bindAndResolve(ctx context.Context, instanceID, spaceID string, tasks map[string]string, resolve func() (Resolved, error)) (Resolved, error) {
 	if s.Client == nil || s.Sets == nil {
 		return Resolved{}, errors.New("Factor 依赖未配置，不能启用实例")
 	}
@@ -95,7 +95,7 @@ func (s Service) bindAndResolve(ctx context.Context, instanceID, spaceID string,
 		}
 	}
 	for {
-		resolved, err := resolve(taskIDs)
+		resolved, err := resolve()
 		if err == nil {
 			err = CheckResolvedMarkets(resolved, tasks)
 		}
@@ -125,7 +125,8 @@ func (s Service) TaskMarket(ctx context.Context, spaceID, taskID string) (string
 	return item.market, nil
 }
 
-// CheckRegisteredMarkets 核对实例登记的“市场 → 任务”：每个任务的源数据集市场（由 marketOf 查询）必须就是登记的市场；
+// CheckRegisteredMarkets 核对实例登记的“任务键 → 任务”：每个任务的源数据集市场（由 marketOf 查询）必须就是登记的市场（附加来源的键
+// 来源名:市场 取冒号后的市场）；
 // 统一数据集（market_type = multi）上的任务登记为 multi。填错会让任务被永久占住、实例又启用不了，所以创建实例时就要核对，
 // 启用时也要在关联任务之前再核对一次。
 func CheckRegisteredMarkets(ctx context.Context, tasks map[string]string, marketOf func(ctx context.Context, taskID string) (string, error)) error {
@@ -133,7 +134,7 @@ func CheckRegisteredMarkets(ctx context.Context, tasks map[string]string, market
 		market := ""
 		for registered, id := range tasks {
 			if id == taskID {
-				market = registered
+				_, market = dsl.SplitTaskKey(registered)
 			}
 		}
 		actual, err := marketOf(ctx, taskID)
@@ -150,7 +151,7 @@ func CheckRegisteredMarkets(ctx context.Context, tasks map[string]string, market
 	return nil
 }
 
-// TaskIDs 返回实例登记的因子任务（按现货、永续、股票、统一数据集的先后）。
+// TaskIDs 返回实例登记的全部因子任务：先是主帧与参考市场（按现货、永续、股票、统一数据集的先后），再是附加来源（按任务键）。
 func TaskIDs(tasks map[string]string) []string {
 	ids := make([]string, 0, len(tasks))
 	for _, market := range []string{dsl.MarketSpot, dsl.MarketSwap, dsl.MarketEquity, MarketMulti} {
@@ -158,18 +159,24 @@ func TaskIDs(tasks map[string]string) []string {
 			ids = append(ids, id)
 		}
 	}
+	for _, key := range sortedKeys(tasks) {
+		if source, _ := dsl.SplitTaskKey(key); source != "" {
+			ids = append(ids, tasks[key])
+		}
+	}
 	return ids
 }
 
 // CheckResolvedMarkets 核对解析结果里的任务键与实例登记的一致（解析之后的最后一道核对，不查 Storage）。
 func CheckResolvedMarkets(resolved Resolved, tasks map[string]string) error {
-	if len(resolved.Tasks) != len(tasks) {
-		return fmt.Errorf("登记了 %d 个因子任务，按策略的市场模式解析出 %d 个", len(tasks), len(resolved.Tasks))
+	all := resolved.AllTasks()
+	if len(all) != len(tasks) {
+		return fmt.Errorf("登记了 %d 个因子任务，按策略的市场模式解析出 %d 个", len(tasks), len(all))
 	}
 	for market, taskID := range tasks {
-		if got := resolved.Tasks[market].FactorTaskID; got != taskID {
-			for actual, task := range resolved.Tasks {
-				if task.FactorTaskID == taskID {
+		if got := all[market]; got != taskID {
+			for actual, id := range all {
+				if id == taskID {
 					if actual == MarketMulti {
 						return fmt.Errorf("因子任务 %s 在统一数据集上（同时放现货与永续），factor_tasks 要写 multi=%s，不能写成 %s；从实例发起的回放可以省略 factor_tasks", taskID, taskID, market)
 					}
@@ -191,12 +198,12 @@ func waitingForColumns(err error) bool {
 	return errors.Is(err, ErrViewNotFound) || strings.Contains(text, "不存在于 View") || strings.Contains(text, "没有数据集或频率")
 }
 
-// Resolve 解析绑定并编译策略（不关联任务，只读；校验接口用）。
-func (s Service) Resolve(ctx context.Context, spaceID string, taskIDs []string, strategy dsl.Strategy) (Resolved, *dsl.Program, error) {
+// Resolve 按登记的任务（任务键 → 任务）解析绑定并编译策略（不关联任务，只读；校验接口用）。
+func (s Service) Resolve(ctx context.Context, spaceID string, tasks map[string]string, strategy dsl.Strategy) (Resolved, *dsl.Program, error) {
 	if s.Client == nil {
 		return Resolved{}, nil, errors.New("Storage 与 Factor 依赖未配置，不能解析绑定")
 	}
-	return Resolve(ctx, s.Client, spaceID, taskIDs, strategy)
+	return ResolveTasks(ctx, s.Client, spaceID, tasks, strategy)
 }
 
 // ReplayWindow 逐个读取绑定 View 的覆盖范围，校验回放起点并截断终点：起点要在每个 View 的可用范围内，终点取各 View 中最早的。
@@ -221,6 +228,17 @@ func (s Service) ReplayWindow(ctx context.Context, spaceID string, resolved Reso
 			return time.Time{}, nil, err
 		}
 		generations[key] = view.Generation
+	}
+	// 附加来源与参考市场不截断区间，只记下提交时的索引代次。
+	for key, task := range resolved.AllTaskBindings() {
+		if _, main := generations[key]; main {
+			continue
+		}
+		generation, err := s.Client.ViewGeneration(ctx, spaceID, task.ViewID)
+		if err != nil {
+			return time.Time{}, nil, err
+		}
+		generations[key] = generation
 	}
 	return end, generations, nil
 }
