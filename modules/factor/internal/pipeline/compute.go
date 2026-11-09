@@ -125,7 +125,8 @@ func (r *Runner) Compute(ctx context.Context, plan Plan, loaded LoadResult) (Com
 	}
 	computation.BudgetHit = errors.Is(workCtx.Err(), context.DeadlineExceeded)
 	if runErr != nil {
-		// 补算分块超出内存预算是资源错误：整块失败、不写入、不推进进度（分块在读取前已按预算收窄，正常不会出现）。
+		// 补算分块超出内存预算是资源错误：整块失败、不写入、不推进进度。分块在读取前已按预算收窄（observed 成员的历史截面
+		// 标的也计入），正常不会出现；读取后按实际的序列数（标的 × series_tag）复核时仍可能超出，例如统一数据集的序列比估计多。
 		if plan.Mode == ModeRecalc && errors.Is(runErr, ErrMemoryBudget) {
 			return computation, runErr
 		}
