@@ -38,13 +38,18 @@ type Strategy struct {
 	Market Market
 	// MarketDeclared 为真表示 DSL 里显式写了 market。
 	MarketDeclared bool
-	Universe       Universe
-	Rules          []Rule
+	// ReferenceMarkets 是 market.reference 写出的参考市场（S3）：单市场策略额外绑定的另一个市场的任务，只用于 age_markets: all
+	// 的年龄判定，不参与选择与下单。
+	ReferenceMarkets []string
+	Universe         Universe
+	Rules            []Rule
 	// Pool 非空表示策略池：与 Rules 互斥（见 pool.go）。
 	Pool      *StrategyPool
 	Portfolio Portfolio
 	// FactorParams 是可变成员的成员键 → 参数名 → 下一期参数的输出表达式（见 factors.go）。
 	FactorParams map[string]map[string]ParamExpr
+	// Sources 是附加列来源（见 sources.go），按声明顺序。
+	Sources []Source
 }
 
 // Universe 是策略级默认标的池：省略即 all。规则可以写规则级 universe 逐项覆盖（见 universe.go）。

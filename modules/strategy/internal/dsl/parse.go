@@ -170,7 +170,7 @@ func decodeStrategy(root *yaml.Node) (Strategy, error) {
 		case "bar":
 			strategy.Bar, err = scalarRequiredText(f.value, "bar")
 		case "market":
-			strategy.Market, err = decodeMarket(f.value)
+			strategy.Market, strategy.ReferenceMarkets, err = decodeMarket(f.value)
 			strategy.MarketDeclared = err == nil
 		case "universe":
 			strategy.Universe, _, err = decodeUniverse(f.value, "universe")
@@ -185,6 +185,8 @@ func decodeStrategy(root *yaml.Node) (Strategy, error) {
 			return Strategy{}, errors.New("策略 DSL 不再有 factors 段：策略读取的列来自创建实例时选定的因子任务，规则里直接写列名即可")
 		case "factor_params":
 			strategy.FactorParams, err = decodeFactorParams(f.value)
+		case "sources":
+			strategy.Sources, err = decodeSources(f.value)
 		default:
 			return Strategy{}, fmt.Errorf("策略 DSL 包含未知字段 %q", f.key)
 		}
