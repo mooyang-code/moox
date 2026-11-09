@@ -573,6 +573,45 @@ describe("strategy replay page", () => {
     expect(text).not.toContain("模拟曲线未计资金费与强平");
   });
 
+  it("策略池回放显示每期的池明细，资金费说明按池 DSL 的 fees.funding_column", async () => {
+    const pooled = replay("r9", "done", '{"bars":1,"ok_bars":1,"limitations":[]}', {
+      tasks: { swap: { factor_task_id: "ftask_b", view_id: "view_factor_b" } },
+      swap_fee_bps: 5,
+      dsl_yaml:
+        "name: p\nbar: 1h\nstrategy_pool:\n  members:\n    - {id: a, strategy: s_a}\n  allocation: {method: drift, ratios: {a: 1}}\n  fees: {funding_column: funding_rate}\n"
+    });
+    api.listReplays.mockResolvedValue({ items: [pooled], page: { total: 1 } });
+    api.getReplay.mockResolvedValue(pooled);
+    const summary = {
+      decision: {
+        pool: {
+          method: "drift",
+          members: [{ id: "a", status: "ok", equity: 1.01, ratio: "1", drifted: "1.02" }],
+          drift: { phase: "start" }
+        }
+      },
+      ledger: {}
+    };
+    api.listReplayBars.mockResolvedValue({
+      items: [{ ...bar(JSON.stringify(summary)), spot_value: 0, swap_value: -1 }],
+      page: { total: 1 }
+    });
+    const wrapper = mountPage();
+    await flushPromises();
+    const section = wrapper.find("section[aria-label='策略池']");
+    expect(section.exists()).toBe(true);
+    expect(section.text()).toContain("漂移分配");
+    expect(section.text()).toContain("只覆盖当前已加载的周期表当前页");
+    expect(section.text()).toContain("漂移起点，系数置为起始比例");
+    expect(wrapper.text()).toContain("模拟曲线按 funding_rate 列计资金费、未计强平");
+  });
+
+  it("单策略回放不显示池明细", async () => {
+    const wrapper = mountPage();
+    await flushPromises();
+    expect(wrapper.find("section[aria-label='策略池']").exists()).toBe(false);
+  });
+
   it("shows the bar detail with the buy scale and describes the curve in text", async () => {
     api.listReplays.mockResolvedValue({ items: [replay("r1", "done")], page: { total: 1 } });
     api.getReplay.mockResolvedValue(replay("r1", "done", '{"bars":1,"ok_bars":1,"limitations":[]}'));

@@ -6,10 +6,14 @@
           <th>成员</th>
           <th>状态</th>
           <th class="num">净值</th>
-          <th class="num">基础比例</th>
+          <th class="num">{{ drift ? "目标比例" : "基础比例" }}</th>
           <th v-if="showTiming">择时</th>
-          <th class="num">步长前比例</th>
-          <th class="num">实际比例</th>
+          <th class="num" :title="drift ? '上一根写入状态的分配系数' : undefined">{{ drift ? "漂移前系数" : "步长前比例" }}</th>
+          <th v-if="hasDrifted" class="num" title="漂移之后、侧内再平衡与组合约束之前">漂移后系数</th>
+          <th class="num" :title="drift ? '再平衡与组合约束之后，下一根从它漂移' : undefined">
+            {{ drift ? "分配系数" : "实际比例" }}
+          </th>
+          <th v-if="hasComposed" class="num" title="组合约束或条件转移之后，实际用于合成">合成比例</th>
           <th v-if="hasRank" class="num">综合名次分</th>
           <th class="num">总敞口</th>
           <th class="num">净敞口</th>
@@ -37,7 +41,9 @@
             <td class="num">{{ pct(member.base) }}</td>
             <td v-if="showTiming">{{ member.timing === null ? "-" : member.timing === 1 ? "持有" : "空仓" }}</td>
             <td class="num">{{ pct(member.ratioBefore) }}</td>
+            <td v-if="hasDrifted" class="num">{{ pct(member.drifted) }}</td>
             <td class="num strong">{{ pct(member.ratio) }}</td>
+            <td v-if="hasComposed" class="num">{{ member.composed === null ? "-" : pct(member.composed) }}</td>
             <td v-if="hasRank" class="num">{{ member.rank === null ? "-" : String(Number(member.rank.toFixed(4))) }}</td>
             <td class="num">{{ pct(member.gross) }}</td>
             <td class="num">{{ pct(member.net) }}</td>
@@ -79,6 +85,12 @@
         </template>
       </tbody>
     </table>
+    <dl v-if="notes.length" class="pool-notes" aria-label="策略池当期的分配说明">
+      <template v-for="(note, index) in notes" :key="index">
+        <dt>{{ note.label }}</dt>
+        <dd>{{ note.text }}</dd>
+      </template>
+    </dl>
   </div>
 </template>
 
@@ -86,7 +98,7 @@
 import { computed, ref } from "vue";
 import { marketLabel } from "@/views/strategy/market-mode";
 import { percent, skipReasonLabel } from "@/views/strategy/model";
-import { memberColor, type PoolPeriod } from "@/views/strategy/pool-model";
+import { memberColor, poolPeriodNotes, type PoolPeriod } from "@/views/strategy/pool-model";
 
 // 某一期的策略池成员明细：每个成员一行，行可以展开看它对各（标的|市场）的贡献权重。
 const props = defineProps<{
@@ -98,8 +110,14 @@ const props = defineProps<{
 
 const expanded = ref<Set<string>>(new Set());
 const hasRank = computed(() => props.period.members.some(member => member.rank !== null));
-// 成员、状态、净值、基础比例、步长前、实际、总敞口、净敞口、操作，再加可选的择时与名次分。
-const columnCount = computed(() => 9 + (props.showTiming ? 1 : 0) + (hasRank.value ? 1 : 0));
+const drift = computed(() => props.period.method === "drift");
+const hasDrifted = computed(() => props.period.members.some(member => member.drifted !== null));
+const hasComposed = computed(() => props.period.members.some(member => member.composed !== null));
+const notes = computed(() => poolPeriodNotes(props.period));
+// 成员、状态、净值、基础比例、步长前、实际、总敞口、净敞口、操作，再加可选的择时、漂移后、合成与名次分。
+const columnCount = computed(
+  () => 9 + [props.showTiming, hasDrifted.value, hasComposed.value, hasRank.value].filter(Boolean).length
+);
 
 function colorOf(id: string): string {
   return memberColor(Math.max(0, props.ids.indexOf(id)));
@@ -199,6 +217,19 @@ function toggle(id: string) {
 }
 .long {
   color: rgb(var(--green-6));
+}
+.pool-notes {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 12px;
+  margin: 10px 0 0;
+  font-size: 12px;
+}
+.pool-notes dt {
+  color: var(--color-text-3);
+}
+.pool-notes dd {
+  margin: 0;
 }
 .short {
   color: rgb(var(--red-6));

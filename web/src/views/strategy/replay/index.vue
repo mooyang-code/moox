@@ -125,9 +125,9 @@
               {{ formatInstant(metrics.bankrupt_at, displayZone) }}
               的这一期权益不为正，持仓已全部平掉，此后各期空仓、权益保持不变；之后的曲线不代表策略还能继续运行。</a-alert
             >
-            <a-alert v-if="replayUsesSwap(selected) && selected?.funding_column" type="warning" class="top-alert"
+            <a-alert v-if="replayUsesSwap(selected) && replayFunding(selected)" type="warning" class="top-alert"
               >模拟曲线按
-              {{ selected.funding_column }}
+              {{ replayFunding(selected) }}
               列计资金费、未计强平：永续按收盘价逐期结算盈亏，成交按收盘价、每期都调到目标，不模拟实盘的调仓阈值、最小下单额与拆单；它只用于比较策略，不代表实盘收益。</a-alert
             >
             <a-alert v-else-if="replayUsesSwap(selected)" type="warning" class="top-alert"
@@ -159,6 +159,7 @@
                 <pre class="dsl">{{ selected.dsl_yaml }}</pre>
               </a-collapse-item>
             </a-collapse>
+            <PoolDetail v-if="poolPeriods.length" class="pool-detail" :periods="poolPeriods" source="周期表当前页" />
             <a-alert v-if="errors.table" type="error" show-icon class="top-alert"
               >{{ errors.table }}<template #action><a-button size="small" @click="retryTable">重试</a-button></template></a-alert
             >
@@ -313,6 +314,7 @@ import {
 } from "@/views/strategy/replay/replay-form-model";
 import { buildReplayQuery, parseReplayQuery, type ReplayQueryState } from "@/views/strategy/replay/replay-query";
 import ReplayRecordList from "@/views/strategy/replay/replay-record-list.vue";
+import PoolDetail from "@/views/strategy/components/strategy-pool-detail.vue";
 import { formatInstant, msToWallClock, zoneSuffix } from "@/utils/time-zone";
 import { useDisplayZone } from "@/hooks/useDisplayZone";
 import { usePolling } from "@/hooks/usePolling";
@@ -325,6 +327,8 @@ import {
   recentRange,
   replayFeeText,
   replayFormFromReplay,
+  replayFunding,
+  replayPoolPeriods,
   replayRangeLabel,
   replaySourceLabel,
   replayStatusColor,
@@ -358,6 +362,8 @@ const tasks = ref<FactorTask[]>([]);
 // series 是 brief 周期记录（只有曲线与摘要字段），tableRows 是表格当前页的完整记录。
 const series = ref<ReplayBar[]>([]);
 const tableRows = ref<ReplayBar[]>([]);
+// 策略池回放：表格当前页每期的池明细（成员净值、分配系数、约束与转移），不是池回放时为空。
+const poolPeriods = computed(() => replayPoolPeriods(tableRows.value, selected.value?.replay_id ?? ""));
 const tableTotal = ref(0);
 const tablePage = ref(1);
 const tableLoading = ref(false);
@@ -1104,6 +1110,9 @@ onBeforeUnmount(() => {
   width: 100%;
 }
 .limits {
+  margin-bottom: 12px;
+}
+.pool-detail {
   margin-bottom: 12px;
 }
 .limits ul {

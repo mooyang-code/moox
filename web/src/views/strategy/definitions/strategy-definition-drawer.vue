@@ -29,11 +29,7 @@
           <a-button @click="emit('edit', definition.strategy_id)">编辑定义</a-button>
           <a-button @click="emit('instances', definition.strategy_id)">查看当前空间实例</a-button>
           <a-button type="primary" status="success" @click="emit('createInstance', definition.strategy_id)">创建实例</a-button>
-          <a-tooltip :content="POOL_REPLAY_DISABLED_TEXT" :disabled="!isPoolStrategy(definition.dsl_yaml)">
-            <a-button :disabled="isPoolStrategy(definition.dsl_yaml)" @click="emit('replay', definition.strategy_id)"
-              >发起回放</a-button
-            >
-          </a-tooltip>
+          <a-button @click="emit('replay', definition.strategy_id)">发起回放</a-button>
         </a-space>
         <div class="section-title">DSL</div>
         <CodeBlock :code="definition.dsl_yaml" language="yaml" />
@@ -50,7 +46,7 @@ import type { Strategy } from "@/api/strategy-types";
 import CodeBlock from "@/components/code-block/index.vue";
 import { useSpaceStore } from "@/store/modules/space";
 import { RequestGate } from "@/utils/request-gate";
-import { POOL_REPLAY_DISABLED_TEXT, isPoolStrategy, summarizeDSL } from "@/views/strategy/dsl";
+import { summarizeDSL } from "@/views/strategy/dsl";
 import { shortHash } from "@/views/strategy/model";
 import { formatInstant } from "@/utils/time-zone";
 import { useDisplayZone } from "@/hooks/useDisplayZone";

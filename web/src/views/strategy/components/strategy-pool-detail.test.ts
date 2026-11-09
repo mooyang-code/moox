@@ -199,6 +199,64 @@ describe("策略池详情", () => {
   });
 });
 
+describe("策略池详情里的漂移与组合约束", () => {
+  const driftPool = {
+    drift: {
+      phase: "drift",
+      sides: [{ side: "long", rebalance: "periodic", trigger: "periodic", moved: true }],
+      freeze: { change: 0.02, frozen: false }
+    },
+    adjustments: [
+      { kind: "gross", side: "all", factor: 0.8, long_before: 1, short_before: 0.5, long_after: 0.8, short_after: 0.4 }
+    ],
+    switch: { index: 0, empty: "probe", from: "trend_b", to: ["trend_a"], moved: "0.1" }
+  };
+  const members = [
+    member("trend_a", { base: "0.6", ratio_before: "0.6", drifted: "0.62", ratio: "0.6", composed: "0.7" }),
+    member("trend_b", { base: "0.4", ratio_before: "0.4", drifted: "0.38", ratio: "0.4", composed: "0.3" })
+  ];
+  const driftResults = [
+    poolResult("d1", "2026-11-01T01:00:00Z", [], {
+      summary_json: JSON.stringify({
+        pool: { method: "drift", members, ...driftPool },
+        limits: [{ instrument_id: "BTC-USDT", side: "long", excess: "0.05", round: 1, to: "trend_a" }]
+      })
+    })
+  ];
+
+  it("drift 的列名按分配系数写，并给出漂移后系数、合成比例与当期分配说明", () => {
+    const wrapper = mount(PoolDetail, {
+      props: { periods: buildPoolPeriods(driftResults), source: "周期表当前页" },
+      global: { stubs }
+    });
+    expect(wrapper.text()).toContain("漂移分配");
+    expect(wrapper.text()).toContain("每期分配系数");
+    expect(wrapper.text()).toContain("只覆盖当前已加载的周期表当前页");
+    const headers = wrapper.findAll(".pool-table > thead th").map(item => item.text());
+    expect(headers).toEqual(expect.arrayContaining(["目标比例", "漂移前系数", "漂移后系数", "分配系数", "合成比例"]));
+    expect(headers).not.toContain("步长前比例");
+    const row = wrapper.findAll(".member-row")[0].text();
+    expect(row).toContain("62.00%");
+    expect(row).toContain("70.00%");
+    const notes = wrapper.find(".pool-notes").text();
+    expect(notes).toContain("照常漂移");
+    expect(notes).toContain("定期再平衡，本根触发（定期），已移动侧内构成");
+    expect(notes).toContain("窗口涨跌 2.00%");
+    expect(notes).toContain("整体 ×0.8");
+    expect(notes).toContain("probe 为空：trend_b 的 10.00% 转给 trend_a");
+    expect(notes).toContain("BTC-USDT 多头超出 5.00%（第 1 轮）→ trend_a");
+  });
+
+  it("fixed、rotation 没写约束时不出漂移列、合成列与分配说明", () => {
+    const wrapper = mountDetail();
+    const headers = wrapper.findAll(".pool-table > thead th").map(item => item.text());
+    expect(headers).toEqual(expect.arrayContaining(["基础比例", "步长前比例", "实际比例"]));
+    expect(headers).not.toContain("漂移后系数");
+    expect(headers).not.toContain("合成比例");
+    expect(wrapper.find(".pool-notes").exists()).toBe(false);
+  });
+});
+
 describe("实例结果面板里的策略池", () => {
   const props = {
     instance: { instance_id: "i", enabled: true, session_id: "s", health: "ok" },

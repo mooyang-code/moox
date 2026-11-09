@@ -1,5 +1,7 @@
+import { parseDocument } from "yaml";
 import type { Replay, ReplayBar } from "@/api/strategy-types";
 import { positionLabel, tasksText } from "@/views/strategy/market-mode";
+import { parsePoolSummary, type PoolPeriod } from "@/views/strategy/pool-model";
 import { formatInstant, msToWallClock, toInstantMs } from "@/utils/time-zone";
 
 export interface ReplayMetrics {
@@ -134,6 +136,17 @@ export function replayUsesSwap(replay: Pick<Replay, "tasks"> | null | undefined)
   return Boolean(replay?.tasks?.swap || replay?.tasks?.multi);
 }
 
+/** 回放计资金费用的列：单策略回放写在回放任务上，策略池回放取池 DSL 的 strategy_pool.fees.funding_column；不计时为空串。 */
+export function replayFunding(replay: Pick<Replay, "funding_column" | "dsl_yaml">): string {
+  if (replay.funding_column) return replay.funding_column;
+  try {
+    const value = parseDocument(replay.dsl_yaml ?? "").toJS()?.strategy_pool?.fees?.funding_column;
+    return typeof value === "string" ? value : "";
+  } catch {
+    return "";
+  }
+}
+
 /** 回放的手续费说明：现货类一个费率，用到永续时再写永续的。 */
 export function replayFeeText(replay: Pick<Replay, "tasks" | "spot_fee_bps" | "swap_fee_bps">): string {
   return replayUsesSwap(replay)
@@ -205,6 +218,25 @@ export function parseBarDetail(bar: ReplayBar): ReplayBarDetail {
     buyScale: ledger.buy_scale === undefined || ledger.buy_scale === null ? null : Number(ledger.buy_scale),
     notes: list(summary.decision?.notes)
   };
+}
+
+/**
+ * 策略池回放每期的池明细（按时间从旧到新）：回放一期的 summary_json 里，池明细与超限转移在 decision 下（实例结果里在顶层）。
+ * 不是策略池回放、或记录是 brief 的期没有池明细，返回空列表。
+ */
+export function replayPoolPeriods(bars: ReplayBar[], replayId: string): PoolPeriod[] {
+  const periods: PoolPeriod[] = [];
+  for (const bar of bars) {
+    const decision = parseObject(bar.summary_json).decision;
+    const period = parsePoolSummary(decision, {
+      result_id: bar.bar_end_time,
+      session_id: replayId,
+      bar_end_time: bar.bar_end_time,
+      status: bar.status
+    });
+    if (period) periods.push(period);
+  }
+  return periods.sort((a, b) => a.timeMs - b.timeMs);
 }
 
 /** 权益曲线的文字摘要，供屏幕阅读器等无法查看图形的场景使用。 */

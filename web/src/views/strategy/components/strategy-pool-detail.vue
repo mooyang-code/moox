@@ -5,8 +5,10 @@
       <span class="muted">{{ headText }}</span>
     </header>
     <p class="pool-note">
-      成员净值是按收盘价成交的模拟账本曲线（含手续费，未计资金费与强平），只用来分配资金，不代表实盘收益。图表只覆盖当前已加载的结果页（共
-      {{ periods.length }} 期，{{ rangeText }}）；横轴按期排列，不按时间等距，不同会话之间的曲线不连接。
+      成员净值是按收盘价成交的模拟账本曲线（含手续费，不计强平；池写了 fees.funding_column
+      才计资金费），只用来分配资金，不代表实盘收益。图表只覆盖当前已加载的{{ source }}（共 {{ periods.length }} 期，{{
+        rangeText
+      }}）；横轴按期排列，不按时间等距，不同会话之间的曲线不连接。
     </p>
 
     <ul class="legend" aria-label="成员图例">
@@ -41,7 +43,10 @@
     </div>
 
     <div class="chart-block">
-      <div class="chart-title">每期分配比例<span class="muted">步长限制之后，按成员堆叠</span></div>
+      <div class="chart-title">
+        {{ allDrift ? "每期分配系数" : "每期分配比例"
+        }}<span class="muted">{{ allDrift ? "再平衡与组合约束之后" : "步长限制之后" }}，按成员堆叠</span>
+      </div>
       <div class="chart-body">
         <div class="axis">
           <span>{{ percent(ratioMax, 0) }}</span>
@@ -127,8 +132,8 @@ import { useDisplayZone } from "@/hooks/useDisplayZone";
 const displayZone = useDisplayZone();
 
 // 策略池详情：成员净值曲线、每期分配比例、择时状态，以及可选期的成员明细。只读取已加载的结果，不请求新数据。
-// 调用方保证 periods 非空且按时间从旧到新（buildPoolPeriods 的输出）。
-const props = defineProps<{ periods: PoolPeriod[] }>();
+// 调用方保证 periods 非空且按时间从旧到新（buildPoolPeriods 的输出）；source 说明期来自哪里（实例结果页或回放周期页）。
+const props = withDefaults(defineProps<{ periods: PoolPeriod[]; source?: string }>(), { source: "结果页" });
 
 const W = 600;
 const H = 120;
@@ -142,6 +147,7 @@ const selected = computed(
 );
 const selectedIndex = computed(() => props.periods.findIndex(item => item.resultId === selected.value.resultId));
 const showTiming = computed(() => props.periods.some(period => period.timing));
+const allDrift = computed(() => props.periods.every(period => period.method === "drift"));
 const bankrupt = computed(() => bankruptMemberIds(props.periods));
 const breaks = computed(() => sessionBreaks(props.periods));
 const equity = computed(() => equitySeries(props.periods, ids.value));
@@ -152,7 +158,8 @@ const range = computed(() => equityRange(equity.value));
 
 const methodText = computed(() => {
   const methods = new Set(props.periods.map(period => period.method).filter(Boolean));
-  return [...methods].map(method => (method === "rotation" ? "轮动" : method === "fixed" ? "固定比例" : method)).join("、");
+  const labels: Record<string, string> = { rotation: "轮动", fixed: "固定比例", drift: "漂移分配" };
+  return [...methods].map(method => labels[method] ?? method).join("、");
 });
 const headText = computed(() =>
   [`${ids.value.length} 个成员`, methodText.value, showTiming.value ? "叠加择时" : ""].filter(Boolean).join(" · ")

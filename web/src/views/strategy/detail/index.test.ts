@@ -109,13 +109,13 @@ describe("strategy detail page result paging", () => {
     expect(ctx.store.loadResultPage).toHaveBeenLastCalledWith(1, 20, false);
   });
 
-  it("策略池实例禁用回放并说明原因（后端研究回放不支持策略池）", async () => {
+  it("策略池实例也可以回放（研究回放支持策略池）", async () => {
     ctx.store.strategy = { strategy_id: "s", name: "池", dsl_yaml: "strategy_pool:\n  members: []\n" };
     const wrapper = mount(DetailPage, { global: { stubs } });
     await flushPromises();
     const replay = wrapper.findAll("button").find(item => item.text() === "回放")!;
-    expect(replay.attributes("disabled")).toBeDefined();
-    expect(wrapper.text()).toContain("策略池暂不支持回放");
+    expect(replay.attributes("disabled")).toBeUndefined();
+    expect(wrapper.text()).not.toContain("暂不支持回放");
   });
 
   it("普通策略可以回放", async () => {

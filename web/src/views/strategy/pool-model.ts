@@ -56,13 +56,84 @@ export interface PoolMemberDetail {
   /** 择时：1 持有，0 空仓；没有择时时为 null。 */
   timing: 0 | 1 | null;
   ratioBefore: number | null;
-  /** 步长限制之后、实际用于合成的比例；缺失按 0 计。 */
+  /** 步长限制之后的比例；drift 下是再平衡与组合约束之后、写入状态的分配系数。缺失按 0 计。 */
   ratio: number;
+  /** drift：漂移之后、再平衡与组合约束之前的系数；其他分配方式为 null。 */
+  drifted: number | null;
+  /** 实际用于合成的比例：组合约束或条件转移让它与 ratio 不同时才有，否则为 null。 */
+  composed: number | null;
   rank: number | null;
   gross: number | null;
   net: number | null;
   /** 按贡献权重绝对值从大到小排列。 */
   targets: PoolTarget[];
+}
+
+/** drift 一侧本期的侧内再平衡。 */
+export interface PoolSideDetail {
+  side: string;
+  rebalance: string;
+  /** 本根新触发的原因（every_bar、periodic、threshold），没有触发为空串。 */
+  trigger: string;
+  /** threshold 用的最大偏离；没有给出时为 null。 */
+  deviation: number | null;
+  moved: boolean;
+  /** 本根之后还剩的分步根数，0 表示没有在分步。 */
+  remaining: number;
+  /** 这次分步由什么触发。 */
+  reason: string;
+  /** 冻结期间分步暂停。 */
+  paused: boolean;
+}
+
+/** drift 的波动冻结状态。 */
+export interface PoolFreezeDetail {
+  /** 被观察成员的组合净值在窗口内的涨跌幅；历史不足时为 null。 */
+  change: number | null;
+  triggered: boolean;
+  frozen: boolean;
+  /** 冻结截止（不含）的 bar 序号；没有冻结时为 null。 */
+  until: number | null;
+}
+
+/** drift 分配本期的明细：阶段（pending 还没到起点、start 起点那一根、drift 照常漂移）、两侧的再平衡与冻结。 */
+export interface PoolDriftDetail {
+  phase: string;
+  sides: PoolSideDetail[];
+  freeze: PoolFreezeDetail | null;
+}
+
+/** 一次净敞口区间（exposure）或总杠杆区间（gross）修正。 */
+export interface PoolAdjustmentDetail {
+  kind: string;
+  /** exposure 的段号（从 1 数）；gross 为 null。 */
+  band: number | null;
+  /** 被缩放的一侧：long、short，gross 整体缩放时为 all。 */
+  side: string;
+  factor: number | null;
+  longBefore: number | null;
+  shortBefore: number | null;
+  longAfter: number | null;
+  shortAfter: number | null;
+  note: string;
+}
+
+/** 本期生效的条件转移：empty 成员为空时，from 的比例 moved 转给了 to。 */
+export interface PoolSwitchDetail {
+  index: number;
+  empty: string;
+  from: string;
+  to: string[];
+  moved: number | null;
+}
+
+/** 一次单标的超限截断（portfolio.limits）：超出量与去向（成员 id，空串表示留现金）。 */
+export interface PoolLimitDetail {
+  instrumentId: string;
+  side: string;
+  excess: number | null;
+  round: number;
+  to: string;
 }
 
 export interface PoolPeriod {
@@ -77,6 +148,14 @@ export interface PoolPeriod {
   /** 本期叠加了择时。 */
   timing: boolean;
   members: PoolMemberDetail[];
+  /** drift 的明细；其他分配方式为 null。 */
+  drift: PoolDriftDetail | null;
+  /** 净敞口与总杠杆区间的修正，按执行顺序。 */
+  adjustments: PoolAdjustmentDetail[];
+  /** 本期生效的条件转移；没有为 null。 */
+  switch: PoolSwitchDetail | null;
+  /** 本期的单标的超限截断（来自摘要顶层的 limits）。 */
+  limits: PoolLimitDetail[];
 }
 
 function splitTargetKey(key: string): { instrumentId: string; market: string } {
@@ -106,6 +185,8 @@ function parseMember(raw: any): PoolMemberDetail | null {
     timing,
     ratioBefore: poolNumber(raw.ratio_before),
     ratio: poolNumber(raw.ratio) ?? 0,
+    drifted: poolNumber(raw.drifted),
+    composed: poolNumber(raw.composed),
     rank: poolNumber(raw.rank),
     gross: poolNumber(raw.gross),
     net: poolNumber(raw.net),
@@ -113,10 +194,76 @@ function parseMember(raw: any): PoolMemberDetail | null {
   };
 }
 
+const text = (value: unknown) => (typeof value === "string" ? value : "");
+const list = (value: unknown): any[] => (Array.isArray(value) ? value.filter(item => item && typeof item === "object") : []);
+const integer = (value: unknown) => (typeof value === "number" && Number.isInteger(value) ? value : null);
+
+function parseDrift(raw: any): PoolDriftDetail | null {
+  if (!raw || typeof raw !== "object" || typeof raw.phase !== "string") return null;
+  const freeze = raw.freeze && typeof raw.freeze === "object" ? raw.freeze : null;
+  return {
+    phase: raw.phase,
+    sides: list(raw.sides).map(side => ({
+      side: text(side.side),
+      rebalance: text(side.rebalance),
+      trigger: text(side.trigger),
+      deviation: poolNumber(side.deviation),
+      moved: side.moved === true,
+      remaining: integer(side.remaining) ?? 0,
+      reason: text(side.reason),
+      paused: side.paused === true
+    })),
+    freeze: freeze
+      ? {
+          change: poolNumber(freeze.change),
+          triggered: freeze.triggered === true,
+          frozen: freeze.frozen === true,
+          until: integer(freeze.until)
+        }
+      : null
+  };
+}
+
+function parseAdjustment(raw: any): PoolAdjustmentDetail {
+  return {
+    kind: text(raw.kind),
+    band: integer(raw.band),
+    side: text(raw.side),
+    factor: poolNumber(raw.factor),
+    longBefore: poolNumber(raw.long_before),
+    shortBefore: poolNumber(raw.short_before),
+    longAfter: poolNumber(raw.long_after),
+    shortAfter: poolNumber(raw.short_after),
+    note: text(raw.note)
+  };
+}
+
+function parseSwitch(raw: any): PoolSwitchDetail | null {
+  if (!raw || typeof raw !== "object" || typeof raw.from !== "string") return null;
+  return {
+    index: integer(raw.index) ?? 0,
+    empty: text(raw.empty),
+    from: raw.from,
+    to: Array.isArray(raw.to) ? raw.to.map(String) : [],
+    moved: poolNumber(raw.moved)
+  };
+}
+
+function parseLimit(raw: any): PoolLimitDetail {
+  return {
+    instrumentId: text(raw.instrument_id),
+    side: text(raw.side),
+    excess: poolNumber(raw.excess),
+    round: integer(raw.round) ?? 0,
+    to: text(raw.to)
+  };
+}
+
+/** 一期的身份：结果 id、会话、K 线结束时间与这一期本身的状态。 */
+export type PoolPeriodSource = Pick<StrategyResult, "result_id" | "session_id" | "bar_end_time" | "status">;
+
 /** 解析一期结果里的策略池明细；没有 pool、JSON 损坏、时间无效或没有任何成员时返回 null。同一期内重复的成员 id 只取第一个。 */
-export function parsePoolPeriod(
-  result: Pick<StrategyResult, "result_id" | "session_id" | "bar_end_time" | "status" | "summary_json">
-): PoolPeriod | null {
+export function parsePoolPeriod(result: PoolPeriodSource & Pick<StrategyResult, "summary_json">): PoolPeriod | null {
   if (!result.summary_json) return null;
   let summary: any;
   try {
@@ -124,9 +271,17 @@ export function parsePoolPeriod(
   } catch {
     return null;
   }
+  return parsePoolSummary(summary, result);
+}
+
+/**
+ * 从已解析的摘要对象（实例结果的 summary_json，或回放一期 summary_json 里的 decision）取出池明细：pool 段与顶层的 limits。
+ * 没有 pool、时间无效或没有任何成员时返回 null。
+ */
+export function parsePoolSummary(summary: any, source: PoolPeriodSource): PoolPeriod | null {
   const pool = summary?.pool;
   if (!pool || typeof pool !== "object" || !Array.isArray(pool.members)) return null;
-  const timeMs = Date.parse(result.bar_end_time);
+  const timeMs = Date.parse(source.bar_end_time);
   if (!Number.isFinite(timeMs)) return null;
   const seen = new Set<string>();
   const members: PoolMemberDetail[] = [];
@@ -138,14 +293,18 @@ export function parsePoolPeriod(
   }
   if (!members.length) return null;
   return {
-    resultId: result.result_id,
-    sessionId: result.session_id,
-    time: result.bar_end_time,
+    resultId: source.result_id,
+    sessionId: source.session_id,
+    time: source.bar_end_time,
     timeMs,
-    resultStatus: result.status,
+    resultStatus: source.status,
     method: typeof pool.method === "string" ? pool.method : "",
     timing: pool.timing === true,
-    members
+    members,
+    drift: parseDrift(pool.drift),
+    adjustments: list(pool.adjustments).map(parseAdjustment),
+    switch: parseSwitch(pool.switch),
+    limits: list(summary.limits).map(parseLimit)
   };
 }
 
@@ -266,4 +425,73 @@ export function equityRange(all: MemberSeries<number>[]): { min: number; max: nu
   const high = Math.max(1, ...values);
   const pad = high > low ? (high - low) * 0.05 : 0.05;
   return { min: low - pad, max: high + pad };
+}
+
+const pct = (value: number | null) => (value === null ? "-" : `${(value * 100).toFixed(2)}%`);
+const SIDE_LABELS: Record<string, string> = { long: "多头", short: "空头", all: "整体" };
+const PHASE_LABELS: Record<string, string> = {
+  pending: "还没到漂移起点，按起始比例合成",
+  start: "漂移起点，系数置为起始比例",
+  drift: "照常漂移"
+};
+const REBALANCE_LABELS: Record<string, string> = {
+  none: "不再平衡",
+  every_bar: "每根再平衡",
+  periodic: "定期再平衡",
+  threshold: "偏离超限再平衡",
+  both: "定期与偏离超限再平衡"
+};
+const TRIGGER_LABELS: Record<string, string> = { every_bar: "每根", periodic: "定期", threshold: "偏离超限" };
+
+/** 池明细里一条带标签的说明（当期明细表下方逐条显示）。 */
+export interface PoolNote {
+  label: string;
+  text: string;
+}
+
+function sideNote(side: PoolSideDetail): string {
+  const parts = [REBALANCE_LABELS[side.rebalance] ?? side.rebalance];
+  if (side.trigger) parts.push(`本根触发（${TRIGGER_LABELS[side.trigger] ?? side.trigger}）`);
+  if (side.deviation !== null) parts.push(`最大偏离 ${pct(side.deviation)}`);
+  if (side.moved) parts.push("已移动侧内构成");
+  if (side.remaining > 0) parts.push(`分步还剩 ${side.remaining} 根（${TRIGGER_LABELS[side.reason] ?? side.reason}）`);
+  if (side.paused) parts.push("冻结中，分步暂停");
+  return parts.join("，");
+}
+
+/** 一期的分配说明：drift 的阶段、两侧再平衡与冻结，净敞口、总杠杆修正，条件转移与超限转移；都没有时为空列表。 */
+export function poolPeriodNotes(period: PoolPeriod): PoolNote[] {
+  const notes: PoolNote[] = [];
+  if (period.drift) {
+    notes.push({ label: "漂移", text: PHASE_LABELS[period.drift.phase] ?? period.drift.phase });
+    for (const side of period.drift.sides)
+      notes.push({ label: `${SIDE_LABELS[side.side] ?? side.side}侧`, text: sideNote(side) });
+    const freeze = period.drift.freeze;
+    if (freeze) {
+      const parts = [freeze.change === null ? "窗口历史不足" : `窗口涨跌 ${pct(freeze.change)}`];
+      if (freeze.triggered) parts.push("本根触发");
+      if (freeze.frozen) parts.push(freeze.until === null ? "冻结中" : `冻结中（到第 ${freeze.until} 根前）`);
+      notes.push({ label: "波动冻结", text: parts.join("，") });
+    }
+  }
+  for (const item of period.adjustments) {
+    const label = item.kind === "exposure" ? `净敞口第 ${item.band ?? "?"} 段` : item.kind === "gross" ? "总杠杆" : item.kind;
+    const factor = item.factor === null ? "" : ` ×${Number(item.factor.toFixed(6))}`;
+    const text = `${SIDE_LABELS[item.side] ?? item.side}${factor}（多头 ${pct(item.longBefore)} → ${pct(item.longAfter)}，空头 ${pct(item.shortBefore)} → ${pct(item.shortAfter)}）`;
+    notes.push({ label, text: item.note ? `${text}；${item.note}` : text });
+  }
+  if (period.switch) {
+    const item = period.switch;
+    notes.push({
+      label: "条件转移",
+      text: `${item.empty} 为空：${item.from} 的 ${pct(item.moved)} 转给 ${item.to.join("、") || "-"}`
+    });
+  }
+  for (const item of period.limits) {
+    notes.push({
+      label: "超限转移",
+      text: `${item.instrumentId} ${SIDE_LABELS[item.side] ?? item.side}超出 ${pct(item.excess)}（第 ${item.round} 轮）→ ${item.to || "留现金"}`
+    });
+  }
+  return notes;
 }

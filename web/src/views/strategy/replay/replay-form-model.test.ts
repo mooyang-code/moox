@@ -4,8 +4,11 @@ import {
   type ReplayFormState,
   replayDateOnly,
   replayFactorTasks,
+  replayDeclared,
+  replayDriftHint,
   replayFundingColumn,
   replayMarkets,
+  replayPool,
   replaySourceOf,
   validateReplayForm,
   wholeDays
@@ -126,5 +129,62 @@ describe("replay form model", () => {
     // 已经是整天的不变
     const aligned: [number, number] = [Date.parse("2026-10-08T00:00:00Z"), Date.parse("2026-11-08T00:00:00Z")];
     expect(wholeDays(aligned, "UTC")).toEqual(aligned);
+  });
+});
+
+describe("策略池回放表单", () => {
+  const members = [
+    { strategy_id: "m_spot", dsl_yaml: "name: a\nbar: 1h\nmarket: {select: spot}\n" },
+    { strategy_id: "m_swap", dsl_yaml: "name: b\nbar: 1h\nmarket: {select: swap}\n" },
+    { strategy_id: "m_stock", dsl_yaml: "name: c\nbar: 1d\n" }
+  ] as Strategy[];
+  const pool = (list: string, allocation = "  allocation: {method: fixed, ratios: {a: 0.5, b: 0.5}}\n") =>
+    ({ strategy_id: "p", dsl_yaml: `name: p\nbar: 1h\nstrategy_pool:\n  members:\n${list}${allocation}` }) as Strategy;
+  const both = pool("    - {id: a, strategy: m_spot}\n    - {id: b, strategy: m_swap}\n");
+  const form = (strategy: Strategy, extra: Partial<ReplayFormState> = {}): ReplayFormState => ({
+    ...base,
+    strategy_id: strategy.strategy_id,
+    tasks: { spot: "ftask_spot", swap: "ftask_swap" },
+    ...extra
+  });
+
+  it("策略池读成员所需市场的并集，不用先选任务所属的市场", () => {
+    const catalog = [...members, both];
+    expect(replayPool(form(both), catalog)).toEqual({ markets: ["spot", "swap"], problems: [] });
+    expect(replayDeclared(form(both), catalog)).toBe(true);
+    expect(replayMarkets(form(both), catalog)).toEqual(["spot", "swap"]);
+    expect(replayFactorTasks(form(both), catalog)).toEqual({ spot: "ftask_spot", swap: "ftask_swap" });
+    expect(validateReplayForm(form(both), catalog)).toBe("");
+    // 普通策略不受影响
+    expect(replayPool(base, strategies)).toBeNull();
+    expect(replayDeclared({ ...base, strategy_id: "s3" }, strategies)).toBe(false);
+  });
+
+  it("成员不存在或股票与加密成员混用时不能发起", () => {
+    const ghost = pool("    - {id: a, strategy: m_spot}\n    - {id: b, strategy: ghost}\n");
+    expect(validateReplayForm(form(ghost), [...members, ghost])).toContain("成员 b 引用的策略 ghost 不存在");
+    const mixed = pool("    - {id: a, strategy: m_spot}\n    - {id: b, strategy: m_stock}\n");
+    expect(validateReplayForm(form(mixed), [...members, mixed])).toContain("策略池的成员还不能回放");
+  });
+
+  it("策略池的资金费写在池 DSL 里，表单里的资金费列不提交", () => {
+    const catalog = [...members, both];
+    expect(replayFundingColumn(form(both, { funding_column: "funding_rate" }), catalog)).toBe("");
+    expect(validateReplayForm(form(both, { funding_column: "funding-rate" }), catalog)).toBe("");
+  });
+
+  it("drift 池的区间旁说明起点规则；不是 drift 时没有说明", () => {
+    const list = "    - {id: a, strategy: m_spot}\n    - {id: b, strategy: m_swap}\n";
+    const started = pool(
+      list,
+      '  allocation:\n    method: drift\n    ratios: {a: 0.5, b: 0.5}\n    start: "2026-09-01T05:00:00Z"\n'
+    );
+    const free = pool(list, "  allocation:\n    method: drift\n    ratios: {a: 0.5, b: 0.5}\n");
+    expect(replayDriftHint(form(started), [...members, started])).toBe(
+      "drift 池：起点必须选漂移起点 2026-09-01T05:00:00Z，结果才与实时可比。"
+    );
+    expect(replayDriftHint(form(free), [...members, free])).toBe("drift 池：漂移从区间的第一根开始。");
+    expect(replayDriftHint(form(both), [...members, both])).toBe("");
+    expect(replayDriftHint({ ...form(started), instance_id: "i1" }, [...members, started])).toBe("");
   });
 });
