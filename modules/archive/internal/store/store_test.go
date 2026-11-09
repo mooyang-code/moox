@@ -276,6 +276,53 @@ func TestClaimRunsOrdersByScheduleAndHonorsSlotsAndDataNodeLimits(t *testing.T) 
 	}
 }
 
+// 导入不读 Storage：DataNode 名额已满时照样领取，也不占名额。
+func TestClaimRunsLetsImportBypassDataNodeLimit(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	for _, name := range []string{"busy", "imp", "after"} {
+		tk := task("crypto", name)
+		tk.DataNodeID = "node-0"
+		if _, err := s.CreateTask(ctx, tk); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.CreateRun(ctx, "crypto", "busy", RunSpec{Kind: KindManual}, t0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateRun(ctx, "crypto", "imp", RunSpec{Kind: KindImport, ImportFile: "imp_0123456789abcdef01234567/import.csv"}, t0.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	// node-0 已被 worker 占满（上限 1）：manual 领不到，import 照样领取。
+	claimed, err := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w1", FreeSlots: 3, MaxPerDataNode: 1, BusyByDataNode: map[string]int{"node-0": 1}, Now: t0, LeaseTTL: time.Minute})
+	if err != nil || len(claimed) != 1 || claimed[0].Run.Kind != KindImport {
+		t.Fatalf("claimed = %+v err=%v", claimed, err)
+	}
+}
+
+// 同一次领取里，排在前面的 import 不计入 DataNode 占用：上限 1 时后面的普通运行仍能领到。
+func TestClaimRunsImportDoesNotConsumeDataNodeSlotWithinOneClaim(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	for _, name := range []string{"imp", "plain"} {
+		tk := task("crypto", name)
+		tk.DataNodeID = "node-0"
+		if _, err := s.CreateTask(ctx, tk); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.CreateRun(ctx, "crypto", "imp", RunSpec{Kind: KindImport, ImportFile: "imp_0123456789abcdef01234567/import.csv"}, t0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateRun(ctx, "crypto", "plain", RunSpec{Kind: KindManual}, t0.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w1", FreeSlots: 3, MaxPerDataNode: 1, Now: t0, LeaseTTL: time.Minute})
+	if err != nil || len(claimed) != 2 || claimed[0].Run.Kind != KindImport || claimed[1].Task.DatasetID != "plain" {
+		t.Fatalf("claimed = %+v err=%v", claimed, err)
+	}
+}
+
 func finishedPartition(key string, status string) Partition {
 	start := time.Date(2026, 10, 16, 0, 0, 0, 0, time.UTC)
 	p := Partition{

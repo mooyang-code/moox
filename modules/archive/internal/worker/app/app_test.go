@@ -365,6 +365,31 @@ func TestHeartbeatConflictAndFailuresStopPulling(t *testing.T) {
 	}
 }
 
+// 运行中的导入不读 Storage，不计入上报给 mgr 的 DataNode 占用。
+func TestPullDoesNotCountImportRunsAgainstDataNode(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	h.cfg.Pacing.MaxConcurrentRuns, h.cfg.Pacing.MaxRunsPerDataNode = 3, 2
+	h.app.heartbeatOnce(ctx)
+	h.app.mu.Lock()
+	h.app.running["a"] = &activeRun{assignment: assignment("a", nil), cancel: func() {}}
+	h.app.running["imp"] = &activeRun{assignment: assignment("imp", func(x *archivepb.RunAssignment) { x.Kind = "import" }), cancel: func() {}}
+	h.app.mu.Unlock()
+	h.app.pullOnce(ctx)
+	if len(h.mgr.pulls) != 1 {
+		t.Fatalf("pulls = %d", len(h.mgr.pulls))
+	}
+	req := h.mgr.pulls[0]
+	loads := map[string]uint32{}
+	for _, l := range req.GetBusyDataNodes() {
+		loads[l.GetDataNodeId()] = l.GetRunning()
+	}
+	// 导入仍占一个并发槽，但 node-0 只算普通运行 a。
+	if req.GetFreeSlots() != 1 || loads["node-0"] != 1 {
+		t.Fatalf("pull = %v", req)
+	}
+}
+
 func TestPullHonorsSlotsLeaseMaintenanceAndDisk(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
