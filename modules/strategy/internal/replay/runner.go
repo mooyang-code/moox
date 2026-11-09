@@ -228,6 +228,8 @@ type marketReader struct {
 	passed map[int]map[string]struct{}
 	// listed 是这个市场列出的标的（全部标的绑定），年龄判定用；构造时算一次。
 	listed map[string]struct{}
+	// sources 是这个市场各附加来源的行读取器（来源名 → 读取器）：每段按 as-of 读来源应读的那几根，并进主帧的行。
+	sources map[string]*input.RangeLoader
 }
 
 // newMarketReader 构造一个市场的读取器，列出的标的取全部标的绑定。
@@ -330,7 +332,7 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 	if end.Before(job.EndTime) {
 		acc.setNote(noteTruncated, fmt.Sprintf("排队期间 View 重建了索引，回放区间的终点按新索引截短：区间内最后一根 K 线结束于 %s", input.BarEndLabel(resolved.Calendar, resolved.Bar, bars[len(bars)-1].BarEnd)))
 	}
-	columns := uniqueStrings(append(append([]string{"close"}, program.Columns...), program.PreviousColumns...))
+	columns := uniqueStrings(append(append([]string{"close"}, program.MainColumns()...), program.PreviousColumns...))
 	readers := make([]*marketReader, 0, len(markets))
 	// 统一数据集里两个市场共用一个 View：同一段的读取只发一次，各市场再按 series_tag 过滤。
 	var memo *input.RowsMemo
@@ -347,7 +349,14 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 			&input.RangeLoader{Client: r.Client, SpaceID: job.SpaceID, View: view, Subjects: subjects[market], Columns: columns, Market: loaderMarket, Memo: memo, Abort: abort},
 			&input.RangeLoader{Client: r.Client, SpaceID: job.SpaceID, View: view, Subjects: subjects[market], Columns: []string{"close"}, Market: loaderMarket, Memo: memo, Abort: abort}))
 	}
-	reader := &segmentReader{runner: r, job: job, resolved: resolved, program: program, end: end, acc: acc, abort: abort, markets: readers, memo: memo}
+	if err := attachSources(ctx, r.Client, job.SpaceID, resolved, program, readers, memo, abort); err != nil {
+		return Metrics{}, err
+	}
+	refs, err := referenceReaders(ctx, r.Client, job, resolved, abort)
+	if err != nil {
+		return Metrics{}, err
+	}
+	reader := &segmentReader{runner: r, job: job, resolved: resolved, program: program, end: end, acc: acc, abort: abort, markets: readers, refs: refs, memo: memo}
 	members := cachedMembership(r.Client, job.SpaceID)
 	book := ledger.NewLedger(r.initialEquity(), job.SpotFeeBps, job.SwapFeeBps, r.liquidateAfter())
 	state := engine.State{}
@@ -369,7 +378,7 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 			if err := abort(ctx); err != nil {
 				return acc.finish(), err
 			}
-			decision, err := evaluateBar(ctx, program, resolved, readers, members, segments, bar, state)
+			decision, err := evaluateBar(ctx, program, resolved, readers, refs, members, segments, bar, state)
 			if err != nil {
 				return acc.finish(), err
 			}
@@ -590,6 +599,8 @@ type segmentReader struct {
 	resolved input.Resolved
 	program  *dsl.Program
 	markets  []*marketReader
+	// refs 是参考市场的读取器：只读年龄判定的历史，不读行。
+	refs []*marketReader
 	// acc 记录换代的局限说明：每次换代成功后立即写入，回放失败或取消时保存的部分指标也带着它；abort 在退避前后确认
 	// 回放没有被取消。
 	acc      *accumulator
@@ -601,10 +612,11 @@ type segmentReader struct {
 	end time.Time
 }
 
-// marketSegment 是一个市场一段读取的结果：行与年龄判定的历史。
+// marketSegment 是一个市场一段读取的结果：行与年龄判定的历史，以及各附加来源这一段的行（来源名 → 行）。
 type marketSegment struct {
-	rows input.RangeRows
-	ages *presence
+	rows    input.RangeRows
+	ages    *presence
+	sources map[string]input.RangeRows
 }
 
 func (s *segmentReader) load(ctx context.Context, segment []input.PeriodBoundaries) (map[string]marketSegment, error) {
@@ -636,12 +648,16 @@ reload:
 					continue reload
 				}
 			}
+			var sources map[string]input.RangeRows
+			if err == nil {
+				sources, err = loadSourceSegment(ctx, s.resolved, market, segment)
+			}
 			var changed *input.IndexChangedError
 			if !errors.As(err, &changed) {
 				if err != nil {
 					return nil, err
 				}
-				loaded[market.market] = marketSegment{rows: rows, ages: ages}
+				loaded[market.market] = marketSegment{rows: rows, ages: ages, sources: sources}
 				continue
 			}
 			if s.switches >= maxIndexSwitches {
@@ -665,14 +681,128 @@ reload:
 			s.acc.setNote(noteIndexSwitch, fmt.Sprintf("回放过程中 View 重建了 %d 次索引，每次都按新索引复查了剩余区间后继续", s.switches))
 			continue reload
 		}
+		// 参考市场只读年龄判定的历史（修订号不固定）。
+		for _, ref := range s.refs {
+			ages, err := agePresence(ctx, ref.history, s.resolved, segment, ref.passed)
+			if err != nil {
+				return nil, fmt.Errorf("参考市场 %s：%w", ref.market, err)
+			}
+			loaded[ref.market] = marketSegment{ages: ages}
+		}
 		return loaded, nil
 	}
+}
+
+// attachSources 给每个市场的读取器加上各附加来源的行读取器：来源 View 是这个市场所在任务键上的来源任务，标的与主帧相同
+// （不带 series_tag，读全部序列；统一数据集再按市场过滤），只读策略引用的来源列。
+func attachSources(ctx context.Context, client input.Client, spaceID string, resolved input.Resolved, program *dsl.Program, readers []*marketReader, memo *input.RowsMemo, abort func(context.Context) error) error {
+	if !resolved.HasSources() {
+		return nil
+	}
+	views := map[string]input.ViewInfo{}
+	for _, reader := range readers {
+		reader.sources = map[string]*input.RangeLoader{}
+		for _, name := range resolved.SourceNames() {
+			columns := program.SourceColumns[name]
+			if len(columns) == 0 {
+				continue
+			}
+			task := resolved.Sources[name].Tasks[resolved.TaskKey(reader.market)]
+			view, ok := views[task.ViewID]
+			if !ok {
+				var err error
+				if view, err = client.GetView(ctx, spaceID, task.ViewID); err != nil {
+					return err
+				}
+				views[task.ViewID] = view
+			}
+			subjects := make([]input.Subject, 0, len(reader.subjects))
+			for _, subject := range reader.subjects {
+				subject.SeriesTag = ""
+				subjects = append(subjects, subject)
+			}
+			market := ""
+			if resolved.Unified() {
+				market = reader.market
+			}
+			reader.sources[name] = &input.RangeLoader{Client: client, SpaceID: spaceID, View: view, Subjects: subjects, Columns: columns, Market: market, Memo: memo, Abort: abort}
+		}
+	}
+	return nil
+}
+
+// loadSourceSegment 读一段 bar 要用到的来源行：从第一根主帧应读的来源 bar 的前一根（多取一根）到最后一根主帧应读的那一根。
+// 来源 View 在回放过程中换了索引时直接失败（不跟随换代），请重新发起回放。
+func loadSourceSegment(ctx context.Context, resolved input.Resolved, reader *marketReader, segment []input.PeriodBoundaries) (map[string]input.RangeRows, error) {
+	if len(reader.sources) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]input.RangeRows, len(reader.sources))
+	for _, name := range sortedNames(reader.sources) {
+		source := resolved.Sources[name]
+		first, _, err := source.Period(segment[0].BarEnd)
+		if err != nil {
+			return nil, err
+		}
+		last, _, err := source.Period(segment[len(segment)-1].BarEnd)
+		if err != nil {
+			return nil, err
+		}
+		from := first.StorageStart
+		if !first.PreviousStart.IsZero() {
+			from = first.PreviousStart
+		}
+		rows, err := reader.sources[name].Load(ctx, from, last.StorageStart.Add(time.Nanosecond))
+		var changed *input.IndexChangedError
+		if errors.As(err, &changed) {
+			return nil, fmt.Errorf("来源 %s 的 View %s 在回放过程中重建了索引，请重新发起回放", name, changed.View.ViewID)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("读取来源 %s 的行：%w", name, err)
+		}
+		out[name] = rows
+	}
+	return out, nil
+}
+
+// referenceReaders 构造参考市场的读取器：只读年龄判定所需的 close 历史，列出的标的取参考数据集的全部标的绑定（回放中都视为活跃）。
+func referenceReaders(ctx context.Context, client input.Client, job store.Replay, resolved input.Resolved, abort func(context.Context) error) ([]*marketReader, error) {
+	refs := make([]*marketReader, 0, len(resolved.References))
+	for _, market := range sortedNames(resolved.References) {
+		task := resolved.References[market]
+		view, err := client.GetView(ctx, job.SpaceID, task.ViewID)
+		if err != nil {
+			return nil, err
+		}
+		bindings, err := client.ListDatasetSubjects(ctx, job.SpaceID, view.DatasetID)
+		if err != nil {
+			return nil, err
+		}
+		subjects := make([]input.Subject, 0, len(bindings))
+		for _, subject := range bindings {
+			subject.Active = true
+			subjects = append(subjects, subject)
+		}
+		refs = append(refs, newMarketReader(market, job.Tasks[market], subjects, nil,
+			&input.RangeLoader{Client: client, SpaceID: job.SpaceID, View: view, Subjects: subjects, Columns: []string{"close"}, Abort: abort}))
+	}
+	return refs, nil
+}
+
+func sortedNames[V any](values map[string]V) []string {
+	names := make([]string, 0, len(values))
+	for name := range values {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 // evaluate 装配一期的帧并求值。与实时一致：基础集合只由选币市场的行构成，另一个市场只提供可用标记；只有策略涉及的标的
 // （∪E(r)，年龄剔除之前）在本期（用到 bars[-1] 时还有上一根）出现多个序列才整期跳过，无关标的的歧义不影响本期，只是它们的价格
 // 不用于估值。年龄判定按市场各自的历史；多个市场时，年龄没通过的市场不用它的行。
-func evaluateBar(ctx context.Context, program *dsl.Program, resolved input.Resolved, readers []*marketReader, members input.Membership, segments map[string]marketSegment, bar input.PeriodBoundaries, state engine.State) (engine.Decision, error) {
+// refs 是参考市场的读取器：只参与 age_markets: all 的年龄判定（列出的标的与探针）。
+func evaluateBar(ctx context.Context, program *dsl.Program, resolved input.Resolved, readers, refs []*marketReader, members input.Membership, segments map[string]marketSegment, bar input.PeriodBoundaries, state engine.State) (engine.Decision, error) {
 	key := bar.StorageStart.Unix()
 	multi := len(readers) > 1
 	// 基础集合与标的绑定只取选币市场：基础集合是选币市场本期有行的标的（回放与实时的已知差别见 docs/模块/策略.md 第 10 节）。
@@ -704,13 +834,13 @@ func evaluateBar(ctx context.Context, program *dsl.Program, resolved input.Resol
 		}
 	}
 	// 每个市场列出的标的取它的全部标的绑定（与实时的市场基础集合一致：本根没有行也算列出），探针候选也按它收窄。
-	listed := make(input.AgeListed, len(readers))
-	for _, reader := range readers {
+	listed := make(input.AgeListed, len(readers)+len(refs))
+	for _, reader := range append(append([]*marketReader(nil), readers...), refs...) {
 		listed[reader.market] = reader.listed
 	}
 	probe := func(ctx context.Context, n int, ids []string) (map[string]map[string]struct{}, error) {
-		passed := make(map[string]map[string]struct{}, len(readers))
-		for _, reader := range readers {
+		passed := make(map[string]map[string]struct{}, len(readers)+len(refs))
+		for _, reader := range append(append([]*marketReader(nil), readers...), refs...) {
 			inMarket := make([]string, 0, len(ids))
 			for _, id := range ids {
 				if _, ok := listed[reader.market][id]; ok {
@@ -775,6 +905,22 @@ func evaluateBar(ctx context.Context, program *dsl.Program, resolved input.Resol
 				}
 			}
 			frameRows[subjectID] = engineRow
+		}
+		// 附加来源按 as-of 取这根主帧应读的那一根；同一标的有多个序列的来源行不可信，按缺数处理。
+		for _, name := range sortedNames(segments[reader.market].sources) {
+			period, _, err := resolved.Sources[name].Period(bar.BarEnd)
+			if err != nil {
+				return engine.Decision{}, err
+			}
+			rows := segments[reader.market].sources[name]
+			at := period.StorageStart.Unix()
+			usable := make(map[string]input.Row, len(rows.Bars[at]))
+			for id, row := range rows.Bars[at] {
+				if _, ambiguous := rows.Ambiguous[at][id]; !ambiguous {
+					usable[id] = row
+				}
+			}
+			input.MergeSourceRows(frameRows, name, usable)
 		}
 		frame.Markets[reader.market] = engine.MarketInput{Rows: frameRows, AgedOut: marketAged}
 	}

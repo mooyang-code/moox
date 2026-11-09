@@ -189,7 +189,7 @@ func RunPool(ctx context.Context, run PoolRun) (PoolRunResult, error) {
 			}
 			results := make([]pool.MemberResult, 0, len(members))
 			for _, member := range members {
-				decision, err := evaluateBar(ctx, member.program, member.resolved, member.readers, membership, member.segments, bar, state.Members[member.id])
+				decision, err := evaluateBar(ctx, member.program, member.resolved, member.readers, nil, membership, member.segments, bar, state.Members[member.id])
 				if err != nil {
 					return PoolRunResult{}, fmt.Errorf("成员 %s：%w", member.id, err)
 				}

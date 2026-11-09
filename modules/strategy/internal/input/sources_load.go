@@ -58,7 +58,7 @@ func (l Loader) loadReferences(ctx context.Context, spaceID string, resolved Res
 	return loads, nil
 }
 
-// mergeSources 按 as-of 读附加来源，把来源列以 来源名.列名 并进帧里各市场的行（见 mergeSourceRows）。每个来源在每个主帧任务键上
+// mergeSources 按 as-of 读附加来源，把来源列以 来源名.列名 并进帧里各市场的行（见 MergeSourceRows）。每个来源在每个主帧任务键上
 // 读一次：只读应读的那一根（ClosedPeriod(来源日历, 来源周期, 主帧 BarEnd)），修订号不固定、读回服务端当前的修订号。
 // down 里的来源本期不读（汇合 bar 上来源的因子被整体跳过），它的列按缺数处理。返回各来源 View 读到的修订号（View → 修订号）。
 func (l Loader) mergeSources(ctx context.Context, spaceID string, resolved Resolved, program *dsl.Program, barEnd time.Time, down map[string]string, frame *engine.Frame, unavailable map[string]string) (map[string]uint64, error) {
@@ -123,7 +123,7 @@ func (l Loader) mergeSources(ctx context.Context, spaceID string, resolved Resol
 				if err != nil {
 					return nil, err
 				}
-				mergeSourceRows(frame.Markets[market].Rows, name, byMarket)
+				MergeSourceRows(frame.Markets[market].Rows, name, byMarket)
 			}
 		}
 	}
@@ -146,8 +146,8 @@ func sourceRowsOf(rows []Row, unified bool, market string, start time.Time) (map
 	return groupRows(picked, unified, market)
 }
 
-// mergeSourceRows 把一个来源的行并进帧里一个市场的行：列名加上 来源名. 前缀；行的列表复制一份再改，不改动读回的原始行。
-func mergeSourceRows(rows map[string]engine.Row, name string, source map[string]Row) {
+// MergeSourceRows 把一个来源的行并进帧里一个市场的行：列名加上 来源名. 前缀；行的列表复制一份再改，不改动读回的原始行。
+func MergeSourceRows(rows map[string]engine.Row, name string, source map[string]Row) {
 	for id, row := range rows {
 		got, ok := source[id]
 		if !ok || len(got.Values) == 0 {
