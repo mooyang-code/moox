@@ -141,6 +141,9 @@ func (e *ReplayEvaluator) Bind(ctx context.Context, instanceID string) (ReplayBi
 	if strategy.HasTranche() {
 		return ReplayBinding{}, errors.New("闭环回放第一版不支持 tranche 策略")
 	}
+	if strategy.HasSources() || len(strategy.ReferenceMarkets) > 0 {
+		return ReplayBinding{}, errors.New("闭环回放不支持附加来源（sources）与参考市场（market.reference）：因子引擎的闭环回放只计算一个任务；请用研究回放")
+	}
 	resolved, program, err := e.resolveForReplay(ctx, instance, strategy)
 	if err != nil {
 		return ReplayBinding{}, err

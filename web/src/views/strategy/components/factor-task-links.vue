@@ -1,7 +1,7 @@
 <template>
   <span class="factor-task-links"
     ><template v-for="(item, index) in items" :key="item.market"
-      >{{ index ? "、" : "" }}<template v-if="items.length > 1">{{ `${marketLabel(item.market)} ` }}</template
+      >{{ index ? "、" : "" }}<template v-if="items.length > 1">{{ `${taskKeyLabel(item.market)} ` }}</template
       ><a class="mono" :href="`#/factor/tasks?detail=${encodeURIComponent(item.taskId)}`" @click.stop>{{
         item.taskId
       }}</a></template
@@ -11,7 +11,7 @@
 
 <script setup lang="ts">
 import { computed } from "vue";
-import { instanceTasks, marketLabel } from "@/views/strategy/market-mode";
+import { instanceTasks, taskKeyLabel } from "@/views/strategy/market-mode";
 
 defineOptions({ name: "FactorTaskLinks" });
 

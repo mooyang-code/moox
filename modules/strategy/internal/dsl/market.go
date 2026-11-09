@@ -17,6 +17,7 @@ const (
 )
 
 // Market 是策略的市场模式：Select 决定从哪个市场的币里选，Prefer 决定一个币在两个市场都可用时优先在哪个市场下单。
+// 参考市场（market.reference）不属于模式，见 Strategy.ReferenceMarkets。
 type Market struct {
 	Select string `json:"select"`
 	Prefer string `json:"prefer"`
@@ -67,12 +68,14 @@ func (m Market) String() string {
 	return "select=" + m.Select + ", prefer=" + m.Prefer
 }
 
-func decodeMarket(node *yaml.Node) (Market, error) {
+// decodeMarket 解析 market 段：select、prefer 是模式，reference 是参考市场。
+func decodeMarket(node *yaml.Node) (Market, []string, error) {
 	fields, err := mappingFields(node, "market")
 	if err != nil {
-		return Market{}, err
+		return Market{}, nil, err
 	}
 	var market Market
+	var reference []string
 	for _, f := range fields {
 		path := "market." + f.key
 		switch f.key {
@@ -80,14 +83,41 @@ func decodeMarket(node *yaml.Node) (Market, error) {
 			market.Select, err = scalarRequiredText(f.value, path)
 		case "prefer":
 			market.Prefer, err = scalarRequiredText(f.value, path)
+		case "reference":
+			reference, err = stringList(f.value, path)
 		default:
-			return Market{}, fmt.Errorf("market 包含未知字段 %q", f.key)
+			return Market{}, nil, fmt.Errorf("market 包含未知字段 %q", f.key)
 		}
 		if err != nil {
-			return Market{}, err
+			return Market{}, nil, err
 		}
 	}
-	return market, nil
+	return market, reference, nil
+}
+
+// validateReferenceMarkets 校验 market.reference：只能是 spot 或 swap、不能是模式已涉及的市场（只有单市场策略能写），并且要有规则写了
+// age_markets: all，否则参考市场的数据不会被用到。
+func validateReferenceMarkets(s *Strategy) error {
+	if len(s.ReferenceMarkets) == 0 {
+		return nil
+	}
+	if len(s.FactorParams) > 0 {
+		return errors.New("写了 market.reference 的策略不支持 factor_params：参考市场要另外绑定一个任务，参数回写只支持只绑一个任务的实例")
+	}
+	for _, market := range s.ReferenceMarkets {
+		switch {
+		case market != MarketSpot && market != MarketSwap:
+			return fmt.Errorf("market.reference 的 %q 不受支持，只能是 spot 或 swap", market)
+		case s.Market.Has(market):
+			return fmt.Errorf("market.reference 的 %s 已在 select/prefer 里：参考市场只能是策略不选择、不下单的那个市场（只有单市场策略能写参考市场）", market)
+		}
+	}
+	for _, rule := range s.Rules {
+		if s.RuleUniverse(rule).AllMarkets() {
+			return nil
+		}
+	}
+	return errors.New("写了 market.reference，但没有规则使用 age_markets: all：参考市场只用于 age_markets: all 的年龄判定，请去掉 market.reference 或在 universe 里写 age_markets: all")
 }
 
 // validateMarketCombination 校验 market 的写法只能是 5 种组合之一：spot/spot、swap/swap、both/spot、both/swap、spot/swap。

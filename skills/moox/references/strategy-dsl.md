@@ -16,6 +16,7 @@ universe: {min_age_bars: 15}   # 策略级默认标的池，省略即全部
 rules: [...]                   # 至少一条规则（或写 strategy_pool，见下，二选一）
 portfolio: {leverage: 1}       # 组合级约束
 factor_params: {...}           # 可选：可变成员的逐期调参（见 docs/模块/策略.md「动态调参」）
+sources: {daily: {bar: 1d}}    # 可选：附加列来源，规则里写 daily.列名（见下）
 ```
 
 - 解析严格：重复键、未知字段、多文档一律拒绝，错误信息是中文。
@@ -49,6 +50,27 @@ market:
 - **规则级市场**：模式含两个市场（`both/*`、`spot/swap`）时，规则可写 `market: spot` 或 `market: swap`，这条规则只用该市场的因子值选择、目标也落在该市场，同一个币在两条规则里可以落在不同市场（不互相抵消）；不沿用上期持仓市场，缺数与年龄按这个市场判断，这个市场不可用时只冻结它在这个市场的持仓。写了它的策略必须显式写 `market`；单市场模式下只能写与策略相同的市场；`market: spot` 的规则不能做空。
 - tranche 只能用在单市场模式（`spot/spot`、`swap/swap`）；纯现货的 tranche 不能做空且必须 `sizing.method: weight`；双市场模式（`both`、`spot/swap`）不支持 tranche。绑定两个任务的策略不支持 `factor_params`。
 - 行为变化：现货权重之和超过 1、总敞口超过 `leverage` 时，现在按比例缩小并在摘要注明，不再整期跳过。
+
+- **参考市场**：单市场策略可写 `market: {select: swap, reference: [spot]}`，额外绑定另一个市场的任务（`--factor-task spot=…`），只用于 `age_markets: all` 的年龄判定，不参与选择与下单。只能写模式不涉及的市场；必须有规则写 `age_markets: all`；不支持 `factor_params`、池成员不能写、统一数据集上的任务不能再写。
+
+### sources：附加列来源
+
+主帧仍是 `bar`，`sources` 让规则读更慢频率任务算好的列（例如小时帧读日线均线）：
+
+```yaml
+bar: 1h
+sources:
+  daily: {bar: 1d}                       # 至多两个；名字是 snake_case
+rules:
+  - {id: pick, type: rank, filter: "daily.close > daily.ma__20", score: "rank(daily.mom__20)", select: {top: 5}, weight: 1}
+```
+
+- 实例为每个来源按主帧的任务键各绑一个任务：`--factor-task daily:spot=…`（双市场主帧给 `daily:spot` 与 `daily:swap`，统一数据集写 `daily:multi`）。来源任务的周期要等于来源的 `bar`、是主帧周期的整数倍（A 股只能是 `1d`，主帧必须是日内周期），不能有可变成员。
+- 每根主帧读来源里收盘时刻不晚于这根收盘时刻的最新一根（as-of）；读不到或缺了一期按缺数处理。收盘时刻对齐的那一根（如 00:00、A 股 15:00）等主帧与来源都到齐，其余时刻只等主帧；来源指纹变化在对齐的那一根触发 `factor_changed`。
+- 每个来源至少要被一个表达式引用，否则保存即拒绝。
+- 主帧很快、来源很慢（如 5m 配 1d）时，日线可能比对齐后的一根主帧晚就绪，那几根来源列缺数：写了 `allow_empty` 的规则会清仓再买回，这类规则请配 `on_missing: {keep_bars: N}`。
+- A 股日线的时间键由数据层定下来（采集现在按 UTC 零点写日线键，策略要求上海零点）之前，不要在生产启用 A 股来源。
+- 规则状态、持有计数、止损、冻结、缺数都只按主帧算。`bars[-1].daily.x`、`select.group.by` 写来源列、`factor_params` 读来源列都不支持；池与池成员不能写 `sources`；闭环回放不支持（研究回放可以）。
 
 ### strategy_pool：策略池
 
@@ -144,7 +166,8 @@ portfolio: {leverage: 1, max_weight: 0.1}
 - 结果 View 的列（列名就是成员键）；
 - `bars[0].<列>`（当期）、`bars[-1].<列>`（日历上紧邻的上一根）；`bars[...]` 之后只能用 `.列名`；
 - `instrument_id`；仅 `select.where`、`filter_after` 里还能用 `score`；
-- `params("成员键", "参数名")`：读取可变成员这一行实际用的参数。
+- `params("成员键", "参数名")`：读取可变成员这一行实际用的参数；
+- `来源名.列名`：写了 `sources` 时读附加来源的列（见上）。
 
 禁用与注意：
 
@@ -273,5 +296,7 @@ stop:
 | tranche 规则写 `on_missing` 被拒 | tranche 不走冻结保持 | 去掉 `on_missing` |
 | 规则写 `market` 被拒 | 策略没显式写 `market`；单市场策略写了不同的市场；`market: spot` 的规则做空；取值不是 spot、swap | 显式写策略的 `market`（双市场模式才能另选）；现货规则改成多头或改 `market: swap` |
 | 启用被拒，提示列不存在 | 规则引用的列不在因子任务结果里 | 按成员键推导列名；默认参数的成员省略参数段 |
+| 提示 `x 不是已声明的来源` 或不允许属性访问 | 表达式写了 `x.y`，但 `sources` 没有声明 `x` | 在 `sources` 里声明来源，或改回主帧的列名 |
+| 启用被拒，提示来源要按主帧的任务键各绑定一个任务、或周期不是整数倍 | 来源任务少给了市场，或来源周期与主帧对不齐 | 按 `来源名:市场=任务` 补齐；换成周期是主帧整数倍的任务 |
 | 含参数表的 DSL 被拒（超 64 KiB） | 参数表很大 | 含参数表的策略上限是 1 MiB，仍超出就拆成多条规则或多个策略 |
 | tranche 策略启用被拒 | 混用了 `rank` 规则、`factor_params`，用在双市场模式，或纯现货里做空 / 按数量持有 | tranche 只能全部是 tranche 规则、只用单市场模式；纯现货只能 `sizing.method: weight` 且不做空 |

@@ -117,10 +117,21 @@ type Program struct {
 	// Params 是 factor_params 的已编译表达式（按成员键、参数名排序）。
 	Params []CompiledParam
 	// ParamRefs 是规则与参数表达式里 params(成员键, 参数名) 引用的全部参数（去重排序）；非空时求值需要读取 __params 列。
-	ParamRefs       []ParamRef
+	ParamRefs []ParamRef
+	// Columns 是引用的全部当期列（排序）：主帧的列，以及写作 来源名.列名 的来源列。
 	Columns         []string
 	PreviousColumns []string
 	UsesPreviousBar bool
+	// SourceColumns 是各附加来源被引用的列（来源名 → 去掉前缀的列名，排序）；没有来源时为空。
+	SourceColumns map[string][]string
+}
+
+// MainColumns 返回主帧的当期列（不含来源列）：读主帧 View 的行用它。
+func (p *Program) MainColumns() []string {
+	if len(p.SourceColumns) == 0 {
+		return p.Columns
+	}
+	return ColumnsBySource(p.Columns)[""]
 }
 
 // Compile 用绑定 View 的列编译全部表达式。引用不存在的列、类型不匹配都会在这里报错。
@@ -132,6 +143,10 @@ func Compile(strategy Strategy, columns []string) (*Program, error) {
 	for _, column := range columns {
 		available[column] = struct{}{}
 	}
+	if err := checkSourceColumnClash(strategy, available); err != nil {
+		return nil, err
+	}
+	sources := strategy.sourceSet()
 	program := &Program{Strategy: strategy, Rules: make([]CompiledRule, 0, len(strategy.Rules))}
 	allColumns := make(map[string]struct{})
 	allPrevious := make(map[string]struct{})
@@ -144,7 +159,7 @@ func Compile(strategy Strategy, columns []string) (*Program, error) {
 			if item.source == "" {
 				continue
 			}
-			*targets[i], err = CompileExpression(item.source, item.stage, available)
+			*targets[i], err = compileExpressionIn(item.source, item.stage, available, sources)
 			if err != nil {
 				return nil, fmt.Errorf("规则 %s 的 %s 表达式无效：%w", rule.ID, item.stage, err)
 			}
@@ -202,6 +217,13 @@ func Compile(strategy Strategy, columns []string) (*Program, error) {
 	program.Params = params
 	program.ParamRefs = sortedParamRefs(refs)
 	program.Columns = sortedKeys(allColumns)
+	if strategy.HasSources() {
+		grouped := ColumnsBySource(program.Columns)
+		delete(grouped, "")
+		if len(grouped) > 0 {
+			program.SourceColumns = grouped
+		}
+	}
 	program.PreviousColumns = sortedKeys(allPrevious)
 	program.UsesPreviousBar = len(program.PreviousColumns) > 0
 	return program, nil
@@ -211,6 +233,7 @@ func Compile(strategy Strategy, columns []string) (*Program, error) {
 // 用于启用前的列解析与提示。
 func ReferencedColumns(strategy Strategy) ([]string, error) {
 	set := make(map[string]struct{})
+	sources := strategy.sourceSet()
 	for _, rule := range strategy.Rules {
 		for _, column := range rule.StopColumns() {
 			set[column] = struct{}{}
@@ -227,7 +250,7 @@ func ReferencedColumns(strategy Strategy) ([]string, error) {
 			if item.source == "" {
 				continue
 			}
-			expression, err := Analyze(item.source, item.stage)
+			expression, err := analyzeIn(item.source, item.stage, sources)
 			if err != nil {
 				return nil, fmt.Errorf("规则 %s 的 %s 表达式无效：%w", rule.ID, item.stage, err)
 			}
@@ -249,11 +272,12 @@ func ReferencedColumns(strategy Strategy) ([]string, error) {
 // 以及 factor_params 输出的参数；用于启用前对照任务的成员与定义的参数声明做检查。
 func ReferencedParamRefs(strategy Strategy) ([]ParamRef, error) {
 	refs := make(map[ParamRef]struct{})
+	sources := strategy.sourceSet()
 	collect := func(source string, stage Stage, where string) error {
 		if source == "" {
 			return nil
 		}
-		expression, err := Analyze(source, stage)
+		expression, err := analyzeIn(source, stage, sources)
 		if err != nil {
 			return fmt.Errorf("%s 无效：%w", where, err)
 		}

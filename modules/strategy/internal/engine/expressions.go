@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 )
@@ -32,6 +33,17 @@ func rowEnv(expression *dsl.Expression, id string, row Row, score float64, vars 
 		previous = map[string]float64{}
 	}
 	env["bars"] = []map[string]float64{row.Values, previous}
+	// 附加来源的列在行里写作 来源名.列名，表达式按 来源名.列名 访问：每个引用到的来源放一个 列名 → 值 的字典。
+	for _, source := range expression.Sources {
+		values := make(map[string]float64)
+		prefix := source + "."
+		for column, value := range row.Values {
+			if strings.HasPrefix(column, prefix) {
+				values[column[len(prefix):]] = value
+			}
+		}
+		env[source] = values
+	}
 	return env
 }
 

@@ -372,6 +372,9 @@ func validatePool(s *Strategy) error {
 	if len(s.FactorParams) > 0 {
 		return errors.New("策略池不支持 factor_params：多个成员可能给同一个可变成员写参数，会冲突")
 	}
+	if len(s.Sources) > 0 {
+		return errors.New("策略池不写 sources：附加列来源属于成员策略，而池成员第一版不能使用 sources")
+	}
 	if len(s.Universe.Tags)+len(s.Universe.ExcludeTags)+len(s.Universe.Include)+len(s.Universe.Exclude) > 0 || s.Universe.MinAgeBars != 0 || s.Universe.MaxAgeBars != 0 || s.Universe.AgeMarkets != "" {
 		return errors.New("策略池不写 universe：标的范围由各成员自己的 universe 决定")
 	}
@@ -493,6 +496,10 @@ func ValidatePoolMember(pool Strategy, id string, member Strategy) error {
 		return fmt.Errorf("成员 %s 引用的策略没有显式写 market：池成员必须写 market（股票策略不能进池）", id)
 	case len(member.FactorParams) > 0:
 		return fmt.Errorf("成员 %s 引用的策略用了 factor_params：多个成员可能给同一个可变成员写参数，池成员不能用", id)
+	case len(member.Sources) > 0:
+		return fmt.Errorf("成员 %s 引用的策略写了 sources：池成员第一版不能使用附加列来源", id)
+	case len(member.ReferenceMarkets) > 0:
+		return fmt.Errorf("成员 %s 引用的策略写了 market.reference：池成员不能绑定参考市场", id)
 	case member.Bar != "" && member.Bar != pool.Bar:
 		return fmt.Errorf("成员 %s 的 bar 是 %s，与池的 bar %s 不一致", id, member.Bar, pool.Bar)
 	}

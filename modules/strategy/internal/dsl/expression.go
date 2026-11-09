@@ -87,9 +87,11 @@ type Expression struct {
 	Program         *vm.Program
 	Normalizers     []*Normalizer
 	ParamRefs       []ParamRef
-	Columns         []string // 直接引用的当期列（不含截面函数参数内部的引用）
+	Columns         []string // 直接引用的当期列（不含截面函数参数内部的引用）；来源列写作 来源名.列名
 	PreviousColumns []string // 通过 bars[-1] 引用的上一根列
-	Numeric         bool
+	// Sources 是直接引用的附加来源名（排序，不含截面函数参数内部的引用）：求值环境里每个来源是一个 列名 → 值 的字典。
+	Sources []string
+	Numeric bool
 }
 
 // AllColumns 返回包括截面函数参数在内的全部当期列。
@@ -165,18 +167,28 @@ func (e *Expression) Run(env map[string]any) (any, error) {
 
 // Analyze 解析并校验一条表达式，不编译。用于保存 DSL 时的语法检查。
 func Analyze(source string, stage Stage) (*Expression, error) {
+	return analyzeIn(source, stage, nil)
+}
+
+// analyzeIn 解析并校验一条表达式；sources 是已声明的附加来源名，表达式可以用 来源名.列名 读它们的列（为空时不允许属性访问）。
+func analyzeIn(source string, stage Stage, sources map[string]struct{}) (*Expression, error) {
 	if err := checkSourceLength(source); err != nil {
 		return nil, err
 	}
-	return analyze(source, stage)
+	return analyze(source, stage, sources)
 }
 
 // CompileExpression 分析并编译一条表达式。columns 是绑定 View 的全部列，引用不存在的列会报错。
 func CompileExpression(source string, stage Stage, columns map[string]struct{}) (*Expression, error) {
+	return compileExpressionIn(source, stage, columns, nil)
+}
+
+// compileExpressionIn 是带附加来源的 CompileExpression：columns 里来源列写作 来源名.列名。
+func compileExpressionIn(source string, stage Stage, columns map[string]struct{}, sources map[string]struct{}) (*Expression, error) {
 	if err := checkSourceLength(source); err != nil {
 		return nil, err
 	}
-	expression, err := analyze(source, stage)
+	expression, err := analyze(source, stage, sources)
 	if err != nil {
 		return nil, err
 	}
@@ -194,7 +206,7 @@ func checkSourceLength(source string) error {
 	return nil
 }
 
-func analyze(source string, stage Stage) (*Expression, error) {
+func analyze(source string, stage Stage, sources map[string]struct{}) (*Expression, error) {
 	source = strings.TrimSpace(source)
 	if source == "" {
 		return nil, errors.New("表达式为空")
@@ -209,7 +221,7 @@ func analyze(source string, stage Stage) (*Expression, error) {
 		return nil, exprError("语法错误", err, true)
 	}
 	expression := &Expression{Source: source, Stage: stage, Numeric: stage.numeric()}
-	w := &walker{stage: stage, expression: expression, columns: map[string]struct{}{}, previous: map[string]struct{}{}}
+	w := &walker{stage: stage, expression: expression, columns: map[string]struct{}{}, previous: map[string]struct{}{}, sources: sources, usedSources: map[string]struct{}{}}
 	if err := w.visit(&tree.Node); err != nil {
 		return nil, err
 	}
@@ -218,10 +230,13 @@ func analyze(source string, stage Stage) (*Expression, error) {
 	}
 	expression.Columns = sortedKeys(w.columns)
 	expression.PreviousColumns = sortedKeys(w.previous)
+	if len(w.usedSources) > 0 {
+		expression.Sources = sortedKeys(w.usedSources)
+	}
 	expression.ParamRefs = w.paramRefs
 	expression.Rewritten = tree.Node.String()
 	for _, spec := range w.normalizers {
-		inner, err := analyze(spec.innerSource, stageInner)
+		inner, err := analyze(spec.innerSource, stageInner, sources)
 		if err != nil {
 			return nil, fmt.Errorf("%s 的参数无效：%w", spec.kind, err)
 		}
@@ -249,6 +264,10 @@ func compileAnalyzed(expression *Expression, columns map[string]struct{}) error 
 	env := make(map[string]any, len(columns)+len(expression.Normalizers)+len(expression.ParamRefs)+3)
 	for column := range columns {
 		env[column] = float64(0)
+	}
+	// 来源列以 来源名.列名 访问：环境里每个引用到的来源是一个字典。
+	for _, source := range expression.Sources {
+		env[source] = map[string]float64{}
 	}
 	env[identifierBars] = []map[string]float64{}
 	env[identifierScore] = float64(0)
@@ -328,6 +347,9 @@ type walker struct {
 	paramRefs       []ParamRef
 	barsIdentifiers int
 	barsAccesses    int
+	// sources 是已声明的附加来源名，usedSources 是表达式实际引用到的来源。
+	sources     map[string]struct{}
+	usedSources map[string]struct{}
 }
 
 func (w *walker) visit(node *ast.Node) error {
@@ -456,6 +478,9 @@ func (w *walker) member(n *ast.MemberNode) error {
 		if isBarsIdentifier(n.Node) {
 			return errors.New("bars 必须以 bars[0].列名 或 bars[-1].列名 的形式使用")
 		}
+		if identifier, isIdentifier := n.Node.(*ast.IdentifierNode); isIdentifier && len(w.sources) > 0 {
+			return w.sourceMember(identifier.Value, n)
+		}
 		return errors.New("不允许使用属性访问，只能引用列名或 bars[0].列名、bars[-1].列名")
 	}
 	if !isBarsIdentifier(inner.Node) {
@@ -481,6 +506,23 @@ func (w *walker) member(n *ast.MemberNode) error {
 		// 环境中 bars 是 [当期, 上一根]，把 -1 改写为 1。
 		ast.Patch(&inner.Property, &ast.IntegerNode{Value: 1})
 	}
+	return nil
+}
+
+// sourceMember 记下 来源名.列名 的引用：来源名必须已在 sources 声明，列名不能是保留名称。
+func (w *walker) sourceMember(source string, n *ast.MemberNode) error {
+	if _, declared := w.sources[source]; !declared {
+		return errUndeclaredSource(source)
+	}
+	field, ok := memberName(n.Property)
+	if !ok || n.Method || n.Optional {
+		return fmt.Errorf("来源 %s 之后必须用 .列名 引用列，例如 %s.close", source, source)
+	}
+	if field == identifierScore || field == identifierInstrument || strings.HasPrefix(field, "__") || strings.Contains(field, ".") {
+		return fmt.Errorf("来源 %s 不能访问 %q", source, field)
+	}
+	w.columns[SourceColumn(source, field)] = struct{}{}
+	w.usedSources[source] = struct{}{}
 	return nil
 }
 

@@ -63,6 +63,12 @@ func Validate(s *Strategy) error {
 			return err
 		}
 	}
+	if err := validateReferenceMarkets(s); err != nil {
+		return err
+	}
+	if err := validateSources(s); err != nil {
+		return err
+	}
 	if s.Pool != nil {
 		if err := validatePool(s); err != nil {
 			return err
@@ -85,7 +91,7 @@ func Validate(s *Strategy) error {
 	totalBudget := quant.Zero()
 	for i := range s.Rules {
 		rule := &s.Rules[i]
-		if err := validateRule(rule); err != nil {
+		if err := validateRule(rule, s.sourceSet()); err != nil {
 			return err
 		}
 		if _, exists := ids[rule.ID]; exists {
@@ -118,6 +124,9 @@ func Validate(s *Strategy) error {
 		return err
 	}
 	if err := validateAnchorAlignment(s); err != nil {
+		return err
+	}
+	if err := validateSourcesReferenced(s); err != nil {
 		return err
 	}
 	// 显式写了 market 时，保存就按这个模式校验做空、杠杆、tranche 与 factor_params，不必等到启用；没写时模式取决于绑定的任务，启用时再校验。
@@ -169,7 +178,8 @@ func validatePortfolio(p *Portfolio) error {
 	return nil
 }
 
-func validateRule(rule *Rule) error {
+// sources 是已声明的附加来源名：表达式可以用 来源名.列名 读它们的列。
+func validateRule(rule *Rule, sources map[string]struct{}) error {
 	rule.ID = strings.TrimSpace(rule.ID)
 	if rule.ID == "" {
 		return errors.New("每条规则都需要 id")
@@ -197,7 +207,7 @@ func validateRule(rule *Rule) error {
 		return fmt.Errorf("%s 是 tranche 规则，不支持 on_missing：tranche 的持仓按自己的持有计数到期，不走冻结保持", prefix)
 	}
 	if rule.Scale != nil {
-		if _, err := Analyze(rule.Scale.Expr, StageScale); err != nil {
+		if _, err := analyzeIn(rule.Scale.Expr, StageScale, sources); err != nil {
 			return fmt.Errorf("%s 的 %s 表达式无效：%w", prefix, StageScale, err)
 		}
 	}
@@ -209,9 +219,9 @@ func validateRule(rule *Rule) error {
 	}
 	switch rule.Type {
 	case RuleTypeRank:
-		return validateRankRule(prefix, rule)
+		return validateRankRule(prefix, rule, sources)
 	case RuleTypeSignal:
-		return validateSignalRule(prefix, rule)
+		return validateSignalRule(prefix, rule, sources)
 	case RuleTypeTranche:
 		return validateTrancheRule(prefix, rule)
 	case "":
@@ -242,7 +252,7 @@ func validateWeight(prefix string, weight *Weight) error {
 	return nil
 }
 
-func validateRankRule(prefix string, rule *Rule) error {
+func validateRankRule(prefix string, rule *Rule, sources map[string]struct{}) error {
 	if rule.Entry != "" || rule.Exit != "" {
 		return fmt.Errorf("%s 是 rank 规则，不能使用 entry / exit", prefix)
 	}
@@ -282,10 +292,10 @@ func validateRankRule(prefix string, rule *Rule) error {
 	if fixed && rule.Weight.HasCap && rule.Weight.Cap.Mul(quant.Must(fmt.Sprint(slots))).Cmp(rule.Weight.Total) < 0 {
 		return fmt.Errorf("%s 的 weight.cap 乘以最多可持有的标的数小于 weight.total，预算永远分不完", prefix)
 	}
-	return analyzeStages(prefix, rule.stageSources())
+	return analyzeStages(prefix, rule.stageSources(), sources)
 }
 
-func validateSignalRule(prefix string, rule *Rule) error {
+func validateSignalRule(prefix string, rule *Rule, sources map[string]struct{}) error {
 	if !rule.Pool.Explicit {
 		return fmt.Errorf("%s 是 signal 规则，必须显式给出 pool", prefix)
 	}
@@ -301,16 +311,16 @@ func validateSignalRule(prefix string, rule *Rule) error {
 	if rule.Weight.HasCap {
 		return fmt.Errorf("%s 是 signal 规则，不支持 weight.cap", prefix)
 	}
-	return analyzeStages(prefix, rule.stageSources())
+	return analyzeStages(prefix, rule.stageSources(), sources)
 }
 
 // analyzeStages 按固定阶段顺序做语法检查，保证同一份 DSL 总是报告同一个错误。
-func analyzeStages(prefix string, sources []stageSource) error {
-	for _, item := range sources {
+func analyzeStages(prefix string, stages []stageSource, sources map[string]struct{}) error {
+	for _, item := range stages {
 		if item.source == "" {
 			continue
 		}
-		if _, err := Analyze(item.source, item.stage); err != nil {
+		if _, err := analyzeIn(item.source, item.stage, sources); err != nil {
 			return fmt.Errorf("%s 的 %s 表达式无效：%w", prefix, item.stage, err)
 		}
 	}

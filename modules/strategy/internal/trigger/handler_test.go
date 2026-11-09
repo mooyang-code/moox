@@ -61,6 +61,8 @@ type fakeLoader struct {
 	onLoad      func()
 	// lastBar 是最近一次装配收到的参数。
 	lastBar input.Bar
+	// sourceRevisions 是装配结果里附加来源 View 的修订号（View → 修订号）。
+	sourceRevisions map[string]uint64
 	// prices 是各周期（bar_start）的收盘价（标的|市场 → 价格），LoadPrices 按请求的键返回其中有价的。
 	prices      map[int64]map[string]float64
 	priceCalls  int
@@ -131,7 +133,7 @@ func (l *fakeLoader) LoadBar(_ context.Context, spaceID string, resolved input.R
 	frame.Expected["r"] = ids
 	sets.Universe = ids
 	sets.Expected["r"] = ids
-	return input.Loaded{Frame: frame, Sets: sets, Boundary: boundary}, nil
+	return input.Loaded{Frame: frame, Sets: sets, Boundary: boundary, SourceRevisions: l.sourceRevisions}, nil
 }
 
 type recordingObserver struct {
@@ -174,10 +176,7 @@ func newHarnessWith(t *testing.T, dslYaml string, account *string, resolved inpu
 	if err := repo.CreateDefinition(ctx, store.Definition{StrategyID: "s1", Name: "demo", DSLYaml: dslYaml, DSLHash: hash, CreatedAt: bar0}); err != nil {
 		t.Fatal(err)
 	}
-	tasks := map[string]string{}
-	for market, task := range resolved.Tasks {
-		tasks[market] = task.FactorTaskID
-	}
+	tasks := resolved.AllTasks()
 	if err := repo.CreateInstance(ctx, store.Instance{InstanceID: "i1", StrategyID: "s1", SpaceID: "space", FactorTasks: tasks, LogicalAccountID: account, CreatedAt: bar0}); err != nil {
 		t.Fatal(err)
 	}
