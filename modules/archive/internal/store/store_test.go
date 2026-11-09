@@ -300,6 +300,52 @@ func TestClaimRunsLetsImportBypassDataNodeLimit(t *testing.T) {
 	}
 }
 
+// 排队中的复核或立即运行不挡导入；运行中的运行或排队中的另一条导入才挡。领取时同一任务只执行一条。
+func TestImportCoexistsWithQueuedRunsButTaskRunsOneAtATime(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	tk := task("crypto", "ds1")
+	tk.DataNodeID = "node-0"
+	if _, err := s.CreateTask(ctx, tk); err != nil {
+		t.Fatal(err)
+	}
+	spec := RunSpec{Kind: KindImport, ImportFile: "imp_0123456789abcdef01234567/import.csv"}
+	if _, err := s.CreateRun(ctx, "crypto", "ds1", RunSpec{Kind: KindManual}, t0); err != nil {
+		t.Fatal(err)
+	}
+	imp, err := s.CreateRun(ctx, "crypto", "ds1", spec, t0.Add(time.Second))
+	if err != nil {
+		t.Fatalf("排队中的立即运行不应挡导入: %v", err)
+	}
+	// 立即运行、补拉仍然被排队中的运行挡住；第二条导入被排队中的导入挡住。
+	if _, err := s.CreateRun(ctx, "crypto", "ds1", RunSpec{Kind: KindManual}, t0); !errors.Is(err, ErrConflict) {
+		t.Fatalf("立即运行应冲突: %v", err)
+	}
+	if _, err := s.CreateRun(ctx, "crypto", "ds1", spec, t0); !errors.Is(err, ErrConflict) {
+		t.Fatalf("第二条导入应冲突: %v", err)
+	}
+	// DataNode 名额已满：manual 领不到，导入领到；同一次领取里不会再领同任务的 manual。
+	claimed, err := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w1", FreeSlots: 3, MaxPerDataNode: 1, BusyByDataNode: map[string]int{"node-0": 1}, Now: t0, LeaseTTL: time.Minute})
+	if err != nil || len(claimed) != 1 || claimed[0].Run.RunID != imp.RunID {
+		t.Fatalf("claimed = %+v err=%v", claimed, err)
+	}
+	// 导入运行中：即使 DataNode 有空，同任务的 manual 也不领取；导入运行中时再建导入冲突。
+	again, err := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w1", FreeSlots: 3, MaxPerDataNode: 2, Now: t0, LeaseTTL: time.Minute})
+	if err != nil || len(again) != 0 {
+		t.Fatalf("again = %+v err=%v", again, err)
+	}
+	if _, err := s.CreateRun(ctx, "crypto", "ds1", spec, t0); !errors.Is(err, ErrConflict) {
+		t.Fatalf("导入运行中再建导入应冲突: %v", err)
+	}
+	if err := s.CompleteRun(ctx, CompleteRequest{RunID: imp.RunID, WorkerID: "w1", LeaseToken: claimed[0].Run.LeaseToken, Status: RunSucceeded, Now: t0}); err != nil {
+		t.Fatal(err)
+	}
+	last, err := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w1", FreeSlots: 3, MaxPerDataNode: 2, Now: t0, LeaseTTL: time.Minute})
+	if err != nil || len(last) != 1 || last[0].Run.Kind != KindManual {
+		t.Fatalf("last = %+v err=%v", last, err)
+	}
+}
+
 // 同一次领取里，排在前面的 import 不计入 DataNode 占用：上限 1 时后面的普通运行仍能领到。
 func TestClaimRunsImportDoesNotConsumeDataNodeSlotWithinOneClaim(t *testing.T) {
 	s := openTest(t)

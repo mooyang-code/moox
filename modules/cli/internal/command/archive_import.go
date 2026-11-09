@@ -212,7 +212,7 @@ func archiveCall(ctx context.Context, gateway commandGateway, method string, req
 	return nil
 }
 
-// checkArchiveTaskIdle 确认任务没有排队中或运行中的运行；排队中的到点拉取（tick）会给导入让位，不算。
+// checkArchiveTaskIdle 确认任务没有运行中的运行、也没有排队中的另一条导入；其余排队中的运行（复核、立即运行、补拉、到点拉取）不挡导入。
 func checkArchiveTaskIdle(ctx context.Context, gateway commandGateway, spaceID, datasetID string) error {
 	for _, status := range []string{"queued", "running"} {
 		rsp := &archivepb.ListArchiveRunsRsp{}
@@ -222,7 +222,8 @@ func checkArchiveTaskIdle(ctx context.Context, gateway commandGateway, spaceID, 
 			return err
 		}
 		for _, run := range rsp.GetRuns() {
-			if run.GetStatus() == "queued" && run.GetKind() == "tick" {
+			// 与 mgr 的口径一致：只有运行中的运行、或排队中的另一条导入会挡住导入；排队中的复核、立即运行、补拉区间、到点拉取不挡。
+			if run.GetStatus() == "queued" && run.GetKind() != "import" {
 				continue
 			}
 			label := map[string]string{"queued": "排队中", "running": "运行中"}[run.GetStatus()]

@@ -250,8 +250,8 @@ func TestArchiveImportRefusesToUploadWhileTheTaskHasAnActiveRun(t *testing.T) {
 		active map[string][]*archivepb.ArchiveRun
 		want   string
 	}{
-		"排队中的复核": {map[string][]*archivepb.ArchiveRun{"queued": {{RunId: "run_q", Kind: "scheduled", Status: "queued"}}}, "排队中的运行（run_q，scheduled）"},
-		"运行中的补拉": {map[string][]*archivepb.ArchiveRun{"running": {{RunId: "run_r", Kind: "range", Status: "running"}}}, "运行中的运行（run_r，range）"},
+		"排队中的另一条导入": {map[string][]*archivepb.ArchiveRun{"queued": {{RunId: "run_q", Kind: "import", Status: "queued"}}}, "排队中的运行（run_q，import）"},
+		"运行中的补拉":    {map[string][]*archivepb.ArchiveRun{"running": {{RunId: "run_r", Kind: "range", Status: "running"}}}, "运行中的运行（run_r，range）"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			g, _, calls := useImportFakes(t)
@@ -267,11 +267,13 @@ func TestArchiveImportRefusesToUploadWhileTheTaskHasAnActiveRun(t *testing.T) {
 		})
 	}
 
-	// 排队中的到点拉取会给导入让位，不挡上传。
-	g, _, calls := useImportFakes(t)
-	g.active = map[string][]*archivepb.ArchiveRun{"queued": {{RunId: "run_t", Kind: "tick", Status: "queued"}}}
-	require.NoError(t, runArchiveImport(context.Background(), io.Discard, archiveFlags{SpaceID: "crypto", DatasetID: "ds", CSV: local, Yes: true}))
-	assert.Contains(t, *calls, "upload")
+	// 排队中的到点拉取、复核、立即运行、补拉区间都不挡导入（长回补期间复核要排几个小时）。
+	for _, kind := range []string{"tick", "scheduled", "manual", "range"} {
+		g, _, calls := useImportFakes(t)
+		g.active = map[string][]*archivepb.ArchiveRun{"queued": {{RunId: "run_" + kind, Kind: kind, Status: "queued"}}}
+		require.NoError(t, runArchiveImport(context.Background(), io.Discard, archiveFlags{SpaceID: "crypto", DatasetID: "ds", CSV: local, Yes: true}), kind)
+		assert.Contains(t, *calls, "upload", kind)
+	}
 }
 
 func TestArchiveImportRefusesToUploadWhenTheWorkerIsNotOnTheDeployedHost(t *testing.T) {
