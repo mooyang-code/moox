@@ -603,16 +603,6 @@ func involvedIn(wanted map[string]map[string]struct{}, subjectID string) bool {
 // market_unavailable。持仓要单独补上：它可能已不在这个市场本期的基础集合里（例如永续标签刚移除了它），没有证据时引擎会借用另一个市场的行
 // 重新排名（永续空头用现货的因子值），而不是冻结。
 func marketUnavailable(program *dsl.Program, universe map[string]Subject, held map[string]struct{}) map[string]map[string]string {
-	ids := make(map[string]struct{}, len(universe))
-	for id := range universe {
-		ids[id] = struct{}{}
-	}
-	return MarketUnavailableEvidence(program, ids, held)
-}
-
-// MarketUnavailableEvidence 构造一个市场本期整体不可用的失败证据：ids（这个市场列出的标的）与 held（上期在这个市场持仓的标的）在每个
-// 引用列上都记 market_unavailable。实时由 marketUnavailable 调用；研究回放在一个市场整根断档、另一个市场有行时调用，与实时走同一条路径。
-func MarketUnavailableEvidence(program *dsl.Program, universe map[string]struct{}, held map[string]struct{}) map[string]map[string]string {
 	failed := make(map[string]map[string]string)
 	for _, column := range uniqueSorted(append(append([]string(nil), program.Columns...), program.PreviousColumns...)) {
 		failed[column] = make(map[string]string, len(universe)+len(held))

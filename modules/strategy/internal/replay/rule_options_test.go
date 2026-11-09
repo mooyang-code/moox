@@ -56,27 +56,6 @@ rules:
     weight: 1
 portfolio: {max_missing: 1}
 `,
-		"on_missing_row": `name: on_missing_row
-rules:
-  - id: r
-    type: rank
-    score: "mom"
-    select: {top: 1}
-    on_missing: {keep_bars: 2}
-    weight: 1
-portfolio: {max_missing: 1}
-`,
-		"hold_on_missing_row": `name: hold_on_missing_row
-rules:
-  - id: r
-    type: rank
-    score: "mom"
-    select: {top: 1}
-    hold: {}
-    on_missing: {keep_bars: 2}
-    weight: 1
-portfolio: {max_missing: 1}
-`,
 		"scale": `name: scale
 rules:
   - id: r
@@ -92,13 +71,9 @@ portfolio: {max_missing: 1}
 		t.Run(name, func(t *testing.T) {
 			repo := openStore(t)
 			client := &fakeClient{marketType: "spot"}
-			switch name {
-			case "on_missing":
+			if name == "on_missing" {
 				// 两个标的轮流有两根缺 mom（行还在）：持有中的那个应按 on_missing 冻结保持。
 				client.nullMom = map[string]map[int]bool{"A": {6: true, 7: true}, "B": {9: true, 10: true}}
-			case "on_missing_row", "hold_on_missing_row":
-				// 两个标的轮流有两根整行缺失：回放与实时一样把持有中的那个留在预期集合里，按 on_missing 冻结保持。
-				client.missing = map[string]map[int]bool{"A": {6: true, 7: true}, "B": {9: true, 10: true}}
 			}
 			job := startReplay(t, repo, "p1", dslYaml, 12)
 			(&Runner{Store: repo, Client: client, ChunkBars: 4, InitialEquity: 100}).Execute(context.Background(), job)
@@ -131,7 +106,7 @@ portfolio: {max_missing: 1}
 				}
 			}
 			require.NotZero(t, compared)
-			if name == "on_missing" || name == "on_missing_row" || name == "hold_on_missing_row" {
+			if name == "on_missing" {
 				require.True(t, kept, "应出现按 on_missing 冻结保持的持仓")
 			}
 		})
