@@ -82,7 +82,7 @@
     </a-form-item>
     <a-form-item v-if="usesSwap" label="永续单边手续费（bps）">
       <a-input-number v-model="form.swap_fee_bps" :min="0" :max="1000" :step="1" />
-      <template #extra>模拟曲线未计资金费与强平；永续按收盘价逐期结算盈亏。</template>
+      <template #extra>模拟曲线未计强平；永续按收盘价逐期结算盈亏，资金费要在下面写资金费列才计入。</template>
     </a-form-item>
     <a-form-item v-if="usesSwap" label="资金费列（可选）">
       <a-input v-model="form.funding_column" placeholder="funding_rate" allow-clear />
