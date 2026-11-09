@@ -105,10 +105,11 @@ func orderByRank(ids []string, scores map[string]float64, bottom bool) []string 
 }
 
 // selectWithBuffer 实现排名缓冲区：上期持有、仍在候选中且全样本名次（与解释明细一致，select.where 之前）
-// 不超过 count+buffer 的标的保留，空位按 ordered 的顺序补足。
-func selectWithBuffer(ordered []string, rankOf map[string]int, count, buffer int, previouslyHeld []string) []string {
+// 不超过 count+buffer 的标的保留，空位按 ordered 的顺序补足。quota 是 select.group 的名额（nil 表示不分组）：
+// 保留的持仓按名次先占各组名额，补位时所属组已满的跳过；skipped 记下因分组没能入选的标的与原因。
+func selectWithBuffer(ordered []string, rankOf map[string]int, count, buffer int, previouslyHeld []string, quota *groupQuota) (chosen []string, skipped map[string]string) {
 	if count <= 0 || len(ordered) == 0 {
-		return nil
+		return nil, nil
 	}
 	candidate := make(map[string]struct{}, len(ordered))
 	for _, id := range ordered {
@@ -124,12 +125,22 @@ func selectWithBuffer(ordered []string, rankOf map[string]int, count, buffer int
 		}
 	}
 	sort.Slice(kept, func(i, j int) bool { return rankOf[kept[i]] < rankOf[kept[j]] })
-	if len(kept) > count {
-		kept = kept[:count]
-	}
 	selected := make(map[string]struct{}, count)
-	for _, id := range kept {
+	accept := func(id string) {
+		if reason := quota.admit(id); reason != "" {
+			if skipped == nil {
+				skipped = make(map[string]string)
+			}
+			skipped[id] = reason
+			return
+		}
 		selected[id] = struct{}{}
+	}
+	for _, id := range kept {
+		if len(selected) >= count {
+			break
+		}
+		accept(id)
 	}
 	for _, id := range ordered {
 		if len(selected) >= count {
@@ -138,7 +149,10 @@ func selectWithBuffer(ordered []string, rankOf map[string]int, count, buffer int
 		if _, ok := selected[id]; ok {
 			continue
 		}
-		selected[id] = struct{}{}
+		if _, ok := skipped[id]; ok {
+			continue
+		}
+		accept(id)
 	}
 	result := make([]string, 0, len(selected))
 	for _, id := range ordered {
@@ -146,5 +160,5 @@ func selectWithBuffer(ordered []string, rankOf map[string]int, count, buffer int
 			result = append(result, id)
 		}
 	}
-	return result
+	return result, skipped
 }

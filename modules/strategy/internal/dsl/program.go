@@ -14,6 +14,7 @@ type CompiledRule struct {
 	FilterAfter *Expression
 	Entry       *Expression
 	Exit        *Expression
+	ThenScore   *Expression
 	// TrancheGroups 是 tranche 规则按排名签名分好的子策略组（见 tranche.go）；其他类型为空。
 	TrancheGroups []TrancheGroup
 }
@@ -24,24 +25,43 @@ type stageSource struct {
 	source string
 }
 
-// stageSources 按固定顺序返回规则各阶段的表达式文本（可能为空）。
+// stageSources 按固定顺序返回规则各阶段的表达式文本（可能为空）。新增阶段只改这里与 stageTargets，两者顺序一一对应。
 func (r Rule) stageSources() []stageSource {
-	return []stageSource{
+	sources := []stageSource{
 		{StageFilter, r.Filter},
 		{StageScore, r.Score},
 		{StageSelectWhere, r.Select.Where},
 		{StageFilterAfter, r.FilterAfter},
 		{StageEntry, r.Entry},
 		{StageExit, r.Exit},
+		{StageThenScore, ""},
 	}
+	if r.Select.Then != nil {
+		sources[6].source = r.Select.Then.Score
+	}
+	return sources
+}
+
+// stageTargets 返回与 stageSources 同序的编译结果位置。
+func (r *CompiledRule) stageTargets() []**Expression {
+	return []**Expression{&r.Filter, &r.Score, &r.SelectWhere, &r.FilterAfter, &r.Entry, &r.Exit, &r.ThenScore}
+}
+
+// referencedColumns 是规则直接写列名（不经表达式）引用的当期列：select.group.by。
+func (r Rule) referencedColumns() []string {
+	if r.Select.Group != nil {
+		return []string{r.Select.Group.By}
+	}
+	return nil
 }
 
 // Expressions 按固定顺序返回非空的阶段表达式。
 func (r *CompiledRule) Expressions() []*Expression {
-	out := make([]*Expression, 0, 6)
-	for _, expression := range []*Expression{r.Filter, r.Score, r.SelectWhere, r.FilterAfter, r.Entry, r.Exit} {
-		if expression != nil {
-			out = append(out, expression)
+	targets := r.stageTargets()
+	out := make([]*Expression, 0, len(targets))
+	for _, target := range targets {
+		if *target != nil {
+			out = append(out, *target)
 		}
 	}
 	return out
@@ -57,6 +77,9 @@ func (r *CompiledRule) Columns() []string {
 		for _, column := range expression.AllColumns() {
 			set[column] = struct{}{}
 		}
+	}
+	for _, column := range r.Rule.referencedColumns() {
+		set[column] = struct{}{}
 	}
 	return sortedKeys(set)
 }
@@ -101,25 +124,19 @@ func Compile(strategy Strategy, columns []string) (*Program, error) {
 	for _, rule := range strategy.Rules {
 		compiled := CompiledRule{Rule: rule}
 		var err error
-		stages := []struct {
-			stage  Stage
-			source string
-			target **Expression
-		}{
-			{StageFilter, rule.Filter, &compiled.Filter},
-			{StageScore, rule.Score, &compiled.Score},
-			{StageSelectWhere, rule.Select.Where, &compiled.SelectWhere},
-			{StageFilterAfter, rule.FilterAfter, &compiled.FilterAfter},
-			{StageEntry, rule.Entry, &compiled.Entry},
-			{StageExit, rule.Exit, &compiled.Exit},
-		}
-		for _, item := range stages {
+		targets := compiled.stageTargets()
+		for i, item := range rule.stageSources() {
 			if item.source == "" {
 				continue
 			}
-			*item.target, err = CompileExpression(item.source, item.stage, available)
+			*targets[i], err = CompileExpression(item.source, item.stage, available)
 			if err != nil {
 				return nil, fmt.Errorf("规则 %s 的 %s 表达式无效：%w", rule.ID, item.stage, err)
+			}
+		}
+		for _, column := range rule.referencedColumns() {
+			if _, ok := available[column]; !ok {
+				return nil, fmt.Errorf("规则 %s 引用的列 %q 不存在于绑定的 View", rule.ID, column)
 			}
 		}
 		if rule.Type == RuleTypeTranche {
@@ -188,6 +205,9 @@ func ReferencedColumns(strategy Strategy) ([]string, error) {
 				set[column] = struct{}{}
 			}
 			continue
+		}
+		for _, column := range rule.referencedColumns() {
+			set[column] = struct{}{}
 		}
 		for _, item := range rule.stageSources() {
 			if item.source == "" {

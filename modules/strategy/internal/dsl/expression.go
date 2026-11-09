@@ -28,6 +28,13 @@ const (
 	StageFilterAfter Stage = "filter_after"
 	StageEntry       Stage = "entry"
 	StageExit        Stage = "exit"
+	// StageThenScore 是 select.then 的二次排序分数（数值，可用 rank/zscore，在第一段选中的集合上计算）。
+	StageThenScore Stage = "select.then.score"
+	// StageHoldEntry、StageHoldExit 是 rank 规则 hold 块的入场、出场条件（布尔）。
+	StageHoldEntry Stage = "hold.entry"
+	StageHoldExit  Stage = "hold.exit"
+	// StageScale 是仓位系数（数值，逐行求值，不能用截面函数）。
+	StageScale Stage = "scale.expr"
 	// stageInner 是 rank/zscore 的参数表达式：数值，可继续嵌套截面函数。
 	stageInner Stage = "inner"
 )
@@ -47,6 +54,16 @@ const (
 	// maxExpressionLength 限制单条表达式的字符数，同时限制了括号嵌套深度，避免递归解析耗尽栈。
 	maxExpressionLength = 1024
 )
+
+// numeric 报告阶段的表达式是否返回数值（其余阶段返回布尔）。
+func (s Stage) numeric() bool {
+	return s == StageScore || s == stageInner || s == StageThenScore || s == StageScale
+}
+
+// crossSectional 报告阶段里能否使用 rank、zscore：只有在一个样本上整体求值的分数阶段可以。
+func (s Stage) crossSectional() bool {
+	return s == StageScore || s == stageInner || s == StageThenScore
+}
 
 // Normalizer 是一次截面预计算：先对样本内每行求 Inner，再把 rank 或 zscore 的结果写入 Variable。
 type Normalizer struct {
@@ -191,7 +208,7 @@ func analyze(source string, stage Stage) (*Expression, error) {
 		}
 		return nil, exprError("语法错误", err, true)
 	}
-	expression := &Expression{Source: source, Stage: stage, Numeric: stage == StageScore || stage == stageInner}
+	expression := &Expression{Source: source, Stage: stage, Numeric: stage.numeric()}
 	w := &walker{stage: stage, expression: expression, columns: map[string]struct{}{}, previous: map[string]struct{}{}}
 	if err := w.visit(&tree.Node); err != nil {
 		return nil, err
@@ -478,8 +495,8 @@ func (w *walker) call(node *ast.Node, n *ast.CallNode) error {
 	if callee.Value != normalizerRank && callee.Value != normalizerZScore {
 		return fmt.Errorf("不允许调用函数 %s，只支持 rank、zscore 和 params", callee.Value)
 	}
-	if w.stage != StageScore && w.stage != stageInner {
-		return fmt.Errorf("%s 只能在 score 中使用", callee.Value)
+	if !w.stage.crossSectional() {
+		return fmt.Errorf("%s 只能在 score 与 select.then.score 中使用", callee.Value)
 	}
 	if len(n.Arguments) != 1 {
 		return fmt.Errorf("%s 需要且只需要一个参数", callee.Value)

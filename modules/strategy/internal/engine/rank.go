@@ -172,9 +172,25 @@ func evaluateRank(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous R
 		}
 		ordered = kept
 	}
-	count := rule.Rule.Select.Top
-	if bottom {
-		count = rule.Rule.Select.Bottom
+	// 选择个数：比例的分母是通过 filter 且分数有效的样本数（select.where 之前）。
+	count := rule.Rule.Select.Count(len(live))
+	// skipReasons 记下候选因分组名额、二次排序没能入选的原因（见 select.go）。
+	skipReasons := map[string]string{}
+	pick := func(eligible, bufferHeld []string) ([]string, error) {
+		sel := rule.Rule.Select
+		eligible = inRange(sel, eligible, rankOf)
+		chosen, skipped := selectWithBuffer(eligible, rankOf, count, sel.Buffer, bufferHeld, newGroupQuota(sel.Group, eligible, frame.Rows))
+		final, rejected := applyThen(rule, chosen, frame.Rows)
+		if err := checkThenScore(chosen, rejected); err != nil {
+			return nil, err
+		}
+		for id, reason := range skipped {
+			skipReasons[id] = reason
+		}
+		for id, reason := range rejected {
+			skipReasons[id] = reason
+		}
+		return final, nil
 	}
 	// chosen 是本期按名次选中的标的（filter_after 之前）；fresh 是本期选择最终给出权重的标的。
 	var chosen []string
@@ -182,7 +198,7 @@ func evaluateRank(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous R
 	fresh := make(map[string]struct{})
 	notChosenReason := reasonNotSelected
 	if rule.Rule.Holding != nil {
-		outcome, err := evaluateHolding(rule, frame, sets, previous, rebuild, ordered, scored.values, count, explain, rankOf, stops)
+		outcome, err := evaluateHolding(rule, frame, sets, previous, rebuild, ordered, scored.values, pick, explain, rankOf, stops)
 		if err != nil {
 			return ruleResult{}, err
 		}
@@ -196,7 +212,10 @@ func evaluateRank(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous R
 		if stops != nil {
 			eligible, bufferHeld = withoutExcluded(ordered, stops), withoutExcluded(previous.Held, stops)
 		}
-		chosen = selectWithBuffer(eligible, rankOf, count, rule.Rule.Select.Buffer, bufferHeld)
+		var err error
+		if chosen, err = pick(eligible, bufferHeld); err != nil {
+			return ruleResult{}, err
+		}
 		weights = allocate(chosen, rule.Rule.Weight)
 		for _, id := range chosen {
 			if rule.FilterAfter != nil {
@@ -227,6 +246,10 @@ func evaluateRank(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous R
 			}
 			if stops.excluded(id) {
 				explain.reject(id, StageDropped, reasonCooldown, scoreOf(id), rankOf[id])
+				continue
+			}
+			if reason, ok := skipReasons[id]; ok {
+				explain.reject(id, StageScored, reason, scoreOf(id), rankOf[id])
 				continue
 			}
 			explain.reject(id, StageScored, notChosenReason, scoreOf(id), rankOf[id])
@@ -341,7 +364,7 @@ type holdingOutcome struct {
 // 满 bars 根的批次到期并在同一 bar 重建。启用后的第一根 ok bar 上建立全部批次；建仓 bar 没有产生 ok 决策（守门跳过、
 // 无数据、停机）时，到期的批次不会被丢弃清仓，而是在之后第一根 ok bar 上补建。补建与首次建立的批次，建仓序号都按
 // 各自的 offset 对齐到最近一个应建仓的 bar，下一次照常在 offset 上重建。rebuild 是 holdingRebuilds 给出的本期批次。
-func evaluateHolding(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous RuleState, rebuild []int, ordered []string, scores map[string]float64, count int, explain *explanation, rankOf map[string]int, stops *stopTracker) (holdingOutcome, error) {
+func evaluateHolding(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous RuleState, rebuild []int, ordered []string, scores map[string]float64, pick func(eligible, bufferHeld []string) ([]string, error), explain *explanation, rankOf map[string]int, stops *stopTracker) (holdingOutcome, error) {
 	holding := rule.Rule.Holding
 	// 止损：先判断上期全部批次的成员（含本期要重建的批次，触发后同样进入冷却），冻结成员不判断。
 	stoppedIn := make(map[int]map[string]bool)
@@ -409,12 +432,13 @@ func evaluateHolding(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previou
 	}
 	if len(rebuild) > 0 {
 		outcome.rebuilt = true
-		chosen := ordered
+		eligible := ordered
 		if stops != nil {
-			chosen = withoutExcluded(ordered, stops)
+			eligible = withoutExcluded(ordered, stops)
 		}
-		if count < len(chosen) {
-			chosen = chosen[:count]
+		chosen, err := pick(eligible, nil)
+		if err != nil {
+			return outcome, err
 		}
 		outcome.chosen = chosen
 		base := baseShares(chosen, quant.One(), rule.Rule.Weight.Method)

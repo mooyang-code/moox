@@ -63,12 +63,19 @@ type Pool struct {
 	Tags     []string
 }
 
-// Select 描述选择阶段：top 或 bottom 二选一，where 可选，buffer 是排名缓冲区。
+// Select 描述选择阶段（见 select.go）：top、bottom、range 三选一；top/bottom 是正整数个数或 (0, 1) 的比例，比例按
+// CountRound 取整后与 CountMin 取大；Range 是名次闭区间（未写时为零值）；Group 限制每组入选个数；Then 在第一段的结果上二次排序。
+// where 可选，buffer 是排名缓冲区。
 type Select struct {
-	Top    int
-	Bottom int
-	Where  string
-	Buffer int
+	Top        float64
+	Bottom     float64
+	CountRound string
+	CountMin   int
+	Range      [2]int
+	Group      *SelectGroup
+	Then       *SelectThen
+	Where      string
+	Buffer     int
 }
 
 // Weight 描述配权：Total 是规则预算上限，Cap 是规则内单标的上限（HasCap 为 false 表示不限）。

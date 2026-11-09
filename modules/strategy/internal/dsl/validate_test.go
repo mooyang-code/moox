@@ -238,3 +238,104 @@ func offsetsList(n int) string {
 	}
 	return strings.Join(parts, ", ")
 }
+
+// rankRule 返回只有一条 rank 规则 a 的 DSL；body 是规则里 id、type、score 之外的字段（flow 写法）。
+func rankRule(body string) string {
+	return "name: x\nrules:\n  - {id: a, type: rank, score: close, " + body + "}\n"
+}
+
+// optionCase 是第 3 期新增字段的一条保存校验用例：dsl 应被拒绝，错误包含 want。
+type optionCase struct {
+	dsl  string
+	want string
+}
+
+func runOptionCases(t *testing.T, cases map[string]optionCase) {
+	t.Helper()
+	for name, tc := range cases {
+		tc := tc
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			_, err := Parse([]byte(tc.dsl))
+			if err == nil {
+				t.Fatalf("Parse() 不应接受：%s", tc.dsl)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("错误 = %v，应包含 %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// S1 选择数量：互斥与非法值。
+func TestValidateSelectOptions(t *testing.T) {
+	t.Parallel()
+	runOptionCases(t, map[string]optionCase{
+		"top 写 1 以上的小数":        {rankRule("select: {top: 2.5}, weight: 1"), "正整数或 0～1 之间的比例"},
+		"top 为负":               {rankRule("select: {top: -0.1}, weight: 1"), "不能为负数"},
+		"count_round 非法":       {rankRule("select: {top: 0.1, count_round: up}, weight: 1"), "floor、ceil 或 round"},
+		"count_min 配整数 top":    {rankRule("select: {top: 3, count_min: 1}, weight: 1"), "写成比例时"},
+		"count_min 为负":         {rankRule("select: {top: 0.1, count_min: -1}, weight: 1"), "count_min 必须在"},
+		"range 与 top 同写":       {rankRule("select: {top: 2, range: [1, 3]}, weight: 1"), "range 与 top、bottom 只能写一个"},
+		"range 倒序":             {rankRule("select: {range: [5, 3]}, weight: 1"), "结束名次不小于起始"},
+		"range 从 0 开始":         {rankRule("select: {range: [0, 3]}, weight: 1"), "名次从 1 开始"},
+		"range 不是两项":           {rankRule("select: {range: [1, 2, 3]}, weight: 1"), "两个整数"},
+		"range 写小数":            {rankRule("select: {range: [1.5, 3]}, weight: 1"), "必须是整数"},
+		"range 与 buffer":       {rankRule("select: {range: [1, 3], buffer: 1}, weight: 1"), "range 不能与 buffer"},
+		"group max 与 quotas":   {rankRule("select: {top: 3, group: {by: g, max: 1, quotas: [1]}}, weight: 1"), "max 与 quotas 只能写一个"},
+		"group 缺 by":           {rankRule("select: {top: 3, group: {max: 1}}, weight: 1"), "缺少 by"},
+		"group 缺名额":            {rankRule("select: {top: 3, group: {by: g}}, weight: 1"), "max 或 quotas"},
+		"group by 写表达式":        {rankRule("select: {top: 3, group: {by: \"g + 1\", max: 1}}, weight: 1"), "必须是 View 里的列名"},
+		"group max 为 0":        {rankRule("select: {top: 3, group: {by: g, max: 0}}, weight: 1"), "max 必须在 1 到"},
+		"group rest 配 max":     {rankRule("select: {top: 3, group: {by: g, max: 1, rest: 1}}, weight: 1"), "rest 只能与 quotas"},
+		"group quotas 为负":      {rankRule("select: {top: 3, group: {by: g, quotas: [1, -1]}}, weight: 1"), "quotas[1] 必须在"},
+		"group 未知字段":           {rankRule("select: {top: 3, group: {by: g, max: 1, size: 2}}, weight: 1"), "未知字段"},
+		"then 与 buffer":        {rankRule("select: {top: 3, buffer: 1, then: {score: close, top: 1}}, weight: 1"), "then 不能与 buffer"},
+		"then 缺 score":         {rankRule("select: {top: 3, then: {top: 1}}, weight: 1"), "缺少 score"},
+		"then top 与 bottom 同写": {rankRule("select: {top: 3, then: {score: close, top: 1, bottom: 1}}, weight: 1"), "top 或 bottom 之一"},
+		"then 用 score 标识符":     {rankRule("select: {top: 3, then: {score: \"score\", top: 1}}, weight: 1"), "score 只能"},
+		"then 个数按 cap 检查":      {rankRule("select: {top: 3, then: {score: close, top: 2}}, weight: {total: 1, cap: 0.4}"), "分不完"},
+	})
+}
+
+// S1 选择数量：正常写法保存通过，个数换算与引用列正确；写比例时跳过 cap 的保存检查。
+func TestValidateSelectOptionsAccepted(t *testing.T) {
+	t.Parallel()
+	strategy, err := Parse([]byte(`name: x
+rules:
+  - id: a
+    type: rank
+    score: close
+    select: {top: 0.1, count_round: ceil, count_min: 2, group: {by: ind, quotas: [2, 1], rest: 1}}
+    weight: {total: 0.5, cap: 0.1}
+  - id: b
+    type: rank
+    score: close
+    select: {range: [3, 6], group: {by: ind, max: 1}, then: {score: "rank(-close)", top: 3}}
+    weight: 0.5
+`))
+	if err != nil {
+		t.Fatalf("Parse() = %v", err)
+	}
+	sel := strategy.Rules[0].Select
+	if !sel.IsRatio() || sel.Count(25) != 3 || sel.Count(5) != 2 {
+		t.Fatalf("比例换算不对：%+v", sel)
+	}
+	if count, fixed := strategy.Rules[1].Select.FixedCount(); !fixed || count != 4 || strategy.Rules[1].Select.Then.Count() != 3 {
+		t.Fatalf("range 的个数应为 4：%d %v", count, fixed)
+	}
+	columns, err := ReferencedColumns(strategy)
+	if err != nil || strings.Join(columns, ",") != "close,ind" {
+		t.Fatalf("引用列应包含 group.by：%v %v", columns, err)
+	}
+	if _, err := Compile(strategy, []string{"close"}); err == nil || !strings.Contains(err.Error(), `"ind"`) {
+		t.Fatalf("group.by 的列不存在时编译应报错：%v", err)
+	}
+	boolean, err := Parse([]byte(rankRule(`select: {top: 3, then: {score: "close > 1", top: 1}}, weight: 1`)))
+	if err != nil {
+		t.Fatalf("Parse() = %v", err)
+	}
+	if _, err := Compile(boolean, []string{"close"}); err == nil || !strings.Contains(err.Error(), "select.then.score") {
+		t.Fatalf("then.score 返回布尔时编译应报错：%v", err)
+	}
+}

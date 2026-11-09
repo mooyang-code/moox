@@ -339,33 +339,6 @@ func decodePool(node *yaml.Node, path string) (Pool, error) {
 	}
 }
 
-func decodeSelect(node *yaml.Node, path string) (Select, error) {
-	fields, err := mappingFields(node, path)
-	if err != nil {
-		return Select{}, err
-	}
-	var sel Select
-	for _, f := range fields {
-		fieldPath := path + "." + f.key
-		switch f.key {
-		case "top":
-			sel.Top, err = scalarInt(f.value, fieldPath)
-		case "bottom":
-			sel.Bottom, err = scalarInt(f.value, fieldPath)
-		case "buffer":
-			sel.Buffer, err = scalarInt(f.value, fieldPath)
-		case "where":
-			sel.Where, err = scalarRequiredText(f.value, fieldPath)
-		default:
-			return Select{}, fmt.Errorf("%s 包含未知字段 %q", path, f.key)
-		}
-		if err != nil {
-			return Select{}, err
-		}
-	}
-	return sel, nil
-}
-
 func decodeWeight(node *yaml.Node, path string) (Weight, error) {
 	if node == nil {
 		return Weight{}, fmt.Errorf("%s 必须是数字或对象", path)

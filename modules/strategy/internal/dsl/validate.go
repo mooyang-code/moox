@@ -234,22 +234,10 @@ func validateRankRule(prefix string, rule *Rule) error {
 	if !rule.HasSelect {
 		return fmt.Errorf("%s 缺少 select", prefix)
 	}
+	if err := validateSelectCount(prefix, &rule.Select); err != nil {
+		return err
+	}
 	sel := rule.Select
-	if sel.Top < 0 || sel.Bottom < 0 || sel.Buffer < 0 {
-		return fmt.Errorf("%s 的 select.top、bottom、buffer 不能为负数", prefix)
-	}
-	if sel.Top > MaxCount || sel.Bottom > MaxCount || sel.Buffer > MaxCount {
-		return fmt.Errorf("%s 的 select.top、bottom、buffer 不能超过 %d", prefix, MaxCount)
-	}
-	if (sel.Top > 0) == (sel.Bottom > 0) {
-		return fmt.Errorf("%s 的 select 必须且只能设置 top 或 bottom 之一", prefix)
-	}
-	// 单次配权能覆盖的标的数：就是选中数量。holding 规则的每个批次各自按 cap/total 配权（见 engine 的
-	// baseShares + applyCapRat），批次之间互不补足，所以这里不能乘批次数放宽。
-	slots := sel.Top
-	if sel.Bottom > 0 {
-		slots = sel.Bottom
-	}
 	if rule.Holding != nil {
 		if sel.Buffer > 0 {
 			return fmt.Errorf("%s 不能同时使用 holding 和 select.buffer", prefix)
@@ -258,7 +246,17 @@ func validateRankRule(prefix string, rule *Rule) error {
 			return err
 		}
 	}
-	if rule.Weight.HasCap && rule.Weight.Cap.Mul(quant.Must(fmt.Sprint(slots))).Cmp(rule.Weight.Total) < 0 {
+	// 单次配权能覆盖的标的数：就是选中数量（写了 then 时是二次排序取的个数）。holding 规则的每个批次各自按 cap/total 配权（见 engine 的
+	// baseShares + applyCapRat），批次之间互不补足，所以这里不能乘批次数放宽。写比例时个数要到运行时才知道，保存时不做这项检查，
+	// 运行时分不完的预算按 cap 语义留现金。
+	slots, fixed := sel.FixedCount()
+	if sel.Then != nil {
+		if !fixed || sel.Then.Count() < slots {
+			slots = sel.Then.Count()
+		}
+		fixed = true
+	}
+	if fixed && rule.Weight.HasCap && rule.Weight.Cap.Mul(quant.Must(fmt.Sprint(slots))).Cmp(rule.Weight.Total) < 0 {
 		return fmt.Errorf("%s 的 weight.cap 乘以最多可持有的标的数小于 weight.total，预算永远分不完", prefix)
 	}
 	return analyzeStages(prefix, rule.stageSources())
