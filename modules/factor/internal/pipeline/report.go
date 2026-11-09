@@ -111,6 +111,16 @@ func (r *Runner) Run(ctx context.Context, plan Plan) (Outcome, error) {
 			plan.ExpectedSeries, plan.ExpectedSeriesDerived = series, len(series) > 0
 		}
 	}
+	if plan.Observed() && plan.HistorySubjects == nil {
+		// observed 成员的历史截面要用本地存储里本期不可用的标的：在内存预检之前取得，预检按扩大后的序列数估算。
+		if source, ok := r.data.(HistorySource); ok {
+			history, err := source.HistorySubjects(ctx, plan)
+			if err != nil {
+				return Outcome{StageDurations: outcome.StageDurations}, fmt.Errorf("列出历史截面的标的: %w", err)
+			}
+			plan.HistorySubjects = history
+		}
+	}
 	outcome.StageDurations["plan"] = time.Since(planStarted)
 	loaded := LoadResult{Frames: map[string]*storageio.Frame{}, Available: append([]string(nil), plan.Available...)}
 	computation := Computation{Results: map[string]map[string]ItemResult{}, FactorStates: map[string]storageio.FactorState{}}

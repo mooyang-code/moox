@@ -30,6 +30,13 @@ type SeriesExpecter interface {
 	ExpectedSeries(ctx context.Context, plan Plan) ([]seriesset.Series, error)
 }
 
+// HistorySource 是数据层的可选能力：为有 observed 成员的计划列出 Plan.HistorySubjects——本地存储里在读取区间
+// [ReadStart, TargetEnd) 内有数据、但不在 plan.Available、也不在 plan.UpstreamFailed 里的标的（按标的排序）。
+// 按本地存储的内容取，不按当前全集名单取，所以重启前后结果一致。
+type HistorySource interface {
+	HistorySubjects(ctx context.Context, plan Plan) ([]string, error)
+}
+
 // DataResult 是 Data.Load 的结果。
 type DataResult struct {
 	// View 是计算的列式输入。
