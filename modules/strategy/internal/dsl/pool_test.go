@@ -78,7 +78,7 @@ func TestParsePoolRejectsIllegal(t *testing.T) {
 		"成员 id 重复":          {strings.Replace(poolHead, "id: b", "id: a", 1) + "  allocation: {method: fixed, ratios: {a: 1}}\n", "重复"},
 		"成员 id 非法":          {strings.Replace(poolHead, "id: b", "id: B1", 1) + okAllocation, "snake_case"},
 		"成员缺 strategy":      {"name: p\nbar: 1h\nstrategy_pool:\n  members:\n    - {id: a}\n" + okAllocation, "strategy"},
-		"没有 method":         {poolHead + "  allocation: {ratios: {a: 1}}\n", "必须写 fixed 或 rotation"},
+		"没有 method":         {poolHead + "  allocation: {ratios: {a: 1}}\n", "必须写 fixed、rotation 或 drift"},
 		"未知 method":         {poolHead + "  allocation: {method: equal}\n", "不受支持"},
 		"fixed 缺比例":         {poolHead + "  allocation: {method: fixed, ratios: {a: 1}}\n", "缺少成员 b"},
 		"fixed 多余成员":        {poolHead + "  allocation: {method: fixed, ratios: {a: 1, b: 1, c: 1}}\n", "不是池的成员"},
