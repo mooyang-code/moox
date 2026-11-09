@@ -76,6 +76,7 @@ type ParamReader interface {
 
 type config struct {
 	params       ParamReader
+	history      pipeline.HistorySource
 	gate         func(taskID string) bool
 	begin        func(ctx context.Context, taskID string) (func(), bool)
 	chunkPeriods int
@@ -110,10 +111,17 @@ func WithWriteScope(begin func(ctx context.Context, taskID string) (func(), bool
 }
 func WithLocks(locks SetLocker) Option { return func(cfg *config) { cfg.locks = locks } }
 
+// WithHistory 设置历史截面标的的来源（数据层）：有 cross_section_history: observed 成员时，分块按“标的 + 历史截面标的”
+// 估算内存并收窄，分块的计划带上同一份名单，管线的内存预检与选块用的序列数一致。
+func WithHistory(source pipeline.HistorySource) Option {
+	return func(cfg *config) { cfg.history = source }
+}
+
 // Executor runs a recalc window in chunks without touching any job store; the
 // caller persists progress through ProgressFunc.
 type Executor struct {
 	params       ParamReader
+	history      pipeline.HistorySource
 	gate         func(taskID string) bool
 	begin        func(ctx context.Context, taskID string) (func(), bool)
 	runner       Runner
@@ -138,7 +146,7 @@ func NewExecutor(runner Runner, options ...Option) *Executor {
 		cfg.chunkRetries = 1
 	}
 	return &Executor{
-		params: cfg.params, gate: cfg.gate, begin: cfg.begin, runner: runner, locks: cfg.locks,
+		params: cfg.params, history: cfg.history, gate: cfg.gate, begin: cfg.begin, runner: runner, locks: cfg.locks,
 		chunkPeriods: cfg.chunkPeriods, memoryBudget: cfg.memoryBudget, chunkRetries: cfg.chunkRetries, retryBackoff: cfg.retryBackoff,
 	}
 }
@@ -207,10 +215,14 @@ func (e *Executor) runSegments(ctx context.Context, selection Selection, start, 
 	if err != nil {
 		return pipeline.Outcome{}, err
 	}
+	history, err := e.historyFor(ctx, selection, start, end)
+	if err != nil {
+		return pipeline.Outcome{}, err
+	}
 	var merged pipeline.Outcome
 	for at := start; at.Before(end); {
 		segment := paramSegment(selection, base, at, end, duration)
-		outcome, err := e.runner.Run(ctx, plan(selection, segment, at))
+		outcome, err := e.runner.Run(ctx, plan(selection, segment, at, history))
 		if err == nil && e.params != nil {
 			outcome.DefaultFilled = filterDefaultFilled(selection, base, segment.defaultFilled, outcome.Items)
 		}
@@ -337,9 +349,27 @@ func (e *Executor) runChunk(ctx context.Context, source SelectionSource, start, 
 		return windowEnd, pipeline.Outcome{}, true, nil
 	}
 	// 分块大小按锁内重读的选择计算：等锁期间标的或成员可能变化，内存预算要按实际要算的范围收窄。
-	chunkEnd, err := e.chunkEnd(selection, start, windowEnd)
+	// observed 成员：历史截面标的按本块的区间列出，选块与管线的内存预检用同一份名单。先不计历史标的选出一块，按它的区间
+	// 列出历史标的再收窄；收窄后的区间更短，历史标的只会更少，所以再列一次之后一定装得下。
+	chunkEnd, err := e.chunkEnd(selection, start, windowEnd, 0)
 	if err != nil {
 		return time.Time{}, pipeline.Outcome{}, false, err
+	}
+	history, err := e.historyFor(ctx, selection, start, chunkEnd)
+	if err != nil {
+		return time.Time{}, pipeline.Outcome{}, false, err
+	}
+	if len(history) > 0 {
+		narrowed, err := e.chunkEnd(selection, start, chunkEnd, len(history))
+		if err != nil {
+			return time.Time{}, pipeline.Outcome{}, false, err
+		}
+		if narrowed.Before(chunkEnd) {
+			chunkEnd = narrowed
+			if history, err = e.historyFor(ctx, selection, start, chunkEnd); err != nil {
+				return time.Time{}, pipeline.Outcome{}, false, err
+			}
+		}
 	}
 	// 一次只算一个参数段：分块在参数变化处截断，进度按段推进，段内各期的快照相同。
 	duration, err := e.duration(selection.Set)
@@ -351,7 +381,7 @@ func (e *Executor) runChunk(ctx context.Context, source SelectionSource, start, 
 		return time.Time{}, pipeline.Outcome{}, false, err
 	}
 	segment := paramSegment(selection, base, start, chunkEnd, duration)
-	outcome, err := e.runner.Run(ctx, plan(selection, segment, start))
+	outcome, err := e.runner.Run(ctx, plan(selection, segment, start, history))
 	if err == nil && e.params != nil {
 		outcome.DefaultFilled = filterDefaultFilled(selection, base, segment.defaultFilled, outcome.Items)
 	}
@@ -374,7 +404,22 @@ func (e *Executor) duration(set domain.FactorTask) (time.Duration, error) {
 	return periodclock.Continuous{}.Duration(set.Freq)
 }
 
-func (e *Executor) chunkEnd(selection Selection, start, windowEnd time.Time) (time.Time, error) {
+// historyFor 返回有 observed 成员时 [start, end) 的历史截面标的；没有 observed 成员或没有配置来源时为 nil。
+func (e *Executor) historyFor(ctx context.Context, selection Selection, start, end time.Time) ([]string, error) {
+	probe := pipeline.Plan{Mode: pipeline.ModeRecalc, Set: selection.Set, Members: selection.Members, TargetStart: start, TargetEnd: end,
+		Available: selection.Subjects}
+	if e.history == nil || !probe.Observed() {
+		return nil, nil
+	}
+	history, err := e.history.HistorySubjects(ctx, probe)
+	if err != nil {
+		return nil, fmt.Errorf("列出历史截面的标的: %w", err)
+	}
+	return history, nil
+}
+
+// chunkEnd 返回分块的终点；history 是 observed 成员额外放进面板的历史截面标的个数（每个按一条序列估计）。
+func (e *Executor) chunkEnd(selection Selection, start, windowEnd time.Time, history int) (time.Time, error) {
 	set := selection.Set
 	duration, err := e.duration(set)
 	if err != nil {
@@ -383,7 +428,7 @@ func (e *Executor) chunkEnd(selection Selection, start, windowEnd time.Time) (ti
 	periods := e.chunkPeriods
 	if e.memoryBudget > 0 {
 		// 序列数按标的数估计（crypto 每个标的一个 series_tag）；统一数据集按冻结的序列数。
-		fit, err := pipeline.MaxPeriodsWithin(selection.Members, max(len(selection.Subjects), len(selection.Series)), len(selection.Columns), periods, e.memoryBudget)
+		fit, err := pipeline.MaxPeriodsWithin(selection.Members, max(len(selection.Subjects), len(selection.Series))+history, len(selection.Columns), periods, e.memoryBudget)
 		if err != nil {
 			return time.Time{}, err
 		}
@@ -561,9 +606,10 @@ func mergeOutcome(into, next pipeline.Outcome) pipeline.Outcome {
 	return into
 }
 
-func plan(selection Selection, seg segment, start time.Time) pipeline.Plan {
+func plan(selection Selection, seg segment, start time.Time, history []string) pipeline.Plan {
 	return pipeline.Plan{
-		Mode: pipeline.ModeRecalc, Set: selection.Set, Members: selection.Members, Params: seg.params, BaseParams: seg.base,
+		HistorySubjects: history,
+		Mode:            pipeline.ModeRecalc, Set: selection.Set, Members: selection.Members, Params: seg.params, BaseParams: seg.base,
 		TargetStart: start, TargetEnd: seg.end,
 		Expected:       append([]string(nil), selection.Subjects...),
 		Available:      append([]string(nil), selection.Subjects...),

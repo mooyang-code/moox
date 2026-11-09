@@ -19,6 +19,9 @@ type Result struct {
 	PeakBufferBytes int64
 	// DedupedNodes 是因参数取值相同（运行时去重）而没有单独计算的节点数，用于观察去重效果。
 	DedupedNodes int
+	// Warnings 是各成员（ProgramInput.Key）在目标区间内整截面没有算出的次数：成员 → 原因（例如 cs_resid_singular、
+	// gs_too_many_groups）→ 截面数。成员的输出依赖的每个截面节点都计入；同一个节点被成员的多个输出共用时只计一次。
+	Warnings map[string]map[string]int
 }
 
 // Len 返回目标区间的长度。
@@ -55,5 +58,46 @@ func (r *runner) result(start, end int) *Result {
 		}
 		result.Columns = append(result.Columns, column)
 	}
+	result.Warnings = r.memberWarnings()
 	return result
+}
+
+// memberWarnings 把节点的告警汇总到依赖它的成员：沿输出节点的子树（经去重后的计算节点）找出全部报告过告警的节点。
+func (r *runner) memberWarnings() map[string]map[string]int {
+	if len(r.warnings) == 0 {
+		return nil
+	}
+	reached := map[string]map[int]bool{}
+	var walk func(key string, index int)
+	walk = func(key string, index int) {
+		canonical := r.alias[index]
+		if reached[key][canonical] {
+			return
+		}
+		reached[key][canonical] = true
+		for _, arg := range r.program.Nodes[index].Args {
+			walk(key, arg)
+		}
+	}
+	for _, output := range r.program.Outputs {
+		if reached[output.Key] == nil {
+			reached[output.Key] = map[int]bool{}
+		}
+		walk(output.Key, output.Node)
+	}
+	out := map[string]map[string]int{}
+	for key, nodes := range reached {
+		for index := range nodes {
+			for reason, count := range r.warnings[index] {
+				if out[key] == nil {
+					out[key] = map[string]int{}
+				}
+				out[key][reason] += count
+			}
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }

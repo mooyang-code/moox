@@ -28,6 +28,19 @@ type Axis struct {
 	freqs sync.Map
 }
 
+// AllSubjectsLister 是 Storage 客户端的可选能力：列出数据集登记过的全部标的（含已下架的）。
+type AllSubjectsLister interface {
+	ListAllDatasetSubjects(ctx context.Context, spaceID, datasetID string) ([]string, error)
+}
+
+// ListAllDatasetSubjects 透传给被包装的客户端；它不支持时退回只列在册标的。
+func (s *Axis) ListAllDatasetSubjects(ctx context.Context, spaceID, datasetID string) ([]string, error) {
+	if lister, ok := s.Backend.(AllSubjectsLister); ok {
+		return lister.ListAllDatasetSubjects(ctx, spaceID, datasetID)
+	}
+	return s.Backend.ListDatasetSubjects(ctx, spaceID, datasetID)
+}
+
 // NewAxis 用换算边界包装 Storage 客户端。
 func NewAxis(inner Backend) *Axis { return &Axis{Backend: inner} }
 

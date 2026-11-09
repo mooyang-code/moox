@@ -49,6 +49,7 @@ func outcomeFor(plan Plan, loaded LoadResult, computation Computation) Outcome {
 	if computation.BudgetHit {
 		outcome.Status = "degraded"
 	}
+	outcome.Warnings = computation.Warnings
 	sort.Slice(outcome.Factors, func(i, j int) bool { return outcome.Factors[i].MemberKey < outcome.Factors[j].MemberKey })
 	return outcome
 }
@@ -109,6 +110,14 @@ func (r *Runner) Run(ctx context.Context, plan Plan) (Outcome, error) {
 			}
 			plan.ExpectedSeries, plan.ExpectedSeriesDerived = series, len(series) > 0
 		}
+	}
+	if plan.Observed() && plan.HistorySubjects == nil {
+		// observed 成员的历史截面要用本地存储里本期不可用的标的：在内存预检之前取得，预检按扩大后的序列数估算。
+		history, err := r.HistorySubjects(ctx, plan)
+		if err != nil {
+			return Outcome{StageDurations: outcome.StageDurations}, err
+		}
+		plan.HistorySubjects = history
 	}
 	outcome.StageDurations["plan"] = time.Since(planStarted)
 	loaded := LoadResult{Frames: map[string]*storageio.Frame{}, Available: append([]string(nil), plan.Available...)}
@@ -193,6 +202,39 @@ func (r *Runner) Run(ctx context.Context, plan Plan) (Outcome, error) {
 	}
 	outcome.StageDurations["report"] = time.Since(stage)
 	return outcome, nil
+}
+
+// HistorySubjects 向数据层取计划的历史截面标的（Plan.HistorySubjects）；没有 observed 成员、或数据层不提供时为 nil。
+// 试算、回放这类直接调 Load/Compute 的调用方用它补上名单。
+func (r *Runner) HistorySubjects(ctx context.Context, plan Plan) ([]string, error) {
+	source, ok := r.data.(HistorySource)
+	if !ok || !plan.Observed() {
+		return nil, nil
+	}
+	history, err := source.HistorySubjects(ctx, plan)
+	if err != nil {
+		return nil, fmt.Errorf("列出历史截面的标的：%w", err)
+	}
+	return history, nil
+}
+
+// HistorySubjectsWithin 与 HistorySubjects 相同，但个数超过 limit 时返回 ErrHistoryTooMany；数据层支持时提前停止读取。
+func (r *Runner) HistorySubjectsWithin(ctx context.Context, plan Plan, limit int) ([]string, error) {
+	if !plan.Observed() {
+		return nil, nil
+	}
+	if limited, ok := r.data.(LimitedHistorySource); ok {
+		history, err := limited.HistorySubjectsWithin(ctx, plan, limit)
+		if err != nil && !errors.Is(err, ErrHistoryTooMany) {
+			return nil, fmt.Errorf("列出历史截面的标的：%w", err)
+		}
+		return history, err
+	}
+	history, err := r.HistorySubjects(ctx, plan)
+	if err == nil && limit > 0 && len(history) > limit {
+		return nil, &HistoryTooManyError{Candidates: len(history), Confirmed: len(history), Limit: limit}
+	}
+	return history, err
 }
 
 func mergeOutcomeDurations(outcome, previous Outcome) Outcome {

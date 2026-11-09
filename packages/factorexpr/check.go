@@ -153,28 +153,24 @@ func lowerCall(src *exprSource, call *ast.CallNode, sc *scope) (*Node, error) {
 		}
 		return nil, src.errAt(call, "未知的函数 %s", callee.Value)
 	}
-	required := 0
-	for _, arg := range fn.Args {
-		if !arg.Optional {
-			required++
-		}
-	}
-	if len(call.Arguments) < required || len(call.Arguments) > len(fn.Args) {
-		if required == len(fn.Args) {
+	required, most := fn.ArgCount()
+	if len(call.Arguments) < required || len(call.Arguments) > most {
+		if required == most {
 			return nil, src.errAt(call, "函数 %s 需要 %d 个参数，写了 %d 个", fn.Name, required, len(call.Arguments))
 		}
-		return nil, src.errAt(call, "函数 %s 需要 %d～%d 个参数，写了 %d 个", fn.Name, required, len(fn.Args), len(call.Arguments))
+		return nil, src.errAt(call, "函数 %s 需要 %d～%d 个参数，写了 %d 个", fn.Name, required, most, len(call.Arguments))
 	}
+	specs := fn.argSpecs(len(call.Arguments))
 	args := make([]*Node, 0, len(call.Arguments))
 	for i, argument := range call.Arguments {
-		if fn.Args[i].Kind == ArgSubject {
+		if specs[i].Kind == ArgSubject {
 			// 字符串字面量只在这个位置截获；其余位置照常编译，遇到字符串由 rejectNode 拒绝。
 			literal, ok := argument.(*ast.StringNode)
 			if !ok {
-				return nil, src.errAt(argument, "函数 %s 的参数 %s 必须是标的 ID 的字符串字面量，例如 \"BTC-USDT\"", fn.Name, fn.Args[i].Name)
+				return nil, src.errAt(argument, "函数 %s 的参数 %s 必须是标的 ID 的字符串字面量，例如 \"BTC-USDT\"", fn.Name, specs[i].Name)
 			}
 			if err := ValidateSubjectLiteral(literal.Value); err != nil {
-				return nil, src.errAt(argument, "函数 %s 的参数 %s：%v", fn.Name, fn.Args[i].Name, err)
+				return nil, src.errAt(argument, "函数 %s 的参数 %s：%v", fn.Name, specs[i].Name, err)
 			}
 			args = append(args, newSubject(literal.Value))
 			continue
@@ -202,7 +198,8 @@ func apply(src *exprSource, node ast.Node, fn *Function, args []*Node, argNodes 
 		label = "运算 " + operatorSymbols[fn.Name] + " 的参数 "
 	}
 	result := &Node{Op: fn.Name, Function: fn, size: 1}
-	for i, spec := range fn.Args {
+	// 变参函数按实际写的参数个数展开，逐个核对；变参之外没有可选参数，不需要补默认值。
+	for i, spec := range fn.argSpecs(len(args)) {
 		if i >= len(args) {
 			// 可选参数取默认值
 			if spec.Kind == ArgConstant {
@@ -223,7 +220,7 @@ func apply(src *exprSource, node ast.Node, fn *Function, args []*Node, argNodes 
 			if !arg.Kind.isNumber() {
 				return nil, src.errAt(at, "%s%s 需要数值，得到%s", label, spec.Name, arg.Kind.describe())
 			}
-		case ArgSeries:
+		case ArgSeries, ArgGroup:
 			if arg.Kind == KindNumberConst || arg.Scalar {
 				return nil, src.errAt(at, "%s%s 必须依赖输入列，不能是常量或参数", label, spec.Name)
 			}
@@ -613,8 +610,15 @@ func CompileSpecWith(spec *Spec, env UDFEnv) (*Factor, error) {
 		factor.Outputs = append(factor.Outputs, Output{Name: binding.Name, Root: root})
 	}
 	factor.derive()
+	if spec.ObservedHistory() && factor.Type != FactorTypeCrossSection {
+		return nil, errorf("cross_section_history", 0, "cross_section_history: observed 只对截面因子有意义，这个定义里没有截面函数")
+	}
 	return factor, nil
 }
+
+// ObservedHistory 报告因子是否写了 cross_section_history: observed：历史截面按本地存储里有数据的标的组成（设计 F8）。
+// 它不进入规范文本；定义哈希在写了 observed 时另外追加标记。
+func (f *Factor) ObservedHistory() bool { return f.Spec.ObservedHistory() }
 
 func (f *Factor) derive() {
 	columns := map[string]bool{}

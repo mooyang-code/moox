@@ -361,6 +361,46 @@ func (s *Store) TagBounds(src Source, subject string) (map[string]Bounds, error)
 	return out, nil
 }
 
+// SubjectBounds 返回数据源里各个有本地数据的标的的边界（各 series_tag 取并集）：一次扫描边界键，不缓存。
+// 只有任务里有 cross_section_history: observed 成员时才调用（每期一次）。
+func (s *Store) SubjectBounds(src Source) (map[string]Bounds, error) {
+	if err := src.check(); err != nil {
+		return nil, err
+	}
+	prefix := []byte(boundsPrefix(src))
+	iter, err := s.db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: prefixEnd(prefix)})
+	if err != nil {
+		return nil, err
+	}
+	defer iter.Close()
+	type span struct{ e, l int64 }
+	spans := map[string]span{}
+	for ok := iter.First(); ok; ok = iter.Next() {
+		rest := string(iter.Key()[len(prefix):])
+		i := strings.IndexByte(rest, '/')
+		if i <= 0 {
+			continue
+		}
+		e, l, valid := decodeBounds(iter.Value())
+		if !valid {
+			return nil, fmt.Errorf("%s 的边界记录已损坏", src)
+		}
+		subject := rest[:i]
+		if old, seen := spans[subject]; seen {
+			e, l = min(e, old.e), max(l, old.l)
+		}
+		spans[subject] = span{e: e, l: l}
+	}
+	if err := iter.Error(); err != nil {
+		return nil, err
+	}
+	out := make(map[string]Bounds, len(spans))
+	for subject, b := range spans {
+		out[subject] = Bounds{Earliest: time.Unix(b.e, 0).UTC(), Latest: time.Unix(b.l, 0).UTC()}
+	}
+	return out, nil
+}
+
 // Latest 返回标的本地最新一根的时间。
 func (s *Store) Latest(src Source, subject string) (time.Time, bool, error) {
 	b, ok, err := s.Bounds(src, subject)

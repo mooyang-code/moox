@@ -28,6 +28,11 @@ type Options struct {
 	// Universes 是标的范围标识到序列成员掩码的映射（按 Panel.Series 的顺序）：截面算子只在掩码为真的序列之间计算，
 	// 范围外的序列结果为 NaN。没有给出的范围（包括空串）表示全部序列。
 	Universes map[string][]bool
+	// PresentOnly 列出“只用有源行的序列”的标的范围：这些范围里的截面算子在每个时刻只让这一刻在网格上有源行的序列参与，
+	// 其余序列这一刻的结果为 NaN（observed 的历史截面口径）。没有列出的范围不看源行。
+	// 前提：列在这里的范围不传掩码，所以 runtimeKey 为 "all"，不会与带掩码的范围（current）去重成同一个节点；
+	// 以后若给这些范围也传掩码，要把 PresentOnly 编进 runtimeKey。
+	PresentOnly map[string]bool
 	// UDF 是自定义算子的执行宿主；程序里没有自定义算子时不需要。
 	UDF UDFHost
 }
@@ -97,7 +102,8 @@ func Run(ctx context.Context, program *factorexpr.Program, panel *Panel, opts Op
 	}
 	alias, lastUse, need := dedup(program, params, universes, need)
 	run := &runner{ctx: ctx, udf: opts.UDF, program: program, panel: panel, need: need, workers: opts.Workers, pool: newPool(), params: params,
-		universes: universes, alias: alias, nodes: make([]values, len(program.Nodes)), owned: make([]bool, len(program.Nodes))}
+		universes: universes, presentOnly: opts.PresentOnly, alias: alias, nodes: make([]values, len(program.Nodes)), owned: make([]bool, len(program.Nodes)),
+		start: opts.Start, end: opts.End, warnings: map[int]map[string]int{}}
 	for index, node := range program.Nodes {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -323,9 +329,14 @@ type runner struct {
 	pool      *pool
 	params    map[string][]float64
 	universes map[string][]bool
-	alias     []int
-	nodes     []values
-	owned     []bool
+	// presentOnly 见 Options.PresentOnly。
+	presentOnly map[string]bool
+	alias       []int
+	nodes       []values
+	owned       []bool
+	// start、end 是目标区间；warnings 是截面节点在目标区间内报告的告警（节点下标 → 原因 → 截面数），只由主 goroutine 写入。
+	start, end int
+	warnings   map[int]map[string]int
 }
 
 func (r *runner) compute(index int, node *factorexpr.ProgramNode) error {
@@ -414,59 +425,29 @@ func (r *runner) compute(index int, node *factorexpr.ProgramNode) error {
 			}
 		})
 	case factorexpr.CategoryCrossSection:
-		if node.Function.Broadcast {
-			return r.computeBroadcast(node, args[0], out, interval)
-		}
-		kernel := ops.CrossKernel(node.Op)
-		if kernel == nil {
-			return fmt.Errorf("算子 %s 没有截面内核", node.Op)
-		}
-		arg := args[0]
-		mask := r.universes[node.Universe]
-		return r.parallel(length, seriesCount, func(lo, hi int) {
-			var input, output []float64
-			for i := lo; i < hi; i++ {
-				t := interval.Start + i
-				for _, group := range r.panel.groups {
-					input, output = input[:0], output[:0]
-					for _, s := range group {
-						if mask != nil && !mask[s] {
-							out.data[s*length+i] = math.NaN()
-							continue
-						}
-						input = append(input, arg.at(s, t))
-						output = append(output, 0)
-					}
-					kernel(input, output)
-					k := 0
-					for _, s := range group {
-						if mask != nil && !mask[s] {
-							continue
-						}
-						out.data[s*length+i] = output[k]
-						k++
-					}
-				}
-			}
-		})
+		return r.computeCross(index, node, args, out, interval)
 	}
 	return fmt.Errorf("算子 %s 的类别未知", node.Op)
 }
 
-// computeBroadcast 计算聚合广播类截面节点：每个时刻、每个 series_tag 组在成员标的范围之内算出一个统计量，写给组内范围之内的
-// 每一行（包括输入为 NaN 的行，以及这一刻没有源行的序列）；范围之外的行为 NaN。
-func (r *runner) computeBroadcast(node *factorexpr.ProgramNode, arg values, out values, interval factorexpr.Interval) error {
-	kernel := ops.AggregateKernel(node.Op, node.Floats, node.Subject)
+// computeCross 计算截面节点：每个时刻、每个 series_tag 组在成员标的范围之内取出全部参数（分组键单独放进 Section.Group），
+// 交给内核算出逐行结果。逐行变换类的 NaN 行为 NaN；聚合广播类的统计量写给组内范围之内的每一行（包括输入为 NaN 的行，以及
+// 这一刻没有源行的序列；范围列在 Options.PresentOnly 里时例外，这些序列这一刻为 NaN）。范围之外的行为 NaN。内核报告的告警（例如回归奇异）只统计目标区间 [Start, End] 内的截面，
+// 历史截面在它自己作为目标的那一期统计，不重复计数。
+func (r *runner) computeCross(index int, node *factorexpr.ProgramNode, args []values, out values, interval factorexpr.Interval) error {
+	kernel := ops.CrossKernel(node.Op, node.Floats, node.Subject)
 	if kernel == nil {
-		return fmt.Errorf("算子 %s 没有聚合内核", node.Op)
+		return fmt.Errorf("算子 %s 没有截面内核", node.Op)
 	}
 	length := interval.Len()
+	group := node.Function.GroupArg()
 	mask := r.universes[node.Universe]
+	presentOnly := node.Universe != "" && r.presentOnly[node.Universe]
 	// 每组范围之内的序列与标的只取决于掩码，与时刻无关，先算好。
 	members := make([][]int, len(r.panel.groups))
 	subjects := make([][]string, len(r.panel.groups))
-	for g, group := range r.panel.groups {
-		for _, s := range group {
+	for g, series := range r.panel.groups {
+		for _, s := range series {
 			if mask != nil && !mask[s] {
 				for i := 0; i < length; i++ {
 					out.data[s*length+i] = math.NaN()
@@ -477,22 +458,68 @@ func (r *runner) computeBroadcast(node *factorexpr.ProgramNode, arg values, out 
 			subjects[g] = append(subjects[g], r.panel.series[s].Subject)
 		}
 	}
-	return r.parallel(length, len(r.panel.series), func(lo, hi int) {
-		var input []float64
+	var warned sync.Mutex
+	warnings := map[string]int{}
+	err := r.parallel(length, len(r.panel.series)*len(args), func(lo, hi int) {
+		section := ops.Section{Args: make([][]float64, 0, len(args))}
+		buffers := make([][]float64, len(args))
+		var output []float64
+		local := map[string]int{}
+		var present []int
+		var presentSubjects []string
 		for i := lo; i < hi; i++ {
 			t := interval.Start + i
-			for g, group := range members {
-				input = input[:0]
-				for _, s := range group {
-					input = append(input, arg.at(s, t))
+			for g, rows := range members {
+				names := subjects[g]
+				if presentOnly {
+					// 这一刻没有源行的序列不参与截面，结果为 NaN。
+					present, presentSubjects = present[:0], presentSubjects[:0]
+					for k, s := range rows {
+						if r.panel.Present(s, t) {
+							present = append(present, s)
+							presentSubjects = append(presentSubjects, names[k])
+						} else {
+							out.data[s*length+i] = math.NaN()
+						}
+					}
+					rows, names = present, presentSubjects
 				}
-				value := kernel(input, subjects[g])
-				for _, s := range group {
-					out.data[s*length+i] = value
+				section.Args, section.Group, section.Subjects = section.Args[:0], nil, names
+				for k, arg := range args {
+					buffers[k] = buffers[k][:0]
+					for _, s := range rows {
+						buffers[k] = append(buffers[k], arg.at(s, t))
+					}
+					if k == group {
+						section.Group = buffers[k]
+					} else {
+						section.Args = append(section.Args, buffers[k])
+					}
+				}
+				if cap(output) < len(rows) {
+					output = make([]float64, len(rows))
+				}
+				output = output[:len(rows)]
+				if reason := kernel(section, output); reason != "" && t >= r.start && t <= r.end {
+					local[reason]++
+				}
+				for k, s := range rows {
+					out.data[s*length+i] = output[k]
 				}
 			}
 		}
+		if len(local) > 0 {
+			warned.Lock()
+			for reason, count := range local {
+				warnings[reason] += count
+			}
+			warned.Unlock()
+		}
 	})
+	if len(warnings) > 0 {
+		r.warnings[index] = warnings
+	}
+	return err
 }
 
 // seriesKernels 为时序节点准备内核。没有参数槽时所有序列共用一个内核；有参数槽时按每条序列的具体取值分组，

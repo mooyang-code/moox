@@ -53,6 +53,20 @@ type Plan struct {
 	FillOnly bool
 	// CommitSalt 非空时混入提交 ID，保证「期望重写」的写入不被相同内容的旧回执吞掉；补算与含空洞失效写入每次执行取新值。
 	CommitSalt string
+	// HistorySubjects 只在有成员写了 cross_section_history: observed 时才有：本地存储里在读取区间内有数据、但不在 Available
+	// （也不是上游失败）的标的，例如已下架或移出全集的标的。它们只读本地历史、不同步、不输出结果，只放进面板参与 observed
+	// 成员的历史截面；由 Run 在内存预检之前向数据层取得（HistorySource）。
+	HistorySubjects []string
+}
+
+// Observed 报告计划里是否有成员写了 cross_section_history: observed。
+func (p Plan) Observed() bool {
+	for _, member := range p.Members {
+		if member.Factor.ObservedHistory() {
+			return true
+		}
+	}
+	return false
 }
 
 // RowKey 标识结果数据集里的一行：标的、时间与序列标签。
@@ -79,6 +93,9 @@ type Outcome struct {
 	// DefaultFilled 是补算里按默认参数新补的期次（成员键 → 期次）：已有行不存在、或 __params 里没有这个成员。
 	// 由补算执行器填写，管线本身不知道。
 	DefaultFilled map[string][]time.Time
+	// Warnings 是成员在目标区间内整截面没有算出的次数（成员键 → 原因 → 截面数），例如截面回归奇异（cs_resid_singular）、
+	// 组数超限（gs_too_many_groups）。这些截面的值为 NaN、照常写出，不改变成员状态；引擎按原因计入失败指标。
+	Warnings map[string]map[string]int
 }
 
 type Config struct {
@@ -149,6 +166,8 @@ type Computation struct {
 	// Failures 记录成员整体计算失败的原因（补算模式下截面因子的逐行结果不带错误，原因放在这里供试算等调用方报告）。
 	Failures  map[string]error
 	BudgetHit bool
+	// Warnings 是成员在目标区间内整截面没有算出的次数（成员键 → 原因 → 截面数），来自 exec.Result.Warnings。
+	Warnings map[string]map[string]int
 	// availableSeries 是统一数据集上本期可用的序列：成员整体计算失败时，这些序列都记为失败。
 	availableSeries []seriesset.Series
 }

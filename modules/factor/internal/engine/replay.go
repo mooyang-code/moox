@@ -13,6 +13,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/factor/internal/domain"
 	factorhealth "github.com/mooyang-code/moox/modules/factor/internal/health"
+	"github.com/mooyang-code/moox/modules/factor/internal/localdata"
 	"github.com/mooyang-code/moox/modules/factor/internal/memadmit"
 	"github.com/mooyang-code/moox/modules/factor/internal/periodclock"
 	"github.com/mooyang-code/moox/modules/factor/internal/pipeline"
@@ -47,7 +48,10 @@ type ReplayDeps struct {
 	Columns interface {
 		ListColumns(ctx context.Context, spaceID, datasetID string) ([]storageio.ColumnInfo, error)
 	}
-	Store   *seriesstore.Store
+	Store *seriesstore.Store
+	// Synced 返回数据源上正在同步的标的（目录里同源启用任务的范围）：observed 成员的历史截面不纳入其他任务正在同步、
+	// 而本任务范围不含的标的（与实时计算同一规则，localdata.HistoryRule）。nil 表示只看本任务的范围。
+	Synced  func(context.Context, seriesstore.Source) ([]string, error)
 	Runner  *pipeline.Runner
 	Admit   *memadmit.Admitter
 	Now     func() time.Time
@@ -83,6 +87,8 @@ type replaySession struct {
 	from, to time.Time // 决策周期的 data_time 范围 [from, to)（轴上）
 	start    time.Time // 预热起点（轴上）
 	subjects []string
+	// history 是 observed 成员历史截面额外用到的标的：只在快照里提供历史，不输出、不写回。
+	history  []string
 	numeric  []string
 	lookback int
 	carry    []string
@@ -324,9 +330,14 @@ func (m *replayManager) Open(ctx context.Context, req ReplayOpenRequest) (Replay
 		return ReplayOpenResponse{}, http.StatusConflict, fmt.Errorf("%d/%d 个标的的本地数据晚于预热起点 %s（例如 %s），因子前段会是空值：先回补或导入更早的历史（moox-factor-engine backfill / moox-cli import），或确认接受后加 --allow-short-warmup",
 			shortCount, len(subjects), axis.Format(start), strings.Join(shortSamples, "、"))
 	}
+	// observed 成员：历史截面还要用本地存储里在快照区间内有数据、但不在回放标的里的标的（含已下架的），与实时计算同一口径。
+	history, err := m.replayHistory(ctx, src, set, candidates, subjects, start, to.Add(step))
+	if err != nil {
+		return ReplayOpenResponse{}, http.StatusInternalServerError, err
+	}
 	periods := int(to.Sub(from) / step)
 	rowsPerSubject := int(to.Add(step).Sub(start) / step)
-	need := int64(len(subjects)) * int64(rowsPerSubject) * int64(len(numeric)*8+9)
+	need := int64(len(subjects)+len(history)) * int64(rowsPerSubject) * int64(len(numeric)*8+9)
 	release := func() {}
 	if m.deps.Admit != nil {
 		waitCtx, cancel := context.WithTimeout(memadmit.WithPriority(ctx, memadmit.PriorityBackground), replayReserveWait)
@@ -342,7 +353,7 @@ func (m *replayManager) Open(ctx context.Context, req ReplayOpenRequest) (Replay
 			cleanup()
 		}
 	}()
-	snapshot, err := m.deps.Store.ReadRange(ctx, src, subjects, start, to.Add(step))
+	snapshot, err := m.deps.Store.ReadRange(ctx, src, append(append([]string(nil), subjects...), history...), start, to.Add(step))
 	if err != nil {
 		return ReplayOpenResponse{}, http.StatusInternalServerError, fmt.Errorf("读取回放快照：%w", err)
 	}
@@ -364,7 +375,7 @@ func (m *replayManager) Open(ctx context.Context, req ReplayOpenRequest) (Replay
 	}
 	session := &replaySession{
 		id: req.ReplayID, set: set, src: src, axis: axis, step: step, from: from, to: to, start: start,
-		subjects: subjects, numeric: numeric, lookback: lookback, carry: carry, types: types, view: view, cols: snapshot,
+		subjects: subjects, history: history, numeric: numeric, lookback: lookback, carry: carry, types: types, view: view, cols: snapshot,
 		earliest: earliest, release: release, quote: quote, udfKey: taskUDFKey(set), cache: map[int64]*replayPeriod{}, applied: map[int64]map[string]domain.ParamSnapshot{}, lastUsed: m.deps.Now(),
 	}
 	cleanup = nil
@@ -729,6 +740,19 @@ func (s *replaySession) compute(ctx context.Context, runner *pipeline.Runner, pe
 		}
 	}
 	plan.Available = available
+	if plan.Observed() {
+		// 与实时计算相同：本期不可用的回放标的与历史标的都放进历史截面（数据截至本期，未来的行已被截掉）。
+		inAvailable := make(map[string]struct{}, len(available))
+		for _, subject := range available {
+			inAvailable[subject] = struct{}{}
+		}
+		plan.HistorySubjects = []string{}
+		for _, subject := range append(append([]string(nil), s.subjects...), s.history...) {
+			if _, ok := inAvailable[subject]; !ok {
+				plan.HistorySubjects = append(plan.HistorySubjects, subject)
+			}
+		}
+	}
 	if cached != nil {
 		return cached, plan, pipeline.Computation{}, nil
 	}
@@ -749,6 +773,27 @@ func (s *replaySession) compute(ctx context.Context, runner *pipeline.Runner, pe
 	result := &replayPeriod{values: values, states: states, digest: digest, paramValues: paramValues(plan, universe)}
 	s.cache[period.Unix()] = result
 	return result, plan, computation, nil
+}
+
+// replayHistory 返回有 observed 成员时快照区间 [from, to) 的历史截面标的：按 localdata.HistoryRule，本任务范围是回放的候选标的，
+// 回放标的本身不算（它们每期按是否可用决定）。
+func (m *replayManager) replayHistory(ctx context.Context, src seriesstore.Source, set domain.EngineTask, candidates, subjects []string, from, to time.Time) ([]string, error) {
+	observed := false
+	for _, member := range set.Members {
+		observed = observed || member.Factor.ObservedHistory()
+	}
+	if !observed {
+		return nil, nil
+	}
+	var synced []string
+	if m.deps.Synced != nil {
+		var err error
+		if synced, err = m.deps.Synced(ctx, src); err != nil {
+			return nil, fmt.Errorf("列出数据源上正在同步的标的：%w", err)
+		}
+	}
+	return localdata.HistoryCandidates(m.deps.Store, src, from, to,
+		localdata.HistoryRule{Exclude: subjects, Own: candidates, Synced: append(synced, candidates...)})
 }
 
 func (s *replaySession) hasRow(subject string, at time.Time) bool {

@@ -32,15 +32,8 @@ type SeriesKernel func(out []float64, outStart int, in []Series)
 // Rolling 按节点的整数与数值常量参数准备一个时序内核（例如预先算好 EMA 的权重）。
 type Rolling func(ints []int, floats []float64) SeriesKernel
 
-// Cross 计算一个截面：values 是同一时刻、同一 series_tag 下各标的的输入（可能含 NaN），结果写入等长的 out。
-// 输入为 NaN 的标的不参与计算，输出也为 NaN。
-type Cross func(values, out []float64)
-
 // RollingKernel 返回时序算子的内核；不是时序算子时返回 nil。
 func RollingKernel(op string) Rolling { return rolling[op] }
-
-// CrossKernel 返回截面算子的内核；不是截面算子时返回 nil。
-func CrossKernel(op string) Cross { return cross[op] }
 
 // nanCount 返回以 outStart 结尾、长度为 n 的第一个窗口里的 NaN 个数。之后逐点推进时，移入的加一、移出的减一：
 // 计数是整数、精确，与从哪里开始统计无关，不影响“只依赖窗口”，也不需要额外分配内存。

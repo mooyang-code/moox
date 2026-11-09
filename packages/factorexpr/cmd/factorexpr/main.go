@@ -70,6 +70,8 @@ type argInfo struct {
 	Max      *float64 `json:"max,omitempty"`
 	Optional bool     `json:"optional,omitempty"`
 	Default  *float64 `json:"default,omitempty"`
+	// Variadic 大于 0 表示变参：这个参数可以重复写 1～Variadic 次（可选时也可以不写）。
+	Variadic int `json:"variadic,omitempty"`
 }
 
 type functionInfo struct {
@@ -91,12 +93,12 @@ func describeFunctions() []functionInfo {
 		info := functionInfo{Name: doc.Name, Category: doc.Category, Broadcast: doc.Broadcast, Result: doc.Result, Lookback: doc.Lookback,
 			Doc: doc.Doc, Example: doc.Example}
 		for _, arg := range doc.Args {
-			a := argInfo{Name: arg.Name, Kind: arg.Kind, Optional: arg.Optional}
+			a := argInfo{Name: arg.Name, Kind: arg.Kind, Optional: arg.Optional, Variadic: arg.Variadic}
 			if arg.Kind == "window" || arg.Kind == "integer" || arg.Kind == "constant" {
 				lo, hi := arg.Min, arg.Max
 				a.Min, a.Max = &lo, &hi
 			}
-			if arg.Optional {
+			if arg.Optional && arg.Variadic == 0 {
 				d := arg.Default
 				a.Default = &d
 			}
@@ -133,7 +135,10 @@ func runFunctions(args []string, out io.Writer) error {
 			if a.Min != nil {
 				part += fmt.Sprintf("[%g,%g]", *a.Min, *a.Max)
 			}
-			if a.Optional {
+			switch {
+			case a.Variadic > 0:
+				part += fmt.Sprintf("×%d～%d", variadicMin(a), a.Variadic)
+			case a.Optional:
 				part += fmt.Sprintf("=%g", *a.Default)
 			}
 			parts = append(parts, part)
@@ -147,11 +152,19 @@ func runFunctions(args []string, out io.Writer) error {
 	return nil
 }
 
+// variadicMin 是变参最少要写的个数：可选时为 0，否则为 1。
+func variadicMin(a argInfo) int {
+	if a.Optional {
+		return 0
+	}
+	return 1
+}
+
 var categoryNames = map[string]string{"elementwise": "逐元素", "timeseries": "时序", "cross_section": "截面"}
 
 var argKindNames = map[string]string{
 	"series": "序列", "bool": "布尔", "bool_series": "布尔序列", "window": "常量", "integer": "常量", "constant": "常量",
-	"subject": "标的字符串",
+	"subject": "标的字符串", "group": "分组键序列",
 }
 
 // writeMarkdown 输出函数清单的 Markdown 表格：类别、函数、参数、回看、说明。
@@ -174,7 +187,10 @@ func writeMarkdown(out io.Writer, infos []functionInfo) error {
 				}
 				notes = append(notes, kind)
 			}
-			if a.Optional {
+			switch {
+			case a.Variadic > 0:
+				notes = append(notes, fmt.Sprintf("变参，%d～%d 个", variadicMin(a), a.Variadic))
+			case a.Optional:
 				notes = append(notes, fmt.Sprintf("可选，默认 %g", *a.Default))
 			}
 			part := a.Name
@@ -276,6 +292,8 @@ type checkResult struct {
 	OutputLookbacks map[string]int `json:"output_lookbacks,omitempty"`
 	// CrossSectionPoints 是计算一个目标时刻要算的截面个数之和（各截面算子的需求区间长度之和），用来估算时序套截面的计算量。
 	CrossSectionPoints int `json:"cross_section_points,omitempty"`
+	// CrossSectionHistory 是写了 cross_section_history: observed 时的取值；不写或写 current 时省略。
+	CrossSectionHistory string `json:"cross_section_history,omitempty"`
 	// Params 是可调参数的声明：类型、范围与默认值。
 	Params    []paramInfo `json:"params,omitempty"`
 	Canonical string      `json:"canonical,omitempty"`
@@ -319,6 +337,9 @@ func runCheck(args []string, out io.Writer) error {
 			result.Outputs = factor.OutputNamesFor(entry.FactorID)
 			result.Lookback = factor.Lookback
 			result.CrossSectionPoints = factor.CrossSectionPoints()
+			if factor.ObservedHistory() {
+				result.CrossSectionHistory = factorexpr.CrossSectionObserved
+			}
 			result.OutputLookbacks = map[string]int{}
 			for i, output := range factor.Outputs {
 				result.OutputLookbacks[result.Outputs[i]] = max(output.Root.Lookback, 1)
