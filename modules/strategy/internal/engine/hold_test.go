@@ -153,6 +153,52 @@ portfolio: {max_missing: 1}
 	require.Equal(t, reasonHoldNotEntered, items["A"].Reason)
 }
 
+// 默认（不写 allow_reentry）：出场条件为真的标的不能入场，本根刚出场的标的当根也不能补回。
+func TestHoldDefaultBlocksExitTrueAndSameBarReentry(t *testing.T) {
+	run := newHoldRun(t, holdReentryDSL(""), "m", "f", "x")
+	weights, items, _ := run.step(reentryRows(9)) // 100：A 的出场条件成立，entry 为真，仍不入场，B 入场
+	require.Equal(t, map[string]string{"B": "1"}, weights)
+	require.Equal(t, reasonHoldNotEntered, items["A"].Reason)
+	weights, items, _ = run.step(reentryRows(1)) // 101：A 的出场条件不成立了才能入场；B 已持有（top 1），A 分数更高但持有数已满
+	require.Equal(t, map[string]string{"B": "1"}, weights)
+	require.Equal(t, reasonHoldKept, items["B"].Reason)
+}
+
+func holdReentryDSL(extra string) string {
+	return `name: h
+rules:
+  - id: r
+    type: rank
+    score: "m"
+    select: {top: 1}
+    hold: {entry: "f > 0", exit: "x > 8", max_bars: 2` + extra + `}
+    weight: 1
+portfolio: {max_missing: 1}
+`
+}
+
+func reentryRows(ax float64) map[string]map[string]float64 {
+	return map[string]map[string]float64{"A": {"m": 9, "f": 1, "x": ax}, "B": {"m": 8, "f": 1, "x": 1}}
+}
+
+// allow_reentry：entry 是入场的唯一门槛——出场条件成立的标的也可以入场；出场（条件或 max_bars）后当根补回，持有根数重新计，不记冷却。
+func TestHoldAllowReentrySameBar(t *testing.T) {
+	run := newHoldRun(t, holdReentryDSL(", allow_reentry: true"), "m", "f", "x")
+	weights, items, _ := run.step(reentryRows(9)) // 100：A 出场条件成立，但 entry 为真、分数最高 → 入场
+	require.Equal(t, map[string]string{"A": "1"}, weights)
+	require.Equal(t, reasonHoldEntered, items["A"].Reason)
+	weights, items, _ = run.step(reentryRows(9)) // 101：A 条件出场，当根补回
+	require.Equal(t, map[string]string{"A": "1"}, weights)
+	require.Equal(t, reasonHoldEntered, items["A"].Reason, "补回按新入场记")
+	require.Equal(t, int64(101), run.state.Rules["r"].Hold.Entered["A"], "持有根数重新计")
+	run.step(reentryRows(1))                     // 102：持有 1 根
+	weights, items, _ = run.step(reentryRows(1)) // 103：自 101 起持满 2 根，max_bars 出场并当根补回
+	require.Equal(t, map[string]string{"A": "1"}, weights)
+	require.Equal(t, reasonHoldEntered, items["A"].Reason)
+	require.Equal(t, int64(103), run.state.Rules["r"].Hold.Entered["A"])
+	require.Empty(t, run.state.Rules["r"].Hold.Cooldown, "允许补回时不记冷却")
+}
+
 // 持有标的只有 score 缺值时不出场；filter 引用的列缺值时按缺数出场（exit_missing）。
 func TestHoldMissingScoreKeepsAndMissingFilterExits(t *testing.T) {
 	run := newHoldRun(t, holdProgram("0"), "m", "f", "x")

@@ -418,6 +418,8 @@ func TestValidateHoldOptions(t *testing.T) {
 		"hold.max_bars 为负":        {rankRule("select: {top: 2}, weight: 1, hold: {max_bars: -1}"), "hold.max_bars 必须在 0 到"},
 		"hold.cooldown_bars 超过上限": {rankRule("select: {top: 2}, weight: 1, hold: {cooldown_bars: 10001}"), "hold.cooldown_bars 必须在 0 到"},
 		"hold 未知字段":               {rankRule("select: {top: 2}, weight: 1, hold: {keep: 1}"), "未知字段"},
+		"allow_reentry 配冷却":       {rankRule("select: {top: 2}, weight: 1, hold: {allow_reentry: true, cooldown_bars: 2}"), "allow_reentry 不能与大于 0 的 cooldown_bars"},
+		"allow_reentry 不是布尔":      {rankRule("select: {top: 2}, weight: 1, hold: {allow_reentry: yes please}"), "allow_reentry"},
 		"hold.entry 用截面函数":        {rankRule("select: {top: 2}, weight: 1, hold: {entry: \"rank(close) > 0.5\"}"), "只能在 score"},
 		"signal 写 hold":           {"name: x\nrules:\n  - {id: a, type: signal, pool: [A], entry: \"close > 1\", exit: \"close < 1\", weight: 1, hold: {}}\n", "不能写 hold"},
 	})
@@ -428,6 +430,18 @@ func TestValidateHoldOptions(t *testing.T) {
 	columns, err := ReferencedColumns(strategy)
 	if err != nil || strings.Join(columns, ",") != "a,b,close,ind" {
 		t.Fatalf("hold 的 entry、exit 列应计入引用列：%v %v", columns, err)
+	}
+}
+
+// allow_reentry 的正常写法：解析为真，冷却为 0 时保存通过。
+func TestValidateHoldAllowReentryAccepted(t *testing.T) {
+	t.Parallel()
+	strategy, err := Parse([]byte(rankRule("select: {top: 2}, weight: 1, hold: {entry: \"close > 1\", exit: \"close > 9\", max_bars: 72, allow_reentry: true}")))
+	if err != nil {
+		t.Fatalf("Parse() = %v", err)
+	}
+	if !strategy.Rules[0].Hold.AllowReentry {
+		t.Fatalf("allow_reentry 应解析为真：%+v", strategy.Rules[0].Hold)
 	}
 }
 

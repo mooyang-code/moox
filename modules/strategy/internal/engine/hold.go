@@ -137,7 +137,9 @@ func evaluateHold(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous R
 	exited := make(map[string]struct{})
 	exit := func(id string) {
 		exited[id] = struct{}{}
-		cooldown[id] = bar + int64(hold.CooldownBars)
+		if !hold.AllowReentry {
+			cooldown[id] = bar + int64(hold.CooldownBars)
+		}
 	}
 	held := make([]string, 0, len(previous.Held))
 	for _, id := range previous.Held {
@@ -220,7 +222,7 @@ func evaluateHold(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous R
 			if _, ok := heldSet[id]; ok {
 				continue
 			}
-			if _, ok := exited[id]; ok {
+			if _, ok := exited[id]; ok && !hold.AllowReentry {
 				continue
 			}
 			reason, stage := "", StageScored
@@ -242,7 +244,7 @@ func evaluateHold(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous R
 				}
 			}
 			if reason == "" {
-				ok, err := holdCanEnter(rule, id, frame.Rows[id])
+				ok, err := holdCanEnter(rule, id, frame.Rows[id], hold.AllowReentry)
 				if err != nil {
 					return ruleResult{}, err
 				}
@@ -419,7 +421,7 @@ func frozenGroups(groups map[string]float64, frozen map[string]struct{}) map[str
 }
 
 // holdCanEnter 判断候选能否入场：entry 为真（不写表示不限制），且 exit 不为真（同一根两者都成立时不入场）。
-func holdCanEnter(rule *dsl.CompiledRule, id string, row Row) (bool, error) {
+func holdCanEnter(rule *dsl.CompiledRule, id string, row Row, allowReentry bool) (bool, error) {
 	if rule.HoldEntry != nil {
 		ok, err := runBool(rule.HoldEntry, id, row, 0)
 		if err != nil {
@@ -429,7 +431,7 @@ func holdCanEnter(rule *dsl.CompiledRule, id string, row Row) (bool, error) {
 			return false, nil
 		}
 	}
-	if rule.HoldExit != nil {
+	if rule.HoldExit != nil && !allowReentry {
 		out, err := runBool(rule.HoldExit, id, row, 0)
 		if err != nil {
 			return false, fmt.Errorf("hold.exit 在 %s 上执行失败：%w", id, err)
