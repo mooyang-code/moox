@@ -675,6 +675,21 @@ reload:
 func evaluateBar(ctx context.Context, program *dsl.Program, resolved input.Resolved, readers []*marketReader, members input.Membership, segments map[string]marketSegment, bar input.PeriodBoundaries, state engine.State) (engine.Decision, error) {
 	key := bar.StorageStart.Unix()
 	multi := len(readers) > 1
+	// 多个市场时，一个市场本根整根没有行、另一个市场有行，按这个市场本期整体不可用处理（与实时一致：实时的事件名单仍是预期全集、
+	// 全部标为失败，这个市场被判为整体不可用）：它列出的标的都进基础集合、不做年龄探针，列出的标的与上期在它那里的持仓都带
+	// market_unavailable 证据，冻结、守门豁免与明细原因都与实时相同。
+	unavailable := map[string]bool{}
+	if multi {
+		anyRows := false
+		for _, reader := range readers {
+			anyRows = anyRows || len(segments[reader.market].rows.Bars[key]) > 0
+		}
+		for _, reader := range readers {
+			if anyRows && len(segments[reader.market].rows.Bars[key]) == 0 {
+				unavailable[reader.market] = true
+			}
+		}
+	}
 	// 基础集合与标的绑定只取选币市场：基础集合是选币市场本期有行的标的。
 	// 策略写了 on_missing 时，上期持有、在选币市场列出、本根整行缺失的标的也并进来（与实时的事件名单一致）：它进入预期集合、
 	// 按缺数冻结保持并计入缺数占比，而不是按不在预期集合出场。没写 on_missing 时不并入（结果与以前相同）。
@@ -699,9 +714,13 @@ func evaluateBar(ctx context.Context, program *dsl.Program, resolved input.Resol
 		for subjectID := range segments[reader.market].rows.Bars[key] {
 			universeSet[subjectID] = struct{}{}
 		}
+		if unavailable[reader.market] {
+			for id := range reader.listed {
+				universeSet[id] = struct{}{}
+			}
+		}
 	}
 	// 任一选币市场本根有行时，并入在选币市场列出的持有标的；所有选币市场都断档时基础集合为空，照常记 skipped(no_data)、持仓保留。
-	// 回放不模拟“市场整体不可用”：单边断档时持仓靠 on_missing 按缺数冻结（实时则按市场不可用冻结）。
 	if len(universeSet) == 0 {
 		selection = nil
 	}
@@ -736,6 +755,9 @@ func evaluateBar(ctx context.Context, program *dsl.Program, resolved input.Resol
 	probe := func(ctx context.Context, n int, ids []string) (map[string]map[string]struct{}, error) {
 		passed := make(map[string]map[string]struct{}, len(readers))
 		for _, reader := range readers {
+			if unavailable[reader.market] {
+				continue // 本期整体不可用的市场不做探针（与实时一致）
+			}
 			inMarket := make([]string, 0, len(ids))
 			for _, id := range ids {
 				if _, ok := listed[reader.market][id]; ok {
@@ -750,7 +772,6 @@ func evaluateBar(ctx context.Context, program *dsl.Program, resolved input.Resol
 		}
 		return passed, nil
 	}
-	// 回放没有市场整体不可用的情形：每个市场都判定过。
 	allPassed, err := sets.ApplyAge(ctx, resolved, listed, probe)
 	if err != nil {
 		var skip *input.SkipError
@@ -802,7 +823,11 @@ func evaluateBar(ctx context.Context, program *dsl.Program, resolved input.Resol
 			}
 			frameRows[subjectID] = engineRow
 		}
-		frame.Markets[reader.market] = engine.MarketInput{Rows: frameRows, AgedOut: marketAged}
+		marketInput := engine.MarketInput{Rows: frameRows, AgedOut: marketAged}
+		if unavailable[reader.market] {
+			marketInput.Failed = input.MarketUnavailableEvidence(program, reader.listed, state.HeldMarkets()[reader.market])
+		}
+		frame.Markets[reader.market] = marketInput
 	}
 	return engine.Evaluate(program, frame, state)
 }

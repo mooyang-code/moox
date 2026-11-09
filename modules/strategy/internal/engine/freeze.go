@@ -211,12 +211,11 @@ func frozenSetOnMissing(program *dsl.Program, frame Frame, previous State, held 
 			if !ruleHeld && contains(frame.AgedOut[ruleID], id) {
 				continue
 			}
-			other := false
-			// 永续已经没有它的空头（按无行处理）：这条规则持有它时同样是本根缺数，写了 on_missing 就按缺数冻结保持，连续超过 keep_bars
-			// 才平掉；不持有它的规则只当缺数候选。
 			if _, noRow := frame.shortNoRow[ruleID][id]; noRow {
-				other = true
+				blocked = true // 永续已经没有它的空头（已下架）：不冻结，与没写 on_missing 时相同
+				continue
 			}
+			other := false
 			for _, c := range ruleCauses(rule, frame, id, ruleHeld) {
 				switch c.kind {
 				case causeOther:

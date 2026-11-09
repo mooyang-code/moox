@@ -2,7 +2,9 @@ package engine
 
 import (
 	"fmt"
+	"github.com/stretchr/testify/require"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
@@ -344,4 +346,21 @@ func TestWaivedHoldingShortRuleKeepsBatches(t *testing.T) {
 		t.Fatalf("永续不可用时空头 C 应冻结：%v", holdsOf(down))
 	}
 	requireFullShort(evaluate(threeCoins(program, 5, false), down.State))
+}
+
+// 写了 on_missing 时同样：对冲币 X 的永续下架（永续没有行、没有证据），只平掉永续空头，现货多头照常，不按缺数冻结、不连带冻住现货多头。
+func TestDelistedSwapShortOfHedgeCoinWithOnMissing(t *testing.T) {
+	text := strings.ReplaceAll(longShortTwoColumns, "    weight: {total: 0.5}\n", "    weight: {total: 0.5}\n    on_missing: {keep_bars: 3}\n")
+	program := compileIn(t, dsl.Market{Select: dsl.MarketBoth, Prefer: dsl.MarketSpot}, text, "m", "v")
+	require.True(t, program.Strategy.HasOnMissing())
+	rows := map[string]map[string]Row{
+		dsl.MarketSpot: {"A": values("m", 1, "v", 1), "B": values("m", 2, "v", 2), "X": values("m", 9, "v", 9)},
+		dsl.MarketSwap: {"A": values("m", 1, "v", 1), "B": values("m", 2, "v", 2)},
+	}
+	decision, err := Evaluate(program, rowsFrame(program, rows, nil, []string{"A", "B", "X"}), hedgeState())
+	require.NoError(t, err)
+	requireHolds(t, decision, map[string]string{"X|spot": "0.5", "B|swap": "-0.5"})
+	for _, item := range decision.Items {
+		require.NotEqual(t, reasonMissingKept, item.Reason, "%+v", item)
+	}
 }

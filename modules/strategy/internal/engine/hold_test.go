@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"math"
 	"sort"
 	"strings"
 	"testing"
@@ -352,4 +353,24 @@ portfolio: {max_missing: 1}
 	run.clock = &HoldingClock{Scheduled: map[int]int64{1: 107}}
 	weights, _, _ = run.step(map[string]map[string]float64{"B": {"m": 3, "f": 1}, "C": {"m": 2, "f": 1}})
 	require.Equal(t, map[string]string{"B": "0.6", "C": "0.3"}, weights)
+}
+
+// 分组值的回退只给冻结标的用：持有标的本根有行、group.by 为 NaN，即使上期记下了分组值，也按 group_none 处理（不占名额、不能留作分组）。
+func TestHoldGroupFallbackOnlyForFrozen(t *testing.T) {
+	run := newHoldRun(t, `name: h
+rules:
+  - id: r
+    type: rank
+    score: "m"
+    select: {top: 2, group: {by: g, max: 1}}
+    hold: {}
+    weight: 1
+portfolio: {max_missing: 1}
+`, "m", "g")
+	run.state = State{Rules: map[string]RuleState{"r": {Held: []string{"A"}, Hold: &HoldState{Entered: map[string]int64{"A": 99}, Groups: map[string]float64{"A": 1}}}}, Targets: map[string]string{"A|" + testMarket: "1"}}
+	weights, items, decision := run.step(map[string]map[string]float64{"A": {"m": 1, "g": math.NaN()}, "C": {"m": 9, "g": 1}})
+	// A 的分组值是 NaN、不按上期的 1 占名额：同组的 C 可以入场；A 继续持有（hold 只看 filter、exit 等）。
+	require.Equal(t, reasonHoldEntered, items["C"].Reason)
+	require.Equal(t, map[string]string{"A": "0.5", "C": "0.5"}, weights)
+	require.NotContains(t, decision.State.Rules["r"].Hold.Groups, "A")
 }
