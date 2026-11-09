@@ -192,3 +192,33 @@ func TestRuleMarketOnMissing(t *testing.T) {
 	}
 	requireHolds(t, decision, map[string]string{"A|spot": "0.4", "B|swap": "0.4"})
 }
+
+// 按键冻结时 max_weight 仍按币合计：A|swap 保持 0.05，现货规则又选中 A，A|spot 只能截到 0.1 − 0.05，合计不超过 0.1；
+// 保持目标已占满上限时另一个市场的贡献为 0。
+func TestRuleMarketKeyHoldCountsTowardMaxWeight(t *testing.T) {
+	rules := `  - {id: s, type: rank, market: spot, score: m, select: {top: 1}, weight: 0.4}
+  - {id: w, type: rank, market: swap, score: m, select: {top: 1}, weight: 0.4}
+`
+	raw := "name: rm\nmarket: {select: both, prefer: spot}\nportfolio: {max_missing: 1, max_weight: 0.1}\nrules:\n" + rules
+	program := compileIn(t, dsl.Market{}, raw, "m")
+	frame := marketFrame(program, map[string]map[string]float64{dsl.MarketSpot: {"A": 3, "B": 1}}, map[string]map[string]map[string]string{dsl.MarketSwap: {"m": {"A": FailedMarket, "B": FailedMarket}}})
+	previous := State{
+		Rules:   map[string]RuleState{"s": {Held: []string{"A"}}, "w": {Held: []string{"A"}}},
+		Targets: map[string]string{"A|spot": "0.05", "A|swap": "0.05"},
+	}
+	decision, err := Evaluate(program, frame, previous)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireHolds(t, decision, map[string]string{"A|spot": "0.05", "A|swap": "0.05(hold)"})
+	if !strings.Contains(strings.Join(decision.Summary.Notes, "\n"), "扣掉保持目标 0.05 后的上限 0.05") {
+		t.Fatalf("应注明扣掉保持目标后的上限：%v", decision.Summary.Notes)
+	}
+
+	previous.Targets = map[string]string{"A|swap": "0.1"}
+	decision, err = Evaluate(program, frame, previous)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requireHolds(t, decision, map[string]string{"A|swap": "0.1(hold)"})
+}

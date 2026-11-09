@@ -25,9 +25,9 @@ func applyPortfolio(decision *Decision, portfolio dsl.Portfolio, mode dsl.Market
 			delete(contributions, key) // 规则不给冻结标的配权，保险起见再删一次
 		}
 	}
-	quantized := quantizeTargets(contributions, portfolio, tolerance)
-	decision.Summary.Notes = append(decision.Summary.Notes, quantized.notes...)
 	holds := holdTargets(frozen, frozenKeys, previous, held)
+	quantized := quantizeTargets(contributions, portfolio, tolerance, holds)
+	decision.Summary.Notes = append(decision.Summary.Notes, quantized.notes...)
 	quantized = fitBudget(quantized, holds, portfolio, mode, &decision.Summary)
 	for _, target := range quantized.targets {
 		if dsl.SpotLike(target.Market) && target.Weight.IsNegative() {
@@ -211,9 +211,14 @@ func (q quantizedTargets) spotSum() quant.Decimal {
 
 // quantizeTargets 对每个币的合成权重先套 max_weight 再向零截断（noiseTolerance 为 0 时是精确截断）；裁剪或截断后为零的
 // 目标不再出现在结果里。max_weight 按币合计：同一个标的现货与永续两边都不为零时，绝对值之和超过上限就按比例缩小两边；
-// 只有一边时沿用单边的写法（直接取 ±上限）。
-func quantizeTargets(contributions map[string]quant.Decimal, portfolio dsl.Portfolio, noiseTolerance quant.Decimal) quantizedTargets {
+// 只有一边时沿用单边的写法（直接取 ±上限）。holds 是保持目标：按键冻结时同一个币另一个市场仍有贡献，上限先扣掉这个币保持目标的
+// 绝对值（不低于 0），保证这个币的合计不超过 max_weight；按币冻结的币没有贡献，不受影响。
+func quantizeTargets(contributions map[string]quant.Decimal, portfolio dsl.Portfolio, noiseTolerance quant.Decimal, holds []Target) quantizedTargets {
 	result := quantizedTargets{gross: quant.Zero(), net: quant.Zero(), targets: make([]Target, 0, len(contributions))}
+	reserved := make(map[string]quant.Decimal, len(holds))
+	for _, hold := range holds {
+		reserved[hold.InstrumentID] = reserved[hold.InstrumentID].Add(abs(hold.Weight))
+	}
 	keys := make([]string, 0, len(contributions))
 	for key, weight := range contributions {
 		if !weight.IsZero() {
@@ -232,16 +237,24 @@ func quantizeTargets(contributions map[string]quant.Decimal, portfolio dsl.Portf
 		}
 		group := keys[i:j]
 		i = j
+		limit, limitNote := portfolio.MaxWeight, ""
+		if held, ok := reserved[id]; ok && !held.IsZero() {
+			limit = portfolio.MaxWeight.Sub(held)
+			if limit.IsNegative() {
+				limit = quant.Zero()
+			}
+			limitNote = fmt.Sprintf("（扣掉保持目标 %s 后的上限 %s）", held.String(), limit.String())
+		}
 		if portfolio.HasMaxWeight && len(group) > 1 {
 			total := quant.Zero()
 			for _, key := range group {
 				total = total.Add(abs(contributions[key]))
 			}
-			if total.Cmp(portfolio.MaxWeight) > 0 {
-				result.notes = append(result.notes, fmt.Sprintf("%s 的现货、永续合成权重绝对值之和 %s 超过 portfolio.max_weight，两边按比例缩小为合计 %s，超出部分留现金", id, total.String(), portfolio.MaxWeight.String()))
+			if total.Cmp(limit) > 0 {
+				result.notes = append(result.notes, fmt.Sprintf("%s 的现货、永续合成权重绝对值之和 %s 超过 portfolio.max_weight%s，两边按比例缩小为合计 %s，超出部分留现金", id, total.String(), limitNote, limit.String()))
 				for _, key := range group {
 					_, market := SplitTargetKey(key)
-					weight := contributions[key].Mul(portfolio.MaxWeight).Div(total)
+					weight := contributions[key].Mul(limit).Div(total)
 					result.add(Target{InstrumentID: id, Market: market, Weight: truncateWeightWith(weight, noiseTolerance)})
 				}
 				continue
@@ -250,12 +263,12 @@ func quantizeTargets(contributions map[string]quant.Decimal, portfolio dsl.Portf
 		for _, key := range group {
 			_, market := SplitTargetKey(key)
 			weight := contributions[key]
-			if portfolio.HasMaxWeight && len(group) == 1 && abs(weight).Cmp(portfolio.MaxWeight) > 0 {
-				capped := portfolio.MaxWeight
+			if portfolio.HasMaxWeight && len(group) == 1 && abs(weight).Cmp(limit) > 0 {
+				capped := limit
 				if weight.IsNegative() {
 					capped = capped.Neg()
 				}
-				result.notes = append(result.notes, fmt.Sprintf("%s 的合成权重 %s 超过 portfolio.max_weight，裁剪为 %s，超出部分留现金", id, weight.String(), capped.String()))
+				result.notes = append(result.notes, fmt.Sprintf("%s 的合成权重 %s 超过 portfolio.max_weight%s，裁剪为 %s，超出部分留现金", id, weight.String(), limitNote, capped.String()))
 				weight = capped
 			}
 			result.add(Target{InstrumentID: id, Market: market, Weight: truncateWeightWith(weight, noiseTolerance)})
