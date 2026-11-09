@@ -5,7 +5,7 @@ import "strings"
 // ArgDoc 是函数参数的说明。Min、Max 只对编译期常量参数有意义。
 type ArgDoc struct {
 	Name     string
-	Kind     string // number、series、bool、bool_series、window、integer、constant、subject
+	Kind     string // number、series、bool、bool_series、window、integer、constant、subject、group
 	Min      float64
 	Max      float64
 	Optional bool
@@ -28,7 +28,7 @@ type FunctionDoc struct {
 
 var argKindNames = map[ArgKind]string{
 	ArgNumber: "number", ArgSeries: "series", ArgBool: "bool", ArgBoolSeries: "bool_series",
-	ArgWindow: "window", ArgInteger: "integer", ArgConstant: "constant", ArgSubject: "subject",
+	ArgWindow: "window", ArgInteger: "integer", ArgConstant: "constant", ArgSubject: "subject", ArgGroup: "group",
 }
 
 // FunctionDocs 返回全部可调用函数的说明，顺序与 Functions 相同。

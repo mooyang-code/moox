@@ -46,6 +46,8 @@ const (
 	ArgConstant
 	// ArgSubject 是标的 ID：只能写字符串字面量（cs_ref 的参考标的），表达式里其他位置都不允许字符串。
 	ArgSubject
+	// ArgGroup 是分组键：数值序列，必须依赖输入列（例如行业代码列）。截面里按它的取值分组，NaN 的行不属于任何组。
+	ArgGroup
 )
 
 // ArgSpec 描述一个参数。Min、Max 只对编译期常量参数有效（闭区间）。
@@ -115,6 +117,20 @@ func (f *Function) Validate(ints []int, floats []float64) string {
 		return ""
 	}
 	return f.validate(ints, floats)
+}
+
+// GroupArg 返回分组键在节点序列参数（ProgramNode.Args）中的位置；没有分组键时为 −1。
+// 截面算子的序列参数都写在编译期常量与标的字面量之前，所以它就是分组键之前的参数个数。
+func (f *Function) GroupArg() int {
+	if f == nil {
+		return -1
+	}
+	for i, arg := range f.Args {
+		if arg.Kind == ArgGroup {
+			return i
+		}
+	}
+	return -1
 }
 
 // Operator 报告它是否为运算符（只能通过运算符书写，不能按名字调用）。

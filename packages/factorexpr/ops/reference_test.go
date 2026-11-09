@@ -385,7 +385,7 @@ func TestCrossKernelsMatchReference(t *testing.T) {
 		indexes := valid(values)
 		out := make([]float64, len(values))
 
-		CrossKernel("cs_rank")(values, out)
+		CrossKernel("cs_rank", nil, "")(Section{Args: [][]float64{values}}, out)
 		for _, i := range indexes {
 			less, equal := 0, 0
 			for _, j := range indexes {
@@ -404,7 +404,7 @@ func TestCrossKernelsMatchReference(t *testing.T) {
 		for _, i := range indexes {
 			valid = append(valid, values[i])
 		}
-		CrossKernel("cs_zscore")(values, out)
+		CrossKernel("cs_zscore", nil, "")(Section{Args: [][]float64{values}}, out)
 		if len(valid) >= 2 && refVariance(valid) > 0 {
 			m, sd := toFloat(bigMean(valid)), math.Sqrt(refVariance(valid))
 			for _, i := range indexes {

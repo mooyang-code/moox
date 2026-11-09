@@ -223,7 +223,7 @@ func apply(src *exprSource, node ast.Node, fn *Function, args []*Node, argNodes 
 			if !arg.Kind.isNumber() {
 				return nil, src.errAt(at, "%s%s 需要数值，得到%s", label, spec.Name, arg.Kind.describe())
 			}
-		case ArgSeries:
+		case ArgSeries, ArgGroup:
 			if arg.Kind == KindNumberConst || arg.Scalar {
 				return nil, src.errAt(at, "%s%s 必须依赖输入列，不能是常量或参数", label, spec.Name)
 			}

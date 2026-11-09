@@ -59,7 +59,7 @@ func TestAggregateKernelsByHand(t *testing.T) {
 		if kernel == nil {
 			t.Fatalf("%s has no aggregate kernel", c.op)
 		}
-		got := kernel(c.values, subjects)
+		got := kernel(Section{Args: [][]float64{c.values}, Subjects: subjects})
 		if !sameValue(got, c.want) && math.Abs(got-c.want) > 1e-12 {
 			t.Errorf("%s%v(%v) = %v, want %v", c.op, c.floats, c.values, got, c.want)
 		}
@@ -73,16 +73,16 @@ func TestAggregateKernelsByHand(t *testing.T) {
 func TestAggregateReference(t *testing.T) {
 	subjects := []string{"A", "B", "C"}
 	ref := AggregateKernel("cs_ref", nil, "B")
-	if got := ref([]float64{1, 2, 3}, subjects); got != 2 {
+	if got := ref(Section{Args: [][]float64{{1, 2, 3}}, Subjects: subjects}); got != 2 {
 		t.Fatalf("cs_ref = %v, want 2", got)
 	}
-	if got := ref([]float64{1, nan, 3}, subjects); !math.IsNaN(got) {
+	if got := ref(Section{Args: [][]float64{{1, nan, 3}}, Subjects: subjects}); !math.IsNaN(got) {
 		t.Fatalf("cs_ref of NaN reference = %v, want NaN", got)
 	}
-	if got := AggregateKernel("cs_ref", nil, "Z")([]float64{1, 2, 3}, subjects); !math.IsNaN(got) {
+	if got := AggregateKernel("cs_ref", nil, "Z")(Section{Args: [][]float64{{1, 2, 3}}, Subjects: subjects}); !math.IsNaN(got) {
 		t.Fatalf("cs_ref of missing reference = %v, want NaN", got)
 	}
-	if got := ref(nil, nil); !math.IsNaN(got) {
+	if got := ref(Section{Args: [][]float64{nil}}); !math.IsNaN(got) {
 		t.Fatalf("cs_ref of empty section = %v, want NaN", got)
 	}
 }
@@ -101,7 +101,7 @@ func TestAggregateKernelsMatchReference(t *testing.T) {
 			}
 		}
 		check := func(op string, floats []float64, want float64, tol float64) {
-			got := AggregateKernel(op, floats, "")(values, subjects)
+			got := AggregateKernel(op, floats, "")(Section{Args: [][]float64{values}, Subjects: subjects})
 			if math.IsNaN(want) || math.IsNaN(got) {
 				if !(math.IsNaN(want) && math.IsNaN(got)) {
 					t.Fatalf("seed %d %s = %v, want %v", seed, op, got, want)
@@ -144,7 +144,7 @@ func TestRowwiseCrossNaN(t *testing.T) {
 		"cs_rank":   {0.5, nan, 1},
 	} {
 		out := make([]float64, len(values))
-		CrossKernel(op)(values, out)
+		CrossKernel(op, nil, "")(Section{Args: [][]float64{values}}, out)
 		for i := range want {
 			if !sameValue(out[i], want[i]) {
 				t.Errorf("%s[%d] = %v, want %v", op, i, out[i], want[i])
@@ -152,7 +152,7 @@ func TestRowwiseCrossNaN(t *testing.T) {
 		}
 		allNaN := []float64{nan, nan}
 		out = make([]float64, 2)
-		CrossKernel(op)(allNaN, out)
+		CrossKernel(op, nil, "")(Section{Args: [][]float64{allNaN}}, out)
 		if !math.IsNaN(out[0]) || !math.IsNaN(out[1]) {
 			t.Errorf("%s of all NaN = %v", op, out)
 		}
