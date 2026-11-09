@@ -243,6 +243,29 @@ func (s Service) ReplayWindow(ctx context.Context, spaceID string, resolved Reso
 	return end, generations, nil
 }
 
+// PoolReplayWindow 校验并截断策略池研究回放的区间：每个成员按自己的 min_age_bars 与回看校验起点、终点取各 View 各成员中最早的
+// （见 PoolWindow；研究回放不含最新一根）。返回截断后的终点与各市场校验所用的活动索引代次（市场 → 代次）。
+func (s Service) PoolReplayWindow(ctx context.Context, spaceID string, pooled PoolResolved, start, end, now time.Time) (time.Time, map[string]string, error) {
+	if s.Client == nil {
+		return time.Time{}, nil, errors.New("Storage 与 Factor 依赖未配置，不能回放")
+	}
+	views := make(map[string]ViewInfo, len(pooled.Resolved.Tasks))
+	generations := make(map[string]string, len(pooled.Resolved.Tasks))
+	for market, task := range pooled.Resolved.Tasks {
+		view, err := s.Client.GetView(ctx, spaceID, task.ViewID)
+		if err != nil {
+			return time.Time{}, nil, err
+		}
+		view.ViewID = task.ViewID
+		views[market], generations[market] = view, view.Generation
+	}
+	end, err := PoolWindow(ctx, s.Client, spaceID, pooled.Resolved, pooled.Members, pooled.Programs, views, start, end, now, false)
+	if err != nil {
+		return time.Time{}, nil, err
+	}
+	return end, generations, nil
+}
+
 // CheckPoolCoverage 在启用策略池时校验 View 的覆盖：按每个成员的 min_age_bars 与 A 股行键（见 CheckPoolMemberCoverage），
 // 再按精确的覆盖统计核对 View 实际的历史够不够预热（见 CheckPoolWarmCoverage）。
 func (s Service) CheckPoolCoverage(ctx context.Context, spaceID string, pooled PoolResolved, now time.Time) error {

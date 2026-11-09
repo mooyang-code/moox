@@ -91,6 +91,21 @@ func (f *fakeResolver) CheckPoolCoverage(context.Context, string, input.PoolReso
 	return f.coverageErr
 }
 
+// PoolReplayWindow 按每个成员的回看要求用同一份覆盖范围校验区间（假解析器的所有 View 共用 view）。
+func (f *fakeResolver) PoolReplayWindow(_ context.Context, _ string, pooled input.PoolResolved, start, end, now time.Time) (time.Time, map[string]string, error) {
+	for i, member := range pooled.Members {
+		var err error
+		if end, err = input.ReplayWindow(member.Resolved, pooled.Programs[i], f.view, start, end, now); err != nil {
+			return time.Time{}, nil, err
+		}
+	}
+	generations := make(map[string]string, len(pooled.Resolved.Tasks))
+	for market := range pooled.Resolved.Tasks {
+		generations[market] = f.view.Generation
+	}
+	return end, generations, nil
+}
+
 func createPoolInstance(h *harness, id, strategyID string, tasks map[string]string, enabled bool) *strategypb.CreateStrategyInstanceRsp {
 	h.t.Helper()
 	rsp, err := h.service.CreateStrategyInstance(h.ctx, &strategypb.CreateStrategyInstanceReq{Instance: &strategypb.StrategyInstance{InstanceId: id, StrategyId: strategyID, FactorTasks: tasks, Enabled: enabled}})
@@ -182,13 +197,14 @@ func TestPoolEnableFreezesMembers(t *testing.T) {
 	}
 }
 
-func TestPoolIsNotReplayableOrTrialled(t *testing.T) {
+// 第 8 期起研究回放支持策略池（原来断言“研究回放暂不支持策略池”），试算仍然不做。
+func TestPoolIsReplayableButNotTrialled(t *testing.T) {
 	h := newHarness(t)
 	h.createStrategy("member_spot", spotMemberDSL)
 	h.createStrategy("member_swap", swapMemberDSL)
 	h.createStrategy("pool_1", poolDefDSL)
 	replay, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "pool_1", FactorTasks: map[string]string{"spot": "ftask_p2", "swap": "ftask_p2swap"}, StartTime: "2026-09-01", EndTime: "2026-09-02"})
-	requireFail(t, int32(replay.GetRetInfo().GetCode()), replay.GetRetInfo().GetMsg(), "研究回放暂不支持策略池")
+	requireOK(t, int32(replay.GetRetInfo().GetCode()), replay.GetRetInfo().GetMsg())
 	validated, _ := h.service.ValidateStrategy(h.ctx, &strategypb.ValidateStrategyReq{DslYaml: poolDefDSL, FactorTasks: map[string]string{"spot": "ftask_p2", "swap": "ftask_p2swap"}})
 	requireOK(t, int32(validated.GetRetInfo().GetCode()), validated.GetRetInfo().GetMsg())
 	if validated.GetResolvedJson() == "" || validated.GetTrial() != nil {

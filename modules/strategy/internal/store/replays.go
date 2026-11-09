@@ -53,6 +53,9 @@ type Replay struct {
 	SwapFeeBps float64
 	// FundingColumn 非空时永续持仓按 View 里的这一列（本根累计的资金费率）结算资金费；空串表示不计。
 	FundingColumn string
+	// MembersJSON 是策略池回放发起时固化的成员（input.PoolMember 列表的 JSON，与会话的成员快照同一格式）；执行时只读它，
+	// 不重读成员定义。单策略回放为空（落库为 NULL）；列表不读这一列。
+	MembersJSON string
 	// Factors 是发起回放时固化的因子定义指纹；执行时与当时的定义比对，排队期间变化即拒绝执行。
 	Factors      map[string]string
 	Status       string
@@ -107,6 +110,7 @@ type replayRow struct {
 	SpotFeeBps    float64        `gorm:"column:c_spot_fee_bps"`
 	SwapFeeBps    float64        `gorm:"column:c_swap_fee_bps"`
 	FundingColumn string         `gorm:"column:c_funding_column"`
+	MembersJSON   sql.NullString `gorm:"column:c_members_json"`
 	FactorsJSON   string         `gorm:"column:c_factors_json"`
 	Status        string         `gorm:"column:c_status"`
 	ProgressTime  sql.NullInt64  `gorm:"column:c_progress_time"`
@@ -119,7 +123,7 @@ type replayRow struct {
 func (r replayRow) replay() Replay {
 	replay := Replay{
 		ReplayID: r.ReplayID, StrategyID: nullableString(r.StrategyID), InstanceID: nullableString(r.InstanceID), SessionID: nullableString(r.SessionID), DSLYaml: r.DSLYaml, DSLHash: r.DSLHash, Calendar: r.Calendar, SpaceID: r.SpaceID,
-		StartTime: fromMillis(r.StartTime), EndTime: fromMillis(r.EndTime), SpotFeeBps: r.SpotFeeBps, SwapFeeBps: r.SwapFeeBps, FundingColumn: r.FundingColumn, Status: r.Status,
+		StartTime: fromMillis(r.StartTime), EndTime: fromMillis(r.EndTime), SpotFeeBps: r.SpotFeeBps, SwapFeeBps: r.SwapFeeBps, FundingColumn: r.FundingColumn, MembersJSON: r.MembersJSON.String, Status: r.Status,
 		MetricsJSON: json.RawMessage(r.MetricsJSON), Error: r.Error, CreatedAt: r.CreatedAt.UTC(), UpdatedAt: r.UpdatedAt.UTC(),
 	}
 	if r.ProgressTime.Valid {
@@ -139,18 +143,18 @@ func (r replayRow) replay() Replay {
 const (
 	// sqlInsertReplay 写入一条排队中的回放。
 	sqlInsertReplay = `
-	INSERT INTO t_strategy_replays (c_replay_id, c_strategy_id, c_instance_id, c_session_id, c_dsl_yaml, c_dsl_hash, c_calendar, c_space_id, c_tasks_json, c_start_time, c_end_time, c_spot_fee_bps, c_swap_fee_bps, c_funding_column, c_factors_json, c_status, c_progress_time, c_metrics_json, c_error, c_ctime, c_mtime)
-	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, '{}', '', ?, ?)`
+	INSERT INTO t_strategy_replays (c_replay_id, c_strategy_id, c_instance_id, c_session_id, c_dsl_yaml, c_dsl_hash, c_calendar, c_space_id, c_tasks_json, c_start_time, c_end_time, c_spot_fee_bps, c_swap_fee_bps, c_funding_column, c_members_json, c_factors_json, c_status, c_progress_time, c_metrics_json, c_error, c_ctime, c_mtime)
+	VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, '{}', '', ?, ?)`
 	// sqlCountActiveReplays 统计空间内排队与运行中的回放。
 	sqlCountActiveReplays = `SELECT COUNT(*) FROM t_strategy_replays WHERE c_space_id = ? AND c_status IN ('pending', 'running')`
 	// sqlSelectReplayByID 按回放 ID 读取回放。
-	sqlSelectReplayByID = `SELECT c_replay_id, c_strategy_id, c_instance_id, c_session_id, c_dsl_yaml, c_dsl_hash, c_calendar, c_space_id, c_tasks_json, c_start_time, c_end_time, c_spot_fee_bps, c_swap_fee_bps, c_funding_column, c_factors_json, c_status, c_progress_time, c_metrics_json, c_error, c_ctime, c_mtime FROM t_strategy_replays WHERE c_replay_id = ?`
+	sqlSelectReplayByID = `SELECT c_replay_id, c_strategy_id, c_instance_id, c_session_id, c_dsl_yaml, c_dsl_hash, c_calendar, c_space_id, c_tasks_json, c_start_time, c_end_time, c_spot_fee_bps, c_swap_fee_bps, c_funding_column, c_members_json, c_factors_json, c_status, c_progress_time, c_metrics_json, c_error, c_ctime, c_mtime FROM t_strategy_replays WHERE c_replay_id = ?`
 	// sqlCountReplaysOfSpace 统计空间内的全部回放。
 	sqlCountReplaysOfSpace = `SELECT COUNT(*) FROM t_strategy_replays WHERE c_space_id = ?`
-	// sqlListReplaysOfSpace 按创建时间倒序分页列出空间内的回放，不读取 DSL 全文（c_dsl_yaml 返回空串）。
-	sqlListReplaysOfSpace = `SELECT c_replay_id, c_strategy_id, c_instance_id, c_session_id, '' AS c_dsl_yaml, c_dsl_hash, c_calendar, c_space_id, c_tasks_json, c_start_time, c_end_time, c_spot_fee_bps, c_swap_fee_bps, c_funding_column, c_factors_json, c_status, c_progress_time, c_metrics_json, c_error, c_ctime, c_mtime FROM t_strategy_replays WHERE c_space_id = ? ORDER BY c_ctime DESC, c_replay_id LIMIT ? OFFSET ?`
+	// sqlListReplaysOfSpace 按创建时间倒序分页列出空间内的回放，不读取 DSL 全文与成员快照（c_dsl_yaml 返回空串，c_members_json 返回 NULL）。
+	sqlListReplaysOfSpace = `SELECT c_replay_id, c_strategy_id, c_instance_id, c_session_id, '' AS c_dsl_yaml, c_dsl_hash, c_calendar, c_space_id, c_tasks_json, c_start_time, c_end_time, c_spot_fee_bps, c_swap_fee_bps, c_funding_column, NULL AS c_members_json, c_factors_json, c_status, c_progress_time, c_metrics_json, c_error, c_ctime, c_mtime FROM t_strategy_replays WHERE c_space_id = ? ORDER BY c_ctime DESC, c_replay_id LIMIT ? OFFSET ?`
 	// sqlSelectNextPendingReplay 读取最早的一条排队中的回放。
-	sqlSelectNextPendingReplay = `SELECT c_replay_id, c_strategy_id, c_instance_id, c_session_id, c_dsl_yaml, c_dsl_hash, c_calendar, c_space_id, c_tasks_json, c_start_time, c_end_time, c_spot_fee_bps, c_swap_fee_bps, c_funding_column, c_factors_json, c_status, c_progress_time, c_metrics_json, c_error, c_ctime, c_mtime FROM t_strategy_replays WHERE c_status = 'pending' ORDER BY c_ctime, c_replay_id LIMIT 1`
+	sqlSelectNextPendingReplay = `SELECT c_replay_id, c_strategy_id, c_instance_id, c_session_id, c_dsl_yaml, c_dsl_hash, c_calendar, c_space_id, c_tasks_json, c_start_time, c_end_time, c_spot_fee_bps, c_swap_fee_bps, c_funding_column, c_members_json, c_factors_json, c_status, c_progress_time, c_metrics_json, c_error, c_ctime, c_mtime FROM t_strategy_replays WHERE c_status = 'pending' ORDER BY c_ctime, c_replay_id LIMIT 1`
 	// sqlClaimReplay 比较交换把排队中的回放改为运行中。
 	sqlClaimReplay = `UPDATE t_strategy_replays SET c_status = 'running', c_mtime = ? WHERE c_replay_id = ? AND c_status = 'pending'`
 	// sqlUpdateReplayProgress 推进运行中回放的进度。
@@ -218,6 +222,15 @@ func (s *Store) CreateReplay(ctx context.Context, replay Replay) error {
 	if err != nil {
 		return err
 	}
+	// 成员快照只有策略池回放写，单策略回放落库为 NULL。
+	var membersJSON any
+	if replay.MembersJSON != "" {
+		var members []json.RawMessage
+		if err := json.Unmarshal([]byte(replay.MembersJSON), &members); err != nil || len(members) == 0 {
+			return errors.New("策略池回放的成员快照必须是非空的 JSON 数组")
+		}
+		membersJSON = replay.MembersJSON
+	}
 	return s.transaction(ctx, func(tx *gorm.DB) error {
 		var active int64
 		if err := tx.Raw(sqlCountActiveReplays, replay.SpaceID).Scan(&active).Error; err != nil {
@@ -226,7 +239,7 @@ func (s *Store) CreateReplay(ctx context.Context, replay Replay) error {
 		if active >= MaxActiveReplays {
 			return fmt.Errorf("空间 %s 已有 %d 个排队或运行中的回放，请等它们完成或取消后再发起", replay.SpaceID, active)
 		}
-		return tx.Exec(sqlInsertReplay, replay.ReplayID, stringValue(replay.StrategyID), stringValue(replay.InstanceID), stringValue(replay.SessionID), replay.DSLYaml, replay.DSLHash, replay.Calendar, replay.SpaceID, string(tasksJSON), millis(replay.StartTime), millis(replay.EndTime), replay.SpotFeeBps, replay.SwapFeeBps, replay.FundingColumn, string(factorsJSON), now, now).Error
+		return tx.Exec(sqlInsertReplay, replay.ReplayID, stringValue(replay.StrategyID), stringValue(replay.InstanceID), stringValue(replay.SessionID), replay.DSLYaml, replay.DSLHash, replay.Calendar, replay.SpaceID, string(tasksJSON), millis(replay.StartTime), millis(replay.EndTime), replay.SpotFeeBps, replay.SwapFeeBps, replay.FundingColumn, membersJSON, string(factorsJSON), now, now).Error
 	})
 }
 

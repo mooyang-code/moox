@@ -309,6 +309,9 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 	if err != nil {
 		return Metrics{}, err
 	}
+	if strategy.IsPool() {
+		return r.replayPool(ctx, job, strategy)
+	}
 	tasks := replayTaskIDs(job)
 	resolved, program, err := input.ResolveTasks(ctx, r.Client, job.SpaceID, tasks, strategy)
 	if err != nil {
@@ -347,12 +350,9 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 	if err != nil {
 		return Metrics{}, err
 	}
-	acc := newAccumulator(r.initialEquity(), periodsPerYear(resolved.Calendar, resolved.Bar, freq.NominalDuration()), minAnnualizedBars(resolved.Calendar, resolved.Bar, freq.NominalDuration()))
+	acc := r.newAccumulator(resolved, freq.NominalDuration(), job, end, bars)
 	acc.metrics.Factors = resolved.Factors
 	acc.metrics.Limitations = limitations(r.liquidateAfter(), usesTags(strategy), slices.Contains(markets, dsl.MarketSwap), job.FundingColumn)
-	if end.Before(job.EndTime) {
-		acc.setNote(noteTruncated, fmt.Sprintf("排队期间 View 重建了索引，回放区间的终点按新索引截短：区间内最后一根 K 线结束于 %s", input.BarEndLabel(resolved.Calendar, resolved.Bar, bars[len(bars)-1].BarEnd)))
-	}
 	columns := uniqueStrings(append(append([]string{"close"}, program.MainColumns()...), program.PreviousColumns...))
 	// 计资金费时永续的行另读费率列；统一数据集两个市场共用一个 View 与读取缓存，两边都读这一列，查询才相同。
 	columnsOf := func(market string) []string {
@@ -386,9 +386,8 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 	}
 	reader := &segmentReader{runner: r, job: job, resolved: resolved, program: program, end: end, acc: acc, abort: abort, markets: readers, refs: refs, memo: memo}
 	members := cachedMembership(r.Client, job.SpaceID)
-	book := ledger.NewLedger(r.initialEquity(), job.SpotFeeBps, job.SwapFeeBps, r.liquidateAfter())
+	book := r.newBook(job, resolved, acc)
 	state := engine.State{}
-	previousEquity := r.initialEquity()
 	chunk := r.chunkBars()
 	for start := 0; start < len(bars); start += chunk {
 		segment := bars[start:min(start+chunk, len(bars))]
@@ -396,12 +395,7 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 		if err != nil {
 			return acc.finish(), err
 		}
-		// 换代后新索引可能截短了终点：丢掉终点之后的 bar（复查保证本段至少还剩第一根）。
-		if cut := sort.Search(len(bars), func(i int) bool { return !bars[i].StorageStart.Before(reader.end) }); cut < len(bars) {
-			bars = bars[:cut]
-			segment = bars[start:min(start+chunk, len(bars))]
-			acc.setNote(noteTruncated, fmt.Sprintf("回放过程中 View 重建了索引，回放区间的终点按新索引截短：区间内最后一根 K 线结束于 %s", input.BarEndLabel(resolved.Calendar, resolved.Bar, bars[cut-1].BarEnd)))
-		}
+		bars, segment = truncateBars(bars, start, chunk, reader.end, resolved, acc)
 		for _, bar := range segment {
 			if err := abort(ctx); err != nil {
 				return acc.finish(), err
@@ -410,29 +404,12 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 			if err != nil {
 				return acc.finish(), err
 			}
-			prices := barPrices(readers, segments, bar.StorageStart.Unix())
-			ok := decision.Status == engine.StatusOK
-			targets := make(map[string]float64, len(decision.Targets))
-			for _, target := range decision.Targets {
-				weight, _ := strconv.ParseFloat(target.Weight.String(), 64)
-				targets[engine.TargetKey(target.InstrumentID, target.Market)] = weight
-			}
-			outcome := book.Step(ledger.Step{Prices: prices, Targets: targets, OK: ok, Funding: barFunding(readers, segments, bar.StorageStart.Unix(), job.FundingColumn)})
-			if ok {
-				state = decision.State
-			}
-			barReturn := 0.0
-			if previousEquity > 0 {
-				barReturn = outcome.EquityAfter/previousEquity - 1
-			}
-			previousEquity = outcome.EquityAfter
-			// 先写入周期再累计指标：写入失败时，保留的部分指标与已写入的周期一致。
-			if err := r.writeBar(ctx, job.ReplayID, bar.BarEnd, decision, book, outcome, barReturn); err != nil {
+			key := bar.StorageStart.Unix()
+			if err := book.settle(ctx, bar, decision, barPrices(readers, segments, key), barFunding(readers, segments, key, job.FundingColumn)); err != nil {
 				return acc.finish(), err
 			}
-			acc.add(bar.BarEnd, ok, decision.SkipReason, outcome, book.Holdings())
-			if outcome.Bankrupt {
-				acc.setNote(noteBankrupt, fmt.Sprintf("权益在 %s 这一期不为正（模拟爆仓），此后各期空仓：目标不再成交，权益保持不变", input.BarEndLabel(resolved.Calendar, resolved.Bar, bar.BarEnd)))
+			if decision.Status == engine.StatusOK {
+				state = decision.State
 			}
 		}
 		if err := r.Store.UpdateReplayProgress(ctx, job.ReplayID, segment[len(segment)-1].BarEnd, r.now()); err != nil {
@@ -440,6 +417,64 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 		}
 	}
 	return acc.finish(), nil
+}
+
+// newAccumulator 构造回放的指标累计器；排队期间换代截短了终点时先记下说明。
+func (r *Runner) newAccumulator(resolved input.Resolved, duration time.Duration, job store.Replay, end time.Time, bars []input.PeriodBoundaries) *accumulator {
+	acc := newAccumulator(r.initialEquity(), periodsPerYear(resolved.Calendar, resolved.Bar, duration), minAnnualizedBars(resolved.Calendar, resolved.Bar, duration))
+	if end.Before(job.EndTime) {
+		acc.setNote(noteTruncated, fmt.Sprintf("排队期间 View 重建了索引，回放区间的终点按新索引截短：区间内最后一根 K 线结束于 %s", input.BarEndLabel(resolved.Calendar, resolved.Bar, bars[len(bars)-1].BarEnd)))
+	}
+	return acc
+}
+
+// truncateBars 在回放过程中换代截短了终点时丢掉终点之后的 bar（复查保证本段至少还剩第一根），返回剩下的 bar 与本段。
+func truncateBars(bars []input.PeriodBoundaries, start, chunk int, end time.Time, resolved input.Resolved, acc *accumulator) ([]input.PeriodBoundaries, []input.PeriodBoundaries) {
+	if cut := sort.Search(len(bars), func(i int) bool { return !bars[i].StorageStart.Before(end) }); cut < len(bars) {
+		bars = bars[:cut]
+		acc.setNote(noteTruncated, fmt.Sprintf("回放过程中 View 重建了索引，回放区间的终点按新索引截短：区间内最后一根 K 线结束于 %s", input.BarEndLabel(resolved.Calendar, resolved.Bar, bars[cut-1].BarEnd)))
+	}
+	return bars, bars[start:min(start+chunk, len(bars))]
+}
+
+// replayBook 是回放的理论账本与逐期记录：按决策的目标调仓、写入这一期、累计指标。单策略回放与策略池回放（池级账本承接合成后的池目标）共用。
+type replayBook struct {
+	runner   *Runner
+	job      store.Replay
+	resolved input.Resolved
+	acc      *accumulator
+	ledger   *ledger.Ledger
+	// previousEquity 是上一期末的权益（算本期收益用）。
+	previousEquity float64
+}
+
+// newBook 构造回放的账本：费率用回放任务的现货、永续费率。
+func (r *Runner) newBook(job store.Replay, resolved input.Resolved, acc *accumulator) *replayBook {
+	return &replayBook{runner: r, job: job, resolved: resolved, acc: acc, ledger: ledger.NewLedger(r.initialEquity(), job.SpotFeeBps, job.SwapFeeBps, r.liquidateAfter()), previousEquity: r.initialEquity()}
+}
+
+// settle 让账本承接一期的决策（skipped 期只估值、不调仓），先写入这一期再累计指标：写入失败时，保留的部分指标与已写入的周期一致。
+func (b *replayBook) settle(ctx context.Context, bar input.PeriodBoundaries, decision engine.Decision, prices, funding map[string]float64) error {
+	ok := decision.Status == engine.StatusOK
+	targets := make(map[string]float64, len(decision.Targets))
+	for _, target := range decision.Targets {
+		weight, _ := strconv.ParseFloat(target.Weight.String(), 64)
+		targets[engine.TargetKey(target.InstrumentID, target.Market)] = weight
+	}
+	outcome := b.ledger.Step(ledger.Step{Prices: prices, Targets: targets, OK: ok, Funding: funding})
+	barReturn := 0.0
+	if b.previousEquity > 0 {
+		barReturn = outcome.EquityAfter/b.previousEquity - 1
+	}
+	b.previousEquity = outcome.EquityAfter
+	if err := b.runner.writeBar(ctx, b.job.ReplayID, bar.BarEnd, decision, b.ledger, outcome, barReturn); err != nil {
+		return err
+	}
+	b.acc.add(bar.BarEnd, ok, decision.SkipReason, outcome, b.ledger.Holdings())
+	if outcome.Bankrupt {
+		b.acc.setNote(noteBankrupt, fmt.Sprintf("权益在 %s 这一期不为正（模拟爆仓），此后各期空仓：目标不再成交，权益保持不变", input.BarEndLabel(b.resolved.Calendar, b.resolved.Bar, bar.BarEnd)))
+	}
+	return nil
 }
 
 // barPrices 是一根 bar 上各（标的，市场）的收盘价：按各 View 的原始行取，不受选币池构造的去重影响（另一个市场的持仓也要估值）；
@@ -662,6 +697,18 @@ type segmentReader struct {
 	memo *input.RowsMemo
 	// end 是当前有效的终点（不含）：换代后可能被新索引截短。
 	end time.Time
+	// group 非空时换代由它统一跟随（策略池回放的全部成员共用一个计数，一起切换），switches 不用。
+	group *readerGroup
+}
+
+// usesTask 报告这个读取器有没有读任务键 taskKey 上的 View。
+func (s *segmentReader) usesTask(taskKey string) bool {
+	for _, market := range s.markets {
+		if s.resolved.TaskKey(market.market) == taskKey {
+			return true
+		}
+	}
+	return false
 }
 
 // marketSegment 是一个市场一段读取的结果：行与年龄判定的历史，以及各附加来源这一段的行（来源名 → 行）。
@@ -711,6 +758,12 @@ reload:
 				}
 				loaded[market.market] = marketSegment{rows: rows, ages: ages, sources: sources}
 				continue
+			}
+			if s.group != nil {
+				if err := s.group.follow(ctx, s.resolved.TaskKey(market.market), changed.View, segment[0].StorageStart); err != nil {
+					return nil, err
+				}
+				continue reload
 			}
 			if s.switches >= maxIndexSwitches {
 				return nil, fmt.Errorf("View %s 的活动索引在回放过程中持续变化，请稍后重新发起回放", market.task.ViewID)

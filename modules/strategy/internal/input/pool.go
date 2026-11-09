@@ -214,6 +214,46 @@ func ParseMembers(raw string) ([]PoolMember, []*dsl.Program, error) {
 	return members, programs, nil
 }
 
+// PoolMemberDefs 把成员快照（PoolMembersJSON 的格式：会话或回放记录的 c_members_json）还原成成员定义：取 id、策略 ID、DSL 文本与哈希，
+// DSL 重新解析，绑定由调用方按 ResolvePool 重新解析。从实例发起的池回放取会话的成员快照、执行池回放时取回放记录的成员快照，
+// 都不重读成员的当前定义，所以排队期间改了成员定义也不影响。
+func PoolMemberDefs(raw string) ([]PoolMemberDef, error) {
+	var members []PoolMember
+	if err := json.Unmarshal([]byte(raw), &members); err != nil {
+		return nil, &describedError{message: "成员快照 members_json 无法解析", cause: err}
+	}
+	if len(members) == 0 {
+		return nil, errors.New("成员快照 members_json 没有成员")
+	}
+	defs := make([]PoolMemberDef, 0, len(members))
+	for _, member := range members {
+		if member.ID == "" || strings.TrimSpace(member.DSLYaml) == "" {
+			return nil, fmt.Errorf("成员快照里的成员 %q 缺少 id 或 DSL 文本", member.ID)
+		}
+		strategy, err := dsl.Parse([]byte(member.DSLYaml))
+		if err != nil {
+			return nil, fmt.Errorf("成员快照里成员 %s 的 DSL 无效：%w", member.ID, err)
+		}
+		defs = append(defs, PoolMemberDef{ID: member.ID, StrategyID: member.StrategyID, DSLYaml: member.DSLYaml, DSLHash: member.DSLHash, Strategy: strategy})
+	}
+	return defs, nil
+}
+
+// CheckPoolReplayStart 核对策略池研究回放的起点：drift 写了 allocation.start（或 initial.at）时，回放的第一根必须就是漂移起点。
+// 回放从别的根开始时，漂移要么从回放的第一根重新开始、要么前面几根还没到起点，与实时结果不可比。没写起点时漂移从回放的第一根开始，不用核对。
+func CheckPoolReplayStart(resolved Resolved, pool dsl.StrategyPool, first PeriodBoundaries) error {
+	clock, err := PoolClock(resolved.Calendar, resolved.Bar, pool)
+	if err != nil {
+		return err
+	}
+	if !clock.HasStart || first.BarIndex == clock.Start {
+		return nil
+	}
+	text := pool.Allocation.DriftStart()
+	return fmt.Errorf("%s 是 %s，策略池回放的起点必须等于漂移起点才与实时结果可比，实际第一根从 %s 开始：请把 start_time 改为 %s",
+		driftStartField(pool), text, PeriodLabel(resolved.Calendar, resolved.Bar, first.StorageStart), text)
+}
+
 // MemberStrategies 返回成员 id → 编译后的成员策略（programs 与 members 下标一致），构造池配置时判定成员方向用。
 func MemberStrategies(members []PoolMember, programs []*dsl.Program) map[string]dsl.Strategy {
 	strategies := make(map[string]dsl.Strategy, len(members))

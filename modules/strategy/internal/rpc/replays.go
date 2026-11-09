@@ -87,9 +87,6 @@ func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayRe
 	if fundingColumn != "" && !dsl.ValidColumnName(fundingColumn) {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(fmt.Errorf("funding_column %q 必须是 View 里的列名", fundingColumn))}, nil
 	}
-	if strategy.IsPool() {
-		return &strategypb.StartReplayRsp{RetInfo: invalid(errors.New("研究回放暂不支持策略池：成员的净值与分配比例要在池实例启用后的预热与运行中查看"))}, nil
-	}
 	if len(strategy.FactorParams) > 0 {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(errors.New("输出了 factor_params 的策略暂不支持研究回放：可变成员的参数随策略逐期变化，需要从实例发起的闭环回放"))}, nil
 	}
@@ -102,8 +99,26 @@ func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayRe
 	} else if active >= store.MaxActiveReplays {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(fmt.Errorf("空间 %s 已有 %d 个排队或运行中的回放，请等它们完成或取消后再发起", scoped, active))}, nil
 	}
-	resolved, program, err := s.Resolver.Resolve(ctx, scoped, tasks, strategy)
-	if err != nil {
+	// 策略池按成员分别解析绑定，并把成员固化进回放记录：执行时只读这份快照，不重读成员定义。
+	var (
+		resolved    input.Resolved
+		program     *dsl.Program
+		pooled      input.PoolResolved
+		membersJSON string
+	)
+	if strategy.IsPool() {
+		members, err := s.replayPoolMembers(ctx, source, strategy)
+		if err != nil {
+			return &strategypb.StartReplayRsp{RetInfo: invalid(err)}, nil
+		}
+		if pooled, err = s.Resolver.ResolvePool(ctx, scoped, input.TaskIDs(tasks), strategy, members); err != nil {
+			return &strategypb.StartReplayRsp{RetInfo: invalid(err)}, nil
+		}
+		if membersJSON, err = pooled.MembersJSON(); err != nil {
+			return &strategypb.StartReplayRsp{RetInfo: failure(err)}, nil
+		}
+		resolved = pooled.Resolved
+	} else if resolved, program, err = s.Resolver.Resolve(ctx, scoped, tasks, strategy); err != nil {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(err)}, nil
 	}
 	if err := input.CheckResolvedMarkets(resolved, tasks); err != nil {
@@ -123,7 +138,12 @@ func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayRe
 	}
 	// 同步校验起点、截断终点并检查根数上限：排队后才失败、或回放没有数据的未来 bar 都会误导用户。
 	var generations map[string]string
-	if end, generations, err = s.Resolver.ReplayWindow(ctx, scoped, resolved, program, start, end, s.nowTime()); err != nil {
+	if strategy.IsPool() {
+		end, generations, err = s.Resolver.PoolReplayWindow(ctx, scoped, pooled, start, end, s.nowTime())
+	} else {
+		end, generations, err = s.Resolver.ReplayWindow(ctx, scoped, resolved, program, start, end, s.nowTime())
+	}
+	if err != nil {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(err)}, nil
 	}
 	bars, err := input.ReplayBars(resolved.Calendar, resolved.Bar, start, end, input.DefaultReplayMaxBars)
@@ -132,6 +152,11 @@ func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayRe
 	}
 	if len(bars) == 0 {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(errors.New("回放区间内没有完整的 bar"))}, nil
+	}
+	if strategy.IsPool() {
+		if err := input.CheckPoolReplayStart(resolved, *strategy.Pool, bars[0]); err != nil {
+			return &strategypb.StartReplayRsp{RetInfo: invalid(err)}, nil
+		}
 	}
 	replayID, err := store.NewID()
 	if err != nil {
@@ -142,7 +167,7 @@ func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayRe
 	for key, task := range bindings {
 		replayTasks[key] = store.ReplayTask{FactorTaskID: task.FactorTaskID, ViewID: task.ViewID, ViewGeneration: generations[key]}
 	}
-	replay := store.Replay{ReplayID: replayID, StrategyID: source.strategyID, InstanceID: source.instanceID, SessionID: source.sessionID, DSLYaml: source.dslYaml, DSLHash: dsl.Hash([]byte(source.dslYaml)), Calendar: resolved.Calendar, SpaceID: scoped, Tasks: replayTasks, StartTime: start, EndTime: end, SpotFeeBps: req.GetSpotFeeBps(), SwapFeeBps: req.GetSwapFeeBps(), FundingColumn: fundingColumn, Factors: resolved.Factors, CreatedAt: s.nowTime()}
+	replay := store.Replay{ReplayID: replayID, StrategyID: source.strategyID, InstanceID: source.instanceID, SessionID: source.sessionID, DSLYaml: source.dslYaml, DSLHash: dsl.Hash([]byte(source.dslYaml)), Calendar: resolved.Calendar, SpaceID: scoped, Tasks: replayTasks, StartTime: start, EndTime: end, SpotFeeBps: req.GetSpotFeeBps(), SwapFeeBps: req.GetSwapFeeBps(), FundingColumn: fundingColumn, MembersJSON: membersJSON, Factors: resolved.Factors, CreatedAt: s.nowTime()}
 	if err := s.Store.CreateReplay(ctx, replay); err != nil {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(err)}, nil
 	}
@@ -164,6 +189,8 @@ type replayInput struct {
 	sessionID  *string
 	// instanceTasks 是从实例发起时实例关联的因子任务（市场 → 任务）；其他来源为 nil。
 	instanceTasks map[string]string
+	// membersJSON 是从策略池实例发起时会话固化的成员快照：回放实例在跑（或最后在跑）的成员版本，而不是成员的当前定义。
+	membersJSON string
 }
 
 // replaySource 按 strategy_id、dsl_yaml、instance_id 三选一确定被回放的 DSL 文本：定义当前的版本、给定文本，
@@ -210,10 +237,22 @@ func (s *Service) replaySource(ctx context.Context, scoped string, req *strategy
 		if err != nil {
 			return replayInput{}, err
 		}
-		return replayInput{dslYaml: version.DSLYaml, strategyID: &instance.StrategyID, instanceID: &instance.InstanceID, sessionID: &sessionID, instanceTasks: instance.FactorTasks}, nil
+		return replayInput{dslYaml: version.DSLYaml, strategyID: &instance.StrategyID, instanceID: &instance.InstanceID, sessionID: &sessionID, instanceTasks: instance.FactorTasks, membersJSON: session.MembersJSON}, nil
 	default:
 		return replayInput{dslYaml: text}, nil
 	}
+}
+
+// replayPoolMembers 返回策略池回放的成员定义：从实例发起时取会话固化的成员快照，其余来源取成员的当前定义（并核对都能进池）。
+func (s *Service) replayPoolMembers(ctx context.Context, source replayInput, strategy dsl.Strategy) ([]input.PoolMemberDef, error) {
+	if source.instanceID != nil {
+		members, err := input.PoolMemberDefs(source.membersJSON)
+		if err != nil {
+			return nil, fmt.Errorf("实例 %s 的会话：%w", *source.instanceID, err)
+		}
+		return members, nil
+	}
+	return s.checkPool(ctx, strategy)
 }
 
 func (s *Service) scopedReplay(ctx context.Context, replayID string) (store.Replay, error) {
