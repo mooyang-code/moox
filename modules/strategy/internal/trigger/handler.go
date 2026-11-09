@@ -40,8 +40,8 @@ const (
 // Loader 为实例装配一期输入。
 type Loader interface {
 	LoadBar(ctx context.Context, spaceID string, resolved input.Resolved, program *dsl.Program, bar input.Bar) (input.Loaded, error)
-	// LoadPrices 读取一期里若干（标的|市场）的收盘价，策略池的成员账本估值用。
-	LoadPrices(ctx context.Context, spaceID string, resolved input.Resolved, bar input.Bar, keys []string) (map[string]float64, error)
+	// LoadPrices 读取一期里若干（标的|市场）的收盘价，策略池的成员账本估值用；fundingColumn 非空时同时读永续的资金费率。
+	LoadPrices(ctx context.Context, spaceID string, resolved input.Resolved, bar input.Bar, keys []string, fundingColumn string) (prices, funding map[string]float64, err error)
 }
 
 // Observer 接收每个处理周期的结果，用于指标与 Monitor 上报。

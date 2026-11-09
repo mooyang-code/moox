@@ -79,7 +79,7 @@ func itemProtos(items []store.ResultItem) []*strategypb.StrategyResultItem {
 func replayProto(value store.Replay) *strategypb.Replay {
 	replay := &strategypb.Replay{
 		ReplayId: value.ReplayID, StrategyId: dereference(value.StrategyID), DslYaml: value.DSLYaml, SpaceId: value.SpaceID,
-		StartTime: formatTime(value.StartTime), EndTime: formatTime(value.EndTime), SpotFeeBps: value.SpotFeeBps, SwapFeeBps: value.SwapFeeBps, Status: value.Status,
+		StartTime: formatTime(value.StartTime), EndTime: formatTime(value.EndTime), SpotFeeBps: value.SpotFeeBps, SwapFeeBps: value.SwapFeeBps, FundingColumn: value.FundingColumn, Status: value.Status,
 		MetricsJson: string(value.MetricsJSON), Error: value.Error, CreatedAt: formatTime(value.CreatedAt), UpdatedAt: formatTime(value.UpdatedAt),
 		DslHash: value.DSLHash, InstanceId: dereference(value.InstanceID), SessionId: dereference(value.SessionID), Calendar: value.Calendar,
 	}

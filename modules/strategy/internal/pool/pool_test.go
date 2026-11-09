@@ -41,7 +41,7 @@ func poolConfig(t *testing.T, allocation, portfolio string, members ...string) C
 			mode = dsl.Market{Select: dsl.MarketBoth, Prefer: dsl.MarketSpot}
 		}
 	}
-	cfg, err := NewConfig(strategy, mode)
+	cfg, err := NewConfig(strategy, mode, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

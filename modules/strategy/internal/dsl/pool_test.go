@@ -134,15 +134,18 @@ func TestValidatePoolMembers(t *testing.T) {
 		members  map[string]Strategy
 		contains string
 	}{
-		"成员不存在":       {map[string]Strategy{"a": spot}, "不存在"},
-		"成员没写 market": {map[string]Strategy{"a": spot, "b": member("")}, "没有显式写 market"},
-		"成员 bar 不一致":  {map[string]Strategy{"a": spot, "b": member("market: {select: spot}\nbar: 5m\n")}, "不一致"},
-		"成员是池":        {map[string]Strategy{"a": spot, "b": pool}, "不能嵌套"},
+		"成员不存在":      {map[string]Strategy{"a": spot}, "不存在"},
+		"成员 bar 不一致": {map[string]Strategy{"a": spot, "b": member("market: {select: spot}\nbar: 5m\n")}, "不一致"},
+		"成员是池":       {map[string]Strategy{"a": spot, "b": pool}, "不能嵌套"},
 		"成员用 factor_params": {map[string]Strategy{"a": spot, "b": func() Strategy {
 			strategy := member("market: {select: spot}\n")
 			strategy.FactorParams = map[string]map[string]ParamExpr{"m": {"p": {Default: "1"}}}
 			return strategy
 		}()}, "factor_params"},
+	}
+	// S8 取消了“成员必须写 market”：股票成员不写 market，保存时放行，启用时按池绑定的任务判断（见 TestInferPoolMemberMarkets）。
+	if _, err := ValidatePoolMembers(pool, map[string]Strategy{"a": spot, "b": member("")}); err != nil {
+		t.Fatalf("没写 market 的成员保存时放行：%v", err)
 	}
 	for name, tc := range bad {
 		if _, err := ValidatePoolMembers(pool, tc.members); err == nil || !strings.Contains(err.Error(), tc.contains) {
@@ -175,7 +178,7 @@ rules:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := strategy.MaxHoldBars(); got != 12 {
+	if got := strategy.MaxHoldBars(BarClock{PerDay: 24}); got != 12 {
 		t.Fatalf("最长持有期 %d，期望 12", got)
 	}
 }

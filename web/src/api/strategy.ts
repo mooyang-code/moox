@@ -101,6 +101,7 @@ function normalizeReplay(value: any): Replay {
     end_time: value?.end_time ?? "",
     spot_fee_bps: Number(value?.spot_fee_bps ?? 0),
     swap_fee_bps: Number(value?.swap_fee_bps ?? 0),
+    funding_column: value?.funding_column ?? "",
     status: value?.status ?? "",
     progress_time: value?.progress_time ?? "",
     metrics_json: value?.metrics_json || "{}",

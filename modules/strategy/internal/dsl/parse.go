@@ -384,6 +384,8 @@ func decodePortfolio(node *yaml.Node) (Portfolio, error) {
 			portfolio.MinUniverse, err = scalarInt(f.value, path)
 		case "max_missing":
 			portfolio.MaxMissing, err = scalarDecimal(f.value, path)
+		case "limits":
+			portfolio.Limits, err = decodeLimits(f.value, path)
 		default:
 			return Portfolio{}, fmt.Errorf("portfolio 包含未知字段 %q", f.key)
 		}

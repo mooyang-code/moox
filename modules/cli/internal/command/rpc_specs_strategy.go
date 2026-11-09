@@ -64,6 +64,7 @@ func init() {
 				mapFlag("factor-task", "factor_tasks", "读取的因子计算任务，写成 市场=任务 ID，可重复：现货、永续策略各给一个（spot=…、swap=…，混合市场两个都要给），股票策略 equity=…，统一数据集上的任务 multi=…；参考市场的任务按市场给，附加来源写 来源名:市场=任务 ID；从实例发起时可省略（读实例关联的任务）"),
 				timeFlag("from", "start_time", "起点（RFC3339）", true), timeFlag("to", "end_time", "终点（RFC3339）", true),
 				{Name: "spot-fee-bps", Field: "spot_fee_bps", Kind: rpcFloat, Usage: "现货与股票的单边费率（基点）"}, {Name: "swap-fee-bps", Field: "swap_fee_bps", Kind: rpcFloat, Usage: "永续的单边费率（基点）"},
+				strFlag("funding-column", "funding_column", "永续持仓按 View 里的这一列结算资金费（本根累计的资金费率，例如 funding_rate）；不写不计，策略池写在池 DSL 的 fees.funding_column"),
 				strFlag("instance-id", "instance_id", "沿用这个实例当前会话的策略版本与因子任务")}},
 		rpcSpec{Path: []string{"strategy", "replay", "list"}, Short: "列出策略历史回放", Service: strategyMgr, Method: "ListReplays", Page: rpcPagePSize},
 		rpcSpec{Path: []string{"strategy", "replay", "show"}, Short: "查看一次回放", Service: strategyMgr, Method: "GetReplay",

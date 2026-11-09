@@ -239,6 +239,7 @@ export function replayFormFromReplay(replay: Replay) {
     tasks,
     range: Number.isFinite(start) && Number.isFinite(end) ? ([start, end] as [number, number]) : null,
     spot_fee_bps: replay.spot_fee_bps,
-    swap_fee_bps: replay.swap_fee_bps
+    swap_fee_bps: replay.swap_fee_bps,
+    funding_column: replay.funding_column ?? ""
   };
 }

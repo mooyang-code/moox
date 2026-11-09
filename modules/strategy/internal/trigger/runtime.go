@@ -101,7 +101,7 @@ func (h *Handler) runtimeFor(ctx context.Context, instance store.Instance) (*run
 		if err != nil {
 			return &runtime{sessionID: sessionID, dslHash: session.DSLHash, resolved: compiled}, &input.SkipError{Reason: input.SkipConfigError, Detail: err.Error()}
 		}
-		config, err := pool.NewConfig(program.Strategy, compiled.Market)
+		config, err := pool.NewConfig(program.Strategy, compiled.Market, input.MemberStrategies(members, programs))
 		if err != nil {
 			return &runtime{sessionID: sessionID, dslHash: session.DSLHash, resolved: compiled}, &input.SkipError{Reason: input.SkipConfigError, Detail: err.Error()}
 		}

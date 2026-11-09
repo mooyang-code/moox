@@ -120,6 +120,9 @@ func Validate(s *Strategy) error {
 	if totalBudget.Cmp(s.Portfolio.Leverage) > 0 {
 		return fmt.Errorf("各规则 weight.total 之和 %s 超过 portfolio.leverage %s", totalBudget.String(), s.Portfolio.Leverage.String())
 	}
+	if err := validateLimitsTarget(s.Portfolio, ids, "规则 id"); err != nil {
+		return err
+	}
 	if err := validateTrancheStrategy(s); err != nil {
 		return err
 	}
@@ -175,7 +178,7 @@ func validatePortfolio(p *Portfolio) error {
 	if p.MaxMissing.IsNegative() || p.MaxMissing.Cmp(quant.One()) > 0 {
 		return errors.New("portfolio.max_missing 必须在 0 到 1 之间")
 	}
-	return nil
+	return validateLimits(p)
 }
 
 // sources 是已声明的附加来源名：表达式可以用 来源名.列名 读它们的列。

@@ -19,6 +19,8 @@ export interface ReplayFormState {
   /** 现货与股票的单边手续费、永续的单边手续费（bps）。 */
   spot_fee_bps: number;
   swap_fee_bps: number;
+  /** 永续持仓结算资金费用的列（例如 funding_rate）；空串表示不计。 */
+  funding_column: string;
 }
 
 /** 回放对象三选一：实例会话固化的版本、已保存的定义，或未保存的 DSL 文本；都没选返回 null。 */
@@ -65,6 +67,8 @@ export function validateReplayForm(form: ReplayFormState, strategies: Strategy[]
   for (const fee of [Number(form.spot_fee_bps), Number(form.swap_fee_bps)]) {
     if (!Number.isFinite(fee) || fee < 0 || fee > 1000) return "单边手续费需在 0～1000 bps 之间";
   }
+  const funding = (form.funding_column ?? "").trim();
+  if (funding && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(funding)) return "资金费列只能是 View 里的列名";
   return "";
 }
 

@@ -52,7 +52,7 @@ func buildPool(t *testing.T, client input.Client, tasks []string, allocation str
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := pool.NewConfig(strategy, pooled.Resolved.Market)
+	cfg, err := pool.NewConfig(strategy, pooled.Resolved.Market, input.MemberStrategies(pooled.Members, pooled.Programs))
 	if err != nil {
 		t.Fatal(err)
 	}

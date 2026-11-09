@@ -64,26 +64,36 @@ func ResolvePool(ctx context.Context, client Client, spaceID string, taskIDs []s
 	if !pool.IsPool() {
 		return PoolResolved{}, errors.New("不是策略池")
 	}
-	byID := make(map[string]PoolMemberDef, len(members))
-	strategies := make(map[string]dsl.Strategy, len(members))
-	for _, member := range members {
-		byID[member.ID] = member
-		strategies[member.ID] = member.Strategy
-	}
-	union, err := dsl.ValidatePoolMembers(pool, strategies)
-	if err != nil {
-		return PoolResolved{}, err
-	}
 	views, err := resolveViews(ctx, client, spaceID, taskIDs, pool.Bar)
 	if err != nil {
 		return PoolResolved{}, err
 	}
 	bound := make([]string, 0, len(views))
+	boundEquity := false
 	for _, item := range views {
 		if item.market == MarketMulti {
 			return PoolResolved{}, fmt.Errorf("因子任务 %s 在统一数据集上，策略池暂不支持：成员账本估值与预热按市场分别读取 View，统一数据集上的任务只能用于普通策略", item.taskID)
 		}
+		boundEquity = boundEquity || item.market == dsl.MarketEquity
 		bound = append(bound, item.market)
+	}
+	// 没写 market 的成员按池绑定的任务确定市场：绑的是 equity 任务就是股票成员。
+	declared := make(map[string]dsl.Strategy, len(members))
+	for _, member := range members {
+		declared[member.ID] = member.Strategy
+	}
+	strategies, err := dsl.InferPoolMemberMarkets(declared, boundEquity)
+	if err != nil {
+		return PoolResolved{}, err
+	}
+	byID := make(map[string]PoolMemberDef, len(members))
+	for _, member := range members {
+		member.Strategy = strategies[member.ID]
+		byID[member.ID] = member
+	}
+	union, err := dsl.ValidatePoolMembers(pool, strategies)
+	if err != nil {
+		return PoolResolved{}, err
 	}
 	if want := union.Markets(); strings.Join(bound, ",") != strings.Join(want, ",") {
 		return PoolResolved{}, fmt.Errorf("策略池的成员需要绑定 %s 的因子任务，实际绑定了 %s", strings.Join(want, "、"), strings.Join(bound, "、"))
@@ -95,7 +105,7 @@ func ResolvePool(ctx context.Context, client Client, spaceID string, taskIDs []s
 		}
 	}
 	// 数据集的保留期要能装下预热：预热期数加成员里最长的回看（上一根与年龄判定）。
-	need := dsl.PoolWarmBars(pool, memberStrategies(members)) + poolLookback(members)
+	need := dsl.PoolWarmBars(pool, memberStrategies(members), WarmClock(calendarOf(first), strings.ToLower(first.view.Frequency))) + poolLookback(members)
 	for _, item := range views {
 		if bars, ok := retentionBars(item.dataset.Retention, calendarOf(first), strings.ToLower(first.view.Frequency)); ok && need > bars {
 			return PoolResolved{}, fmt.Errorf("View %s 的数据集保留 %d 根，策略池预热需要 %d 根（预热 %d 期 + 成员最长回看 %d 根），请调大保留期或缩短轮动、择时的窗口",
@@ -106,6 +116,21 @@ func ResolvePool(ctx context.Context, client Client, spaceID string, taskIDs []s
 	for _, item := range views {
 		if _, ok := item.columns[priceColumn]; !ok {
 			return PoolResolved{}, fmt.Errorf("View %s 没有 %s 列，策略池的成员账本无法估值", item.view.ViewID, priceColumn)
+		}
+	}
+	// 资金费列只在永续的 View 上读：写了 fees.funding_column 就必须绑定永续、且永续的 View 有这一列。
+	if column := pool.Pool.Fees.FundingColumn; column != "" {
+		swapView := -1
+		for i, item := range views {
+			if item.market == dsl.MarketSwap {
+				swapView = i
+			}
+		}
+		if swapView < 0 {
+			return PoolResolved{}, fmt.Errorf("策略池的成员不涉及永续，strategy_pool.fees.funding_column 不起作用，请删掉")
+		}
+		if _, ok := views[swapView].columns[column]; !ok {
+			return PoolResolved{}, fmt.Errorf("永续的 View %s 没有资金费列 %s（strategy_pool.fees.funding_column）", views[swapView].view.ViewID, column)
 		}
 	}
 	resolved := Resolved{Market: union, Tasks: map[string]TaskBinding{}, Columns: map[string]ColumnBinding{}, Factors: map[string]string{},
@@ -183,6 +208,17 @@ func ParseMembers(raw string) ([]PoolMember, []*dsl.Program, error) {
 		programs = append(programs, program)
 	}
 	return members, programs, nil
+}
+
+// MemberStrategies 返回成员 id → 编译后的成员策略（programs 与 members 下标一致），构造池配置时判定成员方向用。
+func MemberStrategies(members []PoolMember, programs []*dsl.Program) map[string]dsl.Strategy {
+	strategies := make(map[string]dsl.Strategy, len(members))
+	for i, member := range members {
+		if i < len(programs) && programs[i] != nil {
+			strategies[member.ID] = programs[i].Strategy
+		}
+	}
+	return strategies
 }
 
 // CheckPoolMemberCoverage 在启用策略池时按每个成员自己的 min_age_bars 与 A 股行键校验 View 的覆盖（见 CheckCoverage）。
@@ -276,7 +312,8 @@ func CheckPoolWarmCoverage(ctx context.Context, client Client, spaceID string, p
 	for _, program := range pooled.Programs {
 		strategies = append(strategies, program.Strategy)
 	}
-	start, end, err := PoolWarmWindow(pooled.Resolved, dsl.PoolWarmBars(pooled.Program.Strategy, strategies), now, PoolWarmGrace)
+	clock := WarmClock(pooled.Resolved.Calendar, pooled.Resolved.Bar)
+	start, end, err := PoolWarmWindow(pooled.Resolved, dsl.PoolWarmBars(pooled.Program.Strategy, strategies, clock), now, PoolWarmGrace)
 	if err != nil {
 		return err
 	}

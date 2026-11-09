@@ -312,7 +312,7 @@ func (m *Manager) warm(ctx context.Context, instanceID, sessionID string) (done 
 	if err != nil {
 		return false, fmt.Errorf("%w：%v", errPermanent, err)
 	}
-	cfg, err := pool.NewConfig(strategy, resolved.Market)
+	cfg, err := pool.NewConfig(strategy, resolved.Market, input.MemberStrategies(members, programs))
 	if err != nil {
 		return false, fmt.Errorf("%w：%v", errPermanent, err)
 	}
@@ -375,18 +375,18 @@ func (m *Manager) grace() time.Duration {
 	return defaultGrace
 }
 
-// WarmBars 是预热需要推进的期数（见 dsl.PoolWarmBars）。
-func WarmBars(pool dsl.Strategy, members []*dsl.Program) int {
+// WarmBars 是预热需要推进的期数（见 dsl.PoolWarmBars）：日历换仓的周期按池的日历与周期换算成 bar 数。
+func WarmBars(resolved input.Resolved, pool dsl.Strategy, members []*dsl.Program) int {
 	strategies := make([]dsl.Strategy, 0, len(members))
 	for _, program := range members {
 		strategies = append(strategies, program.Strategy)
 	}
-	return dsl.PoolWarmBars(pool, strategies)
+	return dsl.PoolWarmBars(pool, strategies, input.WarmClock(resolved.Calendar, resolved.Bar))
 }
 
 // Window 返回预热的区间 [start, end)（bar_start）：以 now 之前（再留 grace 宽限）最新已收盘的一期为最后一期，往前共 WarmBars 期（见 input.PoolWarmWindow）。
 // 最后一期实际有没有数据由 replay.RunPool 按 View 的覆盖范围截断（View 里还没有的期不推进）。该期的就绪事件在启用之前就已发出，
 // 预热不推进它就没有别的路径会处理它，所以终点包含已闭合的最新一根。
 func Window(resolved input.Resolved, pool dsl.Strategy, members []*dsl.Program, now time.Time, grace time.Duration) (start, end time.Time, err error) {
-	return input.PoolWarmWindow(resolved, WarmBars(pool, members), now, grace)
+	return input.PoolWarmWindow(resolved, WarmBars(resolved, pool, members), now, grace)
 }
