@@ -373,15 +373,15 @@ func (d *Data) Prepare(ctx context.Context, set domain.EngineTask, subjects []st
 	}
 	st.exemptNew = d.newListingExempt(src, step, lookback, info.Retention)
 
-	end, err := d.axisNow(src)
-	if err != nil {
-		return err
-	}
 	// 有 observed 任务时，窗口还要放进本地存储里回看窗口内有数据、但不在任何任务标的范围里的标的（例如已下架、移出全集的标的）。
 	// 它们只读本地历史，不同步、不跟进源数据的修正。
 	var history []string
 	if observed {
-		if history, err = d.historySubjects(src, end.Add(-time.Duration(lookback)*step), end, subjects); err != nil {
+		now, err := d.axisNow(src)
+		if err != nil {
+			return err
+		}
+		if history, err = d.historySubjects(src, now.Add(-time.Duration(lookback)*step), now, subjects); err != nil {
 			return err
 		}
 	}
@@ -423,6 +423,10 @@ func (d *Data) Prepare(ctx context.Context, set domain.EngineTask, subjects []st
 	st.blocked = nil
 
 	// 本地补到最新已收盘的一根：停机缺口、新标的的回看窗口一次性拉齐。
+	end, err := d.axisNow(src)
+	if err != nil {
+		return err
+	}
 	pull, err := d.syncer.Pull(ctx, st.spec, subjects, end)
 	if err != nil {
 		return fmt.Errorf("同步本地数据：%w", err)
