@@ -55,6 +55,15 @@ export function fundingRateFieldAvailable(condition: FundingRateCondition): bool
   );
 }
 
+/**
+ * 是否该去掉已选的资金费率：条件不满足时去掉；但编辑已有任务时标签为空（还没读到或读取失败）不能判断条件，保留。
+ * 提交前的过滤与条件变化时的清理用同一个判断。
+ */
+export function shouldDropFundingRate(available: boolean, editing: boolean, routeCount: number): boolean {
+  if (available) return false;
+  return !(editing && routeCount === 0);
+}
+
 /** 条件不满足时从已选输出字段里去掉资金费率。 */
 export function dropUnavailableFundingRate(fields: string[], available: boolean): string[] {
   return available ? fields : fields.filter(id => id !== FUNDING_RATE_FIELD_ID);

@@ -591,6 +591,7 @@ import {
   FUNDING_RATE_FIELD_ID,
   fundingRateFieldAvailable,
   isCrossMarketSelection,
+  shouldDropFundingRate,
   KLINE_OUTPUT_FIELD_IDS,
   normalizeCollectionTask,
   parseCollectionTaskInput,
@@ -781,8 +782,11 @@ const fundingRateAvailable = computed(() =>
   })
 );
 // 条件不再满足时去掉已选的资金费率。编辑已有任务时标签可能还没读到，标签为空时不动，避免误删；新建时标签清空也去掉。
-watch(fundingRateAvailable, available => {
-  if (available || (!selectedTagRoutes.value.length && editorMode.value === "edit")) return;
+const fundingRateDropped = computed(() =>
+  shouldDropFundingRate(fundingRateAvailable.value, editorMode.value === "edit", selectedTagRoutes.value.length)
+);
+watch(fundingRateDropped, dropped => {
+  if (!dropped) return;
   selectedOutputFields.value = dropUnavailableFundingRate(selectedOutputFields.value, false);
   outputFieldDraft.value = dropUnavailableFundingRate(outputFieldDraft.value, false);
 });
@@ -1212,7 +1216,7 @@ function currentTaskInput(): CollectionTaskInput {
     subjectTags: subjectTagIds.value.slice(),
     sourceTaskId: sourceTaskId.value,
     // 提交前按条件再过滤一次：条件不满足时不带资金费率。
-    outputFields: selectedOutputFields.value.filter(id => id !== FUNDING_RATE_FIELD_ID || fundingRateAvailable.value)
+    outputFields: selectedOutputFields.value.filter(id => id !== FUNDING_RATE_FIELD_ID || !fundingRateDropped.value)
   };
 }
 

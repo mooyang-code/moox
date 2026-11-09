@@ -135,7 +135,8 @@ func TestRuntimeActivatesFundingOnlyWhenPlanSelectsIt(t *testing.T) {
 	plan.Datasets[0].Frequency = "1h"
 	plan.Datasets[0].OutputFields = []string{"close", "funding_rate"}
 	require.NoError(t, runtime.Apply(items))
-	require.Eventually(t, func() bool { return source.count() > 0 }, time.Second, time.Millisecond, "本地拉取的计划项也要启用")
+	// Activate(1h) 并行取上一根与当前这一根两个小时槽，两个都取完再停用，否则停用后的计数会变。
+	require.Eventually(t, func() bool { return source.count() == 2 }, time.Second, time.Millisecond, "本地拉取的计划项也要启用")
 
 	require.NoError(t, runtime.Apply(nil))
 	settled := source.count()

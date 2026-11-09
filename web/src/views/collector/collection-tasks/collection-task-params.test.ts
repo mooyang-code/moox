@@ -6,6 +6,7 @@ import {
   collectionTaskNameError,
   dropUnavailableFundingRate,
   fundingRateFieldAvailable,
+  shouldDropFundingRate,
   collectionTaskResultLabel,
   normalizeCollectionTask,
   parseCollectionTaskInput,
@@ -219,6 +220,14 @@ describe("funding rate output field", () => {
     );
     expect(fundingRateFieldAvailable({ dataType: "kline", frequency: "1h", routes: [] })).toBe(false);
     expect(fundingRateFieldAvailable({ dataType: "kline_resample", frequency: "1h", routes: [swap] })).toBe(false);
+  });
+
+  it("keeps the selection while editing before tags are loaded", () => {
+    expect(shouldDropFundingRate(false, true, 0)).toBe(false);
+    expect(shouldDropFundingRate(false, true, 1)).toBe(true);
+    expect(shouldDropFundingRate(false, false, 0)).toBe(true);
+    expect(shouldDropFundingRate(true, true, 1)).toBe(false);
+    expect(shouldDropFundingRate(true, false, 0)).toBe(false);
   });
 
   it("drops the selection when the condition no longer holds", () => {
