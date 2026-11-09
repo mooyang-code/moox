@@ -88,6 +88,16 @@ describe("strategy model helpers", () => {
     expect(itemReasonLabel("period_skipped")).toBe("本期整期跳过，未求值（period_skipped）");
     expect(itemReasonLabel("custom_reason")).toBe("custom_reason");
   });
+
+  it("translates rule option reasons", () => {
+    expect(itemReasonLabel("group_full")).toBe("所属组名额已满（group_full）");
+    expect(itemReasonLabel("hold_entered")).toBe("新入场（hold_entered）");
+    expect(itemReasonLabel("exit_stop:stop_loss")).toBe("止损出场：固定止损（exit_stop:stop_loss）");
+    expect(itemReasonLabel("exit_missing;missing:f")).toBe("缺数出场；缺少 f（exit_missing;missing:f）");
+    expect(itemReasonLabel("select.then:score_invalid")).toBe("二次排序分数无效：分数无效（select.then:score_invalid）");
+    expect(itemReasonLabel("missing_kept")).toBe("本期缺数，按 on_missing 保持持仓不动（missing_kept）");
+    expect(itemReasonLabel("aged_out_max")).toBe("已不是新标的（超过 max_age_bars）（aged_out_max）");
+  });
 });
 
 describe("result insights", () => {

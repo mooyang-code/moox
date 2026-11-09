@@ -148,7 +148,21 @@ const itemReasons: Record<string, string> = {
   stop_loss: "固定止损",
   trailing_stop: "跟踪止损",
   take_profit: "止盈",
-  cooldown: "止损后冷却中，不能入场"
+  cooldown: "止损后冷却中，不能入场",
+  aged_out_max: "已不是新标的（超过 max_age_bars）",
+  scale_invalid: "仓位系数无效，按缺数处理",
+  missing_kept: "本期缺数，按 on_missing 保持持仓不动",
+  group_full: "所属组名额已满",
+  group_none: "分组值为空，不属于任何组",
+  "select.then": "二次排序未取到",
+  hold_kept: "继续持有",
+  hold_entered: "新入场",
+  hold_not_entered: "入场条件不成立",
+  hold_cooling: "出场后冷却中，不能入场",
+  exit_condition: "触发 hold.exit 出场",
+  exit_max_bars: "持满 max_bars 出场",
+  exit_filter: "不再满足 filter，出场",
+  exit_missing: "缺数出场"
 };
 
 function reasonText(reason: string): string {
@@ -162,10 +176,12 @@ function reasonText(reason: string): string {
   if (reason.startsWith("source_failed:")) return `上游数据失败（${reason.slice("source_failed:".length)}）`;
   if (reason.startsWith("market_unavailable:")) return `市场本期不可用（${reason.slice("market_unavailable:".length)}）`;
   if (reason.startsWith("score_error:")) return `分数计算出错：${reason.slice("score_error:".length)}`;
+  if (reason.startsWith("exit_stop:")) return `止损出场：${reasonText(reason.slice("exit_stop:".length))}`;
+  if (reason.startsWith("select.then:")) return `二次排序分数无效：${reasonText(reason.slice("select.then:".length))}`;
   return itemReasons[reason] ?? reason;
 }
 
-/** 解释明细的原因：已知代码给出中文说明并附原文，带前缀的原因（holding:、tranche:、missing:、factor_failed:、source_failed:、market_unavailable:、score_error:）逐段翻译。 */
+/** 解释明细的原因：已知代码给出中文说明并附原文，带前缀的原因（holding:、tranche:、missing:、factor_failed:、source_failed:、market_unavailable:、score_error:、exit_stop:、select.then:）逐段翻译。 */
 export function itemReasonLabel(reason?: string): string {
   if (!reason) return "-";
   const text = reasonText(reason);

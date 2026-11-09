@@ -78,6 +78,8 @@ export interface StrategyResultItem {
   rank: number;
   weight: string;
   reason: string;
+  /** 乘在输出权重上的仓位系数（weight 已乘过）；规则没写 scale 时为空。 */
+  scale?: string;
 }
 
 export interface StrategyResultDetail {
