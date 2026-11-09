@@ -1,104 +1,99 @@
 <template>
-  <div class="moox-page">
-    <div class="moox-inner">
-      <div class="page-head">
-        <h2>处理记录</h2>
+  <div class="executions-tab">
+    <div class="filters">
+      <a-space wrap>
+        <a-select v-model="filters.rule_id" placeholder="全部订阅" allow-clear style="width: 220px" @change="onFilterChange">
+          <a-option v-for="rule in rules" :key="rule.rule_id" :value="rule.rule_id">{{ rule.name }}</a-option>
+        </a-select>
+        <a-select v-model="filters.status" placeholder="全部状态" allow-clear style="width: 140px" @change="onFilterChange">
+          <a-option v-for="item in EXECUTION_STATUS_FILTERS" :key="item.value" :value="item.value">
+            {{ item.label }}
+          </a-option>
+        </a-select>
         <span class="muted">每 30 秒自动刷新</span>
-      </div>
-      <div class="filters">
-        <a-space wrap>
-          <a-select v-model="filters.rule_id" placeholder="全部订阅" allow-clear style="width: 220px" @change="onFilterChange">
-            <a-option v-for="rule in rules" :key="rule.rule_id" :value="rule.rule_id">{{ rule.name }}</a-option>
-          </a-select>
-          <a-select v-model="filters.status" placeholder="全部状态" allow-clear style="width: 140px" @change="onFilterChange">
-            <a-option v-for="item in EXECUTION_STATUS_FILTERS" :key="item.value" :value="item.value">
-              {{ item.label }}
-            </a-option>
-          </a-select>
-        </a-space>
-      </div>
-
-      <a-table
-        row-key="execution_id"
-        size="small"
-        :bordered="{ cell: true }"
-        :loading="loading"
-        :data="rows"
-        :pagination="pagination"
-        :scroll="{ x: 'max-content' }"
-        @page-change="onPageChange"
-        @page-size-change="onPageSizeChange"
-      >
-        <template #columns>
-          <a-table-column title="时间" :width="200">
-            <template #cell="{ record }">{{ formatInstant(record.created_at_ms, "UTC") }}</template>
-          </a-table-column>
-          <a-table-column title="订阅" data-index="rule_name" :width="180" :ellipsis="true" :tooltip="true" />
-          <a-table-column title="事件" :width="240" :ellipsis="true" :tooltip="true">
-            <template #cell="{ record }">{{ eventTitle(events, record.event_name) }}　{{ record.subject_id }}</template>
-          </a-table-column>
-          <a-table-column title="状态" :width="120">
-            <template #cell="{ record }">
-              <span :class="['status', `status-${executionStatusTone(record)}`]">{{ executionStatusText(record) }}</span>
-            </template>
-          </a-table-column>
-          <a-table-column title="耗时" :width="100">
-            <template #cell="{ record }">{{ formatDuration(record.duration_ms) }}</template>
-          </a-table-column>
-          <a-table-column title="失败原因" :width="260" :ellipsis="true" :tooltip="true">
-            <template #cell="{ record }">{{ record.last_error || "-" }}</template>
-          </a-table-column>
-          <a-table-column title="操作" :width="220" align="center" fixed="right">
-            <template #cell="{ record }">
-              <a-space>
-                <a-button size="mini" type="text" @click="openDetail(record)">详情</a-button>
-                <a-button
-                  v-if="canRetry(record)"
-                  size="mini"
-                  type="text"
-                  :disabled="Boolean(acting)"
-                  :loading="acting === `retry/${record.execution_id}`"
-                  @click="requestAct('retry', record)"
-                >
-                  重新执行
-                </a-button>
-                <a-popconfirm v-if="canCancel(record)" :content="cancelConfirmText(record)" @ok="act('cancel', record)">
-                  <a-button
-                    size="mini"
-                    type="text"
-                    status="danger"
-                    :disabled="Boolean(acting)"
-                    :loading="acting === `cancel/${record.execution_id}`"
-                  >
-                    {{ cancelLabel(record) }}
-                  </a-button>
-                </a-popconfirm>
-                <a-button
-                  v-if="canAcknowledge(record)"
-                  size="mini"
-                  type="text"
-                  :disabled="Boolean(acting)"
-                  :loading="acting === `ack/${record.execution_id}`"
-                  @click="act('ack', record)"
-                >
-                  确认已处理
-                </a-button>
-              </a-space>
-            </template>
-          </a-table-column>
-        </template>
-      </a-table>
-
-      <ExecutionDrawer
-        :visible="drawerVisible"
-        :execution-id="detailId"
-        :refresh-token="refreshToken"
-        :events="events"
-        :busy="Boolean(acting)"
-        @update:visible="onDrawerVisible"
-        @action="(kind, item) => requestAct(kind, item)"
-      />
+      </a-space>
     </div>
+
+    <a-table
+      row-key="execution_id"
+      size="small"
+      :bordered="{ cell: true }"
+      :loading="loading"
+      :data="rows"
+      :pagination="pagination"
+      :scroll="{ x: 'max-content' }"
+      @page-change="onPageChange"
+      @page-size-change="onPageSizeChange"
+    >
+      <template #columns>
+        <a-table-column title="时间" :width="200">
+          <template #cell="{ record }">{{ formatInstant(record.created_at_ms, "UTC") }}</template>
+        </a-table-column>
+        <a-table-column title="订阅" data-index="rule_name" :width="180" :ellipsis="true" :tooltip="true" />
+        <a-table-column title="事件" :width="240" :ellipsis="true" :tooltip="true">
+          <template #cell="{ record }">{{ eventTitle(events, record.event_name) }}　{{ record.subject_id }}</template>
+        </a-table-column>
+        <a-table-column title="状态" :width="120">
+          <template #cell="{ record }">
+            <span :class="['status', `status-${executionStatusTone(record)}`]">{{ executionStatusText(record) }}</span>
+          </template>
+        </a-table-column>
+        <a-table-column title="耗时" :width="100">
+          <template #cell="{ record }">{{ formatDuration(record.duration_ms) }}</template>
+        </a-table-column>
+        <a-table-column title="失败原因" :width="260" :ellipsis="true" :tooltip="true">
+          <template #cell="{ record }">{{ record.last_error || "-" }}</template>
+        </a-table-column>
+        <a-table-column title="操作" :width="220" align="center" fixed="right">
+          <template #cell="{ record }">
+            <a-space>
+              <a-button size="mini" type="text" @click="openDetail(record)">详情</a-button>
+              <a-button
+                v-if="canRetry(record)"
+                size="mini"
+                type="text"
+                :disabled="Boolean(acting)"
+                :loading="acting === `retry/${record.execution_id}`"
+                @click="requestAct('retry', record)"
+              >
+                重新执行
+              </a-button>
+              <a-popconfirm v-if="canCancel(record)" :content="cancelConfirmText(record)" @ok="act('cancel', record)">
+                <a-button
+                  size="mini"
+                  type="text"
+                  status="danger"
+                  :disabled="Boolean(acting)"
+                  :loading="acting === `cancel/${record.execution_id}`"
+                >
+                  {{ cancelLabel(record) }}
+                </a-button>
+              </a-popconfirm>
+              <a-button
+                v-if="canAcknowledge(record)"
+                size="mini"
+                type="text"
+                :disabled="Boolean(acting)"
+                :loading="acting === `ack/${record.execution_id}`"
+                @click="act('ack', record)"
+              >
+                确认已处理
+              </a-button>
+            </a-space>
+          </template>
+        </a-table-column>
+      </template>
+    </a-table>
+
+    <ExecutionDrawer
+      :visible="drawerVisible"
+      :execution-id="detailId"
+      :refresh-token="refreshToken"
+      :events="events"
+      :busy="Boolean(acting)"
+      @update:visible="onDrawerVisible"
+      @action="(kind, item) => requestAct(kind, item)"
+    />
   </div>
 </template>
 
@@ -106,6 +101,7 @@
 // 事件中心和空间无关，时间都按 UTC 显示
 import { formatInstant } from "@/utils/time-zone";
 import { onMounted, reactive, ref, watch } from "vue";
+import { onShown } from "@/hooks/useOnShown";
 import { useRoute, useRouter } from "vue-router";
 import { Message, Modal } from "@arco-design/web-vue";
 import {
@@ -162,6 +158,8 @@ const acting = ref("");
 let loadSeq = 0;
 /** background：自动刷新，不转加载态、不弹提示，失败时保留上次的列表。 */
 async function load(background = false) {
+  // 前台读取进行中时，后台刷新（含切回页签时的那一次）不再重复发，免得把前台读取的结果和错误提示作废
+  if (background && loading.value) return;
   const seq = ++loadSeq;
   if (!background) loading.value = true;
   try {
@@ -205,7 +203,7 @@ async function loadOptions() {
 /** 筛选和打开的记录都在 URL 里：刷新浏览器、从告警跳进来都能恢复。 */
 function writeQuery() {
   const query = executionQuery({ ...filters, execution: drawerVisible.value ? detailId.value : "" });
-  void router.replace({ path: route.path, query });
+  void router.replace({ path: "/events", query: { tab: "executions", ...query } });
 }
 
 /** 按 URL 恢复；筛选变了才重读列表（自己写回 URL 时不重复读）。 */
@@ -225,7 +223,7 @@ function applyQuery() {
 watch(
   () => route.query,
   () => {
-    if (route.path === "/events/executions") applyQuery();
+    if (route.path === "/events" && route.query.tab === "executions") applyQuery();
   }
 );
 
@@ -299,9 +297,11 @@ onMounted(() => {
   filters.status = initial.status;
   detailId.value = initial.execution;
   drawerVisible.value = Boolean(initial.execution);
-  void loadOptions();
   void load();
 });
+
+// 订阅下拉和事件名每次切回都重读：订阅页签里可能刚新建了订阅
+onShown(() => void loadOptions());
 
 // 每 30 秒自动刷新；打开详情时暂停，免得列表在背后跳动。
 usePolling(
@@ -312,19 +312,6 @@ usePolling(
 </script>
 
 <style scoped>
-.page-head {
-  display: flex;
-  align-items: baseline;
-  gap: 12px;
-  margin-bottom: 8px;
-}
-
-.page-head h2 {
-  margin: 0;
-  font-size: 20px;
-  font-weight: 600;
-}
-
 .muted {
   color: var(--color-text-3);
   font-size: 12px;

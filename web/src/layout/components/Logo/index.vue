@@ -1,7 +1,7 @@
 <template>
   <div class="logo_head">
     <div class="logo_box" :class="collapsed && 'padding-unset'">
-      <SvgIcon name="snow" :size="30" />
+      <SvgIcon name="moox-logo" :size="30" />
       <span :class="asideDark ? 'logo_title dark' : 'logo_title'" v-if="!collapsed">{{ title }}</span>
     </div>
   </div>

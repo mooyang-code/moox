@@ -1,8 +1,1 @@
-<svg width="120" height="120" viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <rect width="120" height="120" rx="24" fill="#0f766e"/>
-  <path d="M30 35 L30 85 M30 60 L50 35 M30 60 L50 85" stroke="white" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M60 35 L60 85 M60 35 L78 35 C88 35 88 60 78 60 L60 60 M78 60 L90 85" stroke="white" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
-  <circle cx="100" cy="38" r="4" fill="#fbbf24"/>
-  <circle cx="105" cy="50" r="3" fill="#fbbf24"/>
-  <circle cx="100" cy="62" r="3" fill="#fbbf24"/>
-</svg>
+<svg width="200" height="200" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg"><rect width="120" height="120" rx="28" fill="#1E56D9"/><g fill="#FFFFFF"><rect x="-20.62" y="-5.0" width="41.24" height="10" rx="5.0" transform="translate(34.00 70.00) rotate(-50.19)"/><rect x="-15.00" y="-5.0" width="30.00" height="10" rx="5.0" transform="translate(52.00 64.00) rotate(36.87)"/><rect x="-21.64" y="-5.0" width="43.29" height="10" rx="5.0" transform="translate(69.00 56.00) rotate(-57.26)"/><rect x="-16.40" y="-5.0" width="32.80" height="10" rx="5.0" transform="translate(87.00 49.00) rotate(37.87)"/></g><rect x="21.5" y="93.5" width="77" height="5" rx="2.5" fill="#FFFFFF" fill-opacity=".45"/></svg>

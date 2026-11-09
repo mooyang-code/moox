@@ -20,7 +20,7 @@
     </div>
 
     <ReceiverGuide />
-    <p class="hint">请求头、请求体字段和这些说明在事件订阅页的「接收说明」里随时能看到。</p>
+    <p class="hint">请求头、请求体字段和这些说明在事件中心“订阅”页签的「接收说明」里随时能看到。</p>
     <div class="actions">
       <a-button type="primary" @click="emit('update:visible', false)">我已保存密钥</a-button>
     </div>

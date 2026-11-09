@@ -51,9 +51,6 @@ export default {
     ["archive"]: "数据归档",
     ["archive-tasks"]: "归档任务",
     ["archive-storage"]: "归档存储",
-    ["events"]: "事件中心",
-    ["events-subscriptions"]: "事件订阅",
-    ["events-executions"]: "处理记录",
-    ["events-delist"]: "下架处理"
+    ["events"]: "事件中心"
   }
 };

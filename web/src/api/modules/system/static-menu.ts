@@ -101,14 +101,9 @@ export const systemMenu = [
   menu("05801", "058", "/archive/tasks", "archive-tasks", "archive-tasks", "archive/tasks/index", 1, { reuseOnQuery: true }),
   menu("05802", "058", "/archive/storage", "archive-storage", "archive-storage", "archive/storage/index", 2),
 
-  // 事件中心是一级菜单，排在数据归档之后、运维之前。
-  directory("055", "0", "/events/subscriptions", "events", "events", 7, { svgIcon: "form", icon: "" }),
-  menu("05501", "055", "/events/subscriptions", "events-subscriptions", "events-subscriptions", "events/subscriptions/index", 1),
-  // 筛选和打开的记录在 query 里（告警会直接带失败筛选跳进来），query 变化时复用页面。
-  menu("05502", "055", "/events/executions", "events-executions", "events-executions", "events/executions/index", 2, {
-    reuseOnQuery: true
-  }),
-  menu("05503", "055", "/events/delist", "events-delist", "events-delist", "events/delist/index", 3),
+  // 事件中心是一级菜单（只有这一页），排在数据归档之后、运维之前。页签（事件 / 订阅 / 执行记录）、执行记录的筛选和打开的记录
+  // 都在 query 里（告警会直接带失败筛选跳进来），query 变化时复用页面。
+  menu("055", "0", "/events", "events", "events", "events/index", 7, { svgIcon: "bell", icon: "", reuseOnQuery: true }),
 
   directory("06", "0", "/ops/monitor", "ops", "ops", 8, { svgIcon: "defend", icon: "" }),
   // 展开状态、页签、筛选、定位的主机都在 query 里：query 变化时复用页面（菜单与 route.ts 两处都写）

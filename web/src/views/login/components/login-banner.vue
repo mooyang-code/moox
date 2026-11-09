@@ -1,7 +1,7 @@
 <template>
   <div class="banner_box">
     <div class="banner_title">
-      <SvgIcon name="snow" size="25" />
+      <SvgIcon name="moox-logo" size="25" />
       {{ title }}
     </div>
     <div class="banner_img">
