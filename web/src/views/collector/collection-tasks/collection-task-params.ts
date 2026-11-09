@@ -64,6 +64,15 @@ export function shouldDropFundingRate(available: boolean, editing: boolean, rout
   return !(editing && routeCount === 0);
 }
 
+/**
+ * 按 shouldDropFundingRate 的结果清理已选字段：需要去掉且确实选了时返回新数组，否则原样返回同一个数组
+ * （调用方据此判断要不要赋值，避免监听已选字段时反复触发）。
+ */
+export function pruneFundingRate(fields: string[], dropped: boolean): string[] {
+  if (!dropped || !fields.includes(FUNDING_RATE_FIELD_ID)) return fields;
+  return fields.filter(id => id !== FUNDING_RATE_FIELD_ID);
+}
+
 /** 条件不满足时从已选输出字段里去掉资金费率。 */
 export function dropUnavailableFundingRate(fields: string[], available: boolean): string[] {
   return available ? fields : fields.filter(id => id !== FUNDING_RATE_FIELD_ID);

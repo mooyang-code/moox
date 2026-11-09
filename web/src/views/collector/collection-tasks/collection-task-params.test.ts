@@ -6,6 +6,7 @@ import {
   collectionTaskNameError,
   dropUnavailableFundingRate,
   fundingRateFieldAvailable,
+  pruneFundingRate,
   shouldDropFundingRate,
   collectionTaskResultLabel,
   normalizeCollectionTask,
@@ -228,6 +229,16 @@ describe("funding rate output field", () => {
     expect(shouldDropFundingRate(false, false, 0)).toBe(true);
     expect(shouldDropFundingRate(true, true, 1)).toBe(false);
     expect(shouldDropFundingRate(true, false, 0)).toBe(false);
+  });
+
+  it("prunes a selection loaded while the drop condition already holds", () => {
+    // 新建初始态判断值已是“去掉”，再打开一个标签已读到、条件不满足的任务：判断值没变，按已选字段的变化也要清理。
+    const dropped = shouldDropFundingRate(false, true, 1);
+    expect(pruneFundingRate(["close", "funding_rate"], dropped)).toEqual(["close"]);
+    const kept = ["close", "funding_rate"];
+    expect(pruneFundingRate(kept, false)).toBe(kept);
+    const plain = ["close"];
+    expect(pruneFundingRate(plain, true)).toBe(plain);
   });
 
   it("drops the selection when the condition no longer holds", () => {

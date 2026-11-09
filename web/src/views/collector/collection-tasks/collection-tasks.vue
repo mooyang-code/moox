@@ -587,10 +587,10 @@ import {
   buildCollectionTaskPayload,
   collectionTaskResultLabel,
   collectionTaskNameError,
-  dropUnavailableFundingRate,
   FUNDING_RATE_FIELD_ID,
   fundingRateFieldAvailable,
   isCrossMarketSelection,
+  pruneFundingRate,
   shouldDropFundingRate,
   KLINE_OUTPUT_FIELD_IDS,
   normalizeCollectionTask,
@@ -785,11 +785,17 @@ const fundingRateAvailable = computed(() =>
 const fundingRateDropped = computed(() =>
   shouldDropFundingRate(fundingRateAvailable.value, editorMode.value === "edit", selectedTagRoutes.value.length)
 );
-watch(fundingRateDropped, dropped => {
-  if (!dropped) return;
-  selectedOutputFields.value = dropUnavailableFundingRate(selectedOutputFields.value, false);
-  outputFieldDraft.value = dropUnavailableFundingRate(outputFieldDraft.value, false);
-});
+// 同时监听已选字段：打开任务时判断值可能没变（一直是“去掉”），已选字段换了也要按同一判断清理。
+watch(
+  [fundingRateDropped, selectedOutputFields, outputFieldDraft],
+  ([dropped]) => {
+    const selected = pruneFundingRate(selectedOutputFields.value, dropped);
+    if (selected !== selectedOutputFields.value) selectedOutputFields.value = selected;
+    const draft = pruneFundingRate(outputFieldDraft.value, dropped);
+    if (draft !== outputFieldDraft.value) outputFieldDraft.value = draft;
+  },
+  { immediate: true }
+);
 
 const spaceStore = useSpaceStore();
 const { selectedSpaceId } = storeToRefs(spaceStore);

@@ -199,10 +199,13 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 				limit = 1
 			}
 			// 资金费在批次开始时与 K 线并行取；区间未知（取最近若干根）时等 K 线取完按它们的范围再取。
+			// 资金费取数用这一项自己的子 ctx：K 线失败等提前返回时撤销，不白占限速配额。
 			wantsFunding := itemWantsFunding(req, item)
+			fundingCtx, cancelFunding := context.WithCancel(ctx)
+			defer cancelFunding()
 			var fundingResult func() (fundingLookup, error)
 			if wantsFunding && !coverageStart.IsZero() && !coverageEnd.IsZero() {
-				fundingResult = p.startFunding(ctx, req, providerSymbol, coverageStart, coverageEnd)
+				fundingResult = p.startFunding(fundingCtx, req, providerSymbol, coverageStart, coverageEnd)
 			}
 			// Each provider request owns its DNS snapshot, including the IP slices.
 			var dnsRoutes map[string][]string
@@ -237,7 +240,7 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 			if wantsFunding {
 				if fundingResult == nil {
 					start, end := klineSpan(fetched)
-					fundingResult = p.startFunding(ctx, req, providerSymbol, start, end)
+					fundingResult = p.startFunding(fundingCtx, req, providerSymbol, start, end)
 				}
 				fundingErr = fillFundingRates(fetched, fundingResult)
 			}

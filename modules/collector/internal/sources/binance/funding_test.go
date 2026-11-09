@@ -158,45 +158,90 @@ func TestFundingRatesAllMarketSkipsMalformedRecords(t *testing.T) {
 	require.ErrorIs(t, err, marketdata.ErrProtocol, "指定合约的记录格式不对要报错")
 }
 
-// 收到 429 后暂停全部请求：下一次请求要等到退避结束。
+// limiterClock 是手动推进的时间，注入限速器的 now；advance 之后广播，让等待者按新时间重新判断。
+type limiterClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func (c *limiterClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *limiterClock) advance(limiter *fundingLimiter, d time.Duration) {
+	c.mu.Lock()
+	c.now = c.now.Add(d)
+	c.mu.Unlock()
+	limiter.mu.Lock()
+	limiter.broadcast()
+	limiter.mu.Unlock()
+}
+
+func fakeTimeLimiter(interval, backoffBase, backoffMax time.Duration) (*fundingLimiter, *limiterClock) {
+	clock := &limiterClock{now: fundingBase}
+	limiter := newFundingLimiter(interval, backoffBase, backoffMax)
+	limiter.now = clock.Now
+	return limiter, clock
+}
+
+// 收到 429 后暂停全部请求：暂停到退避结束；连续触发时退避翻倍，成功一次复位。
 func TestFundingLimiterBacksOffAfterRateLimit(t *testing.T) {
 	server := &fundingServer{status: http.StatusTooManyRequests}
 	adapter := newFundingTestAdapter(t, server)
-	limiter := newFundingLimiter(time.Millisecond, 150*time.Millisecond, time.Second)
+	limiter, clock := fakeTimeLimiter(time.Millisecond, 5*time.Second, time.Minute)
 	_, err := adapter.fundingRates(context.Background(), limiter, "BTCUSDT", fundingBase, fundingBase.Add(time.Hour))
 	require.ErrorIs(t, err, marketdata.ErrRateLimited)
 	require.Len(t, server.requests, 1, "429 不在请求内重试")
-	started := time.Now()
-	require.NoError(t, limiter.Wait(context.Background(), true))
-	require.GreaterOrEqual(t, time.Since(started), 100*time.Millisecond, "退避期间所有请求都要等")
+	require.Equal(t, 5*time.Second, limiter.backoff)
+	require.Equal(t, fundingBase.Add(5*time.Second), limiter.pausedUntil, "退避期间暂停全部请求")
+
+	// 暂停期间等待拿不到配额（假时间不前进，用短超时确认它在等）。
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	require.ErrorIs(t, limiter.Wait(ctx, true), context.DeadlineExceeded)
+	clock.advance(limiter, 5*time.Second)
+	require.NoError(t, limiter.Wait(context.Background(), true), "退避结束后放行")
 
 	limiter.Done(&httpclient.StatusError{StatusCode: http.StatusTeapot})
-	require.Equal(t, 300*time.Millisecond, limiter.backoff, "连续触发时翻倍")
+	require.Equal(t, 10*time.Second, limiter.backoff, "连续触发时翻倍")
+	require.Equal(t, clock.Now().Add(10*time.Second), limiter.pausedUntil)
+	limiter.Done(&httpclient.StatusError{StatusCode: http.StatusTooManyRequests, RetryAfter: time.Minute})
+	require.Equal(t, clock.Now().Add(time.Minute), limiter.pausedUntil, "Retry-After 更长时按它暂停")
 	limiter.Done(nil)
 	require.Zero(t, limiter.backoff, "成功一次复位")
 }
 
 // 有实时请求在等时，补采请求让它先走。
 func TestFundingLimiterPrefersRealtime(t *testing.T) {
-	limiter := newFundingLimiter(80*time.Millisecond, time.Second, time.Second)
-	require.NoError(t, limiter.Wait(context.Background(), false)) // 占掉当前配额
-	order := make(chan string, 2)
-	var wg sync.WaitGroup
-	wg.Add(2)
+	limiter, clock := fakeTimeLimiter(time.Second, time.Minute, time.Minute)
+	require.NoError(t, limiter.Wait(context.Background(), false)) // 占掉当前配额，下一次要到 1 秒后
+	backfill := make(chan struct{})
+	realtime := make(chan struct{})
 	go func() {
-		defer wg.Done()
 		_ = limiter.Wait(context.Background(), false)
-		order <- "backfill"
+		close(backfill)
 	}()
-	time.Sleep(10 * time.Millisecond) // 补采先开始等
 	go func() {
-		defer wg.Done()
 		_ = limiter.Wait(context.Background(), true)
-		order <- "realtime"
+		close(realtime)
 	}()
-	wg.Wait()
-	require.Equal(t, "realtime", <-order)
-	require.Equal(t, "backfill", <-order)
+	require.Eventually(t, func() bool {
+		limiter.mu.Lock()
+		defer limiter.mu.Unlock()
+		return limiter.realtimeWaiting == 1
+	}, time.Second, time.Millisecond)
+
+	clock.advance(limiter, time.Second) // 配额空出一次：实时先拿
+	<-realtime
+	select {
+	case <-backfill:
+		t.Fatal("实时请求在等时补采不能先走")
+	default:
+	}
+	clock.advance(limiter, time.Second)
+	<-backfill
 }
 
 func TestFundingLimiterWaitHonoursContext(t *testing.T) {
