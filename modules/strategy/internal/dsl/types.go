@@ -130,6 +130,9 @@ type Rule struct {
 	Stop *Stop
 	// Tranche 是 tranche 规则的子策略模板与参数表（见 tranche.go）。
 	Tranche *TrancheSpec
+	// Market 是规则级市场（spot 或 swap，见 market.go）：策略涉及两个市场时，这条规则只从该市场的序列选择，目标也落在该市场；
+	// 空串表示沿用策略的选币池与定市场。
+	Market string
 }
 
 // Portfolio 是组合级约束与守门参数。

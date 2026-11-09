@@ -133,6 +133,11 @@ func ValidateMode(s Strategy, mode Market) error {
 	if !mode.Single() && s.HasTranche() {
 		return fmt.Errorf("%s 策略不支持 tranche 规则：S1 暂不支持双市场 tranche，原因是一个市场本期不可用时 tranche 的持仓无法冻结（tranche 内部把同一个币的多空合成一个净值，也不参与冻结），会把这个市场里的持仓卖掉；tranche 只能用在单个市场的策略（spot/spot 或 swap/swap）", modeLabel(mode))
 	}
+	for _, rule := range s.Rules {
+		if rule.Market != "" && mode.Single() && rule.Market != mode.Select {
+			return fmt.Errorf("规则 %s 写了 market: %s，与%s策略不一致：只有策略涉及现货、永续两个市场时，规则才能另选市场，单市场策略的规则 market 必须与策略相同", rule.ID, rule.Market, modeLabel(mode))
+		}
+	}
 	if !mode.Has(MarketSwap) {
 		if s.Portfolio.Leverage.Cmp(quant.One()) > 0 {
 			return fmt.Errorf("%s 策略不允许 portfolio.leverage 大于 1（当前 %s），加杠杆需要永续市场", modeLabel(mode), s.Portfolio.Leverage.String())
@@ -160,6 +165,43 @@ func ValidateMode(s Strategy, mode Market) error {
 		}
 	}
 	return nil
+}
+
+// validateRuleMarket 校验规则级市场的写法（与模式无关的部分）：只能是 spot 或 swap；写了它的策略必须显式写 market（模式在保存时就要确定，
+// 单市场策略的一致性检查才能在保存时做）；现货规则不能做空。
+func validateRuleMarket(s *Strategy, rule *Rule) error {
+	if rule.Market == "" {
+		return nil
+	}
+	prefix := "规则 " + rule.ID
+	switch {
+	case rule.Market != MarketSpot && rule.Market != MarketSwap:
+		return fmt.Errorf("%s 的 market %q 不受支持，规则级 market 只能是 spot 或 swap", prefix, rule.Market)
+	case !s.MarketDeclared:
+		return fmt.Errorf("%s 写了 market，策略也必须显式写 market（规则级市场只在策略涉及现货、永续两个市场时可以另选；股票策略不支持）", prefix)
+	case rule.Market == MarketSpot && rule.Side == SideShort:
+		return fmt.Errorf("%s 是现货规则（market: spot），不能做空：空头只能在永续市场", prefix)
+	}
+	return nil
+}
+
+// HasRuleMarket 报告是否有规则写了规则级 market。
+func (s Strategy) HasRuleMarket() bool {
+	for _, rule := range s.Rules {
+		if rule.Market != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// RuleMarket 返回规则在模式 mode 下实际使用的规则级市场：只有模式涉及两个市场时才生效，单市场模式下（规则 market 只能与策略相同）返回空串，
+// 与没写相同。
+func RuleMarket(mode Market, rule Rule) string {
+	if mode.Single() {
+		return ""
+	}
+	return rule.Market
 }
 
 func modeLabel(mode Market) string {

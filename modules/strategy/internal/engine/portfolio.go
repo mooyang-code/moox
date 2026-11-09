@@ -17,16 +17,17 @@ import (
 //  5. 写入目标、摘要与换手。
 //
 // 现货负权重仍然报错：它说明策略或定市场的逻辑有错。frozen 是因市场不可用或只缺上一根而保持持仓的标的：
-// 按标的展开成上期所有非零的（标的, 市场）键，它们的目标是保持标记，权重取上期值。
-func applyPortfolio(decision *Decision, portfolio dsl.Portfolio, mode dsl.Market, contributions map[string]quant.Decimal, frozen map[string]struct{}, previous State, held heldIndex, tolerance quant.Decimal) error {
+// 按标的展开成上期所有非零的（标的, 市场）键，它们的目标是保持标记，权重取上期值。frozenKeys 是按键冻结的（标的, 市场）键
+// （写了规则级市场的规则，只冻结那个市场的键，见 rulemarket.go），同样保持上期值。
+func applyPortfolio(decision *Decision, portfolio dsl.Portfolio, mode dsl.Market, contributions map[string]quant.Decimal, frozen, frozenKeys map[string]struct{}, previous State, held heldIndex, tolerance quant.Decimal) error {
 	for key := range contributions {
-		if id, _ := SplitTargetKey(key); contains2(frozen, id) {
+		if id, _ := SplitTargetKey(key); contains2(frozen, id) || contains2(frozenKeys, key) {
 			delete(contributions, key) // 规则不给冻结标的配权，保险起见再删一次
 		}
 	}
 	quantized := quantizeTargets(contributions, portfolio, tolerance)
 	decision.Summary.Notes = append(decision.Summary.Notes, quantized.notes...)
-	holds := holdTargets(frozen, previous, held)
+	holds := holdTargets(frozen, frozenKeys, previous, held)
 	quantized = fitBudget(quantized, holds, portfolio, mode, &decision.Summary)
 	for _, target := range quantized.targets {
 		if dsl.SpotLike(target.Market) && target.Weight.IsNegative() {
@@ -61,23 +62,30 @@ func contains2(set map[string]struct{}, id string) bool {
 	return ok
 }
 
-// holdTargets 返回冻结标的的保持目标：每个标的展开成上期所有非零键，权重取上期值（排序）。
-func holdTargets(frozen map[string]struct{}, previous State, held heldIndex) []Target {
-	ids := make([]string, 0, len(frozen))
+// holdTargets 返回冻结标的的保持目标：按币冻结的标的展开成上期所有非零键，按键冻结的只取那个键，权重取上期值（按键排序）。
+func holdTargets(frozen, frozenKeys map[string]struct{}, previous State, held heldIndex) []Target {
+	keys := make(map[string]struct{}, len(frozen)+len(frozenKeys))
 	for id := range frozen {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	var holds []Target
-	for _, id := range ids {
 		for _, key := range held.keys(id) {
-			weight, err := quant.Parse(previous.Targets[key])
-			if err != nil || weight.IsZero() {
-				continue
-			}
-			_, market := SplitTargetKey(key)
-			holds = append(holds, Target{InstrumentID: id, Market: market, Weight: weight, Hold: true})
+			keys[key] = struct{}{}
 		}
+	}
+	for key := range frozenKeys {
+		keys[key] = struct{}{}
+	}
+	ordered := make([]string, 0, len(keys))
+	for key := range keys {
+		ordered = append(ordered, key)
+	}
+	sortKeys(ordered)
+	var holds []Target
+	for _, key := range ordered {
+		weight, err := quant.Parse(previous.Targets[key])
+		if err != nil || weight.IsZero() {
+			continue
+		}
+		id, market := SplitTargetKey(key)
+		holds = append(holds, Target{InstrumentID: id, Market: market, Weight: weight, Hold: true})
 	}
 	return holds
 }
