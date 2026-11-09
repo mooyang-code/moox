@@ -15,7 +15,7 @@
       :scroll="{ x: 'max-content' }"
     >
       <template #columns>
-        <a-table-column title="事件" :width="320">
+        <a-table-column title="事件" :width="360">
           <template #cell="{ record }">
             <a-link @click="infoEvent = record">{{ record.title }}</a-link>
             <div class="muted mono">{{ record.event_name }}</div>

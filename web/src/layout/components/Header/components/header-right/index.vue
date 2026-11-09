@@ -172,6 +172,9 @@ const logOut = () => {
     .my_avatar {
       flex-shrink: 0;
       margin-right: var(--moox-space-2);
+      // 跟随主题主色，不用默认的灰底
+      color: #fff;
+      background-color: rgb(var(--primary-6));
     }
     .user-nickname {
       white-space: nowrap;
