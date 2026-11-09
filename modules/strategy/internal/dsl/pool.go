@@ -372,7 +372,7 @@ func validatePool(s *Strategy) error {
 	if len(s.FactorParams) > 0 {
 		return errors.New("策略池不支持 factor_params：多个成员可能给同一个可变成员写参数，会冲突")
 	}
-	if len(s.Universe.Tags)+len(s.Universe.ExcludeTags)+len(s.Universe.Include)+len(s.Universe.Exclude) > 0 || s.Universe.MinAgeBars != 0 {
+	if len(s.Universe.Tags)+len(s.Universe.ExcludeTags)+len(s.Universe.Include)+len(s.Universe.Exclude) > 0 || s.Universe.MinAgeBars != 0 || s.Universe.MaxAgeBars != 0 || s.Universe.AgeMarkets != "" {
 		return errors.New("策略池不写 universe：标的范围由各成员自己的 universe 决定")
 	}
 	pool := s.Pool

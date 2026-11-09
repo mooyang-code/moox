@@ -127,7 +127,7 @@ func TestBuildSetsAgeProbe(t *testing.T) {
 	}
 	failing := func(context.Context, []string) (map[string]struct{}, error) { return nil, errors.New("probe timeout") }
 	failed := build()
-	if err := failed.ApplyAge(context.Background(), strategy.Universe.MinAgeBars, failing); err == nil || !strings.Contains(err.Error(), "probe timeout") {
+	if err := applySingleAge(&failed, strategy.Universe.MinAgeBars, failing); err == nil || !strings.Contains(err.Error(), "probe timeout") {
 		t.Fatalf("探针失败应返回错误：%v", err)
 	}
 	var probed []string
@@ -136,7 +136,7 @@ func TestBuildSetsAgeProbe(t *testing.T) {
 		return map[string]struct{}{"BTC-USDT": {}, "ETH-USDT": {}}, nil
 	}
 	sets := build()
-	if err := sets.ApplyAge(context.Background(), strategy.Universe.MinAgeBars, probe); err != nil {
+	if err := applySingleAge(&sets, strategy.Universe.MinAgeBars, probe); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(probed, []string{"BTC-USDT", "ETH-USDT", "SOL-USDT"}) {
@@ -149,7 +149,7 @@ func TestBuildSetsAgeProbe(t *testing.T) {
 		t.Fatalf("年龄剔除后的读取范围不符：%v", sets.Instruments())
 	}
 	missingProbe := build()
-	if err := missingProbe.ApplyAge(context.Background(), strategy.Universe.MinAgeBars, nil); err == nil {
+	if err := applySingleAge(&missingProbe, strategy.Universe.MinAgeBars, nil); err == nil {
 		t.Fatal("设置了 min_age_bars 却没有探针应报错")
 	}
 }
@@ -161,7 +161,7 @@ func TestNewAgeProbeQueriesToleranceWindow(t *testing.T) {
 	}
 	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {ViewID: "view_factor_1h"}}, Bar: "1h", Calendar: DefaultCalendar, MinAgeBars: 24}
 	subjects := map[string]Subject{"BTC-USDT": subject("BTC-USDT", true), "ETH-USDT": subject("ETH-USDT", true)}
-	probe := NewAgeProbe(client, "space", resolved, client.views["view_factor_1h"], "spot", subjects, barStart, 0, nil)
+	probe := NewAgeProbe(client, "space", resolved, resolved.MinAgeBars, client.views["view_factor_1h"], "spot", subjects, barStart, 0, nil)
 	satisfied, err := probe(context.Background(), []string{"BTC-USDT", "ETH-USDT"})
 	if err != nil {
 		t.Fatal(err)
@@ -199,7 +199,7 @@ func TestAgeProbeDistinguishesNewListingsFromHistoryGaps(t *testing.T) {
 		}
 		return nil, 7, nil
 	}
-	probe := NewAgeProbe(client, "space", resolved, client.views["view_factor_1h"], "spot", subjects, barStart, 7, nil)
+	probe := NewAgeProbe(client, "space", resolved, resolved.MinAgeBars, client.views["view_factor_1h"], "spot", subjects, barStart, 7, nil)
 	satisfied, err := probe(context.Background(), []string{"NEW-USDT"})
 	if err != nil || len(satisfied) != 0 {
 		t.Fatalf("数据集有数据时新标的应正常剔除：%v err=%v", satisfied, err)
@@ -210,7 +210,7 @@ func TestAgeProbeDistinguishesNewListingsFromHistoryGaps(t *testing.T) {
 
 	gap := newFakeClient("spot")
 	gap.rows = func(Query) ([]Row, uint64, error) { return nil, 7, nil }
-	probe = NewAgeProbe(gap, "space", resolved, gap.views["view_factor_1h"], "spot", subjects, barStart, 7, nil)
+	probe = NewAgeProbe(gap, "space", resolved, resolved.MinAgeBars, gap.views["view_factor_1h"], "spot", subjects, barStart, 7, nil)
 	_, err = probe(context.Background(), []string{"BTC-USDT", "NEW-USDT"})
 	var skip *SkipError
 	if !errors.As(err, &skip) || skip.Reason != SkipHistoryInsufficient || !strings.Contains(skip.Detail, "历史缺口") {

@@ -80,7 +80,7 @@ func resolveViews(ctx context.Context, client Client, spaceID string, taskIDs []
 
 // bindViews 在已解析的 View 上绑定并编译一个策略：校验周期与日历一致、确定市场模式、校验列与成员契约。
 func bindViews(ctx context.Context, client Client, spaceID string, views []resolvedView, strategy dsl.Strategy) (Resolved, *dsl.Program, error) {
-	resolved := Resolved{Tasks: map[string]TaskBinding{}, Columns: map[string]ColumnBinding{}, Factors: map[string]string{}, MinAgeBars: strategy.Universe.MinAgeBars}
+	resolved := Resolved{Tasks: map[string]TaskBinding{}, Columns: map[string]ColumnBinding{}, Factors: map[string]string{}, MinAgeBars: strategy.Universe.MinAgeBars, RuleAges: ruleAges(strategy)}
 	for _, item := range views {
 		resolved.Tasks[item.market] = TaskBinding{ViewID: item.view.ViewID, FactorTaskID: item.taskID, DatasetID: item.view.DatasetID, SourceDatasetID: sourceDatasetID(item)}
 	}
@@ -126,13 +126,14 @@ func bindViews(ctx context.Context, client Client, spaceID string, views []resol
 	if err := CheckHoldingAnchors(resolved.Calendar, resolved.Bar, strategy); err != nil {
 		return Resolved{}, nil, err
 	}
+	longest := resolved.LongestAge()
 	for _, item := range views {
-		if bars, ok := retentionBars(item.dataset.Retention, resolved.Calendar, resolved.Bar); ok && strategy.Universe.MinAgeBars > bars {
-			return Resolved{}, nil, fmt.Errorf("universe.min_age_bars=%d 超过 View 的保留根数 %d", strategy.Universe.MinAgeBars, bars)
+		if bars, ok := retentionBars(item.dataset.Retention, resolved.Calendar, resolved.Bar); ok && longest > bars {
+			return Resolved{}, nil, fmt.Errorf("年龄判定需要 %d 根（min_age_bars、max_age_bars 的最大值），超过 View 的保留根数 %d", longest, bars)
 		}
-		if strategy.Universe.MinAgeBars > 0 {
+		if longest > 0 {
 			if _, ok := item.columns[ageProbeColumn]; !ok {
-				return Resolved{}, nil, fmt.Errorf("universe.min_age_bars 通过 %s 列判断上市时间，但 View %s 没有该列", ageProbeColumn, item.view.ViewID)
+				return Resolved{}, nil, fmt.Errorf("min_age_bars、max_age_bars 通过 %s 列判断上市时间，但 View %s 没有该列", ageProbeColumn, item.view.ViewID)
 			}
 		}
 	}
@@ -380,6 +381,10 @@ func checkReferences(ctx context.Context, client Client, spaceID string, views [
 	instruments = append(instruments, strategy.Universe.Exclude...)
 	for _, rule := range strategy.Rules {
 		instruments = append(instruments, rule.Pool.Fixed...)
+		if rule.Universe != nil {
+			instruments = append(instruments, rule.Universe.Include...)
+			instruments = append(instruments, rule.Universe.Exclude...)
+		}
 	}
 	for _, tag := range referencedTags(strategy) {
 		if _, err := client.GetTag(ctx, spaceID, tag); err != nil {
@@ -422,6 +427,10 @@ func referencedTags(strategy dsl.Strategy) []string {
 	tags := append(append([]string(nil), strategy.Universe.Tags...), strategy.Universe.ExcludeTags...)
 	for _, rule := range strategy.Rules {
 		tags = append(tags, rule.Pool.Tags...)
+		if rule.Universe != nil {
+			tags = append(tags, rule.Universe.Tags...)
+			tags = append(tags, rule.Universe.ExcludeTags...)
+		}
 	}
 	return uniqueSorted(tags)
 }
@@ -432,7 +441,7 @@ func referencedTags(strategy dsl.Strategy) []string {
 //
 // 校验的是关联任务的结果 View：它的历史由因子计算与手动补算写出，所以 min_age_bars 需要的历史也要先补算出来。
 func CheckCoverage(ctx context.Context, client Client, spaceID string, resolved Resolved, now time.Time) error {
-	if resolved.MinAgeBars <= 0 && !stockDaily(resolved.Calendar, resolved.Bar) {
+	if resolved.LongestAge() <= 0 && !stockDaily(resolved.Calendar, resolved.Bar) {
 		return nil
 	}
 	for _, key := range resolved.TaskKeys() {
@@ -453,8 +462,8 @@ func checkViewCoverage(ctx context.Context, client Client, spaceID string, resol
 	if view, err = WithCoverage(ctx, client, spaceID, view, true); err != nil {
 		return err
 	}
-	if resolved.MinAgeBars > 0 {
-		if err := checkAgeCoverage(view, resolved, resolved.MinAgeBars, now); err != nil {
+	if longest := resolved.LongestAge(); longest > 0 {
+		if err := checkAgeCoverage(view, resolved, longest, now); err != nil {
 			return err
 		}
 		// 统一数据集的 View 级覆盖统计取所有序列的最早一行：现货、永续分两次导入、永续历史较短时它会放行，之后永续一直被当新上市。

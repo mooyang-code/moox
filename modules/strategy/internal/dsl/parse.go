@@ -173,7 +173,7 @@ func decodeStrategy(root *yaml.Node) (Strategy, error) {
 			strategy.Market, err = decodeMarket(f.value)
 			strategy.MarketDeclared = err == nil
 		case "universe":
-			strategy.Universe, err = decodeUniverse(f.value)
+			strategy.Universe, _, err = decodeUniverse(f.value, "universe")
 		case "rules":
 			rulesSeen = true
 			strategy.Rules, err = decodeRules(f.value)
@@ -199,35 +199,6 @@ func decodeStrategy(root *yaml.Node) (Strategy, error) {
 		return Strategy{}, errors.New("策略 DSL 缺少 rules（或 strategy_pool）")
 	}
 	return strategy, nil
-}
-
-func decodeUniverse(node *yaml.Node) (Universe, error) {
-	fields, err := mappingFields(node, "universe")
-	if err != nil {
-		return Universe{}, err
-	}
-	var universe Universe
-	for _, f := range fields {
-		path := "universe." + f.key
-		switch f.key {
-		case "tags":
-			universe.Tags, err = stringList(f.value, path)
-		case "exclude_tags":
-			universe.ExcludeTags, err = stringList(f.value, path)
-		case "include":
-			universe.Include, err = stringList(f.value, path)
-		case "exclude":
-			universe.Exclude, err = stringList(f.value, path)
-		case "min_age_bars":
-			universe.MinAgeBars, err = scalarInt(f.value, path)
-		default:
-			return Universe{}, fmt.Errorf("universe 包含未知字段 %q", f.key)
-		}
-		if err != nil {
-			return Universe{}, err
-		}
-	}
-	return universe, nil
 }
 
 func decodeRules(node *yaml.Node) ([]Rule, error) {
@@ -265,6 +236,10 @@ func decodeRule(node *yaml.Node, path string) (Rule, error) {
 			rule.Type, err = scalarRequiredText(f.value, fieldPath)
 		case "pool":
 			rule.Pool, err = decodePool(f.value, fieldPath)
+		case "universe":
+			rule.Universe, err = decodeRuleUniverse(f.value, fieldPath)
+		case "allow_empty":
+			rule.AllowEmpty, err = scalarBool(f.value, fieldPath)
 		case "filter":
 			rule.Filter, err = scalarRequiredText(f.value, fieldPath)
 		case "score":

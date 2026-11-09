@@ -178,7 +178,7 @@ func (e *ReplayEvaluator) Bind(ctx context.Context, instanceID string) (ReplayBi
 	sort.Strings(columns)
 	return ReplayBinding{
 		InstanceID: instanceID, StrategyID: instance.StrategyID, SpaceID: instance.SpaceID, ViewID: task.ViewID,
-		DSLHash: definition.DSLHash, Bar: resolved.Bar, Calendar: resolved.Calendar, Spot: true, MinAgeBars: resolved.MinAgeBars,
+		DSLHash: definition.DSLHash, Bar: resolved.Bar, Calendar: resolved.Calendar, Spot: true, MinAgeBars: resolved.LongestAge(),
 		Factors: resolved.Factors, Columns: resolved.Columns, SourceColumns: columns, PreviousDepth: depth,
 		FactorTaskID: task.FactorTaskID, Tuned: len(program.Params) > 0,
 	}, nil
@@ -335,16 +335,18 @@ func (e *ReplayEvaluator) Evaluate(ctx context.Context, req ReplayEvaluateReques
 		}
 		return ReplayDecision{}, err
 	}
-	probe := func(_ context.Context, instruments []string) (map[string]struct{}, error) {
+	// 闭环回放只有一个现货市场：年龄是因子引擎给出的本地根数。
+	market := resolved.Market.Select
+	probe := func(_ context.Context, n int, instruments []string) (map[string]map[string]struct{}, error) {
 		aged := make(map[string]struct{}, len(instruments))
 		for _, id := range instruments {
-			if row, ok := req.Rows[id]; ok && row.AgeBars >= resolved.MinAgeBars {
+			if row, ok := req.Rows[id]; ok && row.AgeBars >= n {
 				aged[id] = struct{}{}
 			}
 		}
-		return aged, nil
+		return map[string]map[string]struct{}{market: aged}, nil
 	}
-	if err := sets.ApplyAge(ctx, resolved.MinAgeBars, probe); err != nil {
+	if _, err := sets.ApplyAge(ctx, resolved, []string{market}, probe); err != nil {
 		var skip *input.SkipError
 		if errors.As(err, &skip) {
 			return skipped(skip.Reason, skip.Detail)
@@ -360,7 +362,7 @@ func (e *ReplayEvaluator) Evaluate(ctx context.Context, req ReplayEvaluateReques
 	}
 	frame := engine.Frame{
 		BarEnd: boundary.BarEnd, BarIndex: boundary.BarIndex,
-		Universe: sets.Universe, Expected: sets.Expected, AgedOut: sets.AgedOut, Holdings: holdings,
+		Universe: sets.Universe, Expected: sets.Expected, AgedOut: sets.AgedOut, AgedOutMax: sets.AgedOutMax, Holdings: holdings,
 	}
 	for subject, row := range req.Rows {
 		if _, ok := sets.Subjects[subject]; !ok {

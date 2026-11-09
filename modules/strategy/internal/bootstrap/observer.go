@@ -438,8 +438,8 @@ func (o *instanceObserver) accumulatingLocked(instance store.Instance, bar strin
 		return at.Sub(since) <= limit
 	}
 	if expectation, valid := datasetKey(instance, bar); valid {
-		if resolved, err := input.ParseResolved(instance.ResolvedJSON); err == nil && resolved.MinAgeBars > 0 {
-			limit = max(limit, time.Duration(resolved.MinAgeBars)*expectation.Interval)
+		if resolved, err := input.ParseResolved(instance.ResolvedJSON); err == nil && resolved.LongestAge() > 0 {
+			limit = max(limit, time.Duration(resolved.LongestAge())*expectation.Interval)
 		}
 	}
 	return at.Sub(since) <= limit+time.Hour

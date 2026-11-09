@@ -207,7 +207,7 @@ func memberStrategies(members []PoolMemberDef) []dsl.Strategy {
 func poolLookback(members []PoolMemberDef) int {
 	lookback := 1
 	for _, member := range members {
-		if age := member.Strategy.Universe.MinAgeBars; age > 0 {
+		if age := member.Strategy.LongestAgeBars(); age > 0 {
 			lookback = max(lookback, age+2)
 		}
 	}

@@ -148,7 +148,7 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 		if view.DatasetID != task.DatasetID || !strings.EqualFold(view.Frequency, resolved.Bar) {
 			return Loaded{}, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("View %s 的数据集或周期已变化（%s/%s → %s/%s），请重新启用实例", task.ViewID, task.DatasetID, resolved.Bar, view.DatasetID, view.Frequency)}
 		}
-		if missing := MissingColumns(view, program, resolved.MinAgeBars); len(missing) > 0 {
+		if missing := MissingColumns(view, program, resolved.LongestAge()); len(missing) > 0 {
 			return Loaded{}, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("列 %s 已不存在于 View %s，请重新启用实例", strings.Join(missing, "、"), task.ViewID)}
 		}
 		views[key] = view
@@ -186,7 +186,7 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 		view ViewInfo
 		err  error
 	})
-	if resolved.MinAgeBars > 0 {
+	if resolved.LongestAge() > 0 {
 		for _, key := range keys {
 			if keyDown(key) {
 				continue
@@ -405,9 +405,9 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 		}
 	}
 	began = time.Now()
-	agePassed := make(map[string]map[string]struct{}, len(loads))
-	err = sets.ApplyAge(ctx, resolved.MinAgeBars, func(ctx context.Context, ids []string) (map[string]struct{}, error) {
-		passed := make(map[string]struct{}, len(ids))
+	// 每个需要的 N 在各市场各判定一次；规则按自己的上下限与 age_markets 取剔除集合（见 age.go）。
+	agePassed, err := sets.ApplyAge(ctx, resolved, markets, func(ctx context.Context, n int, ids []string) (map[string]map[string]struct{}, error) {
+		passed := make(map[string]map[string]struct{}, len(loads))
 		for _, load := range loads {
 			if load.unavailable != "" {
 				continue
@@ -418,15 +418,12 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 					inMarket = append(inMarket, id)
 				}
 			}
-			probe := NewAgeProbe(l.Client, spaceID, resolved, load.view, load.market, load.active, bar.BarStart, load.revision, l.Meta)
+			probe := NewAgeProbe(l.Client, spaceID, resolved, n, load.view, load.market, load.active, bar.BarStart, load.revision, l.Meta)
 			got, err := probe(ctx, inMarket)
 			if err != nil {
 				return nil, err
 			}
-			agePassed[load.market] = got
-			for id := range got {
-				passed[id] = struct{}{}
-			}
+			passed[load.market] = got
 		}
 		return passed, nil
 	})
@@ -434,6 +431,8 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 	if err != nil {
 		return Loaded{}, err
 	}
+	// 按市场剔除行只按策略级 min_age_bars 判断；规则级的年龄字段只影响这条规则自己的年龄剔除集合。
+	marketPassed := agePassed[resolved.MinAgeBars]
 	// 失败的标的占比超过 max_missing 也按这个市场不可用处理：多市场策略里，逐币的 factor_failed 不冻结，没持仓的币又会退回另一个市场的行，
 	// 缺数分母被摊薄，持有的永续照样被卖。分母与单市场守门尽量一致：只统计本次读行的标的，并扣掉在这个市场年龄不够的（年龄剔除的标的不算缺数），
 	// 但上期在这个市场持仓的豁免（年龄剔除只拦新进入的标的）。判为不可用的市场清掉已读的行和年龄剔除记录，规则级的年龄剔除集合也按剩下的市场重算。
@@ -443,7 +442,7 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 			if load.unavailable != "" {
 				continue
 			}
-			passed, probed := agePassed[load.market]
+			passed, probed := marketPassed[load.market]
 			include := func(id string) bool {
 				if !probed {
 					return true
@@ -456,23 +455,17 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 			}
 			if detail := wholeMarketFailure(load, ready[load.market], instruments, include, program.Strategy.Portfolio.MaxMissing, true); detail != "" {
 				markUnavailable(load, detail)
-				if _, probed := agePassed[load.market]; probed {
-					delete(agePassed, load.market)
-					cleared = true
+				for _, byMarket := range agePassed {
+					if _, probed := byMarket[load.market]; probed {
+						delete(byMarket, load.market)
+						cleared = true
+					}
 				}
 			}
 		}
-		if cleared && resolved.MinAgeBars > 0 {
+		if cleared {
 			// 不可用市场的探针结果不再作数：只在它那里通过年龄的标的，规则级也按年龄剔除记（与因子被跳过、全部失败而没做探针的市场口径一致）。
-			_ = sets.ApplyAge(ctx, resolved.MinAgeBars, func(context.Context, []string) (map[string]struct{}, error) {
-				passed := make(map[string]struct{})
-				for _, got := range agePassed {
-					for id := range got {
-						passed[id] = struct{}{}
-					}
-				}
-				return passed, nil
-			})
+			sets.ApplyAgePassed(resolved, markets, agePassed)
 		}
 		if err := skipWhenSelectionUnavailable(resolved, loads); err != nil {
 			return Loaded{}, err
@@ -482,7 +475,7 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 	if err != nil {
 		return Loaded{}, &SkipError{Reason: SkipConfigError, Detail: err.Error()}
 	}
-	frame := engine.Frame{BarEnd: boundary.BarEnd, BarIndex: boundary.BarIndex, Markets: make(map[string]engine.MarketInput, len(loads)), Universe: sets.Universe, Expected: sets.Expected, AgedOut: sets.AgedOut, Holdings: holdings}
+	frame := engine.Frame{BarEnd: boundary.BarEnd, BarIndex: boundary.BarIndex, Markets: make(map[string]engine.MarketInput, len(loads)), Universe: sets.Universe, Expected: sets.Expected, AgedOut: sets.AgedOut, AgedOutMax: sets.AgedOutMax, Holdings: holdings}
 	for _, load := range loads {
 		input := engine.MarketInput{Rows: make(map[string]engine.Row, len(load.current))}
 		for subjectID, row := range load.current {
@@ -491,7 +484,7 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 			}
 			// 多个市场时，某个市场里年龄不够的标的不用这个市场的行（例如老币刚上线永续，不能用现货的历史直接通过永续的年龄检查）：
 			// 这里只记下，由选币池构造决定（已持仓的标的豁免，见 engine.MarketInput.AgedOut）。
-			if passed, probed := agePassed[load.market]; probed && len(loads) > 1 {
+			if passed, probed := marketPassed[load.market]; probed && len(loads) > 1 {
 				if _, inUniverse := load.universe[subjectID]; inUniverse {
 					if _, ok := passed[subjectID]; !ok {
 						if input.AgedOut == nil {

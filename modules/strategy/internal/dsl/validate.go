@@ -69,11 +69,8 @@ func Validate(s *Strategy) error {
 		}
 		return validatePortfolio(&s.Portfolio)
 	}
-	if s.Universe.MinAgeBars < 0 {
-		return errors.New("universe.min_age_bars 不能为负数")
-	}
-	if s.Universe.MinAgeBars > MaxCount {
-		return fmt.Errorf("universe.min_age_bars 不能超过 %d", MaxCount)
+	if err := validateUniverseAges("universe", s.Universe); err != nil {
+		return err
 	}
 	if err := validatePortfolio(&s.Portfolio); err != nil {
 		return err
@@ -94,13 +91,17 @@ func Validate(s *Strategy) error {
 		if _, exists := ids[rule.ID]; exists {
 			return fmt.Errorf("规则 id %q 重复", rule.ID)
 		}
+		if err := validateRuleUniverse("规则 "+rule.ID, s, rule); err != nil {
+			return err
+		}
 		// rank 规则的可用标的数达不到 min_universe 时整期跳过：固定写出的 pool、或只由 include 构成的白名单
-		// 比它还小，这条规则就永远无法运行。
-		if rule.Type == RuleTypeRank && rule.Pool.Explicit && len(rule.Pool.Fixed) > 0 && len(rule.Pool.Fixed) < s.Portfolio.MinUniverse {
+		// 比它还小，这条规则就永远无法运行。写了 allow_empty 的规则不参与守门，不做这项检查。
+		universe := s.RuleUniverse(*rule)
+		if rule.Type == RuleTypeRank && !rule.AllowEmpty && rule.Pool.Explicit && len(rule.Pool.Fixed) > 0 && len(rule.Pool.Fixed) < s.Portfolio.MinUniverse {
 			return fmt.Errorf("规则 %s 的 pool 只有 %d 个标的，少于 portfolio.min_universe=%d，这条规则永远无法通过守门", rule.ID, len(rule.Pool.Fixed), s.Portfolio.MinUniverse)
 		}
-		if rule.Type == RuleTypeRank && !rule.Pool.Explicit && len(s.Universe.Tags) == 0 && len(s.Universe.Include) > 0 {
-			if size := includeOnlyUniverse(s.Universe); size < s.Portfolio.MinUniverse {
+		if rule.Type == RuleTypeRank && !rule.AllowEmpty && !rule.Pool.Explicit && len(universe.Tags) == 0 && len(universe.Include) > 0 {
+			if size := includeOnlyUniverse(universe); size < s.Portfolio.MinUniverse {
 				return fmt.Errorf("规则 %s 使用的 universe 只由 include 给出 %d 个标的（去掉 exclude 后），少于 portfolio.min_universe=%d，这条规则永远无法通过守门", rule.ID, size, s.Portfolio.MinUniverse)
 			}
 		}

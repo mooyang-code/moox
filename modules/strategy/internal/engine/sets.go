@@ -10,11 +10,13 @@ import (
 // 冻结的标的（因市场不可用或只缺上一根而缺数的已持仓标的，见 freeze.go）既不算可用也不算缺数：规则对它们不求值，持仓保持不动；
 // 但守门仍把它们计入缺数比例，保护中的标的不能伪装成可用。
 type ruleSets struct {
-	expected  []string
-	agedOut   map[string]struct{}
-	available []string
-	missing   map[string]string
-	frozen    map[string]struct{}
+	expected []string
+	agedOut  map[string]struct{}
+	// agedOutMax 是 agedOut 里因超过 max_age_bars 剔除的标的。
+	agedOutMax map[string]struct{}
+	available  []string
+	missing    map[string]string
+	frozen     map[string]struct{}
 	// holdReason 是冻结标的的明细原因（prev_hold 或 market_hold，见 frozenSet）。
 	holdReason map[string]string
 	// waived 表示规则本期不守门（永续整体不可用时的空头规则，见 waivesShortGuard）：规则只保持冻结的持仓，holding 规则不重建批次。
@@ -39,6 +41,7 @@ func partitionRule(rule *dsl.CompiledRule, frame Frame, held []string, frozen ma
 		}
 		sets.agedOut[id] = struct{}{}
 	}
+	sets.agedOutMax = agedOutMax(frame, rule.Rule.ID, sets.agedOut)
 	expected := append([]string(nil), frame.Expected[rule.Rule.ID]...)
 	sort.Strings(expected)
 	sets.expected = expected
@@ -71,6 +74,20 @@ func partitionRule(rule *dsl.CompiledRule, frame Frame, held []string, frozen ma
 	return sets
 }
 
+// agedOutMax 返回规则剔除集合里因超过 max_age_bars 剔除的标的。
+func agedOutMax(frame Frame, ruleID string, agedOut map[string]struct{}) map[string]struct{} {
+	var out map[string]struct{}
+	for _, id := range frame.AgedOutMax[ruleID] {
+		if _, aged := agedOut[id]; aged {
+			if out == nil {
+				out = make(map[string]struct{})
+			}
+			out[id] = struct{}{}
+		}
+	}
+	return out
+}
+
 // missingReason 返回标的在检查列上的第一个缺失原因（空串表示不缺）；明细只记这一个。
 func missingReason(id string, row Row, columns, previousColumns []string, failed map[string]map[string]string) string {
 	causes := missingCauses(id, row, true, columns, previousColumns, failed)
@@ -79,6 +96,9 @@ func missingReason(id string, row Row, columns, previousColumns []string, failed
 	}
 	return causes[0].text
 }
+
+// reasonAgedOutMax 是年龄超过 max_age_bars、不再算新标的而剔除的明细原因。
+const reasonAgedOutMax = "aged_out_max"
 
 // reasonVolumeZero 是 tranche 规则里本期有行但 volume 为 0、不作为候选的标的的明细原因。
 const reasonVolumeZero = "volume_zero"
@@ -92,7 +112,11 @@ func (s ruleSets) items(ruleID string) []Item {
 	}
 	for _, id := range s.expected {
 		if _, aged := s.agedOut[id]; aged {
-			items = append(items, Item{RuleID: ruleID, InstrumentID: id, Stage: StageAgedOut, Reason: "min_age_bars"})
+			reason := "min_age_bars"
+			if _, tooOld := s.agedOutMax[id]; tooOld {
+				reason = reasonAgedOutMax
+			}
+			items = append(items, Item{RuleID: ruleID, InstrumentID: id, Stage: StageAgedOut, Reason: reason})
 			continue
 		}
 		if _, held := s.frozen[id]; held {

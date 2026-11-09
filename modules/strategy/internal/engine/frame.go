@@ -44,6 +44,8 @@ type Frame struct {
 	Universe []string
 	Expected map[string][]string
 	AgedOut  map[string][]string
+	// AgedOutMax 是 AgedOut 里因超过 max_age_bars（不再是新标的）剔除的部分，明细原因记 aged_out_max；其余记 min_age_bars。
+	AgedOutMax map[string][]string
 	// Holdings 是写了 holding.anchor 或 holding.calendar 的规则的换仓时钟（规则 id → 时钟），由输入层按交易日历算好；
 	// 其余规则不出现，引擎按锚点 0 与 bars/offsets 计算。
 	Holdings map[string]HoldingClock

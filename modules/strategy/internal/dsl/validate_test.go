@@ -408,3 +408,34 @@ func TestValidateHoldOptions(t *testing.T) {
 		t.Fatalf("hold 的 entry、exit 列应计入引用列：%v %v", columns, err)
 	}
 }
+
+// S3 规则级标的池、年龄上限、跨市场年龄、允许空选择：互斥与非法值。
+func TestValidateRuleUniverseOptions(t *testing.T) {
+	t.Parallel()
+	runOptionCases(t, map[string]optionCase{
+		"max_age_bars 不写 allow_empty":     {rankRule("select: {top: 1}, weight: 1, universe: {max_age_bars: 30}"), "必须同时写 allow_empty: true"},
+		"策略级 max_age_bars 不写 allow_empty": {"name: x\nuniverse: {max_age_bars: 30}\nrules:\n  - {id: a, type: rank, score: close, select: {top: 1}, weight: 1}\n", "必须同时写 allow_empty: true"},
+		"max_age_bars 为负":                 {rankRule("select: {top: 1}, weight: 1, allow_empty: true, universe: {max_age_bars: -1}"), "max_age_bars 不能为负数"},
+		"max_age_bars 超过上限":               {rankRule("select: {top: 1}, weight: 1, allow_empty: true, universe: {max_age_bars: 10001}"), "max_age_bars 不能超过"},
+		"min 不小于 max":                     {rankRule("select: {top: 1}, weight: 1, allow_empty: true, universe: {min_age_bars: 30, max_age_bars: 30}"), "min_age_bars 必须小于 max_age_bars"},
+		"继承的 min 不小于规则 max":               {"name: x\nuniverse: {min_age_bars: 40}\nrules:\n  - {id: a, type: rank, score: close, select: {top: 1}, weight: 1, allow_empty: true, universe: {max_age_bars: 30}}\n", "实际使用的 universe.min_age_bars 必须小于"},
+		"age_markets 非法":                  {rankRule("select: {top: 1}, weight: 1, universe: {age_markets: any}"), "each 或 all"},
+		"显式 pool 写标签":                     {rankRule("pool: [A, B], select: {top: 1}, weight: 1, universe: {tags: [x]}"), "规则级 universe 只能写 min_age_bars"},
+		"规则 universe 未知字段":                {rankRule("select: {top: 1}, weight: 1, universe: {size: 3}"), "未知字段"},
+		"allow_empty 不是布尔":                {rankRule("select: {top: 1}, weight: 1, allow_empty: 1"), "true 或 false"},
+		"策略池写 max_age_bars":               {"name: p\nbar: 1h\nuniverse: {max_age_bars: 3}\nstrategy_pool:\n  members: [{id: a, strategy: s1}]\n  allocation: {method: fixed, ratios: {a: 1}}\n", "策略池不写 universe"},
+	})
+	// 显式 pool 的规则可以写年龄类字段；allow_empty 的规则不受 pool 小于 min_universe 的保存检查限制。
+	strategy, err := Parse([]byte("name: x\nportfolio: {min_universe: 5}\nrules:\n  - {id: a, type: rank, pool: [A, B], score: close, select: {top: 1}, weight: 1, allow_empty: true, universe: {min_age_bars: 1, max_age_bars: 20, age_markets: all}}\n"))
+	if err != nil {
+		t.Fatalf("Parse() = %v", err)
+	}
+	merged := strategy.RuleUniverse(strategy.Rules[0])
+	if merged.MinAgeBars != 1 || merged.MaxAgeBars != 20 || !merged.AllMarkets() || !strategy.HasRuleAges() || strategy.LongestAgeBars() != 20 {
+		t.Fatalf("规则级年龄字段不对：%+v", merged)
+	}
+	plain, err := Parse([]byte("name: x\nuniverse: {min_age_bars: 5}\nrules:\n  - {id: a, type: rank, score: close, select: {top: 1}, weight: 1, universe: {exclude: [B]}}\n"))
+	if err != nil || plain.HasRuleAges() {
+		t.Fatalf("只改标的范围不算规则级年龄：%v", err)
+	}
+}

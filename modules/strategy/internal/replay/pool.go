@@ -155,7 +155,7 @@ func RunPool(ctx context.Context, run PoolRun) (PoolRunResult, error) {
 		for _, market := range member.Resolved.Markets() {
 			view := views[market]
 			item.readers = append(item.readers, &marketReader{
-				market: market, task: job.Tasks[market], subjects: subjects[market], passed: make(map[string]struct{}),
+				market: market, task: job.Tasks[market], subjects: subjects[market], passed: make(map[int]map[string]struct{}),
 				rows:    &input.RangeLoader{Client: shared, SpaceID: run.SpaceID, View: view, Subjects: subjects[market], Columns: columns, Abort: abort},
 				history: &input.RangeLoader{Client: shared, SpaceID: run.SpaceID, View: view, Subjects: subjects[market], Columns: []string{"close"}, Abort: abort},
 			})

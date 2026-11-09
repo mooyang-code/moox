@@ -12,12 +12,20 @@ import (
 type presence struct {
 	indexes map[string]map[int64]struct{}
 	cache   map[int64]int64
-	// passed 是回放中已通过年龄判定的标的：与实时一致，通过后不再因之后窗口缺口被重新剔除。
-	passed map[string]struct{}
+	// passed 是回放中已通过年龄判定的标的，按判定根数 N 分开（与实时的年龄通过记录按 N 保存一致）：通过后不再因之后窗口缺口被重新剔除。
+	passed map[int]map[string]struct{}
 }
 
 func newPresence() *presence {
-	return &presence{indexes: make(map[string]map[int64]struct{}), cache: make(map[int64]int64), passed: make(map[string]struct{})}
+	return &presence{indexes: make(map[string]map[int64]struct{}), cache: make(map[int64]int64), passed: make(map[int]map[string]struct{})}
+}
+
+// passedFor 返回已通过 n 根判定的标的集合（没有时建一个）。
+func (p *presence) passedFor(n int) map[string]struct{} {
+	if p.passed[n] == nil {
+		p.passed[n] = make(map[string]struct{})
+	}
+	return p.passed[n]
 }
 
 // add 登记一段读取到的行。不在日历上的行（例如 A 股节假日误写的一行）不能作为年龄依据，跳过而不是让整个回放失败。
@@ -46,14 +54,15 @@ func (p *presence) add(resolved input.Resolved, rows input.RangeRows) {
 	}
 }
 
-// probe 返回本期的年龄探针。
-func (p *presence) probe(resolved input.Resolved, bar input.PeriodBoundaries) input.AgeProbe {
+// probe 返回本期判定 n 根年龄的探针。
+func (p *presence) probe(n int, bar input.PeriodBoundaries) input.AgeProbe {
 	return func(_ context.Context, instruments []string) (map[string]struct{}, error) {
+		passed := p.passedFor(n)
 		wanted := make(map[string]struct{}, len(instruments))
 		for _, id := range instruments {
 			wanted[id] = struct{}{}
 		}
-		target := bar.BarIndex - int64(resolved.MinAgeBars-1)
+		target := bar.BarIndex - int64(n-1)
 		inWindow := func(indexes map[int64]struct{}) bool {
 			for offset := int64(0); offset <= 2; offset++ {
 				if _, ok := indexes[target-offset]; ok {
@@ -64,7 +73,7 @@ func (p *presence) probe(resolved input.Resolved, bar input.PeriodBoundaries) in
 		}
 		satisfied := make(map[string]struct{}, len(instruments))
 		for id := range wanted {
-			if _, ok := p.passed[id]; ok {
+			if _, ok := passed[id]; ok {
 				satisfied[id] = struct{}{}
 			}
 		}
@@ -77,12 +86,12 @@ func (p *presence) probe(resolved input.Resolved, bar input.PeriodBoundaries) in
 			// 与实时一致：只有本期的候选通过判定才记入已通过集合；不在候选里的标的之后重新出现时仍要重新判定。
 			if _, ok := wanted[subjectID]; ok {
 				satisfied[subjectID] = struct{}{}
-				p.passed[subjectID] = struct{}{}
+				passed[subjectID] = struct{}{}
 			}
 		}
 		// 与实时一致：已证明年龄的标的放行；其余全部不满足且窗口内整个数据集没有数据时，才是历史缺口。
 		if len(instruments) > 0 && len(satisfied) == 0 && !anyRows {
-			return nil, &input.SkipError{Reason: input.SkipHistoryInsufficient, Detail: fmt.Sprintf("min_age_bars=%d 的探针窗口内整个数据集都没有数据（历史缺口），无法判断上市时间", resolved.MinAgeBars)}
+			return nil, &input.SkipError{Reason: input.SkipHistoryInsufficient, Detail: fmt.Sprintf("min_age_bars=%d 的探针窗口内整个数据集都没有数据（历史缺口），无法判断上市时间", n)}
 		}
 		return satisfied, nil
 	}

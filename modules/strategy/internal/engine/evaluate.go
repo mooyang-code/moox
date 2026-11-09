@@ -67,6 +67,10 @@ func evaluateFrame(program *dsl.Program, mode dsl.Market, frame Frame, previous 
 			decision.Summary.Notes = append(decision.Summary.Notes, fmt.Sprintf("永续本期整体不可用，空头规则 %s 不守门：冻结的空头保持不动，不新开空头", rule.Rule.ID))
 			continue
 		}
+		// allow_empty 的规则不参与任何整期守门：候选为空或缺数时这条规则本期只是不出目标，预算留现金。
+		if rule.Rule.AllowEmpty {
+			continue
+		}
 		if reason := guard(program.Strategy.Portfolio, rule.Rule.Type, sets, guardedFrozen(mode, sets, previous.Rules[rule.Rule.ID].Held)); reason != "" {
 			skipReason = reason
 			skipNote = fmt.Sprintf("规则 %s：预期 %d、年龄剔除 %d、可用 %d、缺数 %d", rule.Rule.ID, len(sets.expected), len(sets.agedOut), len(sets.available), len(sets.missing))

@@ -224,8 +224,8 @@ type marketReader struct {
 	subjects []input.Subject
 	rows     *input.RangeLoader
 	history  *input.RangeLoader
-	// passed 是整次回放内已通过年龄判定的标的，各段共用（与实时一致：通过后不再因窗口缺口被重新剔除）。
-	passed map[string]struct{}
+	// passed 是整次回放内已通过年龄判定的标的（按判定根数 N 分开），各段共用（与实时一致：通过后不再因窗口缺口被重新剔除）。
+	passed map[int]map[string]struct{}
 }
 
 // loadMarketViews 读取绑定的每个市场的结果 View（要有 close 列，账本按它估值）与数据集的全部标的绑定（含已停用，回放中都视为活跃）。
@@ -333,7 +333,7 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 			loaderMarket = market
 		}
 		readers = append(readers, &marketReader{
-			market: market, task: job.Tasks[resolved.TaskKey(market)], subjects: subjects[market], passed: make(map[string]struct{}),
+			market: market, task: job.Tasks[resolved.TaskKey(market)], subjects: subjects[market], passed: make(map[int]map[string]struct{}),
 			rows:    &input.RangeLoader{Client: r.Client, SpaceID: job.SpaceID, View: view, Subjects: subjects[market], Columns: columns, Market: loaderMarket, Memo: memo, Abort: abort},
 			history: &input.RangeLoader{Client: r.Client, SpaceID: job.SpaceID, View: view, Subjects: subjects[market], Columns: []string{"close"}, Market: loaderMarket, Memo: memo, Abort: abort},
 		})
@@ -699,36 +699,37 @@ func evaluateBar(ctx context.Context, program *dsl.Program, resolved input.Resol
 			return skippedDecision(state, input.SkipAmbiguousSeries, marketDetail(reader.market, multi, detail)), nil
 		}
 	}
-	agePassed := make(map[string]map[string]struct{}, len(readers))
-	if resolved.MinAgeBars > 0 {
-		probe := func(ctx context.Context, ids []string) (map[string]struct{}, error) {
-			passed := make(map[string]struct{}, len(ids))
-			for _, reader := range readers {
-				inMarket := make([]string, 0, len(ids))
-				for _, id := range ids {
-					if _, ok := present[reader.market][id]; ok {
-						inMarket = append(inMarket, id)
-					}
-				}
-				got, err := segments[reader.market].ages.probe(resolved, bar)(ctx, inMarket)
-				if err != nil {
-					return nil, err
-				}
-				agePassed[reader.market] = got
-				for id := range got {
-					passed[id] = struct{}{}
-				}
-			}
-			return passed, nil
-		}
-		if err := sets.ApplyAge(ctx, resolved.MinAgeBars, probe); err != nil {
-			var skip *input.SkipError
-			if errors.As(err, &skip) {
-				return skippedDecision(state, skip.Reason, skip.Detail), nil
-			}
-			return engine.Decision{}, err
-		}
+	markets := make([]string, 0, len(readers))
+	for _, reader := range readers {
+		markets = append(markets, reader.market)
 	}
+	probe := func(ctx context.Context, n int, ids []string) (map[string]map[string]struct{}, error) {
+		passed := make(map[string]map[string]struct{}, len(readers))
+		for _, reader := range readers {
+			inMarket := make([]string, 0, len(ids))
+			for _, id := range ids {
+				if _, ok := present[reader.market][id]; ok {
+					inMarket = append(inMarket, id)
+				}
+			}
+			got, err := segments[reader.market].ages.probe(n, bar)(ctx, inMarket)
+			if err != nil {
+				return nil, err
+			}
+			passed[reader.market] = got
+		}
+		return passed, nil
+	}
+	allPassed, err := sets.ApplyAge(ctx, resolved, markets, probe)
+	if err != nil {
+		var skip *input.SkipError
+		if errors.As(err, &skip) {
+			return skippedDecision(state, skip.Reason, skip.Detail), nil
+		}
+		return engine.Decision{}, err
+	}
+	// 按市场剔除行只按策略级 min_age_bars 判断（与实时一致）。
+	agePassed := allPassed[resolved.MinAgeBars]
 	if program.UsesPreviousBar {
 		for _, reader := range readers {
 			if detail := firstAmbiguous(involved, segments[reader.market].rows.Ambiguous[bar.PreviousStart.Unix()]); detail != "" {
@@ -740,7 +741,7 @@ func evaluateBar(ctx context.Context, program *dsl.Program, resolved input.Resol
 	if err != nil {
 		return skippedDecision(state, input.SkipConfigError, err.Error()), nil
 	}
-	frame := engine.Frame{BarEnd: bar.BarEnd, BarIndex: bar.BarIndex, Markets: make(map[string]engine.MarketInput, len(readers)), Universe: sets.Universe, Expected: sets.Expected, AgedOut: sets.AgedOut, Holdings: holdings}
+	frame := engine.Frame{BarEnd: bar.BarEnd, BarIndex: bar.BarIndex, Markets: make(map[string]engine.MarketInput, len(readers)), Universe: sets.Universe, Expected: sets.Expected, AgedOut: sets.AgedOut, AgedOutMax: sets.AgedOutMax, Holdings: holdings}
 	for _, reader := range readers {
 		current := segments[reader.market].rows.Bars[key]
 		previous := segments[reader.market].rows.Bars[bar.PreviousStart.Unix()]
@@ -848,25 +849,27 @@ func (r *Runner) writeBar(ctx context.Context, replayID string, barEnd time.Time
 	})
 }
 
-// agePresence 为一段 bar 读取年龄判定所需的窗口 [首根 − (N+1), 末根 − (N−1)]（只读 close），
-// 每段重新构造，内存只与段长和标的数有关，不随 min_age_bars 或回放长度增长；已通过判定的标的集合由各段共用。
-func agePresence(ctx context.Context, history *input.RangeLoader, resolved input.Resolved, segment []input.PeriodBoundaries, passed map[string]struct{}) (*presence, error) {
+// agePresence 为一段 bar 读取年龄判定所需的窗口 [首根 − (N最大+1), 末根 − (N最小−1)]（只读 close），N 取策略里全部需要判定的根数；
+// 每段重新构造，内存只与段长和标的数有关，不随年龄根数或回放长度增长；已通过判定的标的集合（按 N 分开）由各段共用。
+func agePresence(ctx context.Context, history *input.RangeLoader, resolved input.Resolved, segment []input.PeriodBoundaries, passed map[int]map[string]struct{}) (*presence, error) {
 	result := newPresence()
 	if passed != nil {
 		result.passed = passed
 	}
-	if resolved.MinAgeBars <= 0 {
+	levels := resolved.AgeLevels()
+	if len(levels) == 0 {
 		return result, nil
 	}
-	from, err := input.HistoryStart(resolved.Calendar, resolved.Bar, segment[0].StorageStart, resolved.MinAgeBars+2)
+	shortest, longest := levels[0], levels[len(levels)-1]
+	from, err := input.HistoryStart(resolved.Calendar, resolved.Bar, segment[0].StorageStart, longest+2)
 	if errors.Is(err, marketcalendar.ErrNoPreviousTradingDay) {
 		// A 股内嵌日历起点附近没有目标根之前的两根容忍窗口，从目标根读起。
-		from, err = input.HistoryStart(resolved.Calendar, resolved.Bar, segment[0].StorageStart, resolved.MinAgeBars)
+		from, err = input.HistoryStart(resolved.Calendar, resolved.Bar, segment[0].StorageStart, longest)
 	}
 	if err != nil {
 		return nil, err
 	}
-	to, err := input.HistoryStart(resolved.Calendar, resolved.Bar, segment[len(segment)-1].StorageStart, resolved.MinAgeBars)
+	to, err := input.HistoryStart(resolved.Calendar, resolved.Bar, segment[len(segment)-1].StorageStart, shortest)
 	if err != nil {
 		return nil, err
 	}
@@ -883,7 +886,7 @@ func usesTags(strategy dsl.Strategy) bool {
 		return true
 	}
 	for _, rule := range strategy.Rules {
-		if len(rule.Pool.Tags) > 0 {
+		if len(rule.Pool.Tags) > 0 || (rule.Universe != nil && len(rule.Universe.Tags)+len(rule.Universe.ExcludeTags) > 0) {
 			return true
 		}
 	}

@@ -47,13 +47,16 @@ type Strategy struct {
 	FactorParams map[string]map[string]ParamExpr
 }
 
-// Universe 是策略级默认标的池：省略即 all。
+// Universe 是策略级默认标的池：省略即 all。规则可以写规则级 universe 逐项覆盖（见 universe.go）。
+// MinAgeBars、MaxAgeBars 是年龄下限与上限（只保留年龄小于上限的新标的）；AgeMarkets 为 all 时要求在全部绑定市场上判断年龄。
 type Universe struct {
 	Tags        []string
 	ExcludeTags []string
 	Include     []string
 	Exclude     []string
 	MinAgeBars  int
+	MaxAgeBars  int
+	AgeMarkets  string
 }
 
 // Pool 是规则级标的池。Explicit 为 true 时替代 universe 的标签与黑白名单。
@@ -101,10 +104,13 @@ type Holding struct {
 // Rule 是一条规则。rank 规则使用 Filter、Score、Select、Weight、FilterAfter、Holding；
 // signal 规则使用 Pool、Entry、Exit、Weight；tranche 规则使用 Weight（只有 total）与 Tranche。
 type Rule struct {
-	ID          string
-	Name        string
-	Type        string
-	Pool        Pool
+	ID   string
+	Name string
+	Type string
+	Pool Pool
+	// Universe 是规则级 universe（见 universe.go）；AllowEmpty 为真时这条规则不参与整期守门，候选为空或缺数时只是不出目标。
+	Universe    *RuleUniverse
+	AllowEmpty  bool
 	Filter      string
 	Score       string
 	Select      Select
