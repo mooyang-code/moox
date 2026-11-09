@@ -267,14 +267,14 @@ let:
 | `s.clip(lo, hi)` / `s.abs()` / `np.log(s)` / `np.sqrt(s)` / `np.sign(s)` | `clip(s, lo, hi)` / `abs(s)` / `log(s)` / `sqrt(s)` / `sign(s)` |
 | `np.maximum(a, b)` / `np.minimum(a, b)` | `max(a, b)` / `min(a, b)` |
 | `np.floor(s)` / `np.ceil(s)` | `floor(s)` / `ceil(s)` |
-| `np.round(s)`、`s.round()`、Python 3 的 `round()` | **不等价**：它们是银行家舍入（2.5 → 2、3.5 → 4），DSL 的 `round` 在 0.5 处远离零（2.5 → 3）；只在没有恰好 .5 的值时一致，否则用 `where` 按原口径写，并在验收里单独核对 |
+| `np.round(s)`、`s.round()`、Python 3 的 `round()` | **不等价**：它们是银行家舍入（2.5 → 2、3.5 → 4），DSL 的 `round` 在 0.5 处远离零（2.5 → 3）；只在没有恰好 .5 的值时一致，否则按原口径写成 `where(x - floor(x) == 0.5, 2 * round(x / 2), round(x))`，并在验收里单独核对 |
 | `s.fillna(v)` / `s.isna()` | `fill_nan(s, v)` / `is_nan(s)` |
 | `(c).rolling(n).sum()`（布尔计数） | `ts_count(c, n)` |
 | `df.groupby(["data_time", "series_tag"])[x].rank(pct=True)` | `cs_rank(x)` |
 | 截面 `(x - mean) / std`（ddof=1） | `cs_zscore(x)` |
 | 截面 `x - mean` / `x / x.abs().sum()` | `cs_demean(x)` / `cs_scale(x)` |
 | `df.groupby(["data_time", "series_tag"])[x].transform("mean")` / `"sum"` / `"median"` / `"std"` / `"min"` / `"max"` | `cs_mean(x)` / `cs_sum(x)` / `cs_median(x)` / `cs_std(x)` / `cs_min(x)` / `cs_max(x)`（整组 NaN 时为 NaN；pandas 的 `sum` 给 0，要用 `min_count=1` 才一致） |
-| 同上，`transform("count")` 数条件为真的行 / `transform(lambda s: s.quantile(q))` | `cs_count(c)`（c 为布尔） / `cs_quantile(x, q)`（q 只收字面量） |
+| 同上，布尔列 c 的 `transform("sum", min_count=1)`（数条件为真的行；pandas 的 `count` 数的是非空行，False 也算进去，不等价） / `transform(lambda s: s.quantile(q))` | `cs_count(c)`（c 为布尔，整组 NaN 时为 NaN） / `cs_quantile(x, q)`（q 只收字面量） |
 | 截面里取指定标的的值，例如按 `data_time` 合并 `df[df.subject_id == "BTC-USDT"][x]` | `cs_ref(x, "BTC-USDT")` |
 | `params["window"]`、`params["windows"]` + `output_names` | `params: {window: {type: int, min: 2, max: 120, default: 20}}`，每个旧窗口值对应一个成员（固定参数不同的成员，或可变成员 `ma_fast`、`ma_slow`）或一个共用参数的输出，输出名固定 |
 
