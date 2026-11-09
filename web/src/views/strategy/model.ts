@@ -190,7 +190,7 @@ export function itemReasonLabel(reason?: string): string {
 }
 
 const stages: Record<string, { label: string; color: string }> = {
-  aged_out: { label: "年龄不足", color: "gray" },
+  aged_out: { label: "年龄剔除", color: "gray" },
   missing: { label: "缺数", color: "red" },
   filtered: { label: "被过滤", color: "gray" },
   scored: { label: "未入选", color: "blue" },
@@ -209,7 +209,7 @@ export function stageColor(stage: string): string {
   return stages[stage]?.color ?? "blue";
 }
 
-/** 解释明细的阶段顺序：入选的放最前面，其次是保持持仓、止损止盈、被剔除、打分未入选，最后是缺数、未触发、被过滤和年龄不足。 */
+/** 解释明细的阶段顺序：入选的放最前面，其次是保持持仓、止损止盈、被剔除、打分未入选，最后是缺数、未触发、被过滤和年龄剔除（原因区分年龄不足、已不是新标的、未在全部市场上市）。 */
 const stageOrder: Record<string, number> = {
   weighted: 0,
   held: 1,

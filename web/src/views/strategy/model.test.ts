@@ -50,6 +50,7 @@ describe("strategy model helpers", () => {
     expect(skipReasonLabel("history_insufficient")).toContain("历史覆盖不足");
     expect(stageLabel("weighted")).toBe("入选");
     expect(stageLabel("held")).toBe("保持持仓");
+    expect(stageLabel("aged_out")).toBe("年龄剔除");
   });
 
   it("parses summaries and resolved bindings defensively", () => {

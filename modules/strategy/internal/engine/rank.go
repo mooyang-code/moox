@@ -178,8 +178,11 @@ func evaluateRank(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous R
 	}
 	// 选择个数：比例的分母是通过 filter 且分数有效的样本数（select.where 之前）。
 	count := rule.Rule.Select.Count(len(live))
-	if note := capShortNote(rule, count); note != "" {
-		result.notes = append(result.notes, note)
+	// 只在本根实际做选择时说明（普通规则每根都选；holding 只在建仓、补建批次的 bar 上选）。
+	if rule.Rule.Holding == nil || len(rebuild) > 0 {
+		if note := capShortNote(rule, count); note != "" {
+			result.notes = append(result.notes, note)
+		}
 	}
 	// skipReasons 记下候选因分组名额、二次排序没能入选的原因（见 select.go）。
 	skipReasons := map[string]string{}

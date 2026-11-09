@@ -71,10 +71,10 @@ func (q *groupQuota) admit(id string) string {
 }
 
 // capShortNote 在 top/bottom 写比例、配了 cap、且 cap × 选中数小于 total 时返回摘要说明：保存时个数未知、没做这项检查，
-// 运行时分不完的预算按 cap 语义留现金。其余情况返回空串。
+// 运行时分不完的预算按 cap 语义留现金。个数为 0 与其余情况返回空串。
 func capShortNote(rule *dsl.CompiledRule, count int) string {
 	sel, weight := rule.Rule.Select, rule.Rule.Weight
-	if !sel.IsRatio() || !weight.HasCap {
+	if !sel.IsRatio() || !weight.HasCap || count <= 0 {
 		return ""
 	}
 	if weight.Cap.Mul(quant.Must(fmt.Sprint(count))).Cmp(weight.Total) >= 0 {

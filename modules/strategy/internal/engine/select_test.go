@@ -230,3 +230,18 @@ func TestSelectRatioCapShortNote(t *testing.T) {
 	enough := evaluate(t, program, frameOf(program, rankedRows(40, nil)), State{})
 	require.NotContains(t, strings.Join(enough.Summary.Notes, "\n"), "分不完的预算")
 }
+
+// 个数为 0、或 holding 的非建仓 bar（本根没有做选择）时不写“分不完”的说明。
+func TestSelectRatioCapShortNoteOnlyWhenSelecting(t *testing.T) {
+	program := compile(t, "name: s\nrules:\n  - {id: r, type: rank, score: m, select: {top: 0.1}, weight: {total: 1, cap: 0.3}}\nportfolio: {max_missing: 1}\n", "m")
+	none := evaluate(t, program, frameOf(program, rankedRows(5, nil)), State{})
+	require.NotContains(t, strings.Join(none.Summary.Notes, "\n"), "分不完的预算")
+	holding := compile(t, "name: s\nrules:\n  - {id: r, type: rank, score: m, select: {top: 0.1}, weight: {total: 1, cap: 0.3}, holding: {bars: 3, offsets: [0]}}\nportfolio: {max_missing: 1}\n", "m")
+	frame := frameOf(holding, rankedRows(20, nil))
+	frame.BarIndex = 30
+	built := evaluate(t, holding, frame, State{})
+	require.Contains(t, strings.Join(built.Summary.Notes, "\n"), "分不完的预算")
+	frame.BarIndex = 31
+	carried := evaluate(t, holding, frame, built.State)
+	require.NotContains(t, strings.Join(carried.Summary.Notes, "\n"), "分不完的预算")
+}
