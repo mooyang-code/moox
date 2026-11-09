@@ -261,3 +261,27 @@ func TestFunctionsMarksBroadcast(t *testing.T) {
 		t.Fatalf("cs_ref args = %+v", args)
 	}
 }
+
+// functions --markdown 输出函数清单表格（factor-dsl.md 的函数清单由它生成）：每个函数一行，竖线转义。
+func TestFunctionsMarkdown(t *testing.T) {
+	var out bytes.Buffer
+	if err := run([]string{"functions", "--markdown"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != len(describeFunctions())+2 || lines[0] != "| 类别 | 函数 | 参数 | 回看 | 说明 |" {
+		t.Fatalf("markdown = %s", out.String())
+	}
+	for _, want := range []string{
+		"| 截面（聚合广播） | `cs_quantile` | x（序列）、q（常量 0～1） |",
+		"| 时序 | `pct_change` | x（序列）、k（常量 1～100000，可选，默认 1） |",
+		"sign(x) · \\|x\\|^e",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("markdown lacks %q", want)
+		}
+	}
+	if err := run([]string{"functions", "--json", "--markdown"}, &out); err == nil {
+		t.Fatal("--json 与 --markdown 同时给出应报错")
+	}
+}

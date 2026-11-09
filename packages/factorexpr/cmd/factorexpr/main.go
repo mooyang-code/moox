@@ -110,14 +110,21 @@ func describeFunctions() []functionInfo {
 func runFunctions(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("functions", flag.ContinueOnError)
 	asJSON := fs.Bool("json", false, "输出 JSON")
+	asMarkdown := fs.Bool("markdown", false, "输出 Markdown 表格（skills/moox/references/factor-dsl.md 的函数清单由它生成）")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if *asJSON && *asMarkdown {
+		return errors.New("--json 与 --markdown 只能选一个")
 	}
 	infos := describeFunctions()
 	if *asJSON {
 		encoder := json.NewEncoder(out)
 		encoder.SetIndent("", "  ")
 		return encoder.Encode(infos)
+	}
+	if *asMarkdown {
+		return writeMarkdown(out, infos)
 	}
 	for _, info := range infos {
 		var parts []string
@@ -136,6 +143,50 @@ func runFunctions(args []string, out io.Writer) error {
 			category += "/broadcast"
 		}
 		fmt.Fprintf(out, "%-19s %-23s (%s) 回看 %s；%s；例：%s\n", info.Name, category, strings.Join(parts, ", "), info.Lookback, info.Doc, info.Example)
+	}
+	return nil
+}
+
+var categoryNames = map[string]string{"elementwise": "逐元素", "timeseries": "时序", "cross_section": "截面"}
+
+var argKindNames = map[string]string{
+	"series": "序列", "bool": "布尔", "bool_series": "布尔序列", "window": "常量", "integer": "常量", "constant": "常量",
+	"subject": "标的字符串",
+}
+
+// writeMarkdown 输出函数清单的 Markdown 表格：类别、函数、参数、回看、说明。
+func writeMarkdown(out io.Writer, infos []functionInfo) error {
+	escape := func(text string) string { return strings.ReplaceAll(text, "|", "\\|") }
+	if _, err := fmt.Fprintln(out, "| 类别 | 函数 | 参数 | 回看 | 说明 |\n| --- | --- | --- | --- | --- |"); err != nil {
+		return err
+	}
+	for _, info := range infos {
+		category := categoryNames[info.Category]
+		if info.Broadcast {
+			category += "（聚合广播）"
+		}
+		parts := make([]string, 0, len(info.Args))
+		for _, a := range info.Args {
+			var notes []string
+			if kind := argKindNames[a.Kind]; kind != "" {
+				if a.Min != nil {
+					kind += fmt.Sprintf(" %g～%g", *a.Min, *a.Max)
+				}
+				notes = append(notes, kind)
+			}
+			if a.Optional {
+				notes = append(notes, fmt.Sprintf("可选，默认 %g", *a.Default))
+			}
+			part := a.Name
+			if len(notes) > 0 {
+				part += "（" + strings.Join(notes, "，") + "）"
+			}
+			parts = append(parts, part)
+		}
+		if _, err := fmt.Fprintf(out, "| %s | `%s` | %s | %s | %s |\n", category, info.Name, escape(strings.Join(parts, "、")),
+			escape(info.Lookback), escape(info.Doc)); err != nil {
+			return err
+		}
 	}
 	return nil
 }
