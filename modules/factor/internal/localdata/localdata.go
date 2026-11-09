@@ -384,13 +384,10 @@ func (d *Data) Prepare(ctx context.Context, set domain.EngineTask, subjects []st
 		if err != nil {
 			return err
 		}
-		// 窗口只需要没有任何任务在同步的标的（任务范围内的标的本来就在窗口里）。
-		synced, err := d.SyncedSubjects(ctx, src)
-		if err != nil {
-			return fmt.Errorf("列出数据源上正在同步的标的：%w", err)
-		}
+		// 窗口载入回看区间内、不在登记标的并集里的全部本地标的，不按“正在同步”过滤：过滤放到计算时（HistorySubjects）做。
+		// 否则刚下架的标的会因为过时的“正在同步”清单被移出窗口，之后实时结果一直少它。
 		if history, err = HistoryCandidates(d.cfg.Store, src, now.Add(-time.Duration(lookback)*step), now,
-			HistoryRule{Exclude: subjects, Synced: append(synced, subjects...)}); err != nil {
+			HistoryRule{Exclude: subjects, Synced: subjects}); err != nil {
 			return err
 		}
 	}
@@ -522,7 +519,11 @@ func observedMembers(members []domain.MemberDef) bool {
 // 其他任务正在同步、而本任务范围不含的标的不纳入：它们本期的数据到没到取决于那个任务先跑还是后跑，纳入会让结果随执行顺序变化。
 // 按本地存储的内容与登记取，不按当前全集名单取，所以重启前后结果一致。实时、补算、回放都按这条规则。
 type HistoryRule struct {
-	Exclude, Own, Synced []string
+	// Exclude 是不纳入的标的（本期可用、上游失败）；Synced 是正在同步的标的。
+	Exclude, Synced []string
+	// Own 是本任务范围：其中本期不可用、又不在 Exclude 里的标的即使正在同步也纳入。实时与补算的 Exclude 已经包含计划的全部
+	// 期望标的（本期可用与上游失败），所以 Own 只在回放中起作用：回放的候选标的里被排除在回放标的之外的（例如数据到不了回放终点）。
+	Own []string
 }
 
 // HistoryCandidates 返回按 rule 应纳入的标的（按标的排序）。本地边界用存储的缓存（只重读写过的标的）。
@@ -557,9 +558,9 @@ func HistoryCandidates(store *seriesstore.Store, src seriesstore.Source, from, t
 	return out, nil
 }
 
-// SyncedSubjects 返回数据源上“正在同步”的标的：目录里同一数据源上启用的任务的标的范围的并集（Config.Synced 提供），
+// syncedSubjects 返回数据源上“正在同步”的标的：目录里同一数据源上启用的任务的标的范围的并集（Config.Synced 提供），
 // 与运行时的登记、准备状态无关，所以重启时任务逐个就绪、某个任务准备失败都不改变它。没有配置时为空。
-func (d *Data) SyncedSubjects(ctx context.Context, src seriesstore.Source) ([]string, error) {
+func (d *Data) syncedSubjects(ctx context.Context, src seriesstore.Source) ([]string, error) {
 	if d.cfg.Synced == nil {
 		return nil, nil
 	}
@@ -574,7 +575,7 @@ func (d *Data) HistorySubjects(ctx context.Context, plan pipeline.Plan) ([]strin
 		return nil, err
 	}
 	src := sourceOf(plan.Set)
-	synced, err := d.SyncedSubjects(ctx, src)
+	synced, err := d.syncedSubjects(ctx, src)
 	if err != nil {
 		return nil, fmt.Errorf("列出数据源上正在同步的标的：%w", err)
 	}
@@ -974,7 +975,14 @@ func (d *Data) loadLiveWindow(ctx context.Context, st *source, plan pipeline.Pla
 	}
 	d.startFlush(ctx, st, staged, flushList)
 
-	// observed 成员历史截面的标的只从窗口取本地历史，不参与上面的同步。
+	// observed 成员历史截面的标的只从窗口取本地历史，不参与上面的同步。窗口里缺了其中某个标的（窗口按旧的预载载入）时
+	// 改读磁盘：Acquire 会静默跳过窗口外的标的，结果会少它。
+	for _, subject := range plan.HistorySubjects {
+		if !st.window.Has(subject) {
+			log.Warnf("factor_history_subject_outside_window task=%s source=%s subject=%s：改读本地磁盘", plan.Set.TaskID, st.spec.Source, subject)
+			return pipeline.DataResult{Failed: sortedKeys(failed)}, true, nil
+		}
+	}
 	view := st.window.Acquire(withHistory(subjects, plan.HistorySubjects), target.Unix())
 	for _, subject := range subjects {
 		if end, has := st.window.Latest(subject); has && end.After(target) {

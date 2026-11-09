@@ -161,11 +161,29 @@ func (s *Service) selection(ctx context.Context, taskID string, memberKeys, subj
 	if err != nil {
 		return domain.FactorTask{}, nil, nil, err
 	}
+	if len(subjects) > 0 {
+		if err := rejectObservedSubset(selected); err != nil {
+			return domain.FactorTask{}, nil, nil, err
+		}
+	}
 	resolved, err := s.resolveSubjects(ctx, set, subjects)
 	if err != nil {
 		return domain.FactorTask{}, nil, nil, err
 	}
 	return set, selected, resolved, nil
+}
+
+// rejectObservedSubset 拒绝对写了 cross_section_history: observed 的成员做标的子集补算：没列出的在册标的正在同步、
+// 又不在这次补算的范围里，按历史截面的规则既不在当前截面、也不进历史截面，截面比实时少了这些标的，结果与实时、补算全部标的
+// 都不同，又会写回结果数据集。这类成员请补算全部标的（不指定 subjects）。
+func rejectObservedSubset(members []domain.MemberDef) error {
+	for _, member := range members {
+		if member.Factor.ObservedHistory() {
+			return fmt.Errorf("成员 %s 写了 cross_section_history: observed，不能只补算部分标的（结果会与实时不同）：请补算全部标的，"+
+				"或者只选其他成员", member.Key)
+		}
+	}
+	return nil
 }
 
 func (s *Service) resolveSubjects(ctx context.Context, set domain.FactorTask, requested []string) ([]string, error) {

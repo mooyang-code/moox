@@ -47,7 +47,10 @@ type preloader struct {
 	blocked func() bool
 	// onReady 在一个任务预载成功后调用（唤醒跳过恢复补算预载期间跳过的周期）。
 	onReady func(taskID string)
-	kick    chan struct{}
+	// onSubjects 在每次取到任务的标的清单（数据集在册的标的）时调用：用同一份清单更新“正在同步”的缓存（syncedScope），
+	// 让实时、补算、回放与预载看到的是同一份清单，标的下架、上架后不必等缓存过期。
+	onSubjects func(set domain.FactorTask, subjects []string)
+	kick       chan struct{}
 
 	// prepared 记录每个任务预载成功时的状态：目录里的因子变了回看更长、源数据集的标的清单变了，都要重新预载（设计 6.2 移除标的）。
 	mu       sync.Mutex
@@ -153,6 +156,9 @@ func (p *preloader) subjectsChanged(ctx context.Context, set domain.EngineTask) 
 	subjects, err := setSubjects(ctx, p.source, set, nil)
 	if err != nil {
 		return false
+	}
+	if p.onSubjects != nil {
+		p.onSubjects(set.Set, subjects)
 	}
 	p.mu.Lock()
 	state, ok := p.prepared[set.Set.TaskID]
@@ -291,6 +297,9 @@ func (p *preloader) prepare(ctx context.Context, set domain.EngineTask) ([]strin
 	subjects, err := setSubjects(ctx, p.source, set, nil)
 	if err != nil {
 		return nil, err
+	}
+	if p.onSubjects != nil {
+		p.onSubjects(set.Set, subjects)
 	}
 	if err := p.data.Prepare(ctx, set, subjects); err != nil {
 		return nil, fmt.Errorf("预载任务 %s：%w", set.Set.TaskID, err)

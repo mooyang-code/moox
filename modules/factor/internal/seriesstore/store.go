@@ -378,7 +378,8 @@ func (s *Store) TagBounds(src Source, subject string) (map[string]Bounds, error)
 // 写过的标的才重读，用于每期都要按边界筛选全部本地标的的调用方（observed 的历史截面）。
 //
 // 并发：读者在缓存的 refresh 锁里完成“取名单 → 读 Pebble → 回填”，彼此串行；读 Pebble 时不持有 bmu，写入不被挡住。
-// 读取期间写到的标的会被重新标为待刷新，下一次读取时刷新；读取开始之前已经提交的写入一定反映在结果里。
+// 读取期间写到的标的会被重新标为待刷新，下一次读取时刷新。写入在提交（Commit）之后才调用 markBoundsDirty，两者之间有一个
+// 空窗：这段时间里开始的读取可能仍返回这次写入之前的边界；markBoundsDirty 返回（WriteBatch 返回）之后开始的读取一定反映它。
 func (s *Store) SubjectBounds(src Source) (map[string]Bounds, error) {
 	if err := src.check(); err != nil {
 		return nil, err
