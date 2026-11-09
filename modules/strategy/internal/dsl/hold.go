@@ -13,6 +13,9 @@ type Hold struct {
 	Exit         string
 	MaxBars      int
 	CooldownBars int
+	// AllowReentry 为真时，候选只看 Entry：出场条件为真的标的也可以入场，本根刚出场的标的也可以当根补回（持有根数重新计）。
+	// 只能与 cooldown_bars 为 0 同用（冷却与当根补回互相矛盾）。
+	AllowReentry bool
 }
 
 func decodeHold(node *yaml.Node, path string) (*Hold, error) {
@@ -32,6 +35,8 @@ func decodeHold(node *yaml.Node, path string) (*Hold, error) {
 			hold.MaxBars, err = scalarInt(f.value, fieldPath)
 		case "cooldown_bars":
 			hold.CooldownBars, err = scalarInt(f.value, fieldPath)
+		case "allow_reentry":
+			hold.AllowReentry, err = scalarBool(f.value, fieldPath)
 		default:
 			return nil, fmt.Errorf("%s 包含未知字段 %q", path, f.key)
 		}
@@ -51,6 +56,9 @@ func validateHold(prefix string, rule *Rule) error {
 	}
 	if hold.CooldownBars < 0 || hold.CooldownBars > MaxCount {
 		return fmt.Errorf("%s 的 hold.cooldown_bars 必须在 0 到 %d 之间", prefix, MaxCount)
+	}
+	if hold.AllowReentry && hold.CooldownBars > 0 {
+		return fmt.Errorf("%s 的 hold.allow_reentry 不能与大于 0 的 cooldown_bars 同时使用（允许当根补回就没有冷却）", prefix)
 	}
 	switch {
 	case rule.Select.Buffer > 0:
