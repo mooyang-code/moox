@@ -160,6 +160,27 @@ func TestSelectOutputFieldsKeepsFundingRateOnlyWhenSelected(t *testing.T) {
 	require.Same(t, plain[0], selectOutputFields(plain, nil)[0])
 }
 
+// 任务选的资金费率要原样进到计划与计划构造的请求里，执行端才知道要取这一列。
+func TestDesiredPlanCarriesFundingRateIntoRequests(t *testing.T) {
+	groups := testGroups(3, "1h")
+	groups[0].OutputFields = []string{"close", domain.FieldFundingRate}
+	state, err := BuildDesiredState(testPlanOptions(), groups, nil)
+	require.NoError(t, err)
+	require.NotEmpty(t, state.Functions)
+	for _, function := range state.Functions {
+		dataset := findPlanDataset(function.Plan, "ds_spot_1h|1h")
+		require.NotNil(t, dataset)
+		require.Contains(t, dataset.OutputFields, domain.FieldFundingRate)
+		period := time.Unix(dataset.Copies[0].From, 0).UTC()
+		planned, ok, err := function.Plan.buildFrequencyRequest("crypto", "f", "r", "1h", marketdata.FrequencyHour, period)
+		require.NoError(t, err)
+		require.True(t, ok)
+		for _, item := range planned.Request.Items {
+			require.True(t, itemWantsFunding(planned.Request, item))
+		}
+	}
+}
+
 func TestFundingFailureClassification(t *testing.T) {
 	item := domain.CollectionItem{SubjectID: "BTC-USDT"}
 	require.Equal(t, domain.ItemOutcomeProviderError, fundingFailure(item, context.DeadlineExceeded).Outcome, "等待超时也归为 provider_error")

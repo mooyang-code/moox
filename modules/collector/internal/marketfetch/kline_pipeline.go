@@ -541,9 +541,8 @@ func fetchKlinesFromChain(ctx context.Context, session *marketdata.RouterSession
 	return nil, lastProvider, (startIndex + attempts) % len(chain), attempts, lastErr
 }
 
-// selectOutputFields keeps the canonical row field order while dropping fields
-// not selected by the task. An empty selection keeps every default field;
-// opt-in fields (funding_rate) are written only when explicitly selected.
+// selectOutputFields 按规范的字段顺序保留任务选中的字段。选择为空时保留全部默认字段；
+// 需要显式选中的字段（funding_rate）只在选中时写入。
 func selectOutputFields(fields []*storagepb.FieldValue, selected []string) []*storagepb.FieldValue {
 	if len(selected) == 0 {
 		if !hasField(fields, domain.FieldFundingRate) {

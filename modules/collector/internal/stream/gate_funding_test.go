@@ -137,8 +137,19 @@ func TestGateWithoutFundingFieldIgnoresCache(t *testing.T) {
 	source := &gateFundingSource{fail: true}
 	period := hourClose.Add(-time.Hour)
 	plan, dataset := testStreamPlan("1h", 15, copyOf(period.Add(-time.Hour), "BTC-USDT"))
-	h := newGateHarness(t, hourClose.Add(-10*time.Second), marketdata.FrequencyHour, plan, dataset)
-	h.gate.cfg.Funding = marketfetch.NewFundingCache(source, fundingClock{h.clock})
+	clock := NewFakeClock(hourClose.Add(-10 * time.Second))
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	queue := NewCommitQueue(clock)
+	go queue.Run(ctx)
+	committer := &recordingCommitter{}
+	gate, err := NewGate(GateConfig{SpaceID: "crypto", Market: gateMarket, DatasetID: dataset.DatasetID, Frequency: marketdata.FrequencyHour, Committer: committer, Queue: queue, Clock: clock,
+		Funding: marketfetch.NewFundingCache(source, fundingClock{clock}), Report: func(PeriodStat) {}})
+	require.NoError(t, err)
+	gate.Start(ctx)
+	gate.SetPlan(plan, dataset)
+	gate.Sync()
+	h := &gateHarness{t: t, clock: clock, gate: gate, committer: committer}
 	h.advance(10 * time.Second)
 	h.final("BTCUSDT", period, 1)
 	calls := h.waitCalls(1)
