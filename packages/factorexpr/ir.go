@@ -1,6 +1,7 @@
 package factorexpr
 
 import (
+	"math"
 	"strconv"
 	"strings"
 )
@@ -51,6 +52,8 @@ type Node struct {
 	Value    float64   // Op == OpConst；布尔常量为 1 或 0
 	IsInt    bool      // 常量是否为整数
 	Args     []*Node   // 序列、常量或参数子节点
+	// Subject 是字符串字面量参数（只有 cs_ref 的参考标的），参与规范文本与去重键。
+	Subject string
 	// Ints 是窗口、位移等整数参数；IntParams 与它等长，非空的位置由同名参数提供（Ints 里是默认值）。
 	Ints      []int
 	IntParams []string
@@ -66,6 +69,8 @@ type Node struct {
 	shift int
 	cross bool
 	size  int
+	// nanLiteral 为真表示子树里写了 nan 字面量：只有这样的常量运算才允许折叠出 NaN（见 fold）。
+	nanLiteral bool
 }
 
 // HasParamSlots 报告节点的整数或数值参数里是否有可调参数。
@@ -77,6 +82,19 @@ func (n *Node) HasParamSlots() bool {
 	}
 	for _, name := range n.FloatParams {
 		if name != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// hasParam 报告子树里是否引用了参数。
+func (n *Node) hasParam() bool {
+	if n.Op == OpParam {
+		return true
+	}
+	for _, arg := range n.Args {
+		if arg.hasParam() {
 			return true
 		}
 	}
@@ -120,6 +138,10 @@ func (n *Node) writeCanonical(b *strings.Builder) {
 		separate()
 		arg.writeCanonical(b)
 	}
+	if n.Subject != "" {
+		separate()
+		b.WriteString(strconv.Quote(n.Subject))
+	}
 	for i, value := range n.Ints {
 		separate()
 		if i < len(n.IntParams) && n.IntParams[i] != "" {
@@ -146,6 +168,9 @@ func formatConst(n *Node) string {
 		}
 		return "false"
 	}
+	if math.IsNaN(n.Value) {
+		return NaNLiteral
+	}
 	return formatFloat(n.Value)
 }
 
@@ -167,6 +192,18 @@ func newParam(param Param) *Node {
 func newNumber(value float64, isInt bool) *Node {
 	return &Node{Op: OpConst, Kind: KindNumberConst, Value: value, IsInt: isInt, size: 1}
 }
+
+// NaNLiteral 是空值常量的写法，与 true、false 同为保留字。
+const NaNLiteral = "nan"
+
+func newNaN() *Node {
+	return &Node{Op: OpConst, Kind: KindNumberConst, Value: math.NaN(), size: 1, nanLiteral: true}
+}
+
+// opSubject 只在编译期出现：字符串字面量参数的占位节点，apply 把它的值写进算子节点的 Subject，不进入表达式树。
+const opSubject = "subject"
+
+func newSubject(value string) *Node { return &Node{Op: opSubject, Subject: value} }
 
 func newBool(value bool) *Node {
 	node := &Node{Op: OpConst, Kind: KindBoolConst, size: 1}

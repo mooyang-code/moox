@@ -2,11 +2,13 @@ package binance
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/exchange"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -149,4 +151,136 @@ func (api *SwapAPI) getExchangeInfoWithDomainIPs(ctx context.Context, domain str
 	log.InfoContextf(ctx, "[SwapAPI] 获取ExchangeInfo成功，总计%d个交易对，活跃永续合约%d个",
 		total, len(symbols))
 	return symbols, nil
+}
+
+const (
+	// FundingRatePageLimit 是资金费接口单次最多返回的条数。
+	FundingRatePageLimit = 1000
+	// fundingRateChunk 是不带 symbol 查询时每次请求覆盖的最长时间：一个 8 小时结算点约 600 多个合约，4 小时内通常装得下。
+	fundingRateChunk = 4 * time.Hour
+)
+
+// FundingRateRecord 是一条资金费结算记录（接口原文）。
+type FundingRateRecord struct {
+	Symbol      string `json:"symbol"`
+	FundingRate string `json:"fundingRate"`
+	FundingTime int64  `json:"fundingTime"`
+}
+
+// FundingPacer 在每次资金费请求前等待配额，并在请求结束后拿到结果（用于 429/418 退避）。
+type FundingPacer interface {
+	Wait(ctx context.Context) error
+	Done(err error)
+}
+
+// ErrFundingPageOverflow 表示同一毫秒内的结算记录就超过了单页上限，无法拆分。
+var ErrFundingPageOverflow = errors.New("同一毫秒的资金费结算记录超过单页上限")
+
+// FundingRates 返回结算时刻落在 [start, end) 内的资金费记录（接口原文，不保证顺序）。
+//   - 不带 symbol：按 4 小时分段查询全部合约；某段满页说明可能被截断，对半拆开重查，不依赖返回顺序；
+//   - 带 symbol：按时间往后翻页，直到返回不足一页（满页时总要再翻一页确认）。
+//
+// 每次请求前经 pacer 等待配额；请求只发一次，不在这里重试，失败交给调用方。
+func (api *SwapAPI) FundingRates(ctx context.Context, pacer FundingPacer, symbol string, start, end time.Time) ([]FundingRateRecord, error) {
+	if api == nil || api.client == nil {
+		return nil, fmt.Errorf("永续合约资金费请求无效")
+	}
+	if !end.After(start) {
+		return nil, nil
+	}
+	symbol = FormatSymbol(strings.TrimSpace(symbol))
+	from, to := start.UnixMilli(), end.UnixMilli()
+	var records []FundingRateRecord
+	var err error
+	if symbol != "" {
+		records, err = api.fundingRatesOfSymbol(ctx, pacer, symbol, from, to)
+	} else {
+		chunk := fundingRateChunk.Milliseconds()
+		for chunkStart := from; chunkStart < to && err == nil; chunkStart += chunk {
+			var rows []FundingRateRecord
+			rows, err = api.fundingRateRange(ctx, pacer, chunkStart, min(chunkStart+chunk, to))
+			records = append(records, rows...)
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+	// 接口的 endTime 含端点，这里再按左闭右开过滤一次。
+	kept := records[:0]
+	for _, record := range records {
+		if record.FundingTime >= from && record.FundingTime < to {
+			kept = append(kept, record)
+		}
+	}
+	return kept, nil
+}
+
+// fundingRateRange 查 [from, to) 毫秒内的全部合约；满页时拆成 [from, mid) 与 [mid, to) 重查。
+func (api *SwapAPI) fundingRateRange(ctx context.Context, pacer FundingPacer, from, to int64) ([]FundingRateRecord, error) {
+	rows, err := api.fundingRatePage(ctx, pacer, "", from, to)
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) < FundingRatePageLimit {
+		return rows, nil
+	}
+	if to-from <= 1 {
+		return nil, fmt.Errorf("%w：%d", ErrFundingPageOverflow, from)
+	}
+	middle := from + (to-from)/2
+	left, err := api.fundingRateRange(ctx, pacer, from, middle)
+	if err != nil {
+		return nil, err
+	}
+	right, err := api.fundingRateRange(ctx, pacer, middle, to)
+	if err != nil {
+		return nil, err
+	}
+	return append(left, right...), nil
+}
+
+// fundingRatesOfSymbol 按时间往后翻页查一个合约在 [from, to) 毫秒内的记录。
+func (api *SwapAPI) fundingRatesOfSymbol(ctx context.Context, pacer FundingPacer, symbol string, from, to int64) ([]FundingRateRecord, error) {
+	var records []FundingRateRecord
+	for cursor := from; cursor < to; {
+		rows, err := api.fundingRatePage(ctx, pacer, symbol, cursor, to)
+		if err != nil {
+			return nil, err
+		}
+		records = append(records, rows...)
+		if len(rows) < FundingRatePageLimit {
+			return records, nil
+		}
+		latest := cursor
+		for _, row := range rows {
+			latest = max(latest, row.FundingTime)
+		}
+		cursor = latest + 1
+	}
+	return records, nil
+}
+
+// fundingRatePage 请求一页：[from, to) 换成接口含端点的 [startTime, endTime]。
+func (api *SwapAPI) fundingRatePage(ctx context.Context, pacer FundingPacer, symbol string, from, to int64) ([]FundingRateRecord, error) {
+	if pacer != nil {
+		if err := pacer.Wait(ctx); err != nil {
+			return nil, err
+		}
+	}
+	params := url.Values{}
+	if symbol != "" {
+		params.Set("symbol", symbol)
+	}
+	params.Set("startTime", strconv.FormatInt(from, 10))
+	params.Set("endTime", strconv.FormatInt(to-1, 10))
+	params.Set("limit", strconv.Itoa(FundingRatePageLimit))
+	var rows []FundingRateRecord
+	err := api.client.GetDirectWithIPs(ctx, api.client.SwapDomain(), nil, SwapFundingRateEndpoint, params, &rows)
+	if pacer != nil {
+		pacer.Done(err)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("获取永续合约资金费率失败（symbol=%s 区间=[%d,%d)）: %w", symbol, from, to, err)
+	}
+	return rows, nil
 }

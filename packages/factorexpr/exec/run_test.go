@@ -21,6 +21,14 @@ var purityExpressions = []string{
 	"delay(x, 3)", "delta(x, 2)", "pct_change(x, 2)", "cs_rank(x)", "cs_zscore(x)", "cs_demean(x)", "cs_scale(x)",
 	"where(ema(x, 20) > 0, 1, 0)", "ts_rank(ts_mean(x, 5) - y, 10)", "cs_rank(ts_mean(x, 5))",
 	"where(y > 0, x / y, 0)", "abs(x) + sqrt(abs(y)) * log(abs(x) + 1)",
+	"floor(x) + ceil(y) + round(x * y)", "where(x > 0, x, nan)",
+	"cs_mean(x)", "cs_sum(x)", "cs_count(x > y)", "cs_std(x)", "cs_median(x)", "cs_quantile(x, 0.3)", "cs_min(x)", "cs_max(x)",
+	`cs_ref(x, "S002")`, "ts_mean(cs_mean(x), 5)", "cs_rank(where(x > 0, x, nan))",
+	"ts_sum_relaxed(x, 7, 2)", "ts_count_relaxed(x > y, 7, 2)", "ts_median_relaxed(x, 8, 3)", "ts_quantile_relaxed(x, 9, 0.3, 2)",
+	"ts_rank_relaxed(x, 7, 2)", "ts_var_relaxed(x, 7, 2)", "ts_zscore_relaxed(x, 7, 3)", "ts_skew_relaxed(x, 9, 3)",
+	"ts_kurt_relaxed(x, 9, 4)", "ts_argmax_relaxed(x, 7, 1)", "ts_argmin_relaxed(x, 7, 1)", "ts_product_relaxed(x / 100, 5, 2)",
+	"ts_corr_relaxed(x, y, 9, 3)", "ts_cov_relaxed(x, y, 9, 3)",
+	"ts_last_valid(where(x > 0.5, x, nan), 9)", "ts_bars_since(x > y, 9)", "ts_value_when(x > y, delay(x, 2), 9)",
 }
 
 // purityPanel 生成多序列、两个 series_tag 的面板：含 NaN、常数段，第一条序列放入 Codex 审查给出的 EMA 反例。

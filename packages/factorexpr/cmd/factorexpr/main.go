@@ -1,7 +1,7 @@
 // Command factorexpr 是因子表达式的离线工具：列出函数、编译检查定义、在 K 线 CSV 上试算。
 // 它与引擎使用同一个编译器和执行器，用于把旧的 Python 因子转写成表达式之后逐值核对（见 skills/moox/references/factor-dsl.md）。
 //
-//	factorexpr functions [--json]
+//	factorexpr functions [--json | --markdown]
 //	factorexpr check --library lib.yaml [--factor-id ID ...]
 //	factorexpr eval --library lib.yaml --factor-id ID [--factor-id ID ...] --input bars.csv --freq 1m [--output out.csv]
 package main
@@ -73,35 +73,26 @@ type argInfo struct {
 }
 
 type functionInfo struct {
-	Name     string    `json:"name"`
-	Category string    `json:"category"`
-	Args     []argInfo `json:"args"`
-	Result   string    `json:"result"`
-	Lookback string    `json:"lookback"`
-	Doc      string    `json:"doc"`
-	Example  string    `json:"example"`
+	Name     string `json:"name"`
+	Category string `json:"category"`
+	// Broadcast 为真表示聚合广播类截面函数：统计量写给截面每一行（category 仍是 cross_section）。
+	Broadcast bool      `json:"broadcast,omitempty"`
+	Args      []argInfo `json:"args"`
+	Result    string    `json:"result"`
+	Lookback  string    `json:"lookback"`
+	Doc       string    `json:"doc"`
+	Example   string    `json:"example"`
 }
 
-var argKinds = map[factorexpr.ArgKind]string{
-	factorexpr.ArgNumber:     "number",
-	factorexpr.ArgSeries:     "series",
-	factorexpr.ArgBool:       "bool",
-	factorexpr.ArgBoolSeries: "bool_series",
-	factorexpr.ArgWindow:     "window",
-	factorexpr.ArgInteger:    "integer",
-	factorexpr.ArgConstant:   "constant",
-}
-
+// describeFunctions 与控制台的函数参考（ListFactorFunctions）同源：都来自 factorexpr.FunctionDocs。
 func describeFunctions() []functionInfo {
 	var infos []functionInfo
-	for _, fn := range factorexpr.Functions() {
-		info := functionInfo{Name: fn.Name, Category: fn.Category.String(), Result: "number", Lookback: fn.Lookback, Doc: fn.Doc, Example: fn.Example}
-		if fn.Result == factorexpr.ResultBool {
-			info.Result = "bool"
-		}
-		for _, arg := range fn.Args {
-			a := argInfo{Name: arg.Name, Kind: argKinds[arg.Kind], Optional: arg.Optional}
-			if arg.Kind == factorexpr.ArgWindow || arg.Kind == factorexpr.ArgInteger || arg.Kind == factorexpr.ArgConstant {
+	for _, doc := range factorexpr.FunctionDocs() {
+		info := functionInfo{Name: doc.Name, Category: doc.Category, Broadcast: doc.Broadcast, Result: doc.Result, Lookback: doc.Lookback,
+			Doc: doc.Doc, Example: doc.Example}
+		for _, arg := range doc.Args {
+			a := argInfo{Name: arg.Name, Kind: arg.Kind, Optional: arg.Optional}
+			if arg.Kind == "window" || arg.Kind == "integer" || arg.Kind == "constant" {
 				lo, hi := arg.Min, arg.Max
 				a.Min, a.Max = &lo, &hi
 			}
@@ -119,14 +110,21 @@ func describeFunctions() []functionInfo {
 func runFunctions(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("functions", flag.ContinueOnError)
 	asJSON := fs.Bool("json", false, "输出 JSON")
+	asMarkdown := fs.Bool("markdown", false, "输出 Markdown 表格（skills/moox/references/factor-dsl.md 的函数清单由它生成）")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if *asJSON && *asMarkdown {
+		return errors.New("--json 与 --markdown 只能选一个")
 	}
 	infos := describeFunctions()
 	if *asJSON {
 		encoder := json.NewEncoder(out)
 		encoder.SetIndent("", "  ")
 		return encoder.Encode(infos)
+	}
+	if *asMarkdown {
+		return writeMarkdown(out, infos)
 	}
 	for _, info := range infos {
 		var parts []string
@@ -140,7 +138,55 @@ func runFunctions(args []string, out io.Writer) error {
 			}
 			parts = append(parts, part)
 		}
-		fmt.Fprintf(out, "%-16s %-13s (%s) 回看 %s；%s；例：%s\n", info.Name, info.Category, strings.Join(parts, ", "), info.Lookback, info.Doc, info.Example)
+		category := info.Category
+		if info.Broadcast {
+			category += "/broadcast"
+		}
+		fmt.Fprintf(out, "%-19s %-23s (%s) 回看 %s；%s；例：%s\n", info.Name, category, strings.Join(parts, ", "), info.Lookback, info.Doc, info.Example)
+	}
+	return nil
+}
+
+var categoryNames = map[string]string{"elementwise": "逐元素", "timeseries": "时序", "cross_section": "截面"}
+
+var argKindNames = map[string]string{
+	"series": "序列", "bool": "布尔", "bool_series": "布尔序列", "window": "常量", "integer": "常量", "constant": "常量",
+	"subject": "标的字符串",
+}
+
+// writeMarkdown 输出函数清单的 Markdown 表格：类别、函数、参数、回看、说明。
+func writeMarkdown(out io.Writer, infos []functionInfo) error {
+	escape := func(text string) string { return strings.ReplaceAll(text, "|", "\\|") }
+	if _, err := fmt.Fprintln(out, "| 类别 | 函数 | 参数 | 回看 | 说明 |\n| --- | --- | --- | --- | --- |"); err != nil {
+		return err
+	}
+	for _, info := range infos {
+		category := categoryNames[info.Category]
+		if info.Broadcast {
+			category += "（聚合广播）"
+		}
+		parts := make([]string, 0, len(info.Args))
+		for _, a := range info.Args {
+			var notes []string
+			if kind := argKindNames[a.Kind]; kind != "" {
+				if a.Min != nil {
+					kind += fmt.Sprintf(" %g～%g", *a.Min, *a.Max)
+				}
+				notes = append(notes, kind)
+			}
+			if a.Optional {
+				notes = append(notes, fmt.Sprintf("可选，默认 %g", *a.Default))
+			}
+			part := a.Name
+			if len(notes) > 0 {
+				part += "（" + strings.Join(notes, "，") + "）"
+			}
+			parts = append(parts, part)
+		}
+		if _, err := fmt.Fprintf(out, "| %s | `%s` | %s | %s | %s |\n", category, info.Name, escape(strings.Join(parts, "、")),
+			escape(info.Lookback), escape(info.Doc)); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -228,6 +274,8 @@ type checkResult struct {
 	Lookback     int      `json:"lookback,omitempty"`
 	// OutputLookbacks 是每个输出列自己的回看；Lookback 是其中的最大值，也是引擎做空洞检查用的窗口。
 	OutputLookbacks map[string]int `json:"output_lookbacks,omitempty"`
+	// CrossSectionPoints 是计算一个目标时刻要算的截面个数之和（各截面算子的需求区间长度之和），用来估算时序套截面的计算量。
+	CrossSectionPoints int `json:"cross_section_points,omitempty"`
 	// Params 是可调参数的声明：类型、范围与默认值。
 	Params    []paramInfo `json:"params,omitempty"`
 	Canonical string      `json:"canonical,omitempty"`
@@ -270,6 +318,7 @@ func runCheck(args []string, out io.Writer) error {
 			result.InputColumns = factor.InputColumns
 			result.Outputs = factor.OutputNamesFor(entry.FactorID)
 			result.Lookback = factor.Lookback
+			result.CrossSectionPoints = factor.CrossSectionPoints()
 			result.OutputLookbacks = map[string]int{}
 			for i, output := range factor.Outputs {
 				result.OutputLookbacks[result.Outputs[i]] = max(output.Root.Lookback, 1)

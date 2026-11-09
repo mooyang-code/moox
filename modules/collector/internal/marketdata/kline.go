@@ -28,6 +28,9 @@ type NormalizedKline struct {
 	ProviderTimestamp time.Time
 	FetchedAt         time.Time
 	RequestID         string
+	// FundingRate 是结算时刻落在 [BarStart, BarEnd) 内的资金费率之和（本根没有结算为 0）；
+	// 只在写入目标选了 funding_rate 时由采集管线填入，为空表示没有取。
+	FundingRate *float64
 }
 
 func ValidateNormalizedKline(kline NormalizedKline) error {

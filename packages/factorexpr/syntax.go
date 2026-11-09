@@ -102,7 +102,7 @@ func (s *exprSource) syntaxError(err error) *Error {
 func rejectNode(src *exprSource, node ast.Node) *Error {
 	switch n := node.(type) {
 	case *ast.StringNode:
-		return src.errAt(node, "不允许使用字符串")
+		return src.errAt(node, "不允许使用字符串：只有 cs_ref 的标的参数可以写字符串")
 	case *ast.NilNode:
 		return src.errAt(node, "不允许使用 nil")
 	case *ast.BuiltinNode:

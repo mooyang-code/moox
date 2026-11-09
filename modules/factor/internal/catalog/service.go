@@ -35,6 +35,7 @@ type Service struct {
 	locks       *setlock.Locks
 	now         func() time.Time
 	subjects    SubjectSource
+	refSubjects SubjectSource
 	verifier    *UDFVerifier
 	engineView  EngineView
 }
@@ -158,6 +159,17 @@ func (s *Service) SetTaskStatus(ctx context.Context, taskID, status string) (dom
 		return domain.FactorTask{}, errors.New("pending factor task cannot be toggled")
 	}
 	if status == domain.TaskStatusEnabled {
+		enabled, err := s.db.ListMembers(ctx, task.TaskID, domain.MemberStatusEnabled)
+		if err != nil {
+			return domain.FactorTask{}, err
+		}
+		defs := make([]domain.MemberDef, 0, len(enabled))
+		for _, member := range enabled {
+			defs = append(defs, member.Def())
+		}
+		if err := s.checkReferenceSubjects(ctx, task, defs...); err != nil {
+			return domain.FactorTask{}, err
+		}
 		if err := s.reconcileTaskUnlocked(ctx, task); err != nil {
 			return domain.FactorTask{}, err
 		}
@@ -853,6 +865,9 @@ func (s *Service) validateMembership(ctx context.Context, set domain.FactorTask,
 		}
 	}
 	if err := domain.ValidateMembership(set, member, sourceColumns(columns), siblings, origins); err != nil {
+		return nil, err
+	}
+	if err := s.checkReferenceSubjects(ctx, set, member); err != nil {
 		return nil, err
 	}
 	return members, nil

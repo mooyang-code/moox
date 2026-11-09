@@ -18,6 +18,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/health"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketstorage"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketwiring"
 	collectorobservability "github.com/mooyang-code/moox/modules/collector/internal/observability"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
 	collectorresult "github.com/mooyang-code/moox/modules/collector/internal/planner/taskresult"
@@ -125,6 +126,8 @@ func Initialize(ctx context.Context, s *server.Server) (*Runtime, error) {
 		RealtimeInventory: realtimeInventory,
 		ResultManager:     resultManager,
 		ResultDataNodeID:  cfg.Storage.ResultDataNodeID,
+		// 资金费率是行情源的可选能力：建任务、改任务时按行情源目录判断。
+		SupportsFundingRate: marketwiring.SupportsFundingRate,
 	})
 	collectorpb.RegisterCollectMgrService(s.Service("trpc.moox.collector.CollectMgr"), svc)
 	marketFetchMetrics := marketfetch.NewMetrics(prometheus.DefaultRegisterer)

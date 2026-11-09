@@ -35,6 +35,8 @@ type Dependencies struct {
 	RealtimeInventory RealtimeInventory
 	ResultManager     *taskresult.Manager
 	ResultDataNodeID  string
+	// SupportsFundingRate 判断（空间, 行情源, 市场类型）的行情源是否具备资金费率能力（由 marketwiring 注入）；为空表示都不具备。
+	SupportsFundingRate func(spaceID, provider, marketType string) bool
 }
 
 // RealtimeInventory reconciles the derived expected Dataset registry.
@@ -58,6 +60,7 @@ type Service struct {
 	createTaskMu            ctxMutex
 	taskMutationLocks       keyedTaskLocker
 	subjectSyncer           SubjectSyncer
+	supportsFundingRate     func(spaceID, provider, marketType string) bool
 	klineOps                KlineOps
 	fetchPlanControl        FetchPlanControl
 	sourceIDResolver        func(provider, instrumentType string) string
@@ -146,6 +149,8 @@ func New(persistence *store.Store, deps Dependencies) *Service {
 		inventory:        deps.RealtimeInventory,
 		resultManager:    deps.ResultManager,
 		resultDataNodeID: strings.TrimSpace(deps.ResultDataNodeID),
+
+		supportsFundingRate: deps.SupportsFundingRate,
 	}
 }
 
@@ -1122,6 +1127,10 @@ func (s *Service) validateCollectionTaskTagRoutes(ctx context.Context, task doma
 	if !strings.EqualFold(strings.TrimSpace(task.DataType), "kline") {
 		return nil
 	}
+	wantsFunding, err := validateFundingRateFrequency(task)
+	if err != nil {
+		return err
+	}
 	tagSource, ok := s.datasetSrc.(collectionTaskTagSource)
 	if !ok {
 		// Some focused unit fakes expose only Dataset/Subject resolution. The
@@ -1163,7 +1172,32 @@ func (s *Service) validateCollectionTaskTagRoutes(ctx context.Context, task doma
 			return fmt.Errorf("tag %s route is unsupported: provider=%s market=%s data_type=%s", route.id, route.source, route.market, params.Collector.DataType)
 		}
 	}
+	if wantsFunding {
+		// 资金费率只对永续有意义，且由行情源的可选能力提供；统一数据集（现货加永续）不支持。
+		for _, route := range routes {
+			if route.market != "swap" {
+				return fmt.Errorf("输出字段 %s 只适用于永续：标签 %s 的市场是 %s；统一数据集也不支持这一列", domain.FieldFundingRate, route.id, route.market)
+			}
+			if s.supportsFundingRate == nil || !s.supportsFundingRate(task.SpaceID, route.source, route.market) {
+				return fmt.Errorf("输出字段 %s 需要行情源具备资金费率能力：标签 %s 的行情源 %s 不具备", domain.FieldFundingRate, route.id, route.source)
+			}
+		}
+	}
 	return nil
+}
+
+// validateFundingRateFrequency 校验选了资金费率的 K 线任务的频率：只支持 1h、1d。
+// 1m～30m 收盘时结算记录可能还没公布；1w、1M 推送不支持，一次要取的数据也太多。
+func validateFundingRateFrequency(task domain.CollectionTask) (bool, error) {
+	params, err := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
+	if err != nil || !domain.HasOutputField(params.OutputFields, domain.FieldFundingRate) {
+		return false, nil
+	}
+	parsed, err := frequencypkg.Parse(params.Frequency)
+	if err != nil || (parsed.Duration() != time.Hour && parsed.Duration() != 24*time.Hour) {
+		return true, fmt.Errorf("输出字段 %s 只支持 1h、1d 频率，当前是 %q", domain.FieldFundingRate, params.Frequency)
+	}
+	return true, nil
 }
 
 func canonicalizeCollectionTask(task domain.CollectionTask) (domain.CollectionTask, error) {

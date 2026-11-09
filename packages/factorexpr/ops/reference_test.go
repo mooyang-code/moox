@@ -556,3 +556,33 @@ func TestEMA20WithLongWarmup(t *testing.T) {
 		}
 	}
 }
+
+// 取整：round 在 0.5 处远离零；NaN 仍为 NaN。
+func TestRoundingSemantics(t *testing.T) {
+	cases := []struct {
+		x                  float64
+		floor, ceil, round float64
+	}{
+		{0.5, 0, 1, 1},
+		{-0.5, -1, 0, -1},
+		{1.5, 1, 2, 2},
+		{2.5, 2, 3, 3},
+		{-2.5, -3, -2, -3},
+		{-1.2, -2, -1, -1},
+		{-1.7, -2, -1, -2},
+		{3, 3, 3, 3},
+		{0.49999999999999994, 0, 1, 0},
+	}
+	for _, c := range cases {
+		for op, want := range map[string]float64{"floor": c.floor, "ceil": c.ceil, "round": c.round} {
+			if got := factorexpr.Scalar(op)([]float64{c.x}); got != want {
+				t.Errorf("%s(%v) = %v, want %v", op, c.x, got, want)
+			}
+		}
+	}
+	for _, op := range []string{"floor", "ceil", "round"} {
+		if !math.IsNaN(factorexpr.Scalar(op)([]float64{math.NaN()})) {
+			t.Errorf("%s(NaN) should be NaN", op)
+		}
+	}
+}

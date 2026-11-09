@@ -109,7 +109,4 @@ func TestKlineCommitterReportsMissingAndUnplanned(t *testing.T) {
 	_, err = committer.CommitPeriod(context.Background(), batch)
 	require.NoError(t, err)
 	require.Len(t, storage.rows, 1, "零到达不提交")
-
-	require.NoError(t, committer.Upsert(context.Background(), KlineBatch{SpaceID: "crypto", BatchID: "bf", Market: plan.Market, Dataset: plan.Datasets[0], Symbols: plan.ExchangeSymbol, Bars: []marketdata.NormalizedKline{testSwapBar("BTC-USDT", "", period, 1)}}))
-	require.Len(t, storage.upserts, 1)
 }

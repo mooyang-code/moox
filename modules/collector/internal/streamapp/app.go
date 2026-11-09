@@ -76,10 +76,11 @@ func New(cfg *Config, version string, registerer prometheus.Registerer) (*App, e
 			}
 			return &timedCommitter{committer: marketfetch.NewKlineCommitter(storage, market), timeout: storageTimeout}, nil
 		},
-		Manager: stream.ManagerOptions{Resolve: app.resolve},
-		Metrics: stream.NewMetrics(registerer),
-		Report:  func(stat stream.PeriodStat) { agent.Collect(stat) },
-		Suspect: func(suspect stream.Suspect) { agent.Flag(suspect) },
+		Manager:    stream.ManagerOptions{Resolve: app.resolve},
+		Metrics:    stream.NewMetrics(registerer),
+		Report:     func(stat stream.PeriodStat) { agent.Collect(stat) },
+		Suspect:    func(suspect stream.Suspect) { agent.Flag(suspect) },
+		FundingFor: marketwiring.FundingCacheForMarket,
 	})
 	agent = stream.NewAgent(&stream.PlanClient{Gateway: gateway, SpaceID: cfg.SpaceID, InstanceID: cfg.InstanceID, Version: version}, app.Runtime, app.Scheduler)
 	app.Agent = agent

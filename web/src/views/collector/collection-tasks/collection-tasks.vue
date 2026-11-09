@@ -587,7 +587,11 @@ import {
   buildCollectionTaskPayload,
   collectionTaskResultLabel,
   collectionTaskNameError,
+  FUNDING_RATE_FIELD_ID,
+  fundingRateFieldAvailable,
   isCrossMarketSelection,
+  pruneFundingRate,
+  shouldDropFundingRate,
   KLINE_OUTPUT_FIELD_IDS,
   normalizeCollectionTask,
   parseCollectionTaskInput,
@@ -668,6 +672,7 @@ let taskTypeFieldRequestToken = 0;
 const outputFieldSections = computed(() => {
   const grouped = new Map<string, Field[]>();
   for (const field of outputFieldCatalog.value) {
+    if (field.field_id === FUNDING_RATE_FIELD_ID && !fundingRateAvailable.value) continue;
     const groupID = field.group_id || "";
     const list = grouped.get(groupID) || [];
     list.push(field);
@@ -767,6 +772,30 @@ const pagination = reactive({
   pageSize: 10,
   total: 0
 });
+
+// 资金费率只在 K 线、1h/1d、标签全部是具备这项能力的永续时可选，默认不勾。
+const fundingRateAvailable = computed(() =>
+  fundingRateFieldAvailable({
+    dataType: editor.data_type,
+    frequency: frequencyValue.value,
+    routes: selectedTagRoutes.value
+  })
+);
+// 条件不再满足时去掉已选的资金费率。编辑已有任务时标签可能还没读到，标签为空时不动，避免误删；新建时标签清空也去掉。
+const fundingRateDropped = computed(() =>
+  shouldDropFundingRate(fundingRateAvailable.value, editorMode.value === "edit", selectedTagRoutes.value.length)
+);
+// 同时监听已选字段：打开任务时判断值可能没变（一直是“去掉”），已选字段换了也要按同一判断清理。
+watch(
+  [fundingRateDropped, selectedOutputFields, outputFieldDraft],
+  ([dropped]) => {
+    const selected = pruneFundingRate(selectedOutputFields.value, dropped);
+    if (selected !== selectedOutputFields.value) selectedOutputFields.value = selected;
+    const draft = pruneFundingRate(outputFieldDraft.value, dropped);
+    if (draft !== outputFieldDraft.value) outputFieldDraft.value = draft;
+  },
+  { immediate: true }
+);
 
 const spaceStore = useSpaceStore();
 const { selectedSpaceId } = storeToRefs(spaceStore);
@@ -1117,7 +1146,7 @@ async function loadOutputFieldCatalog(force = false) {
     outputFieldGroups.value = groups;
     outputFieldCatalog.value = fields.filter(
       field =>
-        KLINE_OUTPUT_FIELD_IDS.has(field.field_id) &&
+        (KLINE_OUTPUT_FIELD_IDS.has(field.field_id) || field.field_id === FUNDING_RATE_FIELD_ID) &&
         (!field.group_id || activeGroupIDs.has(field.group_id) || !allGroupIDs.has(field.group_id))
     );
     outputCatalogSpaceID.value = spaceID;
@@ -1192,7 +1221,8 @@ function currentTaskInput(): CollectionTaskInput {
     frequency: frequencyValue.value,
     subjectTags: subjectTagIds.value.slice(),
     sourceTaskId: sourceTaskId.value,
-    outputFields: selectedOutputFields.value
+    // 提交前按条件再过滤一次：条件不满足时不带资金费率。
+    outputFields: selectedOutputFields.value.filter(id => id !== FUNDING_RATE_FIELD_ID || !fundingRateDropped.value)
   };
 }
 

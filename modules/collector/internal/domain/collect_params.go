@@ -298,6 +298,19 @@ func normalizeTags(tags []string) []string {
 	return result
 }
 
+// FieldFundingRate 是可选输出字段“资金费率”：只在显式选中时采集与写入，输出字段为空（表示默认字段）时不包含。
+const FieldFundingRate = "funding_rate"
+
+// HasOutputField 判断输出字段里是否显式选了 field。
+func HasOutputField(fields []string, field string) bool {
+	for _, candidate := range fields {
+		if strings.EqualFold(strings.TrimSpace(candidate), field) {
+			return true
+		}
+	}
+	return false
+}
+
 func normalizeOutputFields(fields []string) []string {
 	for i := range fields {
 		fields[i] = strings.ToLower(strings.TrimSpace(fields[i]))

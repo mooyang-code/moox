@@ -20,6 +20,12 @@ type SubjectSource interface {
 // WithSubjectSource 设置参数提交时校验覆盖标的用的标的来源；不设置则不校验标的范围。
 func WithSubjectSource(source SubjectSource) Option { return func(s *Service) { s.subjects = source } }
 
+// WithRefSubjectSource 设置校验 cs_ref 参考标的用的标的来源（加成员、启用成员、启用任务时读取）；不设置则不校验。
+// 与参数提交分开设置：参数提交在每期的热路径上，参考标的只在成员与任务变更时校验。
+func WithRefSubjectSource(source SubjectSource) Option {
+	return func(s *Service) { s.refSubjects = source }
+}
+
 // MemberSubmission 是一个可变成员的一份参数提交（完整快照：默认值加按标的覆盖）。
 type MemberSubmission struct {
 	MemberKey string
@@ -112,10 +118,37 @@ func (s *Service) SubmitParams(ctx context.Context, writer, taskID string, perio
 
 // subjectScope 返回覆盖标的是否在源数据集里的判断函数；没有设置标的来源时返回 nil（不校验）。
 func (s *Service) subjectScope(ctx context.Context, task domain.FactorTask) (func(string) bool, error) {
-	if s.subjects == nil {
+	return datasetScope(ctx, s.subjects, task)
+}
+
+// checkReferenceSubjects 校验成员定义里 cs_ref 引用的参考标的都在任务源数据集的标的范围内。没有参考标的的成员不读取标的列表。
+func (s *Service) checkReferenceSubjects(ctx context.Context, task domain.FactorTask, members ...domain.MemberDef) error {
+	var inScope func(string) bool
+	for _, member := range members {
+		compiled := member.Factor.Compiled()
+		if compiled == nil || len(compiled.RefSubjects) == 0 {
+			continue
+		}
+		if inScope == nil {
+			scope, err := datasetScope(ctx, s.refSubjects, task)
+			if err != nil || scope == nil {
+				return err
+			}
+			inScope = scope
+		}
+		if err := domain.ValidateReferenceSubjects(member, inScope); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// datasetScope 返回“标的是否在任务源数据集里”的判断函数；source 为 nil 时返回 nil（不校验）。
+func datasetScope(ctx context.Context, source SubjectSource, task domain.FactorTask) (func(string) bool, error) {
+	if source == nil {
 		return nil, nil
 	}
-	list, err := s.subjects.ListDatasetSubjects(ctx, task.SpaceID, task.SourceDatasetID)
+	list, err := source.ListDatasetSubjects(ctx, task.SpaceID, task.SourceDatasetID)
 	if err != nil {
 		return nil, fmt.Errorf("读取源数据集 %s 的标的：%w", task.SourceDatasetID, err)
 	}

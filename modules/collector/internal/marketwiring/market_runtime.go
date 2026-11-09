@@ -62,6 +62,7 @@ func newMarketKlinePipeline(storage marketfetch.Storage, marketID string, instru
 			pipeline.InstrumentType = marketdata.InstrumentSwap
 		}
 	}
+	pipeline.Funding = FundingCacheFor(marketID, pipeline.InstrumentType, providerID, sourceID)
 	if marketID == marketfetch.StockCNSpaceID {
 		if instrumentType == marketdata.InstrumentIndex {
 			pipeline.InstrumentType = marketdata.InstrumentIndex

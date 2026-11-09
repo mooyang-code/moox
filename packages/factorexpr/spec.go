@@ -376,7 +376,7 @@ func checkNames(spec *Spec) error {
 		if isReservedColumn(name) {
 			return errorf(path, line, "名称 %s 是系统列", name)
 		}
-		if name == "true" || name == "false" || name == "nil" {
+		if name == "true" || name == "false" || name == "nil" || name == NaNLiteral {
 			return errorf(path, line, "名称 %s 是保留字", name)
 		}
 		if previous, ok := used[name]; ok {

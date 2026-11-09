@@ -145,8 +145,23 @@ func ValidateSnapshot(member MemberDef, snapshot ParamSnapshot, inScope func(sub
 	return nil
 }
 
-// crossSectionParams 返回流入截面算子参数位置的参数。当前的截面算子都没有常量参数，所以总是为空；
-// 以后增加带参数的截面算子时在这里识别。
+// ValidateReferenceSubjects 检查成员定义里 cs_ref 引用的参考标的都满足 inScope（在任务的标的范围内）：不在范围内时结果恒为 NaN，
+// 加成员、启用成员与启用任务时拒绝。inScope 为 nil 或定义没有参考标的时不校验。
+func ValidateReferenceSubjects(member MemberDef, inScope func(subject string) bool) error {
+	compiled := member.Factor.Compiled()
+	if compiled == nil || inScope == nil {
+		return nil
+	}
+	for _, subject := range compiled.RefSubjects {
+		if !inScope(subject) {
+			return fmt.Errorf("成员 %s 的 cs_ref 引用的参考标的 %s 不在任务的标的范围内", member.Key, subject)
+		}
+	}
+	return nil
+}
+
+// crossSectionParams 返回流入截面算子参数位置的参数。截面算子的编译期常量只收字面量（cs_quantile 的 q，编译时拒绝参数），
+// 所以总是为空；以后增加收参数的截面算子时在这里识别。
 func crossSectionParams(MemberDef) []string { return nil }
 
 // MergeSnapshots 按标的合并两次提交：默认值取本次提交的；按标的的覆盖里，本次带了的标的覆盖旧值，没带的标的保留旧值。
