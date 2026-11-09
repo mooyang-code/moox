@@ -1,0 +1,2359 @@
+{
+  "bars": [
+    {
+      "bar_index": 100,
+      "input": {
+        "rows": {
+          "swap": {
+            "A": {
+              "close": 100,
+              "high": 101,
+              "low": 99,
+              "m1": 9,
+              "m2": 1,
+              "m3": 5
+            },
+            "B": {
+              "close": 100,
+              "high": 101,
+              "low": 99,
+              "m1": 2,
+              "m2": 9,
+              "m3": 6
+            },
+            "C": {
+              "close": 100,
+              "high": 101,
+              "low": 99,
+              "m1": 3,
+              "m2": 2,
+              "m3": 1
+            },
+            "D": {
+              "close": 50,
+              "high": 51,
+              "low": 49,
+              "m1": 5,
+              "m2": 5,
+              "m3": 4
+            },
+            "E": {
+              "close": 40,
+              "high": 41,
+              "low": 39,
+              "m1": 1,
+              "m2": 4,
+              "m3": 3
+            }
+          }
+        }
+      },
+      "items": [
+        {
+          "instrument_id": "A",
+          "market": "swap",
+          "rank": 1,
+          "rule_id": "loss",
+          "score": "9",
+          "stage": "weighted",
+          "weight": "0.3"
+        },
+        {
+          "instrument_id": "B",
+          "market": "swap",
+          "rank": 4,
+          "reason": "not_selected",
+          "rule_id": "loss",
+          "score": "2",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "C",
+          "market": "swap",
+          "rank": 3,
+          "reason": "not_selected",
+          "rule_id": "loss",
+          "score": "3",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "D",
+          "market": "swap",
+          "rank": 2,
+          "reason": "not_selected",
+          "rule_id": "loss",
+          "score": "5",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "E",
+          "market": "swap",
+          "rank": 5,
+          "reason": "not_selected",
+          "rule_id": "loss",
+          "score": "1",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "A",
+          "market": "swap",
+          "rank": 5,
+          "reason": "not_selected",
+          "rule_id": "trail",
+          "score": "1",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "B",
+          "market": "swap",
+          "rank": 1,
+          "rule_id": "trail",
+          "score": "9",
+          "stage": "weighted",
+          "weight": "0.3"
+        },
+        {
+          "instrument_id": "C",
+          "market": "swap",
+          "rank": 4,
+          "reason": "not_selected",
+          "rule_id": "trail",
+          "score": "2",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "D",
+          "market": "swap",
+          "rank": 2,
+          "reason": "not_selected",
+          "rule_id": "trail",
+          "score": "5",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "E",
+          "market": "swap",
+          "rank": 3,
+          "reason": "not_selected",
+          "rule_id": "trail",
+          "score": "4",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "A",
+          "market": "swap",
+          "rank": 4,
+          "reason": "not_selected",
+          "rule_id": "profit",
+          "score": "5",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "B",
+          "market": "swap",
+          "rank": 5,
+          "reason": "not_selected",
+          "rule_id": "profit",
+          "score": "6",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "C",
+          "market": "swap",
+          "rank": 1,
+          "rule_id": "profit",
+          "score": "1",
+          "stage": "weighted",
+          "weight": "-0.3"
+        },
+        {
+          "instrument_id": "D",
+          "market": "swap",
+          "rank": 3,
+          "reason": "not_selected",
+          "rule_id": "profit",
+          "score": "4",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "E",
+          "market": "swap",
+          "rank": 2,
+          "reason": "not_selected",
+          "rule_id": "profit",
+          "score": "3",
+          "stage": "scored"
+        }
+      ],
+      "rule_states_json": {
+        "rules": {
+          "loss": {
+            "entries": {
+              "A": {
+                "bar": 100,
+                "peak": "100",
+                "price": "100"
+              }
+            },
+            "held": [
+              "A"
+            ]
+          },
+          "profit": {
+            "entries": {
+              "C": {
+                "bar": 100,
+                "peak": "100",
+                "price": "100"
+              }
+            },
+            "held": [
+              "C"
+            ]
+          },
+          "trail": {
+            "entries": {
+              "B": {
+                "bar": 100,
+                "peak": "100",
+                "price": "100"
+              }
+            },
+            "held": [
+              "B"
+            ]
+          }
+        },
+        "targets": {
+          "A|swap": "0.3",
+          "B|swap": "0.3",
+          "C|swap": "-0.3"
+        }
+      },
+      "status": "ok",
+      "summary": {
+        "cash": "0.7",
+        "gross": "0.9",
+        "net": "0.3",
+        "rules": {
+          "loss": {
+            "aged_out": 0,
+            "allocated": "0.3",
+            "available": 5,
+            "budget": "0.3",
+            "expected": 5,
+            "filtered": 0,
+            "missing": 0,
+            "scored": 5,
+            "selected": 1,
+            "weighted": 1
+          },
+          "profit": {
+            "aged_out": 0,
+            "allocated": "0.3",
+            "available": 5,
+            "budget": "0.3",
+            "expected": 5,
+            "filtered": 0,
+            "missing": 0,
+            "scored": 5,
+            "selected": 1,
+            "weighted": 1
+          },
+          "trail": {
+            "aged_out": 0,
+            "allocated": "0.3",
+            "available": 5,
+            "budget": "0.3",
+            "expected": 5,
+            "filtered": 0,
+            "missing": 0,
+            "scored": 5,
+            "selected": 1,
+            "weighted": 1
+          }
+        },
+        "turnover": "0.45",
+        "universe": 5
+      },
+      "targets": [
+        {
+          "instrument_id": "A",
+          "market": "swap",
+          "weight": "0.3"
+        },
+        {
+          "instrument_id": "B",
+          "market": "swap",
+          "weight": "0.3"
+        },
+        {
+          "instrument_id": "C",
+          "market": "swap",
+          "weight": "-0.3"
+        }
+      ]
+    },
+    {
+      "bar_index": 101,
+      "input": {
+        "rows": {
+          "swap": {
+            "A": {
+              "close": 95,
+              "high": 96,
+              "low": 94,
+              "m1": 9,
+              "m2": 1,
+              "m3": 5
+            },
+            "B": {
+              "close": 110,
+              "high": 111,
+              "low": 109,
+              "m1": 2,
+              "m2": 9,
+              "m3": 6
+            },
+            "C": {
+              "close": 95,
+              "high": 96,
+              "low": 94,
+              "m1": 3,
+              "m2": 2,
+              "m3": 1
+            },
+            "D": {
+              "close": 50,
+              "high": 51,
+              "low": 49,
+              "m1": 5,
+              "m2": 5,
+              "m3": 4
+            },
+            "E": {
+              "close": 41,
+              "high": 42,
+              "low": 40,
+              "m1": 1,
+              "m2": 4,
+              "m3": 3
+            }
+          }
+        }
+      },
+      "items": [
+        {
+          "instrument_id": "A",
+          "market": "swap",
+          "rank": 1,
+          "rule_id": "loss",
+          "score": "9",
+          "stage": "weighted",
+          "weight": "0.3"
+        },
+        {
+          "instrument_id": "B",
+          "market": "swap",
+          "rank": 4,
+          "reason": "not_selected",
+          "rule_id": "loss",
+          "score": "2",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "C",
+          "market": "swap",
+          "rank": 3,
+          "reason": "not_selected",
+          "rule_id": "loss",
+          "score": "3",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "D",
+          "market": "swap",
+          "rank": 2,
+          "reason": "not_selected",
+          "rule_id": "loss",
+          "score": "5",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "E",
+          "market": "swap",
+          "rank": 5,
+          "reason": "not_selected",
+          "rule_id": "loss",
+          "score": "1",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "A",
+          "market": "swap",
+          "rank": 5,
+          "reason": "not_selected",
+          "rule_id": "trail",
+          "score": "1",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "B",
+          "market": "swap",
+          "rank": 1,
+          "rule_id": "trail",
+          "score": "9",
+          "stage": "weighted",
+          "weight": "0.3"
+        },
+        {
+          "instrument_id": "C",
+          "market": "swap",
+          "rank": 4,
+          "reason": "not_selected",
+          "rule_id": "trail",
+          "score": "2",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "D",
+          "market": "swap",
+          "rank": 2,
+          "reason": "not_selected",
+          "rule_id": "trail",
+          "score": "5",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "E",
+          "market": "swap",
+          "rank": 3,
+          "reason": "not_selected",
+          "rule_id": "trail",
+          "score": "4",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "A",
+          "market": "swap",
+          "rank": 4,
+          "reason": "not_selected",
+          "rule_id": "profit",
+          "score": "5",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "B",
+          "market": "swap",
+          "rank": 5,
+          "reason": "not_selected",
+          "rule_id": "profit",
+          "score": "6",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "C",
+          "market": "swap",
+          "rank": 1,
+          "rule_id": "profit",
+          "score": "1",
+          "stage": "weighted",
+          "weight": "-0.3"
+        },
+        {
+          "instrument_id": "D",
+          "market": "swap",
+          "rank": 3,
+          "reason": "not_selected",
+          "rule_id": "profit",
+          "score": "4",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "E",
+          "market": "swap",
+          "rank": 2,
+          "reason": "not_selected",
+          "rule_id": "profit",
+          "score": "3",
+          "stage": "scored"
+        }
+      ],
+      "rule_states_json": {
+        "rules": {
+          "loss": {
+            "entries": {
+              "A": {
+                "bar": 100,
+                "peak": "100",
+                "price": "100"
+              }
+            },
+            "held": [
+              "A"
+            ]
+          },
+          "profit": {
+            "entries": {
+              "C": {
+                "bar": 100,
+                "peak": "95",
+                "price": "100"
+              }
+            },
+            "held": [
+              "C"
+            ]
+          },
+          "trail": {
+            "entries": {
+              "B": {
+                "bar": 100,
+                "peak": "111",
+                "price": "100"
+              }
+            },
+            "held": [
+              "B"
+            ]
+          }
+        },
+        "targets": {
+          "A|swap": "0.3",
+          "B|swap": "0.3",
+          "C|swap": "-0.3"
+        }
+      },
+      "status": "ok",
+      "summary": {
+        "cash": "0.7",
+        "gross": "0.9",
+        "net": "0.3",
+        "rules": {
+          "loss": {
+            "aged_out": 0,
+            "allocated": "0.3",
+            "available": 5,
+            "budget": "0.3",
+            "expected": 5,
+            "filtered": 0,
+            "missing": 0,
+            "scored": 5,
+            "selected": 1,
+            "weighted": 1
+          },
+          "profit": {
+            "aged_out": 0,
+            "allocated": "0.3",
+            "available": 5,
+            "budget": "0.3",
+            "expected": 5,
+            "filtered": 0,
+            "missing": 0,
+            "scored": 5,
+            "selected": 1,
+            "weighted": 1
+          },
+          "trail": {
+            "aged_out": 0,
+            "allocated": "0.3",
+            "available": 5,
+            "budget": "0.3",
+            "expected": 5,
+            "filtered": 0,
+            "missing": 0,
+            "scored": 5,
+            "selected": 1,
+            "weighted": 1
+          }
+        },
+        "turnover": "0",
+        "universe": 5
+      },
+      "targets": [
+        {
+          "instrument_id": "A",
+          "market": "swap",
+          "weight": "0.3"
+        },
+        {
+          "instrument_id": "B",
+          "market": "swap",
+          "weight": "0.3"
+        },
+        {
+          "instrument_id": "C",
+          "market": "swap",
+          "weight": "-0.3"
+        }
+      ]
+    },
+    {
+      "bar_index": 102,
+      "input": {
+        "rows": {
+          "swap": {
+            "A": {
+              "close": 89,
+              "high": 90,
+              "low": 88,
+              "m1": 9,
+              "m2": 1,
+              "m3": 5
+            },
+            "B": {
+              "close": 120,
+              "high": 121,
+              "low": 119,
+              "m1": 2,
+              "m2": 9,
+              "m3": 6
+            },
+            "C": {
+              "close": 85,
+              "high": 86,
+              "low": 84,
+              "m1": 3,
+              "m2": 2,
+              "m3": 1
+            },
+            "D": {
+              "close": 51,
+              "high": 52,
+              "low": 50,
+              "m1": 5,
+              "m2": 5,
+              "m3": 4
+            },
+            "E": {
+              "close": 41,
+              "high": 42,
+              "low": 40,
+              "m1": 1,
+              "m2": 4,
+              "m3": 3
+            }
+          }
+        }
+      },
+      "items": [
+        {
+          "instrument_id": "A",
+          "market": "swap",
+          "reason": "stop_loss",
+          "rule_id": "loss",
+          "stage": "stopped"
+        },
+        {
+          "instrument_id": "B",
+          "market": "swap",
+          "rank": 4,
+          "reason": "not_selected",
+          "rule_id": "loss",
+          "score": "2",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "C",
+          "market": "swap",
+          "rank": 3,
+          "reason": "not_selected",
+          "rule_id": "loss",
+          "score": "3",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "D",
+          "market": "swap",
+          "rank": 2,
+          "rule_id": "loss",
+          "score": "5",
+          "stage": "weighted",
+          "weight": "0.3"
+        },
+        {
+          "instrument_id": "E",
+          "market": "swap",
+          "rank": 5,
+          "reason": "not_selected",
+          "rule_id": "loss",
+          "score": "1",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "A",
+          "market": "swap",
+          "rank": 5,
+          "reason": "not_selected",
+          "rule_id": "trail",
+          "score": "1",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "B",
+          "market": "swap",
+          "rank": 1,
+          "rule_id": "trail",
+          "score": "9",
+          "stage": "weighted",
+          "weight": "0.3"
+        },
+        {
+          "instrument_id": "C",
+          "market": "swap",
+          "rank": 4,
+          "reason": "not_selected",
+          "rule_id": "trail",
+          "score": "2",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "D",
+          "market": "swap",
+          "rank": 2,
+          "reason": "not_selected",
+          "rule_id": "trail",
+          "score": "5",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "E",
+          "market": "swap",
+          "rank": 3,
+          "reason": "not_selected",
+          "rule_id": "trail",
+          "score": "4",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "A",
+          "market": "swap",
+          "rank": 4,
+          "reason": "not_selected",
+          "rule_id": "profit",
+          "score": "5",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "B",
+          "market": "swap",
+          "rank": 5,
+          "reason": "not_selected",
+          "rule_id": "profit",
+          "score": "6",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "C",
+          "market": "swap",
+          "rank": 1,
+          "rule_id": "profit",
+          "score": "1",
+          "stage": "weighted",
+          "weight": "-0.3"
+        },
+        {
+          "instrument_id": "D",
+          "market": "swap",
+          "rank": 3,
+          "reason": "not_selected",
+          "rule_id": "profit",
+          "score": "4",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "E",
+          "market": "swap",
+          "rank": 2,
+          "reason": "not_selected",
+          "rule_id": "profit",
+          "score": "3",
+          "stage": "scored"
+        }
+      ],
+      "rule_states_json": {
+        "rules": {
+          "loss": {
+            "cooldown": {
+              "A": 104
+            },
+            "entries": {
+              "D": {
+                "bar": 102,
+                "peak": "51",
+                "price": "51"
+              }
+            },
+            "held": [
+              "D"
+            ]
+          },
+          "profit": {
+            "entries": {
+              "C": {
+                "bar": 100,
+                "peak": "85",
+                "price": "100"
+              }
+            },
+            "held": [
+              "C"
+            ]
+          },
+          "trail": {
+            "entries": {
+              "B": {
+                "bar": 100,
+                "peak": "121",
+                "price": "100"
+              }
+            },
+            "held": [
+              "B"
+            ]
+          }
+        },
+        "targets": {
+          "B|swap": "0.3",
+          "C|swap": "-0.3",
+          "D|swap": "0.3"
+        }
+      },
+      "status": "ok",
+      "summary": {
+        "cash": "0.7",
+        "gross": "0.9",
+        "net": "0.3",
+        "rules": {
+          "loss": {
+            "aged_out": 0,
+            "allocated": "0.3",
+            "available": 5,
+            "budget": "0.3",
+            "expected": 5,
+            "filtered": 0,
+            "missing": 0,
+            "scored": 5,
+            "selected": 1,
+            "stop_loss": 1,
+            "weighted": 1
+          },
+          "profit": {
+            "aged_out": 0,
+            "allocated": "0.3",
+            "available": 5,
+            "budget": "0.3",
+            "expected": 5,
+            "filtered": 0,
+            "missing": 0,
+            "scored": 5,
+            "selected": 1,
+            "weighted": 1
+          },
+          "trail": {
+            "aged_out": 0,
+            "allocated": "0.3",
+            "available": 5,
+            "budget": "0.3",
+            "expected": 5,
+            "filtered": 0,
+            "missing": 0,
+            "scored": 5,
+            "selected": 1,
+            "weighted": 1
+          }
+        },
+        "turnover": "0.3",
+        "universe": 5
+      },
+      "targets": [
+        {
+          "instrument_id": "B",
+          "market": "swap",
+          "weight": "0.3"
+        },
+        {
+          "instrument_id": "C",
+          "market": "swap",
+          "weight": "-0.3"
+        },
+        {
+          "instrument_id": "D",
+          "market": "swap",
+          "weight": "0.3"
+        }
+      ]
+    },
+    {
+      "bar_index": 103,
+      "input": {
+        "rows": {
+          "swap": {
+            "A": {
+              "close": 90,
+              "high": 91,
+              "low": 89,
+              "m1": 9,
+              "m2": 1,
+              "m3": 5
+            },
+            "B": {
+              "close": 125,
+              "high": 126,
+              "low": 124,
+              "m1": 2,
+              "m2": 9,
+              "m3": 6
+            },
+            "C": {
+              "close": 79,
+              "high": 80,
+              "low": 78,
+              "m1": 3,
+              "m2": 2,
+              "m3": 1
+            },
+            "D": {
+              "close": 51,
+              "high": 52,
+              "low": 50,
+              "m1": 5,
+              "m2": 5,
+              "m3": 4
+            },
+            "E": {
+              "close": 42,
+              "high": 43,
+              "low": 41,
+              "m1": 1,
+              "m2": 4,
+              "m3": 3
+            }
+          }
+        }
+      },
+      "items": [
+        {
+          "instrument_id": "A",
+          "market": "swap",
+          "rank": 1,
+          "reason": "cooldown",
+          "rule_id": "loss",
+          "score": "9",
+          "stage": "dropped"
+        },
+        {
+          "instrument_id": "B",
+          "market": "swap",
+          "rank": 4,
+          "reason": "not_selected",
+          "rule_id": "loss",
+          "score": "2",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "C",
+          "market": "swap",
+          "rank": 3,
+          "reason": "not_selected",
+          "rule_id": "loss",
+          "score": "3",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "D",
+          "market": "swap",
+          "rank": 2,
+          "rule_id": "loss",
+          "score": "5",
+          "stage": "weighted",
+          "weight": "0.3"
+        },
+        {
+          "instrument_id": "E",
+          "market": "swap",
+          "rank": 5,
+          "reason": "not_selected",
+          "rule_id": "loss",
+          "score": "1",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "A",
+          "market": "swap",
+          "rank": 5,
+          "reason": "not_selected",
+          "rule_id": "trail",
+          "score": "1",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "B",
+          "market": "swap",
+          "rank": 1,
+          "rule_id": "trail",
+          "score": "9",
+          "stage": "weighted",
+          "weight": "0.3"
+        },
+        {
+          "instrument_id": "C",
+          "market": "swap",
+          "rank": 4,
+          "reason": "not_selected",
+          "rule_id": "trail",
+          "score": "2",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "D",
+          "market": "swap",
+          "rank": 2,
+          "reason": "not_selected",
+          "rule_id": "trail",
+          "score": "5",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "E",
+          "market": "swap",
+          "rank": 3,
+          "reason": "not_selected",
+          "rule_id": "trail",
+          "score": "4",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "A",
+          "market": "swap",
+          "rank": 4,
+          "reason": "not_selected",
+          "rule_id": "profit",
+          "score": "5",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "B",
+          "market": "swap",
+          "rank": 5,
+          "reason": "not_selected",
+          "rule_id": "profit",
+          "score": "6",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "C",
+          "market": "swap",
+          "reason": "take_profit",
+          "rule_id": "profit",
+          "stage": "stopped"
+        },
+        {
+          "instrument_id": "D",
+          "market": "swap",
+          "rank": 3,
+          "reason": "not_selected",
+          "rule_id": "profit",
+          "score": "4",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "E",
+          "market": "swap",
+          "rank": 2,
+          "rule_id": "profit",
+          "score": "3",
+          "stage": "weighted",
+          "weight": "-0.3"
+        }
+      ],
+      "rule_states_json": {
+        "rules": {
+          "loss": {
+            "cooldown": {
+              "A": 104
+            },
+            "entries": {
+              "D": {
+                "bar": 102,
+                "peak": "51",
+                "price": "51"
+              }
+            },
+            "held": [
+              "D"
+            ]
+          },
+          "profit": {
+            "cooldown": {
+              "C": 104
+            },
+            "entries": {
+              "E": {
+                "bar": 103,
+                "peak": "42",
+                "price": "42"
+              }
+            },
+            "held": [
+              "E"
+            ]
+          },
+          "trail": {
+            "entries": {
+              "B": {
+                "bar": 100,
+                "peak": "126",
+                "price": "100"
+              }
+            },
+            "held": [
+              "B"
+            ]
+          }
+        },
+        "targets": {
+          "B|swap": "0.3",
+          "D|swap": "0.3",
+          "E|swap": "-0.3"
+        }
+      },
+      "status": "ok",
+      "summary": {
+        "cash": "0.7",
+        "gross": "0.9",
+        "net": "0.3",
+        "rules": {
+          "loss": {
+            "aged_out": 0,
+            "allocated": "0.3",
+            "available": 5,
+            "budget": "0.3",
+            "expected": 5,
+            "filtered": 0,
+            "missing": 0,
+            "scored": 5,
+            "selected": 1,
+            "weighted": 1
+          },
+          "profit": {
+            "aged_out": 0,
+            "allocated": "0.3",
+            "available": 5,
+            "budget": "0.3",
+            "expected": 5,
+            "filtered": 0,
+            "missing": 0,
+            "scored": 5,
+            "selected": 1,
+            "take_profit": 1,
+            "weighted": 1
+          },
+          "trail": {
+            "aged_out": 0,
+            "allocated": "0.3",
+            "available": 5,
+            "budget": "0.3",
+            "expected": 5,
+            "filtered": 0,
+            "missing": 0,
+            "scored": 5,
+            "selected": 1,
+            "weighted": 1
+          }
+        },
+        "turnover": "0.3",
+        "universe": 5
+      },
+      "targets": [
+        {
+          "instrument_id": "B",
+          "market": "swap",
+          "weight": "0.3"
+        },
+        {
+          "instrument_id": "D",
+          "market": "swap",
+          "weight": "0.3"
+        },
+        {
+          "instrument_id": "E",
+          "market": "swap",
+          "weight": "-0.3"
+        }
+      ]
+    },
+    {
+      "bar_index": 104,
+      "input": {
+        "rows": {
+          "swap": {
+            "A": {
+              "close": 92,
+              "high": 93,
+              "low": 91,
+              "m1": 9,
+              "m2": 1,
+              "m3": 5
+            },
+            "B": {
+              "close": 110,
+              "high": 111,
+              "low": 105,
+              "m1": 2,
+              "m2": 9,
+              "m3": 6
+            },
+            "C": {
+              "close": 82,
+              "high": 83,
+              "low": 81,
+              "m1": 3,
+              "m2": 2,
+              "m3": 1
+            },
+            "D": {
+              "close": 52,
+              "high": 53,
+              "low": 51,
+              "m1": 5,
+              "m2": 5,
+              "m3": 4
+            },
+            "E": {
+              "close": 42,
+              "high": 43,
+              "low": 41,
+              "m1": 1,
+              "m2": 4,
+              "m3": 3
+            }
+          }
+        }
+      },
+      "items": [
+        {
+          "instrument_id": "A",
+          "market": "swap",
+          "rank": 1,
+          "reason": "cooldown",
+          "rule_id": "loss",
+          "score": "9",
+          "stage": "dropped"
+        },
+        {
+          "instrument_id": "B",
+          "market": "swap",
+          "rank": 4,
+          "reason": "not_selected",
+          "rule_id": "loss",
+          "score": "2",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "C",
+          "market": "swap",
+          "rank": 3,
+          "reason": "not_selected",
+          "rule_id": "loss",
+          "score": "3",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "D",
+          "market": "swap",
+          "rank": 2,
+          "rule_id": "loss",
+          "score": "5",
+          "stage": "weighted",
+          "weight": "0.3"
+        },
+        {
+          "instrument_id": "E",
+          "market": "swap",
+          "rank": 5,
+          "reason": "not_selected",
+          "rule_id": "loss",
+          "score": "1",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "A",
+          "market": "swap",
+          "rank": 5,
+          "reason": "not_selected",
+          "rule_id": "trail",
+          "score": "1",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "B",
+          "market": "swap",
+          "reason": "trailing_stop",
+          "rule_id": "trail",
+          "stage": "stopped"
+        },
+        {
+          "instrument_id": "C",
+          "market": "swap",
+          "rank": 4,
+          "reason": "not_selected",
+          "rule_id": "trail",
+          "score": "2",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "D",
+          "market": "swap",
+          "rank": 2,
+          "rule_id": "trail",
+          "score": "5",
+          "stage": "weighted",
+          "weight": "0.3"
+        },
+        {
+          "instrument_id": "E",
+          "market": "swap",
+          "rank": 3,
+          "reason": "not_selected",
+          "rule_id": "trail",
+          "score": "4",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "A",
+          "market": "swap",
+          "rank": 4,
+          "reason": "not_selected",
+          "rule_id": "profit",
+          "score": "5",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "B",
+          "market": "swap",
+          "rank": 5,
+          "reason": "not_selected",
+          "rule_id": "profit",
+          "score": "6",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "C",
+          "market": "swap",
+          "rank": 1,
+          "reason": "cooldown",
+          "rule_id": "profit",
+          "score": "1",
+          "stage": "dropped"
+        },
+        {
+          "instrument_id": "D",
+          "market": "swap",
+          "rank": 3,
+          "reason": "not_selected",
+          "rule_id": "profit",
+          "score": "4",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "E",
+          "market": "swap",
+          "rank": 2,
+          "rule_id": "profit",
+          "score": "3",
+          "stage": "weighted",
+          "weight": "-0.3"
+        }
+      ],
+      "rule_states_json": {
+        "rules": {
+          "loss": {
+            "entries": {
+              "D": {
+                "bar": 102,
+                "peak": "52",
+                "price": "51"
+              }
+            },
+            "held": [
+              "D"
+            ]
+          },
+          "profit": {
+            "entries": {
+              "E": {
+                "bar": 103,
+                "peak": "42",
+                "price": "42"
+              }
+            },
+            "held": [
+              "E"
+            ]
+          },
+          "trail": {
+            "entries": {
+              "D": {
+                "bar": 104,
+                "peak": "52",
+                "price": "52"
+              }
+            },
+            "held": [
+              "D"
+            ]
+          }
+        },
+        "targets": {
+          "D|swap": "0.6",
+          "E|swap": "-0.3"
+        }
+      },
+      "status": "ok",
+      "summary": {
+        "cash": "0.7",
+        "gross": "0.9",
+        "net": "0.3",
+        "rules": {
+          "loss": {
+            "aged_out": 0,
+            "allocated": "0.3",
+            "available": 5,
+            "budget": "0.3",
+            "expected": 5,
+            "filtered": 0,
+            "missing": 0,
+            "scored": 5,
+            "selected": 1,
+            "weighted": 1
+          },
+          "profit": {
+            "aged_out": 0,
+            "allocated": "0.3",
+            "available": 5,
+            "budget": "0.3",
+            "expected": 5,
+            "filtered": 0,
+            "missing": 0,
+            "scored": 5,
+            "selected": 1,
+            "weighted": 1
+          },
+          "trail": {
+            "aged_out": 0,
+            "allocated": "0.3",
+            "available": 5,
+            "budget": "0.3",
+            "expected": 5,
+            "filtered": 0,
+            "missing": 0,
+            "scored": 5,
+            "selected": 1,
+            "trailing_stop": 1,
+            "weighted": 1
+          }
+        },
+        "turnover": "0.3",
+        "universe": 5
+      },
+      "targets": [
+        {
+          "instrument_id": "D",
+          "market": "swap",
+          "weight": "0.6"
+        },
+        {
+          "instrument_id": "E",
+          "market": "swap",
+          "weight": "-0.3"
+        }
+      ]
+    },
+    {
+      "bar_index": 105,
+      "input": {
+        "rows": {
+          "swap": {
+            "A": {
+              "close": 95,
+              "high": 96,
+              "low": 94,
+              "m1": 9,
+              "m2": 1,
+              "m3": 5
+            },
+            "B": {
+              "close": 112,
+              "high": 113,
+              "low": 111,
+              "m1": 2,
+              "m2": 9,
+              "m3": 6
+            },
+            "C": {
+              "close": 84,
+              "high": 85,
+              "low": 83,
+              "m1": 3,
+              "m2": 2,
+              "m3": 1
+            },
+            "D": {
+              "close": 52,
+              "high": 53,
+              "low": 51,
+              "m1": 5,
+              "m2": 5,
+              "m3": 4
+            },
+            "E": {
+              "close": 43,
+              "high": 44,
+              "low": 42,
+              "m1": 1,
+              "m2": 4,
+              "m3": 3
+            }
+          }
+        }
+      },
+      "items": [
+        {
+          "instrument_id": "A",
+          "market": "swap",
+          "rank": 1,
+          "rule_id": "loss",
+          "score": "9",
+          "stage": "weighted",
+          "weight": "0.3"
+        },
+        {
+          "instrument_id": "B",
+          "market": "swap",
+          "rank": 4,
+          "reason": "not_selected",
+          "rule_id": "loss",
+          "score": "2",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "C",
+          "market": "swap",
+          "rank": 3,
+          "reason": "not_selected",
+          "rule_id": "loss",
+          "score": "3",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "D",
+          "market": "swap",
+          "rank": 2,
+          "reason": "not_selected",
+          "rule_id": "loss",
+          "score": "5",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "E",
+          "market": "swap",
+          "rank": 5,
+          "reason": "not_selected",
+          "rule_id": "loss",
+          "score": "1",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "A",
+          "market": "swap",
+          "rank": 5,
+          "reason": "not_selected",
+          "rule_id": "trail",
+          "score": "1",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "B",
+          "market": "swap",
+          "rank": 1,
+          "rule_id": "trail",
+          "score": "9",
+          "stage": "weighted",
+          "weight": "0.3"
+        },
+        {
+          "instrument_id": "C",
+          "market": "swap",
+          "rank": 4,
+          "reason": "not_selected",
+          "rule_id": "trail",
+          "score": "2",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "D",
+          "market": "swap",
+          "rank": 2,
+          "reason": "not_selected",
+          "rule_id": "trail",
+          "score": "5",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "E",
+          "market": "swap",
+          "rank": 3,
+          "reason": "not_selected",
+          "rule_id": "trail",
+          "score": "4",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "A",
+          "market": "swap",
+          "rank": 4,
+          "reason": "not_selected",
+          "rule_id": "profit",
+          "score": "5",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "B",
+          "market": "swap",
+          "rank": 5,
+          "reason": "not_selected",
+          "rule_id": "profit",
+          "score": "6",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "C",
+          "market": "swap",
+          "rank": 1,
+          "rule_id": "profit",
+          "score": "1",
+          "stage": "weighted",
+          "weight": "-0.3"
+        },
+        {
+          "instrument_id": "D",
+          "market": "swap",
+          "rank": 3,
+          "reason": "not_selected",
+          "rule_id": "profit",
+          "score": "4",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "E",
+          "market": "swap",
+          "rank": 2,
+          "reason": "not_selected",
+          "rule_id": "profit",
+          "score": "3",
+          "stage": "scored"
+        }
+      ],
+      "rule_states_json": {
+        "rules": {
+          "loss": {
+            "entries": {
+              "A": {
+                "bar": 105,
+                "peak": "95",
+                "price": "95"
+              }
+            },
+            "held": [
+              "A"
+            ]
+          },
+          "profit": {
+            "entries": {
+              "C": {
+                "bar": 105,
+                "peak": "84",
+                "price": "84"
+              }
+            },
+            "held": [
+              "C"
+            ]
+          },
+          "trail": {
+            "entries": {
+              "B": {
+                "bar": 105,
+                "peak": "112",
+                "price": "112"
+              }
+            },
+            "held": [
+              "B"
+            ]
+          }
+        },
+        "targets": {
+          "A|swap": "0.3",
+          "B|swap": "0.3",
+          "C|swap": "-0.3"
+        }
+      },
+      "status": "ok",
+      "summary": {
+        "cash": "0.7",
+        "gross": "0.9",
+        "net": "0.3",
+        "rules": {
+          "loss": {
+            "aged_out": 0,
+            "allocated": "0.3",
+            "available": 5,
+            "budget": "0.3",
+            "expected": 5,
+            "filtered": 0,
+            "missing": 0,
+            "scored": 5,
+            "selected": 1,
+            "weighted": 1
+          },
+          "profit": {
+            "aged_out": 0,
+            "allocated": "0.3",
+            "available": 5,
+            "budget": "0.3",
+            "expected": 5,
+            "filtered": 0,
+            "missing": 0,
+            "scored": 5,
+            "selected": 1,
+            "weighted": 1
+          },
+          "trail": {
+            "aged_out": 0,
+            "allocated": "0.3",
+            "available": 5,
+            "budget": "0.3",
+            "expected": 5,
+            "filtered": 0,
+            "missing": 0,
+            "scored": 5,
+            "selected": 1,
+            "weighted": 1
+          }
+        },
+        "turnover": "0.9",
+        "universe": 5
+      },
+      "targets": [
+        {
+          "instrument_id": "A",
+          "market": "swap",
+          "weight": "0.3"
+        },
+        {
+          "instrument_id": "B",
+          "market": "swap",
+          "weight": "0.3"
+        },
+        {
+          "instrument_id": "C",
+          "market": "swap",
+          "weight": "-0.3"
+        }
+      ]
+    },
+    {
+      "bar_index": 106,
+      "input": {
+        "rows": {
+          "swap": {
+            "A": {
+              "close": 96,
+              "high": 97,
+              "low": 95,
+              "m1": 9,
+              "m2": 1,
+              "m3": 5
+            },
+            "B": {
+              "close": 113,
+              "high": 114,
+              "low": 112,
+              "m1": 2,
+              "m2": 9,
+              "m3": 6
+            },
+            "C": {
+              "close": 86,
+              "high": 87,
+              "low": 85,
+              "m1": 3,
+              "m2": 2,
+              "m3": 1
+            },
+            "D": {
+              "close": 53,
+              "high": 54,
+              "low": 52,
+              "m1": 5,
+              "m2": 5,
+              "m3": 4
+            },
+            "E": {
+              "close": 43,
+              "high": 44,
+              "low": 42,
+              "m1": 1,
+              "m2": 4,
+              "m3": 3
+            }
+          }
+        }
+      },
+      "items": [
+        {
+          "instrument_id": "A",
+          "market": "swap",
+          "rank": 1,
+          "rule_id": "loss",
+          "score": "9",
+          "stage": "weighted",
+          "weight": "0.3"
+        },
+        {
+          "instrument_id": "B",
+          "market": "swap",
+          "rank": 4,
+          "reason": "not_selected",
+          "rule_id": "loss",
+          "score": "2",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "C",
+          "market": "swap",
+          "rank": 3,
+          "reason": "not_selected",
+          "rule_id": "loss",
+          "score": "3",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "D",
+          "market": "swap",
+          "rank": 2,
+          "reason": "not_selected",
+          "rule_id": "loss",
+          "score": "5",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "E",
+          "market": "swap",
+          "rank": 5,
+          "reason": "not_selected",
+          "rule_id": "loss",
+          "score": "1",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "A",
+          "market": "swap",
+          "rank": 5,
+          "reason": "not_selected",
+          "rule_id": "trail",
+          "score": "1",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "B",
+          "market": "swap",
+          "rank": 1,
+          "rule_id": "trail",
+          "score": "9",
+          "stage": "weighted",
+          "weight": "0.3"
+        },
+        {
+          "instrument_id": "C",
+          "market": "swap",
+          "rank": 4,
+          "reason": "not_selected",
+          "rule_id": "trail",
+          "score": "2",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "D",
+          "market": "swap",
+          "rank": 2,
+          "reason": "not_selected",
+          "rule_id": "trail",
+          "score": "5",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "E",
+          "market": "swap",
+          "rank": 3,
+          "reason": "not_selected",
+          "rule_id": "trail",
+          "score": "4",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "A",
+          "market": "swap",
+          "rank": 4,
+          "reason": "not_selected",
+          "rule_id": "profit",
+          "score": "5",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "B",
+          "market": "swap",
+          "rank": 5,
+          "reason": "not_selected",
+          "rule_id": "profit",
+          "score": "6",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "C",
+          "market": "swap",
+          "rank": 1,
+          "rule_id": "profit",
+          "score": "1",
+          "stage": "weighted",
+          "weight": "-0.3"
+        },
+        {
+          "instrument_id": "D",
+          "market": "swap",
+          "rank": 3,
+          "reason": "not_selected",
+          "rule_id": "profit",
+          "score": "4",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "E",
+          "market": "swap",
+          "rank": 2,
+          "reason": "not_selected",
+          "rule_id": "profit",
+          "score": "3",
+          "stage": "scored"
+        }
+      ],
+      "rule_states_json": {
+        "rules": {
+          "loss": {
+            "entries": {
+              "A": {
+                "bar": 105,
+                "peak": "96",
+                "price": "95"
+              }
+            },
+            "held": [
+              "A"
+            ]
+          },
+          "profit": {
+            "entries": {
+              "C": {
+                "bar": 105,
+                "peak": "84",
+                "price": "84"
+              }
+            },
+            "held": [
+              "C"
+            ]
+          },
+          "trail": {
+            "entries": {
+              "B": {
+                "bar": 105,
+                "peak": "114",
+                "price": "112"
+              }
+            },
+            "held": [
+              "B"
+            ]
+          }
+        },
+        "targets": {
+          "A|swap": "0.3",
+          "B|swap": "0.3",
+          "C|swap": "-0.3"
+        }
+      },
+      "status": "ok",
+      "summary": {
+        "cash": "0.7",
+        "gross": "0.9",
+        "net": "0.3",
+        "rules": {
+          "loss": {
+            "aged_out": 0,
+            "allocated": "0.3",
+            "available": 5,
+            "budget": "0.3",
+            "expected": 5,
+            "filtered": 0,
+            "missing": 0,
+            "scored": 5,
+            "selected": 1,
+            "weighted": 1
+          },
+          "profit": {
+            "aged_out": 0,
+            "allocated": "0.3",
+            "available": 5,
+            "budget": "0.3",
+            "expected": 5,
+            "filtered": 0,
+            "missing": 0,
+            "scored": 5,
+            "selected": 1,
+            "weighted": 1
+          },
+          "trail": {
+            "aged_out": 0,
+            "allocated": "0.3",
+            "available": 5,
+            "budget": "0.3",
+            "expected": 5,
+            "filtered": 0,
+            "missing": 0,
+            "scored": 5,
+            "selected": 1,
+            "weighted": 1
+          }
+        },
+        "turnover": "0",
+        "universe": 5
+      },
+      "targets": [
+        {
+          "instrument_id": "A",
+          "market": "swap",
+          "weight": "0.3"
+        },
+        {
+          "instrument_id": "B",
+          "market": "swap",
+          "weight": "0.3"
+        },
+        {
+          "instrument_id": "C",
+          "market": "swap",
+          "weight": "-0.3"
+        }
+      ]
+    },
+    {
+      "bar_index": 107,
+      "input": {
+        "rows": {
+          "swap": {
+            "A": {
+              "close": 97,
+              "high": 98,
+              "low": 96,
+              "m1": 9,
+              "m2": 1,
+              "m3": 5
+            },
+            "B": {
+              "close": 114,
+              "high": 115,
+              "low": 113,
+              "m1": 2,
+              "m2": 9,
+              "m3": 6
+            },
+            "C": {
+              "close": 88,
+              "high": 89,
+              "low": 87,
+              "m1": 3,
+              "m2": 2,
+              "m3": 1
+            },
+            "D": {
+              "close": 53,
+              "high": 54,
+              "low": 52,
+              "m1": 5,
+              "m2": 5,
+              "m3": 4
+            },
+            "E": {
+              "close": 44,
+              "high": 45,
+              "low": 43,
+              "m1": 1,
+              "m2": 4,
+              "m3": 3
+            }
+          }
+        }
+      },
+      "items": [
+        {
+          "instrument_id": "A",
+          "market": "swap",
+          "rank": 1,
+          "rule_id": "loss",
+          "score": "9",
+          "stage": "weighted",
+          "weight": "0.3"
+        },
+        {
+          "instrument_id": "B",
+          "market": "swap",
+          "rank": 4,
+          "reason": "not_selected",
+          "rule_id": "loss",
+          "score": "2",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "C",
+          "market": "swap",
+          "rank": 3,
+          "reason": "not_selected",
+          "rule_id": "loss",
+          "score": "3",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "D",
+          "market": "swap",
+          "rank": 2,
+          "reason": "not_selected",
+          "rule_id": "loss",
+          "score": "5",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "E",
+          "market": "swap",
+          "rank": 5,
+          "reason": "not_selected",
+          "rule_id": "loss",
+          "score": "1",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "A",
+          "market": "swap",
+          "rank": 5,
+          "reason": "not_selected",
+          "rule_id": "trail",
+          "score": "1",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "B",
+          "market": "swap",
+          "rank": 1,
+          "rule_id": "trail",
+          "score": "9",
+          "stage": "weighted",
+          "weight": "0.3"
+        },
+        {
+          "instrument_id": "C",
+          "market": "swap",
+          "rank": 4,
+          "reason": "not_selected",
+          "rule_id": "trail",
+          "score": "2",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "D",
+          "market": "swap",
+          "rank": 2,
+          "reason": "not_selected",
+          "rule_id": "trail",
+          "score": "5",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "E",
+          "market": "swap",
+          "rank": 3,
+          "reason": "not_selected",
+          "rule_id": "trail",
+          "score": "4",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "A",
+          "market": "swap",
+          "rank": 4,
+          "reason": "not_selected",
+          "rule_id": "profit",
+          "score": "5",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "B",
+          "market": "swap",
+          "rank": 5,
+          "reason": "not_selected",
+          "rule_id": "profit",
+          "score": "6",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "C",
+          "market": "swap",
+          "rank": 1,
+          "rule_id": "profit",
+          "score": "1",
+          "stage": "weighted",
+          "weight": "-0.3"
+        },
+        {
+          "instrument_id": "D",
+          "market": "swap",
+          "rank": 3,
+          "reason": "not_selected",
+          "rule_id": "profit",
+          "score": "4",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "E",
+          "market": "swap",
+          "rank": 2,
+          "reason": "not_selected",
+          "rule_id": "profit",
+          "score": "3",
+          "stage": "scored"
+        }
+      ],
+      "rule_states_json": {
+        "rules": {
+          "loss": {
+            "entries": {
+              "A": {
+                "bar": 105,
+                "peak": "97",
+                "price": "95"
+              }
+            },
+            "held": [
+              "A"
+            ]
+          },
+          "profit": {
+            "entries": {
+              "C": {
+                "bar": 105,
+                "peak": "84",
+                "price": "84"
+              }
+            },
+            "held": [
+              "C"
+            ]
+          },
+          "trail": {
+            "entries": {
+              "B": {
+                "bar": 105,
+                "peak": "115",
+                "price": "112"
+              }
+            },
+            "held": [
+              "B"
+            ]
+          }
+        },
+        "targets": {
+          "A|swap": "0.3",
+          "B|swap": "0.3",
+          "C|swap": "-0.3"
+        }
+      },
+      "status": "ok",
+      "summary": {
+        "cash": "0.7",
+        "gross": "0.9",
+        "net": "0.3",
+        "rules": {
+          "loss": {
+            "aged_out": 0,
+            "allocated": "0.3",
+            "available": 5,
+            "budget": "0.3",
+            "expected": 5,
+            "filtered": 0,
+            "missing": 0,
+            "scored": 5,
+            "selected": 1,
+            "weighted": 1
+          },
+          "profit": {
+            "aged_out": 0,
+            "allocated": "0.3",
+            "available": 5,
+            "budget": "0.3",
+            "expected": 5,
+            "filtered": 0,
+            "missing": 0,
+            "scored": 5,
+            "selected": 1,
+            "weighted": 1
+          },
+          "trail": {
+            "aged_out": 0,
+            "allocated": "0.3",
+            "available": 5,
+            "budget": "0.3",
+            "expected": 5,
+            "filtered": 0,
+            "missing": 0,
+            "scored": 5,
+            "selected": 1,
+            "weighted": 1
+          }
+        },
+        "turnover": "0",
+        "universe": 5
+      },
+      "targets": [
+        {
+          "instrument_id": "A",
+          "market": "swap",
+          "weight": "0.3"
+        },
+        {
+          "instrument_id": "B",
+          "market": "swap",
+          "weight": "0.3"
+        },
+        {
+          "instrument_id": "C",
+          "market": "swap",
+          "weight": "-0.3"
+        }
+      ]
+    }
+  ],
+  "dsl": "name: baseline_rank_stop\nrules:\n  - id: loss\n    type: rank\n    score: \"m1\"\n    select: {top: 1}\n    weight: {total: 0.3}\n    stop: {loss: 0.1, cooldown_bars: 2}\n  - id: trail\n    type: rank\n    score: \"m2\"\n    select: {top: 1}\n    weight: {total: 0.3}\n    stop: {trailing: 0.15, price: extreme}\n  - id: profit\n    type: rank\n    side: short\n    score: \"m3\"\n    select: {bottom: 1}\n    weight: {total: 0.3}\n    stop: {profit: 0.2, cooldown_bars: 1}\nportfolio:\n  leverage: 1\n  max_missing: 1\n",
+  "market": "swap",
+  "name": "rank_stop"
+}

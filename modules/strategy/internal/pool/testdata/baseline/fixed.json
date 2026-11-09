@@ -1,0 +1,1123 @@
+{
+  "bars": [
+    {
+      "bar_index": 1,
+      "input": {
+        "bar_index": 1,
+        "members": [
+          {
+            "id": "a",
+            "targets": {
+              "X|spot": "1"
+            }
+          },
+          {
+            "id": "b",
+            "targets": {
+              "Y|spot": "0.8"
+            }
+          },
+          {
+            "id": "c",
+            "targets": {
+              "W|spot": "0.5",
+              "Z|swap": "-0.5"
+            }
+          }
+        ],
+        "prices": {
+          "W|spot": 10,
+          "X|spot": 100,
+          "Y|spot": 50,
+          "Z|swap": 20
+        }
+      },
+      "pool_state": {
+        "last_bar_index": 1,
+        "ledgers": {
+          "a": {
+            "cash": 0,
+            "liquidate_after": 3,
+            "positions": {
+              "X|spot": {
+                "last_price": 100,
+                "quantity": 0.009990009990009992,
+                "value": 0.9990009990009991
+              }
+            },
+            "spot_fee_rate": 0.001,
+            "swap_fee_rate": 0.0005
+          },
+          "b": {
+            "cash": 0.19984012789800965,
+            "liquidate_after": 3,
+            "positions": {
+              "Y|spot": {
+                "last_price": 50,
+                "quantity": 0.015987210231808,
+                "value": 0.7993605115904001
+              }
+            },
+            "spot_fee_rate": 0.001,
+            "swap_fee_rate": 0.0005
+          },
+          "c": {
+            "cash": 0.499625281039379,
+            "liquidate_after": 3,
+            "positions": {
+              "W|spot": {
+                "last_price": 10,
+                "quantity": 0.04996252810390625,
+                "value": 0.4996252810390625
+              },
+              "Z|swap": {
+                "last_price": 20,
+                "quantity": -0.024981264051953125,
+                "value": -0.4996252810390625
+              }
+            },
+            "spot_fee_rate": 0.001,
+            "swap_fee_rate": 0.0005
+          }
+        },
+        "ratios": {
+          "a": "0.5",
+          "b": "0.3",
+          "c": "0.4"
+        },
+        "series": {
+          "a": [
+            0.9990009990009991
+          ],
+          "b": [
+            0.9992006394884098
+          ],
+          "c": [
+            0.9992505620784415
+          ]
+        },
+        "started": true
+      },
+      "state_targets": {
+        "W|spot": "0.1834",
+        "X|spot": "0.4128",
+        "Y|spot": "0.2201",
+        "Z|swap": "-0.1834"
+      },
+      "status": "ok",
+      "summary": {
+        "gross": "0.9997",
+        "net": "0.6329",
+        "notes": [
+          "X 的合成权重 0.5 超过 portfolio.max_weight，裁剪为 0.45，超出部分留现金",
+          "总敞口 1.09 超过 portfolio.leverage 1，按比例缩小为 0.9997"
+        ],
+        "pool": {
+          "members": [
+            {
+              "base": "0.5",
+              "equity": 0.9990009990009991,
+              "gross": "0.5",
+              "id": "a",
+              "net": "0.5",
+              "ratio": "0.5",
+              "ratio_before": "0.5",
+              "status": "ok",
+              "targets": {
+                "X|spot": "0.5"
+              }
+            },
+            {
+              "base": "0.3",
+              "equity": 0.9992006394884098,
+              "gross": "0.24",
+              "id": "b",
+              "net": "0.24",
+              "ratio": "0.3",
+              "ratio_before": "0.3",
+              "status": "ok",
+              "targets": {
+                "Y|spot": "0.24"
+              }
+            },
+            {
+              "base": "0.4",
+              "equity": 0.9992505620784415,
+              "gross": "0.4",
+              "id": "c",
+              "net": "0",
+              "ratio": "0.4",
+              "ratio_before": "0.4",
+              "status": "ok",
+              "targets": {
+                "W|spot": "0.2",
+                "Z|swap": "-0.2"
+              }
+            }
+          ],
+          "method": "fixed"
+        },
+        "rules": {},
+        "spot_net": "0.8163",
+        "swap_net": "-0.1834",
+        "turnover": "0.4999",
+        "universe": 0
+      },
+      "targets": [
+        {
+          "instrument_id": "W",
+          "market": "spot",
+          "weight": "0.1834"
+        },
+        {
+          "instrument_id": "X",
+          "market": "spot",
+          "weight": "0.4128"
+        },
+        {
+          "instrument_id": "Y",
+          "market": "spot",
+          "weight": "0.2201"
+        },
+        {
+          "instrument_id": "Z",
+          "market": "swap",
+          "weight": "-0.1834"
+        }
+      ]
+    },
+    {
+      "bar_index": 2,
+      "input": {
+        "bar_index": 2,
+        "members": [
+          {
+            "id": "a",
+            "targets": {
+              "X|spot": "1"
+            }
+          },
+          {
+            "id": "b",
+            "targets": {
+              "Y|spot": "0.8"
+            }
+          },
+          {
+            "id": "c",
+            "targets": {
+              "W|spot": "0.5",
+              "Z|swap": "-0.5"
+            }
+          }
+        ],
+        "prices": {
+          "W|spot": 10,
+          "X|spot": 104,
+          "Y|spot": 49,
+          "Z|swap": 21
+        }
+      },
+      "pool_state": {
+        "last_bar_index": 2,
+        "ledgers": {
+          "a": {
+            "cash": 0,
+            "liquidate_after": 3,
+            "positions": {
+              "X|spot": {
+                "last_price": 104,
+                "quantity": 0.009990009990009992,
+                "value": 1.038961038961039
+              }
+            },
+            "spot_fee_rate": 0.001,
+            "swap_fee_rate": 0.0005
+          },
+          "b": {
+            "cash": 0.196642046874094,
+            "liquidate_after": 3,
+            "positions": {
+              "Y|spot": {
+                "last_price": 49,
+                "quantity": 0.016052411989721835,
+                "value": 0.7865681874963699
+              }
+            },
+            "spot_fee_rate": 0.001,
+            "swap_fee_rate": 0.0005
+          },
+          "c": {
+            "cash": 0.4871190240044486,
+            "liquidate_after": 3,
+            "positions": {
+              "W|spot": {
+                "last_price": 10,
+                "quantity": 0.04871190240044619,
+                "value": 0.48711902400446194
+              },
+              "Z|swap": {
+                "last_price": 21,
+                "quantity": -0.023196144000212467,
+                "value": -0.48711902400446183
+              }
+            },
+            "spot_fee_rate": 0.001,
+            "swap_fee_rate": 0.0005
+          }
+        },
+        "ratios": {
+          "a": "0.5",
+          "b": "0.3",
+          "c": "0.4"
+        },
+        "series": {
+          "a": [
+            1.038961038961039
+          ],
+          "b": [
+            0.983210234370464
+          ],
+          "c": [
+            0.9742380480089106
+          ]
+        },
+        "started": true
+      },
+      "state_targets": {
+        "W|spot": "0.1834",
+        "X|spot": "0.4128",
+        "Y|spot": "0.2201",
+        "Z|swap": "-0.1834"
+      },
+      "status": "ok",
+      "summary": {
+        "gross": "0.9997",
+        "net": "0.6329",
+        "notes": [
+          "X 的合成权重 0.5 超过 portfolio.max_weight，裁剪为 0.45，超出部分留现金",
+          "总敞口 1.09 超过 portfolio.leverage 1，按比例缩小为 0.9997"
+        ],
+        "pool": {
+          "members": [
+            {
+              "base": "0.5",
+              "equity": 1.038961038961039,
+              "gross": "0.5",
+              "id": "a",
+              "net": "0.5",
+              "ratio": "0.5",
+              "ratio_before": "0.5",
+              "status": "ok",
+              "targets": {
+                "X|spot": "0.5"
+              }
+            },
+            {
+              "base": "0.3",
+              "equity": 0.983210234370464,
+              "gross": "0.24",
+              "id": "b",
+              "net": "0.24",
+              "ratio": "0.3",
+              "ratio_before": "0.3",
+              "status": "ok",
+              "targets": {
+                "Y|spot": "0.24"
+              }
+            },
+            {
+              "base": "0.4",
+              "equity": 0.9742380480089106,
+              "gross": "0.4",
+              "id": "c",
+              "net": "0",
+              "ratio": "0.4",
+              "ratio_before": "0.4",
+              "status": "ok",
+              "targets": {
+                "W|spot": "0.2",
+                "Z|swap": "-0.2"
+              }
+            }
+          ],
+          "method": "fixed"
+        },
+        "rules": {},
+        "spot_net": "0.8163",
+        "swap_net": "-0.1834",
+        "turnover": "0",
+        "universe": 0
+      },
+      "targets": [
+        {
+          "instrument_id": "W",
+          "market": "spot",
+          "weight": "0.1834"
+        },
+        {
+          "instrument_id": "X",
+          "market": "spot",
+          "weight": "0.4128"
+        },
+        {
+          "instrument_id": "Y",
+          "market": "spot",
+          "weight": "0.2201"
+        },
+        {
+          "instrument_id": "Z",
+          "market": "swap",
+          "weight": "-0.1834"
+        }
+      ]
+    },
+    {
+      "bar_index": 3,
+      "input": {
+        "bar_index": 3,
+        "members": [
+          {
+            "id": "a",
+            "targets": {
+              "X|spot": "1"
+            }
+          },
+          {
+            "id": "b",
+            "targets": {
+              "Y|spot": "0.8"
+            }
+          },
+          {
+            "id": "c",
+            "targets": {
+              "W|spot": "0.5",
+              "Z|swap": "-0.5"
+            }
+          }
+        ],
+        "prices": {
+          "W|spot": 11,
+          "X|spot": 108,
+          "Y|spot": 51,
+          "Z|swap": 19
+        }
+      },
+      "pool_state": {
+        "last_bar_index": 3,
+        "ledgers": {
+          "a": {
+            "cash": 0,
+            "liquidate_after": 3,
+            "positions": {
+              "X|spot": {
+                "last_price": 108,
+                "quantity": 0.009990009990009992,
+                "value": 1.078921078921079
+              }
+            },
+            "spot_fee_rate": 0.001,
+            "swap_fee_rate": 0.0005
+          },
+          "b": {
+            "cash": 0.2030617264488428,
+            "liquidate_after": 3,
+            "positions": {
+              "Y|spot": {
+                "last_price": 51,
+                "quantity": 0.015926409917556558,
+                "value": 0.8122469057953844
+              }
+            },
+            "spot_fee_rate": 0.001,
+            "swap_fee_rate": 0.0005
+          },
+          "c": {
+            "cash": 0.5346470471874859,
+            "liquidate_after": 3,
+            "positions": {
+              "W|spot": {
+                "last_price": 11,
+                "quantity": 0.04860427701704424,
+                "value": 0.5346470471874867
+              },
+              "Z|swap": {
+                "last_price": 19,
+                "quantity": -0.028139318273025613,
+                "value": -0.5346470471874867
+              }
+            },
+            "spot_fee_rate": 0.001,
+            "swap_fee_rate": 0.0005
+          }
+        },
+        "ratios": {
+          "a": "0.5",
+          "b": "0.3",
+          "c": "0.4"
+        },
+        "series": {
+          "a": [
+            1.078921078921079
+          ],
+          "b": [
+            1.0153086322442273
+          ],
+          "c": [
+            1.0692940943749725
+          ]
+        },
+        "started": true
+      },
+      "state_targets": {
+        "W|spot": "0.1834",
+        "X|spot": "0.4128",
+        "Y|spot": "0.2201",
+        "Z|swap": "-0.1834"
+      },
+      "status": "ok",
+      "summary": {
+        "gross": "0.9997",
+        "net": "0.6329",
+        "notes": [
+          "X 的合成权重 0.5 超过 portfolio.max_weight，裁剪为 0.45，超出部分留现金",
+          "总敞口 1.09 超过 portfolio.leverage 1，按比例缩小为 0.9997"
+        ],
+        "pool": {
+          "members": [
+            {
+              "base": "0.5",
+              "equity": 1.078921078921079,
+              "gross": "0.5",
+              "id": "a",
+              "net": "0.5",
+              "ratio": "0.5",
+              "ratio_before": "0.5",
+              "status": "ok",
+              "targets": {
+                "X|spot": "0.5"
+              }
+            },
+            {
+              "base": "0.3",
+              "equity": 1.0153086322442273,
+              "gross": "0.24",
+              "id": "b",
+              "net": "0.24",
+              "ratio": "0.3",
+              "ratio_before": "0.3",
+              "status": "ok",
+              "targets": {
+                "Y|spot": "0.24"
+              }
+            },
+            {
+              "base": "0.4",
+              "equity": 1.0692940943749725,
+              "gross": "0.4",
+              "id": "c",
+              "net": "0",
+              "ratio": "0.4",
+              "ratio_before": "0.4",
+              "status": "ok",
+              "targets": {
+                "W|spot": "0.2",
+                "Z|swap": "-0.2"
+              }
+            }
+          ],
+          "method": "fixed"
+        },
+        "rules": {},
+        "spot_net": "0.8163",
+        "swap_net": "-0.1834",
+        "turnover": "0",
+        "universe": 0
+      },
+      "targets": [
+        {
+          "instrument_id": "W",
+          "market": "spot",
+          "weight": "0.1834"
+        },
+        {
+          "instrument_id": "X",
+          "market": "spot",
+          "weight": "0.4128"
+        },
+        {
+          "instrument_id": "Y",
+          "market": "spot",
+          "weight": "0.2201"
+        },
+        {
+          "instrument_id": "Z",
+          "market": "swap",
+          "weight": "-0.1834"
+        }
+      ]
+    },
+    {
+      "bar_index": 4,
+      "input": {
+        "bar_index": 4,
+        "members": [
+          {
+            "id": "a",
+            "targets": {
+              "X|spot": "1"
+            }
+          },
+          {
+            "id": "b",
+            "targets": {
+              "Y|spot": "0.8"
+            }
+          },
+          {
+            "id": "c",
+            "targets": {
+              "W|spot": "0.5",
+              "Z|swap": "-0.5"
+            }
+          }
+        ],
+        "prices": {
+          "W|spot": 12,
+          "X|spot": 103,
+          "Y|spot": 53,
+          "Z|swap": 18
+        }
+      },
+      "pool_state": {
+        "last_bar_index": 4,
+        "ledgers": {
+          "a": {
+            "cash": 0,
+            "liquidate_after": 3,
+            "positions": {
+              "X|spot": {
+                "last_price": 103,
+                "quantity": 0.009990009990009992,
+                "value": 1.0289710289710292
+              }
+            },
+            "spot_fee_rate": 0.001,
+            "swap_fee_rate": 0.0005
+          },
+          "b": {
+            "cash": 0.20943101528296587,
+            "liquidate_after": 3,
+            "positions": {
+              "Y|spot": {
+                "last_price": 53,
+                "quantity": 0.015806114360978788,
+                "value": 0.8377240611318758
+              }
+            },
+            "spot_fee_rate": 0.001,
+            "swap_fee_rate": 0.0005
+          },
+          "c": {
+            "cash": 0.5729970953764912,
+            "liquidate_after": 3,
+            "positions": {
+              "W|spot": {
+                "last_price": 12,
+                "quantity": 0.047749757948041004,
+                "value": 0.572997095376492
+              },
+              "Z|swap": {
+                "last_price": 18,
+                "quantity": -0.031833171965360674,
+                "value": -0.5729970953764921
+              }
+            },
+            "spot_fee_rate": 0.001,
+            "swap_fee_rate": 0.0005
+          }
+        },
+        "ratios": {
+          "a": "0.5",
+          "b": "0.3",
+          "c": "0.4"
+        },
+        "series": {
+          "a": [
+            1.0289710289710292
+          ],
+          "b": [
+            1.0471550764148416
+          ],
+          "c": [
+            1.1459941907529831
+          ]
+        },
+        "started": true
+      },
+      "state_targets": {
+        "W|spot": "0.1834",
+        "X|spot": "0.4128",
+        "Y|spot": "0.2201",
+        "Z|swap": "-0.1834"
+      },
+      "status": "ok",
+      "summary": {
+        "gross": "0.9997",
+        "net": "0.6329",
+        "notes": [
+          "X 的合成权重 0.5 超过 portfolio.max_weight，裁剪为 0.45，超出部分留现金",
+          "总敞口 1.09 超过 portfolio.leverage 1，按比例缩小为 0.9997"
+        ],
+        "pool": {
+          "members": [
+            {
+              "base": "0.5",
+              "equity": 1.0289710289710292,
+              "gross": "0.5",
+              "id": "a",
+              "net": "0.5",
+              "ratio": "0.5",
+              "ratio_before": "0.5",
+              "status": "ok",
+              "targets": {
+                "X|spot": "0.5"
+              }
+            },
+            {
+              "base": "0.3",
+              "equity": 1.0471550764148416,
+              "gross": "0.24",
+              "id": "b",
+              "net": "0.24",
+              "ratio": "0.3",
+              "ratio_before": "0.3",
+              "status": "ok",
+              "targets": {
+                "Y|spot": "0.24"
+              }
+            },
+            {
+              "base": "0.4",
+              "equity": 1.1459941907529831,
+              "gross": "0.4",
+              "id": "c",
+              "net": "0",
+              "ratio": "0.4",
+              "ratio_before": "0.4",
+              "status": "ok",
+              "targets": {
+                "W|spot": "0.2",
+                "Z|swap": "-0.2"
+              }
+            }
+          ],
+          "method": "fixed"
+        },
+        "rules": {},
+        "spot_net": "0.8163",
+        "swap_net": "-0.1834",
+        "turnover": "0",
+        "universe": 0
+      },
+      "targets": [
+        {
+          "instrument_id": "W",
+          "market": "spot",
+          "weight": "0.1834"
+        },
+        {
+          "instrument_id": "X",
+          "market": "spot",
+          "weight": "0.4128"
+        },
+        {
+          "instrument_id": "Y",
+          "market": "spot",
+          "weight": "0.2201"
+        },
+        {
+          "instrument_id": "Z",
+          "market": "swap",
+          "weight": "-0.1834"
+        }
+      ]
+    },
+    {
+      "bar_index": 5,
+      "input": {
+        "bar_index": 5,
+        "members": [
+          {
+            "id": "a",
+            "targets": {
+              "X|spot": "1"
+            }
+          },
+          {
+            "id": "b",
+            "targets": {
+              "Y|spot": "0.8"
+            }
+          },
+          {
+            "id": "c",
+            "targets": {
+              "W|spot": "0.5",
+              "Z|swap": "-0.5"
+            }
+          }
+        ],
+        "prices": {
+          "W|spot": 11,
+          "X|spot": 99,
+          "Y|spot": 55,
+          "Z|swap": 20
+        }
+      },
+      "pool_state": {
+        "last_bar_index": 5,
+        "ledgers": {
+          "a": {
+            "cash": 0,
+            "liquidate_after": 3,
+            "positions": {
+              "X|spot": {
+                "last_price": 99,
+                "quantity": 0.009990009990009992,
+                "value": 0.9890109890109892
+              }
+            },
+            "spot_fee_rate": 0.001,
+            "swap_fee_rate": 0.0005
+          },
+          "b": {
+            "cash": 0.21575219552580716,
+            "liquidate_after": 3,
+            "positions": {
+              "Y|spot": {
+                "last_price": 55,
+                "quantity": 0.01569106876551348,
+                "value": 0.8630087821032415
+              }
+            },
+            "spot_fee_rate": 0.001,
+            "swap_fee_rate": 0.0005
+          },
+          "c": {
+            "cash": 0.5172551963057844,
+            "liquidate_after": 3,
+            "positions": {
+              "W|spot": {
+                "last_price": 11,
+                "quantity": 0.04702319966416483,
+                "value": 0.5172551963058131
+              },
+              "Z|swap": {
+                "last_price": 20,
+                "quantity": -0.02586275981529066,
+                "value": -0.5172551963058132
+              }
+            },
+            "spot_fee_rate": 0.001,
+            "swap_fee_rate": 0.0005
+          }
+        },
+        "ratios": {
+          "a": "0.5",
+          "b": "0.3",
+          "c": "0.4"
+        },
+        "series": {
+          "a": [
+            0.9890109890109892
+          ],
+          "b": [
+            1.0787609776290488
+          ],
+          "c": [
+            1.0345103926115975
+          ]
+        },
+        "started": true
+      },
+      "state_targets": {
+        "W|spot": "0.1834",
+        "X|spot": "0.4128",
+        "Y|spot": "0.2201",
+        "Z|swap": "-0.1834"
+      },
+      "status": "ok",
+      "summary": {
+        "gross": "0.9997",
+        "net": "0.6329",
+        "notes": [
+          "X 的合成权重 0.5 超过 portfolio.max_weight，裁剪为 0.45，超出部分留现金",
+          "总敞口 1.09 超过 portfolio.leverage 1，按比例缩小为 0.9997"
+        ],
+        "pool": {
+          "members": [
+            {
+              "base": "0.5",
+              "equity": 0.9890109890109892,
+              "gross": "0.5",
+              "id": "a",
+              "net": "0.5",
+              "ratio": "0.5",
+              "ratio_before": "0.5",
+              "status": "ok",
+              "targets": {
+                "X|spot": "0.5"
+              }
+            },
+            {
+              "base": "0.3",
+              "equity": 1.0787609776290488,
+              "gross": "0.24",
+              "id": "b",
+              "net": "0.24",
+              "ratio": "0.3",
+              "ratio_before": "0.3",
+              "status": "ok",
+              "targets": {
+                "Y|spot": "0.24"
+              }
+            },
+            {
+              "base": "0.4",
+              "equity": 1.0345103926115975,
+              "gross": "0.4",
+              "id": "c",
+              "net": "0",
+              "ratio": "0.4",
+              "ratio_before": "0.4",
+              "status": "ok",
+              "targets": {
+                "W|spot": "0.2",
+                "Z|swap": "-0.2"
+              }
+            }
+          ],
+          "method": "fixed"
+        },
+        "rules": {},
+        "spot_net": "0.8163",
+        "swap_net": "-0.1834",
+        "turnover": "0",
+        "universe": 0
+      },
+      "targets": [
+        {
+          "instrument_id": "W",
+          "market": "spot",
+          "weight": "0.1834"
+        },
+        {
+          "instrument_id": "X",
+          "market": "spot",
+          "weight": "0.4128"
+        },
+        {
+          "instrument_id": "Y",
+          "market": "spot",
+          "weight": "0.2201"
+        },
+        {
+          "instrument_id": "Z",
+          "market": "swap",
+          "weight": "-0.1834"
+        }
+      ]
+    },
+    {
+      "bar_index": 6,
+      "input": {
+        "bar_index": 6,
+        "members": [
+          {
+            "id": "a",
+            "targets": {
+              "X|spot": "1"
+            }
+          },
+          {
+            "id": "b",
+            "targets": {
+              "Y|spot": "0.8"
+            }
+          },
+          {
+            "id": "c",
+            "targets": {
+              "W|spot": "0.5",
+              "Z|swap": "-0.5"
+            }
+          }
+        ],
+        "prices": {
+          "W|spot": 10,
+          "X|spot": 102,
+          "Y|spot": 54,
+          "Z|swap": 22
+        }
+      },
+      "pool_state": {
+        "last_bar_index": 6,
+        "ledgers": {
+          "a": {
+            "cash": 0,
+            "liquidate_after": 3,
+            "positions": {
+              "X|spot": {
+                "last_price": 102,
+                "quantity": 0.009990009990009992,
+                "value": 1.0189810189810191
+              }
+            },
+            "spot_fee_rate": 0.001,
+            "swap_fee_rate": 0.0005
+          },
+          "b": {
+            "cash": 0.21261335463167053,
+            "liquidate_after": 3,
+            "positions": {
+              "Y|spot": {
+                "last_price": 54,
+                "quantity": 0.015749137380123623,
+                "value": 0.8504534185266757
+              }
+            },
+            "spot_fee_rate": 0.001,
+            "swap_fee_rate": 0.0005
+          },
+          "c": {
+            "cash": 0.46785436625580146,
+            "liquidate_after": 3,
+            "positions": {
+              "W|spot": {
+                "last_price": 10,
+                "quantity": 0.046785436625582384,
+                "value": 0.46785436625582383
+              },
+              "Z|swap": {
+                "last_price": 22,
+                "quantity": -0.0212661075570829,
+                "value": -0.4678543662558238
+              }
+            },
+            "spot_fee_rate": 0.001,
+            "swap_fee_rate": 0.0005
+          }
+        },
+        "ratios": {
+          "a": "0.5",
+          "b": "0.3",
+          "c": "0.4"
+        },
+        "series": {
+          "a": [
+            1.0189810189810191
+          ],
+          "b": [
+            1.0630667731583463
+          ],
+          "c": [
+            0.9357087325116253
+          ]
+        },
+        "started": true
+      },
+      "state_targets": {
+        "W|spot": "0.1834",
+        "X|spot": "0.4128",
+        "Y|spot": "0.2201",
+        "Z|swap": "-0.1834"
+      },
+      "status": "ok",
+      "summary": {
+        "gross": "0.9997",
+        "net": "0.6329",
+        "notes": [
+          "X 的合成权重 0.5 超过 portfolio.max_weight，裁剪为 0.45，超出部分留现金",
+          "总敞口 1.09 超过 portfolio.leverage 1，按比例缩小为 0.9997"
+        ],
+        "pool": {
+          "members": [
+            {
+              "base": "0.5",
+              "equity": 1.0189810189810191,
+              "gross": "0.5",
+              "id": "a",
+              "net": "0.5",
+              "ratio": "0.5",
+              "ratio_before": "0.5",
+              "status": "ok",
+              "targets": {
+                "X|spot": "0.5"
+              }
+            },
+            {
+              "base": "0.3",
+              "equity": 1.0630667731583463,
+              "gross": "0.24",
+              "id": "b",
+              "net": "0.24",
+              "ratio": "0.3",
+              "ratio_before": "0.3",
+              "status": "ok",
+              "targets": {
+                "Y|spot": "0.24"
+              }
+            },
+            {
+              "base": "0.4",
+              "equity": 0.9357087325116253,
+              "gross": "0.4",
+              "id": "c",
+              "net": "0",
+              "ratio": "0.4",
+              "ratio_before": "0.4",
+              "status": "ok",
+              "targets": {
+                "W|spot": "0.2",
+                "Z|swap": "-0.2"
+              }
+            }
+          ],
+          "method": "fixed"
+        },
+        "rules": {},
+        "spot_net": "0.8163",
+        "swap_net": "-0.1834",
+        "turnover": "0",
+        "universe": 0
+      },
+      "targets": [
+        {
+          "instrument_id": "W",
+          "market": "spot",
+          "weight": "0.1834"
+        },
+        {
+          "instrument_id": "X",
+          "market": "spot",
+          "weight": "0.4128"
+        },
+        {
+          "instrument_id": "Y",
+          "market": "spot",
+          "weight": "0.2201"
+        },
+        {
+          "instrument_id": "Z",
+          "market": "swap",
+          "weight": "-0.1834"
+        }
+      ]
+    }
+  ],
+  "dsl": "name: baseline_pool\nbar: 1h\nstrategy_pool:\n  members:\n    - {id: a, strategy: s_a}\n    - {id: b, strategy: s_b}\n    - {id: c, strategy: s_c}\n  allocation: {method: fixed, ratios: {a: 0.5, b: 0.3, c: 0.4}}\n  fees: {spot_bps: 10, swap_bps: 5}\nportfolio: {leverage: 1, max_weight: 0.45}\n",
+  "market": "select=both, prefer=spot",
+  "name": "fixed"
+}

@@ -1,0 +1,823 @@
+{
+  "bars": [
+    {
+      "bar_index": 100,
+      "input": {
+        "rows": {
+          "spot": {
+            "A": {
+              "m": 1
+            },
+            "B": {
+              "m": 2
+            },
+            "C": {
+              "m": 3
+            },
+            "D": {
+              "m": 9
+            }
+          },
+          "swap": {
+            "A": {
+              "m": 1
+            },
+            "B": {
+              "m": 2
+            },
+            "C": {
+              "m": 3
+            },
+            "D": {
+              "m": 9
+            }
+          }
+        }
+      },
+      "items": [
+        {
+          "instrument_id": "A",
+          "market": "spot",
+          "rank": 4,
+          "reason": "not_selected",
+          "rule_id": "l",
+          "score": "1",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "B",
+          "market": "spot",
+          "rank": 3,
+          "reason": "not_selected",
+          "rule_id": "l",
+          "score": "2",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "C",
+          "market": "spot",
+          "rank": 2,
+          "reason": "not_selected",
+          "rule_id": "l",
+          "score": "3",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "D",
+          "market": "spot",
+          "rank": 1,
+          "rule_id": "l",
+          "score": "9",
+          "stage": "weighted",
+          "weight": "0.5"
+        },
+        {
+          "instrument_id": "A",
+          "market": "swap",
+          "rank": 1,
+          "rule_id": "s",
+          "score": "1",
+          "stage": "weighted",
+          "weight": "-0.5"
+        },
+        {
+          "instrument_id": "B",
+          "market": "spot",
+          "rank": 2,
+          "reason": "not_selected",
+          "rule_id": "s",
+          "score": "2",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "C",
+          "market": "spot",
+          "rank": 3,
+          "reason": "not_selected",
+          "rule_id": "s",
+          "score": "3",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "D",
+          "market": "spot",
+          "rank": 4,
+          "reason": "not_selected",
+          "rule_id": "s",
+          "score": "9",
+          "stage": "scored"
+        }
+      ],
+      "rule_states_json": {
+        "rules": {
+          "l": {
+            "held": [
+              "D"
+            ]
+          },
+          "s": {
+            "held": [
+              "A"
+            ]
+          }
+        },
+        "targets": {
+          "A|swap": "-0.5",
+          "D|spot": "0.5"
+        }
+      },
+      "status": "ok",
+      "summary": {
+        "gross": "1",
+        "net": "0",
+        "rules": {
+          "l": {
+            "aged_out": 0,
+            "allocated": "0.5",
+            "available": 4,
+            "budget": "0.5",
+            "expected": 4,
+            "filtered": 0,
+            "missing": 0,
+            "scored": 4,
+            "selected": 1,
+            "weighted": 1
+          },
+          "s": {
+            "aged_out": 0,
+            "allocated": "0.5",
+            "available": 4,
+            "budget": "0.5",
+            "expected": 4,
+            "filtered": 0,
+            "missing": 0,
+            "scored": 4,
+            "selected": 1,
+            "weighted": 1
+          }
+        },
+        "spot_net": "0.5",
+        "swap_net": "-0.5",
+        "turnover": "0.5",
+        "universe": 4
+      },
+      "targets": [
+        {
+          "instrument_id": "A",
+          "market": "swap",
+          "weight": "-0.5"
+        },
+        {
+          "instrument_id": "D",
+          "market": "spot",
+          "weight": "0.5"
+        }
+      ]
+    },
+    {
+      "bar_index": 101,
+      "input": {
+        "rows": {
+          "spot": {
+            "A": {
+              "m": 1
+            },
+            "B": {
+              "m": 2
+            },
+            "C": {
+              "m": 3
+            },
+            "D": {
+              "m": 9
+            }
+          },
+          "swap": {
+            "A": {
+              "m": 1
+            },
+            "B": {
+              "m": 2
+            },
+            "C": {
+              "m": 3
+            },
+            "D": {
+              "m": 9
+            }
+          }
+        }
+      },
+      "items": [
+        {
+          "instrument_id": "A",
+          "market": "spot",
+          "rank": 4,
+          "reason": "not_selected",
+          "rule_id": "l",
+          "score": "1",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "B",
+          "market": "spot",
+          "rank": 3,
+          "reason": "not_selected",
+          "rule_id": "l",
+          "score": "2",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "C",
+          "market": "spot",
+          "rank": 2,
+          "reason": "not_selected",
+          "rule_id": "l",
+          "score": "3",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "D",
+          "market": "spot",
+          "rank": 1,
+          "rule_id": "l",
+          "score": "9",
+          "stage": "weighted",
+          "weight": "0.5"
+        },
+        {
+          "instrument_id": "A",
+          "market": "swap",
+          "rank": 1,
+          "rule_id": "s",
+          "score": "1",
+          "stage": "weighted",
+          "weight": "-0.5"
+        },
+        {
+          "instrument_id": "B",
+          "market": "spot",
+          "rank": 2,
+          "reason": "not_selected",
+          "rule_id": "s",
+          "score": "2",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "C",
+          "market": "spot",
+          "rank": 3,
+          "reason": "not_selected",
+          "rule_id": "s",
+          "score": "3",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "D",
+          "market": "spot",
+          "rank": 4,
+          "reason": "not_selected",
+          "rule_id": "s",
+          "score": "9",
+          "stage": "scored"
+        }
+      ],
+      "rule_states_json": {
+        "rules": {
+          "l": {
+            "held": [
+              "D"
+            ]
+          },
+          "s": {
+            "held": [
+              "A"
+            ]
+          }
+        },
+        "targets": {
+          "A|swap": "-0.5",
+          "D|spot": "0.5"
+        }
+      },
+      "status": "ok",
+      "summary": {
+        "gross": "1",
+        "net": "0",
+        "rules": {
+          "l": {
+            "aged_out": 0,
+            "allocated": "0.5",
+            "available": 4,
+            "budget": "0.5",
+            "expected": 4,
+            "filtered": 0,
+            "missing": 0,
+            "scored": 4,
+            "selected": 1,
+            "weighted": 1
+          },
+          "s": {
+            "aged_out": 0,
+            "allocated": "0.5",
+            "available": 4,
+            "budget": "0.5",
+            "expected": 4,
+            "filtered": 0,
+            "missing": 0,
+            "scored": 4,
+            "selected": 1,
+            "weighted": 1
+          }
+        },
+        "spot_net": "0.5",
+        "swap_net": "-0.5",
+        "turnover": "0",
+        "universe": 4
+      },
+      "targets": [
+        {
+          "instrument_id": "A",
+          "market": "swap",
+          "weight": "-0.5"
+        },
+        {
+          "instrument_id": "D",
+          "market": "spot",
+          "weight": "0.5"
+        }
+      ]
+    },
+    {
+      "bar_index": 102,
+      "input": {
+        "failed": {
+          "swap": {
+            "m": {
+              "A": "market_unavailable",
+              "B": "market_unavailable",
+              "C": "market_unavailable",
+              "D": "market_unavailable"
+            }
+          }
+        },
+        "rows": {
+          "spot": {
+            "A": {
+              "m": 9
+            },
+            "B": {
+              "m": 2
+            },
+            "C": {
+              "m": 3
+            },
+            "D": {
+              "m": 1
+            }
+          },
+          "swap": {}
+        }
+      },
+      "items": [
+        {
+          "instrument_id": "A",
+          "market": "swap",
+          "reason": "market_hold",
+          "rule_id": "l",
+          "stage": "held"
+        },
+        {
+          "instrument_id": "B",
+          "market": "spot",
+          "rank": 2,
+          "reason": "not_selected",
+          "rule_id": "l",
+          "score": "2",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "C",
+          "market": "spot",
+          "rank": 1,
+          "rule_id": "l",
+          "score": "3",
+          "stage": "weighted",
+          "weight": "0.5"
+        },
+        {
+          "instrument_id": "D",
+          "market": "spot",
+          "rank": 3,
+          "reason": "not_selected",
+          "rule_id": "l",
+          "score": "1",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "A",
+          "market": "swap",
+          "reason": "market_hold",
+          "rule_id": "s",
+          "stage": "held"
+        }
+      ],
+      "rule_states_json": {
+        "rules": {
+          "l": {
+            "held": [
+              "C"
+            ]
+          },
+          "s": {
+            "held": [
+              "A"
+            ]
+          }
+        },
+        "targets": {
+          "A|swap": "-0.5",
+          "C|spot": "0.5"
+        }
+      },
+      "status": "ok",
+      "summary": {
+        "gross": "1",
+        "net": "0",
+        "notes": [
+          "永续本期整体不可用，空头规则 s 不守门：冻结的空头保持不动，不新开空头",
+          "1 个标的因市场不可用或只缺上一根保持持仓：A"
+        ],
+        "rules": {
+          "l": {
+            "aged_out": 0,
+            "allocated": "0.5",
+            "available": 3,
+            "budget": "0.5",
+            "expected": 4,
+            "filtered": 0,
+            "held": 1,
+            "missing": 0,
+            "scored": 3,
+            "selected": 1,
+            "weighted": 1
+          },
+          "s": {
+            "aged_out": 0,
+            "allocated": "0",
+            "available": 0,
+            "budget": "0.5",
+            "expected": 1,
+            "filtered": 0,
+            "held": 1,
+            "missing": 0,
+            "scored": 0,
+            "selected": 0,
+            "weighted": 0
+          }
+        },
+        "spot_net": "0.5",
+        "swap_net": "-0.5",
+        "turnover": "0.5",
+        "universe": 4
+      },
+      "targets": [
+        {
+          "hold": true,
+          "instrument_id": "A",
+          "market": "swap",
+          "weight": "-0.5"
+        },
+        {
+          "instrument_id": "C",
+          "market": "spot",
+          "weight": "0.5"
+        }
+      ]
+    },
+    {
+      "bar_index": 103,
+      "input": {
+        "failed": {
+          "swap": {
+            "m": {
+              "A": "market_unavailable",
+              "B": "market_unavailable",
+              "C": "market_unavailable",
+              "D": "market_unavailable"
+            }
+          }
+        },
+        "rows": {
+          "spot": {
+            "A": {
+              "m": 9
+            },
+            "B": {
+              "m": 2
+            },
+            "C": {
+              "m": 3
+            },
+            "D": {
+              "m": 1
+            }
+          },
+          "swap": {}
+        }
+      },
+      "items": [
+        {
+          "instrument_id": "A",
+          "market": "swap",
+          "reason": "market_hold",
+          "rule_id": "l",
+          "stage": "held"
+        },
+        {
+          "instrument_id": "B",
+          "market": "spot",
+          "rank": 2,
+          "reason": "not_selected",
+          "rule_id": "l",
+          "score": "2",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "C",
+          "market": "spot",
+          "rank": 1,
+          "rule_id": "l",
+          "score": "3",
+          "stage": "weighted",
+          "weight": "0.5"
+        },
+        {
+          "instrument_id": "D",
+          "market": "spot",
+          "rank": 3,
+          "reason": "not_selected",
+          "rule_id": "l",
+          "score": "1",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "A",
+          "market": "swap",
+          "reason": "market_hold",
+          "rule_id": "s",
+          "stage": "held"
+        }
+      ],
+      "rule_states_json": {
+        "rules": {
+          "l": {
+            "held": [
+              "C"
+            ]
+          },
+          "s": {
+            "held": [
+              "A"
+            ]
+          }
+        },
+        "targets": {
+          "A|swap": "-0.5",
+          "C|spot": "0.5"
+        }
+      },
+      "status": "ok",
+      "summary": {
+        "gross": "1",
+        "net": "0",
+        "notes": [
+          "永续本期整体不可用，空头规则 s 不守门：冻结的空头保持不动，不新开空头",
+          "1 个标的因市场不可用或只缺上一根保持持仓：A"
+        ],
+        "rules": {
+          "l": {
+            "aged_out": 0,
+            "allocated": "0.5",
+            "available": 3,
+            "budget": "0.5",
+            "expected": 4,
+            "filtered": 0,
+            "held": 1,
+            "missing": 0,
+            "scored": 3,
+            "selected": 1,
+            "weighted": 1
+          },
+          "s": {
+            "aged_out": 0,
+            "allocated": "0",
+            "available": 0,
+            "budget": "0.5",
+            "expected": 1,
+            "filtered": 0,
+            "held": 1,
+            "missing": 0,
+            "scored": 0,
+            "selected": 0,
+            "weighted": 0
+          }
+        },
+        "spot_net": "0.5",
+        "swap_net": "-0.5",
+        "turnover": "0",
+        "universe": 4
+      },
+      "targets": [
+        {
+          "hold": true,
+          "instrument_id": "A",
+          "market": "swap",
+          "weight": "-0.5"
+        },
+        {
+          "instrument_id": "C",
+          "market": "spot",
+          "weight": "0.5"
+        }
+      ]
+    },
+    {
+      "bar_index": 104,
+      "input": {
+        "rows": {
+          "spot": {
+            "A": {
+              "m": 9
+            },
+            "B": {
+              "m": 2
+            },
+            "C": {
+              "m": 3
+            },
+            "D": {
+              "m": 1
+            }
+          },
+          "swap": {
+            "A": {
+              "m": 9
+            },
+            "B": {
+              "m": 2
+            },
+            "C": {
+              "m": 1
+            },
+            "D": {
+              "m": 3
+            }
+          }
+        }
+      },
+      "items": [
+        {
+          "instrument_id": "A",
+          "market": "spot",
+          "rank": 1,
+          "rule_id": "l",
+          "score": "9",
+          "stage": "weighted",
+          "weight": "0.5"
+        },
+        {
+          "instrument_id": "B",
+          "market": "spot",
+          "rank": 3,
+          "reason": "not_selected",
+          "rule_id": "l",
+          "score": "2",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "C",
+          "market": "spot",
+          "rank": 2,
+          "reason": "not_selected",
+          "rule_id": "l",
+          "score": "3",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "D",
+          "market": "spot",
+          "rank": 4,
+          "reason": "not_selected",
+          "rule_id": "l",
+          "score": "1",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "A",
+          "market": "spot",
+          "rank": 4,
+          "reason": "not_selected",
+          "rule_id": "s",
+          "score": "9",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "B",
+          "market": "spot",
+          "rank": 2,
+          "reason": "not_selected",
+          "rule_id": "s",
+          "score": "2",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "C",
+          "market": "spot",
+          "rank": 3,
+          "reason": "not_selected",
+          "rule_id": "s",
+          "score": "3",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "D",
+          "market": "swap",
+          "rank": 1,
+          "rule_id": "s",
+          "score": "1",
+          "stage": "weighted",
+          "weight": "-0.5"
+        }
+      ],
+      "rule_states_json": {
+        "rules": {
+          "l": {
+            "held": [
+              "A"
+            ]
+          },
+          "s": {
+            "held": [
+              "D"
+            ]
+          }
+        },
+        "targets": {
+          "A|spot": "0.5",
+          "D|swap": "-0.5"
+        }
+      },
+      "status": "ok",
+      "summary": {
+        "gross": "1",
+        "net": "0",
+        "rules": {
+          "l": {
+            "aged_out": 0,
+            "allocated": "0.5",
+            "available": 4,
+            "budget": "0.5",
+            "expected": 4,
+            "filtered": 0,
+            "missing": 0,
+            "scored": 4,
+            "selected": 1,
+            "weighted": 1
+          },
+          "s": {
+            "aged_out": 0,
+            "allocated": "0.5",
+            "available": 4,
+            "budget": "0.5",
+            "expected": 4,
+            "filtered": 0,
+            "missing": 0,
+            "scored": 4,
+            "selected": 1,
+            "weighted": 1
+          }
+        },
+        "spot_net": "0.5",
+        "swap_net": "-0.5",
+        "turnover": "1",
+        "universe": 4
+      },
+      "targets": [
+        {
+          "instrument_id": "A",
+          "market": "spot",
+          "weight": "0.5"
+        },
+        {
+          "instrument_id": "D",
+          "market": "swap",
+          "weight": "-0.5"
+        }
+      ]
+    }
+  ],
+  "dsl": "name: baseline_hedge\nrules:\n  - id: l\n    type: rank\n    score: \"m\"\n    select: {top: 1}\n    weight: {total: 0.5}\n  - id: s\n    type: rank\n    side: short\n    score: \"m\"\n    select: {bottom: 1}\n    weight: {total: 0.5}\nportfolio:\n  leverage: 2\n  max_missing: 1\n",
+  "market": "select=both, prefer=spot",
+  "name": "market_freeze_both_spot"
+}
