@@ -148,8 +148,10 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	if r.series, err = seriesstore.Open(seriesstore.Options{Dir: cfg.SeriesStore.Dir, BlockCacheBytes: int64(cfg.SeriesStore.BlockCache)}); err != nil {
 		return nil, fmt.Errorf("open factor series store: %w", err)
 	}
+	synced := &syncedScope{}
 	r.data = localdata.New(localdata.Config{
-		Store: r.series, Storage: r.storage, Admit: r.admit,
+		Synced: synced.Subjects,
+		Store:  r.series, Storage: r.storage, Admit: r.admit,
 		Workers: cfg.Sync.Workers, BatchSubjects: cfg.Sync.BatchSubjects, Headroom: cfg.Window.Headroom, WindowMax: int64(cfg.Window.MaxMemory),
 		Lookback: func(src seriesstore.Source) int { return cfg.Window.LookbackFor(src.SpaceID, src.DatasetID, src.Freq) },
 	})
@@ -197,6 +199,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	r.pipeline = base
 	r.runner = &measuredRunner{inner: base, metrics: r.metrics, health: r.monitor, runs: r.runs}
 	r.preload = newPreloader(r.catalog, r.storage, r.data, r.active, func(string) { kickGap() })
+	r.preload.onSubjects = synced.Update
 	r.preload.blocked = func() bool { return r.life != nil && r.life.Halted(lifecycle.Ref{}) }
 	if r.life, err = r.newLifecycle(); err != nil {
 		return nil, fmt.Errorf("open factor lifecycle: %w", err)
@@ -228,7 +231,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 		recalcexec.WithChunkPeriods(cfg.Recalc.ChunkPeriods), recalcexec.WithLocks(r.locks),
 		recalcexec.WithMemoryBudget(int64(cfg.Compute.MaxMemory)), recalcexec.WithGate(r.writeGate),
 		recalcexec.WithWriteScope(func(ctx context.Context, taskID string) (func(), bool) { return r.beginWrite(ctx, taskID, true, true) }),
-		recalcexec.WithParamReader(recalcexec.NewStorageParamReader(r.storage)))
+		recalcexec.WithParamReader(recalcexec.NewStorageParamReader(r.storage)), recalcexec.WithHistory(r.data))
 	recalc := &recalcLoop{client: r.manager, executor: executor, source: r.storage, active: r.active, poll: cfg.Recalc.PollInterval,
 		prepare: r.prepareJobModules, leaseAllowed: r.leaseAllowed, generation: r.life.ModuleGeneration, moduleOpen: r.life.ModuleOpen, pulling: func() func() { return r.writes.enter("") },
 		history: func(ctx context.Context, set domain.EngineTask, subjects []string, bars int) error {
@@ -267,6 +270,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 		BatchOK: func() int { return cfg.Pipeline.WriteBatchRows },
 		Begin:   r.beginReplayWrite,
 		Pin:     r.pinTaskModules,
+		Synced:  synced.Subjects,
 	})
 	r.goRun(appCtx, r.replays.Run)
 	r.goRun(appCtx, func(ctx context.Context) {

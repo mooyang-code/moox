@@ -36,7 +36,10 @@ type Storage interface {
 
 // Config 是数据层的参数。
 type Config struct {
-	Store *seriesstore.Store
+	// Synced 返回数据源上“正在同步”的标的：预载最近一次从 Storage 取到的数据集在册清单（引擎的 syncedScope）。observed 成员
+	// 每期计算时不纳入其中、而本任务范围不含的标的（HistoryRule）；窗口载入不看它。nil 表示只看本任务的范围。
+	Synced func(ctx context.Context, src seriesstore.Source) ([]string, error)
+	Store  *seriesstore.Store
 	// Storage 读写的都是轴上时间（storageio.Axis 包装过的客户端）：数据层内部全部在轴上，按 periodclock.Continuous 做周期数学。
 	Storage Storage
 	// Admit 非空时，窗口的常驻内存向它登记，新增窗口超出预算时拒绝（设计 4.2）。
@@ -119,6 +122,9 @@ type coverageKey struct {
 type setReg struct {
 	lookback int
 	subjects []string
+	// observed 为真表示任务里有成员写了 cross_section_history: observed：窗口还要载入本地存储里回看窗口内有数据、
+	// 但不在任何任务标的范围里的标的（只读本地历史，不同步）。
+	observed bool
 }
 
 type source struct {
@@ -326,10 +332,11 @@ func (d *Data) Prepare(ctx context.Context, set domain.EngineTask, subjects []st
 	d.settleFlush(st)
 	// 登记本任务，再按全部登记任务的标的并集与最大回看准备数据源。
 	st.regsMu.Lock()
-	st.regs[set.Set.TaskID] = setReg{lookback: setLookback, subjects: append([]string(nil), subjects...)}
-	lookback, union := 1, map[string]struct{}{}
+	st.regs[set.Set.TaskID] = setReg{lookback: setLookback, subjects: append([]string(nil), subjects...), observed: observedMembers(set.Members)}
+	lookback, union, observed := 1, map[string]struct{}{}, false
 	for _, reg := range st.regs {
 		lookback = max(lookback, reg.lookback)
+		observed = observed || reg.observed
 		for _, subject := range reg.subjects {
 			union[subject] = struct{}{}
 		}
@@ -369,8 +376,23 @@ func (d *Data) Prepare(ctx context.Context, set domain.EngineTask, subjects []st
 	}
 	st.exemptNew = d.newListingExempt(src, step, lookback, info.Retention)
 
+	// 有 observed 任务时，窗口还要放进本地存储里回看窗口内有数据、但不在任何任务标的范围里的标的（例如已下架、移出全集的标的）。
+	// 它们只读本地历史，不同步、不跟进源数据的修正。
+	var history []string
+	if observed {
+		now, err := d.axisNow(src)
+		if err != nil {
+			return err
+		}
+		// 窗口载入回看区间内、不在登记标的并集里的全部本地标的，不按“正在同步”过滤：过滤放到计算时（HistorySubjects）做。
+		// 否则刚下架的标的会因为过时的“正在同步”清单被移出窗口，之后实时结果一直少它。
+		if history, err = HistoryCandidates(d.cfg.Store, src, now.Add(-time.Duration(lookback)*step), now,
+			HistoryRule{Exclude: subjects, Synced: subjects}); err != nil {
+			return err
+		}
+	}
 	// 窗口内存超出上限或进程预算：拒绝启用并给出明确原因，不让窗口把计算挤出内存。
-	need := serieswindow.BytesPerSeries(lookback, d.cfg.Headroom, len(numeric)) * int64(max(len(subjects), 1))
+	need := serieswindow.BytesPerSeries(lookback, d.cfg.Headroom, len(numeric)) * int64(max(len(subjects)+len(history), 1))
 	if d.cfg.WindowMax > 0 {
 		if total := d.windowBytesExcept(src) + need; total > d.cfg.WindowMax {
 			st.ready.Store(false)
@@ -462,7 +484,8 @@ func (d *Data) Prepare(ctx context.Context, set domain.EngineTask, subjects []st
 		st.blocked = &NoDataError{Subjects: noData}
 		return st.blocked
 	}
-	want := intersect(subjects, local)
+	// 窗口按全部登记任务需要的标的并集载入与保留：任务的标的，加上 observed 任务的历史截面标的。
+	want := append(intersect(subjects, local), history...)
 	if err := window.Load(ctx, d.cfg.Store, want); err != nil {
 		return fmt.Errorf("载入内存窗口：%w", err)
 	}
@@ -476,6 +499,98 @@ func (d *Data) Prepare(ctx context.Context, set domain.EngineTask, subjects []st
 		d.cfg.Admit.SetResident("window:"+src.String(), window.Stats().Bytes)
 	}
 	return nil
+}
+
+// observedMembers 报告任务里是否有成员写了 cross_section_history: observed。
+func observedMembers(members []domain.MemberDef) bool {
+	for _, member := range members {
+		if member.Factor.ObservedHistory() {
+			return true
+		}
+	}
+	return false
+}
+
+// HistoryRule 决定 observed 成员历史截面额外纳入哪些标的（设计 F8“在成员标的范围内”）：本地存储里数据与读取区间有交集、
+// 不在 Exclude（本期可用、上游失败）里，并且属于下面两类之一：
+//   - 本任务范围（Own）里本期不可用的标的；
+//   - 已经没有任何登记任务在同步的标的（Synced 之外：已下架、已移出全集）。
+//
+// 其他任务正在同步、而本任务范围不含的标的不纳入：它们本期的数据到没到取决于那个任务先跑还是后跑，纳入会让结果随执行顺序变化。
+// 按本地存储的内容与登记取，不按当前全集名单取，所以重启前后结果一致。实时、补算、回放都按这条规则。
+type HistoryRule struct {
+	// Exclude 是不纳入的标的（本期可用、上游失败）；Synced 是正在同步的标的。
+	Exclude, Synced []string
+	// Own 是本任务范围：其中本期不可用、又不在 Exclude 里的标的即使正在同步也纳入。实时与补算的 Exclude 已经包含计划的全部
+	// 期望标的（本期可用与上游失败），所以 Own 只在回放中起作用：回放的候选标的里被排除在回放标的之外的（例如数据到不了回放终点）。
+	Own []string
+}
+
+// HistoryCandidates 返回按 rule 应纳入的标的（按标的排序）。每次调用扫描一遍本地标的边界；只在有 observed 成员时调用。
+func HistoryCandidates(store *seriesstore.Store, src seriesstore.Source, from, to time.Time, rule HistoryRule) ([]string, error) {
+	set := func(list []string) map[string]struct{} {
+		out := make(map[string]struct{}, len(list))
+		for _, subject := range list {
+			out[subject] = struct{}{}
+		}
+		return out
+	}
+	exclude, own, synced := set(rule.Exclude), set(rule.Own), set(rule.Synced)
+	bounds, err := store.SubjectBounds(src)
+	if err != nil {
+		return nil, err
+	}
+	out := []string{}
+	for subject, b := range bounds {
+		if _, skip := exclude[subject]; skip {
+			continue
+		}
+		_, mine := own[subject]
+		_, others := synced[subject]
+		if !mine && others {
+			continue
+		}
+		if !b.Latest.Before(from) && b.Earliest.Before(to) {
+			out = append(out, subject)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// syncedSubjects 返回数据源上“正在同步”的标的（Config.Synced：预载最近一次取到的在册清单），与运行时的登记、准备状态无关，
+// 所以重启时任务逐个就绪、某个任务准备失败都不改变它。没有配置、或预载还没取到过清单时为空。
+func (d *Data) syncedSubjects(ctx context.Context, src seriesstore.Source) ([]string, error) {
+	if d.cfg.Synced == nil {
+		return nil, nil
+	}
+	return d.cfg.Synced(ctx, src)
+}
+
+// HistorySubjects 实现 pipeline.HistorySource：读取区间 [ReadStart, TargetEnd) 内按 HistoryRule 纳入的标的。
+// 本任务范围是计划的期望全集；正在同步的标的是预载的在册清单，加上本任务范围。只在有 observed 成员时调用，每次扫描一遍本地边界。
+func (d *Data) HistorySubjects(ctx context.Context, plan pipeline.Plan) ([]string, error) {
+	from, err := pipeline.ReadStart(periodclock.Continuous{}, plan)
+	if err != nil {
+		return nil, err
+	}
+	src := sourceOf(plan.Set)
+	synced, err := d.syncedSubjects(ctx, src)
+	if err != nil {
+		return nil, fmt.Errorf("列出数据源上正在同步的标的：%w", err)
+	}
+	return HistoryCandidates(d.cfg.Store, src, from, plan.TargetEnd, HistoryRule{
+		Exclude: append(append([]string(nil), plan.Available...), plan.UpstreamFailed...),
+		Own:     plan.Expected, Synced: append(append([]string(nil), synced...), plan.Expected...),
+	})
+}
+
+// withHistory 返回 subjects 加上 history（observed 成员历史截面的标的）。
+func withHistory(subjects, history []string) []string {
+	if len(history) == 0 {
+		return subjects
+	}
+	return append(append([]string(nil), subjects...), history...)
 }
 
 // factorsOverLookback 返回回看超过 N 的成员（没有则为 nil）。
@@ -643,7 +758,7 @@ func (d *Data) Load(ctx context.Context, plan pipeline.Plan) (pipeline.DataResul
 	if plan.Mode == pipeline.ModeLive {
 		return d.loadLive(ctx, st, plan, subjects)
 	}
-	return d.loadRange(ctx, st, plan, subjects)
+	return d.loadRange(ctx, st, plan, subjects, plan.HistorySubjects)
 }
 
 // DelistedMinSilence 是判断序列已下架的最短沉默时长：序列的最后一行比数据源最新一根早过这么久（见 DelistedThreshold）才可能是已下架。
@@ -750,7 +865,12 @@ func (d *Data) loadLive(ctx context.Context, st *source, plan pipeline.Plan, sub
 			ok = append(ok, s)
 		}
 	}
-	out, err := d.loadRange(ctx, st, plan, ok)
+	// observed 成员：同步失败的标的本期不可用，但本地历史仍参与历史截面。
+	history := plan.HistorySubjects
+	if plan.Observed() {
+		history = withHistory(history, sortedKeys(failed))
+	}
+	out, err := d.loadRange(ctx, st, plan, ok, history)
 	if err != nil {
 		return pipeline.DataResult{}, err
 	}
@@ -855,7 +975,15 @@ func (d *Data) loadLiveWindow(ctx context.Context, st *source, plan pipeline.Pla
 	}
 	d.startFlush(ctx, st, staged, flushList)
 
-	view := st.window.Acquire(subjects, target.Unix())
+	// observed 成员历史截面的标的只从窗口取本地历史，不参与上面的同步。窗口里缺了其中某个标的（窗口按旧的预载载入）时
+	// 改读磁盘：Acquire 会静默跳过窗口外的标的，结果会少它。
+	for _, subject := range plan.HistorySubjects {
+		if !st.window.Has(subject) {
+			log.Warnf("factor_history_subject_outside_window task=%s source=%s subject=%s：改读本地磁盘", plan.Set.TaskID, st.spec.Source, subject)
+			return pipeline.DataResult{Failed: sortedKeys(failed)}, true, nil
+		}
+	}
+	view := st.window.Acquire(withHistory(subjects, plan.HistorySubjects), target.Unix())
 	for _, subject := range subjects {
 		if end, has := st.window.Latest(subject); has && end.After(target) {
 			return pipeline.DataResult{Failed: sortedKeys(failed)}, true, nil
@@ -1116,8 +1244,9 @@ func (d *Data) rows(ctx context.Context, st *source, plan pipeline.Plan, subject
 	return out, nil
 }
 
-// loadRange 读本地存储的 [回看起点, TargetEnd)：补算与只填充都走这里，不碰 Storage。
-func (d *Data) loadRange(ctx context.Context, st *source, plan pipeline.Plan, subjects []string) (pipeline.DataResult, error) {
+// loadRange 读本地存储的 [回看起点, TargetEnd)：补算与只填充都走这里，不碰 Storage。history 是 observed 成员历史截面的标的：
+// 一起读进视图，但不判失败、不产生目标区间的行。
+func (d *Data) loadRange(ctx context.Context, st *source, plan pipeline.Plan, subjects, history []string) (pipeline.DataResult, error) {
 	if st == nil {
 		return pipeline.DataResult{Failed: subjects}, nil
 	}
@@ -1136,7 +1265,7 @@ func (d *Data) loadRange(ctx context.Context, st *source, plan pipeline.Plan, su
 	if err != nil {
 		return pipeline.DataResult{}, err
 	}
-	got, err := d.cfg.Store.ReadRange(ctx, spec.Source, subjects, from, plan.TargetEnd)
+	got, err := d.cfg.Store.ReadRange(ctx, spec.Source, withHistory(subjects, history), from, plan.TargetEnd)
 	if err != nil {
 		return pipeline.DataResult{}, err
 	}
@@ -1150,8 +1279,12 @@ func (d *Data) loadRange(ctx context.Context, st *source, plan pipeline.Plan, su
 	if err != nil {
 		return pipeline.DataResult{}, err
 	}
-	rows := make(map[string]*storageio.Frame, len(got))
-	for subject, cols := range got {
+	rows := make(map[string]*storageio.Frame, len(subjects))
+	for _, subject := range subjects {
+		cols := got[subject]
+		if cols == nil {
+			continue
+		}
 		// 目标区间的行：补算的目标区间，或实时周期的最后一根。
 		target := seriesstore.NewColumns(cols.Fields, 0)
 		lo := plan.TargetStart.Unix()

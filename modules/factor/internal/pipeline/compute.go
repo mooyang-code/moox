@@ -125,7 +125,8 @@ func (r *Runner) Compute(ctx context.Context, plan Plan, loaded LoadResult) (Com
 	}
 	computation.BudgetHit = errors.Is(workCtx.Err(), context.DeadlineExceeded)
 	if runErr != nil {
-		// 补算分块超出内存预算是资源错误：整块失败、不写入、不推进进度（分块在读取前已按预算收窄，正常不会出现）。
+		// 补算分块超出内存预算是资源错误：整块失败、不写入、不推进进度。分块在读取前已按预算收窄（observed 成员的历史截面
+		// 标的也计入），正常不会出现；读取后按实际的序列数（标的 × series_tag）复核时仍可能超出，例如统一数据集的序列比估计多。
 		if plan.Mode == ModeRecalc && errors.Is(runErr, ErrMemoryBudget) {
 			return computation, runErr
 		}
@@ -134,11 +135,22 @@ func (r *Runner) Compute(ctx context.Context, plan Plan, loaded LoadResult) (Com
 		}
 		return computation, nil
 	}
+	// 只写本期可用标的的行：有 observed 成员时面板里还有历史截面的标的，它们不输出。
+	outputs := make(map[string]struct{}, len(available))
+	for _, subject := range available {
+		outputs[subject] = struct{}{}
+	}
 	for _, member := range runnable {
 		if member.Factor.FactorType == domain.FactorTypeCrossSection {
-			computation.addCross(plan, member, result, grid)
+			computation.addCross(plan, member, result, grid, outputs)
 		} else {
-			computation.addTimeSeries(plan, member, result, grid)
+			computation.addTimeSeries(plan, member, result, grid, outputs)
+		}
+		if warnings := result.Warnings[member.ProgramKey(plan.Set.TaskID)]; len(warnings) > 0 {
+			if computation.Warnings == nil {
+				computation.Warnings = map[string]map[string]int{}
+			}
+			computation.Warnings[member.Key] = warnings
 		}
 	}
 	return computation, nil
@@ -229,7 +241,17 @@ func (r *Runner) run(ctx context.Context, plan Plan, members []domain.MemberDef,
 	if view == nil {
 		return nil, computeGrid{}, errors.New("factor computation has no input view")
 	}
-	series := countSeries(subjects, view)
+	// 面板的标的：只有 current 成员时就是本期可用的标的；有 observed 成员时还要放进本期不可用、但本地有历史的标的
+	// （计划里的全部标的，加上历史截面的标的），observed 成员的历史截面按它们组成。
+	panelSubjects := subjects
+	observed := false
+	for _, member := range members {
+		observed = observed || member.Factor.ObservedHistory()
+	}
+	if observed {
+		panelSubjects = uniqueSorted(append(append(append([]string(nil), subjects...), plan.Available...), plan.HistorySubjects...))
+	}
+	series := countSeries(panelSubjects, view)
 	if r.cfg.MaxMemory > 0 {
 		// 读取后按实际的序列数（标的 × series_tag）复核：读取前的预检只能按标的数估计。
 		if err := withinBudget(members, series, planPeriods(r.clock, plan), len(plan.CarryColumns), r.cfg.MaxMemory); err != nil {
@@ -254,8 +276,16 @@ func (r *Runner) run(ctx context.Context, plan Plan, members []domain.MemberDef,
 	}
 	inputs := make([]factorexpr.ProgramInput, 0, len(members))
 	for _, member := range members {
-		inputs = append(inputs, factorexpr.ProgramInput{Key: member.ProgramKey(plan.Set.TaskID), FactorID: member.Factor.FactorID,
-			Factor: member.Factor.Compiled()})
+		input := factorexpr.ProgramInput{Key: member.ProgramKey(plan.Set.TaskID), FactorID: member.Factor.FactorID,
+			Factor: member.Factor.Compiled()}
+		if observed {
+			// 两种口径的截面节点按不同的标的范围区分，不会被去重成同一个节点。
+			input.Universe = universeCurrent
+			if member.Factor.ObservedHistory() {
+				input.Universe = universeObserved
+			}
+		}
+		inputs = append(inputs, input)
 	}
 	program, err := factorexpr.NewProgram(inputs)
 	if err != nil {
@@ -281,9 +311,19 @@ func (r *Runner) run(ctx context.Context, plan Plan, members []domain.MemberDef,
 	grid.first, grid.last = grid.index(first), grid.index(last)
 	// 上游判为失败的序列（统一数据集事件的 failed_series）不进面板：本地即使已有这一期的数据也不可信，不能算出值，
 	// 也不能参与截面排名，否则会影响同一个 tag 上别的序列的结果。它们的结果行由 Assemble 写成 NULL。
-	panel, err := buildPanel(grid, program.Columns, subjects, view, seriesSet(plan.UpstreamFailedSeries))
+	panel, err := buildPanel(grid, program.Columns, panelSubjects, view, seriesSet(plan.UpstreamFailedSeries))
 	if err != nil {
 		return nil, computeGrid{}, err
+	}
+	var universes map[string][]bool
+	var presentOnly map[string]bool
+	if observed {
+		// observed 成员的截面在每个时刻只用这一刻在网格上有源行的序列（含目标时刻：本期同步失败、迟到的标的也不参与），
+		// 否则 cs_rank(delay(close, 1)) 这类表达式会让已下架的标的带着上一根的值进入目标期截面。
+		presentOnly = map[string]bool{universeObserved: true}
+		// current 成员的截面限制在原来会放进面板的序列（本期可用的标的、去掉上游失败的序列）之内，结果与只有 current 成员时逐位相同；
+		// observed 成员用整个面板。
+		universes = map[string][]bool{universeCurrent: availableMask(panel, subjects)}
 	}
 	params := make(map[string][]float64, len(program.Params))
 	keys := panel.Series()
@@ -298,11 +338,30 @@ func (r *Runner) run(ctx context.Context, plan Plan, members []domain.MemberDef,
 		}
 	}
 	result, err := exec.Run(ctx, program, panel, exec.Options{Start: grid.first, End: grid.last, Workers: r.cfg.ComputeWorkers,
-		Params: params, UDF: r.cfg.UDF})
+		Params: params, Universes: universes, PresentOnly: presentOnly, UDF: r.cfg.UDF})
 	if err != nil {
 		return nil, computeGrid{}, err
 	}
 	return result, grid, nil
+}
+
+// 有 observed 成员时两种口径的标的范围名（exec.Options.Universes 的键）。
+const (
+	universeCurrent  = "current"
+	universeObserved = "observed"
+)
+
+// availableMask 是面板序列里属于本期可用标的的掩码。
+func availableMask(panel *exec.Panel, subjects []string) []bool {
+	keep := make(map[string]struct{}, len(subjects))
+	for _, subject := range subjects {
+		keep[subject] = struct{}{}
+	}
+	mask := make([]bool, len(panel.Series()))
+	for i, key := range panel.Series() {
+		_, mask[i] = keep[key.Subject]
+	}
+	return mask
 }
 
 // planPeriods 是计划的目标周期数：实时 1 期，补算为目标区间的周期数。
@@ -336,6 +395,8 @@ func (r *Runner) precheckMemory(plan Plan) error {
 		// 统一数据集：一个标的有多条序列，按期望序列里属于可读标的的条数估算。
 		series = max(series, len(seriesOfSubjects(plan.ExpectedSeries, plan.Available)))
 	}
+	// observed 成员的面板还要放进历史截面的标的（每个按一条序列估计）。
+	series += len(plan.HistorySubjects)
 	return withinBudget(plan.Members, series, planPeriods(r.clock, plan), len(plan.CarryColumns), r.cfg.MaxMemory)
 }
 
@@ -467,10 +528,13 @@ func rowValues(result *exec.Result, positions []int, s, t int) []any {
 }
 
 // addTimeSeries 把时序因子的结果按标的转换成逐行结果：只在有源行的目标时刻产生行（设计 7.4）。
-func (c *Computation) addTimeSeries(plan Plan, member domain.MemberDef, result *exec.Result, grid computeGrid) {
+func (c *Computation) addTimeSeries(plan Plan, member domain.MemberDef, result *exec.Result, grid computeGrid, outputs map[string]struct{}) {
 	positions := outputColumns(plan, result, member)
 	columns := append([]string{"data_time", "series_tag"}, member.OutputColumns()...)
 	for s, key := range result.Series {
+		if _, ok := outputs[key.Subject]; !ok {
+			continue
+		}
 		item := c.Results[member.Key][key.Subject]
 		item.Member, item.Columns = member.Key, columns
 		for t := grid.first; t <= grid.last; t++ {
@@ -490,7 +554,7 @@ func (c *Computation) crossPeriods(member domain.MemberDef, targets []time.Time)
 }
 
 // addCross 把截面因子的结果合成一个以空串为键的结果，跳过记为 gap 的周期。
-func (c *Computation) addCross(plan Plan, member domain.MemberDef, result *exec.Result, grid computeGrid) {
+func (c *Computation) addCross(plan Plan, member domain.MemberDef, result *exec.Result, grid computeGrid, outputs map[string]struct{}) {
 	positions := outputColumns(plan, result, member)
 	item := ItemResult{Member: member.Key, Columns: append([]string{"data_time", "series_tag", "subject_id"}, member.OutputColumns()...)}
 	// 被跳过的 series_tag（统一数据集）：这些序列不出结果，结果行保持预置的 NULL。
@@ -504,6 +568,9 @@ func (c *Computation) addCross(plan Plan, member domain.MemberDef, result *exec.
 		}
 		for s, key := range result.Series {
 			if _, skip := skipped[key.Tag]; skip {
+				continue
+			}
+			if _, ok := outputs[key.Subject]; !ok {
 				continue
 			}
 			if result.Present(s, t) {

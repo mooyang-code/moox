@@ -29,6 +29,14 @@ var purityExpressions = []string{
 	"ts_kurt_relaxed(x, 9, 4)", "ts_argmax_relaxed(x, 7, 1)", "ts_argmin_relaxed(x, 7, 1)", "ts_product_relaxed(x / 100, 5, 2)",
 	"ts_corr_relaxed(x, y, 9, 3)", "ts_cov_relaxed(x, y, 9, 3)",
 	"ts_last_valid(where(x > 0.5, x, nan), 9)", "ts_bars_since(x > y, 9)", "ts_value_when(x > y, delay(x, 2), 9)",
+	// 多输入与分组截面：分组键由 y 派生（含 NaN 的行），回归里另有与 x 共线的列。
+	"cs_corr(x, y)", "ts_mean(cs_corr(cs_rank(x), cs_rank(y)), 5)",
+	"gs_rank(x, floor(abs(y) * 2))", "gs_demean(x, floor(abs(y) * 2))", "gs_zscore(x, where(y > 1.5, nan, floor(abs(y) * 2)))",
+	"gs_cumshare(abs(x), floor(abs(y) * 2))", "gs_mean(x, floor(abs(y) * 2))", "gs_sum(x, floor(abs(y) * 2))",
+	"gs_count(x > 0, floor(abs(y) * 2))", "gs_median(x, floor(abs(y) * 2))", "gs_wmean(x, abs(y), floor(abs(y) * 2))",
+	"gx_rank(gs_mean(x, floor(abs(y) * 2)), floor(abs(y) * 2))", "gx_zscore(x, floor(abs(y) * 2))",
+	"cs_resid(x, y)", "cs_resid(x, y, abs(y), delay(y, 2))", "cs_resid(x, y, y * 2)", "gs_resid(x, floor(abs(y) * 2), y)",
+	"gs_resid(x, floor(abs(y) * 2))", "ts_mean(cs_resid(x, y), 4)",
 }
 
 // purityPanel 生成多序列、两个 series_tag 的面板：含 NaN、常数段，第一条序列放入 Codex 审查给出的 EMA 反例。

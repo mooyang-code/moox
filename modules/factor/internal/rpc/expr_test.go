@@ -65,6 +65,14 @@ func TestListFactorFunctionsCoversRegistry(t *testing.T) {
 	require.Equal(t, "timeseries", names["ts_mean"].GetCategory())
 	require.NotEmpty(t, names["ts_mean"].GetArgs())
 	require.NotEmpty(t, names["ts_mean"].GetDoc())
+	// 变参不标可选、不带默认值，说明里写明可以写几个。
+	resid := names["gs_resid"]
+	require.Equal(t, "gs_resid(y, g[, x1 … x8])", resid.GetSignature())
+	last := resid.GetArgs()[len(resid.GetArgs())-1]
+	require.False(t, last.GetOptional())
+	require.Zero(t, last.GetDefaultValue())
+	require.Contains(t, resid.GetDoc(), "参数 x 是变参，可以写 0～8 个")
+	require.Contains(t, names["cs_resid"].GetDoc(), "参数 x 是变参，可以写 1～8 个")
 }
 
 type previewerFake struct {

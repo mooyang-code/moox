@@ -7,10 +7,9 @@ import (
 	"github.com/mooyang-code/moox/packages/factorexpr"
 )
 
-// Aggregate 计算一个截面的统计量（聚合广播类截面算子）：values 是同一时刻、同一 series_tag、成员标的范围之内各行的输入
-// （可能含 NaN），subjects 是对应行的标的，按标的排序。返回值由执行器写给截面的每一行，包括输入为 NaN 的行；
-// 输入为 NaN 的行不参与统计，没有有效样本时返回 NaN。
-type Aggregate func(values []float64, subjects []string) float64
+// Aggregate 计算一个截面的统计量（聚合广播类截面算子）：in 是同一时刻、同一 series_tag、成员标的范围之内各行的输入
+// （可能含 NaN）。返回值由 broadcast 写给截面的每一行，包括输入为 NaN 的行；输入为 NaN 的行不参与统计，没有有效样本时返回 NaN。
+type Aggregate func(in Section) float64
 
 // AggregateKernel 按节点的编译期常量（例如 cs_quantile 的 q）与参考标的（cs_ref）准备聚合内核；不是聚合广播类算子时返回 nil。
 // 内核不保存跨调用的状态，可以被多个 goroutine 同时调用。
@@ -20,16 +19,27 @@ func AggregateKernel(op string, floats []float64, subject string) Aggregate {
 		q := floats[0]
 		return sortedAggregate(func(sorted []float64) float64 { return quantileLinear(sorted, q) })
 	case "cs_ref":
-		return func(values []float64, subjects []string) float64 {
-			for i, s := range subjects {
+		return func(in Section) float64 {
+			for i, s := range in.Subjects {
 				if s == subject {
-					return values[i]
+					return in.Args[0][i]
 				}
 			}
 			return nan
 		}
 	}
 	return aggregates[op]
+}
+
+// broadcast 把统计量写给截面的每一行。
+func broadcast(aggregate Aggregate) Cross {
+	return func(in Section, out []float64) string {
+		value := aggregate(in)
+		for i := range out {
+			out[i] = value
+		}
+		return ""
+	}
 }
 
 // validValues 返回非 NaN 的值（保持原顺序）。
@@ -45,8 +55,8 @@ func validValues(values []float64) []float64 {
 
 // onValid 把统计函数包装成聚合内核：只在有效样本上计算，样本少于 minimum 个时为 NaN，±Inf 记为 NaN。
 func onValid(minimum int, fn func(valid []float64) float64) Aggregate {
-	return func(values []float64, _ []string) float64 {
-		valid := validValues(values)
+	return func(in Section) float64 {
+		valid := validValues(in.Args[0])
 		if len(valid) < minimum {
 			return nan
 		}
@@ -75,4 +85,21 @@ var aggregates = map[string]Aggregate{
 	"cs_median": sortedAggregate(median),
 	"cs_min":    onValid(1, windowMin),
 	"cs_max":    onValid(1, windowMax),
+	"cs_corr":   pairCorrelation,
+}
+
+// pairCorrelation 是 x、y 都有效的行上的皮尔逊相关系数（与 ts_corr 共用同一个统计函数）；有效对数少于 3，
+// 或任一方方差为 0 时为 NaN。
+func pairCorrelation(in Section) float64 {
+	x, y := in.Args[0], in.Args[1]
+	var xs, ys []float64
+	for i := range x {
+		if !math.IsNaN(x[i]) && !math.IsNaN(y[i]) {
+			xs, ys = append(xs, x[i]), append(ys, y[i])
+		}
+	}
+	if len(xs) < 3 {
+		return nan
+	}
+	return factorexpr.Finite(correlation(xs, ys))
 }

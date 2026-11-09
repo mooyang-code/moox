@@ -90,6 +90,13 @@ func (r *measuredRunner) Run(ctx context.Context, plan pipeline.Plan) (pipeline.
 			log.ErrorContextf(ctx, "factor_compute_failed task_id=%s member=%s factor_id=%s reason=%s", taskID, factor.MemberKey, factor.FactorID, reason)
 		}
 	}
+	// 整截面没有算出（回归奇异、组数超限）：值是 NaN、照常写出，按原因计入失败指标，计数是目标区间内的截面数。
+	for member, reasons := range outcome.Warnings {
+		for reason, count := range reasons {
+			r.metrics.Failures.WithLabelValues(taskID, member, reason).Add(float64(count))
+			log.WarnContextf(ctx, "factor_cross_section_failed task_id=%s member=%s reason=%s sections=%d", taskID, member, reason, count)
+		}
+	}
 	if err != nil {
 		r.metrics.Failures.WithLabelValues(taskID, periodFailureFactor, periodFailureReason(err)).Inc()
 		log.ErrorContextf(ctx, "factor_period_failed task_id=%s period_time=%s error=%v", taskID, shown, err)

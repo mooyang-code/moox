@@ -124,6 +124,24 @@ func DefinitionHash(def FactorDef) string {
 		return "sha256:" + hex.EncodeToString(hash[:])
 	}
 	parts := []string{"definition-v2", factorexpr.ExprVersion, compiled.compiled.CanonicalText(), strconv.FormatBool(def.AllowPartialUniverse)}
+	if compiled.compiled.ObservedHistory() {
+		// 只有写了 observed 才追加标记：不写或写 current 的定义哈希与原来相同；从 current 改成 observed 会改变哈希，
+		// 策略侧的成员契约据此报出 factor_changed。
+		parts = append(parts, observedHistoryMark)
+	}
 	hash := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
 	return "sha256:" + hex.EncodeToString(hash[:])
+}
+
+// observedHistoryMark 是 cross_section_history: observed 在定义哈希输入里的固定标记。
+const observedHistoryMark = "cross_section_history=observed"
+
+// ObservedHistory 报告定义是否写了 cross_section_history: observed（历史截面按本地存储里有数据的标的组成，设计 F8）。
+// 没有编译结果时只解析 spec；解析失败按 current 处理（这样的定义也算不出结果）。
+func (d FactorDef) ObservedHistory() bool {
+	if d.compiled != nil {
+		return d.compiled.ObservedHistory()
+	}
+	spec, err := factorexpr.ParseSpec(d.Spec)
+	return err == nil && spec.ObservedHistory()
 }
