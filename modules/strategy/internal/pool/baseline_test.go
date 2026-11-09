@@ -150,6 +150,7 @@ type baselinePoolOutput struct {
 	Targets      []baselinePoolTarget `json:"targets"`
 	StateTargets map[string]string    `json:"state_targets,omitempty"`
 	PoolState    json.RawMessage      `json:"pool_state"`
+	State        json.RawMessage      `json:"state"`
 	Summary      engine.Summary       `json:"summary"`
 }
 
@@ -175,8 +176,11 @@ func baselinePoolRun(t *testing.T, scenario baselinePoolScenario) ([]engine.Deci
 		if len(pool) == 0 {
 			pool = json.RawMessage("null")
 		}
+		// 完整状态（含各成员上期目标）一并锁住：成员没通过时沿用的正是 State.Members。
+		fullState, err := json.Marshal(decision.State)
+		require.NoError(t, err)
 		outputs = append(outputs, baselinePoolOutput{BarIndex: bar.BarIndex, Input: bar, Status: decision.Status, SkipReason: decision.SkipReason,
-			Targets: targets, StateTargets: decision.State.Targets, PoolState: pool, Summary: decision.Summary})
+			Targets: targets, StateTargets: decision.State.Targets, PoolState: pool, State: fullState, Summary: decision.Summary})
 		decisions = append(decisions, decision)
 		state = decision.State
 	}
