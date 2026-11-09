@@ -38,6 +38,15 @@ type Store struct {
 	smu     sync.Mutex
 	closed  sync.Once
 	closeEr error
+	// bounds 缓存各数据源各标的的本地边界（SubjectBounds）：第一次用到时扫一遍边界键，之后每次写入只把写到的标的
+	// 记为待刷新，下次读取时只重读这些标的。
+	bmu    sync.Mutex
+	bounds map[Source]*boundsCache
+}
+
+type boundsCache struct {
+	subjects map[string]Bounds
+	dirty    map[string]struct{}
 }
 
 // quietLogger 丢弃 Pebble 的信息日志（启动时回放 WAL 等），只让致命错误中止进程。
@@ -359,6 +368,59 @@ func (s *Store) TagBounds(src Source, subject string) (map[string]Bounds, error)
 		out[tag.tag] = Bounds{Earliest: time.Unix(tag.e, 0).UTC(), Latest: time.Unix(tag.l, 0).UTC()}
 	}
 	return out, nil
+}
+
+// SubjectBounds 返回数据源里各个有本地数据的标的的边界（各 series_tag 取并集），结果是副本。按缓存返回：只有自上次读取以来
+// 写过的标的才重读，用于每期都要按边界筛选全部本地标的的调用方（observed 的历史截面）。
+func (s *Store) SubjectBounds(src Source) (map[string]Bounds, error) {
+	if err := src.check(); err != nil {
+		return nil, err
+	}
+	s.bmu.Lock()
+	defer s.bmu.Unlock()
+	if s.bounds == nil {
+		s.bounds = map[Source]*boundsCache{}
+	}
+	cache := s.bounds[src]
+	if cache == nil {
+		subjects, err := s.Subjects(src)
+		if err != nil {
+			return nil, err
+		}
+		cache = &boundsCache{subjects: make(map[string]Bounds, len(subjects)), dirty: map[string]struct{}{}}
+		for _, subject := range subjects {
+			cache.dirty[subject] = struct{}{}
+		}
+		s.bounds[src] = cache
+	}
+	for subject := range cache.dirty {
+		b, ok, err := s.Bounds(src, subject)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			cache.subjects[subject] = b
+		} else {
+			delete(cache.subjects, subject)
+		}
+		delete(cache.dirty, subject)
+	}
+	out := make(map[string]Bounds, len(cache.subjects))
+	for subject, b := range cache.subjects {
+		out[subject] = b
+	}
+	return out, nil
+}
+
+// markBoundsDirty 在写入提交之后把写到的标的记为待刷新（数据源还没有缓存时不用记）。
+func (s *Store) markBoundsDirty(src Source, subjects []string) {
+	s.bmu.Lock()
+	defer s.bmu.Unlock()
+	if cache := s.bounds[src]; cache != nil {
+		for _, subject := range subjects {
+			cache.dirty[subject] = struct{}{}
+		}
+	}
 }
 
 // Latest 返回标的本地最新一根的时间。

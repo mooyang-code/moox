@@ -22,10 +22,17 @@ type storageData struct {
 // NewStorageData 返回直接读 Storage 的数据层。
 func NewStorageData(store storageio.Store) Data { return storageData{store: store} }
 
-// HistorySubjects 实现 HistorySource：Storage 里登记过的全部标的（含已下架的）减去本期可用与上游失败的标的。
-// 客户端不能列出全部标的时没有历史标的。没有数据的标的读回空帧，不进面板。
+// maxHistoryCandidates 是直接读 Storage 时历史标的候选数的粗限：超过时不再逐个确认区间内有没有行，直接拒绝。
+const maxHistoryCandidates = 20000
+
+// HistorySubjects 实现 HistorySource（近似口径，用于管理端试算与 run-once 诊断）：没有本地存储与任务登记，
+// 把 Storage 里在册（active）的标的都当作“有任务在同步”，只纳入不在册（已下架、停用）且在读取区间 [ReadStart, TargetEnd)
+// 里有行的标的；本期可用与上游失败的标的不算。客户端不能列出全部标的时没有历史标的。
 func (d storageData) HistorySubjects(ctx context.Context, plan Plan) ([]string, error) {
-	lister, ok := d.store.(storageio.AllSubjectsLister)
+	lister, ok := d.store.(interface {
+		storageio.AllSubjectsLister
+		ListDatasetSubjects(ctx context.Context, spaceID, datasetID string) ([]string, error)
+	})
 	if !ok {
 		return []string{}, nil
 	}
@@ -33,13 +40,41 @@ func (d storageData) HistorySubjects(ctx context.Context, plan Plan) ([]string, 
 	if err != nil {
 		return nil, err
 	}
-	exclude := make(map[string]struct{}, len(plan.Available)+len(plan.UpstreamFailed))
-	for _, subject := range append(append([]string(nil), plan.Available...), plan.UpstreamFailed...) {
-		exclude[subject] = struct{}{}
+	active, err := lister.ListDatasetSubjects(ctx, plan.Set.SpaceID, plan.Set.SourceDatasetID)
+	if err != nil {
+		return nil, err
 	}
-	out := []string{}
+	exclude := make(map[string]struct{}, len(active)+len(plan.Available)+len(plan.UpstreamFailed))
+	for _, list := range [][]string{active, plan.Available, plan.UpstreamFailed} {
+		for _, subject := range list {
+			exclude[subject] = struct{}{}
+		}
+	}
+	var candidates []string
 	for _, subject := range all {
 		if _, skip := exclude[subject]; !skip {
+			candidates = append(candidates, subject)
+		}
+	}
+	if len(candidates) > maxHistoryCandidates {
+		return nil, fmt.Errorf("历史截面的候选标的有 %d 个，超过 %d 个", len(candidates), maxHistoryCandidates)
+	}
+	out := []string{}
+	if len(candidates) == 0 {
+		return out, nil
+	}
+	// 精确计数：只读时间列，确认读取区间内有行。
+	start, err := ReadStart(periodclock.Continuous{}, plan)
+	if err != nil {
+		return nil, err
+	}
+	frames, err := d.store.ReadWindow(ctx, storageio.ReadRequest{SpaceID: plan.Set.SpaceID, DatasetID: plan.Set.SourceDatasetID,
+		Freq: plan.Set.Freq, Subjects: candidates, Start: start, End: plan.TargetEnd})
+	if err != nil {
+		return nil, err
+	}
+	for _, subject := range candidates {
+		if frame := frames[subject]; frame != nil && len(frame.Rows) > 0 {
 			out = append(out, subject)
 		}
 	}

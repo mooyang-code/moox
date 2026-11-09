@@ -27,6 +27,9 @@ func (s *Store) Wipe() error {
 	s.smu.Lock()
 	s.schemas = map[Source][]Field{}
 	s.smu.Unlock()
+	s.bmu.Lock()
+	s.bounds = nil
+	s.bmu.Unlock()
 	// 回收磁盘空间；失败只影响空间回收，不影响数据已清空这件事。
 	_ = s.db.Compact([]byte("k/"), prefixEnd([]byte("k/")), true)
 	return nil

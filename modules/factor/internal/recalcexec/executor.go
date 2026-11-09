@@ -349,14 +349,27 @@ func (e *Executor) runChunk(ctx context.Context, source SelectionSource, start, 
 		return windowEnd, pipeline.Outcome{}, true, nil
 	}
 	// 分块大小按锁内重读的选择计算：等锁期间标的或成员可能变化，内存预算要按实际要算的范围收窄。
-	// observed 成员的历史截面标的按整个剩余窗口列出（任何分块的读取区间都在其中），选块与管线的内存预检用同一份名单。
-	history, err := e.historyFor(ctx, selection, start, windowEnd)
+	// observed 成员：历史截面标的按本块的区间列出，选块与管线的内存预检用同一份名单。先不计历史标的选出一块，按它的区间
+	// 列出历史标的再收窄；收窄后的区间更短，历史标的只会更少，所以再列一次之后一定装得下。
+	chunkEnd, err := e.chunkEnd(selection, start, windowEnd, 0)
 	if err != nil {
 		return time.Time{}, pipeline.Outcome{}, false, err
 	}
-	chunkEnd, err := e.chunkEnd(selection, start, windowEnd, len(history))
+	history, err := e.historyFor(ctx, selection, start, chunkEnd)
 	if err != nil {
 		return time.Time{}, pipeline.Outcome{}, false, err
+	}
+	if len(history) > 0 {
+		narrowed, err := e.chunkEnd(selection, start, chunkEnd, len(history))
+		if err != nil {
+			return time.Time{}, pipeline.Outcome{}, false, err
+		}
+		if narrowed.Before(chunkEnd) {
+			chunkEnd = narrowed
+			if history, err = e.historyFor(ctx, selection, start, chunkEnd); err != nil {
+				return time.Time{}, pipeline.Outcome{}, false, err
+			}
+		}
 	}
 	// 一次只算一个参数段：分块在参数变化处截断，进度按段推进，段内各期的快照相同。
 	duration, err := e.duration(selection.Set)

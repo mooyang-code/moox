@@ -57,6 +57,9 @@ func RunOnce(ctx context.Context, cfg *Config, req RunOnceRequest) (pipeline.Out
 	if err != nil {
 		return pipeline.Outcome{}, err
 	}
+	if err := rejectObservedRunOnce(members); err != nil {
+		return pipeline.Outcome{}, err
+	}
 	if err := checkSubjectsInDataset(ctx, storage, set, req.Subjects); err != nil {
 		return pipeline.Outcome{}, err
 	}
@@ -136,4 +139,16 @@ func selectTaskMembers(set domain.EngineTask, aliases []string) ([]domain.Member
 		})
 	}
 	return domain.SelectEnabledMembers(members, aliases)
+}
+
+// rejectObservedRunOnce 拒绝 cross_section_history: observed 的成员：诊断入口直接读 Storage，没有本地存储与任务登记，
+// 历史截面的标的只能近似（与实时计算口径不同），而它会把结果写进结果数据集。这类成员请用补算重算。
+func rejectObservedRunOnce(members []domain.MemberDef) error {
+	for _, member := range members {
+		if member.Factor.ObservedHistory() {
+			return fmt.Errorf("成员 %s 写了 cross_section_history: observed：run-once 直接读 Storage，历史截面的口径与实时计算不同，"+
+				"又会写入结果数据集，所以不支持；请用补算重算这一期", member.Key)
+		}
+	}
+	return nil
 }

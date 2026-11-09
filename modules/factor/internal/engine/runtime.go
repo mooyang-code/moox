@@ -267,6 +267,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 		BatchOK: func() int { return cfg.Pipeline.WriteBatchRows },
 		Begin:   r.beginReplayWrite,
 		Pin:     r.pinTaskModules,
+		Synced:  r.data.SyncedSubjects,
 	})
 	r.goRun(appCtx, r.replays.Run)
 	r.goRun(appCtx, func(ctx context.Context) {

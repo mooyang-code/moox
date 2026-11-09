@@ -381,7 +381,9 @@ func (d *Data) Prepare(ctx context.Context, set domain.EngineTask, subjects []st
 		if err != nil {
 			return err
 		}
-		if history, err = d.historySubjects(src, now.Add(-time.Duration(lookback)*step), now, subjects); err != nil {
+		// 窗口只需要没有任何任务在同步的标的（任务范围内的标的本来就在窗口里）。
+		if history, err = HistoryCandidates(d.cfg.Store, src, now.Add(-time.Duration(lookback)*step), now,
+			HistoryRule{Exclude: subjects, Synced: subjects}); err != nil {
 			return err
 		}
 	}
@@ -505,50 +507,81 @@ func observedMembers(members []domain.MemberDef) bool {
 	return false
 }
 
-// historySubjects 返回本地存储里数据与 [from, to) 有交集、且不在 exclude 里的标的（按标的排序）。这是 observed 成员历史截面
-// 额外纳入的标的：按本地存储的内容取，不按当前全集名单取（全集只含在册标的，求交会把下架、移出的标的再次排除），
-// 所以重启前后结果一致。
-func (d *Data) historySubjects(src seriesstore.Source, from, to time.Time, exclude []string) ([]string, error) {
-	skip := make(map[string]struct{}, len(exclude))
-	for _, subject := range exclude {
-		skip[subject] = struct{}{}
+// HistoryRule 决定 observed 成员历史截面额外纳入哪些标的（设计 F8“在成员标的范围内”）：本地存储里数据与读取区间有交集、
+// 不在 Exclude（本期可用、上游失败）里，并且属于下面两类之一：
+//   - 本任务范围（Own）里本期不可用的标的；
+//   - 已经没有任何登记任务在同步的标的（Synced 之外：已下架、已移出全集）。
+//
+// 其他任务正在同步、而本任务范围不含的标的不纳入：它们本期的数据到没到取决于那个任务先跑还是后跑，纳入会让结果随执行顺序变化。
+// 按本地存储的内容与登记取，不按当前全集名单取，所以重启前后结果一致。实时、补算、回放都按这条规则。
+type HistoryRule struct {
+	Exclude, Own, Synced []string
+}
+
+// HistoryCandidates 返回按 rule 应纳入的标的（按标的排序）。本地边界用存储的缓存（只重读写过的标的）。
+func HistoryCandidates(store *seriesstore.Store, src seriesstore.Source, from, to time.Time, rule HistoryRule) ([]string, error) {
+	set := func(list []string) map[string]struct{} {
+		out := make(map[string]struct{}, len(list))
+		for _, subject := range list {
+			out[subject] = struct{}{}
+		}
+		return out
 	}
-	local, err := d.cfg.Store.Subjects(src)
+	exclude, own, synced := set(rule.Exclude), set(rule.Own), set(rule.Synced)
+	bounds, err := store.SubjectBounds(src)
 	if err != nil {
 		return nil, err
 	}
-	var out []string
-	for _, subject := range local {
-		if _, excluded := skip[subject]; excluded {
+	out := []string{}
+	for subject, b := range bounds {
+		if _, skip := exclude[subject]; skip {
 			continue
 		}
-		bounds, ok, err := d.cfg.Store.Bounds(src, subject)
-		if err != nil {
-			return nil, err
+		_, mine := own[subject]
+		_, others := synced[subject]
+		if !mine && others {
+			continue
 		}
-		if ok && !bounds.Latest.Before(from) && bounds.Earliest.Before(to) {
+		if !b.Latest.Before(from) && b.Earliest.Before(to) {
 			out = append(out, subject)
 		}
 	}
+	sort.Strings(out)
 	return out, nil
 }
 
-// HistorySubjects 实现 pipeline.HistorySource：读取区间 [ReadStart, TargetEnd) 内本地有数据、但不在 plan.Available、
-// 也不是上游失败的标的。
+// SyncedSubjects 返回数据源上全部登记任务的标的范围（正在同步的标的）的并集，排序；数据源没有登记时为空。
+func (d *Data) SyncedSubjects(src seriesstore.Source) []string {
+	st := d.lookup(src)
+	if st == nil {
+		return nil
+	}
+	_, regs := st.registered()
+	union := map[string]struct{}{}
+	for _, reg := range regs {
+		for _, subject := range reg.subjects {
+			union[subject] = struct{}{}
+		}
+	}
+	return sortedKeys(union)
+}
+
+// HistorySubjects 实现 pipeline.HistorySource：读取区间 [ReadStart, TargetEnd) 内按 HistoryRule 纳入的标的。
+// 本任务范围是计划的期望全集加上任务登记的标的。
 func (d *Data) HistorySubjects(_ context.Context, plan pipeline.Plan) ([]string, error) {
 	from, err := pipeline.ReadStart(periodclock.Continuous{}, plan)
 	if err != nil {
 		return nil, err
 	}
-	exclude := append(append([]string(nil), plan.Available...), plan.UpstreamFailed...)
-	history, err := d.historySubjects(sourceOf(plan.Set), from, plan.TargetEnd, exclude)
-	if err != nil {
-		return nil, err
+	src := sourceOf(plan.Set)
+	own := append([]string(nil), plan.Expected...)
+	if st := d.lookup(src); st != nil {
+		_, regs := st.registered()
+		own = append(own, regs[plan.Set.TaskID].subjects...)
 	}
-	if history == nil {
-		history = []string{}
-	}
-	return history, nil
+	return HistoryCandidates(d.cfg.Store, src, from, plan.TargetEnd, HistoryRule{
+		Exclude: append(append([]string(nil), plan.Available...), plan.UpstreamFailed...), Own: own, Synced: d.SyncedSubjects(src),
+	})
 }
 
 // withHistory 返回 subjects 加上 history（observed 成员历史截面的标的）。
