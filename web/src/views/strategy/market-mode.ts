@@ -45,6 +45,46 @@ export function marketRequirement(dslYaml: string): MarketRequirement {
   return { declared: false, markets: [] };
 }
 
+/** 附加来源与参考市场：sources 是 DSL 声明的附加来源（名字与周期，声明顺序），references 是 market.reference 写出的参考市场。 */
+export interface SourceRequirement {
+  sources: { name: string; bar: string }[];
+  references: string[];
+}
+
+/** 从 DSL 文本读出附加来源与参考市场；解析失败或都没写时为空（后端校验写法）。 */
+export function sourceRequirement(dslYaml: string): SourceRequirement {
+  try {
+    const document = parseDocument(dslYaml).toJS();
+    const sources = document?.sources && typeof document.sources === "object" ? document.sources : {};
+    const reference = Array.isArray(document?.market?.reference) ? document.market.reference : [];
+    return {
+      sources: Object.entries(sources).map(([name, value]: [string, any]) => ({ name, bar: String(value?.bar ?? "") })),
+      references: reference.map((item: unknown) => String(item)).filter((item: string) => item === "spot" || item === "swap")
+    };
+  } catch {
+    return { sources: [], references: [] };
+  }
+}
+
+/** 附加来源的任务键：来源名:市场（市场与主帧的任务键一一对应）。 */
+export function sourceTaskKey(source: string, market: string): string {
+  return `${source}:${market}`;
+}
+
+/** 拆开任务键：附加来源的键是 来源名:市场，其余键的来源为空。 */
+export function splitTaskKey(key: string): { source: string; market: string } {
+  const at = key.indexOf(":");
+  return at < 0 ? { source: "", market: key } : { source: key.slice(0, at), market: key.slice(at + 1) };
+}
+
+/** 任务键的展示文本：市场写市场名，附加来源写成 来源 daily（现货）。 */
+export function taskKeyLabel(key: string): string {
+  const { source, market } = splitTaskKey(key);
+  return source ? `来源 ${source}（${marketLabel(market)}）` : marketLabel(market);
+}
+
+const sourceNamePattern = /^[a-z][a-z0-9_]{0,31}$/;
+
 /** 策略池的成员引用；DSL 不是策略池（没有 strategy_pool）或无法解析时返回 null。 */
 export function poolMembers(dslYaml: string): { id: string; strategyId: string }[] | null {
   try {
@@ -100,16 +140,21 @@ export function poolRequirement(
   return { markets: problems.length ? [] : MARKET_ORDER.filter(market => markets.has(market)), problems };
 }
 
-/** 实例绑定的计算任务，按市场先后排列（统一数据集上的任务键是 multi，排在最后）。 */
+/** 实例绑定的计算任务，按市场先后排列（统一数据集上的任务键是 multi，排在市场之后），附加来源的任务（来源名:市场）按键排在最后。 */
 export function instanceTasks(tasks: Record<string, string> | undefined): { market: string; taskId: string }[] {
-  return TASK_KEY_ORDER.filter(market => tasks?.[market]).map(market => ({ market, taskId: tasks![market] }));
+  const plain = TASK_KEY_ORDER.filter(market => tasks?.[market]).map(market => ({ market, taskId: tasks![market] }));
+  const sources = Object.keys(tasks ?? {})
+    .filter(key => splitTaskKey(key).source)
+    .sort()
+    .map(key => ({ market: key, taskId: tasks![key] }));
+  return [...plain, ...sources];
 }
 
-/** 计算任务的展示文本：单任务只写 ID，多任务写成 现货 xxx、永续 yyy。 */
+/** 计算任务的展示文本：单任务只写 ID，多任务写成 现货 xxx、永续 yyy、来源 daily（现货） zzz。 */
 export function tasksText(tasks: Record<string, string> | undefined): string {
   const items = instanceTasks(tasks);
   if (items.length <= 1) return items[0]?.taskId ?? "";
-  return items.map(item => `${marketLabel(item.market)} ${item.taskId}`).join("、");
+  return items.map(item => `${taskKeyLabel(item.market)} ${item.taskId}`).join("、");
 }
 
 /** 计算任务写进 URL 的格式：spot=ftask_a,swap=ftask_b（按现货、永续、股票先后）；没有任务返回空串。 */
@@ -119,12 +164,14 @@ export function formatFactorTasks(tasks: Record<string, string> | undefined): st
     .join(",");
 }
 
-/** 解析 URL 里的计算任务；只认现货、永续、股票三个市场与统一数据集（multi），其余与格式不对的项忽略。 */
+/** 解析 URL 里的计算任务；只认现货、永续、股票三个市场与统一数据集（multi），以及附加来源的 来源名:市场，其余与格式不对的项忽略。 */
 export function parseFactorTasks(raw: string): Record<string, string> {
   const tasks: Record<string, string> = {};
   for (const part of raw.split(",")) {
-    const [market, taskId] = part.split("=").map(item => item.trim());
-    if (taskId && (TASK_KEY_ORDER as readonly string[]).includes(market)) tasks[market] = taskId;
+    const [key, taskId] = part.split("=").map(item => item.trim());
+    const { source, market } = splitTaskKey(key ?? "");
+    const knownMarket = (TASK_KEY_ORDER as readonly string[]).includes(market);
+    if (taskId && knownMarket && (!key.includes(":") || sourceNamePattern.test(source))) tasks[key] = taskId;
   }
   return tasks;
 }

@@ -153,6 +153,48 @@ describe("strategy instance creation behavior", () => {
     expect((wrapper.find("select").element as HTMLSelectElement).value).toBe("s1");
   });
 
+  it("写了参考市场与附加来源时，为参考市场和每个来源各选一个计算任务，按任务键提交", async () => {
+    const plainTask = (taskId: string) => ({
+      factor_task: { task_id: taskId, name: taskId, space_id: "crypto", freq: "1h", status: "enabled" },
+      members: [{ member_key: "ma", kind: "fixed", output_columns: ["ma"] }]
+    });
+    api.listFactorTasks.mockResolvedValue({
+      factor_tasks: [plainTask("ftask_main"), plainTask("ftask_ref"), plainTask("ftask_daily")],
+      page_result: { has_more: false }
+    });
+    const withSources = {
+      strategy_id: "s2",
+      name: "日线过滤",
+      dsl_yaml:
+        "name: demo\nbar: 1h\nmarket: {select: swap, reference: [spot]}\nuniverse: {min_age_bars: 5, age_markets: all}\nsources:\n  daily: {bar: 1d}\n",
+      dsl_hash: "h2",
+      created_at: "",
+      updated_at: ""
+    };
+    const { wrapper, flushPromises } = await open({ strategies: [withSources], presetStrategyId: "s2" });
+    expect(wrapper.text()).toContain("参考市场 现货 的计算任务只用于 age_markets: all 的年龄判定");
+    expect(wrapper.text()).toContain("附加来源 daily（1d）");
+    expect(wrapper.text()).toContain("按主帧的市场各绑一个计算任务");
+    const selects = wrapper.findAll("select");
+    expect(selects).toHaveLength(4);
+    await selects[1].setValue("ftask_main");
+    await selects[2].setValue("ftask_ref");
+    await selects[3].setValue("ftask_daily");
+    await precheck(wrapper, flushPromises);
+    expect(api.validateStrategy).toHaveBeenCalledWith(withSources.dsl_yaml, {
+      swap: "ftask_main",
+      spot: "ftask_ref",
+      "daily:swap": "ftask_daily"
+    });
+    await clickCreate(wrapper, flushPromises);
+    expect(api.createInstance).toHaveBeenCalledWith({
+      instance_id: undefined,
+      strategy_id: "s2",
+      factor_tasks: { swap: "ftask_main", spot: "ftask_ref", "daily:swap": "ftask_daily" },
+      logical_account_id: ""
+    });
+  });
+
   it("still creates a compute-only instance when the account list fails", async () => {
     api.listLogicalAccounts.mockRejectedValue(new Error("账户服务不可用"));
     const { wrapper, flushPromises } = await open({ presetStrategyId: "s1" });

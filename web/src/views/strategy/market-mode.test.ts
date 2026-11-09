@@ -7,6 +7,9 @@ import {
   poolMembers,
   poolRequirement,
   positionLabel,
+  sourceRequirement,
+  splitTaskKey,
+  taskKeyLabel,
   tasksText
 } from "./market-mode";
 
@@ -108,5 +111,33 @@ describe("策略池的市场要求", () => {
     expect(poolRequirement("name: p\nstrategy_pool:\n  members:\n    - {id: a}\n", lookup)?.problems).toEqual([
       "成员 a 没有写 strategy"
     ]);
+  });
+});
+
+describe("附加来源与参考市场", () => {
+  it("从 DSL 读出附加来源与参考市场，没写时为空", () => {
+    expect(
+      sourceRequirement("name: a\nmarket: {select: swap, reference: [spot]}\nsources:\n  daily: {bar: 1d}\n  weekly: {bar: 4h}\n")
+    ).toEqual({
+      sources: [
+        { name: "daily", bar: "1d" },
+        { name: "weekly", bar: "4h" }
+      ],
+      references: ["spot"]
+    });
+    expect(sourceRequirement("name: a\nmarket: {select: swap}\n")).toEqual({ sources: [], references: [] });
+    expect(sourceRequirement("name: [")).toEqual({ sources: [], references: [] });
+  });
+
+  it("任务键 来源名:市场 的拆分、展示与 URL 往返", () => {
+    expect(splitTaskKey("daily:swap")).toEqual({ source: "daily", market: "swap" });
+    expect(splitTaskKey("spot")).toEqual({ source: "", market: "spot" });
+    expect(taskKeyLabel("daily:multi")).toBe("来源 daily（统一数据集）");
+    expect(taskKeyLabel("swap")).toBe("永续");
+    const tasks = { "daily:swap": "ftask_d", swap: "ftask_s", spot: "ftask_r" };
+    expect(instanceTasks(tasks).map(item => item.market)).toEqual(["spot", "swap", "daily:swap"]);
+    expect(tasksText(tasks)).toBe("现货 ftask_r、永续 ftask_s、来源 daily（永续） ftask_d");
+    expect(parseFactorTasks(formatFactorTasks(tasks))).toEqual(tasks);
+    expect(parseFactorTasks("Daily:swap=x,daily:future=y,:spot=z")).toEqual({});
   });
 });
