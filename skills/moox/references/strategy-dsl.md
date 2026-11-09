@@ -134,7 +134,8 @@ portfolio: {leverage: 1, max_weight: 0.1}
   `period_bars`、`anchor` 只能配 periodic、both，`threshold` 只能配 threshold、both，`spread_bars` 不能配 none。`start`、`initial`、`sides`、`freeze` 写在 fixed、rotation 下保存即拒绝。时刻必须是池周期上某根 bar 的起点（池不写 market，启用时才检查）；从 `start` 到最新已收盘的一根不能超过 20000 根，View 的历史要覆盖到起点，否则启用时拒绝。
 - 实例要绑定的因子任务是成员所需市场的并集（现货、永续各最多一个）；View 要有 `close` 列，数据集保留期要装得下预热。
 - 启用后先在后台预热（用历史推进成员净值），预热完成前不求值（事件稍后重投）也不能 `confirm`；停用再启用会重新预热。
-- 研究回放与闭环回放暂不支持策略池；成员净值、比例、择时与贡献写在每期结果的 `summary_json.pool`，页面在实例结果里显示。
+- 成员净值、比例、择时与贡献写在每期结果的 `summary_json.pool`，页面在实例结果里显示。
+- 研究回放支持策略池（闭环回放不支持）：`factor_tasks` 给成员市场的并集；回放发起时固化成员（从实例发起取会话的成员快照，否则取成员的当前定义），排队期间改成员定义不影响；资金费只按池 DSL 的 `fees.funding_column`，回放任务上不能写 `funding_column`。drift 写了 `start` 或 `initial.at` 时回放起点必须等于它，与同起点的预热逐期一致。每期记录的 `summary_json.decision.pool` 与 `decision.limits` 是池明细；`strategy_check.py targets --replay 名称=回放ID` 导出目标再用 `compare` 比对。
 - 成员净值是模拟曲线（不模拟强平；写了 `fees.funding_column` 才计资金费：上一根收盘调仓之前的永续持仓乘本根费率，费率为正时多头付），只用来分配资金，不代表实盘收益。语义与计算顺序见 `docs/模块/策略.md` 的“策略池”。
 
 ### universe 与 portfolio
