@@ -41,6 +41,18 @@ describe("strategy DSL preview", () => {
     expect(parseDSL("name: [").preview).toBeNull();
   });
 
+  it("shows rule-level markets and rejects other values", () => {
+    const mixed = parseDSL(
+      "name: m\nmarket: {select: both, prefer: spot}\nrules:\n  - {id: a, type: rank, market: swap}\n  - {id: b, type: rank}\n"
+    );
+    expect(mixed.diagnostics).toEqual([]);
+    expect(mixed.preview?.rules.map(rule => rule.market)).toEqual(["swap", undefined]);
+    expect(summarizeDSL("name: m\nrules:\n  - {id: a, type: rank, market: spot}\n")).toContain("a（rank，现货）");
+    expect(parseDSL("name: m\nrules:\n  - {id: a, type: rank, market: both}\n").diagnostics[0].message).toBe(
+      "rules[0] 的 market 只能是 spot 或 swap"
+    );
+  });
+
   it("summarizes a definition in one line", () => {
     expect(summarizeDSL(rankedTemplate)).toContain("2 条规则");
     expect(summarizeDSL("name: [")).toBe("DSL 无法解析");

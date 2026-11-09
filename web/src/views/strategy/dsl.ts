@@ -164,7 +164,12 @@ export interface DSLRulePreview {
   type: string;
   /** tranche 规则展开后的子策略数（参数表行数，没有参数表时为 1）；其他类型为 0。 */
   subStrategies: number;
+  /** 规则级市场（spot 或 swap）；没写时不出现。 */
+  market?: string;
 }
+
+/** 规则级市场的中文名。 */
+export const RULE_MARKET_LABELS: Record<string, string> = { spot: "现货", swap: "永续" };
 
 /** 策略池的预览：成员、分配方式、择时与步长。 */
 export interface DSLPoolPreview {
@@ -225,7 +230,17 @@ export function parseDSL(source: string): { preview: DSLPreview | null; diagnost
         diagnostics.push({ message: `rules[${index}] 的 type 只能是 rank、signal 或 tranche` });
       const rows = rule?.params?.rows;
       const subStrategies = type === "tranche" ? (Array.isArray(rows) ? rows.length : 1) : 0;
-      rules.push({ id: id || `#${index + 1}`, name: typeof rule?.name === "string" ? rule.name : "", type, subStrategies });
+      const preview: DSLRulePreview = {
+        id: id || `#${index + 1}`,
+        name: typeof rule?.name === "string" ? rule.name : "",
+        type,
+        subStrategies
+      };
+      if (rule?.market !== undefined) {
+        if (rule.market in RULE_MARKET_LABELS) preview.market = rule.market;
+        else diagnostics.push({ message: `rules[${index}] 的 market 只能是 spot 或 swap` });
+      }
+      rules.push(preview);
     });
     if (rules.some(rule => rule.type === "tranche") && rules.some(rule => rule.type !== "tranche"))
       diagnostics.push({ message: "含 tranche 规则的策略只能全部是 tranche 规则" });
@@ -384,7 +399,7 @@ export function summarizeDSL(source: string): string {
   const rules = preview.rules
     .map(
       rule =>
-        `${rule.name || rule.id}（${rule.type === "tranche" ? `tranche，${rule.subStrategies} 个子策略` : rule.type || "?"}）`
+        `${rule.name || rule.id}（${rule.type === "tranche" ? `tranche，${rule.subStrategies} 个子策略` : rule.type || "?"}${rule.market ? `，${RULE_MARKET_LABELS[rule.market]}` : ""}）`
     )
     .join("、");
   return `${preview.bar} · ${preview.rules.length} 条规则：${rules}`;

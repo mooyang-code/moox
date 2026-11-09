@@ -298,8 +298,9 @@ func pickOrder(mode dsl.Market, id string, held heldIndex) []string {
 }
 
 // filtersShortCandidates 报告这条规则是否做空头候选过滤：同时涉及现货与永续的模式下、非 tranche 的空头规则。
+// 写了规则级市场的规则不做这一步：它只用该市场的视图（见 rulemarket.go）。
 func filtersShortCandidates(mode dsl.Market, rule dsl.Rule) bool {
-	return !mode.Single() && mode.Has(dsl.MarketSwap) && rule.Type != dsl.RuleTypeTranche && rule.Side == dsl.SideShort
+	return !mode.Single() && mode.Has(dsl.MarketSwap) && rule.Type != dsl.RuleTypeTranche && rule.Side == dsl.SideShort && dsl.RuleMarket(mode, rule) == ""
 }
 
 // marketUnavailable 报告这个市场本期整体不可用：帧里它的失败证据有 market_unavailable（input 对整个市场的每个标的都记这个原因）。
@@ -422,11 +423,19 @@ func labelItems(program *dsl.Program, mode dsl.Market, frame Frame, held heldInd
 	for i := range program.Rules {
 		shortRules[program.Rules[i].Rule.ID] = program.Rules[i].Rule.Side == dsl.SideShort
 	}
+	ruleMarkets := make(map[string]string)
+	for i := range program.Rules {
+		if market := dsl.RuleMarket(mode, program.Rules[i].Rule); market != "" {
+			ruleMarkets[program.Rules[i].Rule.ID] = market
+		}
+	}
 	for i := range items {
 		item := &items[i]
 		switch {
 		case mode.Single():
 			item.Market = mode.Select
+		case ruleMarkets[item.RuleID] != "":
+			item.Market = ruleMarkets[item.RuleID] // 写了规则级市场的规则：选择、目标与冻结都在这个市场
 		case item.Stage == StageWeighted && item.Weight != "":
 			item.Market = contributionMarket(mode, frame, held, item.InstrumentID, strings.HasPrefix(item.Weight, "-"))
 		case item.Stage == StageHeld:

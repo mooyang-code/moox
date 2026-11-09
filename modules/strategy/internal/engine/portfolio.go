@@ -17,16 +17,17 @@ import (
 //  5. 写入目标、摘要与换手。
 //
 // 现货负权重仍然报错：它说明策略或定市场的逻辑有错。frozen 是因市场不可用或只缺上一根而保持持仓的标的：
-// 按标的展开成上期所有非零的（标的, 市场）键，它们的目标是保持标记，权重取上期值。
-func applyPortfolio(decision *Decision, portfolio dsl.Portfolio, mode dsl.Market, contributions map[string]quant.Decimal, frozen map[string]struct{}, previous State, held heldIndex, tolerance quant.Decimal) error {
+// 按标的展开成上期所有非零的（标的, 市场）键，它们的目标是保持标记，权重取上期值。frozenKeys 是按键冻结的（标的, 市场）键
+// （写了规则级市场的规则，只冻结那个市场的键，见 rulemarket.go），同样保持上期值。
+func applyPortfolio(decision *Decision, portfolio dsl.Portfolio, mode dsl.Market, contributions map[string]quant.Decimal, frozen, frozenKeys map[string]struct{}, previous State, held heldIndex, tolerance quant.Decimal) error {
 	for key := range contributions {
-		if id, _ := SplitTargetKey(key); contains2(frozen, id) {
+		if id, _ := SplitTargetKey(key); contains2(frozen, id) || contains2(frozenKeys, key) {
 			delete(contributions, key) // 规则不给冻结标的配权，保险起见再删一次
 		}
 	}
-	quantized := quantizeTargets(contributions, portfolio, tolerance)
+	holds := holdTargets(frozen, frozenKeys, previous, held)
+	quantized := quantizeTargets(contributions, portfolio, tolerance, holds)
 	decision.Summary.Notes = append(decision.Summary.Notes, quantized.notes...)
-	holds := holdTargets(frozen, previous, held)
 	quantized = fitBudget(quantized, holds, portfolio, mode, &decision.Summary)
 	for _, target := range quantized.targets {
 		if dsl.SpotLike(target.Market) && target.Weight.IsNegative() {
@@ -61,23 +62,30 @@ func contains2(set map[string]struct{}, id string) bool {
 	return ok
 }
 
-// holdTargets 返回冻结标的的保持目标：每个标的展开成上期所有非零键，权重取上期值（排序）。
-func holdTargets(frozen map[string]struct{}, previous State, held heldIndex) []Target {
-	ids := make([]string, 0, len(frozen))
+// holdTargets 返回冻结标的的保持目标：按币冻结的标的展开成上期所有非零键，按键冻结的只取那个键，权重取上期值（按键排序）。
+func holdTargets(frozen, frozenKeys map[string]struct{}, previous State, held heldIndex) []Target {
+	keys := make(map[string]struct{}, len(frozen)+len(frozenKeys))
 	for id := range frozen {
-		ids = append(ids, id)
-	}
-	sort.Strings(ids)
-	var holds []Target
-	for _, id := range ids {
 		for _, key := range held.keys(id) {
-			weight, err := quant.Parse(previous.Targets[key])
-			if err != nil || weight.IsZero() {
-				continue
-			}
-			_, market := SplitTargetKey(key)
-			holds = append(holds, Target{InstrumentID: id, Market: market, Weight: weight, Hold: true})
+			keys[key] = struct{}{}
 		}
+	}
+	for key := range frozenKeys {
+		keys[key] = struct{}{}
+	}
+	ordered := make([]string, 0, len(keys))
+	for key := range keys {
+		ordered = append(ordered, key)
+	}
+	sortKeys(ordered)
+	var holds []Target
+	for _, key := range ordered {
+		weight, err := quant.Parse(previous.Targets[key])
+		if err != nil || weight.IsZero() {
+			continue
+		}
+		id, market := SplitTargetKey(key)
+		holds = append(holds, Target{InstrumentID: id, Market: market, Weight: weight, Hold: true})
 	}
 	return holds
 }
@@ -203,9 +211,14 @@ func (q quantizedTargets) spotSum() quant.Decimal {
 
 // quantizeTargets 对每个币的合成权重先套 max_weight 再向零截断（noiseTolerance 为 0 时是精确截断）；裁剪或截断后为零的
 // 目标不再出现在结果里。max_weight 按币合计：同一个标的现货与永续两边都不为零时，绝对值之和超过上限就按比例缩小两边；
-// 只有一边时沿用单边的写法（直接取 ±上限）。
-func quantizeTargets(contributions map[string]quant.Decimal, portfolio dsl.Portfolio, noiseTolerance quant.Decimal) quantizedTargets {
+// 只有一边时沿用单边的写法（直接取 ±上限）。holds 是保持目标：按键冻结时同一个币另一个市场仍有贡献，上限先扣掉这个币保持目标的
+// 绝对值（不低于 0），保证这个币的合计不超过 max_weight；按币冻结的币没有贡献，不受影响。
+func quantizeTargets(contributions map[string]quant.Decimal, portfolio dsl.Portfolio, noiseTolerance quant.Decimal, holds []Target) quantizedTargets {
 	result := quantizedTargets{gross: quant.Zero(), net: quant.Zero(), targets: make([]Target, 0, len(contributions))}
+	reserved := make(map[string]quant.Decimal, len(holds))
+	for _, hold := range holds {
+		reserved[hold.InstrumentID] = reserved[hold.InstrumentID].Add(abs(hold.Weight))
+	}
 	keys := make([]string, 0, len(contributions))
 	for key, weight := range contributions {
 		if !weight.IsZero() {
@@ -224,16 +237,24 @@ func quantizeTargets(contributions map[string]quant.Decimal, portfolio dsl.Portf
 		}
 		group := keys[i:j]
 		i = j
+		limit, limitNote := portfolio.MaxWeight, ""
+		if held, ok := reserved[id]; ok && !held.IsZero() {
+			limit = portfolio.MaxWeight.Sub(held)
+			if limit.IsNegative() {
+				limit = quant.Zero()
+			}
+			limitNote = fmt.Sprintf("（扣掉保持目标 %s 后的上限 %s）", held.String(), limit.String())
+		}
 		if portfolio.HasMaxWeight && len(group) > 1 {
 			total := quant.Zero()
 			for _, key := range group {
 				total = total.Add(abs(contributions[key]))
 			}
-			if total.Cmp(portfolio.MaxWeight) > 0 {
-				result.notes = append(result.notes, fmt.Sprintf("%s 的现货、永续合成权重绝对值之和 %s 超过 portfolio.max_weight，两边按比例缩小为合计 %s，超出部分留现金", id, total.String(), portfolio.MaxWeight.String()))
+			if total.Cmp(limit) > 0 {
+				result.notes = append(result.notes, fmt.Sprintf("%s 的现货、永续合成权重绝对值之和 %s 超过 portfolio.max_weight%s，两边按比例缩小为合计 %s，超出部分留现金", id, total.String(), limitNote, limit.String()))
 				for _, key := range group {
 					_, market := SplitTargetKey(key)
-					weight := contributions[key].Mul(portfolio.MaxWeight).Div(total)
+					weight := contributions[key].Mul(limit).Div(total)
 					result.add(Target{InstrumentID: id, Market: market, Weight: truncateWeightWith(weight, noiseTolerance)})
 				}
 				continue
@@ -242,12 +263,12 @@ func quantizeTargets(contributions map[string]quant.Decimal, portfolio dsl.Portf
 		for _, key := range group {
 			_, market := SplitTargetKey(key)
 			weight := contributions[key]
-			if portfolio.HasMaxWeight && len(group) == 1 && abs(weight).Cmp(portfolio.MaxWeight) > 0 {
-				capped := portfolio.MaxWeight
+			if portfolio.HasMaxWeight && len(group) == 1 && abs(weight).Cmp(limit) > 0 {
+				capped := limit
 				if weight.IsNegative() {
 					capped = capped.Neg()
 				}
-				result.notes = append(result.notes, fmt.Sprintf("%s 的合成权重 %s 超过 portfolio.max_weight，裁剪为 %s，超出部分留现金", id, weight.String(), capped.String()))
+				result.notes = append(result.notes, fmt.Sprintf("%s 的合成权重 %s 超过 portfolio.max_weight%s，裁剪为 %s，超出部分留现金", id, weight.String(), limitNote, capped.String()))
 				weight = capped
 			}
 			result.add(Target{InstrumentID: id, Market: market, Weight: truncateWeightWith(weight, noiseTolerance)})

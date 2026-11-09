@@ -18,7 +18,7 @@ func ComposeTargets(portfolio dsl.Portfolio, mode dsl.Market, contributions map[
 	for key, weight := range contributions {
 		merged[key] = weight
 	}
-	if err := applyPortfolio(&decision, portfolio, mode, merged, frozen, previous, indexHeld(previous), poolTolerance(portfolio)); err != nil {
+	if err := applyPortfolio(&decision, portfolio, mode, merged, frozen, nil, previous, indexHeld(previous), poolTolerance(portfolio)); err != nil {
 		return Decision{}, err
 	}
 	return decision, nil

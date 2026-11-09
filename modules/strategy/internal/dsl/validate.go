@@ -94,6 +94,9 @@ func Validate(s *Strategy) error {
 		if err := validateRuleUniverse("规则 "+rule.ID, s, rule); err != nil {
 			return err
 		}
+		if err := validateRuleMarket(s, rule); err != nil {
+			return err
+		}
 		// rank 规则的可用标的数达不到 min_universe 时整期跳过：固定写出的 pool、或只由 include 构成的白名单
 		// 比它还小，这条规则就永远无法运行。写了 allow_empty 的规则不参与守门，不做这项检查。
 		universe := s.RuleUniverse(*rule)

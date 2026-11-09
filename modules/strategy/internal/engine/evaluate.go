@@ -19,22 +19,47 @@ func Evaluate(program *dsl.Program, frame Frame, previous State) (Decision, erro
 		return Decision{}, errors.New("策略程序没有确定市场模式")
 	}
 	held := indexHeld(previous)
+	// 没写规则级市场的规则看的持仓：去掉只被写了规则级市场的规则持有的标的（见 rulemarket.go；没有这类规则时就是 held）。
+	poolHeld := unmarkedHeld(program, mode, previous, held)
 	columns := append(append([]string(nil), program.Columns...), program.PreviousColumns...)
-	frame = restrictShortCandidates(program, mode, selectPool(mode, frame, held, columns), previous, held)
-	decision := evaluateFrame(program, mode, frame, previous, held)
-	labelItems(program, mode, frame, held, decision.Items)
+	views := ruleMarketViews(program, mode, frame, previous)
+	frame = restrictShortCandidates(program, mode, selectPool(mode, frame, poolHeld, columns), previous, poolHeld)
+	decision := evaluateFrame(program, mode, frame, views, previous, held, poolHeld)
+	labelItems(program, mode, frame, poolHeld, decision.Items)
 	sortItems(program, decision.Items)
 	return decision, nil
 }
 
-func evaluateFrame(program *dsl.Program, mode dsl.Market, frame Frame, previous State, held heldIndex) Decision {
+func evaluateFrame(program *dsl.Program, mode dsl.Market, frame Frame, views map[string]Frame, previous State, held, poolHeld heldIndex) Decision {
 	decision := Decision{
 		Status:  StatusOK,
 		State:   State{Rules: make(map[string]RuleState, len(program.Rules)), Targets: map[string]string{}},
 		Summary: Summary{Universe: len(frame.Universe), Rules: make(map[string]RuleSummary, len(program.Rules))},
 	}
 	// 因所在市场本期不可用（或只缺上一根）缺数的已持仓标的在所有规则里冻结：不求值、不调仓，持仓数量保持不动（见 freeze.go）。
-	frozen, holdReasons, streaks := frozenSet(program, frame, previous, held)
+	frozen, holdReasons, streaks := frozenSet(program, frame, previous, poolHeld.subjects(), "")
+	// 写了规则级市场的规则按（标的, 市场）键冻结：只在写了同一市场的规则之间、用该市场的视图判断（见 rulemarket.go）。
+	// marketFrozen 是这些规则划分集合用的冻结集合（按币冻结的标的仍对它们冻结），frozenKeys 交给组合层按键保持。
+	marketFrozen, marketReasons := map[string]map[string]struct{}{}, map[string]map[string]string{}
+	frozenKeys := map[string]struct{}{}
+	for market, view := range views {
+		keyed, reasons, keyedStreaks := frozenSet(program, view, previous, held.subjectsIn(market), market)
+		merged, mergedReasons := make(map[string]struct{}, len(frozen)+len(keyed)), make(map[string]string, len(holdReasons)+len(reasons))
+		for id := range keyed {
+			merged[id], mergedReasons[id] = struct{}{}, reasons[id]
+			frozenKeys[TargetKey(id, market)] = struct{}{}
+		}
+		for id := range frozen {
+			merged[id], mergedReasons[id] = struct{}{}, holdReasons[id]
+		}
+		marketFrozen[market], marketReasons[market] = merged, mergedReasons
+		for ruleID, streak := range keyedStreaks {
+			if streaks == nil {
+				streaks = make(map[string]map[string]int)
+			}
+			streaks[ruleID] = streak
+		}
+	}
 	// 第一遍：集合划分与守门。守门失败也要给出全部规则的集合摘要与缺数明细，便于排查。
 	partitions := make([]ruleSets, len(program.Rules))
 	skipReason, skipNote := "", ""
@@ -43,13 +68,24 @@ func evaluateFrame(program *dsl.Program, mode dsl.Market, frame Frame, previous 
 	}
 	for i := range program.Rules {
 		rule := &program.Rules[i]
+		ruleMarket := dsl.RuleMarket(mode, rule.Rule)
+		ruleFrame := frameFor(mode, rule.Rule, frame, views)
 		var sets ruleSets
-		if rule.Rule.Type == dsl.RuleTypeTranche {
-			sets = partitionTranche(rule, frame, previous.Rules[rule.Rule.ID].Held)
-		} else {
-			sets = partitionRule(rule, frame, previous.Rules[rule.Rule.ID].Held, frozen, holdReasons)
+		switch {
+		case rule.Rule.Type == dsl.RuleTypeTranche:
+			sets = partitionTranche(rule, ruleFrame, previous.Rules[rule.Rule.ID].Held)
+		case ruleMarket != "":
+			sets = partitionRule(rule, ruleFrame, previous.Rules[rule.Rule.ID].Held, marketFrozen[ruleMarket], marketReasons[ruleMarket])
+		default:
+			sets = partitionRule(rule, ruleFrame, previous.Rules[rule.Rule.ID].Held, frozen, holdReasons)
 		}
-		sets.waived = waivesShortGuard(mode, rule.Rule, frame, sets)
+		if ruleMarket != "" {
+			// 规则所在市场本期整体不可用：视图里没有另一个市场的行可借，候选都带着 market_unavailable，守门必然整期跳过（设计 3.2.1：
+			// 只有一部分市场不可用时不整期跳过）。这条规则本期只保持冻结的键，不新开仓。
+			sets.waived = marketUnavailable(frame, ruleMarket)
+		} else {
+			sets.waived = waivesShortGuard(mode, rule.Rule, frame, sets)
+		}
 		partitions[i] = sets
 		decision.Summary.Rules[rule.Rule.ID] = RuleSummary{
 			Expected:  len(sets.expected),
@@ -61,6 +97,10 @@ func evaluateFrame(program *dsl.Program, mode dsl.Market, frame Frame, previous 
 		}
 		decision.Items = append(decision.Items, sets.items(rule.Rule.ID)...)
 		if skipReason != "" {
+			continue
+		}
+		if sets.waived && ruleMarket != "" {
+			decision.Summary.Notes = append(decision.Summary.Notes, fmt.Sprintf("%s市场本期整体不可用，规则 %s（market: %s）不守门：冻结的持仓保持不动，不新开仓", ruleMarket, rule.Rule.ID, ruleMarket))
 			continue
 		}
 		if sets.waived {
@@ -87,15 +127,17 @@ func evaluateFrame(program *dsl.Program, mode dsl.Market, frame Frame, previous 
 	contributions := make(map[string]quant.Decimal)
 	for i := range program.Rules {
 		rule := &program.Rules[i]
+		ruleMarket := dsl.RuleMarket(mode, rule.Rule)
+		ruleFrame := frameFor(mode, rule.Rule, frame, views)
 		var result ruleResult
 		var err error
 		switch rule.Rule.Type {
 		case dsl.RuleTypeRank:
-			result, err = evaluateRank(rule, frame, partitions[i], previous.Rules[rule.Rule.ID], tolerance)
+			result, err = evaluateRank(rule, ruleFrame, partitions[i], previous.Rules[rule.Rule.ID], tolerance)
 		case dsl.RuleTypeSignal:
-			result, err = evaluateSignal(rule, frame, partitions[i], previous.Rules[rule.Rule.ID], tolerance)
+			result, err = evaluateSignal(rule, ruleFrame, partitions[i], previous.Rules[rule.Rule.ID], tolerance)
 		case dsl.RuleTypeTranche:
-			result, err = evaluateTranche(rule, frame, partitions[i], previous.Rules[rule.Rule.ID], tolerance)
+			result, err = evaluateTranche(rule, ruleFrame, partitions[i], previous.Rules[rule.Rule.ID], tolerance)
 		default:
 			err = fmt.Errorf("类型 %q 不受支持", rule.Rule.Type)
 		}
@@ -106,13 +148,17 @@ func evaluateFrame(program *dsl.Program, mode dsl.Market, frame Frame, previous 
 			}
 			return skipped(decision, previous, SkipConfigError, fmt.Sprintf("规则 %s：%v", rule.Rule.ID, err))
 		}
-		applyScale(rule, frame, &result, tolerance)
+		applyScale(rule, ruleFrame, &result, tolerance)
 		if streak := streaks[rule.Rule.ID]; len(streak) > 0 {
 			result.state.MissingStreak = streak
 		}
 		allocated := quant.Zero()
 		for id, weight := range result.weights {
-			key := TargetKey(id, contributionMarket(mode, frame, held, id, weight.IsNegative()))
+			market := ruleMarket
+			if market == "" {
+				market = contributionMarket(mode, frame, poolHeld, id, weight.IsNegative())
+			}
+			key := TargetKey(id, market)
 			contributions[key] = contributions[key].Add(weight)
 			allocated = allocated.Add(abs(truncateWeightWith(weight, tolerance)))
 		}
@@ -126,7 +172,7 @@ func evaluateFrame(program *dsl.Program, mode dsl.Market, frame Frame, previous 
 		decision.Items = mergeStopItems(decision.Items, result.items)
 		decision.Items = append(decision.Items, partitions[i].notExpected(rule.Rule.ID, previous.Rules[rule.Rule.ID].Held)...)
 	}
-	if err := applyPortfolio(&decision, program.Strategy.Portfolio, mode, contributions, frozen, previous, held, tolerance); err != nil {
+	if err := applyPortfolio(&decision, program.Strategy.Portfolio, mode, contributions, frozen, frozenKeys, previous, held, tolerance); err != nil {
 		return skipped(decision, previous, SkipConfigError, err.Error())
 	}
 	return decision

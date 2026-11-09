@@ -115,22 +115,24 @@ func sortedSet(set map[string]struct{}) []string {
 // reasons 是每个冻结标的的明细原因：任一规则里有市场不可用的原因记 market_hold，否则记 prev_hold。
 //
 // 策略里有规则写了 on_missing 时按另一套合并规则（见 frozenSetOnMissing）；没有时逻辑与结果都不变。streaks 是各规则新的连续缺数根数。
-func frozenSet(program *dsl.Program, frame Frame, previous State, held heldIndex) (frozen map[string]struct{}, reasons map[string]string, streaks map[string]map[string]int) {
+//
+// scope 是参与判断的规则：空串是没写规则级市场的规则（按币冻结，candidates 是上期持有的标的）；市场名是写了这个规则级市场的规则
+// （按键冻结，frame 是该市场的视图，candidates 是上期在该市场持有的标的，见 rulemarket.go）。没有规则级市场时空串就是全部规则。
+func frozenSet(program *dsl.Program, frame Frame, previous State, candidates []string, scope string) (frozen map[string]struct{}, reasons map[string]string, streaks map[string]map[string]int) {
 	frozen, reasons = make(map[string]struct{}), make(map[string]string)
 	// tranche 规则不与其他规则混用，持仓到期由自己的持有计数决定，不参与冻结。
 	if program.Strategy.HasTranche() {
 		return frozen, reasons, nil
 	}
 	if program.Strategy.HasOnMissing() {
-		return frozenSetOnMissing(program, frame, previous, held)
+		return frozenSetOnMissing(program, frame, previous, candidates, scope)
 	}
-	candidates := held.subjects()
 	for _, id := range candidates {
 		protectable, blocked, market := false, false, false
 		for i := range program.Rules {
 			rule := &program.Rules[i]
 			ruleID := rule.Rule.ID
-			if !contains(frame.Expected[ruleID], id) {
+			if dsl.RuleMarket(program.Strategy.Market, rule.Rule) != scope || !contains(frame.Expected[ruleID], id) {
 				continue
 			}
 			ruleHeld := contains(previous.Rules[ruleID].Held, id)
@@ -195,16 +197,16 @@ const reasonMissingKept = "missing_kept"
 //   - 持有它的规则里出现其他原因（本根缺数）时：写了 on_missing 且连续缺数不超过 keep_bars 的，按缺数冻结保持（missing_kept）；
 //     没写 on_missing、或已超过 keep_bars 的，阻止冻结，按现状移出；
 //   - 市场不可用、只缺上一根的冻结与现状相同（任一规则里出现都可以保护）。
-func frozenSetOnMissing(program *dsl.Program, frame Frame, previous State, held heldIndex) (map[string]struct{}, map[string]string, map[string]map[string]int) {
+func frozenSetOnMissing(program *dsl.Program, frame Frame, previous State, candidates []string, scope string) (map[string]struct{}, map[string]string, map[string]map[string]int) {
 	frozen, reasons := make(map[string]struct{}), make(map[string]string)
 	streaks := make(map[string]map[string]int)
-	for _, id := range held.subjects() {
+	for _, id := range candidates {
 		protectable, blocked, market, kept := false, false, false, false
 		next := make(map[string]int)
 		for i := range program.Rules {
 			rule := &program.Rules[i]
 			ruleID := rule.Rule.ID
-			if !contains(frame.Expected[ruleID], id) {
+			if dsl.RuleMarket(program.Strategy.Market, rule.Rule) != scope || !contains(frame.Expected[ruleID], id) {
 				continue
 			}
 			ruleHeld := contains(previous.Rules[ruleID].Held, id)

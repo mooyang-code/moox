@@ -240,6 +240,8 @@ func decodeRule(node *yaml.Node, path string) (Rule, error) {
 			rule.Universe, err = decodeRuleUniverse(f.value, fieldPath)
 		case "allow_empty":
 			rule.AllowEmpty, err = scalarBool(f.value, fieldPath)
+		case "market":
+			rule.Market, err = scalarRequiredText(f.value, fieldPath)
 		case "filter":
 			rule.Filter, err = scalarRequiredText(f.value, fieldPath)
 		case "score":

@@ -168,3 +168,44 @@ func TestCheckAgeMarketsRejectsSingleMarket(t *testing.T) {
 	require.NoError(t, Resolved{Market: dsl.Market{Select: "both", Prefer: "swap"}, RuleAges: ages}.CheckAgeMarkets())
 	require.NoError(t, Resolved{Market: dsl.SingleMarket("spot"), RuleAges: map[string]AgeRule{"r": {MaxBars: 3}}}.CheckAgeMarkets())
 }
+
+// 规则级市场：年龄只按规则所用市场的判定。现货老、永续新的 MID 在永续规则里按 min_age_bars 剔除、在 max_age_bars 的永续规则里仍是新标的；
+// 没写规则级市场的规则仍按任一市场通过；永续本期不可用时，永续规则的 min、max 都剔除，现货规则不受影响。
+func TestApplyAgeRuleMarket(t *testing.T) {
+	strategy, err := dsl.Parse([]byte(`name: m
+market: {select: both, prefer: spot}
+universe: {min_age_bars: 5}
+rules:
+  - {id: base, type: rank, score: m, select: {top: 1}, weight: 0.25}
+  - {id: perp, type: rank, market: swap, score: m, select: {top: 1}, weight: 0.25}
+  - {id: cash, type: rank, market: spot, score: m, select: {top: 1}, weight: 0.25}
+  - {id: perp_new, type: rank, market: swap, allow_empty: true, universe: {min_age_bars: 0, max_age_bars: 20}, score: m, select: {top: 1}, weight: 0.25}
+`))
+	require.NoError(t, err)
+	ages := ruleAges(strategy)
+	require.Equal(t, AgeRule{MinBars: 5, Market: dsl.MarketSwap}, ages["perp"])
+	require.Equal(t, AgeRule{MinBars: 5}, ages["base"])
+	resolved := Resolved{MinAgeBars: 5, RuleAges: ages}
+	ids := []string{"OLD", "MID"}
+	expected := map[string][]string{"base": ids, "perp": ids, "cash": ids, "perp_new": ids}
+	listed := AgeListed{"spot": idSet("OLD", "MID"), "swap": idSet("OLD", "MID")}
+	// OLD 两个市场都满 20 根；MID 现货满 20 根、永续不满 5 根。
+	passed := AgePassed{
+		5:  {"spot": idSet("OLD", "MID"), "swap": idSet("OLD")},
+		20: {"spot": idSet("OLD", "MID"), "swap": idSet("OLD")},
+	}
+	sets := Sets{Expected: expected, AgedOut: map[string][]string{}}
+	sets.ApplyAgePassed(resolved, listed, passed)
+	require.Empty(t, sets.AgedOut["base"])
+	require.Empty(t, sets.AgedOut["cash"])
+	require.Equal(t, []string{"MID"}, sets.AgedOut["perp"])
+	require.Equal(t, []string{"OLD"}, sets.AgedOut["perp_new"])
+	require.Equal(t, map[string]string{"OLD": engine.ReasonAgedOutMax}, sets.AgedOutReasons["perp_new"])
+
+	down := AgePassed{5: {"spot": passed[5]["spot"]}, 20: {"spot": passed[20]["spot"]}}
+	unavailable := Sets{Expected: expected, AgedOut: map[string][]string{}}
+	unavailable.ApplyAgePassed(resolved, listed, down)
+	require.Empty(t, unavailable.AgedOut["cash"])
+	require.Equal(t, ids, unavailable.AgedOut["perp"])
+	require.Equal(t, ids, unavailable.AgedOut["perp_new"])
+}
