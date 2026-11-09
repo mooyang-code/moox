@@ -131,7 +131,10 @@ func TestFailedConnectedCallbackKeepsConnectionAndPublishingAndIsRetriedAlone(t 
 	require.NoError(t, err)
 	db := openStore(t)
 	hub := NewHub(Config{URLs: []string{server.URL()}}, registry)
-	hub.RetryInterval = 50 * time.Millisecond
+	// 用测试时钟判断重试间隔：真实时钟下中间发布事件在慢机器上会超过间隔，“没到重试间隔”就不成立了
+	now := time.Unix(1_700_000_000, 0)
+	hub.Now = func() time.Time { return now }
+	hub.RetryInterval = time.Minute
 	t.Cleanup(func() { _ = hub.Close() })
 
 	failing, healthy, closedHealthy := 0, 0, 0
@@ -164,10 +167,15 @@ func TestFailedConnectedCallbackKeepsConnectionAndPublishingAndIsRetriedAlone(t 
 	// 失败的回调在重试间隔之后单独重试；已成功的回调不会再跑。
 	require.NoError(t, hub.Ensure(context.Background()))
 	require.Equal(t, 1, failing, "没到重试间隔")
-	require.Eventually(t, func() bool {
-		require.NoError(t, hub.Ensure(context.Background()))
-		return failing == 3
-	}, 3*time.Second, 20*time.Millisecond)
+	now = now.Add(time.Minute)
+	require.NoError(t, hub.Ensure(context.Background()))
+	require.Equal(t, 2, failing, "过了重试间隔，失败的回调重试一次")
+	now = now.Add(time.Minute)
+	require.NoError(t, hub.Ensure(context.Background()))
+	require.Equal(t, 3, failing, "再过一个间隔又重试，这次成功")
+	now = now.Add(time.Minute)
+	require.NoError(t, hub.Ensure(context.Background()))
+	require.Equal(t, 3, failing, "成功之后不再重试")
 	require.Equal(t, 1, healthy)
 	require.NoError(t, hub.Close())
 	require.Equal(t, 1, closedHealthy)
