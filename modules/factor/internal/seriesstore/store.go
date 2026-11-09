@@ -38,19 +38,6 @@ type Store struct {
 	smu     sync.Mutex
 	closed  sync.Once
 	closeEr error
-	// bounds 缓存各数据源各标的的本地边界（SubjectBounds）：第一次用到时扫一遍边界键，之后每次写入只把写到的标的
-	// 记为待刷新，下次读取时只重读这些标的。
-	bmu    sync.Mutex
-	bounds map[Source]*boundsCache
-}
-
-type boundsCache struct {
-	// refresh 串行“取待刷新名单 → 读 Pebble → 回填”整段：并发的读者排队，后来的读者拿到的是完整、最新的结果。
-	// 写入只拿 Store.bmu 标记待刷新，不碰这把锁，所以不挡写入。scanned 与 subjects 在 refresh 与 bmu 下修改。
-	refresh  sync.Mutex
-	scanned  bool
-	subjects map[string]Bounds
-	dirty    map[string]struct{}
 }
 
 // quietLogger 丢弃 Pebble 的信息日志（启动时回放 WAL 等），只让致命错误中止进程。
@@ -374,91 +361,44 @@ func (s *Store) TagBounds(src Source, subject string) (map[string]Bounds, error)
 	return out, nil
 }
 
-// SubjectBounds 返回数据源里各个有本地数据的标的的边界（各 series_tag 取并集），结果是副本。按缓存返回：只有自上次读取以来
-// 写过的标的才重读，用于每期都要按边界筛选全部本地标的的调用方（observed 的历史截面）。
-//
-// 并发：读者在缓存的 refresh 锁里完成“取名单 → 读 Pebble → 回填”，彼此串行；读 Pebble 时不持有 bmu，写入不被挡住。
-// 读取期间写到的标的会被重新标为待刷新，下一次读取时刷新。写入在提交（Commit）之后才调用 markBoundsDirty，两者之间有一个
-// 空窗：这段时间里开始的读取可能仍返回这次写入之前的边界；markBoundsDirty 返回（WriteBatch 返回）之后开始的读取一定反映它。
+// SubjectBounds 返回数据源里各个有本地数据的标的的边界（各 series_tag 取并集）：一次扫描边界键，不缓存。
+// 只有任务里有 cross_section_history: observed 成员时才调用（每期一次）。
 func (s *Store) SubjectBounds(src Source) (map[string]Bounds, error) {
 	if err := src.check(); err != nil {
 		return nil, err
 	}
-	s.bmu.Lock()
-	if s.bounds == nil {
-		s.bounds = map[Source]*boundsCache{}
+	prefix := []byte(boundsPrefix(src))
+	iter, err := s.db.NewIter(&pebble.IterOptions{LowerBound: prefix, UpperBound: prefixEnd(prefix)})
+	if err != nil {
+		return nil, err
 	}
-	cache := s.bounds[src]
-	if cache == nil {
-		// 先登记空缓存再扫描：扫描期间的写入会记为待刷新，不会漏掉。
-		cache = &boundsCache{subjects: map[string]Bounds{}, dirty: map[string]struct{}{}}
-		s.bounds[src] = cache
-	}
-	s.bmu.Unlock()
-
-	cache.refresh.Lock()
-	defer cache.refresh.Unlock()
-	if !cache.scanned {
-		subjects, err := s.Subjects(src)
-		if err != nil {
-			return nil, err
+	defer iter.Close()
+	type span struct{ e, l int64 }
+	spans := map[string]span{}
+	for ok := iter.First(); ok; ok = iter.Next() {
+		rest := string(iter.Key()[len(prefix):])
+		i := strings.IndexByte(rest, '/')
+		if i <= 0 {
+			continue
 		}
-		s.bmu.Lock()
-		for _, subject := range subjects {
-			cache.dirty[subject] = struct{}{}
+		e, l, valid := decodeBounds(iter.Value())
+		if !valid {
+			return nil, fmt.Errorf("%s 的边界记录已损坏", src)
 		}
-		s.bmu.Unlock()
-		cache.scanned = true
-	}
-	s.bmu.Lock()
-	pending := make([]string, 0, len(cache.dirty))
-	for subject := range cache.dirty {
-		pending = append(pending, subject)
-		delete(cache.dirty, subject)
-	}
-	s.bmu.Unlock()
-	read := make(map[string]Bounds, len(pending))
-	missing := map[string]struct{}{}
-	for _, subject := range pending {
-		b, ok, err := s.Bounds(src, subject)
-		if err != nil {
-			s.bmu.Lock()
-			for _, again := range pending {
-				cache.dirty[again] = struct{}{}
-			}
-			s.bmu.Unlock()
-			return nil, err
+		subject := rest[:i]
+		if old, seen := spans[subject]; seen {
+			e, l = min(e, old.e), max(l, old.l)
 		}
-		if ok {
-			read[subject] = b
-		} else {
-			missing[subject] = struct{}{}
-		}
+		spans[subject] = span{e: e, l: l}
 	}
-	s.bmu.Lock()
-	defer s.bmu.Unlock()
-	for subject, b := range read {
-		cache.subjects[subject] = b
+	if err := iter.Error(); err != nil {
+		return nil, err
 	}
-	for subject := range missing {
-		delete(cache.subjects, subject)
-	}
-	out := make(map[string]Bounds, len(cache.subjects))
-	for subject, b := range cache.subjects {
-		out[subject] = b
+	out := make(map[string]Bounds, len(spans))
+	for subject, b := range spans {
+		out[subject] = Bounds{Earliest: time.Unix(b.e, 0).UTC(), Latest: time.Unix(b.l, 0).UTC()}
 	}
 	return out, nil
-}
-
-// markBoundsDirty 在写入提交之后把写到的标的记为待刷新（数据源还没有缓存时不用记）。
-func (s *Store) markBoundsDirty(src Source, subjects []string) {
-	s.bmu.Lock()
-	defer s.bmu.Unlock()
-	if cache := s.bounds[src]; cache != nil {
-		for _, subject := range subjects {
-			cache.dirty[subject] = struct{}{}
-		}
-	}
 }
 
 // Latest 返回标的本地最新一根的时间。

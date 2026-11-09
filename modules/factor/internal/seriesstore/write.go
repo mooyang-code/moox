@@ -124,11 +124,6 @@ func (s *Store) WriteBatch(ctx context.Context, src Source, writes []SubjectWrit
 		s.schemas[src] = fields
 		s.smu.Unlock()
 	}
-	subjects := make([]string, 0, len(writes))
-	for _, w := range writes {
-		subjects = append(subjects, w.Subject)
-	}
-	s.markBoundsDirty(src, subjects)
 	return results, nil
 }
 

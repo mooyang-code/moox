@@ -526,7 +526,7 @@ type HistoryRule struct {
 	Own []string
 }
 
-// HistoryCandidates 返回按 rule 应纳入的标的（按标的排序）。本地边界用存储的缓存（只重读写过的标的）。
+// HistoryCandidates 返回按 rule 应纳入的标的（按标的排序）。每次调用扫描一遍本地标的边界；只在有 observed 成员时调用。
 func HistoryCandidates(store *seriesstore.Store, src seriesstore.Source, from, to time.Time, rule HistoryRule) ([]string, error) {
 	set := func(list []string) map[string]struct{} {
 		out := make(map[string]struct{}, len(list))
