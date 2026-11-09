@@ -25,7 +25,7 @@ type groupQuota struct {
 
 // newGroupQuota 按候选（已按名次排好）建立分组名额；规则没写 group 时返回 nil。分组值取自本期行，NaN 与缺值不属于任何组。
 // quotas 写法按组内最优名次给组排序：第 i 个出现的组名额是 quotas[i]，其余组是 rest。
-// known 是本根没有分组值的标的沿用的分组值（hold 规则记下的持仓分组，冻结且没有行时用），可为 nil。
+// known 是本根没有分组值的标的沿用的分组值（hold 规则记下的冻结持仓的分组，见 frozenGroups），可为 nil。
 func newGroupQuota(group *dsl.SelectGroup, ordered []string, rows map[string]Row, known map[string]float64) *groupQuota {
 	if group == nil {
 		return nil

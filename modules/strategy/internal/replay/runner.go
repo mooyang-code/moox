@@ -700,12 +700,12 @@ func evaluateBar(ctx context.Context, program *dsl.Program, resolved input.Resol
 			universeSet[subjectID] = struct{}{}
 		}
 	}
-	// 按市场判断：只有选币市场本根自己有行，才并入在这个市场列出的持有标的。某个市场整根一行都没有（数据集断档）时，它列出的持仓
-	// 不并入（与实时“事件到了但名单为空”一致）；所有选币市场都断档时基础集合为空，照常记 skipped(no_data)、持仓保留。
+	// 任一选币市场本根有行时，并入在选币市场列出的持有标的；所有选币市场都断档时基础集合为空，照常记 skipped(no_data)、持仓保留。
+	// 回放不模拟“市场整体不可用”：单边断档时持仓靠 on_missing 按缺数冻结（实时则按市场不可用冻结）。
+	if len(universeSet) == 0 {
+		selection = nil
+	}
 	for _, reader := range selection {
-		if len(segments[reader.market].rows.Bars[key]) == 0 {
-			continue
-		}
 		for id := range heldIDs {
 			if _, listed := reader.listed[id]; listed {
 				universeSet[id] = struct{}{}

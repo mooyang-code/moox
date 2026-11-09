@@ -154,8 +154,10 @@ portfolio:
 	require.True(t, sawMissingD, "第 7 小时永续缺行的 D 应按缺数处理（年龄按永续判为足够）")
 }
 
-// 写了 on_missing 的双市场策略，永续单边断档（第 9、10 小时永续整根没有行，现货照常）：回放只在本根有行的选币市场里并入持有标的，
-// 与实时“永续的事件到了但名单为空”一致；逐期对拍状态、目标与各规则的缺数、冻结数。
+// 写了 on_missing 的双市场策略，永续单边断档（第 9、10 小时永续整根没有行，现货照常）。真实实时路径上断档时事件名单仍是本期预期全集，
+// 只是全部标为失败，这个市场会被判为整体不可用（这里用 Unavailable 表达），已持仓的按 market_hold 冻结；回放不模拟“市场整体不可用”，
+// 靠 on_missing 把持仓按缺数冻结（missing_kept）。两边的原因码不同，但持仓结论必须一致：只在永续上市、被空头规则持有的 F 两边都保留。
+// 断档之外的各期逐期对拍状态、目标与各规则的预期数、缺数、冻结数。
 func TestReplayOnMissingOneMarketGapMatchesLive(t *testing.T) {
 	const dslYaml = `name: one_gap
 market: {select: both, prefer: swap}
@@ -179,15 +181,18 @@ portfolio:
   leverage: 2
   max_missing: 1
 `
+	gap := map[int]bool{9: true, 10: true}
 	dual := baselineDualClient()
 	swapIDs := append(append([]string(nil), baselineSubjects...), "F")
 	for _, id := range swapIDs {
 		if dual.swap.missing[id] == nil {
 			dual.swap.missing[id] = map[int]bool{}
 		}
-		dual.swap.missing[id][9], dual.swap.missing[id][10] = true, true
+		for hour := range gap {
+			dual.swap.missing[id][hour] = true
+		}
 	}
-	// F 只在永续上市（动量多数时候最低，是空头规则的持仓）：只在永续列出，永续断档时不能借现货的行并进基础集合。
+	// F 只在永续上市（动量多数时候最低，是空头规则的持仓）。
 	client := &swapOnlyClient{baselineClient: newBaselineClient(dual), swapDataset: "ds_swap", extra: "F"}
 	repo := openStore(t)
 	tasks := map[string]store.ReplayTask{"spot": spotTask, "swap": swapTask}
@@ -200,54 +205,73 @@ portfolio:
 	require.NoError(t, err)
 	resolved, program, err := input.Resolve(context.Background(), client, "crypto", input.TaskIDs(map[string]string{"spot": spotTask.FactorTaskID, "swap": swapTask.FactorTaskID}), strategy)
 	require.NoError(t, err)
-	// 实时的事件名单：每个市场本根有行的标的；永续断档的那两根，永续的事件到了但名单为空。
+	// 实时的事件名单：每个市场本根有行的标的；断档的那两根，永续的名单仍是全集，并整体不可用。
 	names := func(ids []string, missing map[string]map[int]bool, hour int) []string {
 		out := []string{}
 		for _, id := range ids {
-			if !missing[id][hour] {
+			if !missing[id][hour] || gap[hour] {
 				out = append(out, id)
 			}
 		}
 		return out
 	}
-	state, compared, gapBars, heldF := engine.State{}, 0, 0, false
+	heldF := func(state engine.State) bool {
+		_, ok := state.HeldMarkets()[dsl.MarketSwap]["F"]
+		return ok
+	}
+	state, compared, gapBars, everHeldF := engine.State{}, 0, 0, false
 	for _, replayed := range barsOf(t, repo, "o1") {
 		hour := hourOf(replayed)
 		boundary, err := input.FromBarEnd(resolved.Calendar, resolved.Bar, replayed.BarEndTime)
 		require.NoError(t, err)
-		universe := map[string][]string{dsl.MarketSpot: names(baselineSubjects, dual.spot.missing, hour), dsl.MarketSwap: names(swapIDs, dual.swap.missing, hour)}
-		loaded, err := (input.Loader{Client: client}).LoadBar(context.Background(), "crypto", resolved, program, input.Bar{BarStart: boundary.StorageStart, EventUniverse: universe, Held: state.HeldMarkets()})
+		bar := input.Bar{BarStart: boundary.StorageStart, Held: state.HeldMarkets(), EventUniverse: map[string][]string{
+			dsl.MarketSpot: names(baselineSubjects, dual.spot.missing, hour), dsl.MarketSwap: names(swapIDs, dual.swap.missing, hour),
+		}}
+		if gap[hour] {
+			bar.Unavailable = map[string]string{dsl.MarketSwap: "永续本期整体失败"}
+		}
+		loaded, err := (input.Loader{Client: client}).LoadBar(context.Background(), "crypto", resolved, program, bar)
 		require.NoError(t, err)
 		decision, err := engine.Evaluate(program, loaded.Frame, state)
 		require.NoError(t, err)
 		require.Equal(t, replayed.Status, decision.Status, "第 %d 小时", hour)
+		if decision.Status != engine.StatusOK {
+			continue
+		}
 		var summary struct {
 			Decision engine.Summary `json:"decision"`
 		}
 		require.NoError(t, json.Unmarshal(replayed.SummaryJSON, &summary))
-		for _, id := range []string{"l", "s"} {
-			live, replay := decision.Summary.Rules[id], summary.Decision.Rules[id]
-			require.Equal(t, live.Expected, replay.Expected, "第 %d 小时规则 %s 的预期数不一致", hour, id)
-			require.Equal(t, live.Missing, replay.Missing, "第 %d 小时规则 %s 的缺数不一致", hour, id)
-			require.Equal(t, live.Held, replay.Held, "第 %d 小时规则 %s 的冻结数不一致", hour, id)
-		}
-		if hour == 9 || hour == 10 {
+		if gap[hour] {
+			// 断档期间：持仓结论一致（F 两边都保留），原因码不同（回放 missing_kept，实时 market_hold）。
 			gapBars++
-		}
-		if decision.Status != engine.StatusOK {
-			continue
+			require.Equal(t, heldF(state), targetsHold(t, replayed, "F"), "第 %d 小时回放里 F 的保留与实时不一致", hour)
+			require.Equal(t, heldF(state), heldF(decision.State), "第 %d 小时实时里 F 应保留", hour)
+		} else {
+			for _, id := range []string{"l", "s"} {
+				live, replay := decision.Summary.Rules[id], summary.Decision.Rules[id]
+				require.Equal(t, live.Expected, replay.Expected, "第 %d 小时规则 %s 的预期数不一致", hour, id)
+				require.Equal(t, live.Missing, replay.Missing, "第 %d 小时规则 %s 的缺数不一致", hour, id)
+				require.Equal(t, live.Held, replay.Held, "第 %d 小时规则 %s 的冻结数不一致", hour, id)
+			}
 		}
 		_, live, err := trigger.EncodeTargets(decision.Targets)
 		require.NoError(t, err)
 		require.Equal(t, string(replayed.TargetsJSON), string(live), "第 %d 小时的目标不一致", hour)
 		state = decision.State
+		everHeldF = everHeldF || heldF(state)
 		compared++
-		_, short := state.HeldMarkets()[dsl.MarketSwap]["F"]
-		heldF = heldF || short
 	}
 	require.NotZero(t, compared)
 	require.Equal(t, 2, gapBars)
-	require.True(t, heldF, "场景里空头规则应持有过只在永续上市的 F")
+	require.True(t, everHeldF, "场景里空头规则应持有过只在永续上市的 F")
+}
+
+// targetsHold 报告回放这一期的目标里标的是否仍有永续持仓（含保持目标）。
+func targetsHold(t *testing.T, bar store.ReplayBar, id string) bool {
+	t.Helper()
+	_, ok := decodeTargets(t, bar)[id+"|swap"]
+	return ok
 }
 
 // swapOnlyClient 在永续数据集的标的绑定里多一个只在永续上市的标的。

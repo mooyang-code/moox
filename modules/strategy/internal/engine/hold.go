@@ -211,7 +211,7 @@ func evaluateHold(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous R
 		if note := capShortNote(rule, target); note != "" {
 			result.notes = append(result.notes, note)
 		}
-		quota := newGroupQuota(rule.Rule.Select.Group, append(append([]string(nil), ordered...), sortedMissingFromRank(held, rankOf)...), frame.Rows, prior.Groups)
+		quota := newGroupQuota(rule.Rule.Select.Group, append(append([]string(nil), ordered...), sortedMissingFromRank(held, rankOf)...), frame.Rows, frozenGroups(prior.Groups, sets.frozen))
 		for _, id := range rankedFirst(held, rankOf) {
 			quota.admit(id) // 持有标的先占各组名额
 		}
@@ -324,7 +324,7 @@ func evaluateHold(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous R
 	state := &HoldState{Decided: decided, Weights: base}
 	if group := rule.Rule.Select.Group; group != nil {
 		for _, id := range held {
-			if value, ok := groupValue(group, id, frame.Rows, prior.Groups); ok {
+			if value, ok := groupValue(group, id, frame.Rows, frozenGroups(prior.Groups, sets.frozen)); ok {
 				if state.Groups == nil {
 					state.Groups = make(map[string]float64, len(held))
 				}
@@ -402,6 +402,20 @@ func holdCalendarWeights(rule *dsl.CompiledRule, held []string, rankOf map[strin
 		base = nil
 	}
 	return weights, base, nil
+}
+
+// frozenGroups 只保留冻结标的记下的分组值：冻结且本根没有行的持仓沿用它占名额；本根有行、分组值为非数的持仓仍按 group_none 处理。
+func frozenGroups(groups map[string]float64, frozen map[string]struct{}) map[string]float64 {
+	if len(groups) == 0 || len(frozen) == 0 {
+		return nil
+	}
+	out := make(map[string]float64, len(frozen))
+	for id := range frozen {
+		if value, ok := groups[id]; ok {
+			out[id] = value
+		}
+	}
+	return out
 }
 
 // holdCanEnter 判断候选能否入场：entry 为真（不写表示不限制），且 exit 不为真（同一根两者都成立时不入场）。
