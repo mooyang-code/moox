@@ -34,7 +34,7 @@ func evaluateFrame(program *dsl.Program, mode dsl.Market, frame Frame, previous 
 		Summary: Summary{Universe: len(frame.Universe), Rules: make(map[string]RuleSummary, len(program.Rules))},
 	}
 	// 因所在市场本期不可用（或只缺上一根）缺数的已持仓标的在所有规则里冻结：不求值、不调仓，持仓数量保持不动（见 freeze.go）。
-	frozen, holdReasons := frozenSet(program, frame, previous, held)
+	frozen, holdReasons, streaks := frozenSet(program, frame, previous, held)
 	// 第一遍：集合划分与守门。守门失败也要给出全部规则的集合摘要与缺数明细，便于排查。
 	partitions := make([]ruleSets, len(program.Rules))
 	skipReason, skipNote := "", ""
@@ -105,6 +105,10 @@ func evaluateFrame(program *dsl.Program, mode dsl.Market, frame Frame, previous 
 				decision.Items = append(decision.Items, partitions[j].unevaluated(program.Rules[j].Rule.ID)...)
 			}
 			return skipped(decision, previous, SkipConfigError, fmt.Sprintf("规则 %s：%v", rule.Rule.ID, err))
+		}
+		applyScale(rule, frame, &result, tolerance)
+		if streak := streaks[rule.Rule.ID]; len(streak) > 0 {
+			result.state.MissingStreak = streak
 		}
 		allocated := quant.Zero()
 		for id, weight := range result.weights {

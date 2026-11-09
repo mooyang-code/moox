@@ -190,6 +190,14 @@ func validateRule(rule *Rule) error {
 	if rule.Stop != nil && rule.Type == RuleTypeTranche {
 		return fmt.Errorf("%s 是 tranche 规则，stop 写在 tranche 子策略模板里", prefix)
 	}
+	if rule.OnMissing != nil && rule.Type == RuleTypeTranche {
+		return fmt.Errorf("%s 是 tranche 规则，不支持 on_missing：tranche 的持仓按自己的持有计数到期，不走冻结保持", prefix)
+	}
+	if rule.Scale != nil {
+		if _, err := Analyze(rule.Scale.Expr, StageScale); err != nil {
+			return fmt.Errorf("%s 的 %s 表达式无效：%w", prefix, StageScale, err)
+		}
+	}
 	if rule.Hold != nil && rule.Type != RuleTypeRank {
 		return fmt.Errorf("%s 不是 rank 规则，不能写 hold", prefix)
 	}

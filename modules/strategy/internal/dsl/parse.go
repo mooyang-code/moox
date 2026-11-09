@@ -263,6 +263,10 @@ func decodeRule(node *yaml.Node, path string) (Rule, error) {
 			rule.Holding = &holding
 		case "hold":
 			rule.Hold, err = decodeHold(f.value, fieldPath)
+		case "scale":
+			rule.Scale, err = decodeScale(f.value, fieldPath)
+		case "on_missing":
+			rule.OnMissing, err = decodeOnMissing(f.value, fieldPath)
 		case "stop":
 			rule.Stop, err = decodeStop(f.value, fieldPath)
 		case "candidates":

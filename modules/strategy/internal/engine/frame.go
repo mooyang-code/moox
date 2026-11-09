@@ -100,6 +100,8 @@ type RuleState struct {
 	Tranche *TrancheState `json:"tranche,omitempty"`
 	// Hold 是 rank 规则 hold 块的入场序号、冷却与上次判进出场的序号（见 hold.go）。
 	Hold *HoldState `json:"hold,omitempty"`
+	// MissingStreak 是写了 on_missing 的规则里，按缺数冻结保持的持有标的已连续缺数的根数（标的 → 根数）；数据恢复即清零。
+	MissingStreak map[string]int `json:"missing_streak,omitempty"`
 }
 
 // State 是一次 ok 决策之后的全部状态：各规则状态与组合目标权重（供换手统计）。

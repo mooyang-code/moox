@@ -69,6 +69,10 @@ func partitionRule(rule *dsl.CompiledRule, frame Frame, held []string, frozen ma
 			sets.missing[id] = reason
 			continue
 		}
+		if _, valid := scaleOf(rule, id, row); !valid {
+			sets.missing[id] = reasonScaleInvalid
+			continue
+		}
 		sets.available = append(sets.available, id)
 	}
 	return sets

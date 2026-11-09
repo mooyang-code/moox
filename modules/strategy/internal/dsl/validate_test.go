@@ -439,3 +439,34 @@ func TestValidateRuleUniverseOptions(t *testing.T) {
 		t.Fatalf("只改标的范围不算规则级年龄：%v", err)
 	}
 }
+
+// S6 仓位系数与缺数冻结：非法值与互斥。
+func TestValidateScaleOptions(t *testing.T) {
+	t.Parallel()
+	runOptionCases(t, map[string]optionCase{
+		"scale 缺 expr":         {rankRule("select: {top: 1}, weight: 1, scale: {max: 1}"), "缺少 expr"},
+		"scale.max 为 0":        {rankRule("select: {top: 1}, weight: 1, scale: {expr: c, max: 0}"), "max 必须在 (0, 10]"},
+		"scale.max 超过 10":      {rankRule("select: {top: 1}, weight: 1, scale: {expr: c, max: 11}"), "max 必须在 (0, 10]"},
+		"scale 用截面函数":          {rankRule("select: {top: 1}, weight: 1, scale: {expr: \"rank(c)\"}"), "只能在 score"},
+		"scale 未知字段":           {rankRule("select: {top: 1}, weight: 1, scale: {expr: c, min: 0}"), "未知字段"},
+		"keep_bars 为 0":        {rankRule("select: {top: 1}, weight: 1, on_missing: {keep_bars: 0}"), "keep_bars 必须在 1 到 1000"},
+		"keep_bars 超过上限":       {rankRule("select: {top: 1}, weight: 1, on_missing: {keep_bars: 1001}"), "keep_bars 必须在 1 到 1000"},
+		"on_missing 未知字段":      {rankRule("select: {top: 1}, weight: 1, on_missing: {cash: true}"), "未知字段"},
+		"tranche 写 on_missing": {"name: x\nrules:\n  - id: t\n    type: tranche\n    weight: 1\n    on_missing: {keep_bars: 3}\n    tranche: {hold_period: 1, long_factors: [{column: close}], long_coin_num: 1, long_weight: 1, stg_weight: 1}\n", "不支持 on_missing"},
+	})
+	strategy, err := Parse([]byte(rankRule("select: {top: 1}, weight: 1, scale: {expr: \"coef\", max: 2}, on_missing: {keep_bars: 5}")))
+	if err != nil {
+		t.Fatalf("Parse() = %v", err)
+	}
+	if strategy.Rules[0].Scale.Max != 2 || strategy.Rules[0].OnMissing.KeepBars != 5 || !strategy.HasOnMissing() {
+		t.Fatalf("scale、on_missing 解析不对：%+v", strategy.Rules[0])
+	}
+	columns, err := ReferencedColumns(strategy)
+	if err != nil || strings.Join(columns, ",") != "close,coef" {
+		t.Fatalf("scale 的列应计入引用列：%v %v", columns, err)
+	}
+	defaulted, err := Parse([]byte(rankRule("select: {top: 1}, weight: 1, scale: {expr: coef}")))
+	if err != nil || defaulted.Rules[0].Scale.Max != 1 {
+		t.Fatalf("scale.max 默认 1：%v", err)
+	}
+}

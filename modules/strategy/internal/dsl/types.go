@@ -123,6 +123,9 @@ type Rule struct {
 	Holding     *Holding
 	// Hold 是 rank 规则的进出场持有（见 hold.go）。
 	Hold *Hold
+	// Scale 是规则输出权重上的仓位系数；OnMissing 是持有标的缺数时的冻结保持（见 scale.go，tranche 规则不支持 on_missing）。
+	Scale     *Scale
+	OnMissing *OnMissing
 	// Stop 是 rank、signal 规则的止损止盈（见 stop.go）；tranche 规则写在子策略模板里。
 	Stop *Stop
 	// Tranche 是 tranche 规则的子策略模板与参数表（见 tranche.go）。

@@ -38,6 +38,8 @@ type Item struct {
 	Rank   int    `json:"rank,omitempty"`
 	Weight string `json:"weight,omitempty"`
 	Reason string `json:"reason,omitempty"`
+	// Scale 是乘在输出权重上的仓位系数（截断之后的值）；Weight 是乘系数之后的权重。规则没写 scale 时为空。
+	Scale string `json:"scale,omitempty"`
 }
 
 // sortItems 按规则声明顺序、标的 id 排序，保证解释明细可重复。

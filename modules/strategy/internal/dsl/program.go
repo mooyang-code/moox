@@ -17,6 +17,7 @@ type CompiledRule struct {
 	ThenScore   *Expression
 	HoldEntry   *Expression
 	HoldExit    *Expression
+	Scale       *Expression
 	// TrancheGroups 是 tranche 规则按排名签名分好的子策略组（见 tranche.go）；其他类型为空。
 	TrancheGroups []TrancheGroup
 }
@@ -39,6 +40,7 @@ func (r Rule) stageSources() []stageSource {
 		{StageThenScore, ""},
 		{StageHoldEntry, ""},
 		{StageHoldExit, ""},
+		{StageScale, ""},
 	}
 	if r.Select.Then != nil {
 		sources[6].source = r.Select.Then.Score
@@ -46,12 +48,15 @@ func (r Rule) stageSources() []stageSource {
 	if r.Hold != nil {
 		sources[7].source, sources[8].source = r.Hold.Entry, r.Hold.Exit
 	}
+	if r.Scale != nil {
+		sources[9].source = r.Scale.Expr
+	}
 	return sources
 }
 
 // stageTargets 返回与 stageSources 同序的编译结果位置。
 func (r *CompiledRule) stageTargets() []**Expression {
-	return []**Expression{&r.Filter, &r.Score, &r.SelectWhere, &r.FilterAfter, &r.Entry, &r.Exit, &r.ThenScore, &r.HoldEntry, &r.HoldExit}
+	return []**Expression{&r.Filter, &r.Score, &r.SelectWhere, &r.FilterAfter, &r.Entry, &r.Exit, &r.ThenScore, &r.HoldEntry, &r.HoldExit, &r.Scale}
 }
 
 // DirectColumns 是规则直接写列名（不经表达式）引用的当期列：select.group.by。
@@ -76,10 +81,13 @@ func (r *CompiledRule) Expressions() []*Expression {
 
 // Columns 返回该规则引用的全部当期列。
 func (r *CompiledRule) Columns() []string {
-	if r.Rule.Type == RuleTypeTranche {
-		return r.Rule.TrancheColumns()
-	}
 	set := make(map[string]struct{})
+	if r.Rule.Type == RuleTypeTranche {
+		// tranche 规则的列来自子策略模板，表达式阶段只有 scale。
+		for _, column := range r.Rule.TrancheColumns() {
+			set[column] = struct{}{}
+		}
+	}
 	for _, expression := range r.Expressions() {
 		for _, column := range expression.AllColumns() {
 			set[column] = struct{}{}
@@ -211,7 +219,6 @@ func ReferencedColumns(strategy Strategy) ([]string, error) {
 			for _, column := range rule.TrancheColumns() {
 				set[column] = struct{}{}
 			}
-			continue
 		}
 		for _, column := range rule.DirectColumns() {
 			set[column] = struct{}{}
