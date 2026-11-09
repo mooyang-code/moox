@@ -46,6 +46,16 @@ rules:
     weight: 1
 portfolio: {max_missing: 1}
 `,
+		"on_missing": `name: on_missing
+rules:
+  - id: r
+    type: rank
+    score: "mom"
+    select: {top: 1}
+    on_missing: {keep_bars: 2}
+    weight: 1
+portfolio: {max_missing: 1}
+`,
 		"scale": `name: scale
 rules:
   - id: r
@@ -61,6 +71,10 @@ portfolio: {max_missing: 1}
 		t.Run(name, func(t *testing.T) {
 			repo := openStore(t)
 			client := &fakeClient{marketType: "spot"}
+			if name == "on_missing" {
+				// 两个标的轮流有两根缺 mom（行还在）：持有中的那个应按 on_missing 冻结保持。
+				client.nullMom = map[string]map[int]bool{"A": {6: true, 7: true}, "B": {9: true, 10: true}}
+			}
 			job := startReplay(t, repo, "p1", dslYaml, 12)
 			(&Runner{Store: repo, Client: client, ChunkBars: 4, InitialEquity: 100}).Execute(context.Background(), job)
 			done, err := repo.GetReplay(context.Background(), "p1")
@@ -70,7 +84,7 @@ portfolio: {max_missing: 1}
 			require.NoError(t, err)
 			resolved, program, err := input.Resolve(context.Background(), client, "crypto", []string{"ftask_a"}, strategy)
 			require.NoError(t, err)
-			state, compared := engine.State{}, 0
+			state, compared, kept := engine.State{}, 0, false
 			for _, replayed := range barsOf(t, repo, "p1") {
 				boundary, err := input.FromBarEnd(resolved.Calendar, resolved.Bar, replayed.BarEndTime)
 				require.NoError(t, err)
@@ -87,8 +101,14 @@ portfolio: {max_missing: 1}
 				require.Equal(t, string(replayed.TargetsJSON), string(live), "%v 的目标不一致", replayed.BarEndTime)
 				state = decision.State
 				compared++
+				for _, item := range decision.Items {
+					kept = kept || item.Reason == "missing_kept"
+				}
 			}
 			require.NotZero(t, compared)
+			if name == "on_missing" {
+				require.True(t, kept, "应出现按 on_missing 冻结保持的持仓")
+			}
 		})
 	}
 }

@@ -226,6 +226,17 @@ type marketReader struct {
 	history  *input.RangeLoader
 	// passed 是整次回放内已通过年龄判定的标的（按判定根数 N 分开），各段共用（与实时一致：通过后不再因窗口缺口被重新剔除）。
 	passed map[int]map[string]struct{}
+	// listed 是这个市场列出的标的（全部标的绑定），年龄判定用；构造时算一次。
+	listed map[string]struct{}
+}
+
+// newMarketReader 构造一个市场的读取器，列出的标的取全部标的绑定。
+func newMarketReader(market string, task store.ReplayTask, subjects []input.Subject, rows, history *input.RangeLoader) *marketReader {
+	listed := make(map[string]struct{}, len(subjects))
+	for _, subject := range subjects {
+		listed[subject.SubjectID] = struct{}{}
+	}
+	return &marketReader{market: market, task: task, subjects: subjects, rows: rows, history: history, passed: make(map[int]map[string]struct{}), listed: listed}
 }
 
 // loadMarketViews 读取绑定的每个市场的结果 View（要有 close 列，账本按它估值）与数据集的全部标的绑定（含已停用，回放中都视为活跃）。
@@ -332,11 +343,9 @@ func (r *Runner) replay(ctx context.Context, job store.Replay) (Metrics, error) 
 		if resolved.Unified() {
 			loaderMarket = market
 		}
-		readers = append(readers, &marketReader{
-			market: market, task: job.Tasks[resolved.TaskKey(market)], subjects: subjects[market], passed: make(map[int]map[string]struct{}),
-			rows:    &input.RangeLoader{Client: r.Client, SpaceID: job.SpaceID, View: view, Subjects: subjects[market], Columns: columns, Market: loaderMarket, Memo: memo, Abort: abort},
-			history: &input.RangeLoader{Client: r.Client, SpaceID: job.SpaceID, View: view, Subjects: subjects[market], Columns: []string{"close"}, Market: loaderMarket, Memo: memo, Abort: abort},
-		})
+		readers = append(readers, newMarketReader(market, job.Tasks[resolved.TaskKey(market)], subjects[market],
+			&input.RangeLoader{Client: r.Client, SpaceID: job.SpaceID, View: view, Subjects: subjects[market], Columns: columns, Market: loaderMarket, Memo: memo, Abort: abort},
+			&input.RangeLoader{Client: r.Client, SpaceID: job.SpaceID, View: view, Subjects: subjects[market], Columns: []string{"close"}, Market: loaderMarket, Memo: memo, Abort: abort}))
 	}
 	reader := &segmentReader{runner: r, job: job, resolved: resolved, program: program, end: end, acc: acc, abort: abort, markets: readers, memo: memo}
 	members := cachedMembership(r.Client, job.SpaceID)
@@ -702,11 +711,7 @@ func evaluateBar(ctx context.Context, program *dsl.Program, resolved input.Resol
 	// 每个市场列出的标的取它的全部标的绑定（与实时的市场基础集合一致：本根没有行也算列出），探针候选也按它收窄。
 	listed := make(input.AgeListed, len(readers))
 	for _, reader := range readers {
-		ids := make(map[string]struct{}, len(reader.subjects))
-		for _, subject := range reader.subjects {
-			ids[subject.SubjectID] = struct{}{}
-		}
-		listed[reader.market] = ids
+		listed[reader.market] = reader.listed
 	}
 	probe := func(ctx context.Context, n int, ids []string) (map[string]map[string]struct{}, error) {
 		passed := make(map[string]map[string]struct{}, len(readers))
@@ -747,7 +752,7 @@ func evaluateBar(ctx context.Context, program *dsl.Program, resolved input.Resol
 	if err != nil {
 		return skippedDecision(state, input.SkipConfigError, err.Error()), nil
 	}
-	frame := engine.Frame{BarEnd: bar.BarEnd, BarIndex: bar.BarIndex, Markets: make(map[string]engine.MarketInput, len(readers)), Universe: sets.Universe, Expected: sets.Expected, AgedOut: sets.AgedOut, AgedOutMax: sets.AgedOutMax, Holdings: holdings}
+	frame := engine.Frame{BarEnd: bar.BarEnd, BarIndex: bar.BarIndex, Markets: make(map[string]engine.MarketInput, len(readers)), Universe: sets.Universe, Expected: sets.Expected, AgedOut: sets.AgedOut, AgedOutReasons: sets.AgedOutReasons, Holdings: holdings}
 	for _, reader := range readers {
 		current := segments[reader.market].rows.Bars[key]
 		previous := segments[reader.market].rows.Bars[bar.PreviousStart.Unix()]
@@ -895,6 +900,7 @@ func ageWindows(resolved input.Resolved, segment []input.PeriodBoundaries) ([]ag
 // 不随年龄根数或回放长度增长；已通过判定的标的集合（按 N 分开）由各段共用。
 func agePresence(ctx context.Context, history *input.RangeLoader, resolved input.Resolved, segment []input.PeriodBoundaries, passed map[int]map[string]struct{}) (*presence, error) {
 	result := newPresence()
+	result.resolved = resolved
 	if passed != nil {
 		result.passed = passed
 	}

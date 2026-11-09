@@ -1,9 +1,11 @@
 package engine
 
 import (
+	"fmt"
 	"math"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
+	"github.com/mooyang-code/moox/modules/strategy/internal/quant"
 )
 
 // select 的明细原因：group_full 是所属组名额已满而跳过，group_none 是分组列为 NaN、不属于任何组，select.then 是第一段选中、
@@ -66,6 +68,19 @@ func (q *groupQuota) admit(id string) string {
 	}
 	q.used[value]++
 	return ""
+}
+
+// capShortNote 在 top/bottom 写比例、配了 cap、且 cap × 选中数小于 total 时返回摘要说明：保存时个数未知、没做这项检查，
+// 运行时分不完的预算按 cap 语义留现金。其余情况返回空串。
+func capShortNote(rule *dsl.CompiledRule, count int) string {
+	sel, weight := rule.Rule.Select, rule.Rule.Weight
+	if !sel.IsRatio() || !weight.HasCap {
+		return ""
+	}
+	if weight.Cap.Mul(quant.Must(fmt.Sprint(count))).Cmp(weight.Total) >= 0 {
+		return ""
+	}
+	return fmt.Sprintf("规则 %s 的 select 按比例换算出 %d 个，weight.cap %s × %d 小于 weight.total %s：分不完的预算留作现金", rule.Rule.ID, count, weight.Cap.String(), count, weight.Total.String())
 }
 
 // inRange 只保留名次落在 select.range 闭区间里的候选（保持原顺序）；没写 range 时原样返回。

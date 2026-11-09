@@ -84,7 +84,7 @@ func rowsOfMarket(rows []Row, market string) []Row {
 func checkUnifiedAgeCoverage(ctx context.Context, client Client, spaceID string, view ViewInfo, resolved Resolved, now time.Time) error {
 	bounds, err := CoverageBounds(view, resolved, now)
 	if err != nil {
-		return coverageUnusable(view.ViewID, err, fmt.Sprintf("无法确认年龄判定 %d 根所需的历史", resolved.LongestAge()))
+		return coverageUnusable(view.ViewID, err, fmt.Sprintf("无法确认%s所需的历史", resolved.LongestAgeLabel()))
 	}
 	from, to, err := AgeWindow(resolved.Calendar, resolved.Bar, bounds.To, resolved.LongestAge())
 	if err != nil {
@@ -103,12 +103,12 @@ func checkUnifiedAgeCoverage(ctx context.Context, client Client, spaceID string,
 	}
 	rows, _, err := client.QueryRows(ctx, spaceID, Query{ViewID: view.ViewID, DatasetID: view.DatasetID, Frequency: view.Frequency, Subjects: subjects, Start: from, End: to, Columns: []string{ageProbeColumn}, ExpectedIndexID: view.ActiveIndexID})
 	if err != nil {
-		return fmt.Errorf("按市场核对 universe.min_age_bars 所需的历史：%w", err)
+		return fmt.Errorf("按市场核对%s所需的历史：%w", resolved.LongestAgeLabel(), err)
 	}
 	for _, market := range resolved.Markets() {
 		if len(rowsOfMarket(rows, market)) == 0 {
-			return fmt.Errorf("统一数据集的 View %s 里%s市场的序列在 %s 至 %s 内没有数据，无法满足 universe.min_age_bars=%d：该市场的标的会一直被当作新上市剔除；请等该市场积累够历史（或先补导入）再启用",
-				view.ViewID, marketLabel(market), PeriodLabel(resolved.Calendar, resolved.Bar, from), PeriodLabel(resolved.Calendar, resolved.Bar, to.Add(-time.Nanosecond)), resolved.LongestAge())
+			return fmt.Errorf("统一数据集的 View %s 里%s市场的序列在 %s 至 %s 内没有数据，无法满足%s：该市场的标的会一直被当作新上市剔除；请等该市场积累够历史（或先补导入）再启用，或减小括号里的字段",
+				view.ViewID, marketLabel(market), PeriodLabel(resolved.Calendar, resolved.Bar, from), PeriodLabel(resolved.Calendar, resolved.Bar, to.Add(-time.Nanosecond)), resolved.LongestAgeLabel())
 		}
 	}
 	return nil

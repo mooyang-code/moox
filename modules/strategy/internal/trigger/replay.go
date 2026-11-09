@@ -89,7 +89,9 @@ type ReplayBinding struct {
 	Bar        string `json:"bar"`
 	Calendar   string `json:"calendar"`
 	Spot       bool   `json:"spot"`
-	MinAgeBars int    `json:"min_age_bars,omitempty"`
+	// MinAgeBars 是策略里最长的年龄判定根数（Resolved.LongestAge：策略级与各规则 min_age_bars、max_age_bars 的最大值），
+	// 告诉因子引擎要带回多长的本地历史；JSON 字段名沿用 min_age_bars。
+	MinAgeBars int `json:"min_age_bars,omitempty"`
 	// Factors 是策略引用的因子及其定义指纹（回放期间因子定义变了，回放服务据此拒绝继续）。
 	Factors map[string]string `json:"factors"`
 	// Columns 是策略引用的列：列名 → 来源（数据集列，或因子的某个输出）。
@@ -369,7 +371,7 @@ func (e *ReplayEvaluator) Evaluate(ctx context.Context, req ReplayEvaluateReques
 	}
 	frame := engine.Frame{
 		BarEnd: boundary.BarEnd, BarIndex: boundary.BarIndex,
-		Universe: sets.Universe, Expected: sets.Expected, AgedOut: sets.AgedOut, AgedOutMax: sets.AgedOutMax, Holdings: holdings,
+		Universe: sets.Universe, Expected: sets.Expected, AgedOut: sets.AgedOut, AgedOutReasons: sets.AgedOutReasons, Holdings: holdings,
 	}
 	for subject, row := range req.Rows {
 		if _, ok := sets.Subjects[subject]; !ok {

@@ -328,9 +328,9 @@ type Sets struct {
 	Universe []string
 	Expected map[string][]string
 	AgedOut  map[string][]string
-	// AgedOutMax 是 AgedOut 里因超过 max_age_bars（不再是新标的）剔除的部分，明细原因记 aged_out_max。
-	AgedOutMax map[string][]string
-	Subjects   map[string]Subject
+	// AgedOutReasons 是 AgedOut 里不按 min_age_bars 剔除的标的的明细原因（见 engine.Frame.AgedOutReasons）。
+	AgedOutReasons map[string]map[string]string
+	Subjects       map[string]Subject
 	// Notes 记录装配过程中的说明（例如事件未携带名单）。
 	Notes []string
 }

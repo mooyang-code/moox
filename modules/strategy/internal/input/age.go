@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
+	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
 )
 
 // AgeRule 是一条规则的年龄要求：MinBars 是下限（没通过 N 根的判定即剔除），MaxBars 是上限（通过了 N 根的判定即剔除，
@@ -47,6 +48,43 @@ func (r Resolved) CheckAgeMarkets() error {
 	}
 	sort.Strings(ids)
 	return fmt.Errorf("规则 %s 写了 age_markets: all，但实例只绑定了 %s 一个市场：all 要在全部绑定市场上判断年龄，只有一个市场时与 each 相同；单市场加参考市场以后支持，现在请去掉 age_markets: all 或绑定现货、永续两个市场", strings.Join(ids, "、"), strings.Join(r.Market.Markets(), "、"))
+}
+
+// AgeLabel 说明 n 根的年龄判定来自哪些字段，供报错提示该改哪里：例如“年龄判定 24 根（universe.min_age_bars=24）”、
+// “年龄判定 8760 根（规则 fresh 的 max_age_bars=8760）”。
+func (r Resolved) AgeLabel(n int) string {
+	var sources []string
+	if r.MinAgeBars == n {
+		sources = append(sources, fmt.Sprintf("universe.min_age_bars=%d", n))
+	}
+	ids := make([]string, 0, len(r.RuleAges))
+	for id := range r.RuleAges {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		rule := r.RuleAges[id]
+		if rule.MinBars == n && rule.MinBars != r.MinAgeBars {
+			sources = append(sources, fmt.Sprintf("规则 %s 的 min_age_bars=%d", id, n))
+		}
+		if rule.MaxBars == n {
+			sources = append(sources, fmt.Sprintf("规则 %s 的 max_age_bars=%d", id, n))
+		}
+	}
+	if len(sources) == 0 {
+		return fmt.Sprintf("年龄判定 %d 根", n)
+	}
+	return fmt.Sprintf("年龄判定 %d 根（%s）", n, strings.Join(sources, "、"))
+}
+
+// LongestAgeLabel 说明最长的年龄判定：根数是各规则 min_age_bars、max_age_bars 的最大值，括号里是它的来源字段。
+func (r Resolved) LongestAgeLabel() string {
+	longest := r.LongestAge()
+	label := r.AgeLabel(longest)
+	if len(r.RuleAges) == 0 {
+		return label
+	}
+	return strings.Replace(label, "年龄判定", "年龄判定（min_age_bars、max_age_bars 的最大值）", 1)
 }
 
 // AgeRuleOf 返回规则的年龄要求。
@@ -126,8 +164,8 @@ func (s *Sets) ApplyAge(ctx context.Context, resolved Resolved, listed AgeListed
 //   - age_markets: all：标的必须在每个绑定市场都列出、且这些市场本期都判定过，否则 min_age_bars 与 max_age_bars 都不通过、剔除；
 //     满足时年龄按最晚出现的市场算：min 要求每个市场都通过，max 在每个市场都通过 N 时才不是新标的。
 func (s *Sets) ApplyAgePassed(resolved Resolved, listed AgeListed, passed AgePassed) {
-	if s.AgedOutMax == nil {
-		s.AgedOutMax = map[string][]string{}
+	if s.AgedOutReasons == nil {
+		s.AgedOutReasons = map[string]map[string]string{}
 	}
 	judged := func(n int, market string) bool {
 		_, ok := passed[n][market]
@@ -177,17 +215,17 @@ func (s *Sets) ApplyAgePassed(resolved Resolved, listed AgeListed, passed AgePas
 			}
 			return false
 		}
-		var out, outMax []string
+		var out []string
+		reasons := map[string]string{}
 		for _, id := range expected {
 			if rule.AllMarkets {
 				switch {
 				case !everywhere(id):
 					out = append(out, id)
-					if rule.MaxBars > 0 {
-						outMax = append(outMax, id)
-					}
+					reasons[id] = engine.ReasonAgeMarkets
 				case rule.MaxBars > 0 && passAll(rule.MaxBars, id):
-					out, outMax = append(out, id), append(outMax, id)
+					out = append(out, id)
+					reasons[id] = engine.ReasonAgedOutMax
 				case rule.MinBars > 0 && !passAll(rule.MinBars, id):
 					out = append(out, id)
 				}
@@ -195,16 +233,17 @@ func (s *Sets) ApplyAgePassed(resolved Resolved, listed AgeListed, passed AgePas
 			}
 			switch {
 			case rule.MaxBars > 0 && (passAny(rule.MaxBars, id) || unknown(rule.MaxBars, id)):
-				out, outMax = append(out, id), append(outMax, id)
+				out = append(out, id)
+				reasons[id] = engine.ReasonAgedOutMax
 			case rule.MinBars > 0 && !passAny(rule.MinBars, id):
 				out = append(out, id)
 			}
 		}
 		s.AgedOut[ruleID] = out
-		if outMax != nil {
-			s.AgedOutMax[ruleID] = outMax
+		if len(reasons) > 0 {
+			s.AgedOutReasons[ruleID] = reasons
 		} else {
-			delete(s.AgedOutMax, ruleID)
+			delete(s.AgedOutReasons, ruleID)
 		}
 	}
 }

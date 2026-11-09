@@ -14,6 +14,8 @@ type presence struct {
 	cache   map[int64]int64
 	// passed 是回放中已通过年龄判定的标的，按判定根数 N 分开（与实时的年龄通过记录按 N 保存一致）：通过后不再因之后窗口缺口被重新剔除。
 	passed map[int]map[string]struct{}
+	// resolved 只用来在报错里说明年龄判定来自哪个字段。
+	resolved input.Resolved
 }
 
 func newPresence() *presence {
@@ -91,7 +93,7 @@ func (p *presence) probe(n int, bar input.PeriodBoundaries) input.AgeProbe {
 		}
 		// 与实时一致：已证明年龄的标的放行；其余全部不满足且窗口内整个数据集没有数据时，才是历史缺口。
 		if len(instruments) > 0 && len(satisfied) == 0 && !anyRows {
-			return nil, &input.SkipError{Reason: input.SkipHistoryInsufficient, Detail: fmt.Sprintf("年龄判定 %d 根的探针窗口内整个数据集都没有数据（历史缺口），无法判断上市时间", n)}
+			return nil, &input.SkipError{Reason: input.SkipHistoryInsufficient, Detail: fmt.Sprintf("%s 的探针窗口内整个数据集都没有数据（历史缺口），无法判断上市时间", p.resolved.AgeLabel(n))}
 		}
 		return satisfied, nil
 	}

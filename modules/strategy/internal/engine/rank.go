@@ -178,6 +178,9 @@ func evaluateRank(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous R
 	}
 	// 选择个数：比例的分母是通过 filter 且分数有效的样本数（select.where 之前）。
 	count := rule.Rule.Select.Count(len(live))
+	if note := capShortNote(rule, count); note != "" {
+		result.notes = append(result.notes, note)
+	}
 	// skipReasons 记下候选因分组名额、二次排序没能入选的原因（见 select.go）。
 	skipReasons := map[string]string{}
 	pick := func(eligible, bufferHeld []string) []string {

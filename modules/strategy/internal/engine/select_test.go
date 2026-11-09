@@ -3,6 +3,7 @@ package engine
 import (
 	"fmt"
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -216,4 +217,16 @@ portfolio: {max_missing: 1}
 	assertOK(t, decision)
 	assertWeights(t, decision, map[string]string{"S01": "0.5"})
 	require.Equal(t, reasonThen+":score_invalid", findItem(t, decision, "r", "S01").Reason)
+}
+
+// 写比例、配了 cap 且 cap × 选中数 < total：摘要里注明分不完的预算留作现金；分得完时没有这条说明。
+func TestSelectRatioCapShortNote(t *testing.T) {
+	text := "name: s\nrules:\n  - {id: r, type: rank, score: m, select: {top: 0.1}, weight: {total: 1, cap: 0.3}}\nportfolio: {max_missing: 1}\n"
+	program := compile(t, text, "m")
+	decision := evaluate(t, program, frameOf(program, rankedRows(20, nil)), State{})
+	assertOK(t, decision)
+	assertDecimal(t, "cash", decision.Summary.Cash, "0.4")
+	require.Contains(t, strings.Join(decision.Summary.Notes, "\n"), "分不完的预算留作现金")
+	enough := evaluate(t, program, frameOf(program, rankedRows(40, nil)), State{})
+	require.NotContains(t, strings.Join(enough.Summary.Notes, "\n"), "分不完的预算")
 }

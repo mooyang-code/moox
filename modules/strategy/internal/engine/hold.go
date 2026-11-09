@@ -206,6 +206,9 @@ func evaluateHold(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous R
 	if decide {
 		notChosen = reasonNotSelected
 		target := rule.Rule.Select.Count(len(live))
+		if note := capShortNote(rule, target); note != "" {
+			result.notes = append(result.notes, note)
+		}
 		quota := newGroupQuota(rule.Rule.Select.Group, append(append([]string(nil), ordered...), sortedMissingFromRank(held, rankOf)...), frame.Rows)
 		for _, id := range rankedFirst(held, rankOf) {
 			quota.admit(id) // 持有标的先占各组名额

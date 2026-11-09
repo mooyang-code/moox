@@ -230,7 +230,10 @@ export function parseDSL(source: string): { preview: DSLPreview | null; diagnost
     if (rules.some(rule => rule.type === "tranche") && rules.some(rule => rule.type !== "tranche"))
       diagnostics.push({ message: "含 tranche 规则的策略只能全部是 tranche 规则" });
   }
-  const universe = value.universe && typeof value.universe === "object" ? describeUniverse(value.universe) : "全部标的";
+  const universe = [
+    value.universe && typeof value.universe === "object" ? describeUniverse(value.universe) : "全部标的",
+    ...describeRuleUniverses(value.rules)
+  ].join("；");
   return {
     preview: {
       name: typeof value.name === "string" ? value.name : "未命名策略",
@@ -341,8 +344,33 @@ function describeUniverse(universe: Record<string, any>): string {
     parts.push(`排除标签 ${universe.exclude_tags.join("、")}`);
   if (Array.isArray(universe.include) && universe.include.length) parts.push(`包含 ${universe.include.length} 个`);
   if (Array.isArray(universe.exclude) && universe.exclude.length) parts.push(`排除 ${universe.exclude.join("、")}`);
-  if (universe.min_age_bars) parts.push(`上市满 ${universe.min_age_bars} 根`);
+  parts.push(...describeAges(universe));
   return parts.length ? parts.join("；") : "全部标的";
+}
+
+/** 年龄类字段的说明：上市满 N 根、上市不满 N 根（只保留新标的）、各市场都判断。 */
+function describeAges(universe: Record<string, any>): string[] {
+  const parts: string[] = [];
+  if (universe.min_age_bars) parts.push(`上市满 ${universe.min_age_bars} 根`);
+  if (universe.max_age_bars) parts.push(`上市不满 ${universe.max_age_bars} 根`);
+  if (universe.age_markets === "all") parts.push("年龄按全部市场判断");
+  return parts;
+}
+
+/** 规则级 universe 的说明：写了的字段覆盖策略级。 */
+function describeRuleUniverses(rules: unknown): string[] {
+  if (!Array.isArray(rules)) return [];
+  return rules
+    .filter(rule => rule?.universe && typeof rule.universe === "object")
+    .map(rule => {
+      const universe = rule.universe as Record<string, any>;
+      const parts: string[] = [];
+      if (Array.isArray(universe.tags) && universe.tags.length) parts.push(`标签 ${universe.tags.join("、")}`);
+      if (Array.isArray(universe.include) && universe.include.length) parts.push(`包含 ${universe.include.length} 个`);
+      if (Array.isArray(universe.exclude) && universe.exclude.length) parts.push(`排除 ${universe.exclude.join("、")}`);
+      parts.push(...describeAges(universe));
+      return `规则 ${rule.id ?? "?"}：${parts.join("，") || "沿用策略级"}${rule.allow_empty ? "（允许为空）" : ""}`;
+    });
 }
 
 /** 定义列表里的一行摘要。 */

@@ -65,7 +65,7 @@ func partitionTranche(rule *dsl.CompiledRule, frame Frame, held []string) ruleSe
 			sets.agedOut[id] = struct{}{}
 		}
 	}
-	sets.agedOutMax = agedOutMax(frame, rule.Rule.ID, sets.agedOut)
+	sets.agedOutReason = frame.AgedOutReasons[rule.Rule.ID]
 	expected := append([]string(nil), frame.Expected[rule.Rule.ID]...)
 	sort.Strings(expected)
 	sets.expected = expected

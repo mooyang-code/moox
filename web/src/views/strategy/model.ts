@@ -150,6 +150,7 @@ const itemReasons: Record<string, string> = {
   take_profit: "止盈",
   cooldown: "止损后冷却中，不能入场",
   aged_out_max: "已不是新标的（超过 max_age_bars）",
+  age_markets: "没在全部绑定市场上市，或某个市场本期不可用（age_markets: all）",
   scale_invalid: "仓位系数无效，按缺数处理",
   missing_kept: "本期缺数，按 on_missing 保持持仓不动",
   group_full: "所属组名额已满",
@@ -318,6 +319,8 @@ export interface ResolvedBinding {
   bar: string;
   calendar: string;
   min_age_bars: number;
+  /** 各规则的年龄要求；只在有规则不同于策略级 min_age_bars 时出现。 */
+  rule_ages: { rule_id: string; min_bars: number; max_bars: number; all_markets: boolean }[];
   columns: ResolvedColumn[];
 }
 
@@ -351,8 +354,25 @@ export function parseResolved(raw?: string): ResolvedBinding | null {
     bar: value.bar ?? "",
     calendar: value.calendar ?? "",
     min_age_bars: Number(value.min_age_bars ?? 0),
+    rule_ages: Object.entries((value.rule_ages ?? {}) as Record<string, any>)
+      .map(([ruleID, age]) => ({
+        rule_id: ruleID,
+        min_bars: Number(age?.min_bars ?? 0),
+        max_bars: Number(age?.max_bars ?? 0),
+        all_markets: Boolean(age?.all_markets)
+      }))
+      .sort((a, b) => a.rule_id.localeCompare(b.rule_id)),
     columns
   };
+}
+
+/** 一条规则年龄要求的说明：上市满 N 根、上市不满 M 根、按全部市场判断。 */
+export function ruleAgeText(age: { min_bars: number; max_bars: number; all_markets: boolean }): string {
+  const parts: string[] = [];
+  if (age.min_bars) parts.push(`满 ${age.min_bars} 根`);
+  if (age.max_bars) parts.push(`不满 ${age.max_bars} 根`);
+  if (age.all_markets) parts.push("全部市场");
+  return parts.length ? parts.join("，") : "不限";
 }
 
 export interface ResultInsight {

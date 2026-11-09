@@ -31,12 +31,12 @@ func TestAllowEmptyRuleSkipsGuards(t *testing.T) {
 	// fresh 的候选都已通过 30 根判定（不是新标的）：全部记 aged_out_max，预期 − 年龄剔除 = 0。
 	frame := frameOf(program, rows)
 	frame.AgedOut["fresh"] = []string{"A", "B"}
-	frame.AgedOutMax = map[string][]string{"fresh": {"A", "B"}}
+	frame.AgedOutReasons = map[string]map[string]string{"fresh": {"A": ReasonAgedOutMax, "B": ReasonAgedOutMax}}
 	decision := evaluate(t, program, frame, State{})
 	assertOK(t, decision)
 	assertWeights(t, decision, map[string]string{"A": "0.5"})
 	require.Equal(t, StageAgedOut, findItem(t, decision, "fresh", "A").Stage)
-	require.Equal(t, reasonAgedOutMax, findItem(t, decision, "fresh", "A").Reason)
+	require.Equal(t, ReasonAgedOutMax, findItem(t, decision, "fresh", "A").Reason)
 	assertDecimal(t, "cash", decision.Summary.Cash, "0.5")
 
 	// fresh 的候选全部缺数（缺数占比 100%）：仍不守门，缺数的只是不入选。

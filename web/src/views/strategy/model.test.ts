@@ -8,6 +8,7 @@ import {
   deriveTargetState,
   formatDelay,
   itemReasonLabel,
+  ruleAgeText,
   parseResolved,
   parseSummary,
   percent,
@@ -67,6 +68,13 @@ describe("strategy model helpers", () => {
     expect(resolved?.market).toEqual({ select: "both", prefer: "swap" });
     expect(resolved?.tasks.map(task => `${task.market}:${task.view_id}`)).toEqual(["spot:v", "swap:v2"]);
     expect(parseResolved("{}")).toBeNull();
+    const aged = parseResolved(
+      JSON.stringify({
+        tasks: { spot: { view_id: "v" } },
+        rule_ages: { b: { max_bars: 30, all_markets: true }, a: { min_bars: 5 } }
+      })
+    );
+    expect(aged?.rule_ages.map(age => `${age.rule_id}:${ruleAgeText(age)}`)).toEqual(["a:满 5 根", "b:不满 30 根，全部市场"]);
   });
 
   it("translates explanation reasons including prefixed ones", () => {
@@ -97,6 +105,7 @@ describe("strategy model helpers", () => {
     expect(itemReasonLabel("select.then:score_invalid")).toBe("二次排序分数无效：分数无效（select.then:score_invalid）");
     expect(itemReasonLabel("missing_kept")).toBe("本期缺数，按 on_missing 保持持仓不动（missing_kept）");
     expect(itemReasonLabel("aged_out_max")).toBe("已不是新标的（超过 max_age_bars）（aged_out_max）");
+    expect(itemReasonLabel("age_markets")).toContain("没在全部绑定市场上市");
   });
 });
 

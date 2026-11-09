@@ -121,7 +121,7 @@ func historyNeed(resolved Resolved, program *dsl.Program) (int, string) {
 	need, sources := 1, make([]string, 0, 2)
 	if longest := resolved.LongestAge(); longest > 1 {
 		need = longest
-		sources = append(sources, fmt.Sprintf("年龄判定 %d 根", longest))
+		sources = append(sources, resolved.LongestAgeLabel())
 	}
 	if program != nil && program.UsesPreviousBar {
 		need = max(need, 2)

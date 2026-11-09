@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
+	"github.com/mooyang-code/moox/modules/strategy/internal/engine"
 	"github.com/stretchr/testify/require"
 )
 
@@ -90,12 +91,12 @@ func TestApplyAgeRuleLevels(t *testing.T) {
 	require.Equal(t, AgePassed(passed), got)
 	require.Equal(t, []string{"NEW"}, sets.AgedOut["base"])
 	require.Equal(t, []string{"OLD", "MID", "SPOT"}, sets.AgedOut["fresh"])
-	require.Equal(t, []string{"OLD", "MID", "SPOT"}, sets.AgedOutMax["fresh"])
+	require.Equal(t, map[string]string{"OLD": engine.ReasonAgedOutMax, "MID": engine.ReasonAgedOutMax, "SPOT": engine.ReasonAgedOutMax}, sets.AgedOutReasons["fresh"])
 	require.Equal(t, []string{"SPOT"}, sets.AgedOut["listed"])
-	require.Empty(t, sets.AgedOutMax["listed"])
+	require.Equal(t, map[string]string{"SPOT": engine.ReasonAgeMarkets}, sets.AgedOutReasons["listed"])
 	// all + max：年龄按最晚出现的市场算，MID 的永续不满 20 根仍是新标的；只上了现货的老币 SPOT 缺一个市场，min、max 都不通过、剔除。
 	require.Equal(t, []string{"OLD", "SPOT"}, sets.AgedOut["fresh_all"])
-	require.Equal(t, []string{"OLD", "SPOT"}, sets.AgedOutMax["fresh_all"])
+	require.Equal(t, map[string]string{"OLD": engine.ReasonAgedOutMax, "SPOT": engine.ReasonAgeMarkets}, sets.AgedOutReasons["fresh_all"])
 
 	// 永续本期整体不可用（没有判定结果）：列在永续里的标的无法确认是不是新标的，max 规则都按“不是新标的”剔除；
 	// all 规则缺一个判定过的市场，全部剔除；只有 min 的 each 规则与现状相同。

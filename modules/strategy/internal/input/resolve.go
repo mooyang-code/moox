@@ -489,30 +489,34 @@ func checkViewCoverage(ctx context.Context, client Client, spaceID string, resol
 // checkAgeCoverage 校验 View 能追溯 min_age_bars：N 不超过每个序列保留的根数，且以最新一根为 T，
 // T − (N−1) 根不早于活跃序列的覆盖起点。覆盖范围未知（索引还没有任何行）时无法确认，拒绝启用。
 func checkAgeCoverage(view ViewInfo, resolved Resolved, minAgeBars int, now time.Time) error {
+	need := resolved.AgeLabel(minAgeBars)
+	if minAgeBars == resolved.LongestAge() {
+		need = resolved.LongestAgeLabel()
+	}
 	if view.SeriesBars > 0 && minAgeBars > view.SeriesBars {
-		return fmt.Errorf("universe.min_age_bars=%d 超过 View %s 每个序列保留的 %d 根，永远无法满足", minAgeBars, view.ViewID, view.SeriesBars)
+		return fmt.Errorf("%s 超过 View %s 每个序列保留的 %d 根，永远无法满足；请减小括号里的字段", need, view.ViewID, view.SeriesBars)
 	}
 	bounds, err := CoverageBounds(view, resolved, now)
 	if errors.Is(err, ErrCoverageUnknown) {
-		return fmt.Errorf("View %s 还没有数据（覆盖范围未知），无法确认 universe.min_age_bars=%d 所需的历史，请等数据写入后再启用", view.ViewID, minAgeBars)
+		return fmt.Errorf("View %s 还没有数据（覆盖范围未知），无法确认%s所需的历史，请等数据写入后再启用", view.ViewID, need)
 	}
 	if err != nil {
-		return coverageUnusable(view.ViewID, err, fmt.Sprintf("无法确认 universe.min_age_bars=%d 所需的历史", minAgeBars))
+		return coverageUnusable(view.ViewID, err, fmt.Sprintf("无法确认%s所需的历史", need))
 	}
 	label := func(at time.Time) string { return PeriodLabel(resolved.Calendar, resolved.Bar, at) }
 	// 启用前已确认当前时间没有过内嵌日历的可用截止日，索引最晚一行不会超出日历（Beyond 为 0）。
 	start, latest := coverageStart(bounds, view, resolved, time.Time{}), bounds.To
 	target, err := HistoryStart(resolved.Calendar, resolved.Bar, latest, minAgeBars)
 	if errors.Is(err, marketcalendar.ErrNoPreviousTradingDay) {
-		return fmt.Errorf("universe.min_age_bars=%d 需要追溯到 A 股内嵌交易日历的起点之前，但 View %s 的活跃序列当前只覆盖 %s 至 %s；请减小 min_age_bars",
-			minAgeBars, view.ViewID, label(start), label(latest))
+		return fmt.Errorf("%s 需要追溯到 A 股内嵌交易日历的起点之前，但 View %s 的活跃序列当前只覆盖 %s 至 %s；请减小括号里的字段",
+			need, view.ViewID, label(start), label(latest))
 	}
 	if err != nil {
 		return err
 	}
 	if target.Before(start) {
-		return fmt.Errorf("universe.min_age_bars=%d 需要追溯到 %s，但 View %s 的活跃序列当前只覆盖 %s 至 %s；请减小 min_age_bars 或等待 View 积累更多历史",
-			minAgeBars, label(target), view.ViewID, label(start), label(latest))
+		return fmt.Errorf("%s 需要追溯到 %s，但 View %s 的活跃序列当前只覆盖 %s 至 %s；请减小括号里的字段或等待 View 积累更多历史",
+			need, label(target), view.ViewID, label(start), label(latest))
 	}
 	return nil
 }
