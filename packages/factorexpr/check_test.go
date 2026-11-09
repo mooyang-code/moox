@@ -383,3 +383,53 @@ func TestEventMemoryChecks(t *testing.T) {
 		}
 	}
 }
+
+// 第 1 期新函数的非法写法：宽松窗口的 m（大于 n、低于严格版的下限、用参数时的联合约束）、类型、q 的范围；取整与聚合广播函数的参数类型。
+func TestNewFunctionsRejectInvalidArguments(t *testing.T) {
+	cases := []struct {
+		text, want string
+	}{
+		{outputSpec(`ts_sum_relaxed(close, 5, 6)`), "m 不能大于 n"},
+		{outputSpec(`ts_median_relaxed(close, 5, 6)`), "m 不能大于 n"},
+		{outputSpec(`ts_quantile_relaxed(close, 5, 0.5, 6)`), "m 不能大于 n"},
+		{outputSpec(`ts_corr_relaxed(close, volume, 5, 6)`), "m 不能大于 n"},
+		{outputSpec(`ts_var_relaxed(close, 20, 1)`), "2～100000"},
+		{outputSpec(`ts_zscore_relaxed(close, 20, 1)`), "2～100000"},
+		{outputSpec(`ts_skew_relaxed(close, 20, 2)`), "3～100000"},
+		{outputSpec(`ts_kurt_relaxed(close, 20, 3)`), "4～100000"},
+		{outputSpec(`ts_corr_relaxed(close, volume, 20, 1)`), "2～100000"},
+		{outputSpec(`ts_cov_relaxed(close, volume, 20, 1)`), "2～100000"},
+		{outputSpec(`ts_rank_relaxed(close, 20, 0)`), "1～100000"},
+		{outputSpec(`ts_count_relaxed(close, 5, 1)`), "需要布尔序列"},
+		{outputSpec(`ts_count_relaxed(true, 5, 1) + close`), "必须依赖输入列"},
+		{outputSpec(`ts_cov_relaxed(close, 1, 20, 3)`), "必须依赖输入列"},
+		{outputSpec(`ts_argmax_relaxed(close, 20)`), "需要 3 个参数"},
+		{outputSpec(`ts_quantile_relaxed(close, 20, 1.5, 3)`), "0～1 之间的常量"},
+		{outputSpec(`ts_quantile_relaxed(close, 20, nan, 3)`), "不能是 nan"},
+		{outputSpec(`ts_product_relaxed(close, 20, nan)`), "不能是 nan"},
+		{"params: {m: {type: int, min: 1, max: 30, default: 25}}\noutput: ts_sum_relaxed(close, 20, m)\n", "m 不能大于 n"},
+		{outputSpec(`floor(close > 0)`), "需要数值"},
+		{outputSpec(`ceil(true) + close`), "需要数值"},
+		{outputSpec(`round()`), "需要 1 个参数"},
+	}
+	for _, aggregate := range []string{"cs_sum", "cs_std", "cs_median", "cs_min", "cs_max", "cs_mean"} {
+		cases = append(cases,
+			struct{ text, want string }{outputSpec(aggregate + `(2) + close`), "必须依赖输入列"},
+			struct{ text, want string }{outputSpec(aggregate + `(close > open)`), "需要数值序列"},
+			struct{ text, want string }{outputSpec(aggregate + `(close, 2)`), "需要 1 个参数"})
+	}
+	for _, tc := range cases {
+		_, err := Compile(tc.text)
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%q: err = %v, want containing %q", tc.text, err, tc.want)
+		}
+	}
+	// m 用参数且声明范围的上限超过 n：编译时按默认值检查；默认值合法时，提交的取值仍按联合约束检查。
+	factor := mustCompile(t, "params: {m: {type: int, min: 1, max: 30, default: 5}}\noutput: ts_sum_relaxed(close, 20, m)\n")
+	if err := factor.CheckParams(map[string]float64{"m": 25}); err == nil || !strings.Contains(err.Error(), "m 不能大于 n") {
+		t.Fatalf("CheckParams(m=25) = %v", err)
+	}
+	if err := factor.CheckParams(map[string]float64{"m": 20}); err != nil {
+		t.Fatalf("CheckParams(m=20) = %v", err)
+	}
+}
