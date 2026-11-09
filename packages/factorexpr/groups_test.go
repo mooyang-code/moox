@@ -69,6 +69,32 @@ func TestGroupAndResidualChecks(t *testing.T) {
 	}
 }
 
+// cross_section_history 写在顶层：不写为 current；写 observed 不改变规范文本（哈希标记由定义哈希另行追加）。
+func TestCrossSectionHistorySpec(t *testing.T) {
+	plain := mustCompile(t, "output: ts_mean(cs_rank(close), 5)\n")
+	observed := mustCompile(t, "cross_section_history: observed\noutput: ts_mean(cs_rank(close), 5)\n")
+	current := mustCompile(t, "cross_section_history: current\noutput: ts_mean(cs_rank(close), 5)\n")
+	if plain.ObservedHistory() || current.ObservedHistory() || !observed.ObservedHistory() {
+		t.Fatalf("observed: plain %v current %v observed %v", plain.ObservedHistory(), current.ObservedHistory(), observed.ObservedHistory())
+	}
+	if plain.Spec.CrossSectionHistory != "" || current.Spec.CrossSectionHistory != CrossSectionCurrent {
+		t.Fatalf("parsed values %q %q", plain.Spec.CrossSectionHistory, current.Spec.CrossSectionHistory)
+	}
+	if plain.CanonicalText() != observed.CanonicalText() {
+		t.Fatal("cross_section_history must not enter the canonical text")
+	}
+	for text, want := range map[string]string{
+		"cross_section_history: everything\noutput: cs_rank(close)\n":  "只能是 current 或 observed",
+		"cross_section_history: {a: 1}\noutput: cs_rank(close)\n":      "必须是 current 或 observed",
+		"cross_section_history: observed\noutput: ts_mean(close, 5)\n": "只对截面因子有意义",
+		"history: observed\noutput: cs_rank(close)\n":                  "cross_section_history",
+	} {
+		if _, err := Compile(text); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%q: err = %v, want containing %q", text, err, want)
+		}
+	}
+}
+
 // 变参的签名：必填时写成 x1[, x2 … x8]，可选时紧跟前一个参数写成 [, x1 … x8]；参数说明只列一次并标出最多次数。
 func TestVariadicSignature(t *testing.T) {
 	signatures := map[string]string{}

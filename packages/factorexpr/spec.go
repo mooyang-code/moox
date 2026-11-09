@@ -60,10 +60,26 @@ type Spec struct {
 	Lets   []Binding
 	// Outputs 是输出：单输出因子（写 output）只有一项，名称为空，输出名就是因子 ID；多输出因子（写 outputs）至少两项。
 	Outputs []Binding
+	// CrossSectionHistory 是历史截面的标的全集（顶层键 cross_section_history）：CrossSectionCurrent（默认，不写时也是它）
+	// 或 CrossSectionObserved。
+	CrossSectionHistory string
 }
+
+// 历史截面的标的全集（设计 F8）。
+const (
+	// CrossSectionCurrent：每个历史时刻的截面只用本期可用的标的（Expected ∩ Available）。
+	CrossSectionCurrent = "current"
+	// CrossSectionObserved：历史时刻的截面由本地存储里在回看窗口内有数据的标的组成，与本期是否可用无关。
+	CrossSectionObserved = "observed"
+)
 
 // SingleOutput 报告定义是否是单输出写法（output）。
 func (s *Spec) SingleOutput() bool { return len(s.Outputs) == 1 && s.Outputs[0].Name == "" }
+
+// ObservedHistory 报告定义是否写了 cross_section_history: observed。
+func (s *Spec) ObservedHistory() bool {
+	return s != nil && s.CrossSectionHistory == CrossSectionObserved
+}
 
 // ParamType 是参数的取值类型。
 type ParamType string
@@ -124,7 +140,8 @@ func (s *Spec) param(name string) (Param, bool) {
 	return Param{}, false
 }
 
-// ParseSpec 解析定义文本：只接受一个 YAML 映射文档，键只能是 params、let，以及 output（单输出）或 outputs（多输出）二选一。
+// ParseSpec 解析定义文本：只接受一个 YAML 映射文档，键只能是 params、let、cross_section_history，以及 output（单输出）
+// 或 outputs（多输出）二选一。
 func ParseSpec(text string) (*Spec, error) {
 	if len(text) > MaxSpecBytes {
 		return nil, errorf("", 0, "定义超过 %d 字节", MaxSpecBytes)
@@ -178,8 +195,10 @@ func ParseSpec(text string) (*Spec, error) {
 				return nil, errorf(key.Value, key.Line, "output 与 outputs 只能写一个")
 			}
 			spec.Outputs, err = parseBindings("outputs", value)
+		case "cross_section_history":
+			spec.CrossSectionHistory, err = parseCrossSectionHistory(value)
 		default:
-			err = errorf(key.Value, key.Line, "未知的键，只允许 params、let、output、outputs")
+			err = errorf(key.Value, key.Line, "未知的键，只允许 params、let、output、outputs、cross_section_history")
 		}
 		if err != nil {
 			return nil, err
@@ -195,6 +214,18 @@ func ParseSpec(text string) (*Spec, error) {
 		return nil, err
 	}
 	return spec, nil
+}
+
+// parseCrossSectionHistory 解析 cross_section_history：只能是 current 或 observed。
+func parseCrossSectionHistory(node *yaml.Node) (string, error) {
+	if node.Kind != yaml.ScalarNode || node.ShortTag() != "!!str" {
+		return "", errorf("cross_section_history", node.Line, "必须是 current 或 observed")
+	}
+	switch node.Value {
+	case CrossSectionCurrent, CrossSectionObserved:
+		return node.Value, nil
+	}
+	return "", errorf("cross_section_history", node.Line, "取值 %q 不支持，只能是 current 或 observed", node.Value)
 }
 
 // checkPlainYAML 拒绝锚点、别名与显式标签：定义应当一眼看清，不允许引用展开或类型改写。

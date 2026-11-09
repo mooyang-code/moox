@@ -610,8 +610,15 @@ func CompileSpecWith(spec *Spec, env UDFEnv) (*Factor, error) {
 		factor.Outputs = append(factor.Outputs, Output{Name: binding.Name, Root: root})
 	}
 	factor.derive()
+	if spec.ObservedHistory() && factor.Type != FactorTypeCrossSection {
+		return nil, errorf("cross_section_history", 0, "cross_section_history: observed 只对截面因子有意义，这个定义里没有截面函数")
+	}
 	return factor, nil
 }
+
+// ObservedHistory 报告因子是否写了 cross_section_history: observed：历史截面按本地存储里有数据的标的组成（设计 F8）。
+// 它不进入规范文本；定义哈希在写了 observed 时另外追加标记。
+func (f *Factor) ObservedHistory() bool { return f.Spec.ObservedHistory() }
 
 func (f *Factor) derive() {
 	columns := map[string]bool{}

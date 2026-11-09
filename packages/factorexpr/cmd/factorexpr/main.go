@@ -292,6 +292,8 @@ type checkResult struct {
 	OutputLookbacks map[string]int `json:"output_lookbacks,omitempty"`
 	// CrossSectionPoints 是计算一个目标时刻要算的截面个数之和（各截面算子的需求区间长度之和），用来估算时序套截面的计算量。
 	CrossSectionPoints int `json:"cross_section_points,omitempty"`
+	// CrossSectionHistory 是写了 cross_section_history: observed 时的取值；不写或写 current 时省略。
+	CrossSectionHistory string `json:"cross_section_history,omitempty"`
 	// Params 是可调参数的声明：类型、范围与默认值。
 	Params    []paramInfo `json:"params,omitempty"`
 	Canonical string      `json:"canonical,omitempty"`
@@ -335,6 +337,9 @@ func runCheck(args []string, out io.Writer) error {
 			result.Outputs = factor.OutputNamesFor(entry.FactorID)
 			result.Lookback = factor.Lookback
 			result.CrossSectionPoints = factor.CrossSectionPoints()
+			if factor.ObservedHistory() {
+				result.CrossSectionHistory = factorexpr.CrossSectionObserved
+			}
 			result.OutputLookbacks = map[string]int{}
 			for i, output := range factor.Outputs {
 				result.OutputLookbacks[result.Outputs[i]] = max(output.Root.Lookback, 1)
