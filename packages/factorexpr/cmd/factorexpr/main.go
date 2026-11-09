@@ -73,35 +73,26 @@ type argInfo struct {
 }
 
 type functionInfo struct {
-	Name     string    `json:"name"`
-	Category string    `json:"category"`
-	Args     []argInfo `json:"args"`
-	Result   string    `json:"result"`
-	Lookback string    `json:"lookback"`
-	Doc      string    `json:"doc"`
-	Example  string    `json:"example"`
+	Name     string `json:"name"`
+	Category string `json:"category"`
+	// Broadcast 为真表示聚合广播类截面函数：统计量写给截面每一行（category 仍是 cross_section）。
+	Broadcast bool      `json:"broadcast,omitempty"`
+	Args      []argInfo `json:"args"`
+	Result    string    `json:"result"`
+	Lookback  string    `json:"lookback"`
+	Doc       string    `json:"doc"`
+	Example   string    `json:"example"`
 }
 
-var argKinds = map[factorexpr.ArgKind]string{
-	factorexpr.ArgNumber:     "number",
-	factorexpr.ArgSeries:     "series",
-	factorexpr.ArgBool:       "bool",
-	factorexpr.ArgBoolSeries: "bool_series",
-	factorexpr.ArgWindow:     "window",
-	factorexpr.ArgInteger:    "integer",
-	factorexpr.ArgConstant:   "constant",
-}
-
+// describeFunctions 与控制台的函数参考（ListFactorFunctions）同源：都来自 factorexpr.FunctionDocs。
 func describeFunctions() []functionInfo {
 	var infos []functionInfo
-	for _, fn := range factorexpr.Functions() {
-		info := functionInfo{Name: fn.Name, Category: fn.Category.String(), Result: "number", Lookback: fn.Lookback, Doc: fn.Doc, Example: fn.Example}
-		if fn.Result == factorexpr.ResultBool {
-			info.Result = "bool"
-		}
-		for _, arg := range fn.Args {
-			a := argInfo{Name: arg.Name, Kind: argKinds[arg.Kind], Optional: arg.Optional}
-			if arg.Kind == factorexpr.ArgWindow || arg.Kind == factorexpr.ArgInteger || arg.Kind == factorexpr.ArgConstant {
+	for _, doc := range factorexpr.FunctionDocs() {
+		info := functionInfo{Name: doc.Name, Category: doc.Category, Broadcast: doc.Broadcast, Result: doc.Result, Lookback: doc.Lookback,
+			Doc: doc.Doc, Example: doc.Example}
+		for _, arg := range doc.Args {
+			a := argInfo{Name: arg.Name, Kind: arg.Kind, Optional: arg.Optional}
+			if arg.Kind == "window" || arg.Kind == "integer" || arg.Kind == "constant" {
 				lo, hi := arg.Min, arg.Max
 				a.Min, a.Max = &lo, &hi
 			}
@@ -140,7 +131,11 @@ func runFunctions(args []string, out io.Writer) error {
 			}
 			parts = append(parts, part)
 		}
-		fmt.Fprintf(out, "%-16s %-13s (%s) 回看 %s；%s；例：%s\n", info.Name, info.Category, strings.Join(parts, ", "), info.Lookback, info.Doc, info.Example)
+		category := info.Category
+		if info.Broadcast {
+			category += "/broadcast"
+		}
+		fmt.Fprintf(out, "%-19s %-23s (%s) 回看 %s；%s；例：%s\n", info.Name, category, strings.Join(parts, ", "), info.Lookback, info.Doc, info.Example)
 	}
 	return nil
 }
@@ -228,6 +223,8 @@ type checkResult struct {
 	Lookback     int      `json:"lookback,omitempty"`
 	// OutputLookbacks 是每个输出列自己的回看；Lookback 是其中的最大值，也是引擎做空洞检查用的窗口。
 	OutputLookbacks map[string]int `json:"output_lookbacks,omitempty"`
+	// CrossSectionPoints 是计算一个目标时刻要算的截面个数之和（各截面算子的需求区间长度之和），用来估算时序套截面的计算量。
+	CrossSectionPoints int `json:"cross_section_points,omitempty"`
 	// Params 是可调参数的声明：类型、范围与默认值。
 	Params    []paramInfo `json:"params,omitempty"`
 	Canonical string      `json:"canonical,omitempty"`
@@ -270,6 +267,7 @@ func runCheck(args []string, out io.Writer) error {
 			result.InputColumns = factor.InputColumns
 			result.Outputs = factor.OutputNamesFor(entry.FactorID)
 			result.Lookback = factor.Lookback
+			result.CrossSectionPoints = factor.CrossSectionPoints()
 			result.OutputLookbacks = map[string]int{}
 			for i, output := range factor.Outputs {
 				result.OutputLookbacks[result.Outputs[i]] = max(output.Root.Lookback, 1)

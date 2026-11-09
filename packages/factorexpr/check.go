@@ -660,6 +660,27 @@ func (f *Factor) derive() {
 	sort.Slice(f.UDFs, func(i, j int) bool { return f.UDFs[i].Name < f.UDFs[j].Name })
 }
 
+// CrossSectionPoints 估算每期的截面计算量：计算一个目标时刻时，全部截面算子节点的需求区间长度之和（参数按声明范围取最坏情况）。
+// 没有时序套截面时每个截面节点只算目标时刻这一个截面，长度为 1；ts_mean(cs_rank(x), 20) 要算 20 个历史截面。
+// 只用于 factor-expr check 的提示，不进入规范文本与定义哈希。
+func (f *Factor) CrossSectionPoints() int {
+	program, err := NewProgram([]ProgramInput{{Key: "check", Factor: f}})
+	if err != nil {
+		return 0
+	}
+	need, err := program.Need(0, 0)
+	if err != nil {
+		return 0
+	}
+	points := 0
+	for i, node := range program.Nodes {
+		if node.Function != nil && node.Function.Category == CategoryCrossSection {
+			points += need[i].Len()
+		}
+	}
+	return points
+}
+
 // SingleOutput 报告因子是否是单输出写法（output）：此时输出的 Name 为空，输出名就是因子 ID。
 func (f *Factor) SingleOutput() bool { return f.Spec != nil && f.Spec.SingleOutput() }
 

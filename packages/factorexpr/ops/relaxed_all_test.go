@@ -27,7 +27,9 @@ func relaxedCases() []relaxedCase {
 	}
 	return []relaxedCase{
 		{op: "ts_sum_relaxed", strict: "ts_sum", minimum: 1, inputs: 1,
-			ref: func(x, _ []float64) float64 { return toFloat(bigSum(len(x), func(i int) *big.Float { return bigFloat(x[i]) })) }},
+			ref: func(x, _ []float64) float64 {
+				return toFloat(bigSum(len(x), func(i int) *big.Float { return bigFloat(x[i]) }))
+			}},
 		{op: "ts_count_relaxed", strict: "ts_count", minimum: 1, inputs: 1, boolean: true,
 			ref: func(x, _ []float64) float64 {
 				count := 0.0
