@@ -125,11 +125,11 @@ func evaluateFrame(program *dsl.Program, mode dsl.Market, frame Frame, previous 
 }
 
 // mergeStopItems 追加规则的求值明细。止损的标的可能已经有集合划分给出的明细（例如 signal 持仓的 exit 因子缺失、
-// 但 close 已达止损线）：这时改写那一条，原因附上原有原因，保证每个（规则, 标的）只有一条。
+// 但 close 已达止损线），hold 规则缺数出场的持仓也已经有缺数明细：这时改写那一条，原因附上原有原因，保证每个（规则, 标的）只有一条。
 func mergeStopItems(items, ruleItems []Item) []Item {
 	var index map[string]int
 	for _, item := range ruleItems {
-		if item.Stage == StageStopped {
+		if item.Stage == StageStopped || item.Reason == reasonExitMissing {
 			if index == nil {
 				index = make(map[string]int, len(items))
 				for i, existing := range items {

@@ -44,10 +44,7 @@ func partitionRule(rule *dsl.CompiledRule, frame Frame, held []string, frozen ma
 	sets.expected = expected
 	columns := rule.Columns()
 	previousColumns := rule.PreviousColumns()
-	heldColumns, heldPrevious := columns, previousColumns
-	if rule.Rule.Type == dsl.RuleTypeSignal && rule.Exit != nil {
-		heldColumns, heldPrevious = rule.Exit.AllColumns(), rule.Exit.AllPreviousColumns()
-	}
+	heldCurrent, heldPrevious := heldColumns(rule)
 	for _, id := range expected {
 		if _, aged := sets.agedOut[id]; aged {
 			continue
@@ -63,7 +60,7 @@ func partitionRule(rule *dsl.CompiledRule, frame Frame, held []string, frozen ma
 		}
 		current, previous := columns, previousColumns
 		if _, isHeld := heldSet[id]; isHeld {
-			current, previous = heldColumns, heldPrevious
+			current, previous = heldCurrent, heldPrevious
 		}
 		if reason := missingReason(id, row, current, previous, frame.FailedColumns); reason != "" {
 			sets.missing[id] = reason

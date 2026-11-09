@@ -115,6 +115,8 @@ type Rule struct {
 	Entry       string
 	Exit        string
 	Holding     *Holding
+	// Hold 是 rank 规则的进出场持有（见 hold.go）。
+	Hold *Hold
 	// Stop 是 rank、signal 规则的止损止盈（见 stop.go）；tranche 规则写在子策略模板里。
 	Stop *Stop
 	// Tranche 是 tranche 规则的子策略模板与参数表（见 tranche.go）。

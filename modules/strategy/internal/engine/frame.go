@@ -96,6 +96,8 @@ type RuleState struct {
 	Cooldown map[string]int64     `json:"cooldown,omitempty"`
 	// Tranche 是 tranche 规则的开仓记录（见 tranche.go）。
 	Tranche *TrancheState `json:"tranche,omitempty"`
+	// Hold 是 rank 规则 hold 块的入场序号、冷却与上次判进出场的序号（见 hold.go）。
+	Hold *HoldState `json:"hold,omitempty"`
 }
 
 // State 是一次 ok 决策之后的全部状态：各规则状态与组合目标权重（供换手统计）。

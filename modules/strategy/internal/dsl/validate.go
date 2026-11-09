@@ -189,6 +189,9 @@ func validateRule(rule *Rule) error {
 	if rule.Stop != nil && rule.Type == RuleTypeTranche {
 		return fmt.Errorf("%s 是 tranche 规则，stop 写在 tranche 子策略模板里", prefix)
 	}
+	if rule.Hold != nil && rule.Type != RuleTypeRank {
+		return fmt.Errorf("%s 不是 rank 规则，不能写 hold", prefix)
+	}
 	if rule.Tranche != nil && rule.Type != RuleTypeTranche {
 		return fmt.Errorf("%s 不是 tranche 规则，不能写 candidates、tranche 或 params", prefix)
 	}
@@ -239,6 +242,11 @@ func validateRankRule(prefix string, rule *Rule) error {
 	}
 	if err := validateSelectCount(prefix, &rule.Select); err != nil {
 		return err
+	}
+	if rule.Hold != nil {
+		if err := validateHold(prefix, rule); err != nil {
+			return err
+		}
 	}
 	sel := rule.Select
 	if rule.Holding != nil {

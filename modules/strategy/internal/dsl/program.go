@@ -15,6 +15,8 @@ type CompiledRule struct {
 	Entry       *Expression
 	Exit        *Expression
 	ThenScore   *Expression
+	HoldEntry   *Expression
+	HoldExit    *Expression
 	// TrancheGroups 是 tranche 规则按排名签名分好的子策略组（见 tranche.go）；其他类型为空。
 	TrancheGroups []TrancheGroup
 }
@@ -35,20 +37,25 @@ func (r Rule) stageSources() []stageSource {
 		{StageEntry, r.Entry},
 		{StageExit, r.Exit},
 		{StageThenScore, ""},
+		{StageHoldEntry, ""},
+		{StageHoldExit, ""},
 	}
 	if r.Select.Then != nil {
 		sources[6].source = r.Select.Then.Score
+	}
+	if r.Hold != nil {
+		sources[7].source, sources[8].source = r.Hold.Entry, r.Hold.Exit
 	}
 	return sources
 }
 
 // stageTargets 返回与 stageSources 同序的编译结果位置。
 func (r *CompiledRule) stageTargets() []**Expression {
-	return []**Expression{&r.Filter, &r.Score, &r.SelectWhere, &r.FilterAfter, &r.Entry, &r.Exit, &r.ThenScore}
+	return []**Expression{&r.Filter, &r.Score, &r.SelectWhere, &r.FilterAfter, &r.Entry, &r.Exit, &r.ThenScore, &r.HoldEntry, &r.HoldExit}
 }
 
-// referencedColumns 是规则直接写列名（不经表达式）引用的当期列：select.group.by。
-func (r Rule) referencedColumns() []string {
+// DirectColumns 是规则直接写列名（不经表达式）引用的当期列：select.group.by。
+func (r Rule) DirectColumns() []string {
 	if r.Select.Group != nil {
 		return []string{r.Select.Group.By}
 	}
@@ -78,7 +85,7 @@ func (r *CompiledRule) Columns() []string {
 			set[column] = struct{}{}
 		}
 	}
-	for _, column := range r.Rule.referencedColumns() {
+	for _, column := range r.Rule.DirectColumns() {
 		set[column] = struct{}{}
 	}
 	return sortedKeys(set)
@@ -134,7 +141,7 @@ func Compile(strategy Strategy, columns []string) (*Program, error) {
 				return nil, fmt.Errorf("规则 %s 的 %s 表达式无效：%w", rule.ID, item.stage, err)
 			}
 		}
-		for _, column := range rule.referencedColumns() {
+		for _, column := range rule.DirectColumns() {
 			if _, ok := available[column]; !ok {
 				return nil, fmt.Errorf("规则 %s 引用的列 %q 不存在于绑定的 View", rule.ID, column)
 			}
@@ -206,7 +213,7 @@ func ReferencedColumns(strategy Strategy) ([]string, error) {
 			}
 			continue
 		}
-		for _, column := range rule.referencedColumns() {
+		for _, column := range rule.DirectColumns() {
 			set[column] = struct{}{}
 		}
 		for _, item := range rule.stageSources() {

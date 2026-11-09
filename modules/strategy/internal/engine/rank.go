@@ -81,6 +81,9 @@ func (e *explanation) list() []Item {
 
 // evaluateRank 执行截面选股：filter → score → select（buffer 或 holding）→ weight → filter_after。
 func evaluateRank(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous RuleState, tolerance quant.Decimal) (ruleResult, error) {
+	if rule.Rule.Hold != nil {
+		return evaluateHold(rule, frame, sets, previous, tolerance)
+	}
 	result := ruleResult{weights: map[string]quant.Decimal{}}
 	explain := newExplanation(rule.Rule.ID, tolerance)
 	// 止损先于选币（设计 4.3）：本期触发与冷却中的标的不能入选；holding 规则在 evaluateHolding 里按批次成员判断。

@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"sort"
+
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 )
 
@@ -63,13 +65,41 @@ func missingCauses(id string, row Row, hasRow bool, columns, previousColumns []s
 	return causes
 }
 
-// heldColumns 是规则对「该规则已持有的标的」检查的列：signal 规则的持仓只判 exit，只需要 exit 引用的列。
+// heldColumns 是规则对「该规则已持有的标的」检查的列：signal 规则的持仓只判 exit，只需要 exit 引用的列；
+// hold 规则的持仓只看 filter、hold.exit 与 select.group.by，score、entry 缺值时不出场，只是不能参与补位。
+// 集合划分与冻结判定共用这一个口径。
 func heldColumns(rule *dsl.CompiledRule) (columns, previous []string) {
-	columns, previous = rule.Columns(), rule.PreviousColumns()
-	if rule.Rule.Type == dsl.RuleTypeSignal && rule.Exit != nil {
-		columns, previous = rule.Exit.AllColumns(), rule.Exit.AllPreviousColumns()
+	switch {
+	case rule.Rule.Type == dsl.RuleTypeSignal && rule.Exit != nil:
+		return rule.Exit.AllColumns(), rule.Exit.AllPreviousColumns()
+	case rule.Rule.Hold != nil:
+		current, prior := make(map[string]struct{}), make(map[string]struct{})
+		for _, expression := range []*dsl.Expression{rule.Filter, rule.HoldExit} {
+			if expression == nil {
+				continue
+			}
+			for _, column := range expression.AllColumns() {
+				current[column] = struct{}{}
+			}
+			for _, column := range expression.AllPreviousColumns() {
+				prior[column] = struct{}{}
+			}
+		}
+		for _, column := range rule.Rule.DirectColumns() {
+			current[column] = struct{}{}
+		}
+		return sortedSet(current), sortedSet(prior)
 	}
-	return columns, previous
+	return rule.Columns(), rule.PreviousColumns()
+}
+
+func sortedSet(set map[string]struct{}) []string {
+	out := make([]string, 0, len(set))
+	for key := range set {
+		out = append(out, key)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // frozenSet 返回因市场不可用或只缺上一根而缺数、需要保持持仓的标的：策略当前持有（上期组合目标非零，任一市场）的标的，

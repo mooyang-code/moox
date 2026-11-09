@@ -382,3 +382,29 @@ func TestValidateHoldingCalendarAccepted(t *testing.T) {
 		}
 	}
 }
+
+// S2 进出场持有：互斥与非法值。
+func TestValidateHoldOptions(t *testing.T) {
+	t.Parallel()
+	runOptionCases(t, map[string]optionCase{
+		"hold 与 buffer":           {rankRule("select: {top: 2, buffer: 1}, weight: 1, hold: {exit: \"close > 1\"}"), "hold 不能与 select.buffer"},
+		"hold 与 then":             {rankRule("select: {top: 2, then: {score: close, top: 1}}, weight: 1, hold: {}"), "hold 不能与 select.then"},
+		"hold 与 range":            {rankRule("select: {range: [1, 2]}, weight: 1, hold: {}"), "hold 不能与 select.range"},
+		"hold 与 filter_after":     {rankRule("select: {top: 2}, filter_after: \"close > 1\", weight: 1, hold: {}"), "hold 不能与 filter_after"},
+		"hold 与 holding.bars":     {rankRule("select: {top: 2}, weight: 1, hold: {}, holding: {bars: 4, offsets: [0]}"), "hold 不能与 holding 的 bars/offsets"},
+		"hold 与日历多个批次":            {rankRule("select: {top: 2}, weight: 1, hold: {}, holding: {calendar: week, days: [1, 3]}"), "holding.days 只能有一个值"},
+		"hold.max_bars 为负":        {rankRule("select: {top: 2}, weight: 1, hold: {max_bars: -1}"), "hold.max_bars 必须在 0 到"},
+		"hold.cooldown_bars 超过上限": {rankRule("select: {top: 2}, weight: 1, hold: {cooldown_bars: 10001}"), "hold.cooldown_bars 必须在 0 到"},
+		"hold 未知字段":               {rankRule("select: {top: 2}, weight: 1, hold: {keep: 1}"), "未知字段"},
+		"hold.entry 用截面函数":        {rankRule("select: {top: 2}, weight: 1, hold: {entry: \"rank(close) > 0.5\"}"), "只能在 score"},
+		"signal 写 hold":           {"name: x\nrules:\n  - {id: a, type: signal, pool: [A], entry: \"close > 1\", exit: \"close < 1\", weight: 1, hold: {}}\n", "不能写 hold"},
+	})
+	strategy, err := Parse([]byte(rankRule("select: {top: 0.1, group: {by: ind, max: 2}}, weight: 1, hold: {entry: \"a > 0\", exit: \"b > 0\", max_bars: 720, cooldown_bars: 3}, holding: {calendar: week, days: [1]}")))
+	if err != nil {
+		t.Fatalf("Parse() = %v", err)
+	}
+	columns, err := ReferencedColumns(strategy)
+	if err != nil || strings.Join(columns, ",") != "a,b,close,ind" {
+		t.Fatalf("hold 的 entry、exit 列应计入引用列：%v %v", columns, err)
+	}
+}
