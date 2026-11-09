@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
 )
@@ -27,6 +28,25 @@ func ruleAges(strategy dsl.Strategy) map[string]AgeRule {
 		ages[rule.ID] = AgeRule{MinBars: universe.MinAgeBars, MaxBars: universe.MaxAgeBars, AllMarkets: universe.AllMarkets()}
 	}
 	return ages
+}
+
+// CheckAgeMarkets 检查 age_markets: all 只用在绑定了两个市场的实例上（统一数据集，或现货、永续两个任务）：只绑一个市场时它与 each
+// 没有区别，用户却以为在核对另一个市场，所以直接拒绝。单市场加参考市场（只用于年龄判定）以后再做。
+func (r Resolved) CheckAgeMarkets() error {
+	if len(r.Market.Markets()) >= 2 {
+		return nil
+	}
+	ids := make([]string, 0)
+	for id, rule := range r.RuleAges {
+		if rule.AllMarkets {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	sort.Strings(ids)
+	return fmt.Errorf("规则 %s 写了 age_markets: all，但实例只绑定了 %s 一个市场：all 要在全部绑定市场上判断年龄，只有一个市场时与 each 相同；单市场加参考市场以后支持，现在请去掉 age_markets: all 或绑定现货、永续两个市场", strings.Join(ids, "、"), strings.Join(r.Market.Markets(), "、"))
 }
 
 // AgeRuleOf 返回规则的年龄要求。
@@ -73,9 +93,12 @@ type AgePassed map[int]map[string]map[string]struct{}
 // MarketAgeProbe 判定一组标的在各市场是否通过 n 根的年龄判定，返回 市场 → 通过的标的。
 type MarketAgeProbe func(ctx context.Context, n int, instruments []string) (map[string]map[string]struct{}, error)
 
-// ApplyAge 用年龄探针计算各规则的 G(r)：对每个需要的 N 判定一次 ∪E(r)，再按规则的上下限与 age_markets 取剔除集合。
-// markets 是实例绑定的全部市场（age_markets: all 要求在这些市场上都通过）。返回各 N 的判定结果，供按市场剔除行与重算使用。
-func (s *Sets) ApplyAge(ctx context.Context, resolved Resolved, markets []string, probe MarketAgeProbe) (AgePassed, error) {
+// AgeListed 是实例绑定的每个市场本期列出的标的（市场 → 标的）：键是全部绑定市场，本期不可用的市场也在内。
+type AgeListed map[string]map[string]struct{}
+
+// ApplyAge 用年龄探针计算各规则的 G(r)：对每个需要的 N 判定一次 ∪E(r)，再按规则的上下限与 age_markets 取剔除集合（见 ApplyAgePassed）。
+// 返回各 N 的判定结果，供按市场剔除行与重算使用。
+func (s *Sets) ApplyAge(ctx context.Context, resolved Resolved, listed AgeListed, probe MarketAgeProbe) (AgePassed, error) {
 	levels := resolved.AgeLevels()
 	if len(levels) == 0 {
 		return AgePassed{}, nil
@@ -92,29 +115,30 @@ func (s *Sets) ApplyAge(ctx context.Context, resolved Resolved, markets []string
 		}
 		passed[n] = got
 	}
-	s.ApplyAgePassed(resolved, markets, passed)
+	s.ApplyAgePassed(resolved, listed, passed)
 	return passed, nil
 }
 
-// ApplyAgePassed 按已有的判定结果计算各规则的 G(r) 与其中因超过年龄上限剔除的部分。
-func (s *Sets) ApplyAgePassed(resolved Resolved, markets []string, passed AgePassed) {
+// ApplyAgePassed 按已有的判定结果计算各规则的 G(r) 与其中因超过年龄上限剔除的部分。一个市场“判定过”指它在 passed[N] 里出现
+// （本期可用、做了探针）；本期不可用的市场没有判定结果。
+//   - age_markets: each（默认）：min_age_bars 在任一判定过的市场通过即算通过（现状）。max_age_bars 在任一判定过的市场通过 N 即不是新标的；
+//     标的列在某个本期不可用的市场里时，无法确认它在那里是不是老标的，按保守口径算作不是新标的、剔除。
+//   - age_markets: all：标的必须在每个绑定市场都列出、且这些市场本期都判定过，否则 min_age_bars 与 max_age_bars 都不通过、剔除；
+//     满足时年龄按最晚出现的市场算：min 要求每个市场都通过，max 在每个市场都通过 N 时才不是新标的。
+func (s *Sets) ApplyAgePassed(resolved Resolved, listed AgeListed, passed AgePassed) {
 	if s.AgedOutMax == nil {
 		s.AgedOutMax = map[string][]string{}
+	}
+	judged := func(n int, market string) bool {
+		_, ok := passed[n][market]
+		return ok
 	}
 	for ruleID, expected := range s.Expected {
 		rule := resolved.AgeRuleOf(ruleID)
 		if rule.MinBars <= 0 && rule.MaxBars <= 0 {
 			continue
 		}
-		pass := func(n int, id string) bool {
-			if rule.AllMarkets {
-				for _, market := range markets {
-					if _, ok := passed[n][market][id]; !ok {
-						return false
-					}
-				}
-				return len(markets) > 0
-			}
+		passAny := func(n int, id string) bool {
 			for _, ids := range passed[n] {
 				if _, ok := ids[id]; ok {
 					return true
@@ -122,12 +146,57 @@ func (s *Sets) ApplyAgePassed(resolved Resolved, markets []string, passed AgePas
 			}
 			return false
 		}
+		passAll := func(n int, id string) bool {
+			for market := range listed {
+				if _, ok := passed[n][market][id]; !ok {
+					return false
+				}
+			}
+			return len(listed) > 0
+		}
+		// everywhere：标的在每个绑定市场都列出，且这些市场在需要的每个 N 上都判定过。
+		everywhere := func(id string) bool {
+			for market, ids := range listed {
+				if _, ok := ids[id]; !ok {
+					return false
+				}
+				for _, n := range []int{rule.MinBars, rule.MaxBars} {
+					if n > 0 && !judged(n, market) {
+						return false
+					}
+				}
+			}
+			return len(listed) > 0
+		}
+		// unknown：标的列在某个没有判定 n 的市场里（本期不可用），不知道它在那里的年龄。
+		unknown := func(n int, id string) bool {
+			for market, ids := range listed {
+				if _, ok := ids[id]; ok && !judged(n, market) {
+					return true
+				}
+			}
+			return false
+		}
 		var out, outMax []string
 		for _, id := range expected {
+			if rule.AllMarkets {
+				switch {
+				case !everywhere(id):
+					out = append(out, id)
+					if rule.MaxBars > 0 {
+						outMax = append(outMax, id)
+					}
+				case rule.MaxBars > 0 && passAll(rule.MaxBars, id):
+					out, outMax = append(out, id), append(outMax, id)
+				case rule.MinBars > 0 && !passAll(rule.MinBars, id):
+					out = append(out, id)
+				}
+				continue
+			}
 			switch {
-			case rule.MaxBars > 0 && pass(rule.MaxBars, id):
+			case rule.MaxBars > 0 && (passAny(rule.MaxBars, id) || unknown(rule.MaxBars, id)):
 				out, outMax = append(out, id), append(outMax, id)
-			case rule.MinBars > 0 && !pass(rule.MinBars, id):
+			case rule.MinBars > 0 && !passAny(rule.MinBars, id):
 				out = append(out, id)
 			}
 		}

@@ -126,6 +126,9 @@ func bindViews(ctx context.Context, client Client, spaceID string, views []resol
 	if err := CheckHoldingAnchors(resolved.Calendar, resolved.Bar, strategy); err != nil {
 		return Resolved{}, nil, err
 	}
+	if err := resolved.CheckAgeMarkets(); err != nil {
+		return Resolved{}, nil, err
+	}
 	longest := resolved.LongestAge()
 	for _, item := range views {
 		if bars, ok := retentionBars(item.dataset.Retention, resolved.Calendar, resolved.Bar); ok && longest > bars {

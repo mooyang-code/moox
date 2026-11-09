@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"fmt"
 	"math"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
@@ -84,7 +83,7 @@ func inRange(sel dsl.Select, ordered []string, rankOf map[string]int) []string {
 }
 
 // applyThen 在第一段选中的集合上按 select.then.score 重新排序，取 then.top 或 then.bottom 个；没写 then 时原样返回。
-// 截面函数在选中集合上计算；分数无效的标的淘汰。rejected 是第一段选中、最终没取到的标的与原因。
+// 截面函数在选中集合上计算；分数无效的标的淘汰（全部无效时这条规则本期不出目标，不影响整期）。rejected 是第一段选中、最终没取到的标的与原因。
 func applyThen(rule *dsl.CompiledRule, chosen []string, rows map[string]Row) (final []string, rejected map[string]string) {
 	then := rule.Rule.Select.Then
 	if then == nil || len(chosen) == 0 {
@@ -104,17 +103,4 @@ func applyThen(rule *dsl.CompiledRule, chosen []string, rows map[string]Row) (fi
 		ordered = ordered[:count]
 	}
 	return ordered, rejected
-}
-
-// checkThenScore 报告二次排序是否对全部选中标的都无效：与 score 相同，这说明表达式本身有问题，整期按配置错误跳过。
-func checkThenScore(chosen []string, rejected map[string]string) error {
-	if len(chosen) == 0 || len(rejected) < len(chosen) {
-		return nil
-	}
-	for _, reason := range rejected {
-		if reason == reasonThen {
-			return nil
-		}
-	}
-	return fmt.Errorf("select.then.score 对全部 %d 个选中标的都无效", len(chosen))
 }

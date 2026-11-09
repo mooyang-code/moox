@@ -149,6 +149,9 @@ func (e *ReplayEvaluator) Bind(ctx context.Context, instanceID string) (ReplayBi
 	if !resolved.SpotOnly() {
 		return ReplayBinding{}, fmt.Errorf("闭环回放第一版只支持单个现货任务的实例；这个实例的市场模式是 %s（绑定了 %s 的任务），暂不支持回放", resolved.Market, strings.Join(resolved.Markets(), "、"))
 	}
+	if err := resolved.CheckAgeMarkets(); err != nil {
+		return ReplayBinding{}, err
+	}
 	task := resolved.Primary()
 	e.mu.Lock()
 	if e.bindings == nil {
@@ -346,7 +349,11 @@ func (e *ReplayEvaluator) Evaluate(ctx context.Context, req ReplayEvaluateReques
 		}
 		return map[string]map[string]struct{}{market: aged}, nil
 	}
-	if _, err := sets.ApplyAge(ctx, resolved, []string{market}, probe); err != nil {
+	listed := make(map[string]struct{}, len(req.Rows))
+	for id := range req.Rows {
+		listed[id] = struct{}{}
+	}
+	if _, err := sets.ApplyAge(ctx, resolved, input.AgeListed{market: listed}, probe); err != nil {
 		var skip *input.SkipError
 		if errors.As(err, &skip) {
 			return skipped(skip.Reason, skip.Detail)

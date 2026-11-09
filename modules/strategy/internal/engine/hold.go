@@ -3,6 +3,7 @@ package engine
 import (
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"sort"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
@@ -32,6 +33,8 @@ type HoldState struct {
 	Entered  map[string]int64 `json:"entered,omitempty"`
 	Cooldown map[string]int64 `json:"cooldown,omitempty"`
 	Decided  int64            `json:"decided,omitempty"`
+	// Weights 是与日历同写时上一次判进出场定下的基准权重（持有标的 → 份额，预算按 1 计，含 cap）；非建仓 bar 沿用它配权。
+	Weights map[string]string `json:"weights,omitempty"`
 }
 
 // holdDecision 报告本根是否判 filter、exit、max_bars 与补位，并返回之后记下的“上次判进出场的序号”。
@@ -272,7 +275,19 @@ func evaluateHold(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous R
 	}
 	result.selected = len(held)
 	// 4. 配权：对持有集合（含冻结）按 weight 配权；冻结标的的份额由组合层保持上期目标，这里不输出。
-	weights := allocate(rankedFirst(held, rankOf), rule.Rule.Weight)
+	// 与日历同写时，配权与 holding 批次同一口径：建仓 bar（判进出场的 bar）按份额（预算按 1 计，含 cap）定下基准权重并记进状态，
+	// 其余 bar 沿用基准权重，不按本根名次重新配权；出场空出的份额留现金，到下一个建仓 bar 再分。
+	var weights map[string]quant.Decimal
+	var base map[string]string
+	if rule.Rule.Holding.IsCalendar() {
+		var err error
+		weights, base, err = holdCalendarWeights(rule, held, rankOf, decide, prior)
+		if err != nil {
+			return ruleResult{}, err
+		}
+	} else {
+		weights = allocate(rankedFirst(held, rankOf), rule.Rule.Weight)
+	}
 	short := rule.Rule.Side == dsl.SideShort
 	for _, id := range sortedIDs(weights) {
 		if _, isFrozen := sets.frozen[id]; isFrozen {
@@ -300,7 +315,7 @@ func evaluateHold(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous R
 	// 5. 状态。
 	sort.Strings(held)
 	result.state.Held = held
-	state := &HoldState{Decided: decided}
+	state := &HoldState{Decided: decided, Weights: base}
 	if len(entered) > 0 {
 		state.Entered = make(map[string]int64, len(held))
 		for _, id := range held {
@@ -336,6 +351,41 @@ func evaluateHold(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous R
 	}
 	result.items = explain.list()
 	return result, nil
+}
+
+// holdCalendarWeights 返回与日历同写时本根的权重与要记进状态的基准份额。判进出场的 bar 上按持有集合重新定份额；
+// 其余 bar 沿用上次的份额，只保留仍在持有里的标的（出场的份额留现金）。
+func holdCalendarWeights(rule *dsl.CompiledRule, held []string, rankOf map[string]int, decide bool, prior *HoldState) (map[string]quant.Decimal, map[string]string, error) {
+	weight := rule.Rule.Weight
+	base := make(map[string]string, len(held))
+	if decide || prior.Weights == nil {
+		order := rankedFirst(held, rankOf)
+		shares := baseShares(order, quant.One(), weight.Method)
+		if weight.HasCap {
+			shares = applyCapRat(order, shares, new(big.Rat).Quo(weight.Cap.Rat(), weight.Total.Rat()))
+		}
+		for id, share := range shares {
+			base[id] = share.String()
+		}
+	} else {
+		for _, id := range held {
+			if raw, ok := prior.Weights[id]; ok {
+				base[id] = raw
+			}
+		}
+	}
+	weights := make(map[string]quant.Decimal, len(base))
+	for id, raw := range base {
+		share, err := quant.Parse(raw)
+		if err != nil {
+			return nil, nil, fmt.Errorf("hold 状态里 %s 的基准权重无效：%w", id, err)
+		}
+		weights[id] = share.Mul(weight.Total)
+	}
+	if len(base) == 0 {
+		base = nil
+	}
+	return weights, base, nil
 }
 
 // holdCanEnter 判断候选能否入场：entry 为真（不写表示不限制），且 exit 不为真（同一根两者都成立时不入场）。

@@ -321,3 +321,35 @@ func TestHoldResetAfterReenable(t *testing.T) {
 	require.Empty(t, run.state.Rules["r"].Hold.Cooldown)
 	require.Equal(t, map[string]int64{"A": 102, "B": 102}, run.state.Rules["r"].Hold.Entered)
 }
+
+// 与日历同写：非建仓 bar 沿用上次判定时的基准权重。rank 配权下分数互换不翻转权重；持有标的缺数出场时，空出的份额留现金，
+// 剩下的不重新分满；下一个建仓 bar 再按持有集合重新配权。
+func TestHoldCalendarKeepsBaseWeights(t *testing.T) {
+	run := newHoldRun(t, `name: h
+rules:
+  - id: r
+    type: rank
+    score: "m"
+    select: {top: 2}
+    holding: {calendar: week, days: [1]}
+    hold: {}
+    weight: {total: 0.9, method: rank}
+portfolio: {max_missing: 1}
+`, "m", "f")
+	run.clock = &HoldingClock{Scheduled: map[int]int64{1: 100}}
+	weights, _, _ := run.step(map[string]map[string]float64{"A": {"m": 3, "f": 1}, "B": {"m": 2, "f": 1}, "C": {"m": 1, "f": 1}})
+	require.Equal(t, map[string]string{"A": "0.6", "B": "0.3"}, weights)
+	// 101：分数互换，权重不翻转。
+	weights, _, _ = run.step(map[string]map[string]float64{"A": {"m": 1, "f": 1}, "B": {"m": 3, "f": 1}, "C": {"m": 2, "f": 1}})
+	require.Equal(t, map[string]string{"A": "0.6", "B": "0.3"}, weights)
+	// 102：A 缺数出场，B 仍是 0.3，A 的份额留现金，C 不补位。
+	weights, items, decision := run.step(map[string]map[string]float64{"B": {"m": 3, "f": 1}, "C": {"m": 2, "f": 1}})
+	require.Equal(t, map[string]string{"B": "0.3"}, weights)
+	require.Equal(t, reasonNotRebalanced, items["C"].Reason)
+	assertDecimal(t, "cash", decision.Summary.Cash, "0.7")
+	// 107：下一个建仓 bar，B、C 按名次重新配权。
+	run.bar = 107
+	run.clock = &HoldingClock{Scheduled: map[int]int64{1: 107}}
+	weights, _, _ = run.step(map[string]map[string]float64{"B": {"m": 3, "f": 1}, "C": {"m": 2, "f": 1}})
+	require.Equal(t, map[string]string{"B": "0.6", "C": "0.3"}, weights)
+}

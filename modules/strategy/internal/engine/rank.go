@@ -184,9 +184,6 @@ func evaluateRank(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous R
 		eligible = inRange(sel, eligible, rankOf)
 		chosen, skipped := selectWithBuffer(eligible, rankOf, count, sel.Buffer, bufferHeld, newGroupQuota(sel.Group, eligible, frame.Rows))
 		final, rejected := applyThen(rule, chosen, frame.Rows)
-		if err := checkThenScore(chosen, rejected); err != nil {
-			return nil, err
-		}
 		for id, reason := range skipped {
 			skipReasons[id] = reason
 		}

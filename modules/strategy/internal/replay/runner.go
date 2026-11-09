@@ -699,10 +699,6 @@ func evaluateBar(ctx context.Context, program *dsl.Program, resolved input.Resol
 			return skippedDecision(state, input.SkipAmbiguousSeries, marketDetail(reader.market, multi, detail)), nil
 		}
 	}
-	markets := make([]string, 0, len(readers))
-	for _, reader := range readers {
-		markets = append(markets, reader.market)
-	}
 	probe := func(ctx context.Context, n int, ids []string) (map[string]map[string]struct{}, error) {
 		passed := make(map[string]map[string]struct{}, len(readers))
 		for _, reader := range readers {
@@ -720,7 +716,8 @@ func evaluateBar(ctx context.Context, program *dsl.Program, resolved input.Resol
 		}
 		return passed, nil
 	}
-	allPassed, err := sets.ApplyAge(ctx, resolved, markets, probe)
+	// 回放里每个市场本期有行的标的就是它列出的标的；回放没有市场整体不可用的情形。
+	allPassed, err := sets.ApplyAge(ctx, resolved, input.AgeListed(present), probe)
 	if err != nil {
 		var skip *input.SkipError
 		if errors.As(err, &skip) {

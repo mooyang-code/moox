@@ -194,3 +194,26 @@ func TestSelectThenCrossSectionOnChosen(t *testing.T) {
 	// S04 的 v=1 最小，但没进第一段；在 S01～S03 里 rank(v) 最低的是 S01。
 	require.Equal(t, []string{"S01"}, weightedIDs(decision))
 }
+
+// then.score 对第一段选出的标的全部无效（NaN）时，只让这条规则本期不出目标，不整期跳过。
+func TestSelectThenAllInvalidOnlyEmptiesRule(t *testing.T) {
+	program := compile(t, `name: s
+rules:
+  - id: r
+    type: rank
+    score: "m"
+    select: {top: 2, then: {score: "v", top: 1}}
+    weight: 0.5
+  - id: o
+    type: rank
+    score: "m"
+    select: {top: 1}
+    weight: 0.5
+portfolio: {max_missing: 1}
+`, "m", "v")
+	rows := rankedRows(3, func(int) map[string]float64 { return map[string]float64{"v": math.NaN()} })
+	decision := evaluate(t, program, frameOf(program, rows), State{})
+	assertOK(t, decision)
+	assertWeights(t, decision, map[string]string{"S01": "0.5"})
+	require.Equal(t, reasonThen+":score_invalid", findItem(t, decision, "r", "S01").Reason)
+}

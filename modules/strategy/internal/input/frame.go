@@ -406,7 +406,16 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 	}
 	began = time.Now()
 	// 每个需要的 N 在各市场各判定一次；规则按自己的上下限与 age_markets 取剔除集合（见 age.go）。
-	agePassed, err := sets.ApplyAge(ctx, resolved, markets, func(ctx context.Context, n int, ids []string) (map[string]map[string]struct{}, error) {
+	// 每个绑定市场本期列出的标的（含本期不可用的市场）：age_markets: all 与 max_age_bars 的保守口径要用。
+	listed := make(AgeListed, len(loads))
+	for _, load := range loads {
+		ids := make(map[string]struct{}, len(load.universe))
+		for id := range load.universe {
+			ids[id] = struct{}{}
+		}
+		listed[load.market] = ids
+	}
+	agePassed, err := sets.ApplyAge(ctx, resolved, listed, func(ctx context.Context, n int, ids []string) (map[string]map[string]struct{}, error) {
 		passed := make(map[string]map[string]struct{}, len(loads))
 		for _, load := range loads {
 			if load.unavailable != "" {
@@ -465,7 +474,7 @@ func (l Loader) LoadBar(ctx context.Context, spaceID string, resolved Resolved, 
 		}
 		if cleared {
 			// 不可用市场的探针结果不再作数：只在它那里通过年龄的标的，规则级也按年龄剔除记（与因子被跳过、全部失败而没做探针的市场口径一致）。
-			sets.ApplyAgePassed(resolved, markets, agePassed)
+			sets.ApplyAgePassed(resolved, listed, agePassed)
 		}
 		if err := skipWhenSelectionUnavailable(resolved, loads); err != nil {
 			return Loaded{}, err
