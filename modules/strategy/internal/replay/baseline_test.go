@@ -206,20 +206,72 @@ type baselineReplayScenario struct {
 	client func() input.Client
 	tasks  map[string]store.ReplayTask
 	hours  int
+	// check 是与金样无关的硬断言：确认场景标注的特性真的发生了。
+	check func(t *testing.T, bars []store.ReplayBar)
 }
 
 func baselineReplayScenarios() []baselineReplayScenario {
 	return []baselineReplayScenario{
 		{name: "swap_universe_pool", dsl: baselineSwapDSL, hours: 16,
 			client: func() input.Client { return newBaselineClient(baselineSwapClient()) },
-			tasks:  map[string]store.ReplayTask{"swap": swapTask}},
+			tasks:  map[string]store.ReplayTask{"swap": swapTask}, check: baselineCheckSwap},
 		{name: "dual_two_tasks", dsl: baselineDualDSL, hours: 16,
 			client: func() input.Client { return newBaselineClient(baselineDualClient()) },
-			tasks:  map[string]store.ReplayTask{"spot": spotTask, "swap": swapTask}},
+			tasks:  map[string]store.ReplayTask{"spot": spotTask, "swap": swapTask}, check: baselineCheckDual},
 		{name: "dual_unified", dsl: baselineDualDSL, hours: 16,
 			client: func() input.Client { return newBaselineClient(&unifiedClient{dualClient: baselineDualClient()}) },
-			tasks:  map[string]store.ReplayTask{"multi": uniTask}},
+			tasks:  map[string]store.ReplayTask{"multi": uniTask}, check: baselineCheckDual},
 	}
+}
+
+// baselineCheckSwap：B、C 被黑名单与排除标签挡住；白名单 include 的 D 与显式 pool 的 E 入选过；D 新上市的几期被年龄剔除；
+// 永续 A 缺价时持仓冻结；永续持仓逐期结算。
+func baselineCheckSwap(t *testing.T, bars []store.ReplayBar) {
+	t.Helper()
+	sawD, sawE := false, false
+	for hour, targets := range baselineTargetsByHour(t, bars) {
+		for key := range targets {
+			require.True(t, strings.HasSuffix(key, "|swap"), "纯永续回放只有永续目标：%s", key)
+			require.False(t, strings.HasPrefix(key, "B|") || strings.HasPrefix(key, "C|"), "第 %d 小时 B、C 被黑名单与排除标签挡住，不应入选：%v", hour, targets)
+			sawD = sawD || key == "D|swap"
+			sawE = sawE || key == "E|swap"
+		}
+	}
+	require.True(t, sawD && sawE, "白名单 include 的 D 与显式 pool 的 E 都应入选过")
+	agedOut, frozen, settled := false, false, false
+	for i, bar := range bars {
+		var summary struct {
+			Decision struct {
+				Rules map[string]struct {
+					AgedOut int `json:"aged_out"`
+				} `json:"rules"`
+			} `json:"decision"`
+		}
+		require.NoError(t, json.Unmarshal(bar.SummaryJSON, &summary))
+		agedOut = agedOut || summary.Decision.Rules["r"].AgedOut > 0
+		frozen = frozen || bar.Frozen > 0
+		if i > 0 && bar.SwapValue != 0 && bar.SwapValue != bars[i-1].SwapValue {
+			settled = true
+		}
+	}
+	require.True(t, agedOut, "永续新上市的 D 在年龄不够的几期应被剔除")
+	require.True(t, frozen, "永续 A 缺价的两根应冻结持仓")
+	require.True(t, settled, "永续持仓应逐期结算（永续名义价值随价格变化）")
+}
+
+// baselineCheckDual：B 的永续第 10 小时才满足年龄，之前不能用永续的行入选，但可以用现货的行入选（年龄按市场判断）。
+func baselineCheckDual(t *testing.T, bars []store.ReplayBar) {
+	t.Helper()
+	sawBSpot := false
+	for hour, targets := range baselineTargetsByHour(t, bars) {
+		if hour < 10 {
+			_, young := targets["B|swap"]
+			require.False(t, young, "第 %d 小时 B 的永续年龄不够，不能入选：%v", hour, targets)
+			_, spot := targets["B|spot"]
+			sawBSpot = sawBSpot || spot
+		}
+	}
+	require.True(t, sawBSpot, "B 的永续年龄不够时应改用现货的行（年龄按市场判断）")
 }
 
 // baselineReplayDump 执行一次回放，取出逐期记录与最终绩效。
@@ -269,60 +321,17 @@ func TestBaselineReplayGoldens(t *testing.T) {
 		t.Run(scenario.name, func(t *testing.T) {
 			dump, bars := baselineReplayDump(t, scenario)
 			require.Len(t, bars, scenario.hours)
+			scenario.check(t, bars)
 			results[scenario.name] = bars
 			baselineCompare(t, filepath.Join("testdata", "baseline", scenario.name+".json"), baselineJSON(t, dump))
 		})
 	}
-
-	// 与金样无关的硬断言：确认每个场景标注的特性真的发生了。
-	swapTargets := baselineTargetsByHour(t, results["swap_universe_pool"])
-	sawD, sawE, frozen := false, false, false
-	for hour, targets := range swapTargets {
-		for key := range targets {
-			require.True(t, strings.HasSuffix(key, "|swap"), "纯永续回放只有永续目标：%s", key)
-			require.False(t, strings.HasPrefix(key, "B|") || strings.HasPrefix(key, "C|"), "第 %d 小时 B、C 被黑名单与排除标签挡住，不应入选：%v", hour, targets)
-			sawD = sawD || key == "D|swap"
-			sawE = sawE || key == "E|swap"
-		}
+	// 统一数据集（一个任务）与两个任务读同样的行，逐期目标与账本应相同；只单跑其中一个子测试时不比较。
+	two, okTwo := results["dual_two_tasks"]
+	unified, okUnified := results["dual_unified"]
+	if !okTwo || !okUnified {
+		return
 	}
-	require.True(t, sawD && sawE, "白名单 include 的 D 与显式 pool 的 E 都应入选过")
-	agedOut := false
-	for _, bar := range results["swap_universe_pool"] {
-		var summary struct {
-			Decision struct {
-				Rules map[string]struct {
-					AgedOut int `json:"aged_out"`
-				} `json:"rules"`
-			} `json:"decision"`
-		}
-		require.NoError(t, json.Unmarshal(bar.SummaryJSON, &summary))
-		agedOut = agedOut || summary.Decision.Rules["r"].AgedOut > 0
-	}
-	require.True(t, agedOut, "永续新上市的 D 在年龄不够的几期应被剔除")
-	settled := false
-	for i, bar := range results["swap_universe_pool"] {
-		frozen = frozen || bar.Frozen > 0
-		if i > 0 && bar.SwapValue != 0 && bar.SwapValue != results["swap_universe_pool"][i-1].SwapValue {
-			settled = true
-		}
-	}
-	require.True(t, frozen, "永续 A 缺价的两根应冻结持仓")
-	require.True(t, settled, "永续持仓应逐期结算（永续名义价值随价格变化）")
-
-	for _, name := range []string{"dual_two_tasks", "dual_unified"} {
-		dualTargets := baselineTargetsByHour(t, results[name])
-		sawBSpot := false
-		for hour, targets := range dualTargets {
-			if hour < 10 {
-				_, young := targets["B|swap"]
-				require.False(t, young, "%s：第 %d 小时 B 的永续年龄不够，不能入选：%v", name, hour, targets)
-				_, spot := targets["B|spot"]
-				sawBSpot = sawBSpot || spot
-			}
-		}
-		require.True(t, sawBSpot, "%s：B 的永续年龄不够时应改用现货的行（年龄按市场判断）", name)
-	}
-	two, unified := results["dual_two_tasks"], results["dual_unified"]
 	require.Len(t, unified, len(two))
 	for i := range two {
 		require.Equal(t, string(two[i].TargetsJSON), string(unified[i].TargetsJSON), "第 %d 期：统一数据集与两个任务的目标应一致", i)
