@@ -108,6 +108,9 @@ func lowerNode(src *exprSource, node ast.Node, sc *scope) (*Node, error) {
 
 func resolveName(src *exprSource, node *ast.IdentifierNode, sc *scope) (*Node, error) {
 	name := node.Value
+	if name == NaNLiteral {
+		return newNaN(), nil
+	}
 	if position, ok := sc.letPos[name]; ok {
 		if position >= sc.current {
 			return nil, src.errAt(node, "引用了在它之后（或它自身）定义的 let %s；let 只能引用前面定义的中间量", name)
@@ -163,7 +166,19 @@ func lowerCall(src *exprSource, call *ast.CallNode, sc *scope) (*Node, error) {
 		return nil, src.errAt(call, "函数 %s 需要 %d～%d 个参数，写了 %d 个", fn.Name, required, len(fn.Args), len(call.Arguments))
 	}
 	args := make([]*Node, 0, len(call.Arguments))
-	for _, argument := range call.Arguments {
+	for i, argument := range call.Arguments {
+		if fn.Args[i].Kind == ArgSubject {
+			// 字符串字面量只在这个位置截获；其余位置照常编译，遇到字符串由 rejectNode 拒绝。
+			literal, ok := argument.(*ast.StringNode)
+			if !ok {
+				return nil, src.errAt(argument, "函数 %s 的参数 %s 必须是标的 ID 的字符串字面量，例如 \"BTC-USDT\"", fn.Name, fn.Args[i].Name)
+			}
+			if err := ValidateSubjectLiteral(literal.Value); err != nil {
+				return nil, src.errAt(argument, "函数 %s 的参数 %s：%v", fn.Name, fn.Args[i].Name, err)
+			}
+			args = append(args, newSubject(literal.Value))
+			continue
+		}
 		arg, err := lower(src, argument, sc)
 		if err != nil {
 			return nil, err
@@ -201,6 +216,9 @@ func apply(src *exprSource, node ast.Node, fn *Function, args []*Node, argNodes 
 		}
 		arg, at := args[i], argNodes[i]
 		switch spec.Kind {
+		case ArgSubject:
+			result.Subject = arg.Subject
+			continue
 		case ArgNumber:
 			if !arg.Kind.isNumber() {
 				return nil, src.errAt(at, "%s%s 需要数值，得到%s", label, spec.Name, arg.Kind.describe())
@@ -224,6 +242,9 @@ func apply(src *exprSource, node ast.Node, fn *Function, args []*Node, argNodes 
 				return nil, src.errAt(at, "%s%s 需要布尔序列，得到%s", label, spec.Name, arg.Kind.describe())
 			}
 		case ArgWindow, ArgInteger:
+			if arg.Kind == KindNumberConst && math.IsNaN(arg.Value) {
+				return nil, src.errAt(at, "%s%s 不能是 nan：这个位置必须是 %s～%s 的整数", label, spec.Name, formatFloat(spec.Min), formatFloat(spec.Max))
+			}
 			if arg.Op == OpParam {
 				param := sc.params[arg.Param]
 				if !param.IsInt() || param.Min < spec.Min || param.Max > spec.Max {
@@ -241,7 +262,13 @@ func apply(src *exprSource, node ast.Node, fn *Function, args []*Node, argNodes 
 			result.IntParams = append(result.IntParams, "")
 			continue
 		case ArgConstant:
+			if arg.Kind == KindNumberConst && math.IsNaN(arg.Value) {
+				return nil, src.errAt(at, "%s%s 不能是 nan：这个位置必须是 %s～%s 之间的数", label, spec.Name, formatFloat(spec.Min), formatFloat(spec.Max))
+			}
 			if arg.Op == OpParam {
+				if spec.LiteralOnly {
+					return nil, src.errAt(at, "%s%s 只能写字面量，不能使用参数 %s（参数可以按标的取不同的值）", label, spec.Name, arg.Param)
+				}
 				param := sc.params[arg.Param]
 				if param.Min < spec.Min || param.Max > spec.Max {
 					return nil, src.errAt(at, "%s%s 使用参数 %s 时，参数范围必须在 %s～%s 内", label, spec.Name, param.Name,
@@ -252,6 +279,9 @@ func apply(src *exprSource, node ast.Node, fn *Function, args []*Node, argNodes 
 				continue
 			}
 			if arg.Kind != KindNumberConst || arg.Value < spec.Min || arg.Value > spec.Max {
+				if spec.LiteralOnly {
+					return nil, src.errAt(at, "%s%s 必须是 %s～%s 之间的字面量", label, spec.Name, formatFloat(spec.Min), formatFloat(spec.Max))
+				}
 				return nil, src.errAt(at, "%s%s 必须是 %s～%s 之间的常量或单个参数", label, spec.Name, formatFloat(spec.Min), formatFloat(spec.Max))
 			}
 			result.Floats = append(result.Floats, arg.Value)
@@ -330,22 +360,32 @@ func fold(src *exprSource, node ast.Node, fn *Function, args []*Node) (*Node, bo
 		return args[2], true, nil
 	}
 	values := make([]float64, len(args))
-	allInt := true
+	allInt, nanLiteral := true, false
 	for i, arg := range args {
 		if !arg.Kind.isConst() {
 			return nil, false, nil
 		}
 		values[i] = arg.Value
 		allInt = allInt && arg.IsInt
+		nanLiteral = nanLiteral || arg.nanLiteral
 	}
 	value := Scalar(fn.Name)(values)
 	if math.IsNaN(value) {
-		return nil, false, src.errAt(node, "常量运算的结果不是有限数（例如除以 0、对负数取对数）")
+		if !nanLiteral {
+			return nil, false, src.errAt(node, "常量运算的结果不是有限数（例如除以 0、对负数取对数）")
+		}
+		if fn.Result == ResultBool {
+			// 布尔常量只有真、假两个值；结果为 NaN 的条件（例如 nan > 0）不折叠，留到运行时按三值逻辑求值。
+			return nil, false, nil
+		}
+		nanNode := newNaN()
+		return nanNode, true, nil
 	}
 	if fn.Result == ResultBool {
 		return newBool(value != 0), true, nil
 	}
-	isInt := allInt && integerPreserving[fn.Name] && value == math.Trunc(value) && math.Abs(value) <= maxIntegerParam
+	isInt := (integerResult[fn.Name] || allInt && integerPreserving[fn.Name]) && value == math.Trunc(value) &&
+		math.Abs(value) <= maxIntegerParam
 	if fn.Name == "where" {
 		chosen := args[2]
 		if args[0].Value != 0 {
@@ -381,6 +421,30 @@ type Factor struct {
 	Type     FactorType
 	// UDFs 是引用的自定义算子版本，按名称排序、去重。
 	UDFs []UDFRef
+	// RefSubjects 是 cs_ref 引用的参考标的，排序、去重；加成员与启用任务时要求它们在任务的标的范围内。
+	RefSubjects []string
+}
+
+// MaxSubjectLiteralRunes 是标的 ID 字面量的最大长度。
+const MaxSubjectLiteralRunes = 64
+
+// ValidateSubjectLiteral 校验标的 ID 字面量的写法：非空，只含字母、数字和 . _ - : 四种符号，最长 MaxSubjectLiteralRunes 个字符。
+// 只检查写法；标的是否存在、是否在任务的标的范围内，由加成员与启用任务时校验。
+func ValidateSubjectLiteral(subject string) error {
+	if subject == "" {
+		return fmt.Errorf("标的 ID 不能为空")
+	}
+	if len(subject) > MaxSubjectLiteralRunes {
+		return fmt.Errorf("标的 ID %q 超过 %d 个字符", subject, MaxSubjectLiteralRunes)
+	}
+	for _, r := range subject {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '_', r == '-', r == ':':
+		default:
+			return fmt.Errorf("标的 ID %q 含有不允许的字符 %q：只能包含字母、数字和 . _ - :", subject, r)
+		}
+	}
+	return nil
 }
 
 // Param 返回名为 name 的参数声明。
@@ -536,8 +600,11 @@ func CompileSpecWith(spec *Spec, env UDFEnv) (*Factor, error) {
 			return nil, parsed.src.errAt(parsed.root, "输出必须依赖输入列，不能是常量")
 		case root.Kind == KindBool || root.Kind == KindBoolConst:
 			return nil, parsed.src.errAt(parsed.root, "输出必须是数值；布尔值请用 where(c, 1, 0) 转换")
-		case root.Scalar:
+		case root.Scalar && root.hasParam():
 			return nil, parsed.src.errAt(parsed.root, "输出必须依赖输入列，不能只由参数决定")
+		case root.Scalar:
+			// 没有折叠成常量的常量运算（例如结果为 NaN 的条件 nan > 0）。
+			return nil, parsed.src.errAt(parsed.root, "输出必须依赖输入列，不能只由常量决定")
 		}
 		total = addSize(total, root.size)
 		if total > MaxFactorNodes {
@@ -551,6 +618,7 @@ func CompileSpecWith(spec *Spec, env UDFEnv) (*Factor, error) {
 
 func (f *Factor) derive() {
 	columns := map[string]bool{}
+	subjects := map[string]bool{}
 	udfs := map[string]string{}
 	visited := map[*Node]bool{}
 	var walk func(*Node)
@@ -561,6 +629,9 @@ func (f *Factor) derive() {
 		visited[node] = true
 		if node.Op == OpColumn {
 			columns[node.Column] = true
+		}
+		if node.Subject != "" {
+			subjects[node.Subject] = true
 		}
 		if udf := node.Function.UDF(); udf != nil {
 			udfs[udf.Name] = udf.Hash
@@ -583,11 +654,37 @@ func (f *Factor) derive() {
 		f.InputColumns = append(f.InputColumns, column)
 	}
 	sort.Strings(f.InputColumns)
+	f.RefSubjects = nil
+	for subject := range subjects {
+		f.RefSubjects = append(f.RefSubjects, subject)
+	}
+	sort.Strings(f.RefSubjects)
 	f.UDFs = nil
 	for name, hash := range udfs {
 		f.UDFs = append(f.UDFs, UDFRef{Name: name, Hash: hash})
 	}
 	sort.Slice(f.UDFs, func(i, j int) bool { return f.UDFs[i].Name < f.UDFs[j].Name })
+}
+
+// CrossSectionPoints 估算每期的截面计算量：计算一个目标时刻时，全部截面算子节点的需求区间长度之和（参数按声明范围取最坏情况）。
+// 没有时序套截面时每个截面节点只算目标时刻这一个截面，长度为 1；ts_mean(cs_rank(x), 20) 要算 20 个历史截面。
+// 只用于 factor-expr check 的提示，不进入规范文本与定义哈希。
+func (f *Factor) CrossSectionPoints() int {
+	program, err := NewProgram([]ProgramInput{{Key: "check", Factor: f}})
+	if err != nil {
+		return 0
+	}
+	need, err := program.Need(0, 0)
+	if err != nil {
+		return 0
+	}
+	points := 0
+	for i, node := range program.Nodes {
+		if node.Function != nil && node.Function.Category == CategoryCrossSection {
+			points += need[i].Len()
+		}
+	}
+	return points
 }
 
 // SingleOutput 报告因子是否是单输出写法（output）：此时输出的 Name 为空，输出名就是因子 ID。

@@ -24,6 +24,43 @@ func mean(w []float64) (float64, bool) {
 	return exactSum(w) / float64(len(w)), false
 }
 
+func meanValue(w []float64) float64 { m, _ := mean(w); return m }
+
+func stdDev(w []float64) float64 { return math.Sqrt(variance(w)) }
+
+// zscoreLast 是最新一个值在窗口内的标准分 (x − mean) / std；常数窗口或标准差为 0 时为 NaN。
+func zscoreLast(w []float64) float64 {
+	m, constant := mean(w)
+	if constant {
+		return nan
+	}
+	sd := math.Sqrt(variance(w))
+	if sd == 0 {
+		return nan
+	}
+	return (w[len(w)-1] - m) / sd
+}
+
+// product 是窗口内连乘，从最老到最新。
+func product(w []float64) float64 {
+	result := 1.0
+	for _, v := range w {
+		result *= v
+	}
+	return result
+}
+
+// countTrue 是窗口内条件为真（非 0）的个数；输入是布尔（1、0），NaN 由调用方先排除。
+func countTrue(w []float64) float64 {
+	count := 0.0
+	for _, v := range w {
+		if v != 0 {
+			count++
+		}
+	}
+	return count
+}
+
 // variance 是样本方差（ddof=1），两遍法；常数窗口精确为 0。
 func variance(w []float64) float64 {
 	m, constant := mean(w)
@@ -119,6 +156,11 @@ func argExtreme(better func(a, b float64) bool) func(w []float64) float64 {
 	}
 }
 
+var (
+	argMax = argExtreme(func(a, b float64) bool { return a > b })
+	argMin = argExtreme(func(a, b float64) bool { return a < b })
+)
+
 // decayLinear 是线性衰减加权平均：最新一根权重为 n，最老一根为 1。
 func decayLinear(n int) func(w []float64) float64 {
 	total := float64(n) * float64(n+1) / 2
@@ -200,49 +242,58 @@ func median(sorted []float64) float64 {
 func sortedWindow(n int, fn func(sorted []float64) float64) SeriesKernel {
 	return func(out []float64, outStart int, in []Series) {
 		x := in[0]
-		sorted := make([]float64, 0, n)
-		nans := 0
-		add := func(v float64) {
-			if math.IsNaN(v) {
-				nans++
-				return
-			}
-			v += 0 // 把 −0 归一成 +0，移出时按值查找才不会删错
-			i := sort.SearchFloat64s(sorted, v)
-			sorted = append(sorted, 0)
-			copy(sorted[i+1:], sorted[i:])
-			sorted[i] = v
-		}
-		remove := func(v float64) {
-			if math.IsNaN(v) {
-				nans--
-				return
-			}
-			v += 0
-			i := sort.SearchFloat64s(sorted, v)
-			sorted = append(sorted[:i], sorted[i+1:]...)
-		}
-		// 第一个窗口一次性收集、排序（O(w log w)）；逐个插入在常数输入时每次都插在最前面，是 O(w²)。
-		for t := outStart - n + 1; t <= outStart; t++ {
-			if v := x.At(t); math.IsNaN(v) {
-				nans++
-			} else {
-				sorted = append(sorted, v+0)
-			}
-		}
-		sort.Float64s(sorted)
+		window := newSortedWindow(x, outStart, n)
 		for i := range out {
 			if i > 0 {
-				t := outStart + i
-				remove(x.At(t - n))
-				add(x.At(t))
+				window.slide(x, outStart+i, n)
 			}
-			if nans > 0 {
+			if window.nans > 0 {
 				out[i] = nan
 				continue
 			}
-			out[i] = factorexpr.Finite(fn(sorted))
+			out[i] = factorexpr.Finite(fn(window.sorted))
 		}
+	}
+}
+
+// sortedValues 是一个窗口里非 NaN 值的有序多重集合与 NaN 个数。
+type sortedValues struct {
+	sorted []float64
+	nans   int
+}
+
+// newSortedWindow 收集以 outStart 结尾、长度为 n 的第一个窗口：一次性收集、排序（O(w log w)）；逐个插入在常数输入时
+// 每次都插在最前面，是 O(w²)。−0 归一成 +0，移出时按值查找才不会删错。
+func newSortedWindow(x Series, outStart, n int) *sortedValues {
+	window := &sortedValues{sorted: make([]float64, 0, n)}
+	for t := outStart - n + 1; t <= outStart; t++ {
+		if v := x.At(t); math.IsNaN(v) {
+			window.nans++
+		} else {
+			window.sorted = append(window.sorted, v+0)
+		}
+	}
+	sort.Float64s(window.sorted)
+	return window
+}
+
+// slide 把窗口推进到以 t 结尾：移出 t−n，移入 t。
+func (w *sortedValues) slide(x Series, t, n int) {
+	if v := x.At(t - n); math.IsNaN(v) {
+		w.nans--
+	} else {
+		v += 0
+		i := sort.SearchFloat64s(w.sorted, v)
+		w.sorted = append(w.sorted[:i], w.sorted[i+1:]...)
+	}
+	if v := x.At(t); math.IsNaN(v) {
+		w.nans++
+	} else {
+		v += 0
+		i := sort.SearchFloat64s(w.sorted, v)
+		w.sorted = append(w.sorted, 0)
+		copy(w.sorted[i+1:], w.sorted[i:])
+		w.sorted[i] = v
 	}
 }
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 因子表达式离线工具（packages/factorexpr/cmd/factorexpr）的入口：在 Skill 所在仓库里构建，再在调用方的工作目录运行，
 # 相对路径按调用方的工作目录解析。用法见 references/factor-dsl.md：
-#   factor-expr.sh functions [--json]
+#   factor-expr.sh functions [--json | --markdown]
 #   factor-expr.sh check --library lib.yaml [--factor-id ID]
 #   factor-expr.sh eval --library lib.yaml --factor-id ID --input bars.csv --freq 1m --output dsl.csv
 set -euo pipefail

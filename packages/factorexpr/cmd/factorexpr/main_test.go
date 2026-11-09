@@ -192,3 +192,96 @@ func TestFunctionsListsRegistry(t *testing.T) {
 		t.Fatalf("ts_mean args = %+v", names["ts_mean"].Args)
 	}
 }
+
+// check 输出 cross_section_points：各截面算子节点的需求区间长度之和。时序因子没有这一项（为 0，省略）；单层截面为 1；
+// 时序套截面为外层窗口长度；两处嵌套时把每一层截面的需求区间长度相加，参数按声明范围取最坏情况。
+func TestCheckReportsCrossSectionPoints(t *testing.T) {
+	library := writeFile(t, "lib.yaml", `- factor_id: plain
+  name: 时序
+  spec: |
+    output: ts_mean(close, 5)
+- factor_id: single
+  name: 单层截面
+  spec: |
+    output: cs_rank(close) + cs_mean(close)
+- factor_id: over
+  name: 时序套截面
+  spec: |
+    output: ts_mean(cs_rank(close), 20)
+- factor_id: nested
+  name: 两处嵌套
+  spec: |
+    output: ts_mean(cs_rank(ts_mean(cs_rank(close), 5)), 20)
+- factor_id: param
+  name: 参数窗口
+  spec: |
+    params: {w: {type: int, min: 2, max: 30, default: 10}}
+    output: ts_max(cs_zscore(close), w)
+`)
+	var out bytes.Buffer
+	if err := run([]string{"check", "--library", library}, &out); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]int{"plain": 0, "single": 2, "over": 20, "nested": 20 + 24, "param": 30}
+	for _, line := range strings.Split(strings.TrimSpace(out.String()), "\n") {
+		var result checkResult
+		if err := json.Unmarshal([]byte(line), &result); err != nil {
+			t.Fatal(err)
+		}
+		if result.CrossSectionPoints != want[result.FactorID] {
+			t.Errorf("%s: cross_section_points = %d, want %d", result.FactorID, result.CrossSectionPoints, want[result.FactorID])
+		}
+		if result.FactorID == "plain" && strings.Contains(line, "cross_section_points") {
+			t.Errorf("时序因子不应输出 cross_section_points：%s", line)
+		}
+	}
+}
+
+// functions 列出聚合广播类截面函数，类别仍是 cross_section，带 broadcast 标记；cs_ref 的标的参数类型是 subject。
+func TestFunctionsMarksBroadcast(t *testing.T) {
+	var out bytes.Buffer
+	if err := run([]string{"functions", "--json"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	var infos []functionInfo
+	if err := json.Unmarshal(out.Bytes(), &infos); err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]functionInfo{}
+	for _, info := range infos {
+		byName[info.Name] = info
+	}
+	if info := byName["cs_mean"]; info.Category != "cross_section" || !info.Broadcast {
+		t.Fatalf("cs_mean = %+v", info)
+	}
+	if info := byName["cs_rank"]; info.Category != "cross_section" || info.Broadcast {
+		t.Fatalf("cs_rank = %+v", info)
+	}
+	if args := byName["cs_ref"].Args; len(args) != 2 || args[1].Kind != "subject" || args[1].Min != nil {
+		t.Fatalf("cs_ref args = %+v", args)
+	}
+}
+
+// functions --markdown 输出函数清单表格（factor-dsl.md 的函数清单由它生成）：每个函数一行，竖线转义。
+func TestFunctionsMarkdown(t *testing.T) {
+	var out bytes.Buffer
+	if err := run([]string{"functions", "--markdown"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != len(describeFunctions())+2 || lines[0] != "| 类别 | 函数 | 参数 | 回看 | 说明 |" {
+		t.Fatalf("markdown = %s", out.String())
+	}
+	for _, want := range []string{
+		"| 截面（聚合广播） | `cs_quantile` | x（序列）、q（常量 0～1） |",
+		"| 时序 | `pct_change` | x（序列）、k（常量 1～100000，可选，默认 1） |",
+		"sign(x) · \\|x\\|^e",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("markdown lacks %q", want)
+		}
+	}
+	if err := run([]string{"functions", "--json", "--markdown"}, &out); err == nil {
+		t.Fatal("--json 与 --markdown 同时给出应报错")
+	}
+}

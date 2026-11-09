@@ -218,3 +218,219 @@ func TestUnusedLetIsAllowedButChecked(t *testing.T) {
 		t.Fatal("an invalid unused let should still be rejected")
 	}
 }
+
+// nan 是空值常量：可以写在数值位置（where 的分支、fill_nan 的取值、运算），不能写在窗口、位移、分位数等编译期位置，
+// 也不能用作参数名或 let 名；不含 nan 字面量的常量运算算出 NaN 仍然报错。
+func TestNaNLiteral(t *testing.T) {
+	valid := []struct {
+		expression, canonical string
+	}{
+		{`where(close > open, close, nan)`, "where(gt(close,open),close,nan)"},
+		{`fill_nan(close, nan)`, "fill_nan(close,nan)"},
+		{`close + nan`, "add(close,nan)"},
+		{`close + (nan + 1)`, "add(close,nan)"},
+		{`cs_rank(where(close > 0, close, nan))`, "cs_rank(where(gt(close,0),close,nan))"},
+		{`where(nan > 0, close, open)`, "where(gt(nan,0),close,open)"},
+		{`where(is_nan(nan), close, open)`, "close"},
+		{`ts_mean(close, ceil(7.5))`, "ts_mean(close,8)"},
+		{`ts_mean(close, round(2.5))`, "ts_mean(close,3)"},
+	}
+	for _, tc := range valid {
+		factor, err := Compile(outputSpec(tc.expression))
+		if err != nil {
+			t.Fatalf("%s: %v", tc.expression, err)
+		}
+		if got := factor.Outputs[0].Root.Canonical(); got != tc.canonical {
+			t.Errorf("%s: canonical = %s, want %s", tc.expression, got, tc.canonical)
+		}
+	}
+	invalid := []struct {
+		name, text, want string
+	}{
+		{"window", outputSpec(`ts_mean(close, nan)`), "参数 n 不能是 nan"},
+		{"folded window", outputSpec(`ts_mean(close, nan + 1)`), "参数 n 不能是 nan"},
+		{"shift", outputSpec(`delay(close, nan)`), "参数 k 不能是 nan"},
+		{"quantile", outputSpec(`ts_quantile(close, 20, nan)`), "参数 q 不能是 nan"},
+		{"constant output", outputSpec(`nan`), "不能是常量"},
+		{"zero over zero", outputSpec(`close + 0 / 0`), "常量运算的结果不是有限数"},
+		{"constant condition output", outputSpec(`where(nan > 0, 1, 0)`), "不能只由常量决定"},
+		{"param name", "params: {nan: {type: int, min: 1, max: 9, default: 5}}\noutput: close\n", "保留字"},
+		{"let name", "let:\n  nan: close\noutput: close\n", "保留字"},
+		{"called as function", outputSpec(`nan(close)`), "未知的函数 nan"},
+	}
+	for _, tc := range invalid {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Compile(tc.text)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want containing %q", err, tc.want)
+			}
+		})
+	}
+	// 不同写法得到同一个 NaN 常量：规范文本相同（定义哈希相同）。
+	a := mustCompile(t, outputSpec(`close + nan`)).CanonicalText()
+	b := mustCompile(t, outputSpec(`close + (nan * 2)`)).CanonicalText()
+	if a != b {
+		t.Fatalf("canonical differs: %q vs %q", a, b)
+	}
+}
+
+// 聚合广播类截面函数的编译期检查：cs_quantile 的 q 只收 0～1 的字面量，cs_count 只收布尔序列，cs_ref 的标的只收字符串字面量。
+func TestAggregateChecks(t *testing.T) {
+	valid := []struct {
+		expression, canonical string
+	}{
+		{`cs_quantile(close, 0.9)`, "cs_quantile(close,0.9)"},
+		{`cs_count(close > open)`, "cs_count(gt(close,open))"},
+		{`close - cs_median(close)`, "sub(close,cs_median(close))"},
+		{`cs_ref(close, "BTC-USDT")`, `cs_ref(close,"BTC-USDT")`},
+		{`cs_ref(close, "600519.XSHG")`, `cs_ref(close,"600519.XSHG")`},
+		{`c and cs_count(c) <= ceil(cs_count(close > 0) * 0.04)`, ""},
+	}
+	for _, tc := range valid {
+		text := outputSpec(tc.expression)
+		if strings.HasPrefix(tc.expression, "c and") {
+			text = "let:\n  c: close > open\noutput: where(" + tc.expression + ", 1, 0)\n"
+		}
+		factor, err := Compile(text)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.expression, err)
+		}
+		if factor.Type != FactorTypeCrossSection {
+			t.Errorf("%s: type = %s", tc.expression, factor.Type)
+		}
+		if tc.canonical != "" {
+			if got := factor.Outputs[0].Root.Canonical(); got != tc.canonical {
+				t.Errorf("%s: canonical = %s, want %s", tc.expression, got, tc.canonical)
+			}
+		}
+	}
+	invalid := []struct {
+		name, text, want string
+	}{
+		{"quantile param", "params: {q: {type: float, min: 0, max: 1, default: 0.5}}\noutput: cs_quantile(close, q)\n", "只能写字面量，不能使用参数 q"},
+		{"quantile out of range", outputSpec(`cs_quantile(close, 1.5)`), "0～1 之间的字面量"},
+		{"quantile nan", outputSpec(`cs_quantile(close, nan)`), "不能是 nan"},
+		{"quantile series", outputSpec(`cs_quantile(close, volume)`), "0～1 之间的字面量"},
+		{"count number", outputSpec(`cs_count(close)`), "需要布尔序列"},
+		{"count constant", outputSpec(`cs_count(true) + close`), "必须依赖输入列"},
+		{"mean constant", outputSpec(`cs_mean(1) + close`), "必须依赖输入列"},
+		{"mean bool", outputSpec(`cs_mean(close > 1)`), "需要数值序列"},
+		{"ref identifier", outputSpec(`cs_ref(close, btc)`), "必须是标的 ID 的字符串字面量"},
+		{"ref number", outputSpec(`cs_ref(close, 1)`), "必须是标的 ID 的字符串字面量"},
+		{"ref empty", outputSpec(`cs_ref(close, "")`), "标的 ID 不能为空"},
+		{"ref bad character", outputSpec(`cs_ref(close, "BTC USDT")`), "不允许的字符"},
+		{"ref too long", outputSpec(`cs_ref(close, "` + strings.Repeat("A", MaxSubjectLiteralRunes+1) + `")`), "超过 64 个字符"},
+		{"ref missing subject", outputSpec(`cs_ref(close)`), "需要 2 个参数"},
+		{"string elsewhere", outputSpec(`cs_mean("BTC-USDT")`), "只有 cs_ref 的标的参数可以写字符串"},
+		{"string in let", "let:\n  s: '\"BTC-USDT\"'\noutput: cs_ref(close, s)\n", "不允许使用字符串"},
+	}
+	for _, tc := range invalid {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Compile(tc.text)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want containing %q", err, tc.want)
+			}
+		})
+	}
+	// 参考标的进入规范文本（定义哈希）与 RefSubjects；不同参考标的的两个 cs_ref 是不同的节点。
+	factor := mustCompile(t, "outputs:\n  a: cs_ref(close, \"ETH-USDT\")\n  b: cs_ref(close, \"BTC-USDT\") + cs_ref(close, \"ETH-USDT\")\n")
+	if got := strings.Join(factor.RefSubjects, ","); got != "BTC-USDT,ETH-USDT" {
+		t.Fatalf("RefSubjects = %s", got)
+	}
+	if !strings.Contains(factor.CanonicalText(), `add(cs_ref(close,"BTC-USDT"),cs_ref(close,"ETH-USDT"))`) {
+		t.Fatalf("canonical = %s", factor.CanonicalText())
+	}
+	program, err := NewProgram([]ProgramInput{{FactorID: "f", Factor: factor}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	refs := 0
+	for _, node := range program.Nodes {
+		if node.Op == "cs_ref" {
+			refs++
+		}
+	}
+	if refs != 2 {
+		t.Fatalf("program has %d cs_ref nodes, want 2 (same subject shared, different subjects kept apart)", refs)
+	}
+	if mustCompile(t, outputSpec(`ts_mean(close, 5)`)).RefSubjects != nil {
+		t.Fatal("RefSubjects should be empty without cs_ref")
+	}
+}
+
+// 事件记忆的回看是 L(x)+n−1（多个序列参数取最大的 L）；c 只收布尔序列，n 只收窗口常量。
+func TestEventMemoryChecks(t *testing.T) {
+	for expression, lookback := range map[string]int{
+		`ts_last_valid(close, 10)`:                                 10,
+		`ts_bars_since(close > open, 10)`:                          10,
+		`ts_value_when(close > open, delay(close, 3), 10)`:         13,
+		`ts_bars_since(ts_mean(close, 5) > open, 1)`:               5,
+		`fill_nan(ts_last_valid(where(close > 1, 1, nan), 20), 0)`: 20,
+	} {
+		if got := mustCompile(t, outputSpec(expression)).Lookback; got != lookback {
+			t.Errorf("%s: lookback = %d, want %d", expression, got, lookback)
+		}
+	}
+	for expression, want := range map[string]string{
+		`ts_bars_since(close, 10)`:            "需要布尔序列",
+		`ts_value_when(close, close, 10)`:     "需要布尔序列",
+		`ts_value_when(close > open, 1, 10)`:  "必须依赖输入列",
+		`ts_last_valid(close, 0)`:             "1～100000 的整数常量",
+		`ts_last_valid(close, nan)`:           "不能是 nan",
+		`ts_bars_since(close > open, 100001)`: "1～100000 的整数常量",
+	} {
+		if _, err := Compile(outputSpec(expression)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: err = %v, want containing %q", expression, err, want)
+		}
+	}
+}
+
+// 第 1 期新函数的非法写法：宽松窗口的 m（大于 n、低于严格版的下限、用参数时的联合约束）、类型、q 的范围；取整与聚合广播函数的参数类型。
+func TestNewFunctionsRejectInvalidArguments(t *testing.T) {
+	cases := []struct {
+		text, want string
+	}{
+		{outputSpec(`ts_sum_relaxed(close, 5, 6)`), "m 不能大于 n"},
+		{outputSpec(`ts_median_relaxed(close, 5, 6)`), "m 不能大于 n"},
+		{outputSpec(`ts_quantile_relaxed(close, 5, 0.5, 6)`), "m 不能大于 n"},
+		{outputSpec(`ts_corr_relaxed(close, volume, 5, 6)`), "m 不能大于 n"},
+		{outputSpec(`ts_var_relaxed(close, 20, 1)`), "2～100000"},
+		{outputSpec(`ts_zscore_relaxed(close, 20, 1)`), "2～100000"},
+		{outputSpec(`ts_skew_relaxed(close, 20, 2)`), "3～100000"},
+		{outputSpec(`ts_kurt_relaxed(close, 20, 3)`), "4～100000"},
+		{outputSpec(`ts_corr_relaxed(close, volume, 20, 1)`), "2～100000"},
+		{outputSpec(`ts_cov_relaxed(close, volume, 20, 1)`), "2～100000"},
+		{outputSpec(`ts_rank_relaxed(close, 20, 0)`), "1～100000"},
+		{outputSpec(`ts_count_relaxed(close, 5, 1)`), "需要布尔序列"},
+		{outputSpec(`ts_count_relaxed(true, 5, 1) + close`), "必须依赖输入列"},
+		{outputSpec(`ts_cov_relaxed(close, 1, 20, 3)`), "必须依赖输入列"},
+		{outputSpec(`ts_argmax_relaxed(close, 20)`), "需要 3 个参数"},
+		{outputSpec(`ts_quantile_relaxed(close, 20, 1.5, 3)`), "0～1 之间的常量"},
+		{outputSpec(`ts_quantile_relaxed(close, 20, nan, 3)`), "不能是 nan"},
+		{outputSpec(`ts_product_relaxed(close, 20, nan)`), "不能是 nan"},
+		{"params: {m: {type: int, min: 1, max: 30, default: 25}}\noutput: ts_sum_relaxed(close, 20, m)\n", "m 不能大于 n"},
+		{outputSpec(`floor(close > 0)`), "需要数值"},
+		{outputSpec(`ceil(true) + close`), "需要数值"},
+		{outputSpec(`round()`), "需要 1 个参数"},
+	}
+	for _, aggregate := range []string{"cs_sum", "cs_std", "cs_median", "cs_min", "cs_max", "cs_mean"} {
+		cases = append(cases,
+			struct{ text, want string }{outputSpec(aggregate + `(2) + close`), "必须依赖输入列"},
+			struct{ text, want string }{outputSpec(aggregate + `(close > open)`), "需要数值序列"},
+			struct{ text, want string }{outputSpec(aggregate + `(close, 2)`), "需要 1 个参数"})
+	}
+	for _, tc := range cases {
+		_, err := Compile(tc.text)
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%q: err = %v, want containing %q", tc.text, err, tc.want)
+		}
+	}
+	// m 用参数且声明范围的上限超过 n：编译时按默认值检查；默认值合法时，提交的取值仍按联合约束检查。
+	factor := mustCompile(t, "params: {m: {type: int, min: 1, max: 30, default: 5}}\noutput: ts_sum_relaxed(close, 20, m)\n")
+	if err := factor.CheckParams(map[string]float64{"m": 25}); err == nil || !strings.Contains(err.Error(), "m 不能大于 n") {
+		t.Fatalf("CheckParams(m=25) = %v", err)
+	}
+	if err := factor.CheckParams(map[string]float64{"m": 20}); err != nil {
+		t.Fatalf("CheckParams(m=20) = %v", err)
+	}
+}

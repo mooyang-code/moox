@@ -109,6 +109,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config) (_ *Runtime,
 		catalog.WithReadyRecorder(hub.SetResultReady),
 		catalog.WithUDFVerifier(catalog.UDFVerifier{Runtime: verifyRuntime, Conformance: factorudf.ConformanceOptions{Timeout: udfVerifyTimeout}}),
 		catalog.WithEngineView(hub.Engine),
+		catalog.WithRefSubjectSource(storage),
 	)
 	fetchModule := func(ctx context.Context, hash string) ([]byte, error) {
 		_, wasm, err := catalogService.UdfModule(ctx, hash)

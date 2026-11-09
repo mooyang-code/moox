@@ -247,6 +247,9 @@ func runtimeKey(node *factorexpr.ProgramNode, alias []int, digests, universes ma
 	for _, arg := range node.Args {
 		b.WriteString(strconv.Itoa(alias[arg]) + ",")
 	}
+	if node.Subject != "" {
+		b.WriteString(";s=" + strconv.Quote(node.Subject))
+	}
 	b.WriteByte(';')
 	for i, value := range node.Ints {
 		if slot := node.IntParams[i]; slot != "" {
@@ -411,6 +414,9 @@ func (r *runner) compute(index int, node *factorexpr.ProgramNode) error {
 			}
 		})
 	case factorexpr.CategoryCrossSection:
+		if node.Function.Broadcast {
+			return r.computeBroadcast(node, args[0], out, interval)
+		}
 		kernel := ops.CrossKernel(node.Op)
 		if kernel == nil {
 			return fmt.Errorf("算子 %s 没有截面内核", node.Op)
@@ -445,6 +451,48 @@ func (r *runner) compute(index int, node *factorexpr.ProgramNode) error {
 		})
 	}
 	return fmt.Errorf("算子 %s 的类别未知", node.Op)
+}
+
+// computeBroadcast 计算聚合广播类截面节点：每个时刻、每个 series_tag 组在成员标的范围之内算出一个统计量，写给组内范围之内的
+// 每一行（包括输入为 NaN 的行，以及这一刻没有源行的序列）；范围之外的行为 NaN。
+func (r *runner) computeBroadcast(node *factorexpr.ProgramNode, arg values, out values, interval factorexpr.Interval) error {
+	kernel := ops.AggregateKernel(node.Op, node.Floats, node.Subject)
+	if kernel == nil {
+		return fmt.Errorf("算子 %s 没有聚合内核", node.Op)
+	}
+	length := interval.Len()
+	mask := r.universes[node.Universe]
+	// 每组范围之内的序列与标的只取决于掩码，与时刻无关，先算好。
+	members := make([][]int, len(r.panel.groups))
+	subjects := make([][]string, len(r.panel.groups))
+	for g, group := range r.panel.groups {
+		for _, s := range group {
+			if mask != nil && !mask[s] {
+				for i := 0; i < length; i++ {
+					out.data[s*length+i] = math.NaN()
+				}
+				continue
+			}
+			members[g] = append(members[g], s)
+			subjects[g] = append(subjects[g], r.panel.series[s].Subject)
+		}
+	}
+	return r.parallel(length, len(r.panel.series), func(lo, hi int) {
+		var input []float64
+		for i := lo; i < hi; i++ {
+			t := interval.Start + i
+			for g, group := range members {
+				input = input[:0]
+				for _, s := range group {
+					input = append(input, arg.at(s, t))
+				}
+				value := kernel(input, subjects[g])
+				for _, s := range group {
+					out.data[s*length+i] = value
+				}
+			}
+		}
+	})
 }
 
 // seriesKernels 为时序节点准备内核。没有参数槽时所有序列共用一个内核；有参数槽时按每条序列的具体取值分组，

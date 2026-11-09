@@ -44,6 +44,8 @@ const (
 	ArgInteger
 	// ArgConstant 是分位数等：编译期数值常量。
 	ArgConstant
+	// ArgSubject 是标的 ID：只能写字符串字面量（cs_ref 的参考标的），表达式里其他位置都不允许字符串。
+	ArgSubject
 )
 
 // ArgSpec 描述一个参数。Min、Max 只对编译期常量参数有效（闭区间）。
@@ -54,6 +56,8 @@ type ArgSpec struct {
 	Max      float64
 	Optional bool
 	Default  float64
+	// LiteralOnly 为真表示这个编译期常量位置只收字面量，不收参数（截面算子的常量要对整个截面相同）。
+	LiteralOnly bool
 }
 
 // Function 是注册表中的一个算子（函数或运算符）。
@@ -67,6 +71,9 @@ type Function struct {
 	Lookback string
 	Doc      string
 	Example  string
+	// Broadcast 为真表示聚合广播类截面算子（Category 仍是 CategoryCrossSection）：每个截面算出一个统计量，
+	// 写给截面里的每一行，包括输入为 NaN 的行；其余截面算子是逐行变换类，输入为 NaN 的行输出 NaN。
+	Broadcast bool
 	// back 返回在子节点回看之上额外需要的行数（同时决定需求区间向前扩展多少），shift 返回需求区间整体向前平移的行数
 	// （只有 delay 不为 0）。参数是整数常量参数，按 Args 中出现的顺序排列。
 	back  func(ints []int) int
@@ -163,8 +170,15 @@ func rolling(name string, args []ArgSpec, doc, example string) *Function {
 
 // relaxedWindow 登记 (x, n, m) 形式的宽松窗口算子：回看按 n 推导，m 是序列开头最少的有效值个数。
 func relaxedWindow(name string, minimum int, doc, example string) *Function {
-	return &Function{Name: name, Category: CategoryTimeSeries,
-		Args:   []ArgSpec{argSeries, window(minimum), {Name: "m", Kind: ArgInteger, Min: float64(minimum), Max: MaxWindow}},
+	return relaxed(name, []ArgSpec{argSeries}, minimum, nil, doc, example)
+}
+
+// relaxed 登记宽松窗口算子，参数依次是 series、窗口 n、consts（例如 ts_quantile_relaxed 的 q）与 m。m 的下限沿用严格版本
+// 对 n 的下限（minimum），且不能大于 n。整数参数依次为 [n, m]。
+func relaxed(name string, series []ArgSpec, minimum int, consts []ArgSpec, doc, example string) *Function {
+	args := append(append([]ArgSpec(nil), series...), window(minimum))
+	args = append(append(args, consts...), ArgSpec{Name: "m", Kind: ArgInteger, Min: float64(minimum), Max: MaxWindow})
+	return &Function{Name: name, Category: CategoryTimeSeries, Args: args,
 		Result: ResultNumber, Lookback: "L(x)+n−1", Doc: doc, Example: example,
 		back: func(ints []int) int { return ints[0] - 1 },
 		validate: func(ints []int, _ []float64) string {
@@ -177,6 +191,13 @@ func relaxedWindow(name string, minimum int, doc, example string) *Function {
 
 func cross(name, doc, example string) *Function {
 	return &Function{Name: name, Category: CategoryCrossSection, Args: []ArgSpec{argSeries}, Result: ResultNumber,
+		Lookback: "L(x)", Doc: doc, Example: example}
+}
+
+// aggregate 登记聚合广播类截面算子：有效样本（非 NaN）上算出一个统计量，广播到同一截面（同一 data_time、同一 series_tag、
+// 成员标的范围之内）的每一行；没有有效样本时整个截面为 NaN。
+func aggregate(name string, args []ArgSpec, doc, example string) *Function {
+	return &Function{Name: name, Category: CategoryCrossSection, Args: args, Result: ResultNumber, Broadcast: true,
 		Lookback: "L(x)", Doc: doc, Example: example}
 }
 
@@ -202,6 +223,9 @@ var functionList = []*Function{
 	elementwise("fill_nan", []ArgSpec{argX, {Name: "v", Kind: ArgNumber}}, ResultNumber,
 		"x 为 NaN 时取 v", "fill_nan(pct_change(close), 0)"),
 	elementwise("is_nan", []ArgSpec{argX}, ResultBool, "x 是否为 NaN（结果不会是 NaN）", "where(is_nan(x), 0, x)"),
+	elementwise("floor", []ArgSpec{argX}, ResultNumber, "向下取整", "floor(close)"),
+	elementwise("ceil", []ArgSpec{argX}, ResultNumber, "向上取整", "ceil(volume / 100)"),
+	elementwise("round", []ArgSpec{argX}, ResultNumber, "四舍五入到整数，0.5 远离零取整（2.5 → 3，−2.5 → −3）", "round(close)"),
 
 	// 时序：位移
 	{Name: "delay", Category: CategoryTimeSeries, Args: []ArgSpec{argSeries, {Name: "k", Kind: ArgInteger, Min: 1, Max: MaxWindow}},
@@ -240,6 +264,15 @@ var functionList = []*Function{
 	rolling("ts_rsquare", []ArgSpec{{Name: "y", Kind: ArgSeries}, window(2)}, "对时间序号 1..n 做最小二乘的 R²", "ts_rsquare(close, 20)"),
 	rolling("ts_resi", []ArgSpec{{Name: "y", Kind: ArgSeries}, window(2)}, "对时间序号 1..n 做最小二乘后当期的残差", "ts_resi(close, 20)"),
 
+	// 时序：窗口内事件记忆（只在最近 n 根里回看，窗口里没有事件时为 NaN）
+	rolling("ts_last_valid", []ArgSpec{argSeries, window(1)},
+		"最近 n 根（含当根）里最后一个非 NaN 的 x；没有为 NaN。只有最近一次有效值落在窗口内时，才等于无限期前向填充",
+		"fill_nan(ts_last_valid(where(close > open, 1, where(close < open, 0, nan)), 50), 0)"),
+	rolling("ts_bars_since", []ArgSpec{{Name: "c", Kind: ArgBoolSeries}, window(1)},
+		"最近 n 根里 c 最后一次为真距今的根数，当根为真记 0；c 为 NaN 不算为真；没有为 NaN", "ts_bars_since(close > ts_max(high, 20) * 0.99, 100)"),
+	rolling("ts_value_when", []ArgSpec{{Name: "c", Kind: ArgBoolSeries}, {Name: "x", Kind: ArgSeries}, window(1)},
+		"最近 n 根里 c 最后一次为真那一根的 x；没有为 NaN", "ts_value_when(volume > ts_mean(volume, 20) * 3, close, 100)"),
+
 	// 时序：递归平滑（截断到 K 根）
 	{Name: "ema", Category: CategoryTimeSeries,
 		Args:   []ArgSpec{argSeries, window(1), {Name: "k", Kind: ArgInteger, Min: 0, Max: MaxWindow, Optional: true, Default: 0}},
@@ -268,12 +301,46 @@ var functionList = []*Function{
 	relaxedWindow("ts_std_relaxed", 2, "窗口内样本标准差（ddof=1）；序列开头的宽松窗口规则同 ts_mean_relaxed，m ≥ 2", "ts_std_relaxed(close, 20, 2)"),
 	relaxedWindow("ts_min_relaxed", 1, "窗口内最小值；序列开头的宽松窗口规则同 ts_mean_relaxed", "ts_min_relaxed(low, 20, 1)"),
 	relaxedWindow("ts_max_relaxed", 1, "窗口内最大值；序列开头的宽松窗口规则同 ts_mean_relaxed", "ts_max_relaxed(high, 20, 1)"),
+	relaxedWindow("ts_sum_relaxed", 1, "窗口内求和；序列开头的宽松窗口规则同 ts_mean_relaxed", "ts_sum_relaxed(volume, 20, 1)"),
+	relaxed("ts_count_relaxed", []ArgSpec{{Name: "c", Kind: ArgBoolSeries}}, 1, nil,
+		"窗口内条件为真的个数；序列开头的宽松窗口规则同 ts_mean_relaxed", "ts_count_relaxed(close > open, 20, 5)"),
+	relaxedWindow("ts_median_relaxed", 1, "窗口内中位数；序列开头的宽松窗口规则同 ts_mean_relaxed", "ts_median_relaxed(volume, 20, 1)"),
+	relaxed("ts_quantile_relaxed", []ArgSpec{argSeries}, 1, []ArgSpec{{Name: "q", Kind: ArgConstant, Min: 0, Max: 1}},
+		"窗口内 q 分位数，线性插值；序列开头的宽松窗口规则同 ts_mean_relaxed", "ts_quantile_relaxed(close, 20, 0.9, 5)"),
+	relaxedWindow("ts_rank_relaxed", 1, "当期值在窗口内的百分位，分母是窗口内的有效个数（pandas rolling(n, min_periods=m).rank(pct=True)）；序列开头的宽松窗口规则同 ts_mean_relaxed",
+		"ts_rank_relaxed(close, 20, 5)"),
+	relaxedWindow("ts_var_relaxed", 2, "窗口内样本方差（ddof=1）；序列开头的宽松窗口规则同 ts_mean_relaxed，m ≥ 2", "ts_var_relaxed(close, 20, 2)"),
+	relaxedWindow("ts_zscore_relaxed", 2, "(x − ts_mean) / ts_std；序列开头的宽松窗口规则同 ts_mean_relaxed，m ≥ 2", "ts_zscore_relaxed(close, 20, 5)"),
+	relaxedWindow("ts_skew_relaxed", 3, "窗口内无偏偏度；序列开头的宽松窗口规则同 ts_mean_relaxed，m ≥ 3", "ts_skew_relaxed(pct_change(close), 20, 5)"),
+	relaxedWindow("ts_kurt_relaxed", 4, "窗口内无偏超额峰度；序列开头的宽松窗口规则同 ts_mean_relaxed，m ≥ 4", "ts_kurt_relaxed(pct_change(close), 20, 5)"),
+	relaxedWindow("ts_argmax_relaxed", 1, "窗口内最大值距今的根数（0 为当期，并列取最早的一根）；序列开头的宽松窗口规则同 ts_mean_relaxed", "ts_argmax_relaxed(high, 20, 1)"),
+	relaxedWindow("ts_argmin_relaxed", 1, "窗口内最小值距今的根数（0 为当期，并列取最早的一根）；序列开头的宽松窗口规则同 ts_mean_relaxed", "ts_argmin_relaxed(low, 20, 1)"),
+	relaxedWindow("ts_product_relaxed", 1, "窗口内连乘；序列开头的宽松窗口规则同 ts_mean_relaxed", "ts_product_relaxed(1 + pct_change(close), 5, 1)"),
+	relaxed("ts_corr_relaxed", []ArgSpec{{Name: "x", Kind: ArgSeries}, {Name: "y", Kind: ArgSeries}}, 2, nil,
+		"窗口内相关系数；任一条序列在窗口里有效值之后又出现 NaN（中途缺失）时为 NaN，否则从两条序列都开始的位置起取共同的有效尾段，有效对数 ≥ m 才出值，m ≥ 2", "ts_corr_relaxed(close, volume, 20, 5)"),
+	relaxed("ts_cov_relaxed", []ArgSpec{{Name: "x", Kind: ArgSeries}, {Name: "y", Kind: ArgSeries}}, 2, nil,
+		"窗口内样本协方差（ddof=1）；共同有效尾段的规则同 ts_corr_relaxed，m ≥ 2", "ts_cov_relaxed(close, volume, 20, 5)"),
 
 	// 截面
 	cross("cs_rank", "截面百分位（名次 / 有效样本数，并列取平均名次）；按 (data_time, series_tag) 分组，排除 NaN", "cs_rank(ts_mean(volume, 20))"),
 	cross("cs_zscore", "截面标准化 (x − mean) / std（ddof=1）；样本少于 2 或标准差为 0 时为 NaN", "cs_zscore(pct_change(close, 20))"),
 	cross("cs_demean", "截面去均值 x − mean", "cs_demean(pct_change(close))"),
 	cross("cs_scale", "截面缩放 x / sum(|x|)；分母为 0 时为 NaN", "cs_scale(cs_demean(x))"),
+
+	// 截面：聚合广播
+	aggregate("cs_mean", []ArgSpec{argSeries}, "截面均值，广播到截面每一行（含输入为 NaN 的行）；没有有效样本时为 NaN", "cs_mean(pct_change(close))"),
+	aggregate("cs_sum", []ArgSpec{argSeries}, "截面求和，广播到截面每一行；没有有效样本时为 NaN", "cs_sum(volume)"),
+	aggregate("cs_count", []ArgSpec{{Name: "c", Kind: ArgBoolSeries}}, "截面里条件为真的个数，c 为 NaN 的行不计；广播到截面每一行；c 全为 NaN 时为 NaN",
+		"cs_count(close > open)"),
+	aggregate("cs_std", []ArgSpec{argSeries}, "截面样本标准差（ddof=1），广播到截面每一行；有效样本少于 2 时为 NaN", "cs_std(pct_change(close))"),
+	aggregate("cs_median", []ArgSpec{argSeries}, "截面中位数，广播到截面每一行；没有有效样本时为 NaN", "abs(close - cs_median(close))"),
+	aggregate("cs_quantile", []ArgSpec{argSeries, {Name: "q", Kind: ArgConstant, Min: 0, Max: 1, LiteralOnly: true}},
+		"截面 q 分位数，线性插值（与 ts_quantile 同口径），广播到截面每一行；q 只能写 0～1 的字面量，不能用参数", "cs_quantile(volume, 0.9)"),
+	aggregate("cs_min", []ArgSpec{argSeries}, "截面最小值，广播到截面每一行；没有有效样本时为 NaN", "cs_min(close)"),
+	aggregate("cs_max", []ArgSpec{argSeries}, "截面最大值，广播到截面每一行；没有有效样本时为 NaN", "cs_max(close)"),
+	aggregate("cs_ref", []ArgSpec{argSeries, {Name: "subject", Kind: ArgSubject}},
+		"同一截面里参考标的的 x，广播到截面每一行；参考标的本期不在截面里或 x 为 NaN 时整个截面为 NaN。标的写成字符串字面量，加成员和启用任务时校验它在任务的标的范围内",
+		`pct_change(close) - pct_change(cs_ref(close, "BTC-USDT"))`),
 }
 
 // 运算符：只能用运算符写，不能按名字调用。
