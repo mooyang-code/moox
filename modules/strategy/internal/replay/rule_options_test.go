@@ -137,3 +137,57 @@ portfolio: {max_missing: 1}
 		})
 	}
 }
+
+// 写了 on_missing 的策略，整根 bar 一行都没有（数据集断档，第 6～8 小时、超过 keep_bars: 2）：回放与实时一样记 skipped(no_data)，
+// 不把持有标的并进基础集合，持仓保留；断档之后与逐期实时求值一致。
+func TestReplayOnMissingWholeBarGapKeepsPositions(t *testing.T) {
+	const dslYaml = `name: gap
+rules:
+  - id: r
+    type: rank
+    score: "mom"
+    select: {top: 1}
+    on_missing: {keep_bars: 2}
+    weight: 1
+portfolio: {max_missing: 1}
+`
+	gap := map[int]bool{6: true, 7: true, 8: true}
+	repo := openStore(t)
+	client := &fakeClient{marketType: "spot", missing: map[string]map[int]bool{"A": gap, "B": gap, "C": gap}}
+	job := startReplay(t, repo, "g1", dslYaml, 12)
+	(&Runner{Store: repo, Client: client, ChunkBars: 4, InitialEquity: 100}).Execute(context.Background(), job)
+	done, err := repo.GetReplay(context.Background(), "g1")
+	require.NoError(t, err)
+	require.Equal(t, store.ReplayDone, done.Status, done.Error)
+	strategy, err := dsl.Parse([]byte(dslYaml))
+	require.NoError(t, err)
+	resolved, program, err := input.Resolve(context.Background(), client, "crypto", []string{"ftask_a"}, strategy)
+	require.NoError(t, err)
+	state, gaps := engine.State{}, 0
+	for _, replayed := range barsOf(t, repo, "g1") {
+		hour := hourOf(replayed)
+		names := []string{"A", "B"}
+		if gap[hour] {
+			names = []string{} // 断档的那一根事件没有任何标的
+			require.Equal(t, store.StatusSkipped, replayed.Status, "第 %d 小时", hour)
+			require.Equal(t, engine.SkipNoData, replayed.SkipReason, "第 %d 小时", hour)
+			require.Positive(t, replayed.Holdings, "第 %d 小时断档期间持仓应保留", hour)
+			gaps++
+		}
+		boundary, err := input.FromBarEnd(resolved.Calendar, resolved.Bar, replayed.BarEndTime)
+		require.NoError(t, err)
+		loaded, err := (input.Loader{Client: client}).LoadBar(context.Background(), "crypto", resolved, program, input.Bar{BarStart: boundary.StorageStart, EventUniverse: map[string][]string{resolved.Market.Select: names}})
+		require.NoError(t, err)
+		decision, err := engine.Evaluate(program, loaded.Frame, state)
+		require.NoError(t, err)
+		require.Equal(t, replayed.Status, decision.Status, "第 %d 小时", hour)
+		if decision.Status != engine.StatusOK {
+			continue
+		}
+		_, live, err := trigger.EncodeTargets(decision.Targets)
+		require.NoError(t, err)
+		require.Equal(t, string(replayed.TargetsJSON), string(live), "第 %d 小时的目标不一致", hour)
+		state = decision.State
+	}
+	require.Equal(t, 3, gaps)
+}

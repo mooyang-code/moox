@@ -171,9 +171,13 @@ func ruleCauses(rule *dsl.CompiledRule, frame Frame, id string, ruleHeld bool) [
 	}
 	row, hasRow := frame.Rows[id]
 	causes := missingCauses(id, row, hasRow, columns, previousColumns, frame.FailedColumns)
-	// 持有时检查的列可能为空（hold 规则不写 filter、exit、scale、group 时）：没有行仍是缺数，集合划分按 no_row 处理，这里同样记上。
-	if len(causes) == 0 && !hasRow {
-		causes = append(causes, cause{kind: causeOther, text: "no_row"})
+	// hold 规则持有时检查的列可能为空（不写 filter、exit、scale、group 时）：没有行时先按规则的全部列找失败证据（市场不可用记 market），
+	// 没有证据才记 no_row，与集合划分的口径一致。其他规则不走这里，结果与以前逐位一致。
+	if len(causes) == 0 && !hasRow && rule.Rule.Hold != nil {
+		causes = missingCauses(id, row, hasRow, rule.Columns(), rule.PreviousColumns(), frame.FailedColumns)
+		if len(causes) == 0 {
+			causes = append(causes, cause{kind: causeOther, text: "no_row"})
+		}
 	}
 	if len(causes) == 0 && hasRow {
 		if _, valid := scaleOf(rule, id, row); !valid {

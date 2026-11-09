@@ -689,17 +689,24 @@ func evaluateBar(ctx context.Context, program *dsl.Program, resolved input.Resol
 	}
 	universeSet := make(map[string]struct{})
 	var subjects []input.Subject
+	var selection []*marketReader
 	for _, reader := range readers {
 		if resolved.Market.Select != dsl.MarketBoth && resolved.Market.Select != reader.market {
 			continue
 		}
+		selection = append(selection, reader)
 		subjects = append(subjects, reader.subjects...)
 		for subjectID := range segments[reader.market].rows.Bars[key] {
 			universeSet[subjectID] = struct{}{}
 		}
-		for id := range heldIDs {
-			if _, listed := reader.listed[id]; listed {
-				universeSet[id] = struct{}{}
+	}
+	// 选币市场整根一行都没有（数据集断档）时不并入持有标的：照常按空集合记 skipped(no_data)，持仓保留（与实时一致）。
+	if len(universeSet) > 0 {
+		for _, reader := range selection {
+			for id := range heldIDs {
+				if _, listed := reader.listed[id]; listed {
+					universeSet[id] = struct{}{}
+				}
 			}
 		}
 	}

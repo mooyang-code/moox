@@ -189,3 +189,66 @@ portfolio: {max_missing: 0.2}
 	}
 	assertSkipped(t, decision, SkipTooManyMissing)
 }
+
+// 持有时检查的列为空的规则（signal 的 exit 是常量、hold 不写 filter 等）：永续整体不可用时，持有的永续 A 仍按 market_hold 冻结，
+// 不因为“没有行”而被平掉。
+func TestMarketHoldWhenHeldColumnsEmpty(t *testing.T) {
+	mode := dsl.Market{Select: dsl.MarketBoth, Prefer: dsl.MarketSwap}
+	cases := map[string]struct {
+		dsl      string
+		previous State
+		rules    []string
+	}{
+		"signal 常量 exit 加 rank 同持": {
+			dsl: `name: c
+rules:
+  - id: r
+    type: rank
+    score: "m"
+    select: {top: 1}
+    weight: {total: 0.5}
+  - id: g
+    type: signal
+    pool: [A]
+    entry: "m > 0"
+    exit: "false"
+    weight: {total: 0.5}
+portfolio: {max_missing: 1}
+`,
+			previous: State{Rules: map[string]RuleState{"r": {Held: []string{"A"}}, "g": {Held: []string{"A"}}}, Targets: map[string]string{"A|swap": "1"}},
+			rules:    []string{"r", "g"},
+		},
+		"hold 不写 filter": {
+			dsl: `name: h
+rules:
+  - id: r
+    type: rank
+    score: "m"
+    select: {top: 1}
+    hold: {}
+    weight: {total: 0.5}
+portfolio: {max_missing: 1}
+`,
+			previous: State{Rules: map[string]RuleState{"r": {Held: []string{"A"}, Hold: &HoldState{Entered: map[string]int64{"A": 0}}}}, Targets: map[string]string{"A|swap": "0.5"}},
+			rules:    []string{"r"},
+		},
+	}
+	for name, tc := range cases {
+		program := compileIn(t, mode, tc.dsl, "m")
+		frame := swapDown(program)
+		frame.Expected["g"] = []string{"A"}
+		decision, err := Evaluate(program, frame, tc.previous)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertOK(t, decision)
+		if got := holdsOf(decision)["A|swap"]; got != tc.previous.Targets["A|swap"]+"(hold)" {
+			t.Fatalf("%s：持有的永续 A 应冻结：%v", name, holdsOf(decision))
+		}
+		for _, ruleID := range tc.rules {
+			if item := findItem(t, decision, ruleID, "A"); item.Stage != StageHeld || item.Reason != reasonMarketHold {
+				t.Fatalf("%s：规则 %s 里 A 的明细应是 held/market_hold：%+v", name, ruleID, item)
+			}
+		}
+	}
+}
