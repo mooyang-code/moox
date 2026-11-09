@@ -282,7 +282,8 @@ const rotationFactorNames = ["return", "ma_ratio", "drawdown"];
 function inspectPool(value: Record<string, any>, diagnostics: DSLDiagnostic[]): DSLPoolPreview | undefined {
   const report = (message: string) => diagnostics.push({ message });
   if (value.rules !== undefined) report("rules 与 strategy_pool 只能写一个：策略池的逻辑都在成员策略里");
-  if (value.market !== undefined) report("策略池不写 market：成员各自显式写 market，池要绑定的计算任务是成员所需市场的并集");
+  if (value.market !== undefined)
+    report("策略池不写 market：现货、永续成员各自写 market（股票成员不写），池要绑定的计算任务是成员所需市场的并集");
   if (value.bar === undefined) report("策略池必须写 bar：成员的周期要与池一致");
   if (value.universe !== undefined) report("策略池不写 universe：标的范围由各成员自己的 universe 决定");
   if (value.factor_params !== undefined) report("策略池不支持 factor_params：多个成员可能给同一个可变成员写参数，会冲突");

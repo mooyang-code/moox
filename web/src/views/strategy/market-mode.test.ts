@@ -102,7 +102,9 @@ describe("策略池的市场要求", () => {
       markets: [],
       problems: ["成员 m1 引用的策略 gone 不存在（定义已删除，或读取失败）"]
     });
-    expect(poolRequirement(pool("plain"), lookup)?.problems[0]).toContain("没有显式写 market");
+    // S8：没写 market 的成员按股票成员处理；全是股票成员时池绑定股票任务，与现货、永续成员混用时拒绝。
+    expect(poolRequirement(pool("plain", "plain"), lookup)).toEqual({ markets: ["equity"], problems: [] });
+    expect(poolRequirement(pool("spot", "plain"), lookup)?.problems[0]).toContain("不能与现货、永续成员放在同一个池里");
     expect(poolRequirement(pool("nested"), lookup)?.problems[0]).toContain("策略池不能嵌套");
     expect(poolRequirement(pool("loading"), lookup)?.problems[0]).toContain("正在读取");
     expect(poolRequirement("name: p\nstrategy_pool: {members: []}\n", lookup)?.problems).toEqual([

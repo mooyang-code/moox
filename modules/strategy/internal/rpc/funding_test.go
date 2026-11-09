@@ -10,6 +10,10 @@ import (
 func TestStartReplayFundingColumn(t *testing.T) {
 	h := newHarness(t)
 	h.createStrategy("s1", demoDSL)
+	// 只绑一个永续 View 时提交就核对资金费列：View 没有这一列即拒绝。
+	missing, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"swap": "ftask_aswap"}, StartTime: "2026-09-02T00:00:00Z", EndTime: "2026-09-03T00:00:00Z", FundingColumn: "funding_rate"})
+	requireFail(t, int32(missing.GetRetInfo().GetCode()), missing.GetRetInfo().GetMsg(), "没有资金费列 funding_rate")
+	h.resolver.columns = []string{"close", "funding_rate"}
 	started, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"swap": "ftask_aswap"}, StartTime: "2026-09-02T00:00:00Z", EndTime: "2026-09-03T00:00:00Z", FundingColumn: " funding_rate "})
 	requireOK(t, int32(started.GetRetInfo().GetCode()), started.GetRetInfo().GetMsg())
 	stored, err := h.service.Store.GetReplay(h.ctx, started.GetReplay().GetReplayId())

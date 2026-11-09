@@ -307,6 +307,7 @@ import { parseFactorTasks } from "@/views/strategy/market-mode";
 import {
   type ReplayFormState,
   replayFactorTasks,
+  replayFundingColumn,
   replaySourceOf,
   validateReplayForm
 } from "@/views/strategy/replay/replay-form-model";
@@ -823,6 +824,7 @@ async function start() {
   const [startTime, endTime] = form.range.map(ms => new Date(ms).toISOString().replace(/\.\d{3}Z$/, "Z"));
   const gen = generation;
   const picks = userPicks;
+  const fundingColumn = replayFundingColumn(form, strategyStore.strategyCatalog);
   starting.value = true;
   try {
     const started = await startReplay({
@@ -832,7 +834,7 @@ async function start() {
       end_time: endTime,
       spot_fee_bps: Number(form.spot_fee_bps) || 0,
       swap_fee_bps: Number(form.swap_fee_bps) || 0,
-      ...(form.funding_column.trim() ? { funding_column: form.funding_column.trim() } : {})
+      ...(fundingColumn ? { funding_column: fundingColumn } : {})
     });
     if (gen !== generation) return;
     Message.success(

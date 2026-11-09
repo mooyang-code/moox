@@ -67,9 +67,16 @@ export function validateReplayForm(form: ReplayFormState, strategies: Strategy[]
   for (const fee of [Number(form.spot_fee_bps), Number(form.swap_fee_bps)]) {
     if (!Number.isFinite(fee) || fee < 0 || fee > 1000) return "单边手续费需在 0～1000 bps 之间";
   }
-  const funding = (form.funding_column ?? "").trim();
+  const funding = replayFundingColumn(form, strategies);
   if (funding && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(funding)) return "资金费列只能是 View 里的列名";
   return "";
+}
+
+/** 提交用的资金费列：只在回放读取永续（含统一数据集）时带上，表单里隐藏的旧值不提交；没写时为空串。 */
+export function replayFundingColumn(form: ReplayFormState, strategies: Strategy[] = []): string {
+  const markets = replayMarkets(form, strategies);
+  if (!markets.includes("swap") && !markets.includes("multi")) return "";
+  return (form.funding_column ?? "").trim();
 }
 
 /** 选的计算任务都是日线时区间只选日期（按空间时区的整天）；没选任务或有日内任务时选到分钟。 */

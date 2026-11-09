@@ -433,7 +433,7 @@ func validatePool(s *Strategy) error {
 		return errors.New("rules 与 strategy_pool 只能写一个：策略池的逻辑都在成员策略里")
 	}
 	if s.MarketDeclared {
-		return errors.New("策略池不写 market：成员各自显式写 market，池要绑定的因子任务是成员所需市场的并集")
+		return errors.New("策略池不写 market：现货、永续成员各自写 market（股票成员不写），池要绑定的因子任务是成员所需市场的并集")
 	}
 	if s.Bar == "" {
 		return errors.New("策略池必须写 bar：成员的周期要与池一致")

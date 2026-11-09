@@ -4,6 +4,7 @@ import {
   type ReplayFormState,
   replayDateOnly,
   replayFactorTasks,
+  replayFundingColumn,
   replayMarkets,
   replaySourceOf,
   validateReplayForm,
@@ -68,6 +69,14 @@ describe("replay form model", () => {
     expect(validateReplayForm({ ...base, funding_column: "funding_rate" }, strategies)).toBe("");
     expect(validateReplayForm({ ...base, funding_column: "  " }, strategies)).toBe("");
     expect(validateReplayForm({ ...base, funding_column: "funding-rate" }, strategies)).toContain("资金费列");
+  });
+
+  it("drops a funding column left over from a swap strategy after switching to a spot one", () => {
+    expect(replayFundingColumn({ ...base, funding_column: " funding_rate " }, strategies)).toBe("funding_rate");
+    // 换成纯现货策略：资金费列的输入框已隐藏，旧值不提交，也不参与校验。
+    const spot = { ...base, source: "dsl" as const, dsl_yaml: "name: x\nmarket: {select: spot}\n", tasks: { spot: "a" } };
+    expect(replayFundingColumn({ ...spot, funding_column: "funding-rate" }, strategies)).toBe("");
+    expect(validateReplayForm({ ...spot, funding_column: "funding-rate" }, strategies)).toBe("");
   });
 
   it("requires a source and a task for every market in use", () => {

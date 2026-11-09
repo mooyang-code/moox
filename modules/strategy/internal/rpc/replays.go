@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"time"
 
@@ -110,6 +111,11 @@ func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayRe
 	}
 	if fundingColumn != "" && !resolved.Market.Has(dsl.MarketSwap) {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(fmt.Errorf("策略不涉及永续（市场 %s），资金费只对永续持仓结算，不要写 funding_column", resolved.Market))}, nil
+	}
+	// 只绑一个 View（纯永续、统一数据集）时 ViewColumns 就是这个 View 的列，提交时就能确认资金费列存在；现货、永续两个 View 时
+	// ViewColumns 是交集（现货没有这一列），留到执行时按永续的 View 检查。
+	if fundingColumn != "" && (resolved.Market.Single() || resolved.Unified()) && !slices.Contains(resolved.ViewColumns, fundingColumn) {
+		return &strategypb.StartReplayRsp{RetInfo: invalid(fmt.Errorf("永续的 View 没有资金费列 %s", fundingColumn))}, nil
 	}
 	// A 股日线按上海日期回放：区间两端换成所在上海日期的零点，记录与执行都用换算后的区间。
 	if start, end, err = input.ReplayRange(resolved.Calendar, resolved.Bar, start, end); err != nil {

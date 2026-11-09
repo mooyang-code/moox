@@ -117,6 +117,8 @@ export function poolRequirement(
   if (!members.length) return { markets: [], problems: ["策略池没有写成员（strategy_pool.members）"] };
   const problems: string[] = [];
   const markets = new Set<string>();
+  // 股票策略不写 market：没写 market 的成员按股票成员处理，池绑定股票任务；股票成员不能与现货、永续成员混用。
+  const stockMembers: string[] = [];
   for (const member of members) {
     const label = `成员 ${member.id || "?"}`;
     if (!member.strategyId) {
@@ -132,11 +134,15 @@ export function poolRequirement(
       problems.push(`${label} 引用的策略 ${member.strategyId} 本身是策略池，策略池不能嵌套`);
     } else {
       const requirement = marketRequirement(memberDsl);
-      if (!requirement.declared)
-        problems.push(`${label} 引用的策略 ${member.strategyId} 没有显式写 market，池成员必须写 market（股票策略不能进池）`);
+      if (!requirement.declared) stockMembers.push(label);
       else requirement.markets.forEach(market => markets.add(market));
     }
   }
+  if (stockMembers.length && markets.size)
+    problems.push(
+      `${stockMembers.join("、")} 引用的策略没有写 market，按股票成员处理；股票成员不能与现货、永续成员放在同一个池里（现货、永续成员要显式写 market）`
+    );
+  else if (stockMembers.length) markets.add("equity");
   return { markets: problems.length ? [] : MARKET_ORDER.filter(market => markets.has(market)), problems };
 }
 
