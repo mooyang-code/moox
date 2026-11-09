@@ -318,7 +318,7 @@ func (s *Store) ClaimRuns(ctx context.Context, req ClaimRequest) ([]Claimed, err
 			if err != nil {
 				return err
 			}
-			// 导入读的是 worker 本机的 CSV，不读 Storage，不占 DataNode 的并发名额（否则长回补期间导入要排几个小时）。
+			// 导入读的是 worker 本机的 CSV，不读 Storage 时序数据（只取一次列信息），不占 DataNode 的并发名额（否则长回补期间导入要排几个小时）。
 			readsStorage := run.Kind != KindImport
 			if readsStorage && req.MaxPerDataNode > 0 && busy[task.DataNodeID] >= req.MaxPerDataNode {
 				continue

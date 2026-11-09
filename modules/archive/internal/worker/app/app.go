@@ -336,7 +336,7 @@ func (a *App) pullOnce(ctx context.Context) {
 	blocked := a.maintaining || a.diskInsufficient
 	busy := map[string]uint32{}
 	for _, r := range a.running {
-		// 导入不读 Storage，不计入 DataNode 的并发占用（与 mgr 领取时的口径一致）。
+		// 导入不读 Storage 时序数据（只取一次列信息），不计入 DataNode 的并发占用（与 mgr 领取时的口径一致）。
 		if r.assignment.GetKind() != "import" {
 			busy[r.assignment.GetDataNodeId()]++
 		}
