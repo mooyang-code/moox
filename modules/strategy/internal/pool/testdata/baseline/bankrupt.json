@@ -69,6 +69,68 @@
         },
         "started": true
       },
+      "state": {
+        "members": {
+          "b": {
+            "targets": {
+              "Y|spot": "1"
+            }
+          },
+          "swapper": {
+            "targets": {
+              "Z|swap": "12"
+            }
+          }
+        },
+        "pool": {
+          "last_bar_index": 1,
+          "ledgers": {
+            "b": {
+              "cash": 0,
+              "liquidate_after": 3,
+              "positions": {
+                "Y|spot": {
+                  "last_price": 50,
+                  "quantity": 0.019980019980019983,
+                  "value": 0.9990009990009991
+                }
+              },
+              "spot_fee_rate": 0.001,
+              "swap_fee_rate": 0.0005
+            },
+            "swapper": {
+              "cash": 0.9940357852882706,
+              "liquidate_after": 3,
+              "positions": {
+                "Z|swap": {
+                  "last_price": 20,
+                  "quantity": 0.5964214711729344,
+                  "value": 11.928429423458688
+                }
+              },
+              "spot_fee_rate": 0.001,
+              "swap_fee_rate": 0.0005
+            }
+          },
+          "ratios": {
+            "b": "0.5",
+            "swapper": "0.5"
+          },
+          "series": {
+            "b": [
+              0.9990009990009991
+            ],
+            "swapper": [
+              0.9940357852882706
+            ]
+          },
+          "started": true
+        },
+        "targets": {
+          "Y|spot": "0.5",
+          "Z|swap": "6"
+        }
+      },
       "state_targets": {
         "Y|spot": "0.5",
         "Z|swap": "6"
@@ -198,6 +260,70 @@
         },
         "started": true
       },
+      "state": {
+        "members": {
+          "b": {
+            "targets": {
+              "Y|spot": "1"
+            }
+          },
+          "swapper": {
+            "targets": {
+              "Z|swap": "12"
+            }
+          }
+        },
+        "pool": {
+          "last_bar_index": 2,
+          "ledgers": {
+            "b": {
+              "cash": 0,
+              "liquidate_after": 3,
+              "positions": {
+                "Y|spot": {
+                  "last_price": 49,
+                  "quantity": 0.019980019980019983,
+                  "value": 0.9790209790209792
+                }
+              },
+              "spot_fee_rate": 0.001,
+              "swap_fee_rate": 0.0005
+            },
+            "swapper": {
+              "cash": 1.5871965028911483,
+              "liquidate_after": 3,
+              "positions": {
+                "Z|swap": {
+                  "last_price": 21,
+                  "quantity": 0.9069694302259426,
+                  "value": 19.046358034744795
+                }
+              },
+              "spot_fee_rate": 0.001,
+              "swap_fee_rate": 0.0005
+            }
+          },
+          "ratios": {
+            "b": "0.5",
+            "swapper": "0.5"
+          },
+          "series": {
+            "b": [
+              0.9990009990009991,
+              0.9790209790209792
+            ],
+            "swapper": [
+              0.9940357852882706,
+              1.5871965028911483
+            ]
+          },
+          "started": true
+        },
+        "targets": {
+          "Y|spot": "0.5",
+          "Z|swap": "6"
+        }
+      },
       "state_targets": {
         "Y|spot": "0.5",
         "Z|swap": "6"
@@ -322,6 +448,64 @@
         },
         "started": true
       },
+      "state": {
+        "members": {
+          "b": {
+            "targets": {
+              "Y|spot": "1"
+            }
+          },
+          "swapper": {
+            "targets": {
+              "Z|swap": "12"
+            }
+          }
+        },
+        "pool": {
+          "last_bar_index": 3,
+          "ledgers": {
+            "b": {
+              "cash": 0,
+              "liquidate_after": 3,
+              "positions": {
+                "Y|spot": {
+                  "last_price": 51,
+                  "quantity": 0.019980019980019983,
+                  "value": 1.0189810189810191
+                }
+              },
+              "spot_fee_rate": 0.001,
+              "swap_fee_rate": 0.0005
+            },
+            "swapper": {
+              "bankrupt": true,
+              "cash": -0.23535856714788325,
+              "liquidate_after": 3,
+              "positions": {},
+              "spot_fee_rate": 0.001,
+              "swap_fee_rate": 0.0005
+            }
+          },
+          "ratios": {
+            "b": "0",
+            "swapper": "1"
+          },
+          "series": {
+            "b": [
+              0.9790209790209792,
+              1.0189810189810191
+            ],
+            "swapper": [
+              1.5871965028911483,
+              -0.23535856714788325
+            ]
+          },
+          "started": true
+        },
+        "targets": {
+          "Z|swap": "10"
+        }
+      },
       "state_targets": {
         "Z|swap": "10"
       },
@@ -443,6 +627,64 @@
         },
         "started": true
       },
+      "state": {
+        "members": {
+          "b": {
+            "targets": {
+              "Y|spot": "1"
+            }
+          },
+          "swapper": {
+            "targets": {
+              "Z|swap": "12"
+            }
+          }
+        },
+        "pool": {
+          "last_bar_index": 4,
+          "ledgers": {
+            "b": {
+              "cash": 0,
+              "liquidate_after": 3,
+              "positions": {
+                "Y|spot": {
+                  "last_price": 53,
+                  "quantity": 0.019980019980019983,
+                  "value": 1.058941058941059
+                }
+              },
+              "spot_fee_rate": 0.001,
+              "swap_fee_rate": 0.0005
+            },
+            "swapper": {
+              "bankrupt": true,
+              "cash": -0.23535856714788325,
+              "liquidate_after": 3,
+              "positions": {},
+              "spot_fee_rate": 0.001,
+              "swap_fee_rate": 0.0005
+            }
+          },
+          "ratios": {
+            "b": "1",
+            "swapper": "0"
+          },
+          "series": {
+            "b": [
+              1.0189810189810191,
+              1.058941058941059
+            ],
+            "swapper": [
+              -0.23535856714788325,
+              -0.23535856714788325
+            ]
+          },
+          "started": true
+        },
+        "targets": {
+          "Y|spot": "1"
+        }
+      },
       "state_targets": {
         "Y|spot": "1"
       },
@@ -560,6 +802,64 @@
         },
         "started": true
       },
+      "state": {
+        "members": {
+          "b": {
+            "targets": {
+              "Y|spot": "1"
+            }
+          },
+          "swapper": {
+            "targets": {
+              "Z|swap": "12"
+            }
+          }
+        },
+        "pool": {
+          "last_bar_index": 5,
+          "ledgers": {
+            "b": {
+              "cash": 0,
+              "liquidate_after": 3,
+              "positions": {
+                "Y|spot": {
+                  "last_price": 55,
+                  "quantity": 0.019980019980019983,
+                  "value": 1.098901098901099
+                }
+              },
+              "spot_fee_rate": 0.001,
+              "swap_fee_rate": 0.0005
+            },
+            "swapper": {
+              "bankrupt": true,
+              "cash": -0.23535856714788325,
+              "liquidate_after": 3,
+              "positions": {},
+              "spot_fee_rate": 0.001,
+              "swap_fee_rate": 0.0005
+            }
+          },
+          "ratios": {
+            "b": "1",
+            "swapper": "0"
+          },
+          "series": {
+            "b": [
+              1.058941058941059,
+              1.098901098901099
+            ],
+            "swapper": [
+              -0.23535856714788325,
+              -0.23535856714788325
+            ]
+          },
+          "started": true
+        },
+        "targets": {
+          "Y|spot": "1"
+        }
+      },
       "state_targets": {
         "Y|spot": "1"
       },
@@ -676,6 +976,64 @@
           ]
         },
         "started": true
+      },
+      "state": {
+        "members": {
+          "b": {
+            "targets": {
+              "Y|spot": "1"
+            }
+          },
+          "swapper": {
+            "targets": {
+              "Z|swap": "12"
+            }
+          }
+        },
+        "pool": {
+          "last_bar_index": 6,
+          "ledgers": {
+            "b": {
+              "cash": 0,
+              "liquidate_after": 3,
+              "positions": {
+                "Y|spot": {
+                  "last_price": 54,
+                  "quantity": 0.019980019980019983,
+                  "value": 1.078921078921079
+                }
+              },
+              "spot_fee_rate": 0.001,
+              "swap_fee_rate": 0.0005
+            },
+            "swapper": {
+              "bankrupt": true,
+              "cash": -0.23535856714788325,
+              "liquidate_after": 3,
+              "positions": {},
+              "spot_fee_rate": 0.001,
+              "swap_fee_rate": 0.0005
+            }
+          },
+          "ratios": {
+            "b": "1",
+            "swapper": "0"
+          },
+          "series": {
+            "b": [
+              1.098901098901099,
+              1.078921078921079
+            ],
+            "swapper": [
+              -0.23535856714788325,
+              -0.23535856714788325
+            ]
+          },
+          "started": true
+        },
+        "targets": {
+          "Y|spot": "1"
+        }
       },
       "state_targets": {
         "Y|spot": "1"
