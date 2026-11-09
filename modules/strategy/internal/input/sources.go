@@ -42,18 +42,6 @@ func (s SourceBinding) ReadinessBinding() readiness.Binding {
 	return readiness.Binding{Factors: factors}
 }
 
-// ColumnsOfFactor 返回由来源的某个因子成员产出的被引用列（不带来源前缀，排序）。
-func (s SourceBinding) ColumnsOfFactor(member string) []string {
-	columns := make([]string, 0)
-	for name, binding := range s.Columns {
-		if binding.Source == SourceFactor && binding.Member == member {
-			columns = append(columns, name)
-		}
-	}
-	sortStrings(columns)
-	return columns
-}
-
 // Period 返回主帧收盘于 barEnd 的这一根应读的来源 bar（收盘时刻不晚于 barEnd 的最新一根），以及两者收盘时刻是否相同（汇合 bar）。
 func (s SourceBinding) Period(barEnd time.Time) (PeriodBoundaries, bool, error) {
 	period, err := ClosedPeriod(s.Calendar, s.Bar, barEnd)

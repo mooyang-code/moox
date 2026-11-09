@@ -22,6 +22,7 @@ sources:
 rules:
   - id: r
     type: rank
+    filter: "daily.g > 0"
     score: "m"
     select: {top: 1}
     weight: {total: 1}
@@ -51,7 +52,7 @@ func newSourceHarnessWith(t *testing.T, dslYaml string) *harness {
 			Factors: map[string]string{"g": "h2|fixed"}, ViewColumns: []string{"close", "g"}}}}
 	h := newHarnessWith(t, dslYaml, nil, resolved)
 	for _, n := range []int{1, 2, alignedBar, alignedBar + 1} {
-		h.frame(n, map[string]map[string]float64{"A": {"m": 3}, "B": {"m": 1}})
+		h.frame(n, map[string]map[string]float64{"A": {"m": 3, "daily.g": 1}, "B": {"m": 1, "daily.g": 1}})
 	}
 	h.loader.sourceRevisions = map[string]uint64{dailyView: 42}
 	return h
@@ -210,8 +211,8 @@ func TestReferenceViewEventIgnored(t *testing.T) {
 // 写了附加来源、又经 bars[-1] 读主帧因子的策略：输入记录里多出的来源 View 条目不影响相邻周期检查，第二根照常求值。
 func TestSourceWithPreviousBarKeepsAdjacentCheck(t *testing.T) {
 	h := newSourceHarnessWith(t, strings.Replace(sourceRankDSL, `score: "m"`, `score: "m - bars[-1].m"`, 1))
-	h.frame(1, map[string]map[string]float64{"A": {"m": 3, "prev_m": 1}, "B": {"m": 1, "prev_m": 2}})
-	h.frame(2, map[string]map[string]float64{"A": {"m": 1, "prev_m": 3}, "B": {"m": 3, "prev_m": 1}})
+	h.frame(1, map[string]map[string]float64{"A": {"m": 3, "prev_m": 1, "daily.g": 1}, "B": {"m": 1, "prev_m": 2, "daily.g": 1}})
+	h.frame(2, map[string]map[string]float64{"A": {"m": 1, "prev_m": 3, "daily.g": 1}, "B": {"m": 3, "prev_m": 1, "daily.g": 1}})
 	h.atBar(1)
 	expectAck(t, h.deliver(1))
 	h.atBar(2)

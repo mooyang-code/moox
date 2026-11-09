@@ -131,6 +131,24 @@ func validateSources(s *Strategy) error {
 	return nil
 }
 
+// validateSourcesReferenced 拒绝没有被任何表达式引用的来源：没用到的来源仍要绑定任务，收盘时刻对齐的那一根还会等它的事件。
+func validateSourcesReferenced(s *Strategy) error {
+	if len(s.Sources) == 0 {
+		return nil
+	}
+	referenced, err := ReferencedColumns(*s)
+	if err != nil {
+		return err
+	}
+	used := ColumnsBySource(referenced)
+	for _, source := range s.Sources {
+		if len(used[source.Name]) == 0 {
+			return fmt.Errorf("来源 %s 没有被任何表达式引用（写成 %s.列名），请删掉它或在规则里使用它的列", source.Name, source.Name)
+		}
+	}
+	return nil
+}
+
 // ColumnsBySource 把帧里的列名按来源分组：键为空串的是主帧的列，其余键是来源名，值是去掉来源前缀的列名（排序）。
 func ColumnsBySource(columns []string) map[string][]string {
 	grouped := make(map[string]map[string]struct{})

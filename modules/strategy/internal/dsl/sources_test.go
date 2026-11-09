@@ -95,6 +95,7 @@ func TestSourcesRejected(t *testing.T) {
 		"bars 读来源":          {sourcesDSL(`score: "bars[-1].daily.close"`), "属性访问"},
 		"group.by 写来源列":     {head + "sources: {daily: {bar: 1d}}\nrules:\n  - {id: a, type: rank, score: close, select: {top: 1, group: {by: daily.sector, max: 1}}, weight: 1}\n", "必须是 View 里的列名"},
 		"factor_params 读来源": {"name: x\nbar: 1h\nsources:\n  daily: {bar: 1d}\nfactor_params:\n  ma__var: {window: {default: daily.close}}\nrules:\n  - {id: a, type: rank, score: close, select: {top: 1}, weight: 1}\n", "属性访问"},
+		"来源没被引用":            {head + "sources: {daily: {bar: 1d}}\n" + rule, "来源 daily 没有被任何表达式引用"},
 		"池写 sources":        {"name: p\nbar: 1h\nsources: {daily: {bar: 1d}}\nstrategy_pool:\n  members: [{id: a, strategy: s1}]\n  allocation: {method: fixed, ratios: {a: 1}}\n", "策略池不写 sources"},
 	})
 	strategy, err := Parse([]byte(sourcesDSL(`score: "daily.close"`)))

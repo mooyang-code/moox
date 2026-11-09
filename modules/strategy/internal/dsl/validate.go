@@ -126,6 +126,9 @@ func Validate(s *Strategy) error {
 	if err := validateAnchorAlignment(s); err != nil {
 		return err
 	}
+	if err := validateSourcesReferenced(s); err != nil {
+		return err
+	}
 	// 显式写了 market 时，保存就按这个模式校验做空、杠杆、tranche 与 factor_params，不必等到启用；没写时模式取决于绑定的任务，启用时再校验。
 	if s.MarketDeclared {
 		return ValidateMode(*s, s.Market)
