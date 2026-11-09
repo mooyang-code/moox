@@ -316,7 +316,11 @@ func (r *Runner) run(ctx context.Context, plan Plan, members []domain.MemberDef,
 		return nil, computeGrid{}, err
 	}
 	var universes map[string][]bool
+	var presentOnly map[string]bool
 	if observed {
+		// observed 成员的截面在每个时刻只用这一刻在网格上有源行的序列（含目标时刻：本期同步失败、迟到的标的也不参与），
+		// 否则 cs_rank(delay(close, 1)) 这类表达式会让已下架的标的带着上一根的值进入目标期截面。
+		presentOnly = map[string]bool{universeObserved: true}
 		// current 成员的截面限制在原来会放进面板的序列（本期可用的标的、去掉上游失败的序列）之内，结果与只有 current 成员时逐位相同；
 		// observed 成员用整个面板。
 		universes = map[string][]bool{universeCurrent: availableMask(panel, subjects)}
@@ -334,7 +338,7 @@ func (r *Runner) run(ctx context.Context, plan Plan, members []domain.MemberDef,
 		}
 	}
 	result, err := exec.Run(ctx, program, panel, exec.Options{Start: grid.first, End: grid.last, Workers: r.cfg.ComputeWorkers,
-		Params: params, Universes: universes, UDF: r.cfg.UDF})
+		Params: params, Universes: universes, PresentOnly: presentOnly, UDF: r.cfg.UDF})
 	if err != nil {
 		return nil, computeGrid{}, err
 	}

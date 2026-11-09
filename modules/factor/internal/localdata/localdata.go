@@ -36,8 +36,8 @@ type Storage interface {
 
 // Config 是数据层的参数。
 type Config struct {
-	// Synced 返回数据源上“正在同步”的标的：目录里同一数据源上启用的任务的标的范围的并集。observed 成员的历史截面不纳入
-	// 其他任务正在同步、而本任务范围不含的标的（HistoryRule）。nil 表示只看本任务的范围。
+	// Synced 返回数据源上“正在同步”的标的：预载最近一次从 Storage 取到的数据集在册清单（引擎的 syncedScope）。observed 成员
+	// 每期计算时不纳入其中、而本任务范围不含的标的（HistoryRule）；窗口载入不看它。nil 表示只看本任务的范围。
 	Synced func(ctx context.Context, src seriesstore.Source) ([]string, error)
 	Store  *seriesstore.Store
 	// Storage 读写的都是轴上时间（storageio.Axis 包装过的客户端）：数据层内部全部在轴上，按 periodclock.Continuous 做周期数学。
@@ -558,8 +558,8 @@ func HistoryCandidates(store *seriesstore.Store, src seriesstore.Source, from, t
 	return out, nil
 }
 
-// syncedSubjects 返回数据源上“正在同步”的标的：目录里同一数据源上启用的任务的标的范围的并集（Config.Synced 提供），
-// 与运行时的登记、准备状态无关，所以重启时任务逐个就绪、某个任务准备失败都不改变它。没有配置时为空。
+// syncedSubjects 返回数据源上“正在同步”的标的（Config.Synced：预载最近一次取到的在册清单），与运行时的登记、准备状态无关，
+// 所以重启时任务逐个就绪、某个任务准备失败都不改变它。没有配置、或预载还没取到过清单时为空。
 func (d *Data) syncedSubjects(ctx context.Context, src seriesstore.Source) ([]string, error) {
 	if d.cfg.Synced == nil {
 		return nil, nil
@@ -568,7 +568,7 @@ func (d *Data) syncedSubjects(ctx context.Context, src seriesstore.Source) ([]st
 }
 
 // HistorySubjects 实现 pipeline.HistorySource：读取区间 [ReadStart, TargetEnd) 内按 HistoryRule 纳入的标的。
-// 本任务范围是计划的期望全集；正在同步的标的是目录里同源启用任务的范围，加上本任务范围。
+// 本任务范围是计划的期望全集；正在同步的标的是预载的在册清单，加上本任务范围。只在有 observed 成员时调用，每次扫描一遍本地边界。
 func (d *Data) HistorySubjects(ctx context.Context, plan pipeline.Plan) ([]string, error) {
 	from, err := pipeline.ReadStart(periodclock.Continuous{}, plan)
 	if err != nil {

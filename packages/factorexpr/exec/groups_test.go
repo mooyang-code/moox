@@ -173,3 +173,31 @@ func TestCrossWarningsPerMember(t *testing.T) {
 		t.Fatalf("no singular section in [13, 15], got %v", result.Warnings)
 	}
 }
+
+// PresentOnly：列出的标的范围里，截面只用这一刻有源行的序列，没有源行的序列这一刻为 NaN；没列出的范围照旧。
+func TestCrossPresentOnlyUniverse(t *testing.T) {
+	panel := groupPanel(t) // venue:a 的 E 没有源行；D 有源行
+	factor, err := factorexpr.Compile("output: cs_count(y > 0)\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	program, err := factorexpr.NewProgram([]factorexpr.ProgramInput{{FactorID: "c", Factor: factor, Universe: "observed"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// E 的 y 改成有值：没有源行但有值（例如 delay 带过来的上一根）。
+	s, _ := panel.SeriesIndex(SeriesKey{Subject: "E", Tag: "venue:a"})
+	y, _ := panel.ColumnIndex("y")
+	panel.Set(y, s, 0, 9)
+	plain, err := Run(context.Background(), program, panel, Options{Start: 0, End: 0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	present, err := Run(context.Background(), program, panel, Options{Start: 0, End: 0, PresentOnly: map[string]bool{"observed": true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// venue:a 的 y：A 2、B NaN、C 1、D 4、E 9。不看源行时 E 计入（4 个），只看源行时不计入（3 个），E 自己为 NaN。
+	expectCells(t, panel, plain, 0, "venue:a", map[string]float64{"A": 4, "E": 4})
+	expectCells(t, panel, present, 0, "venue:a", map[string]float64{"A": 3, "D": 3, "E": math.NaN()})
+}

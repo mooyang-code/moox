@@ -28,6 +28,9 @@ type Options struct {
 	// Universes 是标的范围标识到序列成员掩码的映射（按 Panel.Series 的顺序）：截面算子只在掩码为真的序列之间计算，
 	// 范围外的序列结果为 NaN。没有给出的范围（包括空串）表示全部序列。
 	Universes map[string][]bool
+	// PresentOnly 列出“只用有源行的序列”的标的范围：这些范围里的截面算子在每个时刻只让这一刻在网格上有源行的序列参与，
+	// 其余序列这一刻的结果为 NaN（observed 的历史截面口径）。没有列出的范围不看源行。
+	PresentOnly map[string]bool
 	// UDF 是自定义算子的执行宿主；程序里没有自定义算子时不需要。
 	UDF UDFHost
 }
@@ -97,7 +100,7 @@ func Run(ctx context.Context, program *factorexpr.Program, panel *Panel, opts Op
 	}
 	alias, lastUse, need := dedup(program, params, universes, need)
 	run := &runner{ctx: ctx, udf: opts.UDF, program: program, panel: panel, need: need, workers: opts.Workers, pool: newPool(), params: params,
-		universes: universes, alias: alias, nodes: make([]values, len(program.Nodes)), owned: make([]bool, len(program.Nodes)),
+		universes: universes, presentOnly: opts.PresentOnly, alias: alias, nodes: make([]values, len(program.Nodes)), owned: make([]bool, len(program.Nodes)),
 		start: opts.Start, end: opts.End, warnings: map[int]map[string]int{}}
 	for index, node := range program.Nodes {
 		if err := ctx.Err(); err != nil {
@@ -324,9 +327,11 @@ type runner struct {
 	pool      *pool
 	params    map[string][]float64
 	universes map[string][]bool
-	alias     []int
-	nodes     []values
-	owned     []bool
+	// presentOnly 见 Options.PresentOnly。
+	presentOnly map[string]bool
+	alias       []int
+	nodes       []values
+	owned       []bool
 	// start、end 是目标区间；warnings 是截面节点在目标区间内报告的告警（节点下标 → 原因 → 截面数），只由主 goroutine 写入。
 	start, end int
 	warnings   map[int]map[string]int
@@ -435,6 +440,7 @@ func (r *runner) computeCross(index int, node *factorexpr.ProgramNode, args []va
 	length := interval.Len()
 	group := node.Function.GroupArg()
 	mask := r.universes[node.Universe]
+	presentOnly := node.Universe != "" && r.presentOnly[node.Universe]
 	// 每组范围之内的序列与标的只取决于掩码，与时刻无关，先算好。
 	members := make([][]int, len(r.panel.groups))
 	subjects := make([][]string, len(r.panel.groups))
@@ -457,10 +463,26 @@ func (r *runner) computeCross(index int, node *factorexpr.ProgramNode, args []va
 		buffers := make([][]float64, len(args))
 		var output []float64
 		local := map[string]int{}
+		var present []int
+		var presentSubjects []string
 		for i := lo; i < hi; i++ {
 			t := interval.Start + i
 			for g, rows := range members {
-				section.Args, section.Group, section.Subjects = section.Args[:0], nil, subjects[g]
+				names := subjects[g]
+				if presentOnly {
+					// 这一刻没有源行的序列不参与截面，结果为 NaN。
+					present, presentSubjects = present[:0], presentSubjects[:0]
+					for k, s := range rows {
+						if r.panel.Present(s, t) {
+							present = append(present, s)
+							presentSubjects = append(presentSubjects, names[k])
+						} else {
+							out.data[s*length+i] = math.NaN()
+						}
+					}
+					rows, names = present, presentSubjects
+				}
+				section.Args, section.Group, section.Subjects = section.Args[:0], nil, names
 				for k, arg := range args {
 					buffers[k] = buffers[k][:0]
 					for _, s := range rows {

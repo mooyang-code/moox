@@ -152,3 +152,31 @@ func TestObservedMemoryPrecheckCountsHistorySubjects(t *testing.T) {
 	plan.HistorySubjects = []string{"OLD", "GONE"}
 	require.ErrorIs(t, runner.precheckMemory(plan), ErrMemoryBudget)
 }
+
+// 目标时刻没有源行的标的不参与 observed 的截面：已下架的 OLD 用 delay、ts_last_valid 还能在目标期算出值，
+// 但它这一刻没有源行，不能改变在册标的的名次；observed 与 current 在目标期截面上结果相同。
+func TestObservedTargetSectionUsesPresentRowsOnly(t *testing.T) {
+	for _, expression := range []string{"cs_rank(delay(close, 1))", "cs_rank(ts_last_valid(close, 5))"} {
+		t.Run(expression, func(t *testing.T) {
+			target := time.Date(2026, 10, 4, 0, 10, 0, 0, time.UTC)
+			clock := periodclock.Continuous{}
+			store, data := observedStorage(target)
+			runner := NewRunner(store, data, clock, Config{ComputeWorkers: 1})
+			observed := domain.MustDefinition("obs", "obs", "cross_section_history: observed\noutput: "+expression+"\n")
+			observed.AllowPartialUniverse = true
+			current := domain.MustDefinition("cur", "cur", "output: "+expression+"\n")
+			current.AllowPartialUniverse = true
+			plan, err := BuildLivePlan(clock, e2eLiveInput(target, []string{"BTC", "ETH", "SOL"}, []domain.FactorDef{observed, current}))
+			require.NoError(t, err)
+			_, err = runner.Run(context.Background(), plan)
+			require.NoError(t, err)
+			rows := sortedRows(store)
+			require.Len(t, rows, 3)
+			want := map[string]float64{"BTC": 1.0 / 3, "ETH": 2.0 / 3, "SOL": 1}
+			for _, row := range rows {
+				require.InDelta(t, want[row.SubjectID], row.Fields["cur"], 1e-12, row.SubjectID)
+				require.Equal(t, row.Fields["cur"], row.Fields["obs"], row.SubjectID)
+			}
+		})
+	}
+}
