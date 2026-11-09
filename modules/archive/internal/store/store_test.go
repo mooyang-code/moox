@@ -276,6 +276,38 @@ func TestClaimRunsOrdersByScheduleAndHonorsSlotsAndDataNodeLimits(t *testing.T) 
 	}
 }
 
+// 导入不读 Storage：DataNode 名额已满时照样领取，也不占名额。
+func TestClaimRunsLetsImportBypassDataNodeLimit(t *testing.T) {
+	s := openTest(t)
+	ctx := context.Background()
+	for _, name := range []string{"busy", "imp", "after"} {
+		tk := task("crypto", name)
+		tk.DataNodeID = "node-0"
+		if _, err := s.CreateTask(ctx, tk); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.CreateRun(ctx, "crypto", "busy", RunSpec{Kind: KindManual}, t0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CreateRun(ctx, "crypto", "imp", RunSpec{Kind: KindImport, ImportFile: "imp_0123456789abcdef01234567/import.csv"}, t0.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	// node-0 已被 worker 占满（上限 1）：manual 领不到，import 照样领取。
+	claimed, err := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w1", FreeSlots: 3, MaxPerDataNode: 1, BusyByDataNode: map[string]int{"node-0": 1}, Now: t0, LeaseTTL: time.Minute})
+	if err != nil || len(claimed) != 1 || claimed[0].Run.Kind != KindImport {
+		t.Fatalf("claimed = %+v err=%v", claimed, err)
+	}
+	// 领到的 import 不占名额：node-0 空闲时，同一次领取里 manual 仍能拿到上限内的那个名额。
+	if _, err := s.CreateRun(ctx, "crypto", "after", RunSpec{Kind: KindManual}, t0.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	next, err := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w1", FreeSlots: 3, MaxPerDataNode: 1, Now: t0, LeaseTTL: time.Minute})
+	if err != nil || len(next) != 1 || next[0].Task.DatasetID != "busy" {
+		t.Fatalf("next = %+v err=%v", next, err)
+	}
+}
+
 func finishedPartition(key string, status string) Partition {
 	start := time.Date(2026, 10, 16, 0, 0, 0, 0, time.UTC)
 	p := Partition{

@@ -336,7 +336,10 @@ func (a *App) pullOnce(ctx context.Context) {
 	blocked := a.maintaining || a.diskInsufficient
 	busy := map[string]uint32{}
 	for _, r := range a.running {
-		busy[r.assignment.GetDataNodeId()]++
+		// 导入不读 Storage，不计入 DataNode 的并发占用（与 mgr 领取时的口径一致）。
+		if r.assignment.GetKind() != "import" {
+			busy[r.assignment.GetDataNodeId()]++
+		}
 	}
 	if free > 0 && !blocked && a.active && !a.lastHeartbeatOK.IsZero() && a.opts.Now().Sub(a.lastHeartbeatOK) < a.leaseTTL {
 		// 与维护的「开始」在同一把锁里决定：登记了 pulling 之后，维护会等这次领取登记完运行才继续。
