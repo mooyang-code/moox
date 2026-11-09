@@ -124,6 +124,12 @@ func TestHoldingClocksStockIntraday(t *testing.T) {
 	require.Equal(t, "2025-10-13T14:00", scheduledStart(t, cal, freq, last, closing, 1))
 	every := holdingStrategy(t, `{calendar: trading_days, every: 5, days: [5], anchor: "2025-09-29"}`)
 	require.Equal(t, "2025-10-13T14:00", scheduledStart(t, cal, freq, every, closing, 5))
+	// 月：10 月第 1 个交易日是节后的 10-09；10-13 上午时 at first 取 10-09 第一根，月末 -1 取 9 月最后一个交易日的收盘那一根。
+	month := holdingStrategy(t, "{calendar: month, days: [1, -1], at: first}")
+	require.Equal(t, "2025-10-09T09:30", scheduledStart(t, cal, freq, month, morning, 1))
+	require.Equal(t, "2025-09-30T09:30", scheduledStart(t, cal, freq, month, morning, -1))
+	monthLast := holdingStrategy(t, "{calendar: month, days: [-1]}")
+	require.Equal(t, "2025-09-30T14:00", scheduledStart(t, cal, freq, monthLast, morning, -1))
 }
 
 // bars/offsets 写法的锚点：换成 bar 序号；不是 bar 起点时启用即拒绝。

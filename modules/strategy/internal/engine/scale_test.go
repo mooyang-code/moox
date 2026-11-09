@@ -251,3 +251,55 @@ portfolio: {max_missing: 1}
 	assertWeights(t, third, map[string]string{"A": "1"})
 	require.Empty(t, third.State.Rules["r"].MissingStreak)
 }
+
+// on_missing 的新合并规则：两条规则都引用 m；r 持有 A 且写了 on_missing，q 没持有 A（A 在 q 的预期集合里，也缺 m）。
+// 没持有它的规则只把它当作缺数的候选，不阻止冻结（旧的合并规则下 q 会阻止）。
+func TestOnMissingNonHolderDoesNotBlock(t *testing.T) {
+	program := compile(t, `name: o
+rules:
+  - id: r
+    type: rank
+    score: "m"
+    select: {top: 1}
+    weight: 0.5
+    on_missing: {keep_bars: 2}
+  - id: q
+    type: rank
+    score: "m"
+    select: {bottom: 1}
+    weight: 0.5
+portfolio: {max_missing: 1}
+`, "m")
+	first := evaluate(t, program, frameOf(program, map[string]Row{"A": values("m", 3), "B": values("m", 2), "C": values("m", 1)}), State{})
+	assertWeights(t, first, map[string]string{"A": "0.5", "C": "0.5"})
+	second := evaluate(t, program, frameOf(program, map[string]Row{"A": values("x", 1), "B": values("m", 2), "C": values("m", 1)}), first.State)
+	assertOK(t, second)
+	require.True(t, holdsTarget(second, "A"))
+	require.Equal(t, reasonMissingKept, findItem(t, second, "r", "A").Reason)
+	require.Equal(t, map[string]int{"A": 1}, second.State.Rules["r"].MissingStreak)
+	require.Empty(t, second.State.Rules["q"].MissingStreak)
+}
+
+// hold 规则写 on_missing：持有标的缺数时冻结保持、占名额，不按 exit_missing 出场。
+func TestOnMissingHoldRule(t *testing.T) {
+	program := compile(t, `name: o
+rules:
+  - id: r
+    type: rank
+    filter: "f > 0"
+    score: "m"
+    select: {top: 1}
+    hold: {}
+    weight: 1
+    on_missing: {keep_bars: 1}
+portfolio: {max_missing: 1}
+`, "m", "f")
+	first := evaluate(t, program, frameOf(program, map[string]Row{"A": values("m", 2, "f", 1), "B": values("m", 1, "f", 1)}), State{})
+	assertWeights(t, first, map[string]string{"A": "1"})
+	second := evaluate(t, program, frameOf(program, map[string]Row{"A": values("m", 2), "B": values("m", 5, "f", 1)}), first.State)
+	require.True(t, holdsTarget(second, "A"))
+	require.Equal(t, reasonNotSelected, findItem(t, second, "r", "B").Reason)
+	third := evaluate(t, program, frameOf(program, map[string]Row{"A": values("m", 2), "B": values("m", 5, "f", 1)}), second.State)
+	require.Equal(t, reasonExitMissing+";missing:f", findItem(t, third, "r", "A").Reason)
+	assertWeights(t, third, map[string]string{"B": "1"})
+}
