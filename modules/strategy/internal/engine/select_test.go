@@ -185,6 +185,29 @@ func TestSelectThenWithHolding(t *testing.T) {
 	require.Equal(t, []string{"S01", "S02"}, weightedIDs(third))
 }
 
+// then 写比例：个数 = 第一段选中且分数有效的个数 × 比例（默认向下取整），count_min 保证最少个数。
+func TestSelectThenRatio(t *testing.T) {
+	vs := []float64{0, 4, 1, 3, 2, 5, 0}
+	rows := rankedRows(6, func(i int) map[string]float64 { return map[string]float64{"v": vs[i]} })
+	// 第一段选 S01～S04，v 依次为 4、1、3、2；按 -v 取一半（4 × 0.5 = 2 个）。
+	program := compile(t, selectRule("{top: 4, then: {score: \"-v\", top: 0.5}}"), "m", "v")
+	decision := evaluate(t, program, frameOf(program, rows), State{})
+	assertOK(t, decision)
+	require.Equal(t, []string{"S02", "S04"}, weightedIDs(decision), "第一段 S01～S04 的 v 为 4、1、3、2，-v 最高的两个是 S02、S04")
+	require.Equal(t, reasonThen, findItem(t, decision, "r", "S01").Reason)
+	// 3 × 0.5 = 1.5：默认向下取 1 个；count_round: ceil 取 2 个；count_min: 2 把向下取整的 1 抬到 2。
+	for spec, want := range map[string]int{
+		"{top: 3, then: {score: \"-v\", top: 0.5}}":                    1,
+		"{top: 3, then: {score: \"-v\", top: 0.5, count_round: ceil}}": 2,
+		"{top: 3, then: {score: \"-v\", top: 0.5, count_min: 2}}":      2,
+		"{top: 4, then: {score: \"-v\", bottom: 0.25}}":                1,
+	} {
+		decision = evaluate(t, compile(t, selectRule(spec), "m", "v"), frameOf(compile(t, selectRule(spec), "m", "v"), rows), State{})
+		assertOK(t, decision)
+		require.Len(t, weightedIDs(decision), want, spec)
+	}
+}
+
 // then.score 可以用截面函数，在第一段选中的集合上计算。
 func TestSelectThenCrossSectionOnChosen(t *testing.T) {
 	program := compile(t, selectRule("{top: 3, then: {score: \"rank(v)\", bottom: 1}}"), "m", "v")

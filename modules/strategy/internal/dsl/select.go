@@ -32,19 +32,25 @@ type SelectGroup struct {
 }
 
 // SelectThen 是二次排序：在第一段选中的集合里按 Score 重新排序，取 Top 或 Bottom 个。
+// Top、Bottom 与第一段同口径：整数是个数，(0, 1) 是比例（分母是第一段选中且二次排序分数有效的个数），比例按 CountRound 取整后与 CountMin 取大。
 type SelectThen struct {
-	Score  string
-	Top    int
-	Bottom int
+	Score      string
+	Top        float64
+	Bottom     float64
+	CountRound string
+	CountMin   int
 }
 
-// Count 返回二次排序要取的个数。
-func (t SelectThen) Count() int {
-	if t.Bottom > 0 {
-		return t.Bottom
-	}
-	return t.Top
+// counter 把二次排序的个数字段套进 Select，复用第一段的比例判断与取整。
+func (t SelectThen) counter() Select {
+	return Select{Top: t.Top, Bottom: t.Bottom, CountRound: t.CountRound, CountMin: t.CountMin}
 }
+
+// FixedCount 返回不依赖样本数的二次排序个数；写比例时返回 0 与 false。
+func (t SelectThen) FixedCount() (int, bool) { return t.counter().FixedCount() }
+
+// Count 返回二次排序要取的个数，sample 是比例的分母。
+func (t SelectThen) Count(sample int) int { return t.counter().Count(sample) }
 
 // HasRange 报告 select 是否写了名次区间。
 func (s Select) HasRange() bool { return s.Range[0] > 0 }
@@ -226,9 +232,13 @@ func decodeSelectThen(node *yaml.Node, path string) (*SelectThen, error) {
 		case "score":
 			then.Score, err = scalarRequiredText(f.value, fieldPath)
 		case "top":
-			then.Top, err = scalarInt(f.value, fieldPath)
+			then.Top, err = scalarFloat(f.value, fieldPath)
 		case "bottom":
-			then.Bottom, err = scalarInt(f.value, fieldPath)
+			then.Bottom, err = scalarFloat(f.value, fieldPath)
+		case "count_round":
+			then.CountRound, err = scalarRequiredText(f.value, fieldPath)
+		case "count_min":
+			then.CountMin, err = scalarInt(f.value, fieldPath)
 		default:
 			return nil, fmt.Errorf("%s 包含未知字段 %q", path, f.key)
 		}
@@ -240,9 +250,17 @@ func decodeSelectThen(node *yaml.Node, path string) (*SelectThen, error) {
 	case then.Score == "":
 		return nil, fmt.Errorf("%s 缺少 score", path)
 	case (then.Top > 0) == (then.Bottom > 0):
-		return nil, fmt.Errorf("%s 必须且只能设置 top 或 bottom 之一（正整数）", path)
+		return nil, fmt.Errorf("%s 必须且只能设置 top 或 bottom 之一（正整数，或 0～1 之间的比例）", path)
 	case then.Top < 0 || then.Bottom < 0 || then.Top > MaxCount || then.Bottom > MaxCount:
-		return nil, fmt.Errorf("%s 的 top、bottom 必须在 1 到 %d 之间", path, MaxCount)
+		return nil, fmt.Errorf("%s 的 top、bottom 必须在 0 到 %d 之间", path, MaxCount)
+	case then.Top >= 1 && then.Top != math.Trunc(then.Top), then.Bottom >= 1 && then.Bottom != math.Trunc(then.Bottom):
+		return nil, fmt.Errorf("%s 的 top、bottom 必须是正整数或 0～1 之间的比例", path)
+	case (then.CountRound != "" || then.CountMin != 0) && !then.counter().IsRatio():
+		return nil, fmt.Errorf("%s 的 count_round、count_min 只能在 top/bottom 写成比例时使用", path)
+	case then.CountRound != "" && then.CountRound != CountRoundFloor && then.CountRound != CountRoundCeil && then.CountRound != CountRoundRound:
+		return nil, fmt.Errorf("%s 的 count_round 只能是 floor、ceil 或 round", path)
+	case then.CountMin < 0 || then.CountMin > MaxCount:
+		return nil, fmt.Errorf("%s 的 count_min 必须在 0 到 %d 之间", path, MaxCount)
 	}
 	return then, nil
 }
