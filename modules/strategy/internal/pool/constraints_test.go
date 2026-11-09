@@ -43,7 +43,7 @@ func sidedConfig(t *testing.T, body, portfolio string, members ...[2]string) Con
 	if _, err := dsl.ValidatePoolMembers(strategy, strategies); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := NewConfig(strategy, dsl.SingleMarket(dsl.MarketSwap), strategies)
+	cfg, err := NewConfig(strategy, dsl.SingleMarket(dsl.MarketSwap), strategies, engine.PoolClock{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -43,7 +43,7 @@ func dayAxisFor(calendarID, frequency string) (dayAxis, error) {
 	switch typed := clock.(type) {
 	case fixedClock:
 		if typed.duration <= 0 || (24*time.Hour)%typed.duration != 0 {
-			return nil, fmt.Errorf("holding 的锚点与日历换仓需要周期整除一天，%s 不满足", frequency)
+			return nil, fmt.Errorf("锚点与日历换仓需要周期整除一天，%s 不满足", frequency)
 		}
 		return cryptoAxis{perDay: int64(24 * time.Hour / typed.duration)}, nil
 	case stockDailyClock:

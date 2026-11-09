@@ -30,8 +30,10 @@ type Config struct {
 	Portfolio dsl.Portfolio
 	// Mode 是池的有效市场模式（成员市场的并集，见 dsl.UnionMarket）。
 	Mode dsl.Market
-	// Sides 是各成员的方向（成员 id → long、short；混合方向为空串），条件转移与组合约束按它汇总多头、空头敞口。
+	// Sides 是各成员的方向（成员 id → long、short；混合方向为空串），drift、条件转移与组合约束按它汇总多头、空头敞口。
 	Sides map[string]string
+	// Clock 是 DSL 里的漂移起点与 periodic 锚点换成的 bar 序号（输入层按池的日历与周期换算）。
+	Clock engine.PoolClock
 	// Degrading 非空时报告一个跳过原因是否需要人工处理：所有成员都没通过时，池的跳过原因优先取这类原因（实例据此标 degraded）。
 	Degrading func(reason string) bool
 }
@@ -54,9 +56,10 @@ func (c Config) PickSkipReason(reasonOf func(id string) string) (id, reason stri
 	return id, reason, ok
 }
 
-// NewConfig 从池的策略定义构造配置；mode 是成员市场的并集，members 是成员 id → 成员策略（判定成员方向用）。
-// 池写了 switch、exposure 或 gross 时每个成员都必须给出且是单方向的。
-func NewConfig(strategy dsl.Strategy, mode dsl.Market, members map[string]dsl.Strategy) (Config, error) {
+// NewConfig 从池的策略定义构造配置；mode 是成员市场的并集，members 是成员 id → 成员策略（判定成员方向用），
+// clock 是 DSL 里的时刻换成的 bar 序号（见 input.PoolClock；不写 drift 的起点与锚点时为零值）。
+// 池用了 drift、switch、exposure 或 gross 时每个成员都必须给出且是单方向的。
+func NewConfig(strategy dsl.Strategy, mode dsl.Market, members map[string]dsl.Strategy, clock engine.PoolClock) (Config, error) {
 	if !strategy.IsPool() {
 		return Config{}, errors.New("不是策略池")
 	}
@@ -64,11 +67,11 @@ func NewConfig(strategy dsl.Strategy, mode dsl.Market, members map[string]dsl.St
 	if strategy.Pool.NeedsSingleSide() {
 		for _, id := range strategy.Pool.MemberIDs() {
 			if sides[id] == "" {
-				return Config{}, fmt.Errorf("成员 %s 不是单方向的（或缺少成员定义）：写了 allocation.switch、exposure 或 gross 时每个成员都必须全部做多或全部做空", id)
+				return Config{}, fmt.Errorf("成员 %s 不是单方向的（或缺少成员定义）：用了 drift、allocation.switch、exposure 或 gross 时每个成员都必须全部做多或全部做空", id)
 			}
 		}
 	}
-	return Config{Spec: *strategy.Pool, Portfolio: strategy.Portfolio, Mode: mode, Sides: sides}, nil
+	return Config{Spec: *strategy.Pool, Portfolio: strategy.Portfolio, Mode: mode, Sides: sides, Clock: clock}, nil
 }
 
 // newLedger 构造一个成员的模拟账本：股票池的费率用 fees.equity_bps，停牌（缺价）时按最后价格保持持仓、不清算；
@@ -89,8 +92,10 @@ type State struct {
 	// 之后某一期缺了（没有被处理）时，成员净值沿用上一个值补齐。
 	Started      bool  `json:"started,omitempty"`
 	LastBarIndex int64 `json:"last_bar_index,omitempty"`
-	// Ratios 是上期（步长限制之后）各成员的比例，供步长限制用。
+	// Ratios 是上期（步长限制之后）各成员的比例，供步长限制用；drift 不写，它的系数在 Drift 里。
 	Ratios map[string]string `json:"ratios,omitempty"`
+	// Drift 是 drift 分配的状态（分配系数、分步再平衡、冻结截止），其他分配方式为空。
+	Drift *DriftState `json:"drift,omitempty"`
 	// Series 是各成员模拟账本的净值序列，最后一个值是最后推进那一期的期末净值，只保留最长窗口所需的长度。
 	Series map[string][]float64 `json:"series,omitempty"`
 	// Ledgers 是各成员的模拟账本（全精度）。
@@ -136,8 +141,15 @@ type Input struct {
 
 // Step 推进池一期。previous 是上一期的完整状态（没有时为零值）；返回的决策里 State 是新的完整状态。
 // 只有所有成员都没通过时才返回 skipped：状态不变，账本不推进（缺的期之后沿用上一个净值补齐）。
-// 计算顺序：成员目标（没通过的沿用上期权重）→ 用上一期末为止的净值序列算比例 → 成员账本推进一期并追加本期净值 → 池目标 = Σ 比例 × 成员目标，
-// 再套组合约束与 max_weight。
+// 计算顺序（设计第 6 节末尾的 12 步）：
+//   - 第 1 步：成员目标（没通过的沿用上期权重）；
+//   - 第 2 步：成员账本按本根收盘价估值（Mark，不调仓，结算资金费）；
+//   - 第 3 步：比例。fixed、rotation 用上一期末为止的净值序列（不用本根估值），再乘择时、按步长限制；drift 按本根估值漂移（见 drift.go）；
+//   - 第 4～5 步：drift 的波动冻结与侧内再平衡；
+//   - 第 6～7 步：净敞口与总杠杆区间；
+//   - 第 8～9 步：条件转移，池目标 = Σ 比例 × 成员目标；
+//   - 第 10 步：成员账本按成员目标调仓（Rebalance），追加本期净值；
+//   - 第 11～12 步：单标的上限与转移、leverage 与 max_weight（成员冻结的标的保持上期池目标）。
 func Step(cfg Config, previous engine.State, in Input) (engine.Decision, error) {
 	ids := cfg.MemberIDs()
 	results, err := indexResults(ids, in.Members)
@@ -168,14 +180,65 @@ func Step(cfg Config, previous engine.State, in Input) (engine.Decision, error) 
 	if err != nil {
 		return engine.Decision{}, err
 	}
+	// 爆仓标记取估值之前的：本根估值时才爆仓的成员下一根起比例为 0。
 	bankrupt := make(map[string]bool, len(ids))
 	for _, id := range ids {
 		if book := state.Ledgers[id]; book != nil {
 			bankrupt[id] = book.Bankrupt
 		}
 	}
-	// 比例只用上一期末为止的净值序列：本期的成员账本在下面才推进。
-	alloc := allocate(cfg.Spec, ids, state.Series, bankrupt, previousRatios)
+	if state.Ledgers == nil {
+		state.Ledgers = make(map[string]*ledger.Ledger, len(ids))
+	}
+	if state.Series == nil {
+		state.Series = make(map[string][]float64, len(ids))
+	}
+	var funding map[string]float64
+	if cfg.Spec.Fees.FundingColumn != "" {
+		funding = in.Funding
+		if funding == nil {
+			funding = map[string]float64{}
+		}
+	}
+	// 第 2 步：成员账本估值。drift 在估值之前按账本里上一次调仓后的持仓与估值价算 ρ、π。
+	drift := cfg.Spec.Allocation.Method == dsl.AllocationDrift
+	var returns map[string]memberReturn
+	if drift {
+		returns = make(map[string]memberReturn, len(ids))
+	}
+	marks := make(map[string]ledger.Outcome, len(ids))
+	for _, id := range ids {
+		book := state.Ledgers[id]
+		if book == nil {
+			book = cfg.newLedger()
+			state.Ledgers[id] = book
+		}
+		if drift {
+			returns[id] = valuationReturn(book, in.Prices)
+		}
+		if marks[id], err = book.Mark(in.Prices, funding); err != nil {
+			return engine.Decision{}, fmt.Errorf("成员 %s：%w", id, err)
+		}
+	}
+	// 第 3～7 步：比例。fixed、rotation 只用上一期末为止的净值序列（本根的净值在第 10 步才追加）。
+	var alloc allocation
+	var ratios map[string]quant.Decimal
+	var adjustments []engine.PoolAdjustment
+	var driftSummary *engine.PoolDrift
+	if drift {
+		result, err := stepDrift(cfg, ids, state, returns, marks, bankrupt, in.BarIndex)
+		if err != nil {
+			return engine.Decision{}, err
+		}
+		alloc, ratios, adjustments, driftSummary = result.alloc, result.alloc.ratio, result.adjustments, result.summary
+		state.Drift = result.state
+	} else {
+		alloc = allocate(cfg.Spec, ids, state.Series, bankrupt, previousRatios)
+		// 合成用的比例：净敞口与总杠杆区间之后的值（见 constraints.go），不写回 State.Ratios。
+		if ratios, adjustments, err = constrain(cfg, ids, alloc.ratio, state.Started); err != nil {
+			return engine.Decision{}, err
+		}
+	}
 
 	// 成员的有效目标：通过的取本期目标，没通过的沿用上期目标；条件转移按它判断“空”。
 	memberTargets := make(map[string]map[string]quant.Decimal, len(ids))
@@ -194,11 +257,7 @@ func Step(cfg Config, previous engine.State, in Input) (engine.Decision, error) 
 			}
 		}
 	}
-	// 合成用的比例：净敞口与总杠杆区间、条件转移之后的值（见 constraints.go），不写回 State.Ratios。
-	ratios, adjustments, err := constrain(cfg, ids, alloc.ratio, state.Started)
-	if err != nil {
-		return engine.Decision{}, err
-	}
+	// 第 8～9 步：条件转移只作用于本期合成用的比例，不写回状态。
 	ratios, switched := applySwitch(cfg, ratios, empty)
 
 	contributions := make(map[string]quant.Decimal)
@@ -220,26 +279,12 @@ func Step(cfg Config, previous engine.State, in Input) (engine.Decision, error) 
 			}
 		}
 	}
-	if state.Ledgers == nil {
-		state.Ledgers = make(map[string]*ledger.Ledger, len(ids))
-	}
-	if state.Series == nil {
-		state.Series = make(map[string][]float64, len(ids))
-	}
-	var funding map[string]float64
-	if cfg.Spec.Fees.FundingColumn != "" {
-		funding = in.Funding
-		if funding == nil {
-			funding = map[string]float64{}
-		}
-	}
+	// 第 10 步：成员账本按成员目标调仓（没通过的成员只做收尾），追加本期净值。
 	for _, id := range ids {
-		book := state.Ledgers[id]
-		if book == nil {
-			book = cfg.newLedger()
-			state.Ledgers[id] = book
+		outcome, err := state.Ledgers[id].Rebalance(marks[id], ledger.Step{Prices: in.Prices, Targets: floatTargets(results[id]), OK: results[id].passed(), Funding: funding})
+		if err != nil {
+			return engine.Decision{}, fmt.Errorf("成员 %s：%w", id, err)
 		}
-		outcome := book.Step(ledger.Step{Prices: in.Prices, Targets: floatTargets(results[id]), OK: results[id].passed(), Funding: funding})
 		series := append(state.Series[id], outcome.EquityAfter)
 		if len(series) > keep {
 			series = append([]float64(nil), series[len(series)-keep:]...)
@@ -255,9 +300,12 @@ func Step(cfg Config, previous engine.State, in Input) (engine.Decision, error) 
 		return engine.Decision{}, err
 	}
 	state.Started, state.LastBarIndex = true, in.BarIndex
-	state.Ratios = make(map[string]string, len(ids))
-	for _, id := range ids {
-		state.Ratios[id] = alloc.ratio[id].String()
+	state.Ratios = nil
+	if !drift {
+		state.Ratios = make(map[string]string, len(ids))
+		for _, id := range ids {
+			state.Ratios[id] = alloc.ratio[id].String()
+		}
 	}
 	raw, err := json.Marshal(state)
 	if err != nil {
@@ -274,7 +322,7 @@ func Step(cfg Config, previous engine.State, in Input) (engine.Decision, error) 
 	composed.State = next
 	composed.Items = items
 	composed.Summary.Pool = summary(cfg, ids, results, state, &alloc, perMember)
-	composed.Summary.Pool.Adjustments, composed.Summary.Pool.Switch = adjustments, switched
+	composed.Summary.Pool.Adjustments, composed.Summary.Pool.Switch, composed.Summary.Pool.Drift = adjustments, switched, driftSummary
 	for i, id := range ids {
 		if used := ratios[id].String(); used != alloc.ratio[id].String() {
 			composed.Summary.Pool.Members[i].Composed = used
@@ -447,6 +495,11 @@ func summary(cfg Config, ids []string, results map[string]MemberResult, state St
 			member.Bankrupt = book.Bankrupt
 		}
 		ratio := state.Ratios[id]
+		if state.Drift != nil {
+			if value, err := decimalRatio(state.Drift.G[id]); err == nil {
+				ratio = value.String()
+			}
+		}
 		if ratio == "" {
 			ratio = "0"
 		}
@@ -456,6 +509,9 @@ func summary(cfg Config, ids []string, results map[string]MemberResult, state St
 			member.Base, member.RatioBefore, member.Ratio = alloc.base[id].String(), alloc.before[id].String(), alloc.ratio[id].String()
 			if alloc.timing != nil {
 				member.Timing = alloc.timing[id].String()
+			}
+			if alloc.drifted != nil {
+				member.Drifted = alloc.drifted[id].String()
 			}
 			if rank, ok := alloc.rank[id]; ok {
 				rank = math.Round(rank*1e6) / 1e6
