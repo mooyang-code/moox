@@ -89,11 +89,11 @@
       <a-input-number v-model="form.swap_fee_bps" :min="0" :max="1000" :step="1" />
       <template #extra
         >模拟曲线未计强平；永续按收盘价逐期结算盈亏，{{
-          pool ? "资金费按池 DSL 的 fees.funding_column 结算。" : "资金费要在下面写资金费列才计入。"
+          pooled ? "资金费按池 DSL 的 fees.funding_column 结算。" : "资金费要在下面写资金费列才计入。"
         }}</template
       >
     </a-form-item>
-    <a-form-item v-if="usesSwap && !pool" label="资金费列（可选）">
+    <a-form-item v-if="usesSwap && !pooled" label="资金费列（可选）">
       <a-input v-model="form.funding_column" placeholder="funding_rate" allow-clear />
       <template #extra>写了就按这一列（本根累计的资金费率）给永续持仓结算资金费：上一根收盘调仓之前的持仓乘本根费率。</template>
     </a-form-item>
@@ -112,6 +112,7 @@ import {
   replayDateOnly,
   replayDeclared,
   replayDriftHint,
+  replayIsPool,
   replayMarkets,
   replayPool,
   wholeDays
@@ -126,6 +127,8 @@ const zone = useDisplayZone();
 
 // 策略的 market 决定要读哪些市场的任务（策略池取成员市场的并集）；没写 market 时只读一个，市场由用户选。
 const pool = computed(() => replayPool(form.value, props.strategies));
+// 资金费列与说明看回放对象是不是策略池（从池实例发起时按实例引用的定义判断）：池的资金费写在池 DSL 里。
+const pooled = computed(() => replayIsPool(form.value, props.strategies));
 const declared = computed(() => replayDeclared(form.value, props.strategies));
 const driftHint = computed(() => replayDriftHint(form.value, props.strategies));
 const markets = computed(() => replayMarkets(form.value, props.strategies));

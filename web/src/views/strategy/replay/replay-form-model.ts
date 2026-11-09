@@ -22,6 +22,8 @@ export interface ReplayFormState {
   swap_fee_bps: number;
   /** 永续持仓结算资金费用的列（例如 funding_rate）；空串表示不计。 */
   funding_column: string;
+  /** 从实例发起时实例引用的策略定义（页面按实例 ID 读回）；只用来判断是不是策略池，没读到时为空。 */
+  instance_strategy_id?: string;
 }
 
 /** 回放对象三选一：实例会话固化的版本、已保存的定义，或未保存的 DSL 文本；都没选返回 null。 */
@@ -45,6 +47,16 @@ export function replayPool(form: ReplayFormState, strategies: Strategy[]): PoolR
     replayDslText(form, strategies),
     id => strategies.find(item => item.strategy_id === id)?.dsl_yaml ?? null
   );
+}
+
+/**
+ * 回放对象是不是策略池：从实例发起时按实例引用的定义（当前版本）判断，实例的定义还没读到时按不是池处理；其余来源看 DSL 本身。
+ * 只用来决定资金费列与说明（池的资金费写在池 DSL 里），不用来校验成员：实例回放的成员取会话快照，由后端校验。
+ */
+export function replayIsPool(form: ReplayFormState, strategies: Strategy[]): boolean {
+  if (!form.instance_id) return Boolean(replayPool(form, strategies));
+  const text = strategies.find(item => item.strategy_id === form.instance_strategy_id)?.dsl_yaml ?? "";
+  return Boolean(form.instance_strategy_id && parseDSL(text).preview?.pool);
 }
 
 /** 要读的市场是否由 DSL 决定：写了 market，或是策略池（成员市场的并集）；否则要先选任务所属的市场。 */
@@ -71,7 +83,7 @@ export function replayDriftHint(form: ReplayFormState, strategies: Strategy[]): 
   if (pool?.method !== "drift") return "";
   return pool.driftStart
     ? `drift 池：起点必须选漂移起点 ${pool.driftStart}，结果才与实时可比。`
-    : "drift 池：漂移从区间的第一根开始。";
+    : "drift 池：漂移从区间的第一根开始，与实时不可比；要逐期比对请在池 DSL 写 allocation.start。";
 }
 
 /** 提交用的 factor_tasks：只含回放要读的市场；从实例发起且没有预填任务时为空，由后端读实例关联的任务。 */
@@ -101,7 +113,7 @@ export function validateReplayForm(form: ReplayFormState, strategies: Strategy[]
 
 /** 提交用的资金费列：只在回放读取永续（含统一数据集）时带上，表单里隐藏的旧值不提交；策略池的资金费写在池 DSL 里，不提交；没写时为空串。 */
 export function replayFundingColumn(form: ReplayFormState, strategies: Strategy[] = []): string {
-  if (replayPool(form, strategies)) return "";
+  if (replayIsPool(form, strategies)) return "";
   const markets = replayMarkets(form, strategies);
   if (!markets.includes("swap") && !markets.includes("multi")) return "";
   return (form.funding_column ?? "").trim();

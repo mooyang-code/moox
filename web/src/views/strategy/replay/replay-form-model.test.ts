@@ -7,6 +7,7 @@ import {
   replayDeclared,
   replayDriftHint,
   replayFundingColumn,
+  replayIsPool,
   replayMarkets,
   replayPool,
   replaySourceOf,
@@ -173,6 +174,25 @@ describe("策略池回放表单", () => {
     expect(validateReplayForm(form(both, { funding_column: "funding-rate" }), catalog)).toBe("");
   });
 
+  it("从池实例发起时按实例引用的定义认出策略池，资金费列不提交；定义还没读到或不是池时照常提交", () => {
+    const catalog = [...members, both, ...strategies];
+    const instance = (strategyId: string | undefined): ReplayFormState => ({
+      ...base,
+      instance_id: "i1",
+      instance_strategy_id: strategyId,
+      tasks: { spot: "ftask_spot", swap: "ftask_swap" },
+      funding_column: "funding_rate"
+    });
+    expect(replayIsPool(instance("p"), catalog)).toBe(true);
+    expect(replayFundingColumn(instance("p"), catalog)).toBe("");
+    expect(replayIsPool(instance("s1"), catalog)).toBe(false);
+    expect(replayFundingColumn(instance("s1"), catalog)).toBe("funding_rate");
+    expect(replayFundingColumn(instance(undefined), catalog)).toBe("funding_rate");
+    // 不从实例发起时只看回放对象的 DSL，表单里残留的实例定义不起作用。
+    expect(replayIsPool({ ...instance("p"), instance_id: "" }, catalog)).toBe(false);
+    expect(replayIsPool(form(both), catalog)).toBe(true);
+  });
+
   it("drift 池的区间旁说明起点规则；不是 drift 时没有说明", () => {
     const list = "    - {id: a, strategy: m_spot}\n    - {id: b, strategy: m_swap}\n";
     const started = pool(
@@ -183,7 +203,9 @@ describe("策略池回放表单", () => {
     expect(replayDriftHint(form(started), [...members, started])).toBe(
       "drift 池：起点必须选漂移起点 2026-09-01T05:00:00Z，结果才与实时可比。"
     );
-    expect(replayDriftHint(form(free), [...members, free])).toBe("drift 池：漂移从区间的第一根开始。");
+    expect(replayDriftHint(form(free), [...members, free])).toBe(
+      "drift 池：漂移从区间的第一根开始，与实时不可比；要逐期比对请在池 DSL 写 allocation.start。"
+    );
     expect(replayDriftHint(form(both), [...members, both])).toBe("");
     expect(replayDriftHint({ ...form(started), instance_id: "i1" }, [...members, started])).toBe("");
   });

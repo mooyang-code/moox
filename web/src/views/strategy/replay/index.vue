@@ -290,7 +290,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } 
 import { Message, Modal } from "@arco-design/web-vue";
 import type VChart from "@visactor/vchart";
 import { useRoute, useRouter } from "vue-router";
-import { cancelReplay, getReplay, listReplayBars, listReplays, startReplay } from "@/api/strategy";
+import { cancelReplay, getInstance, getReplay, listReplayBars, listReplays, startReplay } from "@/api/strategy";
 import type { PageResult } from "@/api/strategy";
 import type { InstrumentTarget, Replay, ReplayBar } from "@/api/strategy-types";
 import { reportControlError, serverNow } from "@/api/admin/http";
@@ -924,13 +924,28 @@ function closeCreate() {
 /** 建立创建上下文时应用入口预填；之后的翻页、选择、轮询都不会覆盖正在编辑的草稿。 */
 function applyPrefill() {
   const { strategyId, instanceId, factorTasks } = parsed.value.prefill;
-  if (instanceId) form.instance_id = instanceId;
-  else if (strategyId) {
+  if (instanceId) {
+    form.instance_id = instanceId;
+    void loadInstanceStrategy(instanceId);
+  } else if (strategyId) {
     form.instance_id = "";
     form.strategy_id = strategyId;
     form.source = "definition";
   }
   if (Object.keys(factorTasks).length) form.tasks = { ...factorTasks };
+}
+/**
+ * 从实例发起时读回实例引用的策略定义，表单据此判断是不是策略池（池的资金费写在池 DSL 里，不显示资金费列）。
+ * 读取失败时不提示，表单按不是池处理，提交后由后端校验；读回之前用户已改了来源时丢弃结果。
+ */
+async function loadInstanceStrategy(instanceId: string) {
+  form.instance_strategy_id = "";
+  try {
+    const instance = await getInstance(instanceId, { silent: true });
+    if (form.instance_id === instanceId) form.instance_strategy_id = instance.strategy_id;
+  } catch {
+    // 读不到实例时保持空值
+  }
 }
 /** URL 里有显式 replay_id 时直接读取它（即使不在当前列表页），失败也不回退到第一条。 */
 function applyRouteSelection() {
