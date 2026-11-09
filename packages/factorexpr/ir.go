@@ -1,6 +1,7 @@
 package factorexpr
 
 import (
+	"math"
 	"strconv"
 	"strings"
 )
@@ -66,6 +67,8 @@ type Node struct {
 	shift int
 	cross bool
 	size  int
+	// nanLiteral 为真表示子树里写了 nan 字面量：只有这样的常量运算才允许折叠出 NaN（见 fold）。
+	nanLiteral bool
 }
 
 // HasParamSlots 报告节点的整数或数值参数里是否有可调参数。
@@ -146,6 +149,9 @@ func formatConst(n *Node) string {
 		}
 		return "false"
 	}
+	if math.IsNaN(n.Value) {
+		return NaNLiteral
+	}
 	return formatFloat(n.Value)
 }
 
@@ -166,6 +172,13 @@ func newParam(param Param) *Node {
 
 func newNumber(value float64, isInt bool) *Node {
 	return &Node{Op: OpConst, Kind: KindNumberConst, Value: value, IsInt: isInt, size: 1}
+}
+
+// NaNLiteral 是空值常量的写法，与 true、false 同为保留字。
+const NaNLiteral = "nan"
+
+func newNaN() *Node {
+	return &Node{Op: OpConst, Kind: KindNumberConst, Value: math.NaN(), size: 1, nanLiteral: true}
 }
 
 func newBool(value bool) *Node {

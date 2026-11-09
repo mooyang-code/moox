@@ -108,6 +108,9 @@ func lowerNode(src *exprSource, node ast.Node, sc *scope) (*Node, error) {
 
 func resolveName(src *exprSource, node *ast.IdentifierNode, sc *scope) (*Node, error) {
 	name := node.Value
+	if name == NaNLiteral {
+		return newNaN(), nil
+	}
 	if position, ok := sc.letPos[name]; ok {
 		if position >= sc.current {
 			return nil, src.errAt(node, "引用了在它之后（或它自身）定义的 let %s；let 只能引用前面定义的中间量", name)
@@ -224,6 +227,9 @@ func apply(src *exprSource, node ast.Node, fn *Function, args []*Node, argNodes 
 				return nil, src.errAt(at, "%s%s 需要布尔序列，得到%s", label, spec.Name, arg.Kind.describe())
 			}
 		case ArgWindow, ArgInteger:
+			if arg.Kind == KindNumberConst && math.IsNaN(arg.Value) {
+				return nil, src.errAt(at, "%s%s 不能是 nan：这个位置必须是 %s～%s 的整数", label, spec.Name, formatFloat(spec.Min), formatFloat(spec.Max))
+			}
 			if arg.Op == OpParam {
 				param := sc.params[arg.Param]
 				if !param.IsInt() || param.Min < spec.Min || param.Max > spec.Max {
@@ -241,7 +247,13 @@ func apply(src *exprSource, node ast.Node, fn *Function, args []*Node, argNodes 
 			result.IntParams = append(result.IntParams, "")
 			continue
 		case ArgConstant:
+			if arg.Kind == KindNumberConst && math.IsNaN(arg.Value) {
+				return nil, src.errAt(at, "%s%s 不能是 nan：这个位置必须是 %s～%s 之间的数", label, spec.Name, formatFloat(spec.Min), formatFloat(spec.Max))
+			}
 			if arg.Op == OpParam {
+				if spec.LiteralOnly {
+					return nil, src.errAt(at, "%s%s 只能写字面量，不能使用参数 %s（参数可以按标的取不同的值）", label, spec.Name, arg.Param)
+				}
 				param := sc.params[arg.Param]
 				if param.Min < spec.Min || param.Max > spec.Max {
 					return nil, src.errAt(at, "%s%s 使用参数 %s 时，参数范围必须在 %s～%s 内", label, spec.Name, param.Name,
@@ -330,22 +342,32 @@ func fold(src *exprSource, node ast.Node, fn *Function, args []*Node) (*Node, bo
 		return args[2], true, nil
 	}
 	values := make([]float64, len(args))
-	allInt := true
+	allInt, nanLiteral := true, false
 	for i, arg := range args {
 		if !arg.Kind.isConst() {
 			return nil, false, nil
 		}
 		values[i] = arg.Value
 		allInt = allInt && arg.IsInt
+		nanLiteral = nanLiteral || arg.nanLiteral
 	}
 	value := Scalar(fn.Name)(values)
 	if math.IsNaN(value) {
-		return nil, false, src.errAt(node, "常量运算的结果不是有限数（例如除以 0、对负数取对数）")
+		if !nanLiteral {
+			return nil, false, src.errAt(node, "常量运算的结果不是有限数（例如除以 0、对负数取对数）")
+		}
+		if fn.Result == ResultBool {
+			// 布尔常量只有真、假两个值；结果为 NaN 的条件（例如 nan > 0）不折叠，留到运行时按三值逻辑求值。
+			return nil, false, nil
+		}
+		nanNode := newNaN()
+		return nanNode, true, nil
 	}
 	if fn.Result == ResultBool {
 		return newBool(value != 0), true, nil
 	}
-	isInt := allInt && integerPreserving[fn.Name] && value == math.Trunc(value) && math.Abs(value) <= maxIntegerParam
+	isInt := (integerResult[fn.Name] || allInt && integerPreserving[fn.Name]) && value == math.Trunc(value) &&
+		math.Abs(value) <= maxIntegerParam
 	if fn.Name == "where" {
 		chosen := args[2]
 		if args[0].Value != 0 {

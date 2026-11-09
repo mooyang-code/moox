@@ -218,3 +218,57 @@ func TestUnusedLetIsAllowedButChecked(t *testing.T) {
 		t.Fatal("an invalid unused let should still be rejected")
 	}
 }
+
+// nan 是空值常量：可以写在数值位置（where 的分支、fill_nan 的取值、运算），不能写在窗口、位移、分位数等编译期位置，
+// 也不能用作参数名或 let 名；不含 nan 字面量的常量运算算出 NaN 仍然报错。
+func TestNaNLiteral(t *testing.T) {
+	valid := []struct {
+		expression, canonical string
+	}{
+		{`where(close > open, close, nan)`, "where(gt(close,open),close,nan)"},
+		{`fill_nan(close, nan)`, "fill_nan(close,nan)"},
+		{`close + nan`, "add(close,nan)"},
+		{`close + (nan + 1)`, "add(close,nan)"},
+		{`cs_rank(where(close > 0, close, nan))`, "cs_rank(where(gt(close,0),close,nan))"},
+		{`where(nan > 0, close, open)`, "where(gt(nan,0),close,open)"},
+		{`where(is_nan(nan), close, open)`, "close"},
+		{`ts_mean(close, ceil(7.5))`, "ts_mean(close,8)"},
+		{`ts_mean(close, round(2.5))`, "ts_mean(close,3)"},
+	}
+	for _, tc := range valid {
+		factor, err := Compile(outputSpec(tc.expression))
+		if err != nil {
+			t.Fatalf("%s: %v", tc.expression, err)
+		}
+		if got := factor.Outputs[0].Root.Canonical(); got != tc.canonical {
+			t.Errorf("%s: canonical = %s, want %s", tc.expression, got, tc.canonical)
+		}
+	}
+	invalid := []struct {
+		name, text, want string
+	}{
+		{"window", outputSpec(`ts_mean(close, nan)`), "参数 n 不能是 nan"},
+		{"folded window", outputSpec(`ts_mean(close, nan + 1)`), "参数 n 不能是 nan"},
+		{"shift", outputSpec(`delay(close, nan)`), "参数 k 不能是 nan"},
+		{"quantile", outputSpec(`ts_quantile(close, 20, nan)`), "参数 q 不能是 nan"},
+		{"constant output", outputSpec(`nan`), "不能是常量"},
+		{"zero over zero", outputSpec(`close + 0 / 0`), "常量运算的结果不是有限数"},
+		{"param name", "params: {nan: {type: int, min: 1, max: 9, default: 5}}\noutput: close\n", "保留字"},
+		{"let name", "let:\n  nan: close\noutput: close\n", "保留字"},
+		{"called as function", outputSpec(`nan(close)`), "未知的函数 nan"},
+	}
+	for _, tc := range invalid {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Compile(tc.text)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("err = %v, want containing %q", err, tc.want)
+			}
+		})
+	}
+	// 不同写法得到同一个 NaN 常量：规范文本相同（定义哈希相同）。
+	a := mustCompile(t, outputSpec(`close + nan`)).CanonicalText()
+	b := mustCompile(t, outputSpec(`close + (nan * 2)`)).CanonicalText()
+	if a != b {
+		t.Fatalf("canonical differs: %q vs %q", a, b)
+	}
+}

@@ -89,7 +89,10 @@ var scalarFuncs = map[string]ScalarFunc{
 		}
 		return math.Sqrt(a)
 	}),
-	"exp": unary(math.Exp),
+	"exp":   unary(math.Exp),
+	"floor": unary(math.Floor),
+	"ceil":  unary(math.Ceil),
+	"round": unary(math.Round), // math.Round 在 0.5 处远离零取整
 	"log": unary(func(a float64) float64 {
 		if a <= 0 {
 			return nan
@@ -158,3 +161,6 @@ func Scalar(op string) ScalarFunc { return scalarFuncs[op] }
 var integerPreserving = map[string]bool{
 	"add": true, "sub": true, "mul": true, "mod": true, "neg": true, "abs": true, "max": true, "min": true, "sign": true,
 }
+
+// integerResult 是不论输入、结果总是整数的算子：取整后的常量可以作为窗口参数，例如 ts_mean(x, ceil(7.5))。
+var integerResult = map[string]bool{"floor": true, "ceil": true, "round": true}

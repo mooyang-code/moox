@@ -54,6 +54,8 @@ type ArgSpec struct {
 	Max      float64
 	Optional bool
 	Default  float64
+	// LiteralOnly 为真表示这个编译期常量位置只收字面量，不收参数（截面算子的常量要对整个截面相同）。
+	LiteralOnly bool
 }
 
 // Function 是注册表中的一个算子（函数或运算符）。
@@ -202,6 +204,9 @@ var functionList = []*Function{
 	elementwise("fill_nan", []ArgSpec{argX, {Name: "v", Kind: ArgNumber}}, ResultNumber,
 		"x 为 NaN 时取 v", "fill_nan(pct_change(close), 0)"),
 	elementwise("is_nan", []ArgSpec{argX}, ResultBool, "x 是否为 NaN（结果不会是 NaN）", "where(is_nan(x), 0, x)"),
+	elementwise("floor", []ArgSpec{argX}, ResultNumber, "向下取整", "floor(close)"),
+	elementwise("ceil", []ArgSpec{argX}, ResultNumber, "向上取整", "ceil(volume / 100)"),
+	elementwise("round", []ArgSpec{argX}, ResultNumber, "四舍五入到整数，0.5 远离零取整（2.5 → 3，−2.5 → −3）", "round(close)"),
 
 	// 时序：位移
 	{Name: "delay", Category: CategoryTimeSeries, Args: []ArgSpec{argSeries, {Name: "k", Kind: ArgInteger, Min: 1, Max: MaxWindow}},
