@@ -30,6 +30,9 @@ func CrossKernel(op string, floats []float64, subject string) Cross {
 	if kernel, ok := cross[op]; ok {
 		return kernel
 	}
+	if kernel, ok := grouped[op]; ok {
+		return kernel
+	}
 	if aggregate := AggregateKernel(op, floats, subject); aggregate != nil {
 		return broadcast(aggregate)
 	}
@@ -82,6 +85,9 @@ var cross = map[string]Cross{
 	"cs_zscore": rowwise(crossZscore),
 	"cs_demean": rowwise(crossDemean),
 	"cs_scale":  rowwise(crossScale),
+	"cs_resid": func(in Section, out []float64) string {
+		return residuals(in, out, false)
+	},
 }
 
 // cs_rank：截面百分位（名次 / 有效样本数），并列取平均名次。

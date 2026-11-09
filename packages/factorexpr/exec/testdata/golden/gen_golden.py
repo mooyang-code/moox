@@ -8,7 +8,8 @@
 - rolling：各时序算子在一条序列上的结果，pandas 严格窗口（min_periods = n）；宽松窗口算子在开头带 NaN 的序列 z、u 上，
   pandas rolling(n, min_periods=m)；
 - cross：各截面算子在 12 个标的 × 30 个时刻上的结果（按时刻与 series_tag 分组）；逐行变换类用 v，
-  聚合广播类用 w（在 v 上挖出整组为 NaN 的截面）。
+  聚合广播类用 w（在 v 上挖出整组为 NaN 的截面）；多输入、分组截面与截面回归用 a、b、y2、amount 与分组键 g，
+  回归的期望值由 numpy lstsq 在完整设计矩阵（截距或分组哑变量）上算出，误差 ≤ 1e-9。
 
 约定：结果里的 NaN 与 ±Inf 写成 null（与 factorexpr 把非有限值记为 NaN 一致）。
 """
@@ -229,6 +230,152 @@ aggregate_cases = {
 for q in (0, 0.25, 0.9, 1):
     aggregate_cases[f"cs_quantile(w, {q})"] = wgroup.transform(lambda s, q=q: s.quantile(q))
 
+# 多输入与分组截面函数（第 2 期）：另用一个随机数发生器生成 a、b、y2 与分组键 g，不影响上面的数据与期望值。
+# 分组键 g 取 0～2（部分行为 NaN，不属于任何组）；回归用例里另有一个截面让 b = 2a（奇异），一个截面让 a 在组内为常数（与哑变量共线）。
+group_rng = np.random.default_rng(20261109)
+a = group_rng.normal(0, 1, (S, T))
+b = group_rng.normal(0, 1, (S, T))
+y2 = 0.5 * a - 0.3 * b + group_rng.normal(0, 0.5, (S, T))
+g = group_rng.integers(0, 3, (S, T)).astype(float)
+amount = np.abs(group_rng.normal(10, 4, (S, T)))
+a[2, 3] = np.nan
+b[8, 4] = np.nan
+y2[5, 6] = np.nan
+g[1, 7] = np.nan
+g[9, 7] = np.nan
+g[0:7, 9] = np.nan  # venue:a 整截面没有分组键
+amount[3, 11] = np.nan
+amount[0:3, 13] = 7.0  # 并列（按标的排序）
+amount[7:12, 14] = 0.0  # venue:b 总和为 0
+amount[4, 16] = -1.0  # w ≤ 0 的行不参与加权
+b[:, 18] = 2 * a[:, 18]  # 奇异：b 与 a 共线
+for s in range(S):
+    a[s, 19] = 1.0 + (g[s, 19] if not np.isnan(g[s, 19]) else 0)  # a 在组内为常数：与哑变量共线
+a[7:12, 21] = 3.0  # venue:b 的 a 是常数：与截距共线
+a[0:7, 23] = np.nan  # venue:a 没有有效的 a
+gframe = frame[["time", "tag", "subject"]].copy()
+for name, matrix in (("a", a), ("b", b), ("y2", y2), ("g", g), ("amount", amount)):
+    gframe[name] = [matrix[s, t] for s in range(S) for t in range(T)]
+gframe["c"] = np.where(np.isnan(gframe["a"]), np.nan, (gframe["a"] > 0).astype(float))
+
+
+def by_section(fn):
+    """按 (time, tag) 截面逐个计算：fn 收到截面的子表，返回与它等长的结果。"""
+    out = pd.Series(np.nan, index=gframe.index)
+    for _, part in gframe.groupby(["time", "tag"]):
+        out.loc[part.index] = np.asarray(fn(part), dtype=float)
+    return out
+
+
+def by_group(fn):
+    """截面内再按 g 分组（g 为 NaN 的行输出 NaN）：fn 收到组的子表，返回与它等长的结果。"""
+    def section(part):
+        out = pd.Series(np.nan, index=part.index)
+        for _, members in part[part["g"].notna()].groupby("g"):
+            out.loc[members.index] = np.asarray(fn(members), dtype=float)
+        return out
+    return by_section(section)
+
+
+def broadcast(fn):
+    return lambda members: np.full(len(members), fn(members))
+
+
+def rank_pct(values):
+    return pd.Series(values).rank(pct=True).to_numpy()
+
+
+def zscore(values):
+    values = pd.Series(values)
+    if values.count() < 2:
+        return np.full(len(values), np.nan)
+    return ((values - values.mean()) / values.std()).to_numpy()
+
+
+def corr(part):
+    valid = part[["a", "y2"]].dropna()
+    if len(valid) < 3:
+        return np.nan
+    return valid["a"].corr(valid["y2"])
+
+
+def wmean(members):
+    use = members[members["a"].notna() & members["amount"].notna() & (members["amount"] > 0)]
+    if len(use) == 0:
+        return np.nan
+    return (use["a"] * use["amount"]).sum() / use["amount"].sum()
+
+
+def cumshare(members):
+    valid = members[members["amount"].notna()].copy()
+    out = pd.Series(np.nan, index=members.index)
+    if len(valid) == 0:
+        return out
+    valid = valid.assign(neg=-valid["amount"]).sort_values(["neg", "subject"])
+    total = valid["amount"].sum()
+    if total == 0:
+        return out
+    out.loc[valid.index] = valid["amount"].cumsum() / total
+    return out
+
+
+def across(fn):
+    """组间：每组取 v 的有效均值，在组之间排名或标准化，再广播回组内。"""
+    def section(part):
+        out = pd.Series(np.nan, index=part.index)
+        keyed = part[part["g"].notna()]
+        if len(keyed) == 0:
+            return out
+        means = keyed.groupby("g")["a"].mean()
+        scores = pd.Series(fn(means.to_numpy()), index=means.index)
+        out.loc[keyed.index] = keyed["g"].map(scores).to_numpy()
+        return out
+    return by_section(section)
+
+
+def resid(columns, grouped):
+    """numpy lstsq 参考：完整设计矩阵（截距，或每组一个哑变量）；有效行数不超过参数个数或秩不足时整截面为 NaN。"""
+    def section(part):
+        need = ["y2"] + columns + (["g"] if grouped else [])
+        valid = part.dropna(subset=need)
+        out = pd.Series(np.nan, index=part.index)
+        if len(valid) == 0:
+            return out
+        if grouped:
+            dummies = pd.get_dummies(valid["g"]).to_numpy(dtype=float)
+        else:
+            dummies = np.ones((len(valid), 1))
+        design = np.column_stack([dummies] + [valid[c].to_numpy() for c in columns])
+        if len(valid) <= design.shape[1] or np.linalg.matrix_rank(design) < design.shape[1]:
+            return out
+        beta, *_ = np.linalg.lstsq(design, valid["y2"].to_numpy(), rcond=None)
+        out.loc[valid.index] = valid["y2"].to_numpy() - design @ beta
+        return out
+    return by_section(section)
+
+
+group_cases = {
+    "cs_corr(a, y2)": by_section(lambda part: np.full(len(part), corr(part))),
+    "gs_rank(a, g)": by_group(lambda m: rank_pct(m["a"].to_numpy())),
+    "gs_demean(a, g)": by_group(lambda m: (m["a"] - m["a"].mean()).to_numpy()),
+    "gs_zscore(a, g)": by_group(lambda m: zscore(m["a"].to_numpy())),
+    "gs_cumshare(amount, g)": by_group(cumshare),
+    "gs_mean(a, g)": by_group(broadcast(lambda m: m["a"].mean())),
+    "gs_sum(a, g)": by_group(broadcast(lambda m: m["a"].sum(min_count=1))),
+    "gs_count(a > 0, g)": by_group(broadcast(lambda m: m["c"].sum(min_count=1))),
+    "gs_median(a, g)": by_group(broadcast(lambda m: m["a"].median())),
+    "gs_wmean(a, amount, g)": by_group(broadcast(wmean)),
+    "gx_rank(a, g)": across(rank_pct),
+    "gx_zscore(a, g)": across(zscore),
+}
+resid_cases = {
+    "cs_resid(y2, a)": resid(["a"], False),
+    "cs_resid(y2, a, b)": resid(["a", "b"], False),
+    "gs_resid(y2, g)": resid([], True),
+    "gs_resid(y2, g, a)": resid(["a"], True),
+    "gs_resid(y2, g, a, b)": resid(["a", "b"], True),
+}
+
 cross = {
     "subjects": subjects,
     "tags": tags,
@@ -240,6 +387,14 @@ cross = {
 for expression, values in list(cross_cases.items()) + list(aggregate_cases.items()):
     matrix = values.to_numpy().reshape(S, T)
     cross["cases"].append({"expr": expression, "tol": 1e-12, "expect": [clean(matrix[s]) for s in range(S)]})
+for name, matrix in (("a", a), ("b", b), ("y2", y2), ("g", g), ("amount", amount)):
+    cross[name] = [clean(matrix[s]) for s in range(S)]
+for expression, values in group_cases.items():
+    matrix = values.to_numpy().reshape(S, T)
+    cross["cases"].append({"expr": expression, "tol": 1e-12, "expect": [clean(matrix[s]) for s in range(S)]})
+for expression, values in resid_cases.items():
+    matrix = values.to_numpy().reshape(S, T)
+    cross["cases"].append({"expr": expression, "tol": 1e-9, "expect": [clean(matrix[s]) for s in range(S)]})
 
 OUT.write_text(json.dumps({"pandas": pd.__version__, "numpy": np.__version__, "length": N,
                            "x": clean(x), "y": clean(y), "z": clean(z), "u": clean(u), "rolling": rolling, "cross": cross},

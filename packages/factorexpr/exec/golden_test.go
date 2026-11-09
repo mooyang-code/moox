@@ -28,7 +28,13 @@ type goldenData struct {
 		Times    int          `json:"times"`
 		V        [][]*float64 `json:"v"`
 		W        [][]*float64 `json:"w"`
-		Cases    []struct {
+		// A、B、Y2、Amount 与分组键 G 用于多输入、分组截面与截面回归。
+		A      [][]*float64 `json:"a"`
+		B      [][]*float64 `json:"b"`
+		Y2     [][]*float64 `json:"y2"`
+		G      [][]*float64 `json:"g"`
+		Amount [][]*float64 `json:"amount"`
+		Cases  []struct {
 			Expr   string       `json:"expr"`
 			Tol    float64      `json:"tol"`
 			Expect [][]*float64 `json:"expect"`
@@ -137,15 +143,17 @@ func TestCrossMatchesPandas(t *testing.T) {
 	for i, subject := range data.Subjects {
 		keys = append(keys, SeriesKey{Subject: subject, Tag: data.Tags[i]})
 	}
-	panel, err := NewPanel(data.Times, []string{"v", "w"}, keys)
+	columns := [][][]*float64{data.V, data.W, data.A, data.B, data.Y2, data.G, data.Amount}
+	panel, err := NewPanel(data.Times, []string{"v", "w", "a", "b", "y2", "g", "amount"}, keys)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for i, key := range keys {
 		s, _ := panel.SeriesIndex(key)
-		for tm, v := range data.V[i] {
-			panel.Set(0, s, tm, value(v))
-			panel.Set(1, s, tm, value(data.W[i][tm]))
+		for tm := range data.V[i] {
+			for c, column := range columns {
+				panel.Set(c, s, tm, value(column[i][tm]))
+			}
 			panel.MarkPresent(s, tm)
 		}
 	}

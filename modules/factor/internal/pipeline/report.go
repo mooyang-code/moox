@@ -49,6 +49,7 @@ func outcomeFor(plan Plan, loaded LoadResult, computation Computation) Outcome {
 	if computation.BudgetHit {
 		outcome.Status = "degraded"
 	}
+	outcome.Warnings = computation.Warnings
 	sort.Slice(outcome.Factors, func(i, j int) bool { return outcome.Factors[i].MemberKey < outcome.Factors[j].MemberKey })
 	return outcome
 }

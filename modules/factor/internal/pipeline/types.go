@@ -79,6 +79,9 @@ type Outcome struct {
 	// DefaultFilled 是补算里按默认参数新补的期次（成员键 → 期次）：已有行不存在、或 __params 里没有这个成员。
 	// 由补算执行器填写，管线本身不知道。
 	DefaultFilled map[string][]time.Time
+	// Warnings 是成员在目标区间内整截面没有算出的次数（成员键 → 原因 → 截面数），例如截面回归奇异（cs_resid_singular）、
+	// 组数超限（gs_too_many_groups）。这些截面的值为 NaN、照常写出，不改变成员状态；引擎按原因计入失败指标。
+	Warnings map[string]map[string]int
 }
 
 type Config struct {
@@ -149,6 +152,8 @@ type Computation struct {
 	// Failures 记录成员整体计算失败的原因（补算模式下截面因子的逐行结果不带错误，原因放在这里供试算等调用方报告）。
 	Failures  map[string]error
 	BudgetHit bool
+	// Warnings 是成员在目标区间内整截面没有算出的次数（成员键 → 原因 → 截面数），来自 exec.Result.Warnings。
+	Warnings map[string]map[string]int
 	// availableSeries 是统一数据集上本期可用的序列：成员整体计算失败时，这些序列都记为失败。
 	availableSeries []seriesset.Series
 }

@@ -3,6 +3,7 @@ package factorexpr
 import (
 	"math"
 	"sort"
+	"strconv"
 )
 
 // Category 是算子的类别，决定计算方式：逐元素、按序列滚动、按截面。
@@ -73,6 +74,8 @@ type Function struct {
 	Lookback string
 	Doc      string
 	Example  string
+	// Variadic 大于 0 表示变参：最后一个参数可以重复 1～Variadic 次（它是可选参数时也可以不写），各次的名字是参数名加序号。
+	Variadic int
 	// Broadcast 为真表示聚合广播类截面算子（Category 仍是 CategoryCrossSection）：每个截面算出一个统计量，
 	// 写给截面里的每一行，包括输入为 NaN 的行；其余截面算子是逐行变换类，输入为 NaN 的行输出 NaN。
 	Broadcast bool
@@ -117,6 +120,37 @@ func (f *Function) Validate(ints []int, floats []float64) string {
 		return ""
 	}
 	return f.validate(ints, floats)
+}
+
+// ArgCount 返回参数个数的下限与上限。
+func (f *Function) ArgCount() (int, int) {
+	required := 0
+	for _, arg := range f.Args {
+		if !arg.Optional {
+			required++
+		}
+	}
+	if f.Variadic > 0 {
+		return required, len(f.Args) - 1 + f.Variadic
+	}
+	return required, len(f.Args)
+}
+
+// argSpecs 返回写了 count 个参数时每个位置的参数说明：变参的最后一个参数按次数展开，名字加序号（x1、x2…）。
+// 不是变参时就是 Args。
+func (f *Function) argSpecs(count int) []ArgSpec {
+	if f.Variadic == 0 {
+		return f.Args
+	}
+	specs := append([]ArgSpec(nil), f.Args[:len(f.Args)-1]...)
+	last := f.Args[len(f.Args)-1]
+	for i := 1; len(specs) < count; i++ {
+		spec := last
+		spec.Name = last.Name + strconv.Itoa(i)
+		spec.Optional = false
+		specs = append(specs, spec)
+	}
+	return specs
 }
 
 // GroupArg 返回分组键在节点序列参数（ProgramNode.Args）中的位置；没有分组键时为 −1。
@@ -168,6 +202,7 @@ func smaBack(ints []int) int { return RecursiveSpan(SMAAlpha(ints[0], ints[1])) 
 var (
 	argX      = ArgSpec{Name: "x", Kind: ArgNumber}
 	argSeries = ArgSpec{Name: "x", Kind: ArgSeries}
+	argGroup  = ArgSpec{Name: "g", Kind: ArgGroup}
 )
 
 func window(min int) ArgSpec {
@@ -210,11 +245,32 @@ func cross(name, doc, example string) *Function {
 		Lookback: "L(x)", Doc: doc, Example: example}
 }
 
+// withGroup 在截面算子的参数末尾加上分组键 g。
+func (f *Function) withGroup() *Function {
+	f.Args = append(append([]ArgSpec(nil), f.Args...), argGroup)
+	f.Lookback = crossLookback(f.Args)
+	return f
+}
+
+// crossLookback 是截面算子的回看说明：只有一个序列参数时为 L(x)，多个时（含分组键）取各参数回看的最大值。
+func crossLookback(args []ArgSpec) string {
+	series := 0
+	for _, arg := range args {
+		if arg.Kind == ArgSeries || arg.Kind == ArgBoolSeries || arg.Kind == ArgGroup {
+			series++
+		}
+	}
+	if series > 1 {
+		return "各参数回看的最大值"
+	}
+	return "L(x)"
+}
+
 // aggregate 登记聚合广播类截面算子：有效样本（非 NaN）上算出一个统计量，广播到同一截面（同一 data_time、同一 series_tag、
 // 成员标的范围之内）的每一行；没有有效样本时整个截面为 NaN。
 func aggregate(name string, args []ArgSpec, doc, example string) *Function {
 	return &Function{Name: name, Category: CategoryCrossSection, Args: args, Result: ResultNumber, Broadcast: true,
-		Lookback: "L(x)", Doc: doc, Example: example}
+		Lookback: crossLookback(args), Doc: doc, Example: example}
 }
 
 var functionList = []*Function{
@@ -357,6 +413,40 @@ var functionList = []*Function{
 	aggregate("cs_ref", []ArgSpec{argSeries, {Name: "subject", Kind: ArgSubject}},
 		"同一截面里参考标的的 x，广播到截面每一行；参考标的本期不在截面里或 x 为 NaN 时整个截面为 NaN。标的写成字符串字面量，加成员和启用任务时校验它在任务的标的范围内",
 		`pct_change(close) - pct_change(cs_ref(close, "BTC-USDT"))`),
+	aggregate("cs_corr", []ArgSpec{{Name: "x", Kind: ArgSeries}, {Name: "y", Kind: ArgSeries}},
+		"x、y 都有效的行上的截面皮尔逊相关系数，广播到截面每一行；有效对数少于 3 或任一方方差为 0 时为 NaN。秩相关写成 cs_corr(cs_rank(x), cs_rank(y))",
+		"cs_corr(delay(cs_rank(f), 5), cs_rank(pct_change(close, 5)))"),
+
+	// 分组截面：按分组键 g（数值列，例如行业代码）在每个截面内分组，g 为 NaN 的行不属于任何组、输出 NaN；
+	// 一个截面的组数超过 1000 时整个截面为 NaN，计入失败指标（gs_too_many_groups）。
+	cross("gs_rank", "组内百分位（与 cs_rank 同口径）", "gs_rank(pct_change(close, 20), industry)").withGroup(),
+	cross("gs_demean", "组内去均值 x − 组内均值", "gs_demean(pct_change(close), industry)").withGroup(),
+	cross("gs_zscore", "组内标准化（ddof=1）；组内样本少于 2 或标准差为 0 时为 NaN", "gs_zscore(pct_change(close, 20), industry)").withGroup(),
+	cross("gs_cumshare", "组内按 x 降序排列（并列按标的 ID），累计到本行（含本行）的 x 之和占组内总和的比例；组内总和为 0 时为 NaN",
+		"gs_cumshare(amount, industry)").withGroup(),
+	aggregate("gs_mean", []ArgSpec{argSeries, argGroup}, "组内均值，广播到组内每一行（含输入为 NaN 的行）；组内没有有效样本时为 NaN", "x - gs_mean(x, industry)"),
+	aggregate("gs_sum", []ArgSpec{argSeries, argGroup}, "组内求和，广播到组内每一行；组内没有有效样本时为 NaN", "amount / gs_sum(amount, industry)"),
+	aggregate("gs_count", []ArgSpec{{Name: "c", Kind: ArgBoolSeries}, argGroup}, "组内条件为真的个数，c 为 NaN 的行不计；广播到组内每一行；组内 c 全为 NaN 时为 NaN",
+		"gs_count(close > open, industry)"),
+	aggregate("gs_median", []ArgSpec{argSeries, argGroup}, "组内中位数，广播到组内每一行；组内没有有效样本时为 NaN", "x - gs_median(x, industry)"),
+	aggregate("gs_wmean", []ArgSpec{argSeries, {Name: "w", Kind: ArgSeries}, argGroup},
+		"组内加权均值 Σw·x / Σw，w ≤ 0 或为 NaN、x 为 NaN 的行不参与；广播到组内每一行；没有可用的行时为 NaN", "gs_wmean(pct_change(close, 20), mcap, industry)"),
+	aggregate("gx_rank", []ArgSpec{{Name: "v", Kind: ArgSeries}, argGroup},
+		"组间百分位：每组取 v 的组内均值作为该组的值（v 通常是 gs_* 的结果，组内为常数；组内全为 NaN 的组不参与），在组之间按 cs_rank 的口径排名，再广播回组内每一行",
+		"gx_rank(gs_mean(pct_change(close, 20), industry), industry)"),
+	aggregate("gx_zscore", []ArgSpec{{Name: "v", Kind: ArgSeries}, argGroup},
+		"组间标准化：每组的值同 gx_rank，在组之间按 cs_zscore 的口径标准化（ddof=1，少于 2 组或标准差为 0 时为 NaN），再广播回组内每一行",
+		"gx_zscore(gs_mean(pct_change(close, 20), industry), industry)"),
+
+	// 截面回归残差（逐行变换）
+	{Name: "cs_resid", Category: CategoryCrossSection, Args: []ArgSpec{{Name: "y", Kind: ArgSeries}, {Name: "x", Kind: ArgSeries}}, Variadic: 8,
+		Result: ResultNumber, Lookback: "各参数回看的最大值",
+		Doc:     "每个截面上 y 对常数项与 x1…xk（1～8 个）做最小二乘，输出残差；任一变量为 NaN 的行不参与、输出 NaN。有效行数不超过 k+1 或设计矩阵奇异时整个截面为 NaN，计入失败指标（cs_resid_singular）",
+		Example: "-cs_resid(log(mcap), a, b) / log(mcap)"},
+	{Name: "gs_resid", Category: CategoryCrossSection, Args: []ArgSpec{{Name: "y", Kind: ArgSeries}, argGroup, {Name: "x", Kind: ArgSeries, Optional: true}},
+		Variadic: 8, Result: ResultNumber, Lookback: "各参数回看的最大值",
+		Doc:     "同 cs_resid，但截距换成分组哑变量（每组一个截距，g 为 NaN 的行输出 NaN）：先在组内对 y 与各 x 去均值，再做不带截距的回归；不给 x 时等于 gs_demean(y, g)。有效行数不超过 k+组数或奇异时整个截面为 NaN，计入失败指标（cs_resid_singular）",
+		Example: "gs_resid(pct_change(close, 20), industry, log(mcap))"},
 }
 
 // 运算符：只能用运算符写，不能按名字调用。

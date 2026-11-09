@@ -85,4 +85,21 @@ var aggregates = map[string]Aggregate{
 	"cs_median": sortedAggregate(median),
 	"cs_min":    onValid(1, windowMin),
 	"cs_max":    onValid(1, windowMax),
+	"cs_corr":   pairCorrelation,
+}
+
+// pairCorrelation 是 x、y 都有效的行上的皮尔逊相关系数（与 ts_corr 共用同一个统计函数）；有效对数少于 3，
+// 或任一方方差为 0 时为 NaN。
+func pairCorrelation(in Section) float64 {
+	x, y := in.Args[0], in.Args[1]
+	var xs, ys []float64
+	for i := range x {
+		if !math.IsNaN(x[i]) && !math.IsNaN(y[i]) {
+			xs, ys = append(xs, x[i]), append(ys, y[i])
+		}
+	}
+	if len(xs) < 3 {
+		return nan
+	}
+	return factorexpr.Finite(correlation(xs, ys))
 }

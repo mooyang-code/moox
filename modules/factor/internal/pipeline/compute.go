@@ -140,6 +140,12 @@ func (r *Runner) Compute(ctx context.Context, plan Plan, loaded LoadResult) (Com
 		} else {
 			computation.addTimeSeries(plan, member, result, grid)
 		}
+		if warnings := result.Warnings[member.ProgramKey(plan.Set.TaskID)]; len(warnings) > 0 {
+			if computation.Warnings == nil {
+				computation.Warnings = map[string]map[string]int{}
+			}
+			computation.Warnings[member.Key] = warnings
+		}
 	}
 	return computation, nil
 }
