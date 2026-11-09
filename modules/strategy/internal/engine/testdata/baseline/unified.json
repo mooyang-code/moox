@@ -1,0 +1,1077 @@
+{
+  "bars": [
+    {
+      "bar_index": 100,
+      "input": {
+        "aged_out": {
+          "swap": [
+            "S4"
+          ]
+        },
+        "rows": {
+          "spot": {
+            "S1": {
+              "m": 4
+            },
+            "S2": {
+              "m": 3
+            },
+            "S3": {
+              "m": 2
+            },
+            "S4": {
+              "m": 1
+            }
+          },
+          "swap": {
+            "S1": {
+              "m": 1
+            },
+            "S2": {
+              "m": 2
+            },
+            "S3": {
+              "m": 3
+            },
+            "S4": {
+              "m": 9
+            }
+          }
+        }
+      },
+      "items": [
+        {
+          "instrument_id": "S1",
+          "market": "swap",
+          "rank": 3,
+          "reason": "not_selected",
+          "rule_id": "l",
+          "score": "1",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "S2",
+          "market": "swap",
+          "rank": 2,
+          "rule_id": "l",
+          "score": "2",
+          "stage": "weighted",
+          "weight": "0.3"
+        },
+        {
+          "instrument_id": "S3",
+          "market": "swap",
+          "rank": 1,
+          "rule_id": "l",
+          "score": "3",
+          "stage": "weighted",
+          "weight": "0.3"
+        },
+        {
+          "instrument_id": "S4",
+          "market": "spot",
+          "rank": 4,
+          "reason": "not_selected",
+          "rule_id": "l",
+          "score": "1",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "S1",
+          "market": "swap",
+          "rank": 1,
+          "rule_id": "s",
+          "score": "1",
+          "stage": "weighted",
+          "weight": "-0.4"
+        },
+        {
+          "instrument_id": "S2",
+          "market": "swap",
+          "rank": 2,
+          "reason": "not_selected",
+          "rule_id": "s",
+          "score": "2",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "S3",
+          "market": "swap",
+          "rank": 3,
+          "reason": "not_selected",
+          "rule_id": "s",
+          "score": "3",
+          "stage": "scored"
+        }
+      ],
+      "rule_states_json": {
+        "rules": {
+          "l": {
+            "held": [
+              "S2",
+              "S3"
+            ]
+          },
+          "s": {
+            "held": [
+              "S1"
+            ]
+          }
+        },
+        "targets": {
+          "S1|swap": "-0.4",
+          "S2|swap": "0.3",
+          "S3|swap": "0.3"
+        }
+      },
+      "status": "ok",
+      "summary": {
+        "gross": "1",
+        "net": "0.2",
+        "rules": {
+          "l": {
+            "aged_out": 0,
+            "allocated": "0.6",
+            "available": 4,
+            "budget": "0.6",
+            "expected": 4,
+            "filtered": 0,
+            "missing": 0,
+            "scored": 4,
+            "selected": 2,
+            "weighted": 2
+          },
+          "s": {
+            "aged_out": 0,
+            "allocated": "0.4",
+            "available": 3,
+            "budget": "0.4",
+            "expected": 3,
+            "filtered": 0,
+            "missing": 0,
+            "scored": 3,
+            "selected": 1,
+            "weighted": 1
+          }
+        },
+        "spot_net": "0",
+        "swap_net": "0.2",
+        "turnover": "0.5",
+        "universe": 4
+      },
+      "targets": [
+        {
+          "instrument_id": "S1",
+          "market": "swap",
+          "weight": "-0.4"
+        },
+        {
+          "instrument_id": "S2",
+          "market": "swap",
+          "weight": "0.3"
+        },
+        {
+          "instrument_id": "S3",
+          "market": "swap",
+          "weight": "0.3"
+        }
+      ]
+    },
+    {
+      "bar_index": 101,
+      "input": {
+        "aged_out": {
+          "swap": [
+            "S4"
+          ]
+        },
+        "rows": {
+          "spot": {
+            "S1": {
+              "m": 4
+            },
+            "S2": {
+              "m": 3
+            },
+            "S3": {
+              "m": 2
+            },
+            "S4": {
+              "m": 1
+            }
+          },
+          "swap": {
+            "S1": {
+              "m": 2
+            },
+            "S2": {
+              "m": 1
+            },
+            "S3": {
+              "m": 3
+            },
+            "S4": {
+              "m": 9
+            }
+          }
+        }
+      },
+      "items": [
+        {
+          "instrument_id": "S1",
+          "market": "swap",
+          "rank": 2,
+          "rule_id": "l",
+          "score": "2",
+          "stage": "weighted",
+          "weight": "0.3"
+        },
+        {
+          "instrument_id": "S2",
+          "market": "swap",
+          "rank": 3,
+          "reason": "not_selected",
+          "rule_id": "l",
+          "score": "1",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "S3",
+          "market": "swap",
+          "rank": 1,
+          "rule_id": "l",
+          "score": "3",
+          "stage": "weighted",
+          "weight": "0.3"
+        },
+        {
+          "instrument_id": "S4",
+          "market": "spot",
+          "rank": 4,
+          "reason": "not_selected",
+          "rule_id": "l",
+          "score": "1",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "S1",
+          "market": "swap",
+          "rank": 2,
+          "reason": "not_selected",
+          "rule_id": "s",
+          "score": "2",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "S2",
+          "market": "swap",
+          "rank": 1,
+          "rule_id": "s",
+          "score": "1",
+          "stage": "weighted",
+          "weight": "-0.4"
+        },
+        {
+          "instrument_id": "S3",
+          "market": "swap",
+          "rank": 3,
+          "reason": "not_selected",
+          "rule_id": "s",
+          "score": "3",
+          "stage": "scored"
+        }
+      ],
+      "rule_states_json": {
+        "rules": {
+          "l": {
+            "held": [
+              "S1",
+              "S3"
+            ]
+          },
+          "s": {
+            "held": [
+              "S2"
+            ]
+          }
+        },
+        "targets": {
+          "S1|swap": "0.3",
+          "S2|swap": "-0.4",
+          "S3|swap": "0.3"
+        }
+      },
+      "status": "ok",
+      "summary": {
+        "gross": "1",
+        "net": "0.2",
+        "rules": {
+          "l": {
+            "aged_out": 0,
+            "allocated": "0.6",
+            "available": 4,
+            "budget": "0.6",
+            "expected": 4,
+            "filtered": 0,
+            "missing": 0,
+            "scored": 4,
+            "selected": 2,
+            "weighted": 2
+          },
+          "s": {
+            "aged_out": 0,
+            "allocated": "0.4",
+            "available": 3,
+            "budget": "0.4",
+            "expected": 3,
+            "filtered": 0,
+            "missing": 0,
+            "scored": 3,
+            "selected": 1,
+            "weighted": 1
+          }
+        },
+        "spot_net": "0",
+        "swap_net": "0.2",
+        "turnover": "0.7",
+        "universe": 4
+      },
+      "targets": [
+        {
+          "instrument_id": "S1",
+          "market": "swap",
+          "weight": "0.3"
+        },
+        {
+          "instrument_id": "S2",
+          "market": "swap",
+          "weight": "-0.4"
+        },
+        {
+          "instrument_id": "S3",
+          "market": "swap",
+          "weight": "0.3"
+        }
+      ]
+    },
+    {
+      "bar_index": 102,
+      "input": {
+        "aged_out": {
+          "swap": [
+            "S4"
+          ]
+        },
+        "rows": {
+          "spot": {
+            "S1": {
+              "m": 1
+            },
+            "S2": {
+              "m": 3
+            },
+            "S3": {
+              "m": 2
+            },
+            "S4": {
+              "m": 4
+            }
+          },
+          "swap": {
+            "S1": {
+              "m": 2
+            },
+            "S2": {
+              "m": 1
+            },
+            "S3": {
+              "m": 3
+            },
+            "S4": {
+              "m": 9
+            }
+          }
+        }
+      },
+      "items": [
+        {
+          "instrument_id": "S1",
+          "market": "swap",
+          "rank": 3,
+          "reason": "not_selected",
+          "rule_id": "l",
+          "score": "2",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "S2",
+          "market": "swap",
+          "rank": 4,
+          "reason": "not_selected",
+          "rule_id": "l",
+          "score": "1",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "S3",
+          "market": "swap",
+          "rank": 2,
+          "rule_id": "l",
+          "score": "3",
+          "stage": "weighted",
+          "weight": "0.3"
+        },
+        {
+          "instrument_id": "S4",
+          "market": "spot",
+          "rank": 1,
+          "rule_id": "l",
+          "score": "4",
+          "stage": "weighted",
+          "weight": "0.3"
+        },
+        {
+          "instrument_id": "S1",
+          "market": "swap",
+          "rank": 2,
+          "reason": "not_selected",
+          "rule_id": "s",
+          "score": "2",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "S2",
+          "market": "swap",
+          "rank": 1,
+          "rule_id": "s",
+          "score": "1",
+          "stage": "weighted",
+          "weight": "-0.4"
+        },
+        {
+          "instrument_id": "S3",
+          "market": "swap",
+          "rank": 3,
+          "reason": "not_selected",
+          "rule_id": "s",
+          "score": "3",
+          "stage": "scored"
+        }
+      ],
+      "rule_states_json": {
+        "rules": {
+          "l": {
+            "held": [
+              "S3",
+              "S4"
+            ]
+          },
+          "s": {
+            "held": [
+              "S2"
+            ]
+          }
+        },
+        "targets": {
+          "S2|swap": "-0.4",
+          "S3|swap": "0.3",
+          "S4|spot": "0.3"
+        }
+      },
+      "status": "ok",
+      "summary": {
+        "gross": "1",
+        "net": "0.2",
+        "rules": {
+          "l": {
+            "aged_out": 0,
+            "allocated": "0.6",
+            "available": 4,
+            "budget": "0.6",
+            "expected": 4,
+            "filtered": 0,
+            "missing": 0,
+            "scored": 4,
+            "selected": 2,
+            "weighted": 2
+          },
+          "s": {
+            "aged_out": 0,
+            "allocated": "0.4",
+            "available": 3,
+            "budget": "0.4",
+            "expected": 3,
+            "filtered": 0,
+            "missing": 0,
+            "scored": 3,
+            "selected": 1,
+            "weighted": 1
+          }
+        },
+        "spot_net": "0.3",
+        "swap_net": "-0.1",
+        "turnover": "0.3",
+        "universe": 4
+      },
+      "targets": [
+        {
+          "instrument_id": "S2",
+          "market": "swap",
+          "weight": "-0.4"
+        },
+        {
+          "instrument_id": "S3",
+          "market": "swap",
+          "weight": "0.3"
+        },
+        {
+          "instrument_id": "S4",
+          "market": "spot",
+          "weight": "0.3"
+        }
+      ]
+    },
+    {
+      "bar_index": 103,
+      "input": {
+        "failed": {
+          "swap": {
+            "m": {
+              "S3": "source_failed"
+            }
+          }
+        },
+        "rows": {
+          "spot": {
+            "S1": {
+              "m": 1
+            },
+            "S2": {
+              "m": 3
+            },
+            "S3": {
+              "m": 2
+            },
+            "S4": {
+              "m": 4
+            }
+          },
+          "swap": {
+            "S1": {
+              "m": 4
+            },
+            "S2": {
+              "m": 1
+            },
+            "S4": {
+              "m": 9
+            }
+          }
+        }
+      },
+      "items": [
+        {
+          "instrument_id": "S1",
+          "market": "swap",
+          "rank": 1,
+          "rule_id": "l",
+          "score": "4",
+          "stage": "weighted",
+          "weight": "0.3"
+        },
+        {
+          "instrument_id": "S2",
+          "market": "swap",
+          "rank": 3,
+          "reason": "not_selected",
+          "rule_id": "l",
+          "score": "1",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "S3",
+          "reason": "no_row",
+          "rule_id": "l",
+          "stage": "missing"
+        },
+        {
+          "instrument_id": "S4",
+          "market": "spot",
+          "rank": 2,
+          "rule_id": "l",
+          "score": "4",
+          "stage": "weighted",
+          "weight": "0.3"
+        },
+        {
+          "instrument_id": "S1",
+          "market": "swap",
+          "rank": 2,
+          "reason": "not_selected",
+          "rule_id": "s",
+          "score": "4",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "S2",
+          "market": "swap",
+          "rank": 1,
+          "rule_id": "s",
+          "score": "1",
+          "stage": "weighted",
+          "weight": "-0.4"
+        },
+        {
+          "instrument_id": "S4",
+          "market": "spot",
+          "rank": 3,
+          "reason": "not_selected",
+          "rule_id": "s",
+          "score": "4",
+          "stage": "scored"
+        }
+      ],
+      "rule_states_json": {
+        "rules": {
+          "l": {
+            "held": [
+              "S1",
+              "S4"
+            ]
+          },
+          "s": {
+            "held": [
+              "S2"
+            ]
+          }
+        },
+        "targets": {
+          "S1|swap": "0.3",
+          "S2|swap": "-0.4",
+          "S4|spot": "0.3"
+        }
+      },
+      "status": "ok",
+      "summary": {
+        "gross": "1",
+        "net": "0.2",
+        "rules": {
+          "l": {
+            "aged_out": 0,
+            "allocated": "0.6",
+            "available": 3,
+            "budget": "0.6",
+            "expected": 4,
+            "filtered": 0,
+            "missing": 1,
+            "scored": 3,
+            "selected": 2,
+            "weighted": 2
+          },
+          "s": {
+            "aged_out": 0,
+            "allocated": "0.4",
+            "available": 3,
+            "budget": "0.4",
+            "expected": 3,
+            "filtered": 0,
+            "missing": 0,
+            "scored": 3,
+            "selected": 1,
+            "weighted": 1
+          }
+        },
+        "spot_net": "0.3",
+        "swap_net": "-0.1",
+        "turnover": "0.3",
+        "universe": 4
+      },
+      "targets": [
+        {
+          "instrument_id": "S1",
+          "market": "swap",
+          "weight": "0.3"
+        },
+        {
+          "instrument_id": "S2",
+          "market": "swap",
+          "weight": "-0.4"
+        },
+        {
+          "instrument_id": "S4",
+          "market": "spot",
+          "weight": "0.3"
+        }
+      ]
+    },
+    {
+      "bar_index": 104,
+      "input": {
+        "rows": {
+          "spot": {
+            "S1": {
+              "m": 1
+            },
+            "S2": {
+              "m": 2
+            },
+            "S3": {
+              "m": 4
+            },
+            "S4": {
+              "m": 3
+            }
+          },
+          "swap": {
+            "S1": {
+              "m": 4
+            },
+            "S2": {
+              "m": 1
+            },
+            "S3": {
+              "m": 2
+            },
+            "S4": {
+              "m": 9
+            }
+          }
+        }
+      },
+      "items": [
+        {
+          "instrument_id": "S1",
+          "market": "swap",
+          "rank": 1,
+          "rule_id": "l",
+          "score": "4",
+          "stage": "weighted",
+          "weight": "0.3"
+        },
+        {
+          "instrument_id": "S2",
+          "market": "swap",
+          "rank": 4,
+          "reason": "not_selected",
+          "rule_id": "l",
+          "score": "1",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "S3",
+          "market": "swap",
+          "rank": 3,
+          "reason": "not_selected",
+          "rule_id": "l",
+          "score": "2",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "S4",
+          "market": "spot",
+          "rank": 2,
+          "rule_id": "l",
+          "score": "3",
+          "stage": "weighted",
+          "weight": "0.3"
+        },
+        {
+          "instrument_id": "S1",
+          "market": "swap",
+          "rank": 4,
+          "reason": "not_selected",
+          "rule_id": "s",
+          "score": "4",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "S2",
+          "market": "swap",
+          "rank": 1,
+          "rule_id": "s",
+          "score": "1",
+          "stage": "weighted",
+          "weight": "-0.4"
+        },
+        {
+          "instrument_id": "S3",
+          "market": "swap",
+          "rank": 2,
+          "reason": "not_selected",
+          "rule_id": "s",
+          "score": "2",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "S4",
+          "market": "spot",
+          "rank": 3,
+          "reason": "not_selected",
+          "rule_id": "s",
+          "score": "3",
+          "stage": "scored"
+        }
+      ],
+      "rule_states_json": {
+        "rules": {
+          "l": {
+            "held": [
+              "S1",
+              "S4"
+            ]
+          },
+          "s": {
+            "held": [
+              "S2"
+            ]
+          }
+        },
+        "targets": {
+          "S1|swap": "0.3",
+          "S2|swap": "-0.4",
+          "S4|spot": "0.3"
+        }
+      },
+      "status": "ok",
+      "summary": {
+        "gross": "1",
+        "net": "0.2",
+        "rules": {
+          "l": {
+            "aged_out": 0,
+            "allocated": "0.6",
+            "available": 4,
+            "budget": "0.6",
+            "expected": 4,
+            "filtered": 0,
+            "missing": 0,
+            "scored": 4,
+            "selected": 2,
+            "weighted": 2
+          },
+          "s": {
+            "aged_out": 0,
+            "allocated": "0.4",
+            "available": 4,
+            "budget": "0.4",
+            "expected": 4,
+            "filtered": 0,
+            "missing": 0,
+            "scored": 4,
+            "selected": 1,
+            "weighted": 1
+          }
+        },
+        "spot_net": "0.3",
+        "swap_net": "-0.1",
+        "turnover": "0",
+        "universe": 4
+      },
+      "targets": [
+        {
+          "instrument_id": "S1",
+          "market": "swap",
+          "weight": "0.3"
+        },
+        {
+          "instrument_id": "S2",
+          "market": "swap",
+          "weight": "-0.4"
+        },
+        {
+          "instrument_id": "S4",
+          "market": "spot",
+          "weight": "0.3"
+        }
+      ]
+    },
+    {
+      "bar_index": 105,
+      "input": {
+        "failed": {
+          "spot": {
+            "m": {
+              "S1": "source_failed"
+            }
+          }
+        },
+        "rows": {
+          "spot": {
+            "S2": {
+              "m": 2
+            },
+            "S3": {
+              "m": 4
+            },
+            "S4": {
+              "m": 1
+            }
+          },
+          "swap": {
+            "S1": {
+              "m": 4
+            },
+            "S2": {
+              "m": 3
+            },
+            "S3": {
+              "m": 2
+            },
+            "S4": {
+              "m": 1
+            }
+          }
+        }
+      },
+      "items": [
+        {
+          "instrument_id": "S1",
+          "market": "swap",
+          "rank": 1,
+          "rule_id": "l",
+          "score": "4",
+          "stage": "weighted",
+          "weight": "0.3"
+        },
+        {
+          "instrument_id": "S2",
+          "market": "swap",
+          "rank": 2,
+          "rule_id": "l",
+          "score": "3",
+          "stage": "weighted",
+          "weight": "0.3"
+        },
+        {
+          "instrument_id": "S3",
+          "market": "swap",
+          "rank": 3,
+          "reason": "not_selected",
+          "rule_id": "l",
+          "score": "2",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "S4",
+          "market": "spot",
+          "rank": 4,
+          "reason": "not_selected",
+          "rule_id": "l",
+          "score": "1",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "S1",
+          "market": "swap",
+          "rank": 4,
+          "reason": "not_selected",
+          "rule_id": "s",
+          "score": "4",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "S2",
+          "market": "swap",
+          "rank": 3,
+          "reason": "not_selected",
+          "rule_id": "s",
+          "score": "3",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "S3",
+          "market": "swap",
+          "rank": 2,
+          "reason": "not_selected",
+          "rule_id": "s",
+          "score": "2",
+          "stage": "scored"
+        },
+        {
+          "instrument_id": "S4",
+          "market": "swap",
+          "rank": 1,
+          "rule_id": "s",
+          "score": "1",
+          "stage": "weighted",
+          "weight": "-0.4"
+        }
+      ],
+      "rule_states_json": {
+        "rules": {
+          "l": {
+            "held": [
+              "S1",
+              "S2"
+            ]
+          },
+          "s": {
+            "held": [
+              "S4"
+            ]
+          }
+        },
+        "targets": {
+          "S1|swap": "0.3",
+          "S2|swap": "0.3",
+          "S4|swap": "-0.4"
+        }
+      },
+      "status": "ok",
+      "summary": {
+        "gross": "1",
+        "net": "0.2",
+        "rules": {
+          "l": {
+            "aged_out": 0,
+            "allocated": "0.6",
+            "available": 4,
+            "budget": "0.6",
+            "expected": 4,
+            "filtered": 0,
+            "missing": 0,
+            "scored": 4,
+            "selected": 2,
+            "weighted": 2
+          },
+          "s": {
+            "aged_out": 0,
+            "allocated": "0.4",
+            "available": 4,
+            "budget": "0.4",
+            "expected": 4,
+            "filtered": 0,
+            "missing": 0,
+            "scored": 4,
+            "selected": 1,
+            "weighted": 1
+          }
+        },
+        "spot_net": "0",
+        "swap_net": "0.2",
+        "turnover": "0.7",
+        "universe": 4
+      },
+      "targets": [
+        {
+          "instrument_id": "S1",
+          "market": "swap",
+          "weight": "0.3"
+        },
+        {
+          "instrument_id": "S2",
+          "market": "swap",
+          "weight": "0.3"
+        },
+        {
+          "instrument_id": "S4",
+          "market": "swap",
+          "weight": "-0.4"
+        }
+      ]
+    }
+  ],
+  "dsl": "name: baseline_unified\nmarket: {select: both, prefer: swap}\nrules:\n  - id: l\n    type: rank\n    score: \"m\"\n    select: {top: 2}\n    weight: {total: 0.6}\n  - id: s\n    type: rank\n    side: short\n    score: \"m\"\n    select: {bottom: 1}\n    weight: {total: 0.4}\nportfolio:\n  leverage: 2\n  max_missing: 1\n",
+  "market": "select=both, prefer=swap",
+  "name": "unified"
+}

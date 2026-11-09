@@ -1,0 +1,1346 @@
+{
+  "bars": [
+    {
+      "bar_end": 1788231600,
+      "equity": 99.9251,
+      "fee": 0.0749,
+      "frozen": 0,
+      "holdings": 1,
+      "liquidated": 0,
+      "positions": {
+        "cash": 99.9251,
+        "positions": {
+          "A|swap": {
+            "instrument_id": "A",
+            "last_price": 105,
+            "market": "swap",
+            "quantity": 1.4275008,
+            "value": 149.8876
+          }
+        }
+      },
+      "return": -0.0007,
+      "skip_reason": "",
+      "spot_value": 0,
+      "status": "ok",
+      "summary": {
+        "decision": {
+          "cash": "-0.5",
+          "gross": "1.5",
+          "net": "1.5",
+          "rules": {
+            "e": {
+              "aged_out": 0,
+              "allocated": "0",
+              "available": 1,
+              "budget": "0.5",
+              "expected": 1,
+              "filtered": 0,
+              "missing": 0,
+              "scored": 1,
+              "selected": 0,
+              "weighted": 0
+            },
+            "r": {
+              "aged_out": 0,
+              "allocated": "1.5",
+              "available": 1,
+              "budget": "1.5",
+              "expected": 1,
+              "filtered": 0,
+              "missing": 0,
+              "scored": 1,
+              "selected": 1,
+              "weighted": 1
+            }
+          },
+          "turnover": "0.75",
+          "universe": 3
+        },
+        "ledger": {
+          "equity_after": 99.9251,
+          "equity_before": 100,
+          "fee": 0.0749,
+          "spot_value": 0,
+          "swap_value": 149.8876,
+          "traded": 149.8876,
+          "turnover": 0.7494
+        },
+        "skip_reason": ""
+      },
+      "swap_value": 149.8876,
+      "targets": [
+        {
+          "instrument_id": "A",
+          "market": "swap",
+          "target_weight": "1.5"
+        }
+      ],
+      "turnover": 0.7494,
+      "unfilled": 0
+    },
+    {
+      "bar_end": 1788235200,
+      "equity": 101.3522,
+      "fee": 0.0004,
+      "frozen": 0,
+      "holdings": 1,
+      "liquidated": 0,
+      "positions": {
+        "cash": 101.3522,
+        "positions": {
+          "A|swap": {
+            "instrument_id": "A",
+            "last_price": 106,
+            "market": "swap",
+            "quantity": 1.43422925,
+            "value": 152.0283
+          }
+        }
+      },
+      "return": 0.0143,
+      "skip_reason": "",
+      "spot_value": 0,
+      "status": "ok",
+      "summary": {
+        "decision": {
+          "cash": "-0.5",
+          "gross": "1.5",
+          "net": "1.5",
+          "rules": {
+            "e": {
+              "aged_out": 0,
+              "allocated": "0",
+              "available": 1,
+              "budget": "0.5",
+              "expected": 1,
+              "filtered": 0,
+              "missing": 0,
+              "scored": 1,
+              "selected": 0,
+              "weighted": 0
+            },
+            "r": {
+              "aged_out": 0,
+              "allocated": "1.5",
+              "available": 1,
+              "budget": "1.5",
+              "expected": 1,
+              "filtered": 0,
+              "missing": 0,
+              "scored": 1,
+              "selected": 1,
+              "weighted": 1
+            }
+          },
+          "turnover": "0",
+          "universe": 3
+        },
+        "ledger": {
+          "equity_after": 101.3522,
+          "equity_before": 101.3526,
+          "fee": 0.0004,
+          "spot_value": 0,
+          "swap_value": 152.0283,
+          "traded": 0.7132,
+          "turnover": 0.0035
+        },
+        "skip_reason": ""
+      },
+      "swap_value": 152.0283,
+      "targets": [
+        {
+          "instrument_id": "A",
+          "market": "swap",
+          "target_weight": "1.5"
+        }
+      ],
+      "turnover": 0.0035,
+      "unfilled": 0
+    },
+    {
+      "bar_end": 1788238800,
+      "equity": 102.7861,
+      "fee": 0.0004,
+      "frozen": 0,
+      "holdings": 1,
+      "liquidated": 0,
+      "positions": {
+        "cash": 102.7861,
+        "positions": {
+          "A|swap": {
+            "instrument_id": "A",
+            "last_price": 107,
+            "market": "swap",
+            "quantity": 1.44092623,
+            "value": 154.1791
+          }
+        }
+      },
+      "return": 0.0141,
+      "skip_reason": "",
+      "spot_value": 0,
+      "status": "ok",
+      "summary": {
+        "decision": {
+          "cash": "-0.5",
+          "gross": "1.5",
+          "net": "1.5",
+          "rules": {
+            "e": {
+              "aged_out": 0,
+              "allocated": "0",
+              "available": 1,
+              "budget": "0.5",
+              "expected": 1,
+              "filtered": 0,
+              "missing": 0,
+              "scored": 1,
+              "selected": 0,
+              "weighted": 0
+            },
+            "r": {
+              "aged_out": 0,
+              "allocated": "1.5",
+              "available": 1,
+              "budget": "1.5",
+              "expected": 1,
+              "filtered": 0,
+              "missing": 0,
+              "scored": 1,
+              "selected": 1,
+              "weighted": 1
+            }
+          },
+          "turnover": "0",
+          "universe": 3
+        },
+        "ledger": {
+          "equity_after": 102.7861,
+          "equity_before": 102.7864,
+          "fee": 0.0004,
+          "spot_value": 0,
+          "swap_value": 154.1791,
+          "traded": 0.7166,
+          "turnover": 0.0035
+        },
+        "skip_reason": ""
+      },
+      "swap_value": 154.1791,
+      "targets": [
+        {
+          "instrument_id": "A",
+          "market": "swap",
+          "target_weight": "1.5"
+        }
+      ],
+      "turnover": 0.0035,
+      "unfilled": 0
+    },
+    {
+      "bar_end": 1788242400,
+      "equity": 104.2006,
+      "fee": 0.0264,
+      "frozen": 0,
+      "holdings": 2,
+      "liquidated": 0,
+      "positions": {
+        "cash": 104.2006,
+        "positions": {
+          "A|swap": {
+            "instrument_id": "A",
+            "last_price": 108,
+            "market": "swap",
+            "quantity": 1.44723065,
+            "value": 156.3009
+          },
+          "E|swap": {
+            "instrument_id": "E",
+            "last_price": 41,
+            "market": "swap",
+            "quantity": 1.27073911,
+            "value": 52.1003
+          }
+        }
+      },
+      "return": 0.0138,
+      "skip_reason": "",
+      "spot_value": 0,
+      "status": "ok",
+      "summary": {
+        "decision": {
+          "cash": "-1",
+          "gross": "2",
+          "net": "2",
+          "rules": {
+            "e": {
+              "aged_out": 0,
+              "allocated": "0.5",
+              "available": 1,
+              "budget": "0.5",
+              "expected": 1,
+              "filtered": 0,
+              "missing": 0,
+              "scored": 1,
+              "selected": 1,
+              "weighted": 1
+            },
+            "r": {
+              "aged_out": 0,
+              "allocated": "1.5",
+              "available": 1,
+              "budget": "1.5",
+              "expected": 1,
+              "filtered": 0,
+              "missing": 0,
+              "scored": 1,
+              "selected": 1,
+              "weighted": 1
+            }
+          },
+          "turnover": "0.25",
+          "universe": 3
+        },
+        "ledger": {
+          "equity_after": 104.2006,
+          "equity_before": 104.227,
+          "fee": 0.0264,
+          "spot_value": 0,
+          "swap_value": 208.4012,
+          "traded": 52.7812,
+          "turnover": 0.2532
+        },
+        "skip_reason": ""
+      },
+      "swap_value": 208.4012,
+      "targets": [
+        {
+          "instrument_id": "A",
+          "market": "swap",
+          "target_weight": "1.5"
+        },
+        {
+          "instrument_id": "E",
+          "market": "swap",
+          "target_weight": "0.5"
+        }
+      ],
+      "turnover": 0.2532,
+      "unfilled": 0
+    },
+    {
+      "bar_end": 1788246000,
+      "equity": 104.3511,
+      "fee": 0.026,
+      "frozen": 0,
+      "holdings": 1,
+      "liquidated": 0,
+      "positions": {
+        "cash": 104.3511,
+        "positions": {
+          "A|swap": {
+            "instrument_id": "A",
+            "last_price": 109,
+            "market": "swap",
+            "quantity": 1.43602394,
+            "value": 156.5266
+          }
+        }
+      },
+      "return": 0.0014,
+      "skip_reason": "",
+      "spot_value": 0,
+      "status": "ok",
+      "summary": {
+        "decision": {
+          "cash": "-0.5",
+          "gross": "1.5",
+          "net": "1.5",
+          "rules": {
+            "e": {
+              "aged_out": 0,
+              "allocated": "0",
+              "available": 1,
+              "budget": "0.5",
+              "expected": 1,
+              "filtered": 0,
+              "missing": 0,
+              "scored": 1,
+              "selected": 0,
+              "weighted": 0
+            },
+            "r": {
+              "aged_out": 0,
+              "allocated": "1.5",
+              "available": 1,
+              "budget": "1.5",
+              "expected": 1,
+              "filtered": 0,
+              "missing": 0,
+              "scored": 1,
+              "selected": 1,
+              "weighted": 1
+            }
+          },
+          "turnover": "0.25",
+          "universe": 3
+        },
+        "ledger": {
+          "equity_after": 104.3511,
+          "equity_before": 104.3771,
+          "fee": 0.026,
+          "spot_value": 0,
+          "swap_value": 156.5266,
+          "traded": 52.0511,
+          "turnover": 0.2493
+        },
+        "skip_reason": ""
+      },
+      "swap_value": 156.5266,
+      "targets": [
+        {
+          "instrument_id": "A",
+          "market": "swap",
+          "target_weight": "1.5"
+        }
+      ],
+      "turnover": 0.2493,
+      "unfilled": 0
+    },
+    {
+      "bar_end": 1788249600,
+      "equity": 105.7867,
+      "fee": 0.0004,
+      "frozen": 0,
+      "holdings": 1,
+      "liquidated": 0,
+      "positions": {
+        "cash": 105.7867,
+        "positions": {
+          "A|swap": {
+            "instrument_id": "A",
+            "last_price": 110,
+            "market": "swap",
+            "quantity": 1.44254643,
+            "value": 158.6801
+          }
+        }
+      },
+      "return": 0.0138,
+      "skip_reason": "",
+      "spot_value": 0,
+      "status": "ok",
+      "summary": {
+        "decision": {
+          "cash": "-0.5",
+          "gross": "1.5",
+          "net": "1.5",
+          "rules": {
+            "e": {
+              "aged_out": 0,
+              "allocated": "0",
+              "available": 1,
+              "budget": "0.5",
+              "expected": 1,
+              "filtered": 0,
+              "missing": 0,
+              "scored": 1,
+              "selected": 0,
+              "weighted": 0
+            },
+            "r": {
+              "aged_out": 1,
+              "allocated": "1.5",
+              "available": 1,
+              "budget": "1.5",
+              "expected": 2,
+              "filtered": 0,
+              "missing": 0,
+              "scored": 1,
+              "selected": 1,
+              "weighted": 1
+            }
+          },
+          "turnover": "0",
+          "universe": 4
+        },
+        "ledger": {
+          "equity_after": 105.7867,
+          "equity_before": 105.7871,
+          "fee": 0.0004,
+          "spot_value": 0,
+          "swap_value": 158.6801,
+          "traded": 0.7175,
+          "turnover": 0.0034
+        },
+        "skip_reason": ""
+      },
+      "swap_value": 158.6801,
+      "targets": [
+        {
+          "instrument_id": "A",
+          "market": "swap",
+          "target_weight": "1.5"
+        }
+      ],
+      "turnover": 0.0034,
+      "unfilled": 0
+    },
+    {
+      "bar_end": 1788253200,
+      "equity": 107.2289,
+      "fee": 0.0004,
+      "frozen": 0,
+      "holdings": 1,
+      "liquidated": 0,
+      "positions": {
+        "cash": 107.2289,
+        "positions": {
+          "A|swap": {
+            "instrument_id": "A",
+            "last_price": 111,
+            "market": "swap",
+            "quantity": 1.44903952,
+            "value": 160.8434
+          }
+        }
+      },
+      "return": 0.0136,
+      "skip_reason": "",
+      "spot_value": 0,
+      "status": "ok",
+      "summary": {
+        "decision": {
+          "cash": "-0.5",
+          "gross": "1.5",
+          "net": "1.5",
+          "rules": {
+            "e": {
+              "aged_out": 0,
+              "allocated": "0",
+              "available": 1,
+              "budget": "0.5",
+              "expected": 1,
+              "filtered": 0,
+              "missing": 0,
+              "scored": 1,
+              "selected": 0,
+              "weighted": 0
+            },
+            "r": {
+              "aged_out": 1,
+              "allocated": "1.5",
+              "available": 1,
+              "budget": "1.5",
+              "expected": 2,
+              "filtered": 0,
+              "missing": 0,
+              "scored": 1,
+              "selected": 1,
+              "weighted": 1
+            }
+          },
+          "turnover": "0",
+          "universe": 5
+        },
+        "ledger": {
+          "equity_after": 107.2289,
+          "equity_before": 107.2293,
+          "fee": 0.0004,
+          "spot_value": 0,
+          "swap_value": 160.8434,
+          "traded": 0.7207,
+          "turnover": 0.0034
+        },
+        "skip_reason": ""
+      },
+      "swap_value": 160.8434,
+      "targets": [
+        {
+          "instrument_id": "A",
+          "market": "swap",
+          "target_weight": "1.5"
+        }
+      ],
+      "turnover": 0.0034,
+      "unfilled": 0
+    },
+    {
+      "bar_end": 1788256800,
+      "equity": 107.1486,
+      "fee": 0.0804,
+      "frozen": 1,
+      "holdings": 2,
+      "liquidated": 0,
+      "positions": {
+        "cash": 107.1486,
+        "positions": {
+          "A|swap": {
+            "frozen": true,
+            "instrument_id": "A",
+            "last_price": 111,
+            "market": "swap",
+            "missing_bars": 1,
+            "quantity": 1.44903952,
+            "value": 160.8434
+          },
+          "D|swap": {
+            "instrument_id": "D",
+            "last_price": 26,
+            "market": "swap",
+            "quantity": 6.18164786,
+            "value": 160.7228
+          }
+        }
+      },
+      "return": -0.0007,
+      "skip_reason": "",
+      "spot_value": 0,
+      "status": "ok",
+      "summary": {
+        "decision": {
+          "cash": "-0.5",
+          "gross": "1.5",
+          "net": "1.5",
+          "rules": {
+            "e": {
+              "aged_out": 0,
+              "allocated": "0",
+              "available": 1,
+              "budget": "0.5",
+              "expected": 1,
+              "filtered": 0,
+              "missing": 0,
+              "scored": 1,
+              "selected": 0,
+              "weighted": 0
+            },
+            "r": {
+              "aged_out": 0,
+              "allocated": "1.5",
+              "available": 1,
+              "budget": "1.5",
+              "expected": 1,
+              "filtered": 0,
+              "missing": 0,
+              "scored": 1,
+              "selected": 1,
+              "weighted": 1
+            }
+          },
+          "turnover": "1.5",
+          "universe": 4
+        },
+        "ledger": {
+          "equity_after": 107.1486,
+          "equity_before": 107.2289,
+          "fee": 0.0804,
+          "spot_value": 0,
+          "swap_value": 321.5662,
+          "traded": 160.7228,
+          "turnover": 0.7494,
+          "unfilled": [
+            "A|swap"
+          ]
+        },
+        "skip_reason": ""
+      },
+      "swap_value": 321.5662,
+      "targets": [
+        {
+          "instrument_id": "D",
+          "market": "swap",
+          "target_weight": "1.5"
+        }
+      ],
+      "turnover": 0.7494,
+      "unfilled": 1
+    },
+    {
+      "bar_end": 1788260400,
+      "equity": 76.2326,
+      "fee": 0.0077,
+      "frozen": 1,
+      "holdings": 2,
+      "liquidated": 0,
+      "positions": {
+        "cash": 76.2326,
+        "positions": {
+          "A|swap": {
+            "frozen": true,
+            "instrument_id": "A",
+            "last_price": 111,
+            "market": "swap",
+            "missing_bars": 2,
+            "quantity": 1.44903952,
+            "value": 160.8434
+          },
+          "D|swap": {
+            "instrument_id": "D",
+            "last_price": 21,
+            "market": "swap",
+            "quantity": 5.44518505,
+            "value": 114.3489
+          }
+        }
+      },
+      "return": -0.2885,
+      "skip_reason": "",
+      "spot_value": 0,
+      "status": "ok",
+      "summary": {
+        "decision": {
+          "cash": "-0.5",
+          "gross": "1.5",
+          "net": "1.5",
+          "rules": {
+            "e": {
+              "aged_out": 0,
+              "allocated": "0",
+              "available": 1,
+              "budget": "0.5",
+              "expected": 1,
+              "filtered": 0,
+              "missing": 0,
+              "scored": 1,
+              "selected": 0,
+              "weighted": 0
+            },
+            "r": {
+              "aged_out": 0,
+              "allocated": "1.5",
+              "available": 1,
+              "budget": "1.5",
+              "expected": 1,
+              "filtered": 0,
+              "missing": 0,
+              "scored": 1,
+              "selected": 1,
+              "weighted": 1
+            }
+          },
+          "turnover": "0",
+          "universe": 4
+        },
+        "ledger": {
+          "equity_after": 76.2326,
+          "equity_before": 76.2403,
+          "fee": 0.0077,
+          "spot_value": 0,
+          "swap_value": 275.1923,
+          "traded": 15.4657,
+          "turnover": 0.1014,
+          "unfilled": [
+            "A|swap"
+          ]
+        },
+        "skip_reason": ""
+      },
+      "swap_value": 275.1923,
+      "targets": [
+        {
+          "instrument_id": "D",
+          "market": "swap",
+          "target_weight": "1.5"
+        }
+      ],
+      "turnover": 0.1014,
+      "unfilled": 1
+    },
+    {
+      "bar_end": 1788264000,
+      "equity": 85.9469,
+      "fee": 0.078,
+      "frozen": 0,
+      "holdings": 1,
+      "liquidated": 0,
+      "positions": {
+        "cash": 85.9469,
+        "positions": {
+          "A|swap": {
+            "instrument_id": "A",
+            "last_price": 114,
+            "market": "swap",
+            "quantity": 1.13087977,
+            "value": 128.9203
+          }
+        }
+      },
+      "return": 0.1274,
+      "skip_reason": "",
+      "spot_value": 0,
+      "status": "ok",
+      "summary": {
+        "decision": {
+          "cash": "-0.5",
+          "gross": "1.5",
+          "net": "1.5",
+          "rules": {
+            "e": {
+              "aged_out": 0,
+              "allocated": "0",
+              "available": 1,
+              "budget": "0.5",
+              "expected": 1,
+              "filtered": 0,
+              "missing": 0,
+              "scored": 1,
+              "selected": 0,
+              "weighted": 0
+            },
+            "r": {
+              "aged_out": 0,
+              "allocated": "1.5",
+              "available": 2,
+              "budget": "1.5",
+              "expected": 2,
+              "filtered": 0,
+              "missing": 0,
+              "scored": 2,
+              "selected": 1,
+              "weighted": 1
+            }
+          },
+          "turnover": "1.5",
+          "universe": 5
+        },
+        "ledger": {
+          "equity_after": 85.9469,
+          "equity_before": 86.0249,
+          "fee": 0.078,
+          "spot_value": 0,
+          "swap_value": 128.9203,
+          "traded": 156.0643,
+          "turnover": 0.9071
+        },
+        "skip_reason": ""
+      },
+      "swap_value": 128.9203,
+      "targets": [
+        {
+          "instrument_id": "A",
+          "market": "swap",
+          "target_weight": "1.5"
+        }
+      ],
+      "turnover": 0.9071,
+      "unfilled": 0
+    },
+    {
+      "bar_end": 1788267600,
+      "equity": 87.0557,
+      "fee": 0.022,
+      "frozen": 0,
+      "holdings": 2,
+      "liquidated": 0,
+      "positions": {
+        "cash": 87.0557,
+        "positions": {
+          "A|swap": {
+            "instrument_id": "A",
+            "last_price": 115,
+            "market": "swap",
+            "quantity": 1.13550928,
+            "value": 130.5836
+          },
+          "E|swap": {
+            "instrument_id": "E",
+            "last_price": 41,
+            "market": "swap",
+            "quantity": 1.06165502,
+            "value": 43.5279
+          }
+        }
+      },
+      "return": 0.0129,
+      "skip_reason": "",
+      "spot_value": 0,
+      "status": "ok",
+      "summary": {
+        "decision": {
+          "cash": "-1",
+          "gross": "2",
+          "net": "2",
+          "rules": {
+            "e": {
+              "aged_out": 0,
+              "allocated": "0.5",
+              "available": 1,
+              "budget": "0.5",
+              "expected": 1,
+              "filtered": 0,
+              "missing": 0,
+              "scored": 1,
+              "selected": 1,
+              "weighted": 1
+            },
+            "r": {
+              "aged_out": 0,
+              "allocated": "1.5",
+              "available": 2,
+              "budget": "1.5",
+              "expected": 2,
+              "filtered": 0,
+              "missing": 0,
+              "scored": 2,
+              "selected": 1,
+              "weighted": 1
+            }
+          },
+          "turnover": "0.25",
+          "universe": 5
+        },
+        "ledger": {
+          "equity_after": 87.0557,
+          "equity_before": 87.0777,
+          "fee": 0.022,
+          "spot_value": 0,
+          "swap_value": 174.1114,
+          "traded": 44.0603,
+          "turnover": 0.253
+        },
+        "skip_reason": ""
+      },
+      "swap_value": 174.1114,
+      "targets": [
+        {
+          "instrument_id": "A",
+          "market": "swap",
+          "target_weight": "1.5"
+        },
+        {
+          "instrument_id": "E",
+          "market": "swap",
+          "target_weight": "0.5"
+        }
+      ],
+      "turnover": 0.253,
+      "unfilled": 0
+    },
+    {
+      "bar_end": 1788271200,
+      "equity": 87.1078,
+      "fee": 0.0218,
+      "frozen": 0,
+      "holdings": 1,
+      "liquidated": 0,
+      "positions": {
+        "cash": 87.1078,
+        "positions": {
+          "A|swap": {
+            "instrument_id": "A",
+            "last_price": 116,
+            "market": "swap",
+            "quantity": 1.12639402,
+            "value": 130.6617
+          }
+        }
+      },
+      "return": 0.0006,
+      "skip_reason": "",
+      "spot_value": 0,
+      "status": "ok",
+      "summary": {
+        "decision": {
+          "cash": "-0.5",
+          "gross": "1.5",
+          "net": "1.5",
+          "rules": {
+            "e": {
+              "aged_out": 0,
+              "allocated": "0",
+              "available": 1,
+              "budget": "0.5",
+              "expected": 1,
+              "filtered": 0,
+              "missing": 0,
+              "scored": 1,
+              "selected": 0,
+              "weighted": 0
+            },
+            "r": {
+              "aged_out": 0,
+              "allocated": "1.5",
+              "available": 2,
+              "budget": "1.5",
+              "expected": 2,
+              "filtered": 0,
+              "missing": 0,
+              "scored": 2,
+              "selected": 1,
+              "weighted": 1
+            }
+          },
+          "turnover": "0.25",
+          "universe": 5
+        },
+        "ledger": {
+          "equity_after": 87.1078,
+          "equity_before": 87.1296,
+          "fee": 0.0218,
+          "spot_value": 0,
+          "swap_value": 130.6617,
+          "traded": 43.5236,
+          "turnover": 0.2498
+        },
+        "skip_reason": ""
+      },
+      "swap_value": 130.6617,
+      "targets": [
+        {
+          "instrument_id": "A",
+          "market": "swap",
+          "target_weight": "1.5"
+        }
+      ],
+      "turnover": 0.2498,
+      "unfilled": 0
+    },
+    {
+      "bar_end": 1788274800,
+      "equity": 88.2339,
+      "fee": 0.0003,
+      "frozen": 0,
+      "holdings": 1,
+      "liquidated": 0,
+      "positions": {
+        "cash": 88.2339,
+        "positions": {
+          "A|swap": {
+            "instrument_id": "A",
+            "last_price": 117,
+            "market": "swap",
+            "quantity": 1.13120406,
+            "value": 132.3509
+          }
+        }
+      },
+      "return": 0.0129,
+      "skip_reason": "",
+      "spot_value": 0,
+      "status": "ok",
+      "summary": {
+        "decision": {
+          "cash": "-0.5",
+          "gross": "1.5",
+          "net": "1.5",
+          "rules": {
+            "e": {
+              "aged_out": 0,
+              "allocated": "0",
+              "available": 1,
+              "budget": "0.5",
+              "expected": 1,
+              "filtered": 0,
+              "missing": 0,
+              "scored": 1,
+              "selected": 0,
+              "weighted": 0
+            },
+            "r": {
+              "aged_out": 0,
+              "allocated": "1.5",
+              "available": 2,
+              "budget": "1.5",
+              "expected": 2,
+              "filtered": 0,
+              "missing": 0,
+              "scored": 2,
+              "selected": 1,
+              "weighted": 1
+            }
+          },
+          "turnover": "0",
+          "universe": 5
+        },
+        "ledger": {
+          "equity_after": 88.2339,
+          "equity_before": 88.2342,
+          "fee": 0.0003,
+          "spot_value": 0,
+          "swap_value": 132.3509,
+          "traded": 0.5628,
+          "turnover": 0.0032
+        },
+        "skip_reason": ""
+      },
+      "swap_value": 132.3509,
+      "targets": [
+        {
+          "instrument_id": "A",
+          "market": "swap",
+          "target_weight": "1.5"
+        }
+      ],
+      "turnover": 0.0032,
+      "unfilled": 0
+    },
+    {
+      "bar_end": 1788278400,
+      "equity": 89.3648,
+      "fee": 0.0003,
+      "frozen": 0,
+      "holdings": 1,
+      "liquidated": 0,
+      "positions": {
+        "cash": 89.3648,
+        "positions": {
+          "A|swap": {
+            "instrument_id": "A",
+            "last_price": 118,
+            "market": "swap",
+            "quantity": 1.13599371,
+            "value": 134.0473
+          }
+        }
+      },
+      "return": 0.0128,
+      "skip_reason": "",
+      "spot_value": 0,
+      "status": "ok",
+      "summary": {
+        "decision": {
+          "cash": "-0.5",
+          "gross": "1.5",
+          "net": "1.5",
+          "rules": {
+            "e": {
+              "aged_out": 0,
+              "allocated": "0",
+              "available": 1,
+              "budget": "0.5",
+              "expected": 1,
+              "filtered": 0,
+              "missing": 0,
+              "scored": 1,
+              "selected": 0,
+              "weighted": 0
+            },
+            "r": {
+              "aged_out": 0,
+              "allocated": "1.5",
+              "available": 2,
+              "budget": "1.5",
+              "expected": 2,
+              "filtered": 0,
+              "missing": 0,
+              "scored": 2,
+              "selected": 1,
+              "weighted": 1
+            }
+          },
+          "turnover": "0",
+          "universe": 5
+        },
+        "ledger": {
+          "equity_after": 89.3648,
+          "equity_before": 89.3651,
+          "fee": 0.0003,
+          "spot_value": 0,
+          "swap_value": 134.0473,
+          "traded": 0.5652,
+          "turnover": 0.0032
+        },
+        "skip_reason": ""
+      },
+      "swap_value": 134.0473,
+      "targets": [
+        {
+          "instrument_id": "A",
+          "market": "swap",
+          "target_weight": "1.5"
+        }
+      ],
+      "turnover": 0.0032,
+      "unfilled": 0
+    },
+    {
+      "bar_end": 1788282000,
+      "equity": 90.5005,
+      "fee": 0.0003,
+      "frozen": 0,
+      "holdings": 1,
+      "liquidated": 0,
+      "positions": {
+        "cash": 90.5005,
+        "positions": {
+          "A|swap": {
+            "instrument_id": "A",
+            "last_price": 119,
+            "market": "swap",
+            "quantity": 1.14076321,
+            "value": 135.7508
+          }
+        }
+      },
+      "return": 0.0127,
+      "skip_reason": "",
+      "spot_value": 0,
+      "status": "ok",
+      "summary": {
+        "decision": {
+          "cash": "-0.5",
+          "gross": "1.5",
+          "net": "1.5",
+          "rules": {
+            "e": {
+              "aged_out": 0,
+              "allocated": "0",
+              "available": 1,
+              "budget": "0.5",
+              "expected": 1,
+              "filtered": 0,
+              "missing": 0,
+              "scored": 1,
+              "selected": 0,
+              "weighted": 0
+            },
+            "r": {
+              "aged_out": 0,
+              "allocated": "1.5",
+              "available": 2,
+              "budget": "1.5",
+              "expected": 2,
+              "filtered": 0,
+              "missing": 0,
+              "scored": 2,
+              "selected": 1,
+              "weighted": 1
+            }
+          },
+          "turnover": "0",
+          "universe": 5
+        },
+        "ledger": {
+          "equity_after": 90.5005,
+          "equity_before": 90.5008,
+          "fee": 0.0003,
+          "spot_value": 0,
+          "swap_value": 135.7508,
+          "traded": 0.5676,
+          "turnover": 0.0031
+        },
+        "skip_reason": ""
+      },
+      "swap_value": 135.7508,
+      "targets": [
+        {
+          "instrument_id": "A",
+          "market": "swap",
+          "target_weight": "1.5"
+        }
+      ],
+      "turnover": 0.0031,
+      "unfilled": 0
+    },
+    {
+      "bar_end": 1788285600,
+      "equity": 91.641,
+      "fee": 0.0003,
+      "frozen": 0,
+      "holdings": 1,
+      "liquidated": 0,
+      "positions": {
+        "cash": 91.641,
+        "positions": {
+          "A|swap": {
+            "instrument_id": "A",
+            "last_price": 120,
+            "market": "swap",
+            "quantity": 1.14551283,
+            "value": 137.4615
+          }
+        }
+      },
+      "return": 0.0126,
+      "skip_reason": "",
+      "spot_value": 0,
+      "status": "ok",
+      "summary": {
+        "decision": {
+          "cash": "-0.5",
+          "gross": "1.5",
+          "net": "1.5",
+          "rules": {
+            "e": {
+              "aged_out": 0,
+              "allocated": "0",
+              "available": 1,
+              "budget": "0.5",
+              "expected": 1,
+              "filtered": 0,
+              "missing": 0,
+              "scored": 1,
+              "selected": 0,
+              "weighted": 0
+            },
+            "r": {
+              "aged_out": 0,
+              "allocated": "1.5",
+              "available": 2,
+              "budget": "1.5",
+              "expected": 2,
+              "filtered": 0,
+              "missing": 0,
+              "scored": 2,
+              "selected": 1,
+              "weighted": 1
+            }
+          },
+          "turnover": "0",
+          "universe": 5
+        },
+        "ledger": {
+          "equity_after": 91.641,
+          "equity_before": 91.6413,
+          "fee": 0.0003,
+          "spot_value": 0,
+          "swap_value": 137.4615,
+          "traded": 0.57,
+          "turnover": 0.0031
+        },
+        "skip_reason": ""
+      },
+      "swap_value": 137.4615,
+      "targets": [
+        {
+          "instrument_id": "A",
+          "market": "swap",
+          "target_weight": "1.5"
+        }
+      ],
+      "turnover": 0.0031,
+      "unfilled": 0
+    }
+  ],
+  "dsl": "name: baseline_swap\nmarket: {select: swap}\nuniverse:\n  tags: [majors]\n  include: [D]\n  exclude_tags: [meme]\n  exclude: [B]\n  min_age_bars: 3\nrules:\n  - id: r\n    type: rank\n    score: \"mom\"\n    select: {top: 1}\n    weight: {total: 1.5}\n  - id: e\n    type: signal\n    pool: [E]\n    entry: \"mom > 0\"\n    exit: \"mom < 0\"\n    weight: {total: 0.5}\nportfolio:\n  leverage: 2\n  max_missing: 1\n",
+  "metrics": {
+    "average_holdings": 1.25,
+    "average_turnover": 0.2212,
+    "bars": 16,
+    "factors": {
+      "mom": "sha256:mom|fixed"
+    },
+    "final_equity": 91.641,
+    "first_bar_end": "2026-09-01T03:00:00Z",
+    "initial_equity": 100,
+    "last_bar_end": "2026-09-01T18:00:00Z",
+    "limitations": [
+      "研究回放：按当期 close 成交的理想化假设，与实盘在 bar_end 之后成交不同",
+      "区间内历史行版本未验证：因子结果行不携带版本，只核对了回放开始时的因子定义指纹",
+      "基础集合取每期有行的标的，与实时事件名单可能不同；数据集的全部标的绑定（含已停用）都参与读取",
+      "手续费只按实际成交额计；不含滑点与盘口冲击",
+      "持有标的连续缺价 3 期后在 ok 期按最后价清算（研究假设）",
+      "标签只有当前成员关系：按标签选池存在幸存者偏差",
+      "永续按收盘价逐期结算盈亏、不占用现金：未计资金费，不模拟强平与保证金率",
+      "区间不足一周，不给出年化收益"
+    ],
+    "liquidations": 0,
+    "max_drawdown": 0.2891,
+    "ok_bars": 16,
+    "skipped_bars": 0,
+    "total_fee": 0.3398,
+    "total_return": -0.0836,
+    "unfilled_bars": 2
+  }
+}
