@@ -132,3 +132,23 @@ func TestObservedHistoryIncludesBackfilledNewcomer(t *testing.T) {
 	require.InDelta(t, (0.2+0.2+0.25)/3, fx.value(t, "A", 10, "obs"), 1e-12)
 	require.InDelta(t, (0.4+0.4+0.5)/3, fx.value(t, "NEW", 10, "obs"), 1e-12)
 }
+
+// 准备失败的登记不算正在同步：observed 的历史截面据此判断，失败任务的范围不能把已下架的标的挡在外面。
+func TestSyncedSubjectsCountsOnlyPreparedRegistrations(t *testing.T) {
+	fx := newFixture(t, observedRank("obs"))
+	observedSource(fx)
+	require.NoError(t, fx.data.Prepare(context.Background(), fx.set, []string{"A", "B"}))
+	src := sourceOf(fx.set.Set)
+	require.Equal(t, []string{"A", "B"}, fx.data.SyncedSubjects(src))
+
+	other := fx.set
+	other.Set.TaskID = "set2"
+	other.Members = domain.AsMembers(mean3())
+	// NOPE 在本地和 Storage 都没有数据：准备失败。
+	err := fx.data.Prepare(context.Background(), other, []string{"C", "OLD", "NOPE"})
+	require.Error(t, err)
+	require.Equal(t, []string{"A", "B"}, fx.data.SyncedSubjects(src), "失败的登记不计入")
+
+	require.NoError(t, fx.data.Prepare(context.Background(), other, []string{"C", "OLD"}))
+	require.Equal(t, []string{"A", "B", "C", "OLD"}, fx.data.SyncedSubjects(src))
+}

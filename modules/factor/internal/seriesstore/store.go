@@ -371,39 +371,72 @@ func (s *Store) TagBounds(src Source, subject string) (map[string]Bounds, error)
 }
 
 // SubjectBounds 返回数据源里各个有本地数据的标的的边界（各 series_tag 取并集），结果是副本。按缓存返回：只有自上次读取以来
-// 写过的标的才重读，用于每期都要按边界筛选全部本地标的的调用方（observed 的历史截面）。
+// 写过的标的才重读，用于每期都要按边界筛选全部本地标的的调用方（observed 的历史截面）。读 Pebble 时不持有缓存锁，
+// 不挡写入：先取出待刷新的名单，锁外读取，再加锁回填；读取期间又被写到的标的仍标为待刷新，下次读取时再刷新。
 func (s *Store) SubjectBounds(src Source) (map[string]Bounds, error) {
 	if err := src.check(); err != nil {
 		return nil, err
 	}
 	s.bmu.Lock()
-	defer s.bmu.Unlock()
 	if s.bounds == nil {
 		s.bounds = map[Source]*boundsCache{}
 	}
 	cache := s.bounds[src]
-	if cache == nil {
+	fresh := cache == nil
+	if fresh {
+		// 先登记空缓存再扫描：扫描期间的写入会记为待刷新，不会漏掉。
+		cache = &boundsCache{subjects: map[string]Bounds{}, dirty: map[string]struct{}{}}
+		s.bounds[src] = cache
+	}
+	s.bmu.Unlock()
+	if fresh {
 		subjects, err := s.Subjects(src)
 		if err != nil {
+			s.bmu.Lock()
+			if s.bounds[src] == cache {
+				delete(s.bounds, src)
+			}
+			s.bmu.Unlock()
 			return nil, err
 		}
-		cache = &boundsCache{subjects: make(map[string]Bounds, len(subjects)), dirty: map[string]struct{}{}}
+		s.bmu.Lock()
 		for _, subject := range subjects {
 			cache.dirty[subject] = struct{}{}
 		}
-		s.bounds[src] = cache
+		s.bmu.Unlock()
 	}
+	s.bmu.Lock()
+	pending := make([]string, 0, len(cache.dirty))
 	for subject := range cache.dirty {
+		pending = append(pending, subject)
+		delete(cache.dirty, subject)
+	}
+	s.bmu.Unlock()
+	read := make(map[string]Bounds, len(pending))
+	missing := map[string]struct{}{}
+	for _, subject := range pending {
 		b, ok, err := s.Bounds(src, subject)
 		if err != nil {
+			s.bmu.Lock()
+			for _, again := range pending {
+				cache.dirty[again] = struct{}{}
+			}
+			s.bmu.Unlock()
 			return nil, err
 		}
 		if ok {
-			cache.subjects[subject] = b
+			read[subject] = b
 		} else {
-			delete(cache.subjects, subject)
+			missing[subject] = struct{}{}
 		}
-		delete(cache.dirty, subject)
+	}
+	s.bmu.Lock()
+	defer s.bmu.Unlock()
+	for subject, b := range read {
+		cache.subjects[subject] = b
+	}
+	for subject := range missing {
+		delete(cache.subjects, subject)
 	}
 	out := make(map[string]Bounds, len(cache.subjects))
 	for subject, b := range cache.subjects {

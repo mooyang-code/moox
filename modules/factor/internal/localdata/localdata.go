@@ -122,6 +122,8 @@ type setReg struct {
 	// observed 为真表示任务里有成员写了 cross_section_history: observed：窗口还要载入本地存储里回看窗口内有数据、
 	// 但不在任何任务标的范围里的标的（只读本地历史，不同步）。
 	observed bool
+	// prepared 为真表示这次登记的准备已经成功：只有准备好的任务范围才算“正在同步”（SyncedSubjects）。
+	prepared bool
 }
 
 type source struct {
@@ -491,6 +493,12 @@ func (d *Data) Prepare(ctx context.Context, set domain.EngineTask, subjects []st
 	st.window = window
 	st.win.Store(window)
 	st.ready.Store(true)
+	st.regsMu.Lock()
+	if reg, ok := st.regs[set.Set.TaskID]; ok {
+		reg.prepared = true
+		st.regs[set.Set.TaskID] = reg
+	}
+	st.regsMu.Unlock()
 	if d.cfg.Admit != nil {
 		d.cfg.Admit.SetResident("window:"+src.String(), window.Stats().Bytes)
 	}
@@ -550,7 +558,8 @@ func HistoryCandidates(store *seriesstore.Store, src seriesstore.Source, from, t
 	return out, nil
 }
 
-// SyncedSubjects 返回数据源上全部登记任务的标的范围（正在同步的标的）的并集，排序；数据源没有登记时为空。
+// SyncedSubjects 返回数据源上已准备好的登记任务的标的范围（正在同步的标的）的并集，排序；数据源没有登记时为空。
+// 准备失败的登记（例如窗口内存超限、本地没有数据）不计入。
 func (d *Data) SyncedSubjects(src seriesstore.Source) []string {
 	st := d.lookup(src)
 	if st == nil {
@@ -559,6 +568,9 @@ func (d *Data) SyncedSubjects(src seriesstore.Source) []string {
 	_, regs := st.registered()
 	union := map[string]struct{}{}
 	for _, reg := range regs {
+		if !reg.prepared {
+			continue // 准备没有成功的登记不算正在同步
+		}
 		for _, subject := range reg.subjects {
 			union[subject] = struct{}{}
 		}

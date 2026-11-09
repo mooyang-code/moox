@@ -34,6 +34,23 @@ func TestSubjectBoundsCacheFollowsWrites(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, at(3), again["A"].Latest)
 
+	// 读取与写入并发：读 Pebble 时不持有缓存锁；写完之后的读取与逐个 Bounds 相同。
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for m := 4; m < 40; m++ {
+			write(t, s, "A", m, m+1, rowsOf(map[int]float64{m: float64(100 + m)}), false)
+		}
+	}()
+	for i := 0; i < 50; i++ {
+		_, err := s.SubjectBounds(testSrc)
+		require.NoError(t, err)
+	}
+	<-done
+	got, err = s.SubjectBounds(testSrc)
+	require.NoError(t, err)
+	require.Equal(t, at(39), got["A"].Latest)
+
 	require.NoError(t, s.Wipe())
 	got, err = s.SubjectBounds(testSrc)
 	require.NoError(t, err)

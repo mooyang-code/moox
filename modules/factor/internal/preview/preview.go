@@ -198,8 +198,16 @@ func (s *Service) Preview(ctx context.Context, req Request) (Result, error) {
 		Expected: computed, Available: computed, CarryColumns: factor.InputColumns,
 	}
 	// observed：历史截面还要用源数据集登记过、但不在册的标的（含已下架的），与正式计算同一口径。
-	history, err := s.runner.HistorySubjects(ctx, plan)
+	// 预算是标的上限减去本期标的数：确认数一超过就提前报错，不读完全部候选。
+	budget := MaxUniverse - len(computed)
+	if budget < 1 {
+		budget = 1
+	}
+	history, err := s.runner.HistorySubjectsWithin(ctx, plan, budget)
 	if err != nil {
+		if errors.Is(err, pipeline.ErrHistoryTooMany) {
+			return Result{}, fmt.Errorf("截面因子试算最多支持 %d 个标的（含历史截面），任务有 %d 个：%w", MaxUniverse, len(computed), err)
+		}
 		return Result{}, err
 	}
 	plan.HistorySubjects = history

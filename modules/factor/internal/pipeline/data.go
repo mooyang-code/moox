@@ -37,6 +37,11 @@ type HistorySource interface {
 	HistorySubjects(ctx context.Context, plan Plan) ([]string, error)
 }
 
+// LimitedHistorySource 是 HistorySource 的可选扩展：调用方给出个数上限，超过时尽早返回 ErrHistoryTooMany，不读完全部候选。
+type LimitedHistorySource interface {
+	HistorySubjectsWithin(ctx context.Context, plan Plan, limit int) ([]string, error)
+}
+
 // DataResult 是 Data.Load 的结果。
 type DataResult struct {
 	// View 是计算的列式输入。

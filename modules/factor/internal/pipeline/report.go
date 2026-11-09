@@ -218,6 +218,25 @@ func (r *Runner) HistorySubjects(ctx context.Context, plan Plan) ([]string, erro
 	return history, nil
 }
 
+// HistorySubjectsWithin 与 HistorySubjects 相同，但个数超过 limit 时返回 ErrHistoryTooMany；数据层支持时提前停止读取。
+func (r *Runner) HistorySubjectsWithin(ctx context.Context, plan Plan, limit int) ([]string, error) {
+	if !plan.Observed() {
+		return nil, nil
+	}
+	if limited, ok := r.data.(LimitedHistorySource); ok {
+		history, err := limited.HistorySubjectsWithin(ctx, plan, limit)
+		if err != nil {
+			return nil, fmt.Errorf("列出历史截面的标的: %w", err)
+		}
+		return history, nil
+	}
+	history, err := r.HistorySubjects(ctx, plan)
+	if err == nil && limit > 0 && len(history) > limit {
+		return nil, fmt.Errorf("列出历史截面的标的: %w：%d 个，超过 %d", ErrHistoryTooMany, len(history), limit)
+	}
+	return history, err
+}
+
 func mergeOutcomeDurations(outcome, previous Outcome) Outcome {
 	for name, duration := range previous.StageDurations {
 		outcome.StageDurations[name] = duration
