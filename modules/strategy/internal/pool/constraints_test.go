@@ -97,6 +97,29 @@ func TestExposureBandAdjustModes(t *testing.T) {
 	}
 }
 
+// 区间不含 0 时也按超出方向修正，净敞口回到区间边界：字面上的“较大一侧”在这时会把净敞口推得更远
+// （例如区间 [0.2, 0.5]、多头 0.55、空头 0.45，缩较大的多头会让净敞口继续下降）。
+func TestExposureBandWithoutZero(t *testing.T) {
+	cases := []struct {
+		name, ratios, band string
+		want               map[string]string
+	}{
+		// 区间 [0.2, 0.5]，净敞口 0.1 低于 min：缩空头到 0.35，或放大多头到 0.65。
+		{"正区间低于下限缩空头", "{l: 0.55, s: 0.45}", "min: 0.2, max: 0.5, adjust: reduce_larger", map[string]string{"l": "0.55", "s": "0.35"}},
+		{"正区间低于下限放大多头", "{l: 0.55, s: 0.45}", "min: 0.2, max: 0.5, adjust: raise_smaller", map[string]string{"l": "0.65", "s": "0.45"}},
+		// 区间 [−0.5, −0.2]，净敞口 −0.05 高于 max：缩多头到 0.3，或放大空头到 0.65。
+		{"负区间高于上限缩多头", "{l: 0.45, s: 0.5}", "min: -0.5, max: -0.2, adjust: reduce_larger", map[string]string{"l": "0.3", "s": "0.5"}},
+		{"负区间高于上限放大空头", "{l: 0.45, s: 0.5}", "min: -0.5, max: -0.2, adjust: raise_smaller", map[string]string{"l": "0.45", "s": "0.65"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := sidedConfig(t, "  allocation: {method: fixed, ratios: "+tc.ratios+"}\n  exposure: {bands: [{"+tc.band+"}]}\n", "portfolio: {leverage: 2}\n", longShort...)
+			decisions, _ := run(t, cfg, []bar{longShortBar()})
+			requireMap(t, "合成比例", composedRatios(decisions[0]), tc.want)
+		})
+	}
+}
+
 // 带 when_gross_below 的段只在总敞口低于阈值时执行；区间内不修正。
 func TestExposureConditionalBand(t *testing.T) {
 	body := "  exposure: {bands: [{when_gross_below: 1.0, min: 0, max: 0, adjust: raise_smaller}]}\n"
