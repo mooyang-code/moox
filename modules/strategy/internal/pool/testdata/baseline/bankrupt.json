@@ -1,0 +1,735 @@
+{
+  "bars": [
+    {
+      "bar_index": 1,
+      "input": {
+        "bar_index": 1,
+        "members": [
+          {
+            "id": "swapper",
+            "targets": {
+              "Z|swap": "12"
+            }
+          },
+          {
+            "id": "b",
+            "targets": {
+              "Y|spot": "1"
+            }
+          }
+        ],
+        "prices": {
+          "W|spot": 10,
+          "X|spot": 100,
+          "Y|spot": 50,
+          "Z|swap": 20
+        }
+      },
+      "pool_state": {
+        "last_bar_index": 1,
+        "ledgers": {
+          "b": {
+            "cash": 0,
+            "liquidate_after": 3,
+            "positions": {
+              "Y|spot": {
+                "last_price": 50,
+                "quantity": 0.019980019980019983,
+                "value": 0.9990009990009991
+              }
+            },
+            "spot_fee_rate": 0.001,
+            "swap_fee_rate": 0.0005
+          },
+          "swapper": {
+            "cash": 0.9940357852882706,
+            "liquidate_after": 3,
+            "positions": {
+              "Z|swap": {
+                "last_price": 20,
+                "quantity": 0.5964214711729344,
+                "value": 11.928429423458688
+              }
+            },
+            "spot_fee_rate": 0.001,
+            "swap_fee_rate": 0.0005
+          }
+        },
+        "ratios": {
+          "b": "0.5",
+          "swapper": "0.5"
+        },
+        "series": {
+          "b": [
+            0.9990009990009991
+          ],
+          "swapper": [
+            0.9940357852882706
+          ]
+        },
+        "started": true
+      },
+      "state_targets": {
+        "Y|spot": "0.5",
+        "Z|swap": "6"
+      },
+      "status": "ok",
+      "summary": {
+        "gross": "6.5",
+        "net": "6.5",
+        "pool": {
+          "members": [
+            {
+              "base": "0.5",
+              "equity": 0.9940357852882706,
+              "gross": "6",
+              "id": "swapper",
+              "net": "6",
+              "ratio": "0.5",
+              "ratio_before": "0.5",
+              "status": "ok",
+              "targets": {
+                "Z|swap": "6"
+              }
+            },
+            {
+              "base": "0.5",
+              "equity": 0.9990009990009991,
+              "gross": "0.5",
+              "id": "b",
+              "net": "0.5",
+              "ratio": "0.5",
+              "ratio_before": "0.5",
+              "status": "ok",
+              "targets": {
+                "Y|spot": "0.5"
+              }
+            }
+          ],
+          "method": "rotation"
+        },
+        "rules": {},
+        "spot_net": "0.5",
+        "swap_net": "6",
+        "turnover": "3.25",
+        "universe": 0
+      },
+      "targets": [
+        {
+          "instrument_id": "Y",
+          "market": "spot",
+          "weight": "0.5"
+        },
+        {
+          "instrument_id": "Z",
+          "market": "swap",
+          "weight": "6"
+        }
+      ]
+    },
+    {
+      "bar_index": 2,
+      "input": {
+        "bar_index": 2,
+        "members": [
+          {
+            "id": "swapper",
+            "targets": {
+              "Z|swap": "12"
+            }
+          },
+          {
+            "id": "b",
+            "targets": {
+              "Y|spot": "1"
+            }
+          }
+        ],
+        "prices": {
+          "W|spot": 10,
+          "X|spot": 104,
+          "Y|spot": 49,
+          "Z|swap": 21
+        }
+      },
+      "pool_state": {
+        "last_bar_index": 2,
+        "ledgers": {
+          "b": {
+            "cash": 0,
+            "liquidate_after": 3,
+            "positions": {
+              "Y|spot": {
+                "last_price": 49,
+                "quantity": 0.019980019980019983,
+                "value": 0.9790209790209792
+              }
+            },
+            "spot_fee_rate": 0.001,
+            "swap_fee_rate": 0.0005
+          },
+          "swapper": {
+            "cash": 1.5871965028911483,
+            "liquidate_after": 3,
+            "positions": {
+              "Z|swap": {
+                "last_price": 21,
+                "quantity": 0.9069694302259426,
+                "value": 19.046358034744795
+              }
+            },
+            "spot_fee_rate": 0.001,
+            "swap_fee_rate": 0.0005
+          }
+        },
+        "ratios": {
+          "b": "0.5",
+          "swapper": "0.5"
+        },
+        "series": {
+          "b": [
+            0.9990009990009991,
+            0.9790209790209792
+          ],
+          "swapper": [
+            0.9940357852882706,
+            1.5871965028911483
+          ]
+        },
+        "started": true
+      },
+      "state_targets": {
+        "Y|spot": "0.5",
+        "Z|swap": "6"
+      },
+      "status": "ok",
+      "summary": {
+        "gross": "6.5",
+        "net": "6.5",
+        "pool": {
+          "members": [
+            {
+              "base": "0.5",
+              "equity": 1.5871965028911483,
+              "gross": "6",
+              "id": "swapper",
+              "net": "6",
+              "ratio": "0.5",
+              "ratio_before": "0.5",
+              "status": "ok",
+              "targets": {
+                "Z|swap": "6"
+              }
+            },
+            {
+              "base": "0.5",
+              "equity": 0.9790209790209792,
+              "gross": "0.5",
+              "id": "b",
+              "net": "0.5",
+              "ratio": "0.5",
+              "ratio_before": "0.5",
+              "status": "ok",
+              "targets": {
+                "Y|spot": "0.5"
+              }
+            }
+          ],
+          "method": "rotation"
+        },
+        "rules": {},
+        "spot_net": "0.5",
+        "swap_net": "6",
+        "turnover": "0",
+        "universe": 0
+      },
+      "targets": [
+        {
+          "instrument_id": "Y",
+          "market": "spot",
+          "weight": "0.5"
+        },
+        {
+          "instrument_id": "Z",
+          "market": "swap",
+          "weight": "6"
+        }
+      ]
+    },
+    {
+      "bar_index": 3,
+      "input": {
+        "bar_index": 3,
+        "members": [
+          {
+            "id": "swapper",
+            "targets": {
+              "Z|swap": "12"
+            }
+          },
+          {
+            "id": "b",
+            "targets": {
+              "Y|spot": "1"
+            }
+          }
+        ],
+        "prices": {
+          "W|spot": 11,
+          "X|spot": 108,
+          "Y|spot": 51,
+          "Z|swap": 19
+        }
+      },
+      "pool_state": {
+        "last_bar_index": 3,
+        "ledgers": {
+          "b": {
+            "cash": 0,
+            "liquidate_after": 3,
+            "positions": {
+              "Y|spot": {
+                "last_price": 51,
+                "quantity": 0.019980019980019983,
+                "value": 1.0189810189810191
+              }
+            },
+            "spot_fee_rate": 0.001,
+            "swap_fee_rate": 0.0005
+          },
+          "swapper": {
+            "bankrupt": true,
+            "cash": -0.23535856714788325,
+            "liquidate_after": 3,
+            "positions": {},
+            "spot_fee_rate": 0.001,
+            "swap_fee_rate": 0.0005
+          }
+        },
+        "ratios": {
+          "b": "0",
+          "swapper": "1"
+        },
+        "series": {
+          "b": [
+            0.9790209790209792,
+            1.0189810189810191
+          ],
+          "swapper": [
+            1.5871965028911483,
+            -0.23535856714788325
+          ]
+        },
+        "started": true
+      },
+      "state_targets": {
+        "Z|swap": "10"
+      },
+      "status": "ok",
+      "summary": {
+        "gross": "10",
+        "net": "10",
+        "notes": [
+          "总敞口 12 超过 portfolio.leverage 10，按比例缩小为 10"
+        ],
+        "pool": {
+          "members": [
+            {
+              "bankrupt": true,
+              "base": "1",
+              "equity": -0.23535856714788325,
+              "gross": "12",
+              "id": "swapper",
+              "net": "12",
+              "rank": 1,
+              "ratio": "1",
+              "ratio_before": "1",
+              "status": "ok",
+              "targets": {
+                "Z|swap": "12"
+              }
+            },
+            {
+              "base": "0",
+              "equity": 1.0189810189810191,
+              "gross": "0",
+              "id": "b",
+              "net": "0",
+              "rank": 2,
+              "ratio": "0",
+              "ratio_before": "0",
+              "status": "ok"
+            }
+          ],
+          "method": "rotation"
+        },
+        "rules": {},
+        "spot_net": "0",
+        "swap_net": "10",
+        "turnover": "2.25",
+        "universe": 0
+      },
+      "targets": [
+        {
+          "instrument_id": "Z",
+          "market": "swap",
+          "weight": "10"
+        }
+      ]
+    },
+    {
+      "bar_index": 4,
+      "input": {
+        "bar_index": 4,
+        "members": [
+          {
+            "id": "swapper",
+            "targets": {
+              "Z|swap": "12"
+            }
+          },
+          {
+            "id": "b",
+            "targets": {
+              "Y|spot": "1"
+            }
+          }
+        ],
+        "prices": {
+          "W|spot": 12,
+          "X|spot": 103,
+          "Y|spot": 53,
+          "Z|swap": 18
+        }
+      },
+      "pool_state": {
+        "last_bar_index": 4,
+        "ledgers": {
+          "b": {
+            "cash": 0,
+            "liquidate_after": 3,
+            "positions": {
+              "Y|spot": {
+                "last_price": 53,
+                "quantity": 0.019980019980019983,
+                "value": 1.058941058941059
+              }
+            },
+            "spot_fee_rate": 0.001,
+            "swap_fee_rate": 0.0005
+          },
+          "swapper": {
+            "bankrupt": true,
+            "cash": -0.23535856714788325,
+            "liquidate_after": 3,
+            "positions": {},
+            "spot_fee_rate": 0.001,
+            "swap_fee_rate": 0.0005
+          }
+        },
+        "ratios": {
+          "b": "1",
+          "swapper": "0"
+        },
+        "series": {
+          "b": [
+            1.0189810189810191,
+            1.058941058941059
+          ],
+          "swapper": [
+            -0.23535856714788325,
+            -0.23535856714788325
+          ]
+        },
+        "started": true
+      },
+      "state_targets": {
+        "Y|spot": "1"
+      },
+      "status": "ok",
+      "summary": {
+        "gross": "1",
+        "net": "1",
+        "pool": {
+          "members": [
+            {
+              "bankrupt": true,
+              "base": "0",
+              "equity": -0.23535856714788325,
+              "gross": "0",
+              "id": "swapper",
+              "net": "0",
+              "ratio": "0",
+              "ratio_before": "0",
+              "status": "ok"
+            },
+            {
+              "base": "1",
+              "equity": 1.058941058941059,
+              "gross": "1",
+              "id": "b",
+              "net": "1",
+              "rank": 1,
+              "ratio": "1",
+              "ratio_before": "1",
+              "status": "ok",
+              "targets": {
+                "Y|spot": "1"
+              }
+            }
+          ],
+          "method": "rotation"
+        },
+        "rules": {},
+        "spot_net": "1",
+        "swap_net": "0",
+        "turnover": "5.5",
+        "universe": 0
+      },
+      "targets": [
+        {
+          "instrument_id": "Y",
+          "market": "spot",
+          "weight": "1"
+        }
+      ]
+    },
+    {
+      "bar_index": 5,
+      "input": {
+        "bar_index": 5,
+        "members": [
+          {
+            "id": "swapper",
+            "targets": {
+              "Z|swap": "12"
+            }
+          },
+          {
+            "id": "b",
+            "targets": {
+              "Y|spot": "1"
+            }
+          }
+        ],
+        "prices": {
+          "W|spot": 11,
+          "X|spot": 99,
+          "Y|spot": 55,
+          "Z|swap": 20
+        }
+      },
+      "pool_state": {
+        "last_bar_index": 5,
+        "ledgers": {
+          "b": {
+            "cash": 0,
+            "liquidate_after": 3,
+            "positions": {
+              "Y|spot": {
+                "last_price": 55,
+                "quantity": 0.019980019980019983,
+                "value": 1.098901098901099
+              }
+            },
+            "spot_fee_rate": 0.001,
+            "swap_fee_rate": 0.0005
+          },
+          "swapper": {
+            "bankrupt": true,
+            "cash": -0.23535856714788325,
+            "liquidate_after": 3,
+            "positions": {},
+            "spot_fee_rate": 0.001,
+            "swap_fee_rate": 0.0005
+          }
+        },
+        "ratios": {
+          "b": "1",
+          "swapper": "0"
+        },
+        "series": {
+          "b": [
+            1.058941058941059,
+            1.098901098901099
+          ],
+          "swapper": [
+            -0.23535856714788325,
+            -0.23535856714788325
+          ]
+        },
+        "started": true
+      },
+      "state_targets": {
+        "Y|spot": "1"
+      },
+      "status": "ok",
+      "summary": {
+        "gross": "1",
+        "net": "1",
+        "pool": {
+          "members": [
+            {
+              "bankrupt": true,
+              "base": "0",
+              "equity": -0.23535856714788325,
+              "gross": "0",
+              "id": "swapper",
+              "net": "0",
+              "ratio": "0",
+              "ratio_before": "0",
+              "status": "ok"
+            },
+            {
+              "base": "1",
+              "equity": 1.098901098901099,
+              "gross": "1",
+              "id": "b",
+              "net": "1",
+              "rank": 1,
+              "ratio": "1",
+              "ratio_before": "1",
+              "status": "ok",
+              "targets": {
+                "Y|spot": "1"
+              }
+            }
+          ],
+          "method": "rotation"
+        },
+        "rules": {},
+        "spot_net": "1",
+        "swap_net": "0",
+        "turnover": "0",
+        "universe": 0
+      },
+      "targets": [
+        {
+          "instrument_id": "Y",
+          "market": "spot",
+          "weight": "1"
+        }
+      ]
+    },
+    {
+      "bar_index": 6,
+      "input": {
+        "bar_index": 6,
+        "members": [
+          {
+            "id": "swapper",
+            "targets": {
+              "Z|swap": "12"
+            }
+          },
+          {
+            "id": "b",
+            "targets": {
+              "Y|spot": "1"
+            }
+          }
+        ],
+        "prices": {
+          "W|spot": 10,
+          "X|spot": 102,
+          "Y|spot": 54,
+          "Z|swap": 22
+        }
+      },
+      "pool_state": {
+        "last_bar_index": 6,
+        "ledgers": {
+          "b": {
+            "cash": 0,
+            "liquidate_after": 3,
+            "positions": {
+              "Y|spot": {
+                "last_price": 54,
+                "quantity": 0.019980019980019983,
+                "value": 1.078921078921079
+              }
+            },
+            "spot_fee_rate": 0.001,
+            "swap_fee_rate": 0.0005
+          },
+          "swapper": {
+            "bankrupt": true,
+            "cash": -0.23535856714788325,
+            "liquidate_after": 3,
+            "positions": {},
+            "spot_fee_rate": 0.001,
+            "swap_fee_rate": 0.0005
+          }
+        },
+        "ratios": {
+          "b": "1",
+          "swapper": "0"
+        },
+        "series": {
+          "b": [
+            1.098901098901099,
+            1.078921078921079
+          ],
+          "swapper": [
+            -0.23535856714788325,
+            -0.23535856714788325
+          ]
+        },
+        "started": true
+      },
+      "state_targets": {
+        "Y|spot": "1"
+      },
+      "status": "ok",
+      "summary": {
+        "gross": "1",
+        "net": "1",
+        "pool": {
+          "members": [
+            {
+              "bankrupt": true,
+              "base": "0",
+              "equity": -0.23535856714788325,
+              "gross": "0",
+              "id": "swapper",
+              "net": "0",
+              "ratio": "0",
+              "ratio_before": "0",
+              "status": "ok"
+            },
+            {
+              "base": "1",
+              "equity": 1.078921078921079,
+              "gross": "1",
+              "id": "b",
+              "net": "1",
+              "rank": 1,
+              "ratio": "1",
+              "ratio_before": "1",
+              "status": "ok",
+              "targets": {
+                "Y|spot": "1"
+              }
+            }
+          ],
+          "method": "rotation"
+        },
+        "rules": {},
+        "spot_net": "1",
+        "swap_net": "0",
+        "turnover": "0",
+        "universe": 0
+      },
+      "targets": [
+        {
+          "instrument_id": "Y",
+          "market": "spot",
+          "weight": "1"
+        }
+      ]
+    }
+  ],
+  "dsl": "name: baseline_pool\nbar: 1h\nstrategy_pool:\n  members:\n    - {id: swapper, strategy: s_swapper}\n    - {id: b, strategy: s_b}\n  allocation:\n    method: rotation\n    rotation:\n      top: 1\n      factors:\n        - {name: return, window: 1}\n  fees: {spot_bps: 10, swap_bps: 5}\nportfolio: {leverage: 10}\n",
+  "market": "select=both, prefer=spot",
+  "name": "bankrupt"
+}
