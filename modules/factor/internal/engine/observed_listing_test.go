@@ -61,8 +61,7 @@ func newListingScenario(t *testing.T) *listingScenario {
 	sc.storage.put("GONE", 200, 0, 1, 2, 3, 4, 5, 6, 7, 8)
 	sc.listing.set("A", "B", "C", "GONE")
 	sc.obs, _ = sharedTasks()
-	sc.synced = &syncedScope{catalog: func() []domain.EngineTask { return []domain.EngineTask{sc.obs} }, source: sc.listing,
-		now: func() time.Time { return sc.clock }}
+	sc.synced = &syncedScope{}
 	store, err := seriesstore.Open(seriesstore.Options{Dir: t.TempDir(), BlockCacheBytes: 8 << 20, DisableSync: true})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
@@ -93,28 +92,9 @@ func (sc *listingScenario) recalc(minute int, universe ...string) float64 {
 	return sc.storage.value(sc.t, "result_ftask_obs", "A", minute, "obs")
 }
 
-// 刚下架时“正在同步”的缓存还是旧清单：重新 Prepare 不再按它把 GONE 移出窗口，缓存过期后实时与补算逐位相同。
-func TestObservedStaleSyncedCacheDoesNotDropWindow(t *testing.T) {
-	sc := newListingScenario(t)
-	ctx := context.Background()
-	require.NoError(t, sc.data.Prepare(ctx, sc.obs, []string{"A", "B", "C", "GONE"}))
-	_, err := sc.synced.Subjects(ctx, seriesstore.Source{SpaceID: "crypto", DatasetID: "dataset_a", Freq: "1m"}) // 缓存旧清单
-	require.NoError(t, err)
-	// GONE 下架：数据集清单变了，缓存还没过期，任务按新全集重新准备。
-	sc.listing.set("A", "B", "C")
-	sc.clock = rt0.Add(10 * time.Minute)
-	require.NoError(t, sc.data.Prepare(ctx, sc.obs, []string{"A", "B", "C"}))
-	// 缓存过期之后的实时与补算：第 8 分钟的截面有 GONE。
-	sc.clock = rt0.Add(11*time.Minute + syncedScopeTTL)
-	live := sc.live(10, "A", "B", "C")
-	recalc := sc.recalc(10, "A", "B", "C")
-	require.InDelta(t, (0.25+1.0/3+1.0/3)/3, live, 1e-12)
-	require.Equal(t, math.Float64bits(live), math.Float64bits(recalc))
-}
-
-// 预载取到新清单时直接更新“正在同步”的缓存（preloader.onSubjects）：下架、上架之后马上算出的实时值，
-// 与缓存过期之后的补算逐位相同，不必等一分钟。
-func TestObservedPreloadUpdatesSyncedScope(t *testing.T) {
+// 下架、上架：“正在同步”只来自预载最近一次取到的清单，清单变了立即生效；Prepare 载入窗口不按它过滤，
+// 刚下架的 GONE 仍在窗口里。变化之后马上算出的实时值与补算逐位相同。
+func TestObservedListingChangeTakesEffectImmediately(t *testing.T) {
 	for _, change := range []string{"delist", "list"} {
 		t.Run(change, func(t *testing.T) {
 			sc := newListingScenario(t)
@@ -129,10 +109,6 @@ func TestObservedPreloadUpdatesSyncedScope(t *testing.T) {
 			subjects, err := preload.prepare(ctx, sc.obs)
 			require.NoError(t, err)
 			preload.markPrepared(sc.obs, subjects)
-			// 上一期的计算把旧清单放进了缓存（没过期）。
-			sc.clock = rt0.Add(9*time.Minute + 30*time.Second)
-			_, err = sc.synced.Subjects(ctx, seriesstore.Source{SpaceID: "crypto", DatasetID: "dataset_a", Freq: "1m"})
-			require.NoError(t, err)
 			universe := []string{"A", "B", "C"}
 			if change == "delist" {
 				sc.listing.set("A", "B", "C")
@@ -144,11 +120,14 @@ func TestObservedPreloadUpdatesSyncedScope(t *testing.T) {
 			require.True(t, preload.subjectsChanged(ctx, sc.obs), "预载发现清单变化")
 			_, err = preload.prepare(ctx, sc.obs)
 			require.NoError(t, err)
-			sc.clock = rt0.Add(10*time.Minute + 20*time.Second) // 旧清单的缓存还没过期
+			sc.clock = rt0.Add(11 * time.Minute)
 			live := sc.live(10, universe...)
-			sc.clock = rt0.Add(11*time.Minute + syncedScopeTTL)
 			recalc := sc.recalc(10, universe...)
-			require.Equal(t, math.Float64bits(recalc), math.Float64bits(live), "下架、上架后马上算出的实时值与补算相同")
+			require.Equal(t, math.Float64bits(recalc), math.Float64bits(live), "清单变化后马上算出的实时值与补算相同")
+			if change == "delist" {
+				// 第 8 分钟的截面有 GONE（窗口没有因为下架把它移出）。
+				require.InDelta(t, (0.25+1.0/3+1.0/3)/3, live, 1e-12)
+			}
 		})
 	}
 }

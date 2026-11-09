@@ -148,7 +148,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	if r.series, err = seriesstore.Open(seriesstore.Options{Dir: cfg.SeriesStore.Dir, BlockCacheBytes: int64(cfg.SeriesStore.BlockCache)}); err != nil {
 		return nil, fmt.Errorf("open factor series store: %w", err)
 	}
-	synced := &syncedScope{catalog: func() []domain.EngineTask { return r.catalog.Sets() }, source: r.storage, now: time.Now}
+	synced := &syncedScope{}
 	r.data = localdata.New(localdata.Config{
 		Synced: synced.Subjects,
 		Store:  r.series, Storage: r.storage, Admit: r.admit,

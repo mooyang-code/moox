@@ -236,17 +236,12 @@ func (sharedReplaySource) ListDatasetSubjects(context.Context, string, string) (
 	return []string{"A", "B", "C"}, nil
 }
 
-// sharedSynced 是测试用的“正在同步”：目录里两个任务都启用，数据集在册的标的是 A、B、C、X。
+// sharedSynced 是测试用的“正在同步”：预载取到的数据集在册清单是 A、B、C、X。
 func sharedSynced() *syncedScope {
-	obs, wide := sharedTasks()
-	return &syncedScope{catalog: func() []domain.EngineTask { return []domain.EngineTask{obs, wide} }, source: sharedListing{},
-		now: time.Now}
-}
-
-type sharedListing struct{}
-
-func (sharedListing) ListDatasetSubjects(context.Context, string, string) ([]string, error) {
-	return []string{"A", "B", "C", "X"}, nil
+	obs, _ := sharedTasks()
+	scope := &syncedScope{}
+	scope.Update(obs.Set, []string{"A", "B", "C", "X"})
+	return scope
 }
 
 // 重启时任务逐个就绪：只有 obs 准备好、wide 还没准备（或准备失败）时，obs 的结果与两个任务都就绪后相同——
