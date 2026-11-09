@@ -84,7 +84,7 @@ strategy_pool:
     - {id: a, strategy: strategy_xxx}       # id 是 snake_case；strategy 是已有策略的 ID
     - {id: b, strategy: strategy_yyy}
   allocation:
-    method: rotation                        # fixed（写 ratios: {a: 0.6, b: 0.4}，覆盖所有成员）或 rotation
+    method: rotation                        # fixed（写 ratios: {a: 0.6, b: 0.4}，覆盖所有成员）、rotation 或 drift（见下）
     rotation:
       factors: [{name: return, window: 24, weight: 1}, {name: ma_ratio, window: 72, weight: 1}]   # return / ma_ratio / drawdown，可选 order: asc|desc
       top: 1                                # 前几名，并列的平分
@@ -102,7 +102,7 @@ portfolio: {leverage: 1, max_weight: 0.1}
     allocation:
       method: fixed
       ratios: {long_core: 0.5, short_core: 0.45, short_new: 0.05, probe: 0}
-      switch:                               # 条件转移（只用于 fixed），第一个成立的生效
+      switch:                               # 条件转移（用于 fixed 与 drift），第一个成立的生效
         - when: {empty: probe}              # probe 本期有效目标为空（没通过时按沿用的上期目标判断）
           move: {from: short_new, to: [short_core]}   # from、to 必须同方向
     exposure:                               # 净敞口 = 多头 − 空头，各段按顺序执行
@@ -112,6 +112,26 @@ portfolio: {leverage: 1, max_weight: 0.1}
     gross: {min: 1.0, max: 1.8}             # 总敞口区间；第一根不放大；max 不超过 portfolio.leverage
   ```
   超出区间按超出方向修正：净敞口高于 `max` 时 `reduce_larger` 缩多头、`raise_smaller` 放大空头；低于 `min` 时反过来。三者只改合成用的比例，步长仍按约束之前的比例算。
+- 漂移分配（`method: drift`，要求每个成员单方向；不能写 `timing`、`step`、`rotation`）：分配系数随成员持仓的名义价值漂移，再按两侧各自的规则拉回 `ratios` 的侧内构成：
+  ```yaml
+  strategy_pool:
+    allocation:
+      method: drift
+      ratios: {long_core: 0.3, long_majors: 0.2, short_a: 0.25, short_b: 0.05, short_c: 0.2}   # 目标比例
+      start: "2026-01-17T07:00:00Z"         # 可选：漂移起点（某根 bar 的 bar_start，或交易日期），预热从这一根开始
+      # initial: {at: "2026-01-17T07:00:00Z", ratios: {...}}   # 与 start 二选一：在 at 这一根把系数置为给定比例
+      sides:                                # 不写的一侧不再平衡
+        long: {rebalance: every_bar}
+        short:
+          rebalance: both                   # none（默认）| every_bar | periodic | threshold | both
+          period_bars: 2160                 # periodic、both 必填：每隔这么多根
+          anchor: "2026-01-17T07:00:00Z"    # 可选：periodic 的相位起点，默认漂移起点
+          threshold: 0.6                    # threshold、both 必填：|侧内占比 ÷ 目标侧内占比 − 1| 超过它触发
+          spread_bars: 24                   # 可选：触发后分几根走完，默认 1（一次到位）
+          drift_by: notional                # notional（默认）| nav：侧内构成按成员资金收益漂移
+    freeze: {watch: short, window_bars: 1, threshold: 0.10, bars: 4}   # 可选，只用于 drift：watch 写 long、short 或 [成员 id…]
+  ```
+  `period_bars`、`anchor` 只能配 periodic、both，`threshold` 只能配 threshold、both，`spread_bars` 不能配 none。`start`、`initial`、`sides`、`freeze` 写在 fixed、rotation 下保存即拒绝。时刻必须是池周期上某根 bar 的起点（池不写 market，启用时才检查）；从 `start` 到最新已收盘的一根不能超过 20000 根，View 的历史要覆盖到起点，否则启用时拒绝。
 - 实例要绑定的因子任务是成员所需市场的并集（现货、永续各最多一个）；View 要有 `close` 列，数据集保留期要装得下预热。
 - 启用后先在后台预热（用历史推进成员净值），预热完成前不求值（事件稍后重投）也不能 `confirm`；停用再启用会重新预热。
 - 研究回放与闭环回放暂不支持策略池；成员净值、比例、择时与贡献写在每期结果的 `summary_json.pool`，页面在实例结果里显示。

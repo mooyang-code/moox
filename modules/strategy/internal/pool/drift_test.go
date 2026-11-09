@@ -390,7 +390,7 @@ func freezeBar(index int64, a, c float64) driftStep {
 func TestDriftFreeze(t *testing.T) {
 	body := "  allocation:\n    method: drift\n    ratios: {l1: 0.3, l2: 0.2, s: 0.5}\n    sides: {long: {rebalance: every_bar, spread_bars: 3}}\n" +
 		"  freeze: {watch: short, window_bars: 1, threshold: 0.1, bars: 2}\n  gross: {min: 0.5, max: 1.1}\n"
-	cfg := sidedConfig(t, body, "portfolio: {leverage: 3, limits: {long_max: 0.25}}\n", rebalanceMembers...)
+	cfg := sidedConfig(t, body, "portfolio: {leverage: 3, max_weight: 0.6, limits: {long_max: 0.25}}\n", rebalanceMembers...)
 	decisions, _ := runDrift(t, cfg, engine.State{}, []driftStep{
 		freezeBar(1, 10, 10), freezeBar(2, 12, 10), freezeBar(3, 12, 12), freezeBar(4, 10, 12), freezeBar(5, 10, 12), freezeBar(6, 10, 12),
 	})
@@ -429,10 +429,18 @@ func TestDriftFreeze(t *testing.T) {
 		if decisions[i].Summary.Limits == nil {
 			t.Fatalf("第 %d 根冻结中仍执行单标的上限", i+1)
 		}
+		shortC := false
 		for _, target := range decisions[i].Targets {
 			if target.Weight.Cmp(cfg.Portfolio.Limits.LongMax) > 0 {
 				t.Fatalf("第 %d 根的池目标超过 long_max：%+v", i+1, target)
 			}
+			// 空头系数约 0.62～0.67，超过 max_weight 0.6 的部分留现金。
+			if target.InstrumentID == "C" {
+				shortC = target.Weight.Neg().Cmp(cfg.Portfolio.MaxWeight) == 0
+			}
+		}
+		if !shortC {
+			t.Fatalf("第 %d 根冻结中仍执行 max_weight：%+v", i+1, decisions[i].Targets)
 		}
 	}
 	// 空头亏损让系数总量升到约 1.2，冻结中超过 gross.max 也不缩；解除后第 5 根缩到 1.1。
