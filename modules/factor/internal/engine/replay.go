@@ -49,9 +49,9 @@ type ReplayDeps struct {
 		ListColumns(ctx context.Context, spaceID, datasetID string) ([]storageio.ColumnInfo, error)
 	}
 	Store *seriesstore.Store
-	// Synced 返回数据源上正在同步的标的（全部登记任务的范围）：observed 成员的历史截面不纳入其他任务正在同步、
-	// 而本任务范围不含的标的（与实时计算同一规则，localdata.HistoryRule）。nil 表示没有登记。
-	Synced  func(seriesstore.Source) []string
+	// Synced 返回数据源上正在同步的标的（目录里同源启用任务的范围）：observed 成员的历史截面不纳入其他任务正在同步、
+	// 而本任务范围不含的标的（与实时计算同一规则，localdata.HistoryRule）。nil 表示只看本任务的范围。
+	Synced  func(context.Context, seriesstore.Source) ([]string, error)
 	Runner  *pipeline.Runner
 	Admit   *memadmit.Admitter
 	Now     func() time.Time
@@ -331,7 +331,7 @@ func (m *replayManager) Open(ctx context.Context, req ReplayOpenRequest) (Replay
 			shortCount, len(subjects), axis.Format(start), strings.Join(shortSamples, "、"))
 	}
 	// observed 成员：历史截面还要用本地存储里在快照区间内有数据、但不在回放标的里的标的（含已下架的），与实时计算同一口径。
-	history, err := m.replayHistory(src, set, candidates, subjects, start, to.Add(step))
+	history, err := m.replayHistory(ctx, src, set, candidates, subjects, start, to.Add(step))
 	if err != nil {
 		return ReplayOpenResponse{}, http.StatusInternalServerError, err
 	}
@@ -777,7 +777,7 @@ func (s *replaySession) compute(ctx context.Context, runner *pipeline.Runner, pe
 
 // replayHistory 返回有 observed 成员时快照区间 [from, to) 的历史截面标的：按 localdata.HistoryRule，本任务范围是回放的候选标的，
 // 回放标的本身不算（它们每期按是否可用决定）。
-func (m *replayManager) replayHistory(src seriesstore.Source, set domain.EngineTask, candidates, subjects []string, from, to time.Time) ([]string, error) {
+func (m *replayManager) replayHistory(ctx context.Context, src seriesstore.Source, set domain.EngineTask, candidates, subjects []string, from, to time.Time) ([]string, error) {
 	observed := false
 	for _, member := range set.Members {
 		observed = observed || member.Factor.ObservedHistory()
@@ -787,9 +787,13 @@ func (m *replayManager) replayHistory(src seriesstore.Source, set domain.EngineT
 	}
 	var synced []string
 	if m.deps.Synced != nil {
-		synced = m.deps.Synced(src)
+		var err error
+		if synced, err = m.deps.Synced(ctx, src); err != nil {
+			return nil, fmt.Errorf("列出数据源上正在同步的标的：%w", err)
+		}
 	}
-	return localdata.HistoryCandidates(m.deps.Store, src, from, to, localdata.HistoryRule{Exclude: subjects, Own: candidates, Synced: synced})
+	return localdata.HistoryCandidates(m.deps.Store, src, from, to,
+		localdata.HistoryRule{Exclude: subjects, Own: candidates, Synced: append(synced, candidates...)})
 }
 
 func (s *replaySession) hasRow(subject string, at time.Time) bool {

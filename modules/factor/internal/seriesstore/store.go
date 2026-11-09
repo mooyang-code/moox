@@ -45,6 +45,10 @@ type Store struct {
 }
 
 type boundsCache struct {
+	// refresh 串行“取待刷新名单 → 读 Pebble → 回填”整段：并发的读者排队，后来的读者拿到的是完整、最新的结果。
+	// 写入只拿 Store.bmu 标记待刷新，不碰这把锁，所以不挡写入。scanned 与 subjects 在 refresh 与 bmu 下修改。
+	refresh  sync.Mutex
+	scanned  bool
 	subjects map[string]Bounds
 	dirty    map[string]struct{}
 }
@@ -371,8 +375,10 @@ func (s *Store) TagBounds(src Source, subject string) (map[string]Bounds, error)
 }
 
 // SubjectBounds 返回数据源里各个有本地数据的标的的边界（各 series_tag 取并集），结果是副本。按缓存返回：只有自上次读取以来
-// 写过的标的才重读，用于每期都要按边界筛选全部本地标的的调用方（observed 的历史截面）。读 Pebble 时不持有缓存锁，
-// 不挡写入：先取出待刷新的名单，锁外读取，再加锁回填；读取期间又被写到的标的仍标为待刷新，下次读取时再刷新。
+// 写过的标的才重读，用于每期都要按边界筛选全部本地标的的调用方（observed 的历史截面）。
+//
+// 并发：读者在缓存的 refresh 锁里完成“取名单 → 读 Pebble → 回填”，彼此串行；读 Pebble 时不持有 bmu，写入不被挡住。
+// 读取期间写到的标的会被重新标为待刷新，下一次读取时刷新；读取开始之前已经提交的写入一定反映在结果里。
 func (s *Store) SubjectBounds(src Source) (map[string]Bounds, error) {
 	if err := src.check(); err != nil {
 		return nil, err
@@ -382,21 +388,18 @@ func (s *Store) SubjectBounds(src Source) (map[string]Bounds, error) {
 		s.bounds = map[Source]*boundsCache{}
 	}
 	cache := s.bounds[src]
-	fresh := cache == nil
-	if fresh {
+	if cache == nil {
 		// 先登记空缓存再扫描：扫描期间的写入会记为待刷新，不会漏掉。
 		cache = &boundsCache{subjects: map[string]Bounds{}, dirty: map[string]struct{}{}}
 		s.bounds[src] = cache
 	}
 	s.bmu.Unlock()
-	if fresh {
+
+	cache.refresh.Lock()
+	defer cache.refresh.Unlock()
+	if !cache.scanned {
 		subjects, err := s.Subjects(src)
 		if err != nil {
-			s.bmu.Lock()
-			if s.bounds[src] == cache {
-				delete(s.bounds, src)
-			}
-			s.bmu.Unlock()
 			return nil, err
 		}
 		s.bmu.Lock()
@@ -404,6 +407,7 @@ func (s *Store) SubjectBounds(src Source) (map[string]Bounds, error) {
 			cache.dirty[subject] = struct{}{}
 		}
 		s.bmu.Unlock()
+		cache.scanned = true
 	}
 	s.bmu.Lock()
 	pending := make([]string, 0, len(cache.dirty))

@@ -152,7 +152,6 @@ func sharedTasks() (domain.EngineTask, domain.EngineTask) {
 func TestObservedSharedSourceIndependentOfOrder(t *testing.T) {
 	values := map[string]float64{}
 	var replayStore *seriesstore.Store
-	var replayData *localdata.Data
 	for _, order := range []string{"obs-first", "wide-first"} {
 		storage := newSharedStorage()
 		for subject, base := range map[string]float64{"A": 100, "B": 300, "C": 500, "X": 400} {
@@ -164,7 +163,7 @@ func TestObservedSharedSourceIndependentOfOrder(t *testing.T) {
 		t.Cleanup(func() { _ = store.Close() })
 		now := rt0.Add(9 * time.Minute)
 		data := localdata.New(localdata.Config{Store: store, Storage: storage, Admit: memadmit.New(0), Workers: 1, BatchSubjects: 2,
-			Now: func() time.Time { return now }})
+			Now: func() time.Time { return now }, Synced: sharedSynced().Subjects})
 		runner := pipeline.NewRunner(storage, data, periodclock.Continuous{}, pipeline.Config{ComputeWorkers: 1})
 		obs, wide := sharedTasks()
 		ctx := context.Background()
@@ -203,7 +202,7 @@ func TestObservedSharedSourceIndependentOfOrder(t *testing.T) {
 		_, err = runner.Run(ctx, recalc)
 		require.NoError(t, err)
 		values[order+"/recalc"] = storage.value(t, "result_ftask_obs", "A", 10, "obs")
-		replayStore, replayData = store, data
+		replayStore = store
 	}
 	// 第 8 分钟的截面有 GONE：A 的名次 1/4；第 9、10 分钟只有 A、B、C：1/3。X 始终不在。
 	require.InDelta(t, (0.25+1.0/3+1.0/3)/3, values["obs-first"], 1e-12)
@@ -215,7 +214,7 @@ func TestObservedSharedSourceIndependentOfOrder(t *testing.T) {
 	obs, _ := sharedTasks()
 	runner := pipeline.NewRunner(nil, nil, periodclock.Continuous{}, pipeline.Config{ComputeWorkers: 1})
 	m := newReplayManager(ReplayDeps{Sets: replayTasks{set: obs}, Source: sharedReplaySource{}, Columns: &sharedStorage{}, Store: replayStore,
-		Synced: replayData.SyncedSubjects, Runner: runner})
+		Synced: sharedSynced().Subjects, Runner: runner})
 	ctx := context.Background()
 	_, status, err := m.Open(ctx, ReplayOpenRequest{ReplayID: "shared", TaskID: obs.Set.TaskID,
 		From: rt0.Add(10 * time.Minute).Format(time.RFC3339), To: rt0.Add(11 * time.Minute).Format(time.RFC3339)})
@@ -235,4 +234,80 @@ func (sharedReplaySource) DatasetColumns(context.Context, string, string) ([]str
 
 func (sharedReplaySource) ListDatasetSubjects(context.Context, string, string) ([]string, error) {
 	return []string{"A", "B", "C"}, nil
+}
+
+// sharedSynced 是测试用的“正在同步”：目录里两个任务都启用，数据集在册的标的是 A、B、C、X。
+func sharedSynced() *syncedScope {
+	obs, wide := sharedTasks()
+	return &syncedScope{catalog: func() []domain.EngineTask { return []domain.EngineTask{obs, wide} }, source: sharedListing{},
+		now: time.Now}
+}
+
+type sharedListing struct{}
+
+func (sharedListing) ListDatasetSubjects(context.Context, string, string) ([]string, error) {
+	return []string{"A", "B", "C", "X"}, nil
+}
+
+// 重启时任务逐个就绪：只有 obs 准备好、wide 还没准备（或准备失败）时，obs 的结果与两个任务都就绪后相同——
+// “正在同步”按目录里同源启用任务的范围算，与运行时的登记、准备状态无关。
+func TestObservedRestartTasksReadyOneByOne(t *testing.T) {
+	storage := newSharedStorage()
+	for subject, base := range map[string]float64{"A": 100, "B": 300, "C": 500, "X": 400} {
+		storage.put(subject, base, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)
+	}
+	storage.put("GONE", 200, 0, 1, 2, 3, 4, 5, 6, 7, 8)
+	dir := t.TempDir()
+	open := func() *seriesstore.Store {
+		store, err := seriesstore.Open(seriesstore.Options{Dir: dir, BlockCacheBytes: 8 << 20, DisableSync: true})
+		require.NoError(t, err)
+		return store
+	}
+	ctx := context.Background()
+	obs, wide := sharedTasks()
+	now := rt0.Add(9 * time.Minute)
+	newData := func(store *seriesstore.Store) (*localdata.Data, *pipeline.Runner) {
+		data := localdata.New(localdata.Config{Store: store, Storage: storage, Admit: memadmit.New(0), Workers: 1, BatchSubjects: 2,
+			Now: func() time.Time { return now }, Synced: sharedSynced().Subjects})
+		return data, pipeline.NewRunner(storage, data, periodclock.Continuous{}, pipeline.Config{ComputeWorkers: 1})
+	}
+	live := func(runner *pipeline.Runner, data *localdata.Data, set domain.EngineTask, universe []string) {
+		plan, err := pipeline.BuildLivePlan(periodclock.Continuous{}, pipeline.LiveInput{Set: set.Set, Members: set.Members,
+			PeriodTime: now.Add(-time.Minute), Universe: universe, CarryColumns: []string{"close"}})
+		require.NoError(t, err)
+		_, err = runner.Run(ctx, plan)
+		require.NoError(t, err)
+		data.Drain()
+	}
+	// 重启前：两个任务都就绪，GONE 随 obs 的旧全集进了本地。
+	store := open()
+	data, runner := newData(store)
+	require.NoError(t, data.Prepare(ctx, obs, []string{"A", "B", "C", "GONE"}))
+	now = rt0.Add(10 * time.Minute)
+	require.NoError(t, data.Prepare(ctx, obs, []string{"A", "B", "C"}))
+	require.NoError(t, data.Prepare(ctx, wide, []string{"A", "B", "C", "X"}))
+	live(runner, data, wide, []string{"A", "B", "C", "X"})
+	live(runner, data, obs, []string{"A", "B", "C"})
+	allReady := storage.value(t, "result_ftask_obs", "A", 9, "obs")
+	require.NoError(t, store.Close())
+
+	// 重启：只有 obs 就绪，wide 还没准备。
+	store = open()
+	t.Cleanup(func() { _ = store.Close() })
+	data, runner = newData(store)
+	require.NoError(t, data.Prepare(ctx, obs, []string{"A", "B", "C"}))
+	storage.mu.Lock()
+	storage.results = map[string]map[string]any{}
+	storage.mu.Unlock()
+	live(runner, data, obs, []string{"A", "B", "C"})
+	require.Equal(t, math.Float64bits(allReady), math.Float64bits(storage.value(t, "result_ftask_obs", "A", 9, "obs")), "先就绪的 obs")
+
+	// wide 准备失败（NOPE 在本地与 Storage 都没有数据）：它的范围仍算正在同步，X 不进 obs 的历史截面，GONE 仍在。
+	require.Error(t, data.Prepare(ctx, wide, []string{"A", "B", "C", "X", "NOPE"}))
+	plan, err := pipeline.BuildLivePlan(periodclock.Continuous{}, pipeline.LiveInput{Set: obs.Set, Members: obs.Members,
+		PeriodTime: rt0.Add(9 * time.Minute), Universe: []string{"A", "B", "C"}})
+	require.NoError(t, err)
+	history, err := data.HistorySubjects(ctx, plan)
+	require.NoError(t, err)
+	require.Equal(t, []string{"GONE"}, history)
 }

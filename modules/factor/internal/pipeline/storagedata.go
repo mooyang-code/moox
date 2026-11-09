@@ -23,14 +23,37 @@ type storageData struct {
 // NewStorageData 返回直接读 Storage 的数据层。
 func NewStorageData(store storageio.Store) Data { return storageData{store: store} }
 
-// historyCandidateFactor 是直接读 Storage 时历史标的候选数的粗限倍数：候选数超过上限的这么多倍时不再逐个确认，直接拒绝。
-const historyCandidateFactor = 4
+// historyCandidateFactor、historyCandidateFloor 决定直接读 Storage 时候选数的粗限 max(factor·limit, floor)：
+// 超过时不再逐个确认有没有行，直接拒绝。
+const (
+	historyCandidateFactor = 4
+	historyCandidateFloor  = 8000
+)
 
 // historyProbeBatch 是确认候选标的有没有行时每次读取的标的数：确认数一超过上限就停，不读完全部候选。
 const historyProbeBatch = 200
 
-// ErrHistoryTooMany 表示历史截面的标的超过调用方给的上限。
+// ErrHistoryTooMany 表示历史截面的标的超过调用方给的上限；具体数字在 HistoryTooManyError 里。
 var ErrHistoryTooMany = errors.New("历史截面的标的太多")
+
+// HistoryTooManyError 是 ErrHistoryTooMany 的具体情况：Coarse 为真时是候选数超过粗限（Candidates 个，粗限 Bound），
+// 否则是确认有行的标的已超过余量 Limit（确认到 Confirmed 个就停止）。
+type HistoryTooManyError struct {
+	Coarse     bool
+	Candidates int
+	Confirmed  int
+	Limit      int
+	Bound      int
+}
+
+func (e *HistoryTooManyError) Error() string {
+	if e.Coarse {
+		return fmt.Sprintf("不在册的候选标的 %d 个，超过余量 %d 的 %d 倍，也超过 %d 个", e.Candidates, e.Limit, historyCandidateFactor, e.Bound)
+	}
+	return fmt.Sprintf("区间内有行的不在册标的已超过余量 %d（确认到 %d 个）", e.Limit, e.Confirmed)
+}
+
+func (e *HistoryTooManyError) Is(target error) bool { return target == ErrHistoryTooMany }
 
 // HistorySubjects 实现 HistorySource，不限个数。
 func (d storageData) HistorySubjects(ctx context.Context, plan Plan) ([]string, error) {
@@ -39,7 +62,7 @@ func (d storageData) HistorySubjects(ctx context.Context, plan Plan) ([]string, 
 
 // HistorySubjectsWithin 实现 LimitedHistorySource（近似口径，用于管理端试算）：没有本地存储与任务登记，把 Storage 里在册
 // （active）的标的都当作“有任务在同步”，只纳入不在册（已下架、停用）且在读取区间 [ReadStart, TargetEnd) 里有行的标的；
-// 本期可用与上游失败的标的不算。limit > 0 时：候选数超过 limit 的 historyCandidateFactor 倍直接拒绝；确认有行的个数一超过
+// 本期可用与上游失败的标的不算。limit > 0 时：候选数超过粗限 max(4·limit, 8000) 直接拒绝；确认有行的个数一超过
 // limit 就停止读取并返回 ErrHistoryTooMany。确认时每个标的只读一列（Storage 要求至少一列）。客户端不能列出全部标的时没有历史标的。
 func (d storageData) HistorySubjectsWithin(ctx context.Context, plan Plan, limit int) ([]string, error) {
 	lister, ok := d.store.(interface {
@@ -70,8 +93,8 @@ func (d storageData) HistorySubjectsWithin(ctx context.Context, plan Plan, limit
 		}
 	}
 	sort.Strings(candidates)
-	if limit > 0 && len(candidates) > limit*historyCandidateFactor {
-		return nil, fmt.Errorf("%w：候选标的有 %d 个，超过上限 %d 的 %d 倍", ErrHistoryTooMany, len(candidates), limit, historyCandidateFactor)
+	if bound := max(limit*historyCandidateFactor, historyCandidateFloor); limit > 0 && len(candidates) > bound {
+		return nil, &HistoryTooManyError{Coarse: true, Candidates: len(candidates), Limit: limit, Bound: bound}
 	}
 	out := []string{}
 	if len(candidates) == 0 {
@@ -98,7 +121,7 @@ func (d storageData) HistorySubjectsWithin(ctx context.Context, plan Plan, limit
 			}
 		}
 		if limit > 0 && len(out) > limit {
-			return nil, fmt.Errorf("%w：区间内有行的历史标的已超过 %d 个", ErrHistoryTooMany, limit)
+			return nil, &HistoryTooManyError{Candidates: len(candidates), Confirmed: len(out), Limit: limit}
 		}
 	}
 	return out, nil

@@ -148,8 +148,10 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 	if r.series, err = seriesstore.Open(seriesstore.Options{Dir: cfg.SeriesStore.Dir, BlockCacheBytes: int64(cfg.SeriesStore.BlockCache)}); err != nil {
 		return nil, fmt.Errorf("open factor series store: %w", err)
 	}
+	synced := &syncedScope{catalog: func() []domain.EngineTask { return r.catalog.Sets() }, source: r.storage, now: time.Now}
 	r.data = localdata.New(localdata.Config{
-		Store: r.series, Storage: r.storage, Admit: r.admit,
+		Synced: synced.Subjects,
+		Store:  r.series, Storage: r.storage, Admit: r.admit,
 		Workers: cfg.Sync.Workers, BatchSubjects: cfg.Sync.BatchSubjects, Headroom: cfg.Window.Headroom, WindowMax: int64(cfg.Window.MaxMemory),
 		Lookback: func(src seriesstore.Source) int { return cfg.Window.LookbackFor(src.SpaceID, src.DatasetID, src.Freq) },
 	})
@@ -267,7 +269,7 @@ func Initialize(ctx context.Context, s *server.Server, cfg *Config, version stri
 		BatchOK: func() int { return cfg.Pipeline.WriteBatchRows },
 		Begin:   r.beginReplayWrite,
 		Pin:     r.pinTaskModules,
-		Synced:  r.data.SyncedSubjects,
+		Synced:  synced.Subjects,
 	})
 	r.goRun(appCtx, r.replays.Run)
 	r.goRun(appCtx, func(ctx context.Context) {

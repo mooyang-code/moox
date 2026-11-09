@@ -213,7 +213,7 @@ func (r *Runner) HistorySubjects(ctx context.Context, plan Plan) ([]string, erro
 	}
 	history, err := source.HistorySubjects(ctx, plan)
 	if err != nil {
-		return nil, fmt.Errorf("列出历史截面的标的: %w", err)
+		return nil, fmt.Errorf("列出历史截面的标的：%w", err)
 	}
 	return history, nil
 }
@@ -225,14 +225,14 @@ func (r *Runner) HistorySubjectsWithin(ctx context.Context, plan Plan, limit int
 	}
 	if limited, ok := r.data.(LimitedHistorySource); ok {
 		history, err := limited.HistorySubjectsWithin(ctx, plan, limit)
-		if err != nil {
-			return nil, fmt.Errorf("列出历史截面的标的: %w", err)
+		if err != nil && !errors.Is(err, ErrHistoryTooMany) {
+			return nil, fmt.Errorf("列出历史截面的标的：%w", err)
 		}
-		return history, nil
+		return history, err
 	}
 	history, err := r.HistorySubjects(ctx, plan)
 	if err == nil && limit > 0 && len(history) > limit {
-		return nil, fmt.Errorf("列出历史截面的标的: %w：%d 个，超过 %d", ErrHistoryTooMany, len(history), limit)
+		return nil, &HistoryTooManyError{Candidates: len(history), Confirmed: len(history), Limit: limit}
 	}
 	return history, err
 }

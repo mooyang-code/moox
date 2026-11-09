@@ -197,16 +197,18 @@ func (s *Service) Preview(ctx context.Context, req Request) (Result, error) {
 		TargetStart: end.Add(-time.Duration(periods) * duration), TargetEnd: end,
 		Expected: computed, Available: computed, CarryColumns: factor.InputColumns,
 	}
-	// observed：历史截面还要用源数据集登记过、但不在册的标的（含已下架的），与正式计算同一口径。
-	// 预算是标的上限减去本期标的数：确认数一超过就提前报错，不读完全部候选。
-	budget := MaxUniverse - len(computed)
-	if budget < 1 {
-		budget = 1
+	// 先按本期标的数做一次内存预检：本期标的就装不下时不必再探测历史标的。
+	if err := pipeline.CheckChunkMemory([]domain.MemberDef{member}, len(computed), periods, len(factor.InputColumns), MaxMemory); err != nil {
+		return Result{}, fmt.Errorf("试算范围太大，请减少期数或标的：%w", err)
 	}
+	// observed：历史截面还要用源数据集登记过、但不在册的标的（含已下架的），口径见模块文档“试算是近似口径”。
+	// 余量是标的上限减去本期标的数：确认数一超过就提前报错，不读完全部候选。
+	budget := max(MaxUniverse-len(computed), 1)
 	history, err := s.runner.HistorySubjectsWithin(ctx, plan, budget)
 	if err != nil {
-		if errors.Is(err, pipeline.ErrHistoryTooMany) {
-			return Result{}, fmt.Errorf("截面因子试算最多支持 %d 个标的（含历史截面），任务有 %d 个：%w", MaxUniverse, len(computed), err)
+		var tooMany *pipeline.HistoryTooManyError
+		if errors.As(err, &tooMany) {
+			return Result{}, historyTooManyError(tooMany, len(computed))
 		}
 		return Result{}, err
 	}
@@ -227,6 +229,17 @@ func (s *Service) Preview(ctx context.Context, req Request) (Result, error) {
 		return Result{}, err
 	}
 	return collect(factor, computation, shown, axis)
+}
+
+// historyTooManyError 是 observed 试算的历史标的超过余量时给用户的说明与处理办法。
+func historyTooManyError(e *pipeline.HistoryTooManyError, current int) error {
+	remedy := "请缩小任务范围，或者试算时去掉 cross_section_history: observed"
+	if e.Coarse {
+		return fmt.Errorf("%w：不在册的候选标的 %d 个，超过余量 %d（上限 %d − 本期 %d）的 4 倍，也超过 %d 个。%s",
+			pipeline.ErrHistoryTooMany, e.Candidates, e.Limit, MaxUniverse, current, e.Bound, remedy)
+	}
+	return fmt.Errorf("%w：试算区间内有行的不在册标的超过余量 %d（上限 %d − 本期 %d）。%s",
+		pipeline.ErrHistoryTooMany, e.Limit, MaxUniverse, current, remedy)
 }
 
 func (s *Service) universe(ctx context.Context, set domain.FactorTask) ([]string, error) {

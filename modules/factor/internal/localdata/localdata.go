@@ -36,7 +36,10 @@ type Storage interface {
 
 // Config 是数据层的参数。
 type Config struct {
-	Store *seriesstore.Store
+	// Synced 返回数据源上“正在同步”的标的：目录里同一数据源上启用的任务的标的范围的并集。observed 成员的历史截面不纳入
+	// 其他任务正在同步、而本任务范围不含的标的（HistoryRule）。nil 表示只看本任务的范围。
+	Synced func(ctx context.Context, src seriesstore.Source) ([]string, error)
+	Store  *seriesstore.Store
 	// Storage 读写的都是轴上时间（storageio.Axis 包装过的客户端）：数据层内部全部在轴上，按 periodclock.Continuous 做周期数学。
 	Storage Storage
 	// Admit 非空时，窗口的常驻内存向它登记，新增窗口超出预算时拒绝（设计 4.2）。
@@ -122,8 +125,6 @@ type setReg struct {
 	// observed 为真表示任务里有成员写了 cross_section_history: observed：窗口还要载入本地存储里回看窗口内有数据、
 	// 但不在任何任务标的范围里的标的（只读本地历史，不同步）。
 	observed bool
-	// prepared 为真表示这次登记的准备已经成功：只有准备好的任务范围才算“正在同步”（SyncedSubjects）。
-	prepared bool
 }
 
 type source struct {
@@ -384,8 +385,12 @@ func (d *Data) Prepare(ctx context.Context, set domain.EngineTask, subjects []st
 			return err
 		}
 		// 窗口只需要没有任何任务在同步的标的（任务范围内的标的本来就在窗口里）。
+		synced, err := d.SyncedSubjects(ctx, src)
+		if err != nil {
+			return fmt.Errorf("列出数据源上正在同步的标的：%w", err)
+		}
 		if history, err = HistoryCandidates(d.cfg.Store, src, now.Add(-time.Duration(lookback)*step), now,
-			HistoryRule{Exclude: subjects, Synced: subjects}); err != nil {
+			HistoryRule{Exclude: subjects, Synced: append(synced, subjects...)}); err != nil {
 			return err
 		}
 	}
@@ -493,12 +498,6 @@ func (d *Data) Prepare(ctx context.Context, set domain.EngineTask, subjects []st
 	st.window = window
 	st.win.Store(window)
 	st.ready.Store(true)
-	st.regsMu.Lock()
-	if reg, ok := st.regs[set.Set.TaskID]; ok {
-		reg.prepared = true
-		st.regs[set.Set.TaskID] = reg
-	}
-	st.regsMu.Unlock()
 	if d.cfg.Admit != nil {
 		d.cfg.Admit.SetResident("window:"+src.String(), window.Stats().Bytes)
 	}
@@ -558,41 +557,30 @@ func HistoryCandidates(store *seriesstore.Store, src seriesstore.Source, from, t
 	return out, nil
 }
 
-// SyncedSubjects 返回数据源上已准备好的登记任务的标的范围（正在同步的标的）的并集，排序；数据源没有登记时为空。
-// 准备失败的登记（例如窗口内存超限、本地没有数据）不计入。
-func (d *Data) SyncedSubjects(src seriesstore.Source) []string {
-	st := d.lookup(src)
-	if st == nil {
-		return nil
+// SyncedSubjects 返回数据源上“正在同步”的标的：目录里同一数据源上启用的任务的标的范围的并集（Config.Synced 提供），
+// 与运行时的登记、准备状态无关，所以重启时任务逐个就绪、某个任务准备失败都不改变它。没有配置时为空。
+func (d *Data) SyncedSubjects(ctx context.Context, src seriesstore.Source) ([]string, error) {
+	if d.cfg.Synced == nil {
+		return nil, nil
 	}
-	_, regs := st.registered()
-	union := map[string]struct{}{}
-	for _, reg := range regs {
-		if !reg.prepared {
-			continue // 准备没有成功的登记不算正在同步
-		}
-		for _, subject := range reg.subjects {
-			union[subject] = struct{}{}
-		}
-	}
-	return sortedKeys(union)
+	return d.cfg.Synced(ctx, src)
 }
 
 // HistorySubjects 实现 pipeline.HistorySource：读取区间 [ReadStart, TargetEnd) 内按 HistoryRule 纳入的标的。
-// 本任务范围是计划的期望全集加上任务登记的标的。
-func (d *Data) HistorySubjects(_ context.Context, plan pipeline.Plan) ([]string, error) {
+// 本任务范围是计划的期望全集；正在同步的标的是目录里同源启用任务的范围，加上本任务范围。
+func (d *Data) HistorySubjects(ctx context.Context, plan pipeline.Plan) ([]string, error) {
 	from, err := pipeline.ReadStart(periodclock.Continuous{}, plan)
 	if err != nil {
 		return nil, err
 	}
 	src := sourceOf(plan.Set)
-	own := append([]string(nil), plan.Expected...)
-	if st := d.lookup(src); st != nil {
-		_, regs := st.registered()
-		own = append(own, regs[plan.Set.TaskID].subjects...)
+	synced, err := d.SyncedSubjects(ctx, src)
+	if err != nil {
+		return nil, fmt.Errorf("列出数据源上正在同步的标的：%w", err)
 	}
 	return HistoryCandidates(d.cfg.Store, src, from, plan.TargetEnd, HistoryRule{
-		Exclude: append(append([]string(nil), plan.Available...), plan.UpstreamFailed...), Own: own, Synced: d.SyncedSubjects(src),
+		Exclude: append(append([]string(nil), plan.Available...), plan.UpstreamFailed...),
+		Own:     plan.Expected, Synced: append(append([]string(nil), synced...), plan.Expected...),
 	})
 }
 
