@@ -121,7 +121,10 @@ func (c *KlineCommitter) periodRows(batch KlineBatch) (Request, []*storagepb.Row
 		if rowErr != nil {
 			return req, nil, result, fmt.Errorf("subject %s: %w", subject, rowErr)
 		}
-		expanded, missing := expandTargetRows(req, item, []*storagepb.RowFieldUpsert{row})
+		expanded, missing, fundingMissing := expandTargetRows(req, item, []*storagepb.RowFieldUpsert{row})
+		if len(fundingMissing) > 0 {
+			return req, nil, result, fmt.Errorf("标的 %s 缺资金费率，不能提交", subject)
+		}
 		if len(missing) > 0 {
 			return req, nil, result, fmt.Errorf("subject %s has no supported output fields", subject)
 		}
@@ -138,33 +141,6 @@ func (c *KlineCommitter) periodRows(batch KlineBatch) (Request, []*storagepb.Row
 	return req, rows, result, nil
 }
 
-// Upsert 用普通写入写一批 K 线（补采）：不涉及周期状态。
-func (c *KlineCommitter) Upsert(ctx context.Context, batch KlineBatch) error {
-	req := Request{SpaceID: batch.SpaceID, DatasetID: batch.Dataset.DatasetID, Frequency: batch.Dataset.Frequency, BatchID: batch.BatchID, PlanRequest: true,
-		MarketID: batch.Market.MarketID, InstrumentType: batch.Market.InstrumentType, MarketType: batch.Market.MarketType, Provider: batch.Market.Provider, SourceID: batch.Market.SourceID}
-	var rows []*storagepb.RowFieldUpsert
-	for _, bar := range batch.Bars {
-		if batch.Symbols != nil {
-			bar.ProviderSymbol = batch.Symbols(strings.ToUpper(strings.TrimSpace(bar.SubjectID)))
-		}
-		if strings.TrimSpace(bar.RequestID) == "" {
-			bar.RequestID = batch.BatchID
-		}
-		row, err := c.rowFor(bar, req, requestKlineRouteID(&KlinePipeline{MarketID: c.MarketID, SpaceID: c.SpaceID, InstrumentType: c.InstrumentType}, req.Frequency), 1)
-		if err != nil {
-			return err
-		}
-		row.Fields = selectOutputFields(row.Fields, batch.Dataset.OutputFields)
-		rows = append(rows, row)
-	}
-	if len(rows) == 0 {
-		return nil
-	}
-	sortRows(rows)
-	_, _, err := c.writeDatasets(ctx, req, map[string][]*storagepb.RowFieldUpsert{batch.Dataset.DatasetID: rows})
-	return err
-}
-
 func sortRows(rows []*storagepb.RowFieldUpsert) {
 	sort.Slice(rows, func(i, j int) bool {
 		left, right := rows[i].GetKey().GetTimeSeries(), rows[j].GetKey().GetTimeSeries()
@@ -176,48 +152,89 @@ func sortRows(rows []*storagepb.RowFieldUpsert) {
 }
 
 // expandTargetRows 把一个取数项的行复制到它的各个写入目标（数据集），并按目标选择输出字段。
-// 周期提交请求里某个目标一行都没有时，返回该目标的失败结果。
-func expandTargetRows(req Request, item domain.CollectionItem, itemRows []*storagepb.RowFieldUpsert) ([]*storagepb.RowFieldUpsert, []domain.TargetResult) {
+// 周期提交请求里某个目标一行都没有时，返回该目标的失败结果（missingTargets）；
+// 目标显式选了 funding_rate 而行里没有这一列时，这个目标的这一项整体失败（fundingTargets），其他目标不受影响。
+func expandTargetRows(req Request, item domain.CollectionItem, itemRows []*storagepb.RowFieldUpsert) (rows []*storagepb.RowFieldUpsert, missingTargets, fundingTargets []domain.TargetResult) {
 	if len(req.Targets) == 0 {
-		return itemRows, nil
+		return itemRows, nil, nil
 	}
-	targets := req.Targets
-	if item.InstanceID != "" {
-		targets = make([]domain.WriteTarget, 0, len(req.Targets))
-		for _, candidate := range req.Targets {
-			if candidate.InstanceID == "" || candidate.InstanceID == item.InstanceID {
-				targets = append(targets, candidate)
-			}
-		}
-	}
-	var rows []*storagepb.RowFieldUpsert
-	var missingTargets []domain.TargetResult
-	for _, target := range targets {
-		targetRowCount := 0
+	for _, target := range itemTargets(req, item) {
+		fields := targetOutputFields(item, target)
+		wantsFunding := domain.HasOutputField(fields, domain.FieldFundingRate)
+		var targetRows []*storagepb.RowFieldUpsert
+		fundingMissing := false
 		for _, sourceRow := range itemRows {
 			row, ok := proto.Clone(sourceRow).(*storagepb.RowFieldUpsert)
 			if !ok || row.GetKey() == nil {
 				continue
 			}
 			row.GetKey().DatasetId = target.DatasetID
-			fields := item.OutputFields
-			if target.OutputFields != "" {
-				var selected []string
-				if json.Unmarshal([]byte(target.OutputFields), &selected) == nil {
-					fields = selected
-				}
-			}
 			row.Fields = selectOutputFields(row.Fields, fields)
+			if wantsFunding && !hasField(row.Fields, domain.FieldFundingRate) {
+				fundingMissing = true
+				break
+			}
 			if len(row.Fields) > 0 {
-				rows = append(rows, row)
-				targetRowCount++
+				targetRows = append(targetRows, row)
 			}
 		}
-		if req.RequirePeriodCommit && targetRowCount == 0 {
+		if fundingMissing {
+			fundingTargets = append(fundingTargets, domain.TargetResult{WriteTargetID: target.ID, DatasetID: target.DatasetID, Status: "failed", ErrorSummary: "资金费率缺失"})
+			continue
+		}
+		rows = append(rows, targetRows...)
+		if req.RequirePeriodCommit && len(targetRows) == 0 {
 			missingTargets = append(missingTargets, domain.TargetResult{WriteTargetID: target.ID, DatasetID: target.DatasetID, Status: "failed", ErrorSummary: "required period target has no supported output rows"})
 		}
 	}
-	return rows, missingTargets
+	return rows, missingTargets, fundingTargets
+}
+
+// itemTargets 返回取数项对应的写入目标：目标带 InstanceID 时只取这一项的。
+func itemTargets(req Request, item domain.CollectionItem) []domain.WriteTarget {
+	if item.InstanceID == "" {
+		return req.Targets
+	}
+	targets := make([]domain.WriteTarget, 0, len(req.Targets))
+	for _, candidate := range req.Targets {
+		if candidate.InstanceID == "" || candidate.InstanceID == item.InstanceID {
+			targets = append(targets, candidate)
+		}
+	}
+	return targets
+}
+
+// targetOutputFields 返回写入目标的输出字段：目标自己给出的优先，否则用取数项的。
+func targetOutputFields(item domain.CollectionItem, target domain.WriteTarget) []string {
+	if target.OutputFields != "" {
+		var selected []string
+		if json.Unmarshal([]byte(target.OutputFields), &selected) == nil {
+			return selected
+		}
+	}
+	return item.OutputFields
+}
+
+// itemWantsFunding 判断这一项是否有写入目标显式选了 funding_rate（没有目标时看取数项自己的输出字段）。
+func itemWantsFunding(req Request, item domain.CollectionItem) bool {
+	if len(req.Targets) == 0 {
+		return domain.HasOutputField(item.OutputFields, domain.FieldFundingRate)
+	}
+	for _, target := range itemTargets(req, item) {
+		if domain.HasOutputField(targetOutputFields(item, target), domain.FieldFundingRate) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasField(fields []*storagepb.FieldValue, fieldID string) bool {
+	for _, field := range fields {
+		if field.GetFieldId() == fieldID {
+			return true
+		}
+	}
+	return false
 }
 
 // writeDatasets 逐个数据集写入：周期提交请求走 CommitTimeSeriesBatch，其余走普通写入。一个数据集失败不影响其他数据集。
@@ -307,6 +324,10 @@ func (p *KlineCommitter) rowFor(bar marketdata.NormalizedKline, req Request, rou
 		stringValue("provider_id", bar.ProviderID), stringValue("source_id", bar.SourceID),
 		stringValue("provider_symbol", bar.ProviderSymbol),
 	)
+	// 资金费率只在采集管线取到时输出；缺失由 expandTargetRows 按目标判定，不在这里报错。
+	if bar.FundingRate != nil {
+		fields = append(fields, doubleValue(domain.FieldFundingRate, *bar.FundingRate))
+	}
 	return &storagepb.RowFieldUpsert{
 		Key: &storagepb.RowKey{SpaceId: req.SpaceID, DatasetId: req.DatasetID, Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
 			SubjectId: bar.SubjectID, Freq: bar.Frequency, DataTime: bar.BarStart.UTC().Format(time.RFC3339Nano), SeriesTag: seriesTag,

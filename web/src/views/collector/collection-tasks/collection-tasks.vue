@@ -587,6 +587,9 @@ import {
   buildCollectionTaskPayload,
   collectionTaskResultLabel,
   collectionTaskNameError,
+  dropUnavailableFundingRate,
+  FUNDING_RATE_FIELD_ID,
+  fundingRateFieldAvailable,
   isCrossMarketSelection,
   KLINE_OUTPUT_FIELD_IDS,
   normalizeCollectionTask,
@@ -668,6 +671,7 @@ let taskTypeFieldRequestToken = 0;
 const outputFieldSections = computed(() => {
   const grouped = new Map<string, Field[]>();
   for (const field of outputFieldCatalog.value) {
+    if (field.field_id === FUNDING_RATE_FIELD_ID && !fundingRateAvailable.value) continue;
     const groupID = field.group_id || "";
     const list = grouped.get(groupID) || [];
     list.push(field);
@@ -766,6 +770,21 @@ const pagination = reactive({
   current: Math.max(1, Number.parseInt(queryText(route.query.page), 10) || 1),
   pageSize: 10,
   total: 0
+});
+
+// 资金费率只在 K 线、1h/1d、标签全部是具备这项能力的永续时可选，默认不勾。
+const fundingRateAvailable = computed(() =>
+  fundingRateFieldAvailable({
+    dataType: editor.data_type,
+    frequency: frequencyValue.value,
+    routes: selectedTagRoutes.value
+  })
+);
+// 条件不再满足时去掉已选的资金费率；标签还没选（或还没读到）时不动，避免编辑已有任务时误删。
+watch(fundingRateAvailable, available => {
+  if (available || !selectedTagRoutes.value.length) return;
+  selectedOutputFields.value = dropUnavailableFundingRate(selectedOutputFields.value, false);
+  outputFieldDraft.value = dropUnavailableFundingRate(outputFieldDraft.value, false);
 });
 
 const spaceStore = useSpaceStore();
@@ -1117,7 +1136,7 @@ async function loadOutputFieldCatalog(force = false) {
     outputFieldGroups.value = groups;
     outputFieldCatalog.value = fields.filter(
       field =>
-        KLINE_OUTPUT_FIELD_IDS.has(field.field_id) &&
+        (KLINE_OUTPUT_FIELD_IDS.has(field.field_id) || field.field_id === FUNDING_RATE_FIELD_ID) &&
         (!field.group_id || activeGroupIDs.has(field.group_id) || !allGroupIDs.has(field.group_id))
     );
     outputCatalogSpaceID.value = spaceID;

@@ -4,6 +4,8 @@ import {
   buildCollectionTaskPayload,
   parseKlineResampleParams,
   collectionTaskNameError,
+  dropUnavailableFundingRate,
+  fundingRateFieldAvailable,
   collectionTaskResultLabel,
   normalizeCollectionTask,
   parseCollectionTaskInput,
@@ -197,5 +199,30 @@ describe("collection task result label", () => {
     expect(collectionTaskResultLabel({ prepare_state: "ready", result: result("error") })).toBe("结果异常");
     expect(collectionTaskResultLabel({ prepare_state: "error", result: result("unknown") })).toBe("结果异常");
     expect(collectionTaskResultLabel({ prepare_state: "ready", last_error: "boom", result: result("unknown") })).toBe("结果异常");
+  });
+});
+
+describe("funding rate output field", () => {
+  const swap = { source: "binance", market: "swap" };
+  const spot = { source: "binance", market: "spot" };
+
+  it("is available only for kline swap tasks at 1h or 1d from a capable source", () => {
+    expect(fundingRateFieldAvailable({ dataType: "kline", frequency: "1h", routes: [swap] })).toBe(true);
+    expect(fundingRateFieldAvailable({ dataType: "kline", frequency: "1d", routes: [swap, swap] })).toBe(true);
+    for (const frequency of ["1m", "5m", "30m", "4h", "1w", "1mo", ""]) {
+      expect(fundingRateFieldAvailable({ dataType: "kline", frequency, routes: [swap] })).toBe(false);
+    }
+    expect(fundingRateFieldAvailable({ dataType: "kline", frequency: "1h", routes: [spot] })).toBe(false);
+    expect(fundingRateFieldAvailable({ dataType: "kline", frequency: "1h", routes: [spot, swap] })).toBe(false);
+    expect(fundingRateFieldAvailable({ dataType: "kline", frequency: "1h", routes: [{ source: "okx", market: "swap" }] })).toBe(
+      false
+    );
+    expect(fundingRateFieldAvailable({ dataType: "kline", frequency: "1h", routes: [] })).toBe(false);
+    expect(fundingRateFieldAvailable({ dataType: "kline_resample", frequency: "1h", routes: [swap] })).toBe(false);
+  });
+
+  it("drops the selection when the condition no longer holds", () => {
+    expect(dropUnavailableFundingRate(["close", "funding_rate"], false)).toEqual(["close"]);
+    expect(dropUnavailableFundingRate(["close", "funding_rate"], true)).toEqual(["close", "funding_rate"]);
   });
 });

@@ -59,6 +59,7 @@ type resultMetadataFake struct {
 	createViews    int
 	failView       bool
 	columnNames    []string
+	columns        []*storagepb.DatasetColumn
 }
 
 func newResultMetadataFake() *resultMetadataFake {
@@ -136,6 +137,7 @@ func (f *resultMetadataFake) DeleteView(_ context.Context, req *storagepb.Delete
 
 func (f *resultMetadataFake) UpsertDatasetColumn(_ context.Context, req *storagepb.UpsertDatasetColumnReq) (*storagepb.UpsertDatasetColumnRsp, error) {
 	f.columnNames = append(f.columnNames, req.GetColumn().GetColumnName())
+	f.columns = append(f.columns, req.GetColumn())
 	return &storagepb.UpsertDatasetColumnRsp{RetInfo: resultOK()}, nil
 }
 
@@ -557,4 +559,26 @@ func TestEnsureMarksSpotSwapTagsAsUnifiedDataset(t *testing.T) {
 	mixed := ensure("mixed", "binance_spot", "okx_swap")
 	require.Empty(t, mixed.GetDataSourceId(), "数据源不同不能成为统一数据集")
 	require.Empty(t, mixed.GetAttributes()["market_type"])
+}
+
+// 资金费率只在显式选中时建列，列属性写 fill=zero（因子引擎没有这个属性就沿用上一根，会重复计费）。
+func TestEnsureColumnsCreatesFundingRateOnlyWhenSelected(t *testing.T) {
+	fake := newResultMetadataFake()
+	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
+	require.NoError(t, manager.ensureColumns(context.Background(), "crypto", "dataset", "view", storagepb.DataKind_DATA_KIND_TIME_SERIES, nil))
+	require.NotContains(t, fake.columnNames, "funding_rate", "默认字段不含资金费率")
+
+	fake.columnNames, fake.columns = nil, nil
+	require.NoError(t, manager.ensureColumns(context.Background(), "crypto", "dataset", "view", storagepb.DataKind_DATA_KIND_TIME_SERIES, []string{"close", "funding_rate"}))
+	require.Equal(t, []string{"close", "funding_rate"}, fake.columnNames)
+	funding := fake.columns[1]
+	require.Equal(t, storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, funding.GetValueType())
+	require.Equal(t, "zero", funding.GetAttributes()["fill"])
+	require.Equal(t, "资金费率", funding.GetAttributes()["display_name"])
+
+	columns, err := resultViewColumns("crypto", IDs{ViewID: "view"}, []string{"close", "funding_rate"})
+	require.NoError(t, err)
+	require.Equal(t, "funding_rate", columns[1].GetColumnName())
+	require.Equal(t, storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, columns[1].GetValueType())
+	require.Equal(t, "资金费率", columns[1].GetAttributes()["display_name"])
 }

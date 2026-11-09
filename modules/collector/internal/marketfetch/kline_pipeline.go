@@ -44,6 +44,8 @@ type KlinePipeline struct {
 	// Reporter 非空时，把失败项明细与批次摘要上报 CLS；FunctionName 是上报用的函数名。
 	Reporter     ItemReporter
 	FunctionName string
+	// Funding 是行情源的资金费率能力（进程内缓存）；为空表示行情源没有这项能力。只在写入目标选了 funding_rate 时使用。
+	Funding *FundingCache
 }
 
 func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchpb.MarketFetchBatchCompleted, error) {
@@ -196,6 +198,12 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 				coverageEnd = frequency.BarEnd(coverageStart)
 				limit = 1
 			}
+			// 资金费在批次开始时与 K 线并行取；区间未知（取最近若干根）时等 K 线取完按它们的范围再取。
+			wantsFunding := itemWantsFunding(req, item)
+			var fundingResult func() (fundingLookup, error)
+			if wantsFunding && !coverageStart.IsZero() && !coverageEnd.IsZero() {
+				fundingResult = p.startFunding(ctx, req, providerSymbol, coverageStart, coverageEnd)
+			}
 			// Each provider request owns its DNS snapshot, including the IP slices.
 			var dnsRoutes map[string][]string
 			if len(req.DNSRoutes) > 0 {
@@ -224,6 +232,14 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 				item.CandidateIndex = nextCandidateIndex
 				results[index] = failureResult(item, domain.ItemOutcomeInvalid, "source_binding", err)
 				return
+			}
+			var fundingErr error
+			if wantsFunding {
+				if fundingResult == nil {
+					start, end := klineSpan(fetched)
+					fundingResult = p.startFunding(ctx, req, providerSymbol, start, end)
+				}
+				fundingErr = fillFundingRates(fetched, fundingResult)
 			}
 			itemRows := make([]*storagepb.RowFieldUpsert, 0, len(fetched))
 			for _, bar := range fetched {
@@ -254,6 +270,10 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 				}
 				if len(req.Targets) == 0 {
 					row.Fields = selectOutputFields(row.Fields, item.OutputFields)
+					if wantsFunding && !hasField(row.Fields, domain.FieldFundingRate) {
+						results[index] = fundingFailure(item, fundingErr)
+						return
+					}
 					if len(row.Fields) == 0 {
 						results[index] = failureResult(item, domain.ItemOutcomeInvalid, "output_fields", fmt.Errorf("selected output fields contain no fields supported by the kline dataset"))
 						return
@@ -277,11 +297,18 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 				result = "fallback"
 			}
 			p.observeFeed(req, selectedProvider, "kline", result)
-			expanded, missingTargets := expandTargetRows(req, item, itemRows)
+			expanded, missingTargets, fundingTargets := expandTargetRows(req, item, itemRows)
 			rowsMu.Lock()
 			rows = append(rows, expanded...)
 			rowsMu.Unlock()
-			if len(missingTargets) > 0 {
+			if len(fundingTargets) > 0 {
+				// 只让选了资金费率的目标的这一项失败，其他目标照常写入。
+				results[index] = fundingFailure(item, fundingErr)
+				for position := range fundingTargets {
+					fundingTargets[position].ErrorSummary = results[index].ErrorSummary
+				}
+				results[index].TargetResults = append(fundingTargets, missingTargets...)
+			} else if len(missingTargets) > 0 {
 				results[index] = failureResult(item, domain.ItemOutcomeInvalid, "output_fields", fmt.Errorf("required period target has no supported output rows"))
 				results[index].TargetResults = missingTargets
 			} else {
@@ -515,10 +542,20 @@ func fetchKlinesFromChain(ctx context.Context, session *marketdata.RouterSession
 }
 
 // selectOutputFields keeps the canonical row field order while dropping fields
-// not selected by the task. An empty selection keeps every field.
+// not selected by the task. An empty selection keeps every default field;
+// opt-in fields (funding_rate) are written only when explicitly selected.
 func selectOutputFields(fields []*storagepb.FieldValue, selected []string) []*storagepb.FieldValue {
 	if len(selected) == 0 {
-		return fields
+		if !hasField(fields, domain.FieldFundingRate) {
+			return fields
+		}
+		kept := make([]*storagepb.FieldValue, 0, len(fields))
+		for _, field := range fields {
+			if field.GetFieldId() != domain.FieldFundingRate {
+				kept = append(kept, field)
+			}
+		}
+		return kept
 	}
 	wanted := make(map[string]struct{}, len(selected))
 	for _, fieldID := range selected {

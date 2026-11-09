@@ -32,6 +32,34 @@ export const KLINE_OUTPUT_FIELD_IDS: ReadonlySet<string> = new Set([
   "amount_quality"
 ]);
 
+/** 资金费率：行情源的可选能力，只在显式选中时采集，条件满足时才在输出字段里显示。 */
+export const FUNDING_RATE_FIELD_ID = "funding_rate";
+// 具备资金费率能力的行情源（与后端行情源目录一致：目前只有币安 U 本位永续）。
+const FUNDING_RATE_SOURCES: ReadonlySet<string> = new Set(["binance"]);
+// 1m～30m 收盘时结算记录可能还没公布；1w、1M 推送不支持。
+const FUNDING_RATE_FREQUENCIES: ReadonlySet<string> = new Set(["1h", "1d"]);
+
+export interface FundingRateCondition {
+  dataType: string;
+  frequency: string;
+  routes: ReadonlyArray<{ source: string; market: string }>;
+}
+
+/** 资金费率是否可选：K 线采集、频率 1h 或 1d、所选标签全部是具备这项能力的行情源的永续（统一数据集不行）。 */
+export function fundingRateFieldAvailable(condition: FundingRateCondition): boolean {
+  if (condition.dataType !== "kline") return false;
+  if (!FUNDING_RATE_FREQUENCIES.has(normalizeFrequency(condition.frequency || ""))) return false;
+  if (!condition.routes.length) return false;
+  return condition.routes.every(
+    route => route.market === "swap" && FUNDING_RATE_SOURCES.has((route.source || "").trim().toLowerCase())
+  );
+}
+
+/** 条件不满足时从已选输出字段里去掉资金费率。 */
+export function dropUnavailableFundingRate(fields: string[], available: boolean): string[] {
+  return available ? fields : fields.filter(id => id !== FUNDING_RATE_FIELD_ID);
+}
+
 export type CollectionTaskMarket = "spot" | "swap" | "equity" | "multi";
 
 export interface CollectionTaskInput {

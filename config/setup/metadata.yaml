@@ -907,7 +907,7 @@ fields:
   field_id: funding_rate
   name: 资金费率
   value_type: double
-  unit: percent
+  unit: ratio
   sort_order: 10
   status: active
 

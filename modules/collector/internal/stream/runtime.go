@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -41,6 +42,8 @@ type RuntimeConfig struct {
 	Metrics       *Metrics
 	Report        func(PeriodStat)
 	Suspect       func(Suspect)
+	// FundingFor 返回计划市场的行情源在本进程里的资金费率缓存；行情源没有这项能力时返回 nil。为空表示不支持资金费率。
+	FundingFor func(marketfetch.PlanMarket) *marketfetch.FundingCache
 }
 
 // Runtime 按计划为每个市场维护来源、连接与各（数据集, 频率）的闸门；所有闸门共用一个串行提交队列。
@@ -50,6 +53,8 @@ type Runtime struct {
 	ctx     context.Context
 	mu      sync.RWMutex
 	markets map[string]*marketRuntime
+	// funding 是当前启用了整点取数的资金费率缓存。
+	funding map[*marketfetch.FundingCache]bool
 }
 
 type marketRuntime struct {
@@ -71,7 +76,7 @@ func NewRuntime(cfg RuntimeConfig) *Runtime {
 	if cfg.Clock == nil {
 		cfg.Clock = SystemClock{}
 	}
-	return &Runtime{cfg: cfg, queue: NewCommitQueue(cfg.Clock), markets: map[string]*marketRuntime{}}
+	return &Runtime{cfg: cfg, queue: NewCommitQueue(cfg.Clock), markets: map[string]*marketRuntime{}, funding: map[*marketfetch.FundingCache]bool{}}
 }
 
 // Start 启动提交队列与订阅刷新（每分钟按各份的生效时间重算订阅：移除的标的在它最后负责的周期提交之后才退订）。
@@ -99,6 +104,7 @@ func (r *Runtime) Start(ctx context.Context) {
 
 // Apply 换成新的推送计划；不在计划里的市场在它的订阅全部不再需要后关闭。
 func (r *Runtime) Apply(items []PlanItem) error {
+	r.applyFunding(items)
 	wanted := map[string]PlanItem{}
 	for _, item := range items {
 		if item.Executor != marketfetch.PlanExecutorStreaming || item.Plan == nil {
@@ -132,6 +138,49 @@ func (r *Runtime) Apply(items []PlanItem) error {
 	r.mu.Unlock()
 	r.refreshAll()
 	return firstErr
+}
+
+// applyFunding 按全部计划项（推送与本地拉取）启停资金费率整点取数：只有计划里有数据集选了 funding_rate 时才启用，
+// 取数节奏按其中最长的一根准备小时槽。
+func (r *Runtime) applyFunding(items []PlanItem) {
+	if r.cfg.FundingFor == nil {
+		return
+	}
+	wanted := map[*marketfetch.FundingCache]time.Duration{}
+	for _, item := range items {
+		if item.Plan == nil {
+			continue
+		}
+		longest := time.Duration(0)
+		for _, dataset := range item.Plan.Datasets {
+			if !domain.HasOutputField(dataset.OutputFields, domain.FieldFundingRate) {
+				continue
+			}
+			if frequency, err := marketdata.ParseFrequency(dataset.Frequency); err == nil {
+				longest = max(longest, frequency.Duration())
+			}
+		}
+		if longest == 0 {
+			continue
+		}
+		if cache := r.cfg.FundingFor(item.Plan.Market); cache != nil {
+			wanted[cache] = max(wanted[cache], longest)
+		} else {
+			log.Warnf("stream plan %s 选了资金费率，但行情源 %s/%s 不具备这项能力", item.Name, item.Plan.Market.Provider, item.Plan.Market.SourceID)
+		}
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for cache, longest := range wanted {
+		cache.Activate(longest)
+		r.funding[cache] = true
+	}
+	for cache := range r.funding {
+		if _, ok := wanted[cache]; !ok {
+			cache.Deactivate()
+			delete(r.funding, cache)
+		}
+	}
 }
 
 func (r *Runtime) newMarket(name string, plan *marketfetch.Plan) (*marketRuntime, error) {
@@ -216,8 +265,12 @@ func (m *marketRuntime) setPlan(r *Runtime, plan *marketfetch.Plan) {
 					log.Errorf("stream %s dataset %s: %v", m.name, key, err)
 					continue
 				}
+				var funding *marketfetch.FundingCache
+				if r.cfg.FundingFor != nil {
+					funding = r.cfg.FundingFor(plan.Market)
+				}
 				gate, err = NewGate(GateConfig{SpaceID: r.cfg.SpaceID, Market: plan.Market, DatasetID: dataset.DatasetID, Frequency: frequency, Committer: m.committer,
-					Queue: r.queue, Clock: r.cfg.Clock, CommitReserve: r.cfg.CommitReserve, Metrics: r.cfg.Metrics, Report: func(stat PeriodStat) {
+					Queue: r.queue, Clock: r.cfg.Clock, CommitReserve: r.cfg.CommitReserve, Metrics: r.cfg.Metrics, Funding: funding, Report: func(stat PeriodStat) {
 						m.tracker.observe(&stat)
 						if r.cfg.Report != nil {
 							r.cfg.Report(stat)

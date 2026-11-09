@@ -51,6 +51,8 @@
 ./bin/moox-cli collector status --space-id crypto                     # 总体健康、各数据集巡检进度与缺口
 ./bin/moox-cli collector task list|show|update|disable|inventory      # 任务查询、改名与启停
 ./bin/moox-cli collector task create --help                           # 新建 K 线采集任务
+# 币安永续 1h/1d 可选资金费率：--output-field 会替换默认字段，要把默认字段一起列出，例如
+# --output-field open,high,low,close,volume,quote_volume,trade_num,funding_rate；建完用 ingest-mode get 确认是 stream 加 local
 ./bin/moox-cli collector kline check|backfill|backfill-status ...     # 检查与补采
 ./bin/moox-cli collector kline backfill-cancel|backfill-retry ...     # 取消补采作业；重试失败的分块
 ./bin/moox-cli collector kline history-confirm|absences-clear ...     # 按历史扫描的缺口补采并确认“行情源本来没有”的 K 线；行情源后来补上数据时清除这些确认
