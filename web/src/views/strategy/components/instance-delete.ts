@@ -5,7 +5,7 @@ import type { FactorTask } from "@/api/factor/types";
 import { ControlRequestError } from "@/api/admin/http";
 import { deleteInstance } from "@/api/strategy";
 import type { StrategyInstance } from "@/api/strategy-types";
-import { instanceTasks, marketLabel } from "@/views/strategy/market-mode";
+import { instanceTasks, taskKeyLabel } from "@/views/strategy/market-mode";
 
 export const DELETE_INCOMPLETE_TIP = "删除未完成，请稍后重试";
 
@@ -33,7 +33,7 @@ export function instanceDeleteLines(instanceId: string, tasks: DeleteTaskLine[])
   const lines = ["将删除的计算任务和数据集："];
   if (!removed.length) lines.push("无");
   for (const task of removed) {
-    const market = marketLabel(task.market);
+    const market = taskKeyLabel(task.market);
     if (!task.factorTask) {
       lines.push(`${market}：${task.taskId}（已删除）`);
       continue;
@@ -43,7 +43,7 @@ export function instanceDeleteLines(instanceId: string, tasks: DeleteTaskLine[])
   }
   if (kept.length) {
     lines.push("保留的计算任务（只去掉实例对它的引用）：");
-    for (const task of kept) lines.push(`${marketLabel(task.market)}：计算任务 ${task.taskId}，未绑定到此实例`);
+    for (const task of kept) lines.push(`${taskKeyLabel(task.market)}：计算任务 ${task.taskId}，未绑定到此实例`);
   }
   lines.push("结果数据不可恢复。交易模块里的历史目标和订单保留。");
   return lines;

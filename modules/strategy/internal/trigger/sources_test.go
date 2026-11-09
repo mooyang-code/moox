@@ -37,6 +37,11 @@ const alignedBar = 23
 // newSourceHarness 是 1h 主帧（view_factor_a）加 1d 来源 daily（view_factor_d，成员 g）的实例。
 func newSourceHarness(t *testing.T) *harness {
 	t.Helper()
+	return newSourceHarnessWith(t, sourceRankDSL)
+}
+
+func newSourceHarnessWith(t *testing.T, dslYaml string) *harness {
+	t.Helper()
 	resolved := input.Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]input.TaskBinding{"spot": {ViewID: "view_factor_a", FactorTaskID: "ftask_a", DatasetID: "ds"}},
 		Bar: "1h", Calendar: input.DefaultCalendar, Columns: map[string]input.ColumnBinding{"m": {Source: input.SourceFactor, Member: "f", FactorID: "f", DefinitionHash: "h1"}},
 		Factors: map[string]string{"f": "h1|fixed"}, ViewColumns: []string{"close", "m"},
@@ -44,7 +49,7 @@ func newSourceHarness(t *testing.T) *harness {
 			Tasks:   map[string]input.TaskBinding{"spot": {ViewID: dailyView, FactorTaskID: "ftask_d", DatasetID: "ds_d"}},
 			Columns: map[string]input.ColumnBinding{"g": {Source: input.SourceFactor, Member: "g", FactorID: "g", DefinitionHash: "h2"}},
 			Factors: map[string]string{"g": "h2|fixed"}, ViewColumns: []string{"close", "g"}}}}
-	h := newHarnessWith(t, sourceRankDSL, nil, resolved)
+	h := newHarnessWith(t, dslYaml, nil, resolved)
 	for _, n := range []int{1, 2, alignedBar, alignedBar + 1} {
 		h.frame(n, map[string]map[string]float64{"A": {"m": 3}, "B": {"m": 1}})
 	}
@@ -199,5 +204,19 @@ func TestReferenceViewEventIgnored(t *testing.T) {
 	expectAck(t, h.handler.Handle(context.Background(), message, payload))
 	if h.resultCount() != 0 || h.loader.calls != 0 || len(h.observer.results) != 0 {
 		t.Fatalf("参考市场的事件不应求值或记录：results=%d calls=%d observed=%v", h.resultCount(), h.loader.calls, h.observer.results)
+	}
+}
+
+// 写了附加来源、又经 bars[-1] 读主帧因子的策略：输入记录里多出的来源 View 条目不影响相邻周期检查，第二根照常求值。
+func TestSourceWithPreviousBarKeepsAdjacentCheck(t *testing.T) {
+	h := newSourceHarnessWith(t, strings.Replace(sourceRankDSL, `score: "m"`, `score: "m - bars[-1].m"`, 1))
+	h.frame(1, map[string]map[string]float64{"A": {"m": 3, "prev_m": 1}, "B": {"m": 1, "prev_m": 2}})
+	h.frame(2, map[string]map[string]float64{"A": {"m": 1, "prev_m": 3}, "B": {"m": 3, "prev_m": 1}})
+	h.atBar(1)
+	expectAck(t, h.deliver(1))
+	h.atBar(2)
+	expectAck(t, h.deliver(2))
+	if result := h.resultAt(2); result.Status != store.StatusOK {
+		t.Fatalf("第二根应照常求值（相邻记录可信）：%+v", result)
 	}
 }
