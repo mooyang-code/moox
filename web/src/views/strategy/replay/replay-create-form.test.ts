@@ -20,7 +20,8 @@ describe("回放表单的区间", () => {
       tasks: { spot: "ftask_d" },
       range: [Date.parse("2026-10-08T10:00:00Z"), Date.parse("2026-11-07T10:00:00Z")],
       spot_fee_bps: 10,
-      swap_fee_bps: 10
+      swap_fee_bps: 10,
+      funding_column: ""
     };
     const wrapper = mount(ReplayCreateForm, {
       props: {

@@ -25,7 +25,8 @@ const base: ReplayFormState = {
   tasks: { swap: "ftask_swap" },
   range: [Date.parse("2026-09-01T00:00:00Z"), Date.parse("2026-09-02T00:00:00Z")],
   spot_fee_bps: 10,
-  swap_fee_bps: 5
+  swap_fee_bps: 5,
+  funding_column: ""
 };
 
 describe("replay form model", () => {
@@ -61,6 +62,12 @@ describe("replay form model", () => {
 
   it("accepts a valid form", () => {
     expect(validateReplayForm(base, strategies)).toBe("");
+  });
+
+  it("checks the optional funding column is a plain column name", () => {
+    expect(validateReplayForm({ ...base, funding_column: "funding_rate" }, strategies)).toBe("");
+    expect(validateReplayForm({ ...base, funding_column: "  " }, strategies)).toBe("");
+    expect(validateReplayForm({ ...base, funding_column: "funding-rate" }, strategies)).toContain("资金费列");
   });
 
   it("requires a source and a task for every market in use", () => {

@@ -90,15 +90,32 @@ strategy_pool:
       top: 1                                # 前几名，并列的平分
   timing: {window: 24}                      # 可选：净值在 24 期均线之上取 1，否则取 0
   step: 0.2                                 # 可选：每期每个成员的比例变化上限
-  fees: {spot_bps: 10, swap_bps: 5}         # 可选：成员模拟账本的手续费
+  fees: {spot_bps: 10, swap_bps: 5, equity_bps: 3}   # 可选：成员模拟账本的手续费（股票成员用 equity_bps）
+  # fees.funding_column: funding_rate       # 可选：永续持仓按这一列（本根累计的资金费率）计资金费
 portfolio: {leverage: 1, max_weight: 0.1}
 ```
 
-- 成员策略必须显式写 `market`、不能是池、不能用 `factor_params`、`bar` 与池一致；池不写 `market`、`universe`、`factor_params`。
+- 现货、永续成员必须显式写 `market`；股票策略不写 `market`，池绑定 `equity` 任务时按股票成员处理（股票与现货、永续成员不能混用，股票池只做多、`leverage ≤ 1`，停牌不清算）。成员不能是池、不能用 `factor_params`、`bar` 与池一致；池不写 `market`、`universe`、`factor_params`。
+- 组合约束（按成员汇总的分配比例，要求每个成员单方向：规则全部做多或全部做空）：
+  ```yaml
+  strategy_pool:
+    allocation:
+      method: fixed
+      ratios: {long_core: 0.5, short_core: 0.45, short_new: 0.05, probe: 0}
+      switch:                               # 条件转移（只用于 fixed），第一个成立的生效
+        - when: {empty: probe}              # probe 本期有效目标为空（没通过时按沿用的上期目标判断）
+          move: {from: short_new, to: [short_core]}   # from、to 必须同方向
+    exposure:                               # 净敞口 = 多头 − 空头，各段按顺序执行
+      bands:
+        - {min: -0.1, max: 0.3, adjust: auto, pivot: 1.0}   # adjust：reduce_larger / raise_smaller / auto（auto 必须写 pivot）
+        - {when_gross_below: 1.0, min: 0, max: 0, adjust: raise_smaller}
+    gross: {min: 1.0, max: 1.8}             # 总敞口区间；第一根不放大；max 不超过 portfolio.leverage
+  ```
+  超出区间按超出方向修正：净敞口高于 `max` 时 `reduce_larger` 缩多头、`raise_smaller` 放大空头；低于 `min` 时反过来。三者只改合成用的比例，步长仍按约束之前的比例算。
 - 实例要绑定的因子任务是成员所需市场的并集（现货、永续各最多一个）；View 要有 `close` 列，数据集保留期要装得下预热。
 - 启用后先在后台预热（用历史推进成员净值），预热完成前不求值（事件稍后重投）也不能 `confirm`；停用再启用会重新预热。
 - 研究回放与闭环回放暂不支持策略池；成员净值、比例、择时与贡献写在每期结果的 `summary_json.pool`，页面在实例结果里显示。
-- 成员净值是模拟曲线（不计资金费与强平），只用来分配资金，不代表实盘收益。语义与计算顺序见 `docs/模块/策略.md` 的“策略池”。
+- 成员净值是模拟曲线（不模拟强平；写了 `fees.funding_column` 才计资金费：上一根收盘调仓之前的永续持仓乘本根费率，费率为正时多头付），只用来分配资金，不代表实盘收益。语义与计算顺序见 `docs/模块/策略.md` 的“策略池”。
 
 ### universe 与 portfolio
 
@@ -114,6 +131,7 @@ portfolio: {leverage: 1, max_weight: 0.1}
 | `portfolio.max_weight` | 组合级单币上限，同一个币的现货、永续**合计**（绝对值之和，“现货多 + 永续空”的对冲也按绝对值之和截断）；两边都不为零时按比例缩小，只有一边时取上限，超出部分留现金 |
 | `portfolio.min_universe` | rank 规则进入 filter 的可用标的少于它则整期跳过 |
 | `portfolio.max_missing` | 任一规则缺数占比超过它则整期跳过，默认 0.2 |
+| `portfolio.limits` | `{long_max, short_max, overflow: {to}}`：单标的多头、空头上限（占权益，同一标的各市场同方向合计），在规则相加（池合成）之后、`max_weight` 之前执行；超出部分转给 `to` 指向的规则（池里是成员）本期同方向的其他标的，按它的权重比例分，最多三轮，剩下的留现金；不写 `overflow` 时留现金 |
 
 ## 2. 规则类型
 

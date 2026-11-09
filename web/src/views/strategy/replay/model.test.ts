@@ -255,5 +255,10 @@ describe("回放对比", () => {
     expect(
       replayFormFromReplay({ ...(base as object), tasks: { multi: { factor_task_id: "u", view_id: "v" } } } as never)
     ).toBeNull();
+    // 资金费列随配置带回表单，没写时为空串。
+    expect(replayFormFromReplay(base)).toMatchObject({ funding_column: "" });
+    expect(replayFormFromReplay({ ...(base as object), funding_column: "funding_rate" } as never)).toMatchObject({
+      funding_column: "funding_rate"
+    });
   });
 });

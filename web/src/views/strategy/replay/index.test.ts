@@ -557,6 +557,22 @@ describe("strategy replay page", () => {
     expect(text).toContain("现货市值 10.0000 · 永续净名义价值 -100.0000");
   });
 
+  it("names the funding column instead of the no-funding-fee warning when the replay charges funding", async () => {
+    const funded = replay("r8", "done", '{"bars":1,"ok_bars":1,"limitations":[]}', {
+      tasks: { swap: { factor_task_id: "ftask_b", view_id: "view_factor_b" } },
+      swap_fee_bps: 5,
+      funding_column: "funding_rate"
+    });
+    api.listReplays.mockResolvedValue({ items: [funded], page: { total: 1 } });
+    api.getReplay.mockResolvedValue(funded);
+    api.listReplayBars.mockResolvedValue({ items: [], page: { total: 0 } });
+    const wrapper = mountPage();
+    await flushPromises();
+    const text = wrapper.text();
+    expect(text).toContain("模拟曲线按 funding_rate 列计资金费、未计强平");
+    expect(text).not.toContain("模拟曲线未计资金费与强平");
+  });
+
   it("shows the bar detail with the buy scale and describes the curve in text", async () => {
     api.listReplays.mockResolvedValue({ items: [replay("r1", "done")], page: { total: 1 } });
     api.getReplay.mockResolvedValue(replay("r1", "done", '{"bars":1,"ok_bars":1,"limitations":[]}'));
