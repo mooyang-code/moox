@@ -47,6 +47,7 @@ params:                            # 可选：可调参数的声明；type 为 i
 let:                               # 可选：有序中间量，只能引用前面的 let、params 和输入列
   ma: ts_mean(close, window)
 output: close / ma - 1              # 单输出写 output；多输出写 outputs: {输出名: 表达式, …}（输出名固定，不随参数变化）
+cross_section_history: current     # 可选，只对截面因子有效：current（默认）或 observed，见“截面函数”一节的“历史截面的全集”
 ```
 
 - 输入列就是表达式里出现的源数据列名（`open`、`high`、`low`、`close`、`volume`、`quote_volume` 等，以源数据集实际的列为准），不用声明。
@@ -63,7 +64,7 @@ output: close / ma - 1              # 单输出写 output；多输出写 outputs
   只有运算里写了 `nan` 时才允许。取整用 `floor`、`ceil`、`round`（`round` 在 0.5 处远离零：2.5 → 3，−2.5 → −3）。
 - 回看由编译推导：`ts_*` 为 L(x)+n−1，`delay`/`delta`/`pct_change` 为 L(x)+k，嵌套相加（`ts_rank(ts_mean(x, 20), 20)` 是 39）；
   `ema`/`sma` 截断到起点权重低于 1e−9 的 K 根（`ema(x, 20)` 为 208）；`ema(x, n, k)` 显式指定预热总根数 K=k（含起点那一根，窗口里最老的一根作为递推初值）：`ema(close, 20, 50000)` 是 EMA20 用 5 万根预热，k 不写或为 0 按通常方式；`ema(close, 50000, 50000)` 的起点权重约 13%，是近似值。
-- 用到任何 `cs_*` 的因子是截面因子，否则是时序因子。
+- 用到任何截面函数（`cs_*`、`gs_*`、`gx_*`）的因子是截面因子，否则是时序因子。
 - 限制：spec 64 KiB，单条表达式 4096 字符、512 个节点，最多 16 个参数，展开后最多 64 个输出，窗口 1～100000，回看不超过 100000；实际可用的回看还受数据源回看数量、保留期与引擎 `window.lookback` 的限制。
 
 ### 成员键与列名
@@ -173,6 +174,7 @@ rules:
 | 时序 | `ts_var_relaxed` | x（序列）、n（常量 2～100000）、m（常量 2～100000） | L(x)+n−1 | 窗口内样本方差（ddof=1）；序列开头的宽松窗口规则同 ts_mean_relaxed，m ≥ 2 |
 | 时序 | `ts_zscore` | x（序列）、n（常量 2～100000） | L(x)+n−1 | (x − ts_mean) / ts_std；标准差为 0 时为 NaN |
 | 时序 | `ts_zscore_relaxed` | x（序列）、n（常量 2～100000）、m（常量 2～100000） | L(x)+n−1 | (x − ts_mean) / ts_std；序列开头的宽松窗口规则同 ts_mean_relaxed，m ≥ 2 |
+| 截面（聚合广播） | `cs_corr` | x（序列）、y（序列） | 各参数回看的最大值 | x、y 都有效的行上的截面皮尔逊相关系数，广播到截面每一行；有效对数少于 3 或任一方方差为 0 时为 NaN。秩相关写成 cs_corr(cs_rank(x), cs_rank(y)) |
 | 截面（聚合广播） | `cs_count` | c（布尔序列） | L(x) | 截面里条件为真的个数，c 为 NaN 的行不计；广播到截面每一行；c 全为 NaN 时为 NaN |
 | 截面 | `cs_demean` | x（序列） | L(x) | 截面去均值 x − mean |
 | 截面（聚合广播） | `cs_max` | x（序列） | L(x) | 截面最大值，广播到截面每一行；没有有效样本时为 NaN |
@@ -182,10 +184,23 @@ rules:
 | 截面（聚合广播） | `cs_quantile` | x（序列）、q（常量 0～1） | L(x) | 截面 q 分位数，线性插值（与 ts_quantile 同口径），广播到截面每一行；q 只能写 0～1 的字面量，不能用参数 |
 | 截面 | `cs_rank` | x（序列） | L(x) | 截面百分位（名次 / 有效样本数，并列取平均名次）；按 (data_time, series_tag) 分组，排除 NaN |
 | 截面（聚合广播） | `cs_ref` | x（序列）、subject（标的字符串） | L(x) | 同一截面里参考标的的 x，广播到截面每一行；参考标的本期不在截面里或 x 为 NaN 时整个截面为 NaN。标的写成字符串字面量，加成员和启用任务时校验它在任务的标的范围内 |
+| 截面 | `cs_resid` | y（序列）、x（序列，变参，1～8 个） | 各参数回看的最大值 | 每个截面上 y 对常数项与 x1…xk（1～8 个）做最小二乘，输出残差；任一变量为 NaN 的行不参与、输出 NaN。有效行数不超过 k+1 或设计矩阵奇异时整个截面为 NaN，计入失败指标（cs_resid_singular） |
 | 截面 | `cs_scale` | x（序列） | L(x) | 截面缩放 x / sum(\|x\|)；分母为 0 时为 NaN |
 | 截面（聚合广播） | `cs_std` | x（序列） | L(x) | 截面样本标准差（ddof=1），广播到截面每一行；有效样本少于 2 时为 NaN |
 | 截面（聚合广播） | `cs_sum` | x（序列） | L(x) | 截面求和，广播到截面每一行；没有有效样本时为 NaN |
 | 截面 | `cs_zscore` | x（序列） | L(x) | 截面标准化 (x − mean) / std（ddof=1）；样本少于 2 或标准差为 0 时为 NaN |
+| 截面（聚合广播） | `gs_count` | c（布尔序列）、g（分组键序列） | 各参数回看的最大值 | 组内条件为真的个数，c 为 NaN 的行不计；广播到组内每一行；组内 c 全为 NaN 时为 NaN |
+| 截面 | `gs_cumshare` | x（序列）、g（分组键序列） | 各参数回看的最大值 | 组内按 x 降序排列（并列按标的 ID），累计到本行（含本行）的 x 之和占组内总和的比例；组内总和为 0 时为 NaN |
+| 截面 | `gs_demean` | x（序列）、g（分组键序列） | 各参数回看的最大值 | 组内去均值 x − 组内均值 |
+| 截面（聚合广播） | `gs_mean` | x（序列）、g（分组键序列） | 各参数回看的最大值 | 组内均值，广播到组内每一行（含输入为 NaN 的行）；组内没有有效样本时为 NaN |
+| 截面（聚合广播） | `gs_median` | x（序列）、g（分组键序列） | 各参数回看的最大值 | 组内中位数，广播到组内每一行；组内没有有效样本时为 NaN |
+| 截面 | `gs_rank` | x（序列）、g（分组键序列） | 各参数回看的最大值 | 组内百分位（与 cs_rank 同口径） |
+| 截面 | `gs_resid` | y（序列）、g（分组键序列）、x（序列，变参，0～8 个） | 各参数回看的最大值 | 同 cs_resid，但截距换成分组哑变量（每组一个截距，g 为 NaN 的行输出 NaN）：先在组内对 y 与各 x 去均值，再做不带截距的回归；不给 x 时等于 gs_demean(y, g)。有效行数不超过 k+组数或奇异时整个截面为 NaN，计入失败指标（cs_resid_singular） |
+| 截面（聚合广播） | `gs_sum` | x（序列）、g（分组键序列） | 各参数回看的最大值 | 组内求和，广播到组内每一行；组内没有有效样本时为 NaN |
+| 截面（聚合广播） | `gs_wmean` | x（序列）、w（序列）、g（分组键序列） | 各参数回看的最大值 | 组内加权均值 Σw·x / Σw，w ≤ 0 或为 NaN、x 为 NaN 的行不参与；广播到组内每一行；没有可用的行时为 NaN |
+| 截面 | `gs_zscore` | x（序列）、g（分组键序列） | 各参数回看的最大值 | 组内标准化（ddof=1）；组内样本少于 2 或标准差为 0 时为 NaN |
+| 截面（聚合广播） | `gx_rank` | v（序列）、g（分组键序列） | 各参数回看的最大值 | 组间百分位：每组取 v 的组内均值作为该组的值（v 通常是 gs_* 的结果，组内为常数；组内全为 NaN 的组不参与），在组之间按 cs_rank 的口径排名，再广播回组内每一行 |
+| 截面（聚合广播） | `gx_zscore` | v（序列）、g（分组键序列） | 各参数回看的最大值 | 组间标准化：每组的值同 gx_rank，在组之间按 cs_zscore 的口径标准化（ddof=1，少于 2 组或标准差为 0 时为 NaN），再广播回组内每一行 |
 
 ### 截面函数
 
@@ -193,8 +208,8 @@ rules:
 
 | 类别 | 函数 | 输入为 NaN 的行 | 输出 |
 | --- | --- | --- | --- |
-| 逐行变换 | `cs_rank`、`cs_zscore`、`cs_demean`、`cs_scale` | 不参与统计 | 该行为 NaN |
-| 聚合广播 | `cs_mean`、`cs_sum`、`cs_count`、`cs_std`、`cs_median`、`cs_quantile`、`cs_min`、`cs_max`、`cs_ref` | 不参与统计 | 统计量写给同一截面的每一行，包括输入为 NaN 的行；没有有效样本时整个截面为 NaN（`cs_sum`、`cs_count` 也是 NaN，不是 0） |
+| 逐行变换 | `cs_rank`、`cs_zscore`、`cs_demean`、`cs_scale`、`gs_rank`、`gs_demean`、`gs_zscore`、`gs_cumshare`、`cs_resid`、`gs_resid` | 不参与统计 | 该行为 NaN |
+| 聚合广播 | `cs_mean`、`cs_sum`、`cs_count`、`cs_std`、`cs_median`、`cs_quantile`、`cs_min`、`cs_max`、`cs_corr`、`cs_ref`、`gs_mean`、`gs_sum`、`gs_count`、`gs_median`、`gs_wmean`、`gx_rank`、`gx_zscore` | 不参与统计 | 统计量写给同一截面（分组函数是同一组）的每一行，包括输入为 NaN 的行；没有有效样本时整个截面为 NaN（`cs_sum`、`cs_count` 也是 NaN，不是 0） |
 
 - **条件截面**不需要新参数：`cs_rank(where(c, x, nan))` 只在 c 为真的标的里排名，其余为 NaN；`cs_mean(where(c, ret, nan))` 是满足条件的标的的均值。
 - `cs_count(c)` 只收布尔，c 为 NaN 的行不计；`cs_std` 是样本标准差（ddof=1），有效样本少于 2 时为 NaN；`cs_quantile(x, q)` 与 `ts_quantile` 同口径（线性插值），
@@ -205,6 +220,32 @@ rules:
   与时序算子组合得到“与基准的滚动相关”“相对基准的超额”：`ts_corr(pct_change(close), pct_change(cs_ref(close, "BTC-USDT")), 20)`。
   保存定义时只检查标的 ID 的写法（非空，只含字母、数字和 `. _ - :`，最长 64 个字符）；加成员、启用成员、启用任务时检查它在任务源数据集的标的范围内，不在就拒绝。
   用到 `cs_ref` 的因子是截面因子，建议设 `allow_partial_universe: true`；参考标的某一期缺数时这一列整个截面为 NaN，策略按缺数处理。
+- **截面相关** `cs_corr(x, y)`：x、y 都有效的行上的皮尔逊相关，有效对数少于 3 或任一方方差为 0 时为 NaN。
+  秩相关写成 `cs_corr(cs_rank(x), cs_rank(y))`；“滚动秩相关的信息比”：`ic = cs_corr(delay(cs_rank(f), k), cs_rank(pct_change(close, k)))`，
+  再写 `ts_mean(ic, w) / ts_std(ic, w)`（只用已实现收益，不需要未来数据）。
+- **分组截面**（`gs_*`、`gx_*`）：最后一个参数 g 是分组键，必须是源数据集里的数值列（例如行业代码），不能是常量或参数。
+  每个截面内按 g 的取值分组，g 为 NaN 的行不属于任何组，**所有分组函数在这些行上都输出 NaN**（没有源行的序列 g 也是 NaN，这一点与 `cs_mean` 等不同）。
+  - `gs_rank`、`gs_demean`、`gs_zscore`、`gs_mean`、`gs_sum`、`gs_count`（只收布尔）、`gs_median`：组内按对应 `cs_` 函数的口径计算。
+  - `gs_wmean(x, w, g)`：组内 Σw·x / Σw，w ≤ 0 或为 NaN 的行不参与。
+  - `gs_cumshare(x, g)`：组内按 x 降序排列（并列按标的 ID），累计到本行（含本行）的 x 之和占组内总和的比例；组内总和为 0 时为 NaN。
+  - `gx_rank(v, g)`、`gx_zscore(v, g)`：组间比较。每组取 v 的有效均值作为该组的值（v 通常是 `gs_*` 的结果，组内为常数），
+    在组之间按 `cs_rank`、`cs_zscore` 的口径排名或标准化，再写回组内每一行。
+  - 一个截面最多 1000 个组，超出时整个截面为 NaN，并计入失败指标（原因 `gs_too_many_groups`）。
+  - 例：“组内按成交额累计占比 ≤ 70% 的头部，用市值加权动量给组打分，取得分前 3 的组”：
+    `gx_rank(gs_wmean(where(gs_cumshare(amount, ind) <= 0.7, mom, nan), mcap, ind), ind)`，在策略里按这一列过滤。
+- **截面回归残差** `cs_resid(y, x1[, x2 … x8])`、`gs_resid(y, g[, x1 … x8])`：每个截面上 y 对截距（`gs_resid` 为每组一个截距）与 1～8 个自变量做最小二乘，
+  输出残差；任一变量（`gs_resid` 还有 g）为 NaN 的行不参与、输出 NaN。`gs_resid` 不给 x 时等于 `gs_demean(y, g)`（分组中性化）。
+  - 自变量按书写顺序进入定义哈希，个数与顺序不同就是不同的定义。
+  - 有效行数不超过参数个数（`cs_resid` 为 k+1，`gs_resid` 为 k+组数），或某个 x 与截距、分组、其他 x 共线（例如 x 在每组内是常数）时，
+    整个截面为 NaN，并计入失败指标（原因 `cs_resid_singular`）。
+  - 例：理论值偏离度 `-cs_resid(log(mcap), a, b, c) / log(mcap)`；行业中性化的动量 `gs_resid(mom, ind, log(mcap))`。
+  - 与 numpy `np.linalg.lstsq` 在完整设计矩阵（截距或分组哑变量）上的结果相对误差 ≤ 1e−9；转写外部因子时用它核对。
+- **历史截面的全集** `cross_section_history`（spec 顶层，只对截面因子有效）：
+  - `current`（默认）：每个历史时刻的截面只用本期可用的标的，已下架、移出全集的标的被排除，时序套截面的因子（“过去 N 根是否进过前 10%”“滚动秩相关”）会带幸存者偏差。
+  - `observed`：历史时刻的截面由本地存储里在读取区间内有数据的标的组成，与本期是否可用无关；新加入并回补历史的标的也参与加入前的截面。
+    多出来的标的只读本地历史，不同步、不再跟进源数据的修正；本期不可用的标的没有结果行。
+  - 只有写了 `observed` 时定义哈希才变化（不写与写 `current` 相同）；从 `current` 改成 `observed` 要按“修改已有因子的定义”的流程停用、更新、再启用。
+  - 面板会扩大，内存与耗时随额外标的数增加；先用 `check` 看 `cross_section_points`，长窗口时在合成数据上试算。
 - **计算量**：时序套截面（例如 `ts_mean(cs_rank(x), 20)`）每期要重算 20 个历史截面。`check` 输出的 `cross_section_points`
   是计算一个目标时刻要算的截面个数之和（各截面算子的需求区间长度之和，参数取声明范围的最坏情况）：单层截面为 1，`ts_mean(cs_rank(x), 20)` 为 20，
   `ts_mean(cs_rank(ts_mean(cs_rank(x), 5)), 20)` 为 20 + 24 = 44。分钟级、长窗口先看这个数再决定。
