@@ -2,6 +2,7 @@ package exec
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"testing"
 
@@ -141,6 +142,28 @@ func TestCrossWarningsPerMember(t *testing.T) {
 		if len(result.Warnings) != len(want) || result.Warnings["m"]["cs_resid_singular"] != 5 || result.Warnings["s"]["cs_resid_singular"] != 5 {
 			t.Fatalf("workers=%d warnings = %v, want %v", workers, result.Warnings, want)
 		}
+	}
+	// 大面板真正走并行：各分块的计数合并后与单线程完全相同（-race 覆盖合并处的锁）。
+	big := purityPanel(t, 64, 300, 5)
+	for s := range big.Series() {
+		for tm := 0; tm < 300; tm += 4 {
+			big.Set(0, s, tm, 7)
+		}
+	}
+	const start, end = 20, 299
+	one, err := Run(context.Background(), program, big, Options{Start: start, End: end, Workers: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parallel, err := Run(context.Background(), program, big, Options{Start: start, End: end, Workers: 8})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := one.Warnings["m"]["cs_resid_singular"]; got != 140 {
+		t.Fatalf("single-thread warnings = %v, want 140（70 个时刻 × 2 个 series_tag）", one.Warnings)
+	}
+	if fmt.Sprint(one.Warnings) != fmt.Sprint(parallel.Warnings) {
+		t.Fatalf("warnings depend on workers: %v vs %v", one.Warnings, parallel.Warnings)
 	}
 	result, err := Run(context.Background(), program, panel, Options{Start: 13, End: 15})
 	if err != nil {
