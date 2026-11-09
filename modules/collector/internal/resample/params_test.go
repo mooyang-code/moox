@@ -20,6 +20,13 @@ func TestValidateTaskParamsAcceptsTaskOwnedTargetWithoutFrequencySuffix(t *testi
 	require.NoError(t, ValidateTaskParams("crypto", parseResampleParams(t, "1h", "4h", "")))
 }
 
+// 重采样不合成资金费率：只有输出字段显式要这一列时才拒绝，源数据集带这一列不影响。
+func TestValidateTaskParamsRejectsExplicitFundingRate(t *testing.T) {
+	require.NoError(t, ValidateTaskParams("crypto", parseResampleParams(t, "1h", "4h", `,"output_fields":["close"]`)))
+	err := ValidateTaskParams("crypto", parseResampleParams(t, "1h", "4h", `,"output_fields":["close","funding_rate"]`))
+	require.ErrorContains(t, err, "funding_rate")
+}
+
 func TestValidateTaskParamsRejectsInvalidPairAndIdentity(t *testing.T) {
 	tests := []struct {
 		name      string

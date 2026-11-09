@@ -72,6 +72,10 @@ func ValidateTaskParams(spaceID string, params *domain.CollectParams) error {
 	if len(params.SourceTags()) == 0 {
 		return fmt.Errorf("source_series_tag is required")
 	}
+	// 合成的字段表是固定的，资金费率不做求和合成：源数据集带这一列也可以重采样（结果里没有这一列），只拒绝显式要它。
+	if domain.HasOutputField(params.OutputFields, domain.FieldFundingRate) {
+		return fmt.Errorf("重采样不能合成输出字段 %s，请从输出字段里去掉它", domain.FieldFundingRate)
+	}
 	source, err := ParseFixedFrequency(params.SourceFrequency)
 	if err != nil {
 		return fmt.Errorf("source_frequency: %w", err)

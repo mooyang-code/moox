@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/binance"
 	"github.com/mooyang-code/moox/modules/collector/internal/stream"
@@ -87,4 +88,59 @@ func TestRuntimeSubscribesAndCommitsAPlannedPeriod(t *testing.T) {
 	}
 	require.NoError(t, runtime.Apply(nil))
 	require.Eventually(t, func() bool { return len(runtime.Status()[0].Conns) == 0 }, 3*time.Second, 10*time.Millisecond)
+}
+
+type countingFundingSource struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (s *countingFundingSource) FundingRates(context.Context, string, time.Time, time.Time) ([]marketdata.FundingRate, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls++
+	return nil, nil
+}
+
+func (s *countingFundingSource) count() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.calls
+}
+
+type streamFundingClock struct{ clock *stream.FakeClock }
+
+func (c streamFundingClock) Now() time.Time { return c.clock.Now() }
+func (c streamFundingClock) AfterFunc(d time.Duration, f func()) func() bool {
+	return c.clock.AfterFunc(d, f).Stop
+}
+
+// 资金费率整点取数默认关闭：只有计划项（推送或本地拉取）里有数据集选了 funding_rate 时才启用，去掉后停用。
+func TestRuntimeActivatesFundingOnlyWhenPlanSelectsIt(t *testing.T) {
+	clock := stream.NewFakeClock(time.Date(2026, 10, 21, 8, 30, 0, 0, time.UTC))
+	source := &countingFundingSource{}
+	cache := marketfetch.NewFundingCache(source, streamFundingClock{clock})
+	runtime := stream.NewRuntime(stream.RuntimeConfig{
+		Clock: clock, SpaceID: "crypto", Providers: map[string]stream.Provider{},
+		NewCommitter: func(marketfetch.PlanMarket) (stream.PeriodCommitter, error) { return &memoryCommitter{}, nil },
+		FundingFor:   func(marketfetch.PlanMarket) *marketfetch.FundingCache { return cache },
+	})
+	plan := spotPlan(clock.Now().Add(-time.Hour), "BTC-USDT")
+	plan.Executor = marketfetch.PlanExecutorLocal
+	items := []stream.PlanItem{{Name: "local-crypto-swap", Executor: marketfetch.PlanExecutorLocal, Market: "swap", Plan: plan}}
+	require.NoError(t, runtime.Apply(items))
+	clock.Advance(2 * time.Hour)
+	require.Zero(t, source.count(), "不选资金费率时不取数")
+
+	plan.Datasets[0].Frequency = "1h"
+	plan.Datasets[0].OutputFields = []string{"close", "funding_rate"}
+	require.NoError(t, runtime.Apply(items))
+	// Activate(1h) 并行取上一根与当前这一根两个小时槽，两个都取完再停用，否则停用后的计数会变。
+	require.Eventually(t, func() bool { return source.count() == 2 }, time.Second, time.Millisecond, "本地拉取的计划项也要启用")
+
+	require.NoError(t, runtime.Apply(nil))
+	settled := source.count()
+	clock.Advance(3 * time.Hour)
+	time.Sleep(20 * time.Millisecond)
+	require.Equal(t, settled, source.count(), "计划里不再选资金费率后停用")
 }

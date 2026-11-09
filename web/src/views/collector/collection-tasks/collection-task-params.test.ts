@@ -4,6 +4,9 @@ import {
   buildCollectionTaskPayload,
   parseKlineResampleParams,
   collectionTaskNameError,
+  fundingRateFieldAvailable,
+  pruneFundingRate,
+  shouldDropFundingRate,
   collectionTaskResultLabel,
   normalizeCollectionTask,
   parseCollectionTaskInput,
@@ -197,5 +200,43 @@ describe("collection task result label", () => {
     expect(collectionTaskResultLabel({ prepare_state: "ready", result: result("error") })).toBe("结果异常");
     expect(collectionTaskResultLabel({ prepare_state: "error", result: result("unknown") })).toBe("结果异常");
     expect(collectionTaskResultLabel({ prepare_state: "ready", last_error: "boom", result: result("unknown") })).toBe("结果异常");
+  });
+});
+
+describe("funding rate output field", () => {
+  const swap = { source: "binance", market: "swap" };
+  const spot = { source: "binance", market: "spot" };
+
+  it("is available only for kline swap tasks at 1h or 1d from a capable source", () => {
+    expect(fundingRateFieldAvailable({ dataType: "kline", frequency: "1h", routes: [swap] })).toBe(true);
+    expect(fundingRateFieldAvailable({ dataType: "kline", frequency: "1d", routes: [swap, swap] })).toBe(true);
+    for (const frequency of ["1m", "5m", "30m", "4h", "1w", "1mo", ""]) {
+      expect(fundingRateFieldAvailable({ dataType: "kline", frequency, routes: [swap] })).toBe(false);
+    }
+    expect(fundingRateFieldAvailable({ dataType: "kline", frequency: "1h", routes: [spot] })).toBe(false);
+    expect(fundingRateFieldAvailable({ dataType: "kline", frequency: "1h", routes: [spot, swap] })).toBe(false);
+    expect(fundingRateFieldAvailable({ dataType: "kline", frequency: "1h", routes: [{ source: "okx", market: "swap" }] })).toBe(
+      false
+    );
+    expect(fundingRateFieldAvailable({ dataType: "kline", frequency: "1h", routes: [] })).toBe(false);
+    expect(fundingRateFieldAvailable({ dataType: "kline_resample", frequency: "1h", routes: [swap] })).toBe(false);
+  });
+
+  it("keeps the selection while editing before tags are loaded", () => {
+    expect(shouldDropFundingRate(false, true, 0)).toBe(false);
+    expect(shouldDropFundingRate(false, true, 1)).toBe(true);
+    expect(shouldDropFundingRate(false, false, 0)).toBe(true);
+    expect(shouldDropFundingRate(true, true, 1)).toBe(false);
+    expect(shouldDropFundingRate(true, false, 0)).toBe(false);
+  });
+
+  it("prunes a selection loaded while the drop condition already holds", () => {
+    // 新建初始态判断值已是“去掉”，再打开一个标签已读到、条件不满足的任务：判断值没变，按已选字段的变化也要清理。
+    const dropped = shouldDropFundingRate(false, true, 1);
+    expect(pruneFundingRate(["close", "funding_rate"], dropped)).toEqual(["close"]);
+    const kept = ["close", "funding_rate"];
+    expect(pruneFundingRate(kept, false)).toBe(kept);
+    const plain = ["close"];
+    expect(pruneFundingRate(plain, true)).toBe(plain);
   });
 });

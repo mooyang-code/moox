@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/tagattr"
 	"sort"
 	"strconv"
@@ -1060,6 +1061,13 @@ func (m *Manager) ensureColumns(ctx context.Context, spaceID, datasetID, viewID 
 			}{"amount_quality", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING},
 		)
 	}
+	if len(outputFields) > 0 && kind != storagepb.DataKind_DATA_KIND_RECORD {
+		// 资金费率只在显式选中时建列；输出字段为空（默认字段）时不建。
+		fields = append(fields, struct {
+			name string
+			kind storagepb.FieldValueType
+		}{domain.FieldFundingRate, storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE})
+	}
 	if len(outputFields) > 0 {
 		selected := make(map[string]struct{}, len(outputFields))
 		for _, name := range outputFields {
@@ -1089,7 +1097,12 @@ func (m *Manager) ensureColumns(ctx context.Context, spaceID, datasetID, viewID 
 		fields = filtered
 	}
 	for _, field := range fields {
-		resp, err := m.metadata.UpsertDatasetColumn(ctx, &storagepb.UpsertDatasetColumnReq{AuthInfo: m.auth, Column: &storagepb.DatasetColumn{SpaceId: spaceID, DatasetId: datasetID, ColumnName: field.name, OriginType: storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD, OriginId: field.name, ValueType: field.kind, Required: true, Status: "active", Attributes: map[string]string{"display_name": resultColumnDisplayName(field.name)}}})
+		attributes := map[string]string{"display_name": resultColumnDisplayName(field.name)}
+		if field.name == domain.FieldFundingRate {
+			// 没有结算的根写的是 0；因子引擎读列时没有 fill 属性就沿用上一根，会重复计费。
+			attributes["fill"] = "zero"
+		}
+		resp, err := m.metadata.UpsertDatasetColumn(ctx, &storagepb.UpsertDatasetColumnReq{AuthInfo: m.auth, Column: &storagepb.DatasetColumn{SpaceId: spaceID, DatasetId: datasetID, ColumnName: field.name, OriginType: storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD, OriginId: field.name, ValueType: field.kind, Required: true, Status: "active", Attributes: attributes}})
 		if err != nil || resp == nil || resp.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
 			return metadataError("create result dataset column", err, retInfoDatasetColumn(resp))
 		}
@@ -1155,7 +1168,7 @@ func resultViewColumns(spaceID string, ids IDs, outputFields []string) ([]*stora
 
 func resultViewColumnType(name string) (storagepb.FieldValueType, bool) {
 	switch name {
-	case "open", "high", "low", "close", "volume", "quote_volume", "amount":
+	case "open", "high", "low", "close", "volume", "quote_volume", "amount", domain.FieldFundingRate:
 		return storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, true
 	case "trade_num", "route_rank":
 		return storagepb.FieldValueType_FIELD_VALUE_TYPE_INT, true
@@ -1170,7 +1183,7 @@ func resultViewColumnType(name string) (storagepb.FieldValueType, bool) {
 
 func resultColumnDisplayName(name string) string {
 	names := map[string]string{
-		"open": "开盘", "high": "最高", "low": "最低", "close": "收盘", "volume": "成交量", "quote_volume": "成交额", "trade_num": "成交笔数", "amount": "成交额", "instrument_name": "标的名称", "provider_id": "数据提供方", "source_id": "来源", "provider_symbol": "原始标的", "volume_unit": "量单位", "amount_unit": "额单位", "trade_date": "交易日期", "close_time": "收盘时间", "provider_timestamp": "源时间", "fetched_at": "采集时间", "request_id": "请求标识", "route_id": "路由", "route_rank": "路由序号", "source_provider": "源提供方", "quality_status": "质量状态", "amount_quality": "金额质量",
+		"open": "开盘", "high": "最高", "low": "最低", "close": "收盘", "volume": "成交量", "quote_volume": "成交额", "trade_num": "成交笔数", "amount": "成交额", "instrument_name": "标的名称", "provider_id": "数据提供方", "source_id": "来源", "provider_symbol": "原始标的", "volume_unit": "量单位", "amount_unit": "额单位", "trade_date": "交易日期", "close_time": "收盘时间", "provider_timestamp": "源时间", "fetched_at": "采集时间", "request_id": "请求标识", "route_id": "路由", "route_rank": "路由序号", "source_provider": "源提供方", "quality_status": "质量状态", "amount_quality": "金额质量", domain.FieldFundingRate: "资金费率",
 	}
 	if displayName := names[name]; displayName != "" {
 		return displayName

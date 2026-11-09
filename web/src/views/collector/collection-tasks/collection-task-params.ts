@@ -32,6 +32,47 @@ export const KLINE_OUTPUT_FIELD_IDS: ReadonlySet<string> = new Set([
   "amount_quality"
 ]);
 
+/** 资金费率：行情源的可选能力，只在显式选中时采集，条件满足时才在输出字段里显示。 */
+export const FUNDING_RATE_FIELD_ID = "funding_rate";
+// 具备资金费率能力的行情源（与后端行情源目录一致：目前只有币安 U 本位永续）。
+const FUNDING_RATE_SOURCES: ReadonlySet<string> = new Set(["binance"]);
+// 1m～30m 收盘时结算记录可能还没公布；1w、1M 推送不支持。
+const FUNDING_RATE_FREQUENCIES: ReadonlySet<string> = new Set(["1h", "1d"]);
+
+export interface FundingRateCondition {
+  dataType: string;
+  frequency: string;
+  routes: ReadonlyArray<{ source: string; market: string }>;
+}
+
+/** 资金费率是否可选：K 线采集、频率 1h 或 1d、所选标签全部是具备这项能力的行情源的永续（统一数据集不行）。 */
+export function fundingRateFieldAvailable(condition: FundingRateCondition): boolean {
+  if (condition.dataType !== "kline") return false;
+  if (!FUNDING_RATE_FREQUENCIES.has(normalizeFrequency(condition.frequency || ""))) return false;
+  if (!condition.routes.length) return false;
+  return condition.routes.every(
+    route => route.market === "swap" && FUNDING_RATE_SOURCES.has((route.source || "").trim().toLowerCase())
+  );
+}
+
+/**
+ * 是否该去掉已选的资金费率：条件不满足时去掉；但编辑已有任务时标签为空（还没读到或读取失败）不能判断条件，保留。
+ * 提交前的过滤与条件变化时的清理用同一个判断。
+ */
+export function shouldDropFundingRate(available: boolean, editing: boolean, routeCount: number): boolean {
+  if (available) return false;
+  return !(editing && routeCount === 0);
+}
+
+/**
+ * 按 shouldDropFundingRate 的结果清理已选字段：需要去掉且确实选了时返回新数组，否则原样返回同一个数组
+ * （调用方据此判断要不要赋值，避免监听已选字段时反复触发）。
+ */
+export function pruneFundingRate(fields: string[], dropped: boolean): string[] {
+  if (!dropped || !fields.includes(FUNDING_RATE_FIELD_ID)) return fields;
+  return fields.filter(id => id !== FUNDING_RATE_FIELD_ID);
+}
+
 export type CollectionTaskMarket = "spot" | "swap" | "equity" | "multi";
 
 export interface CollectionTaskInput {
