@@ -699,12 +699,21 @@ func evaluateBar(ctx context.Context, program *dsl.Program, resolved input.Resol
 			return skippedDecision(state, input.SkipAmbiguousSeries, marketDetail(reader.market, multi, detail)), nil
 		}
 	}
+	// 每个市场列出的标的取它的全部标的绑定（与实时的市场基础集合一致：本根没有行也算列出），探针候选也按它收窄。
+	listed := make(input.AgeListed, len(readers))
+	for _, reader := range readers {
+		ids := make(map[string]struct{}, len(reader.subjects))
+		for _, subject := range reader.subjects {
+			ids[subject.SubjectID] = struct{}{}
+		}
+		listed[reader.market] = ids
+	}
 	probe := func(ctx context.Context, n int, ids []string) (map[string]map[string]struct{}, error) {
 		passed := make(map[string]map[string]struct{}, len(readers))
 		for _, reader := range readers {
 			inMarket := make([]string, 0, len(ids))
 			for _, id := range ids {
-				if _, ok := present[reader.market][id]; ok {
+				if _, ok := listed[reader.market][id]; ok {
 					inMarket = append(inMarket, id)
 				}
 			}
@@ -716,8 +725,8 @@ func evaluateBar(ctx context.Context, program *dsl.Program, resolved input.Resol
 		}
 		return passed, nil
 	}
-	// 回放里每个市场本期有行的标的就是它列出的标的；回放没有市场整体不可用的情形。
-	allPassed, err := sets.ApplyAge(ctx, resolved, input.AgeListed(present), probe)
+	// 回放没有市场整体不可用的情形：每个市场都判定过。
+	allPassed, err := sets.ApplyAge(ctx, resolved, listed, probe)
 	if err != nil {
 		var skip *input.SkipError
 		if errors.As(err, &skip) {
@@ -846,35 +855,63 @@ func (r *Runner) writeBar(ctx context.Context, replayID string, barEnd time.Time
 	})
 }
 
-// agePresence 为一段 bar 读取年龄判定所需的窗口 [首根 − (N最大+1), 末根 − (N最小−1)]（只读 close），N 取策略里全部需要判定的根数；
-// 每段重新构造，内存只与段长和标的数有关，不随年龄根数或回放长度增长；已通过判定的标的集合（按 N 分开）由各段共用。
+// ageWindow 是一段年龄判定要读的历史区间 [From, To)（bar_start）。
+type ageWindow struct{ From, To time.Time }
+
+// ageWindows 返回一段 bar 年龄判定要读的区间：每个需要判定的 N 各一个窄窗口 [首根 − (N+1), 末根 − (N−1)]，重叠或相接的合并。
+// 不能取 [首根 − (N最大+1), 末根 − (N最小−1)] 一整段：N 相差很大时（例如 24 与 8760）中间几千根都用不到，却全部读进内存。
+func ageWindows(resolved input.Resolved, segment []input.PeriodBoundaries) ([]ageWindow, error) {
+	var windows []ageWindow
+	for _, n := range resolved.AgeLevels() {
+		from, err := input.HistoryStart(resolved.Calendar, resolved.Bar, segment[0].StorageStart, n+2)
+		if errors.Is(err, marketcalendar.ErrNoPreviousTradingDay) {
+			// A 股内嵌日历起点附近没有目标根之前的两根容忍窗口，从目标根读起。
+			from, err = input.HistoryStart(resolved.Calendar, resolved.Bar, segment[0].StorageStart, n)
+		}
+		if err != nil {
+			return nil, err
+		}
+		to, err := input.HistoryStart(resolved.Calendar, resolved.Bar, segment[len(segment)-1].StorageStart, n)
+		if err != nil {
+			return nil, err
+		}
+		windows = append(windows, ageWindow{From: from, To: to.Add(time.Nanosecond)})
+	}
+	sort.Slice(windows, func(i, j int) bool { return windows[i].From.Before(windows[j].From) })
+	merged := make([]ageWindow, 0, len(windows))
+	for _, window := range windows {
+		if last := len(merged) - 1; last >= 0 && !window.From.After(merged[last].To) {
+			if window.To.After(merged[last].To) {
+				merged[last].To = window.To
+			}
+			continue
+		}
+		merged = append(merged, window)
+	}
+	return merged, nil
+}
+
+// agePresence 为一段 bar 读取年龄判定所需的历史（只读 close，区间见 ageWindows）；每段重新构造，内存只与段长、标的数和 N 的个数有关，
+// 不随年龄根数或回放长度增长；已通过判定的标的集合（按 N 分开）由各段共用。
 func agePresence(ctx context.Context, history *input.RangeLoader, resolved input.Resolved, segment []input.PeriodBoundaries, passed map[int]map[string]struct{}) (*presence, error) {
 	result := newPresence()
 	if passed != nil {
 		result.passed = passed
 	}
-	levels := resolved.AgeLevels()
-	if len(levels) == 0 {
+	if len(resolved.AgeLevels()) == 0 {
 		return result, nil
 	}
-	shortest, longest := levels[0], levels[len(levels)-1]
-	from, err := input.HistoryStart(resolved.Calendar, resolved.Bar, segment[0].StorageStart, longest+2)
-	if errors.Is(err, marketcalendar.ErrNoPreviousTradingDay) {
-		// A 股内嵌日历起点附近没有目标根之前的两根容忍窗口，从目标根读起。
-		from, err = input.HistoryStart(resolved.Calendar, resolved.Bar, segment[0].StorageStart, longest)
-	}
+	windows, err := ageWindows(resolved, segment)
 	if err != nil {
 		return nil, err
 	}
-	to, err := input.HistoryStart(resolved.Calendar, resolved.Bar, segment[len(segment)-1].StorageStart, shortest)
-	if err != nil {
-		return nil, err
+	for _, window := range windows {
+		rows, err := history.Load(ctx, window.From, window.To)
+		if err != nil {
+			return nil, fmt.Errorf("读取年龄判定所需的历史：%w", err)
+		}
+		result.add(resolved, rows)
 	}
-	rows, err := history.Load(ctx, from, to.Add(time.Nanosecond))
-	if err != nil {
-		return nil, fmt.Errorf("读取年龄判定所需的历史：%w", err)
-	}
-	result.add(resolved, rows)
 	return result, nil
 }
 

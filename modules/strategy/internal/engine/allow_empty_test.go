@@ -69,3 +69,32 @@ portfolio: {max_missing: 1}
 	assertSkipped(t, decision, SkipUniverseTooSmall)
 	require.Equal(t, "min_age_bars", findItem(t, decision, "main", "A").Reason)
 }
+
+// allow_empty 规则的分数对全部候选都无效（例如只有 1 个候选时 n/(n-1) 除零）：只清空这条规则，预算留现金，不整期 config_error；
+// hold 规则同样。没写 allow_empty 的规则仍整期跳过。
+func TestAllowEmptyInvalidScoresOnlyEmptiesRule(t *testing.T) {
+	for _, extra := range []string{"", "\n    hold: {}"} {
+		program := compile(t, `name: e
+rules:
+  - id: main
+    type: rank
+    score: "m"
+    select: {top: 1}
+    weight: 0.5
+  - id: fresh
+    type: rank
+    score: "m / (n - 1)"
+    select: {top: 1}
+    weight: 0.5
+    allow_empty: true`+extra+`
+portfolio: {max_missing: 1}
+`, "m", "n")
+		decision := evaluate(t, program, frameOf(program, map[string]Row{"A": values("m", 2, "n", 1)}), State{})
+		assertOK(t, decision)
+		assertWeights(t, decision, map[string]string{"A": "0.5"})
+		require.Equal(t, StageDropped, findItem(t, decision, "fresh", "A").Stage)
+		assertDecimal(t, "cash", decision.Summary.Cash, "0.5")
+	}
+	strict := compile(t, "name: s\nrules:\n  - {id: r, type: rank, score: \"m / (n - 1)\", select: {top: 1}, weight: 1}\nportfolio: {max_missing: 1}\n", "m", "n")
+	assertSkipped(t, evaluate(t, strict, frameOf(strict, map[string]Row{"A": values("m", 2, "n", 1)}), State{}), SkipConfigError)
+}

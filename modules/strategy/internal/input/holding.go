@@ -3,6 +3,7 @@ package input
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/strategy/internal/dsl"
@@ -208,12 +209,35 @@ func CheckHoldingAnchors(calendarID, frequency string, strategy dsl.Strategy) er
 			return fmt.Errorf("规则 %s：%w", rule.ID, err)
 		}
 		if holding.IsCalendar() {
+			if err := checkCalendarDays(axis, holding); err != nil {
+				return fmt.Errorf("规则 %s 的 %w", rule.ID, err)
+			}
 			_, err = anchorDay(calendarID, frequency, axis, holding.Anchor)
 		} else {
 			_, err = anchorBar(calendarID, frequency, axis, holding.Anchor)
 		}
 		if err != nil {
 			return fmt.Errorf("规则 %s 的 holding.anchor %w", rule.ID, err)
+		}
+	}
+	return nil
+}
+
+// checkCalendarDays 按交易日历检查 holding.days：A 股一周最多 5 个交易日，一个月最多的交易日数从内嵌日历推出；
+// 日历上不存在的序号会让批次永远不重建，启用时就拒绝。加密每天都是交易日，保存时的 ±7、±31 已经够了。
+func checkCalendarDays(axis dayAxis, holding *dsl.Holding) error {
+	stock, ok := axis.(stockAxis)
+	if !ok || holding.Calendar == dsl.CalendarTradingDays {
+		return nil
+	}
+	period, name := marketcalendar.PeriodWeek, "周"
+	if holding.Calendar == dsl.CalendarMonth {
+		period, name = marketcalendar.PeriodMonth, "月"
+	}
+	limit := stock.calendar.MaxPeriodTradingDays(period)
+	for _, day := range holding.Days {
+		if day > limit || -day > limit {
+			return fmt.Errorf("holding.days 的 %d 在 A 股交易日历上不存在：一%s最多 %d 个交易日，这个批次永远不会重建", day, name, limit)
 		}
 	}
 	return nil
@@ -286,6 +310,7 @@ func scheduledBars(calendarID, frequency string, axis dayAxis, holding *dsl.Hold
 		pending[day] = struct{}{}
 	}
 	date, index := today, todayIndex
+	reachedStart := false
 	for step := 0; step < maxCalendarScan && len(pending) > 0; step++ {
 		position, total, err := axis.position(date, period)
 		if err != nil {
@@ -302,8 +327,18 @@ func scheduledBars(calendarID, frequency string, axis dayAxis, holding *dsl.Hold
 		if date, index, ok, err = axis.previous(date, index); err != nil {
 			return nil, err
 		} else if !ok {
+			reachedStart = true
 			break
 		}
+	}
+	// 回看到日历起点之前还没找到属于还没有过建仓日；回看满 maxCalendarScan 个交易日仍找不到说明这个序号在日历上不存在，不能静默。
+	if len(pending) > 0 && !reachedStart {
+		days := make([]int, 0, len(pending))
+		for day := range pending {
+			days = append(days, day)
+		}
+		sort.Ints(days)
+		return nil, fmt.Errorf("holding.days 的 %v 在之前 %d 个交易日里找不到对应的建仓日：日历上不存在这个序号", days, maxCalendarScan)
 	}
 	return scheduled, nil
 }

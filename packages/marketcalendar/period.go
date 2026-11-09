@@ -56,3 +56,20 @@ func (c TradingCalendar) PeriodPosition(date CivilDate, period Period) (position
 	}
 	return index - first + 1, last - first + 1, nil
 }
+
+// MaxPeriodTradingDays 返回日历覆盖范围内单个自然周（或自然月）最多的交易日数。
+func (c TradingCalendar) MaxPeriodTradingDays(period Period) int {
+	if c.data == nil {
+		return 0
+	}
+	most, count := 0, 0
+	for i, day := range c.data.tradingDays {
+		if i > 0 && samePeriod(c.data.tradingDays[i-1], day, period) {
+			count++
+		} else {
+			count = 1
+		}
+		most = max(most, count)
+	}
+	return most
+}

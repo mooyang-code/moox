@@ -92,6 +92,7 @@ func evaluateHold(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous R
 	scored := evaluateNumeric(rule.Score, passed, frame.Rows)
 	live := without(passed, scored.failed)
 	// 本根要补位时，未持有的候选分数全部无效说明表达式本身有问题；持有标的只缺分数不出场，不参与这项检查。
+	// allow_empty 的规则不参与整期守门，这时只是不补位。
 	if decide {
 		candidates, valid := 0, 0
 		for _, id := range passed {
@@ -103,7 +104,7 @@ func evaluateHold(rule *dsl.CompiledRule, frame Frame, sets ruleSets, previous R
 				valid++
 			}
 		}
-		if candidates > 0 && valid == 0 {
+		if candidates > 0 && valid == 0 && !rule.Rule.AllowEmpty {
 			return ruleResult{}, fmt.Errorf("score 对全部 %d 个通过 filter 的候选都无效", candidates)
 		}
 	}

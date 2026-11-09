@@ -236,7 +236,7 @@ func TestLoadBarPinsProbeRevisionAndChecksCoverage(t *testing.T) {
 	client.queries = nil
 	_, err = Loader{Client: client}.LoadBar(context.Background(), "space", resolved, program, Bar{BarStart: barStart})
 	var skip *SkipError
-	if !errors.As(err, &skip) || skip.Reason != SkipHistoryInsufficient || !strings.Contains(skip.Detail, "min_age_bars=24") {
+	if !errors.As(err, &skip) || skip.Reason != SkipHistoryInsufficient || !strings.Contains(skip.Detail, "年龄判定 24 根") {
 		t.Fatalf("View 覆盖不足应记为 history_insufficient：%v", err)
 	}
 }

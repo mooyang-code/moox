@@ -194,10 +194,10 @@ func NewAgeProbe(client Client, spaceID string, resolved Resolved, n int, view V
 		from, to, err := AgeWindow(resolved.Calendar, resolved.Bar, barStart, n)
 		if err != nil {
 			// 日历换算是确定性的（数据不变、重试结果不变）：记 config_error，而不是按基础设施错误重试到预算耗尽。
-			return nil, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("min_age_bars=%d 的探针窗口无法换算：%v", n, err)}
+			return nil, &SkipError{Reason: SkipConfigError, Detail: fmt.Sprintf("年龄判定 %d 根的探针窗口无法换算：%v", n, err)}
 		}
 		if target, start := to.Add(-time.Nanosecond), CoverageStartAt(view, resolved, barStart); !start.IsZero() && target.Before(start) {
-			return nil, &SkipError{Reason: SkipHistoryInsufficient, Detail: fmt.Sprintf("min_age_bars=%d 需要 %s 的数据，但 View %s 的活跃序列当前最早只覆盖到 %s", n, PeriodLabel(resolved.Calendar, resolved.Bar, target), view.ViewID, PeriodLabel(resolved.Calendar, resolved.Bar, start))}
+			return nil, &SkipError{Reason: SkipHistoryInsufficient, Detail: fmt.Sprintf("年龄判定 %d 根需要 %s 的数据，但 View %s 的活跃序列当前最早只覆盖到 %s", n, PeriodLabel(resolved.Calendar, resolved.Bar, target), view.ViewID, PeriodLabel(resolved.Calendar, resolved.Bar, start))}
 		}
 		// 已证明年龄足够的标的直接放行，只探针其余的；全部已知时不发查询。
 		cacheKey := AgeKey{SpaceID: spaceID, ViewID: view.ViewID, IndexID: view.ActiveIndexID, MinAgeBars: n, Market: market}
@@ -265,7 +265,7 @@ func NewAgeProbe(client Client, spaceID string, resolved Resolved, n int, view V
 				present = rowsOfMarket(present, market)
 			}
 			if len(present) == 0 {
-				return nil, &SkipError{Reason: SkipHistoryInsufficient, Detail: fmt.Sprintf("min_age_bars=%d 的探针窗口 %s 至 %s 内整个数据集都没有数据（历史缺口），无法判断上市时间", n, PeriodLabel(resolved.Calendar, resolved.Bar, from), PeriodLabel(resolved.Calendar, resolved.Bar, to.Add(-time.Nanosecond)))}
+				return nil, &SkipError{Reason: SkipHistoryInsufficient, Detail: fmt.Sprintf("年龄判定 %d 根的探针窗口 %s 至 %s 内整个数据集都没有数据（历史缺口），无法判断上市时间", n, PeriodLabel(resolved.Calendar, resolved.Bar, from), PeriodLabel(resolved.Calendar, resolved.Bar, to.Add(-time.Nanosecond)))}
 			}
 		}
 		return satisfied, nil

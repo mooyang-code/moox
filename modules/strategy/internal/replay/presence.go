@@ -91,7 +91,7 @@ func (p *presence) probe(n int, bar input.PeriodBoundaries) input.AgeProbe {
 		}
 		// 与实时一致：已证明年龄的标的放行；其余全部不满足且窗口内整个数据集没有数据时，才是历史缺口。
 		if len(instruments) > 0 && len(satisfied) == 0 && !anyRows {
-			return nil, &input.SkipError{Reason: input.SkipHistoryInsufficient, Detail: fmt.Sprintf("min_age_bars=%d 的探针窗口内整个数据集都没有数据（历史缺口），无法判断上市时间", n)}
+			return nil, &input.SkipError{Reason: input.SkipHistoryInsufficient, Detail: fmt.Sprintf("年龄判定 %d 根的探针窗口内整个数据集都没有数据（历史缺口），无法判断上市时间", n)}
 		}
 		return satisfied, nil
 	}

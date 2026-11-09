@@ -155,3 +155,19 @@ func TestHoldingAnchorBar(t *testing.T) {
 	holiday := holdingStrategy(t, `{bars: 5, offsets: [0], anchor: "2025-10-01"}`)
 	require.Error(t, CheckHoldingAnchors("cn_stock", "1d", holiday))
 }
+
+// A 股日历上不存在的序号启用即拒绝：一周最多 5 个交易日，一个月最多的交易日数从日历推出；加密的周 7、月 31 照常。
+// 每根计算时扫不到建仓日时明确报错。
+func TestHoldingCalendarDaysCheckedAgainstCalendar(t *testing.T) {
+	for _, body := range []string{"{calendar: week, days: [6]}", "{calendar: week, days: [-6]}", "{calendar: month, days: [24]}"} {
+		err := CheckHoldingAnchors("cn_stock", "1d", holdingStrategy(t, body))
+		require.Error(t, err, body)
+		require.Contains(t, err.Error(), "在 A 股交易日历上不存在")
+	}
+	require.NoError(t, CheckHoldingAnchors("cn_stock", "1d", holdingStrategy(t, "{calendar: week, days: [5, -5]}")))
+	require.NoError(t, CheckHoldingAnchors(DefaultCalendar, "1h", holdingStrategy(t, "{calendar: week, days: [7]}")))
+	require.NoError(t, CheckHoldingAnchors(DefaultCalendar, "1h", holdingStrategy(t, "{calendar: month, days: [31]}")))
+	_, err := HoldingClocks("cn_stock", "1d", holdingStrategy(t, "{calendar: week, days: [6]}"), barAt(t, "cn_stock", "1d", "2025-10-09T16:00:00Z"))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "找不到对应的建仓日")
+}
