@@ -120,7 +120,7 @@ func applyThen(rule *dsl.CompiledRule, chosen []string, rows map[string]Row) (fi
 		rejected[id] = reasonThen + ":" + reason
 	}
 	ordered := orderByRank(without(chosen, scored.failed), scored.values, then.Bottom > 0)
-	count := then.Count()
+	count := then.Count(len(ordered))
 	if count < len(ordered) {
 		for _, id := range ordered[count:] {
 			rejected[id] = reasonThen

@@ -287,10 +287,14 @@ func validateRankRule(prefix string, rule *Rule, sources map[string]struct{}) er
 	// 运行时分不完的预算按 cap 语义留现金。
 	slots, fixed := sel.FixedCount()
 	if sel.Then != nil {
-		if !fixed || sel.Then.Count() < slots {
-			slots = sel.Then.Count()
+		if thenCount, thenFixed := sel.Then.FixedCount(); !thenFixed {
+			fixed = false
+		} else {
+			if !fixed || thenCount < slots {
+				slots = thenCount
+			}
+			fixed = true
 		}
-		fixed = true
 	}
 	if fixed && rule.Weight.HasCap && rule.Weight.Cap.Mul(quant.Must(fmt.Sprint(slots))).Cmp(rule.Weight.Total) < 0 {
 		return fmt.Errorf("%s 的 weight.cap 乘以最多可持有的标的数小于 weight.total，预算永远分不完", prefix)

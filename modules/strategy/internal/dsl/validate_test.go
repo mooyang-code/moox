@@ -295,6 +295,10 @@ func TestValidateSelectOptions(t *testing.T) {
 		"then top 与 bottom 同写": {rankRule("select: {top: 3, then: {score: close, top: 1, bottom: 1}}, weight: 1"), "top 或 bottom 之一"},
 		"then 用 score 标识符":     {rankRule("select: {top: 3, then: {score: \"score\", top: 1}}, weight: 1"), "score 只能"},
 		"then 个数按 cap 检查":      {rankRule("select: {top: 3, then: {score: close, top: 2}}, weight: {total: 1, cap: 0.4}"), "分不完"},
+		"then 比例大于 1":          {rankRule("select: {top: 3, then: {score: close, top: 1.5}}, weight: 1"), "正整数或 0～1"},
+		"then 整数配 count_round": {rankRule("select: {top: 3, then: {score: close, top: 1, count_round: ceil}}, weight: 1"), "只能在 top/bottom 写成比例时使用"},
+		"then count_round 非法":  {rankRule("select: {top: 3, then: {score: close, top: 0.5, count_round: up}}, weight: 1"), "count_round 只能是"},
+		"then count_min 为负":    {rankRule("select: {top: 3, then: {score: close, top: 0.5, count_min: -1}}, weight: 1"), "count_min 必须在"},
 	})
 }
 
@@ -321,7 +325,7 @@ rules:
 	if !sel.IsRatio() || sel.Count(25) != 3 || sel.Count(5) != 2 {
 		t.Fatalf("比例换算不对：%+v", sel)
 	}
-	if count, fixed := strategy.Rules[1].Select.FixedCount(); !fixed || count != 4 || strategy.Rules[1].Select.Then.Count() != 3 {
+	if count, fixed := strategy.Rules[1].Select.FixedCount(); !fixed || count != 4 || strategy.Rules[1].Select.Then.Count(0) != 3 {
 		t.Fatalf("range 的个数应为 4：%d %v", count, fixed)
 	}
 	columns, err := ReferencedColumns(strategy)
@@ -337,6 +341,24 @@ rules:
 	}
 	if _, err := Compile(boolean, []string{"close"}); err == nil || !strings.Contains(err.Error(), "select.then.score") {
 		t.Fatalf("then.score 返回布尔时编译应报错：%v", err)
+	}
+}
+
+// then 的 top、bottom 可以写比例：个数按第一段选中个数换算，保存时不做 cap 检查（个数要到运行时才知道）。
+func TestValidateSelectThenRatio(t *testing.T) {
+	t.Parallel()
+	strategy, err := Parse([]byte(rankRule(`select: {top: 6, then: {score: close, top: 0.5, count_round: ceil, count_min: 2}}, weight: {total: 1, cap: 0.1}`)))
+	if err != nil {
+		t.Fatalf("Parse() = %v", err)
+	}
+	then := strategy.Rules[0].Select.Then
+	if count, fixed := then.FixedCount(); fixed || count != 0 {
+		t.Fatalf("比例写法不应有固定个数：%d %v", count, fixed)
+	}
+	for sample, want := range map[int]int{6: 3, 5: 3, 1: 2, 0: 2} {
+		if got := then.Count(sample); got != want {
+			t.Fatalf("Count(%d) = %d，应为 %d", sample, got, want)
+		}
 	}
 }
 
