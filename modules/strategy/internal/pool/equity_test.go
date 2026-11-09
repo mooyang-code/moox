@@ -15,7 +15,7 @@ func TestEquityMemberKeepsSuspendedHolding(t *testing.T) {
 		t.Fatal(err)
 	}
 	run := func(mode dsl.Market, key string) (engine.State, float64) {
-		cfg, err := NewConfig(strategy, mode, nil)
+		cfg, err := NewConfig(strategy, mode, nil, engine.PoolClock{})
 		if err != nil {
 			t.Fatal(err)
 		}

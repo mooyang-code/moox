@@ -157,6 +157,12 @@ type harness struct {
 // newHarness 搭一个已启用的池实例（会话带成员快照、预热结果为空）。
 func newHarness(t *testing.T) *harness {
 	t.Helper()
+	return newPoolHarness(t, poolYaml, "a")
+}
+
+// newPoolHarness 按池的 DSL 搭一个已启用的池实例，成员都引用 memberDSL。
+func newPoolHarness(t *testing.T, poolYaml string, memberIDs ...string) *harness {
+	t.Helper()
 	repo, err := store.Open(filepath.Join(t.TempDir(), "strategy.sqlite"))
 	if err != nil {
 		t.Fatal(err)
@@ -175,7 +181,11 @@ func newHarness(t *testing.T) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pooled, err := input.ResolvePool(ctx, h.client, "crypto", []string{"ftask_a"}, strategy, []input.PoolMemberDef{{ID: "a", StrategyID: "s_a", DSLYaml: memberDSL, DSLHash: dsl.Hash([]byte(memberDSL)), Strategy: member}})
+	defs := make([]input.PoolMemberDef, 0, len(memberIDs))
+	for _, id := range memberIDs {
+		defs = append(defs, input.PoolMemberDef{ID: id, StrategyID: "s_" + id, DSLYaml: memberDSL, DSLHash: dsl.Hash([]byte(memberDSL)), Strategy: member})
+	}
+	pooled, err := input.ResolvePool(ctx, h.client, "crypto", []string{"ftask_a"}, strategy, defs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -396,7 +406,13 @@ rules:
 // 预热终点之后的第一期走真实的实时路径（处理器 + 输入装配 + 就绪判断）：它的分配比例、成员净值、目标与池状态，
 // 与从同一起点用历史推进一路算到这一期逐位一致。
 func TestFirstLivePeriodAfterWarmUpMatchesOneLongRun(t *testing.T) {
-	h := newHarness(t)
+	checkFirstLiveMatchesLongRun(t, poolYaml, "a")
+}
+
+// checkFirstLiveMatchesLongRun 预热后用实时路径处理第一期，与一路推进的结果逐位比较，返回这一期的决策。
+func checkFirstLiveMatchesLongRun(t *testing.T, poolYaml string, memberIDs ...string) engine.Decision {
+	t.Helper()
+	h := newPoolHarness(t, poolYaml, memberIDs...)
 	h.client.indexedTo = origin.Add(101 * time.Hour) // 索引里最晚一行是第 101 小时的 bar_start（最新一根）
 	warmNow := h.manager.Now()
 	h.manager.Start(context.Background(), "i1", "session-1")
@@ -430,7 +446,11 @@ func TestFirstLivePeriodAfterWarmUpMatchesOneLongRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := pool.NewConfig(strategy, resolved.Market, input.MemberStrategies(members, programs))
+	clock, err := input.PoolClock(resolved.Calendar, resolved.Bar, *strategy.Pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := pool.NewConfig(strategy, resolved.Market, input.MemberStrategies(members, programs), clock)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -476,6 +496,7 @@ func TestFirstLivePeriodAfterWarmUpMatchesOneLongRun(t *testing.T) {
 	if len(want.Targets) == 0 {
 		t.Fatal("测试数据应产生非空目标")
 	}
+	return *want
 }
 
 // Ensure 只在没有任何预热任务时才开始：正在预热、已经失败的都不重来。

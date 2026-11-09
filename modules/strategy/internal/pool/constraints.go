@@ -1,6 +1,7 @@
 package pool
 
 import (
+	"fmt"
 	"math"
 	"strconv"
 
@@ -14,8 +15,9 @@ import (
 //   1. 净敞口区间（exposure）各段按书写顺序执行；
 //   2. 总杠杆区间（gross），池的第一根不放大；
 //   3. 条件转移（switch），第一个成立的生效，把 from 的比例转给同方向的 to。
-// 三步都只作用于本期合成用的比例：写给下一期步长限制的上期比例（State.Ratios）仍是步长之后、这三步之前的值。
+// fixed、rotation 下三步都只作用于本期合成用的比例：写给下一期步长限制的上期比例（State.Ratios）仍是步长之后、这三步之前的值。
 // 1、2 两步在比例的 float64 副本上计算，算完四舍五入到 12 位小数再换回 Decimal；没写 exposure、gross 时不做这次换算。
+// drift 的分配系数本来就是 float64，在漂移与侧内再平衡之后直接执行 1、2 两步（constrainValues），结果写入状态（见 drift.go）。
 
 // constraintTolerance 是区间判断的浮点容差：净敞口超出区间不到它时不修正。
 const constraintTolerance = 1e-12
@@ -33,6 +35,33 @@ func constrain(cfg Config, ids []string, ratios map[string]quant.Decimal, starte
 		}
 		values[id] = value
 	}
+	adjustments := constrainValues(cfg, ids, values, started)
+	out, err := decimalRatios(ids, values)
+	if err != nil {
+		return nil, nil, err
+	}
+	return out, adjustments, nil
+}
+
+// decimalRatios 把 float64 的比例四舍五入到 12 位小数换回 Decimal（组合约束与 drift 合成前都用这一种换算）。
+func decimalRatios(ids []string, values map[string]float64) (map[string]quant.Decimal, error) {
+	out := make(map[string]quant.Decimal, len(ids))
+	for _, id := range ids {
+		value, err := decimalRatio(values[id])
+		if err != nil {
+			return nil, fmt.Errorf("成员 %s 的比例 %v 无法换成定点数：%w", id, values[id], err)
+		}
+		out[id] = value
+	}
+	return out, nil
+}
+
+func decimalRatio(value float64) (quant.Decimal, error) {
+	return quant.Parse(strconv.FormatFloat(value, 'f', 12, 64))
+}
+
+// constrainValues 在比例的 float64 副本 values 上原地执行净敞口区间与总杠杆区间，返回修正明细；started 为假时不放大。
+func constrainValues(cfg Config, ids []string, values map[string]float64, started bool) []engine.PoolAdjustment {
 	exposure := func() (long, short float64) {
 		for _, id := range ids {
 			if cfg.Sides[id] == dsl.SideShort {
@@ -105,15 +134,7 @@ func constrain(cfg Config, ids []string, ratios map[string]quant.Decimal, starte
 			adjustments = append(adjustments, after)
 		}
 	}
-	out := make(map[string]quant.Decimal, len(ids))
-	for _, id := range ids {
-		value, err := quant.Parse(strconv.FormatFloat(values[id], 'f', 12, 64))
-		if err != nil {
-			return nil, nil, err
-		}
-		out[id] = value
-	}
-	return out, adjustments, nil
+	return adjustments
 }
 
 // applySwitch 执行条件转移：第一个条件成立（when.empty 的成员本期有效目标为空）的 switch 把 from 的比例全部转给 to，

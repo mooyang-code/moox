@@ -312,7 +312,14 @@ func (m *Manager) warm(ctx context.Context, instanceID, sessionID string) (done 
 	if err != nil {
 		return false, fmt.Errorf("%w：%v", errPermanent, err)
 	}
-	cfg, err := pool.NewConfig(strategy, resolved.Market, input.MemberStrategies(members, programs))
+	if !strategy.IsPool() {
+		return false, fmt.Errorf("%w：会话的策略不是策略池", errPermanent)
+	}
+	clock, err := input.PoolClock(resolved.Calendar, resolved.Bar, *strategy.Pool)
+	if err != nil {
+		return false, fmt.Errorf("%w：%v", errPermanent, err)
+	}
+	cfg, err := pool.NewConfig(strategy, resolved.Market, input.MemberStrategies(members, programs), clock)
 	if err != nil {
 		return false, fmt.Errorf("%w：%v", errPermanent, err)
 	}
@@ -384,9 +391,13 @@ func WarmBars(resolved input.Resolved, pool dsl.Strategy, members []*dsl.Program
 	return dsl.PoolWarmBars(pool, strategies, input.WarmClock(resolved.Calendar, resolved.Bar))
 }
 
-// Window 返回预热的区间 [start, end)（bar_start）：以 now 之前（再留 grace 宽限）最新已收盘的一期为最后一期，往前共 WarmBars 期（见 input.PoolWarmWindow）。
+// Window 返回预热的区间 [start, end)（bar_start）：以 now 之前（再留 grace 宽限）最新已收盘的一期为最后一期；起点是 drift 的
+// allocation.start，或 allocation.initial.at 往前共 WarmBars 期，都没写时从最后一期往前共 WarmBars 期（见 input.PoolWarmWindow）。
 // 最后一期实际有没有数据由 replay.RunPool 按 View 的覆盖范围截断（View 里还没有的期不推进）。该期的就绪事件在启用之前就已发出，
 // 预热不推进它就没有别的路径会处理它，所以终点包含已闭合的最新一根。
 func Window(resolved input.Resolved, pool dsl.Strategy, members []*dsl.Program, now time.Time, grace time.Duration) (start, end time.Time, err error) {
-	return input.PoolWarmWindow(resolved, WarmBars(resolved, pool, members), now, grace)
+	if !pool.IsPool() {
+		return time.Time{}, time.Time{}, errors.New("不是策略池")
+	}
+	return input.PoolWarmWindow(resolved, *pool.Pool, WarmBars(resolved, pool, members), now, grace)
 }

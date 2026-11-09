@@ -12,7 +12,7 @@ import (
 )
 
 // 策略池（设计 3.5）：一个策略要么写 rules，要么写 strategy_pool，两者互斥。池由若干成员策略组成，
-// 每个成员独立求值并在模拟账本里维护自己的净值，池按固定比例或净值轮动分配资金，再叠加择时与步长限制。
+// 每个成员独立求值并在模拟账本里维护自己的净值，池按固定比例、净值轮动或漂移分配资金（fixed、rotation 可再叠加择时与步长限制）。
 
 const (
 	// AllocationFixed 按 allocation.ratios 的固定比例分配。
@@ -56,6 +56,8 @@ type StrategyPool struct {
 	// Exposure 与 Gross 是净敞口区间与总杠杆区间（见 pool_constraints.go），没写时为空。
 	Exposure *PoolExposure
 	Gross    *PoolGross
+	// Freeze 是波动冻结（只用于 drift，见 pool_drift.go），没写时为空。
+	Freeze *PoolFreeze
 }
 
 // PoolMember 是池的一个成员：引用已有策略定义，启用时固化其 DSL 与版本。
@@ -70,8 +72,12 @@ type PoolAllocation struct {
 	// Ratios 是 fixed 用的固定比例（成员 id → 比例），可以不归一，总敞口受 portfolio.leverage 约束。
 	Ratios   map[string]quant.Decimal
 	Rotation *PoolRotation
-	// Switch 是条件转移（按顺序判断，第一个成立的生效），只用于 fixed。
+	// Switch 是条件转移（按顺序判断，第一个成立的生效），只用于 fixed 与 drift。
 	Switch []PoolSwitch
+	// Sides 是 drift 两侧（键是 long、short）的侧内再平衡；Start 与 Initial 是漂移起点，二选一（见 pool_drift.go）。
+	Sides   map[string]*PoolSide
+	Start   string
+	Initial *PoolInitial
 }
 
 // PoolRotation 是 rotation 的参数：多个因子在成员之间排名，按因子权重加权，取前 Top 名（并列的平分）平分 1。
@@ -120,7 +126,7 @@ func (p StrategyPool) MemberIDs() []string {
 	return ids
 }
 
-// MaxWindow 返回轮动因子与择时里最长的窗口（都没有时为 0）。
+// MaxWindow 返回轮动因子、择时与波动冻结里最长的窗口（都没有时为 0）。
 func (p StrategyPool) MaxWindow() int {
 	longest := 0
 	if p.Allocation.Rotation != nil {
@@ -130,6 +136,9 @@ func (p StrategyPool) MaxWindow() int {
 	}
 	if p.Timing != nil {
 		longest = max(longest, p.Timing.Window)
+	}
+	if p.Freeze != nil {
+		longest = max(longest, p.Freeze.WindowBars)
 	}
 	return longest
 }
@@ -235,6 +244,8 @@ func decodeStrategyPool(node *yaml.Node) (*StrategyPool, error) {
 			pool.Exposure, err = decodePoolExposure(f.value, path)
 		case "gross":
 			pool.Gross, err = decodePoolGross(f.value, path)
+		case "freeze":
+			pool.Freeze, err = decodePoolFreeze(f.value, path)
 		default:
 			return nil, fmt.Errorf("strategy_pool 包含未知字段 %q", f.key)
 		}
@@ -292,6 +303,12 @@ func decodePoolAllocation(node *yaml.Node, path string) (PoolAllocation, error) 
 			allocation.Rotation, err = decodePoolRotation(f.value, fieldPath)
 		case "switch":
 			allocation.Switch, err = decodePoolSwitch(f.value, fieldPath)
+		case "sides":
+			allocation.Sides, err = decodePoolSides(f.value, fieldPath)
+		case "start":
+			allocation.Start, err = scalarRequiredText(f.value, fieldPath)
+		case "initial":
+			allocation.Initial, err = decodePoolInitial(f.value, fieldPath)
 		default:
 			return PoolAllocation{}, fmt.Errorf("%s 包含未知字段 %q", path, f.key)
 		}
@@ -472,6 +489,9 @@ func validatePool(s *Strategy) error {
 	if err := validatePoolAllocation(pool, ids); err != nil {
 		return err
 	}
+	if err := validatePoolDrift(pool, ids); err != nil {
+		return err
+	}
 	if pool.Timing != nil && (pool.Timing.Window < 1 || pool.Timing.Window > MaxPoolWindow) {
 		return fmt.Errorf("strategy_pool.timing.window 必须在 1 到 %d 之间", MaxPoolWindow)
 	}
@@ -496,42 +516,24 @@ func validatePool(s *Strategy) error {
 func validatePoolAllocation(pool *StrategyPool, ids map[string]struct{}) error {
 	allocation := &pool.Allocation
 	switch allocation.Method {
-	case AllocationFixed:
+	case AllocationFixed, AllocationDrift:
 		if allocation.Rotation != nil {
-			return errors.New("strategy_pool.allocation.method 是 fixed，不能写 rotation")
+			return fmt.Errorf("strategy_pool.allocation.method 是 %s，不能写 rotation", allocation.Method)
 		}
 		if len(allocation.Ratios) == 0 {
-			return errors.New("strategy_pool.allocation.method 是 fixed，需要写 ratios（成员 id → 比例）")
+			return fmt.Errorf("strategy_pool.allocation.method 是 %s，需要写 ratios（成员 id → 比例）", allocation.Method)
 		}
-		names := make([]string, 0, len(allocation.Ratios))
-		for id := range allocation.Ratios {
-			names = append(names, id)
-		}
-		sort.Strings(names)
-		for _, id := range names {
-			if _, ok := ids[id]; !ok {
-				return fmt.Errorf("allocation.ratios 里的 %q 不是池的成员", id)
-			}
-			if ratio := allocation.Ratios[id]; ratio.IsNegative() || ratio.Cmp(MaxLeverage) > 0 {
-				return fmt.Errorf("allocation.ratios.%s 必须在 0 到 %s 之间", id, MaxLeverage.String())
-			}
-		}
-		for _, member := range pool.Members {
-			if _, ok := allocation.Ratios[member.ID]; !ok {
-				return fmt.Errorf("allocation.ratios 缺少成员 %s 的比例（不分配请写 0）", member.ID)
-			}
-		}
+		return validatePoolRatios("allocation.ratios", allocation.Ratios, pool, ids)
 	case AllocationRotation:
 		if len(allocation.Ratios) > 0 {
 			return errors.New("strategy_pool.allocation.method 是 rotation，不能写 ratios")
 		}
 		return validatePoolRotation(allocation.Rotation, len(pool.Members))
 	case "":
-		return errors.New("strategy_pool.allocation.method 必须写 fixed 或 rotation")
+		return errors.New("strategy_pool.allocation.method 必须写 fixed、rotation 或 drift")
 	default:
-		return fmt.Errorf("strategy_pool.allocation.method %q 不受支持，只能是 fixed 或 rotation", allocation.Method)
+		return fmt.Errorf("strategy_pool.allocation.method %q 不受支持，只能是 fixed、rotation 或 drift", allocation.Method)
 	}
-	return nil
 }
 
 func validatePoolRotation(rotation *PoolRotation, members int) error {

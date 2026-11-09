@@ -9,20 +9,26 @@ import (
 	"github.com/mooyang-code/moox/modules/strategy/internal/quant"
 )
 
-// 资金分配（设计 3.5，每期计算顺序的第 3～5 步）：本期的比例只用到上一期末为止的成员净值序列，
+// 资金分配（设计 3.5，每期计算顺序的第 3 步）：fixed、rotation 本期的比例只用到上一期末为止的成员净值序列，
 // 分配方式给出基础比例 → 乘择时系数 → 按步长限制相对上期比例的变化。模拟爆仓的成员比例一律为 0，不受步长限制。
+// drift 的分配系数按本根的估值漂移，见 drift.go。
 
 // allocation 是一期的分配结果，各映射的键都是成员 id。
 type allocation struct {
 	// base 是分配方式给出的比例；timing 是择时系数，没有择时时为空；before 是乘择时之后、步长之前的比例；ratio 是步长之后的最终比例。
-	base, timing, before, ratio map[string]quant.Decimal
+	// drift 下 base 是目标比例，before、drifted、ratio 是漂移前、漂移后、写入状态的分配系数；drifted 只有 drift 才有。
+	base, timing, before, drifted, ratio map[string]quant.Decimal
 	// rank 是轮动的综合名次分，只有 rotation 且历史足够、参与排名的成员才有。
 	rank map[string]float64
 }
 
+func newAllocation() allocation {
+	return allocation{base: map[string]quant.Decimal{}, before: map[string]quant.Decimal{}, ratio: map[string]quant.Decimal{}, rank: map[string]float64{}}
+}
+
 // allocate 用上一期末为止的净值序列 series、上期比例 previous（没有时为 nil）与模拟爆仓标记算出本期的比例。members 是成员顺序。
 func allocate(spec dsl.StrategyPool, members []string, series map[string][]float64, bankrupt map[string]bool, previous map[string]quant.Decimal) allocation {
-	out := allocation{base: map[string]quant.Decimal{}, before: map[string]quant.Decimal{}, ratio: map[string]quant.Decimal{}, rank: map[string]float64{}}
+	out := newAllocation()
 	switch spec.Allocation.Method {
 	case dsl.AllocationRotation:
 		out.base, out.rank = rotate(spec.Allocation.Rotation, members, series, bankrupt)

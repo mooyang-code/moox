@@ -9,7 +9,7 @@ import (
 )
 
 // 策略池的组合约束：条件转移（allocation.switch）、净敞口区间（exposure）与总杠杆区间（gross）。三者都按成员汇总的分配比例计算，
-// 要求成员是单方向的（规则全部做多或全部做空，见 Strategy.Direction）。
+// 要求成员是单方向的（规则全部做多或全部做空，见 Strategy.Direction）；drift 同样要求。
 
 // 净敞口区间超出时的修正方式。
 const (
@@ -46,10 +46,13 @@ type PoolGross struct {
 	HasMin, HasMax bool
 }
 
-// NeedsSingleSide 报告池写了要求成员单方向的字段（switch、exposure、gross）。
+// NeedsSingleSide 报告池用了要求成员单方向的分配方式或字段（drift、switch、exposure、gross）。
 func (p StrategyPool) NeedsSingleSide() bool {
-	return len(p.Allocation.Switch) > 0 || p.Exposure != nil || p.Gross != nil
+	return p.Allocation.Method == AllocationDrift || len(p.Allocation.Switch) > 0 || p.Exposure != nil || p.Gross != nil
 }
+
+// singleSideFields 是要求成员单方向的写法，用在报错里。
+const singleSideFields = "allocation.method: drift、allocation.switch、exposure 或 gross"
 
 // HasConstraints 报告池写了净敞口或总杠杆区间。
 func (p StrategyPool) HasConstraints() bool { return p.Exposure != nil || p.Gross != nil }
@@ -271,8 +274,8 @@ func scalarNumber(node *yaml.Node, path string) (float64, error) {
 
 // validatePoolConstraints 校验组合约束的结构（成员方向在 ValidatePoolMembers 里检查）。leverage 是 portfolio.leverage。
 func validatePoolConstraints(pool *StrategyPool, ids map[string]struct{}, leverage float64) error {
-	if len(pool.Allocation.Switch) > 0 && pool.Allocation.Method != AllocationFixed {
-		return fmt.Errorf("strategy_pool.allocation.switch 只能与 method: fixed 一起写（rotation 不支持）")
+	if len(pool.Allocation.Switch) > 0 && pool.Allocation.Method != AllocationFixed && pool.Allocation.Method != AllocationDrift {
+		return fmt.Errorf("strategy_pool.allocation.switch 只能与 method: fixed 或 drift 一起写（rotation 不支持）")
 	}
 	for i, entry := range pool.Allocation.Switch {
 		prefix := fmt.Sprintf("allocation.switch[%d]", i)
@@ -319,7 +322,8 @@ func validatePoolConstraints(pool *StrategyPool, ids map[string]struct{}, levera
 	return nil
 }
 
-// validatePoolSides 在成员定义取到之后检查方向：写了 switch、exposure、gross 时每个成员都必须是单方向的，switch 的 from 与 to 必须同方向。
+// validatePoolSides 在成员定义取到之后检查方向：用了 drift、switch、exposure、gross 时每个成员都必须是单方向的，
+// switch 的 from 与 to 必须同方向，freeze.watch 写的一侧要有成员。
 func validatePoolSides(pool StrategyPool, members map[string]Strategy) error {
 	if !pool.NeedsSingleSide() {
 		return nil
@@ -328,9 +332,12 @@ func validatePoolSides(pool StrategyPool, members map[string]Strategy) error {
 	for _, member := range pool.Members {
 		side := members[member.ID].Direction()
 		if side == "" {
-			return fmt.Errorf("成员 %s 同时有多头与空头规则：写了 allocation.switch、exposure 或 gross 时，每个成员都必须是单方向的（规则全部做多或全部做空）", member.ID)
+			return fmt.Errorf("成员 %s 同时有多头与空头规则：写了 %s 时，每个成员都必须是单方向的（规则全部做多或全部做空）", member.ID, singleSideFields)
 		}
 		sides[member.ID] = side
+	}
+	if err := validateFreezeSides(pool, sides); err != nil {
+		return err
 	}
 	for i, entry := range pool.Allocation.Switch {
 		for _, to := range entry.To {

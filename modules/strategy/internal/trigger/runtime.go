@@ -101,7 +101,11 @@ func (h *Handler) runtimeFor(ctx context.Context, instance store.Instance) (*run
 		if err != nil {
 			return &runtime{sessionID: sessionID, dslHash: session.DSLHash, resolved: compiled}, &input.SkipError{Reason: input.SkipConfigError, Detail: err.Error()}
 		}
-		config, err := pool.NewConfig(program.Strategy, compiled.Market, input.MemberStrategies(members, programs))
+		clock, err := input.PoolClock(compiled.Calendar, compiled.Bar, *program.Strategy.Pool)
+		if err != nil {
+			return &runtime{sessionID: sessionID, dslHash: session.DSLHash, resolved: compiled}, &input.SkipError{Reason: input.SkipConfigError, Detail: err.Error()}
+		}
+		config, err := pool.NewConfig(program.Strategy, compiled.Market, input.MemberStrategies(members, programs), clock)
 		if err != nil {
 			return &runtime{sessionID: sessionID, dslHash: session.DSLHash, resolved: compiled}, &input.SkipError{Reason: input.SkipConfigError, Detail: err.Error()}
 		}

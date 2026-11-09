@@ -77,6 +77,14 @@ type HoldingClock struct {
 	Scheduled map[int]int64
 }
 
+// PoolClock 是策略池 DSL 里的时刻换成的 bar 序号（由输入层按池的日历与周期换算，池的求值是纯函数）：Start 是漂移起点
+// （allocation.start 或 allocation.initial.at），HasStart 为假表示没写；Anchors 是 drift 各侧 periodic 写了的 anchor（键是 long、short）。
+type PoolClock struct {
+	Start    int64
+	HasStart bool
+	Anchors  map[string]int64
+}
+
 // HoldingBatch 是 holding 规则在某个偏移建立的一个批次；BaseWeights 之和不超过 1，
 // filter_after 剔除与缺数移除的份额留作现金。
 type HoldingBatch struct {
@@ -177,7 +185,7 @@ type Summary struct {
 
 // PoolSummary 是策略池一期的明细。
 type PoolSummary struct {
-	// Method 是分配方式（fixed 或 rotation）；Timing 为真表示叠加了择时。
+	// Method 是分配方式（fixed、rotation 或 drift）；Timing 为真表示叠加了择时。
 	Method string `json:"method"`
 	Timing bool   `json:"timing,omitempty"`
 	// Members 按池里的成员顺序。
@@ -186,6 +194,47 @@ type PoolSummary struct {
 	Adjustments []PoolAdjustment `json:"adjustments,omitempty"`
 	// Switch 是本期生效的条件转移，没有时为空。
 	Switch *PoolSwitch `json:"switch,omitempty"`
+	// Drift 是 drift 分配本期的明细（漂移阶段、两侧的再平衡、波动冻结），其他分配方式为空。
+	Drift *PoolDrift `json:"drift,omitempty"`
+}
+
+// 漂移分配一期的阶段（PoolDrift.Phase）。
+const (
+	DriftPending = "pending" // 还没到漂移起点：按起始比例合成，不写入状态
+	DriftStart   = "start"   // 本根是漂移起点：分配系数置为起始比例，不漂移、不再平衡
+	DriftRunning = "drift"   // 照常漂移
+)
+
+// PoolDrift 是 drift 分配一期的明细：Phase 是分配系数的来源（见 DriftPending 等）；Sides 是有成员的各侧本期的侧内再平衡；
+// Freeze 是波动冻结的状态（没写 freeze 时为空）。
+type PoolDrift struct {
+	Phase  string              `json:"phase"`
+	Sides  []PoolSideRebalance `json:"sides,omitempty"`
+	Freeze *PoolFreeze         `json:"freeze,omitempty"`
+}
+
+// PoolSideRebalance 是 drift 一侧本期的侧内再平衡。Rebalance 是配置的方式；Trigger 是本根新触发的原因（every_bar、periodic、threshold），
+// 没有触发为空；Deviation 是 threshold 判断用的最大偏离 |侧内占比 ÷ 目标侧内占比 − 1|（只在按偏离触发的一侧、且能算出时给出）。
+// Moved 为真表示本根按分步移动了侧内构成；Remaining 是本根之后还剩的分步根数（0 表示没有在分步）；Reason 是这次分步由什么触发；
+// Paused 为真表示冻结期间分步暂停（不移动、不消耗剩余根数）。
+type PoolSideRebalance struct {
+	Side      string   `json:"side"`
+	Rebalance string   `json:"rebalance"`
+	Trigger   string   `json:"trigger,omitempty"`
+	Deviation *float64 `json:"deviation,omitempty"`
+	Moved     bool     `json:"moved,omitempty"`
+	Remaining int      `json:"remaining,omitempty"`
+	Reason    string   `json:"reason,omitempty"`
+	Paused    bool     `json:"paused,omitempty"`
+}
+
+// PoolFreeze 是波动冻结一期的状态：Change 是被观察成员按 ratios 加权的净值在窗口内的涨跌幅（历史不足或无法计算时为空）；
+// Triggered 为真表示本根触发；Frozen 为真表示本根处于冻结（跳过侧内再平衡、净敞口与总杠杆区间）；Until 是冻结截止（不含）的 bar 序号。
+type PoolFreeze struct {
+	Change    *float64 `json:"change,omitempty"`
+	Triggered bool     `json:"triggered,omitempty"`
+	Frozen    bool     `json:"frozen,omitempty"`
+	Until     int64    `json:"until,omitempty"`
 }
 
 // PoolAdjustment 是一次组合约束修正。Kind 是 exposure 或 gross；Band 是 exposure 的段号（从 1 数）；Side 是被缩放的一侧
@@ -224,12 +273,15 @@ type PoolMemberSummary struct {
 	Bankrupt bool    `json:"bankrupt,omitempty"`
 	// Base 是分配方式给出的比例（择时与步长之前）；Timing 是择时系数（1 或 0，没有择时时为空）；RatioBefore 是乘择时之后、
 	// 步长限制之前的比例；Ratio 是步长限制之后、实际用于合成的比例。
+	// drift 下 Base 是目标比例（allocation.ratios）；RatioBefore 是漂移之前的分配系数（上一根写入状态的值，漂移起点那一根是起始比例）；
+	// Drifted 是漂移之后、侧内再平衡与组合约束之前的系数；Ratio 是侧内再平衡与组合约束之后、写入状态的系数。
 	Base        string `json:"base"`
 	Timing      string `json:"timing,omitempty"`
 	RatioBefore string `json:"ratio_before"`
+	Drifted     string `json:"drifted,omitempty"`
 	Ratio       string `json:"ratio"`
 	// Composed 是实际用于合成的比例：写了 exposure、gross 或 switch 且它与 Ratio 不同时才给出（Ratio 仍是步长之后、组合约束之前的值，
-	// 也是下一期步长限制用的上期比例）。
+	// 也是下一期步长限制用的上期比例；drift 的 Ratio 已含组合约束，只有条件转移会让两者不同）。
 	Composed string `json:"composed,omitempty"`
 	// Rank 是轮动的综合名次分（各因子名次按权重加权，越小越靠前），只有 rotation 且历史足够时才有。
 	Rank *float64 `json:"rank,omitempty"`
