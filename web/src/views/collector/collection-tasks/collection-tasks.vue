@@ -780,9 +780,9 @@ const fundingRateAvailable = computed(() =>
     routes: selectedTagRoutes.value
   })
 );
-// 条件不再满足时去掉已选的资金费率；标签还没选（或还没读到）时不动，避免编辑已有任务时误删。
+// 条件不再满足时去掉已选的资金费率。编辑已有任务时标签可能还没读到，标签为空时不动，避免误删；新建时标签清空也去掉。
 watch(fundingRateAvailable, available => {
-  if (available || !selectedTagRoutes.value.length) return;
+  if (available || (!selectedTagRoutes.value.length && editorMode.value === "edit")) return;
   selectedOutputFields.value = dropUnavailableFundingRate(selectedOutputFields.value, false);
   outputFieldDraft.value = dropUnavailableFundingRate(outputFieldDraft.value, false);
 });
@@ -1211,7 +1211,8 @@ function currentTaskInput(): CollectionTaskInput {
     frequency: frequencyValue.value,
     subjectTags: subjectTagIds.value.slice(),
     sourceTaskId: sourceTaskId.value,
-    outputFields: selectedOutputFields.value
+    // 提交前按条件再过滤一次：条件不满足时不带资金费率。
+    outputFields: selectedOutputFields.value.filter(id => id !== FUNDING_RATE_FIELD_ID || fundingRateAvailable.value)
   };
 }
 

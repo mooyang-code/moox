@@ -137,6 +137,32 @@ func TestKlinePipelineRealtimeReadsFundingCache(t *testing.T) {
 	require.True(t, queries[0].realtime)
 }
 
+type blockingFundingSource struct{}
+
+func (blockingFundingSource) FundingRates(ctx context.Context, _ string, _, _ time.Time) ([]marketdata.FundingRate, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// 实时批次等缓存有一个早于批次截止的上限：等不到只判选了资金费率的目标失败，另一个目标照常写入。
+func TestKlinePipelineRealtimeFundingWaitIsBoundedBeforeDeadline(t *testing.T) {
+	storage := &datasetStorage{}
+	bars := swapHourBars(1)
+	pipeline := fundingPipeline(t, bars, NewFundingCache(blockingFundingSource{}, nil), storage)
+	req := fundingBackfillRequest("")
+	req.Items[0].EndTime = bars[0].BarEnd.Format(time.RFC3339)
+	req.Items[0].BarLimit = 1
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	started := time.Now()
+	payload, err := pipeline.Execute(ctx, req)
+	require.NoError(t, err)
+	require.Less(t, time.Since(started), 900*time.Millisecond, "在批次截止前就停止等待")
+	require.Equal(t, string(domain.ItemOutcomeProviderError), payload.GetItems()[0].GetOutcome())
+	require.Empty(t, storage.rows["with_funding"])
+	require.Len(t, storage.rows["plain"], 1)
+}
+
 // 没有写入目标、取数项自己选了资金费率，而行情源没有这项能力：配置错误，不重试。
 func TestKlinePipelineFundingWithoutCapabilityIsInvalid(t *testing.T) {
 	storage := &datasetStorage{}
@@ -179,6 +205,36 @@ func TestDesiredPlanCarriesFundingRateIntoRequests(t *testing.T) {
 			require.True(t, itemWantsFunding(planned.Request, item))
 		}
 	}
+}
+
+// 推送的周期提交：数据集选了资金费率时写入这一列；有一根缺值就整批报错，不能写出缺列的行。
+func TestPeriodRowsWritesFundingRateAndRejectsMissingValue(t *testing.T) {
+	period := time.Date(2026, 10, 1, 8, 0, 0, 0, time.UTC)
+	plan := swapTestPlan(period)
+	plan.Datasets[0].OutputFields = []string{"close", domain.FieldFundingRate}
+	committer := NewKlineCommitter(&capturingPeriodStorage{}, plan.Market)
+	rate := 0.0001
+	btc := testSwapBar("BTC-USDT", "", period, 1)
+	btc.FundingRate = &rate
+	zero := 0.0
+	eth := testSwapBar("ETH-USDT", "", period, 2)
+	eth.FundingRate = &zero
+	batch := KlineBatch{SpaceID: "crypto", BatchID: "b", Market: plan.Market, Dataset: plan.Datasets[0], Period: period, Symbols: plan.ExchangeSymbol, Bars: []marketdata.NormalizedKline{btc, eth}}
+	_, rows, _, err := committer.periodRows(batch)
+	require.NoError(t, err)
+	require.Equal(t, []float64{0.0001, 0}, fundingValues(rows))
+
+	eth.FundingRate = nil
+	batch.Bars = []marketdata.NormalizedKline{btc, eth}
+	_, _, _, err = committer.periodRows(batch)
+	require.ErrorContains(t, err, "缺资金费率")
+
+	// 不选这一列时，即使 K 线带了值也不写。
+	plan.Datasets[0].OutputFields = nil
+	batch.Dataset = plan.Datasets[0]
+	_, rows, _, err = committer.periodRows(batch)
+	require.NoError(t, err)
+	require.Empty(t, fundingValues(rows))
 }
 
 func TestFundingFailureClassification(t *testing.T) {

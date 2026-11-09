@@ -53,8 +53,9 @@ type Runtime struct {
 	ctx     context.Context
 	mu      sync.RWMutex
 	markets map[string]*marketRuntime
-	// funding 是当前启用了整点取数的资金费率缓存。
-	funding map[*marketfetch.FundingCache]bool
+	// funding 是当前启用了整点取数的资金费率缓存；fundingMissing 是选了资金费率但行情源不具备能力的计划项（只在变化时告警）。
+	funding        map[*marketfetch.FundingCache]bool
+	fundingMissing map[string]bool
 }
 
 type marketRuntime struct {
@@ -76,7 +77,7 @@ func NewRuntime(cfg RuntimeConfig) *Runtime {
 	if cfg.Clock == nil {
 		cfg.Clock = SystemClock{}
 	}
-	return &Runtime{cfg: cfg, queue: NewCommitQueue(cfg.Clock), markets: map[string]*marketRuntime{}, funding: map[*marketfetch.FundingCache]bool{}}
+	return &Runtime{cfg: cfg, queue: NewCommitQueue(cfg.Clock), markets: map[string]*marketRuntime{}, funding: map[*marketfetch.FundingCache]bool{}, fundingMissing: map[string]bool{}}
 }
 
 // Start 启动提交队列与订阅刷新（每分钟按各份的生效时间重算订阅：移除的标的在它最后负责的周期提交之后才退订）。
@@ -147,6 +148,7 @@ func (r *Runtime) applyFunding(items []PlanItem) {
 		return
 	}
 	wanted := map[*marketfetch.FundingCache]time.Duration{}
+	missing := map[string]string{}
 	for _, item := range items {
 		if item.Plan == nil {
 			continue
@@ -166,11 +168,23 @@ func (r *Runtime) applyFunding(items []PlanItem) {
 		if cache := r.cfg.FundingFor(item.Plan.Market); cache != nil {
 			wanted[cache] = max(wanted[cache], longest)
 		} else {
-			log.Warnf("stream plan %s 选了资金费率，但行情源 %s/%s 不具备这项能力", item.Name, item.Plan.Market.Provider, item.Plan.Market.SourceID)
+			missing[item.Name] = item.Plan.Market.Provider + "/" + item.Plan.Market.SourceID
 		}
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	for name, source := range missing {
+		if !r.fundingMissing[name] {
+			r.fundingMissing[name] = true
+			log.Warnf("stream plan %s 选了资金费率，但行情源 %s 不具备这项能力", name, source)
+		}
+	}
+	for name := range r.fundingMissing {
+		if _, ok := missing[name]; !ok {
+			delete(r.fundingMissing, name)
+			log.Infof("stream plan %s 不再缺资金费率能力", name)
+		}
+	}
 	for cache, longest := range wanted {
 		cache.Activate(longest)
 		r.funding[cache] = true

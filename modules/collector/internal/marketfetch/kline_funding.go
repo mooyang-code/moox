@@ -17,8 +17,12 @@ var errFundingUnsupported = errors.New("行情源不具备资金费率能力")
 // fundingLookup 返回 [start, end) 内的资金费率之和；取不到时返回 false。
 type fundingLookup func(start, end time.Time) (float64, bool)
 
-// startFunding 异步取一个合约在 [start, end) 内的资金费：实时批次读进程缓存（没就绪的小时槽按需补取），
-// 其余（补采、追赶、手动）按合约直接查区间。返回的函数等待结果。
+// fundingAwaitReserve 是实时批次等资金费缓存时，在批次截止前留出的时间：等不到只判选了 funding_rate 的目标失败，
+// 其他目标仍有时间照常写入。
+const fundingAwaitReserve = 2 * time.Second
+
+// startFunding 异步取一个合约在 [start, end) 内的资金费：实时批次（BatchKind 为空时也按实时）读进程缓存，
+// 没就绪的小时槽按需补取；补采、追赶、缺口修复按合约直接查区间。返回的函数等待结果。
 func (p *KlinePipeline) startFunding(ctx context.Context, req Request, symbol string, start, end time.Time) func() (fundingLookup, error) {
 	type outcome struct {
 		lookup fundingLookup
@@ -42,8 +46,10 @@ func (p *KlinePipeline) loadFunding(ctx context.Context, req Request, symbol str
 	if !end.After(start) {
 		return nil, fmt.Errorf("资金费率查询区间为空")
 	}
-	if req.BatchKind == domain.BatchKindRealtime {
-		if err := p.Funding.Await(ctx, start, end); err != nil {
+	if req.BatchKind == "" || req.BatchKind == domain.BatchKindRealtime {
+		awaitCtx, cancel := fundingAwaitContext(ctx)
+		defer cancel()
+		if err := p.Funding.Await(awaitCtx, start, end); err != nil {
 			return nil, fmt.Errorf("等待资金费率小时槽 [%s, %s) 就绪：%w", start.UTC().Format(time.RFC3339), end.UTC().Format(time.RFC3339), err)
 		}
 		return func(barStart, barEnd time.Time) (float64, bool) { return p.Funding.Sum(symbol, barStart, barEnd) }, nil
@@ -58,6 +64,20 @@ func (p *KlinePipeline) loadFunding(ctx context.Context, req Request, symbol str
 		}
 		return marketdata.SumFundingRates(rates, barStart, barEnd)[symbol], true
 	}, nil
+}
+
+// fundingAwaitContext 给等缓存设一个早于批次截止的上限：截止前 fundingAwaitReserve，剩余不足时取剩余的一半。
+func fundingAwaitContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return context.WithCancel(ctx)
+	}
+	remaining := time.Until(deadline)
+	limit := remaining - fundingAwaitReserve
+	if limit < remaining/2 {
+		limit = remaining / 2
+	}
+	return context.WithTimeout(ctx, limit)
 }
 
 // fillFundingRates 等资金费结果并填进每一根；取不到的根留空，由 expandTargetRows 按目标判定失败。

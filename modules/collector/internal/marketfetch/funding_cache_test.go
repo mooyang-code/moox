@@ -154,7 +154,7 @@ func TestFundingCacheFetchesAfterHourAndRefreshesBeforeClose(t *testing.T) {
 	cache := NewFundingCache(source, clock)
 	cache.Activate(time.Hour)
 	// 启动时补取：上一根与本根已过去的小时（00:00 这一小时已过 2 分钟）。
-	waitReady(t, cache, "BTCUSDT", cacheBase, cacheBase.Add(time.Hour))
+	waitReady(t, cache, "BTCUSDT", cacheBase.Add(-time.Hour), cacheBase.Add(time.Hour))
 	require.Len(t, source.queried(), 2)
 
 	source.set(fundingAt("BTCUSDT", cacheBase.Add(time.Hour+time.Millisecond), 0.0001))
@@ -244,4 +244,45 @@ func TestFundingCacheDefersSlotUntilPublished(t *testing.T) {
 	clock.Advance(fundingPublishDelay)
 	<-notified
 	require.Len(t, source.queried(), 1)
+}
+
+// 启用时补取最长一根需要的小时槽；已因 1h 启用、后来又加了 1d（最长一根变长）时，按 1d 补取当天已过去的小时槽，已就绪的不重取。
+func TestFundingCacheActivateBackfillsSlotsAndGrowsWithMaxStep(t *testing.T) {
+	now := cacheBase.Add(5*time.Hour + 30*time.Minute) // 05:30
+	clock := &fakeFundingClock{now: now}
+	source := &fakeFundingSource{}
+	cache := NewFundingCache(source, clock)
+	cache.Activate(time.Hour)
+	waitReady(t, cache, "BTCUSDT", cacheBase.Add(4*time.Hour), cacheBase.Add(6*time.Hour))
+	require.Len(t, source.queried(), 2, "1h：上一根 04:00 与当前这一根 05:00")
+
+	cache.Activate(time.Hour)
+	require.Len(t, source.queried(), 2, "最长一根没变时不重复补取")
+
+	cache.Activate(24 * time.Hour)
+	// 前一天 24 个小时槽加上当天 00:00～05:00 共 30 个，其中 04:00、05:00 已就绪。
+	waitReady(t, cache, "BTCUSDT", cacheBase.Add(-24*time.Hour), cacheBase.Add(6*time.Hour))
+	require.Len(t, source.queried(), 30)
+	starts := map[time.Time]int{}
+	for _, query := range source.queried() {
+		starts[query.start]++
+	}
+	for start, count := range starts {
+		require.Equal(t, 1, count, "小时槽 %s 只取一次", start)
+	}
+}
+
+// 等待撤销后，取数失败的小时槽不再无限重试（启用整点取数时只重试最近的小时槽）。
+func TestFundingCacheCanceledWaitStopsRetry(t *testing.T) {
+	clock := &fakeFundingClock{now: cacheBase.Add(time.Hour + 10*time.Second)}
+	source := &fakeFundingSource{failures: 100}
+	cache := NewFundingCache(source, clock)
+	ready, cancel := cache.Prepare(cacheBase, cacheBase.Add(time.Hour), func() {})
+	require.False(t, ready)
+	require.Eventually(t, func() bool { return clock.pending() == 1 }, time.Second, time.Millisecond)
+	cancel()
+	clock.Advance(fundingRetryBase)
+	require.Eventually(t, func() bool { return len(source.queried()) == 2 }, time.Second, time.Millisecond)
+	time.Sleep(10 * time.Millisecond)
+	require.Zero(t, clock.pending(), "没人等了就不再安排重试")
 }

@@ -97,6 +97,7 @@ type periodSlot struct {
 	// commitWanted 表示有一次提交因缓存没就绪而挂起；fundingGaveUp 表示到 D 仍没就绪，这一期不再提交。
 	wantsFunding  bool
 	fundingWait   bool
+	fundingCancel func()
 	commitWanted  bool
 	fundingGaveUp bool
 }
@@ -347,15 +348,17 @@ func (g *Gate) fundingReady(slot *periodSlot) bool {
 			return true
 		}
 		if !slot.fundingWait {
-			ready, _ := g.cfg.Funding.Prepare(slot.period, slot.close, func() { g.post(func() { g.onFundingReady(slot) }) })
+			ready, cancel := g.cfg.Funding.Prepare(slot.period, slot.close, func() { g.post(func() { g.onFundingReady(slot) }) })
 			if ready {
 				return true
 			}
-			slot.fundingWait = true
+			slot.fundingWait, slot.fundingCancel = true, cancel
 		}
 	}
 	if !g.cfg.Clock.Now().Before(slot.due) {
 		slot.fundingGaveUp = true
+		// 撤销等待：不再有人等这些小时槽，缓存才会停止重试并能清理它们。
+		slot.cancelFundingWait()
 		slot.err = "资金费率到最晚提交时刻仍未就绪，这一期不提交"
 		if g.cfg.Funding == nil {
 			slot.err = "数据集选了资金费率，但行情源不具备这项能力，这一期不提交"
@@ -369,7 +372,7 @@ func (g *Gate) fundingReady(slot *periodSlot) bool {
 
 // onFundingReady 在缓存就绪后回到闸门协程：有挂起的提交就补上。
 func (g *Gate) onFundingReady(slot *periodSlot) {
-	slot.fundingWait = false
+	slot.fundingWait, slot.fundingCancel = false, nil
 	if !slot.commitWanted || slot.fundingGaveUp {
 		return
 	}
@@ -405,6 +408,7 @@ func (g *Gate) onEnd(slot *periodSlot) {
 		return
 	}
 	slot.reported = true
+	slot.cancelFundingWait()
 	stat := PeriodStat{
 		Market: g.cfg.Market.MarketType, DatasetID: slot.dataset.DatasetID, Frequency: slot.dataset.Frequency, Period: slot.period,
 		Expected: len(slot.got), Arrived: slot.arrived, LateAfterCommit: slot.late, Duplicates: slot.duplicates, Conflicts: slot.conflicts,
@@ -426,6 +430,14 @@ func (g *Gate) onEnd(slot *periodSlot) {
 	g.cfg.Metrics.observePeriod(stat)
 	if g.cfg.Report != nil {
 		g.cfg.Report(stat)
+	}
+}
+
+// cancelFundingWait 撤销这一期在资金费缓存上的等待（没有等待时什么也不做）。
+func (s *periodSlot) cancelFundingWait() {
+	if s.fundingCancel != nil {
+		s.fundingCancel()
+		s.fundingCancel = nil
 	}
 }
 

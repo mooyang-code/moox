@@ -147,24 +147,28 @@ func (c *FundingCache) Query(ctx context.Context, symbol string, start, end time
 	return c.source.FundingRates(ctx, symbol, start, end)
 }
 
-// Activate 启动整点取数；maxStep 是计划里选了 funding_rate 的最长一根（1h 或 1d）。启动时补取最长一根需要的小时槽。
+// Activate 启动整点取数；maxStep 是计划里选了 funding_rate 的最长一根（1h 或 1d）。
+// 启动时，以及已启用后最长一根变长（例如原来只有 1h、又加了 1d）时，补取最长一根需要的小时槽。
 func (c *FundingCache) Activate(maxStep time.Duration) {
 	if maxStep < fundingSlotSpan {
 		maxStep = fundingSlotSpan
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	grown := maxStep > c.maxStep
 	c.maxStep = maxStep
-	if c.active {
+	if c.active && !grown {
 		return
 	}
-	c.active = true
 	now := c.clock.Now().UTC()
-	// 上一根（可能还在截止前等待提交）与正在进行的这一根已经过去的小时。
+	// 上一根（可能还在截止前等待提交）与正在进行的这一根已经过去的小时；已就绪或正在取的小时槽不重复取。
 	for hour := now.Truncate(maxStep).Add(-maxStep); !hour.Add(fundingPublishDelay).After(now); hour = hour.Add(fundingSlotSpan) {
 		c.ensure(hour)
 	}
-	c.scheduleTick()
+	if !c.active {
+		c.active = true
+		c.scheduleTick()
+	}
 }
 
 // Deactivate 停止整点取数；已取到的小时槽保留到被清理。

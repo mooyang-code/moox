@@ -58,18 +58,27 @@ var hourClose = time.Date(2026, 10, 21, 9, 0, 0, 0, time.UTC)
 
 func newFundingGateHarness(t *testing.T, source *gateFundingSource) (*gateHarness, *marketfetch.FundingCache, time.Time) {
 	t.Helper()
-	period := hourClose.Add(-time.Hour)
-	plan, dataset := testStreamPlan("1h", 15, copyOf(period.Add(-time.Hour), "BTC-USDT", "ETH-USDT"))
+	return newFundingGateHarnessAt(t, source, marketdata.FrequencyHour, hourClose, true)
+}
+
+// newFundingGateHarnessAt 建一个选了资金费率的闸门，时钟停在收盘时刻；withCache 为假表示行情源没有资金费率能力。
+func newFundingGateHarnessAt(t *testing.T, source *gateFundingSource, frequency marketdata.Frequency, closeTime time.Time, withCache bool) (*gateHarness, *marketfetch.FundingCache, time.Time) {
+	t.Helper()
+	period := closeTime.Add(-frequency.Duration())
+	plan, dataset := testStreamPlan(string(frequency), 15, copyOf(period.Add(-time.Hour), "BTC-USDT", "ETH-USDT"))
 	dataset.OutputFields = []string{"close", domain.FieldFundingRate}
-	clock := NewFakeClock(hourClose.Add(-10 * time.Second))
+	clock := NewFakeClock(closeTime.Add(-10 * time.Second))
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	queue := NewCommitQueue(clock)
 	go queue.Run(ctx)
-	cache := marketfetch.NewFundingCache(source, fundingClock{clock})
+	var cache *marketfetch.FundingCache
+	if withCache {
+		cache = marketfetch.NewFundingCache(source, fundingClock{clock})
+	}
 	committer := &recordingCommitter{}
 	stats := make(chan PeriodStat, 16)
-	gate, err := NewGate(GateConfig{SpaceID: "crypto", Market: gateMarket, DatasetID: dataset.DatasetID, Frequency: marketdata.FrequencyHour, Committer: committer, Queue: queue, Clock: clock, Funding: cache, Report: func(stat PeriodStat) { stats <- stat }})
+	gate, err := NewGate(GateConfig{SpaceID: "crypto", Market: gateMarket, DatasetID: dataset.DatasetID, Frequency: frequency, Committer: committer, Queue: queue, Clock: clock, Funding: cache, Report: func(stat PeriodStat) { stats <- stat }})
 	require.NoError(t, err)
 	gate.Start(ctx)
 	gate.SetPlan(plan, dataset)
@@ -155,4 +164,40 @@ func TestGateWithoutFundingFieldIgnoresCache(t *testing.T) {
 	calls := h.waitCalls(1)
 	require.Nil(t, calls[0].Bars[0].FundingRate)
 	require.Zero(t, source.calls)
+}
+
+// 1d：取本根覆盖的 24 个小时槽求和（下一根开盘时刻的结算不算），24 个都就绪才提交。
+func TestGateFundingDailySumsTwentyFourSlots(t *testing.T) {
+	dayClose := time.Date(2026, 10, 22, 0, 0, 0, 0, time.UTC)
+	day := dayClose.Add(-24 * time.Hour)
+	source := &gateFundingSource{rates: []marketdata.FundingRate{
+		{ProviderSymbol: "BTCUSDT", FundingTime: day, Rate: 0.0001},
+		{ProviderSymbol: "BTCUSDT", FundingTime: day.Add(8*time.Hour + time.Millisecond), Rate: 0.0002},
+		{ProviderSymbol: "BTCUSDT", FundingTime: day.Add(16 * time.Hour), Rate: -0.0001},
+		{ProviderSymbol: "BTCUSDT", FundingTime: dayClose, Rate: 0.0009},
+	}}
+	h, _, period := newFundingGateHarnessAt(t, source, marketdata.FrequencyDay, dayClose, true)
+	h.final("BTCUSDT", period, 1)
+	h.final("ETHUSDT", period, 2)
+	calls := h.waitCalls(1)
+	require.InDelta(t, 0.0002, fundingOf(t, calls[0].Bars[0]), 1e-12)
+	require.Equal(t, 0.0, fundingOf(t, calls[0].Bars[1]))
+	source.mu.Lock()
+	defer source.mu.Unlock()
+	require.Equal(t, 24, source.calls, "按需补取本根的 24 个小时槽")
+}
+
+// 行情源没有资金费率能力：到最晚提交时刻放弃这一期，不提交。
+func TestGateFundingWithoutCapabilityGivesUp(t *testing.T) {
+	h, _, period := newFundingGateHarnessAt(t, &gateFundingSource{}, marketdata.FrequencyHour, hourClose, false)
+	h.final("BTCUSDT", period, 1)
+	h.final("ETHUSDT", period, 2)
+	h.advance(2 * time.Second)
+	require.Empty(t, h.committer.calls(), "D 之前挂起")
+	h.advance(20 * time.Second)
+	require.Empty(t, h.committer.calls())
+	stat := h.stat()
+	require.False(t, stat.Committed)
+	require.Equal(t, 2, stat.Missing)
+	require.Contains(t, stat.Err, "不具备")
 }
