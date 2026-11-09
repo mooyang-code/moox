@@ -36,6 +36,16 @@ const subjectPageSize = 1000
 
 // ListDatasetSubjects returns the sorted active subjects of a dataset.
 func (c *Client) ListDatasetSubjects(ctx context.Context, spaceID, datasetID string) ([]string, error) {
+	return c.listDatasetSubjects(ctx, spaceID, datasetID, true)
+}
+
+// ListAllDatasetSubjects 返回数据集登记过的全部标的（含已下架、停用的），排序：试算 observed 成员的历史截面要用到
+// 本期不在册、但历史上有数据的标的。
+func (c *Client) ListAllDatasetSubjects(ctx context.Context, spaceID, datasetID string) ([]string, error) {
+	return c.listDatasetSubjects(ctx, spaceID, datasetID, false)
+}
+
+func (c *Client) listDatasetSubjects(ctx context.Context, spaceID, datasetID string, activeOnly bool) ([]string, error) {
 	if err := c.metadataReady("list dataset subjects"); err != nil {
 		return nil, err
 	}
@@ -52,7 +62,7 @@ func (c *Client) ListDatasetSubjects(ctx context.Context, spaceID, datasetID str
 			return nil, fmt.Errorf("list dataset subjects failed: %s", rsp.GetRetInfo().GetMsg())
 		}
 		for _, item := range rsp.GetDatasetSubjects() {
-			if item != nil && item.GetSubjectId() != "" && item.GetStatus() == "active" {
+			if item != nil && item.GetSubjectId() != "" && (!activeOnly || item.GetStatus() == "active") {
 				seen[item.GetSubjectId()] = struct{}{}
 			}
 		}

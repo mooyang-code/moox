@@ -192,14 +192,23 @@ func (s *Service) Preview(ctx context.Context, req Request) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	// 读取之前按标的数估算峰值内存，超限直接拒绝，避免长窗口 × 大全集的试算耗尽管理端内存。
-	if err := pipeline.CheckChunkMemory([]domain.MemberDef{member}, len(computed), periods, len(factor.InputColumns), MaxMemory); err != nil {
-		return Result{}, fmt.Errorf("试算范围太大，请减少期数或标的：%w", err)
-	}
 	plan := pipeline.Plan{
 		Mode: pipeline.ModeRecalc, Set: set, Members: []domain.MemberDef{member}, Params: params,
 		TargetStart: end.Add(-time.Duration(periods) * duration), TargetEnd: end,
 		Expected: computed, Available: computed, CarryColumns: factor.InputColumns,
+	}
+	// observed：历史截面还要用源数据集登记过、但不在册的标的（含已下架的），与正式计算同一口径。
+	history, err := s.runner.HistorySubjects(ctx, plan)
+	if err != nil {
+		return Result{}, err
+	}
+	plan.HistorySubjects = history
+	if len(computed)+len(history) > MaxUniverse {
+		return Result{}, fmt.Errorf("截面因子试算最多支持 %d 个标的，任务有 %d 个、历史截面另有 %d 个", MaxUniverse, len(computed), len(history))
+	}
+	// 读取之前按标的数（含历史截面的标的）估算峰值内存，超限直接拒绝，避免长窗口 × 大全集的试算耗尽管理端内存。
+	if err := pipeline.CheckChunkMemory([]domain.MemberDef{member}, len(computed)+len(history), periods, len(factor.InputColumns), MaxMemory); err != nil {
+		return Result{}, fmt.Errorf("试算范围太大，请减少期数或标的：%w", err)
 	}
 	loaded, err := s.runner.Load(ctx, plan)
 	if err != nil {

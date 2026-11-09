@@ -83,6 +83,8 @@ type replaySession struct {
 	from, to time.Time // 决策周期的 data_time 范围 [from, to)（轴上）
 	start    time.Time // 预热起点（轴上）
 	subjects []string
+	// history 是 observed 成员历史截面额外用到的标的：只在快照里提供历史，不输出、不写回。
+	history  []string
 	numeric  []string
 	lookback int
 	carry    []string
@@ -324,9 +326,14 @@ func (m *replayManager) Open(ctx context.Context, req ReplayOpenRequest) (Replay
 		return ReplayOpenResponse{}, http.StatusConflict, fmt.Errorf("%d/%d 个标的的本地数据晚于预热起点 %s（例如 %s），因子前段会是空值：先回补或导入更早的历史（moox-factor-engine backfill / moox-cli import），或确认接受后加 --allow-short-warmup",
 			shortCount, len(subjects), axis.Format(start), strings.Join(shortSamples, "、"))
 	}
+	// observed 成员：历史截面还要用本地存储里在快照区间内有数据、但不在回放标的里的标的（含已下架的），与实时计算同一口径。
+	history, err := replayHistory(m.deps.Store, src, set, subjects, start, to.Add(step))
+	if err != nil {
+		return ReplayOpenResponse{}, http.StatusInternalServerError, err
+	}
 	periods := int(to.Sub(from) / step)
 	rowsPerSubject := int(to.Add(step).Sub(start) / step)
-	need := int64(len(subjects)) * int64(rowsPerSubject) * int64(len(numeric)*8+9)
+	need := int64(len(subjects)+len(history)) * int64(rowsPerSubject) * int64(len(numeric)*8+9)
 	release := func() {}
 	if m.deps.Admit != nil {
 		waitCtx, cancel := context.WithTimeout(memadmit.WithPriority(ctx, memadmit.PriorityBackground), replayReserveWait)
@@ -342,7 +349,7 @@ func (m *replayManager) Open(ctx context.Context, req ReplayOpenRequest) (Replay
 			cleanup()
 		}
 	}()
-	snapshot, err := m.deps.Store.ReadRange(ctx, src, subjects, start, to.Add(step))
+	snapshot, err := m.deps.Store.ReadRange(ctx, src, append(append([]string(nil), subjects...), history...), start, to.Add(step))
 	if err != nil {
 		return ReplayOpenResponse{}, http.StatusInternalServerError, fmt.Errorf("读取回放快照：%w", err)
 	}
@@ -364,7 +371,7 @@ func (m *replayManager) Open(ctx context.Context, req ReplayOpenRequest) (Replay
 	}
 	session := &replaySession{
 		id: req.ReplayID, set: set, src: src, axis: axis, step: step, from: from, to: to, start: start,
-		subjects: subjects, numeric: numeric, lookback: lookback, carry: carry, types: types, view: view, cols: snapshot,
+		subjects: subjects, history: history, numeric: numeric, lookback: lookback, carry: carry, types: types, view: view, cols: snapshot,
 		earliest: earliest, release: release, quote: quote, udfKey: taskUDFKey(set), cache: map[int64]*replayPeriod{}, applied: map[int64]map[string]domain.ParamSnapshot{}, lastUsed: m.deps.Now(),
 	}
 	cleanup = nil
@@ -729,6 +736,19 @@ func (s *replaySession) compute(ctx context.Context, runner *pipeline.Runner, pe
 		}
 	}
 	plan.Available = available
+	if plan.Observed() {
+		// 与实时计算相同：本期不可用的回放标的与历史标的都放进历史截面（数据截至本期，未来的行已被截掉）。
+		inAvailable := make(map[string]struct{}, len(available))
+		for _, subject := range available {
+			inAvailable[subject] = struct{}{}
+		}
+		plan.HistorySubjects = []string{}
+		for _, subject := range append(append([]string(nil), s.subjects...), s.history...) {
+			if _, ok := inAvailable[subject]; !ok {
+				plan.HistorySubjects = append(plan.HistorySubjects, subject)
+			}
+		}
+	}
 	if cached != nil {
 		return cached, plan, pipeline.Computation{}, nil
 	}
@@ -749,6 +769,39 @@ func (s *replaySession) compute(ctx context.Context, runner *pipeline.Runner, pe
 	result := &replayPeriod{values: values, states: states, digest: digest, paramValues: paramValues(plan, universe)}
 	s.cache[period.Unix()] = result
 	return result, plan, computation, nil
+}
+
+// replayHistory 返回有 observed 成员时，本地存储里数据与 [from, to) 有交集、且不在 subjects 里的标的（按标的排序）。
+func replayHistory(store *seriesstore.Store, src seriesstore.Source, set domain.EngineTask, subjects []string, from, to time.Time) ([]string, error) {
+	observed := false
+	for _, member := range set.Members {
+		observed = observed || member.Factor.ObservedHistory()
+	}
+	if !observed {
+		return nil, nil
+	}
+	skip := make(map[string]struct{}, len(subjects))
+	for _, subject := range subjects {
+		skip[subject] = struct{}{}
+	}
+	local, err := store.Subjects(src)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, subject := range local {
+		if _, excluded := skip[subject]; excluded {
+			continue
+		}
+		bounds, ok, err := store.Bounds(src, subject)
+		if err != nil {
+			return nil, err
+		}
+		if ok && !bounds.Latest.Before(from) && bounds.Earliest.Before(to) {
+			out = append(out, subject)
+		}
+	}
+	return out, nil
 }
 
 func (s *replaySession) hasRow(subject string, at time.Time) bool {

@@ -113,13 +113,11 @@ func (r *Runner) Run(ctx context.Context, plan Plan) (Outcome, error) {
 	}
 	if plan.Observed() && plan.HistorySubjects == nil {
 		// observed 成员的历史截面要用本地存储里本期不可用的标的：在内存预检之前取得，预检按扩大后的序列数估算。
-		if source, ok := r.data.(HistorySource); ok {
-			history, err := source.HistorySubjects(ctx, plan)
-			if err != nil {
-				return Outcome{StageDurations: outcome.StageDurations}, fmt.Errorf("列出历史截面的标的: %w", err)
-			}
-			plan.HistorySubjects = history
+		history, err := r.HistorySubjects(ctx, plan)
+		if err != nil {
+			return Outcome{StageDurations: outcome.StageDurations}, err
 		}
+		plan.HistorySubjects = history
 	}
 	outcome.StageDurations["plan"] = time.Since(planStarted)
 	loaded := LoadResult{Frames: map[string]*storageio.Frame{}, Available: append([]string(nil), plan.Available...)}
@@ -204,6 +202,20 @@ func (r *Runner) Run(ctx context.Context, plan Plan) (Outcome, error) {
 	}
 	outcome.StageDurations["report"] = time.Since(stage)
 	return outcome, nil
+}
+
+// HistorySubjects 向数据层取计划的历史截面标的（Plan.HistorySubjects）；没有 observed 成员、或数据层不提供时为 nil。
+// 试算、回放这类直接调 Load/Compute 的调用方用它补上名单。
+func (r *Runner) HistorySubjects(ctx context.Context, plan Plan) ([]string, error) {
+	source, ok := r.data.(HistorySource)
+	if !ok || !plan.Observed() {
+		return nil, nil
+	}
+	history, err := source.HistorySubjects(ctx, plan)
+	if err != nil {
+		return nil, fmt.Errorf("列出历史截面的标的: %w", err)
+	}
+	return history, nil
 }
 
 func mergeOutcomeDurations(outcome, previous Outcome) Outcome {

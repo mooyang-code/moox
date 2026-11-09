@@ -22,6 +22,31 @@ type storageData struct {
 // NewStorageData 返回直接读 Storage 的数据层。
 func NewStorageData(store storageio.Store) Data { return storageData{store: store} }
 
+// HistorySubjects 实现 HistorySource：Storage 里登记过的全部标的（含已下架的）减去本期可用与上游失败的标的。
+// 客户端不能列出全部标的时没有历史标的。没有数据的标的读回空帧，不进面板。
+func (d storageData) HistorySubjects(ctx context.Context, plan Plan) ([]string, error) {
+	lister, ok := d.store.(storageio.AllSubjectsLister)
+	if !ok {
+		return []string{}, nil
+	}
+	all, err := lister.ListAllDatasetSubjects(ctx, plan.Set.SpaceID, plan.Set.SourceDatasetID)
+	if err != nil {
+		return nil, err
+	}
+	exclude := make(map[string]struct{}, len(plan.Available)+len(plan.UpstreamFailed))
+	for _, subject := range append(append([]string(nil), plan.Available...), plan.UpstreamFailed...) {
+		exclude[subject] = struct{}{}
+	}
+	out := []string{}
+	for _, subject := range all {
+		if _, skip := exclude[subject]; !skip {
+			out = append(out, subject)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
 func (d storageData) Load(ctx context.Context, plan Plan) (DataResult, error) {
 	// 管线始终在轴上运行：store 是换算边界包装过的客户端，读回的 data_time 已是轴上时间。
 	start, err := ReadStart(periodclock.Continuous{}, plan)
@@ -30,7 +55,7 @@ func (d storageData) Load(ctx context.Context, plan Plan) (DataResult, error) {
 	}
 	frames, err := d.store.ReadWindow(ctx, storageio.ReadRequest{
 		SpaceID: plan.Set.SpaceID, DatasetID: plan.Set.SourceDatasetID, Freq: plan.Set.Freq,
-		Subjects: plan.Available, Start: start, End: plan.TargetEnd, Columns: plan.CarryColumns,
+		Subjects: append(append([]string(nil), plan.Available...), plan.HistorySubjects...), Start: start, End: plan.TargetEnd, Columns: plan.CarryColumns,
 	})
 	if err != nil {
 		return DataResult{}, err
@@ -38,6 +63,11 @@ func (d storageData) Load(ctx context.Context, plan Plan) (DataResult, error) {
 	step, err := seriesstore.Step(plan.Set.Freq)
 	if err != nil {
 		return DataResult{}, err
+	}
+	// 历史截面的标的（observed）只进视图，不产生目标区间的行。
+	history := make(map[string]struct{}, len(plan.HistorySubjects))
+	for _, subject := range plan.HistorySubjects {
+		history[subject] = struct{}{}
 	}
 	cols := make(map[string]*seriesstore.Columns, len(frames))
 	rows := make(map[string]*storageio.Frame, len(frames))
@@ -75,7 +105,9 @@ func (d storageData) Load(ctx context.Context, plan Plan) (DataResult, error) {
 		if c.Len() > 0 {
 			cols[subject] = c
 		}
-		rows[subject] = target
+		if _, only := history[subject]; !only {
+			rows[subject] = target
+		}
 	}
 	view, err := serieswindow.FromColumns(seriesstore.Source{SpaceID: plan.Set.SpaceID, DatasetID: plan.Set.SourceDatasetID, Freq: plan.Set.Freq}, int64(step/time.Second), numeric, cols)
 	if err != nil {
