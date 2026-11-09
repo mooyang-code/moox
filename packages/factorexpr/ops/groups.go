@@ -142,12 +142,18 @@ func weightedMean(in Section) float64 {
 }
 
 // cumulativeShare 按 x 降序排列（并列保持原顺序，即按标的），输出累计到本行（含本行）的 x 之和占总和的比例；
-// 总和为 0 时全为 NaN。累计和按这个固定顺序逐项相加，总和就是最后一项的累计和，所以排在最后的一行恰好是 1。
+// x 是成交额、市值这类非负量：有负数时占比没有意义，全为 NaN；总和为 0 时也全为 NaN。累计和按这个固定顺序逐项相加，
+// 总和就是最后一项的累计和，所以排在最后的一行恰好是 1。
 func cumulativeShare(values, out []float64) {
 	fillNaN(out)
 	indexes := valid(values)
 	if len(indexes) == 0 {
 		return
+	}
+	for _, i := range indexes {
+		if values[i] < 0 {
+			return
+		}
 	}
 	sort.SliceStable(indexes, func(a, b int) bool { return values[indexes[a]] > values[indexes[b]] })
 	running := make([]float64, len(indexes))

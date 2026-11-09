@@ -57,7 +57,10 @@ func residuals(in Section, out []float64, byGroup bool) string {
 		return ReasonResidSingular
 	}
 	// 去均值：centered[0] 是 y，centered[1..k] 是各 x。均值与 cs_demean 同一算法（全部相同时直接取这个值）。
+	// references 是各 x 去均值之前（有效行上）的原列范数：奇异判定以它为参照。x 与截距或分组哑变量近似共线时
+	// （例如由 1e6 和比它大 1 ulp 的值组成），去均值后剩下的只是舍入误差，按去均值后的范数作参照判不出来。
 	centered := make([][]float64, k+1)
+	references := make([]float64, k)
 	for c, column := range in.Args {
 		values := make([]float64, n)
 		for position, i := range rows {
@@ -71,8 +74,11 @@ func residuals(in Section, out []float64, byGroup bool) string {
 			}
 		}
 		centered[c] = demeaned
+		if c > 0 {
+			references[c-1] = euclidean(values)
+		}
 	}
-	residual, ok := leastSquaresResidual(centered[0], centered[1:])
+	residual, ok := leastSquaresResidual(centered[0], centered[1:], references)
 	if !ok {
 		return ReasonResidSingular
 	}
@@ -82,9 +88,10 @@ func residuals(in Section, out []float64, byGroup bool) string {
 	return ""
 }
 
-// leastSquaresResidual 用 Householder QR 求 y 对 columns（各长 n，不含截距）的最小二乘残差 y − Xβ。某一列在消去前面的列
-// 之后剩下的范数不超过 max(n, k)·ε·‖原列‖（或原列全为 0）时判为奇异，ok 为假。
-func leastSquaresResidual(y []float64, columns [][]float64) ([]float64, bool) {
+// leastSquaresResidual 用 Householder QR 求 y 对 columns（各长 n，不含截距）的最小二乘残差 y − Xβ。references 是各列的参照范数
+// （去均值之前的原列范数；为 nil 时用列本身的范数）：某一列在消去前面的列之后剩下的范数不超过 max(n, k)·ε·参照范数
+// （或参照范数为 0）时判为奇异，ok 为假。去均值本身就是消去截距（哑变量）这一步，所以列本身的范数也要过同一个判定。
+func leastSquaresResidual(y []float64, columns [][]float64, references []float64) ([]float64, bool) {
 	n, k := len(y), len(columns)
 	if k == 0 {
 		return append([]float64(nil), y...), true
@@ -94,6 +101,9 @@ func leastSquaresResidual(y []float64, columns [][]float64) ([]float64, bool) {
 	for j, column := range columns {
 		a[j] = append([]float64(nil), column...)
 		norms[j] = euclidean(column)
+		if references != nil {
+			norms[j] = references[j]
+		}
 	}
 	qty := append([]float64(nil), y...)
 	diagonal := make([]float64, k)

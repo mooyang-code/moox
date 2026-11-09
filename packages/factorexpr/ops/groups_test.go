@@ -72,7 +72,7 @@ func TestCrossCorrelationByHand(t *testing.T) {
 // 分组截面的手算用例：两组、g 为 NaN 的行、组内全 NaN、单样本组、并列。
 func TestGroupedKernelsByHand(t *testing.T) {
 	//            A  B    C  D    E  F    G
-	g := []float64{1, 1, nan, 2, 2, 1, -0.0}
+	g := []float64{1, 1, nan, 2, 2, 1, math.Copysign(0, -1)}
 	x := []float64{3, 1, 9, nan, nan, 3, 5}
 	cases := []struct {
 		op   string
@@ -113,6 +113,15 @@ func TestGroupCumulativeShare(t *testing.T) {
 	if out[3] != 1 {
 		t.Fatalf("last share = %v, want exactly 1", out[3])
 	}
+	// 组内有负数：整组为 NaN，其他组照常。
+	out, _ = runCross(t, "gs_cumshare", [][]float64{{2, -1, 3, 4}}, []float64{1, 1, 2, 2})
+	expectRow(t, "gs_cumshare negative", out, []float64{nan, nan, 1, 4.0 / 7})
+}
+
+// −0 与 0 是同一组。
+func TestNegativeZeroGroupKey(t *testing.T) {
+	out, _ := runCross(t, "gs_sum", [][]float64{{1, 2, 4}}, []float64{0, math.Copysign(0, -1), 1})
+	expectRow(t, "gs_sum", out, []float64{3, 3, 4})
 }
 
 // 组数上限：超过 MaxGroups 个不同取值时整个截面为 NaN，并报告原因；恰好 MaxGroups 个时照常计算。

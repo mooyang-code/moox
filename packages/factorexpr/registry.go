@@ -422,7 +422,7 @@ var functionList = []*Function{
 	cross("gs_rank", "组内百分位（与 cs_rank 同口径）", "gs_rank(pct_change(close, 20), industry)").withGroup(),
 	cross("gs_demean", "组内去均值 x − 组内均值", "gs_demean(pct_change(close), industry)").withGroup(),
 	cross("gs_zscore", "组内标准化（ddof=1）；组内样本少于 2 或标准差为 0 时为 NaN", "gs_zscore(pct_change(close, 20), industry)").withGroup(),
-	cross("gs_cumshare", "组内按 x 降序排列（并列按标的 ID），累计到本行（含本行）的 x 之和占组内总和的比例；组内总和为 0 时为 NaN",
+	cross("gs_cumshare", "组内按 x 降序排列（并列按标的 ID），累计到本行（含本行）的 x 之和占组内总和的比例；x 应为非负量，组内有负数或总和为 0 时整组为 NaN",
 		"gs_cumshare(amount, industry)").withGroup(),
 	aggregate("gs_mean", []ArgSpec{argSeries, argGroup}, "组内均值，广播到组内每一行（含输入为 NaN 的行）；组内没有有效样本时为 NaN", "x - gs_mean(x, industry)"),
 	aggregate("gs_sum", []ArgSpec{argSeries, argGroup}, "组内求和，广播到组内每一行；组内没有有效样本时为 NaN", "amount / gs_sum(amount, industry)"),

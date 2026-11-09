@@ -143,14 +143,25 @@ func (s *Service) ListFactorFunctions(ctx context.Context, _ *factorpb.ListFacto
 	functions := make([]*factorpb.FactorFunction, 0, len(docs))
 	for _, doc := range docs {
 		args := make([]*factorpb.FactorFunctionArg, 0, len(doc.Args))
+		description := doc.Doc
 		for _, arg := range doc.Args {
-			args = append(args, &factorpb.FactorFunctionArg{
+			item := &factorpb.FactorFunctionArg{
 				Name: arg.Name, Kind: arg.Kind, Min: arg.Min, Max: arg.Max, Optional: arg.Optional, DefaultValue: arg.Default,
-			})
+			}
+			if arg.Variadic > 0 {
+				// 变参没有默认值，proto 里也没有变参字段：不标可选、不下发默认值，在说明里写明可以写几个。
+				least := 1
+				if arg.Optional {
+					least = 0
+				}
+				item.Optional, item.DefaultValue = false, 0
+				description += fmt.Sprintf("。参数 %s 是变参，可以写 %d～%d 个（%s1、%s2…）", arg.Name, least, arg.Variadic, arg.Name, arg.Name)
+			}
+			args = append(args, item)
 		}
 		functions = append(functions, &factorpb.FactorFunction{
 			Name: doc.Name, Category: doc.Category, Signature: doc.Signature, Result: doc.Result, Args: args,
-			Lookback: doc.Lookback, Doc: doc.Doc, Example: doc.Example,
+			Lookback: doc.Lookback, Doc: description, Example: doc.Example,
 		})
 	}
 	return &factorpb.ListFactorFunctionsRsp{RetInfo: success(), Functions: functions, ExprVersion: factorexpr.ExprVersion}, nil

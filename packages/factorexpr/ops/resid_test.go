@@ -62,6 +62,43 @@ func TestResidualSingular(t *testing.T) {
 	}
 }
 
+// 近似共线：x 与截距（或分组哑变量）只差 1 ulp 时判为奇异，与 numpy matrix_rank 的判定一致（rank 1、rank 2）；
+// 扰动大得多（1、1e−3）时 numpy 判满秩，这里也照常算。期望的秩由 numpy 2.5 算出。
+func TestResidualNearlyCollinearMatchesNumpyRank(t *testing.T) {
+	y := []float64{1, 3, 2, 5, 4, 7, 6, 8}
+	ulp := math.Nextafter(1e6, 2e6)
+	g := []float64{0, 0, 0, 0, 1, 1, 1, 1}
+	perturbed := func(delta1, delta6 float64) []float64 {
+		x := []float64{5, 5, 5, 5, 9, 9, 9, 9}
+		x[1], x[6] = delta1, delta6
+		return x
+	}
+	cases := []struct {
+		name     string
+		op       string
+		args     [][]float64
+		group    []float64
+		singular bool
+	}{
+		{"ulp 常数列", "cs_resid", [][]float64{y, {1e6, ulp, 1e6, ulp, 1e6, ulp, 1e6, ulp}}, nil, true},
+		{"相差 1 的列", "cs_resid", [][]float64{y, {1e6, 1e6 + 1, 1e6, 1e6 + 1, 1e6, 1e6 + 1, 1e6, 1e6 + 1}}, nil, false},
+		{"组内常数加 ulp", "gs_resid", [][]float64{y, perturbed(math.Nextafter(5, 6), math.Nextafter(9, 10))}, g, true},
+		{"组内常数加 1e-3", "gs_resid", [][]float64{y, perturbed(5+1e-3, 9)}, g, false},
+	}
+	for _, c := range cases {
+		out, reason := runCross(t, c.op, c.args, c.group)
+		if c.singular {
+			if reason != ReasonResidSingular {
+				t.Errorf("%s: reason %q, want singular (out %v)", c.name, reason, out)
+			}
+			continue
+		}
+		if reason != "" || math.IsNaN(out[0]) {
+			t.Errorf("%s: reason %q out %v, want regular", c.name, reason, out)
+		}
+	}
+}
+
 // gs_resid 不带 x 时与 gs_demean 逐位相同（每组至少 2 个样本，不触发样本不足）。
 func TestGroupResidualWithoutRegressorsIsDemean(t *testing.T) {
 	rng := rand.New(rand.NewSource(7))
@@ -121,7 +158,7 @@ func TestGroupResidualMatchesDummyRegression(t *testing.T) {
 			design = append(design, dummy)
 		}
 		design = append(design, xs...)
-		want, ok := leastSquaresResidual(y, design)
+		want, ok := leastSquaresResidual(y, design, nil)
 		if !ok {
 			t.Fatalf("trial %d: reference regression singular", trial)
 		}

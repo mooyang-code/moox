@@ -313,7 +313,7 @@ def cumshare(members):
         return out
     valid = valid.assign(neg=-valid["amount"]).sort_values(["neg", "subject"])
     total = valid["amount"].sum()
-    if total == 0:
+    if total == 0 or (valid["amount"] < 0).any():  # 有负数时占比没有意义，整组为 NaN
         return out
     out.loc[valid.index] = valid["amount"].cumsum() / total
     return out
