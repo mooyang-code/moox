@@ -366,6 +366,8 @@ function describeRuleUniverses(rules: unknown): string[] {
       const universe = rule.universe as Record<string, any>;
       const parts: string[] = [];
       if (Array.isArray(universe.tags) && universe.tags.length) parts.push(`标签 ${universe.tags.join("、")}`);
+      if (Array.isArray(universe.exclude_tags) && universe.exclude_tags.length)
+        parts.push(`排除标签 ${universe.exclude_tags.join("、")}`);
       if (Array.isArray(universe.include) && universe.include.length) parts.push(`包含 ${universe.include.length} 个`);
       if (Array.isArray(universe.exclude) && universe.exclude.length) parts.push(`排除 ${universe.exclude.join("、")}`);
       parts.push(...describeAges(universe));

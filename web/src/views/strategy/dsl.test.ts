@@ -24,6 +24,8 @@ describe("strategy DSL preview", () => {
       "name: a\nuniverse: {min_age_bars: 5}\nrules:\n  - {id: f, type: rank, allow_empty: true, universe: {max_age_bars: 30, age_markets: all}}\n"
     );
     expect(aged.preview?.universe).toBe("上市满 5 根；规则 f：上市不满 30 根，年龄按全部市场判断（允许为空）");
+    const excluded = parseDSL("name: e\nrules:\n  - {id: g, type: rank, universe: {exclude_tags: [meme, new]}}\n");
+    expect(excluded.preview?.universe).toBe("全部标的；规则 g：排除标签 meme、new");
     const signal = parseDSL(signalTemplate);
     expect(signal.diagnostics).toEqual([]);
     expect(signalTemplate).toContain("bars[-1].bias");

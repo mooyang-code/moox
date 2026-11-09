@@ -675,20 +675,31 @@ reload:
 func evaluateBar(ctx context.Context, program *dsl.Program, resolved input.Resolved, readers []*marketReader, members input.Membership, segments map[string]marketSegment, bar input.PeriodBoundaries, state engine.State) (engine.Decision, error) {
 	key := bar.StorageStart.Unix()
 	multi := len(readers) > 1
-	// 每个市场本期有行的标的；基础集合与标的绑定只取选币市场。
-	present := make(map[string]map[string]struct{}, len(readers))
+	// 基础集合与标的绑定只取选币市场：基础集合是选币市场本期有行的标的。
+	// 策略写了 on_missing 时，上期持有、在选币市场列出、本根整行缺失的标的也并进来（与实时的事件名单一致）：它进入预期集合、
+	// 按缺数冻结保持并计入缺数占比，而不是按不在预期集合出场。没写 on_missing 时不并入（结果与以前相同）。
+	var heldIDs map[string]struct{}
+	if program.Strategy.HasOnMissing() {
+		heldIDs = make(map[string]struct{})
+		for _, ids := range state.HeldMarkets() {
+			for id := range ids {
+				heldIDs[id] = struct{}{}
+			}
+		}
+	}
 	universeSet := make(map[string]struct{})
 	var subjects []input.Subject
 	for _, reader := range readers {
-		ids := make(map[string]struct{}, len(segments[reader.market].rows.Bars[key]))
-		for subjectID := range segments[reader.market].rows.Bars[key] {
-			ids[subjectID] = struct{}{}
+		if resolved.Market.Select != dsl.MarketBoth && resolved.Market.Select != reader.market {
+			continue
 		}
-		present[reader.market] = ids
-		if resolved.Market.Select == dsl.MarketBoth || resolved.Market.Select == reader.market {
-			subjects = append(subjects, reader.subjects...)
-			for subjectID := range ids {
-				universeSet[subjectID] = struct{}{}
+		subjects = append(subjects, reader.subjects...)
+		for subjectID := range segments[reader.market].rows.Bars[key] {
+			universeSet[subjectID] = struct{}{}
+		}
+		for id := range heldIDs {
+			if _, listed := reader.listed[id]; listed {
+				universeSet[id] = struct{}{}
 			}
 		}
 	}

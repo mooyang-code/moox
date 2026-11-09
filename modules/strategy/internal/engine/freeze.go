@@ -171,6 +171,10 @@ func ruleCauses(rule *dsl.CompiledRule, frame Frame, id string, ruleHeld bool) [
 	}
 	row, hasRow := frame.Rows[id]
 	causes := missingCauses(id, row, hasRow, columns, previousColumns, frame.FailedColumns)
+	// 持有时检查的列可能为空（hold 规则不写 filter、exit、scale、group 时）：没有行仍是缺数，集合划分按 no_row 处理，这里同样记上。
+	if len(causes) == 0 && !hasRow {
+		causes = append(causes, cause{kind: causeOther, text: "no_row"})
+	}
 	if len(causes) == 0 && hasRow {
 		if _, valid := scaleOf(rule, id, row); !valid {
 			causes = append(causes, cause{kind: causeOther, text: reasonScaleInvalid})

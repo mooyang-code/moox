@@ -82,7 +82,7 @@ portfolio: {leverage: 1, max_weight: 0.1}
 | 字段 | 说明 |
 | --- | --- |
 | `universe.tags` / `include` | 任一非空时取并集作白名单；都为空表示全部；再减去 `exclude_tags` 与 `exclude` |
-| `universe.min_age_bars` | 标的在这么多根之前已有数据才参与；对所有规则生效 |
+| `universe.min_age_bars` | 标的在这么多根之前已有数据才参与；规则没写规则级 `min_age_bars` 时生效 |
 | `universe.max_age_bars` | 只保留年龄小于这么多根的新标的；写了它的规则必须同时写 `allow_empty: true` |
 | `universe.age_markets` | `each`（默认）任一市场通过即算通过；`all` 要求在绑定的全部市场上都通过 |
 | 规则级 `universe` | 规则里写 `universe`，写了的字段逐项覆盖策略级；写了显式 `pool` 的规则只能写年龄类字段 |
