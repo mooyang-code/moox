@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -60,6 +61,8 @@ type fakeClient struct {
 	viewName    string
 	datasetName string
 	priceFn     func(id string, hour int) float64
+	// fundingRate 非零时 View 有 funding_rate 列，每行的值都是它（请求了这一列才返回）。
+	fundingRate float64
 }
 
 func (f *fakeClient) view() string {
@@ -139,7 +142,11 @@ func (f *fakeClient) GetView(context.Context, string, string) (input.ViewInfo, e
 	if f.build != "" {
 		generation += "@" + f.build
 	}
-	return input.ViewInfo{ViewID: f.view(), DatasetID: f.dataset(), Frequency: "1h", Status: "active", ActiveIndexID: index, Generation: generation, Columns: []input.ViewColumn{{Name: "close", Attributes: map[string]string{}}, {Name: "mom", Attributes: map[string]string{"column_kind": "output", "member_key": "mom", "factor_id": "mom", "member_kind": "fixed", "output_name": "mom"}}}}, nil
+	columns := []input.ViewColumn{{Name: "close", Attributes: map[string]string{}}, {Name: "mom", Attributes: map[string]string{"column_kind": "output", "member_key": "mom", "factor_id": "mom", "member_kind": "fixed", "output_name": "mom"}}}
+	if f.fundingRate != 0 {
+		columns = append(columns, input.ViewColumn{Name: "funding_rate", Attributes: map[string]string{}})
+	}
+	return input.ViewInfo{ViewID: f.view(), DatasetID: f.dataset(), Frequency: "1h", Status: "active", ActiveIndexID: index, Generation: generation, Columns: columns}, nil
 }
 
 func (f *fakeClient) ViewGeneration(ctx context.Context, spaceID, viewID string) (string, error) {
@@ -209,6 +216,9 @@ func (f *fakeClient) QueryRows(_ context.Context, _ string, query input.Query) (
 			values := map[string]float64{"close": value, "mom": value - f.priceAt(subject.SubjectID, hour-1)}
 			if f.nullMom[subject.SubjectID][hour] {
 				delete(values, "mom")
+			}
+			if f.fundingRate != 0 && slices.Contains(query.Columns, "funding_rate") {
+				values["funding_rate"] = f.fundingRate
 			}
 			rows = append(rows, input.Row{SubjectID: subject.SubjectID, DataTime: at, SeriesTag: "venue:binance", Values: values})
 			if subject.SubjectID == "A" && f.ambiguous[hour] {

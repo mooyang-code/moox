@@ -144,6 +144,9 @@ func TestPoolEnableFreezesMembers(t *testing.T) {
 	// 任务并集不齐：成员需要现货与永续，只绑一个现货任务。
 	one := createPoolInstance(h, "p_one", "pool_1", map[string]string{"spot": "ftask_p1"}, true)
 	requireFail(t, int32(one.GetRetInfo().GetCode()), one.GetRetInfo().GetMsg(), "")
+	// S8：股票成员可以进池，但股票任务不能与现货、永续任务绑在同一个池上。
+	mixed := createPoolInstance(h, "p_mixed", "pool_1", map[string]string{"spot": "ftask_p3", "equity": "ftask_p3eq"}, true)
+	requireFail(t, int32(mixed.GetRetInfo().GetCode()), mixed.GetRetInfo().GetMsg(), "不能与现货、永续混用")
 	created := createPoolInstance(h, "p1", "pool_1", map[string]string{"spot": "ftask_p2", "swap": "ftask_p2swap"}, true)
 	requireOK(t, int32(created.GetRetInfo().GetCode()), created.GetRetInfo().GetMsg())
 	instance := created.GetInstance()

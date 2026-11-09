@@ -69,11 +69,14 @@ type fakeLoader struct {
 	funding     map[int64]map[string]float64
 	priceCalls  int
 	priceKeysAt [][]string
+	// fundingColumns 是每次读价格时请求的资金费列。
+	fundingColumns []string
 }
 
 func (l *fakeLoader) LoadPrices(_ context.Context, _ string, _ input.Resolved, bar input.Bar, keys []string, fundingColumn string) (map[string]float64, map[string]float64, error) {
 	l.priceCalls++
 	l.priceKeysAt = append(l.priceKeysAt, keys)
+	l.fundingColumns = append(l.fundingColumns, fundingColumn)
 	out := map[string]float64{}
 	for _, key := range keys {
 		if price, ok := l.prices[bar.BarStart.Unix()][key]; ok {

@@ -19,12 +19,16 @@ import (
 // 现货负权重仍然报错：它说明策略或定市场的逻辑有错。frozen 是因市场不可用或只缺上一根而保持持仓的标的：
 // 按标的展开成上期所有非零的（标的, 市场）键，它们的目标是保持标记，权重取上期值。frozenKeys 是按键冻结的（标的, 市场）键
 // （写了规则级市场的规则，只冻结那个市场的键，见 rulemarket.go），同样保持上期值。
-func applyPortfolio(decision *Decision, portfolio dsl.Portfolio, mode dsl.Market, contributions map[string]quant.Decimal, frozen, frozenKeys map[string]struct{}, previous State, held heldIndex, tolerance quant.Decimal) error {
+//
+// 写了 portfolio.limits 时，第 1 步之前先做单标的分方向上限与超限转移（见 limits.go）：groups 是各来源（规则 id 或成员 id）
+// 本期的分组目标，键与 contributions 相同；没写 limits 时不用。
+func applyPortfolio(decision *Decision, portfolio dsl.Portfolio, mode dsl.Market, contributions map[string]quant.Decimal, groups map[string]map[string]quant.Decimal, frozen, frozenKeys map[string]struct{}, previous State, held heldIndex, tolerance quant.Decimal) error {
 	for key := range contributions {
 		if id, _ := SplitTargetKey(key); contains2(frozen, id) || contains2(frozenKeys, key) {
 			delete(contributions, key) // 规则不给冻结标的配权，保险起见再删一次
 		}
 	}
+	decision.Summary.Limits = applyLimits(contributions, groups, portfolio.Limits, frozen, frozenKeys)
 	holds := holdTargets(frozen, frozenKeys, previous, held)
 	quantized := quantizeTargets(contributions, portfolio, tolerance, holds)
 	decision.Summary.Notes = append(decision.Summary.Notes, quantized.notes...)

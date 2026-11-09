@@ -173,7 +173,12 @@ func limitations(liquidateAfter int, usesTags, usesSwap bool, fundingColumn stri
 		"区间内历史行版本未验证：因子结果行不携带版本，只核对了回放开始时的因子定义指纹",
 		"基础集合取每期有行的标的，与实时事件名单可能不同；数据集的全部标的绑定（含已停用）都参与读取",
 		"手续费只按实际成交额计；不含滑点与盘口冲击",
-		"持有标的连续缺价 " + itoa(liquidateAfter) + " 期后在 ok 期按最后价清算（研究假设）",
+	}
+	// 清算阈值为 0 表示不清算（股票成员的账本：停牌时按最后价格保持持仓）。
+	if liquidateAfter > 0 {
+		notes = append(notes, "持有标的连续缺价 "+itoa(liquidateAfter)+" 期后在 ok 期按最后价清算（研究假设）")
+	} else {
+		notes = append(notes, "缺价（停牌）的持仓按最后价格保持，不清算；成员净值只用于分配")
 	}
 	if usesTags {
 		notes = append(notes, "标签只有当前成员关系：按标签选池存在幸存者偏差")

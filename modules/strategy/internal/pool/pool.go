@@ -177,18 +177,39 @@ func Step(cfg Config, previous engine.State, in Input) (engine.Decision, error) 
 	// 比例只用上一期末为止的净值序列：本期的成员账本在下面才推进。
 	alloc := allocate(cfg.Spec, ids, state.Series, bankrupt, previousRatios)
 
+	// 成员的有效目标：通过的取本期目标，没通过的沿用上期目标；条件转移按它判断“空”。
+	memberTargets := make(map[string]map[string]quant.Decimal, len(ids))
+	empty := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		weights, err := memberWeights(results[id], previous.Members[id])
+		if err != nil {
+			return engine.Decision{}, fmt.Errorf("成员 %s：%w", id, err)
+		}
+		memberTargets[id] = weights
+		empty[id] = true
+		for _, weight := range weights {
+			if !weight.IsZero() {
+				empty[id] = false
+				break
+			}
+		}
+	}
+	// 合成用的比例：净敞口与总杠杆区间、条件转移之后的值（见 constraints.go），不写回 State.Ratios。
+	ratios, adjustments, err := constrain(cfg, ids, alloc.ratio, state.Started)
+	if err != nil {
+		return engine.Decision{}, err
+	}
+	ratios, switched := applySwitch(cfg, ratios, empty)
+
 	contributions := make(map[string]quant.Decimal)
 	frozen := make(map[string]struct{})
 	perMember := make(map[string]map[string]quant.Decimal, len(ids))
 	for _, id := range ids {
 		result := results[id]
-		weights, err := memberWeights(result, previous.Members[id])
-		if err != nil {
-			return engine.Decision{}, fmt.Errorf("成员 %s：%w", id, err)
-		}
+		weights := memberTargets[id]
 		scaled := make(map[string]quant.Decimal, len(weights))
 		for key, weight := range weights {
-			share := weight.Mul(alloc.ratio[id])
+			share := weight.Mul(ratios[id])
 			scaled[key] = share
 			contributions[key] = contributions[key].Add(share)
 		}
@@ -225,7 +246,11 @@ func Step(cfg Config, previous engine.State, in Input) (engine.Decision, error) 
 		}
 		state.Series[id] = series
 	}
-	composed, err := engine.ComposeTargets(cfg.Portfolio, cfg.Mode, contributions, frozen, previous)
+	var groups map[string]map[string]quant.Decimal
+	if cfg.Portfolio.Limits != nil {
+		groups = perMember
+	}
+	composed, err := engine.ComposeTargets(cfg.Portfolio, cfg.Mode, contributions, groups, frozen, previous)
 	if err != nil {
 		return engine.Decision{}, err
 	}
@@ -249,6 +274,12 @@ func Step(cfg Config, previous engine.State, in Input) (engine.Decision, error) 
 	composed.State = next
 	composed.Items = items
 	composed.Summary.Pool = summary(cfg, ids, results, state, &alloc, perMember)
+	composed.Summary.Pool.Adjustments, composed.Summary.Pool.Switch = adjustments, switched
+	for i, id := range ids {
+		if used := ratios[id].String(); used != alloc.ratio[id].String() {
+			composed.Summary.Pool.Members[i].Composed = used
+		}
+	}
 	return composed, nil
 }
 

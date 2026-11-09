@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -198,6 +199,22 @@ func TestPoolEvaluatesEveryMemberAndAllocates(t *testing.T) {
 	}
 	if h.health() != store.HealthOK {
 		t.Fatalf("健康状态：%s", h.health())
+	}
+}
+
+// 写了 fees.funding_column 的池读价格时同时请求这一列；没写时不请求。
+func TestPoolRequestsFundingColumn(t *testing.T) {
+	for column, dslText := range map[string]string{
+		"funding_rate": strings.Replace(poolDSL("{a: 0.5, b: 0.5}"), "fees: {spot_bps: 0, swap_bps: 0}", "fees: {spot_bps: 0, swap_bps: 0, funding_column: funding_rate}", 1),
+		"":             poolDSL("{a: 0.5, b: 0.5}"),
+	} {
+		h := newPoolHarness(t, dslText, standardMembers(), nil)
+		h.warm(barStart(1), "")
+		h.frame(2, abcFrame(3, 2, 1))
+		expectAck(t, h.deliverWith(2, bothFactors))
+		if len(h.loader.fundingColumns) != 1 || h.loader.fundingColumns[0] != column {
+			t.Fatalf("读价格时请求的资金费列 %v，期望 %q", h.loader.fundingColumns, column)
+		}
 	}
 }
 

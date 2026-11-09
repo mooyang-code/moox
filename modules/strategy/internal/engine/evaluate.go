@@ -125,6 +125,11 @@ func evaluateFrame(program *dsl.Program, mode dsl.Market, frame Frame, views map
 	// 第二遍：逐规则求值。
 	tolerance := quantizationTolerance(program)
 	contributions := make(map[string]quant.Decimal)
+	// groups 是各规则本期的分组目标（键与 contributions 相同），只在写了 portfolio.limits 时收集，超限转移按它分配。
+	var groups map[string]map[string]quant.Decimal
+	if program.Strategy.Portfolio.Limits != nil {
+		groups = make(map[string]map[string]quant.Decimal, len(program.Rules))
+	}
 	for i := range program.Rules {
 		rule := &program.Rules[i]
 		ruleMarket := dsl.RuleMarket(mode, rule.Rule)
@@ -153,6 +158,11 @@ func evaluateFrame(program *dsl.Program, mode dsl.Market, frame Frame, views map
 			result.state.MissingStreak = streak
 		}
 		allocated := quant.Zero()
+		var group map[string]quant.Decimal
+		if groups != nil {
+			group = make(map[string]quant.Decimal, len(result.weights))
+			groups[rule.Rule.ID] = group
+		}
 		for id, weight := range result.weights {
 			market := ruleMarket
 			if market == "" {
@@ -160,6 +170,9 @@ func evaluateFrame(program *dsl.Program, mode dsl.Market, frame Frame, views map
 			}
 			key := TargetKey(id, market)
 			contributions[key] = contributions[key].Add(weight)
+			if group != nil {
+				group[key] = group[key].Add(weight)
+			}
 			allocated = allocated.Add(abs(truncateWeightWith(weight, tolerance)))
 		}
 		summary := decision.Summary.Rules[rule.Rule.ID]
@@ -172,7 +185,7 @@ func evaluateFrame(program *dsl.Program, mode dsl.Market, frame Frame, views map
 		decision.Items = mergeStopItems(decision.Items, result.items)
 		decision.Items = append(decision.Items, partitions[i].notExpected(rule.Rule.ID, previous.Rules[rule.Rule.ID].Held)...)
 	}
-	if err := applyPortfolio(&decision, program.Strategy.Portfolio, mode, contributions, frozen, frozenKeys, previous, held, tolerance); err != nil {
+	if err := applyPortfolio(&decision, program.Strategy.Portfolio, mode, contributions, groups, frozen, frozenKeys, previous, held, tolerance); err != nil {
 		return skipped(decision, previous, SkipConfigError, err.Error())
 	}
 	return decision

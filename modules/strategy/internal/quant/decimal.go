@@ -252,6 +252,27 @@ func DivideProportional(total Decimal, orderedKeys []string, parts []int64) map[
 	return result
 }
 
+// DivideByWeights 按非负权重 weights 把 total 分给 orderedKeys：前面的键按比例取商，最后一个键取剩余，各份之和恰好等于 total；
+// 权重都为 0 时平分（见 DivideStable）。weights 与 orderedKeys 等长。
+func DivideByWeights(total Decimal, orderedKeys []string, weights []Decimal) map[string]Decimal {
+	sum := Zero()
+	for _, weight := range weights {
+		sum = sum.Add(weight)
+	}
+	if len(orderedKeys) == 0 || len(weights) != len(orderedKeys) || sum.IsZero() {
+		return DivideStable(total, orderedKeys)
+	}
+	result := make(map[string]Decimal, len(orderedKeys))
+	assigned := Zero()
+	for i, key := range orderedKeys[:len(orderedKeys)-1] {
+		share := total.Mul(weights[i]).Div(sum)
+		result[key] = share
+		assigned = assigned.Add(share)
+	}
+	result[orderedKeys[len(orderedKeys)-1]] = total.Sub(assigned)
+	return result
+}
+
 func DivideStable(total Decimal, orderedKeys []string) map[string]Decimal {
 	result := make(map[string]Decimal, len(orderedKeys))
 	if len(orderedKeys) == 0 {
