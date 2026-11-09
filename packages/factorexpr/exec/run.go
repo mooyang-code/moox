@@ -30,6 +30,8 @@ type Options struct {
 	Universes map[string][]bool
 	// PresentOnly 列出“只用有源行的序列”的标的范围：这些范围里的截面算子在每个时刻只让这一刻在网格上有源行的序列参与，
 	// 其余序列这一刻的结果为 NaN（observed 的历史截面口径）。没有列出的范围不看源行。
+	// 前提：列在这里的范围不传掩码，所以 runtimeKey 为 "all"，不会与带掩码的范围（current）去重成同一个节点；
+	// 以后若给这些范围也传掩码，要把 PresentOnly 编进 runtimeKey。
 	PresentOnly map[string]bool
 	// UDF 是自定义算子的执行宿主；程序里没有自定义算子时不需要。
 	UDF UDFHost
@@ -430,7 +432,7 @@ func (r *runner) compute(index int, node *factorexpr.ProgramNode) error {
 
 // computeCross 计算截面节点：每个时刻、每个 series_tag 组在成员标的范围之内取出全部参数（分组键单独放进 Section.Group），
 // 交给内核算出逐行结果。逐行变换类的 NaN 行为 NaN；聚合广播类的统计量写给组内范围之内的每一行（包括输入为 NaN 的行，以及
-// 这一刻没有源行的序列）。范围之外的行为 NaN。内核报告的告警（例如回归奇异）只统计目标区间 [Start, End] 内的截面，
+// 这一刻没有源行的序列；范围列在 Options.PresentOnly 里时例外，这些序列这一刻为 NaN）。范围之外的行为 NaN。内核报告的告警（例如回归奇异）只统计目标区间 [Start, End] 内的截面，
 // 历史截面在它自己作为目标的那一期统计，不重复计数。
 func (r *runner) computeCross(index int, node *factorexpr.ProgramNode, args []values, out values, interval factorexpr.Interval) error {
 	kernel := ops.CrossKernel(node.Op, node.Floats, node.Subject)
