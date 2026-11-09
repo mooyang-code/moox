@@ -174,6 +174,8 @@ python3 -I "$SKILL_ROOT/scripts/strategy_check.py" compare --targets out/targets
   --reference out/ref_<策略名>.csv --since <首个 ok 的 bar_end> --until <参考数据覆盖到的最后一个 bar_end> --trunc 1e-4 --table
 ```
 
+比对研究回放（含策略池回放）时，把 `--instance` 换成 `--replay <名称>=<回放ID>`：只导出回放里 ok 的期，格式与实例相同，再用 `compare` 比对。`--instance` 与 `--replay` 可以同时给，名称不能重复。
+
 `compare` 的退出码：0 表示通过；1 表示有期次不一致（或 MooX 缺期）；2 表示窗口里没有持仓或权重从未变化，开仓和到期路径没被检验到。
 
 **通过条件**：

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # strategy_check.py 的契约测试（只依赖 Python 标准库，全部离线）：
-# targets / summary 能读策略库，targets 按 (market, instrument_id) 区分同一标的的现货与永续，compare 对一致的权重判通过、对不一致判失败、对没有变化的窗口给出警告，
+# targets / summary 能读策略库，targets 按 (market, instrument_id) 区分同一标的的现货与永续、--replay 能读研究回放的目标，compare 对一致的权重判通过、对不一致判失败、对没有变化的窗口给出警告，
 # 截断按十进制向零（0.7284 不会被截成 0.7283），latency / task-lag 能按 bar_end 关联两份日志并算出分段耗时。
 set -euo pipefail
 
@@ -30,6 +30,31 @@ PY
 python3 -I "${CHECK}" targets --db "${TMP}/strategy.sqlite" --instance A=inst-a --output "${TMP}/targets.json" 2>/dev/null
 python3 -I -c 'import json,sys; t=json.load(open(sys.argv[1]))["A"]; assert sorted(t)==["2026-10-26T18:00:00Z","2026-10-26T18:05:00Z","2026-10-26T18:10:00Z"], t; assert t["2026-10-26T18:05:00Z"]["swap:BTC-USDT"]=="0.7284"; assert t["2026-10-26T18:10:00Z"]=={"swap:ETH-USDT":"0.25","spot:ETH-USDT":"0.3"}, t' "${TMP}/targets.json" \
   || fail "targets 应只导出 ok 的期、保留权重原文，并按 (market, instrument_id) 区分现货与永续"
+# --replay 读研究回放（含策略池回放）每期的目标：只导出 ok 的期，格式与实例相同；回放不存在、两类参数都没给、名称重复时报错。
+python3 -I - "${TMP}/strategy.sqlite" <<'PY'
+import json, sqlite3, sys
+c = sqlite3.connect(sys.argv[1])
+c.execute("CREATE TABLE t_strategy_replays (c_replay_id TEXT)")
+c.execute("CREATE TABLE t_strategy_replay_bars (c_replay_id TEXT, c_bar_end_time INTEGER, c_status TEXT, c_skip_reason TEXT, c_targets_json TEXT)")
+c.execute("INSERT INTO t_strategy_replays VALUES ('rp-1')")
+base = 1793037600000  # 2026-10-26T18:00:00Z
+targets = [{"instrument_id": "BTC-USDT", "market": "spot", "target_weight": "0.6"}, {"instrument_id": "BTC-USDT", "market": "swap", "target_weight": "-0.4"}]
+c.execute("INSERT INTO t_strategy_replay_bars VALUES ('rp-1', ?, 'ok', '', ?)", (base, json.dumps(targets)))
+c.execute("INSERT INTO t_strategy_replay_bars VALUES ('rp-1', ?, 'skipped', 'no_data', '[]')", (base + 300000,))
+c.commit()
+PY
+python3 -I "${CHECK}" targets --db "${TMP}/strategy.sqlite" --replay P=rp-1 --instance A=inst-a --output "${TMP}/replay_targets.json" 2>/dev/null
+python3 -I -c 'import json,sys; t=json.load(open(sys.argv[1])); assert t["P"]=={"2026-10-26T18:00:00Z":{"spot:BTC-USDT":"0.6","swap:BTC-USDT":"-0.4"}}, t; assert len(t["A"])==3, t' "${TMP}/replay_targets.json" \
+  || fail "targets --replay 应只导出回放里 ok 的期，按 (market, instrument_id) 区分现货与永续，并能与 --instance 一起导出"
+set +e
+out="$(python3 -I "${CHECK}" targets --db "${TMP}/strategy.sqlite" --replay P=missing 2>&1)"
+[[ $? != 0 ]] && grep -q "回放 missing 不存在" <<<"${out}" || fail "回放不存在必须报错：${out}"
+out="$(python3 -I "${CHECK}" targets --db "${TMP}/strategy.sqlite" 2>&1)"
+[[ $? != 0 ]] && grep -q "至少给一个 --instance 或 --replay" <<<"${out}" || fail "两类参数都没给必须报错：${out}"
+out="$(python3 -I "${CHECK}" targets --db "${TMP}/strategy.sqlite" --replay A=rp-1 --instance A=inst-a 2>&1)"
+[[ $? != 0 ]] && grep -q "名称重复" <<<"${out}" || fail "名称重复必须报错：${out}"
+set -e
+
 summary="$(python3 -I "${CHECK}" summary --db "${TMP}/strategy.sqlite" --instance A=inst-a)"
 grep -q "跳过原因 {'expired': 1}" <<<"${summary}" || fail "summary 应列出跳过原因：${summary}"
 grep -q "最大 200" <<<"${summary}" || fail "summary 应给出状态体积"

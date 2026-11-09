@@ -139,7 +139,7 @@ func TestPoolReplayRejectsInvalidRequests(t *testing.T) {
 	oneTask, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "pool_1", FactorTasks: map[string]string{"spot": "ftask_p2"}, StartTime: "2026-09-01", EndTime: "2026-09-02"})
 	requireFail(t, int32(oneTask.GetRetInfo().GetCode()), oneTask.GetRetInfo().GetMsg(), "策略池的成员需要绑定")
 	early, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "pool_1", FactorTasks: poolReplayTasks, StartTime: "2025-12-01", EndTime: "2026-01-02"})
-	requireFail(t, int32(early.GetRetInfo().GetCode()), early.GetRetInfo().GetMsg(), "")
+	requireFail(t, int32(early.GetRetInfo().GetCode()), early.GetRetInfo().GetMsg(), "太早")
 	listed, _, err := h.service.Store.ListReplays(h.ctx, "crypto", 0, 10)
 	if err != nil || len(listed) != 0 {
 		t.Fatalf("被拒绝的回放不写记录：%+v %v", listed, err)
