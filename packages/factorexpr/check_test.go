@@ -356,3 +356,30 @@ func TestAggregateChecks(t *testing.T) {
 		t.Fatal("RefSubjects should be empty without cs_ref")
 	}
 }
+
+// 事件记忆的回看是 L(x)+n−1（多个序列参数取最大的 L）；c 只收布尔序列，n 只收窗口常量。
+func TestEventMemoryChecks(t *testing.T) {
+	for expression, lookback := range map[string]int{
+		`ts_last_valid(close, 10)`:                                 10,
+		`ts_bars_since(close > open, 10)`:                          10,
+		`ts_value_when(close > open, delay(close, 3), 10)`:         13,
+		`ts_bars_since(ts_mean(close, 5) > open, 1)`:               5,
+		`fill_nan(ts_last_valid(where(close > 1, 1, nan), 20), 0)`: 20,
+	} {
+		if got := mustCompile(t, outputSpec(expression)).Lookback; got != lookback {
+			t.Errorf("%s: lookback = %d, want %d", expression, got, lookback)
+		}
+	}
+	for expression, want := range map[string]string{
+		`ts_bars_since(close, 10)`:            "需要布尔序列",
+		`ts_value_when(close, close, 10)`:     "需要布尔序列",
+		`ts_value_when(close > open, 1, 10)`:  "必须依赖输入列",
+		`ts_last_valid(close, 0)`:             "1～100000 的整数常量",
+		`ts_last_valid(close, nan)`:           "不能是 nan",
+		`ts_bars_since(close > open, 100001)`: "1～100000 的整数常量",
+	} {
+		if _, err := Compile(outputSpec(expression)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: err = %v, want containing %q", expression, err, want)
+		}
+	}
+}

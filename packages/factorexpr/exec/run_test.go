@@ -28,6 +28,7 @@ var purityExpressions = []string{
 	"ts_rank_relaxed(x, 7, 2)", "ts_var_relaxed(x, 7, 2)", "ts_zscore_relaxed(x, 7, 3)", "ts_skew_relaxed(x, 9, 3)",
 	"ts_kurt_relaxed(x, 9, 4)", "ts_argmax_relaxed(x, 7, 1)", "ts_argmin_relaxed(x, 7, 1)", "ts_product_relaxed(x / 100, 5, 2)",
 	"ts_corr_relaxed(x, y, 9, 3)", "ts_cov_relaxed(x, y, 9, 3)",
+	"ts_last_valid(where(x > 0.5, x, nan), 9)", "ts_bars_since(x > y, 9)", "ts_value_when(x > y, delay(x, 2), 9)",
 }
 
 // purityPanel 生成多序列、两个 series_tag 的面板：含 NaN、常数段，第一条序列放入 Codex 审查给出的 EMA 反例。

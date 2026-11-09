@@ -264,6 +264,15 @@ var functionList = []*Function{
 	rolling("ts_rsquare", []ArgSpec{{Name: "y", Kind: ArgSeries}, window(2)}, "对时间序号 1..n 做最小二乘的 R²", "ts_rsquare(close, 20)"),
 	rolling("ts_resi", []ArgSpec{{Name: "y", Kind: ArgSeries}, window(2)}, "对时间序号 1..n 做最小二乘后当期的残差", "ts_resi(close, 20)"),
 
+	// 时序：窗口内事件记忆（只在最近 n 根里回看，窗口里没有事件时为 NaN）
+	rolling("ts_last_valid", []ArgSpec{argSeries, window(1)},
+		"最近 n 根（含当根）里最后一个非 NaN 的 x；没有为 NaN。只有最近一次有效值落在窗口内时，才等于无限期前向填充",
+		"fill_nan(ts_last_valid(where(close > open, 1, where(close < open, 0, nan)), 50), 0)"),
+	rolling("ts_bars_since", []ArgSpec{{Name: "c", Kind: ArgBoolSeries}, window(1)},
+		"最近 n 根里 c 最后一次为真距今的根数，当根为真记 0；c 为 NaN 不算为真；没有为 NaN", "ts_bars_since(close > ts_max(high, 20) * 0.99, 100)"),
+	rolling("ts_value_when", []ArgSpec{{Name: "c", Kind: ArgBoolSeries}, {Name: "x", Kind: ArgSeries}, window(1)},
+		"最近 n 根里 c 最后一次为真那一根的 x；没有为 NaN", "ts_value_when(volume > ts_mean(volume, 20) * 3, close, 100)"),
+
 	// 时序：递归平滑（截断到 K 根）
 	{Name: "ema", Category: CategoryTimeSeries,
 		Args:   []ArgSpec{argSeries, window(1), {Name: "k", Kind: ArgInteger, Min: 0, Max: MaxWindow, Optional: true, Default: 0}},
