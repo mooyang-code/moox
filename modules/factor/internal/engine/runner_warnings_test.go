@@ -17,7 +17,9 @@ import (
 
 type warningRunner struct{ outcome pipeline.Outcome }
 
-func (r warningRunner) Run(context.Context, pipeline.Plan) (pipeline.Outcome, error) { return r.outcome, nil }
+func (r warningRunner) Run(context.Context, pipeline.Plan) (pipeline.Outcome, error) {
+	return r.outcome, nil
+}
 
 // 截面回归奇异、组数超限按原因计入 factor_failures_total，计数是截面数；成员状态是 complete 时不另记状态失败。
 func TestMeasuredRunnerCountsCrossSectionWarnings(t *testing.T) {
