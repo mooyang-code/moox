@@ -27,7 +27,7 @@ describe("持仓与目标按币合并", () => {
     expect(rows[0].deviationSwap).toBeCloseTo(0.6);
   });
 
-  it("相差 1% 以内或目标已收敛算到位", () => {
+  it("相差 1% 以内或目标整体已到位算到位", () => {
     const input = {
       targets: [{ instrument_id: "ETH-USDT-SWAP", quantity: "10" }],
       blocked: [],
@@ -41,7 +41,7 @@ describe("持仓与目标按币合并", () => {
     expect(buildCoinRows({ ...far, converged: true })[0].state).toBe("ok");
   });
 
-  it("被拦下的目标优先显示原因，目标外的永续持仓标为目标外", () => {
+  it("未执行的目标优先显示原因，不在目标内的永续持仓标为 extra", () => {
     const rows = buildCoinRows({
       targets: [{ instrument_id: "DOGE-USDT-SPOT", quantity: "100" }],
       blocked: [{ instrument_id: "DOGE-USDT-SPOT", quantity: "100", reason: "低于最小下单额" }],
@@ -59,7 +59,7 @@ describe("持仓与目标按币合并", () => {
     expect(rows[0].blockedReason).toContain("最小下单额");
   });
 
-  it("被每小时上限顺延的目标不算被拦下：状态按差额判断，原因单独放在顺延里", () => {
+  it("被每小时上限顺延的目标不算未执行：状态按差额判断，原因单独放在顺延里", () => {
     const rows = buildCoinRows({
       targets: [{ instrument_id: "DOGE-USDT-SPOT", quantity: "100" }],
       blocked: [{ instrument_id: "DOGE-USDT-SPOT", quantity: "100", reason: "超出每小时上限，留到下一个整点", deferred: true }],

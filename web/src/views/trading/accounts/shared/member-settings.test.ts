@@ -184,7 +184,7 @@ describe("测试网、生产环境下的设置要先确认", () => {
     wrapper.unmount();
   });
 
-  it("杠杆不是正整数时被拦下，不打开确认框", async () => {
+  it("杠杆不是正整数时不放行，不打开确认框", async () => {
     const wrapper = mountLive(liveAccount);
     const vm = wrapper.vm as unknown as SettingsVM;
     for (const value of ["0", "1.5", "-1", "abc"]) {

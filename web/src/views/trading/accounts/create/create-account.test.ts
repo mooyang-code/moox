@@ -177,7 +177,7 @@ describe("新建账户提交", () => {
       await vi.waitFor(() => expect(nextButton()?.disabled).toBe(false));
       expect(mocks.inspectExchangeCredential.mock.calls[0][0].markets).toBeUndefined();
 
-      // 进入第三步：按所选市场再检测，合约双向持仓这类和市场有关的阻断项在这里拦下。
+      // 进入第三步：按所选市场再检测，合约双向持仓这类和市场有关的阻断项在这里挡住。
       mocks.inspectExchangeCredential.mockResolvedValueOnce({
         inspection: { account_mode: "BINANCE_STANDARD", blockers: [{ code: "hedge_position_mode", message: "合约是双向持仓" }] }
       });

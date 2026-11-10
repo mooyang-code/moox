@@ -45,4 +45,11 @@ describe("order settings form", () => {
       })
     ).toContain("重复");
   });
+
+  it("A 股组合只有一项最小下单额：标签不带市场，不校验合约那项", () => {
+    const model = { ...orderSettingsToModel(), min_notional_swap: "abc" };
+    expect(validateOrderSettingsModel(model)).toContain("合约最小下单额");
+    expect(validateOrderSettingsModel(model, true)).toBe("");
+    expect(validateOrderSettingsModel({ ...model, min_notional_spot: "x" }, true)).toBe("最小下单额必须是不小于 0 的数字");
+  });
 });

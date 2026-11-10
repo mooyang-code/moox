@@ -24,9 +24,9 @@
             {{ formatInstant(target.valid_until, displayZone) }}
             <span class="tx-muted">（{{ targetExpired ? "已过期" : "尚未过期" }}）</span>
           </a-descriptions-item>
-          <a-descriptions-item label="目标">{{ targetCoins }} 个币</a-descriptions-item>
+          <a-descriptions-item label="目标">{{ targetCoins }} {{ stockOnly ? "只股票" : "个币" }}</a-descriptions-item>
           <a-descriptions-item label="未到位">{{ offCount }} 个</a-descriptions-item>
-          <a-descriptions-item label="被拦下">{{ blockedCount }} 个</a-descriptions-item>
+          <a-descriptions-item label="未执行">{{ blockedCount }} 个</a-descriptions-item>
           <a-descriptions-item v-if="deferredCount" label="顺延">{{ deferredCount }} 个</a-descriptions-item>
           <a-descriptions-item label="最近错误">{{ target.last_error || "无" }}</a-descriptions-item>
         </a-descriptions>
@@ -81,7 +81,7 @@ import EnvMark from "@/components/trade-confirm/env-mark.vue";
 import EquityCurve from "../shared/equity-curve.vue";
 import { accountEnvironment } from "@/components/trade-confirm/environment";
 import { fmtMoney } from "../shared/format";
-import { marketsText } from "../shared/markets";
+import { isStockOnly, marketsText } from "../shared/markets";
 import SectionBlock from "../shared/section-block.vue";
 import StatusMark from "../shared/status-mark.vue";
 import { detailContextKey } from "./context";
@@ -103,8 +103,9 @@ const members = computed(() =>
     .map(member => ({ ...member, account: accounts.value.get(member.trading_account_id) }))
     .filter((item): item is typeof item & { account: NonNullable<typeof item.account> } => Boolean(item.account))
 );
+const stockOnly = computed(() => isStockOnly(logical.value.markets || []));
 const targetCoins = computed(() => targetCoinCount(target.value?.targets || []));
-// 被单币每小时上限顺延的标的不算被拦下，单独计数
+// 被单币每小时上限顺延的标的不算未执行，单独计数
 const blockedCount = computed(() => (target.value?.blocked_targets || []).filter(item => !item.deferred).length);
 const deferredCount = computed(() => (target.value?.blocked_targets || []).filter(item => item.deferred).length);
 const offCount = computed(() => coinRows.value.filter(row => row.state !== "ok").length);

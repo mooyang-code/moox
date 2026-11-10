@@ -101,11 +101,12 @@ function validateCaps(rows: CapRow[], market: "SPOT" | "SWAP", label: string): s
 }
 
 /** 提交前的本地校验，规则和后端 domain/ordersettings 一致；返回第一条错误，空串表示通过。 */
-export function validateOrderSettingsModel(model: OrderSettingsModel): string {
+export function validateOrderSettingsModel(model: OrderSettingsModel, stockOnly = false): string {
   const ratioIn01 = (value: string) => isDecimal(value) && Number(value) <= 1;
   if (!ratioIn01(model.rebalance_threshold_ratio)) return "调仓阈值比例必须在 0 到 1 之间";
-  if (!isDecimal(model.min_notional_spot)) return "现货最小下单额必须是不小于 0 的数字";
-  if (!isDecimal(model.min_notional_swap)) return "合约最小下单额必须是不小于 0 的数字";
+  // A 股组合只有股票一个市场，最小下单额只有一项，不校验合约那项
+  if (!isDecimal(model.min_notional_spot)) return `${stockOnly ? "" : "现货"}最小下单额必须是不小于 0 的数字`;
+  if (!stockOnly && !isDecimal(model.min_notional_swap)) return "合约最小下单额必须是不小于 0 的数字";
   const capError = validateCaps(model.hourly_cap_spot, "SPOT", "现货") || validateCaps(model.hourly_cap_swap, "SWAP", "合约");
   if (capError) return capError;
   if (

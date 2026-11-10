@@ -30,9 +30,9 @@ export interface CoinRow {
   /** 股票：可卖数量（扣掉冻结和当日买入）；股票行的目标、实际、偏差记在 Spot 那一列 */
   sellable: number;
   stock: boolean;
-  /** 被拦下的原因，没有则为空 */
+  /** 未执行的原因，没有则为空 */
   blockedReason: string;
-  /** 被单币每小时上限顺延到下一个整点的说明，没有则为空：不算被拦下，状态仍按差额判断 */
+  /** 被单币每小时上限顺延到下一个整点的说明，没有则为空：不算未执行，状态仍按差额判断 */
   deferredReason: string;
   state: "ok" | "off" | "blocked" | "extra";
   /** 相对偏差的最大值，用于排序 */
@@ -44,9 +44,9 @@ export interface BuildCoinRowsInput {
   blocked: readonly BlockedTarget[];
   swapPositions: readonly Position[];
   spotHoldings: readonly Holding[];
-  /** 目标整体已收敛：差额只是下不了单的零头，全部算到位 */
+  /** 目标整体已到位：差额只是下不了单的零头，全部算到位 */
   converged: boolean;
-  /** 有没有策略目标；自主下单的组合没有目标，持仓都不算“目标外” */
+  /** 有没有策略目标；自主下单的组合没有目标，持仓都不算“不在目标内” */
   hasTarget: boolean;
 }
 
