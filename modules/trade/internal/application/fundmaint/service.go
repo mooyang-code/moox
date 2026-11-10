@@ -42,7 +42,7 @@ const (
 	ownerStableRebalance = "stable-rebalance"
 )
 
-// 约定的数值：BNB 市值低于“目标 − 容差”才补买（统一账户目标是保留金额、容差 fundsettings.BNBReserveSlack，普通账户只补现货钱包、两者都减半，见 bnbBounds）；稳定币偏离目标超过 stableDeviation（占稳定币总价值的比例，
+// 约定的数值：BNB 市值低于“目标 − 容差”才补买（统一账户目标是保留金额、容差 fundsettings.BNBReserveSlack，普通账户只补现货钱包、两者都减半，见 BNBBounds）；稳定币偏离目标超过 stableDeviation（占稳定币总价值的比例，
 // 取绝对差）才调平；零头资产价值低于 dustValueLimit（结算币计）才兑换。
 var (
 	stableDeviation = shared.MustDecimal("0.05")
