@@ -232,7 +232,14 @@ func TestTargetExecutorDiscardsPendingChildWhenSessionChangesAfterPlace(t *testi
 	require.True(t, accepted)
 	fixture.orders.afterPlace = func() {
 		require.NoError(t, fixture.store.Transaction(context.Background(), func(tx *store.Tx) error {
-			_, _, err := tx.RebindLogicalAccountSession("space-1", "logical-1", "instance-1", "session-1", fence, "instance-2", "session-2")
+			if err := tx.ReleaseLogicalAccountSession("space-1", "logical-1", "instance-1", "session-1", fence); err != nil {
+				return err
+			}
+			logical, err := tx.GetLogicalAccount("space-1", "logical-1")
+			if err != nil {
+				return err
+			}
+			_, _, err = tx.ClaimLogicalAccountSession("space-1", "logical-1", "instance-2", "session-2", logical.AuthFence)
 			return err
 		}))
 	}

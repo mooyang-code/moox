@@ -214,47 +214,6 @@ func (tx *Tx) ClaimLogicalAccountSession(
 	return fence, true, nil
 }
 
-// RebindLogicalAccountSession switches an existing instance to a new session
-// only when the complete old identity and fence still match. It is useful for
-// explicit re-enable/rebind operations and intentionally does not revive an
-// account that another instance has claimed in the meantime. changed is false
-// when the requested new identity already owns the account with this fence.
-func (tx *Tx) RebindLogicalAccountSession(
-	spaceID, logicalAccountID, oldInstanceID, oldSessionID, expectedFence,
-	newInstanceID, newSessionID string,
-) (string, bool, error) {
-	if blank(oldInstanceID) || blank(oldSessionID) || blank(expectedFence) || blank(newInstanceID) || blank(newSessionID) {
-		return "", false, fmt.Errorf("%w: session authorization identity and expected auth fence are required", ErrInvalidRecord)
-	}
-	account, err := tx.GetLogicalAccount(spaceID, logicalAccountID)
-	if err != nil {
-		return "", false, err
-	}
-	if account.ControlMode != "STRATEGY" {
-		return "", false, fmt.Errorf("%w: logical account is not strategy controlled", ErrConflict)
-	}
-	if account.AuthFence != expectedFence {
-		return "", false, fmt.Errorf("%w: stale session authorization rebind", ErrConflict)
-	}
-	if account.OwnerInstanceID == newInstanceID && account.OwnerSessionID == newSessionID {
-		return account.AuthFence, false, nil
-	}
-	if account.OwnerInstanceID != oldInstanceID || account.OwnerSessionID != oldSessionID ||
-		account.AuthFence != expectedFence {
-		return "", false, fmt.Errorf("%w: stale session authorization rebind", ErrConflict)
-	}
-	fence := newAuthFence()
-	result := tx.db.Exec(execRebindLogicalAccountOwner, newInstanceID, newSessionID, fence, spaceID, logicalAccountID,
-		oldInstanceID, oldSessionID, account.AuthFence)
-	if result.Error != nil {
-		return "", false, writeError(result.Error)
-	}
-	if result.RowsAffected != 1 {
-		return "", false, fmt.Errorf("%w: session authorization rebind lost compare-and-set", ErrConflict)
-	}
-	return fence, true, nil
-}
-
 // ReleaseLogicalAccountSession releases only the expected identity and fence. Releasing
 // an already-idle account is idempotent; releasing an account owned by a new
 // session is a conflict and never changes that new authorization.
@@ -655,13 +614,6 @@ const (
 		  AND COALESCE(c_owner_instance_id, '') = ''
 		  AND c_control_mode = 'STRATEGY'
 		  AND COALESCE(c_owner_session_id, '') = ''
-		  AND c_auth_fence = ?`
-	execRebindLogicalAccountOwner = `UPDATE t_logical_accounts
-		SET c_owner_instance_id = ?, c_owner_session_id = ?, c_owner_claimed_at = c_owner_claimed_at + 1, c_auth_fence = ?,
-			c_mtime = CURRENT_TIMESTAMP
-		WHERE c_space_id = ? AND c_logical_account_id = ?
-		  AND c_owner_instance_id = ? AND c_owner_session_id = ?
-		  AND c_control_mode = 'STRATEGY'
 		  AND c_auth_fence = ?`
 	execReleaseLogicalAccountOwner = `UPDATE t_logical_accounts
 		SET c_owner_instance_id = NULL, c_owner_session_id = NULL,
