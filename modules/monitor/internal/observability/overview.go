@@ -1121,6 +1121,8 @@ var TradeAttentionNames = map[string]string{
 	"release_orders_stuck":      "释放会话持续失败，目标单没撤下",
 	"orders_instrument_gone":    "标的已下架的订单需人工核对成交",
 	"fill_ingest_failed":        "成交没能记进账本，账户卡在同一笔",
+	"clock_skew":                "本机时钟与交易所相差过大，请检查 NTP",
+	"isolated_position":         "交易所账户里有逐仓持仓，moox 只支持全仓单向",
 }
 
 // EventCenterAttentionNames 是事件中心上报的需要人看的情况。

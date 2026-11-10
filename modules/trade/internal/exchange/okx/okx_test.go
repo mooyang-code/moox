@@ -571,6 +571,26 @@ func TestRejectsUnsupportedAndClassifiesErrors(t *testing.T) {
 	})
 }
 
+// 账户里有逐仓持仓：REST 不整体报错，逐仓的标记出来（不换算张数），全仓的照常解析。
+func TestListPositionSnapshotsMarksIsolatedPositions(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		ok(w, `[{"instId":"ETH-USDT-SWAP","posSide":"net","pos":"3","mgnMode":"isolated","uTime":"1700000000000"},`+
+			`{"instId":"BTC-USDT-SWAP","posSide":"net","pos":"-4","avgPx":"100","markPx":"101","lever":"5","mgnMode":"cross","margin":"10","liqPx":"50","upl":"2","realizedPnl":"1","uTime":"1700000000000"}]`)
+	}))
+	defer server.Close()
+	adapter := swapAdapter(server.URL)
+	adapter.instruments[exchange.SymbolKey{Market: exchange.MarketTypeSwap, Symbol: "BTC-USDT-SWAP"}] = testInstrument()
+	positions, err := adapter.ListPositionSnapshots(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cross, isolated := exchange.SplitIsolated(positions)
+	if len(isolated) != 1 || isolated[0].ExchangeSymbol != "ETH-USDT-SWAP" ||
+		len(cross) != 1 || cross[0].ExchangeSymbol != "BTC-USDT-SWAP" || cross[0].SignedQuantity.String() != "-0.04" {
+		t.Fatalf("cross=%+v isolated=%+v", cross, isolated)
+	}
+}
+
 func swapAdapter(baseURL string) *Adapter {
 	return newWithClient(exchange.AccountConfig{
 		TradingAccountID: "account-1", Exchange: exchange.ExchangeOKX,

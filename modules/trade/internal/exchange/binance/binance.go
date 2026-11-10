@@ -18,6 +18,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/httpclient"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
+	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 )
 
 // sideEffectNone 是统一账户杠杆账户下单的 sideEffectType 取值：不借币、不自动还款（官方 SDK 枚举 NO_SIDE_EFFECT）。
@@ -605,6 +606,7 @@ func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnaps
 	if err != nil {
 		return exchange.AccountSnapshot{}, err
 	}
+	positions, _ = exchange.SplitIsolated(positions)
 	snapshot.UnrealizedPnL = sumUnrealizedPnL(positions)
 	for _, balance := range payload.Assets {
 		total, parseErr := decimalOrZero(balance.WalletBalance)
@@ -694,12 +696,22 @@ func (a *Adapter) ListPositionSnapshots(ctx context.Context) ([]exchange.Positio
 		if err != nil || quantity.IsZero() {
 			continue
 		}
+		isolatedWallet, err := decimalOrZero(row.IsolatedWallet)
+		if err != nil {
+			return nil, err
+		}
 		position := exchange.Position{
 			Market:           a.config.Market(),
 			TradingAccountID: a.config.TradingAccountID,
 			ExchangeSymbol:   row.Symbol, PositionSide: exchange.PositionSideNet,
 			SignedQuantity: quantity, MarginMode: exchange.MarginModeCross,
 			ExchangeUpdatedAt: millis(row.UpdateTime),
+		}
+		if !isolatedWallet.IsZero() {
+			// 逐仓持仓只标记、不解析其余字段：调用方据此暂停组合，该持仓不入投影。
+			position.MarginMode = exchange.MarginModeIsolated
+			out = append(out, position)
+			continue
 		}
 		position.EntryPrice, err = decimalOrZero(row.EntryPrice)
 		if err == nil {
@@ -713,13 +725,6 @@ func (a *Adapter) ListPositionSnapshots(ctx context.Context) ([]exchange.Positio
 		}
 		if err != nil {
 			return nil, err
-		}
-		isolatedWallet, err := decimalOrZero(row.IsolatedWallet)
-		if err != nil {
-			return nil, err
-		}
-		if !isolatedWallet.IsZero() {
-			return nil, typedRejected("isolated margin is unsupported", nil)
 		}
 		position.UsedMargin, err = positionMargin(row)
 		if err != nil {
@@ -1344,8 +1349,25 @@ func classifyAPIError(err error, raw []byte) error {
 	}
 	typed.Code = code
 	switch code {
-	case "-2010", "-2019":
+	case "-2010":
+		// -2010 是“新订单被拒绝”的总称，按说明文字细分：订单号重复说明原单可能已被受理，不能当拒单。
+		message := strings.ToLower(apiMessage(raw))
+		switch {
+		case strings.Contains(message, "duplicate order"):
+			typed.Kind = exchange.ErrorTransportUnknown
+		case strings.Contains(message, "insufficient balance"):
+			typed.Kind = exchange.ErrorInsufficientBalance
+		default:
+			typed.Kind = exchange.ErrorRejected
+		}
+	case "-2019":
 		typed.Kind = exchange.ErrorInsufficientBalance
+	case "-4116":
+		// 合约：ClientOrderId is duplicated，原单可能已被受理，走查询认领。
+		typed.Kind = exchange.ErrorTransportUnknown
+	case "-1000", "-1001":
+		// 未知错误、内部错误：官方说明没有保证订单未被受理，按结果未知走查询恢复。
+		typed.Kind = exchange.ErrorTransportUnknown
 	case "-2011", "-2013":
 		typed.Kind = exchange.ErrorOrderNotFound
 	case "-2015":
@@ -1360,10 +1382,20 @@ func classifyAPIError(err error, raw []byte) error {
 		// 官方说明：后端响应异常或超时，执行状态未知。
 		typed.Kind = exchange.ErrorTransportUnknown
 	case "-1021":
-		// 时间戳超窗时交易所没有受理，但本地无法确认，按结果未知走查询恢复。
+		// 时间戳超窗时交易所没有受理，但本地无法确认，按结果未知走查询恢复；同时提示检查本机时钟。
 		typed.Kind = exchange.ErrorTransportUnknown
+		telemetry.Note(telemetry.AttentionClockSkew, "币安：本机时钟与交易所相差过大，请检查 NTP", time.Now())
 	}
 	return typed
+}
+
+// apiMessage 取响应体里的错误说明（msg）；没有时返回空串。
+func apiMessage(raw []byte) string {
+	var payload struct {
+		Msg string `json:"msg"`
+	}
+	_ = json.Unmarshal(raw, &payload)
+	return payload.Msg
 }
 
 func apiCode(raw []byte) string {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/httpclient"
@@ -48,7 +50,17 @@ func configReply(t *testing.T, mutate func(map[string]any)) string {
 
 func inspectAgainst(t *testing.T, status int, body string, request exchange.InspectRequest) (exchange.Inspection, error) {
 	t.Helper()
+	return inspectAgainstWithClock(t, status, body, request, 0)
+}
+
+// inspectAgainstWithClock 同 inspectAgainst，另让模拟的交易所时间比本机快 clockAhead（官方 public/time 的格式：data[0].ts 毫秒）。
+func inspectAgainstWithClock(t *testing.T, status int, body string, request exchange.InspectRequest, clockAhead time.Duration) (exchange.Inspection, error) {
+	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v5/public/time" {
+			_, _ = fmt.Fprintf(w, `{"code":"0","msg":"","data":[{"ts":"%d"}]}`, time.Now().Add(clockAhead).UnixMilli())
+			return
+		}
 		if r.URL.Path != "/api/v5/account/config" {
 			t.Errorf("意外的路径 %s", r.URL.Path)
 		}
@@ -278,5 +290,33 @@ func TestInspectSimulatedTradingSendsDemoHeader(t *testing.T) {
 	adapter.client = httpclient.New(server.URL)
 	if _, err := inspectWith(context.Background(), request, adapter); err != nil || header != "1" {
 		t.Fatalf("模拟盘照常检测并带模拟盘请求头：header=%q err=%v", header, err)
+	}
+}
+
+// 本机时钟偏差：交易所时间比本机快 4 秒是阻断项，快 2 秒只是提示，没有偏差两者都没有。
+func TestInspectClockSkew(t *testing.T) {
+	config := string(readSample(t, "account_config.json"))
+	request := exchange.InspectRequest{Environment: exchange.AccountEnvironmentProduction}
+
+	blocked, err := inspectAgainstWithClock(t, http.StatusOK, config, request, 4*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasFinding(blocked.Blockers, exchange.FindingClockSkew) || blocked.ClockSkewMillis < 3500 || blocked.ClockSkewMillis > 4500 {
+		t.Fatalf("偏差 4 秒应阻断：skew=%d blockers=%+v", blocked.ClockSkewMillis, blocked.Blockers)
+	}
+	warned, err := inspectAgainstWithClock(t, http.StatusOK, config, request, -2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasFinding(warned.Blockers, exchange.FindingClockSkew) || !hasFinding(warned.Warnings, exchange.FindingClockSkew) {
+		t.Fatalf("偏差 2 秒只提示：blockers=%+v warnings=%+v", warned.Blockers, warned.Warnings)
+	}
+	clean, err := inspectAgainstWithClock(t, http.StatusOK, config, request, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasFinding(clean.Blockers, exchange.FindingClockSkew) || hasFinding(clean.Warnings, exchange.FindingClockSkew) {
+		t.Fatalf("没有偏差不应有提示：%+v", clean)
 	}
 }

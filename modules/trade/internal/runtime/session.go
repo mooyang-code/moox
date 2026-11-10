@@ -185,6 +185,9 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 		return s.disconnect(ctx, err)
 	}
 	positions, err := s.Adapter.ListPositionSnapshots(ctx)
+	if err == nil {
+		positions, err = s.Sync.FilterIsolatedPositions(ctx, s.Account.TradingAccountID, positions)
+	}
 	if err != nil {
 		return s.disconnect(ctx, err)
 	}

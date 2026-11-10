@@ -300,12 +300,25 @@ func (a *Adapter) dispatchPrivate(
 			if row.PosSide != "" && row.PosSide != "net" {
 				return rejected("hedge position mode is unsupported", nil)
 			}
-			if row.MgnMode != "cross" {
-				return rejected("isolated margin is unsupported", nil)
-			}
 			contracts, err := decimalOrZero(row.Pos)
 			if err != nil {
 				return err
+			}
+			if row.MgnMode != "cross" {
+				// 逐仓持仓只标记、不解析其余字段（也不换算张数）：没有仓位的逐仓行不算。
+				if contracts.IsZero() {
+					continue
+				}
+				isolated := exchange.Position{
+					Market: a.config.Market(), TradingAccountID: a.config.TradingAccountID,
+					ExchangeSymbol: row.InstID, PositionSide: exchange.PositionSideNet,
+					SignedQuantity: contracts, MarginMode: exchange.MarginModeIsolated,
+					ExchangeUpdatedAt: millisString(row.UTime),
+				}
+				if err := handler.OnPosition(ctx, isolated); err != nil {
+					return err
+				}
+				continue
 			}
 			quantity, err := a.toBaseQuantity(row.InstID, contracts)
 			if err != nil {

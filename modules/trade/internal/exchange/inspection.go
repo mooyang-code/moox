@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -28,7 +29,21 @@ const (
 	FindingCredentialRejected = "credential_rejected"
 	// FindingMarketNotPermitted：开通的市场，密钥没有对应的交易权限。
 	FindingMarketNotPermitted = "market_not_permitted"
+	// FindingClockSkew：本机时钟与交易所相差超过 ClockSkewBlock，下单会被交易所拒绝或卡在结果未知。
+	FindingClockSkew = "clock_skew"
 )
+
+// 本机时钟与交易所时间偏差的阈值：超过 ClockSkewWarn 提示，达到 ClockSkewBlock 阻断。
+const (
+	ClockSkewWarn  = time.Second
+	ClockSkewBlock = 3 * time.Second
+)
+
+// MeasureClockSkew 用一次取交易所时间的请求估算本机时钟偏差（交易所时间减本机时间）：
+// 本机时间取请求发出和收到响应的中点，抵消往返延迟。
+func MeasureClockSkew(sentAt, receivedAt, serverTime time.Time) time.Duration {
+	return serverTime.Sub(sentAt.Add(receivedAt.Sub(sentAt) / 2))
+}
 
 // PositionMode 是合约的持仓模式。
 type PositionMode string
@@ -73,6 +88,8 @@ type Inspection struct {
 	PortfolioMarginSuspected bool `json:"portfolio_margin_suspected,omitempty"`
 	// CredentialRejected 记录鉴权类错误的说明；非空表示交易所拒绝了这把密钥。
 	CredentialRejected string `json:"credential_rejected,omitempty"`
+	// ClockSkewMillis 是本机时钟相对交易所的偏差（毫秒，交易所时间减本机时间）；没取到交易所时间时为 0。
+	ClockSkewMillis int64 `json:"clock_skew_ms,omitempty"`
 
 	// AvailableMarkets 是这把密钥当前能开通的市场。
 	AvailableMarkets []MarketType `json:"available_markets,omitempty"`
@@ -91,6 +108,15 @@ type Inspection struct {
 	LastFailureAt       time.Time `json:"last_failure_at,omitzero"`
 }
 
+// clockSkew 返回本机时钟偏差的绝对值。
+func (i Inspection) clockSkew() time.Duration {
+	skew := time.Duration(i.ClockSkewMillis) * time.Millisecond
+	if skew < 0 {
+		return -skew
+	}
+	return skew
+}
+
 // BlockersFor 按账户开通的市场推出阻断项。markets 为空（预览时还没选市场）只给和市场无关的阻断项：
 // 密钥被拒绝、带提现权限、疑似统一账户旧密钥；和市场有关的（万向划转、双向持仓、OKX 现货模式、市场交易权限）
 // 要等选定市场后再判断，否则只想开现货的账户会被合约才有的问题挡住。
@@ -106,6 +132,9 @@ func (i Inspection) BlockersFor(markets []MarketType) []InspectionFinding {
 	if i.CredentialRejected != "" {
 		add(FindingCredentialRejected, "交易所拒绝了这把密钥："+i.CredentialRejected)
 		return findings
+	}
+	if skew := i.clockSkew(); skew >= ClockSkewBlock {
+		add(FindingClockSkew, fmt.Sprintf("本机时钟与交易所相差 %.1f 秒（达到 %d 秒），下单会被拒绝或卡在结果未知：请检查本机 NTP 校时后重新检测", skew.Seconds(), int(ClockSkewBlock.Seconds())))
 	}
 	if i.CanWithdraw {
 		add(FindingWithdrawPermission, "密钥带有提现权限，请在交易所关闭提现权限后重新录入")
@@ -136,6 +165,13 @@ func (i Inspection) BlockersFor(markets []MarketType) []InspectionFinding {
 // 和市场有关的问题（只在开通合约或同时开通现货、合约时才成立的）写成提醒，说明开通对应市场时会被阻断。
 func (i *Inspection) ApplyFindings(markets []MarketType) {
 	i.Blockers = i.BlockersFor(markets)
+	i.Warnings = nil
+	if skew := i.clockSkew(); !i.Skipped && skew > ClockSkewWarn && skew < ClockSkewBlock {
+		i.Warnings = append(i.Warnings, InspectionFinding{
+			Code:    FindingClockSkew,
+			Message: fmt.Sprintf("本机时钟与交易所相差 %.1f 秒，建议检查本机 NTP 校时（达到 %d 秒会阻断下单）", skew.Seconds(), int(ClockSkewBlock.Seconds())),
+		})
+	}
 	if len(markets) != 0 {
 		return
 	}

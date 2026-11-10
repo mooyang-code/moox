@@ -609,8 +609,9 @@ func (p *PortfolioMargin) dispatchOrder(ctx context.Context, market exchange.Mar
 	if err := handler.OnOrder(ctx, current); err != nil {
 		return err
 	}
-	if order.execution != "TRADE" || order.tradeID == "" || order.tradeID == "-1" {
-		return nil
+	hasFill, err := order.hasFill()
+	if err != nil || !hasFill {
+		return err
 	}
 	fill, err := fillFromPrivateOrder(market, p.config.SettlementAsset, order)
 	if err != nil {

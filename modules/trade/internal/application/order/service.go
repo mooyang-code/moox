@@ -77,6 +77,17 @@ type Service struct {
 	lookups  map[string]time.Time
 }
 
+// defaultUnknownLookupWindow 是提交结果未知的订单退回待提交前的观察窗口：交易所已收下请求、后端延迟执行的订单
+// 可能晚于几十秒才查得到，窗口取 2 分钟，换这类罕见订单晚 90 秒重发。
+const defaultUnknownLookupWindow = 2 * time.Minute
+
+func (s *Service) unknownLookupWindow() time.Duration {
+	if s.UnknownLookupWindow > 0 {
+		return s.UnknownLookupWindow
+	}
+	return defaultUnknownLookupWindow
+}
+
 func (s *Service) Get(
 	ctx context.Context,
 	spaceID string,
@@ -905,7 +916,8 @@ func (s *Service) resolveUnknown(
 	if lookupErr == nil {
 		return s.resolveUnknownFound(ctx, record, current, found.ExchangeOrderID)
 	}
-	if !exchange.IsKind(lookupErr, exchange.ErrorOrderNotFound) {
+	// 只有交易所用明确错误码确认“没有这张单”才继续；网关的裸 404 等别的失败一律保持结果未知。
+	if !exchange.IsConfirmedOrderMissing(lookupErr) {
 		return current, accountExecutionError(record.TradingAccountID, "get_order", lookupErr)
 	}
 	// 从已同步的位置往后找，不重新拉全部历史。
@@ -932,10 +944,7 @@ func (s *Service) resolveUnknown(
 	if exchangeOrderID != "" {
 		return s.resolveUnknownFound(ctx, record, current, exchangeOrderID)
 	}
-	window := s.UnknownLookupWindow
-	if window <= 0 {
-		window = 30 * time.Second
-	}
+	window := s.unknownLookupWindow()
 	if record.SubmittedAt <= 0 ||
 		s.now().Sub(time.UnixMilli(record.SubmittedAt)) < window {
 		return current, nil

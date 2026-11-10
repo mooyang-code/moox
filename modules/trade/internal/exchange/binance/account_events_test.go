@@ -152,14 +152,25 @@ func TestDispatchPrivateSpotWebSocketAPIEnvelope(t *testing.T) {
 	}
 }
 
-func TestDispatchPrivateRejectsIsolatedSwapPosition(t *testing.T) {
+// 逐仓持仓不让私有流报错：该标的标记为逐仓（由账户同步暂停组合），同一推送里的全仓持仓照常解析。
+func TestDispatchPrivateMarksIsolatedSwapPosition(t *testing.T) {
 	adapter := testAdapter(exchange.MarketTypeSwap, "http://unused")
+	handler := &recordingHandler{}
 	err := adapter.dispatchPrivate(context.Background(), []byte(`{
 		"e":"ACCOUNT_UPDATE","E":1700000000000,
-		"a":{"B":[],"P":[{"s":"BTCUSDT","pa":"1","ep":"100","up":"0","mt":"isolated","ps":"BOTH"}]}
-	}`), &recordingHandler{})
-	if err == nil {
-		t.Fatal("isolated position was accepted")
+		"a":{"B":[],"P":[
+			{"s":"BTCUSDT","pa":"1","ep":"100","up":"0","mt":"isolated","ps":"BOTH"},
+			{"s":"ETHUSDT","pa":"0","ep":"0","up":"0","mt":"isolated","ps":"BOTH"},
+			{"s":"SOLUSDT","pa":"2","ep":"20","up":"1","mt":"cross","ps":"BOTH"}]}
+	}`), handler)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(handler.positions) != 2 ||
+		handler.positions[0].ExchangeSymbol != "BTCUSDT" || handler.positions[0].MarginMode != exchange.MarginModeIsolated ||
+		handler.positions[1].ExchangeSymbol != "SOLUSDT" || handler.positions[1].MarginMode != exchange.MarginModeCross ||
+		handler.positions[1].SignedQuantity.String() != "2" {
+		t.Fatalf("positions = %+v", handler.positions)
 	}
 }
 

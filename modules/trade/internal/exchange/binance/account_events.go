@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/httpclient"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
@@ -181,7 +182,7 @@ func (a *Adapter) subscribeSwapPrivate(
 
 	keepaliveDone := make(chan struct{})
 	defer close(keepaliveDone)
-	go a.keepListenKeyAlive(ctx, path, key.ListenKey, connection, keepaliveDone)
+	go a.keepListenKeyAlive(ctx, path, connection, keepaliveDone)
 
 	handler.OnSubscribed()
 	return a.receivePrivate(ctx, connection, handler)
@@ -263,10 +264,11 @@ func receiveStream(
 	}
 }
 
+// keepListenKeyAlive 每 30 分钟续期一次。合约 PUT /fapi/v1/listenKey 不带参数（官方文档：只需 X-MBX-APIKEY 请求头），
+// 续期的是该密钥当前有效的 listenKey。
 func (a *Adapter) keepListenKeyAlive(
 	ctx context.Context,
 	path string,
-	listenKey string,
 	connection *websocket.Conn,
 	done <-chan struct{},
 ) {
@@ -282,14 +284,7 @@ func (a *Adapter) keepListenKeyAlive(
 				ticker.Reset(time.Minute)
 				continue
 			}
-			_, err := a.client().Do(ctx, &httpclient.Request{
-				Method: http.MethodPut,
-				Path:   path,
-				Query:  url.Values{"listenKey": []string{listenKey}},
-				Headers: map[string]string{
-					"X-MBX-APIKEY": a.credential.APIKey,
-				},
-			})
+			err := a.renewListenKey(ctx, path)
 			// 限流（确定未受理）或结果未知的续期 1 分钟后重试，只有明确失败才断开重连。
 			if exchange.NotAccepted(err) || exchange.IsKind(err, exchange.ErrorTransportUnknown) {
 				ticker.Reset(time.Minute)
@@ -302,6 +297,15 @@ func (a *Adapter) keepListenKeyAlive(
 			ticker.Reset(30 * time.Minute)
 		}
 	}
+}
+
+func (a *Adapter) renewListenKey(ctx context.Context, path string) error {
+	_, err := a.client().Do(ctx, &httpclient.Request{
+		Method:  http.MethodPut,
+		Path:    path,
+		Headers: map[string]string{"X-MBX-APIKEY": a.credential.APIKey},
+	})
+	return err
 }
 
 // privateOrder 是私有流订单事件里按精确键取出的字段，现货 executionReport 和合约 ORDER_TRADE_UPDATE 共用。
@@ -372,15 +376,28 @@ func (a *Adapter) dispatchPrivate(
 	if err := handler.OnOrder(ctx, current); err != nil {
 		return err
 	}
-	// 现货没有成交时 t 是 -1。
-	if order.execution != "TRADE" || order.tradeID == "" || order.tradeID == "-1" {
-		return nil
+	hasFill, err := order.hasFill()
+	if err != nil || !hasFill {
+		return err
 	}
 	fill, err := fillFromPrivateOrder(a.config.Market(), a.config.SettlementAsset, order)
 	if err != nil {
 		return err
 	}
 	return handler.OnFill(ctx, fill)
+}
+
+// hasFill 报告事件是否带一笔成交：有成交号（现货没有成交时 t 是 -1）且本次成交量大于 0。
+// 不看执行类型：强平、自动减仓产生的成交是 CALCULATED 而不是 TRADE，同样要入账。
+func (o privateOrder) hasFill() (bool, error) {
+	if o.tradeID == "" || o.tradeID == "-1" {
+		return false, nil
+	}
+	quantity, err := decimalOrZero(o.lastQty)
+	if err != nil {
+		return false, err
+	}
+	return quantity.Cmp(shared.Zero()) > 0, nil
 }
 
 // fillFromPrivateOrder 把私有流订单事件里的成交部分转成成交记录；普通账户和统一账户共用。
@@ -584,9 +601,6 @@ func (a *Adapter) dispatchFuturesAccount(
 		if side != "" && side != "BOTH" {
 			return typedRejected("hedge position mode is unsupported", nil)
 		}
-		if !strings.EqualFold(marginType, "cross") {
-			return typedRejected("isolated margin is unsupported", nil)
-		}
 		quantity, err := decimalOrZero(amount)
 		if err != nil {
 			return err
@@ -597,6 +611,17 @@ func (a *Adapter) dispatchFuturesAccount(
 			ExchangeSymbol:   symbol, PositionSide: exchange.PositionSideNet,
 			SignedQuantity: quantity, MarginMode: exchange.MarginModeCross,
 			ExchangeUpdatedAt: millis(eventTime),
+		}
+		if !strings.EqualFold(marginType, "cross") {
+			// 逐仓持仓只标记、不解析其余字段：没有仓位的逐仓行（推送里带出的历史标的）不算。
+			if quantity.IsZero() {
+				continue
+			}
+			position.MarginMode = exchange.MarginModeIsolated
+			if err := handler.OnPosition(ctx, position); err != nil {
+				return err
+			}
+			continue
 		}
 		position.EntryPrice, err = decimalOrZero(entry)
 		if err == nil {

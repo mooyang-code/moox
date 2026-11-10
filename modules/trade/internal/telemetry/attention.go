@@ -52,6 +52,10 @@ const (
 	// AttentionFillIngestFailed 是一笔成交没能记进本地账本（订单状态不允许、数量超量等）：账户保持未就绪，
 	// 每轮同步都会卡在同一笔，详情写明订单号和原因，要人工核对订单与成交。
 	AttentionFillIngestFailed = "fill_ingest_failed"
+	// AttentionClockSkew 是下单或查询遇到时间戳超窗（币安 -1021、OKX 50102）：本机时钟与交易所相差过大，请检查 NTP。
+	AttentionClockSkew = "clock_skew"
+	// AttentionIsolatedPosition 是交易所账户里有逐仓持仓：moox 只支持全仓单向，该持仓不入投影，所在组合已暂停（已暂停的不改原因）。
+	AttentionIsolatedPosition = "isolated_position"
 )
 
 // attentionKinds 里每种情况都要上报，恢复后 Monitor 才能看到值回到 0。
@@ -61,7 +65,7 @@ var attentionKinds = []string{
 	AttentionRateLimited, AttentionTurnoverHigh, AttentionUnknownResults, AttentionMarginRatioLow,
 	AttentionInspectionBlocked, AttentionInspectionFailing, AttentionTransferShortfall, AttentionTransferFailing,
 	AttentionValuationDegraded, AttentionFlattenOrdersUnsettled, AttentionReleaseOrdersUnverified, AttentionReleaseOrdersStuck,
-	AttentionOrdersInstrumentGone, AttentionFillIngestFailed,
+	AttentionOrdersInstrumentGone, AttentionFillIngestFailed, AttentionClockSkew, AttentionIsolatedPosition,
 }
 
 // maxAttentionDetail 是标签的字节上限：Monitor 超过 512 字节会拒收整份上报。

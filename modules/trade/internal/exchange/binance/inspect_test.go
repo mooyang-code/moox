@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/httpclient"
@@ -326,4 +328,48 @@ func TestInspectSignsRequestsAndSendsAPIKey(t *testing.T) {
 
 func hasFinding(findings []exchange.InspectionFinding, code string) bool {
 	return slices.ContainsFunc(findings, func(f exchange.InspectionFinding) bool { return f.Code == code })
+}
+
+// 本机时钟偏差：交易所时间比本机快 4 秒是阻断项，快 2 秒只是提示，没有偏差两者都没有。
+func TestInspectClockSkew(t *testing.T) {
+	check := func(ahead time.Duration) exchange.Inspection {
+		routes := standardRoutes(t, `{"dualSidePosition": false}`, nil)
+		serverTime := ok([]byte(fmt.Sprintf(`{"serverTime":%d}`, time.Now().Add(ahead).UnixMilli())))
+		routes["/api/v3/time"], routes["/fapi/v1/time"] = serverTime, serverTime
+		_, clients := newInspectServer(t, routes)
+		result, err := inspectWith(context.Background(), exchange.InspectRequest{Environment: exchange.AccountEnvironmentProduction}, clients)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	blocked := check(4 * time.Second)
+	if !hasFinding(blocked.Blockers, exchange.FindingClockSkew) || blocked.ClockSkewMillis < 3500 || blocked.ClockSkewMillis > 4500 {
+		t.Fatalf("偏差 4 秒应阻断：skew=%d blockers=%+v", blocked.ClockSkewMillis, blocked.Blockers)
+	}
+	warned := check(-2 * time.Second)
+	if hasFinding(warned.Blockers, exchange.FindingClockSkew) || !hasFinding(warned.Warnings, exchange.FindingClockSkew) {
+		t.Fatalf("偏差 2 秒只提示：blockers=%+v warnings=%+v", warned.Blockers, warned.Warnings)
+	}
+	clean := check(0)
+	if hasFinding(clean.Blockers, exchange.FindingClockSkew) || hasFinding(clean.Warnings, exchange.FindingClockSkew) {
+		t.Fatalf("没有偏差不应有提示：%+v", clean)
+	}
+}
+
+// 合约 listenKey 续期：PUT /fapi/v1/listenKey 只带 X-MBX-APIKEY 请求头，请求里没有 listenKey 参数。
+func TestRenewListenKeySendsNoListenKeyParameter(t *testing.T) {
+	var method, path, query, apiKey string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		method, path, query, apiKey = r.Method, r.URL.Path, r.URL.RawQuery, r.Header.Get("X-MBX-APIKEY")
+		_, _ = w.Write([]byte(`{"listenKey":"secret-listen-key"}`))
+	}))
+	t.Cleanup(server.Close)
+	adapter := testAdapter(exchange.MarketTypeSwap, server.URL)
+	if err := adapter.renewListenKey(context.Background(), "/fapi/v1/listenKey"); err != nil {
+		t.Fatal(err)
+	}
+	if method != http.MethodPut || path != "/fapi/v1/listenKey" || query != "" || apiKey != "key" {
+		t.Fatalf("method=%s path=%s query=%q apiKey=%q", method, path, query, apiKey)
+	}
 }

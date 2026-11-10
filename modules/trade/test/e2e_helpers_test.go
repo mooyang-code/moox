@@ -199,7 +199,7 @@ func (f *fakeExchange) GetOrder(_ context.Context, _ exchange.SymbolKey, clientO
 	f.lookupCalls++
 	current, ok := f.orders[clientOrderID]
 	if !ok {
-		return exchange.Order{}, &exchange.Error{Kind: exchange.ErrorOrderNotFound}
+		return exchange.Order{}, &exchange.Error{Kind: exchange.ErrorOrderNotFound, Code: "-2013"}
 	}
 	return current, nil
 }
@@ -231,7 +231,7 @@ func (f *fakeExchange) CancelOrder(_ context.Context, _ exchange.SymbolKey, clie
 	defer f.mu.Unlock()
 	current, ok := f.orders[clientOrderID]
 	if !ok {
-		return exchange.Order{}, &exchange.Error{Kind: exchange.ErrorOrderNotFound}
+		return exchange.Order{}, &exchange.Error{Kind: exchange.ErrorOrderNotFound, Code: "-2013"}
 	}
 	current.Status = exchange.OrderStatusCanceled
 	current.UpdatedAt = current.UpdatedAt.Add(time.Second)

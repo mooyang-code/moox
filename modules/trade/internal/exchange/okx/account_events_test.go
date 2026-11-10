@@ -436,12 +436,19 @@ func TestDispatchPrivatePositionRequiresCrossAndUsesIMR(t *testing.T) {
 		t.Fatalf("positions = %+v", recording.positions)
 	}
 
+	// 逐仓持仓不报错：标记为逐仓（不换算张数，标的也可以不在本地标的表里），没有仓位的逐仓行忽略。
+	isolated := &handler{}
 	err = adapter.dispatchPrivate(context.Background(), []byte(`{
 		"arg":{"channel":"positions"},
-		"data":[{"instId":"BTC-USDT-SWAP","posSide":"net","mgnMode":"isolated","pos":"2"}]
-	}`), &handler{})
-	if err == nil {
-		t.Fatal("isolated position was accepted")
+		"data":[{"instId":"ETH-USDT-SWAP","posSide":"net","mgnMode":"isolated","pos":"2"},
+			{"instId":"SOL-USDT-SWAP","posSide":"net","mgnMode":"isolated","pos":"0"}]
+	}`), isolated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(isolated.positions) != 1 || isolated.positions[0].ExchangeSymbol != "ETH-USDT-SWAP" ||
+		isolated.positions[0].MarginMode != exchange.MarginModeIsolated {
+		t.Fatalf("positions = %+v", isolated.positions)
 	}
 }
 

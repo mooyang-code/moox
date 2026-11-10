@@ -282,7 +282,7 @@ func TestSubmitOrderUnknownNotFoundAfterDeadlineDiscardsWithoutPost(t *testing.T
 	require.NoError(t, err)
 	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_trade_orders SET c_state='SUBMIT_UNKNOWN',c_submitted_at=? WHERE c_order_id=?", f.now.UnixMilli(), result.Order.OrderID).Error)
 	f.now = f.now.Add(time.Hour)
-	adapter.lookupErr = &exchange.Error{Kind: exchange.ErrorOrderNotFound}
+	adapter.lookupErr = &exchange.Error{Kind: exchange.ErrorOrderNotFound, Code: "-2013"}
 	require.NoError(t, s.ResumeOperatorAction(context.Background(), result.Action))
 	require.Equal(t, 1, adapter.queries)
 	require.Zero(t, adapter.posts)
@@ -456,7 +456,7 @@ func TestSubmitOrderUnconfirmedLookupIsNotInfrastructureFailure(t *testing.T) {
 	result, err := s.SubmitOrder(context.Background(), submissionCommand(f))
 	require.NoError(t, err)
 	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_trade_orders SET c_state='SUBMIT_UNKNOWN',c_submitted_at=? WHERE c_order_id=?", f.now.UnixMilli(), result.Order.OrderID).Error)
-	adapter.lookupErr = &exchange.Error{Kind: exchange.ErrorOrderNotFound}
+	adapter.lookupErr = &exchange.Error{Kind: exchange.ErrorOrderNotFound, Code: "-2013"}
 	require.NoError(t, s.ResumeOperatorAction(context.Background(), result.Action))
 	require.Zero(t, adapter.posts)
 	require.Equal(t, 1, adapter.queries)

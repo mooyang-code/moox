@@ -19,6 +19,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/httpclient"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
+	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 )
 
 const defaultBaseURL = "https://openapi.okx.com"
@@ -584,6 +585,17 @@ func (a *Adapter) ListPositionSnapshots(ctx context.Context) ([]exchange.Positio
 		if err != nil || contracts.IsZero() {
 			continue
 		}
+		if row.MgnMode != "" && row.MgnMode != "cross" {
+			// 逐仓持仓只标记、不解析其余字段（也不换算张数，标的可能不在本地标的表里）：
+			// 调用方据此暂停组合，该持仓不入投影。
+			out = append(out, exchange.Position{
+				Market: a.config.Market(), TradingAccountID: a.config.TradingAccountID,
+				ExchangeSymbol: row.InstID, PositionSide: exchange.PositionSideNet,
+				SignedQuantity: contracts, MarginMode: exchange.MarginModeIsolated,
+				ExchangeUpdatedAt: millisString(row.UTime),
+			})
+			continue
+		}
 		quantity, err := a.toBaseQuantity(row.InstID, contracts)
 		if err != nil {
 			return nil, err
@@ -620,9 +632,6 @@ func (a *Adapter) ListPositionSnapshots(ctx context.Context) ([]exchange.Positio
 		}
 		if err != nil {
 			return nil, err
-		}
-		if row.MgnMode != "" && row.MgnMode != "cross" {
-			return nil, rejected("isolated margin is unsupported", nil)
 		}
 		out = append(out, position)
 	}
@@ -1243,8 +1252,13 @@ func classifyOKXCode(code, message string) error {
 		kind = exchange.ErrorOrderNotFound
 	// 结果未知，走查询恢复：服务暂不可用、超时（50004 官方说明不代表成功或失败）、系统繁忙/错误、下单超时，
 	// 以及时间戳过期（交易所没有受理，但本地无法确认，与币安 -1021 一致）。50000 是请求体为空，属于拒单。
-	case "50001", "50004", "50013", "50026", "51149", "50102":
+	// 51016 是客户端订单号重复：原单可能已被受理，走查询认领，不能当拒单。
+	case "50001", "50004", "50013", "50026", "51149", "50102", "51016":
 		kind = exchange.ErrorTransportUnknown
+	}
+	if code == "50102" {
+		// 时间戳过期：提示检查本机时钟。
+		telemetry.Note(telemetry.AttentionClockSkew, "OKX：本机时钟与交易所相差过大，请检查 NTP", time.Now())
 	}
 	return &exchange.Error{Kind: kind, Code: code, Err: errors.New(message)}
 }
