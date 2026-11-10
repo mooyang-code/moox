@@ -452,6 +452,8 @@ func validateWeightRisk(weights []orderedWeight) error {
 }
 
 func (r *WeightResolver) instrumentForMembers(ctx context.Context, spaceID string, members []store.LogicalAccountMemberRecord, instrumentID string) (store.InstrumentRecord, string, error) {
+	// 读库出错的成员和不支持该标的的成员一样跳过（行为不变），只是都没找到时消息要区分，不能把读库错误说成“不支持”。
+	var readErr error
 	for _, member := range members {
 		account, accountErr := r.Store.GetTradingAccountByID(ctx, member.TradingAccountID)
 		if accountErr != nil {
@@ -470,8 +472,14 @@ func (r *WeightResolver) instrumentForMembers(ctx context.Context, spaceID strin
 			}
 			return instrument, member.TradingAccountID, nil
 		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			readErr = err
+		}
 	}
-	return store.InstrumentRecord{}, "", fmt.Errorf("target weight resolver: instrument %s is not supported by a ready account member", instrumentID)
+	if readErr != nil {
+		return store.InstrumentRecord{}, "", fmt.Errorf("读取标的失败：%s：%w", instrumentID, readErr)
+	}
+	return store.InstrumentRecord{}, "", fmt.Errorf("没有就绪的组合成员支持标的 %s", instrumentID)
 }
 
 func (r *WeightResolver) now() time.Time {
