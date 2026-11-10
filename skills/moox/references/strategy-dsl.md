@@ -3,6 +3,7 @@
 策略用一份 YAML（DSL）描述：怎么在截面上选标的、怎么配权。时序计算（均线、动量、分位）一律写成因子（见 [factor-dsl.md](factor-dsl.md)），
 策略只在截面上过滤、打分、配权。Go 代码只提供通用规则类型（`rank`、`signal`、`tranche`），新策略写配置即可，不改代码。
 
+按功能讲写法、带例子与逐步推演的完整手册见 `docs/策略DSL手册.md`（含单标的上限、进出场持有、策略池漂移与组合约束的推演）。
 本文是 Agent 写策略时的语法速查；字段的完整语义、状态与明细以 `docs/模块/策略.md` 的第 3 节为准，解析与校验的源码在 `modules/strategy/internal/dsl/`。
 整套 Python 策略迁移成 DSL 的流程见 [strategy-migration.md](strategy-migration.md)。
 
