@@ -4,6 +4,7 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
@@ -30,9 +31,10 @@ func TestConsoleQueryEquityCurveReadsOnlyRequestedSpace(t *testing.T) {
 		if err := tx.CreateTradingAccount(account); err != nil {
 			return err
 		}
+		recent := time.Now().Add(-time.Hour).Truncate(time.Minute).UnixMilli()
 		return tx.UpsertAccountEquityPoint(store.EquityPointRecord{
-			SpaceID: "space-1", TradingAccountID: "account-1", BucketTime: 100,
-			Equity: "1000", AvailableFunds: "1000", UsedMargin: "0", SourceTime: 100,
+			SpaceID: "space-1", TradingAccountID: "account-1", BucketTime: recent,
+			Equity: "1000", AvailableFunds: "1000", UsedMargin: "0", SourceTime: recent,
 		})
 	}); err != nil {
 		t.Fatal(err)

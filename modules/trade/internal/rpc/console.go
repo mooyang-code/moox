@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 
 	delistapp "github.com/mooyang-code/moox/modules/trade/internal/application/delist"
 	holdingapp "github.com/mooyang-code/moox/modules/trade/internal/application/holding"
@@ -223,6 +224,40 @@ func tradableInstrumentToPB(record store.InstrumentRecord) *tradepb.TradableInst
 	}
 }
 
+const (
+	// 权益曲线默认只看最近 30 天；跨度超过 2 天按 15 分钟、超过 30 天按小时取每桶最后一点；最多返回 3000 点。
+	equityCurveDefaultSpan  = 30 * 24 * time.Hour
+	equityCurveFineSpan     = 2 * 24 * time.Hour
+	equityCurveMinuteBucket = time.Minute
+	equityCurveQuarterHour  = 15 * time.Minute
+	equityCurveHourBucket   = time.Hour
+	equityCurveMaxPoints    = 3000
+)
+
+// equityCurveRange 补全权益曲线的起止（毫秒），并按跨度定桶宽（毫秒）：起止为 0 时取到现在为止的最近 30 天。
+// 净值点本来每分钟一个，所以 2 天内的桶宽取 1 分钟就是不降采样。跨度太长、按桶宽会超过 3000 点时，桶宽放宽到刚好装下。
+func equityCurveRange(from, to int64, now time.Time) (int64, int64, int64) {
+	if to <= 0 {
+		to = now.UnixMilli()
+	}
+	if from <= 0 {
+		from = to - equityCurveDefaultSpan.Milliseconds()
+	}
+	span := time.Duration(to-from) * time.Millisecond
+	bucket := equityCurveMinuteBucket
+	switch {
+	case span > equityCurveDefaultSpan:
+		bucket = equityCurveHourBucket
+	case span > equityCurveFineSpan:
+		bucket = equityCurveQuarterHour
+	}
+	// 每桶一点，再加上第一点，最多 span/桶宽 + 2 个。
+	if fit := (to - from) / (equityCurveMaxPoints - 2); fit > bucket.Milliseconds() {
+		return from, to, fit
+	}
+	return from, to, bucket.Milliseconds()
+}
+
 func (s *ConsoleServer) QueryEquityCurve(
 	ctx context.Context,
 	req *tradepb.QueryEquityCurveReq,
@@ -240,12 +275,12 @@ func (s *ConsoleServer) QueryEquityCurve(
 	if (req.GetTradingAccountId() == "") == (req.GetLogicalAccountId() == "") {
 		return &tradepb.QueryEquityCurveRsp{RetInfo: invalidInfo(errInvalidCurveTarget)}, nil
 	}
-	from, to := req.GetStartTime(), req.GetEndTime()
+	from, to, bucket := equityCurveRange(req.GetStartTime(), req.GetEndTime(), time.Now())
 	var records []store.EquityPointRecord
 	if req.GetTradingAccountId() != "" {
-		records, err = s.Store.ListAccountEquityPoints(ctx, spaceID, req.GetTradingAccountId(), from, to)
+		records, err = s.Store.QueryAccountEquityCurve(ctx, spaceID, req.GetTradingAccountId(), from, to, bucket)
 	} else {
-		records, err = s.Store.ListLogicalAccountEquityPoints(ctx, spaceID, req.GetLogicalAccountId(), from, to)
+		records, err = s.Store.QueryLogicalAccountEquityCurve(ctx, spaceID, req.GetLogicalAccountId(), from, to, bucket)
 	}
 	if err != nil {
 		return &tradepb.QueryEquityCurveRsp{RetInfo: errorInfo(err)}, nil
