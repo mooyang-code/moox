@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/httpclient"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
@@ -372,15 +373,28 @@ func (a *Adapter) dispatchPrivate(
 	if err := handler.OnOrder(ctx, current); err != nil {
 		return err
 	}
-	// 现货没有成交时 t 是 -1。
-	if order.execution != "TRADE" || order.tradeID == "" || order.tradeID == "-1" {
-		return nil
+	hasFill, err := order.hasFill()
+	if err != nil || !hasFill {
+		return err
 	}
 	fill, err := fillFromPrivateOrder(a.config.Market(), a.config.SettlementAsset, order)
 	if err != nil {
 		return err
 	}
 	return handler.OnFill(ctx, fill)
+}
+
+// hasFill 报告事件是否带一笔成交：有成交号（现货没有成交时 t 是 -1）且本次成交量大于 0。
+// 不看执行类型：强平、自动减仓产生的成交是 CALCULATED 而不是 TRADE，同样要入账。
+func (o privateOrder) hasFill() (bool, error) {
+	if o.tradeID == "" || o.tradeID == "-1" {
+		return false, nil
+	}
+	quantity, err := decimalOrZero(o.lastQty)
+	if err != nil {
+		return false, err
+	}
+	return quantity.Cmp(shared.Zero()) > 0, nil
 }
 
 // fillFromPrivateOrder 把私有流订单事件里的成交部分转成成交记录；普通账户和统一账户共用。
