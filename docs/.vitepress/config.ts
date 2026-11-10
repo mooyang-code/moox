@@ -87,6 +87,7 @@ export default defineConfig({
         items: [
           { text: '因子', link: '/模块/因子' },
           { text: '策略', link: '/模块/策略' },
+          { text: '策略 DSL 手册', link: '/策略DSL手册' },
           { text: '交易', link: '/模块/交易' },
         ],
       },
