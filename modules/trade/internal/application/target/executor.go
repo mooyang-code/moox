@@ -339,6 +339,7 @@ func (e *Executor) Converge(
 		return Result{}, err
 	}
 	flattenChildren := flattenChildCache{}
+	hasStale := false
 	for _, current := range orders {
 		if current.OwnerType == string(orderdomain.OwnerOperator) {
 			// 清仓一族（下架清仓、整组清仓、减仓）的子单不算冲突，不管动作是否还在运行：运行中的下架清仓执行器不碰那个标的
@@ -366,17 +367,25 @@ func (e *Executor) Converge(
 				return Result{}, err
 			}
 			return Result{Status: StatusPaused, Action: "pause"}, nil
-		// 上一份目标（包括上一个策略实例、上一个会话）留下的单按第 1 阶段处理：挂单撤掉，待提交的丢弃，市价单等它结束。
 		case current.OwnerType == string(orderdomain.OwnerTarget) &&
 			current.OwnerID != target.TargetID:
-			if err := e.stopOrder(ctx, target, current); err != nil {
-				return Result{}, err
-			}
-			if err := e.updateTarget(ctx, &target, StatusConverging); err != nil {
-				return Result{}, err
-			}
-			return Result{Status: StatusConverging, Action: "stop"}, nil
+			hasStale = true
 		}
+	}
+	// 上一份目标（包括上一个策略实例、上一个会话）留下的单按第 1 阶段处理，一轮内处理完：挂单批量撤，待提交的丢弃，
+	// 结果未知的先解析，撤单结果未知的先确认；市价单等它自己结束。当前目标自己的单不动。
+	if hasStale {
+		if err := e.checkTargetExecutable(ctx, logicalAccount, target); err != nil {
+			return Result{}, err
+		}
+		if err := e.releaseTargetOrders(ctx, spaceID, logicalAccountID, target.TargetID); err != nil {
+			return Result{}, err
+		}
+		if err := e.updateTarget(ctx, &target, StatusConverging); err != nil {
+			return Result{}, err
+		}
+		// 还有没结束的旧单（市价单、撤单中）时过一会儿再看，不等定时器。
+		return Result{Status: StatusConverging, Action: "stop", RetryAfter: transferPollInterval}, nil
 	}
 
 	blocked := blockedExposures(members)
@@ -1927,9 +1936,9 @@ func (e *Executor) discardPendingOnTargetInvalidation(
 	return err
 }
 
-// releaseExpiredTargetOrders 在目标过期时释放组合里还没结束的目标单：待提交的丢弃，簿上的挂单撤掉。
+// releaseExpiredTargetOrders 在目标过期时释放组合里还没结束的目标单：待提交的丢弃，结果未知的先解析，簿上的挂单撤掉。
 // 不只看过期的这一份目标：新目标在第 1 阶段之前就过期（例如成员一直未就绪）时，上一份目标留下的挂单也要撤掉，
-// 否则它们一直挂在簿上，等下一份目标到来才被处理。结果未知的单不在这里解析（这条路径只有几秒）。
+// 否则它们一直挂在簿上，等下一份目标到来才被处理。限价 GTC 单没解析出来、没撤下来时返回错误，由调用方按 expiryRetryDelay 重试。
 func (e *Executor) releaseExpiredTargetOrders(
 	ctx context.Context,
 	spaceID string,
@@ -1938,7 +1947,7 @@ func (e *Executor) releaseExpiredTargetOrders(
 	if target.LogicalAccountID == "" || target.TargetID == "" {
 		return nil
 	}
-	return e.releaseTargetOrders(ctx, spaceID, target.LogicalAccountID, false)
+	return e.releaseTargetOrders(ctx, spaceID, target.LogicalAccountID, "")
 }
 
 // ReleaseTargetOrders 在策略会话释放、重绑、认领（删掉目标）时撤掉组合里所有还没结束的目标单，调用方持有组合锁：
@@ -1950,13 +1959,14 @@ func (e *Executor) ReleaseTargetOrders(ctx context.Context, spaceID, logicalAcco
 	if e == nil || e.Store == nil || e.Orders == nil {
 		return ErrExecutorConfig
 	}
-	return e.releaseTargetOrders(ctx, spaceID, logicalAccountID, true)
+	return e.releaseTargetOrders(ctx, spaceID, logicalAccountID, "")
 }
 
 // errTargetOrderUnresolved 表示目标挂单的提交结果还不知道，撤不了，稍后再试。
 var errTargetOrderUnresolved = errors.New("挂单的提交结果还不知道，稍后再撤")
 
-func (e *Executor) releaseTargetOrders(ctx context.Context, spaceID, logicalAccountID string, resolveUnknown bool) error {
+// releaseTargetOrders 释放组合里还没结束的目标单；keepTargetID 非空时跳过这份目标自己的单（第 1 阶段只处理旧目标留下的）。
+func (e *Executor) releaseTargetOrders(ctx context.Context, spaceID, logicalAccountID, keepTargetID string) error {
 	var open []store.OrderRecord
 	const pageSize = 1000
 	for offset := 0; ; offset += pageSize {
@@ -1970,7 +1980,11 @@ func (e *Executor) releaseTargetOrders(ctx context.Context, spaceID, logicalAcco
 		if err != nil {
 			return err
 		}
-		open = append(open, orders...)
+		for _, current := range orders {
+			if keepTargetID == "" || current.OwnerID != keepTargetID {
+				open = append(open, current)
+			}
+		}
 		if int64(offset+len(orders)) >= total || len(orders) == 0 {
 			break
 		}
@@ -1979,7 +1993,7 @@ func (e *Executor) releaseTargetOrders(ctx context.Context, spaceID, logicalAcco
 	// canceled 是撤过单、要在最后同步一次的账户。
 	canceled := make(map[string]struct{})
 	for _, current := range open {
-		if err := e.releaseTargetOrder(ctx, current, resolveUnknown, canceled); err != nil {
+		if err := e.releaseTargetOrder(ctx, current, canceled); err != nil {
 			releaseErrs = append(releaseErrs, fmt.Errorf("目标单 %s：%w", current.OrderID, err))
 		}
 	}
@@ -2018,13 +2032,10 @@ func (e *Executor) cancelForRelease(ctx context.Context, current store.OrderReco
 	return err
 }
 
-func (e *Executor) releaseTargetOrder(ctx context.Context, current store.OrderRecord, resolveUnknown bool, canceled map[string]struct{}) error {
+func (e *Executor) releaseTargetOrder(ctx context.Context, current store.OrderRecord, canceled map[string]struct{}) error {
 	state := orderdomain.State(current.State)
 	resting := current.OrderType == string(exchange.OrderTypeLimit) && current.TimeInForce == string(exchange.TimeInForceGTC)
 	if state == orderdomain.Submitting || state == orderdomain.SubmitUnknown {
-		if !resolveUnknown {
-			return nil
-		}
 		// 每笔结果未知的单都解析一次：查无此单退回待提交的要丢弃，否则目标删掉之后没人再管它。
 		// 只有限价 GTC 单可能一直挂在簿上，解析不出来就报错让调用方重试；市价、IOC 单提交出去也会自己结束，解析不出来不挡释放。
 		if _, err := e.Orders.ResolveUnknown(ctx, current.SpaceID, current.OrderID); err != nil {
@@ -2051,7 +2062,7 @@ func (e *Executor) releaseTargetOrder(ctx context.Context, current store.OrderRe
 		return err
 	case restingOrder(current):
 		return e.cancelForRelease(ctx, current, canceled)
-	case resolveUnknown && state == orderdomain.CancelUnknown && resting:
+	case state == orderdomain.CancelUnknown && resting:
 		// 上一次撤单结果未知：撤单可能没到交易所，同步之后会改回挂单中，而那时已经没有目标管它。先确认撤单结果，
 		// 确认不了就报错，让调用方稍后重试；撤单中（交易所已受理）的会自己结束，不用管。
 		return e.recoverTargetCancel(ctx, current, canceled)
