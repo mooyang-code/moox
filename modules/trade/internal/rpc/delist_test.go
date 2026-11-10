@@ -151,22 +151,6 @@ func TestFlattenInstrumentResolvesInstrumentAndReportsBusy(t *testing.T) {
 	require.Equal(t, tradepb.ErrorCode_INVALID_PARAM, missing.GetRetInfo().GetCode())
 }
 
-func TestReduceLogicalAccountPassesTheRatio(t *testing.T) {
-	server, _ := delistServer(t)
-	var ratio shared.Decimal
-	server.ReduceAccount = func(_ context.Context, spaceID, actionID, logicalAccountID string, r shared.Decimal, reason string) (store.OperatorActionRecord, error) {
-		ratio = r
-		return store.OperatorActionRecord{ActionID: actionID, LogicalAccountID: logicalAccountID, ActionType: "REDUCE", Status: "RUNNING"}, nil
-	}
-	rsp, err := server.ReduceLogicalAccount(spacecontext.WithSpaceID(context.Background(), "space-1"), &tradepb.ReduceLogicalAccountReq{
-		ActionId: "a", LogicalAccountId: "l", ReduceRatio: "0.1", Reason: "保证金率低",
-	})
-	require.NoError(t, err)
-	require.Equal(t, tradepb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
-	require.Equal(t, "0.1", ratio.String())
-	require.Equal(t, "REDUCE", rsp.GetAction().GetActionType())
-}
-
 // ---- T29 ----
 
 // liveLedgerServer 和 ledgerServer 一样，但 account-1 是实盘永续账户：实盘的资金费才走交易所流水翻页。

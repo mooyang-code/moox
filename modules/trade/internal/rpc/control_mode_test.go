@@ -87,13 +87,6 @@ func TestManualControlModeClaimConflictIsConsistent(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, tradepb.ErrorCode_CONFLICT, rsp.GetRetInfo().GetCode(), req)
 	}
-	for _, req := range []*tradepb.RebindLogicalAccountOwnerReq{
-		{LogicalAccountId: "manual-1", InstanceId: "instance-1", SessionId: "session-1", NewInstanceId: "instance-2", NewSessionId: "session-2", ExpectedAuthFence: "fence-1"},
-	} {
-		rsp, err := h.RebindLogicalAccountOwner(ctx, req)
-		require.NoError(t, err)
-		require.Equal(t, tradepb.ErrorCode_CONFLICT, rsp.GetRetInfo().GetCode(), req)
-	}
 	after, err := db.GetLogicalAccount(ctx, "space-1", "manual-1")
 	require.NoError(t, err)
 	require.Equal(t, before, after)

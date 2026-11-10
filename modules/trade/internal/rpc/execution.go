@@ -52,6 +52,53 @@ type ExecutionServer struct {
 	) (store.OperatorActionRecord, store.OrderRecord, error)
 }
 
+// manualOrderRequest 是 PlaceManualOrderReq 与 SubmitOrderReq 共有的字段读取。
+type manualOrderRequest interface {
+	GetActionId() string
+	GetTradingAccountId() string
+	GetClientOrderId() string
+	GetInstrumentId() string
+	GetMarketType() tradepb.MarketType
+	GetOrderType() tradepb.OrderType
+	GetFillPolicy() tradepb.FillPolicy
+	GetSide() tradepb.OrderSide
+	GetPositionSide() tradepb.PositionSide
+	GetQuantity() string
+	GetLimitPrice() string
+	GetReason() string
+	GetDeadlineAt() int64
+}
+
+// manualOrderCommand 把下单请求转成命令。hasLimitPrice 表示请求带了 limit_price（proto 可选字段，读取器分不出“未传”和“空串”）。
+// 失败时返回写好的错误信息，调用方直接放进响应。
+func (h *ExecutionServer) manualOrderCommand(
+	ctx context.Context, spaceID string, req manualOrderRequest, hasLimitPrice bool,
+) (ManualOrderCommand, *tradepb.RetInfo) {
+	quantity, err := shared.ParseDecimal(req.GetQuantity())
+	if err != nil {
+		return ManualOrderCommand{}, invalidInfo(err)
+	}
+	var limitPrice *shared.Decimal
+	if hasLimitPrice {
+		value, parseErr := shared.ParseDecimal(req.GetLimitPrice())
+		if parseErr != nil {
+			return ManualOrderCommand{}, invalidInfo(parseErr)
+		}
+		limitPrice = &value
+	}
+	instrumentID, err := h.requestInstrumentID(ctx, spaceID, req.GetTradingAccountId(), req.GetInstrumentId(), req.GetMarketType())
+	if err != nil {
+		return ManualOrderCommand{}, instrumentErrorInfo(err)
+	}
+	return ManualOrderCommand{
+		SpaceID: spaceID, ActionID: req.GetActionId(), TradingAccountID: req.GetTradingAccountId(),
+		ClientOrderID: req.GetClientOrderId(), InstrumentID: instrumentID,
+		OrderType: orderTypeFromPB(req.GetOrderType()), FillPolicy: fillPolicyFromPB(req.GetFillPolicy()),
+		Side: sideFromPB(req.GetSide()), PositionSide: positionSideFromPB(req.GetPositionSide()),
+		Quantity: quantity, LimitPrice: limitPrice, Reason: req.GetReason(), DeadlineAt: req.GetDeadlineAt(),
+	}, nil
+}
+
 func (h *ExecutionServer) PlaceManualOrder(
 	ctx context.Context,
 	req *tradepb.PlaceManualOrderReq,
@@ -61,27 +108,11 @@ func (h *ExecutionServer) PlaceManualOrder(
 		err = validatePB(req)
 	}
 	if err != nil {
-		return &tradepb.PlaceManualOrderRsp{
-			RetInfo: invalidOrErrorInfo(err),
-		}, nil
+		return &tradepb.PlaceManualOrderRsp{RetInfo: invalidOrErrorInfo(err)}, nil
 	}
-	quantity, err := shared.ParseDecimal(req.GetQuantity())
-	if err != nil {
-		return &tradepb.PlaceManualOrderRsp{RetInfo: invalidInfo(err)}, nil
-	}
-	var limitPrice *shared.Decimal
-	if req.LimitPrice != nil {
-		value, parseErr := shared.ParseDecimal(req.GetLimitPrice())
-		if parseErr != nil {
-			return &tradepb.PlaceManualOrderRsp{
-				RetInfo: invalidInfo(parseErr),
-			}, nil
-		}
-		limitPrice = &value
-	}
-	instrumentID, err := h.requestInstrumentID(ctx, spaceID, req.GetTradingAccountId(), req.GetInstrumentId(), req.GetMarketType())
-	if err != nil {
-		return &tradepb.PlaceManualOrderRsp{RetInfo: instrumentErrorInfo(err)}, nil
+	command, info := h.manualOrderCommand(ctx, spaceID, req, req.LimitPrice != nil)
+	if info != nil {
+		return &tradepb.PlaceManualOrderRsp{RetInfo: info}, nil
 	}
 	if h.PlaceManual == nil {
 		err = fmt.Errorf("人工下单服务未配置")
@@ -89,17 +120,7 @@ func (h *ExecutionServer) PlaceManualOrder(
 	var action store.OperatorActionRecord
 	var order store.OrderRecord
 	if err == nil {
-		action, order, err = h.PlaceManual(ctx, ManualOrderCommand{
-			SpaceID: spaceID, ActionID: req.GetActionId(),
-			TradingAccountID: req.GetTradingAccountId(),
-			ClientOrderID:    req.GetClientOrderId(), InstrumentID: instrumentID,
-			OrderType:    orderTypeFromPB(req.GetOrderType()),
-			FillPolicy:   fillPolicyFromPB(req.GetFillPolicy()),
-			Side:         sideFromPB(req.GetSide()),
-			PositionSide: positionSideFromPB(req.GetPositionSide()),
-			Quantity:     quantity, LimitPrice: limitPrice, Reason: req.GetReason(),
-			DeadlineAt: req.GetDeadlineAt(),
-		})
+		action, order, err = h.PlaceManual(ctx, command)
 	}
 	return &tradepb.PlaceManualOrderRsp{
 		RetInfo: errorInfo(err), Action: operatorActionToPB(action),

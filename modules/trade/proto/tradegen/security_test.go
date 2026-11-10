@@ -19,7 +19,7 @@ func TestTradeRPCExposesOnlyApprovedServicesAndMethods(t *testing.T) {
 			"CreateLogicalAccount", "GetLogicalAccount", "ListLogicalAccounts",
 			"UpdateLogicalAccount", "UpdateLogicalAccountOrderSettings", "UpdateLogicalAccountFundSettings", "AddLogicalAccountMember",
 			"RemoveLogicalAccountMember", "ClaimLogicalAccountOwner",
-			"ReleaseLogicalAccountOwner", "RebindLogicalAccountOwner", "PauseLogicalAccount",
+			"ReleaseLogicalAccountOwner", "PauseLogicalAccount",
 			"ResumeLogicalAccount", "FlattenLogicalAccount",
 			"PlaceManualOrder", "SubmitOrder", "CancelOrder", "GetOperatorAction",
 			"GetLogicalAccountTarget", "GetOrder", "ListOrders", "ListFills",
@@ -27,7 +27,7 @@ func TestTradeRPCExposesOnlyApprovedServicesAndMethods(t *testing.T) {
 			"GetExecutionCapabilities", "ListTradableInstruments", "QueryEquityCurve", "ListHoldings",
 			"ListAccountLedger", "FlattenTradingAccount",
 			"BlockInstrument", "UnblockInstrument", "ListBlockedInstruments", "ListInstrumentHolders",
-			"FlattenInstrument", "ReduceLogicalAccount", "SummarizeAccountPnl", "ListOperatorActions",
+			"FlattenInstrument", "SummarizeAccountPnl", "ListOperatorActions",
 		},
 	}
 	services := File_trade_service_proto.Services()
@@ -246,7 +246,6 @@ func TestScopedRequestsRejectMissingIdentity(t *testing.T) {
 		&RemoveLogicalAccountMemberReq{},
 		&ClaimLogicalAccountOwnerReq{},
 		&ReleaseLogicalAccountOwnerReq{},
-		&RebindLogicalAccountOwnerReq{},
 		&PauseLogicalAccountReq{},
 		&ResumeLogicalAccountReq{},
 		&FlattenLogicalAccountReq{},
