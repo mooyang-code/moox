@@ -23,7 +23,14 @@
       <a-select v-if="marketOptions.length > 1" v-model="market" :disabled="!symbol.trim()" style="width: 110px" @change="search">
         <a-option v-for="item in marketOptions" :key="item" :value="item">{{ marketLabel(item) }}</a-option>
       </a-select>
-      <a-input v-model="symbol" allow-clear placeholder="币，如 BTC" style="width: 150px" @press-enter="search" @clear="search" />
+      <a-input
+        v-model="symbol"
+        allow-clear
+        :placeholder="stockOnly ? '代码，如 600519.XSHG' : '币，如 BTC'"
+        style="width: 150px"
+        @press-enter="search"
+        @clear="search"
+      />
       <a-button :loading="loading" @click="search">查询</a-button>
     </div>
     <a-alert v-if="error" type="error" class="alert">{{ error }}</a-alert>
@@ -125,7 +132,7 @@ import type { MarketType, Order } from "@/api/trade";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import { usePolling } from "@/hooks/usePolling";
 import { fmtQty } from "../shared/format";
-import { instrumentName, marketLabel } from "../shared/markets";
+import { instrumentName, isStockOnly, marketLabel } from "../shared/markets";
 import { orderStateTone } from "./detail-model";
 import { instrumentFilter } from "./instrument-filter";
 import SectionBlock from "../shared/section-block.vue";
@@ -178,6 +185,7 @@ const accountName = (id: string) => accounts.value.get(id)?.name || id;
 const marketOptions = computed<MarketType[]>(() =>
   accountId.value ? (accounts.value.get(accountId.value)?.markets ?? []) : (logical.value.markets ?? [])
 );
+const stockOnly = computed(() => isStockOnly(marketOptions.value));
 watch(
   marketOptions,
   options => {
@@ -198,7 +206,7 @@ async function load(background = false) {
       {
         logical_account_id: logical.value.logical_account_id,
         trading_account_id: accountId.value,
-        instrument_id: instrumentFilter(appliedSymbol.value, market.value, logical.value.settlement_asset),
+        instrument_id: instrumentFilter(appliedSymbol.value, stockOnly.value ? 3 : market.value, logical.value.settlement_asset),
         state: state.value,
         owner_type: ownerType.value || undefined,
         ...rangeParams(range.value),

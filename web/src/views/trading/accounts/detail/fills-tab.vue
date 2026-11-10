@@ -17,7 +17,14 @@
       <a-select v-if="marketOptions.length > 1" v-model="market" :disabled="!symbol.trim()" style="width: 110px" @change="search">
         <a-option v-for="item in marketOptions" :key="item" :value="item">{{ marketLabel(item) }}</a-option>
       </a-select>
-      <a-input v-model="symbol" allow-clear placeholder="币，如 BTC" style="width: 150px" @press-enter="search" @clear="search" />
+      <a-input
+        v-model="symbol"
+        allow-clear
+        :placeholder="stockOnly ? '代码，如 600519.XSHG' : '币，如 BTC'"
+        style="width: 150px"
+        @press-enter="search"
+        @clear="search"
+      />
       <a-button :loading="loading" @click="search">查询</a-button>
       <span class="tx-muted hint">点一行看所属订单</span>
     </div>
@@ -95,7 +102,7 @@ import { getOrder, listFills } from "@/api/trade";
 import type { Fill, MarketType, Order } from "@/api/trade";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import { fmtMoney, fmtQty, fmtSigned, pnlClass } from "../shared/format";
-import { instrumentName, marketLabel } from "../shared/markets";
+import { instrumentName, isStockOnly, marketLabel } from "../shared/markets";
 import { instrumentFilter } from "./instrument-filter";
 import SectionBlock from "../shared/section-block.vue";
 import { detailContextKey } from "./context";
@@ -133,6 +140,7 @@ const accountName = (id: string) => accounts.value.get(id)?.name || id;
 const marketOptions = computed<MarketType[]>(() =>
   accountId.value ? (accounts.value.get(accountId.value)?.markets ?? []) : (logical.value.markets ?? [])
 );
+const stockOnly = computed(() => isStockOnly(marketOptions.value));
 watch(
   marketOptions,
   options => {
@@ -149,7 +157,7 @@ async function load() {
     const rsp = await listFills({
       logical_account_id: logical.value.logical_account_id,
       trading_account_id: accountId.value,
-      instrument_id: instrumentFilter(symbol.value, market.value, logical.value.settlement_asset),
+      instrument_id: instrumentFilter(symbol.value, stockOnly.value ? 3 : market.value, logical.value.settlement_asset),
       ...rangeParams(range.value),
       page: { page: page.value, size: pageSize }
     });
