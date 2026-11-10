@@ -37,10 +37,10 @@ func TestPaperMatcherRestartAndCASE2E(t *testing.T) {
 		}
 		return tx.CreateOrder(store.OrderRecord{SpaceID: "space-1", OrderID: "order-1", TradingAccountID: "paper-1", ClientOrderID: "client-1", ExchangeSymbol: "BTCUSDT", OrderType: "MARKET", Side: "BUY", Quantity: "1", ReferencePrice: "100", OwnerType: "EXTERNAL", OwnerID: "e2e", State: "OPEN", FirstMatchPending: true, Version: 1})
 	}))
-	candidates, err := s.ListPaperMatchCandidates(ctx, 10)
+	candidates, err := s.ListPaperMatchCandidatePage(ctx, true, "", "", 10)
 	require.NoError(t, err)
 	require.Len(t, candidates, 1)
-	m := &paperexec.Matcher{Store: s, Decide: func(store.OrderRecord) (paperexec.Decision, error) {
+	m := &paperexec.Matcher{Store: s, DecideContext: func(context.Context, store.OrderRecord) (paperexec.Decision, error) {
 		return paperexec.Decision{Cancel: true, Reason: "stale quote"}, nil
 	}}
 	require.NoError(t, m.Scan(ctx))

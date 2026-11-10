@@ -859,7 +859,7 @@ func (s *Service) readiness(
 					account.TradingAccountID+" 有未确认的提交订单 "+current.OrderID,
 				)
 			}
-			if current.OwnerType == "EXTERNAL" && !terminalOrderState(current.State) {
+			if current.OwnerType == "EXTERNAL" {
 				reasons = append(
 					reasons,
 					account.TradingAccountID+" 有外部订单 EXTERNAL "+current.OrderID,
@@ -939,7 +939,16 @@ func (s *Service) memberHasExposure(
 	spaceID string,
 	tradingAccountID string,
 ) (bool, error) {
-	return s.exposure(ctx, spaceID, tradingAccountID, true)
+	exposed, _, err := s.exposure(ctx, spaceID, tradingAccountID, true)
+	return exposed, err
+}
+
+// exposureFacts 是 exposure 查到的账户、挂单和持仓，managedExposure 直接复用，不再重复查询。
+// 有挂单时 exposure 提前返回，positions 为空。
+type exposureFacts struct {
+	account   store.TradingAccountRecord
+	orders    []store.OrderRecord
+	positions []store.PositionRecord
 }
 
 // exposure 判断执行账户是否有挂单、持仓或非结算资产余额；requireFresh 为真时要求账户就绪且快照新鲜。
@@ -948,35 +957,34 @@ func (s *Service) exposure(
 	spaceID string,
 	tradingAccountID string,
 	requireFresh bool,
-) (bool, error) {
+) (bool, exposureFacts, error) {
 	account, err := s.Store.GetTradingAccountByID(ctx, tradingAccountID)
 	if err != nil {
-		return false, err
+		return false, exposureFacts{}, err
 	}
+	facts := exposureFacts{account: account}
 	if requireFresh && (!account.Ready || account.LastSyncAt <= 0 ||
 		s.snapshotStale(s.now(), account.LastSyncAt)) {
-		return false, ErrNotReady
+		return false, facts, ErrNotReady
 	}
-	orders, err := s.Store.ListActiveOrdersForAccount(ctx, spaceID, tradingAccountID)
+	facts.orders, err = s.Store.ListActiveOrdersForAccount(ctx, spaceID, tradingAccountID)
 	if err != nil {
-		return false, err
+		return false, facts, err
 	}
-	for _, current := range orders {
-		if !terminalOrderState(current.State) {
-			return true, nil
-		}
+	if len(facts.orders) > 0 {
+		return true, facts, nil
 	}
-	positions, err := s.Store.ListPositions(ctx, spaceID, tradingAccountID, exchange.SymbolKey{})
+	facts.positions, err = s.Store.ListPositions(ctx, spaceID, tradingAccountID, exchange.SymbolKey{})
 	if err != nil {
-		return false, err
+		return false, facts, err
 	}
-	for _, position := range positions {
+	for _, position := range facts.positions {
 		quantity, parseErr := shared.ParseDecimal(position.SignedQuantity)
 		if parseErr != nil {
-			return false, parseErr
+			return false, facts, parseErr
 		}
 		if !quantity.IsZero() {
-			return true, nil
+			return true, facts, nil
 		}
 	}
 	if account.HasBalanceMarket() {
@@ -986,32 +994,29 @@ func (s *Service) exposure(
 			}
 			total, parseErr := shared.ParseDecimal(balance.Total)
 			if parseErr != nil {
-				return false, parseErr
+				return false, facts, parseErr
 			}
 			if !total.IsZero() {
-				return true, nil
+				return true, facts, nil
 			}
 		}
 	}
-	return false, nil
+	return false, facts, nil
 }
 
 // managedExposure 用于移除成员：非受管资产不归 MooX 管，不挡移除。
 func (s *Service) managedExposure(ctx context.Context, spaceID, tradingAccountID string, requireFresh bool) (bool, error) {
-	exposed, err := s.exposure(ctx, spaceID, tradingAccountID, requireFresh)
+	exposed, facts, err := s.exposure(ctx, spaceID, tradingAccountID, requireFresh)
 	if err != nil || !exposed {
 		return false, err
 	}
-	account, err := s.Store.GetTradingAccountByID(ctx, tradingAccountID)
-	if err != nil {
-		return false, err
+	account := facts.account
+	// 有挂单：下面无论哪条路径都判有敞口，直接返回。
+	if len(facts.orders) > 0 {
+		return true, nil
 	}
 	if account.HasPositionMarket() {
-		positions, positionErr := s.Store.ListPositions(ctx, spaceID, tradingAccountID, exchange.SymbolKey{})
-		if positionErr != nil {
-			return false, positionErr
-		}
-		for _, position := range positions {
+		for _, position := range facts.positions {
 			quantity, parseErr := shared.ParseDecimal(position.SignedQuantity)
 			if parseErr != nil {
 				return false, parseErr
@@ -1022,13 +1027,6 @@ func (s *Service) managedExposure(ctx context.Context, spaceID, tradingAccountID
 		}
 	}
 	if !account.HasBalanceMarket() {
-		return true, nil
-	}
-	orders, err := s.Store.ListActiveOrdersForAccount(ctx, spaceID, tradingAccountID)
-	if err != nil {
-		return false, err
-	}
-	if len(orders) > 0 {
 		return true, nil
 	}
 	managed, err := s.Store.ManagedAssets(ctx, spaceID, tradingAccountID)
@@ -1079,13 +1077,4 @@ func (s *Service) now() time.Time {
 		return s.Now().UTC()
 	}
 	return time.Now().UTC()
-}
-
-func terminalOrderState(state string) bool {
-	switch state {
-	case "FILLED", "CANCELED", "PARTIALLY_CANCELED", "REJECTED", "EXPIRED":
-		return true
-	default:
-		return false
-	}
 }

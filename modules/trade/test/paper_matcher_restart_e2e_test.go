@@ -31,7 +31,7 @@ func TestPaperMatcherRestingGTCRecoversAfterSQLiteRestart(t *testing.T) {
 
 	// The first quote does not cross the limit. The matcher clears only the
 	// first-decision marker and leaves the order durably OPEN.
-	firstMatcher := &paperexec.Matcher{Store: f.store, Decide: func(store.OrderRecord) (paperexec.Decision, error) {
+	firstMatcher := &paperexec.Matcher{Store: f.store, DecideContext: func(context.Context, store.OrderRecord) (paperexec.Decision, error) {
 		return paperexec.Decision{Rest: true}, nil
 	}}
 	require.NoError(t, firstMatcher.Scan(ctx))
@@ -44,7 +44,7 @@ func TestPaperMatcherRestingGTCRecoversAfterSQLiteRestart(t *testing.T) {
 	secondMatcher := &paperexec.Matcher{
 		Store:   restarted,
 		Reducer: reducer,
-		Decide: func(candidate store.OrderRecord) (paperexec.Decision, error) {
+		DecideContext: func(_ context.Context, candidate store.OrderRecord) (paperexec.Decision, error) {
 			return paperexec.Decision{Fill: exchange.Fill{Market: exchange.MarketTypeSpot,
 				ExchangeTradeID: "restart-trade",
 				ExchangeOrderID: candidate.ExchangeOrderID,

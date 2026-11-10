@@ -176,10 +176,6 @@ func (s *Store) GetInstrumentInEnvironment(ctx context.Context, exchange, enviro
 	return set.symbol(exchangeSymbol)
 }
 
-func (s *Store) GetInstrumentByID(ctx context.Context, instrumentID string) (InstrumentRecord, error) {
-	return getInstrumentByID(s.db.WithContext(ctx), instrumentID)
-}
-
 func (s *Store) GetInstrumentByIDForAccount(ctx context.Context, spaceID, tradingAccountID, instrumentID string) (InstrumentRecord, error) {
 	var record InstrumentRecord
 	err := s.Transaction(ctx, func(tx *Tx) error {
@@ -301,10 +297,6 @@ func (tx *Tx) GetInstrumentInEnvironment(exchange, environment, marketType, exch
 		return InstrumentRecord{}, err
 	}
 	return set.symbol(exchangeSymbol)
-}
-
-func (tx *Tx) GetInstrumentByID(instrumentID string) (InstrumentRecord, error) {
-	return getInstrumentByID(tx.db, instrumentID)
 }
 
 func (tx *Tx) GetInstrumentByIDForAccount(spaceID, tradingAccountID, instrumentID string) (InstrumentRecord, error) {
@@ -540,12 +532,8 @@ func validateOrderOwnership(tx *Tx, record OrderRecord) error {
 		return fmt.Errorf("%w: TARGET instance does not own logical account", ErrConflict)
 	}
 	var membership int64
-	if err := tx.db.Raw(`
-		SELECT COUNT(*)
-		FROM t_logical_account_members
-		WHERE c_space_id = ? AND c_logical_account_id = ?
-			AND c_trading_account_id = ?
-	`,
+	if err := tx.db.Raw(
+		queryCountLogicalMember,
 		record.SpaceID, record.LogicalAccountID, record.TradingAccountID,
 	).Scan(&membership).Error; err != nil {
 		return err
@@ -940,10 +928,7 @@ func (s *Store) ListOrders(
 
 func (tx *Tx) GetOrder(spaceID string, orderID string) (OrderRecord, error) {
 	var row orderRow
-	result := tx.db.Raw(`
-		SELECT * FROM t_trade_orders
-		WHERE c_space_id = ? AND c_order_id = ?
-	`, spaceID, orderID).Scan(&row)
+	result := tx.db.Raw(queryOrderByID, spaceID, orderID).Scan(&row)
 	if result.Error != nil {
 		return OrderRecord{}, result.Error
 	}
@@ -1014,8 +999,7 @@ func (tx *Tx) UpdatePendingOrderReference(record OrderRecord, expectedVersion ui
 			return fmt.Errorf("%w: invalid paper execution price", ErrInvalidRecord)
 		}
 	}
-	result := tx.db.Exec(`UPDATE t_trade_orders SET c_reference_price = ?, c_reference_price_at = ?, c_paper_execution_price = ?
-		WHERE c_space_id = ? AND c_order_id = ? AND c_version = ? AND c_state = 'PENDING' AND c_submitted_at = 0`,
+	result := tx.db.Exec(execUpdatePendingOrderReference,
 		price.String(), record.ReferencePriceAt, record.PaperExecutionPrice, record.SpaceID, record.OrderID, expectedVersion)
 	if result.Error != nil {
 		return writeError(result.Error)
@@ -1148,12 +1132,7 @@ func (tx *Tx) InsertFill(record FillRecord) (bool, error) {
 		Side             string `gorm:"column:c_side"`
 		PositionSide     string `gorm:"column:c_position_side"`
 	}
-	result := tx.db.Raw(`
-		SELECT c_trading_account_id, c_exchange_order_id, c_exchange, c_market_type,
-			c_instrument_id, c_exchange_symbol, c_side, c_position_side
-		FROM t_trade_orders
-		WHERE c_space_id = ? AND c_order_id = ?
-	`, record.SpaceID, record.OrderID).Scan(&orderIdentity)
+	result := tx.db.Raw(queryOrderIdentity, record.SpaceID, record.OrderID).Scan(&orderIdentity)
 	if result.Error != nil {
 		return false, result.Error
 	}
@@ -1206,14 +1185,8 @@ func (tx *Tx) InsertFill(record FillRecord) (bool, error) {
 	if duplicate {
 		return tx.resolveDuplicateFill(record, ErrConflict)
 	}
-	result = tx.db.Exec(`
-		INSERT INTO t_order_fills (
-			c_space_id, c_fill_id, c_exchange_trade_id, c_order_id,
-			c_exchange_order_id, c_trading_account_id, c_exchange, c_market_type,
-			c_instrument_id, c_exchange_symbol, c_side, c_position_side, c_price, c_quantity, c_fee,
-			c_fee_asset, c_settlement_asset, c_realized_pnl, c_role, c_traded_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`,
+	result = tx.db.Exec(
+		execInsertOrderFill,
 		record.SpaceID, record.FillID, record.ExchangeTradeID, record.OrderID,
 		record.ExchangeOrderID, record.TradingAccountID, record.Exchange,
 		record.MarketType, record.InstrumentID, record.ExchangeSymbol, record.Side, record.PositionSide,
@@ -1913,13 +1886,7 @@ func (s *Store) TargetFillNotionalSince(ctx context.Context, spaceID, tradingAcc
 	var total struct {
 		Notional float64 `gorm:"column:notional"`
 	}
-	err := s.db.WithContext(ctx).Raw(`
-		SELECT COALESCE(SUM(CAST(f.c_price AS REAL) * CAST(f.c_quantity AS REAL)), 0) AS notional
-		FROM t_order_fills AS f
-		JOIN t_trade_orders AS o ON o.c_space_id = f.c_space_id AND o.c_order_id = f.c_order_id
-		WHERE f.c_space_id = ? AND f.c_trading_account_id = ? AND f.c_traded_at > ?
-			AND o.c_owner_type = 'TARGET'
-	`, spaceID, tradingAccountID, since).Scan(&total).Error
+	err := s.db.WithContext(ctx).Raw(queryTargetFillNotionalSince, spaceID, tradingAccountID, since).Scan(&total).Error
 	return total.Notional, err
 }
 
@@ -1945,6 +1912,27 @@ const (
 			c_reject_reason = ?, c_exchange_updated_at = ?, c_version = ?,
 			c_submitted_at = ?, c_finished_at = ?, c_mtime = CURRENT_TIMESTAMP
 		WHERE c_space_id = ? AND c_order_id = ? AND c_version = ?`
+	queryCountLogicalMember = `SELECT COUNT(*) FROM t_logical_account_members
+		WHERE c_space_id = ? AND c_logical_account_id = ? AND c_trading_account_id = ?`
+	queryOrderByID = `SELECT * FROM t_trade_orders
+		WHERE c_space_id = ? AND c_order_id = ?`
+	execUpdatePendingOrderReference = `UPDATE t_trade_orders SET c_reference_price = ?, c_reference_price_at = ?, c_paper_execution_price = ?
+		WHERE c_space_id = ? AND c_order_id = ? AND c_version = ? AND c_state = 'PENDING' AND c_submitted_at = 0`
+	queryOrderIdentity = `SELECT c_trading_account_id, c_exchange_order_id, c_exchange, c_market_type,
+			c_instrument_id, c_exchange_symbol, c_side, c_position_side
+		FROM t_trade_orders
+		WHERE c_space_id = ? AND c_order_id = ?`
+	execInsertOrderFill = `INSERT INTO t_order_fills (
+			c_space_id, c_fill_id, c_exchange_trade_id, c_order_id,
+			c_exchange_order_id, c_trading_account_id, c_exchange, c_market_type,
+			c_instrument_id, c_exchange_symbol, c_side, c_position_side, c_price, c_quantity, c_fee,
+			c_fee_asset, c_settlement_asset, c_realized_pnl, c_role, c_traded_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	queryTargetFillNotionalSince = `SELECT COALESCE(SUM(CAST(f.c_price AS REAL) * CAST(f.c_quantity AS REAL)), 0) AS notional
+		FROM t_order_fills AS f
+		JOIN t_trade_orders AS o ON o.c_space_id = f.c_space_id AND o.c_order_id = f.c_order_id
+		WHERE f.c_space_id = ? AND f.c_trading_account_id = ? AND f.c_traded_at > ?
+			AND o.c_owner_type = 'TARGET'`
 	queryCountOrderFills = `SELECT COUNT(*) FROM t_order_fills
 		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_market_type = ? AND c_exchange_symbol = ?
 			AND c_exchange_trade_id = ?`

@@ -3,6 +3,7 @@ package store
 import (
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
@@ -33,7 +34,7 @@ func (tx *Tx) ClosePaperSimulation(spaceID, tradingAccountID string) error {
 			// Closing is terminal for a Paper fixture. Orders that are still in
 			// submission/cancel handshakes are rejected and their reservation is
 			// released rather than being retried through an exchange adapter.
-			result := tx.db.Exec(execCancelClosedPaperOrder, "模拟账户已关闭", current.SpaceID, current.OrderID, current.Version)
+			result := tx.db.Exec(execCancelClosedPaperOrder, "模拟账户已关闭", time.Now().UTC().UnixMilli(), current.SpaceID, current.OrderID, current.Version)
 			if result.Error != nil {
 				return result.Error
 			}
@@ -118,8 +119,7 @@ func (tx *Tx) refreshClosedPaperBalances(account TradingAccountRecord) error {
 	if err != nil {
 		return err
 	}
-	result := tx.db.Exec(`UPDATE t_trading_accounts SET c_snapshot_json = ?, c_mtime = CURRENT_TIMESTAMP
-		WHERE c_space_id = ? AND c_trading_account_id = ?`, encoded, account.SpaceID, account.TradingAccountID)
+	result := tx.db.Exec(execUpdateClosedPaperSnapshot, encoded, account.SpaceID, account.TradingAccountID)
 	return requireUpdated(result.Error, result.RowsAffected, "closed paper balance snapshot")
 }
 
@@ -188,10 +188,7 @@ func (tx *Tx) listOpenOrdersForAccount(spaceID, tradingAccountID string) ([]Orde
 }
 
 func (tx *Tx) SetTradingAccountStatus(spaceID, tradingAccountID, status string) error {
-	result := tx.db.Exec(`
-		UPDATE t_trading_accounts SET c_status = ?, c_ready = 0, c_mtime = CURRENT_TIMESTAMP
-		WHERE c_space_id = ? AND c_trading_account_id = ?
-	`, status, spaceID, tradingAccountID)
+	result := tx.db.Exec(execSetTradingAccountStatus, status, spaceID, tradingAccountID)
 	return requireUpdated(result.Error, result.RowsAffected, "trading account status")
 }
 
@@ -200,9 +197,13 @@ const (
 	execCancelClosedPaperOrder = `UPDATE t_trade_orders
 		SET c_state = 'CANCELED', c_first_match_pending = 0,
 		    c_remaining_reserved_quantity = '0', c_reject_reason = ?,
-		    c_finished_at = CAST(strftime('%s', 'now') AS INTEGER) * 1000,
+		    c_finished_at = ?,
 		    c_version = c_version + 1, c_mtime = CURRENT_TIMESTAMP
 		WHERE c_space_id = ? AND c_order_id = ? AND c_version = ?`
+	execUpdateClosedPaperSnapshot = `UPDATE t_trading_accounts SET c_snapshot_json = ?, c_mtime = CURRENT_TIMESTAMP
+		WHERE c_space_id = ? AND c_trading_account_id = ?`
+	execSetTradingAccountStatus = `UPDATE t_trading_accounts SET c_status = ?, c_ready = 0, c_mtime = CURRENT_TIMESTAMP
+		WHERE c_space_id = ? AND c_trading_account_id = ?`
 	sqlPaperAccountLogicalIDs = `SELECT c_logical_account_id FROM t_logical_account_members
 		WHERE c_space_id = ? AND c_trading_account_id = ?`
 	execPausePaperLogicalAccount = `UPDATE t_logical_accounts SET c_automation_state = 'PAUSED', c_pause_reason = ?, c_mtime = CURRENT_TIMESTAMP

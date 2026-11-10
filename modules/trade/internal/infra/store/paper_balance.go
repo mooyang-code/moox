@@ -12,9 +12,8 @@ import (
 )
 
 type PaperBalanceSnapshot struct {
-	Totals           map[string]shared.Decimal
-	Reserved         map[string]shared.Decimal
-	AppliedFillCount int64
+	Totals   map[string]shared.Decimal
+	Reserved map[string]shared.Decimal
 }
 
 func (tx *Tx) initializePaperBalance(spaceID, accountID, initial string) error {
@@ -29,10 +28,10 @@ func (tx *Tx) initializePaperBalance(spaceID, accountID, initial string) error {
 	if err != nil {
 		return err
 	}
-	if err := tx.db.Exec(`INSERT INTO t_paper_balance_projections (c_space_id, c_trading_account_id, c_initialized_at) VALUES (?, ?, ?)`, spaceID, accountID, time.Now().UTC().UnixMilli()).Error; err != nil {
+	if err := tx.db.Exec(execInsertPaperBalanceProjection, spaceID, accountID, time.Now().UTC().UnixMilli()).Error; err != nil {
 		return writeError(err)
 	}
-	return tx.db.Exec(`INSERT INTO t_paper_asset_balances (c_space_id, c_trading_account_id, c_asset, c_total) VALUES (?, ?, ?, ?)`, spaceID, accountID, account.SettlementAsset, total).Error
+	return tx.db.Exec(execInsertPaperAssetBalance, spaceID, accountID, account.SettlementAsset, total).Error
 }
 
 func (s *Store) GetPaperBalanceSnapshot(ctx context.Context, spaceID, accountID string) (PaperBalanceSnapshot, error) {
@@ -48,14 +47,13 @@ func (s *Store) GetPaperBalanceSnapshot(ctx context.Context, spaceID, accountID 
 func (tx *Tx) GetPaperBalanceSnapshot(spaceID, accountID string) (PaperBalanceSnapshot, error) {
 	result := PaperBalanceSnapshot{Totals: map[string]shared.Decimal{}, Reserved: map[string]shared.Decimal{}}
 	var marker struct {
-		Count int64 `gorm:"column:c_applied_fill_count"`
+		InitializedAt int64 `gorm:"column:c_initialized_at"`
 	}
 	err := tx.db.Table("t_paper_balance_projections").Where("c_space_id = ? AND c_trading_account_id = ?", spaceID, accountID).Take(&marker).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		// reset data 清掉了余额但保留账户，按配置的初始资金重新开始。
 		var initial string
-		if rawErr := tx.db.Raw(`SELECT c_initial_balance FROM t_paper_account_configs WHERE c_space_id = ? AND c_trading_account_id = ?`,
-			spaceID, accountID).Scan(&initial).Error; rawErr != nil {
+		if rawErr := tx.db.Raw(queryPaperInitialBalance, spaceID, accountID).Scan(&initial).Error; rawErr != nil {
 			return result, rawErr
 		}
 		if initial == "" {
@@ -69,7 +67,6 @@ func (tx *Tx) GetPaperBalanceSnapshot(spaceID, accountID string) (PaperBalanceSn
 	if err != nil {
 		return result, err
 	}
-	result.AppliedFillCount = marker.Count
 	var balances []struct {
 		Asset string `gorm:"column:c_asset"`
 		Total string `gorm:"column:c_total"`
@@ -88,8 +85,7 @@ func (tx *Tx) GetPaperBalanceSnapshot(spaceID, accountID string) (PaperBalanceSn
 		Asset    string `gorm:"column:c_reserved_asset"`
 		Quantity string `gorm:"column:c_remaining_reserved_quantity"`
 	}
-	if err := tx.db.Raw(`SELECT c_reserved_asset, c_remaining_reserved_quantity FROM t_trade_orders
- WHERE c_space_id = ? AND c_trading_account_id = ? AND c_state IN ('PENDING', 'SUBMITTING', 'SUBMIT_UNKNOWN', 'OPEN', 'PARTIALLY_FILLED', 'CANCELING', 'CANCEL_UNKNOWN')`, spaceID, accountID).Scan(&reservations).Error; err != nil {
+	if err := tx.db.Raw(queryPaperActiveReservations, spaceID, accountID, activeOrderStates).Scan(&reservations).Error; err != nil {
 		return result, err
 	}
 	for _, reservation := range reservations {
@@ -174,13 +170,6 @@ func (tx *Tx) applyPaperFill(record FillRecord) error {
 			return err
 		}
 	}
-	result := tx.db.Exec(`UPDATE t_paper_balance_projections SET c_applied_fill_count = c_applied_fill_count + 1 WHERE c_space_id = ? AND c_trading_account_id = ?`, record.SpaceID, record.TradingAccountID)
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected != 1 {
-		return fmt.Errorf("%w: uninitialized paper balance", ErrInvalidRecord)
-	}
 	return nil
 }
 
@@ -189,7 +178,7 @@ func (tx *Tx) normalizePaperFillSettlement(record *FillRecord) error {
 		return nil
 	}
 	var settlement string
-	if err := tx.db.Raw(`SELECT c_settlement_asset FROM t_trading_accounts WHERE c_space_id = ? AND c_trading_account_id = ?`, record.SpaceID, record.TradingAccountID).Scan(&settlement).Error; err != nil {
+	if err := tx.db.Raw(queryAccountSettlementAsset, record.SpaceID, record.TradingAccountID).Scan(&settlement).Error; err != nil {
 		return err
 	}
 	if settlement == "" {
@@ -197,14 +186,6 @@ func (tx *Tx) normalizePaperFillSettlement(record *FillRecord) error {
 	}
 	return validateOrDeriveIdentity(&record.SettlementAsset, settlement, "paper fill settlement asset")
 }
-
-// paperT1BuysSQL 一次读出一个模拟账户在某个时刻之后、在给定市场上的买入成交和它们的基础资产（T+1 只看当日买入），
-// 不在写事务里逐笔查标的。
-const paperT1BuysSQL = `SELECT i.c_base_asset AS c_base_asset, f.c_quantity AS c_quantity
- FROM t_order_fills f
- JOIN t_trade_instruments i ON i.c_exchange = ? AND i.c_environment = ? AND i.c_market_type = f.c_market_type
-  AND i.c_exchange_symbol = f.c_exchange_symbol
- WHERE f.c_space_id = ? AND f.c_trading_account_id = ? AND f.c_side = 'BUY' AND f.c_traded_at >= ? AND f.c_market_type IN ?`
 
 // PaperT1Bought 返回 since 之后买入、按 T+1 当天还不能卖的数量（资产 -> 数量），只算有 T+1 规则的市场（股票）。
 func (s *Store) PaperT1Bought(ctx context.Context, spaceID, accountID string, since int64) (map[string]shared.Decimal, error) {
@@ -236,7 +217,7 @@ func (tx *Tx) PaperT1Bought(spaceID, accountID string, since int64) (map[string]
 		BaseAsset string `gorm:"column:c_base_asset"`
 		Quantity  string `gorm:"column:c_quantity"`
 	}
-	if err := tx.db.Raw(paperT1BuysSQL, identity.Exchange, identity.Environment, spaceID, accountID, since, names).Scan(&rows).Error; err != nil {
+	if err := tx.db.Raw(queryPaperT1Buys, identity.Exchange, identity.Environment, spaceID, accountID, since, names).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
 	for _, row := range rows {
@@ -248,3 +229,25 @@ func (tx *Tx) PaperT1Bought(spaceID, accountID string, since int64) (map[string]
 	}
 	return result, nil
 }
+
+// 以下 SQL 整条写成常量，不在调用处拼接或内联。
+const (
+	execInsertPaperBalanceProjection = `INSERT INTO t_paper_balance_projections (c_space_id, c_trading_account_id, c_initialized_at)
+		VALUES (?, ?, ?)`
+	execInsertPaperAssetBalance = `INSERT INTO t_paper_asset_balances (c_space_id, c_trading_account_id, c_asset, c_total)
+		VALUES (?, ?, ?, ?)`
+	queryPaperInitialBalance = `SELECT c_initial_balance FROM t_paper_account_configs
+		WHERE c_space_id = ? AND c_trading_account_id = ?`
+	// 状态列表由调用方传入 activeOrderStates。
+	queryPaperActiveReservations = `SELECT c_reserved_asset, c_remaining_reserved_quantity FROM t_trade_orders
+		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_state IN ?`
+	queryAccountSettlementAsset = `SELECT c_settlement_asset FROM t_trading_accounts
+		WHERE c_space_id = ? AND c_trading_account_id = ?`
+	// 一次读出一个模拟账户在某个时刻之后、在给定市场上的买入成交和它们的基础资产（T+1 只看当日买入），
+	// 不在写事务里逐笔查标的。
+	queryPaperT1Buys = `SELECT i.c_base_asset AS c_base_asset, f.c_quantity AS c_quantity
+		FROM t_order_fills f
+		JOIN t_trade_instruments i ON i.c_exchange = ? AND i.c_environment = ? AND i.c_market_type = f.c_market_type
+			AND i.c_exchange_symbol = f.c_exchange_symbol
+		WHERE f.c_space_id = ? AND f.c_trading_account_id = ? AND f.c_side = 'BUY' AND f.c_traded_at >= ? AND f.c_market_type IN ?`
+)

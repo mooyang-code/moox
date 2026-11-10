@@ -45,26 +45,3 @@ CREATE TABLE IF NOT EXISTS t_replay_periods (
     CHECK (json_type(c_positions_json) = 'object'),
     CHECK (json_valid(c_result_json))
 );
-
-CREATE TABLE IF NOT EXISTS t_replay_orders (
-    c_replay_id TEXT NOT NULL,
-    c_order_id TEXT NOT NULL,
-    c_period INTEGER NOT NULL,
-    c_instrument_id TEXT NOT NULL,
-    c_side TEXT NOT NULL,
-    c_requested_quantity TEXT NOT NULL,
-    c_filled_quantity TEXT NOT NULL,
-    c_price TEXT NOT NULL,
-    c_fee TEXT NOT NULL,
-    c_status TEXT NOT NULL,
-    c_reason TEXT NOT NULL DEFAULT '',
-    PRIMARY KEY (c_replay_id, c_order_id),
-    FOREIGN KEY (c_replay_id)
-        REFERENCES t_replay_sessions (c_replay_id)
-        ON DELETE CASCADE,
-    CHECK (c_side IN ('BUY', 'SELL')),
-    CHECK (c_status IN ('FILLED', 'PARTIAL', 'REJECTED'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_replay_orders_period
-ON t_replay_orders (c_replay_id, c_period);
