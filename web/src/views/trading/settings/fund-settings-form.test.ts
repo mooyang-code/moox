@@ -7,6 +7,7 @@ import {
   marginMonitorHiddenNote,
   marginMonitorMixedNote,
   parseAssetList,
+  showsBnbStandardNote,
   showsLiveOnlyFields,
   showsMarginMonitor,
   sumDecimals,
@@ -360,5 +361,15 @@ describe("fund settings form", () => {
     expect(turnsOffMarginMonitor(off, on, false)).toBe(false);
     expect(turnsOffMarginMonitor(on, on, false)).toBe(false);
     expect(turnsOffMarginMonitor(on, off, true)).toBe(false);
+  });
+});
+
+describe("普通账户的 BNB 补买说明", () => {
+  it("只在显示 BNB 项且组合里有普通账户时出现", () => {
+    expect(showsBnbStandardNote({ standardAccount: true })).toBe(true);
+    expect(showsBnbStandardNote({})).toBe(false);
+    expect(showsBnbStandardNote({ standardAccount: false })).toBe(false);
+    expect(showsBnbStandardNote({ standardAccount: true, paper: true })).toBe(false);
+    expect(showsBnbStandardNote({ standardAccount: true, nonBinance: true })).toBe(false);
   });
 });

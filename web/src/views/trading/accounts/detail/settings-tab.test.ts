@@ -31,14 +31,26 @@ let wrapper: VueWrapper;
 const reload = vi.fn(async () => undefined);
 const saved: FundSettings = { reserve_ratio: "0", bnb_discount: false, bnb_reserve_amount: "0", dust_convert_enabled: false };
 
-function mountTab(env: Environment, stored: Partial<FundSettings> = {}) {
+function mountTab(env: Environment, stored: Partial<FundSettings> = {}, binanceMode?: string) {
+  // 带 binanceMode 时组合里有一个币安实盘成员，账户类型为所给值
+  const members = binanceMode ? [{ trading_account_id: "t-1", enabled: true, priority: 1 }] : [];
+  const account = {
+    trading_account_id: "t-1",
+    name: "币安账户",
+    exchange: 1,
+    markets: [1, 2],
+    execution_mode: 2,
+    status: "ENABLED",
+    account_mode: binanceMode,
+    live: { environment: 2 }
+  };
   const logical = ref({
     logical_account_id: "l-1",
     name: "组合",
     control_mode: 2,
     execution_mode: env === "paper" ? 1 : 2,
     settlement_asset: "USDT",
-    members: [],
+    members,
     fund_settings: { ...saved, ...stored }
   } as unknown as LogicalAccount);
   wrapper = mount(
@@ -46,7 +58,7 @@ function mountTab(env: Environment, stored: Partial<FundSettings> = {}) {
       setup() {
         provide(detailContextKey, {
           logical: computed(() => logical.value),
-          accounts: computed(() => new Map()),
+          accounts: computed(() => new Map(binanceMode ? [["t-1", account]] : [])),
           allAccounts: ref([]),
           env: computed(() => env),
           strategy: ref(null),
@@ -153,5 +165,22 @@ describe("设置页保存资金设置", () => {
     await saveFund({ margin_monitor_disabled: true });
     expect(dialogTitle()).toBe(false);
     expect(mocks.updateFund).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("设置页的 BNB 补买说明", () => {
+  const note = "普通账户只补现货钱包的 BNB（目标为保留金额的一半）；合约手续费用 BNB 抵扣需要在合约钱包里自行放入 BNB。";
+
+  it("普通账户组合在 BNB 保留金额旁显示补买范围", async () => {
+    mountTab("prod", {}, "BINANCE_STANDARD");
+    await flushPromises();
+    expect(wrapper.text()).toContain(note);
+  });
+
+  it("统一账户组合不显示这句话", async () => {
+    mountTab("prod", {}, "BINANCE_PORTFOLIO_MARGIN");
+    await flushPromises();
+    expect(wrapper.text()).toContain("BNB 保留金额");
+    expect(wrapper.text()).not.toContain("普通账户只补现货钱包");
   });
 });
