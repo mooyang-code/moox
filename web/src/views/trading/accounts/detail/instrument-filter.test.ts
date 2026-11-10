@@ -12,4 +12,11 @@ describe("标的筛选补全", () => {
     expect(instrumentFilter("  ", 2, "USDT")).toBeUndefined();
     expect(instrumentFilter("SOL", undefined, "USDT")).toBe("SOL-USDT");
   });
+
+  it("股票代码原样返回：带点的输入、市场为股票、没选市场都只去空格和大写", () => {
+    expect(instrumentFilter("600519.xshg", 3, "CNY")).toBe("600519.XSHG");
+    expect(instrumentFilter("600519.xshg", undefined, "CNY")).toBe("600519.XSHG");
+    expect(instrumentFilter(" 600519 ", 3, "CNY")).toBe("600519");
+    expect(instrumentFilter("600519.xshg", 1, "USDT")).toBe("600519.XSHG");
+  });
 });

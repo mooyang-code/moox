@@ -26,3 +26,8 @@ export function instrumentName(instrumentId: string): string {
 export function coinOf(instrumentId: string): string {
   return instrumentName(instrumentId).split("-")[0];
 }
+
+/** 只开通了股票市场（A 股组合）。 */
+export function isStockOnly(markets: readonly number[]): boolean {
+  return markets.length === 1 && markets[0] === 3;
+}
