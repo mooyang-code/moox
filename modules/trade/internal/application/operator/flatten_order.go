@@ -309,13 +309,18 @@ func (s *Service) placeOrContinueFlattenChildWithQuote(
 	delist := command.actionType() == operatordomain.ActionDelistFlatten
 	// stockIOC：A 股没有市价单，清仓、减仓也发限价 IOC。
 	stockIOC := exchange.RuleFor(instrument.MarketType).PriceLimits
-	// 所有市场的子单号都带上第几次尝试（本动作在这个标的上已结束的子单数）：零成交的子单（已过期、已撤销、本地校验没过）
-	// 结束后同一个动作号换号再下，不会撞上上一笔已结束的子单；交易所明确拒绝的才终结。
+	// 所有市场的子单号都带上第几次尝试：零成交的子单（已过期、已撤销、本地校验没过）结束后同一个动作号换号再下，
+	// 不会撞上上一笔已结束的子单；交易所明确拒绝的才终结。
+	// 下架清仓和 A 股数本动作在这个标的上已结束的全部子单；加密市场清仓、减仓只数零成交的：
+	// 有成交的子单（含部分成交）结束后，持仓还没同步时按旧数量再下会命中原号而不下单，同步后数量变了自然换号。
 	history, err := s.loadDelistHistory(ctx, command, account.TradingAccountID, exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol))
 	if err != nil {
 		return err
 	}
 	attempt := history.finished
+	if !delist && !stockIOC {
+		attempt = history.zeroFilled
+	}
 	clientOrderID := flattenClientOrderIDForSpec(
 		command.ActionID,
 		account.TradingAccountID,

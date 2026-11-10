@@ -104,6 +104,9 @@ func (e delistPacingError) Error() string {
 type delistHistory struct {
 	// finished 是本动作在这个标的上已结束的子单总数（不分起点）：并进子单号的哈希，保证每笔的号不同。
 	finished int
+	// zeroFilled 是其中一股都没成交的笔数（不分起点）：加密市场清仓、减仓的尝试序号只数它，
+	// 有成交的终态子单不换号——持仓还没同步时按旧数量再下，会命中原号而不下单，避免重复减仓。
+	zeroFilled int
 	// lastRejected、rejectReason 说明这一轮（起点之后）最近一笔是否被交易所拒绝；unfilled 是这一轮最近连续一股都没成交的笔数。
 	lastRejected bool
 	rejectReason string
@@ -135,6 +138,9 @@ func (s *Service) loadDelistHistory(ctx context.Context, command FlattenCommand,
 	history := delistHistory{finished: len(finished)}
 	var thisRound []store.OrderRecord
 	for _, current := range finished {
+		if filled, parseErr := decimalOrZero(current.FilledQuantity); parseErr == nil && filled.Cmp(shared.Zero()) <= 0 {
+			history.zeroFilled++
+		}
 		at := current.CreatedAt
 		if current.FinishedAt > 0 {
 			at = time.UnixMilli(current.FinishedAt)

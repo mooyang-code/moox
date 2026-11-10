@@ -141,7 +141,8 @@ func TestFlattenZeroFillRejectedChildEndsPartial(t *testing.T) {
 	require.Empty(t, fixture.orders.specs)
 }
 
-func TestFlattenPartiallyFilledEndedChildRetries(t *testing.T) {
+// 子单部分成交后结束、持仓还没同步（仍是旧数量）：按旧数量再下会重复减仓，命中原号不下单。
+func TestFlattenPartiallyFilledEndedChildNotRepeatedBeforePositionSync(t *testing.T) {
 	fixture := newOperatorFixture(t, exchange.MarketTypeSwap)
 	fixture.orders.nextID = ""
 	fixture.position(t, "account-a", "BTCUSDT", "2")
@@ -149,11 +150,26 @@ func TestFlattenPartiallyFilledEndedChildRetries(t *testing.T) {
 	service := fixture.service()
 	service.FlattenMaxAttempts = 2
 
-	result, err := flattenOnce(t, service, "flatten-1")
+	_, err := flattenOnce(t, service, "flatten-1")
 
 	require.NoError(t, err)
-	require.Equal(t, string(operatordomain.StatusRunning), result.Action.Status)
-	require.NotEmpty(t, fixture.orders.specs, "部分成交后结束的子单，持仓同步后换号再下")
+	require.Empty(t, fixture.orders.specs, "子单已成交、持仓没变时，不再下新单")
+}
+
+// 子单部分成交后持仓已同步：按剩余持仓下一笔，不超过剩余持仓。
+func TestFlattenPartiallyFilledEndedChildContinuesWithRemainingPosition(t *testing.T) {
+	fixture := newOperatorFixture(t, exchange.MarketTypeSwap)
+	fixture.orders.nextID = ""
+	fixture.position(t, "account-a", "BTCUSDT", "1")
+	fixture.order(t, endedChild(fixture, "PARTIALLY_CANCELED", "1"))
+	service := fixture.service()
+	service.FlattenMaxAttempts = 1
+
+	_, err := flattenOnce(t, service, "flatten-1")
+
+	require.NoError(t, err)
+	require.Len(t, fixture.orders.specs, 1)
+	require.Equal(t, "1", fixture.orders.specs[0].Quantity.String())
 }
 
 // 零成交的已过期、已撤销子单（加密市场的减仓、清仓）：换号重试，不判终结。

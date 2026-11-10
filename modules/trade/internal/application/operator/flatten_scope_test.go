@@ -155,7 +155,7 @@ func TestReduceRetriesWithNewIDsAfterZeroFillExpiryButEndsOnRejection(t *testing
 	require.NotEqual(t, string(operatordomain.StatusPartial), result.Action.Status)
 
 	// 这一轮的单被交易所拒绝：终结，不再换号。
-	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_trade_orders SET c_state = 'REJECTED', c_reject_reason = '交易对暂停', c_submitted_at = 1000, c_exchange_symbol = 'BTCUSDT' WHERE c_owner_id = 'reduce-retry' AND c_state <> 'EXPIRED'`).Error)
+	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_trade_orders SET c_state = 'REJECTED', c_filled_quantity = '0', c_reject_reason = '交易对暂停', c_submitted_at = 1000, c_exchange_symbol = 'BTCUSDT' WHERE c_owner_id = 'reduce-retry' AND c_state <> 'EXPIRED'`).Error)
 	currentRoundOrders(t, fixture, "reduce-retry")
 	fixture.orders.specs = nil
 	result, err = fixture.service().FlattenLogicalAccount(context.Background(), command)

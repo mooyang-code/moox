@@ -899,6 +899,9 @@ func setOperatorOrderState(
 	}
 	expected := record.Version
 	record.State = state
+	if state == "FILLED" {
+		record.FilledQuantity = record.Quantity
+	}
 	record.Version++
 	record.FinishedAt = time.Now().UnixMilli()
 	return tradeStore.Transaction(ctx, func(tx *store.Tx) error {

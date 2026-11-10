@@ -141,7 +141,7 @@ func TestDelistFlattenUnfilledStreakCapsThenResetsOnRetry(t *testing.T) {
 	fixture.orders.nextID = ""
 	_, err := fixture.service().FlattenLogicalAccount(context.Background(), command)
 	require.NoError(t, err)
-	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_trade_orders SET c_state = 'EXPIRED', c_exchange_symbol = 'BTCUSDT' WHERE c_owner_id = 'delist-streak'`).Error)
+	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_trade_orders SET c_state = 'EXPIRED', c_filled_quantity = '0', c_exchange_symbol = 'BTCUSDT' WHERE c_owner_id = 'delist-streak'`).Error)
 	limit := "97"
 	for i := 1; i < flattenMaxUnfilled; i++ {
 		id := "old-" + string(rune('a'+i))
