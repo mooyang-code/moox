@@ -82,6 +82,7 @@ type fakeOrders struct {
 	recovered []string
 	resolveTo orderdomain.State
 	placeErr  error
+	onCancel  func()
 }
 
 func (o *fakeOrders) setState(orderID string, state orderdomain.State) error {
@@ -128,7 +129,10 @@ func (o *fakeOrders) Submit(_ context.Context, _ string, orderID string) (orderd
 }
 func (o *fakeOrders) Cancel(_ context.Context, _ string, orderID string) (orderdomain.Order, error) {
 	o.canceled = append(o.canceled, orderID)
-	return orderdomain.Order{ID: shared.OrderID(orderID)}, nil
+	if o.onCancel != nil {
+		o.onCancel()
+	}
+	return orderdomain.Order{ID: shared.OrderID(orderID), State: orderdomain.Canceled}, o.setState(orderID, orderdomain.Canceled)
 }
 
 type fixture struct {
@@ -280,6 +284,46 @@ func TestBNBReserveCountsAllWalletsAndWaitsForTheOpenOrder(t *testing.T) {
 	}))
 	require.NoError(t, g.run())
 	require.Empty(t, g.orders.specs)
+}
+
+// 普通账户（现货、合约两个钱包）：补买只补现货钱包，目标是保留金额的一半，合约钱包里的 BNB 不算。
+func TestBNBReserveForAStandardAccountTargetsHalfInTheSpotWallet(t *testing.T) {
+	newStandard := func(t *testing.T, balances ...store.AssetBalance) *fixture {
+		f := newFixture(t, `{"bnb_reserve_amount":"200"}`, append([]store.AssetBalance{{Wallet: "FUTURES", Asset: "USDT", Available: "1000", Total: "1000"}}, balances...))
+		require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_trading_accounts SET c_account_mode = 'BINANCE_STANDARD', c_markets = 'SPOT,SWAP'`).Error)
+		return f
+	}
+	spot := func(asset, total string) store.AssetBalance {
+		return store.AssetBalance{Wallet: "SPOT", Asset: asset, Available: total, Total: total}
+	}
+
+	t.Run("N=200、BNB 为 0、价格 600：买 floor_step((200/2)/600)", func(t *testing.T) {
+		f := newStandard(t, spot("USDT", "500"))
+		require.NoError(t, f.run())
+		require.Len(t, f.orders.specs, 1)
+		require.Equal(t, "0.166", f.orders.specs[0].Quantity.String(), "100/600 = 0.1666…，步长 0.001 向下取整")
+		require.Equal(t, "BNB-USDT-SPOT", f.orders.specs[0].InstrumentID)
+	})
+	t.Run("合约钱包里的 BNB 不算", func(t *testing.T) {
+		f := newStandard(t, spot("USDT", "500"), store.AssetBalance{Wallet: "FUTURES", Asset: "BNB", Available: "5", Total: "5"})
+		require.NoError(t, f.run())
+		require.Len(t, f.orders.specs, 1)
+		require.Equal(t, "0.166", f.orders.specs[0].Quantity.String())
+	})
+	t.Run("现货钱包已有 0.1 个（60）：只补缺口 40", func(t *testing.T) {
+		f := newStandard(t, spot("USDT", "500"), spot("BNB", "0.1"))
+		require.NoError(t, f.run())
+		require.Len(t, f.orders.specs, 1)
+		require.Equal(t, "0.066", f.orders.specs[0].Quantity.String())
+	})
+	t.Run("触发线是 N/2 − 5：市值 95 不补，90 补", func(t *testing.T) {
+		enough := newStandard(t, spot("USDT", "500"), spot("BNB", "0.1583333334"))
+		require.NoError(t, enough.run())
+		require.Empty(t, enough.orders.specs)
+		short := newStandard(t, spot("USDT", "500"), spot("BNB", "0.15"))
+		require.NoError(t, short.run())
+		require.Len(t, short.orders.specs, 1)
+	})
 }
 
 func TestSystemTasksSkipPausedAndFlatteningAccounts(t *testing.T) {
@@ -488,7 +532,28 @@ func TestStablecoinCancelsLastRoundsUnfilledBuyBeforeRecalculating(t *testing.T)
 	}))
 	require.NoError(t, f.run())
 	require.Equal(t, []string{"rest-1"}, f.orders.canceled, "到下一次检查还没成交的买单撤掉")
-	require.Empty(t, f.orders.specs, "撤单结束前不下新单")
+	require.Len(t, f.orders.specs, 1, "撤单全部结束后，同一轮重算并重挂")
+	require.Equal(t, "USDC-USDT-SPOT", f.orders.specs[0].InstrumentID)
+	require.Equal(t, exchange.SideBuy, f.orders.specs[0].Side)
+}
+
+// 撤单后账户未就绪（撤单前的部分成交还没进快照）：这一轮不重挂，等下一轮。
+func TestStablecoinDoesNotReplaceTheBuyWhileTheAccountIsNotReady(t *testing.T) {
+	f := newFixture(t, stableSettings, []store.AssetBalance{balance("USDT", "800"), balance("USDC", "200")})
+	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.CreateOrder(store.OrderRecord{
+			SpaceID: "space-1", OrderID: "rest-1", TradingAccountID: "account-a", LogicalAccountID: "logical-1", ClientOrderID: "rest-1",
+			Exchange: "BINANCE", MarketType: "SPOT", InstrumentID: "USDC-USDT-SPOT", ExchangeSymbol: "USDCUSDT",
+			OrderType: "LIMIT", TimeInForce: "GTC", Side: "BUY", Quantity: "200", LimitPrice: strPtr("0.9995"), ReferencePrice: "1",
+			OwnerType: "SYSTEM", OwnerID: "stable-rebalance", State: "OPEN", SubmittedAt: 1_000, Version: 1,
+		})
+	}))
+	f.orders.onCancel = func() {
+		require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_trading_accounts SET c_ready = 0`).Error)
+	}
+	require.NoError(t, f.run())
+	require.Equal(t, []string{"rest-1"}, f.orders.canceled)
+	require.Empty(t, f.orders.specs)
 }
 
 // 更早的唤醒（设置变更、会话就绪）不撤刚挂不久的买单，也不下新单，等下一次定时检查。

@@ -13,11 +13,18 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 )
 
-// bnbQuantity 是账户各钱包里 BNB 的净数量（现货和合约钱包都可能有，抵扣手续费两边都用）。
+// isStandardAccount 报告账户是否是币安普通账户（现货、合约两个钱包分开）。
+func isStandardAccount(account store.TradingAccountRecord) bool {
+	return exchange.AccountMode(account.AccountMode) == exchange.AccountModeBinanceStandard
+}
+
+// bnbQuantity 是补买维护的那部分 BNB 的净数量：普通账户只数现货钱包（补买只买进现货钱包；币安 U 本位合约的 BNB 抵扣要用合约钱包里的 BNB，
+// 补买不给合约钱包补，合约钱包里有多少是用户自己放的，不算）；统一账户只有一个钱包，全数。借出的不算。
 func bnbQuantity(account store.TradingAccountRecord) shared.Decimal {
+	standard := isStandardAccount(account)
 	total := shared.Zero()
 	for _, balance := range account.Snapshot.Balances {
-		if !strings.EqualFold(balance.Asset, fundsettings.BNBAsset) {
+		if !strings.EqualFold(balance.Asset, fundsettings.BNBAsset) || (standard && balance.Wallet != string(exchange.WalletSpot)) {
 			continue
 		}
 		quantity, err := shared.ParseDecimal(balance.Total)
@@ -32,9 +39,19 @@ func bnbQuantity(account store.TradingAccountRecord) shared.Decimal {
 	return total
 }
 
-// topUpBNB 在 BNB 市值低于“保留金额 − 10”时市价补买到保留金额（SYSTEM 单，现货下单）。
-// 普通账户把补买的 BNB 在现货、合约钱包之间分配需要钱包划转，由真实交易所接入阶段的划转实现负责；
-// 这里只把缺口买到现货钱包里。账户没开通现货时无法补买，告警一次。
+// bnbBounds 返回补买的目标市值和触发容差：普通账户只补现货钱包，目标是保留金额的一半（和归集时现货钱包的留存口径一致），容差同样减半
+// （保留金额大于 10 时目标减容差仍为正）；统一账户一个钱包，取全额。BNB 市值低于“目标 − 容差”才补买，买到目标。
+func bnbBounds(account store.TradingAccountRecord, reserve shared.Decimal) (target, slack shared.Decimal) {
+	target, slack = reserve, fundsettings.BNBReserveSlack
+	if isStandardAccount(account) {
+		half := shared.MustDecimal("2")
+		target, slack = target.Div(half), slack.Div(half)
+	}
+	return target, slack
+}
+
+// topUpBNB 在 BNB 市值低于“目标 − 容差”时市价补买到目标（SYSTEM 单，现货下单），目标和容差见 bnbBounds：
+// 普通账户只补现货钱包、目标是保留金额的一半，不在钱包之间划转 BNB；统一账户目标是保留金额。账户没开通现货时无法补买，告警一次。
 // busy 为真表示补买单刚下出或还没结束：买单要花 USDT、余额要等同步才更新，同一轮后面的稳定币调平先让路。
 func (s *Service) topUpBNB(
 	ctx context.Context,
@@ -89,15 +106,16 @@ func (s *Service) topUpBNB(
 	if err != nil {
 		return false, err
 	}
+	target, slack := bnbBounds(account, reserve)
 	value := bnbQuantity(account).Mul(price)
-	if value.Cmp(reserve.Sub(fundsettings.BNBReserveSlack)) >= 0 {
+	if value.Cmp(target.Sub(slack)) >= 0 {
 		return false, nil
 	}
 	step, minimum, minNotional, err := quantityRules(instrument, price)
 	if err != nil {
 		return false, err
 	}
-	quantity := shared.FloorToStep(reserve.Sub(value).Div(price), step)
+	quantity := shared.FloorToStep(target.Sub(value).Div(price), step)
 	if quantity.Cmp(minimum) < 0 || quantity.Mul(price).Cmp(minNotional) < 0 {
 		s.warnOnce("bnb-too-small|"+account.TradingAccountID, fmt.Sprintf("执行账户 %s 的 BNB 补买量低于交易所最小下单量，暂不补买", account.TradingAccountID))
 		return false, nil

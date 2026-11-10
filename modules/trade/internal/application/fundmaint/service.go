@@ -42,7 +42,7 @@ const (
 	ownerStableRebalance = "stable-rebalance"
 )
 
-// 约定的数值：BNB 市值低于“保留金额 − fundsettings.BNBReserveSlack”才补买；稳定币偏离目标超过 stableDeviation（占稳定币总价值的比例，
+// 约定的数值：BNB 市值低于“目标 − 容差”才补买（统一账户目标是保留金额、容差 fundsettings.BNBReserveSlack，普通账户只补现货钱包、两者都减半，见 bnbBounds）；稳定币偏离目标超过 stableDeviation（占稳定币总价值的比例，
 // 取绝对差）才调平；零头资产价值低于 dustValueLimit（结算币计）才兑换。
 var (
 	stableDeviation = shared.MustDecimal("0.05")
@@ -206,7 +206,13 @@ func (s *Service) RunLogicalAccount(ctx context.Context, logical store.LogicalAc
 			}
 			// BNB 补买单刚下出（或还没结束）时调平先让路：补买要花 USDT，余额要等同步才更新。
 			if !hasOpen && !bnbBusy && err == nil {
-				if err := s.rebalanceStablecoins(ctx, logical, settings, account, adapter); err != nil {
+				// 过期的买单撤掉的同一轮就重算重挂（定时器每小时才一次，账户就绪唤醒每个账户每个进程只一次，不能等下一轮）：
+				// 撤单前可能有部分成交，重读账户；成交还没进快照时账户未就绪，等下一轮。
+				fresh, err := s.Store.GetTradingAccountByID(ctx, account.TradingAccountID)
+				if err == nil && fresh.Ready {
+					err = s.rebalanceStablecoins(ctx, logical, settings, fresh, adapter)
+				}
+				if err != nil {
 					runErrors = append(runErrors, fmt.Errorf("账户 %s 稳定币调平：%w", account.TradingAccountID, err))
 				}
 			}
