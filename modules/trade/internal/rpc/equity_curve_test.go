@@ -41,11 +41,43 @@ func TestEquityCurveRangePicksBucketBySpan(t *testing.T) {
 				t.Fatalf("桶宽 = %d 毫秒，期望 %v", bucket, tt.wantBucket)
 			}
 			if tt.wantCappedTo > 0 {
-				if bucket < tt.wantAtLeast.Milliseconds() || int((to-from)/bucket)+2 > tt.wantCappedTo {
-					t.Fatalf("桶宽 %d 毫秒装不下：最多 %d 点", bucket, tt.wantCappedTo)
+				if bucket < tt.wantAtLeast.Milliseconds() {
+					t.Fatalf("桶宽 %d 毫秒小于 %v", bucket, tt.wantAtLeast)
+				}
+				if got := equityCurveWorstPoints(from, to, bucket); got > int64(tt.wantCappedTo) {
+					t.Fatalf("桶宽 %d 毫秒下最多返回 %d 点，超过 %d", bucket, got, tt.wantCappedTo)
 				}
 			}
 		})
+	}
+}
+
+// equityCurveWorstPoints 按存储层的取点规则（每个按绝对时间对齐的桶取最后一点，范围内第一点也保留）
+// 算 [from, to] 最多返回多少点：范围首尾各可能落在不满的桶里，第一点又可能不是所在桶的最后一点。
+func equityCurveWorstPoints(from, to, bucket int64) int64 {
+	return to/bucket - from/bucket + 1 + 1
+}
+
+// 放宽桶宽的分支：不管范围的起止落在桶内的什么位置，返回点数最多也不超过 3000（含单独保留的第一点）。
+func TestEquityCurveRangeWideSpanNeverExceedsMaxPoints(t *testing.T) {
+	now := time.Date(2026, 11, 9, 12, 0, 0, 0, time.UTC)
+	day := (24 * time.Hour).Milliseconds()
+	for _, days := range []int64{200, 400, 733, 1000} {
+		for _, shift := range []int64{0, 1, 17, 1799, 3599} {
+			from := now.UnixMilli() - days*day - shift*60_000
+			from, to, bucket := equityCurveRange(from, now.UnixMilli(), now)
+			if got := equityCurveWorstPoints(from, to, bucket); got > equityCurveMaxPoints {
+				t.Fatalf("跨度 %d 天、错位 %d 分钟：桶宽 %d 毫秒最多返回 %d 点，超过 %d", days, shift, bucket, got, equityCurveMaxPoints)
+			}
+		}
+	}
+	// 旧算法（桶宽 = 跨度 / 2998 向下取整）的最坏情形：跨度刚好比 2998 个桶宽多一点，起点贴在桶尾、终点越过桶界。
+	bucket := (2 * time.Hour).Milliseconds()
+	from := 5*bucket + bucket - 1000
+	to := from + 2998*bucket + 2997
+	from, to, got := equityCurveRange(from, to, now)
+	if worst := equityCurveWorstPoints(from, to, got); worst > equityCurveMaxPoints {
+		t.Fatalf("最坏情形：桶宽 %d 毫秒最多返回 %d 点，超过 %d", got, worst, equityCurveMaxPoints)
 	}
 }
 

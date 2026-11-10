@@ -249,8 +249,10 @@ func equityCurveRange(from, to int64, now time.Time) (int64, int64, int64) {
 	case span > equityCurveFineSpan:
 		bucket = equityCurveQuarterHour
 	}
-	// 每桶一点，再加上第一点，最多 span/桶宽 + 2 个。
-	if fit := (to - from) / (equityCurveMaxPoints - 2); fit > bucket.Milliseconds() {
+	// 桶按绝对时间对齐，范围首尾各可能落在不满的桶里，所以桶数最多 floor(span/桶宽) + 2，再加上单独保留的第一点，
+	// 最多 floor(span/桶宽) + 3 个。桶宽向上取整到 span/桶宽 ≤ 最大点数 - 3，总点数就不会超过最大点数。
+	const fitBuckets = equityCurveMaxPoints - 3
+	if fit := ((to - from) + fitBuckets - 1) / fitBuckets; fit > bucket.Milliseconds() {
 		return from, to, fit
 	}
 	return from, to, bucket.Milliseconds()
