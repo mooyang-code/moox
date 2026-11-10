@@ -1101,7 +1101,27 @@ func (s *Service) applyFill(
 		SpaceID: account.SpaceID, TradingAccountID: account.TradingAccountID,
 		Kind: kind,
 	})
+	if err != nil && ctx.Err() == nil {
+		err = s.noteFillFailure(ctx, account, fill, err)
+	}
 	return applied, external && applied, err
+}
+
+// noteFillFailure 把一笔成交入账失败记成关注项（带订单号和原因）并返回带订单号的错误。
+// 不隔离这一笔：成交记不进去说明本地账本不准，账户保持未就绪才安全；这里只让用户知道卡在哪。
+func (s *Service) noteFillFailure(ctx context.Context, account store.TradingAccountRecord, fill exchange.Fill, cause error) error {
+	order := "订单 " + fill.ClientOrderID
+	switch {
+	case fill.ClientOrderID == "":
+		order = "订单 " + fill.ExchangeOrderID
+	case fill.ExchangeOrderID != "":
+		order += "（交易所单号 " + fill.ExchangeOrderID + "）"
+	}
+	detail := fmt.Sprintf("执行账户 %s：%s，成交 %s 入账失败：%s",
+		account.Name, order, fill.ExchangeTradeID, telemetry.StableReason(cause.Error()))
+	telemetry.Note(telemetry.AttentionFillIngestFailed, detail, s.now())
+	log.WarnContextf(ctx, "交易关注项：%s", detail)
+	return fmt.Errorf("%s，成交 %s 入账失败：%w", order, fill.ExchangeTradeID, cause)
 }
 
 func (s *Service) ensureOrderForFill(
@@ -1142,6 +1162,8 @@ func (s *Service) ensureOrderForFill(
 	}
 	var current exchange.Order
 	var lookupErr error
+	// 交易所查不到原单（已归档）时按成交合成外部订单：数量只是已知成交之和，后到的成交会放大它。
+	synthetic := false
 	if fill.ClientOrderID != "" {
 		current, lookupErr = adapter.GetOrder(ctx, exchange.NewSymbolKey(fill.Market, fill.ExchangeSymbol), fill.ClientOrderID)
 	} else {
@@ -1154,6 +1176,7 @@ func (s *Service) ensureOrderForFill(
 		if syntheticQuantity.Cmp(shared.Zero()) <= 0 {
 			syntheticQuantity = fill.Quantity
 		}
+		synthetic = true
 		current = exchange.Order{
 			ExchangeOrderID: fill.ExchangeOrderID, ClientOrderID: fill.ClientOrderID,
 			Market: fill.Market, ExchangeSymbol: fill.ExchangeSymbol, OrderType: exchange.OrderTypeMarket,
@@ -1171,7 +1194,7 @@ func (s *Service) ensureOrderForFill(
 	if batchFilled.Cmp(shared.Zero()) <= 0 {
 		batchFilled = fill.Quantity
 	}
-	imported, err := s.importExternalOrder(ctx, account, current, batchFilled)
+	imported, err := s.importExternalOrder(ctx, account, current, batchFilled, synthetic)
 	if err != nil {
 		return false, err
 	}
@@ -1221,7 +1244,7 @@ func (s *Service) applyOrder(
 		)
 	}
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		record, err = s.importExternalOrder(ctx, account, current, shared.Zero())
+		record, err = s.importExternalOrder(ctx, account, current, shared.Zero(), false)
 		if err != nil {
 			return false, false, "", err
 		}
@@ -1389,6 +1412,7 @@ func (s *Service) importExternalOrder(
 	account store.TradingAccountRecord,
 	current exchange.Order,
 	batchFilled shared.Decimal,
+	synthetic bool,
 ) (store.OrderRecord, error) {
 	if strings.TrimSpace(current.ExchangeOrderID) == "" ||
 		strings.TrimSpace(current.ExchangeSymbol) == "" ||
@@ -1467,9 +1491,13 @@ func (s *Service) importExternalOrder(
 			filledQuantity, averagePrice = seed.String(), current.AveragePrice.String()
 		}
 	}
+	orderIDPrefix := "external:"
+	if synthetic {
+		orderIDPrefix = orderdomain.SyntheticOrderIDPrefix
+	}
 	record := store.OrderRecord{
 		SpaceID: account.SpaceID,
-		OrderID: "external:" + account.TradingAccountID + ":" + string(current.Market) + ":" +
+		OrderID: orderIDPrefix + account.TradingAccountID + ":" + string(current.Market) + ":" +
 			current.ExchangeSymbol + ":" + current.ExchangeOrderID,
 		TradingAccountID: account.TradingAccountID,
 		ClientOrderID:    clientOrderID, ExchangeOrderID: current.ExchangeOrderID,

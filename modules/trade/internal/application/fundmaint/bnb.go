@@ -63,7 +63,18 @@ func (s *Service) topUpBNB(
 		return false, err
 	}
 	if len(open) > 0 {
-		return true, nil
+		// 待提交、提交结果未知的旧单先丢弃或解析；处理完还有没结束的（挂单、刚解析出的挂单）才算忙。
+		for _, record := range open {
+			if err := s.advanceUnconfirmed(ctx, record); err != nil {
+				return true, err
+			}
+		}
+		if open, err = s.openSystemOrders(ctx, account, ownerBNBReserve); err != nil {
+			return true, err
+		}
+		if len(open) > 0 {
+			return true, nil
+		}
 	}
 	price, quotedAt, err := s.referencePrice(ctx, adapter, instrument)
 	if err != nil {

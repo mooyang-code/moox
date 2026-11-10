@@ -49,6 +49,9 @@ const (
 	// 已按过期结束并释放资金预留；订单（含已结束的单）的累计成交领先已入账成交明细的，缺口已按已入账值收掉（成交明细缺失）。
 	// 这些单实际成交了多少要人工到交易所核对，持仓、余额以同步结果为准。
 	AttentionOrdersInstrumentGone = "orders_instrument_gone"
+	// AttentionFillIngestFailed 是一笔成交没能记进本地账本（订单状态不允许、数量超量等）：账户保持未就绪，
+	// 每轮同步都会卡在同一笔，详情写明订单号和原因，要人工核对订单与成交。
+	AttentionFillIngestFailed = "fill_ingest_failed"
 )
 
 // attentionKinds 里每种情况都要上报，恢复后 Monitor 才能看到值回到 0。
@@ -58,7 +61,7 @@ var attentionKinds = []string{
 	AttentionRateLimited, AttentionTurnoverHigh, AttentionUnknownResults, AttentionMarginRatioLow,
 	AttentionInspectionBlocked, AttentionInspectionFailing, AttentionTransferShortfall, AttentionTransferFailing,
 	AttentionValuationDegraded, AttentionFlattenOrdersUnsettled, AttentionReleaseOrdersUnverified, AttentionReleaseOrdersStuck,
-	AttentionOrdersInstrumentGone,
+	AttentionOrdersInstrumentGone, AttentionFillIngestFailed,
 }
 
 // maxAttentionDetail 是标签的字节上限：Monitor 超过 512 字节会拒收整份上报。

@@ -31,6 +31,9 @@ type OrderService interface {
 	Place(ctx context.Context, spaceID string, spec orderdomain.OrderSpec) (orderdomain.Order, error)
 	Submit(ctx context.Context, spaceID, orderID string) (orderdomain.Order, error)
 	Cancel(ctx context.Context, spaceID, orderID string) (orderdomain.Order, error)
+	DiscardPending(ctx context.Context, spaceID, orderID string) (orderdomain.Order, error)
+	ResolveUnknown(ctx context.Context, spaceID, orderID string) (orderdomain.Order, error)
+	RecoverCancel(ctx context.Context, spaceID, orderID string) (orderdomain.Order, error)
 }
 
 // 系统单的归属 ID：同一类任务的订单用同一个，下一次检查时据此找到上次没成交的单。
@@ -391,6 +394,52 @@ func (s *Service) placeSystemOrder(
 	}
 	_, err = s.Orders.Submit(ctx, logical.SpaceID, string(placed.ID))
 	return err
+}
+
+// advanceUnconfirmed 推进还没有交易所结果的旧系统单：待提交的丢弃；提交中、结果未知的先解析，
+// 解析后退回待提交的接着丢弃。系统单由组合锁串行下出，在锁里看到这样的旧单，要么是提交失败留下的，
+// 要么是进程中途退出留下的，没有别的代码会推进它们；不处理的话它们一直算“未结束”，补买和调平永远让路。
+// 解析后仍然未知（还在查询窗口内）的不报错，下一轮再解析。
+func (s *Service) advanceUnconfirmed(ctx context.Context, record store.OrderRecord) error {
+	switch orderdomain.State(record.State) {
+	case orderdomain.Pending:
+		_, err := s.Orders.DiscardPending(ctx, record.SpaceID, record.OrderID)
+		return err
+	case orderdomain.Submitting, orderdomain.SubmitUnknown:
+		resolved, err := s.Orders.ResolveUnknown(ctx, record.SpaceID, record.OrderID)
+		if err != nil || resolved.State != orderdomain.Pending {
+			return err
+		}
+		_, err = s.Orders.DiscardPending(ctx, record.SpaceID, record.OrderID)
+		return err
+	}
+	return nil
+}
+
+// stopOrder 结束一笔还没成交完的系统单，写法与人工操作的 stopOrder 一致：待提交丢弃；提交中、结果未知先解析
+// （解析成挂单的接着撤）；撤单中走撤单恢复；其余才撤。提交结果未知的单不能直接撤，撤单被拒后会得到一个没有交易所单号的挂单。
+func (s *Service) stopOrder(ctx context.Context, record store.OrderRecord) error {
+	switch orderdomain.State(record.State) {
+	case orderdomain.Pending, orderdomain.Submitting, orderdomain.SubmitUnknown:
+		if err := s.advanceUnconfirmed(ctx, record); err != nil {
+			return err
+		}
+		latest, err := s.Store.GetOrder(ctx, record.SpaceID, record.OrderID)
+		if err != nil {
+			return err
+		}
+		switch orderdomain.State(latest.State) {
+		case orderdomain.Open, orderdomain.PartiallyFilled, orderdomain.Canceling, orderdomain.CancelUnknown:
+			return s.stopOrder(ctx, latest)
+		}
+		return nil
+	case orderdomain.Canceling, orderdomain.CancelUnknown:
+		_, err := s.Orders.RecoverCancel(ctx, record.SpaceID, record.OrderID)
+		return err
+	default:
+		_, err := s.Orders.Cancel(ctx, record.SpaceID, record.OrderID)
+		return err
+	}
 }
 
 // openSystemOrders 返回账户上这类系统单里还没结束的订单。

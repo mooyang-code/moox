@@ -137,7 +137,7 @@ func TestImportedOrderBeforeCreationSeedsFilledQuantity(t *testing.T) {
 		OrderType: exchange.OrderTypeMarket, Side: exchange.SideBuy, Quantity: shared.MustDecimal("1"),
 		FilledQuantity: shared.MustDecimal("0.6"), AveragePrice: shared.MustDecimal("100"),
 		Status: exchange.OrderStatusPartiallyFilled, CreatedAt: time.UnixMilli(1_000), UpdatedAt: time.UnixMilli(6_000),
-	}, shared.MustDecimal("0.2"))
+	}, shared.MustDecimal("0.2"), false)
 	require.NoError(t, err)
 	require.Equal(t, "0.4", record.FilledQuantity)
 	require.Equal(t, "100", record.AveragePrice)

@@ -1120,6 +1120,7 @@ var TradeAttentionNames = map[string]string{
 	"release_orders_unverified": "释放会话时没能撤单，只按本地记录释放",
 	"release_orders_stuck":      "释放会话持续失败，目标单没撤下",
 	"orders_instrument_gone":    "标的已下架的订单需人工核对成交",
+	"fill_ingest_failed":        "成交没能记进账本，账户卡在同一笔",
 }
 
 // EventCenterAttentionNames 是事件中心上报的需要人看的情况。

@@ -70,12 +70,49 @@ type adapters struct{ adapter *fakeAdapter }
 
 func (a adapters) Adapter(string) (execution.ExecutionAdapter, error) { return a.adapter, nil }
 
-// fakeOrders 记录下的系统单；Cancel 把单标成已撤。
+// fakeOrders 记录下的系统单和各个处理动作；丢弃待提交会把库里的订单标成已撤，解析提交结果未知会把库里的订单改成 resolveTo
+// （默认不改，等于还在查询窗口内），让需要重新读库的流程能看到处理后的状态。
 type fakeOrders struct {
+	store     *store.Store
 	specs     []orderdomain.OrderSpec
 	submitted []string
 	canceled  []string
+	discarded []string
+	resolved  []string
+	recovered []string
+	resolveTo orderdomain.State
 	placeErr  error
+}
+
+func (o *fakeOrders) setState(orderID string, state orderdomain.State) error {
+	return o.store.Transaction(context.Background(), func(tx *store.Tx) error {
+		record, err := tx.GetOrder("space-1", orderID)
+		if err != nil {
+			return err
+		}
+		expected := record.Version
+		record.State = string(state)
+		record.Version++
+		return tx.UpdateOrder(record, expected)
+	})
+}
+
+func (o *fakeOrders) DiscardPending(_ context.Context, _ string, orderID string) (orderdomain.Order, error) {
+	o.discarded = append(o.discarded, orderID)
+	return orderdomain.Order{ID: shared.OrderID(orderID), State: orderdomain.Canceled}, o.setState(orderID, orderdomain.Canceled)
+}
+
+func (o *fakeOrders) ResolveUnknown(_ context.Context, _ string, orderID string) (orderdomain.Order, error) {
+	o.resolved = append(o.resolved, orderID)
+	if o.resolveTo == "" {
+		return orderdomain.Order{ID: shared.OrderID(orderID), State: orderdomain.SubmitUnknown}, nil
+	}
+	return orderdomain.Order{ID: shared.OrderID(orderID), State: o.resolveTo}, o.setState(orderID, o.resolveTo)
+}
+
+func (o *fakeOrders) RecoverCancel(_ context.Context, _ string, orderID string) (orderdomain.Order, error) {
+	o.recovered = append(o.recovered, orderID)
+	return orderdomain.Order{ID: shared.OrderID(orderID)}, nil
 }
 
 func (o *fakeOrders) Place(_ context.Context, _ string, spec orderdomain.OrderSpec) (orderdomain.Order, error) {
@@ -145,7 +182,7 @@ func newFixture(t *testing.T, fundSettings string, balances []store.AssetBalance
 		prices: map[string]string{"BNBUSDT": "600", "BTCUSDT": "50000", "USDCUSDT": "1", "FDUSDUSDT": "1"},
 		bids:   map[string]string{"USDCUSDT": "0.9995", "FDUSDUSDT": "0.9995"},
 	}
-	orders := &fakeOrders{}
+	orders := &fakeOrders{store: tradeStore}
 	f := &fixture{t: t, now: testNow, store: tradeStore, adapter: adapter, orders: orders}
 	adapter.clock = func() time.Time { return f.now }
 	f.service = &Service{Store: tradeStore, Adapters: adapters{adapter}, Orders: orders, Now: func() time.Time { return f.now }}

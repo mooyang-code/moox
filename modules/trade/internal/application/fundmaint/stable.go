@@ -50,7 +50,7 @@ func (s *Service) settleStableOrders(ctx context.Context, account store.TradingA
 		if now.Sub(time.UnixMilli(record.SubmittedAt)) < stableOrderMaxAge {
 			continue
 		}
-		if _, err := s.Orders.Cancel(ctx, record.SpaceID, record.OrderID); err != nil {
+		if err := s.stopOrder(ctx, record); err != nil {
 			return true, err
 		}
 	}

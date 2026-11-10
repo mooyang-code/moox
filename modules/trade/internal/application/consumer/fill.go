@@ -52,7 +52,8 @@ func (r *Reducer) ConfirmCancel(
 			return err
 		}
 		state := order.State(record.State)
-		if state == order.Canceled || state == order.PartiallyCanceled {
+		// 已经结束的订单（含刚被同轮成交补成已成交的）不再迁移：交易所说它没了，本地已经有结论。
+		if state.Terminal() {
 			return nil
 		}
 		quantity, err := shared.ParseDecimal(record.Quantity)
@@ -292,13 +293,24 @@ func applyOrderFill(
 		Spec: order.OrderSpec{
 			ClientOrderSpec: order.ClientOrderSpec{Quantity: quantity},
 		},
+		ExchangeOrderID:  record.ExchangeOrderID,
 		FilledQuantity:   filled,
 		AverageFillPrice: averagePrice,
 		AppliedFills:     make(map[shared.FillID]shared.Decimal),
 		State:            order.State(record.State),
 		Version:          record.Version,
 	}
-	if _, err := aggregate.ApplyFill(order.Fill{
+	// 待提交的订单收到成交，说明交易所已经受理了它（重发前的请求其实成功了）：先认领成挂单，再入账。
+	if aggregate.State == order.Pending {
+		if _, err := aggregate.Claim(fill.ExchangeOrderID); err != nil {
+			return err
+		}
+	}
+	applyFill := aggregate.ApplyFill
+	if order.IsSyntheticOrderID(record.OrderID) {
+		applyFill = aggregate.ApplySyntheticFill
+	}
+	if _, err := applyFill(order.Fill{
 		ID: shared.FillID(fillID), Quantity: fill.Quantity,
 	}); err != nil {
 		return err
@@ -311,10 +323,16 @@ func applyOrderFill(
 	if err != nil {
 		return err
 	}
+	// 合成外部订单收到后到的成交会放大数量；其余订单数量不变，保持库里的原样。
+	if aggregate.Spec.Quantity.Cmp(quantity) != 0 {
+		record.Quantity = aggregate.Spec.Quantity.String()
+	}
 	record.FilledQuantity = aggregate.FilledQuantity.String()
+	record.ExchangeOrderID = aggregate.ExchangeOrderID
 	record.AveragePrice = aggregate.AverageFillPrice.String()
 	record.State = string(aggregate.State)
-	record.Version = aggregate.Version
+	// 一次入账只写一次库：认领加入账在领域模型里是两次迁移，库里的乐观锁版本只加一。
+	record.Version++
 	return nil
 }
 

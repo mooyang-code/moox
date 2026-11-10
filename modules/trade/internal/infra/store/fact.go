@@ -1056,7 +1056,7 @@ func (tx *Tx) UpdateOrder(record OrderRecord, expectedVersion uint64) error {
 		return fmt.Errorf("%w: inconsistent order quantities", ErrInvalidRecord)
 	}
 	result := tx.db.Exec(execUpdateOrderVersioned,
-		record.ExchangeOrderID, record.State, record.Attempt, record.FilledQuantity,
+		record.ExchangeOrderID, record.State, record.Attempt, record.Quantity, record.FilledQuantity,
 		record.AveragePrice, record.ReduceOnly, record.ReservedAsset,
 		record.ReservedQuantity, record.RemainingReservedQuantity,
 		record.RejectReason, record.ExchangeUpdatedAt, record.Version,
@@ -1939,7 +1939,7 @@ const (
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	// 按版本号更新订单。
 	execUpdateOrderVersioned = `UPDATE t_trade_orders
-		SET c_exchange_order_id = ?, c_state = ?, c_attempt = ?, c_filled_quantity = ?,
+		SET c_exchange_order_id = ?, c_state = ?, c_attempt = ?, c_quantity = ?, c_filled_quantity = ?,
 			c_average_price = ?, c_reduce_only = ?, c_reserved_asset = ?,
 			c_reserved_quantity = ?, c_remaining_reserved_quantity = ?,
 			c_reject_reason = ?, c_exchange_updated_at = ?, c_version = ?,

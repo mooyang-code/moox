@@ -13,6 +13,15 @@ var (
 	ErrInvalidTransition = errors.New("trade: invalid order transition")
 )
 
+// SyntheticOrderIDPrefix 是合成外部订单的订单号前缀：交易所查不到原单时，按收到的成交合成的外部订单。
+// 订单没有单独的标记列，靠前缀区分，只有它们允许在已成交后继续放大数量（见 ApplySyntheticFill）。
+const SyntheticOrderIDPrefix = "synthetic:"
+
+// IsSyntheticOrderID 报告订单号是否属于合成外部订单。
+func IsSyntheticOrderID(orderID string) bool {
+	return strings.HasPrefix(orderID, SyntheticOrderIDPrefix)
+}
+
 type Event struct {
 	Type    string
 	Version uint64
@@ -90,6 +99,23 @@ func (o *Order) Acknowledge(exchangeOrderID string) ([]Event, error) {
 	return o.emit("OrderAcknowledged"), nil
 }
 
+// Claim 认领：待提交的订单收到了交易所已受理它的证据（成交或撤单快照）。订单转为挂单，
+// 记下交易所单号（证据里没带就先不记，由后续订单快照补上），之后按挂单的流程继续。
+func (o *Order) Claim(exchangeOrderID string) ([]Event, error) {
+	if o.State != Pending {
+		return nil, ErrInvalidTransition
+	}
+	exchangeOrderID = strings.TrimSpace(exchangeOrderID)
+	if exchangeOrderID != "" {
+		if o.ExchangeOrderID != "" && o.ExchangeOrderID != exchangeOrderID {
+			return nil, fmt.Errorf("%w: conflicting Exchange order ID", ErrInvalidTransition)
+		}
+		o.ExchangeOrderID = exchangeOrderID
+	}
+	o.State = Open
+	return o.emit("OrderClaimed"), nil
+}
+
 func (o *Order) Reject() ([]Event, error) {
 	return o.transition(Rejected, Pending, Submitting, SubmitUnknown)
 }
@@ -107,8 +133,10 @@ func (o *Order) Expire() ([]Event, error) {
 	)
 }
 
+// BeginCancel 只接受交易所已受理的挂单。提交结果未知的订单要先解析（查到就认领，查不到退回待提交再丢弃），
+// 直接撤单被拒后会得到一个没有交易所单号的挂单。
 func (o *Order) BeginCancel() ([]Event, error) {
-	return o.transition(Canceling, Open, PartiallyFilled, SubmitUnknown)
+	return o.transition(Canceling, Open, PartiallyFilled)
 }
 
 func (o *Order) DiscardPending() ([]Event, error) {
@@ -178,6 +206,19 @@ func (o *Order) ApplyFill(fill Fill) ([]Event, error) {
 	return o.emit("FillApplied"), nil
 }
 
+// ApplySyntheticFill 与 ApplyFill 相同，只多一条：已成交的合成外部订单收到新成交时放大订单数量。
+// 合成订单是交易所查不到原单时按成交合成的，数量只是当时已知成交之和，后到的成交属于同一张单，数量要跟着加；
+// 普通订单的数量是下单时定的，超量仍然是非法迁移。
+func (o *Order) ApplySyntheticFill(fill Fill) ([]Event, error) {
+	if o.State == Filled && fill.ID != "" && fill.Quantity.Cmp(shared.Zero()) > 0 {
+		if _, applied := o.AppliedFills[fill.ID]; !applied {
+			o.Spec.Quantity = o.FilledQuantity.Add(fill.Quantity)
+			o.State = PartiallyFilled
+		}
+	}
+	return o.ApplyFill(fill)
+}
+
 func (o *Order) ConfirmCancel() ([]Event, error) {
 	to := Canceled
 	if !o.FilledQuantity.IsZero() {
@@ -185,6 +226,7 @@ func (o *Order) ConfirmCancel() ([]Event, error) {
 	}
 	return o.transition(
 		to,
+		Pending,
 		Submitting,
 		SubmitUnknown,
 		Open,
