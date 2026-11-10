@@ -12,6 +12,9 @@ import (
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
 )
 
+// errNotLogicalMember 是查询持仓时传了不属于该组合账户的交易账户：请求参数有误。
+var errNotLogicalMember = errors.New("交易账户不是该组合账户的成员")
+
 type ManualOrderCommand struct {
 	SpaceID          string
 	ActionID         string
@@ -298,6 +301,9 @@ func (h *ExecutionServer) ListPositions(
 		}, nil
 	}
 	accountIDs, err := h.positionAccountIDs(ctx, spaceID, req)
+	if errors.Is(err, errNotLogicalMember) {
+		return &tradepb.ListPositionsRsp{RetInfo: invalidInfo(err)}, nil
+	}
 	if err != nil {
 		return &tradepb.ListPositionsRsp{RetInfo: errorInfo(err)}, nil
 	}
@@ -368,7 +374,8 @@ func (h *ExecutionServer) positionAccountIDs(
 	}
 	if req.GetTradingAccountId() != "" && len(ids) == 0 {
 		return nil, fmt.Errorf(
-			"exchange account %s is not a member of logical account %s",
+			"%w：交易账户 %s，组合账户 %s",
+			errNotLogicalMember,
 			req.GetTradingAccountId(),
 			req.GetLogicalAccountId(),
 		)

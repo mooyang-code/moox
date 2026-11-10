@@ -2,7 +2,7 @@ package rpc
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"sort"
 	"strings"
 	"time"
@@ -27,14 +27,11 @@ type HoldingQuery struct {
 
 func (q *HoldingQuery) List(ctx context.Context, spaceID, accountID string) ([]holdingapp.Holding, error) {
 	if q == nil || q.Store == nil || q.Adapters == nil {
-		return nil, fmt.Errorf("持有者查询服务未配置")
+		return nil, errors.New("持币查询服务未配置")
 	}
 	account, err := q.Store.GetTradingAccount(ctx, spaceID, accountID)
 	if err != nil {
 		return nil, err
-	}
-	if !account.HasBalanceMarket() {
-		return nil, fmt.Errorf("holding query: account is not SPOT")
 	}
 	var quoteSource execution.ReferencePriceSource
 	if adapter, adapterErr := q.Adapters.Adapter(accountID); adapterErr == nil {
