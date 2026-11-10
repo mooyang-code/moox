@@ -205,7 +205,7 @@ func (s *Service) loadCancelOrderResult(
 		if action.LastError == "" {
 			return CancelOrderResult{Action: action}, nil
 		}
-		return CancelOrderResult{Action: action}, errors.New(action.LastError)
+		return CancelOrderResult{Action: action}, recordedFailure{message: action.LastError}
 	}
 	var result cancelOrderActionResult
 	if err := json.Unmarshal([]byte(*action.ResultJSON), &result); err != nil {
@@ -213,7 +213,7 @@ func (s *Service) loadCancelOrderResult(
 	}
 	current, err := s.Store.GetOrder(ctx, action.SpaceID, result.OrderID)
 	if err == nil && action.LastError != "" {
-		err = errors.New(action.LastError)
+		err = recordedFailure{message: action.LastError}
 	}
 	return CancelOrderResult{Action: action, Order: current}, err
 }

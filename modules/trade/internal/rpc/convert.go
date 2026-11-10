@@ -48,7 +48,12 @@ func errorInfo(err error) *tradepb.RetInfo {
 		errors.Is(err, operatorapp.ErrCancelUnconfirmed),
 		errors.Is(err, orderapp.ErrExternalConflict),
 		errors.Is(err, orderapp.ErrAutomationPaused),
-		errors.Is(err, orderapp.ErrAccountNotReady):
+		errors.Is(err, orderapp.ErrAccountNotReady),
+		errors.Is(err, tradingaccount.ErrAccountNotExecutable),
+		errors.Is(err, orderapp.ErrInstrumentHalted),
+		errors.Is(err, orderapp.ErrPriceLimit),
+		// 从库里还原的操作失败（撤单、人工单重放）：文案是当时落库的原因。
+		errors.Is(err, operatorapp.ErrRecordedFailure):
 		code = tradepb.ErrorCode_INNER_ERR
 	case errors.Is(err, runtime.ErrSessionConfig):
 		// 会话还没建起来：请求没有发到交易所，稍后重试即可；前端据此等几秒重试。
@@ -96,6 +101,11 @@ func errorInfo(err error) *tradepb.RetInfo {
 		code = tradepb.ErrorCode_INVALID_PARAM
 	default:
 		log.Errorf("交易服务内部错误：%v", err)
+		// 交易所错误回类别、HTTP 状态和错误码（不带交易所原文），暂时性错误才看得出原因。
+		var typed *exchange.Error
+		if errors.As(err, &typed) {
+			return retInfo(code, exchange.FailureSummary(err))
+		}
 		return retInfo(code, internalErrorMessage)
 	}
 	return retInfo(code, err.Error())

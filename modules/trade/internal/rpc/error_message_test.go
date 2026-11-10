@@ -7,6 +7,10 @@ import (
 	"strings"
 	"testing"
 
+	operatorapp "github.com/mooyang-code/moox/modules/trade/internal/application/operator"
+	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/spacecontext"
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
@@ -42,6 +46,47 @@ func TestErrorInfoHidesRawInternalError(t *testing.T) {
 	}
 	if len(capture.errors) != 1 || !strings.Contains(capture.errors[0], raw.Error()) {
 		t.Fatalf("日志里要有原文：%v", capture.errors)
+	}
+}
+
+// 交易所错误：回中文类别、HTTP 状态和错误码，不带交易所原文；原文仍写日志。
+func TestErrorInfoSummarizesExchangeError(t *testing.T) {
+	capture := captureErrorLogs(t)
+	raw := &exchange.Error{Kind: exchange.ErrorRateLimited, HTTPStatus: 429, Code: "-1003", Err: errors.New("body: signature=abc123")}
+	info := errorInfo(fmt.Errorf("加入组合失败：%w", raw))
+	if info.GetCode() != tradepb.ErrorCode_INNER_ERR {
+		t.Fatalf("code = %v", info.GetCode())
+	}
+	for _, want := range []string{"限频", "HTTP 429", "-1003"} {
+		if !strings.Contains(info.GetMsg(), want) {
+			t.Fatalf("msg = %q，缺少 %q", info.GetMsg(), want)
+		}
+	}
+	if strings.Contains(info.GetMsg(), "abc123") {
+		t.Fatalf("不能带交易所原文：%q", info.GetMsg())
+	}
+	if len(capture.errors) != 1 || !strings.Contains(capture.errors[0], "abc123") {
+		t.Fatalf("日志里要有原文：%v", capture.errors)
+	}
+}
+
+// 文案本来给用户看的错误（含从库里还原的撤单失败）照原样回，不走兜底。
+func TestErrorInfoKeepsUserFacingMessages(t *testing.T) {
+	capture := captureErrorLogs(t)
+	cases := []error{
+		fmt.Errorf("%w：交易账户被停用", tradingaccount.ErrAccountNotExecutable),
+		fmt.Errorf("%w：BTC-USDT", orderapp.ErrInstrumentHalted),
+		fmt.Errorf("%w：委托价 1", orderapp.ErrPriceLimit),
+		operatorapp.ErrCancelUnconfirmed,
+		operatorapp.RecordedFailure("撤单还没有得到交易所确认：订单 o1"),
+	}
+	for _, err := range cases {
+		if info := errorInfo(err); info.GetCode() != tradepb.ErrorCode_INNER_ERR || info.GetMsg() != err.Error() {
+			t.Fatalf("%v：info = %+v", err, info)
+		}
+	}
+	if len(capture.errors) != 0 {
+		t.Fatalf("不该写错误日志：%v", capture.errors)
 	}
 }
 
