@@ -95,6 +95,64 @@ func TestApplySyntheticFillGrowsFilledOrder(t *testing.T) {
 	}
 }
 
+// 合成外部订单已是部分成交（数量大于已成交量）时，超量成交同样放大数量并推导成已成交；未超量则保持部分成交。
+func TestApplySyntheticFillGrowsPartiallyFilledOrder(t *testing.T) {
+	spec := validSpec()
+	spec.Quantity = shared.MustDecimal("0.5")
+	value, _, _ := New("order-1", spec)
+	_, _ = value.Claim("exchange-1")
+	if _, err := value.ApplySyntheticFill(Fill{ID: "fill-1", Quantity: shared.MustDecimal("0.3")}); err != nil {
+		t.Fatalf("first fill error = %v", err)
+	}
+	if value.State != PartiallyFilled || value.Spec.Quantity.String() != "0.5" {
+		t.Fatalf("state = %s, quantity = %s", value.State, value.Spec.Quantity)
+	}
+	if _, err := value.ApplySyntheticFill(Fill{ID: "fill-2", Quantity: shared.MustDecimal("0.4")}); err != nil {
+		t.Fatalf("second fill error = %v", err)
+	}
+	if value.State != Filled || value.FilledQuantity.String() != "0.7" || value.Spec.Quantity.String() != "0.7" {
+		t.Fatalf("state = %s, filled = %s, quantity = %s", value.State, value.FilledQuantity, value.Spec.Quantity)
+	}
+}
+
+// 部分撤销的合成外部订单收到超量的迟到成交：数量放大到已成交量，订单成为已成交。
+func TestApplySyntheticFillGrowsPartiallyCanceledOrder(t *testing.T) {
+	spec := validSpec()
+	spec.Quantity = shared.MustDecimal("0.5")
+	value, _, _ := New("order-1", spec)
+	_, _ = value.Claim("exchange-1")
+	_, _ = value.ApplySyntheticFill(Fill{ID: "fill-1", Quantity: shared.MustDecimal("0.3")})
+	if _, err := value.ConfirmCancel(); err != nil || value.State != PartiallyCanceled {
+		t.Fatalf("ConfirmCancel() state = %s, error = %v", value.State, err)
+	}
+	if _, err := value.ApplySyntheticFill(Fill{ID: "fill-2", Quantity: shared.MustDecimal("0.4")}); err != nil {
+		t.Fatalf("late fill error = %v", err)
+	}
+	if value.State != Filled || value.FilledQuantity.String() != "0.7" || value.Spec.Quantity.String() != "0.7" {
+		t.Fatalf("state = %s, filled = %s, quantity = %s", value.State, value.FilledQuantity, value.Spec.Quantity)
+	}
+}
+
+// REST 临时失败一笔后私有流插入：A 已入账（数量 = A），C 经私有流到达，B 补进来时总量超过原数量，都不能报超量。
+func TestApplySyntheticFillSurvivesOutOfOrderArrival(t *testing.T) {
+	spec := validSpec()
+	spec.Quantity = shared.MustDecimal("0.2")
+	value, _, _ := New("order-1", spec)
+	_, _ = value.Claim("exchange-1")
+	for _, fill := range []Fill{
+		{ID: "fill-a", Quantity: shared.MustDecimal("0.2")},
+		{ID: "fill-c", Quantity: shared.MustDecimal("0.1")},
+		{ID: "fill-b", Quantity: shared.MustDecimal("0.3")},
+	} {
+		if _, err := value.ApplySyntheticFill(fill); err != nil {
+			t.Fatalf("fill %s error = %v", fill.ID, err)
+		}
+	}
+	if value.State != Filled || value.FilledQuantity.String() != "0.6" || value.Spec.Quantity.String() != "0.6" {
+		t.Fatalf("state = %s, filled = %s, quantity = %s", value.State, value.FilledQuantity, value.Spec.Quantity)
+	}
+}
+
 // 普通订单超量仍然是非法迁移。
 func TestApplyFillStillRejectsFilledOrderGrowth(t *testing.T) {
 	spec := validSpec()

@@ -350,7 +350,17 @@ func (s *Service) syncAccountLocked(
 		if err := s.Fills.ConfirmCancel(ctx, local.SpaceID, local.OrderID); err != nil {
 			return result, maxDifference, err
 		}
-		result.Warnings = append(result.Warnings, fmt.Sprintf("订单 %s 在交易所已不存在，按已撤销处理", local.OrderID))
+		latest, err := s.Store.GetOrder(ctx, local.SpaceID, local.OrderID)
+		if err != nil {
+			return result, maxDifference, err
+		}
+		// 同一轮里迟到成交可能已把订单推到终态，按真实状态写，不一律说“已撤销”。
+		switch orderdomain.State(latest.State) {
+		case orderdomain.Canceled, orderdomain.PartiallyCanceled:
+			result.Warnings = append(result.Warnings, fmt.Sprintf("订单 %s 在交易所已不存在，按已撤销处理", local.OrderID))
+		default:
+			result.Warnings = append(result.Warnings, fmt.Sprintf("订单 %s 在交易所已不存在，当前状态 %s", local.OrderID, latest.State))
+		}
 	}
 	for _, local := range gone {
 		closed, err := s.closeInstrumentGone(ctx, local)
@@ -1346,18 +1356,25 @@ func (s *Service) applyOrderState(
 		return s.terminalize(ctx, record, current.Status)
 	}
 	next := state
+	// 还没有交易所结果的订单，快照里查到它（不论挂着、部分成交还是已成交）就是交易所的证据：先认领成挂单，再走正常迁移。
+	unconfirmed := state == orderdomain.Pending || state == orderdomain.Submitting || state == orderdomain.SubmitUnknown
 	switch current.Status {
 	case exchange.OrderStatusOpen:
-		if state == orderdomain.Pending || state == orderdomain.Submitting ||
-			state == orderdomain.SubmitUnknown || state == orderdomain.CancelUnknown {
+		if unconfirmed || state == orderdomain.CancelUnknown {
 			next = orderdomain.Open
 		}
 	case exchange.OrderStatusPartiallyFilled:
+		if unconfirmed {
+			next = orderdomain.Open
+		}
 		if !shared.MustDecimal(record.FilledQuantity).IsZero() &&
 			state != orderdomain.Filled {
 			next = orderdomain.PartiallyFilled
 		}
 	case exchange.OrderStatusFilled:
+		if unconfirmed {
+			next = orderdomain.Open
+		}
 		if shared.MustDecimal(record.FilledQuantity).Cmp(shared.MustDecimal(record.Quantity)) == 0 {
 			next = orderdomain.Filled
 		}

@@ -49,7 +49,7 @@ func TestBNBTopUpResolvesAnUnknownOrderBeforeDeciding(t *testing.T) {
 	require.NoError(t, g.run())
 	require.Equal(t, []string{"unknown-2"}, g.orders.resolved)
 	require.Equal(t, []string{"unknown-2"}, g.orders.discarded, "查无此单退回待提交，接着丢弃")
-	require.Len(t, g.orders.specs, 1)
+	require.Empty(t, g.orders.specs, "解析过旧单的这一轮不下新单，下一轮按新快照再算缺口")
 
 	h := newFixture(t, `{"bnb_reserve_amount":"200"}`, []store.AssetBalance{balance("USDT", "1000")})
 	seedSystemOrder(t, h, "unknown-3", ownerBNBReserve, "BNB-USDT-SPOT", "BNBUSDT", "SUBMIT_UNKNOWN", 1_000)

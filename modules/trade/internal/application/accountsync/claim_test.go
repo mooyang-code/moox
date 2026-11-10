@@ -2,6 +2,7 @@ package accountsync
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -114,6 +115,32 @@ func TestSnapshotCanceledStatusFinishesPendingOrder(t *testing.T) {
 	require.NotZero(t, record.FinishedAt)
 }
 
+// 待提交的订单在快照里已是部分成交、已成交：与挂单一样认领，先写交易所单号并转为挂单，不停在待提交。
+func TestSnapshotFilledStatusClaimsPendingOrder(t *testing.T) {
+	for _, status := range []exchange.OrderStatus{exchange.OrderStatusPartiallyFilled, exchange.OrderStatusFilled} {
+		t.Run(string(status), func(t *testing.T) {
+			tradeStore := openSyncStore(t)
+			seedSyncAccount(t, tradeStore)
+			seedLocalOrder(t, tradeStore, "pending-filled", "PENDING", "", "0")
+			service := claimService(tradeStore, &syncAdapter{})
+
+			_, err := service.ApplySnapshot(context.Background(), "account-1", Snapshot{
+				Orders: []exchange.Order{{
+					Market: exchange.MarketTypeSwap, ExchangeOrderID: "exchange-pending-filled", ClientOrderID: "pending-filled-client",
+					ExchangeSymbol: "BTC-USDT", OrderType: exchange.OrderTypeMarket, Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
+					Quantity: shared.MustDecimal("1"), FilledQuantity: shared.MustDecimal("0.4"), Status: status,
+					CreatedAt: time.UnixMilli(1_000), UpdatedAt: time.UnixMilli(2_000),
+				}},
+				Account: exchange.AccountSnapshot{ExchangeUpdatedAt: time.UnixMilli(2_500)},
+			})
+			require.NoError(t, err)
+			record := getOrder(t, tradeStore, "pending-filled")
+			require.Equal(t, "OPEN", record.State)
+			require.Equal(t, "exchange-pending-filled", record.ExchangeOrderID)
+		})
+	}
+}
+
 // missingAdapter：交易所已经查不到这笔单（-2013），但近期成交里有它。
 type missingAdapter struct {
 	adaptertest.Stub
@@ -161,11 +188,13 @@ func TestMissingOrderWithFillsInTheSameRoundStaysFilled(t *testing.T) {
 		Now: func() time.Time { return time.Now().Add(10 * time.Minute) },
 	}
 
-	_, err := service.SyncAccountFull(context.Background(), "account-1")
+	result, err := service.SyncAccountFull(context.Background(), "account-1")
 	require.NoError(t, err)
 	record := getOrder(t, tradeStore, "missing-filled")
 	require.Equal(t, "FILLED", record.State)
 	require.Equal(t, "1", record.FilledQuantity)
+	require.NotContains(t, strings.Join(result.Warnings, "\n"), "按已撤销处理", "订单已是已成交，提示不能说已撤销")
+	require.Contains(t, strings.Join(result.Warnings, "\n"), "当前状态 FILLED")
 }
 
 // 成交入账失败（这里是普通订单超量）：同步失败、账户未就绪，并有一条带订单号和原因的关注项；不隔离这一笔。

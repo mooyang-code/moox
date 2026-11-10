@@ -173,18 +173,7 @@ func (o *Order) ApplyFill(fill Fill) ([]Event, error) {
 		}
 		return nil, nil
 	}
-	switch o.State {
-	case Submitting,
-		SubmitUnknown,
-		Open,
-		PartiallyFilled,
-		Canceling,
-		CancelUnknown,
-		Canceled,
-		PartiallyCanceled,
-		Rejected,
-		Expired:
-	default:
+	if !o.State.acceptsFill() {
 		return nil, ErrInvalidTransition
 	}
 	next := o.FilledQuantity.Add(fill.Quantity)
@@ -206,14 +195,20 @@ func (o *Order) ApplyFill(fill Fill) ([]Event, error) {
 	return o.emit("FillApplied"), nil
 }
 
-// ApplySyntheticFill 与 ApplyFill 相同，只多一条：已成交的合成外部订单收到新成交时放大订单数量。
+// ApplySyntheticFill 与 ApplyFill 相同，只多一条：合成外部订单收到的成交使已入账成交量超过订单数量时，
+// 把订单数量放大到已入账成交量加本笔，状态按新数量重新推导（放大后恰好等于数量，即已成交）。
 // 合成订单是交易所查不到原单时按成交合成的，数量只是当时已知成交之和，后到的成交属于同一张单，数量要跟着加；
 // 普通订单的数量是下单时定的，超量仍然是非法迁移。
 func (o *Order) ApplySyntheticFill(fill Fill) ([]Event, error) {
-	if o.State == Filled && fill.ID != "" && fill.Quantity.Cmp(shared.Zero()) > 0 {
-		if _, applied := o.AppliedFills[fill.ID]; !applied {
-			o.Spec.Quantity = o.FilledQuantity.Add(fill.Quantity)
-			o.State = PartiallyFilled
+	if fill.ID != "" && fill.Quantity.Cmp(shared.Zero()) > 0 {
+		if _, applied := o.AppliedFills[fill.ID]; !applied && (o.State == Filled || o.State.acceptsFill()) {
+			if next := o.FilledQuantity.Add(fill.Quantity); next.Cmp(o.Spec.Quantity) > 0 {
+				o.Spec.Quantity = next
+				if o.State == Filled {
+					// 已成交不再接收成交；放大后它又有了未成交的余量，先回到部分成交，再由 ApplyFill 推导。
+					o.State = PartiallyFilled
+				}
+			}
 		}
 	}
 	return o.ApplyFill(fill)
@@ -252,4 +247,13 @@ func (o *Order) transition(to State, allowed ...State) ([]Event, error) {
 func (o *Order) emit(eventType string) []Event {
 	o.Version++
 	return []Event{{Type: eventType, Version: o.Version}}
+}
+
+// acceptsFill 报告处于该状态的订单能否继续接收成交（终态里撤销、拒绝、过期的订单也可能有迟到的成交）。
+func (s State) acceptsFill() bool {
+	switch s {
+	case Submitting, SubmitUnknown, Open, PartiallyFilled, Canceling, CancelUnknown, Canceled, PartiallyCanceled, Rejected, Expired:
+		return true
+	}
+	return false
 }

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/fundsettings"
+	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
@@ -63,11 +64,19 @@ func (s *Service) topUpBNB(
 		return false, err
 	}
 	if len(open) > 0 {
-		// 待提交、提交结果未知的旧单先丢弃或解析；处理完还有没结束的（挂单、刚解析出的挂单）才算忙。
+		// 待提交的旧单直接丢弃；提交结果未知的先向交易所解析。
+		resolved := false
 		for _, record := range open {
+			if state := orderdomain.State(record.State); state == orderdomain.Submitting || state == orderdomain.SubmitUnknown {
+				resolved = true
+			}
 			if err := s.advanceUnconfirmed(ctx, record); err != nil {
 				return true, err
 			}
+		}
+		// 解析过旧单的这一轮不下新单：解析出的成交还没进账户快照，按旧快照算缺口会重复补买。
+		if resolved {
+			return true, nil
 		}
 		if open, err = s.openSystemOrders(ctx, account, ownerBNBReserve); err != nil {
 			return true, err
