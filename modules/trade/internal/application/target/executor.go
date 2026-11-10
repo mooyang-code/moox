@@ -1482,6 +1482,13 @@ func (e *Executor) placeActionMode(
 	// explained 统计原因已经说清楚的成员（资金不足、单笔上限低于最小下单额）：全部成员都是这类原因时，
 	// 阻塞原因直接写它们，不再笼统地写“成员容量不足”。
 	explained := 0
+	explain := func(reason string) {
+		// 每个成员的说明一样，只写一次。
+		if !slices.Contains(capacityErrors, reason) {
+			capacityErrors = append(capacityErrors, reason)
+			explained++
+		}
+	}
 	// t1Deferred 表示有成员只因为 T+1 卖不出。
 	t1Deferred := false
 	candidates := placementCandidates(action, members)
@@ -1622,26 +1629,26 @@ func (e *Executor) placeActionMode(
 		if exchange.RuleFor(candidate.instrument.MarketType).BoardLot && maxQuantity.Cmp(minimum) < 0 {
 			maxQuantity = minimum
 		}
-		if quantity.Cmp(maxQuantity) > 0 {
+		// sliceClipped 表示数量被单笔上限截小过：之后不够最小金额不是“差额太小”，而是单笔上限设得太低。
+		sliceClipped := quantity.Cmp(maxQuantity) > 0
+		if sliceClipped {
 			quantity, oddFull = maxQuantity, false
 		}
 		if quantity.Cmp(shared.Zero()) <= 0 || (quantity.Cmp(minimum) < 0 && !oddFull) {
 			capacityErrors = append(capacityErrors, candidate.member.account.TradingAccountID+": 单笔子单上限低于交易所最小数量")
 			continue
 		}
-		// 单笔上限把开仓子单截到不足交易所最小名义金额：每笔都会被拒，这是设置问题，原因写清楚。
-		// 合约减仓不受最小名义金额限制；截断前已经通过上面的最小名义金额检查，所以走到这里说明是被单笔上限截小的。
-		if !candidate.reducing {
+		// 合约只减仓单不受交易所最小名义金额限制（校验器和交易所都豁免），其余下单方向都要查。
+		minNotionalExempt := candidate.reducing && exchange.RuleFor(candidate.instrument.MarketType).ReduceOnly
+		// 单笔上限把子单截到不足交易所最小名义金额：每笔都会被拒，这是设置问题，原因写清楚，不当作“差额太小、视为已满足”。
+		// 截断前的数量已经通过上面的最小名义金额检查，所以走到这里说明是被单笔上限截小的。
+		if sliceClipped && !minNotionalExempt {
 			clippedSmall, err := belowMinimumNotional(quantity, quote.Price, minNotional)
 			if err != nil {
 				return placement{}, err
 			}
 			if clippedSmall {
-				// 每个成员的说明一样，只写一次。
-				if reason := fmt.Sprintf("单笔上限 %s 低于该标的最小下单额 %s，请调高单笔上限", sliceLimit, minNotional); !slices.Contains(capacityErrors, reason) {
-					capacityErrors = append(capacityErrors, reason)
-					explained++
-				}
+				explain(fmt.Sprintf("单笔上限 %s 低于该标的最小下单额 %s，请调高单笔上限%s", env.settings.MaxChildNotional, minNotional, randomizeNote(env.settings)))
 				continue
 			}
 		}
@@ -1699,16 +1706,27 @@ func (e *Executor) placeActionMode(
 		if spec.LimitPrice != nil {
 			orderPrice = *spec.LimitPrice
 		}
-		belowExchange, err := belowExchangeMinimum(candidate, spec.Quantity, orderPrice)
-		if err != nil {
-			return placement{}, err
+		belowExchange := false
+		if !sliceClipped || !minNotionalExempt {
+			if belowExchange, err = belowExchangeMinimum(candidate, spec.Quantity, orderPrice); err != nil {
+				return placement{}, err
+			}
 		}
 		if belowExchange {
+			if sliceClipped {
+				explain(fmt.Sprintf("单笔上限 %s 按下单价折算后低于该标的最小下单额 %s，请调高单笔上限%s", env.settings.MaxChildNotional, minNotional, randomizeNote(env.settings)))
+				continue
+			}
 			capacityErrors = append(capacityErrors, accountID+": 金额低于交易所最小名义金额")
 			tooSmall++
 			continue
 		}
 		if env.belowConfiguredMinimum(candidate, spec.Quantity, orderPrice) {
+			if sliceClipped {
+				explain(fmt.Sprintf("单笔上限 %s 低于设置的最小下单额 %s，请调高单笔上限或降低最小下单额%s",
+					env.settings.MaxChildNotional, env.settings.MinNotional(candidate.instrument.MarketType), randomizeNote(env.settings)))
+				continue
+			}
 			capacityErrors = append(capacityErrors, accountID+": 金额低于配置的最小下单额")
 			tooSmall++
 			configuredSmall++
@@ -1869,6 +1887,14 @@ func belowMinimumNotional(
 	}
 	return minimum.Cmp(shared.Zero()) > 0 &&
 		quantity.Mul(price).Cmp(minimum) < 0, nil
+}
+
+// randomizeNote 是开了拆单随机化时给单笔上限原因补的一句：每笔实际只有单笔上限的 50%～100%。
+func randomizeNote(settings ordersettings.Settings) string {
+	if settings.RandomizeSplit {
+		return "（开了拆单随机化，每笔只有单笔上限的 50%～100%）"
+	}
+	return ""
 }
 
 // belowExchangeMinimum 判断数量按给定价格算是否低于交易所最小名义金额（合约全平例外，否则剩余仓位永远平不掉）。
