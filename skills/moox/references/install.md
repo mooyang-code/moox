@@ -69,7 +69,7 @@ echo "下载源: $SRC"
 - CNB：`https://cnb.cool/mooyang-code/moox/-/releases/download/${VER}/<文件名>`
 
 ```bash
-VER=v0.5.3
+VER=v0.0.1
 OS=darwin_arm64        # 按本机选择：darwin_arm64 / darwin_amd64 / linux_amd64 / linux_arm64
 GITHUB=https://github.com/mooyang-code/moox/releases/download/${VER}
 CNB=https://cnb.cool/mooyang-code/moox/-/releases/download/${VER}
