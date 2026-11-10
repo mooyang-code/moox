@@ -366,7 +366,7 @@ func TestSubmitUnknownResetsToPendingOnlyAfterConfirmedAbsentAndWindowExpired(t 
 	pending, err := service.Place(context.Background(), "space-1", testSpec(service.now()))
 	require.NoError(t, err)
 	setStoredOrderState(t, tradeStore, string(pending.ID), orderdomain.SubmitUnknown, service.now())
-	adapter.getErr = &exchange.Error{Kind: exchange.ErrorOrderNotFound}
+	adapter.getErr = &exchange.Error{Kind: exchange.ErrorOrderNotFound, Code: "-2013"}
 	service.UnknownLookupWindow = time.Minute
 
 	withinWindow, err := service.Submit(context.Background(), "space-1", string(pending.ID))
@@ -687,9 +687,9 @@ func TestConfirmedAbsentRetryRefreshesReducePositionOnly(t *testing.T) {
 	require.Equal(t, orderdomain.SubmitUnknown, unknown.State)
 	require.False(t, adapter.placed.ReduceOnly)
 
-	adapter.getErr = &exchange.Error{Kind: exchange.ErrorOrderNotFound}
+	adapter.getErr = &exchange.Error{Kind: exchange.ErrorOrderNotFound, Code: "-2013"}
 	adapter.placeErr = nil
-	now = now.Add(31 * time.Second)
+	now = now.Add(121 * time.Second)
 	pending, err = service.Submit(context.Background(), "space-1", string(pending.ID))
 	require.NoError(t, err)
 	require.Equal(t, orderdomain.Pending, pending.State)
@@ -864,7 +864,7 @@ func TestServiceResolveUnknownFindsOrderOrReturnsPendingAfterWindow(t *testing.T
 	stored, err := service.Store.GetOrder(context.Background(), "space-1", string(pending.ID))
 	require.NoError(t, err)
 	require.Equal(t, int64(1_700_000_000_000), stored.SubmittedAt)
-	adapter.getErr = &exchange.Error{Kind: exchange.ErrorOrderNotFound}
+	adapter.getErr = &exchange.Error{Kind: exchange.ErrorOrderNotFound, Code: "-2013"}
 	service.UnknownLookupWindow = time.Minute
 
 	adapter.fills = []exchange.Fill{
@@ -997,7 +997,7 @@ func TestServiceResolveUnknownRecoversSubmittingAfterCrash(t *testing.T) {
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.UpdateOrder(record, expected)
 	}))
-	adapter.getErr = &exchange.Error{Kind: exchange.ErrorOrderNotFound}
+	adapter.getErr = &exchange.Error{Kind: exchange.ErrorOrderNotFound, Code: "-2013"}
 	service.UnknownLookupWindow = time.Minute
 
 	got, err := service.ResolveUnknown(context.Background(), "space-1", string(pending.ID))
@@ -1363,7 +1363,7 @@ func TestConfirmedAbsentMarketRetryRevalidatesLimitsWithFreshQuote(t *testing.T)
 	pending, err := service.Place(context.Background(), "space-1", testSpec(service.now()))
 	require.NoError(t, err)
 	setStoredOrderState(t, tradeStore, string(pending.ID), orderdomain.SubmitUnknown, service.now())
-	adapter.getErr = &exchange.Error{Kind: exchange.ErrorOrderNotFound}
+	adapter.getErr = &exchange.Error{Kind: exchange.ErrorOrderNotFound, Code: "-2013"}
 	service.UnknownLookupWindow = time.Minute
 	service.Now = func() time.Time { return time.Unix(1_700_000_061, 0) }
 	service.Validator.Now = service.Now
@@ -1384,7 +1384,7 @@ func expireUnknownOrder(t *testing.T, service *Service, tradeStore *store.Store,
 	pending, err := service.Place(context.Background(), "space-1", testSpec(service.now()))
 	require.NoError(t, err)
 	setStoredOrderState(t, tradeStore, string(pending.ID), orderdomain.SubmitUnknown, service.now())
-	adapter.getErr = &exchange.Error{Kind: exchange.ErrorOrderNotFound}
+	adapter.getErr = &exchange.Error{Kind: exchange.ErrorOrderNotFound, Code: "-2013"}
 	service.UnknownLookupWindow = time.Minute
 	service.Now = func() time.Time { return time.Unix(1_700_000_061, 0) }
 	service.Validator.Now = service.Now

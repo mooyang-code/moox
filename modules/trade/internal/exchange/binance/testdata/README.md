@@ -38,3 +38,10 @@
 
 - `fapi_funding_rate.json`：`GET /fapi/v1/fundingRate`（公共接口，不带 symbol）。按官方文档的字段集构造，不是录制的原文：字段 `symbol`、`fundingTime`（毫秒）、`fundingRate`、`markPrice`，数值都是字符串；包含负费率、结算时刻不在整点（多 1 毫秒）、老记录 `markPrice` 为空串三种情况。
 - 未核对：不带 symbol 时返回记录的排序方式。适配器满页就对半拆开重查，不依赖顺序。
+
+## 强平成交样例（2026-11-09 改写）
+
+- `futures_order_trade_update_calculated.json`、`futures_order_trade_update_idle.json`：U 本位合约 `ORDER_TRADE_UPDATE`。按官方文档（https://developers.binance.com/docs/derivatives/usds-margined-futures/user-data-streams/Event-Order-Update ）的字段改写，不是录制的原文。
+  - `calculated`：官方文档说明执行类型 `x` 可以是 `CALCULATED`（强平成交），强平单的客户端订单号 `c` 以 `autoclose-` 开头；在 `futures_order_trade_update.json` 上改了 `c`、`S`、`x`、`ps`、`t`、`l`、`z`、`L`、`rp`、`R`、`ap`。
+  - `idle`：同一结构的 `NEW` 事件，`t` 为 0、`l` 为 `0`，不带成交。
+- 测试网没法触发强平，录到原文后替换（执行计划 B8-2）。

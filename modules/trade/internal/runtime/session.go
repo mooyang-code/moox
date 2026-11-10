@@ -185,6 +185,9 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 		return s.disconnect(ctx, err)
 	}
 	positions, err := s.Adapter.ListPositionSnapshots(ctx)
+	if err == nil {
+		positions, err = s.Sync.FilterIsolatedPositions(ctx, s.Account.TradingAccountID, positions)
+	}
 	if err != nil {
 		return s.disconnect(ctx, err)
 	}
@@ -306,8 +309,11 @@ func (s *ExchangeSession) Run(ctx context.Context) error {
 			}
 			// 同步失败时账户已记录错误并保持未就绪，下一轮重试；只有私有流结束才重启会话。
 			s.opMu.Lock()
-			_, _ = s.Sync.SyncAccountReconcile(ctx, s.Account.TradingAccountID)
+			_, err := s.Sync.SyncAccountReconcile(ctx, s.Account.TradingAccountID)
 			s.opMu.Unlock()
+			if err != nil && ctx.Err() == nil {
+				log.WarnContextf(ctx, "对账同步失败，下一轮重试：account=%s err=%v", s.Account.TradingAccountID, err)
+			}
 			if err, ended := privateStreamError(disconnected, streamDone); ended {
 				return s.disconnect(context.Background(), err)
 			}
@@ -556,7 +562,9 @@ func (s *ExchangeSession) runPolling(ctx context.Context) error {
 			s.refreshInstruments(ctx)
 		case <-ticker.C:
 			// 失败时账户已记录错误并保持未就绪，下一轮重试。
-			_, _ = s.Sync.SyncAccount(ctx, s.Account.TradingAccountID)
+			if _, err := s.Sync.SyncAccount(ctx, s.Account.TradingAccountID); err != nil && ctx.Err() == nil {
+				log.WarnContextf(ctx, "账户同步失败，下一轮重试：account=%s err=%v", s.Account.TradingAccountID, err)
+			}
 		}
 	}
 }

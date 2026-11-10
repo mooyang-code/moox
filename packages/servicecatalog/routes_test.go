@@ -129,7 +129,7 @@ func TestCompileThreeHostRoutesAndVerificationScopes(t *testing.T) {
 	}{
 		"control":  {198, []string{"access", "admin", "archive-mgr", "cloudfunction", "collector", "collector-stream", "console", "host-agent", "host-gateway@control", "host-gateway@overseas", "host-gateway@storage", "monitor", "moox-cli", "storage-view", "strategy", "trade"}, "8ec2c95c2dfbae188c184a299a4a051decece884e780de9b7713ded4a328f738"},
 		"storage":  {80, []string{"access", "archive-mgr", "collector", "collector-stream", "console", "factor-mgr", "monitor", "moox-cli", "strategy"}, "d8cbc0c0358eb28b304be9024ad5b6bb269f5589e2f67b019e8243fb482968b3"},
-		"overseas": {66, []string{"callback-dispatcher", "collector", "console", "monitor", "moox-cli", "strategy"}, "e93196a5b5ecb194054892feae7e2c22d6296e3a9c3e66ac40cc90044ca24a43"},
+		"overseas": {64, []string{"callback-dispatcher", "collector", "console", "monitor", "moox-cli", "strategy"}, "a19904225d4ffdfe0b2452d1df51328df2bfac98ab73498607850c13ad777599"},
 	}
 	for _, host := range p.Hosts {
 		compiled, err := c.Compile(p, host.ID)
@@ -197,7 +197,7 @@ func TestCompilePreservesMethodSpecificPermissionBoundaries(t *testing.T) {
 		if route.ServicePath != "trpc.moox.trade.TradeConsoleService" {
 			continue
 		}
-		if slices.Contains(route.Callers, "strategy") != slices.Contains([]string{"GetLogicalAccount", "ClaimLogicalAccountOwner", "ReleaseLogicalAccountOwner", "RebindLogicalAccountOwner"}, route.Method) {
+		if slices.Contains(route.Callers, "strategy") != slices.Contains([]string{"GetLogicalAccount", "ClaimLogicalAccountOwner", "ReleaseLogicalAccountOwner"}, route.Method) {
 			t.Fatalf("strategy permission crossed method boundary: %+v", route)
 		}
 	}

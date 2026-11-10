@@ -41,10 +41,10 @@ func (a *Adapter) SupportsFundingRates() bool {
 // 只严格解析 symbols 里的合约，其他合约格式不对的记录只记日志跳过。
 func (a *Adapter) ListFundingRates(ctx context.Context, start, end time.Time, symbols []string) ([]exchange.FundingRate, error) {
 	if !a.SupportsFundingRates() {
-		return nil, typedRejected("该市场没有资金费", nil)
+		return nil, exchange.Rejected("该市场没有资金费", nil)
 	}
 	if end.Before(start) {
-		return nil, typedRejected("资金费率查询的结束时间早于开始时间", nil)
+		return nil, exchange.Rejected("资金费率查询的结束时间早于开始时间", nil)
 	}
 	wanted := make(map[string]struct{}, len(symbols))
 	for _, symbol := range symbols {
@@ -72,7 +72,7 @@ func (a *Adapter) fundingRateRange(ctx context.Context, from, to int64, wanted m
 		return fundingRatesFromPayload(rows, wanted)
 	}
 	if to <= from {
-		return nil, typedRejected("同一毫秒的资金费结算记录超过单页上限", errors.New(strconv.FormatInt(from, 10)))
+		return nil, exchange.Rejected("同一毫秒的资金费结算记录超过单页上限", errors.New(strconv.FormatInt(from, 10)))
 	}
 	middle := from + (to-from)/2
 	left, err := a.fundingRateRange(ctx, from, middle, wanted)
@@ -101,7 +101,7 @@ func (a *Adapter) fundingRatePage(ctx context.Context, from, to int64) ([]fundin
 	}
 	var rows []fundingRatePayload
 	if err := json.Unmarshal(raw, &rows); err != nil {
-		return nil, typedRejected("解析资金费率", err)
+		return nil, exchange.Rejected("解析资金费率", err)
 	}
 	return rows, nil
 }
@@ -131,14 +131,14 @@ func fundingRatesFromPayload(rows []fundingRatePayload, wanted map[string]struct
 
 func fundingRateFromPayload(row fundingRatePayload) (exchange.FundingRate, error) {
 	if row.Symbol == "" || row.FundingTime <= 0 {
-		return exchange.FundingRate{}, typedRejected("资金费率记录缺少合约或结算时刻", errors.New(row.Symbol))
+		return exchange.FundingRate{}, exchange.Rejected("资金费率记录缺少合约或结算时刻", errors.New(row.Symbol))
 	}
 	rate, err := shared.ParseDecimal(row.FundingRate)
 	if err != nil {
-		return exchange.FundingRate{}, typedRejected("资金费率 "+row.Symbol+" 不是数字", err)
+		return exchange.FundingRate{}, exchange.Rejected("资金费率 "+row.Symbol+" 不是数字", err)
 	}
 	// 老记录的 markPrice 是空串，按零返回，由调用方决定跳过。
-	mark, err := decimalOrZero(row.MarkPrice)
+	mark, err := exchange.DecimalOrZero(row.MarkPrice)
 	if err != nil {
 		return exchange.FundingRate{}, err
 	}

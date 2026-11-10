@@ -195,7 +195,6 @@ func TestACLSeparatesConsoleMachinesAndExternalPrincipals(t *testing.T) {
 		{"strategy", "trpc.moox.trade.TradeConsoleService", "PlaceManualOrder", false},
 		{"console", "trpc.moox.trade.TradeConsoleService", "ClaimLogicalAccountOwner", false},
 		{"console", "trpc.moox.trade.TradeConsoleService", "ReleaseLogicalAccountOwner", false},
-		{"console", "trpc.moox.trade.TradeConsoleService", "RebindLogicalAccountOwner", false},
 		{"moox-cli", "trpc.moox.trade.TradeConsoleService", "ClaimLogicalAccountOwner", true},
 		{"strategy", "trpc.moox.trade.TradeConsoleService", "ClaimLogicalAccountOwner", true},
 		{"scf-collector", "trpc.moox.storage.PrimaryStore", "CommitTimeSeriesBatch", false},

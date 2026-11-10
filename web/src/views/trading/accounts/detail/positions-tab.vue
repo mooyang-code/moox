@@ -63,8 +63,8 @@
         </a-table-column>
         <a-table-column v-if="logical.control_mode === 1" title="偏差" :width="190">
           <template #cell="{ record }">
-            <span v-if="record.state === 'blocked'" class="tx-neg">已拦下：{{ record.blockedReason }}</span>
-            <span v-else-if="record.state === 'extra'" class="tx-st tx-st--warn">目标外</span>
+            <span v-if="record.state === 'blocked'" class="tx-neg">未执行：{{ record.blockedReason }}</span>
+            <span v-else-if="record.state === 'extra'" class="tx-st tx-st--warn">不在目标内</span>
             <template v-else>
               <div
                 v-if="record.deviationSpot !== null"

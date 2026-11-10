@@ -5,13 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"strings"
 	"time"
 
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
+	operatordomain "github.com/mooyang-code/moox/modules/trade/internal/domain/operator"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"gorm.io/gorm"
 )
@@ -65,12 +66,12 @@ func (s *Service) SubmitOrder(ctx context.Context, command SubmitOrderCommand) (
 	if err != nil {
 		return ManualOrderResult{}, err
 	}
-	expected := store.OperatorActionRecord{SpaceID: command.SpaceID, ActionID: command.ActionID, LogicalAccountID: command.LogicalAccountID, ActionType: "SUBMIT_ORDER", Reason: strings.TrimSpace(command.Reason), RequestJSON: string(encoded), Status: "RUNNING"}
+	expected := store.OperatorActionRecord{SpaceID: command.SpaceID, ActionID: command.ActionID, LogicalAccountID: command.LogicalAccountID, ActionType: string(operatordomain.ActionSubmitOrder), Reason: strings.TrimSpace(command.Reason), RequestJSON: string(encoded), Status: string(operatordomain.StatusRunning)}
 	if existing, found, err := s.existingAction(ctx, expected); err != nil {
 		return ManualOrderResult{}, err
 	} else if found {
 		knownAction = existing
-		if existing.Status != "RUNNING" {
+		if existing.Status != string(operatordomain.StatusRunning) {
 			return s.loadManualOrderResult(ctx, existing)
 		}
 	}
@@ -187,7 +188,7 @@ func (s *Service) resumeSubmission(ctx context.Context, action store.OperatorAct
 	if err != nil {
 		return submissionRecoveryError(result, err)
 	}
-	if result.Action.Status != "RUNNING" || result.Order.OrderID == "" {
+	if result.Action.Status != string(operatordomain.StatusRunning) || result.Order.OrderID == "" {
 		return nil
 	}
 	unlock, err := s.Store.LockLogicalAccountContext(ctx, action.SpaceID, action.LogicalAccountID)
@@ -200,7 +201,7 @@ func (s *Service) resumeSubmission(ctx context.Context, action store.OperatorAct
 	if err != nil {
 		return err
 	}
-	if current.Status != "RUNNING" {
+	if current.Status != string(operatordomain.StatusRunning) {
 		return nil
 	}
 	progress, err := s.manualProgress(ctx, &current)
@@ -215,9 +216,9 @@ func submissionRecoveryError(result ManualOrderResult, err error) error {
 	if allSubmissionErrors(err, func(leaf error) bool {
 		switch leaf.(type) {
 		case manualFailureError:
-			return result.Action.Status == "FAILED"
+			return result.Action.Status == string(operatordomain.StatusFailed)
 		case submissionDeferredError:
-			return result.Action.Status == "RUNNING"
+			return result.Action.Status == string(operatordomain.StatusRunning)
 		}
 		return false
 	}) {
@@ -352,7 +353,7 @@ func (s *Service) deferActionLock(ctx context.Context, action store.OperatorActi
 			return err
 		}
 		action = current
-		if current.Status != "RUNNING" {
+		if current.Status != string(operatordomain.StatusRunning) {
 			return nil
 		}
 		current.LastError = cause.Error()
@@ -365,7 +366,7 @@ func (s *Service) deferActionLock(ctx context.Context, action store.OperatorActi
 	if err != nil {
 		return action, errors.Join(cause, err)
 	}
-	if action.Status != "RUNNING" {
+	if action.Status != string(operatordomain.StatusRunning) {
 		return action, nil
 	}
 	return action, submissionDeferredError{cause: cause}

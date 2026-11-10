@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 
 	delistapp "github.com/mooyang-code/moox/modules/trade/internal/application/delist"
 	holdingapp "github.com/mooyang-code/moox/modules/trade/internal/application/holding"
@@ -21,8 +22,7 @@ var (
 	errInvalidCurveTarget = errors.New("权益曲线要指定且只能指定一个账户或组合")
 )
 
-// ConsoleServer is the single public business service. The existing handlers
-// remain embedded so the cutover does not duplicate command semantics.
+// ConsoleServer 是对外唯一的业务服务，内嵌账户、组合、执行三组处理器。
 type ConsoleServer struct {
 	*AccountServer
 	*LogicalAccountServer
@@ -35,10 +35,9 @@ type ConsoleServer struct {
 	Exchanges          execution.ExchangeCatalog
 	Adapters           AdapterSource
 	FlattenAccount     FlattenTradingAccountFunc
-	// Delist 是下架名单与持有者查询；FlattenInstrumentAction 发起单标的下架清仓；ReduceAccount 发起按比例减仓。
+	// Delist 是下架名单与持有者查询；FlattenInstrumentAction 发起单标的下架清仓。
 	Delist                  *delistapp.Service
 	FlattenInstrumentAction FlattenInstrumentFunc
-	ReduceAccount           ReduceLogicalAccountFunc
 }
 
 type HoldingQueryService interface {
@@ -223,6 +222,42 @@ func tradableInstrumentToPB(record store.InstrumentRecord) *tradepb.TradableInst
 	}
 }
 
+const (
+	// 权益曲线默认只看最近 30 天；跨度超过 2 天按 15 分钟、超过 30 天按小时取每桶最后一点；最多返回 3000 点。
+	equityCurveDefaultSpan  = 30 * 24 * time.Hour
+	equityCurveFineSpan     = 2 * 24 * time.Hour
+	equityCurveMinuteBucket = time.Minute
+	equityCurveQuarterHour  = 15 * time.Minute
+	equityCurveHourBucket   = time.Hour
+	equityCurveMaxPoints    = 3000
+)
+
+// equityCurveRange 补全权益曲线的起止（毫秒），并按跨度定桶宽（毫秒）：起止为 0 时取到现在为止的最近 30 天。
+// 净值点本来每分钟一个，所以 2 天内的桶宽取 1 分钟就是不降采样。跨度太长、按桶宽会超过 3000 点时，桶宽放宽到刚好装下。
+func equityCurveRange(from, to int64, now time.Time) (int64, int64, int64) {
+	if to <= 0 {
+		to = now.UnixMilli()
+	}
+	if from <= 0 {
+		from = to - equityCurveDefaultSpan.Milliseconds()
+	}
+	span := time.Duration(to-from) * time.Millisecond
+	bucket := equityCurveMinuteBucket
+	switch {
+	case span > equityCurveDefaultSpan:
+		bucket = equityCurveHourBucket
+	case span > equityCurveFineSpan:
+		bucket = equityCurveQuarterHour
+	}
+	// 桶按绝对时间对齐，范围首尾各可能落在不满的桶里，所以桶数最多 floor(span/桶宽) + 2，再加上单独保留的第一点，
+	// 最多 floor(span/桶宽) + 3 个。桶宽向上取整到 span/桶宽 ≤ 最大点数 - 3，总点数就不会超过最大点数。
+	const fitBuckets = equityCurveMaxPoints - 3
+	if fit := ((to - from) + fitBuckets - 1) / fitBuckets; fit > bucket.Milliseconds() {
+		return from, to, fit
+	}
+	return from, to, bucket.Milliseconds()
+}
+
 func (s *ConsoleServer) QueryEquityCurve(
 	ctx context.Context,
 	req *tradepb.QueryEquityCurveReq,
@@ -240,12 +275,12 @@ func (s *ConsoleServer) QueryEquityCurve(
 	if (req.GetTradingAccountId() == "") == (req.GetLogicalAccountId() == "") {
 		return &tradepb.QueryEquityCurveRsp{RetInfo: invalidInfo(errInvalidCurveTarget)}, nil
 	}
-	from, to := req.GetStartTime(), req.GetEndTime()
+	from, to, bucket := equityCurveRange(req.GetStartTime(), req.GetEndTime(), time.Now())
 	var records []store.EquityPointRecord
 	if req.GetTradingAccountId() != "" {
-		records, err = s.Store.ListAccountEquityPoints(ctx, spaceID, req.GetTradingAccountId(), from, to)
+		records, err = s.Store.QueryAccountEquityCurve(ctx, spaceID, req.GetTradingAccountId(), from, to, bucket)
 	} else {
-		records, err = s.Store.ListLogicalAccountEquityPoints(ctx, spaceID, req.GetLogicalAccountId(), from, to)
+		records, err = s.Store.QueryLogicalAccountEquityCurve(ctx, spaceID, req.GetLogicalAccountId(), from, to, bucket)
 	}
 	if err != nil {
 		return &tradepb.QueryEquityCurveRsp{RetInfo: errorInfo(err)}, nil
@@ -276,6 +311,9 @@ func (s *ConsoleServer) ListHoldings(
 	if s.Store == nil {
 		return &tradepb.ListHoldingsRsp{RetInfo: errorInfo(errServiceUnavailable)}, nil
 	}
+	if s.Holdings == nil {
+		return &tradepb.ListHoldingsRsp{RetInfo: errorInfo(errors.New("持币查询服务未配置"))}, nil
+	}
 	account, err := s.Store.GetTradingAccount(ctx, spaceID, req.GetTradingAccountId())
 	if err != nil {
 		return &tradepb.ListHoldingsRsp{RetInfo: errorInfo(err)}, nil
@@ -283,45 +321,26 @@ func (s *ConsoleServer) ListHoldings(
 	if !account.HasBalanceMarket() {
 		return &tradepb.ListHoldingsRsp{RetInfo: invalidInfo(errors.New("只有开通现货的账户才有持币明细"))}, nil
 	}
-	if s.Holdings != nil {
-		values, err := s.Holdings.List(ctx, spaceID, req.GetTradingAccountId())
-		if err != nil {
-			return &tradepb.ListHoldingsRsp{RetInfo: errorInfo(err)}, nil
-		}
-		result := make([]*tradepb.Holding, 0, len(values))
-		for _, value := range values {
-			item := &tradepb.Holding{
-				TradingAccountId: value.TradingAccountID, InstrumentId: value.InstrumentID,
-				ExchangeSymbol: value.ExchangeSymbol, Asset: value.Asset,
-				Quantity: value.Quantity.String(), AverageCost: value.AverageCost.String(),
-				MarkPrice: value.MarkPrice.String(), MarketValue: value.MarketValue.String(),
-				SourceTime: value.SourceTime.UnixMilli(), Sellable: value.Sellable.String(),
-			}
-			if value.UnrealizedPnL != nil {
-				pnl := value.UnrealizedPnL.String()
-				item.UnrealizedPnl = &pnl
-			}
-			result = append(result, item)
-		}
-		return &tradepb.ListHoldingsRsp{RetInfo: success(), Holdings: result}, nil
+	values, err := s.Holdings.List(ctx, spaceID, req.GetTradingAccountId())
+	if err != nil {
+		return &tradepb.ListHoldingsRsp{RetInfo: errorInfo(err)}, nil
 	}
-	holdings := make([]*tradepb.Holding, 0, len(account.Snapshot.Balances))
-	for _, balance := range account.Snapshot.Balances {
-		if balance.Total == "" || balance.Total == "0" {
-			continue
+	result := make([]*tradepb.Holding, 0, len(values))
+	for _, value := range values {
+		item := &tradepb.Holding{
+			TradingAccountId: value.TradingAccountID, InstrumentId: value.InstrumentID,
+			ExchangeSymbol: value.ExchangeSymbol, Asset: value.Asset,
+			Quantity: value.Quantity.String(), AverageCost: value.AverageCost.String(),
+			MarkPrice: value.MarkPrice.String(), MarketValue: value.MarketValue.String(),
+			SourceTime: value.SourceTime.UnixMilli(), Sellable: value.Sellable.String(),
 		}
-		marketValue := ""
-		markPrice := ""
-		if balance.Asset == account.SettlementAsset {
-			marketValue, markPrice = balance.Total, "1"
+		if value.UnrealizedPnL != nil {
+			pnl := value.UnrealizedPnL.String()
+			item.UnrealizedPnl = &pnl
 		}
-		holdings = append(holdings, &tradepb.Holding{
-			TradingAccountId: req.GetTradingAccountId(), Asset: balance.Asset, Quantity: balance.Total,
-			MarkPrice: markPrice, MarketValue: marketValue, SourceTime: account.Snapshot.ExchangeUpdatedAt,
-			Sellable: balance.Available,
-		})
+		result = append(result, item)
 	}
-	return &tradepb.ListHoldingsRsp{RetInfo: success(), Holdings: holdings}, nil
+	return &tradepb.ListHoldingsRsp{RetInfo: success(), Holdings: result}, nil
 }
 
 func domainAccountForCapabilities(record store.TradingAccountRecord) tradingaccount.Account {

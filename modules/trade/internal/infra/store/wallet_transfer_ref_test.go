@@ -55,3 +55,34 @@ func TestUpdateWalletTransferKeepsExchangeIDWhenEmpty(t *testing.T) {
 	require.Equal(t, "tran-9", rows[0].ExchangeTransferID)
 	require.Equal(t, TransferStateFailed, rows[0].State)
 }
+
+// 按引用号前缀列记录：不限时间窗口（请求时间是很久以前也在），别的前缀、别的账户不算；查询走（空间、执行账户、引用号）唯一索引，不需要新索引。
+func TestListWalletTransfersByRefPrefixIgnoresTimeWindow(t *testing.T) {
+	ctx := context.Background()
+	tradeStore := seedTransferParents(t)
+	const prefix = "margin-logical-1-20261101T000000:TO_FUTURES:"
+	require.NoError(t, tradeStore.Transaction(ctx, func(tx *Tx) error {
+		if err := tx.InsertWalletTransfer(transferRecord("t-1", prefix+"1", TransferToFutures, 1)); err != nil {
+			return err
+		}
+		if err := tx.InsertWalletTransfer(transferRecord("t-2", prefix+"2", TransferToFutures, 2)); err != nil {
+			return err
+		}
+		return tx.InsertWalletTransfer(transferRecord("t-3", "margin-logical-1-20261102T000000:TO_FUTURES:1", TransferToFutures, 3))
+	}))
+
+	rows, err := tradeStore.ListWalletTransfersByRefPrefix(ctx, "space-1", "account-1", prefix)
+
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	require.Equal(t, []string{"t-1", "t-2"}, []string{rows[0].TransferID, rows[1].TransferID})
+	rows, err = tradeStore.ListWalletTransfersByRefPrefix(ctx, "space-1", "account-2", prefix)
+	require.NoError(t, err)
+	require.Empty(t, rows)
+
+	var plan []struct{ Detail string }
+	require.NoError(t, tradeStore.DBForTest().Raw("EXPLAIN QUERY PLAN "+listWalletTransfersByRefPrefixSQL, "space-1", "account-1", prefix, prefix).Scan(&plan).Error)
+	require.NotEmpty(t, plan)
+	require.Contains(t, plan[0].Detail, "SEARCH", "按空间和执行账户走索引，不扫全表")
+	require.Contains(t, plan[0].Detail, "c_trading_account_id=?")
+}

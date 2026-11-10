@@ -13,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 	"github.com/mooyang-code/moox/packages/events"
+	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/tradeeventpb"
 	"google.golang.org/protobuf/proto"
@@ -36,29 +37,51 @@ type TargetOptions struct {
 // TargetWeightResolver converts the strategy-owned target weights into the
 // immutable quantity snapshot consumed by Trade.
 type TargetWeightResolver interface {
-	Resolve(context.Context, int64, *tradeeventpb.LogicalAccountTargetWeightRequested, string) (targetapp.WeightConversion, error)
+	Resolve(context.Context, *tradeeventpb.LogicalAccountTargetWeightRequested, string) (targetapp.WeightConversion, error)
 }
 
 // conversionAttentionDeliveries 是换算连续失败多少次才告警。
 const conversionAttentionDeliveries = 5
 
+// HandleTarget 处理一条策略目标消息：先校验并归一化（admitTarget），再换算数量、落库并唤醒执行器（acceptTarget）。
 func HandleTarget(
 	ctx context.Context,
 	delivery *jetstream.Delivery,
 	opts TargetOptions,
 ) jetstream.HandlerResult {
+	admitted, result, done := admitTarget(ctx, delivery, opts)
+	if done {
+		return result
+	}
+	return acceptTarget(ctx, delivery, opts, admitted)
+}
+
+// admittedTarget 是通过解码、授权、有效期和标的归一化检查的真实目标。
+type admittedTarget struct {
+	message *eventpb.EventMessage
+	request *tradeeventpb.LogicalAccountTargetWeightRequested
+	account store.LogicalAccountRecord
+}
+
+// admitTarget 解码并校验目标消息。done 为真表示消息已有结论（拒绝、重投、影子目标已记录），
+// 调用方直接返回 result；否则返回可以继续接收的目标。
+func admitTarget(
+	ctx context.Context,
+	delivery *jetstream.Delivery,
+	opts TargetOptions,
+) (admitted admittedTarget, result jetstream.HandlerResult, done bool) {
 	if delivery == nil {
-		return jetstream.HandlerResult{
+		return admittedTarget{}, jetstream.HandlerResult{
 			Decision: jetstream.TERM,
 			Err:      jetstream.ErrInvalidDelivery,
-		}
+		}, true
 	}
 	if opts.Store == nil {
-		return retryTarget(store.ErrInvalidRecord)
+		return admittedTarget{}, retryTarget(store.ErrInvalidRecord), true
 	}
 	registry, err := events.DefaultRegistry()
 	if err != nil {
-		return retryTarget(err)
+		return admittedTarget{}, retryTarget(err), true
 	}
 	message, payload, err := events.DecodeRaw(
 		registry,
@@ -70,36 +93,36 @@ func HandleTarget(
 	if err != nil {
 		var invalidPayload *events.PayloadValidationError
 		if errors.As(err, &invalidPayload) {
-			return targetRejection("invalid_contract", err)
+			return admittedTarget{}, targetRejection("invalid_contract", err), true
 		}
-		return targetRejection("invalid_event", err)
+		return admittedTarget{}, targetRejection("invalid_event", err), true
 	}
 	request, ok := payload.(*tradeeventpb.LogicalAccountTargetWeightRequested)
 	if !ok ||
 		message.GetEventName() != events.LogicalAccountTargetWeightRequested.Name() ||
 		message.GetEventVersion() != events.LogicalAccountTargetWeightRequested.Version() {
-		return jetstream.HandlerResult{
+		return admittedTarget{}, jetstream.HandlerResult{
 			Decision: jetstream.TERM,
 			Err:      fmt.Errorf("trade target: unexpected event payload %T", payload),
-		}
+		}, true
 	}
 
 	if opts.WeightResolver == nil {
-		return targetRejection("resolver_missing", errors.New("trade target weight resolver is required"))
+		return admittedTarget{}, targetRejection("resolver_missing", errors.New("trade target weight resolver is required")), true
 	}
 	// DecodeRaw has already enforced the complete session-scoped contract.
 	account, accountErr := opts.Store.GetLogicalAccount(ctx, message.GetSpaceId(), request.GetLogicalAccountId())
 	if accountErr != nil {
 		if errors.Is(accountErr, gorm.ErrRecordNotFound) {
-			return jetstream.HandlerResult{Decision: jetstream.TERM, Err: accountErr}
+			return admittedTarget{}, jetstream.HandlerResult{Decision: jetstream.TERM, Err: accountErr}, true
 		}
-		return retryTarget(accountErr)
+		return admittedTarget{}, retryTarget(accountErr), true
 	}
 	if account.ControlMode != "STRATEGY" {
-		return targetRejection("authorization_conflict", fmt.Errorf("%w: logical account is not strategy controlled", store.ErrTargetAuthorization))
+		return admittedTarget{}, targetRejection("authorization_conflict", fmt.Errorf("%w: 组合账户不是策略控制的", store.ErrTargetAuthorization)), true
 	}
 	if account.OwnerInstanceID != request.GetInstanceId() || account.OwnerSessionID != request.GetSessionId() {
-		return targetRejection("authorization_conflict", fmt.Errorf("%w: target session authorization", store.ErrConflict))
+		return admittedTarget{}, targetRejection("authorization_conflict", fmt.Errorf("%w: 目标所属的策略会话与账户当前授权不一致", store.ErrConflict)), true
 	}
 	now := time.Now().UTC()
 	if opts.Now != nil {
@@ -110,36 +133,47 @@ func HandleTarget(
 	// the validity window is still open; the executor will hold it in PENDING
 	// until effective_at and only terminally reject it after valid_until.
 	if !now.Before(request.GetValidUntil().AsTime()) {
-		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: store.ErrTargetExpired}
+		return admittedTarget{}, jetstream.HandlerResult{Decision: jetstream.TERM, Err: store.ErrTargetExpired}, true
 	}
 	// 上游标的 ID 不带市场后缀，回执和目标只保存标准化后的 Trade 内部 ID。
 	tradable, err := opts.Store.LogicalAccountMarkets(ctx, message.GetSpaceId(), account.LogicalAccountID)
 	if err != nil {
-		return retryTarget(err)
+		return admittedTarget{}, retryTarget(err), true
 	}
 	if len(tradable) == 0 && len(request.GetTargets()) > 0 {
 		// 组合还没有启用的成员，没有可交易的市场：等成员加入后重投，和原来等成员就绪一致。
-		return retryTarget(errors.New("组合账户还没有启用的成员"))
+		return admittedTarget{}, retryTarget(errors.New("组合账户还没有启用的成员")), true
 	}
 	request, err = normalizeTargetRequest(request, marketTypes(tradable))
 	if err != nil {
-		return targetRejection("invalid_contract", err)
+		return admittedTarget{}, targetRejection("invalid_contract", err), true
 	}
 	if request.GetShadow() {
-		return handleShadowTarget(ctx, opts, message.GetSpaceId(), message.GetOccurredAt().AsTime().UnixMilli(), request, now)
+		return admittedTarget{}, handleShadowTarget(ctx, opts, message.GetSpaceId(), request, now), true
 	}
 	if opts.Intake != nil && !opts.Intake() {
 		// 暂停期间不接收真实目标，但也不销毁它：它可能是策略暂停前刚发布、还在路上的目标。
 		// 留在消费者里延迟重投，放开后照常接收；已过有效期的由上面的过期检查终止。
-		return pausedTargetRetry()
+		return admittedTarget{}, pausedTargetRetry(), true
 	}
+	return admittedTarget{message: message, request: request, account: account}, jetstream.HandlerResult{}, false
+}
+
+// acceptTarget 把已通过校验的真实目标换算成数量快照，在账户锁内连同回执一起落库，成功后唤醒执行器。
+func acceptTarget(
+	ctx context.Context,
+	delivery *jetstream.Delivery,
+	opts TargetOptions,
+	admitted admittedTarget,
+) jetstream.HandlerResult {
+	message, request, account := admitted.message, admitted.request, admitted.account
 	requestHash, err := targetapp.RequestHash(request)
 	if err != nil {
 		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
 	}
 	if existing, lookupErr := opts.Store.GetTargetReceipt(ctx, message.GetSpaceId(), request.GetTargetId()); lookupErr == nil {
 		if existing.RequestHash != requestHash {
-			return targetRejection("receipt_conflict", fmt.Errorf("%w: target receipt request hash conflict", store.ErrConflict))
+			return targetRejection("receipt_conflict", fmt.Errorf("%w: 同一目标的回执请求哈希冲突", store.ErrConflict))
 		}
 		return jetstream.HandlerResult{Decision: jetstream.ACK}
 	} else if !errors.Is(lookupErr, gorm.ErrRecordNotFound) {
@@ -192,7 +226,7 @@ func HandleTarget(
 	}
 	if unsupportedInstrument != "" {
 		err = fmt.Errorf(
-			"%w: no enabled member supports instrument %s",
+			"%w: 没有启用的成员支持标的 %s",
 			store.ErrInvalidRecord, unsupportedInstrument,
 		)
 		if membersReady {
@@ -204,7 +238,7 @@ func HandleTarget(
 	if len(delisted) > 0 {
 		request = holdTargets(request, delisted)
 	}
-	now = time.Now().UTC()
+	now := time.Now().UTC()
 	if opts.Now != nil {
 		now = opts.Now().UTC()
 	}
@@ -229,7 +263,7 @@ func HandleTarget(
 		timeout = 10 * time.Second
 	}
 	resolveCtx, cancel := context.WithTimeout(ctx, timeout)
-	conversion, conversionErr := opts.WeightResolver.Resolve(resolveCtx, message.GetOccurredAt().AsTime().UnixMilli(), request, message.GetSpaceId())
+	conversion, conversionErr := opts.WeightResolver.Resolve(resolveCtx, request, message.GetSpaceId())
 	if conversionErr == nil {
 		conversionErr = resolveCtx.Err()
 	}
@@ -245,20 +279,7 @@ func HandleTarget(
 		return retryTarget(conversionErr)
 	}
 	record.Targets = append(record.Targets, conversion.QuantityTargets...)
-	// Keep the receipt column's JSON shape stable: an object keyed by
-	// instrument_id, with full quote evidence as the value when available.
-	referencePriceValue := make(map[string]targetapp.ReferencePriceEvidence, len(conversion.ReferencePriceEvidence))
-	for _, evidence := range conversion.ReferencePriceEvidence {
-		if evidence.InstrumentID != "" {
-			referencePriceValue[evidence.InstrumentID] = evidence
-		}
-	}
-	if len(referencePriceValue) == 0 {
-		for instrumentID, price := range conversion.ReferencePrices {
-			referencePriceValue[instrumentID] = targetapp.ReferencePriceEvidence{InstrumentID: instrumentID, Price: price}
-		}
-	}
-	referencePrices, marshalErr := json.Marshal(referencePriceValue)
+	referencePrices, marshalErr := json.Marshal(referencePriceByInstrument(conversion))
 	if marshalErr != nil {
 		return retryTarget(marshalErr)
 	}
@@ -295,7 +316,6 @@ func handleShadowTarget(
 	ctx context.Context,
 	opts TargetOptions,
 	spaceID string,
-	occurredAtMillis int64,
 	request *tradeeventpb.LogicalAccountTargetWeightRequested,
 	now time.Time,
 ) jetstream.HandlerResult {
@@ -304,7 +324,7 @@ func handleShadowTarget(
 		timeout = 10 * time.Second
 	}
 	resolveCtx, cancel := context.WithTimeout(ctx, timeout)
-	conversion, err := opts.WeightResolver.Resolve(resolveCtx, occurredAtMillis, request, spaceID)
+	conversion, err := opts.WeightResolver.Resolve(resolveCtx, request, spaceID)
 	if err == nil {
 		err = resolveCtx.Err()
 	}
@@ -315,23 +335,12 @@ func handleShadowTarget(
 		}
 		return retryTarget(err)
 	}
-	referencePrices := make(map[string]targetapp.ReferencePriceEvidence, len(conversion.ReferencePriceEvidence))
-	for _, evidence := range conversion.ReferencePriceEvidence {
-		if evidence.InstrumentID != "" {
-			referencePrices[evidence.InstrumentID] = evidence
-		}
-	}
-	if len(referencePrices) == 0 {
-		for instrumentID, price := range conversion.ReferencePrices {
-			referencePrices[instrumentID] = targetapp.ReferencePriceEvidence{InstrumentID: instrumentID, Price: price}
-		}
-	}
 	_, err = opts.Store.RecordShadowTarget(ctx, store.ShadowTargetRecord{
 		SpaceID: spaceID, TargetID: request.GetTargetId(), LogicalAccountID: request.GetLogicalAccountId(),
 		InstanceID: request.GetInstanceId(), SessionID: request.GetSessionId(), StrategyID: request.GetStrategyId(),
 		BarEndTime: request.GetBarEndTime().AsTime().UTC().UnixMilli(), ValidUntil: request.GetValidUntil().AsTime().UTC().UnixMilli(),
 		WeightsJSON: conversion.WeightsJSON, Equity: conversion.Equity.String(), EquitySourceTime: conversion.EquitySourceTime,
-		ReferencePricesJSON: mustMarshal(referencePrices), QuantityTargetsJSON: mustMarshal(conversion.QuantityTargets),
+		ReferencePricesJSON: mustMarshal(referencePriceByInstrument(conversion)), QuantityTargetsJSON: mustMarshal(conversion.QuantityTargets),
 		RecordedAt: now.UnixMilli(),
 	})
 	if err != nil {
@@ -341,6 +350,23 @@ func handleShadowTarget(
 		return retryTarget(err)
 	}
 	return jetstream.HandlerResult{Decision: jetstream.ACK}
+}
+
+// referencePriceByInstrument 整理回执里的参考价：按 instrument_id 为键的对象，有完整报价证据时值就是证据，
+// 没有时用换算给出的价格兜底，保持回执列的 JSON 形状稳定。
+func referencePriceByInstrument(conversion targetapp.WeightConversion) map[string]targetapp.ReferencePriceEvidence {
+	result := make(map[string]targetapp.ReferencePriceEvidence, len(conversion.ReferencePriceEvidence))
+	for _, evidence := range conversion.ReferencePriceEvidence {
+		if evidence.InstrumentID != "" {
+			result[evidence.InstrumentID] = evidence
+		}
+	}
+	if len(result) == 0 {
+		for instrumentID, price := range conversion.ReferencePrices {
+			result[instrumentID] = targetapp.ReferencePriceEvidence{InstrumentID: instrumentID, Price: price}
+		}
+	}
+	return result
 }
 
 func marketTypes(markets []string) []exchange.MarketType {
@@ -489,7 +515,7 @@ func pausedTargetRetry() jetstream.HandlerResult {
 	return jetstream.HandlerResult{
 		Decision: jetstream.RETRY,
 		Delay:    pausedTargetDelay,
-		Err:      errors.New("trade is paused: the target waits until resume or expiry"),
+		Err:      errors.New("交易已暂停：目标等待恢复或过期"),
 	}
 }
 

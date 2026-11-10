@@ -18,9 +18,9 @@ type capturingResolver struct {
 	received []*tradeeventpb.InstrumentWeightTarget
 }
 
-func (c *capturingResolver) Resolve(ctx context.Context, signalTime int64, request *tradeeventpb.LogicalAccountTargetWeightRequested, spaceID string) (targetapp.WeightConversion, error) {
+func (c *capturingResolver) Resolve(ctx context.Context, request *tradeeventpb.LogicalAccountTargetWeightRequested, spaceID string) (targetapp.WeightConversion, error) {
 	c.received = request.GetTargets()
-	return c.testWeightResolver.Resolve(ctx, signalTime, request, spaceID)
+	return c.testWeightResolver.Resolve(ctx, request, spaceID)
 }
 
 func seedDelistedInstrument(t *testing.T, tradeStore *store.Store, blocked bool) {

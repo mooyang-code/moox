@@ -44,7 +44,7 @@ type Pause func(ctx context.Context, spaceID, logicalAccountID, expectedState, e
 
 // Collect 把普通账户现货钱包里的资金归集回合约钱包；pending 为真表示还没完成，下一轮再调（实现须幂等）。
 // idempotencyKey 是这次风控事件的幂等键（风控减仓的动作号，形如 margin-<组合>-<时间>）：风控划转没有目标（target_id 为空串），
-// 实现必须按它做幂等，不能只按（组合、空目标、方向）判断，否则第二次风控事件的归集会被当成已经做过。
+// 实现必须按它做幂等（按引用号查全部划转记录，不限时间），不能只按（组合、空目标、方向）判断，否则第二次风控事件的归集会被当成已经做过。
 type Collect func(ctx context.Context, spaceID, logicalAccountID, idempotencyKey string, accounts []store.TradingAccountRecord) (pending bool, err error)
 
 // ErrTransferUnavailable 表示还没有接入钱包划转：监控只告警一次，请用户手动把现货钱包的资金划回合约钱包。
@@ -59,6 +59,11 @@ const defaultMaxSnapshotAge = 3 * time.Minute
 // createdAtSlackMillis：操作记录的创建时间只精确到秒（向下取整），组合“恢复过”要比它晚一秒以上才算。
 const createdAtSlackMillis = 1000
 
+// collectGiveUpAfter：风控减仓动作结束这么久、库里还没有它的任何归集记录，就不再归集。
+// “没有可归集资金”不落记录，进程内的“已处理”重启就丢；不设期限，重启后会对很久以前的减仓再归集一次，
+// 把用户这期间手动放进现货钱包的 USDT 划回合约钱包。已有记录的按引用号接着做，不受这个期限限制。
+const collectGiveUpAfter = 24 * time.Hour
+
 type Service struct {
 	Store   *store.Store
 	Reduce  Reduce
@@ -68,7 +73,8 @@ type Service struct {
 	// MaxSnapshotAge 是账户快照的最长允许年龄，默认 3 分钟。
 	MaxSnapshotAge time.Duration
 
-	mu        sync.Mutex
+	mu sync.Mutex
+	// collected 是已经归集完成（或无需归集、被放弃）的风控减仓动作号：只是进程内的缓存，权威状态在划转记录里。
 	collected map[string]struct{}
 	warned    map[string]struct{}
 }
@@ -427,16 +433,19 @@ func (s *Service) trigger(ctx context.Context, logical store.LogicalAccountRecor
 }
 
 // collectAfterReduce 把风控减仓做完之后的归集做完：普通账户的现货卖出所得在现货钱包里，要划回合约钱包补保证金。
-// 只处理由保证金风控暂停的组合的最近一次风控减仓；减仓还在跑就等，已处理过的记在进程内（重启后会再调一次，归集实现是幂等的）。
+// 看组合最近一次风控减仓动作：减仓还在跑就等；动作之后组合恢复过就不再为它归集；其余都按这个动作的动作号归集。
+// 不看暂停原因文字（撤单、外部成交、人工下单、手动暂停都会改写它）；这个动作是否已经归集完成、是否被交易所拒到放弃，
+// 由 Collect 按引用号查全部划转记录得出（不限时间，重启不丢），这里的 collected 只是进程内的缓存，省掉每分钟重复查余额。
+// 动作结束超过 collectGiveUpAfter 且库里没有它的任何归集记录时不再归集。
 // 归集的账户有一个没就绪就先不记完成，下一轮再来。
 func (s *Service) collectAfterReduce(ctx context.Context, logical store.LogicalAccountRecord, accounts []store.TradingAccountRecord) error {
-	// 只跟随“已发起减仓”的风控暂停；减仓待执行、或待执行期间回到安全线而没有减仓时，没有要归集的。
-	if !store.IsMarginPauseReduced(logical.PauseReason) {
-		return nil
-	}
 	action, err := s.lastMarginAction(ctx, logical)
 	if err != nil || action == nil || action.Status == string(operatordomain.StatusRunning) {
 		return err
+	}
+	// 动作之后组合恢复过（用户确认安全后恢复，时间记在库里）：旧动作的归集不再做，下一次风控触发有新的动作号。
+	if logical.ResumedAt > action.CreatedAt.UnixMilli()+createdAtSlackMillis {
+		return nil
 	}
 	s.mu.Lock()
 	_, done := s.collected[action.ActionID]
@@ -453,6 +462,18 @@ func (s *Service) collectAfterReduce(ctx context.Context, logical store.LogicalA
 			standard = append(standard, account)
 		}
 	}
+	if len(standard) > 0 && s.now().Sub(action.UpdatedAt) > collectGiveUpAfter {
+		recorded, err := s.hasCollectRecords(ctx, logical.SpaceID, action.ActionID, standard)
+		if err != nil {
+			return err
+		}
+		if !recorded {
+			s.warnOnce("collect-give-up|"+action.ActionID, fmt.Sprintf("组合 %s 的风控减仓 %s 于 %s 结束，已超过 %d 小时且没有归集记录，不再归集；如现货钱包里还有 USDT，请手动划回合约钱包",
+				logical.LogicalAccountID, action.ActionID, action.UpdatedAt.Format("2006-01-02 15:04:05"), int(collectGiveUpAfter.Hours())))
+			s.markCollected(action.ActionID)
+			return nil
+		}
+	}
 	if len(standard) > 0 {
 		pending, err := false, ErrTransferUnavailable
 		if s.Collect != nil {
@@ -467,11 +488,29 @@ func (s *Service) collectAfterReduce(ctx context.Context, logical store.LogicalA
 			return nil
 		}
 	}
+	s.markCollected(action.ActionID)
+	return nil
+}
+
+func (s *Service) markCollected(actionID string) {
 	s.mu.Lock()
 	if s.collected == nil {
 		s.collected = make(map[string]struct{})
 	}
-	s.collected[action.ActionID] = struct{}{}
+	s.collected[actionID] = struct{}{}
 	s.mu.Unlock()
-	return nil
+}
+
+// hasCollectRecords 报告这个风控减仓动作在给定账户上是否有过归集记录（按引用号前缀查，不限时间）。
+func (s *Service) hasCollectRecords(ctx context.Context, spaceID, actionID string, accounts []store.TradingAccountRecord) (bool, error) {
+	for _, account := range accounts {
+		rows, err := s.Store.ListWalletTransfersByRefPrefix(ctx, spaceID, account.TradingAccountID, fmt.Sprintf("%s:%s:", actionID, store.TransferToFutures))
+		if err != nil {
+			return false, err
+		}
+		if len(rows) > 0 {
+			return true, nil
+		}
+	}
+	return false, nil
 }

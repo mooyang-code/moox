@@ -14,7 +14,6 @@ func TestTradeDelistMethodsCallerBoundary(t *testing.T) {
 		"ListInstrumentHolders":  {"callback-dispatcher": true, "console": true, "moox-cli": true},
 		"FlattenInstrument":      {"callback-dispatcher": true},
 		"GetOperatorAction":      {"callback-dispatcher": true, "console": true, "moox-cli": true},
-		"ReduceLogicalAccount":   {"console": true},
 		"SummarizeAccountPnl":    {"console": true, "moox-cli": true},
 		"ListOperatorActions":    {"console": true, "moox-cli": true},
 	}
@@ -30,7 +29,7 @@ func TestTradeDelistMethodsCallerBoundary(t *testing.T) {
 			t.Errorf("%s 应当是只读方法", method)
 		}
 	}
-	for _, method := range []string{"BlockInstrument", "UnblockInstrument", "FlattenInstrument", "ReduceLogicalAccount"} {
+	for _, method := range []string{"BlockInstrument", "UnblockInstrument", "FlattenInstrument"} {
 		if c.ReadOnly(service, method) {
 			t.Errorf("%s 不是只读方法", method)
 		}

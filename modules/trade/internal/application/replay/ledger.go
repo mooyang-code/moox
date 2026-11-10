@@ -256,7 +256,7 @@ func (s *Service) Advance(ctx context.Context, req AdvanceRequest) (Result, erro
 	if err != nil {
 		return Result{}, err
 	}
-	result, orders, err := state.settle(req)
+	result, err := state.settle(req)
 	if err != nil {
 		return Result{}, err
 	}
@@ -268,19 +268,12 @@ func (s *Service) Advance(ctx context.Context, req AdvanceRequest) (Result, erro
 	if err != nil {
 		return Result{}, err
 	}
-	write := store.ReplayPeriodWrite{Period: store.ReplayPeriodRecord{
+	period := store.ReplayPeriodRecord{
 		ReplayID: req.ReplayID, Period: req.Period, Kind: req.Decision.Kind, RequestHash: hash, EquityBefore: result.EquityBefore,
 		Equity: result.Equity, Cash: result.Cash, PositionsJSON: positionsJSON, Fees: result.Fees, Turnover: result.Turnover,
 		ResultJSON: string(resultJSON), RecordedAt: s.now().UnixMilli(),
-	}}
-	for _, order := range orders {
-		write.Orders = append(write.Orders, store.ReplayOrderRecord{
-			ReplayID: req.ReplayID, OrderID: order.OrderID, Period: req.Period, InstrumentID: order.InstrumentID, Side: order.Side,
-			RequestedQuantity: order.RequestedQuantity, FilledQuantity: order.FilledQuantity, Price: order.Price, Fee: order.Fee,
-			Status: order.Status, Reason: order.Reason,
-		})
 	}
-	if err := s.Store.WriteReplayPeriod(ctx, write); err != nil {
+	if err := s.Store.WriteReplayPeriod(ctx, period); err != nil {
 		if errors.Is(err, store.ErrReplayOutOfOrder) {
 			return Result{}, fmt.Errorf("%w: %v", ErrConflict, err)
 		}
@@ -397,25 +390,25 @@ func (l *ledgerState) equity(quotes map[string]Quote) (shared.Decimal, error) {
 	return total, nil
 }
 
-// settle 在内存状态上撮合一期，返回结果与订单；出错时状态不应被使用（调用方不持久化）。
-func (l *ledgerState) settle(req AdvanceRequest) (Result, []Order, error) {
+// settle 在内存状态上撮合一期，返回结果（订单在结果里）；出错时状态不应被使用（调用方不持久化）。
+func (l *ledgerState) settle(req AdvanceRequest) (Result, error) {
 	equityBefore, err := l.equity(req.Quotes)
 	if err != nil {
-		return Result{}, nil, err
+		return Result{}, err
 	}
 	var orders []Order
 	fees, turnover := shared.Zero(), shared.Zero()
 	if req.Decision.Kind == KindUpdateTarget {
 		orders, fees, turnover, err = l.rebalance(req)
 		if err != nil {
-			return Result{}, nil, err
+			return Result{}, err
 		}
 	}
 	// 现金按 12 位小数截断后持久化：多期的费用与滑点乘积不会让小数位数无限增长。
 	l.cash = l.cash.RoundDown(12)
 	equityAfter, err := l.equity(req.Quotes)
 	if err != nil {
-		return Result{}, nil, err
+		return Result{}, err
 	}
 	result := Result{
 		ReplayID: req.ReplayID, Period: req.Period, Kind: req.Decision.Kind, EquityBefore: equityBefore.RoundDown(moneyScale).String(),
@@ -437,7 +430,7 @@ func (l *ledgerState) settle(req AdvanceRequest) (Result, []Order, error) {
 		quantity := l.positions[instrument]
 		result.Holdings = append(result.Holdings, Holding{InstrumentID: instrument, Quantity: quantity.String(), Mark: mark.String(), Value: quantity.Mul(mark).RoundDown(moneyScale).String()})
 	}
-	return result, orders, nil
+	return result, nil
 }
 
 // sizingEquity 是换算目标数量用的权益：现金加持仓按成交价（有的话）估值。目标权重是相对「成交时」权益的比例，

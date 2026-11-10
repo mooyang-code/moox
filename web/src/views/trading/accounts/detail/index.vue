@@ -99,7 +99,7 @@
               {{ snapshotCount }}<small v-if="logical.control_mode === 1">/ {{ targetCoins }}</small>
             </div>
             <div v-if="logical.control_mode === 1" class="d">{{ offCount }} 个未到位</div>
-            <div v-else class="d">现货和永续合计</div>
+            <div v-else-if="positionTotalText" class="d">{{ positionTotalText }}</div>
           </div>
         </div>
 
@@ -328,13 +328,12 @@ import ConfirmDialog from "@/components/trade-confirm/confirm-dialog.vue";
 import EnvMark from "@/components/trade-confirm/env-mark.vue";
 import { environmentFromQuery, environmentLabel, logicalEnvironment } from "@/components/trade-confirm/environment";
 import { fmtMoney, fmtPercent, fmtQty, fmtSigned, pnlClass } from "../shared/format";
-import { instrumentName, marketLabel } from "../shared/markets";
+import { instrumentName, isAShareLogical, marketLabel, marketsTotalText } from "../shared/markets";
 import { loadPositionSnapshot, positionCount, type PositionSnapshot } from "../shared/position-snapshot";
 import { loadStrategyLinks, type StrategyLink } from "../shared/strategy-link";
 import { useActionTracker } from "./action-tracker";
 import { detailContextKey, type OrderPrefill } from "./context";
 import {
-  actionTypeLabels,
   detailTabs,
   equityChangeOf,
   flattenPreview,
@@ -345,6 +344,7 @@ import {
   tabFromQuery,
   targetExpired
 } from "./detail-model";
+import { operatorActionTypeText } from "./operator-actions-model";
 import FillsTab from "./fills-tab.vue";
 import LedgerTab from "./ledger-tab.vue";
 import OrderDialog from "./order-dialog.vue";
@@ -410,6 +410,12 @@ const coinRows = computed(() =>
   })
 );
 const snapshotCount = computed(() => positionCount(snapshot.value));
+// 成员全停用时市场并集为空，按结算币判断是不是 A 股；都判断不了就不显示
+const positionTotalText = computed(() => {
+  const current = logical.value;
+  if (!current) return "";
+  return marketsTotalText(current.markets) || (isAShareLogical(current) ? "股票合计" : "");
+});
 const targetCoins = computed(() => targetCoinCount(target.value?.targets || []));
 const offCount = computed(() => coinRows.value.filter(row => row.state !== "ok").length);
 const membersEditable = computed(() => logical.value?.automation_state === "PAUSED");
@@ -424,10 +430,10 @@ const flattenResult = computed(() => parseFlattenResult(tracker.action.value || 
 const actionTitle = computed(() => {
   const action = tracker.action.value;
   if (!action) return "";
-  const name = actionTypeLabels[action.action_type] || "人工操作";
+  const name = operatorActionTypeText(action.action_type);
   if (action.status === "RUNNING") return `${name}进行中`;
   if (action.status === "COMPLETED")
-    return ["SUBMIT_ORDER", "MANUAL_ORDER"].includes(action.action_type) ? `${name}：提交阶段完成` : `${name}完成`;
+    return ["SUBMIT_ORDER", "MANUAL_ORDER"].includes(action.action_type) ? `${name}：订单已提交` : `${name}完成`;
   return `${name}${actionStateLabels[action.status] || ""}`;
 });
 const actionAlertType = computed(() => {

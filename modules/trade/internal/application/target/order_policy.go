@@ -162,26 +162,27 @@ func nextHourRetryDelay(now time.Time) time.Duration {
 }
 
 // submittedNotional 是一笔已提交目标子单计入每小时上限的金额：结束的单按实际成交额，没结束的按全部数量 × 参考价。
-func submittedNotional(row store.SubmittedTargetOrder) shared.Decimal {
+// 金额解析失败返回错误：按 0 计会让上限静默放宽。
+func submittedNotional(row store.SubmittedTargetOrder) (shared.Decimal, error) {
 	price, err := shared.ParseDecimal(row.ReferencePrice)
 	if err != nil {
-		return shared.Zero()
+		return shared.Zero(), fmt.Errorf("%s 的已提交子单参考价 %q 无法解析：%w", row.InstrumentID, row.ReferencePrice, err)
 	}
 	if orderdomain.State(row.State).Terminal() {
 		filled, filledErr := shared.ParseDecimal(row.FilledQuantity)
 		if filledErr != nil {
-			return shared.Zero()
+			return shared.Zero(), fmt.Errorf("%s 的已提交子单成交量 %q 无法解析：%w", row.InstrumentID, row.FilledQuantity, filledErr)
 		}
 		if average, averageErr := shared.ParseDecimal(row.AveragePrice); averageErr == nil && average.Cmp(shared.Zero()) > 0 {
 			price = average
 		}
-		return filled.Mul(price)
+		return filled.Mul(price), nil
 	}
 	quantity, err := shared.ParseDecimal(row.Quantity)
 	if err != nil {
-		return shared.Zero()
+		return shared.Zero(), fmt.Errorf("%s 的已提交子单数量 %q 无法解析：%w", row.InstrumentID, row.Quantity, err)
 	}
-	return quantity.Mul(price)
+	return quantity.Mul(price), nil
 }
 
 // hourlyUsed 返回标的本自然小时已提交的金额，第一次调用时按订单表汇总一次。
@@ -194,7 +195,11 @@ func (env *laneEnv) hourlyUsed(ctx context.Context, instrumentID string) (shared
 		}
 		env.hourly = make(map[string]shared.Decimal)
 		for _, row := range rows {
-			env.hourly[row.InstrumentID] = env.hourly[row.InstrumentID].Add(submittedNotional(row))
+			notional, err := submittedNotional(row)
+			if err != nil {
+				return shared.Zero(), err
+			}
+			env.hourly[row.InstrumentID] = env.hourly[row.InstrumentID].Add(notional)
 		}
 		env.hourlyLoaded = true
 	}
@@ -255,12 +260,16 @@ func (env *laneEnv) tooSmallToPlace(candidate laneAction, quantity, price shared
 		return true
 	}
 	belowExchange, err := belowMinimumNotional(quantity, price, minNotional)
-	fullClose := candidate.reducing && exchange.RuleFor(candidate.instrument.MarketType).ReduceOnly &&
-		quantity.Cmp(candidate.member.positions[candidate.instrument.InstrumentID].Abs()) == 0
-	if err != nil || (belowExchange && !fullClose) {
+	if err != nil || (belowExchange && !isFullClose(candidate, quantity)) {
 		return true
 	}
 	return env.belowConfiguredMinimum(candidate, quantity, price)
+}
+
+// isFullClose 判断这一笔是不是合约全平：减仓且数量等于这个成员的全部持仓。全平只查最小数量，否则剩余仓位永远平不掉。
+func isFullClose(candidate laneAction, quantity shared.Decimal) bool {
+	return candidate.reducing && exchange.RuleFor(candidate.instrument.MarketType).ReduceOnly &&
+		quantity.Cmp(candidate.member.positions[candidate.instrument.InstrumentID].Abs()) == 0
 }
 
 // splitFraction 由种子算出 [0.5, 1] 之间的比例（精确小数，千分位）。同一个种子永远得到同一个比例，结果可复现。

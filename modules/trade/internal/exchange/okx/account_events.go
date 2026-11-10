@@ -15,9 +15,15 @@ import (
 // privateHandshakeTimeout 是私有流拨号、登录与订阅确认阶段的统一期限。
 var privateHandshakeTimeout = 15 * time.Second
 
+// 私有流空闲多久发一次 ping，以及 ping 后等待 pong 的期限；测试里会改短。
+var (
+	privateIdleTimeout = 25 * time.Second
+	privatePongTimeout = 5 * time.Second
+)
+
 func (a *Adapter) Subscribe(ctx context.Context, handler execution.AccountEventHandler) error {
 	if handler == nil {
-		return rejected("private event handler is required", nil)
+		return exchange.Rejected("private event handler is required", nil)
 	}
 	// 拨号（含 HTTP Upgrade）、登录与订阅确认共用一个继承调用方取消的期限
 	handshakeCtx, cancelHandshake := context.WithTimeout(ctx, privateHandshakeTimeout)
@@ -88,28 +94,13 @@ func (a *Adapter) privateHandshake(connection *websocket.Conn) ([][]byte, error)
 	return expectOKXSubscribeAcks(connection, channels)
 }
 
+// receivePrivateMessage 读一条私有流消息；空闲超过 privateIdleTimeout 就发 ping，pong 在 privatePongTimeout 内必须回来。
 func (a *Adapter) receivePrivateMessage(
 	ctx context.Context,
 	connection *websocket.Conn,
 	handler execution.AccountEventHandler,
 ) error {
-	return a.receivePrivateMessageWithTimeouts(
-		ctx,
-		connection,
-		handler,
-		25*time.Second,
-		5*time.Second,
-	)
-}
-
-func (a *Adapter) receivePrivateMessageWithTimeouts(
-	ctx context.Context,
-	connection *websocket.Conn,
-	handler execution.AccountEventHandler,
-	idleTimeout time.Duration,
-	pongTimeout time.Duration,
-) error {
-	_ = connection.SetReadDeadline(time.Now().Add(idleTimeout))
+	_ = connection.SetReadDeadline(time.Now().Add(privateIdleTimeout))
 	var payload []byte
 	err := websocket.Message.Receive(connection, &payload)
 	if err == nil {
@@ -125,11 +116,11 @@ func (a *Adapter) receivePrivateMessageWithTimeouts(
 	if !ok || !timeout.Timeout() {
 		return &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: err}
 	}
-	_ = connection.SetWriteDeadline(time.Now().Add(pongTimeout))
+	_ = connection.SetWriteDeadline(time.Now().Add(privatePongTimeout))
 	if err := websocket.Message.Send(connection, "ping"); err != nil {
 		return &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: err}
 	}
-	_ = connection.SetReadDeadline(time.Now().Add(pongTimeout))
+	_ = connection.SetReadDeadline(time.Now().Add(privatePongTimeout))
 	for {
 		if err := websocket.Message.Receive(connection, &payload); err != nil {
 			if ctx.Err() != nil {
@@ -169,7 +160,7 @@ func expectOKXSubscribeAcks(
 			} `json:"arg"`
 		}
 		if err := json.Unmarshal(raw, &payload); err != nil {
-			return nil, rejected("decode private subscription frame", err)
+			return nil, exchange.Rejected("decode private subscription frame", err)
 		}
 		if payload.Event == "" && payload.Arg.Channel != "" {
 			buffered = append(buffered, append([]byte(nil), raw...))
@@ -180,7 +171,7 @@ func expectOKXSubscribeAcks(
 			return nil, classifyOKXCode(payload.Code, payload.Msg)
 		}
 		if _, found := pending[payload.Arg.Channel]; !found {
-			return nil, rejected(
+			return nil, exchange.Rejected(
 				"unexpected or duplicate private channel acknowledgement",
 				nil,
 			)
@@ -239,7 +230,7 @@ func (a *Adapter) dispatchPrivate(
 ) error {
 	var message privateMessage
 	if err := json.Unmarshal(payload, &message); err != nil {
-		return rejected("decode private event", err)
+		return exchange.Rejected("decode private event", err)
 	}
 	if message.Event == "error" {
 		return classifyOKXCode(message.Code, message.Msg)
@@ -263,7 +254,7 @@ func (a *Adapter) dispatchPrivate(
 			FillTime   string `json:"fillTime"`
 		}
 		if err := json.Unmarshal(message.Data, &rows); err != nil {
-			return rejected("decode private orders", err)
+			return exchange.Rejected("decode private orders", err)
 		}
 		for _, row := range rows {
 			order, err := a.order(row.orderPayload)
@@ -294,18 +285,31 @@ func (a *Adapter) dispatchPrivate(
 	case "positions":
 		var rows []positionPayload
 		if err := json.Unmarshal(message.Data, &rows); err != nil {
-			return rejected("decode private positions", err)
+			return exchange.Rejected("decode private positions", err)
 		}
 		for _, row := range rows {
 			if row.PosSide != "" && row.PosSide != "net" {
-				return rejected("hedge position mode is unsupported", nil)
+				return exchange.Rejected("hedge position mode is unsupported", nil)
 			}
-			if row.MgnMode != "cross" {
-				return rejected("isolated margin is unsupported", nil)
-			}
-			contracts, err := decimalOrZero(row.Pos)
+			contracts, err := exchange.DecimalOrZero(row.Pos)
 			if err != nil {
 				return err
+			}
+			if row.MgnMode != "cross" {
+				// 逐仓持仓只标记、不解析其余字段（也不换算张数）：没有仓位的逐仓行不算。
+				if contracts.IsZero() {
+					continue
+				}
+				isolated := exchange.Position{
+					Market: a.config.Market(), TradingAccountID: a.config.TradingAccountID,
+					ExchangeSymbol: row.InstID, PositionSide: exchange.PositionSideNet,
+					SignedQuantity: contracts, MarginMode: exchange.MarginModeIsolated,
+					ExchangeUpdatedAt: millisString(row.UTime),
+				}
+				if err := handler.OnPosition(ctx, isolated); err != nil {
+					return err
+				}
+				continue
 			}
 			quantity, err := a.toBaseQuantity(row.InstID, contracts)
 			if err != nil {
@@ -318,28 +322,28 @@ func (a *Adapter) dispatchPrivate(
 				SignedQuantity: quantity, MarginMode: exchange.MarginModeCross,
 				ExchangeUpdatedAt: millisString(row.UTime),
 			}
-			position.EntryPrice, err = decimalOrZero(row.AvgPx)
+			position.EntryPrice, err = exchange.DecimalOrZero(row.AvgPx)
 			if err == nil {
-				position.MarkPrice, err = decimalOrZero(row.MarkPx)
+				position.MarkPrice, err = exchange.DecimalOrZero(row.MarkPx)
 			}
 			if err == nil {
-				position.Leverage, err = decimalOrZero(row.Lever)
+				position.Leverage, err = exchange.DecimalOrZero(row.Lever)
 			}
 			if err == nil {
 				usedMargin := row.IMR
 				if usedMargin == "" {
 					usedMargin = row.Margin
 				}
-				position.UsedMargin, err = decimalOrZero(usedMargin)
+				position.UsedMargin, err = exchange.DecimalOrZero(usedMargin)
 			}
 			if err == nil {
-				position.LiquidationPrice, err = decimalOrZero(row.LiqPx)
+				position.LiquidationPrice, err = exchange.DecimalOrZero(row.LiqPx)
 			}
 			if err == nil {
-				position.UnrealizedPnL, err = decimalOrZero(row.Upl)
+				position.UnrealizedPnL, err = exchange.DecimalOrZero(row.Upl)
 			}
 			if err == nil {
-				position.RealizedPnL, err = decimalOrZero(row.Realized)
+				position.RealizedPnL, err = exchange.DecimalOrZero(row.Realized)
 			}
 			if err != nil {
 				return err
@@ -351,7 +355,7 @@ func (a *Adapter) dispatchPrivate(
 	case "account":
 		var rows []balanceEnvelope
 		if err := json.Unmarshal(message.Data, &rows); err != nil || len(rows) == 0 {
-			return rejected("decode private account", err)
+			return exchange.Rejected("decode private account", err)
 		}
 		snapshot, err := a.balanceSnapshot(rows[0])
 		if err != nil {

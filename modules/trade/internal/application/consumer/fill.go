@@ -31,10 +31,28 @@ type Source struct {
 	Kind             FillOrigin
 }
 
+// AwaitingBalanceReason 是成交释放预留后、余额快照尚未确认期间持久化的账户未就绪原因。
+const AwaitingBalanceReason = "成交待余额同步确认"
+
 type Reducer struct {
 	Store   *store.Store
 	Now     func() time.Time
 	Enqueue func(string)
+}
+
+// FinishOrderTx 在调用方的事务里按给定终态结束订单：写终态和结束时间、清零剩余资金预留、升版本；
+// reason 非空时覆盖订单的原因字段，为空则保持原值。
+// 本地强制结束订单（标的下架、交易所拒单或过期、收盘撤单）都走这里，调用方负责事先确认订单还没结束。
+func (r *Reducer) FinishOrderTx(tx *store.Tx, record store.OrderRecord, next order.State, reason string) error {
+	expected := record.Version
+	record.State = string(next)
+	if reason != "" {
+		record.RejectReason = reason
+	}
+	record.RemainingReservedQuantity = "0"
+	record.FinishedAt = r.now().UnixMilli()
+	record.Version++
+	return tx.UpdateOrder(record, expected)
 }
 
 func (r *Reducer) ConfirmCancel(
@@ -52,7 +70,8 @@ func (r *Reducer) ConfirmCancel(
 			return err
 		}
 		state := order.State(record.State)
-		if state == order.Canceled || state == order.PartiallyCanceled {
+		// 已经结束的订单（含刚被同轮成交补成已成交的）不再迁移：交易所说它没了，本地已经有结论。
+		if state.Terminal() {
 			return nil
 		}
 		quantity, err := shared.ParseDecimal(record.Quantity)
@@ -232,7 +251,7 @@ func markBalancePendingForLiveFill(tx *store.Tx, source Source, fill exchange.Fi
 		return err
 	}
 	return tx.UpdateTradingAccountReadiness(
-		source.SpaceID, source.TradingAccountID, false, fill.TradedAt.UnixMilli(), "fill awaiting balance sync",
+		source.SpaceID, source.TradingAccountID, false, fill.TradedAt.UnixMilli(), AwaitingBalanceReason,
 	)
 }
 
@@ -292,13 +311,24 @@ func applyOrderFill(
 		Spec: order.OrderSpec{
 			ClientOrderSpec: order.ClientOrderSpec{Quantity: quantity},
 		},
+		ExchangeOrderID:  record.ExchangeOrderID,
 		FilledQuantity:   filled,
 		AverageFillPrice: averagePrice,
 		AppliedFills:     make(map[shared.FillID]shared.Decimal),
 		State:            order.State(record.State),
 		Version:          record.Version,
 	}
-	if _, err := aggregate.ApplyFill(order.Fill{
+	// 待提交的订单收到成交，说明交易所已经受理了它（重发前的请求其实成功了）：先认领成挂单，再入账。
+	if aggregate.State == order.Pending {
+		if _, err := aggregate.Claim(fill.ExchangeOrderID); err != nil {
+			return err
+		}
+	}
+	applyFill := aggregate.ApplyFill
+	if order.IsSyntheticOrderID(record.OrderID) {
+		applyFill = aggregate.ApplySyntheticFill
+	}
+	if _, err := applyFill(order.Fill{
 		ID: shared.FillID(fillID), Quantity: fill.Quantity,
 	}); err != nil {
 		return err
@@ -311,10 +341,16 @@ func applyOrderFill(
 	if err != nil {
 		return err
 	}
+	// 合成外部订单收到后到的成交会放大数量；其余订单数量不变，保持库里的原样。
+	if aggregate.Spec.Quantity.Cmp(quantity) != 0 {
+		record.Quantity = aggregate.Spec.Quantity.String()
+	}
 	record.FilledQuantity = aggregate.FilledQuantity.String()
+	record.ExchangeOrderID = aggregate.ExchangeOrderID
 	record.AveragePrice = aggregate.AverageFillPrice.String()
 	record.State = string(aggregate.State)
-	record.Version = aggregate.Version
+	// 一次入账只写一次库：认领加入账在领域模型里是两次迁移，库里的乐观锁版本只加一。
+	record.Version++
 	return nil
 }
 

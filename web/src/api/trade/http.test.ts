@@ -10,7 +10,6 @@ vi.mock("@arco-design/web-vue", () => ({ Message: { error: messageError } }));
 import {
   callTrade,
   isTradeAdoptionRequired,
-  isTradeInvalidParam,
   isTradeNotFound,
   isTradeSessionNotReady,
   TradeResponseError,
@@ -81,7 +80,6 @@ describe("Trade response errors", () => {
     const error = await callTrade("console", "UpdateTradingAccount", {}, { silent: true }).catch(cause => cause);
     expect(error.message).toBe("执行账户的参数不合法");
     expect(error.response.ret_info.msg, "原始消息保留").toBe("trade: invalid trading account");
-    expect(isTradeInvalidParam(error)).toBe(true);
     expect(isTradeNotFound(error)).toBe(false);
     expect(isTradeNotFound(new TradeResponseError({ ret_info: { code: "NOT_FOUND", msg: "" } }))).toBe(true);
     expect(new TradeResponseError({ ret_info: { code: 1, msg: "执行账户上已有持仓或挂单" } }).message).toBe(
@@ -106,7 +104,6 @@ describe("Trade response errors", () => {
     expect(text("trade store: conflict")).toBe("数据已经被修改，刷新后再试");
     expect(text("trade: invalid order transition")).toBe("trade: invalid order transition");
     expect(text("trade: invalid order: quantity must be positive")).toBe("订单参数不合法（quantity must be positive）");
-    expect(text("trade order: Exchange account ownership mismatch")).toBe("执行账户不属于当前空间");
     expect(text("trade: invalid order specification")).toBe("订单参数不合法");
   });
 

@@ -118,7 +118,7 @@ type Document struct {
 // BNBAsset 是 BNB 保留涉及的资产。
 const BNBAsset = "BNB"
 
-// BNBReserveSlack 是 BNB 补买的容差：BNB 市值低于“保留金额 − 10”才补买。
+// BNBReserveSlack 是 BNB 补买的容差：统一账户 BNB 市值低于“保留金额 − 10”才补买；普通账户只补现货钱包，目标和容差都减半（保留金额的一半、5）。
 var BNBReserveSlack = shared.MustDecimal("10")
 
 const (
@@ -169,9 +169,9 @@ func (d Document) validate(settlementAsset string) (Settings, error) {
 	if settings.BNBReserveAmount.IsNegative() {
 		return Settings{}, fmt.Errorf("BNB 保留金额不能为负")
 	}
-	// 市值低于“保留金额 − 10”才补买：保留金额不大于 10 时永远不会补买，换算目标时却一直扣着缺口。
+	// 统一账户市值低于“保留金额 − 10”、普通账户现货钱包市值低于“保留金额 ÷ 2 − 5”才补买：保留金额不大于 10 时永远不会补买，换算目标时却一直扣着缺口。
 	if amount := settings.BNBReserveAmount; amount.Cmp(shared.Zero()) > 0 && amount.Cmp(BNBReserveSlack) <= 0 {
-		return Settings{}, fmt.Errorf("BNB 保留金额要大于 %s：市值低于保留金额减 %s 才会补买，不大于 %s 的设置永远不会补买", BNBReserveSlack, BNBReserveSlack, BNBReserveSlack)
+		return Settings{}, fmt.Errorf("BNB 保留金额要大于 %s：统一账户 BNB 市值低于保留金额减 %s、普通账户现货钱包 BNB 市值低于保留金额的一半减 5 才会补买，不大于 %s 的设置永远不会补买", BNBReserveSlack, BNBReserveSlack, BNBReserveSlack)
 	}
 	for _, item := range []struct {
 		raw, name string

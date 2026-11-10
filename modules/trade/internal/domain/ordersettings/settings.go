@@ -5,11 +5,13 @@ package ordersettings
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 )
 
 // ThresholdMode 是调仓阈值模式。
@@ -137,10 +139,10 @@ func (d Document) Validate() (Settings, error) {
 	if settings.MinNotionalSwap, err = nonNegative(d.MinNotionalSwap, defaultMinNotionalSwap, "合约最小下单额"); err != nil {
 		return Settings{}, err
 	}
-	if settings.HourlyCapSpot, err = hourlyCaps(d.HourlyCapSpot, "SPOT", "现货"); err != nil {
+	if settings.HourlyCapSpot, err = hourlyCaps(d.HourlyCapSpot, "SPOT", "现货", true); err != nil {
 		return Settings{}, err
 	}
-	if settings.HourlyCapSwap, err = hourlyCaps(d.HourlyCapSwap, "SWAP", "合约"); err != nil {
+	if settings.HourlyCapSwap, err = hourlyCaps(d.HourlyCapSwap, "SWAP", "合约", false); err != nil {
 		return Settings{}, err
 	}
 	if settings.MaxChildNotional, err = decimalOr(d.MaxChildNotional, defaultMaxChildNotional, "单笔上限"); err != nil {
@@ -246,10 +248,16 @@ func (s Settings) Document() Document {
 	return document
 }
 
+// usesSpotItems 报告市场用设置里的“现货”项：持仓来自余额的市场（现货、A 股股票）；合约用“合约”项。
+func usesSpotItems(market string) bool {
+	return exchange.RuleFor(strings.ToUpper(market)).PositionFromBalance
+}
+
 // HourlyCap 返回标的的每小时累计下单金额上限：先找标的自己的设置，再找 "*"；没有设置返回 false（不限）。
+// 现货和股票用现货项，合约用合约项。
 func (s Settings) HourlyCap(market, instrumentID string) (shared.Decimal, bool) {
 	caps := s.HourlyCapSwap
-	if strings.EqualFold(market, "SPOT") {
+	if usesSpotItems(market) {
 		caps = s.HourlyCapSpot
 	}
 	if limit, ok := caps[strings.ToUpper(instrumentID)]; ok {
@@ -264,9 +272,9 @@ func (s Settings) HasHourlyCaps() bool {
 	return len(s.HourlyCapSpot) > 0 || len(s.HourlyCapSwap) > 0
 }
 
-// MinNotional 返回市场的最小下单额配置值。
+// MinNotional 返回市场的最小下单额配置值：现货和股票用现货项，合约用合约项。
 func (s Settings) MinNotional(market string) shared.Decimal {
-	if strings.EqualFold(market, "SPOT") {
+	if usesSpotItems(market) {
 		return s.MinNotionalSpot
 	}
 	return s.MinNotionalSwap
@@ -303,16 +311,25 @@ func nonNegative(raw, fallback, name string) (shared.Decimal, error) {
 	return value, nil
 }
 
+// stockCode 是股票内部标的 ID 的格式：代码加交易所后缀，如 600519.XSHG、000001.XSHE、430047.XBSE。
+var stockCode = regexp.MustCompile(`^[0-9A-Z]+\.[A-Z]+$`)
+
 // hourlyCaps 校验每小时上限：键必须是 "*" 或本市场的内部标的 ID（大小写不限，统一转大写后不能重复），值大于 0。
-func hourlyCaps(raw map[string]string, market, label string) (map[string]shared.Decimal, error) {
+// allowStock 为真时（现货那一组，股票也用它）还接受股票代码格式的键。
+func hourlyCaps(raw map[string]string, market, label string, allowStock bool) (map[string]shared.Decimal, error) {
 	if len(raw) == 0 {
 		return nil, nil
 	}
 	caps := make(map[string]shared.Decimal, len(raw))
 	for key, value := range raw {
 		normalized := strings.ToUpper(strings.TrimSpace(key))
-		if normalized != "*" && !strings.HasSuffix(normalized, "-"+market) {
-			return nil, fmt.Errorf("%s每小时上限的键 %q 必须是 * 或形如 BTC-USDT-%s 的内部标的 ID", label, key, market)
+		validKey := normalized == "*" || strings.HasSuffix(normalized, "-"+market) || allowStock && stockCode.MatchString(normalized)
+		if !validKey {
+			hint := "BTC-USDT-" + market
+			if allowStock {
+				hint += " 或 600519.XSHG"
+			}
+			return nil, fmt.Errorf("%s每小时上限的键 %q 必须是 * 或形如 %s 的内部标的 ID", label, key, hint)
 		}
 		if _, duplicated := caps[normalized]; duplicated {
 			return nil, fmt.Errorf("%s每小时上限的键 %q 重复（标的 ID 不区分大小写）", label, key)

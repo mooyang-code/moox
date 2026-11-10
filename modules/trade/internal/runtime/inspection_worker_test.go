@@ -148,7 +148,7 @@ func TestInspectionAttentionReportsBlockersAndFailureStreak(t *testing.T) {
 	_, failingText = InspectionAttention(account)
 	require.Contains(t, failingText, "连续失败 6 次")
 
-	withdraw := exchange.Inspection{CanWithdraw: true, CanTradeSpot: true, InspectedAt: time.Now().UTC()}
+	withdraw := exchange.Inspection{AccountMode: exchange.AccountModeBinanceStandard, CanWithdraw: true, CanTradeSpot: true, InspectedAt: time.Now().UTC()}
 	account.InspectionJSON = encode(withdraw)
 	blocked, _ = InspectionAttention(account)
 	require.Contains(t, blocked, "提现权限")

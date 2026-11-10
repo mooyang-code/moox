@@ -35,15 +35,6 @@ func TestDelistRequestsRequireExchangeMarketAndSymbol(t *testing.T) {
 	}
 }
 
-func TestReduceLogicalAccountRatioMustBeBetweenZeroAndOne(t *testing.T) {
-	for ratio, valid := range map[string]bool{"0.1": true, "0.5": true, "0.999": true, "1": false, "0": false, "1.5": false, "-0.1": false, "": false, "abc": false} {
-		err := (&ReduceLogicalAccountReq{ActionId: "a", LogicalAccountId: "l", Reason: "r", ReduceRatio: ratio}).Validate()
-		if (err == nil) != valid {
-			t.Errorf("比例 %q：valid=%v err=%v", ratio, valid, err)
-		}
-	}
-}
-
 func TestListOrdersOwnerTypeAndOperatorActionTypeAreChecked(t *testing.T) {
 	if err := (&ListOrdersReq{LogicalAccountId: "l", OwnerType: "SYSTEM"}).Validate(); err != nil {
 		t.Fatalf("SYSTEM 来源应当有效：%v", err)

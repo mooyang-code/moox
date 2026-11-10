@@ -204,70 +204,12 @@ func (tx *Tx) ClaimLogicalAccountSession(
 		return "", false, fmt.Errorf("%w: logical account is owned by another session", ErrConflict)
 	}
 	fence := newAuthFence()
-	result := tx.db.Exec(`
-		UPDATE t_logical_accounts
-		SET c_owner_instance_id = ?, c_owner_session_id = ?,
-			c_owner_claimed_at = c_owner_claimed_at + 1, c_auth_fence = ?, c_mtime = CURRENT_TIMESTAMP
-		WHERE c_space_id = ? AND c_logical_account_id = ?
-		  AND COALESCE(c_owner_instance_id, '') = ''
-		  AND c_control_mode = 'STRATEGY'
-		  AND COALESCE(c_owner_session_id, '') = ''
-		  AND c_auth_fence = ?
-	`, instanceID, sessionID, fence, spaceID, logicalAccountID, account.AuthFence)
+	result := tx.db.Exec(execClaimLogicalAccountOwner, instanceID, sessionID, fence, spaceID, logicalAccountID, account.AuthFence)
 	if result.Error != nil {
 		return "", false, writeError(result.Error)
 	}
 	if result.RowsAffected != 1 {
 		return "", false, fmt.Errorf("%w: session authorization claim lost compare-and-set", ErrConflict)
-	}
-	return fence, true, nil
-}
-
-// RebindLogicalAccountSession switches an existing instance to a new session
-// only when the complete old identity and fence still match. It is useful for
-// explicit re-enable/rebind operations and intentionally does not revive an
-// account that another instance has claimed in the meantime. changed is false
-// when the requested new identity already owns the account with this fence.
-func (tx *Tx) RebindLogicalAccountSession(
-	spaceID, logicalAccountID, oldInstanceID, oldSessionID, expectedFence,
-	newInstanceID, newSessionID string,
-) (string, bool, error) {
-	if blank(oldInstanceID) || blank(oldSessionID) || blank(expectedFence) || blank(newInstanceID) || blank(newSessionID) {
-		return "", false, fmt.Errorf("%w: session authorization identity and expected auth fence are required", ErrInvalidRecord)
-	}
-	account, err := tx.GetLogicalAccount(spaceID, logicalAccountID)
-	if err != nil {
-		return "", false, err
-	}
-	if account.ControlMode != "STRATEGY" {
-		return "", false, fmt.Errorf("%w: logical account is not strategy controlled", ErrConflict)
-	}
-	if account.AuthFence != expectedFence {
-		return "", false, fmt.Errorf("%w: stale session authorization rebind", ErrConflict)
-	}
-	if account.OwnerInstanceID == newInstanceID && account.OwnerSessionID == newSessionID {
-		return account.AuthFence, false, nil
-	}
-	if account.OwnerInstanceID != oldInstanceID || account.OwnerSessionID != oldSessionID ||
-		account.AuthFence != expectedFence {
-		return "", false, fmt.Errorf("%w: stale session authorization rebind", ErrConflict)
-	}
-	fence := newAuthFence()
-	result := tx.db.Exec(`
-		UPDATE t_logical_accounts
-		SET c_owner_instance_id = ?, c_owner_session_id = ?, c_owner_claimed_at = c_owner_claimed_at + 1, c_auth_fence = ?,
-			c_mtime = CURRENT_TIMESTAMP
-		WHERE c_space_id = ? AND c_logical_account_id = ?
-		  AND c_owner_instance_id = ? AND c_owner_session_id = ?
-		  AND c_control_mode = 'STRATEGY'
-		  AND c_auth_fence = ?
-	`, newInstanceID, newSessionID, fence, spaceID, logicalAccountID,
-		oldInstanceID, oldSessionID, account.AuthFence)
-	if result.Error != nil {
-		return "", false, writeError(result.Error)
-	}
-	if result.RowsAffected != 1 {
-		return "", false, fmt.Errorf("%w: session authorization rebind lost compare-and-set", ErrConflict)
 	}
 	return fence, true, nil
 }
@@ -295,15 +237,7 @@ func (tx *Tx) ReleaseLogicalAccountSession(
 		account.AuthFence != expectedFence {
 		return fmt.Errorf("%w: stale session authorization release", ErrConflict)
 	}
-	result := tx.db.Exec(`
-		UPDATE t_logical_accounts
-		SET c_owner_instance_id = NULL, c_owner_session_id = NULL,
-			c_owner_claimed_at = c_owner_claimed_at + 1,
-			c_auth_fence = ?, c_mtime = CURRENT_TIMESTAMP
-		WHERE c_space_id = ? AND c_logical_account_id = ?
-		  AND c_owner_instance_id = ? AND c_owner_session_id = ?
-		  AND c_auth_fence = ?
-	`, newAuthFence(), spaceID, logicalAccountID, instanceID, sessionID, account.AuthFence)
+	result := tx.db.Exec(execReleaseLogicalAccountOwner, newAuthFence(), spaceID, logicalAccountID, instanceID, sessionID, account.AuthFence)
 	if result.Error != nil {
 		return writeError(result.Error)
 	}
@@ -321,11 +255,7 @@ func (tx *Tx) SetLogicalAccountName(
 	if blank(name) {
 		return fmt.Errorf("%w: logical account name is required", ErrInvalidRecord)
 	}
-	result := tx.db.Exec(`
-		UPDATE t_logical_accounts
-		SET c_name = ?, c_mtime = CURRENT_TIMESTAMP
-		WHERE c_space_id = ? AND c_logical_account_id = ?
-	`, name, spaceID, logicalAccountID)
+	result := tx.db.Exec(execRenameLogicalAccount, name, spaceID, logicalAccountID)
 	return requireUpdated(result.Error, result.RowsAffected, "logical account name")
 }
 
@@ -382,11 +312,6 @@ func MarginPauseReduceFailedReason() string {
 
 func MarginPauseReducePartialReason() string {
 	return AutoPauseReason(marginPauseText + "，组合已暂停，风控减仓只完成了一部分，请检查持仓后手动处理并确认恢复")
-}
-
-// IsMarginPauseReduced 判断暂停原因是否表示风控已经发起过减仓（不论减仓是否做完），减仓后的归集跟随这些原因。
-func IsMarginPauseReduced(reason string) bool {
-	return reason == MarginPauseReason() || reason == MarginPauseReduceFailedReason() || reason == MarginPauseReducePartialReason()
 }
 
 // MarginAttentionDetail 是 margin_ratio_low 关注项的固定文字，带上减仓状态（不带比值）。
@@ -496,10 +421,7 @@ func (tx *Tx) PutLogicalAccountMember(record LogicalAccountMemberRecord) error {
 		return fmt.Errorf("%w: %v", ErrInvalidRecord, logicalaccount.ErrMembershipChange)
 	}
 	var elsewhere int64
-	if err := tx.db.Raw(`
-		SELECT COUNT(*) FROM t_logical_account_members
-		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_logical_account_id <> ?
-	`, record.SpaceID, record.TradingAccountID, record.LogicalAccountID).Scan(&elsewhere).Error; err != nil {
+	if err := tx.db.Raw(queryCountMemberAccountMembership, record.SpaceID, record.TradingAccountID, record.LogicalAccountID).Scan(&elsewhere).Error; err != nil {
 		return err
 	}
 	if elsewhere > 0 {
@@ -514,15 +436,7 @@ func (tx *Tx) PutLogicalAccountMember(record LogicalAccountMemberRecord) error {
 		return fmt.Errorf("%w: %v", ErrInvalidRecord, logicalaccount.ErrInhomogeneous)
 	}
 	var environments []string
-	if err := tx.db.Raw(`
-		SELECT DISTINCT COALESCE(NULLIF(a.c_live_environment, ''), 'PRODUCTION')
-		FROM t_logical_account_members AS m
-		JOIN t_trading_accounts AS a
-			ON a.c_space_id = m.c_space_id
-			AND a.c_trading_account_id = m.c_trading_account_id
-		WHERE m.c_space_id = ? AND m.c_logical_account_id = ?
-			AND m.c_trading_account_id <> ?
-	`,
+	if err := tx.db.Raw(queryMemberEnvironments,
 		record.SpaceID, record.LogicalAccountID, record.TradingAccountID,
 	).Scan(&environments).Error; err != nil {
 		return err
@@ -536,17 +450,7 @@ func (tx *Tx) PutLogicalAccountMember(record LogicalAccountMemberRecord) error {
 			return fmt.Errorf("%w: %v", ErrInvalidRecord, logicalaccount.ErrInhomogeneous)
 		}
 	}
-	err = tx.db.Exec(`
-		INSERT INTO t_logical_account_members (
-			c_space_id, c_logical_account_id, c_trading_account_id,
-			c_enabled, c_priority
-		) VALUES (?, ?, ?, ?, ?)
-		ON CONFLICT(c_space_id, c_logical_account_id, c_trading_account_id)
-		DO UPDATE SET
-			c_enabled = excluded.c_enabled,
-			c_priority = excluded.c_priority,
-			c_mtime = CURRENT_TIMESTAMP
-	`,
+	err = tx.db.Exec(execInsertLogicalAccountMember,
 		record.SpaceID, record.LogicalAccountID, record.TradingAccountID,
 		record.Enabled, record.Priority,
 	).Error
@@ -587,11 +491,7 @@ func (tx *Tx) DeleteLogicalAccountMember(
 	if account.AutomationState != string(logicalaccount.AutomationPaused) {
 		return fmt.Errorf("%w: %v", ErrInvalidRecord, logicalaccount.ErrMembershipChange)
 	}
-	result := tx.db.Exec(`
-		DELETE FROM t_logical_account_members
-		WHERE c_space_id = ? AND c_logical_account_id = ?
-			AND c_trading_account_id = ?
-	`, spaceID, logicalAccountID, tradingAccountID)
+	result := tx.db.Exec(execDeleteLogicalAccountMember, spaceID, logicalAccountID, tradingAccountID)
 	return requireUpdated(result.Error, result.RowsAffected, "logical account member")
 }
 
@@ -707,4 +607,43 @@ const (
 			ON a.c_space_id = m.c_space_id
 			AND a.c_trading_account_id = m.c_trading_account_id
 		WHERE m.c_space_id = ? AND m.c_logical_account_id = ? AND m.c_enabled = 1`
+	execClaimLogicalAccountOwner = `UPDATE t_logical_accounts
+		SET c_owner_instance_id = ?, c_owner_session_id = ?,
+			c_owner_claimed_at = c_owner_claimed_at + 1, c_auth_fence = ?, c_mtime = CURRENT_TIMESTAMP
+		WHERE c_space_id = ? AND c_logical_account_id = ?
+		  AND COALESCE(c_owner_instance_id, '') = ''
+		  AND c_control_mode = 'STRATEGY'
+		  AND COALESCE(c_owner_session_id, '') = ''
+		  AND c_auth_fence = ?`
+	execReleaseLogicalAccountOwner = `UPDATE t_logical_accounts
+		SET c_owner_instance_id = NULL, c_owner_session_id = NULL,
+			c_owner_claimed_at = c_owner_claimed_at + 1,
+			c_auth_fence = ?, c_mtime = CURRENT_TIMESTAMP
+		WHERE c_space_id = ? AND c_logical_account_id = ?
+		  AND c_owner_instance_id = ? AND c_owner_session_id = ?
+		  AND c_auth_fence = ?`
+	execRenameLogicalAccount = `UPDATE t_logical_accounts
+		SET c_name = ?, c_mtime = CURRENT_TIMESTAMP
+		WHERE c_space_id = ? AND c_logical_account_id = ?`
+	queryCountMemberAccountMembership = `SELECT COUNT(*) FROM t_logical_account_members
+		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_logical_account_id <> ?`
+	queryMemberEnvironments = `SELECT DISTINCT COALESCE(NULLIF(a.c_live_environment, ''), 'PRODUCTION')
+		FROM t_logical_account_members AS m
+		JOIN t_trading_accounts AS a
+			ON a.c_space_id = m.c_space_id
+			AND a.c_trading_account_id = m.c_trading_account_id
+		WHERE m.c_space_id = ? AND m.c_logical_account_id = ?
+			AND m.c_trading_account_id <> ?`
+	execInsertLogicalAccountMember = `INSERT INTO t_logical_account_members (
+			c_space_id, c_logical_account_id, c_trading_account_id,
+			c_enabled, c_priority
+		) VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(c_space_id, c_logical_account_id, c_trading_account_id)
+		DO UPDATE SET
+			c_enabled = excluded.c_enabled,
+			c_priority = excluded.c_priority,
+			c_mtime = CURRENT_TIMESTAMP`
+	execDeleteLogicalAccountMember = `DELETE FROM t_logical_account_members
+		WHERE c_space_id = ? AND c_logical_account_id = ?
+			AND c_trading_account_id = ?`
 )

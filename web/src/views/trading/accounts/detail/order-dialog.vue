@@ -64,6 +64,7 @@
         <ZonedDatePicker v-model="manualForm.deadline_at" :zone="displayZone" allow-clear style="width: 100%" />
       </a-form-item>
     </a-form>
+    <p v-if="tier.requiresName && orderSummary" class="order-summary">本次订单：{{ orderSummary }}</p>
     <a-form v-if="tier.requiresName" :model="{}" layout="vertical">
       <a-form-item :label="`输入组合名称「${logical.name}」确认`">
         <a-input v-model="typedName" autocomplete="off" />
@@ -136,6 +137,15 @@ const tier = computed(() => confirmTier(props.env));
 const nameOk = computed(() => nameConfirmed(tier.value, typedName.value, props.logical.name));
 const orderEntryLabel = computed(() => (props.logical.control_mode === 2 ? "下单" : "接管并下单"));
 const selectedInstrument = computed(() => instruments.value.find(item => item.instrument_id === manualForm.instrument_id));
+// 生产环境确认前再看一眼订单内容：方向、标的、数量、限价或市价
+const orderSummary = computed(() => {
+  const id = manualForm.instrument_id;
+  const quantity = manualForm.quantity.trim();
+  if (!id || !quantity) return "";
+  const side = manualForm.side === 1 ? "买入" : "卖出";
+  const price = manualForm.order_type === 2 ? `限价 ${manualForm.limit_price.trim() || "未填"}` : "市价";
+  return `${side} ${instrumentName(id)} · ${marketLabel(marketOfInstrument(id))} ${quantity}，${price}`;
+});
 const memberOptions = computed(() =>
   (props.logical.members || [])
     .filter(member => member.enabled)
@@ -356,6 +366,11 @@ defineExpose({ open, openManual, submitManual, manualForm, visible, pendingSubmi
 <style scoped>
 .section {
   margin-bottom: var(--moox-space-3);
+}
+
+.order-summary {
+  margin: 0 0 var(--moox-space-3);
+  font-size: 13px;
 }
 
 .order-env {

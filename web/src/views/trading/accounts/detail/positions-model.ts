@@ -1,9 +1,12 @@
 import type { BlockedTarget, Holding, InstrumentTarget, Position } from "@/api/trade/types";
 import { coinOf, marketOfInstrument } from "../shared/markets";
+import { decimalAdd, decimalSub } from "../shared/order-rules";
 
 export interface TargetCell {
   /** 目标数量；保持当前持仓时为 null */
   quantity: number | null;
+  /** 目标数量的原始小数字符串，算差额用 */
+  text: string;
   hold: boolean;
 }
 
@@ -13,17 +16,23 @@ export interface CoinRow {
   targetSwap?: TargetCell;
   actualSpot: number;
   actualSwap: number;
+  /** 实际数量的精确小数字符串（与 actualSpot、actualSwap 同口径），算差额用 */
+  actualSpotText: string;
+  actualSwapText: string;
   /** 实际减目标；这个市场没有目标或保持当前持仓时为 null */
   deviationSpot: number | null;
   deviationSwap: number | null;
+  /** 差额的精确小数字符串，行内下单预填数量用，不经过浮点 */
+  deviationSpotText: string | null;
+  deviationSwapText: string | null;
   /** 现货钱包里这个币的总数，包含不受管理的部分 */
   spotBalance: number;
   /** 股票：可卖数量（扣掉冻结和当日买入）；股票行的目标、实际、偏差记在 Spot 那一列 */
   sellable: number;
   stock: boolean;
-  /** 被拦下的原因，没有则为空 */
+  /** 未执行的原因，没有则为空 */
   blockedReason: string;
-  /** 被单币每小时上限顺延到下一个整点的说明，没有则为空：不算被拦下，状态仍按差额判断 */
+  /** 被单币每小时上限顺延到下一个整点的说明，没有则为空：不算未执行，状态仍按差额判断 */
   deferredReason: string;
   state: "ok" | "off" | "blocked" | "extra";
   /** 相对偏差的最大值，用于排序 */
@@ -35,9 +44,9 @@ export interface BuildCoinRowsInput {
   blocked: readonly BlockedTarget[];
   swapPositions: readonly Position[];
   spotHoldings: readonly Holding[];
-  /** 目标整体已收敛：差额只是下不了单的零头，全部算到位 */
+  /** 目标整体已到位：差额只是下不了单的零头，全部算到位 */
   converged: boolean;
-  /** 有没有策略目标；自主下单的组合没有目标，持仓都不算“目标外” */
+  /** 有没有策略目标；自主下单的组合没有目标，持仓都不算“不在目标内” */
   hasTarget: boolean;
 }
 
@@ -49,8 +58,12 @@ function blankRow(coin: string): CoinRow {
     coin,
     actualSpot: 0,
     actualSwap: 0,
+    actualSpotText: "0",
+    actualSwapText: "0",
     deviationSpot: null,
     deviationSwap: null,
+    deviationSpotText: null,
+    deviationSwapText: null,
     spotBalance: 0,
     sellable: 0,
     stock: false,
@@ -86,6 +99,7 @@ export function buildCoinRows(input: BuildCoinRowsInput): CoinRow[] {
   for (const target of input.targets) {
     const cell: TargetCell = {
       quantity: target.hold ? null : Number(target.quantity),
+      text: target.hold ? "" : target.quantity,
       hold: Boolean(target.hold)
     };
     const row = rowOf(coinOf(target.instrument_id));
@@ -100,7 +114,9 @@ export function buildCoinRows(input: BuildCoinRowsInput): CoinRow[] {
     else row.blockedReason = row.blockedReason ? `${row.blockedReason}；${item.reason}` : item.reason;
   }
   for (const position of input.swapPositions) {
-    rowOf(coinOf(position.instrument_id)).actualSwap += Number(position.signed_quantity);
+    const row = rowOf(coinOf(position.instrument_id));
+    row.actualSwap += Number(position.signed_quantity);
+    row.actualSwapText = decimalAdd(row.actualSwapText, position.signed_quantity);
   }
   for (const holding of input.spotHoldings) {
     const row = rowOf(holding.asset || coinOf(holding.instrument_id));
@@ -108,6 +124,7 @@ export function buildCoinRows(input: BuildCoinRowsInput): CoinRow[] {
     row.spotBalance += quantity;
     if (holding.instrument_id) {
       row.actualSpot += quantity;
+      row.actualSpotText = decimalAdd(row.actualSpotText, holding.quantity);
       row.sellable += Number(holding.sellable || 0);
       if (marketOfInstrument(holding.instrument_id) === 3) row.stock = true;
     }
@@ -115,8 +132,14 @@ export function buildCoinRows(input: BuildCoinRowsInput): CoinRow[] {
 
   const result: CoinRow[] = [];
   for (const row of rows.values()) {
-    if (row.targetSpot && row.targetSpot.quantity !== null) row.deviationSpot = row.actualSpot - row.targetSpot.quantity;
-    if (row.targetSwap && row.targetSwap.quantity !== null) row.deviationSwap = row.actualSwap - row.targetSwap.quantity;
+    if (row.targetSpot && row.targetSpot.quantity !== null) {
+      row.deviationSpot = row.actualSpot - row.targetSpot.quantity;
+      row.deviationSpotText = decimalSub(row.actualSpotText, row.targetSpot.text);
+    }
+    if (row.targetSwap && row.targetSwap.quantity !== null) {
+      row.deviationSwap = row.actualSwap - row.targetSwap.quantity;
+      row.deviationSwapText = decimalSub(row.actualSwapText, row.targetSwap.text);
+    }
     const hasAnyTarget = Boolean(row.targetSpot || row.targetSwap);
     // 目标之外的持仓也要列出：其中受管的现货会被执行器按目标 0 卖掉，永续有仓位也一样。
     const listed = hasAnyTarget || row.blockedReason || row.deferredReason || row.actualSwap !== 0 || row.actualSpot !== 0;
@@ -147,6 +170,13 @@ export interface OrderHint {
   quantity?: string;
 }
 
+/** 差额不为零时预填方向和数量：差额为负要买入，为正要卖出，数量是差额的绝对值（精确小数）。 */
+function setDeviation(hint: OrderHint, deviation: string | null) {
+  if (deviation === null || deviation === "0") return;
+  hint.side = deviation.startsWith("-") ? 1 : 2;
+  hint.quantity = deviation.replace(/^-/, "");
+}
+
 /**
  * 行内下单的入口：现货、永续各一个（有目标或有持仓的市场才给），带上市场和与目标的差额。
  * 币和计价币拼出内部标的 ID，两个市场都有目标时不会只能下永续。
@@ -157,23 +187,17 @@ export function rowOrderHints(row: CoinRow, quote: string): OrderHint[] {
   if (row.stock) {
     if (!row.targetSpot && row.actualSpot === 0) return hints;
     const hint: OrderHint = { market: 3, instrumentId: row.coin };
-    if (row.deviationSpot !== null && Math.abs(row.deviationSpot) > 1e-12) {
-      hint.side = row.deviationSpot < 0 ? 1 : 2;
-      hint.quantity = String(cleanNumber(Math.abs(row.deviationSpot)));
-    }
+    setDeviation(hint, row.deviationSpotText);
     return [hint];
   }
   const markets = [
-    { market: 1 as const, target: row.targetSpot, actual: row.actualSpot, deviation: row.deviationSpot, suffix: "SPOT" },
-    { market: 2 as const, target: row.targetSwap, actual: row.actualSwap, deviation: row.deviationSwap, suffix: "SWAP" }
+    { market: 1 as const, target: row.targetSpot, actual: row.actualSpot, deviation: row.deviationSpotText, suffix: "SPOT" },
+    { market: 2 as const, target: row.targetSwap, actual: row.actualSwap, deviation: row.deviationSwapText, suffix: "SWAP" }
   ];
   for (const item of markets) {
     if (!item.target && item.actual === 0) continue;
     const hint: OrderHint = { market: item.market, instrumentId: `${row.coin}-${quote}-${item.suffix}` };
-    if (item.deviation !== null && Math.abs(item.deviation) > 1e-12) {
-      hint.side = item.deviation < 0 ? 1 : 2;
-      hint.quantity = String(cleanNumber(Math.abs(item.deviation)));
-    }
+    setDeviation(hint, item.deviation);
     hints.push(hint);
   }
   return hints;

@@ -76,7 +76,7 @@ func TestClosePaperSimulationCancelsReservationsAndSurvivesRestartE2E(t *testing
 	restarted, err := store.Open(f.path)
 	require.NoError(t, err)
 	defer restarted.Close()
-	candidates, err := restarted.ListPaperMatchCandidates(ctx, 10)
+	candidates, err := restarted.ListPaperMatchCandidatePage(ctx, false, "", "", 10)
 	require.NoError(t, err)
 	require.Empty(t, candidates)
 	reloaded, err := restarted.GetTradingAccountByID(ctx, testAccount)
@@ -119,7 +119,6 @@ func TestClosePaperSimulationPreservesFilledBalancesWithoutQuotesE2E(t *testing.
 			require.NoError(t, err)
 			projection, err := f.store.GetPaperBalanceSnapshot(ctx, testSpace, testAccount)
 			require.NoError(t, err)
-			require.Equal(t, int64(1), projection.AppliedFillCount)
 			f.fake.mu.Lock()
 			f.fake.quoteErr = errors.New("public quotes unavailable")
 			f.fake.mu.Unlock()
@@ -225,21 +224,26 @@ func testCloseAfterPositionRefreshFailure(t *testing.T, reduce bool) {
 	f.fake.mu.Lock()
 	f.fake.quoteErr = errors.New("public quotes unavailable after fill commit")
 	f.fake.mu.Unlock()
-	matcher := &paperexec.Matcher{
-		Store: f.store, Reducer: f.reducer,
-		Refresh: func(ctx context.Context, _ string) error {
-			_, err := f.adapter.GetAccountSnapshot(ctx)
-			return err
-		},
-	}
-	err = matcher.MatchOrder(ctx, candidate, paperexec.Decision{Fill: exchange.Fill{Market: exchange.MarketTypeSwap,
+	decision := paperexec.Decision{Fill: exchange.Fill{Market: exchange.MarketTypeSwap,
 		ExchangeTradeID: "committed-before-refresh-failure", ExchangeOrderID: candidate.ExchangeOrderID,
 		ClientOrderID: candidate.ClientOrderID, ExchangeSymbol: candidate.ExchangeSymbol,
 		Side: side, PositionSide: exchange.PositionSideNet,
 		Quantity: shared.MustDecimal(quantity), Price: shared.MustDecimal("50000"),
 		TradedAt: testNow.Add(time.Second),
-	}})
-	require.ErrorContains(t, err, "public quotes unavailable")
+	}}
+	matcher := &paperexec.Matcher{
+		Store: f.store, Reducer: f.reducer,
+		DecideContext: func(context.Context, store.OrderRecord) (paperexec.Decision, error) { return decision, nil },
+		Refresh: func(ctx context.Context, _ string) error {
+			_, err := f.adapter.GetAccountSnapshot(ctx)
+			return err
+		},
+	}
+	// 成交先落库，再由扫描收尾刷新快照；刷新失败只记在账户状态上，不影响已提交的成交。
+	require.NoError(t, matcher.Scan(ctx))
+	state := matcher.AccountState(testAccount)
+	require.Equal(t, "PAPER_REFRESH_FAILED", state.ErrorCode)
+	require.Contains(t, state.LastError, "public quotes unavailable")
 	positions, err := f.store.ListPositions(ctx, testSpace, testAccount, exchange.SymbolKey{})
 	require.NoError(t, err)
 	require.Len(t, positions, 1)

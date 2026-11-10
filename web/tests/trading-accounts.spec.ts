@@ -126,8 +126,8 @@ test("详情页六个页签用 ?tab= 直达，切换页签不重建页面", asyn
   // 按币一行：BTC 同时有现货和永续目标
   const btc = page.getByRole("row", { name: /BTC/ }).first();
   await expect(btc).toBeVisible();
-  await expect(page.getByText("已拦下：低于最小下单额")).toBeVisible();
-  await expect(page.getByText("目标外")).toBeVisible();
+  await expect(page.getByText("未执行：低于最小下单额")).toBeVisible();
+  await expect(page.getByText("不在目标内")).toBeVisible();
 });
 
 test("生产环境清仓要输入组合名称，其他环境不用", async ({ page }) => {

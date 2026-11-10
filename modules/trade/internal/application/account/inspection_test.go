@@ -241,6 +241,45 @@ func TestReinspectKeepsAccountModeWhenCredentialIsRejected(t *testing.T) {
 	require.Equal(t, exchange.AccountModeBinanceStandard, store.accounts[fresh.ID].AccountMode)
 }
 
+// 签名检测没有结论、只测到时钟偏差（结果里账户类型为空）：在上次结果的基础上只更新时钟偏差、检测时间和阻断项，
+// 权限字段不被清零，也不会因为写回账户类型而冒出“没有交易权限”等假阻断项。
+func TestReinspectClockOnlyKeepsPreviousPermissions(t *testing.T) {
+	store := newMemoryStore()
+	value := liveProductionAccount()
+	value.AccountMode = exchange.AccountModeBinanceStandard
+	value.Markets = []exchange.MarketType{exchange.MarketTypeSpot, exchange.MarketTypeSwap}
+	previous := exchange.Inspection{
+		Exchange: exchange.ExchangeBinance, Environment: exchange.AccountEnvironmentProduction,
+		AccountMode: exchange.AccountModeBinanceStandard, CanTradeSpot: true, CanTradeSwap: true, UniversalTransfer: true,
+		InspectedAt: time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC),
+	}
+	encoded, err := previous.Encode()
+	require.NoError(t, err)
+	value.InspectionJSON = encoded
+	store.accounts[value.ID] = value
+
+	checkedAt := time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC)
+	clockOnly := exchange.Inspection{
+		Exchange: exchange.ExchangeBinance, Environment: exchange.AccountEnvironmentProduction,
+		InspectedAt: checkedAt, ClockSkewMillis: 4000,
+	}
+	clockOnly.ApplyFindings(value.Markets)
+	result, err := inspectingService(store, &fakeInspector{result: &clockOnly}, validSecret()).Reinspect(context.Background(), value.ID)
+	require.NoError(t, err)
+	require.True(t, result.Blocked)
+	require.False(t, result.ModeChanged)
+	stored, err := exchange.ParseInspection(store.accounts[value.ID].InspectionJSON)
+	require.NoError(t, err)
+	require.Equal(t, exchange.AccountModeBinanceStandard, stored.AccountMode)
+	require.True(t, stored.CanTradeSpot && stored.CanTradeSwap && stored.UniversalTransfer, "权限字段沿用上次结果")
+	require.Equal(t, int64(4000), stored.ClockSkewMillis)
+	require.True(t, stored.InspectedAt.Equal(checkedAt))
+	blockers := stored.BlockersFor(value.Markets)
+	require.Len(t, blockers, 1, "只剩时钟偏差一项阻断")
+	require.Equal(t, exchange.FindingClockSkew, blockers[0].Code)
+	require.Equal(t, blockers, stored.Blockers)
+}
+
 // 检测结果记录被检测密钥的指纹（API Key 的哈希前缀，不存明文）。
 func TestInspectionRecordsCredentialFingerprintWithoutPlaintext(t *testing.T) {
 	store := newMemoryStore()

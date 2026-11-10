@@ -585,19 +585,6 @@ message ReleaseLogicalAccountOwnerRsp {
   LogicalAccount logical_account = 2;
 }
 
-message RebindLogicalAccountOwnerReq {
-  string logical_account_id = 1;
-  string instance_id = 4;
-  string session_id = 5;
-  string expected_auth_fence = 6;
-  string new_instance_id = 7;
-  string new_session_id = 8;
-}
-message RebindLogicalAccountOwnerRsp {
-  common.RetInfo ret_info = 1;
-  LogicalAccount logical_account = 2;
-}
-
 message PauseLogicalAccountReq {
   string logical_account_id = 1;
   string reason = 2;
@@ -903,7 +890,6 @@ service TradeConsoleService {
   rpc RemoveLogicalAccountMember(RemoveLogicalAccountMemberReq) returns (RemoveLogicalAccountMemberRsp);
   rpc ClaimLogicalAccountOwner(ClaimLogicalAccountOwnerReq) returns (ClaimLogicalAccountOwnerRsp);
   rpc ReleaseLogicalAccountOwner(ReleaseLogicalAccountOwnerReq) returns (ReleaseLogicalAccountOwnerRsp);
-  rpc RebindLogicalAccountOwner(RebindLogicalAccountOwnerReq) returns (RebindLogicalAccountOwnerRsp);
   rpc PauseLogicalAccount(PauseLogicalAccountReq) returns (PauseLogicalAccountRsp);
   rpc ResumeLogicalAccount(ResumeLogicalAccountReq) returns (ResumeLogicalAccountRsp);
   rpc FlattenLogicalAccount(FlattenLogicalAccountReq) returns (FlattenLogicalAccountRsp);
@@ -929,7 +915,6 @@ service TradeConsoleService {
   rpc ListBlockedInstruments(ListBlockedInstrumentsReq) returns (ListBlockedInstrumentsRsp);
   rpc ListInstrumentHolders(ListInstrumentHoldersReq) returns (ListInstrumentHoldersRsp);
   rpc FlattenInstrument(FlattenInstrumentReq) returns (FlattenInstrumentRsp);
-  rpc ReduceLogicalAccount(ReduceLogicalAccountReq) returns (ReduceLogicalAccountRsp);
   rpc SummarizeAccountPnl(SummarizeAccountPnlReq) returns (SummarizeAccountPnlRsp);
   rpc ListOperatorActions(ListOperatorActionsReq) returns (ListOperatorActionsRsp);
 }
@@ -1079,19 +1064,6 @@ message FlattenInstrumentRsp {
   bool busy = 3;
   // true 表示标的已被解除禁止而提前结束，动作记 COMPLETED，不要重试（结果 JSON 顶层也带 unblocked）。
   bool unblocked = 4;
-}
-
-// 按比例减仓（REDUCE）：先暂停组合、撤全部订单，再把现货和合约同比例减掉；每个持仓的目标数量发起时写定，重试不会再减一次。
-message ReduceLogicalAccountReq {
-  string action_id = 1;
-  string logical_account_id = 2;
-  // 大于 0 小于 1 的比例，例如 0.1。
-  string reduce_ratio = 3;
-  string reason = 4;
-}
-message ReduceLogicalAccountRsp {
-  common.RetInfo ret_info = 1;
-  OperatorAction action = 2;
 }
 
 // ===== 收益拆解与人工操作记录 =====

@@ -19,7 +19,7 @@ import (
 // 多稳定币保证金调平（币安统一账户）。
 //   - 偏离的定义：各稳定币价值占稳定币总价值的实际比例与目标比例的绝对差，任何一个超过 5 个百分点就调平，否则不动；
 //   - 买入（要增加的稳定币）用买一价限价单，到下一次检查还没成交就撤掉；卖出（多出来的稳定币）用 IOC；都在稳定币对 USDT 的现货标的上下单；
-//   - 每轮只做一个方向：先卖多出来的换回 USDT，买入留到下一轮（卖单成交后余额才更新）；没成交的缺口下一次检查再补。
+//   - 每轮只做一个方向：先卖多出来的换回 USDT，买入留到下一次检查（每小时一次；卖单成交后余额要等同步才更新，账户就绪唤醒每个账户每个进程只有一次，不会马上补买）；没成交的缺口下一次检查再补。
 
 // stableOrderMaxAge 是稳定币买单最多挂多久：每小时检查一次，留 5 分钟余量，免得整点检查时刚好差几秒没撤。
 const stableOrderMaxAge = 55 * time.Minute
@@ -38,7 +38,8 @@ func stableApplies(account store.TradingAccountRecord) bool {
 }
 
 // settleStableOrders 处理上一轮留下的稳定币买单：挂满 stableOrderMaxAge（到下一次检查）还没成交的撤掉，
-// 更早的唤醒（设置变更、会话就绪）不撤。hasOpen 为真表示还有没结束的单，这一轮不下新单。
+// 更早的唤醒（设置变更、会话就绪）不撤。hasOpen 为真表示撤单之后还有没结束的单，这一轮不下新单；
+// 过期的单全部撤完、没有剩余时返回 false，调用方在同一轮重算重挂。
 // 它和调平分开做：BNB 补买让路时，过期的旧买单照样要撤。
 func (s *Service) settleStableOrders(ctx context.Context, account store.TradingAccountRecord) (hasOpen bool, err error) {
 	open, err := s.openSystemOrders(ctx, account, ownerStableRebalance)
@@ -46,15 +47,21 @@ func (s *Service) settleStableOrders(ctx context.Context, account store.TradingA
 		return false, err
 	}
 	now := s.now()
+	stopped := false
 	for _, record := range open {
 		if now.Sub(time.UnixMilli(record.SubmittedAt)) < stableOrderMaxAge {
 			continue
 		}
-		if _, err := s.Orders.Cancel(ctx, record.SpaceID, record.OrderID); err != nil {
+		if err := s.stopOrder(ctx, record); err != nil {
 			return true, err
 		}
+		stopped = true
 	}
-	return true, nil
+	if !stopped {
+		return true, nil
+	}
+	remaining, err := s.openSystemOrders(ctx, account, ownerStableRebalance)
+	return len(remaining) > 0, err
 }
 
 func (s *Service) rebalanceStablecoins(
@@ -93,7 +100,7 @@ func (s *Service) rebalanceStablecoins(
 		adjustments = append(adjustments, adjustment{holding: holding, delta: total.Mul(settings.StablecoinTargets[holding.asset]).Sub(holding.value)})
 	}
 	// 每轮只做一个方向：先卖。卖单成交后账户的余额要等同步才更新，同一轮的买单还按开始时的快照算，
-	// 会因为资金不足被拒；买入留到下一轮（下一次检查，或卖单成交触发的账户就绪唤醒），不算失败。
+	// 会因为资金不足被拒；买入留到下一次检查（每小时一次；账户就绪唤醒每个账户每个进程只有一次，卖单成交不会触发补买），不算失败。
 	sort.SliceStable(adjustments, func(i, j int) bool { return adjustments[i].delta.Cmp(adjustments[j].delta) < 0 })
 	var placeErrors []error
 	soldThisRound := false

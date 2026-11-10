@@ -28,7 +28,7 @@ func TestSpotSubscriptionUsesSignedWebSocketAPIRequest(t *testing.T) {
 		"recvWindow": []string{fmt.Sprint(recvWindow)},
 		"timestamp":  []string{"1700000000000"},
 	}
-	want := fmt.Sprintf("%x", hmacSha256([]byte("secret"), []byte(values.Encode())))
+	want := fmt.Sprintf("%x", exchange.HMACSHA256([]byte("secret"), []byte(values.Encode())))
 	if request.Params["signature"] != want ||
 		request.Params["timestamp"] != int64(1_700_000_000_000) {
 		t.Fatalf("params = %+v", request.Params)
@@ -87,8 +87,8 @@ func TestReceivePrivateRefreshesLivenessOnControlPing(t *testing.T) {
 	defer connection.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Millisecond)
 	defer cancel()
-	err = testAdapter(exchange.MarketTypeSpot, "http://unused").
-		receivePrivateWithHeartbeat(ctx, connection, &recordingHandler{}, 30*time.Millisecond)
+	adapter := testAdapter(exchange.MarketTypeSpot, "http://unused")
+	err = receiveStream(ctx, connection, &recordingHandler{}, 30*time.Millisecond, adapter.dispatchPrivate)
 	if err != context.DeadlineExceeded {
 		t.Fatalf("receive error = %v", err)
 	}
@@ -152,14 +152,25 @@ func TestDispatchPrivateSpotWebSocketAPIEnvelope(t *testing.T) {
 	}
 }
 
-func TestDispatchPrivateRejectsIsolatedSwapPosition(t *testing.T) {
+// 逐仓持仓不让私有流报错：该标的标记为逐仓（由账户同步暂停组合），同一推送里的全仓持仓照常解析。
+func TestDispatchPrivateMarksIsolatedSwapPosition(t *testing.T) {
 	adapter := testAdapter(exchange.MarketTypeSwap, "http://unused")
+	handler := &recordingHandler{}
 	err := adapter.dispatchPrivate(context.Background(), []byte(`{
 		"e":"ACCOUNT_UPDATE","E":1700000000000,
-		"a":{"B":[],"P":[{"s":"BTCUSDT","pa":"1","ep":"100","up":"0","mt":"isolated","ps":"BOTH"}]}
-	}`), &recordingHandler{})
-	if err == nil {
-		t.Fatal("isolated position was accepted")
+		"a":{"B":[],"P":[
+			{"s":"BTCUSDT","pa":"1","ep":"100","up":"0","mt":"isolated","ps":"BOTH"},
+			{"s":"ETHUSDT","pa":"0","ep":"0","up":"0","mt":"isolated","ps":"BOTH"},
+			{"s":"SOLUSDT","pa":"2","ep":"20","up":"1","mt":"cross","ps":"BOTH"}]}
+	}`), handler)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(handler.positions) != 2 ||
+		handler.positions[0].ExchangeSymbol != "BTCUSDT" || handler.positions[0].MarginMode != exchange.MarginModeIsolated ||
+		handler.positions[1].ExchangeSymbol != "SOLUSDT" || handler.positions[1].MarginMode != exchange.MarginModeCross ||
+		handler.positions[1].SignedQuantity.String() != "2" {
+		t.Fatalf("positions = %+v", handler.positions)
 	}
 }
 

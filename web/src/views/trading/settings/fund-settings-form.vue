@@ -12,11 +12,11 @@
       <a-form-item label="BNB 抵扣手续费" extra="开启后会在币安账户上打开 BNB 抵扣开关，现货、合约一起设">
         <a-switch v-model="model.bnb_discount" />
       </a-form-item>
-      <a-form-item
-        label="BNB 保留金额"
-        extra="BNB 市值低于这个金额减 10 时市价补买到这个金额；0 表示不保留。保留期间 BNB 不参与策略持仓"
-      >
+      <a-form-item label="BNB 保留金额">
         <a-input v-model="model.bnb_reserve_amount" :suffix="unit" />
+        <template #extra>
+          <div v-for="hint in bnbHints" :key="hint">{{ hint }}</div>
+        </template>
       </a-form-item>
       <a-form-item
         label="小额资产兑换 BNB"
@@ -117,6 +117,7 @@
 import { computed, reactive, ref, watch } from "vue";
 import type { FundSettings } from "@/api/trade/settings";
 import {
+  bnbReserveHints,
   buildFundSettingsRequest,
   defaultFundSettings,
   fundSettingsToModel,
@@ -149,6 +150,8 @@ const props = defineProps<{
   hasBinanceLive?: boolean;
   /** 组合的结算币，默认 USDT：稳定币保证金必须含它，保证金币和底仓不能写它 */
   settlementAsset?: string;
+  /** 组合里有币安普通账户（不含统一账户）：BNB 保留金额旁显示补买范围的说明 */
+  standardAccount?: boolean;
 }>();
 const emit = defineEmits<{ save: [settings: FundSettings]; refresh: [] }>();
 
@@ -157,9 +160,11 @@ const scope = computed(() => ({
   nonBinance: props.nonBinance,
   testnet: props.testnet,
   hasBinanceLive: props.hasBinanceLive,
-  settlementAsset: props.settlementAsset
+  settlementAsset: props.settlementAsset,
+  standardAccount: props.standardAccount
 }));
 const liveOnly = computed(() => showsLiveOnlyFields(scope.value));
+const bnbHints = computed(() => bnbReserveHints(scope.value));
 const marginMonitor = computed(() => showsMarginMonitor(scope.value));
 const marginNote = computed(() => marginMonitorHiddenNote(scope.value));
 const mixedNote = computed(() => marginMonitorMixedNote(scope.value));

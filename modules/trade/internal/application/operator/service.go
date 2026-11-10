@@ -11,6 +11,7 @@ import (
 
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
 	targetapp "github.com/mooyang-code/moox/modules/trade/internal/application/target"
+	operatordomain "github.com/mooyang-code/moox/modules/trade/internal/domain/operator"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
@@ -151,6 +152,17 @@ type manualFailureError struct {
 func (e manualFailureError) Error() string { return e.message }
 func (e manualFailureError) Unwrap() error { return e.cause }
 
+// ErrRecordedFailure 标记从库里还原出来的操作失败：文案是当时落库的原因，回给前端时照原样返回。
+var ErrRecordedFailure = errors.New("已记录的操作失败")
+
+type recordedFailure struct{ message string }
+
+// RecordedFailure 用落库的失败原因还原一个错误。
+func RecordedFailure(message string) error { return recordedFailure{message: message} }
+
+func (e recordedFailure) Error() string        { return e.message }
+func (e recordedFailure) Is(target error) bool { return target == ErrRecordedFailure }
+
 func manualErrorCode(cause error) string {
 	for _, entry := range manualFailureCodes {
 		if errors.Is(cause, entry.cause) {
@@ -166,7 +178,7 @@ func manualPersistedError(message, code string) error {
 			return manualFailureError{message: message, cause: entry.cause}
 		}
 	}
-	return manualFailureError{message: message, cause: errors.New(message)}
+	return manualFailureError{message: message, cause: recordedFailure{message: message}}
 }
 
 func (s *Service) PlaceManualOrder(
@@ -193,7 +205,7 @@ func (s *Service) PlaceManualOrder(
 				result.Order.OrderID = knownOrderID
 			}
 		}
-		if result.Action.Status == "RUNNING" && allSubmissionErrors(retErr, func(err error) bool {
+		if result.Action.Status == string(operatordomain.StatusRunning) && allSubmissionErrors(retErr, func(err error) bool {
 			_, deferred := err.(submissionDeferredError)
 			return deferred
 		}) {
@@ -214,14 +226,14 @@ func (s *Service) PlaceManualOrder(
 		expected := store.OperatorActionRecord{
 			SpaceID: command.SpaceID, ActionID: command.ActionID,
 			LogicalAccountID: existing.LogicalAccountID,
-			ActionType:       "MANUAL_ORDER", Reason: strings.TrimSpace(command.Reason),
+			ActionType:       string(operatordomain.ActionManualOrder), Reason: strings.TrimSpace(command.Reason),
 			RequestJSON: requestJSON,
 		}
 		current, _, matchErr := s.existingAction(ctx, expected)
 		if matchErr != nil {
 			return ManualOrderResult{}, matchErr
 		}
-		if current.Status != "RUNNING" {
+		if current.Status != string(operatordomain.StatusRunning) {
 			return s.loadManualOrderResult(ctx, current)
 		}
 		runningAction = &current
@@ -289,14 +301,14 @@ func (s *Service) PlaceManualOrder(
 	expectedAction := store.OperatorActionRecord{
 		SpaceID: command.SpaceID, ActionID: command.ActionID,
 		LogicalAccountID: logicalAccount.LogicalAccountID,
-		ActionType:       "MANUAL_ORDER", Reason: strings.TrimSpace(command.Reason),
-		RequestJSON: requestJSON, Status: "RUNNING",
+		ActionType:       string(operatordomain.ActionManualOrder), Reason: strings.TrimSpace(command.Reason),
+		RequestJSON: requestJSON, Status: string(operatordomain.StatusRunning),
 	}
 	existing, found, err := s.existingAction(ctx, expectedAction)
 	if err != nil {
 		return ManualOrderResult{}, err
 	}
-	if found && existing.Status != "RUNNING" {
+	if found && existing.Status != string(operatordomain.StatusRunning) {
 		return s.loadManualOrderResult(ctx, existing)
 	}
 	var action store.OperatorActionRecord
@@ -406,31 +418,31 @@ func (s *Service) ResumeOperatorAction(
 	ctx context.Context,
 	action store.OperatorActionRecord,
 ) error {
-	if action.ActionType == "SUBMIT_ORDER" && action.Status == "RUNNING" {
+	if action.ActionType == string(operatordomain.ActionSubmitOrder) && action.Status == string(operatordomain.StatusRunning) {
 		return s.resumeSubmission(ctx, action)
 	}
 	if err := s.validate(); err != nil {
 		return err
 	}
-	if action.Status != "RUNNING" {
+	if action.Status != string(operatordomain.StatusRunning) {
 		return nil
 	}
 	switch action.ActionType {
-	case "FLATTEN", "REDUCE", "DELIST_FLATTEN":
+	case string(operatordomain.ActionFlatten), string(operatordomain.ActionReduce), string(operatordomain.ActionDelistFlatten):
 		command, err := decodeFlattenRequest(action)
 		if err != nil {
 			return err
 		}
 		result, err := s.FlattenLogicalAccount(ctx, command)
 		return submissionRecoveryError(ManualOrderResult{Action: result.Action}, err)
-	case "MANUAL_ORDER":
+	case string(operatordomain.ActionManualOrder):
 		command, err := manualOrderCommand(action)
 		if err != nil {
 			return err
 		}
 		result, err := s.PlaceManualOrder(ctx, command)
 		return submissionRecoveryError(result, err)
-	case "CANCEL_ORDER":
+	case string(operatordomain.ActionCancelOrder):
 		var request cancelOrderRequest
 		if err := json.Unmarshal([]byte(action.RequestJSON), &request); err != nil {
 			return err
@@ -552,7 +564,7 @@ func (s *Service) recoverChild(ctx context.Context, action store.OperatorActionR
 			}
 		}
 	}()
-	if action.Status != "RUNNING" {
+	if action.Status != string(operatordomain.StatusRunning) {
 		result, err := s.loadManualOrderResult(ctx, action)
 		return result, true, err
 	}
@@ -644,7 +656,7 @@ func (s *Service) advanceManualChild(ctx context.Context, action store.OperatorA
 			return ManualOrderResult{}, err
 		}
 		if callErr != nil && !submissionAccountError(callErr) &&
-			(child.State == "PENDING" || child.State == "SUBMITTING" || child.State == "SUBMIT_UNKNOWN") {
+			(child.State == string(orderdomain.Pending) || child.State == string(orderdomain.Submitting) || child.State == string(orderdomain.SubmitUnknown)) {
 			return s.submissionOrderError(ctx, action, callErr)
 		}
 	}
@@ -655,7 +667,7 @@ func (s *Service) advanceManualChild(ctx context.Context, action store.OperatorA
 		if membershipErr != nil && !errors.Is(membershipErr, gorm.ErrRecordNotFound) {
 			return ManualOrderResult{}, membershipErr
 		}
-		if membershipErr != nil || !member.Enabled || owner.LogicalAccountID != action.LogicalAccountID || (action.ActionType == "SUBMIT_ORDER" && owner.ControlMode != "MANUAL") {
+		if membershipErr != nil || !member.Enabled || owner.LogicalAccountID != action.LogicalAccountID || (action.ActionType == string(operatordomain.ActionSubmitOrder) && owner.ControlMode != "MANUAL") {
 			if _, discardErr := s.Orders.DiscardPending(ctx, action.SpaceID, child.OrderID); discardErr != nil {
 				return s.submissionOrderError(ctx, action, discardErr)
 			}
@@ -689,7 +701,7 @@ func (s *Service) advanceManualChild(ctx context.Context, action store.OperatorA
 		return ManualOrderResult{}, err
 	}
 	if callErr != nil && !submissionAccountError(callErr) &&
-		(child.State == "PENDING" || child.State == "SUBMITTING" || child.State == "SUBMIT_UNKNOWN") {
+		(child.State == string(orderdomain.Pending) || child.State == string(orderdomain.Submitting) || child.State == string(orderdomain.SubmitUnknown)) {
 		return s.submissionOrderError(ctx, action, callErr)
 	}
 	// Exchange work is over. Only persist the observed terminal outcome.
@@ -724,7 +736,7 @@ func (s *Service) advanceManualChild(ctx context.Context, action store.OperatorA
 		return ManualOrderResult{Action: action, Order: child}, fmt.Errorf("invalid manual child state %q", child.State)
 	}
 	previousAction := action
-	action.Status = "COMPLETED"
+	action.Status = string(operatordomain.StatusCompleted)
 	action.LastError = ""
 	if err := s.saveManualProgress(ctx, &action, progress); err != nil {
 		return submissionIdentity(previousAction), errors.Join(callErr, err)
@@ -741,7 +753,7 @@ func (s *Service) deferManualAction(ctx context.Context, action store.OperatorAc
 	if err != nil {
 		return ManualOrderResult{}, err
 	}
-	action.Status = "RUNNING"
+	action.Status = string(operatordomain.StatusRunning)
 	action.LastError = cause.Error()
 	progress.Accounts = accounts
 	if err := s.saveManualProgress(ctx, &action, progress); err != nil {
@@ -815,11 +827,11 @@ func (s *Service) loadManualOrderResult(
 	invalidResult := func(detail string) (ManualOrderResult, error) {
 		return ManualOrderResult{Action: action}, fmt.Errorf("%w: %w: %s", ErrInvalidActionResult, store.ErrInvalidRecord, detail)
 	}
-	if action.Status != "RUNNING" && action.Status != "COMPLETED" && action.Status != "FAILED" {
+	if action.Status != string(operatordomain.StatusRunning) && action.Status != string(operatordomain.StatusCompleted) && action.Status != string(operatordomain.StatusFailed) {
 		return invalidResult("unsupported manual action status")
 	}
 	if action.ResultJSON == nil {
-		if action.Status == "RUNNING" {
+		if action.Status == string(operatordomain.StatusRunning) {
 			return ManualOrderResult{Action: action}, nil
 		}
 		return invalidResult("terminal manual action has no result")
@@ -831,14 +843,14 @@ func (s *Service) loadManualOrderResult(
 	if result == nil {
 		return invalidResult("result is not an object")
 	}
-	if action.Status == "COMPLETED" && (strings.TrimSpace(result.OrderID) == "" || action.LastError != "") {
+	if action.Status == string(operatordomain.StatusCompleted) && (strings.TrimSpace(result.OrderID) == "" || action.LastError != "") {
 		return invalidResult("completed action requires child order and no error")
 	}
-	if action.Status == "FAILED" && strings.TrimSpace(action.LastError) == "" {
+	if action.Status == string(operatordomain.StatusFailed) && strings.TrimSpace(action.LastError) == "" {
 		return invalidResult("failed action requires an error")
 	}
 	if result.OrderID == "" {
-		if action.Status == "RUNNING" {
+		if action.Status == string(operatordomain.StatusRunning) {
 			return ManualOrderResult{Action: action, Accounts: result.Accounts}, nil
 		}
 		if action.LastError != "" {
@@ -852,7 +864,7 @@ func (s *Service) loadManualOrderResult(
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return invalidResult("linked child order is missing")
 	}
-	if err == nil && action.Status == "FAILED" && action.LastError != "" {
+	if err == nil && action.Status == string(operatordomain.StatusFailed) && action.LastError != "" {
 		err = manualPersistedError(action.LastError, result.ErrorCode)
 	}
 	return ManualOrderResult{
@@ -869,7 +881,7 @@ func (s *Service) failManualAction(
 	previousAction := action
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
-	action.Status = "FAILED"
+	action.Status = string(operatordomain.StatusFailed)
 	action.LastError = cause.Error()
 	var progress manualOrderActionResult
 	if action.ResultJSON != nil {
@@ -885,7 +897,7 @@ func (s *Service) failManualAction(
 		action.ResultJSON = &raw
 	}
 	if err := s.updateAction(ctx, action); err != nil {
-		if action.ActionType == "SUBMIT_ORDER" {
+		if action.ActionType == string(operatordomain.ActionSubmitOrder) {
 			return submissionIdentity(previousAction), errors.Join(cause, err)
 		}
 		return submissionIdentity(previousAction), err

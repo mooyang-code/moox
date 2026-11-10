@@ -15,7 +15,7 @@ import (
 )
 
 var (
-	ErrAccountOwnership   = errors.New("trade order: Exchange account ownership mismatch")
+	ErrAccountOwnership   = errors.New("执行账户不属于当前空间")
 	ErrInstrumentDisabled = errors.New("标的不可交易")
 	ErrQuantityRule       = errors.New("数量不符合交易规则")
 	ErrNotionalLimit      = errors.New("超过单笔子单金额上限")
@@ -218,7 +218,7 @@ func (v Validator) validateOptions(ctx context.Context, spaceID string, spec ord
 			leverage, found = shared.MustDecimal("1"), true
 		}
 		if !found || leverage.Cmp(shared.Zero()) <= 0 {
-			return Validation{}, fmt.Errorf("%w: missing symbol leverage", ErrLeverageLimit)
+			return Validation{}, fmt.Errorf("%w：该标的没有配置杠杆", ErrLeverageLimit)
 		}
 		if v.MaxLeverage.Cmp(shared.Zero()) > 0 && leverage.Cmp(v.MaxLeverage) > 0 {
 			return Validation{}, ErrLeverageLimit

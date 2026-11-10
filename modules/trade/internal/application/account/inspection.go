@@ -219,10 +219,26 @@ func (s *Service) reinspect(ctx context.Context, accountID string, countFailure 
 		result.Blocked = previous.Blocked(current.Markets)
 		return result, nil
 	}
+	// 签名检测没有结论、只测到了时钟偏差（账户类型为空且密钥没被拒绝）：权限字段全是零值，不是检测到的事实。
+	// 在上次结果的基础上只更新时钟偏差、检测时间和阻断项，不覆盖权限字段，也不把账户类型写回去造出假阻断项。
+	if inspection.AccountMode == exchange.AccountModeUnspecified && inspection.CredentialRejected == "" {
+		previous.ClockSkewMillis, previous.InspectedAt = inspection.ClockSkewMillis, inspection.InspectedAt
+		previous.ApplyFindings(current.Markets)
+		encoded, err := previous.Encode()
+		if err != nil {
+			return ReinspectResult{}, err
+		}
+		if err := s.Store.SetInspection(ctx, accountID, current.CredentialSecretID, current.AccountMode, encoded); err != nil {
+			return ReinspectResult{}, staleInspection(err)
+		}
+		result.Inspection = previous
+		result.Blocked = previous.Blocked(current.Markets)
+		return result, nil
+	}
 	// 交易所拒绝了密钥，或疑似统一账户旧密钥（papi、fapi 都被拒）：这次检测的结论是“密钥有问题”，不是“账户类型变了”，
 	// 也没能读出账户类型。已有账户的类型沿用，否则会话会被换成另一种适配器、账户类型被清空；阻断项照常生效。
 	if current.AccountMode != exchange.AccountModeUnspecified &&
-		(inspection.CredentialRejected != "" || inspection.PortfolioMarginSuspected || inspection.AccountMode == exchange.AccountModeUnspecified) {
+		(inspection.CredentialRejected != "" || inspection.PortfolioMarginSuspected) {
 		inspection.AccountMode = current.AccountMode
 	}
 	encoded, err := inspection.Encode()

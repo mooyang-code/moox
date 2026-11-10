@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/httpclient"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
@@ -33,7 +34,7 @@ var privateHandshakeTimeout = 15 * time.Second
 
 func (a *Adapter) Subscribe(ctx context.Context, handler execution.AccountEventHandler) error {
 	if handler == nil {
-		return typedRejected("private event handler is required", nil)
+		return exchange.Rejected("private event handler is required", nil)
 	}
 	if a.config.Market() == exchange.MarketTypeSpot {
 		return a.subscribeSpotPrivate(ctx, handler)
@@ -138,7 +139,7 @@ func (a *Adapter) newSpotSubscriptionRequest(timestamp int64) spotSubscriptionRe
 	}
 	params.Set("signature", fmt.Sprintf(
 		"%x",
-		hmacSha256([]byte(a.credential.APISecret), []byte(params.Encode())),
+		exchange.HMACSHA256([]byte(a.credential.APISecret), []byte(params.Encode())),
 	))
 	return spotSubscriptionRequest{
 		ID: "private-" + fmt.Sprint(timestamp), Method: "userDataStream.subscribe.signature",
@@ -166,7 +167,7 @@ func (a *Adapter) subscribeSwapPrivate(
 	}
 	var key listenKeyResponse
 	if err := json.Unmarshal(raw, &key); err != nil || key.ListenKey == "" {
-		return typedRejected("invalid private stream listen key", err)
+		return exchange.Rejected("invalid private stream listen key", err)
 	}
 	endpoint := privateStreamEndpoint(a.config) + key.ListenKey
 	connection, _, err := websocket.DefaultDialer.DialContext(
@@ -181,7 +182,7 @@ func (a *Adapter) subscribeSwapPrivate(
 
 	keepaliveDone := make(chan struct{})
 	defer close(keepaliveDone)
-	go a.keepListenKeyAlive(ctx, path, key.ListenKey, connection, keepaliveDone)
+	go keepListenKeyAlive(ctx, a.client(), a.credential.APIKey, path, connection, keepaliveDone)
 
 	handler.OnSubscribed()
 	return a.receivePrivate(ctx, connection, handler)
@@ -192,12 +193,7 @@ func (a *Adapter) receivePrivate(
 	connection *websocket.Conn,
 	handler execution.AccountEventHandler,
 ) error {
-	return a.receivePrivateWithHeartbeat(
-		ctx,
-		connection,
-		handler,
-		a.privateHeartbeatTimeout(),
-	)
+	return receiveStream(ctx, connection, handler, a.privateHeartbeatTimeout(), a.dispatchPrivate)
 }
 
 func (a *Adapter) privateHeartbeatTimeout() time.Duration {
@@ -206,15 +202,6 @@ func (a *Adapter) privateHeartbeatTimeout() time.Duration {
 		return 4 * time.Minute
 	}
 	return 60 * time.Second
-}
-
-func (a *Adapter) receivePrivateWithHeartbeat(
-	ctx context.Context,
-	connection *websocket.Conn,
-	handler execution.AccountEventHandler,
-	heartbeatTimeout time.Duration,
-) error {
-	return receiveStream(ctx, connection, handler, heartbeatTimeout, a.dispatchPrivate)
 }
 
 // receiveStream 读取私有流并逐条分派；心跳超时、读失败或分派出错都结束并返回，由会话重连。
@@ -263,10 +250,13 @@ func receiveStream(
 	}
 }
 
-func (a *Adapter) keepListenKeyAlive(
+// keepListenKeyAlive 每 30 分钟续期一次，普通账户和统一账户共用。
+// 续期 PUT 不带参数（官方文档：只需 X-MBX-APIKEY 请求头），续期的是该密钥当前有效的 listenKey。
+func keepListenKeyAlive(
 	ctx context.Context,
+	client *httpclient.Client,
+	apiKey string,
 	path string,
-	listenKey string,
 	connection *websocket.Conn,
 	done <-chan struct{},
 ) {
@@ -278,18 +268,11 @@ func (a *Adapter) keepListenKeyAlive(
 			return
 		case <-ticker.C:
 			// 限流暂停期间跳过这次续期，1 分钟后再试：listenKey 有效期 60 分钟，等满 30 分钟会过期断流。
-			if !a.client().Status().PausedUntil.IsZero() {
+			if !client.Status().PausedUntil.IsZero() {
 				ticker.Reset(time.Minute)
 				continue
 			}
-			_, err := a.client().Do(ctx, &httpclient.Request{
-				Method: http.MethodPut,
-				Path:   path,
-				Query:  url.Values{"listenKey": []string{listenKey}},
-				Headers: map[string]string{
-					"X-MBX-APIKEY": a.credential.APIKey,
-				},
-			})
+			err := renewListenKey(ctx, client, apiKey, path)
 			// 限流（确定未受理）或结果未知的续期 1 分钟后重试，只有明确失败才断开重连。
 			if exchange.NotAccepted(err) || exchange.IsKind(err, exchange.ErrorTransportUnknown) {
 				ticker.Reset(time.Minute)
@@ -302,6 +285,15 @@ func (a *Adapter) keepListenKeyAlive(
 			ticker.Reset(30 * time.Minute)
 		}
 	}
+}
+
+func renewListenKey(ctx context.Context, client *httpclient.Client, apiKey, path string) error {
+	_, err := client.Do(ctx, &httpclient.Request{
+		Method:  http.MethodPut,
+		Path:    path,
+		Headers: map[string]string{"X-MBX-APIKEY": apiKey},
+	})
+	return err
 }
 
 // privateOrder 是私有流订单事件里按精确键取出的字段，现货 executionReport 和合约 ORDER_TRADE_UPDATE 共用。
@@ -323,20 +315,10 @@ func (a *Adapter) dispatchPrivate(
 	payload []byte,
 	handler execution.AccountEventHandler,
 ) error {
-	root, err := exactFields(payload)
-	if err != nil {
-		return typedRejected("decode private event", err)
-	}
 	// WebSocket API 订阅把事件包在 event 里，listenKey 流直接是事件本身。
-	if _, wrapped := root.value("event"); wrapped {
-		if root, err = root.object("event"); err != nil {
-			return typedRejected("decode private event wrapper", err)
-		}
-	}
-	// 没有 e 的是 WS API 应答之类的非事件帧，按未知事件忽略。
-	event, err := root.str("e")
+	root, event, err := decodePrivateEvent(payload, true)
 	if err != nil {
-		return typedRejected("decode private event", err)
+		return err
 	}
 	// 先按事件类型分派：o、a 在不同事件里类型不同（executionReport 的 o 是订单类型字符串）。
 	var order privateOrder
@@ -351,60 +333,105 @@ func (a *Adapter) dispatchPrivate(
 	case "ORDER_TRADE_UPDATE":
 		body, objectErr := root.object("o")
 		if objectErr != nil {
-			return typedRejected("decode futures private order", objectErr)
+			return exchange.Rejected("decode futures private order", objectErr)
 		}
 		order, err = futuresPrivateOrder(body)
 		if err != nil {
-			return typedRejected("decode futures private order", err)
+			return exchange.Rejected("decode futures private order", err)
 		}
 	case "executionReport":
 		order, err = spotPrivateOrder(root)
 		if err != nil {
-			return typedRejected("decode spot private order", err)
+			return exchange.Rejected("decode spot private order", err)
 		}
 	default:
 		return nil
 	}
-	current, err := a.orderFromPayload(order.payload)
+	return dispatchPrivateOrder(ctx, a.config.Market(), a.config.SettlementAsset, order, handler)
+}
+
+// decodePrivateEvent 解出私有流事件的根对象和事件类型；unwrap 为真时先剥掉 WebSocket API 订阅的 event 包装。
+// 没有 e 的是 WS API 应答之类的非事件帧：缺失字段读成空串，事件类型为空，调用方按未知事件忽略。
+func decodePrivateEvent(payload []byte, unwrap bool) (fields, string, error) {
+	root, err := exactFields(payload)
+	if err != nil {
+		return nil, "", exchange.Rejected("decode private event", err)
+	}
+	if unwrap {
+		if _, wrapped := root.value("event"); wrapped {
+			if root, err = root.object("event"); err != nil {
+				return nil, "", exchange.Rejected("decode private event wrapper", err)
+			}
+		}
+	}
+	event, err := root.str("e")
+	if err != nil {
+		return nil, "", exchange.Rejected("decode private event", err)
+	}
+	return root, event, nil
+}
+
+// dispatchPrivateOrder 上报私有流订单事件，事件带成交时接着上报成交；普通账户和统一账户共用。
+func dispatchPrivateOrder(
+	ctx context.Context,
+	market exchange.MarketType,
+	settlementAsset string,
+	order privateOrder,
+	handler execution.AccountEventHandler,
+) error {
+	current, err := orderFromRow(market, order.payload)
 	if err != nil {
 		return err
 	}
 	if err := handler.OnOrder(ctx, current); err != nil {
 		return err
 	}
-	// 现货没有成交时 t 是 -1。
-	if order.execution != "TRADE" || order.tradeID == "" || order.tradeID == "-1" {
-		return nil
+	hasFill, err := order.hasFill()
+	if err != nil || !hasFill {
+		return err
 	}
-	fill, err := fillFromPrivateOrder(a.config.Market(), a.config.SettlementAsset, order)
+	fill, err := fillFromPrivateOrder(market, settlementAsset, order)
 	if err != nil {
 		return err
 	}
 	return handler.OnFill(ctx, fill)
 }
 
+// hasFill 报告事件是否带一笔成交：有成交号（现货没有成交时 t 是 -1）且本次成交量大于 0。
+// 不看执行类型：强平、自动减仓产生的成交是 CALCULATED 而不是 TRADE，同样要入账。
+func (o privateOrder) hasFill() (bool, error) {
+	if o.tradeID == "" || o.tradeID == "-1" {
+		return false, nil
+	}
+	quantity, err := exchange.DecimalOrZero(o.lastQty)
+	if err != nil {
+		return false, err
+	}
+	return quantity.Cmp(shared.Zero()) > 0, nil
+}
+
 // fillFromPrivateOrder 把私有流订单事件里的成交部分转成成交记录；普通账户和统一账户共用。
 func fillFromPrivateOrder(market exchange.MarketType, settlementAsset string, order privateOrder) (exchange.Fill, error) {
-	quantity, err := decimalOrZero(order.lastQty)
+	quantity, err := exchange.DecimalOrZero(order.lastQty)
 	if err != nil {
 		return exchange.Fill{}, err
 	}
-	price, err := decimalOrZero(order.lastPrice)
+	price, err := exchange.DecimalOrZero(order.lastPrice)
 	if err != nil {
 		return exchange.Fill{}, err
 	}
-	fee, err := decimalOrZero(order.fee)
+	fee, err := exchange.DecimalOrZero(order.fee)
 	if err != nil {
 		return exchange.Fill{}, err
 	}
-	pnl, err := decimalOrZero(order.realizedPnL)
+	pnl, err := exchange.DecimalOrZero(order.realizedPnL)
 	if err != nil {
 		return exchange.Fill{}, err
 	}
 	positionSide := exchange.PositionSideUnspecified
 	if market == exchange.MarketTypeSwap {
 		if order.payload.PositionSide != "" && order.payload.PositionSide != "BOTH" {
-			return exchange.Fill{}, typedRejected("hedge fill is unsupported", nil)
+			return exchange.Fill{}, exchange.Rejected("hedge fill is unsupported", nil)
 		}
 		positionSide = exchange.PositionSideNet
 	}
@@ -519,31 +546,47 @@ func binanceLiquidityRole(maker bool) string {
 	return "TAKER"
 }
 
-func (a *Adapter) dispatchFuturesAccount(
-	ctx context.Context,
-	root fields,
-	handler execution.AccountEventHandler,
-) error {
+// futuresAccountUpdate 是合约 ACCOUNT_UPDATE 事件里的事务时间、余额行和持仓行；普通账户和统一账户共用。
+type futuresAccountUpdate struct {
+	eventTime int64
+	balances  []fields
+	positions []fields
+}
+
+func decodeFuturesAccountUpdate(root fields) (futuresAccountUpdate, error) {
 	// T 是事务（余额实际变更）时间；E 只是消息生成时间，可能晚于 T，不能与 REST 的余额更新时间比较。
 	eventTime, err := root.int64("T")
 	if err == nil && eventTime <= 0 {
 		eventTime, err = root.int64("E")
 	}
 	if err != nil {
-		return typedRejected("decode futures account event", err)
+		return futuresAccountUpdate{}, exchange.Rejected("decode futures account event", err)
 	}
 	body, err := root.object("a")
 	if err != nil {
-		return typedRejected("decode futures account event", err)
+		return futuresAccountUpdate{}, exchange.Rejected("decode futures account event", err)
 	}
 	balances, err := body.objects("B")
 	if err != nil {
-		return typedRejected("decode futures account event", err)
+		return futuresAccountUpdate{}, exchange.Rejected("decode futures account event", err)
 	}
 	positions, err := body.objects("P")
 	if err != nil {
-		return typedRejected("decode futures account event", err)
+		return futuresAccountUpdate{}, exchange.Rejected("decode futures account event", err)
 	}
+	return futuresAccountUpdate{eventTime: eventTime, balances: balances, positions: positions}, nil
+}
+
+func (a *Adapter) dispatchFuturesAccount(
+	ctx context.Context,
+	root fields,
+	handler execution.AccountEventHandler,
+) error {
+	update, err := decodeFuturesAccountUpdate(root)
+	if err != nil {
+		return err
+	}
+	eventTime, balances, positions := update.eventTime, update.balances, update.positions
 	snapshot := exchange.AccountSnapshot{
 		ExchangeUpdatedAt: millis(eventTime),
 		Present:           exchange.AccountSnapshotPresence{Balances: true},
@@ -553,14 +596,14 @@ func (a *Adapter) dispatchFuturesAccount(
 		var asset, wallet, cross string
 		for key, target := range map[string]*string{"a": &asset, "wb": &wallet, "cw": &cross} {
 			if *target, err = row.str(key); err != nil {
-				return typedRejected("decode futures account event", err)
+				return exchange.Rejected("decode futures account event", err)
 			}
 		}
-		total, err := decimalOrZero(wallet)
+		total, err := exchange.DecimalOrZero(wallet)
 		if err != nil {
 			return err
 		}
-		available, err := decimalOrZero(cross)
+		available, err := exchange.DecimalOrZero(cross)
 		if err != nil {
 			return err
 		}
@@ -578,16 +621,13 @@ func (a *Adapter) dispatchFuturesAccount(
 			"s": &symbol, "pa": &amount, "ep": &entry, "up": &unrealized, "mt": &marginType, "ps": &side,
 		} {
 			if *target, err = row.str(key); err != nil {
-				return typedRejected("decode futures account event", err)
+				return exchange.Rejected("decode futures account event", err)
 			}
 		}
 		if side != "" && side != "BOTH" {
-			return typedRejected("hedge position mode is unsupported", nil)
+			return exchange.Rejected("hedge position mode is unsupported", nil)
 		}
-		if !strings.EqualFold(marginType, "cross") {
-			return typedRejected("isolated margin is unsupported", nil)
-		}
-		quantity, err := decimalOrZero(amount)
+		quantity, err := exchange.DecimalOrZero(amount)
 		if err != nil {
 			return err
 		}
@@ -598,9 +638,20 @@ func (a *Adapter) dispatchFuturesAccount(
 			SignedQuantity: quantity, MarginMode: exchange.MarginModeCross,
 			ExchangeUpdatedAt: millis(eventTime),
 		}
-		position.EntryPrice, err = decimalOrZero(entry)
+		if !strings.EqualFold(marginType, "cross") {
+			// 逐仓持仓只标记、不解析其余字段：没有仓位的逐仓行（推送里带出的历史标的）不算。
+			if quantity.IsZero() {
+				continue
+			}
+			position.MarginMode = exchange.MarginModeIsolated
+			if err := handler.OnPosition(ctx, position); err != nil {
+				return err
+			}
+			continue
+		}
+		position.EntryPrice, err = exchange.DecimalOrZero(entry)
 		if err == nil {
-			position.UnrealizedPnL, err = decimalOrZero(unrealized)
+			position.UnrealizedPnL, err = exchange.DecimalOrZero(unrealized)
 		}
 		if err != nil {
 			return err
@@ -617,38 +668,54 @@ func (a *Adapter) dispatchSpotAccount(
 	root fields,
 	handler execution.AccountEventHandler,
 ) error {
+	snapshot, err := decodeSpotAccountSnapshot(root, "decode spot account event", a.wallet(), false, nil)
+	if err != nil {
+		return err
+	}
+	return handler.OnAccountSnapshot(ctx, snapshot)
+}
+
+// decodeSpotAccountSnapshot 把 outboundAccountPosition 余额推送转成快照（只带 free、locked）；
+// 普通账户和统一账户共用。label 是解码失败的说明前缀，borrowed 给出各资产的借款（可为空）。
+func decodeSpotAccountSnapshot(
+	root fields,
+	label string,
+	wallet exchange.Wallet,
+	requiresSync bool,
+	borrowed map[string]shared.Decimal,
+) (exchange.AccountSnapshot, error) {
 	updatedAt, err := root.int64("u")
 	if err != nil {
-		return typedRejected("decode spot account event", err)
+		return exchange.AccountSnapshot{}, exchange.Rejected(label, err)
 	}
-	balances, err := root.objects("B")
+	rows, err := root.objects("B")
 	if err != nil {
-		return typedRejected("decode spot account event", err)
+		return exchange.AccountSnapshot{}, exchange.Rejected(label, err)
 	}
 	snapshot := exchange.AccountSnapshot{
 		ExchangeUpdatedAt: millis(updatedAt),
 		Present:           exchange.AccountSnapshotPresence{Balances: true},
+		RequiresSync:      requiresSync,
 	}
-	for _, row := range balances {
+	for _, row := range rows {
 		var asset, free, locked string
 		for key, target := range map[string]*string{"a": &asset, "f": &free, "l": &locked} {
 			if *target, err = row.str(key); err != nil {
-				return typedRejected("decode spot account event", err)
+				return exchange.AccountSnapshot{}, exchange.Rejected(label, err)
 			}
 		}
-		available, err := decimalOrZero(free)
+		available, err := exchange.DecimalOrZero(free)
 		if err != nil {
-			return err
+			return exchange.AccountSnapshot{}, err
 		}
-		lockedValue, err := decimalOrZero(locked)
+		lockedValue, err := exchange.DecimalOrZero(locked)
 		if err != nil {
-			return err
+			return exchange.AccountSnapshot{}, err
 		}
 		snapshot.Balances = append(snapshot.Balances, exchange.AssetBalance{
-			Wallet: a.wallet(),
-			Asset:  asset, Available: available, Locked: lockedValue,
-			Total: available.Add(lockedValue),
+			Wallet: wallet, Asset: asset, Available: available, Locked: lockedValue,
+			Total: available.Add(lockedValue), Borrowed: borrowed[asset],
 		})
 	}
-	return handler.OnAccountSnapshot(ctx, snapshot)
+	return snapshot, nil
 }

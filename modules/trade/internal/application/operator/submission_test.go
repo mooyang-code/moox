@@ -10,6 +10,8 @@ import (
 	"time"
 
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
+	operatordomain "github.com/mooyang-code/moox/modules/trade/internal/domain/operator"
+	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
@@ -81,7 +83,7 @@ func TestSubmitOrderRealStoreReplayConflictAndMultipleActive(t *testing.T) {
 	command := submissionCommand(f)
 	first, err := s.SubmitOrder(ctx, command)
 	require.NoError(t, err)
-	require.Equal(t, "PENDING", first.Order.State)
+	require.Equal(t, string(orderdomain.Pending), first.Order.State)
 	require.Empty(t, f.trace)
 	require.Zero(t, adapter.posts)
 	var reservations int64
@@ -108,11 +110,11 @@ func TestSubmitOrderRealStoreReplayConflictAndMultipleActive(t *testing.T) {
 	require.Equal(t, 1, adapter.posts)
 	stillPending, err := f.store.GetOrder(ctx, "space-1", second.Order.OrderID)
 	require.NoError(t, err)
-	require.Equal(t, "PENDING", stillPending.State)
+	require.Equal(t, string(orderdomain.Pending), stillPending.State)
 	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_trading_accounts SET c_status='DISABLED' WHERE c_trading_account_id='account-a'").Error)
 	replay, err = s.SubmitOrder(ctx, command)
 	require.NoError(t, err)
-	require.Equal(t, "COMPLETED", replay.Action.Status)
+	require.Equal(t, string(operatordomain.StatusCompleted), replay.Action.Status)
 	require.Equal(t, first.Order.OrderID, replay.Order.OrderID)
 }
 
@@ -160,7 +162,7 @@ func TestSubmitOrderExplicitDeadlineAndUnknownQueryFirst(t *testing.T) {
 	require.Zero(t, adapter.posts)
 	action, err = f.store.GetOperatorAction(context.Background(), command.SpaceID, command.ActionID)
 	require.NoError(t, err)
-	require.Equal(t, "COMPLETED", action.Status)
+	require.Equal(t, string(operatordomain.StatusCompleted), action.Status)
 }
 
 func TestSubmitOrderPendingExpiredOrModeChangedReleasesReservation(t *testing.T) {
@@ -184,7 +186,7 @@ func TestSubmitOrderPendingExpiredOrModeChangedReleasesReservation(t *testing.T)
 			require.Empty(t, child.ExchangeOrderID)
 			action, err := f.store.GetOperatorAction(context.Background(), command.SpaceID, command.ActionID)
 			require.NoError(t, err)
-			require.Equal(t, "FAILED", action.Status)
+			require.Equal(t, string(operatordomain.StatusFailed), action.Status)
 			var remaining string
 			require.NoError(t, f.store.DBForTest().Raw("SELECT c_remaining_reserved_quantity FROM t_trade_orders WHERE c_order_id=?", child.OrderID).Scan(&remaining).Error)
 			require.Equal(t, "0", remaining)
@@ -197,8 +199,8 @@ func TestSubmitOrderAcceptsWithoutTakeoverOrPost(t *testing.T) {
 	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode='MANUAL',c_owner_instance_id=NULL,c_owner_session_id=NULL,c_automation_state='PAUSED',c_pause_reason='manual' WHERE c_logical_account_id='logical-1'").Error)
 	got, err := f.service().SubmitOrder(context.Background(), submissionCommand(f))
 	require.NoError(t, err)
-	require.Equal(t, "RUNNING", got.Action.Status)
-	require.Equal(t, "PENDING", got.Order.State)
+	require.Equal(t, string(operatordomain.StatusRunning), got.Action.Status)
+	require.Equal(t, string(orderdomain.Pending), got.Order.State)
 	require.Equal(t, []string{"place:submit-client"}, f.trace)
 	require.Zero(t, f.orders.submitCalls)
 }
@@ -282,7 +284,7 @@ func TestSubmitOrderUnknownNotFoundAfterDeadlineDiscardsWithoutPost(t *testing.T
 	require.NoError(t, err)
 	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_trade_orders SET c_state='SUBMIT_UNKNOWN',c_submitted_at=? WHERE c_order_id=?", f.now.UnixMilli(), result.Order.OrderID).Error)
 	f.now = f.now.Add(time.Hour)
-	adapter.lookupErr = &exchange.Error{Kind: exchange.ErrorOrderNotFound}
+	adapter.lookupErr = &exchange.Error{Kind: exchange.ErrorOrderNotFound, Code: "-2013"}
 	require.NoError(t, s.ResumeOperatorAction(context.Background(), result.Action))
 	require.Equal(t, 1, adapter.queries)
 	require.Zero(t, adapter.posts)
@@ -292,12 +294,12 @@ func TestSubmitOrderUnknownNotFoundAfterDeadlineDiscardsWithoutPost(t *testing.T
 	require.Equal(t, "0", child.RemainingReservedQuantity)
 	action, err := f.store.GetOperatorAction(context.Background(), command.SpaceID, command.ActionID)
 	require.NoError(t, err)
-	require.Equal(t, "FAILED", action.Status)
+	require.Equal(t, string(operatordomain.StatusFailed), action.Status)
 }
 
 func TestSubmissionRecoveryNeverSwallowsInfrastructureErrors(t *testing.T) {
 	failure := errors.New("database is closed")
-	require.ErrorIs(t, submissionRecoveryError(ManualOrderResult{Action: store.OperatorActionRecord{Status: "FAILED"}}, failure), failure)
+	require.ErrorIs(t, submissionRecoveryError(ManualOrderResult{Action: store.OperatorActionRecord{Status: string(operatordomain.StatusFailed)}}, failure), failure)
 }
 
 type submissionResumerFunc func(context.Context, store.OperatorActionRecord) error
@@ -312,7 +314,7 @@ func TestSubmitOrderWorkerAdvancesDurableActionWithoutSyncer(t *testing.T) {
 	command := submissionCommand(f)
 	result, err := s.SubmitOrder(context.Background(), command)
 	require.NoError(t, err)
-	require.Equal(t, "PENDING", result.Order.State)
+	require.Equal(t, string(orderdomain.Pending), result.Order.State)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	worker := &traderuntime.OperatorWorker{Actions: f.store, Resumer: submissionResumerFunc(func(ctx context.Context, action store.OperatorActionRecord) error {
@@ -326,7 +328,7 @@ func TestSubmitOrderWorkerAdvancesDurableActionWithoutSyncer(t *testing.T) {
 	require.Equal(t, 1, adapter.posts)
 	action, err := f.store.GetOperatorAction(context.Background(), command.SpaceID, command.ActionID)
 	require.NoError(t, err)
-	require.Equal(t, "COMPLETED", action.Status)
+	require.Equal(t, string(operatordomain.StatusCompleted), action.Status)
 }
 
 func TestSubmitOrderTransientFailureReturnsDurableActionAndOriginalError(t *testing.T) {
@@ -341,7 +343,7 @@ func TestSubmitOrderTransientFailureReturnsDurableActionAndOriginalError(t *test
 			}
 			result, err := s.SubmitOrder(context.Background(), submissionCommand(f))
 			require.ErrorIs(t, err, cause)
-			require.Equal(t, "RUNNING", result.Action.Status)
+			require.Equal(t, string(operatordomain.StatusRunning), result.Action.Status)
 			require.Equal(t, cause.Error(), result.Action.LastError)
 			require.Empty(t, result.Order.OrderID)
 			require.NoError(t, s.ResumeOperatorAction(context.Background(), result.Action))
@@ -356,7 +358,7 @@ func TestSubmitOrderWorkerPlaceDatabaseFailureRemainsUnhealthy(t *testing.T) {
 	command := submissionCommand(f)
 	result, err := s.SubmitOrder(context.Background(), command)
 	require.Error(t, err)
-	require.Equal(t, "RUNNING", result.Action.Status)
+	require.Equal(t, string(operatordomain.StatusRunning), result.Action.Status)
 	s.Prices = f.prices
 	dbFailure := errors.New("injected order insert database failure")
 	injected := false
@@ -384,7 +386,7 @@ func TestSubmitOrderWorkerPlaceDatabaseFailureRemainsUnhealthy(t *testing.T) {
 	require.Zero(t, adapter.posts)
 	action, err := f.store.GetOperatorAction(context.Background(), command.SpaceID, command.ActionID)
 	require.NoError(t, err)
-	require.Equal(t, "RUNNING", action.Status)
+	require.Equal(t, string(operatordomain.StatusRunning), action.Status)
 	require.Equal(t, dbFailure.Error(), action.LastError)
 	var count int64
 	require.NoError(t, f.store.DBForTest().Table("t_trade_orders").Count(&count).Error)
@@ -398,16 +400,16 @@ func TestSubmitOrderRecoveryDatabaseFailuresRemainVisible(t *testing.T) {
 			command := submissionCommand(f)
 			result, err := s.SubmitOrder(context.Background(), command)
 			require.NoError(t, err)
-			wantState := "PENDING"
+			wantState := string(orderdomain.Pending)
 			if path == "unknown" {
-				wantState = "SUBMIT_UNKNOWN"
+				wantState = string(orderdomain.SubmitUnknown)
 				require.NoError(t, f.store.DBForTest().Exec("UPDATE t_trade_orders SET c_state='SUBMIT_UNKNOWN',c_submitted_at=? WHERE c_order_id=?", f.now.UnixMilli(), result.Order.OrderID).Error)
 			}
 			if path == "discard" {
 				f.now = f.now.Add(time.Hour)
 			}
 			if path == "submit-outcome" {
-				wantState = "SUBMITTING"
+				wantState = string(orderdomain.Submitting)
 			}
 			cause := errors.New("injected " + path + " order update database failure")
 			injected := false
@@ -437,7 +439,7 @@ func TestSubmitOrderRecoveryDatabaseFailuresRemainVisible(t *testing.T) {
 			require.Equal(t, result.Order.RemainingReservedQuantity, child.RemainingReservedQuantity)
 			action, err := f.store.GetOperatorAction(context.Background(), command.SpaceID, command.ActionID)
 			require.NoError(t, err)
-			require.Equal(t, "RUNNING", action.Status)
+			require.Equal(t, string(operatordomain.StatusRunning), action.Status)
 			require.Equal(t, cause.Error(), action.LastError)
 			if path == "submit-outcome" {
 				require.Equal(t, 1, adapter.posts)
@@ -456,13 +458,13 @@ func TestSubmitOrderUnconfirmedLookupIsNotInfrastructureFailure(t *testing.T) {
 	result, err := s.SubmitOrder(context.Background(), submissionCommand(f))
 	require.NoError(t, err)
 	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_trade_orders SET c_state='SUBMIT_UNKNOWN',c_submitted_at=? WHERE c_order_id=?", f.now.UnixMilli(), result.Order.OrderID).Error)
-	adapter.lookupErr = &exchange.Error{Kind: exchange.ErrorOrderNotFound}
+	adapter.lookupErr = &exchange.Error{Kind: exchange.ErrorOrderNotFound, Code: "-2013"}
 	require.NoError(t, s.ResumeOperatorAction(context.Background(), result.Action))
 	require.Zero(t, adapter.posts)
 	require.Equal(t, 1, adapter.queries)
 	child, err := f.store.GetOrder(context.Background(), "space-1", result.Order.OrderID)
 	require.NoError(t, err)
-	require.Equal(t, "SUBMIT_UNKNOWN", child.State)
+	require.Equal(t, string(orderdomain.SubmitUnknown), child.State)
 }
 
 func TestSubmitOrderWorkerPermanentRevalidationFailureIsBusinessOutcome(t *testing.T) {
@@ -474,6 +476,6 @@ func TestSubmitOrderWorkerPermanentRevalidationFailureIsBusinessOutcome(t *testi
 	require.Zero(t, adapter.posts)
 	action, err := f.store.GetOperatorAction(context.Background(), result.Action.SpaceID, result.Action.ActionID)
 	require.NoError(t, err)
-	require.Equal(t, "FAILED", action.Status)
+	require.Equal(t, string(operatordomain.StatusFailed), action.Status)
 	require.Contains(t, action.LastError, orderapp.ErrNotionalLimit.Error())
 }

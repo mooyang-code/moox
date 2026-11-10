@@ -31,6 +31,9 @@ type OrderService interface {
 	Place(ctx context.Context, spaceID string, spec orderdomain.OrderSpec) (orderdomain.Order, error)
 	Submit(ctx context.Context, spaceID, orderID string) (orderdomain.Order, error)
 	Cancel(ctx context.Context, spaceID, orderID string) (orderdomain.Order, error)
+	DiscardPending(ctx context.Context, spaceID, orderID string) (orderdomain.Order, error)
+	ResolveUnknown(ctx context.Context, spaceID, orderID string) (orderdomain.Order, error)
+	RecoverCancel(ctx context.Context, spaceID, orderID string) (orderdomain.Order, error)
 }
 
 // 系统单的归属 ID：同一类任务的订单用同一个，下一次检查时据此找到上次没成交的单。
@@ -39,7 +42,7 @@ const (
 	ownerStableRebalance = "stable-rebalance"
 )
 
-// 约定的数值：BNB 市值低于“保留金额 − fundsettings.BNBReserveSlack”才补买；稳定币偏离目标超过 stableDeviation（占稳定币总价值的比例，
+// 约定的数值：BNB 市值低于“目标 − 容差”才补买（统一账户目标是保留金额、容差 fundsettings.BNBReserveSlack，普通账户只补现货钱包、两者都减半，见 BNBBounds）；稳定币偏离目标超过 stableDeviation（占稳定币总价值的比例，
 // 取绝对差）才调平；零头资产价值低于 dustValueLimit（结算币计）才兑换。
 var (
 	stableDeviation = shared.MustDecimal("0.05")
@@ -203,7 +206,13 @@ func (s *Service) RunLogicalAccount(ctx context.Context, logical store.LogicalAc
 			}
 			// BNB 补买单刚下出（或还没结束）时调平先让路：补买要花 USDT，余额要等同步才更新。
 			if !hasOpen && !bnbBusy && err == nil {
-				if err := s.rebalanceStablecoins(ctx, logical, settings, account, adapter); err != nil {
+				// 过期的买单撤掉的同一轮就重算重挂（定时器每小时才一次，账户就绪唤醒每个账户每个进程只一次，不能等下一轮）：
+				// 撤单前可能有部分成交，重读账户；成交还没进快照时账户未就绪，等下一轮。
+				fresh, err := s.Store.GetTradingAccountByID(ctx, account.TradingAccountID)
+				if err == nil && fresh.Ready {
+					err = s.rebalanceStablecoins(ctx, logical, settings, fresh, adapter)
+				}
+				if err != nil {
 					runErrors = append(runErrors, fmt.Errorf("账户 %s 稳定币调平：%w", account.TradingAccountID, err))
 				}
 			}
@@ -391,6 +400,52 @@ func (s *Service) placeSystemOrder(
 	}
 	_, err = s.Orders.Submit(ctx, logical.SpaceID, string(placed.ID))
 	return err
+}
+
+// advanceUnconfirmed 推进还没有交易所结果的旧系统单：待提交的丢弃；提交中、结果未知的先解析，
+// 解析后退回待提交的接着丢弃。系统单由组合锁串行下出，在锁里看到这样的旧单，要么是提交失败留下的，
+// 要么是进程中途退出留下的，没有别的代码会推进它们；不处理的话它们一直算“未结束”，补买和调平永远让路。
+// 解析后仍然未知（还在查询窗口内）的不报错，下一轮再解析。
+func (s *Service) advanceUnconfirmed(ctx context.Context, record store.OrderRecord) error {
+	switch orderdomain.State(record.State) {
+	case orderdomain.Pending:
+		_, err := s.Orders.DiscardPending(ctx, record.SpaceID, record.OrderID)
+		return err
+	case orderdomain.Submitting, orderdomain.SubmitUnknown:
+		resolved, err := s.Orders.ResolveUnknown(ctx, record.SpaceID, record.OrderID)
+		if err != nil || resolved.State != orderdomain.Pending {
+			return err
+		}
+		_, err = s.Orders.DiscardPending(ctx, record.SpaceID, record.OrderID)
+		return err
+	}
+	return nil
+}
+
+// stopOrder 结束一笔还没成交完的系统单，写法与人工操作的 stopOrder 一致：待提交丢弃；提交中、结果未知先解析
+// （解析成挂单的接着撤）；撤单中走撤单恢复；其余才撤。提交结果未知的单不能直接撤，撤单被拒后会得到一个没有交易所单号的挂单。
+func (s *Service) stopOrder(ctx context.Context, record store.OrderRecord) error {
+	switch orderdomain.State(record.State) {
+	case orderdomain.Pending, orderdomain.Submitting, orderdomain.SubmitUnknown:
+		if err := s.advanceUnconfirmed(ctx, record); err != nil {
+			return err
+		}
+		latest, err := s.Store.GetOrder(ctx, record.SpaceID, record.OrderID)
+		if err != nil {
+			return err
+		}
+		switch orderdomain.State(latest.State) {
+		case orderdomain.Open, orderdomain.PartiallyFilled, orderdomain.Canceling, orderdomain.CancelUnknown:
+			return s.stopOrder(ctx, latest)
+		}
+		return nil
+	case orderdomain.Canceling, orderdomain.CancelUnknown:
+		_, err := s.Orders.RecoverCancel(ctx, record.SpaceID, record.OrderID)
+		return err
+	default:
+		_, err := s.Orders.Cancel(ctx, record.SpaceID, record.OrderID)
+		return err
+	}
 }
 
 // openSystemOrders 返回账户上这类系统单里还没结束的订单。

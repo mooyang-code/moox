@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
@@ -119,7 +120,7 @@ func (s *Service) SubmitBatch(ctx context.Context, spaceID string, orderIDs []st
 			closed[accountID] = struct{}{}
 			closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 			err := s.Store.Transaction(closeCtx, func(tx *store.Tx) error {
-				return tx.UpdateTradingAccountReadiness(send.record.SpaceID, accountID, false, s.now().UnixMilli(), fillAwaitingBalance)
+				return tx.UpdateTradingAccountReadiness(send.record.SpaceID, accountID, false, s.now().UnixMilli(), consumer.AwaitingBalanceReason)
 			})
 			cancel()
 			if err != nil {
@@ -268,10 +269,7 @@ func (s *Service) ResolveUnknownQuiet(ctx context.Context, spaceID, orderID stri
 
 // lookupDue 判断这笔未知订单现在是否该查：没查过就查；查过的要等未知窗口到期再查最后一次。
 func (s *Service) lookupDue(record store.OrderRecord) bool {
-	window := s.UnknownLookupWindow
-	if window <= 0 {
-		window = 30 * time.Second
-	}
+	window := s.unknownLookupWindow()
 	now := s.now()
 	s.lookupMu.Lock()
 	defer s.lookupMu.Unlock()

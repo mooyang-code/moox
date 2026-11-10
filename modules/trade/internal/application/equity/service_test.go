@@ -104,7 +104,7 @@ func TestSampleAccountValuesLiveSpotBalancesWhenSnapshotHasNoEquity(t *testing.T
 	if adapter.symbol != "BTCUSDT" {
 		t.Fatalf("quote symbol = %q, want instrument ExchangeSymbol", adapter.symbol)
 	}
-	logicalPoints, err := tradeStore.ListLogicalAccountEquityPoints(context.Background(), "space-1", "logical-1", 0, 0)
+	logicalPoints, err := allLogicalEquityPoints(tradeStore)
 	if err != nil {
 		t.Fatal(err)
 	}

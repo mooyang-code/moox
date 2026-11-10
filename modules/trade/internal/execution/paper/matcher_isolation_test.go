@@ -221,15 +221,14 @@ func TestMatcherEnqueuesAfterUnlockAndRefresh(t *testing.T) {
 	s := matcherFixture(t)
 	refreshed := false
 	m := &Matcher{Store: s, Reducer: &consumer.Reducer{Store: s}, Refresh: func(context.Context, string) error { refreshed = true; return nil }}
+	m.DecideContext = func(_ context.Context, o store.OrderRecord) (Decision, error) { return matchFill(o), nil }
 	m.Enqueue = func(id string) {
 		require.True(t, refreshed)
 		unlock := s.LockTradingAccount(id)
 		unlock()
 	}
-	o, err := s.GetOrder(context.Background(), "s", "a")
-	require.NoError(t, err)
 	done := make(chan error, 1)
-	go func() { done <- m.MatchOrder(context.Background(), o, matchFill(o)) }()
+	go func() { done <- m.Scan(context.Background()) }()
 	select {
 	case err := <-done:
 		require.NoError(t, err)
@@ -240,11 +239,15 @@ func TestMatcherEnqueuesAfterUnlockAndRefresh(t *testing.T) {
 
 func TestMatcherWakesTargetAfterFillIsCommitted(t *testing.T) {
 	s := matcherFixture(t)
-	o, err := s.GetOrder(context.Background(), "s", "a")
-	require.NoError(t, err)
-	o.LogicalAccountID = "logical"
 	var woken []string
 	m := &Matcher{Store: s, Reducer: &consumer.Reducer{Store: s}}
+	// 只成交账户 a 的订单，b 的订单只清首次撮合标记。
+	m.DecideContext = func(_ context.Context, o store.OrderRecord) (Decision, error) {
+		if o.TradingAccountID == "a" {
+			return matchFill(o), nil
+		}
+		return Decision{Rest: true}, nil
+	}
 	m.WakeTarget = func(spaceID, logicalAccountID string) {
 		// 被唤醒时成交必须已经落库，并且账户锁已释放。
 		current, getErr := s.GetOrder(context.Background(), "s", "a")
@@ -255,14 +258,14 @@ func TestMatcherWakesTargetAfterFillIsCommitted(t *testing.T) {
 		woken = append(woken, spaceID+"/"+logicalAccountID)
 	}
 	done := make(chan error, 1)
-	go func() { done <- m.MatchOrder(context.Background(), o, matchFill(o)) }()
+	go func() { done <- m.Scan(context.Background()) }()
 	select {
 	case err := <-done:
 		require.NoError(t, err)
 	case <-time.After(time.Second):
 		t.Fatal("WakeTarget called while account lock held")
 	}
-	require.Equal(t, []string{"s/logical"}, woken)
+	require.Equal(t, []string{"s/"}, woken)
 }
 
 func TestPaperSnapshotClassifiesClosedDatabaseAsSharedFailure(t *testing.T) {

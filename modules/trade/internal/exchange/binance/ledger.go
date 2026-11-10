@@ -39,10 +39,10 @@ func (a *Adapter) LedgerSupported() bool {
 // 满页说明这段装不下，按这一页覆盖的时间跨度估算密度，缩小窗口重查这段的末尾；不满页就整段收下再往前。
 func (a *Adapter) ListLedger(ctx context.Context, query exchange.LedgerQuery) (exchange.LedgerPage, error) {
 	if !a.LedgerSupported() {
-		return exchange.LedgerPage{}, typedRejected("该账户不支持资金流水", nil)
+		return exchange.LedgerPage{}, exchange.Rejected("该账户不支持资金流水", nil)
 	}
 	if query.Limit <= 0 || query.End.Before(query.Start) {
-		return exchange.LedgerPage{}, typedRejected("invalid ledger query", nil)
+		return exchange.LedgerPage{}, exchange.Rejected("invalid ledger query", nil)
 	}
 	var entries []exchange.LedgerEntry
 	end := query.End.UnixMilli()
@@ -92,18 +92,18 @@ func (a *Adapter) incomePage(ctx context.Context, from, to int64) ([]incomePaylo
 	}
 	var rows []incomePayload
 	if err := json.Unmarshal(raw, &rows); err != nil {
-		return nil, typedRejected("decode income", err)
+		return nil, exchange.Rejected("decode income", err)
 	}
 	return rows, nil
 }
 
 func incomeEntry(row incomePayload) (exchange.LedgerEntry, error) {
-	amount, err := decimalOrZero(row.Income)
+	amount, err := exchange.DecimalOrZero(row.Income)
 	if err != nil {
 		return exchange.LedgerEntry{}, err
 	}
 	if row.Time <= 0 || row.TranID.String() == "" {
-		return exchange.LedgerEntry{}, typedRejected("income row lacks time or tranId", errors.New(row.IncomeType))
+		return exchange.LedgerEntry{}, exchange.Rejected("income row lacks time or tranId", errors.New(row.IncomeType))
 	}
 	return exchange.LedgerEntry{
 		// tranId 在同一笔成交的手续费和已实现盈亏之间可能相同，带上类型保证唯一。

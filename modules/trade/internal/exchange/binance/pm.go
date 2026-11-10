@@ -78,7 +78,7 @@ func (p *PortfolioMargin) route(market exchange.MarketType) (*Adapter, error) {
 	if sub := p.markets[market]; sub != nil {
 		return sub, nil
 	}
-	return nil, typedRejected(fmt.Sprintf("账户没有开通市场 %q", market), nil)
+	return nil, exchange.Rejected(fmt.Sprintf("账户没有开通市场 %q", market), nil)
 }
 
 func (p *PortfolioMargin) LoadInstruments(ctx context.Context) ([]exchange.Instrument, error) {
@@ -227,7 +227,7 @@ func (p *PortfolioMargin) LedgerSupported() bool { return p.hasMarket(exchange.M
 
 func (p *PortfolioMargin) ListLedger(ctx context.Context, query exchange.LedgerQuery) (exchange.LedgerPage, error) {
 	if !p.hasMarket(exchange.MarketTypeSwap) || (query.Market != exchange.MarketTypeUnspecified && query.Market != exchange.MarketTypeSwap) {
-		return exchange.LedgerPage{}, typedRejected("该账户不支持这个市场的资金流水", nil)
+		return exchange.LedgerPage{}, exchange.Rejected("该账户不支持这个市场的资金流水", nil)
 	}
 	page, err := p.markets[exchange.MarketTypeSwap].ListLedger(ctx, query)
 	if err != nil {
@@ -289,7 +289,7 @@ func (p *PortfolioMargin) GetAccountSnapshot(ctx context.Context) (exchange.Acco
 	}
 	var balances []pmBalance
 	if err := json.Unmarshal(rawBalance, &balances); err != nil {
-		return exchange.AccountSnapshot{}, typedRejected("decode portfolio margin balance", err)
+		return exchange.AccountSnapshot{}, exchange.Rejected("decode portfolio margin balance", err)
 	}
 	rawAccount, err := p.core.request(ctx, http.MethodGet, "/papi/v1/account", nil)
 	if err != nil {
@@ -297,7 +297,7 @@ func (p *PortfolioMargin) GetAccountSnapshot(ctx context.Context) (exchange.Acco
 	}
 	var account pmAccount
 	if err := json.Unmarshal(rawAccount, &account); err != nil {
-		return exchange.AccountSnapshot{}, typedRejected("decode portfolio margin account", err)
+		return exchange.AccountSnapshot{}, exchange.Rejected("decode portfolio margin account", err)
 	}
 	snapshot := exchange.AccountSnapshot{
 		Present: exchange.AccountSnapshotPresence{
@@ -319,7 +319,7 @@ func (p *PortfolioMargin) GetAccountSnapshot(ctx context.Context) (exchange.Acco
 		if err != nil {
 			return exchange.AccountSnapshot{}, err
 		}
-		unified, err := decimalOrZero(row.UMWalletBalance)
+		unified, err := exchange.DecimalOrZero(row.UMWalletBalance)
 		if err != nil {
 			return exchange.AccountSnapshot{}, err
 		}
@@ -346,23 +346,23 @@ func (p *PortfolioMargin) GetAccountSnapshot(ctx context.Context) (exchange.Acco
 	snapshot.WalletUpdatedAt = map[exchange.Wallet]time.Time{
 		exchange.WalletMargin: snapshot.ExchangeUpdatedAt, exchange.WalletUnified: snapshot.ExchangeUpdatedAt,
 	}
-	if snapshot.ExchangeEquity, err = decimalOrZero(account.AccountEquity); err != nil {
+	if snapshot.ExchangeEquity, err = exchange.DecimalOrZero(account.AccountEquity); err != nil {
 		return exchange.AccountSnapshot{}, err
 	}
 	snapshot.Equity = snapshot.ExchangeEquity
-	if snapshot.UsedMargin, err = decimalOrZero(account.AccountInitialMargin); err != nil {
+	if snapshot.UsedMargin, err = exchange.DecimalOrZero(account.AccountInitialMargin); err != nil {
 		return exchange.AccountSnapshot{}, err
 	}
-	if snapshot.MaintenanceMargin, err = decimalOrZero(account.AccountMaintMargin); err != nil {
+	if snapshot.MaintenanceMargin, err = exchange.DecimalOrZero(account.AccountMaintMargin); err != nil {
 		return exchange.AccountSnapshot{}, err
 	}
-	if snapshot.UniMMR, err = decimalOrZero(account.UniMMR); err != nil {
+	if snapshot.UniMMR, err = exchange.DecimalOrZero(account.UniMMR); err != nil {
 		return exchange.AccountSnapshot{}, err
 	}
 	// 账户级可用资金：优先用接口给的 totalAvailableBalance；官方样例里它是空串（未核对真实取值），
 	// 取不到时用“杠杆钱包可用 + UM 钱包余额 − 账户已用初始保证金”估算，不低于 0。
 	if account.TotalAvailableBalance != "" {
-		snapshot.AvailableFunds, err = decimalOrZero(account.TotalAvailableBalance)
+		snapshot.AvailableFunds, err = exchange.DecimalOrZero(account.TotalAvailableBalance)
 		if err != nil {
 			return exchange.AccountSnapshot{}, err
 		}
@@ -384,20 +384,20 @@ func pmMarginBalance(row pmBalance) (exchange.AssetBalance, error) {
 	var out exchange.AssetBalance
 	var err error
 	out.Wallet, out.Asset = exchange.WalletMargin, row.Asset
-	if out.Total, err = decimalOrZero(row.CrossMarginAsset); err != nil {
+	if out.Total, err = exchange.DecimalOrZero(row.CrossMarginAsset); err != nil {
 		return out, err
 	}
-	if out.Available, err = decimalOrZero(row.CrossMarginFree); err != nil {
+	if out.Available, err = exchange.DecimalOrZero(row.CrossMarginFree); err != nil {
 		return out, err
 	}
-	if out.Locked, err = decimalOrZero(row.CrossMarginLocked); err != nil {
+	if out.Locked, err = exchange.DecimalOrZero(row.CrossMarginLocked); err != nil {
 		return out, err
 	}
-	loan, err := decimalOrZero(row.CrossMarginBorrowed)
+	loan, err := exchange.DecimalOrZero(row.CrossMarginBorrowed)
 	if err != nil {
 		return out, err
 	}
-	interest, err := decimalOrZero(row.CrossMarginInterest)
+	interest, err := exchange.DecimalOrZero(row.CrossMarginInterest)
 	if err != nil {
 		return out, err
 	}
@@ -414,10 +414,10 @@ func (p *PortfolioMargin) ensureOneWayMode(ctx context.Context) error {
 		DualSidePosition bool `json:"dualSidePosition"`
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		return typedRejected("decode position mode", err)
+		return exchange.Rejected("decode position mode", err)
 	}
 	if payload.DualSidePosition {
-		return typedRejected("hedge position mode is unsupported", nil)
+		return exchange.Rejected("hedge position mode is unsupported", nil)
 	}
 	return nil
 }
@@ -446,14 +446,14 @@ func (p *PortfolioMargin) ListPositionSnapshots(ctx context.Context) ([]exchange
 	}
 	var rows []pmPosition
 	if err := json.Unmarshal(raw, &rows); err != nil {
-		return nil, typedRejected("decode portfolio margin positions", err)
+		return nil, exchange.Rejected("decode portfolio margin positions", err)
 	}
 	out := make([]exchange.Position, 0, len(rows))
 	for _, row := range rows {
 		if row.PositionSide != "" && row.PositionSide != "BOTH" {
-			return nil, typedRejected("hedge position mode is unsupported", nil)
+			return nil, exchange.Rejected("hedge position mode is unsupported", nil)
 		}
-		quantity, err := decimalOrZero(row.PositionAmt)
+		quantity, err := exchange.DecimalOrZero(row.PositionAmt)
 		if err != nil || quantity.IsZero() {
 			continue
 		}
@@ -463,23 +463,23 @@ func (p *PortfolioMargin) ListPositionSnapshots(ctx context.Context) ([]exchange
 			SignedQuantity: quantity, MarginMode: exchange.MarginModeCross,
 			ExchangeUpdatedAt: millis(row.UpdateTime),
 		}
-		if position.EntryPrice, err = decimalOrZero(row.EntryPrice); err != nil {
+		if position.EntryPrice, err = exchange.DecimalOrZero(row.EntryPrice); err != nil {
 			return nil, err
 		}
-		if position.MarkPrice, err = decimalOrZero(row.MarkPrice); err != nil {
+		if position.MarkPrice, err = exchange.DecimalOrZero(row.MarkPrice); err != nil {
 			return nil, err
 		}
-		if position.LiquidationPrice, err = decimalOrZero(row.LiquidationPrice); err != nil {
+		if position.LiquidationPrice, err = exchange.DecimalOrZero(row.LiquidationPrice); err != nil {
 			return nil, err
 		}
-		if position.UnrealizedPnL, err = decimalOrZero(row.UnRealizedProfit); err != nil {
+		if position.UnrealizedPnL, err = exchange.DecimalOrZero(row.UnRealizedProfit); err != nil {
 			return nil, err
 		}
 		position.Leverage = shared.MustDecimal("1")
-		if leverage, parseErr := decimalOrZero(row.Leverage); parseErr == nil && leverage.Cmp(shared.Zero()) > 0 {
+		if leverage, parseErr := exchange.DecimalOrZero(row.Leverage); parseErr == nil && leverage.Cmp(shared.Zero()) > 0 {
 			position.Leverage = leverage
 		}
-		if notional, parseErr := decimalOrZero(row.Notional); parseErr == nil {
+		if notional, parseErr := exchange.DecimalOrZero(row.Notional); parseErr == nil {
 			position.UsedMargin = notional.Abs().Div(position.Leverage)
 		}
 		out = append(out, position)
@@ -490,7 +490,7 @@ func (p *PortfolioMargin) ListPositionSnapshots(ctx context.Context) ([]exchange
 // Subscribe 订阅统一账户的私有流：一个 listenKey、一条连接，现货（杠杆账户）和合约（UM）事件都来自这条流。
 func (p *PortfolioMargin) Subscribe(ctx context.Context, handler execution.AccountEventHandler) error {
 	if handler == nil {
-		return typedRejected("private event handler is required", nil)
+		return exchange.Rejected("private event handler is required", nil)
 	}
 	const path = "/papi/v1/listenKey"
 	headers := map[string]string{"X-MBX-APIKEY": p.credential.APIKey}
@@ -500,7 +500,7 @@ func (p *PortfolioMargin) Subscribe(ctx context.Context, handler execution.Accou
 	}
 	var key listenKeyResponse
 	if err := json.Unmarshal(raw, &key); err != nil || key.ListenKey == "" {
-		return typedRejected("invalid private stream listen key", err)
+		return exchange.Rejected("invalid private stream listen key", err)
 	}
 	connection, _, err := websocket.DefaultDialer.DialContext(
 		ctx, pmStreamURL+key.ListenKey, http.Header{"Origin": []string{"https://moox.local"}},
@@ -512,39 +512,10 @@ func (p *PortfolioMargin) Subscribe(ctx context.Context, handler execution.Accou
 
 	done := make(chan struct{})
 	defer close(done)
-	go p.keepListenKeyAlive(ctx, path, connection, done)
+	go keepListenKeyAlive(ctx, p.papi, p.credential.APIKey, path, connection, done)
 
 	handler.OnSubscribed()
 	return receiveStream(ctx, connection, handler, pmHeartbeatTimeout, p.dispatchPrivate)
-}
-
-// keepListenKeyAlive 每 30 分钟续期一次（统一账户的 listenKey 60 分钟过期，续期不带参数）。
-func (p *PortfolioMargin) keepListenKeyAlive(ctx context.Context, path string, connection *websocket.Conn, done <-chan struct{}) {
-	ticker := time.NewTicker(30 * time.Minute)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-done:
-			return
-		case <-ticker.C:
-			if !p.papi.Status().PausedUntil.IsZero() {
-				ticker.Reset(time.Minute)
-				continue
-			}
-			_, err := p.papi.Do(ctx, &httpclient.Request{
-				Method: http.MethodPut, Path: path, Headers: map[string]string{"X-MBX-APIKEY": p.credential.APIKey},
-			})
-			if exchange.NotAccepted(err) || exchange.IsKind(err, exchange.ErrorTransportUnknown) {
-				ticker.Reset(time.Minute)
-				continue
-			}
-			if err != nil {
-				_ = connection.Close()
-				return
-			}
-			ticker.Reset(30 * time.Minute)
-		}
-	}
 }
 
 // dispatchPrivate 按事件类型分派统一账户私有流。事件里没有市场字段，靠类型区分：
@@ -554,19 +525,9 @@ func (p *PortfolioMargin) keepListenKeyAlive(ctx context.Context, path string, c
 //
 // fs 是 CM（币本位）的事件不在 MooX 的交易范围，直接忽略。
 func (p *PortfolioMargin) dispatchPrivate(ctx context.Context, payload []byte, handler execution.AccountEventHandler) error {
-	root, err := exactFields(payload)
+	root, event, err := decodePrivateEvent(payload, false)
 	if err != nil {
-		return typedRejected("decode private event", err)
-	}
-	// listenKey 流直接是事件本身；兼容 WebSocket API 订阅把事件包在 event 里的写法。
-	if _, wrapped := root.value("event"); wrapped {
-		if root, err = root.object("event"); err != nil {
-			return typedRejected("decode private event wrapper", err)
-		}
-	}
-	event, err := root.str("e")
-	if err != nil {
-		return typedRejected("decode private event", err)
+		return err
 	}
 	switch event {
 	case "listenKeyExpired", "eventStreamTerminated":
@@ -584,82 +545,35 @@ func (p *PortfolioMargin) dispatchPrivate(ctx context.Context, payload []byte, h
 		}
 		body, err := root.object("o")
 		if err != nil {
-			return typedRejected("decode futures private order", err)
+			return exchange.Rejected("decode futures private order", err)
 		}
 		order, err := futuresPrivateOrder(body)
 		if err != nil {
-			return typedRejected("decode futures private order", err)
+			return exchange.Rejected("decode futures private order", err)
 		}
-		return p.dispatchOrder(ctx, exchange.MarketTypeSwap, order, handler)
+		return dispatchPrivateOrder(ctx, exchange.MarketTypeSwap, p.config.SettlementAsset, order, handler)
 	case "executionReport":
 		order, err := spotPrivateOrder(root)
 		if err != nil {
-			return typedRejected("decode margin private order", err)
+			return exchange.Rejected("decode margin private order", err)
 		}
-		return p.dispatchOrder(ctx, exchange.MarketTypeSpot, order, handler)
+		return dispatchPrivateOrder(ctx, exchange.MarketTypeSpot, p.config.SettlementAsset, order, handler)
 	}
 	return nil
-}
-
-func (p *PortfolioMargin) dispatchOrder(ctx context.Context, market exchange.MarketType, order privateOrder, handler execution.AccountEventHandler) error {
-	current, err := orderFromRow(market, order.payload)
-	if err != nil {
-		return err
-	}
-	if err := handler.OnOrder(ctx, current); err != nil {
-		return err
-	}
-	if order.execution != "TRADE" || order.tradeID == "" || order.tradeID == "-1" {
-		return nil
-	}
-	fill, err := fillFromPrivateOrder(market, p.config.SettlementAsset, order)
-	if err != nil {
-		return err
-	}
-	return handler.OnFill(ctx, fill)
 }
 
 // dispatchMarginAccount 处理杠杆账户的余额推送（outboundAccountPosition，只带 free、locked）。
 // 借款沿用最近一次完整同步的值；推送只覆盖部分资产，所以要求会话尽快做一次完整同步（RequiresSync）。
 func (p *PortfolioMargin) dispatchMarginAccount(ctx context.Context, root fields, handler execution.AccountEventHandler) error {
-	updatedAt, err := root.int64("u")
-	if err != nil {
-		return typedRejected("decode margin account event", err)
-	}
-	rows, err := root.objects("B")
-	if err != nil {
-		return typedRejected("decode margin account event", err)
-	}
-	snapshot := exchange.AccountSnapshot{
-		ExchangeUpdatedAt: millis(updatedAt),
-		Present:           exchange.AccountSnapshotPresence{Balances: true},
-		RequiresSync:      true,
-	}
 	// 只在锁内取出借款表的引用（GetAccountSnapshot 整表替换、不原地修改），解锁后再组装快照、回调会话：
 	// 会话的 OnAccountSnapshot 要拿 opMu，而同步线程持着 opMu 调 GetAccountSnapshot 时末尾要拿 borrowMu，
 	// 持 borrowMu 回调会和同步线程互相等死。
 	p.borrowMu.Lock()
 	borrowed := p.borrowed
 	p.borrowMu.Unlock()
-	for _, row := range rows {
-		var asset, free, locked string
-		for key, target := range map[string]*string{"a": &asset, "f": &free, "l": &locked} {
-			if *target, err = row.str(key); err != nil {
-				return typedRejected("decode margin account event", err)
-			}
-		}
-		available, err := decimalOrZero(free)
-		if err != nil {
-			return err
-		}
-		lockedValue, err := decimalOrZero(locked)
-		if err != nil {
-			return err
-		}
-		snapshot.Balances = append(snapshot.Balances, exchange.AssetBalance{
-			Wallet: exchange.WalletMargin, Asset: asset, Available: available, Locked: lockedValue,
-			Total: available.Add(lockedValue), Borrowed: borrowed[asset],
-		})
+	snapshot, err := decodeSpotAccountSnapshot(root, "decode margin account event", exchange.WalletMargin, true, borrowed)
+	if err != nil {
+		return err
 	}
 	return handler.OnAccountSnapshot(ctx, snapshot)
 }
@@ -667,25 +581,11 @@ func (p *PortfolioMargin) dispatchMarginAccount(ctx context.Context, root fields
 // dispatchUMAccount 处理合约（UM）的 ACCOUNT_UPDATE：钱包余额记入 UNIFIED 钱包，持仓变化逐个上报。
 // 统一账户的持仓行没有保证金模式字段（mt），统一账户的合约一律全仓。
 func (p *PortfolioMargin) dispatchUMAccount(ctx context.Context, root fields, handler execution.AccountEventHandler) error {
-	eventTime, err := root.int64("T")
-	if err == nil && eventTime <= 0 {
-		eventTime, err = root.int64("E")
-	}
+	update, err := decodeFuturesAccountUpdate(root)
 	if err != nil {
-		return typedRejected("decode futures account event", err)
+		return err
 	}
-	body, err := root.object("a")
-	if err != nil {
-		return typedRejected("decode futures account event", err)
-	}
-	balances, err := body.objects("B")
-	if err != nil {
-		return typedRejected("decode futures account event", err)
-	}
-	positions, err := body.objects("P")
-	if err != nil {
-		return typedRejected("decode futures account event", err)
-	}
+	eventTime, balances, positions := update.eventTime, update.balances, update.positions
 	snapshot := exchange.AccountSnapshot{
 		ExchangeUpdatedAt: millis(eventTime),
 		Present:           exchange.AccountSnapshotPresence{Balances: true},
@@ -694,13 +594,13 @@ func (p *PortfolioMargin) dispatchUMAccount(ctx context.Context, root fields, ha
 	for _, row := range balances {
 		asset, err := row.str("a")
 		if err != nil {
-			return typedRejected("decode futures account event", err)
+			return exchange.Rejected("decode futures account event", err)
 		}
 		wallet, err := row.str("wb")
 		if err != nil {
-			return typedRejected("decode futures account event", err)
+			return exchange.Rejected("decode futures account event", err)
 		}
-		total, err := decimalOrZero(wallet)
+		total, err := exchange.DecimalOrZero(wallet)
 		if err != nil {
 			return err
 		}
@@ -713,13 +613,13 @@ func (p *PortfolioMargin) dispatchUMAccount(ctx context.Context, root fields, ha
 		var symbol, amount, entry, unrealized, side string
 		for key, target := range map[string]*string{"s": &symbol, "pa": &amount, "ep": &entry, "up": &unrealized, "ps": &side} {
 			if *target, err = row.str(key); err != nil {
-				return typedRejected("decode futures account event", err)
+				return exchange.Rejected("decode futures account event", err)
 			}
 		}
 		if side != "" && side != "BOTH" {
-			return typedRejected("hedge position mode is unsupported", nil)
+			return exchange.Rejected("hedge position mode is unsupported", nil)
 		}
-		quantity, err := decimalOrZero(amount)
+		quantity, err := exchange.DecimalOrZero(amount)
 		if err != nil {
 			return err
 		}
@@ -728,10 +628,10 @@ func (p *PortfolioMargin) dispatchUMAccount(ctx context.Context, root fields, ha
 			ExchangeSymbol: symbol, PositionSide: exchange.PositionSideNet,
 			SignedQuantity: quantity, MarginMode: exchange.MarginModeCross, ExchangeUpdatedAt: millis(eventTime),
 		}
-		if position.EntryPrice, err = decimalOrZero(entry); err != nil {
+		if position.EntryPrice, err = exchange.DecimalOrZero(entry); err != nil {
 			return err
 		}
-		if position.UnrealizedPnL, err = decimalOrZero(unrealized); err != nil {
+		if position.UnrealizedPnL, err = exchange.DecimalOrZero(unrealized); err != nil {
 			return err
 		}
 		if err := handler.OnPosition(ctx, position); err != nil {

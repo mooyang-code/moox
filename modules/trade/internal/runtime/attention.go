@@ -80,6 +80,12 @@ func (w *AttentionWorker) Scan(ctx context.Context) error {
 		telemetry.AttentionReleaseOrdersStuck: telemetry.Recent(telemetry.AttentionReleaseOrdersStuck, now, rejectionWindow),
 		// 同步把标的已下架、查不到的订单按过期结束或收掉成交缺口：每笔记一条，保留窗口内持续上报。
 		telemetry.AttentionOrdersInstrumentGone: telemetry.Recent(telemetry.AttentionOrdersInstrumentGone, now, rejectionWindow),
+		// 成交入账失败：账户每轮同步都卡在同一笔，失败期间每轮刷新时间，修好后窗口过了就消失。
+		telemetry.AttentionFillIngestFailed: telemetry.Recent(telemetry.AttentionFillIngestFailed, now, rejectionWindow),
+		// 时间戳超窗：每次遇到记一条，保留窗口内持续上报，校时之后不再出现就消失。
+		telemetry.AttentionClockSkew: telemetry.Recent(telemetry.AttentionClockSkew, now, rejectionWindow),
+		// 逐仓持仓：每次同步发现都刷新，逐仓持仓平掉后窗口过了就消失。
+		telemetry.AttentionIsolatedPosition: telemetry.Recent(telemetry.AttentionIsolatedPosition, now, rejectionWindow),
 	}
 	names := make(map[string]string)
 	accounts, err := w.Store.ListAllTradingAccounts(ctx)

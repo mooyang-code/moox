@@ -43,9 +43,24 @@ export interface FundFormScope {
   hasBinanceLive?: boolean;
   /** 组合的结算币，默认 USDT：稳定币保证金必须含它，保证金币和套利底仓不能写它 */
   settlementAsset?: string;
+  /** 组合里有币安普通账户（现货、合约两个钱包；统一账户不算）：BNB 保留金额旁要说明补买只到现货钱包 */
+  standardAccount?: boolean;
 }
 
-/** BNB 补买的容差：市值低于“保留金额 − 10”才补买，所以保留金额要大于 10。 */
+/**
+ * BNB 保留金额旁的说明，和后端 fundmaint.BNBBounds 一致：统一账户一个钱包，市值低于“保留金额减 10”才补买到保留金额；
+ * 普通账户只补现货钱包，目标和容差都减半（保留金额的一半、5）。组合里没有普通账户时只说统一账户的规则。
+ */
+export function bnbReserveHints(scope: FundFormScope = {}): string[] {
+  const rule = "BNB 市值低于这个金额减 10 时市价补买到这个金额；0 表示不保留。保留期间 BNB 不参与策略持仓";
+  if (!showsLiveOnlyFields(scope) || scope.standardAccount !== true) return [rule];
+  return [
+    `统一账户：${rule}`,
+    "普通账户：只补现货钱包，现货钱包 BNB 市值低于这个金额的一半减 5 时补买到这个金额的一半；合约手续费用 BNB 抵扣需要在合约钱包里自行放入 BNB"
+  ];
+}
+
+/** BNB 补买的容差（统一账户；普通账户减半）：市值低于“保留金额 − 10”才补买，所以保留金额要大于 10。 */
 const BNB_RESERVE_SLACK = 10;
 
 export function showsLiveOnlyFields(scope: FundFormScope = {}): boolean {
@@ -85,6 +100,11 @@ export function withStoredMarginMonitor(
     margin_reduce_ratio: saved.margin_reduce_ratio,
     margin_monitor_disabled: saved.margin_monitor_disabled
   };
+}
+
+/** 这次保存会把保证金率监控从开着改成关闭：生产、测试网组合要先确认；模拟盘不监控，不用确认。 */
+export function turnsOffMarginMonitor(stored: FundSettings | undefined, next: FundSettings, paper: boolean): boolean {
+  return !paper && Boolean(next.margin_monitor_disabled) && !stored?.margin_monitor_disabled;
 }
 
 export function defaultFundSettings(): FundSettings {
@@ -192,7 +212,7 @@ export function validateFundSettingsModel(model: FundSettingsModel, scope: FundF
     if (!isDecimal(model.bnb_reserve_amount)) return "BNB 保留金额必须是不小于 0 的数字";
     const reserve = Number(model.bnb_reserve_amount);
     if (reserve > 0 && reserve <= BNB_RESERVE_SLACK) {
-      return `BNB 保留金额要大于 ${BNB_RESERVE_SLACK}：市值低于保留金额减 ${BNB_RESERVE_SLACK} 才会补买，不大于 ${BNB_RESERVE_SLACK} 的设置永远不会补买`;
+      return `BNB 保留金额要大于 ${BNB_RESERVE_SLACK}：统一账户 BNB 市值低于保留金额减 ${BNB_RESERVE_SLACK}、普通账户现货钱包 BNB 市值低于保留金额的一半减 5 才会补买，不大于 ${BNB_RESERVE_SLACK} 的设置永远不会补买`;
     }
     if (
       !Number.isInteger(model.dust_convert_interval_days) ||

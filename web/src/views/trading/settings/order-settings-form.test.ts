@@ -45,4 +45,22 @@ describe("order settings form", () => {
       })
     ).toContain("重复");
   });
+
+  it("A 股组合只有一项最小下单额：标签不带市场，不校验合约那项", () => {
+    const model = { ...orderSettingsToModel(), min_notional_swap: "abc" };
+    expect(validateOrderSettingsModel(model)).toContain("合约最小下单额");
+    expect(validateOrderSettingsModel(model, true)).toBe("");
+    expect(validateOrderSettingsModel({ ...model, min_notional_spot: "x" }, true)).toBe("最小下单额必须是不小于 0 的数字");
+  });
+
+  it("A 股组合只有一组每小时上限：标的写股票代码，不要求 -SPOT/-SWAP 后缀，不校验合约那组", () => {
+    const base = orderSettingsToModel();
+    const stock = (patch: Partial<typeof base>) => validateOrderSettingsModel({ ...base, ...patch }, true);
+    expect(stock({ hourly_cap_spot: [{ key: "600519.xshg", value: "100000" }] })).toBe("");
+    expect(stock({ hourly_cap_spot: [{ key: "*", value: "1" }] })).toBe("");
+    expect(stock({ hourly_cap_spot: [{ key: "BTC-USDT-SPOT", value: "1" }] })).toBe("每小时上限的标的写 * 或形如 600519.XSHG");
+    expect(stock({ hourly_cap_swap: [{ key: "abc", value: "1" }] })).toBe("");
+    // 加密组合仍按后缀校验
+    expect(validateOrderSettingsModel({ ...base, hourly_cap_spot: [{ key: "600519.XSHG", value: "1" }] })).toContain("现货");
+  });
 });

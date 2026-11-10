@@ -10,6 +10,7 @@ import (
 	accountsyncapp "github.com/mooyang-code/moox/modules/trade/internal/application/accountsync"
 	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
+	operatordomain "github.com/mooyang-code/moox/modules/trade/internal/domain/operator"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
@@ -64,11 +65,11 @@ func (a failedSyncAdapter) CancelOrder(context.Context, exchange.SymbolKey, stri
 }
 
 func TestOperatorRealSyncMixedDatabaseFailureNeverBecomesHealthy(t *testing.T) {
-	for _, kind := range []string{"MANUAL_ORDER", "FLATTEN", "CANCEL_ORDER"} {
+	for _, kind := range []string{string(operatordomain.ActionManualOrder), string(operatordomain.ActionFlatten), string(operatordomain.ActionCancelOrder)} {
 		t.Run(kind, func(t *testing.T) {
 			f, s, a := realSubmissionService(t)
 			var orderID string
-			if kind == "CANCEL_ORDER" {
+			if kind == string(operatordomain.ActionCancelOrder) {
 				accepted, err := s.SubmitOrder(context.Background(), submissionCommand(f))
 				require.NoError(t, err)
 				require.NoError(t, s.ResumeOperatorAction(context.Background(), accepted.Action))
@@ -76,7 +77,7 @@ func TestOperatorRealSyncMixedDatabaseFailureNeverBecomesHealthy(t *testing.T) {
 			}
 			syncer := realOperatorSync{&accountsyncapp.Service{Store: f.store, Adapters: failedSyncAdapter{a}, Fills: &consumer.Reducer{Store: f.store}}}
 			s.Syncer = syncer
-			if kind == "CANCEL_ORDER" {
+			if kind == string(operatordomain.ActionCancelOrder) {
 				orders := s.Orders.(*orderapp.Service)
 				orders.Adapters = failedSyncAdapter{a}
 				orders.Syncer = syncer
@@ -91,11 +92,11 @@ func TestOperatorRealSyncMixedDatabaseFailureNeverBecomesHealthy(t *testing.T) {
 			defer f.store.DBForTest().Callback().Raw().Remove(callback)
 			var err error
 			switch kind {
-			case "MANUAL_ORDER":
+			case string(operatordomain.ActionManualOrder):
 				_, err = s.PlaceManualOrder(context.Background(), submissionCommand(f).ManualOrderCommand)
-			case "FLATTEN":
+			case string(operatordomain.ActionFlatten):
 				_, err = s.FlattenLogicalAccount(context.Background(), FlattenCommand{SpaceID: "space-1", ActionID: "mixed-flatten", LogicalAccountID: "logical-1", Reason: "stop"})
-			case "CANCEL_ORDER":
+			case string(operatordomain.ActionCancelOrder):
 				_, err = s.CancelOrder(context.Background(), CancelOrderCommand{SpaceID: "space-1", ActionID: "mixed-cancel", OrderID: orderID, Reason: "stop"})
 			}
 			require.ErrorIs(t, err, failure)
@@ -105,22 +106,22 @@ func TestOperatorRealSyncMixedDatabaseFailureNeverBecomesHealthy(t *testing.T) {
 }
 
 func TestOperatorWorkerRealServicesTimeoutActionThenAdvancesNext(t *testing.T) {
-	for _, kind := range []string{"MANUAL_ORDER", "FLATTEN", "CANCEL_ORDER"} {
+	for _, kind := range []string{string(operatordomain.ActionManualOrder), string(operatordomain.ActionFlatten), string(operatordomain.ActionCancelOrder)} {
 		t.Run(kind, func(t *testing.T) {
 			f, s, adapter := realSubmissionService(t)
 			s.Syncer = realOperatorSync{&accountsyncapp.Service{Store: f.store, Adapters: deadlineSyncAdapter{}, Fills: &consumer.Reducer{Store: f.store}}}
 			var raw string
 			switch kind {
-			case "MANUAL_ORDER":
+			case string(operatordomain.ActionManualOrder):
 				command := submissionCommand(f).ManualOrderCommand
 				command.ActionID = "a-action"
 				command.ClientOrderID = "a-client"
 				var err error
 				raw, err = manualOrderRequestJSON(command)
 				require.NoError(t, err)
-			case "FLATTEN":
+			case string(operatordomain.ActionFlatten):
 				raw = `{"logical_account_id":"logical-1"}`
-			case "CANCEL_ORDER":
+			case string(operatordomain.ActionCancelOrder):
 				command := submissionCommand(f)
 				command.ActionID = "completed"
 				command.ClientOrderID = "cancel-child"
@@ -132,7 +133,7 @@ func TestOperatorWorkerRealServicesTimeoutActionThenAdvancesNext(t *testing.T) {
 				orders.Adapters = cancelDeadlineAdapter{adapter}
 				orders.Syncer = databaseSubmissionSyncer{f.store}
 			}
-			action, _, err := f.store.CreateOperatorAction(context.Background(), store.OperatorActionRecord{SpaceID: "space-1", ActionID: "a-action", LogicalAccountID: "logical-1", ActionType: kind, Reason: "ordinary order", RequestJSON: raw, Status: "RUNNING", CreatedAt: f.now})
+			action, _, err := f.store.CreateOperatorAction(context.Background(), store.OperatorActionRecord{SpaceID: "space-1", ActionID: "a-action", LogicalAccountID: "logical-1", ActionType: kind, Reason: "ordinary order", RequestJSON: raw, Status: string(operatordomain.StatusRunning), CreatedAt: f.now})
 			require.NoError(t, err)
 			command := submissionCommand(f)
 			command.ActionID = "z-action"
@@ -155,11 +156,11 @@ func TestOperatorWorkerRealServicesTimeoutActionThenAdvancesNext(t *testing.T) {
 			require.True(t, worker.Snapshot().Ready, worker.Snapshot().LastError)
 			persisted, err := f.store.GetOperatorAction(context.Background(), "space-1", action.ActionID)
 			require.NoError(t, err)
-			require.Equal(t, "RUNNING", persisted.Status)
+			require.Equal(t, string(operatordomain.StatusRunning), persisted.Status)
 			require.Contains(t, persisted.LastError, "deadline")
 			progressed, err := f.store.GetOperatorAction(context.Background(), "space-1", second.Action.ActionID)
 			require.NoError(t, err)
-			require.Equal(t, "COMPLETED", progressed.Status)
+			require.Equal(t, string(operatordomain.StatusCompleted), progressed.Status)
 		})
 	}
 }
@@ -191,7 +192,7 @@ func TestCancelDeadlineRemainsRecoverableWithIdentity(t *testing.T) {
 	require.Equal(t, currentOrder, result.Order)
 	persisted, err := f.store.GetOperatorAction(context.Background(), "space-1", "cancel-1")
 	require.NoError(t, err)
-	require.Equal(t, "RUNNING", persisted.Status)
+	require.Equal(t, string(operatordomain.StatusRunning), persisted.Status)
 	require.Contains(t, persisted.LastError, "deadline")
 }
 
@@ -249,12 +250,12 @@ func TestFlattenSharedSyncFailureIsNotHealthy(t *testing.T) {
 	defer f.store.DBForTest().Callback().Raw().Remove(callback)
 	result, err := s.FlattenLogicalAccount(context.Background(), FlattenCommand{SpaceID: "space-1", LogicalAccountID: "logical-1", ActionID: "flatten-1", Reason: "stop"})
 	require.ErrorIs(t, err, failure)
-	require.Equal(t, "RUNNING", result.Action.Status)
+	require.Equal(t, string(operatordomain.StatusRunning), result.Action.Status)
 }
 
 func TestFlattenCanceledLockPersistsRetryAndKeepsIdentity(t *testing.T) {
 	f, s, _ := realSubmissionService(t)
-	action, _, err := f.store.CreateOperatorAction(context.Background(), store.OperatorActionRecord{SpaceID: "space-1", ActionID: "flatten-lock", LogicalAccountID: "logical-1", ActionType: "FLATTEN", RequestJSON: `{"logical_account_id":"logical-1"}`, Reason: "stop", Status: "RUNNING"})
+	action, _, err := f.store.CreateOperatorAction(context.Background(), store.OperatorActionRecord{SpaceID: "space-1", ActionID: "flatten-lock", LogicalAccountID: "logical-1", ActionType: string(operatordomain.ActionFlatten), RequestJSON: `{"logical_account_id":"logical-1"}`, Reason: "stop", Status: string(operatordomain.StatusRunning)})
 	require.NoError(t, err)
 	unlock := f.store.LockLogicalAccount("space-1", "logical-1")
 	defer unlock()
@@ -263,7 +264,7 @@ func TestFlattenCanceledLockPersistsRetryAndKeepsIdentity(t *testing.T) {
 	result, err := s.FlattenLogicalAccount(ctx, FlattenCommand{SpaceID: "space-1", ActionID: action.ActionID, LogicalAccountID: "logical-1", Reason: "stop"})
 	// 运行中的清仓拿不到锁时由工作线程继续，调用方看到“运行中”，不报错。
 	require.NoError(t, err)
-	require.Equal(t, "RUNNING", result.Action.Status)
+	require.Equal(t, string(operatordomain.StatusRunning), result.Action.Status)
 	require.Equal(t, action.ActionID, result.Action.ActionID)
 	require.Contains(t, result.Action.LastError, "deadline")
 }
@@ -283,7 +284,7 @@ func TestCancelDiagnosticAndCompletionWriteFailureKeepDurableAction(t *testing.T
 				orders.Adapters = cancelDeadlineAdapter{a}
 				orders.Syncer = databaseSubmissionSyncer{f.store}
 			}
-			action, _, err := f.store.CreateOperatorAction(context.Background(), store.OperatorActionRecord{SpaceID: "space-1", ActionID: "cancel-write", LogicalAccountID: "logical-1", ActionType: "CANCEL_ORDER", RequestJSON: `{"order_id":"` + accepted.Order.OrderID + `"}`, Reason: "stop", Status: "RUNNING"})
+			action, _, err := f.store.CreateOperatorAction(context.Background(), store.OperatorActionRecord{SpaceID: "space-1", ActionID: "cancel-write", LogicalAccountID: "logical-1", ActionType: string(operatordomain.ActionCancelOrder), RequestJSON: `{"order_id":"` + accepted.Order.OrderID + `"}`, Reason: "stop", Status: string(operatordomain.StatusRunning)})
 			require.NoError(t, err)
 			failure := errors.New("action update unavailable")
 			callback := "test:cancel_action_write"
@@ -321,7 +322,7 @@ func TestFlattenRecoversUnknownChildBeforeQuoteAndNeverCompletesUncertain(t *tes
 	require.Zero(t, a.posts)
 	persisted, err := f.store.GetOperatorAction(context.Background(), "space-1", action.ActionID)
 	require.NoError(t, err)
-	require.Equal(t, "RUNNING", persisted.Status)
+	require.Equal(t, string(operatordomain.StatusRunning), persisted.Status)
 }
 
 func TestManualRecoveryBusinessRejectionAndUnknownQuery(t *testing.T) {
@@ -336,9 +337,9 @@ func TestManualRecoveryBusinessRejectionAndUnknownQuery(t *testing.T) {
 			require.NoError(t, f.store.DBForTest().Exec("UPDATE t_operator_actions SET c_action_type='MANUAL_ORDER',c_request_json=? WHERE c_action_id=?", raw, accepted.Action.ActionID).Error)
 			action, err := f.store.GetOperatorAction(context.Background(), "space-1", accepted.Action.ActionID)
 			require.NoError(t, err)
-			want := "FAILED"
+			want := string(operatordomain.StatusFailed)
 			if path == "unknown" {
-				want = "RUNNING"
+				want = string(operatordomain.StatusRunning)
 				require.NoError(t, f.store.DBForTest().Exec("UPDATE t_trade_orders SET c_state='SUBMIT_UNKNOWN',c_submitted_at=? WHERE c_order_id=?", f.now.UnixMilli(), accepted.Order.OrderID).Error)
 				a.lookupErr = errors.New("temporary lookup failure")
 			} else {
@@ -358,14 +359,14 @@ func TestManualRecoveryBusinessRejectionAndUnknownQuery(t *testing.T) {
 }
 
 func TestManualAndCancelLockWaitsAreCancelableAndKeepDurableIDs(t *testing.T) {
-	for _, kind := range []string{"MANUAL_ORDER", "CANCEL_ORDER"} {
+	for _, kind := range []string{string(operatordomain.ActionManualOrder), string(operatordomain.ActionCancelOrder)} {
 		t.Run(kind, func(t *testing.T) {
 			f, s, _ := realSubmissionService(t)
 			command := submissionCommand(f)
 			accepted, err := s.SubmitOrder(context.Background(), command)
 			require.NoError(t, err)
 			var raw string
-			if kind == "MANUAL_ORDER" {
+			if kind == string(operatordomain.ActionManualOrder) {
 				raw, err = manualOrderRequestJSON(command.ManualOrderCommand)
 				require.NoError(t, err)
 			} else {
@@ -378,7 +379,7 @@ func TestManualAndCancelLockWaitsAreCancelableAndKeepDurableIDs(t *testing.T) {
 			defer cancel()
 			var action store.OperatorActionRecord
 			var orderID string
-			if kind == "MANUAL_ORDER" {
+			if kind == string(operatordomain.ActionManualOrder) {
 				got, callErr := s.PlaceManualOrder(ctx, command.ManualOrderCommand)
 				err = callErr
 				action = got.Action
@@ -389,7 +390,7 @@ func TestManualAndCancelLockWaitsAreCancelableAndKeepDurableIDs(t *testing.T) {
 				action = got.Action
 				orderID = got.Order.OrderID
 			}
-			if kind == "MANUAL_ORDER" {
+			if kind == string(operatordomain.ActionManualOrder) {
 				require.NoError(t, err)
 			} else {
 				require.ErrorIs(t, err, context.DeadlineExceeded)
@@ -455,12 +456,12 @@ func TestSubmitWorkerLockTimeoutContinuesNextActionWithHealthyDiagnostics(t *tes
 			} else {
 				current, err := f.store.GetOperatorAction(context.Background(), "space-1", first.Action.ActionID)
 				require.NoError(t, err)
-				require.Equal(t, "RUNNING", current.Status)
+				require.Equal(t, string(operatordomain.StatusRunning), current.Status)
 				require.Contains(t, current.LastError, "deadline")
 			}
 			current, err := f.store.GetOperatorAction(context.Background(), "space-1", second.Action.ActionID)
 			require.NoError(t, err)
-			require.Equal(t, "COMPLETED", current.Status)
+			require.Equal(t, string(operatordomain.StatusCompleted), current.Status)
 		})
 	}
 }

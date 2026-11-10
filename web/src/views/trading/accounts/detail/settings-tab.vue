@@ -76,6 +76,7 @@
         :settings="settingsOf.order_settings"
         :error="settingsOf.order_settings_error"
         :settlement-asset="logical.settlement_asset"
+        :stock-only="isAShareLogical(logical)"
         :saving="savingOrder"
         @save="saveOrderSettings"
         @refresh="reload"
@@ -90,6 +91,7 @@
         :testnet="env === 'testnet'"
         :has-binance-live="hasBinanceLive"
         :non-binance="nonBinance"
+        :standard-account="hasStandardAccount"
         :settlement-asset="logical.settlement_asset"
         :saving="savingFund"
         @save="saveFundSettings"
@@ -148,6 +150,21 @@
         >
       </a-descriptions>
     </ConfirmDialog>
+
+    <ConfirmDialog
+      v-model:visible="marginOffVisible"
+      title="关闭保证金率监控"
+      :env="env"
+      :combo-name="logical.name"
+      :need-reason="false"
+      danger
+      confirm-text="关闭并保存"
+      :submit="submitMarginOff"
+    >
+      <p class="dialog-text">
+        关闭后不再监控这个组合的保证金率，即使行情剧烈波动、保证金不足，也不会自动暂停组合或减仓，可能导致爆仓。资金设置里的其他修改会一起保存。
+      </p>
+    </ConfirmDialog>
   </div>
 </template>
 
@@ -166,10 +183,11 @@ import {
   type OrderSettings
 } from "@/api/trade/settings";
 import FundSettingsForm from "../../settings/fund-settings-form.vue";
+import { turnsOffMarginMonitor } from "../../settings/fund-settings-form";
 import OrderSettingsForm from "../../settings/order-settings-form.vue";
 import ConfirmDialog from "@/components/trade-confirm/confirm-dialog.vue";
 import { accountEnvironment } from "@/components/trade-confirm/environment";
-import { marketsText } from "../shared/markets";
+import { isAShareLogical, marketsText } from "../shared/markets";
 import { eligibleAccounts } from "../shared/membership";
 import SectionBlock from "../shared/section-block.vue";
 import { detailContextKey } from "./context";
@@ -191,6 +209,8 @@ const renaming = ref(false);
 const removeVisible = ref(false);
 const savingOrder = ref(false);
 const savingFund = ref(false);
+const marginOffVisible = ref(false);
+const pendingFund = ref<FundSettings | null>(null);
 const removeTarget = ref<TradingAccount | null>(null);
 
 const rows = computed(() =>
@@ -216,6 +236,10 @@ const hasBinanceLive = computed(() =>
       account.status === "ENABLED"
     );
   })
+);
+// 组合里有币安普通账户（account_mode 由交易所检测写入，没检测过的不算）：资金设置里说明 BNB 补买只到现货钱包
+const hasStandardAccount = computed(() =>
+  rows.value.some(item => item.account.exchange === 1 && item.account.account_mode === "BINANCE_STANDARD")
 );
 const candidates = computed(() => eligibleAccounts(allAccounts.value, allLogicals.value, logical.value, env.value));
 // 模拟账户可以在这里关闭（会暂停整个组合）；实盘账户要先移出组合，再到执行账户页签停用
@@ -293,7 +317,25 @@ async function saveOrderSettings(settings: OrderSettings) {
   }
 }
 
-async function saveFundSettings(settings: FundSettings) {
+// 关闭保证金率监控会让组合失去自动减仓的保护，单独确认；其他设置照常直接保存。
+function saveFundSettings(settings: FundSettings) {
+  if (turnsOffMarginMonitor(settingsOf.value.fund_settings, settings, env.value === "paper")) {
+    pendingFund.value = settings;
+    marginOffVisible.value = true;
+    return;
+  }
+  void persistFundSettings(settings);
+}
+
+async function submitMarginOff() {
+  if (!pendingFund.value) return false;
+  await updateLogicalAccountFundSettings(logical.value.logical_account_id, pendingFund.value);
+  Message.success("资金设置已保存");
+  await reload();
+  return true;
+}
+
+async function persistFundSettings(settings: FundSettings) {
   savingFund.value = true;
   try {
     await updateLogicalAccountFundSettings(logical.value.logical_account_id, settings);

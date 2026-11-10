@@ -317,12 +317,12 @@ func (s *Service) stopIfUnblocked(
 		err = s.confirmFlattenChildren(ctx, command, tradingAccountID, result)
 	}
 	if err != nil {
-		result.Status, result.decided, result.retry, result.unblocking = "RUNNING", true, true, true
+		result.Status, result.decided, result.retry, result.unblocking = string(operatordomain.StatusRunning), true, true, true
 		// 只是还没做完：写进说明，不当作这次调用的错误（cause 留空）。
 		result.Error, result.cause = "已解除禁止，撤单还没确认结束，下一轮继续："+err.Error(), nil
 		return true
 	}
-	result.Status, result.Error, result.cause = "COMPLETED", "", nil
+	result.Status, result.Error, result.cause = string(operatordomain.StatusCompleted), "", nil
 	result.Unblocked, result.decided, result.retry = true, true, false
 	return true
 }

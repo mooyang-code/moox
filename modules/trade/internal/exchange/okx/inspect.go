@@ -29,6 +29,39 @@ type accountConfig struct {
 }
 
 func inspectWith(ctx context.Context, request exchange.InspectRequest, adapter *Adapter) (exchange.Inspection, error) {
+	result, err := inspectAccount(ctx, request, adapter)
+	if err != nil || result.CredentialRejected != "" {
+		return result, err
+	}
+	result.ClockSkewMillis = measureClockSkew(ctx, adapter)
+	result.ApplyFindings(request.Markets)
+	return result, nil
+}
+
+// measureClockSkew 用 /api/v5/public/time 测一次本机时钟偏差（毫秒，交易所时间减本机时间）。
+// 取不到交易所时间、往返太慢的样本都按没测到处理（偏差 0）：其余检测调用同样会暴露网络问题。
+func measureClockSkew(ctx context.Context, adapter *Adapter) int64 {
+	sentAt := time.Now()
+	data, err := adapter.request(ctx, http.MethodGet, "/api/v5/public/time", nil, nil, false)
+	receivedAt := time.Now()
+	var rows []struct {
+		TS string `json:"ts"`
+	}
+	if err != nil || json.Unmarshal(data, &rows) != nil || len(rows) == 0 {
+		return 0
+	}
+	serverTime := millisString(rows[0].TS)
+	if serverTime.IsZero() {
+		return 0
+	}
+	skew, ok := exchange.MeasureClockSkew(sentAt, receivedAt, serverTime)
+	if !ok {
+		return 0
+	}
+	return skew.Milliseconds()
+}
+
+func inspectAccount(ctx context.Context, request exchange.InspectRequest, adapter *Adapter) (exchange.Inspection, error) {
 	result := exchange.Inspection{
 		Exchange: exchange.ExchangeOKX, Environment: request.Environment,
 		AccountMode: exchange.AccountModeOKXUnified, InspectedAt: time.Now().UTC(),

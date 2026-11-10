@@ -387,7 +387,7 @@ func TestTargetWorkerAccountErrorIsDiagnosticAndRecovers(t *testing.T) {
 	}
 	require.NoError(t, worker.runOnce(context.Background()))
 	snapshot := worker.Snapshot()
-	require.Equal(t, []TargetFailure{{SpaceID: "space", LogicalAccountID: "logical", TargetID: "target", TradingAccountID: "account", Error: "target account account: quote unavailable"}}, snapshot.TargetErrors)
+	require.Equal(t, []TargetFailure{{SpaceID: "space", LogicalAccountID: "logical", TargetID: "target", TradingAccountID: "account", Error: "执行账户 account：quote unavailable"}}, snapshot.TargetErrors)
 	snapshot.TargetErrors[0].Error = "changed by caller"
 	require.NotEqual(t, "changed by caller", worker.Snapshot().TargetErrors[0].Error)
 	bad = false

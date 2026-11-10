@@ -18,6 +18,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/httpclient"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
+	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 )
 
 // sideEffectNone 是统一账户杠杆账户下单的 sideEffectType 取值：不借币、不自动还款（官方 SDK 枚举 NO_SIDE_EFFECT）。
@@ -215,7 +216,7 @@ func signQuery(secret string, values url.Values) string {
 	query.Set("timestamp", strconv.FormatInt(time.Now().UnixMilli(), 10))
 	query.Set("recvWindow", strconv.Itoa(recvWindow))
 	encoded := query.Encode()
-	return encoded + "&signature=" + hex.EncodeToString(hmacSha256(
+	return encoded + "&signature=" + hex.EncodeToString(exchange.HMACSHA256(
 		[]byte(secret),
 		[]byte(encoded),
 	))
@@ -284,7 +285,7 @@ func (a *Adapter) LoadInstruments(ctx context.Context) ([]exchange.Instrument, e
 	}
 	var payload exchangeInfo
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		return nil, typedRejected("decode exchange info", err)
+		return nil, exchange.Rejected("decode exchange info", err)
 	}
 	out := make([]exchange.Instrument, 0, len(payload.Symbols))
 	for _, item := range payload.Symbols {
@@ -304,7 +305,7 @@ func (a *Adapter) LoadInstruments(ctx context.Context) ([]exchange.Instrument, e
 			a.config.Market(),
 		)
 		if idErr != nil {
-			return nil, typedRejected("canonical instrument ID", idErr)
+			return nil, exchange.Rejected("canonical instrument ID", idErr)
 		}
 		instrument := exchange.Instrument{
 			Exchange:           exchange.ExchangeBinance,
@@ -326,13 +327,13 @@ func (a *Adapter) LoadInstruments(ctx context.Context) ([]exchange.Instrument, e
 		for _, filter := range item.Filters {
 			switch filter.FilterType {
 			case "PRICE_FILTER":
-				instrument.PriceTick, err = decimalOrZero(filter.TickSize)
+				instrument.PriceTick, err = exchange.DecimalOrZero(filter.TickSize)
 			case "LOT_SIZE", "MARKET_LOT_SIZE":
 				// LOT_SIZE wins when both filters are present.
 				if instrument.ExchangeQuantityStep.IsZero() || filter.FilterType == "LOT_SIZE" {
-					instrument.ExchangeQuantityStep, err = decimalOrZero(filter.StepSize)
+					instrument.ExchangeQuantityStep, err = exchange.DecimalOrZero(filter.StepSize)
 					if err == nil {
-						instrument.MinExchangeQuantity, err = decimalOrZero(filter.MinQty)
+						instrument.MinExchangeQuantity, err = exchange.DecimalOrZero(filter.MinQty)
 					}
 				}
 			case "NOTIONAL", "MIN_NOTIONAL":
@@ -340,7 +341,7 @@ func (a *Adapter) LoadInstruments(ctx context.Context) ([]exchange.Instrument, e
 				if rawNotional == "" {
 					rawNotional = filter.MinNotional
 				}
-				instrument.MinNotional, err = decimalOrZero(rawNotional)
+				instrument.MinNotional, err = exchange.DecimalOrZero(rawNotional)
 			case "PERCENT_PRICE":
 				err = tightenPriceBand(&instrument, filter.MultiplierUp, filter.MultiplierDown)
 			case "PERCENT_PRICE_BY_SIDE":
@@ -348,13 +349,13 @@ func (a *Adapter) LoadInstruments(ctx context.Context) ([]exchange.Instrument, e
 				err = tightenPriceBand(&instrument, filter.BidMultiplierUp, filter.AskMultiplierDown)
 			}
 			if err != nil {
-				return nil, typedRejected("decode instrument decimal", err)
+				return nil, exchange.Rejected("decode instrument decimal", err)
 			}
 		}
 		if instrument.ExchangeQuantityStep.Cmp(shared.Zero()) <= 0 ||
 			instrument.MinExchangeQuantity.Cmp(shared.Zero()) <= 0 ||
 			instrument.PriceTick.Cmp(shared.Zero()) <= 0 {
-			return nil, typedRejected("incomplete instrument filters", nil)
+			return nil, exchange.Rejected("incomplete instrument filters", nil)
 		}
 		out = append(out, instrument)
 	}
@@ -369,11 +370,11 @@ func (a *Adapter) LoadInstruments(ctx context.Context) ([]exchange.Instrument, e
 
 // tightenPriceBand 记下价格偏离限制；两个过滤器都有时取更严的一个。
 func tightenPriceBand(instrument *exchange.Instrument, up, down string) error {
-	upValue, err := decimalOrZero(up)
+	upValue, err := exchange.DecimalOrZero(up)
 	if err != nil {
 		return err
 	}
-	downValue, err := decimalOrZero(down)
+	downValue, err := exchange.DecimalOrZero(down)
 	if err != nil {
 		return err
 	}
@@ -410,11 +411,11 @@ func (a *Adapter) GetReferencePrice(
 		Price string `json:"price"`
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		return exchange.ReferencePrice{}, typedRejected("decode reference price", err)
+		return exchange.ReferencePrice{}, exchange.Rejected("decode reference price", err)
 	}
 	price, err := shared.ParseDecimal(payload.Price)
 	if err != nil || price.Cmp(shared.Zero()) <= 0 {
-		return exchange.ReferencePrice{}, typedRejected("invalid reference price", err)
+		return exchange.ReferencePrice{}, exchange.Rejected("invalid reference price", err)
 	}
 	// 时效检查判断的是这次报价是否刚取到，用本地收到时间，不依赖交易所时钟和最后成交时间。
 	return exchange.ReferencePrice{Price: price, UpdatedAt: time.Now().UTC()}, nil
@@ -433,7 +434,7 @@ func (a *Adapter) allPrices(ctx context.Context) (map[exchange.SymbolKey]shared.
 		Price  string `json:"price"`
 	}
 	if err := json.Unmarshal(raw, &rows); err != nil {
-		return nil, typedRejected("decode all prices", err)
+		return nil, exchange.Rejected("decode all prices", err)
 	}
 	prices := make(map[exchange.SymbolKey]shared.Decimal, len(rows))
 	for _, row := range rows {
@@ -464,9 +465,9 @@ func (a *Adapter) GetQuote(ctx context.Context, key exchange.SymbolKey) (executi
 		AskPrice string `json:"askPrice"`
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		return execution.MarketQuote{}, typedRejected("decode quote", err)
+		return execution.MarketQuote{}, exchange.Rejected("decode quote", err)
 	}
-	return execution.MarketQuote{Bid: parseQuote(payload.BidPrice), Ask: parseQuote(payload.AskPrice), Last: last.Price, SourceTime: time.Now().UTC()}, nil
+	return execution.MarketQuote{Bid: exchange.ParseQuote(payload.BidPrice), Ask: exchange.ParseQuote(payload.AskPrice), Last: last.Price, SourceTime: time.Now().UTC()}, nil
 }
 
 // allBooks 一次取全市场买一卖一（永续权重 5、现货 4）。
@@ -484,21 +485,13 @@ func (a *Adapter) allBooks(ctx context.Context) (map[exchange.SymbolKey]exchange
 		AskPrice string `json:"askPrice"`
 	}
 	if err := json.Unmarshal(raw, &rows); err != nil {
-		return nil, typedRejected("decode all books", err)
+		return nil, exchange.Rejected("decode all books", err)
 	}
 	books := make(map[exchange.SymbolKey]exchange.Book, len(rows))
 	for _, row := range rows {
-		books[a.key(row.Symbol)] = exchange.Book{Bid: parseQuote(row.BidPrice), Ask: parseQuote(row.AskPrice)}
+		books[a.key(row.Symbol)] = exchange.Book{Bid: exchange.ParseQuote(row.BidPrice), Ask: exchange.ParseQuote(row.AskPrice)}
 	}
 	return books, nil
-}
-
-func parseQuote(raw string) shared.Decimal {
-	v, err := shared.ParseDecimal(raw)
-	if err != nil {
-		return shared.Zero()
-	}
-	return v
 }
 
 type spotAccount struct {
@@ -545,7 +538,7 @@ func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnaps
 	if a.config.Market() == exchange.MarketTypeSpot {
 		var payload spotAccount
 		if err := json.Unmarshal(raw, &payload); err != nil {
-			return exchange.AccountSnapshot{}, typedRejected("decode account", err)
+			return exchange.AccountSnapshot{}, exchange.Rejected("decode account", err)
 		}
 		snapshotTime := payload.UpdateTime
 		if snapshotTime <= 0 {
@@ -553,11 +546,11 @@ func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnaps
 		}
 		snapshot := exchange.AccountSnapshot{ExchangeUpdatedAt: millis(snapshotTime)}
 		for _, balance := range payload.Balances {
-			available, err := decimalOrZero(balance.Free)
+			available, err := exchange.DecimalOrZero(balance.Free)
 			if err != nil {
 				return exchange.AccountSnapshot{}, err
 			}
-			locked, err := decimalOrZero(balance.Locked)
+			locked, err := exchange.DecimalOrZero(balance.Locked)
 			if err != nil {
 				return exchange.AccountSnapshot{}, err
 			}
@@ -570,7 +563,7 @@ func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnaps
 	}
 	var payload swapAccount
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		return exchange.AccountSnapshot{}, typedRejected("decode futures account", err)
+		return exchange.AccountSnapshot{}, exchange.Rejected("decode futures account", err)
 	}
 	snapshotTime := int64(0)
 	for _, asset := range payload.Assets {
@@ -585,16 +578,16 @@ func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnaps
 		snapshotTime = time.Now().UTC().UnixMilli()
 	}
 	snapshot := exchange.AccountSnapshot{ExchangeUpdatedAt: millis(snapshotTime)}
-	snapshot.Equity, err = decimalOrZero(payload.TotalMarginBalance)
+	snapshot.Equity, err = exchange.DecimalOrZero(payload.TotalMarginBalance)
 	snapshot.ExchangeEquity = snapshot.Equity
 	if err == nil {
-		snapshot.AvailableFunds, err = decimalOrZero(payload.AvailableBalance)
+		snapshot.AvailableFunds, err = exchange.DecimalOrZero(payload.AvailableBalance)
 	}
 	if err == nil {
-		snapshot.UsedMargin, err = decimalOrZero(payload.TotalInitialMargin)
+		snapshot.UsedMargin, err = exchange.DecimalOrZero(payload.TotalInitialMargin)
 	}
 	if err == nil {
-		snapshot.MaintenanceMargin, err = decimalOrZero(payload.TotalMaintMargin)
+		snapshot.MaintenanceMargin, err = exchange.DecimalOrZero(payload.TotalMaintMargin)
 	}
 	if err != nil {
 		return exchange.AccountSnapshot{}, err
@@ -605,13 +598,14 @@ func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnaps
 	if err != nil {
 		return exchange.AccountSnapshot{}, err
 	}
+	positions, _ = exchange.SplitIsolated(positions)
 	snapshot.UnrealizedPnL = sumUnrealizedPnL(positions)
 	for _, balance := range payload.Assets {
-		total, parseErr := decimalOrZero(balance.WalletBalance)
+		total, parseErr := exchange.DecimalOrZero(balance.WalletBalance)
 		if parseErr != nil {
 			return exchange.AccountSnapshot{}, parseErr
 		}
-		available, parseErr := decimalOrZero(balance.AvailableBalance)
+		available, parseErr := exchange.DecimalOrZero(balance.AvailableBalance)
 		if parseErr != nil {
 			return exchange.AccountSnapshot{}, parseErr
 		}
@@ -619,7 +613,7 @@ func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnaps
 		// 字段缺失时才退回可用余额。
 		transferable := available
 		if balance.MaxWithdrawAmount != "" {
-			if transferable, parseErr = decimalOrZero(balance.MaxWithdrawAmount); parseErr != nil {
+			if transferable, parseErr = exchange.DecimalOrZero(balance.MaxWithdrawAmount); parseErr != nil {
 				return exchange.AccountSnapshot{}, parseErr
 			}
 		}
@@ -649,10 +643,10 @@ func (a *Adapter) ensureOneWayMode(ctx context.Context) error {
 		DualSidePosition bool `json:"dualSidePosition"`
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		return typedRejected("decode position mode", err)
+		return exchange.Rejected("decode position mode", err)
 	}
 	if payload.DualSidePosition {
-		return typedRejected("hedge position mode is unsupported", nil)
+		return exchange.Rejected("hedge position mode is unsupported", nil)
 	}
 	return nil
 }
@@ -683,16 +677,20 @@ func (a *Adapter) ListPositionSnapshots(ctx context.Context) ([]exchange.Positio
 	}
 	var payload []positionRisk
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		return nil, typedRejected("decode positions", err)
+		return nil, exchange.Rejected("decode positions", err)
 	}
 	out := make([]exchange.Position, 0, len(payload))
 	for _, row := range payload {
 		if row.PositionSide != "" && row.PositionSide != "BOTH" {
-			return nil, typedRejected("hedge position mode is unsupported", nil)
+			return nil, exchange.Rejected("hedge position mode is unsupported", nil)
 		}
-		quantity, err := decimalOrZero(row.PositionAmt)
+		quantity, err := exchange.DecimalOrZero(row.PositionAmt)
 		if err != nil || quantity.IsZero() {
 			continue
+		}
+		isolatedWallet, err := exchange.DecimalOrZero(row.IsolatedWallet)
+		if err != nil {
+			return nil, err
 		}
 		position := exchange.Position{
 			Market:           a.config.Market(),
@@ -701,25 +699,24 @@ func (a *Adapter) ListPositionSnapshots(ctx context.Context) ([]exchange.Positio
 			SignedQuantity: quantity, MarginMode: exchange.MarginModeCross,
 			ExchangeUpdatedAt: millis(row.UpdateTime),
 		}
-		position.EntryPrice, err = decimalOrZero(row.EntryPrice)
-		if err == nil {
-			position.MarkPrice, err = decimalOrZero(row.MarkPrice)
-		}
-		if err == nil {
-			position.LiquidationPrice, err = decimalOrZero(row.LiquidationPrice)
-		}
-		if err == nil {
-			position.UnrealizedPnL, err = decimalOrZero(row.UnRealizedProfit)
-		}
-		if err != nil {
-			return nil, err
-		}
-		isolatedWallet, err := decimalOrZero(row.IsolatedWallet)
-		if err != nil {
-			return nil, err
-		}
 		if !isolatedWallet.IsZero() {
-			return nil, typedRejected("isolated margin is unsupported", nil)
+			// 逐仓持仓只标记、不解析其余字段：调用方据此暂停组合，该持仓不入投影。
+			position.MarginMode = exchange.MarginModeIsolated
+			out = append(out, position)
+			continue
+		}
+		position.EntryPrice, err = exchange.DecimalOrZero(row.EntryPrice)
+		if err == nil {
+			position.MarkPrice, err = exchange.DecimalOrZero(row.MarkPrice)
+		}
+		if err == nil {
+			position.LiquidationPrice, err = exchange.DecimalOrZero(row.LiquidationPrice)
+		}
+		if err == nil {
+			position.UnrealizedPnL, err = exchange.DecimalOrZero(row.UnRealizedProfit)
+		}
+		if err != nil {
+			return nil, err
 		}
 		position.UsedMargin, err = positionMargin(row)
 		if err != nil {
@@ -735,16 +732,16 @@ func (a *Adapter) ListPositionSnapshots(ctx context.Context) ([]exchange.Positio
 }
 
 func positionMargin(row positionRisk) (shared.Decimal, error) {
-	margin, err := decimalOrZero(row.PositionInitialMargin)
+	margin, err := exchange.DecimalOrZero(row.PositionInitialMargin)
 	if err != nil || !margin.IsZero() {
 		return margin, err
 	}
-	return decimalOrZero(row.InitialMargin)
+	return exchange.DecimalOrZero(row.InitialMargin)
 }
 
 // positionLeverage 由名义价值和保证金反推杠杆，只用于展示和估算；取不到时按 1 倍。
 func positionLeverage(rawNotional string, margin shared.Decimal) (shared.Decimal, error) {
-	notional, err := decimalOrZero(rawNotional)
+	notional, err := exchange.DecimalOrZero(rawNotional)
 	if err != nil {
 		return shared.Decimal{}, err
 	}
@@ -795,7 +792,7 @@ func (a *Adapter) ListOpenOrdersForSymbol(ctx context.Context, key exchange.Symb
 		return nil, err
 	}
 	if strings.TrimSpace(key.Symbol) == "" {
-		return nil, typedRejected("symbol is required", nil)
+		return nil, exchange.Rejected("symbol is required", nil)
 	}
 	return a.listOpenOrders(ctx, url.Values{"symbol": []string{key.Symbol}})
 }
@@ -813,7 +810,7 @@ func (a *Adapter) listOpenOrders(ctx context.Context, values url.Values) ([]exch
 	}
 	var payload []orderPayload
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		return nil, typedRejected("decode open orders", err)
+		return nil, exchange.Rejected("decode open orders", err)
 	}
 	return a.ordersFromPayload(payload)
 }
@@ -828,20 +825,29 @@ func (a *Adapter) GetOrder(
 	}
 	symbolValue := key.Symbol
 	if strings.TrimSpace(symbolValue) == "" || strings.TrimSpace(clientOrderID) == "" {
-		return exchange.Order{}, typedRejected("symbol and client order id are required", nil)
+		return exchange.Order{}, exchange.Rejected("symbol and client order id are required", nil)
 	}
-	raw, err := a.request(ctx, http.MethodGet, a.path("/api/v3/order", "/fapi/v1/order"), url.Values{
+	payload, err := a.fetchOrder(ctx, url.Values{
 		"symbol":            []string{symbolValue},
 		"origClientOrderId": []string{clientOrderID},
 	})
 	if err != nil {
-		return exchange.Order{}, classifyAPIError(err, raw)
+		return exchange.Order{}, err
+	}
+	return a.orderFromPayload(payload)
+}
+
+// fetchOrder 查询单个订单；values 带 symbol 和 origClientOrderId 或 orderId。
+func (a *Adapter) fetchOrder(ctx context.Context, values url.Values) (orderPayload, error) {
+	raw, err := a.request(ctx, http.MethodGet, a.path("/api/v3/order", "/fapi/v1/order"), values)
+	if err != nil {
+		return orderPayload{}, classifyAPIError(err, raw)
 	}
 	var payload orderPayload
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		return exchange.Order{}, typedRejected("decode order", err)
+		return orderPayload{}, exchange.Rejected("decode order", err)
 	}
-	return a.orderFromPayload(payload)
+	return payload, nil
 }
 
 func (a *Adapter) GetOrderByExchangeID(
@@ -854,23 +860,14 @@ func (a *Adapter) GetOrderByExchangeID(
 	}
 	symbol := key.Symbol
 	if strings.TrimSpace(symbol) == "" || strings.TrimSpace(exchangeOrderID) == "" {
-		return exchange.Order{}, typedRejected("symbol and Exchange order id are required", nil)
+		return exchange.Order{}, exchange.Rejected("symbol and Exchange order id are required", nil)
 	}
-	raw, err := a.request(
-		ctx,
-		http.MethodGet,
-		a.path("/api/v3/order", "/fapi/v1/order"),
-		url.Values{
-			"symbol":  []string{symbol},
-			"orderId": []string{exchangeOrderID},
-		},
-	)
+	payload, err := a.fetchOrder(ctx, url.Values{
+		"symbol":  []string{symbol},
+		"orderId": []string{exchangeOrderID},
+	})
 	if err != nil {
-		return exchange.Order{}, classifyAPIError(err, raw)
-	}
-	var payload orderPayload
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		return exchange.Order{}, typedRejected("decode order", err)
+		return exchange.Order{}, err
 	}
 	return a.orderFromPayload(payload)
 }
@@ -879,7 +876,7 @@ func (a *Adapter) PlaceOrder(
 	ctx context.Context,
 	request exchange.OrderRequest,
 ) (exchange.Order, error) {
-	if err := validateOrderRequest(request, a.config.Market()); err != nil {
+	if err := exchange.ValidateOrderRequest(request, a.config.Market(), nil); err != nil {
 		return exchange.Order{}, err
 	}
 	values := url.Values{
@@ -916,12 +913,12 @@ func (a *Adapter) PlaceOrder(
 	}
 	var payload orderPayload
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		return exchange.Order{}, transportUnknown("decode placed order", err)
+		return exchange.Order{}, exchange.TransportUnknown("decode placed order", err)
 	}
 	order, err := a.orderFromPayload(payload)
 	if err != nil {
 		// HTTP 200 说明交易所已经受理：回执字段解析不了不能当确定拒单，按结果不明走查询恢复。
-		return exchange.Order{}, transportUnknown("decode placed order fields", err)
+		return exchange.Order{}, exchange.TransportUnknown("decode placed order fields", err)
 	}
 	// Some Binance acknowledgements omit these echoed fields.
 	order.ClientOrderID = request.ClientOrderID
@@ -953,14 +950,14 @@ func (a *Adapter) CancelOrder(
 	}
 	var payload orderPayload
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		return exchange.Order{}, transportUnknown("decode canceled order", err)
+		return exchange.Order{}, exchange.TransportUnknown("decode canceled order", err)
 	}
 	// 现货撤单回执的 clientOrderId 是撤单请求自己的单号（原单号在 origClientOrderId），统一用被撤订单的单号。
 	payload.ClientOrderID = clientOrderID
 	order, err := a.orderFromPayload(payload)
 	if err != nil {
 		// 撤单已被受理（HTTP 200），回执字段解析不了按结果不明处理，由查询确认订单状态。
-		return exchange.Order{}, transportUnknown("decode canceled order fields", err)
+		return exchange.Order{}, exchange.TransportUnknown("decode canceled order fields", err)
 	}
 	return order, nil
 }
@@ -993,7 +990,7 @@ func (a *Adapter) ListRecentFills(
 	}
 	symbolValue := key.Symbol
 	if strings.TrimSpace(symbolValue) == "" {
-		return nil, cursor, typedRejected("symbol is required to list Binance fills", nil)
+		return nil, cursor, exchange.Rejected("symbol is required to list Binance fills", nil)
 	}
 	const pageSize = 1000
 	values := url.Values{
@@ -1004,7 +1001,7 @@ func (a *Adapter) ListRecentFills(
 	if cursor != "" {
 		tradeID, err := strconv.ParseUint(cursor, 10, 64)
 		if err != nil || tradeID == ^uint64(0) {
-			return nil, cursor, typedRejected("invalid Binance fill cursor", err)
+			return nil, cursor, exchange.Rejected("invalid Binance fill cursor", err)
 		}
 		// Binance fromId is inclusive. Advance past the last applied trade so
 		// an idle account does not return the same Fill on every sync.
@@ -1029,7 +1026,7 @@ func (a *Adapter) ListRecentFills(
 		}
 		var payload []tradePayload
 		if err := json.Unmarshal(raw, &payload); err != nil {
-			return nil, cursor, typedRejected("decode fills", err)
+			return nil, cursor, exchange.Rejected("decode fills", err)
 		}
 		for _, row := range payload {
 			fill, err := a.fillFromPayload(row)
@@ -1066,11 +1063,11 @@ func (a *Adapter) ListRecentFills(
 		}
 		lastID, err := strconv.ParseUint(next, 10, 64)
 		if err != nil || lastID == ^uint64(0) {
-			return nil, cursor, typedRejected("invalid Binance fill page cursor", err)
+			return nil, cursor, exchange.Rejected("invalid Binance fill page cursor", err)
 		}
 		fromID := strconv.FormatUint(lastID+1, 10)
 		if values.Get("fromId") == fromID {
-			return nil, cursor, typedRejected("Binance fill page did not advance", nil)
+			return nil, cursor, exchange.Rejected("Binance fill page did not advance", nil)
 		}
 		values.Set("fromId", fromID)
 	}
@@ -1083,23 +1080,14 @@ func (a *Adapter) clientOrderIDByExchangeOrderID(
 	exchangeOrderID string,
 ) (string, error) {
 	if exchangeOrderID == "" {
-		return "", typedRejected("Binance Fill is missing order id", nil)
+		return "", exchange.Rejected("Binance Fill is missing order id", nil)
 	}
-	raw, err := a.request(
-		ctx,
-		http.MethodGet,
-		a.path("/api/v3/order", "/fapi/v1/order"),
-		url.Values{"symbol": []string{symbol}, "orderId": []string{exchangeOrderID}},
-	)
+	payload, err := a.fetchOrder(ctx, url.Values{"symbol": []string{symbol}, "orderId": []string{exchangeOrderID}})
 	if err != nil {
-		return "", classifyAPIError(err, raw)
-	}
-	var payload orderPayload
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		return "", typedRejected("decode Fill order", err)
+		return "", err
 	}
 	if strings.TrimSpace(payload.ClientOrderID) == "" {
-		return "", typedRejected("Binance Fill order is missing client order id", nil)
+		return "", exchange.Rejected("Binance Fill order is missing client order id", nil)
 	}
 	return payload.ClientOrderID, nil
 }
@@ -1117,7 +1105,7 @@ func (a *Adapter) SetLeverage(
 		strings.TrimSpace(symbolValue) == "" ||
 		leverage.Cmp(shared.Zero()) <= 0 ||
 		strings.ContainsAny(leverage.String(), "./") {
-		return typedRejected("positive integer SWAP leverage is required", nil)
+		return exchange.Rejected("positive integer SWAP leverage is required", nil)
 	}
 	raw, err := a.request(ctx, http.MethodPost, a.path("", "/fapi/v1/leverage"), url.Values{
 		"symbol":   []string{symbolValue},
@@ -1138,7 +1126,7 @@ func (a *Adapter) SetMarginMode(
 	if a.config.Market() != exchange.MarketTypeSwap ||
 		mode != exchange.MarginModeCross ||
 		strings.TrimSpace(symbolValue) == "" {
-		return typedRejected("only CROSS SWAP margin mode is supported", nil)
+		return exchange.Rejected("only CROSS SWAP margin mode is supported", nil)
 	}
 	if a.papi != nil {
 		// 统一账户的合约一律全仓，没有切换保证金模式的接口。
@@ -1172,20 +1160,20 @@ func (a *Adapter) orderFromPayload(row orderPayload) (exchange.Order, error) {
 
 // orderFromRow 把订单响应转成订单；市场由调用方指定，普通账户和统一账户共用。
 func orderFromRow(market exchange.MarketType, row orderPayload) (exchange.Order, error) {
-	quantity, err := decimalOrZero(row.OrigQty)
+	quantity, err := exchange.DecimalOrZero(row.OrigQty)
 	if err != nil {
 		return exchange.Order{}, err
 	}
-	filled, err := decimalOrZero(row.ExecutedQty)
+	filled, err := exchange.DecimalOrZero(row.ExecutedQty)
 	if err != nil {
 		return exchange.Order{}, err
 	}
-	average, err := decimalOrZero(row.AvgPrice)
+	average, err := exchange.DecimalOrZero(row.AvgPrice)
 	if err != nil {
 		return exchange.Order{}, err
 	}
 	if average.IsZero() && !filled.IsZero() {
-		cumulativeQuote, parseErr := decimalOrZero(row.CumulativeQuoteQty)
+		cumulativeQuote, parseErr := exchange.DecimalOrZero(row.CumulativeQuoteQty)
 		if parseErr != nil {
 			return exchange.Order{}, parseErr
 		}
@@ -1193,7 +1181,7 @@ func orderFromRow(market exchange.MarketType, row orderPayload) (exchange.Order,
 			average = cumulativeQuote.Div(filled)
 		}
 	}
-	price, err := decimalOrZero(row.Price)
+	price, err := exchange.DecimalOrZero(row.Price)
 	if err != nil {
 		return exchange.Order{}, err
 	}
@@ -1205,7 +1193,7 @@ func orderFromRow(market exchange.MarketType, row orderPayload) (exchange.Order,
 	positionSide := exchange.PositionSideUnspecified
 	if market == exchange.MarketTypeSwap {
 		if row.PositionSide != "" && row.PositionSide != "BOTH" {
-			return exchange.Order{}, typedRejected("hedge order is unsupported", nil)
+			return exchange.Order{}, exchange.Rejected("hedge order is unsupported", nil)
 		}
 		positionSide = exchange.PositionSideNet
 	}
@@ -1244,19 +1232,19 @@ func (a *Adapter) fillFromPayload(row tradePayload) (exchange.Fill, error) {
 
 // fillFromRow 把成交查询的一行转成成交记录；普通账户和统一账户共用。
 func fillFromRow(market exchange.MarketType, settlementAsset string, row tradePayload) (exchange.Fill, error) {
-	quantity, err := decimalOrZero(row.Qty)
+	quantity, err := exchange.DecimalOrZero(row.Qty)
 	if err != nil {
 		return exchange.Fill{}, err
 	}
-	price, err := decimalOrZero(row.Price)
+	price, err := exchange.DecimalOrZero(row.Price)
 	if err != nil {
 		return exchange.Fill{}, err
 	}
-	fee, err := decimalOrZero(row.Commission)
+	fee, err := exchange.DecimalOrZero(row.Commission)
 	if err != nil {
 		return exchange.Fill{}, err
 	}
-	pnl, err := decimalOrZero(row.RealizedPnl)
+	pnl, err := exchange.DecimalOrZero(row.RealizedPnl)
 	if err != nil {
 		return exchange.Fill{}, err
 	}
@@ -1267,12 +1255,12 @@ func fillFromRow(market exchange.MarketType, settlementAsset string, row tradePa
 	positionSide := exchange.PositionSideUnspecified
 	if market == exchange.MarketTypeSwap {
 		if row.PositionSide != "" && row.PositionSide != "BOTH" {
-			return exchange.Fill{}, typedRejected("hedge fill is unsupported", nil)
+			return exchange.Fill{}, exchange.Rejected("hedge fill is unsupported", nil)
 		}
 		positionSide = exchange.PositionSideNet
 		side, maker = exchange.Side(row.Side), row.Maker
 		if !side.Valid() {
-			return exchange.Fill{}, typedRejected("futures fill has no valid side", nil)
+			return exchange.Fill{}, exchange.Rejected("futures fill has no valid side", nil)
 		}
 	}
 	role := "TAKER"
@@ -1297,38 +1285,6 @@ func fillFromRow(market exchange.MarketType, settlementAsset string, row tradePa
 	}, nil
 }
 
-func validateOrderRequest(request exchange.OrderRequest, market exchange.MarketType) error {
-	if strings.TrimSpace(request.ClientOrderID) == "" ||
-		strings.TrimSpace(request.ExchangeSymbol) == "" ||
-		!request.Side.Valid() ||
-		request.Quantity.Cmp(shared.Zero()) <= 0 {
-		return typedRejected("invalid order request", nil)
-	}
-	switch request.OrderType {
-	case exchange.OrderTypeMarket:
-		if request.LimitPrice != nil ||
-			request.EffectiveFillPolicy() != exchange.FillPolicyUnspecified {
-			return typedRejected("MARKET order cannot carry price or TimeInForce", nil)
-		}
-	case exchange.OrderTypeLimit:
-		if request.LimitPrice == nil ||
-			request.LimitPrice.Cmp(shared.Zero()) <= 0 ||
-			!request.EffectiveFillPolicy().ValidForLimit() {
-			return typedRejected("invalid LIMIT order", nil)
-		}
-	default:
-		return typedRejected("unsupported order type", nil)
-	}
-	if market == exchange.MarketTypeSpot {
-		if request.PositionSide != exchange.PositionSideUnspecified || request.ReduceOnly {
-			return typedRejected("SPOT order cannot set position side or reduce-only", nil)
-		}
-	} else if request.PositionSide != exchange.PositionSideNet {
-		return typedRejected("SWAP order requires NET position side", nil)
-	}
-	return nil
-}
-
 func classifyAPIError(err error, raw []byte) error {
 	if err == nil {
 		return nil
@@ -1344,8 +1300,25 @@ func classifyAPIError(err error, raw []byte) error {
 	}
 	typed.Code = code
 	switch code {
-	case "-2010", "-2019":
+	case "-2010":
+		// -2010 是“新订单被拒绝”的总称，按说明文字细分：订单号重复说明原单可能已被受理，不能当拒单。
+		message := strings.ToLower(apiMessage(raw))
+		switch {
+		case strings.Contains(message, "duplicate order"):
+			typed.Kind = exchange.ErrorTransportUnknown
+		case strings.Contains(message, "insufficient balance"):
+			typed.Kind = exchange.ErrorInsufficientBalance
+		default:
+			typed.Kind = exchange.ErrorRejected
+		}
+	case "-2019":
 		typed.Kind = exchange.ErrorInsufficientBalance
+	case "-4116":
+		// 合约：ClientOrderId is duplicated，原单可能已被受理，走查询认领。
+		typed.Kind = exchange.ErrorTransportUnknown
+	case "-1000", "-1001":
+		// 未知错误、内部错误：官方说明没有保证订单未被受理，按结果未知走查询恢复。
+		typed.Kind = exchange.ErrorTransportUnknown
 	case "-2011", "-2013":
 		typed.Kind = exchange.ErrorOrderNotFound
 	case "-2015":
@@ -1360,10 +1333,20 @@ func classifyAPIError(err error, raw []byte) error {
 		// 官方说明：后端响应异常或超时，执行状态未知。
 		typed.Kind = exchange.ErrorTransportUnknown
 	case "-1021":
-		// 时间戳超窗时交易所没有受理，但本地无法确认，按结果未知走查询恢复。
+		// 时间戳超窗时交易所没有受理，但本地无法确认，按结果未知走查询恢复；同时提示检查本机时钟。
 		typed.Kind = exchange.ErrorTransportUnknown
+		telemetry.Note(telemetry.AttentionClockSkew, "币安：本机时钟与交易所相差过大，请检查 NTP", time.Now())
 	}
 	return typed
+}
+
+// apiMessage 取响应体里的错误说明（msg）；没有时返回空串。
+func apiMessage(raw []byte) string {
+	var payload struct {
+		Msg string `json:"msg"`
+	}
+	_ = json.Unmarshal(raw, &payload)
+	return payload.Msg
 }
 
 func apiCode(raw []byte) string {
@@ -1395,35 +1378,6 @@ func mapOrderStatus(status string, filled shared.Decimal) exchange.OrderStatus {
 	default:
 		return exchange.OrderStatusSubmitUnknown
 	}
-}
-
-func typedRejected(message string, err error) error {
-	if err == nil {
-		err = errors.New(message)
-	} else {
-		err = fmt.Errorf("%s: %w", message, err)
-	}
-	return &exchange.Error{Kind: exchange.ErrorRejected, Err: err}
-}
-
-func transportUnknown(message string, err error) error {
-	if err == nil {
-		err = errors.New(message)
-	} else {
-		err = fmt.Errorf("%s: %w", message, err)
-	}
-	return &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: err}
-}
-
-func decimalOrZero(raw string) (shared.Decimal, error) {
-	if raw == "" {
-		return shared.Zero(), nil
-	}
-	value, err := shared.ParseDecimal(raw)
-	if err != nil {
-		return shared.Decimal{}, typedRejected("invalid Exchange decimal", err)
-	}
-	return value, nil
 }
 
 func cloneValues(values url.Values) url.Values {

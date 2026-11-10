@@ -2,9 +2,12 @@ package operator
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
+	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
+	operatordomain "github.com/mooyang-code/moox/modules/trade/internal/domain/operator"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
@@ -69,7 +72,7 @@ func TestFlattenSpotDustCompletesWithoutRetry(t *testing.T) {
 			result, err := flattenOnce(t, service, "flatten-1")
 
 			require.NoError(t, err)
-			require.Equal(t, "COMPLETED", result.Action.Status)
+			require.Equal(t, string(operatordomain.StatusCompleted), result.Action.Status)
 			account := accountResult(t, result, "account-a")
 			require.Empty(t, account.Remaining)
 			require.Len(t, account.Dust, 1)
@@ -88,7 +91,7 @@ func TestFlattenSpotLockedBalanceKeepsRetrying(t *testing.T) {
 	result, err := flattenOnce(t, service, "flatten-1")
 
 	require.NoError(t, err)
-	require.Equal(t, "RUNNING", result.Action.Status)
+	require.Equal(t, string(operatordomain.StatusRunning), result.Action.Status)
 	account := accountResult(t, result, "account-a")
 	require.Len(t, account.Remaining, 1)
 	require.Empty(t, account.Dust)
@@ -105,7 +108,7 @@ func TestFlattenSwapQuantityRuleEndsPartialImmediately(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Less(t, time.Since(started), 2*time.Second, "final reasons must not spin until the budget ends")
-	require.Equal(t, "PARTIAL", result.Action.Status)
+	require.Equal(t, string(operatordomain.StatusPartial), result.Action.Status)
 	require.Equal(t, 2, fixture.syncer.callsFor("account-a"))
 }
 
@@ -118,42 +121,162 @@ func endedChild(fixture *operatorFixture, state, filled string) store.OrderRecor
 		Side: "SELL", PositionSide: "NET", Quantity: quantity.String(), FilledQuantity: filled,
 		ReferencePrice: "100", ReferencePriceAt: fixture.now.UnixMilli(), ReduceOnly: true,
 		OwnerType: "OPERATOR", OwnerID: "flatten-1", LogicalAccountID: "logical-1",
-		State: state, Version: 1, FinishedAt: fixture.now.UnixMilli(),
+		State: state, Version: 1, SubmittedAt: fixture.now.UnixMilli(), FinishedAt: fixture.now.UnixMilli(),
 	}
 }
 
+// 交易所确定性拒绝（已发给交易所、零成交）：这一轮终结，不换号再下。
 func TestFlattenZeroFillRejectedChildEndsPartial(t *testing.T) {
 	fixture := newOperatorFixture(t, exchange.MarketTypeSwap)
 	fixture.position(t, "account-a", "BTCUSDT", "2")
 	fixture.order(t, endedChild(fixture, "REJECTED", "0"))
+	currentRoundOrders(t, fixture, "flatten-1")
 	service := fixture.service()
 	service.FlattenMaxAttempts = 0
 
 	result, err := flattenOnce(t, service, "flatten-1")
 
 	require.NoError(t, err)
-	require.Equal(t, "PARTIAL", result.Action.Status)
+	require.Equal(t, string(operatordomain.StatusPartial), result.Action.Status)
 	require.Empty(t, fixture.orders.specs)
 }
 
-func TestFlattenPartiallyFilledEndedChildRetries(t *testing.T) {
+// 子单部分成交后结束、持仓还没同步（仍是旧数量）：按旧数量再下会重复减仓，命中原号不下单。
+func TestFlattenPartiallyFilledEndedChildNotRepeatedBeforePositionSync(t *testing.T) {
 	fixture := newOperatorFixture(t, exchange.MarketTypeSwap)
+	fixture.orders.nextID = ""
 	fixture.position(t, "account-a", "BTCUSDT", "2")
 	fixture.order(t, endedChild(fixture, "PARTIALLY_CANCELED", "1"))
 	service := fixture.service()
 	service.FlattenMaxAttempts = 2
 
+	_, err := flattenOnce(t, service, "flatten-1")
+
+	require.NoError(t, err)
+	require.Empty(t, fixture.orders.specs, "子单已成交、持仓没变时，不再下新单")
+}
+
+// 子单部分成交后持仓已同步：按剩余持仓下一笔，不超过剩余持仓。
+func TestFlattenPartiallyFilledEndedChildContinuesWithRemainingPosition(t *testing.T) {
+	fixture := newOperatorFixture(t, exchange.MarketTypeSwap)
+	fixture.orders.nextID = ""
+	fixture.position(t, "account-a", "BTCUSDT", "1")
+	fixture.order(t, endedChild(fixture, "PARTIALLY_CANCELED", "1"))
+	service := fixture.service()
+	service.FlattenMaxAttempts = 1
+
+	_, err := flattenOnce(t, service, "flatten-1")
+
+	require.NoError(t, err)
+	require.Len(t, fixture.orders.specs, 1)
+	require.Equal(t, "1", fixture.orders.specs[0].Quantity.String())
+}
+
+// 零成交的已过期、已撤销子单（加密市场的减仓、清仓）：换号重试，不判终结。
+func TestFlattenZeroFillExpiredOrCanceledChildRetriesWithNewID(t *testing.T) {
+	for _, state := range []string{"EXPIRED", "CANCELED"} {
+		t.Run(state, func(t *testing.T) {
+			fixture := newOperatorFixture(t, exchange.MarketTypeSwap)
+			fixture.orders.nextID = ""
+			fixture.position(t, "account-a", "BTCUSDT", "2")
+			ended := endedChild(fixture, state, "0")
+			fixture.order(t, ended)
+			currentRoundOrders(t, fixture, "flatten-1")
+			service := fixture.service()
+			service.FlattenMaxAttempts = 1
+
+			result, err := flattenOnce(t, service, "flatten-1")
+
+			require.NoError(t, err)
+			require.Equal(t, string(operatordomain.StatusRunning), result.Action.Status)
+			require.Len(t, fixture.orders.specs, 1)
+			require.NotEqual(t, ended.ClientOrderID, fixture.orders.specs[0].ClientOrderID, "换号，不会命中已结束的旧单")
+		})
+	}
+}
+
+// 提交前本地判定没过（资金不足、只减仓无效，SubmittedAt 为 0）的拒单，与 Place 一样按可重试处理。
+func TestFlattenLocallyRejectedChildRetries(t *testing.T) {
+	fixture := newOperatorFixture(t, exchange.MarketTypeSwap)
+	fixture.orders.nextID = ""
+	fixture.position(t, "account-a", "BTCUSDT", "2")
+	local := endedChild(fixture, "REJECTED", "0")
+	local.SubmittedAt = 0
+	local.RejectReason = orderapp.ErrInsufficientFunds.Error()
+	fixture.order(t, local)
+	currentRoundOrders(t, fixture, "flatten-1")
+	service := fixture.service()
+	service.FlattenMaxAttempts = 1
+
 	result, err := flattenOnce(t, service, "flatten-1")
 
 	require.NoError(t, err)
-	require.Equal(t, "RUNNING", result.Action.Status)
+	require.Equal(t, string(operatordomain.StatusRunning), result.Action.Status)
+	require.Len(t, fixture.orders.specs, 1)
+}
+
+// 本地校验没过但不是资金不足、只减仓（例如数量规则）没有豁免：和交易所的拒绝一样终结。
+func TestFlattenOtherLocalRejectionStillEnds(t *testing.T) {
+	fixture := newOperatorFixture(t, exchange.MarketTypeSwap)
+	fixture.orders.nextID = ""
+	fixture.position(t, "account-a", "BTCUSDT", "2")
+	local := endedChild(fixture, "REJECTED", "0")
+	local.SubmittedAt = 0
+	local.RejectReason = orderapp.ErrQuantityRule.Error()
+	fixture.order(t, local)
+	currentRoundOrders(t, fixture, "flatten-1")
+	service := fixture.service()
+	service.FlattenMaxAttempts = 0
+
+	result, err := flattenOnce(t, service, "flatten-1")
+
+	require.NoError(t, err)
+	require.Equal(t, string(operatordomain.StatusPartial), result.Action.Status)
+	require.Empty(t, fixture.orders.specs)
+}
+
+// 连续零成交到上限才判终结。
+func TestFlattenUnfilledChildrenEndAtTheCap(t *testing.T) {
+	fixture := newOperatorFixture(t, exchange.MarketTypeSwap)
+	fixture.orders.nextID = ""
+	fixture.position(t, "account-a", "BTCUSDT", "2")
+	for i := 0; i < flattenMaxUnfilled; i++ {
+		ended := endedChild(fixture, "EXPIRED", "0")
+		ended.OrderID = fmt.Sprintf("ended-%d", i)
+		ended.ClientOrderID = fmt.Sprintf("ended-client-%d", i)
+		fixture.order(t, ended)
+	}
+	currentRoundOrders(t, fixture, "flatten-1")
+	service := fixture.service()
+	service.FlattenMaxAttempts = 0
+
+	result, err := flattenOnce(t, service, "flatten-1")
+
+	require.NoError(t, err)
+	require.Equal(t, string(operatordomain.StatusPartial), result.Action.Status)
+	require.Empty(t, fixture.orders.specs)
+	require.Contains(t, result.Accounts[0].Remaining[0].Reason, "一股都没成交")
+}
+
+// 现货受管资产读取失败：已算出的合约剩余仍要返回，不能让结果看起来像平完了。
+func TestRemainingKeepsSwapPositionsWhenManagedAssetsFail(t *testing.T) {
+	fixture := newMixedFlattenFixture(t)
+	require.NoError(t, fixture.store.DBForTest().Exec(`DROP TABLE t_logical_account_targets`).Error)
+	var result FlattenAccountResult
+
+	remaining := fixture.service().remainingForAccount(context.Background(), "space-1", "account-a", nil, &result, flattenScope{})
+
+	require.NotEmpty(t, result.Error, "读取失败要记进结果")
+	require.Len(t, remaining, 1)
+	require.Equal(t, "BTC-USDT-SWAP", remaining[0].InstrumentID)
+	require.Equal(t, "3", remaining[0].Quantity)
 }
 
 func runningFlatten(t *testing.T, fixture *operatorFixture, actionID string) {
 	t.Helper()
 	_, _, err := fixture.store.CreateOperatorAction(context.Background(), store.OperatorActionRecord{
-		SpaceID: "space-1", ActionID: actionID, LogicalAccountID: "logical-1", ActionType: "FLATTEN",
-		RequestJSON: `{"logical_account_id":"logical-1"}`, Reason: "close risk", Status: "RUNNING",
+		SpaceID: "space-1", ActionID: actionID, LogicalAccountID: "logical-1", ActionType: string(operatordomain.ActionFlatten),
+		RequestJSON: `{"logical_account_id":"logical-1"}`, Reason: "close risk", Status: string(operatordomain.StatusRunning),
 	})
 	require.NoError(t, err)
 }
@@ -241,7 +364,7 @@ func TestFlattenWithManyMembersStillPlacesOrders(t *testing.T) {
 	result, err := flattenOnce(t, service, "flatten-1")
 
 	require.NoError(t, err)
-	require.Equal(t, "COMPLETED", result.Action.Status)
+	require.Equal(t, string(operatordomain.StatusCompleted), result.Action.Status)
 	require.Len(t, fixture.orders.specs, 1, "the member with a position must get its flatten order")
 }
 
@@ -292,8 +415,8 @@ func TestFlattenTradingAccountRequiresLogicalMembership(t *testing.T) {
 func TestFlattenTradingAccountIsBusyWhileAnotherMemberFlattens(t *testing.T) {
 	fixture := newOperatorFixture(t, exchange.MarketTypeSwap)
 	_, _, err := fixture.store.CreateOperatorAction(context.Background(), store.OperatorActionRecord{
-		SpaceID: "space-1", ActionID: "flatten-a", LogicalAccountID: "logical-1", ActionType: "FLATTEN",
-		RequestJSON: `{"logical_account_id":"logical-1","trading_account_id":"account-a"}`, Reason: "close a", Status: "RUNNING",
+		SpaceID: "space-1", ActionID: "flatten-a", LogicalAccountID: "logical-1", ActionType: string(operatordomain.ActionFlatten),
+		RequestJSON: `{"logical_account_id":"logical-1","trading_account_id":"account-a"}`, Reason: "close a", Status: string(operatordomain.StatusRunning),
 	})
 	require.NoError(t, err)
 	service := fixture.service()

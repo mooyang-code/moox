@@ -224,6 +224,9 @@ func (s *Service) syncAccountLocked(
 	positionsReadAt := s.now()
 	protectAfter := positionsReadAt.Add(-positionLagGrace).UnixMilli()
 	positions, err := adapter.ListPositionSnapshots(ctx)
+	if err == nil {
+		positions, err = s.FilterIsolatedPositions(ctx, tradingAccountID, positions)
+	}
 	if err != nil {
 		result, failErr := s.fail(ctx, account, accountDependencyError(tradingAccountID, "list_positions", err))
 		return result, 0, failErr
@@ -347,7 +350,17 @@ func (s *Service) syncAccountLocked(
 		if err := s.Fills.ConfirmCancel(ctx, local.SpaceID, local.OrderID); err != nil {
 			return result, maxDifference, err
 		}
-		result.Warnings = append(result.Warnings, fmt.Sprintf("订单 %s 在交易所已不存在，按已撤销处理", local.OrderID))
+		latest, err := s.Store.GetOrder(ctx, local.SpaceID, local.OrderID)
+		if err != nil {
+			return result, maxDifference, err
+		}
+		// 同一轮里迟到成交可能已把订单推到终态，按真实状态写，不一律说“已撤销”。
+		switch orderdomain.State(latest.State) {
+		case orderdomain.Canceled, orderdomain.PartiallyCanceled:
+			result.Warnings = append(result.Warnings, fmt.Sprintf("订单 %s 在交易所已不存在，按已撤销处理", local.OrderID))
+		default:
+			result.Warnings = append(result.Warnings, fmt.Sprintf("订单 %s 在交易所已不存在，当前状态 %s", local.OrderID, latest.State))
+		}
 	}
 	for _, local := range gone {
 		closed, err := s.closeInstrumentGone(ctx, local)
@@ -400,14 +413,8 @@ func (s *Service) closeInstrumentGone(ctx context.Context, local store.OrderReco
 		if !s.instrumentGoneClosable(record) {
 			return nil
 		}
-		expected := record.Version
-		record.State = string(orderdomain.Expired)
-		record.RejectReason = InstrumentGoneReason
-		record.RemainingReservedQuantity = "0"
-		record.FinishedAt = s.now().UnixMilli()
-		record.Version++
 		closed = true
-		return tx.UpdateOrder(record, expected)
+		return s.Fills.FinishOrderTx(tx, record, orderdomain.Expired, InstrumentGoneReason)
 	})
 	return closed && err == nil, err
 }
@@ -717,7 +724,7 @@ func (s *Service) applySnapshot(
 		snapshot.Ready = false
 		result.Ready = false
 		result.BalancePending = true
-		readinessCause = awaitingBalanceReason
+		readinessCause = consumer.AwaitingBalanceReason
 		result.Warnings = append(result.Warnings, "balance snapshot does not cover the pending fill or private update; admission stays closed")
 	}
 	// LastSyncAt 同时是资金预留的抵扣边界：只有余额快照真正被采用且没有遗留待确认水位时才能推进；
@@ -841,10 +848,7 @@ func (s *Service) resolveUnknownOrders(
 	return result, nil
 }
 
-// awaitingBalanceReason 是私有成交释放预留后、余额快照尚未确认期间持久化的未就绪原因。
 var errBalanceNotConfirmed = errors.New("trade account sync: balance snapshot does not cover the pending fill or private update")
-
-const awaitingBalanceReason = "成交待余额同步确认"
 
 func (s *Service) ApplyFill(
 	ctx context.Context,
@@ -921,6 +925,9 @@ func (s *Service) ApplyPosition(
 ) error {
 	if err := s.validate(); err != nil {
 		return err
+	}
+	if position.MarginMode == exchange.MarginModeIsolated {
+		return s.pauseForIsolated(ctx, tradingAccountID, []exchange.Position{position})
 	}
 	unlock, lockErr := s.Store.LockTradingAccountContext(ctx, tradingAccountID)
 	if lockErr != nil {
@@ -1061,7 +1068,7 @@ func (s *Service) setReady(
 	}
 	if ready && account.HasBalancePending() {
 		// 还有未被完整余额快照覆盖的成交或私有更新：不能仅凭会话就绪恢复准入
-		ready, lastError = false, awaitingBalanceReason
+		ready, lastError = false, consumer.AwaitingBalanceReason
 	}
 	if ready {
 		// 订单累计成交仍领先已入账成交时也不能恢复：回执没有交易所时间时只记了缺口、没抬水位。
@@ -1070,7 +1077,7 @@ func (s *Service) setReady(
 			return err
 		}
 		if gaps > 0 {
-			ready, lastError = false, awaitingBalanceReason
+			ready, lastError = false, consumer.AwaitingBalanceReason
 		}
 	}
 	return s.Store.Transaction(ctx, func(tx *store.Tx) error {
@@ -1101,7 +1108,27 @@ func (s *Service) applyFill(
 		SpaceID: account.SpaceID, TradingAccountID: account.TradingAccountID,
 		Kind: kind,
 	})
+	if err != nil && ctx.Err() == nil {
+		err = s.noteFillFailure(ctx, account, fill, err)
+	}
 	return applied, external && applied, err
+}
+
+// noteFillFailure 把一笔成交入账失败记成关注项（带订单号和原因）并返回带订单号的错误。
+// 不隔离这一笔：成交记不进去说明本地账本不准，账户保持未就绪才安全；这里只让用户知道卡在哪。
+func (s *Service) noteFillFailure(ctx context.Context, account store.TradingAccountRecord, fill exchange.Fill, cause error) error {
+	order := "订单 " + fill.ClientOrderID
+	switch {
+	case fill.ClientOrderID == "":
+		order = "订单 " + fill.ExchangeOrderID
+	case fill.ExchangeOrderID != "":
+		order += "（交易所单号 " + fill.ExchangeOrderID + "）"
+	}
+	detail := fmt.Sprintf("执行账户 %s：%s，成交 %s 入账失败：%s",
+		account.Name, order, fill.ExchangeTradeID, telemetry.StableReason(cause.Error()))
+	telemetry.Note(telemetry.AttentionFillIngestFailed, detail, s.now())
+	log.WarnContextf(ctx, "交易关注项：%s", detail)
+	return fmt.Errorf("%s，成交 %s 入账失败：%w", order, fill.ExchangeTradeID, cause)
 }
 
 func (s *Service) ensureOrderForFill(
@@ -1142,6 +1169,8 @@ func (s *Service) ensureOrderForFill(
 	}
 	var current exchange.Order
 	var lookupErr error
+	// 交易所查不到原单（已归档）时按成交合成外部订单：数量只是已知成交之和，后到的成交会放大它。
+	synthetic := false
 	if fill.ClientOrderID != "" {
 		current, lookupErr = adapter.GetOrder(ctx, exchange.NewSymbolKey(fill.Market, fill.ExchangeSymbol), fill.ClientOrderID)
 	} else {
@@ -1154,6 +1183,7 @@ func (s *Service) ensureOrderForFill(
 		if syntheticQuantity.Cmp(shared.Zero()) <= 0 {
 			syntheticQuantity = fill.Quantity
 		}
+		synthetic = true
 		current = exchange.Order{
 			ExchangeOrderID: fill.ExchangeOrderID, ClientOrderID: fill.ClientOrderID,
 			Market: fill.Market, ExchangeSymbol: fill.ExchangeSymbol, OrderType: exchange.OrderTypeMarket,
@@ -1171,7 +1201,7 @@ func (s *Service) ensureOrderForFill(
 	if batchFilled.Cmp(shared.Zero()) <= 0 {
 		batchFilled = fill.Quantity
 	}
-	imported, err := s.importExternalOrder(ctx, account, current, batchFilled)
+	imported, err := s.importExternalOrder(ctx, account, current, batchFilled, synthetic)
 	if err != nil {
 		return false, err
 	}
@@ -1221,7 +1251,7 @@ func (s *Service) applyOrder(
 		)
 	}
 	if errors.Is(err, gorm.ErrRecordNotFound) {
-		record, err = s.importExternalOrder(ctx, account, current, shared.Zero())
+		record, err = s.importExternalOrder(ctx, account, current, shared.Zero(), false)
 		if err != nil {
 			return false, false, "", err
 		}
@@ -1284,7 +1314,7 @@ func (s *Service) observeOrderFills(
 			return err
 		}
 		return tx.UpdateTradingAccountReadiness(
-			account.SpaceID, account.TradingAccountID, false, s.now().UnixMilli(), awaitingBalanceReason,
+			account.SpaceID, account.TradingAccountID, false, s.now().UnixMilli(), consumer.AwaitingBalanceReason,
 		)
 	})
 }
@@ -1317,18 +1347,25 @@ func (s *Service) applyOrderState(
 		return s.terminalize(ctx, record, current.Status)
 	}
 	next := state
+	// 还没有交易所结果的订单，快照里查到它（不论挂着、部分成交还是已成交）就是交易所的证据：先认领成挂单，再走正常迁移。
+	unconfirmed := state == orderdomain.Pending || state == orderdomain.Submitting || state == orderdomain.SubmitUnknown
 	switch current.Status {
 	case exchange.OrderStatusOpen:
-		if state == orderdomain.Pending || state == orderdomain.Submitting ||
-			state == orderdomain.SubmitUnknown || state == orderdomain.CancelUnknown {
+		if unconfirmed || state == orderdomain.CancelUnknown {
 			next = orderdomain.Open
 		}
 	case exchange.OrderStatusPartiallyFilled:
+		if unconfirmed {
+			next = orderdomain.Open
+		}
 		if !shared.MustDecimal(record.FilledQuantity).IsZero() &&
 			state != orderdomain.Filled {
 			next = orderdomain.PartiallyFilled
 		}
 	case exchange.OrderStatusFilled:
+		if unconfirmed {
+			next = orderdomain.Open
+		}
 		if shared.MustDecimal(record.FilledQuantity).Cmp(shared.MustDecimal(record.Quantity)) == 0 {
 			next = orderdomain.Filled
 		}
@@ -1367,20 +1404,15 @@ func (s *Service) terminalize(
 		}
 		return fmt.Errorf("trade account sync: conflicting terminal order state")
 	}
-	expected := record.Version
-	record.Version++
-	record.FinishedAt = s.now().UnixMilli()
+	next, reason := orderdomain.Expired, ""
 	if status == exchange.OrderStatusRejected {
-		record.State = string(orderdomain.Rejected)
-		if record.RejectReason == "" {
-			record.RejectReason = "交易所拒单"
+		next, reason = orderdomain.Rejected, record.RejectReason
+		if reason == "" {
+			reason = "交易所拒单"
 		}
-	} else {
-		record.State = string(orderdomain.Expired)
 	}
-	record.RemainingReservedQuantity = "0"
 	return s.Store.Transaction(ctx, func(tx *store.Tx) error {
-		return tx.UpdateOrder(record, expected)
+		return s.Fills.FinishOrderTx(tx, record, next, reason)
 	})
 }
 
@@ -1389,6 +1421,7 @@ func (s *Service) importExternalOrder(
 	account store.TradingAccountRecord,
 	current exchange.Order,
 	batchFilled shared.Decimal,
+	synthetic bool,
 ) (store.OrderRecord, error) {
 	if strings.TrimSpace(current.ExchangeOrderID) == "" ||
 		strings.TrimSpace(current.ExchangeSymbol) == "" ||
@@ -1467,9 +1500,13 @@ func (s *Service) importExternalOrder(
 			filledQuantity, averagePrice = seed.String(), current.AveragePrice.String()
 		}
 	}
+	orderIDPrefix := "external:"
+	if synthetic {
+		orderIDPrefix = orderdomain.SyntheticOrderIDPrefix
+	}
 	record := store.OrderRecord{
 		SpaceID: account.SpaceID,
-		OrderID: "external:" + account.TradingAccountID + ":" + string(current.Market) + ":" +
+		OrderID: orderIDPrefix + account.TradingAccountID + ":" + string(current.Market) + ":" +
 			current.ExchangeSymbol + ":" + current.ExchangeOrderID,
 		TradingAccountID: account.TradingAccountID,
 		ClientOrderID:    clientOrderID, ExchangeOrderID: current.ExchangeOrderID,

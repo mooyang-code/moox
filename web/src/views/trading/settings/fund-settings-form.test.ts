@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { FundSettings } from "@/api/trade/settings";
 import {
+  bnbReserveHints,
   buildFundSettingsRequest,
   defaultFundSettings,
   fundSettingsToModel,
@@ -10,6 +11,7 @@ import {
   showsLiveOnlyFields,
   showsMarginMonitor,
   sumDecimals,
+  turnsOffMarginMonitor,
   validateFundSettingsModel,
   withStoredMarginMonitor,
   type FundFormScope,
@@ -348,5 +350,45 @@ describe("fund settings form", () => {
       expect(request.margin_monitor_disabled).toBe(false);
       expect(request.margin_ratio_threshold).toBeUndefined();
     });
+  });
+
+  it("只有把监控从开着改成关闭才需要确认；模拟盘、已经关闭、保持开着都不需要", () => {
+    const on = { ...defaultFundSettings(), margin_monitor_disabled: false };
+    const off = { ...defaultFundSettings(), margin_monitor_disabled: true };
+    expect(turnsOffMarginMonitor(on, off, false)).toBe(true);
+    expect(turnsOffMarginMonitor(undefined, off, false)).toBe(true);
+    expect(turnsOffMarginMonitor(off, off, false)).toBe(false);
+    expect(turnsOffMarginMonitor(off, on, false)).toBe(false);
+    expect(turnsOffMarginMonitor(on, on, false)).toBe(false);
+    expect(turnsOffMarginMonitor(on, off, true)).toBe(false);
+  });
+});
+
+describe("BNB 保留金额说明", () => {
+  it("组合里没有普通账户时只说统一账户的规则", () => {
+    for (const scope of [
+      {},
+      { standardAccount: false },
+      { standardAccount: true, paper: true },
+      { standardAccount: true, nonBinance: true }
+    ]) {
+      const hints = bnbReserveHints(scope);
+      expect(hints).toHaveLength(1);
+      expect(hints[0]).toContain("低于这个金额减 10");
+      expect(hints[0]).not.toContain("普通账户");
+    }
+  });
+
+  it("有普通账户时按账户类型区分：统一账户减 10，普通账户只补现货钱包、一半减 5", () => {
+    const hints = bnbReserveHints({ standardAccount: true });
+    expect(hints).toHaveLength(2);
+    expect(hints[0]).toMatch(/^统一账户：.*低于这个金额减 10/);
+    expect(hints[1]).toMatch(/^普通账户：只补现货钱包.*一半减 5/);
+  });
+
+  it("保留金额过小的校验文案说明两种账户的补买线", () => {
+    const message = validateFundSettingsModel({ ...fundSettingsToModel(), bnb_reserve_amount: "10" });
+    expect(message).toContain("统一账户");
+    expect(message).toContain("普通账户现货钱包");
   });
 });

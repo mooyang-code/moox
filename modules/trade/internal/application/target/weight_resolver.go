@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/trade/internal/application/fundmaint"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/fundsettings"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
@@ -81,7 +82,16 @@ var (
 	logicalTargetQuantityStep = shared.MustDecimal("0.000000000000000001")
 )
 
-func (r *WeightResolver) Resolve(ctx context.Context, _ int64, request *tradeeventpb.LogicalAccountTargetWeightRequested, spaceID string) (WeightConversion, error) {
+// heldConversion 是全部标的都保持时的换算结果：不换算任何数量，不带权益和报价。
+func heldConversion(requestHash string, signalTime int64, weightsJSON string, orderedWeights []orderedWeight) WeightConversion {
+	held := make([]store.InstrumentTarget, 0, len(orderedWeights))
+	for _, weight := range orderedWeights {
+		held = append(held, store.InstrumentTarget{InstrumentID: weight.InstrumentID, Hold: true})
+	}
+	return WeightConversion{RequestHash: requestHash, SignalTime: signalTime, Equity: shared.Zero(), WeightsJSON: weightsJSON, ReferencePrices: map[string]string{}, ReferencePriceEvidence: []ReferencePriceEvidence{}, QuantityTargets: held}
+}
+
+func (r *WeightResolver) Resolve(ctx context.Context, request *tradeeventpb.LogicalAccountTargetWeightRequested, spaceID string) (WeightConversion, error) {
 	if r == nil || r.Store == nil || r.Prices == nil || r.Equity == nil {
 		return WeightConversion{}, fmt.Errorf("%w: target weight resolver is not configured", ErrPermanent)
 	}
@@ -115,11 +125,7 @@ func (r *WeightResolver) Resolve(ctx context.Context, _ int64, request *tradeeve
 	// 全部是保持标的的目标不换算任何数量，不依赖权益快照与报价：权益读取暂时失败时保持标记也必须被接受，
 	// 否则旧的调仓目标会继续执行，保持保护失效。
 	if allHold(orderedWeights) {
-		held := make([]store.InstrumentTarget, 0, len(orderedWeights))
-		for _, weight := range orderedWeights {
-			held = append(held, store.InstrumentTarget{InstrumentID: weight.InstrumentID, Hold: true})
-		}
-		return WeightConversion{RequestHash: requestHash, SignalTime: signalTime, Equity: shared.Zero(), WeightsJSON: weightsJSON, ReferencePrices: map[string]string{}, ReferencePriceEvidence: []ReferencePriceEvidence{}, QuantityTargets: held}, nil
+		return heldConversion(requestHash, signalTime, weightsJSON, orderedWeights), nil
 	}
 	// 资金设置在空目标（清仓）和全保持的提前返回之后才读：设置解析失败不能挡住清仓。
 	logical, err := r.Store.GetLogicalAccount(ctx, spaceID, request.GetLogicalAccountId())
@@ -147,11 +153,7 @@ func (r *WeightResolver) Resolve(ctx context.Context, _ int64, request *tradeeve
 		}
 	}
 	if allHold(orderedWeights) {
-		held := make([]store.InstrumentTarget, 0, len(orderedWeights))
-		for _, weight := range orderedWeights {
-			held = append(held, store.InstrumentTarget{InstrumentID: weight.InstrumentID, Hold: true})
-		}
-		return WeightConversion{RequestHash: requestHash, SignalTime: signalTime, Equity: shared.Zero(), WeightsJSON: weightsJSON, ReferencePrices: map[string]string{}, ReferencePriceEvidence: []ReferencePriceEvidence{}, QuantityTargets: held}, nil
+		return heldConversion(requestHash, signalTime, weightsJSON, orderedWeights), nil
 	}
 	equity, equityTime, err := r.Equity.ResolveLogicalAccountEquity(ctx, spaceID, request.GetLogicalAccountId())
 	if err != nil {
@@ -318,8 +320,10 @@ func (r *WeightResolver) warnExcluded(ctx context.Context, logicalAccountID, ass
 	return true
 }
 
-// bnbShortfall 返回 BNB 保留金额还差的部分：每个会补买的执行账户各保留 N，逐个账户算缺口再求和，
-// 和资金维护任务的补买口径一致（M 个账户实际要买 M × N，不是只扣一份 N）。
+// bnbShortfall 返回 BNB 保留金额还差的部分：每个会补买的执行账户各算一个缺口再求和，
+// 和资金维护任务的补买口径一致（M 个账户实际要买 M 份，不是只扣一份）：普通账户只数现货钱包的 BNB、目标是 N/2，
+// 统一账户一个钱包、目标是 N（数量与目标直接用 fundmaint.BNBQuantity、BNBBounds，和补买、归集同一份算法）。
+// 缺口不扣触发容差：多留一点只是保守。
 // 只算资金维护生效的账户（币安生产环境实盘）且开通了现货、有 BNB 现货标的的：其他账户没有补买，也就不用为它留钱。
 // 没有 BNB 余额时不取报价；取到的报价要新鲜。
 func (r *WeightResolver) bnbShortfall(ctx context.Context, members []store.LogicalAccountMemberRecord, reserve shared.Decimal) (shared.Decimal, error) {
@@ -351,21 +355,7 @@ func (r *WeightResolver) bnbShortfall(ctx context.Context, members []store.Logic
 		if bnb == nil {
 			continue
 		}
-		quantity := shared.Zero()
-		// BNB 抵扣手续费的 BNB 现货和合约钱包里都可能有（普通账户分配到两个钱包），市值两个钱包都算；借出的不算。
-		for _, balance := range account.Snapshot.Balances {
-			if !strings.EqualFold(balance.Asset, fundsettings.BNBAsset) {
-				continue
-			}
-			held, err := shared.ParseDecimal(balance.Total)
-			if err != nil {
-				return shared.Zero(), err
-			}
-			if borrowed, borrowedErr := shared.ParseDecimal(balance.Borrowed); borrowedErr == nil {
-				held = held.Sub(borrowed)
-			}
-			quantity = quantity.Add(held)
-		}
+		quantity := fundmaint.BNBQuantity(account)
 		value := shared.Zero()
 		if quantity.Cmp(shared.Zero()) > 0 {
 			quote, err := r.Prices.LatestPrice(ctx, account.TradingAccountID, exchange.NewSymbolKey(bnb.MarketType, bnb.ExchangeSymbol))
@@ -377,7 +367,8 @@ func (r *WeightResolver) bnbShortfall(ctx context.Context, members []store.Logic
 			}
 			value = quantity.Mul(quote.Price)
 		}
-		if shortfall := reserve.Sub(value); shortfall.Cmp(shared.Zero()) > 0 {
+		target, _ := fundmaint.BNBBounds(account, reserve)
+		if shortfall := target.Sub(value); shortfall.Cmp(shared.Zero()) > 0 {
 			total = total.Add(shortfall)
 		}
 	}
@@ -461,6 +452,8 @@ func validateWeightRisk(weights []orderedWeight) error {
 }
 
 func (r *WeightResolver) instrumentForMembers(ctx context.Context, spaceID string, members []store.LogicalAccountMemberRecord, instrumentID string) (store.InstrumentRecord, string, error) {
+	// 读库出错的成员和不支持该标的的成员一样跳过（行为不变），只是都没找到时消息要区分，不能把读库错误说成“不支持”。
+	var readErr error
 	for _, member := range members {
 		account, accountErr := r.Store.GetTradingAccountByID(ctx, member.TradingAccountID)
 		if accountErr != nil {
@@ -479,8 +472,14 @@ func (r *WeightResolver) instrumentForMembers(ctx context.Context, spaceID strin
 			}
 			return instrument, member.TradingAccountID, nil
 		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			readErr = err
+		}
 	}
-	return store.InstrumentRecord{}, "", fmt.Errorf("target weight resolver: instrument %s is not supported by a ready account member", instrumentID)
+	if readErr != nil {
+		return store.InstrumentRecord{}, "", fmt.Errorf("读取标的失败：%s：%w", instrumentID, readErr)
+	}
+	return store.InstrumentRecord{}, "", fmt.Errorf("没有就绪的组合成员支持标的 %s", instrumentID)
 }
 
 func (r *WeightResolver) now() time.Time {

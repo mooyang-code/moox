@@ -34,7 +34,7 @@ func TestExcludedAssetUsesInstrumentBaseAssetNotNamePrefix(t *testing.T) {
 	addInstrument(t, tradeStore, "SPOT", "PEPE")
 	addInstrument(t, tradeStore, "SWAP", "1000PEPE")
 
-	conversion, err := resolver.Resolve(context.Background(), 0, mixedRequest(
+	conversion, err := resolver.Resolve(context.Background(), mixedRequest(
 		weightTarget("PEPE-USDT-SPOT", "SPOT", "0.1"), weightTarget("1000PEPE-USDT-SWAP", "SWAP", "0.1"),
 	), "space-1")
 
@@ -47,7 +47,7 @@ func TestExcludedAssetUsesInstrumentBaseAssetNotNamePrefix(t *testing.T) {
 func TestEmptyTargetFlattenIgnoresBrokenFundSettings(t *testing.T) {
 	resolver, _ := newMixedResolver(t, `{"reserve_ratio":"not-a-number"}`)
 
-	conversion, err := resolver.Resolve(context.Background(), 0, mixedRequest(), "space-1")
+	conversion, err := resolver.Resolve(context.Background(), mixedRequest(), "space-1")
 
 	require.NoError(t, err)
 	require.Empty(t, conversion.QuantityTargets)
@@ -58,7 +58,7 @@ func TestBNBReserveIsNotDeductedWithoutSpotBNBInstrument(t *testing.T) {
 	resolver, tradeStore := newMixedResolver(t, `{"bnb_reserve_amount":"500"}`)
 	require.NoError(t, tradeStore.DBForTest().Exec(`DELETE FROM t_trade_instruments WHERE c_instrument_id = 'BNB-USDT-SPOT'`).Error)
 
-	conversion, err := resolver.Resolve(context.Background(), 0, mixedRequest(weightTarget("BTC-USDT-SWAP", "SWAP", "0.5")), "space-1")
+	conversion, err := resolver.Resolve(context.Background(), mixedRequest(weightTarget("BTC-USDT-SWAP", "SWAP", "0.5")), "space-1")
 
 	require.NoError(t, err)
 	require.Equal(t, "2000", conversion.Equity.String())
@@ -70,7 +70,7 @@ func TestBNBMarketValueRequiresFreshPrice(t *testing.T) {
 	resolver.Prices = targetPriceStub{price: shared.MustDecimal("100")}
 	resolver.Now = func() time.Time { return time.UnixMilli(2000).Add(time.Hour) } // 报价停在 2000，早已过期
 
-	_, err := resolver.Resolve(context.Background(), 0, mixedRequest(weightTarget("BTC-USDT-SPOT", "SPOT", "0.5")), "space-1")
+	_, err := resolver.Resolve(context.Background(), mixedRequest(weightTarget("BTC-USDT-SPOT", "SPOT", "0.5")), "space-1")
 
 	require.Error(t, err)
 }

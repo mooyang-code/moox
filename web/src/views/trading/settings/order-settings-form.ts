@@ -88,11 +88,17 @@ function isDecimal(value: string): boolean {
   return decimalPattern.test(value.trim());
 }
 
-function validateCaps(rows: CapRow[], market: "SPOT" | "SWAP", label: string): string {
+// 股票代码形如 600519.XSHG
+const stockCodePattern = /^[0-9A-Z]+\.[A-Z]+$/;
+
+/** label 为空（A 股组合只有一组上限）时提示里不带市场名；标的写法按市场：加密货币带 -SPOT/-SWAP 后缀，股票是代码。 */
+function validateCaps(rows: CapRow[], market: "SPOT" | "SWAP" | "STOCK", label: string): string {
   const seen = new Set<string>();
   for (const row of rows) {
     const key = row.key.trim().toUpperCase();
-    if (key !== "*" && !key.endsWith(`-${market}`)) return `${label}每小时上限的标的写 * 或形如 BTC-USDT-${market}`;
+    const valid = market === "STOCK" ? stockCodePattern.test(key) : key.endsWith(`-${market}`);
+    if (key !== "*" && !valid)
+      return `${label}每小时上限的标的写 * 或形如 ${market === "STOCK" ? "600519.XSHG" : `BTC-USDT-${market}`}`;
     if (seen.has(key)) return `${label}每小时上限的标的 ${key} 重复`;
     seen.add(key);
     if (!isDecimal(row.value) || Number(row.value) <= 0) return `${label}每小时上限 ${key} 必须是大于 0 的数字`;
@@ -101,12 +107,16 @@ function validateCaps(rows: CapRow[], market: "SPOT" | "SWAP", label: string): s
 }
 
 /** 提交前的本地校验，规则和后端 domain/ordersettings 一致；返回第一条错误，空串表示通过。 */
-export function validateOrderSettingsModel(model: OrderSettingsModel): string {
+export function validateOrderSettingsModel(model: OrderSettingsModel, stockOnly = false): string {
   const ratioIn01 = (value: string) => isDecimal(value) && Number(value) <= 1;
   if (!ratioIn01(model.rebalance_threshold_ratio)) return "调仓阈值比例必须在 0 到 1 之间";
-  if (!isDecimal(model.min_notional_spot)) return "现货最小下单额必须是不小于 0 的数字";
-  if (!isDecimal(model.min_notional_swap)) return "合约最小下单额必须是不小于 0 的数字";
-  const capError = validateCaps(model.hourly_cap_spot, "SPOT", "现货") || validateCaps(model.hourly_cap_swap, "SWAP", "合约");
+  // A 股组合只有股票一个市场，最小下单额只有一项，不校验合约那项
+  if (!isDecimal(model.min_notional_spot)) return `${stockOnly ? "" : "现货"}最小下单额必须是不小于 0 的数字`;
+  if (!stockOnly && !isDecimal(model.min_notional_swap)) return "合约最小下单额必须是不小于 0 的数字";
+  // A 股组合只有一组上限（后端按现货那组处理），不校验合约那组
+  const capError = stockOnly
+    ? validateCaps(model.hourly_cap_spot, "STOCK", "")
+    : validateCaps(model.hourly_cap_spot, "SPOT", "现货") || validateCaps(model.hourly_cap_swap, "SWAP", "合约");
   if (capError) return capError;
   if (
     !isDecimal(model.max_child_notional) ||

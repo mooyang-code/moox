@@ -568,48 +568,6 @@ func (s *Service) ClaimSession(
 	return value, fence, err
 }
 
-// RebindSession atomically switches an existing Strategy session. The old
-// target is cleared only when this CAS wins, so a delayed rebind cannot erase
-// a target accepted by a newer session.
-func (s *Service) RebindSession(
-	ctx context.Context,
-	spaceID, logicalAccountID, oldInstanceID, oldSessionID, expectedFence,
-	newInstanceID, newSessionID string,
-) (store.LogicalAccountRecord, string, error) {
-	if s == nil || s.Store == nil {
-		return store.LogicalAccountRecord{}, "", ErrServiceConfig
-	}
-	unlock, lockErr := s.Store.LockLogicalAccountContext(ctx, spaceID, logicalAccountID)
-	if lockErr != nil {
-		return store.LogicalAccountRecord{}, "", lockErr
-	}
-	defer unlock()
-	// 重绑会删掉旧会话的目标：先撤掉它的挂单。撤不下来也照常重绑，新会话的第一份目标在第 1 阶段会再撤（executor.go）。
-	if current, err := s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID); err == nil &&
-		rebindChanges(current, oldInstanceID, oldSessionID, expectedFence, newInstanceID, newSessionID) {
-		if err := s.releaseTargetOrders(ctx, spaceID, logicalAccountID); err != nil {
-			log.WarnContextf(ctx, "交易关注项：组合 %s 重绑会话前撤目标挂单失败，交给新目标的第 1 阶段处理：%v", logicalAccountID, err)
-		} else {
-			s.clearReleaseFailure(spaceID, logicalAccountID)
-		}
-	}
-	var fence string
-	err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
-		var err error
-		var changed bool
-		fence, changed, err = tx.RebindLogicalAccountSession(spaceID, logicalAccountID, oldInstanceID, oldSessionID, expectedFence, newInstanceID, newSessionID)
-		if err != nil || !changed {
-			return err
-		}
-		return tx.DeleteLogicalAccountTarget(spaceID, logicalAccountID)
-	})
-	if err != nil {
-		return store.LogicalAccountRecord{}, "", err
-	}
-	value, err := s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
-	return value, fence, err
-}
-
 // ReleaseSession is a compare-and-set release. A stale session cannot clear
 // a replacement session's authorization or target.
 func (s *Service) ReleaseSession(
@@ -661,19 +619,13 @@ func (s *Service) ReleaseSession(
 	})
 }
 
-// claimChanges、rebindChanges、releaseChanges 按 store 里会话 CAS 的同样条件预判这次操作会不会换掉所有者、删掉目标：
+// claimChanges、releaseChanges 按 store 里会话 CAS 的同样条件预判这次操作会不会换掉所有者、删掉目标：
 // 只有会删目标时才撤目标挂单。幂等的重复请求、过期的围栏、被别的会话占用时都不撤，否则会撤掉当前所有者正在用的挂单。
 // 调用方持有组合锁，会话字段只在这把锁下改，预判和随后的 CAS 之间不会变。
 func claimChanges(account store.LogicalAccountRecord, instanceID, sessionID, expectedFence string) bool {
 	// 认领只在组合空闲时生效（同一会话重复认领时所有者非空，不会走到这里）。
 	return account.ControlMode == "STRATEGY" && account.AuthFence == expectedFence &&
 		account.OwnerInstanceID == "" && account.OwnerSessionID == "" && instanceID != "" && sessionID != ""
-}
-
-func rebindChanges(account store.LogicalAccountRecord, oldInstanceID, oldSessionID, expectedFence, newInstanceID, newSessionID string) bool {
-	return account.ControlMode == "STRATEGY" && account.AuthFence == expectedFence &&
-		!(account.OwnerInstanceID == newInstanceID && account.OwnerSessionID == newSessionID) &&
-		account.OwnerInstanceID == oldInstanceID && account.OwnerSessionID == oldSessionID
 }
 
 // releaseChanges 对已经空闲的组合也返回真：释放照样删目标，重试释放时要接着撤上一次没撤下来的挂单。
@@ -859,7 +811,7 @@ func (s *Service) readiness(
 					account.TradingAccountID+" 有未确认的提交订单 "+current.OrderID,
 				)
 			}
-			if current.OwnerType == "EXTERNAL" && !terminalOrderState(current.State) {
+			if current.OwnerType == "EXTERNAL" {
 				reasons = append(
 					reasons,
 					account.TradingAccountID+" 有外部订单 EXTERNAL "+current.OrderID,
@@ -939,7 +891,16 @@ func (s *Service) memberHasExposure(
 	spaceID string,
 	tradingAccountID string,
 ) (bool, error) {
-	return s.exposure(ctx, spaceID, tradingAccountID, true)
+	exposed, _, err := s.exposure(ctx, spaceID, tradingAccountID, true)
+	return exposed, err
+}
+
+// exposureFacts 是 exposure 查到的账户、挂单和持仓，managedExposure 直接复用，不再重复查询。
+// 有挂单时 exposure 提前返回，positions 为空。
+type exposureFacts struct {
+	account   store.TradingAccountRecord
+	orders    []store.OrderRecord
+	positions []store.PositionRecord
 }
 
 // exposure 判断执行账户是否有挂单、持仓或非结算资产余额；requireFresh 为真时要求账户就绪且快照新鲜。
@@ -948,35 +909,34 @@ func (s *Service) exposure(
 	spaceID string,
 	tradingAccountID string,
 	requireFresh bool,
-) (bool, error) {
+) (bool, exposureFacts, error) {
 	account, err := s.Store.GetTradingAccountByID(ctx, tradingAccountID)
 	if err != nil {
-		return false, err
+		return false, exposureFacts{}, err
 	}
+	facts := exposureFacts{account: account}
 	if requireFresh && (!account.Ready || account.LastSyncAt <= 0 ||
 		s.snapshotStale(s.now(), account.LastSyncAt)) {
-		return false, ErrNotReady
+		return false, facts, ErrNotReady
 	}
-	orders, err := s.Store.ListActiveOrdersForAccount(ctx, spaceID, tradingAccountID)
+	facts.orders, err = s.Store.ListActiveOrdersForAccount(ctx, spaceID, tradingAccountID)
 	if err != nil {
-		return false, err
+		return false, facts, err
 	}
-	for _, current := range orders {
-		if !terminalOrderState(current.State) {
-			return true, nil
-		}
+	if len(facts.orders) > 0 {
+		return true, facts, nil
 	}
-	positions, err := s.Store.ListPositions(ctx, spaceID, tradingAccountID, exchange.SymbolKey{})
+	facts.positions, err = s.Store.ListPositions(ctx, spaceID, tradingAccountID, exchange.SymbolKey{})
 	if err != nil {
-		return false, err
+		return false, facts, err
 	}
-	for _, position := range positions {
+	for _, position := range facts.positions {
 		quantity, parseErr := shared.ParseDecimal(position.SignedQuantity)
 		if parseErr != nil {
-			return false, parseErr
+			return false, facts, parseErr
 		}
 		if !quantity.IsZero() {
-			return true, nil
+			return true, facts, nil
 		}
 	}
 	if account.HasBalanceMarket() {
@@ -986,32 +946,29 @@ func (s *Service) exposure(
 			}
 			total, parseErr := shared.ParseDecimal(balance.Total)
 			if parseErr != nil {
-				return false, parseErr
+				return false, facts, parseErr
 			}
 			if !total.IsZero() {
-				return true, nil
+				return true, facts, nil
 			}
 		}
 	}
-	return false, nil
+	return false, facts, nil
 }
 
 // managedExposure 用于移除成员：非受管资产不归 MooX 管，不挡移除。
 func (s *Service) managedExposure(ctx context.Context, spaceID, tradingAccountID string, requireFresh bool) (bool, error) {
-	exposed, err := s.exposure(ctx, spaceID, tradingAccountID, requireFresh)
+	exposed, facts, err := s.exposure(ctx, spaceID, tradingAccountID, requireFresh)
 	if err != nil || !exposed {
 		return false, err
 	}
-	account, err := s.Store.GetTradingAccountByID(ctx, tradingAccountID)
-	if err != nil {
-		return false, err
+	account := facts.account
+	// 有挂单：下面无论哪条路径都判有敞口，直接返回。
+	if len(facts.orders) > 0 {
+		return true, nil
 	}
 	if account.HasPositionMarket() {
-		positions, positionErr := s.Store.ListPositions(ctx, spaceID, tradingAccountID, exchange.SymbolKey{})
-		if positionErr != nil {
-			return false, positionErr
-		}
-		for _, position := range positions {
+		for _, position := range facts.positions {
 			quantity, parseErr := shared.ParseDecimal(position.SignedQuantity)
 			if parseErr != nil {
 				return false, parseErr
@@ -1022,13 +979,6 @@ func (s *Service) managedExposure(ctx context.Context, spaceID, tradingAccountID
 		}
 	}
 	if !account.HasBalanceMarket() {
-		return true, nil
-	}
-	orders, err := s.Store.ListActiveOrdersForAccount(ctx, spaceID, tradingAccountID)
-	if err != nil {
-		return false, err
-	}
-	if len(orders) > 0 {
 		return true, nil
 	}
 	managed, err := s.Store.ManagedAssets(ctx, spaceID, tradingAccountID)
@@ -1079,13 +1029,4 @@ func (s *Service) now() time.Time {
 		return s.Now().UTC()
 	}
 	return time.Now().UTC()
-}
-
-func terminalOrderState(state string) bool {
-	switch state {
-	case "FILLED", "CANCELED", "PARTIALLY_CANCELED", "REJECTED", "EXPIRED":
-		return true
-	default:
-		return false
-	}
 }

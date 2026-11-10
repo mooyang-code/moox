@@ -3,11 +3,9 @@ package rpc
 import (
 	"context"
 	"errors"
-	"strings"
 
 	delistapp "github.com/mooyang-code/moox/modules/trade/internal/application/delist"
 	operatorapp "github.com/mooyang-code/moox/modules/trade/internal/application/operator"
-	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
 )
@@ -26,9 +24,6 @@ type FlattenInstrumentCommand struct {
 
 // FlattenInstrumentFunc 发起下架清仓。unblocked 为真表示标的已被解除禁止而提前结束。
 type FlattenInstrumentFunc func(ctx context.Context, command FlattenInstrumentCommand) (action store.OperatorActionRecord, unblocked bool, err error)
-
-// ReduceLogicalAccountFunc 发起按比例减仓。
-type ReduceLogicalAccountFunc func(ctx context.Context, spaceID, actionID, logicalAccountID string, ratio shared.Decimal, reason string) (store.OperatorActionRecord, error)
 
 func delistKey(exchange tradepb.Exchange, market tradepb.MarketType, symbol string) delistapp.Key {
 	return delistapp.Key{
@@ -144,24 +139,4 @@ func (s *ConsoleServer) FlattenInstrument(ctx context.Context, req *tradepb.Flat
 		return &tradepb.FlattenInstrumentRsp{RetInfo: errorInfo(err), Busy: true}, nil
 	}
 	return &tradepb.FlattenInstrumentRsp{RetInfo: errorInfo(err), Action: operatorActionToPB(action), Unblocked: unblocked}, nil
-}
-
-// ReduceLogicalAccount 按比例减仓：先暂停组合、撤全部订单，再把现货和合约同比例减掉。
-func (s *ConsoleServer) ReduceLogicalAccount(ctx context.Context, req *tradepb.ReduceLogicalAccountReq) (*tradepb.ReduceLogicalAccountRsp, error) {
-	spaceID, err := requiredSpace(ctx)
-	if err == nil {
-		err = validatePB(req)
-	}
-	if err != nil {
-		return &tradepb.ReduceLogicalAccountRsp{RetInfo: invalidOrErrorInfo(err)}, nil
-	}
-	if s.ReduceAccount == nil {
-		return &tradepb.ReduceLogicalAccountRsp{RetInfo: errorInfo(errServiceUnavailable)}, nil
-	}
-	ratio, err := shared.ParseDecimal(strings.TrimSpace(req.GetReduceRatio()))
-	if err != nil {
-		return &tradepb.ReduceLogicalAccountRsp{RetInfo: invalidInfo(err)}, nil
-	}
-	action, err := s.ReduceAccount(ctx, spaceID, req.GetActionId(), req.GetLogicalAccountId(), ratio, req.GetReason())
-	return &tradepb.ReduceLogicalAccountRsp{RetInfo: errorInfo(err), Action: operatorActionToPB(action)}, nil
 }

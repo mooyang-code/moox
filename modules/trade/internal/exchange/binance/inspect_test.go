@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/httpclient"
@@ -318,12 +320,103 @@ func TestInspectSignsRequestsAndSendsAPIKey(t *testing.T) {
 	_, _ = inspectWith(context.Background(), exchange.InspectRequest{
 		Environment: exchange.AccountEnvironmentProduction, Credential: exchange.Credential{APIKey: "key-1", APISecret: "secret-1"},
 	}, clients)
-	if len(seen) == 0 || seen[0].Header.Get("X-MBX-APIKEY") != "key-1" ||
-		!strings.Contains(seen[0].URL.RawQuery, "timestamp=") || !strings.Contains(seen[0].URL.RawQuery, "&signature=") {
+	// 前面的时间请求不签名；第一个签名请求是 apiRestrictions。
+	index := slices.IndexFunc(seen, func(r *http.Request) bool { return r.URL.Path == "/sapi/v1/account/apiRestrictions" })
+	if index < 0 || seen[index].Header.Get("X-MBX-APIKEY") != "key-1" ||
+		!strings.Contains(seen[index].URL.RawQuery, "timestamp=") || !strings.Contains(seen[index].URL.RawQuery, "&signature=") {
 		t.Fatalf("请求没有带密钥或签名：%+v", seen)
 	}
 }
 
 func hasFinding(findings []exchange.InspectionFinding, code string) bool {
 	return slices.ContainsFunc(findings, func(f exchange.InspectionFinding) bool { return f.Code == code })
+}
+
+// 本机时钟偏差：交易所时间比本机快 4 秒是阻断项，快 2 秒只是提示，没有偏差两者都没有。
+func TestInspectClockSkew(t *testing.T) {
+	check := func(ahead time.Duration) exchange.Inspection {
+		routes := standardRoutes(t, `{"dualSidePosition": false}`, nil)
+		serverTime := ok([]byte(fmt.Sprintf(`{"serverTime":%d}`, time.Now().Add(ahead).UnixMilli())))
+		routes["/api/v3/time"], routes["/fapi/v1/time"] = serverTime, serverTime
+		_, clients := newInspectServer(t, routes)
+		result, err := inspectWith(context.Background(), exchange.InspectRequest{Environment: exchange.AccountEnvironmentProduction}, clients)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	blocked := check(4 * time.Second)
+	if !hasFinding(blocked.Blockers, exchange.FindingClockSkew) || blocked.ClockSkewMillis < 3500 || blocked.ClockSkewMillis > 4500 {
+		t.Fatalf("偏差 4 秒应阻断：skew=%d blockers=%+v", blocked.ClockSkewMillis, blocked.Blockers)
+	}
+	warned := check(-2 * time.Second)
+	if hasFinding(warned.Blockers, exchange.FindingClockSkew) || !hasFinding(warned.Warnings, exchange.FindingClockSkew) {
+		t.Fatalf("偏差 2 秒只提示：blockers=%+v warnings=%+v", warned.Blockers, warned.Warnings)
+	}
+	clean := check(0)
+	if hasFinding(clean.Blockers, exchange.FindingClockSkew) || hasFinding(clean.Warnings, exchange.FindingClockSkew) {
+		t.Fatalf("没有偏差不应有提示：%+v", clean)
+	}
+}
+
+// 合约 listenKey 续期：PUT /fapi/v1/listenKey 只带 X-MBX-APIKEY 请求头，请求里没有 listenKey 参数。
+func TestRenewListenKeySendsNoListenKeyParameter(t *testing.T) {
+	var method, path, query, apiKey string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		method, path, query, apiKey = r.Method, r.URL.Path, r.URL.RawQuery, r.Header.Get("X-MBX-APIKEY")
+		_, _ = w.Write([]byte(`{"listenKey":"secret-listen-key"}`))
+	}))
+	t.Cleanup(server.Close)
+	adapter := testAdapter(exchange.MarketTypeSwap, server.URL)
+	if err := renewListenKey(context.Background(), adapter.client(), "key", "/fapi/v1/listenKey"); err != nil {
+		t.Fatal(err)
+	}
+	if method != http.MethodPut || path != "/fapi/v1/listenKey" || query != "" || apiKey != "key" {
+		t.Fatalf("method=%s path=%s query=%q apiKey=%q", method, path, query, apiKey)
+	}
+}
+
+// 本机时钟偏快时签名请求全被 -1021 拒绝：签名检测没有结论，但不签名的时间接口能测出偏差，
+// 偏差达到阻断阈值就把它作为结论返回（只有时钟阻断项，没有账户相关的误报）；偏差不大时仍是“没有结论”。
+func TestInspectClockSkewExplainsSignedRequestsRejected(t *testing.T) {
+	check := func(ahead time.Duration) (exchange.Inspection, error) {
+		timestampRejected := inspectReply{http.StatusBadRequest, errorBody(-1021, "Timestamp for this request is outside of the recvWindow.")}
+		serverTime := ok([]byte(fmt.Sprintf(`{"serverTime":%d}`, time.Now().Add(ahead).UnixMilli())))
+		_, clients := newInspectServer(t, map[string]inspectReply{
+			"/sapi/v1/account/apiRestrictions": timestampRejected,
+			"/api/v3/time":                     serverTime,
+			"/fapi/v1/time":                    serverTime,
+		})
+		return inspectWith(context.Background(), exchange.InspectRequest{
+			Environment: exchange.AccountEnvironmentProduction,
+			Markets:     []exchange.MarketType{exchange.MarketTypeSpot, exchange.MarketTypeSwap},
+		}, clients)
+	}
+	result, err := check(-4 * time.Second)
+	if err != nil {
+		t.Fatalf("偏差 4 秒应给出结论：%v", err)
+	}
+	if len(result.Blockers) != 1 || result.Blockers[0].Code != exchange.FindingClockSkew || result.ClockSkewMillis > -3500 {
+		t.Fatalf("应只有时钟阻断项：skew=%d blockers=%+v", result.ClockSkewMillis, result.Blockers)
+	}
+	if _, err := check(0); !errors.Is(err, exchange.ErrInspectionInconclusive) {
+		t.Fatalf("没有时钟偏差时签名失败仍然没有结论：err=%v", err)
+	}
+}
+
+// 往返超过 1 秒的样本按没测到处理；现货慢、合约正常时只看合约的样本。
+func TestMeasureClockSkewIgnoresSlowSamples(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		offset := time.Duration(0)
+		if r.URL.Path == "/api/v3/time" {
+			time.Sleep(exchange.ClockSkewWarn + 100*time.Millisecond)
+			offset = 10 * time.Second
+		}
+		_, _ = fmt.Fprintf(w, `{"serverTime":%d}`, time.Now().Add(offset).UnixMilli())
+	}))
+	defer server.Close()
+	clients := inspectClients{spot: httpclient.New(server.URL), swap: httpclient.New(server.URL), papi: httpclient.New(server.URL)}
+	if skew := measureClockSkew(context.Background(), clients); skew < -200 || skew > 200 {
+		t.Fatalf("慢样本应被丢弃，只剩合约的零偏差样本：skew=%d", skew)
+	}
 }

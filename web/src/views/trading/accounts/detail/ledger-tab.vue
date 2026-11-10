@@ -1,6 +1,6 @@
 <template>
   <SectionBlock title="资金流水" flush>
-    <template #sub>直接查交易所，不落库（模拟盘查本地成交和资金费记录），最长 90 天</template>
+    <template #sub>实时查询交易所，不保存（模拟盘查本地成交和资金费记录），最长 90 天</template>
     <div class="toolbar">
       <a-select v-if="memberOptions.length > 1" v-model="accountId" style="width: 150px" @change="onAccountChange">
         <a-option v-for="item in memberOptions" :key="item.id" :value="item.id">{{ item.label }}</a-option>
