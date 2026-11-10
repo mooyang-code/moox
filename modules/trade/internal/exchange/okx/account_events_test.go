@@ -380,14 +380,11 @@ func TestReceivePrivateMessageRequiresPongAfterIdle(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer connection.Close()
+	previousIdle, previousPong := privateIdleTimeout, privatePongTimeout
+	privateIdleTimeout, privatePongTimeout = 20*time.Millisecond, 20*time.Millisecond
+	defer func() { privateIdleTimeout, privatePongTimeout = previousIdle, previousPong }()
 	err = New(exchange.AccountConfig{}, exchange.Credential{}).
-		receivePrivateMessageWithTimeouts(
-			context.Background(),
-			connection,
-			&handler{},
-			20*time.Millisecond,
-			20*time.Millisecond,
-		)
+		receivePrivateMessage(context.Background(), connection, &handler{})
 	if !exchange.IsKind(err, exchange.ErrorTransportUnknown) {
 		t.Fatalf("error = %v", err)
 	}

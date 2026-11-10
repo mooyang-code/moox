@@ -105,6 +105,16 @@ func testPM(server *httptest.Server, markets ...exchange.MarketType) *PortfolioM
 
 func samplePath(t *testing.T, name string) string { return string(sample(t, name)) }
 
+// unwrappedSample 取出 WebSocket API 样例里的 event：统一账户走 listenKey 流，事件不带包装。
+func unwrappedSample(t *testing.T, name string) []byte {
+	t.Helper()
+	var envelope struct {
+		Event json.RawMessage `json:"event"`
+	}
+	require.NoError(t, json.Unmarshal(sample(t, name), &envelope))
+	return envelope.Event
+}
+
 // withField 取样例 JSON（对象）并改一个字段。
 func withFields(t *testing.T, name string, set map[string]any) string {
 	t.Helper()
@@ -364,7 +374,7 @@ func TestPortfolioMarginDispatchesStreamEventsByType(t *testing.T) {
 	require.Equal(t, exchange.MarketTypeSwap, handler.orders[0].Market)
 	require.Equal(t, exchange.MarketTypeSwap, handler.fills[0].Market)
 
-	require.NoError(t, pm.dispatchPrivate(ctx, sample(t, "spot_execution_report_trade.json"), handler))
+	require.NoError(t, pm.dispatchPrivate(ctx, unwrappedSample(t, "spot_execution_report_trade.json"), handler))
 	require.Len(t, handler.orders, 2)
 	require.Equal(t, exchange.MarketTypeSpot, handler.orders[1].Market)
 	require.Equal(t, exchange.MarketTypeSpot, handler.fills[1].Market)
@@ -436,7 +446,7 @@ func TestPortfolioMarginSubscribeOpensSingleStreamForBothMarkets(t *testing.T) {
 			connections++
 			mu.Unlock()
 			_ = connection.WriteMessage(websocket.TextMessage, []byte(um))
-			_ = connection.WriteMessage(websocket.TextMessage, sample(t, "spot_execution_report_new.json"))
+			_ = connection.WriteMessage(websocket.TextMessage, unwrappedSample(t, "spot_execution_report_new.json"))
 			_ = connection.WriteMessage(websocket.TextMessage, []byte(`{"e":"listenKeyExpired","E":1,"listenKey":"k"}`))
 			_ = connection.Close()
 		default:

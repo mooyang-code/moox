@@ -28,7 +28,7 @@ func TestSpotSubscriptionUsesSignedWebSocketAPIRequest(t *testing.T) {
 		"recvWindow": []string{fmt.Sprint(recvWindow)},
 		"timestamp":  []string{"1700000000000"},
 	}
-	want := fmt.Sprintf("%x", hmacSha256([]byte("secret"), []byte(values.Encode())))
+	want := fmt.Sprintf("%x", exchange.HMACSHA256([]byte("secret"), []byte(values.Encode())))
 	if request.Params["signature"] != want ||
 		request.Params["timestamp"] != int64(1_700_000_000_000) {
 		t.Fatalf("params = %+v", request.Params)
@@ -87,8 +87,8 @@ func TestReceivePrivateRefreshesLivenessOnControlPing(t *testing.T) {
 	defer connection.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Millisecond)
 	defer cancel()
-	err = testAdapter(exchange.MarketTypeSpot, "http://unused").
-		receivePrivateWithHeartbeat(ctx, connection, &recordingHandler{}, 30*time.Millisecond)
+	adapter := testAdapter(exchange.MarketTypeSpot, "http://unused")
+	err = receiveStream(ctx, connection, &recordingHandler{}, 30*time.Millisecond, adapter.dispatchPrivate)
 	if err != context.DeadlineExceeded {
 		t.Fatalf("receive error = %v", err)
 	}

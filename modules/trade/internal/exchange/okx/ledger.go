@@ -47,7 +47,7 @@ func (a *Adapter) LedgerSupported() bool { return true }
 // 用 after=<上一页最后一条 billId> 往更早翻页。
 func (a *Adapter) ListLedger(ctx context.Context, query exchange.LedgerQuery) (exchange.LedgerPage, error) {
 	if query.Limit <= 0 || query.End.Before(query.Start) {
-		return exchange.LedgerPage{}, rejected("invalid ledger query", nil)
+		return exchange.LedgerPage{}, exchange.Rejected("invalid ledger query", nil)
 	}
 	path, interval := "/api/v5/account/bills", billsPageInterval
 	// 留一点余量：默认“近 7 天”在请求发出时已经超过 7 天整几毫秒。
@@ -89,7 +89,7 @@ func (a *Adapter) ListLedger(ctx context.Context, query exchange.LedgerQuery) (e
 		}
 		var rows []billPayload
 		if err := json.Unmarshal(data, &rows); err != nil {
-			return exchange.LedgerPage{}, rejected("decode bills", err)
+			return exchange.LedgerPage{}, exchange.Rejected("decode bills", err)
 		}
 		for _, row := range rows {
 			// 同一个统一账户可能分别登记成现货、永续两个执行账户：交易类账单只留本市场的，划转、利息等没有 instType 的都留。
@@ -128,7 +128,7 @@ func partialLedger(entries []exchange.LedgerEntry, limit int) exchange.LedgerPag
 func billEntries(row billPayload) ([]exchange.LedgerEntry, error) {
 	at := millisString(row.Ts)
 	if row.BillID == "" || at.IsZero() {
-		return nil, rejected("bill lacks billId or ts", nil)
+		return nil, exchange.Rejected("bill lacks billId or ts", nil)
 	}
 	base := exchange.LedgerEntry{
 		ID: row.BillID, Time: at, Type: billLedgerType(row.Type), ExchangeType: row.Type + "/" + row.SubType,
@@ -141,7 +141,7 @@ func billEntries(row billPayload) ([]exchange.LedgerEntry, error) {
 			kind   exchange.LedgerType
 			raw    string
 		}{{":pnl", exchange.LedgerRealizedPnL, row.Pnl}, {":fee", exchange.LedgerFee, row.Fee}} {
-			amount, err := decimalOrZero(part.raw)
+			amount, err := exchange.DecimalOrZero(part.raw)
 			if err != nil {
 				return nil, err
 			}
@@ -154,7 +154,7 @@ func billEntries(row billPayload) ([]exchange.LedgerEntry, error) {
 		}
 		return out, nil
 	}
-	amount, err := decimalOrZero(row.BalChg)
+	amount, err := exchange.DecimalOrZero(row.BalChg)
 	if err != nil {
 		return nil, err
 	}

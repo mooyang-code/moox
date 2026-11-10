@@ -368,7 +368,7 @@ func TestRenewListenKeySendsNoListenKeyParameter(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 	adapter := testAdapter(exchange.MarketTypeSwap, server.URL)
-	if err := adapter.renewListenKey(context.Background(), "/fapi/v1/listenKey"); err != nil {
+	if err := renewListenKey(context.Background(), adapter.client(), "key", "/fapi/v1/listenKey"); err != nil {
 		t.Fatal(err)
 	}
 	if method != http.MethodPut || path != "/fapi/v1/listenKey" || query != "" || apiKey != "key" {

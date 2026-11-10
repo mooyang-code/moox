@@ -194,7 +194,7 @@ func TestSignatureIsAppendedLastOverSentBytes(t *testing.T) {
 	if index <= 0 || strings.Count(rawQuery, "signature=") != 1 {
 		t.Fatalf("query = %s", rawQuery)
 	}
-	want := hex.EncodeToString(hmacSha256([]byte("secret"), []byte(rawQuery[:index])))
+	want := hex.EncodeToString(exchange.HMACSHA256([]byte("secret"), []byte(rawQuery[:index])))
 	if rawQuery[index+len("&signature="):] != want {
 		t.Fatalf("signature does not cover the sent bytes: %s", rawQuery)
 	}

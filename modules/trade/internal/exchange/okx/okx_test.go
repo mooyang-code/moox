@@ -107,36 +107,36 @@ func TestAdapterRequestValidationContract(t *testing.T) {
 }
 
 func TestOKXRejectsClientOrderIDWithDash(t *testing.T) {
-	err := validateRequest(exchange.OrderRequest{
+	err := exchange.ValidateOrderRequest(exchange.OrderRequest{
 		ClientOrderID: "contains-dash", ExchangeSymbol: "BTC-USDT",
 		OrderType: exchange.OrderTypeMarket, Side: exchange.SideBuy,
 		Quantity: shared.MustDecimal("1"),
-	}, exchange.MarketTypeSpot)
+	}, exchange.MarketTypeSpot, ValidClientOrderID)
 	if !exchange.IsKind(err, exchange.ErrorRejected) {
-		t.Fatalf("validateRequest() error = %v, want REJECTED", err)
+		t.Fatalf("ValidateOrderRequest() error = %v, want REJECTED", err)
 	}
 }
 
 func TestOKXRejectsClientOrderIDLongerThan32(t *testing.T) {
-	err := validateRequest(exchange.OrderRequest{
+	err := exchange.ValidateOrderRequest(exchange.OrderRequest{
 		ClientOrderID: strings.Repeat("a", 33), ExchangeSymbol: "BTC-USDT",
 		OrderType: exchange.OrderTypeMarket, Side: exchange.SideBuy,
 		Quantity: shared.MustDecimal("1"),
-	}, exchange.MarketTypeSpot)
+	}, exchange.MarketTypeSpot, ValidClientOrderID)
 	if !exchange.IsKind(err, exchange.ErrorRejected) {
-		t.Fatalf("validateRequest() error = %v, want REJECTED", err)
+		t.Fatalf("ValidateOrderRequest() error = %v, want REJECTED", err)
 	}
 }
 
 func TestOKXAcceptsGeneratedClientOrderID(t *testing.T) {
 	clientOrderID := xid.New().String()
-	err := validateRequest(exchange.OrderRequest{
+	err := exchange.ValidateOrderRequest(exchange.OrderRequest{
 		ClientOrderID: clientOrderID, ExchangeSymbol: "BTC-USDT",
 		OrderType: exchange.OrderTypeMarket, Side: exchange.SideBuy,
 		Quantity: shared.MustDecimal("1"),
-	}, exchange.MarketTypeSpot)
+	}, exchange.MarketTypeSpot, ValidClientOrderID)
 	if err != nil {
-		t.Fatalf("validateRequest() error = %v", err)
+		t.Fatalf("ValidateOrderRequest() error = %v", err)
 	}
 	if len(clientOrderID) != 20 {
 		t.Fatalf("generated client order ID length = %d, want 20", len(clientOrderID))

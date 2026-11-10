@@ -56,7 +56,7 @@ func (a *Adapter) Transfer(ctx context.Context, from, to exchange.Wallet, asset 
 		return execution.TransferReceipt{}, err
 	}
 	if strings.TrimSpace(asset) == "" || amount.Cmp(shared.Zero()) <= 0 {
-		return execution.TransferReceipt{}, typedRejected("划转需要资产和大于 0 的金额", nil)
+		return execution.TransferReceipt{}, exchange.Rejected("划转需要资产和大于 0 的金额", nil)
 	}
 	raw, err := a.sapiRequest(ctx, http.MethodPost, "/sapi/v1/asset/transfer", url.Values{
 		"type": []string{kind}, "asset": []string{asset}, "amount": []string{amount.String()},
@@ -69,7 +69,7 @@ func (a *Adapter) Transfer(ctx context.Context, from, to exchange.Wallet, asset 
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil || payload.TranID.String() == "" {
 		// 请求已发出但回执解析不了：结果未知，由调用方对账。
-		return execution.TransferReceipt{}, transportUnknown("decode transfer receipt", err)
+		return execution.TransferReceipt{}, exchange.TransportUnknown("decode transfer receipt", err)
 	}
 	return execution.TransferReceipt{ExchangeTransferID: payload.TranID.String()}, nil
 }
@@ -81,7 +81,7 @@ func transferType(from, to exchange.Wallet) (string, error) {
 	case from == exchange.WalletFutures && to == exchange.WalletSpot:
 		return transferToSpot, nil
 	}
-	return "", typedRejected(fmt.Sprintf("不支持从 %s 钱包划转到 %s 钱包", from, to), nil)
+	return "", exchange.Rejected(fmt.Sprintf("不支持从 %s 钱包划转到 %s 钱包", from, to), nil)
 }
 
 type transferHistory struct {
@@ -111,10 +111,10 @@ func (a *Adapter) ListTransfers(ctx context.Context, since time.Time) ([]executi
 			}
 			var payload transferHistory
 			if err := json.Unmarshal(raw, &payload); err != nil {
-				return nil, typedRejected("decode transfer history", err)
+				return nil, exchange.Rejected("decode transfer history", err)
 			}
 			for _, row := range payload.Rows {
-				amount, err := decimalOrZero(row.Amount)
+				amount, err := exchange.DecimalOrZero(row.Amount)
 				if err != nil {
 					return nil, err
 				}
@@ -172,7 +172,7 @@ func (a *Adapter) GetBNBFeeDiscount(ctx context.Context) (bool, error) {
 			FeeBurn bool `json:"feeBurn"`
 		}
 		if err := json.Unmarshal(raw, &payload); err != nil {
-			return false, typedRejected("decode fee burn status", err)
+			return false, exchange.Rejected("decode fee burn status", err)
 		}
 		return payload.FeeBurn, nil
 	}
@@ -185,7 +185,7 @@ func (a *Adapter) GetBNBFeeDiscount(ctx context.Context) (bool, error) {
 		InterestBNBBurn bool `json:"interestBNBBurn"`
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		return false, typedRejected("decode BNB burn status", err)
+		return false, exchange.Rejected("decode BNB burn status", err)
 	}
 	if a.papi != nil {
 		return payload.SpotBNBBurn && payload.InterestBNBBurn, nil
@@ -225,15 +225,15 @@ func (a *Adapter) ListDust(ctx context.Context) ([]exchange.DustAsset, error) {
 		} `json:"details"`
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		return nil, typedRejected("decode dust list", err)
+		return nil, exchange.Rejected("decode dust list", err)
 	}
 	out := make([]exchange.DustAsset, 0, len(payload.Details))
 	for _, row := range payload.Details {
-		amount, err := decimalOrZero(row.AmountFree)
+		amount, err := exchange.DecimalOrZero(row.AmountFree)
 		if err != nil {
 			return nil, err
 		}
-		valueBTC, err := decimalOrZero(row.ToBTC)
+		valueBTC, err := exchange.DecimalOrZero(row.ToBTC)
 		if err != nil {
 			return nil, err
 		}
@@ -259,9 +259,9 @@ func (a *Adapter) ConvertDust(ctx context.Context, assets []string) (exchange.Du
 		} `json:"transferResult"`
 	}
 	if err := json.Unmarshal(raw, &payload); err != nil {
-		return exchange.DustConversion{}, typedRejected("decode dust conversion", err)
+		return exchange.DustConversion{}, exchange.Rejected("decode dust conversion", err)
 	}
-	received, err := decimalOrZero(payload.TotalTransfered)
+	received, err := exchange.DecimalOrZero(payload.TotalTransfered)
 	if err != nil {
 		return exchange.DustConversion{}, err
 	}
