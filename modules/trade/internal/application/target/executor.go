@@ -2091,11 +2091,7 @@ func (e *Executor) releaseTargetOrders(ctx context.Context, spaceID, logicalAcco
 	canceled := make(map[string]struct{})
 	for _, current := range open {
 		if err := e.releaseTargetOrder(ctx, current, canceled); err != nil {
-			// 包成账户错误：目标 worker 只把账户错误当作诊断，其余错误会让整个模块显示未就绪。
-			releaseErrs = append(releaseErrs, &AccountError{
-				TradingAccountID: current.TradingAccountID,
-				Err:              fmt.Errorf("目标单 %s：%w", current.OrderID, err),
-			})
+			releaseErrs = append(releaseErrs, fmt.Errorf("目标单 %s（执行账户 %s）：%w", current.OrderID, current.TradingAccountID, err))
 		}
 	}
 	if syncer, ok := e.Orders.(deferredCanceler); ok {
@@ -2106,10 +2102,7 @@ func (e *Executor) releaseTargetOrders(ctx context.Context, spaceID, logicalAcco
 		sort.Strings(accounts)
 		for _, accountID := range accounts {
 			if err := syncer.SyncAfterCancel(ctx, accountID); err != nil {
-				releaseErrs = append(releaseErrs, &AccountError{
-					TradingAccountID: accountID,
-					Err:              fmt.Errorf("撤单后同步账户 %s：%w", accountID, err),
-				})
+				releaseErrs = append(releaseErrs, fmt.Errorf("撤单后同步执行账户 %s：%w", accountID, err))
 			}
 		}
 	}
