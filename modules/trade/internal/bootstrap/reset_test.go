@@ -127,6 +127,39 @@ func TestTradeResetBlocksOnLiveExposureOnly(t *testing.T) {
 	require.Empty(t, plan.Blockers, "终态订单不挡")
 }
 
+// 停用的实盘账户没有会话、对不了账：它本地的残留持仓和未完成订单不挡重置，也不向交易所对账，清表时一并清掉。
+func TestTradeResetIgnoresDisabledLiveAccountResidue(t *testing.T) {
+	env := newTradeResetEnv(t)
+	ctx := context.Background()
+	env.seedAccounts(t)
+	require.NoError(t, env.db.Transaction(ctx, func(tx *store.Tx) error {
+		return tx.CreateTradingAccount(store.TradingAccountRecord{
+			SpaceID: "space-1", TradingAccountID: "live-off", Name: "live-off", Exchange: "BINANCE", Markets: []string{"SPOT"},
+			ExecutionMode: "LIVE", Environment: "PRODUCTION", SettlementAsset: "USDT", Status: "DISABLED", CredentialSecretID: "secret-2",
+		})
+	}))
+	env.setPosition(t, "live-off", "2")
+	sqlDB, err := env.db.SQLDB()
+	require.NoError(t, err)
+	_, err = sqlDB.Exec(`INSERT INTO t_trade_orders (c_space_id, c_order_id, c_trading_account_id, c_client_order_id, c_exchange, c_market_type, c_instrument_id,
+		c_exchange_symbol, c_order_type, c_side, c_quantity, c_reference_price, c_reference_price_at, c_owner_type, c_owner_id, c_state)
+		VALUES ('space-1', 'o-off', 'live-off', 'c-off', 'BINANCE', 'SPOT', 'BTC-USDT', 'BTC-USDT', 'LIMIT', 'BUY', '1', '100', 1, 'EXTERNAL', 'ext', 'NEW')`)
+	require.NoError(t, err)
+
+	env.pause(t)
+	plan, err := env.life.ResetPlan(ctx, lifecycle.ResetAll)
+	require.NoError(t, err)
+	require.Empty(t, plan.Blockers, "停用账户的本地残留不挡重置")
+	_, err = env.life.ResetApply(ctx, lifecycle.ResetApplyRequest{Token: plan.Token, Scope: lifecycle.ResetAll, By: "ops"})
+	require.NoError(t, err)
+	require.NoError(t, env.life.ResetWait(ctx))
+	require.Equal(t, lifecycle.StageUninitialized, env.life.ResetStatus().Stage)
+	require.Equal(t, []string{"live-1"}, env.synced, "停用账户没有会话，不向交易所对账")
+	require.Zero(t, env.count(t, "t_trading_positions"))
+	require.Zero(t, env.count(t, "t_trade_orders"))
+	require.Zero(t, env.count(t, "t_trading_accounts"))
+}
+
 // 执行的第一步重新向交易所对账并核验：plan 之后新增了仓位，拒绝重置，什么都没删；之后仓位清掉可续做。
 func TestTradeResetReverifiesAgainstTheExchangeAndKeepsDataOnRefusal(t *testing.T) {
 	env := newTradeResetEnv(t)
