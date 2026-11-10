@@ -10,7 +10,6 @@ import (
 	"time"
 
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
-	"github.com/mooyang-code/moox/modules/trade/internal/application/wallet"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/ordersettings"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
@@ -238,32 +237,7 @@ func (e *Executor) Converge(
 		return Result{Status: StatusPaused}, err
 	}
 	if logicalAccount.AutomationState != "ACTIVE" {
-		orders, _, listErr := e.Store.ListOrders(
-			ctx,
-			spaceID,
-			store.OrderQuery{
-				LogicalAccountID: logicalAccountID,
-				OnlyOpen:         true,
-				Limit:            1000,
-			},
-		)
-		if listErr != nil {
-			return Result{}, listErr
-		}
-		for _, current := range orders {
-			if current.OwnerType != string(orderdomain.OwnerTarget) {
-				continue
-			}
-			if err := e.stopOrder(ctx, target, current); err != nil {
-				return Result{}, err
-			}
-			target.LastError = logicalAccount.PauseReason
-			if err := e.updateTarget(ctx, &target, StatusPending); err != nil {
-				return Result{}, err
-			}
-			return Result{Status: StatusPaused, Action: "stop"}, nil
-		}
-		return Result{Status: StatusPaused}, nil
+		return e.stopWhenInactive(ctx, spaceID, logicalAccountID, logicalAccount, &target)
 	}
 	if target.InstanceID == "" || logicalAccount.OwnerInstanceID != target.InstanceID || logicalAccount.OwnerSessionID != target.SessionID {
 		return Result{}, ErrTargetSession
@@ -338,79 +312,11 @@ func (e *Executor) Converge(
 	if err != nil {
 		return Result{}, err
 	}
-	flattenChildren := flattenChildCache{}
-	hasStale := false
-	for _, current := range orders {
-		if current.OwnerType == string(orderdomain.OwnerOperator) {
-			// 清仓一族（下架清仓、整组清仓、减仓）的子单不算冲突，不管动作是否还在运行：运行中的下架清仓执行器不碰那个标的
-			// （loadMembers 里已跳过）；结束了的动作已经收拾过待提交、结果未知的子单，剩下的挂单中、撤单中的单会自己结束。
-			exempt, err := e.flattenChild(ctx, spaceID, current.OwnerID, flattens, flattenChildren)
-			if err != nil {
-				return Result{}, err
-			}
-			if exempt {
-				continue
-			}
-		}
-		switch {
-		case current.OwnerType == string(orderdomain.OwnerExternal),
-			current.OwnerType == string(orderdomain.OwnerOperator),
-			// 别的组合的目标单出现在成员账户上，或者本目标号却不是本实例下的：说不清来历，暂停。
-			current.OwnerType == string(orderdomain.OwnerTarget) &&
-				(current.LogicalAccountID != logicalAccountID ||
-					current.OwnerID == target.TargetID && current.RunnerID != target.RunnerID):
-			reason := fmt.Sprintf(
-				"%s 订单 %s 与自动执行冲突",
-				current.OwnerType, current.OrderID,
-			)
-			if err := e.pauseLogicalAccount(ctx, logicalAccount, target, reason); err != nil {
-				return Result{}, err
-			}
-			return Result{Status: StatusPaused, Action: "pause"}, nil
-		case current.OwnerType == string(orderdomain.OwnerTarget) &&
-			current.OwnerID != target.TargetID:
-			hasStale = true
-		}
+	if early, handled, err := e.releaseConflictsAndStale(ctx, spaceID, logicalAccountID, logicalAccount, &target, orders, flattens); handled || err != nil {
+		return early, err
 	}
-	// 上一份目标（包括上一个策略实例、上一个会话）留下的单按第 1 阶段处理，一轮内处理完：挂单批量撤，待提交的丢弃，
-	// 结果未知的先解析，撤单结果未知的先确认；市价单等它自己结束。当前目标自己的单不动。
-	if hasStale {
-		if err := e.checkTargetExecutable(ctx, logicalAccount, target); err != nil {
-			return Result{}, err
-		}
-		if err := e.releaseTargetOrders(ctx, spaceID, logicalAccountID, target.TargetID); err != nil {
-			return Result{}, err
-		}
-		if err := e.updateTarget(ctx, &target, StatusConverging); err != nil {
-			return Result{}, err
-		}
-		// 还有没结束的旧单（市价单、撤单中）时过一会儿再看，不等定时器。
-		return Result{Status: StatusConverging, Action: "stop", RetryAfter: transferPollInterval}, nil
-	}
-
-	blocked := blockedExposures(members)
-	if len(blocked) > 0 {
-		for _, current := range orders {
-			if current.OwnerType != string(orderdomain.OwnerTarget) ||
-				current.OwnerID != target.TargetID {
-				continue
-			}
-			if err := e.stopOrder(ctx, target, current); err != nil {
-				return Result{}, err
-			}
-			target.BlockedTargets = blocked
-			target.LastError = ""
-			if err := e.updateTarget(ctx, &target, StatusBlocked); err != nil {
-				return Result{}, err
-			}
-			return Result{Status: StatusBlocked, Action: "stop"}, nil
-		}
-		target.BlockedTargets = blocked
-		target.LastError = ""
-		if err := e.updateTarget(ctx, &target, StatusBlocked); err != nil {
-			return Result{}, err
-		}
-		return Result{Status: StatusBlocked}, nil
+	if blocked := blockedExposures(members); len(blocked) > 0 {
+		return e.stopForBlockedExposure(ctx, &target, orders, blocked)
 	}
 
 	desired, err := desiredTargets(target)
@@ -426,416 +332,22 @@ func (e *Executor) Converge(
 	env := e.newLaneEnv(ctx, spaceID, logicalAccountID, orderSettings, members, desired)
 	e.warnReduceOnly(ctx, env, logicalAccountID, original, truncated, members)
 	// 规则：有在途子单（待提交、提交中、结果未知、挂单中）时本轮只处理这些单，不发新批。
-	inFlight := false
-	// resting 是本目标簿上有限价 GTC 挂单的标的：挂单不阻塞其他标的，剩余量从这个标的的差额里扣除。
-	resting := make(map[string]*restingLane)
-	var expiredResting []store.OrderRecord
-	var unknown []string
-	for _, current := range orders {
-		if current.OwnerType != string(orderdomain.OwnerTarget) ||
-			current.OwnerID != target.TargetID {
-			continue
-		}
-		switch orderdomain.State(current.State) {
-		case orderdomain.Pending:
-			result, handled, pendingErr := e.handlePendingChild(ctx, logicalAccount, &target, current, desired, members, env)
-			if handled {
-				return result, pendingErr
-			}
-			if pendingErr != nil {
-				return Result{}, pendingErr
-			}
-			inFlight = inFlight || result.Action == "submit"
-		case orderdomain.Submitting, orderdomain.SubmitUnknown:
-			unknown = append(unknown, current.OrderID)
-			inFlight = true
-		default:
-			if restingOrder(current) {
-				lane := resting[current.InstrumentID]
-				if lane == nil {
-					lane = &restingLane{signedRemaining: shared.Zero()}
-					resting[current.InstrumentID] = lane
-				}
-				lane.add(current)
-				if expires := restingExpiresAt(current, orderSettings); !expires.IsZero() && !e.now().Before(expires) {
-					expiredResting = append(expiredResting, current)
-				}
-			} else {
-				inFlight = true
-			}
-		}
+	resting, early, handled, err := e.handleTargetChildren(ctx, spaceID, logicalAccount, &target, orders, desired, members, env, orderSettings)
+	if handled || err != nil {
+		return early, err
 	}
-	if len(unknown) > 0 {
-		// 全部未知结果一次解析完，结束后只做一次轻量同步。
-		if _, err := e.Orders.ResolveUnknownBatch(ctx, spaceID, unknown); err != nil {
-			return Result{}, err
-		}
-	}
-	// 超过挂单寿命的挂单撤掉，等撤单结束后剩余量重新计入差额。
-	for _, current := range expiredResting {
-		if err := e.stopOrder(ctx, target, current); err != nil {
-			return Result{}, err
-		}
-		inFlight = true
-	}
-	if inFlight {
-		if err := e.updateTarget(ctx, &target, StatusConverging); err != nil {
-			return Result{}, err
-		}
-		return Result{Status: StatusConverging, Action: "wait"}, nil
-	}
-
-	blocked = nil
-	var actions []laneAction
-	for _, instrumentID := range laneIDs(desired, members) {
-		action, complete, reason, actionErr := e.laneAction(
-			env, instrumentID, desired[instrumentID], members,
-		)
-		if actionErr != nil {
-			return Result{}, actionErr
-		}
-		if reason != "" {
-			blocked = append(blocked, store.BlockedTarget{
-				InstrumentID: instrumentID,
-				Quantity:     desired[instrumentID].Quantity.String(),
-				Reason:       reason,
-			})
-			continue
-		}
-		if !complete {
-			actions = append(actions, action)
-		}
-	}
-	// 挂单的剩余量从差额里扣掉；反向或超出差额的挂单（买多、卖多的风险）撤掉，下一轮再按最新状态重算。
-	actions, staleResting := reconcileResting(actions, resting, blocked)
-	if len(staleResting) > 0 {
-		for _, current := range staleResting {
-			if err := e.stopOrder(ctx, target, current); err != nil {
-				return Result{}, err
-			}
-		}
-		target.BlockedTargets = blocked
-		if err := e.updateTarget(ctx, &target, StatusConverging); err != nil {
-			return Result{}, err
-		}
-		return Result{Status: StatusConverging, Action: "wait"}, nil
-	}
-	hasResting := len(resting) > 0
-	// 按方向的金额预算挑出这一轮改成挂单的标的。
-	if !orderSettings.RestingRatio.IsZero() && len(actions) > 0 {
-		// 本目标在某个标的上挂过单、挂单已经结束（到期被撤、超出差额被撤）：这个标的不再挂单，改吃单。
-		rested, err := e.Store.TargetEndedRestingInstruments(ctx, spaceID, logicalAccountID, target.TargetID)
-		if err != nil {
-			return Result{}, err
-		}
-		for index := range actions {
-			_, actions[index].rested = rested[actions[index].instrument.InstrumentID]
-		}
-		picked := pickResting(env, target, actions, desired, members, e.restingNotional(ctx))
-		for index := range actions {
-			_, actions[index].resting = picked[actions[index].instrument.InstrumentID]
-		}
-	}
-	if len(actions) > 0 {
-		if allowed, retryAfter := e.batchAllowed(logicalAccount.LogicalAccountID, members, env.settings); !allowed {
-			// 批间隔未到，或交易所接口限流暂停、权重用到 90%：本轮不发新批，也不算阻塞。
-			target.BlockedTargets = blocked
-			if err := e.updateTarget(ctx, &target, StatusConverging); err != nil {
-				return Result{}, err
-			}
-			return Result{Status: StatusConverging, Action: "pace", RetryAfter: retryAfter}, nil
-		}
-	}
-	// 执行阶段（阶段 1 撤旧单在上面已做）：2 减仓、3 合约加仓、4 划转、5 现货买入、6 归集。
-	// 阶段不单独存储，每轮从当前差额推出：前一阶段还有能下的单就只做它，没有了才进入下一阶段。
-	// 被阻塞、下不了单的标的在本阶段视为已处理，不卡住后面的阶段；批额度顺延的标的留在本阶段，后面的阶段不能插队。
-	quota := e.batchQuota(members)
-	// 本轮建子单时同一执行账户的模拟盘保证金估值只算一次快照；发送阶段仍用原 ctx。
-	placeCtx := orderapp.WithSnapshotReuse(ctx)
-	var placedIDs []string
-	deferred := false
-	capDeferred := false
-	// marketDeferred 表示有标的按市场规则顺延（停牌、涨跌停、T+1）：定时器不扫已收敛的目标，要自己定时唤醒再看一次。
-	marketDeferred := false
-	// transferWaiting 表示有执行账户的现货买单在等划转（划转、对账、等快照、失败后退避）：它们这轮不下单，
-	// 其余账户照常下单；只要还有账户在等，目标不能定终态，也不进入归集。
-	transferWaiting := false
-	var transferRetry time.Duration
-	// openBuyAccounts 是本目标里还有现货买单在等这笔资金的执行账户（顺延到下一个整点、等划转、因合约钱包可划转资金不足被缩小或挡下）：
-	// 这些账户不归集，否则刚划进现货钱包的资金又被划回合约钱包，剩下的买单再也买不了。
-	// 因为被拒单、反向次数超限等非资金原因被挡的买单不算：资金用不上，应该照常归集。
-	openBuyAccounts := map[string]struct{}{}
-	// holdCollect 记下现货买单（阶段 5）里还在等资金的账户。
-	holdCollect := func(stage int, action laneAction) {
-		if stage == stageSpotBuy {
-			openBuyAccounts[action.member.account.TradingAccountID] = struct{}{}
-		}
-	}
-	// deferredItems 是被每小时上限顺延的标的：写进 blocked_targets 让界面看得到原因，但不算阻塞——
-	// 全是顺延时目标定为 CONVERGED（计划 4.4），不触发“目标持续阻塞”告警；有真实阻塞时真实原因排在前面。
-	var deferredItems []store.BlockedTarget
-	for _, stage := range []int{stageReduce, stageSwapAdd, stageSpotBuy} {
-		if len(placedIDs) > 0 || deferred {
-			break
-		}
-		var stageActions []laneAction
-		for _, action := range actions {
-			if actionStage(action) == stage {
-				stageActions = append(stageActions, action)
-			}
-		}
-		if len(stageActions) == 0 {
-			continue
-		}
-		if stage == stageSpotBuy {
-			// 缩小前的原始差额就够不上最小下单额（或交易规则下下不了单且已有同向持仓）的买单视为已满足；因为非资金原因注定下不了的买单
-			// 直接记 BLOCKED：都不下单、不计入划转需求，否则会为不会下的单划转资金，或把本来已满足的差额判成 BLOCKED。
-			needed := stageActions[:0:0]
-			for _, action := range stageActions {
-				if needsWalletTransfer(action.member.account) {
-					verdict, err := e.spotBuyPrecheck(ctx, env, spaceID, target, action, desired, members)
-					if err != nil {
-						return Result{}, err
-					}
-					switch {
-					case verdict.satisfied:
-						continue
-					case verdict.noTransfer:
-						action.noTransfer = true
-					case verdict.capDeferred:
-						// 每小时上限已用完：顺延到下一个整点，不为它划转；账户的资金到整点还要用，不归集。
-						capDeferred = true
-						deferredItems = append(deferredItems, store.BlockedTarget{
-							InstrumentID: action.instrument.InstrumentID, Quantity: action.delta.String(), Reason: reasonHourlyCapDeferred, Deferred: true,
-						})
-						holdCollect(stage, action)
-						continue
-					case verdict.blockedReason != "":
-						blocked = append(blocked, store.BlockedTarget{
-							InstrumentID: action.instrument.InstrumentID, Quantity: action.delta.String(), Reason: verdict.blockedReason,
-						})
-						continue
-					}
-				}
-				needed = append(needed, action)
-			}
-			stageActions = needed
-			// 阶段 4：普通账户把资金划进现货钱包，划转完成后才买入。统一账户、OKX、模拟盘没有这一步。
-			outcome, err := e.walletTransferBeforeSpotBuy(ctx, spaceID, target, stageActions)
-			if err != nil {
-				return Result{}, err
-			}
-			// 合约钱包可划额度不够时，现货买入按比例缩小，剩下的留到下一份目标重算。
-			scaledActions := scaleBuys(stageActions, outcome.BuyScale, outcome.Reasons)
-			for _, action := range stageActions {
-				accountID := action.member.account.TradingAccountID
-				if reason, waiting := outcome.Waiting[accountID]; waiting {
-					// 这个账户在划转、对账、等快照或失败后退避：它的买单这轮不下，不算阻塞；同组合其他账户照常下单。
-					transferWaiting = true
-					openBuyAccounts[accountID] = struct{}{}
-					if reason != "" {
-						deferredItems = append(deferredItems, store.BlockedTarget{
-							InstrumentID: action.instrument.InstrumentID, Quantity: action.blockedQuantity(), Reason: reason, Deferred: true,
-						})
-					}
-					continue
-				}
-				kept := false
-				for _, scaled := range scaledActions {
-					kept = kept || (scaled.instrument.InstrumentID == action.instrument.InstrumentID &&
-						scaled.member.account.TradingAccountID == accountID)
-				}
-				if !kept {
-					reason := outcome.Reasons[accountID]
-					if reason == "" {
-						reason = wallet.ReasonShortfallNoBuy
-					}
-					if wallet.IsFundsShortage(reason) {
-						openBuyAccounts[accountID] = struct{}{}
-					}
-					blocked = append(blocked, store.BlockedTarget{
-						InstrumentID: action.instrument.InstrumentID, Quantity: action.blockedQuantity(),
-						Reason: reason,
-					})
-				}
-			}
-			transferRetry = max(transferRetry, outcome.RetryAfter)
-			stageActions = stageActions[:0:0]
-			for _, action := range scaledActions {
-				if _, waiting := outcome.Waiting[action.member.account.TradingAccountID]; !waiting {
-					stageActions = append(stageActions, action)
-				}
-			}
-		}
-		for _, action := range stageActions {
-			if quotaExhausted(quota) {
-				// 所有执行账户的本批额度都用完：剩下的标的留到下一批，不再逐个查询。
-				deferred = true
-				break
-			}
-			if quota[action.member.account.TradingAccountID] <= 0 {
-				// 首选成员额度用完：本轮跳过，不换成员。
-				deferred = true
-				continue
-			}
-			instrumentID := action.instrument.InstrumentID
-			unreflected, checkErr := e.positionUnreflected(ctx, spaceID, members, instrumentID)
-			if checkErr != nil {
-				return Result{}, checkErr
-			}
-			if unreflected {
-				if e.Observe != nil {
-					e.Observe.Blocked(action.member.account.TradingAccountID, "duplicate_blocked")
-				}
-				// 持仓回退到某笔已成交子单下单前的值：整条标的本轮跳过，不换成员，等同步纠正后重算。
-				// 这是暂时状态，买单马上要继续：不归集，否则资金归集回合约钱包后，同步追上来买单就没钱了。
-				blocked = append(blocked, store.BlockedTarget{
-					InstrumentID: instrumentID,
-					Quantity:     action.blockedQuantity(),
-					Reason:       reasonPositionUnreflected,
-				})
-				holdCollect(stage, action)
-				continue
-			}
-			placement, placeErr := e.placeAction(
-				placeCtx, spaceID, target, action, members, quota, env,
-			)
-			if placeErr != nil {
-				if len(placedIDs) > 0 {
-					// 已经落库的子单照常发出，错误留到下一轮。
-					break
-				}
-				return e.placementFailure(ctx, logicalAccount, &target, placeErr)
-			}
-			if placement.deferred {
-				deferred = true
-				continue
-			}
-			if placement.deferReason != "" {
-				// 停牌、涨跌停、T+1：这个标的在本阶段视为已处理，原因写进 blocked_targets，不算阻塞；目标有效期内过一会儿再看一次。
-				marketDeferred = true
-				holdCollect(stage, action)
-				deferredItems = append(deferredItems, store.BlockedTarget{
-					InstrumentID: instrumentID, Quantity: action.blockedQuantity(), Reason: placement.deferReason, Deferred: true,
-				})
-				continue
-			}
-			if placement.capDeferred {
-				// 每小时额度用完：这个标的在本阶段视为已处理，不卡后面的阶段，留到下一个整点；
-				// 原因写进目标的 blocked_targets，界面看得到为什么没下单。
-				capDeferred = true
-				holdCollect(stage, action)
-				deferredItems = append(deferredItems, store.BlockedTarget{
-					InstrumentID: instrumentID, Quantity: action.blockedQuantity(), Reason: reasonHourlyCapDeferred, Deferred: true,
-				})
-				continue
-			}
-			if action.scaled && (placement.belowConfiguredMin || placement.tooSmall) {
-				// 缩小后的买单太小下不了：不是“已满足”，原因是合约钱包划转的资金不够，要让界面看得到。
-				blocked = append(blocked, store.BlockedTarget{
-					InstrumentID: instrumentID, Quantity: action.blockedQuantity(), Reason: action.scaleReason,
-				})
-				if wallet.IsFundsShortage(action.scaleReason) {
-					holdCollect(stage, action)
-				}
-				continue
-			}
-			if placement.tooSmall && laneFinished(desired[instrumentID], members, instrumentID) {
-				continue
-			}
-			if placement.belowConfiguredMin {
-				continue
-			}
-			if placement.reason != "" {
-				blocked = append(blocked, store.BlockedTarget{
-					InstrumentID: instrumentID,
-					Quantity:     action.blockedQuantity(),
-					Reason:       placement.reason,
-				})
-				continue
-			}
-			if placement.placed {
-				placedIDs = append(placedIDs, placement.orderID)
-			}
-		}
-	}
-	if len(placedIDs) > 0 {
-		e.noteBatch(logicalAccount.LogicalAccountID)
-		results, batchErr := e.Orders.SubmitBatch(ctx, spaceID, placedIDs)
-		failure, handled, otherErr := e.batchFailure(ctx, logicalAccount, &target, results)
-		if handled {
-			return failure, otherErr
-		}
-		// 其它错误只留给下一轮重试，目标状态、阻塞列表照常刷新。
-		if batchErr == nil {
-			batchErr = otherErr
-		} else if otherErr != nil {
-			batchErr = errors.Join(batchErr, otherErr)
-		}
-		if batchErr != nil && len(results) == 0 {
-			return Result{}, batchErr
-		}
-		target.BlockedTargets = listedBlocked(blocked, deferredItems)
-		target.LastError = ""
-		if err := e.updateTarget(ctx, &target, StatusConverging); err != nil {
-			return Result{}, errors.Join(batchErr, err)
-		}
-		return Result{Status: StatusConverging, Action: "place"}, batchErr
-	}
-	if deferred {
-		target.BlockedTargets = listedBlocked(blocked, deferredItems)
-		if err := e.updateTarget(ctx, &target, StatusConverging); err != nil {
-			return Result{}, err
-		}
-		return Result{Status: StatusConverging, Action: "pace"}, nil
-	}
-	if transferWaiting {
-		// 有账户的现货买单还在等划转（含失败后退避重试）：目标保持收敛中，不归集、不定终态；退避期内不请求交易所。
-		target.BlockedTargets = listedBlocked(blocked, deferredItems)
-		if err := e.updateTarget(ctx, &target, StatusConverging); err != nil {
-			return Result{}, err
-		}
-		return Result{Status: StatusConverging, Action: "transfer", RetryAfter: max(transferPollInterval, transferRetry)}, nil
-	}
-	// 阶段 6：普通账户把现货钱包里多出来的资金归集回合约钱包，归集完成才定终态。
-	// 本目标里还有没做完的现货买单的账户不归集（见 openBuyAccounts）。
-	if collecting, err := e.walletCollect(ctx, spaceID, target, members, openBuyAccounts); err != nil {
-		return Result{}, err
-	} else if collecting {
-		target.BlockedTargets = listedBlocked(blocked, deferredItems)
-		if err := e.updateTarget(ctx, &target, StatusConverging); err != nil {
-			return Result{}, err
-		}
-		return Result{Status: StatusConverging, Action: "collect", RetryAfter: transferPollInterval}, nil
-	}
-	target.BlockedTargets = listedBlocked(blocked, deferredItems)
-	target.LastError = ""
-	// 只剩挂单（或阻塞加挂单）时，定时器不再扫这个目标：挂单成交会唤醒目标，下一份目标到达时在阶段 1 撤掉旧挂单，
-	// 一直没有成交也没有新目标则到有效期末被唤醒，走过期分支撤掉本目标的挂单，所以都要设唤醒时间。
-	var retryAfter time.Duration
-	if hasResting {
-		retryAfter = e.restingWake(target, resting, orderSettings)
-	}
-	// 有标的因每小时上限顺延：定时器不会再扫已收敛的目标，到下一个整点自己唤醒继续下顺延的部分；同时有挂单时取较早的唤醒时间。
-	if capDeferred {
-		if next := nextHourRetryDelay(e.now()); retryAfter == 0 || next < retryAfter {
-			retryAfter = next
-		}
-	}
-	// 停牌复牌、涨跌停打开都可能在目标有效期内发生：过 60 秒再收敛一次，到期后走过期分支。
-	if marketDeferred && (retryAfter == 0 || marketDeferralRetry < retryAfter) {
-		retryAfter = marketDeferralRetry
-	}
-	if len(blocked) > 0 {
-		if err := e.updateTarget(ctx, &target, StatusBlocked); err != nil {
-			return Result{}, err
-		}
-		return Result{Status: StatusBlocked, RetryAfter: retryAfter}, nil
-	}
-	if err := e.updateTarget(ctx, &target, StatusConverged); err != nil {
+	actions, blocked, stop, err := e.planActions(ctx, spaceID, logicalAccount, &target, members, desired, env, resting, orderSettings)
+	if err != nil {
 		return Result{}, err
 	}
-	return Result{Status: StatusConverged, RetryAfter: retryAfter}, nil
+	if stop != nil {
+		return *stop, nil
+	}
+	run := &stageRun{blocked: blocked, openBuyAccounts: map[string]struct{}{}}
+	if early, handled, err := e.runStages(ctx, spaceID, logicalAccount, &target, members, desired, env, actions, run); handled || err != nil {
+		return early, err
+	}
+	return e.finishConverge(ctx, spaceID, logicalAccount, &target, members, run, resting, orderSettings)
 }
 
 // HasDifference 判断目标和实际持仓是否还有能下单的差额，用于过期目标的告警。
@@ -901,7 +413,7 @@ func (e *Executor) settledByMarketRule(ctx context.Context, action laneAction, d
 	if !exchange.RuleFor(action.instrument.MarketType).BoardLot {
 		return false
 	}
-	_, tooSmall, err := e.childQuantity(ctx, action)
+	_, tooSmall, err := childQuantity(action)
 	return err == nil && tooSmall != "" && laneFinished(desired, members, action.instrument.InstrumentID)
 }
 
@@ -1441,19 +953,7 @@ func positionsByAbsoluteSize(
 	return values
 }
 
-func (e *Executor) placeAction(
-	ctx context.Context,
-	spaceID string,
-	target store.LogicalAccountTargetRecord,
-	action laneAction,
-	members []memberState,
-	quota map[string]int,
-	env *laneEnv,
-) (placement, error) {
-	return e.placeActionMode(ctx, spaceID, target, action, members, quota, env, false)
-}
-
-// placeActionMode 是 placeAction 的实现；dryRun 为真只试算：走完交易规则、拒单排除、伪市价次数、反向次数等所有“下不了单”的检查，
+// placeActionMode 给一笔动作下单；dryRun 为真只试算：走完交易规则、拒单排除、伪市价次数、反向次数等所有“下不了单”的检查，
 // 不看批额度、不查资金容量、不落库，能下就返回 viable。现货买入在向钱包要资金之前用它排除下不了的单：
 // 为一笔注定下不了的单划转资金，会先划进来、再被归集回去、再划进来。
 func (e *Executor) placeActionMode(
@@ -1470,272 +970,327 @@ func (e *Executor) placeActionMode(
 	if err != nil {
 		return placement{}, err
 	}
-	var capacityErrors []string
-	// tooSmall 只统计交易规则挡住的成员，不受拒单过滤影响：
-	// 有成员本来能下单但被排除时不能算完成。
-	tooSmall := 0
-	// configuredSmall 统计因为低于设置的最小下单额而下不了单的成员。
-	configuredSmall := 0
-	// unfilled 表示有成员的伪市价单用满了尝试次数。
-	unfilled := false
-	// t1Deferred 表示有成员只因为 T+1 卖不出。
-	t1Deferred := false
+	var tally candidateTally
 	candidates := placementCandidates(action, members)
 	for _, candidate := range candidates {
-		accountID := candidate.member.account.TradingAccountID
-		// 额度按执行账户计：用完算本轮跳过，不换到下一个成员，也不写阻塞原因。
-		if !dryRun && quota[accountID] <= 0 {
-			return placement{deferred: true}, nil
+		check, out, done, err := e.checkCandidate(ctx, candidate, env, rejected, quota, dryRun, &tally)
+		if done || err != nil {
+			return out, err
 		}
-		quantity, reason, err := e.childQuantity(ctx, candidate)
-		if err != nil {
-			return placement{}, err
-		}
-		if reason != "" {
-			capacityErrors = append(capacityErrors, reason)
-			tooSmall++
+		if check.skip {
 			continue
 		}
-		quote, err := e.Prices.LatestPrice(
-			ctx,
-			candidate.member.account.TradingAccountID,
-			exchange.NewSymbolKey(candidate.instrument.MarketType, candidate.instrument.ExchangeSymbol),
-		)
-		if err != nil {
-			if paper.IsInfrastructureError(err) {
-				return placement{}, err
-			}
-			return placement{}, &AccountError{TradingAccountID: candidate.member.account.TradingAccountID, Err: err}
+		out, done, err = e.submitCandidate(ctx, spaceID, target, candidate, check, env, quota, dryRun, &tally)
+		if done || err != nil {
+			return out, err
 		}
-		if quote.Price.Cmp(shared.Zero()) <= 0 {
-			return placement{}, &AccountError{TradingAccountID: candidate.member.account.TradingAccountID, Err: orderdomain.ErrInvalidSpec}
-		}
-		// 停牌、涨停时买、跌停时卖：整个标的顺延，不换成员（停牌和涨跌停是标的本身的状态）。
-		if exchange.RuleFor(candidate.instrument.MarketType).PriceLimits {
-			if reason := deferralReason(laneAction{instrument: candidate.instrument, delta: candidate.delta}, quote); reason != "" {
-				return placement{deferReason: reason}, nil
-			}
-		}
-		// 最小名义金额：交易所给了就用它，没给（OKX）用 minSz × 合约面值 × 价格折算。
-		minNotional, err := candidate.instrument.MinNotionalAt(quote.Price)
-		if err != nil {
-			return placement{}, fmt.Errorf("%w: minimum notional", ErrInvalidTarget)
-		}
-		// 单币每小时上限：额度不够整笔时只下剩下的；剩下的不够下一单就顺延到下一个整点，不算下不了单。
-		quantity, clipped, capErr := env.applyHourlyCap(ctx, candidate, quantity, quote.Price)
-		if capErr != nil {
-			return placement{}, capErr
-		}
-		if clipped && env.tooSmallToPlace(candidate, quantity, quote.Price) {
-			return placement{capDeferred: true}, nil
-		}
-		belowMinimum, err := belowMinimumNotional(quantity, quote.Price, minNotional)
-		if err != nil {
-			return placement{}, err
-		}
-		// 合约全平只查最小数量，否则剩余仓位永远平不掉。
-		fullClose := candidate.reducing && exchange.RuleFor(candidate.instrument.MarketType).ReduceOnly &&
-			quantity.Cmp(candidate.member.positions[candidate.instrument.InstrumentID].Abs()) == 0
-		if belowMinimum && !fullClose {
-			capacityErrors = append(capacityErrors, accountID+": 金额低于交易所最小名义金额")
-			tooSmall++
-			continue
-		}
-		// 配置的最小下单额：合约减仓、清仓例外（否则剩余仓位下不了单、永远平不掉）。
-		if env.belowConfiguredMinimum(candidate, quantity, quote.Price) {
-			capacityErrors = append(capacityErrors, accountID+": 金额低于配置的最小下单额")
-			tooSmall++
-			configuredSmall++
-			continue
-		}
-		if reason, excluded := rejected[accountID]; excluded {
-			// 同一目标不再向拒过单的账户下单，下一个目标自然重试。
-			capacityErrors = append(capacityErrors, accountID+": "+reason)
-			continue
-		}
-		// oddFull：整手市场卖出全部可卖数量，零股一次卖完，不受最小数量限制。
-		oddFull := false
-		if candidate.reducing && exchange.RuleFor(candidate.instrument.MarketType).PositionFromBalance {
-			quantity, oddFull = sellQuantity(candidate, quantity)
-			// 截断到可卖量后数量可能低于最小值或最小名义金额，交易所会拒单。
-			tooSmallNotional, notionalErr := belowMinimumNotional(quantity, quote.Price, minNotional)
-			if notionalErr != nil {
-				return placement{}, notionalErr
-			}
-			if quantity.IsZero() || tooSmallNotional {
-				if t1Locked(candidate) {
-					// 只因为 T+1 卖不出：顺延到次日，不算阻塞。
-					t1Deferred = true
-					continue
-				}
-				capacityErrors = append(capacityErrors, accountID+": 可卖量不足")
-				continue
-			}
-		}
-		if target.InstanceID != "" {
-			if err := e.checkTargetExecutable(ctx, store.LogicalAccountRecord{
-				SpaceID: spaceID, LogicalAccountID: target.LogicalAccountID,
-				OwnerInstanceID: target.InstanceID, OwnerSessionID: target.SessionID,
-			}, target); err != nil {
-				return placement{}, err
-			}
-		}
-		// 单笔上限：拆单时每笔的名义金额不超过设置的上限；开了随机化，每笔取上限的 50%～100%。
-		children, childrenErr := e.targetChildren(ctx, spaceID, target, candidate)
-		if childrenErr != nil {
-			return placement{}, childrenErr
-		}
-		// 伪市价单：用满尝试次数仍没成交完的标的记为“未到位”，告警一次，不再重试，等下一份目标重算。
-		attempt := 0
-		// 挂单价先定：取不到买一卖一就不挂单，这一片走原来的下单方式（含伪市价的次数上限和“未到位”处理）。
-		var restingPrice shared.Decimal
-		if candidate.resting {
-			var restingOK bool
-			if restingPrice, restingOK = e.restingPrice(ctx, candidate); !restingOK {
-				candidate.resting = false
-			}
-		}
-		pseudoMarket := env.settings.OrderMode == ordersettings.OrderModePseudoMarket && !candidate.resting
-		if pseudoMarket {
-			if attempt = pseudoMarketAttempts(children); attempt >= env.settings.MaxAttempts {
-				reason := fmt.Sprintf("伪市价单已尝试 %d 次仍没成交完，本份目标不再重试", attempt)
-				e.warnOnce("unfilled|"+target.TargetID+"|"+candidate.instrument.InstrumentID,
-					fmt.Sprintf("组合 %s 的 %s 在账户 %s 上%s", target.LogicalAccountID, candidate.instrument.InstrumentID, accountID, reason))
-				capacityErrors = append(capacityErrors, accountID+": "+reason)
-				unfilled = true
-				continue
-			}
-		}
-		accountChildren := childrenOfAccount(children, accountID)
-		sliceLimit := env.sliceNotionalLimit(target, candidate.instrument.InstrumentID, len(accountChildren))
-		_, minimum, err := baseQuantityRules(candidate.instrument)
-		if err != nil {
-			return placement{}, err
-		}
-		maxQuantity := floorToStep(sliceLimit.Div(quote.Price), mustBaseStep(candidate.instrument))
-		// 整手市场（A 股）单笔上限不足一手时按一手下单（拆单随机化后也一样）：高价股一手就超过默认的 10 万元上限，
-		// 否则永远下不了单。
-		if exchange.RuleFor(candidate.instrument.MarketType).BoardLot && maxQuantity.Cmp(minimum) < 0 {
-			maxQuantity = minimum
-		}
-		if quantity.Cmp(maxQuantity) > 0 {
-			quantity, oddFull = maxQuantity, false
-		}
-		if quantity.Cmp(shared.Zero()) <= 0 || (quantity.Cmp(minimum) < 0 && !oddFull) {
-			capacityErrors = append(capacityErrors, candidate.member.account.TradingAccountID+": 单笔子单上限低于交易所最小数量")
-			continue
-		}
-		reversal := reversalCount(accountChildren, candidate)
-		if reversal >= 2 {
-			// 同一目标内第二次反向：整条标的本目标内不再下单，新目标到达时自然清零。
-			if e.Observe != nil && !dryRun {
-				e.Observe.Blocked(candidate.member.account.TradingAccountID, "reversal_blocked")
-			}
-			return placement{reason: reasonTargetReversal}, nil
-		}
-		if dryRun {
-			return placement{viable: true}, nil
-		}
-		runnerID := target.RunnerID
-		spec := orderdomain.OrderSpec{
-			ClientOrderSpec: orderdomain.ClientOrderSpec{
-				TradingAccountID: candidate.member.account.TradingAccountID,
-				ClientOrderID:    childClientOrderID(attempt),
-				InstrumentID:     candidate.instrument.InstrumentID,
-				Type:             exchange.OrderTypeMarket,
-				Side:             sideForDelta(candidate.delta),
-				Quantity:         quantity,
-			},
-			Attempt:        attempt,
-			ReferencePrice: quote.Price, ReferencePriceAt: quote.UpdatedAt,
-			ReducePositionOnly: candidate.reducing,
-			Owner: orderdomain.OrderOwner{
-				Type: orderdomain.OwnerTarget, OwnerID: target.TargetID,
-				LogicalAccountID: target.LogicalAccountID, RunnerID: &runnerID,
-			},
-			PositionBefore: candidate.member.positions[candidate.instrument.InstrumentID].String(),
-		}
-		spec.PositionSide = exchange.RuleFor(candidate.instrument.MarketType).PositionSide
-		if candidate.resting {
-			// 挂单：限价 + GTC，买单挂买一价，卖单挂卖一价。
-			spec.Type, spec.FillPolicy, spec.LimitPrice = exchange.OrderTypeLimit, exchange.FillPolicyGTC, &restingPrice
-		}
-		if pseudoMarket {
-			// 限价 + IOC：价格 = 参考价 ×（1 ± 滑点），部分成交的剩余量下一轮按新的滑点再来。
-			// 默认最多 6% 的滑点比币安合约的价格过滤器（约 ±5%）宽，按标的的价格偏离限制夹住，避免最后几次被交易所拒单。
-			limit := pseudoMarketPrice(quote.Price, spec.Side, env.settings, attempt, candidate.instrument.PriceTick)
-			limit = ClampToPriceBand(limit, CageBasis(quote, spec.Side), spec.Side, candidate.instrument)
-			// 涨跌停是绝对价：截在涨停价、跌停价之间（A 股；没有涨跌停的市场原样返回）。
-			limit = ClampToPriceLimits(limit, quote)
-			spec.Type, spec.FillPolicy, spec.LimitPrice = exchange.OrderTypeLimit, exchange.FillPolicyIOC, &limit
-		}
-		if candidate.resting {
-			restingLimit := ClampToPriceLimits(*spec.LimitPrice, quote)
-			spec.LimitPrice = &restingLimit
-		}
-		if !candidate.reducing {
-			capacity, err := e.Orders.Capacity(ctx, spaceID, spec)
-			if err != nil {
-				if capacityError(err) {
-					capacityErrors = append(capacityErrors, candidate.member.account.TradingAccountID+": "+err.Error())
-					continue
-				}
-				return placement{}, err
-			}
-			if capacity.Cmp(shared.Zero()) <= 0 {
-				capacityErrors = append(capacityErrors, candidate.member.account.TradingAccountID+": 没有可用资金")
-				continue
-			}
-			if capacity.Cmp(spec.Quantity) < 0 {
-				spec.Quantity = capacity
-			}
-		}
-		placed, err := e.Orders.Place(ctx, spaceID, spec)
-		if err != nil {
-			if errors.Is(err, orderapp.ErrInstrumentHalted) {
-				// 下单校验看到停牌（报价在执行器取价之后变了）：顺延，不拖住整个目标。
-				return placement{deferReason: reasonHalted}, nil
-			}
-			if orderapp.IsPermanentValidationError(err) {
-				capacityErrors = append(
-					capacityErrors,
-					candidate.member.account.TradingAccountID+": "+err.Error(),
-				)
-				continue
-			}
-			return placement{}, err
-		}
-		if err := e.checkTargetExecutable(ctx, store.LogicalAccountRecord{SpaceID: spaceID, LogicalAccountID: target.LogicalAccountID}, target); err != nil {
-			return placement{}, e.discardPendingOnTargetInvalidation(ctx, spaceID, string(placed.ID), err)
-		}
-		quota[accountID]--
-		env.noteSubmitted(candidate.instrument.InstrumentID, spec.Quantity.Mul(quote.Price))
-		if reversal == 1 && e.OnReversal != nil {
-			e.OnReversal(spaceID, target.LogicalAccountID, candidate.instrument.InstrumentID, e.now())
-		}
-		if e.Observe != nil {
-			e.Observe.ChildPlaced(target.LogicalAccountID, target.TargetID, e.crossTargetReversal(ctx, spaceID, target, candidate))
-		}
-		// 只落库，批量提交由收敛统一发出；拒单后下一轮换成员，全部被拒时写入 blocked_targets。
-		return placement{placed: true, orderID: string(placed.ID)}, nil
 	}
 	result := placement{
-		tooSmall:           len(candidates) > 0 && tooSmall == len(candidates),
-		belowConfiguredMin: configuredSmall > 0 && tooSmall == len(candidates),
+		tooSmall:           len(candidates) > 0 && tally.tooSmall == len(candidates),
+		belowConfiguredMin: tally.configuredSmall > 0 && tally.tooSmall == len(candidates),
 	}
-	if t1Deferred && len(capacityErrors) == 0 {
+	if tally.t1Deferred && len(tally.capacityErrors) == 0 {
 		result.deferReason = reasonT1
 		return result, nil
 	}
-	if len(capacityErrors) == 0 {
+	if len(tally.capacityErrors) == 0 {
 		result.reason = "数量低于交易所最小值"
 		return result, nil
 	}
-	result.reason = "成员容量不足：" + strings.Join(capacityErrors, "; ")
-	if unfilled {
-		result.reason = "未到位：" + strings.Join(capacityErrors, "; ")
+	result.reason = "成员容量不足：" + strings.Join(tally.capacityErrors, "; ")
+	if tally.unfilled {
+		result.reason = "未到位：" + strings.Join(tally.capacityErrors, "; ")
 	}
 	return result, nil
+}
+
+// candidateTally 汇总各成员下不了单的情况，全部成员都没下成时用来给出原因。
+type candidateTally struct {
+	capacityErrors []string
+	// tooSmall 只统计交易规则挡住的成员，不受拒单过滤影响：有成员本来能下单但被排除时不能算完成。
+	tooSmall int
+	// configuredSmall 统计因为低于设置的最小下单额而下不了单的成员。
+	configuredSmall int
+	// unfilled 表示有成员的伪市价单用满了尝试次数。
+	unfilled bool
+	// t1Deferred 表示有成员只因为 T+1 卖不出。
+	t1Deferred bool
+}
+
+// candidateCheck 是一个成员通过交易规则检查后的结果：报价、取整后的数量；skip 表示这个成员下不了单，换下一个。
+type candidateCheck struct {
+	skip     bool
+	quote    Quote
+	quantity shared.Decimal
+	// oddFull：整手市场卖出全部可卖数量，零股一次卖完，不受最小数量限制。
+	oddFull bool
+}
+
+// checkCandidate 检查一个候选成员能不能下这一笔：取整、报价、停牌涨跌停、每小时上限、最小名义金额、最小下单额、拒单排除、T+1 可卖量。
+// 下不了的原因记进 tally；done 为真表示整笔动作已有结论（out），不再看后面的成员。
+func (e *Executor) checkCandidate(
+	ctx context.Context,
+	candidate laneAction,
+	env *laneEnv,
+	rejected map[string]string,
+	quota map[string]int,
+	dryRun bool,
+	tally *candidateTally,
+) (candidateCheck, placement, bool, error) {
+	accountID := candidate.member.account.TradingAccountID
+	// 额度按执行账户计：用完算本轮跳过，不换到下一个成员，也不写阻塞原因。
+	if !dryRun && quota[accountID] <= 0 {
+		return candidateCheck{}, placement{deferred: true}, true, nil
+	}
+	quantity, reason, err := childQuantity(candidate)
+	if err != nil {
+		return candidateCheck{}, placement{}, true, err
+	}
+	if reason != "" {
+		tally.capacityErrors = append(tally.capacityErrors, reason)
+		tally.tooSmall++
+		return candidateCheck{skip: true}, placement{}, false, nil
+	}
+	quote, err := e.Prices.LatestPrice(
+		ctx,
+		candidate.member.account.TradingAccountID,
+		exchange.NewSymbolKey(candidate.instrument.MarketType, candidate.instrument.ExchangeSymbol),
+	)
+	if err != nil {
+		if paper.IsInfrastructureError(err) {
+			return candidateCheck{}, placement{}, true, err
+		}
+		return candidateCheck{}, placement{}, true, &AccountError{TradingAccountID: candidate.member.account.TradingAccountID, Err: err}
+	}
+	if quote.Price.Cmp(shared.Zero()) <= 0 {
+		return candidateCheck{}, placement{}, true, &AccountError{TradingAccountID: candidate.member.account.TradingAccountID, Err: orderdomain.ErrInvalidSpec}
+	}
+	// 停牌、涨停时买、跌停时卖：整个标的顺延，不换成员（停牌和涨跌停是标的本身的状态）。
+	if exchange.RuleFor(candidate.instrument.MarketType).PriceLimits {
+		if reason := deferralReason(laneAction{instrument: candidate.instrument, delta: candidate.delta}, quote); reason != "" {
+			return candidateCheck{}, placement{deferReason: reason}, true, nil
+		}
+	}
+	// 最小名义金额：交易所给了就用它，没给（OKX）用 minSz × 合约面值 × 价格折算。
+	minNotional, err := candidate.instrument.MinNotionalAt(quote.Price)
+	if err != nil {
+		return candidateCheck{}, placement{}, true, fmt.Errorf("%w: minimum notional", ErrInvalidTarget)
+	}
+	// 单币每小时上限：额度不够整笔时只下剩下的；剩下的不够下一单就顺延到下一个整点，不算下不了单。
+	quantity, clipped, capErr := env.applyHourlyCap(ctx, candidate, quantity, quote.Price)
+	if capErr != nil {
+		return candidateCheck{}, placement{}, true, capErr
+	}
+	if clipped && env.tooSmallToPlace(candidate, quantity, quote.Price) {
+		return candidateCheck{}, placement{capDeferred: true}, true, nil
+	}
+	belowMinimum, err := belowMinimumNotional(quantity, quote.Price, minNotional)
+	if err != nil {
+		return candidateCheck{}, placement{}, true, err
+	}
+	// 合约全平只查最小数量，否则剩余仓位永远平不掉。
+	if belowMinimum && !isFullClose(candidate, quantity) {
+		tally.capacityErrors = append(tally.capacityErrors, accountID+": 金额低于交易所最小名义金额")
+		tally.tooSmall++
+		return candidateCheck{skip: true}, placement{}, false, nil
+	}
+	// 配置的最小下单额：合约减仓、清仓例外（否则剩余仓位下不了单、永远平不掉）。
+	if env.belowConfiguredMinimum(candidate, quantity, quote.Price) {
+		tally.capacityErrors = append(tally.capacityErrors, accountID+": 金额低于配置的最小下单额")
+		tally.tooSmall++
+		tally.configuredSmall++
+		return candidateCheck{skip: true}, placement{}, false, nil
+	}
+	if reason, excluded := rejected[accountID]; excluded {
+		// 同一目标不再向拒过单的账户下单，下一个目标自然重试。
+		tally.capacityErrors = append(tally.capacityErrors, accountID+": "+reason)
+		return candidateCheck{skip: true}, placement{}, false, nil
+	}
+	// oddFull：整手市场卖出全部可卖数量，零股一次卖完，不受最小数量限制。
+	oddFull := false
+	if candidate.reducing && exchange.RuleFor(candidate.instrument.MarketType).PositionFromBalance {
+		quantity, oddFull = sellQuantity(candidate, quantity)
+		// 截断到可卖量后数量可能低于最小值或最小名义金额，交易所会拒单。
+		tooSmallNotional, notionalErr := belowMinimumNotional(quantity, quote.Price, minNotional)
+		if notionalErr != nil {
+			return candidateCheck{}, placement{}, true, notionalErr
+		}
+		if quantity.IsZero() || tooSmallNotional {
+			if t1Locked(candidate) {
+				// 只因为 T+1 卖不出：顺延到次日，不算阻塞。
+				tally.t1Deferred = true
+				return candidateCheck{skip: true}, placement{}, false, nil
+			}
+			tally.capacityErrors = append(tally.capacityErrors, accountID+": 可卖量不足")
+			return candidateCheck{skip: true}, placement{}, false, nil
+		}
+	}
+	return candidateCheck{quote: quote, quantity: quantity, oddFull: oddFull}, placement{}, false, nil
+}
+
+// submitCandidate 给通过检查的候选成员下单：单笔上限、伪市价次数、挂单价、反向次数、资金容量，最后落库。
+// 只落库，批量提交由收敛统一发出；done 为假表示这个成员下不了，换下一个成员。
+func (e *Executor) submitCandidate(
+	ctx context.Context,
+	spaceID string,
+	target store.LogicalAccountTargetRecord,
+	candidate laneAction,
+	check candidateCheck,
+	env *laneEnv,
+	quota map[string]int,
+	dryRun bool,
+	tally *candidateTally,
+) (placement, bool, error) {
+	accountID := candidate.member.account.TradingAccountID
+	quote, quantity, oddFull := check.quote, check.quantity, check.oddFull
+	if target.InstanceID != "" {
+		if err := e.checkTargetExecutable(ctx, store.LogicalAccountRecord{
+			SpaceID: spaceID, LogicalAccountID: target.LogicalAccountID,
+			OwnerInstanceID: target.InstanceID, OwnerSessionID: target.SessionID,
+		}, target); err != nil {
+			return placement{}, true, err
+		}
+	}
+	// 单笔上限：拆单时每笔的名义金额不超过设置的上限；开了随机化，每笔取上限的 50%～100%。
+	// 同一目标、同一标的已发出的子单（所有执行账户），按提交先后：伪市价单的尝试次数按标的统计（换成员不重新计数），
+	// 拆单随机化和反向熔断按候选账户统计（见 childrenOfAccount），共用这一次查询。
+	children, childrenErr := e.Store.TargetChildOrders(ctx, spaceID, target.LogicalAccountID, target.TargetID, candidate.instrument.InstrumentID)
+	if childrenErr != nil {
+		return placement{}, true, childrenErr
+	}
+	// 伪市价单：用满尝试次数仍没成交完的标的记为“未到位”，告警一次，不再重试，等下一份目标重算。
+	attempt := 0
+	// 挂单价先定：取不到买一卖一就不挂单，这一片走原来的下单方式（含伪市价的次数上限和“未到位”处理）。
+	var restingPrice shared.Decimal
+	if candidate.resting {
+		var restingOK bool
+		if restingPrice, restingOK = e.restingPrice(ctx, candidate); !restingOK {
+			candidate.resting = false
+		}
+	}
+	pseudoMarket := env.settings.OrderMode == ordersettings.OrderModePseudoMarket && !candidate.resting
+	if pseudoMarket {
+		if attempt = pseudoMarketAttempts(children); attempt >= env.settings.MaxAttempts {
+			reason := fmt.Sprintf("伪市价单已尝试 %d 次仍没成交完，本份目标不再重试", attempt)
+			e.warnOnce("tally.unfilled|"+target.TargetID+"|"+candidate.instrument.InstrumentID,
+				fmt.Sprintf("组合 %s 的 %s 在账户 %s 上%s", target.LogicalAccountID, candidate.instrument.InstrumentID, accountID, reason))
+			tally.capacityErrors = append(tally.capacityErrors, accountID+": "+reason)
+			tally.unfilled = true
+			return placement{}, false, nil
+		}
+	}
+	accountChildren := childrenOfAccount(children, accountID)
+	sliceLimit := env.sliceNotionalLimit(target, candidate.instrument.InstrumentID, len(accountChildren))
+	_, minimum, err := baseQuantityRules(candidate.instrument)
+	if err != nil {
+		return placement{}, true, err
+	}
+	maxQuantity := floorToStep(sliceLimit.Div(quote.Price), mustBaseStep(candidate.instrument))
+	// 整手市场（A 股）单笔上限不足一手时按一手下单（拆单随机化后也一样）：高价股一手就超过默认的 10 万元上限，
+	// 否则永远下不了单。
+	if exchange.RuleFor(candidate.instrument.MarketType).BoardLot && maxQuantity.Cmp(minimum) < 0 {
+		maxQuantity = minimum
+	}
+	if quantity.Cmp(maxQuantity) > 0 {
+		quantity, oddFull = maxQuantity, false
+	}
+	if quantity.Cmp(shared.Zero()) <= 0 || (quantity.Cmp(minimum) < 0 && !oddFull) {
+		tally.capacityErrors = append(tally.capacityErrors, candidate.member.account.TradingAccountID+": 单笔子单上限低于交易所最小数量")
+		return placement{}, false, nil
+	}
+	reversal := reversalCount(accountChildren, candidate)
+	if reversal >= 2 {
+		// 同一目标内第二次反向：整条标的本目标内不再下单，新目标到达时自然清零。
+		if e.Observe != nil && !dryRun {
+			e.Observe.Blocked(candidate.member.account.TradingAccountID, "reversal_blocked")
+		}
+		return placement{reason: reasonTargetReversal}, true, nil
+	}
+	if dryRun {
+		return placement{viable: true}, true, nil
+	}
+	runnerID := target.RunnerID
+	spec := orderdomain.OrderSpec{
+		ClientOrderSpec: orderdomain.ClientOrderSpec{
+			TradingAccountID: candidate.member.account.TradingAccountID,
+			ClientOrderID:    childClientOrderID(attempt),
+			InstrumentID:     candidate.instrument.InstrumentID,
+			Type:             exchange.OrderTypeMarket,
+			Side:             sideForDelta(candidate.delta),
+			Quantity:         quantity,
+		},
+		Attempt:        attempt,
+		ReferencePrice: quote.Price, ReferencePriceAt: quote.UpdatedAt,
+		ReducePositionOnly: candidate.reducing,
+		Owner: orderdomain.OrderOwner{
+			Type: orderdomain.OwnerTarget, OwnerID: target.TargetID,
+			LogicalAccountID: target.LogicalAccountID, RunnerID: &runnerID,
+		},
+		PositionBefore: candidate.member.positions[candidate.instrument.InstrumentID].String(),
+	}
+	spec.PositionSide = exchange.RuleFor(candidate.instrument.MarketType).PositionSide
+	if candidate.resting {
+		// 挂单：限价 + GTC，买单挂买一价，卖单挂卖一价。
+		spec.Type, spec.FillPolicy, spec.LimitPrice = exchange.OrderTypeLimit, exchange.FillPolicyGTC, &restingPrice
+	}
+	if pseudoMarket {
+		// 限价 + IOC：价格 = 参考价 ×（1 ± 滑点），部分成交的剩余量下一轮按新的滑点再来。
+		// 默认最多 6% 的滑点比币安合约的价格过滤器（约 ±5%）宽，按标的的价格偏离限制夹住，避免最后几次被交易所拒单。
+		limit := pseudoMarketPrice(quote.Price, spec.Side, env.settings, attempt, candidate.instrument.PriceTick)
+		limit = ClampToPriceBand(limit, CageBasis(quote, spec.Side), spec.Side, candidate.instrument)
+		// 涨跌停是绝对价：截在涨停价、跌停价之间（A 股；没有涨跌停的市场原样返回）。
+		limit = ClampToPriceLimits(limit, quote)
+		spec.Type, spec.FillPolicy, spec.LimitPrice = exchange.OrderTypeLimit, exchange.FillPolicyIOC, &limit
+	}
+	if candidate.resting {
+		restingLimit := ClampToPriceLimits(*spec.LimitPrice, quote)
+		spec.LimitPrice = &restingLimit
+	}
+	if !candidate.reducing {
+		capacity, err := e.Orders.Capacity(ctx, spaceID, spec)
+		if err != nil {
+			if capacityError(err) {
+				tally.capacityErrors = append(tally.capacityErrors, candidate.member.account.TradingAccountID+": "+err.Error())
+				return placement{}, false, nil
+			}
+			return placement{}, true, err
+		}
+		if capacity.Cmp(shared.Zero()) <= 0 {
+			tally.capacityErrors = append(tally.capacityErrors, candidate.member.account.TradingAccountID+": 没有可用资金")
+			return placement{}, false, nil
+		}
+		if capacity.Cmp(spec.Quantity) < 0 {
+			spec.Quantity = capacity
+		}
+	}
+	placed, err := e.Orders.Place(ctx, spaceID, spec)
+	if err != nil {
+		if errors.Is(err, orderapp.ErrInstrumentHalted) {
+			// 下单校验看到停牌（报价在执行器取价之后变了）：顺延，不拖住整个目标。
+			return placement{deferReason: reasonHalted}, true, nil
+		}
+		if orderapp.IsPermanentValidationError(err) {
+			tally.capacityErrors = append(
+				tally.capacityErrors,
+				candidate.member.account.TradingAccountID+": "+err.Error(),
+			)
+			return placement{}, false, nil
+		}
+		return placement{}, true, err
+	}
+	if err := e.checkTargetExecutable(ctx, store.LogicalAccountRecord{SpaceID: spaceID, LogicalAccountID: target.LogicalAccountID}, target); err != nil {
+		return placement{}, true, e.discardPendingOnTargetInvalidation(ctx, spaceID, string(placed.ID), err)
+	}
+	quota[accountID]--
+	env.noteSubmitted(candidate.instrument.InstrumentID, spec.Quantity.Mul(quote.Price))
+	if reversal == 1 && e.OnReversal != nil {
+		e.OnReversal(spaceID, target.LogicalAccountID, candidate.instrument.InstrumentID, e.now())
+	}
+	if e.Observe != nil {
+		e.Observe.ChildPlaced(target.LogicalAccountID, target.TargetID, e.crossTargetReversal(ctx, spaceID, target, candidate))
+	}
+	// 只落库，批量提交由收敛统一发出；拒单后下一轮换成员，全部被拒时写入 blocked_targets。
+	return placement{placed: true, orderID: string(placed.ID)}, true, nil
 }
 
 // placementCandidates 列出可以承接这次动作的成员：加仓是全部支持该标的的成员，
@@ -1820,10 +1375,8 @@ func belowMinimumNotional(
 		quantity.Mul(price).Cmp(minimum) < 0, nil
 }
 
-func (e *Executor) childQuantity(
-	_ context.Context,
-	action laneAction,
-) (shared.Decimal, string, error) {
+// childQuantity 返回动作按步长取整后的下单数量；不到交易所最小数量时返回原因。
+func childQuantity(action laneAction) (shared.Decimal, string, error) {
 	step, minimum, err := baseQuantityRules(action.instrument)
 	if err != nil {
 		return shared.Decimal{}, "", err
@@ -2201,17 +1754,6 @@ func (e *Executor) positionUnreflected(
 		}
 	}
 	return false, nil
-}
-
-// targetChildren 返回同一目标、同一标的已发出的子单（所有执行账户），按提交先后；
-// 伪市价单的尝试次数按标的统计（换成员不重新计数），拆单随机化和反向熔断按候选账户统计（见 childrenOfAccount），共用这一次查询。
-func (e *Executor) targetChildren(
-	ctx context.Context,
-	spaceID string,
-	target store.LogicalAccountTargetRecord,
-	candidate laneAction,
-) ([]store.TargetChildOrder, error) {
-	return e.Store.TargetChildOrders(ctx, spaceID, target.LogicalAccountID, target.TargetID, candidate.instrument.InstrumentID)
 }
 
 // childrenOfAccount 取出某个执行账户的子单。
