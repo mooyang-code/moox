@@ -110,6 +110,28 @@ describe("新建账户提交", () => {
     expect(vm.visible).toBe(true);
   });
 
+  it("提交中不能关闭：遮罩、关闭按钮、Esc 都禁用，取消按钮置灰且点了没反应；结束后恢复", async () => {
+    const vm = await openDialog();
+    let resolve!: (value: unknown) => void;
+    mocks.createPaperSimulation.mockImplementationOnce(() => new Promise(done => (resolve = done)));
+    Object.assign(vm.form, { step: 3 });
+    const submitting = vm.submit();
+    await flushPromises();
+    const modal = wrapper.findComponent({ name: "Modal" });
+    expect(modal.props()).toMatchObject({ closable: false, maskClosable: false, escToClose: false });
+    const cancel = [...document.querySelectorAll<HTMLButtonElement>(".arco-modal button")].find(item =>
+      item.textContent?.includes("上一步")
+    );
+    expect(cancel?.disabled).toBe(true);
+    cancel?.click();
+    await flushPromises();
+    expect(vm.visible).toBe(true);
+    expect(vm.form.step).toBe(3);
+    resolve({ account: { trading_account_id: "ta-new" } });
+    await submitting;
+    expect(vm.visible).toBe(false);
+  });
+
   describe("实盘路径", () => {
     function nextButton() {
       return [...document.querySelectorAll<HTMLButtonElement>(".arco-modal button")].find(item =>
@@ -251,6 +273,21 @@ describe("新建账户提交", () => {
       Object.assign(vm.form, { step: 0, kind: "prod" });
       await flushPromises();
       expect(vm.form.secretId).toBe("");
+    });
+
+    it("重新打开后状态是新的：上一次提交建成的账户不会让这次跳过创建", async () => {
+      mocks.createTradingAccount.mockResolvedValue({ account: { trading_account_id: "ta-live" } });
+      const vm = await openDialog();
+      Object.assign(vm.form, liveForm);
+      mocks.addLogicalAccountMember.mockRejectedValueOnce(new Error("先暂停自动执行"));
+      await vm.submit();
+      await flushPromises();
+      expect(document.body.textContent).toContain("已锁定");
+      vm.open("testnet");
+      await flushPromises();
+      Object.assign(vm.form, liveForm);
+      await vm.submit();
+      expect(mocks.createTradingAccount).toHaveBeenCalledTimes(2);
     });
 
     it("加入组合失败只显示一条红色提示并锁定前几步，重试只补加入不重复建账户", async () => {
