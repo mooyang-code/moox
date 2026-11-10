@@ -260,12 +260,16 @@ func (env *laneEnv) tooSmallToPlace(candidate laneAction, quantity, price shared
 		return true
 	}
 	belowExchange, err := belowMinimumNotional(quantity, price, minNotional)
-	fullClose := candidate.reducing && exchange.RuleFor(candidate.instrument.MarketType).ReduceOnly &&
-		quantity.Cmp(candidate.member.positions[candidate.instrument.InstrumentID].Abs()) == 0
-	if err != nil || (belowExchange && !fullClose) {
+	if err != nil || (belowExchange && !isFullClose(candidate, quantity)) {
 		return true
 	}
 	return env.belowConfiguredMinimum(candidate, quantity, price)
+}
+
+// isFullClose 判断这一笔是不是合约全平：减仓且数量等于这个成员的全部持仓。全平只查最小数量，否则剩余仓位永远平不掉。
+func isFullClose(candidate laneAction, quantity shared.Decimal) bool {
+	return candidate.reducing && exchange.RuleFor(candidate.instrument.MarketType).ReduceOnly &&
+		quantity.Cmp(candidate.member.positions[candidate.instrument.InstrumentID].Abs()) == 0
 }
 
 // splitFraction 由种子算出 [0.5, 1] 之间的比例（精确小数，千分位）。同一个种子永远得到同一个比例，结果可复现。

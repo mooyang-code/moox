@@ -129,7 +129,7 @@ func TestReduceFixesTargetsAtStartAndDoesNotReduceAgain(t *testing.T) {
 	replay, err := fixture.service().FlattenLogicalAccount(context.Background(), command)
 	require.NoError(t, err)
 	require.Empty(t, fixture.orders.specs, "已到目标数量，不再减仓")
-	require.Equal(t, "COMPLETED", replay.Action.Status)
+	require.Equal(t, string(operatordomain.StatusCompleted), replay.Action.Status)
 }
 
 // 风控减仓的子单零成交就过期：同一个动作号重试时换号再下，不判部分完成；交易所确定性拒绝才终结。
@@ -152,7 +152,7 @@ func TestReduceRetriesWithNewIDsAfterZeroFillExpiryButEndsOnRejection(t *testing
 	require.Equal(t, []string{"BTC-USDT-SPOT:SELL:1", "BTC-USDT-SWAP:SELL:1.5"}, placed(fixture), "换号重试，数量还是原来的减仓目标")
 	require.NotEqual(t, first[0], fixture.orders.specs[0].ClientOrderID)
 	require.NotEqual(t, first[1], fixture.orders.specs[1].ClientOrderID)
-	require.NotEqual(t, "PARTIAL", result.Action.Status)
+	require.NotEqual(t, string(operatordomain.StatusPartial), result.Action.Status)
 
 	// 这一轮的单被交易所拒绝：终结，不再换号。
 	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_trade_orders SET c_state = 'REJECTED', c_reject_reason = '交易对暂停', c_submitted_at = 1000, c_exchange_symbol = 'BTCUSDT' WHERE c_owner_id = 'reduce-retry' AND c_state <> 'EXPIRED'`).Error)
@@ -161,7 +161,7 @@ func TestReduceRetriesWithNewIDsAfterZeroFillExpiryButEndsOnRejection(t *testing
 	result, err = fixture.service().FlattenLogicalAccount(context.Background(), command)
 	require.NoError(t, err)
 	require.Empty(t, fixture.orders.specs)
-	require.Equal(t, "PARTIAL", result.Action.Status)
+	require.Equal(t, string(operatordomain.StatusPartial), result.Action.Status)
 }
 
 // 只平一个标的：只处理这一个，别的标的的单不撤、仓不动，也不暂停组合。
@@ -199,14 +199,14 @@ func TestFlattenConflictRules(t *testing.T) {
 	reduce := FlattenCommand{ReduceRatio: shared.MustDecimal("0.1")}
 	delistBTC := FlattenCommand{InstrumentID: "BTC-USDT-SWAP"}
 
-	require.True(t, flattenConflict(running("FLATTEN", ""), whole))
-	require.True(t, flattenConflict(running("DELIST_FLATTEN", "BTC-USDT-SWAP"), whole), "整组清仓遇到运行中的单标的清仓算忙")
-	require.True(t, flattenConflict(running("DELIST_FLATTEN", "BTC-USDT-SWAP"), reduce))
-	require.True(t, flattenConflict(running("FLATTEN", ""), delistBTC), "单标的清仓遇到整组清仓算忙")
-	require.True(t, flattenConflict(running("REDUCE", ""), delistBTC))
-	require.True(t, flattenConflict(running("DELIST_FLATTEN", "BTC-USDT-SWAP"), delistBTC), "同一标的")
-	require.False(t, flattenConflict(running("DELIST_FLATTEN", "ETH-USDT-SWAP"), delistBTC), "不同标的的单标的清仓不互相冲突")
-	require.False(t, flattenConflict(running("MANUAL_ORDER", ""), whole))
+	require.True(t, flattenConflict(running(string(operatordomain.ActionFlatten), ""), whole))
+	require.True(t, flattenConflict(running(string(operatordomain.ActionDelistFlatten), "BTC-USDT-SWAP"), whole), "整组清仓遇到运行中的单标的清仓算忙")
+	require.True(t, flattenConflict(running(string(operatordomain.ActionDelistFlatten), "BTC-USDT-SWAP"), reduce))
+	require.True(t, flattenConflict(running(string(operatordomain.ActionFlatten), ""), delistBTC), "单标的清仓遇到整组清仓算忙")
+	require.True(t, flattenConflict(running(string(operatordomain.ActionReduce), ""), delistBTC))
+	require.True(t, flattenConflict(running(string(operatordomain.ActionDelistFlatten), "BTC-USDT-SWAP"), delistBTC), "同一标的")
+	require.False(t, flattenConflict(running(string(operatordomain.ActionDelistFlatten), "ETH-USDT-SWAP"), delistBTC), "不同标的的单标的清仓不互相冲突")
+	require.False(t, flattenConflict(running(string(operatordomain.ActionManualOrder), ""), whole))
 }
 
 // 同一个动作号在 FAILED、PARTIAL 后重放：目标数量沿用第一次算好的，不按当前持仓重算再减一次。
@@ -218,7 +218,7 @@ func TestReduceReplayAfterPartialKeepsOriginalTargets(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []string{"BTC-USDT-SPOT:SELL:1", "BTC-USDT-SWAP:SELL:1.5"}, placed(fixture))
 
-	for _, status := range []string{"PARTIAL", "FAILED"} {
+	for _, status := range []string{string(operatordomain.StatusPartial), string(operatordomain.StatusFailed)} {
 		// 第一轮成交了一部分：现货剩 1.5（目标 1），合约剩 2.25（目标 1.5）。
 		fixture.orders.specs = nil
 		require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_operator_actions SET c_status = ? WHERE c_action_id = 'reduce-2'`, status).Error)
@@ -304,7 +304,7 @@ func TestFlattenScopeValidation(t *testing.T) {
 // 运行中的减仓遇到比例不同的减仓请求：返回忙，不能把别的比例的进度当成这次的。
 func TestRunningReduceWithDifferentRatioIsBusy(t *testing.T) {
 	running := store.OperatorActionRecord{
-		ActionID: "r1", ActionType: "REDUCE", Status: "RUNNING",
+		ActionID: "r1", ActionType: string(operatordomain.ActionReduce), Status: string(operatordomain.StatusRunning),
 		RequestJSON: `{"logical_account_id":"logical-1","reduce_ratio":"0.1"}`,
 	}
 	same := FlattenCommand{ReduceRatio: shared.MustDecimal("0.1")}
@@ -327,7 +327,7 @@ func TestFlattenKeepsArbitrageBaseAndItsHedgeLeg(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Empty(t, placed(fixture), "底仓现货和永续对冲腿都不动")
-	require.Equal(t, "COMPLETED", result.Action.Status)
+	require.Equal(t, string(operatordomain.StatusCompleted), result.Action.Status)
 	require.Empty(t, result.Accounts[0].Remaining)
 }
 
@@ -351,6 +351,6 @@ func TestFlattenDoesNotTradeWhenExclusionSettingIsUnreadable(t *testing.T) {
 
 	require.NoError(t, err, "设置坏了不是模块级故障，不能让 operator 一直未就绪")
 	require.Empty(t, placed(fixture), "排除字段读不出来不下单")
-	require.Equal(t, "FAILED", result.Action.Status, "直接以失败结束，不一直 RUNNING 被每秒重试")
+	require.Equal(t, string(operatordomain.StatusFailed), result.Action.Status, "直接以失败结束，不一直 RUNNING 被每秒重试")
 	require.Contains(t, result.Accounts[0].Error, "套利底仓")
 }

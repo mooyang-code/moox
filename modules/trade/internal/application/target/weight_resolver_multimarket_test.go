@@ -148,9 +148,9 @@ func TestExcludedAssetWarningOncePerDay(t *testing.T) {
 	require.True(t, resolver.warnExcluded(ctx, "logical-1", "BNB", "BNB-USDT-SPOT"), "第二天再告警一次")
 }
 
-// 换算权益 = 权益 + 未受管现货 - 权益 × 资金预留比例 - max(0, BNB 保留金额 - BNB 市值)。
+// 换算权益 = 权益 + 未受管现货 - 权益 × 资金预留比例 - max(0, 补买目标 - BNB 市值)；普通账户补买目标是 N/2。
 func TestConversionEquityDeductsReserveRatioAndBNBShortfall(t *testing.T) {
-	// 权益 2000 + 现货 BTC 1000 = 3000；预留 10% = 300；BNB 保留 500，现有 1 个 BNB = 100，还差 400。
+	// 权益 2000 + 现货 BTC 1000 = 3000；预留 10% = 300；BNB 保留 500，普通账户目标 250，现货钱包有 1 个 BNB = 100，还差 150。
 	tradeStore := newMixedResolverStore(t, `{"reserve_ratio":"0.1","bnb_reserve_amount":"500"}`)
 	makeBinanceProduction(t, tradeStore, "account-a")
 	resolver := WeightResolver{Store: tradeStore, Prices: targetPriceStub{price: shared.MustDecimal("100")}, Equity: conversionEquityStub{}, Now: func() time.Time { return time.UnixMilli(2000) }}
@@ -158,8 +158,8 @@ func TestConversionEquityDeductsReserveRatioAndBNBShortfall(t *testing.T) {
 	conversion, err := resolver.Resolve(context.Background(), 0, mixedRequest(weightTarget("BTC-USDT-SPOT", "SPOT", "0.5")), "space-1")
 
 	require.NoError(t, err)
-	require.Equal(t, "2300", conversion.Equity.String())
-	require.Equal(t, "11.5", quantityOf(t, conversion, "BTC-USDT-SPOT").Quantity)
+	require.Equal(t, "2550", conversion.Equity.String())
+	require.Equal(t, "12.75", quantityOf(t, conversion, "BTC-USDT-SPOT").Quantity)
 
 	// BNB 买到位（市值不低于保留金额）后不再扣。
 	enough := newMixedResolverStore(t, `{"bnb_reserve_amount":"100"}`)
@@ -191,10 +191,10 @@ func makeBinanceProduction(t *testing.T, tradeStore *store.Store, accountID stri
 			c_account_mode = 'BINANCE_STANDARD', c_snapshot_json = REPLACE(c_snapshot_json, '"UNIFIED"', '"SPOT"') WHERE c_trading_account_id = ?`, accountID).Error)
 }
 
-// BNB 保留按每个会补买的币安执行账户各保留 N：两个成员各差 400，一共扣 800；
+// BNB 保留按每个会补买的币安执行账户各算一份：普通账户只看现货钱包、目标 N/2，两个成员各差 150，一共扣 300；
 // 非币安、测试网、模拟盘成员不补买，不为它们留钱。
 func TestBNBShortfallIsSummedPerBinanceMember(t *testing.T) {
-	// 权益 2000 + 现货 BTC 1000 = 3000；BNB 保留 500，每个成员现有 1 个 BNB = 100，各差 400。
+	// 权益 2000 + 现货 BTC 1000 = 3000；BNB 保留 500，普通账户目标 250，每个成员现货钱包有 1 个 BNB = 100，各差 150。
 	tradeStore := newMixedResolverStore(t, `{"bnb_reserve_amount":"500"}`)
 	makeBinanceProduction(t, tradeStore, "account-a")
 	accounts, err := tradeStore.ListAllTradingAccounts(context.Background())
@@ -211,7 +211,7 @@ func TestBNBShortfallIsSummedPerBinanceMember(t *testing.T) {
 		{SpaceID: "space-1", LogicalAccountID: "logical-1", TradingAccountID: "account-b"},
 	}, shared.MustDecimal("500"))
 	require.NoError(t, err)
-	require.Equal(t, "800", shortfall.String())
+	require.Equal(t, "300", shortfall.String())
 
 	// 第二个成员是测试网账户：不补买，不留钱。
 	require.NoError(t, tradeStore.DBForTest().Exec("UPDATE t_trading_accounts SET c_live_environment = 'TESTNET', c_markets = 'SPOT' WHERE c_trading_account_id = 'account-b'").Error)
@@ -219,7 +219,7 @@ func TestBNBShortfallIsSummedPerBinanceMember(t *testing.T) {
 		{TradingAccountID: "account-a"}, {TradingAccountID: "account-b"},
 	}, shared.MustDecimal("500"))
 	require.NoError(t, err)
-	require.Equal(t, "400", shortfall.String())
+	require.Equal(t, "150", shortfall.String())
 
 	// 模拟盘成员也不补买。
 	require.NoError(t, tradeStore.DBForTest().Exec("UPDATE t_trading_accounts SET c_execution_mode = 'PAPER', c_live_environment = '', c_credential_secret_id = '', c_account_mode = '' WHERE c_trading_account_id = 'account-a'").Error)
@@ -248,7 +248,7 @@ func TestBNBShortfallSkipsMembersAndInstrumentsTheMaintenanceTaskSkips(t *testin
 		require.NoError(t, err)
 		return value.String()
 	}
-	require.Equal(t, "400", shortfall())
+	require.Equal(t, "150", shortfall())
 
 	require.NoError(t, tradeStore.DBForTest().Exec("UPDATE t_trading_accounts SET c_ready = 0").Error)
 	require.Equal(t, "0", shortfall(), "未就绪的账户资金维护不处理")
@@ -267,4 +267,28 @@ func TestBNBShortfallSkipsMembersAndInstrumentsTheMaintenanceTaskSkips(t *testin
 		return nil
 	}))
 	require.Equal(t, "0", shortfall(), "BNB 标的不在交易状态，补买不会下单")
+}
+
+// 普通账户只数现货钱包的 BNB、目标是 N/2；合约钱包里的 BNB 是用户自己放的，不算。统一账户一个钱包，目标是 N。
+func TestBNBShortfallFollowsFundMaintenanceWalletAndTarget(t *testing.T) {
+	tradeStore := newMixedResolverStore(t, `{"bnb_reserve_amount":"500"}`)
+	makeBinanceProduction(t, tradeStore, "account-a")
+	resolver := WeightResolver{Store: tradeStore, Prices: targetPriceStub{price: shared.MustDecimal("100")}, Equity: conversionEquityStub{}, Now: func() time.Time { return time.UnixMilli(2000) }}
+	members := []store.LogicalAccountMemberRecord{{TradingAccountID: "account-a"}}
+	shortfall := func() string {
+		value, err := resolver.bnbShortfall(context.Background(), members, shared.MustDecimal("500"))
+		require.NoError(t, err)
+		return value.String()
+	}
+
+	// 现货钱包的 BNB 市值 100，目标 250。
+	require.Equal(t, "150", shortfall())
+	// BNB 只在合约钱包里：现货钱包没有，缺口是整个目标 250。
+	require.NoError(t, tradeStore.DBForTest().Exec(
+		`UPDATE t_trading_accounts SET c_snapshot_json = REPLACE(c_snapshot_json, '"SPOT"', '"FUTURES"')`).Error)
+	require.Equal(t, "250", shortfall())
+	// 统一账户一个钱包：BNB 在统一钱包里，目标是 N，缺口 400。
+	require.NoError(t, tradeStore.DBForTest().Exec(
+		`UPDATE t_trading_accounts SET c_account_mode = 'BINANCE_PORTFOLIO_MARGIN', c_snapshot_json = REPLACE(c_snapshot_json, '"FUTURES"', '"UNIFIED"')`).Error)
+	require.Equal(t, "400", shortfall())
 }

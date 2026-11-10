@@ -7,6 +7,7 @@ import (
 	"time"
 
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
+	operatordomain "github.com/mooyang-code/moox/modules/trade/internal/domain/operator"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
@@ -44,7 +45,7 @@ func TestFlattenFreshSyncsBeforeCancelAndClose(t *testing.T) {
 		"sync:account-b",
 	}, fixture.trace)
 	// 子单已成交但持仓还没反映（兜底原因可重试），动作保持运行中，由工作线程继续。
-	require.Equal(t, "RUNNING", result.Action.Status)
+	require.Equal(t, string(operatordomain.StatusRunning), result.Action.Status)
 	require.Len(t, fixture.orders.specs, 1)
 	spec := fixture.orders.specs[0]
 	require.Equal(t, "account-a", spec.TradingAccountID)
@@ -66,7 +67,7 @@ func TestFlattenUsesPausedAutomationStateAndRunningAction(t *testing.T) {
 		require.Equal(t, "PAUSED", account.AutomationState)
 		action, err := fixture.store.GetOperatorAction(ctx, "space-1", "flatten-1")
 		require.NoError(t, err)
-		require.Equal(t, "RUNNING", action.Status)
+		require.Equal(t, string(operatordomain.StatusRunning), action.Status)
 		return nil
 	}
 
@@ -121,7 +122,7 @@ func TestFlattenWaitsForCancellationConfirmation(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Empty(t, fixture.orders.specs)
-	require.Equal(t, "RUNNING", result.Action.Status)
+	require.Equal(t, string(operatordomain.StatusRunning), result.Action.Status)
 	require.Contains(t, result.Accounts[0].Error, "撤单还没有得到交易所确认")
 }
 
@@ -169,7 +170,7 @@ func TestFlattenSkipsStaleFailedAccountAndContinuesOthers(t *testing.T) {
 	require.Equal(t, "account-b", fixture.orders.specs[0].TradingAccountID)
 	require.Equal(t, exchange.SideBuy, fixture.orders.specs[0].Side)
 	require.Equal(t, "3", fixture.orders.specs[0].Quantity.String())
-	require.Equal(t, "RUNNING", result.Action.Status)
+	require.Equal(t, string(operatordomain.StatusRunning), result.Action.Status)
 	require.Equal(t, "sync unavailable", result.Accounts[0].Error)
 }
 
@@ -186,7 +187,7 @@ func TestFlattenReportsPartialRemainingPositionsAndEndsPaused(t *testing.T) {
 	)
 
 	require.NoError(t, err)
-	require.Equal(t, "PARTIAL", result.Action.Status)
+	require.Equal(t, string(operatordomain.StatusPartial), result.Action.Status)
 	require.NotEmpty(t, result.Accounts[0].Remaining)
 	require.Contains(t, result.Accounts[0].Remaining[0].Reason, "最小值")
 	account, err := fixture.store.GetLogicalAccount(
@@ -213,7 +214,7 @@ func TestFlattenRetriesSameActionWithoutDuplicateChildren(t *testing.T) {
 		PositionSide: "NET", Quantity: "2", ReferencePrice: "100",
 		ReferencePriceAt: fixture.now.UnixMilli(), ReduceOnly: true,
 		OwnerType: "OPERATOR", OwnerID: "flatten-1",
-		LogicalAccountID: "logical-1", State: "PENDING", Version: 1,
+		LogicalAccountID: "logical-1", State: string(orderdomain.Pending), Version: 1,
 	})
 	requestJSON, err := flattenRequestJSON(FlattenCommand{
 		SpaceID: "space-1", ActionID: "flatten-1",
@@ -224,8 +225,8 @@ func TestFlattenRetriesSameActionWithoutDuplicateChildren(t *testing.T) {
 		context.Background(),
 		store.OperatorActionRecord{
 			SpaceID: "space-1", ActionID: "flatten-1",
-			LogicalAccountID: "logical-1", ActionType: "FLATTEN",
-			Reason: "close risk", RequestJSON: requestJSON, Status: "RUNNING",
+			LogicalAccountID: "logical-1", ActionType: string(operatordomain.ActionFlatten),
+			Reason: "close risk", RequestJSON: requestJSON, Status: string(operatordomain.StatusRunning),
 		},
 	)
 	require.NoError(t, err)
@@ -324,7 +325,7 @@ func TestFlattenRemainsRecoverableWhenEveryMemberIsUnavailable(t *testing.T) {
 	)
 
 	require.NoError(t, err)
-	require.Equal(t, "RUNNING", result.Action.Status)
+	require.Equal(t, string(operatordomain.StatusRunning), result.Action.Status)
 	require.Empty(t, fixture.orders.specs)
 }
 
@@ -407,7 +408,7 @@ func TestFlattenRetriesDelayedFillUntilPositionIsZero(t *testing.T) {
 	)
 
 	require.NoError(t, err)
-	require.Equal(t, "COMPLETED", result.Action.Status)
+	require.Equal(t, string(operatordomain.StatusCompleted), result.Action.Status)
 	require.Len(t, fixture.orders.specs, 1)
 	require.Empty(t, result.Accounts[0].Remaining)
 }
@@ -437,7 +438,7 @@ func TestFlattenRetryStopsAtDeadline(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Less(t, time.Since(started), 5*time.Second)
-	require.Equal(t, "RUNNING", result.Action.Status)
+	require.Equal(t, string(operatordomain.StatusRunning), result.Action.Status)
 	// 开始一次、首轮收尾一次；没撤单时不再多做一次轻量同步。
 	require.Equal(t, 2, fixture.syncer.callsFor("account-a"))
 }
@@ -481,7 +482,7 @@ func TestFlattenRunningReplayContinuesSameActionWithoutDuplicateChild(t *testing
 		context.Background(), command,
 	)
 	require.NoError(t, err)
-	require.Equal(t, "RUNNING", first.Action.Status)
+	require.Equal(t, string(operatordomain.StatusRunning), first.Action.Status)
 	require.NoError(t, setOperatorOrderState(
 		context.Background(),
 		fixture.store,
@@ -496,6 +497,6 @@ func TestFlattenRunningReplayContinuesSameActionWithoutDuplicateChild(t *testing
 	)
 
 	require.NoError(t, err)
-	require.Equal(t, "COMPLETED", replayed.Action.Status)
+	require.Equal(t, string(operatordomain.StatusCompleted), replayed.Action.Status)
 	require.Len(t, fixture.orders.specs, 1)
 }

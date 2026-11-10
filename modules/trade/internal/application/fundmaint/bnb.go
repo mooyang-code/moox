@@ -18,9 +18,9 @@ func isStandardAccount(account store.TradingAccountRecord) bool {
 	return exchange.AccountMode(account.AccountMode) == exchange.AccountModeBinanceStandard
 }
 
-// bnbQuantity 是补买维护的那部分 BNB 的净数量：普通账户只数现货钱包（补买只买进现货钱包；币安 U 本位合约的 BNB 抵扣要用合约钱包里的 BNB，
+// BNBQuantity 是补买维护的那部分 BNB 的净数量：普通账户只数现货钱包（补买只买进现货钱包；币安 U 本位合约的 BNB 抵扣要用合约钱包里的 BNB，
 // 补买不给合约钱包补，合约钱包里有多少是用户自己放的，不算）；统一账户只有一个钱包，全数。借出的不算。
-func bnbQuantity(account store.TradingAccountRecord) shared.Decimal {
+func BNBQuantity(account store.TradingAccountRecord) shared.Decimal {
 	standard := isStandardAccount(account)
 	total := shared.Zero()
 	for _, balance := range account.Snapshot.Balances {
@@ -39,9 +39,9 @@ func bnbQuantity(account store.TradingAccountRecord) shared.Decimal {
 	return total
 }
 
-// bnbBounds 返回补买的目标市值和触发容差：普通账户只补现货钱包，目标是保留金额的一半（和归集时现货钱包的留存口径一致），容差同样减半
+// BNBBounds 返回补买的目标市值和触发容差：普通账户只补现货钱包，目标是保留金额的一半（和归集时现货钱包的留存口径一致），容差同样减半
 // （保留金额大于 10 时目标减容差仍为正）；统一账户一个钱包，取全额。BNB 市值低于“目标 − 容差”才补买，买到目标。
-func bnbBounds(account store.TradingAccountRecord, reserve shared.Decimal) (target, slack shared.Decimal) {
+func BNBBounds(account store.TradingAccountRecord, reserve shared.Decimal) (target, slack shared.Decimal) {
 	target, slack = reserve, fundsettings.BNBReserveSlack
 	if isStandardAccount(account) {
 		half := shared.MustDecimal("2")
@@ -50,7 +50,7 @@ func bnbBounds(account store.TradingAccountRecord, reserve shared.Decimal) (targ
 	return target, slack
 }
 
-// topUpBNB 在 BNB 市值低于“目标 − 容差”时市价补买到目标（SYSTEM 单，现货下单），目标和容差见 bnbBounds：
+// topUpBNB 在 BNB 市值低于“目标 − 容差”时市价补买到目标（SYSTEM 单，现货下单），目标和容差见 BNBBounds：
 // 普通账户只补现货钱包、目标是保留金额的一半，不在钱包之间划转 BNB；统一账户目标是保留金额。账户没开通现货时无法补买，告警一次。
 // busy 为真表示补买单刚下出或还没结束：买单要花 USDT、余额要等同步才更新，同一轮后面的稳定币调平先让路。
 func (s *Service) topUpBNB(
@@ -106,8 +106,8 @@ func (s *Service) topUpBNB(
 	if err != nil {
 		return false, err
 	}
-	target, slack := bnbBounds(account, reserve)
-	value := bnbQuantity(account).Mul(price)
+	target, slack := BNBBounds(account, reserve)
+	value := BNBQuantity(account).Mul(price)
 	if value.Cmp(target.Sub(slack)) >= 0 {
 		return false, nil
 	}

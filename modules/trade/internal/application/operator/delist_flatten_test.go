@@ -121,7 +121,7 @@ func TestDelistFlattenRetryAfterARejectionStartsOver(t *testing.T) {
 	result, err := fixture.service().FlattenLogicalAccount(context.Background(), command)
 	require.NoError(t, err)
 	require.Empty(t, fixture.orders.specs)
-	require.Equal(t, "PARTIAL", result.Action.Status)
+	require.Equal(t, string(operatordomain.StatusPartial), result.Action.Status)
 	require.Contains(t, result.Accounts[0].Remaining[0].Reason, "被交易所拒绝")
 
 	// 同一个动作号重试：重新进入运行，起点之后没有被拒的子单，会再下一笔。
@@ -143,7 +143,7 @@ func TestDelistFlattenUnfilledStreakCapsThenResetsOnRetry(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_trade_orders SET c_state = 'EXPIRED', c_exchange_symbol = 'BTCUSDT' WHERE c_owner_id = 'delist-streak'`).Error)
 	limit := "97"
-	for i := 1; i < delistMaxAttempts; i++ {
+	for i := 1; i < flattenMaxUnfilled; i++ {
 		id := "old-" + string(rune('a'+i))
 		fixture.order(t, store.OrderRecord{
 			SpaceID: "space-1", TradingAccountID: "account-a", OrderID: id, ClientOrderID: id,
@@ -197,7 +197,7 @@ func TestDelistFlattenPacesConsecutiveIOCOrders(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Len(t, fixture.orders.specs, 1, "离上一笔结束太近，这一轮不再下")
-	require.Equal(t, "RUNNING", result.Action.Status, "不算终结，下一轮继续")
+	require.Equal(t, string(operatordomain.StatusRunning), result.Action.Status, "不算终结，下一轮继续")
 }
 
 // 解除禁止就停：撤掉本动作的订单，记 COMPLETED 并带“已解除禁止”标记，不下单、不记 PARTIAL。
@@ -209,7 +209,7 @@ func TestDelistFlattenStopsWhenTheInstrumentIsUnblocked(t *testing.T) {
 	fixture.orders.nextID = ""
 	first, err := fixture.service().FlattenLogicalAccount(context.Background(), command)
 	require.NoError(t, err)
-	require.Equal(t, "RUNNING", first.Action.Status, "子单还挂着，动作继续")
+	require.Equal(t, string(operatordomain.StatusRunning), first.Action.Status, "子单还挂着，动作继续")
 
 	removed, err := fixture.store.UnblockInstrument(context.Background(), "BINANCE", "SWAP", "BTCUSDT")
 	require.NoError(t, err)
@@ -222,7 +222,7 @@ func TestDelistFlattenStopsWhenTheInstrumentIsUnblocked(t *testing.T) {
 	result, err := service.FlattenLogicalAccount(context.Background(), command)
 
 	require.NoError(t, err)
-	require.Equal(t, "COMPLETED", result.Action.Status)
+	require.Equal(t, string(operatordomain.StatusCompleted), result.Action.Status)
 	require.True(t, result.Unblocked)
 	require.Equal(t, 1, wakes, "提前结束时唤醒目标，周期长的策略不用等下一份目标")
 	require.Empty(t, fixture.orders.specs, "解除后不再下单")
@@ -288,8 +288,8 @@ func TestDelistFlattenBusyWhenWholeFlattenIsRunning(t *testing.T) {
 	fixture := newMixedFlattenFixture(t)
 	fixture.block(t, "SWAP", "BTCUSDT")
 	_, _, err := fixture.store.CreateOperatorAction(context.Background(), store.OperatorActionRecord{
-		SpaceID: "space-1", ActionID: "whole", LogicalAccountID: "logical-1", ActionType: "FLATTEN",
-		Reason: "清仓", RequestJSON: `{"logical_account_id":"logical-1"}`, Status: "RUNNING",
+		SpaceID: "space-1", ActionID: "whole", LogicalAccountID: "logical-1", ActionType: string(operatordomain.ActionFlatten),
+		Reason: "清仓", RequestJSON: `{"logical_account_id":"logical-1"}`, Status: string(operatordomain.StatusRunning),
 	})
 	require.NoError(t, err)
 
@@ -309,7 +309,7 @@ func TestResumeOperatorActionContinuesDelistFlattenAndReduce(t *testing.T) {
 	fixture.orders.nextID = ""
 	first, err := fixture.service().FlattenLogicalAccount(context.Background(), command)
 	require.NoError(t, err)
-	require.Equal(t, "RUNNING", first.Action.Status)
+	require.Equal(t, string(operatordomain.StatusRunning), first.Action.Status)
 	require.JSONEq(t, `{"logical_account_id":"logical-1","instrument_id":"BTC-USDT-SWAP","exchange":"BINANCE"}`, first.Action.RequestJSON)
 
 	_, err = fixture.store.UnblockInstrument(context.Background(), "BINANCE", "SWAP", "BTCUSDT")
@@ -318,7 +318,7 @@ func TestResumeOperatorActionContinuesDelistFlattenAndReduce(t *testing.T) {
 	require.NoError(t, fixture.service().ResumeOperatorAction(context.Background(), first.Action))
 	action, err := fixture.store.GetOperatorAction(context.Background(), "space-1", "delist-resume")
 	require.NoError(t, err)
-	require.Equal(t, "COMPLETED", action.Status)
+	require.Equal(t, string(operatordomain.StatusCompleted), action.Status)
 
 }
 
@@ -347,7 +347,7 @@ func TestDelistFlattenCompletesWhileOtherInstrumentsHaveOpenOrders(t *testing.T)
 	result, err := fixture.service().FlattenLogicalAccount(context.Background(), delistCommand("delist-with-open", "BTC-USDT-SWAP"))
 
 	require.NoError(t, err)
-	require.Equal(t, "COMPLETED", result.Action.Status, "result=%+v", result.Accounts)
+	require.Equal(t, string(operatordomain.StatusCompleted), result.Action.Status, "result=%+v", result.Accounts)
 	for _, entry := range fixture.trace {
 		require.NotContains(t, entry, "cancel:", "别的标的的挂单不撤")
 	}
@@ -375,7 +375,7 @@ func TestDelistFlattenUnblockWaitsForCancelConfirmation(t *testing.T) {
 	// 撤单发出了但订单还开着（撤单没确认）：动作继续运行，不记完成、不唤醒。
 	result, err := service.FlattenLogicalAccount(context.Background(), command)
 	require.NoError(t, err)
-	require.Equal(t, "RUNNING", result.Action.Status)
+	require.Equal(t, string(operatordomain.StatusRunning), result.Action.Status)
 	require.False(t, result.Unblocked)
 	require.Zero(t, wakes)
 	require.Empty(t, fixture.orders.specs, "解除后不再下单")
@@ -385,7 +385,7 @@ func TestDelistFlattenUnblockWaitsForCancelConfirmation(t *testing.T) {
 	fixture.orders.leaveOpen = nil
 	result, err = service.FlattenLogicalAccount(context.Background(), command)
 	require.NoError(t, err)
-	require.Equal(t, "COMPLETED", result.Action.Status)
+	require.Equal(t, string(operatordomain.StatusCompleted), result.Action.Status)
 	require.True(t, result.Unblocked)
 	require.Equal(t, 1, wakes)
 }
@@ -395,8 +395,8 @@ func TestDelistFlattenWithAnotherActionIDOnTheSameInstrumentIsBusy(t *testing.T)
 	fixture := newMixedFlattenFixture(t)
 	fixture.block(t, "SWAP", "BTCUSDT")
 	_, _, err := fixture.store.CreateOperatorAction(context.Background(), store.OperatorActionRecord{
-		SpaceID: "space-1", ActionID: "drill", LogicalAccountID: "logical-1", ActionType: "DELIST_FLATTEN", Reason: "演练",
-		RequestJSON: `{"logical_account_id":"logical-1","instrument_id":"BTC-USDT-SWAP","exchange":"BINANCE"}`, Status: "RUNNING",
+		SpaceID: "space-1", ActionID: "drill", LogicalAccountID: "logical-1", ActionType: string(operatordomain.ActionDelistFlatten), Reason: "演练",
+		RequestJSON: `{"logical_account_id":"logical-1","instrument_id":"BTC-USDT-SWAP","exchange":"BINANCE"}`, Status: string(operatordomain.StatusRunning),
 	})
 	require.NoError(t, err)
 	command := delistCommand("real", "BTC-USDT-SWAP")
@@ -460,13 +460,13 @@ func TestDelistFlattenRetryDeadlineStartsAtTheRoundNotTheActionCreation(t *testi
 	service.Now = time.Now
 	first, err := service.FlattenLogicalAccount(context.Background(), command)
 	require.NoError(t, err)
-	require.Equal(t, "RUNNING", first.Action.Status)
+	require.Equal(t, string(operatordomain.StatusRunning), first.Action.Status)
 
 	// 动作是 40 分钟前创建的，且已经结束（FAILED）；同一个动作号重试。
 	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_operator_actions SET c_ctime = datetime('now', '-40 minutes'), c_status = 'FAILED' WHERE c_action_id = 'delist-old'`).Error)
 	result, err := service.FlattenLogicalAccount(context.Background(), command)
 	require.NoError(t, err)
-	require.Equal(t, "RUNNING", result.Action.Status, "期限从这一轮的起点算，不是动作创建时间")
+	require.Equal(t, string(operatordomain.StatusRunning), result.Action.Status, "期限从这一轮的起点算，不是动作创建时间")
 
 	// 这一轮自己超过 30 分钟才记 PARTIAL。
 	var persisted struct {
@@ -476,7 +476,7 @@ func TestDelistFlattenRetryDeadlineStartsAtTheRoundNotTheActionCreation(t *testi
 	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_operator_actions SET c_result_json = json_set(c_result_json, '$.attempt_started_at', ?)`, time.Now().Add(-40*time.Minute).UnixMilli()).Error)
 	result, err = service.FlattenLogicalAccount(context.Background(), command)
 	require.NoError(t, err)
-	require.Equal(t, "PARTIAL", result.Action.Status)
+	require.Equal(t, string(operatordomain.StatusPartial), result.Action.Status)
 }
 
 // 等间隔的睡眠期间解除禁止：睡醒后先查名单，不能再下一笔 IOC（多卖的一笔随后又会被执行器买回来）。
@@ -498,7 +498,7 @@ func TestDelistFlattenDoesNotPlaceAfterTheUnblockDuringTheIntervalSleep(t *testi
 
 	require.NoError(t, err)
 	require.Len(t, fixture.orders.specs, 1, "解除禁止之后不再下单")
-	require.Equal(t, "COMPLETED", result.Action.Status)
+	require.Equal(t, string(operatordomain.StatusCompleted), result.Action.Status)
 	require.True(t, result.Unblocked)
 }
 
@@ -520,6 +520,6 @@ func TestDelistFlattenEndsTheRoundWhenTheWakeUpLeavesNoRoomToPlace(t *testing.T)
 	require.NoError(t, err)
 	require.Less(t, time.Since(started), 700*time.Millisecond, "没有睡到间隔结束，也没有空转到期限")
 	require.Len(t, fixture.orders.specs, 1)
-	require.Equal(t, "RUNNING", result.Action.Status, "下一次调用接着来")
+	require.Equal(t, string(operatordomain.StatusRunning), result.Action.Status, "下一次调用接着来")
 	require.Empty(t, result.Action.LastError)
 }
