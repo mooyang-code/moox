@@ -103,7 +103,7 @@ func latestEquity(t *testing.T, tradeStore *store.Store) (string, string) {
 	points, err := tradeStore.ListAccountEquityPoints(context.Background(), "space-1", "account-1", 0, 0)
 	require.NoError(t, err)
 	require.NotEmpty(t, points)
-	logical, err := tradeStore.ListLogicalAccountEquityPoints(context.Background(), "space-1", "logical-1", 0, 0)
+	logical, err := allLogicalEquityPoints(tradeStore)
 	require.NoError(t, err)
 	require.NotEmpty(t, logical, "组合权益也要照常写入")
 	return points[len(points)-1].Equity, logical[len(logical)-1].Equity

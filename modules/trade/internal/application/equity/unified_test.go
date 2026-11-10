@@ -100,7 +100,7 @@ func TestUnifiedEquityFormulaOnStandardAccount(t *testing.T) {
 	require.Len(t, points, 1)
 	// USDT 500 + 1000 + 未实现盈亏 20 + 现货 BTC 0.01 × 50000；保证金币配置值在组合层加
 	require.Equal(t, "2020", points[0].Equity)
-	logicalPoints, err := tradeStore.ListLogicalAccountEquityPoints(context.Background(), "space-1", "logical-1", 0, 0)
+	logicalPoints, err := allLogicalEquityPoints(tradeStore)
 	require.NoError(t, err)
 	require.Len(t, logicalPoints, 1)
 	require.Equal(t, "2120", logicalPoints[0].Equity, "组合权益再加保证金币 ETH 的配置值 100，只加一次")
@@ -213,7 +213,7 @@ func sampleEquity(t *testing.T, tradeStore *store.Store, prices map[string]strin
 	points, err := tradeStore.ListAccountEquityPoints(context.Background(), "space-1", "account-1", 0, 0)
 	require.NoError(t, err)
 	require.Len(t, points, 1)
-	logicalPoints, err := tradeStore.ListLogicalAccountEquityPoints(context.Background(), "space-1", "logical-1", 0, 0)
+	logicalPoints, err := allLogicalEquityPoints(tradeStore)
 	require.NoError(t, err)
 	require.Len(t, logicalPoints, 1)
 	return points[0].Equity, logicalPoints[0].Equity
