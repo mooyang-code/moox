@@ -29,7 +29,7 @@ func TestWeightResolverFreezesTotalQuantityWithoutExecutionPin(t *testing.T) {
 		BarEndTime: timestamppb.New(time.UnixMilli(1000)), EffectiveAt: timestamppb.New(time.UnixMilli(1000)), ValidUntil: timestamppb.New(time.UnixMilli(3000)),
 		Targets: []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SWAP", MarketType: "SWAP", TargetWeight: "0.5"}},
 	}
-	conversion, err := resolver.Resolve(context.Background(), 0, request, "space-1")
+	conversion, err := resolver.Resolve(context.Background(), request, "space-1")
 	require.NoError(t, err)
 	require.Equal(t, "2000", conversion.Equity.String())
 	require.Equal(t, int64(1900), conversion.EquitySourceTime)
@@ -55,7 +55,7 @@ func TestWeightResolverPersistsRepeatingQuantityAtLogicalPrecision(t *testing.T)
 		BarEndTime: timestamppb.New(time.UnixMilli(1000)), EffectiveAt: timestamppb.New(time.UnixMilli(1000)), ValidUntil: timestamppb.New(time.UnixMilli(3000)),
 		Targets: []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", MarketType: "SPOT", TargetWeight: "0.1"}},
 	}
-	conversion, err := resolver.Resolve(context.Background(), 0, request, "space-1")
+	conversion, err := resolver.Resolve(context.Background(), request, "space-1")
 	require.NoError(t, err)
 	require.JSONEq(t, `[{"instrument_id":"BTC-USDT-SPOT","quantity":"66.666666666666666666"}]`, string(mustJSON(conversion.QuantityTargets)))
 }
@@ -90,7 +90,7 @@ func TestWeightResolverHoldTargetSkipsConversionAndChangesRequestHash(t *testing
 			Targets: []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SWAP", MarketType: "SWAP", TargetWeight: "0.3", Hold: hold}},
 		}
 	}
-	conversion, err := resolver.Resolve(context.Background(), 0, request(true), "space-1")
+	conversion, err := resolver.Resolve(context.Background(), request(true), "space-1")
 	require.NoError(t, err)
 	require.Equal(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Hold: true}}, conversion.QuantityTargets)
 	require.Empty(t, conversion.ReferencePrices)
@@ -118,13 +118,13 @@ func TestWeightResolverAllHoldTargetDoesNotNeedEquity(t *testing.T) {
 		BarEndTime: bar, EffectiveAt: bar, ValidUntil: timestamppb.New(time.UnixMilli(3000)),
 		Targets: []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SWAP", MarketType: "SWAP", TargetWeight: "0.3", Hold: true}},
 	}
-	conversion, err := resolver.Resolve(context.Background(), 0, request, "space-1")
+	conversion, err := resolver.Resolve(context.Background(), request, "space-1")
 	require.NoError(t, err)
 	require.Equal(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Hold: true}}, conversion.QuantityTargets)
 
 	// 混有需要换算的目标时仍然需要权益快照。
 	request.Targets = append(request.Targets, &tradeeventpb.InstrumentWeightTarget{InstrumentId: "ETH-USDT-SWAP", MarketType: "SWAP", TargetWeight: "0.2"})
-	_, err = resolver.Resolve(context.Background(), 0, request, "space-1")
+	_, err = resolver.Resolve(context.Background(), request, "space-1")
 	require.Error(t, err)
 }
 
@@ -139,7 +139,7 @@ func TestResolveCountsUnmanagedTargetAssetInEquity(t *testing.T) {
 		Targets: []*tradeeventpb.InstrumentWeightTarget{{InstrumentId: "BTC-USDT-SPOT", MarketType: "SPOT", TargetWeight: "0.5"}},
 	}
 
-	conversion, err := resolver.Resolve(context.Background(), 0, request, "space-1")
+	conversion, err := resolver.Resolve(context.Background(), request, "space-1")
 
 	require.NoError(t, err)
 	require.Equal(t, "3000", conversion.Equity.String(), "权益点 2000 加上 10 个币的市值 1000")

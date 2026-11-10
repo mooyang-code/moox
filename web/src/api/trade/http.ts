@@ -30,7 +30,6 @@ const tradeMessageTexts: readonly [prefix: string, text: string, detailOnly?: bo
   ["trade: invalid order specification", "订单参数不合法"],
   ["trade: invalid operator action", "操作参数不合法"],
   ["trade: invalid decimal", "数值格式不合法"],
-  ["trade order: Exchange account ownership mismatch", "执行账户不属于当前空间"],
   ["trade reservation: insufficient reducible quantity", "可减仓的数量不够"],
   ["trade target: invalid target", "交易目标不合法"],
   ["trade target: target validity window elapsed", "交易目标已过有效期"],

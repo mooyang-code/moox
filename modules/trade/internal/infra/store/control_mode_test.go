@@ -39,10 +39,6 @@ func TestManualControlModeRejectsStrategyMutations(t *testing.T) {
 			_, _, err := tx.ClaimLogicalAccountSession("space", "manual", "instance", "session", before.AuthFence)
 			return err
 		},
-		"rebind session": func(tx *Tx) error {
-			_, _, err := tx.RebindLogicalAccountSession("space", "manual", "old", "old", before.AuthFence, "instance", "session")
-			return err
-		},
 		"activate": func(tx *Tx) error { return tx.SetLogicalAccountAutomation("space", "manual", "ACTIVE", "") },
 	}
 	for name, operation := range cases {
@@ -101,10 +97,6 @@ func TestManualControlRejectsIdempotentStrategyFallbacks(t *testing.T) {
 	require.NoError(t, err)
 	require.Error(t, s.Transaction(ctx, func(tx *Tx) error {
 		_, _, err := tx.ClaimLogicalAccountSession("space-1", "logical-1", "instance", "session", before.AuthFence)
-		return err
-	}))
-	require.Error(t, s.Transaction(ctx, func(tx *Tx) error {
-		_, _, err := tx.RebindLogicalAccountSession("space-1", "logical-1", "old", "old", before.AuthFence, "instance", "session")
 		return err
 	}))
 	after, err := s.GetLogicalAccount(ctx, "space-1", "logical-1")

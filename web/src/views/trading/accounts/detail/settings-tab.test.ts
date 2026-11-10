@@ -169,18 +169,18 @@ describe("设置页保存资金设置", () => {
 });
 
 describe("设置页的 BNB 补买说明", () => {
-  const note = "普通账户只补现货钱包的 BNB（目标为保留金额的一半）；合约手续费用 BNB 抵扣需要在合约钱包里自行放入 BNB。";
-
-  it("普通账户组合在 BNB 保留金额旁显示补买范围", async () => {
+  it("普通账户组合按账户类型区分：统一账户减 10，普通账户只补现货钱包", async () => {
     mountTab("prod", {}, "BINANCE_STANDARD");
     await flushPromises();
-    expect(wrapper.text()).toContain(note);
+    expect(wrapper.text()).toContain("统一账户：BNB 市值低于这个金额减 10");
+    expect(wrapper.text()).toContain("普通账户：只补现货钱包，现货钱包 BNB 市值低于这个金额的一半减 5");
   });
 
-  it("统一账户组合不显示这句话", async () => {
+  it("统一账户组合只显示统一账户的规则", async () => {
     mountTab("prod", {}, "BINANCE_PORTFOLIO_MARGIN");
     await flushPromises();
     expect(wrapper.text()).toContain("BNB 保留金额");
-    expect(wrapper.text()).not.toContain("普通账户只补现货钱包");
+    expect(wrapper.text()).toContain("BNB 市值低于这个金额减 10");
+    expect(wrapper.text()).not.toContain("普通账户：只补现货钱包");
   });
 });

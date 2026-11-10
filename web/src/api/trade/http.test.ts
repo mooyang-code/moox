@@ -104,7 +104,6 @@ describe("Trade response errors", () => {
     expect(text("trade store: conflict")).toBe("数据已经被修改，刷新后再试");
     expect(text("trade: invalid order transition")).toBe("trade: invalid order transition");
     expect(text("trade: invalid order: quantity must be positive")).toBe("订单参数不合法（quantity must be positive）");
-    expect(text("trade order: Exchange account ownership mismatch")).toBe("执行账户不属于当前空间");
     expect(text("trade: invalid order specification")).toBe("订单参数不合法");
   });
 

@@ -91,7 +91,7 @@ func heldConversion(requestHash string, signalTime int64, weightsJSON string, or
 	return WeightConversion{RequestHash: requestHash, SignalTime: signalTime, Equity: shared.Zero(), WeightsJSON: weightsJSON, ReferencePrices: map[string]string{}, ReferencePriceEvidence: []ReferencePriceEvidence{}, QuantityTargets: held}
 }
 
-func (r *WeightResolver) Resolve(ctx context.Context, _ int64, request *tradeeventpb.LogicalAccountTargetWeightRequested, spaceID string) (WeightConversion, error) {
+func (r *WeightResolver) Resolve(ctx context.Context, request *tradeeventpb.LogicalAccountTargetWeightRequested, spaceID string) (WeightConversion, error) {
 	if r == nil || r.Store == nil || r.Prices == nil || r.Equity == nil {
 		return WeightConversion{}, fmt.Errorf("%w: target weight resolver is not configured", ErrPermanent)
 	}

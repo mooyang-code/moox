@@ -419,7 +419,14 @@ func TestModernReadinessRejectsDifferentSession(t *testing.T) {
 	acceptModernSessionTarget(t, tradeStore, "session-1")
 	// Store-only rebind deliberately leaves a stale target to exercise readiness.
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		_, changed, err := tx.RebindLogicalAccountSession("space-1", "logical-1", "instance-1", "session-1", fence, "instance-1", "session-2")
+		if err := tx.ReleaseLogicalAccountSession("space-1", "logical-1", "instance-1", "session-1", fence); err != nil {
+			return err
+		}
+		logical, err := tx.GetLogicalAccount("space-1", "logical-1")
+		if err != nil {
+			return err
+		}
+		_, changed, err := tx.ClaimLogicalAccountSession("space-1", "logical-1", "instance-1", "session-2", logical.AuthFence)
 		require.True(t, changed)
 		return err
 	}))
