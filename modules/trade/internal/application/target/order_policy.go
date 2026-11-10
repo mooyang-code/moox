@@ -249,15 +249,7 @@ func (env *laneEnv) tooSmallToPlace(candidate laneAction, quantity, price shared
 	if _, minimum, err := baseQuantityRules(candidate.instrument); err != nil || quantity.Cmp(minimum) < 0 {
 		return true
 	}
-	// 交易所最小名义金额：给了就用它，没给（OKX）用 minSz × 合约面值 × 价格折算。
-	minNotional, err := candidate.instrument.MinNotionalAt(price)
-	if err != nil {
-		return true
-	}
-	belowExchange, err := belowMinimumNotional(quantity, price, minNotional)
-	fullClose := candidate.reducing && exchange.RuleFor(candidate.instrument.MarketType).ReduceOnly &&
-		quantity.Cmp(candidate.member.positions[candidate.instrument.InstrumentID].Abs()) == 0
-	if err != nil || (belowExchange && !fullClose) {
+	if belowExchange, err := belowExchangeMinimum(candidate, quantity, price); err != nil || belowExchange {
 		return true
 	}
 	return env.belowConfiguredMinimum(candidate, quantity, price)
