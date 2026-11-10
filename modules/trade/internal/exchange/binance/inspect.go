@@ -100,7 +100,7 @@ func measureClockSkew(ctx context.Context, clients inspectClients) int64 {
 		path   string
 	}{{clients.spot, "/api/v3/time"}, {clients.swap, "/fapi/v1/time"}} {
 		sentAt := time.Now()
-		raw, err := probe.client.Do(ctx, &httpclient.Request{Method: http.MethodGet, Path: probe.path})
+		raw, err := probe.client.Do(ctx, &httpclient.Request{Method: http.MethodGet, Path: probe.path, Timeout: 2 * time.Second})
 		receivedAt := time.Now()
 		var payload struct {
 			ServerTime int64 `json:"serverTime"`

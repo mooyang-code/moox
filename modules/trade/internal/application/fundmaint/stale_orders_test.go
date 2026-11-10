@@ -29,11 +29,11 @@ func TestBNBTopUpDiscardsAStalePendingOrderAndPlacesANewOne(t *testing.T) {
 	seedSystemOrder(t, f, "stale-pending", ownerBNBReserve, "BNB-USDT-SPOT", "BNBUSDT", "PENDING", 0)
 	require.NoError(t, f.run())
 	require.Equal(t, []string{"stale-pending"}, f.orders.discarded)
-	require.Len(t, f.orders.specs, 1, "旧单丢弃后同一轮下新的补买单")
+	require.Len(t, f.orders.specs, 1, "待提交的旧单丢弃后，同一轮下新的补买单")
 	require.Equal(t, "BNB-USDT-SPOT", f.orders.specs[0].InstrumentID)
 }
 
-// 提交结果未知的补买单先解析：查到成挂单就继续等它，退回待提交的丢弃后重下。
+// 提交结果未知的补买单先解析：查到成挂单就继续等它，退回待提交的丢弃，本轮返回忙、下一轮再重下。
 func TestBNBTopUpResolvesAnUnknownOrderBeforeDeciding(t *testing.T) {
 	f := newFixture(t, `{"bnb_reserve_amount":"200"}`, []store.AssetBalance{balance("USDT", "1000")})
 	seedSystemOrder(t, f, "unknown-1", ownerBNBReserve, "BNB-USDT-SPOT", "BNBUSDT", "SUBMIT_UNKNOWN", 1_000)
