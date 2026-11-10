@@ -119,8 +119,9 @@ func (p *fundingProgress) fail(now time.Time, err error) error {
 }
 
 // settleFundingFrom 从 from 到 until 逐段查询、入账；每段入账后就把进度推到这一段之后。
-// 某一段里有记录缺标记价格、且结算时刻距 until 不超过 fundingMarkWait 时，这一段其余记录照常入账，
-// 进度停在缺价的那一期（waiting 为真），后面的段留到下一轮；缺价超过 fundingMarkWait 的用参考价结算。
+// 某一段里有记录缺标记价格、且结算时刻距 until 不超过 fundingMarkWait 时，这一段只入账不晚于缺价那一期的记录，
+// 进度停在缺价的那一期（waiting 为真），之后的记录和后面的段留到下一轮；缺价超过 fundingMarkWait 的用参考价结算，
+// 取不到参考价就跳过这一条（打 Warn），不让整轮失败。
 func (a *Adapter) settleFundingFrom(ctx context.Context, source execution.FundingRateSource, facts fundingStore, progress *fundingProgress, from, until time.Time) (int, bool, error) {
 	activity, err := facts.PaperSwapActivity(ctx, a.Account.SpaceID, a.Account.TradingAccountID, from.UnixMilli())
 	if err != nil {
@@ -138,22 +139,32 @@ func (a *Adapter) settleFundingFrom(ctx context.Context, source execution.Fundin
 		if err != nil {
 			return total, false, err
 		}
-		var rates []exchange.FundingRate
+		var candidates []exchange.FundingRate
 		var pending time.Time // 本段最早一条还在等标记价格的结算时刻
 		for _, rate := range fetched {
 			if _, found := held[rate.ExchangeSymbol]; !found || rate.FundingTime.After(until) {
 				continue
 			}
-			if rate.MarkPrice.IsZero() || rate.MarkPrice.IsNegative() {
+			candidates = append(candidates, rate)
+			if fundingMarkMissing(rate) && until.Sub(rate.FundingTime) <= fundingMarkWait && (pending.IsZero() || rate.FundingTime.Before(pending)) {
+				pending = rate.FundingTime
+			}
+		}
+		// 有一期在等标记价格时，只入账不晚于它的记录：表里最大的结算时刻不能越过它，重启后回看的起点才不会越过它。
+		var rates []exchange.FundingRate
+		for _, rate := range candidates {
+			if !pending.IsZero() && rate.FundingTime.After(pending) {
+				continue
+			}
+			if fundingMarkMissing(rate) {
 				if until.Sub(rate.FundingTime) <= fundingMarkWait {
-					if pending.IsZero() || rate.FundingTime.Before(pending) {
-						pending = rate.FundingTime
-					}
 					continue
 				}
 				price, err := a.fundingReferencePrice(ctx, fetched, rate)
 				if err != nil {
-					return total, false, err
+					log.WarnContextf(ctx, "模拟盘资金费：%s 在 %s 的结算记录没有标记价格、也取不到参考价，跳过这一条：account=%s，%v",
+						rate.ExchangeSymbol, rate.FundingTime.Format(time.RFC3339), a.Account.TradingAccountID, err)
+					continue
 				}
 				log.WarnContextf(ctx, "模拟盘资金费：%s 在 %s 的结算记录一直没有标记价格，改用参考价 %s 结算：account=%s",
 					rate.ExchangeSymbol, rate.FundingTime.Format(time.RFC3339), price.String(), a.Account.TradingAccountID)
@@ -175,6 +186,11 @@ func (a *Adapter) settleFundingFrom(ctx context.Context, source execution.Fundin
 	return total, false, nil
 }
 
+// fundingMarkMissing 判断记录没有可用的标记价格。
+func fundingMarkMissing(rate exchange.FundingRate) bool {
+	return rate.MarkPrice.IsZero() || rate.MarkPrice.IsNegative()
+}
+
 // fundingReferencePrice 是缺标记价格的记录超过 fundingMarkWait 仍补不上时用的参考价：
 // 优先取同一合约在本段里时间最近的、有标记价格的记录（前后都算，一样近取较早的），没有就取交易所现在的参考价。
 func (a *Adapter) fundingReferencePrice(ctx context.Context, fetched []exchange.FundingRate, missing exchange.FundingRate) (shared.Decimal, error) {
@@ -182,7 +198,7 @@ func (a *Adapter) fundingReferencePrice(ctx context.Context, fetched []exchange.
 	var gap time.Duration
 	for i := range fetched {
 		candidate := &fetched[i]
-		if candidate.ExchangeSymbol != missing.ExchangeSymbol || candidate.MarkPrice.IsZero() || candidate.MarkPrice.IsNegative() {
+		if candidate.ExchangeSymbol != missing.ExchangeSymbol || fundingMarkMissing(*candidate) {
 			continue
 		}
 		distance := candidate.FundingTime.Sub(missing.FundingTime).Abs()

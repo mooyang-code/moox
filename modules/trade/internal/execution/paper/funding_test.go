@@ -334,13 +334,59 @@ func TestSettleFundingUsesReferencePriceAfterSixHours(t *testing.T) {
 		t.Fatalf("本段没有有价记录应取现在的参考价：%+v", got)
 	}
 
-	// 参考价也取不到：报错重试，不跳过。
+	// 参考价也取不到：跳过这一条（打 Warn），不让整轮失败，别的记录照常入账。
 	failing := &fundingFacts{activity: store.PaperSwapActivity{Positions: positions}}
-	market = &fundingMarket{rates: []exchange.FundingRate{fundingRate("BTCUSDT", missing, "0")}}
-	if _, err := swapPaperAdapter(failing, market, &now).SettleFunding(context.Background()); err == nil {
-		t.Fatal("取不到参考价要报错")
+	later := time.Date(2026, 11, 7, 7, 0, 0, 0, time.UTC)
+	market = &fundingMarket{rates: []exchange.FundingRate{fundingRate("BTCUSDT", missing, "0"), fundingRate("BTCUSDT", later, "5")}}
+	adapter := swapPaperAdapter(failing, market, &now)
+	if _, err := adapter.SettleFunding(context.Background()); err != nil {
+		t.Fatalf("取不到参考价不能让整轮失败：%v", err)
 	}
-	if got := settledFundingRates(failing); len(got) != 0 {
-		t.Fatalf("取不到参考价不能结算：%+v", got)
+	got = settledFundingRates(failing)
+	if len(got) != 1 || !got[0].FundingTime.Equal(later) {
+		t.Fatalf("只结算有价的记录：%+v", got)
+	}
+	if adapter.funding.failures != 0 || !adapter.funding.retryAt.IsZero() {
+		t.Fatalf("不应进入退避：failures=%d retryAt=%v", adapter.funding.failures, adapter.funding.retryAt)
+	}
+}
+
+// 等待标记价格期间，同段里缺价那一期之后的记录不入账：表里最大结算时刻不能越过缺价那一期。
+func TestSettleFundingWaitingSegmentOnlySettlesUpToMissingPeriod(t *testing.T) {
+	now := time.Date(2026, 11, 7, 10, 5, 0, 0, time.UTC)
+	missing := time.Date(2026, 11, 7, 8, 0, 0, 0, time.UTC)
+	after := missing.Add(30 * time.Minute)
+	before := missing.Add(-time.Hour)
+	facts := &fundingFacts{activity: store.PaperSwapActivity{Positions: map[string]shared.Decimal{"BTCUSDT": shared.MustDecimal("1")}}}
+	market := &fundingMarket{rates: []exchange.FundingRate{
+		fundingRate("BTCUSDT", before, "90"),
+		fundingRate("BTCUSDT", missing, "0"),
+		fundingRate("BTCUSDT", after, "100"),
+	}}
+	adapter := swapPaperAdapter(facts, market, &now)
+	if _, err := adapter.SettleFunding(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got := settledFundingRates(facts)
+	if len(got) != 1 || !got[0].FundingTime.Equal(before) {
+		t.Fatalf("等待期间只结算缺价那一期之前的记录：%+v", got)
+	}
+
+	// 补上价格后，缺价那一期和之后的记录都结算（前面已结算的靠唯一键去重，替身存储不去重，所以只数新增的）。
+	market.rates = []exchange.FundingRate{
+		fundingRate("BTCUSDT", before, "90"),
+		fundingRate("BTCUSDT", missing, "80"),
+		fundingRate("BTCUSDT", after, "100"),
+	}
+	now = now.Add(time.Minute)
+	if _, err := adapter.SettleFunding(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var times []time.Time
+	for _, rate := range settledFundingRates(facts)[1:] {
+		times = append(times, rate.FundingTime)
+	}
+	if len(times) != 2 || !times[0].Equal(missing) || !times[1].Equal(after) {
+		t.Fatalf("补上价格后的结算：%v", times)
 	}
 }
