@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Holding, Position } from "@/api/trade/types";
+import { decimalAdd, decimalSub } from "../shared/order-rules";
 import { buildCoinRows, filterCoinRows, rowOrderHints, targetCoinCount } from "./positions-model";
 
 const swap = (instrument_id: string, signed_quantity: string) => ({ instrument_id, signed_quantity, market_type: 2 }) as Position;
@@ -131,6 +132,32 @@ describe("持仓与目标按币合并", () => {
       // 永续目标 -1 实际 -0.4：还差 -0.6，卖出 0.6
       { market: 2, instrumentId: "BTC-USDT-SWAP", side: 2, quantity: "0.6" }
     ]);
+  });
+
+  it("预填数量用小数精确相减，不经过浮点和有效位数截断", () => {
+    const [row] = buildCoinRows({
+      targets: [
+        { instrument_id: "BTC-USDT-SPOT", quantity: "100000.1" },
+        { instrument_id: "BTC-USDT-SWAP", quantity: "-0.00000001" }
+      ],
+      blocked: [],
+      swapPositions: [swap("BTC-USDT-SWAP", "123456.78912345"), swap("BTC-USDT-SWAP", "-0.1")],
+      spotHoldings: [spot("BTC", "123456.78912345")],
+      converged: false,
+      hasTarget: true
+    });
+    expect(rowOrderHints(row, "USDT")).toEqual([
+      { market: 1, instrumentId: "BTC-USDT-SPOT", side: 2, quantity: "23456.68912345" },
+      { market: 2, instrumentId: "BTC-USDT-SWAP", side: 2, quantity: "123456.68912346" }
+    ]);
+  });
+
+  it("小数相加减：带符号、结果为负或为零", () => {
+    expect(decimalSub("0.3", "0.1")).toBe("0.2");
+    expect(decimalSub("1", "1.5")).toBe("-0.5");
+    expect(decimalSub("-1.25", "-1.25")).toBe("0");
+    expect(decimalAdd("-0.4", "0.1")).toBe("-0.3");
+    expect(decimalAdd("123456.78912345", "0.00000001")).toBe("123456.78912346");
   });
 
   it("没有目标或保持当前持仓时只给市场，不预填方向和数量；没有目标也没有持仓的市场不给入口", () => {

@@ -13,6 +13,26 @@ function fractionDigits(...values: string[]) {
   return Math.max(...values.map(value => (value.split(".")[1] || "").length));
 }
 
+// 带符号小数字符串相加减，按位数定标成 BigInt 计算，结果是精确的小数字符串；不是规整小数时退回浮点。
+function combine(left: string, right: string, sign: 1n | -1n): string {
+  const digits = fractionDigits(left, right);
+  const unsigned = (value: string) => value.trim().replace(/^[+-]/, "");
+  const parse = (value: string) => {
+    const units = scaled(unsigned(value), digits);
+    return units !== null && value.trim().startsWith("-") ? -units : units;
+  };
+  const a = parse(left);
+  const b = parse(right);
+  if (a === null || b === null) return String(Number(left) + Number(sign) * Number(right));
+  const total = a + sign * b;
+  const text = (total < 0n ? -total : total).toString().padStart(digits + 1, "0");
+  const fraction = text.slice(text.length - digits).replace(/0+$/, "");
+  return `${total < 0n ? "-" : ""}${text.slice(0, text.length - digits)}${fraction ? `.${fraction}` : ""}`;
+}
+
+export const decimalAdd = (left: string, right: string) => combine(left, right, 1n);
+export const decimalSub = (left: string, right: string) => combine(left, right, -1n);
+
 function multipleOf(value: string, step: string) {
   const digits = fractionDigits(value, step);
   const left = scaled(value, digits);

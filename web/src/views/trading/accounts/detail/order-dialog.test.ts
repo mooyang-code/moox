@@ -184,7 +184,7 @@ describe("下单对话框", () => {
     expect(mocks.submitOrder.mock.calls[1][0]).toEqual(first);
   });
 
-  it("动作提交阶段完成后继续查订单直到结束", async () => {
+  it("动作处理完成后继续查订单直到结束", async () => {
     const vm = await openEntry();
     const completed = { ...accepted().action, status: "COMPLETED" };
     mocks.submitOrder.mockResolvedValueOnce({ ...accepted(), action: completed, order: { order_id: "order", state: "OPEN" } });
@@ -263,6 +263,17 @@ describe("下单对话框", () => {
     await openEntry("prod");
     expect(document.body.textContent).toContain("输入组合名称「Paper」确认");
     expect(document.body.textContent).toContain("真实资金");
+  });
+
+  it("生产环境在输入组合名称上方显示订单摘要，模拟盘不显示", async () => {
+    await openEntry("prod", "BTC-USDT-SWAP");
+    Object.assign(dialog.manualForm, { side: 2, order_type: 2, limit_price: "60000" });
+    await flushPromises();
+    expect(document.body.textContent).toContain("本次订单：卖出 BTC-USDT · 永续 0.01，限价 60000");
+    wrapper.unmount();
+    document.body.innerHTML = "";
+    await openEntry("paper");
+    expect(document.body.textContent).not.toContain("本次订单");
   });
 
   it("行内下单预填方向和数量", async () => {

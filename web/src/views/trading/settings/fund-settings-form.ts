@@ -87,6 +87,11 @@ export function withStoredMarginMonitor(
   };
 }
 
+/** 这次保存会把保证金率监控从开着改成关闭：生产、测试网组合要先确认；模拟盘不监控，不用确认。 */
+export function turnsOffMarginMonitor(stored: FundSettings | undefined, next: FundSettings, paper: boolean): boolean {
+  return !paper && Boolean(next.margin_monitor_disabled) && !stored?.margin_monitor_disabled;
+}
+
 export function defaultFundSettings(): FundSettings {
   return {
     reserve_ratio: "0",
