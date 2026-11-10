@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -1479,16 +1478,6 @@ func (e *Executor) placeActionMode(
 	configuredSmall := 0
 	// unfilled 表示有成员的伪市价单用满了尝试次数。
 	unfilled := false
-	// explained 统计原因已经说清楚的成员（资金不足、单笔上限低于最小下单额）：全部成员都是这类原因时，
-	// 阻塞原因直接写它们，不再笼统地写“成员容量不足”。
-	explained := 0
-	explain := func(reason string) {
-		// 每个成员的说明一样，只写一次。
-		if !slices.Contains(capacityErrors, reason) {
-			capacityErrors = append(capacityErrors, reason)
-			explained++
-		}
-	}
 	// t1Deferred 表示有成员只因为 T+1 卖不出。
 	t1Deferred := false
 	candidates := placementCandidates(action, members)
@@ -1507,8 +1496,6 @@ func (e *Executor) placeActionMode(
 			tooSmall++
 			continue
 		}
-		// intended 是按差额算出的数量，还没被每小时上限、单笔上限截过：差额本来够不够下单，以它为准。
-		intended := quantity
 		quote, err := e.Prices.LatestPrice(
 			ctx,
 			candidate.member.account.TradingAccountID,
@@ -1535,11 +1522,11 @@ func (e *Executor) placeActionMode(
 			return placement{}, fmt.Errorf("%w: minimum notional", ErrInvalidTarget)
 		}
 		// 单币每小时上限：额度不够整笔时只下剩下的；剩下的不够下一单就顺延到下一个整点，不算下不了单。
-		quantity, hourlyClipped, capErr := env.applyHourlyCap(ctx, candidate, quantity, quote.Price)
+		quantity, clipped, capErr := env.applyHourlyCap(ctx, candidate, quantity, quote.Price)
 		if capErr != nil {
 			return placement{}, capErr
 		}
-		if hourlyClipped && env.tooSmallToPlace(candidate, quantity, quote.Price) {
+		if clipped && env.tooSmallToPlace(candidate, quantity, quote.Price) {
 			return placement{capDeferred: true}, nil
 		}
 		belowMinimum, err := belowMinimumNotional(quantity, quote.Price, minNotional)
@@ -1631,10 +1618,7 @@ func (e *Executor) placeActionMode(
 		if exchange.RuleFor(candidate.instrument.MarketType).BoardLot && maxQuantity.Cmp(minimum) < 0 {
 			maxQuantity = minimum
 		}
-		// sliceClipped 表示数量被单笔上限截小过；beforeSlice 是截之前的数量。
-		beforeSlice := quantity
-		sliceClipped := quantity.Cmp(maxQuantity) > 0
-		if sliceClipped {
+		if quantity.Cmp(maxQuantity) > 0 {
 			quantity, oddFull = maxQuantity, false
 		}
 		if quantity.Cmp(shared.Zero()) <= 0 || (quantity.Cmp(minimum) < 0 && !oddFull) {
@@ -1648,6 +1632,9 @@ func (e *Executor) placeActionMode(
 				e.Observe.Blocked(candidate.member.account.TradingAccountID, "reversal_blocked")
 			}
 			return placement{reason: reasonTargetReversal}, nil
+		}
+		if dryRun {
+			return placement{viable: true}, nil
 		}
 		runnerID := target.RunnerID
 		spec := orderdomain.OrderSpec{
@@ -1686,57 +1673,6 @@ func (e *Executor) placeActionMode(
 			restingLimit := ClampToPriceLimits(*spec.LimitPrice, quote)
 			spec.LimitPrice = &restingLimit
 		}
-		// 最小金额统一在这里按下单价（限价单是限价）判断，只有三条规则：
-		//   1. 截量前的数量按下单价就不够：差额本来就太小，视为已满足，和单笔上限、每小时上限无关；
-		//   2. 差额够、只是被每小时上限截小：顺延到额度恢复；
-		//   3. 差额够、只是被单笔上限截小：先把拆单随机化抽得偏低的一笔抬到够最小额（配置的单笔上限本身够的话），
-		//      还不够就阻塞，原因写清是单笔上限设得太低。
-		// 合约只减仓单被截小后不查交易所最小名义金额（校验器和交易所都豁免）。
-		orderPrice := quote.Price
-		if spec.LimitPrice != nil {
-			orderPrice = *spec.LimitPrice
-		}
-		skipExchange := sliceClipped && candidate.reducing && exchange.RuleFor(candidate.instrument.MarketType).ReduceOnly
-		shortfall, err := env.minimumShortfall(candidate, intended, orderPrice, false)
-		if err != nil {
-			return placement{}, err
-		}
-		switch {
-		case shortfall != "":
-		case hourlyClipped || sliceClipped:
-			if sliceClipped {
-				spec.Quantity = env.liftToMinimum(candidate, spec.Quantity, beforeSlice, orderPrice, quote.Price, skipExchange)
-			}
-			if shortfall, err = env.minimumShortfall(candidate, spec.Quantity, orderPrice, skipExchange); err != nil {
-				return placement{}, err
-			}
-			if shortfall != "" {
-				if hourlyClipped {
-					return placement{capDeferred: true}, nil
-				}
-				explain(env.sliceLimitReason(candidate, shortfall, minNotional))
-				continue
-			}
-		default:
-			// 数量被可卖量等收小过：按下单价再看一次。
-			if shortfall, err = env.minimumShortfall(candidate, spec.Quantity, orderPrice, false); err != nil {
-				return placement{}, err
-			}
-		}
-		if shortfall == shortfallExchange {
-			capacityErrors = append(capacityErrors, accountID+": 金额低于交易所最小名义金额")
-			tooSmall++
-			continue
-		}
-		if shortfall == shortfallConfigured {
-			capacityErrors = append(capacityErrors, accountID+": 金额低于配置的最小下单额")
-			tooSmall++
-			configuredSmall++
-			continue
-		}
-		if dryRun {
-			return placement{viable: true}, nil
-		}
 		if !candidate.reducing {
 			capacity, err := e.Orders.Capacity(ctx, spaceID, spec)
 			if err != nil {
@@ -1747,18 +1683,11 @@ func (e *Executor) placeActionMode(
 				return placement{}, err
 			}
 			if capacity.Cmp(shared.Zero()) <= 0 {
-				capacityErrors = append(capacityErrors, accountID+": 没有可用资金")
-				explained++
+				capacityErrors = append(capacityErrors, candidate.member.account.TradingAccountID+": 没有可用资金")
 				continue
 			}
 			if capacity.Cmp(spec.Quantity) < 0 {
 				spec.Quantity = capacity
-				// 按可用资金截量后可能已经下不了单（低于最小数量、最小名义金额或设置的最小下单额）：按资金不足处理。
-				if env.tooSmallToPlace(candidate, spec.Quantity, orderPrice) {
-					capacityErrors = append(capacityErrors, accountID+": 资金不足，可用资金只够下低于最小下单额的单")
-					explained++
-					continue
-				}
 			}
 		}
 		placed, err := e.Orders.Place(ctx, spaceID, spec)
@@ -1802,12 +1731,9 @@ func (e *Executor) placeActionMode(
 		result.reason = "数量低于交易所最小值"
 		return result, nil
 	}
-	result.reason = strings.Join(capacityErrors, "; ")
-	switch {
-	case unfilled:
-		result.reason = "未到位：" + result.reason
-	case explained < len(capacityErrors):
-		result.reason = "成员容量不足：" + result.reason
+	result.reason = "成员容量不足：" + strings.Join(capacityErrors, "; ")
+	if unfilled {
+		result.reason = "未到位：" + strings.Join(capacityErrors, "; ")
 	}
 	return result, nil
 }
@@ -1892,22 +1818,6 @@ func belowMinimumNotional(
 	}
 	return minimum.Cmp(shared.Zero()) > 0 &&
 		quantity.Mul(price).Cmp(minimum) < 0, nil
-}
-
-// belowExchangeMinimum 判断数量按给定价格算是否低于交易所最小名义金额（合约全平例外，否则剩余仓位永远平不掉）。
-// 最小名义金额：交易所给了就用它，没给（OKX）用 minSz × 合约面值 × 价格折算。
-func belowExchangeMinimum(candidate laneAction, quantity, price shared.Decimal) (bool, error) {
-	minNotional, err := candidate.instrument.MinNotionalAt(price)
-	if err != nil {
-		return false, fmt.Errorf("%w: minimum notional", ErrInvalidTarget)
-	}
-	below, err := belowMinimumNotional(quantity, price, minNotional)
-	if err != nil || !below {
-		return false, err
-	}
-	fullClose := candidate.reducing && exchange.RuleFor(candidate.instrument.MarketType).ReduceOnly &&
-		quantity.Cmp(candidate.member.positions[candidate.instrument.InstrumentID].Abs()) == 0
-	return !fullClose, nil
 }
 
 func (e *Executor) childQuantity(
@@ -2091,7 +2001,7 @@ func (e *Executor) releaseTargetOrders(ctx context.Context, spaceID, logicalAcco
 	canceled := make(map[string]struct{})
 	for _, current := range open {
 		if err := e.releaseTargetOrder(ctx, current, canceled); err != nil {
-			releaseErrs = append(releaseErrs, fmt.Errorf("目标单 %s（执行账户 %s）：%w", current.OrderID, current.TradingAccountID, err))
+			releaseErrs = append(releaseErrs, fmt.Errorf("目标单 %s：%w", current.OrderID, err))
 		}
 	}
 	if syncer, ok := e.Orders.(deferredCanceler); ok {
@@ -2102,7 +2012,7 @@ func (e *Executor) releaseTargetOrders(ctx context.Context, spaceID, logicalAcco
 		sort.Strings(accounts)
 		for _, accountID := range accounts {
 			if err := syncer.SyncAfterCancel(ctx, accountID); err != nil {
-				releaseErrs = append(releaseErrs, fmt.Errorf("撤单后同步执行账户 %s：%w", accountID, err))
+				releaseErrs = append(releaseErrs, fmt.Errorf("撤单后同步：%w", err))
 			}
 		}
 	}
