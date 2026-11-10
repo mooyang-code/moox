@@ -15,8 +15,7 @@
       <a-form-item label="BNB 保留金额">
         <a-input v-model="model.bnb_reserve_amount" :suffix="unit" />
         <template #extra>
-          <div>BNB 市值低于这个金额减 10 时市价补买到这个金额；0 表示不保留。保留期间 BNB 不参与策略持仓</div>
-          <div v-if="bnbStandardNote" class="bnb-standard-note">{{ BNB_STANDARD_ACCOUNT_NOTE }}</div>
+          <div v-for="hint in bnbHints" :key="hint">{{ hint }}</div>
         </template>
       </a-form-item>
       <a-form-item
@@ -118,13 +117,12 @@
 import { computed, reactive, ref, watch } from "vue";
 import type { FundSettings } from "@/api/trade/settings";
 import {
-  BNB_STANDARD_ACCOUNT_NOTE,
+  bnbReserveHints,
   buildFundSettingsRequest,
   defaultFundSettings,
   fundSettingsToModel,
   marginMonitorHiddenNote,
   marginMonitorMixedNote,
-  showsBnbStandardNote,
   showsLiveOnlyFields,
   showsMarginMonitor,
   validateFundSettingsModel,
@@ -166,7 +164,7 @@ const scope = computed(() => ({
   standardAccount: props.standardAccount
 }));
 const liveOnly = computed(() => showsLiveOnlyFields(scope.value));
-const bnbStandardNote = computed(() => showsBnbStandardNote(scope.value));
+const bnbHints = computed(() => bnbReserveHints(scope.value));
 const marginMonitor = computed(() => showsMarginMonitor(scope.value));
 const marginNote = computed(() => marginMonitorHiddenNote(scope.value));
 const mixedNote = computed(() => marginMonitorMixedNote(scope.value));
@@ -209,10 +207,6 @@ function submit() {
     margin: 0 0 12px;
     font-weight: 600;
   }
-}
-
-.bnb-standard-note {
-  margin-top: 2px;
 }
 
 .settings-hint {

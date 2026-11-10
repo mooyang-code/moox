@@ -47,16 +47,20 @@ export interface FundFormScope {
   standardAccount?: boolean;
 }
 
-/** 普通账户的 BNB 补买范围：统一账户只有一个钱包，不显示这句话。 */
-export const BNB_STANDARD_ACCOUNT_NOTE =
-  "普通账户只补现货钱包的 BNB（目标为保留金额的一半）；合约手续费用 BNB 抵扣需要在合约钱包里自行放入 BNB。";
-
-/** 是否显示普通账户的 BNB 补买说明：BNB 项显示，并且组合里有币安普通账户。 */
-export function showsBnbStandardNote(scope: FundFormScope = {}): boolean {
-  return showsLiveOnlyFields(scope) && scope.standardAccount === true;
+/**
+ * BNB 保留金额旁的说明，和后端 fundmaint.BNBBounds 一致：统一账户一个钱包，市值低于“保留金额减 10”才补买到保留金额；
+ * 普通账户只补现货钱包，目标和容差都减半（保留金额的一半、5）。组合里没有普通账户时只说统一账户的规则。
+ */
+export function bnbReserveHints(scope: FundFormScope = {}): string[] {
+  const rule = "BNB 市值低于这个金额减 10 时市价补买到这个金额；0 表示不保留。保留期间 BNB 不参与策略持仓";
+  if (!showsLiveOnlyFields(scope) || scope.standardAccount !== true) return [rule];
+  return [
+    `统一账户：${rule}`,
+    "普通账户：只补现货钱包，现货钱包 BNB 市值低于这个金额的一半减 5 时补买到这个金额的一半；合约手续费用 BNB 抵扣需要在合约钱包里自行放入 BNB"
+  ];
 }
 
-/** BNB 补买的容差：市值低于“保留金额 − 10”才补买，所以保留金额要大于 10。 */
+/** BNB 补买的容差（统一账户；普通账户减半）：市值低于“保留金额 − 10”才补买，所以保留金额要大于 10。 */
 const BNB_RESERVE_SLACK = 10;
 
 export function showsLiveOnlyFields(scope: FundFormScope = {}): boolean {
@@ -208,7 +212,7 @@ export function validateFundSettingsModel(model: FundSettingsModel, scope: FundF
     if (!isDecimal(model.bnb_reserve_amount)) return "BNB 保留金额必须是不小于 0 的数字";
     const reserve = Number(model.bnb_reserve_amount);
     if (reserve > 0 && reserve <= BNB_RESERVE_SLACK) {
-      return `BNB 保留金额要大于 ${BNB_RESERVE_SLACK}：市值低于保留金额减 ${BNB_RESERVE_SLACK} 才会补买，不大于 ${BNB_RESERVE_SLACK} 的设置永远不会补买`;
+      return `BNB 保留金额要大于 ${BNB_RESERVE_SLACK}：统一账户 BNB 市值低于保留金额减 ${BNB_RESERVE_SLACK}、普通账户现货钱包 BNB 市值低于保留金额的一半减 5 才会补买，不大于 ${BNB_RESERVE_SLACK} 的设置永远不会补买`;
     }
     if (
       !Number.isInteger(model.dust_convert_interval_days) ||
