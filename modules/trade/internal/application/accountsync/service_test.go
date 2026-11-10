@@ -16,6 +16,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store/storetest"
 	"github.com/stretchr/testify/require"
 )
 
@@ -691,10 +692,10 @@ func TestApplyUnknownPartialPositionDefersToFullSync(t *testing.T) {
 	tradeStore := openSyncStore(t)
 	seedSyncAccount(t, tradeStore)
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.UpdateTradingAccountSync(
+		return storetest.SeedAccount(tx,
 			"space-1",
 			"account-1",
-			store.TradingAccountSyncState{LastSyncAt: 1},
+			storetest.AccountState{LastSyncAt: 1},
 		)
 	}))
 	service := Service{
@@ -718,10 +719,10 @@ func TestApplyFillImportsEmptyClientIDPerSymbol(t *testing.T) {
 	tradeStore := openSyncStore(t)
 	seedSyncAccount(t, tradeStore)
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		if err := tx.UpdateTradingAccountSync(
+		if err := storetest.SeedAccount(tx,
 			"space-1",
 			"account-1",
-			store.TradingAccountSyncState{
+			storetest.AccountState{
 				LeverageSettings: store.LeverageSettings{
 					store.DefaultLeverageKey: "5",
 				},

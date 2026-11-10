@@ -8,6 +8,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/application/wallet"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store/storetest"
 	"github.com/stretchr/testify/require"
 )
 
@@ -210,7 +211,7 @@ func (f *targetFixture) setSpotBalanceOf(t *testing.T, accountID, asset, total s
 	balances = append(balances, store.AssetBalance{Wallet: string(account.WalletFor("SPOT")), Asset: asset, Available: total, Total: total})
 	account.Snapshot.Balances = balances
 	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.UpdateTradingAccountSync("space-1", accountID, store.TradingAccountSyncState{
+		return storetest.SeedAccount(tx, "space-1", accountID, storetest.AccountState{
 			Ready: true, Snapshot: account.Snapshot, SnapshotSourceTime: 1_900, LastSyncAt: 1_900,
 		})
 	}))

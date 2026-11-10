@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store/storetest"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1034,9 +1035,9 @@ func (f *targetFixture) setReady(t *testing.T, accountID string, ready bool) {
 	account, err := f.store.GetTradingAccountByID(context.Background(), accountID)
 	require.NoError(t, err)
 	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.UpdateTradingAccountSync(
+		return storetest.SeedAccount(tx,
 			account.SpaceID, account.TradingAccountID,
-			store.TradingAccountSyncState{
+			storetest.AccountState{
 				Ready: ready, Snapshot: account.Snapshot,
 				SnapshotSourceTime: account.SnapshotSourceTime,
 				LastSyncAt:         f.now.UnixMilli(),
@@ -1058,10 +1059,10 @@ func (f *targetFixture) setBalance(
 		Asset: asset, Available: total, Total: total,
 	})
 	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.UpdateTradingAccountSync(
+		return storetest.SeedAccount(tx,
 			account.SpaceID,
 			account.TradingAccountID,
-			store.TradingAccountSyncState{
+			storetest.AccountState{
 				Ready: account.Ready, Snapshot: account.Snapshot,
 				SnapshotSourceTime: account.SnapshotSourceTime,
 				LastSyncAt:         account.LastSyncAt,

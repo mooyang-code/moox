@@ -12,6 +12,7 @@ import (
 	logicaldomain "github.com/mooyang-code/moox/modules/trade/internal/domain/logicalaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store/storetest"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
@@ -444,9 +445,9 @@ func modernSessionFixture(t *testing.T) (*Service, *store.Store, string) {
 	physical, err := tradeStore.GetTradingAccountByID(context.Background(), "account-a")
 	require.NoError(t, err)
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.UpdateTradingAccountSync("space-1", "account-a", store.TradingAccountSyncState{
+		return storetest.SeedAccount(tx, "space-1", "account-a", storetest.AccountState{
 			Ready: true, LeverageSettings: physical.LeverageSettings, Snapshot: physical.Snapshot,
-			SnapshotSourceTime: now.UnixMilli(), LastSyncAt: now.UnixMilli(), LastReadyAt: now.UnixMilli(),
+			SnapshotSourceTime: now.UnixMilli(), LastSyncAt: now.UnixMilli(),
 		})
 	}))
 	account, err := tradeStore.GetLogicalAccount(context.Background(), "space-1", "logical-1")
@@ -547,13 +548,13 @@ func setLogicalFixtureReady(
 	account, err := tradeStore.GetTradingAccountByID(context.Background(), accountID)
 	require.NoError(t, err)
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.UpdateTradingAccountSync(
+		return storetest.SeedAccount(tx,
 			account.SpaceID, account.TradingAccountID,
-			store.TradingAccountSyncState{
+			storetest.AccountState{
 				Ready: ready, LeverageSettings: account.LeverageSettings,
 				Snapshot:           account.Snapshot,
 				SnapshotSourceTime: account.SnapshotSourceTime,
-				LastSyncAt:         1_900, LastReadyAt: 1_900,
+				LastSyncAt:         1_900,
 			},
 		)
 	}))
