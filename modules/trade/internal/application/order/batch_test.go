@@ -113,14 +113,14 @@ func TestSubmitBatchIsolatesPerOrderOutcomes(t *testing.T) {
 	require.Zero(t, record.SubmittedAt)
 }
 
-// 未知结果批量解析：同一订单在窗口内只查两次（第一次机会和窗口到期时）。
+// 未知结果批量解析：同一订单在窗口（默认 2 分钟）内只查两次（第一次机会和窗口到期时）。
 func TestResolveUnknownBatchLimitsLookups(t *testing.T) {
 	service, adapter, ids := batchService(t, 1)
 	adapter.errs["client-0"] = &exchange.Error{Kind: exchange.ErrorTransportUnknown}
 	_, err := service.SubmitBatch(context.Background(), "space-1", ids)
 	require.NoError(t, err)
 	stub := adapter.adapterStub
-	stub.getErr = &exchange.Error{Kind: exchange.ErrorOrderNotFound}
+	stub.getErr = &exchange.Error{Kind: exchange.ErrorOrderNotFound, Code: "-2013"}
 	base := time.Unix(1_700_000_000, 0)
 	now := base
 	service.Now = func() time.Time { return now }
@@ -130,7 +130,7 @@ func TestResolveUnknownBatchLimitsLookups(t *testing.T) {
 		now = now.Add(time.Second)
 	}
 	require.Equal(t, 1, stub.getCalls)
-	now = base.Add(31 * time.Second)
+	now = base.Add(121 * time.Second)
 	_, err = service.ResolveUnknownBatch(context.Background(), "space-1", ids)
 	require.NoError(t, err)
 	require.Equal(t, 2, stub.getCalls)

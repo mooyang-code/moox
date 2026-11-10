@@ -294,7 +294,7 @@ func TestResolveUnknownAccountDependencyErrors(t *testing.T) {
 		cause := errors.New("exchange lookup unavailable")
 		adapter.getErr = cause
 		if fillsFailure {
-			adapter.getErr = &exchange.Error{Kind: exchange.ErrorOrderNotFound}
+			adapter.getErr = &exchange.Error{Kind: exchange.ErrorOrderNotFound, Code: "-2013"}
 			adapter.fillsErr = cause
 		}
 		_, err = s.ResolveUnknown(ctx, "space-1", string(pending.ID))

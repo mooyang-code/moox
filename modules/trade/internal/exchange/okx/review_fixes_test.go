@@ -165,6 +165,7 @@ func TestOKXErrorCodeClassification(t *testing.T) {
 		"51149": exchange.ErrorTransportUnknown,
 		"50011": exchange.ErrorOrderRateLimited,
 		"51603": exchange.ErrorOrderNotFound,
+		"51016": exchange.ErrorTransportUnknown, // 客户端订单号重复：原单可能已受理
 	} {
 		if err := classifyOKXCode(code, "x"); !exchange.IsKind(err, want) {
 			t.Fatalf("%s: err = %v, want %s", code, err, want)

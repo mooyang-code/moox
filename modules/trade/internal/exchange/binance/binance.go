@@ -1344,8 +1344,25 @@ func classifyAPIError(err error, raw []byte) error {
 	}
 	typed.Code = code
 	switch code {
-	case "-2010", "-2019":
+	case "-2010":
+		// -2010 是“新订单被拒绝”的总称，按说明文字细分：订单号重复说明原单可能已被受理，不能当拒单。
+		message := strings.ToLower(apiMessage(raw))
+		switch {
+		case strings.Contains(message, "duplicate order"):
+			typed.Kind = exchange.ErrorTransportUnknown
+		case strings.Contains(message, "insufficient balance"):
+			typed.Kind = exchange.ErrorInsufficientBalance
+		default:
+			typed.Kind = exchange.ErrorRejected
+		}
+	case "-2019":
 		typed.Kind = exchange.ErrorInsufficientBalance
+	case "-4116":
+		// 合约：ClientOrderId is duplicated，原单可能已被受理，走查询认领。
+		typed.Kind = exchange.ErrorTransportUnknown
+	case "-1000", "-1001":
+		// 未知错误、内部错误：官方说明没有保证订单未被受理，按结果未知走查询恢复。
+		typed.Kind = exchange.ErrorTransportUnknown
 	case "-2011", "-2013":
 		typed.Kind = exchange.ErrorOrderNotFound
 	case "-2015":
@@ -1364,6 +1381,15 @@ func classifyAPIError(err error, raw []byte) error {
 		typed.Kind = exchange.ErrorTransportUnknown
 	}
 	return typed
+}
+
+// apiMessage 取响应体里的错误说明（msg）；没有时返回空串。
+func apiMessage(raw []byte) string {
+	var payload struct {
+		Msg string `json:"msg"`
+	}
+	_ = json.Unmarshal(raw, &payload)
+	return payload.Msg
 }
 
 func apiCode(raw []byte) string {

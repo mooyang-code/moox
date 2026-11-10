@@ -113,7 +113,7 @@ const (
 var rejectCodeMessages = map[string]string{
 	"-1013": "价格或数量不符合交易规则",
 	"-1111": "数量精度超过交易所限制",
-	"-2010": "交易所拒绝新订单",
+	"-2010": "交易所拒绝新订单（例如只挂单的订单会立即成交）",
 	"-2019": "保证金不足",
 	"-2022": "只减仓订单被拒绝",
 	"-4164": "金额低于最小名义金额",
@@ -126,6 +126,15 @@ func RejectMessage(err error) string {
 	var exchangeErr *Error
 	if !errors.As(err, &exchangeErr) {
 		return err.Error()
+	}
+	if exchangeErr.Code == "-2010" {
+		// 币安 -2010 按说明文字细分，余额不足已在分类时归入 ErrorInsufficientBalance。
+		switch {
+		case exchangeErr.Kind == ErrorInsufficientBalance:
+			return "余额不足"
+		case exchangeErr.Err != nil && strings.Contains(strings.ToLower(exchangeErr.Err.Error()), "market is closed"):
+			return "标的当前不可交易"
+		}
 	}
 	if message, ok := rejectCodeMessages[exchangeErr.Code]; ok {
 		return message

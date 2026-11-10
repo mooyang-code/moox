@@ -268,10 +268,7 @@ func (s *Service) ResolveUnknownQuiet(ctx context.Context, spaceID, orderID stri
 
 // lookupDue 判断这笔未知订单现在是否该查：没查过就查；查过的要等未知窗口到期再查最后一次。
 func (s *Service) lookupDue(record store.OrderRecord) bool {
-	window := s.UnknownLookupWindow
-	if window <= 0 {
-		window = 30 * time.Second
-	}
+	window := s.unknownLookupWindow()
 	now := s.now()
 	s.lookupMu.Lock()
 	defer s.lookupMu.Unlock()

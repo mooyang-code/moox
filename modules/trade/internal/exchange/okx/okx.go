@@ -1243,7 +1243,8 @@ func classifyOKXCode(code, message string) error {
 		kind = exchange.ErrorOrderNotFound
 	// 结果未知，走查询恢复：服务暂不可用、超时（50004 官方说明不代表成功或失败）、系统繁忙/错误、下单超时，
 	// 以及时间戳过期（交易所没有受理，但本地无法确认，与币安 -1021 一致）。50000 是请求体为空，属于拒单。
-	case "50001", "50004", "50013", "50026", "51149", "50102":
+	// 51016 是客户端订单号重复：原单可能已被受理，走查询认领，不能当拒单。
+	case "50001", "50004", "50013", "50026", "51149", "50102", "51016":
 		kind = exchange.ErrorTransportUnknown
 	}
 	return &exchange.Error{Kind: kind, Code: code, Err: errors.New(message)}
