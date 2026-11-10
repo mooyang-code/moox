@@ -75,7 +75,7 @@ func TestHandleTargetDirectedWakeOnlyAfterNewAcceptance(t *testing.T) {
 	require.Equal(t, jetstream.ACK, HandleTarget(context.Background(), delivery, opts).Decision)
 	rejected := logicalTargetDelivery(t, now, "target-rejected", "runner-other", "logical-1", nil)
 	require.Equal(t, jetstream.TERM, HandleTarget(context.Background(), rejected, opts).Decision)
-	opts.WeightResolver = targetResolverFunc(func(context.Context, int64, *tradeeventpb.LogicalAccountTargetWeightRequested, string) (targetapp.WeightConversion, error) {
+	opts.WeightResolver = targetResolverFunc(func(context.Context, *tradeeventpb.LogicalAccountTargetWeightRequested, string) (targetapp.WeightConversion, error) {
 		return targetapp.WeightConversion{}, errors.New("resolver unavailable")
 	})
 	next := now.Add(time.Minute)
@@ -94,7 +94,7 @@ func TestManualTargetReplayRejectedBeforeResolverAndWake(t *testing.T) {
 	require.Equal(t, jetstream.ACK, HandleTarget(context.Background(), delivery, opts).Decision)
 	require.NoError(t, db.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode = 'MANUAL'").Error)
 	opts.Wake = func() { t.Error("manual target must not wake") }
-	opts.WeightResolver = targetResolverFunc(func(context.Context, int64, *tradeeventpb.LogicalAccountTargetWeightRequested, string) (targetapp.WeightConversion, error) {
+	opts.WeightResolver = targetResolverFunc(func(context.Context, *tradeeventpb.LogicalAccountTargetWeightRequested, string) (targetapp.WeightConversion, error) {
 		t.Error("manual target must not resolve")
 		return targetapp.WeightConversion{}, nil
 	})
@@ -562,7 +562,8 @@ func openTargetStore(t *testing.T) *store.Store {
 
 type testWeightResolver struct{}
 
-func (testWeightResolver) Resolve(_ context.Context, signalTime int64, request *tradeeventpb.LogicalAccountTargetWeightRequested, _ string) (targetapp.WeightConversion, error) {
+func (testWeightResolver) Resolve(_ context.Context, request *tradeeventpb.LogicalAccountTargetWeightRequested, _ string) (targetapp.WeightConversion, error) {
+	signalTime := request.GetBarEndTime().AsTime().UnixMilli()
 	hash, err := targetapp.RequestHash(request)
 	if err != nil {
 		return targetapp.WeightConversion{}, err

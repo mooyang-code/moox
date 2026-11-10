@@ -37,7 +37,7 @@ type TargetOptions struct {
 // TargetWeightResolver converts the strategy-owned target weights into the
 // immutable quantity snapshot consumed by Trade.
 type TargetWeightResolver interface {
-	Resolve(context.Context, int64, *tradeeventpb.LogicalAccountTargetWeightRequested, string) (targetapp.WeightConversion, error)
+	Resolve(context.Context, *tradeeventpb.LogicalAccountTargetWeightRequested, string) (targetapp.WeightConversion, error)
 }
 
 // conversionAttentionDeliveries 是换算连续失败多少次才告警。
@@ -149,7 +149,7 @@ func admitTarget(
 		return admittedTarget{}, targetRejection("invalid_contract", err), true
 	}
 	if request.GetShadow() {
-		return admittedTarget{}, handleShadowTarget(ctx, opts, message.GetSpaceId(), message.GetOccurredAt().AsTime().UnixMilli(), request, now), true
+		return admittedTarget{}, handleShadowTarget(ctx, opts, message.GetSpaceId(), request, now), true
 	}
 	if opts.Intake != nil && !opts.Intake() {
 		// 暂停期间不接收真实目标，但也不销毁它：它可能是策略暂停前刚发布、还在路上的目标。
@@ -263,7 +263,7 @@ func acceptTarget(
 		timeout = 10 * time.Second
 	}
 	resolveCtx, cancel := context.WithTimeout(ctx, timeout)
-	conversion, conversionErr := opts.WeightResolver.Resolve(resolveCtx, message.GetOccurredAt().AsTime().UnixMilli(), request, message.GetSpaceId())
+	conversion, conversionErr := opts.WeightResolver.Resolve(resolveCtx, request, message.GetSpaceId())
 	if conversionErr == nil {
 		conversionErr = resolveCtx.Err()
 	}
@@ -316,7 +316,6 @@ func handleShadowTarget(
 	ctx context.Context,
 	opts TargetOptions,
 	spaceID string,
-	occurredAtMillis int64,
 	request *tradeeventpb.LogicalAccountTargetWeightRequested,
 	now time.Time,
 ) jetstream.HandlerResult {
@@ -325,7 +324,7 @@ func handleShadowTarget(
 		timeout = 10 * time.Second
 	}
 	resolveCtx, cancel := context.WithTimeout(ctx, timeout)
-	conversion, err := opts.WeightResolver.Resolve(resolveCtx, occurredAtMillis, request, spaceID)
+	conversion, err := opts.WeightResolver.Resolve(resolveCtx, request, spaceID)
 	if err == nil {
 		err = resolveCtx.Err()
 	}

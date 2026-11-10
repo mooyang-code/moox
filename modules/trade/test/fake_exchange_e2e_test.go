@@ -119,11 +119,10 @@ type fakeWeightResolver struct{ testTargetWeightResolver }
 
 func (r fakeWeightResolver) Resolve(
 	ctx context.Context,
-	signalTime int64,
 	request *tradeeventpb.LogicalAccountTargetWeightRequested,
 	spaceID string,
 ) (targetapp.WeightConversion, error) {
-	conversion, err := r.testTargetWeightResolver.Resolve(ctx, signalTime, request, spaceID)
+	conversion, err := r.testTargetWeightResolver.Resolve(ctx, request, spaceID)
 	for index := range conversion.QuantityTargets {
 		target := &conversion.QuantityTargets[index]
 		target.Quantity = shared.MustDecimal(target.Quantity).Mul(shared.MustDecimal("1000")).String()

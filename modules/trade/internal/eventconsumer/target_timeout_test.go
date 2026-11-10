@@ -13,10 +13,10 @@ import (
 	"gorm.io/gorm"
 )
 
-type targetResolverFunc func(context.Context, int64, *tradeeventpb.LogicalAccountTargetWeightRequested, string) (targetapp.WeightConversion, error)
+type targetResolverFunc func(context.Context, *tradeeventpb.LogicalAccountTargetWeightRequested, string) (targetapp.WeightConversion, error)
 
-func (f targetResolverFunc) Resolve(ctx context.Context, at int64, request *tradeeventpb.LogicalAccountTargetWeightRequested, space string) (targetapp.WeightConversion, error) {
-	return f(ctx, at, request, space)
+func (f targetResolverFunc) Resolve(ctx context.Context, request *tradeeventpb.LogicalAccountTargetWeightRequested, space string) (targetapp.WeightConversion, error) {
+	return f(ctx, request, space)
 }
 
 func TestTargetResolutionHasDeadlineAndTimeoutDoesNotAccept(t *testing.T) {
@@ -25,7 +25,7 @@ func TestTargetResolutionHasDeadlineAndTimeoutDoesNotAccept(t *testing.T) {
 	now := time.Now().UTC()
 	opts := targetOptions(tradeStore, now)
 	opts.ResolveTimeout = 20 * time.Millisecond
-	opts.WeightResolver = targetResolverFunc(func(ctx context.Context, _ int64, _ *tradeeventpb.LogicalAccountTargetWeightRequested, _ string) (targetapp.WeightConversion, error) {
+	opts.WeightResolver = targetResolverFunc(func(ctx context.Context, _ *tradeeventpb.LogicalAccountTargetWeightRequested, _ string) (targetapp.WeightConversion, error) {
 		if _, ok := ctx.Deadline(); !ok {
 			return targetapp.WeightConversion{}, errors.New("resolver context has no deadline")
 		}
