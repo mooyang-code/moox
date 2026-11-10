@@ -11,10 +11,6 @@ import * as trade from "./index";
 describe("Trade public API", () => {
   beforeEach(() => callTrade.mockReset().mockResolvedValue({ ret_info: { code: 0, msg: "ok" } }));
 
-  it("registers the unified Trade console service", () => {
-    expect(trade.tradeServiceMap).toEqual({ console: "trade" });
-  });
-
   it("constructs 组合账户生命周期请求", async () => {
     await trade.createLogicalAccount({ name: "paper", execution_mode: 1, settlement_asset: "USDT" });
     await trade.pauseLogicalAccount("logical-1", "manual intervention");

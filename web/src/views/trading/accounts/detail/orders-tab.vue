@@ -1,38 +1,25 @@
 <template>
   <SectionBlock title="订单" flush>
-    <div class="toolbar">
-      <a-radio-group v-model="range" type="button" @change="search">
-        <a-radio v-for="item in recordRanges" :key="item.key" :value="item.key">{{ item.label }}</a-radio>
-      </a-radio-group>
-      <a-select v-model="state" allow-clear placeholder="订单状态" style="width: 150px" @change="search">
-        <a-option v-for="(label, value) in orderStateLabels" :key="value" :value="value">{{ label }}</a-option>
-      </a-select>
-      <a-select v-model="ownerType" allow-clear placeholder="订单来源" style="width: 120px" @change="search">
-        <a-option v-for="(label, value) in orderOwnerLabels" :key="value" :value="value">{{ label }}</a-option>
-      </a-select>
-      <a-select
-        v-if="memberOptions.length > 1"
-        v-model="accountId"
-        allow-clear
-        placeholder="执行账户"
-        style="width: 150px"
-        @change="search"
-      >
-        <a-option v-for="item in memberOptions" :key="item.id" :value="item.id">{{ item.label }}</a-option>
-      </a-select>
-      <a-select v-if="marketOptions.length > 1" v-model="market" :disabled="!symbol.trim()" style="width: 110px" @change="search">
-        <a-option v-for="item in marketOptions" :key="item" :value="item">{{ marketLabel(item) }}</a-option>
-      </a-select>
-      <a-input
-        v-model="symbol"
-        allow-clear
-        :placeholder="stockOnly ? '代码，如 600519.XSHG' : '币，如 BTC'"
-        style="width: 150px"
-        @press-enter="search"
-        @clear="search"
-      />
-      <a-button :loading="loading" @click="search">查询</a-button>
-    </div>
+    <RecordToolbar
+      v-model:range="range"
+      v-model:account-id="accountId"
+      v-model:market="market"
+      v-model:symbol="symbol"
+      :member-options="memberOptions"
+      :market-options="marketOptions"
+      :stock-only="stockOnly"
+      :loading="loading"
+      @search="search"
+    >
+      <template #filters>
+        <a-select v-model="state" allow-clear placeholder="订单状态" style="width: 150px" @change="search">
+          <a-option v-for="(label, value) in orderStateLabels" :key="value" :value="value">{{ label }}</a-option>
+        </a-select>
+        <a-select v-model="ownerType" allow-clear placeholder="订单来源" style="width: 120px" @change="search">
+          <a-option v-for="(label, value) in orderOwnerLabels" :key="value" :value="value">{{ label }}</a-option>
+        </a-select>
+      </template>
+    </RecordToolbar>
     <a-alert v-if="error" type="error" class="alert">{{ error }}</a-alert>
     <a-table
       :bordered="{ cell: true }"
@@ -118,7 +105,7 @@
 <script setup lang="ts">
 import { useWindowSize } from "@vueuse/core";
 import { computed, inject, ref, watch } from "vue";
-import { useRoute, useRouter } from "vue-router";
+import { useRoute } from "vue-router";
 import {
   canCancelOrderState,
   getOrder,
@@ -128,43 +115,39 @@ import {
   orderReasonText,
   orderStateLabels
 } from "@/api/trade";
-import type { MarketType, Order } from "@/api/trade";
+import type { Order } from "@/api/trade";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import { usePolling } from "@/hooks/usePolling";
 import { fmtQty } from "../shared/format";
-import { instrumentName, isStockOnly, marketLabel } from "../shared/markets";
+import { instrumentName, marketLabel } from "../shared/markets";
 import { orderStateTone } from "./detail-model";
-import { instrumentFilter } from "./instrument-filter";
 import SectionBlock from "../shared/section-block.vue";
 import StatusMark from "../shared/status-mark.vue";
 import { detailContextKey } from "./context";
 import OrderDetailDrawer from "./order-detail-drawer.vue";
-import { rangeFromQuery, rangeParams, recordRanges, type RecordRange } from "./record-range";
+import RecordToolbar from "./record-toolbar.vue";
+import { useRecordFilters } from "./record-filters";
 import { formatInstant } from "@/utils/time-zone";
 import { useDisplayZone } from "@/hooks/useDisplayZone";
 
 // 交易页的时间按当前空间登记的时区显示
 const displayZone = useDisplayZone();
-const { logical, accounts, dataVersion, openCancel } = inject(detailContextKey)!;
+const { logical, dataVersion, openCancel } = inject(detailContextKey)!;
 // 窄屏时右侧操作列不固定，不然会盖住数据列
 const { width: viewportWidth } = useWindowSize();
 const isNarrow = computed(() => viewportWidth.value < 768);
 
-// 筛选条件写在地址里（o 开头），切换页签回来、刷新页面后仍保持
+// 筛选条件写在地址里（o 开头），切换页签回来、刷新页面后仍保持；时间范围、账户、市场、标的见 useRecordFilters
 const route = useRoute();
-const router = useRouter();
 const queryText = (key: string) => (typeof route.query[key] === "string" ? (route.query[key] as string) : undefined);
-const range = ref<RecordRange>(rangeFromQuery(route.query.orange));
 const state = ref<string | undefined>(queryText("ostate"));
 const ownerType = ref<string | undefined>(queryText("oowner"));
-const accountId = ref<string | undefined>(queryText("oaccount"));
-const symbol = ref(queryText("osymbol") ?? "");
-// 已提交的币名：输入框打到一半时，轮询、翻页仍按上次查询的币名读，回车或点“查询”才换
-const appliedSymbol = ref(symbol.value.trim());
-// 地址里的值都是字符串，市场要转回数字，否则和可选市场比较不相等、会被重置成第一个
-const marketQuery = Number(queryText("omarket"));
-const market = ref<MarketType | undefined>([0, 1, 2, 3].includes(marketQuery) ? (marketQuery as MarketType) : undefined);
-const page = ref(1);
+const { range, accountId, symbol, market, page, memberOptions, accountName, marketOptions, stockOnly, queryParams, search } =
+  useRecordFilters({
+    prefix: "o",
+    extraQuery: () => ({ ostate: state.value, oowner: ownerType.value }),
+    reload: () => void load()
+  });
 const pageSize = 20;
 const total = ref(0);
 const orders = ref<Order[]>([]);
@@ -173,26 +156,6 @@ const error = ref("");
 const drawerVisible = ref(false);
 const drawerOrder = ref<Order | null>(null);
 const requests = createLatestRequestGuard();
-
-const memberOptions = computed(() =>
-  (logical.value.members || []).map(member => ({
-    id: member.trading_account_id,
-    label: accounts.value.get(member.trading_account_id)?.name || member.trading_account_id
-  }))
-);
-const accountName = (id: string) => accounts.value.get(id)?.name || id;
-// 标的筛选按所选市场补全；选了执行账户时只列它开通的市场
-const marketOptions = computed<MarketType[]>(() =>
-  accountId.value ? (accounts.value.get(accountId.value)?.markets ?? []) : (logical.value.markets ?? [])
-);
-const stockOnly = computed(() => isStockOnly(marketOptions.value));
-watch(
-  marketOptions,
-  options => {
-    if (!market.value || !options.includes(market.value)) market.value = options[0];
-  },
-  { immediate: true }
-);
 
 /** background：有未完成订单时每 5 秒的后台刷新，不转加载态、不弹提示，失败时保留上次的列表。 */
 async function load(background = false) {
@@ -204,12 +167,9 @@ async function load(background = false) {
   try {
     const rsp = await listOrders(
       {
-        logical_account_id: logical.value.logical_account_id,
-        trading_account_id: accountId.value,
-        instrument_id: instrumentFilter(appliedSymbol.value, stockOnly.value ? 3 : market.value, logical.value.settlement_asset),
+        ...queryParams(),
         state: state.value,
         owner_type: ownerType.value || undefined,
-        ...rangeParams(range.value),
         page: { page: page.value, size: pageSize }
       },
       { silent: background }
@@ -228,22 +188,6 @@ async function load(background = false) {
   }
 }
 
-function search() {
-  page.value = 1;
-  appliedSymbol.value = symbol.value.trim();
-  void router.replace({
-    query: {
-      ...route.query,
-      orange: range.value === "7d" ? undefined : range.value,
-      ostate: state.value || undefined,
-      oowner: ownerType.value || undefined,
-      oaccount: accountId.value || undefined,
-      osymbol: appliedSymbol.value || undefined,
-      omarket: appliedSymbol.value ? market.value : undefined
-    }
-  });
-  void load();
-}
 function changePage(value: number) {
   page.value = value;
   void load();
@@ -286,14 +230,6 @@ usePolling(
   margin-top: 2px;
   color: var(--color-text-3);
   font-size: 12px;
-}
-
-.toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--moox-space-3);
-  padding: 12px 16px;
 }
 
 .alert {

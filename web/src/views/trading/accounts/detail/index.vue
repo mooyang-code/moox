@@ -334,7 +334,6 @@ import { loadStrategyLinks, type StrategyLink } from "../shared/strategy-link";
 import { useActionTracker } from "./action-tracker";
 import { detailContextKey, type OrderPrefill } from "./context";
 import {
-  actionTypeLabels,
   detailTabs,
   equityChangeOf,
   flattenPreview,
@@ -345,6 +344,7 @@ import {
   tabFromQuery,
   targetExpired
 } from "./detail-model";
+import { operatorActionTypeText } from "./operator-actions-model";
 import FillsTab from "./fills-tab.vue";
 import LedgerTab from "./ledger-tab.vue";
 import OrderDialog from "./order-dialog.vue";
@@ -430,7 +430,7 @@ const flattenResult = computed(() => parseFlattenResult(tracker.action.value || 
 const actionTitle = computed(() => {
   const action = tracker.action.value;
   if (!action) return "";
-  const name = actionTypeLabels[action.action_type] || "人工操作";
+  const name = operatorActionTypeText(action.action_type);
   if (action.status === "RUNNING") return `${name}进行中`;
   if (action.status === "COMPLETED")
     return ["SUBMIT_ORDER", "MANUAL_ORDER"].includes(action.action_type) ? `${name}：订单已提交` : `${name}完成`;

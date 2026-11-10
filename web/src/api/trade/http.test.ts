@@ -10,7 +10,6 @@ vi.mock("@arco-design/web-vue", () => ({ Message: { error: messageError } }));
 import {
   callTrade,
   isTradeAdoptionRequired,
-  isTradeInvalidParam,
   isTradeNotFound,
   isTradeSessionNotReady,
   TradeResponseError,
@@ -81,7 +80,6 @@ describe("Trade response errors", () => {
     const error = await callTrade("console", "UpdateTradingAccount", {}, { silent: true }).catch(cause => cause);
     expect(error.message).toBe("执行账户的参数不合法");
     expect(error.response.ret_info.msg, "原始消息保留").toBe("trade: invalid trading account");
-    expect(isTradeInvalidParam(error)).toBe(true);
     expect(isTradeNotFound(error)).toBe(false);
     expect(isTradeNotFound(new TradeResponseError({ ret_info: { code: "NOT_FOUND", msg: "" } }))).toBe(true);
     expect(new TradeResponseError({ ret_info: { code: 1, msg: "执行账户上已有持仓或挂单" } }).message).toBe(

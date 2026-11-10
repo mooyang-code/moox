@@ -1,12 +1,5 @@
 import { callTrade } from "./http";
-export {
-  isTradeAdoptionRequired,
-  isTradeInvalidParam,
-  isTradeNotFound,
-  isTradeSessionNotReady,
-  TradeResponseError,
-  withDialogErrors
-} from "./http";
+export { isTradeAdoptionRequired, isTradeNotFound, isTradeSessionNotReady, TradeResponseError, withDialogErrors } from "./http";
 import type {
   AccountResponse,
   AddLogicalAccountMemberReq,
@@ -46,7 +39,6 @@ import type {
 } from "./types";
 
 export * from "./types";
-export { tradeServiceMap } from "./http";
 
 export function createTradingAccount(req: CreateTradingAccountReq) {
   return callTrade<CreateTradingAccountReq, AccountResponse>("console", "CreateTradingAccount", req, {
@@ -363,7 +355,7 @@ export const actionStateLabels: Record<string, string> = {
   PARTIAL: "部分完成",
   FAILED: "失败"
 };
-/** 操作记录里的完整类型名；页头进度条另有一套短名（detail-model 的 actionTypeLabels） */
+/** 人工操作的类型名：操作记录、页头进度条都用这一张表，同一个动作处处叫法一致。 */
 export const operatorActionTypeLabels: Record<OperatorActionType, string> = {
   MANUAL_ORDER: "人工下单",
   SUBMIT_ORDER: "提交订单",

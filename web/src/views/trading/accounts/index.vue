@@ -4,7 +4,7 @@
       <PageTitleTabs :model-value="env" :items="environmentTabs" aria-label="账户环境" @change="changeEnv" />
 
       <div class="list-toolbar">
-        <a-tabs :active-key="list" type="rounded" size="medium" class="list-tabs" @change="changeList">
+        <a-tabs :active-key="list" size="medium" class="list-tabs" @change="changeList">
           <a-tab-pane key="combo" :title="`组合账户 ${rows.length}`" />
           <a-tab-pane key="execution" :title="`执行账户 ${execution.length}`" />
         </a-tabs>
