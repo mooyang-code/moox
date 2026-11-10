@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	operatordomain "github.com/mooyang-code/moox/modules/trade/internal/domain/operator"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/ashare"
@@ -162,7 +163,7 @@ func TestFlattenStockHaltAndLimitDownAreRetryable(t *testing.T) {
 			fixture.prices.quote = tc.quote
 			account, status := flattenStockAction(t, fixture)
 			require.Empty(t, fixture.orders.specs)
-			require.Equal(t, "RUNNING", status, "可重试，不终结")
+			require.Equal(t, string(operatordomain.StatusRunning), status, "可重试，不终结")
 			require.Len(t, account.Remaining, 1)
 			require.Equal(t, tc.reason, account.Remaining[0].Reason)
 		})
@@ -183,7 +184,7 @@ func TestFlattenStockRetriesAfterUnfilledIOC(t *testing.T) {
 		})
 	}
 	_, status := flattenStockAction(t, fixture)
-	require.NotEqual(t, "PARTIAL", status)
+	require.NotEqual(t, string(operatordomain.StatusPartial), status)
 	require.Len(t, fixture.orders.specs, 1)
 	require.Equal(t, flattenClientOrderIDForSpec("flatten-stock", "account-a",
 		exchange.NewSymbolKey(exchange.MarketTypeStock, "600519.XSHG"), exchange.SideSell, shared.MustDecimal("100"), 2),

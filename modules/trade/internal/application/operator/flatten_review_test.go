@@ -7,6 +7,7 @@ import (
 	"time"
 
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
+	operatordomain "github.com/mooyang-code/moox/modules/trade/internal/domain/operator"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
@@ -71,7 +72,7 @@ func TestFlattenSpotDustCompletesWithoutRetry(t *testing.T) {
 			result, err := flattenOnce(t, service, "flatten-1")
 
 			require.NoError(t, err)
-			require.Equal(t, "COMPLETED", result.Action.Status)
+			require.Equal(t, string(operatordomain.StatusCompleted), result.Action.Status)
 			account := accountResult(t, result, "account-a")
 			require.Empty(t, account.Remaining)
 			require.Len(t, account.Dust, 1)
@@ -90,7 +91,7 @@ func TestFlattenSpotLockedBalanceKeepsRetrying(t *testing.T) {
 	result, err := flattenOnce(t, service, "flatten-1")
 
 	require.NoError(t, err)
-	require.Equal(t, "RUNNING", result.Action.Status)
+	require.Equal(t, string(operatordomain.StatusRunning), result.Action.Status)
 	account := accountResult(t, result, "account-a")
 	require.Len(t, account.Remaining, 1)
 	require.Empty(t, account.Dust)
@@ -107,7 +108,7 @@ func TestFlattenSwapQuantityRuleEndsPartialImmediately(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Less(t, time.Since(started), 2*time.Second, "final reasons must not spin until the budget ends")
-	require.Equal(t, "PARTIAL", result.Action.Status)
+	require.Equal(t, string(operatordomain.StatusPartial), result.Action.Status)
 	require.Equal(t, 2, fixture.syncer.callsFor("account-a"))
 }
 
@@ -136,7 +137,7 @@ func TestFlattenZeroFillRejectedChildEndsPartial(t *testing.T) {
 	result, err := flattenOnce(t, service, "flatten-1")
 
 	require.NoError(t, err)
-	require.Equal(t, "PARTIAL", result.Action.Status)
+	require.Equal(t, string(operatordomain.StatusPartial), result.Action.Status)
 	require.Empty(t, fixture.orders.specs)
 }
 
@@ -151,7 +152,7 @@ func TestFlattenPartiallyFilledEndedChildRetries(t *testing.T) {
 	result, err := flattenOnce(t, service, "flatten-1")
 
 	require.NoError(t, err)
-	require.Equal(t, "RUNNING", result.Action.Status)
+	require.Equal(t, string(operatordomain.StatusRunning), result.Action.Status)
 	require.NotEmpty(t, fixture.orders.specs, "部分成交后结束的子单，持仓同步后换号再下")
 }
 
@@ -171,7 +172,7 @@ func TestFlattenZeroFillExpiredOrCanceledChildRetriesWithNewID(t *testing.T) {
 			result, err := flattenOnce(t, service, "flatten-1")
 
 			require.NoError(t, err)
-			require.Equal(t, "RUNNING", result.Action.Status)
+			require.Equal(t, string(operatordomain.StatusRunning), result.Action.Status)
 			require.Len(t, fixture.orders.specs, 1)
 			require.NotEqual(t, ended.ClientOrderID, fixture.orders.specs[0].ClientOrderID, "换号，不会命中已结束的旧单")
 		})
@@ -194,7 +195,7 @@ func TestFlattenLocallyRejectedChildRetries(t *testing.T) {
 	result, err := flattenOnce(t, service, "flatten-1")
 
 	require.NoError(t, err)
-	require.Equal(t, "RUNNING", result.Action.Status)
+	require.Equal(t, string(operatordomain.StatusRunning), result.Action.Status)
 	require.Len(t, fixture.orders.specs, 1)
 }
 
@@ -214,7 +215,7 @@ func TestFlattenOtherLocalRejectionStillEnds(t *testing.T) {
 	result, err := flattenOnce(t, service, "flatten-1")
 
 	require.NoError(t, err)
-	require.Equal(t, "PARTIAL", result.Action.Status)
+	require.Equal(t, string(operatordomain.StatusPartial), result.Action.Status)
 	require.Empty(t, fixture.orders.specs)
 }
 
@@ -236,7 +237,7 @@ func TestFlattenUnfilledChildrenEndAtTheCap(t *testing.T) {
 	result, err := flattenOnce(t, service, "flatten-1")
 
 	require.NoError(t, err)
-	require.Equal(t, "PARTIAL", result.Action.Status)
+	require.Equal(t, string(operatordomain.StatusPartial), result.Action.Status)
 	require.Empty(t, fixture.orders.specs)
 	require.Contains(t, result.Accounts[0].Remaining[0].Reason, "一股都没成交")
 }
@@ -258,8 +259,8 @@ func TestRemainingKeepsSwapPositionsWhenManagedAssetsFail(t *testing.T) {
 func runningFlatten(t *testing.T, fixture *operatorFixture, actionID string) {
 	t.Helper()
 	_, _, err := fixture.store.CreateOperatorAction(context.Background(), store.OperatorActionRecord{
-		SpaceID: "space-1", ActionID: actionID, LogicalAccountID: "logical-1", ActionType: "FLATTEN",
-		RequestJSON: `{"logical_account_id":"logical-1"}`, Reason: "close risk", Status: "RUNNING",
+		SpaceID: "space-1", ActionID: actionID, LogicalAccountID: "logical-1", ActionType: string(operatordomain.ActionFlatten),
+		RequestJSON: `{"logical_account_id":"logical-1"}`, Reason: "close risk", Status: string(operatordomain.StatusRunning),
 	})
 	require.NoError(t, err)
 }
@@ -347,7 +348,7 @@ func TestFlattenWithManyMembersStillPlacesOrders(t *testing.T) {
 	result, err := flattenOnce(t, service, "flatten-1")
 
 	require.NoError(t, err)
-	require.Equal(t, "COMPLETED", result.Action.Status)
+	require.Equal(t, string(operatordomain.StatusCompleted), result.Action.Status)
 	require.Len(t, fixture.orders.specs, 1, "the member with a position must get its flatten order")
 }
 
@@ -398,8 +399,8 @@ func TestFlattenTradingAccountRequiresLogicalMembership(t *testing.T) {
 func TestFlattenTradingAccountIsBusyWhileAnotherMemberFlattens(t *testing.T) {
 	fixture := newOperatorFixture(t, exchange.MarketTypeSwap)
 	_, _, err := fixture.store.CreateOperatorAction(context.Background(), store.OperatorActionRecord{
-		SpaceID: "space-1", ActionID: "flatten-a", LogicalAccountID: "logical-1", ActionType: "FLATTEN",
-		RequestJSON: `{"logical_account_id":"logical-1","trading_account_id":"account-a"}`, Reason: "close a", Status: "RUNNING",
+		SpaceID: "space-1", ActionID: "flatten-a", LogicalAccountID: "logical-1", ActionType: string(operatordomain.ActionFlatten),
+		RequestJSON: `{"logical_account_id":"logical-1","trading_account_id":"account-a"}`, Reason: "close a", Status: string(operatordomain.StatusRunning),
 	})
 	require.NoError(t, err)
 	service := fixture.service()

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
+	operatordomain "github.com/mooyang-code/moox/modules/trade/internal/domain/operator"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
@@ -60,8 +61,8 @@ func TestDelistDeadlineDiscardsOwnPendingChild(t *testing.T) {
 
 	result, err := service.FlattenLogicalAccount(context.Background(), command)
 	require.NoError(t, err)
-	require.Equal(t, "RUNNING", result.Action.Status)
-	require.Equal(t, "PENDING", childState(t, fixture, "child-pending"))
+	require.Equal(t, string(operatordomain.StatusRunning), result.Action.Status)
+	require.Equal(t, string(orderdomain.Pending), childState(t, fixture, "child-pending"))
 
 	// 截止时间过了：工作线程用同一个动作号恢复。
 	fixture.now = fixture.now.Add(2 * time.Hour)
@@ -71,7 +72,7 @@ func TestDelistDeadlineDiscardsOwnPendingChild(t *testing.T) {
 
 	stored, err = fixture.store.GetOperatorAction(context.Background(), "space-1", "delist-pending")
 	require.NoError(t, err)
-	require.Equal(t, "PARTIAL", stored.Status)
+	require.Equal(t, string(operatordomain.StatusPartial), stored.Status)
 	require.Equal(t, "CANCELED", childState(t, fixture, "child-pending"), "待提交的子单丢弃，从没发到交易所")
 }
 
@@ -95,8 +96,8 @@ func TestDelistDeadlineWaitsForUnknownChildThenFinishes(t *testing.T) {
 	fixture.orders.specs = nil
 	result, err := service.FlattenLogicalAccount(context.Background(), command)
 	require.NoError(t, err)
-	require.Equal(t, "RUNNING", result.Action.Status, "还有结果未知的子单，不能先记结束")
-	require.Equal(t, "PARTIAL", result.FinishingStatus)
+	require.Equal(t, string(operatordomain.StatusRunning), result.Action.Status, "还有结果未知的子单，不能先记结束")
+	require.Equal(t, string(operatordomain.StatusPartial), result.FinishingStatus)
 	require.Empty(t, fixture.orders.specs)
 
 	// 解析出来退回待提交：恢复时丢弃并记 PARTIAL，不再下单。
@@ -108,7 +109,7 @@ func TestDelistDeadlineWaitsForUnknownChildThenFinishes(t *testing.T) {
 	require.NoError(t, service.ResumeOperatorAction(context.Background(), stored))
 	stored, err = fixture.store.GetOperatorAction(context.Background(), "space-1", "delist-unknown")
 	require.NoError(t, err)
-	require.Equal(t, "PARTIAL", stored.Status)
+	require.Equal(t, string(operatordomain.StatusPartial), stored.Status)
 	require.Equal(t, "CANCELED", childState(t, fixture, "child-unknown"))
 	require.Empty(t, fixture.orders.specs)
 	decoded, err := decodeFlattenResult(stored)
@@ -134,12 +135,12 @@ func TestDelistUnblockBeatsDeadline(t *testing.T) {
 	// 撤单还没确认：等撤单确认，不因为过了截止时间就压成 PARTIAL。
 	result, err := fixture.service().FlattenLogicalAccount(context.Background(), command)
 	require.NoError(t, err)
-	require.Equal(t, "RUNNING", result.Action.Status)
+	require.Equal(t, string(operatordomain.StatusRunning), result.Action.Status)
 
 	fixture.orders.leaveOpen = nil
 	result, err = fixture.service().FlattenLogicalAccount(context.Background(), command)
 	require.NoError(t, err)
-	require.Equal(t, "COMPLETED", result.Action.Status)
+	require.Equal(t, string(operatordomain.StatusCompleted), result.Action.Status)
 	require.True(t, result.Unblocked)
 	require.Equal(t, "CANCELED", childState(t, fixture, "child-open"))
 }
@@ -157,13 +158,13 @@ func TestDelistDeadlineRetryKeepsProgress(t *testing.T) {
 	currentRoundOrders(t, fixture, "delist-progress")
 	first, err := fixture.service().FlattenLogicalAccount(context.Background(), command)
 	require.NoError(t, err)
-	require.Equal(t, "PARTIAL", first.Action.Status)
+	require.Equal(t, string(operatordomain.StatusPartial), first.Action.Status)
 	require.NotEmpty(t, first.Accounts)
 
 	fixture.now = fixture.now.Add(2 * time.Hour)
 	second, err := fixture.service().FlattenLogicalAccount(context.Background(), command)
 	require.NoError(t, err)
-	require.Equal(t, "PARTIAL", second.Action.Status)
+	require.Equal(t, string(operatordomain.StatusPartial), second.Action.Status)
 	require.Equal(t, first.Accounts[0].TradingAccountID, second.Accounts[0].TradingAccountID)
 	require.Len(t, second.Accounts[0].Remaining, len(first.Accounts[0].Remaining))
 	require.Equal(t, first.Accounts[0].Remaining[0].Quantity, second.Accounts[0].Remaining[0].Quantity)
@@ -183,7 +184,7 @@ func TestDeadlineCheckedBeforeEveryOrder(t *testing.T) {
 	result, err := service.FlattenLogicalAccount(context.Background(), command)
 	require.NoError(t, err)
 	require.Len(t, fixture.orders.specs, 1, "第一笔之后已过截止时间，第二笔不下")
-	require.Equal(t, "PARTIAL", result.Action.Status)
+	require.Equal(t, string(operatordomain.StatusPartial), result.Action.Status)
 	require.Contains(t, result.Accounts[0].Error, errDelistDeadlinePassed.Error())
 }
 
@@ -209,7 +210,7 @@ func TestFlattenTimeoutDiscardsOwnPendingChild(t *testing.T) {
 	command := flattenCommand("flatten-timeout")
 	result, err := service.FlattenLogicalAccount(context.Background(), command)
 	require.NoError(t, err)
-	require.Equal(t, "RUNNING", result.Action.Status)
+	require.Equal(t, string(operatordomain.StatusRunning), result.Action.Status)
 
 	fixture.now = time.Now().Add(31 * time.Minute)
 	stored, err := fixture.store.GetOperatorAction(context.Background(), "space-1", "flatten-timeout")
@@ -217,7 +218,7 @@ func TestFlattenTimeoutDiscardsOwnPendingChild(t *testing.T) {
 	require.NoError(t, service.ResumeOperatorAction(context.Background(), stored))
 	stored, err = fixture.store.GetOperatorAction(context.Background(), "space-1", "flatten-timeout")
 	require.NoError(t, err)
-	require.Equal(t, "PARTIAL", stored.Status)
+	require.Equal(t, string(operatordomain.StatusPartial), stored.Status)
 	require.Equal(t, "CANCELED", childState(t, fixture, pending))
 }
 
@@ -289,8 +290,8 @@ func TestFlattenFinishingGivesUpAfterTimeout(t *testing.T) {
 
 	result, err := service.FlattenLogicalAccount(context.Background(), command)
 	require.NoError(t, err, "解析失败不作为调用错误返回")
-	require.Equal(t, "RUNNING", result.Action.Status)
-	require.Equal(t, "PARTIAL", result.FinishingStatus)
+	require.Equal(t, string(operatordomain.StatusRunning), result.Action.Status)
+	require.Equal(t, string(operatordomain.StatusPartial), result.FinishingStatus)
 	require.Equal(t, enteredAt.UnixMilli(), result.FinishingSince)
 	require.Contains(t, result.Action.LastError, "child-stuck")
 
@@ -299,17 +300,17 @@ func TestFlattenFinishingGivesUpAfterTimeout(t *testing.T) {
 	restarted := fixture.service()
 	restarted.Orders = service.Orders
 	decoded := resumeStored(t, fixture, restarted, "delist-stuck")
-	require.Equal(t, "RUNNING", decoded.Action.Status)
+	require.Equal(t, string(operatordomain.StatusRunning), decoded.Action.Status)
 	require.Equal(t, enteredAt.UnixMilli(), decoded.FinishingSince, "重启后不重新计时")
 
 	// 满 30 分钟：落成 PARTIAL，子单号写进结果。
 	fixture.now = enteredAt.Add(30 * time.Minute)
 	decoded = resumeStored(t, fixture, restarted, "delist-stuck")
-	require.Equal(t, "PARTIAL", decoded.Action.Status)
+	require.Equal(t, string(operatordomain.StatusPartial), decoded.Action.Status)
 	require.Equal(t, []string{"child-stuck"}, decoded.ManualCheckOrderIDs)
 	require.Empty(t, decoded.FinishingStatus)
 	require.Zero(t, decoded.FinishingSince)
-	require.Equal(t, "SUBMIT_UNKNOWN", childState(t, fixture, "child-stuck"), "收拾不了的子单原样留着，等人工核对")
+	require.Equal(t, string(orderdomain.SubmitUnknown), childState(t, fixture, "child-stuck"), "收拾不了的子单原样留着，等人工核对")
 	require.Empty(t, fixture.orders.specs, "收尾期间不下单")
 	require.NotEmpty(t, telemetry.Recent(telemetry.AttentionFlattenOrdersUnsettled, fixture.now, time.Minute))
 }
@@ -323,8 +324,8 @@ func TestFlattenFinishingGivesUpOnSharedErrorAfterTimeout(t *testing.T) {
 
 	result, err := service.FlattenLogicalAccount(context.Background(), command)
 	require.NoError(t, err, "收拾子单的错误只记在动作上")
-	require.Equal(t, "RUNNING", result.Action.Status)
-	require.Equal(t, "PARTIAL", result.FinishingStatus)
+	require.Equal(t, string(operatordomain.StatusRunning), result.Action.Status)
+	require.Equal(t, string(operatordomain.StatusPartial), result.FinishingStatus)
 	require.Equal(t, enteredAt.UnixMilli(), result.FinishingSince)
 
 	resume := func() (FlattenResult, error) {
@@ -340,19 +341,19 @@ func TestFlattenFinishingGivesUpOnSharedErrorAfterTimeout(t *testing.T) {
 	fixture.now = enteredAt.Add(29 * time.Minute)
 	decoded, err := resume()
 	require.NoError(t, err)
-	require.Equal(t, "RUNNING", decoded.Action.Status)
+	require.Equal(t, string(operatordomain.StatusRunning), decoded.Action.Status)
 	require.Contains(t, decoded.Action.LastError, "disk I/O error")
 	require.Equal(t, enteredAt.UnixMilli(), decoded.FinishingSince, "不重新计时")
 
 	fixture.now = enteredAt.Add(30 * time.Minute)
 	decoded, err = resume()
 	require.NoError(t, err)
-	require.Equal(t, "PARTIAL", decoded.Action.Status)
+	require.Equal(t, string(operatordomain.StatusPartial), decoded.Action.Status)
 	require.Equal(t, []string{"child-shared"}, decoded.ManualCheckOrderIDs)
 	require.Empty(t, decoded.FinishingStatus)
 	require.Zero(t, decoded.FinishingSince)
 	require.Contains(t, decoded.Action.LastError, "disk I/O error")
-	require.Equal(t, "SUBMIT_UNKNOWN", childState(t, fixture, "child-shared"), "收拾不了的子单原样留着，等人工核对")
+	require.Equal(t, string(orderdomain.SubmitUnknown), childState(t, fixture, "child-shared"), "收拾不了的子单原样留着，等人工核对")
 	require.Empty(t, fixture.orders.specs, "收尾期间不下单")
 	found := false
 	for _, detail := range telemetry.Recent(telemetry.AttentionFlattenOrdersUnsettled, fixture.now, time.Minute) {
@@ -396,9 +397,9 @@ func TestFlattenFinishingBudgetEndDiscardsPendingAndRespectsTimeout(t *testing.T
 	enteredAt := fixture.now
 	result, err := service.FlattenLogicalAccount(context.Background(), command)
 	require.NoError(t, err)
-	require.Equal(t, "RUNNING", result.Action.Status)
+	require.Equal(t, string(operatordomain.StatusRunning), result.Action.Status)
 	require.Equal(t, enteredAt.UnixMilli(), result.FinishingSince)
-	operatorChild(t, fixture, "account-b", "delist-budget", "child-budget-b", "PENDING")
+	operatorChild(t, fixture, "account-b", "delist-budget", "child-budget-b", string(orderdomain.Pending))
 	failing := service.Orders.(failResolveOrders)
 
 	resumeCanceled := func() FlattenResult {
@@ -419,16 +420,16 @@ func TestFlattenFinishingBudgetEndDiscardsPendingAndRespectsTimeout(t *testing.T
 	// 上限之内：保持收尾，B 的待提交子单已丢弃，A 那笔留给下次。
 	fixture.now = enteredAt.Add(10 * time.Minute)
 	decoded := resumeCanceled()
-	require.Equal(t, "RUNNING", decoded.Action.Status)
+	require.Equal(t, string(operatordomain.StatusRunning), decoded.Action.Status)
 	require.Equal(t, enteredAt.UnixMilli(), decoded.FinishingSince, "不重新计时")
 	require.Equal(t, "CANCELED", childState(t, fixture, "child-budget-b"), "第一步只读写本地库，预算用完也照样丢弃待提交子单")
-	require.Equal(t, "SUBMIT_UNKNOWN", childState(t, fixture, "child-budget-a"))
+	require.Equal(t, string(orderdomain.SubmitUnknown), childState(t, fixture, "child-budget-a"))
 	require.False(t, unsettledNoted(fixture, "delist-budget", "读写不了子单"), "不能记成共享故障")
 
 	// 满 30 分钟预算仍每次用完：照常落成，A 交给人工核对。
 	fixture.now = enteredAt.Add(30 * time.Minute)
 	decoded = resumeCanceled()
-	require.Equal(t, "PARTIAL", decoded.Action.Status)
+	require.Equal(t, string(operatordomain.StatusPartial), decoded.Action.Status)
 	require.Equal(t, []string{"child-budget-a"}, decoded.ManualCheckOrderIDs)
 	require.True(t, unsettledNoted(fixture, "delist-budget", "需人工核对"))
 	require.False(t, unsettledNoted(fixture, "delist-budget", "读写不了子单"), "不能记成共享故障")
@@ -443,9 +444,9 @@ func TestFlattenFinishingSharedErrorListsChildrenOfAllMembers(t *testing.T) {
 	enteredAt := fixture.now
 	result, err := service.FlattenLogicalAccount(context.Background(), command)
 	require.NoError(t, err)
-	require.Equal(t, "RUNNING", result.Action.Status)
-	operatorChild(t, fixture, "account-b", "delist-shared-all", "child-shared-b-pending", "PENDING")
-	operatorChild(t, fixture, "account-b", "delist-shared-all", "child-shared-b-unknown", "SUBMIT_UNKNOWN")
+	require.Equal(t, string(operatordomain.StatusRunning), result.Action.Status)
+	operatorChild(t, fixture, "account-b", "delist-shared-all", "child-shared-b-pending", string(orderdomain.Pending))
+	operatorChild(t, fixture, "account-b", "delist-shared-all", "child-shared-b-unknown", string(orderdomain.SubmitUnknown))
 
 	fixture.now = enteredAt.Add(30 * time.Minute)
 	stored, err := fixture.store.GetOperatorAction(context.Background(), "space-1", "delist-shared-all")
@@ -455,10 +456,10 @@ func TestFlattenFinishingSharedErrorListsChildrenOfAllMembers(t *testing.T) {
 	require.NoError(t, err)
 	decoded, err := decodeFlattenResult(stored)
 	require.NoError(t, err)
-	require.Equal(t, "PARTIAL", decoded.Action.Status)
+	require.Equal(t, string(operatordomain.StatusPartial), decoded.Action.Status)
 	require.Equal(t, []string{"child-shared-a"}, decoded.ManualCheckOrderIDs, "只有 A 那笔没收拾掉")
 	require.Equal(t, "CANCELED", childState(t, fixture, "child-shared-b-pending"), "待提交的子单丢弃，释放资金预留")
-	require.NotEqual(t, "SUBMIT_UNKNOWN", childState(t, fixture, "child-shared-b-unknown"), "A 的失败不挡 B，B 的结果未知子单照样解析")
+	require.NotEqual(t, string(orderdomain.SubmitUnknown), childState(t, fixture, "child-shared-b-unknown"), "A 的失败不挡 B，B 的结果未知子单照样解析")
 	require.True(t, unsettledNoted(fixture, "delist-shared-all", "没收拾掉"))
 	require.Empty(t, fixture.orders.specs, "收尾期间不下单")
 }
@@ -481,7 +482,7 @@ func TestFlattenFinishingReleasesUnsettleableChild(t *testing.T) {
 
 			result, err := service.FlattenLogicalAccount(context.Background(), command)
 			require.NoError(t, err)
-			require.Equal(t, "PARTIAL", result.Action.Status)
+			require.Equal(t, string(operatordomain.StatusPartial), result.Action.Status)
 			require.Equal(t, []string{"child-gone"}, result.ManualCheckOrderIDs)
 			require.Empty(t, result.FinishingStatus)
 			require.Empty(t, fixture.orders.specs)
@@ -500,17 +501,17 @@ func TestFlattenFinishingWaitsForMissingSession(t *testing.T) {
 
 	result, err := service.FlattenLogicalAccount(context.Background(), command)
 	require.NoError(t, err)
-	require.Equal(t, "RUNNING", result.Action.Status, "没有会话不当场放行")
-	require.Equal(t, "PARTIAL", result.FinishingStatus)
+	require.Equal(t, string(operatordomain.StatusRunning), result.Action.Status, "没有会话不当场放行")
+	require.Equal(t, string(operatordomain.StatusPartial), result.FinishingStatus)
 	require.Empty(t, result.ManualCheckOrderIDs)
 
 	fixture.now = enteredAt.Add(29 * time.Minute)
 	decoded := resumeStored(t, fixture, service, "delist-nosession")
-	require.Equal(t, "RUNNING", decoded.Action.Status)
+	require.Equal(t, string(operatordomain.StatusRunning), decoded.Action.Status)
 
 	fixture.now = enteredAt.Add(30 * time.Minute)
 	decoded = resumeStored(t, fixture, service, "delist-nosession")
-	require.Equal(t, "PARTIAL", decoded.Action.Status)
+	require.Equal(t, string(operatordomain.StatusPartial), decoded.Action.Status)
 	require.Equal(t, []string{"child-nosession"}, decoded.ManualCheckOrderIDs)
 	require.Empty(t, decoded.FinishingStatus)
 	require.Empty(t, fixture.orders.specs, "收尾期间不下单")
@@ -572,8 +573,8 @@ func TestSettleFlattenChildrenKeepsErrorsOnTheAction(t *testing.T) {
 			}
 
 			result, err := service.FlattenLogicalAccount(ctx, command)
-			require.Equal(t, "RUNNING", result.Action.Status)
-			require.Equal(t, "PARTIAL", result.FinishingStatus, "收拾不完就保持收尾")
+			require.Equal(t, string(operatordomain.StatusRunning), result.Action.Status)
+			require.Equal(t, string(operatordomain.StatusPartial), result.FinishingStatus, "收拾不完就保持收尾")
 			require.NoError(t, err, "收拾子单的错误只记在动作上，不作为调用错误返回")
 			stored, getErr := fixture.store.GetOperatorAction(context.Background(), "space-1", "delist-settle")
 			require.NoError(t, getErr)
@@ -604,7 +605,7 @@ func TestActionScopedErrorCoversMemberRemovalAndConflict(t *testing.T) {
 			require.True(t, ActionScopedError(err))
 			stored, getErr := fixture.store.GetOperatorAction(context.Background(), "space-1", "flatten-removed")
 			require.NoError(t, getErr)
-			require.Equal(t, "FAILED", stored.Status)
+			require.Equal(t, string(operatordomain.StatusFailed), stored.Status)
 
 			require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_operator_actions SET c_status = 'RUNNING' WHERE c_action_id = 'flatten-removed'`).Error)
 			stored, getErr = fixture.store.GetOperatorAction(context.Background(), "space-1", "flatten-removed")
@@ -644,9 +645,9 @@ func TestFlattenFinishingDiscardLockWaitIsActionScoped(t *testing.T) {
 	authErr := &orderapp.AccountExecutionError{TradingAccountID: "account-a", Operation: "get_order",
 		Err: &exchange.Error{Kind: exchange.ErrorAuthentication, Code: "-2015"}}
 	service, _ := startFinishingWithUnknownChild(t, fixture, "delist-lock", "child-lock-unknown", authErr)
-	operatorChild(t, fixture, "account-a", "delist-lock", "child-lock-a", "PENDING")
-	operatorChild(t, fixture, "account-a", "delist-lock", "child-lock-a2", "PENDING")
-	operatorChild(t, fixture, "account-b", "delist-lock", "child-lock-b", "PENDING")
+	operatorChild(t, fixture, "account-a", "delist-lock", "child-lock-a", string(orderdomain.Pending))
+	operatorChild(t, fixture, "account-a", "delist-lock", "child-lock-a2", string(orderdomain.Pending))
+	operatorChild(t, fixture, "account-b", "delist-lock", "child-lock-b", string(orderdomain.Pending))
 	var attempts []string
 	service.Orders = blockDiscard{failResolveOrders: service.Orders.(failResolveOrders), account: "account-a", attempts: &attempts}
 
@@ -654,12 +655,12 @@ func TestFlattenFinishingDiscardLockWaitIsActionScoped(t *testing.T) {
 	require.NoError(t, err)
 	err = service.ResumeOperatorAction(context.Background(), stored)
 	require.NoError(t, err, "等账户锁超时只记在本动作上")
-	require.Equal(t, "PENDING", childState(t, fixture, "child-lock-a"))
-	require.Equal(t, "PENDING", childState(t, fixture, "child-lock-a2"))
+	require.Equal(t, string(orderdomain.Pending), childState(t, fixture, "child-lock-a"))
+	require.Equal(t, string(orderdomain.Pending), childState(t, fixture, "child-lock-a2"))
 	require.Equal(t, "CANCELED", childState(t, fixture, "child-lock-b"), "B 的待提交子单当轮丢弃")
 	require.Equal(t, []string{"child-lock-a", "child-lock-b"}, attempts, "A 等锁超时一次后，它余下的待提交子单这一轮不再试")
 	decoded := resumeStoredNoAssert(t, fixture, "delist-lock")
-	require.Equal(t, "RUNNING", decoded.Action.Status)
+	require.Equal(t, string(operatordomain.StatusRunning), decoded.Action.Status)
 	require.False(t, unsettledNoted(fixture, "delist-lock", "读写不了子单"))
 }
 
@@ -688,8 +689,8 @@ func TestFlattenFinishingHungResolveDoesNotStarveOtherMembers(t *testing.T) {
 	authErr := &orderapp.AccountExecutionError{TradingAccountID: "account-a", Operation: "get_order",
 		Err: &exchange.Error{Kind: exchange.ErrorAuthentication, Code: "-2015"}}
 	service, _ := startFinishingWithUnknownChild(t, fixture, "delist-hang", "child-hang-first", authErr)
-	operatorChild(t, fixture, "account-a", "delist-hang", "child-hang-a", "SUBMIT_UNKNOWN")
-	operatorChild(t, fixture, "account-b", "delist-hang", "child-ok-b", "SUBMIT_UNKNOWN")
+	operatorChild(t, fixture, "account-a", "delist-hang", "child-hang-a", string(orderdomain.SubmitUnknown))
+	operatorChild(t, fixture, "account-b", "delist-hang", "child-ok-b", string(orderdomain.SubmitUnknown))
 	service.Orders = hangResolve{failResolveOrders: service.Orders.(failResolveOrders), hang: "child-hang-a", other: "child-ok-b"}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
@@ -698,9 +699,9 @@ func TestFlattenFinishingHungResolveDoesNotStarveOtherMembers(t *testing.T) {
 	require.NoError(t, err)
 	err = service.ResumeOperatorAction(ctx, stored)
 	require.NoError(t, err, "解析挂住只记在本动作上")
-	require.Equal(t, "SUBMIT_UNKNOWN", childState(t, fixture, "child-hang-a"))
+	require.Equal(t, string(orderdomain.SubmitUnknown), childState(t, fixture, "child-hang-a"))
 	require.Equal(t, "CANCELED", childState(t, fixture, "child-ok-b"), "B 的子单轮得到，解析后退回待提交就丢弃")
-	require.Equal(t, "RUNNING", resumeStoredNoAssert(t, fixture, "delist-hang").Action.Status)
+	require.Equal(t, string(operatordomain.StatusRunning), resumeStoredNoAssert(t, fixture, "delist-hang").Action.Status)
 }
 
 // resumeStoredNoAssert 只读出动作当前的结果，不再恢复一次。
@@ -721,25 +722,25 @@ func TestFlattenFinishingIncompleteListingRespectsTimeout(t *testing.T) {
 		Err: &exchange.Error{Kind: exchange.ErrorAuthentication, Code: "-2015"}}
 	service, _ := startFinishingWithUnknownChild(t, fixture, "delist-list", "child-list-unknown", authErr)
 	enteredAt := fixture.now
-	operatorChild(t, fixture, "account-a", "delist-list", "child-list-a", "PENDING")
-	operatorChild(t, fixture, "account-b", "delist-list", "child-list-bad", "PENDING")
+	operatorChild(t, fixture, "account-a", "delist-list", "child-list-a", string(orderdomain.Pending))
+	operatorChild(t, fixture, "account-b", "delist-list", "child-list-bad", string(orderdomain.Pending))
 	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_trade_orders SET c_version = 'bad' WHERE c_order_id = 'child-list-bad'`).Error)
 	_, listErr := fixture.store.ListActiveOrdersForAccount(context.Background(), "space-1", "account-b")
 	require.Error(t, listErr, "坏数据要让列子单报错")
 
 	decoded := resumeStored(t, fixture, service, "delist-list")
-	require.Equal(t, "RUNNING", decoded.Action.Status, "没列全就保持收尾")
+	require.Equal(t, string(operatordomain.StatusRunning), decoded.Action.Status, "没列全就保持收尾")
 	require.Equal(t, enteredAt.UnixMilli(), decoded.FinishingSince)
 	fixture.now = enteredAt.Add(29 * time.Minute)
 	decoded = resumeStored(t, fixture, service, "delist-list")
-	require.Equal(t, "RUNNING", decoded.Action.Status)
+	require.Equal(t, string(operatordomain.StatusRunning), decoded.Action.Status)
 	require.Equal(t, enteredAt.UnixMilli(), decoded.FinishingSince, "不重新计时")
 	require.Equal(t, "CANCELED", childState(t, fixture, "child-list-a"), "其余账户照常收拾")
 	require.Contains(t, decoded.Action.LastError, "account-b")
 
 	fixture.now = enteredAt.Add(30 * time.Minute)
 	decoded = resumeStored(t, fixture, service, "delist-list")
-	require.Equal(t, "PARTIAL", decoded.Action.Status)
+	require.Equal(t, string(operatordomain.StatusPartial), decoded.Action.Status)
 	require.True(t, unsettledNoted(fixture, "delist-list", "没能列全"))
 	require.Empty(t, fixture.orders.specs, "收尾期间不下单")
 }

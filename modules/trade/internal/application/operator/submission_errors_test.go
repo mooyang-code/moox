@@ -8,6 +8,7 @@ import (
 	"time"
 
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
+	operatordomain "github.com/mooyang-code/moox/modules/trade/internal/domain/operator"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
@@ -61,7 +62,7 @@ func TestSubmissionJoinedExchangeAndSyncDatabaseFailurePreservesRejection(t *tes
 	require.Equal(t, "0", child.RemainingReservedQuantity)
 	action, err := f.store.GetOperatorAction(context.Background(), result.Action.SpaceID, result.Action.ActionID)
 	require.NoError(t, err)
-	require.Equal(t, "FAILED", action.Status)
+	require.Equal(t, string(operatordomain.StatusFailed), action.Status)
 }
 
 type deadlineOrders struct{ OrderService }
@@ -102,7 +103,7 @@ func TestSubmissionAllErrorLeavesMustBeAccountLocal(t *testing.T) {
 	dbErr := errors.New("sync database unavailable")
 	require.False(t, submissionAccountError(errors.Join(accountErr, dbErr)))
 	require.True(t, submissionAccountError(errors.Join(accountErr, tradingaccount.ErrAccountNotExecutable)))
-	require.ErrorIs(t, submissionRecoveryError(ManualOrderResult{Action: store.OperatorActionRecord{Status: "RUNNING"}}, errors.Join(submissionDeferredError{cause: accountErr}, dbErr)), dbErr)
+	require.ErrorIs(t, submissionRecoveryError(ManualOrderResult{Action: store.OperatorActionRecord{Status: string(operatordomain.StatusRunning)}}, errors.Join(submissionDeferredError{cause: accountErr}, dbErr)), dbErr)
 }
 
 func TestSubmissionCanceledDependenciesStillPersistDiagnostics(t *testing.T) {
@@ -143,7 +144,7 @@ func TestSubmissionCanceledDependenciesStillPersistDiagnostics(t *testing.T) {
 			persisted, err := f.store.GetOperatorAction(context.Background(), command.SpaceID, command.ActionID)
 			require.NoError(t, err)
 			require.Contains(t, persisted.LastError, context.DeadlineExceeded.Error())
-			require.Equal(t, "RUNNING", persisted.Status)
+			require.Equal(t, string(operatordomain.StatusRunning), persisted.Status)
 		})
 	}
 }
@@ -185,7 +186,7 @@ func TestSubmissionPlacedChildLinkFailureReturnsBothDurableIdentities(t *testing
 	require.NotEmpty(t, got.Order.OrderID)
 	child, err := f.store.GetOrder(context.Background(), command.SpaceID, got.Order.OrderID)
 	require.NoError(t, err)
-	require.Equal(t, "PENDING", child.State)
+	require.Equal(t, string(orderdomain.Pending), child.State)
 }
 
 func TestSubmissionReplayCanceledLockKeepsKnownIdentity(t *testing.T) {

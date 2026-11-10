@@ -10,6 +10,7 @@ import (
 	"time"
 
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
+	operatordomain "github.com/mooyang-code/moox/modules/trade/internal/domain/operator"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
@@ -36,7 +37,7 @@ func TestManualPermanentFailureIdentitySurvivesReplay(t *testing.T) {
 			for attempt := 0; attempt < 2; attempt++ {
 				result, err := s.PlaceManualOrder(context.Background(), command)
 				require.ErrorIs(t, err, cause)
-				require.Equal(t, "FAILED", result.Action.Status)
+				require.Equal(t, string(operatordomain.StatusFailed), result.Action.Status)
 				require.Contains(t, *result.Action.ResultJSON, "error_code")
 			}
 		})
@@ -47,7 +48,7 @@ func TestManualFailurePersistenceErrorRemainsSystemError(t *testing.T) {
 	f := newOperatorFixture(t, exchange.MarketTypeSpot)
 	closed, err := store.Open(filepath.Join(t.TempDir(), "closed.db"))
 	require.NoError(t, err)
-	action := store.OperatorActionRecord{SpaceID: "space-1", ActionID: "closed", LogicalAccountID: "logical-1", ActionType: "MANUAL_ORDER", RequestJSON: `{}`, Reason: "closed db", Status: "RUNNING"}
+	action := store.OperatorActionRecord{SpaceID: "space-1", ActionID: "closed", LogicalAccountID: "logical-1", ActionType: string(operatordomain.ActionManualOrder), RequestJSON: `{}`, Reason: "closed db", Status: string(operatordomain.StatusRunning)}
 	require.NoError(t, closed.Close())
 	s := f.service()
 	s.Store = closed
@@ -88,18 +89,18 @@ func TestManualMissingInstrumentFailsAction(t *testing.T) {
 	command := ManualOrderCommand{SpaceID: "space-1", ActionID: "missing-instrument", TradingAccountID: "account-a", ClientOrderID: "missing-client", InstrumentID: "does-not-exist", Type: exchange.OrderTypeMarket, Side: exchange.SideBuy, Quantity: shared.MustDecimal("1"), Reason: "invalid instrument test"}
 	result, err := f.service().PlaceManualOrder(context.Background(), command)
 	require.ErrorIs(t, err, ErrInvalidCommand)
-	require.Equal(t, "FAILED", result.Action.Status)
+	require.Equal(t, string(operatordomain.StatusFailed), result.Action.Status)
 	action, err := f.store.GetOperatorAction(context.Background(), "space-1", command.ActionID)
 	require.NoError(t, err)
-	require.Equal(t, "FAILED", action.Status)
+	require.Equal(t, string(operatordomain.StatusFailed), action.Status)
 }
 
 func TestManualRunningDiagnosticIsNotReadError(t *testing.T) {
 	f := newOperatorFixture(t, exchange.MarketTypeSpot)
 	raw := `{"deadline_at":123}`
-	result, err := f.service().loadManualOrderResult(context.Background(), store.OperatorActionRecord{Status: "RUNNING", ResultJSON: &raw, LastError: "temporary transport failure"})
+	result, err := f.service().loadManualOrderResult(context.Background(), store.OperatorActionRecord{Status: string(operatordomain.StatusRunning), ResultJSON: &raw, LastError: "temporary transport failure"})
 	require.NoError(t, err)
-	require.Equal(t, "RUNNING", result.Action.Status)
+	require.Equal(t, string(operatordomain.StatusRunning), result.Action.Status)
 }
 
 func TestManualLegacyDeadlineIsBackfilledOnce(t *testing.T) {
@@ -107,7 +108,7 @@ func TestManualLegacyDeadlineIsBackfilledOnce(t *testing.T) {
 	ctx := context.Background()
 	action, _, err := f.store.CreateOperatorAction(ctx, store.OperatorActionRecord{
 		SpaceID: "space-1", ActionID: "legacy", LogicalAccountID: "logical-1",
-		ActionType: "MANUAL_ORDER", Reason: "legacy recovery", RequestJSON: `{}`, Status: "RUNNING",
+		ActionType: string(operatordomain.ActionManualOrder), Reason: "legacy recovery", RequestJSON: `{}`, Status: string(operatordomain.StatusRunning),
 	})
 	require.NoError(t, err)
 	s := f.service()
@@ -129,7 +130,7 @@ func TestManualLegacyDeadlineIsBackfilledOnce(t *testing.T) {
 
 func TestManualTerminalWithoutResultIsCorrupt(t *testing.T) {
 	f := newOperatorFixture(t, exchange.MarketTypeSpot)
-	for _, status := range []string{"COMPLETED", "FAILED"} {
+	for _, status := range []string{string(operatordomain.StatusCompleted), string(operatordomain.StatusFailed)} {
 		_, err := f.service().loadManualOrderResult(context.Background(), store.OperatorActionRecord{Status: status})
 		require.ErrorIs(t, err, store.ErrInvalidRecord)
 	}
@@ -139,14 +140,14 @@ func TestManualPersistedResultContractFailsClosed(t *testing.T) {
 	f := newOperatorFixture(t, exchange.MarketTypeSpot)
 	f.order(t, activeOrder(f, "child", "OPERATOR"))
 	for _, tc := range []struct{ name, status, raw, lastError string }{
-		{name: "nil-completed", status: "COMPLETED"},
-		{name: "nil-failed", status: "FAILED", lastError: "failure"},
-		{name: "empty-completed", status: "COMPLETED", raw: `{}`},
-		{name: "empty-failed", status: "FAILED", raw: `{}`},
-		{name: "deadline-completed", status: "COMPLETED", raw: `{"deadline_at":1}`},
-		{name: "deadline-failed", status: "FAILED", raw: `{"deadline_at":1}`},
-		{name: "failed-child-no-error", status: "FAILED", raw: `{"order_id":"child"}`},
-		{name: "completed-with-error", status: "COMPLETED", raw: `{"order_id":"child"}`, lastError: "failure"},
+		{name: "nil-completed", status: string(operatordomain.StatusCompleted)},
+		{name: "nil-failed", status: string(operatordomain.StatusFailed), lastError: "failure"},
+		{name: "empty-completed", status: string(operatordomain.StatusCompleted), raw: `{}`},
+		{name: "empty-failed", status: string(operatordomain.StatusFailed), raw: `{}`},
+		{name: "deadline-completed", status: string(operatordomain.StatusCompleted), raw: `{"deadline_at":1}`},
+		{name: "deadline-failed", status: string(operatordomain.StatusFailed), raw: `{"deadline_at":1}`},
+		{name: "failed-child-no-error", status: string(operatordomain.StatusFailed), raw: `{"order_id":"child"}`},
+		{name: "completed-with-error", status: string(operatordomain.StatusCompleted), raw: `{"order_id":"child"}`, lastError: "failure"},
 		{name: "unknown-status", status: "UNKNOWN", raw: `{"order_id":"child"}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -167,12 +168,12 @@ func TestManualLegacyExpiredActionCannotSubmit(t *testing.T) {
 	command := ManualOrderCommand{SpaceID: "space-1", ActionID: "old-action", TradingAccountID: "account-a", ClientOrderID: "old-client", InstrumentID: f.instrumentID(), Type: exchange.OrderTypeMarket, Side: exchange.SideBuy, Quantity: shared.MustDecimal("1"), Reason: "legacy"}
 	request, err := manualOrderRequestJSON(command)
 	require.NoError(t, err)
-	_, _, err = f.store.CreateOperatorAction(ctx, store.OperatorActionRecord{SpaceID: command.SpaceID, ActionID: command.ActionID, LogicalAccountID: "logical-1", ActionType: "MANUAL_ORDER", Status: "RUNNING", Reason: command.Reason, RequestJSON: request})
+	_, _, err = f.store.CreateOperatorAction(ctx, store.OperatorActionRecord{SpaceID: command.SpaceID, ActionID: command.ActionID, LogicalAccountID: "logical-1", ActionType: string(operatordomain.ActionManualOrder), Status: string(operatordomain.StatusRunning), Reason: command.Reason, RequestJSON: request})
 	require.NoError(t, err)
 	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_operator_actions SET c_ctime = ? WHERE c_space_id = ? AND c_action_id = ?", f.now.Add(-time.Hour), command.SpaceID, command.ActionID).Error)
 	result, err := f.service().PlaceManualOrder(ctx, command)
 	require.ErrorContains(t, err, "deadline")
-	require.Equal(t, "FAILED", result.Action.Status)
+	require.Equal(t, string(operatordomain.StatusFailed), result.Action.Status)
 	require.Empty(t, f.orders.specs)
 	require.Zero(t, f.orders.submitCalls)
 }
@@ -213,7 +214,7 @@ func TestManualOrderPausesAndCancelsTargetsBeforeSubmit(t *testing.T) {
 	)
 
 	require.NoError(t, err)
-	require.Equal(t, "COMPLETED", result.Action.Status)
+	require.Equal(t, string(operatordomain.StatusCompleted), result.Action.Status)
 	require.Equal(t, "manual-order-1", result.Order.OrderID)
 	require.Equal(t, []string{
 		"sync:account-a",
@@ -310,8 +311,8 @@ func TestManualOrderRunningReplayFailsStablyAfterMemberRemoval(t *testing.T) {
 		context.Background(),
 		store.OperatorActionRecord{
 			SpaceID: "space-1", ActionID: "manual-1",
-			LogicalAccountID: "logical-1", ActionType: "MANUAL_ORDER",
-			Reason: command.Reason, RequestJSON: requestJSON, Status: "RUNNING",
+			LogicalAccountID: "logical-1", ActionType: string(operatordomain.ActionManualOrder),
+			Reason: command.Reason, RequestJSON: requestJSON, Status: string(operatordomain.StatusRunning),
 		},
 	)
 	require.NoError(t, err)
@@ -331,12 +332,12 @@ func TestManualOrderRunningReplayFailsStablyAfterMemberRemoval(t *testing.T) {
 	)
 
 	require.Error(t, err)
-	require.Equal(t, "FAILED", result.Action.Status)
+	require.Equal(t, string(operatordomain.StatusFailed), result.Action.Status)
 	replayed, replayErr := fixture.service().PlaceManualOrder(
 		context.Background(), command,
 	)
 	require.Error(t, replayErr)
-	require.Equal(t, "FAILED", replayed.Action.Status)
+	require.Equal(t, string(operatordomain.StatusFailed), replayed.Action.Status)
 }
 
 func TestManualOrderRunningReplayFailsAfterAccountMovesLogicalAccount(t *testing.T) {
@@ -354,8 +355,8 @@ func TestManualOrderRunningReplayFailsAfterAccountMovesLogicalAccount(t *testing
 		context.Background(),
 		store.OperatorActionRecord{
 			SpaceID: "space-1", ActionID: "manual-1",
-			LogicalAccountID: "logical-1", ActionType: "MANUAL_ORDER",
-			Reason: command.Reason, RequestJSON: requestJSON, Status: "RUNNING",
+			LogicalAccountID: "logical-1", ActionType: string(operatordomain.ActionManualOrder),
+			Reason: command.Reason, RequestJSON: requestJSON, Status: string(operatordomain.StatusRunning),
 		},
 	)
 	require.NoError(t, err)
@@ -388,7 +389,7 @@ func TestManualOrderRunningReplayFailsAfterAccountMovesLogicalAccount(t *testing
 	)
 
 	require.Error(t, err)
-	require.Equal(t, "FAILED", result.Action.Status)
+	require.Equal(t, string(operatordomain.StatusFailed), result.Action.Status)
 	require.Contains(t, result.Accounts[0].Error, "moved")
 }
 
@@ -519,7 +520,7 @@ func TestManualOrderRejectsTargetDiscoveredDuringCancellationSync(t *testing.T) 
 	require.NoError(t, err)
 	action, getErr := fixture.store.GetOperatorAction(context.Background(), "space-1", "manual-1")
 	require.NoError(t, getErr)
-	require.Equal(t, "RUNNING", action.Status)
+	require.Equal(t, string(operatordomain.StatusRunning), action.Status)
 	require.Contains(t, action.LastError, ErrCancelUnconfirmed.Error())
 	require.Empty(t, fixture.orders.specs)
 }
@@ -550,7 +551,7 @@ func TestManualOrderCancelsEveryMemberAndReturnsPerAccountErrors(t *testing.T) {
 	require.Empty(t, fixture.orders.specs)
 	require.NotEmpty(t, result.Accounts)
 	require.Equal(t, "account-a", result.Accounts[0].TradingAccountID)
-	require.Equal(t, "RUNNING", result.Action.Status)
+	require.Equal(t, string(operatordomain.StatusRunning), result.Action.Status)
 	require.Contains(t, result.Action.LastError, ErrCancelUnconfirmed.Error())
 }
 
@@ -567,7 +568,7 @@ func TestCancelOrderPausesLogicalAccountAndIsIdempotent(t *testing.T) {
 	replayed, err := fixture.service().CancelOrder(context.Background(), command)
 	require.NoError(t, err)
 
-	require.Equal(t, "COMPLETED", first.Action.Status)
+	require.Equal(t, string(operatordomain.StatusCompleted), first.Action.Status)
 	require.Equal(t, first.Order.OrderID, replayed.Order.OrderID)
 	require.Equal(t, []string{
 		"cancel:target-child", "sync:account-a",
@@ -602,8 +603,8 @@ func TestResumeOperatorActionContinuesPersistedCancel(t *testing.T) {
 		context.Background(),
 		store.OperatorActionRecord{
 			SpaceID: "space-1", ActionID: "cancel-1",
-			LogicalAccountID: "logical-1", ActionType: "CANCEL_ORDER",
-			Reason: "operator cancel", RequestJSON: requestJSON, Status: "RUNNING",
+			LogicalAccountID: "logical-1", ActionType: string(operatordomain.ActionCancelOrder),
+			Reason: "operator cancel", RequestJSON: requestJSON, Status: string(operatordomain.StatusRunning),
 		},
 	)
 	require.NoError(t, err)
@@ -616,7 +617,7 @@ func TestResumeOperatorActionContinuesPersistedCancel(t *testing.T) {
 		context.Background(), "space-1", "cancel-1",
 	)
 	require.NoError(t, err)
-	require.Equal(t, "COMPLETED", current.Status)
+	require.Equal(t, string(operatordomain.StatusCompleted), current.Status)
 	require.Equal(t, []string{
 		"cancel:target-child", "sync:account-a",
 	}, fixture.trace)
@@ -808,7 +809,7 @@ func (s *operatorOrderStub) Place(
 		ReduceOnly:       spec.ReducePositionOnly,
 		OwnerType:        string(spec.Owner.Type), OwnerID: spec.Owner.OwnerID,
 		LogicalAccountID: spec.Owner.LogicalAccountID,
-		State:            "PENDING", Version: 1,
+		State:            string(orderdomain.Pending), Version: 1,
 	}
 	if spec.LimitPrice != nil {
 		value := spec.LimitPrice.String()

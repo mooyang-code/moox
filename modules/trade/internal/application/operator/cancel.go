@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	operatordomain "github.com/mooyang-code/moox/modules/trade/internal/domain/operator"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"gorm.io/gorm"
@@ -69,15 +70,15 @@ func (s *Service) CancelOrder(
 			store.OperatorActionRecord{
 				SpaceID: command.SpaceID, ActionID: command.ActionID,
 				LogicalAccountID: existing.LogicalAccountID,
-				ActionType:       "CANCEL_ORDER", Reason: strings.TrimSpace(command.Reason),
-				RequestJSON: requestJSON, Status: "RUNNING",
+				ActionType:       string(operatordomain.ActionCancelOrder), Reason: strings.TrimSpace(command.Reason),
+				RequestJSON: requestJSON, Status: string(operatordomain.StatusRunning),
 			},
 		)
 		if ensureErr != nil {
 			return CancelOrderResult{}, ensureErr
 		}
 		knownAction = current
-		if current.Status != "RUNNING" {
+		if current.Status != string(operatordomain.StatusRunning) {
 			return s.loadCancelOrderResult(ctx, current)
 		}
 	} else if !errors.Is(existingErr, gorm.ErrRecordNotFound) {
@@ -129,8 +130,8 @@ func (s *Service) CancelOrder(
 			store.OperatorActionRecord{
 				SpaceID: command.SpaceID, ActionID: command.ActionID,
 				LogicalAccountID: orderRecord.LogicalAccountID,
-				ActionType:       "CANCEL_ORDER", Reason: strings.TrimSpace(command.Reason),
-				RequestJSON: requestJSON, Status: "RUNNING",
+				ActionType:       string(operatordomain.ActionCancelOrder), Reason: strings.TrimSpace(command.Reason),
+				RequestJSON: requestJSON, Status: string(operatordomain.StatusRunning),
 			},
 		)
 		return ensureErr
@@ -139,7 +140,7 @@ func (s *Service) CancelOrder(
 		return CancelOrderResult{}, err
 	}
 	knownAction = action
-	if action.Status != "RUNNING" {
+	if action.Status != string(operatordomain.StatusRunning) {
 		return s.loadCancelOrderResult(ctx, action)
 	}
 	current, err := s.Store.GetOrder(ctx, command.SpaceID, command.OrderID)
@@ -179,7 +180,7 @@ func (s *Service) CancelOrder(
 	}
 	raw := string(resultData)
 	previousAction := action
-	action.Status = "COMPLETED"
+	action.Status = string(operatordomain.StatusCompleted)
 	action.ResultJSON = &raw
 	action.LastError = ""
 	if err := s.updateAction(ctx, action); err != nil {
@@ -238,10 +239,10 @@ func (s *Service) failCancelAction(
 	} else {
 		orderRecord = current
 	}
-	action.Status = "RUNNING"
+	action.Status = string(operatordomain.StatusRunning)
 	if s.actionOlderThan(action, cancelActionTimeout) {
 		// 撤单迟迟确认不了就结束操作，否则恢复自动执行会一直被挡住。
-		action.Status = "FAILED"
+		action.Status = string(operatordomain.StatusFailed)
 	}
 	action.LastError = cause.Error()
 	data, marshalErr := json.Marshal(map[string]string{

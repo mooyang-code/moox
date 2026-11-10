@@ -8,6 +8,8 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/application/accountsync"
 	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
+	operatordomain "github.com/mooyang-code/moox/modules/trade/internal/domain/operator"
+	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
@@ -108,9 +110,9 @@ func TestLaterFlattenWithRealSyncClosesDelistedLeftover(t *testing.T) {
 			}}
 			finished, err := service.FlattenLogicalAccount(context.Background(), command)
 			require.NoError(t, err)
-			require.Equal(t, "PARTIAL", finished.Action.Status)
+			require.Equal(t, string(operatordomain.StatusPartial), finished.Action.Status)
 			require.Equal(t, []string{"child-gone"}, finished.ManualCheckOrderIDs)
-			require.Equal(t, "SUBMIT_UNKNOWN", childState(t, fixture, "child-gone"), "清仓要在遗留单还没结束时发起")
+			require.Equal(t, string(orderdomain.SubmitUnknown), childState(t, fixture, "child-gone"), "清仓要在遗留单还没结束时发起")
 
 			fixture.orders.nextID = ""
 			later := flattenCommand("later-" + tc.name)
