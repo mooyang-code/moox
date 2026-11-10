@@ -190,6 +190,32 @@ func (s *Store) ListWalletTransfersByAccount(ctx context.Context, spaceID, tradi
 	return records, nil
 }
 
+const listWalletTransfersByRefPrefixSQL = `
+	SELECT c_space_id, c_transfer_id, c_trading_account_id, c_logical_account_id, c_target_id,
+		c_direction, c_asset, c_amount, c_client_ref, c_exchange_transfer_id,
+		c_capped, c_state, c_last_error, c_requested_at, c_completed_at
+	FROM t_trade_wallet_transfers
+	WHERE c_space_id = ? AND c_trading_account_id = ? AND substr(c_client_ref, 1, length(?)) = ?
+	ORDER BY c_requested_at, c_transfer_id
+`
+
+// ListWalletTransfersByRefPrefix 返回一个执行账户上本地引用号以 prefix（“幂等键:方向:”）开头的全部划转记录，按请求时间从早到晚，
+// 不限时间窗口，和 NextWalletTransferAttempt 的查法一致。风控归集靠它判断某次风控事件是否已经归集过，重启和隔多久都不丢。
+func (s *Store) ListWalletTransfersByRefPrefix(ctx context.Context, spaceID, tradingAccountID, prefix string) ([]WalletTransferRecord, error) {
+	if blank(spaceID) || blank(tradingAccountID) || blank(prefix) {
+		return nil, fmt.Errorf("%w: incomplete wallet transfer reference", ErrInvalidRecord)
+	}
+	var rows []walletTransferRow
+	if err := s.db.WithContext(ctx).Raw(listWalletTransfersByRefPrefixSQL, spaceID, tradingAccountID, prefix, prefix).Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	records := make([]WalletTransferRecord, 0, len(rows))
+	for _, row := range rows {
+		records = append(records, row.record())
+	}
+	return records, nil
+}
+
 const getWalletTransferSQL = `
 	SELECT c_space_id, c_transfer_id, c_trading_account_id, c_logical_account_id, c_target_id,
 		c_direction, c_asset, c_amount, c_client_ref, c_exchange_transfer_id,

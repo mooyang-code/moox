@@ -852,6 +852,48 @@ func TestRiskCollectIsIdempotentPerKeyAndSeparatesRiskEvents(t *testing.T) {
 	require.Len(t, e.exchange.Calls(), 3)
 }
 
+// “是否已经归集”按引用号查全部记录，不限 24 小时窗口：归集完成 25 小时后进程重启，风控和目标的归集都不会再划一次。
+func TestCollectDoesNotRepeatAfterTheWindowAndARestart(t *testing.T) {
+	ctx := context.Background()
+	const key = "margin-logical-1-1000"
+	e := newEnv(t, "500", "50")
+	accounts := []store.TradingAccountRecord{e.account}
+
+	pending, err := e.service.CollectForRisk(ctx, "space-1", "logical-1", key, accounts)
+	require.NoError(t, err)
+	require.True(t, pending)
+	e.exchange.ConfirmAll()
+	e.now = e.now.Add(time.Second)
+	pending, err = e.service.CollectForRisk(ctx, "space-1", "logical-1", key, accounts)
+	require.NoError(t, err)
+	require.False(t, pending)
+	require.Len(t, e.exchange.Calls(), 1)
+
+	e.exchange.Set(func(f *wallettest.Exchange) { f.Spot = "700"; f.Futures = "50" })
+	e.now = e.now.Add(25 * time.Hour)
+	restarted := e.newService()
+
+	pending, err = restarted.CollectForRisk(ctx, "space-1", "logical-1", key, accounts)
+	require.NoError(t, err)
+	require.False(t, pending)
+	require.Len(t, e.exchange.Calls(), 1, "25 小时前已经归集完成，重启后现货钱包多出来的资金也不再为这次风控事件划")
+
+	pending, err = restarted.Collect(ctx, "space-1", e.target, accounts)
+	require.NoError(t, err)
+	require.True(t, pending, "没做过的目标归集照常做")
+	require.Len(t, e.exchange.Calls(), 2)
+	e.exchange.ConfirmAll()
+	e.now = e.now.Add(time.Second)
+	pending, err = restarted.Collect(ctx, "space-1", e.target, accounts)
+	require.NoError(t, err)
+	require.False(t, pending)
+	e.now = e.now.Add(26 * time.Hour)
+	pending, err = e.newService().Collect(ctx, "space-1", e.target, accounts)
+	require.NoError(t, err)
+	require.False(t, pending)
+	require.Len(t, e.exchange.Calls(), 2, "每个目标最多归集一次，隔多久都一样")
+}
+
 // 风控归集必须做成：不沿用目标归集“收尾吞错”的语义。出错返回 error（调用方下一轮重试），别的未结划转时 pending，
 // 限频、没到账的软失败记录不算“做过”，重试用递增的本地引用号不撞唯一约束，被拒绝连续 3 次后不再自动重试。
 func TestRiskCollectRetriesAfterFailuresInsteadOfLookingDone(t *testing.T) {
@@ -908,7 +950,7 @@ func TestRiskCollectRetriesAfterFailuresInsteadOfLookingDone(t *testing.T) {
 		require.Len(t, e.exchange.Calls(), calls)
 	})
 
-	t.Run("被交易所拒绝：重试，连续 3 次后不再自动重试但仍返回错误", func(t *testing.T) {
+	t.Run("被交易所拒绝：重试，连续 3 次后放弃，只告警一次，之后不再尝试也不再报错", func(t *testing.T) {
 		e := newEnv(t, "500", "50")
 		e.exchange.TransferErr = &exchange.Error{Kind: exchange.ErrorRejected, Err: errors.New("rejected")}
 		for range maxTransferFailures {
@@ -917,11 +959,20 @@ func TestRiskCollectRetriesAfterFailuresInsteadOfLookingDone(t *testing.T) {
 		}
 		require.Len(t, e.exchange.Calls(), maxTransferFailures)
 		e.exchange.TransferErr = nil
-		_, err := collect(e)
-		require.Error(t, err, "不再自动重试，但不能当成完成")
-		require.Contains(t, err.Error(), "手动")
-		require.Len(t, e.exchange.Calls(), maxTransferFailures)
+		for range 3 {
+			pending, err := collect(e)
+			require.NoError(t, err, "放弃之后不再每轮报错")
+			require.False(t, pending)
+		}
+		require.Len(t, e.exchange.Calls(), maxTransferFailures, "不再自动重试")
 		require.Equal(t, key+":TO_FUTURES:3|FAILED", refs(e)[2])
+		require.Len(t, e.service.alerted, 2, "前几次失败告警一条，放弃再告警一条，之后每轮都不再新增")
+		// 重启后读到同样的记录，仍然不再尝试。
+		restarted := e.newService()
+		pending, err := restarted.CollectForRisk(ctx, "space-1", "logical-1", key, []store.TradingAccountRecord{e.account})
+		require.NoError(t, err)
+		require.False(t, pending)
+		require.Len(t, e.exchange.Calls(), maxTransferFailures)
 	})
 
 	t.Run("目标归集仍是收尾动作：出错只告警、不返回错误", func(t *testing.T) {

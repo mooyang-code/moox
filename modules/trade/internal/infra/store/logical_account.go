@@ -384,11 +384,6 @@ func MarginPauseReducePartialReason() string {
 	return AutoPauseReason(marginPauseText + "，组合已暂停，风控减仓只完成了一部分，请检查持仓后手动处理并确认恢复")
 }
 
-// IsMarginPauseReduced 判断暂停原因是否表示风控已经发起过减仓（不论减仓是否做完），减仓后的归集跟随这些原因。
-func IsMarginPauseReduced(reason string) bool {
-	return reason == MarginPauseReason() || reason == MarginPauseReduceFailedReason() || reason == MarginPauseReducePartialReason()
-}
-
 // MarginAttentionDetail 是 margin_ratio_low 关注项的固定文字，带上减仓状态（不带比值）。
 func MarginAttentionDetail(reason string) string {
 	switch reason {

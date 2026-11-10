@@ -516,16 +516,60 @@ func TestCollectRunsAfterTheReduceFinishes(t *testing.T) {
 	require.Len(t, f.reduces, 1, "组合仍是暂停的，不会再次触发")
 }
 
-// 组合后来因为别的原因自动暂停（暂停原因不是保证金风控）：不会对很早以前的风控减仓再调归集。
-func TestCollectOnlyFollowsAMarginPause(t *testing.T) {
+// 归集不看暂停原因文字：风控减仓之后撤单、外部成交、人工下单、手动暂停都会改写暂停原因，归集照常做完。
+func TestCollectIgnoresRewrittenPauseReasons(t *testing.T) {
+	for name, reason := range map[string]string{
+		"外部订单或成交": store.AutoPauseReason("发现外部订单"),
+		"人工下单待核实": store.AutoPauseReason("人工下单结果待核实"),
+		"用户撤单":    "人工撤单",
+		"用户手动暂停":  "手动暂停",
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFixture(t, "", "400")
+			f.run()
+			actionID := f.reduces[0].actionID
+			require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_operator_actions SET c_status = 'COMPLETED'`).Error)
+			require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
+				return tx.SetLogicalAccountAutomation("space-1", "logical-1", "PAUSED", reason)
+			}))
+
+			f.run()
+
+			require.Equal(t, []string{"logical-1|" + actionID + "|account-1"}, f.collect)
+		})
+	}
+}
+
+// 减仓动作之后组合恢复过：不再为旧动作归集（再次触发会有新的动作号）。
+func TestCollectStopsOnceThePortfolioWasResumed(t *testing.T) {
 	f := newFixture(t, "", "400")
 	f.run()
 	require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_operator_actions SET c_status = 'COMPLETED'`).Error)
+	f.resume()
 	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
 		return tx.SetLogicalAccountAutomation("space-1", "logical-1", "PAUSED", store.AutoPauseReason("发现外部订单"))
 	}))
+	f.restart()
+
 	f.run()
+
 	require.Empty(t, f.collect)
+}
+
+// 重启之后（进程内缓存清零）仍会调一次归集：是否已经归集完成由归集实现按引用号查记录得出，监控不靠自己的内存。
+func TestCollectAfterARestartAsksTheCollectorAgain(t *testing.T) {
+	f := newFixture(t, "", "400")
+	f.run()
+	require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_operator_actions SET c_status = 'COMPLETED'`).Error)
+	f.run()
+	require.Len(t, f.collect, 1)
+	f.run()
+	require.Len(t, f.collect, 1, "完成之后同一个进程里不再问")
+
+	f.restart()
+	f.run()
+
+	require.Len(t, f.collect, 2)
 }
 
 // 划转还没接入（没配 Collect，或返回“不可用”）：只告警一次，不记为失败、不重复调用。

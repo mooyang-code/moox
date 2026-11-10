@@ -763,13 +763,13 @@ func (s *Service) Collect(ctx context.Context, spaceID string, targetRecord stor
 }
 
 // CollectForRisk 是风控（保证金率监控）触发后的归集：没有目标，TargetID 为空串，一次风控事件由幂等键标识
-// （风控减仓的动作号 margin-<组合>-<时间>）。同一个幂等键最多归集一次，未结的记录对账到完成；
+// （风控减仓的动作号 margin-<组合>-<时间>）。同一个幂等键最多归集一次（按引用号查全部记录，不限时间），未结的记录对账到完成；
 // 不同幂等键是不同的风控事件，各自归集，不会被上一次的记录当成“已经做过”。每一轮都会调用，实现幂等。
 //
 // 风控归集不沿用目标归集“收尾吞错”的语义（那是收尾动作，失败了留给下一份目标）：风控触发后卖出所得留在现货钱包补不到合约保证金，
 // 必须做成。所以出错（查余额限频、划转没发出、被拒绝）返回 error，调用方下一轮重试；账户上有别的未结划转返回 pending=true；
 // 只有真的没有可归集的资金，或这个幂等键的归集已经完成，才返回 (false, nil)。限频、没到账这类软失败的记录不算“做过”，
-// 重试用新的本地引用号（<幂等键>:TO_FUTURES:<第几次>），不会撞唯一约束；被交易所确定拒绝连续 3 次后不再自动重试（告警一次，仍返回 error）。
+// 重试用新的本地引用号（<幂等键>:TO_FUTURES:<第几次>），不会撞唯一约束；被交易所确定拒绝连续 3 次后不再自动重试：告警一次，之后返回 (false, nil)，不再报错（是否放弃每轮从引用号下的记录推出，不记进程状态）。
 func (s *Service) CollectForRisk(ctx context.Context, spaceID, logicalAccountID, idempotencyKey string, accounts []store.TradingAccountRecord) (bool, error) {
 	if strings.TrimSpace(idempotencyKey) == "" {
 		return false, errors.New("风控归集需要幂等键")
@@ -803,43 +803,33 @@ func (s *Service) collect(ctx context.Context, spaceID string, targetRecord stor
 }
 
 func (s *Service) collectForAccount(ctx context.Context, spaceID string, targetRecord store.LogicalAccountTargetRecord, key string, account store.TradingAccountRecord) (bool, error) {
-	// 这一次归集的记录：目标归集按 TargetID，风控归集（TargetID 为空串）按本地引用号里的幂等键。
-	owns := func(row store.WalletTransferRecord) bool {
-		if row.Direction != store.TransferToFutures {
-			return false
-		}
-		if key == "" {
-			return row.TargetID == targetRecord.TargetID
-		}
-		return row.TargetID == "" && strings.HasPrefix(row.ClientRef, key+":")
-	}
 	adapter, transferer, err := s.transferer(account.TradingAccountID)
 	if err != nil {
 		return false, err
 	}
-	rows, pendingRows, err := s.settleAccountPending(ctx, spaceID, account, transferer)
+	// 先把账户上未结的划转对账一遍（只看近 accountWindow），再查这一次归集自己的记录：
+	// “是否已经归集”按引用号查全部记录、不限时间，重启和隔多久都不会再归集一次。
+	_, pendingRows, err := s.settleAccountPending(ctx, spaceID, account, transferer)
 	if err != nil {
 		return false, err
 	}
-	for _, row := range pendingRows {
-		if owns(row) {
-			return true, nil
-		}
+	var owned []store.WalletTransferRecord
+	if key == "" {
+		owned, err = s.Store.ListWalletTransfersForTarget(ctx, spaceID, targetRecord.LogicalAccountID, targetRecord.TargetID, account.TradingAccountID, store.TransferToFutures)
+	} else {
+		owned, err = s.Store.ListWalletTransfersByRefPrefix(ctx, spaceID, account.TradingAccountID, fmt.Sprintf("%s:%s:", key, store.TransferToFutures))
 	}
-	if len(pendingRows) > 0 {
-		// 账户上有别的未结划转：不发起新的归集。目标归集是收尾动作，不挡目标定终态；风控归集必须做成，等它结束后再来。
-		return key != "", nil
+	if err != nil {
+		return false, err
 	}
 	hardFailures := 0
-	for _, row := range rows {
-		if !owns(row) {
-			continue
-		}
-		if key == "" {
+	for _, row := range owned {
+		switch {
+		case row.State == store.TransferStatePending:
+			return true, nil // 这一次归集的划转还没确认
+		case key == "":
 			// 这个目标已经归集过（或失败过）：每个目标最多归集一次，失败的留给下一份目标。
 			return false, nil
-		}
-		switch {
 		case row.State == store.TransferStateCompleted:
 			return false, nil // 这次风控事件已经归集完成
 		case row.State == store.TransferStateFailed && !strings.HasPrefix(row.LastError, softNotSent) && !strings.HasPrefix(row.LastError, softNotArrive):
@@ -847,7 +837,15 @@ func (s *Service) collectForAccount(ctx context.Context, spaceID string, targetR
 		}
 	}
 	if hardFailures >= maxTransferFailures {
-		return false, fmt.Errorf("风控归集被交易所拒绝 %d 次，不再自动重试，请手动把现货钱包的资金划回合约钱包", hardFailures)
+		// 被交易所确定拒绝到上限：这次风控事件的归集到此为止，告警一次，之后每轮读到同样的记录直接跳过，不再尝试也不再报错。
+		s.alertOnceWithLabel(telemetry.AttentionTransferFailing, key+"|放弃", account.TradingAccountID,
+			fmt.Sprintf("%s：风控归集被交易所拒绝 %d 次，不再自动重试，请手动把现货钱包的资金划回合约钱包", account.Name, hardFailures),
+			account.Name+"：风控归集被拒绝，请手动归集")
+		return false, nil
+	}
+	if len(pendingRows) > 0 {
+		// 账户上有别的未结划转：不发起新的归集。目标归集是收尾动作，不挡目标定终态；风控归集必须做成，等它结束后再来。
+		return key != "", nil
 	}
 	snapshot, err := adapter.GetAccountSnapshot(ctx)
 	if err != nil {
