@@ -91,7 +91,7 @@ export function syncTradingAccount(trading_account_id: string) {
   >("console", "SyncTradingAccount", { trading_account_id });
 }
 
-// 只读检测一把交易所密钥，不落库；检测没有完成（超时、限频）时返回业务错误，不代表密钥有问题。
+// 只读检测一把交易所密钥，不保存；检测没有完成（超时、限频）时返回业务错误，不代表密钥有问题。
 export function inspectExchangeCredential(req: InspectExchangeCredentialReq) {
   return callTrade<InspectExchangeCredentialReq, { ret_info: RetInfo; inspection: ExchangeInspection }>(
     "console",
@@ -374,9 +374,9 @@ export const operatorActionTypeLabels: Record<OperatorActionType, string> = {
 };
 export const targetStateLabels: Record<string, string> = {
   PENDING: "等待执行",
-  CONVERGING: "收敛中",
-  CONVERGED: "已收敛",
-  BLOCKED: "已阻塞",
+  CONVERGING: "调仓中",
+  CONVERGED: "已到位",
+  BLOCKED: "执行受阻",
   EXPIRED: "已过期"
 };
 

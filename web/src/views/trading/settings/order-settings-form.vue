@@ -8,21 +8,21 @@
       <a-form-item label="调仓阈值比例" extra="0.05 表示 5%；建仓和清仓不受阈值限制">
         <a-input v-model="model.rebalance_threshold_ratio" :disabled="model.rebalance_threshold_mode === 'ALWAYS'" />
       </a-form-item>
-      <a-form-item label="现货最小下单额">
+      <a-form-item :label="stockOnly ? '最小下单额' : '现货最小下单额'">
         <a-input v-model="model.min_notional_spot" :suffix="unit" />
       </a-form-item>
-      <a-form-item label="合约最小下单额" extra="合约减仓和清仓低于这个额度也能下">
+      <a-form-item v-if="!stockOnly" label="合约最小下单额" extra="合约减仓和清仓低于这个额度也能下">
         <a-input v-model="model.min_notional_swap" :suffix="unit" />
       </a-form-item>
     </section>
 
     <section class="settings-group">
-      <h4>单币每小时上限</h4>
+      <h4>{{ stockOnly ? "单只股票每小时上限" : "单币每小时上限" }}</h4>
       <p class="settings-hint">
         每个标的每个自然小时累计下单金额的上限，超出的部分留到下一个整点；标的写 * 表示默认值，不填表示不限。
       </p>
       <div v-for="market in capMarkets" :key="market.key" class="cap-block">
-        <div class="cap-title">{{ market.label }}</div>
+        <div v-if="market.label" class="cap-title">{{ market.label }}</div>
         <div v-for="(row, index) in model[market.key]" :key="index" class="cap-row">
           <a-input v-model="row.key" :placeholder="market.placeholder" />
           <a-input v-model="row.value" placeholder="金额" :suffix="unit" />
@@ -110,13 +110,20 @@ const props = defineProps<{
   error?: string;
   /** 组合的结算币，默认 USDT：金额类设置的单位 */
   settlementAsset?: string;
+  /** A 股组合（只开通股票）：最小下单额只有一项 */
+  stockOnly?: boolean;
 }>();
 const emit = defineEmits<{ save: [settings: OrderSettings]; refresh: [] }>();
 
-const capMarkets = [
-  { key: "hourly_cap_spot", label: "现货", placeholder: "BTC-USDT-SPOT 或 *" },
-  { key: "hourly_cap_swap", label: "合约", placeholder: "BTC-USDT-SWAP 或 *" }
-] as const;
+// A 股组合只有一组上限（走 hourly_cap_spot），标的写股票代码
+const capMarkets = computed(() =>
+  props.stockOnly
+    ? ([{ key: "hourly_cap_spot", label: "", placeholder: "600519.XSHG 或 *" }] as const)
+    : ([
+        { key: "hourly_cap_spot", label: "现货", placeholder: "BTC-USDT-SPOT 或 *" },
+        { key: "hourly_cap_swap", label: "合约", placeholder: "BTC-USDT-SWAP 或 *" }
+      ] as const)
+);
 
 const model = reactive(orderSettingsToModel(props.settings));
 const formError = ref("");
@@ -141,7 +148,7 @@ function restore() {
 }
 
 function submit() {
-  formError.value = validateOrderSettingsModel(model);
+  formError.value = validateOrderSettingsModel(model, props.stockOnly);
   if (formError.value) return;
   emit("save", buildOrderSettingsRequest(model));
 }

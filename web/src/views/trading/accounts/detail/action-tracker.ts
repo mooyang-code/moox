@@ -14,7 +14,7 @@ export interface ActionTrackerOptions {
 
 /**
  * 跟踪最近一次人工操作（清仓、下单、撤单）的进度：每 1.5 秒按操作编号查一次，
- * 下单类操作还要继续查订单直到订单结束。查询失败只记下提示，下一轮重试。
+ * 下单类操作还要继续查订单直到订单结束。查询失败只记下提示，下一轮重试；查询成功后提示清除。
  */
 export function useActionTracker(options: ActionTrackerOptions) {
   const action = ref<OperatorAction | null>(null);
@@ -58,6 +58,8 @@ export function useActionTracker(options: ActionTrackerOptions) {
           if (!request.isLatest() || options.logicalAccountId() !== logicalAccountId) return;
           submittedOrder.value = orderRsp.order;
         }
+        // 操作和订单这一轮都查成功了才清错误，否则每轮都会闪一下
+        error.value = "";
         const orderDone = !orderId || ORDER_FINAL_STATES.includes(submittedOrder.value?.state || "");
         if (rsp.action.status !== "RUNNING" && orderDone) stop();
       } catch (cause) {

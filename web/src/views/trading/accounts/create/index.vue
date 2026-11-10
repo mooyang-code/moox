@@ -4,6 +4,9 @@
     width="min(600px, calc(100vw - 24px))"
     :modal-class="form.kind === 'paper' ? '' : `tx-confirm tx-confirm--${form.kind}`"
     :footer="false"
+    :closable="!submitting"
+    :mask-closable="!submitting"
+    :esc-to-close="!submitting"
     unmount-on-close
   >
     <template #title>
@@ -165,7 +168,7 @@
     </div>
 
     <div class="footer">
-      <a-button @click="back">{{ form.step && !locked ? "上一步" : "取消" }}</a-button>
+      <a-button :disabled="submitting" @click="back">{{ form.step && !locked ? "上一步" : "取消" }}</a-button>
       <a-button v-if="form.step < 3" type="primary" :disabled="nextDisabled" @click="next">下一步</a-button>
       <a-button v-else-if="form.kind === 'prod'" type="primary" status="danger" :loading="submitting" @click="submit">
         开通生产账户
@@ -228,11 +231,15 @@ const scope = createSubmitScope();
 const preview = reactive<{ allowNext: boolean; view: InspectionView | null }>({ allowNext: false, view: null });
 // 第三步按所选市场再检测的结果：和市场有关的阻断项在这里判断
 const marketPreview = reactive({ allowNext: false });
-// 这次已经建成的账户、组合：提交中途失败后重试时用来跳过已完成的部分
-const created = reactive({ accountId: "", logicalId: "", joined: false });
+// 这次已经建成的账户、组合：提交中途失败后重试时用来跳过已完成的部分。
+// 每次打开弹窗换一个新对象，提交时只写自己拿到的那一个，旧提交的结果不会落进重新打开后的状态。
+const created = ref(newCreated());
+function newCreated() {
+  return { accountId: "", logicalId: "", joined: false };
+}
 
 // 账户已经建成：前面几步的参数锁定，重试沿用已创建的账户和组合
-const locked = computed(() => Boolean(created.accountId));
+const locked = computed(() => Boolean(created.value.accountId));
 const selectedKind = computed(() => createKinds.find(item => item.key === form.kind));
 const aShare = computed(() => isAShare(form));
 const joinable = computed(() => joinableLogicals(props.logicals, accountMapOf(props.accounts), form.kind, form.settlementAsset));
@@ -324,8 +331,10 @@ async function loadSecrets() {
 }
 
 function open(kind: Environment) {
+  // 弹窗已经打开时再 open，visible 不变、监听不会触发，要主动使进行中的旧提交失效
+  scope.invalidate();
   Object.assign(form, createDefaultForm(createKinds.find(item => item.key === kind)?.open ? kind : "paper"));
-  Object.assign(created, { accountId: "", logicalId: "", joined: false });
+  created.value = newCreated();
   Object.assign(preview, { allowNext: false, view: null });
   marketPreview.allowNext = false;
   error.value = "";
@@ -373,6 +382,7 @@ function next() {
 }
 
 function back() {
+  if (submitting.value) return;
   error.value = "";
   if (form.step && !locked.value) form.step = (form.step - 1) as typeof form.step;
   else visible.value = false;
@@ -388,23 +398,25 @@ async function submit() {
     }
   }
   const submission = scope.begin();
+  const state = created.value;
+  const kind = form.kind;
   submitting.value = true;
   error.value = "";
   const exist =
     form.join === "exist" ? props.logicals.find(item => item.logical_account_id === form.existingLogicalId) : undefined;
   try {
-    // 前面几步已经建成的对象记在 created 里：中途失败后重试，只补没做完的，不会重复建账户（同名会冲突）
-    if (!created.accountId) {
+    // 前面几步已经建成的对象记在 state 里：中途失败后重试，只补没做完的，不会重复建账户（同名会冲突）
+    if (!state.accountId) {
       if (form.kind === "paper") {
         // 模拟盘一次请求完成：新建组合或加入已有组合都由后端在同一个事务里做，中途失败不会留下孤立的账户
-        created.accountId = (await createPaperSimulation(buildPaperRequest(form))).account.trading_account_id;
-        created.joined = true;
+        state.accountId = (await createPaperSimulation(buildPaperRequest(form))).account.trading_account_id;
+        state.joined = true;
       } else {
-        created.accountId = (await createTradingAccount(buildLiveRequest(form))).account.trading_account_id;
+        state.accountId = (await createTradingAccount(buildLiveRequest(form))).account.trading_account_id;
       }
     }
-    if (!created.joined) {
-      let target = exist?.logical_account_id ?? created.logicalId;
+    if (!state.joined) {
+      let target = exist?.logical_account_id ?? state.logicalId;
       if (!target) {
         target = (
           await createLogicalAccount({
@@ -415,10 +427,10 @@ async function submit() {
             settlement_asset: form.settlementAsset.trim().toUpperCase()
           })
         ).logical_account.logical_account_id;
-        created.logicalId = target;
+        state.logicalId = target;
       }
       // 实盘：新账户的会话要等运行时的周期检查才建起来，这时加入组合会返回 TRADE_SESSION_NOT_READY，等几秒重试。
-      const accountId = created.accountId;
+      const accountId = state.accountId;
       await retryWhileSessionStarting(() =>
         addLogicalAccountMember({
           logical_account_id: target,
@@ -428,24 +440,25 @@ async function submit() {
           adopt_existing_exposure: form.kind !== "paper" && form.adoptExisting
         })
       );
-      created.joined = true;
+      state.joined = true;
     }
   } catch (cause) {
     const message = cause instanceof Error ? cause.message : "请求失败，请稍后重试";
     // 账户已经建成就通知列表刷新，哪怕对话框已经关闭或重新打开
-    if (created.accountId) emit("created", form.kind);
+    if (state.accountId) emit("created", kind);
+    // 先解除提交中：弹窗在提交中关不掉，提交失效（切换空间等）时也不能把它锁死
+    submitting.value = false;
     if (!submission.isCurrent()) return;
     // 后端明确返回需要接管（TRADE_ADOPTION_REQUIRED）时，提示勾选接管后重试
-    const adoptHint = created.accountId && isTradeAdoptionRequired(cause) ? "勾选下方“接管账户里已有的持仓”后再点一次。" : "";
-    error.value = created.accountId
+    const adoptHint = state.accountId && isTradeAdoptionRequired(cause) ? "勾选下方“接管账户里已有的持仓”后再点一次。" : "";
+    error.value = state.accountId
       ? `执行账户已创建，但加入组合没有完成：${message}。前面几步的参数已锁定，修正后再点一次只会补做加入组合。${adoptHint}`
       : message;
-    submitting.value = false;
     return;
   }
-  emit("created", form.kind);
-  if (!submission.isCurrent()) return;
+  emit("created", kind);
   submitting.value = false;
+  if (!submission.isCurrent()) return;
   visible.value = false;
   Message.success("账户已创建");
 }

@@ -10,6 +10,7 @@ import {
   showsLiveOnlyFields,
   showsMarginMonitor,
   sumDecimals,
+  turnsOffMarginMonitor,
   validateFundSettingsModel,
   withStoredMarginMonitor,
   type FundFormScope,
@@ -348,5 +349,16 @@ describe("fund settings form", () => {
       expect(request.margin_monitor_disabled).toBe(false);
       expect(request.margin_ratio_threshold).toBeUndefined();
     });
+  });
+
+  it("只有把监控从开着改成关闭才需要确认；模拟盘、已经关闭、保持开着都不需要", () => {
+    const on = { ...defaultFundSettings(), margin_monitor_disabled: false };
+    const off = { ...defaultFundSettings(), margin_monitor_disabled: true };
+    expect(turnsOffMarginMonitor(on, off, false)).toBe(true);
+    expect(turnsOffMarginMonitor(undefined, off, false)).toBe(true);
+    expect(turnsOffMarginMonitor(off, off, false)).toBe(false);
+    expect(turnsOffMarginMonitor(off, on, false)).toBe(false);
+    expect(turnsOffMarginMonitor(on, on, false)).toBe(false);
+    expect(turnsOffMarginMonitor(on, off, true)).toBe(false);
   });
 });

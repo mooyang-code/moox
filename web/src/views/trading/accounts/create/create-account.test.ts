@@ -1,6 +1,7 @@
 import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
 import ArcoVue from "@arco-design/web-vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setSelectedSpaceIdCache } from "@/api/admin/space-header";
 import { TradeResponseError, type LogicalAccount } from "@/api/trade";
 
 const mocks = vi.hoisted(() => ({
@@ -56,6 +57,7 @@ beforeEach(() => {
   mocks.inspectExchangeCredential.mockReset();
 });
 afterEach(() => {
+  setSelectedSpaceIdCache("");
   wrapper?.unmount();
   document.body.innerHTML = "";
 });
@@ -110,6 +112,56 @@ describe("新建账户提交", () => {
     expect(vm.visible).toBe(true);
   });
 
+  it.each([
+    ["成功", false],
+    ["失败", true]
+  ])("提交挂着时切换空间，请求%s返回后弹窗仍能关闭、按钮不再转圈", async (_name, fails) => {
+    const vm = await openDialog();
+    let settle!: (fail: boolean) => void;
+    mocks.createPaperSimulation.mockImplementationOnce(
+      () =>
+        new Promise((done, reject) => {
+          settle = failed => (failed ? reject(new Error("请求失败")) : done({ account: { trading_account_id: "ta-new" } }));
+        })
+    );
+    Object.assign(vm.form, { step: 3 });
+    const submitting = vm.submit();
+    await flushPromises();
+    const modal = wrapper.findComponent({ name: "Modal" });
+    expect(modal.props("closable")).toBe(false);
+    setSelectedSpaceIdCache("another-space");
+    settle(fails);
+    await submitting;
+    await flushPromises();
+    expect(modal.props("closable")).toBe(true);
+    expect(document.querySelector(".arco-modal .arco-btn-loading")).toBeNull();
+    // 提交已经失效：不动当前界面，不弹错误、不自动关闭
+    expect(vm.visible).toBe(true);
+    expect(document.querySelector(".arco-modal .arco-alert")).toBeNull();
+  });
+
+  it("提交中不能关闭：遮罩、关闭按钮、Esc 都禁用，取消按钮置灰且点了没反应；结束后恢复", async () => {
+    const vm = await openDialog();
+    let resolve!: (value: unknown) => void;
+    mocks.createPaperSimulation.mockImplementationOnce(() => new Promise(done => (resolve = done)));
+    Object.assign(vm.form, { step: 3 });
+    const submitting = vm.submit();
+    await flushPromises();
+    const modal = wrapper.findComponent({ name: "Modal" });
+    expect(modal.props()).toMatchObject({ closable: false, maskClosable: false, escToClose: false });
+    const cancel = [...document.querySelectorAll<HTMLButtonElement>(".arco-modal button")].find(item =>
+      item.textContent?.includes("上一步")
+    );
+    expect(cancel?.disabled).toBe(true);
+    cancel?.click();
+    await flushPromises();
+    expect(vm.visible).toBe(true);
+    expect(vm.form.step).toBe(3);
+    resolve({ account: { trading_account_id: "ta-new" } });
+    await submitting;
+    expect(vm.visible).toBe(false);
+  });
+
   describe("实盘路径", () => {
     function nextButton() {
       return [...document.querySelectorAll<HTMLButtonElement>(".arco-modal button")].find(item =>
@@ -155,7 +207,7 @@ describe("新建账户提交", () => {
       await vi.waitFor(() => expect(nextButton()?.disabled).toBe(false));
       expect(mocks.inspectExchangeCredential.mock.calls[0][0].markets).toBeUndefined();
 
-      // 进入第三步：按所选市场再检测，合约双向持仓这类和市场有关的阻断项在这里拦下。
+      // 进入第三步：按所选市场再检测，合约双向持仓这类和市场有关的阻断项在这里挡住。
       mocks.inspectExchangeCredential.mockResolvedValueOnce({
         inspection: { account_mode: "BINANCE_STANDARD", blockers: [{ code: "hedge_position_mode", message: "合约是双向持仓" }] }
       });
@@ -251,6 +303,31 @@ describe("新建账户提交", () => {
       Object.assign(vm.form, { step: 0, kind: "prod" });
       await flushPromises();
       expect(vm.form.secretId).toBe("");
+    });
+
+    it("重新打开后状态是新的：旧提交迟到的结果不污染新状态，新提交照常创建账户", async () => {
+      const vm = await openDialog();
+      Object.assign(vm.form, liveForm);
+      let resolveOld!: (value: unknown) => void;
+      mocks.createTradingAccount
+        .mockImplementationOnce(() => new Promise(done => (resolveOld = done)))
+        .mockResolvedValueOnce({ account: { trading_account_id: "ta-new" } });
+      const oldSubmit = vm.submit();
+      // 旧提交还挂着，弹窗被程序重新打开
+      vm.open("testnet");
+      await flushPromises();
+      Object.assign(vm.form, liveForm, { join: "exist", existingLogicalId: "la-existing" });
+      resolveOld({ account: { trading_account_id: "ta-old" } });
+      await oldSubmit;
+      await flushPromises();
+      // 旧账户通知列表刷新；新弹窗没有被锁定，也没有被关掉
+      expect(wrapper.emitted("created")).toEqual([["testnet"]]);
+      expect(document.body.textContent).not.toContain("已锁定");
+      expect((wrapper.vm as unknown as { visible: boolean }).visible).toBe(true);
+      // 新提交不会因为旧状态里已有账户而跳过创建
+      await vm.submit();
+      expect(mocks.createTradingAccount).toHaveBeenCalledTimes(2);
+      expect(mocks.addLogicalAccountMember).toHaveBeenLastCalledWith(expect.objectContaining({ trading_account_id: "ta-new" }));
     });
 
     it("加入组合失败只显示一条红色提示并锁定前几步，重试只补加入不重复建账户", async () => {
