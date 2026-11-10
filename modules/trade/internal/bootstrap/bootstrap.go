@@ -43,6 +43,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/jetstream"
+	"github.com/mooyang-code/moox/packages/lifecycle"
 	"github.com/mooyang-code/moox/packages/report"
 	"github.com/prometheus/client_golang/prometheus"
 	"trpc.group/trpc-go/trpc-database/timer"
@@ -217,7 +218,7 @@ func initialize(
 		Prices:    targetapp.ExchangePriceSource{Adapters: manager, Exchanges: registry},
 		Equity:    equityService,
 	}
-	// 生命周期在 registerHealth 里才创建，门禁先建好，创建后绑定；绑定之前放行。
+	// 工人先拿到门禁，生命周期控制器在第一个工人启动之前建好并绑定（见 runWorker 之前）。
 	lifeGate := &lifecycleGate{}
 	targetWorker := &traderuntime.TargetWorker{
 		Store: tradeStore, Executor: targetExecutor, Interval: time.Second,
@@ -362,6 +363,26 @@ func initialize(
 			return nil, err
 		}
 	}
+
+	// 就绪判定和生命周期控制器在第一个工人启动之前建好并绑定到门禁：暂停状态下重启时，
+	// 后台循环的第一轮就要看到“已暂停”。就绪判定里存的只是函数引用，用到时才求值，所以这里就能建；
+	// 控制器构造时只读状态文件、不调用任何钩子，健康检查注册和 Recover、Run 仍留在后面。
+	readiness := newReadiness(
+		tradeStore, manager, targetWorker, operatorWorker, paperMatcherWorker, paperMatcher,
+		cfg.EventBus.Enabled, eventBus, &targetConsumerReady,
+	)
+	life, err := newLifecycle(
+		cfg.Database.Path, readiness, targetWorker.Quiesce,
+		tradeCatchup(tradeStore, targetWorker, time.Now),
+		tradeResetSpec(tradeStore, cfg.Database.Path, accountSyncer{service: syncService}.SyncAccount),
+	)
+	if err != nil {
+		if eventBus != nil {
+			eventBus.Close()
+		}
+		return nil, fmt.Errorf("trade lifecycle state failed to open: %w", err)
+	}
+	lifeGate.Bind(life)
 
 	runtimeCtx, cancelRuntime := context.WithCancel(context.Background())
 	var workers sync.WaitGroup
@@ -521,22 +542,7 @@ func initialize(
 			},
 		},
 	)
-	if err := registerHealth(
-		runtimeCtx,
-		cfg.Database.Path,
-		serverInstance,
-		tradeStore,
-		manager,
-		targetWorker,
-		operatorWorker,
-		paperMatcherWorker,
-		paperMatcher,
-		cfg.EventBus.Enabled,
-		eventBus,
-		&targetConsumerReady,
-		lifeGate,
-		accountSyncer{service: syncService}.SyncAccount,
-	); err != nil {
+	if err := registerHealth(runtimeCtx, serverInstance, tradeStore, life, readiness); err != nil {
 		cancelRuntime()
 		if eventBus != nil {
 			eventBus.Close()
@@ -919,10 +925,8 @@ func registerEquitySamplerTimer(
 	timer.RegisterHandlerService(service, sampler.Handle)
 }
 
-func registerHealth(
-	runtimeCtx context.Context,
-	databasePath string,
-	serverInstance *server.Server,
+// newReadiness 组装 Trade 的就绪判定：数据库、EventBus、账户会话和各个工人。
+func newReadiness(
 	tradeStore *store.Store,
 	manager *traderuntime.Manager,
 	targetWorker *traderuntime.TargetWorker,
@@ -932,11 +936,8 @@ func registerHealth(
 	eventBusEnabled bool,
 	eventBus *jetstream.Client,
 	targetConsumerReady *atomic.Bool,
-	lifeGate *lifecycleGate,
-	syncAccount func(ctx context.Context, accountID string) error,
-) error {
-	state := health.New("trade", "trade", "", "")
-	readiness := health.Readiness{
+) health.Readiness {
+	return health.Readiness{
 		DatabaseReady: func(ctx context.Context) error {
 			return tradeStore.Ping(ctx)
 		},
@@ -951,11 +952,18 @@ func registerHealth(
 		PaperMatcherWorker: paperMatcherWorker.State,
 		PaperAccountErrors: paperMatcher.AccountErrors,
 	}
-	life, err := newLifecycle(databasePath, readiness, targetWorker.Quiesce, tradeCatchup(tradeStore, targetWorker, time.Now), tradeResetSpec(tradeStore, databasePath, syncAccount))
-	if err != nil {
-		return fmt.Errorf("trade lifecycle state failed to open: %w", err)
-	}
-	lifeGate.Bind(life)
+}
+
+// registerHealth 注册健康检查与生命周期路由，并启动生命周期的恢复和定时刷新。
+// 控制器和就绪判定已在第一个工人启动之前建好、绑定到门禁。
+func registerHealth(
+	runtimeCtx context.Context,
+	serverInstance *server.Server,
+	tradeStore *store.Store,
+	life *lifecycle.Controller,
+	readiness health.Readiness,
+) error {
+	state := health.New("trade", "trade", "", "")
 	snapshot := health.SnapshotFunc(
 		state,
 		readiness,
