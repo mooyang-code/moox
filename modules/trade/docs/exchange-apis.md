@@ -25,7 +25,7 @@ REST/WebSocket 差异在各自适配器内完成，不进入应用层。本文�
 - 公共 quantity 是基础资产数量。
 - Binance 当前的 SPOT 与 USDT 线性 SWAP 直接以基础资产数量传递 `quantity`，按 instrument 的步长、精度与最小量校验；不做 OKX 式的张数换算。
 - OKX SWAP 适配器用 `ctVal` 和 `ctValCcy` 在基础数量与 `sz` 之间双向转换。
-- Binance 合约持仓用 `/fapi/v3/positionRisk`，v3 不返回 `marginType`、`leverage`，全仓判断看 `isolatedMargin`，杠杆取本地配置。
+- Binance 合约持仓用 `/fapi/v3/positionRisk`，v3 不返回 `marginType`、`leverage`，全仓判断看 `isolatedWallet`（非零即逐仓），杠杆取本地配置。
 - 接口与持久化边界的时间戳统一为毫秒；适配器内部使用 `time.Time`。
 - Exchange order ID、trade ID 和 client order ID 原样保存，用于恢复与幂等。
 - live SWAP 的账户、保证金、强平价和 PnL 直接采用 Exchange 返回值；paper 使用本地
@@ -35,10 +35,18 @@ REST/WebSocket 差异在各自适配器内完成，不进入应用层。本文�
 
 明确的参数、余额或权限拒绝是终态错误。网络 EOF、超时、HTTP 408 和 HTTP 5xx 表示
 提交结果未知：订单保持 `SUBMIT_UNKNOWN`，下一步必须按 client order ID 查询。
+订单号重复说明原单可能已被受理，不能当拒单：币安现货 -2010（msg 含 `Duplicate order`）、合约 -4116、OKX 51016 归结果未知（保留原错误码），按 client order ID 查询认领。-1000（未知错误）、-1001（内部错误）官方没有保证订单未被受理，同样归结果未知；-1016 是确定未受理，保留拒单。-2010 其余按 msg 细分：含 `insufficient balance` 的归余额不足，其余归拒单。
 限流类错误确定未受理：HTTP 429/-1003、418、WAF 403 是 IP 级（同一域名暂停），-1015 是账户下单限流，-1008 是系统限流，OKX 50011/50040/50061 是下单限流（HTTP 200 里返回，由适配器识别）。这类下单回到 `PENDING` 并清空提交时间，不计入拒单。
 
 权重（币安）：永续每分钟 2400、现货 6000，按 IP 和域名计；永续下单 0 权重、现货 1。`httpclient` 记录 `X-MBX-USED-WEIGHT-1M`，同一分钟取最大值（部分接口如 `bookTicker` 的读数不准），新一分钟没有响应时读数作废。OKX 下单带 `expTime`（5 秒）。只有
-按 client order ID 查询返回不存在、最近成交里也找不到该 ID，并且距首次提交已达到 `UnknownLookupWindow`（未设置时 30 秒），订单才回到 `PENDING`，后续用同一个 client order ID 重试；等待窗口内保持未知，不立即重发。
+按 client order ID 查询返回不存在、最近成交里也找不到该 ID，并且距首次提交已达到 `UnknownLookupWindow`（未设置时 2 分钟），订单才回到 `PENDING`，后续用同一个 client order ID 重试；等待窗口内保持未知，不立即重发。
+“不存在”只认明确的错误码：币安 -2013、OKX 51603（`exchange.IsConfirmedOrderMissing`）；裸 HTTP 404 不算，仍保持未知。
+
+## 时钟检测
+
+账户检测里带一项本机时钟偏差，只检测、不校准（适配器不持有时间偏移，也不改签名时间）。取交易所时间：币安现货 `/api/v3/time`、合约 `/fapi/v1/time`（统一账户共用），OKX `/api/v5/public/time`，都不签名；偏差取请求往返的中点估算，往返超过 1 秒的样本按没测到处理。偏差超过 1 秒给提示，达到 3 秒作为阻断项（`clock_skew`），阻断项文案固定、不带数字，数字只在检测结果的 `clock_skew_ms` 和提示里。
+
+币安本机时钟偏快 1 秒以上时签名请求会被 -1021 拒绝，所以先测时钟，再做签名检测：签名检测没有结论而偏差已达到阻断阈值时，直接把时钟偏差作为结论返回（只有时钟阻断项）。下单或查询遇到币安 -1021、OKX 50102 时另记关注项 `clock_skew`。
 
 ## 环境
 
