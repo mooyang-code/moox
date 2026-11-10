@@ -763,8 +763,15 @@ func (e *Executor) Converge(
 	if len(placedIDs) > 0 {
 		e.noteBatch(logicalAccount.LogicalAccountID)
 		results, batchErr := e.Orders.SubmitBatch(ctx, spaceID, placedIDs)
-		if result, handled, err := e.batchFailure(ctx, logicalAccount, &target, results); handled {
-			return result, err
+		failure, handled, otherErr := e.batchFailure(ctx, logicalAccount, &target, results)
+		if handled {
+			return failure, otherErr
+		}
+		// 其它错误只留给下一轮重试，目标状态、阻塞列表照常刷新。
+		if batchErr == nil {
+			batchErr = otherErr
+		} else if otherErr != nil {
+			batchErr = errors.Join(batchErr, otherErr)
 		}
 		if batchErr != nil && len(results) == 0 {
 			return Result{}, batchErr
@@ -2515,7 +2522,8 @@ func (e *Executor) placementFailure(
 }
 
 // batchFailure 处理批量提交里的目标级错误。拒单、限流只影响单笔，留给下一轮；
-// 目标过期、账户未就绪、归属冲突影响整个组合账户。没发出的单已经退回待提交，下一轮丢弃。
+// 目标过期、账户未就绪、归属冲突影响整个组合账户（handled 为真，调用方直接返回）。没发出的单已经退回待提交，下一轮丢弃。
+// 其它错误不算处理：handled 为假，同时返回第一个错误，调用方照常刷新目标状态后把它带回去。
 func (e *Executor) batchFailure(
 	ctx context.Context,
 	logicalAccount store.LogicalAccountRecord,
@@ -2553,10 +2561,7 @@ func (e *Executor) batchFailure(
 			other = err
 		}
 	}
-	if other != nil {
-		return Result{Status: StatusConverging, Action: "place"}, true, other
-	}
-	return Result{}, false, nil
+	return Result{}, false, other
 }
 
 func quotaExhausted(quota map[string]int) bool {

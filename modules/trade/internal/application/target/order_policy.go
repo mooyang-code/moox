@@ -162,26 +162,27 @@ func nextHourRetryDelay(now time.Time) time.Duration {
 }
 
 // submittedNotional 是一笔已提交目标子单计入每小时上限的金额：结束的单按实际成交额，没结束的按全部数量 × 参考价。
-func submittedNotional(row store.SubmittedTargetOrder) shared.Decimal {
+// 金额解析失败返回错误：按 0 计会让上限静默放宽。
+func submittedNotional(row store.SubmittedTargetOrder) (shared.Decimal, error) {
 	price, err := shared.ParseDecimal(row.ReferencePrice)
 	if err != nil {
-		return shared.Zero()
+		return shared.Zero(), fmt.Errorf("%s 的已提交子单参考价 %q 无法解析：%w", row.InstrumentID, row.ReferencePrice, err)
 	}
 	if orderdomain.State(row.State).Terminal() {
 		filled, filledErr := shared.ParseDecimal(row.FilledQuantity)
 		if filledErr != nil {
-			return shared.Zero()
+			return shared.Zero(), fmt.Errorf("%s 的已提交子单成交量 %q 无法解析：%w", row.InstrumentID, row.FilledQuantity, filledErr)
 		}
 		if average, averageErr := shared.ParseDecimal(row.AveragePrice); averageErr == nil && average.Cmp(shared.Zero()) > 0 {
 			price = average
 		}
-		return filled.Mul(price)
+		return filled.Mul(price), nil
 	}
 	quantity, err := shared.ParseDecimal(row.Quantity)
 	if err != nil {
-		return shared.Zero()
+		return shared.Zero(), fmt.Errorf("%s 的已提交子单数量 %q 无法解析：%w", row.InstrumentID, row.Quantity, err)
 	}
-	return quantity.Mul(price)
+	return quantity.Mul(price), nil
 }
 
 // hourlyUsed 返回标的本自然小时已提交的金额，第一次调用时按订单表汇总一次。
@@ -194,7 +195,11 @@ func (env *laneEnv) hourlyUsed(ctx context.Context, instrumentID string) (shared
 		}
 		env.hourly = make(map[string]shared.Decimal)
 		for _, row := range rows {
-			env.hourly[row.InstrumentID] = env.hourly[row.InstrumentID].Add(submittedNotional(row))
+			notional, err := submittedNotional(row)
+			if err != nil {
+				return shared.Zero(), err
+			}
+			env.hourly[row.InstrumentID] = env.hourly[row.InstrumentID].Add(notional)
 		}
 		env.hourlyLoaded = true
 	}

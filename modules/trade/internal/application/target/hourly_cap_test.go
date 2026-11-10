@@ -60,9 +60,13 @@ func TestHourlyCapCountsInFlightOrdersAtFullSize(t *testing.T) {
 	f.submittedChild(t, "open", "FILLED", "9", "9", "100", f.now.Truncate(time.Hour).Add(time.Second))
 	rows, err := f.store.ListSubmittedTargetOrders(context.Background(), "space-1", "logical-1", 0, f.now.Add(time.Hour).UnixMilli())
 	require.NoError(t, err)
-	require.Equal(t, "900", submittedNotional(rows[0]).String())
+	notional, err := submittedNotional(rows[0])
+	require.NoError(t, err)
+	require.Equal(t, "900", notional.String())
 	rows[0].State, rows[0].FilledQuantity = "OPEN", "1"
-	require.Equal(t, "900", submittedNotional(rows[0]).String(), "OPEN 的单按全部数量 9 × 100")
+	notional, err = submittedNotional(rows[0])
+	require.NoError(t, err)
+	require.Equal(t, "900", notional.String(), "OPEN 的单按全部数量 9 × 100")
 }
 
 // 额度用完：这个标的顺延到下一个整点，目标定为已收敛并设好唤醒时间，不再每秒重算。
