@@ -53,6 +53,8 @@ type fundingMarket struct {
 	PublicMarketData
 	rates []exchange.FundingRate
 	calls []fundingWindowCall
+	// referencePrice 是 GetReferencePrice 返回的现价，为空时返回错误。
+	referencePrice string
 	// failAt 是第几次调用（从 1 起）返回错误；为 0 不出错。
 	failAt int
 }
@@ -69,6 +71,13 @@ func (m *fundingMarket) ListFundingRates(_ context.Context, start, end time.Time
 		}
 	}
 	return out, nil
+}
+
+func (m *fundingMarket) GetReferencePrice(_ context.Context, key exchange.SymbolKey) (exchange.ReferencePrice, error) {
+	if m.referencePrice == "" {
+		return exchange.ReferencePrice{}, errors.New("没有参考价")
+	}
+	return exchange.ReferencePrice{Price: shared.MustDecimal(m.referencePrice)}, nil
 }
 
 func fundingRate(symbol string, at time.Time, mark string) exchange.FundingRate {
@@ -106,8 +115,7 @@ func TestSettleFundingBackfillsAtMostSevenDaysAndFiltersRates(t *testing.T) {
 		fundingRate("BTCUSDT", now.Add(-8*24*time.Hour), "1"), // 超过 7 天，不在查询窗口里
 		fundingRate("BTCUSDT", now.Add(-6*24*time.Hour), "1"),
 		fundingRate("BTCUSDT", hour, "1"),
-		fundingRate("ETHUSDT", hour, "1"),                       // 没有持有过
-		fundingRate("BTCUSDT", hour.Add(time.Millisecond), "0"), // 没有标记价格
+		fundingRate("ETHUSDT", hour, "1"), // 没有持有过
 	}}
 	adapter := swapPaperAdapter(facts, market, &now)
 	if _, err := adapter.SettleFunding(context.Background()); err != nil {
@@ -250,5 +258,89 @@ func TestSettleFundingNeedsSwapAndFundingSource(t *testing.T) {
 	noSource.MarketData = plain
 	if _, err := noSource.SettleFunding(context.Background()); err != nil || len(facts.settled) != 0 {
 		t.Fatalf("err=%v settled=%d", err, len(facts.settled))
+	}
+}
+
+// settledFundingRates 把各次入账的记录拍平。
+func settledFundingRates(facts *fundingFacts) []exchange.FundingRate {
+	var settled []exchange.FundingRate
+	for _, batch := range facts.settled {
+		settled = append(settled, batch...)
+	}
+	return settled
+}
+
+// 缺标记价格、结算时刻在 6 小时以内：进度停在这一期，下一轮从这一期重查；补上价格后这一期结算一次。
+func TestSettleFundingWaitsForMissingMarkPrice(t *testing.T) {
+	now := time.Date(2026, 11, 7, 10, 5, 0, 0, time.UTC)
+	at := time.Date(2026, 11, 7, 8, 0, 0, 0, time.UTC)
+	facts := &fundingFacts{activity: store.PaperSwapActivity{Positions: map[string]shared.Decimal{"BTCUSDT": shared.MustDecimal("1")}}}
+	market := &fundingMarket{rates: []exchange.FundingRate{fundingRate("BTCUSDT", at, "0")}}
+	adapter := swapPaperAdapter(facts, market, &now)
+	if _, err := adapter.SettleFunding(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := settledFundingRates(facts); len(got) != 0 {
+		t.Fatalf("缺价的这一期不能结算：%+v", got)
+	}
+	calls := len(market.calls)
+
+	// 交易所补上标记价格：同一个整点里也重查，从缺价的那一期起。
+	market.rates = []exchange.FundingRate{fundingRate("BTCUSDT", at, "50000")}
+	now = now.Add(time.Minute)
+	if _, err := adapter.SettleFunding(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	requireContiguousSegments(t, market.calls[calls:], at, now.Add(-fundingSettleDelay))
+	got := settledFundingRates(facts)
+	if len(got) != 1 || !got[0].FundingTime.Equal(at) || got[0].MarkPrice.String() != "50000" {
+		t.Fatalf("补上价格后应结算一次：%+v", got)
+	}
+
+	// 结算完成后进度推到整点，同一整点不再查。
+	calls = len(market.calls)
+	now = now.Add(time.Minute)
+	if _, err := adapter.SettleFunding(context.Background()); err != nil || len(market.calls) != calls {
+		t.Fatalf("结算完成后又查了：err=%v calls=%d", err, len(market.calls)-calls)
+	}
+}
+
+// 缺标记价格超过 6 小时：先取同一合约时间最近的有价记录，本段里没有就取交易所现在的参考价。
+func TestSettleFundingUsesReferencePriceAfterSixHours(t *testing.T) {
+	now := time.Date(2026, 11, 7, 10, 5, 0, 0, time.UTC)
+	missing := time.Date(2026, 11, 7, 2, 0, 0, 0, time.UTC)
+	positions := map[string]shared.Decimal{"BTCUSDT": shared.MustDecimal("1")}
+
+	facts := &fundingFacts{activity: store.PaperSwapActivity{Positions: positions}}
+	market := &fundingMarket{referencePrice: "777", rates: []exchange.FundingRate{
+		fundingRate("BTCUSDT", missing.Add(-time.Hour), "100"), // 同一段里最近的有价记录
+		fundingRate("BTCUSDT", missing, "0"),
+	}}
+	if _, err := swapPaperAdapter(facts, market, &now).SettleFunding(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got := settledFundingRates(facts)
+	if len(got) != 2 || !got[1].FundingTime.Equal(missing) || got[1].MarkPrice.String() != "100" {
+		t.Fatalf("应取最近记录的价格：%+v", got)
+	}
+
+	alone := &fundingFacts{activity: store.PaperSwapActivity{Positions: positions}}
+	market = &fundingMarket{referencePrice: "777", rates: []exchange.FundingRate{fundingRate("BTCUSDT", missing, "0")}}
+	if _, err := swapPaperAdapter(alone, market, &now).SettleFunding(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got = settledFundingRates(alone)
+	if len(got) != 1 || got[0].MarkPrice.String() != "777" {
+		t.Fatalf("本段没有有价记录应取现在的参考价：%+v", got)
+	}
+
+	// 参考价也取不到：报错重试，不跳过。
+	failing := &fundingFacts{activity: store.PaperSwapActivity{Positions: positions}}
+	market = &fundingMarket{rates: []exchange.FundingRate{fundingRate("BTCUSDT", missing, "0")}}
+	if _, err := swapPaperAdapter(failing, market, &now).SettleFunding(context.Background()); err == nil {
+		t.Fatal("取不到参考价要报错")
+	}
+	if got := settledFundingRates(failing); len(got) != 0 {
+		t.Fatalf("取不到参考价不能结算：%+v", got)
 	}
 }
