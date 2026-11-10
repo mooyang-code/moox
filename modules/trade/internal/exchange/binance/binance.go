@@ -605,6 +605,7 @@ func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnaps
 	if err != nil {
 		return exchange.AccountSnapshot{}, err
 	}
+	positions, _ = exchange.SplitIsolated(positions)
 	snapshot.UnrealizedPnL = sumUnrealizedPnL(positions)
 	for _, balance := range payload.Assets {
 		total, parseErr := decimalOrZero(balance.WalletBalance)
@@ -694,12 +695,22 @@ func (a *Adapter) ListPositionSnapshots(ctx context.Context) ([]exchange.Positio
 		if err != nil || quantity.IsZero() {
 			continue
 		}
+		isolatedWallet, err := decimalOrZero(row.IsolatedWallet)
+		if err != nil {
+			return nil, err
+		}
 		position := exchange.Position{
 			Market:           a.config.Market(),
 			TradingAccountID: a.config.TradingAccountID,
 			ExchangeSymbol:   row.Symbol, PositionSide: exchange.PositionSideNet,
 			SignedQuantity: quantity, MarginMode: exchange.MarginModeCross,
 			ExchangeUpdatedAt: millis(row.UpdateTime),
+		}
+		if !isolatedWallet.IsZero() {
+			// 逐仓持仓只标记、不解析其余字段：调用方据此暂停组合，该持仓不入投影。
+			position.MarginMode = exchange.MarginModeIsolated
+			out = append(out, position)
+			continue
 		}
 		position.EntryPrice, err = decimalOrZero(row.EntryPrice)
 		if err == nil {
@@ -713,13 +724,6 @@ func (a *Adapter) ListPositionSnapshots(ctx context.Context) ([]exchange.Positio
 		}
 		if err != nil {
 			return nil, err
-		}
-		isolatedWallet, err := decimalOrZero(row.IsolatedWallet)
-		if err != nil {
-			return nil, err
-		}
-		if !isolatedWallet.IsZero() {
-			return nil, typedRejected("isolated margin is unsupported", nil)
 		}
 		position.UsedMargin, err = positionMargin(row)
 		if err != nil {

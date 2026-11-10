@@ -51,7 +51,7 @@ func TestPrivateOrderEventWithoutTradeProducesNoFill(t *testing.T) {
 	adapter := testAdapter(exchange.MarketTypeSwap, "http://unused")
 	for name, patch := range map[string][2]string{
 		"成交号为 -1": {`"t":123457`, `"t":-1`},
-		"成交量为 0": {`"l":"0.002"`, `"l":"0"`},
+		"成交量为 0":  {`"l":"0.002"`, `"l":"0"`},
 	} {
 		raw := strings.Replace(string(sample(t, "futures_order_trade_update_calculated.json")), patch[0], patch[1], 1)
 		handler := &recordingHandler{}

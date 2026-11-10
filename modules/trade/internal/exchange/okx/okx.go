@@ -584,6 +584,17 @@ func (a *Adapter) ListPositionSnapshots(ctx context.Context) ([]exchange.Positio
 		if err != nil || contracts.IsZero() {
 			continue
 		}
+		if row.MgnMode != "" && row.MgnMode != "cross" {
+			// 逐仓持仓只标记、不解析其余字段（也不换算张数，标的可能不在本地标的表里）：
+			// 调用方据此暂停组合，该持仓不入投影。
+			out = append(out, exchange.Position{
+				Market: a.config.Market(), TradingAccountID: a.config.TradingAccountID,
+				ExchangeSymbol: row.InstID, PositionSide: exchange.PositionSideNet,
+				SignedQuantity: contracts, MarginMode: exchange.MarginModeIsolated,
+				ExchangeUpdatedAt: millisString(row.UTime),
+			})
+			continue
+		}
 		quantity, err := a.toBaseQuantity(row.InstID, contracts)
 		if err != nil {
 			return nil, err
@@ -620,9 +631,6 @@ func (a *Adapter) ListPositionSnapshots(ctx context.Context) ([]exchange.Positio
 		}
 		if err != nil {
 			return nil, err
-		}
-		if row.MgnMode != "" && row.MgnMode != "cross" {
-			return nil, rejected("isolated margin is unsupported", nil)
 		}
 		out = append(out, position)
 	}

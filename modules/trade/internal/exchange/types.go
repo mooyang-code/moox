@@ -190,7 +190,22 @@ type MarginMode string
 const (
 	MarginModeUnspecified MarginMode = ""
 	MarginModeCross       MarginMode = "CROSS"
+	// MarginModeIsolated 只用来标记交易所账户里的逐仓持仓：moox 只支持全仓，逐仓持仓不入投影，
+	// 只用来提示并暂停账户所在组合的自动执行（见 SplitIsolated）。
+	MarginModeIsolated MarginMode = "ISOLATED"
 )
+
+// SplitIsolated 把逐仓持仓从持仓列表里拆出来：返回全仓持仓和逐仓持仓。
+func SplitIsolated(positions []Position) (cross, isolated []Position) {
+	for _, position := range positions {
+		if position.MarginMode == MarginModeIsolated {
+			isolated = append(isolated, position)
+		} else {
+			cross = append(cross, position)
+		}
+	}
+	return cross, isolated
+}
 
 type OrderType string
 

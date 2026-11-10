@@ -224,6 +224,9 @@ func (s *Service) syncAccountLocked(
 	positionsReadAt := s.now()
 	protectAfter := positionsReadAt.Add(-positionLagGrace).UnixMilli()
 	positions, err := adapter.ListPositionSnapshots(ctx)
+	if err == nil {
+		positions, err = s.FilterIsolatedPositions(ctx, tradingAccountID, positions)
+	}
 	if err != nil {
 		result, failErr := s.fail(ctx, account, accountDependencyError(tradingAccountID, "list_positions", err))
 		return result, 0, failErr
@@ -921,6 +924,9 @@ func (s *Service) ApplyPosition(
 ) error {
 	if err := s.validate(); err != nil {
 		return err
+	}
+	if position.MarginMode == exchange.MarginModeIsolated {
+		return s.pauseForIsolated(ctx, tradingAccountID, []exchange.Position{position})
 	}
 	unlock, lockErr := s.Store.LockTradingAccountContext(ctx, tradingAccountID)
 	if lockErr != nil {

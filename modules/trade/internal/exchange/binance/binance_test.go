@@ -477,8 +477,16 @@ func TestListPositionSnapshotsParsesV3Response(t *testing.T) {
 	if len(positions) != 1 || positions[0].Leverage.String() != "5" || positions[0].UsedMargin.String() != "102" {
 		t.Fatalf("positions = %+v", positions)
 	}
-	if _, err := serve(`[{` + row + `,"isolatedMargin":"100","isolatedWallet":"100"}]`).ListPositionSnapshots(context.Background()); err == nil {
-		t.Fatal("逐仓持仓应被拒绝")
+	// 逐仓持仓不报错：标记为逐仓，其余持仓照常解析。
+	positions, err = serve(`[{` + row + `,"isolatedMargin":"100","isolatedWallet":"100"},{` +
+		strings.Replace(row, `"BTCUSDT"`, `"ETHUSDT"`, 1) + `,"isolatedWallet":"0"}]`).ListPositionSnapshots(context.Background())
+	if err != nil || len(positions) != 2 {
+		t.Fatalf("账户里有逐仓持仓时不应整体报错：%+v err=%v", positions, err)
+	}
+	cross, isolated := exchange.SplitIsolated(positions)
+	if len(isolated) != 1 || isolated[0].ExchangeSymbol != "BTCUSDT" ||
+		len(cross) != 1 || cross[0].ExchangeSymbol != "ETHUSDT" || cross[0].Leverage.String() != "5" {
+		t.Fatalf("cross=%+v isolated=%+v", cross, isolated)
 	}
 	noMargin := strings.ReplaceAll(row, `"positionInitialMargin":"102"`, `"positionInitialMargin":"0"`)
 	noMargin = strings.ReplaceAll(noMargin, `"initialMargin":"102"`, `"initialMargin":"0"`)

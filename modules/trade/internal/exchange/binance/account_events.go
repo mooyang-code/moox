@@ -598,9 +598,6 @@ func (a *Adapter) dispatchFuturesAccount(
 		if side != "" && side != "BOTH" {
 			return typedRejected("hedge position mode is unsupported", nil)
 		}
-		if !strings.EqualFold(marginType, "cross") {
-			return typedRejected("isolated margin is unsupported", nil)
-		}
 		quantity, err := decimalOrZero(amount)
 		if err != nil {
 			return err
@@ -611,6 +608,17 @@ func (a *Adapter) dispatchFuturesAccount(
 			ExchangeSymbol:   symbol, PositionSide: exchange.PositionSideNet,
 			SignedQuantity: quantity, MarginMode: exchange.MarginModeCross,
 			ExchangeUpdatedAt: millis(eventTime),
+		}
+		if !strings.EqualFold(marginType, "cross") {
+			// 逐仓持仓只标记、不解析其余字段：没有仓位的逐仓行（推送里带出的历史标的）不算。
+			if quantity.IsZero() {
+				continue
+			}
+			position.MarginMode = exchange.MarginModeIsolated
+			if err := handler.OnPosition(ctx, position); err != nil {
+				return err
+			}
+			continue
 		}
 		position.EntryPrice, err = decimalOrZero(entry)
 		if err == nil {
