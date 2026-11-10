@@ -2189,9 +2189,7 @@ func (s *Service) loadDelistHistory(ctx context.Context, command FlattenCommand,
 			thisRound = append(thisRound, current)
 		}
 	}
-	// 提交前在本地就判定没过（资金不足、只减仓无效，还没发给交易所，SubmittedAt 为 0）的拒单与 Place 的口径一致：
-	// 持仓、余额可能只是还没同步，按零成交换号重试，不当成交易所的确定性拒绝；到上限才终结。
-	if n := len(thisRound); n > 0 && thisRound[n-1].State == string(orderdomain.Rejected) && thisRound[n-1].SubmittedAt > 0 {
+	if n := len(thisRound); n > 0 && thisRound[n-1].State == string(orderdomain.Rejected) && !localCapacityReject(thisRound[n-1]) {
 		history.lastRejected, history.rejectReason = true, thisRound[n-1].RejectReason
 	}
 	for index := len(thisRound) - 1; index >= 0; index-- {
@@ -2206,6 +2204,13 @@ func (s *Service) loadDelistHistory(ctx context.Context, command FlattenCommand,
 		history.unfilled++
 	}
 	return history, nil
+}
+
+// localCapacityReject 报告拒单是否是提交前在本地判定的资金不足、只减仓无效（还没发给交易所，SubmittedAt 为 0；原因文字就是这两个错误的原文）。
+// 它们与 Place 的口径一致：持仓、余额可能只是还没同步，按零成交换号重试、到上限才终结，不当成交易所的确定性拒绝。
+func localCapacityReject(record store.OrderRecord) bool {
+	return record.SubmittedAt == 0 &&
+		(record.RejectReason == orderapp.ErrInsufficientFunds.Error() || record.RejectReason == orderapp.ErrReduceOnly.Error())
 }
 
 // flattenMaxUnfilled 是清仓、减仓在一个标的上连续零成交的子单上限，到了就按终结处理、要人工看。

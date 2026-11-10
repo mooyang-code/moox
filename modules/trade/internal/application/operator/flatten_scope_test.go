@@ -132,6 +132,38 @@ func TestReduceFixesTargetsAtStartAndDoesNotReduceAgain(t *testing.T) {
 	require.Equal(t, "COMPLETED", replay.Action.Status)
 }
 
+// 风控减仓的子单零成交就过期：同一个动作号重试时换号再下，不判部分完成；交易所确定性拒绝才终结。
+func TestReduceRetriesWithNewIDsAfterZeroFillExpiryButEndsOnRejection(t *testing.T) {
+	fixture := newMixedFlattenFixture(t)
+	command := flattenCommand("reduce-retry")
+	command.ReduceRatio = shared.MustDecimal("0.5")
+	_, err := fixture.service().FlattenLogicalAccount(context.Background(), command)
+	require.NoError(t, err)
+	require.Len(t, fixture.orders.specs, 2)
+	first := []string{fixture.orders.specs[0].ClientOrderID, fixture.orders.specs[1].ClientOrderID}
+	// 替身把交易所代码写成了内部标的 ID，这里改回真实代码，按标的查才找得到；两笔都一股没成交就过期了，持仓没变。
+	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_trade_orders SET c_state = 'EXPIRED', c_filled_quantity = '0', c_exchange_symbol = 'BTCUSDT' WHERE c_owner_id = 'reduce-retry'`).Error)
+	currentRoundOrders(t, fixture, "reduce-retry")
+	fixture.orders.specs = nil
+
+	result, err := fixture.service().FlattenLogicalAccount(context.Background(), command)
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"BTC-USDT-SPOT:SELL:1", "BTC-USDT-SWAP:SELL:1.5"}, placed(fixture), "换号重试，数量还是原来的减仓目标")
+	require.NotEqual(t, first[0], fixture.orders.specs[0].ClientOrderID)
+	require.NotEqual(t, first[1], fixture.orders.specs[1].ClientOrderID)
+	require.NotEqual(t, "PARTIAL", result.Action.Status)
+
+	// 这一轮的单被交易所拒绝：终结，不再换号。
+	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_trade_orders SET c_state = 'REJECTED', c_reject_reason = '交易对暂停', c_submitted_at = 1000, c_exchange_symbol = 'BTCUSDT' WHERE c_owner_id = 'reduce-retry' AND c_state <> 'EXPIRED'`).Error)
+	currentRoundOrders(t, fixture, "reduce-retry")
+	fixture.orders.specs = nil
+	result, err = fixture.service().FlattenLogicalAccount(context.Background(), command)
+	require.NoError(t, err)
+	require.Empty(t, fixture.orders.specs)
+	require.Equal(t, "PARTIAL", result.Action.Status)
+}
+
 // 只平一个标的：只处理这一个，别的标的的单不撤、仓不动，也不暂停组合。
 func TestFlattenSingleInstrumentLeavesOthersAndDoesNotPause(t *testing.T) {
 	fixture := newMixedFlattenFixture(t)

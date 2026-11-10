@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
@@ -184,7 +185,7 @@ func TestFlattenLocallyRejectedChildRetries(t *testing.T) {
 	fixture.position(t, "account-a", "BTCUSDT", "2")
 	local := endedChild(fixture, "REJECTED", "0")
 	local.SubmittedAt = 0
-	local.RejectReason = "可用资金不足"
+	local.RejectReason = orderapp.ErrInsufficientFunds.Error()
 	fixture.order(t, local)
 	currentRoundOrders(t, fixture, "flatten-1")
 	service := fixture.service()
@@ -195,6 +196,26 @@ func TestFlattenLocallyRejectedChildRetries(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "RUNNING", result.Action.Status)
 	require.Len(t, fixture.orders.specs, 1)
+}
+
+// 本地校验没过但不是资金不足、只减仓（例如数量规则）没有豁免：和交易所的拒绝一样终结。
+func TestFlattenOtherLocalRejectionStillEnds(t *testing.T) {
+	fixture := newOperatorFixture(t, exchange.MarketTypeSwap)
+	fixture.orders.nextID = ""
+	fixture.position(t, "account-a", "BTCUSDT", "2")
+	local := endedChild(fixture, "REJECTED", "0")
+	local.SubmittedAt = 0
+	local.RejectReason = orderapp.ErrQuantityRule.Error()
+	fixture.order(t, local)
+	currentRoundOrders(t, fixture, "flatten-1")
+	service := fixture.service()
+	service.FlattenMaxAttempts = 0
+
+	result, err := flattenOnce(t, service, "flatten-1")
+
+	require.NoError(t, err)
+	require.Equal(t, "PARTIAL", result.Action.Status)
+	require.Empty(t, fixture.orders.specs)
 }
 
 // 连续零成交到上限才判终结。
