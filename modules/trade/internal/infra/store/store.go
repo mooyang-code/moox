@@ -156,10 +156,7 @@ func (s *Store) LockLogicalAccountMembership() func() {
 
 func validateExistingTradeSchema(db *gorm.DB) error {
 	var tables []string
-	if err := db.Raw(`
-		SELECT name FROM sqlite_master
-		WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
-	`).Scan(&tables).Error; err != nil {
+	if err := db.Raw(queryTradeTables).Scan(&tables).Error; err != nil {
 		return fmt.Errorf("inspect trade schema: %w", err)
 	}
 	approved := map[string]struct{}{
@@ -169,7 +166,7 @@ func validateExistingTradeSchema(db *gorm.DB) error {
 		"t_logical_accounts":            {}, "t_logical_account_members": {},
 		"t_logical_account_targets": {}, "t_operator_actions": {},
 		"t_paper_account_configs": {}, "t_account_equity_points": {},
-		"t_paper_balance_projections": {}, "t_paper_asset_balances": {}, "t_shadow_targets": {}, "t_replay_sessions": {}, "t_replay_periods": {}, "t_replay_orders": {},
+		"t_paper_balance_projections": {}, "t_paper_asset_balances": {}, "t_shadow_targets": {}, "t_replay_sessions": {}, "t_replay_periods": {},
 		"t_logical_account_equity_points":   {},
 		"t_logical_account_target_receipts": {},
 		"t_trade_wallet_transfers":          {},
@@ -280,12 +277,7 @@ func inspectTableShape(db *gorm.DB, table string) (tableShape, error) {
 		Name string `gorm:"column:name"`
 		SQL  string `gorm:"column:sql"`
 	}
-	if err := db.Raw(`
-		SELECT type, name, sql FROM sqlite_master
-		WHERE (type = 'table' AND name = ?)
-			OR (type = 'index' AND tbl_name = ? AND sql IS NOT NULL)
-		ORDER BY type, name
-	`, table, table).Scan(&objects).Error; err != nil {
+	if err := db.Raw(queryTableSchemaObjects, table, table).Scan(&objects).Error; err != nil {
 		return tableShape{}, fmt.Errorf("inspect %s schema SQL: %w", table, err)
 	}
 	for _, object := range objects {
@@ -366,3 +358,13 @@ func writeError(err error) error {
 func blank(value string) bool {
 	return strings.TrimSpace(value) == ""
 }
+
+// 以下 SQL 整条写成常量，不在调用处拼接或内联。
+const (
+	queryTradeTables = `SELECT name FROM sqlite_master
+		WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`
+	queryTableSchemaObjects = `SELECT type, name, sql FROM sqlite_master
+		WHERE (type = 'table' AND name = ?)
+			OR (type = 'index' AND tbl_name = ? AND sql IS NOT NULL)
+		ORDER BY type, name`
+)

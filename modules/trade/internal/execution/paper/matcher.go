@@ -63,7 +63,6 @@ type MatchReducer interface {
 type Matcher struct {
 	Store         *store.Store
 	Reducer       MatchReducer
-	Decide        func(store.OrderRecord) (Decision, error)
 	DecideContext func(context.Context, store.OrderRecord) (Decision, error)
 	Enqueue       func(string)
 	// WakeTarget 在成交入账后唤醒目标收敛，下一笔子单不必等定时器。
@@ -249,7 +248,7 @@ func (m *Matcher) Scan(ctx context.Context) error {
 				candidateCtx, cancel := context.WithTimeout(ctx, timeout)
 				// A resting GTC order needs a fresh quote decision. Do not invent a
 				// price when the market-data decision function is not wired yet.
-				if m.Decide == nil && m.DecideContext == nil && !candidate.FirstMatchPending {
+				if m.DecideContext == nil && !candidate.FirstMatchPending {
 					cancel()
 					continue
 				}
@@ -264,8 +263,6 @@ func (m *Matcher) Scan(ctx context.Context) error {
 					decision = Decision{Cancel: true, Reason: OutOfSessionReason}
 				} else if m.DecideContext != nil {
 					decision, err = m.DecideContext(candidateCtx, candidate)
-				} else if m.Decide != nil {
-					decision, err = m.Decide(candidate)
 				}
 				if err == nil {
 					err = candidateCtx.Err()
@@ -273,7 +270,7 @@ func (m *Matcher) Scan(ctx context.Context) error {
 				if err != nil {
 					err = &CandidateError{Stage: "decision", Err: err}
 				} else {
-					err = m.matchOrder(candidateCtx, candidate, decision, true)
+					err = m.matchOrder(candidateCtx, candidate, decision)
 				}
 				cancel()
 				if ctx.Err() != nil {
@@ -408,13 +405,8 @@ func (m *Matcher) refreshFilled(ctx context.Context, accountID string) (bool, er
 	return true, nil
 }
 
-// MatchOrder 撮合一笔订单，成交后立即刷新快照并唤醒。
-func (m *Matcher) MatchOrder(ctx context.Context, candidate store.OrderRecord, decision Decision) error {
-	return m.matchOrder(ctx, candidate, decision, false)
-}
-
-// matchOrder 撮合一笔订单。deferRefresh 为真时由扫描在本轮结束后按账户统一刷新和唤醒。
-func (m *Matcher) matchOrder(ctx context.Context, candidate store.OrderRecord, decision Decision, deferRefresh bool) error {
+// matchOrder 撮合一笔订单；成交后的快照刷新和唤醒由扫描在本轮结束后按账户统一做。
+func (m *Matcher) matchOrder(ctx context.Context, candidate store.OrderRecord, decision Decision) error {
 	if m == nil || m.Store == nil {
 		return fmt.Errorf("paper matcher: store is not configured")
 	}
@@ -422,13 +414,8 @@ func (m *Matcher) matchOrder(ctx context.Context, candidate store.OrderRecord, d
 	if !acquired {
 		return errBusyCandidate
 	}
-	locked := true
-	defer func() {
-		if locked {
-			unlock()
-		}
-	}()
-	err := m.Store.Transaction(ctx, func(tx *store.Tx) error {
+	defer unlock()
+	return m.Store.Transaction(ctx, func(tx *store.Tx) error {
 		current, err := tx.GetOpenOrderForMatch(candidate.SpaceID, candidate.OrderID, candidate.Version)
 		if err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) || errors.Is(err, store.ErrConflict) {
@@ -466,28 +453,6 @@ func (m *Matcher) matchOrder(ctx context.Context, candidate store.OrderRecord, d
 		}
 		return err
 	})
-	if deferRefresh {
-		return err
-	}
-	if err == nil && m.Refresh != nil && !decision.Fill.Quantity.IsZero() {
-		if refreshErr := m.Refresh(ctx, candidate.TradingAccountID); refreshErr != nil {
-			return &CandidateError{Stage: "refresh", Err: refreshErr}
-		}
-		if err := ctx.Err(); err != nil {
-			return &CandidateError{Stage: "refresh", Err: err}
-		}
-	}
-	unlock()
-	locked = false
-	// Refresh the persisted account snapshot before waking the sampler so a
-	// fill cannot enqueue a point that still observes the pre-fill snapshot.
-	if err == nil && m.Enqueue != nil && !decision.Fill.Quantity.IsZero() {
-		m.Enqueue(candidate.TradingAccountID)
-	}
-	if err == nil && m.WakeTarget != nil && !decision.Fill.Quantity.IsZero() {
-		m.WakeTarget(candidate.SpaceID, candidate.LogicalAccountID)
-	}
-	return err
 }
 
 func (m *Matcher) now() time.Time {

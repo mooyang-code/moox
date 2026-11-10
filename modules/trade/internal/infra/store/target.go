@@ -195,34 +195,7 @@ func (tx *Tx) AcceptLogicalAccountTarget(
 		return LogicalAccountTargetRecord{}, false, query.Error
 	}
 
-	result := tx.db.Exec(`
-		INSERT INTO t_logical_account_targets (
-			c_space_id, c_logical_account_id, c_target_id, c_runner_id,
-			c_command_sequence, c_instance_id, c_session_id, c_strategy_id,
-			c_bar_end_time, c_effective_at, c_valid_until,
-			c_targets_json, c_status,
-			c_blocked_targets_json, c_last_error, c_accepted_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(c_space_id, c_logical_account_id) DO UPDATE SET
-			c_target_id = excluded.c_target_id,
-			c_runner_id = excluded.c_runner_id,
-			c_command_sequence = excluded.c_command_sequence,
-			c_instance_id = excluded.c_instance_id,
-			c_session_id = excluded.c_session_id,
-			c_strategy_id = excluded.c_strategy_id,
-			c_bar_end_time = excluded.c_bar_end_time,
-			c_effective_at = excluded.c_effective_at,
-			c_valid_until = excluded.c_valid_until,
-			c_targets_json = excluded.c_targets_json,
-			c_status = excluded.c_status,
-			c_blocked_targets_json = excluded.c_blocked_targets_json,
-			c_last_error = excluded.c_last_error,
-			c_accepted_at = excluded.c_accepted_at,
-			c_mtime = CURRENT_TIMESTAMP
-		WHERE t_logical_account_targets.c_instance_id <> excluded.c_instance_id
-		   OR t_logical_account_targets.c_session_id <> excluded.c_session_id
-		   OR excluded.c_bar_end_time > t_logical_account_targets.c_bar_end_time
-	`,
+	result := tx.db.Exec(execInsertLogicalAccountTarget,
 		record.SpaceID, record.LogicalAccountID, record.TargetID, record.RunnerID,
 		record.CommandSequence, record.InstanceID, record.SessionID, record.StrategyID,
 		record.BarEndTime, record.EffectiveAt, record.ValidUntil,
@@ -267,10 +240,7 @@ func (s *Store) GetLogicalAccountTarget(
 // the live convergence target is cleared so a released runner cannot resume
 // an obsolete strategy after the account is claimed again.
 func (tx *Tx) DeleteLogicalAccountTarget(spaceID, logicalAccountID string) error {
-	return tx.db.Exec(`
-		DELETE FROM t_logical_account_targets
-		WHERE c_space_id = ? AND c_logical_account_id = ?
-	`, spaceID, logicalAccountID).Error
+	return tx.db.Exec(execDeleteLogicalAccountTargets, spaceID, logicalAccountID).Error
 }
 
 func (s *Store) ListLogicalAccountTargets(
@@ -532,4 +502,32 @@ const (
 	updateTargetSuffixSQL = `
 		AND (c_status <> 'EXPIRED' OR ? = 'EXPIRED')
 `
+	execInsertLogicalAccountTarget = `INSERT INTO t_logical_account_targets (
+			c_space_id, c_logical_account_id, c_target_id, c_runner_id,
+			c_command_sequence, c_instance_id, c_session_id, c_strategy_id,
+			c_bar_end_time, c_effective_at, c_valid_until,
+			c_targets_json, c_status,
+			c_blocked_targets_json, c_last_error, c_accepted_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(c_space_id, c_logical_account_id) DO UPDATE SET
+			c_target_id = excluded.c_target_id,
+			c_runner_id = excluded.c_runner_id,
+			c_command_sequence = excluded.c_command_sequence,
+			c_instance_id = excluded.c_instance_id,
+			c_session_id = excluded.c_session_id,
+			c_strategy_id = excluded.c_strategy_id,
+			c_bar_end_time = excluded.c_bar_end_time,
+			c_effective_at = excluded.c_effective_at,
+			c_valid_until = excluded.c_valid_until,
+			c_targets_json = excluded.c_targets_json,
+			c_status = excluded.c_status,
+			c_blocked_targets_json = excluded.c_blocked_targets_json,
+			c_last_error = excluded.c_last_error,
+			c_accepted_at = excluded.c_accepted_at,
+			c_mtime = CURRENT_TIMESTAMP
+		WHERE t_logical_account_targets.c_instance_id <> excluded.c_instance_id
+		   OR t_logical_account_targets.c_session_id <> excluded.c_session_id
+		   OR excluded.c_bar_end_time > t_logical_account_targets.c_bar_end_time`
+	execDeleteLogicalAccountTargets = `DELETE FROM t_logical_account_targets
+		WHERE c_space_id = ? AND c_logical_account_id = ?`
 )

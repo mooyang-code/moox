@@ -153,9 +153,9 @@ func TestHoldSlippageCloseAndDelete(t *testing.T) {
 	require.True(t, deleted)
 	_, err = svc.GetSession(ctx, "r4")
 	require.True(t, errors.Is(err, gorm.ErrRecordNotFound))
-	orders, err := svc.Store.ListReplayOrders(ctx, "r4", 0)
+	periods, err := svc.Store.ListReplayPeriods(ctx, "r4", 0, 0)
 	require.NoError(t, err)
-	require.Empty(t, orders, "清理会话同时清掉订单")
+	require.Empty(t, periods, "清理会话同时清掉周期记录")
 }
 
 // 保持全仓的目标不能因为收盘价与下期开盘价不同而被误调仓：目标权重相对成交时的权益换算。

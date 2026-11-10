@@ -87,7 +87,6 @@ func TestPaperBalanceRollbackAndImmutableConflict(t *testing.T) {
 	snapshot, err := s.GetPaperBalanceSnapshot(context.Background(), fill.SpaceID, fill.TradingAccountID)
 	require.NoError(t, err)
 	require.Equal(t, "100000", snapshot.Totals["USDT"].String())
-	require.Zero(t, snapshot.AppliedFillCount)
 	require.NoError(t, s.Transaction(context.Background(), func(tx *Tx) error { _, err := tx.InsertFill(fill); return err }))
 	// 重放只有手续费不同时按重复处理，余额保持第一次入账的结果。
 	fill.Fee = "0.2"
@@ -95,7 +94,6 @@ func TestPaperBalanceRollbackAndImmutableConflict(t *testing.T) {
 	snapshot, err = s.GetPaperBalanceSnapshot(context.Background(), fill.SpaceID, fill.TradingAccountID)
 	require.NoError(t, err)
 	require.Equal(t, "99899.9", snapshot.Totals["USDT"].String())
-	require.Equal(t, int64(1), snapshot.AppliedFillCount)
 }
 
 func TestPaperBalanceFillProjectionFailureRollsBackFact(t *testing.T) {
@@ -108,7 +106,6 @@ func TestPaperBalanceFillProjectionFailureRollsBackFact(t *testing.T) {
 	require.Zero(t, count)
 	snapshot, err := s.GetPaperBalanceSnapshot(context.Background(), fill.SpaceID, fill.TradingAccountID)
 	require.NoError(t, err)
-	require.Zero(t, snapshot.AppliedFillCount)
 	require.Equal(t, "100000", snapshot.Totals["USDT"].String())
 }
 
@@ -136,7 +133,6 @@ func TestPaperBalanceRejectsAmbiguousFillAssetsAtomically(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, "100000", snapshot.Totals["USDT"].String())
 			require.Len(t, snapshot.Totals, 1)
-			require.Zero(t, snapshot.AppliedFillCount)
 			var count int64
 			require.NoError(t, s.db.Table("t_order_fills").Count(&count).Error)
 			require.Zero(t, count, "invalid fill and its projection must roll back together")
@@ -161,7 +157,6 @@ func TestPaperBalanceSwapSettlementNormalizationRetainsActualFeeAsset(t *testing
 	require.NoError(t, err)
 	require.Equal(t, "100010", snapshot.Totals["USDT"].String())
 	require.Equal(t, "0.1", snapshot.Totals["BNB"].String())
-	require.Equal(t, int64(1), snapshot.AppliedFillCount)
 }
 
 func TestPaperBalanceSellAndSwapCashFlows(t *testing.T) {
@@ -205,7 +200,6 @@ func TestPaperBalanceFillCrossOrderConflictAndLateFeeReplay(t *testing.T) {
 	snapshot, err := s.GetPaperBalanceSnapshot(context.Background(), fill.SpaceID, fill.TradingAccountID)
 	require.NoError(t, err)
 	require.Equal(t, "99900", snapshot.Totals["USDT"].String())
-	require.Equal(t, int64(1), snapshot.AppliedFillCount)
 }
 
 func TestPaperBalanceFeeAssetsRebatesAndLateTrade(t *testing.T) {
@@ -222,7 +216,6 @@ func TestPaperBalanceFeeAssetsRebatesAndLateTrade(t *testing.T) {
 	require.Equal(t, "99599.9", snapshot.Totals["USDT"].String())
 	require.Equal(t, "3.99", snapshot.Totals["BTC"].String())
 	require.Equal(t, "-0.017", snapshot.Totals["BNB"].String())
-	require.Equal(t, int64(4), snapshot.AppliedFillCount)
 }
 
 func TestPaperBalanceReservationsOnlyActiveOrders(t *testing.T) {
@@ -271,6 +264,5 @@ func TestPaperBalanceNewFillAndReplay(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, "99899.9", snapshot.Totals["USDT"].String())
 		require.Equal(t, "1", snapshot.Totals["BTC"].String())
-		require.Equal(t, int64(1), snapshot.AppliedFillCount)
 	}
 }

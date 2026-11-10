@@ -52,14 +52,7 @@ func (s *Store) RecordShadowTarget(ctx context.Context, record ShadowTargetRecor
 			return false, fmt.Errorf("%w: invalid shadow target %s", ErrInvalidRecord, name)
 		}
 	}
-	result := s.db.WithContext(ctx).Exec(`
-		INSERT INTO t_shadow_targets (
-			c_space_id, c_target_id, c_logical_account_id, c_instance_id, c_session_id, c_strategy_id,
-			c_bar_end_time, c_valid_until, c_weights_json, c_equity, c_equity_source_time,
-			c_reference_prices_json, c_quantity_targets_json, c_recorded_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(c_space_id, c_target_id) DO NOTHING
-	`, record.SpaceID, record.TargetID, record.LogicalAccountID, record.InstanceID, record.SessionID, record.StrategyID,
+	result := s.db.WithContext(ctx).Exec(execInsertShadowTarget, record.SpaceID, record.TargetID, record.LogicalAccountID, record.InstanceID, record.SessionID, record.StrategyID,
 		record.BarEndTime, record.ValidUntil, record.WeightsJSON, record.Equity, record.EquitySourceTime,
 		record.ReferencePricesJSON, record.QuantityTargetsJSON, record.RecordedAt)
 	if err := writeError(result.Error); err != nil {
@@ -86,3 +79,13 @@ func (s *Store) ListShadowTargets(ctx context.Context, spaceID, instanceID strin
 	}
 	return out, nil
 }
+
+// 以下 SQL 整条写成常量，不在调用处拼接或内联。
+const (
+	execInsertShadowTarget = `INSERT INTO t_shadow_targets (
+			c_space_id, c_target_id, c_logical_account_id, c_instance_id, c_session_id, c_strategy_id,
+			c_bar_end_time, c_valid_until, c_weights_json, c_equity, c_equity_source_time,
+			c_reference_prices_json, c_quantity_targets_json, c_recorded_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(c_space_id, c_target_id) DO NOTHING`
+)

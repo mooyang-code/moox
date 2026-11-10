@@ -3,26 +3,11 @@ package store
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 )
-
-func (s *Store) ListPaperMatchCandidates(ctx context.Context, limit int) ([]OrderRecord, error) {
-	if limit <= 0 {
-		limit = 100000
-	}
-	var rows []orderRow
-	err := s.db.WithContext(ctx).Table("t_trade_orders AS o").Joins("JOIN t_trading_accounts AS a ON a.c_space_id=o.c_space_id AND a.c_trading_account_id=o.c_trading_account_id").Where("a.c_execution_mode='PAPER' AND a.c_status='ENABLED' AND o.c_state='OPEN'").Order("o.c_first_match_pending DESC, o.c_mtime, o.c_order_id").Limit(limit).Find(&rows).Error
-	if err != nil {
-		return nil, err
-	}
-	result := make([]OrderRecord, 0, len(rows))
-	for _, row := range rows {
-		result = append(result, orderRecordFromRow(row))
-	}
-	return result, nil
-}
 
 // IDs are immutable within a first-match phase. Matching a page can move an
 // order out of that phase, but cannot move an unseen order behind this cursor.
@@ -63,7 +48,7 @@ func (tx *Tx) GetOpenOrderForMatch(spaceID, orderID string, expectedVersion uint
 }
 
 func (tx *Tx) ClearFirstMatchPending(current OrderRecord, expectedVersion uint64) error {
-	r := tx.db.Exec("UPDATE t_trade_orders SET c_first_match_pending=0, c_version=c_version+1, c_mtime=CURRENT_TIMESTAMP WHERE c_space_id=? AND c_order_id=? AND c_version=? AND c_state='OPEN'", current.SpaceID, current.OrderID, expectedVersion)
+	r := tx.db.Exec(execClearFirstMatchPending, current.SpaceID, current.OrderID, expectedVersion)
 	if r.Error != nil {
 		return writeError(r.Error)
 	}
@@ -74,7 +59,7 @@ func (tx *Tx) ClearFirstMatchPending(current OrderRecord, expectedVersion uint64
 }
 
 func (tx *Tx) CancelPaperOrder(current OrderRecord, expectedVersion uint64, reason string) error {
-	r := tx.db.Exec("UPDATE t_trade_orders SET c_state='CANCELED', c_first_match_pending=0, c_remaining_reserved_quantity='0', c_reject_reason=?, c_finished_at=CAST(strftime('%s','now') AS INTEGER)*1000, c_version=c_version+1, c_mtime=CURRENT_TIMESTAMP WHERE c_space_id=? AND c_order_id=? AND c_state='OPEN' AND c_version=?", reason, current.SpaceID, current.OrderID, expectedVersion)
+	r := tx.db.Exec(execCancelPaperOrder, reason, time.Now().UTC().UnixMilli(), current.SpaceID, current.OrderID, expectedVersion)
 	if r.Error != nil {
 		return writeError(r.Error)
 	}
@@ -123,3 +108,14 @@ func absDecimal(raw string) shared.Decimal {
 	}
 	return v.Abs()
 }
+
+// 以下 SQL 整条写成常量，不在调用处拼接或内联。
+const (
+	execClearFirstMatchPending = `UPDATE t_trade_orders
+		SET c_first_match_pending = 0, c_version = c_version + 1, c_mtime = CURRENT_TIMESTAMP
+		WHERE c_space_id = ? AND c_order_id = ? AND c_version = ? AND c_state = 'OPEN'`
+	execCancelPaperOrder = `UPDATE t_trade_orders
+		SET c_state = 'CANCELED', c_first_match_pending = 0, c_remaining_reserved_quantity = '0', c_reject_reason = ?,
+			c_finished_at = ?, c_version = c_version + 1, c_mtime = CURRENT_TIMESTAMP
+		WHERE c_space_id = ? AND c_order_id = ? AND c_state = 'OPEN' AND c_version = ?`
+)

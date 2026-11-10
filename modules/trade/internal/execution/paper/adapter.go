@@ -491,7 +491,8 @@ func (a *Adapter) ListOpenOrders(ctx context.Context) ([]exchange.Order, error) 
 	}
 	result := make([]exchange.Order, 0, len(rows))
 	for _, row := range rows {
-		if row.State == "FILLED" || row.State == "CANCELED" || row.State == "PARTIALLY_CANCELED" || row.State == "REJECTED" || row.State == "EXPIRED" || row.State == "CANCELING" || row.State == "CANCEL_UNKNOWN" {
+		// 查询结果已只含未结束订单；撤单中的订单不算挂单。
+		if row.State == "CANCELING" || row.State == "CANCEL_UNKNOWN" {
 			continue
 		}
 		result = append(result, orderFromRecord(row))

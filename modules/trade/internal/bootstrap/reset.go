@@ -29,7 +29,7 @@ var (
 		"t_trade_orders", "t_order_fills", "t_trading_positions", "t_trading_position_tombstones",
 		"t_account_equity_points", "t_logical_account_equity_points",
 		"t_logical_account_targets", "t_logical_account_target_receipts", "t_shadow_targets",
-		"t_replay_sessions", "t_replay_periods", "t_replay_orders",
+		"t_replay_sessions", "t_replay_periods",
 		"t_paper_balance_projections", "t_paper_asset_balances", "t_paper_funding_fees", "t_operator_actions",
 		"t_trade_wallet_transfers",
 	}

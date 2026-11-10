@@ -429,11 +429,7 @@ func (tx *Tx) UpdateTradingAccountConfiguration(
 		SettlementAsset string `gorm:"column:c_settlement_asset"`
 		Status          string `gorm:"column:c_status"`
 	}
-	result := tx.db.Raw(`
-		SELECT c_execution_mode, c_settlement_asset, c_status
-		FROM t_trading_accounts
-		WHERE c_space_id = ? AND c_trading_account_id = ?
-	`, spaceID, tradingAccountID).Scan(&current)
+	result := tx.db.Raw(queryTradingAccountConfigState, spaceID, tradingAccountID).Scan(&current)
 	if result.Error != nil {
 		return result.Error
 	}
@@ -467,21 +463,7 @@ func (tx *Tx) UpdateTradingAccountConfiguration(
 			)
 		}
 	}
-	result = tx.db.Exec(`
-		UPDATE t_trading_accounts
-		SET c_name = ?, c_credential_secret_id = ?, c_settlement_asset = ?,
-			c_margin_mode = ?, c_status = ?,
-			c_ready = CASE
-				WHEN c_credential_secret_id <> ?
-					OR c_settlement_asset <> ?
-					OR c_margin_mode <> ?
-					OR c_status <> ?
-				THEN 0
-				ELSE c_ready
-			END,
-			c_mtime = CURRENT_TIMESTAMP
-		WHERE c_space_id = ? AND c_trading_account_id = ?
-	`, config.Name, config.CredentialSecretID, config.SettlementAsset,
+	result = tx.db.Exec(execUpdateTradingAccountConfig, config.Name, config.CredentialSecretID, config.SettlementAsset,
 		config.MarginMode, config.Status,
 		config.CredentialSecretID, config.SettlementAsset,
 		config.MarginMode, config.Status,
@@ -523,12 +505,7 @@ func (tx *Tx) SetTradingAccountLeverage(
 	if err != nil {
 		return err
 	}
-	result := tx.db.Exec(`
-		UPDATE t_trading_accounts
-		SET c_leverage_settings_json = ?,
-			c_mtime = CURRENT_TIMESTAMP
-		WHERE c_space_id = ? AND c_trading_account_id = ?
-	`, encoded, spaceID, tradingAccountID)
+	result := tx.db.Exec(execUpdateLeverageSettings, encoded, spaceID, tradingAccountID)
 	return requireUpdated(result.Error, result.RowsAffected, "Exchange account leverage")
 }
 
@@ -563,14 +540,7 @@ func (tx *Tx) UpdateTradingAccountSync(
 	if err != nil {
 		return err
 	}
-	result := tx.db.Exec(`
-		UPDATE t_trading_accounts
-		SET c_ready = ?, c_leverage_settings_json = ?, c_fill_cursors_json = ?,
-			c_snapshot_json = ?,
-			c_snapshot_source_time = ?, c_last_sync_at = ?, c_last_ready_at = ?,
-			c_last_error = ?, c_mtime = CURRENT_TIMESTAMP
-		WHERE c_space_id = ? AND c_trading_account_id = ?
-	`, state.Ready, leverageJSON, fillCursorsJSON, snapshotJSON, state.SnapshotSourceTime,
+	result := tx.db.Exec(execUpdateTradingAccountSync, state.Ready, leverageJSON, fillCursorsJSON, snapshotJSON, state.SnapshotSourceTime,
 		state.LastSyncAt, state.LastReadyAt, state.LastError, spaceID, tradingAccountID)
 	return requireUpdated(result.Error, result.RowsAffected, "Exchange account sync state")
 }
@@ -594,13 +564,7 @@ func (tx *Tx) UpdateTradingAccountFacts(
 	if err != nil {
 		return err
 	}
-	result := tx.db.Exec(`
-		UPDATE t_trading_accounts
-		SET c_fill_cursors_json = ?, c_snapshot_json = ?,
-			c_snapshot_source_time = ?, c_last_sync_at = ?,
-			c_mtime = CURRENT_TIMESTAMP
-		WHERE c_space_id = ? AND c_trading_account_id = ?
-	`, fillCursorsJSON, snapshotJSON, snapshotSourceTime, lastSyncAt,
+	result := tx.db.Exec(execUpdateTradingAccountFacts, fillCursorsJSON, snapshotJSON, snapshotSourceTime, lastSyncAt,
 		spaceID, tradingAccountID)
 	return requireUpdated(result.Error, result.RowsAffected, "Exchange account facts")
 }
@@ -617,11 +581,7 @@ func (tx *Tx) UpdateTradingAccountSnapshot(
 	if err != nil {
 		return err
 	}
-	result := tx.db.Exec(`
-		UPDATE t_trading_accounts
-		SET c_snapshot_json = ?, c_mtime = CURRENT_TIMESTAMP
-		WHERE c_space_id = ? AND c_trading_account_id = ?
-	`, snapshotJSON, spaceID, tradingAccountID)
+	result := tx.db.Exec(execUpdateAccountSnapshot, snapshotJSON, spaceID, tradingAccountID)
 	return requireUpdated(result.Error, result.RowsAffected, "Exchange account snapshot")
 }
 
@@ -667,14 +627,7 @@ func (tx *Tx) UpdateTradingAccountReadiness(
 	if blank(spaceID) || blank(tradingAccountID) || now <= 0 {
 		return fmt.Errorf("%w: incomplete Exchange account readiness", ErrInvalidRecord)
 	}
-	result := tx.db.Exec(`
-		UPDATE t_trading_accounts
-		SET c_ready = ?,
-			c_last_ready_at = CASE WHEN ? THEN ? ELSE c_last_ready_at END,
-			c_last_error = ?,
-			c_mtime = CURRENT_TIMESTAMP
-		WHERE c_space_id = ? AND c_trading_account_id = ?
-	`, ready, ready, now, lastError, spaceID, tradingAccountID)
+	result := tx.db.Exec(execUpdateAccountReadiness, ready, ready, now, lastError, spaceID, tradingAccountID)
 	return requireUpdated(result.Error, result.RowsAffected, "Exchange account readiness")
 }
 
@@ -1055,5 +1008,45 @@ const (
 			AND COALESCE(json_extract(c_balance_pending_json, ?), 0) <= ?`
 	execSetLastDustConvertAt = `UPDATE t_trading_accounts
 		SET c_last_dust_convert_at = ?, c_mtime = CURRENT_TIMESTAMP
+		WHERE c_space_id = ? AND c_trading_account_id = ?`
+	queryTradingAccountConfigState = `SELECT c_execution_mode, c_settlement_asset, c_status
+		FROM t_trading_accounts
+		WHERE c_space_id = ? AND c_trading_account_id = ?`
+	execUpdateTradingAccountConfig = `UPDATE t_trading_accounts
+		SET c_name = ?, c_credential_secret_id = ?, c_settlement_asset = ?,
+			c_margin_mode = ?, c_status = ?,
+			c_ready = CASE
+				WHEN c_credential_secret_id <> ?
+					OR c_settlement_asset <> ?
+					OR c_margin_mode <> ?
+					OR c_status <> ?
+				THEN 0
+				ELSE c_ready
+			END,
+			c_mtime = CURRENT_TIMESTAMP
+		WHERE c_space_id = ? AND c_trading_account_id = ?`
+	execUpdateLeverageSettings = `UPDATE t_trading_accounts
+		SET c_leverage_settings_json = ?,
+			c_mtime = CURRENT_TIMESTAMP
+		WHERE c_space_id = ? AND c_trading_account_id = ?`
+	execUpdateTradingAccountSync = `UPDATE t_trading_accounts
+		SET c_ready = ?, c_leverage_settings_json = ?, c_fill_cursors_json = ?,
+			c_snapshot_json = ?,
+			c_snapshot_source_time = ?, c_last_sync_at = ?, c_last_ready_at = ?,
+			c_last_error = ?, c_mtime = CURRENT_TIMESTAMP
+		WHERE c_space_id = ? AND c_trading_account_id = ?`
+	execUpdateTradingAccountFacts = `UPDATE t_trading_accounts
+		SET c_fill_cursors_json = ?, c_snapshot_json = ?,
+			c_snapshot_source_time = ?, c_last_sync_at = ?,
+			c_mtime = CURRENT_TIMESTAMP
+		WHERE c_space_id = ? AND c_trading_account_id = ?`
+	execUpdateAccountSnapshot = `UPDATE t_trading_accounts
+		SET c_snapshot_json = ?, c_mtime = CURRENT_TIMESTAMP
+		WHERE c_space_id = ? AND c_trading_account_id = ?`
+	execUpdateAccountReadiness = `UPDATE t_trading_accounts
+		SET c_ready = ?,
+			c_last_ready_at = CASE WHEN ? THEN ? ELSE c_last_ready_at END,
+			c_last_error = ?,
+			c_mtime = CURRENT_TIMESTAMP
 		WHERE c_space_id = ? AND c_trading_account_id = ?`
 )

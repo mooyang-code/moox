@@ -188,11 +188,11 @@ func (s *Service) Place(
 				instrumentRecord = store.InstrumentRecord{}
 			}
 			if accountRecord.TradingAccountID != "" && instrumentRecord.InstrumentID != "" {
-				facts, err := tx.LoadReservationFacts(accountRecord, instrumentRecord, spec)
+				reducible, err := tx.AvailableReducibleQuantity(accountRecord, instrumentRecord)
 				if err != nil {
 					return err
 				}
-				if spec.ReducePositionOnly && spec.Quantity.Cmp(facts.AvailableReducibleQuantity) > 0 {
+				if spec.Quantity.Cmp(reducible) > 0 {
 					return ErrReduceOnly
 				}
 			}
