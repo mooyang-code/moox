@@ -40,9 +40,13 @@ const (
 )
 
 // MeasureClockSkew 用一次取交易所时间的请求估算本机时钟偏差（交易所时间减本机时间）：
-// 本机时间取请求发出和收到响应的中点，抵消往返延迟。
-func MeasureClockSkew(sentAt, receivedAt, serverTime time.Time) time.Duration {
-	return serverTime.Sub(sentAt.Add(receivedAt.Sub(sentAt) / 2))
+// 本机时间取请求发出和收到响应的中点，抵消往返延迟。往返超过 ClockSkewWarn 的样本误差太大，按没测到处理（ok 为 false）。
+func MeasureClockSkew(sentAt, receivedAt, serverTime time.Time) (skew time.Duration, ok bool) {
+	roundTrip := receivedAt.Sub(sentAt)
+	if roundTrip > ClockSkewWarn {
+		return 0, false
+	}
+	return serverTime.Sub(sentAt.Add(roundTrip / 2)), true
 }
 
 // PositionMode 是合约的持仓模式。
@@ -134,7 +138,11 @@ func (i Inspection) BlockersFor(markets []MarketType) []InspectionFinding {
 		return findings
 	}
 	if skew := i.clockSkew(); skew >= ClockSkewBlock {
-		add(FindingClockSkew, fmt.Sprintf("本机时钟与交易所相差 %.1f 秒（达到 %d 秒），下单会被拒绝或卡在结果未知：请检查本机 NTP 校时后重新检测", skew.Seconds(), int(ClockSkewBlock.Seconds())))
+		add(FindingClockSkew, "本机时钟与交易所相差过大，下单会被拒绝或卡在结果未知：请检查本机 NTP 校时后重新检测")
+	}
+	// 没有读到账户类型（签名检测没有结论，只测到了时钟）：账户相关的事实都不知道，只能就时钟下结论。
+	if i.AccountMode == AccountModeUnspecified {
+		return findings
 	}
 	if i.CanWithdraw {
 		add(FindingWithdrawPermission, "密钥带有提现权限，请在交易所关闭提现权限后重新录入")

@@ -41,7 +41,18 @@ func TestMeasureClockSkewUsesRequestMidpoint(t *testing.T) {
 	sent := time.UnixMilli(1_000_000)
 	received := sent.Add(200 * time.Millisecond)
 	server := sent.Add(100*time.Millisecond + 3*time.Second)
-	if got := MeasureClockSkew(sent, received, server); got != 3*time.Second {
-		t.Fatalf("偏差 = %v", got)
+	if got, ok := MeasureClockSkew(sent, received, server); !ok || got != 3*time.Second {
+		t.Fatalf("偏差 = %v，有效 = %v", got, ok)
+	}
+}
+
+// 往返超过 ClockSkewWarn 的样本误差太大，按没测到处理。
+func TestMeasureClockSkewDropsSlowSamples(t *testing.T) {
+	sent := time.UnixMilli(1_000_000)
+	if _, ok := MeasureClockSkew(sent, sent.Add(ClockSkewWarn), sent); !ok {
+		t.Fatal("往返恰为阈值的样本应有效")
+	}
+	if _, ok := MeasureClockSkew(sent, sent.Add(ClockSkewWarn+time.Millisecond), sent); ok {
+		t.Fatal("往返超过阈值的样本应无效")
 	}
 }

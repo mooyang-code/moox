@@ -64,17 +64,35 @@ type apiRestrictions struct {
 }
 
 func inspectWith(ctx context.Context, request exchange.InspectRequest, clients inspectClients) (exchange.Inspection, error) {
+	// 先测时钟：/api/v3/time 不签名。本机时钟偏快 1 秒以上时签名请求全被 -1021 拒绝，签名检测得不出结论，
+	// 要是不先测，用户只会看到“检测没有完成”，看不到真正的原因。测试网跳过检测，也不测。
+	var skew int64
+	if request.Environment != exchange.AccountEnvironmentTestnet {
+		skew = measureClockSkew(ctx, clients)
+	}
 	result, err := inspectAccount(ctx, request, clients)
-	if err != nil || result.Skipped || result.CredentialRejected != "" {
+	if err != nil {
+		if errors.Is(err, exchange.ErrInspectionInconclusive) && time.Duration(abs(skew))*time.Millisecond >= exchange.ClockSkewBlock {
+			// 签名检测没有结论，而时钟偏差已经足以解释：把时钟偏差作为结论返回，让用户看到真正的原因。
+			result = exchange.Inspection{
+				Exchange: exchange.ExchangeBinance, Environment: request.Environment,
+				InspectedAt: time.Now().UTC(), ClockSkewMillis: skew,
+			}
+			result.ApplyFindings(request.Markets)
+			return result, nil
+		}
 		return result, err
 	}
-	result.ClockSkewMillis = measureClockSkew(ctx, clients)
+	if result.Skipped || result.CredentialRejected != "" {
+		return result, nil
+	}
+	result.ClockSkewMillis = skew
 	result.ApplyFindings(request.Markets)
 	return result, nil
 }
 
-// measureClockSkew 取现货 /api/v3/time 和合约 /fapi/v1/time 各测一次本机时钟偏差，返回绝对值较大的一个（毫秒）。
-// 取不到交易所时间不影响账户检测，按没有偏差处理：其余检测调用同样会暴露网络问题。
+// measureClockSkew 取现货 /api/v3/time 和合约 /fapi/v1/time 各测一次本机时钟偏差，从测到的有效样本里
+// 返回绝对值较大的一个（毫秒）。取不到交易所时间、往返太慢的样本都不算；没有有效样本时按没有偏差（0）处理。
 func measureClockSkew(ctx context.Context, clients inspectClients) int64 {
 	var worst int64
 	for _, probe := range []struct {
@@ -90,8 +108,11 @@ func measureClockSkew(ctx context.Context, clients inspectClients) int64 {
 		if err != nil || json.Unmarshal(raw, &payload) != nil || payload.ServerTime <= 0 {
 			continue
 		}
-		skew := exchange.MeasureClockSkew(sentAt, receivedAt, time.UnixMilli(payload.ServerTime)).Milliseconds()
-		if abs(skew) > abs(worst) {
+		measured, ok := exchange.MeasureClockSkew(sentAt, receivedAt, time.UnixMilli(payload.ServerTime))
+		if !ok {
+			continue
+		}
+		if skew := measured.Milliseconds(); abs(skew) > abs(worst) {
 			worst = skew
 		}
 	}

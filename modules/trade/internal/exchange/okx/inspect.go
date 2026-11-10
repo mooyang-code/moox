@@ -39,7 +39,7 @@ func inspectWith(ctx context.Context, request exchange.InspectRequest, adapter *
 }
 
 // measureClockSkew 用 /api/v5/public/time 测一次本机时钟偏差（毫秒，交易所时间减本机时间）。
-// 取不到交易所时间不影响账户检测，按没有偏差处理：其余检测调用同样会暴露网络问题。
+// 取不到交易所时间、往返太慢的样本都按没测到处理（偏差 0）：其余检测调用同样会暴露网络问题。
 func measureClockSkew(ctx context.Context, adapter *Adapter) int64 {
 	sentAt := time.Now()
 	data, err := adapter.request(ctx, http.MethodGet, "/api/v5/public/time", nil, nil, false)
@@ -54,7 +54,11 @@ func measureClockSkew(ctx context.Context, adapter *Adapter) int64 {
 	if serverTime.IsZero() {
 		return 0
 	}
-	return exchange.MeasureClockSkew(sentAt, receivedAt, serverTime).Milliseconds()
+	skew, ok := exchange.MeasureClockSkew(sentAt, receivedAt, serverTime)
+	if !ok {
+		return 0
+	}
+	return skew.Milliseconds()
 }
 
 func inspectAccount(ctx context.Context, request exchange.InspectRequest, adapter *Adapter) (exchange.Inspection, error) {

@@ -71,7 +71,7 @@ func TestAttentionCheckNames(t *testing.T) {
 		"target_rejected", "auto_paused", "target_blocked", "account_not_ready", "target_expired", "target_reversal",
 		"rate_limited", "turnover_high", "unknown_results", "margin_ratio_low", "inspection_blocked", "inspection_failing",
 		"transfer_shortfall", "transfer_failing", "valuation_degraded", "flatten_orders_unsettled", "release_orders_unverified",
-		"release_orders_stuck", "orders_instrument_gone", "fill_ingest_failed",
+		"release_orders_stuck", "orders_instrument_gone", "fill_ingest_failed", "clock_skew", "isolated_position",
 	} {
 		require.NotEmpty(t, AttentionCheckName("trade_attention", kind), kind)
 	}
@@ -80,6 +80,8 @@ func TestAttentionCheckNames(t *testing.T) {
 	require.Equal(t, "释放会话持续失败，目标单没撤下", AttentionCheckName("trade_attention", "release_orders_stuck"))
 	require.Equal(t, "标的已下架的订单需人工核对成交", AttentionCheckName("trade_attention", "orders_instrument_gone"))
 	require.Equal(t, "成交没能记进账本，账户卡在同一笔", AttentionCheckName("trade_attention", "fill_ingest_failed"))
+	require.Equal(t, "本机时钟与交易所相差过大，请检查 NTP", AttentionCheckName("trade_attention", "clock_skew"))
+	require.Equal(t, "交易所账户里有逐仓持仓，moox 只支持全仓单向", AttentionCheckName("trade_attention", "isolated_position"))
 	require.Equal(t, "发现标的即将下架", AttentionCheckName("event_center_attention", "delist_detected"))
 	require.Equal(t, "下架检测缺少币安只读 Key", AttentionCheckName("collector_attention", "delist_readonly_key_missing"))
 	require.Empty(t, AttentionCheckName("collector_attention", "unknown"))

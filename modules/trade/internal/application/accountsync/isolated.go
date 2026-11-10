@@ -41,7 +41,8 @@ func (s *Service) pauseForIsolated(ctx context.Context, tradingAccountID string,
 	}
 	slices.Sort(symbols)
 	symbols = slices.Compact(symbols)
-	detail := account.Name + "：交易所账户里有逐仓持仓：标的 " + strings.Join(symbols, "、") + "，moox 只支持全仓单向"
+	description := "交易所账户里有逐仓持仓：标的 " + strings.Join(symbols, "、") + "，moox 只支持全仓单向"
+	detail := account.Name + "：" + description
 	// 关注项不看组合状态：已暂停、自主下单或没加入组合的账户同样要让用户知道这笔持仓不入投影。
 	telemetry.Note(telemetry.AttentionIsolatedPosition, detail, s.now())
 	logical, _, err := s.Store.FindLogicalAccountByTradingAccount(ctx, account.SpaceID, tradingAccountID)
@@ -51,12 +52,20 @@ func (s *Service) pauseForIsolated(ctx context.Context, tradingAccountID string,
 	if err != nil {
 		return err
 	}
-	if logical.ControlMode == "MANUAL" || logical.AutomationState != string(logicalaccount.AutomationActive) {
+	if logical.ControlMode == "MANUAL" {
 		return nil
 	}
-	reason := store.AutoPauseReason("交易所账户里有逐仓持仓：标的 " + strings.Join(symbols, "、") + "，moox 只支持全仓单向")
-	log.WarnContextf(ctx, "交易关注项：执行账户 %s 暂停组合 %s：%s", account.Name, logical.Name, reason)
-	return s.Store.Transaction(ctx, func(tx *store.Tx) error {
-		return tx.SetLogicalAccountAutomation(logical.SpaceID, logical.LogicalAccountID, string(logicalaccount.AutomationPaused), reason)
-	})
+	// 条件写入：只在组合仍是“运行中、没有暂停原因”时才暂停，已被风控或用户暂停的不改写原因。
+	reason := store.AutoPauseReason(description)
+	var paused bool
+	if err := s.Store.Transaction(ctx, func(tx *store.Tx) (err error) {
+		paused, err = tx.PauseLogicalAccountIf(logical.SpaceID, logical.LogicalAccountID, string(logicalaccount.AutomationActive), "", reason)
+		return err
+	}); err != nil {
+		return err
+	}
+	if paused {
+		log.WarnContextf(ctx, "交易关注项：执行账户 %s 暂停组合 %s：%s", account.Name, logical.Name, reason)
+	}
+	return nil
 }

@@ -320,3 +320,17 @@ func TestInspectClockSkew(t *testing.T) {
 		t.Fatalf("没有偏差不应有提示：%+v", clean)
 	}
 }
+
+// 往返超过 1 秒的样本按没测到处理，偏差记为 0。
+func TestMeasureClockSkewIgnoresSlowSample(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(exchange.ClockSkewWarn + 100*time.Millisecond)
+		_, _ = fmt.Fprintf(w, `{"code":"0","msg":"","data":[{"ts":"%d"}]}`, time.Now().Add(10*time.Second).UnixMilli())
+	}))
+	defer server.Close()
+	adapter := New(exchange.AccountConfig{Exchange: exchange.ExchangeOKX, Environment: exchange.AccountEnvironmentProduction}, exchange.Credential{APIKey: "key", APISecret: "secret", Passphrase: "phrase"})
+	adapter.client = httpclient.New(server.URL)
+	if skew := measureClockSkew(context.Background(), adapter); skew != 0 {
+		t.Fatalf("慢样本应被丢弃：skew=%d", skew)
+	}
+}

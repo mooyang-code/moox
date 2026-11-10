@@ -320,8 +320,10 @@ func TestInspectSignsRequestsAndSendsAPIKey(t *testing.T) {
 	_, _ = inspectWith(context.Background(), exchange.InspectRequest{
 		Environment: exchange.AccountEnvironmentProduction, Credential: exchange.Credential{APIKey: "key-1", APISecret: "secret-1"},
 	}, clients)
-	if len(seen) == 0 || seen[0].Header.Get("X-MBX-APIKEY") != "key-1" ||
-		!strings.Contains(seen[0].URL.RawQuery, "timestamp=") || !strings.Contains(seen[0].URL.RawQuery, "&signature=") {
+	// 前面的时间请求不签名；第一个签名请求是 apiRestrictions。
+	index := slices.IndexFunc(seen, func(r *http.Request) bool { return r.URL.Path == "/sapi/v1/account/apiRestrictions" })
+	if index < 0 || seen[index].Header.Get("X-MBX-APIKEY") != "key-1" ||
+		!strings.Contains(seen[index].URL.RawQuery, "timestamp=") || !strings.Contains(seen[index].URL.RawQuery, "&signature=") {
 		t.Fatalf("请求没有带密钥或签名：%+v", seen)
 	}
 }
@@ -371,5 +373,50 @@ func TestRenewListenKeySendsNoListenKeyParameter(t *testing.T) {
 	}
 	if method != http.MethodPut || path != "/fapi/v1/listenKey" || query != "" || apiKey != "key" {
 		t.Fatalf("method=%s path=%s query=%q apiKey=%q", method, path, query, apiKey)
+	}
+}
+
+// 本机时钟偏快时签名请求全被 -1021 拒绝：签名检测没有结论，但不签名的时间接口能测出偏差，
+// 偏差达到阻断阈值就把它作为结论返回（只有时钟阻断项，没有账户相关的误报）；偏差不大时仍是“没有结论”。
+func TestInspectClockSkewExplainsSignedRequestsRejected(t *testing.T) {
+	check := func(ahead time.Duration) (exchange.Inspection, error) {
+		timestampRejected := inspectReply{http.StatusBadRequest, errorBody(-1021, "Timestamp for this request is outside of the recvWindow.")}
+		serverTime := ok([]byte(fmt.Sprintf(`{"serverTime":%d}`, time.Now().Add(ahead).UnixMilli())))
+		_, clients := newInspectServer(t, map[string]inspectReply{
+			"/sapi/v1/account/apiRestrictions": timestampRejected,
+			"/api/v3/time":                     serverTime,
+			"/fapi/v1/time":                    serverTime,
+		})
+		return inspectWith(context.Background(), exchange.InspectRequest{
+			Environment: exchange.AccountEnvironmentProduction,
+			Markets:     []exchange.MarketType{exchange.MarketTypeSpot, exchange.MarketTypeSwap},
+		}, clients)
+	}
+	result, err := check(-4 * time.Second)
+	if err != nil {
+		t.Fatalf("偏差 4 秒应给出结论：%v", err)
+	}
+	if len(result.Blockers) != 1 || result.Blockers[0].Code != exchange.FindingClockSkew || result.ClockSkewMillis > -3500 {
+		t.Fatalf("应只有时钟阻断项：skew=%d blockers=%+v", result.ClockSkewMillis, result.Blockers)
+	}
+	if _, err := check(0); !errors.Is(err, exchange.ErrInspectionInconclusive) {
+		t.Fatalf("没有时钟偏差时签名失败仍然没有结论：err=%v", err)
+	}
+}
+
+// 往返超过 1 秒的样本按没测到处理；现货慢、合约正常时只看合约的样本。
+func TestMeasureClockSkewIgnoresSlowSamples(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		offset := time.Duration(0)
+		if r.URL.Path == "/api/v3/time" {
+			time.Sleep(exchange.ClockSkewWarn + 100*time.Millisecond)
+			offset = 10 * time.Second
+		}
+		_, _ = fmt.Fprintf(w, `{"serverTime":%d}`, time.Now().Add(offset).UnixMilli())
+	}))
+	defer server.Close()
+	clients := inspectClients{spot: httpclient.New(server.URL), swap: httpclient.New(server.URL), papi: httpclient.New(server.URL)}
+	if skew := measureClockSkew(context.Background(), clients); skew < -200 || skew > 200 {
+		t.Fatalf("慢样本应被丢弃，只剩合约的零偏差样本：skew=%d", skew)
 	}
 }
