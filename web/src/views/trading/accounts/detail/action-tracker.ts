@@ -45,7 +45,6 @@ export function useActionTracker(options: ActionTrackerOptions) {
         const isOrderAction = ORDER_ACTIONS.includes(rsp.action.action_type);
         if (action.value?.action_id !== rsp.action.action_id || !isOrderAction) submittedOrder.value = null;
         const changed = action.value?.action_id !== rsp.action.action_id || action.value?.status !== rsp.action.status;
-        error.value = "";
         action.value = rsp.action;
         if (changed) options.onChanged();
         onObserved?.(rsp.action);
@@ -59,6 +58,8 @@ export function useActionTracker(options: ActionTrackerOptions) {
           if (!request.isLatest() || options.logicalAccountId() !== logicalAccountId) return;
           submittedOrder.value = orderRsp.order;
         }
+        // 操作和订单这一轮都查成功了才清错误，否则每轮都会闪一下
+        error.value = "";
         const orderDone = !orderId || ORDER_FINAL_STATES.includes(submittedOrder.value?.state || "");
         if (rsp.action.status !== "RUNNING" && orderDone) stop();
       } catch (cause) {

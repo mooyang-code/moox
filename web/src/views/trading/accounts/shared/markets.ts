@@ -10,6 +10,11 @@ export function marketsText(markets: readonly number[] | undefined): string {
   return markets?.length ? markets.map(marketLabel).join("、") : "-";
 }
 
+/** 持仓数的合计说明，按实际开通的市场写：现货合计、股票合计、现货和永续合计。 */
+export function marketsTotalText(markets: readonly number[] | undefined): string {
+  return `${(markets || []).map(marketLabel).join("和")}合计`;
+}
+
 /** 内部标的 ID 带 -SPOT、-SWAP 后缀（如 BTC-USDT-SWAP），股票是原始代码。 */
 export function marketOfInstrument(instrumentId: string): MarketType {
   if (instrumentId.endsWith("-SWAP")) return 2;

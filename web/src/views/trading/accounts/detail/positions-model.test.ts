@@ -73,7 +73,7 @@ describe("持仓与目标按币合并", () => {
     expect(rows[0].deferredReason).toContain("下一个整点");
   });
 
-  it("保持当前持仓的目标没有偏差；自主下单的组合列出现货持有且不算目标外", () => {
+  it("保持当前持仓的目标没有偏差；自主下单的组合列出现货持有且不算不在目标内", () => {
     const hold = buildCoinRows({
       targets: [{ instrument_id: "BTC-USDT-SWAP", quantity: "", hold: true }],
       blocked: [],

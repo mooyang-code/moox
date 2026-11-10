@@ -99,7 +99,7 @@
               {{ snapshotCount }}<small v-if="logical.control_mode === 1">/ {{ targetCoins }}</small>
             </div>
             <div v-if="logical.control_mode === 1" class="d">{{ offCount }} 个未到位</div>
-            <div v-else-if="!isStockOnly(logical.markets || [])" class="d">现货和永续合计</div>
+            <div v-else class="d">{{ marketsTotalText(logical.markets) }}</div>
           </div>
         </div>
 
@@ -328,7 +328,7 @@ import ConfirmDialog from "@/components/trade-confirm/confirm-dialog.vue";
 import EnvMark from "@/components/trade-confirm/env-mark.vue";
 import { environmentFromQuery, environmentLabel, logicalEnvironment } from "@/components/trade-confirm/environment";
 import { fmtMoney, fmtPercent, fmtQty, fmtSigned, pnlClass } from "../shared/format";
-import { instrumentName, isStockOnly, marketLabel } from "../shared/markets";
+import { instrumentName, marketLabel, marketsTotalText } from "../shared/markets";
 import { loadPositionSnapshot, positionCount, type PositionSnapshot } from "../shared/position-snapshot";
 import { loadStrategyLinks, type StrategyLink } from "../shared/strategy-link";
 import { useActionTracker } from "./action-tracker";

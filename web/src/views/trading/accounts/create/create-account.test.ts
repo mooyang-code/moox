@@ -275,19 +275,29 @@ describe("新建账户提交", () => {
       expect(vm.form.secretId).toBe("");
     });
 
-    it("重新打开后状态是新的：上一次提交建成的账户不会让这次跳过创建", async () => {
-      mocks.createTradingAccount.mockResolvedValue({ account: { trading_account_id: "ta-live" } });
+    it("重新打开后状态是新的：旧提交迟到的结果不污染新状态，新提交照常创建账户", async () => {
       const vm = await openDialog();
       Object.assign(vm.form, liveForm);
-      mocks.addLogicalAccountMember.mockRejectedValueOnce(new Error("先暂停自动执行"));
-      await vm.submit();
-      await flushPromises();
-      expect(document.body.textContent).toContain("已锁定");
+      let resolveOld!: (value: unknown) => void;
+      mocks.createTradingAccount
+        .mockImplementationOnce(() => new Promise(done => (resolveOld = done)))
+        .mockResolvedValueOnce({ account: { trading_account_id: "ta-new" } });
+      const oldSubmit = vm.submit();
+      // 旧提交还挂着，弹窗被程序重新打开
       vm.open("testnet");
       await flushPromises();
-      Object.assign(vm.form, liveForm);
+      Object.assign(vm.form, liveForm, { join: "exist", existingLogicalId: "la-existing" });
+      resolveOld({ account: { trading_account_id: "ta-old" } });
+      await oldSubmit;
+      await flushPromises();
+      // 旧账户通知列表刷新；新弹窗没有被锁定，也没有被关掉
+      expect(wrapper.emitted("created")).toEqual([["testnet"]]);
+      expect(document.body.textContent).not.toContain("已锁定");
+      expect((wrapper.vm as unknown as { visible: boolean }).visible).toBe(true);
+      // 新提交不会因为旧状态里已有账户而跳过创建
       await vm.submit();
       expect(mocks.createTradingAccount).toHaveBeenCalledTimes(2);
+      expect(mocks.addLogicalAccountMember).toHaveBeenLastCalledWith(expect.objectContaining({ trading_account_id: "ta-new" }));
     });
 
     it("加入组合失败只显示一条红色提示并锁定前几步，重试只补加入不重复建账户", async () => {

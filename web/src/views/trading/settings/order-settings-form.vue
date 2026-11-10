@@ -22,7 +22,7 @@
         每个标的每个自然小时累计下单金额的上限，超出的部分留到下一个整点；标的写 * 表示默认值，不填表示不限。
       </p>
       <div v-for="market in capMarkets" :key="market.key" class="cap-block">
-        <div class="cap-title">{{ market.label }}</div>
+        <div v-if="market.label" class="cap-title">{{ market.label }}</div>
         <div v-for="(row, index) in model[market.key]" :key="index" class="cap-row">
           <a-input v-model="row.key" :placeholder="market.placeholder" />
           <a-input v-model="row.value" placeholder="金额" :suffix="unit" />
@@ -115,10 +115,15 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{ save: [settings: OrderSettings]; refresh: [] }>();
 
-const capMarkets = [
-  { key: "hourly_cap_spot", label: "现货", placeholder: "BTC-USDT-SPOT 或 *" },
-  { key: "hourly_cap_swap", label: "合约", placeholder: "BTC-USDT-SWAP 或 *" }
-] as const;
+// A 股组合只有一组上限（走 hourly_cap_spot），标的写股票代码
+const capMarkets = computed(() =>
+  props.stockOnly
+    ? ([{ key: "hourly_cap_spot", label: "", placeholder: "600519.XSHG 或 *" }] as const)
+    : ([
+        { key: "hourly_cap_spot", label: "现货", placeholder: "BTC-USDT-SPOT 或 *" },
+        { key: "hourly_cap_swap", label: "合约", placeholder: "BTC-USDT-SWAP 或 *" }
+      ] as const)
+);
 
 const model = reactive(orderSettingsToModel(props.settings));
 const formError = ref("");

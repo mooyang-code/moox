@@ -331,6 +331,8 @@ async function loadSecrets() {
 }
 
 function open(kind: Environment) {
+  // 弹窗已经打开时再 open，visible 不变、监听不会触发，要主动使进行中的旧提交失效
+  scope.invalidate();
   Object.assign(form, createDefaultForm(createKinds.find(item => item.key === kind)?.open ? kind : "paper"));
   created.value = newCreated();
   Object.assign(preview, { allowNext: false, view: null });
@@ -444,18 +446,19 @@ async function submit() {
     const message = cause instanceof Error ? cause.message : "请求失败，请稍后重试";
     // 账户已经建成就通知列表刷新，哪怕对话框已经关闭或重新打开
     if (state.accountId) emit("created", kind);
+    // 先解除提交中：弹窗在提交中关不掉，提交失效（切换空间等）时也不能把它锁死
+    submitting.value = false;
     if (!submission.isCurrent()) return;
     // 后端明确返回需要接管（TRADE_ADOPTION_REQUIRED）时，提示勾选接管后重试
     const adoptHint = state.accountId && isTradeAdoptionRequired(cause) ? "勾选下方“接管账户里已有的持仓”后再点一次。" : "";
     error.value = state.accountId
       ? `执行账户已创建，但加入组合没有完成：${message}。前面几步的参数已锁定，修正后再点一次只会补做加入组合。${adoptHint}`
       : message;
-    submitting.value = false;
     return;
   }
   emit("created", kind);
-  if (!submission.isCurrent()) return;
   submitting.value = false;
+  if (!submission.isCurrent()) return;
   visible.value = false;
   Message.success("账户已创建");
 }
