@@ -230,6 +230,9 @@ func TestFlattenRetriesSameActionWithoutDuplicateChildren(t *testing.T) {
 	)
 	require.NoError(t, err)
 
+	// 子单提交后还没确认：只重新提交它，不另下新单。
+	fixture.orders.leaveOpen = map[string]bool{"existing-child": true}
+
 	_, err = fixture.service().FlattenLogicalAccount(
 		context.Background(),
 		FlattenCommand{

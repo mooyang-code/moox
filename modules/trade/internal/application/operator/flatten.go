@@ -1573,18 +1573,15 @@ func (s *Service) placeOrContinueFlattenChildWithQuote(
 	quote Quote,
 	result *FlattenAccountResult,
 ) error {
-	// 下架清仓用伪市价单（限价 + IOC，滑点 3%）：每一轮按最新报价重新下，零成交的 IOC 单不算终结，
-	// 子单号带上第几次尝试，同一个动作号重试时不会撞上上一次已结束的子单。
+	// 下架清仓用伪市价单（限价 + IOC，滑点 3%）：每一轮按最新报价重新下，零成交的 IOC 单不算终结。
 	delist := command.actionType() == operatorDelistFlatten
-	// stockIOC：A 股没有市价单，清仓、减仓也发限价 IOC；子单号和下架清仓一样带上第几次尝试，零成交的单结束后换号再下。
+	// stockIOC：A 股没有市价单，清仓、减仓也发限价 IOC。
 	stockIOC := exchange.RuleFor(instrument.MarketType).PriceLimits
-	var history delistHistory
-	if delist || stockIOC {
-		var historyErr error
-		history, historyErr = s.loadDelistHistory(ctx, command, account.TradingAccountID, exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol))
-		if historyErr != nil {
-			return historyErr
-		}
+	// 所有市场的子单号都带上第几次尝试（本动作在这个标的上已结束的子单数）：零成交的子单（已过期、已撤销、本地校验没过）
+	// 结束后同一个动作号换号再下，不会撞上上一笔已结束的子单；交易所明确拒绝的才终结。
+	history, err := s.loadDelistHistory(ctx, command, account.TradingAccountID, exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol))
+	if err != nil {
+		return err
 	}
 	attempt := history.finished
 	clientOrderID := flattenClientOrderIDForSpec(
@@ -1622,14 +1619,6 @@ func (s *Service) placeOrContinueFlattenChildWithQuote(
 		case orderdomain.Canceling, orderdomain.CancelUnknown:
 			_, err = s.Orders.RecoverCancel(ctx, command.SpaceID, existing.OrderID)
 			return err
-		case orderdomain.Rejected, orderdomain.Canceled,
-			orderdomain.PartiallyCanceled, orderdomain.Expired:
-			ended := manualFailureError{message: fmt.Sprintf("上一笔清仓子单已结束（%s）", existing.State), cause: ErrInvalidCommand}
-			// 零成交就终结的子单，同一单号重试只会得到同样结果；部分成交的等持仓同步后按新数量换单号再下。
-			if filled, parseErr := decimalOrZero(existing.FilledQuantity); parseErr == nil && filled.IsZero() {
-				return flattenFinal{ended}
-			}
-			return ended
 		default:
 			return nil
 		}
@@ -1647,6 +1636,8 @@ func (s *Service) placeOrContinueFlattenChildWithQuote(
 		if err := checkStockFlattenAttempt(history, side, quote); err != nil {
 			return err
 		}
+	} else if err := checkFlattenAttempt(history); err != nil {
+		return err
 	}
 	spec := orderdomain.OrderSpec{
 		ClientOrderSpec: orderdomain.ClientOrderSpec{
@@ -1817,10 +1808,10 @@ func (s *Service) remainingForAccount(
 		}
 	}
 	if account.HasBalanceMarket() {
+		// 读取失败时 managed 为空，下面的现货循环全部跳过；已算出的合约剩余照常返回，不能让结果看起来像平完了。
 		managed, managedErr := s.Store.ManagedAssets(ctx, spaceID, tradingAccountID)
 		if managedErr != nil {
 			result.addError(managedErr)
-			return nil
 		}
 		result.Dust = nil
 		for _, balance := range account.SpotBalances() {
@@ -2198,7 +2189,9 @@ func (s *Service) loadDelistHistory(ctx context.Context, command FlattenCommand,
 			thisRound = append(thisRound, current)
 		}
 	}
-	if n := len(thisRound); n > 0 && thisRound[n-1].State == string(orderdomain.Rejected) {
+	// 提交前在本地就判定没过（资金不足、只减仓无效，还没发给交易所，SubmittedAt 为 0）的拒单与 Place 的口径一致：
+	// 持仓、余额可能只是还没同步，按零成交换号重试，不当成交易所的确定性拒绝；到上限才终结。
+	if n := len(thisRound); n > 0 && thisRound[n-1].State == string(orderdomain.Rejected) && thisRound[n-1].SubmittedAt > 0 {
 		history.lastRejected, history.rejectReason = true, thisRound[n-1].RejectReason
 	}
 	for index := len(thisRound) - 1; index >= 0; index-- {
@@ -2215,13 +2208,25 @@ func (s *Service) loadDelistHistory(ctx context.Context, command FlattenCommand,
 	return history, nil
 }
 
-// stockFlattenMaxUnfilled 是 A 股清仓、减仓在一个标的上连续零成交的 IOC 上限，到了就按终结处理、要人工看。
-const stockFlattenMaxUnfilled = 20
+// flattenMaxUnfilled 是清仓、减仓在一个标的上连续零成交的子单上限，到了就按终结处理、要人工看。
+const flattenMaxUnfilled = 20
+
+// checkFlattenAttempt 判断加密市场清仓、减仓这一笔能不能下：最近一笔被交易所拒绝（同样的单再发还是拒绝），
+// 或这一轮连续 flattenMaxUnfilled 笔零成交（已过期、已撤销、本地校验没过）是终结错误；其余零成交的换号重试。
+func checkFlattenAttempt(history delistHistory) error {
+	switch {
+	case history.lastRejected:
+		return flattenFinal{fmt.Errorf("清仓的订单被拒绝：%s", history.rejectReason)}
+	case history.unfilled >= flattenMaxUnfilled:
+		return flattenFinal{fmt.Errorf("清仓连续 %d 笔订单一股都没成交，需要人工处理", history.unfilled)}
+	}
+	return nil
+}
 
 // checkStockFlattenAttempt 判断 A 股清仓、减仓这一笔能不能下：
 //   - 停牌、卖出时跌停（现价在跌停价且没有买一）：一股都卖不出，按可重试处理，下一轮再看，由清仓动作的 30 分钟期限兜底；
 //     和“当日买入，次日可卖”不同，后者在当天怎么重试都卖不了，按终结处理；
-//   - 最近一笔被拒绝，或这一轮连续 stockFlattenMaxUnfilled 笔零成交（休市时被撤掉的不算）：终结。
+//   - 最近一笔被拒绝，或这一轮连续 flattenMaxUnfilled 笔零成交（休市时被撤掉的不算）：终结。
 func checkStockFlattenAttempt(history delistHistory, side exchange.Side, quote Quote) error {
 	switch {
 	case quote.Halted:
@@ -2234,7 +2239,7 @@ func checkStockFlattenAttempt(history delistHistory, side exchange.Side, quote Q
 		return manualFailureError{message: "涨停，没有卖一，打开后再买", cause: ErrInvalidCommand}
 	case history.lastRejected:
 		return flattenFinal{fmt.Errorf("清仓的订单被拒绝：%s", history.rejectReason)}
-	case history.unfilled >= stockFlattenMaxUnfilled:
+	case history.unfilled >= flattenMaxUnfilled:
 		return flattenFinal{fmt.Errorf("清仓连续 %d 笔限价单一股都没成交，需要人工处理", history.unfilled)}
 	}
 	return nil

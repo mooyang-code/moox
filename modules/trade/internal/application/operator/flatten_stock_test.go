@@ -189,6 +189,6 @@ func TestFlattenStockRetriesAfterUnfilledIOC(t *testing.T) {
 		exchange.NewSymbolKey(exchange.MarketTypeStock, "600519.XSHG"), exchange.SideSell, shared.MustDecimal("100"), 2),
 		fixture.orders.specs[0].ClientOrderID)
 
-	history := delistHistory{unfilled: stockFlattenMaxUnfilled}
+	history := delistHistory{unfilled: flattenMaxUnfilled}
 	require.True(t, isFlattenFinal(checkStockFlattenAttempt(history, exchange.SideSell, Quote{Price: shared.MustDecimal("10")})))
 }

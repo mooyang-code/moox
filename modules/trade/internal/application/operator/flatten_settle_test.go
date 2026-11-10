@@ -153,7 +153,7 @@ func TestDelistDeadlineRetryKeepsProgress(t *testing.T) {
 	fixture.orders.nextID = ""
 	_, err := fixture.service().FlattenLogicalAccount(context.Background(), command)
 	require.NoError(t, err)
-	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_trade_orders SET c_state = 'REJECTED', c_reject_reason = 'x', c_exchange_symbol = 'BTCUSDT' WHERE c_owner_id = 'delist-progress'`).Error)
+	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_trade_orders SET c_state = 'REJECTED', c_reject_reason = 'x', c_submitted_at = 1000, c_exchange_symbol = 'BTCUSDT' WHERE c_owner_id = 'delist-progress'`).Error)
 	currentRoundOrders(t, fixture, "delist-progress")
 	first, err := fixture.service().FlattenLogicalAccount(context.Background(), command)
 	require.NoError(t, err)

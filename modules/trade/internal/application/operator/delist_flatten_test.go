@@ -113,7 +113,7 @@ func TestDelistFlattenRetryAfterARejectionStartsOver(t *testing.T) {
 	fixture.orders.nextID = ""
 	_, err := fixture.service().FlattenLogicalAccount(context.Background(), command)
 	require.NoError(t, err)
-	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_trade_orders SET c_state = 'REJECTED', c_reject_reason = '交易对暂停', c_exchange_symbol = 'BTCUSDT' WHERE c_owner_id = 'delist-reject'`).Error)
+	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_trade_orders SET c_state = 'REJECTED', c_reject_reason = '交易对暂停', c_submitted_at = 1000, c_exchange_symbol = 'BTCUSDT' WHERE c_owner_id = 'delist-reject'`).Error)
 	currentRoundOrders(t, fixture, "delist-reject")
 	fixture.orders.specs = nil
 
