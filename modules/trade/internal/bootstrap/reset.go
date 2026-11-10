@@ -19,7 +19,7 @@ import (
 //	data：清运行数据——订单、成交、持仓、权益点、目标与回执、影子目标、回放账本、纸面余额与资金费、操作记录；保留账户与逻辑账户（配置）；
 //	all ：再清账户（交易账户、纸面配置）、逻辑账户及成员、行情标的，回到新部署的空白状态。
 //
-// 重置只清本地账本，**交易所上的仓位和订单不会因此消失**，所以实盘账户还有持仓或未完成订单时一律拒绝：
+// 重置只清本地账本，**交易所上的仓位和订单不会因此消失**，所以启用的实盘账户还有持仓或未完成订单时一律拒绝：
 // plan 阶段按本地账本预检，执行的第一步先向交易所重新对账、再核验一次——plan 到 apply 之间可能新增仓位，
 // 暂停也只是不再下新单，不撤单，在途的挂单仍可能成交。需要用户先自己平仓、撤单。
 // 交易所 API 密钥在 Admin 的 secrets 里，不属于 Trade 的库，重置不碰。
@@ -40,15 +40,11 @@ var (
 	}
 )
 
-// liveExposure 返回（订单终态：FILLED、CANCELED、PARTIALLY_CANCELED、REJECTED、EXPIRED，其余都算未完成）实盘账户（启用的）还有持仓或未完成订单的说明；没有为空。
+// liveExposure 返回（订单终态：FILLED、CANCELED、PARTIALLY_CANCELED、REJECTED、EXPIRED，其余都算未完成）启用的实盘账户还有持仓或未完成订单的说明；没有为空。
+// 持仓、订单、现货余额和向交易所对账用同一个口径，都只看启用的实盘账户：停用的账户没有会话，既对不了账、也不会再下单，它本地的残留由清表一并清掉。
 func liveExposure(ctx context.Context, db *sql.DB) ([]string, error) {
 	var out []string
-	rows, err := db.QueryContext(ctx, `
-		SELECT p.c_trading_account_id, p.c_exchange_symbol, p.c_signed_quantity
-		FROM t_trading_positions p
-		JOIN t_trading_accounts a ON a.c_space_id = p.c_space_id AND a.c_trading_account_id = p.c_trading_account_id
-		WHERE a.c_execution_mode = 'LIVE' AND CAST(p.c_signed_quantity AS REAL) <> 0
-		ORDER BY p.c_trading_account_id, p.c_exchange_symbol LIMIT 5`)
+	rows, err := db.QueryContext(ctx, queryLivePositions)
 	if err != nil {
 		return nil, fmt.Errorf("检查实盘持仓：%w", err)
 	}
@@ -70,10 +66,7 @@ func liveExposure(ctx context.Context, db *sql.DB) ([]string, error) {
 	}
 	out = append(out, holdings...)
 	var open int
-	if err := db.QueryRowContext(ctx, `
-		SELECT COUNT(*) FROM t_trade_orders o
-		JOIN t_trading_accounts a ON a.c_space_id = o.c_space_id AND a.c_trading_account_id = o.c_trading_account_id
-		WHERE a.c_execution_mode = 'LIVE' AND o.c_state NOT IN ('FILLED','CANCELED','PARTIALLY_CANCELED','REJECTED','EXPIRED')`).Scan(&open); err != nil {
+	if err := db.QueryRowContext(ctx, queryLiveOpenOrders).Scan(&open); err != nil {
 		return nil, fmt.Errorf("检查实盘未完成订单：%w", err)
 	}
 	if open > 0 {
@@ -214,8 +207,19 @@ func tradeResetSpec(tradeStore *store.Store, dbPath string, syncAccount func(ctx
 	}}
 }
 
-// 以下 SQL 整条写成常量，不在调用处拼接或内联。
+// 以下 SQL 整条写成常量，不在调用处拼接或内联。预检、对账用同一个口径：只看启用的实盘账户。
 const (
+	// 启用的实盘账户里的非零持仓，最多列 5 条说明。
+	queryLivePositions = `SELECT p.c_trading_account_id, p.c_exchange_symbol, p.c_signed_quantity
+		FROM t_trading_positions p
+		JOIN t_trading_accounts a ON a.c_space_id = p.c_space_id AND a.c_trading_account_id = p.c_trading_account_id
+		WHERE a.c_execution_mode = 'LIVE' AND a.c_status = 'ENABLED' AND CAST(p.c_signed_quantity AS REAL) <> 0
+		ORDER BY p.c_trading_account_id, p.c_exchange_symbol LIMIT 5`
+	// 启用的实盘账户里没到终态的订单数。
+	queryLiveOpenOrders = `SELECT COUNT(*) FROM t_trade_orders o
+		JOIN t_trading_accounts a ON a.c_space_id = o.c_space_id AND a.c_trading_account_id = o.c_trading_account_id
+		WHERE a.c_execution_mode = 'LIVE' AND a.c_status = 'ENABLED'
+			AND o.c_state NOT IN ('FILLED','CANCELED','PARTIALLY_CANCELED','REJECTED','EXPIRED')`
 	// 启用的实盘账户里 MooX 买过的币（有成交的策略或人工订单）。
 	queryLiveSpotHoldings = `SELECT DISTINCT a.c_trading_account_id, o.c_market_type, a.c_snapshot_json, i.c_base_asset, i.c_min_exchange_quantity
 		FROM t_trade_orders o

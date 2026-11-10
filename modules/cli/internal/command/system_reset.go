@@ -62,7 +62,7 @@ func init() {
 
 生产环境（默认；--env test 或 MOOX_SYSTEM_ENV=test 改成测试环境）apply 要逐字输入系统名（--confirm-name）。
 每个模块用重置专用密钥签名：MOOX_<模块>_HEALTH_RESET_ACCESS_KEY / _SECRET_KEY，没有设置时用 MOOX_HEALTH_RESET_ACCESS_KEY / _SECRET_KEY。
-实盘账户有持仓或未完成订单时 Trade 会阻止重置。重置完成后各模块处于未初始化，要按常规流程 init → start → confirm。`,
+启用的实盘账户有持仓或未完成订单时 Trade 会阻止重置（停用的账户没有会话，本地残留不挡）。重置完成后各模块处于未初始化，要按常规流程 init → start → confirm。`,
 	}
 	pf := reset.PersistentFlags()
 	pf.StringVar(&systemResetFlags.StateDir, "state-dir", defaultResetStateDir(), "计划与系统日志的保存目录（0600）")

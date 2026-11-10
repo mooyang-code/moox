@@ -151,6 +151,17 @@ type manualFailureError struct {
 func (e manualFailureError) Error() string { return e.message }
 func (e manualFailureError) Unwrap() error { return e.cause }
 
+// ErrRecordedFailure 标记从库里还原出来的操作失败：文案是当时落库的原因，回给前端时照原样返回。
+var ErrRecordedFailure = errors.New("已记录的操作失败")
+
+type recordedFailure struct{ message string }
+
+// RecordedFailure 用落库的失败原因还原一个错误。
+func RecordedFailure(message string) error { return recordedFailure{message: message} }
+
+func (e recordedFailure) Error() string        { return e.message }
+func (e recordedFailure) Is(target error) bool { return target == ErrRecordedFailure }
+
 func manualErrorCode(cause error) string {
 	for _, entry := range manualFailureCodes {
 		if errors.Is(cause, entry.cause) {
@@ -166,7 +177,7 @@ func manualPersistedError(message, code string) error {
 			return manualFailureError{message: message, cause: entry.cause}
 		}
 	}
-	return manualFailureError{message: message, cause: errors.New(message)}
+	return manualFailureError{message: message, cause: recordedFailure{message: message}}
 }
 
 func (s *Service) PlaceManualOrder(

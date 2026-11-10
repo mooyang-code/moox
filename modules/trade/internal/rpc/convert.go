@@ -18,6 +18,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/runtime"
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
 	"gorm.io/gorm"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 func retInfo(code tradepb.ErrorCode, message string) *tradepb.RetInfo {
@@ -28,6 +29,9 @@ func success() *tradepb.RetInfo {
 	return retInfo(tradepb.ErrorCode_SUCCESS, "")
 }
 
+// internalErrorMessage 是兜底分支对外的固定文案：原始错误可能带 SQL、路径、交易所原文，只写日志，不回给前端。
+const internalErrorMessage = "交易服务内部错误，请查看日志"
+
 func errorInfo(err error) *tradepb.RetInfo {
 	if err == nil {
 		return success()
@@ -36,7 +40,20 @@ func errorInfo(err error) *tradepb.RetInfo {
 	switch {
 	case errors.Is(err, operatorapp.ErrInvalidActionResult),
 		// 释放会话前目标挂单没撤下来：不能落到“冲突”“不存在”（策略把这两种当成已了结、不再重试）。
-		errors.Is(err, logicalapp.ErrTargetOrdersNotReleased):
+		errors.Is(err, logicalapp.ErrTargetOrdersNotReleased),
+		// 下面这些错误的文案本来就是写给用户看的中文（不含交易所原文、SQL、路径），照原样回，不走兜底。
+		errors.Is(err, accountapp.ErrInspectionUnavailable),
+		errors.Is(err, accountapp.ErrLiveTradingDisabled),
+		errors.Is(err, accountapp.ErrPaperAccountImmutable),
+		errors.Is(err, operatorapp.ErrCancelUnconfirmed),
+		errors.Is(err, orderapp.ErrExternalConflict),
+		errors.Is(err, orderapp.ErrAutomationPaused),
+		errors.Is(err, orderapp.ErrAccountNotReady),
+		errors.Is(err, tradingaccount.ErrAccountNotExecutable),
+		errors.Is(err, orderapp.ErrInstrumentHalted),
+		errors.Is(err, orderapp.ErrPriceLimit),
+		// 从库里还原的操作失败（撤单、人工单重放）：文案是当时落库的原因。
+		errors.Is(err, operatorapp.ErrRecordedFailure):
 		code = tradepb.ErrorCode_INNER_ERR
 	case errors.Is(err, runtime.ErrSessionConfig):
 		// 会话还没建起来：请求没有发到交易所，稍后重试即可；前端据此等几秒重试。
@@ -82,6 +99,14 @@ func errorInfo(err error) *tradepb.RetInfo {
 		errors.Is(err, orderapp.ErrLeverageLimit),
 		errors.Is(err, orderapp.ErrReduceOnly):
 		code = tradepb.ErrorCode_INVALID_PARAM
+	default:
+		log.Errorf("交易服务内部错误：%v", err)
+		// 交易所错误回类别、HTTP 状态和错误码（不带交易所原文），暂时性错误才看得出原因。
+		var typed *exchange.Error
+		if errors.As(err, &typed) {
+			return retInfo(code, exchange.FailureSummary(err))
+		}
+		return retInfo(code, internalErrorMessage)
 	}
 	return retInfo(code, err.Error())
 }
