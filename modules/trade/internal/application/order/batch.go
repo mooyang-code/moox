@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
@@ -119,7 +120,7 @@ func (s *Service) SubmitBatch(ctx context.Context, spaceID string, orderIDs []st
 			closed[accountID] = struct{}{}
 			closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 			err := s.Store.Transaction(closeCtx, func(tx *store.Tx) error {
-				return tx.UpdateTradingAccountReadiness(send.record.SpaceID, accountID, false, s.now().UnixMilli(), fillAwaitingBalance)
+				return tx.UpdateTradingAccountReadiness(send.record.SpaceID, accountID, false, s.now().UnixMilli(), consumer.AwaitingBalanceReason)
 			})
 			cancel()
 			if err != nil {

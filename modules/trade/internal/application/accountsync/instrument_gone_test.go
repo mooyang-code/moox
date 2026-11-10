@@ -274,7 +274,7 @@ func TestSyncSettlesFillGapsOfDelistedInstrument(t *testing.T) {
 	account, err = tradeStore.GetTradingAccountByID(ctx, "account-1")
 	require.NoError(t, err)
 	require.False(t, account.Ready)
-	require.Equal(t, awaitingBalanceReason, account.LastError)
+	require.Equal(t, consumer.AwaitingBalanceReason, account.LastError)
 	require.True(t, account.HasBalancePending())
 
 	result, err := service.SyncAccount(ctx, "account-1")

@@ -413,14 +413,8 @@ func (s *Service) closeInstrumentGone(ctx context.Context, local store.OrderReco
 		if !s.instrumentGoneClosable(record) {
 			return nil
 		}
-		expected := record.Version
-		record.State = string(orderdomain.Expired)
-		record.RejectReason = InstrumentGoneReason
-		record.RemainingReservedQuantity = "0"
-		record.FinishedAt = s.now().UnixMilli()
-		record.Version++
 		closed = true
-		return tx.UpdateOrder(record, expected)
+		return s.Fills.FinishOrderTx(tx, record, orderdomain.Expired, InstrumentGoneReason)
 	})
 	return closed && err == nil, err
 }
@@ -730,7 +724,7 @@ func (s *Service) applySnapshot(
 		snapshot.Ready = false
 		result.Ready = false
 		result.BalancePending = true
-		readinessCause = awaitingBalanceReason
+		readinessCause = consumer.AwaitingBalanceReason
 		result.Warnings = append(result.Warnings, "balance snapshot does not cover the pending fill or private update; admission stays closed")
 	}
 	// LastSyncAt 同时是资金预留的抵扣边界：只有余额快照真正被采用且没有遗留待确认水位时才能推进；
@@ -854,10 +848,7 @@ func (s *Service) resolveUnknownOrders(
 	return result, nil
 }
 
-// awaitingBalanceReason 是私有成交释放预留后、余额快照尚未确认期间持久化的未就绪原因。
 var errBalanceNotConfirmed = errors.New("trade account sync: balance snapshot does not cover the pending fill or private update")
-
-const awaitingBalanceReason = "成交待余额同步确认"
 
 func (s *Service) ApplyFill(
 	ctx context.Context,
@@ -1077,7 +1068,7 @@ func (s *Service) setReady(
 	}
 	if ready && account.HasBalancePending() {
 		// 还有未被完整余额快照覆盖的成交或私有更新：不能仅凭会话就绪恢复准入
-		ready, lastError = false, awaitingBalanceReason
+		ready, lastError = false, consumer.AwaitingBalanceReason
 	}
 	if ready {
 		// 订单累计成交仍领先已入账成交时也不能恢复：回执没有交易所时间时只记了缺口、没抬水位。
@@ -1086,7 +1077,7 @@ func (s *Service) setReady(
 			return err
 		}
 		if gaps > 0 {
-			ready, lastError = false, awaitingBalanceReason
+			ready, lastError = false, consumer.AwaitingBalanceReason
 		}
 	}
 	return s.Store.Transaction(ctx, func(tx *store.Tx) error {
@@ -1323,7 +1314,7 @@ func (s *Service) observeOrderFills(
 			return err
 		}
 		return tx.UpdateTradingAccountReadiness(
-			account.SpaceID, account.TradingAccountID, false, s.now().UnixMilli(), awaitingBalanceReason,
+			account.SpaceID, account.TradingAccountID, false, s.now().UnixMilli(), consumer.AwaitingBalanceReason,
 		)
 	})
 }
@@ -1413,20 +1404,15 @@ func (s *Service) terminalize(
 		}
 		return fmt.Errorf("trade account sync: conflicting terminal order state")
 	}
-	expected := record.Version
-	record.Version++
-	record.FinishedAt = s.now().UnixMilli()
+	next, reason := orderdomain.Expired, ""
 	if status == exchange.OrderStatusRejected {
-		record.State = string(orderdomain.Rejected)
-		if record.RejectReason == "" {
-			record.RejectReason = "交易所拒单"
+		next, reason = orderdomain.Rejected, record.RejectReason
+		if reason == "" {
+			reason = "交易所拒单"
 		}
-	} else {
-		record.State = string(orderdomain.Expired)
 	}
-	record.RemainingReservedQuantity = "0"
 	return s.Store.Transaction(ctx, func(tx *store.Tx) error {
-		return tx.UpdateOrder(record, expected)
+		return s.Fills.FinishOrderTx(tx, record, next, reason)
 	})
 }
 

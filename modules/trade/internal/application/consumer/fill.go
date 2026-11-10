@@ -31,10 +31,28 @@ type Source struct {
 	Kind             FillOrigin
 }
 
+// AwaitingBalanceReason 是成交释放预留后、余额快照尚未确认期间持久化的账户未就绪原因。
+const AwaitingBalanceReason = "成交待余额同步确认"
+
 type Reducer struct {
 	Store   *store.Store
 	Now     func() time.Time
 	Enqueue func(string)
+}
+
+// FinishOrderTx 在调用方的事务里按给定终态结束订单：写终态和结束时间、清零剩余资金预留、升版本；
+// reason 非空时覆盖订单的原因字段，为空则保持原值。
+// 本地强制结束订单（标的下架、交易所拒单或过期、收盘撤单）都走这里，调用方负责事先确认订单还没结束。
+func (r *Reducer) FinishOrderTx(tx *store.Tx, record store.OrderRecord, next order.State, reason string) error {
+	expected := record.Version
+	record.State = string(next)
+	if reason != "" {
+		record.RejectReason = reason
+	}
+	record.RemainingReservedQuantity = "0"
+	record.FinishedAt = r.now().UnixMilli()
+	record.Version++
+	return tx.UpdateOrder(record, expected)
 }
 
 func (r *Reducer) ConfirmCancel(
@@ -233,7 +251,7 @@ func markBalancePendingForLiveFill(tx *store.Tx, source Source, fill exchange.Fi
 		return err
 	}
 	return tx.UpdateTradingAccountReadiness(
-		source.SpaceID, source.TradingAccountID, false, fill.TradedAt.UnixMilli(), "fill awaiting balance sync",
+		source.SpaceID, source.TradingAccountID, false, fill.TradedAt.UnixMilli(), AwaitingBalanceReason,
 	)
 }
 

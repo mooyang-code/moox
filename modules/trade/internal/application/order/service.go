@@ -9,6 +9,7 @@ import (
 	"time"
 
 	gonanoid "github.com/matoous/go-nanoid/v2"
+	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
@@ -660,11 +661,23 @@ func (s *Service) cancel(
 	if err != nil {
 		return orderdomain.Order{}, err
 	}
-	applyAggregate(&latest, current)
-	if err = s.Store.Transaction(persistCtx, func(tx *store.Tx) error {
-		return tx.UpdateOrder(latest, expected)
+	return s.saveCancelFailure(persistCtx, latest, current, expected, callErr)
+}
+
+// saveCancelFailure 把撤单失败后迁移出的新状态落库，返回撤单失败的错误；
+// 落库遇到版本冲突而订单已被别处结束时，以已落的终态为准。
+func (s *Service) saveCancelFailure(
+	ctx context.Context,
+	record store.OrderRecord,
+	current orderdomain.Order,
+	expected uint64,
+	callErr error,
+) (orderdomain.Order, error) {
+	applyAggregate(&record, current)
+	if err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
+		return tx.UpdateOrder(record, expected)
 	}); err != nil {
-		return s.cancelUpdateError(persistCtx, spaceID, orderID, err)
+		return s.cancelUpdateError(ctx, record.SpaceID, record.OrderID, err)
 	}
 	return current, accountExecutionError(record.TradingAccountID, "cancel", callErr)
 }
@@ -774,13 +787,7 @@ func (s *Service) RecoverCancel(
 	if err != nil {
 		return current, err
 	}
-	applyAggregate(&record, current)
-	if err := s.Store.Transaction(persistCtx, func(tx *store.Tx) error {
-		return tx.UpdateOrder(record, expected)
-	}); err != nil {
-		return s.cancelUpdateError(persistCtx, spaceID, orderID, err)
-	}
-	return current, accountExecutionError(record.TradingAccountID, "cancel", callErr)
+	return s.saveCancelFailure(persistCtx, record, current, expected, callErr)
 }
 
 func (s *Service) cancelUpdateError(ctx context.Context, spaceID, orderID string, updateErr error) (orderdomain.Order, error) {
@@ -1356,7 +1363,7 @@ func (s *Service) deliverSubmit(
 					send.closeReadiness = true
 					return nil
 				}
-				return tx.UpdateTradingAccountReadiness(latest.SpaceID, latest.TradingAccountID, false, s.now().UnixMilli(), fillAwaitingBalance)
+				return tx.UpdateTradingAccountReadiness(latest.SpaceID, latest.TradingAccountID, false, s.now().UnixMilli(), consumer.AwaitingBalanceReason)
 			}
 		}
 		return nil
@@ -1400,9 +1407,6 @@ func (s *Service) abortUnsentSubmit(
 	}
 	return current, nil
 }
-
-// fillAwaitingBalance 是成交后等余额同步确认期间的未就绪原因。
-const fillAwaitingBalance = "成交待余额同步确认"
 
 func observeOrder(tradingAccountID, result string) {
 	telemetry.Orders.WithLabelValues(tradingAccountID, result).Inc()
