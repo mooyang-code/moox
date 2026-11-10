@@ -351,7 +351,7 @@ func (a *Adapter) dispatchPrivate(
 }
 
 // decodePrivateEvent 解出私有流事件的根对象和事件类型；unwrap 为真时先剥掉 WebSocket API 订阅的 event 包装。
-// 没有 e 的是 WS API 应答之类的非事件帧，这里按解码失败返回。
+// 没有 e 的是 WS API 应答之类的非事件帧：缺失字段读成空串，事件类型为空，调用方按未知事件忽略。
 func decodePrivateEvent(payload []byte, unwrap bool) (fields, string, error) {
 	root, err := exactFields(payload)
 	if err != nil {

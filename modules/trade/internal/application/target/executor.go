@@ -1172,7 +1172,7 @@ func (e *Executor) submitCandidate(
 	if pseudoMarket {
 		if attempt = pseudoMarketAttempts(children); attempt >= env.settings.MaxAttempts {
 			reason := fmt.Sprintf("伪市价单已尝试 %d 次仍没成交完，本份目标不再重试", attempt)
-			e.warnOnce("tally.unfilled|"+target.TargetID+"|"+candidate.instrument.InstrumentID,
+			e.warnOnce("unfilled|"+target.TargetID+"|"+candidate.instrument.InstrumentID,
 				fmt.Sprintf("组合 %s 的 %s 在账户 %s 上%s", target.LogicalAccountID, candidate.instrument.InstrumentID, accountID, reason))
 			tally.capacityErrors = append(tally.capacityErrors, accountID+": "+reason)
 			tally.unfilled = true
