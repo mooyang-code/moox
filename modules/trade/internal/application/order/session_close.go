@@ -82,16 +82,19 @@ func (c *SessionCloser) CloseAccount(ctx context.Context, account store.TradingA
 		}
 	}
 	closed := 0
+	// 一笔失败不挡住后面的：记下错误继续处理，最后一起返回，调用方稍后重试。
+	var errs []error
 	for _, current := range candidates {
 		done, err := c.closeOrder(ctx, current, lastClose)
 		if err != nil {
-			return closed, err
+			errs = append(errs, fmt.Errorf("订单 %s：%w", current.OrderID, err))
+			continue
 		}
 		if done {
 			closed++
 		}
 	}
-	return closed, nil
+	return closed, errors.Join(errs...)
 }
 
 func (c *SessionCloser) candidates(ctx context.Context, account store.TradingAccountRecord, lastClose time.Time) ([]store.OrderRecord, error) {

@@ -16,9 +16,9 @@ type AccountError struct {
 
 func (e *AccountError) Error() string {
 	if e.TradingAccountID == "" {
-		return "target execution: " + e.Err.Error()
+		return "目标执行：" + e.Err.Error()
 	}
-	return "target account " + e.TradingAccountID + ": " + e.Err.Error()
+	return "执行账户 " + e.TradingAccountID + "：" + e.Err.Error()
 }
 func (e *AccountError) Unwrap() error { return e.Err }
 
@@ -81,7 +81,7 @@ func accountCause(err error) (string, bool) {
 		return accountCause(cause.Unwrap())
 	default:
 		switch err {
-		case ErrInvalidTarget, ErrTargetSession, orderdomain.ErrInvalidSpec,
+		case ErrInvalidTarget, ErrTargetSession, errTargetOrderUnresolved, orderdomain.ErrInvalidSpec,
 			orderdomain.ErrReferencePriceStale, orderapp.ErrInstrumentDisabled,
 			orderapp.ErrQuantityRule, orderapp.ErrNotionalLimit,
 			orderapp.ErrInsufficientFunds, orderapp.ErrLeverageLimit, orderapp.ErrReduceOnly:
