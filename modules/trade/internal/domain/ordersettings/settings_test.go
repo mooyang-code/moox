@@ -107,3 +107,42 @@ func TestCanonicalNormalizesDecimals(t *testing.T) {
 	require.NoError(t, err)
 	require.JSONEq(t, `{"rebalance_threshold_ratio":"0.05","min_notional_spot":"10","slippage_step":"0.015","resting_ratio":"0.3"}`, canonical)
 }
+
+// 股票和现货一样走“现货”项，合约走“合约”项（A 股组合设置页只显示现货那一项）。
+func TestStockUsesSpotItems(t *testing.T) {
+	settings, err := Parse(`{"min_notional_spot":"100","min_notional_swap":"1","hourly_cap_spot":{"*":"200"},"hourly_cap_swap":{"*":"9000"}}`)
+	require.NoError(t, err)
+	for _, market := range []string{"SPOT", "STOCK", "stock"} {
+		require.Equal(t, "100", settings.MinNotional(market).String(), market)
+		limit, ok := settings.HourlyCap(market, "600519.XSHG")
+		require.True(t, ok, market)
+		require.Equal(t, "200", limit.String(), market)
+	}
+	require.Equal(t, "1", settings.MinNotional("SWAP").String())
+	limit, ok := settings.HourlyCap("SWAP", "BTC-USDT-SWAP")
+	require.True(t, ok)
+	require.Equal(t, "9000", limit.String())
+}
+
+// 现货那一组的每小时上限键：-SPOT 结尾、股票代码（XSHG、XSHE、XBSE）和 * 都接受；合约那一组和乱写的键仍被拒。
+func TestHourlyCapSpotKeysAcceptStockCodes(t *testing.T) {
+	settings, err := Parse(`{"hourly_cap_spot":{"600519.xshg":"100","000001.XSHE":"200","430047.XBSE":"300","BTC-USDT-SPOT":"400","*":"50"}}`)
+	require.NoError(t, err)
+	for key, want := range map[string]string{"600519.XSHG": "100", "000001.XSHE": "200", "430047.XBSE": "300", "BTC-USDT-SPOT": "400", "ETH-USDT-SPOT": "50"} {
+		limit, ok := settings.HourlyCap("STOCK", key)
+		require.True(t, ok, key)
+		require.Equal(t, want, limit.String(), key)
+	}
+	canonical, err := Document{HourlyCapSpot: map[string]string{"600519.xshg": "100"}}.Canonical()
+	require.NoError(t, err)
+	require.JSONEq(t, `{"hourly_cap_spot":{"600519.XSHG":"100"}}`, canonical)
+
+	for _, raw := range []string{
+		`{"hourly_cap_spot":{"BTC":"1"}}`, `{"hourly_cap_spot":{"BTC-USDT-SWAP":"1"}}`, `{"hourly_cap_spot":{"600519":"1"}}`,
+		`{"hourly_cap_spot":{"600519.XSHG.X":"1"}}`, `{"hourly_cap_spot":{"600519.":"1"}}`,
+		`{"hourly_cap_swap":{"600519.XSHG":"1"}}`,
+	} {
+		_, err := Parse(raw)
+		require.Error(t, err, raw)
+	}
+}
