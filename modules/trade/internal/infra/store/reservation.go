@@ -48,10 +48,7 @@ func (tx *Tx) RaiseObservedFilledQuantity(spaceID, orderID string, observed shar
 	var row struct {
 		Observed string `gorm:"column:c_observed_filled_quantity"`
 	}
-	result := tx.db.Raw(
-		"SELECT c_observed_filled_quantity FROM t_trade_orders WHERE c_space_id = ? AND c_order_id = ?",
-		spaceID, orderID,
-	).Scan(&row)
+	result := tx.db.Raw(queryObservedFilledQuantity, spaceID, orderID).Scan(&row)
 	if result.Error != nil {
 		return result.Error
 	}
@@ -65,10 +62,7 @@ func (tx *Tx) RaiseObservedFilledQuantity(spaceID, orderID string, observed shar
 	if observed.Cmp(current) <= 0 {
 		return nil
 	}
-	return tx.db.Exec(
-		"UPDATE t_trade_orders SET c_observed_filled_quantity = ? WHERE c_space_id = ? AND c_order_id = ?",
-		observed.String(), spaceID, orderID,
-	).Error
+	return tx.db.Exec(execRaiseObservedFilledQuantity, observed.String(), spaceID, orderID).Error
 }
 
 // CountOrdersWithFillGap 返回账户下“观察到的累计成交量大于本地已入账成交量”的订单数：这些订单的成交明细还没补齐。
@@ -166,4 +160,8 @@ const (
 		FROM t_trade_orders
 		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_observed_filled_quantity != '0'
 			AND c_observed_filled_quantity <> c_filled_quantity`
+	queryObservedFilledQuantity = `SELECT c_observed_filled_quantity FROM t_trade_orders
+		WHERE c_space_id = ? AND c_order_id = ?`
+	execRaiseObservedFilledQuantity = `UPDATE t_trade_orders SET c_observed_filled_quantity = ?
+		WHERE c_space_id = ? AND c_order_id = ?`
 )

@@ -90,13 +90,7 @@ func (tx *Tx) EnsureOperatorAction(
 	if !record.CreatedAt.IsZero() {
 		createdAt = record.CreatedAt.UTC()
 	}
-	result := tx.db.Exec(`
-		INSERT INTO t_operator_actions (
-			c_space_id, c_action_id, c_logical_account_id, c_action_type,
-			c_reason, c_request_json, c_status, c_result_json, c_last_error, c_ctime
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP))
-		ON CONFLICT(c_space_id, c_action_id) DO NOTHING
-	`,
+	result := tx.db.Exec(execInsertOperatorAction,
 		record.SpaceID, record.ActionID, record.LogicalAccountID,
 		record.ActionType, record.Reason, record.RequestJSON,
 		record.Status, record.ResultJSON, record.LastError, createdAt,
@@ -239,12 +233,7 @@ func (tx *Tx) UpdateOperatorAction(
 		}
 		resultJSON = value
 	}
-	result := tx.db.Exec(`
-		UPDATE t_operator_actions
-		SET c_status = ?, c_result_json = ?, c_last_error = ?,
-			c_mtime = CURRENT_TIMESTAMP
-		WHERE c_space_id = ? AND c_action_id = ?
-	`,
+	result := tx.db.Exec(execUpdateOperatorActionResult,
 		record.Status, resultJSON, record.LastError,
 		record.SpaceID, record.ActionID,
 	)
@@ -334,3 +323,16 @@ func (s *Store) ListOperatorActions(ctx context.Context, spaceID string, query O
 	}
 	return records, total, nil
 }
+
+// 以下 SQL 整条写成常量，不在调用处拼接或内联。
+const (
+	execInsertOperatorAction = `INSERT INTO t_operator_actions (
+			c_space_id, c_action_id, c_logical_account_id, c_action_type,
+			c_reason, c_request_json, c_status, c_result_json, c_last_error, c_ctime
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, COALESCE(?, CURRENT_TIMESTAMP))
+		ON CONFLICT(c_space_id, c_action_id) DO NOTHING`
+	execUpdateOperatorActionResult = `UPDATE t_operator_actions
+		SET c_status = ?, c_result_json = ?, c_last_error = ?,
+			c_mtime = CURRENT_TIMESTAMP
+		WHERE c_space_id = ? AND c_action_id = ?`
+)

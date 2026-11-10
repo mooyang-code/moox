@@ -86,16 +86,7 @@ func (tx *Tx) InsertTargetReceipt(record TargetReceiptRecord) error {
 	if record.SignalTime == 0 && record.BarEndTime > 0 {
 		record.SignalTime = record.BarEndTime
 	}
-	err := tx.db.Exec(`
-		INSERT INTO t_logical_account_target_receipts (
-			c_space_id, c_target_id, c_runner_id, c_logical_account_id,
-			c_command_sequence, c_instance_id, c_session_id, c_strategy_id,
-			c_bar_end_time, c_effective_at, c_valid_until,
-			c_request_hash, c_signal_time, c_weights_json,
-			c_equity, c_equity_source_time, c_reference_prices_json,
-			c_quantity_targets_json, c_accepted_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, record.SpaceID, record.TargetID, record.RunnerID, record.LogicalAccountID,
+	err := tx.db.Exec(execInsertTargetReceipt, record.SpaceID, record.TargetID, record.RunnerID, record.LogicalAccountID,
 		record.CommandSequence, record.InstanceID, record.SessionID, record.StrategyID,
 		record.BarEndTime, record.EffectiveAt, record.ValidUntil,
 		record.RequestHash, record.SignalTime, record.WeightsJSON,
@@ -218,3 +209,15 @@ func (s *Store) acceptLogicalAccountTargetWithReceipt(ctx context.Context, targe
 	})
 	return current, accepted, err
 }
+
+// 以下 SQL 整条写成常量，不在调用处拼接或内联。
+const (
+	execInsertTargetReceipt = `INSERT INTO t_logical_account_target_receipts (
+			c_space_id, c_target_id, c_runner_id, c_logical_account_id,
+			c_command_sequence, c_instance_id, c_session_id, c_strategy_id,
+			c_bar_end_time, c_effective_at, c_valid_until,
+			c_request_hash, c_signal_time, c_weights_json,
+			c_equity, c_equity_source_time, c_reference_prices_json,
+			c_quantity_targets_json, c_accepted_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+)
