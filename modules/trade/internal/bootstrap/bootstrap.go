@@ -524,14 +524,6 @@ func initialize(
 				})
 				return result.Action, result.Unblocked, flattenErr
 			},
-			ReduceAccount: func(
-				callCtx context.Context, spaceID, actionID, logicalAccountID string, ratio shared.Decimal, reason string,
-			) (store.OperatorActionRecord, error) {
-				result, reduceErr := operatorService.FlattenLogicalAccount(callCtx, operatorapp.FlattenCommand{
-					SpaceID: spaceID, ActionID: actionID, LogicalAccountID: logicalAccountID, Reason: reason, ReduceRatio: ratio,
-				})
-				return result.Action, reduceErr
-			},
 			FlattenAccount: func(
 				callCtx context.Context, spaceID, actionID, tradingAccountID, reason string,
 			) (store.OperatorActionRecord, error) {

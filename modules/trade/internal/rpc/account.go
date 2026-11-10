@@ -191,17 +191,12 @@ func (h *AccountServer) SetLeverage(
 	}
 	leverage, err := shared.ParseDecimal(req.GetLeverage())
 	if err == nil {
-		if _, err = h.Store.GetTradingAccount(ctx, spaceID, req.GetTradingAccountId()); err != nil {
-			return &tradepb.SetLeverageRsp{RetInfo: errorInfo(err)}, nil
-		}
 		// 杠杆键是内部标的 ID（账户默认杠杆是 "*"）；会话要的是交易所代码。
 		leverageKey, symbol := store.DefaultLeverageKey, exchange.SymbolKey{}
 		if req.GetInstrumentId() != store.DefaultLeverageKey {
-			instrumentID := ""
-			if err == nil {
-				// 杠杆只对合约生效，按合约市场标准化标的 ID。
-				instrumentID, err = exchange.NormalizeInstrumentID(req.GetInstrumentId(), exchange.MarketTypeSwap)
-			}
+			// 杠杆只对合约生效，按合约市场标准化标的 ID。
+			var instrumentID string
+			instrumentID, err = exchange.NormalizeInstrumentID(req.GetInstrumentId(), exchange.MarketTypeSwap)
 			if err != nil {
 				return &tradepb.SetLeverageRsp{RetInfo: instrumentErrorInfo(err)}, nil
 			}

@@ -316,13 +316,6 @@ func (r *ReleaseLogicalAccountOwnerReq) Validate() error {
 	return nil
 }
 
-func (r *RebindLogicalAccountOwnerReq) Validate() error {
-	if r == nil || strings.TrimSpace(r.LogicalAccountId) == "" || strings.TrimSpace(r.InstanceId) == "" || strings.TrimSpace(r.SessionId) == "" || strings.TrimSpace(r.ExpectedAuthFence) == "" || strings.TrimSpace(r.NewInstanceId) == "" || strings.TrimSpace(r.NewSessionId) == "" {
-		return fmt.Errorf("logical_account_id, expected_auth_fence, old/new instance_id and old/new session_id are required")
-	}
-	return nil
-}
-
 func (r *PauseLogicalAccountReq) Validate() error {
 	if r == nil ||
 		strings.TrimSpace(r.LogicalAccountId) == "" ||
@@ -675,20 +668,6 @@ func (r *FlattenInstrumentReq) Validate() error {
 		return fmt.Errorf("action_id, logical_account_id and reason are required")
 	}
 	return validateInstrumentKey(r.Exchange, r.MarketType, r.ExchangeSymbol)
-}
-
-func (r *ReduceLogicalAccountReq) Validate() error {
-	if r == nil ||
-		strings.TrimSpace(r.ActionId) == "" ||
-		strings.TrimSpace(r.LogicalAccountId) == "" ||
-		strings.TrimSpace(r.Reason) == "" {
-		return fmt.Errorf("action_id, logical_account_id and reason are required")
-	}
-	ratio, ok := new(big.Rat).SetString(r.ReduceRatio)
-	if !ok || !isCanonicalPositiveDecimal(r.ReduceRatio) || ratio.Cmp(big.NewRat(1, 1)) >= 0 {
-		return fmt.Errorf("reduce_ratio must be a positive decimal below 1")
-	}
-	return nil
 }
 
 func (r *SummarizeAccountPnlReq) Validate() error {

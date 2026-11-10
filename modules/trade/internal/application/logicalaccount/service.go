@@ -568,48 +568,6 @@ func (s *Service) ClaimSession(
 	return value, fence, err
 }
 
-// RebindSession atomically switches an existing Strategy session. The old
-// target is cleared only when this CAS wins, so a delayed rebind cannot erase
-// a target accepted by a newer session.
-func (s *Service) RebindSession(
-	ctx context.Context,
-	spaceID, logicalAccountID, oldInstanceID, oldSessionID, expectedFence,
-	newInstanceID, newSessionID string,
-) (store.LogicalAccountRecord, string, error) {
-	if s == nil || s.Store == nil {
-		return store.LogicalAccountRecord{}, "", ErrServiceConfig
-	}
-	unlock, lockErr := s.Store.LockLogicalAccountContext(ctx, spaceID, logicalAccountID)
-	if lockErr != nil {
-		return store.LogicalAccountRecord{}, "", lockErr
-	}
-	defer unlock()
-	// 重绑会删掉旧会话的目标：先撤掉它的挂单。撤不下来也照常重绑，新会话的第一份目标在第 1 阶段会再撤（executor.go）。
-	if current, err := s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID); err == nil &&
-		rebindChanges(current, oldInstanceID, oldSessionID, expectedFence, newInstanceID, newSessionID) {
-		if err := s.releaseTargetOrders(ctx, spaceID, logicalAccountID); err != nil {
-			log.WarnContextf(ctx, "交易关注项：组合 %s 重绑会话前撤目标挂单失败，交给新目标的第 1 阶段处理：%v", logicalAccountID, err)
-		} else {
-			s.clearReleaseFailure(spaceID, logicalAccountID)
-		}
-	}
-	var fence string
-	err := s.Store.Transaction(ctx, func(tx *store.Tx) error {
-		var err error
-		var changed bool
-		fence, changed, err = tx.RebindLogicalAccountSession(spaceID, logicalAccountID, oldInstanceID, oldSessionID, expectedFence, newInstanceID, newSessionID)
-		if err != nil || !changed {
-			return err
-		}
-		return tx.DeleteLogicalAccountTarget(spaceID, logicalAccountID)
-	})
-	if err != nil {
-		return store.LogicalAccountRecord{}, "", err
-	}
-	value, err := s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
-	return value, fence, err
-}
-
 // ReleaseSession is a compare-and-set release. A stale session cannot clear
 // a replacement session's authorization or target.
 func (s *Service) ReleaseSession(
@@ -661,19 +619,13 @@ func (s *Service) ReleaseSession(
 	})
 }
 
-// claimChanges、rebindChanges、releaseChanges 按 store 里会话 CAS 的同样条件预判这次操作会不会换掉所有者、删掉目标：
+// claimChanges、releaseChanges 按 store 里会话 CAS 的同样条件预判这次操作会不会换掉所有者、删掉目标：
 // 只有会删目标时才撤目标挂单。幂等的重复请求、过期的围栏、被别的会话占用时都不撤，否则会撤掉当前所有者正在用的挂单。
 // 调用方持有组合锁，会话字段只在这把锁下改，预判和随后的 CAS 之间不会变。
 func claimChanges(account store.LogicalAccountRecord, instanceID, sessionID, expectedFence string) bool {
 	// 认领只在组合空闲时生效（同一会话重复认领时所有者非空，不会走到这里）。
 	return account.ControlMode == "STRATEGY" && account.AuthFence == expectedFence &&
 		account.OwnerInstanceID == "" && account.OwnerSessionID == "" && instanceID != "" && sessionID != ""
-}
-
-func rebindChanges(account store.LogicalAccountRecord, oldInstanceID, oldSessionID, expectedFence, newInstanceID, newSessionID string) bool {
-	return account.ControlMode == "STRATEGY" && account.AuthFence == expectedFence &&
-		!(account.OwnerInstanceID == newInstanceID && account.OwnerSessionID == newSessionID) &&
-		account.OwnerInstanceID == oldInstanceID && account.OwnerSessionID == oldSessionID
 }
 
 // releaseChanges 对已经空闲的组合也返回真：释放照样删目标，重试释放时要接着撤上一次没撤下来的挂单。

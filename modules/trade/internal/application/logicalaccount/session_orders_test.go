@@ -70,7 +70,7 @@ func TestReleaseSessionKeepsSessionWhenTargetOrdersRemain(t *testing.T) {
 	require.Empty(t, account.OwnerSessionID)
 }
 
-// 不会换掉所有者的请求不撤单：过期围栏的释放、同一会话重复认领、已经重绑过的重复重绑。
+// 不会换掉所有者的请求不撤单：过期围栏的释放、同一会话重复认领、被别的会话占用时的认领。
 func TestSessionNoOpsDoNotReleaseTargetOrders(t *testing.T) {
 	service, tradeStore, fence := modernSessionFixture(t)
 	releaser := &recordingReleaser{store: tradeStore}
@@ -83,13 +83,6 @@ func TestSessionNoOpsDoNotReleaseTargetOrders(t *testing.T) {
 	_, _, err = service.ClaimSession(ctx, "space-1", "logical-1", "instance-2", "session-9", fence)
 	require.Error(t, err, "被别的会话占用")
 	require.Zero(t, releaser.calls)
-
-	_, rebound, err := service.RebindSession(ctx, "space-1", "logical-1", "instance-1", "session-1", fence, "instance-1", "session-2")
-	require.NoError(t, err)
-	require.Equal(t, 1, releaser.calls, "真的重绑要撤旧会话的挂单")
-	_, _, err = service.RebindSession(ctx, "space-1", "logical-1", "instance-1", "session-1", rebound, "instance-1", "session-2")
-	require.NoError(t, err)
-	require.Equal(t, 1, releaser.calls, "重复的重绑不撤新会话的挂单")
 }
 
 // 认领空闲的组合要先撤上一个会话可能留下的挂单；撤不下来也照常认领（新目标的第 1 阶段会再撤）。
@@ -198,7 +191,7 @@ func TestReleaseSessionNotesStuckReleaseAfterTenMinutes(t *testing.T) {
 	require.False(t, stuck(), "释放成功后清掉")
 }
 
-// 释放失败的计时只算连续失败：中间重绑撤单成功就清掉；两次失败隔了超过 10 分钟也重新计时，
+// 释放失败的计时只算连续失败：中间释放撤单成功就清掉；两次失败隔了超过 10 分钟也重新计时，
 // 不会因为很久以前的一次失败，下一次失败一来就报 release_orders_stuck。
 func TestReleaseStuckTimerRestartsAfterRecoveryOrLongGap(t *testing.T) {
 	noSession := &orderapp.AccountExecutionError{TradingAccountID: "account-a", Operation: "adapter", Err: errors.New("交易账户会话还没有启动，请稍后重试")}
@@ -222,7 +215,7 @@ func TestReleaseStuckTimerRestartsAfterRecoveryOrLongGap(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	t.Run("重绑撤单成功后重新计时", func(t *testing.T) {
+	t.Run("释放撤单成功后重新计时", func(t *testing.T) {
 		service, releaser, now, fence := setup(t)
 		start := *now
 		require.ErrorIs(t, service.ReleaseSession(ctx, "space-1", "logical-1", "instance-1", "session-1", fence), ErrTargetOrdersNotReleased)
@@ -231,16 +224,18 @@ func TestReleaseStuckTimerRestartsAfterRecoveryOrLongGap(t *testing.T) {
 
 		*now = start.Add(6 * time.Minute)
 		releaser.err = nil
-		_, rebound, err := service.RebindSession(ctx, "space-1", "logical-1", "instance-1", "session-1", fence, "instance-1", "session-2")
+		require.NoError(t, service.ReleaseSession(ctx, "space-1", "logical-1", "instance-1", "session-1", fence))
+		require.Equal(t, 3, releaser.calls, "释放真的撤了单")
+		released, err := service.Store.GetLogicalAccount(ctx, "space-1", "logical-1")
 		require.NoError(t, err)
-		require.Equal(t, 3, releaser.calls, "重绑真的撤了单")
+		_, claimed, err := service.ClaimSession(ctx, "space-1", "logical-1", "instance-1", "session-2", released.AuthFence)
+		require.NoError(t, err)
 
-		// 距第一次失败已满 10 分钟，但中间重绑撤单成功过，这是新会话的第一次失败。
+		// 距第一次失败已满 10 分钟，但中间释放撤单成功过，这是新会话的第一次失败。
 		*now = start.Add(11 * time.Minute)
 		releaser.err = fmt.Errorf("目标单 o1：%w", noSession)
-		require.ErrorIs(t, service.ReleaseSession(ctx, "space-1", "logical-1", "instance-1", "session-2", rebound), ErrTargetOrdersNotReleased)
-		require.Equal(t, 4, releaser.calls, "释放确实走到了撤单")
-		require.False(t, stuck(*now), "重绑成功后要重新计时")
+		require.ErrorIs(t, service.ReleaseSession(ctx, "space-1", "logical-1", "instance-1", "session-2", claimed), ErrTargetOrdersNotReleased)
+		require.False(t, stuck(*now), "释放成功后要重新计时")
 	})
 
 	t.Run("两次失败隔了很久重新计时", func(t *testing.T) {

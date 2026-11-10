@@ -15,7 +15,7 @@ func RegisterAll(
 	accounts *AccountServer,
 	logicalAccounts *LogicalAccountServer,
 	execution *ExecutionServer,
-	options ...ConsoleOptions,
+	options ConsoleOptions,
 ) {
 	consoleService := s.Service(TradeConsoleServiceName)
 	if consoleService == nil {
@@ -25,18 +25,15 @@ func RegisterAll(
 		AccountServer: accounts, LogicalAccountServer: logicalAccounts,
 		ExecutionServer: execution, Store: accounts.Store,
 	}
-	if len(options) > 0 {
-		console.Paper = options[0].Paper
-		console.LiveTradingEnabled = options[0].LiveTradingEnabled
-		console.MatcherReady = options[0].MatcherReady
-		console.Holdings = options[0].Holdings
-		console.Exchanges = options[0].Exchanges
-		console.Adapters = options[0].Adapters
-		console.FlattenAccount = options[0].FlattenAccount
-		console.Delist = options[0].Delist
-		console.FlattenInstrumentAction = options[0].FlattenInstrument
-		console.ReduceAccount = options[0].ReduceAccount
-	}
+	console.Paper = options.Paper
+	console.LiveTradingEnabled = options.LiveTradingEnabled
+	console.MatcherReady = options.MatcherReady
+	console.Holdings = options.Holdings
+	console.Exchanges = options.Exchanges
+	console.Adapters = options.Adapters
+	console.FlattenAccount = options.FlattenAccount
+	console.Delist = options.Delist
+	console.FlattenInstrumentAction = options.FlattenInstrument
 	tradepb.RegisterTradeConsoleServiceService(consoleService, console)
 }
 
@@ -50,5 +47,4 @@ type ConsoleOptions struct {
 	FlattenAccount     FlattenTradingAccountFunc
 	Delist             *delistapp.Service
 	FlattenInstrument  FlattenInstrumentFunc
-	ReduceAccount      ReduceLogicalAccountFunc
 }

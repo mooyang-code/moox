@@ -1912,7 +1912,6 @@ components:
           FlattenLogicalAccount: 12000
           FlattenTradingAccount: 12000
           FlattenInstrument: 12000
-          ReduceLogicalAccount: 12000
         max_body_bytes: 4194304
         methods:
           - CreateTradingAccount
@@ -1934,7 +1933,6 @@ components:
           - RemoveLogicalAccountMember
           - ClaimLogicalAccountOwner
           - ReleaseLogicalAccountOwner
-          - RebindLogicalAccountOwner
           - PauseLogicalAccount
           - ResumeLogicalAccount
           - FlattenLogicalAccount
@@ -1960,7 +1958,6 @@ components:
           - ListBlockedInstruments
           - ListInstrumentHolders
           - FlattenInstrument
-          - ReduceLogicalAccount
           - SummarizeAccountPnl
           - ListOperatorActions
         read_only_methods:
@@ -2037,7 +2034,6 @@ components:
               - callback-dispatcher
           - methods:
               - UnblockInstrument
-              - ReduceLogicalAccount
             callers:
               - console
           - methods:
@@ -2050,14 +2046,12 @@ components:
           - methods:
               - ClaimLogicalAccountOwner
               - ReleaseLogicalAccountOwner
-              - RebindLogicalAccountOwner
             callers:
               - moox-cli
           - methods:
               - GetLogicalAccount
               - ClaimLogicalAccountOwner
               - ReleaseLogicalAccountOwner
-              - RebindLogicalAccountOwner
             callers:
               - strategy
     doctor:
