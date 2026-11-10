@@ -207,6 +207,14 @@ describe("Trade public API", () => {
     expect(trade).not.toHaveProperty("flattenInstrument");
   });
 
+  it("下架名单只暴露读取和解除：读取不带参数，解除按（交易所、市场、代码）定位", async () => {
+    await trade.listBlockedInstruments({ silent: true });
+    expect(callTrade).toHaveBeenLastCalledWith("console", "ListBlockedInstruments", {}, { silent: true });
+    const req = { exchange: 1 as const, market_type: 1 as const, exchange_symbol: "LUNAUSDT" };
+    await trade.unblockInstrument(req, { silent: true });
+    expect(callTrade).toHaveBeenLastCalledWith("console", "UnblockInstrument", req, { silent: true });
+  });
+
   it("收益拆解、操作记录和按来源筛选订单的请求原样透传", async () => {
     const pnl = { logical_account_id: "logical-1", start_time: "1000", end_time: "2000" };
     await trade.summarizeAccountPnl(pnl);

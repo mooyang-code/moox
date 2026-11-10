@@ -214,6 +214,27 @@ export interface BlockedTarget extends InstrumentTarget {
   deferred?: boolean;
 }
 
+/** 下架名单里的一项：名单标的只减不增，不能交易时整项跳过。名单是全局的，不分空间。 */
+export interface BlockedInstrument {
+  exchange: Exchange;
+  market_type: MarketType;
+  exchange_symbol: string;
+  /** 写入时能从标的表查到的内部标的 ID 和基础资产，只用于展示，查不到为空 */
+  instrument_id: string;
+  base_asset: string;
+  /** 写入名单时的原因；同一个标的重复写入时保留第一个写入者的原因 */
+  reason: string;
+  source_event_id: string;
+  /** 写入时间，毫秒 */
+  blocked_at: string;
+}
+
+export interface UnblockInstrumentReq {
+  exchange: Exchange;
+  market_type: MarketType;
+  exchange_symbol: string;
+}
+
 export interface LogicalAccountTarget {
   target_id: string;
   logical_account_id: string;

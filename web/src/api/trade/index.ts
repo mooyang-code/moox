@@ -3,6 +3,7 @@ export { isTradeAdoptionRequired, isTradeNotFound, isTradeSessionNotReady, Trade
 import type {
   AccountResponse,
   AddLogicalAccountMemberReq,
+  BlockedInstrument,
   CreateTradingAccountReq,
   CreatePaperSimulationReq,
   CreateLogicalAccountReq,
@@ -35,6 +36,7 @@ import type {
   SummarizeAccountPnlRsp,
   TradableInstrument,
   RetInfo,
+  UnblockInstrumentReq,
   UpdateTradingAccountReq
 } from "./types";
 
@@ -161,6 +163,21 @@ export function listAccountLedger(req: ListAccountLedgerReq) {
     "ListAccountLedger",
     req
   );
+}
+
+/** 下架名单：被禁止买入的标的，全局，不分空间 */
+export function listBlockedInstruments(options: { silent?: boolean } = {}) {
+  return callTrade<Record<string, never>, { ret_info: RetInfo; instruments: BlockedInstrument[] }>(
+    "console",
+    "ListBlockedInstruments",
+    {},
+    options
+  );
+}
+
+/** 解除一个标的的买入禁止；不在名单里不算错误，removed 为 false。对应的下架清仓还在跑时会提前结束 */
+export function unblockInstrument(req: UnblockInstrumentReq, options: { silent?: boolean } = {}) {
+  return callTrade<UnblockInstrumentReq, { ret_info: RetInfo; removed: boolean }>("console", "UnblockInstrument", req, options);
 }
 
 /** 只平组合账户里的这一个执行账户；组合账户会被暂停 */
