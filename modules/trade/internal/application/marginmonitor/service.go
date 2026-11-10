@@ -468,6 +468,8 @@ func (s *Service) collectAfterReduce(ctx context.Context, logical store.LogicalA
 			return err
 		}
 		if !recorded {
+			s.warnOnce("collect-give-up|"+action.ActionID, fmt.Sprintf("组合 %s 的风控减仓 %s 于 %s 结束，已超过 %d 小时且没有归集记录，不再归集；如现货钱包里还有 USDT，请手动划回合约钱包",
+				logical.LogicalAccountID, action.ActionID, action.UpdatedAt.Format("2006-01-02 15:04:05"), int(collectGiveUpAfter.Hours())))
 			s.markCollected(action.ActionID)
 			return nil
 		}
