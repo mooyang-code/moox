@@ -81,7 +81,7 @@ import EnvMark from "@/components/trade-confirm/env-mark.vue";
 import EquityCurve from "../shared/equity-curve.vue";
 import { accountEnvironment } from "@/components/trade-confirm/environment";
 import { fmtMoney } from "../shared/format";
-import { isStockOnly, marketsText } from "../shared/markets";
+import { isAShareLogical, marketsText } from "../shared/markets";
 import SectionBlock from "../shared/section-block.vue";
 import StatusMark from "../shared/status-mark.vue";
 import { detailContextKey } from "./context";
@@ -103,7 +103,7 @@ const members = computed(() =>
     .map(member => ({ ...member, account: accounts.value.get(member.trading_account_id) }))
     .filter((item): item is typeof item & { account: NonNullable<typeof item.account> } => Boolean(item.account))
 );
-const stockOnly = computed(() => isStockOnly(logical.value.markets || []));
+const stockOnly = computed(() => isAShareLogical(logical.value));
 const targetCoins = computed(() => targetCoinCount(target.value?.targets || []));
 // 被单币每小时上限顺延的标的不算未执行，单独计数
 const blockedCount = computed(() => (target.value?.blocked_targets || []).filter(item => !item.deferred).length);

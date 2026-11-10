@@ -18,6 +18,7 @@ vi.mock("@/api/trade/settings", async () => ({
   updateLogicalAccountOrderSettings: mocks.updateOrder
 }));
 import { detailContextKey, type DetailContext } from "./context";
+import ConfirmDialog from "@/components/trade-confirm/confirm-dialog.vue";
 import FundSettingsForm from "../../settings/fund-settings-form.vue";
 import SettingsTab from "./settings-tab.vue";
 
@@ -66,10 +67,13 @@ async function saveFund(settings: Partial<FundSettings>) {
   await flushPromises();
 }
 
-const dialogTitle = () => document.body.textContent?.includes("关闭保证金率监控") ?? false;
+// 只在弹出的确认框里找，不会误中页面上同名的表单项
+const dialogTitle = () =>
+  [...document.querySelectorAll(".arco-modal")].some(item => item.textContent?.includes("关闭保证金率监控"));
 function dialogButton(text: string) {
   return [...document.querySelectorAll<HTMLButtonElement>(".arco-modal button")].find(item => item.textContent?.trim() === text);
 }
+const marginDialog = () => wrapper.findAllComponents(ConfirmDialog).find(item => item.props("title") === "关闭保证金率监控");
 
 beforeEach(() => {
   mocks.listLogicalAccounts.mockReset().mockResolvedValue({ logical_accounts: [] });
@@ -88,8 +92,11 @@ describe("设置页保存资金设置", () => {
     await saveFund({ margin_monitor_disabled: true });
     expect(dialogTitle()).toBe(true);
     expect(mocks.updateFund).not.toHaveBeenCalled();
-    dialogButton("取消")?.click();
+    const cancel = dialogButton("取消");
+    expect(cancel).toBeTruthy();
+    cancel?.click();
     await flushPromises();
+    expect(marginDialog()?.props("visible")).toBe(false);
     expect(mocks.updateFund).not.toHaveBeenCalled();
   });
 
@@ -104,6 +111,27 @@ describe("设置页保存资金设置", () => {
       expect.objectContaining({ margin_monitor_disabled: true, reserve_ratio: "0.1" })
     );
     expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it("生产环境要先输入组合名称才能确认，输入后保存一次", async () => {
+    mountTab("prod", { margin_monitor_disabled: false });
+    await saveFund({ margin_monitor_disabled: true });
+    expect(dialogTitle()).toBe(true);
+    const ok = dialogButton("关闭并保存");
+    expect(ok?.disabled).toBe(true);
+    ok?.click();
+    await flushPromises();
+    expect(mocks.updateFund).not.toHaveBeenCalled();
+    const input = document.querySelector<HTMLInputElement>(".arco-modal input");
+    expect(input).toBeTruthy();
+    input!.value = "组合";
+    input!.dispatchEvent(new Event("input"));
+    await flushPromises();
+    expect(dialogButton("关闭并保存")?.disabled).toBe(false);
+    dialogButton("关闭并保存")?.click();
+    await flushPromises();
+    expect(mocks.updateFund).toHaveBeenCalledTimes(1);
+    expect(marginDialog()?.props("visible")).toBe(false);
   });
 
   it("不涉及关闭监控（保持开着、本来就是关的）时直接保存，不弹确认", async () => {

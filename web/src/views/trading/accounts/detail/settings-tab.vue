@@ -76,7 +76,7 @@
         :settings="settingsOf.order_settings"
         :error="settingsOf.order_settings_error"
         :settlement-asset="logical.settlement_asset"
-        :stock-only="isStockOnly(logical.markets || [])"
+        :stock-only="isAShareLogical(logical)"
         :saving="savingOrder"
         @save="saveOrderSettings"
         @refresh="reload"
@@ -186,7 +186,7 @@ import { turnsOffMarginMonitor } from "../../settings/fund-settings-form";
 import OrderSettingsForm from "../../settings/order-settings-form.vue";
 import ConfirmDialog from "@/components/trade-confirm/confirm-dialog.vue";
 import { accountEnvironment } from "@/components/trade-confirm/environment";
-import { isStockOnly, marketsText } from "../shared/markets";
+import { isAShareLogical, marketsText } from "../shared/markets";
 import { eligibleAccounts } from "../shared/membership";
 import SectionBlock from "../shared/section-block.vue";
 import { detailContextKey } from "./context";

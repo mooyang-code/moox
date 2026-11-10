@@ -7,5 +7,6 @@ describe("持仓合计说明", () => {
     expect(marketsTotalText([2])).toBe("永续合计");
     expect(marketsTotalText([1, 2])).toBe("现货和永续合计");
     expect(marketsTotalText([3])).toBe("股票合计");
+    expect(marketsTotalText([])).toBe("");
   });
 });

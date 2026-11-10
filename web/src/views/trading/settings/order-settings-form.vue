@@ -17,7 +17,7 @@
     </section>
 
     <section class="settings-group">
-      <h4>单币每小时上限</h4>
+      <h4>{{ stockOnly ? "单只股票每小时上限" : "单币每小时上限" }}</h4>
       <p class="settings-hint">
         每个标的每个自然小时累计下单金额的上限，超出的部分留到下一个整点；标的写 * 表示默认值，不填表示不限。
       </p>

@@ -1,6 +1,7 @@
 import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
 import ArcoVue from "@arco-design/web-vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setSelectedSpaceIdCache } from "@/api/admin/space-header";
 import { TradeResponseError, type LogicalAccount } from "@/api/trade";
 
 const mocks = vi.hoisted(() => ({
@@ -56,6 +57,7 @@ beforeEach(() => {
   mocks.inspectExchangeCredential.mockReset();
 });
 afterEach(() => {
+  setSelectedSpaceIdCache("");
   wrapper?.unmount();
   document.body.innerHTML = "";
 });
@@ -108,6 +110,34 @@ describe("新建账户提交", () => {
     await submitting;
     expect(wrapper.emitted("created")).toEqual([["paper"]]);
     expect(vm.visible).toBe(true);
+  });
+
+  it.each([
+    ["成功", false],
+    ["失败", true]
+  ])("提交挂着时切换空间，请求%s返回后弹窗仍能关闭、按钮不再转圈", async (_name, fails) => {
+    const vm = await openDialog();
+    let settle!: (fail: boolean) => void;
+    mocks.createPaperSimulation.mockImplementationOnce(
+      () =>
+        new Promise((done, reject) => {
+          settle = failed => (failed ? reject(new Error("请求失败")) : done({ account: { trading_account_id: "ta-new" } }));
+        })
+    );
+    Object.assign(vm.form, { step: 3 });
+    const submitting = vm.submit();
+    await flushPromises();
+    const modal = wrapper.findComponent({ name: "Modal" });
+    expect(modal.props("closable")).toBe(false);
+    setSelectedSpaceIdCache("another-space");
+    settle(fails);
+    await submitting;
+    await flushPromises();
+    expect(modal.props("closable")).toBe(true);
+    expect(document.querySelector(".arco-modal .arco-btn-loading")).toBeNull();
+    // 提交已经失效：不动当前界面，不弹错误、不自动关闭
+    expect(vm.visible).toBe(true);
+    expect(document.querySelector(".arco-modal .arco-alert")).toBeNull();
   });
 
   it("提交中不能关闭：遮罩、关闭按钮、Esc 都禁用，取消按钮置灰且点了没反应；结束后恢复", async () => {

@@ -99,7 +99,7 @@
               {{ snapshotCount }}<small v-if="logical.control_mode === 1">/ {{ targetCoins }}</small>
             </div>
             <div v-if="logical.control_mode === 1" class="d">{{ offCount }} 个未到位</div>
-            <div v-else class="d">{{ marketsTotalText(logical.markets) }}</div>
+            <div v-else-if="positionTotalText" class="d">{{ positionTotalText }}</div>
           </div>
         </div>
 
@@ -328,7 +328,7 @@ import ConfirmDialog from "@/components/trade-confirm/confirm-dialog.vue";
 import EnvMark from "@/components/trade-confirm/env-mark.vue";
 import { environmentFromQuery, environmentLabel, logicalEnvironment } from "@/components/trade-confirm/environment";
 import { fmtMoney, fmtPercent, fmtQty, fmtSigned, pnlClass } from "../shared/format";
-import { instrumentName, marketLabel, marketsTotalText } from "../shared/markets";
+import { instrumentName, isAShareLogical, marketLabel, marketsTotalText } from "../shared/markets";
 import { loadPositionSnapshot, positionCount, type PositionSnapshot } from "../shared/position-snapshot";
 import { loadStrategyLinks, type StrategyLink } from "../shared/strategy-link";
 import { useActionTracker } from "./action-tracker";
@@ -410,6 +410,12 @@ const coinRows = computed(() =>
   })
 );
 const snapshotCount = computed(() => positionCount(snapshot.value));
+// 成员全停用时市场并集为空，按结算币判断是不是 A 股；都判断不了就不显示
+const positionTotalText = computed(() => {
+  const current = logical.value;
+  if (!current) return "";
+  return marketsTotalText(current.markets) || (isAShareLogical(current) ? "股票合计" : "");
+});
 const targetCoins = computed(() => targetCoinCount(target.value?.targets || []));
 const offCount = computed(() => coinRows.value.filter(row => row.state !== "ok").length);
 const membersEditable = computed(() => logical.value?.automation_state === "PAUSED");
