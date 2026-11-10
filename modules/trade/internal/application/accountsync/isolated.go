@@ -9,6 +9,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/logicalaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 	"gorm.io/gorm"
 	"trpc.group/trpc-go/trpc-go/log"
 )
@@ -34,6 +35,15 @@ func (s *Service) pauseForIsolated(ctx context.Context, tradingAccountID string,
 	if err != nil {
 		return err
 	}
+	symbols := make([]string, 0, len(isolated))
+	for _, position := range isolated {
+		symbols = append(symbols, position.ExchangeSymbol)
+	}
+	slices.Sort(symbols)
+	symbols = slices.Compact(symbols)
+	detail := account.Name + "：交易所账户里有逐仓持仓：标的 " + strings.Join(symbols, "、") + "，moox 只支持全仓单向"
+	// 关注项不看组合状态：已暂停、自主下单或没加入组合的账户同样要让用户知道这笔持仓不入投影。
+	telemetry.Note(telemetry.AttentionIsolatedPosition, detail, s.now())
 	logical, _, err := s.Store.FindLogicalAccountByTradingAccount(ctx, account.SpaceID, tradingAccountID)
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil
@@ -44,12 +54,7 @@ func (s *Service) pauseForIsolated(ctx context.Context, tradingAccountID string,
 	if logical.ControlMode == "MANUAL" || logical.AutomationState != string(logicalaccount.AutomationActive) {
 		return nil
 	}
-	symbols := make([]string, 0, len(isolated))
-	for _, position := range isolated {
-		symbols = append(symbols, position.ExchangeSymbol)
-	}
-	slices.Sort(symbols)
-	reason := store.AutoPauseReason("交易所账户里有逐仓持仓：标的 " + strings.Join(slices.Compact(symbols), "、") + "，moox 只支持全仓单向")
+	reason := store.AutoPauseReason("交易所账户里有逐仓持仓：标的 " + strings.Join(symbols, "、") + "，moox 只支持全仓单向")
 	log.WarnContextf(ctx, "交易关注项：执行账户 %s 暂停组合 %s：%s", account.Name, logical.Name, reason)
 	return s.Store.Transaction(ctx, func(tx *store.Tx) error {
 		return tx.SetLogicalAccountAutomation(logical.SpaceID, logical.LogicalAccountID, string(logicalaccount.AutomationPaused), reason)

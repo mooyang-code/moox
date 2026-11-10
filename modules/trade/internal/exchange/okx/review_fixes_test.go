@@ -7,8 +7,10 @@ import (
 	"os"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 )
 
 type accountRecorder struct {
@@ -170,5 +172,16 @@ func TestOKXErrorCodeClassification(t *testing.T) {
 		if err := classifyOKXCode(code, "x"); !exchange.IsKind(err, want) {
 			t.Fatalf("%s: err = %v, want %s", code, err, want)
 		}
+	}
+}
+
+// 50102（时间戳过期）订单仍按结果未知处理，同时记一条“检查 NTP”的关注项。
+func TestClassifyTimestampExpiredNotesClockSkew(t *testing.T) {
+	if err := classifyOKXCode("50102", "Timestamp request expired"); !exchange.IsKind(err, exchange.ErrorTransportUnknown) {
+		t.Fatalf("err = %v", err)
+	}
+	details := telemetry.Recent(telemetry.AttentionClockSkew, time.Now(), time.Minute)
+	if len(details) == 0 || details[0] != "OKX：本机时钟与交易所相差过大，请检查 NTP" {
+		t.Fatalf("关注项 = %v", details)
 	}
 }

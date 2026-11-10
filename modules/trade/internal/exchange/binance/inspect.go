@@ -64,6 +64,48 @@ type apiRestrictions struct {
 }
 
 func inspectWith(ctx context.Context, request exchange.InspectRequest, clients inspectClients) (exchange.Inspection, error) {
+	result, err := inspectAccount(ctx, request, clients)
+	if err != nil || result.Skipped || result.CredentialRejected != "" {
+		return result, err
+	}
+	result.ClockSkewMillis = measureClockSkew(ctx, clients)
+	result.ApplyFindings(request.Markets)
+	return result, nil
+}
+
+// measureClockSkew 取现货 /api/v3/time 和合约 /fapi/v1/time 各测一次本机时钟偏差，返回绝对值较大的一个（毫秒）。
+// 取不到交易所时间不影响账户检测，按没有偏差处理：其余检测调用同样会暴露网络问题。
+func measureClockSkew(ctx context.Context, clients inspectClients) int64 {
+	var worst int64
+	for _, probe := range []struct {
+		client *httpclient.Client
+		path   string
+	}{{clients.spot, "/api/v3/time"}, {clients.swap, "/fapi/v1/time"}} {
+		sentAt := time.Now()
+		raw, err := probe.client.Do(ctx, &httpclient.Request{Method: http.MethodGet, Path: probe.path})
+		receivedAt := time.Now()
+		var payload struct {
+			ServerTime int64 `json:"serverTime"`
+		}
+		if err != nil || json.Unmarshal(raw, &payload) != nil || payload.ServerTime <= 0 {
+			continue
+		}
+		skew := exchange.MeasureClockSkew(sentAt, receivedAt, time.UnixMilli(payload.ServerTime)).Milliseconds()
+		if abs(skew) > abs(worst) {
+			worst = skew
+		}
+	}
+	return worst
+}
+
+func abs(value int64) int64 {
+	if value < 0 {
+		return -value
+	}
+	return value
+}
+
+func inspectAccount(ctx context.Context, request exchange.InspectRequest, clients inspectClients) (exchange.Inspection, error) {
 	result := exchange.Inspection{
 		Exchange: exchange.ExchangeBinance, Environment: request.Environment, InspectedAt: time.Now().UTC(),
 	}

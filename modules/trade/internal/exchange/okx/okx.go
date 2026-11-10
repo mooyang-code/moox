@@ -19,6 +19,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/httpclient"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
+	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 )
 
 const defaultBaseURL = "https://openapi.okx.com"
@@ -1254,6 +1255,10 @@ func classifyOKXCode(code, message string) error {
 	// 51016 是客户端订单号重复：原单可能已被受理，走查询认领，不能当拒单。
 	case "50001", "50004", "50013", "50026", "51149", "50102", "51016":
 		kind = exchange.ErrorTransportUnknown
+	}
+	if code == "50102" {
+		// 时间戳过期：提示检查本机时钟。
+		telemetry.Note(telemetry.AttentionClockSkew, "OKX：本机时钟与交易所相差过大，请检查 NTP", time.Now())
 	}
 	return &exchange.Error{Kind: kind, Code: code, Err: errors.New(message)}
 }

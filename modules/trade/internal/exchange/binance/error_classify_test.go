@@ -4,8 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 )
 
 // 币安下单错误按错误码和说明文字分类：订单号重复、-1000、-1001 是结果未知，-2010 其余按说明细分，-1016 保留拒单。
@@ -37,5 +39,18 @@ func TestClassifyAPIErrorOrderRejections(t *testing.T) {
 				t.Fatalf("没有保留原错误码 %s：%v", test.code, err)
 			}
 		})
+	}
+}
+
+// -1021（时间戳超窗）订单仍按结果未知处理，同时记一条“检查 NTP”的关注项。
+func TestClassifyTimestampOutsideWindowNotesClockSkew(t *testing.T) {
+	err := classifyAPIError(&exchange.Error{Kind: exchange.ErrorRejected, HTTPStatus: 400},
+		[]byte(`{"code":-1021,"msg":"Timestamp for this request is outside of the recvWindow."}`))
+	if !exchange.IsKind(err, exchange.ErrorTransportUnknown) {
+		t.Fatalf("err = %v", err)
+	}
+	details := telemetry.Recent(telemetry.AttentionClockSkew, time.Now(), time.Minute)
+	if len(details) == 0 || details[0] != "币安：本机时钟与交易所相差过大，请检查 NTP" {
+		t.Fatalf("关注项 = %v", details)
 	}
 }

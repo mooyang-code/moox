@@ -49,6 +49,10 @@ const (
 	// 已按过期结束并释放资金预留；订单（含已结束的单）的累计成交领先已入账成交明细的，缺口已按已入账值收掉（成交明细缺失）。
 	// 这些单实际成交了多少要人工到交易所核对，持仓、余额以同步结果为准。
 	AttentionOrdersInstrumentGone = "orders_instrument_gone"
+	// AttentionClockSkew 是下单或查询遇到时间戳超窗（币安 -1021、OKX 50102）：本机时钟与交易所相差过大，请检查 NTP。
+	AttentionClockSkew = "clock_skew"
+	// AttentionIsolatedPosition 是交易所账户里有逐仓持仓：moox 只支持全仓单向，该持仓不入投影，所在组合已暂停（已暂停的不改原因）。
+	AttentionIsolatedPosition = "isolated_position"
 )
 
 // attentionKinds 里每种情况都要上报，恢复后 Monitor 才能看到值回到 0。
@@ -58,7 +62,7 @@ var attentionKinds = []string{
 	AttentionRateLimited, AttentionTurnoverHigh, AttentionUnknownResults, AttentionMarginRatioLow,
 	AttentionInspectionBlocked, AttentionInspectionFailing, AttentionTransferShortfall, AttentionTransferFailing,
 	AttentionValuationDegraded, AttentionFlattenOrdersUnsettled, AttentionReleaseOrdersUnverified, AttentionReleaseOrdersStuck,
-	AttentionOrdersInstrumentGone,
+	AttentionOrdersInstrumentGone, AttentionClockSkew, AttentionIsolatedPosition,
 }
 
 // maxAttentionDetail 是标签的字节上限：Monitor 超过 512 字节会拒收整份上报。

@@ -3,11 +3,13 @@ package accountsync
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/application/consumer"
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 	"github.com/stretchr/testify/require"
 )
 
@@ -76,6 +78,29 @@ func TestFilterIsolatedPositionsLeavesOtherStatesAlone(t *testing.T) {
 	logical, err := tradeStore.GetLogicalAccount(context.Background(), "space-1", "logical-1")
 	require.NoError(t, err)
 	require.Equal(t, "用户手动暂停", logical.PauseReason)
+}
+
+// 关注项不看组合状态：已暂停和自主下单的账户同样记一条，说明这笔逐仓持仓不入投影。
+func TestIsolatedPositionAttentionIsNotedEvenWhenNotPaused(t *testing.T) {
+	for name, prepare := range map[string]func(t *testing.T, tradeStore *store.Store){
+		"组合已暂停": func(t *testing.T, tradeStore *store.Store) {},
+		"自主下单": func(t *testing.T, tradeStore *store.Store) {
+			require.NoError(t, tradeStore.DBForTest().Exec(`UPDATE t_logical_accounts SET c_control_mode = 'MANUAL'`).Error)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			tradeStore := openSyncStore(t)
+			seedSyncAccount(t, tradeStore)
+			prepare(t, tradeStore)
+			service := &Service{Store: tradeStore}
+
+			_, err := service.FilterIsolatedPositions(context.Background(), "account-1", isolatedMixedPositions())
+			require.NoError(t, err)
+
+			details := telemetry.Recent(telemetry.AttentionIsolatedPosition, time.Now(), time.Minute)
+			require.Contains(t, details, "main：交易所账户里有逐仓持仓：标的 ETHUSDT，moox 只支持全仓单向")
+		})
+	}
 }
 
 // 带逐仓持仓的交易所账户同步：同步成功，全仓持仓入库，逐仓持仓不入库，组合暂停且原因里有标的名。

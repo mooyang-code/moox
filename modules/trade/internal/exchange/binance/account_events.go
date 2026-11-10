@@ -182,7 +182,7 @@ func (a *Adapter) subscribeSwapPrivate(
 
 	keepaliveDone := make(chan struct{})
 	defer close(keepaliveDone)
-	go a.keepListenKeyAlive(ctx, path, key.ListenKey, connection, keepaliveDone)
+	go a.keepListenKeyAlive(ctx, path, connection, keepaliveDone)
 
 	handler.OnSubscribed()
 	return a.receivePrivate(ctx, connection, handler)
@@ -264,10 +264,11 @@ func receiveStream(
 	}
 }
 
+// keepListenKeyAlive 每 30 分钟续期一次。合约 PUT /fapi/v1/listenKey 不带参数（官方文档：只需 X-MBX-APIKEY 请求头），
+// 续期的是该密钥当前有效的 listenKey。
 func (a *Adapter) keepListenKeyAlive(
 	ctx context.Context,
 	path string,
-	listenKey string,
 	connection *websocket.Conn,
 	done <-chan struct{},
 ) {
@@ -283,14 +284,7 @@ func (a *Adapter) keepListenKeyAlive(
 				ticker.Reset(time.Minute)
 				continue
 			}
-			_, err := a.client().Do(ctx, &httpclient.Request{
-				Method: http.MethodPut,
-				Path:   path,
-				Query:  url.Values{"listenKey": []string{listenKey}},
-				Headers: map[string]string{
-					"X-MBX-APIKEY": a.credential.APIKey,
-				},
-			})
+			err := a.renewListenKey(ctx, path)
 			// 限流（确定未受理）或结果未知的续期 1 分钟后重试，只有明确失败才断开重连。
 			if exchange.NotAccepted(err) || exchange.IsKind(err, exchange.ErrorTransportUnknown) {
 				ticker.Reset(time.Minute)
@@ -303,6 +297,15 @@ func (a *Adapter) keepListenKeyAlive(
 			ticker.Reset(30 * time.Minute)
 		}
 	}
+}
+
+func (a *Adapter) renewListenKey(ctx context.Context, path string) error {
+	_, err := a.client().Do(ctx, &httpclient.Request{
+		Method:  http.MethodPut,
+		Path:    path,
+		Headers: map[string]string{"X-MBX-APIKEY": a.credential.APIKey},
+	})
+	return err
 }
 
 // privateOrder 是私有流订单事件里按精确键取出的字段，现货 executionReport 和合约 ORDER_TRADE_UPDATE 共用。

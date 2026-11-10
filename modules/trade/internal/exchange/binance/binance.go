@@ -18,6 +18,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/httpclient"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
+	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 )
 
 // sideEffectNone 是统一账户杠杆账户下单的 sideEffectType 取值：不借币、不自动还款（官方 SDK 枚举 NO_SIDE_EFFECT）。
@@ -1381,8 +1382,9 @@ func classifyAPIError(err error, raw []byte) error {
 		// 官方说明：后端响应异常或超时，执行状态未知。
 		typed.Kind = exchange.ErrorTransportUnknown
 	case "-1021":
-		// 时间戳超窗时交易所没有受理，但本地无法确认，按结果未知走查询恢复。
+		// 时间戳超窗时交易所没有受理，但本地无法确认，按结果未知走查询恢复；同时提示检查本机时钟。
 		typed.Kind = exchange.ErrorTransportUnknown
+		telemetry.Note(telemetry.AttentionClockSkew, "币安：本机时钟与交易所相差过大，请检查 NTP", time.Now())
 	}
 	return typed
 }
