@@ -254,10 +254,78 @@ func (env *laneEnv) tooSmallToPlace(candidate laneAction, quantity, price shared
 	if _, minimum, err := baseQuantityRules(candidate.instrument); err != nil || quantity.Cmp(minimum) < 0 {
 		return true
 	}
-	if belowExchange, err := belowExchangeMinimum(candidate, quantity, price); err != nil || belowExchange {
-		return true
+	shortfall, err := env.minimumShortfall(candidate, quantity, price, false)
+	return err != nil || shortfall != ""
+}
+
+// 数量不够哪一项最小金额：交易所最小名义金额，或设置的最小下单额。
+const (
+	shortfallExchange   = "exchange"
+	shortfallConfigured = "configured"
+)
+
+// minimumShortfall 返回数量按给定价格不够哪一项最小金额，够了返回空串。skipExchange 为真时不查交易所最小名义金额
+// （合约只减仓单被单笔上限截小后）。合约全平、合约减仓的例外见 belowExchangeMinimum 和 belowConfiguredMinimum。
+func (env *laneEnv) minimumShortfall(candidate laneAction, quantity, price shared.Decimal, skipExchange bool) (string, error) {
+	if !skipExchange {
+		below, err := belowExchangeMinimum(candidate, quantity, price)
+		if err != nil {
+			return "", err
+		}
+		if below {
+			return shortfallExchange, nil
+		}
 	}
-	return env.belowConfiguredMinimum(candidate, quantity, price)
+	if env.belowConfiguredMinimum(candidate, quantity, price) {
+		return shortfallConfigured, nil
+	}
+	return "", nil
+}
+
+// liftToMinimum 把被单笔上限截小、不够最小金额的子单抬到刚好够：拆单随机化可能抽到偏低的比例，而配置的单笔上限本身是够的。
+// 抬高后不超过截量前的数量，也不超过配置的单笔上限（按参考价折算）；够不上就原样返回，由调用方阻塞。
+func (env *laneEnv) liftToMinimum(candidate laneAction, quantity, beforeSlice, price, referencePrice shared.Decimal, skipExchange bool) shared.Decimal {
+	need := shared.Zero()
+	if !skipExchange {
+		if raw, err := candidate.instrument.MinNotionalAt(price); err == nil && raw != "" {
+			if minimum, parseErr := shared.ParseDecimal(raw); parseErr == nil && minimum.Cmp(need) > 0 {
+				need = minimum
+			}
+		}
+	}
+	if !(candidate.reducing && exchange.RuleFor(candidate.instrument.MarketType).ReduceOnly) {
+		if configured := env.settings.MinNotional(candidate.instrument.MarketType); configured.Cmp(need) > 0 {
+			need = configured
+		}
+	}
+	if need.IsZero() {
+		return quantity
+	}
+	step := mustBaseStep(candidate.instrument)
+	want := ceilToStep(need.Div(price), step)
+	ceiling := floorToStep(env.settings.MaxChildNotional.Div(referencePrice), step)
+	if beforeSlice.Cmp(ceiling) < 0 {
+		ceiling = beforeSlice
+	}
+	if want.Cmp(ceiling) <= 0 && want.Cmp(quantity) > 0 {
+		return want
+	}
+	return quantity
+}
+
+// sliceLimitReason 是单笔上限把子单截到不够最小金额时的阻塞原因，显示配置的单笔上限。
+func (env *laneEnv) sliceLimitReason(candidate laneAction, shortfall, exchangeMinimum string) string {
+	limit := env.settings.MaxChildNotional
+	what, hint, minimum := "该标的最小下单额", "请调高单笔上限", exchangeMinimum
+	if shortfall == shortfallConfigured {
+		configured := env.settings.MinNotional(candidate.instrument.MarketType)
+		what, hint, minimum = "设置的最小下单额", "请调高单笔上限或降低最小下单额", configured.String()
+	}
+	// 单笔上限本身就不到最小额：直说；本身够、按下单价折算后才不够：说明是折算造成的。
+	if value, err := shared.ParseDecimal(minimum); err == nil && limit.Cmp(value) >= 0 {
+		return fmt.Sprintf("单笔上限 %s 按下单价折算后低于%s %s，%s", limit, what, minimum, hint)
+	}
+	return fmt.Sprintf("单笔上限 %s 低于%s %s，%s", limit, what, minimum, hint)
 }
 
 // splitFraction 由种子算出 [0.5, 1] 之间的比例（精确小数，千分位）。同一个种子永远得到同一个比例，结果可复现。
