@@ -43,6 +43,17 @@ export interface FundFormScope {
   hasBinanceLive?: boolean;
   /** 组合的结算币，默认 USDT：稳定币保证金必须含它，保证金币和套利底仓不能写它 */
   settlementAsset?: string;
+  /** 组合里有币安普通账户（现货、合约两个钱包；统一账户不算）：BNB 保留金额旁要说明补买只到现货钱包 */
+  standardAccount?: boolean;
+}
+
+/** 普通账户的 BNB 补买范围：统一账户只有一个钱包，不显示这句话。 */
+export const BNB_STANDARD_ACCOUNT_NOTE =
+  "普通账户只补现货钱包的 BNB（目标为保留金额的一半）；合约手续费用 BNB 抵扣需要在合约钱包里自行放入 BNB。";
+
+/** 是否显示普通账户的 BNB 补买说明：BNB 项显示，并且组合里有币安普通账户。 */
+export function showsBnbStandardNote(scope: FundFormScope = {}): boolean {
+  return showsLiveOnlyFields(scope) && scope.standardAccount === true;
 }
 
 /** BNB 补买的容差：市值低于“保留金额 − 10”才补买，所以保留金额要大于 10。 */

@@ -91,6 +91,7 @@
         :testnet="env === 'testnet'"
         :has-binance-live="hasBinanceLive"
         :non-binance="nonBinance"
+        :standard-account="hasStandardAccount"
         :settlement-asset="logical.settlement_asset"
         :saving="savingFund"
         @save="saveFundSettings"
@@ -235,6 +236,10 @@ const hasBinanceLive = computed(() =>
       account.status === "ENABLED"
     );
   })
+);
+// 组合里有币安普通账户（account_mode 由交易所检测写入，没检测过的不算）：资金设置里说明 BNB 补买只到现货钱包
+const hasStandardAccount = computed(() =>
+  rows.value.some(item => item.account.exchange === 1 && item.account.account_mode === "BINANCE_STANDARD")
 );
 const candidates = computed(() => eligibleAccounts(allAccounts.value, allLogicals.value, logical.value, env.value));
 // 模拟账户可以在这里关闭（会暂停整个组合）；实盘账户要先移出组合，再到执行账户页签停用

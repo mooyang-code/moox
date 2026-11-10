@@ -11,10 +11,6 @@ import * as trade from "./index";
 describe("Trade public API", () => {
   beforeEach(() => callTrade.mockReset().mockResolvedValue({ ret_info: { code: 0, msg: "ok" } }));
 
-  it("registers the unified Trade console service", () => {
-    expect(trade.tradeServiceMap).toEqual({ console: "trade" });
-  });
-
   it("constructs 组合账户生命周期请求", async () => {
     await trade.createLogicalAccount({ name: "paper", execution_mode: 1, settlement_asset: "USDT" });
     await trade.pauseLogicalAccount("logical-1", "manual intervention");
@@ -209,6 +205,14 @@ describe("Trade public API", () => {
   it("管理台不暴露只给事件中心用的写入接口", () => {
     expect(trade).not.toHaveProperty("blockInstrument");
     expect(trade).not.toHaveProperty("flattenInstrument");
+  });
+
+  it("下架名单只暴露读取和解除：读取不带参数，解除按（交易所、市场、代码）定位", async () => {
+    await trade.listBlockedInstruments({ silent: true });
+    expect(callTrade).toHaveBeenLastCalledWith("console", "ListBlockedInstruments", {}, { silent: true });
+    const req = { exchange: 1 as const, market_type: 1 as const, exchange_symbol: "LUNAUSDT" };
+    await trade.unblockInstrument(req, { silent: true });
+    expect(callTrade).toHaveBeenLastCalledWith("console", "UnblockInstrument", req, { silent: true });
   });
 
   it("收益拆解、操作记录和按来源筛选订单的请求原样透传", async () => {

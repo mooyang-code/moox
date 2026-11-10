@@ -1,33 +1,18 @@
 <template>
   <SectionBlock title="成交" flush>
-    <div class="toolbar">
-      <a-radio-group v-model="range" type="button" @change="search">
-        <a-radio v-for="item in recordRanges" :key="item.key" :value="item.key">{{ item.label }}</a-radio>
-      </a-radio-group>
-      <a-select
-        v-if="memberOptions.length > 1"
-        v-model="accountId"
-        allow-clear
-        placeholder="执行账户"
-        style="width: 150px"
-        @change="search"
-      >
-        <a-option v-for="item in memberOptions" :key="item.id" :value="item.id">{{ item.label }}</a-option>
-      </a-select>
-      <a-select v-if="marketOptions.length > 1" v-model="market" :disabled="!symbol.trim()" style="width: 110px" @change="search">
-        <a-option v-for="item in marketOptions" :key="item" :value="item">{{ marketLabel(item) }}</a-option>
-      </a-select>
-      <a-input
-        v-model="symbol"
-        allow-clear
-        :placeholder="stockOnly ? '代码，如 600519.XSHG' : '币，如 BTC'"
-        style="width: 150px"
-        @press-enter="search"
-        @clear="search"
-      />
-      <a-button :loading="loading" @click="search">查询</a-button>
+    <RecordToolbar
+      v-model:range="range"
+      v-model:account-id="accountId"
+      v-model:market="market"
+      v-model:symbol="symbol"
+      :member-options="memberOptions"
+      :market-options="marketOptions"
+      :stock-only="stockOnly"
+      :loading="loading"
+      @search="search"
+    >
       <span class="tx-muted hint">点一行看所属订单</span>
-    </div>
+    </RecordToolbar>
     <a-alert v-if="error" type="error" class="alert">{{ error }}</a-alert>
     <a-table
       :bordered="{ cell: true }"
@@ -96,30 +81,28 @@
 </template>
 
 <script setup lang="ts">
-import { computed, inject, ref, watch } from "vue";
+import { inject, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
 import { getOrder, listFills } from "@/api/trade";
-import type { Fill, MarketType, Order } from "@/api/trade";
+import type { Fill, Order } from "@/api/trade";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import { fmtMoney, fmtQty, fmtSigned, pnlClass } from "../shared/format";
-import { instrumentName, isStockOnly, marketLabel } from "../shared/markets";
-import { instrumentFilter } from "./instrument-filter";
+import { instrumentName, marketLabel } from "../shared/markets";
 import SectionBlock from "../shared/section-block.vue";
 import { detailContextKey } from "./context";
 import OrderDetailDrawer from "./order-detail-drawer.vue";
-import { rangeParams, recordRanges, type RecordRange } from "./record-range";
+import RecordToolbar from "./record-toolbar.vue";
+import { useRecordFilters } from "./record-filters";
 import { formatInstant } from "@/utils/time-zone";
 import { useDisplayZone } from "@/hooks/useDisplayZone";
 
 // 交易页的时间按当前空间登记的时区显示
 const displayZone = useDisplayZone();
-const { logical, accounts, dataVersion } = inject(detailContextKey)!;
+const { logical, dataVersion } = inject(detailContextKey)!;
 
-const range = ref<RecordRange>("7d");
-const accountId = ref<string>();
-const symbol = ref("");
-const market = ref<MarketType>();
-const page = ref(1);
+// 筛选条件写在地址里（f 开头），切换页签回来、刷新页面后仍保持；时间范围、账户、市场、标的见 useRecordFilters
+const { range, accountId, symbol, market, page, memberOptions, accountName, marketOptions, stockOnly, queryParams, search } =
+  useRecordFilters({ prefix: "f", reload: () => void load() });
 const pageSize = 20;
 const total = ref(0);
 const fills = ref<Fill[]>([]);
@@ -128,39 +111,15 @@ const error = ref("");
 const drawerVisible = ref(false);
 const drawerOrder = ref<Order | null>(null);
 const requests = createLatestRequestGuard();
-
-const memberOptions = computed(() =>
-  (logical.value.members || []).map(member => ({
-    id: member.trading_account_id,
-    label: accounts.value.get(member.trading_account_id)?.name || member.trading_account_id
-  }))
-);
-const accountName = (id: string) => accounts.value.get(id)?.name || id;
-// 标的筛选按所选市场补全；选了执行账户时只列它开通的市场
-const marketOptions = computed<MarketType[]>(() =>
-  accountId.value ? (accounts.value.get(accountId.value)?.markets ?? []) : (logical.value.markets ?? [])
-);
-const stockOnly = computed(() => isStockOnly(marketOptions.value));
-watch(
-  marketOptions,
-  options => {
-    if (!market.value || !options.includes(market.value)) market.value = options[0];
-  },
-  { immediate: true }
-);
+// 连续点几行时只认最后一次：先点的订单后到，不能盖掉后点的
+const orderRequests = createLatestRequestGuard();
 
 async function load() {
   const request = requests.begin();
   loading.value = true;
   error.value = "";
   try {
-    const rsp = await listFills({
-      logical_account_id: logical.value.logical_account_id,
-      trading_account_id: accountId.value,
-      instrument_id: instrumentFilter(symbol.value, stockOnly.value ? 3 : market.value, logical.value.settlement_asset),
-      ...rangeParams(range.value),
-      page: { page: page.value, size: pageSize }
-    });
+    const rsp = await listFills({ ...queryParams(), page: { page: page.value, size: pageSize } });
     if (!request.isLatest()) return;
     fills.value = rsp.fills || [];
     total.value = rsp.page_result?.total || 0;
@@ -173,20 +132,19 @@ async function load() {
   }
 }
 
-function search() {
-  page.value = 1;
-  void load();
-}
 function changePage(value: number) {
   page.value = value;
   void load();
 }
 async function openOrderOf(fill: Fill) {
+  const request = orderRequests.begin();
   try {
-    drawerOrder.value = (await getOrder(fill.order_id)).order;
+    const rsp = await getOrder(fill.order_id);
+    if (!request.isLatest()) return;
+    drawerOrder.value = rsp.order;
     drawerVisible.value = true;
   } catch {
-    Message.warning("读不到这笔成交所属的订单");
+    if (request.isLatest()) Message.warning("读不到这笔成交所属的订单");
   }
 }
 
@@ -196,14 +154,6 @@ watch(dataVersion, () => void load());
 
 <style src="../shared/accounts.css"></style>
 <style scoped>
-.toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--moox-space-3);
-  padding: 12px 16px;
-}
-
 .hint {
   font-size: 12px;
 }

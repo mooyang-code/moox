@@ -6,7 +6,7 @@ import type { OperatorAction, Order, RetInfo } from "./types";
 import { installSpaceAwareSignedClient } from "../admin/signed-client";
 import { explainTransportError } from "../network-error";
 
-export const tradeServiceMap = {
+const tradeServiceMap = {
   console: "trade"
 } as const;
 
@@ -59,7 +59,7 @@ const HAN = /[一-鿿]/;
  * 交易服务错误的展示文字：已知的英文错误常量换成中文，后端包装进去的具体原因（如 "%w: 具体原因"）接在括号里保留；
  * 其余原样返回；没有消息时给出错误码。
  */
-export function tradeErrorText(retInfo: RetInfo): string {
+function tradeErrorText(retInfo: RetInfo): string {
   const raw = retInfo.msg || "";
   if (!raw) return `交易服务请求失败（错误码 ${retInfo.code}）`;
   for (const [prefix, text, detailOnly] of tradeMessageTexts) {
@@ -85,11 +85,6 @@ export class TradeResponseError extends Error {
     const code = String(this.response.ret_info.code);
     return codes.some(item => String(item) === code);
   }
-}
-
-/** 请求参数不合法（ErrorCode.INVALID_PARAM）：业务校验没通过，改了参数可以重试。 */
-export function isTradeInvalidParam(error: unknown): boolean {
-  return error instanceof TradeResponseError && error.hasCode(1, "INVALID_PARAM");
 }
 
 /** 交易账户的交易所会话还没有启动（ErrorCode.TRADE_SESSION_NOT_READY = 19）：请求没有发到交易所，等几秒重试即可。 */
