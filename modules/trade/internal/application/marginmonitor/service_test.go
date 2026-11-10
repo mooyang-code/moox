@@ -572,6 +572,40 @@ func TestCollectAfterARestartAsksTheCollectorAgain(t *testing.T) {
 	require.Len(t, f.collect, 2)
 }
 
+// 动作结束超过 24 小时且没有任何归集记录：重启后不再归集（用户这期间手动放进现货钱包的资金不能被划走）。
+func TestCollectSkipsOldReduceWithoutRecordsAfterARestart(t *testing.T) {
+	f := newFixture(t, "", "400")
+	f.run()
+	require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_operator_actions SET c_status = 'COMPLETED'`).Error)
+	f.advance(25 * time.Hour)
+	f.restart()
+
+	f.run()
+
+	require.Empty(t, f.collect)
+}
+
+// 有归集记录的（例如上次没做完的未结划转）不受 24 小时限制，按引用号接着做。
+func TestCollectContinuesOldReduceThatHasRecords(t *testing.T) {
+	f := newFixture(t, "", "400")
+	f.run()
+	actionID := f.reduces[0].actionID
+	require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_operator_actions SET c_status = 'COMPLETED'`).Error)
+	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
+		return tx.InsertWalletTransfer(store.WalletTransferRecord{
+			SpaceID: "space-1", TransferID: "transfer-1", TradingAccountID: "account-1", LogicalAccountID: "logical-1",
+			Direction: store.TransferToFutures, Asset: "USDT", Amount: "10", ClientRef: actionID + ":TO_FUTURES:1",
+			State: store.TransferStatePending, RequestedAt: time.Now().UnixMilli(),
+		})
+	}))
+	f.advance(25 * time.Hour)
+	f.restart()
+
+	f.run()
+
+	require.Equal(t, []string{"logical-1|" + actionID + "|account-1"}, f.collect)
+}
+
 // 划转还没接入（没配 Collect，或返回“不可用”）：只告警一次，不记为失败、不重复调用。
 func TestCollectWithoutTransferSupportOnlyWarns(t *testing.T) {
 	f := newFixture(t, "", "400")

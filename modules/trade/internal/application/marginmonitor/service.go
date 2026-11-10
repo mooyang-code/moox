@@ -59,6 +59,11 @@ const defaultMaxSnapshotAge = 3 * time.Minute
 // createdAtSlackMillis：操作记录的创建时间只精确到秒（向下取整），组合“恢复过”要比它晚一秒以上才算。
 const createdAtSlackMillis = 1000
 
+// collectGiveUpAfter：风控减仓动作结束这么久、库里还没有它的任何归集记录，就不再归集。
+// “没有可归集资金”不落记录，进程内的“已处理”重启就丢；不设期限，重启后会对很久以前的减仓再归集一次，
+// 把用户这期间手动放进现货钱包的 USDT 划回合约钱包。已有记录的按引用号接着做，不受这个期限限制。
+const collectGiveUpAfter = 24 * time.Hour
+
 type Service struct {
 	Store   *store.Store
 	Reduce  Reduce
@@ -431,6 +436,7 @@ func (s *Service) trigger(ctx context.Context, logical store.LogicalAccountRecor
 // 看组合最近一次风控减仓动作：减仓还在跑就等；动作之后组合恢复过就不再为它归集；其余都按这个动作的动作号归集。
 // 不看暂停原因文字（撤单、外部成交、人工下单、手动暂停都会改写它）；这个动作是否已经归集完成、是否被交易所拒到放弃，
 // 由 Collect 按引用号查全部划转记录得出（不限时间，重启不丢），这里的 collected 只是进程内的缓存，省掉每分钟重复查余额。
+// 动作结束超过 collectGiveUpAfter 且库里没有它的任何归集记录时不再归集。
 // 归集的账户有一个没就绪就先不记完成，下一轮再来。
 func (s *Service) collectAfterReduce(ctx context.Context, logical store.LogicalAccountRecord, accounts []store.TradingAccountRecord) error {
 	action, err := s.lastMarginAction(ctx, logical)
@@ -456,6 +462,16 @@ func (s *Service) collectAfterReduce(ctx context.Context, logical store.LogicalA
 			standard = append(standard, account)
 		}
 	}
+	if len(standard) > 0 && s.now().Sub(action.UpdatedAt) > collectGiveUpAfter {
+		recorded, err := s.hasCollectRecords(ctx, logical.SpaceID, action.ActionID, standard)
+		if err != nil {
+			return err
+		}
+		if !recorded {
+			s.markCollected(action.ActionID)
+			return nil
+		}
+	}
 	if len(standard) > 0 {
 		pending, err := false, ErrTransferUnavailable
 		if s.Collect != nil {
@@ -470,11 +486,29 @@ func (s *Service) collectAfterReduce(ctx context.Context, logical store.LogicalA
 			return nil
 		}
 	}
+	s.markCollected(action.ActionID)
+	return nil
+}
+
+func (s *Service) markCollected(actionID string) {
 	s.mu.Lock()
 	if s.collected == nil {
 		s.collected = make(map[string]struct{})
 	}
-	s.collected[action.ActionID] = struct{}{}
+	s.collected[actionID] = struct{}{}
 	s.mu.Unlock()
-	return nil
+}
+
+// hasCollectRecords 报告这个风控减仓动作在给定账户上是否有过归集记录（按引用号前缀查，不限时间）。
+func (s *Service) hasCollectRecords(ctx context.Context, spaceID, actionID string, accounts []store.TradingAccountRecord) (bool, error) {
+	for _, account := range accounts {
+		rows, err := s.Store.ListWalletTransfersByRefPrefix(ctx, spaceID, account.TradingAccountID, fmt.Sprintf("%s:%s:", actionID, store.TransferToFutures))
+		if err != nil {
+			return false, err
+		}
+		if len(rows) > 0 {
+			return true, nil
+		}
+	}
+	return false, nil
 }
