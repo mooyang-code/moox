@@ -14,6 +14,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution/paper"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store/storetest"
 	"github.com/stretchr/testify/require"
 )
 
@@ -48,7 +49,7 @@ func stockFlattenFixture(t *testing.T, total, available string) *operatorFixture
 		{Wallet: "UNIFIED", Asset: "600519.XSHG", Available: available, Total: total, Locked: "0"},
 	}
 	require.NoError(t, fixture.store.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.UpdateTradingAccountSync("space-1", "account-a", store.TradingAccountSyncState{
+		return storetest.SeedAccount(tx, "space-1", "account-a", storetest.AccountState{
 			Ready: true, Snapshot: account.Snapshot, SnapshotSourceTime: account.SnapshotSourceTime, LastSyncAt: account.LastSyncAt,
 		})
 	}))

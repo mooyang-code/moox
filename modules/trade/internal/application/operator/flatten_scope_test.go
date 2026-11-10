@@ -9,6 +9,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store/storetest"
 	"github.com/stretchr/testify/require"
 )
 
@@ -41,7 +42,7 @@ func newMixedFlattenFixture(t *testing.T) *operatorFixture {
 		{Wallet: "UNIFIED", Asset: "BTC", Available: "2", Total: "2"},
 	}
 	require.NoError(t, fixture.store.Transaction(ctx, func(tx *store.Tx) error {
-		return tx.UpdateTradingAccountSync("space-1", "account-a", store.TradingAccountSyncState{
+		return storetest.SeedAccount(tx, "space-1", "account-a", storetest.AccountState{
 			Ready: true, Snapshot: account.Snapshot, SnapshotSourceTime: fixture.now.UnixMilli(), LastSyncAt: fixture.now.UnixMilli(),
 		})
 	}))
@@ -114,7 +115,7 @@ func TestReduceFixesTargetsAtStartAndDoesNotReduceAgain(t *testing.T) {
 		{Wallet: "UNIFIED", Asset: "BTC", Available: "1", Total: "1"},
 	}
 	require.NoError(t, fixture.store.Transaction(context.Background(), func(tx *store.Tx) error {
-		if err := tx.UpdateTradingAccountSync("space-1", "account-a", store.TradingAccountSyncState{
+		if err := storetest.SeedAccount(tx, "space-1", "account-a", storetest.AccountState{
 			Ready: true, Snapshot: account.Snapshot, SnapshotSourceTime: fixture.now.UnixMilli(), LastSyncAt: fixture.now.UnixMilli(),
 		}); err != nil {
 			return err
@@ -230,7 +231,7 @@ func TestReduceReplayAfterPartialKeepsOriginalTargets(t *testing.T) {
 			{Wallet: "UNIFIED", Asset: "BTC", Available: "1.5", Total: "1.5"},
 		}
 		require.NoError(t, fixture.store.Transaction(context.Background(), func(tx *store.Tx) error {
-			if err := tx.UpdateTradingAccountSync("space-1", "account-a", store.TradingAccountSyncState{
+			if err := storetest.SeedAccount(tx, "space-1", "account-a", storetest.AccountState{
 				Ready: true, Snapshot: account.Snapshot, SnapshotSourceTime: fixture.now.UnixMilli(), LastSyncAt: fixture.now.UnixMilli(),
 			}); err != nil {
 				return err
@@ -270,7 +271,7 @@ func TestSingleInstrumentRemainingIgnoresOtherDelistedSpotAsset(t *testing.T) {
 	require.NoError(t, err)
 	account.Snapshot.Balances = append(account.Snapshot.Balances, store.AssetBalance{Wallet: "UNIFIED", Asset: "ETH", Available: "4", Total: "4"})
 	require.NoError(t, fixture.store.Transaction(ctx, func(tx *store.Tx) error {
-		return tx.UpdateTradingAccountSync("space-1", "account-a", store.TradingAccountSyncState{
+		return storetest.SeedAccount(tx, "space-1", "account-a", storetest.AccountState{
 			Ready: true, Snapshot: account.Snapshot, SnapshotSourceTime: fixture.now.UnixMilli(), LastSyncAt: fixture.now.UnixMilli(),
 		})
 	}))

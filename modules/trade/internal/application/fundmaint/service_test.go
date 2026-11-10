@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store/storetest"
 	"github.com/stretchr/testify/require"
 )
 
@@ -493,7 +494,7 @@ func TestStablecoinRebalancesOneDirectionPerRound(t *testing.T) {
 			return err
 		}
 		account.Snapshot.Balances = []store.AssetBalance{balance("USDT", "600"), balance("USDC", "300"), balance("FDUSD", "100")}
-		return tx.UpdateTradingAccountSync("space-1", "account-a", store.TradingAccountSyncState{
+		return storetest.SeedAccount(tx, "space-1", "account-a", storetest.AccountState{
 			Ready: true, Snapshot: account.Snapshot, SnapshotSourceTime: testNow.UnixMilli(), LastSyncAt: testNow.UnixMilli(),
 		})
 	}))

@@ -11,6 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store/storetest"
 	"github.com/stretchr/testify/require"
 )
 
@@ -39,7 +40,7 @@ func newWalletIntegration(t *testing.T) (*targetFixture, *wallettest.Exchange, f
 func markSpotSnapshot(t *testing.T, f *targetFixture, at time.Time) {
 	t.Helper()
 	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.UpdateTradingAccountSync("space-1", "account-a", store.TradingAccountSyncState{
+		return storetest.SeedAccount(tx, "space-1", "account-a", storetest.AccountState{
 			Ready: true, SnapshotSourceTime: at.UnixMilli(), LastSyncAt: at.UnixMilli(),
 			Snapshot:         store.TradingAccountSnapshot{WalletUpdatedAt: map[string]int64{"SPOT": at.UnixMilli()}, AvailableFunds: "100000"},
 			LeverageSettings: store.LeverageSettings{"*": "5"},

@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store/storetest"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
@@ -87,7 +88,7 @@ func (f *targetFixture) setSpotBalance(asset, total string) {
 	balances = append(balances, store.AssetBalance{Wallet: string(account.WalletFor("SPOT")), Asset: asset, Available: total, Total: total})
 	account.Snapshot.Balances = balances
 	require.NoError(f.t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.UpdateTradingAccountSync("space-1", "account-a", store.TradingAccountSyncState{
+		return storetest.SeedAccount(tx, "space-1", "account-a", storetest.AccountState{
 			Ready: true, Snapshot: account.Snapshot, SnapshotSourceTime: 1_900, LastSyncAt: 1_900,
 		})
 	}))

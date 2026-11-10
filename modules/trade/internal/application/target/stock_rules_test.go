@@ -13,6 +13,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution/paper"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store/storetest"
 	"github.com/stretchr/testify/require"
 )
 
@@ -147,7 +148,7 @@ func (f *stockFixture) holdingLocked(t *testing.T, asset, total, available, lock
 		Wallet: "UNIFIED", Asset: asset, Available: available, Total: total, Locked: locked,
 	})
 	require.NoError(t, f.store.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.UpdateTradingAccountSync(account.SpaceID, account.TradingAccountID, store.TradingAccountSyncState{
+		return storetest.SeedAccount(tx, account.SpaceID, account.TradingAccountID, storetest.AccountState{
 			Ready: true, Snapshot: account.Snapshot, SnapshotSourceTime: account.SnapshotSourceTime, LastSyncAt: account.LastSyncAt,
 		})
 	}))

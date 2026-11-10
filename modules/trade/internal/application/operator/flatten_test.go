@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store/storetest"
 	"github.com/stretchr/testify/require"
 )
 
@@ -272,9 +273,9 @@ func TestFlattenIncludesDisabledMembersAndKeepsSpotSettlementCash(t *testing.T) 
 		{Wallet: "UNIFIED", Asset: "BTC", Available: "1", Total: "1"},
 	}
 	require.NoError(t, fixture.store.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.UpdateTradingAccountSync(
+		return storetest.SeedAccount(tx,
 			account.SpaceID, account.TradingAccountID,
-			store.TradingAccountSyncState{
+			storetest.AccountState{
 				Ready: true, Snapshot: account.Snapshot,
 				SnapshotSourceTime: fixture.now.UnixMilli(),
 				LastSyncAt:         fixture.now.UnixMilli(),

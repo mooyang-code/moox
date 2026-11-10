@@ -509,42 +509,6 @@ func (tx *Tx) SetTradingAccountLeverage(
 	return requireUpdated(result.Error, result.RowsAffected, "Exchange account leverage")
 }
 
-type TradingAccountSyncState struct {
-	Ready              bool
-	LeverageSettings   LeverageSettings
-	FillCursors        FillCursors
-	Snapshot           TradingAccountSnapshot
-	SnapshotSourceTime int64
-	LastSyncAt         int64
-	LastReadyAt        int64
-	LastError          string
-}
-
-func (tx *Tx) UpdateTradingAccountSync(
-	spaceID string,
-	tradingAccountID string,
-	state TradingAccountSyncState,
-) error {
-	if blank(spaceID) || blank(tradingAccountID) || state.LastSyncAt <= 0 {
-		return fmt.Errorf("%w: incomplete Exchange account sync state", ErrInvalidRecord)
-	}
-	leverageJSON, err := encodeLeverageSettings(state.LeverageSettings)
-	if err != nil {
-		return err
-	}
-	fillCursorsJSON, err := encodeFillCursors(state.FillCursors)
-	if err != nil {
-		return err
-	}
-	snapshotJSON, err := encodeSnapshot(state.Snapshot)
-	if err != nil {
-		return err
-	}
-	result := tx.db.Exec(execUpdateTradingAccountSync, state.Ready, leverageJSON, fillCursorsJSON, snapshotJSON, state.SnapshotSourceTime,
-		state.LastSyncAt, state.LastReadyAt, state.LastError, spaceID, tradingAccountID)
-	return requireUpdated(result.Error, result.RowsAffected, "Exchange account sync state")
-}
-
 func (tx *Tx) UpdateTradingAccountFacts(
 	spaceID string,
 	tradingAccountID string,
@@ -1028,12 +992,6 @@ const (
 	execUpdateLeverageSettings = `UPDATE t_trading_accounts
 		SET c_leverage_settings_json = ?,
 			c_mtime = CURRENT_TIMESTAMP
-		WHERE c_space_id = ? AND c_trading_account_id = ?`
-	execUpdateTradingAccountSync = `UPDATE t_trading_accounts
-		SET c_ready = ?, c_leverage_settings_json = ?, c_fill_cursors_json = ?,
-			c_snapshot_json = ?,
-			c_snapshot_source_time = ?, c_last_sync_at = ?, c_last_ready_at = ?,
-			c_last_error = ?, c_mtime = CURRENT_TIMESTAMP
 		WHERE c_space_id = ? AND c_trading_account_id = ?`
 	execUpdateTradingAccountFacts = `UPDATE t_trading_accounts
 		SET c_fill_cursors_json = ?, c_snapshot_json = ?,

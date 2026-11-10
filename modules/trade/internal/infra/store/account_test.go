@@ -105,26 +105,28 @@ func TestTradingAccountScopedUpdatesDoNotOverwriteOtherResponsibilities(t *testi
 		Name: "renamed", CredentialSecretID: "secret-2",
 		SettlementAsset: "USDC", MarginMode: "CROSS", Status: "ENABLED",
 	}
-	syncState := TradingAccountSyncState{
-		Ready: true, LeverageSettings: LeverageSettings{"BTCUSDT": "5"},
-		Snapshot: TradingAccountSnapshot{
-			Equity: "100", AvailableFunds: "80", UsedMargin: "20",
-			MaintenanceMargin: "2", UnrealizedPnL: "-1",
-			ExchangeUpdatedAt: 1000,
-		},
-		SnapshotSourceTime: 1000, LastSyncAt: 1001, LastReadyAt: 1001,
+	snapshot := TradingAccountSnapshot{
+		Equity: "100", AvailableFunds: "80", UsedMargin: "20",
+		MaintenanceMargin: "2", UnrealizedPnL: "-1",
+		ExchangeUpdatedAt: 1000,
 	}
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
-		return tx.UpdateTradingAccountSync("space-1", "account-1", syncState)
+		if err := tx.SetTradingAccountLeverage("space-1", "account-1", LeverageSettings{"BTCUSDT": "5"}); err != nil {
+			return err
+		}
+		if err := tx.UpdateTradingAccountFacts("space-1", "account-1", nil, snapshot, 1000, 1001); err != nil {
+			return err
+		}
+		return tx.UpdateTradingAccountReadiness("space-1", "account-1", true, 1001, "")
 	}))
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
 		return tx.UpdateTradingAccountConfiguration("space-1", "account-1", staleConfig)
 	}))
-	syncState.Ready = false
-	syncState.LastSyncAt = 1002
-	syncState.LastError = "disconnected"
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
-		return tx.UpdateTradingAccountSync("space-1", "account-1", syncState)
+		if err := tx.UpdateTradingAccountFacts("space-1", "account-1", nil, snapshot, 1000, 1002); err != nil {
+			return err
+		}
+		return tx.UpdateTradingAccountReadiness("space-1", "account-1", false, 1002, "disconnected")
 	}))
 
 	got, err := s.GetTradingAccount(ctx, "space-1", "account-1")
@@ -136,6 +138,7 @@ func TestTradingAccountScopedUpdatesDoNotOverwriteOtherResponsibilities(t *testi
 	require.Equal(t, "5", got.LeverageSettings["BTCUSDT"])
 	require.Equal(t, "100", got.Snapshot.Equity)
 	require.Equal(t, int64(1002), got.LastSyncAt)
+	require.Equal(t, int64(1001), got.LastReadyAt, "未就绪的更新不改动上次就绪时间")
 	require.Equal(t, "disconnected", got.LastError)
 }
 

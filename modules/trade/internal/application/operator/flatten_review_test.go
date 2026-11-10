@@ -11,6 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store/storetest"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
 )
@@ -25,7 +26,7 @@ func spotHolding(t *testing.T, fixture *operatorFixture, total, available string
 		{Wallet: "UNIFIED", Asset: "BTC", Available: available, Total: total},
 	}
 	require.NoError(t, fixture.store.Transaction(context.Background(), func(tx *store.Tx) error {
-		if err := tx.UpdateTradingAccountSync(account.SpaceID, account.TradingAccountID, store.TradingAccountSyncState{
+		if err := storetest.SeedAccount(tx, account.SpaceID, account.TradingAccountID, storetest.AccountState{
 			Ready: true, Snapshot: account.Snapshot,
 			SnapshotSourceTime: fixture.now.UnixMilli(), LastSyncAt: fixture.now.UnixMilli(),
 		}); err != nil {

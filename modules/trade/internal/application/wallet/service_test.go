@@ -14,6 +14,7 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
+	"github.com/mooyang-code/moox/modules/trade/internal/infra/store/storetest"
 	"github.com/mooyang-code/moox/modules/trade/internal/telemetry"
 	"github.com/stretchr/testify/require"
 )
@@ -90,7 +91,7 @@ func (e *env) buys(quantity string) []Buy {
 func (e *env) markSynced(at time.Time) {
 	e.t.Helper()
 	require.NoError(e.t, e.store.Transaction(context.Background(), func(tx *store.Tx) error {
-		return tx.UpdateTradingAccountSync("space-1", "account-1", store.TradingAccountSyncState{
+		return storetest.SeedAccount(tx, "space-1", "account-1", storetest.AccountState{
 			LastSyncAt: e.now.UnixMilli(), SnapshotSourceTime: at.UnixMilli(),
 			Snapshot:         store.TradingAccountSnapshot{WalletUpdatedAt: map[string]int64{"SPOT": at.UnixMilli()}},
 			LeverageSettings: store.LeverageSettings{store.DefaultLeverageKey: "1"},
