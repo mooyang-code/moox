@@ -68,3 +68,31 @@ func TestLogicalFillPageReadsIndexInOrder(t *testing.T) {
 	require.Contains(t, plan, "USING INDEX idx_order_fills_logical_time (c_space_id=? AND c_logical_account_id=?)", statement)
 	require.NotContains(t, plan, "TEMP B-TREE", statement)
 }
+
+// 按组合查未结束订单（目标执行每轮都查好几次）：计数和取行都按状态走 idx_trade_orders_logical_state，
+// 不沿创建时间索引或来源索引把组合的历史订单读一遍。
+func TestOpenOrdersByLogicalUseStateIndex(t *testing.T) {
+	s := openTestStore(t)
+	type captured struct {
+		statement string
+		args      []any
+	}
+	var statements []captured
+	require.NoError(t, s.DBForTest().Callback().Query().After("gorm:query").Register("capture_open_orders", func(db *gorm.DB) {
+		statements = append(statements, captured{db.Statement.SQL.String(), append([]any(nil), db.Statement.Vars...)})
+	}))
+	for _, query := range []OrderQuery{
+		{LogicalAccountID: "logical-1", OnlyOpen: true, Limit: 1000},
+		{LogicalAccountID: "logical-1", OwnerType: "TARGET", OnlyOpen: true, Limit: 1000},
+		{LogicalAccountID: "logical-1", TradingAccountID: "account-1", InstrumentID: "BTC-USDT", OnlyOpen: true, Limit: 50},
+	} {
+		statements = nil
+		_, _, err := s.ListOrders(context.Background(), "space-1", query)
+		require.NoError(t, err)
+		require.Len(t, statements, 2, "一条计数、一条取行")
+		for _, item := range statements {
+			plan := queryPlan(t, s, item.statement, item.args...)
+			require.Contains(t, plan, "idx_trade_orders_logical_state (c_space_id=? AND c_logical_account_id=? AND c_state=?)", item.statement)
+		}
+	}
+}
