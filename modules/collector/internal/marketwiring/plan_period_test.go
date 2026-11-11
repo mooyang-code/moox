@@ -26,4 +26,9 @@ func TestPlanPeriodValidFollowsTheMarketClock(t *testing.T) {
 	require.False(t, planPeriodValid(stock, "5m", at(11, 10, 0)), "非交易日")
 	require.False(t, planPeriodValid(stock, "5m", time.Date(2028, 1, 5, 2, 0, 0, 0, time.UTC)), "超出日历覆盖期不执行")
 	require.True(t, planPeriodValid(marketfetch.PlanMarket{MarketID: "crypto"}, "5m", at(11, 3, 0)), "加密货币连续交易")
+	// 日线的周期是交易日期的 UTC 零点：10-13 00:00 UTC 触发采 10-12（周一）那根；周末、节假日的周期不执行。
+	day := func(d int) time.Time { return time.Date(2026, 10, d, 0, 0, 0, 0, time.UTC) }
+	require.True(t, planPeriodValid(stock, "1d", day(12)))
+	require.False(t, planPeriodValid(stock, "1d", day(11)), "周日没有日线")
+	require.False(t, planPeriodValid(stock, "1d", day(1)), "国庆休市")
 }

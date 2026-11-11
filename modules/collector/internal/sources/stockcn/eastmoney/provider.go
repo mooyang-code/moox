@@ -86,7 +86,7 @@ func (p *Provider) KlineSpec() marketdata.KlineSpec {
 	return marketdata.KlineSpec{
 		Markets:           []string{"stockcn"},
 		Exchanges:         []string{"XSHG", "XSHE", "XBSE"},
-		Frequencies:       []string{"1m", "5m"},
+		Frequencies:       []string{"1m", "5m", "1d"},
 		CompleteOHLCV:     true,
 		HasAmount:         true,
 		MaxBarsPerRequest: p.maxBars,
@@ -94,9 +94,14 @@ func (p *Provider) KlineSpec() marketdata.KlineSpec {
 		// 午后首根 13:01 / 13:05），首根含 09:25 开盘集合竞价的成交。
 		TimestampMode: marketdata.TimestampModeClose,
 		// 1m 只能取到当天：保持 24 小时。5m 实测能取到约 1500 根（约 31 个交易日），保守声明 30 个自然日。
-		History:            marketdata.KlineHistoryCapability{MaxLookback: 24 * time.Hour},
-		HistoryByFrequency: map[string]marketdata.KlineHistoryCapability{"5m": {MaxLookback: 30 * 24 * time.Hour}},
-		RateLimit:          p.rateLimit,
+		// 日线（klt=101）带 beg、end 时返回区间内的全部交易日、不受 lmt 限制，能取到上市首日（2026-11-11 实测
+		// 600519 取 2018-01-01～2026-10-31 一次返回 2140 根；300750 从 2018-06-11 上市首日起）：声明任意区间。
+		History: marketdata.KlineHistoryCapability{MaxLookback: 24 * time.Hour},
+		HistoryByFrequency: map[string]marketdata.KlineHistoryCapability{
+			"5m": {MaxLookback: 30 * 24 * time.Hour},
+			"1d": {SupportsArbitraryRange: true},
+		},
+		RateLimit: p.rateLimit,
 	}
 }
 
@@ -209,7 +214,13 @@ func (p *Provider) FetchKlines(ctx context.Context, req marketdata.KlineRequest)
 		if err != nil {
 			return nil, err
 		}
-		row, err := commonsrc.NormalizeIntradayKline(req.SubjectID, "eastmoney", req.ProviderSymbol, frequency, marketdata.TimestampModeClose, fields[0], openValue, highValue, lowValue, closeValue, volumeValue, amountValue, eastMoneyVolumeMultiplier, now, req.RequestID)
+		var row marketdata.NormalizedKline
+		if frequency == marketdata.FrequencyDay {
+			// 日线的时间标签是交易日期（2026-11-10），成交量单位同样是手。
+			row, err = commonsrc.NormalizeDailyKline(req.SubjectID, "eastmoney", req.ProviderSymbol, fields[0], openValue, highValue, lowValue, closeValue, volumeValue, amountValue, eastMoneyVolumeMultiplier, now, req.RequestID)
+		} else {
+			row, err = commonsrc.NormalizeIntradayKline(req.SubjectID, "eastmoney", req.ProviderSymbol, frequency, marketdata.TimestampModeClose, fields[0], openValue, highValue, lowValue, closeValue, volumeValue, amountValue, eastMoneyVolumeMultiplier, now, req.RequestID)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -321,8 +332,9 @@ const (
 // 2026-11-04 实测 clist fs=b:BK0500 返回 total=300、三页各 100 条）。
 var eastMoneyIndexBoards = map[string]string{"000300": "BK0500"}
 
-// eastMoneyKlt 是 K 线接口的 klt 参数（周期分钟数）。
+// eastMoneyKlt 是 K 线接口的 klt 参数：日内是周期分钟数，日线是 101。
 var eastMoneyKlt = map[marketdata.Frequency]string{
 	marketdata.FrequencyMinute: "1",
 	marketdata.Frequency5Min:   "5",
+	marketdata.FrequencyDay:    "101",
 }

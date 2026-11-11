@@ -106,14 +106,14 @@ func TestCoverageBeyondCalendarSaysWhy(t *testing.T) {
 }
 
 // 当前时间已过内嵌日历、索引里还有日历之后的数据时，日历的最后一个交易日已经写完：经提交路径也能回放到它，终点是
-// 次日的上海零点（区间仍按“不含结束日”的整日口径）。
+// 次日的日期键（区间仍按“不含结束日”的整日口径）。
 func TestReplayWindowIncludesLastCalendarDay(t *testing.T) {
 	now := time.Date(2028, 1, 10, 0, 0, 0, 0, time.UTC)
 	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {ViewID: "view_stock"}}, Bar: "1d", Calendar: "cn_stock"}
 	view := ViewInfo{ViewID: "view_stock", IndexedFrom: stockDay(t, 2026, 1, 5), IndexedTo: stockDay(t, 2028, 1, 8), SeriesBars: 5000}
 	end, err := ReplayWindow(resolved, nil, view, stockDay(t, 2027, 12, 1), stockDay(t, 2028, 3, 1), now)
 	if err != nil || !end.Equal(stockDay(t, 2028, 1, 1)) {
-		t.Fatalf("终点应是日历末日次日的上海零点：%s err=%v", end, err)
+		t.Fatalf("终点应是日历末日次日的日期键：%s err=%v", end, err)
 	}
 	bars, err := ReplayBars("cn_stock", "1d", stockDay(t, 2027, 12, 1), end, DefaultReplayMaxBars)
 	if err != nil || !bars[len(bars)-1].StorageStart.Equal(stockDay(t, 2027, 12, 31)) {
@@ -126,20 +126,39 @@ func TestReplayWindowIncludesLastCalendarDay(t *testing.T) {
 	}
 }
 
-// A 股日线的行键必须是交易日的上海零点：按 UTC 零点写行的数据集报错，而不是被静默规整后一直读不到行。
-func TestStockRowKeyMustBeShanghaiMidnight(t *testing.T) {
-	if _, err := FromStorageStart("cn_stock", "1d", time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC)); err == nil || !strings.Contains(err.Error(), "不是上海时间零点") {
-		t.Fatalf("UTC 零点的行键应报错：%v", err)
+// A 股日线的行键必须是交易日期的 UTC 零点（日期键，采集按它写行）：按上海零点写行的数据集报错，而不是被静默规整后
+// 一直读不到行。
+func TestStockRowKeyMustBeUTCMidnight(t *testing.T) {
+	if _, err := FromStorageStart("cn_stock", "1d", shanghaiMidnight(t, 2026, 10, 9)); err == nil || !strings.Contains(err.Error(), "不是 UTC 零点") {
+		t.Fatalf("上海零点的行键应报错：%v", err)
 	}
-	if _, err := FromStorageStart("cn_stock", "1d", stockDay(t, 2026, 10, 9)); err != nil {
-		t.Fatalf("上海零点的行键应能换算：%v", err)
+	period, err := FromStorageStart("cn_stock", "1d", time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("UTC 零点的行键应能换算：%v", err)
+	}
+	// bar_end 是当日上海 15:00 收盘；上一根是 10-08 的日期键。
+	if !period.BarEnd.Equal(time.Date(2026, 10, 9, 7, 0, 0, 0, time.UTC)) || !period.PreviousStart.Equal(time.Date(2026, 10, 8, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("周期边界不符：%+v", period)
+	}
+	// 收盘后求值得到的周期，行键就是采集写出的日期键。
+	closed, err := ClosedPeriod("cn_stock", "1d", time.Date(2026, 10, 9, 7, 0, 5, 0, time.UTC))
+	if err != nil || !closed.StorageStart.Equal(period.StorageStart) {
+		t.Fatalf("收盘后的周期应是当天的日期键：%+v err=%v", closed, err)
+	}
+	// 规整：周六的日期键向前取周五、向后取周一；历史回退按交易日。
+	floor, _ := FloorStorageStart("cn_stock", "1d", time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC))
+	ceil, _ := CeilStorageStart("cn_stock", "1d", time.Date(2026, 10, 10, 0, 0, 0, 0, time.UTC))
+	history, _ := HistoryStart("cn_stock", "1d", period.StorageStart, 3)
+	if !floor.Equal(period.StorageStart) || !ceil.Equal(time.Date(2026, 10, 12, 0, 0, 0, 0, time.UTC)) || !history.Equal(time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("规整与历史回退不符：floor=%s ceil=%s history=%s", floor, ceil, history)
 	}
 }
 
-// A 股日线按上海日期回放：UTC 零点输入的 [09-01, 10-01) 包含 09-01 到 09-30 的交易日；crypto 原样返回。
+// A 股日线按上海日期回放：UTC 零点输入的 [09-01, 10-01) 换成上海日期零点，包含 09-01 到 09-30 的交易日
+// （行键是日期键）；crypto 原样返回。
 func TestReplayRangeUsesShanghaiDates(t *testing.T) {
 	start, end, err := ReplayRange("cn_stock", "1d", time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC))
-	if err != nil || !start.Equal(stockDay(t, 2026, 9, 1)) || !end.Equal(stockDay(t, 2026, 10, 1)) {
+	if err != nil || !start.Equal(shanghaiMidnight(t, 2026, 9, 1)) || !end.Equal(shanghaiMidnight(t, 2026, 10, 1)) {
 		t.Fatalf("区间两端应换成上海日期零点：%s ~ %s err=%v", start, end, err)
 	}
 	bars, err := ReplayBars("cn_stock", "1d", start, end, DefaultReplayMaxBars)

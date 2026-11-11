@@ -65,7 +65,7 @@ func TestQueueTruncationIsNoted(t *testing.T) {
 func TestRecheckReportsCoverageReason(t *testing.T) {
 	repo := openStore(t)
 	shanghai := time.FixedZone("CST", 8*3600)
-	client := &fakeClient{marketType: "spot", indexedFrom: time.Date(2028, 1, 4, 0, 0, 0, 0, shanghai), indexedTo: time.Date(2028, 3, 1, 0, 0, 0, 0, shanghai)}
+	client := &fakeClient{marketType: "spot", indexedFrom: time.Date(2028, 1, 4, 0, 0, 0, 0, time.UTC), indexedTo: time.Date(2028, 3, 1, 0, 0, 0, 0, time.UTC)}
 	runner := &Runner{Store: repo, Client: client}
 	view, err := client.GetView(context.Background(), "crypto", "view_factor_a")
 	if err != nil {

@@ -23,7 +23,7 @@ rules:
 	resolved := input.Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]input.TaskBinding{"spot": {ViewID: "view_factor_a", FactorTaskID: "ftask_a", DatasetID: "ds"}}, Bar: "1d", Calendar: "cn_stock", Columns: map[string]input.ColumnBinding{}, Factors: map[string]string{}, ViewColumns: []string{"close"}}
 	h := newHarnessWith(t, brokenDSL, nil, resolved)
 	shanghai := time.FixedZone("CST", 8*3600)
-	periodStart := time.Date(2026, 10, 9, 0, 0, 0, 0, shanghai)
+	periodStart := time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC) // 日期键
 	h.now = time.Date(2026, 10, 9, 15, 5, 0, 0, shanghai)
 	message := &eventpb.EventMessage{EventId: "event-stock", EventName: "event.storage.view.data_ready", SpaceId: "space"}
 	payload := &storagepb.ViewDataReady{ViewId: "view_factor_a", Frequency: "1d", PeriodTime: periodStart.Unix(), Status: "complete", UniverseSubjectIds: []string{"600000.SH"}}

@@ -175,13 +175,13 @@ func TestNewAgeProbeQueriesToleranceWindow(t *testing.T) {
 		t.Fatalf("探针窗口不符：%+v", query)
 	}
 	// A 股日历按交易日回退：2026-10-12 往前三根依次是 10-09、10-08 和国庆节前的 09-30。
-	stockStart := time.Date(2026, 10, 11, 16, 0, 0, 0, time.UTC)
+	stockStart := time.Date(2026, 10, 12, 0, 0, 0, 0, time.UTC)
 	from, to, err := AgeWindow("cn_stock", "1d", stockStart, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if from.In(shanghai(t)).Format("2006-01-02") != "2026-09-30" || to.Add(-time.Nanosecond).In(shanghai(t)).Format("2006-01-02") != "2026-10-09" {
-		t.Fatalf("A 股探针窗口不符：%s ~ %s", from.In(shanghai(t)), to.In(shanghai(t)))
+	if !from.Equal(time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)) || !to.Add(-time.Nanosecond).Equal(time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("A 股探针窗口不符：%s ~ %s", from, to)
 	}
 }
 

@@ -72,3 +72,27 @@ func TestCheckCalendarHorizon(t *testing.T) {
 	require.ErrorIs(t, CheckCalendarHorizon("stockcn", cst("2028-01-01", "00:00"), 14), ErrCalendarExpired)
 	require.NoError(t, CheckCalendarHorizon("crypto", cst("2030-01-01", "00:00"), 14), "连续交易的市场没有日历")
 }
+
+// 日线的桶键是交易日期的 UTC 零点：只有交易日才有桶，上海零点（前一日 16:00 UTC）不是桶键。
+func TestTradingBarStockCN1dUsesDateKeys(t *testing.T) {
+	day := func(month time.Month, d int) time.Time { return time.Date(2026, month, d, 0, 0, 0, 0, time.UTC) }
+	cases := []struct {
+		at   time.Time
+		want bool
+		note string
+	}{
+		{day(10, 12), true, "周一"},
+		{day(10, 8), true, "国庆后第一个交易日"},
+		{day(10, 7), false, "国庆休市最后一天"},
+		{day(10, 10), false, "周六"},
+		{day(10, 11), false, "周日"},
+		{day(10, 1), false, "国庆休市"},
+		{day(10, 12).Add(-8 * time.Hour), false, "上海零点不是日线的键"},
+		{cst("2026-10-12", "09:30"), false, "开盘时刻不是日线的键"},
+	}
+	for _, tc := range cases {
+		got, err := TradingBar("stockcn", "1d", tc.at)
+		require.NoError(t, err, tc.note)
+		require.Equal(t, tc.want, got, tc.note)
+	}
+}

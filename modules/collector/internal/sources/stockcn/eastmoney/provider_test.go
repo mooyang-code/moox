@@ -104,10 +104,75 @@ func TestFetchKlinesRejectsUndeclaredFrequency(t *testing.T) {
 
 func TestKlineSpecDeclaresHistoryPerFrequency(t *testing.T) {
 	spec := New(Config{}).KlineSpec()
-	require.Equal(t, []string{"1m", "5m"}, spec.Frequencies)
+	require.Equal(t, []string{"1m", "5m", "1d"}, spec.Frequencies)
 	require.Equal(t, marketdata.TimestampModeClose, spec.TimestampMode)
 	require.Equal(t, 24*time.Hour, spec.HistoryFor("1m").MaxLookback)
 	require.Equal(t, 30*24*time.Hour, spec.HistoryFor("5m").MaxLookback)
+	require.True(t, spec.HistoryFor("1d").SupportsArbitraryRange, "日线按日期区间取，能取到上市首日")
+	require.NoError(t, spec.HistoryFor("1d").ValidateStart(time.Date(2026, 11, 11, 0, 0, 0, 0, time.UTC), time.Date(2024, 1, 2, 0, 0, 0, 0, time.UTC)))
+}
+
+// testdata/kline_1d_600519_20251103_20251115.json 是 2026-11-11 实际请求
+// push2his.eastmoney.com/api/qt/stock/kline/get?secid=1.600519&klt=101&fqt=0&beg=20251103&end=20251115&lmt=1205 的原始返回。
+func TestFetchKlines1dParsesRecordedResponse(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join("testdata", "kline_1d_600519_20251103_20251115.json"))
+	require.NoError(t, err)
+	client := newFixtureClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "push2his.eastmoney.com", r.URL.Host)
+		require.Equal(t, "101", r.URL.Query().Get("klt"))
+		require.Equal(t, "0", r.URL.Query().Get("fqt"), "不复权")
+		require.Equal(t, "20251103", r.URL.Query().Get("beg"))
+		require.Equal(t, "20251115", r.URL.Query().Get("end"))
+		_, _ = w.Write(body)
+	}))
+	now := cst("2026-11-11", "18:00")
+	provider := New(Config{HTTPClient: client, Now: func() time.Time { return now }})
+	rows, err := provider.FetchKlines(context.Background(), marketdata.KlineRequest{
+		SubjectID: "600519.XSHG", ProviderSymbol: "sh600519", Frequency: "1d", Limit: 12, Now: now, RequestID: "req-1d",
+		StartTime: time.Date(2025, 11, 3, 0, 0, 0, 0, time.UTC), EndTime: time.Date(2025, 11, 15, 0, 0, 0, 0, time.UTC),
+	})
+	require.NoError(t, err)
+	require.Len(t, rows, 10, "区间内 10 个交易日，周末没有行")
+	for _, row := range rows {
+		require.Equal(t, "1d", row.Frequency)
+		require.Equal(t, "stockcn_http", row.SourceID)
+		require.NoError(t, marketdata.ValidateNormalizedKline(row))
+	}
+	// 日期标签 2025-11-03 就是交易日期：键是它的 UTC 零点，bar_end 是键加 24 小时。
+	first := rows[0]
+	require.Equal(t, time.Date(2025, 11, 3, 0, 0, 0, 0, time.UTC), first.BarStart)
+	require.Equal(t, time.Date(2025, 11, 4, 0, 0, 0, 0, time.UTC), first.BarEnd)
+	require.Equal(t, cst("2025-11-03", "15:00"), first.ProviderTimestamp)
+	require.Equal(t, time.Date(2025, 11, 10, 0, 0, 0, 0, time.UTC), rows[5].BarStart, "11-07 周五之后是 11-10 周一")
+	require.Equal(t, time.Date(2025, 11, 14, 0, 0, 0, 0, time.UTC), rows[9].BarStart)
+	// 列顺序是 日期,开,收,高,低,成交量(手),成交额；成交量换成股：34548 手 = 3454800 股。
+	require.Equal(t, 1431.0, first.Open)
+	require.Equal(t, 1448.0, first.High)
+	require.Equal(t, 1420.1, first.Low)
+	require.Equal(t, 1435.0, first.Close)
+	require.Equal(t, 3454800.0, first.VolumeShares)
+	require.Equal(t, 4945310830.0, first.AmountCNY)
+}
+
+// 当天的日线在键加 24 小时之前不算收盘：不返回。
+func TestFetchKlines1dDropsTheUnfinishedDay(t *testing.T) {
+	client := newFixtureClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.False(t, r.URL.Query().Has("beg"))
+		require.Equal(t, "2", r.URL.Query().Get("lmt"))
+		_, _ = w.Write([]byte(`{"data":{"klines":["2026-11-10,1438.23,1439.00,1444.50,1431.26,23038,3316078849.00","2026-11-11,1445.00,1402.30,1445.62,1402.00,39848,5633865699.00"]}}`))
+	}))
+	now := cst("2026-11-11", "18:00")
+	provider := New(Config{HTTPClient: client, Now: func() time.Time { return now }})
+	rows, err := provider.FetchKlines(context.Background(), marketdata.KlineRequest{SubjectID: "600519.XSHG", ProviderSymbol: "sh600519", Frequency: "1d", Limit: 2, Now: now, RequestID: "req-1d"})
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Equal(t, time.Date(2026, 11, 10, 0, 0, 0, 0, time.UTC), rows[0].BarStart)
+
+	bad := New(Config{HTTPClient: newFixtureClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"data":{"klines":["2026-11-10 15:00,1,1,1,1,1,1"]}}`))
+	})), Now: func() time.Time { return now }})
+	_, err = bad.FetchKlines(context.Background(), marketdata.KlineRequest{SubjectID: "600519.XSHG", ProviderSymbol: "sh600519", Frequency: "1d", Limit: 2, Now: now, RequestID: "req-1d"})
+	require.ErrorIs(t, err, marketdata.ErrProtocol, "日线的标签必须是日期")
 }
 
 func TestFetchInstrumentSnapshotPaginatesSuccessfullyAndCountsExchanges(t *testing.T) {

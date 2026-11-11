@@ -29,3 +29,12 @@ tasks:
   creator: moox-setup
   collect_params:
     frequency: 5m
+- space_id: stockcn
+  task_id: dasftksvjhj2jom4vhhg
+  task_name: A 股 K 线 1d
+  data_type: kline
+  tag_ids: [cn_hs300]
+  enabled: false
+  creator: moox-setup
+  collect_params:
+    frequency: 1d
