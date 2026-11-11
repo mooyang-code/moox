@@ -237,10 +237,10 @@ func (s *Store) SettlePaperFunding(ctx context.Context, spaceID, tradingAccountI
 }
 
 // ListPaperFundingFees 返回 [start, end] 内最新的至多 limit 条资金费记录（按结算时刻倒序）和区间内的总条数。
-// 只有管理台的资金流水用，走只读连接。
+// 只有管理台的资金流水用，经只读视图调用。
 func (s *Store) ListPaperFundingFees(ctx context.Context, spaceID, tradingAccountID string, start, end int64, limit int) ([]PaperFundingFeeRecord, int64, error) {
 	var total int64
-	if err := s.readDB.WithContext(ctx).Raw(queryCountPaperFundingFees, spaceID, tradingAccountID, start, end).Scan(&total).Error; err != nil {
+	if err := s.db.WithContext(ctx).Raw(queryCountPaperFundingFees, spaceID, tradingAccountID, start, end).Scan(&total).Error; err != nil {
 		return nil, 0, err
 	}
 	var rows []struct {
@@ -254,7 +254,7 @@ func (s *Store) ListPaperFundingFees(ctx context.Context, spaceID, tradingAccoun
 		Amount           string `gorm:"column:c_amount"`
 		Asset            string `gorm:"column:c_asset"`
 	}
-	if err := s.readDB.WithContext(ctx).Raw(queryListPaperFundingFees, spaceID, tradingAccountID, start, end, limit).Scan(&rows).Error; err != nil {
+	if err := s.db.WithContext(ctx).Raw(queryListPaperFundingFees, spaceID, tradingAccountID, start, end, limit).Scan(&rows).Error; err != nil {
 		return nil, 0, err
 	}
 	records := make([]PaperFundingFeeRecord, 0, len(rows))
@@ -268,9 +268,9 @@ func (s *Store) ListPaperFundingFees(ctx context.Context, spaceID, tradingAccoun
 }
 
 // SummarizePaperFundingFees 按资产汇总 [start, end] 内的资金费，逐行用十进制累加（金额是字符串，不能让数据库按浮点求和），按资产排序。
-// 管理台的收益拆解直接用它（不经过流水翻页，记录再多也不截断），走只读连接。
+// 管理台的收益拆解直接用它（不经过流水翻页，记录再多也不截断），经只读视图调用。
 func (s *Store) SummarizePaperFundingFees(ctx context.Context, spaceID, tradingAccountID string, start, end int64) ([]AssetAmount, error) {
-	rows, err := s.readDB.WithContext(ctx).Raw(querySummarizePaperFundingFees, spaceID, tradingAccountID, start, end).Rows()
+	rows, err := s.db.WithContext(ctx).Raw(querySummarizePaperFundingFees, spaceID, tradingAccountID, start, end).Rows()
 	if err != nil {
 		return nil, err
 	}

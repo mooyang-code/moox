@@ -11,10 +11,10 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 )
 
-// readOnlyFillStore 是能在只读连接上查成交的事实存储（*store.Store 实现）。流水只有管理台查，
-// 走只读连接，不占交易执行用的读写连接；测试替身没有实现时用 ListFills。
-type readOnlyFillStore interface {
-	ListFillsReadOnly(context.Context, string, store.FillQuery) ([]store.FillRecord, int64, error)
+// readOnlySource 是能给出只读视图的事实存储（*store.Store 实现）。流水只有管理台查，经只读视图读，
+// 不占交易执行用的读写连接；测试替身没有实现时直接读 a.Store。
+type readOnlySource interface {
+	ReadOnly() *store.Store
 }
 
 // fundingLedgerStore 是能读模拟盘资金费记录的事实存储（*store.Store 实现）；测试替身没有实现时流水里没有资金费。
@@ -35,11 +35,11 @@ func (a *Adapter) ListLedger(ctx context.Context, query exchange.LedgerQuery) (e
 	if query.Limit <= 0 || query.End.Before(query.Start) {
 		return exchange.LedgerPage{}, errors.New("paper adapter: invalid ledger query")
 	}
-	listFills := a.Store.ListFills
-	if source, ok := a.Store.(readOnlyFillStore); ok {
-		listFills = source.ListFillsReadOnly
+	facts := a.Store
+	if source, ok := a.Store.(readOnlySource); ok {
+		facts = source.ReadOnly()
 	}
-	fills, total, err := listFills(ctx, a.Account.SpaceID, store.FillQuery{
+	fills, total, err := facts.ListFills(ctx, a.Account.SpaceID, store.FillQuery{
 		TradingAccountID: a.Account.TradingAccountID, Market: string(query.Market),
 		StartTime: query.Start.UnixMilli(), EndTime: query.End.UnixMilli(), Limit: query.Limit,
 	})
@@ -70,7 +70,7 @@ func (a *Adapter) ListLedger(ctx context.Context, query exchange.LedgerQuery) (e
 			})
 		}
 	}
-	if source, ok := a.Store.(fundingLedgerStore); ok && (query.Market == exchange.MarketTypeUnspecified || query.Market == exchange.MarketTypeSwap) {
+	if source, ok := facts.(fundingLedgerStore); ok && (query.Market == exchange.MarketTypeUnspecified || query.Market == exchange.MarketTypeSwap) {
 		fees, feeTotal, err := source.ListPaperFundingFees(ctx, a.Account.SpaceID, a.Account.TradingAccountID, query.Start.UnixMilli(), query.End.UnixMilli(), query.Limit)
 		if err != nil {
 			return exchange.LedgerPage{}, err

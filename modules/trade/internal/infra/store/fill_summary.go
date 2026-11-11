@@ -42,7 +42,7 @@ const (
 )
 
 // SummarizeFills 逐行读成交，用十进制累加（成交表里的金额是字符串，不能让数据库按浮点求和）。
-// 只有管理台的收益拆解用，走只读连接。
+// 只有管理台的收益拆解用，经只读视图调用。
 func (s *Store) SummarizeFills(ctx context.Context, spaceID string, query FillSummaryQuery) (FillSummary, error) {
 	if (query.TradingAccountID == "") == (query.LogicalAccountID == "") {
 		return FillSummary{}, fmt.Errorf("%w: 汇总成交要且只要给执行账户或组合账户之一", ErrInvalidRecord)
@@ -54,9 +54,9 @@ func (s *Store) SummarizeFills(ctx context.Context, spaceID string, query FillSu
 	var rows *sql.Rows
 	var err error
 	if query.TradingAccountID != "" {
-		rows, err = s.readDB.WithContext(ctx).Raw(sqlSummarizeFillsByAccount, spaceID, query.TradingAccountID, query.StartTime, end).Rows()
+		rows, err = s.db.WithContext(ctx).Raw(sqlSummarizeFillsByAccount, spaceID, query.TradingAccountID, query.StartTime, end).Rows()
 	} else {
-		rows, err = s.readDB.WithContext(ctx).Raw(sqlSummarizeFillsByLogical, spaceID, query.LogicalAccountID, query.StartTime, end).Rows()
+		rows, err = s.db.WithContext(ctx).Raw(sqlSummarizeFillsByLogical, spaceID, query.LogicalAccountID, query.StartTime, end).Rows()
 	}
 	if err != nil {
 		return FillSummary{}, err

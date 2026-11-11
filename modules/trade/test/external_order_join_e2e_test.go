@@ -51,7 +51,7 @@ func TestExternalOrderPlacedBeforeJoiningIsVisibleAndCancelable(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, orders, 1)
 	require.Equal(t, imported.OrderID, orders[0].OrderID)
-	readiness, err := logical.Readiness(ctx, testSpace, testLogicalAccount)
+	readiness, err := logical.Readiness(ctx, logical.Store, testSpace, testLogicalAccount)
 	require.NoError(t, err)
 	require.False(t, readiness.Ready)
 	require.True(t, containsText(readiness.Reasons, "E2E 有外部挂单 "+imported.OrderID), readiness.Reasons)

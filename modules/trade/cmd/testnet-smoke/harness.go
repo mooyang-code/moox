@@ -194,6 +194,7 @@ func (h *liveHarness) waitReady(ctx context.Context) error {
 		if snapshot.Reconciled && snapshot.Enabled == 1 && snapshot.Ready == 1 {
 			readiness, err := h.logical.Readiness(
 				ctx,
+				h.logical.Store,
 				smokeSpaceID,
 				h.identity.LogicalAccountID,
 			)

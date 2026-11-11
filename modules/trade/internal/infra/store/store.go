@@ -32,12 +32,11 @@ var (
 )
 
 type Store struct {
-	// db 是唯一的读写连接，交易执行的读写都走它。
+	// db 是这个 Store 的连接：Open 返回的 Store 是唯一的读写连接，交易执行的读写都走它；
+	// 只读视图（见 ReadOnly）是同一个库文件上的只读连接池。
 	db *gorm.DB
-	// readDB 是同一个库文件上的只读连接池，管理台的列表、汇总类查询走它：WAL 模式下读不挡写，
-	// 管理台的大查询不再和交易执行的写入排同一个连接。只读连接看得到所有已提交的数据，
-	// 看不到别处还没提交的事务，所以交易执行路径的查询仍走 db。
-	readDB                *gorm.DB
+	// readOnly 是只读视图；内存库没有单独的只读连接，为空，ReadOnly 返回自己。
+	readOnly              *Store
 	accountLocks          sync.Map
 	logicalLocks          sync.Map
 	executionLocks        sync.Map
@@ -49,9 +48,21 @@ type Store struct {
 	fundWarned map[string]time.Time
 
 	// 很少变化、写入点明确的数据缓存在内存里：标的定义按场所缓存整份，账户身份按账户缓存。
-	// 标的和账户的写入都会清掉对应缓存，下单时不必每笔都查库。
-	instrumentSets cache.Memo[instrumentScope, *instrumentSet]
-	identities     cache.Memo[accountKey, tradingAccountIdentity]
+	// 标的和账户的写入都会清掉对应缓存，下单时不必每笔都查库。只读视图和读写连接共用同一份缓存，
+	// 写入清缓存时两边一起清。
+	instrumentSets *cache.Memo[instrumentScope, *instrumentSet]
+	identities     *cache.Memo[accountKey, tradingAccountIdentity]
+}
+
+// ReadOnly 返回只读视图：同一个库文件上的只读连接池，管理台的查询接口经它读库。WAL 模式下读不挡写，
+// 管理台的查询不再和交易执行的写入排同一个读写连接。只读视图看得到所有已提交的数据，看不到还没提交的事务，
+// 所以交易执行路径和写接口的读取仍走读写连接。经只读视图写库会被 SQLite 拒绝；它的账户锁、组合锁和读写连接
+// 不是同一套，不能经它加锁。内存库没有单独的只读连接，返回自己。
+func (s *Store) ReadOnly() *Store {
+	if s.readOnly == nil {
+		return s
+	}
+	return s.readOnly
 }
 
 // InvalidateCaches 清空内存缓存，用于绕过存储层直接改表之后（例如系统重置清表）。
@@ -104,16 +115,22 @@ func Open(path string) (*Store, error) {
 		_ = sqlDB.Close()
 		return nil, err
 	}
-	// 内存库每个连接各是一个独立的库，只读查询直接用主连接。
+	s := &Store{
+		db:             db,
+		instrumentSets: &cache.Memo[instrumentScope, *instrumentSet]{},
+		identities:     &cache.Memo[accountKey, tradingAccountIdentity]{},
+	}
+	// 内存库每个连接各是一个独立的库，只读查询直接用读写连接。
 	if path == ":memory:" {
-		return &Store{db: db, readDB: db}, nil
+		return s, nil
 	}
 	readDB, err := openReadOnly(path)
 	if err != nil {
 		_ = sqlDB.Close()
 		return nil, err
 	}
-	return &Store{db: db, readDB: readDB}, nil
+	s.readOnly = &Store{db: readDB, instrumentSets: s.instrumentSets, identities: s.identities}
+	return s, nil
 }
 
 // openReadOnly 在同一个库文件上打开只读连接池：query_only 拒绝一切写入；WAL 模式已经记在库文件里，不用再设。
@@ -334,10 +351,10 @@ func (s *Store) Close() error {
 	if err != nil {
 		return err
 	}
-	if s.readDB == s.db {
+	if s.readOnly == nil {
 		return sqlDB.Close()
 	}
-	readDB, err := s.readDB.DB()
+	readDB, err := s.readOnly.db.DB()
 	if err != nil {
 		return err
 	}

@@ -111,7 +111,7 @@ func TestFillsCarryOrderLogicalAccount(t *testing.T) {
 	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
 		return tx.DeleteLogicalAccountMember("space-1", "logical-1", "account-1")
 	}))
-	fills, total, err := s.ListFillsReadOnly(ctx, "space-1", FillQuery{LogicalAccountID: "logical-1", Limit: 2})
+	fills, total, err := s.ReadOnly().ListFills(ctx, "space-1", FillQuery{LogicalAccountID: "logical-1", Limit: 2})
 	require.NoError(t, err)
 	require.Equal(t, int64(3), total, "移出的成员的历史成交仍算在组合下")
 	require.Equal(t, []string{"f3", "f2"}, []string{fills[0].FillID, fills[1].FillID}, "按成交时间倒序分页")

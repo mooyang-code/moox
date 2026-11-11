@@ -72,8 +72,9 @@ func (s *ConsoleServer) ListAccountLedger(
 	if s.Store == nil {
 		return &tradepb.ListAccountLedgerRsp{RetInfo: errorInfo(errServiceUnavailable)}, nil
 	}
+	st := s.Store.ReadOnly()
 	// 先按空间读一次账户，保证只能查自己空间的账户。
-	account, err := s.Store.GetTradingAccount(ctx, spaceID, req.GetTradingAccountId())
+	account, err := st.GetTradingAccount(ctx, spaceID, req.GetTradingAccountId())
 	if err != nil {
 		return &tradepb.ListAccountLedgerRsp{RetInfo: errorInfo(err)}, nil
 	}
@@ -107,7 +108,7 @@ func (s *ConsoleServer) ListAccountLedger(
 		return &tradepb.ListAccountLedgerRsp{RetInfo: errorInfo(err)}, nil
 	}
 	// 普通账户的钱包划转记在本地划转表里，合并进流水（流水本身仍然即查、不落库）。
-	transfers, err := s.Store.ListWalletTransfersByAccount(ctx, spaceID, req.GetTradingAccountId(), start.UnixMilli(), end.UnixMilli())
+	transfers, err := st.ListWalletTransfersByAccount(ctx, spaceID, req.GetTradingAccountId(), start.UnixMilli(), end.UnixMilli())
 	if err != nil {
 		return &tradepb.ListAccountLedgerRsp{RetInfo: errorInfo(err)}, nil
 	}

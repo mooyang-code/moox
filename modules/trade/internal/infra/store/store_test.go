@@ -21,34 +21,76 @@ func openTestStore(t *testing.T) *Store {
 	return s
 }
 
-// 文件库的只读连接池是单独的句柄：看得到主连接已提交的数据，拒绝写入；内存库直接复用主连接。
-func TestReadOnlyHandle(t *testing.T) {
+// 文件库的只读视图是单独的只读连接池：看得到读写连接已提交的数据，拒绝写入，读写连接上开着没提交的事务时照样能读；
+// 和读写连接共用标的缓存。内存库没有单独的只读连接，只读视图就是自己。
+func TestReadOnlyView(t *testing.T) {
+	ctx := context.Background()
 	s := openTestStore(t)
-	require.NotSame(t, s.db, s.readDB)
-	seedLogicalAccount(t, s, "")
-	var count int64
-	require.NoError(t, s.readDB.Raw(`SELECT COUNT(*) FROM t_logical_accounts`).Scan(&count).Error)
-	require.Equal(t, int64(1), count, "只读连接看得到已提交的数据")
-	require.Error(t, s.readDB.Exec(`CREATE TABLE t_read_only_probe (c_id INTEGER)`).Error, "只读连接不能写")
+	ro := s.ReadOnly()
+	require.NotSame(t, s, ro)
+	require.Same(t, ro, ro.ReadOnly())
 	var queryOnly int
-	require.NoError(t, s.readDB.Raw(`PRAGMA query_only`).Scan(&queryOnly).Error)
+	require.NoError(t, ro.db.Raw(`PRAGMA query_only`).Scan(&queryOnly).Error)
 	require.Equal(t, 1, queryOnly)
+	seedLogicalAccount(t, s, "")
+	record, err := ro.GetLogicalAccount(ctx, "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Equal(t, "logical", record.Name, "只读视图看得到已提交的数据")
 
-	// 读写连接上有没提交的事务时，管理台查询照样能返回：它们不排读写连接
-	require.NoError(t, s.db.Transaction(func(*gorm.DB) error {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	err = ro.Transaction(ctx, func(tx *Tx) error {
+		return tx.CreateLogicalAccount(LogicalAccountRecord{
+			SpaceID: "space-1", LogicalAccountID: "logical-2", Name: "other", ExecutionMode: "PAPER",
+			SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "测试",
+		})
+	})
+	require.ErrorContains(t, err, "readonly", "经只读视图写库会被拒绝")
+
+	// 读写连接上开着没提交的事务时，经只读视图的查询照样在短超时内返回，读到的是已提交的数据；
+	// 同样的查询走读写连接要排在这个事务后面，等到超时。
+	require.NoError(t, s.db.Transaction(func(tx *gorm.DB) error {
+		require.NoError(t, tx.Exec(`UPDATE t_logical_accounts SET c_name = 'pending'`).Error)
+		blocked, cancelBlocked := context.WithTimeout(ctx, 100*time.Millisecond)
+		defer cancelBlocked()
+		_, err := s.GetLogicalAccount(blocked, "space-1", "logical-1")
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+
+		short, cancel := context.WithTimeout(ctx, 2*time.Second)
 		defer cancel()
-		_, _, err := s.ListFillsReadOnly(ctx, "space-1", FillQuery{Limit: 10})
-		return err
+		started := time.Now()
+		record, err := ro.GetLogicalAccount(short, "space-1", "logical-1")
+		require.NoError(t, err)
+		require.Equal(t, "logical", record.Name, "看不到没提交的修改")
+		_, err = ro.ListLogicalAccountMembers(short, "space-1", "logical-1", true)
+		require.NoError(t, err)
+		_, err = ro.ListTradingAccounts(short, "space-1")
+		require.NoError(t, err)
+		_, err = ro.ListPositionsByInstrument(short, "space-1", "account-1", "")
+		require.NoError(t, err)
+		_, _, err = ro.ListFills(short, "space-1", FillQuery{Limit: 10})
+		require.NoError(t, err)
+		require.Less(t, time.Since(started), time.Second)
+		return nil
 	}))
+
+	// 只读视图先读过一次标的（缓存里是空的），读写连接写入标的后，只读视图读到新的标的
+	instruments, err := ro.ListInstruments(ctx, "BINANCE", "SPOT")
+	require.NoError(t, err)
+	require.Empty(t, instruments)
+	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
+		return tx.UpsertInstrument(InstrumentRecord{
+			Exchange: "BINANCE", MarketType: "SPOT", ExchangeSymbol: "BTCUSDT",
+			BaseAsset: "BTC", QuoteAsset: "USDT", PriceTick: "0.01",
+			ExchangeQuantityStep: "0.0001", Status: "TRADING",
+		})
+	}))
+	instruments, err = ro.ListInstruments(ctx, "BINANCE", "SPOT")
+	require.NoError(t, err)
+	require.Len(t, instruments, 1)
 
 	memory, err := Open(":memory:")
 	require.NoError(t, err)
 	defer func() { require.NoError(t, memory.Close()) }()
-	require.Same(t, memory.db, memory.readDB)
-	_, total, err := memory.ListFillsReadOnly(context.Background(), "space-1", FillQuery{Limit: 10})
-	require.NoError(t, err)
-	require.Zero(t, total)
+	require.Same(t, memory, memory.ReadOnly())
 }
 
 func TestOpenConfiguresSQLiteAndTransactionRollback(t *testing.T) {

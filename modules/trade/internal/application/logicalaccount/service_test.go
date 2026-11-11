@@ -56,11 +56,11 @@ func TestManualControlRejectsIdempotentClaimAndResume(t *testing.T) {
 func TestManualReadinessUsesActualMembersWithoutStrategyOwner(t *testing.T) {
 	s, db := logicalAccountServiceFixture(t)
 	require.NoError(t, db.DBForTest().Exec("UPDATE t_logical_accounts SET c_control_mode = 'MANUAL', c_owner_instance_id = NULL").Error)
-	ready, err := s.Readiness(context.Background(), "space-1", "logical-1")
+	ready, err := s.Readiness(context.Background(), s.Store, "space-1", "logical-1")
 	require.NoError(t, err)
 	require.True(t, ready.Ready, ready.Reasons)
 	require.NoError(t, db.DBForTest().Exec("DELETE FROM t_logical_account_members").Error)
-	ready, err = s.Readiness(context.Background(), "space-1", "logical-1")
+	ready, err = s.Readiness(context.Background(), s.Store, "space-1", "logical-1")
 	require.NoError(t, err)
 	require.False(t, ready.Ready)
 }
@@ -156,14 +156,14 @@ func TestLogicalReadinessRequiresEveryEnabledMemberAndTargetMetadata(t *testing.
 	acceptSessionTarget(t, service, tradeStore, "target-1")
 
 	readiness, err := service.Readiness(
-		context.Background(), "space-1", "logical-1",
+		context.Background(), service.Store, "space-1", "logical-1",
 	)
 	require.NoError(t, err)
 	require.True(t, readiness.Ready)
 
 	setLogicalFixtureReady(t, tradeStore, "account-b", false)
 	readiness, err = service.Readiness(
-		context.Background(), "space-1", "logical-1",
+		context.Background(), service.Store, "space-1", "logical-1",
 	)
 	require.NoError(t, err)
 	require.False(t, readiness.Ready)
@@ -184,7 +184,7 @@ func TestLogicalReadinessRejectsTargetForDifferentSettlementAsset(t *testing.T) 
 	acceptSessionTarget(t, service, tradeStore, "target-usdc")
 
 	readiness, err := service.Readiness(
-		context.Background(), "space-1", "logical-1",
+		context.Background(), service.Store, "space-1", "logical-1",
 	)
 	require.NoError(t, err)
 	require.False(t, readiness.Ready)
@@ -431,7 +431,7 @@ func TestModernReadinessRejectsDifferentSession(t *testing.T) {
 		require.True(t, changed)
 		return err
 	}))
-	readiness, err := service.Readiness(context.Background(), "space-1", "logical-1")
+	readiness, err := service.Readiness(context.Background(), service.Store, "space-1", "logical-1")
 	require.NoError(t, err)
 	require.False(t, readiness.Ready)
 	require.Contains(t, readiness.Reasons, "目标所属会话不再持有组合账户")
