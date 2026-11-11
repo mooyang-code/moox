@@ -394,6 +394,19 @@ func (a *Adapter) instrument(symbol string) (exchange.Instrument, error) {
 	return instrument, nil
 }
 
+// unlisted 报告永续合约不在已加载的本地标的表里（USDC 本位、币本位等）。持仓、挂单、成交接口和私有流
+// 会返回整个账户的永续，这些合约不归 moox 管，调用方跳过，不换算张数也不报错。
+// 标的表还没加载时不算，照旧报“未加载”，免得把全部持仓当成没有。
+func (a *Adapter) unlisted(symbol string) bool {
+	if a.config.Market() != exchange.MarketTypeSwap {
+		return false
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	_, found := a.instruments[a.key(symbol)]
+	return !found && len(a.instruments) > 0
+}
+
 func (a *Adapter) toExchangeQuantity(symbol string, base shared.Decimal) (shared.Decimal, error) {
 	if a.config.Market() == exchange.MarketTypeSpot {
 		return base, nil
@@ -586,6 +599,9 @@ func (a *Adapter) ListPositionSnapshots(ctx context.Context) ([]exchange.Positio
 				SignedQuantity: contracts, MarginMode: exchange.MarginModeIsolated,
 				ExchangeUpdatedAt: millisString(row.UTime),
 			})
+			continue
+		}
+		if a.unlisted(row.InstID) {
 			continue
 		}
 		quantity, err := a.toBaseQuantity(row.InstID, contracts)
@@ -890,7 +906,7 @@ func (a *Adapter) ListRecentFills(
 	normalized := make([]billedFill, 0, len(rows))
 	for index := len(rows) - 1; index >= 0; index-- {
 		row := rows[index]
-		if cursor != "" && compareBillID(row.BillID, cursor) <= 0 {
+		if (cursor != "" && compareBillID(row.BillID, cursor) <= 0) || a.unlisted(row.InstID) {
 			continue
 		}
 		fill, err := a.fill(row)
@@ -912,6 +928,10 @@ func (a *Adapter) ListRecentFills(
 	return out, next, nil
 }
 
+// fillsRequestInterval 是 fills-history 相邻两次请求的最小间隔：该接口限 10 次/2 秒（按用户），同步按标的逐个查、
+// 一个标的还可能翻页。不记上次请求时间，每次请求前都先等一个间隔，每个标的多花 220 毫秒。测试里改小。
+var fillsRequestInterval = 220 * time.Millisecond
+
 func (a *Adapter) fillPage(
 	ctx context.Context,
 	symbol string,
@@ -919,6 +939,13 @@ func (a *Adapter) fillPage(
 	cursor string,
 	limit int,
 ) ([]fillPayload, error) {
+	timer := time.NewTimer(fillsRequestInterval)
+	select {
+	case <-ctx.Done():
+		timer.Stop()
+		return nil, ctx.Err()
+	case <-timer.C:
+	}
 	query := url.Values{
 		"instType": []string{a.instrumentType()},
 		"instId":   []string{symbol},
@@ -987,6 +1014,9 @@ func (a *Adapter) SetMarginMode(
 func (a *Adapter) orders(payload []orderPayload) ([]exchange.Order, error) {
 	out := make([]exchange.Order, 0, len(payload))
 	for _, row := range payload {
+		if a.unlisted(row.InstID) {
+			continue
+		}
 		order, err := a.order(row)
 		if err != nil {
 			return nil, err

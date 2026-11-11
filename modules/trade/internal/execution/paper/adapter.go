@@ -499,19 +499,11 @@ func (a *Adapter) ListOpenOrders(ctx context.Context) ([]exchange.Order, error) 
 	}
 	return result, nil
 }
-func (a *Adapter) ListRecentFills(ctx context.Context, key exchange.SymbolKey, _ string) ([]exchange.Fill, string, error) {
-	if a.Store == nil {
-		return nil, "", nil
-	}
-	rows, _, err := a.Store.ListFills(ctx, a.Account.SpaceID, store.FillQuery{TradingAccountID: a.Account.TradingAccountID, Market: string(key.Market), ExchangeSymbol: key.Symbol, Limit: 1000})
-	if err != nil {
-		return nil, "", storageError(err)
-	}
-	result := make([]exchange.Fill, 0, len(rows))
-	for _, row := range rows {
-		result = append(result, fillFromRecord(row))
-	}
-	return result, "", nil
+
+// ListRecentFills 对模拟盘恒为空：模拟盘成交是撮合器在同一事务里和余额、持仓一起写进库的，
+// 同步时再把库里的成交读出来逐笔入账只会全部判为重复、白白持锁，没有任何作用。
+func (a *Adapter) ListRecentFills(context.Context, exchange.SymbolKey, string) ([]exchange.Fill, string, error) {
+	return nil, "", nil
 }
 func (a *Adapter) GetOrder(ctx context.Context, key exchange.SymbolKey, clientID string) (exchange.Order, error) {
 	if a.Store == nil {
@@ -578,10 +570,6 @@ func orderFromRecord(row store.OrderRecord) exchange.Order {
 		limit = &value
 	}
 	return exchange.Order{ExchangeOrderID: row.ExchangeOrderID, ClientOrderID: row.ClientOrderID, Market: exchange.MarketType(row.MarketType), ExchangeSymbol: row.ExchangeSymbol, OrderType: exchange.OrderType(row.OrderType), TimeInForce: exchange.TimeInForce(row.TimeInForce), Side: exchange.Side(row.Side), PositionSide: exchange.PositionSide(row.PositionSide), Quantity: decimalOrZero(row.Quantity), LimitPrice: limit, FilledQuantity: decimalOrZero(row.FilledQuantity), AveragePrice: decimalOrZero(row.AveragePrice), ReduceOnly: row.ReduceOnly, Status: exchange.OrderStatus(row.State), CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt}
-}
-
-func fillFromRecord(row store.FillRecord) exchange.Fill {
-	return exchange.Fill{ExchangeTradeID: row.ExchangeTradeID, ExchangeOrderID: row.ExchangeOrderID, Market: exchange.MarketType(row.MarketType), ExchangeSymbol: row.ExchangeSymbol, Side: exchange.Side(row.Side), PositionSide: exchange.PositionSide(row.PositionSide), Quantity: decimalOrZero(row.Quantity), Price: decimalOrZero(row.Price), Fee: decimalOrZero(row.Fee), FeeAsset: row.FeeAsset, RealizedPnL: decimalOrZero(row.RealizedPnL), SettlementAsset: row.SettlementAsset, LiquidityRole: row.Role, TradedAt: time.UnixMilli(row.TradedAt).UTC()}
 }
 
 func decimalOrZero(raw string) shared.Decimal {

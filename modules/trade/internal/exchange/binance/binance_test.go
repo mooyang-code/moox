@@ -460,6 +460,70 @@ func limitOrderRequest() exchange.OrderRequest {
 	return request
 }
 
+// 合约账户里有本地标的表外的合约（USDC 本位永续、交割合约）：持仓、挂单和私有流都跳过它们；
+// 账户快照的未实现盈亏仍按整个账户算；标的表还没加载时不过滤。
+func TestSwapSkipsInstrumentsOutsideLoadedTable(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/fapi/v1/positionSide/dual":
+			_, _ = io.WriteString(w, `{"dualSidePosition":false}`)
+		case "/fapi/v3/positionRisk":
+			_, _ = io.WriteString(w, `[{"symbol":"BTCUSDC","positionSide":"BOTH","positionAmt":"2","entryPrice":"100","markPrice":"95","unRealizedProfit":"-5","isolatedWallet":"0","updateTime":1700000000000},`+
+				`{"symbol":"BTCUSDT","positionSide":"BOTH","positionAmt":"1","entryPrice":"100","markPrice":"90","unRealizedProfit":"-10","isolatedWallet":"0","updateTime":1700000000000}]`)
+		case "/fapi/v1/openOrders":
+			_, _ = io.WriteString(w, `[{"orderId":2,"clientOrderId":"manual","symbol":"BTCUSDT_250328","type":"LIMIT","timeInForce":"GTC","side":"BUY","positionSide":"BOTH","origQty":"1","executedQty":"0","price":"90","status":"NEW","time":1,"updateTime":2},`+
+				`{"orderId":1,"clientOrderId":"cid","symbol":"BTCUSDT","type":"LIMIT","timeInForce":"GTC","side":"BUY","positionSide":"BOTH","origQty":"1","executedQty":"0","price":"90","status":"NEW","time":1,"updateTime":2}]`)
+		case "/fapi/v3/account":
+			_, _ = io.WriteString(w, `{"totalMarginBalance":"90","availableBalance":"80","totalInitialMargin":"20","totalMaintMargin":"2",
+				"assets":[{"asset":"USDT","walletBalance":"100","availableBalance":"80","updateTime":1700000000000}]}`)
+		default:
+			t.Fatalf("unexpected path %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	unloaded := testAdapter(exchange.MarketTypeSwap, server.URL)
+	if positions, err := unloaded.ListPositionSnapshots(context.Background()); err != nil || len(positions) != 2 {
+		t.Fatalf("标的表没加载时不过滤：positions = %+v, err = %v", positions, err)
+	}
+
+	adapter := testAdapter(exchange.MarketTypeSwap, server.URL)
+	adapter.instruments[exchange.NewSymbolKey(exchange.MarketTypeSwap, "BTCUSDT")] = exchange.Instrument{ExchangeSymbol: "BTCUSDT"}
+	positions, err := adapter.ListPositionSnapshots(context.Background())
+	if err != nil || len(positions) != 1 || positions[0].ExchangeSymbol != "BTCUSDT" {
+		t.Fatalf("positions = %+v, err = %v", positions, err)
+	}
+	orders, err := adapter.ListOpenOrders(context.Background())
+	if err != nil || len(orders) != 1 || orders[0].ExchangeSymbol != "BTCUSDT" {
+		t.Fatalf("orders = %+v, err = %v", orders, err)
+	}
+	snapshot, err := adapter.GetAccountSnapshot(context.Background())
+	if err != nil || snapshot.UnrealizedPnL.String() != "-15" {
+		t.Fatalf("snapshot = %+v, err = %v", snapshot, err)
+	}
+
+	handler := &recordingHandler{}
+	if err := adapter.dispatchPrivate(context.Background(), []byte(`{
+		"e":"ORDER_TRADE_UPDATE","o":{
+			"x":"TRADE","s":"BTCUSDC","S":"BUY","o":"MARKET","f":"GTC",
+			"c":"manual","i":42,"X":"FILLED","ps":"BOTH","R":false,
+			"q":"1","z":"1","ap":"100","t":7,"l":"1","L":"100",
+			"n":"0.01","N":"USDC","rp":"0","m":false,"T":1700000000000
+		}
+	}`), handler); err != nil {
+		t.Fatal(err)
+	}
+	if err := adapter.dispatchPrivate(context.Background(), []byte(`{
+		"e":"ACCOUNT_UPDATE","E":1700000000000,
+		"a":{"B":[],"P":[{"s":"BTCUSDC","pa":"1","ep":"100","up":"0","mt":"cross","ps":"BOTH"}]}
+	}`), handler); err != nil {
+		t.Fatal(err)
+	}
+	if len(handler.orders) != 0 || len(handler.fills) != 0 || len(handler.positions) != 0 {
+		t.Fatalf("orders=%+v fills=%+v positions=%+v", handler.orders, handler.fills, handler.positions)
+	}
+}
+
 func TestListPositionSnapshotsParsesV3Response(t *testing.T) {
 	serve := func(body string) *Adapter {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -493,5 +557,35 @@ func TestListPositionSnapshotsParsesV3Response(t *testing.T) {
 	positions, err = serve(`[{` + noMargin + `,"isolatedWallet":"0"}]`).ListPositionSnapshots(context.Background())
 	if err != nil || positions[0].Leverage.String() != "1" {
 		t.Fatalf("取不到保证金时按 1 倍：%+v err=%v", positions, err)
+	}
+}
+
+// 下架流程中的 USDT 永续（PERPETUAL_DELIVERING）要留在标的表里，否则它的持仓会被当成表外合约跳过、清不掉。
+func TestLoadInstrumentsKeepsDeliveringPerpetual(t *testing.T) {
+	const filters = `"filters":[{"filterType":"PRICE_FILTER","tickSize":"0.1"},{"filterType":"LOT_SIZE","stepSize":"0.001","minQty":"0.001"},{"filterType":"MIN_NOTIONAL","notional":"5"}]`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/fapi/v1/exchangeInfo":
+			_, _ = io.WriteString(w, `{"symbols":[`+
+				`{"symbol":"BTCUSDT","contractType":"PERPETUAL","status":"TRADING","baseAsset":"BTC","quoteAsset":"USDT","marginAsset":"USDT",`+filters+`},`+
+				`{"symbol":"OLDUSDT","contractType":"PERPETUAL_DELIVERING","status":"TRADING","baseAsset":"OLD","quoteAsset":"USDT","marginAsset":"USDT",`+filters+`}]}`)
+		case "/fapi/v1/positionSide/dual":
+			_, _ = io.WriteString(w, `{"dualSidePosition":false}`)
+		case "/fapi/v3/positionRisk":
+			_, _ = io.WriteString(w, `[{"symbol":"OLDUSDT","positionSide":"BOTH","positionAmt":"2","entryPrice":"100","markPrice":"95","unRealizedProfit":"-5","isolatedWallet":"0","updateTime":1700000000000}]`)
+		default:
+			t.Fatalf("unexpected path %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	adapter := testAdapter(exchange.MarketTypeSwap, server.URL)
+	instruments, err := adapter.LoadInstruments(context.Background())
+	if err != nil || len(instruments) != 2 {
+		t.Fatalf("instruments = %+v, err = %v", instruments, err)
+	}
+	positions, err := adapter.ListPositionSnapshots(context.Background())
+	if err != nil || len(positions) != 1 || positions[0].ExchangeSymbol != "OLDUSDT" {
+		t.Fatalf("positions = %+v, err = %v", positions, err)
 	}
 }

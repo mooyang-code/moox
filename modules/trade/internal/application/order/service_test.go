@@ -742,6 +742,27 @@ func TestSubmitNonOpenSuccessSyncsWithoutSettlingAggregateResponse(t *testing.T)
 	require.True(t, got.FilledQuantity.IsZero())
 }
 
+// OKX 回执的时间是本地收到时间，晚于订单事件的 uTime：回执只写交易所单号，不写交易所更新时间，
+// 否则同步按“记录时间更新就丢弃”防回退时会丢掉随后更早 uTime 的 IOC 撤销。
+func TestSubmitAcknowledgementDoesNotStampExchangeUpdatedAt(t *testing.T) {
+	service, tradeStore, adapter := newTestService(t)
+	localReceipt := service.now().Add(5 * time.Second)
+	adapter.placeResult = exchange.Order{Market: exchange.MarketTypeSpot,
+		ExchangeOrderID: "exchange-order-1", Status: exchange.OrderStatusOpen,
+		CreatedAt: localReceipt, UpdatedAt: localReceipt,
+	}
+	pending, err := service.Place(context.Background(), "space-1", testSpec(service.now()))
+	require.NoError(t, err)
+
+	got, err := service.Submit(context.Background(), "space-1", string(pending.ID))
+	require.NoError(t, err)
+	require.Equal(t, orderdomain.Open, got.State)
+	record, err := tradeStore.GetOrder(context.Background(), "space-1", string(pending.ID))
+	require.NoError(t, err)
+	require.Equal(t, "exchange-order-1", record.ExchangeOrderID)
+	require.Zero(t, record.ExchangeUpdatedAt)
+}
+
 func TestServiceDiscardPendingReleasesReservationWithoutExchangeCall(t *testing.T) {
 	service, tradeStore, adapter := newTestService(t)
 	now := time.Unix(1_700_000_000, 0)

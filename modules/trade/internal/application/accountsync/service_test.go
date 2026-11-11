@@ -161,6 +161,51 @@ func TestServiceSyncAccountImportsExternalOrderAndAppliesFacts(t *testing.T) {
 	require.Zero(t, result.FillsIngested, "replayed REST Fill must be idempotent")
 }
 
+// 标的表外合约（如 USDC 本位永续）上的外部挂单和成交：跳过这一笔，不导入、不入账、不暂停组合，整轮同步照常成功。
+func TestSyncSkipsExternalOrderOutsideInstrumentTable(t *testing.T) {
+	tradeStore := openSyncStore(t)
+	seedSyncAccount(t, tradeStore)
+	setLogicalAccountAutomation(t, tradeStore, "ACTIVE")
+	adapter := &syncAdapter{
+		order: exchange.Order{Market: exchange.MarketTypeSwap,
+			ExchangeOrderID: "exchange-usdc", ExchangeSymbol: "BTCUSDC",
+			OrderType: exchange.OrderTypeMarket, Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
+			Quantity: shared.MustDecimal("1"), FilledQuantity: shared.MustDecimal("0.5"),
+			AveragePrice: shared.MustDecimal("100"), Status: exchange.OrderStatusPartiallyFilled,
+			CreatedAt: time.UnixMilli(1_000), UpdatedAt: time.UnixMilli(2_000),
+		},
+		fill: exchange.Fill{Market: exchange.MarketTypeSwap,
+			ExchangeTradeID: "trade-usdc", ExchangeOrderID: "exchange-usdc", ExchangeSymbol: "BTCUSDC",
+			Side: exchange.SideBuy, PositionSide: exchange.PositionSideNet,
+			Quantity: shared.MustDecimal("0.5"), Price: shared.MustDecimal("100"),
+			SettlementAsset: "USDC", TradedAt: time.UnixMilli(1_500),
+		},
+	}
+	service := Service{
+		Store: tradeStore, Adapters: syncAdapterSource{adapter: adapter},
+		SessionState: readySessionState(true),
+		Fills:        &consumer.Reducer{Store: tradeStore},
+		Now:          func() time.Time { return time.UnixMilli(3_000) },
+	}
+
+	result, err := service.SyncAccount(context.Background(), "account-1")
+	require.NoError(t, err)
+	require.Zero(t, result.FillsIngested)
+	require.False(t, result.ExternalFactsImported)
+	var orders int64
+	require.NoError(t, tradeStore.DBForTest().Table("t_trade_orders").Count(&orders).Error)
+	require.Zero(t, orders)
+	requireLogicalAccountRemainsActive(t, tradeStore)
+
+	// 私有流推来的同一笔订单和成交也一样跳过。
+	require.NoError(t, service.ApplyOrder(context.Background(), "account-1", adapter.order))
+	applied, err := service.ApplyFill(context.Background(), "account-1", adapter.fill)
+	require.NoError(t, err)
+	require.False(t, applied)
+	require.NoError(t, tradeStore.DBForTest().Table("t_trade_orders").Count(&orders).Error)
+	require.Zero(t, orders)
+}
+
 func TestExternalOrderPausesOwningLogicalAccount(t *testing.T) {
 	tradeStore := openSyncStore(t)
 	seedSyncAccount(t, tradeStore)

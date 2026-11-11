@@ -136,7 +136,7 @@ type flattenRequest struct {
 // ErrNotInLogicalAccount 表示执行账户不属于任何组合账户：MooX 只通过组合账户交易，这样的账户没有可平的仓。
 var ErrNotInLogicalAccount = errors.New("执行账户不属于任何组合账户")
 
-// FlattenTradingAccount 只平组合账户里的一个执行账户：撤这个账户的单、平这个账户的仓，组合账户照样暂停。
+// FlattenTradingAccount 只平组合账户里的一个执行账户：撤这个账户的单、平这个账户的仓，组合账户照样暂停（自主下单组合不暂停）。
 // 同组合只允许一个运行中清仓、锁的短超时、终结与可重试的分类，都和组合清仓相同。
 func (s *Service) FlattenTradingAccount(ctx context.Context, command FlattenCommand) (FlattenResult, error) {
 	if err := s.validate(); err != nil {
@@ -261,14 +261,21 @@ func (s *Service) FlattenLogicalAccount(
 			}
 		}
 		// 整组清仓和减仓先暂停组合；只平一个标的不动组合的自动执行状态。
+		// 自主下单组合没有自动执行，和撤单一样不暂停，也就不改写暂停原因。
 		if command.pausesLogicalAccount() {
-			if err := tx.SetLogicalAccountAutomation(
-				command.SpaceID,
-				command.LogicalAccountID,
-				"PAUSED",
-				strings.TrimSpace(command.Reason),
-			); err != nil {
+			logical, err := tx.GetLogicalAccount(command.SpaceID, command.LogicalAccountID)
+			if err != nil {
 				return err
+			}
+			if logical.ControlMode != "MANUAL" {
+				if err := tx.SetLogicalAccountAutomation(
+					command.SpaceID,
+					command.LogicalAccountID,
+					"PAUSED",
+					strings.TrimSpace(command.Reason),
+				); err != nil {
+					return err
+				}
 			}
 		}
 		var ensureErr error

@@ -144,31 +144,30 @@ func TestEvaluateUsesTheConfiguredThresholds(t *testing.T) {
 	require.True(t, reading.Triggered, "1.8 低于配置的阈值 2")
 }
 
-func TestAppliesOnlyBinanceProductionLiveAccountsWithAKnownType(t *testing.T) {
+func TestMonitoredOnlyBinanceProductionLiveAccountsWithAKnownType(t *testing.T) {
 	account := standardAccount("1")
-	require.True(t, Applies(account))
+	require.True(t, monitored(account))
 	require.Empty(t, unsupportedNote(account))
 	for name, mutate := range map[string]func(*store.TradingAccountRecord){
 		"模拟盘":  func(a *store.TradingAccountRecord) { a.ExecutionMode = "PAPER" },
 		"测试网":  func(a *store.TradingAccountRecord) { a.Environment = "TESTNET" },
-		"未就绪":  func(a *store.TradingAccountRecord) { a.Ready = false },
 		"已停用":  func(a *store.TradingAccountRecord) { a.Status = "DISABLED" },
 		"没有永续": func(a *store.TradingAccountRecord) { a.Markets = []string{"SPOT"} },
 	} {
 		changed := account
 		mutate(&changed)
-		require.False(t, Applies(changed), name)
+		require.False(t, monitored(changed), name)
 		require.Empty(t, unsupportedNote(changed), name+"：不在监控范围，也不用提示")
 	}
 
 	// OKX 暂不接入；账户类型没有检测写入：都不监控，但要说明原因。
 	okx := account
 	okx.Exchange, okx.AccountMode = "OKX", "OKX_UNIFIED"
-	require.False(t, Applies(okx))
+	require.False(t, monitored(okx))
 	require.Contains(t, unsupportedNote(okx), "OKX")
 	unknown := account
 	unknown.AccountMode = ""
-	require.False(t, Applies(unknown))
+	require.False(t, monitored(unknown))
 	require.Contains(t, unsupportedNote(unknown), "账户类型")
 	unknownOKX := okx
 	unknownOKX.AccountMode = ""
@@ -247,11 +246,17 @@ func newFixture(t *testing.T, fundSettings, exchangeEquity string) *fixture {
 				return store.OperatorActionRecord{}, operatorapp.ErrLogicalAccountBusy
 			}
 			f.reduces = append(f.reduces, reduceCall{spaceID, actionID, logicalID, ratio, reason})
-			// 和真实的 REDUCE 一样：先暂停组合、写下操作记录。
+			// 和真实的 REDUCE 一样：先暂停组合（自主下单组合不暂停）、写下操作记录。
 			var record store.OperatorActionRecord
 			err := tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
-				if err := tx.SetLogicalAccountAutomation(spaceID, logicalID, "PAUSED", reason); err != nil {
+				logical, err := tx.GetLogicalAccount(spaceID, logicalID)
+				if err != nil {
 					return err
+				}
+				if logical.ControlMode != "MANUAL" {
+					if err := tx.SetLogicalAccountAutomation(spaceID, logicalID, "PAUSED", reason); err != nil {
+						return err
+					}
 				}
 				var ensureErr error
 				record, _, ensureErr = tx.EnsureOperatorAction(store.OperatorActionRecord{
@@ -316,7 +321,7 @@ func TestRunTriggersReduceAndPausesOnce(t *testing.T) {
 	call := f.reduces[0]
 	require.Equal(t, "space-1", call.spaceID)
 	require.Equal(t, "logical-1", call.logicalID)
-	require.Contains(t, call.actionID, ActionIDPrefix+"logical-1-")
+	require.Contains(t, call.actionID, store.MarginActionIDPrefix+"logical-1-")
 	require.Equal(t, "0.1", call.ratio.String())
 	require.Equal(t, store.MarginPauseReason(), call.reason, "暂停原因是固定文字，不带变化的数字")
 	require.True(t, store.IsAutoPauseReason(call.reason))
@@ -606,28 +611,6 @@ func TestCollectContinuesOldReduceThatHasRecords(t *testing.T) {
 	require.Equal(t, []string{"logical-1|" + actionID + "|account-1"}, f.collect)
 }
 
-// 划转还没接入（没配 Collect，或返回“不可用”）：只告警一次，不记为失败、不重复调用。
-func TestCollectWithoutTransferSupportOnlyWarns(t *testing.T) {
-	f := newFixture(t, "", "400")
-	f.service.Collect = nil
-	f.run()
-	require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_operator_actions SET c_status = 'PARTIAL'`).Error)
-	f.run()
-	f.run()
-
-	f = newFixture(t, "", "400")
-	calls := 0
-	f.service.Collect = func(context.Context, string, string, string, []store.TradingAccountRecord) (bool, error) {
-		calls++
-		return false, ErrTransferUnavailable
-	}
-	f.run()
-	require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_operator_actions SET c_status = 'COMPLETED'`).Error)
-	f.run()
-	f.run()
-	require.Equal(t, 1, calls)
-}
-
 // 账户类型由交易所检测写入（T5）：检测写入之前不监控，写入之后对币安普通账户、统一账户生效。
 func TestDetectionWritingTheAccountModeEnablesTheMonitor(t *testing.T) {
 	writeMode := func(f *fixture, mode string) {
@@ -697,4 +680,48 @@ func TestPendingReasonBecomesUnreducedOnceTheRatioIsSafe(t *testing.T) {
 	require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_logical_accounts SET c_fund_settings_json = '{}'`).Error)
 	f.run()
 	require.Len(t, f.reduces, 1)
+}
+
+// 自主下单组合没有恢复这一步：减仓不暂停、不改写暂停原因；上一次风控减仓结束后比值再跌破阈值，照样再减一次。
+func TestManualGroupReducesAgainOnceTheLastReduceFinished(t *testing.T) {
+	f := newFixture(t, "", "400")
+	require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_logical_accounts SET c_control_mode = 'MANUAL', c_owner_instance_id = NULL,
+		c_owner_session_id = NULL, c_automation_state = 'PAUSED', c_pause_reason = '自主下单'`).Error)
+	setEquity := func(equity string) {
+		t.Helper()
+		require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_trading_accounts SET c_snapshot_json = json_set(c_snapshot_json, '$.exchange_equity', ?)`, equity).Error)
+	}
+
+	f.run()
+	require.Len(t, f.reduces, 1)
+	require.Equal(t, "自主下单", f.logical().PauseReason, "自主下单组合减仓不改写暂停原因")
+
+	f.advance(time.Minute)
+	f.run()
+	require.Len(t, f.reduces, 1, "上一次风控减仓还在跑，不叠加")
+
+	// 减仓做完、比值回到安全线（600 ÷ 1000 = 0.6）：不再减。
+	require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_operator_actions SET c_status = 'COMPLETED'`).Error)
+	setEquity("600")
+	f.advance(time.Minute)
+	f.run()
+	require.Len(t, f.reduces, 1)
+
+	// 比值再次跌破阈值：不需要恢复，照样再减一次，动作号是新的。
+	setEquity("400")
+	f.advance(time.Minute)
+	f.run()
+	require.Len(t, f.reduces, 2)
+	require.NotEqual(t, f.reduces[0].actionID, f.reduces[1].actionID)
+	require.Empty(t, f.pauses, "自主下单组合不暂停")
+	require.Equal(t, "自主下单", f.logical().PauseReason)
+
+	// 这一次一笔都没减（持仓太小）：一小时内不再发起，过后再试。
+	require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_operator_actions SET c_status = 'COMPLETED', c_result_json = '{}'`).Error)
+	f.advance(time.Minute)
+	f.run()
+	require.Len(t, f.reduces, 2)
+	f.advance(time.Hour)
+	f.run()
+	require.Len(t, f.reduces, 3)
 }

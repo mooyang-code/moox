@@ -32,6 +32,10 @@ func (s *Store) ManagedAssets(ctx context.Context, spaceID, tradingAccountID str
 	if err != nil {
 		return nil, err
 	}
+	// 没开通现货类市场的账户（纯永续）只有结算资产受管：合约标的不会让基础资产受管，不必扫订单历史。
+	if !account.HasBalanceMarket() {
+		return map[string]struct{}{account.SettlementAsset: {}}, nil
+	}
 	instrumentIDs, err := s.ListManagedInstruments(ctx, spaceID, tradingAccountID)
 	if err != nil {
 		return nil, err

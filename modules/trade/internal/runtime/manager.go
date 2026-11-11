@@ -115,10 +115,6 @@ func (m *Manager) ReadyFor(account tradingaccount.Account) bool {
 	if entry == nil || entry.stopping || !entry.session.Ready() {
 		return false
 	}
-	leverage := make(store.LeverageSettings, len(account.LeverageSettings))
-	for symbol, value := range account.LeverageSettings {
-		leverage[symbol] = value.String()
-	}
 	environment := string(account.Environment)
 	if account.ExecutionMode == exchange.ExecutionModePaper {
 		// Paper has no persisted live environment. Its market-data environment
@@ -126,15 +122,17 @@ func (m *Manager) ReadyFor(account tradingaccount.Account) bool {
 		// with the empty live-environment column.
 		environment = ""
 	}
+	// 只填 sameSessionConfig 比较的字段：账户类型和检测指纹也在比较之列，漏填会让实盘账户永远不就绪。
 	current := store.TradingAccountRecord{
 		SpaceID: account.SpaceID, TradingAccountID: account.ID,
 		Exchange: string(account.Exchange), Markets: marketStrings(account.Markets),
 		ExecutionMode:      string(account.ExecutionMode),
+		AccountMode:        string(account.AccountMode),
 		Environment:        environment,
 		CredentialSecretID: account.CredentialSecretID,
+		InspectionJSON:     account.InspectionJSON,
 		SettlementAsset:    account.SettlementAsset, MarginMode: string(account.MarginMode),
-		Status:           string(account.Status),
-		LeverageSettings: leverage,
+		Status: string(account.Status),
 	}
 	if account.Paper != nil {
 		current.PaperConfig = &store.PaperAccountConfigRecord{

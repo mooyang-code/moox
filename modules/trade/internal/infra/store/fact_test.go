@@ -712,3 +712,40 @@ func TestReplacePositionsTombstoneCoversProtectionStart(t *testing.T) {
 		"space-1", "account-1", "ETHUSDT").Scan(&covered).Error)
 	require.Equal(t, int64(5_000), covered)
 }
+
+// 一次读全某个标的的成交：只按账户、市场、代码过滤，按时间升序，同一毫秒按成交号倒序。
+func TestListSymbolFillsAscendingFiltersAndOrders(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	require.NoError(t, seedOrder(ctx, s))
+	other := testAccount()
+	other.TradingAccountID, other.Name = "account-2", "other"
+	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error { return tx.CreateTradingAccount(other) }))
+	for _, fill := range []struct {
+		id, account, market, symbol string
+		at                          int64
+	}{
+		{"f-c", "account-1", "SPOT", "BTCUSDT", 200},
+		{"f-a", "account-1", "SPOT", "BTCUSDT", 100},
+		{"f-b", "account-1", "SPOT", "BTCUSDT", 100},
+		{"f-swap", "account-1", "SWAP", "BTCUSDT", 50},
+		{"f-eth", "account-1", "SPOT", "ETHUSDT", 50},
+		{"f-other", "account-2", "SPOT", "BTCUSDT", 50},
+	} {
+		require.NoError(t, s.db.Exec(`INSERT INTO t_order_fills (c_space_id, c_fill_id, c_exchange_trade_id, c_order_id, c_trading_account_id, c_exchange,
+			c_market_type, c_instrument_id, c_exchange_symbol, c_side, c_price, c_quantity, c_traded_at)
+			VALUES ('space-1', ?, ?, 'order-1', ?, 'BINANCE', ?, 'x', ?, 'BUY', '100', '1', ?)`,
+			fill.id, fill.id, fill.account, fill.market, fill.symbol, fill.at).Error)
+	}
+
+	fills, err := s.ListSymbolFillsAscending(ctx, "space-1", "account-1", exchange.NewSymbolKey(exchange.MarketTypeSpot, "BTCUSDT"))
+
+	require.NoError(t, err)
+	ids := make([]string, 0, len(fills))
+	for _, fill := range fills {
+		ids = append(ids, fill.FillID)
+	}
+	require.Equal(t, []string{"f-b", "f-a", "f-c"}, ids)
+	require.Equal(t, "100", fills[0].Price)
+	require.Equal(t, int64(100), fills[0].TradedAt)
+}

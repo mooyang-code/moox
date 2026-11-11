@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	operatordomain "github.com/mooyang-code/moox/modules/trade/internal/domain/operator"
@@ -322,6 +323,25 @@ func (s *Store) ListOperatorActions(ctx context.Context, spaceID string, query O
 		records = append(records, operatorActionRecord(row))
 	}
 	return records, total, nil
+}
+
+// MarginActionIDPrefix 是保证金率风控发起的减仓动作号的前缀，用来在操作记录里认出它们。
+const MarginActionIDPrefix = "margin-"
+
+// LastMarginReduceAction 返回组合最近一次保证金率风控发起的减仓动作，没有则为 nil。
+func (s *Store) LastMarginReduceAction(ctx context.Context, spaceID, logicalAccountID string) (*OperatorActionRecord, error) {
+	actions, _, err := s.ListOperatorActions(ctx, spaceID, OperatorActionQuery{
+		LogicalAccountID: logicalAccountID, ActionType: string(operatordomain.ActionReduce), Limit: 20,
+	})
+	if err != nil {
+		return nil, err
+	}
+	for i := range actions {
+		if strings.HasPrefix(actions[i].ActionID, MarginActionIDPrefix) {
+			return &actions[i], nil
+		}
+	}
+	return nil, nil
 }
 
 // 以下 SQL 整条写成常量，不在调用处拼接或内联。

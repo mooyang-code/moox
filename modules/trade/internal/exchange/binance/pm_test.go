@@ -385,6 +385,32 @@ func TestPortfolioMarginDispatchesStreamEventsByType(t *testing.T) {
 	require.Len(t, handler.orders, 2)
 }
 
+// 统一账户的标的表在按市场的子适配器上：UM 持仓、私有流订单和持仓里标的表外的合约（USDC 本位）都跳过。
+func TestPortfolioMarginSkipsSwapInstrumentsOutsideLoadedTable(t *testing.T) {
+	_, server := newPMServer(t, map[string]string{
+		"GET /papi/v1/um/positionRisk": `[{"symbol":"BTCUSDC","positionSide":"BOTH","positionAmt":"2","entryPrice":"100","markPrice":"95","unRealizedProfit":"-5","leverage":"5","notional":"190","updateTime":1700000000000},` +
+			`{"symbol":"BTCUSDT","positionSide":"BOTH","positionAmt":"1","entryPrice":"100","markPrice":"90","unRealizedProfit":"-10","leverage":"5","notional":"90","updateTime":1700000000000}]`,
+	})
+	pm := testPM(server, exchange.MarketTypeSwap)
+	pm.markets[exchange.MarketTypeSwap].instruments[exchange.NewSymbolKey(exchange.MarketTypeSwap, "BTCUSDT")] = exchange.Instrument{ExchangeSymbol: "BTCUSDT"}
+	positions, err := pm.ListPositionSnapshots(context.Background())
+	require.NoError(t, err)
+	require.Len(t, positions, 1)
+	require.Equal(t, "BTCUSDT", positions[0].ExchangeSymbol)
+
+	handler := &recordingHandler{}
+	ctx := context.Background()
+	um := strings.Replace(string(sample(t, "futures_order_trade_update.json")), `"e":"ORDER_TRADE_UPDATE"`, `"e":"ORDER_TRADE_UPDATE","fs":"UM"`, 1)
+	um = strings.Replace(um, `"s":"BTCUSDT"`, `"s":"BTCUSDC"`, 1)
+	require.NoError(t, pm.dispatchPrivate(ctx, []byte(um), handler))
+	require.NoError(t, pm.dispatchPrivate(ctx, []byte(`{"e":"ACCOUNT_UPDATE","fs":"UM","E":1700000000000,"T":1700000000000,
+		"a":{"B":[],"P":[{"s":"BTCUSDC","pa":"1","ep":"100","up":"0","ps":"BOTH"}]}}`), handler))
+	require.Empty(t, handler.orders)
+	require.Empty(t, handler.fills)
+	require.Empty(t, handler.positions)
+	require.Len(t, handler.accounts, 1)
+}
+
 func TestPortfolioMarginAccountUpdateHasNoMarginTypeField(t *testing.T) {
 	pm := newPortfolioMargin(pmConfig(exchange.MarketTypeSpot, exchange.MarketTypeSwap), exchange.Credential{}, httpclient.New("http://unused"))
 	handler := &recordingHandler{}

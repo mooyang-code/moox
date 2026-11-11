@@ -403,10 +403,6 @@ func TestPaperAdapterStoreBoundariesPreserveInfrastructureErrors(t *testing.T) {
 				"snapshot":  func(ctx context.Context) error { _, err := a.GetAccountSnapshot(ctx); return err },
 				"positions": func(ctx context.Context) error { _, err := a.ListPositionSnapshots(ctx); return err },
 				"orders":    func(ctx context.Context) error { _, err := a.ListOpenOrders(ctx); return err },
-				"fills": func(ctx context.Context) error {
-					_, _, err := a.ListRecentFills(ctx, exchange.NewSymbolKey(exchange.MarketTypeSpot, "BTCUSDT"), "")
-					return err
-				},
 				"order": func(ctx context.Context) error {
 					_, err := a.GetOrder(ctx, exchange.NewSymbolKey(exchange.MarketTypeSpot, "BTCUSDT"), "a")
 					return err
@@ -432,8 +428,7 @@ func TestPaperAdapterReconstructsTransientOrderIdentityAfterCrash(t *testing.T) 
 	require.NoError(t, err)
 	order, err := (&Adapter{Store: s, Account: account}).GetOrder(context.Background(), exchange.NewSymbolKey(exchange.MarketTypeSpot, "BTCUSDT"), "a")
 	require.NoError(t, err)
-	want, _, _ := PaperIDs("a", "a")
-	require.Equal(t, want, order.ExchangeOrderID)
+	require.Equal(t, paperOrderID("a", "a"), order.ExchangeOrderID)
 	require.Equal(t, exchange.OrderStatusOpen, order.Status)
 }
 

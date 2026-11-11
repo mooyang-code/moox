@@ -181,7 +181,7 @@ func (s *Service) RunLogicalAccount(ctx context.Context, logical store.LogicalAc
 			runErrors = append(runErrors, err)
 			continue
 		}
-		// 补买、兑换、调平会下单或动资产：组合暂停、正在清仓或减仓时不做。
+		// 补买、兑换、调平会下单或动资产：组合暂停（自主下单组合不看）、正在清仓或减仓时不做。
 		if !tradingAllowed {
 			continue
 		}
@@ -250,8 +250,9 @@ func (s *Service) runDiscount(ctx context.Context, logical store.LogicalAccountR
 }
 
 // tradingAllowed 判断能不能做会下单的维护：自动执行没暂停，且没有运行中的清仓、减仓、下架清仓。
+// 自主下单组合没有自动执行（一直是暂停状态），不看暂停，只看有没有运行中的清仓、减仓、下架清仓。
 func (s *Service) tradingAllowed(ctx context.Context, logical store.LogicalAccountRecord) (bool, error) {
-	if logical.AutomationState != "ACTIVE" {
+	if logical.ControlMode != "MANUAL" && logical.AutomationState != "ACTIVE" {
 		return false, nil
 	}
 	running, err := s.Store.ListRunningOperatorActions(ctx, logical.SpaceID, logical.LogicalAccountID)

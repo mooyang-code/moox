@@ -125,6 +125,43 @@ func liveAccounts(ctx context.Context, db *sql.DB) ([]string, error) {
 	return ids, rows.Err()
 }
 
+// resetPaperSnapshots 把模拟盘账户的快照改回初始资金（与新建模拟账户时的写法相同）。
+// 清运行数据只清表，账户上的旧快照还在；权益采样先于同步跑到时会按旧快照记下错误的净值点。就绪标记不动。
+func resetPaperSnapshots(ctx context.Context, db *sql.DB) error {
+	rows, err := db.QueryContext(ctx, queryPaperInitialBalances)
+	if err != nil {
+		return fmt.Errorf("读取模拟盘初始资金：%w", err)
+	}
+	type paperAccount struct{ spaceID, accountID, settlementAsset, initialBalance string }
+	var accounts []paperAccount
+	for rows.Next() {
+		var account paperAccount
+		if err := rows.Scan(&account.spaceID, &account.accountID, &account.settlementAsset, &account.initialBalance); err != nil {
+			rows.Close()
+			return err
+		}
+		accounts = append(accounts, account)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, account := range accounts {
+		snapshot, err := json.Marshal(store.TradingAccountSnapshot{
+			Balances: []store.AssetBalance{{Wallet: string(exchange.WalletUnified), Asset: account.settlementAsset, Available: account.initialBalance, Total: account.initialBalance, Borrowed: "0"}},
+			Equity:   account.initialBalance, AvailableFunds: account.initialBalance,
+			ExchangeUpdatedAt: 1,
+		})
+		if err != nil {
+			return err
+		}
+		if _, err := db.ExecContext(ctx, execResetPaperSnapshot, string(snapshot), account.spaceID, account.accountID); err != nil {
+			return fmt.Errorf("改写模拟盘账户 %s 快照：%w", account.accountID, err)
+		}
+	}
+	return nil
+}
+
 // tradeResetSpec 构造 Trade 的重置实现；syncAccount 向交易所对账一个账户（执行时的第一步用它重新核验）。
 func tradeResetSpec(tradeStore *store.Store, dbPath string, syncAccount func(ctx context.Context, accountID string) error) *lifecycle.ResetSpec {
 	dir := filepath.Dir(dbPath)
@@ -193,8 +230,11 @@ func tradeResetSpec(tradeStore *store.Store, dbPath string, syncAccount func(ctx
 				}
 				return err
 			}},
-			{Name: "clear_tables", Describe: "清空表：" + lifecycle.JoinTables(tables), Run: func(ctx context.Context, _ string) error {
+			{Name: "clear_tables", Describe: "清空表：" + lifecycle.JoinTables(tables) + "；模拟盘账户快照改回初始资金", Run: func(ctx context.Context, _ string) error {
 				deleted, err := lifecycle.ClearTables(ctx, sqlDB, tables)
+				if err == nil {
+					err = resetPaperSnapshots(ctx, sqlDB)
+				}
 				// 直接清表绕过了存储层，内存里的标的和账户身份要一起清掉。
 				tradeStore.InvalidateCaches()
 				if err == nil {
@@ -227,4 +267,12 @@ const (
 		JOIN t_trade_instruments i ON i.c_exchange = a.c_exchange AND i.c_market_type = o.c_market_type AND i.c_instrument_id = o.c_instrument_id
 		WHERE a.c_execution_mode = 'LIVE' AND a.c_status = 'ENABLED'
 			AND o.c_owner_type IN ('TARGET', 'OPERATOR') AND o.c_filled_quantity <> '0'`
+	// 模拟盘账户的结算资产和初始资金。
+	queryPaperInitialBalances = `SELECT a.c_space_id, a.c_trading_account_id, a.c_settlement_asset, c.c_initial_balance
+		FROM t_trading_accounts a
+		JOIN t_paper_account_configs c ON c.c_space_id = a.c_space_id AND c.c_trading_account_id = a.c_trading_account_id
+		WHERE a.c_execution_mode = 'PAPER'`
+	// 改写一个账户的快照。
+	execResetPaperSnapshot = `UPDATE t_trading_accounts SET c_snapshot_json = ?, c_mtime = CURRENT_TIMESTAMP
+		WHERE c_space_id = ? AND c_trading_account_id = ?`
 )

@@ -1101,6 +1101,10 @@ func (s *Service) applyFill(
 	external, err := s.ensureOrderForFill(
 		ctx, account, fill, syntheticQuantity,
 	)
+	if errors.Is(err, errUnlistedInstrument) {
+		// 本地标的表外合约上的外部成交：订单没导入，成交也不入账。
+		return false, false, nil
+	}
 	if err != nil {
 		return false, false, err
 	}
@@ -1252,6 +1256,9 @@ func (s *Service) applyOrder(
 	}
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		record, err = s.importExternalOrder(ctx, account, current, shared.Zero(), false)
+		if errors.Is(err, errUnlistedInstrument) {
+			return false, false, "", nil
+		}
 		if err != nil {
 			return false, false, "", err
 		}
@@ -1396,14 +1403,7 @@ func (s *Service) terminalize(
 	record store.OrderRecord,
 	status exchange.OrderStatus,
 ) error {
-	state := orderdomain.State(record.State)
-	if state.Terminal() {
-		if (status == exchange.OrderStatusRejected && state == orderdomain.Rejected) ||
-			(status == exchange.OrderStatusExpired && state == orderdomain.Expired) {
-			return nil
-		}
-		return fmt.Errorf("trade account sync: conflicting terminal order state")
-	}
+	// 唯一调用方 applyOrderState 已对终态订单提前返回，这里只处理未结束的订单。
 	next, reason := orderdomain.Expired, ""
 	if status == exchange.OrderStatusRejected {
 		next, reason = orderdomain.Rejected, record.RejectReason
@@ -1415,6 +1415,10 @@ func (s *Service) terminalize(
 		return s.Fills.FinishOrderTx(tx, record, next, reason)
 	})
 }
+
+// errUnlistedInstrument 表示外部订单所在的合约不在本地标的表里（如 USDC 本位永续、交割合约）：交易所接口和私有流
+// 会返回整个账户的订单和成交，这些合约不归 moox 管，调用方跳过这一笔，不让整轮同步失败。
+var errUnlistedInstrument = errors.New("trade account sync: 外部订单的标的不在本地标的表里")
 
 func (s *Service) importExternalOrder(
 	ctx context.Context,
@@ -1442,6 +1446,9 @@ func (s *Service) importExternalOrder(
 	instrument, err := s.Store.GetInstrumentInEnvironment(
 		ctx, account.Exchange, environment, string(current.Market), current.ExchangeSymbol,
 	)
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return store.OrderRecord{}, errUnlistedInstrument
+	}
 	if err != nil {
 		return store.OrderRecord{}, err
 	}

@@ -164,6 +164,30 @@ func (a *Adapter) key(symbol string) exchange.SymbolKey {
 	return exchange.SymbolKey{Market: a.config.Market(), Symbol: symbol}
 }
 
+// unlisted 报告合约不在已加载的本地标的表里（USDC 本位永续、交割合约等）。合约账户的持仓、挂单和私有流
+// 会带上这些合约，它们不归 moox 管，调用方跳过。标的表还没加载时不算，免得把全部持仓当成没有。
+func (a *Adapter) unlisted(symbol string) bool {
+	if a.config.Market() != exchange.MarketTypeSwap {
+		return false
+	}
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	_, found := a.instruments[a.key(symbol)]
+	return !found && len(a.instruments) > 0
+}
+
+// listedPositions 去掉标的表外合约上的全仓持仓；逐仓持仓照旧上报，由同步据此暂停组合。
+func listedPositions(positions []exchange.Position, unlisted func(string) bool) []exchange.Position {
+	out := make([]exchange.Position, 0, len(positions))
+	for _, position := range positions {
+		if position.MarginMode != exchange.MarginModeIsolated && unlisted(position.ExchangeSymbol) {
+			continue
+		}
+		out = append(out, position)
+	}
+	return out
+}
+
 func (a *Adapter) client() *httpclient.Client {
 	if a.config.Market() == exchange.MarketTypeSwap {
 		return a.swap
@@ -290,7 +314,9 @@ func (a *Adapter) LoadInstruments(ctx context.Context) ([]exchange.Instrument, e
 	out := make([]exchange.Instrument, 0, len(payload.Symbols))
 	for _, item := range payload.Symbols {
 		if a.config.Market() == exchange.MarketTypeSwap {
-			if item.ContractType != "PERPETUAL" || item.MarginAsset != "USDT" {
+			// 进入下架流程的永续合约类型变成 PERPETUAL_DELIVERING，仍可交易，持仓还要靠它平掉。
+			perpetual := item.ContractType == "PERPETUAL" || item.ContractType == "PERPETUAL_DELIVERING"
+			if !perpetual || item.MarginAsset != "USDT" {
 				continue
 			}
 		}
@@ -593,8 +619,8 @@ func (a *Adapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnaps
 		return exchange.AccountSnapshot{}, err
 	}
 	// 未实现盈亏只从持仓接口取一次：账户接口里的 totalUnrealizedProfit 不用，walletBalance 本身不含未实现盈亏，
-	// 这样统一权益公式（结算资产净额 + 永续未实现盈亏 + …）不会重复计入。
-	positions, err := a.ListPositionSnapshots(ctx)
+	// 这样统一权益公式（结算资产净额 + 永续未实现盈亏 + …）不会重复计入。权益按整个账户算，标的表外的合约也计入。
+	positions, err := a.positionRows(ctx)
 	if err != nil {
 		return exchange.AccountSnapshot{}, err
 	}
@@ -668,6 +694,15 @@ type positionRisk struct {
 }
 
 func (a *Adapter) ListPositionSnapshots(ctx context.Context) ([]exchange.Position, error) {
+	positions, err := a.positionRows(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return listedPositions(positions, a.unlisted), nil
+}
+
+// positionRows 返回合约账户的全部持仓，含标的表外的合约。
+func (a *Adapter) positionRows(ctx context.Context) ([]exchange.Position, error) {
 	if a.config.Market() == exchange.MarketTypeSpot {
 		return nil, nil
 	}
@@ -997,7 +1032,6 @@ func (a *Adapter) ListRecentFills(
 		"symbol": []string{symbolValue},
 		"limit":  []string{strconv.Itoa(pageSize)},
 	}
-	catchUp := true
 	if cursor != "" {
 		tradeID, err := strconv.ParseUint(cursor, 10, 64)
 		if err != nil || tradeID == ^uint64(0) {
@@ -1058,7 +1092,7 @@ func (a *Adapter) ListRecentFills(
 				next = row.ID.String()
 			}
 		}
-		if !catchUp || len(payload) < pageSize {
+		if len(payload) < pageSize {
 			break
 		}
 		lastID, err := strconv.ParseUint(next, 10, 64)
@@ -1145,6 +1179,9 @@ func (a *Adapter) SetMarginMode(
 func (a *Adapter) ordersFromPayload(payload []orderPayload) ([]exchange.Order, error) {
 	out := make([]exchange.Order, 0, len(payload))
 	for _, row := range payload {
+		if a.unlisted(row.Symbol) {
+			continue
+		}
 		order, err := a.orderFromPayload(row)
 		if err != nil {
 			return nil, err

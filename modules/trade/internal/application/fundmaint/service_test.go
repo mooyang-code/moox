@@ -349,6 +349,26 @@ func TestSystemTasksSkipPausedAndFlatteningAccounts(t *testing.T) {
 	require.Empty(t, f.orders.specs, "正在减仓的组合不补买")
 }
 
+// 自主下单组合没有自动执行（一直是暂停状态）：资金维护不看暂停，照常下单；只在清仓、减仓进行中时不做。
+func TestSystemTasksRunForManualGroups(t *testing.T) {
+	f := newFixture(t, `{"bnb_reserve_amount":"200"}`, []store.AssetBalance{balance("USDT", "1000")})
+	require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_logical_accounts SET c_control_mode = 'MANUAL', c_owner_instance_id = NULL,
+		c_owner_session_id = NULL, c_automation_state = 'PAUSED', c_pause_reason = '自主下单'`).Error)
+	_, _, err := f.store.CreateOperatorAction(context.Background(), store.OperatorActionRecord{
+		SpaceID: "space-1", ActionID: "action-1", LogicalAccountID: "logical-1", ActionType: "REDUCE", Reason: "保证金率",
+		RequestJSON: "{}", Status: "RUNNING",
+	})
+	require.NoError(t, err)
+	require.NoError(t, f.run())
+	require.Empty(t, f.orders.specs, "正在减仓时不补买")
+
+	require.NoError(t, f.store.DBForTest().Exec(`UPDATE t_operator_actions SET c_status = 'COMPLETED'`).Error)
+	require.NoError(t, f.run())
+	require.Len(t, f.orders.specs, 1, "减仓结束后照常补买")
+	require.Equal(t, "BNB-USDT-SPOT", f.orders.specs[0].InstrumentID)
+	require.Len(t, f.orders.submitted, 1)
+}
+
 func TestReserveWithoutSpotMarketWarnsAndSkips(t *testing.T) {
 	f := newFixture(t, `{"bnb_reserve_amount":"200"}`, []store.AssetBalance{balance("USDT", "1000")})
 	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_trading_accounts SET c_markets = 'SWAP'").Error)
