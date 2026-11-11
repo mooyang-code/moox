@@ -74,6 +74,12 @@ func TestReleaseStockCNRouteWeights5mTowardsTdxWithTencentAsFallback(t *testing.
 	// PrimarySources 按来源名排序，与候选链的回落顺序无关；分配只看权重。
 	require.Equal(t, []stockCNSource{{Provider: "eastmoney", SourceID: "stockcn_http", Weight: 2},
 		{Provider: "tdx", SourceID: "normal_7709", Weight: 4}}, five.PrimarySources(), "新浪、腾讯只做 fallback")
+	// 日线：通达信为主，东方财富为备。
+	daily, err := route.Kline("1d")
+	require.NoError(t, err)
+	require.Equal(t, "stockcn_equity_kline_1d", daily.RouteID())
+	require.Equal(t, []string{"tdx", "eastmoney"}, daily.ProviderChain())
+	require.Equal(t, []stockCNSource{{Provider: "tdx", SourceID: "normal_7709", Weight: 1}}, daily.PrimarySources())
 }
 
 // 按标的固定分配：同一路由、同一标的每次都分到同一来源；沪深 300 量级的标的在两家 primary 之间按权重 4:2 分配，新浪、腾讯不分到标的。

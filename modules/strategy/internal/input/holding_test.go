@@ -27,7 +27,7 @@ func barAt(t *testing.T, calendar, frequency, storageStart string) PeriodBoundar
 	return bar
 }
 
-// scheduledStart 返回规则 r 的批次 day 最近一个应建仓 bar 的 bar_start（上海时间或 UTC，按日历）。
+// scheduledStart 返回规则 r 的批次 day 最近一个应建仓 bar 的 bar_start（A 股日内写上海时间，其余写 UTC；A 股日线是日期键）。
 func scheduledStart(t *testing.T, calendar, frequency string, strategy dsl.Strategy, bar PeriodBoundaries, day int) string {
 	t.Helper()
 	clocks, err := HoldingClocks(calendar, frequency, strategy, bar)
@@ -47,7 +47,7 @@ func startOfIndex(t *testing.T, calendar, frequency string, bar PeriodBoundaries
 	target, err := FromBarEnd(calendar, frequency, end)
 	require.NoError(t, err)
 	require.Equal(t, index, target.BarIndex)
-	if calendar == "cn_stock" {
+	if calendar == "cn_stock" && frequency != "1d" {
 		location, _ := time.LoadLocation("Asia/Shanghai")
 		return target.StorageStart.In(location).Format("2006-01-02T15:04")
 	}
@@ -96,19 +96,19 @@ func TestHoldingClocksCryptoTradingDaysAnchor(t *testing.T) {
 func TestHoldingClocksStockDaily(t *testing.T) {
 	const cal, freq = "cn_stock", "1d"
 	// 2025 年国庆：10-01～10-08 休市，10-09（周四）是当周第 1 个交易日。
-	bar := barAt(t, cal, freq, "2025-10-09T16:00:00Z") // 上海 2025-10-10 0 点
+	bar := barAt(t, cal, freq, "2025-10-10T00:00:00Z") // 交易日 2025-10-10 的日期键
 	week := holdingStrategy(t, "{calendar: week, days: [1, 3]}")
 	require.Equal(t, "2025-10-09T00:00", scheduledStart(t, cal, freq, week, bar, 1))
 	// 当周只有 2 个交易日，第 3 个不存在：取上一周（09-29 周一起，09-30 是第 2 个……第 3 个不存在，再往前 09-24）。
 	require.Equal(t, "2025-09-24T00:00", scheduledStart(t, cal, freq, week, bar, 3))
 	month := holdingStrategy(t, "{calendar: month, days: [18]}")
 	// 10 月只有 17 个交易日，9 月有 22 个：最近的第 18 个交易日在 9 月。
-	end := barAt(t, cal, freq, "2025-10-30T16:00:00Z")
+	end := barAt(t, cal, freq, "2025-10-31T00:00:00Z")
 	require.Equal(t, "2025-09-24T00:00", scheduledStart(t, cal, freq, month, end, 18))
 	every := holdingStrategy(t, `{calendar: trading_days, every: 5, days: [1], anchor: "2025-09-29"}`)
 	// 09-29、09-30、10-09、10-10、10-13 是第 1～5 个；10-14 开始下一个周期。
-	require.Equal(t, "2025-09-29T00:00", scheduledStart(t, cal, freq, every, barAt(t, cal, freq, "2025-10-12T16:00:00Z"), 1))
-	require.Equal(t, "2025-10-14T00:00", scheduledStart(t, cal, freq, every, barAt(t, cal, freq, "2025-10-13T16:00:00Z"), 1))
+	require.Equal(t, "2025-09-29T00:00", scheduledStart(t, cal, freq, every, barAt(t, cal, freq, "2025-10-13T00:00:00Z"), 1))
+	require.Equal(t, "2025-10-14T00:00", scheduledStart(t, cal, freq, every, barAt(t, cal, freq, "2025-10-14T00:00:00Z"), 1))
 }
 
 // A 股 1h 日内帧：at first 是当日第一根（9:30），at last 是收盘那一根（14:00 开始）。
@@ -146,9 +146,11 @@ func TestHoldingAnchorBar(t *testing.T) {
 	err = CheckHoldingAnchors(DefaultCalendar, "1h", offBar)
 	require.Error(t, err)
 	require.True(t, strings.Contains(err.Error(), "不是 1h 周期某根 bar 的起点"), err.Error())
-	// A 股日线的 bar_start 是上海 0 点：UTC 0 点不是。
-	stock := holdingStrategy(t, `{bars: 5, offsets: [0], anchor: "2025-10-09T00:00:00Z"}`)
+	// A 股日线的 bar_start 是交易日期的 UTC 0 点：上海 0 点（前一日 16:00 UTC）不是。
+	stock := holdingStrategy(t, `{bars: 5, offsets: [0], anchor: "2025-10-08T16:00:00Z"}`)
 	require.Error(t, CheckHoldingAnchors("cn_stock", "1d", stock))
+	key := holdingStrategy(t, `{bars: 5, offsets: [0], anchor: "2025-10-09T00:00:00Z"}`)
+	require.NoError(t, CheckHoldingAnchors("cn_stock", "1d", key))
 	date := holdingStrategy(t, `{bars: 5, offsets: [0], anchor: "2025-10-09"}`)
 	require.NoError(t, CheckHoldingAnchors("cn_stock", "1d", date))
 	// 交易日期不是交易日。
@@ -167,7 +169,7 @@ func TestHoldingCalendarDaysCheckedAgainstCalendar(t *testing.T) {
 	require.NoError(t, CheckHoldingAnchors("cn_stock", "1d", holdingStrategy(t, "{calendar: week, days: [5, -5]}")))
 	require.NoError(t, CheckHoldingAnchors(DefaultCalendar, "1h", holdingStrategy(t, "{calendar: week, days: [7]}")))
 	require.NoError(t, CheckHoldingAnchors(DefaultCalendar, "1h", holdingStrategy(t, "{calendar: month, days: [31]}")))
-	_, err := HoldingClocks("cn_stock", "1d", holdingStrategy(t, "{calendar: week, days: [6]}"), barAt(t, "cn_stock", "1d", "2025-10-09T16:00:00Z"))
+	_, err := HoldingClocks("cn_stock", "1d", holdingStrategy(t, "{calendar: week, days: [6]}"), barAt(t, "cn_stock", "1d", "2025-10-10T00:00:00Z"))
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "找不到对应的建仓日")
 }

@@ -18,7 +18,7 @@ func TestClosedPeriodCryptoUsesMostRecentClosedBoundary(t *testing.T) {
 }
 
 func TestStockPeriodSkipsWeekendAndKeepsEventScheduleIdentity(t *testing.T) {
-	// 周一收盘前求值的仍是周五：携带周五零点 Storage 键的事件必须解析到同一个收盘边界。
+	// 周一收盘前求值的仍是周五：携带周五日期键（UTC 零点）的事件必须解析到同一个收盘边界。
 	trigger := time.Date(2026, 8, 31, 5, 0, 0, 0, time.UTC) // 13:00 Shanghai
 	scheduled, err := ClosedPeriod("cn_stock", "1d", trigger)
 	if err != nil {
@@ -35,7 +35,7 @@ func TestStockPeriodSkipsWeekendAndKeepsEventScheduleIdentity(t *testing.T) {
 	if !scheduled.BarEnd.Equal(wantEnd) {
 		t.Fatalf("bar_end = %s，期望 %s", scheduled.BarEnd, wantEnd)
 	}
-	wantPrevious := time.Date(2026, 8, 26, 16, 0, 0, 0, time.UTC)
+	wantPrevious := time.Date(2026, 8, 27, 0, 0, 0, 0, time.UTC)
 	if !scheduled.PreviousStart.Equal(wantPrevious) {
 		t.Fatalf("上一根 bar_start = %s，期望 %s", scheduled.PreviousStart, wantPrevious)
 	}

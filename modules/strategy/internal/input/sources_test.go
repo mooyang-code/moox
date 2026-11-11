@@ -220,7 +220,7 @@ func TestLoadBarReadsSourceAsOf(t *testing.T) {
 	}
 }
 
-// S7 A 股：1h 主帧 15:00 那根读当天的日线（与日线收盘对齐），10:30 那根读上一交易日的日线；日线时间键是上海零点。
+// S7 A 股：1h 主帧 15:00 那根读当天的日线（与日线收盘对齐），10:30 那根读上一交易日的日线；日线时间键是交易日期的 UTC 零点。
 func TestLoadBarStockSourceAsOf(t *testing.T) {
 	client := newFakeClient("spot")
 	withDailySource(client, "spot", "cn_stock")
@@ -248,8 +248,8 @@ func TestLoadBarStockSourceAsOf(t *testing.T) {
 		barStart, day time.Time
 		aligned       bool
 	}{
-		"15:00 读当天":    {shAt(t, 10, 9, 14, 0), shAt(t, 10, 9, 0, 0), true},
-		"10:30 读上一交易日": {shAt(t, 10, 9, 9, 30), shAt(t, 10, 8, 0, 0), false},
+		"15:00 读当天":    {shAt(t, 10, 9, 14, 0), stockDay(t, 2026, 10, 9), true},
+		"10:30 读上一交易日": {shAt(t, 10, 9, 9, 30), stockDay(t, 2026, 10, 8), false},
 	} {
 		boundary := mustPeriod(t, func() (PeriodBoundaries, error) { return FromStorageStart("cn_stock", "1h", tc.barStart) })
 		if _, aligned, err := resolved.Sources["daily"].Period(boundary.BarEnd); err != nil || aligned != tc.aligned {

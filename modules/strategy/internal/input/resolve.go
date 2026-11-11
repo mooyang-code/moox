@@ -456,8 +456,8 @@ func referencedTags(strategy dsl.Strategy) []string {
 	return uniqueSorted(tags)
 }
 
-// CheckCoverage 在启用实例时校验 View 的覆盖（需要读取覆盖统计，统计未缓存时现算）：A 股日线总是校验行键是交易日的
-// 上海零点（按 UTC 零点写行的数据集启用后每一期都会被丢弃）；设置了 min_age_bars 时校验能追溯所需的历史。两者都不
+// CheckCoverage 在启用实例时校验 View 的覆盖（需要读取覆盖统计，统计未缓存时现算）：A 股日线总是校验行键是交易日期的
+// UTC 零点（不按日期键写行的数据集启用后每一期都会被丢弃）；设置了 min_age_bars 时校验能追溯所需的历史。两者都不
 // 涉及时不读取。
 //
 // 校验的是关联任务的结果 View：它的历史由因子计算与手动补算写出，所以 min_age_bars 需要的历史也要先补算出来。

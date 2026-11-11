@@ -58,8 +58,7 @@ func mustCode[T retInfoGetter](rsp T, err error) commonpb.ErrorCode {
 func TestStartReplayRecordsCalendar(t *testing.T) {
 	h := newHarness(t)
 	h.resolver.calendar = "cn_stock"
-	shanghai := time.FixedZone("CST", 8*3600)
-	h.resolver.view = input.ViewInfo{ViewID: "view_a", ActiveIndexID: "idx", Generation: "idx@b1", IndexedFrom: time.Date(2025, 1, 2, 0, 0, 0, 0, shanghai), IndexedTo: time.Date(2026, 10, 9, 0, 0, 0, 0, shanghai)}
+	h.resolver.view = input.ViewInfo{ViewID: "view_a", ActiveIndexID: "idx", Generation: "idx@b1", IndexedFrom: time.Date(2025, 1, 2, 0, 0, 0, 0, time.UTC), IndexedTo: time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC)}
 	h.createStrategy("s1", demoDSL)
 	rsp, _ := h.service.StartReplay(h.ctx, &strategypb.StartReplayReq{StrategyId: "s1", FactorTasks: map[string]string{"spot": "ftask_a"}, StartTime: "2026-09-01", EndTime: "2026-10-01"})
 	requireOK(t, int32(rsp.GetRetInfo().GetCode()), rsp.GetRetInfo().GetMsg())

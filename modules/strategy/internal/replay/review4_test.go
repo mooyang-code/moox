@@ -157,13 +157,9 @@ func TestReplaySkipOrderMatchesLive(t *testing.T) {
 
 // A 股日线：年龄窗口里落在非交易日的行（例如节假日误写的一行）跳过，不让整个回放失败。
 func TestPresenceSkipsRowsOffCalendar(t *testing.T) {
-	location, err := time.LoadLocation("Asia/Shanghai")
-	if err != nil {
-		t.Fatal(err)
-	}
 	resolved := input.Resolved{Calendar: "cn_stock", Bar: "1d", MinAgeBars: 1}
-	holiday := time.Date(2026, 10, 5, 0, 0, 0, 0, location).UTC()
-	trading := time.Date(2026, 10, 9, 0, 0, 0, 0, location).UTC()
+	holiday := time.Date(2026, 10, 5, 0, 0, 0, 0, time.UTC)
+	trading := time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC)
 	rows := input.RangeRows{Bars: map[int64]map[string]input.Row{
 		holiday.Unix(): {"600000.SH": {SubjectID: "600000.SH", DataTime: holiday}},
 		trading.Unix(): {"600000.SH": {SubjectID: "600000.SH", DataTime: trading}},

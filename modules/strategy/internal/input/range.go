@@ -18,8 +18,9 @@ import (
 const DefaultReplayMaxBars = 20000
 
 // ReplayRange 把回放区间换成日历的口径：A 股日线按上海日期回放，两端各取所在上海日期的零点，[起始日期, 结束日期)
-// 内的交易日都包含在内（区间通常按 UTC 输入，而 A 股日线的 bar_start 是上海零点、即前一日 16:00 UTC，直接比较会漏掉
-// 首日、多出末日）；A 股日内的 bar_start 是真实的开盘时刻，与 crypto 一样原样返回。
+// 内的交易日都包含在内。页面按上海时区选日期，传来的两端是上海零点（前一日 16:00 UTC）；A 股日线的 bar_start 是
+// 日期键（交易日期 D 的 UTC 零点，即上海 D 日 08:00），落在 [起始日期的上海零点, 结束日期的上海零点) 内当且仅当
+// 起始日期 ≤ D < 结束日期，所以区间仍按上海零点记录。A 股日内的 bar_start 是真实的开盘时刻，与 crypto 一样原样返回。
 func ReplayRange(calendar, bar string, start, end time.Time) (time.Time, time.Time, error) {
 	if !stockDaily(calendar, bar) {
 		return start, end, nil
@@ -76,8 +77,8 @@ func firstBarAtOrAfter(calendar, bar string, at time.Time) (PeriodBoundaries, er
 		return FromStorageStart(calendar, bar, start)
 	}
 	if stockDaily(calendar, bar) {
-		// 不经 ClosedPeriod 回看上一根收盘：at 落在日历首日时没有上一根。取 at 所在上海日期起的第一个交易日，
-		// at 晚于那天零点时再往后一根。
+		// 不经 ClosedPeriod 回看上一根收盘：at 落在日历首日时没有上一根。取 at 所在 UTC 日期起的第一个交易日，
+		// at 晚于那天的日期键（UTC 零点）时再往后一根。
 		day, err := CeilStorageStart(calendar, bar, at)
 		if err != nil {
 			return PeriodBoundaries{}, err
@@ -152,8 +153,8 @@ func (e *EarlyStartError) Error() string {
 	return fmt.Sprintf("回放起点 %s 太早：View 的活跃序列从 %s 起才有数据，%s 要求起点之前还有 %d 根历史；可用起点为 %s", label(e.First), label(e.Coverage), e.Source, e.History, label(e.Earliest))
 }
 
-// PeriodLabel 是给用户看的 bar 标识：A 股日线写上海日期（bar_start 是上海零点，按 UTC 写会是前一日 16:00），
-// A 股日内写 bar_start 的上海时间，其余写 bar_start 的 UTC 时间。
+// PeriodLabel 是给用户看的 bar 标识：A 股日线写上海日期（bar_start 是日期键，即上海当日 08:00，日期就是交易日期；
+// 回放区间的端点是上海零点，按上海时区取日期两者都对），A 股日内写 bar_start 的上海时间，其余写 bar_start 的 UTC 时间。
 func PeriodLabel(calendar, bar string, storageStart time.Time) string {
 	if stockDaily(calendar, bar) {
 		if _, location, err := stockCalendar(); err == nil {
@@ -214,7 +215,7 @@ func ReplayWindow(resolved Resolved, program *dsl.Program, view ViewInfo, start,
 		return time.Time{}, err
 	}
 	// limit 是终点的上限，last 是最后一根可以回放的 bar。最新一根已经写完时它就是日历的最后一根：终点往后放一天
-	// （日线即次日的上海零点，区间仍是“不含结束日”的整日口径；日内同样包含最后一根），之后没有可知的交易日，
+	// （日线即次日的日期键，区间仍是“不含结束日”的整日口径；日内同样包含最后一根），之后没有可知的交易日，
 	// ReplayBars 枚举到日历末尾为止。
 	limit, last := latest.StorageStart, latest.PreviousStart
 	if bounds.ToClosed {

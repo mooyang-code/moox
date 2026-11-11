@@ -25,9 +25,9 @@ UPDATE t_strategy_instances SET c_resolved_json = '` + instanceJSON + `' WHERE c
 }
 
 func stockEvent(eventID string) (*eventpb.EventMessage, *storagepb.ViewDataReady) {
-	shanghai := time.FixedZone("CST", 8*3600)
 	message := &eventpb.EventMessage{EventId: eventID, EventName: "event.storage.view.data_ready", SpaceId: "space"}
-	payload := &storagepb.ViewDataReady{ViewId: "view_factor_a", Frequency: "1d", PeriodTime: time.Date(2026, 10, 9, 0, 0, 0, 0, shanghai).Unix(), Status: "complete", UniverseSubjectIds: []string{"600000.SH"}}
+	// A 股日线的周期时间是日期键：交易日期的 UTC 零点。
+	payload := &storagepb.ViewDataReady{ViewId: "view_factor_a", Frequency: "1d", PeriodTime: time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC).Unix(), Status: "complete", UniverseSubjectIds: []string{"600000.SH"}}
 	return message, payload
 }
 

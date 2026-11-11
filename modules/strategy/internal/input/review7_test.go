@@ -9,14 +9,14 @@ import (
 	"time"
 )
 
-// A 股日线索引统计的行键不是上海零点（按 UTC 零点写行）：提交回放时就报出，而不是规整后通过、执行时每根都缺数据。
-func TestCoverageBoundsRejectsUTCMidnightStockKeys(t *testing.T) {
+// A 股日线索引统计的行键不是 UTC 零点（例如按上海零点写行）：提交回放时就报出，而不是规整后通过、执行时每根都缺数据。
+func TestCoverageBoundsRejectsNonDateKeyStockRows(t *testing.T) {
 	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {ViewID: "view_stock"}}, Bar: "1d", Calendar: "cn_stock"}
-	view := ViewInfo{ViewID: "view_stock", IndexedFrom: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), IndexedTo: time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC), SeriesBars: 5000}
-	if _, err := CoverageBounds(view, resolved, testNow); err == nil || !strings.Contains(err.Error(), "不是上海时间零点") {
-		t.Fatalf("UTC 零点的行键应报错：%v", err)
+	view := ViewInfo{ViewID: "view_stock", IndexedFrom: shanghaiMidnight(t, 2026, 9, 1), IndexedTo: shanghaiMidnight(t, 2026, 10, 9), SeriesBars: 5000}
+	if _, err := CoverageBounds(view, resolved, testNow); err == nil || !strings.Contains(err.Error(), "不是 UTC 零点") {
+		t.Fatalf("上海零点的行键应报错：%v", err)
 	}
-	if _, err := ReplayWindow(resolved, nil, view, stockDay(t, 2026, 9, 10), stockDay(t, 2026, 10, 1), testNow); err == nil || !strings.Contains(err.Error(), "不是上海时间零点") {
+	if _, err := ReplayWindow(resolved, nil, view, stockDay(t, 2026, 9, 10), stockDay(t, 2026, 10, 1), testNow); err == nil || !strings.Contains(err.Error(), "不是 UTC 零点") {
 		t.Fatalf("提交回放时就应报出：%v", err)
 	}
 }

@@ -200,7 +200,7 @@ func TestReplayWindowUsesActiveCoverage(t *testing.T) {
 
 // A 股日历只解析一次，交易日序号用二分查找；回溯过远（溢出）报错而不是得到一个错误的时间。
 func TestStockCalendarCachedAndOverflowChecked(t *testing.T) {
-	day := time.Date(2026, 9, 1, 0, 0, 0, 0, time.FixedZone("CST", 8*3600))
+	day := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 	first, err := FromStorageStart("cn_stock", "1d", day)
 	if err != nil {
 		t.Fatal(err)

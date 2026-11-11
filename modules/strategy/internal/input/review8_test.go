@@ -67,17 +67,17 @@ func TestGenerationChangeReadRetriesAndConfirms(t *testing.T) {
 	}
 }
 
-// A 股日线实例不论是否设置 min_age_bars，启用时都检查最晚一行的行键：按 UTC 零点写行的数据集在启用时就拒绝；
+// A 股日线实例不论是否设置 min_age_bars，启用时都检查最晚一行的行键：不按日期键（UTC 零点）写行的数据集在启用时就拒绝；
 // 最早一行可能来自早已停更的序列，不检查；还没有数据时允许启用。
 func TestStockEnableChecksRowKeyWithoutMinAge(t *testing.T) {
 	now := time.Date(2026, 10, 12, 10, 0, 0, 0, time.UTC)
 	resolved := Resolved{Market: dsl.SingleMarket("spot"), Tasks: map[string]TaskBinding{"spot": {ViewID: "view_stock"}}, Bar: "1d", Calendar: "cn_stock"}
 	client := newFakeClient("spot")
-	client.views["view_stock"] = ViewInfo{ViewID: "view_stock", IndexedFrom: stockDay(t, 2026, 1, 5), IndexedTo: time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC), SeriesBars: 500}
-	if err := CheckCoverage(context.Background(), client, "space", resolved, now); err == nil || !strings.Contains(err.Error(), "不是上海时间零点") || !strings.Contains(err.Error(), "不能启用实例") {
-		t.Fatalf("UTC 零点写行的 A 股数据集应拒绝启用：%v", err)
+	client.views["view_stock"] = ViewInfo{ViewID: "view_stock", IndexedFrom: stockDay(t, 2026, 1, 5), IndexedTo: shanghaiMidnight(t, 2026, 10, 9), SeriesBars: 500}
+	if err := CheckCoverage(context.Background(), client, "space", resolved, now); err == nil || !strings.Contains(err.Error(), "不是 UTC 零点") || !strings.Contains(err.Error(), "不能启用实例") {
+		t.Fatalf("按上海零点写行的 A 股数据集应拒绝启用：%v", err)
 	}
-	client.views["view_stock"] = ViewInfo{ViewID: "view_stock", IndexedFrom: time.Date(2026, 1, 5, 0, 0, 0, 0, time.UTC), IndexedTo: stockDay(t, 2026, 10, 9), SeriesBars: 500}
+	client.views["view_stock"] = ViewInfo{ViewID: "view_stock", IndexedFrom: shanghaiMidnight(t, 2026, 1, 5), IndexedTo: stockDay(t, 2026, 10, 9), SeriesBars: 500}
 	if err := CheckCoverage(context.Background(), client, "space", resolved, now); err != nil {
 		t.Fatalf("最早一行的遗留数据不应阻止启用：%v", err)
 	}
