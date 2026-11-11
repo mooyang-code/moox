@@ -603,6 +603,7 @@ import {
   collectionTaskNameError,
   isCrossMarketSelection,
   availableExtraFieldIds,
+  extraFieldOptionsPresent,
   outputFieldSelectable,
   outputFieldVisible,
   pruneUnavailableFields,
@@ -1232,7 +1233,7 @@ async function loadTaskTypeFields() {
     if (token !== taskTypeFieldRequestToken || editor.data_type !== dataType) return;
     taskTypeFields.value = [...(response.detail?.fields || [])].sort((a, b) => a.sort_order - b.sort_order);
     extraFieldOptions.value = response.detail?.extra_fields || [];
-    extraFieldOptionsLoaded.value = true;
+    extraFieldOptionsLoaded.value = extraFieldOptionsPresent(response.detail);
   } catch (error) {
     if (token === taskTypeFieldRequestToken) {
       taskTypeFields.value = [];

@@ -5,6 +5,7 @@ import {
   parseKlineResampleParams,
   collectionTaskNameError,
   availableExtraFieldIds,
+  extraFieldOptionsPresent,
   outputFieldSelectable,
   outputFieldVisible,
   pruneUnavailableFields,
@@ -266,6 +267,19 @@ describe("附加输出字段", () => {
     expect(pruneUnavailableFields(selected, new Set(), false)).toBe(selected);
     const plain = ["close"];
     expect(pruneUnavailableFields(plain, new Set(), true)).toBe(plain);
+  });
+
+  it("旧版 Collector 的响应没有 extra_fields 时不算读到附加字段清单", () => {
+    expect(extraFieldOptionsPresent({ extra_fields: [] })).toBe(true);
+    expect(extraFieldOptionsPresent({ extra_fields: [{ field_id: "funding_rate" }] })).toBe(true);
+    expect(extraFieldOptionsPresent({})).toBe(false);
+    expect(extraFieldOptionsPresent({ extra_fields: null })).toBe(false);
+    expect(extraFieldOptionsPresent(undefined)).toBe(false);
+    // 编辑带 funding_rate 的任务：旧版响应下保留这一列，新版响应明确给出空清单时才去掉
+    const selected = ["close", "funding_rate"];
+    const drop = (detail: { extra_fields?: unknown }) => shouldDropUnavailableFields(true, 1, extraFieldOptionsPresent(detail));
+    expect(pruneUnavailableFields(selected, new Set(), drop({}))).toBe(selected);
+    expect(pruneUnavailableFields(selected, new Set(), drop({ extra_fields: [] }))).toEqual(["close"]);
   });
 
   it("编辑任务时标签或附加字段清单还没读到就不去掉已选项", () => {

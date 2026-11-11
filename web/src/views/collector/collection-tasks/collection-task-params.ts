@@ -80,6 +80,14 @@ export function shouldDropUnavailableFields(editing: boolean, routeCount: number
 }
 
 /**
+ * 响应里有没有带附加字段清单。旧版 Collector 的响应没有 extra_fields，这时不能当成“清单为空”：
+ * 否则编辑已有任务时会把已选的附加字段（例如 funding_rate）当成不可选去掉再提交。
+ */
+export function extraFieldOptionsPresent(detail: { extra_fields?: unknown } | null | undefined): boolean {
+  return Array.isArray(detail?.extra_fields);
+}
+
+/**
  * 去掉已选字段里当前不可选的附加字段：确实有要去掉的才返回新数组，否则原样返回同一个数组
  * （调用方据此判断要不要赋值，避免监听已选字段时反复触发）。
  */
