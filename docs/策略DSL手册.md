@@ -222,7 +222,7 @@ select: {top: 10, group: {by: industry, max: 3}}                   # 每个行�
 select: {top: 6, group: {by: industry, quotas: [2, 1, 1], rest: 1}} # 按组内最优名次给行业排序，前三个行业名额 2、1、1，其余行业各 1
 ```
 
-按名次从前往后逐个接受，所属组已满就跳过（明细 `group_full`）。`by` 必须是 View 里的数值列；分组值为空的标的按缺数处理。`max` 与 `quotas` 二选一，`rest` 只能配 `quotas`。
+按名次从前往后逐个接受，所属组已满就跳过（明细 `group_full`）。`by` 必须是数值列：主帧 View 的列，或附加来源的列（见下）；分组值为空的标的按缺数处理。`max` 与 `quotas` 二选一，`rest` 只能配 `quotas`。
 
 写了 `sources` 时，`by` 也可以写附加来源的列（`来源名.列名`），例如小时线主帧按日线来源里的行业代码分组：`group: {by: daily.industry, max: 2}`。分组值取这一根主帧读到的最新一根来源值；来源读不到或这一列为空的标的同样按缺数处理（明细 `missing:daily.industry`）。完整例子见 13.10。
 
