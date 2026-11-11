@@ -22,26 +22,21 @@ web-host/
    pnpm build:prod
    ```
 
-2. 重新生成嵌入静态资源：
+2. 构建 Web Host（`build.sh` 会按 `web/dist` 现场生成内嵌资源，不用仓库里提交的 statik.go；第 1 步已构建好前端，所以设 `MOOX_WEB_DIST_READY=1` 跳过 Docker 构建）：
    ```bash
-   cd ../web-host
-   make statik
+   cd ..
+   MOOX_WEB_DIST_READY=1 bash scripts/build/build.sh web-host
    ```
 
-3. 构建 Web Host：
-   ```bash
-   make build
-   ```
-
-4. 运行服务器：
+3. 运行服务器：
    ```bash
    MOOX_WEB_HOST_ADDR=127.0.0.1:9528 MOOX_WEB_HOST_HEALTH_ADDR=127.0.0.1:19527 ../bin/moox-web-host
    ```
 
 ## Makefile 命令
 
-- `make build` - 使用当前已嵌入的 statik 文件构建 Go 二进制文件
-- `make statik` - 仅生成 statik 文件（前端更新后使用）
+- `make build` - 调用 `scripts/build/build.sh web-host`：先在 Docker 里按当前源码构建前端，再内嵌并编译（不用仓库里提交的 statik.go）
+- `make statik` - 用 `web/dist` 改写仓库里的 `internal/statik/statik.go`（只为让这份提交的文件跟上前端；发布构建不依赖它）
 - `make build-linux` / `make build-darwin` - 交叉构建到仓库根目录 `bin/moox-web-host`
 - `make clean` - 仅删除 `web-host/bin` 与 `web-host/release`；不会删除根目录 `bin/moox-web-host`
 - `make deps` - 执行 `go mod download` 下载依赖（不执行 `go mod tidy`）
@@ -50,9 +45,8 @@ web-host/
 ## 开发流程
 
 1. 前端开发时在 `web` 目录进行
-2. 前端构建完成后，在本目录运行 `make statik`
-3. 再运行 `make build`
-4. 生成在仓库根目录的 `bin/moox-web-host` 二进制文件包含了所有前端资源
+2. 在本目录运行 `make build`（或 `make build-linux`），它会按当前源码构建前端并内嵌
+3. 生成在仓库根目录的 `bin/moox-web-host` 二进制文件包含了所有前端资源
 
 原生部署（`setup bootstrap` / `setup release build`）会在本机重新构建前端并嵌入 web-host；发布线上二进制见
 `skills/moox/references/native-release.md`。

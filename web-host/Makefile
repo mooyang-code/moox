@@ -8,8 +8,8 @@ help:
 	@echo "MooX web-host module"
 	@echo ""
 	@echo "Targets proxy to repository-level scripts:"
-	@echo "  make statik       - regenerate embedded statik assets from ../web/dist"
-	@echo "  make build        - build moox-web-host with current embedded statik assets"
+	@echo "  make statik       - rewrite the committed internal/statik/statik.go from ../web/dist (release builds do not use it)"
+	@echo "  make build        - build the frontend from source in Docker, embed it and build moox-web-host"
 	@echo "  make build-linux  - build moox-web-host for linux/amd64"
 
 statik:

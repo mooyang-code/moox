@@ -170,14 +170,13 @@ systemctl --user restart moox-factor-engine.service
 
 **前端 `web-host`**（本机构建，发布到控制机 `prod` 单元）：
 
-1. `web/` 下 `NODE_OPTIONS=--experimental-require-module pnpm run build:prod`。
-2. `web-host/` 下 `make statik && make build-linux`（PATH 里要有 `.go-version` 固定版本的 Go toolchain），产物 `bin/moox-web-host`。
-   **国内网络要先设 `GOPROXY=https://mirrors.tencent.com/go,direct`**：`make statik` 要 `go run` 一个外部工具，取不到 `proxy.golang.org` 会失败；
-   分两条命令执行时，失败后 `make build-linux` 仍会成功，打出的是内嵌**旧前端**的二进制。构建后核对 `git status` 里 `web-host/internal/statik/statik.go`
-   已被改写，装完再用线上取到的新分包文案确认（见下一步之后的“线上验证”）。
-3. 构建会改写 `web-host/internal/statik/statik.go` 与 `web/src/components.d.ts`：发布后 `git checkout --` 还原，**不要提交**。
-4. 用 `native-release.sh install --host control --unit prod --file web-host/bin/moox-web-host --restart web-host` 装。
-5. 线上验证：curl 懒加载分包检索新文案；页面需登录，由用户自己在浏览器验证。
+1. 和其他组件一样在干净工作树里 `native-release.sh build web-host`（本机 Docker 要在运行，macOS 先 `colima start`）。
+   `build.sh` 编译 web-host 时会先在 Docker 里按当前提交的 `web/` 源码构建前端，再把内嵌资源生成到临时目录、用 `go build -overlay` 编译，
+   **不用也不改仓库里提交的 `web-host/internal/statik/statik.go`**（那份只在有人手工更新时才变，2026-11-10 有人直接拿它编译，线上前端整体回退到 11-03）。
+   构建输出里有一行“moox-web-host 内嵌前端：static/js/index-<哈希>.js”，记下来。
+   国内网络取不到 statik 工具时（报“生成内嵌前端失败”）先设 `GOPROXY=https://mirrors.tencent.com/go,direct` 再重试。
+2. 用 `native-release.sh install --host control --unit prod --file <BUILT 输出的路径> --restart web-host` 装。
+3. 线上验证：`curl -sk https://<control 地址>:9527/ | grep -o 'static/js/index-[^"]*\.js'` 应等于第 1 步记下的入口文件；需要时再 curl 入口文件检索新菜单或文案。页面需登录，由用户自己在浏览器验证。
 
 ## 发布后验证（只读）
 

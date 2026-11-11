@@ -88,14 +88,37 @@ build_storage_cli() {
   build_go modules/storage ./cmd/cli moox-storage-cli 0
 }
 
+# web-host 内嵌的前端一律按当前源码现场生成，不用仓库里提交的 web-host/internal/statik/statik.go：
+# 那份文件只在有人手工更新时才变，直接拿它编译会把线上前端整体回退（2026-11-10 发生过）。
+# 默认先用 build-web-docker.sh 从当前源码构建 web/dist；调用方已经构建好 web/dist 时设 MOOX_WEB_DIST_READY=1 跳过这一步。
+# statik 生成到临时目录，用 go build -overlay 替换内嵌包，不改动仓库文件（native-release.sh 要求工作区干净）。
+STATIK_VERSION="v0.1.7"
 build_web_host() {
   echo "==> build moox-web-host"
+  if [[ "${MOOX_WEB_DIST_READY:-}" != "1" ]]; then
+    bash "${ROOT}/scripts/build/build-web-docker.sh"
+  fi
+  if [[ ! -d "${ROOT}/web/dist/static/js" ]]; then
+    echo "web/dist 不完整（没有 static/js）：先用 scripts/build/build-web-docker.sh 构建前端" >&2
+    exit 1
+  fi
+  local stage
+  stage="$(mktemp -d "${TMPDIR:-/tmp}/moox-web-statik.XXXXXX")"
   (
+    trap 'rm -rf "${stage}"' EXIT
     cd "${ROOT}/web-host"
+    # statik 工具要从 Go 模块代理下载一次；国内网络取不到 proxy.golang.org 时先设 GOPROXY=https://mirrors.tencent.com/go,direct。
+    if ! GOOS= GOARCH= go run "github.com/rakyll/statik@${STATIK_VERSION}" -src="${ROOT}/web/dist" -dest="${stage}" -f >/dev/null; then
+      echo "生成内嵌前端失败（go run statik）；国内网络先设 GOPROXY=https://mirrors.tencent.com/go,direct 再重试" >&2
+      exit 1
+    fi
+    printf '{"Replace":{"%s":"%s"}}\n' "${ROOT}/web-host/internal/statik/statik.go" "${stage}/statik/statik.go" > "${stage}/overlay.json"
     GOOS="${TARGET_GOOS}" GOARCH="${TARGET_GOARCH}" CGO_ENABLED=0 go build \
+      -overlay "${stage}/overlay.json" \
       -ldflags "${LDFLAGS}" \
       -o "${BIN_DIR}/$(binary_name moox-web-host)" .
   )
+  echo "==> moox-web-host 内嵌前端：$(grep -o 'static/js/index-[^"]*\.js' "${ROOT}/web/dist/index.html" | head -1)"
 }
 
 build_hostagent() {
