@@ -2,13 +2,73 @@ package target
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
 
+	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
+	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
+	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
+	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/stretchr/testify/require"
 )
+
+// lookupCountingAdapter 数查单次数：查单一律超时，订单一直停在结果未知。
+type lookupCountingAdapter struct {
+	execution.ExecutionAdapter
+	lookups *int
+}
+
+func (a lookupCountingAdapter) GetOrder(context.Context, exchange.SymbolKey, string) (exchange.Order, error) {
+	*a.lookups++
+	return exchange.Order{}, errors.New("查单超时")
+}
+
+// realResolveOrders 解析结果未知的单交给真的订单服务（带查询次数限制），其余仍走桩。
+type realResolveOrders struct {
+	*targetOrderServiceStub
+	real *orderapp.Service
+}
+
+func (o realResolveOrders) ResolveUnknownBatch(ctx context.Context, spaceID string, orderIDs []string) ([]orderapp.BatchResult, error) {
+	return o.real.ResolveUnknownBatch(ctx, spaceID, orderIDs)
+}
+
+func (o realResolveOrders) ResolveUnknown(ctx context.Context, spaceID, orderID string) (orderdomain.Order, error) {
+	return o.real.ResolveUnknown(ctx, spaceID, orderID)
+}
+
+// 新目标第 1 阶段每轮收敛都会碰到上一份目标留下的结果未知单：同一笔单在未知窗口内最多查两次（第一次机会和窗口到期时），
+// 不能每轮都查单、拉成交。
+func TestStaleUnknownOrderLookupsAreLimitedAcrossRounds(t *testing.T) {
+	f := swapPolicyFixture(t, restingSettings)
+	f.now = time.Now().UTC()
+	f.target(t, []store.InstrumentTarget{{InstrumentID: "BTC-USDT-SWAP", Quantity: "10"}})
+	f.gtcOrder(t, "stale-unknown", "target-old", "SUBMIT_UNKNOWN")
+	lookups := 0
+	executor := f.restingExecutor()
+	executor.Orders = realResolveOrders{targetOrderServiceStub: f.orders, real: &orderapp.Service{
+		Store: f.store, Adapters: bookAdapters{lookupCountingAdapter{lookups: &lookups}}, Now: func() time.Time { return f.now },
+	}}
+
+	for round := 0; round < 5; round++ {
+		_, err := executor.Converge(context.Background(), "space-1", "logical-1")
+		require.Error(t, err, "限价 GTC 旧单解析不出来，报错等下一轮")
+	}
+	require.Equal(t, 1, lookups, "未知窗口内连续 5 轮只查一次")
+
+	f.now = f.now.Add(2*time.Minute + time.Second)
+	for round := 0; round < 3; round++ {
+		_, err := executor.Converge(context.Background(), "space-1", "logical-1")
+		require.Error(t, err)
+	}
+	require.Equal(t, 2, lookups, "窗口到期时再查最后一次")
+	order, err := f.store.GetOrder(context.Background(), "space-1", "stale-unknown")
+	require.NoError(t, err)
+	require.Equal(t, "SUBMIT_UNKNOWN", order.State)
+}
 
 // gtcOrder 建一笔限价 GTC 的目标单（account-a，合约），归属 ownerID 这份目标。
 func (f *targetFixture) gtcOrder(t *testing.T, orderID, ownerID, state string) {

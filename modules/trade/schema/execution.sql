@@ -103,6 +103,21 @@ ON t_trade_orders (
 CREATE INDEX IF NOT EXISTS idx_trade_orders_account_finished
 ON t_trade_orders (c_space_id, c_trading_account_id, c_finished_at);
 
+-- 下单资金检查按提交时间取账户里还没反映到交易所快照的预留。
+CREATE INDEX IF NOT EXISTS idx_trade_orders_account_submitted
+ON t_trade_orders (c_space_id, c_trading_account_id, c_submitted_at);
+
+-- 成交明细没补齐的订单（观察到的累计成交量和已入账的不一致）：每次同步都查，部分索引不随历史订单增长。
+CREATE INDEX IF NOT EXISTS idx_trade_orders_fill_gap
+ON t_trade_orders (c_space_id, c_trading_account_id)
+WHERE c_observed_filled_quantity != '0' AND c_observed_filled_quantity <> c_filled_quantity;
+
+-- 受管标的：账户上有成交的策略或人工订单涉及的标的，部分索引只含有成交的这两类订单；
+-- 带上条件里的来源和成交量两列才能只读索引（SQLite 不会因为部分索引的 WHERE 已经保证了条件就不再回表取这两列）。
+CREATE INDEX IF NOT EXISTS idx_trade_orders_managed_instruments
+ON t_trade_orders (c_space_id, c_trading_account_id, c_instrument_id, c_owner_type, c_filled_quantity)
+WHERE c_owner_type IN ('TARGET', 'OPERATOR') AND c_filled_quantity != '0' AND c_instrument_id != '';
+
 CREATE INDEX IF NOT EXISTS idx_trade_orders_logical_owner_state
 ON t_trade_orders (
     c_space_id,

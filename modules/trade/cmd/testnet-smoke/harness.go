@@ -69,8 +69,9 @@ func openLiveHarness(
 		SessionState:       manager,
 		LiveTradingEnabled: false,
 	}
+	// SymbolConfig 与生产一致：合约首次开仓前把全仓和账户配置的杠杆（冒烟固定 1 倍）设置到交易所。
 	orders := &orderapp.Service{
-		Store: database, Adapters: manager,
+		Store: database, Adapters: manager, SymbolConfig: manager,
 		UnknownLookupWindow: 5 * time.Second,
 		Validator: orderapp.Validator{
 			Accounts: accounts, Instruments: smokeInstrumentSource{store: database},
@@ -302,7 +303,8 @@ func runSubmitPhase(
 			TradingAccountID: harness.identity.AccountID,
 			ClientOrderID:    clientOrderID, InstrumentID: instrument.InstrumentID,
 			Type: exchange.OrderTypeLimit, FillPolicy: exchange.FillPolicyGTC,
-			Side: exchange.SideBuy, Quantity: plan.Quantity, LimitPrice: &plan.Price,
+			Side: exchange.SideBuy, PositionSide: exchange.RuleFor(options.MarketType).PositionSide,
+			Quantity: plan.Quantity, LimitPrice: &plan.Price,
 			Reason: "real testnet smoke submit",
 		},
 	)
@@ -651,18 +653,13 @@ func cleanupTestExposure(
 	if quantity.Cmp(mustDecimal(instrument.MinExchangeQuantity).Mul(contractValue)) < 0 {
 		return delta, errors.New("test fill is below the Exchange cleanup minimum")
 	}
-	reverseSide := exchange.SideSell
-	reversePositionSide := exchange.PositionSideUnspecified
-	if swap {
-		reversePositionSide = exchange.PositionSideNet
-	}
 	cleanup, err := harness.operator.PlaceManualOrder(
 		ctx,
 		operatorapp.ManualOrderCommand{
 			SpaceID: smokeSpaceID, ActionID: xid.New().String(),
 			TradingAccountID: state.AccountID, ClientOrderID: xid.New().String(),
 			InstrumentID: state.InstrumentID, Type: exchange.OrderTypeMarket,
-			Side: reverseSide, PositionSide: reversePositionSide, Quantity: quantity,
+			Side: exchange.SideSell, PositionSide: exchange.RuleFor(state.MarketType).PositionSide, Quantity: quantity,
 			Reason: "real testnet smoke reverse cleanup",
 		},
 	)

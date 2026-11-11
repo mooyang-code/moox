@@ -77,8 +77,20 @@ func TestPlanPassiveBuyRoundsToRulesAndCapsExposure(t *testing.T) {
 	if plan.Price.String() != "90" || plan.Quantity.String() != "0.056" {
 		t.Fatalf("plan = price %s quantity %s", plan.Price, plan.Quantity)
 	}
-	if plan.Price.Mul(plan.Quantity).Cmp(shared.MustDecimal("20")) > 0 {
+	if shared.MustDecimal("100").Mul(plan.Quantity).Cmp(shared.MustDecimal("20")) > 0 {
 		t.Fatalf("plan notional exceeds cap: %+v", plan)
+	}
+}
+
+// 下单校验按参考价比单笔名义上限：上限落在“挂单价名义”和“参考价名义”之间时，规划必须拒绝，不能放行后被拒单。
+func TestPlanPassiveBuyCapsReferenceNotionalLikeValidator(t *testing.T) {
+	// 参考价 100、挂单价 90、最小 1 个：挂单价名义 90 在上限 95 以内，参考价名义 100 超了。
+	_, err := planPassiveBuy(
+		shared.MustDecimal("100"), shared.MustDecimal("0.1"), shared.MustDecimal("1"), shared.MustDecimal("1"),
+		shared.Zero(), shared.MustDecimal("1"), shared.MustDecimal("95"),
+	)
+	if err == nil || !strings.Contains(err.Error(), "safety cap") {
+		t.Fatalf("planPassiveBuy() error = %v", err)
 	}
 }
 
@@ -333,6 +345,16 @@ func TestShellHarnessSkipsNonzeroWithoutConfirmationOrBothSecrets(t *testing.T) 
 		{name: "missing Binance futures testnet secret", env: []string{
 			"MOOX_TRADE_TESTNET_CONFIRM=YES", "MOOX_BINANCE_TESTNET_SECRET_ID=s", "MOOX_OKX_TESTNET_SECRET_ID=o",
 		}},
+		// 仓库里的 config/app.yaml 没有网关 key_id，必须指向已部署 trade 单元的配置。
+		{name: "missing deployed trade config", env: []string{
+			"MOOX_TRADE_TESTNET_CONFIRM=YES", "MOOX_BINANCE_TESTNET_SECRET_ID=s",
+			"MOOX_BINANCE_TESTNET_SWAP_SECRET_ID=w", "MOOX_OKX_TESTNET_SECRET_ID=o",
+		}},
+		{name: "deployed trade config does not exist", env: []string{
+			"MOOX_TRADE_TESTNET_CONFIRM=YES", "MOOX_BINANCE_TESTNET_SECRET_ID=s",
+			"MOOX_BINANCE_TESTNET_SWAP_SECRET_ID=w", "MOOX_OKX_TESTNET_SECRET_ID=o",
+			"MOOX_TRADE_TESTNET_CONFIG=/nonexistent/moox-trade/config/app.yaml",
+		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			command := exec.Command("bash", script)
@@ -362,6 +384,8 @@ func TestShellHarnessUsesSecretIDsAndTwoRestartPhases(t *testing.T) {
 		"MOOX_BINANCE_TESTNET_SECRET_ID",
 		"MOOX_BINANCE_TESTNET_SWAP_SECRET_ID",
 		"MOOX_OKX_TESTNET_SECRET_ID",
+		"MOOX_TRADE_TESTNET_CONFIG",
+		"MOOX_TRADE_TESTNET_SWAP_MAX_NOTIONAL",
 		"run_exchange BINANCE SPOT",
 		"run_exchange BINANCE SWAP",
 		"run_exchange OKX SPOT",
@@ -389,10 +413,13 @@ func TestShellHarnessUsesSecretIDsAndTwoRestartPhases(t *testing.T) {
 			t.Errorf("script retains unsafe legacy input %q", forbidden)
 		}
 	}
+	if strings.Contains(text, "modules/trade/config/app.yaml\"") {
+		t.Error("仓库里的 config/app.yaml 没有网关 key_id，脚本不能再用它")
+	}
 }
 
 func TestPlanPassiveBuyCountsContractValueInNotional(t *testing.T) {
-	// OKX 永续：1 张 = 0.01 BTC，最小 1 张；价格 100 × 0.9 = 90，名义 = 90 × 1 × 0.01 = 0.9，在安全上限内。
+	// OKX 永续：1 张 = 0.01 BTC，最小 1 张；挂单价 100 × 0.9 = 90，按参考价算名义 = 100 × 1 × 0.01 = 1，在安全上限内。
 	plan, err := planPassiveBuy(
 		shared.MustDecimal("100"), shared.MustDecimal("0.1"), shared.MustDecimal("1"), shared.MustDecimal("1"),
 		shared.Zero(), shared.MustDecimal("0.01"), shared.MustDecimal("20"),
@@ -403,7 +430,7 @@ func TestPlanPassiveBuyCountsContractValueInNotional(t *testing.T) {
 	if plan.Quantity.String() != "0.01" {
 		t.Fatalf("下单数量要折成基础资产数量：%s", plan.Quantity)
 	}
-	// 漏掉合约面值时（把张数当基础资产）名义会被高估 100 倍：面值 100 的合约最小 1 张名义 9000，必须被安全上限拦住。
+	// 漏掉合约面值时（把张数当基础资产）名义会被高估 100 倍：面值 100 的合约最小 1 张名义 10000，必须被安全上限拦住。
 	if _, err := planPassiveBuy(
 		shared.MustDecimal("100"), shared.MustDecimal("0.1"), shared.MustDecimal("1"), shared.MustDecimal("1"),
 		shared.Zero(), shared.MustDecimal("100"), shared.MustDecimal("20"),

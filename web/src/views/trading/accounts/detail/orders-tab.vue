@@ -37,7 +37,7 @@
         <a-table-column title="提交时间" :width="140">
           <template #cell="{ record }"
             ><span class="tx-muted tx-nowrap">{{
-              formatInstant(record.submitted_at || record.created_at, displayZone)
+              formatInstant(Number(record.submitted_at) ? record.submitted_at : record.created_at, displayZone)
             }}</span></template
           >
         </a-table-column>

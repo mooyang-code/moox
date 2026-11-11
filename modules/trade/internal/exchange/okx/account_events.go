@@ -3,6 +3,7 @@ package okx
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"strconv"
 	"time"
@@ -151,24 +152,22 @@ func expectOKXSubscribeAcks(
 		if err := websocket.Message.Receive(connection, &raw); err != nil {
 			return nil, &exchange.Error{Kind: exchange.ErrorTransportUnknown, Err: err}
 		}
-		var payload struct {
-			Event string `json:"event"`
-			Code  string `json:"code"`
-			Msg   string `json:"msg"`
-			Arg   struct {
-				Channel string `json:"channel"`
-			} `json:"arg"`
-		}
+		var payload privateMessage
 		if err := json.Unmarshal(raw, &payload); err != nil {
 			return nil, exchange.Rejected("decode private subscription frame", err)
 		}
-		if payload.Event == "" && payload.Arg.Channel != "" {
+		switch {
+		case payload.Event == "" && payload.Arg.Channel != "":
 			buffered = append(buffered, append([]byte(nil), raw...))
 			continue
+		case payload.Event == "" || privateEventFailed(payload.Event):
+			return nil, privateEventError(payload)
+		case payload.Event != "subscribe":
+			// channel-conn-count 这类通知可能夹在各频道确认之间，不影响订阅结果，跳过继续等。
+			continue
 		}
-		if payload.Event != "subscribe" ||
-			(payload.Code != "" && payload.Code != "0") {
-			return nil, classifyOKXCode(payload.Code, payload.Msg)
+		if payload.Code != "" && payload.Code != "0" {
+			return nil, privateEventError(payload)
 		}
 		if _, found := pending[payload.Arg.Channel]; !found {
 			return nil, exchange.Rejected(
@@ -217,10 +216,34 @@ type privateMessage struct {
 	Arg struct {
 		Channel string `json:"channel"`
 	} `json:"arg"`
-	Event string          `json:"event"`
-	Code  string          `json:"code"`
-	Msg   string          `json:"msg"`
-	Data  json.RawMessage `json:"data"`
+	Event string `json:"event"`
+	// Channel 是 channel-conn-count、channel-conn-count-error 事件顶层的频道名（不在 arg 里）。
+	Channel string          `json:"channel"`
+	Code    string          `json:"code"`
+	Msg     string          `json:"msg"`
+	Data    json.RawMessage `json:"data"`
+}
+
+// privateEventFailed 报告私有流事件是否表示失败：error 是请求出错，channel-conn-count-error
+// 是频道连接数超限、交易所终止了订阅。其余事件（subscribe、login、channel-conn-count 等通知）不算失败。
+func privateEventFailed(event string) bool {
+	return event == "error" || event == "channel-conn-count-error"
+}
+
+// privateEventError 把私有流的失败事件转成错误，带上事件名、频道和交易所给的 code/msg，方便排查。
+func privateEventError(message privateMessage) error {
+	detail := fmt.Sprintf("OKX 私有流事件 %q", message.Event)
+	channel := message.Channel
+	if channel == "" {
+		channel = message.Arg.Channel
+	}
+	if channel != "" {
+		detail += "，频道 " + channel
+	}
+	if message.Msg != "" {
+		detail += "：" + message.Msg
+	}
+	return classifyOKXCode(message.Code, detail)
 }
 
 func (a *Adapter) dispatchPrivate(
@@ -232,11 +255,10 @@ func (a *Adapter) dispatchPrivate(
 	if err := json.Unmarshal(payload, &message); err != nil {
 		return exchange.Rejected("decode private event", err)
 	}
-	if message.Event == "error" {
-		return classifyOKXCode(message.Code, message.Msg)
+	// 失败事件结束会话、由上层重连；登录、订阅确认和 channel-conn-count 等通知不带频道数据，忽略。
+	if privateEventFailed(message.Event) {
+		return privateEventError(message)
 	}
-	// Login and subscribe acknowledgements do not carry channel data. OKX
-	// emits one subscribe acknowledgement per requested channel.
 	if message.Event != "" {
 		return nil
 	}

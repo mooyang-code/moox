@@ -268,6 +268,21 @@ func (e *Executor) Converge(
 	if err != nil {
 		return Result{}, err
 	}
+	// 时段外（夜里、午休、周末）TargetWorker 每秒都会来：交易时段只看成员账户的场所，先用成员和账户记录判断，
+	// 不在时段内就不做完整的成员加载（扫订单、复制标的）。
+	if reason, err := e.outOfSessionReason(ctx, logicalAccount); err != nil {
+		return Result{}, err
+	} else if reason != "" {
+		// 状态和原因都没变时不再写库。
+		if target.Status == StatusPending && target.LastError == reason {
+			return Result{Status: StatusPaused}, nil
+		}
+		target.LastError = reason
+		if err := e.updateTarget(ctx, &target, StatusPending); err != nil {
+			return Result{}, err
+		}
+		return Result{Status: StatusPaused}, nil
+	}
 	members, err := e.loadMembers(ctx, spaceID, logicalAccountID, flattens)
 	if errors.Is(err, store.ErrFundSettingsUnreadable) {
 		// 资金设置的排除字段读不出来：这个组合不下单，原因写进目标，不让整个模块显示未就绪。
@@ -283,24 +298,6 @@ func (e *Executor) Converge(
 	for _, member := range members {
 		if member.account.Status != "ENABLED" || !member.account.Ready {
 			target.LastError = "成员 " + member.account.TradingAccountID + " 未就绪"
-			if err := e.updateTarget(ctx, &target, StatusPending); err != nil {
-				return Result{}, err
-			}
-			return Result{Status: StatusPaused}, nil
-		}
-	}
-
-	now := time.Now()
-	if e.Now != nil {
-		now = e.Now()
-	}
-	for _, member := range members {
-		if ok, reason := execution.CanOrder(e.Exchanges, member.account.Exchange, now); !ok {
-			// 时段外 TargetWorker 每秒都会来：状态和原因都没变时不再写库。
-			if target.Status == StatusPending && target.LastError == reason {
-				return Result{Status: StatusPaused}, nil
-			}
-			target.LastError = reason
 			if err := e.updateTarget(ctx, &target, StatusPending); err != nil {
 				return Result{}, err
 			}
@@ -523,6 +520,37 @@ func (e *Executor) belowConfiguredMinimumNow(ctx context.Context, env *laneEnv, 
 	}
 	quantity := floorToStep(action.delta.Abs(), mustBaseStep(action.instrument))
 	return env.belowConfiguredMinimum(action, quantity, quote.Price)
+}
+
+// outOfSessionReason 只读启用成员和它们的账户记录，返回第一个不在交易时段的成员的原因，都在时段内时返回空串。
+// 这个检查原先排在完整加载成员之后，几个原因的先后照旧：资金设置的排除字段读不出来、有成员停用或未就绪、没有启用成员时
+// 都返回空串，由后面的完整路径照原样写原因或报错。
+func (e *Executor) outOfSessionReason(ctx context.Context, logical store.LogicalAccountRecord) (string, error) {
+	if _, err := e.Store.ResolveFundSettings(logical); err != nil {
+		return "", nil
+	}
+	records, err := e.Store.ListLogicalAccountMembers(ctx, logical.SpaceID, logical.LogicalAccountID, false)
+	if err != nil {
+		return "", err
+	}
+	accounts := make([]store.TradingAccountRecord, 0, len(records))
+	for _, record := range records {
+		account, err := e.Store.GetTradingAccountByID(ctx, record.TradingAccountID)
+		if err != nil {
+			return "", err
+		}
+		if account.Status != "ENABLED" || !account.Ready {
+			return "", nil
+		}
+		accounts = append(accounts, account)
+	}
+	now := e.now()
+	for _, account := range accounts {
+		if ok, reason := execution.CanOrder(e.Exchanges, account.Exchange, now); !ok {
+			return reason, nil
+		}
+	}
+	return "", nil
 }
 
 func (e *Executor) loadMembers(
@@ -1550,10 +1578,32 @@ func (e *Executor) releaseTargetOrders(ctx context.Context, spaceID, logicalAcco
 		}
 	}
 	var releaseErrs []error
+	// resolved 非空表示结果未知的单已经批量解析过（键：单号，值：这笔解析的错误），逐笔处理时不再单独查单。
+	var resolved map[string]error
+	if keepTargetID != "" {
+		// 新目标的第 1 阶段每轮收敛都会来（每秒一次）：结果未知的旧单走受次数限制的批量解析（未知窗口内同一笔最多查两次），
+		// 全部解析完每个账户只做一次轻量同步。不能每轮对每笔旧单都查单、拉成交，下单超时故障后会打满交易所限频。
+		var unknown []string
+		for _, current := range open {
+			if state := orderdomain.State(current.State); state == orderdomain.Submitting || state == orderdomain.SubmitUnknown {
+				unknown = append(unknown, current.OrderID)
+			}
+		}
+		resolved = make(map[string]error, len(unknown))
+		if len(unknown) > 0 {
+			results, err := e.Orders.ResolveUnknownBatch(ctx, spaceID, unknown)
+			if err != nil {
+				releaseErrs = append(releaseErrs, fmt.Errorf("解析结果未知的旧单：%w", err))
+			}
+			for _, result := range results {
+				resolved[result.OrderID] = result.Err
+			}
+		}
+	}
 	// canceled 是撤过单、要在最后同步一次的账户。
 	canceled := make(map[string]struct{})
 	for _, current := range open {
-		if err := e.releaseTargetOrder(ctx, current, canceled); err != nil {
+		if err := e.releaseTargetOrder(ctx, current, canceled, resolved); err != nil {
 			releaseErrs = append(releaseErrs, fmt.Errorf("目标单 %s：%w", current.OrderID, err))
 		}
 	}
@@ -1592,13 +1642,20 @@ func (e *Executor) cancelForRelease(ctx context.Context, current store.OrderReco
 	return err
 }
 
-func (e *Executor) releaseTargetOrder(ctx context.Context, current store.OrderRecord, canceled map[string]struct{}) error {
+// releaseTargetOrder 释放一笔目标单。resolved 为 nil 时结果未知的单在这里解析；非 nil 时已经批量解析过，只取那笔的错误。
+func (e *Executor) releaseTargetOrder(ctx context.Context, current store.OrderRecord, canceled map[string]struct{}, resolved map[string]error) error {
 	state := orderdomain.State(current.State)
 	resting := current.OrderType == string(exchange.OrderTypeLimit) && current.TimeInForce == string(exchange.TimeInForceGTC)
 	if state == orderdomain.Submitting || state == orderdomain.SubmitUnknown {
 		// 每笔结果未知的单都解析一次：查无此单退回待提交的要丢弃，否则目标删掉之后没人再管它。
 		// 只有限价 GTC 单可能一直挂在簿上，解析不出来就报错让调用方重试；市价、IOC 单提交出去也会自己结束，解析不出来不挡释放。
-		if _, err := e.Orders.ResolveUnknown(ctx, current.SpaceID, current.OrderID); err != nil {
+		var err error
+		if resolved == nil {
+			_, err = e.Orders.ResolveUnknown(ctx, current.SpaceID, current.OrderID)
+		} else {
+			err = resolved[current.OrderID]
+		}
+		if err != nil {
 			if resting {
 				return err
 			}

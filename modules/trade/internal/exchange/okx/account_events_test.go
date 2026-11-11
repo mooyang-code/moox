@@ -385,6 +385,63 @@ func TestExpectSubscribeAcknowledgementsBuffersInterleavedData(t *testing.T) {
 	}
 }
 
+// subscribeAcksFrom 让测试服务端按顺序推送 frames，返回 expectOKXSubscribeAcks 对 orders、account 两个频道的结果。
+func subscribeAcksFrom(t *testing.T, frames ...string) ([][]byte, error) {
+	t.Helper()
+	server := httptest.NewServer(websocket.Handler(func(connection *websocket.Conn) {
+		for _, frame := range frames {
+			_ = websocket.Message.Send(connection, frame)
+		}
+	}))
+	defer server.Close()
+	config, err := websocket.NewConfig("ws"+strings.TrimPrefix(server.URL, "http"), "http://localhost")
+	require.NoError(t, err)
+	connection, err := websocket.DialConfig(config)
+	require.NoError(t, err)
+	defer connection.Close()
+	return expectOKXSubscribeAcks(connection, []map[string]string{{"channel": "orders"}, {"channel": "account"}})
+}
+
+// OKX 订阅私有频道后会推 channel-conn-count 通知，夹在各频道确认之间时握手不能失败。
+func TestExpectSubscribeAcknowledgementsSkipsChannelConnCount(t *testing.T) {
+	buffered, err := subscribeAcksFrom(t,
+		`{"event":"subscribe","arg":{"channel":"orders"},"connId":"a4d3ae55"}`,
+		`{"event":"channel-conn-count","channel":"orders","connCount":"2","connId":"a4d3ae55"}`,
+		`{"event":"subscribe","arg":{"channel":"account"},"connId":"a4d3ae55"}`,
+	)
+	require.NoError(t, err)
+	require.Empty(t, buffered, "通知不是数据帧，不能缓冲")
+}
+
+func TestExpectSubscribeAcknowledgementsFailsOnErrorEvents(t *testing.T) {
+	_, err := subscribeAcksFrom(t,
+		`{"event":"subscribe","arg":{"channel":"orders"}}`,
+		`{"event":"error","code":"60012","msg":"Invalid request: {\"op\": \"subscribe\"}","connId":"a4d3ae55"}`,
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "code 60012")
+	require.Contains(t, err.Error(), `"error"`)
+	require.Contains(t, err.Error(), "Invalid request")
+
+	_, err = subscribeAcksFrom(t,
+		`{"event":"channel-conn-count-error","channel":"orders","connLimit":"30","connId":"a4d3ae55"}`,
+	)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "channel-conn-count-error")
+	require.Contains(t, err.Error(), "频道 orders")
+}
+
+// 握手完成后 channel-conn-count 照样忽略；channel-conn-count-error 表示交易所终止了订阅，要返回错误让会话重连。
+func TestDispatchPrivateEndsSessionOnChannelConnCountError(t *testing.T) {
+	adapter := New(exchange.AccountConfig{}, exchange.Credential{})
+	require.NoError(t, adapter.dispatchPrivate(context.Background(),
+		[]byte(`{"event":"channel-conn-count","channel":"orders","connCount":"2","connId":"a4d3ae55"}`), &handler{}))
+	err := adapter.dispatchPrivate(context.Background(),
+		[]byte(`{"event":"channel-conn-count-error","channel":"orders","connLimit":"30","connId":"a4d3ae55"}`), &handler{})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "channel-conn-count-error")
+}
+
 func TestReceivePrivateMessageRequiresPongAfterIdle(t *testing.T) {
 	server := httptest.NewServer(websocket.Handler(func(connection *websocket.Conn) {
 		var payload string

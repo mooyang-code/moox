@@ -32,7 +32,9 @@
         <a-descriptions-item label="参考价">{{ fmtQty(order.reference_price) }}</a-descriptions-item>
         <a-descriptions-item label="来源">{{ orderOwnerLabels[order.owner_type] || order.owner_type }}</a-descriptions-item>
         <a-descriptions-item label="执行账户">{{ accountName(order.trading_account_id) }}</a-descriptions-item>
-        <a-descriptions-item label="提交时间">{{ formatInstant(order.submitted_at, displayZone) }}</a-descriptions-item>
+        <a-descriptions-item label="提交时间">{{
+          formatInstant(Number(order.submitted_at) ? order.submitted_at : order.created_at, displayZone)
+        }}</a-descriptions-item>
         <a-descriptions-item v-if="Number(order.finished_at)" label="结束时间">{{
           formatInstant(order.finished_at, displayZone)
         }}</a-descriptions-item>

@@ -26,6 +26,9 @@ func run(
 	if err != nil {
 		return err
 	}
+	if options.Config == "" {
+		return fmt.Errorf("缺少 --config：要指向已部署 trade 单元的配置文件（或设置 MOOX_TRADE_TESTNET_CONFIG）")
+	}
 	cfg, err := config.Load(options.Config)
 	if err != nil {
 		return err

@@ -323,6 +323,7 @@ import {
   syncTradingAccount
 } from "@/api/trade";
 import type { LogicalAccount, LogicalAccountTarget, Order, TradingAccount } from "@/api/trade";
+import type { LogicalAccountWithSettings } from "@/api/trade/settings";
 import { accountMapOf } from "../account-list";
 import ConfirmDialog from "@/components/trade-confirm/confirm-dialog.vue";
 import EnvMark from "@/components/trade-confirm/env-mark.vue";
@@ -406,6 +407,10 @@ const coinRows = computed(() =>
     swapPositions: snapshot.value.swapPositions,
     spotHoldings: snapshot.value.spotHoldings,
     converged: target.value?.status === "CONVERGED",
+    // 组合详情里带着当前生效的下单设置；读不出来时为空，按后端默认阈值判断
+    rebalance: (logical.value as LogicalAccountWithSettings | null)?.order_settings,
+    // 按组合权益比例的阈值：后端用组合最近一个权益采样点，页面用启用成员的权益合计，两者只差同步时刻
+    equity: totals.value.equity,
     hasTarget: Boolean(target.value)
   })
 );

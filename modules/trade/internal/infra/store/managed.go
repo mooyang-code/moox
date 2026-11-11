@@ -16,13 +16,16 @@ import (
 // 这些是 MooX 买过的标的，目标不再包含时要能卖掉。
 func (s *Store) ListManagedInstruments(ctx context.Context, spaceID, tradingAccountID string) ([]string, error) {
 	var instruments []string
-	err := s.db.WithContext(ctx).Table("t_trade_orders").
-		Distinct("c_instrument_id").
-		Where(`c_space_id = ? AND c_trading_account_id = ? AND c_owner_type IN ('TARGET', 'OPERATOR')
-			AND c_filled_quantity != '0' AND c_instrument_id != ''`, spaceID, tradingAccountID).
-		Pluck("c_instrument_id", &instruments).Error
+	err := s.db.WithContext(ctx).Raw(queryManagedInstruments, spaceID, tradingAccountID).Scan(&instruments).Error
 	return instruments, err
 }
+
+// queryManagedInstruments 的条件与部分覆盖索引 idx_trade_orders_managed_instruments 的 WHERE 逐项一致（含 IN 列表的次序），
+// 规划器才会用它：只读索引里有成交的策略、人工订单，不扫账户全部订单，也不回表。
+const queryManagedInstruments = `SELECT DISTINCT c_instrument_id
+	FROM t_trade_orders
+	WHERE c_space_id = ? AND c_trading_account_id = ?
+		AND c_owner_type IN ('TARGET', 'OPERATOR') AND c_filled_quantity != '0' AND c_instrument_id != ''`
 
 // ManagedAssets 返回持仓来自余额的账户里归 MooX 管理的资产：结算资产、当前目标里的标的、
 // 有成交的策略或人工订单涉及的标的，再减去组合资金设置里的排除资产

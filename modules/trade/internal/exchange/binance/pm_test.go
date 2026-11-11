@@ -385,6 +385,33 @@ func TestPortfolioMarginDispatchesStreamEventsByType(t *testing.T) {
 	require.Len(t, handler.orders, 2)
 }
 
+// 统一账户整个账户只有一条私有流：没开通的市场的订单、持仓事件也会推过来，跳过、不上报也不报错，
+// 否则 accountsync 会因“未开通的市场”报错，私有流退出重连。杠杆账户的余额推送照常上报。
+func TestPortfolioMarginSkipsEventsOfMarketsNotOpened(t *testing.T) {
+	ctx := context.Background()
+	um := strings.Replace(string(sample(t, "futures_order_trade_update.json")), `"e":"ORDER_TRADE_UPDATE"`, `"e":"ORDER_TRADE_UPDATE","fs":"UM"`, 1)
+	umAccount := `{"e":"ACCOUNT_UPDATE","fs":"UM","E":1700000000000,"T":1700000000000,
+		"a":{"B":[{"a":"USDT","wb":"100","cw":"100","bc":"0"}],"P":[{"s":"BTCUSDT","pa":"1","ep":"100","up":"0","ps":"BOTH"}]}}`
+
+	spotOnly := newPortfolioMargin(pmConfig(exchange.MarketTypeSpot), exchange.Credential{}, httpclient.New("http://unused"))
+	handler := &recordingHandler{}
+	require.NoError(t, spotOnly.dispatchPrivate(ctx, []byte(um), handler))
+	require.NoError(t, spotOnly.dispatchPrivate(ctx, []byte(umAccount), handler))
+	require.Empty(t, handler.orders)
+	require.Empty(t, handler.fills)
+	require.Empty(t, handler.positions)
+	require.Empty(t, handler.accounts)
+
+	swapOnly := newPortfolioMargin(pmConfig(exchange.MarketTypeSwap), exchange.Credential{}, httpclient.New("http://unused"))
+	handler = &recordingHandler{}
+	require.NoError(t, swapOnly.dispatchPrivate(ctx, unwrappedSample(t, "spot_execution_report_trade.json"), handler))
+	require.Empty(t, handler.orders)
+	require.Empty(t, handler.fills)
+	balance := `{"e":"outboundAccountPosition","E":1564034571105,"u":1564034571073,"B":[{"a":"USDT","f":"90","l":"1"}]}`
+	require.NoError(t, swapOnly.dispatchPrivate(ctx, []byte(balance), handler))
+	require.Len(t, handler.accounts, 1)
+}
+
 // 统一账户的标的表在按市场的子适配器上：UM 持仓、私有流订单和持仓里标的表外的合约（USDC 本位）都跳过。
 func TestPortfolioMarginSkipsSwapInstrumentsOutsideLoadedTable(t *testing.T) {
 	_, server := newPMServer(t, map[string]string{

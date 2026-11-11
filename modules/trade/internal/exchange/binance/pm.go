@@ -539,11 +539,22 @@ func (p *PortfolioMargin) Subscribe(ctx context.Context, handler execution.Accou
 //	executionReport、outboundAccountPosition → 杠杆账户（现货）；
 //	ORDER_TRADE_UPDATE、ACCOUNT_UPDATE（fs 为 UM）→ U 本位合约。
 //
-// fs 是 CM（币本位）的事件不在 MooX 的交易范围，直接忽略。
+// fs 是 CM（币本位）的事件不在 MooX 的交易范围，直接忽略。整个账户只有这一条流，账户没开通的市场的
+// 订单和持仓事件照样会推过来，也跳过；杠杆账户的余额推送（outboundAccountPosition）保留。
 func (p *PortfolioMargin) dispatchPrivate(ctx context.Context, payload []byte, handler execution.AccountEventHandler) error {
 	root, event, err := decodePrivateEvent(payload, false)
 	if err != nil {
 		return err
+	}
+	switch event {
+	case "ORDER_TRADE_UPDATE", "ACCOUNT_UPDATE":
+		if !p.hasMarket(exchange.MarketTypeSwap) {
+			return nil
+		}
+	case "executionReport":
+		if !p.hasMarket(exchange.MarketTypeSpot) {
+			return nil
+		}
 	}
 	switch event {
 	case "listenKeyExpired", "eventStreamTerminated":

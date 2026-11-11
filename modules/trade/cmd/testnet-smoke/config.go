@@ -45,13 +45,16 @@ func parseOptions(args []string, getenv func(string) string) (smokeOptions, erro
 	flags.StringVar(&options.SecretID, "secret-id", "", "Admin Exchange Secret ID")
 	flags.StringVar(&options.Database, "database", "", "isolated Trade SQLite database")
 	flags.StringVar(&options.State, "state", "", "restart state file")
-	flags.StringVar(&options.Config, "config", "modules/trade/config/app.yaml", "Trade app config")
+	flags.StringVar(&options.Config, "config", "", "已部署 trade 单元的配置文件，默认读环境变量 MOOX_TRADE_TESTNET_CONFIG")
 	flags.StringVar(&options.ExchangeSymbol, "exchange-symbol", "", "testnet native exchange symbol")
 	flags.StringVar(&maxNotional, "max-notional", "20", "maximum test order quote notional")
 	if err := flags.Parse(args); err != nil {
 		return options, err
 	}
 	options.Phase = strings.ToLower(strings.TrimSpace(options.Phase))
+	if options.Config == "" && getenv != nil {
+		options.Config = getenv("MOOX_TRADE_TESTNET_CONFIG")
+	}
 	readOnly := options.Phase == "facts"
 	if !readOnly && (getenv == nil || getenv(confirmEnv) != "YES") {
 		return options, fmt.Errorf("SKIP: refusing real orders without %s=YES", confirmEnv)
@@ -112,7 +115,8 @@ type passiveOrder struct {
 
 // planPassiveBuy 按交易所规则规划被动买单。quantityStep、minQuantity 是交易所数量单位（OKX 永续是张），
 // contractValue 是每张折合的基础资产数量（现货和币安合约为 1，缺失按 1）；名义金额 = 价格 × 数量 × 合约面值，
-// 不能漏掉合约面值，否则永续的安全上限差几个数量级。
+// 不能漏掉合约面值，否则永续的安全上限差几个数量级。最小名义金额按挂单价算，安全上限按参考价比，
+// 都与下单校验一致：上限按挂单价比会出现规划能过、校验拒单的情况。
 func planPassiveBuy(
 	reference shared.Decimal,
 	priceTick shared.Decimal,
@@ -144,7 +148,7 @@ func planPassiveBuy(
 		}
 	}
 	base := quantity.Mul(contractValue)
-	notional := price.Mul(base)
+	notional := reference.Mul(base)
 	if notional.Cmp(maxNotional) > 0 {
 		return passiveOrder{}, fmt.Errorf(
 			"minimum test order notional %s exceeds safety cap %s",
