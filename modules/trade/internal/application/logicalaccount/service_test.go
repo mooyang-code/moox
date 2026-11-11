@@ -28,13 +28,13 @@ func TestAddMemberRequiresAdoptionForExistingExposure(t *testing.T) {
 		})
 	}))
 
-	err := service.AddMember(context.Background(), AddMemberCommand{
+	err := addMember(context.Background(), service, AddMemberCommand{
 		SpaceID: "space-1", LogicalAccountID: "logical-1",
 		TradingAccountID: "account-b", Enabled: true, Priority: 2,
 	})
 	require.ErrorIs(t, err, ErrAdoptionRequired)
 
-	require.NoError(t, service.AddMember(context.Background(), AddMemberCommand{
+	require.NoError(t, addMember(context.Background(), service, AddMemberCommand{
 		SpaceID: "space-1", LogicalAccountID: "logical-1",
 		TradingAccountID: "account-b", Enabled: true, Priority: 2,
 		AdoptExistingExposure: true,
@@ -101,7 +101,7 @@ func TestRemoveMemberWhenSyncFailsUsesLocalRecords(t *testing.T) {
 	// 本地没有挂单和持仓：同步失败也允许移除，并提示交易所侧没有核对。
 	warning, err := service.RemoveMember(context.Background(), "space-1", "logical-1", "account-a")
 	require.NoError(t, err)
-	require.Equal(t, UnverifiedRemovalWarning, warning)
+	require.Equal(t, UnverifiedMemberWarning, warning)
 
 	// 本地还有持仓：同步失败时不能移除，按“有持仓不能移出”报，同步失败的原因附在后面。
 	require.NoError(t, tradeStore.Transaction(context.Background(), func(tx *store.Tx) error {
@@ -133,7 +133,7 @@ func TestDisableMemberCannotAdoptAwayExistingExposure(t *testing.T) {
 		})
 	}))
 
-	err := service.AddMember(context.Background(), AddMemberCommand{
+	err := addMember(context.Background(), service, AddMemberCommand{
 		SpaceID: "space-1", LogicalAccountID: "logical-1",
 		TradingAccountID: "account-a", Enabled: false, Priority: 1,
 		AdoptExistingExposure: true,
@@ -149,7 +149,7 @@ func TestDisableMemberCannotAdoptAwayExistingExposure(t *testing.T) {
 
 func TestLogicalReadinessRequiresEveryEnabledMemberAndTargetMetadata(t *testing.T) {
 	service, tradeStore := logicalAccountServiceFixture(t)
-	require.NoError(t, service.AddMember(context.Background(), AddMemberCommand{
+	require.NoError(t, addMember(context.Background(), service, AddMemberCommand{
 		SpaceID: "space-1", LogicalAccountID: "logical-1",
 		TradingAccountID: "account-b", Enabled: true, Priority: 2,
 	}))
@@ -188,7 +188,7 @@ func TestLogicalReadinessRejectsTargetForDifferentSettlementAsset(t *testing.T) 
 	)
 	require.NoError(t, err)
 	require.False(t, readiness.Ready)
-	require.Contains(t, readiness.Reasons, "target instrument BTC-USDT-SWAP is unavailable")
+	require.Contains(t, readiness.Reasons, "目标里的标的 BTC-USDT-SWAP 在启用的执行账户上都不能交易（没有这个标的、已暂停或下架，或结算资产不同）")
 }
 
 func TestResumeRequiresReadyNoConflictAndWarnsAboutReopen(t *testing.T) {
@@ -520,6 +520,12 @@ type noopAccountSyncer struct{}
 
 func (noopAccountSyncer) SyncAccount(context.Context, string) error { return nil }
 
+// addMember 调 AddMember，只返回错误；要看提示的用例直接调 AddMember。
+func addMember(ctx context.Context, service *Service, command AddMemberCommand) error {
+	_, err := service.AddMember(ctx, command)
+	return err
+}
+
 func logicalFixtureAccount(id string) store.TradingAccountRecord {
 	return store.TradingAccountRecord{
 		SpaceID: "space-1", TradingAccountID: id, Name: id,
@@ -568,7 +574,7 @@ func TestLogicalAccountOperationsHonorDeadlineWhileLocksAreHeld(t *testing.T) {
 
 	for name, call := range map[string]func(context.Context) error{
 		"AddMember": func(ctx context.Context) error {
-			return service.AddMember(ctx, AddMemberCommand{SpaceID: "space-1", LogicalAccountID: "logical-1", TradingAccountID: "account-b", Enabled: true})
+			return addMember(ctx, service, AddMemberCommand{SpaceID: "space-1", LogicalAccountID: "logical-1", TradingAccountID: "account-b", Enabled: true})
 		},
 		"Resume": func(ctx context.Context) error {
 			_, _, err := service.Resume(ctx, "space-1", "logical-1")
@@ -624,12 +630,12 @@ func TestAddMemberChangesPriorityOfExposedMember(t *testing.T) {
 			SignedQuantity: "1", Leverage: "5", MarginMode: "CROSS", ExchangeUpdatedAt: 1_900,
 		})
 	}))
-	require.NoError(t, service.AddMember(ctx, AddMemberCommand{
+	require.NoError(t, addMember(ctx, service, AddMemberCommand{
 		SpaceID: "space-1", LogicalAccountID: "logical-1", TradingAccountID: "account-b",
 		Enabled: true, Priority: 2, AdoptExistingExposure: true,
 	}))
 
-	require.NoError(t, service.AddMember(ctx, AddMemberCommand{
+	require.NoError(t, addMember(ctx, service, AddMemberCommand{
 		SpaceID: "space-1", LogicalAccountID: "logical-1", TradingAccountID: "account-b", Enabled: true, Priority: 9,
 	}))
 
@@ -663,7 +669,7 @@ func TestAddMemberRejectsAccountOwnedByAnotherGroupBeforeSync(t *testing.T) {
 	calls := 0
 	service.Syncer = failingAccountSyncer{calls: &calls}
 	for _, enabled := range []bool{true, false} {
-		err := service.AddMember(context.Background(), AddMemberCommand{
+		err := addMember(context.Background(), service, AddMemberCommand{
 			SpaceID: "space-1", LogicalAccountID: "logical-2",
 			TradingAccountID: "account-a", Enabled: enabled,
 		})

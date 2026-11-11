@@ -154,9 +154,19 @@ async function runPending() {
 async function submit() {
   const submission = scope.begin();
   const logicalId = props.logical.logical_account_id;
+  const name = accountName();
   error.value = "";
   try {
-    await addLogicalAccountMember({ logical_account_id: logicalId, ...form });
+    const rsp = await addLogicalAccountMember({ logical_account_id: logicalId, ...form });
+    // 停用成员时凭证失效等原因只按本地记录确认，成功响应里带着提示：和移出成员一样，要用户看过、手动关掉。
+    // 保存已经生效，对话框换了内容也照样提示。
+    const warning = rsp.ret_info?.msg?.trim();
+    if (warning)
+      Message.warning({
+        content: `「${name}」已停用：${warning}。请到交易所确认这个账户没有残留的挂单和仓位。`,
+        duration: 0,
+        closable: true
+      });
   } catch (cause) {
     if (!submission.isCurrent()) return false;
     if (isTradeAdoptionRequired(cause) && !form.adopt_existing_exposure) {

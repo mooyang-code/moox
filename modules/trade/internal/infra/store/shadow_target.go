@@ -80,6 +80,16 @@ func (s *Store) ListShadowTargets(ctx context.Context, spaceID, instanceID strin
 	return out, nil
 }
 
+// DeleteShadowTargetsBefore 删掉最多 limit 条有效期截止（c_valid_until，毫秒）早于 before 的影子目标，返回删掉的条数。
+// 一次调用是一条独立语句，由调用方分批调用，批与批之间连接交还给其他读写。
+func (s *Store) DeleteShadowTargetsBefore(ctx context.Context, before int64, limit int) (int64, error) {
+	result := s.db.WithContext(ctx).Exec(execDeleteShadowTargetsBefore, before, limit)
+	if err := writeError(result.Error); err != nil {
+		return 0, err
+	}
+	return result.RowsAffected, nil
+}
+
 // 以下 SQL 整条写成常量，不在调用处拼接或内联。
 const (
 	execInsertShadowTarget = `INSERT INTO t_shadow_targets (
@@ -88,4 +98,8 @@ const (
 			c_reference_prices_json, c_quantity_targets_json, c_recorded_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(c_space_id, c_target_id) DO NOTHING`
+	// 用 rowid 子查询限制每批行数：SQLite 默认不支持 DELETE ... LIMIT。c_valid_until 排在大 JSON 列之前，判断不用读溢出页。
+	execDeleteShadowTargetsBefore = `DELETE FROM t_shadow_targets WHERE rowid IN (
+			SELECT rowid FROM t_shadow_targets WHERE c_valid_until < ? LIMIT ?
+		)`
 )

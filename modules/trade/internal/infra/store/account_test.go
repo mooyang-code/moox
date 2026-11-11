@@ -153,7 +153,8 @@ func TestCreateTradingAccountIsExplicitAndRejectsDuplicate(t *testing.T) {
 		account.Status = "DISABLED"
 		return tx.CreateTradingAccount(account)
 	})
-	require.ErrorIs(t, err, ErrConflict)
+	// 模拟账户的编号由名称算出，编号重复就是名称用过了：按“名称已被使用”报。
+	require.ErrorIs(t, err, ErrNameTaken)
 
 	got, err := s.GetTradingAccount(ctx, account.SpaceID, account.TradingAccountID)
 	require.NoError(t, err)

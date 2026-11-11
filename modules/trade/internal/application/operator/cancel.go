@@ -36,6 +36,15 @@ type cancelOrderActionResult struct {
 	OrderID string `json:"order_id"`
 }
 
+// cancelPendingError 是撤单已发给交易所、撤单后的同步还没看到订单结束。文案写给用户看；
+// 它仍是 ErrCancelUnconfirmed（Unwrap 到它），错误分类和重试照旧。
+type cancelPendingError struct{}
+
+func (cancelPendingError) Error() string {
+	return "撤单已提交，交易所还没确认，稍后刷新查看"
+}
+func (cancelPendingError) Unwrap() error { return ErrCancelUnconfirmed }
+
 func (s *Service) CancelOrder(
 	ctx context.Context,
 	command CancelOrderCommand,
@@ -91,7 +100,7 @@ func (s *Service) CancelOrder(
 	}
 	if blank(orderRecord.LogicalAccountID) {
 		return CancelOrderResult{}, fmt.Errorf(
-			"%w: order does not belong to a logical account",
+			"%w: 这笔订单不属于任何组合（执行账户不在组合里或成员已停用），不能在这里撤单",
 			ErrInvalidCommand,
 		)
 	}
@@ -164,13 +173,7 @@ func (s *Service) CancelOrder(
 	}
 	orderRecord = current
 	if !orderdomain.State(orderRecord.State).Terminal() {
-		err = fmt.Errorf(
-			"%w: order %s remains %s",
-			ErrCancelUnconfirmed,
-			orderRecord.OrderID,
-			orderRecord.State,
-		)
-		return s.failCancelAction(ctx, action, orderRecord, err)
+		return s.failCancelAction(ctx, action, orderRecord, cancelPendingError{})
 	}
 	resultData, err := json.Marshal(cancelOrderActionResult{
 		OrderID: orderRecord.OrderID,

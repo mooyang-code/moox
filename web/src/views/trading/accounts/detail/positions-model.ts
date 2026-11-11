@@ -20,6 +20,9 @@ export interface CoinRow {
   /** 实际数量的精确小数字符串（与 actualSpot、actualSwap 同口径），算差额用 */
   actualSpotText: string;
   actualSwapText: string;
+  /** 按执行账户分开的实际数量（键是执行账户 ID），行内下单默认选持仓最大的账户用 */
+  memberSpot: Record<string, number>;
+  memberSwap: Record<string, number>;
   /** 实际减目标；这个市场没有目标或保持当前持仓时为 null */
   deviationSpot: number | null;
   deviationSwap: number | null;
@@ -122,6 +125,8 @@ function blankRow(coin: string): CoinRow {
     actualSwap: 0,
     actualSpotText: "0",
     actualSwapText: "0",
+    memberSpot: {},
+    memberSwap: {},
     deviationSpot: null,
     deviationSwap: null,
     deviationSpotText: null,
@@ -184,6 +189,7 @@ export function buildCoinRows(input: BuildCoinRowsInput): CoinRow[] {
     row.actualSwap += Number(position.signed_quantity);
     row.actualSwapText = decimalAdd(row.actualSwapText, position.signed_quantity);
     row.markSwap ||= Number(position.mark_price) || 0;
+    addMember(row.memberSwap, position.trading_account_id, Number(position.signed_quantity));
   }
   for (const holding of input.spotHoldings) {
     const row = rowOf(holding.asset || coinOf(holding.instrument_id));
@@ -194,6 +200,7 @@ export function buildCoinRows(input: BuildCoinRowsInput): CoinRow[] {
       row.actualSpotText = decimalAdd(row.actualSpotText, holding.quantity);
       row.sellable += Number(holding.sellable || 0);
       row.markSpot ||= Number(holding.mark_price) || 0;
+      addMember(row.memberSpot, holding.trading_account_id, quantity);
       if (marketOfInstrument(holding.instrument_id) === 3) row.stock = true;
     }
   }
@@ -233,6 +240,30 @@ export function buildCoinRows(input: BuildCoinRowsInput): CoinRow[] {
 
 function stateOrder(row: CoinRow): number {
   return { blocked: 0, off: 1, extra: 2, ok: 3 }[row.state];
+}
+
+function addMember(members: Record<string, number>, accountId: string, quantity: number) {
+  if (!accountId || !quantity) return;
+  members[accountId] = (members[accountId] ?? 0) + quantity;
+}
+
+/**
+ * 行内下单默认的执行账户：候选账户里（调用方按启用、开通了该市场筛好，保持原来的顺序）这个市场持仓绝对值最大的；
+ * 一样大时取靠前的。候选账户都没有持仓时返回 undefined，由调用方按原来的选法取第一个候选。
+ * 多成员组合里卖出差额要在持仓所在的账户上下，否则会在别的账户上开出反向仓。
+ */
+export function largestHolder(row: CoinRow, market: 1 | 2 | 3, candidates: readonly string[]): string | undefined {
+  const members = market === 2 ? row.memberSwap : row.memberSpot;
+  let best: string | undefined;
+  let size = 0;
+  for (const accountId of candidates) {
+    const held = Math.abs(members[accountId] ?? 0);
+    if (held > size) {
+      best = accountId;
+      size = held;
+    }
+  }
+  return best;
 }
 
 export interface OrderHint {

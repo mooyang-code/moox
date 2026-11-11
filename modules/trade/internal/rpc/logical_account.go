@@ -149,7 +149,7 @@ func (h *LogicalAccountServer) AddLogicalAccountMember(
 			RetInfo: invalidOrErrorInfo(err),
 		}, nil
 	}
-	err = h.LogicalAccounts.AddMember(ctx, logicalapp.AddMemberCommand{
+	warning, err := h.LogicalAccounts.AddMember(ctx, logicalapp.AddMemberCommand{
 		SpaceID: spaceID, LogicalAccountID: req.GetLogicalAccountId(),
 		TradingAccountID:      req.GetTradingAccountId(),
 		Enabled:               req.GetEnabled(),
@@ -160,8 +160,13 @@ func (h *LogicalAccountServer) AddLogicalAccountMember(
 		return &tradepb.AddLogicalAccountMemberRsp{RetInfo: errorInfo(err)}, nil
 	}
 	record, err := h.Store.GetLogicalAccount(ctx, spaceID, req.GetLogicalAccountId())
+	info := errorInfo(err)
+	if err == nil && warning != "" {
+		// 停用成功但只按本地记录确认过，提示放在返回信息里（与移出成员一样）。
+		info = retInfo(tradepb.ErrorCode_SUCCESS, warning)
+	}
 	return &tradepb.AddLogicalAccountMemberRsp{
-		RetInfo:        errorInfo(err),
+		RetInfo:        info,
 		LogicalAccount: h.logicalAccount(ctx, record),
 	}, nil
 }

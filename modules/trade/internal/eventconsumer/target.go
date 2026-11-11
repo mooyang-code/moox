@@ -118,22 +118,18 @@ func admitTarget(
 		}
 		return admittedTarget{}, retryTarget(accountErr), true
 	}
-	if account.ControlMode != "STRATEGY" {
-		return admittedTarget{}, targetRejection("authorization_conflict", fmt.Errorf("%w: 组合账户不是策略控制的", store.ErrTargetAuthorization)), true
-	}
-	if account.OwnerInstanceID != request.GetInstanceId() || account.OwnerSessionID != request.GetSessionId() {
-		return admittedTarget{}, targetRejection("authorization_conflict", fmt.Errorf("%w: 目标所属的策略会话与账户当前授权不一致", store.ErrConflict)), true
-	}
 	now := time.Now().UTC()
 	if opts.Now != nil {
 		now = opts.Now().UTC()
 	}
-	// A target may arrive before its effective bar boundary because Strategy
-	// and Trade clocks/transport are not perfectly aligned. Persist it while
-	// the validity window is still open; the executor will hold it in PENDING
-	// until effective_at and only terminally reject it after valid_until.
+	// 过期最先判断：停用再启用策略后，旧会话还在路上的目标多半已经过期，按过期终止，不当成授权冲突告警。
+	// 目标可能早于生效时刻送到（策略与交易的时钟、传输不完全对齐）：有效期内照常接收，执行器保持 PENDING
+	// 到 effective_at 才执行，过了 valid_until 才终止。
 	if !now.Before(request.GetValidUntil().AsTime()) {
 		return admittedTarget{}, jetstream.HandlerResult{Decision: jetstream.TERM, Err: store.ErrTargetExpired}, true
+	}
+	if rejection, rejected := ownershipRejection(account, request); rejected {
+		return admittedTarget{}, rejection, true
 	}
 	// 上游标的 ID 不带市场后缀，回执和目标只保存标准化后的 Trade 内部 ID。
 	tradable, err := opts.Store.LogicalAccountMarkets(ctx, message.GetSpaceId(), account.LogicalAccountID)
@@ -149,7 +145,7 @@ func admitTarget(
 		return admittedTarget{}, targetRejection("invalid_contract", err), true
 	}
 	if request.GetShadow() {
-		return admittedTarget{}, handleShadowTarget(ctx, opts, message.GetSpaceId(), request, now), true
+		return admittedTarget{}, handleShadowTarget(ctx, delivery, opts, message.GetSpaceId(), account.Name, request, now), true
 	}
 	if opts.Intake != nil && !opts.Intake() {
 		// 暂停期间不接收真实目标，但也不销毁它：它可能是策略暂停前刚发布、还在路上的目标。
@@ -157,6 +153,25 @@ func admitTarget(
 		return admittedTarget{}, pausedTargetRetry(), true
 	}
 	return admittedTarget{message: message, request: request, account: account}, jetstream.HandlerResult{}, false
+}
+
+// ownershipRejection 判断目标所属的策略会话是不是账户当前的所有者，不是时给出拒绝结论。
+// 账户已释放（所有者为空）或同一实例换了会话（停用再启用）：这是旧会话的目标，按被取代处理，不告警；
+// 只有账户改成人工控制或被别的实例持有，才是需要人看的授权冲突。
+func ownershipRejection(
+	account store.LogicalAccountRecord,
+	request *tradeeventpb.LogicalAccountTargetWeightRequested,
+) (jetstream.HandlerResult, bool) {
+	if account.ControlMode != "STRATEGY" {
+		return targetRejection("authorization_conflict", fmt.Errorf("%w: 组合账户不是策略控制的", store.ErrTargetAuthorization)), true
+	}
+	if account.OwnerInstanceID == request.GetInstanceId() && account.OwnerSessionID == request.GetSessionId() {
+		return jetstream.HandlerResult{}, false
+	}
+	if account.OwnerInstanceID == "" || account.OwnerInstanceID == request.GetInstanceId() {
+		return targetRejection("superseded", fmt.Errorf("%w: 目标所属的策略会话已不是账户当前的所有者", store.ErrConflict)), true
+	}
+	return targetRejection("authorization_conflict", fmt.Errorf("%w: 目标所属的策略会话与账户当前授权不一致", store.ErrConflict)), true
 }
 
 // acceptTarget 把已通过校验的真实目标换算成数量快照，在账户锁内连同回执一起落库，成功后唤醒执行器。
@@ -202,8 +217,8 @@ func acceptTarget(
 	// exchange selection through receipt acceptance. Otherwise a concurrent member
 	// removal can leave an immutable receipt pointing at an exchange that no longer
 	// belongs to the logical account.
-	// 拿锁阶段也受处理预算约束：完整同步等长时间持锁的操作不能让串行消费的目标消息一直卡在这里，
-	// 超时按可重试处理，其他账户的消息才能继续。
+	// 拿锁阶段也受处理预算约束：完整同步等长时间持锁的操作不能让串行消费的目标消息一直卡在这里。
+	// 超时按可重试处理，只延后这一条；消费者并发处理（见 targetBatchSize），其他组合的消息照常处理。
 	lockBudget := opts.ResolveTimeout
 	if lockBudget <= 0 {
 		lockBudget = 10 * time.Second
@@ -215,28 +230,9 @@ func acceptTarget(
 		return retryTarget(lockErr)
 	}
 	defer unlockAccount()
-	unsupportedInstrument, delisted, membersReady, err := unsupportedLogicalTargetInstrument(
-		ctx, opts.Store, message.GetSpaceId(), request,
-	)
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
-		}
-		return retryTarget(err)
-	}
-	if unsupportedInstrument != "" {
-		err = fmt.Errorf(
-			"%w: 没有启用的成员支持标的 %s",
-			store.ErrInvalidRecord, unsupportedInstrument,
-		)
-		if membersReady {
-			return targetRejection("unsupported_instrument", err)
-		}
-		return retryTarget(err)
-	}
-
-	if len(delisted) > 0 {
-		request = holdTargets(request, delisted)
+	request, checked, done := checkTargetInstruments(ctx, opts.Store, message.GetSpaceId(), request)
+	if done {
+		return checked
 	}
 	now := time.Now().UTC()
 	if opts.Now != nil {
@@ -269,14 +265,7 @@ func acceptTarget(
 	}
 	cancel()
 	if conversionErr != nil {
-		if errors.Is(conversionErr, targetapp.ErrPermanent) {
-			return jetstream.HandlerResult{Decision: jetstream.TERM, Err: conversionErr}
-		}
-		// 换算失败的目标不进目标表，过期后就消失了，页面看不到。偶发失败重投就好，持续失败才提醒人。
-		if delivery.DeliveryCount >= conversionAttentionDeliveries {
-			telemetry.NoteTargetRejection(account.Name, "目标换算失败："+telemetry.StableReason(conversionErr.Error()), now)
-		}
-		return retryTarget(conversionErr)
+		return conversionFailure(delivery, account.Name, "目标换算失败：", conversionErr, now)
 	}
 	record.Targets = append(record.Targets, conversion.QuantityTargets...)
 	referencePrices, marshalErr := json.Marshal(referencePriceByInstrument(conversion))
@@ -291,6 +280,15 @@ func acceptTarget(
 	var accepted bool
 	_, accepted, err = opts.Store.AcceptLogicalAccountTargetWithReceiptLocked(ctx, record, receipt)
 	if err != nil {
+		if errors.Is(err, store.ErrTargetAuthorization) {
+			// 入口检查之后、拿到组合锁之前会话被释放或换掉（释放全程持锁，最后才改所有者）：按当前所有者重新分类，
+			// 旧会话的目标按被取代处理、不告警。读不到账户时按下面的原样终止。
+			if current, lookupErr := opts.Store.GetLogicalAccount(ctx, message.GetSpaceId(), request.GetLogicalAccountId()); lookupErr == nil {
+				if rejection, rejected := ownershipRejection(current, request); rejected {
+					return rejection
+				}
+			}
+		}
 		if errors.Is(err, store.ErrInvalidRecord) ||
 			errors.Is(err, store.ErrConflict) ||
 			errors.Is(err, store.ErrTargetExpired) ||
@@ -310,15 +308,34 @@ func acceptTarget(
 	return jetstream.HandlerResult{Decision: jetstream.ACK}
 }
 
+// conversionFailure 把换算失败转成投递结论：永久错误终止，其余重投。
+// 换算失败的目标不进目标表，过期后就消失了，页面看不到。偶发失败重投就好，投递满 conversionAttentionDeliveries 次才提醒人；
+// prefix 区分正式目标和试运行目标。
+func conversionFailure(delivery *jetstream.Delivery, accountName, prefix string, err error, now time.Time) jetstream.HandlerResult {
+	if errors.Is(err, targetapp.ErrPermanent) {
+		return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
+	}
+	if delivery.DeliveryCount >= conversionAttentionDeliveries {
+		telemetry.NoteTargetRejection(accountName, prefix+telemetry.StableReason(err.Error()), now)
+	}
+	return retryTarget(err)
+}
+
 // handleShadowTarget 处理预热中的策略实例发来的影子目标（设计 6.3）：完成权重到数量的换算并记录，
-// 不接受为正式目标，不拿账户锁、不预留资金、不唤醒执行器。
+// 不接受为正式目标，不拿账户锁、不预留资金、不唤醒执行器。标的检查和换算失败告警与正式目标一致。
 func handleShadowTarget(
 	ctx context.Context,
+	delivery *jetstream.Delivery,
 	opts TargetOptions,
 	spaceID string,
+	accountName string,
 	request *tradeeventpb.LogicalAccountTargetWeightRequested,
 	now time.Time,
 ) jetstream.HandlerResult {
+	request, checked, done := checkTargetInstruments(ctx, opts.Store, spaceID, request)
+	if done {
+		return checked
+	}
 	timeout := opts.ResolveTimeout
 	if timeout <= 0 {
 		timeout = 10 * time.Second
@@ -330,10 +347,7 @@ func handleShadowTarget(
 	}
 	cancel()
 	if err != nil {
-		if errors.Is(err, targetapp.ErrPermanent) {
-			return jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}
-		}
-		return retryTarget(err)
+		return conversionFailure(delivery, accountName, "试运行目标换算失败：", err, now)
 	}
 	_, err = opts.Store.RecordShadowTarget(ctx, store.ShadowTargetRecord{
 		SpaceID: spaceID, TargetID: request.GetTargetId(), LogicalAccountID: request.GetLogicalAccountId(),
@@ -425,6 +439,36 @@ func holdTargets(request *tradeeventpb.LogicalAccountTargetWeightRequested, inst
 		}
 	}
 	return held
+}
+
+// checkTargetInstruments 检查目标里的标的能不能交易：有标的没有成员能交易时，成员都已就绪就拒绝（unsupported_instrument，
+// 需要人看），还有成员没就绪就重投；下架名单里已经不能交易的标的改成保持，其余照常。本身不拿组合锁：
+// 正式目标在组合锁内调用（成员从这里到落库保持不变），影子目标直接调用，两条路径结论一致。
+// done 为真时调用方直接返回 result；否则继续使用返回的（可能改成保持的）目标。
+func checkTargetInstruments(
+	ctx context.Context,
+	tradeStore *store.Store,
+	spaceID string,
+	request *tradeeventpb.LogicalAccountTargetWeightRequested,
+) (*tradeeventpb.LogicalAccountTargetWeightRequested, jetstream.HandlerResult, bool) {
+	unsupported, delisted, membersReady, err := unsupportedLogicalTargetInstrument(ctx, tradeStore, spaceID, request)
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, jetstream.HandlerResult{Decision: jetstream.TERM, Err: err}, true
+		}
+		return nil, retryTarget(err), true
+	}
+	if unsupported != "" {
+		err = fmt.Errorf("%w: 没有启用的成员支持标的 %s", store.ErrInvalidRecord, unsupported)
+		if membersReady {
+			return nil, targetRejection("unsupported_instrument", err), true
+		}
+		return nil, retryTarget(err), true
+	}
+	if len(delisted) > 0 {
+		request = holdTargets(request, delisted)
+	}
+	return request, jetstream.HandlerResult{}, false
 }
 
 // unsupportedLogicalTargetInstrument 找出第一个没有成员能交易的标的。名单里（下架名单）已经不能交易的标的不算不受支持，

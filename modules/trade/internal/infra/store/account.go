@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"sort"
@@ -333,6 +334,36 @@ func (tradingAccountRow) TableName() string {
 	return "t_trading_accounts"
 }
 
+// ErrNameTaken 是新建或改名时名称在空间内已被占用：执行账户、组合账户各自在空间内不能重名，
+// 关闭的模拟账户只是停用，记录和名称都还在。
+var ErrNameTaken = errors.New("名称已被使用，请换一个（已关闭的模拟账户也占用名称）")
+
+// 写入撞上的名称唯一约束，按 SQLite 报错（“UNIQUE constraint failed: 表.列, 表.列”）里的约束列识别；
+// 别的唯一约束（例如密钥）照旧当冲突。
+const (
+	uniqueConstraintFailed   = "UNIQUE constraint failed"
+	uniqueTradingAccountName = "t_trading_accounts.c_space_id, t_trading_accounts.c_name"
+	// 模拟账户的编号由空间、账户名和组合名算出，编号重复就是这对名称已经用过（模拟账户不能改名）。
+	// 主键和全局编号唯一索引报的列不同，都含这一段。
+	uniqueTradingAccountID   = "t_trading_accounts.c_trading_account_id"
+	uniqueLogicalAccountName = "t_logical_accounts.c_space_id, t_logical_accounts.c_name"
+)
+
+// nameWriteError 把撞上名称唯一约束的写入错误换成 ErrNameTaken，其余照 writeError 处理。
+func nameWriteError(err error, constraints ...string) error {
+	if err == nil {
+		return nil
+	}
+	if message := err.Error(); strings.Contains(message, uniqueConstraintFailed) {
+		for _, constraint := range constraints {
+			if strings.Contains(message, constraint) {
+				return ErrNameTaken
+			}
+		}
+	}
+	return writeError(err)
+}
+
 func (tx *Tx) CreateTradingAccount(record TradingAccountRecord) error {
 	tx.accountsWritten = true
 	if tx.store != nil {
@@ -399,7 +430,10 @@ func (tx *Tx) CreateTradingAccount(record TradingAccountRecord) error {
 		row.SnapshotSourceTime, row.LastSyncAt, row.LastReadyAt, row.LastError, createdAt,
 	).Error
 	if err != nil {
-		return writeError(err)
+		if record.ExecutionMode == "PAPER" {
+			return nameWriteError(err, uniqueTradingAccountName, uniqueTradingAccountID)
+		}
+		return nameWriteError(err, uniqueTradingAccountName)
 	}
 	if record.ExecutionMode == "PAPER" && record.PaperConfig != nil {
 		return tx.CreatePaperAccountConfig(*record.PaperConfig)
@@ -468,6 +502,9 @@ func (tx *Tx) UpdateTradingAccountConfiguration(
 		config.CredentialSecretID, config.SettlementAsset,
 		config.MarginMode, config.Status,
 		spaceID, tradingAccountID)
+	if result.Error != nil {
+		return nameWriteError(result.Error, uniqueTradingAccountName)
+	}
 	return requireUpdated(result.Error, result.RowsAffected, "Exchange account configuration")
 }
 

@@ -501,3 +501,60 @@ func TestSameSessionConfigDiffersWhenCredentialFingerprintChanges(t *testing.T) 
 	require.True(t, sameSessionConfig(account("key-1"), account("key-1")))
 	require.False(t, sameSessionConfig(account("key-1"), account("key-2")))
 }
+
+// 一个账户建会话很慢（实盘经网关取密钥）时，已建好账户的 Ready、Adapter、Snapshot、RequestSync 不被管理器的锁挡住。
+func TestManagerSlowSessionFactoryDoesNotBlockReaders(t *testing.T) {
+	good := &managedSessionStub{started: make(chan struct{}), stopped: make(chan struct{})}
+	slow := &managedSessionStub{started: make(chan struct{}), stopped: make(chan struct{})}
+	source := &managerAccountSource{accounts: []store.TradingAccountRecord{{TradingAccountID: "good"}}}
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	releaseSlow := sync.OnceFunc(func() { close(release) })
+	defer releaseSlow()
+	var slowCalls atomic.Int32
+	m := &Manager{Accounts: source, NewSession: func(account store.TradingAccountRecord) (ManagedSession, error) {
+		if account.TradingAccountID == "good" {
+			return good, nil
+		}
+		if slowCalls.Add(1) == 1 {
+			close(entered)
+		}
+		<-release
+		return slow, nil
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	require.NoError(t, m.reconcile(ctx))
+	<-good.started
+	require.Eventually(t, func() bool { return m.Ready("good") }, time.Second, time.Millisecond)
+
+	source.set([]store.TradingAccountRecord{{TradingAccountID: "good"}, {TradingAccountID: "slow"}})
+	reconciled := make(chan error, 1)
+	go func() { reconciled <- m.reconcile(ctx) }()
+	<-entered
+	var ready bool
+	var snapshot SessionSnapshot
+	readers := make(chan struct{})
+	go func() {
+		defer close(readers)
+		ready = m.Ready("good")
+		_, _ = m.Adapter("good")
+		snapshot = m.Snapshot()
+		m.RequestSync("good")
+	}()
+	select {
+	case <-readers:
+	case <-time.After(time.Second):
+		t.Fatal("建会话期间读者被管理器的锁挡住")
+	}
+	require.True(t, ready)
+	require.Equal(t, 1, snapshot.Ready)
+	require.False(t, m.Ready("slow"))
+
+	releaseSlow()
+	require.NoError(t, <-reconciled)
+	<-slow.started
+	require.Eventually(t, func() bool { return m.Ready("slow") }, time.Second, time.Millisecond)
+	require.Equal(t, int32(1), slowCalls.Load(), "同一账户只建一个会话")
+	m.stopAll()
+}

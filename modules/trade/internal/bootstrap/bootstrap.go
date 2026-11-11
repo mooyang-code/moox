@@ -267,6 +267,10 @@ func initialize(
 		Pause: logicalAccounts.PauseIf,
 	}
 	marginWorker := &traderuntime.FundWorker{Maintainer: marginService, Interval: time.Minute, Gate: lifeGate.Open, Name: "保证金率监控"}
+	// 目标回执与影子目标的清理：启动时一次，之后每 6 小时一次；同样复用这个定时任务外壳。清理不是交易行为，不受暂停影响。
+	targetHistoryWorker := &traderuntime.FundWorker{
+		Maintainer: &traderuntime.TargetHistoryPruner{Store: tradeStore}, Interval: 6 * time.Hour, Name: "目标回执与影子目标清理",
+	}
 	operatorWorker := &traderuntime.OperatorWorker{
 		Actions: tradeStore, Resumer: operatorService, Interval: time.Second,
 		ActionScoped: operatorapp.ActionScopedError,
@@ -404,6 +408,7 @@ func initialize(
 	runWorker(inspectionWorker.Run)
 	runWorker(fundWorker.Run)
 	runWorker(marginWorker.Run)
+	runWorker(targetHistoryWorker.Run)
 	runWorker((&traderuntime.AttentionWorker{Store: tradeStore, Executor: targetExecutor}).Run)
 	// 收盘撤单：A 股日收盘后先全量同步，再把收盘前提交、仍在途的订单按已撤结束；重启后第一轮就补做。
 	sessionCloser := &orderapp.SessionCloser{
@@ -530,21 +535,23 @@ func initialize(
 			},
 		},
 	)
-	if err := registerHealth(runtimeCtx, serverInstance, tradeStore, life, readiness); err != nil {
+	// 停止顺序：先取消工人、等它们都退出，再关事件总线连接。目标消费者停下时要把在途消息立即退回（见 jetstream
+	// Runner 的 releaseOnStop），连接先关了退回必然失败，这些消息要等 AckWait（60 秒）才重投。
+	// 工人退出不依赖连接关闭：拉取消息用的是可取消的上下文。
+	stopWorkers := func() {
 		cancelRuntime()
+		workers.Wait()
 		if eventBus != nil {
 			eventBus.Close()
 		}
-		workers.Wait()
+	}
+	if err := registerHealth(runtimeCtx, serverInstance, tradeStore, life, readiness); err != nil {
+		stopWorkers()
 		return nil, err
 	}
 
 	serverInstance.RegisterOnShutdown(func() {
-		cancelRuntime()
-		if eventBus != nil {
-			eventBus.Close()
-		}
-		workers.Wait()
+		stopWorkers()
 		_ = gateway.Close()
 		_ = tradeStore.Close()
 	})

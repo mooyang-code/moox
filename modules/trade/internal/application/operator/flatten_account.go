@@ -249,7 +249,7 @@ func (s *Service) confirmFlattenChildren(ctx context.Context, command FlattenCom
 	for _, child := range orders {
 		if child.OwnerType == string(orderdomain.OwnerOperator) && child.OwnerID == command.ActionID && !orderdomain.State(child.State).Terminal() {
 			result.ChildOrderIDs = appendUnique(result.ChildOrderIDs, child.OrderID)
-			return &orderapp.AccountExecutionError{TradingAccountID: accountID, Operation: "flatten_confirmation", Err: fmt.Errorf("flatten child %s remains %s", child.OrderID, child.State)}
+			return &orderapp.AccountExecutionError{TradingAccountID: accountID, Operation: "flatten_confirmation", Err: fmt.Errorf("清仓子单 %s 还没结束，等交易所确认", child.OrderID)}
 		}
 	}
 	return nil
@@ -343,11 +343,7 @@ func (s *Service) cancelAccountOrders(
 			continue
 		}
 		if err != nil {
-			cancelErrors = append(cancelErrors, fmt.Errorf(
-				"cancel order %s: %w",
-				current.OrderID,
-				err,
-			))
+			cancelErrors = append(cancelErrors, fmt.Errorf("撤单 %s 失败：%w", current.OrderID, err))
 		}
 	}
 	return errors.Join(cancelErrors...)
@@ -364,12 +360,7 @@ func (s *Service) confirmAccountCancellations(
 	if err != nil || len(records) == 0 {
 		return err
 	}
-	return fmt.Errorf(
-		"%w: order %s remains %s",
-		ErrCancelUnconfirmed,
-		records[0].OrderID,
-		records[0].State,
-	)
+	return fmt.Errorf("%w（订单 %s）", ErrCancelUnconfirmed, records[0].OrderID)
 }
 
 func (s *Service) flattenAttempts() int {
