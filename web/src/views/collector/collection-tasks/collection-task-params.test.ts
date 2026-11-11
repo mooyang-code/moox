@@ -4,9 +4,11 @@ import {
   buildCollectionTaskPayload,
   parseKlineResampleParams,
   collectionTaskNameError,
-  fundingRateFieldAvailable,
-  pruneFundingRate,
-  shouldDropFundingRate,
+  availableExtraFieldIds,
+  outputFieldSelectable,
+  outputFieldVisible,
+  pruneUnavailableFields,
+  shouldDropUnavailableFields,
   collectionTaskResultLabel,
   normalizeCollectionTask,
   parseCollectionTaskInput,
@@ -203,40 +205,87 @@ describe("collection task result label", () => {
   });
 });
 
-describe("funding rate output field", () => {
-  const swap = { source: "binance", market: "swap" };
-  const spot = { source: "binance", market: "spot" };
+describe("附加输出字段", () => {
+  // 与后端 GetDataTypeConfigWithFields 的 extra_fields 同形：资金费率只有加密永续、1h/1d；A 股附加字段只有股票日线。
+  const options = [
+    { field_id: "funding_rate", market_id: "crypto", instrument_type: "swap", frequencies: ["1h", "1d"], provider_id: "binance" },
+    { field_id: "adj_factor", market_id: "stockcn", instrument_type: "equity", frequencies: ["1d"], provider_id: "sina_hfq" },
+    { field_id: "sw_l1", market_id: "stockcn", instrument_type: "equity", frequencies: ["1d"], provider_id: "swsresearch" }
+  ];
+  const swap = { market: "swap" };
+  const spot = { market: "spot" };
+  const equity = { market: "equity" };
+  const available = (spaceId: string, frequency: string, routes: Array<{ market: string }>, dataType = "kline") =>
+    [...availableExtraFieldIds({ dataType, spaceId, frequency, routes, options })].sort();
 
-  it("is available only for kline swap tasks at 1h or 1d from a capable source", () => {
-    expect(fundingRateFieldAvailable({ dataType: "kline", frequency: "1h", routes: [swap] })).toBe(true);
-    expect(fundingRateFieldAvailable({ dataType: "kline", frequency: "1d", routes: [swap, swap] })).toBe(true);
+  it("按市场、品种与频率给出可选的附加字段", () => {
+    expect(available("stockcn", "1d", [equity])).toEqual(["adj_factor", "sw_l1"]);
+    expect(available("stockcn", "5m", [equity])).toEqual([]);
+    // 别的市场的字段不出现
+    expect(available("crypto", "1d", [swap])).toEqual(["funding_rate"]);
+    expect(available("crypto", "1d", [equity])).toEqual([]);
+    // 没选标签、不是 K 线采集、接口没给清单时都没有
+    expect(available("stockcn", "1d", [])).toEqual([]);
+    expect(available("stockcn", "1d", [equity], "kline_resample")).toEqual([]);
+    expect([
+      ...availableExtraFieldIds({ dataType: "kline", spaceId: "stockcn", frequency: "1d", routes: [equity], options: [] })
+    ]).toEqual([]);
+    // 空间 ID、频率写法不同也能对上
+    expect(available(" StockCN ", "1D", [equity])).toEqual(["adj_factor", "sw_l1"]);
+  });
+
+  it("资金费率的显示与原来一致：只在永续、1h 或 1d、非统一数据集时出现", () => {
+    expect(available("crypto", "1h", [swap])).toEqual(["funding_rate"]);
+    expect(available("crypto", "1d", [swap, swap])).toEqual(["funding_rate"]);
     for (const frequency of ["1m", "5m", "30m", "4h", "1w", "1mo", ""]) {
-      expect(fundingRateFieldAvailable({ dataType: "kline", frequency, routes: [swap] })).toBe(false);
+      expect(available("crypto", frequency, [swap])).toEqual([]);
     }
-    expect(fundingRateFieldAvailable({ dataType: "kline", frequency: "1h", routes: [spot] })).toBe(false);
-    expect(fundingRateFieldAvailable({ dataType: "kline", frequency: "1h", routes: [spot, swap] })).toBe(false);
-    expect(fundingRateFieldAvailable({ dataType: "kline", frequency: "1h", routes: [{ source: "okx", market: "swap" }] })).toBe(
-      false
-    );
-    expect(fundingRateFieldAvailable({ dataType: "kline", frequency: "1h", routes: [] })).toBe(false);
-    expect(fundingRateFieldAvailable({ dataType: "kline_resample", frequency: "1h", routes: [swap] })).toBe(false);
+    expect(available("crypto", "1h", [spot])).toEqual([]);
+    // 现货加永续的统一数据集选不了
+    expect(available("crypto", "1h", [spot, swap])).toEqual([]);
+    expect(available("crypto", "1h", [])).toEqual([]);
+    expect(available("crypto", "1h", [swap], "kline_resample")).toEqual([]);
   });
 
-  it("keeps the selection while editing before tags are loaded", () => {
-    expect(shouldDropFundingRate(false, true, 0)).toBe(false);
-    expect(shouldDropFundingRate(false, true, 1)).toBe(true);
-    expect(shouldDropFundingRate(false, false, 0)).toBe(true);
-    expect(shouldDropFundingRate(true, true, 1)).toBe(false);
-    expect(shouldDropFundingRate(true, false, 0)).toBe(false);
+  it("字段清单只显示基础 K 线字段和当前可选的附加字段", () => {
+    const now = new Set(["adj_factor"]);
+    expect(outputFieldVisible("close", now)).toBe(true);
+    expect(outputFieldVisible("adj_factor", now)).toBe(true);
+    expect(outputFieldVisible("sw_l1", now)).toBe(false);
+    expect(outputFieldVisible("funding_rate", new Set())).toBe(false);
   });
 
-  it("prunes a selection loaded while the drop condition already holds", () => {
-    // 新建初始态判断值已是“去掉”，再打开一个标签已读到、条件不满足的任务：判断值没变，按已选字段的变化也要清理。
-    const dropped = shouldDropFundingRate(false, true, 1);
-    expect(pruneFundingRate(["close", "funding_rate"], dropped)).toEqual(["close"]);
-    const kept = ["close", "funding_rate"];
-    expect(pruneFundingRate(kept, false)).toBe(kept);
+  it("条件不满足时去掉已选的附加字段", () => {
+    const selected = ["close", "adj_factor", "sw_l1"];
+    // 频率从 1d 改成 5m：两个附加字段都去掉
+    expect(pruneUnavailableFields(selected, new Set(available("stockcn", "5m", [equity])), true)).toEqual(["close"]);
+    // 只剩一个可选
+    expect(pruneUnavailableFields(selected, new Set(["adj_factor"]), true)).toEqual(["close", "adj_factor"]);
+    // 没有要去掉的、或不该去掉时原样返回同一个数组
+    expect(pruneUnavailableFields(selected, new Set(["adj_factor", "sw_l1"]), true)).toBe(selected);
+    expect(pruneUnavailableFields(selected, new Set(), false)).toBe(selected);
     const plain = ["close"];
-    expect(pruneFundingRate(plain, true)).toBe(plain);
+    expect(pruneUnavailableFields(plain, new Set(), true)).toBe(plain);
+  });
+
+  it("编辑任务时标签或附加字段清单还没读到就不去掉已选项", () => {
+    expect(shouldDropUnavailableFields(true, 0, true)).toBe(false);
+    expect(shouldDropUnavailableFields(true, 1, false)).toBe(false);
+    expect(shouldDropUnavailableFields(true, 1, true)).toBe(true);
+    // 新建时没有要保护的已选项，照常清理
+    expect(shouldDropUnavailableFields(false, 0, false)).toBe(true);
+    expect(shouldDropUnavailableFields(false, 1, true)).toBe(true);
+  });
+
+  it("编辑任务时不能新增字段，只能取消或重新勾上原有的", () => {
+    // 新建：都能勾
+    expect(outputFieldSelectable("adj_factor", false, [])).toBe(true);
+    // 编辑：原来有的可以重新勾上，原来没有的（基础字段也一样）不能勾
+    expect(outputFieldSelectable("adj_factor", true, ["close", "adj_factor"])).toBe(true);
+    expect(outputFieldSelectable("sw_l1", true, ["close", "adj_factor"])).toBe(false);
+    expect(outputFieldSelectable("volume", true, ["close", "adj_factor"])).toBe(false);
+    // 原来没有显式选择（默认字段）：可以收窄到基础字段，不能勾附加字段
+    expect(outputFieldSelectable("close", true, [])).toBe(true);
+    expect(outputFieldSelectable("adj_factor", true, [])).toBe(false);
   });
 });

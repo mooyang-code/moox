@@ -162,7 +162,13 @@ describe("collector task workbench", () => {
     expect(source).not.toContain('<section v-if="!editing" class="editor-section editor-section--output">');
     expect(source).toContain("detailOutputFieldLabels");
     expect(source).toContain("selectedOutputFields.value = input.outputFields || []");
-    expect(source).toContain("outputFields: selectedOutputFields.value");
+    expect(source).toContain("outputFields: pruneUnavailableFields(selectedOutputFields.value");
+    // 编辑已有任务：输出字段只能减少，不能新增的字段勾选框禁用，并给一句说明。
+    expect(source).toContain(':disabled="!canSelectOutputField(field.field_id)"');
+    expect(source).toContain("输出字段只能减少，要新增请新建任务。");
+    // 附加字段是否可选由接口的 extra_fields 判断，不再写死资金费率的条件。
+    expect(source).toContain("response.detail?.extra_fields");
+    expect(source).not.toContain("FUNDING_RATE");
   });
 
   it("keeps dependent resample tasks clickable in the detail drawer", () => {
