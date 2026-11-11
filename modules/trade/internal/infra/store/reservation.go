@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 
 	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
@@ -19,18 +20,29 @@ func (tx *Tx) GetUnreflectedReservation(
 	markets []string,
 	snapshotSourceTime int64,
 ) (shared.Decimal, error) {
-	var rows []struct {
-		Quantity string `gorm:"column:c_remaining_reserved_quantity"`
-	}
 	marketsJSON, err := json.Marshal(markets)
 	if err != nil {
 		return shared.Decimal{}, fmt.Errorf("%w: encode reservation markets", ErrInvalidRecord)
 	}
-	if err := tx.db.Raw(queryUnreflectedReservations, spaceID, tradingAccountID, asset, string(marketsJSON), snapshotSourceTime).Scan(&rows).Error; err != nil {
+	// “还没提交完的”和“快照之后提交的”分两条查询各走各的索引：写成一条 OR 会扫账户在这些市场的全部订单，写成 UNION 会走主键；
+	// 同时满足两个条件的订单按单号只算一次。
+	var inFlight, submitted []struct {
+		OrderID  string `gorm:"column:c_order_id"`
+		Quantity string `gorm:"column:c_remaining_reserved_quantity"`
+	}
+	if err := tx.db.Raw(queryInFlightReservations, spaceID, tradingAccountID, asset, string(marketsJSON)).Scan(&inFlight).Error; err != nil {
+		return shared.Decimal{}, err
+	}
+	if err := tx.db.Raw(querySubmittedReservationsSince, spaceID, tradingAccountID, snapshotSourceTime, asset, string(marketsJSON)).Scan(&submitted).Error; err != nil {
 		return shared.Decimal{}, err
 	}
 	total := shared.Zero()
-	for _, row := range rows {
+	seen := make(map[string]struct{}, len(inFlight)+len(submitted))
+	for _, row := range append(inFlight, submitted...) {
+		if _, dup := seen[row.OrderID]; dup {
+			continue
+		}
+		seen[row.OrderID] = struct{}{}
 		quantity, err := shared.ParseDecimal(row.Quantity)
 		if err != nil || quantity.IsNegative() {
 			return shared.Decimal{}, fmt.Errorf(
@@ -126,36 +138,46 @@ func (tx *Tx) SettleFillGapsOfGoneInstrument(spaceID, tradingAccountID string, k
 		if observed.Cmp(filled) <= 0 {
 			continue
 		}
-		if err := tx.db.Exec(updateObservedFilledToFilled, spaceID, row.OrderID).Error; err != nil {
+		settled = append(settled, row.OrderID)
+	}
+	// 查询不带 ORDER BY（带了会走主键扫整个空间），按单号排好再逐笔压回。
+	sort.Strings(settled)
+	for _, orderID := range settled {
+		if err := tx.db.Exec(updateObservedFilledToFilled, spaceID, orderID).Error; err != nil {
 			return nil, err
 		}
-		settled = append(settled, row.OrderID)
 	}
 	return settled, nil
 }
 
 // 以下 SQL 整条写成常量，不在调用处拼接或内联。
 const (
-	// 小数不能按字符串比大小：这里只筛出候选，Go 里再比。
+	// 小数不能按字符串比大小：这里只筛出候选，Go 里再比。不带 ORDER BY：按单号排序会让规划器走主键扫整个空间，
+	// 调用方在 Go 里排。
 	queryInstrumentOrdersWithFillGap = `SELECT c_order_id, c_filled_quantity, c_observed_filled_quantity
 		FROM t_trade_orders
 		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_market_type = ? AND c_exchange_symbol = ?
 			AND c_observed_filled_quantity != '0'
-			AND c_observed_filled_quantity <> c_filled_quantity
-		ORDER BY c_order_id`
+			AND c_observed_filled_quantity <> c_filled_quantity`
 	updateObservedFilledToFilled = `UPDATE t_trade_orders SET c_observed_filled_quantity = c_filled_quantity
 		WHERE c_space_id = ? AND c_order_id = ?`
-	// 市场列表经 json_each(?) 传入。
-	queryUnreflectedReservations = `SELECT c_remaining_reserved_quantity
+	// 以下两条是未反映预留的两半，市场列表经 json_each(?) 传入。c_market_type 前面的 + 让规划器不改选按标的的索引：
+	// 第一条走 idx_trade_orders_account_state，第二条走 idx_trade_orders_account_submitted。
+	queryInFlightReservations = `SELECT c_order_id, c_remaining_reserved_quantity
 		FROM t_trade_orders
 		WHERE c_space_id = ? AND c_trading_account_id = ?
+			AND c_state IN ('PENDING', 'SUBMITTING', 'SUBMIT_UNKNOWN')
 			AND c_reserved_asset = ?
-			AND c_market_type IN (SELECT value FROM json_each(?))
-			AND c_remaining_reserved_quantity != '0'
-			AND (
-				c_state IN ('PENDING', 'SUBMITTING', 'SUBMIT_UNKNOWN')
-				OR c_submitted_at >= ?
-			)`
+			AND +c_market_type IN (SELECT value FROM json_each(?))
+			AND c_remaining_reserved_quantity != '0'`
+	querySubmittedReservationsSince = `SELECT c_order_id, c_remaining_reserved_quantity
+		FROM t_trade_orders
+		WHERE c_space_id = ? AND c_trading_account_id = ?
+			AND c_submitted_at >= ?
+			AND c_reserved_asset = ?
+			AND +c_market_type IN (SELECT value FROM json_each(?))
+			AND c_remaining_reserved_quantity != '0'`
+	// 条件与部分索引 idx_trade_orders_fill_gap 的 WHERE 逐项一致，规划器才会用它。
 	queryOrdersWithFillGap = `SELECT c_market_type, c_exchange_symbol, c_filled_quantity, c_observed_filled_quantity
 		FROM t_trade_orders
 		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_observed_filled_quantity != '0'

@@ -39,6 +39,18 @@ func TestPrivateOrderProbeWakesWaitingSubmit(t *testing.T) {
 type capabilityAdapter struct {
 	execution.ExecutionAdapter
 	lookedUpID string
+	leverage   string
+	marginMode exchange.MarginMode
+}
+
+func (a *capabilityAdapter) SetLeverage(_ context.Context, _ exchange.SymbolKey, leverage shared.Decimal) error {
+	a.leverage = leverage.String()
+	return nil
+}
+
+func (a *capabilityAdapter) SetMarginMode(_ context.Context, _ exchange.SymbolKey, mode exchange.MarginMode) error {
+	a.marginMode = mode
+	return nil
 }
 
 func (*capabilityAdapter) GetReferencePrice(context.Context, exchange.SymbolKey) (exchange.ReferencePrice, error) {
@@ -67,4 +79,21 @@ func TestProbingAdapterPreservesOptionalCapabilities(t *testing.T) {
 
 	var _ execution.ExchangeOrderLookup = adapter
 	var _ execution.ReferencePriceSource = adapter
+
+	// 会话只在适配器实现了 SymbolConfigurer 时才设置全仓和杠杆：包装后必须仍然实现，并转发到真实适配器。
+	var wrapped execution.ExecutionAdapter = adapter
+	configurer, ok := wrapped.(execution.SymbolConfigurer)
+	if !ok {
+		t.Fatal("包装后的适配器丢了 SymbolConfigurer，永续测试单不会设置杠杆和全仓")
+	}
+	symbol := exchange.NewSymbolKey(exchange.MarketTypeSwap, "BTCUSDT")
+	if err := configurer.SetMarginMode(context.Background(), symbol, exchange.MarginModeCross); err != nil {
+		t.Fatal(err)
+	}
+	if err := configurer.SetLeverage(context.Background(), symbol, shared.MustDecimal("1")); err != nil {
+		t.Fatal(err)
+	}
+	if base.marginMode != exchange.MarginModeCross || base.leverage != "1" {
+		t.Fatalf("杠杆和保证金模式没有转发：%+v", base)
+	}
 }

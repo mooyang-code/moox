@@ -686,27 +686,34 @@ func (s *Store) RejectedTargetAccounts(
 	targetID string,
 	instrumentID string,
 ) (map[string]string, error) {
-	var rows []orderRow
-	if err := s.db.WithContext(ctx).Table("t_trade_orders").
-		Where(`c_space_id = ? AND c_logical_account_id = ? AND c_owner_type = 'TARGET' AND c_owner_id = ?
-			AND c_instrument_id = ? AND c_submitted_at > 0
-			AND (c_state = 'REJECTED' OR (c_state = 'EXPIRED' AND c_filled_quantity = '0'
-				AND NOT (c_order_type = 'LIMIT' AND c_time_in_force = 'IOC')))`,
-			spaceID, logicalAccountID, targetID, instrumentID).
-		Find(&rows).Error; err != nil {
+	var rows []struct {
+		TradingAccountID string `gorm:"column:c_trading_account_id"`
+		RejectReason     string `gorm:"column:c_reject_reason"`
+	}
+	if err := s.db.WithContext(ctx).Raw(sqlRejectedTargetAccounts, spaceID, logicalAccountID, targetID, instrumentID).
+		Scan(&rows).Error; err != nil {
 		return nil, err
 	}
 	rejected := make(map[string]string, len(rows))
 	for _, row := range rows {
-		record := orderRecordFromRow(row)
-		reason := record.RejectReason
+		reason := row.RejectReason
 		if reason == "" {
 			reason = "交易所未受理订单"
 		}
-		rejected[record.TradingAccountID] = reason
+		rejected[row.TradingAccountID] = reason
 	}
 	return rejected, nil
 }
+
+// sqlRejectedTargetAccounts 取同一目标、同一标的被交易所拒绝或零成交过期的子单。c_submitted_at 前面的 + 让查询走
+// idx_trade_orders_logical_owner_state，不走 idx_trade_orders_target_hourly（见 sqlTargetChildOrders）。
+const sqlRejectedTargetAccounts = `
+	SELECT c_trading_account_id, c_reject_reason
+	FROM t_trade_orders
+	WHERE c_space_id = ? AND c_logical_account_id = ? AND c_owner_type = 'TARGET' AND c_owner_id = ?
+		AND c_instrument_id = ? AND +c_submitted_at > 0
+		AND (c_state = 'REJECTED' OR (c_state = 'EXPIRED' AND c_filled_quantity = '0'
+			AND NOT (c_order_type = 'LIMIT' AND c_time_in_force = 'IOC')))`
 
 // RecentFilledOrdersForLane 返回这个账户在这个标的上 since（毫秒）之后结束且有成交的订单，
 // 不分来源，最近的在前。用于判断持仓是否反映了已成交的目标子单。
@@ -1959,9 +1966,11 @@ const (
 		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_market_type = ? AND c_exchange_symbol = ?
 			AND c_exchange_trade_id = ?`
 	// 账户某个标的的全部成交，按时间升序；同一毫秒按成交号倒序，与原先按时间倒序分页读出、再按时间稳定排序的次序一致。
+	// c_traded_at 前面的 + 让查询按（账户，市场，代码）走成交的唯一键、只读这个标的的成交再排序，
+	// 不走只按（空间，账户）定位的 idx_order_fills_paper_balance_history（会扫账户全部成交）。
 	querySymbolFillsAscending = `SELECT * FROM t_order_fills
 		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_market_type = ? AND c_exchange_symbol = ?
-		ORDER BY c_traded_at, c_fill_id DESC`
+		ORDER BY +c_traded_at, c_fill_id DESC`
 	queryAccountIdentity = `SELECT c_exchange, c_markets, c_live_environment AS c_environment, c_execution_mode
 		FROM t_trading_accounts
 		WHERE c_space_id = ? AND c_trading_account_id = ?`

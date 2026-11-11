@@ -63,9 +63,13 @@
 
     <section v-if="marginMonitor" class="settings-group">
       <h4>保证金率监控</h4>
-      <p class="settings-hint">
-        只对生产环境的币安实盘组合生效。触发后会暂停这个组合的自动执行，并把每个持仓按“触发后减仓比例”同比例减掉；普通账户的钱包划转还没有接入，只会提示你手动把现货钱包里的
-        {{ unit }} 划回合约钱包。触发后组合保持暂停，需要你确认账户安全后手动恢复。
+      <p v-if="manual" class="settings-hint">
+        只对生产环境的币安实盘组合生效。触发后先撤掉组合的全部挂单，再把每个持仓按“触发后减仓比例”减掉，组合不暂停；普通账户减仓后把现货钱包里的
+        {{ unit }} 划回合约钱包。仍满足触发条件时，上一次减仓结束后每分钟再减一次；持仓太小减不动时，一小时内不再发起。
+      </p>
+      <p v-else class="settings-hint">
+        只对生产环境的币安实盘组合生效。触发后暂停组合的自动执行，撤掉全部挂单，再把每个持仓按“触发后减仓比例”减掉；普通账户减仓后把现货钱包里的
+        {{ unit }} 划回合约钱包。确认账户安全后要手动恢复，恢复后才会再次触发。
       </p>
       <p v-if="mixedNote" class="settings-hint">{{ mixedNote }}</p>
       <a-form-item label="关闭保证金率监控" extra="开启后不再监控，触发条件满足也不会暂停组合或减仓">
@@ -116,6 +120,7 @@
 <script setup lang="ts">
 import { computed, reactive, ref, watch } from "vue";
 import type { FundSettings } from "@/api/trade/settings";
+import type { ControlMode } from "@/api/trade/types";
 import {
   bnbReserveHints,
   buildFundSettingsRequest,
@@ -152,6 +157,8 @@ const props = defineProps<{
   settlementAsset?: string;
   /** 组合里有币安普通账户（不含统一账户）：BNB 保留金额旁显示补买范围的说明 */
   standardAccount?: boolean;
+  /** 组合的运行方式（LogicalAccount.control_mode）：自主下单（2）和策略驱动触发保证金率监控后的处理不同，说明分开写 */
+  controlMode?: ControlMode;
 }>();
 const emit = defineEmits<{ save: [settings: FundSettings]; refresh: [] }>();
 
@@ -169,6 +176,7 @@ const marginMonitor = computed(() => showsMarginMonitor(scope.value));
 const marginNote = computed(() => marginMonitorHiddenNote(scope.value));
 const mixedNote = computed(() => marginMonitorMixedNote(scope.value));
 const unit = computed(() => (props.settlementAsset || "USDT").toUpperCase());
+const manual = computed(() => props.controlMode === 2);
 
 const model = reactive(fundSettingsToModel(props.settings));
 const formError = ref("");

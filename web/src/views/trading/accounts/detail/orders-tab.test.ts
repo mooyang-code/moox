@@ -200,6 +200,26 @@ describe("未完成订单的后台刷新", () => {
     expect(tab.drawerOrder?.state).toBe("FILLED");
   });
 
+  it('没有提交时间（后端零值输出成 "0"）的订单显示创建时间', async () => {
+    mocks.listOrders.mockReset().mockResolvedValue({
+      ret_info: { code: 0, msg: "" },
+      orders: [
+        {
+          order_id: "o-1",
+          state: "FILLED",
+          instrument_id: "BTC-USDT-SPOT",
+          quantity: "1",
+          submitted_at: "0",
+          created_at: "1700000000000"
+        }
+      ]
+    });
+    nav.route = reactive({ query: { tab: "orders" } });
+    mountTab();
+    await flushPromises();
+    expect(wrapper.find("tbody td").text()).toContain("2023-11-1");
+  });
+
   it("没有未完成订单时不刷新", async () => {
     vi.useFakeTimers();
     mocks.listOrders.mockReset().mockResolvedValue({

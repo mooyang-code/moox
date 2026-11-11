@@ -69,18 +69,24 @@
               <div
                 v-if="record.deviationSpot !== null"
                 class="tx-num"
-                :class="deviationClass(record.deviationSpot, record, 'targetSpot')"
+                :class="deviationClass(record.deviationSpot, record.offSpot)"
               >
                 {{ spotTitle }} {{ signed(record.deviationSpot) }}
               </div>
+              <div v-else-if="record.offSpot" class="tx-neg">{{ spotTitle }} 不在目标内</div>
               <div
                 v-if="record.deviationSwap !== null"
                 class="tx-num"
-                :class="deviationClass(record.deviationSwap, record, 'targetSwap')"
+                :class="deviationClass(record.deviationSwap, record.offSwap)"
               >
                 永续 {{ signed(record.deviationSwap) }}
               </div>
-              <span v-if="record.deviationSpot === null && record.deviationSwap === null" class="tx-muted">保持</span>
+              <div v-else-if="record.offSwap" class="tx-neg">永续 不在目标内</div>
+              <span
+                v-if="record.deviationSpot === null && record.deviationSwap === null && record.state === 'ok'"
+                class="tx-muted"
+                >保持</span
+              >
               <span v-else-if="record.state === 'ok'" class="tx-muted">到位</span>
               <div v-if="record.deferredReason" class="tx-muted">顺延：{{ record.deferredReason }}</div>
             </template>
@@ -169,11 +175,9 @@ function signed(value: number) {
   const clean = cleanNumber(value);
   return `${clean > 0 ? "+" : ""}${fmtQty(clean)}`;
 }
-/** 偏差超出 1% 才着色：偏多为绿，偏少为红。 */
-function deviationClass(deviation: number, row: CoinRow, key: "targetSpot" | "targetSwap") {
-  const base = Math.abs(row[key]?.quantity ?? 0);
-  const ratio = base === 0 ? (deviation === 0 ? 0 : 1) : Math.abs(deviation) / base;
-  if (ratio <= 0.01) return "";
+/** 这个市场未到位才着色：偏多为绿，偏少为红。 */
+function deviationClass(deviation: number, off: boolean) {
+  if (!off || deviation === 0) return "";
   return deviation > 0 ? "tx-pos" : "tx-neg";
 }
 /** 能下这个标的的成员：启用，并且已开通标的所在的市场。 */

@@ -359,6 +359,26 @@ func TestStockOutOfSessionReasons(t *testing.T) {
 	require.Equal(t, ashare.ReasonCalendarExpired, current.LastError)
 }
 
+// 时段检查挪到完整加载成员之前后，几个原因的先后不变：时段外成员未就绪仍写“未就绪”，资金设置的排除字段坏了仍写资金设置的错误。
+func TestStockOutOfSessionKeepsReasonPrecedence(t *testing.T) {
+	notReady := newStockFixture(t)
+	notReady.now = time.Date(2026, 11, 6, 6, 58, 0, 0, time.UTC) // 14:58
+	require.NoError(t, notReady.store.DBForTest().Exec(`UPDATE t_trading_accounts SET c_ready = 0 WHERE c_trading_account_id = 'stock-a'`).Error)
+	notReady.store.InvalidateCaches()
+	notReady.target(t, store.InstrumentTarget{InstrumentID: "600519.XSHG", Quantity: "1000"})
+	result, current := notReady.converge(t)
+	require.Equal(t, StatusPaused, result.Status)
+	require.Equal(t, "成员 stock-a 未就绪", current.LastError)
+
+	broken := newStockFixture(t)
+	broken.now = time.Date(2026, 11, 6, 6, 58, 0, 0, time.UTC)
+	require.NoError(t, broken.store.DBForTest().Exec(`UPDATE t_logical_accounts SET c_fund_settings_json = '{"margin_coins":["ETH"]}'`).Error)
+	broken.target(t, store.InstrumentTarget{InstrumentID: "600519.XSHG", Quantity: "1000"})
+	result, current = broken.converge(t)
+	require.Equal(t, StatusPaused, result.Status)
+	require.Contains(t, current.LastError, "资金设置的排除字段无法解析")
+}
+
 func TestClampToPriceBandUsesWiderOfRatioAndTicks(t *testing.T) {
 	instrument := stockInstrument("600000.XSHG", "100", "100")
 	// 低价股：2% 不到 10 个价位，按价位放宽（精确值，不留余量）。

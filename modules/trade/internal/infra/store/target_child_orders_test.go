@@ -65,16 +65,17 @@ func TestTargetEndedRestingInstrumentsSkipsNeverSentOrders(t *testing.T) {
 	require.Contains(t, ended, instrumentID)
 }
 
-// 两条按目标查子单的查询都走 idx_trade_orders_logical_owner_state（只扫这一份目标的子单），不走只按组合和提交时间的
+// 三条按目标查子单的查询都走 idx_trade_orders_logical_owner_state（只扫这一份目标的子单），不走只按组合和提交时间的
 // idx_trade_orders_target_hourly。
 func TestTargetChildQueriesUseOwnerStateIndex(t *testing.T) {
 	s := openTestStore(t)
 	for name, query := range map[string]string{
 		"TargetChildOrders":             sqlTargetChildOrders,
 		"TargetEndedRestingInstruments": sqlTargetEndedRestingInstruments,
+		"RejectedTargetAccounts":        sqlRejectedTargetAccounts,
 	} {
 		args := []any{"space-1", "logical-1", "target-1"}
-		if name == "TargetChildOrders" {
+		if name != "TargetEndedRestingInstruments" {
 			args = append(args, "BTC-USDT-SPOT")
 		}
 		var plan []struct {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/shared"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution"
 )
@@ -126,6 +127,24 @@ func (a probingAdapter) GetOrderByExchangeID(
 		)
 	}
 	return lookup.GetOrderByExchangeID(ctx, symbol, exchangeOrderID)
+}
+
+// SetLeverage、SetMarginMode 透传给真实适配器：会话只在适配器实现了 SymbolConfigurer 时才设置全仓和杠杆，
+// 不透传就会悄悄跳过，永续测试单用的是交易所上原有的杠杆。
+func (a probingAdapter) SetLeverage(ctx context.Context, symbol exchange.SymbolKey, leverage shared.Decimal) error {
+	configurer, ok := a.ExecutionAdapter.(execution.SymbolConfigurer)
+	if !ok {
+		return errors.New("测试网适配器不支持设置杠杆")
+	}
+	return configurer.SetLeverage(ctx, symbol, leverage)
+}
+
+func (a probingAdapter) SetMarginMode(ctx context.Context, symbol exchange.SymbolKey, mode exchange.MarginMode) error {
+	configurer, ok := a.ExecutionAdapter.(execution.SymbolConfigurer)
+	if !ok {
+		return errors.New("测试网适配器不支持设置保证金模式")
+	}
+	return configurer.SetMarginMode(ctx, symbol, mode)
 }
 
 type probingHandler struct {

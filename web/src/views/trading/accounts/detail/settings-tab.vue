@@ -93,6 +93,7 @@
         :non-binance="nonBinance"
         :standard-account="hasStandardAccount"
         :settlement-asset="logical.settlement_asset"
+        :control-mode="logical.control_mode"
         :saving="savingFund"
         @save="saveFundSettings"
         @refresh="reload"
