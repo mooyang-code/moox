@@ -96,7 +96,7 @@ func TestAdminBuildUsesOnlyLocalPureGoAndFrontendTools(t *testing.T) {
 	}
 	log := filepath.Join(root, "build.log")
 	for _, tool := range []string{"pnpm", "make", "bash"} {
-		script := "#!/bin/sh\nprintf '%s|%s|%s|%s|%s|%s\\n' '" + tool + "' \"$CGO_ENABLED\" \"$TARGET_GOOS\" \"$TARGET_GOARCH\" \"${GOOS-unset}\" \"$*\" >> \"$MOOX_TEST_BUILD_LOG\"\n"
+		script := "#!/bin/sh\nprintf '%s|%s|%s|%s|%s|%s\\n' '" + tool + "' \"$CGO_ENABLED\" \"$TARGET_GOOS\" \"$TARGET_GOARCH\" \"${GOOS-unset}\" \"$*|ready=${MOOX_WEB_DIST_READY-unset}\" >> \"$MOOX_TEST_BUILD_LOG\"\n"
 		require.NoError(t, os.WriteFile(filepath.Join(root, "tools", tool), []byte(script), 0o700))
 	}
 	t.Setenv("PATH", filepath.Join(root, "tools"))
@@ -108,7 +108,7 @@ func TestAdminBuildUsesOnlyLocalPureGoAndFrontendTools(t *testing.T) {
 	raw, err := os.ReadFile(log)
 	require.NoError(t, err)
 	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
-	require.Len(t, lines, 15)
+	require.Len(t, lines, 14)
 	for _, line := range lines {
 		require.Contains(t, line, "|0|linux|arm64|unset|")
 		require.NotContains(t, line, "storage")
@@ -116,7 +116,9 @@ func TestAdminBuildUsesOnlyLocalPureGoAndFrontendTools(t *testing.T) {
 	require.Contains(t, string(raw), "pnpm|0|linux|arm64|unset|install --frozen-lockfile")
 	require.Contains(t, string(raw), "pnpm|0|linux|arm64|unset|run build:prod")
 	require.NotContains(t, "\n"+string(raw), "\nnpm|")
-	require.Contains(t, string(raw), "make|0|linux|arm64|unset|statik")
+	// 不再执行 make statik（它会改写仓库里的 statik.go）；build.sh 编译 web-host 时按已构建的 web/dist 现场生成内嵌前端。
+	require.NotContains(t, "\n"+string(raw), "\nmake|")
+	require.Contains(t, string(raw), "build.sh web-host|ready=1")
 	require.Contains(t, string(raw), "build.sh host-gateway")
 }
 

@@ -35,10 +35,10 @@ cd $WT && env -u HTTP_PROXY -u HTTPS_PROXY ./scripts/build/build.sh cli
 cd <主仓库根> && $WT/bin/moox-cli setup build-linux --module storage --source-dir $WT
 ```
 
-- **前端必须是真实构建**：Mac 上直接跑 `vue-tsc`、`vite` 不可靠，用本机 Docker 构建：`cd $WT && bash scripts/build/build-web-docker.sh --check`
-  （Node 24 容器里跑完测试、代码检查和 `build:prod`，产物写回 `$WT/web/dist`），然后 `cd web-host && go run github.com/rakyll/statik@v0.1.7 -src=../web/dist -dest=./internal -f`，**提交 `web-host/internal/statik/statik.go`**。
-  `web/dist` 缺少 `static/js` 时 `make statik` 会拒绝执行（否则会把占位页嵌进 web-host，管理台打不开）。
-  之后 bootstrap 会重新生成 statik.go 造成无意义 diff，`git checkout` 掉即可。
+- **前端随 web-host 现场构建**：`scripts/build/build.sh web-host` 编译时按当前源码构建前端（默认在本机 Docker 里，macOS 先 `colima start`；
+  `setup bootstrap`/`setup release build` 先用本机 pnpm 构建好 `web/dist` 再交给它），内嵌资源生成到临时目录、用 `go build -overlay` 编译，
+  不用也不改仓库里提交的 `web-host/internal/statik/statik.go`。想先跑前端测试和代码检查：`cd $WT && bash scripts/build/build-web-docker.sh --check`。
+  `web/dist` 缺少 `static/js` 时构建直接失败（否则会把占位页嵌进 web-host，管理台打不开）。
 - 纯 Go 组件由 bootstrap / deploy-unit 在本机交叉编译。想提前确认能编译：逐个 `go.work` 模块 `GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ./...`，
   **跑完立刻检查并删除模块目录里生成的二进制**（单个 main 的模块会在目录里留文件，如 `modules/replay/replay`、`tools/moox-mcp/moox-mcp`；`git add -A` 会把它们提交）。
 - 改动已提交并推送，CI 通过；线上二进制必须能对应到一个提交。
@@ -144,7 +144,7 @@ A 股交易日历只有一份：`packages/marketcalendar/data/cn_trading_days.js
 | `moox.toml must be in repository root` | CLI 要求 moox.toml 在仓库根 | 在主仓库根目录运行，worktree 用 `--source-dir` |
 | control 阶段失败，重试结果相同 | 软件制品绑定在 admin 的状态目录，重试不会带上新代码 | 修代码后换新状态目录，从 admin 重来 |
 | control 阶段 `target_not_ready` 或 `target_process_exited`，Monitor 没起来 | Monitor 的定时器首次运行时依赖的服务还没起来，错误让进程退出 | 看候选发布目录 `/data/moox/prod/releases/bootstrap-*/<组件>/logs/trpc.log`；代码已改为跳过本轮，但同类问题仍可能出现在别的组件 |
-| 管理台打开是空白/占位页 | web-host 内嵌了占位前端（`web/dist` 不完整） | 按第 2 节用 `build-web-docker.sh` 构建前端并提交 statik.go；`make statik` 现在会拒绝不完整的 dist |
+| 管理台打开是空白/占位页 | web-host 内嵌了占位前端（`web/dist` 不完整） | 按第 2 节重新构建 web-host；`web/dist` 不完整时构建现在会直接失败 |
 | `setup trust-browser` 报 `browser_trust_manual` | 没有终端或 sudo 失败 | 把错误里的命令交给用户在自己的终端运行 |
 | `setup init` 报 `CreateFactorTask failed ... metadata row not found` | `moox.toml` 里有源数据集不存在的因子任务 | 见第 4 节“步骤 8 的已知限制” |
 | 因子 `factor_memory_budget_exceeded`、`status=degraded rows=0` | 引擎 `compute.max_memory` 太小（旧脚本写死 1GiB，默认因子 EMA 一期约 1.1GB） | 脚本已改 4GiB 并在安装时自动 `tune --write`；已装的机器改 `engine.yaml` 后重启引擎 |
@@ -152,7 +152,6 @@ A 股交易日历只有一份：`packages/marketcalendar/data/cn_trading_days.js
 | 告警“外部接入（overseas）连接被拒绝” | 海外机没装 Access | `deploy-unit --host overseas --profile access` |
 | 清空后进程又被拉起来 | 定时看护（cron watchdog）还在 | 先删 crontab 里的 `moox-watchdog` 行再停 |
 | 仓库里多出二进制文件 | `go build ./...` 交叉编译在单 main 模块里留了产物 | 立即删除；别 `git add -A` |
-| `statik.go` 出现无意义 diff | bootstrap 构建时重新生成 | `git checkout web-host/internal/statik/statik.go` |
 
 ## 8. 收尾
 

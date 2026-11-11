@@ -47,5 +47,5 @@ src/views/        页面
 
 ## 发布
 
-`pnpm build:prod` 生成 `dist/` 后，在 `../web-host` 执行 `make statik` 把资源嵌入 `moox-web-host`；
-原生部署（`setup bootstrap` / `setup release build`）会自动完成这两步。
+在仓库根目录执行 `scripts/build/build.sh web-host`：它先在 Docker 里按当前源码构建前端，再把 `dist/` 内嵌进 `moox-web-host`
+（不用仓库里提交的 `web-host/internal/statik/statik.go`）。原生部署（`setup bootstrap` / `setup release build`）会自动完成。
