@@ -144,7 +144,7 @@ func TestDefaultStockCNCollectorTasksRequireExplicitActivation(t *testing.T) {
 		stock = append(stock, task.DataType+"/"+strings.Join(task.TagIDs, ",")+"/"+fmt.Sprint(task.CollectParams["frequency"]))
 		assert.False(t, task.Enabled)
 	}
-	assert.Equal(t, []string{"kline/cn_hs300/5m"}, stock, "A 股只有一条沪深 300 的 5m 任务，默认停用，显式启用")
+	assert.Equal(t, []string{"kline/cn_hs300/5m", "kline/cn_hs300/1d"}, stock, "A 股只有沪深 300 的 5m 任务和带复权、行业、财务的日线任务，默认停用，显式启用")
 }
 
 func TestDeleteCollectorFunctionsFiltersNamespace(t *testing.T) {

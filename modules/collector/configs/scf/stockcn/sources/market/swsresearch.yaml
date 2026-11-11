@@ -1,0 +1,14 @@
+provider:
+  id: swsresearch
+  market: stockcn
+  # 只提供日线的附加字段（申万行业），不取 K 线、不进路由配置。一次函数调用只下载一次行业分类文件（约 1.1MB）。
+  enabled_feeds: []
+  hosts: [www.swsresearch.com]
+  rate_limit:
+    scope: egress_ip
+    # 2026-11-11 国内实测下载 0.3 秒。
+    requests_per_second: 1
+    burst: 1
+    max_concurrent: 1
+    cooldown: 1s
+    request_timeout: 20s

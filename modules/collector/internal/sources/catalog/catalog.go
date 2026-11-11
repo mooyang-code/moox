@@ -19,6 +19,9 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn/baidu"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn/eastmoney"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn/sina"
+	"github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn/sinafinance"
+	"github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn/sinahfq"
+	"github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn/swsresearch"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn/tdx"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn/tencent"
 )
@@ -95,6 +98,16 @@ func build() *marketdata.Catalog {
 				port = 7709
 			}
 			return tdx.New(tdx.Config{Host: host, Port: port, Timeout: s.RateLimit.RequestTimeout, RateLimit: s.RateLimit, MaxBarsPerRequest: s.MaxBarsPerRequest}), nil
+		}),
+		// A 股日线的附加字段来源（复权、行业、财务）：不取 K 线、不进路由配置，限速参数来自各自的数据源配置文件。
+		entry(stockcn, marketdata.InstrumentEquity, "sina_hfq", "hfq_http", func(deps marketdata.Deps) (marketdata.MarketProvider, error) {
+			return sinahfq.New(sinahfq.Config{RateLimit: deps.Settings.RateLimit}), nil
+		}),
+		entry(stockcn, marketdata.InstrumentEquity, "swsresearch", "sw_class_http", func(deps marketdata.Deps) (marketdata.MarketProvider, error) {
+			return swsresearch.New(swsresearch.Config{RateLimit: deps.Settings.RateLimit}), nil
+		}),
+		entry(stockcn, marketdata.InstrumentEquity, "sina_finance", "finance_http", func(deps marketdata.Deps) (marketdata.MarketProvider, error) {
+			return sinafinance.New(sinafinance.Config{RateLimit: deps.Settings.RateLimit}), nil
 		}),
 		// A 股可转债。
 		entry(stockcn, marketdata.InstrumentConvertibleBond, "eastmoney", "convertible_bond_http", fixed(func() marketdata.MarketProvider { return bondeastmoney.New(bondeastmoney.Config{}) })),

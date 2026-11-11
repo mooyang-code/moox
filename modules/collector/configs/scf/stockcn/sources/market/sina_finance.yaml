@@ -1,0 +1,14 @@
+provider:
+  id: sina_finance
+  market: stockcn
+  # 只提供日线的附加字段（财务三表），不取 K 线、不进路由配置。每只股票三次请求。
+  enabled_feeds: []
+  hosts: [quotes.sina.cn]
+  rate_limit:
+    scope: egress_ip
+    # 2026-11-11 国内实测：每张表取 6 期 0.17～0.24 秒；八个函数共用一个出口、并发 64 时全部成功，没有限频。
+    requests_per_second: 50
+    burst: 20
+    max_concurrent: 16
+    cooldown: 1s
+    request_timeout: 5s
