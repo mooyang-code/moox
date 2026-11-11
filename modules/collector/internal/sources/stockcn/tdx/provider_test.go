@@ -320,7 +320,7 @@ func TestTDXDailyMatchesRecordedEastMoney(t *testing.T) {
 	require.Equal(t, time.Date(2025, 11, 3, 0, 0, 0, 0, time.UTC), tdxRows[0].BarStart)
 }
 
-// 日线按交易日序号算偏移：能取指定的老区间，而不是只取最新若干根。
+// 日线从最新一根取到区间起点：能取到指定的老区间，区间之后停过牌也不缺根。
 func TestFetchKlinesDailyReadsTheRequestedDays(t *testing.T) {
 	day := func(value string) time.Time {
 		parsed, err := time.Parse(time.DateOnly, value)
@@ -342,29 +342,26 @@ func TestFetchKlinesDailyReadsTheRequestedDays(t *testing.T) {
 	// 周期提交：交易日 2026-11-10 的日线在 11-11 00:00 UTC（北京时间 08:00）到期，此时服务端最新一根就是它。
 	server, fetch := fetchAt(cst("2026-11-11", "08:00").Add(5*time.Second), 800)
 	rows := fetch(marketdata.KlineRequest{Limit: 1, StartTime: day("2026-11-10"), EndTime: day("2026-11-11")})
-	require.Equal(t, [][2]int{{0, 1}}, server.requests)
-	require.Len(t, rows, 1)
-	require.Equal(t, day("2026-11-10"), rows[0].BarStart)
+	require.Equal(t, [][2]int{{0, 2}}, server.requests, "多取一根较旧的")
+	require.Len(t, rows, 2)
+	require.Equal(t, day("2026-11-10"), rows[1].BarStart)
 
 	for _, pageSize := range []int{800, 100} {
-		// 补采一年前的两周：按交易日序号定位到那一段，多取一根较新的。
+		// 补采一年前的两周：从最新一根取起，一直取到区间起点，区间之后的部分留给管线截掉。
 		server, fetch = fetchAt(cst("2026-11-11", "08:00").Add(5*time.Second), pageSize)
 		rows = fetch(marketdata.KlineRequest{Limit: 12, StartTime: day("2025-11-03"), EndTime: day("2025-11-15")})
-		require.Equal(t, day("2025-11-03"), rows[0].BarStart)
-		require.Len(t, rows, 11)
-		require.Equal(t, day("2025-11-17"), rows[10].BarStart, "多取一根较新的")
-		for _, request := range server.requests {
-			require.Greater(t, request[0], 200, "偏移应在一年前，而不是从最新一根取起：%v", server.requests)
-		}
+		require.Equal(t, day("2025-11-03"), rows[1].BarStart, "起点之前多取一根")
+		require.Equal(t, day("2026-11-10"), rows[len(rows)-1].BarStart)
+		require.Equal(t, 0, server.requests[len(server.requests)-1][0], "最新的一页从偏移 0 取起：%v", server.requests)
 
 		// 起点落在非交易日（2025-11-01 是周六）：从其后第一个交易日取起。
 		rows = fetch(marketdata.KlineRequest{Limit: 3, StartTime: day("2025-11-01"), EndTime: day("2025-11-04")})
-		require.Equal(t, day("2025-11-03"), rows[0].BarStart)
+		require.Equal(t, day("2025-11-03"), rows[1].BarStart)
 
 		// 补最近一年：超过单页上限时分页，首尾都在。
 		server.requests = nil
 		rows = fetch(marketdata.KlineRequest{Limit: 366, StartTime: day("2025-11-11"), EndTime: day("2026-11-11")})
-		require.Equal(t, day("2025-11-11"), rows[0].BarStart)
+		require.Equal(t, day("2025-11-11"), rows[1].BarStart)
 		require.Equal(t, day("2026-11-10"), rows[len(rows)-1].BarStart)
 		if pageSize == 100 {
 			require.Greater(t, len(server.requests), 1)
@@ -373,12 +370,32 @@ func TestFetchKlinesDailyReadsTheRequestedDays(t *testing.T) {
 		}
 	}
 
+	// 标的在补采区间之后停牌 5 个交易日：服务端少 5 根，区间内的 10 根仍然取全。
+	server, fetch = fetchAt(cst("2026-11-11", "08:00").Add(5*time.Second), 800)
+	kept := server.bars[:0]
+	for _, bar := range server.bars {
+		if date := bar.Time.Format(time.DateOnly); date < "2026-10-12" || date > "2026-10-16" {
+			kept = append(kept, bar)
+		}
+	}
+	require.Len(t, kept, len(server.bars)-5)
+	server.bars = kept
+	rows = fetch(marketdata.KlineRequest{Limit: 12, StartTime: day("2025-11-03"), EndTime: day("2025-11-15")})
+	require.False(t, rows[0].BarStart.After(day("2025-11-03")))
+	inRange := 0
+	for _, row := range rows {
+		if !row.BarStart.Before(day("2025-11-03")) && row.BarStart.Before(day("2025-11-15")) {
+			inRange++
+		}
+	}
+	require.Equal(t, 10, inRange)
+
 	// 交易时段内服务端最新一根是当天未收盘的那根：目标是上一交易日，未收盘那根不返回。
 	server, fetch = fetchAt(cst("2026-11-11", "10:07"), 800)
 	rows = fetch(marketdata.KlineRequest{Limit: 1, StartTime: day("2026-11-10"), EndTime: day("2026-11-11")})
-	require.Equal(t, [][2]int{{0, 2}}, server.requests)
-	require.Len(t, rows, 1)
-	require.Equal(t, day("2026-11-10"), rows[0].BarStart)
+	require.Equal(t, [][2]int{{0, 3}}, server.requests)
+	require.Len(t, rows, 2)
+	require.Equal(t, day("2026-11-10"), rows[1].BarStart)
 }
 
 func TestKlineSpecDeclaresDailyLookbackBeyondOneYear(t *testing.T) {

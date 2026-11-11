@@ -165,7 +165,7 @@ func TestPublishLeaseHeldIsClassifiedSeparatelyAndRecoversWhileThePlanIsStillOpe
 	requireNoFailure(t, metrics)
 	require.Zero(t, since())
 	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentHealthy.WithLabelValues("crypto")))
-	require.Zero(t, testutil.ToFloat64(metrics.assignmentLastSuccess.WithLabelValues("crypto")), "计划进行中不刷新最近一次对账成功时间")
+	require.Equal(t, float64(h.now.Unix()), testutil.ToFloat64(metrics.assignmentLastSuccess.WithLabelValues("crypto")), "配置已下发、只等窗口结束：按对账成功上报")
 }
 
 func TestOnlyAnExplicitConflictGetsTheLeaseHeldGrace(t *testing.T) {
@@ -375,4 +375,49 @@ func TestEnableAllReadbackFailureIsRecordedAndNotClearedByTheUpgradeWait(t *test
 	require.Equal(t, float64(1), failureLabel(metrics, "cloudfunction"))
 	require.Zero(t, failureLabel(metrics, ReasonPublishLeaseHeld))
 	require.Zero(t, testutil.ToFloat64(metrics.assignmentHealthy.WithLabelValues("crypto")))
+}
+
+func TestOpenPlanWaitingForItsWindowCountsAsReconciled(t *testing.T) {
+	h := newPlanHarness(t, 60)
+	r := h.reconciler()
+	metrics := roundMetrics(h, r)
+	lastSuccess := func() float64 { return testutil.ToFloat64(metrics.assignmentLastSuccess.WithLabelValues("crypto")) }
+
+	// 新计划的过渡配置下发完、等窗口结束：本轮按对账成功上报，计划仍然未收尾。
+	require.NoError(t, h.reconcile(r))
+	record := h.open()
+	require.NotNil(t, record)
+	end := h.content(record).WindowEnd()
+	require.Equal(t, float64(h.now.Unix()), lastSuccess())
+
+	// 窗口结束前的每一轮都刷新。
+	h.now = end.Add(planFinalizeMargin - time.Second)
+	require.NoError(t, h.reconcile(r))
+	require.NotNil(t, h.open())
+	require.Equal(t, float64(h.now.Unix()), lastSuccess())
+	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentPending.WithLabelValues("crypto")), "计划未收尾，pending 照常上报")
+	waitingAt := h.now
+
+	// 过了窗口结束仍收不了尾（生效日志写不进去）：不再刷新，Monitor 按对账陈旧报出来。
+	h.activity.failures = 100
+	h.now = end.Add(planFinalizeMargin + 20*time.Minute)
+	_ = h.reconcile(r)
+	require.NotNil(t, h.open())
+	require.Equal(t, float64(waitingAt.Unix()), lastSuccess())
+}
+
+func TestOpenPlanWaitingDoesNotHideFailuresFromTheSameRound(t *testing.T) {
+	h := newPlanHarness(t, 60)
+	r := h.reconciler()
+	metrics := roundMetrics(h, r)
+	require.NoError(t, h.reconcile(r))
+	require.NotNil(t, h.open())
+	before := testutil.ToFloat64(metrics.assignmentLastSuccess.WithLabelValues("crypto"))
+
+	// 本轮之前的步骤失败过：等窗口期间也不上报成功。
+	h.now = h.now.Add(10 * time.Second)
+	_ = r.fail("package", errors.New("resolve code package: unavailable"))
+	require.NoError(t, h.reconcile(r))
+	require.Equal(t, before, testutil.ToFloat64(metrics.assignmentLastSuccess.WithLabelValues("crypto")))
+	require.Equal(t, float64(1), failureLabel(metrics, "package"))
 }

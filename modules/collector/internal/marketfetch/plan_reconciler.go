@@ -764,6 +764,11 @@ func (r *PlanReconciler) advance(ctx context.Context, record *store.FetchPlanRec
 		return err
 	}
 	if end := content.WindowEnd(); !end.IsZero() && r.now().Before(end.Add(planFinalizeMargin)) {
+		// 过渡配置都已下发，只是在等旧周期的窗口结束（1h 最长约一小时，1d 要等到下一个 UTC 零点）：
+		// 这段时间按对账成功上报，Monitor 不会把正常的等待判成对账陈旧。过了窗口结束仍没收尾的不再刷新，卡住的计划照样报出来。
+		if r.Metrics != nil && r.failCount == r.roundFailCount && !r.inFlightStuck() {
+			r.Metrics.ObserveAssignmentSuccess(r.SpaceID, r.now().Unix())
+		}
 		return nil
 	}
 	if err := r.applyHandoffLateness(ctx, record, content, progress, true); err != nil {

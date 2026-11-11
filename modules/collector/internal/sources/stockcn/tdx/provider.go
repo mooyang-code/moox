@@ -107,7 +107,7 @@ func (p *Provider) KlineSpec() marketdata.KlineSpec {
 		TimestampMode: marketdata.TimestampModeClose,
 		// 按偏移分页往回取。2026-11-04 实测 600519：5m 偏移 16000 根仍有数据（2025-05），1m 偏移 16000 根到 2026-07、
 		// 40000 根已无数据。声明 5m 及更长周期 365 天、1m 90 天。
-		// 日线按交易日偏移取：2026-11-11 实测 600519 偏移 5000 根（2005-12）仍有数据，声明 10 年。
+		// 日线从最新一根往回取：2026-11-11 实测 600519 偏移 5000 根（2005-12）仍有数据，声明 10 年。
 		History: marketdata.KlineHistoryCapability{MaxLookback: 365 * 24 * time.Hour},
 		HistoryByFrequency: map[string]marketdata.KlineHistoryCapability{
 			"1m": {MaxLookback: 90 * 24 * time.Hour},
@@ -171,10 +171,10 @@ func (p *Provider) FetchKlines(ctx context.Context, req marketdata.KlineRequest)
 // 服务端最新一根：交易时段内是正在形成的那根，休市时是最近收盘的那根（午休时即上午最后一根）。
 // 有起始时间时按 barclock 交易序号算出目标区间离最新一根有多远，多取一根较新的，以容忍服务端还没生成新一根；
 // 没有起始时间时取最新 Limit 根，也多取一根（可能是未收盘那根）。
-// 日线同样按交易序号（交易日序号）算偏移：请求区间的两端是日期键（交易日期的 UTC 零点，即上海 08:00，在当日开盘之前），
-// 服务端最新一根在交易日 15:00 收盘前是当天正在形成的那根。周线、月线只取最新 Limit 根。
-// 停牌的标的缺少中间的 K 线，按市场的交易序号算出的偏移会偏大：日内由覆盖校验报错；日线取回的窗口整体偏旧，
-// 区间之后停过牌时会缺末尾几根。
+// 日线不按区间终点算偏移：固定从最新一根取起，一直取到区间起点，多出来的较新部分由管线按 [start, end) 截掉。
+// 停牌的标的缺少中间的 K 线，市场的交易日数不少于标的自身的根数，这样取的窗口一定覆盖到起点；
+// 若按终点算偏移，区间之后停过牌时窗口会整体偏旧、缺末尾几根且不报错。周线、月线只取最新 Limit 根。
+// 日内仍按交易序号算偏移，停牌造成的偏差由覆盖校验报错。
 func barWindow(req marketdata.KlineRequest, now time.Time) (int, int, error) {
 	frequency, _ := req.FrequencyValue()
 	if req.StartTime.IsZero() || frequency.Duration() <= 0 || frequency.Duration() > 24*time.Hour {
@@ -215,6 +215,9 @@ func barWindow(req marketdata.KlineRequest, now time.Time) (int, int, error) {
 	}
 	if end < start {
 		return 0, 0, fmt.Errorf("%w: [%s, %s) 内没有交易时段的 K 线", marketdata.ErrHistoryCoverage, req.StartTime.UTC().Format(time.RFC3339), req.EndTime.UTC().Format(time.RFC3339))
+	}
+	if frequency.Duration() == 24*time.Hour {
+		return 0, int(newest-start) + 2, nil
 	}
 	offset := max(newest-end-1, 0)
 	return int(offset), int(newest-offset-start) + 1, nil

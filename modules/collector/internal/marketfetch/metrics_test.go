@@ -226,7 +226,7 @@ func TestMetricsRoundOKRestoresHealthAndClearsFailureWithoutTouchingLastSuccess(
 	require.Equal(t, float64(1), testutil.ToFloat64(metrics.assignmentHealthy.WithLabelValues("crypto")))
 	require.Zero(t, testutil.ToFloat64(metrics.assignmentFailure.WithLabelValues("crypto", ReasonPublishLeaseHeld)))
 	require.Zero(t, testutil.ToFloat64(metrics.assignmentFailureSince.WithLabelValues("crypto")))
-	require.Equal(t, float64(1_700_000_000), testutil.ToFloat64(metrics.assignmentLastSuccess.WithLabelValues("crypto")), "计划仍在进行时不刷新最近一次对账成功时间")
+	require.Equal(t, float64(1_700_000_000), testutil.ToFloat64(metrics.assignmentLastSuccess.WithLabelValues("crypto")), "恢复健康本身不刷新最近一次对账成功时间")
 	require.NotPanics(t, func() { (*Metrics)(nil).ObserveAssignmentRoundOK("crypto") })
 }
 

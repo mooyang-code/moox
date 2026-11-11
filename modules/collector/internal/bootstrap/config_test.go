@@ -427,7 +427,7 @@ func TestLoadRenderedTimerConfigEndToEnd(t *testing.T) {
 		require.Equal(t, 800, cfg.SCFPlan.fetchFor("stockcn", "").NotBeforeMS, "A 股收盘后 0.8 秒取数")
 		balance := cfg.SCFPlan.Spaces["stockcn"].EgressBalance
 		require.NotNil(t, balance, "A 股默认新建函数后去重出口 IP")
-		require.Equal(t, SCFPlanEgressBalance{MaxPerIP: 1, Rounds: 5, IdleStart: "15:10", IdleEnd: "09:00", Timezone: "Asia/Shanghai"}, *balance)
+		require.Equal(t, SCFPlanEgressBalance{MaxPerIP: 1, Rounds: 5, IdleStart: "15:10", IdleEnd: "07:50", Timezone: "Asia/Shanghai"}, *balance)
 	})
 	t.Run("egress balance is configurable for any space and validated", func(t *testing.T) {
 		cfg, err := Load(writeCollectorConfig(t, renderedTimerPlan("  crypto: {spot: [ap-nanjing]}\n",
