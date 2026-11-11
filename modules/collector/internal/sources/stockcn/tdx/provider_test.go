@@ -252,17 +252,18 @@ func TestFetchKlinesDuringLunchUsesTheMorningLastBar(t *testing.T) {
 // 能通过采集的统一校验。
 func TestNormalizeBarsDailyUsesDateKeys(t *testing.T) {
 	bar := tdxwire.Bar{Time: cst("2026-11-10", "15:00"), Open: 1438.23, High: 1444.5, Low: 1431.26, Close: 1439, Volume: 2303784, Amount: 3316078848}
+	fetchedAt := time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC) // 三个周期都已收盘，未收盘的根不返回
 	for frequency, want := range map[string]time.Time{
 		"1d":  time.Date(2026, 11, 10, 0, 0, 0, 0, time.UTC),
 		"1w":  time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC), // 2026-11-10 是周二，所在周的周一是 11-09
 		"1mo": time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC),
 	} {
-		rows, err := normalizeBars("600519.XSHG", "sh600519", frequency, []tdxwire.Bar{bar}, time.Now().UTC(), "daily")
+		rows, err := normalizeBars("600519.XSHG", "sh600519", frequency, []tdxwire.Bar{bar}, fetchedAt, "daily")
 		require.NoError(t, err, frequency)
 		require.Equal(t, want, rows[0].BarStart, frequency)
 		require.NoError(t, marketdata.ValidateNormalizedKline(rows[0]), frequency)
 	}
-	rows, err := normalizeBars("600519.XSHG", "sh600519", "1d", []tdxwire.Bar{bar}, time.Now().UTC(), "daily")
+	rows, err := normalizeBars("600519.XSHG", "sh600519", "1d", []tdxwire.Bar{bar}, fetchedAt, "daily")
 	require.NoError(t, err)
 	require.Equal(t, time.Date(2026, 11, 11, 0, 0, 0, 0, time.UTC), rows[0].BarEnd, "日线的 bar_end 是键加 24 小时")
 	require.Equal(t, cst("2026-11-10", "15:00").UTC(), rows[0].ProviderTimestamp)
@@ -396,6 +397,34 @@ func TestFetchKlinesDailyReadsTheRequestedDays(t *testing.T) {
 	require.Equal(t, [][2]int{{0, 3}}, server.requests)
 	require.Len(t, rows, 2)
 	require.Equal(t, day("2026-11-10"), rows[1].BarStart)
+}
+
+// 08:00 取日线时服务端在最新位置给一根价格为 0 的当天占位根：它还没收盘，跳过，不让整次取数报错。
+func TestFetchKlinesSkipsUnclosedPlaceholderBar(t *testing.T) {
+	now := cst("2026-11-11", "08:00").Add(5 * time.Second)
+	from, err := time.Parse(time.DateOnly, "2026-11-02")
+	require.NoError(t, err)
+	server := newFakeServerFor(t, "1d", tdxwire.CategoryDay, from, now.UTC())
+	closedBars := len(server.bars)
+	server.bars = append(server.bars, tdxwire.Bar{Time: cst("2026-11-11", "15:00")})
+	provider := New(Config{Now: func() time.Time { return now }})
+	provider.fetchPage = server.page
+	rows, err := provider.FetchKlines(context.Background(), marketdata.KlineRequest{
+		SubjectID: "600519.XSHG", ProviderSymbol: "sh600519", ExchangeID: "XSHG", Frequency: "1d", RequestID: "placeholder",
+		Limit: 1, StartTime: from.AddDate(0, 0, 8), EndTime: from.AddDate(0, 0, 9),
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, rows)
+	require.LessOrEqual(t, len(rows), closedBars)
+	require.Equal(t, from.AddDate(0, 0, 8), rows[len(rows)-1].BarStart, "最后一根是 11-10，占位根不返回")
+
+	// 已收盘的根价格为 0 仍然报错。
+	server.bars[closedBars-1].Close = 0
+	_, err = provider.FetchKlines(context.Background(), marketdata.KlineRequest{
+		SubjectID: "600519.XSHG", ProviderSymbol: "sh600519", ExchangeID: "XSHG", Frequency: "1d", RequestID: "bad",
+		Limit: 1, StartTime: from.AddDate(0, 0, 8), EndTime: from.AddDate(0, 0, 9),
+	})
+	require.Error(t, err)
 }
 
 func TestKlineSpecDeclaresDailyLookbackBeyondOneYear(t *testing.T) {

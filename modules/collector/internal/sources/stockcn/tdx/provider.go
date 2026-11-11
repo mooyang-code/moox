@@ -153,17 +153,10 @@ func (p *Provider) FetchKlines(ctx context.Context, req marketdata.KlineRequest)
 	if err != nil {
 		return nil, err
 	}
-	// 交易时段内服务端最新一根是还没收盘的那根：不返回。
-	closed := rows[:0]
-	for _, row := range rows {
-		if !row.BarEnd.After(now) {
-			closed = append(closed, row)
-		}
-	}
-	if len(closed) == 0 {
+	if len(rows) == 0 {
 		return nil, marketdata.ErrNoClosedBar
 	}
-	return closed, nil
+	return rows, nil
 }
 
 // barWindow 把请求换成通达信的取数窗口：offset 是从服务端最新一根往前数的偏移，count 是根数。
@@ -353,11 +346,16 @@ func normalizeBars(subjectID, providerSymbol, frequency string, bars []tdxwire.B
 			FetchedAt:         fetchedAt,
 			RequestID:         requestID,
 		}
+		previous = barStart
+		// 还没收盘的根不返回，也不校验：交易时段内最新一根是正在形成的那根；开盘前服务端可能在最新位置给一根价格为 0 的当天占位根，
+		// 先校验会让整次取数报错。
+		if row.BarEnd.After(fetchedAt) {
+			continue
+		}
 		if err := marketdata.ValidateNormalizedKline(row); err != nil {
 			return nil, fmt.Errorf("tdx bar %d: %w", index, err)
 		}
 		rows = append(rows, row)
-		previous = barStart
 	}
 	return rows, nil
 }
