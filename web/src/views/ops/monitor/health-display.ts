@@ -110,7 +110,7 @@ export function alertLink(object?: HealthObject): AlertLink {
       case "strategy":
         return { href: "#/strategy/tasks", label: "查看策略实例" };
       case "trade":
-        return { href: "#/trading/accounts", label: "查看交易账户" };
+        return { href: "#/trading/live", label: "查看交易账户" };
       default:
         return collectorDatasetLink(object);
     }
@@ -124,7 +124,7 @@ export function alertLink(object?: HealthObject): AlertLink {
       return { href: "#/ops/storage/nodes", label: "查看存储节点" };
     case "balance":
     case "trade_attention":
-      return { href: "#/trading/accounts", label: "查看交易账户" };
+      return { href: "#/trading/live", label: "查看交易账户" };
     case "event_center_attention":
       return eventCenterLink(object.attention_kind);
   }

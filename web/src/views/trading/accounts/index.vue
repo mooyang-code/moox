@@ -1,13 +1,12 @@
 <template>
   <div class="moox-page tx-accounts">
     <div class="moox-inner">
-      <PageTitleTabs :model-value="env" :items="environmentTabs" aria-label="账户环境" @change="changeEnv" />
+      <h2 class="page-title">{{ environmentMenus[env].title }}</h2>
 
       <div class="list-toolbar">
         <a-tabs :active-key="list" size="medium" class="list-tabs" @change="changeList">
           <a-tab-pane key="combo" :title="`组合账户 ${rows.length}`" />
           <a-tab-pane key="execution" :title="`执行账户 ${execution.length}`" />
-          <a-tab-pane key="blocked" :title="blockedError ? '下架名单' : `下架名单 ${blocked.length}`" />
         </a-tabs>
         <InfoTip :text="listDesc" />
         <span class="spacer" />
@@ -22,10 +21,8 @@
       </div>
 
       <a-alert v-if="loadError" type="error" class="alert">{{ loadError }}</a-alert>
-      <a-alert v-if="list === 'blocked' && blockedError" type="error" class="alert">{{ blockedError }}</a-alert>
-      <BlockedTab v-if="list === 'blocked'" :rows="blocked" :loading="blockedLoading" @changed="loadBlocked" />
       <ExecutionTab
-        v-else-if="list === 'execution'"
+        v-if="list === 'execution'"
         :env="env"
         :rows="execution"
         :logicals="logicals"
@@ -138,24 +135,24 @@
 import InfoTip from "@/components/info-tip/index.vue";
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import PageTitleTabs from "@/components/page-title-tabs/index.vue";
 import { useSpaceStore } from "@/store/modules/space";
-import { listBlockedInstruments, listLogicalAccounts, listTradingAccounts, queryEquityCurve } from "@/api/trade";
-import type { BlockedInstrument, LogicalAccount, TradingAccount } from "@/api/trade";
+import { listLogicalAccounts, listTradingAccounts, queryEquityCurve } from "@/api/trade";
+import type { LogicalAccount, TradingAccount } from "@/api/trade";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import { accountMapOf, comboRows, equityChange, executionRows, type ComboRow } from "./account-list";
 import CreateAccount from "./create/index.vue";
 import {
-  environmentFromQuery,
   environmentLabel,
+  environmentMenus,
+  environmentOfRoute,
   environmentTabs,
+  logicalDetailPath,
   type Environment
 } from "@/components/trade-confirm/environment";
 import { fmtMoney, fmtPercent, pnlClass } from "./shared/format";
 import { loadPositionSnapshot, positionCount } from "./shared/position-snapshot";
 import StatusMark from "./shared/status-mark.vue";
 import { loadStrategyLinks, type StrategyLink } from "./shared/strategy-link";
-import BlockedTab from "./blocked-tab.vue";
 import ExecutionTab from "./execution-tab.vue";
 
 defineOptions({ name: "trading-accounts" });
@@ -167,20 +164,14 @@ const route = useRoute();
 const router = useRouter();
 const spaceStore = useSpaceStore();
 
-const env = computed<Environment>(() => environmentFromQuery(route.query.env));
-// 子页签：组合账户（默认，不写进 URL）、执行账户（?list=execution）、下架名单（?list=blocked）
-type ListTab = "combo" | "execution" | "blocked";
-const list = computed<ListTab>(() => {
-  const value = route.query.list;
-  return value === "execution" || value === "blocked" ? value : "combo";
-});
+// 三个环境各一个菜单，共用这个页面：环境写在路由 meta 里
+const env = computed<Environment>(() => environmentOfRoute(route) ?? "paper");
+// 子页签：组合账户（默认，不写进 URL）、执行账户（?list=execution）
+type ListTab = "combo" | "execution";
+const list = computed<ListTab>(() => (route.query.list === "execution" ? "execution" : "combo"));
 const focusAccountId = computed(() => (typeof route.query.account === "string" ? route.query.account : ""));
 const currentDesc = computed(() => environmentTabs.find(item => item.key === env.value)?.desc ?? "");
-const listDesc = computed(() =>
-  list.value === "blocked"
-    ? "下架名单是全局的，不分环境和空间：名单里的标的只减不增，不能交易时整项跳过。"
-    : `${currentDesc.value}策略按组合账户下目标，组合里的执行账户负责下单。`
-);
+const listDesc = computed(() => `${currentDesc.value}策略按组合账户下目标，组合里的执行账户负责下单。`);
 const logicals = ref<LogicalAccount[]>([]);
 const accounts = ref<TradingAccount[]>([]);
 const strategies = ref<Map<string, StrategyLink>>(new Map());
@@ -188,9 +179,6 @@ const strategies = ref<Map<string, StrategyLink>>(new Map());
 const strategiesFailed = ref(false);
 const loading = ref(false);
 const loadError = ref("");
-const blocked = ref<BlockedInstrument[]>([]);
-const blockedLoading = ref(false);
-const blockedError = ref("");
 const changes = ref<Record<string, number | null>>({});
 const counts = ref<Record<string, number | null>>({});
 const createDialog = ref<InstanceType<typeof CreateAccount>>();
@@ -202,15 +190,13 @@ const execution = computed(() => executionRows(accounts.value, logicals.value, e
 // 空间切换后，旧空间迟到的响应不能覆盖新空间的列表：只有最新一次请求可以更新页面。
 const listRequests = createLatestRequestGuard();
 const extraRequests = createLatestRequestGuard();
-const blockedRequests = createLatestRequestGuard();
 
 async function load() {
-  void loadBlocked();
   const request = listRequests.begin();
   loading.value = true;
   loadError.value = "";
   try {
-    // 标题页签、两个子页签都要看全量，这里一次取完，表格不分页。
+    // 两个子页签的数量都要看全量，这里一次取完，表格不分页。
     const [logicalRsp, accountRsp] = await Promise.all([
       listLogicalAccounts({ page: 1, size: 500 }),
       listTradingAccounts({ page: { page: 1, size: 200 } })
@@ -227,21 +213,6 @@ async function load() {
     if (request.isLatest()) loadError.value = error instanceof Error ? error.message : "读取交易账户失败，请稍后重试";
   } finally {
     if (request.isLatest()) loading.value = false;
-  }
-}
-
-/** 下架名单是全局的，不随空间变化；读失败只在名单页签里提示，不影响账户列表。 */
-async function loadBlocked() {
-  const request = blockedRequests.begin();
-  blockedLoading.value = true;
-  blockedError.value = "";
-  try {
-    const rsp = await listBlockedInstruments({ silent: true });
-    if (request.isLatest()) blocked.value = rsp.instruments || [];
-  } catch (error) {
-    if (request.isLatest()) blockedError.value = error instanceof Error ? error.message : "读取下架名单失败，请稍后重试";
-  } finally {
-    if (request.isLatest()) blockedLoading.value = false;
   }
 }
 
@@ -280,34 +251,30 @@ async function loadExtras(list: ComboRow[]) {
   await Promise.all([worker(), worker(), worker()]);
 }
 
-// 权益变化和持仓数只在组合账户页签显示：切到这个页签或换环境时，补读还没读过的组合
-watch([env, list], () => {
+// 权益变化和持仓数只在组合账户页签显示：切到这个页签时，补读还没读过的组合
+watch(list, () => {
   if (list.value === "combo") void loadExtras(rows.value);
 });
 
-function changeEnv(key: string) {
-  const next = environmentFromQuery(key);
-  void router.replace({ query: { ...route.query, env: next === "paper" ? undefined : next, account: undefined } });
-}
-
 function changeList(key: string | number) {
-  const next = key === "execution" || key === "blocked" ? key : undefined;
+  const next = key === "execution" ? key : undefined;
   void router.replace({ query: { ...route.query, list: next, account: undefined } });
 }
 
 function onRowClick(record: ComboRow, event: Event) {
   if ((event.target as HTMLElement).closest(".arco-link, a, button")) return;
-  // 带上当前页签：没有成员的实盘组合在测试网、生产环境两个页签都列出，详情按进来的页签显示环境
-  void router.push({ path: `/trading/accounts/${record.key}`, query: { env: env.value === "paper" ? undefined : env.value } });
+  // 详情地址带着当前环境：没有成员的实盘组合在测试账户、实盘账户两个菜单都列出，详情按进来的菜单显示环境
+  void router.push(logicalDetailPath(env.value, record.key));
 }
 
 function openStrategy(instanceId: string) {
   void router.push({ name: "strategy-detail", params: { instanceId } });
 }
 
+/** 新建的账户属于别的环境时，跳到那个环境的菜单；否则重读当前列表。 */
 function onCreated(kind: Environment) {
-  if (kind !== env.value) changeEnv(kind);
-  void load();
+  if (kind !== env.value) void router.push(environmentMenus[kind].path);
+  else void load();
 }
 
 watch(
@@ -326,7 +293,6 @@ watch(
 onBeforeUnmount(() => {
   listRequests.invalidate();
   extraRequests.invalidate();
-  blockedRequests.invalidate();
 });
 
 void load();
@@ -334,6 +300,13 @@ void load();
 
 <style src="./shared/accounts.css"></style>
 <style scoped>
+.page-title {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 32px;
+}
+
 .list-toolbar {
   display: flex;
   flex-wrap: wrap;

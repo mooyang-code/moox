@@ -27,7 +27,7 @@
       @page-change="changePage"
     >
       <template #columns>
-        <a-table-column title="成交时间" :width="140">
+        <a-table-column title="成交时间" :width="190">
           <template #cell="{ record }"
             ><span class="tx-muted tx-nowrap">{{ formatInstant(record.traded_at, displayZone) }}</span></template
           >

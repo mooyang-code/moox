@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { Holding, LogicalAccountTarget, OperatorAction, Position, TradingAccount } from "@/api/trade";
+import type { EquityPoint, Holding, LogicalAccountTarget, OperatorAction, Position, TradingAccount } from "@/api/trade";
 import {
   equityChangeOf,
+  equityDelta,
   flattenPreview,
   isFlattenRunning,
   memberTotals,
@@ -95,5 +96,18 @@ describe("刷新后接回操作与订单配色", () => {
     expect(orderStateTone("CANCEL_UNKNOWN")).toBe("warn");
     expect(orderStateTone("CANCELED")).toBe("");
     expect(orderStateTone("SUBMITTED")).toBe("run");
+  });
+});
+
+describe("一段时间内的权益变化", () => {
+  const point = (bucket_time: string, equity: string) => ({ bucket_time, equity }) as EquityPoint;
+
+  it("取时间最早和最晚的两个点，不看传入顺序", () => {
+    expect(equityDelta([point("3", "90"), point("1", "100"), point("2", "120")])).toEqual({ amount: -10, ratio: 90 / 100 - 1 });
+  });
+
+  it("不足两个点或起点权益为 0 时为空", () => {
+    expect(equityDelta([point("1", "100")])).toBeNull();
+    expect(equityDelta([point("1", "0"), point("2", "5")])).toBeNull();
   });
 });

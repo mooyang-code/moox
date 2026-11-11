@@ -1,5 +1,6 @@
 import type { EquityPoint } from "@/api/trade/types";
 import { formatInstant, msToWallClock, zoneSuffix } from "@/utils/time-zone";
+import { fmtMoney } from "./format";
 
 export interface EquitySeriesPoint {
   time: number;
@@ -24,7 +25,7 @@ export function equityChartParts(series: EquitySeriesPoint[], zone: string) {
   const first = series[0]?.time ?? Date.now();
   const last = series[series.length - 1]?.time ?? first;
   const title = { value: (datum?: { time?: number }) => formatInstant(datum?.time, zone) };
-  const content = [{ key: "权益", value: (datum?: { value?: number }) => String(datum?.value ?? "") }];
+  const content = [{ key: "权益", value: (datum?: { value?: number }) => fmtMoney(datum?.value) }];
   return {
     axes: [
       {
@@ -37,7 +38,8 @@ export function equityChartParts(series: EquitySeriesPoint[], zone: string) {
         title: { visible: true, text: `时间（${zoneSuffix(first, zone)}）` },
         label: { formatMethod: (text: string | string[]) => msToWallClock(Number(text), zone, "minute").slice(5) }
       },
-      { orient: "left" as const, type: "linear" as const }
+      // 纵轴不从 0 起，按数据范围取刻度：权益在高位小幅波动时也看得出变化
+      { orient: "left" as const, type: "linear" as const, zero: false }
     ],
     tooltip: { mark: { title, content }, dimension: { title, content } }
   };

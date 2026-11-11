@@ -58,7 +58,8 @@ describe("站内跳转的路径都有对应的路由", () => {
     )) {
       for (const path of literalLinks(readFileSync(file, "utf8"))) {
         const normalized = path.length > 1 ? path.replace(/\/$/, "") : path;
-        if (exact.has(normalized) || prefixes.some(prefix => normalized.startsWith(prefix))) continue;
+        // 以 / 结尾的字面量是后面要拼参数的前缀（例如 `#/trading/accounts/${id}`），按原样和参数路由的前缀比
+        if (exact.has(normalized) || prefixes.some(prefix => normalized.startsWith(prefix) || path.startsWith(prefix))) continue;
         missing.push(`${file.replace(`${srcRoot}/`, "")}: ${path}`);
       }
     }

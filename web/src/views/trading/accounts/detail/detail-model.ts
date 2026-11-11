@@ -1,4 +1,4 @@
-import type { LogicalAccountTarget, OperatorAction, TradingAccount } from "@/api/trade";
+import type { EquityPoint, LogicalAccountTarget, OperatorAction, TradingAccount } from "@/api/trade";
 import type { PositionSnapshot } from "../shared/position-snapshot";
 
 export const detailTabs = [
@@ -49,6 +49,21 @@ export function paperInitialBalance(accounts: readonly TradingAccount[]): number
 /** 较初始资金的变化：还没读到权益（首次同步前）时为 null，不能把权益当 0 算成 −100%。 */
 export function equityChangeOf(equity: number | null, initial: number | null): number | null {
   return equity === null || !initial ? null : equity - initial;
+}
+
+export interface EquityDelta {
+  amount: number;
+  ratio: number;
+}
+
+/** 一段时间内的权益变化：资金曲线第一个点到最后一个点。不足两个点或起点权益为 0 时返回 null。 */
+export function equityDelta(points: readonly EquityPoint[]): EquityDelta | null {
+  const sorted = [...points].sort((a, b) => Number(a.bucket_time) - Number(b.bucket_time));
+  if (sorted.length < 2) return null;
+  const first = Number(sorted[0].equity);
+  const last = Number(sorted[sorted.length - 1].equity);
+  if (!Number.isFinite(first) || !Number.isFinite(last) || first === 0) return null;
+  return { amount: last - first, ratio: last / first - 1 };
 }
 
 /** 清仓预览：要平掉的持仓个数和价值（永续取标记价，现货取估值）。accountId 为空表示整个组合。 */

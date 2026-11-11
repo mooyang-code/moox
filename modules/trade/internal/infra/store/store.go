@@ -19,7 +19,11 @@ import (
 	"gorm.io/gorm"
 )
 
-const sqliteBusyTimeoutMS = 5000
+const (
+	sqliteBusyTimeoutMS = 5000
+	// readOnlyConns 是只读连接池的连接数：管理台几个页签同时查询够用。
+	readOnlyConns = 4
+)
 
 var (
 	ErrConflict           = errors.New("trade store: conflict")
@@ -28,7 +32,12 @@ var (
 )
 
 type Store struct {
-	db                    *gorm.DB
+	// db 是唯一的读写连接，交易执行的读写都走它。
+	db *gorm.DB
+	// readDB 是同一个库文件上的只读连接池，管理台的列表、汇总类查询走它：WAL 模式下读不挡写，
+	// 管理台的大查询不再和交易执行的写入排同一个连接。只读连接看得到所有已提交的数据，
+	// 看不到别处还没提交的事务，所以交易执行路径的查询仍走 db。
+	readDB                *gorm.DB
 	accountLocks          sync.Map
 	logicalLocks          sync.Map
 	executionLocks        sync.Map
@@ -95,7 +104,32 @@ func Open(path string) (*Store, error) {
 		_ = sqlDB.Close()
 		return nil, err
 	}
-	return &Store{db: db}, nil
+	// 内存库每个连接各是一个独立的库，只读查询直接用主连接。
+	if path == ":memory:" {
+		return &Store{db: db, readDB: db}, nil
+	}
+	readDB, err := openReadOnly(path)
+	if err != nil {
+		_ = sqlDB.Close()
+		return nil, err
+	}
+	return &Store{db: db, readDB: readDB}, nil
+}
+
+// openReadOnly 在同一个库文件上打开只读连接池：query_only 拒绝一切写入；WAL 模式已经记在库文件里，不用再设。
+func openReadOnly(path string) (*gorm.DB, error) {
+	dsn := fmt.Sprintf("%s?_pragma=query_only(1)&_pragma=busy_timeout(%d)", path, sqliteBusyTimeoutMS)
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	if err != nil {
+		return nil, fmt.Errorf("打开交易库只读连接：%w", err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		return nil, fmt.Errorf("取交易库只读连接：%w", err)
+	}
+	sqlDB.SetMaxOpenConns(readOnlyConns)
+	sqlDB.SetMaxIdleConns(readOnlyConns)
+	return db, nil
 }
 
 func initializeTradeStore(db *gorm.DB) error {
@@ -300,7 +334,15 @@ func (s *Store) Close() error {
 	if err != nil {
 		return err
 	}
-	return sqlDB.Close()
+	if s.readDB == s.db {
+		return sqlDB.Close()
+	}
+	readDB, err := s.readDB.DB()
+	if err != nil {
+		return err
+	}
+	// 先关只读连接，主连接最后关闭时才能做收尾的检查点。
+	return errors.Join(readDB.Close(), sqlDB.Close())
 }
 
 func (s *Store) Ping(ctx context.Context) error {

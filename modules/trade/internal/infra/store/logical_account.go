@@ -461,7 +461,13 @@ func (tx *Tx) PutLogicalAccountMember(record LogicalAccountMemberRecord) error {
 		return writeError(err)
 	}
 	// 同步只给启用成员的外部单写组合编号：加入组合前、或停用期间在交易所下的单没有组合编号，
-	// 组合的订单列表看不到、也撤不掉，却会挡住恢复。启用时把这些还没结束的单补上本组合的编号。
+	// 组合的订单列表看不到、也撤不掉，却会挡住恢复。启用时把这些还没结束的单补上本组合的编号，
+	// 这些单已有的成交同样补上（成交的组合编号跟随订单），要在改订单之前按订单还没有组合编号找出来。
+	if err := tx.db.Exec(execAdoptMemberOpenOrderFills,
+		record.LogicalAccountID, record.SpaceID, record.SpaceID, record.TradingAccountID, activeOrderStatesJSON,
+	).Error; err != nil {
+		return err
+	}
 	return tx.db.Exec(execAdoptMemberOpenOrders,
 		record.LogicalAccountID, record.SpaceID, record.TradingAccountID, activeOrderStatesJSON,
 	).Error
@@ -662,4 +668,12 @@ const (
 		SET c_logical_account_id = ?, c_mtime = CURRENT_TIMESTAMP
 		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_logical_account_id IS NULL
 			AND c_state IN (SELECT value FROM json_each(?))`
+	// 给上面将被补上组合编号的订单的已有成交补上同一个组合编号，条件与 execAdoptMemberOpenOrders 相同，须在它之前执行。
+	execAdoptMemberOpenOrderFills = `UPDATE t_order_fills
+		SET c_logical_account_id = ?
+		WHERE c_space_id = ? AND c_order_id IN (
+			SELECT c_order_id FROM t_trade_orders
+			WHERE c_space_id = ? AND c_trading_account_id = ? AND c_logical_account_id IS NULL
+				AND c_state IN (SELECT value FROM json_each(?))
+		)`
 )

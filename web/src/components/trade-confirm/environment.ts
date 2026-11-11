@@ -9,12 +9,29 @@ export const environmentTabs: readonly { key: Environment; label: string; desc: 
   { key: "prod", label: "生产环境", desc: "连交易所生产环境，用真实资金交易。" }
 ];
 
-export function environmentLabel(env: Environment): string {
-  return environmentTabs.find(item => item.key === env)?.label ?? "";
+/**
+ * 每个环境在「交易管理」下各有一个菜单：列表页是 path，这个环境的组合详情是 path/组合编号。
+ * 详情路由的 name 是菜单 name 加 "-detail"，侧栏按 activeMenu 高亮所属菜单。
+ */
+export const environmentMenus: Readonly<Record<Environment, { name: string; path: string; title: string }>> = {
+  paper: { name: "trading-paper", path: "/trading/paper", title: "模拟账户" },
+  testnet: { name: "trading-testnet", path: "/trading/testnet", title: "测试账户" },
+  prod: { name: "trading-live", path: "/trading/live", title: "实盘账户" }
+};
+
+/** 路由 meta.env 写明页面属于哪个环境；没写（按组合编号直接打开的通用详情地址）返回 undefined。 */
+export function environmentOfRoute(route: { meta?: Record<string, unknown> }): Environment | undefined {
+  const value = route.meta?.env;
+  return value === "paper" || value === "testnet" || value === "prod" ? value : undefined;
 }
 
-export function environmentFromQuery(value: unknown): Environment {
-  return value === "testnet" || value === "prod" ? value : "paper";
+/** 组合详情页地址。 */
+export function logicalDetailPath(env: Environment, logicalAccountId: string): string {
+  return `${environmentMenus[env].path}/${encodeURIComponent(logicalAccountId)}`;
+}
+
+export function environmentLabel(env: Environment): string {
+  return environmentTabs.find(item => item.key === env)?.label ?? "";
 }
 
 /** 执行账户的环境。实盘账户没有写明环境时按生产环境处理，和后端的规则一致。 */
@@ -25,7 +42,7 @@ export function accountEnvironment(account: Pick<TradingAccount, "execution_mode
 
 /**
  * 组合账户的环境：后端要求成员环境一致，所以取第一个能找到的成员的环境。
- * 实盘组合没有可判断的成员时（列表页的测试网、生产环境两个页签都列出它）用 entered：从哪个页签进来就按哪个环境显示；
+ * 实盘组合没有可判断的成员时（测试账户、实盘账户两个菜单都列出它）用 entered：从哪个菜单进来就按哪个环境显示；
  * 不知道从哪进来（例如直接打开链接）时按生产环境处理，确认也按最严的一档。
  */
 export function logicalEnvironment(
@@ -42,8 +59,8 @@ export function logicalEnvironment(
 }
 
 /**
- * 组合是否属于这个环境的页签。实盘组合还没有可判断的成员时（例如新建账户加入组合失败后留下的空组合），
- * 测试网和生产环境两个页签都列出它，好让用户在任一页签里给它加成员或处理掉；其余按 logicalEnvironment 判断。
+ * 组合是否列在这个环境的菜单里。实盘组合还没有可判断的成员时（例如新建账户加入组合失败后留下的空组合），
+ * 测试账户和实盘账户两个菜单都列出它，好让用户在任一处给它加成员或处理掉；其余按 logicalEnvironment 判断。
  */
 export function logicalInEnvironment(
   logical: Pick<LogicalAccount, "execution_mode" | "members">,

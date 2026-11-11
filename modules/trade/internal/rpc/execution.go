@@ -250,7 +250,7 @@ func (h *ExecutionServer) ListOrders(
 		return &tradepb.ListOrdersRsp{RetInfo: instrumentErrorInfo(err)}, nil
 	}
 	page := pageFromPB(req.GetPage())
-	records, total, err := h.Store.ListOrders(ctx, spaceID, store.OrderQuery{
+	records, total, err := h.Store.ListOrdersReadOnly(ctx, spaceID, store.OrderQuery{
 		LogicalAccountID: req.GetLogicalAccountId(),
 		TradingAccountID: req.GetTradingAccountId(),
 		InstrumentID:     instrumentID, State: normalized(req.GetState()), OwnerType: req.GetOwnerType(),
@@ -293,7 +293,7 @@ func (h *ExecutionServer) ListFills(
 		return &tradepb.ListFillsRsp{RetInfo: instrumentErrorInfo(err)}, nil
 	}
 	page := pageFromPB(req.GetPage())
-	records, total, err := h.Store.ListFills(ctx, spaceID, store.FillQuery{
+	records, total, err := h.Store.ListFillsReadOnly(ctx, spaceID, store.FillQuery{
 		TradingAccountID: req.GetTradingAccountId(), LogicalAccountID: req.GetLogicalAccountId(), OrderID: req.GetOrderId(),
 		InstrumentID: instrumentID, StartTime: req.GetStartTime(),
 		EndTime: req.GetEndTime(), Offset: page.offset, Limit: page.size,

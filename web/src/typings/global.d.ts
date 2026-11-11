@@ -24,6 +24,10 @@ declare namespace Menu {
     type?: number;
     /** 隐藏路由进入时侧栏高亮的菜单 name */
     activeMenu?: string;
+    /** 同一个页面有几条地址时写相同的 viewKey：在这些地址之间换时复用页面组件 */
+    viewKey?: string;
+    /** 交易账户页面所属的环境：paper、testnet、prod */
+    env?: string;
     /** 同一路径仅 query 变化时复用页面组件（不重建、不闪全局加载态），页面自己监听 query。 */
     reuseOnQuery?: boolean;
   }

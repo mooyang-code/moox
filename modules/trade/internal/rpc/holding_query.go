@@ -93,7 +93,7 @@ func (q *HoldingQuery) List(ctx context.Context, spaceID, accountID string) ([]h
 			// Closed Paper accounts have no live quote stream. Preserve a useful
 			// historical mark from the latest fill when one exists; otherwise
 			// return identity and quantity without fabricating a valuation.
-			fills, _, fillErr := q.Store.ListFills(ctx, spaceID, store.FillQuery{
+			fills, _, fillErr := q.Store.ListFillsReadOnly(ctx, spaceID, store.FillQuery{
 				TradingAccountID: accountID, Market: string(key.Market), ExchangeSymbol: key.Symbol, Limit: 1,
 			})
 			if fillErr != nil {

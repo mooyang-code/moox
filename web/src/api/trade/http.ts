@@ -52,6 +52,9 @@ function constantAt(raw: string, prefix: string): number {
   return -1;
 }
 
+/** 网关转发到交易服务超时、交易服务内部超时的原文（英文的网络层错误），页面统一显示一句中文。 */
+const TIMEOUT_TEXT = /i\/o timeout|context deadline exceeded|deadline_exceeded/i;
+
 /** 含汉字：标为 "chinese" 的常量，原因只有是中文时才单独显示。 */
 const HAN = /[一-鿿]/;
 
@@ -62,6 +65,7 @@ const HAN = /[一-鿿]/;
 function tradeErrorText(retInfo: RetInfo): string {
   const raw = retInfo.msg || "";
   if (!raw) return `交易服务请求失败（错误码 ${retInfo.code}）`;
+  if (TIMEOUT_TEXT.test(raw)) return "交易服务响应超时，请稍后重试";
   for (const [prefix, text, mode] of tradeMessageTexts) {
     const at = constantAt(raw, prefix);
     if (at < 0) continue;

@@ -89,11 +89,23 @@ export const systemMenu = [
     reuseOnQuery: true
   }),
 
-  directory("05", "0", "/trading/accounts", "trading", "trading", 5, { svgIcon: "balance-inquiry", icon: "" }),
-  // 菜单路由会覆盖 route.ts 里的同名声明：环境页签用 ?env=，query 变化时复用页面。
-  menu("0501", "05", "/trading/accounts", "trading-accounts", "trading-accounts", "trading/accounts/index", 1, {
-    reuseOnQuery: true
+  directory("05", "0", "/trading/paper", "trading", "trading", 5, { svgIcon: "balance-inquiry", icon: "" }),
+  // 三个环境各一个菜单，共用同一个列表页，meta.env 写明环境；菜单路由会覆盖 route.ts 里的同名声明，两处都要写。
+  // 子页签（?list=）在 query 里，query 变化时复用页面。
+  menu("0501", "05", "/trading/paper", "trading-paper", "trading-paper", "trading/accounts/index", 1, {
+    reuseOnQuery: true,
+    env: "paper"
   }),
+  menu("0502", "05", "/trading/testnet", "trading-testnet", "trading-testnet", "trading/accounts/index", 2, {
+    reuseOnQuery: true,
+    env: "testnet"
+  }),
+  menu("0503", "05", "/trading/live", "trading-live", "trading-live", "trading/accounts/index", 3, {
+    reuseOnQuery: true,
+    env: "prod"
+  }),
+  // 下架名单是全局的，不分环境和空间，单独一个菜单。
+  menu("0504", "05", "/trading/blocked", "trading-blocked", "trading-blocked", "trading/blocked/index", 4),
 
   // 数据归档是一级菜单，排在交易之后、事件中心之前。
   directory("058", "0", "/archive/tasks", "archive", "archive", 6, { svgIcon: "folder-menu", icon: "" }),
