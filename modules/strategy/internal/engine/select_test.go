@@ -127,6 +127,33 @@ func TestSelectGroupMaxAndNaN(t *testing.T) {
 	require.Equal(t, reasonGroupNone, findItem(t, decision, "r", "S04").Reason)
 }
 
+// group.by 写来源列（来源名.列名）：分组值取行里并进来的来源列，名额、group_full、group_none 与主帧列一致；
+// 行里没有这个来源列的标的按缺数处理（missing:<来源名.列名>），不参与排名、不占名额。
+func TestSelectGroupBySourceColumn(t *testing.T) {
+	program := compile(t, "name: s\nsources:\n  daily: {bar: 1d}\nrules:\n  - id: r\n    type: rank\n    score: \"m\"\n"+
+		"    select: {top: 4, group: {by: daily.g, max: 2}}\n    weight: {total: 1}\nportfolio: {max_missing: 1}\n", "m", "daily.g")
+	require.Equal(t, []string{"daily.g", "m"}, program.Rules[0].Columns())
+	// 组：S01 没有来源列（来源缺一期），S02～S04 属于 1，S05 为 NaN，S06、S07 属于 2。
+	rows := rankedRows(7, func(i int) map[string]float64 {
+		switch {
+		case i == 1:
+			return nil
+		case i <= 4:
+			return map[string]float64{"daily.g": 1}
+		case i == 5:
+			return map[string]float64{"daily.g": math.NaN()}
+		default:
+			return map[string]float64{"daily.g": 2}
+		}
+	})
+	decision := evaluate(t, program, frameOf(program, rows), State{})
+	assertOK(t, decision)
+	require.Equal(t, []string{"S02", "S03", "S06", "S07"}, weightedIDs(decision))
+	require.Equal(t, "missing:daily.g", findItem(t, decision, "r", "S01").Reason)
+	require.Equal(t, reasonGroupFull, findItem(t, decision, "r", "S04").Reason)
+	require.Equal(t, reasonGroupNone, findItem(t, decision, "r", "S05").Reason)
+}
+
 // group.quotas 与 rest：按组内最优名次给组排序，第 i 组名额 quotas[i]，其余组 rest。
 func TestSelectGroupQuotasAndRest(t *testing.T) {
 	program := compile(t, selectRule("{top: 6, group: {by: g, quotas: [2, 1], rest: 1}}"), "m", "g")

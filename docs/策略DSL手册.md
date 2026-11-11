@@ -222,7 +222,9 @@ select: {top: 10, group: {by: industry, max: 3}}                   # 每个行�
 select: {top: 6, group: {by: industry, quotas: [2, 1, 1], rest: 1}} # 按组内最优名次给行业排序，前三个行业名额 2、1、1，其余行业各 1
 ```
 
-按名次从前往后逐个接受，所属组已满就跳过（明细 `group_full`）。`by` 必须是 View 里的数值列；分组值为空的标的按缺数处理。`max` 与 `quotas` 二选一，`rest` 只能配 `quotas`。
+按名次从前往后逐个接受，所属组已满就跳过（明细 `group_full`）。`by` 必须是数值列：主帧 View 的列，或附加来源的列（见下）；分组值为空的标的按缺数处理。`max` 与 `quotas` 二选一，`rest` 只能配 `quotas`。
+
+写了 `sources` 时，`by` 也可以写附加来源的列（`来源名.列名`），例如小时线主帧按日线来源里的行业代码分组：`group: {by: daily.industry, max: 2}`。分组值取这一根主帧读到的最新一根来源值；来源读不到或这一列为空的标的同样按缺数处理（明细 `missing:daily.industry`）。完整例子见 13.10。
 
 **二次排序：`then`**
 
@@ -1061,6 +1063,29 @@ strategy_pool:
   fees: {spot_bps: 10, swap_bps: 6}
 portfolio: {leverage: 1.8}
 ```
+
+### 13.10 日线选股、小时线逐标的择时
+
+```yaml
+name: daily_pick_hourly_timing
+bar: 1h
+sources:
+  daily: {bar: 1d}                 # 日线因子任务，实例启用时按 daily:市场 绑定
+rules:
+  - id: pick
+    type: rank
+    filter: "daily.market_cap > 3000000000 && daily.zone_trend + daily.zone_range > 0"
+    score: "rank(daily.mom__20) - rank(daily.vol__20)"
+    select: {top: 5, group: {by: daily.industry, max: 2}}                # 每个行业最多 2 个
+    holding: {calendar: trading_days, every: 5, days: [1], at: first}   # 每 5 个交易日的第一根小时线重选
+    weight: {total: 1}
+    scale: {expr: "daily.zone_trend * sig_breakout + daily.zone_range * sig_revert"}
+portfolio: {max_missing: 0.2}
+```
+
+- 选股只在建仓日判断：`filter`、`score`、`select`（含行业名额）只在每 5 个交易日的第一根小时线上执行，选出的标的持有到下一个建仓日；仓位系数 `scale` 每根小时线都重新取值，乘掉的部分留现金。
+- `scale` 是“日线分区列 × 小时信号列”相加：`daily.zone_trend`、`daily.zone_range` 是日线因子给每个标的标出的分区（0/1，同一天只有一个为 1），`sig_breakout`、`sig_revert` 是小时线因子里对应分区用的 0/1 信号。标的处在哪个分区，就只看那个分区的信号。
+- “突破置位、跌破复位并保持”这类信号不在策略里写状态，而是在因子里用事件记忆算子（`ts_last_valid`、`ts_bars_since`、`ts_value_when` 等）写成 0/1 列：突破那根记 1、跌破那根记 0、其余为空，再取最近一次有效值。
 
 ## 14. 报错速查
 

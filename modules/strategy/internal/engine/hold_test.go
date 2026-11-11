@@ -308,6 +308,32 @@ portfolio: {max_missing: 1}
 	require.Equal(t, reasonNotSelected, items["B"].Reason)
 }
 
+// 分组列写来源列（来源名.列名）时与主帧列同样处理：持有标的先占组名额，规则状态记下分组值；持有标的缺这个来源列按缺数出场。
+func TestHoldGroupQuotaBySourceColumn(t *testing.T) {
+	run := newHoldRun(t, `name: h
+sources:
+  daily: {bar: 1d}
+rules:
+  - id: r
+    type: rank
+    score: "m"
+    select: {top: 2, group: {by: daily.g, max: 1}}
+    hold: {}
+    weight: 1
+portfolio: {max_missing: 1}
+`, "m", "daily.g")
+	weights, _, decision := run.step(map[string]map[string]float64{"A": {"m": 3, "daily.g": 1}, "B": {"m": 2, "daily.g": 1}, "C": {"m": 1, "daily.g": 2}})
+	require.Equal(t, map[string]string{"A": "0.5", "C": "0.5"}, weights)
+	require.Equal(t, map[string]float64{"A": 1, "C": 2}, decision.State.Rules["r"].Hold.Groups)
+	// A 分数掉到最后仍持有，占着组 1：B 不能入场。
+	_, items, _ := run.step(map[string]map[string]float64{"A": {"m": 0, "daily.g": 1}, "B": {"m": 5, "daily.g": 1}, "C": {"m": 1, "daily.g": 2}})
+	require.Equal(t, reasonNotSelected, items["B"].Reason)
+	// A 的来源列缺了（来源缺一期）：按缺数出场，B 补上组 1 的名额。
+	weights, items, _ = run.step(map[string]map[string]float64{"A": {"m": 0}, "B": {"m": 5, "daily.g": 1}, "C": {"m": 1, "daily.g": 2}})
+	require.Equal(t, reasonExitMissing+";missing:daily.g", items["A"].Reason)
+	require.Equal(t, map[string]string{"B": "0.5", "C": "0.5"}, weights)
+}
+
 // 与日历同写：只在建仓 bar 判 filter、exit、max_bars 与补位，其余 bar 保持；漏掉建仓 bar 时在之后第一根 ok bar 补判一次；
 // 停用再启用后状态清零。
 func TestHoldWithCalendar(t *testing.T) {

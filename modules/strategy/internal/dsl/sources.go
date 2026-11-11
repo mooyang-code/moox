@@ -131,7 +131,7 @@ func validateSources(s *Strategy) error {
 	return nil
 }
 
-// validateSourcesReferenced 拒绝没有被任何表达式引用的来源：没用到的来源仍要绑定任务，收盘时刻对齐的那一根还会等它的事件。
+// validateSourcesReferenced 拒绝没有被任何表达式引用的来源（select.group.by 写 来源名.列名 也算引用）：没用到的来源仍要绑定任务，收盘时刻对齐的那一根还会等它的事件。
 func validateSourcesReferenced(s *Strategy) error {
 	if len(s.Sources) == 0 {
 		return nil

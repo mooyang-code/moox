@@ -368,3 +368,87 @@ func TestReferenceMarketAgeJudgement(t *testing.T) {
 		t.Fatalf("参考任务的市场不对应拒绝：%v", err)
 	}
 }
+
+// groupSourceDSL 是 1h 主帧加 1d 来源 daily 的策略：只有 select.group.by 引用来源（按日线的行业列分组，每组最多 1 个）。
+const groupSourceDSL = `name: group_by_daily
+bar: 1h
+sources:
+  daily: {bar: 1d}
+rules:
+  - id: r
+    type: rank
+    score: "ma_20"
+    select: {top: 2, group: {by: daily.industry, max: 1}}
+    weight: 1
+portfolio: {max_missing: 1}
+`
+
+// select.group.by 写来源列：来源列进必需列、按 as-of 并进主帧的行后参与分组名额；来源缺一期的标的按缺数处理（missing:daily.industry），
+// 与主帧的分组列口径一致。来源 View 没有这一列时启用解析报错。
+func TestLoadBarGroupBySourceColumn(t *testing.T) {
+	client := newFakeClient("spot")
+	withDailySource(client, "spot", "")
+	if _, _, err := ResolveTasks(context.Background(), client, "space", sourceTasks(), parseStrategy(t, groupSourceDSL)); err == nil || !strings.Contains(err.Error(), "industry") {
+		t.Fatalf("来源 View 没有 group.by 的列时应报错：%v", err)
+	}
+	view := client.views["view_factor_d1d"]
+	view.Columns = append(view.Columns, plainColumn("industry"))
+	client.views["view_factor_d1d"] = view
+	resolved, program, err := ResolveTasks(context.Background(), client, "space", sourceTasks(), parseStrategy(t, groupSourceDSL))
+	if err != nil {
+		t.Fatalf("解析失败：%v", err)
+	}
+	if got := program.SourceColumns["daily"]; len(got) != 1 || got[0] != "industry" {
+		t.Fatalf("来源的必需列应是 industry：%v", program.SourceColumns)
+	}
+	day := time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC)
+	evaluate := func(daily map[string]map[string]float64) engine.Decision {
+		t.Helper()
+		client.rows = func(query Query) ([]Row, uint64, error) {
+			if query.ViewID == "view_factor_d1d" {
+				if len(query.Columns) != 1 || query.Columns[0] != "industry" {
+					t.Fatalf("来源应只读 industry：%v", query.Columns)
+				}
+				return rowsAt(day, daily), 7, nil
+			}
+			return rowsAt(query.End.Add(-time.Nanosecond), map[string]map[string]float64{"BTC-USDT": {"ma_20": 3}, "ETH-USDT": {"ma_20": 2}, "SOL-USDT": {"ma_20": 1}}), 1, nil
+		}
+		loaded, err := Loader{Client: client}.LoadBar(context.Background(), "space", resolved, program, Bar{BarStart: day.Add(34 * time.Hour), Readiness: map[string]readiness.Result{}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		decision, err := engine.Evaluate(program, loaded.Frame, engine.State{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if decision.Status != engine.StatusOK {
+			t.Fatalf("状态 %s：%v", decision.Status, decision.Summary.Notes)
+		}
+		return decision
+	}
+	reasonOf := func(decision engine.Decision, id string) string {
+		for _, item := range decision.Items {
+			if item.InstrumentID == id {
+				return item.Reason
+			}
+		}
+		return ""
+	}
+	targets := func(decision engine.Decision) string {
+		ids := make([]string, 0, len(decision.Targets))
+		for _, target := range decision.Targets {
+			ids = append(ids, target.InstrumentID)
+		}
+		return strings.Join(sortedStrings(ids), ",")
+	}
+	// BTC、ETH 同属行业 1，SOL 属行业 2：按名次 BTC 占行业 1 的名额，ETH 组满跳过，SOL 入选。
+	decision := evaluate(map[string]map[string]float64{"BTC-USDT": {"industry": 1}, "ETH-USDT": {"industry": 1}, "SOL-USDT": {"industry": 2}})
+	if targets(decision) != "BTC-USDT,SOL-USDT" || reasonOf(decision, "ETH-USDT") != "group_full" {
+		t.Fatalf("分组名额不符：%s，ETH=%s", targets(decision), reasonOf(decision, "ETH-USDT"))
+	}
+	// BTC 的日线缺了这一期：按缺数处理，不参与排名与分组；ETH 接上行业 1 的名额。
+	decision = evaluate(map[string]map[string]float64{"ETH-USDT": {"industry": 1}, "SOL-USDT": {"industry": 2}})
+	if targets(decision) != "ETH-USDT,SOL-USDT" || reasonOf(decision, "BTC-USDT") != "missing:daily.industry" {
+		t.Fatalf("来源缺数的处理不符：%s，BTC=%s", targets(decision), reasonOf(decision, "BTC-USDT"))
+	}
+}

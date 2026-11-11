@@ -22,7 +22,8 @@ const (
 // MaxGroupQuotas 是 select.group.quotas 的个数上限。
 const MaxGroupQuotas = 64
 
-// SelectGroup 是按分组列限制入选个数：Max 是每组上限；Quotas 按组内最优名次给组排序后，第 i 组的名额是 Quotas[i]，其余组是 Rest。
+// SelectGroup 是按分组列限制入选个数：By 是主帧的列名，或写作 来源名.列名 的附加来源列（分组值取这一根主帧按 as-of 读到的来源值）；
+// Max 是每组上限；Quotas 按组内最优名次给组排序后，第 i 组的名额是 Quotas[i]，其余组是 Rest。
 // Max 与 Quotas 二选一。
 type SelectGroup struct {
 	By     string
@@ -209,7 +210,7 @@ func decodeSelectGroup(node *yaml.Node, path string) (*SelectGroup, error) {
 	case group.Rest < 0 || group.Rest > MaxCount:
 		return nil, fmt.Errorf("%s.rest 必须在 0 到 %d 之间", path, MaxCount)
 	}
-	if err := checkColumnName(group.By, path+".by"); err != nil {
+	if err := checkGroupColumn(group.By, path+".by"); err != nil {
 		return nil, err
 	}
 	for i, quota := range group.Quotas {
@@ -272,7 +273,20 @@ func ValidColumnName(name string) bool {
 	return columnNamePattern.MatchString(name) && !strings.HasPrefix(name, "__")
 }
 
-// checkColumnName 检查直接写列名的字段（例如 select.group.by）：只能是普通列名，不能是表达式或保留名称。
+// checkGroupColumn 检查 select.group.by 的写法：主帧 View 的普通列名，或 来源名.列名（附加来源的列）。
+// 来源是否已在 sources 声明由 validateRankRule 核对。
+func checkGroupColumn(name, path string) error {
+	source, column := SplitSourceColumn(name)
+	if source == "" {
+		return checkColumnName(name, path)
+	}
+	if !ValidSourceName(source) || checkColumnName(column, path) != nil {
+		return fmt.Errorf("%s 必须是 View 里的列名，或写成 来源名.列名 引用附加来源的列", path)
+	}
+	return nil
+}
+
+// checkColumnName 检查直接写列名的字段（例如 select.group.by 的列名部分）：只能是普通列名，不能是表达式或保留名称。
 func checkColumnName(name, path string) error {
 	if !columnNamePattern.MatchString(name) || strings.HasPrefix(name, "__") || name == identifierBars || name == identifierScore || name == identifierInstrument {
 		return fmt.Errorf("%s 必须是 View 里的列名", path)

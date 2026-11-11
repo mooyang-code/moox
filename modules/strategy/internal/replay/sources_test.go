@@ -2,6 +2,7 @@ package replay
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -16,7 +17,7 @@ import (
 const slowView = "view_factor_s"
 
 // sourceClient 在现货 1h 的 fakeClient 之外加一个 4h 的来源 View（任务 ftask_s）：列 trend 按标的与 4h 序号交替正负，
-// A 的第 2 根 4h（origin+8h 起）没有行。
+// 列 sector 是分组用的类别（A、B 同为 1，C 为空）；A 的第 2 根 4h（origin+8h 起）没有行。
 type sourceClient struct {
 	*fakeClient
 	sourceQueries []input.Query
@@ -38,7 +39,7 @@ func (c *sourceClient) GetView(ctx context.Context, spaceID, viewID string) (inp
 		return c.fakeClient.GetView(ctx, spaceID, viewID)
 	}
 	return input.ViewInfo{ViewID: slowView, DatasetID: "ds_s", Frequency: "4h", Status: "active", ActiveIndexID: "idx_s", Generation: "idx_s",
-		Columns: []input.ViewColumn{{Name: "close", Attributes: map[string]string{}}, {Name: "trend", Attributes: map[string]string{}}}}, nil
+		Columns: []input.ViewColumn{{Name: "close", Attributes: map[string]string{}}, {Name: "trend", Attributes: map[string]string{}}, {Name: "sector", Attributes: map[string]string{}}}}, nil
 }
 
 func (c *sourceClient) ViewGeneration(ctx context.Context, spaceID, viewID string) (string, error) {
@@ -69,7 +70,11 @@ func (c *sourceClient) QueryRows(ctx context.Context, spaceID string, query inpu
 			if subject.SubjectID == "A" && k == 2 {
 				continue
 			}
-			rows = append(rows, input.Row{SubjectID: subject.SubjectID, DataTime: at, SeriesTag: "venue:binance", Values: map[string]float64{"close": 1, "trend": slowTrend(subject.SubjectID, k)}})
+			values := map[string]float64{"close": 1, "trend": slowTrend(subject.SubjectID, k)}
+			if subject.SubjectID != "C" && slices.Contains(query.Columns, "sector") {
+				values["sector"] = 1
+			}
+			rows = append(rows, input.Row{SubjectID: subject.SubjectID, DataTime: at, SeriesTag: "venue:binance", Values: values})
 		}
 	}
 	return rows, 5, nil
@@ -92,14 +97,58 @@ portfolio: {max_missing: 1}
 // S7 研究回放：来源按 as-of 合进每一期的输入，与逐期实时装配 + 同一引擎的结果逐期一致；每段的来源读取从第一根应读的来源 bar
 // 的前一根开始。场景里来源的趋势每 4 根翻转一次，A 有一期来源缺行。
 func TestReplaySourcesMatchLive(t *testing.T) {
+	client, bars := replaySourceAgainstLive(t, sourceReplayDSL)
+	// 第一段从 origin+3h 收盘的主帧起，应读收盘于 origin 的 4h 那根（bar_start 是 origin−4h），再向前多取一根。
+	require.NotEmpty(t, client.sourceQueries)
+	require.True(t, client.sourceQueries[0].Start.Equal(origin.Add(-8*time.Hour)), "第一段来源读取起点 %v", client.sourceQueries[0].Start)
+	picked := map[string]bool{}
+	for _, targets := range bars {
+		for _, id := range targets {
+			picked[id] = true
+		}
+	}
+	require.True(t, picked["A"] && picked["B"], "来源的趋势翻转应让 A、B 轮流入选：%v", picked)
+}
+
+// select.group.by 写来源列的研究回放：只有分组列引用来源，A、B 同属一个类别、每组最多 1 个，所以每期只选得出一个（不分组时两个都选）；
+// A 的来源缺一期时按缺数处理，由 B 入选。回放与逐期实时装配 + 同一引擎的结果逐期一致。
+func TestReplayGroupBySourceColumnMatchesLive(t *testing.T) {
+	_, bars := replaySourceAgainstLive(t, `name: src_group_replay
+bar: 1h
+sources:
+  slow: {bar: 4h}
+rules:
+  - id: r
+    type: rank
+    score: "mom"
+    select: {top: 2, group: {by: slow.sector, max: 1}}
+    weight: {total: 1}
+portfolio: {max_missing: 1}
+`)
+	gap := 0
+	for end, targets := range bars {
+		require.Len(t, targets, 1, "%v：同一类别每期只能选一个：%v", end, targets)
+		// A 的第 2 根 4h（origin+8h～origin+12h）没有行：收盘于 origin+12h～origin+15h 的主帧读不到 A 的分组值，只能选 B。
+		if !end.Before(origin.Add(12*time.Hour)) && end.Before(origin.Add(16*time.Hour)) {
+			require.Equal(t, []string{"B"}, targets, "%v", end)
+			gap++
+		}
+	}
+	require.Equal(t, 4, gap, "来源缺一期影响 4 根主帧")
+}
+
+// replaySourceAgainstLive 用带 4h 来源 slow 的策略跑一次研究回放，再逐期用实时装配 + 同一引擎重算，核对状态与目标一致；
+// 返回客户端与各个 ok 期的目标标的（主帧收盘时刻 → 标的）。
+func replaySourceAgainstLive(t *testing.T, dslYaml string) (*sourceClient, map[time.Time][]string) {
+	t.Helper()
 	repo := openStore(t)
 	client := &sourceClient{fakeClient: &fakeClient{marketType: "spot"}}
 	tasks := map[string]string{"spot": "ftask_a", "slow:spot": "ftask_s"}
-	strategy, err := dsl.Parse([]byte(sourceReplayDSL))
+	strategy, err := dsl.Parse([]byte(dslYaml))
 	require.NoError(t, err)
 	resolved, program, err := input.ResolveTasks(context.Background(), client, "crypto", tasks, strategy)
 	require.NoError(t, err)
-	job := store.Replay{ReplayID: "s1", DSLYaml: sourceReplayDSL, DSLHash: dsl.Hash([]byte(sourceReplayDSL)), Calendar: "crypto_24x7", SpaceID: "crypto",
+	job := store.Replay{ReplayID: "s1", DSLYaml: dslYaml, DSLHash: dsl.Hash([]byte(dslYaml)), Calendar: "crypto_24x7", SpaceID: "crypto",
 		Tasks:     map[string]store.ReplayTask{"spot": spotTask, "slow:spot": {FactorTaskID: "ftask_s", ViewID: slowView, ViewGeneration: "idx_s"}},
 		StartTime: origin.Add(2 * time.Hour), EndTime: origin.Add(22 * time.Hour), SpotFeeBps: 10, Factors: resolved.Factors, CreatedAt: origin}
 	require.NoError(t, repo.CreateReplay(context.Background(), job))
@@ -110,11 +159,8 @@ func TestReplaySourcesMatchLive(t *testing.T) {
 	done, err := repo.GetReplay(context.Background(), "s1")
 	require.NoError(t, err)
 	require.Equal(t, store.ReplayDone, done.Status, done.Error)
-	// 第一段从 origin+3h 收盘的主帧起，应读收盘于 origin 的 4h 那根（bar_start 是 origin−4h），再向前多取一根。
-	require.NotEmpty(t, client.sourceQueries)
-	require.True(t, client.sourceQueries[0].Start.Equal(origin.Add(-8*time.Hour)), "第一段来源读取起点 %v", client.sourceQueries[0].Start)
 
-	state, compared, picked := engine.State{}, 0, map[string]bool{}
+	state, bars := engine.State{}, map[time.Time][]string{}
 	for _, replayed := range barsOf(t, repo, "s1") {
 		boundary, err := input.FromBarEnd(resolved.Calendar, resolved.Bar, replayed.BarEndTime)
 		require.NoError(t, err)
@@ -129,14 +175,15 @@ func TestReplaySourcesMatchLive(t *testing.T) {
 		_, live, err := trigger.EncodeTargets(decision.Targets)
 		require.NoError(t, err)
 		require.Equal(t, string(replayed.TargetsJSON), string(live), "%v 的目标不一致", replayed.BarEndTime)
+		ids := make([]string, 0, len(decision.Targets))
 		for _, target := range decision.Targets {
-			picked[target.InstrumentID] = true
+			ids = append(ids, target.InstrumentID)
 		}
+		bars[replayed.BarEndTime.UTC()] = ids
 		state = decision.State
-		compared++
 	}
-	require.NotZero(t, compared)
-	require.True(t, picked["A"] && picked["B"], "来源的趋势翻转应让 A、B 轮流入选：%v", picked)
+	require.NotEmpty(t, bars)
+	return client, bars
 }
 
 // S3 参考市场的研究回放：永续单市场加现货参考市场，age_markets: all 读现货的历史判年龄（现货的 D 前 6 根没有行），
