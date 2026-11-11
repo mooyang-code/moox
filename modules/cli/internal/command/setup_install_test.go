@@ -35,6 +35,9 @@ func newInstallHarness(t *testing.T) *installHarness {
 	h := &installHarness{wipeHarness: newWipeHarness(t)}
 	root := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(root, bundle.ManifestName), []byte(`{"version":1,"release":"v0.0.0","commit":"0123456789abcdef0123456789abcdef01234567","units":{"host":{"file":"host.tar.gz"}},"files":["a"]}`), 0o644))
+	// setup start 要读内置任务文件，找出需手动启用的任务。
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "config", "setup"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "config", "setup", "collection-tasks.yaml"), []byte("tasks: []\n"), 0o644))
 	t.Chdir(root)
 	deployments := h.snapshot.Manifest.Deployments
 	deployments["compute"] = append(slices.Clone(deployments["compute"]), "collector-stream", "egress-proxy")
@@ -227,6 +230,7 @@ func TestBundleDirectoryWithoutServerBinariesWorks(t *testing.T) {
 	h := newInstallHarness(t)
 	root, err := os.Getwd()
 	require.NoError(t, err)
+	require.NoError(t, os.RemoveAll(filepath.Join(root, "config")))
 	require.NoError(t, os.CopyFS(filepath.Join(root, "config/setup"), os.DirFS(filepath.Join(repository, "config/setup"))))
 	options := unitdeploy.DeployOptions{StateDirectory: h.state, OperatorDirectory: h.operator}
 	require.NoError(t, resolveSetupUnitOptions(h.snapshot, "", &options))

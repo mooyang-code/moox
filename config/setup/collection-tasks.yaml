@@ -29,6 +29,17 @@ tasks:
   creator: moox-setup
   collect_params:
     frequency: 5m
+# start: manual 的任务 setup start 不会启用，由用户用 moox-cli collector task update --enabled=true 显式启用。
+- space_id: stockcn
+  task_id: dasftksvjhj2jom4vhi0
+  task_name: A 股 K 线 1d
+  data_type: kline
+  tag_ids: [cn_hs300]
+  enabled: false
+  start: manual
+  creator: moox-setup
+  collect_params:
+    frequency: 1d
 # 附加字段只能在建任务时选全，所以这个任务一次带齐复权、行业、财务的全部字段；基础字段与 A 股默认输出一致。
 - space_id: stockcn
   task_id: dasftksvjhj2jom4vhhg
@@ -36,6 +47,7 @@ tasks:
   data_type: kline
   tag_ids: [cn_hs300]
   enabled: false
+  start: manual
   creator: moox-setup
   collect_params:
     output_fields: [

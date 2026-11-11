@@ -154,8 +154,16 @@ func runSetupStart(ctx context.Context, deps setupDeps, client setupStartClient,
 			return summary, err
 		}
 	}
+	manual, err := manualStartTasks(filepath.Join(repository, filepath.FromSlash("config/setup/collection-tasks.yaml")), spaceID)
+	if err != nil {
+		return summary, err
+	}
 	for _, task := range tasks {
 		if task.Enabled {
+			continue
+		}
+		if manual[task.TaskID] {
+			summary.Notes = append(summary.Notes, fmt.Sprintf("任务 %s（%s）需手动启用：moox-cli collector task update --space-id %s --task-id %s --enabled=true", task.TaskName, task.TaskID, spaceID, task.TaskID))
 			continue
 		}
 		if err := setupStartEnableTask(ctx, client, spaceID, task, poll); err != nil {

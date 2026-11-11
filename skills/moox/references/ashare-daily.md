@@ -6,7 +6,8 @@ A 股日线任务可以在每根日线上带三组附加字段：后复权因子
 
 动手前先跟用户说清三件事：
 
-- **输出字段只能在建任务时选全。** 任务建好后只能减少输出字段，不能新增；要加字段只能新建采集任务和对应的因子任务。所以下面的任务一次带齐 44 个字段（22 个基础字段加 22 个附加字段）。
+- **输出字段只能在建任务时选全。** 任务建好后只能减少输出字段，不能新增；要加字段只能新建采集任务和对应的因子任务。所以带附加字段的内置任务一次带齐 44 个字段（22 个基础字段加 22 个附加字段）。
+- **两条内置日线任务，按需要选。** “A 股日线（复权、行业、财务）”（`dasftksvjhj2jom4vhhg`）带全部附加字段，任一附加来源当天报错，这只股票当天整行不写；“A 股 K 线 1d”（`dasftksvjhj2jom4vhi0`）只有行情，不受附加来源影响。只要日线行情时用后者，下面的命令把任务 ID 换掉即可。两条都默认停用，`setup start` 不会启用它们。
 - **日线在北京时间次日 08:00 才采集。** 交易日 D 的日线在 D+1 日 08:00 到。用它做来源的日内策略，D 日 15:00 收盘那一根的结果在次日开盘前给出。
 - **只覆盖沪深 300（标签 `cn_hs300`）的沪深股票**，不提供市值。
 
@@ -15,6 +16,7 @@ A 股日线任务可以在每根日线上带三组附加字段：后复权因子
 ## 0. 前提
 
 - 线上的 Collector、云函数代码包、策略、管理台已经是带这项能力的版本。旧版程序不认识这些字段，会把它们丢掉；升级见 [`native-release.md`](native-release.md)。
+  发布顺序是 Collector（连同云函数代码包）先于管理台 `web-host`：新版管理台的输出字段清单取自 Collector 的响应。
 - stockcn 空间走云函数采集，`moox.toml` 的 `[scf_plan]` 里要有这个空间。
 - 确认 5m 的 A 股采集已经正常（`./bin/moox-cli collector status --space-id stockcn`），再打开日线。
 
@@ -43,42 +45,64 @@ A 股日线任务可以在每根日线上带三组附加字段：后复权因子
 
 ### 2a. 全新安装：启用内置任务
 
-全新安装（Collector 任务表为空时）会写入内置任务“A 股日线（复权、行业、财务）”，任务 ID `dasftksvjhj2jom4vhhg`，默认停用。
+全新安装（Collector 任务表为空时）会写入两条内置日线任务，默认停用：“A 股日线（复权、行业、财务）”`dasftksvjhj2jom4vhhg` 和“A 股 K 线 1d”`dasftksvjhj2jom4vhi0`。
 
 ```bash
-./bin/moox-cli collector task list --space-id stockcn                                          # 找到这个任务，看 enabled
+./bin/moox-cli collector task list --space-id stockcn                                          # 找到任务，看 enabled
 ./bin/moox-cli collector task show --space-id stockcn --task-id dasftksvjhj2jom4vhhg           # 核对 frequency=1d 和 44 个 output_fields
 ./bin/moox-cli collector task update --space-id stockcn --task-id dasftksvjhj2jom4vhhg --enabled=true
 ```
 
 - `collector task update` 没有预览，执行即生效，不需要也不接受 `--yes`；它先取回现有任务再合并，只改启用状态。执行前先跟用户确认。
 - 写成 `--enabled=true`（带等号）。停用用 `collector task disable --space-id stockcn --task-id <ID>`，不带 `--yes` 只预览。
-- `./bin/moox-cli setup start --space-id stockcn` 会启用这个空间里全部停用的 K 线任务，包括这一个。已经跑过 `setup start` 的全新安装，先用 `task list` 看它是不是已经启用。
+- `./bin/moox-cli setup start --space-id stockcn` 不启用这两条任务（种子里标了 `start: manual`），只在输出的 `notes` 里提示“需手动启用”。必须用上面的 `task update` 显式启用。
 
-### 2b. 已有部署：新建同样的任务
+### 2b. 已有部署：补写内置任务再启用
 
-内置任务只在任务表为空时写入，已有部署里不会自动出现。`task list` 里没有它时新建（`--output-field` 会替换默认字段，44 个要列全；这个参数可以重复写，每次用逗号分隔）：
+内置任务只在任务表为空时自动写入，已有部署里不会自动出现。`task list` 里没有它们时，按下面的顺序做，每一步改线上数据前先给用户看命令：
+
+1. **先导入字段目录**（第 1 步）。字段目录没导入不会让 Collector 启动失败（结果数据集的列由 Collector 自己建，不查字段目录），但管理台上这些列没有显示名和分组，所以放在前面一次做完。
+2. **补写内置任务。** 控制机的 Collector 已经升级到带这两条任务的版本后，在控制机上执行（`<控制机>` 是 `moox.toml` 里控制机的主机名称；路径按默认部署根 `/data/moox`、单元 `prod`，先 `ls` 确认文件存在）：
+
+   ```bash
+   ./bin/moox-cli host exec --host <控制机> -- /data/moox/prod/current/bin/moox-collector-cli init \
+     --db-path /data/moox/prod/current/collector/data/moox_collector.db \
+     --seed-file /data/moox/prod/current/collector/config/collection-tasks.yaml
+   ```
+
+   - 它只新建库里没有的（空间, 任务 ID），已有任务（包括用户改过、停用的）不动；输出里 `tasks_created` 是补写的个数，`tasks_unchanged` 是已存在的个数。同时会执行一次建表语句（`CREATE TABLE IF NOT EXISTS`，对已有的表没有影响）。
+   - 种子里的其他内置任务如果用户以前删过，也会被补回来（停用状态）。执行前用 `task list` 对一下，补回来又不需要的再用 `collector task delete` 删。
+   - 主机上的 `collection-tasks.yaml` 是随单元发布的。只手工换过 Collector 二进制、没有重发单元时它还是旧的：先用 `./bin/moox-cli host put --host <控制机> config/setup/collection-tasks.yaml <远端路径>` 传一份新的，再把 `--seed-file` 指过去。
+3. **重启 Collector。** Collector 只在启动时给任务建结果数据集和 View：
+
+   ```bash
+   ./bin/moox-cli setup restart --host <控制机> --component collector          # 预览
+   ./bin/moox-cli setup restart --host <控制机> --component collector --yes
+   ```
+
+4. **启用。** 用 2a 的 `collector task update --enabled=true`。
+
+不要改用 `collector task create` 新建同名任务：新建的任务 ID 是随机的，和内置任务的固定 ID 不同，结果数据集 ID 也就不同，文档、因子配置里按固定 ID 写的地方都对不上。只有需要“字段组合与内置任务不同”的日线任务时才新建（`--output-field` 会替换默认字段，要的字段列全；这个参数可以重复写，每次用逗号分隔）：
 
 ```bash
 ./bin/moox-cli collector task create --space-id stockcn \
-  --name "A 股日线（复权、行业、财务）" \
+  --name "A 股日线（复权、行业）" \
   --tag-id cn_hs300 --frequency 1d \
   --output-field open,high,low,close,volume,amount \
   --output-field instrument_name,trade_date,close_time,volume_unit,amount_unit,provider_symbol,provider_timestamp,fetched_at \
   --output-field request_id,route_id,route_rank,source_provider,quality_status,amount_quality,provider_id,source_id \
-  --output-field adj_factor,sw_l1,sw_l2,sw_l3 \
-  --output-field fin_report_period,fin_total_revenue,fin_revenue,fin_operating_profit,fin_net_profit,fin_net_profit_parent,fin_eps_basic,fin_total_assets,fin_total_liabilities,fin_equity_parent,fin_operating_cash_flow \
-  --output-field fin_total_revenue_ttm,fin_revenue_ttm,fin_operating_profit_ttm,fin_net_profit_ttm,fin_net_profit_parent_ttm,fin_eps_basic_ttm,fin_operating_cash_flow_ttm
+  --output-field adj_factor,sw_l1,sw_l2,sw_l3
 ```
 
 - 这条命令没有预览，执行就创建并启用（想先停用加 `--disabled`）。执行前把命令给用户确认。
-- 输出里的 `task_id` 记下来。结果数据集的 ID 是 `dataset_<task_id>`（内置任务是 `dataset_dasftksvjhj2jom4vhhg`），用 `collector task show` 或 `collector task inventory --space-id stockcn` 核对。
-- 不想要某一组字段就在创建时去掉那一行，创建之后加不回来。只要日线行情、不要附加字段时，只保留前三行。
+- 输出里的 `task_id` 记下来。结果数据集的 ID 是 `dataset_<task_id>`（内置任务是 `dataset_dasftksvjhj2jom4vhhg`、`dataset_dasftksvjhj2jom4vhi0`），用 `collector task show` 或 `collector task inventory --space-id stockcn` 核对。
+- 创建之后字段加不回来。
 - 报“输出字段 … 在标签 … 的市场 … 下没有来源”或“只支持 1d 频率”时，说明标签不是 A 股股票或频率不是 `1d`，按报错改。
 
 ### 2c. 等采集计划生效
 
-启用后 Collector 在下一轮对账（1 分钟内）生成新的采集计划。
+启用后 Collector 在下一轮对账（1 分钟内）生成新的采集计划。计划要等到下一个 UTC 零点（北京时间 08:00）之后才收尾，这期间 `fetch-plan` 显示计划还在进行是正常的，Monitor 不告警；
+但收尾之前不能生成新计划：停用任务、改任务要等到那之后才生效。
 
 ```bash
 ./bin/moox-cli collector status --space-id stockcn         # 数据集出现在列表里、level 为 ok
@@ -196,7 +220,9 @@ portfolio: {max_missing: 0.2}
 | --- | --- | --- |
 | `collector task update` 报“输出字段只能减少，不能新增” | 想给已有任务加字段 | 新建采集任务（2b）和因子任务，旧任务按需停用 |
 | 管理台新建任务时看不到复权、行业、财务字段 | 字段目录没导入；或标签不是 A 股股票、频率不是 `1d` | 第 1 步补导入；检查标签和频率 |
-| 某天的日线整只股票没有行 | 三个来源里有一个当时报错，带附加字段的任务整行不写 | 等自动补采（隔一天），或手工 `kline backfill` 那一天 |
+| 某天的日线整只股票没有行 | 三个来源里有一个当时报错，带附加字段的任务整行不写（纯日线任务不受影响） | 等自动补采（隔一天），或手工 `kline backfill` 那一天 |
+| 某只股票 `adj_factor` 一直为空 | 新浪复权接口对少数标的返回空列表 | 目前没有别的来源；因子里按缺数处理 |
+| 启用或停用日线任务后计划迟迟不变 | 上一份含日线的计划要到下一个北京时间 08:00 之后才收尾，收尾前不生成新计划 | 等到那之后再看 `collector fetch-plan` |
 | 申万行业全部失败，日志里有证书校验错误 | 申万网站换了证书链，内嵌的中间证书不再适用 | 需要更新程序里内嵌的证书，向用户说明后停下，不要关闭校验 |
 | 某只股票 `sw_l1` 一直为空 | 申万文件里没有它的记录（新股等） | 正常；策略里按缺数处理 |
 | 15:00 那一根策略结果到第二天早上才出 | 日线次日 08:00 才采集 | 设计如此 |
