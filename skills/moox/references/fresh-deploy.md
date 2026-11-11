@@ -99,7 +99,7 @@ sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keyc
 ## 5. 默认初始化的范围
 
 “系统默认配置”取字面意思：仓库 `config/setup/*.yaml` 的种子（Space、元数据、默认采集任务、数据集健康策略）加上 `moox.toml` 里默认的因子任务。Collector 首次启动会把随发布安装的 `collector/config/collection-tasks.yaml` 写成默认采集任务
-（只在任务表为空时写，任务 ID 固定，因子任务的源数据集依赖这些 ID；不足时 `moox-collector-cli init --seed-file` 补种）。默认有币安现货 1m、币安合约 1m（crypto 空间）和 A 股 5m（stockcn，沪深 300 成分股），都是停用状态，`setup start --space-id <空间>` 才启用，安装开始时问用户选哪个空间；不再默认采集 1h，要 1h 数据时用 `moox-cli collector task create` 自己建。内置任务只在 Collector 启动时检查，运行中删空任务不会重新写入。crypto 有计划后采集方式默认是 collector-stream（stream + local），不需要手工切换，也不依赖云函数；首份计划要等 collector-stream 在线，用 `moox-cli collector status` 和 `setup verify` 确认，计划建好前 `ingest-mode` 查不到数据集。
+（只在任务表为空时写，任务 ID 固定，因子任务的源数据集依赖这些 ID；不足时 `moox-collector-cli init --seed-file` 补种）。默认有币安现货 1m、币安合约 1m（crypto 空间）、A 股 5m 和 A 股日线（stockcn，沪深 300 成分股；日线任务带复权、申万行业、财务的附加字段，见 [`ashare-daily.md`](ashare-daily.md)），都是停用状态，`setup start --space-id <空间>` 才启用（会启用这个空间里全部停用的 K 线任务），安装开始时问用户选哪个空间；不再默认采集 1h，要 1h 数据时用 `moox-cli collector task create` 自己建。内置任务只在 Collector 启动时检查，运行中删空任务不会重新写入。crypto 有计划后采集方式默认是 collector-stream（stream + local），不需要手工切换，也不依赖云函数；首份计划要等 collector-stream 在线，用 `moox-cli collector status` 和 `setup verify` 确认，计划建好前 `ingest-mode` 查不到数据集。
 
 ### 默认展示策略（合约双均线）
 

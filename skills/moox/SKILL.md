@@ -38,6 +38,7 @@ MooX 是自托管、单用户的量化系统：行情采集 → 数据存储 →
 | 写策略 DSL、创建策略定义与实例 | [`references/strategy-dsl.md`](references/strategy-dsl.md) |
 | 迁移整套 Python 选币策略 | [`references/strategy-migration.md`](references/strategy-migration.md) |
 | 导入历史 K 线 | [`references/initial-import.md`](references/initial-import.md) |
+| 打开 A 股日线及其附加数据（复权因子、申万行业、财务），在策略里按行业、财务选股 | [`references/ashare-daily.md`](references/ashare-daily.md) |
 | View / 因子水位落后、修复 View | [`references/view-catchup.md`](references/view-catchup.md)、[`references/cli-operations.md`](references/cli-operations.md) |
 | Storage 职责、保留期与内存 | [`references/storage.md`](references/storage.md)、[`references/protocol.md`](references/protocol.md) |
 | EventBus 凭据与轮换 | [`references/eventbus-credentials.md`](references/eventbus-credentials.md) |
