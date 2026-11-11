@@ -343,6 +343,7 @@
             >
           </div>
           <span v-else class="field-hint">未选择时使用采集方法的默认输出字段。</span>
+          <span v-if="editing" class="field-hint">输出字段只能减少，要新增请新建任务。</span>
         </section>
 
         <a-collapse v-if="!editing" :default-active-key="[]">
@@ -382,7 +383,13 @@
       unmount-on-close
       @close="cancelOutputFieldSelection"
     >
-      <a-alert type="info" show-icon>展示当前空间全部分类的启用字段，可按需选择输出字段。</a-alert>
+      <a-alert type="info" show-icon>
+        {{
+          editing
+            ? "输出字段只能减少，要新增请新建任务。"
+            : "按分组列出可选的输出字段；复权因子、资金费率等附加字段只在所选标签和频率支持时出现，默认不勾。"
+        }}
+      </a-alert>
       <a-alert v-if="outputFieldLoadError" class="output-field-error" type="error" show-icon>
         字段目录加载失败 <a-link @click="loadOutputFieldCatalog(true)">重试</a-link>
       </a-alert>
@@ -398,9 +405,14 @@
                 <strong>{{ section.name }}</strong
                 ><span>{{ section.fields.length }} 个字段</span>
               </div>
-              <a-button size="mini" type="text" @click="toggleOutputFieldSection(section.fields)">
+              <a-button
+                v-if="selectableSectionFields(section.fields).length"
+                size="mini"
+                type="text"
+                @click="toggleOutputFieldSection(section.fields)"
+              >
                 {{
-                  section.fields.every(field => outputFieldDraft.includes(field.field_id))
+                  sectionAllSelected(section.fields)
                     ? outputFieldKeyword
                       ? "取消匹配项"
                       : "取消本组"
@@ -419,6 +431,7 @@
               >
                 <a-checkbox
                   :model-value="outputFieldDraft.includes(field.field_id)"
+                  :disabled="!canSelectOutputField(field.field_id)"
                   @change="setOutputField(field.field_id, $event)"
                 />
                 <span class="output-field-option__text"
@@ -574,6 +587,7 @@ import {
   UpdateTask,
   previewKlineResampleSource,
   type DataTypeConfig,
+  type ExtraFieldOption,
   type ResampleSourcePreview
 } from "@/api/collector";
 import { getDataset, getView, listDataNodes, listFieldGroups, listFields, listTags } from "@/api/storage/metadata";
@@ -587,12 +601,13 @@ import {
   buildCollectionTaskPayload,
   collectionTaskResultLabel,
   collectionTaskNameError,
-  FUNDING_RATE_FIELD_ID,
-  fundingRateFieldAvailable,
   isCrossMarketSelection,
-  pruneFundingRate,
-  shouldDropFundingRate,
-  KLINE_OUTPUT_FIELD_IDS,
+  availableExtraFieldIds,
+  extraFieldOptionsPresent,
+  outputFieldSelectable,
+  outputFieldVisible,
+  pruneUnavailableFields,
+  shouldDropUnavailableFields,
   normalizeCollectionTask,
   parseCollectionTaskInput,
   planTaskGroups,
@@ -659,6 +674,11 @@ const subjectTagIds = ref<string[]>([]);
 const organization = ref<TaskOrganization>("unified");
 const selectedOutputFields = ref<string[]>([]);
 const outputFieldDraft = ref<string[]>([]);
+// 编辑已有任务时任务原来的输出字段：输出字段只能减少，不在这里面的不能勾。
+const originalOutputFields = ref<string[]>([]);
+// 接口给出的附加字段清单（随执行任务类型读取）；读到之前不能判断已选的附加字段是否还可选。
+const extraFieldOptions = ref<ExtraFieldOption[]>([]);
+const extraFieldOptionsLoaded = ref(false);
 const outputFieldsVisible = ref(false);
 const outputFieldCatalog = ref<Field[]>([]);
 const outputFieldGroups = ref<FieldGroup[]>([]);
@@ -672,7 +692,7 @@ let taskTypeFieldRequestToken = 0;
 const outputFieldSections = computed(() => {
   const grouped = new Map<string, Field[]>();
   for (const field of outputFieldCatalog.value) {
-    if (field.field_id === FUNDING_RATE_FIELD_ID && !fundingRateAvailable.value) continue;
+    if (!outputFieldVisible(field.field_id, availableExtraFields.value)) continue;
     const groupID = field.group_id || "";
     const list = grouped.get(groupID) || [];
     list.push(field);
@@ -773,25 +793,27 @@ const pagination = reactive({
   total: 0
 });
 
-// 资金费率只在 K 线、1h/1d、标签全部是具备这项能力的永续时可选，默认不勾。
-const fundingRateAvailable = computed(() =>
-  fundingRateFieldAvailable({
+// 附加字段（资金费率、复权因子等）由接口给出适用的市场、品种和频率，默认不勾；这里算出当前条件下可选的那些。
+const availableExtraFields = computed(() =>
+  availableExtraFieldIds({
     dataType: editor.data_type,
+    spaceId: editor.space_id,
     frequency: frequencyValue.value,
-    routes: selectedTagRoutes.value
+    routes: selectedTagRoutes.value,
+    options: extraFieldOptions.value
   })
 );
-// 条件不再满足时去掉已选的资金费率。编辑已有任务时标签可能还没读到，标签为空时不动，避免误删；新建时标签清空也去掉。
-const fundingRateDropped = computed(() =>
-  shouldDropFundingRate(fundingRateAvailable.value, editorMode.value === "edit", selectedTagRoutes.value.length)
+// 条件不再满足时去掉已选的附加字段。编辑已有任务时标签或附加字段清单可能还没读到，这时不动，避免误删。
+const dropUnavailableFields = computed(() =>
+  shouldDropUnavailableFields(editorMode.value === "edit", selectedTagRoutes.value.length, extraFieldOptionsLoaded.value)
 );
-// 同时监听已选字段：打开任务时判断值可能没变（一直是“去掉”），已选字段换了也要按同一判断清理。
+// 同时监听已选字段：打开任务时判断值可能没变，已选字段换了也要按同一判断清理。
 watch(
-  [fundingRateDropped, selectedOutputFields, outputFieldDraft],
-  ([dropped]) => {
-    const selected = pruneFundingRate(selectedOutputFields.value, dropped);
+  [dropUnavailableFields, availableExtraFields, selectedOutputFields, outputFieldDraft],
+  ([drop, available]) => {
+    const selected = pruneUnavailableFields(selectedOutputFields.value, available, drop);
     if (selected !== selectedOutputFields.value) selectedOutputFields.value = selected;
-    const draft = pruneFundingRate(outputFieldDraft.value, dropped);
+    const draft = pruneUnavailableFields(outputFieldDraft.value, available, drop);
     if (draft !== outputFieldDraft.value) outputFieldDraft.value = draft;
   },
   { immediate: true }
@@ -1021,6 +1043,7 @@ function resetEditor() {
   resamplePreview.value = null;
   resampleError.value = "";
   selectedOutputFields.value = [];
+  originalOutputFields.value = [];
   taskTypeFields.value = [];
   resultConfig.data_node_id = "";
   resultConfig.description = "";
@@ -1069,6 +1092,7 @@ function onUpdate(record: CollectionTaskRecord) {
         }
       : null;
   selectedOutputFields.value = input.outputFields || [];
+  originalOutputFields.value = selectedOutputFields.value.slice();
   outputFieldDraft.value = selectedOutputFields.value.slice();
   editorVisible.value = true;
   void loadTaskTypeFields();
@@ -1144,10 +1168,9 @@ async function loadOutputFieldCatalog(force = false) {
     const allGroupIDs = new Set(groups.map(group => group.group_id));
     const activeGroupIDs = new Set(groups.filter(group => group.status === "active").map(group => group.group_id));
     outputFieldGroups.value = groups;
+    // 这里只按分组是否启用过滤；哪些字段能选（基础 K 线字段加当前可选的附加字段）在分组显示时判断。
     outputFieldCatalog.value = fields.filter(
-      field =>
-        (KLINE_OUTPUT_FIELD_IDS.has(field.field_id) || field.field_id === FUNDING_RATE_FIELD_ID) &&
-        (!field.group_id || activeGroupIDs.has(field.group_id) || !allGroupIDs.has(field.group_id))
+      field => !field.group_id || activeGroupIDs.has(field.group_id) || !allGroupIDs.has(field.group_id)
     );
     outputCatalogSpaceID.value = spaceID;
   } catch (error) {
@@ -1162,16 +1185,29 @@ async function loadOutputFieldCatalog(force = false) {
 }
 
 function setOutputField(fieldID: string, checked: boolean | string | number) {
-  const selected = Boolean(checked);
+  const selected = Boolean(checked) && canSelectOutputField(fieldID);
   outputFieldDraft.value = selected
     ? [...new Set([...outputFieldDraft.value, fieldID])]
     : outputFieldDraft.value.filter(id => id !== fieldID);
 }
 
+/** 编辑已有任务时输出字段只能减少：不在任务原有字段里的不能勾。 */
+function canSelectOutputField(fieldID: string): boolean {
+  return outputFieldSelectable(fieldID, editing.value, originalOutputFields.value);
+}
+
+/** 一组里能勾上的字段（编辑任务时不含不能新增的那些）。 */
+function selectableSectionFields(fields: Field[]): Field[] {
+  return fields.filter(field => canSelectOutputField(field.field_id));
+}
+
+function sectionAllSelected(fields: Field[]): boolean {
+  return selectableSectionFields(fields).every(field => outputFieldDraft.value.includes(field.field_id));
+}
+
 function toggleOutputFieldSection(fields: Field[]) {
-  const fieldIDs = new Set(fields.map(field => field.field_id));
-  const allSelected = [...fieldIDs].every(id => outputFieldDraft.value.includes(id));
-  outputFieldDraft.value = allSelected
+  const fieldIDs = new Set(selectableSectionFields(fields).map(field => field.field_id));
+  outputFieldDraft.value = sectionAllSelected(fields)
     ? outputFieldDraft.value.filter(id => !fieldIDs.has(id))
     : [...new Set([...outputFieldDraft.value, ...fieldIDs])];
 }
@@ -1188,15 +1224,16 @@ function cancelOutputFieldSelection() {
 async function loadTaskTypeFields() {
   const token = ++taskTypeFieldRequestToken;
   const dataType = editor.data_type;
-  if (!dataType) {
-    taskTypeFields.value = [];
-    return;
-  }
+  extraFieldOptions.value = [];
+  extraFieldOptionsLoaded.value = false;
   taskTypeFields.value = [];
+  if (!dataType) return;
   try {
     const response = await GetDataTypeConfigWithFields(dataType);
     if (token !== taskTypeFieldRequestToken || editor.data_type !== dataType) return;
     taskTypeFields.value = [...(response.detail?.fields || [])].sort((a, b) => a.sort_order - b.sort_order);
+    extraFieldOptions.value = response.detail?.extra_fields || [];
+    extraFieldOptionsLoaded.value = extraFieldOptionsPresent(response.detail);
   } catch (error) {
     if (token === taskTypeFieldRequestToken) {
       taskTypeFields.value = [];
@@ -1221,8 +1258,8 @@ function currentTaskInput(): CollectionTaskInput {
     frequency: frequencyValue.value,
     subjectTags: subjectTagIds.value.slice(),
     sourceTaskId: sourceTaskId.value,
-    // 提交前按条件再过滤一次：条件不满足时不带资金费率。
-    outputFields: selectedOutputFields.value.filter(id => id !== FUNDING_RATE_FIELD_ID || !fundingRateDropped.value)
+    // 提交前按条件再过滤一次：条件不满足的附加字段不带。
+    outputFields: pruneUnavailableFields(selectedOutputFields.value, availableExtraFields.value, dropUnavailableFields.value)
   };
 }
 

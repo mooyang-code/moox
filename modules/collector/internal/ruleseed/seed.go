@@ -23,13 +23,15 @@ type taskSeed struct {
 }
 
 type taskSeedItem struct {
-	SpaceID       string         `yaml:"space_id"`
-	TaskID        string         `yaml:"task_id"`
-	TaskName      string         `yaml:"task_name"`
-	Description   string         `yaml:"description"`
-	DataType      string         `yaml:"data_type"`
-	TagIDs        []string       `yaml:"tag_ids"`
-	Enabled       bool           `yaml:"enabled"`
+	SpaceID     string   `yaml:"space_id"`
+	TaskID      string   `yaml:"task_id"`
+	TaskName    string   `yaml:"task_name"`
+	Description string   `yaml:"description"`
+	DataType    string   `yaml:"data_type"`
+	TagIDs      []string `yaml:"tag_ids"`
+	Enabled     bool     `yaml:"enabled"`
+	// Start 只给 moox-cli setup start 用：manual 表示不随空间启动自动启用。不进任务表。
+	Start         string         `yaml:"start"`
 	Creator       string         `yaml:"creator"`
 	CollectParams map[string]any `yaml:"collect_params"`
 }
@@ -107,6 +109,9 @@ func validateTaskSeedItem(item taskSeedItem) (domain.CollectionTask, error) {
 	}
 	if spaceID == "" || taskID == "" || dataType == "" {
 		return domain.CollectionTask{}, fmt.Errorf("space_id, task_id and data_type are required")
+	}
+	if start := strings.TrimSpace(item.Start); start != "" && start != "manual" {
+		return domain.CollectionTask{}, fmt.Errorf("start must be empty or manual")
 	}
 	if dataType != "kline_resample" && len(tagIDs) == 0 {
 		return domain.CollectionTask{}, fmt.Errorf("tag_ids are required for direct collection tasks")

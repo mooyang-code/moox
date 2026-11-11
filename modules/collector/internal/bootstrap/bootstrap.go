@@ -118,6 +118,7 @@ func Initialize(ctx context.Context, s *server.Server) (*Runtime, error) {
 		return nil, fmt.Errorf("initialize collector result metadata client: %w", resultMetadataErr)
 	}
 	resultManager := collectorresult.NewManagerWithCleaner(resultMetadata.Client, resultMetadata.Primary, resultMetadata.Auth)
+	resultManager.SetFieldOffers(marketwiring.FieldOffers())
 	if err := ensureTaskResultMetadata(ctx, dbm.Tasks(), resultManager, cfg.Storage.ResultDataNodeID); err != nil {
 		return nil, fmt.Errorf("initialize collector task results: %w", err)
 	}
@@ -126,8 +127,8 @@ func Initialize(ctx context.Context, s *server.Server) (*Runtime, error) {
 		RealtimeInventory: realtimeInventory,
 		ResultManager:     resultManager,
 		ResultDataNodeID:  cfg.Storage.ResultDataNodeID,
-		// 资金费率是行情源的可选能力：建任务、改任务时按行情源目录判断。
-		SupportsFundingRate: marketwiring.SupportsFundingRate,
+		// 附加字段由行情源目录里的来源提供：建任务、改任务、任务表单都按目录判断。
+		FieldOffers: marketwiring.FieldOffers(),
 	})
 	collectorpb.RegisterCollectMgrService(s.Service("trpc.moox.collector.CollectMgr"), svc)
 	marketFetchMetrics := marketfetch.NewMetrics(prometheus.DefaultRegisterer)

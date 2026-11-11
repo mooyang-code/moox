@@ -29,3 +29,33 @@ tasks:
   creator: moox-setup
   collect_params:
     frequency: 5m
+# start: manual 的任务 setup start 不会启用，由用户用 moox-cli collector task update --enabled=true 显式启用。
+- space_id: stockcn
+  task_id: dasftksvjhj2jom4vhi0
+  task_name: A 股 K 线 1d
+  data_type: kline
+  tag_ids: [cn_hs300]
+  enabled: false
+  start: manual
+  creator: moox-setup
+  collect_params:
+    frequency: 1d
+# 附加字段只能在建任务时选全，所以这个任务一次带齐复权、行业、财务的全部字段；基础字段与 A 股默认输出一致。
+- space_id: stockcn
+  task_id: dasftksvjhj2jom4vhhg
+  task_name: A 股日线（复权、行业、财务）
+  data_type: kline
+  tag_ids: [cn_hs300]
+  enabled: false
+  start: manual
+  creator: moox-setup
+  collect_params:
+    output_fields: [
+      open, high, low, close, volume, amount,
+      instrument_name, trade_date, close_time, volume_unit, amount_unit, provider_symbol, provider_timestamp, fetched_at,
+      request_id, route_id, route_rank, source_provider, quality_status, amount_quality, provider_id, source_id,
+      adj_factor, sw_l1, sw_l2, sw_l3,
+      fin_report_period, fin_total_revenue, fin_revenue, fin_operating_profit, fin_net_profit, fin_net_profit_parent, fin_eps_basic, fin_total_assets, fin_total_liabilities, fin_equity_parent, fin_operating_cash_flow,
+      fin_total_revenue_ttm, fin_revenue_ttm, fin_operating_profit_ttm, fin_net_profit_ttm, fin_net_profit_parent_ttm, fin_eps_basic_ttm, fin_operating_cash_flow_ttm
+    ]
+    frequency: 1d

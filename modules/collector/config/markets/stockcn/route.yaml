@@ -28,3 +28,12 @@ klines:
       - {id: eastmoney, source_id: stockcn_http, weight: 2, role: primary}
       - {id: sina, source_id: stockcn_minute_http, weight: 1, role: fallback}
       - {id: tencent, source_id: stockcn_http, weight: 1, role: fallback}
+  # 1d：键是交易日期的 UTC 零点，都不复权，成交量单位都是股。交易日 D 的日线在 D+1 日 00:00 UTC（北京时间 08:00）到期并采集。
+  # 2026-11-11 实测 600519、000001、300750 同 10 个交易日：开高低收逐根相同；东方财富的成交量以手为单位（×100 换成股），
+  # 与通达信差在 100 股以内；通达信的成交额是 float32（末位有误差）。
+  # - tdx：从最新一根往回取到区间起点，回看声明 10 年。
+  # - eastmoney：push2his klt=101，按日期区间取，能取到上市首日；新上市不足区间、通达信证明不了覆盖的标的由它补。
+  - frequency: 1d
+    providers:
+      - {id: tdx, source_id: normal_7709, weight: 1, role: primary}
+      - {id: eastmoney, source_id: stockcn_http, weight: 1, role: fallback}

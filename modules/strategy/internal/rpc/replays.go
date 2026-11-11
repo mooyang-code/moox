@@ -132,7 +132,7 @@ func (s *Service) StartReplay(ctx context.Context, req *strategypb.StartReplayRe
 	if fundingColumn != "" && (resolved.Market.Single() || resolved.Unified()) && !slices.Contains(resolved.ViewColumns, fundingColumn) {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(fmt.Errorf("永续的 View 没有资金费列 %s", fundingColumn))}, nil
 	}
-	// A 股日线按上海日期回放：区间两端换成所在上海日期的零点，记录与执行都用换算后的区间。
+	// A 股日线按上海日期回放：区间两端换成所在上海日期的零点，记录与执行都用换算后的区间（行键是交易日期的 UTC 零点，见 input.ReplayRange）。
 	if start, end, err = input.ReplayRange(resolved.Calendar, resolved.Bar, start, end); err != nil {
 		return &strategypb.StartReplayRsp{RetInfo: invalid(err)}, nil
 	}

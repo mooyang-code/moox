@@ -43,19 +43,15 @@ func TestHandleLogsUnmappablePeriods(t *testing.T) {
 	h.rebindStock()
 	var logs []string
 	h.handler.Logf = func(format string, args ...any) { logs = append(logs, fmt.Sprintf(format, args...)) }
-	location, err := time.LoadLocation("Asia/Shanghai")
-	if err != nil {
-		t.Fatal(err)
-	}
 	deliver := func(day time.Time) error {
 		message := &eventpb.EventMessage{EventId: "event-" + day.Format("0102"), EventName: "event.storage.view.data_ready", SpaceId: "space"}
 		payload := &storagepb.ViewDataReady{ViewId: "view_factor_a", Frequency: "1d", PeriodTime: day.Unix(), Status: "complete", UniverseSubjectIds: []string{"A"}}
 		return h.handler.Handle(context.Background(), message, payload)
 	}
 	// 国庆假期不是交易日：无法确定周期边界。
-	expectAck(t, deliver(time.Date(2026, 10, 5, 0, 0, 0, 0, location)))
+	expectAck(t, deliver(time.Date(2026, 10, 5, 0, 0, 0, 0, time.UTC)))
 	// 内嵌日历只到 2027-12-31：12-30 的有效期要推到 2028 年，无法推算。
-	expectAck(t, deliver(time.Date(2027, 12, 30, 0, 0, 0, 0, location)))
+	expectAck(t, deliver(time.Date(2027, 12, 30, 0, 0, 0, 0, time.UTC)))
 	if len(logs) != 2 || !strings.Contains(logs[0], "无法确定周期边界") || !strings.Contains(logs[1], "无法推算有效期") {
 		t.Fatalf("两期都应留下日志：%q", logs)
 	}

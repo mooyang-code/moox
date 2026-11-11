@@ -148,19 +148,24 @@ type roundTrip func(*http.Request) (*http.Response, error)
 
 func (f roundTrip) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
 
-// fakeServer 模拟通达信服务端：按交易时段生成 5m K 线，时间标签是收盘时刻；交易时段内最新一根是未收盘的那根。
+// fakeServer 模拟通达信服务端：按交易时段生成 K 线（5m 或 1d），时间标签是收盘时刻；交易时段内最新一根是未收盘的那根。
 type fakeServer struct {
+	category tdxwire.KlineCategory
 	bars     []tdxwire.Bar
 	requests [][2]int
 }
 
 func newFakeServer(t *testing.T, from, now time.Time) *fakeServer {
+	return newFakeServerFor(t, "5m", tdxwire.Category5Min, from, now)
+}
+
+func newFakeServerFor(t *testing.T, frequency string, category tdxwire.KlineCategory, from, now time.Time) *fakeServer {
 	t.Helper()
-	clock, err := markets.Clock("stockcn", "5m")
+	clock, err := markets.Clock("stockcn", frequency)
 	require.NoError(t, err)
 	buckets, err := clock.Between(from, now, 10000)
 	require.NoError(t, err)
-	server := &fakeServer{}
+	server := &fakeServer{category: category}
 	for i, bucket := range buckets {
 		price := 100 + float64(i)
 		server.bars = append(server.bars, tdxwire.Bar{Time: bucket.End.In(shanghai), Open: price, High: price + 1, Low: price - 1, Close: price + 0.5, Volume: 1000, Amount: 100000})
@@ -169,7 +174,7 @@ func newFakeServer(t *testing.T, from, now time.Time) *fakeServer {
 }
 
 func (s *fakeServer) page(_ context.Context, _ tdxwire.Market, _ string, category tdxwire.KlineCategory, start, count int) ([]tdxwire.Bar, error) {
-	if category != tdxwire.Category5Min || count > tdxMaxBarsPerPage {
+	if category != s.category || count > tdxMaxBarsPerPage {
 		return nil, fmt.Errorf("unexpected page category=%d count=%d", category, count)
 	}
 	s.requests = append(s.requests, [2]int{start, count})
@@ -241,4 +246,190 @@ func TestFetchKlinesDuringLunchUsesTheMorningLastBar(t *testing.T) {
 	require.Equal(t, [][2]int{{0, 1}}, server.requests)
 	require.Len(t, rows, 1)
 	require.Equal(t, cst("2026-11-04", "11:25").UTC(), rows[0].BarStart)
+}
+
+// 日线、周线、月线的键是日期键：日线是交易日期的 UTC 零点，周线是所在周周一，月线是当月 1 日（都按 UTC 零点），
+// 能通过采集的统一校验。
+func TestNormalizeBarsDailyUsesDateKeys(t *testing.T) {
+	bar := tdxwire.Bar{Time: cst("2026-11-10", "15:00"), Open: 1438.23, High: 1444.5, Low: 1431.26, Close: 1439, Volume: 2303784, Amount: 3316078848}
+	fetchedAt := time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC) // 三个周期都已收盘，未收盘的根不返回
+	for frequency, want := range map[string]time.Time{
+		"1d":  time.Date(2026, 11, 10, 0, 0, 0, 0, time.UTC),
+		"1w":  time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC), // 2026-11-10 是周二，所在周的周一是 11-09
+		"1mo": time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC),
+	} {
+		rows, err := normalizeBars("600519.XSHG", "sh600519", frequency, []tdxwire.Bar{bar}, fetchedAt, "daily")
+		require.NoError(t, err, frequency)
+		require.Equal(t, want, rows[0].BarStart, frequency)
+		require.NoError(t, marketdata.ValidateNormalizedKline(rows[0]), frequency)
+	}
+	rows, err := normalizeBars("600519.XSHG", "sh600519", "1d", []tdxwire.Bar{bar}, fetchedAt, "daily")
+	require.NoError(t, err)
+	require.Equal(t, time.Date(2026, 11, 11, 0, 0, 0, 0, time.UTC), rows[0].BarEnd, "日线的 bar_end 是键加 24 小时")
+	require.Equal(t, cst("2026-11-10", "15:00").UTC(), rows[0].ProviderTimestamp)
+	require.Equal(t, 2303784.0, rows[0].VolumeShares)
+}
+
+// 2026-11-11 从 shtdx.gtjas.com:7709 实际取回的 600519 日线（category 4，2025-11-03～2025-11-14 共 10 个交易日），
+// 与同一时刻东方财富 klt=101 的原始返回（eastmoney/testdata/kline_1d_600519_20251103_20251115.json）逐根比对：
+// 键与开高低收完全相同；东方财富的成交量以手为单位，换成股后与通达信差在 100 股以内；成交额只差通达信 float32 的精度。
+func TestTDXDailyMatchesRecordedEastMoney(t *testing.T) {
+	type daily struct {
+		day                    string
+		open, high, low, close float64
+		volume, amount         float64
+	}
+	recorded := []daily{
+		{"2025-11-03", 1431, 1448, 1420.1, 1435, 3454766, 4.94531072e+09},
+		{"2025-11-04", 1435.1, 1435.78, 1423.78, 1429, 2656572, 3.793892864e+09},
+		{"2025-11-05", 1425.89, 1430.99, 1420.01, 1420.08, 3447527, 4.908475392e+09},
+		{"2025-11-06", 1430, 1441.45, 1429.99, 1435.13, 3834782, 5.505960448e+09},
+		{"2025-11-07", 1435.11, 1439.78, 1431.11, 1433.33, 1886139, 2.70499584e+09},
+		{"2025-11-10", 1435, 1463.69, 1434.98, 1462.3, 4945154, 7.181246464e+09},
+		{"2025-11-11", 1462, 1462.18, 1447, 1458.99, 2669156, 3.882776832e+09},
+		{"2025-11-12", 1459.98, 1478.36, 1459.21, 1465.15, 3299210, 4.849073152e+09},
+		{"2025-11-13", 1462.12, 1473.58, 1458, 1470.38, 3117923, 4.569178112e+09},
+		{"2025-11-14", 1470, 1478.95, 1456.3, 1456.6, 2747306, 4.031007232e+09},
+	}
+	bars := make([]tdxwire.Bar, 0, len(recorded))
+	for _, item := range recorded {
+		bars = append(bars, tdxwire.Bar{Time: cst(item.day, "15:00"), Open: item.open, High: item.high, Low: item.low, Close: item.close, Volume: item.volume, Amount: item.amount})
+	}
+	tdxRows, err := normalizeBars("600519.XSHG", "sh600519", "1d", bars, time.Now().UTC(), "tdx")
+	require.NoError(t, err)
+
+	eastBody, err := os.ReadFile(filepath.Join("..", "eastmoney", "testdata", "kline_1d_600519_20251103_20251115.json"))
+	require.NoError(t, err)
+	client := &http.Client{Transport: roundTrip(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(eastBody)), Header: http.Header{}}, nil
+	})}
+	now := cst("2026-11-11", "18:00")
+	eastRows, err := eastmoney.New(eastmoney.Config{HTTPClient: client, Now: func() time.Time { return now }}).FetchKlines(context.Background(), marketdata.KlineRequest{
+		SubjectID: "600519.XSHG", ProviderSymbol: "sh600519", Frequency: "1d", Limit: 12, Now: now.UTC(), RequestID: "east",
+		StartTime: time.Date(2025, 11, 3, 0, 0, 0, 0, time.UTC), EndTime: time.Date(2025, 11, 15, 0, 0, 0, 0, time.UTC),
+	})
+	require.NoError(t, err)
+	require.Len(t, eastRows, len(tdxRows))
+	for i := range tdxRows {
+		left, right := tdxRows[i], eastRows[i]
+		require.Equal(t, right.BarStart, left.BarStart, "第 %d 根", i)
+		require.Equal(t, right.BarEnd, left.BarEnd, "第 %d 根", i)
+		require.Equal(t, []float64{right.Open, right.High, right.Low, right.Close}, []float64{left.Open, left.High, left.Low, left.Close}, "第 %d 根", i)
+		require.InDelta(t, right.VolumeShares, left.VolumeShares, 100, "第 %d 根成交量差在一手以内", i)
+		require.InEpsilon(t, right.AmountCNY, left.AmountCNY, 1e-6, "第 %d 根成交额只差 float32 精度", i)
+	}
+	require.Equal(t, time.Date(2025, 11, 3, 0, 0, 0, 0, time.UTC), tdxRows[0].BarStart)
+}
+
+// 日线从最新一根取到区间起点：能取到指定的老区间，区间之后停过牌也不缺根。
+func TestFetchKlinesDailyReadsTheRequestedDays(t *testing.T) {
+	day := func(value string) time.Time {
+		parsed, err := time.Parse(time.DateOnly, value)
+		require.NoError(t, err)
+		return parsed
+	}
+	fetchAt := func(now time.Time, pageSize int) (*fakeServer, func(marketdata.KlineRequest) []marketdata.NormalizedKline) {
+		server := newFakeServerFor(t, "1d", tdxwire.CategoryDay, day("2024-01-02"), now.UTC())
+		provider := New(Config{Now: func() time.Time { return now }, MaxBarsPerRequest: pageSize})
+		provider.fetchPage = server.page
+		return server, func(req marketdata.KlineRequest) []marketdata.NormalizedKline {
+			req.SubjectID, req.ProviderSymbol, req.ExchangeID, req.Frequency, req.RequestID = "600519.XSHG", "sh600519", "XSHG", "1d", "daily"
+			rows, err := provider.FetchKlines(context.Background(), req)
+			require.NoError(t, err)
+			return rows
+		}
+	}
+
+	// 周期提交：交易日 2026-11-10 的日线在 11-11 00:00 UTC（北京时间 08:00）到期，此时服务端最新一根就是它。
+	server, fetch := fetchAt(cst("2026-11-11", "08:00").Add(5*time.Second), 800)
+	rows := fetch(marketdata.KlineRequest{Limit: 1, StartTime: day("2026-11-10"), EndTime: day("2026-11-11")})
+	require.Equal(t, [][2]int{{0, 2}}, server.requests, "多取一根较旧的")
+	require.Len(t, rows, 2)
+	require.Equal(t, day("2026-11-10"), rows[1].BarStart)
+
+	for _, pageSize := range []int{800, 100} {
+		// 补采一年前的两周：从最新一根取起，一直取到区间起点，区间之后的部分留给管线截掉。
+		server, fetch = fetchAt(cst("2026-11-11", "08:00").Add(5*time.Second), pageSize)
+		rows = fetch(marketdata.KlineRequest{Limit: 12, StartTime: day("2025-11-03"), EndTime: day("2025-11-15")})
+		require.Equal(t, day("2025-11-03"), rows[1].BarStart, "起点之前多取一根")
+		require.Equal(t, day("2026-11-10"), rows[len(rows)-1].BarStart)
+		require.Equal(t, 0, server.requests[len(server.requests)-1][0], "最新的一页从偏移 0 取起：%v", server.requests)
+
+		// 起点落在非交易日（2025-11-01 是周六）：从其后第一个交易日取起。
+		rows = fetch(marketdata.KlineRequest{Limit: 3, StartTime: day("2025-11-01"), EndTime: day("2025-11-04")})
+		require.Equal(t, day("2025-11-03"), rows[1].BarStart)
+
+		// 补最近一年：超过单页上限时分页，首尾都在。
+		server.requests = nil
+		rows = fetch(marketdata.KlineRequest{Limit: 366, StartTime: day("2025-11-11"), EndTime: day("2026-11-11")})
+		require.Equal(t, day("2025-11-11"), rows[1].BarStart)
+		require.Equal(t, day("2026-11-10"), rows[len(rows)-1].BarStart)
+		if pageSize == 100 {
+			require.Greater(t, len(server.requests), 1)
+		} else {
+			require.Len(t, server.requests, 1)
+		}
+	}
+
+	// 标的在补采区间之后停牌 5 个交易日：服务端少 5 根，区间内的 10 根仍然取全。
+	server, fetch = fetchAt(cst("2026-11-11", "08:00").Add(5*time.Second), 800)
+	kept := server.bars[:0]
+	for _, bar := range server.bars {
+		if date := bar.Time.Format(time.DateOnly); date < "2026-10-12" || date > "2026-10-16" {
+			kept = append(kept, bar)
+		}
+	}
+	require.Len(t, kept, len(server.bars)-5)
+	server.bars = kept
+	rows = fetch(marketdata.KlineRequest{Limit: 12, StartTime: day("2025-11-03"), EndTime: day("2025-11-15")})
+	require.False(t, rows[0].BarStart.After(day("2025-11-03")))
+	inRange := 0
+	for _, row := range rows {
+		if !row.BarStart.Before(day("2025-11-03")) && row.BarStart.Before(day("2025-11-15")) {
+			inRange++
+		}
+	}
+	require.Equal(t, 10, inRange)
+
+	// 交易时段内服务端最新一根是当天未收盘的那根：目标是上一交易日，未收盘那根不返回。
+	server, fetch = fetchAt(cst("2026-11-11", "10:07"), 800)
+	rows = fetch(marketdata.KlineRequest{Limit: 1, StartTime: day("2026-11-10"), EndTime: day("2026-11-11")})
+	require.Equal(t, [][2]int{{0, 3}}, server.requests)
+	require.Len(t, rows, 2)
+	require.Equal(t, day("2026-11-10"), rows[1].BarStart)
+}
+
+// 08:00 取日线时服务端在最新位置给一根价格为 0 的当天占位根：它还没收盘，跳过，不让整次取数报错。
+func TestFetchKlinesSkipsUnclosedPlaceholderBar(t *testing.T) {
+	now := cst("2026-11-11", "08:00").Add(5 * time.Second)
+	from, err := time.Parse(time.DateOnly, "2026-11-02")
+	require.NoError(t, err)
+	server := newFakeServerFor(t, "1d", tdxwire.CategoryDay, from, now.UTC())
+	closedBars := len(server.bars)
+	server.bars = append(server.bars, tdxwire.Bar{Time: cst("2026-11-11", "15:00")})
+	provider := New(Config{Now: func() time.Time { return now }})
+	provider.fetchPage = server.page
+	rows, err := provider.FetchKlines(context.Background(), marketdata.KlineRequest{
+		SubjectID: "600519.XSHG", ProviderSymbol: "sh600519", ExchangeID: "XSHG", Frequency: "1d", RequestID: "placeholder",
+		Limit: 1, StartTime: from.AddDate(0, 0, 8), EndTime: from.AddDate(0, 0, 9),
+	})
+	require.NoError(t, err)
+	require.NotEmpty(t, rows)
+	require.LessOrEqual(t, len(rows), closedBars)
+	require.Equal(t, from.AddDate(0, 0, 8), rows[len(rows)-1].BarStart, "最后一根是 11-10，占位根不返回")
+
+	// 已收盘的根价格为 0 仍然报错。
+	server.bars[closedBars-1].Close = 0
+	_, err = provider.FetchKlines(context.Background(), marketdata.KlineRequest{
+		SubjectID: "600519.XSHG", ProviderSymbol: "sh600519", ExchangeID: "XSHG", Frequency: "1d", RequestID: "bad",
+		Limit: 1, StartTime: from.AddDate(0, 0, 8), EndTime: from.AddDate(0, 0, 9),
+	})
+	require.Error(t, err)
+}
+
+func TestKlineSpecDeclaresDailyLookbackBeyondOneYear(t *testing.T) {
+	spec := New(Config{}).KlineSpec()
+	require.GreaterOrEqual(t, spec.HistoryFor("1d").MaxLookback, 800*24*time.Hour)
+	require.Equal(t, 365*24*time.Hour, spec.HistoryFor("5m").MaxLookback)
+	require.Equal(t, 90*24*time.Hour, spec.HistoryFor("1m").MaxLookback)
 }

@@ -1,4 +1,4 @@
-import type { CollectorTask, CollectionTaskPayload } from "@/api/collector";
+import type { CollectorTask, CollectionTaskPayload, ExtraFieldOption } from "@/api/collector";
 import { normalizeFrequency } from "@/utils/frequency";
 import { marketLabel } from "@/views/data/shared/series-market";
 import { getTaskResultState, getTaskResultViewIds } from "@/views/collector/task-results/task-results-model";
@@ -32,45 +32,78 @@ export const KLINE_OUTPUT_FIELD_IDS: ReadonlySet<string> = new Set([
   "amount_quality"
 ]);
 
-/** 资金费率：行情源的可选能力，只在显式选中时采集，条件满足时才在输出字段里显示。 */
-export const FUNDING_RATE_FIELD_ID = "funding_rate";
-// 具备资金费率能力的行情源（与后端行情源目录一致：目前只有币安 U 本位永续）。
-const FUNDING_RATE_SOURCES: ReadonlySet<string> = new Set(["binance"]);
-// 1m～30m 收盘时结算记录可能还没公布；1w、1M 推送不支持。
-const FUNDING_RATE_FREQUENCIES: ReadonlySet<string> = new Set(["1h", "1d"]);
-
-export interface FundingRateCondition {
+/** 附加字段的可选条件：任务类型、所在空间（市场）、频率、所选标签的品种，以及接口给出的附加字段清单。 */
+export interface ExtraFieldCondition {
   dataType: string;
+  spaceId: string;
   frequency: string;
-  routes: ReadonlyArray<{ source: string; market: string }>;
+  routes: ReadonlyArray<{ market: string }>;
+  options: ReadonlyArray<ExtraFieldOption>;
 }
 
-/** 资金费率是否可选：K 线采集、频率 1h 或 1d、所选标签全部是具备这项能力的行情源的永续（统一数据集不行）。 */
-export function fundingRateFieldAvailable(condition: FundingRateCondition): boolean {
-  if (condition.dataType !== "kline") return false;
-  if (!FUNDING_RATE_FREQUENCIES.has(normalizeFrequency(condition.frequency || ""))) return false;
-  if (!condition.routes.length) return false;
-  return condition.routes.every(
-    route => route.market === "swap" && FUNDING_RATE_SOURCES.has((route.source || "").trim().toLowerCase())
-  );
-}
+const foldText = (value: string | undefined) => (value || "").trim().toLowerCase();
 
 /**
- * 是否该去掉已选的资金费率：条件不满足时去掉；但编辑已有任务时标签为空（还没读到或读取失败）不能判断条件，保留。
- * 提交前的过滤与条件变化时的清理用同一个判断。
+ * 当前可选的附加字段：只有 K 线采集有；字段要在本空间、当前频率下可用，并且所选的每个标签的品种都有来源
+ * （所以现货加永续的统一数据集选不了资金费率）。没选标签时一个都不可选。与后端建任务的校验一致。
  */
-export function shouldDropFundingRate(available: boolean, editing: boolean, routeCount: number): boolean {
-  if (available) return false;
-  return !(editing && routeCount === 0);
+export function availableExtraFieldIds(condition: ExtraFieldCondition): Set<string> {
+  const available = new Set<string>();
+  if (condition.dataType !== "kline" || !condition.routes.length) return available;
+  const space = foldText(condition.spaceId);
+  const frequency = normalizeFrequency(condition.frequency || "");
+  const instruments = [...new Set(condition.routes.map(route => foldText(route.market)))];
+  const offered = new Map<string, Set<string>>();
+  for (const option of condition.options) {
+    if (foldText(option.market_id) !== space) continue;
+    if (!(option.frequencies || []).some(item => normalizeFrequency(item) === frequency)) continue;
+    const id = foldText(option.field_id);
+    offered.set(id, (offered.get(id) || new Set<string>()).add(foldText(option.instrument_type)));
+  }
+  for (const [id, markets] of offered) {
+    if (instruments.every(instrument => markets.has(instrument))) available.add(id);
+  }
+  return available;
+}
+
+/** 输出字段清单里是否显示这个字段：基础 K 线字段总是显示，其余只有当前可选的附加字段才显示。 */
+export function outputFieldVisible(fieldId: string, available: ReadonlySet<string>): boolean {
+  return KLINE_OUTPUT_FIELD_IDS.has(fieldId) || available.has(foldText(fieldId));
 }
 
 /**
- * 按 shouldDropFundingRate 的结果清理已选字段：需要去掉且确实选了时返回新数组，否则原样返回同一个数组
+ * 条件不满足时是否去掉已选的附加字段。编辑已有任务时，标签为空（还没读到或读取失败）或附加字段清单还没读到，
+ * 都判断不了条件，保留；其余情况去掉。提交前的过滤与条件变化时的清理用同一个判断。
+ */
+export function shouldDropUnavailableFields(editing: boolean, routeCount: number, optionsLoaded: boolean): boolean {
+  return !(editing && (routeCount === 0 || !optionsLoaded));
+}
+
+/**
+ * 响应里有没有带附加字段清单。旧版 Collector 的响应没有 extra_fields，这时不能当成“清单为空”：
+ * 否则编辑已有任务时会把已选的附加字段（例如 funding_rate）当成不可选去掉再提交。
+ */
+export function extraFieldOptionsPresent(detail: { extra_fields?: unknown } | null | undefined): boolean {
+  return Array.isArray(detail?.extra_fields);
+}
+
+/**
+ * 去掉已选字段里当前不可选的附加字段：确实有要去掉的才返回新数组，否则原样返回同一个数组
  * （调用方据此判断要不要赋值，避免监听已选字段时反复触发）。
  */
-export function pruneFundingRate(fields: string[], dropped: boolean): string[] {
-  if (!dropped || !fields.includes(FUNDING_RATE_FIELD_ID)) return fields;
-  return fields.filter(id => id !== FUNDING_RATE_FIELD_ID);
+export function pruneUnavailableFields(fields: string[], available: ReadonlySet<string>, drop: boolean): string[] {
+  if (!drop || fields.every(id => outputFieldVisible(id, available))) return fields;
+  return fields.filter(id => outputFieldVisible(id, available));
+}
+
+/**
+ * 这个字段现在能不能勾上。新建任务都可以；编辑已有任务时输出字段只能减少：只有任务原来就有的字段可以重新勾上，
+ * 原来没有显式选择（用默认字段）时可以收窄到基础字段，但不能勾附加字段。与后端改任务的校验一致。
+ */
+export function outputFieldSelectable(fieldId: string, editing: boolean, originalFields: ReadonlyArray<string>): boolean {
+  if (!editing) return true;
+  if (!originalFields.length) return KLINE_OUTPUT_FIELD_IDS.has(fieldId);
+  return originalFields.some(id => foldText(id) === foldText(fieldId));
 }
 
 export type CollectionTaskMarket = "spot" | "swap" | "equity" | "multi";

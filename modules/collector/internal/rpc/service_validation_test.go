@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/taskresult"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
@@ -1112,10 +1113,9 @@ func TestValidateCollectionTaskTagRoutesFundingRate(t *testing.T) {
 		"binance_spot": {TagId: "binance_spot", Attributes: map[string]string{"sync.source": "binance", "market_type": "spot"}},
 		"binance_swap": {TagId: "binance_swap", Attributes: map[string]string{"sync.source": "binance", "market_type": "swap"}},
 	}
-	capable := func(spaceID, provider, marketType string) bool {
-		return spaceID == "crypto" && provider == "binance" && marketType == "swap"
-	}
-	service := &Service{datasetSrc: tagValidationSource{tags: tags}, supportsFundingRate: capable}
+	offers := marketdata.FieldOffers{{MarketID: "crypto", Instrument: "swap", ProviderID: "binance",
+		Spec: marketdata.FieldSpec{ID: "funding_rate", Type: marketdata.FieldTypeDouble, Fill: "zero", Frequencies: []string{"1h", "1d"}}}}
+	service := &Service{datasetSrc: tagValidationSource{tags: tags}, fieldOffers: offers}
 	withFunding := func(frequency string) string {
 		return `{"target_dataset_id":"bars","frequency":"` + frequency + `","output_fields":["close","funding_rate"]}`
 	}
@@ -1131,13 +1131,9 @@ func TestValidateCollectionTaskTagRoutesFundingRate(t *testing.T) {
 
 	task.CollectParams = withFunding("1h")
 	task.TagIDs = []string{"binance_spot"}
-	require.ErrorContains(t, service.validateCollectionTaskTagRoutes(context.Background(), task), "只适用于永续")
+	require.ErrorContains(t, service.validateCollectionTaskTagRoutes(context.Background(), task), "标签 binance_spot 的市场 spot 下没有来源", "只有永续有来源")
 	task.TagIDs = []string{"binance_spot", "binance_swap"}
 	require.ErrorContains(t, service.validateCollectionTaskTagRoutes(context.Background(), task), "统一数据集", "现货加永续不支持")
-
-	task.TagIDs = []string{"binance_swap"}
-	service.supportsFundingRate = nil
-	require.ErrorContains(t, service.validateCollectionTaskTagRoutes(context.Background(), task), "资金费率能力")
 
 	// 不选这个字段时行为不变。
 	task.CollectParams = `{"target_dataset_id":"bars","frequency":"1m"}`

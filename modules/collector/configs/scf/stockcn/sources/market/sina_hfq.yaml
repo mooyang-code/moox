@@ -1,0 +1,14 @@
+provider:
+  id: sina_hfq
+  market: stockcn
+  # 只提供日线的附加字段（后复权因子），不取 K 线、不进路由配置。
+  enabled_feeds: []
+  hosts: [finance.sina.com.cn]
+  rate_limit:
+    scope: egress_ip
+    # 2026-11-11 国内实测：单次 0.08 秒；八个函数共用一个出口、并发 64 时全部成功，没有限频。
+    requests_per_second: 50
+    burst: 20
+    max_concurrent: 16
+    cooldown: 1s
+    request_timeout: 5s

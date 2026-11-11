@@ -311,7 +311,7 @@ func (g *Gate) commit(slot *periodSlot) {
 			bar := slot.bars[position]
 			if slot.wantsFunding {
 				value, _ := g.cfg.Funding.Sum(slot.symbols(bar.SubjectID), slot.period, slot.close)
-				bar.FundingRate = &value
+				bar.Extra = map[string]marketdata.FieldValue{domain.FieldFundingRate: marketdata.DoubleField(value)}
 			}
 			bars = append(bars, bar)
 			positions = append(positions, position)

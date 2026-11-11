@@ -273,57 +273,70 @@ type stockCNProviderRuntime struct {
 }
 
 func loadStockCNProviderRuntime(route stockCNRoute) (map[string]stockCNProviderRuntime, error) {
-	paths := stockCNProviderConfigPaths()
 	ids := route.ProviderIDs()
 	result := make(map[string]stockCNProviderRuntime, len(ids))
 	for _, id := range ids {
-		var file stockCNProviderFile
-		var found string
-		for _, dir := range paths {
-			candidate := filepath.Join(dir, id+".yaml")
-			if _, err := os.Stat(candidate); err != nil {
-				continue
-			}
-			raw, err := os.ReadFile(candidate)
-			if err != nil {
-				return nil, err
-			}
-			decoder := yaml.NewDecoder(strings.NewReader(string(raw)))
-			decoder.KnownFields(true)
-			if err := decoder.Decode(&file); err != nil {
-				return nil, fmt.Errorf("decode provider config %s: %w", candidate, err)
-			}
-			found = candidate
-			break
+		source, found, err := loadStockCNSourceRuntime(id)
+		if err != nil {
+			return nil, err
 		}
-		if found == "" {
+		if !found {
 			return nil, fmt.Errorf("stockcn provider config %q was not found", id)
 		}
-		if err := validateStockCNProviderFile(id, file); err != nil {
-			return nil, fmt.Errorf("validate provider config %s: %w", found, err)
-		}
-		baseURL, endpoint, err := splitStockCNEndpoint(file.Provider.Kline.Endpoint)
-		if err != nil {
-			return nil, fmt.Errorf("provider %q kline.endpoint: %w", id, err)
-		}
-		rateLimit, err := file.Provider.RateLimit.Policy()
-		if err != nil {
-			return nil, fmt.Errorf("provider %q rate_limit: %w", id, err)
-		}
-		result[id] = stockCNProviderRuntime{
-			ID:                id,
-			KlineEnabled:      containsStringFold(file.Provider.EnabledFeeds, "kline"),
-			InstrumentEnabled: containsStringFold(file.Provider.EnabledFeeds, "instrument"),
-			KlineShadow:       containsStringFold(file.Provider.ShadowFeeds, "kline") || strings.EqualFold(file.Provider.Kline.Mode, "shadow"),
-			KlineBaseURL:      baseURL,
-			KlineEndpoint:     endpoint,
-			Hosts:             append([]string(nil), file.Provider.Hosts...),
-			Port:              providerPort(id),
-			KlineSpec:         file.Provider.Kline,
-			RateLimit:         rateLimit,
-		}
+		result[id] = source
 	}
 	return result, nil
+}
+
+// loadStockCNSourceRuntime 按提供方 ID 读 A 股数据源配置文件（sources/market/<id>.yaml）：路由里的 K 线来源和
+// 只提供附加字段的来源都用它。文件不存在时 found 为 false。
+func loadStockCNSourceRuntime(id string) (stockCNProviderRuntime, bool, error) {
+	id = strings.ToLower(strings.TrimSpace(id))
+	var file stockCNProviderFile
+	var path string
+	for _, dir := range stockCNProviderConfigPaths() {
+		candidate := filepath.Join(dir, id+".yaml")
+		if _, statErr := os.Stat(candidate); statErr != nil {
+			continue
+		}
+		raw, readErr := os.ReadFile(candidate)
+		if readErr != nil {
+			return stockCNProviderRuntime{}, false, readErr
+		}
+		decoder := yaml.NewDecoder(strings.NewReader(string(raw)))
+		decoder.KnownFields(true)
+		if err := decoder.Decode(&file); err != nil {
+			return stockCNProviderRuntime{}, false, fmt.Errorf("decode provider config %s: %w", candidate, err)
+		}
+		path = candidate
+		break
+	}
+	if path == "" {
+		return stockCNProviderRuntime{}, false, nil
+	}
+	if err := validateStockCNProviderFile(id, file); err != nil {
+		return stockCNProviderRuntime{}, false, fmt.Errorf("validate provider config %s: %w", path, err)
+	}
+	baseURL, endpoint, err := splitStockCNEndpoint(file.Provider.Kline.Endpoint)
+	if err != nil {
+		return stockCNProviderRuntime{}, false, fmt.Errorf("provider %q kline.endpoint: %w", id, err)
+	}
+	rateLimit, err := file.Provider.RateLimit.Policy()
+	if err != nil {
+		return stockCNProviderRuntime{}, false, fmt.Errorf("provider %q rate_limit: %w", id, err)
+	}
+	return stockCNProviderRuntime{
+		ID:                id,
+		KlineEnabled:      containsStringFold(file.Provider.EnabledFeeds, "kline"),
+		InstrumentEnabled: containsStringFold(file.Provider.EnabledFeeds, "instrument"),
+		KlineShadow:       containsStringFold(file.Provider.ShadowFeeds, "kline") || strings.EqualFold(file.Provider.Kline.Mode, "shadow"),
+		KlineBaseURL:      baseURL,
+		KlineEndpoint:     endpoint,
+		Hosts:             append([]string(nil), file.Provider.Hosts...),
+		Port:              providerPort(id),
+		KlineSpec:         file.Provider.Kline,
+		RateLimit:         rateLimit,
+	}, true, nil
 }
 
 func providerPort(providerID string) int {

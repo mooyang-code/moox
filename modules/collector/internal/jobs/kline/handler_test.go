@@ -54,3 +54,13 @@ func TestNewJobDefinition_Planner_InvalidSourceKind_ShouldReturnError(t *testing
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "dataset")
 }
+
+// A 股（标签的 sync.source 是 eastmoney、市场 equity）支持 1m、5m、1d；其他周期建任务时被拒。
+func TestNewJobDefinition_ShouldSupportStockDaily(t *testing.T) {
+	def := NewJobDefinition()
+	for frequency, want := range map[string]bool{"1m": true, "5m": true, "1d": true, "15m": false, "1w": false} {
+		params, err := domain.ParseCollectParams(`{"target_dataset_id":"bars","frequency":"`+frequency+`"}`, "eastmoney", "equity", "kline")
+		require.NoError(t, err, frequency)
+		assert.Equal(t, want, def.Matches(params), frequency)
+	}
+}

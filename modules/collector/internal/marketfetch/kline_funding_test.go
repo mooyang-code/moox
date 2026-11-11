@@ -44,15 +44,27 @@ func swapHourBars(count int) []marketdata.NormalizedKline {
 	return bars
 }
 
+// fundingFieldSource 把资金费率缓存接成附加字段来源（生产里由币安永续适配器担任）。
+type fundingFieldSource struct{ *FundingCache }
+
+func (fundingFieldSource) Descriptor() marketdata.ProviderDescriptor {
+	return marketdata.ProviderDescriptor{ID: "binance", SourceID: "swap_http"}
+}
+func (fundingFieldSource) FieldSpecs() []marketdata.FieldSpec { return FundingFieldSpecs() }
+
 func fundingPipeline(t *testing.T, bars []marketdata.NormalizedKline, funding *FundingCache, storage Storage) *KlinePipeline {
 	t.Helper()
+	var fields []marketdata.FieldSource
+	if funding != nil {
+		fields = []marketdata.FieldSource{fundingFieldSource{funding}}
+	}
 	now := fundingBarBase.Add(24 * time.Hour)
 	registry := marketdata.NewRegistry()
 	require.NoError(t, registry.Register(pipelineProvider{id: "binance", sourceID: "swap_http", rows: bars}))
 	router, err := marketdata.NewRouter(registry, 1, pipelineClock{now}, func(time.Duration) {})
 	require.NoError(t, err)
 	return &KlinePipeline{Router: router, Storage: storage, CandidateChain: []string{"binance"}, SpaceID: "crypto", MarketID: "crypto",
-		InstrumentType: marketdata.InstrumentSwap, SourceID: "swap_http", Now: func() time.Time { return now }, Funding: funding}
+		InstrumentType: marketdata.InstrumentSwap, SourceID: "swap_http", Now: func() time.Time { return now }, Fields: fields, ExtraFieldIDs: []string{domain.FieldFundingRate}}
 }
 
 // 补采两个目标：选了资金费率的目标写入每根的区间和，另一个目标不出现这一列。
@@ -179,11 +191,12 @@ func TestKlinePipelineFundingWithoutCapabilityIsInvalid(t *testing.T) {
 // 输出字段为空（默认字段）时不包含资金费率，选中时才保留。
 func TestSelectOutputFieldsKeepsFundingRateOnlyWhenSelected(t *testing.T) {
 	fields := []*storagepb.FieldValue{doubleValue("close", 1), doubleValue(domain.FieldFundingRate, 0.0001)}
-	require.Len(t, selectOutputFields(fields, nil), 1)
-	require.Equal(t, "close", selectOutputFields(fields, nil)[0].GetFieldId())
-	require.Len(t, selectOutputFields(fields, []string{"close", domain.FieldFundingRate}), 2)
+	extra := map[string]marketdata.FieldValue{domain.FieldFundingRate: marketdata.DoubleField(0.0001)}
+	require.Len(t, selectOutputFields(fields, nil, extra), 1)
+	require.Equal(t, "close", selectOutputFields(fields, nil, extra)[0].GetFieldId())
+	require.Len(t, selectOutputFields(fields, []string{"close", domain.FieldFundingRate}, extra), 2)
 	plain := []*storagepb.FieldValue{doubleValue("close", 1)}
-	require.Same(t, plain[0], selectOutputFields(plain, nil)[0])
+	require.Same(t, plain[0], selectOutputFields(plain, nil, nil)[0])
 }
 
 // 任务选的资金费率要原样进到计划与计划构造的请求里，执行端才知道要取这一列。
@@ -202,7 +215,7 @@ func TestDesiredPlanCarriesFundingRateIntoRequests(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, ok)
 		for _, item := range planned.Request.Items {
-			require.True(t, itemWantsFunding(planned.Request, item))
+			require.Contains(t, selectedOutputFields(planned.Request, item), domain.FieldFundingRate)
 		}
 	}
 }
@@ -213,18 +226,16 @@ func TestPeriodRowsWritesFundingRateAndRejectsMissingValue(t *testing.T) {
 	plan := swapTestPlan(period)
 	plan.Datasets[0].OutputFields = []string{"close", domain.FieldFundingRate}
 	committer := NewKlineCommitter(&capturingPeriodStorage{}, plan.Market)
-	rate := 0.0001
 	btc := testSwapBar("BTC-USDT", "", period, 1)
-	btc.FundingRate = &rate
-	zero := 0.0
+	btc.Extra = map[string]marketdata.FieldValue{domain.FieldFundingRate: marketdata.DoubleField(0.0001)}
 	eth := testSwapBar("ETH-USDT", "", period, 2)
-	eth.FundingRate = &zero
+	eth.Extra = map[string]marketdata.FieldValue{domain.FieldFundingRate: marketdata.DoubleField(0)}
 	batch := KlineBatch{SpaceID: "crypto", BatchID: "b", Market: plan.Market, Dataset: plan.Datasets[0], Period: period, Symbols: plan.ExchangeSymbol, Bars: []marketdata.NormalizedKline{btc, eth}}
 	_, rows, _, err := committer.periodRows(batch)
 	require.NoError(t, err)
 	require.Equal(t, []float64{0.0001, 0}, fundingValues(rows))
 
-	eth.FundingRate = nil
+	eth.Extra = nil
 	batch.Bars = []marketdata.NormalizedKline{btc, eth}
 	_, _, _, err = committer.periodRows(batch)
 	require.ErrorContains(t, err, "缺资金费率")
@@ -239,7 +250,7 @@ func TestPeriodRowsWritesFundingRateAndRejectsMissingValue(t *testing.T) {
 
 func TestFundingFailureClassification(t *testing.T) {
 	item := domain.CollectionItem{SubjectID: "BTC-USDT"}
-	require.Equal(t, domain.ItemOutcomeProviderError, fundingFailure(item, context.DeadlineExceeded).Outcome, "等待超时也归为 provider_error")
-	require.Equal(t, domain.ItemOutcomeProviderError, fundingFailure(item, errors.New("x")).Outcome)
-	require.Equal(t, domain.ItemOutcomeInvalid, fundingFailure(item, errFundingUnsupported).Outcome)
+	require.Equal(t, domain.ItemOutcomeProviderError, fieldFailure(item, domain.FieldFundingRate, context.DeadlineExceeded).Outcome, "等待超时也归为 provider_error")
+	require.Equal(t, domain.ItemOutcomeProviderError, fieldFailure(item, domain.FieldFundingRate, errors.New("x")).Outcome)
+	require.Equal(t, domain.ItemOutcomeInvalid, fieldFailure(item, domain.FieldFundingRate, errFieldUnsupported).Outcome)
 }

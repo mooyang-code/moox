@@ -210,6 +210,17 @@ message DataTypeFieldConfig {
 message DataTypeConfigDetail {
   DataTypeConfig config = 1;
   repeated DataTypeFieldConfig fields = 2;
+  repeated ExtraFieldOption extra_fields = 3;  // K 线任务可选的附加字段，默认都不选
+}
+
+// ExtraFieldOption 是 K 线任务可以在输出字段里选的一个附加字段，以及它适用的范围。
+// 显示名、分组以 Storage 字段目录为准。
+message ExtraFieldOption {
+  string field_id = 1;              // 输出字段名
+  string market_id = 2;             // 适用的市场（空间）
+  string instrument_type = 3;       // 适用的品种，对应标签的 market_type
+  repeated string frequencies = 4;  // 适用的 K 线频率
+  string provider_id = 5;           // 来源提供方
 }
 
 message GetDataTypeConfigsReq {}

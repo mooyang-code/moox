@@ -1087,6 +1087,53 @@ portfolio: {max_missing: 0.2}
 - `scale` 是“日线分区列 × 小时信号列”相加：`daily.zone_trend`、`daily.zone_range` 是日线因子给每个标的标出的分区（0/1，同一天只有一个为 1），`sig_breakout`、`sig_revert` 是小时线因子里对应分区用的 0/1 信号。标的处在哪个分区，就只看那个分区的信号。
 - “突破置位、跌破复位并保持”这类信号不在策略里写状态，而是在因子里用事件记忆算子（`ts_last_valid`、`ts_bars_since`、`ts_value_when` 等）写成 0/1 列：突破那根记 1、跌破那根记 0、其余为空，再取最近一次有效值。
 
+### 13.11 A 股：日线行业与财务选股，5m 主帧
+
+A 股日线可以带复权因子、申万行业和财务字段（见[采集](模块/采集.md)第 4b 节）。这些列随日线因子任务进入结果数据集，策略写 `sources` 后用 `daily.列名` 读取。
+
+先在日线因子任务里加两个因子（因子表达式的写法见 `skills/moox/references/factor-dsl.md`）：
+
+```yaml
+# 因子 roe_ttm：滚动十二个月的净资产收益率
+output: fin_net_profit_parent_ttm / fin_equity_parent
+```
+
+```yaml
+# 因子 mom_adj：复权后的 20 日涨幅
+params:
+  window: {type: int, min: 2, max: 250, default: 20}
+let:
+  adj_close: close * adj_factor
+output: adj_close / delay(adj_close, window) - 1
+```
+
+策略：
+
+```yaml
+name: ashare_industry_fundamental
+bar: 5m
+sources:
+  daily: {bar: 1d}                 # A 股日线因子任务，创建实例时按 daily:equity 绑定
+rules:
+  - id: pick
+    type: rank
+    filter: "daily.roe_ttm > 0"
+    score: "rank(daily.roe_ttm) + rank(daily.mom_adj)"
+    select: {top: 20, group: {by: daily.sw_l1, max: 3}}                 # 每个申万一级行业最多 3 只
+    holding: {calendar: trading_days, every: 5, days: [1], at: first}   # 每 5 个交易日的第一根 5m 重选
+    weight: {total: 1}
+portfolio: {max_missing: 0.2}
+```
+
+- **行业分组**：`daily.sw_l1` 是申万一级行业代码（整数，如 `480000`），是日线数据集的列，不需要另写因子；二级、三级用 `daily.sw_l2`、`daily.sw_l3`。申万只发布代码，没有中文名。没有申万记录的股票这一列为空，按缺数处理（明细 `missing:daily.sw_l1`），计入 `max_missing` 的缺数占比。
+- **财务字段**：`fin_` 开头的列是“这个交易日已经披露的最新一期”的值，带 `_ttm` 的是滚动十二个月的值。可以像上面那样先在因子里组合，也可以在策略里直接读（`daily.fin_net_profit_parent_ttm > 0`）。金融类公司没有的科目、缺上年数据的滚动值为空，同样按缺数处理。目前没有市值字段。
+- **复权价**：K 线存的是不复权价，`adj_factor` 是后复权因子，`close * adj_factor` 是后复权价。算涨幅、均线偏离这类比值时直接用后复权价，结果与前复权相同。
+  需要前复权价本身时，以当前这一根为基准换算：k 根之前的前复权收盘价是 `delay(close, k) * delay(adj_factor, k) / adj_factor`。不要在策略表达式里拿不复权的 `close` 跨除权日比较。
+- **日线次日 08:00 才到**：交易日 D 的日线在北京时间 D+1 日 08:00 采集。D 日盘中每一根 5m 读的是 D−1 日的日线（当天 08:00 已到齐）；D 日 15:00 收盘的那一根要读 D 日的日线，会等到 D+1 日 08:00 之后才求值，结果在次日开盘前给出。
+  所以这个例子里“每 5 个交易日的第一根”用的是上一交易日收盘后的日线数据。
+- **日线缺了一天**：日线实时采集失败时，自动补采要再过一天才补上，这期间来源列按缺数处理。不想因此清仓的规则配 `on_missing: {keep_bars: N}`（8.3 节），或者手工补采。
+- **绑定**：创建实例时给两个因子任务，`--factor-task equity=<5m 因子任务> --factor-task daily:equity=<日线因子任务>`。A 股的来源只能是 `1d`，主帧必须是日内周期。
+
 ## 14. 报错速查
 
 | 现象 | 原因 | 处理 |

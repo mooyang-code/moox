@@ -3,11 +3,13 @@ package bootstrap
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	collectordns "github.com/mooyang-code/moox/modules/collector/internal/dnsresolver"
+	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/health"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
@@ -130,4 +132,22 @@ func TestMetricsTimerRefreshFailureDoesNotBlockReporter(t *testing.T) {
 	if inventory.refreshes != 1 || reporter.calls != 1 {
 		t.Fatalf("refreshes=%d reporter calls=%d", inventory.refreshes, reporter.calls)
 	}
+}
+
+// 任务表非空时不读内置任务文件：文件格式比程序新（回滚到旧版二进制）也不挡住启动。
+func TestSeedBuiltinTasksSkipsTheSeedFileWhenTasksExist(t *testing.T) {
+	db, err := store.Open(&store.Options{Path: filepath.Join(t.TempDir(), "collector.db")})
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	require.NoError(t, db.ApplySchema(schema.AllSQL()))
+	broken := filepath.Join(t.TempDir(), "collection-tasks.yaml")
+	require.NoError(t, os.WriteFile(broken, []byte("tasks:\n  - task_id: r1\n    mystery: true\n"), 0o644))
+
+	// 任务表为空：照常解析，格式不对就报错。
+	require.Error(t, seedBuiltinTasks(context.Background(), db.Tasks(), broken))
+
+	require.NoError(t, db.Tasks().Create(context.Background(), domain.CollectionTask{
+		SpaceID: "crypto", TaskID: "t1", TaskName: "任务", DataType: "kline", TagIDs: []string{"binance_spot"}, CollectParams: `{"frequency":"1m"}`,
+	}))
+	require.NoError(t, seedBuiltinTasks(context.Background(), db.Tasks(), broken))
 }

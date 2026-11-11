@@ -86,9 +86,13 @@ var fundingBase = time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
 
 func TestFundingRatesOnlySwapSupportsIt(t *testing.T) {
 	spot := NewMarketDataAdapter(AdapterConfig{InstrumentType: marketdata.InstrumentSpot})
-	require.Nil(t, marketdata.FundingRatesOf(spot), "现货没有资金费")
+	require.False(t, spot.SupportsFundingRates(), "现货没有资金费")
+	require.Empty(t, spot.FieldSpecs(), "现货实例不提供附加字段")
+	require.Nil(t, spot.FundingCache())
 	swap := NewMarketDataAdapter(AdapterConfig{InstrumentType: marketdata.InstrumentSwap})
-	require.NotNil(t, marketdata.FundingRatesOf(swap))
+	require.True(t, swap.SupportsFundingRates())
+	require.Len(t, swap.FieldSpecs(), 1)
+	require.Equal(t, "funding_rate", swap.FieldSpecs()[0].ID)
 }
 
 // 带 symbol：区间左闭右开，晚 1 毫秒的结算算在这一小时；endTime 发给接口时减 1 毫秒。

@@ -61,6 +61,36 @@
         </template>
       </a-table>
 
+      <section v-if="selectedSpaceId && extraFieldSources.length" class="extra-sources">
+        <h3>附加字段来源</h3>
+        <p class="extra-sources__hint">
+          这些来源只给 K 线补充字段，不单独建数据集；新建 K 线采集任务时在“输出字段”里勾选，默认不勾。
+        </p>
+        <a-table
+          row-key="provider_id"
+          size="small"
+          :bordered="{ cell: true }"
+          :data="extraFieldSources"
+          :pagination="false"
+          :scroll="{ x: 'max-content' }"
+        >
+          <template #columns>
+            <a-table-column title="来源ID" data-index="provider_id" :width="180" />
+            <a-table-column title="名称" data-index="name" :width="180" />
+            <a-table-column title="适用品种" data-index="instruments" :width="110" />
+            <a-table-column title="适用频率" data-index="frequencies" :width="110" />
+            <a-table-column title="提供的字段" :width="520">
+              <template #cell="{ record }">
+                <span v-for="(field, index) in record.fields" :key="field.field_id" class="extra-field"
+                  >{{ field.name }}<code v-if="field.name !== field.field_id">{{ field.field_id }}</code
+                  >{{ index < record.fields.length - 1 ? "、" : "" }}</span
+                >
+              </template>
+            </a-table-column>
+          </template>
+        </a-table>
+      </section>
+
       <a-modal v-model:visible="visible" width="min(760px, 100vw)" :title="modalTitle" :on-before-ok="submit">
         <a-form :model="form" auto-label-width>
           <a-form-item field="data_source_id" label="来源ID" required>
@@ -99,8 +129,10 @@
 import { createSubmitScope } from "@/utils/submit-scope";
 import { computed, onMounted, reactive, ref, watch } from "vue";
 import { Message } from "@arco-design/web-vue";
-import { createDataSource, listDataSources, updateDataSource } from "@/api/storage/metadata";
+import { GetDataTypeConfigWithFields } from "@/api/collector";
+import { createDataSource, listDataSources, listFields, updateDataSource } from "@/api/storage/metadata";
 import type { DataSource } from "@/api/storage/types";
+import { buildExtraFieldSources, type ExtraFieldSourceRow } from "./extra-field-sources";
 import { useSpaceStore } from "@/store/modules/space";
 import { createLatestRequestGuard } from "@/utils/latest-request";
 import {
@@ -157,6 +189,38 @@ async function load() {
     applyPageResult(pagination, rsp.page_result);
   } finally {
     if (request.isLatest()) loading.value = false;
+  }
+}
+
+// 附加字段来源：给 K 线补充字段的提供方（复权因子、申万行业、财务等），来自采集服务登记的附加字段清单，只读。
+const extraFieldSources = ref<ExtraFieldSourceRow[]>([]);
+const extraSourceRequests = createLatestRequestGuard();
+
+async function loadExtraFieldSources() {
+  const request = extraSourceRequests.begin();
+  const spaceId = selectedSpaceId.value;
+  extraFieldSources.value = [];
+  if (!spaceId) return;
+  try {
+    const options = (await GetDataTypeConfigWithFields("kline")).detail?.extra_fields || [];
+    if (!request.isLatest()) return;
+    const mine = options.filter(option => (option.market_id || "").trim().toLowerCase() === spaceId.trim().toLowerCase());
+    if (!mine.length) return;
+    // 字段显示名取 Storage 字段目录；读不到时显示字段 ID，不影响这块展示。
+    const names = new Map<string, string>();
+    try {
+      for (let page = 1; ; page += 1) {
+        const rsp = await listFields({ space_id: spaceId, page: { page, size: 500 } });
+        for (const field of rsp.fields || []) names.set(field.field_id, field.name);
+        if (!rsp.page_result?.has_more || !(rsp.fields || []).length) break;
+      }
+    } catch {
+      names.clear();
+    }
+    if (!request.isLatest()) return;
+    extraFieldSources.value = buildExtraFieldSources(mine, spaceId, names);
+  } catch {
+    // 失败原因由请求层提示；这块只读展示留空。
   }
 }
 
@@ -236,8 +300,12 @@ watch(selectedSpaceId, () => {
   loadRequests.invalidate();
   pagination.current = 1;
   load();
+  void loadExtraFieldSources();
 });
-onMounted(load);
+onMounted(() => {
+  load();
+  void loadExtraFieldSources();
+});
 
 // 提交作用域：重新打开弹窗使旧提交失效，迟到的响应不能再关闭或清空重新打开的表单
 const sourceScope = createSubmitScope();
@@ -270,6 +338,28 @@ watch(visible, open => {
 
 .muted {
   color: var(--color-text-3);
+}
+
+.extra-sources {
+  margin-top: var(--moox-space-5);
+}
+
+.extra-sources h3 {
+  margin: 0 0 4px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.extra-sources__hint {
+  margin: 0 0 var(--moox-space-2);
+  color: var(--color-text-3);
+  font-size: 12px;
+}
+
+.extra-field code {
+  margin-left: 4px;
+  color: var(--color-text-3);
+  font-size: 12px;
 }
 
 .page-head h2 {

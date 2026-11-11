@@ -26,18 +26,6 @@ type FundingRateSource interface {
 	FundingRates(ctx context.Context, symbol string, start, end time.Time) ([]FundingRate, error)
 }
 
-// FundingRatesOf 返回行情源真实具备的资金费率能力：没有实现，或同一类型的适配器服务的市场没有资金费（例如现货）时返回 nil。
-func FundingRatesOf(provider any) FundingRateSource {
-	source, ok := provider.(FundingRateSource)
-	if !ok {
-		return nil
-	}
-	if capable, ok := provider.(interface{ SupportsFundingRates() bool }); ok && !capable.SupportsFundingRates() {
-		return nil
-	}
-	return source
-}
-
 type realtimeFundingKey struct{}
 
 // WithRealtimeFunding 标记这次资金费查询来自实时链路：限速时排在补采请求前面。

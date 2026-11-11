@@ -39,7 +39,7 @@ type Bounds struct {
 // CoverageBounds 返回按日历规整后的覆盖范围：最早一根取不早于它的周期、最晚一根取不晚于它的周期（A 股日线按交易日，
 // 并夹到内嵌日历之内——索引里可能有误写在节假日或日历之外的行）。now 是判断“已经闭合”的当前时间：回放与启用传入，
 // 最晚一根夹到 now 时已闭合的最后一根之内；零值（实时求值的年龄探针）不做按时间的判断。覆盖未知返回
-// ErrCoverageUnknown；行全在非交易日上、整体超出内嵌日历或 A 股行键不是上海零点时返回说明原因的错误。
+// ErrCoverageUnknown；行全在非交易日上、整体超出内嵌日历或 A 股日线行键不是 UTC 零点时返回说明原因的错误。
 func CoverageBounds(view ViewInfo, resolved Resolved, now time.Time) (Bounds, error) {
 	if view.IndexedFrom.IsZero() || view.IndexedTo.IsZero() {
 		return Bounds{}, ErrCoverageUnknown
@@ -83,22 +83,14 @@ func CoverageBounds(view ViewInfo, resolved Resolved, now time.Time) (Bounds, er
 	return bounds, nil
 }
 
-// checkStockCoverageKey 要求 A 股日线索引统计的最晚行键是上海时间零点：按 UTC 零点写行的数据集规整后能通过提交，
-// 执行时却按上海零点取不到任何行，每根都记缺数据。只看最晚一行：最早一行可能来自早已停更的序列，一行遗留的旧数据
+// checkStockCoverageKey 要求 A 股日线索引统计的最晚行键是 UTC 零点（日期键）：不按日期键写行的数据集规整后能通过提交，
+// 执行时却按日期键取不到任何行，每根都记缺数据。只看最晚一行：最早一行可能来自早已停更的序列，一行遗留的旧数据
 // 不应让整个 View 永远不能使用。
 func checkStockCoverageKey(at time.Time, resolved Resolved) error {
 	if !stockDaily(resolved.Calendar, resolved.Bar) {
 		return nil
 	}
-	_, location, err := stockCalendar()
-	if err != nil {
-		return err
-	}
-	day, err := localDay(at, location)
-	if err != nil {
-		return err
-	}
-	return checkStockRowKey(at, day, location)
+	return checkStockRowKey(at)
 }
 
 // barsBeyondStockCalendar 在 now 已过 A 股内嵌日历最后一天的收盘时，返回行键 at 晚于日历最后一天的最多根数：自然日数

@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/mooyang-code/moox/modules/collector/internal/domain"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/tagattr"
 	"sort"
 	"strconv"
@@ -199,6 +199,35 @@ type Manager struct {
 	metadata metadataAPI
 	cleaner  datasetRowsCleaner
 	auth     *storagepb.AuthInfo
+	// fields 是行情源目录里可用的附加字段：结果数据集里它们的列（类型、显示名、fill 属性）按字段定义生成。
+	fields marketdata.FieldOffers
+}
+
+// SetFieldOffers 设置可用的附加字段（进程启动时由行情源目录给出）。
+func (m *Manager) SetFieldOffers(offers marketdata.FieldOffers) {
+	if m != nil {
+		m.fields = offers
+	}
+}
+
+// extraFieldType 把附加字段的值类型换成 Storage 的列类型。
+func extraFieldType(spec marketdata.FieldSpec) storagepb.FieldValueType {
+	if spec.Type == marketdata.FieldTypeInt {
+		return storagepb.FieldValueType_FIELD_VALUE_TYPE_INT
+	}
+	return storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE
+}
+
+// extraColumnAttributes 是附加字段列的属性：显示名取字段定义；fill 告诉因子引擎缺行时怎样补（没有这个属性就沿用上一根）。
+func extraColumnAttributes(spec marketdata.FieldSpec) map[string]string {
+	attributes := map[string]string{"display_name": spec.Name}
+	if spec.Name == "" {
+		attributes["display_name"] = resultColumnDisplayName(spec.ID)
+	}
+	if spec.Fill != "" {
+		attributes["fill"] = spec.Fill
+	}
+	return attributes
 }
 
 type datasetRowsCleaner interface {
@@ -805,7 +834,7 @@ func (m *Manager) EnsureOutputFields(ctx context.Context, spaceID, taskID, datas
 		return err
 	}
 	// View 的列只能追加：已有列原样保留（任务收窄输出后，旧列在新行里为空），只补上这次新增的字段。
-	columns, err := resultViewColumns(spaceID, ids, outputFields)
+	columns, err := m.resultViewColumns(spaceID, ids, outputFields)
 	if err != nil {
 		return err
 	}
@@ -1061,12 +1090,16 @@ func (m *Manager) ensureColumns(ctx context.Context, spaceID, datasetID, viewID 
 			}{"amount_quality", storagepb.FieldValueType_FIELD_VALUE_TYPE_STRING},
 		)
 	}
+	extra := map[string]marketdata.FieldSpec{}
 	if len(outputFields) > 0 && kind != storagepb.DataKind_DATA_KIND_RECORD {
-		// 资金费率只在显式选中时建列；输出字段为空（默认字段）时不建。
-		fields = append(fields, struct {
-			name string
-			kind storagepb.FieldValueType
-		}{domain.FieldFundingRate, storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE})
+		// 附加字段只在显式选中时建列；输出字段为空（默认字段）时不建。
+		for _, spec := range m.fields.Specs(spaceID) {
+			extra[spec.ID] = spec
+			fields = append(fields, struct {
+				name string
+				kind storagepb.FieldValueType
+			}{spec.ID, extraFieldType(spec)})
+		}
 	}
 	if len(outputFields) > 0 {
 		selected := make(map[string]struct{}, len(outputFields))
@@ -1098,9 +1131,8 @@ func (m *Manager) ensureColumns(ctx context.Context, spaceID, datasetID, viewID 
 	}
 	for _, field := range fields {
 		attributes := map[string]string{"display_name": resultColumnDisplayName(field.name)}
-		if field.name == domain.FieldFundingRate {
-			// 没有结算的根写的是 0；因子引擎读列时没有 fill 属性就沿用上一根，会重复计费。
-			attributes["fill"] = "zero"
+		if spec, ok := extra[field.name]; ok {
+			attributes = extraColumnAttributes(spec)
 		}
 		resp, err := m.metadata.UpsertDatasetColumn(ctx, &storagepb.UpsertDatasetColumnReq{AuthInfo: m.auth, Column: &storagepb.DatasetColumn{SpaceId: spaceID, DatasetId: datasetID, ColumnName: field.name, OriginType: storagepb.DatasetColumnOriginType_DATASET_COLUMN_ORIGIN_TYPE_FIELD, OriginId: field.name, ValueType: field.kind, Required: true, Status: "active", Attributes: attributes}})
 		if err != nil || resp == nil || resp.GetRetInfo().GetCode() != storagepb.ErrorCode_SUCCESS {
@@ -1111,7 +1143,7 @@ func (m *Manager) ensureColumns(ctx context.Context, spaceID, datasetID, viewID 
 }
 
 func (m *Manager) ensureViewColumns(ctx context.Context, spaceID string, ids IDs, outputFields []string) error {
-	columns, err := resultViewColumns(spaceID, ids, outputFields)
+	columns, err := m.resultViewColumns(spaceID, ids, outputFields)
 	if err != nil {
 		return err
 	}
@@ -1129,7 +1161,7 @@ func (m *Manager) ensureViewColumns(ctx context.Context, spaceID string, ids IDs
 	return nil
 }
 
-func resultViewColumns(spaceID string, ids IDs, outputFields []string) ([]*storagepb.ViewColumn, error) {
+func (m *Manager) resultViewColumns(spaceID string, ids IDs, outputFields []string) ([]*storagepb.ViewColumn, error) {
 	if len(outputFields) == 0 {
 		return nil, nil
 	}
@@ -1143,7 +1175,7 @@ func resultViewColumns(spaceID string, ids IDs, outputFields []string) ([]*stora
 		if _, ok := seen[name]; ok {
 			continue
 		}
-		if _, ok := resultViewColumnType(name); !ok {
+		if _, _, ok := m.resultViewColumn(spaceID, name); !ok {
 			return nil, fmt.Errorf("%w: %s", ErrUnsupportedOutputFields, name)
 		}
 		seen[name] = struct{}{}
@@ -1155,20 +1187,33 @@ func resultViewColumns(spaceID string, ids IDs, outputFields []string) ([]*stora
 	sort.Strings(ordered)
 	columns := make([]*storagepb.ViewColumn, 0, len(ordered))
 	for i, name := range ordered {
-		valueType, _ := resultViewColumnType(name)
+		valueType, displayName, _ := m.resultViewColumn(spaceID, name)
 		columns = append(columns, &storagepb.ViewColumn{
 			SpaceId: spaceID, ViewId: ids.ViewID, ColumnName: name,
 			OriginType: storagepb.ColumnOriginType_COLUMN_ORIGIN_TYPE_DATASET_COLUMN,
 			OriginId:   name, ValueType: valueType, SortOrder: uint32(i + 1),
-			Attributes: map[string]string{"display_name": resultColumnDisplayName(name)},
+			Attributes: map[string]string{"display_name": displayName},
 		})
 	}
 	return columns, nil
 }
 
+// resultViewColumn 返回结果 View 里这一列的类型与显示名：基础 K 线字段是固定的，附加字段取字段定义。
+func (m *Manager) resultViewColumn(spaceID, name string) (storagepb.FieldValueType, string, bool) {
+	if valueType, ok := resultViewColumnType(name); ok {
+		return valueType, resultColumnDisplayName(name), true
+	}
+	if m != nil {
+		if spec, ok := m.fields.Spec(spaceID, name); ok {
+			return extraFieldType(spec), extraColumnAttributes(spec)["display_name"], true
+		}
+	}
+	return storagepb.FieldValueType_FIELD_VALUE_TYPE_UNSPECIFIED, "", false
+}
+
 func resultViewColumnType(name string) (storagepb.FieldValueType, bool) {
 	switch name {
-	case "open", "high", "low", "close", "volume", "quote_volume", "amount", domain.FieldFundingRate:
+	case "open", "high", "low", "close", "volume", "quote_volume", "amount":
 		return storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, true
 	case "trade_num", "route_rank":
 		return storagepb.FieldValueType_FIELD_VALUE_TYPE_INT, true
@@ -1183,7 +1228,7 @@ func resultViewColumnType(name string) (storagepb.FieldValueType, bool) {
 
 func resultColumnDisplayName(name string) string {
 	names := map[string]string{
-		"open": "开盘", "high": "最高", "low": "最低", "close": "收盘", "volume": "成交量", "quote_volume": "成交额", "trade_num": "成交笔数", "amount": "成交额", "instrument_name": "标的名称", "provider_id": "数据提供方", "source_id": "来源", "provider_symbol": "原始标的", "volume_unit": "量单位", "amount_unit": "额单位", "trade_date": "交易日期", "close_time": "收盘时间", "provider_timestamp": "源时间", "fetched_at": "采集时间", "request_id": "请求标识", "route_id": "路由", "route_rank": "路由序号", "source_provider": "源提供方", "quality_status": "质量状态", "amount_quality": "金额质量", domain.FieldFundingRate: "资金费率",
+		"open": "开盘", "high": "最高", "low": "最低", "close": "收盘", "volume": "成交量", "quote_volume": "成交额", "trade_num": "成交笔数", "amount": "成交额", "instrument_name": "标的名称", "provider_id": "数据提供方", "source_id": "来源", "provider_symbol": "原始标的", "volume_unit": "量单位", "amount_unit": "额单位", "trade_date": "交易日期", "close_time": "收盘时间", "provider_timestamp": "源时间", "fetched_at": "采集时间", "request_id": "请求标识", "route_id": "路由", "route_rank": "路由序号", "source_provider": "源提供方", "quality_status": "质量状态", "amount_quality": "金额质量",
 	}
 	if displayName := names[name]; displayName != "" {
 		return displayName

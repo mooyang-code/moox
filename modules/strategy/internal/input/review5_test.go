@@ -11,7 +11,14 @@ import (
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
+// stockDay 返回 A 股日线某个交易日期的行键：该日期的 UTC 零点（日期键）。
 func stockDay(t *testing.T, year int, month time.Month, day int) time.Time {
+	t.Helper()
+	return time.Date(year, month, day, 0, 0, 0, 0, time.UTC)
+}
+
+// shanghaiMidnight 返回某个上海日期的零点：页面按上海时区选的回放区间端点。
+func shanghaiMidnight(t *testing.T, year int, month time.Month, day int) time.Time {
 	t.Helper()
 	return time.Date(year, month, day, 0, 0, 0, 0, shanghai(t)).UTC()
 }

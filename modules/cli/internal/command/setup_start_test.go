@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -91,6 +92,9 @@ func startRepository(t *testing.T) string {
 		require.NoError(t, os.MkdirAll(filepath.Dir(name), 0o755))
 		require.NoError(t, os.WriteFile(name, []byte("name: "+example.StrategyID+"\n"), 0o644))
 	}
+	seed := filepath.Join(root, "config", "setup", "collection-tasks.yaml")
+	require.NoError(t, os.MkdirAll(filepath.Dir(seed), 0o755))
+	require.NoError(t, os.WriteFile(seed, []byte("tasks:\n- {space_id: crypto, task_id: m, start: manual}\n- {space_id: stockcn, task_id: b, start: manual}\n"), 0o644))
 	return root
 }
 
@@ -107,6 +111,20 @@ func TestSetupStartEnablesAllTasksThenTriggersOnce(t *testing.T) {
 	require.Equal(t, 1, client.triggers)
 	require.Equal(t, 2, summary.TasksEnabled)
 	require.Zero(t, client.syncs, "标签已有成员时不额外同步")
+}
+
+func TestSetupStartSkipsManualStartTasks(t *testing.T) {
+	client := startClient()
+	client.tasks = append(client.tasks, adminclient.CollectionTaskSummary{TaskID: "m", TaskName: "手动任务"})
+	summary, err := runSetupStart(context.Background(), setupDeps{}, client, setupSnapshot(t), t.TempDir(), startRepository(t), "crypto", time.Millisecond)
+	require.NoError(t, err)
+	require.Equal(t, []string{"a", "b"}, client.enabled, "start: manual 的任务不启用；别的空间的同名标记不影响")
+	require.Equal(t, 2, summary.TasksEnabled)
+	require.Contains(t, strings.Join(summary.Notes, "\n"), "手动任务（m）需手动启用")
+
+	// 读不到内置任务文件时不猜，直接报错。
+	_, err = runSetupStart(context.Background(), setupDeps{}, startClient(), setupSnapshot(t), t.TempDir(), t.TempDir(), "crypto", time.Millisecond)
+	require.ErrorContains(t, err, "请在产物包目录或源码仓库根目录运行")
 }
 
 func TestSetupStartWithoutTasksFails(t *testing.T) {

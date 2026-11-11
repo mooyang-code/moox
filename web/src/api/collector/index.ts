@@ -200,9 +200,24 @@ export interface DataTypeFieldConfig {
   sort_order: number;
 }
 
+/** K 线任务可以在输出字段里选的一个附加字段及其适用范围；显示名、分组以 Storage 字段目录为准。 */
+export interface ExtraFieldOption {
+  field_id: string;
+  /** 适用的市场（空间） */
+  market_id: string;
+  /** 适用的品种，对应标签的 market_type */
+  instrument_type: string;
+  /** 适用的 K 线频率 */
+  frequencies?: string[];
+  /** 来源提供方 */
+  provider_id: string;
+}
+
 export interface DataTypeConfigDetail {
   config?: DataTypeConfig;
   fields?: DataTypeFieldConfig[];
+  /** K 线任务可选的附加字段，默认都不选 */
+  extra_fields?: ExtraFieldOption[];
 }
 
 export async function GetTaskList(params: GetTaskListRequest): Promise<GetTaskListResponse> {

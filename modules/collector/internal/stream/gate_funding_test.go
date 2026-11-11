@@ -90,8 +90,9 @@ func newFundingGateHarnessAt(t *testing.T, source *gateFundingSource, frequency 
 
 func fundingOf(t *testing.T, bar marketdata.NormalizedKline) float64 {
 	t.Helper()
-	require.NotNil(t, bar.FundingRate, "提交的每根都带本根资金费")
-	return *bar.FundingRate
+	value, ok := bar.Extra[domain.FieldFundingRate]
+	require.True(t, ok, "提交的每根都带本根资金费")
+	return value.Double
 }
 
 // 缓存已就绪：到齐即提交，按交易所合约代码取本根的资金费（没有结算的为 0）。
@@ -162,7 +163,7 @@ func TestGateWithoutFundingFieldIgnoresCache(t *testing.T) {
 	h.advance(10 * time.Second)
 	h.final("BTCUSDT", period, 1)
 	calls := h.waitCalls(1)
-	require.Nil(t, calls[0].Bars[0].FundingRate)
+	require.Empty(t, calls[0].Bars[0].Extra)
 	require.Zero(t, source.calls)
 }
 

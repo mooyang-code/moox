@@ -83,6 +83,17 @@ func taskResultFrequency(t *testing.T, task domain.CollectionTask) string {
 	return params.Frequency
 }
 
+func TestLoadTaskSeedAcceptsOnlyManualStartMarker(t *testing.T) {
+	manual := strings.Replace(validSeed, "    enabled: true\n", "    enabled: false\n    start: manual\n", 1)
+	tasks, err := Load(strings.NewReader(manual))
+	require.NoError(t, err)
+	require.Len(t, tasks, 1)
+	require.False(t, tasks[0].Enabled)
+
+	_, err = Load(strings.NewReader(strings.Replace(manual, "start: manual", "start: auto", 1)))
+	require.ErrorContains(t, err, "start must be empty or manual")
+}
+
 func TestLoadTaskSeedRejectsUnknownField(t *testing.T) {
 	_, err := loadTaskSeed(strings.NewReader("tasks:\n  - task_id: r1\n    mystery: true\n"))
 	require.ErrorContains(t, err, "field mystery not found")

@@ -39,6 +39,8 @@ const (
 	// tdxMaxBarsPerPage 是协议允许的单页上限。
 	tdxMaxBarsPerPage = 800
 	stockCNMarket     = "stockcn"
+	// dailyMaxLookback 是日线声明的回看深度，见 KlineSpec 的说明。
+	dailyMaxLookback = 3650 * 24 * time.Hour
 )
 
 func New(cfg Config) *Provider {
@@ -105,9 +107,13 @@ func (p *Provider) KlineSpec() marketdata.KlineSpec {
 		TimestampMode: marketdata.TimestampModeClose,
 		// 按偏移分页往回取。2026-11-04 实测 600519：5m 偏移 16000 根仍有数据（2025-05），1m 偏移 16000 根到 2026-07、
 		// 40000 根已无数据。声明 5m 及更长周期 365 天、1m 90 天。
-		History:            marketdata.KlineHistoryCapability{MaxLookback: 365 * 24 * time.Hour},
-		HistoryByFrequency: map[string]marketdata.KlineHistoryCapability{"1m": {MaxLookback: 90 * 24 * time.Hour}},
-		RateLimit:          p.rateLimit,
+		// 日线从最新一根往回取：2026-11-11 实测 600519 偏移 5000 根（2005-12）仍有数据，声明 10 年。
+		History: marketdata.KlineHistoryCapability{MaxLookback: 365 * 24 * time.Hour},
+		HistoryByFrequency: map[string]marketdata.KlineHistoryCapability{
+			"1m": {MaxLookback: 90 * 24 * time.Hour},
+			"1d": {MaxLookback: dailyMaxLookback},
+		},
+		RateLimit: p.rateLimit,
 	}
 }
 
@@ -147,28 +153,24 @@ func (p *Provider) FetchKlines(ctx context.Context, req marketdata.KlineRequest)
 	if err != nil {
 		return nil, err
 	}
-	// 交易时段内服务端最新一根是还没收盘的那根：不返回。
-	closed := rows[:0]
-	for _, row := range rows {
-		if !row.BarEnd.After(now) {
-			closed = append(closed, row)
-		}
-	}
-	if len(closed) == 0 {
+	if len(rows) == 0 {
 		return nil, marketdata.ErrNoClosedBar
 	}
-	return closed, nil
+	return rows, nil
 }
 
 // barWindow 把请求换成通达信的取数窗口：offset 是从服务端最新一根往前数的偏移，count 是根数。
 //
 // 服务端最新一根：交易时段内是正在形成的那根，休市时是最近收盘的那根（午休时即上午最后一根）。
 // 有起始时间时按 barclock 交易序号算出目标区间离最新一根有多远，多取一根较新的，以容忍服务端还没生成新一根；
-// 没有起始时间时取最新 Limit 根，也多取一根（可能是未收盘那根）。日线及以上只取最新 Limit 根。
-// 停牌的标的缺少中间的 K 线，按市场的交易序号算出的偏移会偏大，这种情况由覆盖校验报错。
+// 没有起始时间时取最新 Limit 根，也多取一根（可能是未收盘那根）。
+// 日线不按区间终点算偏移：固定从最新一根取起，一直取到区间起点，多出来的较新部分由管线按 [start, end) 截掉。
+// 停牌的标的缺少中间的 K 线，市场的交易日数不少于标的自身的根数，这样取的窗口一定覆盖到起点；
+// 若按终点算偏移，区间之后停过牌时窗口会整体偏旧、缺末尾几根且不报错。周线、月线只取最新 Limit 根。
+// 日内仍按交易序号算偏移，停牌造成的偏差由覆盖校验报错。
 func barWindow(req marketdata.KlineRequest, now time.Time) (int, int, error) {
 	frequency, _ := req.FrequencyValue()
-	if req.StartTime.IsZero() || frequency.Duration() <= 0 || frequency.Duration() >= 24*time.Hour {
+	if req.StartTime.IsZero() || frequency.Duration() <= 0 || frequency.Duration() > 24*time.Hour {
 		return 0, req.Limit + 1, nil
 	}
 	clock, err := markets.Clock(stockCNMarket, req.Frequency)
@@ -206,6 +208,9 @@ func barWindow(req marketdata.KlineRequest, now time.Time) (int, int, error) {
 	}
 	if end < start {
 		return 0, 0, fmt.Errorf("%w: [%s, %s) 内没有交易时段的 K 线", marketdata.ErrHistoryCoverage, req.StartTime.UTC().Format(time.RFC3339), req.EndTime.UTC().Format(time.RFC3339))
+	}
+	if frequency.Duration() == 24*time.Hour {
+		return 0, int(newest-start) + 2, nil
 	}
 	offset := max(newest-end-1, 0)
 	return int(offset), int(newest-offset-start) + 1, nil
@@ -313,20 +318,11 @@ func normalizeBars(subjectID, providerSymbol, frequency string, bars []tdxwire.B
 	rows := make([]marketdata.NormalizedKline, 0, len(bars))
 	var previous time.Time
 	for index, bar := range bars {
-		barStart := bar.Time
-		if !daily {
-			barStart, err = intradayBarStart(clock, location, bar.Time)
-			if err != nil {
-				return nil, fmt.Errorf("tdx bar %d: %w", index, err)
-			}
-		}
-		if parsedFrequency == marketdata.FrequencyDay || parsedFrequency == marketdata.FrequencyWeek || parsedFrequency == marketdata.FrequencyMonth {
-			local := bar.Time.In(location)
-			if parsedFrequency == marketdata.FrequencyMonth {
-				barStart = time.Date(local.Year(), local.Month(), 1, 0, 0, 0, 0, location)
-			} else {
-				barStart = time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, location)
-			}
+		var barStart time.Time
+		if daily {
+			barStart = dateKey(parsedFrequency, bar.Time.In(location))
+		} else if barStart, err = intradayBarStart(clock, location, bar.Time); err != nil {
+			return nil, fmt.Errorf("tdx bar %d: %w", index, err)
 		}
 		barStart = barStart.UTC()
 		if !previous.IsZero() && !barStart.After(previous) {
@@ -350,13 +346,33 @@ func normalizeBars(subjectID, providerSymbol, frequency string, bars []tdxwire.B
 			FetchedAt:         fetchedAt,
 			RequestID:         requestID,
 		}
+		previous = barStart
+		// 还没收盘的根不返回，也不校验：交易时段内最新一根是正在形成的那根；开盘前服务端可能在最新位置给一根价格为 0 的当天占位根，
+		// 先校验会让整次取数报错。
+		if row.BarEnd.After(fetchedAt) {
+			continue
+		}
 		if err := marketdata.ValidateNormalizedKline(row); err != nil {
 			return nil, fmt.Errorf("tdx bar %d: %w", index, err)
 		}
 		rows = append(rows, row)
-		previous = barStart
 	}
 	return rows, nil
+}
+
+// dateKey 返回日线及以上 K 线的键：日线是交易日期的 UTC 零点，周线是所在周周一的 UTC 零点，月线是当月 1 日的 UTC 零点
+// （与 barclock 的 1d 键、采集的统一校验一致）。local 是通达信的时间标签换到上海时区后的时刻，标签的日期就是交易日期
+// （周线、月线是期内最后一个交易日）。
+func dateKey(frequency marketdata.Frequency, local time.Time) time.Time {
+	day := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, time.UTC)
+	switch frequency {
+	case marketdata.FrequencyWeek:
+		// Truncate 以零时刻（周一）为基准，落在周一。
+		return day.Truncate(7 * 24 * time.Hour)
+	case marketdata.FrequencyMonth:
+		return time.Date(local.Year(), local.Month(), 1, 0, 0, 0, 0, time.UTC)
+	}
+	return day
 }
 
 // intradayBarStart 把通达信日内 K 线的时间标签换成开盘时刻。
