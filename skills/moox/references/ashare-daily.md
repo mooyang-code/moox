@@ -17,7 +17,7 @@ A 股日线任务可以在每根日线上带三组附加字段：后复权因子
 
 - 线上的 Collector、云函数代码包、策略、管理台已经是带这项能力的版本。旧版程序不认识这些字段，会把它们丢掉；升级见 [`native-release.md`](native-release.md)。
   发布顺序是 Collector（连同云函数代码包）先于管理台 `web-host`：新版管理台的输出字段清单取自 Collector 的响应。
-- 这一版发布之后要回滚 Collector，必须按单元回退（二进制和随单元发布的 `collection-tasks.yaml` 一起回到旧版），不能只把二进制换回旧版：旧版 Collector 不认识种子里的 `start` 键，任务表为空时读到新文件会启动失败。
+- 这一版发布之后要回滚 Collector，必须按单元回退（二进制和随单元发布的 `collection-tasks.yaml` 一起回到旧版），不能只把二进制换回旧版：旧版 Collector（包括这一版之前线上在跑的版本）每次启动都先严格解析这个文件，不管任务表是否为空，读到 `start` 键就启动失败；从这一版起，任务表非空时才不读这个文件。
 - stockcn 空间走云函数采集，`moox.toml` 的 `[scf_plan]` 里要有这个空间。
 - 确认 5m 的 A 股采集已经正常（`./bin/moox-cli collector status --space-id stockcn`），再打开日线。
 
