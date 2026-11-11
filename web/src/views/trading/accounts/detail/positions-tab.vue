@@ -3,7 +3,7 @@
     <template #sub>{{
       stockMode
         ? "按股票一行，目标来自策略，实际来自各执行账户；可卖是扣掉冻结和当日买入后的数量"
-        : "按币一行，目标来自策略，实际来自各执行账户；偏差分现货、永续各算各的"
+        : "按币一行，目标来自策略，实际来自各执行账户；市值和未实现盈亏按标记价，偏差分现货、永续各算各的"
     }}</template>
     <div class="toolbar">
       <a-radio-group v-model="filter" type="button" @change="page = 1">
@@ -23,43 +23,77 @@
       :data="rows"
       :bordered="{ cell: true }"
       :pagination="{ pageSize: 50, current: page, showTotal: true }"
-      :scroll="{ x: 1000 }"
+      :scroll="{ x: 1100 }"
       @page-change="(value: number) => (page = value)"
     >
       <template #columns>
-        <a-table-column :title="stockMode ? '股票' : '币'" :width="stockMode ? 120 : 90" fixed="left">
+        <a-table-column
+          :title="stockMode ? '股票' : '币'"
+          data-index="coin"
+          :width="130"
+          fixed="left"
+          :sortable="{ sortDirections: ['ascend', 'descend'] }"
+        >
           <template #cell="{ record }"
-            ><strong>{{ record.coin }}</strong></template
+            ><strong class="tx-nowrap">{{ record.coin }}</strong></template
+          >
+        </a-table-column>
+        <a-table-column
+          title="市值"
+          data-index="value"
+          :width="120"
+          align="right"
+          :sortable="{ sortDirections: ['descend', 'ascend'], defaultSortOrder: 'descend' }"
+        >
+          <template #cell="{ record }"
+            ><span class="tx-num">{{ record.value ? fmtMoney(record.value) : "—" }}</span></template
           >
         </a-table-column>
         <a-table-column v-if="logical.control_mode === 1" title="目标">
-          <a-table-column :title="spotTitle" :width="110" align="right">
+          <a-table-column v-if="showSpot" :title="spotTitle" :width="120" align="right">
             <template #cell="{ record }"
               ><span class="tx-num">{{ targetText(record.targetSpot) }}</span></template
             >
           </a-table-column>
-          <a-table-column v-if="!stockMode" title="永续" :width="110" align="right">
+          <a-table-column v-if="showSwap" title="永续" :width="120" align="right">
             <template #cell="{ record }"
               ><span class="tx-num">{{ targetText(record.targetSwap) }}</span></template
             >
           </a-table-column>
         </a-table-column>
         <a-table-column title="实际">
-          <a-table-column :title="spotTitle" :width="110" align="right">
+          <a-table-column v-if="showSpot" :title="spotTitle" :width="120" align="right">
             <template #cell="{ record }"
               ><span class="tx-num">{{ actualText(record.actualSpot, "spot") }}</span></template
             >
           </a-table-column>
           <a-table-column v-if="stockMode" title="可卖" :width="110" align="right">
             <template #cell="{ record }"
-              ><span class="tx-num">{{ record.actualSpot ? fmtQty(cleanNumber(record.sellable)) : "—" }}</span></template
+              ><span class="tx-num">{{ record.actualSpot ? fmtQtyShort(record.sellable) : "—" }}</span></template
             >
           </a-table-column>
-          <a-table-column v-else title="永续" :width="110" align="right">
-            <template #cell="{ record }"
-              ><span class="tx-num">{{ actualText(record.actualSwap, "swap") }}</span></template
-            >
+          <a-table-column v-if="showSwap" title="永续" :width="140" align="right">
+            <template #cell="{ record }">
+              <span v-if="record.actualSwap" class="tx-muted side">{{ record.actualSwap > 0 ? "多" : "空" }}</span>
+              <span class="tx-num">{{ actualText(record.actualSwap, "swap") }}</span>
+            </template>
           </a-table-column>
+        </a-table-column>
+        <a-table-column v-if="showSwap" title="开仓均价" :width="110" align="right">
+          <template #cell="{ record }"
+            ><span class="tx-num">{{ fmtPrice(record.entrySwap) }}</span></template
+          >
+        </a-table-column>
+        <a-table-column
+          title="未实现盈亏"
+          data-index="unrealizedPnl"
+          :width="120"
+          align="right"
+          :sortable="{ sortDirections: ['descend', 'ascend'] }"
+        >
+          <template #cell="{ record }"
+            ><span class="tx-num" :class="pnlClass(record.unrealizedPnl)">{{ fmtSigned(record.unrealizedPnl) }}</span></template
+          >
         </a-table-column>
         <a-table-column v-if="logical.control_mode === 1" title="偏差" :width="190">
           <template #cell="{ record }">
@@ -92,9 +126,9 @@
             </template>
           </template>
         </a-table-column>
-        <a-table-column v-if="!stockMode" title="现货余额" :width="120" align="right">
+        <a-table-column v-if="showSpot && !stockMode" title="现货余额" :width="120" align="right">
           <template #cell="{ record }"
-            ><span class="tx-num">{{ record.spotBalance ? fmtQty(cleanNumber(record.spotBalance)) : "—" }}</span></template
+            ><span class="tx-num">{{ record.spotBalance ? fmtQtyShort(record.spotBalance) : "—" }}</span></template
           >
         </a-table-column>
         <a-table-column title="操作" :width="170" :fixed="isNarrow ? undefined : 'right'">
@@ -122,13 +156,15 @@
 import { useWindowSize } from "@vueuse/core";
 import { computed, inject, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import { fmtQty } from "../shared/format";
+import { fmtMoney, fmtPrice, fmtQtyShort, fmtSigned, pnlClass } from "../shared/format";
 import { marketLabel } from "../shared/markets";
 import SectionBlock from "../shared/section-block.vue";
 import { detailContextKey } from "./context";
 import {
   cleanNumber,
   filterCoinRows,
+  hasSpotSide,
+  hasSwapSide,
   largestHolder,
   rowOrderHints,
   type CoinRow,
@@ -161,20 +197,23 @@ const rows = computed(() => filterCoinRows(coinRows.value, filter.value, search.
 // A 股组合：一列股票、加“可卖”列，没有永续
 const stockMode = computed(() => Boolean(logical.value.markets?.includes(3)));
 const spotTitle = computed(() => (stockMode.value ? "股票" : "现货"));
+// 组合里完全没有现货（或永续）一侧的目标和持仓时，不显示那一侧的列
+const showSpot = computed(() => stockMode.value || hasSpotSide(coinRows.value));
+const showSwap = computed(() => !stockMode.value && hasSwapSide(coinRows.value));
 const canOrder = computed(() => [1, 2].includes(logical.value.control_mode) && !flattenRunning.value);
 
 function targetText(cell?: TargetCell) {
   if (!cell) return "—";
-  return cell.hold ? "保持" : fmtQty(cell.quantity);
+  return cell.hold ? "保持" : fmtQtyShort(cell.quantity);
 }
 function actualText(value: number, market: "spot" | "swap") {
-  if (value !== 0) return fmtQty(cleanNumber(value));
+  if (value !== 0) return fmtQtyShort(cleanNumber(value));
   const opened = market === "spot" ? (stockMode.value ? 3 : 1) : 2;
   return logical.value.markets?.includes(opened) ? "0" : "—";
 }
 function signed(value: number) {
   const clean = cleanNumber(value);
-  return `${clean > 0 ? "+" : ""}${fmtQty(clean)}`;
+  return `${clean > 0 ? "+" : ""}${fmtQtyShort(clean)}`;
 }
 /** 这个市场未到位才着色：偏多为绿，偏少为红。 */
 function deviationClass(deviation: number, off: boolean) {
@@ -205,6 +244,11 @@ function openRowOrder(row: CoinRow, hint: OrderHint) {
   align-items: center;
   gap: var(--moox-space-3);
   padding: 12px 16px;
+}
+
+.side {
+  margin-right: 6px;
+  font-size: 12px;
 }
 
 .alert {

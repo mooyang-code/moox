@@ -26,9 +26,9 @@ async function openDetail(page: Page, id: string, tab = "") {
 const listTab = (page: Page, label: string) =>
   page.locator(".list-tabs .arco-tabs-tab").filter({ hasText: new RegExp(`^${label}`) });
 
-test("列表按环境分页签，组合账户、执行账户分两个子页签，执行账户显示市场和所属组合", async ({ page }) => {
-  await page.goto("/#/trading/accounts");
-  await expect(page.getByRole("tab", { name: "模拟盘" })).toHaveAttribute("aria-selected", "true");
+test("三个环境各一个菜单，组合账户、执行账户分两个子页签，执行账户显示市场和所属组合", async ({ page }) => {
+  await page.goto("/#/trading/paper");
+  await expect(page.getByRole("heading", { name: "模拟账户" })).toBeVisible();
   for (const title of ["组合账户", "交易所", "关联策略", "自动执行", "权益", "近 24 小时", "持仓", "就绪"]) {
     await expect(page.getByRole("columnheader", { name: title, exact: true })).toBeVisible();
   }
@@ -44,18 +44,25 @@ test("列表按环境分页签，组合账户、执行账户分两个子页签�
   await expect(page.getByText("币安 · 现货、永续")).toBeVisible();
   await expect(page.getByRole("row", { name: /OKX 模拟（未加入）/ }).getByText("未加入", { exact: true })).toBeVisible();
   await listTab(page, "组合账户").click();
-  await expect(page).toHaveURL(/#\/trading\/accounts$/);
+  await expect(page).toHaveURL(/#\/trading\/paper$/);
 
-  await page.getByRole("tab", { name: "测试网" }).click();
-  await expect(page).toHaveURL(/env=testnet/);
+  await page.goto("/#/trading/testnet");
+  await expect(page.getByRole("heading", { name: "测试账户" })).toBeVisible();
   await expect(page.getByText("测试网组合")).toBeVisible();
   await expect(page.getByText("默认策略模拟组合")).toHaveCount(0);
-  await page.getByRole("tab", { name: "生产环境" }).click();
+  await page.goto("/#/trading/live");
+  await expect(page.getByRole("heading", { name: "实盘账户" })).toBeVisible();
   await expect(page.getByText("生产组合")).toBeVisible();
 });
 
+test("只带组合编号的地址打开详情后，换到所属环境的地址", async ({ page }) => {
+  await openDetail(page, "la-paper-1");
+  await expect(page.getByRole("heading", { name: "默认策略模拟组合" })).toBeVisible();
+  await expect(page).toHaveURL(/#\/trading\/paper\/la-paper-1/);
+});
+
 test("未加入组合的执行账户在执行账户页签的行上加入组合", async ({ page }) => {
-  await page.goto("/#/trading/accounts?list=execution");
+  await page.goto("/#/trading/paper?list=execution");
   await page
     .getByRole("row", { name: /OKX 模拟（未加入）/ })
     .getByRole("button", { name: "加入组合" })
@@ -78,7 +85,7 @@ test("未加入组合的执行账户在执行账户页签的行上加入组合",
 });
 
 test("新建模拟账户四步，测试网和生产环境也可选，请求带市场集合", async ({ page }) => {
-  await page.goto("/#/trading/accounts");
+  await page.goto("/#/trading/paper");
   await page.getByRole("button", { name: "新建账户" }).click();
   const dialog = page.locator(".arco-modal:visible");
   await expect(dialog.getByText("1 类型").or(dialog.getByText("类型", { exact: true }))).toBeVisible();
@@ -172,19 +179,19 @@ test("订单、成交、资金流水页签读数据，订单行点开看详情",
 });
 
 test("从详情页返回列表时重新读取，不显示缓存的旧数据", async ({ page }) => {
-  await page.goto("/#/trading/accounts");
+  await page.goto("/#/trading/paper");
   await expect(page.getByText("默认策略模拟组合")).toBeVisible();
   const before = calls.listLogicals;
   await page.getByText("默认策略模拟组合").click();
   await expect(page.getByRole("heading", { name: "默认策略模拟组合" })).toBeVisible();
-  await page.getByRole("button", { name: "模拟盘" }).first().click();
+  await page.getByRole("button", { name: "模拟账户" }).first().click();
   await expect(page.locator(".list-tabs")).toBeVisible();
   await expect.poll(() => calls.listLogicals).toBeGreaterThan(before);
 });
 
 test("1280 宽时组合和执行账户列表的每一列都保持自己的宽度，数字不折行", async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 720 });
-  await page.goto("/#/trading/accounts");
+  await page.goto("/#/trading/paper");
   await expect(page.getByText("默认策略模拟组合")).toBeVisible();
   const widths = await page
     .locator(".tx-accounts th.arco-table-th")
@@ -205,7 +212,7 @@ test("1280 宽时组合和执行账户列表的每一列都保持自己的宽度
 test("390 窄屏下列表、详情和订单抽屉不产生页面横向溢出", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 800 });
   const overflow = () => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
-  await page.goto("/#/trading/accounts");
+  await page.goto("/#/trading/paper");
   await expect(page.getByText("默认策略模拟组合")).toBeVisible();
   expect(await overflow()).toBeLessThanOrEqual(1);
   await openDetail(page, "la-paper-1");
@@ -247,7 +254,7 @@ test("持仓行下单：现货、永续各一个入口，预填方向和与目�
 });
 
 test("新建模拟账户加入已有组合：一次请求带组合编号，不再单独加成员", async ({ page }) => {
-  await page.goto("/#/trading/accounts");
+  await page.goto("/#/trading/paper");
   await page.getByRole("button", { name: "新建账户" }).click();
   const dialog = page.locator(".arco-modal:visible");
   await dialog.getByRole("button", { name: "下一步" }).click();

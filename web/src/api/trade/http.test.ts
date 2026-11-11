@@ -107,6 +107,14 @@ describe("Trade response errors", () => {
     expect(text("trade: invalid order specification")).toBe("订单参数不合法");
   });
 
+  it("网关或交易服务超时的英文原文换成一句中文", () => {
+    const text = (msg: string) => new TradeResponseError({ ret_info: { code: 2, msg } }).message;
+    expect(text("tcp client transport ReadFrame: read tcp 10.1.12.13:37552->43.132.204.177:11003: i/o timeout")).toBe(
+      "交易服务响应超时，请稍后重试"
+    );
+    expect(text("交易服务内部错误：context deadline exceeded")).toBe("交易服务响应超时，请稍后重试");
+  });
+
   it("“记录不合法”只是外层包装：剥掉英文前缀只显示后面的中文原因", () => {
     const text = (msg: string) => new TradeResponseError({ ret_info: { code: 1, msg } }).message;
     expect(text("trade store: invalid record: 修改组合成员前要先暂停组合")).toBe("修改组合成员前要先暂停组合");

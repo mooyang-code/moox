@@ -94,6 +94,54 @@ func TestSummarizeFillsSumsByAssetWithoutRounding(t *testing.T) {
 	require.ErrorIs(t, err, ErrInvalidRecord)
 }
 
+// 成交写入时带上所属订单的组合账户（外部单为空）；按组合查成交、汇总直接按这一列取，成员移出后历史成交仍算在组合下。
+func TestFillsCarryOrderLogicalAccount(t *testing.T) {
+	s := openTestStore(t)
+	seedLiveSummaryFills(t, s)
+	ctx := context.Background()
+
+	external, _, err := s.ListFills(ctx, "space-1", FillQuery{OrderID: "ext-order", Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, external, 1)
+	require.Empty(t, external[0].LogicalAccountID, "外部单的成交不属于任何组合")
+	var nullCount int64
+	require.NoError(t, s.db.Raw(`SELECT COUNT(*) FROM t_order_fills WHERE c_logical_account_id IS NULL`).Scan(&nullCount).Error)
+	require.Equal(t, int64(1), nullCount, "没有组合时存 NULL，不存空串")
+
+	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
+		return tx.DeleteLogicalAccountMember("space-1", "logical-1", "account-1")
+	}))
+	fills, total, err := s.ListFillsReadOnly(ctx, "space-1", FillQuery{LogicalAccountID: "logical-1", Limit: 2})
+	require.NoError(t, err)
+	require.Equal(t, int64(3), total, "移出的成员的历史成交仍算在组合下")
+	require.Equal(t, []string{"f3", "f2"}, []string{fills[0].FillID, fills[1].FillID}, "按成交时间倒序分页")
+	require.Equal(t, "logical-1", fills[0].LogicalAccountID)
+	summary, err := s.SummarizeFills(ctx, "space-1", FillSummaryQuery{LogicalAccountID: "logical-1", EndTime: 10_000})
+	require.NoError(t, err)
+	require.Equal(t, int64(3), summary.FillCount)
+}
+
+// 启用成员时外部单被补上组合编号，它已有的成交同样补上，成交的组合编号始终跟随订单。
+func TestAdoptedOrderFillsFollowLogicalAccount(t *testing.T) {
+	s := openTestStore(t)
+	seedLiveSummaryFills(t, s)
+	ctx := context.Background()
+	require.NoError(t, s.Transaction(ctx, func(tx *Tx) error {
+		return tx.PutLogicalAccountMember(LogicalAccountMemberRecord{
+			SpaceID: "space-1", LogicalAccountID: "logical-1", TradingAccountID: "account-1", Enabled: true, Priority: 1,
+		})
+	}))
+	order, err := s.GetOrder(ctx, "space-1", "ext-order")
+	require.NoError(t, err)
+	require.Equal(t, "logical-1", order.LogicalAccountID)
+	fills, total, err := s.ListFills(ctx, "space-1", FillQuery{LogicalAccountID: "logical-1", Limit: 10})
+	require.NoError(t, err)
+	require.Equal(t, int64(4), total)
+	for _, fill := range fills {
+		require.Equal(t, "logical-1", fill.LogicalAccountID, fill.FillID)
+	}
+}
+
 func amountOf(values []AssetAmount, asset string) string {
 	for _, value := range values {
 		if value.Asset == asset {

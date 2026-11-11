@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { Holding, Position } from "@/api/trade/types";
 import { decimalAdd, decimalSub } from "../shared/order-rules";
-import { buildCoinRows, filterCoinRows, largestHolder, rowOrderHints, targetCoinCount } from "./positions-model";
+import {
+  buildCoinRows,
+  filterCoinRows,
+  hasSpotSide,
+  hasSwapSide,
+  largestHolder,
+  rowOrderHints,
+  targetCoinCount
+} from "./positions-model";
 
 const swap = (instrument_id: string, signed_quantity: string, mark_price = "") =>
   ({ instrument_id, signed_quantity, mark_price, market_type: 2 }) as Position;
@@ -375,5 +383,80 @@ describe("A 股持仓", () => {
     // 差额整整一手且超出阈值
     expect(stateOf("400", "300")).toBe("off");
     expect(stateOf("0", "50")).toBe("off");
+  });
+});
+
+describe("市值、开仓均价、未实现盈亏", () => {
+  const position = (trading_account_id: string, signed_quantity: string, entry_price: string, unrealized_pnl: string) =>
+    ({
+      instrument_id: "ETH-USDT-SWAP",
+      trading_account_id,
+      signed_quantity,
+      entry_price,
+      mark_price: "2000",
+      unrealized_pnl,
+      market_type: 2
+    }) as Position;
+
+  it("市值按标记价取绝对值，均价按持仓数量加权，未实现盈亏相加", () => {
+    const [row] = buildCoinRows({
+      targets: [],
+      blocked: [],
+      swapPositions: [position("a", "-1", "2100", "100"), position("b", "-3", "1900", "-300")],
+      spotHoldings: [],
+      converged: false,
+      hasTarget: false
+    });
+    expect(row.value).toBe(8000);
+    expect(row.entrySwap).toBe(1950);
+    expect(row.unrealizedPnl).toBe(-200);
+  });
+
+  it("取不到标记价、均价和盈亏时：市值为 0，均价为 0，盈亏为空", () => {
+    const [row] = buildCoinRows({
+      targets: [],
+      blocked: [],
+      swapPositions: [swap("BTC-USDT-SWAP", "1")],
+      spotHoldings: [],
+      converged: false,
+      hasTarget: false
+    });
+    expect(row).toMatchObject({ value: 0, entrySwap: 0, unrealizedPnl: null });
+  });
+
+  it("现货持币没有盈亏数（实盘）时，同一个币的整行盈亏显示为空，不只算永续一条腿", () => {
+    const [row] = buildCoinRows({
+      targets: [],
+      blocked: [],
+      swapPositions: [position("a", "-1", "2100", "100")],
+      spotHoldings: [{ asset: "ETH", quantity: "1", instrument_id: "ETH-USDT-SPOT", mark_price: "2000" } as Holding],
+      converged: false,
+      hasTarget: false
+    });
+    expect(row.unrealizedPnl).toBeNull();
+    expect(row.value).toBe(4000);
+  });
+
+  it("只有永续的组合没有现货一侧，页面据此不显示现货列", () => {
+    const rows = buildCoinRows({
+      targets: [{ instrument_id: "BTC-USDT-SWAP", quantity: "1" }],
+      blocked: [],
+      swapPositions: [],
+      spotHoldings: [],
+      converged: false,
+      hasTarget: true
+    });
+    expect(hasSpotSide(rows)).toBe(false);
+    expect(hasSwapSide(rows)).toBe(true);
+    const withSpot = buildCoinRows({
+      targets: [],
+      blocked: [],
+      swapPositions: [],
+      spotHoldings: [spot("BTC", "1")],
+      converged: false,
+      hasTarget: false
+    });
+    expect(hasSpotSide(withSpot)).toBe(true);
+    expect(hasSwapSide(withSpot)).toBe(false);
   });
 });

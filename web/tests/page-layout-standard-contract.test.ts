@@ -53,8 +53,9 @@ describe("page layout standards", () => {
 
     expectMargin(spaces, ".page-head", "margin-bottom", 8);
     expect(spaces).toMatch(/\.page-head h2\s*\{[\s\S]*?margin:\s*0;/);
-    // 交易账户：环境用页面标题页签，只列组合账户；详情是整页，页签用 ?tab=
-    expect(accounts).toContain("PageTitleTabs");
+    // 交易账户：三个环境各一个菜单，页面标题是菜单名，不再用标题页签切环境；详情是整页，页签用 ?tab=
+    expect(accounts).toContain('<h2 class="page-title">{{ environmentMenus[env].title }}</h2>');
+    expect(accounts).not.toContain("PageTitleTabs");
     expect(accounts).toContain('class="moox-page tx-accounts"');
     expect(accounts).toContain("新建账户");
     expect(accounts).toContain('title="组合账户"');
@@ -64,11 +65,13 @@ describe("page layout standards", () => {
     expect(accounts).not.toContain("<a-drawer");
     expect(accountDetail).toContain('class="moox-page tx-detail"');
     expect(accountDetail).not.toContain("<a-drawer");
-    // 菜单「交易管理」只留「交易账户」一项
-    expect(staticMenuSource.match(/\/trading\/accounts/g)?.length).toBe(2);
+    // 菜单「交易管理」是四项：模拟账户、测试账户、实盘账户、下架名单；持仓、订单不单独做菜单
+    for (const path of ["/trading/paper", "/trading/testnet", "/trading/live", "/trading/blocked"]) {
+      expect(staticMenuSource).toContain(`"${path}"`);
+    }
+    expect(staticMenuSource).not.toContain("/trading/accounts");
     expect(staticMenuSource).not.toContain("/trading/positions");
     expect(staticMenuSource).not.toContain("/trading/orders");
-    expect(staticMenuSource).not.toContain('"0504"');
     expect(staticMenuSource).not.toContain("/trading/logical-accounts");
     // 策略菜单与因子计算一致：总览 → 定义 → 运行（实例 / 结果 / 回放 工作台）。
     const strategyOverviewPos = staticMenuSource.indexOf(

@@ -1,5 +1,35 @@
 import { HOME_PATH } from "@/config/index";
 import Layout from "@/layout/index.vue";
+import { environmentMenus, type Environment } from "@/components/trade-confirm/environment";
+
+// 组合详情的几条地址（各环境一条，加只带组合编号的通用地址）是同一个页面：在它们之间换地址时复用组件
+const DETAIL_VIEW_KEY = "trading-account-detail";
+
+// 三个环境各一个账户列表菜单，加上各自的组合详情（隐藏路由，侧栏高亮所属菜单）。
+const tradingAccountRoutes = (Object.keys(environmentMenus) as Environment[]).flatMap(env => {
+  const menu = environmentMenus[env];
+  return [
+    {
+      path: menu.path,
+      name: menu.name,
+      component: () => import("@/views/trading/accounts/index.vue"),
+      meta: { title: menu.name, reuseOnQuery: true, env }
+    },
+    {
+      path: `${menu.path}/:logical_account_id`,
+      name: `${menu.name}-detail`,
+      component: () => import("@/views/trading/accounts/detail/index.vue"),
+      meta: {
+        title: "trading-account-detail",
+        hide: true,
+        activeMenu: menu.name,
+        reuseOnQuery: true,
+        viewKey: DETAIL_VIEW_KEY,
+        env
+      }
+    }
+  ];
+});
 
 export const staticRoutes = [
   {
@@ -150,17 +180,25 @@ export const staticRoutes = [
         component: () => import("@/views/collector/task-management/index.vue"),
         meta: { title: "collector-tasks", reuseOnQuery: true }
       },
+      ...tradingAccountRoutes,
       {
-        path: "/trading/accounts",
-        name: "trading-accounts",
-        component: () => import("@/views/trading/accounts/index.vue"),
-        meta: { title: "trading-accounts", reuseOnQuery: true }
+        path: "/trading/blocked",
+        name: "trading-blocked",
+        component: () => import("@/views/trading/blocked/index.vue"),
+        meta: { title: "trading-blocked" }
       },
+      // 只知道组合编号、不知道环境的链接（策略页、事件中心）走这个地址；详情页读到组合后换到所属环境的地址。
       {
         path: "/trading/accounts/:logical_account_id",
         name: "trading-account-detail",
         component: () => import("@/views/trading/accounts/detail/index.vue"),
-        meta: { title: "trading-account-detail", hide: true, activeMenu: "trading-accounts", reuseOnQuery: true }
+        meta: {
+          title: "trading-account-detail",
+          hide: true,
+          activeMenu: environmentMenus.prod.name,
+          reuseOnQuery: true,
+          viewKey: DETAIL_VIEW_KEY
+        }
       },
       {
         path: "/ops/monitor",

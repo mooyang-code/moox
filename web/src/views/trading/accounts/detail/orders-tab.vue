@@ -28,13 +28,13 @@
       :data="orders"
       :loading="loading"
       :pagination="{ current: page, pageSize, total, showTotal: true }"
-      :scroll="{ x: 1100 }"
+      :scroll="{ x: 1180 }"
       :row-class="() => 'clickable'"
       @row-click="(record: unknown) => openDrawer(record as Order)"
       @page-change="changePage"
     >
       <template #columns>
-        <a-table-column title="提交时间" :width="140">
+        <a-table-column title="提交时间" :width="190">
           <template #cell="{ record }"
             ><span class="tx-muted tx-nowrap">{{
               formatInstant(Number(record.submitted_at) ? record.submitted_at : record.created_at, displayZone)
@@ -44,9 +44,9 @@
         <a-table-column v-if="memberOptions.length > 1" title="执行账户" :width="130" ellipsis tooltip>
           <template #cell="{ record }">{{ accountName(record.trading_account_id) }}</template>
         </a-table-column>
-        <a-table-column title="标的" :width="170">
+        <a-table-column title="标的" :width="200">
           <template #cell="{ record }">
-            <strong>{{ instrumentName(record.instrument_id) }}</strong>
+            <strong class="tx-nowrap">{{ instrumentName(record.instrument_id) }}</strong>
             <span class="tx-muted"> {{ marketLabel(record.market_type) }}</span>
             <span v-if="record.reduce_position_only" class="tx-muted"> 只减仓</span>
           </template>

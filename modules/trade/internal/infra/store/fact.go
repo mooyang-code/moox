@@ -877,16 +877,21 @@ type OrderQuery struct {
 	Limit     int
 }
 
-func (s *Store) ListOrders(
-	ctx context.Context,
-	spaceID string,
-	query OrderQuery,
-) ([]OrderRecord, int64, error) {
+// ListOrders 给交易执行路径用，走主连接。
+func (s *Store) ListOrders(ctx context.Context, spaceID string, query OrderQuery) ([]OrderRecord, int64, error) {
+	return listOrders(s.db.WithContext(ctx), spaceID, query)
+}
+
+// ListOrdersReadOnly 给管理台的订单列表用，走只读连接，不和交易执行的写入排同一个连接。
+func (s *Store) ListOrdersReadOnly(ctx context.Context, spaceID string, query OrderQuery) ([]OrderRecord, int64, error) {
+	return listOrders(s.readDB.WithContext(ctx), spaceID, query)
+}
+
+func listOrders(db *gorm.DB, spaceID string, query OrderQuery) ([]OrderRecord, int64, error) {
 	if query.ExchangeSymbol != "" && query.Market == "" {
 		return nil, 0, fmt.Errorf("%w: 按交易所代码查询必须同时给市场", ErrInvalidRecord)
 	}
-	db := s.db.WithContext(ctx).Table("t_trade_orders").
-		Where("c_space_id = ?", spaceID)
+	db = db.Table("t_trade_orders").Where("c_space_id = ?", spaceID)
 	if query.LogicalAccountID != "" {
 		db = db.Where("c_logical_account_id = ?", query.LogicalAccountID)
 	}
@@ -1121,6 +1126,8 @@ type FillRecord struct {
 	RealizedPnL      string
 	Role             string
 	TradedAt         int64
+	// LogicalAccountID 是成交所属订单的组合账户，写入时一律取自订单，调用方不用填。
+	LogicalAccountID string
 	CreatedAt        time.Time
 }
 
@@ -1130,14 +1137,15 @@ func (tx *Tx) InsertFill(record FillRecord) (bool, error) {
 		return false, fmt.Errorf("%w: incomplete Fill", ErrInvalidRecord)
 	}
 	var orderIdentity struct {
-		TradingAccountID string `gorm:"column:c_trading_account_id"`
-		ExchangeOrderID  string `gorm:"column:c_exchange_order_id"`
-		Exchange         string `gorm:"column:c_exchange"`
-		MarketType       string `gorm:"column:c_market_type"`
-		InstrumentID     string `gorm:"column:c_instrument_id"`
-		ExchangeSymbol   string `gorm:"column:c_exchange_symbol"`
-		Side             string `gorm:"column:c_side"`
-		PositionSide     string `gorm:"column:c_position_side"`
+		TradingAccountID string  `gorm:"column:c_trading_account_id"`
+		ExchangeOrderID  string  `gorm:"column:c_exchange_order_id"`
+		Exchange         string  `gorm:"column:c_exchange"`
+		MarketType       string  `gorm:"column:c_market_type"`
+		InstrumentID     string  `gorm:"column:c_instrument_id"`
+		ExchangeSymbol   string  `gorm:"column:c_exchange_symbol"`
+		Side             string  `gorm:"column:c_side"`
+		PositionSide     string  `gorm:"column:c_position_side"`
+		LogicalAccountID *string `gorm:"column:c_logical_account_id"`
 	}
 	result := tx.db.Raw(queryOrderIdentity, record.SpaceID, record.OrderID).Scan(&orderIdentity)
 	if result.Error != nil {
@@ -1186,6 +1194,7 @@ func (tx *Tx) InsertFill(record FillRecord) (bool, error) {
 		record.ExchangeOrderID != orderIdentity.ExchangeOrderID {
 		return false, fmt.Errorf("%w: Fill Exchange order", ErrInvalidRecord)
 	}
+	record.LogicalAccountID = valueOrEmpty(orderIdentity.LogicalAccountID)
 	if err := canonicalizeFill(&record); err != nil {
 		return false, err
 	}
@@ -1199,7 +1208,7 @@ func (tx *Tx) InsertFill(record FillRecord) (bool, error) {
 		record.MarketType, record.InstrumentID, record.ExchangeSymbol, record.Side, record.PositionSide,
 		record.Price, record.Quantity, record.Fee, record.FeeAsset,
 		record.SettlementAsset, record.RealizedPnL, record.Role,
-		record.TradedAt,
+		record.TradedAt, nullableString(record.LogicalAccountID),
 	)
 	if result.Error != nil {
 		conflict := writeError(result.Error)
@@ -1242,6 +1251,7 @@ type fillRow struct {
 	RealizedPnL      string    `gorm:"column:c_realized_pnl"`
 	Role             string    `gorm:"column:c_role"`
 	TradedAt         int64     `gorm:"column:c_traded_at"`
+	LogicalAccountID *string   `gorm:"column:c_logical_account_id"`
 	CreatedAt        time.Time `gorm:"column:c_ctime"`
 }
 
@@ -1259,23 +1269,27 @@ type FillQuery struct {
 	Limit          int
 }
 
-func (s *Store) ListFills(
-	ctx context.Context,
-	spaceID string,
-	query FillQuery,
-) ([]FillRecord, int64, error) {
+// ListFills 给交易执行路径用，走主连接。
+func (s *Store) ListFills(ctx context.Context, spaceID string, query FillQuery) ([]FillRecord, int64, error) {
+	return listFills(s.db.WithContext(ctx), spaceID, query)
+}
+
+// ListFillsReadOnly 给管理台的成交列表用，走只读连接，不和交易执行的写入排同一个连接。
+func (s *Store) ListFillsReadOnly(ctx context.Context, spaceID string, query FillQuery) ([]FillRecord, int64, error) {
+	return listFills(s.readDB.WithContext(ctx), spaceID, query)
+}
+
+func listFills(db *gorm.DB, spaceID string, query FillQuery) ([]FillRecord, int64, error) {
 	if query.ExchangeSymbol != "" && query.Market == "" {
 		return nil, 0, fmt.Errorf("%w: 按交易所代码查询必须同时给市场", ErrInvalidRecord)
 	}
-	db := s.db.WithContext(ctx).Table("t_order_fills").
-		Where("c_space_id = ?", spaceID)
+	db = db.Table("t_order_fills").Where("c_space_id = ?", spaceID)
 	if query.TradingAccountID != "" {
 		db = db.Where("c_trading_account_id = ?", query.TradingAccountID)
 	}
-	// 按订单归属查询，已移出的成员的历史成交也算在组合账户下。
+	// 成交上记着所属订单的组合账户，已移出的成员的历史成交也算在组合账户下。
 	if query.LogicalAccountID != "" {
-		db = db.Where(`c_order_id IN (SELECT c_order_id FROM t_trade_orders WHERE c_space_id = ? AND c_logical_account_id = ?)`,
-			spaceID, query.LogicalAccountID)
+		db = db.Where("c_logical_account_id = ?", query.LogicalAccountID)
 	}
 	if query.OrderID != "" {
 		db = db.Where("c_order_id = ?", query.OrderID)
@@ -1309,9 +1323,10 @@ func (s *Store) ListFills(
 
 // ListSymbolFillsAscending 一次读出账户某个标的的全部成交，按成交时间升序；不数总数、不分页，
 // 给持币均价这类必须读全量的计算用（分页查询每页先 COUNT 再 OFFSET，读全量时耗时随成交数平方增长）。
+// 只有管理台的持币查询用，走只读连接。
 func (s *Store) ListSymbolFillsAscending(ctx context.Context, spaceID, tradingAccountID string, key exchange.SymbolKey) ([]FillRecord, error) {
 	var rows []fillRow
-	if err := s.db.WithContext(ctx).Raw(querySymbolFillsAscending, spaceID, tradingAccountID, string(key.Market), key.Symbol).
+	if err := s.readDB.WithContext(ctx).Raw(querySymbolFillsAscending, spaceID, tradingAccountID, string(key.Market), key.Symbol).
 		Scan(&rows).Error; err != nil {
 		return nil, err
 	}
@@ -1330,7 +1345,8 @@ func fillRecordsFromRows(rows []fillRow) []FillRecord {
 			PositionSide: row.PositionSide, Price: row.Price, Quantity: row.Quantity,
 			Fee: row.Fee, FeeAsset: row.FeeAsset,
 			SettlementAsset: row.SettlementAsset, RealizedPnL: row.RealizedPnL,
-			Role: row.Role, TradedAt: row.TradedAt, CreatedAt: row.CreatedAt,
+			Role: row.Role, TradedAt: row.TradedAt,
+			LogicalAccountID: valueOrEmpty(row.LogicalAccountID), CreatedAt: row.CreatedAt,
 		})
 	}
 	return records
@@ -1941,15 +1957,15 @@ const (
 	execUpdatePendingOrderReference = `UPDATE t_trade_orders SET c_reference_price = ?, c_reference_price_at = ?, c_paper_execution_price = ?
 		WHERE c_space_id = ? AND c_order_id = ? AND c_version = ? AND c_state = 'PENDING' AND c_submitted_at = 0`
 	queryOrderIdentity = `SELECT c_trading_account_id, c_exchange_order_id, c_exchange, c_market_type,
-			c_instrument_id, c_exchange_symbol, c_side, c_position_side
+			c_instrument_id, c_exchange_symbol, c_side, c_position_side, c_logical_account_id
 		FROM t_trade_orders
 		WHERE c_space_id = ? AND c_order_id = ?`
 	execInsertOrderFill = `INSERT INTO t_order_fills (
 			c_space_id, c_fill_id, c_exchange_trade_id, c_order_id,
 			c_exchange_order_id, c_trading_account_id, c_exchange, c_market_type,
 			c_instrument_id, c_exchange_symbol, c_side, c_position_side, c_price, c_quantity, c_fee,
-			c_fee_asset, c_settlement_asset, c_realized_pnl, c_role, c_traded_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+			c_fee_asset, c_settlement_asset, c_realized_pnl, c_role, c_traded_at, c_logical_account_id
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 	queryTargetFillNotionalSince = `SELECT COALESCE(SUM(CAST(f.c_price AS REAL) * CAST(f.c_quantity AS REAL)), 0) AS notional
 		FROM t_order_fills AS f
 		JOIN t_trade_orders AS o ON o.c_space_id = f.c_space_id AND o.c_order_id = f.c_order_id

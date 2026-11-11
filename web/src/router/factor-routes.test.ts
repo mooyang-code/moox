@@ -22,7 +22,9 @@ const reusePaths = [
   "/collector/tasks",
   "/data/subjects",
   "/data/fields",
-  "/trading/accounts",
+  "/trading/paper",
+  "/trading/testnet",
+  "/trading/live",
   "/archive/tasks",
   "/ops/monitor",
   "/ops/deployments",
@@ -34,7 +36,7 @@ describe("query 变化时复用的页面", () => {
   // 定义页的 ?category=、结果页的 ?fc= 和 ?task= 改写时不能重建页面，否则未进 URL 的筛选会丢失。
   // 线上实际注册的是菜单路由（会覆盖 route.ts 的同名声明），所以两处都要声明。
   it.each(reusePaths)("%s 在菜单与静态路由里都声明了 reuseOnQuery", path => {
-    // 目录（type 1）的默认路径可能和它的第一个菜单相同（交易管理 → /trading/accounts），只看菜单项（type 2）
+    // 目录（type 1）的默认路径可能和它的第一个菜单相同（交易管理 → /trading/paper），只看菜单项（type 2）
     const menuEntry = (systemMenu as RouteLike[]).find(item => item.path === path && item.meta?.type === 2);
     const staticEntry = findRoute(staticRoutes as unknown as RouteLike[], path);
     expect(menuEntry?.meta?.reuseOnQuery).toBe(true);

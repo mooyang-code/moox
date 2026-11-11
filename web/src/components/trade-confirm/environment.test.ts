@@ -3,7 +3,9 @@ import type { LogicalAccount, TradingAccount } from "@/api/trade/types";
 import {
   accountEnvironment,
   confirmTier,
-  environmentFromQuery,
+  environmentMenus,
+  environmentOfRoute,
+  logicalDetailPath,
   logicalEnvironment,
   logicalInEnvironment,
   nameConfirmed
@@ -54,11 +56,18 @@ describe("环境推导", () => {
     expect(inEnv({ execution_mode: 1, members: [] } as unknown as LogicalAccount)).toEqual(["paper"]);
   });
 
-  it("查询参数只认 testnet、prod，其余回到模拟盘", () => {
-    expect(environmentFromQuery("testnet")).toBe("testnet");
-    expect(environmentFromQuery("prod")).toBe("prod");
-    expect(environmentFromQuery("live")).toBe("paper");
-    expect(environmentFromQuery(undefined)).toBe("paper");
+  it("页面所属环境读路由 meta.env，没写或不认识时为空", () => {
+    expect(environmentOfRoute({ meta: { env: "testnet" } })).toBe("testnet");
+    expect(environmentOfRoute({ meta: { env: "prod" } })).toBe("prod");
+    expect(environmentOfRoute({ meta: { env: "live" } })).toBeUndefined();
+    expect(environmentOfRoute({ meta: {} })).toBeUndefined();
+    expect(environmentOfRoute({})).toBeUndefined();
+  });
+
+  it("三个环境各一个菜单，详情地址在菜单地址下面", () => {
+    expect(Object.values(environmentMenus).map(item => item.title)).toEqual(["模拟账户", "测试账户", "实盘账户"]);
+    expect(logicalDetailPath("paper", "paper-logical-1")).toBe("/trading/paper/paper-logical-1");
+    expect(logicalDetailPath("prod", "a/b")).toBe("/trading/live/a%2Fb");
   });
 
   it("三档确认：只有生产环境要输入组合名称", () => {

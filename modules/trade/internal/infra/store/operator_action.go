@@ -298,8 +298,13 @@ type OperatorActionQuery struct {
 }
 
 // ListOperatorActions 按创建时间倒序列出组合的人工操作记录（人工单、撤单、清仓、减仓、下架清仓）。
+// 给管理台用，走只读连接；交易执行路径内部的查询见 LastMarginReduceAction。
 func (s *Store) ListOperatorActions(ctx context.Context, spaceID string, query OperatorActionQuery) ([]OperatorActionRecord, int64, error) {
-	db := s.db.WithContext(ctx).Table("t_operator_actions").
+	return listOperatorActions(s.readDB.WithContext(ctx), spaceID, query)
+}
+
+func listOperatorActions(db *gorm.DB, spaceID string, query OperatorActionQuery) ([]OperatorActionRecord, int64, error) {
+	db = db.Table("t_operator_actions").
 		Where("c_space_id = ? AND c_logical_account_id = ?", spaceID, query.LogicalAccountID)
 	if query.ActionType != "" {
 		db = db.Where("c_action_type = ?", query.ActionType)
@@ -328,9 +333,9 @@ func (s *Store) ListOperatorActions(ctx context.Context, spaceID string, query O
 // MarginActionIDPrefix 是保证金率风控发起的减仓动作号的前缀，用来在操作记录里认出它们。
 const MarginActionIDPrefix = "margin-"
 
-// LastMarginReduceAction 返回组合最近一次保证金率风控发起的减仓动作，没有则为 nil。
+// LastMarginReduceAction 返回组合最近一次保证金率风控发起的减仓动作，没有则为 nil。保证金率风控用，走主连接。
 func (s *Store) LastMarginReduceAction(ctx context.Context, spaceID, logicalAccountID string) (*OperatorActionRecord, error) {
-	actions, _, err := s.ListOperatorActions(ctx, spaceID, OperatorActionQuery{
+	actions, _, err := listOperatorActions(s.db.WithContext(ctx), spaceID, OperatorActionQuery{
 		LogicalAccountID: logicalAccountID, ActionType: string(operatordomain.ActionReduce), Limit: 20,
 	})
 	if err != nil {

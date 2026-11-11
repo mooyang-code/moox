@@ -41,6 +41,12 @@ export interface CoinRow {
   /** 标记价，按组合权益比例的阈值要用；取不到为 0 */
   markSpot: number;
   markSwap: number;
+  /** 持仓市值（按标记价，现货加永续的绝对值）；取不到标记价的部分不计 */
+  value: number;
+  /** 永续开仓均价（多个执行账户按持仓数量加权）；没有永续持仓或取不到为 0 */
+  entrySwap: number;
+  /** 未实现盈亏：永续持仓的加上现货持币的；都取不到为 null */
+  unrealizedPnl: number | null;
   /** 这个市场的差额执行器还会下单（目标已收敛时都为假）；任一为真时整行算未到位，偏差各格按它着色 */
   offSpot: boolean;
   offSwap: boolean;
@@ -138,6 +144,9 @@ function blankRow(coin: string): CoinRow {
     deferredReason: "",
     markSpot: 0,
     markSwap: 0,
+    value: 0,
+    entrySwap: 0,
+    unrealizedPnl: null,
     offSpot: false,
     offSwap: false,
     state: "ok",
@@ -184,8 +193,18 @@ export function buildCoinRows(input: BuildCoinRowsInput): CoinRow[] {
     if (item.deferred) row.deferredReason = row.deferredReason ? `${row.deferredReason}；${item.reason}` : item.reason;
     else row.blockedReason = row.blockedReason ? `${row.blockedReason}；${item.reason}` : item.reason;
   }
+  // 永续开仓均价按持仓数量加权：每个币累计 数量×均价 和 数量
+  const entryCost = new Map<CoinRow, { cost: number; size: number }>();
+  const pnlMissing = new Set<CoinRow>();
   for (const position of input.swapPositions) {
     const row = rowOf(coinOf(position.instrument_id));
+    const size = Math.abs(Number(position.signed_quantity)) || 0;
+    const entry = Number(position.entry_price) || 0;
+    if (size && entry) {
+      const sum = entryCost.get(row) ?? { cost: 0, size: 0 };
+      entryCost.set(row, { cost: sum.cost + size * entry, size: sum.size + size });
+    }
+    addPnl(row, Number(position.signed_quantity), position.unrealized_pnl, pnlMissing);
     row.actualSwap += Number(position.signed_quantity);
     row.actualSwapText = decimalAdd(row.actualSwapText, position.signed_quantity);
     row.markSwap ||= Number(position.mark_price) || 0;
@@ -200,6 +219,7 @@ export function buildCoinRows(input: BuildCoinRowsInput): CoinRow[] {
       row.actualSpotText = decimalAdd(row.actualSpotText, holding.quantity);
       row.sellable += Number(holding.sellable || 0);
       row.markSpot ||= Number(holding.mark_price) || 0;
+      addPnl(row, quantity, holding.unrealized_pnl, pnlMissing);
       addMember(row.memberSpot, holding.trading_account_id, quantity);
       if (marketOfInstrument(holding.instrument_id) === 3) row.stock = true;
     }
@@ -208,6 +228,10 @@ export function buildCoinRows(input: BuildCoinRowsInput): CoinRow[] {
   const threshold = thresholdOf(input);
   const result: CoinRow[] = [];
   for (const row of rows.values()) {
+    const entry = entryCost.get(row);
+    if (entry) row.entrySwap = entry.cost / entry.size;
+    if (pnlMissing.has(row)) row.unrealizedPnl = null;
+    row.value = Math.abs(row.actualSwap) * row.markSwap + Math.abs(row.actualSpot) * row.markSpot;
     if (row.targetSpot && row.targetSpot.quantity !== null) {
       row.deviationSpot = row.actualSpot - row.targetSpot.quantity;
       row.deviationSpotText = decimalSub(row.actualSpotText, row.targetSpot.text);
@@ -240,6 +264,17 @@ export function buildCoinRows(input: BuildCoinRowsInput): CoinRow[] {
 
 function stateOrder(row: CoinRow): number {
   return { blocked: 0, off: 1, extra: 2, ok: 3 }[row.state];
+}
+
+/**
+ * 累计一条持仓的未实现盈亏。接口没给这个数（实盘的现货持币没有）时记进 missing：
+ * 这一行只要有一条持仓缺盈亏，整行就显示“—”，不能只拿另一条腿的盈亏当成整行的。
+ */
+function addPnl(row: CoinRow, quantity: number, value: string | undefined, missing: Set<CoinRow>) {
+  if (!quantity) return;
+  const amount = value === undefined || value === "" ? NaN : Number(value);
+  if (!Number.isFinite(amount)) missing.add(row);
+  else row.unrealizedPnl = (row.unrealizedPnl ?? 0) + amount;
 }
 
 function addMember(members: Record<string, number>, accountId: string, quantity: number) {
@@ -323,6 +358,16 @@ export function filterCoinRows(rows: readonly CoinRow[], filter: PositionFilter,
     if (filter === "holding") return row.actualSpot !== 0 || row.actualSwap !== 0;
     return true;
   });
+}
+
+/** 这些行里有没有现货（或股票）一侧的内容：都没有时页面不显示现货各列。 */
+export function hasSpotSide(rows: readonly CoinRow[]): boolean {
+  return rows.some(row => row.targetSpot || row.actualSpot !== 0 || row.spotBalance !== 0);
+}
+
+/** 这些行里有没有永续一侧的内容。 */
+export function hasSwapSide(rows: readonly CoinRow[]): boolean {
+  return rows.some(row => row.targetSwap || row.actualSwap !== 0);
 }
 
 /** 显示用：浮点相减的误差只留 8 位有效数字。 */

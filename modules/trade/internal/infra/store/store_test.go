@@ -5,6 +5,7 @@ import (
 	"errors"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/glebarez/sqlite"
 	"github.com/mooyang-code/moox/modules/trade/schema"
@@ -18,6 +19,36 @@ func openTestStore(t *testing.T) *Store {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, s.Close()) })
 	return s
+}
+
+// 文件库的只读连接池是单独的句柄：看得到主连接已提交的数据，拒绝写入；内存库直接复用主连接。
+func TestReadOnlyHandle(t *testing.T) {
+	s := openTestStore(t)
+	require.NotSame(t, s.db, s.readDB)
+	seedLogicalAccount(t, s, "")
+	var count int64
+	require.NoError(t, s.readDB.Raw(`SELECT COUNT(*) FROM t_logical_accounts`).Scan(&count).Error)
+	require.Equal(t, int64(1), count, "只读连接看得到已提交的数据")
+	require.Error(t, s.readDB.Exec(`CREATE TABLE t_read_only_probe (c_id INTEGER)`).Error, "只读连接不能写")
+	var queryOnly int
+	require.NoError(t, s.readDB.Raw(`PRAGMA query_only`).Scan(&queryOnly).Error)
+	require.Equal(t, 1, queryOnly)
+
+	// 读写连接上有没提交的事务时，管理台查询照样能返回：它们不排读写连接
+	require.NoError(t, s.db.Transaction(func(*gorm.DB) error {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_, _, err := s.ListFillsReadOnly(ctx, "space-1", FillQuery{Limit: 10})
+		return err
+	}))
+
+	memory, err := Open(":memory:")
+	require.NoError(t, err)
+	defer func() { require.NoError(t, memory.Close()) }()
+	require.Same(t, memory.db, memory.readDB)
+	_, total, err := memory.ListFillsReadOnly(context.Background(), "space-1", FillQuery{Limit: 10})
+	require.NoError(t, err)
+	require.Zero(t, total)
 }
 
 func TestOpenConfiguresSQLiteAndTransactionRollback(t *testing.T) {

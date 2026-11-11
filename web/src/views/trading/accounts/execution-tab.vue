@@ -114,7 +114,7 @@ import TimeText from "@/components/time-text/index.vue";
 import { exchangeLabels, updateTradingAccount } from "@/api/trade";
 import type { LogicalAccount, TradingAccount } from "@/api/trade";
 import ConfirmDialog from "@/components/trade-confirm/confirm-dialog.vue";
-import { environmentLabel, type Environment } from "@/components/trade-confirm/environment";
+import { environmentLabel, logicalDetailPath, type Environment } from "@/components/trade-confirm/environment";
 import { useDisplayZone } from "@/hooks/useDisplayZone";
 import type { ExecutionRow } from "./account-list";
 import JoinDialog from "./join-dialog.vue";
@@ -160,10 +160,7 @@ watch(
 );
 
 function openCombo(logicalId: string) {
-  void router.push({
-    path: `/trading/accounts/${logicalId}`,
-    query: { env: props.env === "paper" ? undefined : props.env, list: "execution" }
-  });
+  void router.push({ path: logicalDetailPath(props.env, logicalId), query: { list: "execution" } });
 }
 
 async function runPending() {

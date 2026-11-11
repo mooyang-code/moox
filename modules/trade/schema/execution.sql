@@ -107,6 +107,10 @@ ON t_trade_orders (c_space_id, c_trading_account_id, c_finished_at);
 CREATE INDEX IF NOT EXISTS idx_trade_orders_account_submitted
 ON t_trade_orders (c_space_id, c_trading_account_id, c_submitted_at);
 
+-- 管理台按组合列订单：按创建时间倒序分页，不用对组合的全部订单排序。
+CREATE INDEX IF NOT EXISTS idx_trade_orders_logical_created
+ON t_trade_orders (c_space_id, c_logical_account_id, c_ctime, c_order_id);
+
 -- 成交明细没补齐的订单（观察到的累计成交量和已入账的不一致）：每次同步都查，部分索引不随历史订单增长。
 CREATE INDEX IF NOT EXISTS idx_trade_orders_fill_gap
 ON t_trade_orders (c_space_id, c_trading_account_id)
@@ -163,6 +167,7 @@ CREATE TABLE IF NOT EXISTS t_order_fills (
     c_role TEXT NOT NULL DEFAULT '',
     c_traded_at INTEGER NOT NULL,
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    c_logical_account_id TEXT,
     PRIMARY KEY (c_space_id, c_fill_id),
     UNIQUE (
         c_space_id,
@@ -182,6 +187,11 @@ ON t_order_fills (c_space_id, c_order_id, c_traded_at);
 
 CREATE INDEX IF NOT EXISTS idx_order_fills_paper_balance_history
 ON t_order_fills (c_space_id, c_trading_account_id, c_traded_at, c_fill_id);
+
+-- c_logical_account_id 是成交所属订单的组合账户（订单不属于任何组合时为空），写入成交时从订单带过来；
+-- 按组合查成交、汇总收益按这一列过滤，并按成交时间倒序分页。
+CREATE INDEX IF NOT EXISTS idx_order_fills_logical_time
+ON t_order_fills (c_space_id, c_logical_account_id, c_traded_at, c_fill_id);
 
 CREATE TABLE IF NOT EXISTS t_trading_positions (
     c_space_id TEXT NOT NULL,

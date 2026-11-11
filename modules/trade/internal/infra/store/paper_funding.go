@@ -237,9 +237,10 @@ func (s *Store) SettlePaperFunding(ctx context.Context, spaceID, tradingAccountI
 }
 
 // ListPaperFundingFees 返回 [start, end] 内最新的至多 limit 条资金费记录（按结算时刻倒序）和区间内的总条数。
+// 只有管理台的资金流水用，走只读连接。
 func (s *Store) ListPaperFundingFees(ctx context.Context, spaceID, tradingAccountID string, start, end int64, limit int) ([]PaperFundingFeeRecord, int64, error) {
 	var total int64
-	if err := s.db.WithContext(ctx).Raw(queryCountPaperFundingFees, spaceID, tradingAccountID, start, end).Scan(&total).Error; err != nil {
+	if err := s.readDB.WithContext(ctx).Raw(queryCountPaperFundingFees, spaceID, tradingAccountID, start, end).Scan(&total).Error; err != nil {
 		return nil, 0, err
 	}
 	var rows []struct {
@@ -253,7 +254,7 @@ func (s *Store) ListPaperFundingFees(ctx context.Context, spaceID, tradingAccoun
 		Amount           string `gorm:"column:c_amount"`
 		Asset            string `gorm:"column:c_asset"`
 	}
-	if err := s.db.WithContext(ctx).Raw(queryListPaperFundingFees, spaceID, tradingAccountID, start, end, limit).Scan(&rows).Error; err != nil {
+	if err := s.readDB.WithContext(ctx).Raw(queryListPaperFundingFees, spaceID, tradingAccountID, start, end, limit).Scan(&rows).Error; err != nil {
 		return nil, 0, err
 	}
 	records := make([]PaperFundingFeeRecord, 0, len(rows))
@@ -267,9 +268,9 @@ func (s *Store) ListPaperFundingFees(ctx context.Context, spaceID, tradingAccoun
 }
 
 // SummarizePaperFundingFees 按资产汇总 [start, end] 内的资金费，逐行用十进制累加（金额是字符串，不能让数据库按浮点求和），按资产排序。
-// 收益拆解直接用它：不经过流水翻页，记录再多也不截断。
+// 管理台的收益拆解直接用它（不经过流水翻页，记录再多也不截断），走只读连接。
 func (s *Store) SummarizePaperFundingFees(ctx context.Context, spaceID, tradingAccountID string, start, end int64) ([]AssetAmount, error) {
-	rows, err := s.db.WithContext(ctx).Raw(querySummarizePaperFundingFees, spaceID, tradingAccountID, start, end).Rows()
+	rows, err := s.readDB.WithContext(ctx).Raw(querySummarizePaperFundingFees, spaceID, tradingAccountID, start, end).Rows()
 	if err != nil {
 		return nil, err
 	}
@@ -289,12 +290,7 @@ func (s *Store) SummarizePaperFundingFees(ctx context.Context, spaceID, tradingA
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	result := make([]AssetAmount, 0, len(totals))
-	for asset, amount := range totals {
-		result = append(result, AssetAmount{Asset: asset, Amount: amount})
-	}
-	sort.Slice(result, func(i, j int) bool { return result[i].Asset < result[j].Asset })
-	return result, nil
+	return sortedAmounts(totals), nil
 }
 
 // addPaperBalance 把一笔变动加到模拟账户某个资产的余额上；资产还没有余额行时从零开始。

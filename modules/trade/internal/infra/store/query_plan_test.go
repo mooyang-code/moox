@@ -1,10 +1,12 @@
 package store
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 // queryPlan 返回一条查询的 EXPLAIN QUERY PLAN 明细，逐行用换行连起来。
@@ -40,9 +42,29 @@ func TestHotQueriesUseIntendedIndexes(t *testing.T) {
 			"USING INDEX idx_trade_orders_account_state (c_space_id=? AND c_trading_account_id=? AND c_state=?)"},
 		{"快照之后提交的预留", querySubmittedReservationsSince, []any{"space-1", "account-1", int64(1), "USDT", `["SPOT"]`},
 			"USING INDEX idx_trade_orders_account_submitted (c_space_id=? AND c_trading_account_id=? AND c_submitted_at>?)"},
+		{"按组合汇总成交", sqlSummarizeFillsByLogical, []any{"space-1", "logical-1", int64(0), int64(1)},
+			"USING INDEX idx_order_fills_logical_time (c_space_id=? AND c_logical_account_id=? AND c_traded_at>? AND c_traded_at<?)"},
 	} {
 		plan := queryPlan(t, s, c.query, c.args...)
 		require.Contains(t, plan, c.want, c.name)
 		require.NotContains(t, plan, "TEMP B-TREE FOR DISTINCT", c.name)
 	}
+}
+
+// 管理台按组合分页查成交：沿 idx_order_fills_logical_time 倒序读一页，不对组合的全部成交建临时排序。
+func TestLogicalFillPageReadsIndexInOrder(t *testing.T) {
+	s := openTestStore(t)
+	// 记下分页查询实际生成的 SQL 和参数（COUNT 那条不带 ORDER BY）。
+	var statement string
+	var args []any
+	require.NoError(t, s.DBForTest().Callback().Query().After("gorm:query").Register("capture_fill_page", func(db *gorm.DB) {
+		if strings.Contains(db.Statement.SQL.String(), "ORDER BY") {
+			statement, args = db.Statement.SQL.String(), append([]any(nil), db.Statement.Vars...)
+		}
+	}))
+	_, _, err := s.ListFills(context.Background(), "space-1", FillQuery{LogicalAccountID: "logical-1", Offset: 20, Limit: 20})
+	require.NoError(t, err)
+	plan := queryPlan(t, s, statement, args...)
+	require.Contains(t, plan, "USING INDEX idx_order_fills_logical_time (c_space_id=? AND c_logical_account_id=?)", statement)
+	require.NotContains(t, plan, "TEMP B-TREE", statement)
 }

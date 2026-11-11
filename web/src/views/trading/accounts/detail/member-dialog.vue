@@ -61,7 +61,7 @@ import { addLogicalAccountMember, exchangeLabels, isTradeAdoptionRequired } from
 import type { LogicalAccount, TradingAccount } from "@/api/trade";
 import { createSubmitScope } from "@/utils/submit-scope";
 import ConfirmDialog from "@/components/trade-confirm/confirm-dialog.vue";
-import type { Environment } from "@/components/trade-confirm/environment";
+import { environmentMenus, type Environment } from "@/components/trade-confirm/environment";
 import { marketsText } from "../shared/markets";
 import { nextPriority } from "../shared/membership";
 import { ADOPT_EFFECT_TEXT, memberChangeConfirm, type MemberSettings, type RiskyConfirm } from "../shared/risky-actions";
@@ -72,8 +72,8 @@ const router = useRouter();
 function openExecutionList() {
   visible.value = false;
   void router.push({
-    path: "/trading/accounts",
-    query: { env: props.env === "paper" ? undefined : props.env, list: "execution" }
+    path: environmentMenus[props.env].path,
+    query: { list: "execution" }
   });
 }
 const emit = defineEmits<{ saved: [] }>();

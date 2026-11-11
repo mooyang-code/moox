@@ -39,7 +39,7 @@
       size="small"
     >
       <template #columns>
-        <a-table-column title="时间" :width="150">
+        <a-table-column title="时间" :width="190">
           <template #cell="{ record }"
             ><span class="tx-muted tx-nowrap">{{ formatInstant(record.time, displayZone) }}</span></template
           >

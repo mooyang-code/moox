@@ -423,7 +423,7 @@ const quickLinks: { label: string; icon: string; target: HomeTarget }[] = [
   { label: "因子结果", icon: "icon-experiment", target: "/factor/tasks?tab=results" },
   { label: "策略结果", icon: "icon-compass", target: resultsLink() },
   { label: "策略回放", icon: "icon-history", target: replayLink() },
-  { label: "交易账户", icon: "icon-safe", target: "/trading/accounts" },
+  { label: "交易账户", icon: "icon-safe", target: "/trading/paper" },
   { label: "监控告警", icon: "icon-notification", target: "/ops/monitor" }
 ];
 
@@ -434,7 +434,7 @@ const inventory = computed(() => [
   { label: "因子", value: counts.factors, path: "/factor/definitions" },
   { label: "计算任务", value: counts.factorTasks, path: "/factor/tasks" },
   { label: "策略实例", value: counts.instances, path: "/strategy/tasks" },
-  { label: "执行账户", value: counts.accounts, path: "/trading/accounts?list=execution" },
+  { label: "执行账户", value: counts.accounts, path: "/trading/paper?list=execution" },
   { label: "云函数实例", value: counts.nodes, path: "/collector/tasks?tab=executors" }
 ]);
 

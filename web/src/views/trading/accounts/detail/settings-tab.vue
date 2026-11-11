@@ -1,131 +1,137 @@
 <template>
   <div class="settings">
-    <SectionBlock title="成员" flush>
-      <template #sub>
-        账户本身的名称、密钥、杠杆在「执行账户」页签里改<template v-if="logical.control_mode === 1 && !membersEditable"
-          >；增删成员、改优先级和启用状态前，要先暂停自动执行</template
-        >
-      </template>
-      <template #extra>
-        <a-tooltip content="先暂停自动执行" :disabled="membersEditable">
-          <a-button type="primary" status="success" size="small" :disabled="!membersEditable" @click="memberDialog?.openAdd()"
-            >添加执行账户</a-button
+    <!-- 这一页很长：左侧列出各段，点一下滚到对应位置 -->
+    <nav class="settings-nav" aria-label="设置分段">
+      <a-link v-for="item in sections" :key="item.id" @click="scrollTo(item.id)">{{ item.label }}</a-link>
+    </nav>
+    <div class="settings-body">
+      <SectionBlock id="settings-members" title="成员" flush>
+        <template #sub>
+          账户本身的名称、密钥、杠杆在「执行账户」页签里改<template v-if="logical.control_mode === 1 && !membersEditable"
+            >；增删成员、改优先级和启用状态前，要先暂停自动执行</template
           >
-        </a-tooltip>
-      </template>
-      <a-table
-        :bordered="{ cell: true }"
-        row-key="trading_account_id"
-        size="small"
-        :data="rows"
-        :pagination="false"
-        :scroll="{ x: MEMBERS_WIDTH }"
-      >
-        <template #columns>
-          <a-table-column title="执行账户" :width="220">
-            <template #cell="{ record }">
-              <a-link @click="openAccount(record.account)">{{ record.account.name }}</a-link>
-              <div class="tx-muted tx-mono">{{ record.account.trading_account_id }}</div>
-            </template>
-          </a-table-column>
-          <a-table-column title="交易所 · 市场" :width="190">
-            <template #cell="{ record }"
-              ><span class="tx-nowrap"
-                >{{ exchangeLabels[record.account.exchange] || "-" }} · {{ marketsText(record.account.markets) }}</span
-              ></template
-            >
-          </a-table-column>
-          <a-table-column title="优先级" :width="80" align="right">
-            <template #cell="{ record }">{{ record.priority }}</template>
-          </a-table-column>
-          <a-table-column title="启用" :width="70">
-            <template #cell="{ record }">{{ record.enabled ? "是" : "否" }}</template>
-          </a-table-column>
-          <a-table-column title="操作" :width="120" :fixed="isNarrow ? undefined : 'right'">
-            <template #cell="{ record }">
-              <a-space :size="0">
-                <a-tooltip content="先暂停自动执行" :disabled="membersEditable">
-                  <a-button
-                    size="mini"
-                    type="text"
-                    :disabled="!membersEditable"
-                    @click="memberDialog?.openEdit(record, record.account.name)"
-                    >编辑</a-button
-                  >
-                </a-tooltip>
-                <a-tooltip content="先暂停自动执行" :disabled="membersEditable">
-                  <a-button
-                    size="mini"
-                    type="text"
-                    status="danger"
-                    :disabled="!membersEditable"
-                    @click="openRemove(record.account)"
-                    >移出</a-button
-                  >
-                </a-tooltip>
-              </a-space>
-            </template>
-          </a-table-column>
         </template>
-        <template #empty>组合里还没有执行账户</template>
-      </a-table>
-    </SectionBlock>
+        <template #extra>
+          <a-tooltip content="先暂停自动执行" :disabled="membersEditable">
+            <a-button type="primary" status="success" size="small" :disabled="!membersEditable" @click="memberDialog?.openAdd()"
+              >添加执行账户</a-button
+            >
+          </a-tooltip>
+        </template>
+        <a-table
+          :bordered="{ cell: true }"
+          row-key="trading_account_id"
+          size="small"
+          :data="rows"
+          :pagination="false"
+          :scroll="{ x: MEMBERS_WIDTH }"
+        >
+          <template #columns>
+            <a-table-column title="执行账户" :width="220">
+              <template #cell="{ record }">
+                <a-link @click="openAccount(record.account)">{{ record.account.name }}</a-link>
+                <div class="tx-muted tx-mono">{{ record.account.trading_account_id }}</div>
+              </template>
+            </a-table-column>
+            <a-table-column title="交易所 · 市场" :width="190">
+              <template #cell="{ record }"
+                ><span class="tx-nowrap"
+                  >{{ exchangeLabels[record.account.exchange] || "-" }} · {{ marketsText(record.account.markets) }}</span
+                ></template
+              >
+            </a-table-column>
+            <a-table-column title="优先级" :width="80" align="right">
+              <template #cell="{ record }">{{ record.priority }}</template>
+            </a-table-column>
+            <a-table-column title="启用" :width="70">
+              <template #cell="{ record }">{{ record.enabled ? "是" : "否" }}</template>
+            </a-table-column>
+            <a-table-column title="操作" :width="120" :fixed="isNarrow ? undefined : 'right'">
+              <template #cell="{ record }">
+                <a-space :size="0">
+                  <a-tooltip content="先暂停自动执行" :disabled="membersEditable">
+                    <a-button
+                      size="mini"
+                      type="text"
+                      :disabled="!membersEditable"
+                      @click="memberDialog?.openEdit(record, record.account.name)"
+                      >编辑</a-button
+                    >
+                  </a-tooltip>
+                  <a-tooltip content="先暂停自动执行" :disabled="membersEditable">
+                    <a-button
+                      size="mini"
+                      type="text"
+                      status="danger"
+                      :disabled="!membersEditable"
+                      @click="openRemove(record.account)"
+                      >移出</a-button
+                    >
+                  </a-tooltip>
+                </a-space>
+              </template>
+            </a-table-column>
+          </template>
+          <template #empty>组合里还没有执行账户</template>
+        </a-table>
+      </SectionBlock>
 
-    <SectionBlock title="下单设置">
-      <OrderSettingsForm
-        :settings="settingsOf.order_settings"
-        :error="settingsOf.order_settings_error"
-        :settlement-asset="logical.settlement_asset"
-        :stock-only="isAShareLogical(logical)"
-        :saving="savingOrder"
-        @save="saveOrderSettings"
-        @refresh="reload"
-      />
-    </SectionBlock>
+      <SectionBlock id="settings-order" title="下单设置">
+        <OrderSettingsForm
+          :settings="settingsOf.order_settings"
+          :error="settingsOf.order_settings_error"
+          :settlement-asset="logical.settlement_asset"
+          :stock-only="isAShareLogical(logical)"
+          :saving="savingOrder"
+          @save="saveOrderSettings"
+          @refresh="reload"
+        />
+      </SectionBlock>
 
-    <SectionBlock title="资金设置">
-      <FundSettingsForm
-        :settings="settingsOf.fund_settings"
-        :error="settingsOf.fund_settings_error"
-        :paper="logical.execution_mode === 1"
-        :testnet="env === 'testnet'"
-        :has-binance-live="hasBinanceLive"
-        :non-binance="nonBinance"
-        :standard-account="hasStandardAccount"
-        :settlement-asset="logical.settlement_asset"
-        :control-mode="logical.control_mode"
-        :saving="savingFund"
-        @save="saveFundSettings"
-        @refresh="reload"
-      />
-    </SectionBlock>
+      <SectionBlock id="settings-fund" title="资金设置">
+        <FundSettingsForm
+          :settings="settingsOf.fund_settings"
+          :error="settingsOf.fund_settings_error"
+          :paper="logical.execution_mode === 1"
+          :testnet="env === 'testnet'"
+          :has-binance-live="hasBinanceLive"
+          :non-binance="nonBinance"
+          :standard-account="hasStandardAccount"
+          :settlement-asset="logical.settlement_asset"
+          :control-mode="logical.control_mode"
+          :saving="savingFund"
+          @save="saveFundSettings"
+          @refresh="reload"
+        />
+      </SectionBlock>
 
-    <SectionBlock title="组合设置">
-      <a-form :model="{}" layout="vertical" class="combo-form">
-        <a-form-item label="名称"><a-input v-model="comboName" :max-length="64" /></a-form-item>
-        <a-form-item label="运行方式" extra="创建后不能改">
-          <a-input :model-value="logical.control_mode === 1 ? '策略驱动' : '自主下单'" disabled />
-        </a-form-item>
-        <a-form-item label="关联策略" extra="在策略管理里绑定或换绑">
-          <a-input :model-value="strategy ? `${strategy.name}（实例 ${strategy.instanceId}）` : '无'" disabled />
-        </a-form-item>
-        <a-form-item label="结算资产"><a-input :model-value="logical.settlement_asset" disabled /></a-form-item>
-      </a-form>
-      <a-button type="primary" size="small" :loading="renaming" :disabled="!nameDirty" @click="renameCombo">保存</a-button>
-    </SectionBlock>
+      <SectionBlock id="settings-combo" title="组合设置">
+        <a-form :model="{}" layout="vertical" class="combo-form">
+          <a-form-item label="名称"><a-input v-model="comboName" :max-length="64" /></a-form-item>
+          <a-form-item label="运行方式" extra="创建后不能改">
+            <a-input :model-value="logical.control_mode === 1 ? '策略驱动' : '自主下单'" disabled />
+          </a-form-item>
+          <a-form-item label="关联策略" extra="在策略管理里绑定或换绑">
+            <a-input :model-value="strategy ? `${strategy.name}（实例 ${strategy.instanceId}）` : '无'" disabled />
+          </a-form-item>
+          <a-form-item label="结算资产"><a-input :model-value="logical.settlement_asset" disabled /></a-form-item>
+        </a-form>
+        <a-button type="primary" size="small" :loading="renaming" :disabled="!nameDirty" @click="renameCombo">保存</a-button>
+      </SectionBlock>
 
-    <section v-if="paperRows.length" class="danger-zone">
-      <h3>危险操作</h3>
-      <div v-for="item in paperRows" :key="`dz-${item.account.trading_account_id}`" class="danger-row">
-        <div class="danger-text">
-          <strong>关闭模拟账户「{{ item.account.name }}」</strong>
-          <div class="tx-muted">
-            撤掉它的未完成订单，停用账户并移出组合，并暂停整个组合账户的自动执行。之后不能再下单，历史订单和成交保留。
+      <section v-if="paperRows.length" id="settings-danger" class="danger-zone">
+        <h3>危险操作</h3>
+        <div v-for="item in paperRows" :key="`dz-${item.account.trading_account_id}`" class="danger-row">
+          <div class="danger-text">
+            <strong>关闭模拟账户「{{ item.account.name }}」</strong>
+            <div class="tx-muted">
+              撤掉它的未完成订单，停用账户并移出组合，并暂停整个组合账户的自动执行。之后不能再下单，历史订单和成交保留。
+            </div>
           </div>
+          <a-button status="danger" @click="openClosePaper(item.account)">关闭模拟账户</a-button>
         </div>
-        <a-button status="danger" @click="openClosePaper(item.account)">关闭模拟账户</a-button>
-      </div>
-    </section>
+      </section>
+    </div>
 
     <MemberDialog ref="memberDialog" :logical="logical" :candidates="candidates" :env="env" @saved="reload" />
 
@@ -187,7 +193,7 @@ import FundSettingsForm from "../../settings/fund-settings-form.vue";
 import { turnsOffMarginMonitor } from "../../settings/fund-settings-form";
 import OrderSettingsForm from "../../settings/order-settings-form.vue";
 import ConfirmDialog from "@/components/trade-confirm/confirm-dialog.vue";
-import { accountEnvironment } from "@/components/trade-confirm/environment";
+import { accountEnvironment, environmentMenus } from "@/components/trade-confirm/environment";
 import { isAShareLogical, marketsText } from "../shared/markets";
 import { eligibleAccounts } from "../shared/membership";
 import SectionBlock from "../shared/section-block.vue";
@@ -245,6 +251,17 @@ const hasStandardAccount = computed(() =>
 const candidates = computed(() => eligibleAccounts(allAccounts.value, allLogicals.value, logical.value, env.value));
 // 模拟账户可以在这里关闭（会暂停整个组合）；实盘账户要先移出组合，再到执行账户页签停用
 const paperRows = computed(() => rows.value.filter(item => item.account.execution_mode === 1));
+// 左侧分段导航：危险操作只有模拟盘组合才有
+const sections = computed(() => [
+  { id: "settings-members", label: "成员" },
+  { id: "settings-order", label: "下单设置" },
+  { id: "settings-fund", label: "资金设置" },
+  { id: "settings-combo", label: "组合设置" },
+  ...(paperRows.value.length ? [{ id: "settings-danger", label: "危险操作" }] : [])
+]);
+function scrollTo(id: string) {
+  document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+}
 const nameDirty = computed(() => comboName.value.trim() !== "" && comboName.value.trim() !== logical.value.name);
 
 // 候选账户要排除所有组合里的成员，所以读全部组合；成员变化后重读。
@@ -277,8 +294,8 @@ function positionCountOf(accountId: string): number {
 /** 到执行账户页签并展开这个账户的设置。 */
 function openAccount(account: TradingAccount) {
   void router.push({
-    path: "/trading/accounts",
-    query: { env: env.value === "paper" ? undefined : env.value, list: "execution", account: account.trading_account_id }
+    path: environmentMenus[env.value].path,
+    query: { list: "execution", account: account.trading_account_id }
   });
 }
 
@@ -367,8 +384,36 @@ async function renameCombo() {
 <style scoped>
 .settings {
   display: grid;
+  grid-template-columns: 120px minmax(0, 1fr);
+  align-items: start;
+  gap: var(--moox-space-4);
+}
+
+.settings-nav {
+  position: sticky;
+  top: var(--moox-space-3);
+  display: grid;
+  gap: var(--moox-space-2);
+  justify-items: start;
+}
+
+.settings-body {
+  display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: var(--moox-space-3);
+}
+
+/* 窄屏：导航横排放在最上面 */
+@media (max-width: 900px) {
+  .settings {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .settings-nav {
+    position: static;
+    display: flex;
+    flex-wrap: wrap;
+  }
 }
 
 .combo-form {

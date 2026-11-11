@@ -22,7 +22,7 @@ type AssetAmount struct {
 	Amount shared.Decimal
 }
 
-// FillSummaryQuery 选出要汇总的成交：执行账户或组合账户（按订单归属，已移出的成员的历史成交也算在组合下）二选一。
+// FillSummaryQuery 选出要汇总的成交：执行账户或组合账户（按成交所属订单的组合，已移出的成员的历史成交也算在组合下）二选一。
 type FillSummaryQuery struct {
 	TradingAccountID string
 	LogicalAccountID string
@@ -38,12 +38,11 @@ const (
 	sqlSummarizeFillsByLogical = `
 		SELECT c_fee, c_fee_asset, c_settlement_asset, c_realized_pnl
 		FROM t_order_fills
-		WHERE c_space_id = ?
-			AND c_order_id IN (SELECT c_order_id FROM t_trade_orders WHERE c_space_id = ? AND c_logical_account_id = ?)
-			AND c_traded_at >= ? AND c_traded_at <= ?`
+		WHERE c_space_id = ? AND c_logical_account_id = ? AND c_traded_at >= ? AND c_traded_at <= ?`
 )
 
 // SummarizeFills 逐行读成交，用十进制累加（成交表里的金额是字符串，不能让数据库按浮点求和）。
+// 只有管理台的收益拆解用，走只读连接。
 func (s *Store) SummarizeFills(ctx context.Context, spaceID string, query FillSummaryQuery) (FillSummary, error) {
 	if (query.TradingAccountID == "") == (query.LogicalAccountID == "") {
 		return FillSummary{}, fmt.Errorf("%w: 汇总成交要且只要给执行账户或组合账户之一", ErrInvalidRecord)
@@ -55,9 +54,9 @@ func (s *Store) SummarizeFills(ctx context.Context, spaceID string, query FillSu
 	var rows *sql.Rows
 	var err error
 	if query.TradingAccountID != "" {
-		rows, err = s.db.WithContext(ctx).Raw(sqlSummarizeFillsByAccount, spaceID, query.TradingAccountID, query.StartTime, end).Rows()
+		rows, err = s.readDB.WithContext(ctx).Raw(sqlSummarizeFillsByAccount, spaceID, query.TradingAccountID, query.StartTime, end).Rows()
 	} else {
-		rows, err = s.db.WithContext(ctx).Raw(sqlSummarizeFillsByLogical, spaceID, spaceID, query.LogicalAccountID, query.StartTime, end).Rows()
+		rows, err = s.readDB.WithContext(ctx).Raw(sqlSummarizeFillsByLogical, spaceID, query.LogicalAccountID, query.StartTime, end).Rows()
 	}
 	if err != nil {
 		return FillSummary{}, err
