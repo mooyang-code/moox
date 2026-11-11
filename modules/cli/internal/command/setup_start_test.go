@@ -124,7 +124,7 @@ func TestSetupStartSkipsManualStartTasks(t *testing.T) {
 
 	// 读不到内置任务文件时不猜，直接报错。
 	_, err = runSetupStart(context.Background(), setupDeps{}, startClient(), setupSnapshot(t), t.TempDir(), t.TempDir(), "crypto", time.Millisecond)
-	require.ErrorContains(t, err, "read collection tasks")
+	require.ErrorContains(t, err, "请在产物包目录或源码仓库根目录运行")
 }
 
 func TestSetupStartWithoutTasksFails(t *testing.T) {

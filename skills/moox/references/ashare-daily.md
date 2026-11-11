@@ -11,12 +11,13 @@ A 股日线任务可以在每根日线上带三组附加字段：后复权因子
 - **日线在北京时间次日 08:00 才采集。** 交易日 D 的日线在 D+1 日 08:00 到。用它做来源的日内策略，D 日 15:00 收盘那一根的结果在次日开盘前给出。
 - **只覆盖沪深 300（标签 `cn_hs300`）的沪深股票**，不提供市值。
 
-全部命令在产物包目录（或源码仓库根目录）执行，默认读当前目录的 `moox.toml`。`--space-id` 的默认值是 `crypto`，下面每条命令都要写 `--space-id stockcn`。
+全部命令在产物包目录（或源码仓库根目录）执行，默认读当前目录的 `moox.toml`。`--space-id` 的默认值是 `crypto`，下面带这个参数的命令（`collector`、`factor`、`strategy`、`metadata field list`）都要写 `--space-id stockcn`；`metadata import`（用 `--spaces`）、`host`、`setup restart` 没有这个参数。
 
 ## 0. 前提
 
 - 线上的 Collector、云函数代码包、策略、管理台已经是带这项能力的版本。旧版程序不认识这些字段，会把它们丢掉；升级见 [`native-release.md`](native-release.md)。
   发布顺序是 Collector（连同云函数代码包）先于管理台 `web-host`：新版管理台的输出字段清单取自 Collector 的响应。
+- 这一版发布之后要回滚 Collector，必须按单元回退（二进制和随单元发布的 `collection-tasks.yaml` 一起回到旧版），不能只把二进制换回旧版：旧版 Collector 不认识种子里的 `start` 键，任务表为空时读到新文件会启动失败。
 - stockcn 空间走云函数采集，`moox.toml` 的 `[scf_plan]` 里要有这个空间。
 - 确认 5m 的 A 股采集已经正常（`./bin/moox-cli collector status --space-id stockcn`），再打开日线。
 
@@ -37,7 +38,7 @@ A 股日线任务可以在每根日线上带三组附加字段：后复权因子
 ./bin/moox-cli metadata import --seed config/setup/metadata.yaml --spaces stockcn --if-not-exists    # 已存在的资源跳过，只建缺的
 ```
 
-- 要带 `--if-not-exists`：不带时会对已有的空间、数据集、字段再发一次新建请求。
+- 要带 `--if-not-exists`：不带时会对已有的空间、数据集、字段再发一次新建请求。带了之后标的（subjects）仍会按种子再写一次，它没有“已存在就跳过”的判断。
 - 种子里数据集和 View 的列是“有则更新”的写法，会把这些列写回种子里的定义；用户在管理台改过种子自带数据集的列时先提醒。
 - 字段目录缺这些字段不影响采集和校验（采集按 Collector 自己登记的字段判断），但管理台新建任务的输出字段清单里看不到它们，数据源页的“附加字段来源”只显示字段 ID。
 
@@ -62,7 +63,7 @@ A 股日线任务可以在每根日线上带三组附加字段：后复权因子
 内置任务只在任务表为空时自动写入，已有部署里不会自动出现。`task list` 里没有它们时，按下面的顺序做，每一步改线上数据前先给用户看命令：
 
 1. **先导入字段目录**（第 1 步）。字段目录没导入不会让 Collector 启动失败（结果数据集的列由 Collector 自己建，不查字段目录），但管理台上这些列没有显示名和分组，所以放在前面一次做完。
-2. **补写内置任务。** 控制机的 Collector 已经升级到带这两条任务的版本后，在控制机上执行（`<控制机>` 是 `moox.toml` 里控制机的主机名称；路径按默认部署根 `/data/moox`、单元 `prod`，先 `ls` 确认文件存在）：
+2. **补写内置任务。** 前提是控制机上整个 Collector 所在单元已经按新版发布：新的 `moox-collector-cli` 和新的 `collection-tasks.yaml` 都在主机上（旧版 `moox-collector-cli` 不认识种子里的 `start` 键，会报错）。在控制机上执行（`<控制机>` 是 `moox.toml` 里控制机的主机名称；路径按默认部署根 `/data/moox`、单元 `prod`，先 `ls` 确认文件存在）：
 
    ```bash
    ./bin/moox-cli host exec --host <控制机> -- /data/moox/prod/current/bin/moox-collector-cli init \
@@ -71,8 +72,8 @@ A 股日线任务可以在每根日线上带三组附加字段：后复权因子
    ```
 
    - 它只新建库里没有的（空间, 任务 ID），已有任务（包括用户改过、停用的）不动；输出里 `tasks_created` 是补写的个数，`tasks_unchanged` 是已存在的个数。同时会执行一次建表语句（`CREATE TABLE IF NOT EXISTS`，对已有的表没有影响）。
-   - 种子里的其他内置任务如果用户以前删过，也会被补回来（停用状态）。执行前用 `task list` 对一下，补回来又不需要的再用 `collector task delete` 删。
-   - 主机上的 `collection-tasks.yaml` 是随单元发布的。只手工换过 Collector 二进制、没有重发单元时它还是旧的：先用 `./bin/moox-cli host put --host <控制机> config/setup/collection-tasks.yaml <远端路径>` 传一份新的，再把 `--seed-file` 指过去。
+   - 种子里的其他内置任务如果用户以前删过，也会被补回来（停用状态）。执行前用 `task list` 对一下，补回来又不需要的再用 `collector task delete` 删（默认只预览，`--yes` 才执行；默认连结果数据集和 View 一起删，要保留结果加 `--keep-result`）。
+   - 确实需要单独传种子文件时（主机上的 `moox-collector-cli` 已是新版，只有 yaml 是旧的），传到 `/tmp`：`./bin/moox-cli host put --host <控制机> config/setup/collection-tasks.yaml /tmp/collection-tasks.yaml`，再把 `--seed-file` 指向 `/tmp/collection-tasks.yaml`。不要放进 `/data/moox/prod/current` 下面：那会改动发布目录的文件清单，下次升级报 `prepared release inventory changed`。
 3. **重启 Collector。** Collector 只在启动时给任务建结果数据集和 View：
 
    ```bash
@@ -163,7 +164,7 @@ output: fin_net_profit_parent_ttm / fin_equity_parent
 ./bin/moox-cli factor member enable --space-id stockcn --task-id <日线因子任务> --member-key roe_ttm
 ```
 
-- 成员加入时是停用的，`factor member enable` 之后才计算。启用不会自动补算历史，需要历史因子值时用 `factor recalc submit --space-id stockcn --task-id <任务> --from … --to …`。
+- 成员加入时是停用的，`factor member enable` 之后才计算。启用不会自动补算历史，需要历史因子值时用 `factor recalc submit --space-id stockcn --task-id <任务> --from 2025-11-01T00:00:00Z --to 2026-11-11T00:00:00Z`（`--from`、`--to` 只接受 RFC3339，左闭右开，不能只写日期）。
 - 前复权价本身（以当前这一根为基准）：k 根之前的前复权收盘价是 `delay(close, k) * delay(adj_factor, k) / adj_factor`。只算涨幅、偏离这类比值时用后复权价即可，结果相同。
 - 财务字段为空（金融类公司没有的科目、缺上年数据的滚动值）时因子值也为空。
 - 提醒用户把这个因子任务和成员同步写进 `moox.toml` 的 `[[factors.tasks]]`（用户自己运行 `./bin/moox-cli config edit`），以后重装时 `setup factors` 才会带上它。
@@ -211,7 +212,8 @@ portfolio: {max_missing: 0.2}
 
 - `collector status`：日线数据集 `level: ok`，没有失败分块。
 - `kline check`：`status: complete`、`missing: 0`。`--to` 不要晚于“已经采过的最后一个交易日的下一天”，今天的日线明天 08:00 才有。停牌的交易日来源没有数据，补采确认后记在 `absent_at_source`，不算缺口。
-- `kline check --deep` 不检查附加字段（它们允许为空）。要看附加字段有没有值，取几行数据看（[`data-query.md`](data-query.md)）：抽一只近期除过权的股票看 `adj_factor` 在除权日变化；抽一只银行股，`fin_total_revenue` 为空是正常的。
+- skill 的 A 股 1d 数据查询（[`data-query.md`](data-query.md)）固定读纯日线任务“A 股 K 线 1d”的结果。只启用了带附加字段的那条时，用 skill 查 1d 查不到数据；要用 skill 查日线就把纯日线任务也启用并补历史。
+- `kline check --deep` 不检查附加字段（它们允许为空）。要看附加字段有没有值，在管理台数据页打开带附加字段那条任务的结果数据集取几行看（skill 的数据查询读的是纯日线任务，看不到这些列）：抽一只近期除过权的股票看 `adj_factor` 在除权日变化；抽一只银行股，`fin_total_revenue` 为空是正常的。
 - 管理台“数据采集 › 数据源”页下方的“附加字段来源”应列出复权因子、申万行业、财务报表三个来源和它们的字段。
 
 ## 常见问题

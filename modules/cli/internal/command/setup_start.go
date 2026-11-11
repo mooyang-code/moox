@@ -156,7 +156,7 @@ func runSetupStart(ctx context.Context, deps setupDeps, client setupStartClient,
 	}
 	manual, err := manualStartTasks(filepath.Join(repository, filepath.FromSlash("config/setup/collection-tasks.yaml")), spaceID)
 	if err != nil {
-		return summary, err
+		return summary, fmt.Errorf("读不到内置采集任务文件 config/setup/collection-tasks.yaml，请在产物包目录或源码仓库根目录运行 setup start：%w", err)
 	}
 	for _, task := range tasks {
 		if task.Enabled {
