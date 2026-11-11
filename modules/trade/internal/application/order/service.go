@@ -1331,11 +1331,9 @@ func (s *Service) deliverSubmit(
 	}
 	applyAggregate(&latest, current)
 	if callErr == nil {
+		// 回执只用于认领，不写交易所更新时间：OKX 回执没有交易所时间，适配器填的是本地收到时间，
+		// 会晚于随后订单事件的 uTime，同步按“记录时间更新就丢弃”防回退时会把 IOC 撤销当旧事件丢掉。
 		latest.ExchangeOrderID = response.ExchangeOrderID
-		latest.ExchangeUpdatedAt = response.UpdatedAt.UnixMilli()
-		if latest.ExchangeUpdatedAt <= 0 {
-			latest.ExchangeUpdatedAt = response.CreatedAt.UnixMilli()
-		}
 	}
 	if current.State == orderdomain.Rejected {
 		latest.RemainingReservedQuantity = "0"

@@ -3,11 +3,14 @@ package okx
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,6 +19,12 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange/httpclient"
 	"github.com/rs/xid"
 )
+
+func TestMain(m *testing.M) {
+	// fills-history 的请求间隔在测试里改小；验证间隔的用例自己设回较大的值。
+	fillsRequestInterval = time.Millisecond
+	os.Exit(m.Run())
+}
 
 func TestNewUsesFixedEnvironmentEndpoints(t *testing.T) {
 	production := New(exchange.AccountConfig{
@@ -588,6 +597,87 @@ func TestListPositionSnapshotsMarksIsolatedPositions(t *testing.T) {
 	if len(isolated) != 1 || isolated[0].ExchangeSymbol != "ETH-USDT-SWAP" ||
 		len(cross) != 1 || cross[0].ExchangeSymbol != "BTC-USDT-SWAP" || cross[0].SignedQuantity.String() != "-0.04" {
 		t.Fatalf("cross=%+v isolated=%+v", cross, isolated)
+	}
+}
+
+// 账户里有本地标的表外的永续（USDC 本位）：持仓、挂单、成交都跳过它，不报“未加载”；标的表还没加载时照旧报错。
+func TestSwapSkipsInstrumentsOutsideLoadedTable(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/api/v5/account/positions":
+			ok(w, `[{"instId":"BTC-USDC-SWAP","posSide":"net","pos":"7","avgPx":"100","mgnMode":"cross","uTime":"1700000000000"},`+
+				`{"instId":"BTC-USDT-SWAP","posSide":"net","pos":"-4","avgPx":"100","mgnMode":"cross","uTime":"1700000000000"}]`)
+		case "/api/v5/trade/orders-pending":
+			ok(w, `[{"instId":"BTC-USDC-SWAP","ordId":"2","clOrdId":"manual","side":"buy","posSide":"net","ordType":"limit","px":"90","sz":"3","accFillSz":"0","state":"live","cTime":"1","uTime":"2"},`+
+				`{"instId":"BTC-USDT-SWAP","ordId":"1","clOrdId":"cid","side":"buy","posSide":"net","ordType":"limit","px":"90","sz":"5","accFillSz":"0","state":"live","cTime":"1","uTime":"2"}]`)
+		case "/api/v5/trade/fills-history":
+			ok(w, `[{"billId":"9","instId":"BTC-USDC-SWAP","tradeId":"7","ordId":"2","side":"buy","posSide":"net","fillSz":"3","fillPx":"100","fee":"-0.01","feeCcy":"USDC","fillTime":"1700000000000"}]`)
+		default:
+			t.Fatalf("unexpected path %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	unloaded := swapAdapter(server.URL)
+	if _, err := unloaded.ListPositionSnapshots(context.Background()); !exchange.IsKind(err, exchange.ErrorNotReady) {
+		t.Fatalf("标的表没加载时应报未加载：err = %v", err)
+	}
+
+	adapter := swapAdapter(server.URL)
+	adapter.instruments[exchange.SymbolKey{Market: exchange.MarketTypeSwap, Symbol: "BTC-USDT-SWAP"}] = testInstrument()
+	positions, err := adapter.ListPositionSnapshots(context.Background())
+	if err != nil || len(positions) != 1 || positions[0].ExchangeSymbol != "BTC-USDT-SWAP" || positions[0].SignedQuantity.String() != "-0.04" {
+		t.Fatalf("positions = %+v, err = %v", positions, err)
+	}
+	orders, err := adapter.ListOpenOrders(context.Background())
+	if err != nil || len(orders) != 1 || orders[0].ExchangeSymbol != "BTC-USDT-SWAP" {
+		t.Fatalf("orders = %+v, err = %v", orders, err)
+	}
+	fills, next, err := adapter.ListRecentFills(context.Background(), exchange.NewSymbolKey(exchange.MarketTypeSwap, "BTC-USDC-SWAP"), "")
+	if err != nil || len(fills) != 0 || next != "9" {
+		t.Fatalf("fills = %+v, next = %q, err = %v", fills, next, err)
+	}
+}
+
+// fills-history 每次请求前都先等一个间隔（该接口限 10 次/2 秒），按标的逐个查时相邻两次请求不会挨着发；ctx 取消时不再发请求。
+func TestFillsHistoryRequestsAreSpaced(t *testing.T) {
+	previous := fillsRequestInterval
+	fillsRequestInterval = 50 * time.Millisecond
+	defer func() { fillsRequestInterval = previous }()
+	var mu sync.Mutex
+	var requests []time.Time
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/api/v5/trade/fills-history" {
+			t.Errorf("unexpected path %s", request.URL.Path)
+		}
+		mu.Lock()
+		requests = append(requests, time.Now())
+		mu.Unlock()
+		ok(w, `[]`)
+	}))
+	defer server.Close()
+	sent := func() []time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]time.Time(nil), requests...)
+	}
+	adapter := swapAdapter(server.URL)
+	for _, symbol := range []string{"BTC-USDT-SWAP", "ETH-USDT-SWAP"} {
+		if _, _, err := adapter.ListRecentFills(context.Background(), exchange.NewSymbolKey(exchange.MarketTypeSwap, symbol), ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := sent(); len(got) != 2 || got[1].Sub(got[0]) < fillsRequestInterval {
+		t.Fatalf("requests = %v", got)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, cursor, err := adapter.ListRecentFills(ctx, exchange.NewSymbolKey(exchange.MarketTypeSwap, "BTC-USDT-SWAP"), "5"); !errors.Is(err, context.Canceled) || cursor != "5" {
+		t.Fatalf("cursor = %q, err = %v", cursor, err)
+	}
+	if got := sent(); len(got) != 2 {
+		t.Fatalf("ctx 取消后不应再发请求：requests = %d", len(got))
 	}
 }
 

@@ -42,8 +42,14 @@ func (q *HoldingQuery) List(ctx context.Context, spaceID, accountID string) ([]h
 		return nil, err
 	}
 	index := holdingInstrumentIndex(records, account.SettlementAsset)
-	result := make([]holdingapp.Holding, 0, len(account.Snapshot.Balances))
-	for _, balance := range account.Snapshot.Balances {
+	paper := account.ExecutionMode == string(exchange.ExecutionModePaper)
+	// 只看放着现货的钱包：普通账户合约钱包里的币是保证金，不是持币。
+	balances := account.SpotBalances()
+	result := make([]holdingapp.Holding, 0, len(balances))
+	// 第一遍只解析持币和标的，记下要估值的行（在 result 里的下标）和标的，第二遍再逐只估值。
+	valued := make([]int, 0, len(balances))
+	keys := make([]exchange.SymbolKey, 0, len(balances))
+	for _, balance := range balances {
 		quantity, err := shared.ParseDecimal(balance.Total)
 		if err != nil || quantity.IsZero() {
 			continue
@@ -58,51 +64,52 @@ func (q *HoldingQuery) List(ctx context.Context, spaceID, accountID string) ([]h
 		if strings.EqualFold(balance.Asset, account.SettlementAsset) {
 			item.MarkPrice = shared.MustDecimal("1")
 			item.MarketValue = quantity
-			result = append(result, item)
-			continue
+		} else if instrument, found := balanceInstrument(index, account.Markets, balance.Asset); found {
+			item.InstrumentID, item.ExchangeSymbol = instrument.InstrumentID, instrument.ExchangeSymbol
+			valued = append(valued, len(result))
+			keys = append(keys, exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol))
 		}
-		instrument, found := balanceInstrument(index, account.Markets, balance.Asset)
-		if !found {
-			// 无法估值的资产也要展示，价格留空，页面显示“-”。
-			result = append(result, item)
-			continue
-		}
-		item.InstrumentID, item.ExchangeSymbol = instrument.InstrumentID, holdingQuoteSymbol(instrument)
-		if account.ExecutionMode == string(exchange.ExecutionModePaper) {
-			averageCost, costErr := q.paperAverageCost(ctx, spaceID, accountID, exchange.NewSymbolKey(instrument.MarketType, item.ExchangeSymbol))
+		// 找不到标的、无法估值的资产也要展示，价格留空，页面显示“-”。
+		result = append(result, item)
+	}
+	// 批量预取报价（A 股腾讯快照一次 60 只），之后逐只取价命中缓存；来源不支持预取时什么都不做。
+	execution.PrefetchQuotes(ctx, quoteSource, keys)
+	for i, at := range valued {
+		item, key := &result[at], keys[i]
+		if paper {
+			averageCost, costErr := q.paperAverageCost(ctx, spaceID, accountID, key)
 			if costErr != nil {
 				return nil, costErr
 			}
 			item.AverageCost = averageCost
 		}
 		if quoteSource != nil {
-			if quote, quoteErr := quoteSource.GetReferencePrice(ctx, exchange.NewSymbolKey(instrument.MarketType, holdingQuoteSymbol(instrument))); quoteErr == nil {
+			if quote, quoteErr := quoteSource.GetReferencePrice(ctx, key); quoteErr == nil {
 				item.MarkPrice = quote.Price
-				item.MarketValue = quantity.Mul(quote.Price)
+				item.MarketValue = item.Quantity.Mul(quote.Price)
 				item.SourceTime = quote.UpdatedAt
 			}
-		} else if account.ExecutionMode == string(exchange.ExecutionModePaper) {
+		} else if paper {
 			// Closed Paper accounts have no live quote stream. Preserve a useful
 			// historical mark from the latest fill when one exists; otherwise
 			// return identity and quantity without fabricating a valuation.
 			fills, _, fillErr := q.Store.ListFills(ctx, spaceID, store.FillQuery{
-				TradingAccountID: accountID, Market: string(instrument.MarketType), ExchangeSymbol: holdingQuoteSymbol(instrument), Limit: 1,
+				TradingAccountID: accountID, Market: string(key.Market), ExchangeSymbol: key.Symbol, Limit: 1,
 			})
 			if fillErr != nil {
 				return nil, fillErr
 			}
 			if len(fills) > 0 {
 				if price, parseErr := shared.ParseDecimal(fills[0].Price); parseErr == nil {
-					item.MarkPrice, item.MarketValue = price, quantity.Mul(price)
+					item.MarkPrice, item.MarketValue = price, item.Quantity.Mul(price)
 					item.SourceTime = time.UnixMilli(fills[0].TradedAt).UTC()
 				}
 			}
 		}
-		if account.ExecutionMode == string(exchange.ExecutionModePaper) && !item.AverageCost.IsZero() && !item.MarkPrice.IsZero() {
-			pnl := item.MarkPrice.Sub(item.AverageCost).Mul(quantity)
+		if paper && !item.AverageCost.IsZero() && !item.MarkPrice.IsZero() {
+			pnl := item.MarkPrice.Sub(item.AverageCost).Mul(item.Quantity)
 			item.UnrealizedPnL = &pnl
 		}
-		result = append(result, item)
 	}
 	return result, nil
 }
@@ -143,22 +150,13 @@ func balanceInstrument(index map[holdingKey]exchange.Instrument, markets []strin
 	return exchange.Instrument{}, false
 }
 
+// paperAverageCost 一次读完这个标的的全部成交（按时间升序，不数总数、不分页）算均价。
 func (q *HoldingQuery) paperAverageCost(ctx context.Context, spaceID, accountID string, key exchange.SymbolKey) (shared.Decimal, error) {
-	const pageSize = 1000
-	allFills := make([]store.FillRecord, 0, pageSize)
-	for offset := 0; ; offset += pageSize {
-		fills, total, err := q.Store.ListFills(ctx, spaceID, store.FillQuery{
-			TradingAccountID: accountID, Market: string(key.Market), ExchangeSymbol: key.Symbol, Offset: offset, Limit: pageSize,
-		})
-		if err != nil {
-			return shared.Zero(), err
-		}
-		allFills = append(allFills, fills...)
-		if len(fills) == 0 || int64(offset+len(fills)) >= total {
-			break
-		}
+	fills, err := q.Store.ListSymbolFillsAscending(ctx, spaceID, accountID, key)
+	if err != nil {
+		return shared.Zero(), err
 	}
-	return paperAverageCostFromFills(allFills), nil
+	return paperAverageCostFromFills(fills), nil
 }
 
 func paperAverageCostFromFills(fills []store.FillRecord) shared.Decimal {
@@ -191,10 +189,6 @@ func paperAverageCostFromFills(fills []store.FillRecord) shared.Decimal {
 		return shared.Zero()
 	}
 	return cost.Div(quantity)
-}
-
-func holdingQuoteSymbol(instrument exchange.Instrument) string {
-	return instrument.ExchangeSymbol
 }
 
 func unixMillis(value int64) (resultTime time.Time) {

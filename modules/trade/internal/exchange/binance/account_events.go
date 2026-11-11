@@ -347,6 +347,9 @@ func (a *Adapter) dispatchPrivate(
 	default:
 		return nil
 	}
+	if a.unlisted(order.payload.Symbol) {
+		return nil
+	}
 	return dispatchPrivateOrder(ctx, a.config.Market(), a.config.SettlementAsset, order, handler)
 }
 
@@ -647,6 +650,9 @@ func (a *Adapter) dispatchFuturesAccount(
 			if err := handler.OnPosition(ctx, position); err != nil {
 				return err
 			}
+			continue
+		}
+		if a.unlisted(symbol) {
 			continue
 		}
 		position.EntryPrice, err = exchange.DecimalOrZero(entry)

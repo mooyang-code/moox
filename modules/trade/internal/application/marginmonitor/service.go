@@ -1,5 +1,6 @@
 // Package marginmonitor 是交易计划 4.7 的保证金率监控：币安实盘账户的保证金率跌到阈值以下时，暂停组合并发起按比例减仓（REDUCE），
 // 普通账户再把现货钱包的 USDT 归集回合约钱包，前后都告警，由用户确认安全后手动恢复。
+// 自主下单组合没有自动执行，减仓不暂停组合；上一次风控减仓结束后比值仍不高于阈值就再减一次。
 //
 // 口径（币安生产环境、已启用且就绪的实盘永续账户）：
 //   - 普通账户（BINANCE_STANDARD）：交易所总权益 ÷ 合约持仓名义，不高于阈值（默认 0.5）时触发。总权益取账户快照的 ExchangeEquity：
@@ -19,6 +20,7 @@ package marginmonitor
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -35,7 +37,21 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-// Reduce 发起按比例减仓（先暂停组合、撤全部订单，再把现货和合约同比例减掉）。
+// emptyReduceRetry 是自主下单组合上一次风控减仓一笔都没减时，再次发起前要等的时间。
+const emptyReduceRetry = time.Hour
+
+// reducedNothing 报告一次已完成的减仓是否没有登记任何减仓目标。
+func reducedNothing(action store.OperatorActionRecord) bool {
+	if action.Status != string(operatordomain.StatusCompleted) || action.ResultJSON == nil {
+		return false
+	}
+	var result struct {
+		ReduceTargets map[string]string `json:"reduce_targets"`
+	}
+	return json.Unmarshal([]byte(*action.ResultJSON), &result) == nil && len(result.ReduceTargets) == 0
+}
+
+// Reduce 发起按比例减仓（先暂停组合（自主下单组合不暂停）、撤全部订单，再把现货和合约同比例减掉）。
 type Reduce func(ctx context.Context, spaceID, actionID, logicalAccountID string, ratio shared.Decimal, reason string) (store.OperatorActionRecord, error)
 
 // Pause 只暂停组合（有下架清仓在跑时减仓排不进去，先把组合停住；或改写“减仓待执行”的原因）。
@@ -46,12 +62,6 @@ type Pause func(ctx context.Context, spaceID, logicalAccountID, expectedState, e
 // idempotencyKey 是这次风控事件的幂等键（风控减仓的动作号，形如 margin-<组合>-<时间>）：风控划转没有目标（target_id 为空串），
 // 实现必须按它做幂等（按引用号查全部划转记录，不限时间），不能只按（组合、空目标、方向）判断，否则第二次风控事件的归集会被当成已经做过。
 type Collect func(ctx context.Context, spaceID, logicalAccountID, idempotencyKey string, accounts []store.TradingAccountRecord) (pending bool, err error)
-
-// ErrTransferUnavailable 表示还没有接入钱包划转：监控只告警一次，请用户手动把现货钱包的资金划回合约钱包。
-var ErrTransferUnavailable = errors.New("钱包划转还没有接入")
-
-// ActionIDPrefix 是风控发起的减仓动作号的前缀，用来在操作记录里认出它们。
-const ActionIDPrefix = "margin-"
 
 // 默认的快照最长允许年龄：账户同步间隔是 30 秒，超过这个时间没更新说明数据不可信，不据此减仓。
 const defaultMaxSnapshotAge = 3 * time.Minute
@@ -136,11 +146,6 @@ func (r Reading) Describe() string {
 func inScope(account store.TradingAccountRecord) bool {
 	return account.ExecutionMode == string(exchange.ExecutionModeLive) && account.Environment == string(exchange.AccountEnvironmentProduction) &&
 		account.Status == string(exchange.AccountStatusEnabled) && account.SupportsMarket(string(exchange.MarketTypeSwap))
-}
-
-// Applies 报告账户是否在监控范围内：币安的普通账户和统一账户，已就绪。
-func Applies(account store.TradingAccountRecord) bool {
-	return monitored(account) && account.Ready
 }
 
 // monitored 报告账户是否是被监控的类型（币安普通账户、统一账户），不管是否就绪：
@@ -315,12 +320,21 @@ func (s *Service) RunLogicalAccount(ctx context.Context, logical store.LogicalAc
 	}
 	// 上一次风控减仓之后，组合要恢复过（用户确认安全后手动恢复，时间记在库里，重启不丢）才会再触发：用户在暂停期间人工下单、撤单、
 	// 清仓改写了暂停原因，比值仍低也不会再自动减一次。例外：风控先把组合暂停、减仓还没排进去（暂停原因是“减仓待执行”）时要补减仓。
+	// 自主下单组合没有恢复这一步：上一次风控减仓已经结束（还在跑的上面已经返回）就照常判断，比值仍不高于阈值就再减一次。
+	// 例外：上一次减仓一笔都没减（持仓太小，按比例算出的量不足最小下单量），一小时内不再发起，免得每分钟白撤一次用户的挂单。
 	last, err := s.lastMarginAction(ctx, logical)
 	if err != nil {
 		return err
 	}
-	if last != nil && !store.IsMarginPausePending(logical.PauseReason) && logical.ResumedAt <= last.CreatedAt.UnixMilli()+createdAtSlackMillis {
-		return nil
+	if last != nil {
+		if logical.ControlMode != "MANUAL" {
+			if !store.IsMarginPausePending(logical.PauseReason) && logical.ResumedAt <= last.CreatedAt.UnixMilli()+createdAtSlackMillis {
+				return nil
+			}
+		} else if reducedNothing(*last) && s.now().Sub(last.UpdatedAt) < emptyReduceRetry {
+			s.warnOnce("reduce-empty|"+last.ActionID, fmt.Sprintf("组合 %s 的持仓太小，按比例减不动，保证金率仍然偏低，请手动处理", logical.LogicalAccountID))
+			return nil
+		}
 	}
 	var triggered []Reading
 	safe := false // 有账户读出了数、且没跌破阈值
@@ -388,18 +402,7 @@ func (s *Service) noteReduceOutcome(ctx context.Context, logical store.LogicalAc
 
 // lastMarginAction 返回组合最近一次风控发起的减仓动作，没有则为 nil。
 func (s *Service) lastMarginAction(ctx context.Context, logical store.LogicalAccountRecord) (*store.OperatorActionRecord, error) {
-	actions, _, err := s.Store.ListOperatorActions(ctx, logical.SpaceID, store.OperatorActionQuery{
-		LogicalAccountID: logical.LogicalAccountID, ActionType: string(operatordomain.ActionReduce), Limit: 20,
-	})
-	if err != nil {
-		return nil, err
-	}
-	for i := range actions {
-		if len(actions[i].ActionID) >= len(ActionIDPrefix) && actions[i].ActionID[:len(ActionIDPrefix)] == ActionIDPrefix {
-			return &actions[i], nil
-		}
-	}
-	return nil, nil
+	return s.Store.LastMarginReduceAction(ctx, logical.SpaceID, logical.LogicalAccountID)
 }
 
 func (s *Service) trigger(ctx context.Context, logical store.LogicalAccountRecord, settings fundsettings.Settings, readings []Reading) error {
@@ -410,7 +413,7 @@ func (s *Service) trigger(ctx context.Context, logical store.LogicalAccountRecor
 		}
 		detail += reading.Describe()
 	}
-	actionID := ActionIDPrefix + logical.LogicalAccountID + "-" + s.now().UTC().Format("20060102T150405")
+	actionID := store.MarginActionIDPrefix + logical.LogicalAccountID + "-" + s.now().UTC().Format("20060102T150405")
 	_, err := s.Reduce(ctx, logical.SpaceID, actionID, logical.LogicalAccountID, settings.MarginReduceRatio, store.MarginPauseReason())
 	if errors.Is(err, operatorapp.ErrLogicalAccountBusy) {
 		// 减仓排不进去（有下架清仓在跑，或拿不到组合锁）：先把组合暂停停住，下一轮再试减仓。
@@ -428,6 +431,10 @@ func (s *Service) trigger(ctx context.Context, logical store.LogicalAccountRecor
 		return err
 	}
 	// 动作发出之后才说话：组合忙时没暂停，不能先说“已暂停并减仓”。比值只进日志，不进暂停原因和告警详情。
+	if logical.ControlMode == "MANUAL" {
+		log.Warnf("交易关注项：自主下单组合 %s 保证金率过低（%s），已按 %s 减仓（不暂停组合）", logical.LogicalAccountID, detail, settings.MarginReduceRatio)
+		return nil
+	}
 	log.Warnf("交易关注项：组合 %s 保证金率过低（%s），已暂停并按 %s 减仓", logical.LogicalAccountID, detail, settings.MarginReduceRatio)
 	return nil
 }
@@ -475,17 +482,9 @@ func (s *Service) collectAfterReduce(ctx context.Context, logical store.LogicalA
 		}
 	}
 	if len(standard) > 0 {
-		pending, err := false, ErrTransferUnavailable
-		if s.Collect != nil {
-			pending, err = s.Collect(ctx, logical.SpaceID, logical.LogicalAccountID, action.ActionID, standard)
-		}
-		switch {
-		case errors.Is(err, ErrTransferUnavailable):
-			s.warnOnce("collect|"+action.ActionID, fmt.Sprintf("组合 %s 触发风控后需要把现货钱包的 USDT 划回合约钱包，但划转还没有接入，请手动划转", logical.LogicalAccountID))
-		case err != nil:
+		pending, err := s.Collect(ctx, logical.SpaceID, logical.LogicalAccountID, action.ActionID, standard)
+		if err != nil || pending {
 			return err
-		case pending:
-			return nil
 		}
 	}
 	s.markCollected(action.ActionID)

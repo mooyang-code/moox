@@ -257,6 +257,10 @@ func (a *Adapter) dispatchPrivate(
 			return exchange.Rejected("decode private orders", err)
 		}
 		for _, row := range rows {
+			// 标的表外的合约：订单和随附的成交一起跳过。
+			if a.unlisted(row.InstID) {
+				continue
+			}
 			order, err := a.order(row.orderPayload)
 			if err != nil {
 				return err
@@ -309,6 +313,9 @@ func (a *Adapter) dispatchPrivate(
 				if err := handler.OnPosition(ctx, isolated); err != nil {
 					return err
 				}
+				continue
+			}
+			if a.unlisted(row.InstID) {
 				continue
 			}
 			quantity, err := a.toBaseQuantity(row.InstID, contracts)

@@ -221,6 +221,46 @@ func TestTradeResetDataKeepsAccounts(t *testing.T) {
 	require.Zero(t, env.count(t, "t_paper_funding_fees"), "重置运行数据要清掉资金费记录")
 }
 
+// data 范围：模拟盘账户的旧快照改回初始资金（否则权益采样会按旧快照记下错的净值点），就绪标记不动，实盘账户快照不动。
+func TestTradeResetDataRewritesPaperSnapshotToInitialBalance(t *testing.T) {
+	env := newTradeResetEnv(t)
+	ctx := context.Background()
+	env.seedAccounts(t)
+	require.NoError(t, env.db.Transaction(ctx, func(tx *store.Tx) error {
+		return tx.CreateTradingAccount(store.TradingAccountRecord{
+			SpaceID: "space-1", TradingAccountID: "paper-2", Name: "paper-2", Exchange: "BINANCE", Markets: []string{"SPOT"},
+			ExecutionMode: "PAPER", SettlementAsset: "USDT", Status: "ENABLED", Ready: true,
+			PaperConfig: &store.PaperAccountConfigRecord{
+				SpaceID: "space-1", TradingAccountID: "paper-2", InitialBalance: "1000", MakerFeeRate: "0", TakerFeeRate: "0", SlippageBPS: "0",
+			},
+			Snapshot: store.TradingAccountSnapshot{Balances: []store.AssetBalance{
+				{Wallet: "UNIFIED", Asset: "USDT", Total: "400", Available: "400"},
+				{Wallet: "UNIFIED", Asset: "BTC", Total: "0.01", Available: "0.01"},
+			}, Equity: "500", AvailableFunds: "400", ExchangeUpdatedAt: 5_000},
+		})
+	}))
+	live, err := env.db.GetTradingAccountByID(ctx, "live-1")
+	require.NoError(t, err)
+
+	env.pause(t)
+	plan, err := env.life.ResetPlan(ctx, lifecycle.ResetData)
+	require.NoError(t, err)
+	_, err = env.life.ResetApply(ctx, lifecycle.ResetApplyRequest{Token: plan.Token, Scope: lifecycle.ResetData})
+	require.NoError(t, err)
+	require.NoError(t, env.life.ResetWait(ctx))
+
+	paper, err := env.db.GetTradingAccountByID(ctx, "paper-2")
+	require.NoError(t, err)
+	require.Equal(t, []store.AssetBalance{{Wallet: "UNIFIED", Asset: "USDT", Available: "1000", Total: "1000", Borrowed: "0"}}, paper.Snapshot.Balances)
+	require.Equal(t, "1000", paper.Snapshot.Equity)
+	require.Equal(t, "1000", paper.Snapshot.AvailableFunds)
+	require.Equal(t, int64(1), paper.Snapshot.ExchangeUpdatedAt)
+	require.True(t, paper.Ready, "重置不动就绪标记")
+	liveAfter, err := env.db.GetTradingAccountByID(ctx, "live-1")
+	require.NoError(t, err)
+	require.Equal(t, live.Snapshot, liveAfter.Snapshot, "实盘账户快照不动")
+}
+
 func TestLiveSpotHoldingsOnlyCountsManagedAssetsAboveMinimum(t *testing.T) {
 	ctx := context.Background()
 	tradeStore, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))

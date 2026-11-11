@@ -74,6 +74,12 @@ func (p *PortfolioMargin) Exchange() exchange.Exchange { return exchange.Exchang
 
 func (p *PortfolioMargin) hasMarket(market exchange.MarketType) bool { return p.markets[market] != nil }
 
+// unlistedSwap 报告合约不在合约市场已加载的标的表里。标的表在按市场的子适配器上，core 不加载标的。
+func (p *PortfolioMargin) unlistedSwap(symbol string) bool {
+	sub := p.markets[exchange.MarketTypeSwap]
+	return sub != nil && sub.unlisted(symbol)
+}
+
 func (p *PortfolioMargin) route(market exchange.MarketType) (*Adapter, error) {
 	if sub := p.markets[market]; sub != nil {
 		return sub, nil
@@ -305,7 +311,8 @@ func (p *PortfolioMargin) GetAccountSnapshot(ctx context.Context) (exchange.Acco
 		},
 	}
 	if p.hasMarket(exchange.MarketTypeSwap) {
-		positions, err := p.ListPositionSnapshots(ctx)
+		// 权益按整个账户算，标的表外的合约也计入。
+		positions, err := p.positionRows(ctx)
 		if err != nil {
 			return exchange.AccountSnapshot{}, err
 		}
@@ -437,6 +444,15 @@ type pmPosition struct {
 }
 
 func (p *PortfolioMargin) ListPositionSnapshots(ctx context.Context) ([]exchange.Position, error) {
+	positions, err := p.positionRows(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return listedPositions(positions, p.unlistedSwap), nil
+}
+
+// positionRows 返回 UM 合约的全部持仓，含标的表外的合约。
+func (p *PortfolioMargin) positionRows(ctx context.Context) ([]exchange.Position, error) {
 	if !p.hasMarket(exchange.MarketTypeSwap) {
 		return nil, nil
 	}
@@ -551,6 +567,9 @@ func (p *PortfolioMargin) dispatchPrivate(ctx context.Context, payload []byte, h
 		if err != nil {
 			return exchange.Rejected("decode futures private order", err)
 		}
+		if p.unlistedSwap(order.payload.Symbol) {
+			return nil
+		}
 		return dispatchPrivateOrder(ctx, exchange.MarketTypeSwap, p.config.SettlementAsset, order, handler)
 	case "executionReport":
 		order, err := spotPrivateOrder(root)
@@ -618,6 +637,9 @@ func (p *PortfolioMargin) dispatchUMAccount(ctx context.Context, root fields, ha
 		}
 		if side != "" && side != "BOTH" {
 			return exchange.Rejected("hedge position mode is unsupported", nil)
+		}
+		if p.unlistedSwap(symbol) {
+			continue
 		}
 		quantity, err := exchange.DecimalOrZero(amount)
 		if err != nil {

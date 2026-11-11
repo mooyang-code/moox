@@ -377,20 +377,17 @@ func (a *synchronousPaperAdapter) PlaceOrder(ctx context.Context, request exchan
 	return response, nil
 }
 
+// ListRecentFills 只交出 PlaceOrder 排队的成交：模拟盘适配器本身不再返回成交（撮合器入库时已一并入账）。
 func (a *synchronousPaperAdapter) ListRecentFills(
-	ctx context.Context,
+	_ context.Context,
 	symbol exchange.SymbolKey,
-	cursor string,
+	_ string,
 ) ([]exchange.Fill, string, error) {
-	rows, next, err := a.Adapter.ListRecentFills(ctx, symbol, cursor)
-	if err != nil {
-		return nil, cursor, err
-	}
 	a.mu.Lock()
-	pending := append([]exchange.Fill(nil), a.pending[symbol.Symbol]...)
+	defer a.mu.Unlock()
+	pending := a.pending[symbol.Symbol]
 	delete(a.pending, symbol.Symbol)
-	a.mu.Unlock()
-	return append(rows, pending...), next, nil
+	return pending, "", nil
 }
 
 func (a *synchronousPaperAdapter) GetAccountSnapshot(ctx context.Context) (exchange.AccountSnapshot, error) {

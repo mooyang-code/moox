@@ -133,6 +133,24 @@ func TestReduceFixesTargetsAtStartAndDoesNotReduceAgain(t *testing.T) {
 	require.Equal(t, string(operatordomain.StatusCompleted), replay.Action.Status)
 }
 
+// 自主下单组合没有自动执行：减仓（包括保证金率风控减仓）和撤单一样不暂停组合，暂停原因不被改写。
+func TestReduceDoesNotRewriteThePauseReasonOfAManualGroup(t *testing.T) {
+	fixture := newMixedFlattenFixture(t)
+	require.NoError(t, fixture.store.DBForTest().Exec(`UPDATE t_logical_accounts SET c_control_mode = 'MANUAL', c_owner_instance_id = NULL,
+		c_owner_session_id = NULL, c_automation_state = 'PAUSED', c_pause_reason = '自主下单' WHERE c_logical_account_id = 'logical-1'`).Error)
+	command := flattenCommand("margin-logical-1-1")
+	command.ReduceRatio, command.Reason = shared.MustDecimal("0.5"), store.MarginPauseReason()
+
+	result, err := fixture.service().FlattenLogicalAccount(context.Background(), command)
+
+	require.NoError(t, err)
+	require.Equal(t, string(operatordomain.ActionReduce), result.Action.ActionType)
+	require.Equal(t, []string{"BTC-USDT-SPOT:SELL:1", "BTC-USDT-SWAP:SELL:1.5"}, placed(fixture), "照常减仓")
+	logical, err := fixture.store.GetLogicalAccount(context.Background(), "space-1", "logical-1")
+	require.NoError(t, err)
+	require.Equal(t, "自主下单", logical.PauseReason)
+}
+
 // 风控减仓的子单零成交就过期：同一个动作号重试时换号再下，不判部分完成；交易所确定性拒绝才终结。
 func TestReduceRetriesWithNewIDsAfterZeroFillExpiryButEndsOnRejection(t *testing.T) {
 	fixture := newMixedFlattenFixture(t)

@@ -33,7 +33,8 @@ func (c FlattenCommand) reducing() bool {
 	return c.ReduceRatio.Cmp(shared.Zero()) > 0 && c.ReduceRatio.Cmp(shared.MustDecimal("1")) < 0
 }
 
-// pausesLogicalAccount 报告命令是否先暂停组合账户：整组清仓和减仓都要暂停；只平一个标的不动组合的自动执行状态。
+// pausesLogicalAccount 报告命令是否先暂停组合账户：整组清仓和减仓都要暂停（自主下单组合除外，见 FlattenLogicalAccount）；
+// 只平一个标的不动组合的自动执行状态。
 func (c FlattenCommand) pausesLogicalAccount() bool {
 	return c.actionType() != operatordomain.ActionDelistFlatten
 }

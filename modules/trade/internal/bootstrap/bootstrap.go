@@ -260,11 +260,7 @@ func initialize(
 		Collect: func(
 			callCtx context.Context, spaceID, logicalAccountID, idempotencyKey string, accounts []store.TradingAccountRecord,
 		) (bool, error) {
-			// 归集用执行器的钱包划转；还没接入划转时监控只告警一次，请用户手动划转。
-			if targetExecutor.Transfers == nil {
-				return false, marginmonitor.ErrTransferUnavailable
-			}
-			// 风控划转没有目标：TargetID 为空串（见 wallet_transfer.sql）。idempotencyKey（风控减仓的动作号 margin-<组合>-<时间>）
+			// 归集用执行器的钱包划转。风控划转没有目标：TargetID 为空串（见 wallet_transfer.sql）。idempotencyKey（风控减仓的动作号 margin-<组合>-<时间>）
 			// 是这次风控事件的幂等键：钱包按它做幂等（划转记录的本地引用号带着它），不同风控事件的归集互不影响。
 			return targetExecutor.Transfers.CollectForRisk(callCtx, spaceID, logicalAccountID, idempotencyKey, accounts)
 		},

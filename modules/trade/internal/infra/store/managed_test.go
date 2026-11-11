@@ -83,6 +83,21 @@ func TestManagedAssetsOnlyFollowSpotInstrumentsAndMooxOrders(t *testing.T) {
 	require.Equal(t, map[string]struct{}{"USDT": {}, "ETH": {}, "SOL": {}}, managed)
 }
 
+// 纯永续账户只有结算资产受管。
+func TestManagedAssetsSwapOnlyAccountIsSettlementAsset(t *testing.T) {
+	s := openTestStore(t)
+	require.NoError(t, s.Transaction(context.Background(), func(tx *Tx) error {
+		account := testAccount()
+		account.Markets, account.MarginMode, account.LeverageSettings = []string{"SWAP"}, "CROSS", LeverageSettings{"*": "5"}
+		return tx.CreateTradingAccount(account)
+	}))
+
+	managed, err := s.ManagedAssets(context.Background(), "space-1", "account-1")
+
+	require.NoError(t, err)
+	require.Equal(t, map[string]struct{}{"USDT": {}}, managed)
+}
+
 // 排除资产（BNB 保留、保证金币、稳定币保证金、底仓）从受管资产里减掉；结算资产不受影响。
 func TestManagedAssetsExcludeFundSettingAssets(t *testing.T) {
 	s := seedManagedFixture(t,

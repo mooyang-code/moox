@@ -1297,6 +1297,21 @@ func (s *Store) ListFills(
 		Offset(query.Offset).Limit(query.Limit).Find(&rows).Error; err != nil {
 		return nil, 0, err
 	}
+	return fillRecordsFromRows(rows), total, nil
+}
+
+// ListSymbolFillsAscending 一次读出账户某个标的的全部成交，按成交时间升序；不数总数、不分页，
+// 给持币均价这类必须读全量的计算用（分页查询每页先 COUNT 再 OFFSET，读全量时耗时随成交数平方增长）。
+func (s *Store) ListSymbolFillsAscending(ctx context.Context, spaceID, tradingAccountID string, key exchange.SymbolKey) ([]FillRecord, error) {
+	var rows []fillRow
+	if err := s.db.WithContext(ctx).Raw(querySymbolFillsAscending, spaceID, tradingAccountID, string(key.Market), key.Symbol).
+		Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	return fillRecordsFromRows(rows), nil
+}
+
+func fillRecordsFromRows(rows []fillRow) []FillRecord {
 	records := make([]FillRecord, 0, len(rows))
 	for _, row := range rows {
 		records = append(records, FillRecord{
@@ -1311,7 +1326,7 @@ func (s *Store) ListFills(
 			Role: row.Role, TradedAt: row.TradedAt, CreatedAt: row.CreatedAt,
 		})
 	}
-	return records, total, nil
+	return records
 }
 
 func (tx *Tx) resolveDuplicateFill(
@@ -1943,6 +1958,10 @@ const (
 		FROM t_order_fills
 		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_market_type = ? AND c_exchange_symbol = ?
 			AND c_exchange_trade_id = ?`
+	// 账户某个标的的全部成交，按时间升序；同一毫秒按成交号倒序，与原先按时间倒序分页读出、再按时间稳定排序的次序一致。
+	querySymbolFillsAscending = `SELECT * FROM t_order_fills
+		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_market_type = ? AND c_exchange_symbol = ?
+		ORDER BY c_traded_at, c_fill_id DESC`
 	queryAccountIdentity = `SELECT c_exchange, c_markets, c_live_environment AS c_environment, c_execution_mode
 		FROM t_trading_accounts
 		WHERE c_space_id = ? AND c_trading_account_id = ?`

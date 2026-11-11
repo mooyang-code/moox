@@ -123,3 +123,37 @@ func TestAttentionReportsMarginPauseUntilTheUserResumes(t *testing.T) {
 	require.Empty(t, scan("人工暂停")[telemetry.AttentionMarginRatioLow])
 	require.Empty(t, scan("")[telemetry.AttentionMarginRatioLow], "恢复之后告警消失")
 }
+
+// 自主下单组合减仓不暂停、也没有恢复：最近一次风控减仓还在跑或结束不到 5 分钟就报 margin_ratio_low，之后自己消失。
+func TestAttentionReportsMarginReduceOfAManualGroupOnlyWhileRecent(t *testing.T) {
+	ctx := context.Background()
+	tradeStore, err := store.Open(filepath.Join(t.TempDir(), "trade.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = tradeStore.Close() })
+	require.NoError(t, tradeStore.Transaction(ctx, func(tx *store.Tx) error {
+		return tx.CreateLogicalAccount(store.LogicalAccountRecord{
+			SpaceID: "space-1", LogicalAccountID: "logical-1", Name: "自主组合", ControlMode: "MANUAL",
+			ExecutionMode: "LIVE", SettlementAsset: "USDT", AutomationState: "PAUSED", PauseReason: "自主下单",
+		})
+	}))
+	logical, err := tradeStore.GetLogicalAccount(ctx, "space-1", "logical-1")
+	require.NoError(t, err)
+	worker := &AttentionWorker{Store: tradeStore, blockedSince: map[string]time.Time{}}
+	scan := func(now time.Time) []string {
+		items := map[string][]string{}
+		require.NoError(t, worker.scanLogicalAccount(ctx, logical, now, items, map[string]time.Time{}))
+		return items[telemetry.AttentionMarginRatioLow]
+	}
+
+	require.Empty(t, scan(time.Now()), "没有风控减仓")
+	_, _, err = tradeStore.CreateOperatorAction(ctx, store.OperatorActionRecord{
+		SpaceID: "space-1", ActionID: store.MarginActionIDPrefix + "logical-1-1", LogicalAccountID: "logical-1", ActionType: "REDUCE",
+		Reason: store.MarginPauseReason(), RequestJSON: `{"logical_account_id":"logical-1","reduce_ratio":"0.1"}`, Status: "RUNNING",
+	})
+	require.NoError(t, err)
+	require.Equal(t, []string{"自主组合：保证金率过低，风控正在或刚刚按比例减仓"}, scan(time.Now().Add(time.Hour)), "还在跑就一直报")
+
+	require.NoError(t, tradeStore.DBForTest().Exec(`UPDATE t_operator_actions SET c_status = 'COMPLETED'`).Error)
+	require.Len(t, scan(time.Now()), 1, "刚结束，窗口内照报，保证 Monitor 采得到")
+	require.Empty(t, scan(time.Now().Add(rejectionWindow+time.Minute)), "结束超过窗口，告警自己消失")
+}

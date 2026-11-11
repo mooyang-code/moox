@@ -160,7 +160,17 @@ func (w *AttentionWorker) scanLogicalAccount(
 	}
 	// 保证金率风控暂停的组合在用户确认恢复之前一直上报，按库里的状态推出（不用带时间窗口的记录，窗口过了告警就丢了）；
 	// 详情是固定文字，不带比值，不会每次触发产生新的指标序列。
-	if store.IsMarginPauseReason(logical.PauseReason) {
+	// 自主下单组合减仓不暂停、也没有恢复：最近一次风控减仓还在跑或结束不到 rejectionWindow 就上报（减仓常常几秒就做完，
+	// 留出窗口保证 Monitor 采得到），比值仍低时监控每分钟会再减一次、告警接着报，回到安全线后自己消失。
+	if logical.ControlMode == "MANUAL" {
+		// 查询出错只记日志，不挡后面的检查。
+		last, err := w.Store.LastMarginReduceAction(ctx, logical.SpaceID, logical.LogicalAccountID)
+		if err != nil {
+			log.WarnContextf(ctx, "交易关注项：组合 %s 风控减仓记录查询失败：%v", logical.LogicalAccountID, err)
+		} else if last != nil && (last.Status == "RUNNING" || now.Sub(last.UpdatedAt) <= rejectionWindow) {
+			items[telemetry.AttentionMarginRatioLow] = append(items[telemetry.AttentionMarginRatioLow], logical.Name+"：保证金率过低，风控正在或刚刚按比例减仓")
+		}
+	} else if store.IsMarginPauseReason(logical.PauseReason) {
 		items[telemetry.AttentionMarginRatioLow] = append(items[telemetry.AttentionMarginRatioLow], logical.Name+"："+store.MarginAttentionDetail(logical.PauseReason))
 	}
 	// 换手检查出错只记日志，不能挡住后面的过期、被挡检查。

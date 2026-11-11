@@ -191,12 +191,20 @@ func TestManagerOwnsExactlyOneSessionPerEnabledAccount(t *testing.T) {
 	require.ErrorIs(t, <-done, context.Canceled)
 }
 
+// 实盘账户带账户类型和检测指纹：配置没变时就绪，指纹或密钥变了就不就绪。
 func TestManagerReadyForRejectsStaleSessionConfiguration(t *testing.T) {
+	inspected := func(fingerprint string) string {
+		raw, err := exchange.Inspection{CredentialFingerprint: fingerprint}.Encode()
+		require.NoError(t, err)
+		return raw
+	}
 	record := store.TradingAccountRecord{
 		SpaceID: "space-1", TradingAccountID: "account-1",
 		Exchange: "BINANCE", Markets: []string{"SPOT"}, ExecutionMode: "LIVE",
-		CredentialSecretID: "secret-1", SettlementAsset: "USDT",
-		Status: "ENABLED", LeverageSettings: store.LeverageSettings{},
+		AccountMode:        string(exchange.AccountModeBinanceStandard),
+		CredentialSecretID: "secret-1", InspectionJSON: inspected("fingerprint-1"),
+		SettlementAsset: "USDT", Status: "ENABLED",
+		LeverageSettings: store.LeverageSettings{store.DefaultLeverageKey: "5"},
 	}
 	source := &managerAccountSource{accounts: []store.TradingAccountRecord{record}}
 	session := &managedSessionStub{
@@ -216,13 +224,19 @@ func TestManagerReadyForRejectsStaleSessionConfiguration(t *testing.T) {
 	account := tradingaccount.Account{
 		ID: "account-1", SpaceID: "space-1",
 		Exchange: exchange.ExchangeBinance, Markets: []exchange.MarketType{exchange.MarketTypeSpot},
-		ExecutionMode:      exchange.ExecutionModeLive,
-		CredentialSecretID: "secret-1", SettlementAsset: "USDT",
-		Status: exchange.AccountStatusEnabled, LeverageSettings: map[string]shared.Decimal{},
+		ExecutionMode: exchange.ExecutionModeLive, AccountMode: exchange.AccountModeBinanceStandard,
+		CredentialSecretID: "secret-1", InspectionJSON: inspected("fingerprint-1"),
+		SettlementAsset: "USDT", Status: exchange.AccountStatusEnabled,
+		// 杠杆不属于会话配置：改了杠杆不重建会话，也不影响就绪。
+		LeverageSettings: map[string]shared.Decimal{"*": shared.MustDecimal("10")},
 	}
 	require.True(t, manager.ReadyFor(account))
-	account.CredentialSecretID = "secret-2"
-	require.False(t, manager.ReadyFor(account))
+	changed := account
+	changed.InspectionJSON = inspected("fingerprint-2")
+	require.False(t, manager.ReadyFor(changed), "密钥内容变了、重新检测写入新指纹后，旧会话不能再用")
+	changed = account
+	changed.CredentialSecretID = "secret-2"
+	require.False(t, manager.ReadyFor(changed))
 	manager.stopAll()
 }
 

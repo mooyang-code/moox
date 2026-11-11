@@ -3,6 +3,7 @@ package target
 import (
 	orderapp "github.com/mooyang-code/moox/modules/trade/internal/application/order"
 	orderdomain "github.com/mooyang-code/moox/modules/trade/internal/domain/order"
+	"github.com/mooyang-code/moox/modules/trade/internal/domain/tradingaccount"
 	"github.com/mooyang-code/moox/modules/trade/internal/exchange"
 	"github.com/mooyang-code/moox/modules/trade/internal/execution/paper"
 )
@@ -84,7 +85,9 @@ func accountCause(err error) (string, bool) {
 		case ErrInvalidTarget, ErrTargetSession, errTargetOrderUnresolved, orderdomain.ErrInvalidSpec,
 			orderdomain.ErrReferencePriceStale, orderapp.ErrInstrumentDisabled,
 			orderapp.ErrQuantityRule, orderapp.ErrNotionalLimit,
-			orderapp.ErrInsufficientFunds, orderapp.ErrLeverageLimit, orderapp.ErrReduceOnly:
+			orderapp.ErrInsufficientFunds, orderapp.ErrLeverageLimit, orderapp.ErrReduceOnly,
+			// 账户不可执行（停用、未就绪、检测有阻断项）只影响这一个账户。
+			tradingaccount.ErrAccountNotExecutable:
 			return "", true
 		}
 	}

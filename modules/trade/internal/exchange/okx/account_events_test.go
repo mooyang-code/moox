@@ -242,6 +242,30 @@ func TestDispatchPrivateConvertsSwapFill(t *testing.T) {
 	}
 }
 
+// 私有流推来标的表外永续（USDC 本位）的订单、成交和持仓：跳过，不报“未加载”，私有流不断开。
+func TestDispatchPrivateSkipsInstrumentsOutsideLoadedTable(t *testing.T) {
+	adapter := swapAdapter("http://unused")
+	adapter.instruments[exchange.SymbolKey{Market: exchange.MarketTypeSwap, Symbol: "BTC-USDT-SWAP"}] = testInstrument()
+	handler := &handler{}
+	require.NoError(t, adapter.dispatchPrivate(context.Background(), []byte(`{
+		"arg":{"channel":"orders"},
+		"data":[{
+			"instId":"BTC-USDC-SWAP","ordId":"42","clOrdId":"manual",
+			"side":"buy","posSide":"net","ordType":"ioc","sz":"5",
+			"accFillSz":"2","avgPx":"100","state":"canceled",
+			"tradeId":"7","fillSz":"2","fillPx":"100",
+			"fillFee":"-0.01","fillFeeCcy":"USDC","execType":"T","fillTime":"1700000000000"
+		}]
+	}`), handler))
+	require.NoError(t, adapter.dispatchPrivate(context.Background(), []byte(`{
+		"arg":{"channel":"positions"},
+		"data":[{"instId":"BTC-USDC-SWAP","posSide":"net","pos":"2","avgPx":"100","mgnMode":"cross","uTime":"1700000000000"}]
+	}`), handler))
+	require.Empty(t, handler.orders)
+	require.Empty(t, handler.fills)
+	require.Empty(t, handler.positions)
+}
+
 func TestPrivateChannelsExcludeSpotPositions(t *testing.T) {
 	spot := New(exchange.AccountConfig{Markets: []exchange.MarketType{exchange.MarketTypeSpot}}, exchange.Credential{})
 	channels := spot.privateChannels()
