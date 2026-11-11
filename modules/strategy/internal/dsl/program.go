@@ -59,7 +59,8 @@ func (r *CompiledRule) stageTargets() []**Expression {
 	return []**Expression{&r.Filter, &r.Score, &r.SelectWhere, &r.FilterAfter, &r.Entry, &r.Exit, &r.ThenScore, &r.HoldEntry, &r.HoldExit, &r.Scale}
 }
 
-// DirectColumns 是规则直接写列名（不经表达式）引用的当期列：select.group.by。
+// DirectColumns 是规则直接写列名（不经表达式）引用的当期列：select.group.by（主帧的列名，或写作 来源名.列名 的来源列，
+// 与表达式引用的来源列走同一条路：计入必需列、SourceColumns 与缺数划分）。
 func (r Rule) DirectColumns() []string {
 	if r.Select.Group != nil {
 		return []string{r.Select.Group.By}

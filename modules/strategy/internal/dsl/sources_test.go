@@ -54,6 +54,53 @@ func TestSourcesCompile(t *testing.T) {
 	}
 }
 
+// groupBySourceDSL 构造一份 1h 主帧加 1d 来源 daily 的 rank 策略：分数是 score，分组列是 by。
+func groupBySourceDSL(score, by string) string {
+	return "name: x\nbar: 1h\nsources:\n  daily: {bar: 1d}\nrules:\n  - {id: a, type: rank, score: \"" + score + "\", select: {top: 2, group: {by: " + by + ", max: 1}}, weight: 1}\n"
+}
+
+// select.group.by 写 来源名.列名：与表达式引用的来源列走同一条路——进 ReferencedColumns、Columns、SourceColumns，不进 MainColumns；
+// 只有 group.by 引用某个来源时也算这个来源被引用；来源列不在绑定的来源 View 里时编译报列名。
+func TestSourcesGroupByCompile(t *testing.T) {
+	t.Parallel()
+	strategy, err := Parse([]byte(groupBySourceDSL("close", "daily.industry")))
+	if err != nil {
+		t.Fatalf("只有 group.by 引用来源时应通过保存校验：%v", err)
+	}
+	if by := strategy.Rules[0].Select.Group.By; by != "daily.industry" {
+		t.Fatalf("group.by=%q", by)
+	}
+	referenced, err := ReferencedColumns(strategy)
+	if err != nil || !reflect.DeepEqual(referenced, []string{"close", "daily.industry"}) {
+		t.Fatalf("ReferencedColumns=%v，%v", referenced, err)
+	}
+	program, err := Compile(strategy, []string{"close", "daily.industry", "daily.close"})
+	if err != nil {
+		t.Fatalf("Compile：%v", err)
+	}
+	if want := map[string][]string{"daily": {"industry"}}; !reflect.DeepEqual(program.SourceColumns, want) {
+		t.Fatalf("SourceColumns=%v", program.SourceColumns)
+	}
+	if !reflect.DeepEqual(program.MainColumns(), []string{"close"}) || !reflect.DeepEqual(program.Rules[0].Columns(), []string{"close", "daily.industry"}) {
+		t.Fatalf("MainColumns=%v，规则列=%v", program.MainColumns(), program.Rules[0].Columns())
+	}
+	if _, err := Compile(strategy, []string{"close", "daily.close"}); err == nil || !strings.Contains(err.Error(), `"daily.industry"`) {
+		t.Fatalf("来源列不存在时应报列名：%v", err)
+	}
+	// 与表达式里的来源列并存：同一来源的列合并去重。
+	both, err := Parse([]byte(groupBySourceDSL("daily.close", "daily.industry")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	program, err = Compile(both, []string{"close", "daily.industry", "daily.close"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := map[string][]string{"daily": {"close", "industry"}}; !reflect.DeepEqual(program.SourceColumns, want) {
+		t.Fatalf("SourceColumns=%v", program.SourceColumns)
+	}
+}
+
 // 不写 sources 时与现状一致：属性访问照旧拒绝，Program 没有 SourceColumns，MainColumns 就是 Columns。
 func TestSourcesAbsentUnchanged(t *testing.T) {
 	t.Parallel()
@@ -73,30 +120,36 @@ func TestSourcesAbsentUnchanged(t *testing.T) {
 	}
 }
 
-// sources 的保存校验：个数、来源名、bar、未声明的来源、来源之后的写法、group.by 写来源列、池与池成员、与主帧列同名。
+// sources 的保存校验：个数、来源名、bar、未声明的来源、来源之后的写法、group.by 的来源列写法、池与池成员、与主帧列同名。
 func TestSourcesRejected(t *testing.T) {
 	t.Parallel()
 	head := "name: x\nbar: 1h\n"
 	rule := "rules:\n  - {id: a, type: rank, score: close, select: {top: 1}, weight: 1}\n"
 	runOptionCases(t, map[string]optionCase{
-		"超过两个":              {head + "sources: {a: {bar: 1d}, b: {bar: 4h}, c: {bar: 2h}}\n" + rule, "sources 至多 2 个"},
-		"来源名大写":             {head + "sources: {Daily: {bar: 1d}}\n" + rule, "snake_case"},
-		"来源名保留":             {head + "sources: {bars: {bar: 1d}}\n" + rule, "保留标识符"},
-		"来源名是 rank":         {head + "sources: {rank: {bar: 1d}}\n" + rule, "保留标识符"},
-		"缺 bar":             {head + "sources: {daily: {}}\n" + rule, "缺少 bar"},
-		"bar 非法":            {head + "sources: {daily: {bar: 1w}}\n" + rule, "bar \"1w\" 不受支持"},
-		"bar 不长于主帧":         {head + "sources: {daily: {bar: 1h}}\n" + rule, "必须长于策略的 bar"},
-		"未知字段":              {head + "sources: {daily: {bar: 1d, every: 2}}\n" + rule, "未知字段"},
-		"sources 不是对象":      {head + "sources: [daily]\n" + rule, "sources 必须是一个对象"},
-		"未声明的来源":            {sourcesDSL(`score: "weekly.close"`), "weekly 不是已声明的来源"},
-		"来源之后不是列名":          {sourcesDSL(`score: "daily[close]"`), "必须用 .列名 引用列"},
-		"来源列再取属性":           {sourcesDSL(`score: "daily.close.x"`), "属性访问"},
-		"来源访问保留列":           {sourcesDSL(`score: "daily.__params"`), "不能访问"},
-		"bars 读来源":          {sourcesDSL(`score: "bars[-1].daily.close"`), "属性访问"},
-		"group.by 写来源列":     {head + "sources: {daily: {bar: 1d}}\nrules:\n  - {id: a, type: rank, score: close, select: {top: 1, group: {by: daily.sector, max: 1}}, weight: 1}\n", "必须是 View 里的列名"},
-		"factor_params 读来源": {"name: x\nbar: 1h\nsources:\n  daily: {bar: 1d}\nfactor_params:\n  ma__var: {window: {default: daily.close}}\nrules:\n  - {id: a, type: rank, score: close, select: {top: 1}, weight: 1}\n", "属性访问"},
-		"来源没被引用":            {head + "sources: {daily: {bar: 1d}}\n" + rule, "来源 daily 没有被任何表达式引用"},
-		"池写 sources":        {"name: p\nbar: 1h\nsources: {daily: {bar: 1d}}\nstrategy_pool:\n  members: [{id: a, strategy: s1}]\n  allocation: {method: fixed, ratios: {a: 1}}\n", "策略池不写 sources"},
+		"超过两个":                {head + "sources: {a: {bar: 1d}, b: {bar: 4h}, c: {bar: 2h}}\n" + rule, "sources 至多 2 个"},
+		"来源名大写":               {head + "sources: {Daily: {bar: 1d}}\n" + rule, "snake_case"},
+		"来源名保留":               {head + "sources: {bars: {bar: 1d}}\n" + rule, "保留标识符"},
+		"来源名是 rank":           {head + "sources: {rank: {bar: 1d}}\n" + rule, "保留标识符"},
+		"缺 bar":               {head + "sources: {daily: {}}\n" + rule, "缺少 bar"},
+		"bar 非法":              {head + "sources: {daily: {bar: 1w}}\n" + rule, "bar \"1w\" 不受支持"},
+		"bar 不长于主帧":           {head + "sources: {daily: {bar: 1h}}\n" + rule, "必须长于策略的 bar"},
+		"未知字段":                {head + "sources: {daily: {bar: 1d, every: 2}}\n" + rule, "未知字段"},
+		"sources 不是对象":        {head + "sources: [daily]\n" + rule, "sources 必须是一个对象"},
+		"未声明的来源":              {sourcesDSL(`score: "weekly.close"`), "weekly 不是已声明的来源"},
+		"来源之后不是列名":            {sourcesDSL(`score: "daily[close]"`), "必须用 .列名 引用列"},
+		"来源列再取属性":             {sourcesDSL(`score: "daily.close.x"`), "属性访问"},
+		"来源访问保留列":             {sourcesDSL(`score: "daily.__params"`), "不能访问"},
+		"bars 读来源":            {sourcesDSL(`score: "bars[-1].daily.close"`), "属性访问"},
+		"group.by 来源未声明":      {groupBySourceDSL("daily.close", `weekly.sector`), "weekly 不是已在 sources 声明的来源"},
+		"group.by 没写 sources": {"name: x\nrules:\n  - {id: a, type: rank, score: close, select: {top: 1, group: {by: daily.sector, max: 1}}, weight: 1}\n", "daily 不是已在 sources 声明的来源"},
+		"group.by 来源列名非法":     {groupBySourceDSL("daily.close", `daily.__params`), "必须是 View 里的列名"},
+		"group.by 来源列带表达式":    {groupBySourceDSL("daily.close", `"daily.sector + 1"`), "必须是 View 里的列名"},
+		"group.by 来源列再取属性":    {groupBySourceDSL("daily.close", `daily.sector.x`), "必须是 View 里的列名"},
+		"group.by 来源名非法":      {groupBySourceDSL("daily.close", `Daily.sector`), "必须是 View 里的列名"},
+		"group.by 来源列是保留名":    {groupBySourceDSL("daily.close", `daily.score`), "必须是 View 里的列名"},
+		"factor_params 读来源":   {"name: x\nbar: 1h\nsources:\n  daily: {bar: 1d}\nfactor_params:\n  ma__var: {window: {default: daily.close}}\nrules:\n  - {id: a, type: rank, score: close, select: {top: 1}, weight: 1}\n", "属性访问"},
+		"来源没被引用":              {head + "sources: {daily: {bar: 1d}}\n" + rule, "来源 daily 没有被任何表达式引用"},
+		"池写 sources":          {"name: p\nbar: 1h\nsources: {daily: {bar: 1d}}\nstrategy_pool:\n  members: [{id: a, strategy: s1}]\n  allocation: {method: fixed, ratios: {a: 1}}\n", "策略池不写 sources"},
 	})
 	strategy, err := Parse([]byte(sourcesDSL(`score: "daily.close"`)))
 	if err != nil {

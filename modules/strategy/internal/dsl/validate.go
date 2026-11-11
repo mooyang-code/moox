@@ -274,6 +274,13 @@ func validateRankRule(prefix string, rule *Rule, sources map[string]struct{}) er
 		}
 	}
 	sel := rule.Select
+	if sel.Group != nil {
+		if source, _ := SplitSourceColumn(sel.Group.By); source != "" {
+			if _, declared := sources[source]; !declared {
+				return fmt.Errorf("%s 的 select.group.by 写了 %s，但 %s 不是已在 sources 声明的来源", prefix, sel.Group.By, source)
+			}
+		}
+	}
 	if rule.Holding != nil {
 		if sel.Buffer > 0 {
 			return fmt.Errorf("%s 不能同时使用 holding 和 select.buffer", prefix)
