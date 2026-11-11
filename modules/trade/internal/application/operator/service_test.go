@@ -172,7 +172,7 @@ func TestManualLegacyExpiredActionCannotSubmit(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, f.store.DBForTest().Exec("UPDATE t_operator_actions SET c_ctime = ? WHERE c_space_id = ? AND c_action_id = ?", f.now.Add(-time.Hour), command.SpaceID, command.ActionID).Error)
 	result, err := f.service().PlaceManualOrder(ctx, command)
-	require.ErrorContains(t, err, "deadline")
+	require.ErrorContains(t, err, "超过了人工下单的提交期限")
 	require.Equal(t, string(operatordomain.StatusFailed), result.Action.Status)
 	require.Empty(t, f.orders.specs)
 	require.Zero(t, f.orders.submitCalls)
@@ -390,7 +390,7 @@ func TestManualOrderRunningReplayFailsAfterAccountMovesLogicalAccount(t *testing
 
 	require.Error(t, err)
 	require.Equal(t, string(operatordomain.StatusFailed), result.Action.Status)
-	require.Contains(t, result.Accounts[0].Error, "moved")
+	require.Contains(t, result.Accounts[0].Error, "已移到别的组合")
 }
 
 func TestManualOrderFreshSyncsTargetWithoutKnownTargetOrders(t *testing.T) {

@@ -137,14 +137,15 @@ const tier = computed(() => confirmTier(props.env));
 const nameOk = computed(() => nameConfirmed(tier.value, typedName.value, props.logical.name));
 const orderEntryLabel = computed(() => (props.logical.control_mode === 2 ? "下单" : "接管并下单"));
 const selectedInstrument = computed(() => instruments.value.find(item => item.instrument_id === manualForm.instrument_id));
-// 生产环境确认前再看一眼订单内容：方向、标的、数量、限价或市价
+// 生产环境确认前再看一眼订单内容：方向、标的、数量、限价或市价，以及下在哪个执行账户上（只有一个成员时上面不显示账户选择）
 const orderSummary = computed(() => {
   const id = manualForm.instrument_id;
   const quantity = manualForm.quantity.trim();
   if (!id || !quantity) return "";
   const side = manualForm.side === 1 ? "买入" : "卖出";
   const price = manualForm.order_type === 2 ? `限价 ${manualForm.limit_price.trim() || "未填"}` : "市价";
-  return `${side} ${instrumentName(id)} · ${marketLabel(marketOfInstrument(id))} ${quantity}，${price}`;
+  const account = props.accounts.get(memberId.value)?.name || memberId.value;
+  return `${side} ${instrumentName(id)} · ${marketLabel(marketOfInstrument(id))} ${quantity}，${price}，执行账户 ${account}`;
 });
 const memberOptions = computed(() =>
   (props.logical.members || [])

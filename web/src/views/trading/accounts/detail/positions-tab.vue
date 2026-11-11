@@ -105,8 +105,8 @@
                 :key="hint.market"
                 size="mini"
                 type="text"
-                :disabled="!canOrder || !memberFor(hint.instrumentId)"
-                @click="openRowOrder(hint)"
+                :disabled="!canOrder || !memberFor(record, hint)"
+                @click="openRowOrder(record, hint)"
                 >下单·{{ marketLabel(hint.market) }}</a-button
               >
             </a-space>
@@ -123,12 +123,13 @@ import { useWindowSize } from "@vueuse/core";
 import { computed, inject, ref } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { fmtQty } from "../shared/format";
-import { marketLabel, marketOfInstrument } from "../shared/markets";
+import { marketLabel } from "../shared/markets";
 import SectionBlock from "../shared/section-block.vue";
 import { detailContextKey } from "./context";
 import {
   cleanNumber,
   filterCoinRows,
+  largestHolder,
   rowOrderHints,
   type CoinRow,
   type OrderHint,
@@ -180,19 +181,19 @@ function deviationClass(deviation: number, off: boolean) {
   if (!off || deviation === 0) return "";
   return deviation > 0 ? "tx-pos" : "tx-neg";
 }
-/** 能下这个标的的成员：启用，并且已开通标的所在的市场。 */
-function memberFor(instrumentId: string): string | undefined {
-  const market = marketOfInstrument(instrumentId);
-  return (logical.value.members || []).find(
-    member => member.enabled && accounts.value.get(member.trading_account_id)?.markets?.includes(market)
-  )?.trading_account_id;
+/** 默认的执行账户：启用并开通了标的所在市场的成员里，这个市场持仓最大的；都没有持仓时取第一个。 */
+function memberFor(row: CoinRow, hint: OrderHint): string | undefined {
+  const candidates = (logical.value.members || [])
+    .filter(member => member.enabled && accounts.value.get(member.trading_account_id)?.markets?.includes(hint.market))
+    .map(member => member.trading_account_id);
+  return largestHolder(row, hint.market, candidates) ?? candidates[0];
 }
 /** 行内下单：每个有目标或有持仓的市场一个入口，带上市场、方向和与目标的差额。 */
 function orderHints(row: CoinRow) {
   return rowOrderHints(row, logical.value.settlement_asset);
 }
-function openRowOrder(hint: OrderHint) {
-  openOrder(hint.instrumentId, memberFor(hint.instrumentId), { side: hint.side, quantity: hint.quantity });
+function openRowOrder(row: CoinRow, hint: OrderHint) {
+  openOrder(hint.instrumentId, memberFor(row, hint), { side: hint.side, quantity: hint.quantity });
 }
 </script>
 

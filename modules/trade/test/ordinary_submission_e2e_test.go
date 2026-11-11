@@ -152,7 +152,8 @@ func TestOrdinaryLiveMockSubmissionMarketRules(t *testing.T) {
 			logical := &logicalapp.Service{Store: f.store, Syncer: syncBridge{service: f.sync}, Now: func() time.Time { return testNow }}
 			_, err := logical.Create(ctx, testSpace, testLogicalAccount, "manual-live-mock", exchange.ExecutionModeLive, "USDT", "MANUAL")
 			require.NoError(t, err)
-			require.NoError(t, logical.AddMember(ctx, logicalapp.AddMemberCommand{SpaceID: testSpace, LogicalAccountID: testLogicalAccount, TradingAccountID: testAccount, Enabled: true, AdoptExistingExposure: true}))
+			_, err = logical.AddMember(ctx, logicalapp.AddMemberCommand{SpaceID: testSpace, LogicalAccountID: testLogicalAccount, TradingAccountID: testAccount, Enabled: true, AdoptExistingExposure: true})
+			require.NoError(t, err)
 			service := &operator.Service{Store: f.store, Orders: f.orders, Syncer: syncBridge{service: f.sync}, Prices: logicalAccountE2EPriceSource{at: testNow}, Now: func() time.Time { return testNow }}
 			command := operator.SubmitOrderCommand{LogicalAccountID: testLogicalAccount, ManualOrderCommand: operator.ManualOrderCommand{
 				SpaceID: testSpace, ActionID: "ordinary-live", TradingAccountID: testAccount, ClientOrderID: "ordinary-live", InstrumentID: testInstrumentID(market),

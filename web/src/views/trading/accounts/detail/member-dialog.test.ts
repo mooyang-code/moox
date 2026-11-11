@@ -1,5 +1,5 @@
 import { flushPromises, mount, type VueWrapper } from "@vue/test-utils";
-import ArcoVue from "@arco-design/web-vue";
+import ArcoVue, { Message } from "@arco-design/web-vue";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TradeResponseError, type LogicalAccount, type TradingAccount } from "@/api/trade";
 
@@ -77,6 +77,29 @@ describe("编辑组合成员", () => {
     expect(mocks.addLogicalAccountMember).toHaveBeenLastCalledWith(
       expect.objectContaining({ trading_account_id: "ta-1", enabled: true, adopt_existing_exposure: true })
     );
+  });
+
+  it("停用成员只按本地记录确认时，成功响应里的提示要显示出来、手动关掉", async () => {
+    const warn = vi.spyOn(Message, "warning").mockImplementation(() => ({ close: vi.fn() }));
+    wrapper = mount(MemberDialog, {
+      props: { logical, candidates: [], env: "paper" },
+      global: { plugins: [ArcoVue] },
+      attachTo: document.body
+    });
+    const vm = wrapper.vm as unknown as DialogVM;
+    vm.openEdit({ trading_account_id: "ta-1", enabled: true, priority: 1 }, "执行账户一");
+    vm.form.enabled = false;
+    const text = "执行账户同步失败（例如凭证已失效），只按本地记录确认没有挂单和持仓，交易所侧仓位没有核对";
+    mocks.addLogicalAccountMember.mockResolvedValueOnce({ ret_info: { code: 0, msg: text } });
+    expect(await vm.save()).toBe(true);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toMatchObject({ duration: 0, closable: true });
+    expect((warn.mock.calls[0][0] as { content: string }).content).toContain(`「执行账户一」已停用：${text}`);
+
+    mocks.addLogicalAccountMember.mockResolvedValueOnce({ ret_info: { code: 0, msg: "" } });
+    expect(await vm.save()).toBe(true);
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
   });
 
   it("生产组合里改优先级先确认，不用输入名称；确认后才保存并关掉对话框", async () => {

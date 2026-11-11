@@ -16,9 +16,13 @@ import (
 	"github.com/mooyang-code/moox/modules/trade/internal/infra/store"
 	"github.com/mooyang-code/moox/modules/trade/internal/spacecontext"
 	tradepb "github.com/mooyang-code/moox/modules/trade/proto/tradegen"
+	"gorm.io/gorm"
 )
 
 var errSpaceRequired = errors.New("请求没有带上已认证的使用空间")
+
+// errInstrumentNotInAccount 是设置杠杆时执行账户的场所里没有这个合约。
+var errInstrumentNotInAccount = errors.New("这个账户没有该合约")
 
 type AccountServer struct {
 	Accounts *accountapp.Service
@@ -202,6 +206,10 @@ func (h *AccountServer) SetLeverage(
 			}
 			var instrument store.InstrumentRecord
 			instrument, err = h.Store.GetInstrumentByIDForAccount(ctx, spaceID, req.GetTradingAccountId(), instrumentID)
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				// 账户在（上面查过），是账户的场所里没有这个合约：参数错误，不是“记录不存在”。
+				err = errInstrumentNotInAccount
+			}
 			leverageKey, symbol = instrument.InstrumentID, exchange.NewSymbolKey(instrument.MarketType, instrument.ExchangeSymbol)
 		}
 		if err == nil {

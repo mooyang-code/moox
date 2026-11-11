@@ -98,9 +98,9 @@ describe("Trade response errors", () => {
     expect(isTradeSessionNotReady(new Error("交易账户会话还没有启动"))).toBe(false);
   });
 
-  it("包装进去的具体原因保留在括号里；只认完整的错误常量", () => {
+  it("包装进去的具体原因保留在括号里；冲突类不接原文；只认完整的错误常量", () => {
     const text = (msg: string) => new TradeResponseError({ ret_info: { code: 14, msg } }).message;
-    expect(text("trade store: conflict: stale paper order")).toBe("数据已经被修改，刷新后再试（stale paper order）");
+    expect(text("trade store: conflict: stale paper order")).toBe("数据已经被修改，刷新后再试");
     expect(text("trade store: conflict")).toBe("数据已经被修改，刷新后再试");
     expect(text("trade: invalid order transition")).toBe("trade: invalid order transition");
     expect(text("trade: invalid order: quantity must be positive")).toBe("订单参数不合法（quantity must be positive）");
@@ -124,6 +124,15 @@ describe("Trade response errors", () => {
     expect(text("trade: invalid order：数量必须大于 0")).toBe("订单参数不合法（数量必须大于 0）");
     expect(text("trade store: conflict：")).toBe("数据已经被修改，刷新后再试");
     expect(text("trade: invalid order transition")).toBe("trade: invalid order transition");
+  });
+
+  it("名称重复、唯一约束冲突的固定文案原样显示，不被冲突类的映射替换", () => {
+    const text = (code: string, msg: string) => new TradeResponseError({ ret_info: { code, msg } }).message;
+    const taken = "名称已被使用，请换一个（已关闭的模拟账户也占用名称）";
+    expect(text("INVALID_PARAM", taken)).toBe(taken);
+    const unique = "保存的数据和已有记录冲突（重复提交或刚被别处修改），刷新后再试";
+    expect(text("CONFLICT", unique)).toBe(unique);
+    expect(text("CONFLICT", "trade store: conflict: stale order version")).toBe("数据已经被修改，刷新后再试");
   });
 
   it("does not invent acceptance when the response envelope is missing", async () => {

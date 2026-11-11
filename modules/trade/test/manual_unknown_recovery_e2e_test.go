@@ -482,7 +482,7 @@ func TestManualConfirmedAbsentPendingRespectsOriginalDeadline(t *testing.T) {
 			f.fake.mu.Lock()
 			defer f.fake.mu.Unlock()
 			if expired {
-				require.ErrorContains(t, err, "deadline")
+				require.ErrorContains(t, err, "超过了人工下单的提交期限")
 				require.Equal(t, "FAILED", result.Action.Status)
 				require.Equal(t, string(orderdomain.Canceled), persisted.State)
 				require.Equal(t, "0", persisted.RemainingReservedQuantity)

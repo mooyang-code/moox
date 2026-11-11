@@ -344,7 +344,7 @@ func (s *Service) cancelOwnOrders(ctx context.Context, spaceID, tradingAccountID
 		canceled = true
 		result.ChildOrderIDs = appendUnique(result.ChildOrderIDs, current.OrderID)
 		if err := s.stopOrder(ctx, current); err != nil {
-			cancelErrors = append(cancelErrors, fmt.Errorf("cancel order %s: %w", current.OrderID, err))
+			cancelErrors = append(cancelErrors, fmt.Errorf("撤单 %s 失败：%w", current.OrderID, err))
 		}
 	}
 	return canceled, errors.Join(cancelErrors...)

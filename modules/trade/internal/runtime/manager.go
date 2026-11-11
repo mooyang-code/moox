@@ -305,21 +305,36 @@ func (m *Manager) reconcile(ctx context.Context) error {
 			}
 		}
 	}
+	missing := make([]store.TradingAccountRecord, 0)
 	for id, account := range wanted {
-		if _, found := m.sessions[id]; found {
-			continue
+		if _, found := m.sessions[id]; !found {
+			missing = append(missing, account)
 		}
+	}
+	m.mu.Unlock()
+
+	// 放锁后再建会话：实盘账户建会话要经网关取密钥（可能等好几秒），持锁建会话会挡住 Adapter、Ready、
+	// RequestSync 等全部读者，连带下单与同步。reconcile 只由 Run 串行调用，m.sessions 只有它和 Run 退出时的
+	// stopAll 会改，放锁期间不会有别人插入同一账户；账户列表是本轮开头读的快照，建会话期间配置变了由下一轮按
+	// sameSessionConfig 重建。
+	created := make(map[string]ManagedSession, len(missing))
+	for _, account := range missing {
 		session, createErr := m.NewSession(account)
 		if createErr == nil && session == nil {
 			createErr = ErrSessionConfig
 		}
 		if createErr != nil {
-			accountErrors[id] = createErr.Error()
+			accountErrors[account.TradingAccountID] = createErr.Error()
 			continue
 		}
+		created[account.TradingAccountID] = session
+	}
+
+	m.mu.Lock()
+	for id, session := range created {
 		sessionCtx, cancel := context.WithCancel(ctx)
 		entry := &managedEntry{
-			session: session, cancel: cancel, account: account,
+			session: session, cancel: cancel, account: wanted[id],
 			done: make(chan struct{}),
 		}
 		m.sessions[id] = entry

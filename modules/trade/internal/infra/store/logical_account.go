@@ -124,7 +124,7 @@ func (tx *Tx) CreateLogicalAccount(record LogicalAccountRecord) error {
 		record.OrderSettingsJSON, record.FundSettingsJSON,
 		record.AutomationState, record.PauseReason,
 	).Error
-	return writeError(err)
+	return nameWriteError(err, uniqueLogicalAccountName)
 }
 
 func (s *Store) GetLogicalAccount(
@@ -256,6 +256,9 @@ func (tx *Tx) SetLogicalAccountName(
 		return fmt.Errorf("%w: logical account name is required", ErrInvalidRecord)
 	}
 	result := tx.db.Exec(execRenameLogicalAccount, name, spaceID, logicalAccountID)
+	if result.Error != nil {
+		return nameWriteError(result.Error, uniqueLogicalAccountName)
+	}
 	return requireUpdated(result.Error, result.RowsAffected, "logical account name")
 }
 
@@ -454,7 +457,14 @@ func (tx *Tx) PutLogicalAccountMember(record LogicalAccountMemberRecord) error {
 		record.SpaceID, record.LogicalAccountID, record.TradingAccountID,
 		record.Enabled, record.Priority,
 	).Error
-	return writeError(err)
+	if err != nil || !record.Enabled {
+		return writeError(err)
+	}
+	// 同步只给启用成员的外部单写组合编号：加入组合前、或停用期间在交易所下的单没有组合编号，
+	// 组合的订单列表看不到、也撤不掉，却会挡住恢复。启用时把这些还没结束的单补上本组合的编号。
+	return tx.db.Exec(execAdoptMemberOpenOrders,
+		record.LogicalAccountID, record.SpaceID, record.TradingAccountID, activeOrderStatesJSON,
+	).Error
 }
 
 func (s *Store) ListLogicalAccountMembers(
@@ -646,4 +656,10 @@ const (
 	execDeleteLogicalAccountMember = `DELETE FROM t_logical_account_members
 		WHERE c_space_id = ? AND c_logical_account_id = ?
 			AND c_trading_account_id = ?`
+	// 给启用成员还没结束、也没有组合编号的订单（只可能是外部单）补上组合编号；不动版本号，订单的版本化更新不写这一列。
+	// 订单状态列表经 json_each(?) 传入（activeOrderStatesJSON）。
+	execAdoptMemberOpenOrders = `UPDATE t_trade_orders
+		SET c_logical_account_id = ?, c_mtime = CURRENT_TIMESTAMP
+		WHERE c_space_id = ? AND c_trading_account_id = ? AND c_logical_account_id IS NULL
+			AND c_state IN (SELECT value FROM json_each(?))`
 )

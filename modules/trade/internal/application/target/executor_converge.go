@@ -116,10 +116,14 @@ func (e *Executor) releaseConflictsAndStale(
 			current.OwnerType == string(orderdomain.OwnerTarget) &&
 				(current.LogicalAccountID != logicalAccountID ||
 					current.OwnerID == target.TargetID && current.RunnerID != target.RunnerID):
-			reason := fmt.Sprintf(
-				"%s 订单 %s 与自动执行冲突",
-				current.OwnerType, current.OrderID,
-			)
+			owner := "别的来源的目标"
+			switch current.OwnerType {
+			case string(orderdomain.OwnerExternal):
+				owner = "外部（不是 MooX 下的）"
+			case string(orderdomain.OwnerOperator):
+				owner = "人工"
+			}
+			reason := fmt.Sprintf("%s订单 %s 与自动执行冲突", owner, current.OrderID)
 			if err := e.pauseLogicalAccount(ctx, logicalAccount, *target, reason); err != nil {
 				return Result{}, false, err
 			}

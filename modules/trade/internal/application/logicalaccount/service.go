@@ -26,12 +26,15 @@ import (
 var (
 	ErrServiceConfig    = errors.New("组合账户服务未配置")
 	ErrAdoptionRequired = errors.New("执行账户上已有持仓或挂单，加入组合需要确认接管这些已有仓位")
-	// ErrMemberHasExposure 是以停用状态加入组合、或停用已有成员时，执行账户上还有挂单、持仓或非结算资产余额。
-	ErrMemberHasExposure = errors.New("执行账户上还有挂单、持仓或非结算资产余额，不能以停用状态加入组合，也不能停用成员，请先清仓")
+	// ErrMemberHasExposure 是以停用状态加入组合、或停用已有成员时，执行账户上还有挂单、持仓或受管的现货资产
+	// （与移出成员同一口径：非受管资产与卖不掉的零头不算）。
+	ErrMemberHasExposure = errors.New("执行账户上还有挂单、持仓或受管的现货资产，不能以停用状态加入组合，也不能停用成员，请先撤单、平仓")
 	// ErrRemovalHasExposure 是移出成员时，执行账户上还有挂单、持仓或受管的现货资产（非受管资产与卖不掉的零头不算）。
 	ErrRemovalHasExposure = errors.New("执行账户上还有挂单、持仓或受管的现货资产，不能移出组合，请先撤单、平仓后再移出")
-	ErrOwnerConflict      = errors.New("组合账户已被别的策略会话占用")
-	ErrNotReady           = errors.New("组合账户还没准备好，暂时不能恢复自动执行")
+	// ErrMemberNotSynced 是加入、停用或移出成员时执行账户未就绪或快照过期，持仓核对不了。
+	ErrMemberNotSynced = errors.New("执行账户还没同步完成，稍后再试")
+	ErrOwnerConflict   = errors.New("组合账户已被别的策略会话占用")
+	ErrNotReady        = errors.New("组合账户还没准备好，暂时不能恢复自动执行")
 )
 
 type AddMemberCommand struct {
@@ -302,7 +305,7 @@ func (s *Service) requireBinanceMembers(ctx context.Context, spaceID, logicalAcc
 			return err
 		}
 		if account.Exchange != string(exchange.ExchangeBinance) {
-			return fmt.Errorf("%w: 成员 %s 不是币安账户，BNB 抵扣、BNB 保留、小额兑换和稳定币保证金只适用于币安", store.ErrInvalidRecord, account.TradingAccountID)
+			return fmt.Errorf("%w: 成员 %s 不是币安账户，BNB 抵扣、BNB 保留、小额兑换和稳定币保证金只适用于币安", store.ErrInvalidRecord, accountLabel(account))
 		}
 	}
 	return nil
@@ -327,7 +330,7 @@ func (s *Service) checkMemberAgainstFundSettings(ctx context.Context, command Ad
 		return err
 	}
 	if account.Exchange != string(exchange.ExchangeBinance) {
-		return fmt.Errorf("%w: 组合开了 BNB 抵扣、BNB 保留、小额兑换或稳定币保证金，只能加币安账户，%s 不是", store.ErrInvalidRecord, account.TradingAccountID)
+		return fmt.Errorf("%w: 组合开了 BNB 抵扣、BNB 保留、小额兑换或稳定币保证金，只能加币安账户，%s 不是", store.ErrInvalidRecord, accountLabel(account))
 	}
 	return nil
 }
@@ -359,60 +362,91 @@ func (s *Service) saveSettings(
 	return s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
 }
 
-func (s *Service) AddMember(ctx context.Context, command AddMemberCommand) error {
+// AddMember 加入成员或修改成员（启停、优先级），返回给用户的提示（正常时为空）。
+func (s *Service) AddMember(ctx context.Context, command AddMemberCommand) (string, error) {
 	if s == nil || s.Store == nil {
-		return ErrServiceConfig
+		return "", ErrServiceConfig
 	}
 	if s.Syncer == nil {
-		return ErrServiceConfig
+		return "", ErrServiceConfig
 	}
 	// 归属检查放在同步和持仓检查之前，否则已属于别的组合的账户会先看到无关的错误。
 	if owner, _, err := s.Store.FindLogicalAccountMembership(ctx, command.SpaceID, command.TradingAccountID); err == nil {
 		if owner.LogicalAccountID != command.LogicalAccountID {
-			return fmt.Errorf("%w（组合账户 %s）", logicaldomain.ErrMemberElsewhere, owner.Name)
+			return "", fmt.Errorf("%w（组合账户 %s）", logicaldomain.ErrMemberElsewhere, owner.Name)
 		}
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
-		return err
+		return "", err
 	}
 	members, err := s.Store.ListLogicalAccountMembers(ctx, command.SpaceID, command.LogicalAccountID, true)
 	if err != nil {
-		return err
+		return "", err
 	}
 	for _, member := range members {
 		// 启用成员只改优先级时不碰持仓，有持仓的成员也能调整。
 		if member.TradingAccountID == command.TradingAccountID && member.Enabled && command.Enabled {
 			unlockAll, lockErr := s.Store.LockMemberChange(ctx, command.SpaceID, command.LogicalAccountID, command.TradingAccountID)
 			if lockErr != nil {
-				return lockErr
+				return "", lockErr
 			}
 			defer unlockAll()
-			return s.putMember(ctx, command)
+			return "", s.putMember(ctx, command)
 		}
 	}
+	if !command.Enabled {
+		return s.putDisabledMember(ctx, command)
+	}
 	if err := s.Syncer.SyncAccount(ctx, command.TradingAccountID); err != nil {
-		return err
+		return "", err
 	}
 	// 全部带期限：任何一把锁等待超时都释放已取得的锁并返回，不占住全局成员锁
 	unlockAll, lockErr := s.Store.LockMemberChange(ctx, command.SpaceID, command.LogicalAccountID, command.TradingAccountID)
 	if lockErr != nil {
-		return lockErr
+		return "", lockErr
 	}
 	defer unlockAll()
 	exposed, err := s.memberHasExposure(
 		ctx, command.SpaceID, command.TradingAccountID,
 	)
 	if err != nil {
-		return err
+		return "", err
+	}
+	if exposed && !command.AdoptExistingExposure {
+		return "", ErrAdoptionRequired
+	}
+	return "", s.putMember(ctx, command)
+}
+
+// putDisabledMember 以停用状态加入组合，或停用已有成员。停用后组合不再管这个账户，所以和移出成员同一口径：
+// 只看挂单、持仓和受管资产（非受管资产与卖不掉的零头不算）；凭证失效或没有会话时只按本地记录确认，返回提示。
+func (s *Service) putDisabledMember(ctx context.Context, command AddMemberCommand) (string, error) {
+	syncErr := s.Syncer.SyncAccount(ctx, command.TradingAccountID)
+	// 只有凭证失效或账户没有会话（同步永远不会成功）才退到只看本地记录；超时、限频等暂时性失败照旧报错。
+	if syncErr != nil && (ctx.Err() != nil || !credentialUnavailable(syncErr)) {
+		return "", syncErr
+	}
+	unlockAll, lockErr := s.Store.LockMemberChange(ctx, command.SpaceID, command.LogicalAccountID, command.TradingAccountID)
+	if lockErr != nil {
+		return "", lockErr
+	}
+	defer unlockAll()
+	exposed, err := s.managedExposure(ctx, command.SpaceID, command.TradingAccountID, syncErr == nil)
+	if err != nil {
+		return "", errors.Join(syncErr, err)
 	}
 	if exposed {
-		if !command.Enabled {
-			return ErrMemberHasExposure
+		if syncErr != nil {
+			return "", fmt.Errorf("%w（同步失败：%s）", ErrMemberHasExposure, syncFailureSummary(syncErr))
 		}
-		if !command.AdoptExistingExposure {
-			return ErrAdoptionRequired
-		}
+		return "", ErrMemberHasExposure
 	}
-	return s.putMember(ctx, command)
+	if err := s.putMember(ctx, command); err != nil {
+		return "", err
+	}
+	if syncErr != nil {
+		return UnverifiedMemberWarning, nil
+	}
+	return "", nil
 }
 
 func (s *Service) putMember(ctx context.Context, command AddMemberCommand) error {
@@ -477,8 +511,8 @@ func syncFailureSummary(err error) string {
 	return exchange.FailureSummary(err)
 }
 
-// UnverifiedRemovalWarning 是同步失败、只凭本地记录移除成员时返回的提示。
-const UnverifiedRemovalWarning = "执行账户同步失败（例如凭证已失效），只按本地记录确认没有挂单和持仓，交易所侧仓位没有核对"
+// UnverifiedMemberWarning 是同步失败、只凭本地记录移除或停用成员时返回的提示。
+const UnverifiedMemberWarning = "执行账户同步失败（例如凭证已失效），只按本地记录确认没有挂单和持仓，交易所侧仓位没有核对"
 
 // RemoveMember 移除成员，返回给用户的提示（正常移除时为空）。凭证失效等原因同步失败时，
 // 本地确认没有未结束订单、持仓和受管余额也允许移除，否则账户永远移不出组合。
@@ -524,7 +558,7 @@ func (s *Service) RemoveMember(
 		return "", err
 	}
 	if syncErr != nil {
-		return UnverifiedRemovalWarning, nil
+		return UnverifiedMemberWarning, nil
 	}
 	return "", nil
 }
@@ -790,15 +824,17 @@ func (s *Service) readiness(
 		if getErr != nil {
 			return Readiness{}, getErr
 		}
+		// 原因会显示在页面上、拼进恢复被拒的报错，用账户名称。
+		label := accountLabel(account)
 		switch {
 		case account.Status != "ENABLED":
-			reasons = append(reasons, account.TradingAccountID+" 已停用")
+			reasons = append(reasons, label+" 已停用")
 		case !account.Ready:
-			reasons = append(reasons, account.TradingAccountID+" 未就绪")
+			reasons = append(reasons, label+" 未就绪")
 		case account.LastSyncAt <= 0:
-			reasons = append(reasons, account.TradingAccountID+" 尚未完成首次同步")
+			reasons = append(reasons, label+" 尚未完成首次同步")
 		case s.snapshotStale(now, account.LastSyncAt):
-			reasons = append(reasons, account.TradingAccountID+" 账户快照已过期")
+			reasons = append(reasons, label+" 账户快照已过期")
 		}
 		orders, listErr := s.Store.ListActiveOrdersForAccount(ctx, spaceID, account.TradingAccountID)
 		if listErr != nil {
@@ -808,13 +844,13 @@ func (s *Service) readiness(
 			if current.State == "SUBMITTING" || current.State == "SUBMIT_UNKNOWN" {
 				reasons = append(
 					reasons,
-					account.TradingAccountID+" 有未确认的提交订单 "+current.OrderID,
+					label+" 有未确认的提交订单 "+current.OrderID,
 				)
 			}
 			if current.OwnerType == "EXTERNAL" {
 				reasons = append(
 					reasons,
-					account.TradingAccountID+" 有外部订单 EXTERNAL "+current.OrderID,
+					label+" 有外部挂单 "+current.OrderID+"（不是 MooX 下的单），撤掉后再恢复",
 				)
 			}
 		}
@@ -849,7 +885,7 @@ func (s *Service) readiness(
 			if _, ok := supported[desired.InstrumentID]; !ok {
 				reasons = append(
 					reasons,
-					"target instrument "+desired.InstrumentID+" is unavailable",
+					"目标里的标的 "+desired.InstrumentID+" 在启用的执行账户上都不能交易（没有这个标的、已暂停或下架，或结算资产不同）",
 				)
 			}
 		}
@@ -859,6 +895,14 @@ func (s *Service) readiness(
 	}
 	sort.Strings(reasons)
 	return Readiness{Ready: len(reasons) == 0, Reasons: reasons}, nil
+}
+
+// accountLabel 是给用户看的执行账户名称，没有名称时退回编号。
+func accountLabel(account store.TradingAccountRecord) string {
+	if account.Name != "" {
+		return account.Name
+	}
+	return account.TradingAccountID
 }
 
 func (s *Service) supportedInstruments(ctx context.Context, members []store.LogicalAccountMemberRecord) (map[string]struct{}, error) {
@@ -903,7 +947,8 @@ type exposureFacts struct {
 	positions []store.PositionRecord
 }
 
-// exposure 判断执行账户是否有挂单、持仓或非结算资产余额；requireFresh 为真时要求账户就绪且快照新鲜。
+// exposure 判断执行账户是否有挂单、持仓或非结算资产余额；requireFresh 为真时要求账户就绪且快照新鲜，
+// 否则返回 ErrMemberNotSynced（只有成员变更用它）。
 func (s *Service) exposure(
 	ctx context.Context,
 	spaceID string,
@@ -917,7 +962,7 @@ func (s *Service) exposure(
 	facts := exposureFacts{account: account}
 	if requireFresh && (!account.Ready || account.LastSyncAt <= 0 ||
 		s.snapshotStale(s.now(), account.LastSyncAt)) {
-		return false, facts, ErrNotReady
+		return false, facts, ErrMemberNotSynced
 	}
 	facts.orders, err = s.Store.ListActiveOrdersForAccount(ctx, spaceID, tradingAccountID)
 	if err != nil {
@@ -956,7 +1001,7 @@ func (s *Service) exposure(
 	return false, facts, nil
 }
 
-// managedExposure 用于移除成员：非受管资产不归 MooX 管，不挡移除。
+// managedExposure 用于移除和停用成员：非受管资产不归 MooX 管，不挡移除和停用。
 func (s *Service) managedExposure(ctx context.Context, spaceID, tradingAccountID string, requireFresh bool) (bool, error) {
 	exposed, facts, err := s.exposure(ctx, spaceID, tradingAccountID, requireFresh)
 	if err != nil || !exposed {

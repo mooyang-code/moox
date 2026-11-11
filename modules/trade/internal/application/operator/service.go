@@ -27,6 +27,12 @@ var (
 	ErrInvalidActionResult = errors.New("已保存的人工操作结果无法解析")
 )
 
+// 人工单失败时写进操作 last_error 的原因，前端原样显示。
+const (
+	manualNotMemberText = "执行账户已不是这个组合的启用成员，人工单没有发出"
+	manualDeadlineText  = "超过了人工下单的提交期限，订单没有发出，需要的话重新下单"
+)
+
 type Quote = targetapp.Quote
 
 type PriceSource interface {
@@ -274,10 +280,10 @@ func (s *Service) PlaceManualOrder(
 			return s.failManualAction(
 				ctx,
 				*runningAction,
-				fmt.Errorf("%w: execution account is no longer an enabled member", err),
+				manualFailureError{message: manualNotMemberText, cause: err},
 				[]OperatorAccountError{{
 					TradingAccountID: command.TradingAccountID,
-					Error:            err.Error(),
+					Error:            manualNotMemberText,
 				}},
 			)
 		}
@@ -292,7 +298,7 @@ func (s *Service) PlaceManualOrder(
 			ErrInvalidCommand,
 			[]OperatorAccountError{{
 				TradingAccountID: command.TradingAccountID,
-				Error:            "execution account moved to another logical account",
+				Error:            "执行账户已移到别的组合，人工单没有发出",
 			}},
 		)
 	}
@@ -370,7 +376,7 @@ func (s *Service) PlaceManualOrder(
 	)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			cause := fmt.Errorf("%w: instrument %q does not exist for execution account", ErrInvalidCommand, command.InstrumentID)
+			cause := fmt.Errorf("%w: 执行账户没有标的 %s", ErrInvalidCommand, command.InstrumentID)
 			return s.failManualAction(ctx, action, cause, nil)
 		}
 		return ManualOrderResult{Action: action}, err
@@ -576,7 +582,7 @@ func (s *Service) recoverChild(ctx context.Context, action store.OperatorActionR
 	child, err := s.Store.GetOrderByClientID(ctx, command.SpaceID, command.TradingAccountID, exchange.MarketOfInstrumentID(command.InstrumentID), command.ClientOrderID)
 	if errors.Is(err, gorm.ErrRecordNotFound) && progress.OrderID == "" {
 		if s.manualExpired(progress) {
-			result, err := s.failManualAction(ctx, action, errors.New("manual submission deadline exceeded"), nil)
+			result, err := s.failManualAction(ctx, action, errors.New(manualDeadlineText), nil)
 			return result, true, err
 		}
 		return ManualOrderResult{}, false, nil
@@ -671,14 +677,14 @@ func (s *Service) advanceManualChild(ctx context.Context, action store.OperatorA
 			if _, discardErr := s.Orders.DiscardPending(ctx, action.SpaceID, child.OrderID); discardErr != nil {
 				return s.submissionOrderError(ctx, action, discardErr)
 			}
-			return s.failManualAction(ctx, action, errors.New("manual order logical account membership changed"), nil)
+			return s.failManualAction(ctx, action, errors.New("组合成员关系变了（执行账户被移出或停用，或组合换了控制方式），人工单没有发出"), nil)
 		}
 		if s.manualExpired(progress) {
 			_, err = s.Orders.DiscardPending(ctx, action.SpaceID, child.OrderID)
 			if err != nil {
 				return s.submissionOrderError(ctx, action, err)
 			}
-			return s.failManualAction(ctx, action, errors.New("manual submission deadline exceeded"), nil)
+			return s.failManualAction(ctx, action, errors.New(manualDeadlineText), nil)
 		}
 		if callErr == nil {
 			now := time.Now()
@@ -710,7 +716,7 @@ func (s *Service) advanceManualChild(ctx context.Context, action store.OperatorA
 	switch orderdomain.State(child.State) {
 	case orderdomain.Pending, orderdomain.Submitting, orderdomain.SubmitUnknown:
 		if callErr == nil {
-			callErr = errors.New("manual submission awaiting confirmation")
+			callErr = errors.New("人工单已提交，正在等交易所确认")
 		}
 		result, saveErr := s.deferManualAction(ctx, action, callErr, nil)
 		if saveErr != nil {
@@ -728,7 +734,7 @@ func (s *Service) advanceManualChild(ctx context.Context, action store.OperatorA
 		return result, saveErr
 	case orderdomain.Canceled:
 		if child.ExchangeOrderID == "" {
-			return s.failManualAction(ctx, action, errors.New("manual order discarded before acceptance"), nil)
+			return s.failManualAction(ctx, action, errors.New("人工单在交易所受理前就取消了，没有发出"), nil)
 		}
 	case orderdomain.Open, orderdomain.PartiallyFilled, orderdomain.Filled,
 		orderdomain.Canceling, orderdomain.CancelUnknown, orderdomain.PartiallyCanceled, orderdomain.Expired:
@@ -945,7 +951,7 @@ func (s *Service) cancelLogicalAccountOrders(
 			break
 		}
 		if err := s.Syncer.SyncAccount(ctx, member.TradingAccountID); err != nil {
-			currentErrors = append(currentErrors, fmt.Errorf("fresh sync: %w", err))
+			currentErrors = append(currentErrors, fmt.Errorf("撤单前同步失败：%w", err))
 			accountErrors = appendAccountErrors(accountErrors, member.TradingAccountID, currentErrors)
 			continue
 		}
@@ -976,7 +982,7 @@ func (s *Service) cancelLogicalAccountOrders(
 			if err := s.stopOrder(ctx, current); err != nil {
 				currentErrors = append(
 					currentErrors,
-					fmt.Errorf("stop order %s: %w", current.OrderID, err),
+					fmt.Errorf("撤单 %s 失败：%w", current.OrderID, err),
 				)
 			}
 		}
@@ -986,7 +992,7 @@ func (s *Service) cancelLogicalAccountOrders(
 			break
 		}
 		if err := s.Syncer.SyncAccount(ctx, member.TradingAccountID); err != nil {
-			currentErrors = append(currentErrors, fmt.Errorf("confirm sync: %w", err))
+			currentErrors = append(currentErrors, fmt.Errorf("撤单后确认同步失败：%w", err))
 			accountErrors = appendAccountErrors(accountErrors, member.TradingAccountID, currentErrors)
 			continue
 		}
@@ -1012,12 +1018,7 @@ func (s *Service) cancelLogicalAccountOrders(
 			}
 			currentErrors = append(
 				currentErrors,
-				fmt.Errorf(
-					"%w: order %s remains %s",
-					ErrCancelUnconfirmed,
-					latest.OrderID,
-					latest.State,
-				),
+				fmt.Errorf("%w（订单 %s）", ErrCancelUnconfirmed, latest.OrderID),
 			)
 		}
 		accountErrors = appendAccountErrors(
@@ -1083,7 +1084,7 @@ func (s *Service) lockCurrentLogicalAccount(
 		}
 	}
 	return store.LogicalAccountRecord{}, nil,
-		fmt.Errorf("%w: logical account membership changed", store.ErrConflict)
+		fmt.Errorf("%w: 执行账户的组合成员关系刚变过", store.ErrConflict)
 }
 
 func appendAccountErrors(

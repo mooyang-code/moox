@@ -269,7 +269,9 @@ describe("下单对话框", () => {
     await openEntry("prod", "BTC-USDT-SWAP");
     Object.assign(dialog.manualForm, { side: 2, order_type: 2, limit_price: "60000" });
     await flushPromises();
-    expect(document.body.textContent).toContain("本次订单：卖出 BTC-USDT · 永续 0.01，限价 60000");
+    expect(document.querySelector(".order-summary")?.textContent).toBe(
+      "本次订单：卖出 BTC-USDT · 永续 0.01，限价 60000，执行账户 A"
+    );
     wrapper.unmount();
     document.body.innerHTML = "";
     await openEntry("paper");

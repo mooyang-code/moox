@@ -90,7 +90,7 @@ func (s *Service) remainingForAccount(
 			if quantity.IsZero() {
 				continue
 			}
-			reason := reasonFor(reasons, exchange.NewSymbolKey(position.MarketType, position.ExchangeSymbol).String(), "position remains after final sync")
+			reason := reasonFor(reasons, exchange.NewSymbolKey(position.MarketType, position.ExchangeSymbol).String(), "最后一次同步后仍有持仓")
 			remaining = append(remaining, RemainingPosition{
 				InstrumentID: instrumentID, Quantity: quantity.String(), Reason: reason.text, final: reason.final,
 			})
@@ -141,7 +141,7 @@ func (s *Service) remainingForAccount(
 				}
 			}
 			reason := reasonFor(
-				reasons, "asset:"+balance.Asset, "asset remains after final sync",
+				reasons, "asset:"+balance.Asset, "最后一次同步后仍有余额",
 			)
 			remaining = append(remaining, RemainingPosition{
 				Asset: balance.Asset, Quantity: quantity.String(), Reason: reason.text, final: reason.final,

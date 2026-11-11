@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Holding, Position } from "@/api/trade/types";
 import { decimalAdd, decimalSub } from "../shared/order-rules";
-import { buildCoinRows, filterCoinRows, rowOrderHints, targetCoinCount } from "./positions-model";
+import { buildCoinRows, filterCoinRows, largestHolder, rowOrderHints, targetCoinCount } from "./positions-model";
 
 const swap = (instrument_id: string, signed_quantity: string, mark_price = "") =>
   ({ instrument_id, signed_quantity, mark_price, market_type: 2 }) as Position;
@@ -285,6 +285,46 @@ describe("持仓与目标按币合并", () => {
       hasTarget: true
     });
     expect(rowOrderHints(buy, "USDT")).toEqual([{ market: 2, instrumentId: "SOL-USDT-SWAP", side: 1, quantity: "10" }]);
+  });
+
+  it("行内下单默认选这个市场持仓最大的候选账户；都没有持仓时交给调用方按原来的选法", () => {
+    const [row] = buildCoinRows({
+      targets: [
+        { instrument_id: "BTC-USDT-SPOT", quantity: "1" },
+        { instrument_id: "BTC-USDT-SWAP", quantity: "0" }
+      ],
+      blocked: [],
+      swapPositions: [
+        { ...swap("BTC-USDT-SWAP", "0.5"), trading_account_id: "A" },
+        { ...swap("BTC-USDT-SWAP", "-2"), trading_account_id: "B" }
+      ],
+      spotHoldings: [],
+      converged: false,
+      hasTarget: true
+    });
+    expect(row.memberSwap).toEqual({ A: 0.5, B: -2 });
+    // 永续仓位主要在 B 上：平仓差额要下在 B
+    expect(largestHolder(row, 2, ["A", "B"])).toBe("B");
+    // B 停用或没开通永续（不在候选里）时不选它
+    expect(largestHolder(row, 2, ["A", "C"])).toBe("A");
+    // 现货没有任何持仓
+    expect(largestHolder(row, 1, ["A", "B"])).toBeUndefined();
+  });
+
+  it("现货、股票按执行账户分开记数量，持仓一样大时取靠前的候选", () => {
+    const [row] = buildCoinRows({
+      targets: [{ instrument_id: "600519.XSHG", quantity: "0" }],
+      blocked: [],
+      swapPositions: [],
+      spotHoldings: [
+        { asset: "600519.XSHG", quantity: "100", instrument_id: "600519.XSHG", trading_account_id: "B" } as Holding,
+        { asset: "600519.XSHG", quantity: "100", instrument_id: "600519.XSHG", trading_account_id: "A" } as Holding
+      ],
+      converged: false,
+      hasTarget: true
+    });
+    expect(row.memberSpot).toEqual({ A: 100, B: 100 });
+    expect(largestHolder(row, 3, ["A", "B"])).toBe("A");
   });
 
   it("目标个数按币算，同一个币的现货、永续目标算一个", () => {

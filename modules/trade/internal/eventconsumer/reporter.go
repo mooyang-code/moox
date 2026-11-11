@@ -56,8 +56,10 @@ type targetActionReport struct {
 	LogicalAccount  string `json:"logical_account_id,omitempty"`
 	InstanceID      string `json:"instance_id,omitempty"`
 	SessionID       string `json:"session_id,omitempty"`
-	TraceID         string `json:"trace_id,omitempty"`
-	TraceSource     string `json:"trace_source,omitempty"`
+	// Shadow 为真表示这是试运行中的策略实例发来的影子目标。
+	Shadow      bool   `json:"shadow,omitempty"`
+	TraceID     string `json:"trace_id,omitempty"`
+	TraceSource string `json:"trace_source,omitempty"`
 }
 
 // attentionCode 判断拒绝是否需要人看。过期、被新目标取代是正常情况，页面也能看到。
@@ -79,7 +81,12 @@ func (r targetActionReporter) ReportAction(ctx context.Context, delivery *jetstr
 	report := makeTargetActionReport(ctx, delivery, result, actionErr)
 	telemetry.TargetDeliveryActions.WithLabelValues(report.Decision, report.ErrorCode, report.ActionResult).Inc()
 	if report.Decision == "TERM" && attentionCode(report.ErrorCode) {
-		telemetry.NoteTargetRejection(report.LogicalAccount, report.ErrorCode, time.Now())
+		detail := report.ErrorCode
+		if report.Shadow {
+			// 试运行的目标被拒和正式目标分开：看关注项就知道还没影响真实交易。
+			detail = "试运行目标被拒：" + detail
+		}
+		telemetry.NoteTargetRejection(report.LogicalAccount, detail, time.Now())
 	}
 	if r.emit != nil {
 		r.emit(ctx, report)
@@ -134,6 +141,7 @@ func makeTargetActionReport(ctx context.Context, delivery *jetstream.Delivery, r
 	if ok {
 		report.TargetID, report.LogicalAccount = reportIdentifier(request.GetTargetId()), reportIdentifier(request.GetLogicalAccountId())
 		report.InstanceID, report.SessionID = reportIdentifier(request.GetInstanceId()), reportIdentifier(request.GetSessionId())
+		report.Shadow = request.GetShadow()
 	}
 	return report
 }

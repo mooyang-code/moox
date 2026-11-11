@@ -547,7 +547,7 @@ func TestTargetExecutorPausesOnExternalOrderWithoutCancel(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Equal(t, "PAUSED", logicalAccount.AutomationState)
-	require.Contains(t, logicalAccount.PauseReason, "EXTERNAL")
+	require.Contains(t, logicalAccount.PauseReason, "外部")
 	require.Empty(t, fixture.orders.canceled)
 }
 

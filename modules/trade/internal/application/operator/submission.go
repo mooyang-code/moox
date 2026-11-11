@@ -96,7 +96,7 @@ func (s *Service) SubmitOrder(ctx context.Context, command SubmitOrderCommand) (
 	}
 	logical, member, err := s.Store.FindLogicalAccountByTradingAccount(ctx, command.SpaceID, command.TradingAccountID)
 	if err == nil && (logical.LogicalAccountID != command.LogicalAccountID || logical.ControlMode != "MANUAL" || !member.Enabled) {
-		err = fmt.Errorf("%w: ordinary submission requires an enabled MANUAL logical account member", ErrInvalidCommand)
+		err = fmt.Errorf("%w: 只能给自主下单组合里启用的执行账户下单", ErrInvalidCommand)
 	}
 	if err != nil {
 		if found && (errors.Is(err, ErrInvalidCommand) || errors.Is(err, gorm.ErrRecordNotFound)) {
@@ -135,7 +135,7 @@ func (s *Service) SubmitOrder(ctx context.Context, command SubmitOrderCommand) (
 	instrument, err := s.Store.GetInstrumentByIDForAccount(ctx, command.SpaceID, command.TradingAccountID, command.InstrumentID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return s.failManualAction(ctx, action, fmt.Errorf("%w: instrument does not exist", ErrInvalidCommand), nil)
+			return s.failManualAction(ctx, action, fmt.Errorf("%w: 执行账户没有标的 %s", ErrInvalidCommand, command.InstrumentID), nil)
 		}
 		return ManualOrderResult{Action: action}, err
 	}

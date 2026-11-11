@@ -32,6 +32,12 @@ func success() *tradepb.RetInfo {
 // internalErrorMessage 是兜底分支对外的固定文案：原始错误可能带 SQL、路径、交易所原文，只写日志，不回给前端。
 const internalErrorMessage = "交易服务内部错误，请查看日志"
 
+// sqliteConstraintText 出现在 SQLite 约束报错里（“constraint failed: UNIQUE constraint failed: 表.列”）。
+const sqliteConstraintText = "constraint failed"
+
+// uniqueConflictMessage 是撞上唯一约束时对外的固定文案（例如重复提交同一个操作、同一条记录刚被别处写入）。
+const uniqueConflictMessage = "保存的数据和已有记录冲突（重复提交或刚被别处修改），刷新后再试"
+
 func errorInfo(err error) *tradepb.RetInfo {
 	if err == nil {
 		return success()
@@ -72,7 +78,15 @@ func errorInfo(err error) *tradepb.RetInfo {
 		errors.Is(err, operatorapp.ErrLogicalAccountBusy),
 		errors.Is(err, orderapp.ErrIdempotencyConflict):
 		code = tradepb.ErrorCode_CONFLICT
-	case errors.Is(err, store.ErrInvalidRecord),
+		if strings.Contains(err.Error(), sqliteConstraintText) {
+			// 撞上唯一约束：原文是 SQLite 的约束说明（表名、列名），只写日志，对外回固定文案。
+			log.Warnf("交易服务写入冲突：%v", err)
+			return retInfo(code, uniqueConflictMessage)
+		}
+	case errors.Is(err, store.ErrNameTaken),
+		errors.Is(err, logicalapp.ErrMemberNotSynced),
+		errors.Is(err, errInstrumentNotInAccount),
+		errors.Is(err, store.ErrInvalidRecord),
 		errors.Is(err, operatorapp.ErrInvalidCommand),
 		errors.Is(err, orderapp.ErrCrossZero),
 		errors.Is(err, tradingaccount.ErrInvalidAccount),

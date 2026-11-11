@@ -104,17 +104,14 @@ func (s *Store) GetTargetReceipt(ctx context.Context, spaceID, targetID string) 
 	return row.targetReceipt(), nil
 }
 
-func (s *Store) ListTargetReceipts(ctx context.Context, spaceID, logicalAccountID string) ([]TargetReceiptRecord, error) {
-	var rows []targetReceiptRow
-	query := s.db.WithContext(ctx).Table("t_logical_account_target_receipts").Where("c_space_id = ? AND c_logical_account_id = ?", spaceID, logicalAccountID).Order("c_bar_end_time, c_command_sequence")
-	if err := query.Find(&rows).Error; err != nil {
-		return nil, err
+// DeleteTargetReceiptsBefore 删掉最多 limit 条有效期截止（c_valid_until，毫秒）早于 before 的回执，返回删掉的条数。
+// 一次调用是一条独立语句，由调用方分批调用，批与批之间连接交还给其他读写。
+func (s *Store) DeleteTargetReceiptsBefore(ctx context.Context, before int64, limit int) (int64, error) {
+	result := s.db.WithContext(ctx).Exec(execDeleteTargetReceiptsBefore, before, limit)
+	if err := writeError(result.Error); err != nil {
+		return 0, err
 	}
-	result := make([]TargetReceiptRecord, 0, len(rows))
-	for _, row := range rows {
-		result = append(result, row.targetReceipt())
-	}
-	return result, nil
+	return result.RowsAffected, nil
 }
 
 // ListTargetReceiptsSince 按接收时间返回 since 之后的回执，最前面再带上 since 之前最近的一条作为比较基准（没有就不带）。
@@ -220,4 +217,8 @@ const (
 			c_equity, c_equity_source_time, c_reference_prices_json,
 			c_quantity_targets_json, c_accepted_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+	// 用 rowid 子查询限制每批行数：SQLite 默认不支持 DELETE ... LIMIT。c_valid_until 排在大 JSON 列之前，判断不用读溢出页。
+	execDeleteTargetReceiptsBefore = `DELETE FROM t_logical_account_target_receipts WHERE rowid IN (
+			SELECT rowid FROM t_logical_account_target_receipts WHERE c_valid_until < ? LIMIT ?
+		)`
 )
