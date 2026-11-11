@@ -881,7 +881,14 @@ func (s *Store) ListOrders(ctx context.Context, spaceID string, query OrderQuery
 	if query.ExchangeSymbol != "" && query.Market == "" {
 		return nil, 0, fmt.Errorf("%w: 按交易所代码查询必须同时给市场", ErrInvalidRecord)
 	}
-	db := s.db.WithContext(ctx).Table("t_trade_orders").Where("c_space_id = ?", spaceID)
+	// 按组合查未结束订单是目标执行里的高频查询，结果只有几行到几十行：指定走状态索引。
+	// 不指定时 SQLite 为了省掉排序会沿 idx_trade_orders_logical_created 把组合的全部历史订单读一遍，
+	// 带来源条件时又会改走来源索引读完该来源的全部订单，都随历史订单数变慢。
+	table := "t_trade_orders"
+	if query.OnlyOpen && query.LogicalAccountID != "" {
+		table = "t_trade_orders INDEXED BY idx_trade_orders_logical_state"
+	}
+	db := s.db.WithContext(ctx).Table(table).Where("c_space_id = ?", spaceID)
 	if query.LogicalAccountID != "" {
 		db = db.Where("c_logical_account_id = ?", query.LogicalAccountID)
 	}
