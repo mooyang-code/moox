@@ -298,9 +298,9 @@ type OperatorActionQuery struct {
 }
 
 // ListOperatorActions 按创建时间倒序列出组合的人工操作记录（人工单、撤单、清仓、减仓、下架清仓）。
-// 给管理台用，走只读连接；交易执行路径内部的查询见 LastMarginReduceAction。
+// 给管理台用，经只读视图调用；交易执行路径内部的查询见 LastMarginReduceAction。
 func (s *Store) ListOperatorActions(ctx context.Context, spaceID string, query OperatorActionQuery) ([]OperatorActionRecord, int64, error) {
-	return listOperatorActions(s.readDB.WithContext(ctx), spaceID, query)
+	return listOperatorActions(s.db.WithContext(ctx), spaceID, query)
 }
 
 func listOperatorActions(db *gorm.DB, spaceID string, query OperatorActionQuery) ([]OperatorActionRecord, int64, error) {

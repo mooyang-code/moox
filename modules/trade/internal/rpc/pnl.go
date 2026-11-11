@@ -34,25 +34,26 @@ func (s *ConsoleServer) SummarizeAccountPnl(ctx context.Context, req *tradepb.Su
 	if s.Store == nil {
 		return &tradepb.SummarizeAccountPnlRsp{RetInfo: errorInfo(errServiceUnavailable)}, nil
 	}
+	st := s.Store.ReadOnly()
 	var accounts []store.TradingAccountRecord
 	query := store.FillSummaryQuery{LogicalAccountID: req.GetLogicalAccountId()}
 	switch {
 	case req.GetTradingAccountId() != "":
-		account, err := s.Store.GetTradingAccount(ctx, spaceID, req.GetTradingAccountId())
+		account, err := st.GetTradingAccount(ctx, spaceID, req.GetTradingAccountId())
 		if err != nil {
 			return &tradepb.SummarizeAccountPnlRsp{RetInfo: errorInfo(err)}, nil
 		}
 		accounts, query = []store.TradingAccountRecord{account}, store.FillSummaryQuery{TradingAccountID: account.TradingAccountID}
 	default:
-		if _, err := s.Store.GetLogicalAccount(ctx, spaceID, req.GetLogicalAccountId()); err != nil {
+		if _, err := st.GetLogicalAccount(ctx, spaceID, req.GetLogicalAccountId()); err != nil {
 			return &tradepb.SummarizeAccountPnlRsp{RetInfo: errorInfo(err)}, nil
 		}
-		members, err := s.Store.ListLogicalAccountMembers(ctx, spaceID, req.GetLogicalAccountId(), true)
+		members, err := st.ListLogicalAccountMembers(ctx, spaceID, req.GetLogicalAccountId(), true)
 		if err != nil {
 			return &tradepb.SummarizeAccountPnlRsp{RetInfo: errorInfo(err)}, nil
 		}
 		for _, member := range members {
-			account, err := s.Store.GetTradingAccountByID(ctx, member.TradingAccountID)
+			account, err := st.GetTradingAccountByID(ctx, member.TradingAccountID)
 			if err != nil {
 				return &tradepb.SummarizeAccountPnlRsp{RetInfo: errorInfo(err)}, nil
 			}
@@ -68,7 +69,7 @@ func (s *ConsoleServer) SummarizeAccountPnl(ctx context.Context, req *tradepb.Su
 		start = time.UnixMilli(req.GetStartTime()).UTC()
 	}
 	query.StartTime, query.EndTime = start.UnixMilli(), end.UnixMilli()
-	summary, err := s.Store.SummarizeFills(ctx, spaceID, query)
+	summary, err := st.SummarizeFills(ctx, spaceID, query)
 	if err != nil {
 		return &tradepb.SummarizeAccountPnlRsp{RetInfo: errorInfo(err)}, nil
 	}
@@ -77,7 +78,7 @@ func (s *ConsoleServer) SummarizeAccountPnl(ctx context.Context, req *tradepb.Su
 		Fees: pnlAmountsToPB(summary.Fees), RealizedPnl: pnlAmountsToPB(summary.RealizedPnL),
 		FundingFees: []*tradepb.PnlAmount{},
 	}
-	s.summarizeFunding(ctx, accounts, start, end, rsp)
+	s.summarizeFunding(ctx, st, accounts, start, end, rsp)
 	return rsp, nil
 }
 
@@ -90,8 +91,8 @@ func pnlAmountsToPB(values []store.AssetAmount) []*tradepb.PnlAmount {
 }
 
 // summarizeFunding 汇总各个有永续市场的执行账户的资金费：实盘翻页取交易所流水；模拟盘直接按资产汇总本地资金费记录，
-// 不经过流水翻页，记录再多也不截断。
-func (s *ConsoleServer) summarizeFunding(ctx context.Context, accounts []store.TradingAccountRecord, start, end time.Time, rsp *tradepb.SummarizeAccountPnlRsp) {
+// 不经过流水翻页，记录再多也不截断。st 是只读视图。
+func (s *ConsoleServer) summarizeFunding(ctx context.Context, st *store.Store, accounts []store.TradingAccountRecord, start, end time.Time, rsp *tradepb.SummarizeAccountPnlRsp) {
 	truncated := false
 	// 先把各账户取到的流水都收齐，算出统计起点之后再合计：起点之前只有部分账户取到的流水不能计入，否则合计和起点对不上。
 	var collected []exchange.LedgerEntry
@@ -164,7 +165,7 @@ func (s *ConsoleServer) summarizeFunding(ctx context.Context, accounts []store.T
 	}
 	// 模拟盘按同一个统计起点汇总，合计和起点对得上。
 	for _, account := range paperAccounts {
-		amounts, err := s.Store.SummarizePaperFundingFees(ctx, account.SpaceID, account.TradingAccountID, from.UnixMilli(), end.UnixMilli())
+		amounts, err := st.SummarizePaperFundingFees(ctx, account.SpaceID, account.TradingAccountID, from.UnixMilli(), end.UnixMilli())
 		if err != nil {
 			notes = append(notes, fmt.Sprintf("账户 %s 的资金费记录读取失败：%v", account.Name, err))
 			rsp.FundingTruncated = true
@@ -241,11 +242,12 @@ func (s *ConsoleServer) ListOperatorActions(ctx context.Context, req *tradepb.Li
 	if s.Store == nil {
 		return &tradepb.ListOperatorActionsRsp{RetInfo: errorInfo(errServiceUnavailable)}, nil
 	}
-	if _, err := s.Store.GetLogicalAccount(ctx, spaceID, req.GetLogicalAccountId()); err != nil {
+	st := s.Store.ReadOnly()
+	if _, err := st.GetLogicalAccount(ctx, spaceID, req.GetLogicalAccountId()); err != nil {
 		return &tradepb.ListOperatorActionsRsp{RetInfo: errorInfo(err)}, nil
 	}
 	page := pageFromPB(req.GetPage())
-	records, total, err := s.Store.ListOperatorActions(ctx, spaceID, store.OperatorActionQuery{
+	records, total, err := st.ListOperatorActions(ctx, spaceID, store.OperatorActionQuery{
 		LogicalAccountID: req.GetLogicalAccountId(), ActionType: req.GetActionType(),
 		StartTime: req.GetStartTime(), EndTime: req.GetEndTime(), Offset: page.offset, Limit: page.size,
 	})

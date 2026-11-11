@@ -47,7 +47,7 @@ func (h *LogicalAccountServer) CreateLogicalAccount(
 	)
 	return &tradepb.CreateLogicalAccountRsp{
 		RetInfo:        errorInfo(err),
-		LogicalAccount: h.logicalAccount(ctx, record),
+		LogicalAccount: h.logicalAccount(ctx, h.Store, record),
 	}, nil
 }
 
@@ -64,14 +64,15 @@ func (h *LogicalAccountServer) GetLogicalAccount(
 			RetInfo: invalidOrErrorInfo(err),
 		}, nil
 	}
-	record, err := h.Store.GetLogicalAccount(
+	st := h.Store.ReadOnly()
+	record, err := st.GetLogicalAccount(
 		ctx,
 		spaceID,
 		req.GetLogicalAccountId(),
 	)
 	return &tradepb.GetLogicalAccountRsp{
 		RetInfo:        errorInfo(err),
-		LogicalAccount: h.logicalAccount(ctx, record),
+		LogicalAccount: h.logicalAccount(ctx, st, record),
 	}, nil
 }
 
@@ -88,7 +89,8 @@ func (h *LogicalAccountServer) ListLogicalAccounts(
 			RetInfo: invalidOrErrorInfo(err),
 		}, nil
 	}
-	records, err := h.Store.ListLogicalAccounts(ctx, spaceID)
+	st := h.Store.ReadOnly()
+	records, err := st.ListLogicalAccounts(ctx, spaceID)
 	if err != nil {
 		return &tradepb.ListLogicalAccountsRsp{RetInfo: errorInfo(err)}, nil
 	}
@@ -103,7 +105,7 @@ func (h *LogicalAccountServer) ListLogicalAccounts(
 	}
 	values := make([]*tradepb.LogicalAccount, 0, end-start)
 	for _, record := range records[start:end] {
-		values = append(values, h.logicalAccount(ctx, record))
+		values = append(values, h.logicalAccount(ctx, st, record))
 	}
 	return &tradepb.ListLogicalAccountsRsp{
 		RetInfo: success(), LogicalAccounts: values,
@@ -132,7 +134,7 @@ func (h *LogicalAccountServer) UpdateLogicalAccount(
 	)
 	return &tradepb.UpdateLogicalAccountRsp{
 		RetInfo:        errorInfo(err),
-		LogicalAccount: h.logicalAccount(ctx, record),
+		LogicalAccount: h.logicalAccount(ctx, h.Store, record),
 	}, nil
 }
 
@@ -167,7 +169,7 @@ func (h *LogicalAccountServer) AddLogicalAccountMember(
 	}
 	return &tradepb.AddLogicalAccountMemberRsp{
 		RetInfo:        info,
-		LogicalAccount: h.logicalAccount(ctx, record),
+		LogicalAccount: h.logicalAccount(ctx, h.Store, record),
 	}, nil
 }
 
@@ -201,7 +203,7 @@ func (h *LogicalAccountServer) RemoveLogicalAccountMember(
 	}
 	return &tradepb.RemoveLogicalAccountMemberRsp{
 		RetInfo:        info,
-		LogicalAccount: h.logicalAccount(ctx, record),
+		LogicalAccount: h.logicalAccount(ctx, h.Store, record),
 	}, nil
 }
 
@@ -224,7 +226,7 @@ func (h *LogicalAccountServer) ClaimLogicalAccountOwner(
 	)
 	return &tradepb.ClaimLogicalAccountOwnerRsp{
 		RetInfo:        errorInfo(err),
-		LogicalAccount: h.logicalAccount(ctx, record),
+		LogicalAccount: h.logicalAccount(ctx, h.Store, record),
 	}, nil
 }
 
@@ -250,7 +252,7 @@ func (h *LogicalAccountServer) ReleaseLogicalAccountOwner(
 	record, err := h.Store.GetLogicalAccount(ctx, spaceID, req.GetLogicalAccountId())
 	return &tradepb.ReleaseLogicalAccountOwnerRsp{
 		RetInfo:        errorInfo(err),
-		LogicalAccount: h.logicalAccount(ctx, record),
+		LogicalAccount: h.logicalAccount(ctx, h.Store, record),
 	}, nil
 }
 
@@ -275,7 +277,7 @@ func (h *LogicalAccountServer) PauseLogicalAccount(
 	)
 	return &tradepb.PauseLogicalAccountRsp{
 		RetInfo:        errorInfo(err),
-		LogicalAccount: h.logicalAccount(ctx, record),
+		LogicalAccount: h.logicalAccount(ctx, h.Store, record),
 	}, nil
 }
 
@@ -298,7 +300,7 @@ func (h *LogicalAccountServer) ResumeLogicalAccount(
 		req.GetLogicalAccountId(),
 	)
 	return &tradepb.ResumeLogicalAccountRsp{
-		RetInfo: errorInfo(err), LogicalAccount: h.logicalAccount(ctx, record),
+		RetInfo: errorInfo(err), LogicalAccount: h.logicalAccount(ctx, h.Store, record),
 		Warning: warning,
 	}, nil
 }
@@ -333,14 +335,17 @@ func (h *LogicalAccountServer) FlattenLogicalAccount(
 	}, nil
 }
 
+// logicalAccount 组装返回给管理台的组合账户（成员、可交易市场、就绪原因），从 st 读库：
+// 查询接口传只读视图，写接口传读写连接上的 Store。
 func (h *LogicalAccountServer) logicalAccount(
 	ctx context.Context,
+	st *store.Store,
 	record store.LogicalAccountRecord,
 ) *tradepb.LogicalAccount {
 	if record.LogicalAccountID == "" {
 		return nil
 	}
-	members, err := h.Store.ListLogicalAccountMembers(
+	members, err := st.ListLogicalAccountMembers(
 		ctx,
 		record.SpaceID,
 		record.LogicalAccountID,
@@ -351,7 +356,7 @@ func (h *LogicalAccountServer) logicalAccount(
 			Reasons: []string{err.Error()},
 		})
 	}
-	markets, err := h.Store.LogicalAccountMarkets(ctx, record.SpaceID, record.LogicalAccountID)
+	markets, err := st.LogicalAccountMarkets(ctx, record.SpaceID, record.LogicalAccountID)
 	if err != nil {
 		return logicalAccountToPB(record, members, nil, logicalapp.Readiness{
 			Reasons: []string{err.Error()},
@@ -359,6 +364,7 @@ func (h *LogicalAccountServer) logicalAccount(
 	}
 	readiness, err := h.LogicalAccounts.Readiness(
 		ctx,
+		st,
 		record.SpaceID,
 		record.LogicalAccountID,
 	)

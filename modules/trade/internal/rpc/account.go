@@ -140,7 +140,7 @@ func (h *AccountServer) ListTradingAccounts(
 	if err != nil {
 		return &tradepb.ListTradingAccountsRsp{RetInfo: invalidOrErrorInfo(err)}, nil
 	}
-	records, err := h.Store.ListTradingAccounts(ctx, spaceID)
+	records, err := h.Store.ReadOnly().ListTradingAccounts(ctx, spaceID)
 	if err != nil {
 		return &tradepb.ListTradingAccountsRsp{RetInfo: errorInfo(err)}, nil
 	}

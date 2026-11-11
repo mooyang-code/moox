@@ -22,7 +22,7 @@ func (h *LogicalAccountServer) UpdateLogicalAccountOrderSettings(
 	record, err := h.LogicalAccounts.UpdateOrderSettings(ctx, spaceID, req.GetLogicalAccountId(), orderSettingsFromPB(req.GetSettings()))
 	return &tradepb.UpdateLogicalAccountOrderSettingsRsp{
 		RetInfo:        errorInfo(err),
-		LogicalAccount: h.logicalAccount(ctx, record),
+		LogicalAccount: h.logicalAccount(ctx, h.Store, record),
 	}, nil
 }
 
@@ -40,7 +40,7 @@ func (h *LogicalAccountServer) UpdateLogicalAccountFundSettings(
 	record, err := h.LogicalAccounts.UpdateFundSettings(ctx, spaceID, req.GetLogicalAccountId(), fundSettingsFromPB(req.GetSettings()))
 	return &tradepb.UpdateLogicalAccountFundSettingsRsp{
 		RetInfo:        errorInfo(err),
-		LogicalAccount: h.logicalAccount(ctx, record),
+		LogicalAccount: h.logicalAccount(ctx, h.Store, record),
 	}, nil
 }
 

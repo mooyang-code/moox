@@ -186,12 +186,12 @@ func (s *Service) Unblock(ctx context.Context, key Key) (bool, error) {
 	return removed, nil
 }
 
-// List 返回整张名单。
+// List 返回整张名单。只有管理台查，经只读视图读。
 func (s *Service) List(ctx context.Context) ([]store.BlockedInstrumentRecord, error) {
 	if err := s.ready(); err != nil {
 		return nil, err
 	}
-	return s.Store.ListBlockedInstruments(ctx)
+	return s.Store.ReadOnly().ListBlockedInstruments(ctx)
 }
 
 // Holder 是策略持有某个标的的一个执行账户（每个执行账户一行，调用方按（空间、组合）聚合）。

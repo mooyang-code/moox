@@ -129,7 +129,7 @@ func (s *Store) QueryLogicalAccountEquityCurve(ctx context.Context, spaceID, log
 	return points, err
 }
 
-// queryEquityCurve 只有管理台的净值曲线用，走只读连接。
+// queryEquityCurve 只有管理台的净值曲线用，经只读视图调用。
 func (s *Store) queryEquityCurve(ctx context.Context, query, spaceID, ownerID string, from, to, bucketMS int64) ([]EquityPointRecord, error) {
 	var rows []struct {
 		BucketTime     int64   `gorm:"column:c_bucket_time"`
@@ -139,7 +139,7 @@ func (s *Store) queryEquityCurve(ctx context.Context, query, spaceID, ownerID st
 		UnrealizedPnL  *string `gorm:"column:c_unrealized_pnl"`
 		SourceTime     int64   `gorm:"column:c_source_time"`
 	}
-	if err := s.readDB.WithContext(ctx).Raw(query, spaceID, ownerID, from, to, bucketMS).Scan(&rows).Error; err != nil {
+	if err := s.db.WithContext(ctx).Raw(query, spaceID, ownerID, from, to, bucketMS).Scan(&rows).Error; err != nil {
 		return nil, err
 	}
 	points := make([]EquityPointRecord, 0, len(rows))

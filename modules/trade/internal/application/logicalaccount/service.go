@@ -756,7 +756,7 @@ func (s *Service) Resume(
 			ErrNotReady,
 		)
 	}
-	readiness, err := s.readiness(ctx, spaceID, logicalAccountID)
+	readiness, err := s.readiness(ctx, s.Store, spaceID, logicalAccountID)
 	if err != nil {
 		return store.LogicalAccountRecord{}, "", err
 	}
@@ -786,27 +786,30 @@ func (s *Service) Resume(
 	return current, "恢复后会按最新目标重新收敛，人工清仓后的仓位可能重新开仓", err
 }
 
+// Readiness 判断组合账户能否恢复自动执行，从 st 读库：管理台的查询接口传只读视图，写接口返回结果时传读写连接上的 Store。
 func (s *Service) Readiness(
 	ctx context.Context,
+	st *store.Store,
 	spaceID string,
 	logicalAccountID string,
 ) (Readiness, error) {
-	if s == nil || s.Store == nil {
+	if s == nil || st == nil {
 		return Readiness{}, ErrServiceConfig
 	}
-	return s.readiness(ctx, spaceID, logicalAccountID)
+	return s.readiness(ctx, st, spaceID, logicalAccountID)
 }
 
 func (s *Service) readiness(
 	ctx context.Context,
+	st *store.Store,
 	spaceID string,
 	logicalAccountID string,
 ) (Readiness, error) {
-	logicalAccount, err := s.Store.GetLogicalAccount(ctx, spaceID, logicalAccountID)
+	logicalAccount, err := st.GetLogicalAccount(ctx, spaceID, logicalAccountID)
 	if err != nil {
 		return Readiness{}, err
 	}
-	members, err := s.Store.ListLogicalAccountMembers(
+	members, err := st.ListLogicalAccountMembers(
 		ctx, spaceID, logicalAccountID, false,
 	)
 	if err != nil {
@@ -818,7 +821,7 @@ func (s *Service) readiness(
 	}
 	now := s.now()
 	for _, member := range members {
-		account, getErr := s.Store.GetTradingAccountByID(
+		account, getErr := st.GetTradingAccountByID(
 			ctx, member.TradingAccountID,
 		)
 		if getErr != nil {
@@ -836,7 +839,7 @@ func (s *Service) readiness(
 		case s.snapshotStale(now, account.LastSyncAt):
 			reasons = append(reasons, label+" 账户快照已过期")
 		}
-		orders, listErr := s.Store.ListActiveOrdersForAccount(ctx, spaceID, account.TradingAccountID)
+		orders, listErr := st.ListActiveOrdersForAccount(ctx, spaceID, account.TradingAccountID)
 		if listErr != nil {
 			return Readiness{}, listErr
 		}
@@ -859,7 +862,7 @@ func (s *Service) readiness(
 		sort.Strings(reasons)
 		return Readiness{Ready: len(reasons) == 0, Reasons: reasons}, nil
 	}
-	target, targetErr := s.Store.GetLogicalAccountTarget(
+	target, targetErr := st.GetLogicalAccountTarget(
 		ctx, spaceID, logicalAccountID,
 	)
 	switch {
@@ -873,7 +876,7 @@ func (s *Service) readiness(
 		if now.UnixMilli() >= target.ValidUntil {
 			break
 		}
-		supported, supportErr := s.supportedInstruments(ctx, members)
+		supported, supportErr := supportedInstruments(ctx, st, members)
 		if supportErr != nil {
 			return Readiness{}, supportErr
 		}
@@ -905,14 +908,14 @@ func accountLabel(account store.TradingAccountRecord) string {
 	return account.TradingAccountID
 }
 
-func (s *Service) supportedInstruments(ctx context.Context, members []store.LogicalAccountMemberRecord) (map[string]struct{}, error) {
+func supportedInstruments(ctx context.Context, st *store.Store, members []store.LogicalAccountMemberRecord) (map[string]struct{}, error) {
 	supported := make(map[string]struct{})
 	for _, member := range members {
-		account, err := s.Store.GetTradingAccountByID(ctx, member.TradingAccountID)
+		account, err := st.GetTradingAccountByID(ctx, member.TradingAccountID)
 		if err != nil {
 			return nil, err
 		}
-		instruments, err := s.Store.ListInstrumentsForAccount(ctx, account.TradingAccountID)
+		instruments, err := st.ListInstrumentsForAccount(ctx, account.TradingAccountID)
 		if err != nil {
 			return nil, err
 		}

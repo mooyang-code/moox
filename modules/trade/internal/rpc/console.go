@@ -91,7 +91,7 @@ func (s *ConsoleServer) CreatePaperSimulation(
 	})
 	rsp := &tradepb.CreatePaperSimulationRsp{RetInfo: errorInfo(err), Account: accountToPB(result.Account)}
 	if result.LogicalAccount.LogicalAccountID != "" {
-		rsp.LogicalAccount = s.logicalAccount(ctx, result.LogicalAccount)
+		rsp.LogicalAccount = s.logicalAccount(ctx, s.Store, result.LogicalAccount)
 	}
 	return rsp, nil
 }
@@ -125,7 +125,7 @@ func (s *ConsoleServer) ClosePaperSimulation(
 	}
 	rsp := &tradepb.ClosePaperSimulationRsp{RetInfo: success(), Account: accountToPB(account)}
 	if logical != nil {
-		rsp.LogicalAccount = s.logicalAccount(ctx, *logical)
+		rsp.LogicalAccount = s.logicalAccount(ctx, s.Store, *logical)
 	}
 	return rsp, nil
 }
@@ -277,10 +277,11 @@ func (s *ConsoleServer) QueryEquityCurve(
 	}
 	from, to, bucket := equityCurveRange(req.GetStartTime(), req.GetEndTime(), time.Now())
 	var records []store.EquityPointRecord
+	st := s.Store.ReadOnly()
 	if req.GetTradingAccountId() != "" {
-		records, err = s.Store.QueryAccountEquityCurve(ctx, spaceID, req.GetTradingAccountId(), from, to, bucket)
+		records, err = st.QueryAccountEquityCurve(ctx, spaceID, req.GetTradingAccountId(), from, to, bucket)
 	} else {
-		records, err = s.Store.QueryLogicalAccountEquityCurve(ctx, spaceID, req.GetLogicalAccountId(), from, to, bucket)
+		records, err = st.QueryLogicalAccountEquityCurve(ctx, spaceID, req.GetLogicalAccountId(), from, to, bucket)
 	}
 	if err != nil {
 		return &tradepb.QueryEquityCurveRsp{RetInfo: errorInfo(err)}, nil
@@ -314,7 +315,7 @@ func (s *ConsoleServer) ListHoldings(
 	if s.Holdings == nil {
 		return &tradepb.ListHoldingsRsp{RetInfo: errorInfo(errors.New("持币查询服务未配置"))}, nil
 	}
-	account, err := s.Store.GetTradingAccount(ctx, spaceID, req.GetTradingAccountId())
+	account, err := s.Store.ReadOnly().GetTradingAccount(ctx, spaceID, req.GetTradingAccountId())
 	if err != nil {
 		return &tradepb.ListHoldingsRsp{RetInfo: errorInfo(err)}, nil
 	}

@@ -877,21 +877,11 @@ type OrderQuery struct {
 	Limit     int
 }
 
-// ListOrders 给交易执行路径用，走主连接。
 func (s *Store) ListOrders(ctx context.Context, spaceID string, query OrderQuery) ([]OrderRecord, int64, error) {
-	return listOrders(s.db.WithContext(ctx), spaceID, query)
-}
-
-// ListOrdersReadOnly 给管理台的订单列表用，走只读连接，不和交易执行的写入排同一个连接。
-func (s *Store) ListOrdersReadOnly(ctx context.Context, spaceID string, query OrderQuery) ([]OrderRecord, int64, error) {
-	return listOrders(s.readDB.WithContext(ctx), spaceID, query)
-}
-
-func listOrders(db *gorm.DB, spaceID string, query OrderQuery) ([]OrderRecord, int64, error) {
 	if query.ExchangeSymbol != "" && query.Market == "" {
 		return nil, 0, fmt.Errorf("%w: 按交易所代码查询必须同时给市场", ErrInvalidRecord)
 	}
-	db = db.Table("t_trade_orders").Where("c_space_id = ?", spaceID)
+	db := s.db.WithContext(ctx).Table("t_trade_orders").Where("c_space_id = ?", spaceID)
 	if query.LogicalAccountID != "" {
 		db = db.Where("c_logical_account_id = ?", query.LogicalAccountID)
 	}
@@ -1269,21 +1259,11 @@ type FillQuery struct {
 	Limit          int
 }
 
-// ListFills 给交易执行路径用，走主连接。
 func (s *Store) ListFills(ctx context.Context, spaceID string, query FillQuery) ([]FillRecord, int64, error) {
-	return listFills(s.db.WithContext(ctx), spaceID, query)
-}
-
-// ListFillsReadOnly 给管理台的成交列表用，走只读连接，不和交易执行的写入排同一个连接。
-func (s *Store) ListFillsReadOnly(ctx context.Context, spaceID string, query FillQuery) ([]FillRecord, int64, error) {
-	return listFills(s.readDB.WithContext(ctx), spaceID, query)
-}
-
-func listFills(db *gorm.DB, spaceID string, query FillQuery) ([]FillRecord, int64, error) {
 	if query.ExchangeSymbol != "" && query.Market == "" {
 		return nil, 0, fmt.Errorf("%w: 按交易所代码查询必须同时给市场", ErrInvalidRecord)
 	}
-	db = db.Table("t_order_fills").Where("c_space_id = ?", spaceID)
+	db := s.db.WithContext(ctx).Table("t_order_fills").Where("c_space_id = ?", spaceID)
 	if query.TradingAccountID != "" {
 		db = db.Where("c_trading_account_id = ?", query.TradingAccountID)
 	}
@@ -1323,10 +1303,10 @@ func listFills(db *gorm.DB, spaceID string, query FillQuery) ([]FillRecord, int6
 
 // ListSymbolFillsAscending 一次读出账户某个标的的全部成交，按成交时间升序；不数总数、不分页，
 // 给持币均价这类必须读全量的计算用（分页查询每页先 COUNT 再 OFFSET，读全量时耗时随成交数平方增长）。
-// 只有管理台的持币查询用，走只读连接。
+// 只有管理台的持币查询用，经只读视图调用。
 func (s *Store) ListSymbolFillsAscending(ctx context.Context, spaceID, tradingAccountID string, key exchange.SymbolKey) ([]FillRecord, error) {
 	var rows []fillRow
-	if err := s.readDB.WithContext(ctx).Raw(querySymbolFillsAscending, spaceID, tradingAccountID, string(key.Market), key.Symbol).
+	if err := s.db.WithContext(ctx).Raw(querySymbolFillsAscending, spaceID, tradingAccountID, string(key.Market), key.Symbol).
 		Scan(&rows).Error; err != nil {
 		return nil, err
 	}

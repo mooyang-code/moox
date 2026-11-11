@@ -172,7 +172,7 @@ func (h *ExecutionServer) GetOperatorAction(
 			RetInfo: invalidOrErrorInfo(err),
 		}, nil
 	}
-	record, err := h.Store.GetOperatorAction(ctx, spaceID, req.GetActionId())
+	record, err := h.Store.ReadOnly().GetOperatorAction(ctx, spaceID, req.GetActionId())
 	return &tradepb.GetOperatorActionRsp{
 		RetInfo: errorInfo(err), Action: operatorActionToPB(record),
 	}, nil
@@ -191,7 +191,7 @@ func (h *ExecutionServer) GetLogicalAccountTarget(
 			RetInfo: invalidOrErrorInfo(err),
 		}, nil
 	}
-	record, err := h.Store.GetLogicalAccountTarget(
+	record, err := h.Store.ReadOnly().GetLogicalAccountTarget(
 		ctx,
 		spaceID,
 		req.GetLogicalAccountId(),
@@ -212,7 +212,7 @@ func (h *ExecutionServer) GetOrder(
 	if err != nil {
 		return &tradepb.GetOrderRsp{RetInfo: invalidOrErrorInfo(err)}, nil
 	}
-	record, err := h.Store.GetOrder(ctx, spaceID, req.GetOrderId())
+	record, err := h.Store.ReadOnly().GetOrder(ctx, spaceID, req.GetOrderId())
 	return &tradepb.GetOrderRsp{RetInfo: errorInfo(err), Order: orderToPB(record)}, nil
 }
 
@@ -227,8 +227,9 @@ func (h *ExecutionServer) ListOrders(
 	if err != nil {
 		return &tradepb.ListOrdersRsp{RetInfo: invalidOrErrorInfo(err)}, nil
 	}
+	st := h.Store.ReadOnly()
 	if req.GetLogicalAccountId() != "" {
-		if _, err = h.Store.GetLogicalAccount(
+		if _, err = st.GetLogicalAccount(
 			ctx,
 			spaceID,
 			req.GetLogicalAccountId(),
@@ -237,7 +238,7 @@ func (h *ExecutionServer) ListOrders(
 		}
 	}
 	if req.GetTradingAccountId() != "" {
-		if _, err = h.Store.GetTradingAccount(
+		if _, err = st.GetTradingAccount(
 			ctx,
 			spaceID,
 			req.GetTradingAccountId(),
@@ -245,12 +246,12 @@ func (h *ExecutionServer) ListOrders(
 			return &tradepb.ListOrdersRsp{RetInfo: errorInfo(err)}, nil
 		}
 	}
-	instrumentID, err := h.queryInstrumentID(ctx, spaceID, req.GetLogicalAccountId(), req.GetTradingAccountId(), req.GetInstrumentId())
+	instrumentID, err := queryInstrumentID(ctx, st, spaceID, req.GetLogicalAccountId(), req.GetTradingAccountId(), req.GetInstrumentId())
 	if err != nil {
 		return &tradepb.ListOrdersRsp{RetInfo: instrumentErrorInfo(err)}, nil
 	}
 	page := pageFromPB(req.GetPage())
-	records, total, err := h.Store.ListOrdersReadOnly(ctx, spaceID, store.OrderQuery{
+	records, total, err := st.ListOrders(ctx, spaceID, store.OrderQuery{
 		LogicalAccountID: req.GetLogicalAccountId(),
 		TradingAccountID: req.GetTradingAccountId(),
 		InstrumentID:     instrumentID, State: normalized(req.GetState()), OwnerType: req.GetOwnerType(),
@@ -278,22 +279,23 @@ func (h *ExecutionServer) ListFills(
 	if err != nil {
 		return &tradepb.ListFillsRsp{RetInfo: invalidOrErrorInfo(err)}, nil
 	}
+	st := h.Store.ReadOnly()
 	if req.GetLogicalAccountId() != "" {
-		if _, err := h.Store.GetLogicalAccount(ctx, spaceID, req.GetLogicalAccountId()); err != nil {
+		if _, err := st.GetLogicalAccount(ctx, spaceID, req.GetLogicalAccountId()); err != nil {
 			return &tradepb.ListFillsRsp{RetInfo: errorInfo(err)}, nil
 		}
 	}
 	if req.GetTradingAccountId() != "" {
-		if _, err := h.Store.GetTradingAccount(ctx, spaceID, req.GetTradingAccountId()); err != nil {
+		if _, err := st.GetTradingAccount(ctx, spaceID, req.GetTradingAccountId()); err != nil {
 			return &tradepb.ListFillsRsp{RetInfo: errorInfo(err)}, nil
 		}
 	}
-	instrumentID, err := h.queryInstrumentID(ctx, spaceID, req.GetLogicalAccountId(), req.GetTradingAccountId(), req.GetInstrumentId())
+	instrumentID, err := queryInstrumentID(ctx, st, spaceID, req.GetLogicalAccountId(), req.GetTradingAccountId(), req.GetInstrumentId())
 	if err != nil {
 		return &tradepb.ListFillsRsp{RetInfo: instrumentErrorInfo(err)}, nil
 	}
 	page := pageFromPB(req.GetPage())
-	records, total, err := h.Store.ListFillsReadOnly(ctx, spaceID, store.FillQuery{
+	records, total, err := st.ListFills(ctx, spaceID, store.FillQuery{
 		TradingAccountID: req.GetTradingAccountId(), LogicalAccountID: req.GetLogicalAccountId(), OrderID: req.GetOrderId(),
 		InstrumentID: instrumentID, StartTime: req.GetStartTime(),
 		EndTime: req.GetEndTime(), Offset: page.offset, Limit: page.size,
@@ -321,20 +323,21 @@ func (h *ExecutionServer) ListPositions(
 			RetInfo: invalidOrErrorInfo(err),
 		}, nil
 	}
-	accountIDs, err := h.positionAccountIDs(ctx, spaceID, req)
+	st := h.Store.ReadOnly()
+	accountIDs, err := positionAccountIDs(ctx, st, spaceID, req)
 	if errors.Is(err, errNotLogicalMember) {
 		return &tradepb.ListPositionsRsp{RetInfo: invalidInfo(err)}, nil
 	}
 	if err != nil {
 		return &tradepb.ListPositionsRsp{RetInfo: errorInfo(err)}, nil
 	}
-	instrumentID, err := h.queryInstrumentID(ctx, spaceID, req.GetLogicalAccountId(), req.GetTradingAccountId(), req.GetInstrumentId())
+	instrumentID, err := queryInstrumentID(ctx, st, spaceID, req.GetLogicalAccountId(), req.GetTradingAccountId(), req.GetInstrumentId())
 	if err != nil {
 		return &tradepb.ListPositionsRsp{RetInfo: instrumentErrorInfo(err)}, nil
 	}
 	positions := make([]*tradepb.Position, 0)
 	for _, accountID := range accountIDs {
-		records, listErr := h.Store.ListPositionsByInstrument(
+		records, listErr := st.ListPositionsByInstrument(
 			ctx,
 			spaceID,
 			accountID,
@@ -354,13 +357,14 @@ func (h *ExecutionServer) ListPositions(
 	}, nil
 }
 
-func (h *ExecutionServer) positionAccountIDs(
+func positionAccountIDs(
 	ctx context.Context,
+	st *store.Store,
 	spaceID string,
 	req *tradepb.ListPositionsReq,
 ) ([]string, error) {
 	if req.GetLogicalAccountId() == "" {
-		if _, err := h.Store.GetTradingAccount(
+		if _, err := st.GetTradingAccount(
 			ctx,
 			spaceID,
 			req.GetTradingAccountId(),
@@ -369,14 +373,14 @@ func (h *ExecutionServer) positionAccountIDs(
 		}
 		return []string{req.GetTradingAccountId()}, nil
 	}
-	if _, err := h.Store.GetLogicalAccount(
+	if _, err := st.GetLogicalAccount(
 		ctx,
 		spaceID,
 		req.GetLogicalAccountId(),
 	); err != nil {
 		return nil, err
 	}
-	members, err := h.Store.ListLogicalAccountMembers(
+	members, err := st.ListLogicalAccountMembers(
 		ctx,
 		spaceID,
 		req.GetLogicalAccountId(),
@@ -428,7 +432,7 @@ func (h *ExecutionServer) requestInstrumentID(
 	ctx context.Context, spaceID, tradingAccountID, raw string, market tradepb.MarketType,
 ) (string, error) {
 	if market == tradepb.MarketType_MARKET_TYPE_UNSPECIFIED || raw == "" {
-		return h.accountInstrumentID(ctx, spaceID, tradingAccountID, raw)
+		return accountInstrumentID(ctx, h.Store, spaceID, tradingAccountID, raw)
 	}
 	account, err := h.Store.GetTradingAccount(ctx, spaceID, tradingAccountID)
 	if err != nil {
@@ -442,11 +446,11 @@ func (h *ExecutionServer) requestInstrumentID(
 }
 
 // accountInstrumentID 按执行账户已开通的市场标准化上游传入的标的 ID。
-func (h *ExecutionServer) accountInstrumentID(ctx context.Context, spaceID, tradingAccountID, raw string) (string, error) {
+func accountInstrumentID(ctx context.Context, st *store.Store, spaceID, tradingAccountID, raw string) (string, error) {
 	if raw == "" {
 		return "", nil
 	}
-	account, err := h.Store.GetTradingAccount(ctx, spaceID, tradingAccountID)
+	account, err := st.GetTradingAccount(ctx, spaceID, tradingAccountID)
 	if err != nil {
 		return "", err
 	}
@@ -454,14 +458,14 @@ func (h *ExecutionServer) accountInstrumentID(ctx context.Context, spaceID, trad
 }
 
 // queryInstrumentID 给查询用：有账户信息时标准化，没有时按原值匹配。
-func (h *ExecutionServer) queryInstrumentID(ctx context.Context, spaceID, logicalAccountID, tradingAccountID, raw string) (string, error) {
+func queryInstrumentID(ctx context.Context, st *store.Store, spaceID, logicalAccountID, tradingAccountID, raw string) (string, error) {
 	switch {
 	case raw == "":
 		return "", nil
 	case tradingAccountID != "":
-		return h.accountInstrumentID(ctx, spaceID, tradingAccountID, raw)
+		return accountInstrumentID(ctx, st, spaceID, tradingAccountID, raw)
 	case logicalAccountID != "":
-		markets, err := h.Store.LogicalAccountMarkets(ctx, spaceID, logicalAccountID)
+		markets, err := st.LogicalAccountMarkets(ctx, spaceID, logicalAccountID)
 		if err != nil {
 			return "", err
 		}
