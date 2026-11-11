@@ -20,7 +20,8 @@ usage() {
 
   build   [--allow-unpushed] <构建目标>...
           在本机构建当前（干净且已推送的）提交的 linux/amd64 二进制并输出 sha：不含 CGO 的目标用本机 Go 交叉编译，
-          含 CGO 的目标（Storage 的 DuckDB）在 Docker 编译镜像里编，需要先启动 Docker（macOS：colima start）。
+          含 CGO 的目标（Storage 的 DuckDB）在 Docker 编译镜像里编；web-host 编译时先在 Docker 里按当前源码构建前端。
+          这两类都需要先启动 Docker（macOS：colima start）。
           构建目标即 scripts/build/build.sh 的目标，例如 host-gateway admin monitor collector storage-primary。
   install --host <别名> --unit <单元目录> --file <本地二进制> [--name moox-xxx]
           (--restart <组件id>... | --no-restart) [--label <备份标签>]

@@ -8,7 +8,7 @@
 #   SHA256SUMS
 #
 # 用法：scripts/release/build-release.sh v0.2.0 [输出目录，默认 dist/<版本>]
-# 要求：工作区干净；本机有固定版本的 Go 与正在运行的 Docker（Storage 需要 CGO）。前端用仓库里已打包的内嵌资源。
+# 要求：工作区干净；本机有固定版本的 Go 与正在运行的 Docker（Storage 需要 CGO；web-host 编译时也在 Docker 里按当前源码构建前端，不用仓库里提交的内嵌资源）。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"

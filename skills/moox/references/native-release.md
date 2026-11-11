@@ -168,7 +168,7 @@ systemctl --user restart moox-factor-engine.service
 - 管理端租约 TTL 45 秒：新进程会先报 `lease conflict`，约 45 秒后接管，期间因子不出结果；重启后各因子任务要重新预热几分钟，这期间数据集显示“数据积累中”但不告警。
 - 引擎配置在 `<安装目录>/config/engine.yaml`，改前备份；账本重置用 `moox-factor-engine reset-gap-ledger`（引擎必须已停止）。
 
-**前端 `web-host`**（本机构建，发布到控制机 `prod` 单元）：
+**前端 `web-host`**（发布到控制机 `prod` 单元；现在也走 `native-release.sh` 的标准流程，放在这里是因为它多了构建前端这一步）：
 
 1. 和其他组件一样在干净工作树里 `native-release.sh build web-host`（本机 Docker 要在运行，macOS 先 `colima start`）。
    `build.sh` 编译 web-host 时会先在 Docker 里按当前提交的 `web/` 源码构建前端，再把内嵌资源生成到临时目录、用 `go build -overlay` 编译，
