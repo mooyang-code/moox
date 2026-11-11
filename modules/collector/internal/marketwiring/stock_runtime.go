@@ -46,13 +46,17 @@ func NewStockKlinePipeline(storage marketfetch.Storage, frequency string) (*mark
 	if err != nil {
 		return nil, err
 	}
-	return &marketfetch.KlinePipeline{
+	pipeline := &marketfetch.KlinePipeline{
 		Router: router, Storage: storage, CandidateChain: chain, AutoBindSource: true,
 		SpaceID: marketfetch.StockCNSpaceID, MarketID: marketfetch.StockCNSpaceID, InstrumentType: marketdata.InstrumentEquity,
 		// 2026-11-06 南京实测：通达信、东方财富、新浪在收盘后 0.1～0.5 秒就给出定稿的目标 K 线，等 0.8 秒即可；
 		// 腾讯最早给的是未定稿值（要靠回落才会用到），所以不能再靠更长的等待去迁就它。
 		SettleDelay: 800 * time.Millisecond,
-	}, nil
+	}
+	if err := bindFields(pipeline); err != nil {
+		return nil, err
+	}
+	return pipeline, nil
 }
 
 // NewCryptoKlinePipeline is the crypto composition root for the same common

@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/require"
 )
@@ -565,6 +566,8 @@ func TestEnsureMarksSpotSwapTagsAsUnifiedDataset(t *testing.T) {
 func TestEnsureColumnsCreatesFundingRateOnlyWhenSelected(t *testing.T) {
 	fake := newResultMetadataFake()
 	manager := NewManagerWithAPI(fake, &storagepb.AuthInfo{AppId: "collector"})
+	manager.SetFieldOffers(marketdata.FieldOffers{{MarketID: "crypto", Instrument: "swap", ProviderID: "binance",
+		Spec: marketdata.FieldSpec{ID: "funding_rate", Name: "资金费率", Type: marketdata.FieldTypeDouble, Fill: "zero", Frequencies: []string{"1h", "1d"}}}})
 	require.NoError(t, manager.ensureColumns(context.Background(), "crypto", "dataset", "view", storagepb.DataKind_DATA_KIND_TIME_SERIES, nil))
 	require.NotContains(t, fake.columnNames, "funding_rate", "默认字段不含资金费率")
 
@@ -576,7 +579,7 @@ func TestEnsureColumnsCreatesFundingRateOnlyWhenSelected(t *testing.T) {
 	require.Equal(t, "zero", funding.GetAttributes()["fill"])
 	require.Equal(t, "资金费率", funding.GetAttributes()["display_name"])
 
-	columns, err := resultViewColumns("crypto", IDs{ViewID: "view"}, []string{"close", "funding_rate"})
+	columns, err := manager.resultViewColumns("crypto", IDs{ViewID: "view"}, []string{"close", "funding_rate"})
 	require.NoError(t, err)
 	require.Equal(t, "funding_rate", columns[1].GetColumnName())
 	require.Equal(t, storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, columns[1].GetValueType())

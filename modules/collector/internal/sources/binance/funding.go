@@ -13,11 +13,48 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	binanceapi "github.com/mooyang-code/moox/modules/collector/internal/sources/binance/client"
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
-var _ marketdata.FundingRateSource = (*MarketDataAdapter)(nil)
+var (
+	_ marketdata.FundingRateSource = (*MarketDataAdapter)(nil)
+	_ marketdata.FieldSource       = (*MarketDataAdapter)(nil)
+)
+
+// swapFundingCache 是进程内唯一的永续资金费率缓存：每次取数都新建适配器，缓存必须是包级单例，推送与拉取共用。
+// 只在第一次用到时构造：控制机上的 collector 不跑拉取管线，不会建。
+var (
+	swapFundingOnce  sync.Once
+	swapFundingCache *marketfetch.FundingCache
+)
+
+// FundingCache 返回永续的资金费率缓存；现货没有资金费，返回 nil。
+func (a *MarketDataAdapter) FundingCache() *marketfetch.FundingCache {
+	if !a.SupportsFundingRates() {
+		return nil
+	}
+	swapFundingOnce.Do(func() { swapFundingCache = marketfetch.NewFundingCache(a, nil) })
+	return swapFundingCache
+}
+
+// FieldSpecs 按实例返回附加字段：永续提供资金费率，现货没有。
+func (a *MarketDataAdapter) FieldSpecs() []marketdata.FieldSpec {
+	if !a.SupportsFundingRates() {
+		return nil
+	}
+	return marketfetch.FundingFieldSpecs()
+}
+
+// FetchFields 用资金费率缓存回答附加字段取数。
+func (a *MarketDataAdapter) FetchFields(ctx context.Context, req marketdata.FieldRequest) (map[time.Time]map[string]marketdata.FieldValue, error) {
+	cache := a.FundingCache()
+	if cache == nil {
+		return nil, fmt.Errorf("%w: 币安 %s 没有资金费", marketdata.ErrInvalidRequest, a.defaultInstrumentType)
+	}
+	return cache.FetchFields(ctx, req)
+}
 
 const (
 	// fundingRequestInterval：资金费接口与 fundingInfo 共用“每 5 分钟 500 次”的配额，进程内每秒最多发 1 次。

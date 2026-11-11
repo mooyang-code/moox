@@ -251,3 +251,12 @@ func TestWeeklyBarsAlignOnMonday(t *testing.T) {
 	monday := time.Date(2026, 10, 12, 0, 0, 0, 0, time.UTC)
 	require.Equal(t, monday, alignUp(week, monday))
 }
+
+// 深度检查的必需字段不含附加字段：来源没有值时这一列本来就是空的，不能把这些行算成缺失。
+func TestDeepFieldsExcludeExtraFields(t *testing.T) {
+	checker := &Checker{Fields: marketdata.FieldOffers{{MarketID: "stockcn", Instrument: "equity", ProviderID: "fake", Spec: marketdata.FieldSpec{ID: "adj_factor"}}}}
+	require.Equal(t, []string{"close", "amount"}, checker.deepFields("stockcn", []string{"close", "adj_factor", "amount"}))
+	require.Equal(t, []string{"open", "high", "low", "close"}, checker.deepFields("stockcn", []string{"adj_factor"}), "只选了附加字段时按 OHLC")
+	require.Equal(t, []string{"open", "high", "low", "close"}, checker.deepFields("stockcn", nil))
+	require.Equal(t, []string{"close", "adj_factor"}, checker.deepFields("crypto", []string{"close", "adj_factor"}), "别的市场里它不是附加字段")
+}

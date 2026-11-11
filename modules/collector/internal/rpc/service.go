@@ -16,6 +16,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/domain"
 	"github.com/mooyang-code/moox/modules/collector/internal/jobs"
+	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/storagesource"
 	"github.com/mooyang-code/moox/modules/collector/internal/planner/taskresult"
 	collectorresample "github.com/mooyang-code/moox/modules/collector/internal/resample"
@@ -35,8 +36,8 @@ type Dependencies struct {
 	RealtimeInventory RealtimeInventory
 	ResultManager     *taskresult.Manager
 	ResultDataNodeID  string
-	// SupportsFundingRate 判断（空间, 行情源, 市场类型）的行情源是否具备资金费率能力（由 marketwiring 注入）；为空表示都不具备。
-	SupportsFundingRate func(spaceID, provider, marketType string) bool
+	// FieldOffers 是行情源目录里可用的附加字段（由 marketwiring 注入）；为空表示没有。
+	FieldOffers marketdata.FieldOffers
 }
 
 // RealtimeInventory reconciles the derived expected Dataset registry.
@@ -60,7 +61,7 @@ type Service struct {
 	createTaskMu            ctxMutex
 	taskMutationLocks       keyedTaskLocker
 	subjectSyncer           SubjectSyncer
-	supportsFundingRate     func(spaceID, provider, marketType string) bool
+	fieldOffers             marketdata.FieldOffers
 	klineOps                KlineOps
 	fetchPlanControl        FetchPlanControl
 	sourceIDResolver        func(provider, instrumentType string) string
@@ -149,8 +150,7 @@ func New(persistence *store.Store, deps Dependencies) *Service {
 		inventory:        deps.RealtimeInventory,
 		resultManager:    deps.ResultManager,
 		resultDataNodeID: strings.TrimSpace(deps.ResultDataNodeID),
-
-		supportsFundingRate: deps.SupportsFundingRate,
+		fieldOffers:      deps.FieldOffers,
 	}
 }
 
@@ -610,6 +610,9 @@ func (s *Service) UpdateTask(ctx context.Context, req *pb.UpdateTaskReq) (*pb.Up
 	if outputFieldsChanged && len(requestedParams.OutputFields) == 0 {
 		return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, "output_fields cannot be cleared; specify the fields to persist")}, nil
 	}
+	if added := s.addedOutputFields(task.SpaceID, existingParams.OutputFields, requestedParams.OutputFields); len(added) > 0 {
+		return &pb.UpdateTaskRsp{RetInfo: retErr(pb.ErrorCode_INVALID_PARAM, fmt.Sprintf("输出字段只能减少，不能新增（%s）；要增加字段请创建新任务", strings.Join(added, "、")))}, nil
+	}
 	task.DefinitionHash = CollectionTaskDefinitionHash(task)
 	if duplicate, lookupErr := s.taskRepo.GetByDefinitionHash(ctx, task.SpaceID, task.DefinitionHash); lookupErr == nil {
 		if duplicate != nil && duplicate.TaskID != task.TaskID {
@@ -762,6 +765,23 @@ func (s *Service) GetDataTypeConfigs(ctx context.Context, req *pb.GetDataTypeCon
 	}, nil
 }
 
+// addedOutputFields 返回改任务时新增的输出字段。新增的列不会出现在已有的因子结果数据集里，因子引擎写入会被 Storage 拒绝，
+// 所以输出字段只能减少。原来没有显式选择（默认字段）时，收窄到基础字段算减少，选附加字段算新增。
+func (s *Service) addedOutputFields(spaceID string, existing, requested []string) []string {
+	var added []string
+	for _, field := range requested {
+		if len(existing) == 0 {
+			if _, extra := s.fieldOffers.Spec(spaceID, field); !extra {
+				continue
+			}
+		} else if domain.HasOutputField(existing, field) {
+			continue
+		}
+		added = append(added, field)
+	}
+	return added
+}
+
 // GetDataTypeConfigWithFields returns field metadata for the task form.
 func (s *Service) GetDataTypeConfigWithFields(ctx context.Context, req *pb.GetDataTypeConfigWithFieldsReq) (*pb.GetDataTypeConfigWithFieldsRsp, error) {
 	definition, ok := jobs.JobDefinitionByDataType(req.GetDataType())
@@ -771,10 +791,26 @@ func (s *Service) GetDataTypeConfigWithFields(ctx context.Context, req *pb.GetDa
 	return &pb.GetDataTypeConfigWithFieldsRsp{
 		RetInfo: retOK(),
 		Detail: &pb.DataTypeConfigDetail{
-			Config: dataTypeConfigFromDefinition(definition),
-			Fields: dataTypeFieldsFromDefinition(definition),
+			Config:      dataTypeConfigFromDefinition(definition),
+			Fields:      dataTypeFieldsFromDefinition(definition),
+			ExtraFields: s.extraFieldOptions(definition.DataType),
 		},
 	}, nil
+}
+
+// extraFieldOptions 列出 K 线任务可选的附加字段及其适用范围；其他任务类型没有。
+func (s *Service) extraFieldOptions(dataType string) []*pb.ExtraFieldOption {
+	if !strings.EqualFold(strings.TrimSpace(dataType), "kline") {
+		return nil
+	}
+	options := make([]*pb.ExtraFieldOption, 0, len(s.fieldOffers))
+	for _, offer := range s.fieldOffers {
+		options = append(options, &pb.ExtraFieldOption{
+			FieldId: offer.Spec.ID, MarketId: string(offer.MarketID), InstrumentType: string(offer.Instrument),
+			Frequencies: append([]string(nil), offer.Spec.Frequencies...), ProviderId: offer.ProviderID,
+		})
+	}
+	return options
 }
 
 func normalizeCollectionTask(task domain.CollectionTask) domain.CollectionTask {
@@ -1124,12 +1160,16 @@ type collectionTaskTagSource interface {
 }
 
 func (s *Service) validateCollectionTaskTagRoutes(ctx context.Context, task domain.CollectionTask) error {
-	if !strings.EqualFold(strings.TrimSpace(task.DataType), "kline") {
-		return nil
-	}
-	wantsFunding, err := validateFundingRateFrequency(task)
+	extraFields, err := s.selectedExtraFields(task)
 	if err != nil {
 		return err
+	}
+	if !strings.EqualFold(strings.TrimSpace(task.DataType), "kline") {
+		// 重采样的字段表是固定的，不合成附加字段。
+		if len(extraFields) > 0 {
+			return fmt.Errorf("重采样不能合成附加字段 %s，请从输出字段里去掉它", extraFields[0].ID)
+		}
+		return nil
 	}
 	tagSource, ok := s.datasetSrc.(collectionTaskTagSource)
 	if !ok {
@@ -1172,32 +1212,36 @@ func (s *Service) validateCollectionTaskTagRoutes(ctx context.Context, task doma
 			return fmt.Errorf("tag %s route is unsupported: provider=%s market=%s data_type=%s", route.id, route.source, route.market, params.Collector.DataType)
 		}
 	}
-	if wantsFunding {
-		// 资金费率只对永续有意义，且由行情源的可选能力提供；统一数据集（现货加永续）不支持。
+	// 选中的附加字段在任务每个标签的（市场, 品种）下都要有来源：例如资金费率只有永续有来源，
+	// 现货任务和统一数据集（现货加永续）都选不了。
+	for _, field := range extraFields {
 		for _, route := range routes {
-			if route.market != "swap" {
-				return fmt.Errorf("输出字段 %s 只适用于永续：标签 %s 的市场是 %s；统一数据集也不支持这一列", domain.FieldFundingRate, route.id, route.market)
-			}
-			if s.supportsFundingRate == nil || !s.supportsFundingRate(task.SpaceID, route.source, route.market) {
-				return fmt.Errorf("输出字段 %s 需要行情源具备资金费率能力：标签 %s 的行情源 %s 不具备", domain.FieldFundingRate, route.id, route.source)
+			if _, ok := s.fieldOffers.Find(task.SpaceID, route.market, field.ID); !ok {
+				return fmt.Errorf("输出字段 %s 在标签 %s 的市场 %s 下没有来源；任务的每个标签都要有（统一数据集也一样）", field.ID, route.id, route.market)
 			}
 		}
 	}
 	return nil
 }
 
-// validateFundingRateFrequency 校验选了资金费率的 K 线任务的频率：只支持 1h、1d。
-// 1m～30m 收盘时结算记录可能还没公布；1w、1M 推送不支持，一次要取的数据也太多。
-func validateFundingRateFrequency(task domain.CollectionTask) (bool, error) {
+// selectedExtraFields 返回任务输出字段里选中的附加字段，并校验任务频率在各字段适用的频率里。
+func (s *Service) selectedExtraFields(task domain.CollectionTask) ([]marketdata.FieldSpec, error) {
 	params, err := domain.ParseCollectParams(task.CollectParams, "", "", task.DataType)
-	if err != nil || !domain.HasOutputField(params.OutputFields, domain.FieldFundingRate) {
-		return false, nil
+	if err != nil {
+		return nil, nil
 	}
-	parsed, err := frequencypkg.Parse(params.Frequency)
-	if err != nil || (parsed.Duration() != time.Hour && parsed.Duration() != 24*time.Hour) {
-		return true, fmt.Errorf("输出字段 %s 只支持 1h、1d 频率，当前是 %q", domain.FieldFundingRate, params.Frequency)
+	var selected []marketdata.FieldSpec
+	for _, name := range params.OutputFields {
+		spec, ok := s.fieldOffers.Spec(task.SpaceID, name)
+		if !ok {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(task.DataType), "kline") && !spec.SupportsFrequency(params.Frequency) {
+			return nil, fmt.Errorf("输出字段 %s 只支持 %s 频率，当前是 %q", spec.ID, strings.Join(spec.Frequencies, "、"), params.Frequency)
+		}
+		selected = append(selected, spec)
 	}
-	return true, nil
+	return selected, nil
 }
 
 func canonicalizeCollectionTask(task domain.CollectionTask) (domain.CollectionTask, error) {

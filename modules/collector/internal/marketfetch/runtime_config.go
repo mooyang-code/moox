@@ -43,6 +43,11 @@ func LoadStockCNProviderRuntime(route StockCNRoute) (map[string]StockCNProviderR
 	return loadStockCNProviderRuntime(route)
 }
 
+// LoadStockCNSourceRuntime 按提供方 ID 读 A 股数据源的运行参数；没有配置文件时第二个返回值为 false。
+func LoadStockCNSourceRuntime(providerID string) (StockCNProviderRuntime, bool, error) {
+	return loadStockCNSourceRuntime(providerID)
+}
+
 // attemptTimeoutFloor 是单次行情请求的最短超时，来自计划下发的 MOOX_FETCH_REQUEST_TIMEOUT_MS；未配置时为 0（不设下限）。
 func attemptTimeoutFloor() time.Duration {
 	millis := envInt("MOOX_FETCH_REQUEST_TIMEOUT_MS", 0)

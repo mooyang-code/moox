@@ -61,6 +61,8 @@ type Checker struct {
 	Calendar func(spaceID, frequency string, barStart time.Time) (bool, error)
 	// Absences 非空时，缺口扣除已确认的行情源缺失（强制重拉除外）。
 	Absences AbsenceSource
+	// Fields 是行情源目录里可用的附加字段：深度检查的必需字段不含它们（来源没有值时这一列本来就是空的）。
+	Fields marketdata.FieldOffers
 }
 
 // Request 是一次检查的范围。From 含、To 不含（K 线开始时间）。
@@ -313,7 +315,7 @@ func (c *Checker) checkSubjects(ctx context.Context, request Request, datasetID,
 	}
 	required := []string{"close"}
 	if request.Deep {
-		required = deepFields(segment.OutputFields)
+		required = c.deepFields(request.SpaceID, segment.OutputFields)
 	}
 	present := map[string]map[int64]bool{}
 	complete := map[string]bool{}
@@ -487,9 +489,16 @@ func subjectGaps(datasetID, frequencyName, subject, seriesTag string, frequency 
 	return gaps
 }
 
-func deepFields(configured []string) []string {
-	if len(configured) > 0 {
-		return configured
+// deepFields 返回深度检查要求每根都有值的字段：任务选中的输出字段去掉附加字段；没有选或只选了附加字段时是 OHLC。
+func (c *Checker) deepFields(spaceID string, configured []string) []string {
+	var required []string
+	for _, field := range configured {
+		if _, extra := c.Fields.Spec(spaceID, field); !extra {
+			required = append(required, field)
+		}
+	}
+	if len(required) > 0 {
+		return required
 	}
 	return []string{"open", "high", "low", "close"}
 }

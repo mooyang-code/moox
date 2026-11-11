@@ -108,3 +108,20 @@ func build() *marketdata.Catalog {
 		entry(stockcn, marketdata.InstrumentIndex, "csindex", "index_http", fixed(func() marketdata.MarketProvider { return csindex.New(csindex.Config{}) })),
 	)
 }
+
+var (
+	offersOnce sync.Once
+	offers     marketdata.FieldOffers
+)
+
+// FieldOffers 返回内置目录里全部可用的附加字段（进程内只算一次）。
+func FieldOffers() marketdata.FieldOffers {
+	offersOnce.Do(func() {
+		built, err := Default().FieldOffers()
+		if err != nil {
+			panic(err)
+		}
+		offers = built
+	})
+	return offers
+}

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -44,8 +46,10 @@ type KlinePipeline struct {
 	// Reporter 非空时，把失败项明细与批次摘要上报 CLS；FunctionName 是上报用的函数名。
 	Reporter     ItemReporter
 	FunctionName string
-	// Funding 是行情源的资金费率能力（进程内缓存）；为空表示行情源没有这项能力。只在写入目标选了 funding_rate 时使用。
-	Funding *FundingCache
+	// Fields 是这条管线的（市场, 品种）下提供附加字段的来源，与 K 线的来源分配无关；只在写入目标选了它们的字段时取数。
+	Fields []marketdata.FieldSource
+	// ExtraFieldIDs 是行情源目录里这个市场登记的全部附加字段 ID：选了其中某个而 Fields 里没有来源时判为配置错误。
+	ExtraFieldIDs []string
 }
 
 func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchpb.MarketFetchBatchCompleted, error) {
@@ -198,14 +202,19 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 				coverageEnd = frequency.BarEnd(coverageStart)
 				limit = 1
 			}
-			// 资金费在批次开始时与 K 线并行取；区间未知（取最近若干根）时等 K 线取完按它们的范围再取。
-			// 资金费取数用这一项自己的子 ctx：K 线失败等提前返回时撤销，不白占限速配额。
-			wantsFunding := itemWantsFunding(req, item)
-			fundingCtx, cancelFunding := context.WithCancel(ctx)
-			defer cancelFunding()
-			var fundingResult func() (fundingLookup, error)
-			if wantsFunding && !coverageStart.IsZero() && !coverageEnd.IsZero() {
-				fundingResult = p.startFunding(fundingCtx, req, providerSymbol, coverageStart, coverageEnd)
+			// 附加字段在批次开始时与 K 线并行取；区间未知（取最近若干根）时等 K 线取完按它们的范围再取。
+			// 取数用这一项自己的子 ctx：K 线失败等提前返回时撤销，不白占限速配额。
+			fieldFetches, failedFields := p.wantedFields(req, item)
+			fieldCtx, cancelFields := context.WithCancel(ctx)
+			defer cancelFields()
+			fieldReq := marketdata.FieldRequest{
+				MarketID: marketdata.MarketID(marketID), InstrumentType: instrumentType, SubjectID: item.SubjectID, ProviderSymbol: providerSymbol,
+				Frequency: req.Frequency, Start: coverageStart, End: coverageEnd,
+				Realtime: req.BatchKind == "" || req.BatchKind == domain.BatchKindRealtime,
+			}
+			var fieldResult func() fieldOutcome
+			if len(fieldFetches) > 0 && !coverageStart.IsZero() && !coverageEnd.IsZero() {
+				fieldResult = startFields(fieldCtx, fieldReq, fieldFetches)
 			}
 			// Each provider request owns its DNS snapshot, including the IP slices.
 			var dnsRoutes map[string][]string
@@ -236,13 +245,21 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 				results[index] = failureResult(item, domain.ItemOutcomeInvalid, "source_binding", err)
 				return
 			}
-			var fundingErr error
-			if wantsFunding {
-				if fundingResult == nil {
-					start, end := klineSpan(fetched)
-					fundingResult = p.startFunding(fundingCtx, req, providerSymbol, start, end)
+			if len(fieldFetches) > 0 {
+				if fieldResult == nil {
+					fieldReq.Start, fieldReq.End = klineSpan(fetched)
+					fieldResult = startFields(fieldCtx, fieldReq, fieldFetches)
 				}
-				fundingErr = fillFundingRates(fetched, fundingResult)
+				outcome := fieldResult()
+				fillExtraFields(fetched, outcome.values)
+				maps.Copy(failedFields, outcome.failed)
+			}
+			extraFields := fetchedFieldIDs(fieldFetches)
+			if len(req.Targets) == 0 {
+				if fieldID, cause := failedField(item.OutputFields, failedFields); cause != nil {
+					results[index] = fieldFailure(item, fieldID, cause)
+					return
+				}
 			}
 			itemRows := make([]*storagepb.RowFieldUpsert, 0, len(fetched))
 			for _, bar := range fetched {
@@ -272,11 +289,7 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 					return
 				}
 				if len(req.Targets) == 0 {
-					row.Fields = selectOutputFields(row.Fields, item.OutputFields)
-					if wantsFunding && !hasField(row.Fields, domain.FieldFundingRate) {
-						results[index] = fundingFailure(item, fundingErr)
-						return
-					}
+					row.Fields = selectOutputFields(row.Fields, item.OutputFields, extraFields)
 					if len(row.Fields) == 0 {
 						results[index] = failureResult(item, domain.ItemOutcomeInvalid, "output_fields", fmt.Errorf("selected output fields contain no fields supported by the kline dataset"))
 						return
@@ -300,17 +313,18 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 				result = "fallback"
 			}
 			p.observeFeed(req, selectedProvider, "kline", result)
-			expanded, missingTargets, fundingTargets := expandTargetRows(req, item, itemRows)
+			expanded, missingTargets, failedTargets := expandTargetRows(req, item, itemRows, extraFields, failedFields)
 			rowsMu.Lock()
 			rows = append(rows, expanded...)
 			rowsMu.Unlock()
-			if len(fundingTargets) > 0 {
-				// 只让选了资金费率的目标的这一项失败，其他目标照常写入。
-				results[index] = fundingFailure(item, fundingErr)
-				for position := range fundingTargets {
-					fundingTargets[position].ErrorSummary = results[index].ErrorSummary
+			if len(failedTargets) > 0 {
+				// 只让选了没取到的附加字段的目标的这一项失败，其他目标照常写入。
+				fieldID, cause := failedField(slices.Collect(maps.Keys(failedFields)), failedFields)
+				results[index] = fieldFailure(item, fieldID, cause)
+				for position := range failedTargets {
+					failedTargets[position].ErrorSummary = results[index].ErrorSummary
 				}
-				results[index].TargetResults = append(fundingTargets, missingTargets...)
+				results[index].TargetResults = append(failedTargets, missingTargets...)
 			} else if len(missingTargets) > 0 {
 				results[index] = failureResult(item, domain.ItemOutcomeInvalid, "output_fields", fmt.Errorf("required period target has no supported output rows"))
 				results[index].TargetResults = missingTargets
@@ -545,15 +559,15 @@ func fetchKlinesFromChain(ctx context.Context, session *marketdata.RouterSession
 }
 
 // selectOutputFields 按规范的字段顺序保留任务选中的字段。选择为空时保留全部默认字段；
-// 需要显式选中的字段（funding_rate）只在选中时写入。
-func selectOutputFields(fields []*storagepb.FieldValue, selected []string) []*storagepb.FieldValue {
+// extra 里的附加字段只在显式选中时写入。
+func selectOutputFields(fields []*storagepb.FieldValue, selected []string, extra map[string]marketdata.FieldValue) []*storagepb.FieldValue {
 	if len(selected) == 0 {
-		if !hasField(fields, domain.FieldFundingRate) {
+		if len(extra) == 0 {
 			return fields
 		}
 		kept := make([]*storagepb.FieldValue, 0, len(fields))
 		for _, field := range fields {
-			if field.GetFieldId() != domain.FieldFundingRate {
+			if _, isExtra := extra[field.GetFieldId()]; !isExtra {
 				kept = append(kept, field)
 			}
 		}
@@ -795,6 +809,7 @@ func stockKlineRow(bar marketdata.NormalizedKline, datasetID, routeID string, ro
 	if strings.TrimSpace(bar.SourceID) != "" {
 		fields = append(fields, stringValue("provider_id", bar.ProviderID), stringValue("source_id", bar.SourceID))
 	}
+	fields = append(fields, extraFieldValues(bar.Extra)...)
 	return &storagepb.RowFieldUpsert{
 		Key: &storagepb.RowKey{
 			SpaceId: StockCNSpaceID, DatasetId: strings.TrimSpace(datasetID),
