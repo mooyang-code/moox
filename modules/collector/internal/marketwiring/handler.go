@@ -10,6 +10,10 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/markets"
+	// 各市场的标的规则在包初始化时登记（markets.Register）。Collector、云函数、collector-stream 三个入口都经过本包装配，
+	// 所以在这里显式引用；新增市场时加一行。
+	_ "github.com/mooyang-code/moox/modules/collector/internal/markets/crypto"
+	_ "github.com/mooyang-code/moox/modules/collector/internal/markets/stockcn"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/catalog"
 )
 

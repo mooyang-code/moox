@@ -26,8 +26,7 @@ func TestHandlerWiresMetricsIntoCommonStockKlinePipeline(t *testing.T) {
 	require.NoError(t, err)
 	storage := &pipelineStorage{}
 	pipeline := &KlinePipeline{Router: router, CandidateChain: []string{"sina", "tencent"}, MarketID: StockCNSpaceID, SpaceID: StockCNSpaceID, DatasetID: testStockDatasetID, Now: func() time.Time { return now }}
-	metrics := NewMetrics(prometheus.NewRegistry())
-	metrics.FeedLabels = testFeedLabels
+	metrics := NewMetrics(prometheus.NewRegistry(), testFeedLabels)
 	handler := &Handler{
 		NewStorage: func(string) (Storage, error) { return storage, nil },
 		NewStockKlinePipeline: func(s Storage, _ string) (*KlinePipeline, error) {

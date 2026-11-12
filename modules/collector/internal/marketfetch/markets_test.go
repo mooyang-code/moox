@@ -7,7 +7,9 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/markets"
-	// 生产里标的规则随行情源目录登记（sources/catalog）；marketfetch 不引用目录，测试里直接引用两个市场的规则包。
+	"github.com/prometheus/client_golang/prometheus"
+
+	// 生产里标的规则由装配入口（marketwiring）引用后登记；marketfetch 不引用装配层，测试里直接引用两个市场的规则包。
 	_ "github.com/mooyang-code/moox/modules/collector/internal/markets/crypto"
 	_ "github.com/mooyang-code/moox/modules/collector/internal/markets/stockcn"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -57,4 +59,21 @@ func TestStockCNRoutePathOverridesEmbedded(t *testing.T) {
 	route, err := loadStockCNRoute()
 	require.NoError(t, err)
 	require.Equal(t, []string{"eastmoney"}, route.ProviderIDs())
+}
+
+// 构造指标时必须给出标签的允许取值：漏了在启动期就 panic，不会把所有标签悄悄记成 unknown。
+func TestNewMetricsRequiresFeedLabels(t *testing.T) {
+	require.Panics(t, func() { NewMetrics(prometheus.NewRegistry(), FeedLabels{}) })
+}
+
+// 环境变量指向的目录里没有这个数据源的文件时，回落到编进二进制的内容；两处都没有才算没配置。
+func TestSourceConfigDirFallsBackPerFile(t *testing.T) {
+	t.Setenv("MOOX_STOCK_CN_SOURCE_CONFIG_DIR", filepath.Join(t.TempDir(), "no_such_dir"))
+	config, found, err := loadStockCNSourceRuntime("sina")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, 1023, config.KlineSpec.MaxBarsPerRequest)
+	_, found, err = loadStockCNSourceRuntime("no_such_source")
+	require.NoError(t, err)
+	require.False(t, found)
 }

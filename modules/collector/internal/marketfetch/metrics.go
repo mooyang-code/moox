@@ -38,8 +38,8 @@ type Metrics struct {
 	periodReportRetry        *prometheus.CounterVec
 	feedResults              *prometheus.CounterVec
 	feedObservations         *prometheus.CounterVec
-	// FeedLabels 是 feed 指标里市场、数据源、路由标签允许的取值；由组合根设置（marketwiring.FeedLabels）。
-	FeedLabels FeedLabels
+	// feedLabels 是 feed 指标里市场、数据源、路由标签允许的取值；构造时由组合根传入（marketwiring.FeedLabels）。
+	feedLabels FeedLabels
 }
 
 // FeedLabels 是 feed 指标里市场、数据源、路由三个标签允许的取值，其余取值一律记为 unknown，避免标签取值无限增长。
@@ -73,8 +73,12 @@ type FeedMetric struct {
 // events.
 func (m *Metrics) SetDatasetRunObserver(any) {}
 
-func NewMetrics(reg prometheus.Registerer) *Metrics {
+func NewMetrics(reg prometheus.Registerer, labels FeedLabels) *Metrics {
+	if len(labels.Markets) == 0 {
+		panic("marketfetch.NewMetrics 缺少 feed 指标的标签取值（marketwiring.FeedLabels）")
+	}
 	metrics := &Metrics{
+		feedLabels:               labels,
 		storeBytes:               prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_database_bytes", Help: "Collector SQLite database and WAL file bytes."}, []string{"kind"}),
 		storeRows:                prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_store_rows", Help: "Space-scoped Collector table rows; lower bound when store_rows_capped is one."}, []string{"space_id", "table"}),
 		storeRowsCapped:          prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "moox_collector_store_rows_capped", Help: "Whether the row observation exceeded its bounded scan limit."}, []string{"space_id", "table"}),
@@ -370,8 +374,8 @@ func (m *Metrics) ObserveFeedResult(value FeedMetric) {
 	if m == nil || value.GroupCount <= 0 || value.GroupID < 0 || value.GroupID >= value.GroupCount {
 		return
 	}
-	marketID, routeID := m.FeedLabels.marketRoute(value.MarketID, value.RouteID)
-	providerID := boundedValue(value.ProviderID, append([]string{"none"}, m.FeedLabels.Providers...), "unknown")
+	marketID, routeID := m.feedLabels.marketRoute(value.MarketID, value.RouteID)
+	providerID := boundedValue(value.ProviderID, append([]string{"none"}, m.feedLabels.Providers...), "unknown")
 	feedKind := boundedValue(value.FeedKind, []string{"kline", "instrument", "egress"}, "unknown")
 	batchKind := boundedValue(value.BatchKind, []string{"realtime", "backfill", "gap_repair", "catchup", "instrument_snapshot"}, "unknown")
 	result := boundedValue(value.Result, []string{"success", "fallback", "http_429", "http_5xx", "timeout", "rate_limited", "invalid", "storage_error", "no_candidate"}, "unknown")

@@ -11,11 +11,13 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/markets"
 	"gopkg.in/yaml.v3"
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // stockCNRoute 是 A 股的路由配置（config/markets/stockcn/route.yaml，编在二进制里）：标的快照来源，以及按频率分开的 K 线候选链。
@@ -207,12 +209,26 @@ func (k stockCNKlineRoute) sources(primaryOnly bool) []stockCNSource {
 	return sources
 }
 
-// loadStockCNRoute 读 A 股的路由：环境变量 MOOX_STOCK_CN_ROUTE_PATH 指定了文件就读它，否则读编进二进制的 route.yaml。
-func loadStockCNRoute() (stockCNRoute, error) {
-	if path := strings.TrimSpace(os.Getenv("MOOX_STOCK_CN_ROUTE_PATH")); path != "" {
-		return loadStockCNRouteFile(path)
+// readStockCNMarketFile 读 A 股的一个市场数据文件：环境变量指定的 override 路径存在就读它，
+// 否则（没设，或目录、文件不存在）读编进二进制的内容。设了却没有这个文件时打一条警告，每个路径只打一次。
+func readStockCNMarketFile(override, embedded string) ([]byte, error) {
+	if override != "" {
+		raw, err := os.ReadFile(override)
+		if err == nil || !errors.Is(err, fs.ErrNotExist) {
+			return raw, err
+		}
+		if _, warned := missingOverrides.LoadOrStore(override, struct{}{}); !warned {
+			log.Warnf("环境变量指定的市场数据文件 %s 不存在，改用编进二进制的 stockcn/%s", override, embedded)
+		}
 	}
-	raw, err := markets.ReadFile(StockCNSpaceID, "route.yaml")
+	return markets.ReadFile(StockCNSpaceID, embedded)
+}
+
+var missingOverrides sync.Map
+
+// loadStockCNRoute 读 A 股的路由：环境变量 MOOX_STOCK_CN_ROUTE_PATH 指定的文件存在就读它，否则读编进二进制的 route.yaml。
+func loadStockCNRoute() (stockCNRoute, error) {
+	raw, err := readStockCNMarketFile(strings.TrimSpace(os.Getenv("MOOX_STOCK_CN_ROUTE_PATH")), "route.yaml")
 	if err != nil {
 		return stockCNRoute{}, fmt.Errorf("读取 stockcn 路由：%w", err)
 	}
@@ -281,19 +297,16 @@ func loadStockCNProviderRuntime(route stockCNRoute) (map[string]stockCNProviderR
 }
 
 // loadStockCNSourceRuntime 按提供方 ID 读 A 股数据源的运行参数（sources/<id>.yaml）：路由里的 K 线来源和
-// 只提供附加字段的来源都用它。环境变量 MOOX_STOCK_CN_SOURCE_CONFIG_DIR 指定了目录就读目录，否则读编进二进制的内容；
-// 文件不存在时 found 为 false。
+// 只提供附加字段的来源都用它。环境变量 MOOX_STOCK_CN_SOURCE_CONFIG_DIR 指定的目录里有这个文件就读它，
+// 否则读编进二进制的内容；两处都没有时 found 为 false。
 func loadStockCNSourceRuntime(id string) (stockCNProviderRuntime, bool, error) {
 	id = strings.ToLower(strings.TrimSpace(id))
 	path := "stockcn/sources/" + id + ".yaml"
-	var raw []byte
-	var err error
+	override := ""
 	if dir := strings.TrimSpace(os.Getenv("MOOX_STOCK_CN_SOURCE_CONFIG_DIR")); dir != "" {
-		path = filepath.Join(dir, id+".yaml")
-		raw, err = os.ReadFile(path)
-	} else {
-		raw, err = markets.ReadFile(StockCNSpaceID, "sources/"+id+".yaml")
+		override = filepath.Join(dir, id+".yaml")
 	}
+	raw, err := readStockCNMarketFile(override, "sources/"+id+".yaml")
 	if errors.Is(err, fs.ErrNotExist) {
 		return stockCNProviderRuntime{}, false, nil
 	}

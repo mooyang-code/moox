@@ -1,8 +1,10 @@
 package marketwiring
 
 import (
+	"path/filepath"
 	"testing"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/markets"
 	"github.com/mooyang-code/moox/modules/collector/internal/subjectsync"
 	"github.com/stretchr/testify/require"
@@ -75,4 +77,32 @@ func TestSubjectListersAreKeyedByMarket(t *testing.T) {
 	}, keys)
 	require.Len(t, indexes, 1)
 	require.Contains(t, indexes, subjectsync.IndexListerKey{MarketID: "stockcn", Source: "eastmoney", Index: "000300"})
+}
+
+// 环境变量指向不存在的目录或文件时（旧发布流程在 collector.env 里写过），回落到编进二进制的内容：
+// lister 仍是 4 个加 1 个指数，候选链、每函数并发推导都与内置配置一致。
+func TestMissingOverrideFallsBackToEmbeddedFiles(t *testing.T) {
+	wantPipeline, err := NewStockKlinePipeline(timerHandlerStorage{}, "5m")
+	require.NoError(t, err)
+	sample := marketfetch.TaskGroup{Frequency: "5m"}
+	wantFetch := marketfetch.StockCNFetchLimits()(sample, marketfetch.PlanFetch{})
+	wantSize := marketfetch.StockCNAutoSize(marketfetch.FleetSizing{TargetFetchMS: 2000, RequestMS: 500, MinFunctions: 8})(sample, 300)
+
+	missing := filepath.Join(t.TempDir(), "no_such_dir")
+	t.Setenv("MOOX_STOCK_CN_SOURCE_CONFIG_DIR", missing)
+	t.Setenv("MOOX_STOCK_CN_ROUTE_PATH", filepath.Join(missing, "route.yaml"))
+
+	listers, indexes, err := NewSubjectListers()
+	require.NoError(t, err)
+	require.Len(t, listers, 4)
+	require.Len(t, indexes, 1)
+
+	pipeline, err := NewStockKlinePipeline(timerHandlerStorage{}, "5m")
+	require.NoError(t, err)
+	require.Equal(t, wantPipeline.CandidateChain, pipeline.CandidateChain)
+	require.Equal(t, []string{"tdx", "eastmoney", "sina", "tencent"}, pipeline.CandidateChain)
+	require.Equal(t, wantFetch, marketfetch.StockCNFetchLimits()(sample, marketfetch.PlanFetch{}))
+	require.NotZero(t, wantFetch.Concurrency)
+	require.Equal(t, wantSize, marketfetch.StockCNAutoSize(marketfetch.FleetSizing{TargetFetchMS: 2000, RequestMS: 500, MinFunctions: 8})(sample, 300))
+	require.NotZero(t, wantSize)
 }

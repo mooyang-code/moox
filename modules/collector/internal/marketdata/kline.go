@@ -71,8 +71,8 @@ func ValidateNormalizedKline(kline NormalizedKline) error {
 		{name: "high", value: kline.High, min: math.SmallestNonzeroFloat64},
 		{name: "low", value: kline.Low, min: math.SmallestNonzeroFloat64},
 		{name: "close", value: kline.Close, min: math.SmallestNonzeroFloat64},
-		{name: "volume_shares", value: kline.Volume, min: 0},
-		{name: "amount_cny", value: kline.Amount, min: 0},
+		{name: "volume", value: kline.Volume, min: 0},
+		{name: "amount", value: kline.Amount, min: 0},
 	} {
 		if !isFinite(field.value) {
 			return fmt.Errorf("%s must be finite", field.name)
