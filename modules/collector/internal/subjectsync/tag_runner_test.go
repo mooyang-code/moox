@@ -3,6 +3,7 @@ package subjectsync
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"github.com/mooyang-code/moox/packages/cnstock"
 )
 
 type fakeTagStore struct {
@@ -234,4 +236,54 @@ func TestSyncTagsReadsIndexSourceForIndexTags(t *testing.T) {
 	if results[0].Status != StatusFailed || !strings.Contains(results[0].Message, "sina") {
 		t.Fatalf("unknown index source must fail: %v", results)
 	}
+}
+
+// 东方财富主机冷却中：请求根本没发出去，同一次同步里不再整次重跑（全部标的与指数成分两条路径都一样）；
+// 其他错误照旧重试。错误经过各层 %w 包装后仍要能识别。
+func TestSyncTagsDoesNotRetryCoolingDown(t *testing.T) {
+	cooling := fmt.Errorf("对照交易所：读东方财富美股列表 m:105：%w", &cnstock.CoolingDownError{Host: "push2.eastmoney.com", Remaining: 9 * time.Minute})
+	calls := 0
+	failing := countingLister{calls: &calls, err: cooling}
+	hs300 := autoTag("stockcn", "cn_hs300", "auto", "eastmoney", "equity")
+	hs300.Attributes["sync.index"] = "000300"
+	store := &fakeTagStore{tags: []*pb.Tag{hs300, autoTag("stockcn", "cn_a_share", "auto", "eastmoney", "equity")}, applied: map[string]int{}}
+	runs := newFakeRunStore()
+	runner := &TagRunner{
+		Store: store, Runs: runs, FetchTimeout: time.Second, RetryDelays: []time.Duration{time.Millisecond, time.Millisecond},
+		Listers:      Listers{{MarketID: "stockcn", Source: "eastmoney", InstrumentType: "equity"}: failing},
+		IndexListers: IndexListers{{MarketID: "stockcn", Source: "eastmoney", Index: "000300"}: failing},
+	}
+	results, err := runner.SyncTags(context.Background(), Filter{SpaceID: "stockcn"})
+	if err != nil || len(results) != 2 {
+		t.Fatalf("results=%v err=%v", results, err)
+	}
+	for _, result := range results {
+		if result.Status != StatusFailed || !strings.Contains(result.Message, "冷却") {
+			t.Fatalf("冷却应记为失败并带上原因：%+v", result)
+		}
+	}
+	if calls != 2 {
+		t.Fatalf("两个标签各取一次，不应整次重跑：%d 次", calls)
+	}
+	if len(store.applied) != 0 || runs.runs["cn_a_share"].LastStatus != "failed" {
+		t.Fatalf("失败不应改成员：applied=%v", store.applied)
+	}
+
+	// 其他错误仍按原来的重试：3 次。
+	calls = 0
+	failing.err = errors.New("暂时的网络错误")
+	runner.Listers[ListerKey{MarketID: "stockcn", Source: "eastmoney", InstrumentType: "equity"}] = failing
+	if _, err := runner.SyncTags(context.Background(), Filter{SpaceID: "stockcn", TagID: "cn_a_share"}); err != nil || calls != 3 {
+		t.Fatalf("其他错误应重试到 3 次：calls=%d err=%v", calls, err)
+	}
+}
+
+type countingLister struct {
+	calls *int
+	err   error
+}
+
+func (l countingLister) List(context.Context) ([]marketdata.Instrument, error) {
+	*l.calls++
+	return nil, l.err
 }
