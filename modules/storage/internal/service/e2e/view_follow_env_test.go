@@ -54,6 +54,8 @@ type followEnv struct {
 	// follow 是启动跟随时的参数，stopFollowing 停掉跟随（模拟 View 停机）。
 	follow        viewservice.FollowOptions
 	stopFollowing func()
+	// root 是 View 的索引目录。
+	root string
 }
 
 func (e *followEnv) Primary() readyBenchPrimary { return e.primary }
@@ -190,6 +192,7 @@ func newFollowEnv(t *testing.T, datasets []readyBenchDataset, opts followEnvOpti
 
 	// View：先按需建好并预填索引，再启动跟随与维护。
 	root := filepath.Join(t.TempDir(), "view")
+	env.root = root
 	env.metadata = &followEnvMetadata{}
 	for _, dataset := range datasets {
 		view := followEnvView(dataset)

@@ -396,6 +396,9 @@ func (s *Service) holdForRebuild(view *pb.View, engineName string) {
 	runtime.building, runtime.rebuilding = indexID, true
 	runtime.mu.Unlock()
 	log.Errorf("storage view %s/%s 的活动索引 %q 不存在，按元数据的列契约重建", view.GetSpaceId(), view.GetViewId(), indexID)
+	// 正在运行的跟随器还按原来的进度跟随（同一个 View 再 Ensure 不会重起）：先停掉它，新跟随器读到“要重建”后原地重建。
+	// 要在清掉活动索引之后停：停止时落盘找不到活动索引就不写，不会对着已删除的文件写进度。
+	s.followManager().Stop(key.spaceID, key.viewID)
 	s.ensureFollower(key)
 }
 

@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -345,4 +347,30 @@ func TestFollowRebuildResumesAfterViewReenabled(t *testing.T) {
 	reader.set(func(r *controlledRangeReader) { r.block = nil })
 	env.metadata.setViews(views) // 再启用
 	waitRebuilt(t, env, kline, before)
+}
+
+// 活动索引文件被外部删除：维护流程把 View 登记为待重建，换掉正在运行的跟随器，新跟随器按原契约原地重建，
+// 删除前后的写入都可查，之后照常跟随。
+func TestFollowRebuildsWhenActiveIndexFileRemoved(t *testing.T) {
+	ctx := context.Background()
+	kline := readyBenchDataset{datasetID: "bench_kline_lost", viewID: "bench_kline_lost_view", subjects: []string{"BTC-USDT", "ETH-USDT"}, columns: readyBenchKlineColumns}
+	env := newFollowEnv(t, []readyBenchDataset{kline}, followEnvOptions{})
+	env.WaitBuilt(t, ctx, kline.viewID)
+	writeGapPeriod(t, env, kline, readyBenchBase, 0)
+	env.WaitApplied(t, ctx, kline.viewID)
+	before := env.WaitBuilt(t, ctx, kline.viewID)
+
+	path := filepath.Join(env.root, "duckdb", before.GetIndexId()+".duckdb")
+	for _, file := range []string{path, path + ".wal"} {
+		if err := os.Remove(file); err != nil && !errors.Is(err, os.ErrNotExist) {
+			t.Fatal(err)
+		}
+	}
+	writeGapPeriod(t, env, kline, readyBenchBase.Add(readyBenchStep), 1)
+	waitRebuilt(t, env, kline, before.GetGeneration())
+
+	next := readyBenchBase.Add(2 * readyBenchStep)
+	writeGapPeriod(t, env, kline, next, 2)
+	env.WaitApplied(t, ctx, kline.viewID)
+	requireViewRows(t, ctx, env, kline.viewID, next, next.Add(readyBenchStep), uint64(len(kline.subjects)))
 }
