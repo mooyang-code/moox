@@ -53,8 +53,7 @@ func projectPipeline(facts observability.Overview) []*pb.HealthPipelineStage {
 		}
 		stage.Name = strings.Join(names, " / ")
 		for _, item := range facts.Datasets {
-			// mooxsys 是系统监控数据（主机快照），不属于业务数据链路。
-			if producerStage[item.Producer] != definition.id || strings.EqualFold(item.SpaceID, "mooxsys") {
+			if producerStage[item.Producer] != definition.id {
 				continue
 			}
 			if item.Producer == "collector" && storageScopes[key(item)] {

@@ -15,23 +15,16 @@ func defaultSetupBundlePath(parts ...string) string {
 	return filepath.Join(append(items, parts...)...)
 }
 
-func TestDefaultSetupBundleDefinesBusinessAndInternalSpaces(t *testing.T) {
+func TestDefaultSetupBundleDefinesBusinessSpaces(t *testing.T) {
 	seed, err := loadMetadataSeed(defaultSetupBundlePath("metadata.yaml"))
 	require.NoError(t, err)
 
-	var business, internal []string
+	var business []string
 	for _, space := range seed.Spaces {
-		switch space.Attributes["scope"] {
-		case "internal":
-			internal = append(internal, space.SpaceID)
-		default:
-			business = append(business, space.SpaceID)
-		}
+		business = append(business, space.SpaceID)
 	}
 	slices.Sort(business)
-	slices.Sort(internal)
 	require.Equal(t, []string{"crypto", "stockcn", "stockhk", "stockus"}, business)
-	require.Equal(t, []string{"mooxsys"}, internal)
 
 	byID := make(map[string]seedSpace, len(seed.Spaces))
 	for _, space := range seed.Spaces {
@@ -46,7 +39,6 @@ func TestDefaultSetupBundleDefinesBusinessAndInternalSpaces(t *testing.T) {
 func TestDefaultSetupBundleDefinesCompleteDatasets(t *testing.T) {
 	seed, err := loadMetadataSeed(defaultSetupBundlePath("metadata.yaml"))
 	require.NoError(t, err)
-	require.NoError(t, validateReservedInternalSpaces(seed))
 	require.NoError(t, validateSetupMetadataDependencies(seed))
 	_, err = buildMetadataImportCalls(seed)
 	require.NoError(t, err)

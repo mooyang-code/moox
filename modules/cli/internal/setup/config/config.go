@@ -190,7 +190,7 @@ type StorageView struct {
 // StoragePolicy renders storage-policy.json, the file storage-primary and
 // storage-view load at startup.
 // RecommendedSpaceRetention 是各空间推荐的保留期，只用于 moox.toml 缺省与配置页的「恢复推荐值」；
-// Storage 不认识这些空间。交易时段市场同样的根数要保留更多自然天，主机资源历史（mooxsys）只留短期。
+// Storage 不认识这些空间。交易时段市场同样的根数要保留更多自然天。
 func RecommendedSpaceRetention() map[string]map[string]string {
 	sessionMarket := func(minute string) map[string]string {
 		return map[string]string{
@@ -202,7 +202,6 @@ func RecommendedSpaceRetention() map[string]map[string]string {
 		"stockcn": sessionMarket("60d"),
 		"stockhk": sessionMarket("45d"),
 		"stockus": sessionMarket("40d"),
-		"mooxsys": {"30s": "48h", "1m": "7d"},
 	}
 }
 

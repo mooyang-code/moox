@@ -102,9 +102,6 @@ var metadataApplyCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		if err := validateReservedInternalSpaces(seed); err != nil {
-			return err
-		}
 		calls, err := buildMetadataImportCalls(seed)
 		if err != nil {
 			return err

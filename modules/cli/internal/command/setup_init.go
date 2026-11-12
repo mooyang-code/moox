@@ -505,9 +505,6 @@ func loadSetupInitBundle(configDir string) (setupInitBundle, error) {
 	if err != nil {
 		return setupInitBundle{}, err
 	}
-	if err := validateReservedInternalSpaces(seed); err != nil {
-		return setupInitBundle{}, err
-	}
 	spaces, err := businessSetupSpaces(seed)
 	if err != nil {
 		return setupInitBundle{}, err

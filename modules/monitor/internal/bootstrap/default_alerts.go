@@ -111,8 +111,7 @@ func listAllMonitorChecks(ctx context.Context, repositories *store.Repositories)
 }
 
 // 主机资源告警需要连续超过阈值的采样次数。HostAgent 每分钟采样一次（整分 0 秒），
-// CPU 3 次约 3 分钟、内存 5 次约 5 分钟、磁盘 3 次约 3 分钟。不改成更密的采样：
-// mooxsys 视图每个序列只保留最近 5000 根，每分钟采样约能保留 3.5 天的主机指标历史。
+// CPU 3 次约 3 分钟、内存 5 次约 5 分钟、磁盘 3 次约 3 分钟。
 var hostFailureThresholds = map[string]int{
 	hostmetrics.HostMetricCPU:             3,
 	hostmetrics.HostMetricMemory:          5,

@@ -234,10 +234,6 @@ func buildBusinessFreshnessReporterWithInterval(
 					continue
 				}
 			}
-			if systemMonitoringDataset(dataset) {
-				// mooxsys 是系统监控数据（主机快照）：主机失联与阈值规则已覆盖主机停报，不做数据集新鲜度检查。
-				continue
-			}
 			checkID := strings.Join([]string{"dataset", dataset.Producer, dataset.DatasetID, dataset.Freq}, ":")
 			// Storage 写入水位按结果数据集匹配，View 水位按确切的视图 ID 匹配：同一主数据集上另有独立视图时，它仍要自己的检查。
 			covered := false
@@ -561,10 +557,6 @@ func serviceDeploymentExpected(ctx context.Context, topology *store.TopologyRepo
 
 // noLongerExpected resolves a check whose subject was disabled or removed.
 const noLongerExpected = domain.CheckReasonRetired
-
-func systemMonitoringDataset(dataset monitorobservability.DatasetFrequencyStatus) bool {
-	return strings.EqualFold(strings.TrimSpace(dataset.SpaceID), monmetrics.InternalMetricSpaceID)
-}
 
 // relayAlertAfter 是反向连接断开多久后告警。
 const relayAlertAfter = 3 * time.Minute

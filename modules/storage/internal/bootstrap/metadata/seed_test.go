@@ -41,10 +41,6 @@ func TestDefaultViewInventory(t *testing.T) {
 	}
 	sort.Strings(got)
 	want := []string{
-		"mooxsys/view_mooxsys_host_disk",
-		"mooxsys/view_mooxsys_host_fs",
-		"mooxsys/view_mooxsys_host_net",
-		"mooxsys/view_mooxsys_host_resource",
 		"stockus/view_stockus_equity_kline_1d",
 	}
 	sort.Strings(want)
@@ -101,16 +97,4 @@ func TestImportEntitiesCreatesActiveDatasetsAndKeepsStatusOnReimport(t *testing.
 	dataset, err = store.GetDataset(ctx, "space", "dataset")
 	require.NoError(t, err)
 	require.Equal(t, "disabled", dataset.GetStatus(), "重新导入不改启停状态")
-}
-
-func TestSeedViewColumnAttributesDefaultsInternalDisplayName(t *testing.T) {
-	got := seedViewColumnAttributes(seedViewColumn{
-		SpaceID: "mooxsys", ColumnName: "cpu_usage_percent",
-	})
-	require.Equal(t, "cpu_usage_percent", got["display_name"])
-
-	external := seedViewColumnAttributes(seedViewColumn{
-		SpaceID: "crypto", ColumnName: "close",
-	})
-	require.NotContains(t, external, "display_name")
 }

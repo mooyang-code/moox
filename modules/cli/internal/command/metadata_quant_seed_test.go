@@ -13,7 +13,7 @@ func TestDefaultMetadataUsesUnifiedCryptoMarket(t *testing.T) {
 	for _, space := range seed.Spaces {
 		spaceIDs = append(spaceIDs, space.SpaceID)
 	}
-	require.Equal(t, []string{"stockcn", "stockhk", "stockus", "crypto", "mooxsys"}, spaceIDs)
+	require.Equal(t, []string{"stockcn", "stockhk", "stockus", "crypto"}, spaceIDs)
 
 	var dataSourceIDs []string
 	var datasetIDs []string

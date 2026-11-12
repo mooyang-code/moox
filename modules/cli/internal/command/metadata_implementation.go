@@ -27,79 +27,6 @@ const (
 	metadataApplyMaxPages = 1000
 )
 
-func validateReservedInternalSpaces(seed metadataSeed) error {
-	for _, item := range seed.Spaces {
-		if item.SpaceID != "mooxsys" {
-			continue
-		}
-		if item.Attributes["scope"] != "internal" || item.Attributes["owner_module"] == "" || item.Attributes["managed_by"] == "" {
-			return fmt.Errorf("reserved internal space %q requires attributes scope=internal, owner_module, and managed_by", item.SpaceID)
-		}
-	}
-	check := func(resource, spaceID string) error {
-		spaceID = strings.TrimSpace(spaceID)
-		if spaceID == "mooxsys" && !hasInternalSpace(seed, spaceID) {
-			return fmt.Errorf("seed %s cannot claim reserved space %q", resource, spaceID)
-		}
-		return nil
-	}
-	for _, item := range seed.DataSources {
-		if err := check("data_sources", item.SpaceID); err != nil {
-			return err
-		}
-	}
-	for _, item := range seed.Subjects {
-		if err := check("subjects", item.SpaceID); err != nil {
-			return err
-		}
-	}
-	for _, item := range seed.Tags {
-		if err := check("tags", item.SpaceID); err != nil {
-			return err
-		}
-	}
-	for _, item := range seed.Datasets {
-		if err := check("datasets", item.SpaceID); err != nil {
-			return err
-		}
-	}
-	for _, item := range seed.FieldGroups {
-		if err := check("field_groups", item.SpaceID); err != nil {
-			return err
-		}
-	}
-	for _, item := range seed.Fields {
-		if err := check("fields", item.SpaceID); err != nil {
-			return err
-		}
-	}
-	for _, item := range seed.DatasetColumns {
-		if err := check("dataset_columns", item.SpaceID); err != nil {
-			return err
-		}
-	}
-	for _, item := range seed.Views {
-		if err := check("views", item.SpaceID); err != nil {
-			return err
-		}
-	}
-	for _, item := range seed.ViewColumns {
-		if err := check("view_columns", item.SpaceID); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func hasInternalSpace(seed metadataSeed, id string) bool {
-	for _, s := range seed.Spaces {
-		if s.SpaceID == id && s.Attributes["scope"] == "internal" {
-			return true
-		}
-	}
-	return false
-}
-
 func loadMetadataSeed(path string) (metadataSeed, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -921,9 +848,6 @@ func (s seedViewColumn) toPB() (*pb.ViewColumn, error) {
 		return nil, err
 	}
 	attributes := cloneStringMap(s.Attributes)
-	if s.SpaceID == "mooxsys" && strings.TrimSpace(attributes["display_name"]) == "" {
-		attributes["display_name"] = s.ColumnName
-	}
 	return &pb.ViewColumn{SpaceId: s.SpaceID, ViewId: s.ViewID, ColumnName: s.ColumnName, OriginType: originType, OriginId: s.OriginID, ValueType: valueType, OnlineTime: s.OnlineTime, SortOrder: s.SortOrder, CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt, Attributes: attributes}, nil
 }
 

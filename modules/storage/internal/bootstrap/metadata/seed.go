@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/config"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
@@ -205,7 +204,7 @@ func importEntities(ctx context.Context, store metadata.Store, seed seedFile) (I
 			SpaceId: item.SpaceID, ViewId: item.ViewID, ColumnName: item.ColumnName,
 			OriginType: parseColumnOriginType(item.OriginType), OriginId: item.OriginID,
 			ValueType: parseValueType(item.ValueType), OnlineTime: item.OnlineTime, SortOrder: item.SortOrder,
-			Attributes: seedViewColumnAttributes(item),
+			Attributes: item.Attributes,
 		}); err != nil {
 			return result, seedErr("view_column", item.ViewID+"."+item.ColumnName, err)
 		}
@@ -223,17 +222,6 @@ func importEntities(ctx context.Context, store metadata.Store, seed seedFile) (I
 	}
 
 	return result, nil
-}
-
-func seedViewColumnAttributes(item seedViewColumn) map[string]string {
-	attributes := make(map[string]string, len(item.Attributes)+1)
-	for key, value := range item.Attributes {
-		attributes[key] = value
-	}
-	if item.SpaceID == "mooxsys" && strings.TrimSpace(attributes["display_name"]) == "" {
-		attributes["display_name"] = item.ColumnName
-	}
-	return attributes
 }
 
 func normalizeSeedFieldGroups(seed seedFile) (seedFile, error) {

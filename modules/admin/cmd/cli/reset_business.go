@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/glebarez/sqlite"
+	"github.com/mooyang-code/moox/packages/events"
 	"gorm.io/gorm"
 )
 
@@ -25,7 +26,7 @@ import (
 // 重置前用 VACUUM INTO 备份整个库到数据库所在目录的 reset-backups/（保留最近 3 份），这个命令不依赖 Admin 进程是否在运行。
 
 // defaultSpaceID 是随系统创建的默认空间，业务重置保留它。
-const defaultSpaceID = "mooxsys"
+const defaultSpaceID = events.SystemSpaceID
 
 // businessResetData 是运行数据：重置的两个范围都清。
 var businessResetData = []string{"t_activity_logs", "t_collector_publish_leases", "t_collector_publish_operations"}

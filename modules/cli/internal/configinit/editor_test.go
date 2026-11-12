@@ -219,7 +219,7 @@ func TestEditorFormShowsTheCommonSettings(t *testing.T) {
 	for _, space := range form.Retention.Spaces {
 		names[space.ID] = space.Name
 	}
-	if names["stockcn"] != "A 股" || names["mooxsys"] != "系统数据" {
+	if names["stockcn"] != "A 股" {
 		t.Fatalf("空间 = %v", names)
 	}
 	if form.Logs.MaxSizeMB != 50 || form.Logs.BackupCount != 5 {
@@ -387,14 +387,14 @@ func TestEditorFormOffersRecommendedRetentionAndEverySpace(t *testing.T) {
 	h := startEditor(t, nil)
 	_, reply, _ := h.call("config/form", struct{}{}, nil)
 	rec := reply.Form.Retention.Recommended
-	if rec.ViewBars != 10000 || rec.Defaults["1h"] != "10080h" || rec.Spaces["stockcn"]["1m"] != "60d" || rec.Spaces["mooxsys"]["30s"] != "48h" {
+	if rec.ViewBars != 10000 || rec.Defaults["1h"] != "10080h" || rec.Spaces["stockcn"]["1m"] != "60d" {
 		t.Fatalf("推荐值 = %+v", rec)
 	}
 	ids := map[string]bool{}
 	for _, space := range reply.Form.Retention.Spaces {
 		ids[space.ID] = true
 	}
-	for _, want := range []string{"stockcn", "stockhk", "stockus", "mooxsys"} {
+	for _, want := range []string{"stockcn", "stockhk", "stockus"} {
 		if !ids[want] {
 			t.Fatalf("表格应包含空间 %s: %v", want, ids)
 		}

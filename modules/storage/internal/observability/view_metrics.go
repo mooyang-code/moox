@@ -475,7 +475,7 @@ func (m *ViewMetrics) ObserveViewOutputWatermark(spaceID, viewID, datasetID, fre
 	m.viewWatermarks[key] = watermarkUnix
 	m.viewOutputWatermark.WithLabelValues(spaceID, viewID, datasetID, frequency).Set(float64(watermarkUnix))
 	m.viewOutputArrival.WithLabelValues(spaceID, viewID, datasetID, frequency).Set(float64(m.now().UTC().Unix()))
-	report.NotifyOutputAdvanced(spaceID)
+	report.NotifyOutputAdvanced()
 }
 
 // ViewKey identifies a View by space and view ID.

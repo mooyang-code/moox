@@ -20,13 +20,6 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-func TestValidateReservedInternalSpacesRejectsUndeclaredLogicalResource(t *testing.T) {
-	seed := metadataSeed{Datasets: []seedDataset{{SpaceID: "mooxsys", DatasetID: "dataset_mooxsys_host_resource"}}}
-	if err := validateReservedInternalSpaces(seed); err == nil {
-		t.Fatal("logical resource without an internal space declaration should be rejected")
-	}
-}
-
 func TestLoadMetadataSeed_ParsesMinimalYAML(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "seed.yaml")
 	content := "spaces:\n  - space_id: default\n    attributes: {scope: public}\n"
@@ -55,15 +48,11 @@ func TestLoadMetadataSeedRejectsSecondDocument(t *testing.T) {
 	require.ErrorContains(t, err, "exactly one YAML document")
 }
 
-func TestBusinessSpacesExcludeInternalScopeAndSort(t *testing.T) {
+func TestBusinessSpacesSortByID(t *testing.T) {
 	seed := metadataSeed{Spaces: []seedSpace{
 		{
 			SpaceID: "stockcn", Name: "A股市场", Market: "CN", Timezone: "Asia/Shanghai",
 			seedCommon: seedCommon{Status: "active", Attributes: map[string]string{"managed_by": "moox-cli"}},
-		},
-		{
-			SpaceID: "mooxsys", Name: "MooX System",
-			seedCommon: seedCommon{Attributes: map[string]string{"scope": "internal"}},
 		},
 		{
 			SpaceID: "crypto", Name: "加密货币市场", Market: "crypto", Timezone: "UTC",
@@ -226,22 +215,6 @@ func TestParseColumnAndValueTypes(t *testing.T) {
 	assert.Equal(t, pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, value)
 }
 
-func TestHasInternalSpace(t *testing.T) {
-	seed := metadataSeed{Spaces: []seedSpace{{SpaceID: "mooxsys", seedCommon: seedCommon{Attributes: map[string]string{"scope": "internal"}}}}}
-	assert.True(t, hasInternalSpace(seed, "mooxsys"))
-	assert.False(t, hasInternalSpace(seed, "default"))
-}
-
-func TestValidateReservedInternalSpacesAcceptsDeclaredSpace(t *testing.T) {
-	seed := metadataSeed{Spaces: []seedSpace{{
-		SpaceID: "mooxsys",
-		seedCommon: seedCommon{Attributes: map[string]string{
-			"scope": "internal", "owner_module": "monitor", "managed_by": "platform",
-		}},
-	}}}
-	require.NoError(t, validateReservedInternalSpaces(seed))
-}
-
 func TestBuildMetadataImportCallsFullSeed(t *testing.T) {
 	seed := metadataSeed{
 		Spaces:         []seedSpace{{SpaceID: "crypto", Name: "Crypto"}},
@@ -326,18 +299,6 @@ func TestBuildMetadataImportCallsScopesColumnDisplayNameBySpaceAndOriginType(t *
 	}, got)
 }
 
-func TestBuildMetadataImportCallsBackfillsInternalViewColumnDisplayName(t *testing.T) {
-	seed := metadataSeed{ViewColumns: []seedViewColumn{{
-		SpaceID: "mooxsys", ViewID: "view_mooxsys_host_resource", ColumnName: "cpu_usage_percent",
-		OriginType: "DATASET_COLUMN", OriginID: "cpu_usage_percent", ValueType: "DOUBLE",
-	}}}
-	calls, err := buildMetadataImportCalls(seed)
-	require.NoError(t, err)
-	require.Len(t, calls, 1)
-	column := calls[0].Request.(*pb.UpsertViewColumnReq).GetColumn()
-	assert.Equal(t, "cpu_usage_percent", column.GetAttributes()["display_name"])
-}
-
 func TestMetadataContractsEqualAllResources(t *testing.T) {
 	assert.True(t, metadataContractsEqual("data_sources",
 		&pb.DataSource{SpaceId: "crypto", DataSourceId: "binance", Name: "Binance", Status: "active"},
@@ -359,12 +320,12 @@ func TestMetadataContractsEqualAllResources(t *testing.T) {
 
 func TestMetadataContractsEqualTreatsNilAndEmptyAttributesAsEqual(t *testing.T) {
 	assert.True(t, metadataContractsEqual("spaces",
-		&pb.Space{SpaceId: "mooxsys", Name: "MooX System", Status: "active"},
-		&pb.Space{SpaceId: "mooxsys", Name: "MooX System", Status: "active", Attributes: map[string]string{}},
+		&pb.Space{SpaceId: "crypto", Name: "加密货币市场", Status: "active"},
+		&pb.Space{SpaceId: "crypto", Name: "加密货币市场", Status: "active", Attributes: map[string]string{}},
 	))
 	assert.True(t, metadataContractsEqual("data_sources",
-		&pb.DataSource{SpaceId: "mooxsys", DataSourceId: "moox_monitor", Name: "MooX Monitor", Status: "active"},
-		&pb.DataSource{SpaceId: "mooxsys", DataSourceId: "moox_monitor", Name: "MooX Monitor", Status: "active", Attributes: map[string]string{}},
+		&pb.DataSource{SpaceId: "crypto", DataSourceId: "binance", Name: "币安", Status: "active"},
+		&pb.DataSource{SpaceId: "crypto", DataSourceId: "binance", Name: "币安", Status: "active", Attributes: map[string]string{}},
 	))
 }
 

@@ -93,13 +93,13 @@ Recalc 范围为左闭右开，会按最多 2000 个完整周期分块执行；�
 
 ## 精确清理单个 Dataset 的历史事件
 
-当一个可丢弃的运维 Dataset（例如主机资源快照 `dataset_mooxsys_host_resource`）的积压事件需要清掉，
+当某一个可由后续采样重新生成的 Dataset 的积压事件需要清掉，
 但业务 Dataset 的历史事件必须保留时，不要删除整个 stream 或 consumer。先预览精确 subject：
 
 ```bash
 ./bin/moox-cli storage purge-dataset-events \
-  --space mooxsys \
-  --dataset dataset_mooxsys_host_resource
+  --space <空间> \
+  --dataset <数据集 ID>
 ```
 
 确认后增加 `--yes`。该命令只从 `MOOX_STORAGE` stream 删除这个 Space/Dataset 的
@@ -127,11 +127,11 @@ rows、period 和 sync-point 事件；不会删除 durable consumer，也不会�
 
 ## 下线单个 View
 
-控制台没有删除 View 的入口。要下线某一个 View（例如不再有读取方的 `view_mooxsys_service_metrics`），先暂停 `storage-view`
+控制台没有删除 View 的入口。要下线某一个 View（例如已不再有读取方的 View），先暂停 `storage-view`
 （直接 stop 会在一分钟内被主机守护拉起，用 `moox-runtime pause`，可经 `moox-cli host exec --host <存储机> -- …` 执行），再离线删除这一个 View 的元数据：
 
 ```bash
-./bin/moox-cli storage delete-view --view mooxsys/view_mooxsys_service_metrics --yes
+./bin/moox-cli storage delete-view --view <空间>/<View ID> --yes
 ```
 
 命令只删指定的一个 View 及其列（外键级联），输出待回收的 `engine/index_id`；物理文件由 `storage-view` 的清理定时器在确认无引用后回收。

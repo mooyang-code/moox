@@ -72,10 +72,6 @@ view_rows_per_series = 10000  # 每个序列 View 保留最近 N 根；更旧的
 "1h" = "forever"
 "4h" = "forever"
 
-[storage_retention.spaces.mooxsys]
-"30s" = "48h"
-"1m" = "7d"
-
 # View 维护的检查节奏与单个 View 文件的告警线（超过只告警，不动数据）。
 [storage_view]
 maintenance_check_interval = "1m"
@@ -120,10 +116,6 @@ max_view_file_bytes = 4294967296
 "30m" = "forever"
 "1h" = "forever"
 "4h" = "forever"
-
-[storage_view.max_age.spaces.mooxsys]
-"30s" = "48h"
-"1m" = "7d"
 
 # Collector 的旧执行明细、terminal retry 和 period snapshot 按独立期限回收。
 # 活动工作以及未获 Storage complete/degraded 确认的 K 线目标不会被删除。

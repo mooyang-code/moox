@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
+	"github.com/mooyang-code/moox/packages/events"
 	"gorm.io/gorm"
 )
 
@@ -186,7 +187,7 @@ func (r *CheckRepository) MarkChecked(ctx context.Context, spaceID, checkID stri
 func (r *CheckRepository) ListEnabledKinds(ctx context.Context, spaceID string, kinds []string, limit int) ([]domain.Check, error) {
 	query := r.db.WithContext(ctx).Where("c_enabled = 1 AND substr(c_check_id, 1, instr(c_check_id, ':') - 1) IN ?", kinds)
 	if spaceID != "" {
-		query = query.Where("c_space_id IN ?", []string{spaceID, "", "mooxsys"})
+		query = query.Where("c_space_id IN ?", []string{spaceID, "", events.SystemSpaceID})
 	}
 	var checks []domain.Check
 	err := query.Order("c_space_id, c_check_id").Limit(limit).Find(&checks).Error

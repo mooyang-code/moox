@@ -122,21 +122,21 @@ func TestFactorDatasetObserverFlushesWhenFormalPeriodTurnsSuccessful(t *testing.
 		runs: []domain.TaskRunSummary{partial},
 	}
 	observer := newFactorDatasetObserver(engine, datasets)
-	var flushed []string
-	observer.notify = func(spaceID string) { flushed = append(flushed, spaceID) }
+	flushed := 0
+	observer.notify = func() { flushed++ }
 
 	require.NoError(t, observer.observe(context.Background()))
 	requireDatasetValue(t, registry, "moox_factor_dataset_output_watermark_timestamp_seconds", "dataset_factor_spot_1h", float64(period.Unix()))
-	require.Empty(t, flushed, "新的一期由水位前进触发补报，观察器不重复触发")
+	require.Zero(t, flushed, "新的一期由水位前进触发补报，观察器不重复触发")
 
 	repaired := period.Add(time.Hour + 20*time.Minute)
 	engine.runs = []domain.TaskRunSummary{{TaskID: "spot_1h", LastPeriodTime: period.Unix(), CompletedAt: repaired.Unix(), LastStatus: "complete"}}
 	require.NoError(t, observer.observe(context.Background()))
-	require.Equal(t, []string{"crypto"}, flushed)
+	require.Equal(t, 1, flushed)
 	requireDatasetValue(t, registry, "moox_factor_dataset_last_success_timestamp_seconds", "dataset_factor_spot_1h", float64(repaired.Unix()))
 	requireDatasetValue(t, registry, "moox_factor_dataset_output_arrival_timestamp_seconds", "dataset_factor_spot_1h", float64(period.Add(time.Hour).Unix()))
 	require.NoError(t, observer.observe(context.Background()))
-	require.Len(t, flushed, 1)
+	require.Equal(t, 1, flushed)
 }
 
 // datasetValue returns one dataset's gauge value in a gathered family.

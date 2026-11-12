@@ -114,7 +114,6 @@ func main() {
 			{"stockhk", "港股市场", "quant", "HK", "Asia/Hong_Kong", ""},
 			{"stockus", "美股市场", "quant", "US", "America/New_York", ""},
 			{"crypto", "加密货币市场", "quant", "crypto", "UTC", ""},
-			{"mooxsys", "MooX System", "moox", "", "UTC", `{"scope":"internal","owner_module":"monitor"}`},
 		} {
 			body, _ := json.Marshal(map[string]any{"space": map[string]any{"space_id": sp.id, "name": sp.name, "owner": sp.owner, "market": sp.market, "timezone": sp.tz, "status": "active", "attributes": sp.attrs}})
 			code, raw := c.call("/api/admin/space/CreateSpace", "", string(body))
@@ -133,7 +132,7 @@ func main() {
 		{"sysdeploy/ListHosts", "/api/admin/sysdeploy/ListHosts", "", `{"page":{"page":1,"size":20}}`},
 		{"storage/ListDatasets(crypto)", "/api/admin/storage/ListDatasets", "crypto", `{"space_id":"crypto","page":{"page":1,"size":5}}`},
 		{"storage/ListDataNodes", "/api/admin/storage/ListDataNodes", "", `{"page":{"page":1,"size":5}}`},
-		{"storage/ListViews(mooxsys)", "/api/admin/storage/ListViews", "mooxsys", `{"space_id":"mooxsys","page":{"page":1,"size":5}}`},
+		{"storage/ListViews(stockus)", "/api/admin/storage/ListViews", "stockus", `{"space_id":"stockus","page":{"page":1,"size":5}}`},
 		{"collector/GetTaskList(crypto)", "/api/admin/collector/GetTaskList", "crypto", `{"space_id":"crypto","page":{"page":1,"size":5}}`},
 		{"monitor/GetHealthOverview", "/api/admin/monitor/GetHealthOverview", "", `{}`},
 		{"monitor/ListHostAgents", "/api/admin/monitor/ListHostAgents", "", `{}`},

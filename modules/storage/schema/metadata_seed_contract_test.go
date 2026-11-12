@@ -126,10 +126,6 @@ func TestDefaultSetupSeedDeclaresCollectorPeriodDatasetOwners(t *testing.T) {
 	preserved := map[string]struct{ kind, role string }{
 		"stockcn/dataset_stockcn_financial_statement_metric": {"record", ""},
 		"stockcn/dataset_stockcn_financial_summary":          {"record", ""},
-		"mooxsys/dataset_mooxsys_host_resource":              {"time_series", ""},
-		"mooxsys/dataset_mooxsys_host_filesystem":            {"time_series", ""},
-		"mooxsys/dataset_mooxsys_host_disk":                  {"time_series", ""},
-		"mooxsys/dataset_mooxsys_host_network":               {"time_series", ""},
 	}
 	for key, want := range preserved {
 		t.Run(key, func(t *testing.T) {

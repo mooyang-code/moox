@@ -257,11 +257,11 @@ func ensureEventBus(d *dao.SecretDAO, natsURL string, out io.Writer) error {
 			return err
 		}
 		extra, _ := json.Marshal(map[string]string{"nats_url": natsURL})
-		if err := d.Create(ctx, &model.Secret{SpaceID: "mooxsys", SecretID: uuid.New().String(), Name: "EventBus TLS CA", Description: "private EventBus CA bundle", Category: "eventbus", Provider: "moox_eventbus", SecretType: "certificate", KeyID: "eventbus_tls_ca", SecretValue: bundle.CA, ExtraConfig: string(extra)}); err != nil {
+		if err := d.Create(ctx, &model.Secret{SpaceID: events.SystemSpaceID, SecretID: uuid.New().String(), Name: "EventBus TLS CA", Description: "private EventBus CA bundle", Category: "eventbus", Provider: "moox_eventbus", SecretType: "certificate", KeyID: "eventbus_tls_ca", SecretValue: bundle.CA, ExtraConfig: string(extra)}); err != nil {
 			return err
 		}
 		serverValue, _ := json.Marshal(map[string]string{"cert": bundle.Cert, "key": bundle.Key})
-		if err := d.Create(ctx, &model.Secret{SpaceID: "mooxsys", SecretID: uuid.New().String(), Name: "EventBus TLS server", Description: "private EventBus server bundle", Category: "eventbus", Provider: "moox_eventbus", SecretType: "certificate", KeyID: "eventbus_tls_server", SecretValue: string(serverValue), ExtraConfig: string(extra)}); err != nil {
+		if err := d.Create(ctx, &model.Secret{SpaceID: events.SystemSpaceID, SecretID: uuid.New().String(), Name: "EventBus TLS server", Description: "private EventBus server bundle", Category: "eventbus", Provider: "moox_eventbus", SecretType: "certificate", KeyID: "eventbus_tls_server", SecretValue: string(serverValue), ExtraConfig: string(extra)}); err != nil {
 			return err
 		}
 	}
@@ -280,7 +280,7 @@ func ensureToken(ctx context.Context, d *dao.SecretDAO, key, role string) (strin
 		return "", err
 	}
 	value := base64.RawURLEncoding.EncodeToString(raw)
-	err = d.Create(ctx, &model.Secret{SpaceID: "mooxsys", SecretID: uuid.New().String(), Name: "EventBus " + role, Description: "permanent EventBus role token", Category: "eventbus", Provider: "moox_eventbus", SecretType: "token", KeyID: key, SecretValue: value, ExtraConfig: `{}`})
+	err = d.Create(ctx, &model.Secret{SpaceID: events.SystemSpaceID, SecretID: uuid.New().String(), Name: "EventBus " + role, Description: "permanent EventBus role token", Category: "eventbus", Provider: "moox_eventbus", SecretType: "token", KeyID: key, SecretValue: value, ExtraConfig: `{}`})
 	return value, err
 }
 func listEventbus(d *dao.SecretDAO, ctx context.Context) (map[string]model.Secret, error) {
