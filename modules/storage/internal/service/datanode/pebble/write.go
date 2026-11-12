@@ -66,6 +66,9 @@ func (s *Store) UpsertFields(ctx context.Context, spaceID, datasetID, commitID s
 
 	s.datasetWriteMu.RLock()
 	defer s.datasetWriteMu.RUnlock()
+	if err := s.requireDataset(spaceID, datasetID); err != nil {
+		return nil, err
+	}
 	// 编码 KV、构造并校验事件、整理变更范围与锁无关，放在 outboxMu 之外：并发写入、完成标记与 outbox 转发
 	// 不必排在这一步后面。锁内只查 commit 标记并提交；重复提交白做一次准备，丢弃即可。
 	write, err := s.prepareRowsWrite(ctx, spaceID, datasetID, normalized)
@@ -208,14 +211,11 @@ func (s *Store) prepareRowsWrite(ctx context.Context, spaceID, datasetID string,
 	return &preparedRowsWrite{batch: batch, spaceID: spaceID, datasetID: datasetID, payload: payload, ranges: changeRanges(rows)}, nil
 }
 
-// commitRowsWriteLocked 在 outboxMu 内完成写入：检查数据集未删除、分配 outbox 编号并绑定到事件、追加变更日志，
+// commitRowsWriteLocked 在 outboxMu 内完成写入：分配 outbox 编号并绑定到事件、追加变更日志，
 // 由 decorate 补充同一批次里的其他键（commit 标记、周期位图），然后提交。调用方必须持有 outboxMu。
 func (s *Store) commitRowsWriteLocked(ctx context.Context, prepared *preparedRowsWrite, decorate func(*cpebble.Batch) error) ([]*OutboxEntry, error) {
 	// 等锁期间请求可能已超时或取消：此时不再提交，避免客户端重试后写出重复事件。
 	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if err := s.requireDataset(prepared.spaceID, prepared.datasetID); err != nil {
 		return nil, err
 	}
 	batch := prepared.batch

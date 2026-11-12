@@ -251,6 +251,9 @@ func (s *Store) CommitTimeSeriesBatch(ctx context.Context, exp DatasetPeriodExpe
 	base := periodBase(exp.SpaceID, exp.DatasetID, exp.Frequency, exp.PeriodTime)
 	s.datasetWriteMu.RLock()
 	defer s.datasetWriteMu.RUnlock()
+	if err := s.requireDataset(exp.SpaceID, exp.DatasetID); err != nil {
+		return DatasetPeriodResult{}, err
+	}
 	s.periodMu.Lock()
 	defer s.periodMu.Unlock()
 	status, found, err := s.readPeriodStatus(base)

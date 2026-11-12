@@ -140,8 +140,9 @@ func (s *Service) CreateDataset(ctx context.Context, req *pb.CreateDatasetReq) (
 	if err != nil {
 		return &pb.CreateDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
-	if err := s.refreshMetadataCache(ctx); err != nil {
-		return &pb.CreateDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	// 建好即可写入：返回前把元数据缓存发布出去，写入方紧接着的写入才能在缓存里查到数据集和列。
+	if err := s.refreshMetadataCacheSynchronously(ctx, "CreateDataset"); err != nil {
+		return &pb.CreateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("数据集已创建，但元数据缓存尚未发布，请重试")), Dataset: s.withRetention(created)}, nil
 	}
 	return &pb.CreateDatasetRsp{RetInfo: retinfo.Success("success"), Dataset: s.withRetention(created)}, nil
 }
@@ -254,9 +255,10 @@ func (s *Service) ActivateDataset(ctx context.Context, req *pb.ActivateDatasetRe
 		if dataset, err = s.metadata.UpsertDataset(ctx, enabled); err != nil {
 			return &pb.ActivateDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 		}
-		if err := s.refreshMetadataCacheSynchronously(ctx, "ActivateDataset"); err != nil {
-			return &pb.ActivateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("数据集已启用，但元数据缓存尚未发布，请重试"))}, nil
-		}
+	}
+	// 调用方在激活成功后立即写入：无论是否改了状态，都先把之前补的列等元数据发布到缓存。
+	if err := s.refreshMetadataCacheSynchronously(ctx, "ActivateDataset"); err != nil {
+		return &pb.ActivateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("数据集已启用，但元数据缓存尚未发布，请重试"))}, nil
 	}
 	out := s.withRetention(dataset)
 	out.BindingLocked = true
