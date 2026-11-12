@@ -228,7 +228,7 @@ func runPeriodAuthorizationCases(t *testing.T, method string, invoke func(*Servi
 				},
 			})
 			require.NoError(t, err)
-			expectation := &pb.DatasetPeriodExpectation{SpaceId: "space", DatasetId: "dataset", Frequency: tc.frequency, PeriodTime: 123, SeriesHash: "hash", ExpectedCount: 1, DeadlineAt: time.Now().Add(time.Hour).Unix()}
+			expectation := &pb.DatasetPeriodExpectation{SpaceId: "space", DatasetId: "dataset", Frequency: tc.frequency, PeriodTime: 123, SeriesHash: "hash", ExpectedCount: 1}
 			rsp := invoke(svc, &pb.AuthInfo{AppId: tc.appID, AppKey: "caller-key"}, expectation)
 			require.Equal(t, tc.wantCode, rsp.GetCode(), "ret_info=%v", rsp)
 			require.Equal(t, 1, authorizerCalls, "ordinary HMAC authorization must run first")

@@ -114,13 +114,9 @@ func (s *Service) CommitTimeSeriesBatch(ctx context.Context, req *pb.PrimaryComm
 
 // periodExpectation 把请求里的周期期望转成存储层的结构。
 func periodExpectation(in *pb.DatasetPeriodExpectation) pebble.DatasetPeriodExpectation {
-	seriesSnapshot := make([]pebble.DatasetPeriodSeries, len(in.GetSeriesSnapshot()))
-	for index, row := range in.GetSeriesSnapshot() {
-		seriesSnapshot[index] = pebble.DatasetPeriodSeries{SeriesIndex: row.GetSeriesIndex(), SubjectID: row.GetSubjectId(), SeriesTag: row.GetSeriesTag()}
-	}
 	return pebble.DatasetPeriodExpectation{
 		SpaceID: in.GetSpaceId(), DatasetID: in.GetDatasetId(), Frequency: in.GetFrequency(), PeriodTime: in.GetPeriodTime(),
-		SeriesHash: in.GetSeriesHash(), ExpectedCount: in.GetExpectedCount(), DeadlineAt: in.GetDeadlineAt(), SeriesSnapshot: seriesSnapshot,
+		SeriesHash: in.GetSeriesHash(), ExpectedCount: in.GetExpectedCount(),
 	}
 }
 

@@ -192,8 +192,12 @@ func (s *Store) DeleteDatasetRows(ctx context.Context, spaceID, datasetID string
 		}
 		ranges = append(ranges, [2][]byte{prefix, upper})
 	}
-	// 周期账本与完成标记按数据集前缀整段删除；commit 标记在各日桶下删除，重建同名数据集后同一 commit_id 可以重新写入。
-	for _, prefix := range []string{periodDatasetPrefix(spaceID, datasetID), markerDatasetPrefix(spaceID, datasetID)} {
+	// 周期账本、完成标记、序列快照与生效表按数据集前缀整段删除，重建同名数据集后从头登记快照；
+	// commit 标记在各日桶下删除，重建后同一 commit_id 可以重新写入。
+	for _, prefix := range []string{
+		periodDatasetPrefix(spaceID, datasetID), markerDatasetPrefix(spaceID, datasetID),
+		seriesSnapshotPrefix + datasetScope(spaceID, datasetID), seriesEffectivePrefix + datasetScope(spaceID, datasetID),
+	} {
 		lower, upper := []byte(prefix), nextPrefix([]byte(prefix))
 		if err := batch.DeleteRange(lower, upper, s.writeOptions); err != nil {
 			return 0, err

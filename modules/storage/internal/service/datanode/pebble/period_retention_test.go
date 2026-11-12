@@ -164,3 +164,28 @@ func TestPeriodFinalizerRecoversFullBitmapLeftWaiting(t *testing.T) {
 	require.ErrorContains(t, err, "已损坏")
 	require.Len(t, goldenMarkers(t, store, goldenSpace, goldenDataset), 1)
 }
+
+// 删除数据集也删掉序列快照与生效表：同名重建后可以从更早的生效点重新登记，新快照照常提交。
+func TestDeleteDatasetRowsClearsSeriesSnapshots(t *testing.T) {
+	ctx := context.Background()
+	clock := newGoldenClock(goldenPeriod.Add(61 * time.Second))
+	store := newGoldenStore(t, clock)
+	later := goldenPeriod.Add(time.Hour)
+	old := goldenSeries(t, goldenDefaultSeries())
+	oldExp := goldenRegister(t, store, clock, goldenSpace, goldenDataset, goldenFreq, old, later, goldenLateness)
+	_, err := store.DeleteDatasetRows(ctx, goldenSpace, goldenDataset)
+	require.NoError(t, err)
+	_, err = store.loadSeriesSnapshot(goldenSpace, goldenDataset, goldenFreq, oldExp.SeriesHash)
+	var missing SeriesSnapshotMissingError
+	require.ErrorAs(t, err, &missing, "旧快照已删除")
+
+	// 生效表已清空：比旧生效点更早的 goldenPeriod 可以重新登记。
+	fresh := goldenSeries(t, []seriesset.Series{{SubjectID: "SOL-USDT"}})
+	exp := goldenRegister(t, store, clock, goldenSpace, goldenDataset, goldenFreq, fresh, goldenPeriod, goldenLateness)
+	result, err := store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: goldenRow(goldenSpace, goldenDataset, goldenFreq, fresh[0], goldenPeriod, 1)}})
+	require.NoError(t, err)
+	require.Equal(t, "complete", result.Status)
+	markers := goldenMarkers(t, store, goldenSpace, goldenDataset)
+	require.Len(t, markers, 1)
+	require.Equal(t, []string{"SOL-USDT"}, markers[0].payload.GetUniverseSubjectIds())
+}

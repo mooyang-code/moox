@@ -9,12 +9,6 @@ import "common.proto";
 import "rows.proto";
 import "dataset_markers.proto";
 
-message DatasetPeriodSeries {
-  uint32 series_index = 1;
-  string subject_id = 2;
-  string series_tag = 3;
-}
-
 message DatasetPeriodExpectation {
   string space_id = 1;
   string dataset_id = 2;
@@ -22,8 +16,6 @@ message DatasetPeriodExpectation {
   int64 period_time = 4;
   string series_hash = 5;
   uint32 expected_count = 6;
-  int64 deadline_at = 7;
-  repeated DatasetPeriodSeries series_snapshot = 8;
 }
 
 // SeriesSnapshotEntry 是快照中一条序列的身份（标的加 series_tag），Storage 用它重算 series_hash。

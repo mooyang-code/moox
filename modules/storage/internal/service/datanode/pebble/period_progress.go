@@ -32,6 +32,8 @@ const (
 
 	// periodFinalizeMargin 是窗口扫描在“截止时间上限”之外多看的一段，覆盖后台判定偶尔慢一拍的情况。
 	periodFinalizeMargin = time.Hour
+	// periodFullScanTicks 是后台判定每隔多少遍（每遍一秒）扫一次全部记录。
+	periodFullScanTicks = 3600
 )
 
 type DatasetPeriodSeries struct {
@@ -383,8 +385,8 @@ func (s *Store) finalizePeriod(ctx context.Context, key []byte, now time.Time) (
 	return record.Status, err
 }
 
-// startPeriodFinalizer 每秒扫一遍未完成的周期并判定。启动后第一遍扫全部记录（停机期间到期的周期要补判定），
-// 之后每个（数据集、频率）只扫最近一段：等待中的周期截止时间不晚于收盘后 24 小时。
+// startPeriodFinalizer 每秒扫一遍未完成的周期并判定。启动后第一遍和之后每小时一遍扫全部记录（补判定停机期间到期、
+// 或连续判定失败落出窗口的周期），其余每遍每个（数据集、频率）只扫最近一段：等待中的周期截止时间不晚于收盘后 24 小时。
 func (s *Store) startPeriodFinalizer() {
 	if s == nil || s.backgroundCtx == nil {
 		return
@@ -394,18 +396,16 @@ func (s *Store) startPeriodFinalizer() {
 		defer s.maintenanceWG.Done()
 		ticker := time.NewTicker(time.Second)
 		defer ticker.Stop()
-		windowed := false
-		for {
+		for tick := 0; ; tick++ {
 			select {
 			case <-s.backgroundCtx.Done():
 				return
 			case <-ticker.C:
-				if _, err := s.finalizeDuePeriods(s.backgroundCtx, s.periodNow().UTC(), windowed); err != nil {
+				if _, err := s.finalizeDuePeriods(s.backgroundCtx, s.periodNow().UTC(), tick%periodFullScanTicks != 0); err != nil {
 					s.logPeriodFinalizeError(err)
 				} else {
 					s.clearPeriodFinalizeError()
 				}
-				windowed = true
 			}
 		}
 	}()

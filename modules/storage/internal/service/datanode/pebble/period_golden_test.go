@@ -295,11 +295,12 @@ func nilIfEmpty(values []string) []string {
 // 非法提交整体拒绝：同一请求里合法的行也不写入，账本状态与标记都不变。
 func TestGoldenLedgerRejections(t *testing.T) {
 	type rejectCase struct {
-		name    string
-		noSnap  bool   // 不登记快照
-		prepare string // 先把周期推到的状态：""（不建立）、waiting、complete
-		mutate  func(exp *DatasetPeriodExpectation, items []TimeSeriesBatchItem) []TimeSeriesBatchItem
-		wantErr string
+		name      string
+		noSnap    bool   // 不登记快照
+		frequency string // 周期频率，空串取 1m
+		prepare   string // 先把周期推到的状态：""（不建立）、waiting、complete
+		mutate    func(exp *DatasetPeriodExpectation, items []TimeSeriesBatchItem) []TimeSeriesBatchItem
+		wantErr   string
 	}
 	tagged := func(tag string) func(*DatasetPeriodExpectation, []TimeSeriesBatchItem) []TimeSeriesBatchItem {
 		return func(_ *DatasetPeriodExpectation, items []TimeSeriesBatchItem) []TimeSeriesBatchItem {
@@ -347,6 +348,23 @@ func TestGoldenLedgerRejections(t *testing.T) {
 			exp.SeriesHash = "not-the-effective-hash"
 			return items
 		}, wantErr: "conflict"},
+		{name: "空间带空白", prepare: "waiting", mutate: func(_ *DatasetPeriodExpectation, items []TimeSeriesBatchItem) []TimeSeriesBatchItem {
+			items[1].Row.Key.SpaceId = " " + goldenSpace + " "
+			return items
+		}, wantErr: "invalid"},
+		{name: "数据集带空白", prepare: "waiting", mutate: func(_ *DatasetPeriodExpectation, items []TimeSeriesBatchItem) []TimeSeriesBatchItem {
+			items[1].Row.Key.DatasetId = " " + goldenDataset + " "
+			return items
+		}, wantErr: "invalid"},
+		{name: "标签带空白", prepare: "waiting", mutate: tagged(" binance "), wantErr: "invalid"},
+		{name: "频率带空白", prepare: "waiting", mutate: func(_ *DatasetPeriodExpectation, items []TimeSeriesBatchItem) []TimeSeriesBatchItem {
+			items[1].Row.Key.GetTimeSeries().Freq = " 1m "
+			return items
+		}, wantErr: "invalid"},
+		{name: "小时频率的大小写别名", frequency: "1h", prepare: "waiting", mutate: func(_ *DatasetPeriodExpectation, items []TimeSeriesBatchItem) []TimeSeriesBatchItem {
+			items[1].Row.Key.GetTimeSeries().Freq = "1H"
+			return items
+		}, wantErr: "invalid"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -354,18 +372,22 @@ func TestGoldenLedgerRejections(t *testing.T) {
 			clock := newGoldenClock(goldenPeriod.Add(61 * time.Second))
 			store := newGoldenStore(t, clock)
 			series := goldenSeries(t, goldenDefaultSeries())
-			exp := DatasetPeriodExpectation{SpaceID: goldenSpace, DatasetID: goldenDataset, Frequency: goldenFreq, PeriodTime: goldenPeriod.Unix(), SeriesHash: "unregistered", ExpectedCount: 2, AllowedLatenessSeconds: goldenLateness}
+			freq := goldenFreq
+			if tc.frequency != "" {
+				freq = tc.frequency
+			}
+			exp := DatasetPeriodExpectation{SpaceID: goldenSpace, DatasetID: goldenDataset, Frequency: freq, PeriodTime: goldenPeriod.Unix(), SeriesHash: "unregistered", ExpectedCount: 2, AllowedLatenessSeconds: goldenLateness}
 			if !tc.noSnap {
-				exp = goldenRegister(t, store, clock, goldenSpace, goldenDataset, goldenFreq, series, goldenPeriod, goldenLateness)
+				exp = goldenRegister(t, store, clock, goldenSpace, goldenDataset, freq, series, goldenPeriod, goldenLateness)
 			}
 			switch tc.prepare {
 			case "waiting":
-				_, err := store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: goldenRow(goldenSpace, goldenDataset, goldenFreq, series[0], goldenPeriod, 1)}})
+				_, err := store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: goldenRow(goldenSpace, goldenDataset, freq, series[0], goldenPeriod, 1)}})
 				require.NoError(t, err)
 			case "complete":
 				_, err := store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{
-					{SeriesIndex: 0, Row: goldenRow(goldenSpace, goldenDataset, goldenFreq, series[0], goldenPeriod, 1)},
-					{SeriesIndex: 1, Row: goldenRow(goldenSpace, goldenDataset, goldenFreq, series[1], goldenPeriod, 1)},
+					{SeriesIndex: 0, Row: goldenRow(goldenSpace, goldenDataset, freq, series[0], goldenPeriod, 1)},
+					{SeriesIndex: 1, Row: goldenRow(goldenSpace, goldenDataset, freq, series[1], goldenPeriod, 1)},
 				})
 				require.NoError(t, err)
 			}
@@ -374,8 +396,8 @@ func TestGoldenLedgerRejections(t *testing.T) {
 			clock.set(goldenPeriod.Add(62 * time.Second))
 			bad := exp
 			items := []TimeSeriesBatchItem{
-				{SeriesIndex: 0, Row: goldenRow(goldenSpace, goldenDataset, goldenFreq, series[0], goldenPeriod, 9)},
-				{SeriesIndex: 1, Row: goldenRow(goldenSpace, goldenDataset, goldenFreq, series[1], goldenPeriod, 9)},
+				{SeriesIndex: 0, Row: goldenRow(goldenSpace, goldenDataset, freq, series[0], goldenPeriod, 9)},
+				{SeriesIndex: 1, Row: goldenRow(goldenSpace, goldenDataset, freq, series[1], goldenPeriod, 9)},
 			}
 			if tc.mutate != nil {
 				items = tc.mutate(&bad, items)
@@ -383,11 +405,11 @@ func TestGoldenLedgerRejections(t *testing.T) {
 			result, err := store.CommitTimeSeriesBatch(ctx, bad, items)
 			goldenErrorIs(t, err, tc.wantErr)
 			require.Empty(t, result.AcceptedSeriesIndexes)
-			require.Equal(t, tc.prepare, goldenPeriodStatus(t, store, goldenSpace, goldenDataset, goldenFreq, goldenPeriod.Unix()))
+			require.Equal(t, tc.prepare, goldenPeriodStatus(t, store, goldenSpace, goldenDataset, freq, goldenPeriod.Unix()))
 			require.Len(t, goldenMarkers(t, store, goldenSpace, goldenDataset), markersBefore)
 			require.Equal(t, outboxBefore, goldenOutboxCount(t, store))
 			for index := range series {
-				if got, found := goldenStoredClose(t, store, goldenRow(goldenSpace, goldenDataset, goldenFreq, series[index], goldenPeriod, 0).GetKey()); found {
+				if got, found := goldenStoredClose(t, store, goldenRow(goldenSpace, goldenDataset, freq, series[index], goldenPeriod, 0).GetKey()); found {
 					require.Equal(t, 1.0, got, "series %d must keep the prepared value", index)
 				}
 			}
@@ -784,4 +806,46 @@ func TestGoldenDeleteDatasetClearsLedgerMarkersAndCommits(t *testing.T) {
 	require.NoError(t, err)
 	_, err = store.AppendDatasetMarker(ctx, raw)
 	require.NoError(t, err)
+}
+
+// 截止判定与迟到提交并发：两边都看到降级，只发一个标记，迟到的行不写入。
+func TestGoldenLedgerDeadlineRacesLateCommit(t *testing.T) {
+	for round := 0; round < 20; round++ {
+		ctx := context.Background()
+		clock := newGoldenClock(goldenPeriod.Add(61 * time.Second))
+		store := newGoldenStore(t, clock)
+		series := goldenSeries(t, goldenDefaultSeries())
+		exp := goldenRegister(t, store, clock, goldenSpace, goldenDataset, goldenFreq, series, goldenPeriod, goldenLateness)
+		_, err := store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 0, Row: goldenRow(goldenSpace, goldenDataset, goldenFreq, series[0], goldenPeriod, 1)}})
+		require.NoError(t, err)
+		clock.set(goldenPeriod.Add(goldenDeadline + time.Second))
+
+		var wg sync.WaitGroup
+		var commitResult DatasetPeriodResult
+		var commitErr, finalizeErr error
+		start := make(chan struct{})
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			commitResult, commitErr = store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: 1, Row: goldenRow(goldenSpace, goldenDataset, goldenFreq, series[1], goldenPeriod, 1)}})
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			finalizeErr = goldenFinalize(t, store, clock.now())
+		}()
+		close(start)
+		wg.Wait()
+		require.NoError(t, commitErr)
+		require.NoError(t, finalizeErr)
+		require.Equal(t, "degraded", commitResult.Status)
+		require.Empty(t, commitResult.AcceptedSeriesIndexes)
+		require.Equal(t, "degraded", goldenPeriodStatus(t, store, goldenSpace, goldenDataset, goldenFreq, goldenPeriod.Unix()))
+		markers := goldenMarkers(t, store, goldenSpace, goldenDataset)
+		require.Len(t, markers, 1)
+		require.Equal(t, []string{"ETH-USDT"}, markers[0].payload.GetFailedSubjects())
+		_, found := goldenStoredClose(t, store, goldenRow(goldenSpace, goldenDataset, goldenFreq, series[1], goldenPeriod, 0).GetKey())
+		require.False(t, found, "迟到的行不写入")
+	}
 }

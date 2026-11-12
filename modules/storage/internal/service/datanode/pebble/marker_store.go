@@ -105,8 +105,9 @@ func (s *Store) AppendDatasetMarker(ctx context.Context, raw []byte) (string, er
 }
 
 // stageDatasetMarkerLocked 是两个标记写入点（写入方上报的 AppendDatasetMarker、账本判定的 finalizePeriodLocked）
-// 共用的写入：把标记记录（key 为 nil 时不存）与一条 Outbox 条目放进调用方的 batch。key 上已有内容相同的标记时
-// 什么都不写、返回 written=false；内容不同返回 ConflictError。
+// 共用的写入：把标记记录与一条 Outbox 条目放进调用方的 batch。key 为 nil 表示同步点，不存标记记录、只进 Outbox。
+// key 上已有内容相同的标记时什么都不写、返回 written=false；内容不同返回 ConflictError。
+// 它从数据库（不是 batch）读下一个 Outbox 编号，所以传入的 batch 里不能已有 Outbox 或变更日志条目，否则编号会撞车。
 // 调用方持有 outboxMu，负责提交 batch，并在提交成功且 written 时调 noteOutboxCommitted。
 func (s *Store) stageDatasetMarkerLocked(batch *cpebble.Batch, key []byte, message *eventpb.EventMessage, raw []byte) (bool, error) {
 	if key != nil {
