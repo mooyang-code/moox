@@ -175,7 +175,11 @@ func (r *Relay) report(err error) {
 		r.options.ErrorReporter(err)
 		return
 	}
-	// 每 100 毫秒重试一次，逐次失败只按警告记；积压由 moox_storage_outbox_oldest_age_seconds 的检查告警。
+	// 每 100 毫秒重试一次：偶发失败按警告记，连续失败到需要重连时升为错误；积压由 moox_storage_outbox_oldest_age_seconds 的检查告警。
+	if r.publishFailures >= r.options.ReconnectAfterFailures {
+		log.Errorf("storage outbox relay flush failed %d times in a row: %v", r.publishFailures, err)
+		return
+	}
 	log.Warnf("storage outbox relay flush failed: %v", err)
 }
 

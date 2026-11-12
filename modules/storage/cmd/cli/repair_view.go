@@ -377,29 +377,29 @@ func findLifecycleRoot(candidate string) string {
 	}
 }
 
-// nativeComponentDirs 返回原生部署里 storage-primary、storage-node、storage-view 三个组件的目录（都存在才算原生布局）。
-func nativeComponentDirs(packageRoot string) (primary, node, view string, ok bool) {
+// nativeComponentDirs 返回原生部署里 storage-primary、storage-view 两个组件的目录（都存在才算原生布局）。
+func nativeComponentDirs(packageRoot string) (primary, view string, ok bool) {
 	root := strings.TrimSpace(packageRoot)
 	if root == "" {
-		return "", "", "", false
+		return "", "", false
 	}
-	dirs := [3]string{filepath.Join(root, "storage-primary"), filepath.Join(root, "storage-node"), filepath.Join(root, "storage-view")}
+	dirs := [2]string{filepath.Join(root, "storage-primary"), filepath.Join(root, "storage-view")}
 	for _, dir := range dirs {
 		if info, err := os.Stat(dir); err != nil || !info.IsDir() {
-			return "", "", "", false
+			return "", "", false
 		}
 	}
-	return dirs[0], dirs[1], dirs[2], true
+	return dirs[0], dirs[1], true
 }
 
 // resolveRepairStoragePaths 把配置里的相对数据路径解析成绝对路径。
 //
-// 原生部署里三个角色各有目录与配置（<包根>/<组件>/config/storage.yaml），配置里的数据路径（./var/storage/...）
-// 相对于所属组件的目录，而不是相对于被读取的那一份配置：元数据库在 storage-primary，Pebble 在 storage-node，
+// 原生部署里两个角色各有目录与配置（<包根>/<组件>/config/storage.yaml），配置里的数据路径（./var/storage/...）
+// 相对于所属组件的目录，而不是相对于被读取的那一份配置：元数据库与 Pebble 在 storage-primary，
 // View 索引在 storage-view。只按被读取配置所在的组件目录解析，会把 Pebble、索引指到不存在的目录，
-// “重置全部数据”删不到真正的数据却照样清空事件流。没有这三个组件目录时（单目录布局）按配置所在目录解析。
+// “重置全部数据”删不到真正的数据却照样清空事件流。没有这两个组件目录时（单目录布局）按配置所在目录解析。
 func resolveRepairStoragePaths(storage storageconfig.StorageConfig, packageRoot, configPath string) storageconfig.StorageConfig {
-	if primary, node, view, ok := nativeComponentDirs(packageRoot); ok {
+	if primary, view, ok := nativeComponentDirs(packageRoot); ok {
 		join := func(dir, path string) string {
 			if strings.TrimSpace(path) == "" || filepath.IsAbs(path) {
 				return path
@@ -408,7 +408,7 @@ func resolveRepairStoragePaths(storage storageconfig.StorageConfig, packageRoot,
 		}
 		storage.Root = join(primary, storage.Root)
 		storage.Metadata.Path = join(primary, storage.Metadata.Path)
-		storage.Devices.PebblePath = join(node, storage.Devices.PebblePath)
+		storage.Devices.PebblePath = join(primary, storage.Devices.PebblePath)
 		storage.Devices.ViewIndexRoot = join(view, storage.Devices.ViewIndexRoot)
 		return storage
 	}

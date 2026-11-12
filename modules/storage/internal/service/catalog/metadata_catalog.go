@@ -493,8 +493,9 @@ func (s *Service) UpsertDatasetColumn(ctx context.Context, req *pb.UpsertDataset
 	if err != nil {
 		return &pb.UpsertDatasetColumnRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
-	if err := s.refreshMetadataCache(ctx); err != nil {
-		return &pb.UpsertDatasetColumnRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	// 写入方补完列就会写行：返回前把列发布到缓存，否则首次写入可能因未登记的列被拒。
+	if err := s.refreshMetadataCacheSynchronously(ctx, "UpsertDatasetColumn"); err != nil {
+		return &pb.UpsertDatasetColumnRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("列已写入，缓存尚未发布，请重试")), Column: created}, nil
 	}
 	return &pb.UpsertDatasetColumnRsp{RetInfo: retinfo.Success("success"), Column: created}, nil
 }

@@ -72,7 +72,7 @@ type gatewayEventBusAdmin struct {
 // 原生部署里网关配置在 <包根>/storage-view/config/storage.yaml，否则就是 --storage-conf 指定的那份。
 func openGatewayEventBusAdmin(storageConf, packageRoot string) (eventBusAdmin, error) {
 	configPath := storageConf
-	if _, _, view, ok := nativeComponentDirs(packageRoot); ok {
+	if _, view, ok := nativeComponentDirs(packageRoot); ok {
 		configPath = filepath.Join(view, "config", "storage.yaml")
 	}
 	if strings.TrimSpace(configPath) == "" {

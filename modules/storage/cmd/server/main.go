@@ -98,10 +98,10 @@ func runPrimaryRole() error {
 	store, err := pebble.Open(pebble.Options{
 		NodeID: pebbleStoreID, Path: filepath.Join(root, "pebble", pebbleStoreID),
 		MaxEventBytes: eventConfig.MaxPayloadBytes(), BucketDuration: cleanupBucketDuration(),
-		// 写入拿到数据集读锁后按最新的元数据缓存确认数据集仍在，见 Metadata.DeleteDataset。
+		// 写入拿到数据集读锁后按最新的元数据缓存确认数据集仍在（按索引点查），见 Metadata.DeleteDataset。
 		DatasetExists: func(spaceID, datasetID string) bool {
-			_, ok := cached.RequestSnapshot().GetDataset(spaceID, datasetID)
-			return ok
+			_, err := cached.GetDataset(trpc.BackgroundContext(), spaceID, datasetID)
+			return err == nil
 		},
 	})
 	if err != nil {
@@ -148,8 +148,11 @@ func runPrimaryRole() error {
 	defer stopBackground()
 	go runCleanupLoop(backgroundCtx, datasetCleanup{reader: cached, store: store, retention: policy.Retention, metrics: cleanupMetrics}, time.Hour)
 	go runViewPeriodCleanupLoop(backgroundCtx, meta, time.Hour, storageViewPeriodRetention())
-	// EventBus 不可用时主服务照常启动：转发协程在后台连接，连上后再转发 Outbox 里积压的事件。
-	stopRelay := startOutboxRelay(backgroundCtx, store, eventConfig)
+	// EventBus 不可用时主服务照常启动：转发协程照常运行，连上 EventBus 后再转发 Outbox 里积压的事件。
+	stopRelay, err := storageoutbox.StartWithEventBus(backgroundCtx, store, eventConfig)
+	if err != nil {
+		return err
+	}
 	defer stopRelay()
 	s := trpc.NewServer()
 	// 要在 NewServer 之后装：NewServer 读配置时会换掉默认的日志对象。
@@ -171,33 +174,6 @@ func runPrimaryRole() error {
 		return err
 	}
 	return s.Serve()
-}
-
-// startOutboxRelay 在后台连接 EventBus，连上后启动 Outbox 转发；连不上就退避重试，不影响主服务提供读写。
-// 返回的函数停止转发并等待协程退出。
-func startOutboxRelay(ctx context.Context, store *pebble.Store, config jetstream.Config) func() {
-	ctx, cancel := context.WithCancel(ctx)
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		client, err := connectEventBus(ctx, config, "storage primary", func(error) bool { return true })
-		if err != nil {
-			return
-		}
-		defer client.Close()
-		relay, err := storageoutbox.NewRelay(store, storageoutbox.NewJetStreamPublisher(client), storageoutbox.RelayOptions{})
-		if err != nil {
-			tlog.Errorf("storage primary 启动 Outbox 转发失败: %v", err)
-			return
-		}
-		relay.Start(ctx)
-		<-ctx.Done()
-		relay.Close()
-	}()
-	return func() {
-		cancel()
-		<-done
-	}
 }
 
 type datasetReader interface {
@@ -453,7 +429,7 @@ func runViewRole() error {
 	if err != nil {
 		return err
 	}
-	eventClient, err := connectEventBus(trpc.BackgroundContext(), eventConfig, "storage view", isTransientStorageViewEventBusError)
+	eventClient, err := connectStorageViewEventBus(trpc.BackgroundContext(), eventConfig)
 	if err != nil {
 		return err
 	}
@@ -499,20 +475,19 @@ func runViewRole() error {
 	return <-serveErr
 }
 
-// connectEventBus 连上 EventBus 为止，失败时按退避重试；retryable 判定为不可重试的错误直接返回，ctx 取消时返回 ctx 的错误。
-// View 只重试临时故障：看门狗负责重启崩溃的进程，不该在公网 EventBus 重连期间反复重启一个健康的 View；
-// 主服务对所有错误都重试，EventBus 出问题不影响元数据与读写。连上之后的断线由各自的重连逻辑处理。
-func connectEventBus(ctx context.Context, config jetstream.Config, label string, retryable func(error) bool) (*jetstream.Client, error) {
+// connectStorageViewEventBus 连上 EventBus 为止：临时故障按退避重试，其他错误直接返回。看门狗负责重启崩溃的进程，
+// 不该在公网 EventBus 重连期间反复重启一个健康的 View；连上之后的断线由消费者的重连逻辑处理。
+func connectStorageViewEventBus(ctx context.Context, config jetstream.Config) (*jetstream.Client, error) {
 	backoff := time.Second
 	for {
 		client, err := jetstream.Connect(ctx, config)
 		if err == nil {
 			return client, nil
 		}
-		if !retryable(err) {
+		if !isTransientStorageViewEventBusError(err) {
 			return nil, err
 		}
-		tlog.Warnf("%s EventBus unavailable; retrying in %s: %v", label, backoff, err)
+		tlog.Warnf("storage view EventBus unavailable; retrying in %s: %v", backoff, err)
 		timer := time.NewTimer(backoff)
 		select {
 		case <-ctx.Done():

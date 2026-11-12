@@ -10,10 +10,8 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/observability"
-	storagepebble "github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
-	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/storagepolicy"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -66,31 +64,6 @@ func TestDatasetCleanupUsesPolicyRetentionBySpaceAndFrequency(t *testing.T) {
 		if got := cleaner.cutoffs[key]; !got.Equal(cutoff) {
 			t.Fatalf("%s cutoff = %s, want %s", key, got, cutoff)
 		}
-	}
-}
-
-// EventBus 连不上时 Outbox 转发在后台重试，不挡住主服务启动，也能随时停下。
-func TestOutboxRelayStartsWithoutEventBus(t *testing.T) {
-	store, err := storagepebble.Open(storagepebble.Options{NodeID: pebbleStoreID, Path: filepath.Join(t.TempDir(), "pebble")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	started := time.Now()
-	stop := startOutboxRelay(context.Background(), store, jetstream.Config{URLs: []string{"nats://127.0.0.1:1"}, Name: "storage-primary-test"})
-	if elapsed := time.Since(started); elapsed > time.Second {
-		t.Fatalf("startOutboxRelay blocked for %s", elapsed)
-	}
-	time.Sleep(200 * time.Millisecond)
-	stopped := make(chan struct{})
-	go func() {
-		stop()
-		close(stopped)
-	}()
-	select {
-	case <-stopped:
-	case <-time.After(10 * time.Second):
-		t.Fatal("outbox relay did not stop while EventBus was unavailable")
 	}
 }
 

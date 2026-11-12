@@ -83,11 +83,11 @@ printf '{"components":[{"id":"storage-view","state":"stopped"}]}'`)
 	require.ErrorContains(t, ensureStorageViewStopped(root), "indeterminate")
 }
 
-// 原生部署里三个角色各有目录，配置里的数据路径相对于所属组件：元数据库在 storage-primary、Pebble 在 storage-node、
+// 原生部署里两个角色各有目录，配置里的数据路径相对于所属组件：元数据库与 Pebble 在 storage-primary、
 // View 索引在 storage-view——不管读的是哪一份配置。
 func TestNativeLayoutResolvesEachDataPathAgainstItsOwningComponent(t *testing.T) {
 	root := t.TempDir()
-	for _, dir := range []string{"storage-primary", "storage-node", "storage-view"} {
+	for _, dir := range []string{"storage-primary", "storage-view"} {
 		require.NoError(t, os.MkdirAll(filepath.Join(root, dir, "config"), 0o755))
 	}
 	storage := storageconfig.StorageConfig{Root: "./var/storage"}
@@ -95,10 +95,10 @@ func TestNativeLayoutResolvesEachDataPathAgainstItsOwningComponent(t *testing.T)
 	storage.Devices.PebblePath = "./var/storage/pebble"
 	storage.Devices.ViewIndexRoot = "./var/storage/view-indexes"
 
-	for _, component := range []string{"storage-view", "storage-primary", "storage-node"} {
+	for _, component := range []string{"storage-view", "storage-primary"} {
 		got := resolveRepairStoragePaths(storage, root, filepath.Join(root, component, "config", "storage.yaml"))
 		require.Equal(t, filepath.Join(root, "storage-primary", "var/storage/metadata/storage_metadata.db"), got.Metadata.Path, "读 %s 的配置", component)
-		require.Equal(t, filepath.Join(root, "storage-node", "var/storage/pebble"), got.Devices.PebblePath)
+		require.Equal(t, filepath.Join(root, "storage-primary", "var/storage/pebble"), got.Devices.PebblePath)
 		require.Equal(t, filepath.Join(root, "storage-view", "var/storage/view-indexes"), got.Devices.ViewIndexRoot)
 	}
 
@@ -106,7 +106,7 @@ func TestNativeLayoutResolvesEachDataPathAgainstItsOwningComponent(t *testing.T)
 	absolute.Devices.PebblePath = "/data/pebble"
 	require.Equal(t, "/data/pebble", resolveRepairStoragePaths(absolute, root, filepath.Join(root, "storage-view", "config", "storage.yaml")).Devices.PebblePath, "绝对路径不改")
 
-	// 没有三个组件目录（单目录布局）：沿用按配置所在目录解析。
+	// 没有两个组件目录（单目录布局）：沿用按配置所在目录解析。
 	single := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(single, "config"), 0o755))
 	got := resolveRepairStoragePaths(storage, single, filepath.Join(single, "config", "storage.yaml"))

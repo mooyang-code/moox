@@ -41,8 +41,8 @@ func newPrimaryProcess(t *testing.T, ctx context.Context, meta coremetadata.Stor
 	store, err := pebble.Open(pebble.Options{
 		NodeID: "storage-node-0", Path: filepath.Join(t.TempDir(), "pebble"),
 		DatasetExists: func(spaceID, datasetID string) bool {
-			_, ok := cache.RequestSnapshot().GetDataset(spaceID, datasetID)
-			return ok
+			_, err := cache.GetDataset(context.Background(), spaceID, datasetID)
+			return err == nil
 		},
 	})
 	if err != nil {
