@@ -1,6 +1,6 @@
-# 因子库（表达式写法）：A 股日线因子，用到日线附加字段（后复权因子 adj_factor、fin_ 开头的财务字段）。
-# 只能用在带这些字段的日线数据集上（内置任务“A 股日线（复权、行业、财务）”的结果），字段口径见 docs/模块/采集.md 第 4a、4b 节。
-# 格式同 xbx.yaml。分类：动量类（momentum）、基本面类（fundamental）。
+# 因子库（表达式写法）：A 股日线因子，用到日线附加字段（后复权因子 adj_factor、fin_ 开头的财务字段、换手率 turnover_rate）。
+# 只能用在带这些字段的日线数据集上，字段口径见 docs/模块/采集.md 第 4a、4b 节。
+# 格式同 xbx.yaml。分类：动量类（momentum）、基本面类（fundamental）、筹码类（chip）。
 - factor_id: mom_adj
   name: 复权涨幅
   category_id: momentum
@@ -20,3 +20,44 @@
   # 金融类公司缺的科目、缺上年数据的滚动值为空时，因子值也为空。
   spec: |
     output: fin_net_profit_parent_ttm / fin_equity_parent
+
+# 筹码类（chip）：用最近 window 个交易日的开高低收与换手率推算持仓成本的分布，算法见 docs/模块/因子.md 第 6 节的“筹码分布”。
+# 需要源数据集带换手率 turnover_rate（百分比）。价格先乘 adj_factor 换成后复权价，除权前后的成本才可比；
+# 某天没有换手率时按当天没有换手处理（fill_nan），否则缺一天会让之后 window 天全部为空。
+- factor_id: chip_profit_ratio
+  name: 筹码获利比例
+  category_id: chip
+  category_name: 筹码类
+  # 持仓成本不高于当日收盘价的筹码占比，0～1。
+  spec: |
+    params:
+      window: {type: int, min: 20, max: 500, default: 210}
+    let:
+      turnover: fill_nan(turnover_rate, 0)
+    output: chip_profit(open * adj_factor, high * adj_factor, low * adj_factor, close * adj_factor, turnover, window)
+
+- factor_id: chip_avg_cost
+  name: 筹码平均成本
+  category_id: chip
+  category_name: 筹码类
+  # 筹码累计到一半时的价格，除以当日 adj_factor 后可以直接和当日不复权收盘价比（除权日与收盘价同比例跳变）。
+  spec: |
+    params:
+      window: {type: int, min: 20, max: 500, default: 210}
+    let:
+      turnover: fill_nan(turnover_rate, 0)
+    output: chip_cost(open * adj_factor, high * adj_factor, low * adj_factor, close * adj_factor, turnover, window, 0.5) / adj_factor
+
+- factor_id: chip_concentration
+  name: 筹码集中度（90%）
+  category_id: chip
+  category_name: 筹码类
+  # 90% 筹码所在价格区间的相对宽度：(高位成本 − 低位成本) / (高位成本 + 低位成本)，越小越集中。
+  spec: |
+    params:
+      window: {type: int, min: 20, max: 500, default: 210}
+    let:
+      turnover: fill_nan(turnover_rate, 0)
+      upper: chip_cost(open * adj_factor, high * adj_factor, low * adj_factor, close * adj_factor, turnover, window, 0.95)
+      lower: chip_cost(open * adj_factor, high * adj_factor, low * adj_factor, close * adj_factor, turnover, window, 0.05)
+    output: (upper - lower) / (upper + lower)

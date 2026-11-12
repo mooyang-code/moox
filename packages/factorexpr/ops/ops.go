@@ -134,6 +134,12 @@ var rolling = map[string]Rolling{
 	"ts_median": func(ints []int, _ []float64) SeriesKernel {
 		return sortedWindow(ints[0], median)
 	},
+	"chip_profit": func(ints []int, _ []float64) SeriesKernel {
+		return chipKernel(ints[0], chipProfit)
+	},
+	"chip_cost": func(ints []int, floats []float64) SeriesKernel {
+		return chipKernel(ints[0], chipCost(floats[0]))
+	},
 	"ema": func(ints []int, _ []float64) SeriesKernel {
 		alpha := factorexpr.EMAAlpha(ints[0])
 		if ints[1] > 0 {

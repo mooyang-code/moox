@@ -104,7 +104,7 @@ rules:
 
 ### 函数清单
 
-以 `factor-expr.sh functions` 的输出为准；下表由 `"$SKILL_ROOT/scripts/factor-expr.sh" functions --markdown` 生成（2026-11-08），
+以 `factor-expr.sh functions` 的输出为准；下表由 `"$SKILL_ROOT/scripts/factor-expr.sh" functions --markdown` 生成（2026-11-11），
 函数有增减时重新生成整张表，不要手改。
 
 | 类别 | 函数 | 参数 | 回看 | 说明 |
@@ -125,6 +125,8 @@ rules:
 | 逐元素 | `signed_power` | x、e | 各参数回看的最大值 | sign(x) · \|x\|^e |
 | 逐元素 | `sqrt` | x | 各参数回看的最大值 | 平方根；x < 0 时为 NaN |
 | 逐元素 | `where` | c（布尔）、a、b | 各参数回看的最大值 | 条件选择：c 为真取 a，为假取 b；c 为 NaN 时为 NaN。等价于 c ? a : b |
+| 时序 | `chip_cost` | open（序列）、high（序列）、low（序列）、close（序列）、turnover（序列）、n（常量 20～500）、q（常量 0.01～0.99） | 各参数回看的最大值+n−1 | 筹码分布的分位成本价：从低价往上累计到全部筹码的 q 时的价格，q=0.5 是平均成本。参数与口径同 chip_profit，结果与输入价格同一复权口径 |
+| 时序 | `chip_profit` | open（序列）、high（序列）、low（序列）、close（序列）、turnover（序列）、n（常量 20～500） | 各参数回看的最大值+n−1 | 筹码分布的获利比例（0～1）：最近 n 根推算出的持仓里，成本不高于当根收盘价的占比。turnover 是换手率（百分比）；价格用复权价；窗口内价格没有波动或全程没有换手时为 NaN |
 | 时序 | `delay` | x（序列）、k（常量 1～100000） | L(x)+k | k 期前的值 |
 | 时序 | `delta` | x（序列）、k（常量 1～100000） | L(x)+k | x − delay(x, k) |
 | 时序 | `ema` | x（序列）、n（常量 1～100000）、k（常量 0～100000，可选，默认 0） | L(x)+K−1，K 为 k；k 不写或为 0 时为让起点权重衰减到 1e−9 以下的根数 | 指数移动平均，α = 2/(n+1)，截断到最近 K 根（ewm(span=n, adjust=False)），窗口里最老的一根收盘价作为递推的初始值；可选的 k 显式指定预热总根数 K（含起点）：ema(close, 20, 50000) 是 EMA20 用 5 万根预热；k 不写或为 0 时由 n 推出；n 远大于 k 时起点权重不可忽略，值是近似的 |

@@ -35,6 +35,8 @@ func TestLookbackRules(t *testing.T) {
 		{`ts_mean(close, 20) - ts_mean(close, 5)`, 20},
 		{`ts_corr(close, ts_mean(volume, 10), 5)`, 14},
 		{`ts_quantile(close, 30, 0.5)`, 30},
+		{`chip_profit(open, high, low, close, volume, 120)`, 120},
+		{`chip_cost(open, high * 2, low, delay(close, 3), volume, 210, 0.5)`, 213},
 		{`ema(close, 20)`, 208},
 		{`ema(close, 50000, 50000)`, 50000},
 		{`ema(close, 20, 0)`, 208},
