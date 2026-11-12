@@ -1,0 +1,253 @@
+== 01 默认地址全部成功
+req push2.eastmoney.com pn=1 try=1 -> ok
+req push2.eastmoney.com pn=2 try=1 -> ok
+req push2.eastmoney.com pn=3 try=1 -> ok
+sleeps []
+rows [A1 A2 B1 B2 C1 C2]
+result {Total:6 Pages:3 Base:https://push2.eastmoney.com}
+err class=none msg=<nil>
+
+== 02 指定主地址全部成功
+req push2.eastmoney.com pn=1 try=1 -> ok
+req push2.eastmoney.com pn=2 try=1 -> ok
+req push2.eastmoney.com pn=3 try=1 -> ok
+sleeps []
+rows [A1 A2 B1 B2 C1 C2]
+result {Total:6 Pages:3 Base:https://push2.eastmoney.com}
+err class=none msg=<nil>
+
+== 03 push2 首页被断开后回退并固定在备用地址
+req push2.eastmoney.com pn=1 try=1 -> reset
+req push2test.eastmoney.com pn=1 try=1 -> ok
+req push2test.eastmoney.com pn=2 try=1 -> ok
+req push2test.eastmoney.com pn=3 try=1 -> ok
+sleeps []
+rows [A1 A2 B1 B2 C1 C2]
+result {Total:6 Pages:3 Base:https://push2test.eastmoney.com}
+err class=none msg=<nil>
+
+== 04 push2 返回 502 时回退
+req push2.eastmoney.com pn=1 try=1 -> s502
+req push2test.eastmoney.com pn=1 try=1 -> ok
+req push2test.eastmoney.com pn=2 try=1 -> ok
+req push2test.eastmoney.com pn=3 try=1 -> ok
+sleeps []
+rows [A1 A2 B1 B2 C1 C2]
+result {Total:6 Pages:3 Base:https://push2test.eastmoney.com}
+err class=none msg=<nil>
+
+== 05 push2 返回 500 时回退
+req push2.eastmoney.com pn=1 try=1 -> s500
+req push2test.eastmoney.com pn=1 try=1 -> ok
+req push2test.eastmoney.com pn=2 try=1 -> ok
+req push2test.eastmoney.com pn=3 try=1 -> ok
+sleeps []
+rows [A1 A2 B1 B2 C1 C2]
+result {Total:6 Pages:3 Base:https://push2test.eastmoney.com}
+err class=none msg=<nil>
+
+== 06 push2 返回 429 不回退
+req push2.eastmoney.com pn=1 try=1 -> s429
+sleeps []
+rows []
+result {Total:0 Pages:0 Base:}
+err class=ratelimited msg=cnstock: 上游限流
+
+== 07 push2 返回 403 不回退
+req push2.eastmoney.com pn=1 try=1 -> s403
+sleeps []
+rows []
+result {Total:0 Pages:0 Base:}
+err class=httpstatus+status=403 msg=cnstock: 上游返回错误状态码: status=403
+
+== 08 push2 返回 404 不回退
+req push2.eastmoney.com pn=1 try=1 -> s404
+sleeps []
+rows []
+result {Total:0 Pages:0 Base:}
+err class=httpstatus+status=404 msg=cnstock: 上游返回错误状态码: status=404
+
+== 09 两个地址都被断开
+req push2.eastmoney.com pn=1 try=1 -> reset
+req push2test.eastmoney.com pn=1 try=1 -> reset
+sleeps []
+rows []
+result {Total:0 Pages:0 Base:}
+err class=timeout msg=cnstock: 上游请求超时或连接失败: Get "https://push2test.eastmoney.com/api/qt/clist/get?fid=f12&fields=f12%2Cf13%2Cf14%2Cf115%2Cf152%2Cf103%2Cf128%2Cf129&fs=&pn=1&pz=2": read: connection reset by peer
+
+== 10 备用地址 429
+req push2.eastmoney.com pn=1 try=1 -> reset
+req push2test.eastmoney.com pn=1 try=1 -> s429
+sleeps []
+rows []
+result {Total:0 Pages:0 Base:}
+err class=ratelimited msg=cnstock: 上游限流
+
+== 11 从备用地址起步
+req push2test.eastmoney.com pn=1 try=1 -> ok
+req push2test.eastmoney.com pn=2 try=1 -> ok
+req push2test.eastmoney.com pn=3 try=1 -> ok
+sleeps []
+rows [A1 A2 B1 B2 C1 C2]
+result {Total:6 Pages:3 Base:https://push2test.eastmoney.com}
+err class=none msg=<nil>
+
+== 12 从备用地址起步第二页失败不重试
+req push2test.eastmoney.com pn=1 try=1 -> ok
+req push2test.eastmoney.com pn=2 try=1 -> s502
+sleeps []
+rows [A1 A2]
+result {Total:0 Pages:0 Base:}
+err class=httpstatus+status=502 msg=cnstock: 上游返回错误状态码: status=502
+
+== 13 第二页失败后重试成功
+req push2.eastmoney.com pn=1 try=1 -> ok
+req push2.eastmoney.com pn=2 try=1 -> reset
+req push2.eastmoney.com pn=2 try=2 -> ok
+req push2.eastmoney.com pn=3 try=1 -> ok
+sleeps [10ms]
+rows [A1 A2 B1 B2 C1 C2]
+result {Total:6 Pages:3 Base:https://push2.eastmoney.com}
+err class=none msg=<nil>
+
+== 14 第二页重试用完
+req push2.eastmoney.com pn=1 try=1 -> ok
+req push2.eastmoney.com pn=2 try=1 -> s502
+req push2.eastmoney.com pn=2 try=2 -> s502
+req push2.eastmoney.com pn=2 try=3 -> s502
+sleeps [10ms 20ms]
+rows [A1 A2]
+result {Total:0 Pages:0 Base:}
+err class=httpstatus+status=502 msg=clist 第 2 页重试 2 次后仍失败：cnstock: 上游返回错误状态码: status=502
+
+== 15 重试期间遇到 429 立即失败
+req push2.eastmoney.com pn=1 try=1 -> ok
+req push2.eastmoney.com pn=2 try=1 -> s502
+req push2.eastmoney.com pn=2 try=2 -> s429
+sleeps [1s]
+rows [A1 A2]
+result {Total:0 Pages:0 Base:}
+err class=ratelimited msg=cnstock: 上游限流
+
+== 16 负数重试按零处理
+req push2.eastmoney.com pn=1 try=1 -> ok
+req push2.eastmoney.com pn=2 try=1 -> s502
+sleeps []
+rows [A1 A2]
+result {Total:0 Pages:0 Base:}
+err class=httpstatus+status=502 msg=cnstock: 上游返回错误状态码: status=502
+
+== 17 页间隔
+req push2.eastmoney.com pn=1 try=1 -> ok
+req push2.eastmoney.com pn=2 try=1 -> ok
+req push2.eastmoney.com pn=3 try=1 -> ok
+sleeps [7ms 7ms]
+rows [A1 A2 B1 B2 C1 C2]
+result {Total:6 Pages:3 Base:https://push2.eastmoney.com}
+err class=none msg=<nil>
+
+== 18 页间隔加重试
+req push2.eastmoney.com pn=1 try=1 -> ok
+req push2.eastmoney.com pn=2 try=1 -> ok
+req push2.eastmoney.com pn=3 try=1 -> reset
+req push2.eastmoney.com pn=3 try=2 -> ok
+sleeps [5ms 5ms 3ms]
+rows [A1 A2 B1 B2 C1 C2]
+result {Total:6 Pages:3 Base:https://push2.eastmoney.com}
+err class=none msg=<nil>
+
+== 19 页数上限
+req push2.eastmoney.com pn=1 try=1 -> ok
+req push2.eastmoney.com pn=2 try=1 -> ok
+sleeps []
+rows [A1 A2 B1 B2]
+result {Total:0 Pages:0 Base:}
+err class=protocol msg=cnstock: 上游响应格式不对: eastmoney instrument pagination exceeded 2 pages
+
+== 20 响应不是 JSON
+req push2.eastmoney.com pn=1 try=1 -> ok
+req push2.eastmoney.com pn=2 try=1 -> badjson
+sleeps []
+rows [A1 A2]
+result {Total:0 Pages:0 Base:}
+err class=protocol msg=cnstock: 上游响应格式不对: invalid character 'n' looking for beginning of object key string
+
+== 21 响应缺 data
+req push2.eastmoney.com pn=1 try=1 -> nodata
+sleeps []
+rows []
+result {Total:0 Pages:0 Base:}
+err class=protocol msg=cnstock: 上游响应格式不对: eastmoney instrument payload missing data
+
+== 22 总数前后不一致
+req push2.eastmoney.com pn=1 try=1 -> ok
+req push2.eastmoney.com pn=2 try=1 -> mismatch
+sleeps []
+rows [A1 A2]
+result {Total:0 Pages:0 Base:}
+err class=protocol msg=cnstock: 上游响应格式不对: eastmoney instrument total changed from 6 to 9 on page 2
+
+== 23 首页为空
+req push2.eastmoney.com pn=1 try=1 -> empty
+sleeps []
+rows []
+result {Total:0 Pages:0 Base:}
+err class=protocol msg=cnstock: 上游响应格式不对: eastmoney instrument total 6 does not match 0 items on terminal page 1
+
+== 24 visit 返回错误立即停止
+req push2.eastmoney.com pn=1 try=1 -> ok
+req push2.eastmoney.com pn=2 try=1 -> ok
+sleeps []
+rows [A1 A2 B1]
+result {Total:0 Pages:0 Base:}
+err class=other msg=visit 拒绝
+
+== 25 请求中取消 ctx 且有重试
+req push2.eastmoney.com pn=1 try=1 -> ok
+req push2.eastmoney.com pn=2 try=1 -> cancel
+sleeps []
+rows [A1 A2]
+result {Total:0 Pages:0 Base:}
+err class=canceled msg=读 clist 第 2 页时已取消（cnstock: 上游请求超时或连接失败: Get "https://push2.eastmoney.com/api/qt/clist/get?fid=f12&fields=f12%2Cf13%2Cf14%2Cf115%2Cf152%2Cf103%2Cf128%2Cf129&fs=&pn=2&pz=2": context canceled）：context canceled
+
+== 26 请求中取消 ctx 且无重试
+req push2.eastmoney.com pn=1 try=1 -> ok
+req push2.eastmoney.com pn=2 try=1 -> cancel
+sleeps []
+rows [A1 A2]
+result {Total:0 Pages:0 Base:}
+err class=timeout msg=cnstock: 上游请求超时或连接失败: Get "https://push2.eastmoney.com/api/qt/clist/get?fid=f12&fields=f12%2Cf13%2Cf14%2Cf115%2Cf152%2Cf103%2Cf128%2Cf129&fs=&pn=2&pz=2": context canceled
+
+== 27 自定义地址不回退
+req example.test pn=1 try=1 -> ok
+req example.test pn=2 try=1 -> s502
+sleeps []
+rows [A1 A2]
+result {Total:0 Pages:0 Base:}
+err class=httpstatus+status=502 msg=cnstock: 上游返回错误状态码: status=502
+
+== 28 回退后备用地址第三页失败再重试
+req push2.eastmoney.com pn=1 try=1 -> reset
+req push2test.eastmoney.com pn=1 try=1 -> ok
+req push2test.eastmoney.com pn=2 try=1 -> ok
+req push2test.eastmoney.com pn=3 try=1 -> s500
+req push2test.eastmoney.com pn=3 try=2 -> ok
+sleeps [4ms]
+rows [A1 A2 B1 B2 C1 C2]
+result {Total:6 Pages:3 Base:https://push2test.eastmoney.com}
+err class=none msg=<nil>
+
+== 29 读完一页后取消 ctx 且无重试
+req push2.eastmoney.com pn=1 try=1 -> ok
+sleeps []
+rows [A1 A2]
+result {Total:0 Pages:0 Base:}
+err class=timeout msg=cnstock: 上游请求超时或连接失败: Get "https://push2.eastmoney.com/api/qt/clist/get?fid=f12&fields=f12%2Cf13%2Cf14%2Cf115%2Cf152%2Cf103%2Cf128%2Cf129&fs=&pn=2&pz=2": context canceled
+
+== 30 读完一页后取消 ctx 且有重试
+req push2.eastmoney.com pn=1 try=1 -> ok
+sleeps []
+rows [A1 A2]
+result {Total:0 Pages:0 Base:}
+err class=canceled msg=读 clist 第 2 页时已取消（cnstock: 上游请求超时或连接失败: Get "https://push2.eastmoney.com/api/qt/clist/get?fid=f12&fields=f12%2Cf13%2Cf14%2Cf115%2Cf152%2Cf103%2Cf128%2Cf129&fs=&pn=2&pz=2": context canceled）：context canceled
+
