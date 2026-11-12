@@ -1,0 +1,28 @@
+app:
+  id: "binance"
+  name: "Market Storage Auth"
+  description: "Shared short-lived market writer credentials"
+  type: "market"
+
+api:
+  spot_base_urls:
+    - "https://data-api.binance.vision"
+  swap_base_urls:
+    - "https://fapi.binance.com"
+
+storage:
+  bindings:
+    spot:
+      data_source_id: "stockhk"
+      subject_type: "stock"
+      subject_market: "stockhk"
+      auth_info:
+        app_id: "moox-collector"
+        app_key: ""
+    swap:
+      data_source_id: "stockhk"
+      subject_type: "stock"
+      subject_market: "stockhk"
+      auth_info:
+        app_id: "moox-collector"
+        app_key: ""
