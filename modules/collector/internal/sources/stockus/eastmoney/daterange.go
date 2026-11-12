@@ -14,7 +14,7 @@ const (
 )
 
 // dateRange 是美股的日期区间规则。东方财富对美股的 beg、end 不按 UTC 日期、也不按纽约交易日过滤，规律是实测得到的
-// （2026-11-12，39 组请求，AAPL、JPM、SPY 结果一致，见 docs/计划/美股K线采集执行计划.md 0.1 节与 testdata/date_range_requests.json）：
+// （2026-11-12，48 组请求，AAPL、JPM、SPY 结果一致，见 docs/计划/美股K线采集执行计划.md 0.1 节与 testdata/date_range_requests.json）：
 //
 //   - 返回收盘标签（北京时间）不早于 beg 日 22:30、不晚于 end 日某个时刻的根，这个时刻在 05:00 之后、21:35 之前；
 //   - beg 与 end 同一天一定是空的。
