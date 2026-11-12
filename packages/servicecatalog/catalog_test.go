@@ -42,7 +42,7 @@ func servicePtr(c *Catalog, path string) *Service {
 
 func TestEmbeddedCatalogDefinesEveryComponent(t *testing.T) {
 	c := mustCatalog(t)
-	want := map[string]int{"host-gateway": 11012, "host-agent": 11425, "console-proxy": 19528, "web-host": 19527, "admin": 11010, "eventbus": 11419, "monitor": 11409, "collector": 11412, "cloudfunction": 11411, "factor-mgr": 11414, "archive-mgr": 11416, "strategy": 11431, "storage-primary": 20210,"storage-view": 20211, "access": 11014, "egress-proxy": 11441, "trade": 11210, "collector-stream": 11451, "callback-dispatcher": 11461, "factor-engine": 11417, "archive-worker": 11418}
+	want := map[string]int{"host-gateway": 11012, "host-agent": 11425, "console-proxy": 19528, "web-host": 19527, "admin": 11010, "eventbus": 11419, "monitor": 11409, "collector": 11412, "cloudfunction": 11411, "factor-mgr": 11414, "archive-mgr": 11416, "strategy": 11431, "storage-primary": 20210, "storage-view": 20211, "access": 11014, "egress-proxy": 11441, "trade": 11210, "collector-stream": 11451, "callback-dispatcher": 11461, "factor-engine": 11417, "archive-worker": 11418}
 	if len(c.Components) != len(want) {
 		t.Fatalf("components = %d", len(c.Components))
 	}
