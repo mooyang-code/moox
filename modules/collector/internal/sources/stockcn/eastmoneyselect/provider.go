@@ -104,7 +104,8 @@ func (p *Provider) FetchFields(ctx context.Context, req marketdata.FieldRequest)
 		return nil, fmt.Errorf("取 %s 股本：%w", req.SubjectID, err)
 	}
 	if !found {
-		return nil, nil
+		// 接口地址是固定的，股票代码在参数里；查不到股票时返回的是 200。404 说明接口本身不可用。
+		return nil, fmt.Errorf("取 %s 股本：%w: status=404", req.SubjectID, marketdata.ErrHTTPStatus)
 	}
 	item, err := parseRecord(body)
 	if err != nil {

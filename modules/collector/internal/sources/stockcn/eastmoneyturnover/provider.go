@@ -53,7 +53,8 @@ func (p *Provider) FieldSpecs() []marketdata.FieldSpec {
 
 // FetchFields 一次请求取 [Start, End) 内各交易日的换手率。来源没有这只股票、某天没有这一行、那一天的换手率不是数字时不出值。
 func (p *Provider) FetchFields(ctx context.Context, req marketdata.FieldRequest) (map[time.Time]map[string]marketdata.FieldValue, error) {
-	if _, ok := commonsrc.FieldSymbol(req.SubjectID); !ok || !req.End.After(req.Start) {
+	symbol, ok := commonsrc.FieldSymbol(req.SubjectID)
+	if !ok || !req.End.After(req.Start) {
 		return nil, nil
 	}
 	secid, err := commonsrc.EastMoneySecID(req.SubjectID)
@@ -73,9 +74,10 @@ func (p *Provider) FetchFields(ctx context.Context, req marketdata.FieldRequest)
 		return nil, fmt.Errorf("取 %s 换手率：%w", req.SubjectID, err)
 	}
 	if !found {
-		return nil, nil
+		// 接口地址是固定的，股票代码在参数里；来源没有这只股票时返回的是 200。404 说明接口本身不可用。
+		return nil, fmt.Errorf("取 %s 换手率：%w: status=404", req.SubjectID, marketdata.ErrHTTPStatus)
 	}
-	rates, err := parseTurnover(body)
+	rates, err := parseTurnover(body, symbol[2:])
 	if err != nil {
 		return nil, fmt.Errorf("%w: 解析 %s 换手率：%v", marketdata.ErrProtocol, req.SubjectID, err)
 	}
@@ -89,10 +91,12 @@ func (p *Provider) FetchFields(ctx context.Context, req marketdata.FieldRequest)
 }
 
 // parseTurnover 解析日线响应，返回各交易日（UTC 零点）的换手率。
-// 来源没有这只股票时 data 是 null，返回空；行的列数不足或日期无效是结构性错误；换手率不是有限的非负数的行跳过。
-func parseTurnover(body []byte) (map[time.Time]float64, error) {
+// 来源没有这只股票时 data 是 null，返回空；返回的不是 code 这只股票、行的列数不足或日期无效是结构性错误；
+// 换手率不是有限的非负数的行跳过。
+func parseTurnover(body []byte, code string) (map[time.Time]float64, error) {
 	var payload struct {
 		Data *struct {
+			Code   string   `json:"code"`
 			Klines []string `json:"klines"`
 		} `json:"data"`
 	}
@@ -101,6 +105,9 @@ func parseTurnover(body []byte) (map[time.Time]float64, error) {
 	}
 	if payload.Data == nil {
 		return nil, nil
+	}
+	if payload.Data.Code != code {
+		return nil, fmt.Errorf("返回的是 %q 的日线", payload.Data.Code)
 	}
 	rates := make(map[time.Time]float64, len(payload.Data.Klines))
 	for _, line := range payload.Data.Klines {

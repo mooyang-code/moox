@@ -143,6 +143,7 @@ func TestFetchFieldsKeepsOtherFieldsWhenOneIsNull(t *testing.T) {
 func TestFetchFieldsFailsOnBadResponse(t *testing.T) {
 	for name, handler := range map[string]http.HandlerFunc{
 		"服务端错误": func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusBadGateway) },
+		"接口不存在": func(w http.ResponseWriter, r *http.Request) { http.NotFound(w, r) },
 		"响应被截断": func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = w.Write([]byte(`{"result":{"data":[{"SECURITY_CODE":"6005`))
 		},

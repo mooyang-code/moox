@@ -490,6 +490,7 @@ fields:
   field_id: total_shares
   name: 总股本
   value_type: double
+  unit: share
   sort_order: 22
   status: active
 - space_id: stockcn
@@ -497,6 +498,7 @@ fields:
   field_id: float_shares
   name: 流通股本
   value_type: double
+  unit: share
   sort_order: 23
   status: active
 - space_id: stockcn
