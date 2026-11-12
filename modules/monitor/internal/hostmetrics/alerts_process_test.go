@@ -66,10 +66,10 @@ func TestAlertPayloadKeepsTheFullRanking(t *testing.T) {
 	if payload.Metric != HostMetricCPU || payload.Value != 91 || len(payload.TopProcesses) != 4 {
 		t.Fatalf("payload = %+v", payload)
 	}
-	// NaN 的 CPU 值不能进 JSON（会让整条事件内容序列化失败），按“没有 CPU 值”记录。
 	if payload.TopProcesses[0].PID != 11 || payload.TopProcesses[3].PID != 15 {
 		t.Fatalf("事件里要带 PID，用来区分同名进程：%+v", payload.TopProcesses)
 	}
+	// NaN 的 CPU 值不能进 JSON（会让整条事件内容序列化失败），按“没有 CPU 值”记录。
 	if payload.TopProcesses[0].Name != "storage-node" || *payload.TopProcesses[0].CPUPercent != 340 || payload.TopProcesses[3].Name != "broken" || payload.TopProcesses[3].CPUPercent != nil {
 		t.Fatalf("top_processes = %+v", payload.TopProcesses)
 	}

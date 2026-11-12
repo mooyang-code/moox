@@ -57,39 +57,6 @@
 
       <div class="tables-grid">
         <section class="data-section">
-          <h4>占用最高的进程</h4>
-          <div class="table-scroll">
-            <table class="detail-table process-table">
-              <colgroup>
-                <col style="width: 46%" />
-                <col style="width: 18%" />
-                <col style="width: 18%" />
-                <col style="width: 18%" />
-              </colgroup>
-              <thead>
-                <tr>
-                  <th>进程</th>
-                  <th>PID</th>
-                  <th title="占单核的百分比：100% 是占满一个核">CPU</th>
-                  <th>内存</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="item in row.monitor.processes" :key="item.pid">
-                  <td :title="item.name">{{ item.name || "--" }}</td>
-                  <td>{{ item.pid }}</td>
-                  <td>{{ item.cpu_available ? `${item.cpu_percent.toFixed(0)}%` : "--" }}</td>
-                  <td :title="formatBytes(item.rss)">{{ formatBytes(item.rss) }}</td>
-                </tr>
-                <tr v-if="!row.monitor.processes.length">
-                  <td colspan="4" class="empty-cell">暂无进程数据</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <p class="process-note">最新一次采样里 CPU 前 5 与内存前 5 的进程。CPU 按单核计，超过 100% 表示占用多个核。</p>
-        </section>
-        <section class="data-section">
           <h4>文件系统</h4>
           <div class="table-scroll">
             <table class="detail-table filesystem-table">
@@ -216,6 +183,39 @@
               </tbody>
             </table>
           </div>
+        </section>
+        <section class="data-section">
+          <h4>占用最高的进程</h4>
+          <div class="table-scroll">
+            <table class="detail-table process-table">
+              <colgroup>
+                <col style="width: 46%" />
+                <col style="width: 18%" />
+                <col style="width: 18%" />
+                <col style="width: 18%" />
+              </colgroup>
+              <thead>
+                <tr>
+                  <th>进程</th>
+                  <th>PID</th>
+                  <th title="占单核的百分比：100% 是占满一个核">CPU</th>
+                  <th>内存</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="item in row.monitor.processes" :key="item.pid">
+                  <td :title="item.name">{{ item.name || "--" }}</td>
+                  <td>{{ item.pid }}</td>
+                  <td>{{ item.cpu_available ? `${item.cpu_percent.toFixed(0)}%` : "--" }}</td>
+                  <td :title="formatBytes(item.rss)">{{ formatBytes(item.rss) }}</td>
+                </tr>
+                <tr v-if="!row.monitor.processes.length">
+                  <td colspan="4" class="empty-cell">暂无进程数据</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="process-note">最新一次采样里 CPU 前 5 与内存前 5 的进程。CPU 按单核计，超过 100% 表示占用多个核。</p>
         </section>
       </div>
     </template>

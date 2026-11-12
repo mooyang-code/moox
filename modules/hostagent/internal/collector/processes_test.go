@@ -101,10 +101,11 @@ func TestProcessTrackerRanksByCPUAndMemory(t *testing.T) {
 		{PID: 2, Comm: "duckdb", StartTime: 20, CPUTicks: 500, RSSPages: 3000},
 		{PID: 3, Comm: "idle", StartTime: 30, CPUTicks: 50, RSSPages: 0},
 		{PID: 4, Comm: "reused", StartTime: 40, CPUTicks: 9000, RSSPages: 10},
+		{PID: 6, Comm: "exiting", StartTime: 60, CPUTicks: 800, RSSPages: 5},
 	}
 	// 第一次采样没有可比的上一次：只按内存排，CPU 一律不可用。
 	got := tracker.top(first, 0, 4, page, name)
-	if len(got) != 3 || got[0].Name != "duckdb" || got[0].CpuAvailable || got[0].RssBytes != 3000*page {
+	if len(got) != 4 || got[0].Name != "duckdb" || got[0].CpuAvailable || got[0].RssBytes != 3000*page {
 		t.Fatalf("first sample = %+v", got)
 	}
 
@@ -116,6 +117,8 @@ func TestProcessTrackerRanksByCPUAndMemory(t *testing.T) {
 		{PID: 3, Comm: "idle", StartTime: 30, CPUTicks: 50, RSSPages: 0},
 		{PID: 4, Comm: "reused", StartTime: 99, CPUTicks: 9500, RSSPages: 10},
 		{PID: 5, Comm: "fresh", StartTime: 100, CPUTicks: 400, RSSPages: 20},
+		// 正在退出的进程：启动时刻没变，但内核已经把它的 CPU 时间报成 0。累计时间变小时不能相减（无符号数会下溢）。
+		{PID: 6, Comm: "exiting", StartTime: 60, CPUTicks: 0, RSSPages: 5},
 	}
 	got = tracker.top(second, 6000, 4, page, name)
 	byName := map[string]*hostmetricpb.ProcessMetric{}
@@ -130,6 +133,9 @@ func TestProcessTrackerRanksByCPUAndMemory(t *testing.T) {
 	}
 	if byName["reused"].CpuAvailable || byName["fresh"].CpuAvailable {
 		t.Fatalf("PID 复用或新进程不应有 CPU 值：%+v %+v", byName["reused"], byName["fresh"])
+	}
+	if exiting := byName["exiting"]; exiting == nil || exiting.CpuAvailable || exiting.CpuPercent != 0 {
+		t.Fatalf("CPU 时间变小的进程不应有 CPU 值：%+v", exiting)
 	}
 	if _, listed := byName["idle"]; listed {
 		t.Fatal("没有 CPU 占用也没有常驻内存的进程不应上榜")

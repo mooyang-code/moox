@@ -26,7 +26,7 @@ message HostSnapshot {
 // ProcessMetric 是一个进程在两次采样之间的 CPU 占用与当前常驻内存。
 message ProcessMetric {
   uint32 pid = 1;
-  // 进程名：可执行文件的文件名，读不到时是内核里的进程名（comm，最多 15 个字符，只取空白之前的第一段）；不带参数和控制字符。
+  // 进程名：可执行文件的文件名，读不到时是内核里的进程名（comm，用户进程最多 15 个字符，只取空白之前的第一段）；不带参数和控制字符。
   string name = 2;
   // 占单核的百分比，与 top 一致：340 表示占了 3.4 个核。
   double cpu_percent = 3;
