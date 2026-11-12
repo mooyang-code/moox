@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/eventmapper"
-	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode"
+	"github.com/mooyang-code/moox/modules/storage/internal/serviceauth"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
@@ -35,7 +35,7 @@ func TestSubjectReadyDuckDBRowIsReadableInsidePublish(t *testing.T) {
 			}
 		}
 	})
-	auth := &pb.AuthInfo{AppId: "test", AppKey: datanode.ServiceAuthKey("secret", "test")}
+	auth := &pb.AuthInfo{AppId: "test", AppKey: serviceauth.Key("secret", "test")}
 	columns := []*pb.ViewColumn{{OriginId: "close", ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}
 	rsp, err := svc.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{AuthInfo: auth, IndexId: "prices-a", Schema: &pb.ViewIndexSchema{
 		SpaceId: "space", ViewId: "prices", DatasetId: "market_prices", ViewVersion: 1, Engine: "duckdb", ViewSchemaHash: "schema", Columns: columns,

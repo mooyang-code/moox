@@ -20,7 +20,7 @@ const (
 	maxLatestPerSeries = 10000
 )
 
-// ReadTimeSeriesRows 读取时序事实：所有调用方的请求都由 DataNode（Pebble）回答，结果一致。
+// ReadTimeSeriesRows 读取时序事实：所有调用方的请求都由 Pebble 回答，结果一致。
 // 两种形态二选一：time_range（左闭右开，起止都必须给出）或 latest_per_series（每个序列最近 N 根）。
 // 不带 selector 表示数据集的全部标的。分页只用 page.size 与 page.cursor，不能跳页。
 func (s *Service) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeriesRowsReq) (*pb.ReadTimeSeriesRowsRsp, error) {
@@ -34,24 +34,18 @@ func (s *Service) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeries
 	if err := validateTimeSeriesRead(ctx, req); err != nil {
 		return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
-	node, err := s.rangeNode(ctx, req.GetSpaceId(), req.GetDatasetId())
-	if err != nil {
+	if err := requireActiveDataset(ctx, req.GetSpaceId(), req.GetDatasetId()); err != nil {
 		return nil, err
 	}
-	if node == nil {
-		return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("DataNode range runtime is unavailable"))}, nil
-	}
-	auth, err := s.signAuth(req.GetAuthInfo())
+	rsp, err := s.store.ReadTimeSeriesRows(ctx, req)
 	if err != nil {
-		return &pb.ReadTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+		return &pb.ReadTimeSeriesRowsRsp{RetInfo: storeError(err)}, nil
 	}
-	return node.ReadTimeSeriesRows(ctx, &pb.ReadTimeSeriesRowsReq{
-		AuthInfo: auth, SpaceId: req.GetSpaceId(), DatasetId: req.GetDatasetId(), Selectors: req.GetSelectors(),
-		ColumnNames: req.GetColumnNames(), TimeRange: req.GetTimeRange(), LatestPerSeries: req.GetLatestPerSeries(), Page: req.GetPage(),
-	})
+	rsp.RetInfo = retinfo.Success("success")
+	return rsp, nil
 }
 
-// CountTimeSeriesRows 按标的统计时间范围内已存在的时间点数，由 DataNode 回答，只回传计数。
+// CountTimeSeriesRows 按标的统计时间范围内已存在的时间点数，只回传计数。
 func (s *Service) CountTimeSeriesRows(ctx context.Context, req *pb.CountTimeSeriesRowsReq) (*pb.CountTimeSeriesRowsRsp, error) {
 	if req == nil || len(req.GetSelectors()) == 0 || req.GetTimeRange() == nil {
 		return &pb.CountTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("selectors and time_range are required"))}, nil
@@ -69,21 +63,17 @@ func (s *Service) CountTimeSeriesRows(ctx context.Context, req *pb.CountTimeSeri
 	if _, _, err := parseRequiredRange(req.GetTimeRange()); err != nil {
 		return &pb.CountTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
 	}
-	node, err := s.rangeNode(ctx, req.GetSpaceId(), req.GetDatasetId())
-	if err != nil {
+	if err := requireActiveDataset(ctx, req.GetSpaceId(), req.GetDatasetId()); err != nil {
 		return nil, err
 	}
-	if node == nil {
-		return &pb.CountTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("DataNode range runtime is unavailable"))}, nil
-	}
-	auth, err := s.signAuth(req.GetAuthInfo())
+	counts, err := s.store.CountTimeSeriesRows(ctx, req)
 	if err != nil {
-		return &pb.CountTimeSeriesRowsRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+		return &pb.CountTimeSeriesRowsRsp{RetInfo: storeError(err)}, nil
 	}
-	return node.CountTimeSeriesRows(ctx, &pb.CountTimeSeriesRowsReq{AuthInfo: auth, SpaceId: req.GetSpaceId(), DatasetId: req.GetDatasetId(), Selectors: req.GetSelectors(), TimeRange: req.GetTimeRange()})
+	return &pb.CountTimeSeriesRowsRsp{RetInfo: retinfo.Success("success"), Counts: counts}, nil
 }
 
-// ReadDatasetChanges 读取数据集所在 DataNode 的持久化行变更日志：from_head 取基线位点，否则从游标之后按序读。
+// ReadDatasetChanges 读取持久化的行变更日志：from_head 取基线位点，否则从游标之后按序读。
 // 游标身份对不上或早于日志保留起点时响应里 gap 为真，调用方走对账。
 func (s *Service) ReadDatasetChanges(ctx context.Context, req *pb.ReadDatasetChangesReq) (*pb.ReadDatasetChangesRsp, error) {
 	if req == nil || req.GetSpaceId() == "" || req.GetDatasetId() == "" {
@@ -96,30 +86,15 @@ func (s *Service) ReadDatasetChanges(ctx context.Context, req *pb.ReadDatasetCha
 		return &pb.ReadDatasetChangesRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
 	ctx = s.requestContext(ctx)
-	node, err := s.rangeNode(ctx, req.GetSpaceId(), req.GetDatasetId())
-	if err != nil {
+	if err := requireActiveDataset(ctx, req.GetSpaceId(), req.GetDatasetId()); err != nil {
 		return nil, err
 	}
-	if node == nil {
-		return &pb.ReadDatasetChangesRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("DataNode range runtime is unavailable"))}, nil
-	}
-	auth, err := s.signAuth(req.GetAuthInfo())
+	rsp, err := s.store.ReadDatasetChanges(ctx, req)
 	if err != nil {
-		return &pb.ReadDatasetChangesRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+		return &pb.ReadDatasetChangesRsp{RetInfo: storeError(err)}, nil
 	}
-	return node.ReadDatasetChanges(ctx, &pb.ReadDatasetChangesReq{
-		AuthInfo: auth, SpaceId: req.GetSpaceId(), DatasetId: req.GetDatasetId(),
-		Cursor: req.GetCursor(), FromHead: req.GetFromHead(), Limit: req.GetLimit(),
-	})
-}
-
-func (s *Service) rangeNode(ctx context.Context, spaceID, datasetID string) (rangeDataNodeClient, error) {
-	node, err := s.resolve(ctx, spaceID, datasetID)
-	if err != nil {
-		return nil, err
-	}
-	ranged, _ := node.(rangeDataNodeClient)
-	return ranged, nil
+	rsp.RetInfo = retinfo.Success("success")
+	return rsp, nil
 }
 
 // validateTimeSeriesRead 是所有调用方共用的请求校验。

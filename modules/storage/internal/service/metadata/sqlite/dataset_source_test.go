@@ -16,7 +16,7 @@ func TestUpdateDatasetAssignsDataSourceOnceThenKeepsItImmutable(t *testing.T) {
 		t.Fatal(err)
 	}
 	created, err := store.CreateDataset(ctx, &pb.Dataset{
-		SpaceId: "space", DatasetId: "unsourced", DataNodeId: "node",
+		SpaceId: "space", DatasetId: "unsourced",
 		Name: "unsourced", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m",
 		Attributes: collectorOwner,
 	})
@@ -55,6 +55,5 @@ func newDatasetSourceStore(t *testing.T) (context.Context, *Store) {
 	ctx := context.Background()
 	store := openTestStore(t, ctx)
 	seedDatasetParents(t, ctx, store)
-	registerActiveNode(t, ctx, store, "node")
 	return ctx, store
 }

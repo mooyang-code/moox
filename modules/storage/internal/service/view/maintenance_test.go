@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/observability"
-	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
+	"github.com/mooyang-code/moox/modules/storage/internal/serviceauth"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/storagepolicy"
 	"github.com/prometheus/client_golang/prometheus"
@@ -121,7 +121,7 @@ func TestMaintainerCreatesAndActivatesInitialView(t *testing.T) {
 	if metadata.completes != 1 || metadata.view.GetActiveIndexId() != indexID {
 		t.Fatalf("首次建索引没有提交：completes=%d active=%q", metadata.completes, metadata.view.GetActiveIndexId())
 	}
-	auth := &pb.AuthInfo{AppId: "caller", AppKey: datanode.ServiceAuthKey("view-secret", "caller")}
+	auth := &pb.AuthInfo{AppId: "caller", AppKey: serviceauth.Key("view-secret", "caller")}
 	list, err := svc.ListViewIndexes(context.Background(), &pb.ListViewIndexesReq{AuthInfo: auth})
 	if err != nil || len(list.GetIndexes()) != 1 {
 		t.Fatalf("indexes=%v err=%v", list, err)

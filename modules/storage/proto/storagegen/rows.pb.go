@@ -151,7 +151,7 @@ func (x *RecordRowKey) GetVersion() string {
 	return ""
 }
 
-// RowKey is the only key accepted by DataNode field operations.
+// RowKey is the only key accepted by Pebble field operations.
 type RowKey struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
@@ -497,7 +497,7 @@ func (x *RowsUpserted) GetRows() []*RowFieldUpsert {
 	return nil
 }
 
-// Query key views are retained as read-only query contracts. DataNode writes
+// Query key views are retained as read-only query contracts. Pebble writes
 // use RowKey above and never accept these request wrappers.
 type TimeSeriesKey struct {
 	state         protoimpl.MessageState
@@ -854,7 +854,7 @@ func (x *RecordRow) GetAttributes() map[string]string {
 	return nil
 }
 
-// ReadTimeSeriesRowsReq 读取时序事实，由 DataNode（Pebble）回答，所有调用方的结果一致。
+// ReadTimeSeriesRowsReq 读取时序事实，由主服务的 Pebble 存储回答，所有调用方的结果一致。
 // 两种形态二选一：time_range（时间区间，左闭右开）或 latest_per_series（每个序列最近 N 根）。
 // 不带 selector 表示数据集的全部标的。精确键读取用 PrimaryStore.ReadRows。
 // 分页只用 page.size 与 page.cursor（顺序翻页，不能跳页）。
@@ -967,7 +967,7 @@ func (x *ReadTimeSeriesRowsReq) GetPage() *commonpb.Page {
 
 // CountTimeSeriesRowsReq 按标的统计时间范围内已存在的行数，不回传行：同一时间点有多个 series_tag 只计一次。
 // Collector 的完整性检查先用它比对“应有根数”，只有根数不够的标的才读行定位缺口，读取量随缺口而不是随标的数增长。
-// 由 DataNode 回答。
+// 由主服务的 Pebble 存储回答。
 type CountTimeSeriesRowsReq struct {
 	state         protoimpl.MessageState
 	sizeCache     protoimpl.SizeCache
@@ -1386,7 +1386,7 @@ type ReadDatasetChangesReq struct {
 
 	AuthInfo *commonpb.AuthInfo `protobuf:"bytes,1,opt,name=auth_info,json=authInfo,proto3" json:"auth_info,omitempty"`
 	SpaceId  string             `protobuf:"bytes,2,opt,name=space_id,json=spaceId,proto3" json:"space_id,omitempty"`
-	// dataset_id 必填：PrimaryStore 据此找到数据集所在的 DataNode；只返回这个数据集的变更，游标仍按该节点的全部变更推进。
+	// dataset_id 必填：只返回这个数据集的变更，游标仍按全部变更推进。
 	DatasetId string               `protobuf:"bytes,3,opt,name=dataset_id,json=datasetId,proto3" json:"dataset_id,omitempty"`
 	Cursor    *DatasetChangeCursor `protobuf:"bytes,4,opt,name=cursor,proto3" json:"cursor,omitempty"`
 	// from_head 为真时不返回变更，只返回当前日志头部的位点：基线先取位点、再读数据，之后从这个位点继续读。

@@ -160,10 +160,8 @@ var unitSpecs = map[string]unitComponentSpec{
 		{"modules/storage/config/storage.primary.yaml", "storage-primary/config/storage.yaml", false},
 		schemaAsset("storage", "storage-primary"),
 	}},
-	"storage-node": {assets: []unitAsset{
-		{"modules/storage/config/trpc_go.node.yaml", "storage-node/config/trpc_go.yaml", false},
-		{"modules/storage/config/storage.node.yaml", "storage-node/config/storage.yaml", false},
-	}},
+	// storage-node 已并入 storage-primary，没有自己的配置；组件本身随调用方改造一起删除。
+	"storage-node": {},
 	"storage-view": {assets: []unitAsset{
 		{"modules/storage/config/storage_view/trpc_go.yaml", "storage-view/config/trpc_go.yaml", false},
 		{"modules/storage/config/storage.yaml", "storage-view/config/storage.yaml", false},

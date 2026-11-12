@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
+	"github.com/mooyang-code/moox/modules/storage/internal/serviceauth"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"trpc.group/trpc-go/trpc-go/client"
 )
@@ -421,7 +421,7 @@ func TestRemoveViewIndexClearsActiveOfAttachedView(t *testing.T) {
 	svc.views[key] = runtime
 	svc.indexEngine[id] = "fake"
 	svc.indexView[id] = key
-	auth := &pb.AuthInfo{AppId: "test", AppKey: datanode.ServiceAuthKey("view-secret", "test")}
+	auth := &pb.AuthInfo{AppId: "test", AppKey: serviceauth.Key("view-secret", "test")}
 	done := make(chan *pb.RemoveViewIndexRsp, 1)
 	go func() {
 		rsp, _ := svc.RemoveViewIndex(context.Background(), &pb.RemoveViewIndexReq{AuthInfo: auth, IndexId: id})

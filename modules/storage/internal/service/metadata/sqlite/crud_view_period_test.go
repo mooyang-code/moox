@@ -295,9 +295,8 @@ func openViewPeriodTestStore(t *testing.T, ctx context.Context) *Store {
 	t.Helper()
 	store := openTestStore(t, ctx)
 	seedDatasetParents(t, ctx, store)
-	registerActiveNode(t, ctx, store, "node")
-	createTestDataset(t, ctx, store, "prices", "node")
-	createTestDataset(t, ctx, store, "fundamentals", "node")
+	createTestDataset(t, ctx, store, "prices")
+	createTestDataset(t, ctx, store, "fundamentals")
 	if _, err := store.UpsertView(ctx, &pb.View{
 		SpaceId: "space", ViewId: "source-view", Name: "Source view", DatasetId: "prices",
 	}); err != nil {

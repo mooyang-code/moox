@@ -18,17 +18,3 @@ func (r *SearchRecordRowsReq) Validate() error {
 	}
 	return nil
 }
-
-func (r *UpsertFieldsReq) Validate() error {
-	if r == nil || len(r.Rows) == 0 {
-		return fmt.Errorf("rows must not be empty")
-	}
-	return nil
-}
-
-func (r *ReadRowsReq) Validate() error {
-	if r == nil || len(r.Keys) == 0 || (len(r.ColumnNames) == 0 && len(r.AttributeKeys) == 0) {
-		return fmt.Errorf("keys and column_names must not be empty")
-	}
-	return nil
-}

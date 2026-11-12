@@ -15,23 +15,27 @@ import (
 	"trpc.group/trpc-go/trpc-go/log"
 )
 
+// DatasetRows 删除一个数据集的全部行，即同进程的 Pebble 库。
+type DatasetRows interface {
+	DeleteDatasetRows(ctx context.Context, spaceID, datasetID string) (uint64, error)
+}
+
 type Service struct {
 	pb.UnimplementedMetadata
 	metadata      metadata.Store
 	metadataCache *metacache.Store
 	// refreshOverride 仅供测试替换缓存刷新实现
 	refreshOverride func(context.Context) error
-	nodeAuthSecret  string
 	viewAuthSecret  string
-	nodeState       NodeStateChecker
+	rows            DatasetRows
 	retention       storagepolicy.Retention
 }
 
 type Options struct {
-	AuthSecret string
 	// ViewAuthSecret authenticates the View role's append-only active-schema CAS.
-	ViewAuthSecret   string
-	NodeStateChecker NodeStateChecker
+	ViewAuthSecret string
+	// Rows 删除数据集时一并删行；只读元数据的工具可以不给，此时 DeleteDataset 报错。
+	Rows DatasetRows
 	// Retention resolves the read-only Dataset retention. Tools and tests
 	// without a policy file get the recommended defaults.
 	Retention storagepolicy.Retention
@@ -41,21 +45,14 @@ func NewMetadataService(store metadata.Store, cache *metacache.Store, options Op
 	if store == nil {
 		return nil, errors.New("metadata store is required")
 	}
-	secret := options.AuthSecret
-	if secret == "" {
-		secret = os.Getenv("MOOX_STORAGE_NODE_AUTH_SECRET")
-	}
 	viewSecret := options.ViewAuthSecret
 	if viewSecret == "" {
 		viewSecret = os.Getenv("MOOX_STORAGE_VIEW_AUTH_SECRET")
 	}
-	if options.NodeStateChecker == nil {
-		options.NodeStateChecker = rpcNodeStateChecker{}
-	}
 	if options.Retention.Defaults == nil {
 		options.Retention = storagepolicy.Default().Retention
 	}
-	return &Service{metadata: store, metadataCache: cache, nodeAuthSecret: secret, viewAuthSecret: viewSecret, nodeState: options.NodeStateChecker, retention: options.Retention}, nil
+	return &Service{metadata: store, metadataCache: cache, viewAuthSecret: viewSecret, rows: options.Rows, retention: options.Retention}, nil
 }
 
 // withRetention returns a copy of dataset carrying its effective retention.
@@ -120,10 +117,8 @@ func (s *Service) refreshMetadataCacheAfterCommit(ctx context.Context, operation
 	}
 }
 
-// refreshMetadataCacheSynchronously gives lifecycle mutations a publication
-// point before they report success. A committed Dataset is returned alongside
-// the safe error when all bounded attempts fail; callers may retry because the
-// active+locked terminal state is idempotent.
+// refreshMetadataCacheSynchronously 让启停、删除数据集这类变更在返回前把元数据缓存发布出去；
+// 有限次重试都失败时返回错误，调用方重试即可（这些变更都是幂等的）。
 func (s *Service) refreshMetadataCacheSynchronously(ctx context.Context, operation string) error {
 	var err error
 	const attempts = 5

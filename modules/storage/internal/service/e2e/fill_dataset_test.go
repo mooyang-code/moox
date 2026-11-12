@@ -13,13 +13,14 @@ func fillDataset(req *pb.PrimaryUpsertFieldsReq) *pb.PrimaryUpsertFieldsReq {
 	return req
 }
 
-// emptyRequestSnapshot 是没有任何元数据条目的请求快照：主库要求每个写请求都带快照，只关心路由与行的测试用它。
-func emptyRequestSnapshot() metadata.RequestSnapshot { return emptySnapshot{} }
+// activeRequestSnapshot 是任何数据集都存在且启用、但没有列定义的请求快照，只关心读写行的测试用它。
+func activeRequestSnapshot() metadata.RequestSnapshot { return activeSnapshot{} }
 
-type emptySnapshot struct{}
+type activeSnapshot struct{}
 
-func (emptySnapshot) GetDataset(string, string) (*pb.Dataset, bool) { return nil, false }
-func (emptySnapshot) GetDataNode(string) (*pb.DataNode, bool)       { return nil, false }
-func (emptySnapshot) ListDatasetColumns(string, string, *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
+func (activeSnapshot) GetDataset(spaceID, datasetID string) (*pb.Dataset, bool) {
+	return &pb.Dataset{SpaceId: spaceID, DatasetId: datasetID, Status: "active"}, true
+}
+func (activeSnapshot) ListDatasetColumns(string, string, *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
 	return nil, &pb.PageResult{}, nil
 }

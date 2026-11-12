@@ -8,38 +8,22 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
-// commitMetricsNode 只实现周期提交：由测试决定 DataNode 返回什么。
-type commitMetricsNode struct {
-	commit func(*pb.CommitTimeSeriesBatchReq) (*pb.CommitTimeSeriesBatchRsp, error)
-}
+type commitFunc func(context.Context, pebble.DatasetPeriodExpectation, []pebble.TimeSeriesBatchItem) (pebble.DatasetPeriodResult, error)
 
-func (*commitMetricsNode) UpsertFields(context.Context, *pb.UpsertFieldsReq) (*pb.UpsertFieldsRsp, error) {
-	return nil, errors.New("unexpected ordinary upsert")
-}
-
-func (*commitMetricsNode) ReadRows(context.Context, *pb.ReadRowsReq) (*pb.ReadRowsRsp, error) {
-	return nil, errors.New("unexpected ordinary read")
-}
-
-func (n *commitMetricsNode) CommitTimeSeriesBatch(_ context.Context, req *pb.CommitTimeSeriesBatchReq) (*pb.CommitTimeSeriesBatchRsp, error) {
-	return n.commit(req)
-}
-
-func commitMetricsService(t *testing.T, node *commitMetricsNode) (*Service, *recordingDatasetMetrics) {
+// commitMetricsService 的周期提交由测试决定存储层返回什么。
+func commitMetricsService(t *testing.T, commit commitFunc) (*Service, *recordingDatasetMetrics) {
 	t.Helper()
 	metrics := &recordingDatasetMetrics{}
 	svc, err := New(Options{
-		Resolver:       func(context.Context, string, string) (DataNodeClient, error) { return node, nil },
+		Store:          &hookStore{Store: openTestStore(t), commit: commit},
 		DatasetMetrics: metrics,
 		Snapshot: func() metadata.RequestSnapshot {
 			return collectorPeriodMetadataSnapshot("crypto", "market_kline", "1m")
-		},
-		AuthSigner: func(*pb.AuthInfo) (*pb.AuthInfo, error) {
-			return &pb.AuthInfo{AppId: "storage-primary", AppKey: "k"}, nil
 		},
 		Authorizer: func(*pb.AuthInfo) error { return nil },
 	})
@@ -65,20 +49,16 @@ func commitRequest(times ...time.Time) *pb.PrimaryCommitTimeSeriesBatchReq {
 }
 
 func TestPeriodCommitAdvancesTheDatasetOutputWatermark(t *testing.T) {
-	node := &commitMetricsNode{commit: func(req *pb.CommitTimeSeriesBatchReq) (*pb.CommitTimeSeriesBatchRsp, error) {
-		keys := make([]*pb.RowKey, 0, len(req.GetItems()))
-		for _, item := range req.GetItems() {
-			keys = append(keys, item.GetRow().GetKey())
-		}
-		return &pb.CommitTimeSeriesBatchRsp{RetInfo: successRetInfo(), Keys: keys}, nil
-	}}
-	svc, metrics := commitMetricsService(t, node)
+	svc, metrics := commitMetricsService(t, func(context.Context, pebble.DatasetPeriodExpectation, []pebble.TimeSeriesBatchItem) (pebble.DatasetPeriodResult, error) {
+		return pebble.DatasetPeriodResult{Status: "waiting"}, nil
+	})
 	t0 := time.Date(2026, 10, 14, 1, 58, 0, 0, time.UTC)
 	t1 := t0.Add(time.Minute)
 
 	rsp, err := svc.CommitTimeSeriesBatch(context.Background(), commitRequest(t0, t1))
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
+	require.Len(t, rsp.GetKeys(), 2)
 
 	require.Len(t, metrics.observations, 1)
 	got := metrics.observations[0]
@@ -88,33 +68,16 @@ func TestPeriodCommitAdvancesTheDatasetOutputWatermark(t *testing.T) {
 	require.True(t, got.OutputWatermark.Equal(t1), "watermark=%v want=%v", got.OutputWatermark, t1)
 }
 
-func TestPeriodCommitWithNothingAcceptedIsEmptyAndKeepsTheWatermark(t *testing.T) {
-	node := &commitMetricsNode{commit: func(*pb.CommitTimeSeriesBatchReq) (*pb.CommitTimeSeriesBatchRsp, error) {
-		return &pb.CommitTimeSeriesBatchRsp{RetInfo: successRetInfo()}, nil
-	}}
-	svc, metrics := commitMetricsService(t, node)
-	_, err := svc.CommitTimeSeriesBatch(context.Background(), commitRequest(time.Date(2026, 10, 14, 1, 58, 0, 0, time.UTC)))
-	require.NoError(t, err)
-	require.Len(t, metrics.observations, 1)
-	require.Equal(t, "empty", metrics.observations[0].Result)
-	require.True(t, metrics.observations[0].OutputWatermark.IsZero())
-}
-
 func TestPeriodCommitFailureIsRecordedAsErrorWithoutAWatermark(t *testing.T) {
-	cases := map[string]func(*pb.CommitTimeSeriesBatchReq) (*pb.CommitTimeSeriesBatchRsp, error){
-		"transport error": func(*pb.CommitTimeSeriesBatchReq) (*pb.CommitTimeSeriesBatchRsp, error) {
-			return nil, errors.New("boom")
-		},
-		"data node rejects": func(*pb.CommitTimeSeriesBatchReq) (*pb.CommitTimeSeriesBatchRsp, error) {
-			return &pb.CommitTimeSeriesBatchRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_INNER_ERR, Msg: "bad"}}, nil
-		},
-		"no ret_info": func(*pb.CommitTimeSeriesBatchReq) (*pb.CommitTimeSeriesBatchRsp, error) {
-			return &pb.CommitTimeSeriesBatchRsp{}, nil
-		},
+	cases := map[string]error{
+		"internal error": errors.New("boom"),
+		"rejected":       pebble.ValidationErrorFor("bad"),
 	}
-	for name, commit := range cases {
+	for name, failure := range cases {
 		t.Run(name, func(t *testing.T) {
-			svc, metrics := commitMetricsService(t, &commitMetricsNode{commit: commit})
+			svc, metrics := commitMetricsService(t, func(context.Context, pebble.DatasetPeriodExpectation, []pebble.TimeSeriesBatchItem) (pebble.DatasetPeriodResult, error) {
+				return pebble.DatasetPeriodResult{}, failure
+			})
 			rsp, err := svc.CommitTimeSeriesBatch(context.Background(), commitRequest(time.Date(2026, 10, 14, 1, 58, 0, 0, time.UTC)))
 			require.NoError(t, err)
 			require.NotEqual(t, pb.ErrorCode_SUCCESS, rsp.GetRetInfo().GetCode())
@@ -131,23 +94,24 @@ func (r *recordedRejections) ObserveDeadlineRejection(spaceID, datasetID, freque
 	r.keys = append(r.keys, spaceID+"/"+datasetID+"/"+frequency)
 }
 
-// DataNode 拒绝“周期建立前截止已过”时记录截止拒绝；其他失败不记。
+// 存储层拒绝“周期建立前截止已过”时记录截止拒绝；其他失败不记。
 func TestPeriodCommitRecordsDeadlineRejections(t *testing.T) {
 	for name, tc := range map[string]struct {
-		msg  string
+		err  error
 		want int
 	}{
-		"deadline passed": {"dataset period deadline 1792572005 has passed before the period was created", 1},
-		"other rejection": {"series hash a does not match the effective snapshot b for this period", 0},
+		"deadline passed": {pebble.PeriodDeadlinePassedError{Deadline: 1792572005}, 1},
+		"other rejection": {pebble.ValidationErrorFor("series hash a does not match the effective snapshot b for this period"), 0},
 	} {
 		t.Run(name, func(t *testing.T) {
-			svc, _ := commitMetricsService(t, &commitMetricsNode{commit: func(*pb.CommitTimeSeriesBatchReq) (*pb.CommitTimeSeriesBatchRsp, error) {
-				return &pb.CommitTimeSeriesBatchRsp{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_INVALID_PARAM, Msg: tc.msg}}, nil
-			}})
+			svc, _ := commitMetricsService(t, func(context.Context, pebble.DatasetPeriodExpectation, []pebble.TimeSeriesBatchItem) (pebble.DatasetPeriodResult, error) {
+				return pebble.DatasetPeriodResult{}, tc.err
+			})
 			rejections := &recordedRejections{}
 			svc.rejection = rejections
-			_, err := svc.CommitTimeSeriesBatch(context.Background(), commitRequest(time.Date(2026, 10, 14, 1, 58, 0, 0, time.UTC)))
+			rsp, err := svc.CommitTimeSeriesBatch(context.Background(), commitRequest(time.Date(2026, 10, 14, 1, 58, 0, 0, time.UTC)))
 			require.NoError(t, err)
+			require.Equal(t, pb.ErrorCode_INVALID_PARAM, rsp.GetRetInfo().GetCode())
 			require.Len(t, rejections.keys, tc.want)
 		})
 	}

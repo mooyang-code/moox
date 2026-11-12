@@ -8,7 +8,59 @@ import "moox_common.proto";
 import "common.proto";
 import "rows.proto";
 import "dataset_markers.proto";
-import "data_node.proto";
+
+message DatasetPeriodSeries {
+  uint32 series_index = 1;
+  string subject_id = 2;
+  string series_tag = 3;
+}
+
+message DatasetPeriodExpectation {
+  string space_id = 1;
+  string dataset_id = 2;
+  string frequency = 3;
+  int64 period_time = 4;
+  string series_hash = 5;
+  uint32 expected_count = 6;
+  int64 deadline_at = 7;
+  repeated DatasetPeriodSeries series_snapshot = 8;
+  string reservation_id = 9;
+}
+
+// SeriesSnapshotEntry 是快照中一条序列的身份（标的加 series_tag），Storage 用它重算 series_hash。
+message SeriesSnapshotEntry {
+  string subject_id = 1;
+  string series_tag = 2;
+}
+
+message TimeSeriesBatchRow {
+  uint32 series_index = 1;
+  RowFieldUpsert row = 2;
+}
+
+enum PeriodFailureDisposition {
+  PERIOD_FAILURE_DISPOSITION_UNSPECIFIED = 0;
+  PERIOD_FAILURE_DISPOSITION_RECORDED = 1;
+  PERIOD_FAILURE_DISPOSITION_ALREADY_SUCCEEDED = 2;
+  PERIOD_FAILURE_DISPOSITION_MISSED_DEADLINE = 3;
+}
+
+message DatasetPeriodFailureResult {
+  uint32 series_index = 1;
+  PeriodFailureDisposition disposition = 2;
+}
+
+// RowsCursor 是 ReadTimeSeriesRows 游标的内容，只在服务端编码与解码，不出现在公开请求中。
+message RowsCursor {
+  // 区间读取：最后一行的键。
+  TimeSeriesRowKey last = 1;
+  // 最近 N 根：当前序列（subject_id、freq、series_tag）、续读位置（该序列已返回的最早一根的 data_time）及该序列已返回的根数。
+  string subject_id = 2;
+  string freq = 3;
+  string series_tag = 4;
+  string resume_before = 5;
+  uint32 returned = 6;
+}
 
 
 message PrimaryRegisterSeriesSnapshotReq {
@@ -81,6 +133,7 @@ message PrimaryDeleteDatasetRowsRsp {
   uint64 deleted_ranges = 2;
 }
 
+// PrimaryRestoreDatasetRowsReq 已无作用（删除墓碑已去掉），只为调用方在 T3 改造前还能编译而保留。
 message PrimaryRestoreDatasetRowsReq {
   common.AuthInfo auth_info = 1;
   string space_id = 2;
@@ -139,8 +192,7 @@ message WaitViewSyncPointRsp {
   repeated string pending_dataset_ids = 3;
 }
 
-// PrimaryStore is the metadata-validating user boundary and routes one Dataset
-// to its owner node.
+// PrimaryStore 是带元数据校验的读写入口，直接读写同进程的 Pebble 存储。
 service PrimaryStore {
   // UpsertFields applies partial updates; omitted fields and attributes are retained.
   rpc UpsertFields(PrimaryUpsertFieldsReq) returns (PrimaryUpsertFieldsRsp);

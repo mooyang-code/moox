@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"os"
 	"testing"
 
@@ -11,35 +10,12 @@ import (
 )
 
 type fakeMetadataDeploymentClient struct {
-	nodeState     *storagepb.GetNodeStateRsp
-	nodeStateReq  *storagepb.GetNodeStateReq
-	registerReq   *storagepb.RegisterDataNodeReq
 	listRequests  []*storagepb.ListDatasetsReq
 	checkRequests []*storagepb.CheckDatasetActivationReq
 	activateReqs  []*storagepb.ActivateDatasetReq
 	listResponses []*storagepb.ListDatasetsRsp
 	check         map[string]*storagepb.CheckDatasetActivationRsp
 	activate      map[string]*storagepb.ActivateDatasetRsp
-}
-
-func (f *fakeMetadataDeploymentClient) GetNodeState(_ context.Context, req *storagepb.GetNodeStateReq) (*storagepb.GetNodeStateRsp, error) {
-	f.nodeStateReq = req
-	if f.nodeState == nil {
-		return &storagepb.GetNodeStateRsp{
-			RetInfo: storageSuccess(),
-			NodeId:  req.GetNodeId(),
-			Status:  "READY",
-		}, nil
-	}
-	return f.nodeState, nil
-}
-
-func (f *fakeMetadataDeploymentClient) RegisterDataNode(_ context.Context, req *storagepb.RegisterDataNodeReq) (*storagepb.RegisterDataNodeRsp, error) {
-	f.registerReq = req
-	return &storagepb.RegisterDataNodeRsp{
-		RetInfo: storageSuccess(),
-		Node:    &storagepb.DataNode{NodeId: req.GetNodeId(), ServiceTarget: req.GetServiceTarget(), Name: req.GetInitialName(), Status: "active"},
-	}, nil
 }
 
 func (f *fakeMetadataDeploymentClient) ListDatasets(_ context.Context, req *storagepb.ListDatasetsReq) (*storagepb.ListDatasetsRsp, error) {
@@ -96,46 +72,6 @@ func withDeploymentSecret(t *testing.T) {
 			_ = os.Unsetenv("MOOX_STORAGE_NODE_AUTH_SECRET")
 		}
 	})
-}
-
-func TestRegisterNodeSendsDeploymentHMACAndSanitizedOutput(t *testing.T) {
-	withDeploymentSecret(t)
-	fake := &fakeMetadataDeploymentClient{}
-	var stdout bytes.Buffer
-	err := runRegisterNode(context.Background(), []string{
-		"--metadata-target", "ip://127.0.0.1:20100",
-		"--node-id", "storage-node-0",
-		"--service-target", "ip://127.0.0.1:20107",
-		"--name", "数据节点",
-	}, &stdout, func(string) metadataDeploymentClient { return fake }, func(string) dataNodeRuntimeClient { return fake })
-	if err != nil {
-		t.Fatal(err)
-	}
-	if fake.registerReq == nil {
-		t.Fatal("register request was not sent")
-	}
-	if fake.nodeStateReq == nil || fake.nodeStateReq.GetNodeId() != "storage-node-0" {
-		t.Fatalf("unexpected DataNode readiness request: %v", fake.nodeStateReq)
-	}
-	if got := fake.registerReq.GetAuthInfo().GetAppId(); got != storageDeployerAppID {
-		t.Fatalf("app id = %q, want %q", got, storageDeployerAppID)
-	}
-	if fake.registerReq.GetAuthInfo().GetAppKey() == "" {
-		t.Fatal("service HMAC is empty")
-	}
-	if fake.registerReq.GetAuthInfo().GetAppKey() == "test-storage-node-secret" {
-		t.Fatal("service HMAC must not be the raw secret")
-	}
-	var output operationResult
-	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
-		t.Fatal(err)
-	}
-	if output.Action != "register-node" || output.Status != "ok" {
-		t.Fatalf("unexpected operation output: %s", stdout.String())
-	}
-	if bytes.Contains(stdout.Bytes(), []byte("test-storage-node-secret")) || bytes.Contains(stdout.Bytes(), []byte("app_key")) {
-		t.Fatalf("sanitized output leaked credentials: %s", stdout.String())
-	}
 }
 
 func TestActivateDatasetsChecksDisabledRowsAndUsesObservedRevision(t *testing.T) {

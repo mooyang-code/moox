@@ -3,6 +3,10 @@ package pebble
 import (
 	"errors"
 	"fmt"
+
+	cpebble "github.com/cockroachdb/pebble"
+
+	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
 type ValidationError struct{ cause error }
@@ -31,9 +35,8 @@ func IsInvalidOutboxEvent(err error) bool {
 	return errors.Is(err, ErrInvalidOutboxEvent)
 }
 
-// ErrDatasetDeleted is returned after the destructive dataset boundary has
-// been crossed. The tombstone prevents a delayed writer from recreating rows
-// after the metadata object has already been removed.
+// ErrDatasetDeleted 表示写入拿到数据集读锁后，元数据里已经没有这个数据集：删除先删元数据、再在写锁里删行，
+// 写锁之后才进来的写入在这里被拒绝，不会留下孤儿行。
 var ErrDatasetDeleted = errors.New("dataset is deleted")
 
 type ConflictError struct{ EventID string }
@@ -55,4 +58,35 @@ type PeriodConflictError struct {
 
 func (e PeriodConflictError) Error() string {
 	return fmt.Sprintf("dataset period %s/%s/%s/%d already exists with a different expectation", e.SpaceID, e.DatasetID, e.Frequency, e.PeriodTime)
+}
+
+// ErrorCode 把存储层错误映射成对外错误码：参数错误、不存在、冲突，其余都是内部错误。
+func ErrorCode(err error) pb.ErrorCode {
+	if err == nil {
+		return pb.ErrorCode_SUCCESS
+	}
+	if errors.Is(err, cpebble.ErrNotFound) {
+		return pb.ErrorCode_NOT_FOUND
+	}
+	var (
+		validation         ValidationError
+		conflict           ConflictError
+		commitConflict     CommitConflictError
+		periodConflict     PeriodConflictError
+		staleEffectiveFrom StaleEffectiveFromError
+		hashMismatch       PeriodHashMismatchError
+		snapshotMissing    SeriesSnapshotMissingError
+		deadlinePassed     PeriodDeadlinePassedError
+	)
+	switch {
+	case errors.As(err, &validation), errors.As(err, &deadlinePassed):
+		return pb.ErrorCode_INVALID_PARAM
+	case errors.As(err, &conflict), errors.As(err, &commitConflict), errors.As(err, &periodConflict),
+		errors.As(err, &staleEffectiveFrom), errors.As(err, &hashMismatch):
+		return pb.ErrorCode_CONFLICT
+	case errors.As(err, &snapshotMissing):
+		return pb.ErrorCode_NOT_FOUND
+	default:
+		return pb.ErrorCode_INNER_ERR
+	}
 }

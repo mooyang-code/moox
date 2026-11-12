@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode"
+	"github.com/mooyang-code/moox/modules/storage/internal/serviceauth"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	storageeventpb "github.com/mooyang-code/moox/packages/storagepb"
 )
@@ -63,7 +63,7 @@ func TestRemoveViewIndexRetriesWhenRuntimeAppearsWhileWaiting(t *testing.T) {
 	key := viewRef{spaceID: "space", viewID: "prices"}
 	svc.indexEngine[id] = "fake"
 	svc.indexView[id] = key
-	auth := &pb.AuthInfo{AppId: "test", AppKey: datanode.ServiceAuthKey("view-secret", "test")}
+	auth := &pb.AuthInfo{AppId: "test", AppKey: serviceauth.Key("view-secret", "test")}
 
 	// 占着写锁，让删除先找运行时（此时还没有）再等写锁。
 	hold, err := svc.indexWriteGate(id).lock(context.Background())
@@ -109,7 +109,7 @@ func TestRemoveViewIndexClearsActiveAndReadState(t *testing.T) {
 	svc.views[key] = runtime
 	svc.indexEngine[id] = "fake"
 	svc.indexView[id] = key
-	auth := &pb.AuthInfo{AppId: "test", AppKey: datanode.ServiceAuthKey("view-secret", "test")}
+	auth := &pb.AuthInfo{AppId: "test", AppKey: serviceauth.Key("view-secret", "test")}
 	if rsp, err := svc.RemoveViewIndex(context.Background(), &pb.RemoveViewIndexReq{AuthInfo: auth, IndexId: id}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("删除失败：rsp=%v err=%v", rsp, err)
 	}

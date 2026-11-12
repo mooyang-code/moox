@@ -206,12 +206,12 @@ message Dataset {
   string updated_at = 10;
   // attributes 是扩展属性，默认不作为索引字段使用。
   map<string, string> attributes = 11;
-  // data_node_id 是该 Dataset 的唯一 DataNode owner。
+  // data_node_id 已不再使用：Storage 只原样保存，调用方去掉节点后删除。
   string data_node_id = 17;
   // retention 是只读的生效保留期，由 Storage 策略文件按 (space_id, freq) 解析，取值为 "<n>h" 或
   // "forever"；记录型 Dataset 为 "forever"。写接口忽略该字段。
   string retention = 18;
-  // binding_locked 表示 Dataset 首次激活后是否永久锁定 DataNode 绑定。
+  // binding_locked 已不再使用：Storage 只原样保存，调用方去掉激活后删除。
   bool binding_locked = 19;
   // revision 是 Dataset 元数据的单调递增修订号，用于并发控制。
   uint64 revision = 20;
@@ -762,6 +762,8 @@ message CreateDatasetReq {
   common.AuthInfo auth_info = 1;
   // dataset 是待创建的数据集元数据。
   Dataset dataset = 2;
+  // columns 是随数据集一起创建的列定义，与数据集在同一事务内写入；数据集建好即可写入。
+  repeated DatasetColumn columns = 3;
 }
 
 // CreateDatasetRsp 表示创建数据集的响应。
@@ -1377,11 +1379,11 @@ service Metadata {
   rpc GetDataset(GetDatasetReq) returns (GetDatasetRsp);
   // 列出数据集。
   rpc ListDatasets(ListDatasetsReq) returns (ListDatasetsRsp);
-  // 仅限离线运维：暂停写入并完成数据迁移后，更换 disabled Dataset 的 DataNode 绑定。
+  // 已无作用：节点已并入主服务，返回未实现；调用方改造后删除。
   rpc RebindDatasetDataNode(RebindDatasetDataNodeReq) returns (RebindDatasetDataNodeRsp);
-  // 只读检查 Dataset 是否满足激活条件。
+  // 已无作用：数据集建好即可用，总是返回就绪；调用方改造后删除。
   rpc CheckDatasetActivation(CheckDatasetActivationReq) returns (CheckDatasetActivationRsp);
-  // 使用 revision CAS 激活 Dataset。
+  // 已无作用：数据集建好即可用，停用的数据集在这里重新启用；调用方改造后删除。
   rpc ActivateDataset(ActivateDatasetReq) returns (ActivateDatasetRsp);
   // 列出 Dataset 覆盖的 Subject。
   rpc ListDatasetSubjects(ListDatasetSubjectsReq) returns (ListDatasetSubjectsRsp);
@@ -1413,15 +1415,11 @@ service Metadata {
   // 列出数据集列。
   rpc ListDatasetColumns(ListDatasetColumnsReq) returns (ListDatasetColumnsRsp);
 
-  // 注册或刷新 DataNode。
+  // 以下五个节点接口已无作用：节点已并入主服务，返回未实现；调用方改造后删除。
   rpc RegisterDataNode(RegisterDataNodeReq) returns (RegisterDataNodeRsp);
-  // 更新 DataNode 名称和状态。
   rpc UpdateDataNode(UpdateDataNodeReq) returns (UpdateDataNodeRsp);
-  // 按 ID 获取 DataNode。
   rpc GetDataNode(GetDataNodeReq) returns (GetDataNodeRsp);
-  // 分页列出 DataNode 及其 Dataset 摘要。
   rpc ListDataNodes(ListDataNodesReq) returns (ListDataNodesRsp);
-  // 删除满足约束的 DataNode。
   rpc DeleteDataNode(DeleteDataNodeReq) returns (DeleteDataNodeRsp);
 
   // 创建设备。

@@ -121,12 +121,8 @@ func (s *Store) RegisterSeriesSnapshot(ctx context.Context, spaceID, datasetID, 
 	}
 	s.datasetWriteMu.RLock()
 	defer s.datasetWriteMu.RUnlock()
-	deleted, err := s.isDatasetDeleted(spaceID, datasetID)
-	if err != nil {
+	if err := s.requireDataset(spaceID, datasetID); err != nil {
 		return RegisterSnapshotResult{}, err
-	}
-	if deleted {
-		return RegisterSnapshotResult{}, ErrDatasetDeleted
 	}
 	s.periodMu.Lock()
 	defer s.periodMu.Unlock()

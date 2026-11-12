@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode"
+	"github.com/mooyang-code/moox/modules/storage/internal/serviceauth"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/require"
 	"trpc.group/trpc-go/trpc-go/client"
@@ -29,9 +29,9 @@ func (c *authCapturingMetadata) RecordViewSyncPoint(_ context.Context, req *pb.R
 func TestDirectMetadataClientSignsEveryRequestWithViewSecret(t *testing.T) {
 	proxy := &authCapturingMetadata{}
 	metadata := NewDirectMetadataClient(proxy, "view-secret")
-	want := &pb.AuthInfo{AppId: "storage-view", AppKey: datanode.ServiceAuthKey("view-secret", "storage-view")}
+	want := &pb.AuthInfo{AppId: "storage-view", AppKey: serviceauth.Key("view-secret", "storage-view")}
 
-	_, err := metadata.ListViews(context.Background(), &pb.ListViewsReq{AuthInfo: &pb.AuthInfo{AppId: "storage-view", AppKey: datanode.ServiceAuthKey("primary-secret", "storage-view")}})
+	_, err := metadata.ListViews(context.Background(), &pb.ListViewsReq{AuthInfo: &pb.AuthInfo{AppId: "storage-view", AppKey: serviceauth.Key("primary-secret", "storage-view")}})
 	require.NoError(t, err)
 	require.Equal(t, want.GetAppKey(), proxy.auth.GetAppKey(), "启动校验与调度循环不再使用 Primary 密钥")
 	proxy.auth = nil

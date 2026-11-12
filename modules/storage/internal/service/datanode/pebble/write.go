@@ -43,7 +43,7 @@ func (s *Store) UpsertFields(ctx context.Context, spaceID, datasetID, commitID s
 		if committedAt.IsZero() || time.Since(started) < writeLogThreshold {
 			return
 		}
-		log.Infof("storage node 写入 dataset=%s 行=%d commit=%t 规整=%s 准备=%s 等锁=%s 提交=%s 合计=%s",
+		log.Infof("storage 写入 dataset=%s 行=%d commit=%t 规整=%s 准备=%s 等锁=%s 提交=%s 合计=%s",
 			datasetID, len(rows), commitID != "", normalizedAt.Sub(started).Round(time.Millisecond), preparedAt.Sub(normalizedAt).Round(time.Millisecond),
 			lockedAt.Sub(preparedAt).Round(time.Millisecond), committedAt.Sub(lockedAt).Round(time.Millisecond), time.Since(started).Round(time.Millisecond))
 	}()
@@ -215,12 +215,8 @@ func (s *Store) commitRowsWriteLocked(ctx context.Context, prepared *preparedRow
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	deleted, err := s.isDatasetDeleted(prepared.spaceID, prepared.datasetID)
-	if err != nil {
+	if err := s.requireDataset(prepared.spaceID, prepared.datasetID); err != nil {
 		return nil, err
-	}
-	if deleted {
-		return nil, ErrDatasetDeleted
 	}
 	batch := prepared.batch
 	id, err := s.nextOutboxID()

@@ -23,13 +23,7 @@ func seededStorage(t *testing.T) (storageconfig.StorageConfig, *sql.DB) {
 	storage := storageconfig.StorageConfig{Root: t.TempDir()}
 	ctx := context.Background()
 	require.NoError(t, metadata.InitSchema(ctx, metadata.SchemaOptions{Storage: storage, SchemaPath: testSchemaPath}))
-	// 种子里的数据集指向已登记的 DataNode（线上由 register-node 登记）。
-	node, err := sql.Open("sqlite", metadataDBPath(storage))
-	require.NoError(t, err)
-	_, err = node.Exec("INSERT INTO t_data_nodes (c_node_id, c_name, c_service_target) VALUES ('storage-node-0', 'storage-node-0', 'ip://127.0.0.1:1')")
-	require.NoError(t, err)
-	require.NoError(t, node.Close())
-	_, err = metadata.ImportSeed(ctx, metadata.SeedOptions{Storage: storage, SchemaPath: testSchemaPath, SeedPath: testSeedPath})
+	_, err := metadata.ImportSeed(ctx, metadata.SeedOptions{Storage: storage, SchemaPath: testSchemaPath, SeedPath: testSeedPath})
 	require.NoError(t, err)
 	db, err := sql.Open("sqlite", metadataDBPath(storage)+"?_pragma=busy_timeout(10000)")
 	require.NoError(t, err)
@@ -53,7 +47,7 @@ func TestMetadataResetClassifiesEveryTable(t *testing.T) {
 	require.ErrorContains(t, checkMetadataTables(context.Background(), db), "t_new_thing")
 }
 
-// 清空业务定义后重新导入种子，回到部署后的状态；DataNode、设备、修订号保留（修订号不回退）。
+// 清空业务定义后重新导入种子，回到部署后的状态；设备、修订号保留（修订号不回退）。
 func TestMetadataResetRestoresSeedAndKeepsNodes(t *testing.T) {
 	storage, db := seededStorage(t)
 	ctx := context.Background()
@@ -77,7 +71,6 @@ func TestMetadataResetRestoresSeedAndKeepsNodes(t *testing.T) {
 	require.FileExists(t, res.Backup)
 	require.Equal(t, spacesBefore-1, rowCount(t, db, "t_spaces"), "自定义空间被清掉，种子空间回来")
 	require.Equal(t, viewsBefore, rowCount(t, db, "t_views"))
-	require.EqualValues(t, 1, rowCount(t, db, "t_data_nodes"), "DataNode 登记保留")
 	require.GreaterOrEqual(t, rowCount(t, db, "t_space_revisions"), revisionBefore)
 	require.NotNil(t, res.Imported)
 

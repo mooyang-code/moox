@@ -82,12 +82,6 @@ func (stubMetadataReader) CountFieldsByGroup(context.Context, string) (metadata.
 func (stubMetadataReader) ListDatasetColumns(context.Context, string, string, *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {
 	return nil, nil, nil
 }
-func (stubMetadataReader) GetDataNode(context.Context, string) (*pb.DataNode, error) {
-	return nil, nil
-}
-func (stubMetadataReader) ListDataNodes(context.Context, *pb.Page) ([]*pb.DataNode, *pb.PageResult, error) {
-	return nil, nil, nil
-}
 func (stubMetadataReader) GetDevice(context.Context, string) (*pb.Device, error) {
 	return nil, nil
 }
@@ -140,27 +134,21 @@ func TestStore_ListSpaces_ShouldFilterByOwner(t *testing.T) {
 	assert.False(t, page.GetHasMore())
 }
 
-type dataNodeMetadataReader struct {
+type datasetMetadataReader struct {
 	stubMetadataReader
-	nodeCalls    int
 	datasetCalls int
 }
 
-func (r *dataNodeMetadataReader) ListDataNodes(context.Context, *pb.Page) ([]*pb.DataNode, *pb.PageResult, error) {
-	r.nodeCalls++
-	return []*pb.DataNode{{NodeId: "node-a", Name: "Node A", Status: "active"}}, &pb.PageResult{Page: 1, Size: 1000, Total: 1}, nil
-}
-
-func (r *dataNodeMetadataReader) ListDatasets(context.Context, metadata.DatasetQuery) ([]*pb.Dataset, *pb.PageResult, error) {
+func (r *datasetMetadataReader) ListDatasets(context.Context, metadata.DatasetQuery) ([]*pb.Dataset, *pb.PageResult, error) {
 	r.datasetCalls++
 	return []*pb.Dataset{{
-		SpaceId: "space", DatasetId: "dataset", DataSourceId: "source", DataNodeId: "node-a",
-		Name: "Dataset", Status: "active", BindingLocked: true, Revision: 7,
+		SpaceId: "space", DatasetId: "dataset", DataSourceId: "source",
+		Name: "Dataset", Status: "active", Revision: 7,
 	}}, &pb.PageResult{Page: 1, Size: 1000, Total: 1}, nil
 }
 
-func TestStore_CachePreservesDataNodeAndDatasetLifecycleFields(t *testing.T) {
-	reader := &dataNodeMetadataReader{}
+func TestStore_CachePreservesDatasetLifecycleFields(t *testing.T) {
+	reader := &datasetMetadataReader{}
 	store, err := New(context.Background(), reader, Options{
 		RefreshInterval:    RefreshDisabled,
 		InitialLoadTimeout: 5 * time.Second,
@@ -168,22 +156,14 @@ func TestStore_CachePreservesDataNodeAndDatasetLifecycleFields(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 
-	node, err := store.GetDataNode(context.Background(), "node-a")
-	require.NoError(t, err)
-	assert.Equal(t, "node-a", node.GetNodeId())
 	dataset, err := store.GetDataset(context.Background(), "space", "dataset")
 	require.NoError(t, err)
-	assert.True(t, dataset.GetBindingLocked())
+	assert.Equal(t, "active", dataset.GetStatus())
 	assert.Equal(t, uint64(7), dataset.GetRevision())
-	assert.Equal(t, 1, reader.nodeCalls)
 	assert.Equal(t, 1, reader.datasetCalls)
 
 	snapshot := store.RequestSnapshot()
 	got, ok := snapshot.GetDataset("space", "dataset")
 	assert.True(t, ok)
-	assert.True(t, got.GetBindingLocked())
 	assert.Equal(t, uint64(7), got.GetRevision())
-	gotNode, ok := snapshot.GetDataNode("node-a")
-	assert.True(t, ok)
-	assert.Equal(t, "node-a", gotNode.GetNodeId())
 }

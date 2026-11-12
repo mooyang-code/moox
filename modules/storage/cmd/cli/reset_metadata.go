@@ -22,12 +22,12 @@ import (
 // storage reset-metadata：系统重置里 Storage 的元数据部分（设计 5.2，`--scope all`）。
 //
 // 备份元数据库后清空全部业务定义——空间、数据源、标的与标签、数据集与字段、View 及其构建/同步状态——再用 --seed 重新导入种子，
-// 回到刚完成部署、尚未激活数据集的状态。保留：库结构（t_schema_meta）、DataNode 登记与存储设备、
+// 回到刚完成部署的状态。保留：库结构（t_schema_meta）、存储设备、
 // 标的修订号（按空间单调递增，策略等调用方靠它判断缓存是否过期，不能回退）。
 //
 // 必须先停掉 Storage（元数据库由 Primary 进程持有）。行数据与事件流不在这里：先用
 // `reset-view-consumers --reset-all-storage-data --restart=false` 清 Pebble、事件流和 View 消费者，再执行本命令，
-// 然后启动 Storage，执行 activate-datasets，并让 Collector 重新登记（见部署与运维文档）。
+// 然后启动 Storage，并让 Collector 重新登记（见部署与运维文档）。
 
 // metadataResetClear 是要清空的表，子表在前（外键 RESTRICT 的父表在后）。
 var metadataResetClear = []string{
@@ -37,7 +37,7 @@ var metadataResetClear = []string{
 }
 
 // metadataResetKeep 是不清的表。
-var metadataResetKeep = []string{"t_data_nodes", "t_schema_meta", "t_space_revisions", "t_storage_devices"}
+var metadataResetKeep = []string{"t_schema_meta", "t_space_revisions", "t_storage_devices"}
 
 type resetMetadataOptions struct {
 	Storage    storageconfig.StorageConfig

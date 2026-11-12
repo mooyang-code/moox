@@ -212,7 +212,7 @@ func TestStorageDeploymentEventBusConfigOwnsOnlyConnectionAndDeliverySettings(t 
 		"max_ack_pending": true,
 		"ack_wait_ms":     true,
 	}
-	files := []string{"storage.yaml", "storage.primary.yaml", "storage.node.yaml", "storage_view/trpc_go.yaml"}
+	files := []string{"storage.yaml", "storage.primary.yaml", "storage_view/trpc_go.yaml"}
 	for _, file := range files {
 		t.Run(file, func(t *testing.T) {
 			raw, err := os.ReadFile("../../config/" + file)

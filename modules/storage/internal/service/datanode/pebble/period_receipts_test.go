@@ -117,7 +117,7 @@ func TestPeriodFailureTerminalValidatesIndexes(t *testing.T) {
 }
 
 func TestPeriodCommitAcceptedIndexes(t *testing.T) {
-	field := (&pb.CommitTimeSeriesBatchRsp{}).ProtoReflect().Descriptor().Fields().ByNumber(4)
+	field := (&pb.PrimaryCommitTimeSeriesBatchRsp{}).ProtoReflect().Descriptor().Fields().ByNumber(4)
 	require.NotNil(t, field, "commit RPC must expose persisted target-period success indexes, not infer acceptance from request keys")
 	deadline := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
 	period := deadline.Add(-time.Minute)

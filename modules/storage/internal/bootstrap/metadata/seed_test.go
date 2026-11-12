@@ -2,14 +2,15 @@ package metadata
 
 import (
 	"context"
-	"database/sql"
 	"os"
 	"path/filepath"
 	"sort"
 	"testing"
 
 	metasqlite "github.com/mooyang-code/moox/modules/storage/internal/service/metadata/sqlite"
+	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 	"gopkg.in/yaml.v2"
 )
 
@@ -57,8 +58,6 @@ func TestDefaultSeedImportsIntoEmptyStoreWithDatasetFrequencies(t *testing.T) {
 	var seed seedFile
 	require.NoError(t, yaml.UnmarshalStrict(raw, &seed))
 	store := openSeedTestStore(t)
-	_, err = store.RegisterDataNode(ctx, "storage-node-0", "ip://127.0.0.1:20107", "local node")
-	require.NoError(t, err)
 
 	result, err := importEntities(ctx, store, seed)
 	require.NoError(t, err)
@@ -74,7 +73,8 @@ func TestDefaultSeedImportsIntoEmptyStoreWithDatasetFrequencies(t *testing.T) {
 	}
 }
 
-func TestImportEntitiesRequiresDeploymentRegisteredDataNode(t *testing.T) {
+// 种子新建的数据集直接启用；重新导入不改已有数据集的启停状态。
+func TestImportEntitiesCreatesActiveDatasetsAndKeepsStatusOnReimport(t *testing.T) {
 	ctx := context.Background()
 	store := openSeedTestStore(t)
 	seed := seedFile{
@@ -82,43 +82,25 @@ func TestImportEntitiesRequiresDeploymentRegisteredDataNode(t *testing.T) {
 		DataSources: []seedDataSource{{SpaceID: "space", DataSourceID: "source", Name: "Source", Status: "active"}},
 		Datasets: []seedDataset{{
 			SpaceID: "space", DatasetID: "dataset", DataSourceID: "source", Name: "Dataset",
-			DataKind: "time_series", Freq: "1m", DataNodeID: "storage-node-0", Status: "active",
+			DataKind: "time_series", Freq: "1m", Status: "active",
 		}},
 	}
-
-	_, err := importEntities(ctx, store, seed)
-	require.Error(t, err)
-	// The preflight fails before any logical metadata is written. SQLite
-	// exposes the missing DataNode as sql.ErrNoRows through GetDataNode.
-	require.ErrorIs(t, err, sql.ErrNoRows)
-	_, err = store.GetSpace(ctx, "space")
-	require.ErrorIs(t, err, sql.ErrNoRows)
-
-	_, err = store.RegisterDataNode(ctx, "storage-node-0", "ip://127.0.0.1:20107", "local node")
-	require.NoError(t, err)
 	result, err := importEntities(ctx, store, seed)
 	require.NoError(t, err)
 	require.Equal(t, 1, result.Datasets)
 	dataset, err := store.GetDataset(ctx, "space", "dataset")
 	require.NoError(t, err)
-	require.Equal(t, "storage-node-0", dataset.GetDataNodeId())
-	require.Equal(t, "disabled", dataset.GetStatus(), "seed status must not activate a Dataset")
-}
+	require.Equal(t, "active", dataset.GetStatus())
 
-func TestImportEntitiesValidatesDatasetBindingBeforeWrites(t *testing.T) {
-	ctx := context.Background()
-	store := openSeedTestStore(t)
-	_, err := store.RegisterDataNode(ctx, "storage-node-0", "ip://127.0.0.1:20107", "local node")
+	disabled := proto.Clone(dataset).(*pb.Dataset)
+	disabled.Status = "disabled"
+	_, err = store.UpsertDataset(ctx, disabled)
 	require.NoError(t, err)
-	seed := seedFile{
-		Spaces:   []seedSpace{{SpaceID: "space", Name: "Space"}},
-		Datasets: []seedDataset{{SpaceID: "space", DatasetID: "dataset", DataNodeID: "storage-node-1"}},
-	}
-
 	_, err = importEntities(ctx, store, seed)
-	require.ErrorIs(t, err, sql.ErrNoRows, "a Dataset on an unregistered DataNode is rejected before any write")
-	_, err = store.GetSpace(ctx, "space")
-	require.ErrorIs(t, err, sql.ErrNoRows)
+	require.NoError(t, err)
+	dataset, err = store.GetDataset(ctx, "space", "dataset")
+	require.NoError(t, err)
+	require.Equal(t, "disabled", dataset.GetStatus(), "重新导入不改启停状态")
 }
 
 func TestSeedViewColumnAttributesDefaultsInternalDisplayName(t *testing.T) {

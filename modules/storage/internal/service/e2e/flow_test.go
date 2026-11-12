@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode"
 	storageoutbox "github.com/mooyang-code/moox/modules/storage/internal/service/datanode/outbox"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
 	primarystore "github.com/mooyang-code/moox/modules/storage/internal/service/primarystore"
 	viewservice "github.com/mooyang-code/moox/modules/storage/internal/service/view"
+	"github.com/mooyang-code/moox/modules/storage/internal/serviceauth"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
@@ -54,21 +54,8 @@ func TestSeriesTagPrimaryEventActiveViewAndBackfillFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	node, err := datanode.NewService(datanode.Options{NodeID: "node-a", AuthSecret: secret, Store: store})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer node.Close()
-	primary, err := primarystore.New(primarystore.Options{Snapshot: emptyRequestSnapshot,
-		Resolver: func(_ context.Context, _, dataset string) (primarystore.DataNodeClient, error) {
-			return node, nil
-		},
-		AuthSigner: func(in *pb.AuthInfo) (*pb.AuthInfo, error) {
-			clone := proto.Clone(in).(*pb.AuthInfo)
-			clone.AppKey = datanode.ServiceAuthKey(secret, clone.AppId)
-			return clone, nil
-		},
-	})
+	defer store.Close()
+	primary, err := primarystore.New(primarystore.Options{Snapshot: activeRequestSnapshot, Store: store})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +114,7 @@ func TestSeriesTagPrimaryEventActiveViewAndBackfillFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	viewAuth := &pb.AuthInfo{AppId: "storage-primary", AppKey: datanode.ServiceAuthKey(secret, "storage-primary")}
+	viewAuth := &pb.AuthInfo{AppId: "storage-primary", AppKey: serviceauth.Key(secret, "storage-primary")}
 	view.SetPrimaryAuth(auth)
 	view.SetPrimaryReader(primaryFieldReader{service: primary})
 	columns := []*pb.ViewColumn{

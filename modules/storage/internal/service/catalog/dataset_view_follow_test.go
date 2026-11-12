@@ -25,10 +25,8 @@ func newDatasetFixture(t *testing.T) (*sqlite.Store, *Service, *pb.Dataset) {
 	require.NoError(t, err)
 	_, err = store.UpsertDataSource(ctx, &pb.DataSource{SpaceId: "factor-space", DataSourceId: "factor", Name: "因子计算"})
 	require.NoError(t, err)
-	_, err = store.RegisterDataNode(ctx, "factor-node", "ip://127.0.0.1:19090", "因子节点")
-	require.NoError(t, err)
 	dataset, err := store.CreateDataset(ctx, &pb.Dataset{
-		SpaceId: "factor-space", DatasetId: "dataset_factor_btc_1m", DataSourceId: "factor", DataNodeId: "factor-node",
+		SpaceId: "factor-space", DatasetId: "dataset_factor_btc_1m", DataSourceId: "factor",
 		Name: "BTC 因子", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m",
 	})
 	require.NoError(t, err)
@@ -41,13 +39,15 @@ func newDatasetFixture(t *testing.T) (*sqlite.Store, *Service, *pb.Dataset) {
 		})
 		require.NoError(t, err)
 	}
-	service, err := NewMetadataService(store, nil, Options{
-		AuthSecret:       "secret",
-		NodeStateChecker: &fakeNodeStateChecker{rsp: readyNodeState("factor-node")},
-	})
+	service, err := NewMetadataService(store, nil, Options{Rows: noopRows{}})
 	require.NoError(t, err)
 	return store, service, dataset
 }
+
+// noopRows 是不存行的行存储：只关心元数据的测试用它。
+type noopRows struct{}
+
+func (noopRows) DeleteDatasetRows(context.Context, string, string) (uint64, error) { return 0, nil }
 
 // createView 在数据集上建一个 View；follow 为真时声明 follow_dataset_columns。
 func createView(t *testing.T, store *sqlite.Store, dataset *pb.Dataset, viewID string, follow bool) *pb.View {

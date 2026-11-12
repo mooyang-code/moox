@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata/sqlite"
+	"github.com/mooyang-code/moox/modules/storage/internal/serviceauth"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/stretchr/testify/require"
 )
@@ -19,7 +20,7 @@ func TestCommitViewSchemaExtensionRequiresViewRoleHMAC(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
 	require.NoError(t, store.InitSchema(ctx))
-	service, err := NewMetadataService(store, nil, Options{AuthSecret: "node-secret", ViewAuthSecret: "view-secret"})
+	service, err := NewMetadataService(store, nil, Options{ViewAuthSecret: "view-secret"})
 	require.NoError(t, err)
 
 	req := &pb.CommitViewSchemaExtensionReq{
@@ -31,16 +32,16 @@ func TestCommitViewSchemaExtensionRequiresViewRoleHMAC(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_NO_PERMISSION, rejected.GetRetInfo().GetCode())
 
-	req.AuthInfo = &pb.AuthInfo{AppId: "storage-primary", AppKey: serviceAuthKey("view-secret", "storage-primary")}
+	req.AuthInfo = &pb.AuthInfo{AppId: "storage-primary", AppKey: serviceauth.Key("view-secret", "storage-primary")}
 	rejected, err = service.CommitViewSchemaExtension(ctx, req)
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_NO_PERMISSION, rejected.GetRetInfo().GetCode())
-	req.AuthInfo = &pb.AuthInfo{AppId: "storage-view", AppKey: serviceAuthKey("wrong-secret", "storage-view")}
+	req.AuthInfo = &pb.AuthInfo{AppId: "storage-view", AppKey: serviceauth.Key("wrong-secret", "storage-view")}
 	rejected, err = service.CommitViewSchemaExtension(ctx, req)
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_NO_PERMISSION, rejected.GetRetInfo().GetCode())
 
-	req.AuthInfo = &pb.AuthInfo{AppId: "storage-view", AppKey: serviceAuthKey("view-secret", "storage-view")}
+	req.AuthInfo = &pb.AuthInfo{AppId: "storage-view", AppKey: serviceauth.Key("view-secret", "storage-view")}
 	rejected, err = service.CommitViewSchemaExtension(ctx, req)
 	require.NoError(t, err)
 	require.Equal(t, pb.ErrorCode_NOT_FOUND, rejected.GetRetInfo().GetCode())
@@ -56,7 +57,7 @@ func TestViewOnlyMetadataMethodsRequireViewServiceSignature(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
 	require.NoError(t, store.InitSchema(ctx))
-	service, err := NewMetadataService(store, nil, Options{AuthSecret: "node-secret", ViewAuthSecret: "view-secret"})
+	service, err := NewMetadataService(store, nil, Options{ViewAuthSecret: "view-secret"})
 	require.NoError(t, err)
 
 	calls := map[string]func(*pb.AuthInfo) *pb.RetInfo{
@@ -79,7 +80,7 @@ func TestViewOnlyMetadataMethodsRequireViewServiceSignature(t *testing.T) {
 	}
 	for name, call := range calls {
 		require.Equal(t, pb.ErrorCode_NO_PERMISSION, call(nil).GetCode(), name+" without auth")
-		require.Equal(t, pb.ErrorCode_NO_PERMISSION, call(&pb.AuthInfo{AppId: "storage-view", AppKey: serviceAuthKey("wrong-secret", "storage-view")}).GetCode(), name+" wrong signature")
-		require.NotEqual(t, pb.ErrorCode_NO_PERMISSION, call(&pb.AuthInfo{AppId: "storage-view", AppKey: serviceAuthKey("view-secret", "storage-view")}).GetCode(), name+" correct signature")
+		require.Equal(t, pb.ErrorCode_NO_PERMISSION, call(&pb.AuthInfo{AppId: "storage-view", AppKey: serviceauth.Key("wrong-secret", "storage-view")}).GetCode(), name+" wrong signature")
+		require.NotEqual(t, pb.ErrorCode_NO_PERMISSION, call(&pb.AuthInfo{AppId: "storage-view", AppKey: serviceauth.Key("view-secret", "storage-view")}).GetCode(), name+" correct signature")
 	}
 }

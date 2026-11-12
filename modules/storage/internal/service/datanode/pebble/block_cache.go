@@ -53,7 +53,7 @@ func resolveBlockCache(explicit int64) (bytes int64, source string) {
 		if bytes := hostmem.ParseSize(text); bytes > 0 {
 			return bytes, "环境变量 " + blockCacheEnv
 		}
-		cacheLogf("storage node 环境变量 %s=%q 不是有效的内存值（正整数加 KB/MB/GB/TB），改用按主机内存推算的值", blockCacheEnv, text)
+		cacheLogf("storage 环境变量 %s=%q 不是有效的内存值（正整数加 KB/MB/GB/TB），改用按主机内存推算的值", blockCacheEnv, text)
 	}
 	total := hostMemoryBytes()
 	if total <= 0 {
@@ -78,7 +78,7 @@ func (s *Store) cacheStatsLine(previous *cacheStats) string {
 		}
 		return fmt.Sprintf("%.1f%%", 100*float64(hits)/float64(hits+misses))
 	}
-	return fmt.Sprintf("storage node Pebble 块缓存 占用=%dMB/%dMB 条目=%d 近期命中率=%s（命中 %d、未命中 %d）累计命中率=%s",
+	return fmt.Sprintf("storage Pebble 块缓存 占用=%dMB/%dMB 条目=%d 近期命中率=%s（命中 %d、未命中 %d）累计命中率=%s",
 		metrics.Size>>20, s.blockCacheBytes>>20, metrics.Count, rate(deltaHits, deltaMisses), deltaHits, deltaMisses, rate(metrics.Hits, metrics.Misses))
 }
 

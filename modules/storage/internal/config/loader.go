@@ -88,7 +88,6 @@ func (v StorageView) ValidateConsumer() error {
 // StoragePrimary 保存主存服务访问配置。
 type StoragePrimary struct {
 	ServiceName string `yaml:"service_name"`
-	NodeID      string `yaml:"node_id"`
 }
 
 // StorageHealth controls the lightweight HTTP health endpoint.
@@ -112,9 +111,6 @@ func (c *StorageConfig) ApplyDefaults() {
 	}
 	if len(c.Roles) == 0 {
 		c.Roles = []string{"primary", "view"}
-	}
-	if c.Primary.NodeID == "" {
-		c.Primary.NodeID = "storage-node-0"
 	}
 	if c.Metadata.Path == "" {
 		c.Metadata.Path = filepath.Join(c.Root, "metadata", "storage_metadata.db")

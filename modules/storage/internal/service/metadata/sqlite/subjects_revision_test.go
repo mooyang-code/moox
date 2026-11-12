@@ -28,7 +28,6 @@ func TestSubjectsRevisionTracksSubjectScopeChanges(t *testing.T) {
 	ctx := context.Background()
 	store := openTestStore(t, ctx)
 	seedDatasetParents(t, ctx, store)
-	registerActiveNode(t, ctx, store, "node-a")
 
 	expectChange := func(name string, change func()) {
 		t.Helper()
@@ -86,7 +85,7 @@ func TestSubjectsRevisionTracksSubjectScopeChanges(t *testing.T) {
 	})
 
 	// 数据集：创建、改标的范围、删除后以同 ID 重建，都必须递增（缓存键是 space+dataset）。
-	expectChange("dataset insert", func() { createTestDataset(t, ctx, store, "dataset", "node-a") })
+	expectChange("dataset insert", func() { createTestDataset(t, ctx, store, "dataset") })
 	expectChange("dataset subject tags", func() {
 		execRevisionSQL(t, ctx, store, `UPDATE t_datasets SET c_subject_tags_json = '["assets"]' WHERE c_dataset_id = 'dataset'`)
 	})
@@ -98,7 +97,7 @@ func TestSubjectsRevisionTracksSubjectScopeChanges(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	expectChange("dataset recreate", func() { createTestDataset(t, ctx, store, "dataset", "node-a") })
+	expectChange("dataset recreate", func() { createTestDataset(t, ctx, store, "dataset") })
 
 	// 回滚的事务不改变修订号。
 	before := subjectsRevision(t, ctx, store)

@@ -14,10 +14,10 @@ import (
 
 	"github.com/mooyang-code/moox/modules/storage/internal/observability"
 	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
-	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	viewbleve "github.com/mooyang-code/moox/modules/storage/internal/service/viewindex/bleve"
 	viewduckdb "github.com/mooyang-code/moox/modules/storage/internal/service/viewindex/duckdb"
+	"github.com/mooyang-code/moox/modules/storage/internal/serviceauth"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/storagepolicy"
 	"google.golang.org/protobuf/proto"
@@ -700,7 +700,7 @@ func (s *Service) authorize(auth *pb.AuthInfo) error {
 	if auth == nil || strings.TrimSpace(auth.GetAppId()) == "" || strings.TrimSpace(auth.GetAppKey()) == "" {
 		return errors.New("view auth is required")
 	}
-	expected := datanode.ServiceAuthKey(s.authSecret, auth.GetAppId())
+	expected := serviceauth.Key(s.authSecret, auth.GetAppId())
 	if !hmac.Equal([]byte(strings.ToLower(auth.GetAppKey())), []byte(expected)) {
 		return errors.New("invalid view HMAC")
 	}

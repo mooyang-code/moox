@@ -19,13 +19,11 @@ import (
 )
 
 const (
-	outboxPrefix         = "__outbox/"
-	datasetDeletedPrefix = "__dataset_deleted/"
-	metaNextID           = "__meta/next_outbox_id"
+	outboxPrefix = "__outbox/"
+	metaNextID   = "__meta/next_outbox_id"
 )
 
-// Options controls one DataNode Pebble database. A node can host multiple
-// datasets; the dataset identity is part of every physical key.
+// Options 控制主服务的 Pebble 库。库里存放全部数据集，数据集身份是每个物理键的一部分。
 type Options struct {
 	Path           string
 	NodeID         string
@@ -37,6 +35,8 @@ type Options struct {
 	PeriodNow          func() time.Time
 	// BlockCacheBytes 是 Pebble 块缓存大小；为 0 时由环境变量或主机内存推算，见 resolveBlockCache。
 	BlockCacheBytes int64
+	// DatasetExists 在写入拿到数据集读锁后确认数据集仍在元数据里，必须读当前最新的元数据；为空时不检查。
+	DatasetExists func(spaceID, datasetID string) bool
 }
 
 type OutboxEntry struct {
@@ -83,6 +83,8 @@ type Store struct {
 	// statsStop 通知缓存用量日志协程退出，由 Close 关闭。
 	statsStop chan struct{}
 	statsOnce sync.Once
+	// datasetExists 见 Options.DatasetExists。
+	datasetExists func(spaceID, datasetID string) bool
 }
 
 func Open(opts Options) (*Store, error) {
@@ -109,7 +111,7 @@ func Open(opts Options) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	cacheLogf("storage node Pebble 块缓存 %dMB（%s）", cacheBytes>>20, cacheSource)
+	cacheLogf("storage Pebble 块缓存 %dMB（%s）", cacheBytes>>20, cacheSource)
 	sourceStoreID, err := bindSourceStore(db, opts.NodeID)
 	if err != nil {
 		_ = db.Close()
@@ -120,7 +122,7 @@ func Open(opts Options) (*Store, error) {
 		writeOptions = cpebble.NoSync
 	}
 	backgroundCtx, backgroundCancel := context.WithCancel(context.Background())
-	store := &Store{db: db, writeOptions: writeOptions, nodeID: opts.NodeID, sourceStoreID: sourceStoreID, bucketDuration: opts.BucketDuration, maxEventBytes: opts.MaxEventBytes, changeLogRetention: opts.ChangeLogRetention, periodNow: opts.PeriodNow, backgroundCtx: backgroundCtx, backgroundCancel: backgroundCancel, blockCacheBytes: cacheBytes, statsStop: make(chan struct{}), outboxWake: make(chan struct{}, 1)}
+	store := &Store{db: db, writeOptions: writeOptions, nodeID: opts.NodeID, sourceStoreID: sourceStoreID, bucketDuration: opts.BucketDuration, maxEventBytes: opts.MaxEventBytes, changeLogRetention: opts.ChangeLogRetention, periodNow: opts.PeriodNow, backgroundCtx: backgroundCtx, backgroundCancel: backgroundCancel, blockCacheBytes: cacheBytes, statsStop: make(chan struct{}), outboxWake: make(chan struct{}, 1), datasetExists: opts.DatasetExists}
 	store.startPeriodFinalizer()
 	store.startCacheStats(cacheStatsFirstDelay, cacheStatsInterval)
 	return store, nil

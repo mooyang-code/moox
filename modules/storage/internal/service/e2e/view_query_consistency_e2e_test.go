@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode"
 	viewservice "github.com/mooyang-code/moox/modules/storage/internal/service/view"
+	"github.com/mooyang-code/moox/modules/storage/internal/serviceauth"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
@@ -20,7 +20,7 @@ func TestViewQueryFilterSortPageAndTotalE2E(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	auth := &pb.AuthInfo{AppId: "e2e", AppKey: datanode.ServiceAuthKey(secret, "e2e")}
+	auth := &pb.AuthInfo{AppId: "e2e", AppKey: serviceauth.Key(secret, "e2e")}
 	if rsp, err := service.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{
 		AuthInfo: auth,
 		IndexId:  "prices-view",

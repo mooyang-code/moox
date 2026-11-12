@@ -2,11 +2,11 @@ package catalog
 
 import (
 	"context"
-	"crypto/hmac"
 	"errors"
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
+	"github.com/mooyang-code/moox/modules/storage/internal/serviceauth"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 )
 
@@ -56,8 +56,7 @@ func (s *Service) validateViewServiceAuth(auth *pb.AuthInfo) error {
 	if auth.GetAppId() != "storage-view" {
 		return errors.New("storage-view service identity required")
 	}
-	expected := serviceAuthKey(s.viewAuthSecret, auth.GetAppId())
-	if !hmac.Equal([]byte(strings.ToLower(strings.TrimSpace(auth.GetAppKey()))), []byte(expected)) {
+	if !serviceauth.Valid(s.viewAuthSecret, auth.GetAppId(), strings.TrimSpace(auth.GetAppKey())) {
 		return errors.New("invalid View service HMAC")
 	}
 	return nil

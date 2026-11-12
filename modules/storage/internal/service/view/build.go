@@ -224,7 +224,7 @@ func (s *Service) backfillInitialIndex(ctx context.Context, view *pb.View, schem
 }
 
 // backfillPrimaryHistory 回填 View 保留的最近行：不指定标的、每个序列取最近 periods 根，
-// 按 next_cursor 逐页读取（每页 pageSize 行，DataNode 再按单页值数上限截断），一次拿到值。
+// 按 next_cursor 逐页读取（每页 pageSize 行，Pebble 再按单页值数上限截断），一次拿到值。
 // 某一页失败（含超时）时整次建索引失败重试，不静默跳过标的。
 func (s *Service) backfillPrimaryHistory(ctx context.Context, view *pb.View, schema viewindex.ViewIndexSchema, indexID string, pageSize int, rangeReader TimeSeriesRangeReader, periods uint64, limiter *backfillRequestLimiter) (uint64, error) {
 	spaceID, viewID, frequency := view.GetSpaceId(), view.GetViewId(), view.GetFreq()

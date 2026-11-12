@@ -25,15 +25,13 @@ func TestSingleDatasetView(t *testing.T) {
 	require.NoError(t, err)
 	_, err = store.UpsertDataSource(ctx, &pb.DataSource{SpaceId: "space", DataSourceId: "source", Name: "来源"})
 	require.NoError(t, err)
-	_, err = store.RegisterDataNode(ctx, "node-a", "trpc://node-a", "node-a")
-	require.NoError(t, err)
 	prices, err := store.CreateDataset(ctx, &pb.Dataset{
-		SpaceId: "space", DatasetId: "dataset_prices", DataSourceId: "source", DataNodeId: "node-a",
+		SpaceId: "space", DatasetId: "dataset_prices", DataSourceId: "source",
 		Name: "行情", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m",
 	})
 	require.NoError(t, err)
 	_, err = store.CreateDataset(ctx, &pb.Dataset{
-		SpaceId: "space", DatasetId: "dataset_fundamentals", DataSourceId: "source", DataNodeId: "node-a",
+		SpaceId: "space", DatasetId: "dataset_fundamentals", DataSourceId: "source",
 		Name: "基本面", DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: "1m",
 	})
 	require.NoError(t, err)
@@ -50,7 +48,7 @@ func TestSingleDatasetView(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	svc, err := catalog.NewMetadataService(store, nil, catalog.Options{AuthSecret: "secret"})
+	svc, err := catalog.NewMetadataService(store, nil, catalog.Options{})
 	require.NoError(t, err)
 
 	closeCol := &pb.ViewColumn{

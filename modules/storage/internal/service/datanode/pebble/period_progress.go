@@ -117,12 +117,8 @@ func (s *Store) EnsureDatasetPeriod(ctx context.Context, exp DatasetPeriodExpect
 	}
 	s.datasetWriteMu.RLock()
 	defer s.datasetWriteMu.RUnlock()
-	deleted, err := s.isDatasetDeleted(exp.SpaceID, exp.DatasetID)
-	if err != nil {
+	if err := s.requireDataset(exp.SpaceID, exp.DatasetID); err != nil {
 		return DatasetPeriodResult{}, err
-	}
-	if deleted {
-		return DatasetPeriodResult{}, ErrDatasetDeleted
 	}
 	s.periodMu.Lock()
 	defer s.periodMu.Unlock()

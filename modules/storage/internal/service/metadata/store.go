@@ -39,8 +39,6 @@ type FieldGroupCounts struct {
 type DatasetQuery struct {
 	SpaceID      string
 	DataSourceID string
-	DataNodeID   string
-	DataNodeIDs  []string
 	Freq         string
 	DataKind     pb.DataKind
 	Page         *pb.Page
@@ -53,11 +51,9 @@ type SnapshotReader interface {
 	ListDatasetColumns(ctx context.Context, spaceID string, datasetID string, page *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error)
 }
 
-// RequestSnapshot is the immutable metadata generation shared by validation
-// and direct Dataset -> DataNode resolution for one request.
+// RequestSnapshot 是一次请求内校验与读写共用的不可变元数据版本。
 type RequestSnapshot interface {
 	GetDataset(spaceID string, datasetID string) (*pb.Dataset, bool)
-	GetDataNode(nodeID string) (*pb.DataNode, bool)
 	ListDatasetColumns(spaceID string, datasetID string, page *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error)
 }
 
@@ -103,8 +99,6 @@ type Reader interface {
 	CountFieldsByGroup(ctx context.Context, spaceID string) (FieldGroupCounts, error)
 	ListDatasetColumns(ctx context.Context, spaceID string, datasetID string, page *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error)
 
-	GetDataNode(ctx context.Context, nodeID string) (*pb.DataNode, error)
-	ListDataNodes(ctx context.Context, page *pb.Page) ([]*pb.DataNode, *pb.PageResult, error)
 	GetDevice(ctx context.Context, deviceID string) (*pb.Device, error)
 	ListDevices(ctx context.Context, engine string, page *pb.Page) ([]*pb.Device, *pb.PageResult, error)
 }
@@ -129,7 +123,7 @@ type Writer interface {
 	UpsertDataSource(ctx context.Context, item *pb.DataSource) (*pb.DataSource, error)
 	DeleteDataSource(ctx context.Context, spaceID string, dataSourceID string) error
 	UpsertSubject(ctx context.Context, item *pb.Subject) (*pb.Subject, error)
-	UpsertDataset(ctx context.Context, item *pb.Dataset) (*pb.Dataset, error)
+	UpsertDataset(ctx context.Context, item *pb.Dataset, columns ...*pb.DatasetColumn) (*pb.Dataset, error)
 	DeleteDataset(ctx context.Context, spaceID string, datasetID string) error
 	UpsertFieldGroup(ctx context.Context, item *pb.FieldGroup) (*pb.FieldGroup, error)
 	CreateFieldGroup(ctx context.Context, item *pb.FieldGroup) (*pb.FieldGroup, error)
@@ -140,11 +134,6 @@ type Writer interface {
 	BatchUpdateFields(ctx context.Context, spaceID string, fieldIDs []string, targetGroupID string, targetStatus string) (uint32, error)
 	DeleteFieldGroup(ctx context.Context, spaceID string, groupID string) error
 	UpsertDatasetColumn(ctx context.Context, item *pb.DatasetColumn) (*pb.DatasetColumn, error)
-	RegisterDataNode(ctx context.Context, nodeID string, serviceTarget string, initialName string) (*pb.DataNode, error)
-	UpdateDataNode(ctx context.Context, nodeID string, name string, status string) (*pb.DataNode, error)
-	DeleteDataNode(ctx context.Context, nodeID string) error
-	RebindDatasetDataNode(ctx context.Context, spaceID string, datasetID string, dataNodeID string, expectedRevision uint64) (*pb.Dataset, error)
-	CommitDatasetActivation(ctx context.Context, spaceID string, datasetID string, expectedRevision uint64) (*pb.Dataset, error)
 	UpsertDevice(ctx context.Context, item *pb.Device) (*pb.Device, error)
 }
 

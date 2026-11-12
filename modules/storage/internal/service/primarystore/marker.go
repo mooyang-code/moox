@@ -8,43 +8,30 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
-	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
+	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	storageeventpb "github.com/mooyang-code/moox/packages/storagepb"
+	"google.golang.org/protobuf/proto"
 )
 
-type markerDataNodeClient interface {
-	AppendDatasetPeriodCompleted(context.Context, *pb.AppendDatasetPeriodCompletedReq) (*pb.AppendDatasetPeriodCompletedRsp, error)
-	AppendDatasetSyncPointMarker(context.Context, *pb.AppendDatasetSyncPointMarkerReq) (*pb.AppendDatasetSyncPointMarkerRsp, error)
-	GetDatasetPeriodCompletedMarker(context.Context, *pb.GetDatasetPeriodCompletedMarkerReq) (*pb.GetDatasetPeriodCompletedMarkerRsp, error)
-}
-
-// ReportDatasetPeriodCompleted 追加写入方自己报告的周期完成（source=producer）；账本判定的完成由 DataNode 自己产生。
+// ReportDatasetPeriodCompleted 追加写入方自己报告的周期完成（source=producer）；账本判定的完成由存储层在周期封口时生成。
 func (s *Service) ReportDatasetPeriodCompleted(ctx context.Context, req *pb.ReportDatasetPeriodCompletedReq) (*pb.ReportDatasetPeriodCompletedRsp, error) {
 	if err := s.validateMarkerCaller(req.GetAuthInfo(), req.GetSpaceId(), req.GetMarker().GetDatasetId()); err != nil {
 		return &pb.ReportDatasetPeriodCompletedRsp{RetInfo: markerError(err)}, nil
 	}
 	ctx = s.requestContext(ctx)
-	ownerNodeID, err := datasetOwnerNodeID(ctx, req.GetSpaceId(), req.GetMarker().GetDatasetId())
-	if err != nil {
+	if err := requireActiveDataset(ctx, req.GetSpaceId(), req.GetMarker().GetDatasetId()); err != nil {
 		return &pb.ReportDatasetPeriodCompletedRsp{RetInfo: markerError(err)}, nil
 	}
-	node, err := s.resolve(ctx, req.GetSpaceId(), req.GetMarker().GetDatasetId())
+	raw, _, err := pebble.BuildProducerPeriodCompletedMessage(req.GetSpaceId(), req.GetMarker())
 	if err != nil {
-		return &pb.ReportDatasetPeriodCompletedRsp{RetInfo: markerError(err)}, nil
+		return &pb.ReportDatasetPeriodCompletedRsp{RetInfo: storeError(err)}, nil
 	}
-	markerNode, ok := node.(markerDataNodeClient)
-	if !ok {
-		return &pb.ReportDatasetPeriodCompletedRsp{RetInfo: markerError(errors.New("DataNode marker RPC is unavailable"))}, nil
-	}
-	auth, err := s.signAuth(req.GetAuthInfo())
+	eventID, err := s.store.AppendDatasetMarker(ctx, raw)
 	if err != nil {
-		return &pb.ReportDatasetPeriodCompletedRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+		return &pb.ReportDatasetPeriodCompletedRsp{RetInfo: storeError(err)}, nil
 	}
-	rsp, err := markerNode.AppendDatasetPeriodCompleted(ctx, &pb.AppendDatasetPeriodCompletedReq{AuthInfo: auth, NodeId: ownerNodeID, SpaceId: req.GetSpaceId(), Marker: req.GetMarker()})
-	if err != nil {
-		return &pb.ReportDatasetPeriodCompletedRsp{RetInfo: markerError(err)}, nil
-	}
-	return &pb.ReportDatasetPeriodCompletedRsp{RetInfo: rsp.GetRetInfo(), EventId: rsp.GetEventId()}, nil
+	return &pb.ReportDatasetPeriodCompletedRsp{RetInfo: retinfo.Success("success"), EventId: eventID}, nil
 }
 
 func (s *Service) AppendDatasetSyncPoint(ctx context.Context, req *pb.AppendDatasetSyncPointReq) (*pb.AppendDatasetSyncPointRsp, error) {
@@ -56,27 +43,18 @@ func (s *Service) AppendDatasetSyncPoint(ctx context.Context, req *pb.AppendData
 		return &pb.AppendDatasetSyncPointRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("request_id and source import|catchup are required"))}, nil
 	}
 	ctx = s.requestContext(ctx)
-	node, err := s.resolve(ctx, req.GetSpaceId(), marker.GetDatasetId())
-	if err != nil {
+	if err := requireActiveDataset(ctx, req.GetSpaceId(), marker.GetDatasetId()); err != nil {
 		return &pb.AppendDatasetSyncPointRsp{RetInfo: markerError(err)}, nil
 	}
-	markerNode, ok := node.(markerDataNodeClient)
-	if !ok {
-		return &pb.AppendDatasetSyncPointRsp{RetInfo: markerError(errors.New("DataNode marker RPC is unavailable"))}, nil
-	}
-	ownerNodeID, err := datasetOwnerNodeID(ctx, req.GetSpaceId(), marker.GetDatasetId())
+	raw, _, err := pebble.BuildDatasetSyncPointMessage(req.GetSpaceId(), marker)
 	if err != nil {
-		return &pb.AppendDatasetSyncPointRsp{RetInfo: markerError(err)}, nil
+		return &pb.AppendDatasetSyncPointRsp{RetInfo: storeError(err)}, nil
 	}
-	auth, err := s.signAuth(req.GetAuthInfo())
+	eventID, err := s.store.AppendDatasetMarker(ctx, raw)
 	if err != nil {
-		return &pb.AppendDatasetSyncPointRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+		return &pb.AppendDatasetSyncPointRsp{RetInfo: storeError(err)}, nil
 	}
-	rsp, err := markerNode.AppendDatasetSyncPointMarker(ctx, &pb.AppendDatasetSyncPointMarkerReq{AuthInfo: auth, NodeId: ownerNodeID, SpaceId: req.GetSpaceId(), SyncPoint: marker})
-	if err != nil {
-		return &pb.AppendDatasetSyncPointRsp{RetInfo: markerError(err)}, nil
-	}
-	return &pb.AppendDatasetSyncPointRsp{RetInfo: rsp.GetRetInfo(), EventId: rsp.GetEventId()}, nil
+	return &pb.AppendDatasetSyncPointRsp{RetInfo: retinfo.Success("success"), EventId: eventID}, nil
 }
 
 func (s *Service) GetDatasetPeriodCompleted(ctx context.Context, req *pb.GetDatasetPeriodCompletedReq) (*pb.GetDatasetPeriodCompletedRsp, error) {
@@ -87,57 +65,47 @@ func (s *Service) GetDatasetPeriodCompleted(ctx context.Context, req *pb.GetData
 		return &pb.GetDatasetPeriodCompletedRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
 	ctx = s.requestContext(ctx)
-	ownerNodeID, err := datasetOwnerNodeID(ctx, req.GetSpaceId(), req.GetDatasetId())
-	if err != nil {
+	if err := requireActiveDataset(ctx, req.GetSpaceId(), req.GetDatasetId()); err != nil {
 		return &pb.GetDatasetPeriodCompletedRsp{RetInfo: markerError(err)}, nil
 	}
-	node, err := s.resolve(ctx, req.GetSpaceId(), req.GetDatasetId())
+	message, found, err := s.store.GetDatasetPeriodCompletedMarker(ctx, req.GetSpaceId(), req.GetDatasetId(), req.GetCauseEventId(), req.GetPeriodTime())
 	if err != nil {
-		return &pb.GetDatasetPeriodCompletedRsp{RetInfo: markerError(err)}, nil
+		return &pb.GetDatasetPeriodCompletedRsp{RetInfo: storeError(err)}, nil
 	}
-	markerNode, ok := node.(markerDataNodeClient)
-	if !ok {
-		return &pb.GetDatasetPeriodCompletedRsp{RetInfo: markerError(errors.New("DataNode marker RPC is unavailable"))}, nil
+	if !found {
+		return &pb.GetDatasetPeriodCompletedRsp{RetInfo: retinfo.Success("success")}, nil
 	}
-	auth, err := s.signAuth(req.GetAuthInfo())
-	if err != nil {
-		return &pb.GetDatasetPeriodCompletedRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
+	payload := &storageeventpb.DatasetPeriodCompleted{}
+	if err := proto.Unmarshal(message.GetPayload(), payload); err != nil {
+		return &pb.GetDatasetPeriodCompletedRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, err)}, nil
 	}
-	rsp, err := markerNode.GetDatasetPeriodCompletedMarker(ctx, &pb.GetDatasetPeriodCompletedMarkerReq{
-		AuthInfo: auth, NodeId: ownerNodeID, SpaceId: req.GetSpaceId(), DatasetId: req.GetDatasetId(),
-		CauseEventId: req.GetCauseEventId(), PeriodTime: req.GetPeriodTime(),
-	})
-	if err != nil {
-		return &pb.GetDatasetPeriodCompletedRsp{RetInfo: markerError(err)}, nil
-	}
-	return &pb.GetDatasetPeriodCompletedRsp{RetInfo: rsp.GetRetInfo(), Found: rsp.GetFound(), EventId: rsp.GetEventId(), Marker: rsp.GetMarker()}, nil
+	return &pb.GetDatasetPeriodCompletedRsp{
+		RetInfo: retinfo.Success("success"), Found: true, EventId: message.GetEventId(),
+		Marker: &pb.DatasetPeriodCompletedMarker{
+			DatasetId: payload.GetDatasetId(), Frequency: payload.GetFrequency(), PeriodTime: payload.GetPeriodTime(),
+			Status: payload.GetStatus(), UniverseSubjectIds: append([]string(nil), payload.GetUniverseSubjectIds()...),
+			FailedSubjects: append([]string(nil), payload.GetFailedSubjects()...), CauseEventId: payload.GetCauseEventId(),
+			UniverseSeries: markerSeries(payload.GetUniverseSeries()), FailedSeries: markerSeries(payload.GetFailedSeries()),
+			CompletedAt: payload.GetCompletedAt(), DetailType: payload.GetDetailType(), Detail: append([]byte(nil), payload.GetDetail()...),
+		},
+	}, nil
 }
 
-func datasetOwnerNodeID(ctx context.Context, spaceID, datasetID string) (string, error) {
-	dataset, err := snapshotDataset(ctx, spaceID, datasetID)
-	if err != nil {
-		return "", err
+// markerSeries 把事件形态的序列名单转成 Storage RPC 形态。
+func markerSeries(values []*storageeventpb.SeriesRef) []*pb.SeriesRef {
+	out := make([]*pb.SeriesRef, 0, len(values))
+	for _, value := range values {
+		out = append(out, &pb.SeriesRef{SubjectId: value.GetSubjectId(), SeriesTag: value.GetSeriesTag()})
 	}
-	nodeID := strings.TrimSpace(dataset.GetDataNodeId())
-	if nodeID == "" {
-		return "", errors.New("dataset has no owner DataNode")
+	if len(out) == 0 {
+		return nil
 	}
-	return nodeID, nil
+	return out
 }
 
-func snapshotDataset(ctx context.Context, spaceID, datasetID string) (*pb.Dataset, error) {
-	snapshot := metadata.RequestSnapshotFromContext(ctx)
-	if snapshot == nil {
-		return nil, errors.New("metadata snapshot is unavailable for DataNode routing")
-	}
-	dataset, found := snapshot.GetDataset(spaceID, datasetID)
-	if !found || dataset == nil {
-		return nil, errors.New("dataset is missing from metadata snapshot")
-	}
-	if dataset.GetSpaceId() != spaceID || dataset.GetDatasetId() != datasetID {
-		return nil, errors.New("dataset identity does not match metadata snapshot request")
-	}
-	return dataset, nil
+// storeError 把存储层错误转成带错误码的返回信息。
+func storeError(err error) *pb.RetInfo {
+	return retinfo.Error(pebble.ErrorCode(err), err)
 }
 
 func (s *Service) WaitViewSyncPoint(ctx context.Context, req *pb.WaitViewSyncPointReq) (*pb.WaitViewSyncPointRsp, error) {

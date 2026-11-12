@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
+	"github.com/mooyang-code/moox/modules/storage/internal/serviceauth"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"trpc.group/trpc-go/trpc-go/client"
 )
@@ -36,7 +36,7 @@ func TestViewIndexAndDataViewExplicitKeyFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	auth := &pb.AuthInfo{AppId: "caller", AppKey: datanode.ServiceAuthKey("view-secret", "caller")}
+	auth := &pb.AuthInfo{AppId: "caller", AppKey: serviceauth.Key("view-secret", "caller")}
 	columns := []*pb.ViewColumn{{ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}
 	if rsp, err := svc.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{AuthInfo: auth, IndexId: "prices-view", Schema: &pb.ViewIndexSchema{SpaceId: "quant", ViewId: "prices-view", DatasetId: "prices", ViewVersion: 1, Engine: "duckdb", ViewSchemaHash: "schema-1", Columns: columns}}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("prepare: rsp=%v err=%v", rsp, err)
@@ -123,7 +123,7 @@ func TestDataViewSupportsTimeRangeAndTextOnlyQueries(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	auth := &pb.AuthInfo{AppId: "caller", AppKey: datanode.ServiceAuthKey("view-secret", "caller")}
+	auth := &pb.AuthInfo{AppId: "caller", AppKey: serviceauth.Key("view-secret", "caller")}
 	prepare := func(id string) {
 		t.Helper()
 		rsp, err := svc.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{
@@ -175,7 +175,7 @@ func TestViewDatasetMappingIncludesSpace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	auth := &pb.AuthInfo{AppId: "caller", AppKey: datanode.ServiceAuthKey("view-secret", "caller")}
+	auth := &pb.AuthInfo{AppId: "caller", AppKey: serviceauth.Key("view-secret", "caller")}
 	for _, space := range []string{"space-a", "space-b"} {
 		rsp, err := svc.PrepareViewIndex(context.Background(), &pb.PrepareViewIndexReq{
 			AuthInfo: auth,
@@ -223,7 +223,7 @@ func TestOwnedDatasetEventRecoversMissingColumn(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	auth := &pb.AuthInfo{AppId: "caller", AppKey: datanode.ServiceAuthKey("view-secret", "caller")}
+	auth := &pb.AuthInfo{AppId: "caller", AppKey: serviceauth.Key("view-secret", "caller")}
 	if rsp, err := svc.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{AuthInfo: auth, IndexId: "owned", Schema: &pb.ViewIndexSchema{
 		SpaceId: "space", ViewId: "owned", DatasetId: "primary", ViewVersion: 1, Engine: "bleve", ViewSchemaHash: "hash",
 		Columns: []*pb.ViewColumn{{OriginId: "base", ColumnName: "base"}, {OriginId: "factor", ColumnName: "factor"}},
@@ -262,7 +262,7 @@ func TestCompleteEventCreatesMissingViewRowWithoutRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	auth := &pb.AuthInfo{AppId: "caller", AppKey: datanode.ServiceAuthKey("view-secret", "caller")}
+	auth := &pb.AuthInfo{AppId: "caller", AppKey: serviceauth.Key("view-secret", "caller")}
 	if rsp, err := svc.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{AuthInfo: auth, IndexId: "single", Schema: &pb.ViewIndexSchema{
 		SpaceId: "space", ViewId: "single", DatasetId: "market", ViewVersion: 1, Engine: "bleve", ViewSchemaHash: "hash",
 		Columns: []*pb.ViewColumn{{OriginId: "close", ColumnName: "close"}},
@@ -318,7 +318,7 @@ func TestInitialBuildAcksRowsAfterWritingBuildingIndex(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	auth := &pb.AuthInfo{AppId: "caller", AppKey: datanode.ServiceAuthKey("view-secret", "caller")}
+	auth := &pb.AuthInfo{AppId: "caller", AppKey: serviceauth.Key("view-secret", "caller")}
 	columns := []*pb.ViewColumn{{OriginId: "close", ColumnName: "close", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE}}
 	if rsp, err := svc.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{AuthInfo: auth, IndexId: "priming-view", Schema: &pb.ViewIndexSchema{
 		SpaceId: "space", ViewId: "priming", DatasetId: "market", ViewVersion: 1, Engine: "bleve", ViewSchemaHash: "hash", Columns: columns,
@@ -341,7 +341,7 @@ func TestExplicitEmptyViewRoutesDatasetEventsWithoutBlocking(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	auth := &pb.AuthInfo{AppId: "caller", AppKey: datanode.ServiceAuthKey("view-secret", "caller")}
+	auth := &pb.AuthInfo{AppId: "caller", AppKey: serviceauth.Key("view-secret", "caller")}
 	if rsp, err := svc.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{AuthInfo: auth, IndexId: "empty-view", Schema: &pb.ViewIndexSchema{
 		SpaceId: "space", ViewId: "empty", DatasetId: "market", ViewVersion: 1, Engine: "bleve", ViewSchemaHash: "hash",
 	}}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {

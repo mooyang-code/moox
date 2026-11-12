@@ -101,11 +101,11 @@ type MetadataService interface {
 	GetDataset(ctx context.Context, req *GetDatasetReq) (*GetDatasetRsp, error)
 	// ListDatasets 列出数据集。
 	ListDatasets(ctx context.Context, req *ListDatasetsReq) (*ListDatasetsRsp, error)
-	// RebindDatasetDataNode 仅限离线运维：暂停写入并完成数据迁移后，更换 disabled Dataset 的 DataNode 绑定。
+	// RebindDatasetDataNode 已无作用：节点已并入主服务，返回未实现；调用方改造后删除。
 	RebindDatasetDataNode(ctx context.Context, req *RebindDatasetDataNodeReq) (*RebindDatasetDataNodeRsp, error)
-	// CheckDatasetActivation 只读检查 Dataset 是否满足激活条件。
+	// CheckDatasetActivation 已无作用：数据集建好即可用，总是返回就绪；调用方改造后删除。
 	CheckDatasetActivation(ctx context.Context, req *CheckDatasetActivationReq) (*CheckDatasetActivationRsp, error)
-	// ActivateDataset 使用 revision CAS 激活 Dataset。
+	// ActivateDataset 已无作用：数据集建好即可用，停用的数据集在这里重新启用；调用方改造后删除。
 	ActivateDataset(ctx context.Context, req *ActivateDatasetReq) (*ActivateDatasetRsp, error)
 	// ListDatasetSubjects 列出 Dataset 覆盖的 Subject。
 	ListDatasetSubjects(ctx context.Context, req *ListDatasetSubjectsReq) (*ListDatasetSubjectsRsp, error)
@@ -133,15 +133,15 @@ type MetadataService interface {
 	UpsertDatasetColumn(ctx context.Context, req *UpsertDatasetColumnReq) (*UpsertDatasetColumnRsp, error)
 	// ListDatasetColumns 列出数据集列。
 	ListDatasetColumns(ctx context.Context, req *ListDatasetColumnsReq) (*ListDatasetColumnsRsp, error)
-	// RegisterDataNode 注册或刷新 DataNode。
+	// RegisterDataNode 以下五个节点接口已无作用：节点已并入主服务，返回未实现；调用方改造后删除。
 	RegisterDataNode(ctx context.Context, req *RegisterDataNodeReq) (*RegisterDataNodeRsp, error)
-	// UpdateDataNode 更新 DataNode 名称和状态。
+
 	UpdateDataNode(ctx context.Context, req *UpdateDataNodeReq) (*UpdateDataNodeRsp, error)
-	// GetDataNode 按 ID 获取 DataNode。
+
 	GetDataNode(ctx context.Context, req *GetDataNodeReq) (*GetDataNodeRsp, error)
-	// ListDataNodes 分页列出 DataNode 及其 Dataset 摘要。
+
 	ListDataNodes(ctx context.Context, req *ListDataNodesReq) (*ListDataNodesRsp, error)
-	// DeleteDataNode 删除满足约束的 DataNode。
+
 	DeleteDataNode(ctx context.Context, req *DeleteDataNodeReq) (*DeleteDataNodeRsp, error)
 	// CreateDevice 创建设备。
 	CreateDevice(ctx context.Context, req *CreateDeviceReq) (*CreateDeviceRsp, error)
@@ -1801,17 +1801,17 @@ func (s *UnimplementedMetadata) ListDatasets(ctx context.Context, req *ListDatas
 	return nil, errors.New("rpc ListDatasets of service Metadata is not implemented")
 }
 
-// RebindDatasetDataNode 仅限离线运维：暂停写入并完成数据迁移后，更换 disabled Dataset 的 DataNode 绑定。
+// RebindDatasetDataNode 已无作用：节点已并入主服务，返回未实现；调用方改造后删除。
 func (s *UnimplementedMetadata) RebindDatasetDataNode(ctx context.Context, req *RebindDatasetDataNodeReq) (*RebindDatasetDataNodeRsp, error) {
 	return nil, errors.New("rpc RebindDatasetDataNode of service Metadata is not implemented")
 }
 
-// CheckDatasetActivation 只读检查 Dataset 是否满足激活条件。
+// CheckDatasetActivation 已无作用：数据集建好即可用，总是返回就绪；调用方改造后删除。
 func (s *UnimplementedMetadata) CheckDatasetActivation(ctx context.Context, req *CheckDatasetActivationReq) (*CheckDatasetActivationRsp, error) {
 	return nil, errors.New("rpc CheckDatasetActivation of service Metadata is not implemented")
 }
 
-// ActivateDataset 使用 revision CAS 激活 Dataset。
+// ActivateDataset 已无作用：数据集建好即可用，停用的数据集在这里重新启用；调用方改造后删除。
 func (s *UnimplementedMetadata) ActivateDataset(ctx context.Context, req *ActivateDatasetReq) (*ActivateDatasetRsp, error) {
 	return nil, errors.New("rpc ActivateDataset of service Metadata is not implemented")
 }
@@ -1881,27 +1881,19 @@ func (s *UnimplementedMetadata) ListDatasetColumns(ctx context.Context, req *Lis
 	return nil, errors.New("rpc ListDatasetColumns of service Metadata is not implemented")
 }
 
-// RegisterDataNode 注册或刷新 DataNode。
+// RegisterDataNode 以下五个节点接口已无作用：节点已并入主服务，返回未实现；调用方改造后删除。
 func (s *UnimplementedMetadata) RegisterDataNode(ctx context.Context, req *RegisterDataNodeReq) (*RegisterDataNodeRsp, error) {
 	return nil, errors.New("rpc RegisterDataNode of service Metadata is not implemented")
 }
-
-// UpdateDataNode 更新 DataNode 名称和状态。
 func (s *UnimplementedMetadata) UpdateDataNode(ctx context.Context, req *UpdateDataNodeReq) (*UpdateDataNodeRsp, error) {
 	return nil, errors.New("rpc UpdateDataNode of service Metadata is not implemented")
 }
-
-// GetDataNode 按 ID 获取 DataNode。
 func (s *UnimplementedMetadata) GetDataNode(ctx context.Context, req *GetDataNodeReq) (*GetDataNodeRsp, error) {
 	return nil, errors.New("rpc GetDataNode of service Metadata is not implemented")
 }
-
-// ListDataNodes 分页列出 DataNode 及其 Dataset 摘要。
 func (s *UnimplementedMetadata) ListDataNodes(ctx context.Context, req *ListDataNodesReq) (*ListDataNodesRsp, error) {
 	return nil, errors.New("rpc ListDataNodes of service Metadata is not implemented")
 }
-
-// DeleteDataNode 删除满足约束的 DataNode。
 func (s *UnimplementedMetadata) DeleteDataNode(ctx context.Context, req *DeleteDataNodeReq) (*DeleteDataNodeRsp, error) {
 	return nil, errors.New("rpc DeleteDataNode of service Metadata is not implemented")
 }
@@ -2016,11 +2008,11 @@ type MetadataClientProxy interface {
 	GetDataset(ctx context.Context, req *GetDatasetReq, opts ...client.Option) (rsp *GetDatasetRsp, err error)
 	// ListDatasets 列出数据集。
 	ListDatasets(ctx context.Context, req *ListDatasetsReq, opts ...client.Option) (rsp *ListDatasetsRsp, err error)
-	// RebindDatasetDataNode 仅限离线运维：暂停写入并完成数据迁移后，更换 disabled Dataset 的 DataNode 绑定。
+	// RebindDatasetDataNode 已无作用：节点已并入主服务，返回未实现；调用方改造后删除。
 	RebindDatasetDataNode(ctx context.Context, req *RebindDatasetDataNodeReq, opts ...client.Option) (rsp *RebindDatasetDataNodeRsp, err error)
-	// CheckDatasetActivation 只读检查 Dataset 是否满足激活条件。
+	// CheckDatasetActivation 已无作用：数据集建好即可用，总是返回就绪；调用方改造后删除。
 	CheckDatasetActivation(ctx context.Context, req *CheckDatasetActivationReq, opts ...client.Option) (rsp *CheckDatasetActivationRsp, err error)
-	// ActivateDataset 使用 revision CAS 激活 Dataset。
+	// ActivateDataset 已无作用：数据集建好即可用，停用的数据集在这里重新启用；调用方改造后删除。
 	ActivateDataset(ctx context.Context, req *ActivateDatasetReq, opts ...client.Option) (rsp *ActivateDatasetRsp, err error)
 	// ListDatasetSubjects 列出 Dataset 覆盖的 Subject。
 	ListDatasetSubjects(ctx context.Context, req *ListDatasetSubjectsReq, opts ...client.Option) (rsp *ListDatasetSubjectsRsp, err error)
@@ -2048,15 +2040,15 @@ type MetadataClientProxy interface {
 	UpsertDatasetColumn(ctx context.Context, req *UpsertDatasetColumnReq, opts ...client.Option) (rsp *UpsertDatasetColumnRsp, err error)
 	// ListDatasetColumns 列出数据集列。
 	ListDatasetColumns(ctx context.Context, req *ListDatasetColumnsReq, opts ...client.Option) (rsp *ListDatasetColumnsRsp, err error)
-	// RegisterDataNode 注册或刷新 DataNode。
+	// RegisterDataNode 以下五个节点接口已无作用：节点已并入主服务，返回未实现；调用方改造后删除。
 	RegisterDataNode(ctx context.Context, req *RegisterDataNodeReq, opts ...client.Option) (rsp *RegisterDataNodeRsp, err error)
-	// UpdateDataNode 更新 DataNode 名称和状态。
+
 	UpdateDataNode(ctx context.Context, req *UpdateDataNodeReq, opts ...client.Option) (rsp *UpdateDataNodeRsp, err error)
-	// GetDataNode 按 ID 获取 DataNode。
+
 	GetDataNode(ctx context.Context, req *GetDataNodeReq, opts ...client.Option) (rsp *GetDataNodeRsp, err error)
-	// ListDataNodes 分页列出 DataNode 及其 Dataset 摘要。
+
 	ListDataNodes(ctx context.Context, req *ListDataNodesReq, opts ...client.Option) (rsp *ListDataNodesRsp, err error)
-	// DeleteDataNode 删除满足约束的 DataNode。
+
 	DeleteDataNode(ctx context.Context, req *DeleteDataNodeReq, opts ...client.Option) (rsp *DeleteDataNodeRsp, err error)
 	// CreateDevice 创建设备。
 	CreateDevice(ctx context.Context, req *CreateDeviceReq, opts ...client.Option) (rsp *CreateDeviceRsp, err error)

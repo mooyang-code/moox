@@ -5,7 +5,7 @@
 -- 2. Dataset 描述可写事实数据集，并且只绑定一个 DataSource。
 -- 3. Subject 是 Space 内业务对象，不归属 DataSource；来源侧代码由抓取适配器换算。
 -- 4. View 是查询入口，使用 keep_duration 控制 TimeSeries 行保留。
--- 5. Dataset 直接绑定 DataNode；运行时路由只解析 Dataset 到 DataNode 的关系。
+-- 5. Dataset 的行全部存放在主服务的 Pebble 库里，元数据不记录存储位置。
 -- 6. DuckDB、Bleve 和 Parquet 均从 Pebble 主存变更异步派生。
 
 PRAGMA foreign_keys = ON;
@@ -254,43 +254,18 @@ BEGIN
     UPDATE t_subject_tags SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
 END;
 
--- ************ DataNode ************
-CREATE TABLE IF NOT EXISTS t_data_nodes (
-    c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-    c_node_id TEXT NOT NULL,
-    c_name TEXT NOT NULL,
-    c_service_target TEXT NOT NULL,
-    c_status TEXT NOT NULL DEFAULT 'active' CHECK (c_status IN ('active', 'disabled')),
-    c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    c_mtime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE (c_node_id),
-    UNIQUE (c_name)
-);
-
-CREATE INDEX IF NOT EXISTS idx_t_data_nodes_status ON t_data_nodes (c_status);
-
-CREATE TRIGGER IF NOT EXISTS trg_t_data_nodes_mtime
-AFTER UPDATE ON t_data_nodes
-FOR EACH ROW
-WHEN NEW.c_mtime = OLD.c_mtime
-BEGIN
-    UPDATE t_data_nodes SET c_mtime = CURRENT_TIMESTAMP WHERE c_id = OLD.c_id;
-END;
-
 -- ************ Dataset、Field 与 DatasetColumn ************
 CREATE TABLE IF NOT EXISTS t_datasets (
     c_id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
     c_space_id TEXT NOT NULL,
     c_dataset_id TEXT NOT NULL,
     c_data_source_id TEXT,
-    c_data_node_id TEXT NOT NULL,
     c_name TEXT NOT NULL,
     c_description TEXT NOT NULL DEFAULT '',
     c_data_kind TEXT NOT NULL,
     c_freq TEXT NOT NULL DEFAULT '',
-    c_binding_locked INTEGER NOT NULL DEFAULT 0 CHECK (c_binding_locked IN (0, 1)),
     c_revision INTEGER NOT NULL DEFAULT 1 CHECK (c_revision > 0),
-    c_status TEXT NOT NULL DEFAULT 'disabled' CHECK (c_status IN ('active', 'disabled')),
+    c_status TEXT NOT NULL DEFAULT 'active' CHECK (c_status IN ('active', 'disabled')),
     c_attrs_json TEXT NOT NULL DEFAULT '{}',
     c_subject_tags_json TEXT NOT NULL DEFAULT '[]',
     c_ctime DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -298,14 +273,12 @@ CREATE TABLE IF NOT EXISTS t_datasets (
     CHECK (c_data_kind IN ('record', 'time_series')),
     FOREIGN KEY (c_space_id) REFERENCES t_spaces (c_space_id) ON DELETE CASCADE ON UPDATE CASCADE,
     FOREIGN KEY (c_space_id, c_data_source_id) REFERENCES t_data_sources (c_space_id, c_data_source_id) ON DELETE RESTRICT ON UPDATE CASCADE,
-    FOREIGN KEY (c_data_node_id) REFERENCES t_data_nodes (c_node_id) ON DELETE RESTRICT,
     UNIQUE (c_space_id, c_dataset_id),
     UNIQUE (c_space_id, c_name)
 );
 
 CREATE INDEX IF NOT EXISTS idx_t_datasets_source ON t_datasets (c_space_id, c_data_source_id, c_status);
 CREATE INDEX IF NOT EXISTS idx_t_datasets_kind ON t_datasets (c_space_id, c_data_kind, c_status);
-CREATE INDEX IF NOT EXISTS idx_t_datasets_data_node_id ON t_datasets (c_data_node_id);
 
 CREATE TRIGGER IF NOT EXISTS trg_t_datasets_mtime
 AFTER UPDATE ON t_datasets

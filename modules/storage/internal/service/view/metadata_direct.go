@@ -3,7 +3,7 @@ package view
 import (
 	"context"
 
-	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode"
+	"github.com/mooyang-code/moox/modules/storage/internal/serviceauth"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"trpc.group/trpc-go/trpc-go/client"
 )
@@ -30,7 +30,7 @@ func NewDirectMetadataClient(proxy pb.MetadataClientProxy, authSecret string) *d
 }
 
 func (c *directMetadataClient) auth() *pb.AuthInfo {
-	return &pb.AuthInfo{AppId: storageViewAppID, AppKey: datanode.ServiceAuthKey(c.authSecret, storageViewAppID)}
+	return &pb.AuthInfo{AppId: storageViewAppID, AppKey: serviceauth.Key(c.authSecret, storageViewAppID)}
 }
 
 func (c *directMetadataClient) ListViews(ctx context.Context, request *pb.ListViewsReq, options ...client.Option) (*pb.ListViewsRsp, error) {

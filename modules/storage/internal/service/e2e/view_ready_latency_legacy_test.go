@@ -2,12 +2,12 @@
 
 package e2e
 
-// View 就绪耗时压测的旧路径装配：PrimaryStore → DataNode（Pebble）→ Outbox → JetStream → View 消费者。
+// View 就绪耗时压测的旧路径装配：PrimaryStore（直接读写 Pebble）→ Outbox → JetStream → View 消费者。
 // 各组件都在本进程内，EventBus 是内嵌的 NATS JetStream（文件存储，经本机回环连接），参数按生产配置：
 //   - Outbox 转发用默认参数（100ms 兜底轮询，写入提交后立即唤醒）；
 //   - View 消费者 fetch_batch、max_workers、max_ack_pending 都是 1，ack_wait 120s（config/storage.yaml）；
 //   - MOOX_STORAGE 的四个主题、文件存储、2 分钟去重窗口、8MB 消息上限（modules/eventbus/config/app.yaml）。
-// 与生产的差别：Primary 与 DataNode、View 之间是进程内调用，没有 RPC；View 用到的元数据（View 列表、
+// 与生产的差别：Primary 与 View 之间是进程内调用，没有 RPC；View 用到的元数据（View 列表、
 // View 周期状态）是内存实现，不经 SQLite；三个数据集共用一个静态消费者（生产是每个数据集一个，场景串行执行，等价）。
 
 import (
@@ -20,12 +20,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode"
 	storageoutbox "github.com/mooyang-code/moox/modules/storage/internal/service/datanode/outbox"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	primarystore "github.com/mooyang-code/moox/modules/storage/internal/service/primarystore"
 	viewservice "github.com/mooyang-code/moox/modules/storage/internal/service/view"
+	"github.com/mooyang-code/moox/modules/storage/internal/serviceauth"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
@@ -37,7 +37,6 @@ import (
 
 const (
 	legacyBenchSecret   = "view-ready-bench-secret"
-	legacyBenchNodeID   = "bench-node"
 	legacyBenchMaxBytes = 8 << 20
 	// legacyBenchPrefillBatch 是预填 View 时每次直接写入索引的行数。
 	legacyBenchPrefillBatch = 20000
@@ -87,7 +86,7 @@ func (e *legacyReadyBenchEnv) viewDataset(viewID string) string {
 }
 
 func legacyBenchViewAuth() *pb.AuthInfo {
-	return &pb.AuthInfo{AppId: "storage-bench", AppKey: datanode.ServiceAuthKey(legacyBenchSecret, "storage-bench")}
+	return &pb.AuthInfo{AppId: "storage-bench", AppKey: serviceauth.Key(legacyBenchSecret, "storage-bench")}
 }
 
 func newReadyBenchEnv(t *testing.T, datasets []readyBenchDataset) readyBenchEnv {
@@ -135,30 +134,19 @@ func newReadyBenchEnv(t *testing.T, datasets []readyBenchDataset) readyBenchEnv 
 	}
 	t.Cleanup(func() { _ = eventClient.Close() })
 
-	// DataNode 与 PrimaryStore。
+	// PrimaryStore 与它的 Pebble 库。
 	store, err := pebble.Open(pebble.Options{
-		NodeID: legacyBenchNodeID, Path: filepath.Join(t.TempDir(), "pebble"), MaxEventBytes: legacyBenchMaxBytes,
+		NodeID: "storage-node-0", Path: filepath.Join(t.TempDir(), "pebble"), MaxEventBytes: legacyBenchMaxBytes,
 		PeriodNow: func() time.Time { return time.Unix(0, env.clock.Load()).UTC() },
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	node, err := datanode.NewService(datanode.Options{NodeID: legacyBenchNodeID, AuthSecret: legacyBenchSecret, Store: store})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = node.Close() })
+	t.Cleanup(func() { _ = store.Close() })
 	snapshot := newLegacyBenchSnapshot(datasets)
 	env.primary, err = primarystore.New(primarystore.Options{
 		Snapshot: func() metadata.RequestSnapshot { return snapshot },
-		Resolver: func(context.Context, string, string) (primarystore.DataNodeClient, error) {
-			return legacyBenchNode{node}, nil
-		},
-		AuthSigner: func(in *pb.AuthInfo) (*pb.AuthInfo, error) {
-			signed := proto.Clone(in).(*pb.AuthInfo)
-			signed.AppKey = datanode.ServiceAuthKey(legacyBenchSecret, signed.GetAppId())
-			return signed, nil
-		},
+		Store:    store,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -267,22 +255,7 @@ func prepareLegacyBenchView(t *testing.T, ctx context.Context, view *viewservice
 	}
 }
 
-// legacyBenchNode 补上周期 RPC 的 node_id，与生产 primary 的节点转发适配（cmd/server/main.go 的 dataNodeProxyAdapter）一致。
-type legacyBenchNode struct{ *datanode.Service }
-
-func (n legacyBenchNode) RegisterSeriesSnapshot(ctx context.Context, req *pb.RegisterSeriesSnapshotReq) (*pb.RegisterSeriesSnapshotRsp, error) {
-	bound := proto.Clone(req).(*pb.RegisterSeriesSnapshotReq)
-	bound.NodeId = legacyBenchNodeID
-	return n.Service.RegisterSeriesSnapshot(ctx, bound)
-}
-
-func (n legacyBenchNode) CommitTimeSeriesBatch(ctx context.Context, req *pb.CommitTimeSeriesBatchReq) (*pb.CommitTimeSeriesBatchRsp, error) {
-	bound := proto.Clone(req).(*pb.CommitTimeSeriesBatchReq)
-	bound.NodeId = legacyBenchNodeID
-	return n.Service.CommitTimeSeriesBatch(ctx, bound)
-}
-
-// legacyBenchSnapshot 是 PrimaryStore 的请求快照：周期提交与完成标记要求数据集在快照里、是时序数据、带所属节点。
+// legacyBenchSnapshot 是 PrimaryStore 的请求快照：周期提交与完成标记要求数据集在快照里、是时序数据且已启用。
 type legacyBenchSnapshot struct {
 	datasets map[string]*pb.Dataset
 	columns  map[string][]*pb.DatasetColumn
@@ -292,7 +265,7 @@ func newLegacyBenchSnapshot(datasets []readyBenchDataset) *legacyBenchSnapshot {
 	snapshot := &legacyBenchSnapshot{datasets: make(map[string]*pb.Dataset), columns: make(map[string][]*pb.DatasetColumn)}
 	for _, dataset := range datasets {
 		snapshot.datasets[dataset.datasetID] = &pb.Dataset{
-			SpaceId: readyBenchSpace, DatasetId: dataset.datasetID, DataNodeId: legacyBenchNodeID, Name: dataset.datasetID,
+			SpaceId: readyBenchSpace, DatasetId: dataset.datasetID, Name: dataset.datasetID,
 			DataKind: pb.DataKind_DATA_KIND_TIME_SERIES, Freq: readyBenchFreq, Status: "active",
 			Attributes: map[string]string{"allowed_lateness_seconds": fmt.Sprint(readyBenchLatenessSeconds)},
 		}
@@ -311,13 +284,6 @@ func (s *legacyBenchSnapshot) GetDataset(spaceID, datasetID string) (*pb.Dataset
 	}
 	dataset, ok := s.datasets[datasetID]
 	return dataset, ok
-}
-
-func (s *legacyBenchSnapshot) GetDataNode(nodeID string) (*pb.DataNode, bool) {
-	if nodeID != legacyBenchNodeID {
-		return nil, false
-	}
-	return &pb.DataNode{NodeId: legacyBenchNodeID, Status: "active"}, true
 }
 
 func (s *legacyBenchSnapshot) ListDatasetColumns(spaceID, datasetID string, _ *pb.Page) ([]*pb.DatasetColumn, *pb.PageResult, error) {

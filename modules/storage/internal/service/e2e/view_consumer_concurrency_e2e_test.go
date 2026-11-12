@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode"
 	viewservice "github.com/mooyang-code/moox/modules/storage/internal/service/view"
+	"github.com/mooyang-code/moox/modules/storage/internal/serviceauth"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
@@ -40,7 +40,7 @@ func TestViewEventConsumerProcessesIndependentDatasetLanesE2E(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	auth := &pb.AuthInfo{AppId: "e2e", AppKey: datanode.ServiceAuthKey(secret, "e2e")}
+	auth := &pb.AuthInfo{AppId: "e2e", AppKey: serviceauth.Key(secret, "e2e")}
 	service.SetPrimaryAuth(auth)
 	service.SetPrimaryReader(concurrencyPrimaryReader{})
 	for _, dataset := range []string{"prices_a", "prices_b"} {

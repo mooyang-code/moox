@@ -12,6 +12,7 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
 	coremetadata "github.com/mooyang-code/moox/modules/storage/internal/service/metadata"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"google.golang.org/protobuf/proto"
 	thttp "trpc.group/trpc-go/trpc-go/http"
 )
 
@@ -115,10 +116,6 @@ func (s *Service) CreateDataset(ctx context.Context, req *pb.CreateDatasetReq) (
 	if item == nil || item.GetSpaceId() == "" || (item.GetDatasetId() == "" && item.GetName() == "") {
 		return &pb.CreateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and dataset_id or name are required"))}, nil
 	}
-	if err := validateDatasetDataNodeID(item.GetDataNodeId()); err != nil {
-		return &pb.CreateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
-	}
-	item.DataNodeId = strings.TrimSpace(item.GetDataNodeId())
 	if item.DatasetId == "" {
 		item.DatasetId = defaultID(item.GetName(), "dataset")
 		if !strings.HasPrefix(item.DatasetId, "dataset_") {
@@ -131,7 +128,15 @@ func (s *Service) CreateDataset(ctx context.Context, req *pb.CreateDatasetReq) (
 	if err := validateDatasetID(item.GetDatasetId()); err != nil {
 		return &pb.CreateDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
-	created, err := s.metadata.UpsertDataset(ctx, item)
+	for _, column := range req.GetColumns() {
+		if column == nil || strings.TrimSpace(column.GetColumnName()) == "" {
+			return &pb.CreateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("column_name is required"))}, nil
+		}
+		if err := validateColumnDisplayName("dataset column display_name", column.GetAttributes()); err != nil {
+			return &pb.CreateDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+		}
+	}
+	created, err := s.metadata.UpsertDataset(ctx, item, req.GetColumns()...)
 	if err != nil {
 		return &pb.CreateDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
@@ -152,14 +157,9 @@ func (s *Service) UpdateDataset(ctx context.Context, req *pb.UpdateDatasetReq) (
 	if err := validateDatasetID(item.GetDatasetId()); err != nil {
 		return &pb.UpdateDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
-	current, err := s.metadata.GetDataset(ctx, item.GetSpaceId(), item.GetDatasetId())
-	if err != nil {
+	if _, err := s.metadata.GetDataset(ctx, item.GetSpaceId(), item.GetDatasetId()); err != nil {
 		return &pb.UpdateDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 	}
-	if err := validateDatasetDataNodeUpdate(current, item.GetDataNodeId()); err != nil {
-		return &pb.UpdateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, err)}, nil
-	}
-	item.DataNodeId = strings.TrimSpace(item.GetDataNodeId())
 	updated, err := s.metadata.UpsertDataset(ctx, item)
 	if err != nil {
 		return &pb.UpdateDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
@@ -174,10 +174,24 @@ func (s *Service) DeleteDataset(ctx context.Context, req *pb.DeleteDatasetReq) (
 	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetDatasetId()) == "" {
 		return &pb.DeleteDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and dataset_id are required"))}, nil
 	}
-	if err := s.metadata.DeleteDataset(ctx, req.GetSpaceId(), req.GetDatasetId()); err != nil {
-		return &pb.DeleteDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
+	if s.rows == nil {
+		return &pb.DeleteDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("dataset row store is not configured"))}, nil
 	}
-	s.refreshMetadataCacheAfterCommit(ctx, "DeleteDataset")
+	// 先删元数据并发布缓存，再在写锁里删行：写入拿到读锁后按最新缓存确认数据集仍在，删行之后进来的写入会被拒绝。
+	// 元数据已经不在时照样删行，让中途失败的删除可以重试完成，返回的仍是“不存在”。
+	metadataErr := s.metadata.DeleteDataset(ctx, req.GetSpaceId(), req.GetDatasetId())
+	if metadataErr != nil && !errors.Is(metadataErr, sql.ErrNoRows) {
+		return &pb.DeleteDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(metadataErr), metadataErr)}, nil
+	}
+	if err := s.refreshMetadataCacheSynchronously(ctx, "DeleteDataset"); err != nil {
+		return &pb.DeleteDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("数据集元数据已删除，但缓存尚未发布，请重试删除"))}, nil
+	}
+	if _, err := s.rows.DeleteDatasetRows(ctx, req.GetSpaceId(), req.GetDatasetId()); err != nil {
+		return &pb.DeleteDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, fmt.Errorf("数据集元数据已删除，删除行失败，请重试删除：%w", err))}, nil
+	}
+	if metadataErr != nil {
+		return &pb.DeleteDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(metadataErr), metadataErr)}, nil
+	}
 	return &pb.DeleteDatasetRsp{RetInfo: retinfo.Success("success")}, nil
 }
 
@@ -201,7 +215,6 @@ func (s *Service) ListDatasets(ctx context.Context, req *pb.ListDatasetsReq) (*p
 	query := coremetadata.DatasetQuery{
 		SpaceID:      req.GetSpaceId(),
 		DataSourceID: req.GetDataSourceId(),
-		DataNodeID:   req.GetDataNodeId(),
 		DataKind:     req.GetDataKind(),
 		Freq:         req.GetFreq(),
 		Page:         req.GetPage(),
@@ -213,25 +226,7 @@ func (s *Service) ListDatasets(ctx context.Context, req *pb.ListDatasetsReq) (*p
 	return &pb.ListDatasetsRsp{RetInfo: retinfo.Success("success"), Datasets: s.withRetentions(items), PageResult: page}, nil
 }
 
-func (s *Service) RebindDatasetDataNode(ctx context.Context, req *pb.RebindDatasetDataNodeReq) (*pb.RebindDatasetDataNodeRsp, error) {
-	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetDatasetId()) == "" || strings.TrimSpace(req.GetDataNodeId()) == "" || req.GetExpectedRevision() == 0 {
-		return &pb.RebindDatasetDataNodeRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, dataset_id, data_node_id and expected_revision are required"))}, nil
-	}
-	current, err := s.metadata.GetDataset(ctx, req.GetSpaceId(), req.GetDatasetId())
-	if err != nil {
-		return &pb.RebindDatasetDataNodeRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
-	}
-	if current.GetStatus() != "disabled" {
-		return &pb.RebindDatasetDataNodeRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("dataset must be disabled before offline data node rebind"))}, nil
-	}
-	dataset, err := s.metadata.RebindDatasetDataNode(ctx, req.GetSpaceId(), req.GetDatasetId(), strings.TrimSpace(req.GetDataNodeId()), req.GetExpectedRevision())
-	if err != nil {
-		return &pb.RebindDatasetDataNodeRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
-	}
-	s.refreshMetadataCacheAfterCommit(ctx, "RebindDatasetDataNode")
-	return &pb.RebindDatasetDataNodeRsp{RetInfo: retinfo.Success("success"), Dataset: s.withRetention(dataset)}, nil
-}
-
+// CheckDatasetActivation 已无作用：数据集建好即可用，总是返回就绪。只为调用方改造前还能编译而保留。
 func (s *Service) CheckDatasetActivation(ctx context.Context, req *pb.CheckDatasetActivationReq) (*pb.CheckDatasetActivationRsp, error) {
 	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetDatasetId()) == "" {
 		return &pb.CheckDatasetActivationRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and dataset_id are required"))}, nil
@@ -240,58 +235,32 @@ func (s *Service) CheckDatasetActivation(ctx context.Context, req *pb.CheckDatas
 	if err != nil {
 		return &pb.CheckDatasetActivationRsp{RetInfo: datasetReadRetInfo(err)}, nil
 	}
-	checks := newActivationChecker(s.metadata, s.nodeState, s.nodeAuthSecret, s.retention).checks(ctx, dataset)
-	return &pb.CheckDatasetActivationRsp{
-		RetInfo:         retinfo.Success("success"),
-		DatasetRevision: dataset.GetRevision(),
-		Checks:          checks,
-		Ready:           activationReady(checks),
-	}, nil
+	return &pb.CheckDatasetActivationRsp{RetInfo: retinfo.Success("success"), DatasetRevision: dataset.GetRevision(), Ready: true}, nil
 }
 
+// ActivateDataset 已无作用：数据集建好即可用，停用的数据集在这里重新启用。只为调用方改造前还能编译而保留；
+// 响应里的 binding_locked 总为真，因为调用方仍按它判断激活完成。
 func (s *Service) ActivateDataset(ctx context.Context, req *pb.ActivateDatasetReq) (*pb.ActivateDatasetRsp, error) {
-	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetDatasetId()) == "" || req.GetExpectedRevision() == 0 {
-		return &pb.ActivateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id, dataset_id and expected_revision are required"))}, nil
+	if req == nil || strings.TrimSpace(req.GetSpaceId()) == "" || strings.TrimSpace(req.GetDatasetId()) == "" {
+		return &pb.ActivateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and dataset_id are required"))}, nil
 	}
 	dataset, err := s.metadata.GetDataset(ctx, req.GetSpaceId(), req.GetDatasetId())
 	if err != nil {
 		return &pb.ActivateDatasetRsp{RetInfo: datasetReadRetInfo(err)}, nil
 	}
-	// An active, locked Dataset is the successful terminal state. Return it
-	// before readiness checks so retries remain idempotent even when the node
-	// is temporarily disabled or unreachable.
-	if dataset.GetStatus() == "active" && dataset.GetBindingLocked() {
-		// 上一次激活可能已提交事务但缓存发布失败：幂等成功前必须确认元数据缓存已发布
-		if err := s.refreshMetadataCacheSynchronously(ctx, "ActivateDataset"); err != nil {
-			return &pb.ActivateDatasetRsp{
-				RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("Dataset is active but metadata publication is pending; retry activation")),
-				Dataset: s.withRetention(dataset),
-			}, nil
+	if dataset.GetStatus() != "active" {
+		enabled := proto.Clone(dataset).(*pb.Dataset)
+		enabled.Status = "active"
+		if dataset, err = s.metadata.UpsertDataset(ctx, enabled); err != nil {
+			return &pb.ActivateDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err)}, nil
 		}
-		return &pb.ActivateDatasetRsp{RetInfo: retinfo.Success("success"), Dataset: s.withRetention(dataset)}, nil
+		if err := s.refreshMetadataCacheSynchronously(ctx, "ActivateDataset"); err != nil {
+			return &pb.ActivateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("数据集已启用，但元数据缓存尚未发布，请重试"))}, nil
+		}
 	}
-	checks := newActivationChecker(s.metadata, s.nodeState, s.nodeAuthSecret, s.retention).checks(ctx, dataset)
-	if !activationReady(checks) {
-		return &pb.ActivateDatasetRsp{
-			RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("Dataset activation checks failed")),
-			Checks:  checks,
-		}, nil
-	}
-	if dataset.GetRevision() != req.GetExpectedRevision() {
-		return &pb.ActivateDatasetRsp{RetInfo: retinfo.Error(pb.ErrorCode_CONFLICT, errors.New("dataset revision conflict")), Checks: checks}, nil
-	}
-	activated, err := s.metadata.CommitDatasetActivation(ctx, req.GetSpaceId(), req.GetDatasetId(), req.GetExpectedRevision())
-	if err != nil {
-		return &pb.ActivateDatasetRsp{RetInfo: retinfo.Error(retinfo.MetadataStoreCode(err), err), Checks: checks}, nil
-	}
-	if err := s.refreshMetadataCacheSynchronously(ctx, "ActivateDataset"); err != nil {
-		return &pb.ActivateDatasetRsp{
-			RetInfo: retinfo.Error(pb.ErrorCode_INNER_ERR, errors.New("Dataset activated but metadata publication is pending; retry activation")),
-			Dataset: s.withRetention(activated),
-			Checks:  checks,
-		}, nil
-	}
-	return &pb.ActivateDatasetRsp{RetInfo: retinfo.Success("success"), Dataset: s.withRetention(activated), Checks: checks}, nil
+	out := s.withRetention(dataset)
+	out.BindingLocked = true
+	return &pb.ActivateDatasetRsp{RetInfo: retinfo.Success("success"), Dataset: out}, nil
 }
 
 func datasetReadRetInfo(err error) *pb.RetInfo {

@@ -200,12 +200,6 @@ func (s *Store) DeleteDatasetRows(ctx context.Context, spaceID, datasetID string
 	if err != nil {
 		return 0, err
 	}
-	// Keep a persistent tombstone in the same atomic batch as the physical
-	// cleanup. A writer that was already admitted before this lock was taken
-	// can no longer publish after the delete commits.
-	if err := batch.Set(datasetDeletedKey(spaceID, datasetID), []byte("1"), s.writeOptions); err != nil {
-		return 0, err
-	}
 	// 提交前最后一次检查：批次尚未落盘时取消仍可完整放弃
 	if err := ctx.Err(); err != nil {
 		return 0, err
@@ -219,7 +213,7 @@ func (s *Store) DeleteDatasetRows(ctx context.Context, spaceID, datasetID string
 	if deletedOutbox > 0 {
 		s.noteOutboxDeleted(deletedOutbox)
 	}
-	return uint64(len(ranges) + 1), nil
+	return uint64(len(ranges)), nil
 }
 
 func (s *Store) stageDatasetPeriodCleanup(batch *cpebble.Batch, spaceID, datasetID string) ([][2][]byte, error) {
@@ -344,53 +338,13 @@ func (s *Store) stageDatasetAuxiliaryCleanup(batch *cpebble.Batch, spaceID, data
 	return len(matchingOutbox), nil
 }
 
-// RestoreDatasetRows clears the deletion tombstone when a new task recreates
-// the deterministic result Dataset ID. It intentionally does not restore any
-// old rows; callers must create the metadata object first and then write new
-// data through the PrimaryStore.
-func (s *Store) RestoreDatasetRows(ctx context.Context, spaceID, datasetID string) error {
-	if s == nil || s.db == nil {
-		return errors.New("pebble store is closed")
+// requireDataset 在持有数据集读锁时确认数据集仍在元数据里。删除先删元数据、再在写锁里删行，
+// 所以拿到读锁之后这里还查得到的写入一定早于删行，写入的行会被一并删掉。
+func (s *Store) requireDataset(spaceID, datasetID string) error {
+	if s.datasetExists != nil && !s.datasetExists(spaceID, datasetID) {
+		return ErrDatasetDeleted
 	}
-	if strings.TrimSpace(spaceID) == "" || strings.TrimSpace(datasetID) == "" {
-		return invalid("space_id and dataset_id are required")
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	s.datasetWriteMu.Lock()
-	defer s.datasetWriteMu.Unlock()
-	s.periodMu.Lock()
-	defer s.periodMu.Unlock()
-	s.outboxMu.Lock()
-	defer s.outboxMu.Unlock()
-	deleted, err := s.isDatasetDeleted(spaceID, datasetID)
-	if err != nil {
-		return err
-	}
-	if !deleted {
-		return nil
-	}
-	batch := s.db.NewBatch()
-	defer batch.Close()
-	if _, err := s.stageDatasetPeriodCleanup(batch, spaceID, datasetID); err != nil {
-		return err
-	}
-	if err := batch.Delete(datasetDeletedKey(spaceID, datasetID), s.writeOptions); err != nil {
-		return err
-	}
-	return batch.Commit(s.writeOptions)
-}
-
-func (s *Store) isDatasetDeleted(spaceID, datasetID string) (bool, error) {
-	value, closer, err := s.db.Get(datasetDeletedKey(spaceID, datasetID))
-	if errors.Is(err, cpebble.ErrNotFound) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return len(value) > 0, closer.Close()
+	return nil
 }
 
 func decodePhysicalParts(data []byte) ([]string, bool) {

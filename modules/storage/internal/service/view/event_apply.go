@@ -23,7 +23,7 @@ import (
 // 很短的截止时间；继承这个截止时间会让健康的写入变成不断 NAK 的循环，并让 View 落后 Primary 数分钟。
 const liveIndexWriteTimeout = 30 * time.Second
 
-// primaryPointReadChunkSize 让实时补全留在 DataNode 的点读预算之内（1 万个键、10 万个键字段）。全市场 1m 的批次
+// primaryPointReadChunkSize 让实时补全留在 Pebble 的点读预算之内（1 万个键、10 万个键字段）。全市场 1m 的批次
 // 否则会因为“read request exceeds key/field limit”让整条投递失败。
 func primaryPointReadChunkSize(fieldCount, keyCount int) int {
 	chunkSize := keyCount

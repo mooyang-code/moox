@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/observability"
-	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
+	"github.com/mooyang-code/moox/modules/storage/internal/serviceauth"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
@@ -88,7 +88,7 @@ func (e *deadlineAwareEngine) Write(ctx context.Context, indexID string, batch v
 	return e.queryEngine.Write(ctx, indexID, batch)
 }
 
-func TestPrimaryPointReadChunkSizeStaysUnderDataNodeBudget(t *testing.T) {
+func TestPrimaryPointReadChunkSizeStaysUnderPebbleBudget(t *testing.T) {
 	if got := primaryPointReadChunkSize(6, 400); got != 400 {
 		t.Fatalf("small batch chunk=%d, want 400", got)
 	}
@@ -565,7 +565,7 @@ func queryTestService(engine viewindex.Engine, active bool) (*Service, *pb.AuthI
 	if active {
 		svc.views[viewRef{spaceID: "space", viewID: "prices"}] = &viewRuntime{active: "prices-index"}
 	}
-	auth := &pb.AuthInfo{AppId: "query-test", AppKey: datanode.ServiceAuthKey(secret, "query-test")}
+	auth := &pb.AuthInfo{AppId: "query-test", AppKey: serviceauth.Key(secret, "query-test")}
 	return svc, auth
 }
 

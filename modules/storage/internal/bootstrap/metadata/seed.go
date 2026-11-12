@@ -83,9 +83,6 @@ func ImportSeed(ctx context.Context, opts SeedOptions) (ImportResult, error) {
 func importEntities(ctx context.Context, store metadata.Store, seed seedFile) (ImportResult, error) {
 	var result ImportResult
 	var err error
-	if err := validateSeedDatasets(ctx, store, seed.Datasets); err != nil {
-		return result, err
-	}
 	seed, err = normalizeSeedFieldGroups(seed)
 	if err != nil {
 		return result, err
@@ -150,7 +147,7 @@ func importEntities(ctx context.Context, store metadata.Store, seed seedFile) (I
 		if _, err := store.UpsertDataset(ctx, &pb.Dataset{
 			SpaceId: item.SpaceID, DatasetId: item.DatasetID, DataSourceId: item.DataSourceID,
 			Name: item.Name, Description: item.Description, DataKind: parseDataKind(item.DataKind),
-			Freq: item.Freq, Status: "disabled", Attributes: item.Attributes,
+			Freq: item.Freq, Attributes: item.Attributes,
 			DataNodeId: item.DataNodeID, SubjectTags: subjectTags,
 		}); err != nil {
 			return result, seedErr("dataset", item.DatasetID, err)
@@ -237,26 +234,6 @@ func seedViewColumnAttributes(item seedViewColumn) map[string]string {
 		attributes["display_name"] = item.ColumnName
 	}
 	return attributes
-}
-
-// validateSeedDatasets performs all Dataset checks before the first write.
-// DataNodes are deployment-owned, so a seed import may reference an already
-// registered active node but must never create one implicitly.
-func validateSeedDatasets(ctx context.Context, store metadata.Reader, datasets []seedDataset) error {
-	for _, item := range datasets {
-		dataNodeID := strings.TrimSpace(item.DataNodeID)
-		if dataNodeID == "" {
-			return fmt.Errorf("dataset %q data_node_id is required", item.DatasetID)
-		}
-		node, err := store.GetDataNode(ctx, dataNodeID)
-		if err != nil {
-			return seedErr("data_node", dataNodeID, err)
-		}
-		if node.GetStatus() != "active" {
-			return fmt.Errorf("data node %q must be active before metadata seed import", dataNodeID)
-		}
-	}
-	return nil
 }
 
 func normalizeSeedFieldGroups(seed seedFile) (seedFile, error) {
@@ -424,17 +401,18 @@ type seedTag struct {
 
 // seedDataset 描述待初始化的 Dataset 元数据。
 type seedDataset struct {
-	SpaceID      string            `yaml:"space_id"`
-	DatasetID    string            `yaml:"dataset_id"`
-	DataSourceID string            `yaml:"data_source_id"`
-	DataNodeID   string            `yaml:"data_node_id"`
-	Name         string            `yaml:"name"`
-	Description  string            `yaml:"description"`
-	DataKind     string            `yaml:"data_kind"`
-	Freq         string            `yaml:"freq"`
-	SubjectTags  []string          `yaml:"subject_tags"`
-	Status       string            `yaml:"status"`
-	Attributes   map[string]string `yaml:"attributes"`
+	SpaceID      string `yaml:"space_id"`
+	DatasetID    string `yaml:"dataset_id"`
+	DataSourceID string `yaml:"data_source_id"`
+	// DataNodeID 已不再使用：Storage 只原样保存，种子去掉 data_node_id 后删除。
+	DataNodeID  string            `yaml:"data_node_id"`
+	Name        string            `yaml:"name"`
+	Description string            `yaml:"description"`
+	DataKind    string            `yaml:"data_kind"`
+	Freq        string            `yaml:"freq"`
+	SubjectTags []string          `yaml:"subject_tags"`
+	Status      string            `yaml:"status"`
+	Attributes  map[string]string `yaml:"attributes"`
 }
 
 // seedField 描述待初始化的字段定义。

@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/observability"
-	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
+	"github.com/mooyang-code/moox/modules/storage/internal/serviceauth"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/storagepolicy"
 	"trpc.group/trpc-go/trpc-go/client"
@@ -33,7 +33,7 @@ type FieldReader interface {
 	ReadRows(context.Context, *pb.PrimaryReadRowsReq, ...client.Option) (*pb.PrimaryReadRowsRsp, error)
 }
 
-// TimeSeriesRangeReader 读取 Primary 的时序事实（PrimaryStore 对所有调用方都由 DataNode 回答），首次建索引用它按页取每个序列最近 N 根。
+// TimeSeriesRangeReader 读取 Primary 的时序事实（PrimaryStore 对所有调用方都由 Pebble 回答），首次建索引用它按页取每个序列最近 N 根。
 type TimeSeriesRangeReader interface {
 	ReadTimeSeriesRows(context.Context, *pb.ReadTimeSeriesRowsReq, ...client.Option) (*pb.ReadTimeSeriesRowsRsp, error)
 }
@@ -53,7 +53,7 @@ type MaintenanceOptions struct {
 }
 
 // viewBackfillBatchSize 是没有配置 backfill_page_size 时回填每页读取的行数。
-// Primary 历史读取一页就带回字段值，DataNode 还会按单页值数上限截断，宽表的实际页更小；
+// Primary 历史读取一页就带回字段值，Pebble 还会按单页值数上限截断，宽表的实际页更小；
 // 线上用 backfill_page_size 把页调小，减轻回填对 Pebble 点读的突发压力。索引写入另按 256 行分批。
 const viewBackfillBatchSize = 10000
 
@@ -555,7 +555,7 @@ func loadDefaultViewColumns(ctx context.Context, metadata MetadataClient, auth *
 
 func (s *Service) internalAuth() *pb.AuthInfo {
 	const appID = "storage-view"
-	return &pb.AuthInfo{AppId: appID, AppKey: datanode.ServiceAuthKey(s.authSecret, appID)}
+	return &pb.AuthInfo{AppId: appID, AppKey: serviceauth.Key(s.authSecret, appID)}
 }
 
 func requireSuccess(ret *pb.RetInfo) error {

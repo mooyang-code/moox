@@ -13,8 +13,8 @@ import (
 
 	"github.com/mooyang-code/moox/modules/storage/internal/bootstrap/metadata"
 	storageconfig "github.com/mooyang-code/moox/modules/storage/internal/config"
-	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode"
 	storagepebble "github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
+	"github.com/mooyang-code/moox/modules/storage/internal/serviceauth"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/client"
@@ -46,28 +46,14 @@ type importSummary struct {
 const storageDeployerAppID = "storage-deployer"
 
 type metadataDeploymentClient interface {
-	RegisterDataNode(context.Context, *storagepb.RegisterDataNodeReq) (*storagepb.RegisterDataNodeRsp, error)
 	ListDatasets(context.Context, *storagepb.ListDatasetsReq) (*storagepb.ListDatasetsRsp, error)
 	CheckDatasetActivation(context.Context, *storagepb.CheckDatasetActivationReq) (*storagepb.CheckDatasetActivationRsp, error)
 	ActivateDataset(context.Context, *storagepb.ActivateDatasetReq) (*storagepb.ActivateDatasetRsp, error)
 }
 
-type dataNodeRuntimeClient interface {
-	GetNodeState(context.Context, *storagepb.GetNodeStateReq) (*storagepb.GetNodeStateRsp, error)
-}
-
 type metadataDeploymentProxy struct {
 	proxy   storagepb.MetadataClientProxy
 	options []client.Option
-}
-
-type dataNodeRuntimeProxy struct {
-	proxy   storagepb.DataNodeRuntimeClientProxy
-	options []client.Option
-}
-
-func (c *metadataDeploymentProxy) RegisterDataNode(ctx context.Context, req *storagepb.RegisterDataNodeReq) (*storagepb.RegisterDataNodeRsp, error) {
-	return c.proxy.RegisterDataNode(ctx, req, c.options...)
 }
 
 func (c *metadataDeploymentProxy) ListDatasets(ctx context.Context, req *storagepb.ListDatasetsReq) (*storagepb.ListDatasetsRsp, error) {
@@ -80,10 +66,6 @@ func (c *metadataDeploymentProxy) CheckDatasetActivation(ctx context.Context, re
 
 func (c *metadataDeploymentProxy) ActivateDataset(ctx context.Context, req *storagepb.ActivateDatasetReq) (*storagepb.ActivateDatasetRsp, error) {
 	return c.proxy.ActivateDataset(ctx, req, c.options...)
-}
-
-func (c *dataNodeRuntimeProxy) GetNodeState(ctx context.Context, req *storagepb.GetNodeStateReq) (*storagepb.GetNodeStateRsp, error) {
-	return c.proxy.GetNodeState(ctx, req, c.options...)
 }
 
 var newMetadataDeploymentClient = func(target string) metadataDeploymentClient {
@@ -99,31 +81,11 @@ var newMetadataDeploymentClient = func(target string) metadataDeploymentClient {
 	}
 }
 
-var newDataNodeRuntimeClient = func(target string) dataNodeRuntimeClient {
-	options := []client.Option{
-		client.WithTarget(target),
-		client.WithNetwork("tcp"),
-		client.WithProtocol("trpc"),
-		client.WithTransport(transport.DefaultClientTransport),
-	}
-	return &dataNodeRuntimeProxy{
-		proxy:   storagepb.NewDataNodeRuntimeClientProxy(options...),
-		options: options,
-	}
-}
-
 type operationResult struct {
 	Module  string      `json:"module"`
 	Action  string      `json:"action"`
 	Status  string      `json:"status"`
 	Summary interface{} `json:"summary"`
-}
-
-type registerNodeResult struct {
-	NodeID        string `json:"node_id"`
-	ServiceTarget string `json:"service_target"`
-	Name          string `json:"name"`
-	Status        string `json:"status"`
 }
 
 type activationResult struct {
@@ -159,15 +121,13 @@ func runCommand(args []string, stdout io.Writer, stderr io.Writer) error {
 		stderr = io.Discard
 	}
 	if len(args) == 0 {
-		return fmt.Errorf("expected command: init, import-seed, register-node, activate-datasets, repair-view, force-rebuild-view, reset-view-consumers, reset-metadata, delete-view, purge-dataset-events, or period-inventory")
+		return fmt.Errorf("expected command: init, import-seed, activate-datasets, repair-view, force-rebuild-view, reset-view-consumers, reset-metadata, delete-view, purge-dataset-events, or period-inventory")
 	}
 	switch args[0] {
 	case "init":
 		return runInit(args[1:], stdout, stderr)
 	case "import-seed":
 		return runImportSeed(args[1:], stdout, stderr)
-	case "register-node":
-		return runRegisterNode(trpc.BackgroundContext(), args[1:], stdout, newMetadataDeploymentClient, newDataNodeRuntimeClient)
 	case "activate-datasets":
 		return runActivateDatasets(trpc.BackgroundContext(), args[1:], stdout, newMetadataDeploymentClient)
 	case "repair-view":
@@ -185,7 +145,7 @@ func runCommand(args []string, stdout io.Writer, stderr io.Writer) error {
 	case "period-inventory":
 		return runPeriodInventory(args[1:], stdout)
 	default:
-		return fmt.Errorf("unknown command %q: use init, import-seed, register-node, activate-datasets, repair-view, force-rebuild-view, reset-view-consumers, reset-metadata, delete-view, purge-dataset-events, or period-inventory", args[0])
+		return fmt.Errorf("unknown command %q: use init, import-seed, activate-datasets, repair-view, force-rebuild-view, reset-view-consumers, reset-metadata, delete-view, purge-dataset-events, or period-inventory", args[0])
 	}
 }
 
@@ -228,98 +188,6 @@ func runPeriodInventory(args []string, stdout io.Writer) error {
 	return nil
 }
 
-type registerNodeOptions struct {
-	metadataTarget string
-	nodeID         string
-	serviceTarget  string
-	name           string
-}
-
-func runRegisterNode(ctx context.Context, args []string, stdout io.Writer, metadataFactory func(string) metadataDeploymentClient, nodeFactory func(string) dataNodeRuntimeClient) error {
-	fs := flag.NewFlagSet("register-node", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	opts := registerNodeOptions{}
-	fs.StringVar(&opts.metadataTarget, "metadata-target", "", "Metadata tRPC target")
-	fs.StringVar(&opts.nodeID, "node-id", "", "DataNode ID")
-	fs.StringVar(&opts.serviceTarget, "service-target", "", "DataNode runtime target")
-	fs.StringVar(&opts.name, "name", "", "DataNode display name")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-	if fs.NArg() != 0 {
-		return fmt.Errorf("unexpected register-node arguments: %s", strings.Join(fs.Args(), " "))
-	}
-	if err := validateRegisterNodeOptions(opts); err != nil {
-		return err
-	}
-	auth, err := deploymentAuth()
-	if err != nil {
-		return err
-	}
-	nodeRsp, err := nodeFactory(opts.serviceTarget).GetNodeState(ctx, &storagepb.GetNodeStateReq{
-		AuthInfo: auth,
-		NodeId:   opts.nodeID,
-	})
-	if err != nil {
-		return fmt.Errorf("DataNode readiness RPC failed")
-	}
-	if nodeRsp == nil {
-		return fmt.Errorf("DataNode readiness returned no response")
-	}
-	if err := requireSuccess("DataNode readiness", nodeRsp.GetRetInfo()); err != nil {
-		return err
-	}
-	if nodeRsp.GetNodeId() != opts.nodeID || nodeRsp.GetStatus() != "READY" {
-		return fmt.Errorf("DataNode is not ready")
-	}
-	rsp, err := metadataFactory(opts.metadataTarget).RegisterDataNode(ctx, &storagepb.RegisterDataNodeReq{
-		AuthInfo:      auth,
-		NodeId:        opts.nodeID,
-		ServiceTarget: opts.serviceTarget,
-		InitialName:   opts.name,
-	})
-	if err != nil {
-		return fmt.Errorf("register DataNode RPC failed")
-	}
-	if rsp == nil {
-		return fmt.Errorf("register DataNode returned no response")
-	}
-	if err := requireSuccess("register DataNode", rsp.GetRetInfo()); err != nil {
-		return err
-	}
-	node := rsp.GetNode()
-	if node == nil {
-		return fmt.Errorf("register DataNode returned no node")
-	}
-	return writeOperationResult(stdout, operationResult{
-		Module: "storage",
-		Action: "register-node",
-		Status: "ok",
-		Summary: registerNodeResult{
-			NodeID:        node.GetNodeId(),
-			ServiceTarget: node.GetServiceTarget(),
-			Name:          node.GetName(),
-			Status:        node.GetStatus(),
-		},
-	})
-}
-
-func validateRegisterNodeOptions(opts registerNodeOptions) error {
-	for _, item := range []struct {
-		name  string
-		value string
-	}{
-		{name: "metadata-target", value: opts.metadataTarget},
-		{name: "node-id", value: opts.nodeID},
-		{name: "service-target", value: opts.serviceTarget},
-	} {
-		if strings.TrimSpace(item.value) == "" {
-			return fmt.Errorf("--%s is required", item.name)
-		}
-	}
-	return nil
-}
-
 func deploymentAuth() (*storagepb.AuthInfo, error) {
 	secret := strings.TrimSpace(os.Getenv("MOOX_STORAGE_NODE_AUTH_SECRET"))
 	if secret == "" {
@@ -327,7 +195,7 @@ func deploymentAuth() (*storagepb.AuthInfo, error) {
 	}
 	return &storagepb.AuthInfo{
 		AppId:  storageDeployerAppID,
-		AppKey: datanode.ServiceAuthKey(secret, storageDeployerAppID),
+		AppKey: serviceauth.Key(secret, storageDeployerAppID),
 	}, nil
 }
 
