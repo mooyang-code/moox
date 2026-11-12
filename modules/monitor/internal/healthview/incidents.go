@@ -27,6 +27,8 @@ type incident struct {
 	resolvedAt   time.Time
 	firstEventAt time.Time
 	reason       string
+	// processes 是触发时占用最高的进程（主机 CPU、内存告警）。
+	processes    []*pb.AlertProcess
 	reminders    int32
 	notifyFailed bool
 	open         bool
@@ -57,7 +59,7 @@ func (b Builder) incidents(ctx context.Context, spaceID string, facts observabil
 		key := incidentKey{space: event.SpaceID, check: event.CheckID}
 		current := latest[key]
 		if event.EventType == domain.AlertEventTriggered {
-			current = &incident{key: key, triggeredAt: event.CreatedAt, firstEventAt: event.CreatedAt, reason: eventReason(event), open: true}
+			current = &incident{key: key, triggeredAt: event.CreatedAt, firstEventAt: event.CreatedAt, reason: eventReason(event), processes: eventProcesses(event), open: true}
 			latest[key] = current
 			all = append(all, current)
 			continue
@@ -73,7 +75,7 @@ func (b Builder) incidents(ctx context.Context, spaceID string, facts observabil
 				return nil, err
 			}
 			if trigger != nil {
-				current.triggeredAt, current.reason = trigger.CreatedAt, eventReason(*trigger)
+				current.triggeredAt, current.reason, current.processes = trigger.CreatedAt, eventReason(*trigger), eventProcesses(*trigger)
 			}
 			latest[key] = current
 			all = append(all, current)
@@ -111,6 +113,7 @@ func (b Builder) incidents(ctx context.Context, spaceID string, facts observabil
 			Active:        latest[item.key] == item && active[item.key],
 			ReminderCount: item.reminders,
 			NotifyFailed:  item.notifyFailed,
+			Processes:     item.processes,
 		})
 	}
 	return out, nil

@@ -16,6 +16,7 @@
         "space_id": "",
         "type": "host"
       },
+      "processes": [],
       "raw_error": "",
       "reason": "主机采集代理超过三分钟未上报，主机可能宕机、断网，或采集代理已停止",
       "recovering": false,
@@ -39,6 +40,7 @@
         "space_id": "",
         "type": "host"
       },
+      "processes": [],
       "raw_error": "",
       "reason": "监控项持续异常",
       "recovering": false,

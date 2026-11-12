@@ -1,5 +1,6 @@
 import type {
   AlertIncident,
+  AlertProcess,
   HealthAlert,
   HealthBusinessCheck,
   HealthComponent,
@@ -19,6 +20,7 @@ import {
 } from "@/views/home/home-model";
 import { alertLink, alertNote, hostHref, statusLabel } from "./health-display";
 import { marketTime } from "@/utils/time-zone";
+import { formatBytes } from "@/api/modules/host-monitor";
 
 /** 触发时间相差不超过 60 秒的告警多半是同一个原因（服务重启、网络抖动），合并成一组展示。 */
 export const SAME_CAUSE_WINDOW_MS = 60_000;
@@ -196,6 +198,24 @@ export function expectedBar(item: HealthDataset, delay: BarDelay, nowMs: number)
   return { text, tone: "ok", title: `${text} 那根${closing}，已到` };
 }
 
+/** 告警里最多列出的进程数。 */
+const ALERT_PROCESS_LIMIT = 5;
+
+/** 告警事件里记下的进程排行写成一行：名字（PID）、CPU、内存；没有时为空串。CPU 按单核计。 */
+export function processSummary(processes: AlertProcess[] | undefined): string {
+  return (processes ?? [])
+    .slice(0, ALERT_PROCESS_LIMIT)
+    .map(item => {
+      const parts: string[] = [];
+      if (item.cpu_available) parts.push(`CPU ${Number(item.cpu_percent ?? 0).toFixed(1)}%`);
+      const rss = Number(item.rss_bytes ?? 0);
+      if (Number.isFinite(rss) && rss > 0) parts.push(`内存 ${formatBytes(rss)}`);
+      const name = `${item.name || "未知进程"}（PID ${item.pid ?? "--"}）`;
+      return parts.length ? `${name} ${parts.join("、")}` : name;
+    })
+    .join("；");
+}
+
 function alertLine(alert: HealthAlert, names: NameBook, nowMs: number): AlertLine {
   const note = alertNote(alert.object);
   const startedMs = toMillis(alert.triggered_at);
@@ -204,6 +224,8 @@ function alertLine(alert: HealthAlert, names: NameBook, nowMs: number): AlertLin
     { label: "最新检查", value: relativeTime(alert.last_checked_at, nowMs), title: fullTime(alert.last_checked_at) },
     ...datasetFacts(alert.dataset, nowMs)
   ];
+  const processes = processSummary(alert.processes);
+  if (processes) facts.push({ label: "占用最高的进程", value: processes, title: "最近一次触发或提醒时的排行；CPU 按单核计" });
   return {
     key: alert.id || alert.title || "",
     tone: severityTone(alert.severity),
@@ -403,6 +425,8 @@ export interface IncidentRow {
   /** 同一时间触发的其他告警标题。 */
   others: string[];
   reason: string;
+  /** 触发时占用最高的进程（主机 CPU、内存告警），写成整句；合并了几条时句首带上各自的标题。没有时为空数组。 */
+  processes: string[];
   outcome: string;
   active: boolean;
   flap: boolean;
@@ -464,6 +488,7 @@ export function incidentTimeline(overview: HealthOverview | undefined, names: Na
       const primary = ordered[0];
       const startedMs = group[0].startedMs;
       const { outcome, flap } = incidentOutcome(state, group, startedMs, nowMs);
+      const withProcesses = ordered.filter(item => item.incident.processes?.length);
       return {
         key: group.map(item => item.incident.id).join("|"),
         tone: state === "active" ? worst(group.map(item => item.tone)) : "idle",
@@ -472,6 +497,9 @@ export function incidentTimeline(overview: HealthOverview | undefined, names: Na
         title: primary.title,
         others: ordered.slice(1).map(item => item.title),
         reason: prettifyIds(primary.incident.reason || "", names),
+        processes: withProcesses.map(
+          item => `${group.length > 1 ? `${item.title} ` : ""}触发时占用最高：${processSummary(item.incident.processes)}`
+        ),
         outcome,
         active: state === "active",
         flap,

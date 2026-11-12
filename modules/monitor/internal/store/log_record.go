@@ -55,6 +55,36 @@ func (r *LogRecordRepository) Query(ctx context.Context, filter LogRecordFilter)
 	if limit <= 0 || limit > MaxLogRecordPage+1 {
 		limit = MaxLogRecordPage + 1
 	}
+	query := r.filtered(ctx, filter)
+	if filter.BeforeID > 0 {
+		query = query.Where("c_id < ?", filter.BeforeID)
+	}
+	var records []domain.LogRecord
+	err := query.Order("c_id DESC").Limit(limit).Find(&records).Error
+	return records, err
+}
+
+// LogBucket 是一个小时里的日志条数：Errors 是 Error 及以上，Events 是其余的（关键事件）。
+type LogBucket struct {
+	Hour   string
+	Errors int64
+	Events int64
+}
+
+// Buckets 按小时统计符合条件的日志条数（不看 BeforeID 和 Limit），按时间升序，只含有记录的小时。
+// Hour 是这个小时的起点（UTC，RFC 3339）。
+func (r *LogRecordRepository) Buckets(ctx context.Context, filter LogRecordFilter) ([]LogBucket, error) {
+	var buckets []LogBucket
+	err := r.filtered(ctx, filter).
+		Select("strftime('%Y-%m-%dT%H:00:00Z', c_logged_at) AS hour, "+
+			"SUM(CASE WHEN c_level IN ? THEN 1 ELSE 0 END) AS errors, "+
+			"SUM(CASE WHEN c_level IN ? THEN 0 ELSE 1 END) AS events", levelsAtOrAbove("error"), levelsAtOrAbove("error")).
+		Group("hour").Order("hour").Scan(&buckets).Error
+	return buckets, err
+}
+
+// filtered 套上除翻页以外的查询条件。
+func (r *LogRecordRepository) filtered(ctx context.Context, filter LogRecordFilter) *gorm.DB {
 	query := r.db.WithContext(ctx).Model(&domain.LogRecord{})
 	if value := strings.TrimSpace(filter.HostID); value != "" {
 		query = query.Where("c_host_id = ?", value)
@@ -76,12 +106,7 @@ func (r *LogRecordRepository) Query(ctx context.Context, filter LogRecordFilter)
 	if !filter.End.IsZero() {
 		query = query.Where("c_logged_at < ?", filter.End.UTC())
 	}
-	if filter.BeforeID > 0 {
-		query = query.Where("c_id < ?", filter.BeforeID)
-	}
-	var records []domain.LogRecord
-	err := query.Order("c_id DESC").Limit(limit).Find(&records).Error
-	return records, err
+	return query
 }
 
 // levelsAtOrAbove 返回不低于 level 的级别名；level 为空或不认识时返回 nil（不筛选）。

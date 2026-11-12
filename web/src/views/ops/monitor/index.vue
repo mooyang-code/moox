@@ -90,6 +90,7 @@
             <span class="incident__outcome" :class="{ 'is-active': row.active }"
               >{{ row.outcome }}<template v-if="row.flap"> · 闪断</template></span
             >
+            <p v-for="(text, index) in row.processes" :key="index" class="incident__processes">{{ text }}</p>
           </div>
           <button
             v-if="showAllIncidents || hiddenIncidents"
@@ -1056,6 +1057,13 @@ a {
   color: var(--color-text-3);
   font-size: 12px;
   white-space: nowrap;
+}
+.incident__processes {
+  grid-column: 3 / -1;
+  margin: 0;
+  color: var(--color-text-3);
+  font-size: 12px;
+  overflow-wrap: anywhere;
 }
 .incident__outcome.is-active {
   color: var(--tone);
