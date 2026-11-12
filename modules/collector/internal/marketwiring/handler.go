@@ -20,16 +20,14 @@ import (
 
 func NewHandler() *marketfetch.Handler {
 	h := marketfetch.NewHandler()
-	h.NewMarketKlinePipeline = NewMarketKlinePipeline
-	h.NewCryptoKlinePipeline = NewCryptoKlinePipeline
-	h.NewStockKlinePipeline = NewStockKlinePipeline
+	h.NewKlinePipeline = NewKlinePipeline
 	h.ResolveSymbol = ResolveSymbol
 	h.PlanPeriodValid = planPeriodValid
 	return h
 }
 
 // ResolveSymbol 按市场的标的规则把标的 ID 换成传给数据源的代码。来源由任务或标签指定的（市场，品种），
-// 数据源必须在行情源目录里登记过；按路由分配来源的（A 股股票）不看标签的数据源。
+// 数据源必须在行情源目录里登记过；按路由分配来源的不看标签的数据源。
 func ResolveSymbol(provider, marketID, marketType, subjectID string) (string, error) {
 	rules, err := markets.RulesFor(marketID)
 	if err != nil {
@@ -54,7 +52,8 @@ func DefaultSourceID(marketID, provider, instrumentType string) string {
 }
 
 // FeedLabels 返回 feed 指标里市场、数据源、路由标签允许的取值：市场取已登记的市场，数据源取行情源目录，
-// 路由按目录生成——按路由分配的是 <市场>_<品种>_kline_<频率>，单一来源的是 <数据源>_<品种>_kline_<频率>；
+// 路由按目录生成——按路由分配的是 <市场>_<品种>_kline_<频率>，单一来源的是 <数据源>_<品种>_kline_<频率>
+// （有路由文件的市场里不归路由管的品种，路由 ID 不带频率，不在允许的取值里，标签记为 unknown）；
 // 标的快照的路由 ID 一并保留。
 func FeedLabels() marketfetch.FeedLabels {
 	labels := marketfetch.FeedLabels{Markets: markets.IDs()}

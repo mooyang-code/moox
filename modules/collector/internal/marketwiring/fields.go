@@ -13,20 +13,17 @@ import (
 func FieldOffers() marketdata.FieldOffers { return catalog.FieldOffers() }
 
 // FieldSources 构造（市场, 品种）下全部提供附加字段的来源，供采集管线取数。
-// A 股来源的运行参数（限速等）按提供方 ID 从数据源配置文件加载，没有配置文件的用默认值。
+// 来源的运行参数（限速等）按数据源 ID 从市场的数据源配置文件（config/markets/<市场>/sources）加载，没有配置文件的用默认值。
 func FieldSources(marketID string, instrumentType marketdata.InstrumentType) ([]marketdata.FieldSource, error) {
 	marketID = strings.ToLower(strings.TrimSpace(marketID))
 	return catalog.Default().FieldSources(marketdata.MarketID(marketID), instrumentType, func(entry marketdata.CatalogEntry) (marketdata.Deps, error) {
 		deps := marketdata.Deps{HTTPClient: httpclient.SharedClientIfEnabled()}
-		if marketID != marketfetch.StockCNSpaceID {
-			return deps, nil
-		}
-		config, found, err := marketfetch.LoadStockCNSourceRuntime(entry.Key.ProviderID)
+		runtime, found, err := marketfetch.LoadSourceRuntime(marketID, entry.Key.ProviderID)
 		if err != nil {
 			return marketdata.Deps{}, err
 		}
 		if found {
-			deps.Settings = stockCNSettings(config)
+			deps.Settings = sourceSettings(runtime)
 		}
 		return deps, nil
 	})

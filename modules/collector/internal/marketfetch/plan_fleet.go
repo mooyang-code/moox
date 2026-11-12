@@ -75,27 +75,31 @@ func (f FleetSizing) SymbolsPerFunction(sources []SourceCapacity, subjects int) 
 	return max(size, 1)
 }
 
-// stockCNCapacities 返回 A 股某个频率的各主源在一个函数进程内的承受能力：权重取自该频率的路由，并发与频率上限取自各源的限速配置。
-// 路由或源配置读不出来时返回 nil（调用方沿用配置里的默认值），不影响计划生成。
-func stockCNCapacities() func(frequency string) []SourceCapacity {
+// routeCapacities 返回市场某个频率的各主源在一个函数进程内的承受能力：权重取自该频率的路由，并发与频率上限取自各源的限速配置。
+// 市场没有路由文件、路由或源配置读不出来时返回 nil（调用方沿用配置里的默认值），不影响计划生成。
+// 与市场里的品种无关：有路由文件的市场，全部分组都按路由的主源来算。
+func routeCapacities(marketID string) func(frequency string) []SourceCapacity {
 	var mu sync.Mutex
-	var route stockCNRoute
-	var runtimes map[string]stockCNProviderRuntime
+	var route Route
+	var runtimes map[string]SourceRuntime
 	return func(frequency string) []SourceCapacity {
 		mu.Lock()
 		defer mu.Unlock()
 		if runtimes == nil {
-			loaded, err := loadStockCNRoute()
+			loaded, found, err := LoadRoute(marketID)
 			if err != nil {
-				log.Warnf("stockcn capacities: load route: %v", err)
+				log.Warnf("%s 函数容量估算：读路由失败：%v", marketID, err)
 				return nil
 			}
-			providers, err := loadStockCNProviderRuntime(loaded)
-			if err != nil {
-				log.Warnf("stockcn capacities: load provider config: %v", err)
+			if !found {
 				return nil
 			}
-			route, runtimes = loaded, providers
+			sources, err := LoadSourceRuntimes(loaded)
+			if err != nil {
+				log.Warnf("%s 函数容量估算：读数据源配置失败：%v", marketID, err)
+				return nil
+			}
+			route, runtimes = loaded, sources
 		}
 		kline, err := route.Kline(frequency)
 		if err != nil {
@@ -116,8 +120,8 @@ func stockCNCapacities() func(frequency string) []SourceCapacity {
 	}
 }
 
-// StockCNWorkers 是 A 股一个函数内同时处理的标的数：各主源并发之和（各源在函数内的并发上限见源配置），不超过 MaxConcurrency。
-func stockCNWorkers(sources []SourceCapacity) int {
+// routeWorkers 是一个函数内同时处理的标的数：各主源并发之和（各源在函数内的并发上限见源配置），不超过 MaxConcurrency。
+func routeWorkers(sources []SourceCapacity) int {
 	total := 0
 	for _, source := range sources {
 		total += max(1, source.MaxConcurrent)
@@ -125,26 +129,27 @@ func stockCNWorkers(sources []SourceCapacity) int {
 	return min(total, MaxConcurrency)
 }
 
-// StockCNAutoSize 返回 A 股的每函数标的数估算（见 FleetSizing）；函数内同时处理的标的数取各主源并发之和。
-func StockCNAutoSize(sizing FleetSizing) func(sample TaskGroup, subjects int) int {
-	capacities := stockCNCapacities()
+// RouteAutoSize 返回按市场的路由估算每函数标的数的函数（见 FleetSizing）；函数内同时处理的标的数取各主源并发之和。
+// 市场没有路由文件、或没有这个频率的路由时估算结果为 0，由调用方用默认值。
+func RouteAutoSize(marketID string, sizing FleetSizing) func(sample TaskGroup, subjects int) int {
+	capacities := routeCapacities(marketID)
 	return func(sample TaskGroup, subjects int) int {
 		sources := capacities(sample.Frequency)
 		if len(sources) == 0 {
 			return 0
 		}
 		if sizing.Workers == 0 {
-			sizing.Workers = stockCNWorkers(sources)
+			sizing.Workers = routeWorkers(sources)
 		}
 		return sizing.SymbolsPerFunction(sources, subjects)
 	}
 }
 
-// StockCNFetchLimits 返回 A 股计划里 fetch 参数的推导：函数内并发（concurrency）取各主源并发之和，
-// 熔断用的并发（feed_concurrency）取各主源并发的最大值，每秒请求数与突发（rps、burst）只给币安适配器用、对 A 股没有作用，清零。
-// 各源的并发与频率上限以源配置为准，不再在计划里重复配置。读不出源配置时保持传入的值。
-func StockCNFetchLimits() func(sample TaskGroup, fetch PlanFetch) PlanFetch {
-	capacities := stockCNCapacities()
+// RouteFetchLimits 返回按市场的路由推导计划里 fetch 参数的函数：函数内并发（concurrency）取各主源并发之和，
+// 熔断用的并发（feed_concurrency）取各主源并发的最大值；每秒请求数与突发（rps、burst）是随请求下发给单一来源数据源的限速，
+// 按路由分配的来源各自用源配置里的限速，所以清零。市场没有路由文件、没有这个频率的路由、读不出源配置时保持传入的值。
+func RouteFetchLimits(marketID string) func(sample TaskGroup, fetch PlanFetch) PlanFetch {
+	capacities := routeCapacities(marketID)
 	return func(sample TaskGroup, fetch PlanFetch) PlanFetch {
 		sources := capacities(sample.Frequency)
 		if len(sources) == 0 {
@@ -154,7 +159,7 @@ func StockCNFetchLimits() func(sample TaskGroup, fetch PlanFetch) PlanFetch {
 		for _, source := range sources {
 			feed = max(feed, source.MaxConcurrent)
 		}
-		fetch.Concurrency, fetch.FeedConcurrency, fetch.RPS, fetch.Burst = stockCNWorkers(sources), feed, 0, 0
+		fetch.Concurrency, fetch.FeedConcurrency, fetch.RPS, fetch.Burst = routeWorkers(sources), feed, 0, 0
 		return fetch
 	}
 }

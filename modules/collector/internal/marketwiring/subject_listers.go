@@ -91,19 +91,19 @@ func NewSubjectListers(clients ...*httpclient.HTTPClient) (subjectsync.Listers, 
 // routedInstrumentSettings 返回按路由分配来源的登记项做标的同步时的运行参数；路由没把它列为标的来源、
 // 或数据源配置没开启 instrument 时 enabled 为 false。
 func routedInstrumentSettings(entry marketdata.CatalogEntry) (marketdata.SourceSettings, bool, error) {
-	route, err := marketfetch.LoadStockCNRoute()
+	route, found, err := marketfetch.RouteFor(string(entry.MarketID), entry.Instrument)
 	if err != nil {
 		return marketdata.SourceSettings{}, false, err
 	}
-	if route.MarketID != string(entry.MarketID) {
+	if !found {
 		return marketdata.SourceSettings{}, false, fmt.Errorf("市场 %s 的数据源 %s 按路由分配来源，但没有它的路由文件", entry.MarketID, entry.Key.ProviderID)
 	}
 	if !slices.Contains(route.InstrumentProviders(), entry.Key.ProviderID) {
 		return marketdata.SourceSettings{}, false, nil
 	}
-	config, found, err := marketfetch.LoadStockCNSourceRuntime(entry.Key.ProviderID)
-	if err != nil || !found || !config.InstrumentEnabled {
+	runtime, found, err := marketfetch.LoadSourceRuntime(string(entry.MarketID), entry.Key.ProviderID)
+	if err != nil || !found || !runtime.InstrumentEnabled {
 		return marketdata.SourceSettings{}, false, err
 	}
-	return stockCNSettings(config), true, nil
+	return sourceSettings(runtime), true, nil
 }

@@ -7,7 +7,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/httpclient"
 )
 
-// SourceSettings 是数据源自身的运行参数（A 股按路由与数据源配置文件给出），没有配置的数据源取零值用默认。
+// SourceSettings 是数据源自身的运行参数（按路由分配的数据源由路由与数据源配置文件给出），没有配置的数据源取零值用默认。
 type SourceSettings struct {
 	BaseURL           string
 	KlineEndpoint     string
@@ -21,7 +21,7 @@ type SourceSettings struct {
 // collector-stream（接收）各自给出自己的 HTTP 客户端与配置，数据源的构造只在目录里写一处。
 type Deps struct {
 	HTTPClient *httpclient.HTTPClient
-	// SourceID 为空时取登记的 source_id；A 股按路由配置给出。
+	// SourceID 为空时取登记的 source_id；按路由分配的数据源由路由配置给出。
 	SourceID string
 	Settings SourceSettings
 }
@@ -36,7 +36,7 @@ type CatalogEntry struct {
 	Key        SourceKey
 	MarketID   MarketID
 	Instrument InstrumentType
-	// RouteSource 表示 source_id 由路由配置决定（A 股），查找时只按 provider 匹配。
+	// RouteSource 表示这个（市场，品种）的 K 线来源按路由文件分配：source_id 由路由配置决定，查找时只按 provider 匹配。
 	RouteSource bool
 	New         Factory
 }
