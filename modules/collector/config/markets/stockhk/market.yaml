@@ -9,6 +9,8 @@ allowed_lateness_seconds: 90
 series_tag: default
 # 实时批次不限标的数（每函数标的数由采集计划按容量校验）。
 realtime_batch_no_cap: true
+# 云函数出口探测：只取出口公网 IP（与 A 股共用南京出口，不绑定数据源）。
+egress_probe: public_ip
 # 标的同步（指数成分）的请求直连。
 subject_egress: direct
 # 不写 subject_sync：港股没有全市场标的同步，标的由指数成分的标签同步创建。
