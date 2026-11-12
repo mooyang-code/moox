@@ -13,10 +13,13 @@ import (
 const (
 	// KeyMarketType 是标签覆盖的市场类型（spot、swap、equity 等）。
 	KeyMarketType = "market_type"
-	// KeySyncSource 是标的同步使用的数据来源，也是该标签采集时的行情源。
+	// KeySyncSource 是该标签采集时的行情源，也是标的同步使用的数据来源（指数成分另有来源时见 KeySyncIndexSource）。
 	KeySyncSource = "sync.source"
 	// KeySyncIndex 是指数代码：有它时标签同步该指数的成分股，而不是数据源的全部标的。
 	KeySyncIndex = "sync.index"
+	// KeySyncIndexSource 是指数成分的来源，可选：成分名单与行情不是同一家时才写（港股恒指的行情源是 eastmoney、
+	// 成分来源是 tencent）；不写时等于 KeySyncSource。只在配置了 KeySyncIndex 时有意义。
+	KeySyncIndexSource = "sync.index_source"
 	// KeySyncCron 是标的同步的 cron 表达式；KeySyncTimezone 是它的时区。
 	KeySyncCron     = "sync.cron"
 	KeySyncTimezone = "sync.timezone"
@@ -32,8 +35,16 @@ func lower(tag *storagepb.Tag, key string) string {
 	return strings.ToLower(strings.TrimSpace(tag.GetAttributes()[key]))
 }
 
-// Source 返回标签的同步来源（小写）；未配置时为空。
+// Source 返回标签采集用的行情源，也是全部标的的同步来源（小写）；未配置时为空。
 func Source(tag *storagepb.Tag) string { return lower(tag, KeySyncSource) }
+
+// IndexSource 返回标签的指数成分来源（小写）：配置了 sync.index_source 用它，否则等于 Source。
+func IndexSource(tag *storagepb.Tag) string {
+	if value := lower(tag, KeySyncIndexSource); value != "" {
+		return value
+	}
+	return Source(tag)
+}
 
 // Index 返回标签要同步成分股的指数代码；未配置时为空（同步数据源的全部标的）。
 func Index(tag *storagepb.Tag) string { return strings.TrimSpace(tag.GetAttributes()[KeySyncIndex]) }
