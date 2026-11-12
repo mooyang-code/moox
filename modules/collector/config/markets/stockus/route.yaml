@@ -1,0 +1,17 @@
+market_id: stockus
+# 这份路由管的品种：美股股票的 K 线来源按下面的候选链分配。
+instrument_type: equity
+# 结算延迟（毫秒）：实时采集只写“收盘时刻 + 结算延迟”已经过去的 K 线。
+# 2026-11-12 南京实测：22:50、22:55 两个边界、10 只标的，边界后 0.5～1.4 秒看到新一根、目标那根定稿，之后不再变；
+# 样本少，留出余量取 5 秒，实时批次的截止是收盘后 90 秒（market.yaml 的 allowed_lateness_seconds），多等没有代价。
+# 采集计划的 not_before_ms（market.yaml 的 scf_plan，可被部署配置覆盖）不能小于它，生成计划时会校验。
+settle_delay_ms: 5000
+# 不写 instrument_providers：美股没有全市场标的同步，标的由指数成分的标签同步创建。
+# 按频率分开的 K 线候选链。路由 ID 按频率生成：stockus_equity_kline_<频率>。
+klines:
+  # 5m：只有东方财富一个主源，没有备源（2026-11-12 用户拍板不用新浪备源，新浪边界后约 35 秒才定稿）。
+  # 不复权；时间标签是收盘时刻，北京时间，冬令时每天 78 根（首根 22:35、末根次日 05:00），夏令时首根 21:35、末根次日 04:00，
+  # 半日市 42 根；成交量单位是股，成交额单位是美元；回看 18 个交易日。失败最多重试 3 次，之后等补采。
+  - frequency: 5m
+    providers:
+      - {id: eastmoney, source_id: stockus_http, weight: 1, role: primary}

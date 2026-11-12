@@ -25,6 +25,7 @@ func TestEveryCatalogMarketIsFullyRegistered(t *testing.T) {
 	require.Contains(t, routed, "crypto")
 	require.Contains(t, routed, "stockcn")
 	require.Contains(t, routed, "stockhk")
+	require.Contains(t, routed, "stockus")
 	for marketID, hasRouteSource := range routed {
 		market, err := barclock.MarketFor(marketID)
 		require.NoError(t, err, "%s 没有登记在 barclock 市场表", marketID)
@@ -71,6 +72,9 @@ func TestDefaultSourceIDComesFromCatalog(t *testing.T) {
 		// 美股的纳斯达克、datahub 只取指数成分，登记的 source_id 与港股腾讯相同。
 		{"stockus", "nasdaq", "equity", "index_constituent_http"},
 		{"stockus", "datahub", "equity", "index_constituent_http"},
+		// 美股的东方财富同样只取 K 线。
+		{"stockus", "eastmoney", "equity", "stockus_http"},
+		{"stockus", "sina", "equity", ""},
 		{"stockcn", "unknown", "equity", ""},
 	} {
 		require.Equal(t, tc.want, DefaultSourceID(tc.market, tc.provider, tc.instrument), "%s/%s/%s", tc.market, tc.provider, tc.instrument)
@@ -102,7 +106,7 @@ func TestFeedLabelsCoverExistingValues(t *testing.T) {
 	for _, route := range []string{"stockcn_instrument_v1", "binance_spot_instrument_v1", "binance_swap_instrument_v1"} {
 		require.Contains(t, labels.Routes, route)
 	}
-	for _, prefix := range []string{"stockcn_equity_kline_", "binance_spot_kline_", "binance_swap_kline_"} {
+	for _, prefix := range []string{"stockcn_equity_kline_", "stockhk_equity_kline_", "stockus_equity_kline_", "binance_spot_kline_", "binance_swap_kline_"} {
 		require.Contains(t, labels.KlineRoutePrefixes, prefix)
 	}
 }
