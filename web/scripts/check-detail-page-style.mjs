@@ -27,8 +27,7 @@ const pageShellFiles = [
   "src/views/collector/backfill-jobs/index.vue",
   "src/views/trading/accounts/index.vue",
   "src/views/trading/accounts/detail/index.vue",
-  "src/views/ops/host-workbench/ssh-hosts.vue",
-  "src/views/ops/storage/nodes.vue"
+  "src/views/ops/host-workbench/ssh-hosts.vue"
 ];
 
 const tableFiles = [

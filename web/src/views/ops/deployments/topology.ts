@@ -43,7 +43,6 @@ const LAYER_OF: Record<string, TopologyLayer> = {
   "callback-dispatcher": "business",
   "egress-proxy": "business",
   "storage-primary": "storage",
-  "storage-node": "storage",
   "storage-view": "storage",
   "host-gateway": "infra",
   "host-agent": "infra"
@@ -92,9 +91,8 @@ export const DATA_FLOW: FlowStep[] = [
   },
   { from: "ext:market", to: "collector-stream", kind: "data", stage: "WS 推送", label: "交易所 WS 实时推送" },
   { from: "collector-stream", to: "storage-primary", kind: "data", stage: "WS 推送", label: "写入 K 线" },
-  { from: "storage-primary", to: "storage-node", kind: "data", stage: "存储", label: "写入事实存储，到点固化采集周期" },
-  { from: "storage-node", to: "storage-view", kind: "event", stage: "存储", label: "行变更与周期标记，构建 View" },
-  { from: "storage-node", to: "factor-engine", kind: "event", stage: "因子", label: "采集周期完成，触发因子计算" },
+  { from: "storage-primary", to: "storage-view", kind: "event", stage: "存储", label: "行变更与周期标记，构建 View" },
+  { from: "storage-primary", to: "factor-engine", kind: "event", stage: "因子", label: "采集周期完成，触发因子计算" },
   { from: "factor-engine", to: "access", kind: "data", stage: "因子", label: "写回因子结果", near: "storage-primary" },
   { from: "storage-view", to: "strategy", kind: "event", stage: "策略交易", label: "View 数据就绪，计算目标权重" },
   { from: "strategy", to: "trade", kind: "event", stage: "策略交易", label: "目标权重请求，收敛下单" }

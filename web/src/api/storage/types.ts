@@ -181,12 +181,10 @@ export interface Dataset {
   /** 时序 Dataset 的唯一频率；记录型 Dataset 可为空。 */
   freq?: string;
   status: string;
-  data_node_id?: string;
   /** 只读的生效保留期："<n>h" 或 "forever"，由 Storage 策略按空间与频率解析。 */
   retention?: string;
   /** 保留期来源：default（全局默认）、space（空间覆盖）、record（记录型不过期）。 */
   retention_source?: string;
-  binding_locked?: boolean;
   revision?: number | string;
   subject_tags?: string[];
   created_at?: string;
@@ -281,30 +279,6 @@ export interface ResultColumn {
   origin_type: ColumnOriginType;
   dataset_id?: string;
   origin_id?: string;
-}
-
-export interface DataNode {
-  node_id: string;
-  name: string;
-  service_target: string;
-  status: string;
-  created_at?: string;
-  updated_at?: string;
-}
-
-export interface DatasetSummary {
-  space_id: string;
-  dataset_id: string;
-  name: string;
-  data_kind: DataKind;
-  retention?: string;
-  retention_source?: string;
-  status: string;
-}
-
-export interface DataNodeListItem {
-  node: DataNode;
-  datasets: DatasetSummary[];
 }
 
 export interface TimeSeriesKey {

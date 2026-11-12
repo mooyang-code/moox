@@ -75,7 +75,7 @@
             </template>
           </ViewBrowse>
           <a-spin v-else-if="viewLoading" class="results-loading" />
-          <a-empty v-else-if="!viewError" description="结果视图由 Storage 在结果数据集激活后自动创建，请稍后刷新">
+          <a-empty v-else-if="!viewError" description="结果视图由 Storage 在结果数据集创建后自动生成，请稍后刷新">
             <template #extra>
               <a-button @click="goTasks">前往计算任务</a-button>
             </template>

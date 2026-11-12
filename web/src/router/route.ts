@@ -223,12 +223,6 @@ export const staticRoutes = [
         name: "ops-hosts",
         component: () => import("@/views/ops/host-workbench/index.vue"),
         meta: { title: "ops-hosts", reuseOnQuery: true }
-      },
-      {
-        path: "/ops/storage/nodes",
-        name: "ops-storage",
-        component: () => import("@/views/ops/storage/nodes.vue"),
-        meta: { title: "ops-storage" }
       }
     ]
   }

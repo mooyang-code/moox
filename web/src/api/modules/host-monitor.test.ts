@@ -32,14 +32,14 @@ describe("host monitor wire conversion", () => {
           }
         ],
         top_processes: [
-          { pid: 11, name: "moox-storage-node", cpu_percent: 340.4, cpu_available: true, rss_bytes: "5368709120" },
+          { pid: 11, name: "moox-storage-primary", cpu_percent: 340.4, cpu_available: true, rss_bytes: "5368709120" },
           { pid: 12, name: "fresh", rss_bytes: 1048576 }
         ]
       }
     } as any);
 
     expect(metrics.processes).toEqual([
-      { pid: 11, name: "moox-storage-node", cpu_percent: 340.4, cpu_available: true, rss: 5368709120 },
+      { pid: 11, name: "moox-storage-primary", cpu_percent: 340.4, cpu_available: true, rss: 5368709120 },
       { pid: 12, name: "fresh", cpu_percent: 0, cpu_available: false, rss: 1048576 }
     ]);
 
