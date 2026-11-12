@@ -479,6 +479,43 @@ fields:
   status: active
 - space_id: stockcn
   group_id: trading
+  field_id: turnover_rate
+  name: 换手率
+  value_type: double
+  unit: percent
+  sort_order: 21
+  status: active
+- space_id: stockcn
+  group_id: trading
+  field_id: total_shares
+  name: 总股本
+  value_type: double
+  sort_order: 22
+  status: active
+- space_id: stockcn
+  group_id: trading
+  field_id: float_shares
+  name: 流通股本
+  value_type: double
+  sort_order: 23
+  status: active
+- space_id: stockcn
+  group_id: trading
+  field_id: dividend_per_share
+  name: 每股股利
+  value_type: double
+  unit: CNY
+  sort_order: 24
+  status: active
+- space_id: stockcn
+  group_id: trading
+  field_id: is_st
+  name: 是否 ST
+  value_type: int
+  sort_order: 25
+  status: active
+- space_id: stockcn
+  group_id: trading
   field_id: volume_unit
   name: 成交量单位
   value_type: string

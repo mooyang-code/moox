@@ -9,8 +9,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// chipLibrarySpecs 读内置 A 股日线因子库里的三个筹码因子（与管理端导入的是同一份文件）。
-func chipLibrarySpecs(t *testing.T) map[string]string {
+// stockDailySpecs 从内置 A 股日线因子库里按因子 ID 取定义（与管理端导入的是同一份文件）。
+func stockDailySpecs(t *testing.T, ids ...string) map[string]string {
 	t.Helper()
 	raw, err := os.ReadFile("../../../modules/factor/factors/stockcn_daily.yaml")
 	if err != nil {
@@ -25,12 +25,14 @@ func chipLibrarySpecs(t *testing.T) map[string]string {
 	}
 	specs := map[string]string{}
 	for _, entry := range entries {
-		if entry.FactorID == "chip_profit_ratio" || entry.FactorID == "chip_avg_cost" || entry.FactorID == "chip_concentration" {
-			specs[entry.FactorID] = entry.Spec
+		for _, id := range ids {
+			if entry.FactorID == id {
+				specs[id] = entry.Spec
+			}
 		}
 	}
-	if len(specs) != 3 {
-		t.Fatalf("因子库里的筹码因子有 %d 个，应为 3 个", len(specs))
+	if len(specs) != len(ids) {
+		t.Fatalf("因子库里找到 %d 个因子，应为 %d 个：%v", len(specs), len(ids), ids)
 	}
 	return specs
 }
@@ -67,7 +69,7 @@ func TestChipLibraryFactorsAcrossExRights(t *testing.T) {
 		plain["turnover_rate"][i], split["turnover_rate"][i] = turnover, turnover
 	}
 
-	specs := chipLibrarySpecs(t)
+	specs := stockDailySpecs(t, "chip_profit_ratio", "chip_avg_cost", "chip_concentration")
 	results := map[string][2][]float64{}
 	var start int
 	for id, spec := range specs {
@@ -106,4 +108,69 @@ func TestChipLibraryFactorsAcrossExRights(t *testing.T) {
 	if before != after {
 		t.Fatalf("除权日 收盘价÷平均成本：除权数据 %v、不除权数据 %v，应相同", before, after)
 	}
+}
+
+// 内置估值因子在执行器上的数值检查：市值 = 收盘价 × 股本，估值再除以财务字段；
+// 股本缺一天时沿用前值，连续 20 根没有才为空；分母为 0 或为空时结果为空。
+func TestValuationLibraryFactors(t *testing.T) {
+	const length = 60
+	nan := math.NaN()
+	data := map[string][]float64{}
+	for _, name := range []string{"close", "total_shares", "float_shares", "dividend_per_share", "fin_net_profit_parent_ttm", "fin_equity_parent", "fin_revenue_ttm"} {
+		data[name] = make([]float64, length)
+	}
+	for i := 0; i < length; i++ {
+		data["close"][i] = 10 + float64(i%7)
+		data["total_shares"][i], data["float_shares"][i], data["dividend_per_share"][i] = 2e9, 1.5e9, 0.5
+		data["fin_net_profit_parent_ttm"][i], data["fin_equity_parent"][i], data["fin_revenue_ttm"][i] = 4e9, 1e10, 2e10
+	}
+	// 第 30 根：股本和每股股利没采到。第 31 根起送转，股本翻倍。
+	data["total_shares"][30], data["float_shares"][30], data["dividend_per_share"][30] = nan, nan, nan
+	for i := 31; i < length; i++ {
+		data["total_shares"][i], data["float_shares"][i] = 4e9, 3e9
+	}
+	// 第 40 根：亏损（净利润为负）；第 41 根：净利润为 0；第 42 根：财务字段为空。
+	data["fin_net_profit_parent_ttm"][40], data["fin_net_profit_parent_ttm"][41], data["fin_net_profit_parent_ttm"][42] = -1e9, 0, nan
+	// 第 5～29 根的股本全部缺失：到第 25 根为止最近 20 根里还有值，之后为空。
+	for i := 5; i < 30; i++ {
+		data["float_shares"][i] = nan
+	}
+
+	specs := stockDailySpecs(t, "total_mv", "float_mv", "pe_ttm", "pb", "ps_ttm", "dv_ratio")
+	out := map[string][]float64{}
+	for id, spec := range specs {
+		values, start := evalSpec(t, spec, data, length)
+		if start != 19 {
+			t.Fatalf("%s 的起算位置 = %d，应为 19（回看 20）", id, start)
+		}
+		out[id] = values
+	}
+	check := func(id string, index int, want float64) {
+		t.Helper()
+		got := out[id][index]
+		if math.IsNaN(want) != math.IsNaN(got) || (!math.IsNaN(want) && math.Abs(got-want) > 1e-9*math.Abs(want)) {
+			t.Fatalf("%s 第 %d 根 = %v，应为 %v", id, index, got, want)
+		}
+	}
+	closeAt := func(i int) float64 { return data["close"][i] }
+	// 普通的一根。
+	check("total_mv", 20, closeAt(20)*2e9)
+	check("pe_ttm", 20, closeAt(20)*2e9/4e9)
+	check("pb", 20, closeAt(20)*2e9/1e10)
+	check("ps_ttm", 20, closeAt(20)*2e9/2e10)
+	check("dv_ratio", 20, 0.5/closeAt(20)*100)
+	// 股本缺一天：沿用前一天的值；第二天用新的股本。
+	check("total_mv", 30, closeAt(30)*2e9)
+	check("dv_ratio", 30, 0.5/closeAt(30)*100)
+	check("total_mv", 31, closeAt(31)*4e9)
+	check("float_mv", 31, closeAt(31)*3e9)
+	// 流通股本从第 5 根起缺失：第 24 根的窗口（第 5～24 根）里已经没有值。
+	check("float_mv", 23, closeAt(23)*1.5e9)
+	check("float_mv", 24, nan)
+	check("float_mv", 29, nan)
+	// 亏损是负数；分母为 0 或为空时为空，其他因子不受影响。
+	check("pe_ttm", 40, closeAt(40)*4e9/-1e9)
+	check("pe_ttm", 41, nan)
+	check("pe_ttm", 42, nan)
+	check("pb", 41, closeAt(41)*4e9/1e10)
 }

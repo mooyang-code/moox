@@ -6,6 +6,8 @@ const PROVIDER_NAMES: Record<string, string> = {
   sina_hfq: "复权因子（新浪）",
   swsresearch: "申万行业",
   sina_finance: "财务报表（新浪）",
+  eastmoney_turnover: "换手率（东方财富）",
+  eastmoney_select: "股本与股利（东方财富选股器）",
   binance: "资金费率（币安）"
 };
 

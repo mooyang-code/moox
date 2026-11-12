@@ -44,6 +44,7 @@ type FieldHTTP struct {
 	slots   chan struct{}
 	timeout time.Duration
 	maxBody int64
+	headers map[string]string
 }
 
 // NewFieldHTTP 构造取数客户端；policy 没有配置时用 fallback，maxBody 是响应体的大小上限。
@@ -58,6 +59,12 @@ func NewFieldHTTP(client *http.Client, policy, fallback marketdata.RateLimitPoli
 		client: client, limiter: rate.NewLimiter(rate.Limit(policy.RequestsPerSecond), max(policy.Burst, 1)),
 		slots: make(chan struct{}, max(policy.MaxConcurrent, 1)), timeout: policy.RequestTimeout, maxBody: maxBody,
 	}
+}
+
+// WithHeaders 设置每次请求都带的请求头（覆盖默认的 User-Agent）：有的来源只对浏览器的请求头返回数据。
+func (h *FieldHTTP) WithHeaders(headers map[string]string) *FieldHTTP {
+	h.headers = headers
+	return h
 }
 
 // Get 发一次 GET。404 时 found 为 false（来源没有这个标的）；其他非 2xx、超时、响应体不完整都返回错误。
@@ -82,6 +89,9 @@ func (h *FieldHTTP) Get(ctx context.Context, url string) (body []byte, found boo
 		return nil, false, err
 	}
 	req.Header.Set("User-Agent", "moox-collector/1.0")
+	for name, value := range h.headers {
+		req.Header.Set(name, value)
+	}
 	resp, err := h.client.Do(req)
 	if err != nil {
 		return nil, false, fmt.Errorf("%w: %v", marketdata.ErrTimeout, err)
@@ -106,4 +116,9 @@ func (h *FieldHTTP) Get(ctx context.Context, url string) (body []byte, found boo
 		return nil, false, fmt.Errorf("%w: 响应超过 %d 字节", marketdata.ErrProtocol, h.maxBody)
 	}
 	return body, true, nil
+}
+
+// EastMoneyHeaders 是东方财富接口要的请求头：它只对浏览器的 User-Agent 和来自行情页的 Referer 稳定返回数据。
+func EastMoneyHeaders() map[string]string {
+	return map[string]string{"User-Agent": "Mozilla/5.0", "Referer": "https://quote.eastmoney.com/", "Accept": "*/*"}
 }
