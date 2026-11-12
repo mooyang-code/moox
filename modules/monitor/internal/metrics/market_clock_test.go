@@ -210,7 +210,7 @@ func TestMarketClockForUsesTheInventoryCalendar(t *testing.T) {
 	if err != nil || !clock.exchange || len(clock.sessions) != 2 {
 		t.Fatalf("stockcn clock = %+v err = %v", clock, err)
 	}
-	if _, err := MarketClockFor("stockus", "", "America/New_York", nil); !errors.Is(err, barclock.ErrUnknownMarket) {
+	if _, err := MarketClockFor("stockjp", "", "America/New_York", nil); !errors.Is(err, barclock.ErrUnknownMarket) {
 		t.Fatalf("an unregistered market must not be guessed: %v", err)
 	}
 }

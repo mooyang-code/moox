@@ -1,4 +1,4 @@
-// Package marketcalendar 提供内嵌的交易日历（A 股 cn_stock、港股 hk_stock）：按日期判断交易日、前后推交易日、查提前收市日。
+// Package marketcalendar 提供内嵌的交易日历（A 股 cn_stock、港股 hk_stock、美股 us_stock）：按日期判断交易日、前后推交易日、查提前收市日。
 //
 // 每份日历两个文件：data/<日历 ID>.json（交易日与提前收市日）和 data/<日历 ID>.manifest.json（来源、覆盖期、校验和），
 // 各自更新，互不影响。
@@ -168,6 +168,12 @@ var embeddedHKTradingDays []byte
 //go:embed data/hk_stock.manifest.json
 var embeddedHKManifest []byte
 
+//go:embed data/us_stock.json
+var embeddedUSTradingDays []byte
+
+//go:embed data/us_stock.manifest.json
+var embeddedUSManifest []byte
+
 // embeddedCalendar 是一份内嵌日历和它的加载结果。
 type embeddedCalendar struct {
 	data, manifest []byte
@@ -179,6 +185,7 @@ type embeddedCalendar struct {
 var embeddedCalendars = map[string]*embeddedCalendar{
 	"cn_stock": {data: embeddedTradingDays, manifest: embeddedManifest},
 	"hk_stock": {data: embeddedHKTradingDays, manifest: embeddedHKManifest},
+	"us_stock": {data: embeddedUSTradingDays, manifest: embeddedUSManifest},
 }
 
 // Load 按 ID 加载内嵌日历，未知的 ID 报错。内嵌日历不可变，每份的解析与校验（cn_stock 约 1 毫秒、1.5 MB）只做一次，
