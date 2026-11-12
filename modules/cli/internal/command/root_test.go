@@ -39,6 +39,18 @@ func TestBuildMetadataImportCallsFromSeed(t *testing.T) {
 	assert.Equal(t, "CreateSpace", calls[0].Method)
 }
 
+// 种子里的标签按种子导入提交，Storage 才会保留 builtin。
+func TestBuildMetadataImportCallsMarksTagsAsSeed(t *testing.T) {
+	seed := metadataSeed{Tags: []seedTag{{SpaceID: "stockcn", TagID: "cn_hs300", TagName: "沪深300", Mode: "auto", Builtin: true}}}
+	calls, err := buildMetadataImportCalls(seed)
+	require.NoError(t, err)
+	require.Len(t, calls, 1)
+	req, ok := calls[0].Request.(*pb.UpsertTagReq)
+	require.True(t, ok)
+	assert.True(t, req.GetSeed())
+	assert.True(t, req.GetTag().GetBuiltin())
+}
+
 func TestLoadMetadataSeed(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "seed.yaml")
 	content := "spaces:\n  - space_id: crypto\n    name: Crypto\n"

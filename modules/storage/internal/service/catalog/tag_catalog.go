@@ -26,7 +26,8 @@ func (s *Service) UpsertTag(ctx context.Context, req *pb.UpsertTagReq) (*pb.Upse
 		s.refreshMetadataCacheAfterCommit(ctx, "UpsertTag")
 		return &pb.UpsertTagRsp{RetInfo: retinfo.Success("success"), Tag: tag}, nil
 	}
-	if _, err := s.metadata.GetTag(ctx, req.GetTag().GetSpaceId(), req.GetTag().GetTagId()); errors.Is(err, sql.ErrNoRows) {
+	// 内置标签只能来自种子导入：经接口、管理台新建的标签一律不是内置标签。已有标签的 builtin 由存储层保持不变。
+	if _, err := s.metadata.GetTag(ctx, req.GetTag().GetSpaceId(), req.GetTag().GetTagId()); errors.Is(err, sql.ErrNoRows) && !req.GetSeed() {
 		req.GetTag().Builtin = false
 	}
 	tag, err := s.metadata.UpsertTag(ctx, req.GetTag())
