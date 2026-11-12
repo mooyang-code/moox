@@ -26,6 +26,16 @@ var markets = map[string]Market{
 	"stockcn": {ID: "stockcn", Alignment: AlignmentSession, CalendarID: "cn_stock", Timezone: "Asia/Shanghai", Sessions: []string{"09:30-11:30", "13:00-15:00"}},
 }
 
+// Markets 返回全部已登记的市场，按 ID 排序。
+func Markets() []Market {
+	out := make([]Market, 0, len(markets))
+	for _, market := range markets {
+		out = append(out, market)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out
+}
+
 // MarketFor 返回市场的分桶方式；未登记的市场返回 ErrUnknownMarket（没有交易日历的市场不能合成）。
 func MarketFor(id string) (Market, error) {
 	market, ok := markets[strings.ToLower(strings.TrimSpace(id))]

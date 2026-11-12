@@ -97,7 +97,7 @@ func TradingBar(marketID, frequency string, barStart time.Time) (bool, error) {
 // ErrCalendarExpiringSoon；没有交易日历的市场（连续交易）总是通过。
 func CheckCalendarHorizon(marketID string, now time.Time, minDays int) error {
 	market, err := barclock.MarketFor(marketID)
-	if errors.Is(err, barclock.ErrUnknownMarket) || err == nil && market.CalendarID == "" {
+	if errors.Is(err, barclock.ErrUnknownMarket) || err == nil && market.Alignment != barclock.AlignmentSession {
 		return nil
 	}
 	if err != nil {
