@@ -10,8 +10,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// hkRouteFixture 让路由读取指向一份港股路由（品种 equity、结算延迟 5 秒、只有 5m）。
-// 与 config/markets/stockhk/route.yaml 的约定取值相同；那份文件不存在时测试也能独立运行。
+// hkRouteFixture 让路由读取指向一份港股路由（品种 equity、结算延迟 5 秒、只有 5m）和东方财富的运行参数（限速沿用 A 股）。
+// 与 config/markets/stockhk/ 下 route.yaml、sources/eastmoney.yaml 的取值相同；那两份文件不存在时测试也能独立运行。
 func hkRouteFixture(t *testing.T) {
 	t.Helper()
 	dir := t.TempDir()
@@ -23,6 +23,25 @@ klines:
   - frequency: 5m
     providers:
       - {id: eastmoney, source_id: stockhk_http, weight: 1, role: primary}
+`), 0o600))
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "stockhk", "sources"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "stockhk", "sources", "eastmoney.yaml"), []byte(`provider:
+  id: eastmoney
+  market: stockhk
+  enabled_feeds: [kline]
+  hosts: [push2his.eastmoney.com]
+  kline:
+    endpoint: /api/qt/stock/kline/get
+    max_bars_per_request: 1205
+    volume_unit: shares
+    amount_unit: HKD
+  rate_limit:
+    scope: egress_ip
+    requests_per_second: 50
+    burst: 20
+    max_concurrent: 16
+    cooldown: 1s
+    request_timeout: 5s
 `), 0o600))
 	t.Setenv(marketfetch.MarketConfigDirEnv, dir)
 }
@@ -71,6 +90,9 @@ func TestStockHKPlanUsesFourFunctionsAndWaitsFiveSeconds(t *testing.T) {
 	for name, function := range desired.Functions {
 		require.Equal(t, "ap-nanjing", function.Region, name)
 		require.Equal(t, 5000, function.Plan.Fetch.NotBeforeMS, name)
+		// 函数内并发由东方财富的限速配置推导：只有一个主源，等于它的 max_concurrent。
+		require.Equal(t, 16, function.Plan.Fetch.Concurrency, name)
+		require.Equal(t, 16, function.Plan.Fetch.FeedConcurrency, name)
 		subjects := len(function.Plan.Datasets[0].Copies[0].Subjects)
 		require.LessOrEqual(t, subjects, 25, name)
 		total += subjects

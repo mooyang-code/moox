@@ -123,6 +123,32 @@ func TestRefetchAfterCloseSkipsNonTradingDays(t *testing.T) {
 	require.Empty(t, refetchJobs(t, db))
 }
 
+// 周一和节后第一个交易日照常提交：范围虽然从香港时间零点起，分块只覆盖当天应有的交易桶，从 09:30 开始，
+// 不会带上前面的周末、假期。分块的起点就是下发给数据源的请求起点；数据源按“返回的行覆盖到请求起点”校验
+// （marketdata.KlineHistoryCapability.ValidateCoverage），起点落在当天第一根上才通得过。
+func TestRefetchAfterCloseOnMondayAndAfterAHoliday(t *testing.T) {
+	// 2026-11-16 是周一；2026-12-28 是圣诞假期（12-25 周五休市、12-26、12-27 周末）之后的第一个交易日。
+	for _, day := range []string{"2026-11-16", "2026-12-28"} {
+		backfiller, db, now := closeRefetchFixture(t)
+		ctx := context.Background()
+		*now = hkt(t, day+" 16:15:10")
+		require.NoError(t, backfiller.RefetchAfterClose(ctx, "stockhk"), day)
+		jobs := refetchJobs(t, db)
+		require.Len(t, jobs, 1, day)
+		require.True(t, jobs[0].From.Equal(hkt(t, day+" 00:00:00")), day)
+		_, chunks, err := db.Backfill().GetJob(ctx, jobs[0].JobID)
+		require.NoError(t, err)
+		require.Len(t, chunks, 4, day)
+		starts := map[string]int{}
+		for _, chunk := range chunks {
+			require.False(t, chunk.From.Before(hkt(t, day+" 09:30:00")), "%s：分块不能早于当天开盘", day)
+			require.False(t, chunk.To.After(hkt(t, day+" 16:00:00")), "%s：分块不能晚于当天收市", day)
+			starts[chunk.From.In(time.FixedZone("HKT", 8*3600)).Format("15:04")]++
+		}
+		require.Equal(t, map[string]int{"09:30": 2, "13:00": 2}, starts, day)
+	}
+}
+
 // 半日市 12:00 收市：12:15 那一轮提交，只有上午的 30 根；16:15 不再提交。
 func TestRefetchAfterCloseFollowsTheEarlyClose(t *testing.T) {
 	backfiller, db, now := closeRefetchFixture(t)

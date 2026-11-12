@@ -1,28 +1,11 @@
-app:
-  id: "binance"
-  name: "Market Storage Auth"
-  description: "Shared short-lived market writer credentials"
-  type: "market"
-
-api:
-  spot_base_urls:
-    - "https://data-api.binance.vision"
-  swap_base_urls:
-    - "https://fapi.binance.com"
-
+# 港股云函数代码包里的 Storage 访问配置：函数写 Storage 时用哪个应用身份。只有这一项。
+# 文件名和路径是固定的（函数按 sources/market/binance.yaml 读取，名字是历史沿用，与币安无关），
+# 港股的行情源、路由、限速都编在函数二进制里（config/markets/stockhk/），不在这里。
+# app_key 留空：密钥由 Collector 在创建函数时通过环境变量下发，不进代码包。
+# 股票没有现货、合约之分，函数固定读 spot 这一份绑定。
 storage:
   bindings:
     spot:
-      data_source_id: "stockhk"
-      subject_type: "stock"
-      subject_market: "stockhk"
-      auth_info:
-        app_id: "moox-collector"
-        app_key: ""
-    swap:
-      data_source_id: "stockhk"
-      subject_type: "stock"
-      subject_market: "stockhk"
       auth_info:
         app_id: "moox-collector"
         app_key: ""
