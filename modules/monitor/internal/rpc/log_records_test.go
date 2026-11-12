@@ -52,6 +52,27 @@ func TestQueryLogRecordsPagesAndValidates(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, filtered.GetRecords(), 1)
 
+	// 不要分布时不返回；要分布时按小时统计，不受 limit 影响。
+	require.Empty(t, first.GetBuckets())
+	withBuckets, err := service.QueryLogRecords(t.Context(), &monitorpb.QueryLogRecordsReq{Limit: 1, WithBuckets: true, StartAt: "2026-11-12T00:00:00Z"})
+	require.NoError(t, err)
+	require.Len(t, withBuckets.GetRecords(), 1)
+	require.Len(t, withBuckets.GetBuckets(), 1)
+	require.Equal(t, "2026-11-12T04:00:00Z", withBuckets.GetBuckets()[0].GetStartAt())
+	require.Equal(t, int32(2), withBuckets.GetBuckets()[0].GetErrors())
+	require.Equal(t, int32(1), withBuckets.GetBuckets()[0].GetEvents())
+	// 没有给起点时分布只统计最近 7 天，列表不受影响。
+	_, err = repos.Logs.InsertBatch(t.Context(), []domain.LogRecord{
+		{RecordKey: "old", HostID: "h", Component: "recent-test", Level: "error", Message: "八天前", Fields: "{}", LoggedAt: time.Now().Add(-8 * 24 * time.Hour).UTC()},
+		{RecordKey: "new", HostID: "h", Component: "recent-test", Level: "error", Message: "一小时前", Fields: "{}", LoggedAt: time.Now().Add(-time.Hour).UTC()},
+	})
+	require.NoError(t, err)
+	recent, err := service.QueryLogRecords(t.Context(), &monitorpb.QueryLogRecordsReq{Component: "recent-test", WithBuckets: true})
+	require.NoError(t, err)
+	require.Len(t, recent.GetRecords(), 2)
+	require.Len(t, recent.GetBuckets(), 1)
+	require.Equal(t, int32(1), recent.GetBuckets()[0].GetErrors())
+
 	for _, req := range []*monitorpb.QueryLogRecordsReq{{Level: "verbose"}, {StartAt: "昨天"}, {EndAt: "2026-11-12"}} {
 		rsp, err := service.QueryLogRecords(t.Context(), req)
 		require.NoError(t, err)

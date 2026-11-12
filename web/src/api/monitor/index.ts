@@ -1,5 +1,5 @@
 import { callControl } from "@/api/admin/http";
-import type { ArrivalHistory, HealthOverview, LogRecord, NotificationChannel } from "./types";
+import type { ArrivalHistory, HealthOverview, LogBucket, LogRecord, NotificationChannel } from "./types";
 
 const SERVICE = "monitor";
 
@@ -32,8 +32,14 @@ export const monitorApi = {
     end_at?: string;
     before_id?: number | string;
     limit?: number;
+    /** 另外返回按小时的条数分布（同样的条件）；没有给 start_at 时只统计最近 7 天。 */
+    with_buckets?: boolean;
   }) {
-    return callControl<typeof req, { records?: LogRecord[]; has_more?: boolean }>(SERVICE, "QueryLogRecords", req);
+    return callControl<typeof req, { records?: LogRecord[]; has_more?: boolean; buckets?: LogBucket[] }>(
+      SERVICE,
+      "QueryLogRecords",
+      req
+    );
   }
 };
 

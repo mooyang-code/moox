@@ -12,6 +12,7 @@ import {
   layerCountText,
   layerSummaries,
   pipelineStages,
+  processSummary,
   verdict
 } from "./monitor-model";
 
@@ -178,6 +179,43 @@ describe("incident timeline", () => {
     expect(long).toMatchObject({ flap: false, reminders: 37, outcome: "3 小时 9 分后恢复" });
     expect(timeline.flaps).toBe(1);
     expect(timeline.active).toBe(1);
+  });
+
+  it("写出触发时占用最高的进程；合并了几条时带上各自的标题", () => {
+    const processes = [
+      { pid: 4321, name: "moox-storage-view", cpu_percent: 182.5, cpu_available: true, rss_bytes: "3221225472" },
+      { pid: 77, name: "kswapd0" }
+    ];
+    expect(processSummary(processes)).toBe("moox-storage-view（PID 4321） CPU 182.5%、内存 3 GB；kswapd0（PID 77）");
+    expect(processSummary(undefined)).toBe("");
+    expect(processSummary(Array.from({ length: 8 }, (_, pid) => ({ pid, name: "p" }))).split("；")).toHaveLength(5);
+
+    const single = incidentTimeline(
+      {
+        generated_at: new Date(now).toISOString(),
+        incidents: [
+          { id: "cpu", severity: "warning", title: "storage CPU", triggered_at: at(30), resolved_at: at(20), processes }
+        ]
+      },
+      names,
+      now
+    );
+    expect(single.rows[0].processes).toEqual([`触发时占用最高：${processSummary(processes)}`]);
+
+    const merged = incidentTimeline(
+      {
+        generated_at: new Date(now).toISOString(),
+        incidents: [
+          { id: "cpu", severity: "warning", title: "storage CPU", triggered_at: at(30), resolved_at: at(20), processes },
+          { id: "web", severity: "critical", title: "控制台前端", triggered_at: at(30, 5), resolved_at: at(20) }
+        ]
+      },
+      names,
+      now
+    );
+    expect(merged.rows).toHaveLength(1);
+    expect(merged.rows[0].processes).toEqual([`storage CPU 触发时占用最高：${processSummary(processes)}`]);
+    expect(incidentTimeline(overview, names, now).rows.every(row => row.processes.length === 0)).toBe(true);
   });
 
   it("never merges incidents in different lifecycle states", () => {
@@ -535,5 +573,31 @@ describe("market time zone", () => {
     expect(stage.rows[0]).toMatchObject({ latest: "09:30 UTC+8", expected: "09:30 UTC+8" });
     expect(stage.rows[0].delayTitle).toBe("09:31 UTC+8 收线，09:31:02 UTC+8 到达");
     expect(stage.rows[0].expectedTitle).toContain("09:31:00 UTC+8 收线");
+  });
+});
+
+describe("当前告警的进程排行", () => {
+  it("主机告警的详情里列出占用最高的进程，别的告警没有这一项", () => {
+    const groups = alertGroups(
+      {
+        generated_at: new Date(now).toISOString(),
+        alerts: [
+          {
+            id: "cpu",
+            severity: "warning",
+            title: "storage CPU",
+            triggered_at: at(10),
+            processes: [{ pid: 9, name: "moox-storage-node", cpu_percent: 120, cpu_available: true, rss_bytes: 1048576 }]
+          },
+          { id: "web", severity: "critical", title: "控制台前端", triggered_at: at(40) }
+        ]
+      },
+      names,
+      now
+    );
+    const lines = groups.flatMap(group => group.lines);
+    const fact = (key: string) => lines.find(line => line.key === key)?.facts.find(item => item.label === "占用最高的进程");
+    expect(fact("cpu")?.value).toBe("moox-storage-node（PID 9） CPU 120.0%、内存 1 MB");
+    expect(fact("web")).toBeUndefined();
   });
 });

@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/mooyang-code/moox/modules/monitor/internal/alerttext"
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
 	"github.com/mooyang-code/moox/modules/monitor/internal/hostmetrics"
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
@@ -161,6 +162,43 @@ func eventReason(event domain.AlertEvent) string {
 	return ""
 }
 
+// eventProcessLimit 是页面上一条告警列出的进程数。
+const eventProcessLimit = 5
+
+// eventProcesses 取告警事件里记下的进程排行（主机 CPU、内存告警在触发和提醒时记录），按告警的指标排好：
+// 内存告警按内存、CPU 告警按 CPU，和推送正文同一个规则。没有时返回 nil。
+func eventProcesses(event domain.AlertEvent) []*pb.AlertProcess {
+	var payload struct {
+		Metric       string `json:"metric"`
+		TopProcesses []struct {
+			PID        uint32   `json:"pid"`
+			Name       string   `json:"name"`
+			RSSBytes   uint64   `json:"rss_bytes"`
+			CPUPercent *float64 `json:"cpu_percent"`
+		} `json:"top_processes"`
+	}
+	if json.Unmarshal([]byte(event.Payload), &payload) != nil || len(payload.TopProcesses) == 0 {
+		return nil
+	}
+	items := make([]alerttext.Process, 0, len(payload.TopProcesses))
+	for _, item := range payload.TopProcesses {
+		process := alerttext.Process{PID: item.PID, Name: item.Name, RSSBytes: item.RSSBytes}
+		if item.CPUPercent != nil {
+			process.CPUPercent, process.CPUAvailable = *item.CPUPercent, true
+		}
+		items = append(items, process)
+	}
+	ranked := alerttext.RankProcesses(items, payload.Metric == hostmetrics.HostMetricMemory, eventProcessLimit)
+	if len(ranked) == 0 {
+		return nil
+	}
+	out := make([]*pb.AlertProcess, 0, len(ranked))
+	for _, item := range ranked {
+		out = append(out, &pb.AlertProcess{Pid: int32(item.PID), Name: item.Name, CpuPercent: item.CPUPercent, CpuAvailable: item.CPUAvailable, RssBytes: item.RSSBytes})
+	}
+	return out
+}
+
 func (b Builder) projectAlert(ctx context.Context, state domain.AlertState, facts observability.Overview, titles *checkTitles) (*pb.HealthAlert, error) {
 	object := alertObject(state.SpaceID, state.CheckID, facts)
 	title, err := titles.title(ctx, state.SpaceID, state.CheckID, object, facts)
@@ -219,6 +257,7 @@ func (b Builder) projectAlert(ctx context.Context, state domain.AlertState, fact
 			if reason := eventReason(*event); reason != "" {
 				alert.Reason = reason
 			}
+			alert.Processes = eventProcesses(*event)
 			if alert.LastCheckedAt == "" {
 				alert.LastCheckedAt = stamp(event.CreatedAt)
 			}
