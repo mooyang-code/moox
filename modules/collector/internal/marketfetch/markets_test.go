@@ -54,10 +54,16 @@ func TestMarketFilesAreEmbedded(t *testing.T) {
 		require.NoError(t, err, source)
 		require.True(t, found, source)
 	}
-	for _, marketID := range []string{"crypto", "stockcn"} {
+	for _, marketID := range []string{"crypto", "stockcn", "stockhk"} {
 		_, err := markets.ConfigFor(marketID)
 		require.NoError(t, err, marketID)
 	}
+	route, found, err = LoadRoute("stockhk")
+	require.NoError(t, err)
+	require.True(t, found)
+	providers, err = LoadSourceRuntimes(route)
+	require.NoError(t, err)
+	require.Contains(t, providers, "eastmoney")
 }
 
 // 环境变量仍然可以覆盖编进去的内容：目录里有这个市场的路由文件就读它；没有路由文件的市场不受影响。

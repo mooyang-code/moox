@@ -24,7 +24,7 @@
 ## 当前接入与历史证据
 
 当前 Collector 的 `config/markets/stockcn/route.yaml` 按频率分路由，`normal_7709` 是 1m、5m 行情的 fallback
-（5m 为东方财富主、通达信备），运行时候选链由 `internal/marketwiring/stock_runtime.go` 按请求频率组装；
+（5m 为东方财富主、通达信备），运行时候选链由 `internal/marketwiring/pipeline.go` 的 `newRoutedKlinePipeline` 按请求频率组装；
 时序数据写入采集任务独占的 `dataset_<task_id>`。
 
 日内 K 线的时间标签是收盘时刻（2026-11-04 实测 600519 5m：首根 09:35、末根 11:30 / 15:00，与东方财富逐根对齐；

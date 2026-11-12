@@ -97,6 +97,10 @@ func TestMarketConfigs(t *testing.T) {
 	require.Equal(t, EgressProbePublicIP, stockcn.EgressProbe)
 	require.Equal(t, SubjectEgressDirect, stockcn.SubjectEgress)
 	require.Equal(t, &SubjectSync{Sources: []string{"eastmoney"}, InstrumentType: "equity", Cron: "10 8 * * *", Timezone: "Asia/Shanghai"}, stockcn.SubjectSync)
+
+	stockhk, err := ConfigFor("stockhk")
+	require.NoError(t, err)
+	require.Equal(t, EgressProbePublicIP, stockhk.EgressProbe, "港股与 A 股共用南京出口，探测方式相同")
 }
 
 func TestParseConfigRejectsIncompleteFiles(t *testing.T) {

@@ -94,6 +94,8 @@ type BusinessStatus struct {
 	SpaceID, Kind, Module, Status, Reason string
 	CheckID, RawError, Name               string
 	LastCheckedAt                         time.Time
+	// FromStoredCheck 表示这一项是从库里已有检查读回来的上一次结果，不是本轮按指标新算出的；同一检查本轮有新结果时会被新结果替换。
+	FromStoredCheck bool
 }
 
 type Overview struct {
@@ -1061,7 +1063,7 @@ func (b Builder) buildBusinessChecks(ctx context.Context, spaceID string) ([]Bus
 			if kind == "" {
 				continue
 			}
-			item := BusinessStatus{CheckID: check.CheckID, SpaceID: check.SpaceID, Name: check.Name, Kind: kind, Module: businessModule(check.CheckID), Status: "unknown", Reason: "尚未上报"}
+			item := BusinessStatus{CheckID: check.CheckID, SpaceID: check.SpaceID, Name: check.Name, Kind: kind, Module: businessModule(check.CheckID), Status: "unknown", Reason: "尚未上报", FromStoredCheck: true}
 			results, err := b.Results.Recent(ctx, check.SpaceID, check.CheckID, 1)
 			if err != nil {
 				return nil, err
@@ -1307,8 +1309,8 @@ type marketFeedHealthState struct {
 const maxMarketSignalSeries = 5000
 
 // buildMarketFetchSignalHealth 按 Collector 云函数上报的 K 线数据源结果指标判断各市场的数据源健康：按指标的 market_id
-// 标签分组，每个市场各出一组结果；请求指定了空间就只看这个空间。某个市场从没上报过这个指标就不出结果，
-// 没启用的市场不会一直告警。
+// 标签分组，每个市场各出一组结果；请求指定了空间就只看这个空间。统计窗口内没有观测的数据源不出结果，
+// 没启用的市场、休市时段不会告警。
 func (b Builder) buildMarketFetchSignalHealth(ctx context.Context, spaceID string, now time.Time) ([]BusinessStatus, error) {
 	if b.Metrics == nil || b.Metrics.Catalog() == nil {
 		return nil, nil
@@ -1330,6 +1332,14 @@ func (b Builder) buildMarketFetchSignalHealth(ctx context.Context, spaceID strin
 		if marketID == "" || (spaceID != "" && marketID != spaceID) || strings.TrimSpace(labels["feed_kind"]) != "kline" {
 			continue
 		}
+		latest, err := b.Metrics.Latest(ctx, item.SeriesID)
+		if err != nil {
+			return nil, err
+		}
+		// 只给统计窗口内有观测的数据源出结果：午休、收市后、周末没有请求不算故障，完全断流由 K 线新鲜度和云函数定时检查发现。
+		if latest == nil || item.IsStale || !isFreshMetric(now, latest.ObservedAt.UTC(), window) {
+			continue
+		}
 		states := markets[marketID]
 		if states == nil {
 			states = map[string]*marketFeedHealthState{}
@@ -1343,13 +1353,6 @@ func (b Builder) buildMarketFetchSignalHealth(ctx context.Context, spaceID strin
 		if state == nil {
 			state = &marketFeedHealthState{}
 			states[provider] = state
-		}
-		latest, err := b.Metrics.Latest(ctx, item.SeriesID)
-		if err != nil {
-			return nil, err
-		}
-		if latest == nil || item.IsStale || !isFreshMetric(now, latest.ObservedAt.UTC(), window) {
-			continue
 		}
 		value := maxFloat(latest.Value, 0)
 		state.requests += value

@@ -1317,3 +1317,82 @@ func TestRuntimeObservationStateFollowsIngestAndGrace(t *testing.T) {
 	r.setObservabilityIngestState(false, errors.New("lost"))
 	require.True(t, r.observationState(true, time.Now().Add(time.Hour)).Suspended, "断开之后重新进入冻结")
 }
+
+// 升级前余额对账和三类关注项记在 crypto 空间下，升级后新结果改记到 mooxsys。库里残留的旧检查不能再被写成失败：
+// 概览会把余额对账的旧检查连同上一次结果读回来，报告器不能拿它当本轮事实，只能按“不再检查”收尾。
+func TestBusinessFreshnessReporterRetiresLegacySpaceChecksAfterUpgrade(t *testing.T) {
+	t.Setenv("MOOX_NOTIFICATION_WEBHOOK_URL", "")
+	manager, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = manager.Close() })
+	require.NoError(t, manager.ApplySchema(schema.SQL()))
+	now := time.Now().UTC().Truncate(time.Second)
+	query, err := store.WithDatabase(manager, func(db *gorm.DB) *monmetrics.QueryService {
+		for _, metric := range []struct {
+			id, name string
+			value    float64
+		}{
+			{"balance-success", "moox_trade_balance_sync_last_success_timestamp_seconds", float64(now.Unix())},
+			{"balance-run", "moox_trade_balance_sync_last_run_timestamp_seconds", float64(now.Unix())},
+			{"balance-failures", "moox_trade_balance_sync_consecutive_failures", 0},
+			{"balance-difference", "moox_trade_balance_sync_max_difference_ratio", 0},
+		} {
+			require.NoError(t, db.Create(&monmetrics.MetricSeries{
+				ServiceName: "trade", InstanceID: "trade@control", SeriesID: metric.id,
+				MetricName: metric.name, MetricType: "gauge", LabelsJSON: "{}", LastSeenAt: now,
+			}).Error)
+			require.NoError(t, db.Create(&monmetrics.MetricLatest{
+				SeriesID: metric.id, ServiceName: "trade", InstanceID: "trade@control",
+				MetricName: metric.name, MetricType: "gauge", LabelsJSON: "{}", Value: metric.value, ObservedAt: now,
+			}).Error)
+		}
+		return monmetrics.NewQueryService(monmetrics.NewMetricMessageStore(db), nil)
+	})
+	require.NoError(t, err)
+	repositories := manager.Repositories()
+	legacy := []string{"balance:trade", "trade_attention:target_rejected", "event_center_attention:execution_failed", "collector_attention:delist_source_failed"}
+	before := now.Add(-time.Minute)
+	for _, checkID := range legacy {
+		require.NoError(t, repositories.Checks.Create(t.Context(), &domain.Check{
+			SpaceID: "crypto", CheckID: checkID, Name: checkID, GroupName: "business", Kind: domain.CheckKindExternal,
+			Source: domain.CheckSourceObservability, Enabled: true, IntervalSeconds: 30, TimeoutMS: 20000,
+		}))
+		require.NoError(t, repositories.Results.Insert(t.Context(), &domain.CheckResult{
+			ResultID: domain.ScopedResultID("crypto", checkID, before), SpaceID: "crypto", CheckID: checkID, InstanceID: "monitor",
+			Success: true, Connected: true, Status: domain.CheckStatusOK, ErrorMessage: "balance sync fresh", CheckedAt: before, CreatedAt: before,
+		}))
+	}
+	run := buildBusinessFreshnessReporter(&monitorobservability.Builder{
+		Metrics: query, Checks: repositories.Checks, Topology: repositories.Topology, Results: repositories.Results,
+		Now: func() time.Time { return now },
+	}, repositories, monitorResultHook(&Runtime{Repositories: repositories}))
+	rounds := externalFailureThreshold(30) + 2
+	for range rounds {
+		require.NoError(t, run(t.Context()))
+	}
+	for _, checkID := range legacy {
+		results, err := repositories.Results.Recent(t.Context(), "crypto", checkID, rounds+1)
+		require.NoError(t, err)
+		require.Len(t, results, rounds+1, checkID)
+		for _, result := range results {
+			require.True(t, result.Success, "%s: %+v", checkID, result)
+		}
+		require.Equal(t, domain.CheckReasonRetired, results[0].ErrorMessage, checkID)
+		state, err := repositories.Alerts.GetState(t.Context(), "crypto", "default:"+checkID, checkID)
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			require.NoError(t, err)
+			require.NotEqual(t, domain.AlertStatusFiring, state.Status, checkID)
+		}
+	}
+	firing, err := repositories.Alerts.CountFiring(t.Context(), "")
+	require.NoError(t, err)
+	require.Zero(t, firing)
+	// 新空间下的检查照常按本轮指标判定。
+	results, err := repositories.Results.Recent(t.Context(), monmetrics.InternalMetricSpaceID, "balance:trade", rounds)
+	require.NoError(t, err)
+	require.Len(t, results, rounds)
+	for _, result := range results {
+		require.True(t, result.Success)
+		require.Equal(t, "balance sync fresh", result.ErrorMessage)
+	}
+}

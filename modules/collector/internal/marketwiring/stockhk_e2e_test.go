@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -21,6 +23,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/markets"
 	"github.com/mooyang-code/moox/modules/collector/internal/model"
 	"github.com/mooyang-code/moox/modules/collector/internal/scfinvoker"
+	hkeastmoney "github.com/mooyang-code/moox/modules/collector/internal/sources/stockhk/eastmoney"
 	"github.com/mooyang-code/moox/modules/collector/internal/store"
 	"github.com/mooyang-code/moox/modules/collector/schema"
 	storagepb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
@@ -335,4 +338,69 @@ func hkE2EGroup(subjects ...string) marketfetch.TaskGroup {
 	}
 	return marketfetch.TaskGroup{Provider: "eastmoney", SourceID: DefaultSourceID("stockhk", "eastmoney", "equity"), MarketType: "equity", MarketID: "stockhk", InstrumentType: "equity",
 		DatasetID: hkE2EDataset, Frequency: "5m", Subjects: subjects, ExternalSymbols: symbols}
+}
+
+// hkCapturingTransport 不连网：记下发出去的请求地址，返回固定内容。
+type hkCapturingTransport struct {
+	mu   sync.Mutex
+	urls []*url.URL
+	body string
+}
+
+func (c *hkCapturingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	c.mu.Lock()
+	c.urls = append(c.urls, req.URL)
+	c.mu.Unlock()
+	return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(c.body)), Request: req}, nil
+}
+
+// 真实的请求地址：域名、路径取自编进二进制的 config/markets/stockhk/sources/eastmoney.yaml（与装配时交给行情源目录的相同），
+// 这里只把 HTTP 传输换成记录请求的假传输。16:00 那一期取 00005：secid 是 116.00005，klt=5，beg、end 是当天的日期。
+func TestStockHKRequestGoesToTheConfiguredEastmoneyAddress(t *testing.T) {
+	route, found, err := marketfetch.LoadRoute("stockhk")
+	require.NoError(t, err)
+	require.True(t, found)
+	runtimes, err := marketfetch.LoadSourceRuntimes(route)
+	require.NoError(t, err)
+	settings := sourceSettings(runtimes["eastmoney"])
+
+	storage := newHKRowStore()
+	now := hkTime("2026-11-12 16:00:05")
+	clock := func() time.Time { return now }
+	pipeline, err := NewKlinePipeline(storage, "stockhk", marketdata.InstrumentEquity, "5m", "", nil)
+	require.NoError(t, err)
+	transport := &hkCapturingTransport{body: `{"data":{"klines":["2026-11-12 16:00,141.100,141.100,141.200,141.000,88000,12417320.000"]}}`}
+	registry := marketdata.NewRegistry()
+	require.NoError(t, registry.Register(hkeastmoney.New(hkeastmoney.Config{
+		BaseURL: settings.BaseURL, KlineEndpoint: settings.KlineEndpoint, HTTPClient: &http.Client{Transport: transport}, Now: clock,
+		RateLimit: settings.RateLimit, MaxBarsPerRequest: settings.MaxBarsPerRequest,
+	})))
+	router, err := marketdata.NewRouter(registry, pipeline.Router.BreakerThreshold(), nil, nil)
+	require.NoError(t, err)
+	pipeline.Router, pipeline.Now = router, clock
+
+	target := hkTime("2026-11-12 15:55:00")
+	payload, err := pipeline.Execute(context.Background(), marketfetch.Request{
+		BatchID: "address", BatchKind: domain.BatchKindRealtime, SpaceID: "stockhk", MarketID: "stockhk", InstrumentType: "equity",
+		DatasetID: hkE2EDataset, Frequency: "5m", MarketType: "equity", RequestID: "address", Concurrency: 1,
+		Items: []domain.CollectionItem{{
+			SubjectID: "00005.XHKG", Symbol: "00005", Provider: "eastmoney", MarketType: "equity", DataType: "kline", DatasetID: hkE2EDataset, Frequency: "5m",
+			StartTime: target.Format(time.RFC3339Nano), EndTime: target.Add(5 * time.Minute).Format(time.RFC3339Nano), BarLimit: 1,
+		}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, "succeeded", payload.GetStatus(), payload.GetErrorSummary())
+	require.Len(t, storage.rows, 1)
+
+	require.Len(t, transport.urls, 1)
+	got := transport.urls[0]
+	require.Equal(t, "https", got.Scheme)
+	require.Equal(t, "push2his.eastmoney.com", got.Host)
+	require.Equal(t, "/api/qt/stock/kline/get", got.Path)
+	query := got.Query()
+	require.Equal(t, "116.00005", query.Get("secid"))
+	require.Equal(t, "5", query.Get("klt"))
+	require.Equal(t, "0", query.Get("fqt"))
+	require.Equal(t, "20261112", query.Get("beg"))
+	require.Equal(t, "20261112", query.Get("end"))
 }
