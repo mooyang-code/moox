@@ -27,6 +27,7 @@ import (
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn/swsresearch"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn/tdx"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/stockcn/tencent"
+	hkeastmoney "github.com/mooyang-code/moox/modules/collector/internal/sources/stockhk/eastmoney"
 	hktencent "github.com/mooyang-code/moox/modules/collector/internal/sources/stockhk/tencent"
 )
 
@@ -131,6 +132,11 @@ func build() *marketdata.Catalog {
 		entry(stockcn, marketdata.InstrumentIndex, "cni", "index_cni_http", fixed(func() marketdata.MarketProvider { return cni.New(cni.Config{}) })),
 		entry(stockcn, marketdata.InstrumentIndex, "sw", "index_sw_http", fixed(func() marketdata.MarketProvider { return indexsw.New(indexsw.Config{}) })),
 		entry(stockcn, marketdata.InstrumentIndex, "csindex", "index_http", fixed(func() marketdata.MarketProvider { return csindex.New(csindex.Config{}) })),
+		// 港股股票：K 线来源按 config/markets/stockhk/route.yaml 分配，只有东方财富一家，只取 K 线。
+		routedEntry(stockhk, marketdata.InstrumentEquity, "eastmoney", hkeastmoney.DefaultSourceID, func(deps marketdata.Deps) (marketdata.MarketProvider, error) {
+			s := deps.Settings
+			return hkeastmoney.New(hkeastmoney.Config{BaseURL: s.BaseURL, KlineEndpoint: s.KlineEndpoint, SourceID: deps.SourceID, RateLimit: s.RateLimit, MaxBarsPerRequest: s.MaxBarsPerRequest}), nil
+		}),
 		// 港股：恒生指数成分来源（腾讯），只取指数成分，不取 K 线、不取全部标的。
 		entry(stockhk, marketdata.InstrumentEquity, "tencent", hktencent.DefaultSourceID, fixed(func() marketdata.MarketProvider { return hktencent.New(hktencent.Config{}) })),
 	)

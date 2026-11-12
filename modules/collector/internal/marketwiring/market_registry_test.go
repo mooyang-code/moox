@@ -25,7 +25,10 @@ func TestDefaultSourceIDComesFromCatalog(t *testing.T) {
 		{"stockcn", "sina", "convertible_bond", "convertible_bond_http"},
 		// 同一个数据源在别的市场没有登记。
 		{"crypto", "eastmoney", "equity", ""},
-		{"stockhk", "eastmoney", "equity", ""},
+		// 港股的东方财富只取 K 线，登记的 source_id 与 A 股的不同。
+		{"stockhk", "eastmoney", "equity", "stockhk_http"},
+		{"stockhk", "tencent", "equity", "index_constituent_http"},
+		{"stockhk", "sina", "equity", ""},
 		{"stockcn", "unknown", "equity", ""},
 	} {
 		require.Equal(t, tc.want, DefaultSourceID(tc.market, tc.provider, tc.instrument), "%s/%s/%s", tc.market, tc.provider, tc.instrument)
