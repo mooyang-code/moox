@@ -73,8 +73,13 @@ func (d Decimal) String() string {
 			return strings.TrimRight(strings.TrimRight(s, "0"), ".")
 		}
 	}
-	return r.RatString()
+	// 除不尽的值（例如名义金额 ÷ 3 倍杠杆）没有有限小数表示：向零截断到固定位数，保证输出始终能被 ParseDecimal 读回、能写入库。
+	// 不能输出 a/b 形式的分数，存储层与交易所接口都只认十进制小数。
+	return strings.TrimRight(strings.TrimRight(d.RoundDown(nonTerminatingScale).rat().FloatString(nonTerminatingScale), "0"), ".")
 }
+
+// nonTerminatingScale 是除不尽的值转成字符串时保留的小数位数，远小于任何资产的最小计量单位。
+const nonTerminatingScale = 18
 
 func (d Decimal) Scale() int {
 	s := d.String()
