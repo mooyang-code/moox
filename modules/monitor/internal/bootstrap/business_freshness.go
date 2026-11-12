@@ -289,6 +289,11 @@ func buildBusinessFreshnessReporterWithInterval(
 			if business.Kind != "balance" && business.Kind != "trade_attention" && business.Kind != "event_center_attention" && business.Kind != "collector_attention" && business.Kind != "market_fetch" && business.Kind != "data_delivery" && business.Kind != "view_file" && business.Kind != "worker_presence" && business.Kind != "archive_object_store" && business.Kind != "archive_task" && business.Kind != "archive_coverage" && business.Kind != "metrics_ingest" && business.Kind != "factor_watermark" && business.Kind != "factor_params" && business.Kind != "storage_rejection" {
 				continue
 			}
+			// 概览从库里已有检查读回来的上一次结果不是本轮新算出的事实：不能拿它再写一次结果（它的状态值是 ok，会被记成失败）。
+			// 本轮没有新结果的旧检查（例如升级前记在 crypto 空间下的余额对账）由下面的循环按“不再检查”收尾。
+			if business.FromStoredCheck {
+				continue
+			}
 			spaceID := business.SpaceID
 			if spaceID == "" {
 				spaceID = monmetrics.InternalMetricSpaceID

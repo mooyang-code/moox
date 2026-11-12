@@ -1210,3 +1210,29 @@ func TestViewFileOverLimitBecomesBusinessCheck(t *testing.T) {
 		}
 	}
 }
+
+// 休市时段（午休、收市后、周末）统计窗口内没有请求：不出数据源健康结果，更不能判成 down；
+// 窗口内有请求且失败率超过阈值、或全部失败的数据源照常判 down。
+func TestBuilderSkipsProviderFeedWithoutObservationInWindow(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	query := openOverviewMetrics(t, func(db *gorm.DB) {
+		seed := func(id, provider, result string, value float64, observed time.Time) {
+			labels := `{"market_id":"stockcn","provider_id":"` + provider + `","feed_kind":"kline","group_id":"0","batch_kind":"realtime","result":"` + result + `"}`
+			seedOverviewMetricForInstance(t, db, id, "scf-collector", "fetch-stockcn", "moox_collector_market_feed_results_total", labels, value, observed)
+		}
+		seed("idle-success", "sina", "success", 10, now.Add(-30*time.Minute))
+		seed("idle-failure", "sina", "timeout", 1, now.Add(-30*time.Minute))
+		seed("busy-success", "tencent", "success", 1, now)
+		seed("busy-failure", "tencent", "timeout", 9, now)
+		seed("broken-failure", "eastmoney", "http_5xx", 4, now)
+	})
+	overview, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
+	require.NoError(t, err)
+	feeds := map[string]string{}
+	for _, item := range overview.BusinessChecks {
+		if item.Kind == "market_fetch" && strings.HasPrefix(item.Module, "provider_feed:") {
+			feeds[item.Module] = item.Status
+		}
+	}
+	require.Equal(t, map[string]string{"provider_feed:tencent": "down", "provider_feed:eastmoney": "down"}, feeds)
+}
