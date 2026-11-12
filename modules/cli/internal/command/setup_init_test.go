@@ -574,12 +574,12 @@ func TestSetupInitJSONDoesNotExposeSecrets(t *testing.T) {
 }
 
 func TestProvisionSetupCLSReportsReadyAndNeverBlocksInit(t *testing.T) {
-	ready := provisionSetupCLS(context.Background(), clsAccountSource{}, func(string, string) (tencent.CLSAPI, error) { return clsReadyAPI{}, nil }, "")
+	ready := provisionSetupCLS(context.Background(), clsAccountSource{}, func(string, string) (tencent.CLSAPI, error) { return clsReadyAPI{}, nil }, "", 0)
 	require.Equal(t, "ready", ready.Status)
 	require.Equal(t, "topic-1", ready.TopicID)
 	require.True(t, ready.IndexFieldsChanged)
 
-	failed := provisionSetupCLS(context.Background(), clsAccountSource{}, func(string, string) (tencent.CLSAPI, error) { return nil, errors.New("boom SecretKey=leak") }, "")
+	failed := provisionSetupCLS(context.Background(), clsAccountSource{}, func(string, string) (tencent.CLSAPI, error) { return nil, errors.New("boom SecretKey=leak") }, "", 0)
 	require.Equal(t, "failed", failed.Status)
 	require.NotContains(t, failed.Warning, "leak")
 }

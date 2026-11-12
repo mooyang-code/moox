@@ -33,6 +33,8 @@ type MigrateOptions struct {
 	RenameFrom, RenameTo string
 	// FactorsEnabled 非空（"true"/"false"）时设置 [factors] enabled（--set-factors-enabled）。
 	FactorsEnabled string
+	// AddLoggingCLS 为 true 时补上空的 [logging.cls]（--add-logging-cls），之后用 config set 填值；已经有这一段时不动。
+	AddLoggingCLS bool
 	// RetentionTarget / RetentionValue 非空时设置某个频率的保留期（--set-retention defaults.1m=35d）。
 	RetentionTarget, RetentionValue string
 	// ReachabilityHost / Reachability 非空时设置该主机的可达性（--set-reachability 主机=direct|outbound）。
@@ -117,6 +119,8 @@ type MigrateReport struct {
 	SCF         *SCFImportReport `json:"scf,omitempty"`
 	// RemovedTLSMode 记录删掉了 tls_mode 的主机：管理台只用内部证书，这项配置已删除。
 	RemovedTLSMode []string `json:"removed_tls_mode,omitempty"`
+	// LoggingCLSAdded 为 true 表示这次补上了 [logging.cls]。
+	LoggingCLSAdded bool `json:"logging_cls_added,omitempty"`
 	// FactorsEnabled 记录 --set-factors-enabled 的结果。
 	FactorsEnabled string `json:"factors_enabled,omitempty"`
 	// Retention 记录 --set-retention 的结果。
@@ -197,6 +201,9 @@ func MigrateFile(path string, opts MigrateOptions) (MigrateReport, error) {
 			return report, err
 		}
 		report.FactorsEnabled = opts.FactorsEnabled
+	}
+	if opts.AddLoggingCLS {
+		migrated, report.LoggingCLSAdded = addLoggingCLS(migrated)
 	}
 	if opts.RetentionTarget != "" {
 		if migrated, err = setStorageRetention(migrated, opts.RetentionTarget, opts.RetentionValue); err != nil {
@@ -1014,6 +1021,45 @@ func blockValue(b block, key string) string {
 	}
 	return ""
 }
+
+// addLoggingCLS 在文件末尾补上一段没有启用的 [logging.cls]；已经有这一段时原样返回。
+func addLoggingCLS(plain []byte) ([]byte, bool) {
+	lines := strings.Split(string(plain), "\n")
+	if start, _ := sectionRange(lines, "logging.cls"); start >= 0 {
+		return plain, false
+	}
+	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+		lines = lines[:len(lines)-1]
+	}
+	// 旧文件里通常也没有 [logging]：一起补上，之后才能用 config set 改保留天数。
+	if start, _ := sectionRange(lines, "logging"); start < 0 {
+		lines = append(lines, "", loggingSection)
+	}
+	lines = append(lines, "", loggingCLSSection, "")
+	return []byte(strings.Join(lines, "\n")), true
+}
+
+// loggingSection、loggingCLSSection 与 moox.toml.example 里的 [logging]、[logging.cls] 一致。
+const loggingSection = `# 腾讯云日志服务里日志保留的天数（采集日志与服务日志的主题共用），默认 2 天；保留越久存储费越高。
+# 只在创建日志主题时生效，已经建好的主题要到腾讯云控制台改。
+[logging]
+retention_days = 2`
+
+const loggingCLSSection = `# 服务日志上报腾讯云日志服务（CLS），可选。重要日志（Error 及以上、关键事件）总是发给 Monitor、在管理台“重要日志”里看，不需要这一段；
+# 这里配的是把各服务警告及以上的日志和关键事件另外上报到 CLS，方便检索。
+# 费用（腾讯云按量计费，中国大陆地域）：每个日志主题每天 0.04 元（约 1.2 元/月）是固定的，其余按量；按 MooX 的日志量、保留 2 天，每月合计几元以内。
+# endpoint 是上报域名（例如 ap-guangzhou.cls.tencentcs.com）；topic_id 是主题 moox-service 的 ID，
+# 用 moox-cli ops tencent cls bootstrap --topic-name moox-service --retention-days <[logging] 的 retention_days> 创建并取得。
+# writer_secret_id / writer_secret_key 填只有这个主题上传权限的子账号密钥：它会下发到每台主机，不要填云账号的管理密钥。
+# 上报走明文 HTTP，日志里不要写密钥。min_level 是上报的最低级别：info、warn、error，默认 warn；
+# 调成 info 会把各服务逐条处理的日志也报上去，量大约是 10 倍。关键事件（进程启动、暂停与恢复等）不论级别都上报。
+[logging.cls]
+enabled = false
+endpoint = ""
+topic_id = ""
+writer_secret_id = ""
+writer_secret_key = ""
+min_level = "warn"`
 
 // setFactorsEnabled 设置 [factors] 的 enabled；没有 [factors] 表时报错，不凭空创建。
 func setFactorsEnabled(plain []byte, value string) ([]byte, error) {

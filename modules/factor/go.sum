@@ -2,8 +2,6 @@ github.com/BurntSushi/toml v1.3.2 h1:o7IhLm0Msx3BaB+n3Ag7L8EVlByGnpq14C4YWiu/gL8
 github.com/BurntSushi/toml v1.3.2/go.mod h1:CxXYINrC8qIiEnFrOxCa7Jy5BFHlXnUU2pbicEuybxQ=
 github.com/DataDog/zstd v1.4.5 h1:EndNeuB0l9syBZhut0wns3gV1hL8zX8LIu6ZiVHWLIQ=
 github.com/DataDog/zstd v1.4.5/go.mod h1:1jcaCB/ufaK+sKp1NBhlGmpz41jOoPQ35bpF36t7BBo=
-github.com/agiledragon/gomonkey/v2 v2.10.1 h1:FPJJNykD1957cZlGhr9X0zjr291/lbazoZ/dmc4mS4c=
-github.com/agiledragon/gomonkey/v2 v2.10.1/go.mod h1:ap1AmDzcVOAz1YpeJ3TCzIgstoaWLA6jbbgxfB4w2iY=
 github.com/antithesishq/antithesis-sdk-go v0.7.0-default-no-op h1:Z/MZK75wC/NSrkgqeNIa7jexam9uWzhLmFTSCPI/kn0=
 github.com/antithesishq/antithesis-sdk-go v0.7.0-default-no-op/go.mod h1:FQyySiasQQM8735Ddel3MRojmy4dA1IqCeyJ5jmPMbI=
 github.com/benbjohnson/clock v1.3.0 h1:ip6w0uFQkncKQ979AypyG0ER7mqUSBdKLOgAle/AT8A=
@@ -94,6 +92,7 @@ github.com/jtolds/gls v4.20.0+incompatible h1:xdiiI2gbIgH/gLH7ADydsJ1uDOEzR8yvV7
 github.com/jtolds/gls v4.20.0+incompatible/go.mod h1:QJZ7F/aHp+rZTRtaJ1ow/lLfFfVYBRgL+9YlvaHOwJU=
 github.com/kisielk/errcheck v1.5.0/go.mod h1:pFxgyoBC7bSaBwPgfKdkLd5X25qrDl4LWUI2bnpBCr8=
 github.com/kisielk/gotool v1.0.0/go.mod h1:XhKaO+MFFWcvkIS/tQcRk01m1F5IRFswLeQ+oQHNcck=
+github.com/klauspost/compress v1.15.1/go.mod h1:/3/Vjq9QcHkK5uEr5lBEmyoZ1iFhe47etQ6QUkpK6sk=
 github.com/klauspost/compress v1.20.3 h1:zWNoFqq/lSuYQRim3dUXlXeA0IqwuZGicdG5ZTfY5j4=
 github.com/klauspost/compress v1.20.3/go.mod h1:LUdAzn7YLVvxLpc7y3V1m40wESHTgc1422pwwBSKYuI=
 github.com/kr/pretty v0.1.0/go.mod h1:dAy3ld7l9f0ibDNOQOHHMYYIIbhfbHSm3C4ZsoJORNo=
@@ -188,8 +187,8 @@ github.com/stretchr/testify v1.8.0/go.mod h1:yNjHg4UonilssWZ8iaSj1OCr/vHnekPRkoO
 github.com/stretchr/testify v1.8.1/go.mod h1:w2LPCIKwWwSfY2zedu0+kehJoqGctiVI29o6fzry7u4=
 github.com/stretchr/testify v1.12.1 h1:EuwCh5fleGS7H32xRwO3wRGT7DxrDhLAT6FF8MpWDWE=
 github.com/stretchr/testify v1.12.1/go.mod h1:MDEgiDPPsNp5cuIrHPPCyornHKgEVbtFUmoNlxoYthg=
-github.com/tencentcloud/tencentcloud-cls-sdk-go v0.0.0-20211222035622-e30dab6428ed h1:fAAkGa0jncXK1VezWQ4vrn8HOfJcxEvUZS4L8yFuebI=
-github.com/tencentcloud/tencentcloud-cls-sdk-go v0.0.0-20211222035622-e30dab6428ed/go.mod h1:/TcQ9bTgVYkRkMLyGdjdjjAfpUW1LbklvSAvZorIYAM=
+github.com/tencentcloud/tencentcloud-cls-sdk-go v1.0.11 h1:LJshkcQ14A/7XCgqalheBHv8qLwwOXr/xqttQbjWdHM=
+github.com/tencentcloud/tencentcloud-cls-sdk-go v1.0.11/go.mod h1:WU+0TXfVbSctEsUUf4KmIKnfr+tknbjcsnx/TrEIPH4=
 github.com/tetratelabs/wazero v1.12.0 h1:DuWcpNu/FzgEXgGBDp8J1Spc+CWOvvtvVyjKlaZopYU=
 github.com/tetratelabs/wazero v1.12.0/go.mod h1:LvKtzl2RqO4gyF27BiXU+nKAjcV8f38U+kP/q2vgxh0=
 github.com/valyala/bytebufferpool v1.0.0 h1:GqA5TC/0021Y/b9FG4Oi9Mr3q7XYx6KllzawFIhcdPw=
@@ -314,8 +313,6 @@ trpc.group/trpc-go/trpc-filter/validation v1.0.1 h1:vSRewf8yQ2lXiXwZ0F0+w2Yk3NNy
 trpc.group/trpc-go/trpc-filter/validation v1.0.1/go.mod h1:NsZw4I7fvVnJSXVB86shTT0p1XqcbCqAdFicMyG+sxQ=
 trpc.group/trpc-go/trpc-go v1.0.4 h1:DaTTeaSf5Ah/dtQ8nAKKV2zaO7b7EB6qWLNWlMwLSsc=
 trpc.group/trpc-go/trpc-go v1.0.4/go.mod h1:lZOyo/G6nv2eBEPeDmbEfRhQDCOB65WsTqKqsgC2paA=
-trpc.group/trpc-go/trpc-log-cls v1.0.0 h1:zJ7NnE7khFmxN+jxkZkJd5qTUj4ERJ+2DJXAWyP/akc=
-trpc.group/trpc-go/trpc-log-cls v1.0.0/go.mod h1:ws/wxx51jkd1CClG6+n82rZvRWxczmzbve3tapK61D0=
 trpc.group/trpc-go/trpc-metrics-prometheus v1.0.0 h1:KOWoPoowE/pNDgFQKidfgU7t+avhLmCDMD6nwgG1Y+g=
 trpc.group/trpc-go/trpc-metrics-prometheus v1.0.0/go.mod h1:rGmXHWtX8+Spt7fNxlPwG00DCWVlgBDsIX8yv7oFOFo=
 trpc.group/trpc-go/trpc-metrics-runtime v1.0.0 h1:KHrlvzlzaGP4F2hcUQrtaeq3hM9cHyz2q1wXQmUnlII=

@@ -4,13 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/observability"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
 	"github.com/mooyang-code/moox/packages/jetstream"
+
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 type Publisher interface {
@@ -174,7 +175,8 @@ func (r *Relay) report(err error) {
 		r.options.ErrorReporter(err)
 		return
 	}
-	log.Printf("storage outbox relay flush failed: %v", err)
+	// 每 100 毫秒重试一次，逐次失败只按警告记；积压由 moox_storage_outbox_oldest_age_seconds 的检查告警。
+	log.Warnf("storage outbox relay flush failed: %v", err)
 }
 
 func (r *Relay) Close() {
@@ -235,7 +237,7 @@ func (r *Relay) flush(ctx context.Context) error {
 		if err != nil {
 			if pebble.IsInvalidOutboxEvent(err) {
 				// 永久无效：隔离并告警，继续投递其后的事件。
-				log.Printf("Storage 出站队列隔离无法通过契约校验的事件 %d：%v", entry.ID, err)
+				log.Errorf("Storage 出站队列隔离无法通过契约校验的事件 %d：%v", entry.ID, err)
 				r.metrics.IncOutboxPublishError()
 				confirmed = append(confirmed, entry.ID)
 				continue

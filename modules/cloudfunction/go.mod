@@ -8,6 +8,7 @@ require (
 	github.com/mooyang-code/moox/modules/admin/proto/admingen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/modules/cloudfunction/proto/cloudfunctiongen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/cloudprovider v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/clsreporter v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/gatewayauth v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/gatewayclient v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen v0.0.0-00010101000000-000000000000
@@ -27,7 +28,6 @@ require (
 	trpc.group/trpc-go/trpc-filter/recovery v1.0.0
 	trpc.group/trpc-go/trpc-filter/validation v1.0.1
 	trpc.group/trpc-go/trpc-go v1.0.4
-	trpc.group/trpc-go/trpc-log-cls v1.0.0
 	trpc.group/trpc-go/trpc-metrics-prometheus v1.0.0
 )
 
@@ -85,7 +85,7 @@ require (
 	github.com/robfig/cron v1.2.0 // indirect
 	github.com/smartystreets/assertions v1.2.0 // indirect
 	github.com/spf13/cast v1.5.1 // indirect
-	github.com/tencentcloud/tencentcloud-cls-sdk-go v0.0.0-20211222035622-e30dab6428ed // indirect
+	github.com/tencentcloud/tencentcloud-cls-sdk-go v1.0.11 // indirect
 	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/cls v1.3.135 // indirect
 	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/sts v1.1.11 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
@@ -151,3 +151,5 @@ replace github.com/mooyang-code/moox/packages/storagepb => ../../packages/storag
 replace github.com/mooyang-code/moox/packages/tradeeventpb => ../../packages/tradeeventpb
 
 replace github.com/mooyang-code/moox/packages/wirecompress => ../../packages/wirecompress
+
+replace github.com/mooyang-code/moox/packages/clsreporter => ../../packages/clsreporter

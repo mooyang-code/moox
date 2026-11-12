@@ -70,9 +70,14 @@ for module in "${modules[@]}"; do
 	require_text "${main}" 'packages/healthz/trpcrecovery' "missing sanitized recovery registration for ${module}"
 	require_text "${modfile}" 'trpc.group/trpc-go/trpc-metrics-prometheus v1.0.0' "missing prometheus dependency for ${module}"
 	require_text "${main}" 'trpc.group/trpc-go/trpc-metrics-prometheus' "missing prometheus registration for ${module}"
-	if [[ "${module}" != collector ]]; then
-		require_text "${modfile}" 'trpc.group/trpc-go/trpc-log-cls v1.0.0' "missing CLS dependency for ${module}"
-		require_text "${main}" 'trpc.group/trpc-go/trpc-log-cls' "missing CLS registration for ${module}"
+	# 服务的 main 空白引入 logcls：重要日志发给 Monitor，启用了 CLS 时另外上报。它在代码里给默认日志加上 moox 输出，
+	# 所以配置文件里不能出现 writer: moox（线上的旧二进制不认识它，回滚二进制时会起不来）。
+	# 主机代理不上报重要日志（它没有指标上报，主机停报由主机失联告警覆盖）。
+	if [[ "${module}" != hostagent ]]; then
+		require_text "${main}" 'packages/clsreporter/logcls' "missing log sink registration for ${module}"
+	fi
+	if grep -rn 'writer: moox' "modules/${module}/config" >/dev/null 2>&1; then
+		fail "modules/${module}/config must not list writer: moox; the sink is installed in code"
 	fi
 	require_text "${main}" 'packages/healthz/trpclog' "missing CLS service identity helper for ${module}"
 	require_text "${main}" "InstallServiceName(\"${module}\")" "missing CLS service identity installation for ${module}"
@@ -118,6 +123,17 @@ require_text packages/healthz/trpcotel/filter.go 'intentionally never records re
 require_text packages/healthz/trpcotel/filter_test.go 'TestFiltersNeverAttachBodies' 'tracing adapter must test body suppression'
 require_text modules/admin/cmd/server/main.go 'packages/healthz/trpcotel' 'missing admin tracing registration'
 require_text modules/storage/cmd/server/main.go 'packages/healthz/trpcotel' 'missing storage tracing registration'
+
+# 矩阵之外的常驻服务同样要引入 logcls。
+for main in modules/archive/cmd/mgr/main.go modules/callbackdispatcher/cmd/server/main.go modules/collector/cmd/stream/main.go; do
+	[[ -f "${main}" ]] || fail "missing server entrypoint ${main}"
+	require_text "${main}" 'packages/clsreporter/logcls' "missing log sink registration"
+done
+
+# 各服务已经不再引入 trpc-log-cls，配置里再出现 writer: cls 会让进程在装配日志时直接退出。
+if rg -n 'writer: (cls|moox)\b' modules/*/config deploy 2>/dev/null; then
+	fail 'tRPC configs must not list writer: cls (no longer registered) or writer: moox (installed in code)'
+fi
 
 if rg -n '^  telemetry:$' modules/*/config/trpc_go*.yaml; then
 	fail 'local OpenTelemetry adapter is environment-configured and must not declare an unregistered telemetry plugin'

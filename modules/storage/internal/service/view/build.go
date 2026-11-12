@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"math"
 	"strings"
 	"sync"
@@ -13,6 +12,8 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"google.golang.org/protobuf/proto"
+
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 type backfillRequestLimiter struct {
@@ -185,7 +186,7 @@ func (s *Service) discardInitialBuild(ctx context.Context, ref viewRef, indexID 
 	}
 	release, err := s.indexWriteGate(indexID).lock(ctx)
 	if err != nil {
-		log.Printf("storage view 删除半成品索引 %q 失败：%v", indexID, err)
+		log.Warnf("storage view 删除半成品索引 %q 失败：%v", indexID, err)
 		return
 	}
 	defer release()
@@ -194,14 +195,14 @@ func (s *Service) discardInitialBuild(ctx context.Context, ref viewRef, indexID 
 	s.forgetIndexLocked(indexID)
 	s.mu.Unlock()
 	if err := engine.Remove(ctx, indexID); err != nil {
-		log.Printf("storage view 删除半成品索引 %q 失败：%v", indexID, err)
+		log.Warnf("storage view 删除半成品索引 %q 失败：%v", indexID, err)
 	}
 }
 
 // backfillInitialIndex 从 Primary 回填时序 View 每个序列最近的 bars 根。记录型 View 和 Bleve 没有可读的 Primary 历史，从空开始。
 func (s *Service) backfillInitialIndex(ctx context.Context, view *pb.View, schema viewindex.ViewIndexSchema, indexID string, opts MaintenanceOptions, bars uint64) error {
 	if bars == 0 || schema.Engine == "bleve" {
-		log.Printf("storage view %s/%s 从空开始：没有 Primary 历史可回填", view.GetSpaceId(), view.GetViewId())
+		log.Infof("storage view %s/%s 从空开始：没有 Primary 历史可回填", view.GetSpaceId(), view.GetViewId())
 		return nil
 	}
 	if opts.PrimaryRange == nil {
@@ -217,7 +218,7 @@ func (s *Service) backfillInitialIndex(ctx context.Context, view *pb.View, schem
 	}
 	if written == 0 {
 		// 派生输出（例如因子结果）在第一个周期到来之前合法地为空。
-		log.Printf("storage view %s/%s 从空开始：Primary 还没有这个 View 的行", view.GetSpaceId(), view.GetViewId())
+		log.Infof("storage view %s/%s 从空开始：Primary 还没有这个 View 的行", view.GetSpaceId(), view.GetViewId())
 	}
 	return nil
 }
@@ -229,7 +230,7 @@ func (s *Service) backfillPrimaryHistory(ctx context.Context, view *pb.View, sch
 	spaceID, viewID, frequency := view.GetSpaceId(), view.GetViewId(), view.GetFreq()
 	columns := viewColumnFields(schema.Columns)
 	if len(columns) == 0 {
-		log.Printf("storage view history backfill has no dataset columns space=%s view=%s", spaceID, viewID)
+		log.Warnf("storage view history backfill has no dataset columns space=%s view=%s", spaceID, viewID)
 		return 0, nil
 	}
 	auth := s.primaryAuthSnapshot()

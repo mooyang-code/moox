@@ -5,7 +5,6 @@ import (
 	"crypto/hmac"
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"net/url"
 	"os"
@@ -29,6 +28,7 @@ import (
 	primarystore "github.com/mooyang-code/moox/modules/storage/internal/service/primarystore"
 	viewservice "github.com/mooyang-code/moox/modules/storage/internal/service/view"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	_ "github.com/mooyang-code/moox/packages/clsreporter/logcls"
 	"github.com/mooyang-code/moox/packages/healthz/trpclog"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcotel"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"
@@ -41,14 +41,13 @@ import (
 	_ "trpc.group/trpc-go/trpc-filter/validation"
 	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/client"
+	tlog "trpc.group/trpc-go/trpc-go/log"
 	"trpc.group/trpc-go/trpc-go/server"
 	"trpc.group/trpc-go/trpc-go/transport"
-	_ "trpc.group/trpc-go/trpc-log-cls"
 	_ "trpc.group/trpc-go/trpc-metrics-prometheus"
 )
 
 func main() {
-	trpclog.InstallServiceName("storage")
 	var err error
 	switch os.Getenv("MOOX_STORAGE_ROLE") {
 	case "", "node":
@@ -61,7 +60,8 @@ func main() {
 		err = fmt.Errorf("unknown storage role %q", os.Getenv("MOOX_STORAGE_ROLE"))
 	}
 	if err != nil {
-		log.Fatal(err)
+		// Fatalf 写完会先把日志队列发出去再退出，这最后一条错误才进得了重要日志。
+		tlog.Fatalf("storage exited: %v", err)
 	}
 }
 
@@ -142,6 +142,8 @@ func runPrimaryRole() error {
 	go runCleanupLoop(cleanupCtx, datasetCleanup{reader: cached, resolver: resolver, auth: cleanupAuth, retention: policy.Retention, metrics: cleanupMetrics}, time.Hour)
 	go runViewPeriodCleanupLoop(cleanupCtx, meta, time.Hour, storageViewPeriodRetention())
 	s := trpc.NewServer()
+	// 要在 NewServer 之后装：NewServer 读配置时会换掉默认的日志对象。
+	trpclog.InstallServiceName("storage")
 	for _, name := range []string{"trpc.moox.storage.PrimaryStore", "trpc.moox.storage.PrimaryStore.trpc"} {
 		if listener := s.Service(name); listener != nil {
 			pb.RegisterPrimaryStoreService(listener, svc)
@@ -170,7 +172,7 @@ func runCleanupLoop(ctx context.Context, cleanup datasetCleanup, interval time.D
 		interval = time.Hour
 	}
 	if err := cleanup.run(ctx, time.Now().UTC()); err != nil {
-		log.Printf("storage cleanup initial run failed: %v", err)
+		tlog.Errorf("storage cleanup initial run failed: %v", err)
 	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -180,7 +182,7 @@ func runCleanupLoop(ctx context.Context, cleanup datasetCleanup, interval time.D
 			return
 		case now := <-ticker.C:
 			if err := cleanup.run(ctx, now.UTC()); err != nil {
-				log.Printf("storage cleanup run failed: %v", err)
+				tlog.Errorf("storage cleanup run failed: %v", err)
 			}
 		}
 	}
@@ -199,10 +201,10 @@ func runViewPeriodCleanupLoop(ctx context.Context, store metadata.ViewPeriodStat
 	cleanup := func() {
 		before := time.Now().UTC().Add(-retention)
 		if _, err := store.DeleteViewPeriodDatasetStatesBefore(ctx, before); err != nil {
-			log.Printf("storage View period state cleanup failed: %v", err)
+			tlog.Errorf("storage View period state cleanup failed: %v", err)
 		}
 		if _, err := store.DeleteViewSyncPointsBefore(ctx, before); err != nil {
-			log.Printf("storage View sync point cleanup failed: %v", err)
+			tlog.Errorf("storage View sync point cleanup failed: %v", err)
 		}
 	}
 	cleanup()
@@ -223,7 +225,7 @@ func storageViewPeriodRetention() time.Duration {
 		if retention, err := time.ParseDuration(raw); err == nil && retention > 0 {
 			return retention
 		}
-		log.Printf("invalid MOOX_STORAGE_VIEW_PERIOD_RETENTION=%q; using 168h", raw)
+		tlog.Warnf("invalid MOOX_STORAGE_VIEW_PERIOD_RETENTION=%q; using 168h", raw)
 	}
 	return 7 * 24 * time.Hour
 }
@@ -287,7 +289,7 @@ func (c datasetCleanup) cleanupDataset(ctx context.Context, dataset *pb.Dataset,
 	}
 	elapsed := time.Since(started)
 	c.metrics.ObserveCleanup(dataset.GetSpaceId(), dataset.GetDatasetId(), cutoff, elapsed, rsp.GetDeletedRanges())
-	log.Printf("storage cleanup space=%s dataset=%s freq=%s retention=%s cutoff=%s deleted_ranges=%d elapsed=%s",
+	tlog.Infof("storage cleanup space=%s dataset=%s freq=%s retention=%s cutoff=%s deleted_ranges=%d elapsed=%s",
 		dataset.GetSpaceId(), dataset.GetDatasetId(), dataset.GetFreq(), period, cutoff.Format(time.RFC3339), rsp.GetDeletedRanges(), elapsed.Round(time.Millisecond))
 	return nil
 }
@@ -297,7 +299,7 @@ func cleanupBucketDuration() time.Duration {
 		if duration, err := time.ParseDuration(raw); err == nil && duration > 0 {
 			return duration
 		}
-		log.Printf("invalid MOOX_STORAGE_BUCKET_DURATION=%q; using 24h", raw)
+		tlog.Warnf("invalid MOOX_STORAGE_BUCKET_DURATION=%q; using 24h", raw)
 	}
 	return 24 * time.Hour
 }
@@ -380,6 +382,8 @@ func runViewRole() error {
 	// process reachable lets liveness probes observe the process while
 	// readiness remains false until the consumer is bound.
 	s := trpc.NewServer()
+	// 要在 NewServer 之后装：NewServer 读配置时会换掉默认的日志对象。
+	trpclog.InstallServiceName("storage")
 	indexListener := s.Service("trpc.moox.storage.ViewIndex")
 	if indexListener == nil {
 		return errors.New("ViewIndex listener is not configured")
@@ -450,7 +454,7 @@ func runViewRole() error {
 	defer stopDynamicConsumer()
 	if storageViewMaintenanceDisabled() {
 		// 运维主动暂停建索引时（Storage 主机过载），实时消费照常工作。
-		log.Printf("storage view historical maintenance disabled by MOOX_STORAGE_VIEW_MAINTENANCE_DISABLED=1")
+		tlog.Warnf("storage view historical maintenance disabled by MOOX_STORAGE_VIEW_MAINTENANCE_DISABLED=1")
 	} else {
 		stopViewMaintainer, err := svc.StartViewMaintainerAsync(trpc.BackgroundContext(), maintenanceOptions)
 		if err != nil {
@@ -478,7 +482,7 @@ func connectStorageViewEventBus(config jetstream.Config) (*jetstream.Client, err
 		if !isTransientStorageViewEventBusError(err) {
 			return nil, err
 		}
-		log.Printf("storage view EventBus unavailable; retrying in %s: %v", backoff, err)
+		tlog.Warnf("storage view EventBus unavailable; retrying in %s: %v", backoff, err)
 		time.Sleep(backoff)
 		if backoff < 30*time.Second {
 			backoff *= 2
@@ -859,6 +863,8 @@ func runDataNodeRole() error {
 	relay.Start(trpc.BackgroundContext())
 	defer relay.Close()
 	s := trpc.NewServer()
+	// 要在 NewServer 之后装：NewServer 读配置时会换掉默认的日志对象。
+	trpclog.InstallServiceName("storage")
 	listener := s.Service("trpc.moox.storage.DataNodeRuntime")
 	if listener == nil {
 		return errors.New("DataNode listener is not configured")

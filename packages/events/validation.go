@@ -53,6 +53,45 @@ func validateObservabilityMetricsSnapshotReported(message *eventpb.EventMessage,
 	return nil
 }
 
+// 一批重要日志的上限：条数、单条正文与字段的大小。发送方按这些上限截断，超出的事件直接拒收。
+const (
+	MaxLogReportRecords  = 100
+	MaxLogMessageBytes   = 4096
+	MaxLogRecordFields   = 32
+	MaxLogFieldKeyBytes  = 128
+	MaxLogFieldValueSize = 1024
+)
+
+func validateObservabilityLogReported(message *eventpb.EventMessage, value proto.Message) error {
+	payload, ok := value.(*metricspb.LogReport)
+	if !ok {
+		return fmt.Errorf("log report payload has type %T", value)
+	}
+	if strings.TrimSpace(payload.GetServiceName()) == "" || strings.TrimSpace(payload.GetInstanceId()) == "" || strings.TrimSpace(payload.GetBootId()) == "" {
+		return fmt.Errorf("log report producer identity is incomplete")
+	}
+	if message.GetSubjectId() != payload.GetServiceName()+"/"+payload.GetInstanceId() {
+		return fmt.Errorf("log report producer does not match subject_id")
+	}
+	if len(payload.GetRecords()) == 0 || len(payload.GetRecords()) > MaxLogReportRecords {
+		return fmt.Errorf("log report must carry 1 to %d records", MaxLogReportRecords)
+	}
+	for _, record := range payload.GetRecords() {
+		if record.GetSequence() == 0 || record.GetTimeUnixNano() <= 0 || strings.TrimSpace(record.GetLevel()) == "" {
+			return fmt.Errorf("log record sequence, time and level are required")
+		}
+		if len(record.GetMessage()) > MaxLogMessageBytes || len(record.GetFields()) > MaxLogRecordFields {
+			return fmt.Errorf("log record exceeds the message or field limit")
+		}
+		for key, fieldValue := range record.GetFields() {
+			if len(key) > MaxLogFieldKeyBytes || len(fieldValue) > MaxLogFieldValueSize {
+				return fmt.Errorf("log record field exceeds the size limit")
+			}
+		}
+	}
+	return nil
+}
+
 func validateDatasetRowsUpserted(message *eventpb.EventMessage, value proto.Message) error {
 	payload, ok := value.(*storagepb.DatasetRowsUpserted)
 	if !ok {

@@ -5,7 +5,6 @@ package duckdb
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"sort"
 	"strconv"
@@ -14,6 +13,8 @@ import (
 
 	"github.com/mooyang-code/moox/modules/storage/internal/hostmem"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
+
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // 定期记录各 DuckDB 索引的内存与磁盘溢出用量，用来判断单个索引的内存上限是否合适，不必靠推测。
@@ -28,7 +29,7 @@ const (
 )
 
 // usageLogf 是用量日志的输出函数，测试里替换它来收集日志。
-var usageLogf = log.Printf
+var usageLogf = log.Infof
 
 type indexUsage struct {
 	id string

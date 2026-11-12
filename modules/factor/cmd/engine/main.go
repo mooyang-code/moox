@@ -27,7 +27,6 @@ import (
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"
 	"github.com/mooyang-code/moox/packages/requestauth"
 	_ "trpc.group/trpc-go/trpc-filter/recovery"
-	_ "trpc.group/trpc-go/trpc-log-cls"
 	_ "trpc.group/trpc-go/trpc-metrics-prometheus"
 
 	trpc "trpc.group/trpc-go/trpc-go"

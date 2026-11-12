@@ -9,7 +9,6 @@ import (
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/bootstrap"
 	"github.com/mooyang-code/moox/modules/hostgateway/internal/config"
 	trpc "trpc.group/trpc-go/trpc-go"
-	_ "trpc.group/trpc-go/trpc-log-cls"
 )
 
 var Version = "dev"

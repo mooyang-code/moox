@@ -305,3 +305,52 @@ func contains(value, fragment string) bool {
 	}
 	return false
 }
+
+// 重要日志事件经真实的 EventBus 到达消费者后交给 Logs 路由；路由报错时不确认（稍后重投），没有配置 Logs 路由时直接确认。
+func TestObservabilityConsumerRoutesLogReports(t *testing.T) {
+	var received []*metricspb.LogReport
+	var fail atomic.Bool
+	routes := noopRoutes()
+	routes.Logs = func(_ context.Context, _ *eventpb.EventMessage, report *metricspb.LogReport) error {
+		if fail.Load() {
+			return errors.New("database is locked")
+		}
+		received = append(received, report)
+		return nil
+	}
+	ctx, consumer, publisher, _ := newObservabilityFixture(t, routes)
+	publish := func(eventID string, sequence uint64) {
+		t.Helper()
+		_, err := publisher.Publish(ctx, events.ObservabilityLogReported, &metricspb.LogReport{
+			ServiceName: "trade", InstanceId: "trade@overseas", NodeId: "overseas", BootId: "boot-1",
+			Records: []*metricspb.LogRecord{{Sequence: sequence, TimeUnixNano: time.Now().UnixNano(), Level: "error", Message: "下单失败", Caller: "order/submit.go:88"}},
+		}, events.PublishOptions{EventID: eventID, OccurredAt: time.Now().UTC(), SpaceID: "mooxsys", SubjectID: "trade/trade@overseas"})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	publish("boot-1-log-00000000000000000001", 1)
+	delivery := fetchDelivery(t, ctx, consumer)
+	if result := consumer.Handle(ctx, delivery); result.Decision != jetstream.ACK {
+		t.Fatalf("Handle = %v, %v", result.Decision, result.Err)
+	} else if err := jetstream.ApplyHandlerResult(ctx, delivery, result); err != nil {
+		t.Fatal(err)
+	}
+	if len(received) != 1 || received[0].GetBootId() != "boot-1" || received[0].GetRecords()[0].GetMessage() != "下单失败" {
+		t.Fatalf("received = %v", received)
+	}
+
+	fail.Store(true)
+	publish("boot-1-log-00000000000000000002", 2)
+	delivery = fetchDelivery(t, ctx, consumer)
+	if result := consumer.Handle(ctx, delivery); result.Decision != jetstream.RETRY || result.Err == nil {
+		t.Fatalf("写库失败时应稍后重投：%v, %v", result.Decision, result.Err)
+	}
+
+	// 没有配置 Logs 路由的消费者（例如只关心指标的测试装配）收到日志事件时确认掉，不当成未知事件拒收。
+	plain := &Consumer{registry: consumer.registry, routes: noopRoutes()}
+	if result := plain.Handle(ctx, delivery); result.Decision != jetstream.ACK {
+		t.Fatalf("没有 Logs 路由时应确认：%v, %v", result.Decision, result.Err)
+	}
+}

@@ -104,6 +104,9 @@ func startObservabilityConsumer(
 		Metrics: metricsObservabilityRoute(messageStore, runtime.ModuleMetrics, runtime, cfg.Metrics.Enabled),
 		Host:    hostObservabilityRoute(hostStore, runtime, cfg.Metrics.HostStorage.Enabled),
 	}
+	if runtime.Repositories != nil {
+		routes.Logs = logObservabilityRoute(runtime.Repositories.Logs)
+	}
 	runtime.Go(func() {
 		for ctx.Err() == nil {
 			runtime.setObservabilityIngestState(false, errors.New("observability consumer is connecting"))

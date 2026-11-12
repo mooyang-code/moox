@@ -539,6 +539,50 @@ message GetAlertMuteRsp {
   AlertMuteState state = 2;
 }
 
+// LogRecord 是一条重要日志：某个服务的 Error 及以上级别日志，或它显式标出的关键事件。
+message LogRecord {
+  // id 随写入递增，用来向更早翻页（QueryLogRecordsReq.before_id）。
+  int64 id = 1;
+  string host_id = 2;
+  // component 是上报日志的组件（服务名）。
+  string component = 3;
+  string instance_id = 4;
+  // level：info（关键事件）、error、fatal 等。
+  string level = 5;
+  // event 是关键事件的名称；普通的错误日志为空。
+  string event = 6;
+  string message = 7;
+  // caller 是打日志的代码位置（包/文件:行号）。
+  string caller = 8;
+  map<string, string> fields = 9;
+  // merged_count 大于 0 表示在这条之前，同一代码位置另有这么多条日志因为太密被合并掉了。
+  int32 merged_count = 10;
+  // logged_at 是日志时间（UTC，RFC 3339）。
+  string logged_at = 11;
+}
+// QueryLogRecordsReq 查询重要日志，新的在前。各条件都是可选的。
+message QueryLogRecordsReq {
+  string host_id = 1;
+  string component = 2;
+  // level 是最低级别：error 只看 Error 及以上，info 连关键事件一起看；空表示不限。
+  string level = 3;
+  // keyword 在正文、事件名、代码位置里按子串匹配。带关键字又没有给 start_at 时只查最近 7 天。
+  string keyword = 4;
+  // start_at、end_at 是日志时间的范围（RFC 3339，含起点、不含终点）。
+  string start_at = 5;
+  string end_at = 6;
+  // before_id 大于 0 时只返回 id 更小的记录，用上一页最后一条的 id 向更早翻页。
+  int64 before_id = 7;
+  // limit 默认 100，最多 200。
+  int32 limit = 8;
+}
+message QueryLogRecordsRsp {
+  common.RetInfo ret_info = 1;
+  repeated LogRecord records = 2;
+  // has_more 表示还有更早的记录。
+  bool has_more = 3;
+}
+
 service MonitorMgr {
   rpc GetHealthOverview(GetHealthOverviewReq) returns (GetHealthOverviewRsp);
   rpc ListNotificationChannels(ListNotificationChannelsReq) returns (ListNotificationChannelsRsp);
@@ -547,6 +591,7 @@ service MonitorMgr {
   rpc ListHostAgents(ListHostAgentsReq) returns (ListHostAgentsRsp);
   rpc QueryHostMetricHistory(QueryHostMetricHistoryReq) returns (QueryHostMetricHistoryRsp);
   rpc QueryPipelineArrivalHistory(QueryPipelineArrivalHistoryReq) returns (QueryPipelineArrivalHistoryRsp);
+  rpc QueryLogRecords(QueryLogRecordsReq) returns (QueryLogRecordsRsp);
   rpc GetDoctorContext(GetDoctorContextReq) returns (GetDoctorContextRsp);
   rpc GetHostPolicy(GetHostPolicyReq) returns (GetHostPolicyRsp);
   rpc MuteAlerts(MuteAlertsReq) returns (MuteAlertsRsp);

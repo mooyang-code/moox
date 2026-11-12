@@ -4,12 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/observability"
 	"github.com/mooyang-code/moox/packages/jetstream"
+
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 type deliveryHeartbeat struct {
@@ -42,7 +43,7 @@ func newDeliveryHeartbeat(ctx context.Context, delivery *jetstream.Delivery, int
 					return
 				}
 				if err := delivery.InProgress(ctx); err != nil {
-					log.Printf("storage view delivery in-progress failed: %v", err)
+					log.Warnf("storage view delivery in-progress failed: %v", err)
 					if h.metrics != nil {
 						h.metrics.IncInProgressError()
 						h.metrics.ObserveDelivery("in_progress", "error")

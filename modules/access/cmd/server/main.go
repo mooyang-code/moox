@@ -26,7 +26,6 @@ import (
 	trpc "trpc.group/trpc-go/trpc-go"
 	"trpc.group/trpc-go/trpc-go/codec"
 	"trpc.group/trpc-go/trpc-go/server"
-	_ "trpc.group/trpc-go/trpc-log-cls"
 	_ "trpc.group/trpc-go/trpc-metrics-prometheus"
 )
 

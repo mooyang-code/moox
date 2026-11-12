@@ -36,6 +36,7 @@ func Render(ctx context.Context, request *Request, env Environment) ([]byte, err
 		{"notification", "channel_type", tomlString(request.Notification.ChannelType)},
 		{"notification", "webhook_url", tomlString(request.Notification.WebhookURL)},
 		{"notification", "secret", tomlString(request.Notification.Secret)},
+		{"logging", "retention_days", strconv.FormatInt(request.Logging.RetentionDays, 10)},
 	}
 	for _, edit := range edits {
 		var err error

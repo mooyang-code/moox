@@ -87,6 +87,8 @@ ol.guide figure { margin: 8px 0 4px; }
 ol.guide figure img { display: block; width: 100%; max-width: 560px; border: 1px solid var(--line); border-radius: 4px; }
 ol.guide figcaption { margin-top: 4px; color: var(--faint); font-size: 12.5px; }
 table.policies { width: 100%; border-collapse: collapse; margin: 8px 0 8px; font-size: 12.5px; }
+.cost-note { margin: 10px 0 0; font-size: 12.5px; line-height: 1.7; color: var(--muted); }
+.cost-note b { font-weight: 600; color: inherit; }
 table.policies th { text-align: left; font-weight: 500; color: var(--faint); padding: 6px 8px 6px 0; border-bottom: 1px solid var(--line); }
 table.policies td { padding: 6px 8px 6px 0; border-bottom: 1px solid var(--line); color: var(--muted); vertical-align: top; }
 table.policies td:nth-child(2) { color: var(--ink-2); white-space: nowrap; }
@@ -271,6 +273,7 @@ button.ghost.away { visibility: hidden; }
                 <tr><td><code>QcloudVPCFullAccess</code></td><td>私有网络 VPC</td><td>识别弹性公网 IP、安全组放行、私有网络与云联网打通</td></tr>
               </tbody>
             </table>
+            <p class="cost-note"><b>日志服务的费用</b>：初始化会开通日志服务并建一个日志主题（保留天数按下面“日志保留天数”填的，默认 2 天），用来排查“某个标的某一分钟为什么没采到”。它按量计费：每个日志主题每天 0.04 元（约 1.2 元/月）是固定的，其余按日志量算，按 MooX 的用量每月合计在几元以内。以后如果启用服务日志上报（默认关闭），会再多一个主题，同样约 1.2 元/月起。价格以腾讯云日志服务的定价页为准。</p>
             <button type="button" id="copy-policies" class="small">复制全部策略名</button> <span class="copied" id="copied" hidden>已复制</span>
           </li>
           <li>点进这个子用户，切到<b>「API 密钥」</b>页签，点<b>「新建密钥」</b>。</li>
@@ -280,6 +283,7 @@ button.ghost.away { visibility: hidden; }
         <div class="fields two">
           <label class="f full"><span>SecretId</span><input type="text" id="secret-id" autocomplete="off" spellcheck="false"></label>
           <label class="f full"><span>SecretKey</span><input type="password" id="secret-key" data-secret autocomplete="new-password" spellcheck="false"></label>
+          <label class="f"><span>日志保留天数</span><input type="number" id="log-retention-days" min="1" max="3600" step="1" value="2"><small>日志服务里的日志保留几天，默认 2 天。保留越久存储费越高；只在创建日志主题时生效，以后要改到腾讯云控制台改。</small></label>
           <div class="found" id="account" hidden></div>
         </div>
         </div>
@@ -765,6 +769,7 @@ button.ghost.away { visibility: hidden; }
     return {
       admin: { username: $('admin-username').value.trim(), password: $('admin-password').value },
       tencent: keys(),
+      logging: { retention_days: parseInt($('log-retention-days').value, 10) || 0 },
       notification: { channel_type: $('notify-type').value, webhook_url: $('notify-url').value.trim(), secret: notifySecretVisible() ? $('notify-secret').value.trim() : '' },
       servers: { storage: serverPayload('storage'), control: serverPayload('control'), overseas: serverPayload('overseas'), factor: blocks.factor.toggle.checked ? factorTarget() : null },
       // 没配海外服务器时这一步是隐藏的，不发送任何交易所密钥。

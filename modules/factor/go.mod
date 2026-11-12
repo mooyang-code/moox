@@ -8,6 +8,7 @@ require (
 	github.com/mooyang-code/moox/modules/factor/proto/factorgen v0.0.0-20260709100258-8b1b64632c9f
 	github.com/mooyang-code/moox/modules/storage/proto/storagegen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/barclock v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/clsreporter v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/events v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/factorexpr v0.0.0-00010101000000-000000000000
@@ -39,7 +40,6 @@ require (
 	trpc.group/trpc-go/trpc-filter/recovery v1.0.0
 	trpc.group/trpc-go/trpc-filter/validation v1.0.1
 	trpc.group/trpc-go/trpc-go v1.0.4
-	trpc.group/trpc-go/trpc-log-cls v1.0.0
 	trpc.group/trpc-go/trpc-metrics-prometheus v1.0.0
 )
 
@@ -101,7 +101,7 @@ require (
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
 	github.com/smartystreets/assertions v1.2.0 // indirect
 	github.com/spf13/cast v1.5.1 // indirect
-	github.com/tencentcloud/tencentcloud-cls-sdk-go v0.0.0-20211222035622-e30dab6428ed // indirect
+	github.com/tencentcloud/tencentcloud-cls-sdk-go v1.0.11 // indirect
 	github.com/tetratelabs/wazero v1.12.0 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasthttp v1.77.0 // indirect
@@ -181,3 +181,5 @@ replace github.com/mooyang-code/moox/packages/barclock => ../../packages/barcloc
 replace github.com/mooyang-code/moox/packages/marketcalendar => ../../packages/marketcalendar
 
 replace github.com/mooyang-code/moox/packages/seriesset => ../../packages/seriesset
+
+replace github.com/mooyang-code/moox/packages/clsreporter => ../../packages/clsreporter

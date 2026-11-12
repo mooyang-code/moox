@@ -199,6 +199,8 @@ func TestEventBusCredentialsExportAndRotate(t *testing.T) {
 	metricsPublisherACL := eventBusACLBlock(yaml, "metrics-publisher")
 	assert.NotContains(t, metricsPublisherACL, "$JS.API.>")
 	assert.Contains(t, metricsPublisherACL, "moox.event.observability.metrics.snapshot.reported.v1.>")
+	// 各服务用同一个账号上报指标快照和重要日志。
+	assert.Contains(t, metricsPublisherACL, "moox.event.observability.log.reported.v1.>")
 	assert.NotContains(t, metricsPublisherACL, "moox.event.observability.host.snapshot")
 	assert.Equal(t, `subscribe: {allow: ["_INBOX.>"]}`, aclLine(metricsPublisherACL, "subscribe:"))
 	hostAgentACL := eventBusACLBlock(yaml, "hostagent-publisher")
@@ -501,6 +503,7 @@ func TestGeneratedACLAllowsOwnedConsumerCreationAndStrategyPublish(t *testing.T)
 		},
 		"metrics-publisher": {
 			"moox.event.observability.metrics.snapshot.reported.v1.mooxsys.trade/instance-1",
+			"moox.event.observability.log.reported.v1.mooxsys.trade/instance-1",
 		},
 	} {
 		publisher, connectErr := nats.Connect(

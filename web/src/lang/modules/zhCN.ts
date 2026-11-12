@@ -48,6 +48,7 @@ export default {
     ["ops-hosts"]: "主机工作台",
     ["ops-storage"]: "存储节点",
     ["ops-activity"]: "活动日志",
+    ["ops-logs"]: "重要日志",
     ["settings"]: "系统设置",
     ["settings-spaces"]: "空间管理",
     ["settings-secrets"]: "密钥管理",

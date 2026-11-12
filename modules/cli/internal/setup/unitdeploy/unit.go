@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	setupconfig "github.com/mooyang-code/moox/modules/cli/internal/setup/config"
@@ -56,12 +57,29 @@ const defaultSpaceID = "crypto"
 // collectorStorageAppID 是 Collector 与 SCF 函数写 Storage 的应用身份，collector-stream 沿用它。
 const collectorStorageAppID = "moox-collector"
 
+// serviceLogComponents 是接入了重要日志与 CLS 上报的组件，和 docs/模块/监控.md 的接入范围一致。
+var serviceLogComponents = []string{
+	"admin", "monitor", "collector", "cloudfunction", "factor-mgr", "archive-mgr", "strategy", "eventbus",
+	"storage-primary", "storage-node", "storage-view", "trade", "collector-stream", "callback-dispatcher",
+}
+
 func unitEnvironment(manifest setupconfig.Manifest, identity runtimeIdentity, hostID string, components []string) (map[string]map[string]string, error) {
 	health := map[string]string{"MOOX_HEALTH_AUTH_VERSION": "moox-health-v1", "MOOX_HEALTH_AUTH_ACCESS_KEY": identity.HealthAccessKey, "MOOX_HEALTH_AUTH_SECRET_KEY": identity.HealthSecret}
 	environment := make(map[string]map[string]string, len(components))
 	for _, id := range components {
 		values := maps.Clone(health)
 		environment[id] = values
+		// 服务日志上报 CLS：只给接入了日志上报的组件（main 引入了 logcls 的那些）写入，别的组件不拿这把密钥。
+		// 变量名用 MOOX_LOG_CLS_ 前缀，和云函数、CloudFunction 自己的 MOOX_CLS_* 分开（那一组是采集日志的主题和另一把密钥）。
+		if cls := manifest.Logging.CLS; cls.Enabled && slices.Contains(serviceLogComponents, id) {
+			values["MOOX_LOG_CLS_ENABLED"] = "true"
+			values["MOOX_LOG_CLS_ENDPOINT"] = cls.Endpoint
+			values["MOOX_LOG_CLS_TOPIC_ID"] = cls.TopicID
+			values["MOOX_LOG_CLS_SECRET_ID"] = cls.WriterSecretID
+			values["MOOX_LOG_CLS_SECRET_KEY"] = cls.WriterSecretKey
+			values["MOOX_LOG_CLS_MIN_LEVEL"] = cls.MinLevel
+			values["MOOX_LOG_CLS_SOURCE"] = hostID
+		}
 		if slices.Contains([]string{"monitor", "collector", "factor-mgr", "archive-mgr", "strategy", "admin"}, id) {
 			if len(identity.StoragePrimarySecret) < 32 || (id == "strategy" || id == "admin") && len(identity.StorageViewSecret) < 32 {
 				return nil, errors.New("control Storage clients require the original persistent role secrets")
@@ -77,6 +95,10 @@ func unitEnvironment(manifest setupconfig.Manifest, identity runtimeIdentity, ho
 			values["MOOX_NOTIFICATION_CHANNEL_TYPE"] = manifest.Notification.ChannelType
 			values["MOOX_NOTIFICATION_WEBHOOK_URL"] = manifest.Notification.WebhookURL
 			values["MOOX_NOTIFICATION_SECRET"] = manifest.Notification.Secret
+		}
+		if id == "cloudfunction" {
+			// 开通采集日志主题时的保留天数来自 moox.toml 的 [logging] retention_days（只在创建主题时生效）。
+			values["MOOX_CLS_RETENTION_DAYS"] = strconv.FormatInt(manifest.Logging.RetentionDays, 10)
 		}
 		if id == "admin" {
 			// 证书巡检每次从本机主机策略缓存读取告警渠道（HostAgent 从 Monitor 同步）。

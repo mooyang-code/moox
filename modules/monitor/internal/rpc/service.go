@@ -28,6 +28,7 @@ type Options struct {
 type Service struct {
 	alerts           *store.AlertRepository
 	notifications    *store.NotificationRepository
+	logs             *store.LogRecordRepository
 	hostWatchdog     config.HostWatchdogConfig
 	hostStore        *hostmetrics.Store
 	hostReader       *hostmetrics.StorageReader
@@ -44,6 +45,7 @@ func New(repos *store.Repositories, opts Options) *Service {
 	return &Service{
 		alerts:           repos.Alerts,
 		notifications:    repos.Notifications,
+		logs:             repos.Logs,
 		hostWatchdog:     opts.HostWatchdog,
 		hostStore:        opts.HostStore,
 		hostReader:       opts.HostReader,

@@ -150,3 +150,19 @@ tencent_scf:
 		})
 	}
 }
+
+// 日志保留天数由部署工具经环境变量下发；没有设置或不是正整数时保持配置文件里的值。
+func TestApplyEnvOverridesCLSRetentionDays(t *testing.T) {
+	cfg := Default()
+	if cfg.CLS.RetentionDays != 2 {
+		t.Fatalf("默认保留天数 = %d，应为 2", cfg.CLS.RetentionDays)
+	}
+	for value, want := range map[string]int64{"7": 7, "0": 2, "abc": 2, "": 2} {
+		cfg := Default()
+		t.Setenv("MOOX_CLS_RETENTION_DAYS", value)
+		cfg.applyEnv()
+		if cfg.CLS.RetentionDays != want {
+			t.Fatalf("MOOX_CLS_RETENTION_DAYS=%q 时保留天数 = %d，应为 %d", value, cfg.CLS.RetentionDays, want)
+		}
+	}
+}

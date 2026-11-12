@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"errors"
-	"log"
 	"sort"
 	"strings"
 	"time"
@@ -13,6 +12,8 @@ import (
 	cpebble "github.com/cockroachdb/pebble"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"google.golang.org/protobuf/proto"
+
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // commitMarkerPrefix 下按数据集存放 commit 标记：键为 __commit/<space>/<dataset>/<sha256(commit_id)>，值为内容摘要。
@@ -42,7 +43,7 @@ func (s *Store) UpsertFields(ctx context.Context, spaceID, datasetID, commitID s
 		if committedAt.IsZero() || time.Since(started) < writeLogThreshold {
 			return
 		}
-		log.Printf("storage node 写入 dataset=%s 行=%d commit=%t 规整=%s 准备=%s 等锁=%s 提交=%s 合计=%s",
+		log.Infof("storage node 写入 dataset=%s 行=%d commit=%t 规整=%s 准备=%s 等锁=%s 提交=%s 合计=%s",
 			datasetID, len(rows), commitID != "", normalizedAt.Sub(started).Round(time.Millisecond), preparedAt.Sub(normalizedAt).Round(time.Millisecond),
 			lockedAt.Sub(preparedAt).Round(time.Millisecond), committedAt.Sub(lockedAt).Round(time.Millisecond), time.Since(started).Round(time.Millisecond))
 	}()

@@ -9,6 +9,7 @@ require (
 	github.com/mooyang-code/moox/modules/archive/proto/archivegen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/modules/collector/proto/collectorgen v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/modules/storage/proto/storagegen v0.0.0-00010101000000-000000000000
+	github.com/mooyang-code/moox/packages/clsreporter v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/commonpb v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/frequency v0.0.0-00010101000000-000000000000
 	github.com/mooyang-code/moox/packages/gatewayauth v0.0.0-00010101000000-000000000000
@@ -29,55 +30,8 @@ require (
 	trpc.group/trpc-go/trpc-filter/recovery v1.0.0
 	trpc.group/trpc-go/trpc-filter/validation v1.0.1
 	trpc.group/trpc-go/trpc-go v1.0.4
-	trpc.group/trpc-go/trpc-log-cls v1.0.0
 	trpc.group/trpc-go/trpc-metrics-prometheus v1.0.0
 )
-
-replace github.com/mooyang-code/moox/modules/storage/proto/storagegen => ../storage/proto/storagegen
-
-replace github.com/mooyang-code/moox/modules/strategy/proto/strategygen => ../strategy/proto/strategygen
-
-replace github.com/mooyang-code/moox/packages/commonpb => ../../packages/commonpb
-
-replace github.com/mooyang-code/moox/packages/healthz => ../../packages/healthz
-
-replace github.com/mooyang-code/moox/packages/jetstream => ../../packages/jetstream
-
-replace github.com/mooyang-code/moox/packages/events => ../../packages/events
-
-replace github.com/mooyang-code/moox/packages/metricspb => ../../packages/metricspb
-
-replace github.com/mooyang-code/moox/packages/report => ../../packages/report
-
-replace github.com/mooyang-code/moox/packages/frequency => ../../packages/frequency
-
-replace github.com/mooyang-code/moox/packages/storagepolicy => ../../packages/storagepolicy
-
-replace github.com/mooyang-code/moox/packages/storagepb => ../../packages/storagepb
-
-replace github.com/mooyang-code/moox/packages/gatewayclient => ../../packages/gatewayclient
-
-replace github.com/mooyang-code/moox/packages/servicecatalog => ../../packages/servicecatalog
-
-replace github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen => ../../packages/gatewayroute/proto/gatewayroutegen
-
-replace github.com/mooyang-code/moox/packages/marketfetchpb => ../../packages/marketfetchpb
-
-replace github.com/mooyang-code/moox/packages/tradeeventpb => ../../packages/tradeeventpb
-
-replace github.com/mooyang-code/moox/packages/requestauth => ../../packages/requestauth
-
-replace github.com/mooyang-code/moox/packages/security => ../../packages/security
-
-replace github.com/mooyang-code/moox/packages/hostmetricpb => ../../packages/hostmetricpb
-
-replace github.com/mooyang-code/moox/packages/gatewayauth => ../../packages/gatewayauth
-
-replace github.com/mooyang-code/moox/modules/archive/proto/archivegen => ./proto/archivegen
-
-replace github.com/mooyang-code/moox/modules/collector/proto/collectorgen => ../collector/proto/collectorgen
-
-replace github.com/mooyang-code/moox/packages/timerjob => ../../packages/timerjob
 
 require (
 	github.com/BurntSushi/toml v1.6.0 // indirect
@@ -133,7 +87,7 @@ require (
 	github.com/rs/xid v1.6.0 // indirect
 	github.com/smartystreets/assertions v1.2.0 // indirect
 	github.com/spf13/cast v1.5.1 // indirect
-	github.com/tencentcloud/tencentcloud-cls-sdk-go v0.0.0-20211222035622-e30dab6428ed // indirect
+	github.com/tencentcloud/tencentcloud-cls-sdk-go v1.0.11 // indirect
 	github.com/tinylib/msgp v1.6.4 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasthttp v1.77.0 // indirect
@@ -159,4 +113,52 @@ require (
 	trpc.group/trpc/trpc-protocol/pb/go/trpc v1.0.1 // indirect
 )
 
+replace github.com/mooyang-code/moox/modules/storage/proto/storagegen => ../storage/proto/storagegen
+
+replace github.com/mooyang-code/moox/modules/strategy/proto/strategygen => ../strategy/proto/strategygen
+
+replace github.com/mooyang-code/moox/packages/commonpb => ../../packages/commonpb
+
+replace github.com/mooyang-code/moox/packages/healthz => ../../packages/healthz
+
+replace github.com/mooyang-code/moox/packages/jetstream => ../../packages/jetstream
+
+replace github.com/mooyang-code/moox/packages/events => ../../packages/events
+
+replace github.com/mooyang-code/moox/packages/metricspb => ../../packages/metricspb
+
+replace github.com/mooyang-code/moox/packages/report => ../../packages/report
+
+replace github.com/mooyang-code/moox/packages/frequency => ../../packages/frequency
+
+replace github.com/mooyang-code/moox/packages/storagepolicy => ../../packages/storagepolicy
+
+replace github.com/mooyang-code/moox/packages/storagepb => ../../packages/storagepb
+
+replace github.com/mooyang-code/moox/packages/gatewayclient => ../../packages/gatewayclient
+
+replace github.com/mooyang-code/moox/packages/servicecatalog => ../../packages/servicecatalog
+
+replace github.com/mooyang-code/moox/packages/gatewayroute/proto/gatewayroutegen => ../../packages/gatewayroute/proto/gatewayroutegen
+
+replace github.com/mooyang-code/moox/packages/marketfetchpb => ../../packages/marketfetchpb
+
+replace github.com/mooyang-code/moox/packages/tradeeventpb => ../../packages/tradeeventpb
+
+replace github.com/mooyang-code/moox/packages/requestauth => ../../packages/requestauth
+
+replace github.com/mooyang-code/moox/packages/security => ../../packages/security
+
+replace github.com/mooyang-code/moox/packages/hostmetricpb => ../../packages/hostmetricpb
+
+replace github.com/mooyang-code/moox/packages/gatewayauth => ../../packages/gatewayauth
+
+replace github.com/mooyang-code/moox/modules/archive/proto/archivegen => ./proto/archivegen
+
+replace github.com/mooyang-code/moox/modules/collector/proto/collectorgen => ../collector/proto/collectorgen
+
+replace github.com/mooyang-code/moox/packages/timerjob => ../../packages/timerjob
+
 replace github.com/mooyang-code/moox/packages/wirecompress => ../../packages/wirecompress
+
+replace github.com/mooyang-code/moox/packages/clsreporter => ../../packages/clsreporter

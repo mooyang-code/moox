@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"log"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,6 +20,8 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"trpc.group/trpc-go/trpc-go/client"
+
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 type PeriodMetadataClient interface {
@@ -91,7 +92,7 @@ func (s *Service) applyPeriodCompletion(ctx context.Context, message *eventpb.Ev
 		}
 		if recorded := rsp.GetState(); recorded != nil && recorded.GetEventId() != message.GetEventId() {
 			// 该周期已由更早的上报决定并发布了就绪，这次重复上报不改变任何东西。
-			log.Printf("storage view 忽略重复的周期上报 space=%s view=%s dataset=%s freq=%s period=%d event=%s recorded_event=%s",
+			log.Warnf("storage view 忽略重复的周期上报 space=%s view=%s dataset=%s freq=%s period=%d event=%s recorded_event=%s",
 				message.GetSpaceId(), view.GetViewId(), completion.datasetID, completion.frequency, completion.periodTime, message.GetEventId(), recorded.GetEventId())
 			continue
 		}
@@ -171,7 +172,7 @@ func (s *Service) applyProducerPeriodCompleted(ctx context.Context, message *eve
 			return eventconsumer.Deferred(ErrViewDataReadyPending)
 		}
 		// 分段耗时：投递滞后 = 完成事件发出到本进程开始处理；入队含围栏与就绪队列落盘；发布含 ViewDataReady 的 JetStream 发布。
-		log.Printf("storage view 写入方周期完成就绪 view=%s period=%d 投递滞后=%s 前置=%s 入队=%s 发布=%s 本事件处理=%s",
+		log.Infof("storage view 写入方周期完成就绪 view=%s period=%d 投递滞后=%s 前置=%s 入队=%s 发布=%s 本事件处理=%s",
 			view.GetViewId(), payload.GetPeriodTime(), handleStart.Sub(message.GetOccurredAt().AsTime()).Round(time.Millisecond), enqueueStart.Sub(handleStart).Round(time.Millisecond),
 			flushStart.Sub(enqueueStart).Round(time.Millisecond), time.Since(flushStart).Round(time.Millisecond), time.Since(handleStart).Round(time.Millisecond))
 	}
@@ -189,7 +190,7 @@ func (s *Service) periodWithoutActiveView(ctx context.Context, spaceID, datasetI
 		return errors.New("View 索引映射尚未就绪")
 	}
 	if managed {
-		log.Printf("storage view 丢弃建索引期间的周期完成事件 space=%s dataset=%s period=%d", spaceID, datasetID, periodTime)
+		log.Warnf("storage view 丢弃建索引期间的周期完成事件 space=%s dataset=%s period=%d", spaceID, datasetID, periodTime)
 	}
 	return nil
 }

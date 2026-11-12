@@ -22,6 +22,7 @@ type Repositories struct {
 	Results         *ResultRepository
 	Alerts          *AlertRepository
 	Notifications   *NotificationRepository
+	Logs            *LogRecordRepository
 }
 
 func NewRepositories(db *gorm.DB) *Repositories {
@@ -33,5 +34,6 @@ func NewRepositories(db *gorm.DB) *Repositories {
 		Results:         NewResultRepository(db),
 		Alerts:          NewAlertRepository(db),
 		Notifications:   NewNotificationRepository(db),
+		Logs:            NewLogRecordRepository(db),
 	}
 }

@@ -4,12 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"google.golang.org/protobuf/proto"
+
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // extendViewSchemasRound 给声明了新列的 View 原地加列，由每分钟的定时任务触发。新列默认为空，不回填。
@@ -25,7 +26,7 @@ func (s *Service) extendViewSchemasRound(ctx context.Context) {
 			err = requireSuccess(rsp.GetRetInfo())
 		}
 		if err != nil {
-			log.Printf("storage view 检查加列时读取 View 失败：%v", err)
+			log.Errorf("storage view 检查加列时读取 View 失败：%v", err)
 			return
 		}
 		for _, view := range rsp.GetViews() {
@@ -38,9 +39,9 @@ func (s *Service) extendViewSchemasRound(ctx context.Context) {
 			engine := s.engines[strings.ToLower(strings.TrimSpace(view.GetEngine()))]
 			extended, err := s.extendViewSchema(ctx, metadata, auth, view, engine, false)
 			if err != nil {
-				log.Printf("storage view 加列失败 space=%s view=%s：%v", view.GetSpaceId(), view.GetViewId(), err)
+				log.Errorf("storage view 加列失败 space=%s view=%s：%v", view.GetSpaceId(), view.GetViewId(), err)
 			} else if extended {
-				log.Printf("storage view 加列完成 space=%s view=%s 修订号=%d", view.GetSpaceId(), view.GetViewId(), view.GetViewRevision()+1)
+				log.Infof("storage view 加列完成 space=%s view=%s 修订号=%d", view.GetSpaceId(), view.GetViewId(), view.GetViewRevision()+1)
 			}
 		}
 		if rsp.GetPageResult() == nil || !rsp.GetPageResult().GetHasMore() || len(rsp.GetViews()) == 0 {

@@ -120,6 +120,8 @@ $S catalog-changed --host control                    # 用台账里最近一次 
 4. 外部白名单有变化时，再装存储机与海外机的 `access`（构建目标 `access`，一台一台来）。
 5. 核对：Admin 数据库的 `t_host_gateway_status` 里所有已启用主机 `c_expected_hash == c_applied_hash` 且 `c_last_error` 为空；Monitor 日志每分钟有 `monitor deployment sync updated N checks`、没有 `catalog differs`。
 
+第一次升级到带重要日志的版本时，另有 EventBus 用户表和 `writer: cls` 两项前置检查，见 [`docs/部署与运维.md`](../../../docs/部署与运维.md) 的“已有环境升级到带重要日志的版本”。
+
 只想发布别的改动、而目录改动还不想发布时，在构建树里去掉目录改动再构建（不要把半截目录发出去）。
 
 ## 主机守护（crontab）与 `moox-runtime`
@@ -192,7 +194,9 @@ for r in c.execute("select c_rule_id, c_status, c_triggered_at from t_monitor_al
 EOF
 ```
 
-3. 日志：`/data/moox/run/logs/<组件>.log` 里看新进程启动之后有没有 error/panic；Storage 的日志可能含非 UTF-8 字节，用 `grep -a`。
+3. 日志：用 `moox-cli monitor logs --component <组件> --from <发布时刻>` 看新进程启动之后的记录。**先确认里面有这次启动的 `process_started`**：它同时证明新二进制已经在跑、EventBus 的发布权限没问题、Monitor 入库正常。
+   看不到它时不能当成“没有错误”：可能是这个组件没有接入重要日志（见 `docs/模块/监控.md` 的接入范围），或者链路没通。有了它再看之后有没有错误；
+   崩溃信息（panic）只在标准输出 `/data/moox/run/logs/<组件>.log` 里，也要看一眼。各组件的完整日志在 `<发布目录>/<组件>/logs/trpc.log`（trade 是 `log/trpc_trade.log`），可能含非 UTF-8 字节，用 `grep -a`。
 4. 功能验证：用只读或无副作用的调用验证新行为（例如 `--dry-run`、对不存在的对象做一次空操作），不要用真实数据做试验。
 
 ## 陷阱清单

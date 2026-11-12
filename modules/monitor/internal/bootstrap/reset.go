@@ -11,7 +11,7 @@ import (
 
 // Monitor 的重置（设计 5.2）。
 //
-//	data：清运行数据——探测结果、网关观测、主机代理登记、告警状态与事件、指标序列与最新值、入库消息、数据到达记录、组件健康、任务清单、标的首见；
+//	data：清运行数据——探测结果、网关观测、主机代理登记、告警状态与事件、指标序列与最新值、入库消息、数据到达记录、组件健康、任务清单、标的首见、重要日志；
 //	      保留探测定义与拓扑、告警规则、指标服务登记（配置）；
 //	all ：再清探测定义与拓扑、告警规则、指标服务登记（它们由服务目录和策略文件在启动与部署同步时重新生成）。
 //
@@ -22,7 +22,7 @@ var (
 	monitorDataTables = []string{
 		"t_monitor_check_results", "t_monitor_gateway_observations", "t_monitor_host_agents", "t_monitor_alert_states", "t_monitor_alert_events",
 		"t_monitor_metric_series", "t_monitor_metric_latest", "t_monitor_metric_ingest_messages", "t_monitor_bar_arrivals",
-		"t_monitor_component_health", "t_monitor_task_inventory", "t_monitor_subject_first_seen",
+		"t_monitor_component_health", "t_monitor_task_inventory", "t_monitor_subject_first_seen", "t_monitor_log_records",
 	}
 	monitorConfigTables = []string{
 		"t_monitor_topology", "t_monitor_checks", "t_monitor_alert_rules", "t_monitor_metric_services",

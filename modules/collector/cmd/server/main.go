@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/mooyang-code/moox/modules/collector/internal/bootstrap"
+	_ "github.com/mooyang-code/moox/packages/clsreporter/logcls"
 	"github.com/mooyang-code/moox/packages/healthz/trpclog"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"
 	_ "trpc.group/trpc-go/trpc-filter/recovery"

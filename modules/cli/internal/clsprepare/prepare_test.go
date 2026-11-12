@@ -307,7 +307,7 @@ func TestProvisionEnsuresIndexFieldsAndWritesNoCredentialFile(t *testing.T) {
 	var got []tencent.CLSIndexField
 	result, err := Provision(context.Background(), source, func(string, string) (tencent.CLSAPI, error) {
 		return fieldRecordingCLS{fields: &got}, nil
-	}, "")
+	}, "", 0)
 	require.NoError(t, err)
 	require.Equal(t, "topic-1", result.TopicID)
 	require.True(t, result.IndexFieldsChanged)
@@ -317,7 +317,35 @@ func TestProvisionEnsuresIndexFieldsAndWritesNoCredentialFile(t *testing.T) {
 func TestProvisionHidesUpstreamErrorText(t *testing.T) {
 	_, err := Provision(context.Background(), testSource(), func(string, string) (tencent.CLSAPI, error) {
 		return failingCLS{err: errors.New("SecretId=AKIDleak")}, nil
-	}, "")
+	}, "", 0)
 	require.Error(t, err)
 	require.NotContains(t, err.Error(), "AKID")
+}
+
+// newTopicCLS 模拟主题还不存在：记录建主题时用的保留天数。
+type newTopicCLS struct {
+	fakeCLS
+	retention *int64
+}
+
+func (newTopicCLS) FindTopic(context.Context, string, string) (tencent.CLSTopic, bool, error) {
+	return tencent.CLSTopic{}, false, nil
+}
+
+func (f newTopicCLS) CreateTopic(_ context.Context, opts tencent.CLSCreateTopicOptions) (tencent.CLSTopic, string, error) {
+	*f.retention = opts.RetentionDays
+	return tencent.CLSTopic{ID: "topic-new", LogsetID: opts.LogsetID, Name: opts.Name}, "request-topic", nil
+}
+
+func (newTopicCLS) CreateIndex(context.Context, string) (string, error) { return "request-index", nil }
+
+func TestProvisionCreatesTopicWithConfiguredRetention(t *testing.T) {
+	for _, tc := range []struct{ configured, want int64 }{{7, 7}, {0, RetentionDays}} {
+		var got int64
+		_, err := Provision(context.Background(), testSource(), func(string, string) (tencent.CLSAPI, error) {
+			return newTopicCLS{retention: &got}, nil
+		}, "", tc.configured)
+		require.NoError(t, err)
+		require.Equal(t, tc.want, got)
+	}
 }

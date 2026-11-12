@@ -3,11 +3,12 @@ package view
 import (
 	"context"
 	"errors"
-	"log"
 	"sort"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
+
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // 每分钟的定时任务：第 10 秒触发（避开整点前后的周期提交与策略读取高峰），先给声明了新列的 View 原地加列，
@@ -48,7 +49,7 @@ func (s *Service) StartMinuteTasks(ctx context.Context, opts DeleteOldestOptions
 	if now == nil {
 		now = time.Now
 	}
-	log.Printf("storage view 定时任务已启动：每分钟第 10 秒检查加列，偶数分钟删除最旧数据，每批最多 %d 行、%d 个序列，每个索引每轮最多 %d 行",
+	log.Infof("storage view 定时任务已启动：每分钟第 10 秒检查加列，偶数分钟删除最旧数据，每批最多 %d 行、%d 个序列，每个索引每轮最多 %d 行",
 		opts.BatchSize, deleteOldestSeriesPerBatch, opts.BatchSize*deleteOldestRoundRowsFactor)
 	loopCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
@@ -142,13 +143,13 @@ func (s *Service) deleteOldestRound(ctx context.Context, batchSize int) {
 		}
 		n, err := s.deleteOldestFromIndex(ctx, target, bars, batchSize)
 		if err != nil {
-			log.Printf("storage view 删除最旧数据失败 space=%s view=%s index=%s：%v", target.ref.spaceID, target.ref.viewID, target.indexID, err)
+			log.Errorf("storage view 删除最旧数据失败 space=%s view=%s index=%s：%v", target.ref.spaceID, target.ref.viewID, target.indexID, err)
 		}
 		deleted += n
 	}
 	s.metrics.ObserveViewOldestDeleteRound(time.Now())
 	if deleted > 0 {
-		log.Printf("storage view 删除最旧数据本轮完成：检查 %d 个时序索引，共删除 %d 行", len(targets), deleted)
+		log.Infof("storage view 删除最旧数据本轮完成：检查 %d 个时序索引，共删除 %d 行", len(targets), deleted)
 	}
 }
 
@@ -190,7 +191,7 @@ func (s *Service) deleteOldestFromIndex(ctx context.Context, target deleteOldest
 		maxHeld = max(maxHeld, held)
 		s.metrics.ObserveViewOldestRowsDeleted(target.ref.spaceID, target.ref.viewID, n, held)
 		if held >= slowDeleteOldestBatch {
-			log.Printf("storage view 删除最旧数据单批持锁较久 space=%s view=%s 序列=%d 行=%d 持锁=%s", target.ref.spaceID, target.ref.viewID, len(cuts), n, held.Round(time.Millisecond))
+			log.Warnf("storage view 删除最旧数据单批持锁较久 space=%s view=%s 序列=%d 行=%d 持锁=%s", target.ref.spaceID, target.ref.viewID, len(cuts), n, held.Round(time.Millisecond))
 		}
 		if n == 0 {
 			break
@@ -217,7 +218,7 @@ func (s *Service) deleteOldestFromIndex(ctx context.Context, target deleteOldest
 	s.refreshCachedCoverageFrom(target, from, bars)
 	if int(deleted) >= roundCap {
 		// 达到一轮上限说明还有积压（首次删到保留根数，或删除跟不上写入），剩余部分留到下一轮。
-		log.Printf("storage view 删除最旧数据本轮达到上限 space=%s view=%s 行=%d 用时=%s 单批最长持锁=%s", target.ref.spaceID, target.ref.viewID, deleted, time.Since(began).Round(time.Millisecond), maxHeld.Round(time.Millisecond))
+		log.Warnf("storage view 删除最旧数据本轮达到上限 space=%s view=%s 行=%d 用时=%s 单批最长持锁=%s", target.ref.spaceID, target.ref.viewID, deleted, time.Since(began).Round(time.Millisecond), maxHeld.Round(time.Millisecond))
 	}
 	return deleted, roundErr
 }

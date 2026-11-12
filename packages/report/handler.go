@@ -14,6 +14,7 @@ import (
 	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/mooyang-code/moox/packages/metricspb"
+	"github.com/mooyang-code/moox/packages/report/logsink"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
@@ -118,7 +119,15 @@ func (h *Handler) flush() {
 }
 
 func NewHandler(cfg Config) (*Handler, error) {
-	return newHandler(cfg, prometheus.DefaultRegisterer, prometheus.DefaultGatherer)
+	handler, err := newHandler(cfg, prometheus.DefaultRegisterer, prometheus.DefaultGatherer)
+	if err != nil {
+		return nil, err
+	}
+	// 常驻服务顺带把重要日志接到 EventBus。只在这里接：云函数和 moox-cli 走 NewHandlerWithRegistry，不接。
+	attachLogSink(handler.cfg)
+	// 每次启动记一条关键事件：重要日志里能看出进程什么时候重启过、是哪个版本。
+	logsink.Important(trpc.BackgroundContext(), "process_started", "%s 启动（版本 %s，启动号 %s）", handler.cfg.ServiceName, handler.cfg.Version, handler.cfg.BootID)
+	return handler, nil
 }
 
 // NewHandlerWithRegistry is the SCF Sentinel mode: the caller owns the
@@ -349,7 +358,12 @@ func (h *Handler) publisher(ctx context.Context) (Publisher, error) {
 }
 
 func connect(ctx context.Context, cfg Config) (Publisher, error) {
-	jsConfig := jetstream.ConfigFromEnv(strings.Split(cfg.EventBusURL, ","), "moox-"+cfg.ServiceName+"-metrics")
+	return connectAs(ctx, cfg, "moox-"+cfg.ServiceName+"-metrics")
+}
+
+// connectAs 用指标上报的地址与凭据建立一条连接，clientName 是它在 EventBus 上显示的名字。
+func connectAs(ctx context.Context, cfg Config, clientName string) (Publisher, error) {
+	jsConfig := jetstream.ConfigFromEnv(strings.Split(cfg.EventBusURL, ","), clientName)
 	if strings.TrimSpace(cfg.CredentialFile) != "" {
 		if err := jsConfig.ApplyCredentialFile(jetstream.ExpandCredentialPath(cfg.CredentialFile)); err != nil {
 			return nil, fmt.Errorf("load metrics publisher credential: %w", err)

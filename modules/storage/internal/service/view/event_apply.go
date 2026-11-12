@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
@@ -16,6 +15,8 @@ import (
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	"github.com/mooyang-code/moox/packages/storagepb"
 	"google.golang.org/protobuf/proto"
+
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // liveIndexWriteTimeout 是单次 DuckDB 实时写入专用的时间预算。JetStream 投递到达时，常因前一个索引占着写锁而只剩
@@ -88,7 +89,7 @@ func logRowsApply(first *eventpb.EventMessage, events, rows int, handleStart, ap
 	if first != nil && first.GetOccurredAt() != nil {
 		lag = handleStart.Sub(first.GetOccurredAt().AsTime())
 	}
-	log.Printf("storage view 行事件 dataset=%s 事件=%d 行=%d 投递滞后=%s 解码=%s 写索引=%s 围栏落盘=%s 刷新就绪=%s 本事件处理=%s",
+	log.Infof("storage view 行事件 dataset=%s 事件=%d 行=%d 投递滞后=%s 解码=%s 写索引=%s 围栏落盘=%s 刷新就绪=%s 本事件处理=%s",
 		first.GetSubjectId(), events, rows, lag.Round(time.Millisecond), applyStart.Sub(handleStart).Round(time.Millisecond),
 		fenceStart.Sub(applyStart).Round(time.Millisecond), flushStart.Sub(fenceStart).Round(time.Millisecond),
 		time.Since(flushStart).Round(time.Millisecond), total.Round(time.Millisecond))
@@ -98,7 +99,7 @@ func logRowsApply(first *eventpb.EventMessage, events, rows int, handleStart, ap
 // 后台重试补发，不能让行事件因此失败重投。
 func (s *Service) flushReadyAfterRows(ctx context.Context, spaceID string) {
 	if err := s.FlushViewDataReady(ctx, spaceID, ""); err != nil {
-		log.Printf("行写入后刷新 View 就绪队列失败（空间 %s），稍后重试：%v", spaceID, err)
+		log.Warnf("行写入后刷新 View 就绪队列失败（空间 %s），稍后重试：%v", spaceID, err)
 	}
 }
 
@@ -198,7 +199,7 @@ func (s *Service) applyDatasetEvent(ctx context.Context, spaceID, datasetID stri
 		}
 		writtenRows, err := s.applyEventToIndex(ctx, target, datasetID, rows)
 		if err != nil {
-			log.Printf("storage view 索引写入失败 space=%s view=%s index=%s dataset=%s: %v", viewKey.spaceID, viewKey.viewID, target, datasetID, err)
+			log.Errorf("storage view 索引写入失败 space=%s view=%s index=%s dataset=%s: %v", viewKey.spaceID, viewKey.viewID, target, datasetID, err)
 			runtime.mu.Unlock()
 			return err
 		}
@@ -295,7 +296,7 @@ func (s *Service) applyEventToIndex(ctx context.Context, id, datasetID string, r
 	}
 	if total := time.Since(applyStart); total >= slowIndexApplyLog {
 		// 分段耗时：准备 = 校验与构造写入；补读 = 从 Primary 补全缺列的行；写入 = 等索引写锁与 DuckDB 事务。
-		log.Printf("storage view 行写入索引较慢 index=%s dataset=%s 开始于=%s 行=%d 写入行=%d 补读行=%d 准备=%s 补读=%s 写入=%s 合计=%s",
+		log.Warnf("storage view 行写入索引较慢 index=%s dataset=%s 开始于=%s 行=%d 写入行=%d 补读行=%d 准备=%s 补读=%s 写入=%s 合计=%s",
 			id, datasetID, applyStart.Format("15:04:05.000"), len(rows), len(complete), len(incomplete), recoverStart.Sub(applyStart).Round(time.Millisecond),
 			writeStart.Sub(recoverStart).Round(time.Millisecond), time.Since(writeStart).Round(time.Millisecond), total.Round(time.Millisecond))
 	}
@@ -400,7 +401,7 @@ func (s *Service) observeViewWatermark(indexID, datasetID string, rows []*pb.Row
 			SpaceID: spaceID, ViewID: viewID, DatasetID: datasetID, SubjectID: key.subjectID,
 			Frequency: key.frequency, SeriesTag: key.seriesTag, DataTime: dataTime,
 		}); err != nil {
-			log.Printf("storage view 数据集输出观测失败 space=%s view=%s dataset=%s subject=%s freq=%s series_tag=%s: %v", spaceID, viewID, datasetID, key.subjectID, key.frequency, key.seriesTag, err)
+			log.Warnf("storage view 数据集输出观测失败 space=%s view=%s dataset=%s subject=%s freq=%s series_tag=%s: %v", spaceID, viewID, datasetID, key.subjectID, key.frequency, key.seriesTag, err)
 		}
 	}
 }

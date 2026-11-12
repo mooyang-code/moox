@@ -354,17 +354,17 @@ func defaultSetupProvisionCLS(ctx context.Context, snapshot *setupconfig.Snapsho
 	}
 	defer gateway.Close()
 	client := &adminclient.Client{Gateway: gateway}
-	return provisionSetupCLS(ctx, client, defaultCLSFactory, snapshot.Manifest.SCFCloudAccount().AccountID), nil
+	return provisionSetupCLS(ctx, client, defaultCLSFactory, snapshot.Manifest.SCFCloudAccount().AccountID, snapshot.Manifest.Logging.RetentionDays), nil
 }
 
 func defaultCLSFactory(secretID, secretKey string) (tencent.CLSAPI, error) {
 	return tencent.NewCLSSDKAPI(tencent.CLSSDKOptions{SecretID: secretID, SecretKey: secretKey, Region: clsprepare.Region, Endpoint: "cls.tencentcloudapi.com"})
 }
 
-func provisionSetupCLS(ctx context.Context, source clsprepare.AccountSource, factory clsprepare.Factory, accountID string) *setupCLSSummary {
+func provisionSetupCLS(ctx context.Context, source clsprepare.AccountSource, factory clsprepare.Factory, accountID string, retentionDays int64) *setupCLSSummary {
 	provisionCtx, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
-	result, err := clsprepare.Provision(provisionCtx, source, factory, accountID)
+	result, err := clsprepare.Provision(provisionCtx, source, factory, accountID, retentionDays)
 	if err != nil {
 		// 错误文本已由 clsprepare 脱敏，只带操作名。
 		return &setupCLSSummary{Enabled: true, Status: "failed", Region: clsprepare.Region, Warning: err.Error()}

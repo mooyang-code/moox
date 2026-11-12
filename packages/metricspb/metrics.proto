@@ -29,3 +29,30 @@ message MetricReport {
   uint64 sequence = 6;
   MetricSnapshot snapshot = 7;
 }
+
+// LogRecord 是一条重要日志：Error 及以上级别，或代码里显式标出的关键事件。
+message LogRecord {
+  // sequence 在一次进程启动内递增，和 LogReport 的 boot_id 一起唯一确定一条记录（重复投递靠它去重）。
+  uint64 sequence = 1;
+  int64 time_unix_nano = 2;
+  // level：debug、info、warn、error、fatal。
+  string level = 3;
+  // event 是关键事件的名称；普通的错误日志为空。
+  string event = 4;
+  string message = 5;
+  // caller 是打日志的代码位置（包/文件:行号）。
+  string caller = 6;
+  // fields 是日志带的结构化字段，值一律转成字符串。
+  map<string, string> fields = 7;
+  // merged_count 大于 0 表示在这条之前，同一代码位置另有这么多条日志因为太密被合并掉了。
+  uint32 merged_count = 8;
+}
+
+// LogReport 是一个进程上报的一批重要日志。
+message LogReport {
+  string service_name = 1;
+  string instance_id = 2;
+  string node_id = 3;
+  string boot_id = 4;
+  repeated LogRecord records = 5;
+}

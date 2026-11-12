@@ -12,6 +12,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/collector/internal/streamapp"
 	collectorpb "github.com/mooyang-code/moox/modules/collector/proto/collectorgen"
+	_ "github.com/mooyang-code/moox/packages/clsreporter/logcls"
 	"github.com/mooyang-code/moox/packages/healthz"
 	"github.com/mooyang-code/moox/packages/healthz/trpclog"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"
@@ -31,7 +32,6 @@ func main() {
 	framework := flag.String("conf", "config/trpc_go.yaml", "tRPC framework configuration")
 	flag.Parse()
 	trpc.ServerConfigPath = *framework
-	trpclog.InstallServiceName("collector-stream")
 	cfg, err := streamapp.Load(*path)
 	if err != nil {
 		log.Fatal(err)
@@ -59,6 +59,8 @@ func run(ctx context.Context, cfg *streamapp.Config) error {
 	defer app.Close()
 	drain := &healthz.DrainGate{}
 	server := trpc.NewServer(trpcserver.WithFilter(drain.Filter()))
+	// 要在 NewServer 之后装：NewServer 读配置时会换掉默认的日志对象。
+	trpclog.InstallServiceName("collector-stream")
 	executor := server.Service("trpc.moox.collector.MarketFetchExecutor")
 	if executor == nil {
 		return errors.New("trpc_go.yaml 缺少 trpc.moox.collector.MarketFetchExecutor 服务")

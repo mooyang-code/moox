@@ -5,7 +5,6 @@ import (
 	"crypto/hmac"
 	"errors"
 	"fmt"
-	"log"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -22,6 +21,8 @@ import (
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/storagepolicy"
 	"google.golang.org/protobuf/proto"
+
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 type Service struct {
@@ -260,7 +261,7 @@ func (s *Service) writeIndex(ctx context.Context, indexID string, engine viewind
 	}
 	defer release()
 	if wait := time.Since(gateStart); wait >= 100*time.Millisecond {
-		log.Printf("storage view 索引写锁等待较久 index=%s 等待=%s", indexID, wait.Round(time.Millisecond))
+		log.Warnf("storage view 索引写锁等待较久 index=%s 等待=%s", indexID, wait.Round(time.Millisecond))
 	}
 	// 所有写入路径（实时事件、补采、首次回填）都经过这里，统一丢弃超过最长保留期的行。
 	if batch.RowWrites = s.dropExpiredWrites(indexID, batch.RowWrites); len(batch.RowWrites) == 0 {

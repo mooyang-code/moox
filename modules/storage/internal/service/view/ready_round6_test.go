@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +11,8 @@ import (
 
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/jetstream"
+
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 // 记录位置只改内存并标脏；落盘只在有新的更新时进行，不再每条行事件都写文件。
@@ -67,12 +68,32 @@ func TestOpenReadyFenceRemovesLeftoverTempFiles(t *testing.T) {
 	}
 }
 
-// captureLog 在测试期间截获标准 log 的输出。
+// bufferLogger 把 Info、Warn、Error 的内容写进缓冲区，其余方法沿用原来的日志对象。
+type bufferLogger struct {
+	log.Logger
+	buf *bytes.Buffer
+}
+
+func (l bufferLogger) Info(args ...interface{}) { fmt.Fprintln(l.buf, args...) }
+func (l bufferLogger) Infof(format string, args ...interface{}) {
+	fmt.Fprintf(l.buf, format+"\n", args...)
+}
+func (l bufferLogger) Warn(args ...interface{}) { fmt.Fprintln(l.buf, args...) }
+func (l bufferLogger) Warnf(format string, args ...interface{}) {
+	fmt.Fprintf(l.buf, format+"\n", args...)
+}
+func (l bufferLogger) Error(args ...interface{}) { fmt.Fprintln(l.buf, args...) }
+func (l bufferLogger) Errorf(format string, args ...interface{}) {
+	fmt.Fprintf(l.buf, format+"\n", args...)
+}
+
+// captureLog 在测试期间截获 tRPC 日志的输出。
 func captureLog(t *testing.T) *bytes.Buffer {
 	t.Helper()
 	var buf bytes.Buffer
-	log.SetOutput(&buf)
-	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	previous := log.GetDefaultLogger()
+	log.SetLogger(bufferLogger{Logger: previous, buf: &buf})
+	t.Cleanup(func() { log.SetLogger(previous) })
 	return &buf
 }
 

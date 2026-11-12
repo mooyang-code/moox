@@ -4,13 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+
+	"trpc.group/trpc-go/trpc-go/log"
 )
 
 const defaultRetiredIndexAge = time.Minute
@@ -227,7 +228,7 @@ func (s *Service) observeCleanupCandidates(now time.Time, age time.Duration, phy
 	for ref := range physical {
 		if cleanupIndexProtected(protected, ref) {
 			if _, ok := s.cleanupCandidates[ref]; ok {
-				log.Printf("storage view cleanup candidate cancelled engine=%s index_id=%s reason=referenced_again", ref.engine, ref.indexID)
+				log.Infof("storage view cleanup candidate cancelled engine=%s index_id=%s reason=referenced_again", ref.engine, ref.indexID)
 			}
 			delete(s.cleanupCandidates, ref)
 			continue
@@ -236,7 +237,7 @@ func (s *Service) observeCleanupCandidates(now time.Time, age time.Duration, phy
 		if !exists {
 			candidate = retiredIndexCandidate{firstSeen: now, lastSeen: now}
 			s.cleanupCandidates[ref] = candidate
-			log.Printf("storage view cleanup candidate discovered engine=%s index_id=%s first_seen=%s", ref.engine, ref.indexID, candidate.firstSeen.Format(time.RFC3339Nano))
+			log.Infof("storage view cleanup candidate discovered engine=%s index_id=%s first_seen=%s", ref.engine, ref.indexID, candidate.firstSeen.Format(time.RFC3339Nano))
 			continue
 		}
 		candidate.lastSeen = now
@@ -311,7 +312,7 @@ func (s *Service) removeRetiredIndex(ctx context.Context, ref managedIndexRef, e
 		return nil
 	}
 	if err := engine.Remove(ctx, ref.indexID); err != nil {
-		log.Printf("storage view cleanup delete failed engine=%s index_id=%s age=%s err=%v", ref.engine, ref.indexID, candidate.lastSeen.Sub(candidate.firstSeen), err)
+		log.Errorf("storage view cleanup delete failed engine=%s index_id=%s age=%s err=%v", ref.engine, ref.indexID, candidate.lastSeen.Sub(candidate.firstSeen), err)
 		return fmt.Errorf("remove retired view index engine=%s index_id=%s: %w", ref.engine, ref.indexID, err)
 	}
 
@@ -321,7 +322,7 @@ func (s *Service) removeRetiredIndex(ctx context.Context, ref managedIndexRef, e
 		s.forgetIndexLocked(ref.indexID)
 	}
 	s.mu.Unlock()
-	log.Printf("storage view cleanup deleted engine=%s index_id=%s first_seen=%s", ref.engine, ref.indexID, candidate.firstSeen.Format(time.RFC3339Nano))
+	log.Infof("storage view cleanup deleted engine=%s index_id=%s first_seen=%s", ref.engine, ref.indexID, candidate.firstSeen.Format(time.RFC3339Nano))
 	return nil
 }
 
@@ -340,7 +341,7 @@ func (s *Service) cancelCleanupCandidate(ref managedIndexRef, reason string) {
 	delete(s.cleanupCandidates, ref)
 	s.mu.Unlock()
 	if ok {
-		log.Printf("storage view cleanup candidate cancelled engine=%s index_id=%s reason=%s", ref.engine, ref.indexID, reason)
+		log.Infof("storage view cleanup candidate cancelled engine=%s index_id=%s reason=%s", ref.engine, ref.indexID, reason)
 	}
 }
 

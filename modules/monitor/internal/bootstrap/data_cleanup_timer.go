@@ -26,6 +26,8 @@ type monitorDataCleanupOps struct {
 	pruneArrivals func(context.Context, time.Time) error
 	// pruneChecks 清理失效的业务检查（对象已删除、长期不再被期望的检查及其告警规则与状态，见 stale_checks.go）。
 	pruneChecks func(context.Context, time.Time) error
+	// pruneLogs 清理重要日志：超过保留期的，以及超出行数上限的最旧记录。
+	pruneLogs func(context.Context, time.Time) error
 }
 
 func runMonitorDataCleanup(ctx context.Context, ops monitorDataCleanupOps) error {
@@ -65,6 +67,11 @@ func runMonitorDataCleanup(ctx context.Context, ops monitorDataCleanupOps) error
 			errs = append(errs, fmt.Errorf("prune stale checks: %w", err))
 		}
 	}
+	if ops.pruneLogs != nil {
+		if err := ops.pruneLogs(ctx, now); err != nil {
+			errs = append(errs, fmt.Errorf("prune log records: %w", err))
+		}
+	}
 	return errors.Join(errs...)
 }
 
@@ -89,6 +96,12 @@ func registerMonitorDataCleanupTimer(s *server.Server, cfg *config.Config, runti
 		}
 		ops.deleteAlerts = func(ctx context.Context, cutoff time.Time) error {
 			_, err := runtime.Repositories.Alerts.DeleteEventsOlderThan(ctx, cutoff)
+			return err
+		}
+	}
+	if runtime != nil && runtime.Repositories != nil && runtime.Repositories.Logs != nil {
+		ops.pruneLogs = func(ctx context.Context, now time.Time) error {
+			_, err := runtime.Repositories.Logs.Prune(ctx, now.Add(-logRecordRetention), logRecordMaxRows)
 			return err
 		}
 	}
