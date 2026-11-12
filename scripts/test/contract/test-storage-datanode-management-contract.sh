@@ -70,7 +70,7 @@ require_text modules/storage/proto/metadata.proto 'rpc ActivateDataset' 'explici
 require_text modules/storage/proto/data_node.proto 'service DataNodeRuntime {' 'DataNode runtime service'
 require_text modules/storage/schema/metadata.sql "VALUES ('schema_version', '16')" 'Schema v16'
 require_text config/setup/metadata.yaml 'data_source_id: crypto' 'shared crypto logical DataSource binding'
-require_text config/setup/metadata.yaml 'dataset_id: dataset_stockus_equity_kline_1d' 'seeded stockus equity Dataset'
+require_text config/setup/metadata.yaml 'dataset_id: dataset_mooxsys_host_resource' 'seeded system host Dataset'
 require_text config/setup/metadata.yaml 'series_tag' 'tagged time-series grain'
 if [[ -e modules/storage/config/metadata.seed.yaml ]]; then
   echo 'storage DataNode management contract: duplicate storage metadata seed remains outside config/setup' >&2

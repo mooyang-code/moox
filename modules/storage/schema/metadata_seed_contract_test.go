@@ -3,7 +3,6 @@ package schema
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	frequencypkg "github.com/mooyang-code/moox/packages/frequency"
@@ -109,19 +108,9 @@ func TestDefaultSetupSeedDeclaresCollectorPeriodDatasetOwners(t *testing.T) {
 		require.NotContains(t, indexes, key, "duplicate Dataset identity")
 		indexes[key] = i
 	}
-	owners := []string{
-		"stockus/dataset_stockus_equity_kline_1d",
-	}
-	for _, key := range owners {
-		t.Run(key, func(t *testing.T) {
-			index, found := indexes[key]
-			require.True(t, found, "raw market Dataset is missing")
-			dataset := seed.Datasets[index]
-			require.Equal(t, "time_series", dataset.DataKind)
-			require.True(t, strings.HasSuffix(dataset.DatasetID, "_"+dataset.Freq), "market Dataset ID must end with its freq %q", dataset.Freq)
-			require.Equal(t, "collector", dataset.Attributes["owner_module"])
-			require.Equal(t, "raw_collection", dataset.Attributes["dataset_role"])
-		})
+	// 采集的结果数据集由采集任务派生，种子里不再放原始行情数据集。
+	for _, dataset := range seed.Datasets {
+		require.NotEqual(t, "collector", dataset.Attributes["owner_module"], "种子里不放采集的行情数据集：%s/%s", dataset.SpaceID, dataset.DatasetID)
 	}
 	preserved := map[string]struct{ kind, role string }{
 		"stockcn/dataset_stockcn_financial_statement_metric": {"record", ""},

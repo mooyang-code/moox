@@ -39,6 +39,16 @@ tasks:
   creator: moox-setup
   collect_params:
     frequency: 5m
+# 美股只支持 5m（东方财富），默认绑标普 500，要纳斯达克 100 建任务时用 --tag-id us_ndx；不写 output_fields，与 A 股 5m 一样输出股票行的全部字段。
+- space_id: stockus
+  task_id: dasftksvjhj2jom4vhl0
+  task_name: 美股 K 线 5m
+  data_type: kline
+  tag_ids: [us_spx]
+  enabled: false
+  creator: moox-setup
+  collect_params:
+    frequency: 5m
 # start: manual 的任务 setup start 不会启用，由用户用 moox-cli collector task update --enabled=true 显式启用。
 - space_id: stockcn
   task_id: dasftksvjhj2jom4vhi0
