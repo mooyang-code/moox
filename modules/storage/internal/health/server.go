@@ -26,7 +26,7 @@ type RoleOptions struct {
 	OldestPendingThreshold time.Duration
 }
 
-// SnapshotForRole 将进程存活与流式就绪分开判断：Storage View 绑定 Consumer 后才就绪。
+// SnapshotForRole 将进程存活与就绪分开判断：Storage View 恢复活动索引并开始跟随变更日志后才就绪。
 // 主服务的 Outbox 积压与 EventBus 连接只作为明细上报、不影响就绪：EventBus 故障时元数据与读写照常服务。
 func SnapshotForRole(instance string, metrics *observability.ViewMetrics) healthz.SnapshotFunc {
 	threshold := defaultOldestPendingThreshold
@@ -45,18 +45,12 @@ func SnapshotForRoleWithOptions(instance string, metrics *observability.ViewMetr
 	}
 	return func(context.Context) healthz.Response {
 		snapshot := metrics.Snapshot()
-		consumerBound := instance != InstanceStorageView || snapshot.ConsumerBound
-		// View backlog is partitioned by durable. A system-metrics poison message
-		// must not make the Kline View fail readiness (and trigger a whole-process
-		// restart); bound/restore state is the liveness gate. Partition backlog and
-		// age remain exposed in readiness details for operators.
-		consumerDraining := true
-		ready := consumerBound && consumerDraining
+		// View 恢复完活动索引、跟随器开始跟随变更日志后才就绪。
+		ready := instance != InstanceStorageView || (snapshot.RestoreReady && snapshot.Following)
 		rsp := healthz.Base("storage", instance, "", "", time.Time{}, ready)
 		rsp.Details = map[string]any{
 			"process_alive":                            true,
-			"consumer_bound":                           consumerBound,
-			"consumer_draining":                        consumerDraining,
+			"following":                                snapshot.Following,
 			"outbox_pending_entries":                   snapshot.OutboxPendingEntries,
 			"outbox_oldest_age_seconds":                snapshot.OutboxOldestAge.Seconds(),
 			"outbox_publisher_ready":                   snapshot.OutboxPublisherReady,

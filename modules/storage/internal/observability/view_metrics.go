@@ -66,6 +66,7 @@ type ViewMetrics struct {
 	followLag                        *viewFollowLagCollector
 	consumerLagSnapshot              atomic.Int64
 	consumerBoundSnapshot            atomic.Bool
+	followingSnapshot                atomic.Bool
 	partitionMu                      sync.RWMutex
 	partitionStates                  map[string]ConsumerPartitionSnapshot
 	viewWatermarkMu                  sync.Mutex
@@ -104,8 +105,10 @@ type ViewMetrics struct {
 // outbox instrumentation. It intentionally has no subject, symbol, or message
 // identity fields.
 type ViewMetricsSnapshot struct {
-	ConsumerLagMessages           int64
-	ConsumerBound                 bool
+	ConsumerLagMessages int64
+	ConsumerBound       bool
+	// Following 表示 View 已开始跟随变更日志。
+	Following                     bool
 	LaneActive                    int64
 	OutboxPendingEntries          int64
 	OutboxObserved                bool
@@ -626,6 +629,13 @@ func (m *ViewMetrics) ObserveRestore(success bool, elapsed time.Duration) {
 	m.restoreFailures.Inc()
 }
 
+// SetFollowing 记下 View 是否已开始跟随变更日志（就绪判据之一）。
+func (m *ViewMetrics) SetFollowing(following bool) {
+	if m != nil {
+		m.followingSnapshot.Store(following)
+	}
+}
+
 func (m *ViewMetrics) SetConsumerBound(bound bool) {
 	if m == nil {
 		return
@@ -1031,6 +1041,7 @@ func (m *ViewMetrics) Snapshot() ViewMetricsSnapshot {
 	return ViewMetricsSnapshot{
 		ConsumerLagMessages:           m.consumerLagSnapshot.Load(),
 		ConsumerBound:                 m.consumerBoundSnapshot.Load(),
+		Following:                     m.followingSnapshot.Load(),
 		LaneActive:                    m.laneActiveSnapshot.Load(),
 		OutboxPendingEntries:          m.outboxPendingSnapshot.Load(),
 		OutboxObserved:                m.outboxObservedSnapshot.Load(),

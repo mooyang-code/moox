@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/modules/storage/internal/observability"
-	"github.com/mooyang-code/moox/packages/jetstream"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -46,35 +45,21 @@ func TestHandler_MetricsEndpoint_ShouldExposePrometheusMetrics(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), "moox_storage_outbox_pending_entries 2")
 }
 
-func TestSnapshotForRole_ViewRequiresBoundConsumer(t *testing.T) {
-	metrics, err := observability.NewViewMetrics(prometheus.NewRegistry())
-	require.NoError(t, err)
-	state := New("storage", "storage-view", "", "")
-	state.SetReady(true)
-	state.SnapshotFunc = SnapshotForRole("storage-view", metrics)
-
-	metrics.SetConsumerBound(false)
-	assert.False(t, state.Snapshot(context.Background()).Ready)
-	metrics.SetConsumerBound(true)
-	assert.True(t, state.Snapshot(context.Background()).Ready)
-}
-
-func TestSnapshotForRole_ViewBacklogDoesNotBlockReadiness(t *testing.T) {
+// View 恢复完活动索引并开始跟随变更日志才就绪，两者缺一不可。
+func TestSnapshotForRole_ViewReadyAfterRestoreAndFollowing(t *testing.T) {
 	metrics, err := observability.NewViewMetrics(prometheus.NewRegistry())
 	require.NoError(t, err)
 	state := New("storage", InstanceStorageView, "", "")
 	state.SetReady(true)
-	state.SnapshotFunc = SnapshotForRoleWithOptions(InstanceStorageView, metrics, RoleOptions{OldestPendingThreshold: time.Minute})
-	metrics.SetConsumerBound(true)
+	state.SnapshotFunc = SnapshotForRole(InstanceStorageView, metrics)
 
-	delivery := &jetstream.Delivery{}
-	metrics.ObservePendingDelivery(delivery, time.Now().Add(-2*time.Minute))
-	rsp := state.Snapshot(context.Background())
-
-	assert.True(t, rsp.Ready)
-	assert.Equal(t, true, rsp.Details["consumer_draining"])
-	metrics.CompletePendingDelivery(delivery, time.Now())
+	assert.False(t, state.Snapshot(context.Background()).Ready)
+	metrics.ObserveRestore(true, time.Second)
+	assert.False(t, state.Snapshot(context.Background()).Ready, "恢复完但还没开始跟随")
+	metrics.SetFollowing(true)
 	assert.True(t, state.Snapshot(context.Background()).Ready)
+	metrics.SetFollowing(false)
+	assert.False(t, state.Snapshot(context.Background()).Ready)
 }
 
 // 主服务的 Outbox 积压与 EventBus 断连只上报、不影响就绪：EventBus 故障时 primary 照常服务。
