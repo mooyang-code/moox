@@ -64,7 +64,7 @@ func ContinuousClock() MarketClock { return MarketClock{} }
 // Exchange 判断是不是按交易日历开收盘的交易所市场；全天交易的市场返回假。
 func (c MarketClock) Exchange() bool { return c.exchange }
 
-// Location 是市场时区：有交易日历的市场用交易所时区（A 股 Asia/Shanghai），全天交易的（加密货币）用 UTC。
+// Location 是市场时区：有交易日历的市场用交易所时区，全天交易的市场用 UTC。
 // 按天查询、页面显示时间都按它。
 func (c MarketClock) Location() *time.Location {
 	if c.location == nil {
@@ -97,9 +97,14 @@ func NewExchangeClock(days TradingDays, location *time.Location, sessions []stri
 	return clock, nil
 }
 
-// MarketClockFor 按采集任务清单声明的市场、日历、时区和交易时段选择时钟：加密货币全天交易，其余市场必须有内嵌的交易日历。
+// MarketClockFor 按采集任务清单声明的市场、日历、时区和交易时段选择时钟：市场必须已在 barclock 登记，
+// 连续市场全天交易，交易时段市场必须有内嵌的交易日历。
 func MarketClockFor(marketID, calendarID, timezone string, sessions []string) (MarketClock, error) {
-	if strings.TrimSpace(marketID) == "crypto" {
+	market, err := barclock.MarketFor(marketID)
+	if err != nil {
+		return MarketClock{}, err
+	}
+	if market.Alignment == barclock.AlignmentEpochUTC {
 		return ContinuousClock(), nil
 	}
 	calendarID = strings.TrimSpace(calendarID)

@@ -291,7 +291,7 @@ func buildBusinessFreshnessReporterWithInterval(
 			}
 			spaceID := business.SpaceID
 			if spaceID == "" {
-				spaceID = "crypto"
+				spaceID = monmetrics.InternalMetricSpaceID
 			}
 			checkID, name := businessCheckIdentity(business)
 			item := businessFreshnessItem{spaceID: spaceID, checkID: checkID, name: name, success: business.Status == "healthy", reason: business.Reason}

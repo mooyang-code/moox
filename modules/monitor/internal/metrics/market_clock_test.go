@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mooyang-code/moox/packages/barclock"
 	"github.com/mooyang-code/moox/packages/frequency"
 	"github.com/mooyang-code/moox/packages/marketcalendar"
 )
@@ -209,7 +210,7 @@ func TestMarketClockForUsesTheInventoryCalendar(t *testing.T) {
 	if err != nil || !clock.exchange || len(clock.sessions) != 2 {
 		t.Fatalf("stockcn clock = %+v err = %v", clock, err)
 	}
-	if _, err := MarketClockFor("stockus", "", "America/New_York", nil); !errors.Is(err, ErrNoTradingCalendar) {
-		t.Fatalf("a market without calendar must not be guessed: %v", err)
+	if _, err := MarketClockFor("stockus", "", "America/New_York", nil); !errors.Is(err, barclock.ErrUnknownMarket) {
+		t.Fatalf("an unregistered market must not be guessed: %v", err)
 	}
 }

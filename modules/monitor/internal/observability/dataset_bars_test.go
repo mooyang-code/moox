@@ -8,6 +8,7 @@ import (
 	"time"
 
 	monmetrics "github.com/mooyang-code/moox/modules/monitor/internal/metrics"
+	"github.com/mooyang-code/moox/packages/barclock"
 	"github.com/mooyang-code/moox/packages/marketcalendar"
 	"github.com/stretchr/testify/require"
 )
@@ -382,4 +383,12 @@ func TestStockDatasetWarmingAcrossBreaksStaysHealthy(t *testing.T) {
 		require.NotEqual(t, "stale", item.Status, "%s %s", now, item.Reason)
 		require.Zero(t, item.WaitingBars, "%s 休市时没有等待中的 K 线", now)
 	}
+}
+
+// 采集任务声明的市场没有在 barclock 登记时，页面提示说明是哪个市场，不显示 barclock 的报错原文；原错误仍能用 errors.Is 判断。
+func TestClockIssueTextForUnregisteredMarket(t *testing.T) {
+	builder := Builder{Inventory: staticInventory{{SpaceID: "nomarket", MarketID: "nomarket"}}}
+	clock := builder.spaceClocks(t.Context(), time.Now())["nomarket"]
+	require.ErrorIs(t, clock.err, barclock.ErrUnknownMarket)
+	require.Equal(t, "市场 nomarket 没有登记，无法判断交易时段", clockIssueText(clock.err))
 }

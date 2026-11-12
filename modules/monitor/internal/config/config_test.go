@@ -303,7 +303,7 @@ func TestMonitorAppConfigLoadsDynamicKlineFreshnessInventory(t *testing.T) {
 		cfg.KlineFreshness.InventoryMaxEntries != 1000 {
 		t.Fatalf("dynamic kline freshness inventory = %+v", cfg.KlineFreshness)
 	}
-	if !reflect.DeepEqual(cfg.KlineFreshness.SpaceIDs, []string{"crypto", "stockcn"}) {
+	if !reflect.DeepEqual(cfg.KlineFreshness.SpaceIDs, registeredMarketIDs()) {
 		t.Fatalf("loaded kline freshness Space IDs = %v", cfg.KlineFreshness.SpaceIDs)
 	}
 	if strings.Contains(string(raw), "view_binance_kline_1m") || strings.Contains(string(raw), "  rules:") {
@@ -395,7 +395,7 @@ func TestMonitorConfigKlineFreshnessDefaultsAndValidation(t *testing.T) {
 	if cfg.KlineFreshness.EvaluationInterval != 30*time.Second || cfg.KlineFreshness.MaxSubjectsPerAlert != 20 ||
 		cfg.KlineFreshness.InventoryRefreshInterval != time.Minute || cfg.KlineFreshness.InventoryPageSize != 100 ||
 		cfg.KlineFreshness.InventoryMaxEntries != 1000 ||
-		!reflect.DeepEqual(cfg.KlineFreshness.SpaceIDs, []string{"crypto", "stockcn"}) {
+		!reflect.DeepEqual(cfg.KlineFreshness.SpaceIDs, registeredMarketIDs()) {
 		t.Fatalf("kline freshness defaults = %+v", cfg.KlineFreshness)
 	}
 	cfg.Deployment.Enabled = false
