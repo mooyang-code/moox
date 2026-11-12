@@ -315,8 +315,9 @@ button.ghost.away { visibility: hidden; }
       <div class="block">
         <div><h2>告警通知</h2><p>行情中断、服务异常时发到群里。</p></div>
         <div class="fields two">
-          <label class="f"><span>发送到</span><select id="notify-type"><option value="wecom">企业微信群机器人</option><option value="feishu">飞书群机器人</option></select></label>
+          <label class="f"><span>发送到</span><select id="notify-type"><option value="wecom">企业微信群机器人</option><option value="feishu">飞书群机器人</option><option value="dingtalk">钉钉群机器人</option><option value="webhook">通用 Webhook</option></select></label>
           <label class="f full"><span>机器人 Webhook 地址<span class="opt">可选</span></span><input type="password" id="notify-url" data-secret autocomplete="new-password" spellcheck="false"><small>在群设置 → 群机器人 → 添加机器人后复制。现在不填也行，部署完成后可以在管理台「监控 › 告警渠道」里添加；添加之前出了问题不会通知到群里。</small></label>
+          <label class="f full" id="notify-secret-row" hidden><span>密钥<span class="opt">可选</span></span><input type="password" id="notify-secret" data-secret autocomplete="new-password" spellcheck="false"><small id="notify-secret-hint"></small></label>
         </div>
       </div>
     </section>
@@ -402,6 +403,16 @@ button.ghost.away { visibility: hidden; }
 
   // ---------- 步骤条 ----------
   function exchangeVisible() { return cloudEnabled('overseas'); }
+  // 告警渠道的密钥只有钉钉（加签）和通用 Webhook（签名请求头）使用，其余类型不显示、提交空值。
+  function notifySecretVisible() { var type = $('notify-type').value; return type === 'dingtalk' || type === 'webhook'; }
+  function syncNotifySecret() {
+    $('notify-secret-row').hidden = !notifySecretVisible();
+    $('notify-secret-hint').textContent = $('notify-type').value === 'dingtalk'
+      ? '机器人安全设置选了“加签”时填它的密钥（SEC 开头）；选的是“自定义关键词”就不用填，关键词设成 MooX。'
+      : '填了以后每次推送都带签名请求头，接收方可以据此校验来源；不需要就留空。';
+  }
+  $('notify-type').addEventListener('change', syncNotifySecret);
+  syncNotifySecret();
   function visibleSteps() {
     var list = [];
     for (var n = 1; n <= STEPS.length; n++) if (n !== STEP_EXCHANGE || exchangeVisible()) list.push(n);
@@ -751,7 +762,7 @@ button.ghost.away { visibility: hidden; }
     return {
       admin: { username: $('admin-username').value.trim(), password: $('admin-password').value },
       tencent: keys(),
-      notification: { channel_type: $('notify-type').value, webhook_url: $('notify-url').value.trim() },
+      notification: { channel_type: $('notify-type').value, webhook_url: $('notify-url').value.trim(), secret: notifySecretVisible() ? $('notify-secret').value.trim() : '' },
       servers: { storage: serverPayload('storage'), control: serverPayload('control'), overseas: serverPayload('overseas'), factor: blocks.factor.toggle.checked ? factorTarget() : null },
       // 没配海外服务器时这一步是隐藏的，不发送任何交易所密钥。
       exchange_keys: exchangeVisible() ? exchangeEntries() : []

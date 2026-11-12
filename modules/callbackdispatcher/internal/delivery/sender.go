@@ -4,9 +4,6 @@ package delivery
 import (
 	"bytes"
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +16,7 @@ import (
 	"time"
 
 	"github.com/mooyang-code/moox/packages/netguard"
+	"github.com/mooyang-code/moox/packages/notification"
 )
 
 const (
@@ -135,15 +133,6 @@ func BuildBody(req Request) ([]byte, error) {
 	})
 }
 
-// Sign 返回签名头的值：sha256=<HMAC-SHA256(密钥, 时间戳 + "." + 请求体) 的十六进制>。
-func Sign(secret, timestamp string, body []byte) string {
-	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write([]byte(timestamp))
-	mac.Write([]byte("."))
-	mac.Write(body)
-	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
-}
-
 // ValidateURL 检查通知地址：只允许带主机名的 http、https 地址，不允许内嵌账号密码。
 func ValidateURL(raw string) error {
 	if len(raw) > 2048 {
@@ -186,7 +175,7 @@ func (s *Sender) Send(ctx context.Context, target Target, req Request) Result {
 	httpRequest.Header.Set("X-MooX-Event-Id", req.EventID)
 	httpRequest.Header.Set("X-MooX-Event", req.EventName)
 	httpRequest.Header.Set("X-MooX-Timestamp", timestamp)
-	httpRequest.Header.Set("X-MooX-Signature", Sign(target.Secret, timestamp, body))
+	httpRequest.Header.Set("X-MooX-Signature", notification.WebhookSignature(target.Secret, timestamp, body))
 
 	client := s.public
 	if target.AllowPrivate {

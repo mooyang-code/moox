@@ -35,6 +35,7 @@ func Render(ctx context.Context, request *Request, env Environment) ([]byte, err
 		{"tencent_cloud", "region", tomlString(request.region)},
 		{"notification", "channel_type", tomlString(request.Notification.ChannelType)},
 		{"notification", "webhook_url", tomlString(request.Notification.WebhookURL)},
+		{"notification", "secret", tomlString(request.Notification.Secret)},
 	}
 	for _, edit := range edits {
 		var err error

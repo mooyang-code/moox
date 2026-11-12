@@ -21,6 +21,7 @@ type Request struct {
 	Notification struct {
 		ChannelType string `json:"channel_type"`
 		WebhookURL  string `json:"webhook_url"`
+		Secret      string `json:"secret"`
 	} `json:"notification"`
 	// Servers 按用途收集服务器；海外服务器和因子机可选（nil 表示不配置）。
 	Servers struct {
@@ -94,6 +95,7 @@ func (r *Request) normalize(ctx context.Context, env Environment) error {
 	r.Admin.Username = strings.TrimSpace(r.Admin.Username)
 	r.Notification.ChannelType = strings.TrimSpace(r.Notification.ChannelType)
 	r.Notification.WebhookURL = strings.TrimSpace(r.Notification.WebhookURL)
+	r.Notification.Secret = strings.TrimSpace(r.Notification.Secret)
 	for _, field := range []struct {
 		name, value string
 		required    bool
@@ -102,6 +104,7 @@ func (r *Request) normalize(ctx context.Context, env Environment) error {
 		{"告警渠道", r.Notification.ChannelType, true},
 		// Webhook 可以留空，部署后在管理台添加。
 		{"告警机器人的 Webhook 地址", r.Notification.WebhookURL, false},
+		{"告警渠道的密钥", r.Notification.Secret, false},
 	} {
 		if err := checkText(field.name, field.value, field.required); err != nil {
 			return err

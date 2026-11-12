@@ -15,7 +15,7 @@ import (
 
 var errNotificationUnavailable = errors.New("notification channels are unavailable")
 
-// ListNotificationChannels 返回全部推送渠道，含完整 Webhook URL；控制台只允许全局管理员调用。
+// ListNotificationChannels 返回全部推送渠道，含完整 Webhook URL；控制台只允许全局管理员调用。密钥不返回，只给出是否设置。
 func (s *Service) ListNotificationChannels(ctx context.Context, _ *monitorpb.ListNotificationChannelsReq) (*monitorpb.ListNotificationChannelsRsp, error) {
 	if s.notifications == nil {
 		return &monitorpb.ListNotificationChannelsRsp{RetInfo: inner(errNotificationUnavailable)}, nil
@@ -31,19 +31,20 @@ func (s *Service) ListNotificationChannels(ctx context.Context, _ *monitorpb.Lis
 	return &monitorpb.ListNotificationChannelsRsp{RetInfo: success(), Channels: out}, nil
 }
 
-// AddNotificationChannel 新增一个推送渠道；URL 必须是所选平台的 HTTPS 机器人地址，同一个 URL 不能重复添加。
+// AddNotificationChannel 新增一个推送渠道；URL 必须是所选平台的 HTTPS 机器人地址（通用 Webhook 不限域名），同一个 URL 不能重复添加。
+// 密钥选填，只有钉钉（加签）和通用 Webhook（签名头）使用；要改密钥就删掉渠道重加。
 func (s *Service) AddNotificationChannel(ctx context.Context, req *monitorpb.AddNotificationChannelReq) (*monitorpb.AddNotificationChannelRsp, error) {
 	if s.notifications == nil {
 		return &monitorpb.AddNotificationChannelRsp{RetInfo: inner(errNotificationUnavailable)}, nil
 	}
-	typ, url := strings.TrimSpace(req.GetChannelType()), strings.TrimSpace(req.GetWebhookUrl())
+	typ, url, secret := strings.TrimSpace(req.GetChannelType()), strings.TrimSpace(req.GetWebhookUrl()), strings.TrimSpace(req.GetSecret())
 	if url == "" {
 		return &monitorpb.AddNotificationChannelRsp{RetInfo: invalid(errors.New("Webhook URL 不能为空"))}, nil
 	}
-	if _, err := notification.NewSender(notification.ChannelConfig{Type: notification.ChannelType(typ), WebhookURL: url}); err != nil {
+	if _, err := notification.NewSender(notification.ChannelConfig{Type: notification.ChannelType(typ), WebhookURL: url, Secret: secret}); err != nil {
 		return &monitorpb.AddNotificationChannelRsp{RetInfo: invalid(err)}, nil
 	}
-	channel, err := s.notifications.Add(ctx, typ, url)
+	channel, err := s.notifications.Add(ctx, typ, url, secret)
 	if err != nil {
 		return &monitorpb.AddNotificationChannelRsp{RetInfo: invalid(err)}, nil
 	}
@@ -71,6 +72,6 @@ func (s *Service) DeleteNotificationChannel(ctx context.Context, req *monitorpb.
 func notificationChannelPB(channel domain.NotificationChannel) *monitorpb.NotificationChannel {
 	return &monitorpb.NotificationChannel{
 		ChannelId: channel.ChannelID, ChannelType: channel.ChannelType, WebhookUrl: channel.WebhookURL,
-		CreatedAt: channel.CreatedAt.UTC().Format(time.RFC3339Nano),
+		CreatedAt: channel.CreatedAt.UTC().Format(time.RFC3339Nano), HasSecret: channel.Secret != "",
 	}
 }

@@ -121,7 +121,7 @@ func TestServersOutsideTheAccountAreRejected(t *testing.T) {
 
 func TestRenderKeepsTheExampleDefaultsAndComments(t *testing.T) {
 	_, text := renderWith(t, sampleRequest(), nil)
-	for _, want := range []string{"[storage_retention]", "[egress_proxy.dns]", "[local_logs]", "# 告警推送渠道，初始化前必填", "# View 只按根数保留", "[factors]"} {
+	for _, want := range []string{"[storage_retention]", "[egress_proxy.dns]", "[local_logs]", "# 告警推送渠道。webhook_url 可以先留空", "# View 只按根数保留", "[factors]"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("应保留示例里的 %q", want)
 		}

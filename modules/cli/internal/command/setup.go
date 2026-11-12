@@ -1248,6 +1248,7 @@ func clearSetupSecrets(snapshot *setupconfig.Snapshot) {
 	snapshot.Manifest.TencentCloud.SecretID = ""
 	snapshot.Manifest.TencentCloud.SecretKey = ""
 	snapshot.Manifest.Notification.WebhookURL = ""
+	snapshot.Manifest.Notification.Secret = ""
 	for i := range snapshot.Manifest.ExchangeKeys {
 		snapshot.Manifest.ExchangeKeys[i].APIKey = ""
 		snapshot.Manifest.ExchangeKeys[i].SecretKey = ""

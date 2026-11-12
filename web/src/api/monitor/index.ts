@@ -12,7 +12,7 @@ export const monitorApi = {
   listNotificationChannels() {
     return callControl<Record<string, never>, { channels?: NotificationChannel[] }>(SERVICE, "ListNotificationChannels", {});
   },
-  addNotificationChannel(req: { channel_type: string; webhook_url: string }) {
+  addNotificationChannel(req: { channel_type: string; webhook_url: string; secret?: string }) {
     return callControl<typeof req, { channel?: NotificationChannel }>(SERVICE, "AddNotificationChannel", req);
   },
   deleteNotificationChannel(req: { channel_id: string }) {

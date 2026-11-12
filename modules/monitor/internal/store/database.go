@@ -20,11 +20,13 @@ import (
 
 // gormLogger keeps GORM's slow-query and error logging but drops
 // ErrRecordNotFound, which the repositories return as an ordinary miss, and
-// the terminal colors that clutter the log file.
+// the terminal colors that clutter the log file. ParameterizedQueries 让日志里的 SQL
+// 只留占位符：通知渠道的 Webhook 地址和密钥是推送凭据，不能随慢查询或出错的语句写进日志。
 var gormLogger = logger.New(log.New(os.Stdout, "", log.LstdFlags), logger.Config{
 	SlowThreshold:             200 * time.Millisecond,
 	LogLevel:                  logger.Warn,
 	IgnoreRecordNotFoundError: true,
+	ParameterizedQueries:      true,
 })
 
 type Store struct {

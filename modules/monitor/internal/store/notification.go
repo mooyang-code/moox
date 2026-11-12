@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/mooyang-code/moox/modules/monitor/internal/domain"
+	"github.com/mooyang-code/moox/packages/notification"
 	"gorm.io/gorm"
 )
 
@@ -30,9 +31,9 @@ func (r *NotificationRepository) List(ctx context.Context) ([]domain.Notificatio
 	return channels, nil
 }
 
-// Add 新增一个渠道并返回它。URL 的格式与平台域名由调用方校验，这里只保证类型合法、URL 不重复。
-func (r *NotificationRepository) Add(ctx context.Context, channelType, webhookURL string) (*domain.NotificationChannel, error) {
-	channelType, webhookURL = strings.TrimSpace(channelType), strings.TrimSpace(webhookURL)
+// Add 新增一个渠道并返回它。URL 的格式、平台域名与密钥由调用方校验，这里只保证类型合法、URL 不重复。
+func (r *NotificationRepository) Add(ctx context.Context, channelType, webhookURL, secret string) (*domain.NotificationChannel, error) {
+	channelType, webhookURL, secret = strings.TrimSpace(channelType), strings.TrimSpace(webhookURL), strings.TrimSpace(secret)
 	if err := validateNotificationType(channelType); err != nil {
 		return nil, err
 	}
@@ -50,7 +51,7 @@ func (r *NotificationRepository) Add(ctx context.Context, channelType, webhookUR
 	if err != nil {
 		return nil, err
 	}
-	channel := domain.NotificationChannel{ChannelID: id, ChannelType: channelType, WebhookURL: webhookURL}
+	channel := domain.NotificationChannel{ChannelID: id, ChannelType: channelType, WebhookURL: webhookURL, Secret: secret}
 	if err := r.db.WithContext(ctx).Create(&channel).Error; err != nil {
 		return nil, err
 	}
@@ -78,10 +79,8 @@ func newNotificationChannelID() (string, error) {
 }
 
 func validateNotificationType(value string) error {
-	switch strings.TrimSpace(value) {
-	case "wecom", "feishu":
-		return nil
-	default:
+	if !notification.ValidChannelType(strings.TrimSpace(value)) {
 		return fmt.Errorf("unsupported notification channel type %q", value)
 	}
+	return nil
 }

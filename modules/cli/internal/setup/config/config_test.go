@@ -495,6 +495,33 @@ func TestLoadNotificationWebhook(t *testing.T) {
 	assert.Equal(t, "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test", snapshot.Manifest.Notification.WebhookURL)
 }
 
+// 钉钉与通用 Webhook 可以带密钥；企业微信带密钥、钉钉地址缺 access_token 都要拒绝。
+func TestLoadNotificationDingTalkAndWebhook(t *testing.T) {
+	notification := func(channel, hook, secret string) string {
+		return strings.Replace(validManifest, "channel_type = \"wecom\"\nwebhook_url = \"\"", "channel_type = \""+channel+"\"\nwebhook_url = \""+hook+"\"\nsecret = \""+secret+"\"", 1)
+	}
+	for _, tt := range []struct{ channel, hook, secret string }{
+		{"dingtalk", "https://oapi.dingtalk.com/robot/send?access_token=test", "SECtest"},
+		{"webhook", "https://alerts.example.com/moox", ""},
+	} {
+		root := t.TempDir()
+		snapshot, err := Load(writeManifest(t, root, notification(tt.channel, tt.hook, tt.secret), 0o600), root)
+		require.NoError(t, err, tt.channel)
+		assert.Equal(t, tt.channel, snapshot.Manifest.Notification.ChannelType)
+		assert.Equal(t, tt.secret, snapshot.Manifest.Notification.Secret)
+	}
+	for _, tt := range []struct{ channel, hook, secret string }{
+		{"dingtalk", "https://oapi.dingtalk.com/robot/send", ""},
+		{"wecom", "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=test", "SECtest"},
+		{"sms", "https://alerts.example.com/moox", ""},
+	} {
+		root := t.TempDir()
+		_, err := Load(writeManifest(t, root, notification(tt.channel, tt.hook, tt.secret), 0o600), root)
+		require.Error(t, err, tt.channel)
+		assert.NotContains(t, err.Error(), "SECtest")
+	}
+}
+
 func TestLoadDefaultsEventBusPort(t *testing.T) {
 	root := t.TempDir()
 	body := strings.Replace(validManifest, "port = 4222\n", "", 1)

@@ -275,6 +275,7 @@ button.primary:hover { filter: brightness(1.08); background: var(--brand); }
       ['告警', el('span', { text: view.channel || '—' })],
       ['告警 Webhook', view.has_webhook ? secret('notification.webhook_url') : el('span', { class: 'muted', text: '未填写' })]
     ];
+    if (view.has_notify_secret) rows.push(['告警渠道密钥', secret('notification.secret')]);
     $('accounts').replaceChildren.apply($('accounts'), rows.map(function (row) { return el('tr', {}, [el('th', { text: row[0] }), el('td', {}, [row[1]])]); }));
     // 交易所密钥：明文只在点「显示」时按序号取，概览里只有打码的 API Key。
     var xbody = $('xkeys').tBodies[0];
@@ -340,12 +341,17 @@ button.primary:hover { filter: brightness(1.08); background: var(--brand); }
     root.append(block('腾讯云', '访问密钥。更换后需要重新部署采集云函数才会生效。',
       el('div', { class: 'fields two' }, [field('SecretId', ctl.secretId), field('SecretKey', secretKey.node)])));
 
-    ctl.channel = el('select', {}, [el('option', { value: 'wecom', text: '企业微信群机器人' }), el('option', { value: 'feishu', text: '飞书群机器人' })]);
+    ctl.channel = el('select', {}, [el('option', { value: 'wecom', text: '企业微信群机器人' }), el('option', { value: 'feishu', text: '飞书群机器人' }), el('option', { value: 'dingtalk', text: '钉钉群机器人' }), el('option', { value: 'webhook', text: '通用 Webhook' })]);
     ctl.channel.value = form.notification.channel_type || 'wecom';
-    ctl.channel.addEventListener('change', function () { state.dirty = true; });
     var webhook = secretInput(form.notification.webhook_url); ctl.webhook = webhook.input;
-    root.append(block('告警通知', '行情中断、服务异常时推送的群机器人。',
-      el('div', { class: 'fields two' }, [field('发送到', ctl.channel), field('机器人 Webhook 地址', webhook.node)])));
+    var notifySecret = secretInput(form.notification.secret || ''); ctl.notifySecret = notifySecret.input;
+    var notifySecretField = field('密钥（可选）', notifySecret.node, '钉钉机器人启用“加签”时填它的密钥；通用 Webhook 填了就带签名请求头。');
+    // 企业微信、飞书不使用密钥：隐藏输入框，保存时按空值提交。
+    var syncNotifySecret = function () { notifySecretField.hidden = ctl.channel.value !== 'dingtalk' && ctl.channel.value !== 'webhook'; };
+    ctl.channel.addEventListener('change', function () { state.dirty = true; syncNotifySecret(); });
+    syncNotifySecret();
+    root.append(block('告警通知', '行情中断、服务异常时推送到群机器人或 Webhook 地址。',
+      el('div', { class: 'fields two' }, [field('发送到', ctl.channel), field('Webhook 地址', webhook.node), notifySecretField])));
 
     var os3 = form.archive_object_store || {};
     ctl.os = {
@@ -478,7 +484,7 @@ button.primary:hover { filter: brightness(1.08); background: var(--brand); }
     return {
       admin: { username: ctl.adminUser.value.trim(), password: ctl.adminPass.value },
       tencent: { secret_id: ctl.secretId.value.trim(), secret_key: ctl.secretKey.value },
-      notification: { channel_type: ctl.channel.value, webhook_url: ctl.webhook.value.trim() },
+      notification: { channel_type: ctl.channel.value, webhook_url: ctl.webhook.value.trim(), secret: (ctl.channel.value === 'dingtalk' || ctl.channel.value === 'webhook') ? ctl.notifySecret.value.trim() : '' },
       archive_object_store: {
         enabled: ctl.os.enabled.checked, endpoint: ctl.os.endpoint.value.trim(), region: ctl.os.region.value.trim(), bucket: ctl.os.bucket.value.trim(),
         prefix: ctl.os.prefix.value.trim(), url_style: ctl.os.urlStyle.value, use_tls: ctl.os.useTLS.value === 'true',

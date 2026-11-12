@@ -34,5 +34,5 @@ features:
   - title: 事件驱动
     details: 内嵌 NATS JetStream 的 EventBus 连接各模块，事件由统一注册表声明，消费者自己拥有 Consumer。
   - title: 监控与运维
-    details: Monitor 汇总进程、主机、数据新鲜度与行情健康，告警推送到企业微信和飞书；moox-cli 负责部署与诊断。
+    details: Monitor 汇总进程、主机、数据新鲜度与行情健康，告警推送到企业微信、飞书、钉钉或通用 Webhook；moox-cli 负责部署与诊断。
 ---

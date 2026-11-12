@@ -285,6 +285,7 @@
         <li v-for="channel in channels" :key="channel.channel_id">
           <span class="notification-list__type">{{ channelName(channel.channel_type) }}</span>
           <span class="notification-list__url">{{ channel.webhook_url }}</span>
+          <span v-if="channel.has_secret" class="muted notification-list__secret">已设置密钥</span>
           <a-button
             size="mini"
             type="text"
@@ -300,16 +301,27 @@
         <h4>添加通知渠道</h4>
         <div class="notification-add__row">
           <a-select v-model="draft.channel_type" class="notification-add__type" aria-label="通知平台"
-            ><a-option value="wecom">企业微信</a-option><a-option value="feishu">飞书</a-option></a-select
+            ><a-option value="wecom">企业微信</a-option><a-option value="feishu">飞书</a-option
+            ><a-option value="dingtalk">钉钉</a-option><a-option value="webhook">通用 Webhook</a-option></a-select
           >
           <a-input
             v-model="draft.webhook_url"
             aria-label="Webhook URL"
-            placeholder="群机器人的 HTTPS Webhook URL"
+            :placeholder="draft.channel_type === 'webhook' ? '接收告警的公网 HTTPS 地址' : '群机器人的 HTTPS Webhook URL'"
             allow-clear
             @press-enter="addChannel"
           />
           <a-button type="primary" status="success" :loading="adding" @click="addChannel">添加</a-button>
+        </div>
+        <div v-if="draftSecretAllowed" class="notification-add__secret">
+          <a-input-password
+            v-model="draft.secret"
+            aria-label="密钥"
+            placeholder="密钥（选填）"
+            allow-clear
+            @press-enter="addChannel"
+          />
+          <p class="muted">{{ draftSecretHint }}</p>
         </div>
       </section>
     </a-modal>
@@ -448,7 +460,14 @@ const detailVisible = ref(false);
 const selected = ref<HealthComponent | null>(null);
 const notificationVisible = ref(false);
 const channels = ref<NotificationChannel[]>([]);
-const draft = reactive({ channel_type: "wecom", webhook_url: "" });
+const draft = reactive({ channel_type: "wecom", webhook_url: "", secret: "" });
+// 只有钉钉（加签）和通用 Webhook（签名请求头）可以带密钥；密钥只写不读，要改就删掉渠道重加。
+const draftSecretAllowed = computed(() => draft.channel_type === "dingtalk" || draft.channel_type === "webhook");
+const draftSecretHint = computed(() =>
+  draft.channel_type === "dingtalk"
+    ? "机器人的安全设置选了“加签”就填它的密钥（SEC 开头）；选的是“自定义关键词”不用填，把关键词设成 MooX。"
+    : "推送的是固定格式的 JSON，地址必须是公网 HTTPS。填了密钥，请求会带 X-MooX-Timestamp 和 X-MooX-Signature 两个请求头，接收方可以据此校验来源。"
+);
 const adding = ref(false);
 const removing = ref("");
 const refreshGuard = createLatestRequestGuard();
@@ -527,7 +546,11 @@ const notificationLabel = computed(() => {
 });
 
 function channelName(type?: string) {
-  return ({ wecom: "企业微信", feishu: "飞书" } as Record<string, string>)[type || ""] || type || "";
+  return (
+    ({ wecom: "企业微信", feishu: "飞书", dingtalk: "钉钉", webhook: "通用 Webhook" } as Record<string, string>)[type || ""] ||
+    type ||
+    ""
+  );
 }
 
 function othersText(titles: string[]) {
@@ -605,17 +628,23 @@ function syncNotificationSummary() {
 async function addChannel() {
   const url = draft.webhook_url.trim();
   if (!url) {
-    Message.warning("请填写群机器人的 Webhook URL");
+    Message.warning("请填写 Webhook URL");
     return;
   }
   const submission = notificationScope.begin();
   adding.value = true;
   try {
-    const rsp = await monitorApi.addNotificationChannel({ channel_type: draft.channel_type, webhook_url: url });
+    const secret = draftSecretAllowed.value ? draft.secret.trim() : "";
+    const rsp = await monitorApi.addNotificationChannel({
+      channel_type: draft.channel_type,
+      webhook_url: url,
+      ...(secret ? { secret } : {})
+    });
     if (!submission.isCurrent()) return;
     if (rsp.channel) channels.value = [...channels.value, rsp.channel];
     syncNotificationSummary();
     draft.webhook_url = "";
+    draft.secret = "";
     Message.success("已添加通知渠道");
   } catch (err) {
     Message.error(err instanceof Error ? err.message : "添加通知渠道失败");
@@ -935,7 +964,8 @@ a {
 }
 .notification-list li {
   display: grid;
-  grid-template-columns: 64px minmax(0, 1fr) auto;
+  /* 平台、地址、（可选）已设置密钥、删除 */
+  grid-template-columns: 96px minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 10px;
   padding: 8px 10px;
@@ -966,8 +996,24 @@ a {
 }
 .notification-add__row {
   display: grid;
-  grid-template-columns: 112px minmax(0, 1fr) auto;
+  grid-template-columns: 136px minmax(0, 1fr) auto;
   gap: 8px;
+}
+.notification-add__secret {
+  margin-top: 8px;
+}
+.notification-add__secret p {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.notification-list__secret {
+  font-size: 12px;
+  white-space: nowrap;
+}
+/* 没有设置密钥的行少一个单元格，删除按钮固定在最后一列，各行对齐 */
+.notification-list li > .arco-btn {
+  grid-column: 4;
 }
 @media (max-width: 520px) {
   .notification-add__row {

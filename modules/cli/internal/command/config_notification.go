@@ -49,7 +49,8 @@ type notificationAction struct {
 	Type      string `json:"type"`
 	Webhook   string `json:"webhook"`
 
-	url string
+	url    string
+	secret string
 }
 
 type notificationChannelView struct {
@@ -129,6 +130,7 @@ func newConfigNotificationCommand(deps notificationDeps) *cobra.Command {
 }
 
 // planNotification 计算让 Monitor 包含 moox.toml 渠道所需的变更；--prune 时再删除其余渠道。
+// 只按类型和地址比对：Monitor 不返回密钥，只改了 secret 时这里看不出差异，要先删掉渠道再同步。
 func planNotification(desired setupconfig.Notification, existing []*monitorpb.NotificationChannel, prune bool) ([]notificationChannelView, []notificationAction) {
 	typ := strings.TrimSpace(desired.ChannelType)
 	if typ == "" {
@@ -148,7 +150,7 @@ func planNotification(desired setupconfig.Notification, existing []*monitorpb.No
 	}
 	if !found {
 		// 先添加再删除，过程中始终至少有一个渠道。
-		actions = append([]notificationAction{{Action: "add", Type: typ, Webhook: maskWebhook(want), url: want}}, actions...)
+		actions = append([]notificationAction{{Action: "add", Type: typ, Webhook: maskWebhook(want), url: want, secret: strings.TrimSpace(desired.Secret)}}, actions...)
 	}
 	return views, actions
 }
@@ -159,7 +161,7 @@ func applyNotification(ctx context.Context, gateway gatewayclient.Invoker, actio
 		switch action.Action {
 		case "add":
 			rsp := &monitorpb.AddNotificationChannelRsp{}
-			if err := invokeMonitor(ctx, gateway, "AddNotificationChannel", &monitorpb.AddNotificationChannelReq{ChannelType: action.Type, WebhookUrl: action.url}, rsp, rsp.GetRetInfo); err != nil {
+			if err := invokeMonitor(ctx, gateway, "AddNotificationChannel", &monitorpb.AddNotificationChannelReq{ChannelType: action.Type, WebhookUrl: action.url, Secret: action.secret}, rsp, rsp.GetRetInfo); err != nil {
 				return applied, err
 			}
 			applied = append(applied, "add "+action.Type+" "+action.Webhook)

@@ -34,7 +34,7 @@ func Sender(ctx context.Context, lister Lister) (notification.Sender, error) {
 	}
 	out := make(fanout, 0, len(channels))
 	for _, channel := range channels {
-		sender, err := notification.NewSender(notification.ChannelConfig{Type: notification.ChannelType(channel.ChannelType), WebhookURL: channel.WebhookURL})
+		sender, err := notification.NewSender(notification.ChannelConfig{Type: notification.ChannelType(channel.ChannelType), WebhookURL: channel.WebhookURL, Secret: channel.Secret})
 		out = append(out, target{label: Label(channel), sender: sender, err: err})
 	}
 	return out, nil
@@ -42,10 +42,7 @@ func Sender(ctx context.Context, lister Lister) (notification.Sender, error) {
 
 // Label 给出渠道在失败记录里的称呼：平台、域名和 URL 末 4 位。失败记录对所有登录用户可见，不能带出完整 URL。
 func Label(channel domain.NotificationChannel) string {
-	platform := map[string]string{"wecom": "企业微信", "feishu": "飞书"}[channel.ChannelType]
-	if platform == "" {
-		platform = channel.ChannelType
-	}
+	platform := notification.ChannelLabel(channel.ChannelType)
 	raw := strings.TrimSpace(channel.WebhookURL)
 	host := ""
 	if parsed, err := url.Parse(raw); err == nil {
