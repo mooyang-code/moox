@@ -62,6 +62,17 @@ message HealthAlert {
   bool recovering = 9;
   // 数据集告警对应的数据集事实（水位、最近成功、允许落后）。
   HealthDataset dataset = 10;
+  // 主机 CPU、内存告警最近一次触发或提醒时占用最高的进程；其他告警为空。
+  repeated AlertProcess processes = 11;
+}
+// AlertProcess 是告警事件里记下的一个进程：进程事后退出或被杀掉，仍能查到当时是谁占的。
+message AlertProcess {
+  int32 pid = 1;
+  string name = 2;
+  // cpu_percent 按单核计（两个核跑满是 200）；cpu_available 为 false 表示当时没有取到。
+  double cpu_percent = 3;
+  bool cpu_available = 4;
+  uint64 rss_bytes = 5;
 }
 message HealthSignal {
   string status = 1;
@@ -317,6 +328,8 @@ message AlertIncident {
   bool active = 8;
   int32 reminder_count = 9;
   bool notify_failed = 10;
+  // 主机 CPU、内存告警触发时占用最高的进程；其他告警、或找不到触发记录时为空。
+  repeated AlertProcess processes = 11;
 }
 message GetHealthOverviewReq { string space_id = 1; }
 message GetHealthOverviewRsp { common.RetInfo ret_info = 1; HealthOverview overview = 2; }
@@ -575,12 +588,24 @@ message QueryLogRecordsReq {
   int64 before_id = 7;
   // limit 默认 100，最多 200。
   int32 limit = 8;
+  // with_buckets 为 true 时另外返回按小时的条数分布（同样的条件，不受 before_id 和 limit 影响）；没有给 start_at 时只统计最近 7 天。
+  bool with_buckets = 9;
+}
+// LogBucket 是一个小时里的日志条数。
+message LogBucket {
+  // start_at 是这个小时的起点（UTC，RFC 3339）。
+  string start_at = 1;
+  // errors 是 Error 及以上的条数，events 是其余的（关键事件）。
+  int32 errors = 2;
+  int32 events = 3;
 }
 message QueryLogRecordsRsp {
   common.RetInfo ret_info = 1;
   repeated LogRecord records = 2;
   // has_more 表示还有更早的记录。
   bool has_more = 3;
+  // buckets 只在 with_buckets 时返回，按时间升序，只含有记录的小时。
+  repeated LogBucket buckets = 4;
 }
 
 service MonitorMgr {

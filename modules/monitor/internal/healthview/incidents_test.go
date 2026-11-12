@@ -198,3 +198,72 @@ func TestDatasetAlertCarriesDatasetFactsInsteadOfConcatenatedReason(t *testing.T
 }
 
 func ptr[T any](value T) *T { return &value }
+
+// 主机 CPU、内存告警的经过带上触发时记下的进程排行（提醒时的排行不覆盖它），事后进程退出了也能查到；别的告警没有。
+// 排行按告警的指标排：事件里存的是按 CPU 排的并集，内存告警要按内存重排，CPU 告警去掉没有 CPU 值的。
+func TestIncidentsCarryProcessesRecordedAtTrigger(t *testing.T) {
+	repos := openRepositories(t)
+	ctx := t.Context()
+	now := time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC)
+	cpu, memory, old, other := "host:AGENT01:cpu", "host:AGENT01:memory", "host:AGENT02:cpu", "deployment:control:web-host"
+	create := func(id, check, eventType, payload string, at time.Time) {
+		require.NoError(t, repos.Alerts.CreateEvent(ctx, &domain.AlertEvent{EventID: id, SpaceID: hostmetrics.SpaceID, RuleID: "default:" + check, CheckID: check, EventType: eventType, Payload: payload, CreatedAt: at}))
+	}
+	const top = `"top_processes":[{"pid":4321,"name":"busy","rss_bytes":50331648,"cpu_percent":182.5},{"pid":88,"name":"big","rss_bytes":8589934592,"cpu_percent":3},{"pid":77,"name":"kswapd0","rss_bytes":0}]`
+	create("t1", cpu, domain.AlertEventTriggered, `{"metric":"cpu","value":95,"threshold":90,`+top+`}`, now.Add(-3*time.Hour))
+	create("r1", cpu, domain.AlertEventReminder, `{"metric":"cpu","top_processes":[{"pid":1,"name":"later","rss_bytes":1,"cpu_percent":50}]}`, now.Add(-2*time.Hour))
+	create("x1", cpu, domain.AlertEventResolved, `{"metric":"cpu","value":10,"threshold":90}`, now.Add(-time.Hour))
+	create("t2", memory, domain.AlertEventTriggered, `{"metric":"memory","value":95,"threshold":90,`+top+`}`, now.Add(-4*time.Hour))
+	create("t3", other, domain.AlertEventTriggered, `{"reason":"健康检查失败"}`, now.Add(-30*time.Minute))
+	// 触发早于窗口，窗口内只有提醒和恢复：从窗口外补查到的触发事件同样带上排行。
+	create("t4", old, domain.AlertEventTriggered, `{"metric":"cpu","top_processes":[{"pid":5,"name":"before-window","rss_bytes":1,"cpu_percent":99}]}`, now.Add(-60*time.Hour))
+	create("r4", old, domain.AlertEventReminder, `{"metric":"cpu","top_processes":[{"pid":6,"name":"in-window","rss_bytes":1,"cpu_percent":99}]}`, now.Add(-10*time.Hour))
+	create("x4", old, domain.AlertEventResolved, `{}`, now.Add(-9*time.Hour))
+
+	view, err := (Builder{Alerts: repos.Alerts, Now: func() time.Time { return now }}).Build(ctx, "")
+	require.NoError(t, err)
+	names := map[string][]string{}
+	incidents := map[string]*pb.AlertIncident{}
+	for _, incident := range view.Incidents {
+		check := incident.Id[len(hostmetrics.SpaceID)+1 : len(incident.Id)-len("@"+incident.TriggeredAt)]
+		incidents[check] = incident
+		for _, process := range incident.Processes {
+			names[check] = append(names[check], process.Name)
+		}
+	}
+	require.Len(t, incidents, 4)
+	require.Equal(t, []string{"busy", "big"}, names[cpu], "CPU 告警按 CPU 排，去掉没有 CPU 值的")
+	require.Equal(t, []string{"big", "busy"}, names[memory], "内存告警按内存排，去掉内存为 0 的")
+	require.Empty(t, names[other])
+	require.Equal(t, []string{"before-window"}, names[old])
+	first := incidents[cpu].Processes[0]
+	require.Equal(t, int32(4321), first.Pid)
+	require.True(t, first.CpuAvailable)
+	require.InDelta(t, 182.5, first.CpuPercent, 1e-9)
+	require.Equal(t, uint64(50331648), first.RssBytes)
+	require.NotEmpty(t, incidents[cpu].ResolvedAt)
+}
+
+// 当前告警带最近一次触发或提醒时的排行：提醒比触发新，取提醒那一次的。
+func TestActiveHostAlertCarriesLatestProcesses(t *testing.T) {
+	repos := openRepositories(t)
+	ctx := t.Context()
+	now := time.Date(2026, 11, 12, 12, 0, 0, 0, time.UTC)
+	check := "host:AGENT01:memory"
+	require.NoError(t, repos.Alerts.CreateRule(ctx, &domain.AlertRule{RuleID: "default:" + check, CheckID: check, Enabled: true}))
+	require.NoError(t, repos.Alerts.UpsertState(ctx, &domain.AlertState{RuleID: "default:" + check, CheckID: check, Status: domain.AlertStatusFiring, DedupeKey: check, TriggeredAt: ptr(now.Add(-time.Hour)), UpdatedAt: now}))
+	create := func(id, eventType, name string, at time.Time) {
+		payload := fmt.Sprintf(`{"agent_id":"AGENT01","metric":"memory","value":95,"threshold":90,"top_processes":[{"pid":1,"name":"small","rss_bytes":1048576,"cpu_percent":90},{"pid":2,"name":%q,"rss_bytes":8589934592}]}`, name)
+		require.NoError(t, repos.Alerts.CreateEvent(ctx, &domain.AlertEvent{EventID: id, RuleID: "default:" + check, CheckID: check, EventType: eventType, Payload: payload, CreatedAt: at}))
+	}
+	create("t", domain.AlertEventTriggered, "at-trigger", now.Add(-time.Hour))
+	create("r", domain.AlertEventReminder, "at-reminder", now.Add(-10*time.Minute))
+	view, err := (Builder{Alerts: repos.Alerts, Now: func() time.Time { return now }}).Build(ctx, "")
+	require.NoError(t, err)
+	require.Len(t, view.Alerts, 1)
+	processes := view.Alerts[0].Processes
+	require.Len(t, processes, 2)
+	require.Equal(t, "at-reminder", processes[0].Name, "内存告警里内存最大的排第一，取最近一次提醒的排行")
+	require.False(t, processes[0].CpuAvailable)
+	require.Equal(t, "small", processes[1].Name)
+}

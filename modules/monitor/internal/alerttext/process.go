@@ -21,6 +21,25 @@ type Process struct {
 // byMemory 为 true 时按常驻内存排，否则按 CPU 排（只看有 CPU 值的进程）；没有可列的进程时返回空串。
 // CPU 是占单核的百分比，与 top 一致：340% 就是占了 3.4 个核。
 func TopProcesses(items []Process, byMemory bool, limit int) string {
+	ranked := RankProcesses(items, byMemory, limit)
+	parts := make([]string, 0, len(ranked))
+	for _, item := range ranked {
+		var usage []string
+		if item.CPUAvailable {
+			usage = append(usage, fmt.Sprintf("CPU %.0f%%", item.CPUPercent))
+		}
+		if item.RSSBytes > 0 {
+			usage = append(usage, "内存 "+Bytes(item.RSSBytes))
+		}
+		parts = append(parts, item.Name+" "+strings.Join(usage, "、"))
+	}
+	return strings.Join(parts, "；")
+}
+
+// RankProcesses 按告警的指标挑出占用最高的几个进程：byMemory 为 true 时按常驻内存从高到低（去掉内存为 0 的），
+// 否则按 CPU 从高到低（只留取到了 CPU 且大于 0 的）。HostAgent 上报的是“CPU 前几名”和“内存前几名”合在一起、按 CPU 排的，
+// 直接取前几个的话，内存告警里会看不到真正占内存的进程。
+func RankProcesses(items []Process, byMemory bool, limit int) []Process {
 	ranked := make([]Process, 0, len(items))
 	for _, item := range items {
 		if byMemory && item.RSSBytes == 0 || !byMemory && !(item.CPUAvailable && item.CPUPercent > 0) {
@@ -37,18 +56,7 @@ func TopProcesses(items []Process, byMemory bool, limit int) string {
 	if len(ranked) > limit {
 		ranked = ranked[:limit]
 	}
-	parts := make([]string, 0, len(ranked))
-	for _, item := range ranked {
-		var usage []string
-		if item.CPUAvailable {
-			usage = append(usage, fmt.Sprintf("CPU %.0f%%", item.CPUPercent))
-		}
-		if item.RSSBytes > 0 {
-			usage = append(usage, "内存 "+Bytes(item.RSSBytes))
-		}
-		parts = append(parts, item.Name+" "+strings.Join(usage, "、"))
-	}
-	return strings.Join(parts, "；")
+	return ranked
 }
 
 // Bytes 把字节数写成 GB（一位小数）或 MB（整数）。

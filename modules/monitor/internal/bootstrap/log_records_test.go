@@ -1,6 +1,7 @@
 package bootstrap
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 	"time"
@@ -63,4 +64,25 @@ func TestLogRecordRowKeyCarriesBootID(t *testing.T) {
 	require.Equal(t, "trade@overseas|b1|7", a.RecordKey)
 	require.NotEqual(t, a.RecordKey, b.RecordKey)
 	require.Equal(t, "{}", a.Fields)
+}
+
+// Monitor 写自己的重要日志不受日志输出包那 5 秒期限的限制：刚启动时数据库连接被占着，期限到了也要等到写进去。
+// 这里用一个已经过期的期限代替“等了超过 5 秒”。
+func TestOwnLogDeliverOutlivesTheSinkDeadline(t *testing.T) {
+	db, err := store.Open(filepath.Join(t.TempDir(), "monitor.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	require.NoError(t, db.ApplySchema(schema.SQL()))
+	repository := db.Repositories().Logs
+
+	expired, cancel := context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
+	defer cancel()
+	identity := logsink.Identity{ServiceName: "monitor", InstanceID: "monitor@control", NodeID: "control", BootID: "boot-1"}
+	batch := []logsink.Record{{Sequence: 1, Time: time.Now(), Level: "info", Event: "process_started", Message: "monitor 启动"}}
+	require.NoError(t, ownLogDeliver(repository)(expired, identity, batch))
+
+	rows, err := repository.Query(t.Context(), store.LogRecordFilter{Component: "monitor"})
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Equal(t, "process_started", rows[0].Event)
 }

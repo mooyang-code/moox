@@ -136,6 +136,18 @@ export interface HealthAlert {
   recovering?: boolean;
   /** 数据集告警对应的数据集事实。 */
   dataset?: HealthDataset;
+  /** 主机 CPU、内存告警最近一次触发或提醒时占用最高的进程；其他告警没有。 */
+  processes?: AlertProcess[];
+}
+/** 告警事件里记下的一个进程：进程事后退出或被杀掉，仍能查到当时是谁占的。 */
+export interface AlertProcess {
+  pid?: number;
+  name?: string;
+  /** 按单核计（两个核跑满是 200）；cpu_available 不为 true 表示当时没有取到。 */
+  cpu_percent?: number;
+  cpu_available?: boolean;
+  /** uint64，JSON 里可能是字符串。 */
+  rss_bytes?: number | string;
 }
 /** 一次告警经过：触发到恢复为一条。 */
 export interface AlertIncident {
@@ -152,6 +164,8 @@ export interface AlertIncident {
   active?: boolean;
   reminder_count?: number;
   notify_failed?: boolean;
+  /** 主机 CPU、内存告警触发时占用最高的进程；其他告警、或找不到触发记录时没有。 */
+  processes?: AlertProcess[];
 }
 export interface HealthDataset {
   producer?: string;
@@ -310,6 +324,16 @@ export interface LogRecord {
   merged_count?: number | string;
   /** 日志时间（UTC，RFC 3339）。 */
   logged_at?: string;
+}
+
+/** 一个小时里的重要日志条数。 */
+export interface LogBucket {
+  /** 这个小时的起点（UTC，RFC 3339）。 */
+  start_at?: string;
+  /** Error 及以上的条数。 */
+  errors?: number;
+  /** 其余的（关键事件）。 */
+  events?: number;
 }
 
 /** 数据链路逐根到达历史的一个点：收线时间（UTC）、到达延迟、与上一条记录之间跳过的根数。 */
