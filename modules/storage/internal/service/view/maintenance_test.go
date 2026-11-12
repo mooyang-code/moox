@@ -237,8 +237,8 @@ func TestInitialBuildClearsStaleRuntimeActive(t *testing.T) {
 	}
 }
 
-// 活动索引不存在时只报错，不自动重建。
-func TestMaintenanceDoesNotRebuildMissingActiveIndex(t *testing.T) {
+// 活动索引文件不见了：维护流程不重新提交建索引，只把 View 登记为待重建（不可读），由跟随器按原契约原地重建。
+func TestMaintenanceHoldsMissingActiveIndexForRebuild(t *testing.T) {
 	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
 	if err != nil {
 		t.Fatal(err)
@@ -246,14 +246,17 @@ func TestMaintenanceDoesNotRebuildMissingActiveIndex(t *testing.T) {
 	svc.engines["duckdb"] = &queryEngine{stats: viewindex.ViewIndexStats{Exists: false}}
 	metadata := &maintenanceMetadata{view: &pb.View{
 		SpaceId: "space", ViewId: "prices", Engine: "duckdb", DatasetId: "prices",
-		ActiveIndexId: "prices-a", ViewRevision: 1,
+		ActiveIndexId: "prices-a", ViewRevision: 1, ActiveViewSchemaHash: "hash",
 	}}
-	err = svc.maintainView(context.Background(), MaintenanceOptions{Metadata: metadata}, svc.internalAuth(), metadata.view)
-	if err == nil || !strings.Contains(err.Error(), "不存在") {
+	if err := svc.maintainView(context.Background(), MaintenanceOptions{Metadata: metadata}, svc.internalAuth(), metadata.view); err != nil {
 		t.Fatalf("活动索引缺失 err=%v", err)
 	}
 	if metadata.completes != 0 {
-		t.Fatalf("不应重建：completes=%d", metadata.completes)
+		t.Fatalf("不应重新提交建索引：completes=%d", metadata.completes)
+	}
+	runtime := svc.views[viewRef{spaceID: "space", viewID: "prices"}]
+	if runtime == nil || !runtime.needsRebuild() || runtime.queryState().active != "" {
+		t.Fatalf("View 应登记为待重建且不可读：%+v", runtime)
 	}
 }
 
@@ -338,7 +341,8 @@ func TestRestoreActiveViewsAttachesExistingPhysicalIndex(t *testing.T) {
 	}
 }
 
-func TestRestoreActiveViewsFailsWhenMetadataActiveIndexIsMissing(t *testing.T) {
+// 元数据说是活动的索引文件不见了：恢复不失败（不让整个进程起不来），这个 View 登记为待重建。
+func TestRestoreActiveViewsHoldsMissingActiveIndexForRebuild(t *testing.T) {
 	svc, err := New(filepath.Join(t.TempDir(), "views"), "view-secret")
 	if err != nil {
 		t.Fatal(err)
@@ -348,8 +352,12 @@ func TestRestoreActiveViewsFailsWhenMetadataActiveIndexIsMissing(t *testing.T) {
 		SpaceId: "space", ViewId: "prices", Engine: "bleve", DatasetId: "prices",
 		ActiveIndexId: "missing-active", ViewRevision: 1,
 	}}
-	if err := svc.RestoreActiveViews(context.Background(), MaintenanceOptions{Metadata: metadata}); err == nil || !strings.Contains(err.Error(), "missing") {
+	if err := svc.RestoreActiveViews(context.Background(), MaintenanceOptions{Metadata: metadata}); err != nil {
 		t.Fatalf("restore missing active error = %v", err)
+	}
+	runtime := svc.views[viewRef{spaceID: "space", viewID: "prices"}]
+	if runtime == nil || !runtime.needsRebuild() {
+		t.Fatal("缺失的活动索引应登记为待重建")
 	}
 }
 

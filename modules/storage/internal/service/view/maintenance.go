@@ -200,11 +200,13 @@ func (s *Service) RestoreActiveViews(ctx context.Context, opts MaintenanceOption
 	if opts.Metadata == nil {
 		return errors.New("metadata client is required")
 	}
+	s.mu.Lock()
+	// 断档重建沿用维护参数（回填页大小、请求间隔、保留根数）：跟随器可能先于维护循环启动，维护也可能被禁用。
+	s.maintenance = opts
 	if periodMetadata, ok := opts.Metadata.(PeriodMetadataClient); ok {
-		s.mu.Lock()
 		s.periodMetadata = periodMetadata
-		s.mu.Unlock()
 	}
+	s.mu.Unlock()
 	s.setMetadataClient(opts.Metadata)
 	auth := s.internalAuth()
 	for pageNo := uint32(1); ; pageNo++ {
@@ -230,7 +232,9 @@ func (s *Service) RestoreActiveViews(ctx context.Context, opts MaintenanceOption
 				return err
 			}
 			if !stats.Exists {
-				return fmt.Errorf("active view index %q is missing; refusing to start without a readable active view", view.GetActiveIndexId())
+				// 一个索引不见了不能让整个进程起不来：这个 View 不可读，由跟随器重建。
+				s.holdForRebuild(view, engineName)
+				continue
 			}
 			if err := validatePhysicalViewContract(view, stats); err != nil {
 				recovered, recoverErr := s.recoverViewSchemaExtension(ctx, opts.Metadata, auth, view, engine, stats)
@@ -363,7 +367,11 @@ func (s *Service) maintainView(ctx context.Context, opts MaintenanceOptions, aut
 	}
 	s.observeViewFileSize(view, stats, opts)
 	if !stats.Exists {
-		return fmt.Errorf("View %s/%s 的活动索引 %q 不存在", view.GetSpaceId(), view.GetViewId(), view.GetActiveIndexId())
+		// 活动索引文件不见了（例如原地重建时删掉旧文件后准备新文件失败）：交给跟随器重建。
+		if _, runtime := s.activeIndex(view.GetSpaceId(), view.GetViewId()); runtime == nil || !runtime.needsRebuild() {
+			s.holdForRebuild(view, engineName)
+		}
+		return nil
 	}
 	// 元数据级统计不含覆盖字段：保留上一次完整统计，不能用空值覆盖，否则 TotalMode=NONE 的查询会丢掉完整性信息。
 	_, runtime := s.activeIndex(view.GetSpaceId(), view.GetViewId())

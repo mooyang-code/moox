@@ -93,7 +93,8 @@ type viewRuntime struct {
 	active string
 	// building 是首次建索引期间的写入目标，建成后转为 active。任何时刻只写一个索引。
 	building string
-	// rebuilding 为真表示断档重建进行中：元数据仍说索引是活动的，维护流程不能在建成前把它挂回去。
+	// rebuilding 为真表示要原地重建或正在重建（断档、重建中途失败或退出、活动索引文件不见了）：
+	// 元数据仍说索引是活动的，维护流程不能在建成前把它挂回去，跟随器据此接着重建。
 	rebuilding       bool
 	statsIndexID     string
 	stats            viewindex.ViewIndexStats
@@ -122,6 +123,13 @@ func newViewRuntime() *viewRuntime {
 	runtime := &viewRuntime{}
 	runtime.publishReadStateLocked()
 	return runtime
+}
+
+// needsRebuild 报告 View 是否要原地重建或正在重建。
+func (r *viewRuntime) needsRebuild() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.rebuilding
 }
 
 // publishReadStateLocked republishes the query-path copy; call it with mu held

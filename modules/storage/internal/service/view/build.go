@@ -362,11 +362,41 @@ func (s *Service) AttachActiveView(ctx context.Context, view *pb.View) error {
 		s.views[viewKey] = runtime
 	}
 	s.mu.Unlock()
-	if s.attachRuntime(view, runtime, schema, engineName) {
-		// 解锁之后再起跟随器：换数据集时要等旧跟随器退出，它可能正等着运行时锁写入。
-		s.ensureFollower(viewKey)
-	}
+	s.attachRuntime(view, runtime, schema, engineName)
+	// 解锁之后再起跟随器：换数据集时要等旧跟随器退出，它可能正等着运行时锁写入。
+	// 重建没完成时也要起：跟随器会接着重建。
+	s.ensureFollower(viewKey)
 	return nil
+}
+
+// holdForRebuild 登记一个元数据说是活动的、但索引文件不见了的 View：不挂接、不可读，由跟随器按元数据的列契约原地重建，
+// 不让一个索引拖得整个进程起不来。
+func (s *Service) holdForRebuild(view *pb.View, engineName string) {
+	key := viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}
+	indexID := view.GetActiveIndexId()
+	s.mu.Lock()
+	runtime := s.views[key]
+	if runtime == nil {
+		runtime = newViewRuntime()
+		s.views[key] = runtime
+	}
+	s.catalogViews[key] = proto.Clone(view).(*pb.View)
+	s.indexEngine[indexID] = engineName
+	s.schemas[indexID] = viewindex.ViewIndexSchema{
+		SpaceID: view.GetSpaceId(), ViewID: view.GetViewId(), ViewVersion: view.GetViewRevision(),
+		PrimaryDatasetID: view.GetDatasetId(), Engine: engineName, Columns: view.GetActiveColumns(), SchemaHash: view.GetActiveViewSchemaHash(),
+	}
+	s.indexView[indexID] = key
+	s.attachOwnedDatasetMappingLocked(view.GetSpaceId(), view.GetDatasetId(), indexID)
+	s.mu.Unlock()
+	runtime.mu.Lock()
+	if runtime.active == indexID {
+		runtime.clearActiveLocked()
+	}
+	runtime.building, runtime.rebuilding = indexID, true
+	runtime.mu.Unlock()
+	log.Errorf("storage view %s/%s 的活动索引 %q 不存在，按元数据的列契约重建", view.GetSpaceId(), view.GetViewId(), indexID)
+	s.ensureFollower(key)
 }
 
 // attachRuntime 持有运行时锁挂接活动索引，返回是否挂接了。

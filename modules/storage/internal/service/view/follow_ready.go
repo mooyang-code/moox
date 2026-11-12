@@ -44,11 +44,19 @@ func (s *Service) publishFollowMarker(ctx context.Context, ref viewRef, change *
 		log.Errorf("storage view 跳过来源不认识的完成标记 view=%s/%s 序号=%d 来源=%q", ref.spaceID, ref.viewID, change.GetSequence(), payload.GetSource())
 		return nil
 	}
+	opts := events.PublishOptions{EventID: eventID, OccurredAt: ready.GetReadyAt().AsTime().UTC(), SpaceID: view.GetSpaceId(), SubjectID: view.GetViewId()}
+	// 先按契约编码一遍：过不了校验的事件原样重试也不会成功（发布器返回的校验错误不能可靠地区分），记日志跳过。
+	registry, err := events.DefaultRegistry()
+	if err != nil {
+		return err
+	}
+	if _, err := registry.Encode(events.ViewDataReady, ready, opts); err != nil {
+		log.Errorf("storage view 跳过无法通过契约校验的就绪事件 %s（%s/%s 第 %d 期）：%v", eventID, view.GetSpaceId(), view.GetViewId(), payload.GetPeriodTime(), err)
+		return nil
+	}
 	publishStart := time.Now()
 	publishCtx, cancel := context.WithTimeout(ctx, readyPublishTimeout)
-	_, err := publisher.Publish(publishCtx, events.ViewDataReady, ready, events.PublishOptions{
-		EventID: eventID, OccurredAt: ready.GetReadyAt().AsTime().UTC(), SpaceID: view.GetSpaceId(), SubjectID: view.GetViewId(),
-	})
+	_, err = publisher.Publish(publishCtx, events.ViewDataReady, ready, opts)
 	cancel()
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -64,9 +72,12 @@ func (s *Service) publishFollowMarker(ctx context.Context, ref viewRef, change *
 		}
 		return err
 	}
-	committedAt, _ := time.Parse(time.RFC3339Nano, change.GetCreatedAt())
+	sinceCommit := time.Duration(0)
+	if committedAt, err := time.Parse(time.RFC3339Nano, change.GetCreatedAt()); err == nil {
+		sinceCommit = time.Since(committedAt)
+	}
 	log.Infof("storage view 周期就绪 view=%s/%s 来源=%s 期=%d 标记提交到发布=%s 发布=%s",
-		view.GetSpaceId(), view.GetViewId(), payload.GetSource(), payload.GetPeriodTime(), time.Since(committedAt).Round(time.Millisecond), time.Since(publishStart).Round(time.Millisecond))
+		view.GetSpaceId(), view.GetViewId(), payload.GetSource(), payload.GetPeriodTime(), sinceCommit.Round(time.Millisecond), time.Since(publishStart).Round(time.Millisecond))
 	return nil
 }
 

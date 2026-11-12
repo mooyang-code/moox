@@ -73,6 +73,7 @@ func (s *Service) StartFollowing(ctx context.Context, opts FollowOptions) (func(
 		refs = append(refs, ref)
 	}
 	s.mu.Unlock()
+	s.metrics.SetFollowing(true)
 	s.metrics.SetFollowLagSource(func() []observability.ViewFollowLag {
 		lags := manager.Lags(time.Now())
 		out := make([]observability.ViewFollowLag, 0, len(lags))
@@ -85,6 +86,7 @@ func (s *Service) StartFollowing(ctx context.Context, opts FollowOptions) (func(
 		s.ensureFollower(ref)
 	}
 	return func() {
+		s.metrics.SetFollowing(false)
 		s.metrics.SetFollowLagSource(nil)
 		manager.Close()
 		s.mu.Lock()
@@ -116,7 +118,11 @@ func (s *Service) ensureFollower(ref viewRef) {
 	view := s.catalogViews[ref]
 	runtime := s.views[ref]
 	s.mu.RUnlock()
-	if view == nil || runtime == nil || runtime.queryState().active == "" || strings.TrimSpace(view.GetDatasetId()) == "" {
+	if view == nil || runtime == nil || strings.TrimSpace(view.GetDatasetId()) == "" {
+		return
+	}
+	// 有活动索引，或断档重建还没完成（由跟随器接着重建）时才跟随。
+	if runtime.queryState().active == "" && !runtime.needsRebuild() {
 		return
 	}
 	manager.Ensure(follow.Key{SpaceID: ref.spaceID, ViewID: ref.viewID, DatasetID: strings.TrimSpace(view.GetDatasetId())}, followTarget{s: s, ref: ref})
@@ -129,7 +135,18 @@ type followTarget struct {
 }
 
 func (t followTarget) LoadState(ctx context.Context) (viewindex.FollowState, error) {
-	indexID, engine, err := t.s.followIndex(t.ref)
+	s := t.s
+	s.mu.RLock()
+	runtime := s.views[t.ref]
+	s.mu.RUnlock()
+	if runtime == nil {
+		return viewindex.FollowState{}, fmt.Errorf("View %s/%s 没有运行时", t.ref.spaceID, t.ref.viewID)
+	}
+	if runtime.needsRebuild() {
+		// 上一次重建没完成（失败、中途停掉或进程退出），或活动索引文件不见了：返回空进度，由跟随器重建。
+		return viewindex.FollowState{}, nil
+	}
+	indexID, engine, err := s.followIndex(t.ref)
 	if err != nil {
 		return viewindex.FollowState{}, err
 	}
@@ -138,7 +155,7 @@ func (t followTarget) LoadState(ctx context.Context) (viewindex.FollowState, err
 		return viewindex.FollowState{}, err
 	}
 	if !stats.Exists {
-		return viewindex.FollowState{}, fmt.Errorf("View 的活动索引 %q 不存在", indexID)
+		return viewindex.FollowState{}, nil
 	}
 	return stats.Follow, nil
 }
