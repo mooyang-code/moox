@@ -362,6 +362,15 @@ func (s *Service) AttachActiveView(ctx context.Context, view *pb.View) error {
 		s.views[viewKey] = runtime
 	}
 	s.mu.Unlock()
+	if s.attachRuntime(view, runtime, schema, engineName) {
+		// 解锁之后再起跟随器：换数据集时要等旧跟随器退出，它可能正等着运行时锁写入。
+		s.ensureFollower(viewKey)
+	}
+	return nil
+}
+
+// attachRuntime 持有运行时锁挂接活动索引，返回是否挂接了。
+func (s *Service) attachRuntime(view *pb.View, runtime *viewRuntime, schema viewindex.ViewIndexSchema, engineName string) bool {
 	runtime.mu.Lock()
 	defer runtime.mu.Unlock()
 	// 维护读到的元数据可能早于定时任务刚提交的加列：不能用旧快照把写入契约改回去。
@@ -370,16 +379,14 @@ func (s *Service) AttachActiveView(ctx context.Context, view *pb.View) error {
 	attached := s.schemas[view.GetActiveIndexId()]
 	s.mu.RUnlock()
 	if runtime.active == view.GetActiveIndexId() && attached.ViewVersion > view.GetViewRevision() {
-		return nil
+		return true
 	}
 	// 断档重建进行中：索引建成前不能挂回去。
 	if runtime.rebuilding {
-		return nil
+		return false
 	}
 	s.attachActiveViewLocked(view, runtime, schema, engineName)
-	// ensureFollower 不取运行时锁，可以在这里调用。
-	s.ensureFollower(viewKey)
-	return nil
+	return true
 }
 
 // attachActiveViewLocked 更新内存里的活动索引（调用方持有 runtime.mu）：重启恢复、维护和建索引完成都走这里。

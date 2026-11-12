@@ -131,3 +131,48 @@ func TestFollowRebuildsAfterGap(t *testing.T) {
 	env.WaitApplied(t, ctx, kline.viewID)
 	requireViewRows(t, ctx, env, kline.viewID, next, next.Add(readyBenchStep), uint64(len(kline.subjects)))
 }
+
+// 空闲数据集：别的数据集持续写入，空闲 View 的游标照样前进并落盘；日志清理（相当于 8 天没有写入）后重启不断档、不重建，之后的写入照常应用。
+func TestIdleViewSurvivesChangeLogCleanup(t *testing.T) {
+	ctx := context.Background()
+	idle := readyBenchDataset{datasetID: "bench_idle_ds", viewID: "bench_idle_ds_view", subjects: []string{"BTC-USDT"}, columns: readyBenchKlineColumns}
+	busy := readyBenchDataset{datasetID: "bench_busy_ds", viewID: "bench_busy_ds_view", subjects: []string{"ETH-USDT"}, columns: readyBenchKlineColumns}
+	env := newFollowEnv(t, []readyBenchDataset{idle, busy}, followEnvOptions{})
+	before := env.WaitBuilt(t, ctx, idle.viewID)
+	env.WaitBuilt(t, ctx, busy.viewID)
+	env.stopFollowing()
+	env.follow.Wait, env.follow.PersistInterval = time.Second, 10*time.Millisecond
+	var err error
+	if env.stopFollowing, err = env.view.StartFollowing(ctx, env.follow); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 5; i++ {
+		row := readyBenchRow(busy, busy.subjects[0], readyBenchBase.Add(time.Duration(i)*readyBenchStep), i)
+		writeRowsInBatches(t, ctx, env, busy, []*pb.RowFieldUpsert{row}, "")
+	}
+	head, err := env.store.ChangeCursor()
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for env.WaitBuilt(t, ctx, idle.viewID).GetAppliedCursor().GetSequence() < head.GetSequence() {
+		if time.Now().After(deadline) {
+			t.Fatal("空闲 View 的游标没有扫过别的数据集的条目")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	env.stopFollowing() // 停止时落盘游标
+	if _, err := env.store.CleanupChangeLog(ctx, time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if env.stopFollowing, err = env.view.StartFollowing(ctx, env.follow); err != nil {
+		t.Fatal(err)
+	}
+	row := readyBenchRow(idle, idle.subjects[0], readyBenchBase, 0)
+	writeRowsInBatches(t, ctx, env, idle, []*pb.RowFieldUpsert{row}, "")
+	env.WaitApplied(t, ctx, idle.viewID)
+	requireViewRows(t, ctx, env, idle.viewID, readyBenchBase, readyBenchBase.Add(readyBenchStep), 1)
+	if after := env.WaitBuilt(t, ctx, idle.viewID); after.GetGeneration() != before.GetGeneration() {
+		t.Fatalf("空闲 View 不应重建：建成序号 %d → %d", before.GetGeneration(), after.GetGeneration())
+	}
+}

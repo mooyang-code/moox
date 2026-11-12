@@ -168,7 +168,7 @@ message GetViewStateRsp {
   common.RetInfo ret_info = 1;
   // index_id 是可读的活动索引；为空表示索引还没建好（首次建索引或断档重建中），View 暂不可读。
   string index_id = 2;
-  // generation 是索引的代次：建成那一刻的变更日志头部序号，每次重建都会变。
+  // generation 是索引的代次：建成那一刻的变更日志头部序号，重建后会变；只在 applied_cursor.store_id 相同时可比较（存储重建后序号从头开始）。
   uint64 generation = 3;
   // view_revision、view_schema_hash、columns 是活动索引已建好的列契约；修订号每原地加一次列加 1。
   uint64 view_revision = 4;

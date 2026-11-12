@@ -822,7 +822,7 @@ type GetViewStateRsp struct {
 	RetInfo *commonpb.RetInfo `protobuf:"bytes,1,opt,name=ret_info,json=retInfo,proto3" json:"ret_info,omitempty"`
 	// index_id 是可读的活动索引；为空表示索引还没建好（首次建索引或断档重建中），View 暂不可读。
 	IndexId string `protobuf:"bytes,2,opt,name=index_id,json=indexId,proto3" json:"index_id,omitempty"`
-	// generation 是索引的代次：建成那一刻的变更日志头部序号，每次重建都会变。
+	// generation 是索引的代次：建成那一刻的变更日志头部序号，重建后会变；只在 applied_cursor.store_id 相同时可比较（存储重建后序号从头开始）。
 	Generation uint64 `protobuf:"varint,3,opt,name=generation,proto3" json:"generation,omitempty"`
 	// view_revision、view_schema_hash、columns 是活动索引已建好的列契约；修订号每原地加一次列加 1。
 	ViewRevision   uint64        `protobuf:"varint,4,opt,name=view_revision,json=viewRevision,proto3" json:"view_revision,omitempty"`
