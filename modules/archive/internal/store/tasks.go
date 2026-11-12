@@ -20,7 +20,6 @@ type Task struct {
 	DirName       string
 	Freq          string
 	PartitionUnit string
-	DataNodeID    string
 	Retention     string
 	// MetaJSON 是数据集元数据（名称、简介等）的 JSON，创建与每小时维护时从 Storage 刷新。
 	MetaJSON string
@@ -45,7 +44,7 @@ type Task struct {
 	BlockedReason string
 }
 
-const taskColumns = `c_id, c_space_id, c_dataset_id, c_purpose, c_dir_name, c_freq, c_partition_unit, c_data_node_id, c_retention, c_meta_json, c_pull_every_bars,
+const taskColumns = `c_id, c_space_id, c_dataset_id, c_purpose, c_dir_name, c_freq, c_partition_unit, c_retention, c_meta_json, c_pull_every_bars,
 c_interval_seconds, c_backfill_from, c_status, c_last_boundary, c_last_review, c_consecutive_skips, c_last_success_at, c_final_until,
 c_creator, c_ctime, c_mtime, c_unrecoverable_json, c_blocked_reason`
 
@@ -55,7 +54,7 @@ func scanTask(row rowScanner) (Task, error) {
 	var t Task
 	var backfill, lastBoundary, lastReview, lastSuccess, finalUntil, created, updated timeValue
 	var unrecoverable string
-	err := row.Scan(&t.ID, &t.SpaceID, &t.DatasetID, &t.Purpose, &t.DirName, &t.Freq, &t.PartitionUnit, &t.DataNodeID, &t.Retention, &t.MetaJSON, &t.PullEveryBars,
+	err := row.Scan(&t.ID, &t.SpaceID, &t.DatasetID, &t.Purpose, &t.DirName, &t.Freq, &t.PartitionUnit, &t.Retention, &t.MetaJSON, &t.PullEveryBars,
 		&t.IntervalSeconds, &backfill, &t.Status, &lastBoundary, &lastReview, &t.ConsecutiveSkips, &lastSuccess, &finalUntil,
 		&t.Creator, &created, &updated, &unrecoverable, &t.BlockedReason)
 	if err != nil {
@@ -83,10 +82,10 @@ func (s *Store) CreateTask(ctx context.Context, task Task) (Task, error) {
 		case !errors.Is(err, sql.ErrNoRows):
 			return err
 		}
-		_, err = tx.ExecContext(ctx, `INSERT INTO t_archive_tasks (c_space_id, c_dataset_id, c_purpose, c_dir_name, c_freq, c_partition_unit, c_data_node_id,
+		_, err = tx.ExecContext(ctx, `INSERT INTO t_archive_tasks (c_space_id, c_dataset_id, c_purpose, c_dir_name, c_freq, c_partition_unit,
 c_retention, c_meta_json, c_pull_every_bars, c_interval_seconds, c_backfill_from, c_status, c_consecutive_skips, c_creator)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
-			task.SpaceID, task.DatasetID, task.Purpose, task.DirName, task.Freq, task.PartitionUnit, task.DataNodeID,
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)`,
+			task.SpaceID, task.DatasetID, task.Purpose, task.DirName, task.Freq, task.PartitionUnit,
 			task.Retention, task.MetaJSON, task.PullEveryBars, task.IntervalSeconds, nullTime(task.BackfillFrom), task.Status, task.Creator)
 		if err != nil && isUnique(err) {
 			// 目录名在上面已查过，这里撞上的只能是数据集已有任务。
@@ -208,10 +207,10 @@ func (s *Store) DeleteTask(ctx context.Context, spaceID, datasetID string) (int6
 	return deleted, err
 }
 
-// UpdateTaskDataset 刷新任务的 DataNode 与线上保留期（维护定时器每小时从 Storage 读取）。
-func (s *Store) UpdateTaskDataset(ctx context.Context, spaceID, datasetID, dataNodeID, retention, metaJSON string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE t_archive_tasks SET c_data_node_id = ?, c_retention = ?, c_meta_json = ? WHERE c_space_id = ? AND c_dataset_id = ?
-AND (c_data_node_id != ? OR c_retention != ? OR c_meta_json != ?)`, dataNodeID, retention, metaJSON, spaceID, datasetID, dataNodeID, retention, metaJSON)
+// UpdateTaskDataset 刷新任务的线上保留期与数据集元数据（维护定时器每小时从 Storage 读取）。
+func (s *Store) UpdateTaskDataset(ctx context.Context, spaceID, datasetID, retention, metaJSON string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE t_archive_tasks SET c_retention = ?, c_meta_json = ? WHERE c_space_id = ? AND c_dataset_id = ?
+AND (c_retention != ? OR c_meta_json != ?)`, retention, metaJSON, spaceID, datasetID, retention, metaJSON)
 	return err
 }
 

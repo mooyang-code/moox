@@ -52,11 +52,11 @@ func newHarness(t *testing.T) *harness {
 	t.Cleanup(func() { _ = db.Close() })
 	h := &harness{t: t, store: db, now: time.Date(2026, 10, 17, 1, 0, 0, 0, time.UTC)}
 	h.datasets = &fakeDatasets{datasets: map[string]Dataset{
-		"crypto/ds_1m":  {SpaceID: "crypto", DatasetID: "ds_1m", DataKind: "time_series", Freq: "1m", Status: "active", DataNodeID: "node-0", Retention: "168h"},
-		"crypto/ds_1h":  {SpaceID: "crypto", DatasetID: "ds_1h", DataKind: "time_series", Freq: "1h", Status: "active", DataNodeID: "node-0", Retention: "forever"},
-		"crypto/rec":    {SpaceID: "crypto", DatasetID: "rec", DataKind: "record", Freq: "", Status: "active", DataNodeID: "node-0", Retention: "forever"},
-		"crypto/off":    {SpaceID: "crypto", DatasetID: "off", DataKind: "time_series", Freq: "1m", Status: "building", DataNodeID: "node-0", Retention: "168h"},
-		"stockcn/cn_1m": {SpaceID: "stockcn", DatasetID: "cn_1m", DataKind: "time_series", Freq: "1m", Status: "active", DataNodeID: "node-0", Retention: "1080h"},
+		"crypto/ds_1m":  {SpaceID: "crypto", DatasetID: "ds_1m", DataKind: "time_series", Freq: "1m", Status: "active", Retention: "168h"},
+		"crypto/ds_1h":  {SpaceID: "crypto", DatasetID: "ds_1h", DataKind: "time_series", Freq: "1h", Status: "active", Retention: "forever"},
+		"crypto/rec":    {SpaceID: "crypto", DatasetID: "rec", DataKind: "record", Freq: "", Status: "active", Retention: "forever"},
+		"crypto/off":    {SpaceID: "crypto", DatasetID: "off", DataKind: "time_series", Freq: "1m", Status: "building", Retention: "168h"},
+		"stockcn/cn_1m": {SpaceID: "stockcn", DatasetID: "cn_1m", DataKind: "time_series", Freq: "1m", Status: "active", Retention: "1080h"},
 	}}
 	svc, err := New(db, config.Default(), h.datasets, WithClock(func() time.Time { return h.now }))
 	if err != nil {
@@ -122,7 +122,7 @@ func TestCreateArchiveTaskValidatesTheDatasetAndSchedule(t *testing.T) {
 	}{
 		{"unknown dataset", "nope", nil, commonpb.ErrorCode_DATASET_NOT_FOUND, "nope"},
 		{"record dataset", "rec", nil, commonpb.ErrorCode_INVALID_PARAM, "不是时序数据集"},
-		{"inactive dataset", "off", nil, commonpb.ErrorCode_INVALID_PARAM, "尚未激活"},
+		{"inactive dataset", "off", nil, commonpb.ErrorCode_INVALID_PARAM, "状态不是 active"},
 		{"pull every too many bars", "ds_1m", func(r *archivepb.CreateArchiveTaskReq) { r.PullEveryBars = 1441 }, commonpb.ErrorCode_INVALID_PARAM, "pull_every_bars"},
 		{"backfill in future", "ds_1m", func(r *archivepb.CreateArchiveTaskReq) { r.BackfillFrom = "2026-10-18T00:00:00Z" }, commonpb.ErrorCode_INVALID_PARAM, "早于当前时间"},
 		{"backfill beyond retention", "ds_1m", func(r *archivepb.CreateArchiveTaskReq) { r.BackfillFrom = "2026-10-01T00:00:00Z" }, commonpb.ErrorCode_INVALID_PARAM, "不能早于"},
@@ -145,7 +145,7 @@ func TestCreateArchiveTaskFillsTheTimingAndWaitsForTheNextCheck(t *testing.T) {
 	requireOK(t, rsp.GetRetInfo())
 	task := rsp.GetTask()
 	if task.GetFreq() != "1m" || task.GetPartitionUnit() != "day" || task.GetIntervalSeconds() != 3600 || task.GetPullEveryBars() != 1 || task.GetStatus() != "enabled" ||
-		task.GetDataNodeId() != "node-0" || task.GetRetention() != "168h" || task.GetBackfillFrom() != "2026-10-15T00:00:00Z" ||
+		task.GetRetention() != "168h" || task.GetBackfillFrom() != "2026-10-15T00:00:00Z" ||
 		task.GetLastBoundary() != "" || task.GetLastReview() != "" {
 		t.Fatalf("task = %v", task)
 	}
@@ -164,7 +164,7 @@ func TestCreateArchiveTaskFillsTheTimingAndWaitsForTheNextCheck(t *testing.T) {
 	if n4.GetTask().GetStatus() != "paused" || n4.GetTask().GetNextPullAt() != "" || n4.GetTask().GetPullEveryBars() != 4 || n4.GetTask().GetRetention() != "forever" {
 		t.Fatalf("paused task = %v", n4.GetTask())
 	}
-	h.datasets.datasets["crypto/ds_1d"] = Dataset{SpaceID: "crypto", DatasetID: "ds_1d", DataKind: "time_series", Freq: "1d", Status: "active", DataNodeID: "node-0", Retention: "forever"}
+	h.datasets.datasets["crypto/ds_1d"] = Dataset{SpaceID: "crypto", DatasetID: "ds_1d", DataKind: "time_series", Freq: "1d", Status: "active", Retention: "forever"}
 	daily := h.createOnly("ds_1d", func(r *archivepb.CreateArchiveTaskReq) { r.PullEveryBars = 7 })
 	requireOK(t, daily.GetRetInfo())
 	if daily.GetTask().GetIntervalSeconds() != 86400 || daily.GetTask().GetPullEveryBars() != 1 || daily.GetTask().GetPartitionUnit() != "month" ||
@@ -285,7 +285,7 @@ func TestPrepareAndPreviewReportPullTimesAndReadSpans(t *testing.T) {
 	prep, _ := h.mgr.PrepareArchiveTask(ctx, &archivepb.PrepareArchiveTaskReq{SpaceId: "crypto", DatasetId: "ds_1m"})
 	requireOK(t, prep.GetRetInfo())
 	if prep.GetFreq() != "1m" || prep.GetPartitionUnit() != "day" || prep.GetRecommendedPullEveryBars() != 1 ||
-		prep.GetEarliestBackfillFrom() != "2026-10-11T01:00:00Z" || prep.GetExists() || prep.GetDataNodeId() != "node-0" {
+		prep.GetEarliestBackfillFrom() != "2026-10-11T01:00:00Z" || prep.GetExists() {
 		t.Fatalf("prepare = %v", prep)
 	}
 	forever, _ := h.mgr.PrepareArchiveTask(ctx, &archivepb.PrepareArchiveTaskReq{SpaceId: "crypto", DatasetId: "ds_1h"})
@@ -325,7 +325,7 @@ func TestPrepareAndPreviewReportPullTimesAndReadSpans(t *testing.T) {
 		t.Fatalf("stockcn read span = %d", cnPreview.GetReadSpanSeconds())
 	}
 	// stockcn 1d：15:00 收盘落在整点避让区间，15:04:25（07:04:25 UTC）拉取，拉取即复核。
-	h.datasets.datasets["stockcn/cn_1d"] = Dataset{SpaceID: "stockcn", DatasetID: "cn_1d", DataKind: "time_series", Freq: "1d", Status: "active", DataNodeID: "node-0", Retention: "forever"}
+	h.datasets.datasets["stockcn/cn_1d"] = Dataset{SpaceID: "stockcn", DatasetID: "cn_1d", DataKind: "time_series", Freq: "1d", Status: "active", Retention: "forever"}
 	daily, _ := h.mgr.PreviewArchiveSchedule(ctx, &archivepb.PreviewArchiveScheduleReq{SpaceId: "stockcn", DatasetId: "cn_1d"})
 	requireOK(t, daily.GetRetInfo())
 	if daily.GetIntervalSeconds() != 86400 || len(daily.GetNextRuns()) != 5 || daily.GetNextRuns()[0] != "2026-10-17T07:04:25Z" || daily.GetNextRuns()[1] != "2026-10-18T07:04:25Z" ||
@@ -387,7 +387,7 @@ func (h *harness) heartbeat(worker, instance string, running ...string) *archive
 
 func (h *harness) pull(worker, instance string, slots uint32) []*archivepb.RunAssignment {
 	h.t.Helper()
-	rsp, err := h.worker.PullArchiveRun(context.Background(), &archivepb.PullArchiveRunReq{WorkerId: worker, InstanceId: instance, FreeSlots: slots, MaxRunsPerDataNode: 2})
+	rsp, err := h.worker.PullArchiveRun(context.Background(), &archivepb.PullArchiveRunReq{WorkerId: worker, InstanceId: instance, FreeSlots: slots, MaxStorageRuns: 2})
 	if err != nil {
 		h.t.Fatal(err)
 	}
@@ -422,7 +422,7 @@ func TestWorkerLeaseAndPullFlow(t *testing.T) {
 		t.Fatalf("runs = %v", runs)
 	}
 	run := runs[0]
-	if run.GetLeaseToken() == "" || run.GetKind() != "manual" || run.GetFreq() != "1m" || run.GetPartitionUnit() != "day" || run.GetDataNodeId() != "node-0" ||
+	if run.GetLeaseToken() == "" || run.GetKind() != "manual" || run.GetFreq() != "1m" || run.GetPartitionUnit() != "day" ||
 		run.GetMinLookbackSeconds() != 900 || run.GetStagingRetentionSeconds() != 72*3600 || run.GetSpaceTz() != "UTC" || run.GetLocalClose() != "" ||
 		run.GetBackfillFrom() != "2026-10-15T00:00:00Z" || run.GetStartedAt() != "2026-10-17T01:00:00Z" || run.GetIntervalSeconds() != 3600 || run.GetLeaseTtlSeconds() != 600 ||
 		run.GetPurpose() != "data" || run.GetDirName() != "ds-1m" {
@@ -771,8 +771,8 @@ func TestTriggerGeneratesReviewsAndTicksByBoundary(t *testing.T) {
 
 func TestTriggerDailyTasksOnlyReviewOncePerDay(t *testing.T) {
 	h := newHarness(t)
-	h.datasets.datasets["crypto/ds_1d"] = Dataset{SpaceID: "crypto", DatasetID: "ds_1d", DataKind: "time_series", Freq: "1d", Status: "active", DataNodeID: "node-0", Retention: "forever"}
-	h.datasets.datasets["stockcn/cn_1d"] = Dataset{SpaceID: "stockcn", DatasetID: "cn_1d", DataKind: "time_series", Freq: "1d", Status: "active", DataNodeID: "node-1", Retention: "forever"}
+	h.datasets.datasets["crypto/ds_1d"] = Dataset{SpaceID: "crypto", DatasetID: "ds_1d", DataKind: "time_series", Freq: "1d", Status: "active", Retention: "forever"}
+	h.datasets.datasets["stockcn/cn_1d"] = Dataset{SpaceID: "stockcn", DatasetID: "cn_1d", DataKind: "time_series", Freq: "1d", Status: "active", Retention: "forever"}
 	requireOK(t, h.createOnly("ds_1d", nil).GetRetInfo())
 	requireOK(t, h.createOnly("cn_1d", func(r *archivepb.CreateArchiveTaskReq) { r.SpaceId = "stockcn" }).GetRetInfo())
 	h.trigger(at(1, 10, 25))
@@ -815,7 +815,7 @@ func TestMaintainRefreshesDatasetInfoOncePerHour(t *testing.T) {
 	requireOK(t, h.create("ds_1m", nil).GetRetInfo())
 	h.datasets.mu.Lock()
 	ds := h.datasets.datasets["crypto/ds_1m"]
-	ds.Retention, ds.DataNodeID = "336h", "node-7"
+	ds.Retention = "336h"
 	h.datasets.datasets["crypto/ds_1m"] = ds
 	h.datasets.mu.Unlock()
 	callsBefore := h.datasets.calls
@@ -823,7 +823,7 @@ func TestMaintainRefreshesDatasetInfoOncePerHour(t *testing.T) {
 		t.Fatal(err)
 	}
 	task, _ := h.store.GetTask(ctx, "crypto", "ds_1m")
-	if task.Retention != "336h" || task.DataNodeID != "node-7" || h.datasets.calls != callsBefore+1 {
+	if task.Retention != "336h" || h.datasets.calls != callsBefore+1 {
 		t.Fatalf("task = %+v calls=%d", task, h.datasets.calls)
 	}
 	if err := h.svc.Maintain(ctx); err != nil || h.datasets.calls != callsBefore+1 {
@@ -1077,7 +1077,7 @@ func TestTaskCarriesDatasetMetadataToTheWorkerAndRefreshesIt(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
 	h.datasets.datasets["crypto/ds_1m"] = Dataset{SpaceID: "crypto", DatasetID: "ds_1m", Name: "现货分钟K线", Description: "币安现货 1 分钟 K 线", DataSourceID: "binance_spot",
-		DataKind: "time_series", Freq: "1m", Status: "active", DataNodeID: "node-0", Retention: "168h", SubjectTags: []string{"crypto_spot"}, Revision: 3}
+		DataKind: "time_series", Freq: "1m", Status: "active", Retention: "168h", SubjectTags: []string{"crypto_spot"}, Revision: 3}
 	requireOK(t, h.create("ds_1m", nil).GetRetInfo())
 	task, _ := h.store.GetTask(ctx, "crypto", "ds_1m")
 	for _, want := range []string{`"name":"现货分钟K线"`, `"description":"币安现货 1 分钟 K 线"`, `"data_source_id":"binance_spot"`, `"subject_tags":["crypto_spot"]`, `"online_retention":"168h"`} {

@@ -25,7 +25,7 @@ func openTest(t *testing.T) *Store {
 // task 返回一个测试任务；目录名按数据集取，同一空间里多个任务不会撞目录名。
 func task(space, dataset string) Task {
 	return Task{
-		SpaceID: space, DatasetID: dataset, Purpose: "collect", DirName: "dir-" + strings.ReplaceAll(dataset, "_", "-"), Freq: "1m", PartitionUnit: "day", DataNodeID: "node-0", Retention: "168h",
+		SpaceID: space, DatasetID: dataset, Purpose: "collect", DirName: "dir-" + strings.ReplaceAll(dataset, "_", "-"), Freq: "1m", PartitionUnit: "day", Retention: "168h",
 		PullEveryBars: 1, IntervalSeconds: 3600, Status: StatusEnabled, Creator: "tester",
 	}
 }
@@ -232,28 +232,23 @@ func TestCreateRunRejectsConcurrentRunsAndUnknownTasks(t *testing.T) {
 	}
 }
 
-func TestClaimRunsOrdersByScheduleAndHonorsSlotsAndDataNodeLimits(t *testing.T) {
+func TestClaimRunsOrdersByScheduleAndHonorsSlotsAndStorageLimit(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
 	for i, name := range []string{"a", "b", "c"} {
-		tk := task("crypto", name)
-		tk.DataNodeID = "node-0"
-		if name == "c" {
-			tk.DataNodeID = "node-1"
-		}
-		if _, err := s.CreateTask(ctx, tk); err != nil {
+		if _, err := s.CreateTask(ctx, task("crypto", name)); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := s.CreateRun(ctx, "crypto", name, RunSpec{Kind: KindManual}, t0.Add(time.Duration(i)*time.Second)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	// 每个 DataNode 最多 1 个：a(node-0) 与 c(node-1) 被领取，b 被 node-0 的上限挡住。
-	claimed, err := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w1", FreeSlots: 3, MaxPerDataNode: 1, Now: t0, LeaseTTL: 10 * time.Minute})
+	// 读 Storage 的运行最多 2 个：按计划时刻领取 a 与 b，c 被上限挡住。
+	claimed, err := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w1", FreeSlots: 3, MaxStorageRuns: 2, Now: t0, LeaseTTL: 10 * time.Minute})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(claimed) != 2 || claimed[0].Task.DatasetID != "a" || claimed[1].Task.DatasetID != "c" {
+	if len(claimed) != 2 || claimed[0].Task.DatasetID != "a" || claimed[1].Task.DatasetID != "b" {
 		t.Fatalf("claimed = %+v", claimed)
 	}
 	for _, c := range claimed {
@@ -261,8 +256,8 @@ func TestClaimRunsOrdersByScheduleAndHonorsSlotsAndDataNodeLimits(t *testing.T) 
 			t.Fatalf("run = %+v", c.Run)
 		}
 	}
-	// worker 自己报告的占用也算：node-1 已占 1，剩下的 b 在 node-0 上被 a 占住，仍领不到。
-	again, err := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w1", FreeSlots: 1, MaxPerDataNode: 1, BusyByDataNode: map[string]int{"node-0": 1}, Now: t0, LeaseTTL: time.Minute})
+	// worker 自己报告的占用也算：已在运行 2 个，c 仍领不到。
+	again, err := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w1", FreeSlots: 1, MaxStorageRuns: 2, BusyStorageRuns: 2, Now: t0, LeaseTTL: time.Minute})
 	if err != nil || len(again) != 0 {
 		t.Fatalf("again = %+v err=%v", again, err)
 	}
@@ -270,20 +265,18 @@ func TestClaimRunsOrdersByScheduleAndHonorsSlotsAndDataNodeLimits(t *testing.T) 
 	if none, _ := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w1", FreeSlots: 0, Now: t0, LeaseTTL: time.Minute}); len(none) != 0 {
 		t.Fatalf("none = %+v", none)
 	}
-	last, err := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w1", FreeSlots: 5, MaxPerDataNode: 2, Now: t0, LeaseTTL: time.Minute})
-	if err != nil || len(last) != 1 || last[0].Task.DatasetID != "b" {
+	last, err := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w1", FreeSlots: 5, MaxStorageRuns: 3, BusyStorageRuns: 2, Now: t0, LeaseTTL: time.Minute})
+	if err != nil || len(last) != 1 || last[0].Task.DatasetID != "c" {
 		t.Fatalf("last = %+v err=%v", last, err)
 	}
 }
 
-// 导入不读 Storage：DataNode 名额已满时照样领取，也不占名额。
-func TestClaimRunsLetsImportBypassDataNodeLimit(t *testing.T) {
+// 导入不读 Storage：读 Storage 的名额已满时照样领取，也不占名额。
+func TestClaimRunsLetsImportBypassStorageLimit(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
 	for _, name := range []string{"busy", "imp", "after"} {
-		tk := task("crypto", name)
-		tk.DataNodeID = "node-0"
-		if _, err := s.CreateTask(ctx, tk); err != nil {
+		if _, err := s.CreateTask(ctx, task("crypto", name)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -293,8 +286,8 @@ func TestClaimRunsLetsImportBypassDataNodeLimit(t *testing.T) {
 	if _, err := s.CreateRun(ctx, "crypto", "imp", RunSpec{Kind: KindImport, ImportFile: "imp_0123456789abcdef01234567/import.csv"}, t0.Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	// node-0 已被 worker 占满（上限 1）：manual 领不到，import 照样领取。
-	claimed, err := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w1", FreeSlots: 3, MaxPerDataNode: 1, BusyByDataNode: map[string]int{"node-0": 1}, Now: t0, LeaseTTL: time.Minute})
+	// 读 Storage 的名额已被 worker 占满（上限 1）：manual 领不到，import 照样领取。
+	claimed, err := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w1", FreeSlots: 3, MaxStorageRuns: 1, BusyStorageRuns: 1, Now: t0, LeaseTTL: time.Minute})
 	if err != nil || len(claimed) != 1 || claimed[0].Run.Kind != KindImport {
 		t.Fatalf("claimed = %+v err=%v", claimed, err)
 	}
@@ -304,9 +297,7 @@ func TestClaimRunsLetsImportBypassDataNodeLimit(t *testing.T) {
 func TestImportCoexistsWithQueuedRunsButTaskRunsOneAtATime(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
-	tk := task("crypto", "ds1")
-	tk.DataNodeID = "node-0"
-	if _, err := s.CreateTask(ctx, tk); err != nil {
+	if _, err := s.CreateTask(ctx, task("crypto", "ds1")); err != nil {
 		t.Fatal(err)
 	}
 	spec := RunSpec{Kind: KindImport, ImportFile: "imp_0123456789abcdef01234567/import.csv"}
@@ -324,13 +315,13 @@ func TestImportCoexistsWithQueuedRunsButTaskRunsOneAtATime(t *testing.T) {
 	if _, err := s.CreateRun(ctx, "crypto", "ds1", spec, t0); !errors.Is(err, ErrConflict) {
 		t.Fatalf("第二条导入应冲突: %v", err)
 	}
-	// DataNode 名额已满：manual 领不到，导入领到；同一次领取里不会再领同任务的 manual。
-	claimed, err := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w1", FreeSlots: 3, MaxPerDataNode: 1, BusyByDataNode: map[string]int{"node-0": 1}, Now: t0, LeaseTTL: time.Minute})
+	// 读 Storage 的名额已满：manual 领不到，导入领到；同一次领取里不会再领同任务的 manual。
+	claimed, err := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w1", FreeSlots: 3, MaxStorageRuns: 1, BusyStorageRuns: 1, Now: t0, LeaseTTL: time.Minute})
 	if err != nil || len(claimed) != 1 || claimed[0].Run.RunID != imp.RunID {
 		t.Fatalf("claimed = %+v err=%v", claimed, err)
 	}
-	// 导入运行中：即使 DataNode 有空，同任务的 manual 也不领取；导入运行中时再建导入冲突。
-	again, err := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w1", FreeSlots: 3, MaxPerDataNode: 2, Now: t0, LeaseTTL: time.Minute})
+	// 导入运行中：即使读 Storage 的名额有空，同任务的 manual 也不领取；导入运行中时再建导入冲突。
+	again, err := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w1", FreeSlots: 3, MaxStorageRuns: 2, Now: t0, LeaseTTL: time.Minute})
 	if err != nil || len(again) != 0 {
 		t.Fatalf("again = %+v err=%v", again, err)
 	}
@@ -340,13 +331,13 @@ func TestImportCoexistsWithQueuedRunsButTaskRunsOneAtATime(t *testing.T) {
 	if err := s.CompleteRun(ctx, CompleteRequest{RunID: imp.RunID, WorkerID: "w1", LeaseToken: claimed[0].Run.LeaseToken, Status: RunSucceeded, Now: t0}); err != nil {
 		t.Fatal(err)
 	}
-	last, err := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w1", FreeSlots: 3, MaxPerDataNode: 2, Now: t0, LeaseTTL: time.Minute})
+	last, err := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w1", FreeSlots: 3, MaxStorageRuns: 2, Now: t0, LeaseTTL: time.Minute})
 	if err != nil || len(last) != 1 || last[0].Run.Kind != KindManual {
 		t.Fatalf("last = %+v err=%v", last, err)
 	}
 }
 
-// 同一次领取里，同一任务只领计划时刻更早的那条（不限 DataNode 名额时也一样）。
+// 同一次领取里，同一任务只领计划时刻更早的那条（不限读 Storage 名额时也一样）。
 func TestClaimRunsTakesOneRunPerTaskWithinOneClaim(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
@@ -366,14 +357,12 @@ func TestClaimRunsTakesOneRunPerTaskWithinOneClaim(t *testing.T) {
 	}
 }
 
-// 同一次领取里，排在前面的 import 不计入 DataNode 占用：上限 1 时后面的普通运行仍能领到。
-func TestClaimRunsImportDoesNotConsumeDataNodeSlotWithinOneClaim(t *testing.T) {
+// 同一次领取里，排在前面的 import 不计入读 Storage 的占用：上限 1 时后面的普通运行仍能领到。
+func TestClaimRunsImportDoesNotConsumeStorageSlotWithinOneClaim(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
 	for _, name := range []string{"imp", "plain"} {
-		tk := task("crypto", name)
-		tk.DataNodeID = "node-0"
-		if _, err := s.CreateTask(ctx, tk); err != nil {
+		if _, err := s.CreateTask(ctx, task("crypto", name)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -383,7 +372,7 @@ func TestClaimRunsImportDoesNotConsumeDataNodeSlotWithinOneClaim(t *testing.T) {
 	if _, err := s.CreateRun(ctx, "crypto", "plain", RunSpec{Kind: KindManual}, t0.Add(time.Second)); err != nil {
 		t.Fatal(err)
 	}
-	claimed, err := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w1", FreeSlots: 3, MaxPerDataNode: 1, Now: t0, LeaseTTL: time.Minute})
+	claimed, err := s.ClaimRuns(ctx, ClaimRequest{WorkerID: "w1", FreeSlots: 3, MaxStorageRuns: 1, Now: t0, LeaseTTL: time.Minute})
 	if err != nil || len(claimed) != 2 || claimed[0].Run.Kind != KindImport || claimed[1].Task.DatasetID != "plain" {
 		t.Fatalf("claimed = %+v err=%v", claimed, err)
 	}
@@ -743,7 +732,7 @@ func TestCreateTaskKeepsDirNamesUniquePerSpaceAndPurpose(t *testing.T) {
 	if _, err := s.UpdateTask(ctx, "crypto", "ds1", TaskUpdate{PullEveryBars: 5, Status: StatusPaused}, t0); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.UpdateTaskDataset(ctx, "crypto", "ds1", "node-1", "720h", `{"name":"x"}`); err != nil {
+	if err := s.UpdateTaskDataset(ctx, "crypto", "ds1", "720h", `{"name":"x"}`); err != nil {
 		t.Fatal(err)
 	}
 	if got, _ := s.GetTask(ctx, "crypto", "ds1"); got.Purpose != "collect" || got.DirName != "binance-spot-kline-1m" {
@@ -1007,15 +996,15 @@ func TestHeartbeatKeepsASingleActiveWorkerAndDetectsDuplicateInstances(t *testin
 	}
 }
 
-func TestUpdateTaskDatasetRefreshesRetentionAndDataNode(t *testing.T) {
+func TestUpdateTaskDatasetRefreshesRetention(t *testing.T) {
 	s := openTest(t)
 	ctx := context.Background()
 	mustTask(t, s, "crypto", "ds1", false)
-	if err := s.UpdateTaskDataset(ctx, "crypto", "ds1", "node-9", "336h", ""); err != nil {
+	if err := s.UpdateTaskDataset(ctx, "crypto", "ds1", "336h", ""); err != nil {
 		t.Fatal(err)
 	}
 	got, _ := s.GetTask(ctx, "crypto", "ds1")
-	if got.DataNodeID != "node-9" || got.Retention != "336h" {
+	if got.Retention != "336h" {
 		t.Fatalf("task = %+v", got)
 	}
 	runsByTask, err := s.LastRuns(ctx, "crypto")

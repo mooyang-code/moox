@@ -97,13 +97,14 @@ type StagingSection struct {
 type PacingSection struct {
 	RequestSeconds [2]int `yaml:"request_seconds"`
 	// MinuteWindow 控制是否按秒窗口避让，默认 true；设为 false 则整分钟都可发（优先于 mgr 下发的规则，整点静默仍生效）。
-	MinuteWindow       bool          `yaml:"minute_window"`
-	HourQuiet          [2]string     `yaml:"hour_quiet"`
-	RequestInterval    time.Duration `yaml:"request_interval"`
-	MaxBytesPerSecond  ByteSize      `yaml:"max_bytes_per_second"`
-	MaxConcurrentRuns  int           `yaml:"max_concurrent_runs"`
-	MaxRunsPerDataNode int           `yaml:"max_runs_per_data_node"`
-	PageRows           int           `yaml:"page_rows"`
+	MinuteWindow      bool          `yaml:"minute_window"`
+	HourQuiet         [2]string     `yaml:"hour_quiet"`
+	RequestInterval   time.Duration `yaml:"request_interval"`
+	MaxBytesPerSecond ByteSize      `yaml:"max_bytes_per_second"`
+	MaxConcurrentRuns int           `yaml:"max_concurrent_runs"`
+	// MaxStorageRuns 是读 Storage 的运行（导入除外）同时运行的上限，不超过 MaxConcurrentRuns。
+	MaxStorageRuns int `yaml:"max_storage_runs"`
+	PageRows       int `yaml:"page_rows"`
 }
 
 // HealthSection 是健康检查监听地址。
@@ -135,7 +136,7 @@ func Default() *Config {
 		Staging: StagingSection{CacheSize: ByteSize(256 << 20)},
 		Pacing: PacingSection{
 			RequestSeconds: [2]int{25, 55}, MinuteWindow: true, HourQuiet: [2]string{"58:00", "04:00"}, RequestInterval: 200 * time.Millisecond,
-			MaxBytesPerSecond: ByteSize(512 << 10), MaxConcurrentRuns: 4, MaxRunsPerDataNode: 2, PageRows: 500,
+			MaxBytesPerSecond: ByteSize(512 << 10), MaxConcurrentRuns: 4, MaxStorageRuns: 2, PageRows: 500,
 		},
 		Health:      HealthSection{Addr: "127.0.0.1:11418"},
 		DataAPI:     DataAPISection{MaxBytesPerSecond: ByteSize(2 << 20)},
@@ -213,8 +214,8 @@ func (c *Config) Validate() error {
 	if p.MaxConcurrentRuns < 1 || p.MaxConcurrentRuns > 16 {
 		return fmt.Errorf("pacing.max_concurrent_runs 必须在 1 到 16 之间")
 	}
-	if p.MaxRunsPerDataNode < 1 || p.MaxRunsPerDataNode > p.MaxConcurrentRuns {
-		return fmt.Errorf("pacing.max_runs_per_data_node 必须在 1 到 max_concurrent_runs 之间")
+	if p.MaxStorageRuns < 1 || p.MaxStorageRuns > p.MaxConcurrentRuns {
+		return fmt.Errorf("pacing.max_storage_runs 必须在 1 到 max_concurrent_runs 之间")
 	}
 	if p.PageRows < 1 || p.PageRows > 2000 {
 		return fmt.Errorf("pacing.page_rows 必须在 1 到 2000 之间（Storage 单页上限 2000）")

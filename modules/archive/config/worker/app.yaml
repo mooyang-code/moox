@@ -29,7 +29,7 @@ pacing:
   request_interval: 200ms
   max_bytes_per_second: 512KB
   max_concurrent_runs: 4
-  max_runs_per_data_node: 2
+  max_storage_runs: 2                # 读 Storage 的运行（导入除外）同时运行的上限，不超过 max_concurrent_runs
   page_rows: 500
 
 health:

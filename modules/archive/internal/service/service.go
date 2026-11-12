@@ -18,13 +18,12 @@ import (
 
 // Dataset 是创建任务所需的数据集信息，来自 Storage 的 Metadata.GetDataset。
 type Dataset struct {
-	SpaceID    string
-	DatasetID  string
-	Name       string
-	DataKind   string
-	Freq       string
-	Status     string
-	DataNodeID string
+	SpaceID   string
+	DatasetID string
+	Name      string
+	DataKind  string
+	Freq      string
+	Status    string
 	// Retention 是线上保留期："<n>h" 或 "forever"。
 	Retention string
 	// 以下是写进归档根目录元数据文件的数据集信息。

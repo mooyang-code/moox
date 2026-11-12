@@ -37,7 +37,7 @@ func TestLoadAppliesTheDocumentedDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 	if cfg.Pacing.RequestSeconds != [2]int{25, 55} || cfg.Pacing.HourQuiet != [2]string{"58:00", "04:00"} || cfg.Pacing.RequestInterval != 200*time.Millisecond ||
-		cfg.Pacing.MaxBytesPerSecond != 512<<10 || cfg.Pacing.MaxConcurrentRuns != 4 || cfg.Pacing.MaxRunsPerDataNode != 2 || cfg.Pacing.PageRows != 500 {
+		cfg.Pacing.MaxBytesPerSecond != 512<<10 || cfg.Pacing.MaxConcurrentRuns != 4 || cfg.Pacing.MaxStorageRuns != 2 || cfg.Pacing.PageRows != 500 {
 		t.Fatalf("pacing = %+v", cfg.Pacing)
 	}
 	if cfg.Worker.MinFreeBytes != 5<<30 || cfg.Worker.HeartbeatInterval != 10*time.Second || cfg.Worker.PullInterval != 5*time.Second ||
@@ -60,22 +60,22 @@ func TestLoadAppliesTheDocumentedDefaults(t *testing.T) {
 
 func TestLoadRejectsBadSettings(t *testing.T) {
 	for name, extra := range map[string]string{
-		"unknown key":     "mystery: 1\n",
-		"relative root":   "",
-		"documents root":  "",
-		"slow heartbeat":  "worker_override: x\n",
-		"bad format":      "",
-		"wrong caller":    "",
-		"low free":        "",
-		"bad quiet":       "",
-		"too many pages":  "",
-		"bad maintenance": "",
-		"per node over":   "",
-		"small cache":     "",
-		"two documents":   "---\nworker:\n  worker_id: x\n",
-		"export formats":  "",
-		"removed listen":  "data_api:\n  listen: 127.0.0.1:11428\n",
-		"slow data api":   "data_api:\n  max_bytes_per_second: 255KB\n",
+		"unknown key":       "mystery: 1\n",
+		"relative root":     "",
+		"documents root":    "",
+		"slow heartbeat":    "worker_override: x\n",
+		"bad format":        "",
+		"wrong caller":      "",
+		"low free":          "",
+		"bad quiet":         "",
+		"too many pages":    "",
+		"bad maintenance":   "",
+		"storage runs over": "",
+		"small cache":       "",
+		"two documents":     "---\nworker:\n  worker_id: x\n",
+		"export formats":    "",
+		"removed listen":    "data_api:\n  listen: 127.0.0.1:11428\n",
+		"slow data api":     "data_api:\n  max_bytes_per_second: 255KB\n",
 	} {
 		body := base
 		switch name {
@@ -98,8 +98,8 @@ func TestLoadRejectsBadSettings(t *testing.T) {
 			body = base + "pacing:\n  page_rows: 5000\n"
 		case "bad maintenance":
 			body = base + "maintenance:\n  at: noon\n"
-		case "per node over":
-			body = base + "pacing:\n  max_concurrent_runs: 2\n  max_runs_per_data_node: 3\n"
+		case "storage runs over":
+			body = base + "pacing:\n  max_concurrent_runs: 2\n  max_storage_runs: 3\n"
 		case "small cache":
 			body = base + "staging:\n  cache_size: 64KB\n"
 		case "export formats":

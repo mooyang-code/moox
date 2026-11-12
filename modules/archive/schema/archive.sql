@@ -1,7 +1,7 @@
 -- Archive manager SQLite schema（库以 PRAGMA auto_vacuum = INCREMENTAL 创建，见 store.Open）。
 -- 时间列统一存 UTC 文本 "2006-01-02 15:04:05.000"，按字典序比较即按时间比较。
 
--- 归档任务：一个时序数据集最多一个任务；频率、分区粒度和复核间隔在保存时确定，保留期与 DataNode 由维护定时器刷新
+-- 归档任务：一个时序数据集最多一个任务；频率、分区粒度和复核间隔在保存时确定，保留期由维护定时器刷新
 -- c_last_boundary、c_last_review 是最近一次已生成运行的拉取边界与复核边界，为空时下一次检查立即复核
 -- c_purpose（collect 采集结果、factor 因子结果、data 其他）与 c_dir_name 决定分区目录 <空间>/<用途>/<目录名>/，建好后不改
 CREATE TABLE IF NOT EXISTS t_archive_tasks (
@@ -12,7 +12,6 @@ CREATE TABLE IF NOT EXISTS t_archive_tasks (
     c_dir_name TEXT NOT NULL,
     c_freq TEXT NOT NULL,
     c_partition_unit TEXT NOT NULL,
-    c_data_node_id TEXT NOT NULL DEFAULT '',
     c_retention TEXT NOT NULL DEFAULT '',
     c_meta_json TEXT NOT NULL DEFAULT '',
     c_pull_every_bars INTEGER NOT NULL DEFAULT 1,

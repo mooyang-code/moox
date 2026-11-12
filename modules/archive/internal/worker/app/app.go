@@ -298,7 +298,7 @@ func (a *App) pacingJSON() string {
 		"source": rules.Source, "computed_at": rules.ComputedAt, "minute_window": minuteWindow,
 		"every_minutes": rules.EveryMinutes, "before_seconds": rules.BeforeSeconds, "after_seconds": rules.AfterSeconds, "hour_quiet": hourQuiet,
 		"max_bytes_per_second": int64(cfg.Pacing.MaxBytesPerSecond), "max_concurrent_runs": cfg.Pacing.MaxConcurrentRuns,
-		"max_runs_per_data_node": cfg.Pacing.MaxRunsPerDataNode,
+		"max_storage_runs": cfg.Pacing.MaxStorageRuns,
 	})
 	return string(raw)
 }
@@ -334,11 +334,11 @@ func (a *App) pullOnce(ctx context.Context) {
 	a.mu.Lock()
 	free := cfg.Pacing.MaxConcurrentRuns - len(a.running) - a.pulling
 	blocked := a.maintaining || a.diskInsufficient
-	busy := map[string]uint32{}
+	var busy uint32
 	for _, r := range a.running {
-		// 导入不读 Storage 时序数据（只取一次列信息），不计入 DataNode 的并发占用（与 mgr 领取时的口径一致）。
+		// 导入不读 Storage 时序数据（只取一次列信息），不计入读 Storage 的并发占用（与 mgr 领取时的口径一致）。
 		if r.assignment.GetKind() != "import" {
-			busy[r.assignment.GetDataNodeId()]++
+			busy++
 		}
 	}
 	if free > 0 && !blocked && a.active && !a.lastHeartbeatOK.IsZero() && a.opts.Now().Sub(a.lastHeartbeatOK) < a.leaseTTL {
@@ -357,15 +357,11 @@ func (a *App) pullOnce(ctx context.Context) {
 			a.mu.Unlock()
 		}
 	}()
-	var loads []*archivepb.DataNodeLoad
-	for node, n := range busy {
-		loads = append(loads, &archivepb.DataNodeLoad{DataNodeId: node, Running: n})
-	}
 	callCtx, cancel := context.WithTimeout(ctx, rpcTimeout)
 	defer cancel()
 	rsp, err := a.opts.Manager.Pull(callCtx, &archivepb.PullArchiveRunReq{
 		WorkerId: cfg.Worker.WorkerID, InstanceId: a.opts.InstanceID, FreeSlots: uint32(free),
-		MaxRunsPerDataNode: uint32(cfg.Pacing.MaxRunsPerDataNode), BusyDataNodes: loads,
+		MaxStorageRuns: uint32(cfg.Pacing.MaxStorageRuns), BusyStorageRuns: busy,
 	})
 	if err != nil {
 		log.Warnf("archive worker pull failed: %v", err)
