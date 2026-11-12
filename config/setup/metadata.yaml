@@ -156,6 +156,20 @@ tags:
     sync.index: "000300"
     sync.cron: "40 8 * * *"
     sync.timezone: Asia/Shanghai
+# 港股恒指：行情源是东方财富（sync.source），成分名单来自腾讯（sync.index_source）。
+- space_id: stockhk
+  tag_id: hk_hsi
+  tag_name: 恒生指数
+  description: 恒生指数成分股，每天开盘前按腾讯的指数成分接口同步
+  mode: auto
+  builtin: true
+  attributes:
+    market_type: equity
+    sync.source: eastmoney
+    sync.index_source: tencent
+    sync.index: HSI
+    sync.cron: "40 8 * * *"
+    sync.timezone: Asia/Hong_Kong
 
 datasets:
 - space_id: stockcn
@@ -181,20 +195,6 @@ datasets:
     source_directories: 财务预处理数据
     storage_model: wide_common_metrics
 
-- space_id: stockhk
-  dataset_id: dataset_stockhk_equity_kline_1d
-  data_source_id: market_data
-  name: 港股行情
-  data_kind: time_series
-  data_node_id: storage-node-0
-  freq: 1d
-  status: disabled
-  attributes:
-    market_id: stockhk
-    instrument_type: equity
-    storage_model: wide_common_metrics
-    owner_module: collector
-    dataset_role: raw_collection
 - space_id: stockus
   dataset_id: dataset_stockus_equity_kline_1d
   data_source_id: market_data
@@ -209,7 +209,6 @@ datasets:
     storage_model: wide_common_metrics
     owner_module: collector
     dataset_role: raw_collection
-
 
 - space_id: mooxsys
   dataset_id: dataset_mooxsys_host_resource
@@ -1335,71 +1334,6 @@ fields:
 
 dataset_columns:
 
-- space_id: stockhk
-  dataset_id: dataset_stockhk_equity_kline_1d
-  column_name: open
-  origin_type: field
-  origin_id: open
-  value_type: double
-  status: active
-- space_id: stockhk
-  dataset_id: dataset_stockhk_equity_kline_1d
-  column_name: high
-  origin_type: field
-  origin_id: high
-  value_type: double
-  status: active
-- space_id: stockhk
-  dataset_id: dataset_stockhk_equity_kline_1d
-  column_name: low
-  origin_type: field
-  origin_id: low
-  value_type: double
-  status: active
-- space_id: stockhk
-  dataset_id: dataset_stockhk_equity_kline_1d
-  column_name: close
-  origin_type: field
-  origin_id: close
-  value_type: double
-  required: true
-  status: active
-- space_id: stockhk
-  dataset_id: dataset_stockhk_equity_kline_1d
-  column_name: volume
-  origin_type: field
-  origin_id: volume
-  value_type: double
-  status: active
-- space_id: stockhk
-  dataset_id: dataset_stockhk_equity_kline_1d
-  column_name: amount
-  origin_type: field
-  origin_id: amount
-  value_type: double
-  status: active
-- space_id: stockhk
-  dataset_id: dataset_stockhk_equity_kline_1d
-  column_name: provider_id
-  origin_type: field
-  origin_id: provider_id
-  value_type: string
-  status: active
-- space_id: stockhk
-  dataset_id: dataset_stockhk_equity_kline_1d
-  column_name: source_id
-  origin_type: field
-  origin_id: source_id
-  value_type: string
-  status: active
-- space_id: stockhk
-  dataset_id: dataset_stockhk_equity_kline_1d
-  column_name: provider_symbol
-  origin_type: field
-  origin_id: provider_symbol
-  value_type: string
-  status: active
-
 - space_id: stockus
   dataset_id: dataset_stockus_equity_kline_1d
   column_name: open
@@ -1573,7 +1507,6 @@ dataset_columns:
   origin_id: raw_payload
   value_type: json
   status: active
-
 
 - space_id: mooxsys
   dataset_id: dataset_mooxsys_host_resource
@@ -1887,19 +1820,8 @@ devices:
   engine: parquet
   endpoint: ../data/archive
   status: active
-  
+
 views:
-- space_id: stockhk
-  view_id: view_stockhk_equity_kline_1d
-  name: 港股行情视图
-  dataset_id: dataset_stockhk_equity_kline_1d
-  grain_keys:
-  - subject_id
-  - freq
-  - data_time
-  - series_tag
-  engine: duckdb
-  status: active
 - space_id: stockus
   view_id: view_stockus_equity_kline_1d
   name: 美股行情视图
@@ -1956,60 +1878,6 @@ views:
   engine: duckdb
   status: active
 view_columns:
-- space_id: stockhk
-  view_id: view_stockhk_equity_kline_1d
-  column_name: open
-  origin_type: dataset_column
-  origin_id: open
-  value_type: double
-  sort_order: 10
-  attributes:
-    display_name: 开盘价
-- space_id: stockhk
-  view_id: view_stockhk_equity_kline_1d
-  column_name: high
-  origin_type: dataset_column
-  origin_id: high
-  value_type: double
-  sort_order: 20
-  attributes:
-    display_name: 最高价
-- space_id: stockhk
-  view_id: view_stockhk_equity_kline_1d
-  column_name: low
-  origin_type: dataset_column
-  origin_id: low
-  value_type: double
-  sort_order: 30
-  attributes:
-    display_name: 最低价
-- space_id: stockhk
-  view_id: view_stockhk_equity_kline_1d
-  column_name: close
-  origin_type: dataset_column
-  origin_id: close
-  value_type: double
-  sort_order: 40
-  attributes:
-    display_name: 收盘价
-- space_id: stockhk
-  view_id: view_stockhk_equity_kline_1d
-  column_name: volume
-  origin_type: dataset_column
-  origin_id: volume
-  value_type: double
-  sort_order: 50
-  attributes:
-    display_name: 成交量
-- space_id: stockhk
-  view_id: view_stockhk_equity_kline_1d
-  column_name: amount
-  origin_type: dataset_column
-  origin_id: amount
-  value_type: double
-  sort_order: 60
-  attributes:
-    display_name: 成交额
 - space_id: stockus
   view_id: view_stockus_equity_kline_1d
   column_name: open

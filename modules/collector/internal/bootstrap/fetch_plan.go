@@ -111,6 +111,8 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 		Local: &localexec.Client{Gateway: process.gateway},
 		// 补采作业成功后通知因子：引擎立即推进连续水位、补算上游失败的标的。
 		Notify: klinecheck.FactorNotifier(process.gateway),
+		// 收市后整天重取：时刻取各市场 market.yaml 的 refetch_after_close_minutes，没配的市场不做。
+		CloseRefetch: markets.CloseRefetchDay, RefetchFrequency: routedFrequency,
 	}
 	process.beforeClose = append(process.beforeClose, func() error { backfiller.Wait(); return nil })
 	svc.SetKlineOps(backfiller)
@@ -184,6 +186,10 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 			return reconciler, nil
 		},
 		AfterTick: func(ctx context.Context, spaceID string) error {
+			// 先提交收市后的整天重取（只在“收市 + 延迟”的那一轮有事可做），紧接着的 Tick 就能认领它的分块；失败不挡住补采推进。
+			if err := backfiller.RefetchAfterClose(ctx, spaceID); err != nil {
+				log.WarnContextf(ctx, "collector close refetch failed space=%s: %v", spaceID, err)
+			}
 			if err := backfiller.Tick(ctx, spaceID); err != nil {
 				return err
 			}
@@ -235,6 +241,20 @@ func registerFetchPlanManager(cfg *Config, dbm *store.Store, process *Runtime, r
 	}
 	log.Infof("collector fetch plan reconciliation enabled spaces=%s", strings.Join(control.managed(process.ctx), ","))
 	return nil
+}
+
+// routedFrequency 报告市场的路由文件里有没有这个周期的 K 线路由（数据源声明支持的周期）；没有路由文件的市场不限周期。
+func routedFrequency(spaceID, frequency string) bool {
+	route, found, err := marketfetch.LoadRoute(spaceID)
+	if err != nil {
+		log.Warnf("collector close refetch: 读 %s 路由失败：%v", spaceID, err)
+		return false
+	}
+	if !found {
+		return true
+	}
+	_, err = route.Kline(frequency)
+	return err == nil
 }
 
 // calendarPreflight 检查空间所在市场的交易日历覆盖期：不足 60 天告警，不足 14 天或已过期则拒绝创建新计划

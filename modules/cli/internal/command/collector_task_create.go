@@ -20,12 +20,14 @@ type collectorTaskCreateFlags struct {
 	TagIDs      []string
 	Frequency   string
 	Fields      []string
-	Symbols     int
-	Lateness    int
-	Disabled    bool
-	DataNodeID  string
-	Ingest      string
-	Executor    string
+	// AllFields 为真时不指定 output_fields：输出该品种行的全部字段，与内置任务不写 output_fields 相同。
+	AllFields  bool
+	Symbols    int
+	Lateness   int
+	Disabled   bool
+	DataNodeID string
+	Ingest     string
+	Executor   string
 }
 
 var collectorTaskCreateFlagsValue collectorTaskCreateFlags
@@ -35,8 +37,23 @@ var collectorTaskCreateCmd = &cobra.Command{
 	Short: "创建 K 线采集任务（可直接指定 SCF 定时模式与每函数标的数）",
 	Args:  cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, _ []string) error {
+		if collectorTaskCreateFlagsValue.AllFields && cmd.Flags().Changed("output-field") {
+			return errors.New("--all-output-fields 不能与 --output-field 同时用")
+		}
+		if hint := collectorTaskCreateFieldsHint(collectorTaskCreateFlagsValue, cmd.Flags().Changed("output-field")); hint != "" {
+			fmt.Fprintln(cmd.ErrOrStderr(), hint)
+		}
 		return runCollectorTaskCreate(cmd.Context(), cmd.OutOrStdout(), collectorTaskCreateFlagsValue)
 	},
+}
+
+// collectorTaskCreateFieldsHint 在既没显式给 --output-field、也没带 --all-output-fields 时返回一句提示：
+// 这时用的是默认字段清单，不一定是这个品种行的字段。
+func collectorTaskCreateFieldsHint(flags collectorTaskCreateFlags, fieldsGiven bool) string {
+	if flags.AllFields || fieldsGiven {
+		return ""
+	}
+	return "提示：没有指定输出字段，用的是默认字段清单（" + strings.Join(flags.Fields, ",") + "）；要输出该品种行的全部字段请加 --all-output-fields。"
 }
 
 func init() {
@@ -48,7 +65,8 @@ func init() {
 	flags.StringVar(&collectorTaskCreateFlagsValue.Description, "description", "", "任务说明")
 	flags.StringSliceVar(&collectorTaskCreateFlagsValue.TagIDs, "tag-id", nil, "标的标签，可重复")
 	flags.StringVar(&collectorTaskCreateFlagsValue.Frequency, "frequency", "1m", "K 线频率")
-	flags.StringSliceVar(&collectorTaskCreateFlagsValue.Fields, "output-field", []string{"close", "high", "low", "open", "quote_volume", "trade_num", "volume"}, "输出字段")
+	flags.StringSliceVar(&collectorTaskCreateFlagsValue.Fields, "output-field", []string{"close", "high", "low", "open", "quote_volume", "trade_num", "volume"}, "输出字段；默认值是现货、永续行的字段，股票任务用 --all-output-fields")
+	flags.BoolVar(&collectorTaskCreateFlagsValue.AllFields, "all-output-fields", false, "不指定输出字段：输出该品种行的全部字段，与内置任务不写 output_fields 相同（股票任务用它）；不能与 --output-field 同时用")
 	flags.IntVar(&collectorTaskCreateFlagsValue.Symbols, "symbols-per-function", 0, "定时模式下每个函数负责的标的数（0 为默认 50）")
 	flags.IntVar(&collectorTaskCreateFlagsValue.Lateness, "allowed-lateness-seconds", 0, "结果数据集的允许迟到时间（0 为空间默认）")
 	flags.BoolVar(&collectorTaskCreateFlagsValue.Disabled, "disabled", false, "创建后保持停用")
@@ -61,22 +79,7 @@ func runCollectorTaskCreate(ctx context.Context, out io.Writer, flags collectorT
 	if strings.TrimSpace(flags.SpaceID) == "" || strings.TrimSpace(flags.Name) == "" || len(flags.TagIDs) == 0 {
 		return errors.New("--space-id, --name and at least one --tag-id are required")
 	}
-	params := map[string]any{
-		"subject_tags": stringsToAny(flags.TagIDs), "frequency": flags.Frequency, "output_fields": stringsToAny(flags.Fields),
-	}
-	if flags.Symbols > 0 {
-		params["symbols_per_function"] = flags.Symbols
-	}
-	if flags.Lateness > 0 {
-		params["allowed_lateness_seconds"] = flags.Lateness
-	}
-	if flags.Ingest != "" {
-		params["ingest"] = flags.Ingest
-	}
-	if flags.Executor != "" {
-		params["executor"] = flags.Executor
-	}
-	structured, err := structpb.NewStruct(params)
+	structured, err := structpb.NewStruct(collectorTaskCreateParams(flags))
 	if err != nil {
 		return err
 	}
@@ -98,6 +101,27 @@ func runCollectorTaskCreate(ctx context.Context, out io.Writer, flags collectorT
 		return err
 	}
 	return printJSON(out, map[string]any{"status": "created", "task_id": rsp.GetTaskId()})
+}
+
+// collectorTaskCreateParams 拼出建任务的采集参数。AllFields 为真时不带 output_fields（空表示该品种行的全部字段）。
+func collectorTaskCreateParams(flags collectorTaskCreateFlags) map[string]any {
+	params := map[string]any{"subject_tags": stringsToAny(flags.TagIDs), "frequency": flags.Frequency}
+	if !flags.AllFields {
+		params["output_fields"] = stringsToAny(flags.Fields)
+	}
+	if flags.Symbols > 0 {
+		params["symbols_per_function"] = flags.Symbols
+	}
+	if flags.Lateness > 0 {
+		params["allowed_lateness_seconds"] = flags.Lateness
+	}
+	if flags.Ingest != "" {
+		params["ingest"] = flags.Ingest
+	}
+	if flags.Executor != "" {
+		params["executor"] = flags.Executor
+	}
+	return params
 }
 
 func stringsToAny(values []string) []any {

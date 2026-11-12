@@ -29,6 +29,16 @@ tasks:
   creator: moox-setup
   collect_params:
     frequency: 5m
+# 港股只支持 5m（东方财富）；不写 output_fields，与 A 股 5m 一样输出股票行的全部字段。
+- space_id: stockhk
+  task_id: dasftksvjhj2jom4vhk0
+  task_name: 港股 K 线 5m
+  data_type: kline
+  tag_ids: [hk_hsi]
+  enabled: false
+  creator: moox-setup
+  collect_params:
+    frequency: 5m
 # start: manual 的任务 setup start 不会启用，由用户用 moox-cli collector task update --enabled=true 显式启用。
 - space_id: stockcn
   task_id: dasftksvjhj2jom4vhi0

@@ -110,7 +110,6 @@ func TestDefaultSetupSeedDeclaresCollectorPeriodDatasetOwners(t *testing.T) {
 		indexes[key] = i
 	}
 	owners := []string{
-		"stockhk/dataset_stockhk_equity_kline_1d",
 		"stockus/dataset_stockus_equity_kline_1d",
 	}
 	for _, key := range owners {
