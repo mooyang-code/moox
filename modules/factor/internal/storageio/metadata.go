@@ -351,16 +351,17 @@ func (c *Client) DeleteDataset(ctx context.Context, spaceID, datasetID string) e
 	if current == nil || current.GetRetInfo() == nil {
 		return fmt.Errorf("%w: get dataset before delete returned an empty response", ErrInfra)
 	}
-	if isDatasetNotFound(current.GetRetInfo().GetCode()) {
-		return nil
+	// 元数据已经不在时（上一次删除删完元数据后失败）跳过删 View，但照样调 DeleteDataset：Storage 对不存在的数据集也会删行。
+	metadataGone := isDatasetNotFound(current.GetRetInfo().GetCode())
+	if !metadataGone {
+		if err := responseError("get dataset before delete", current.GetRetInfo()); err != nil {
+			return err
+		}
+		if current.GetDataset() == nil {
+			return fmt.Errorf("%w: get dataset before delete omitted the dataset", ErrInfra)
+		}
 	}
-	if err := responseError("get dataset before delete", current.GetRetInfo()); err != nil {
-		return err
-	}
-	if current.GetDataset() == nil {
-		return fmt.Errorf("%w: get dataset before delete omitted the dataset", ErrInfra)
-	}
-	if current.GetDataset().GetAttributes()["dataset_role"] == DatasetRoleFactorResult {
+	if !metadataGone && current.GetDataset().GetAttributes()["dataset_role"] == DatasetRoleFactorResult {
 		// t_views 外键要求先删 View：先确认没有默认 View 之外的引用，再删默认 View。
 		if err := c.ensureNoExtraViews(ctx, spaceID, datasetID); err != nil {
 			return err

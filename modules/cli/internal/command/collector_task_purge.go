@@ -407,6 +407,16 @@ func inspectCollectorStorageInventory(ctx context.Context, metadata collectorSto
 		}
 	}
 
+	// 待删任务记录里的结果数据集也要删：上一次清理可能已删掉元数据但删行失败，ListDatasets 里就没有它了，
+	// 而 Storage 对元数据已不在的数据集仍会删行。
+	for _, task := range summary.TaskIDs {
+		datasetID := strings.TrimSpace(task.ResultDatasetID)
+		if datasetID == "" || !collectorStorageObjectMatchesSpace(task.SpaceID, summary.SpaceID) {
+			continue
+		}
+		summary.storageDatasetRefs = appendUniqueStorageObject(summary.storageDatasetRefs, task.SpaceID, datasetID)
+	}
+
 	for page := uint32(1); page <= maxPages; page++ {
 		response, err := metadata.ListViews(ctx, &storagepb.ListViewsReq{
 			SpaceId: strings.TrimSpace(summary.SpaceID),

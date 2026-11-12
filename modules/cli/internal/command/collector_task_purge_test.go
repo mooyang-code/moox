@@ -307,6 +307,7 @@ type fakeCollectorStorageMetadataClient struct {
 	datasetCalls int
 	viewCalls    int
 	failViewID   string
+	deletedIDs   []string
 }
 
 func (f *fakeCollectorStorageMetadataClient) ListDatasets(_ context.Context, req *storagepb.ListDatasetsReq) (*storagepb.ListDatasetsRsp, error) {
@@ -335,7 +336,8 @@ func (f *fakeCollectorStorageMetadataClient) ListViews(_ context.Context, req *s
 	}, nil
 }
 
-func (f *fakeCollectorStorageMetadataClient) DeleteDataset(_ context.Context, _ *storagepb.DeleteDatasetReq) (*storagepb.DeleteDatasetRsp, error) {
+func (f *fakeCollectorStorageMetadataClient) DeleteDataset(_ context.Context, req *storagepb.DeleteDatasetReq) (*storagepb.DeleteDatasetRsp, error) {
+	f.deletedIDs = append(f.deletedIDs, req.GetSpaceId()+"/"+req.GetDatasetId())
 	return &storagepb.DeleteDatasetRsp{RetInfo: storageOKForCollectorPurge()}, nil
 }
 
@@ -386,4 +388,16 @@ func collectorPurgePageResult(total, page, pageSize int) *commonpb.PageResult {
 		Total:   uint32(total),
 		HasMore: page*pageSize < total,
 	}
+}
+
+// 上一次清理删掉元数据后删行失败时，ListDatasets 里已没有该数据集；待删任务记录里的结果数据集仍要再调一次 DeleteDataset。
+func TestCollectorPurgeDeletesTaskResultDatasetMissingFromMetadata(t *testing.T) {
+	metadata := &fakeCollectorStorageMetadataClient{}
+	summary := &collectorTaskPurgeSummary{
+		SpaceID: "crypto",
+		TaskIDs: []collectorTaskResultRef{{SpaceID: "crypto", TaskID: "task-1", ResultDatasetID: "dataset_task_1"}},
+	}
+	require.NoError(t, inspectCollectorStorageInventory(context.Background(), metadata, summary))
+	require.NoError(t, deleteCollectorOwnedMetadata(context.Background(), metadata, summary))
+	require.Equal(t, []string{"crypto/dataset_task_1"}, metadata.deletedIDs)
 }

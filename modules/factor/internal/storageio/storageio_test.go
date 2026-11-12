@@ -299,6 +299,39 @@ func TestDeleteFactorResultDatasetRetriesAfterFailure(t *testing.T) {
 	require.Len(t, metadata.deleteRequests, 2)
 }
 
+// 元数据已经不在时仍要调 DeleteDataset：上一次可能删完元数据后删行失败，Storage 对不存在的数据集也会删行。
+func TestDeleteDatasetStillCallsStorageWhenMetadataIsGone(t *testing.T) {
+	metadata := &metadataFake{
+		getDatasetRsps: []*storagepb.GetDatasetRsp{{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_DATASET_NOT_FOUND}}},
+		deleteRsp:      &storagepb.DeleteDatasetRsp{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_NOT_FOUND}},
+	}
+	client := NewClient(&primaryFake{}, metadata, &commonpb.AuthInfo{AppId: "factor", AppKey: "factor-key"})
+	require.NoError(t, client.DeleteDataset(context.Background(), "crypto", "factor_result"))
+	require.Len(t, metadata.deleteRequests, 1)
+	require.Empty(t, metadata.viewCalls, "元数据已不在，不再删默认 View")
+}
+
+// 第一次删完元数据后失败（缓存发布或删行出错），重试时 GetDataset 已是不存在，仍要再发一次 DeleteDataset。
+func TestDeleteDatasetRetryAfterMetadataDeletedStillDeletesRows(t *testing.T) {
+	dataset := &storagepb.Dataset{
+		SpaceId: "crypto", DatasetId: "factor_result", Attributes: map[string]string{"dataset_role": DatasetRoleFactorResult},
+	}
+	metadata := &metadataFake{
+		getDatasetRsps: []*storagepb.GetDatasetRsp{
+			{RetInfo: successRet(), Dataset: dataset},
+			{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_DATASET_NOT_FOUND}},
+		},
+		deleteRsps: []*storagepb.DeleteDatasetRsp{
+			{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_INNER_ERR, Msg: "数据集元数据已删除，删行失败，请重试删除"}},
+			{RetInfo: &commonpb.RetInfo{Code: commonpb.ErrorCode_NOT_FOUND}},
+		},
+	}
+	client := NewClient(&primaryFake{}, metadata, &commonpb.AuthInfo{AppId: "factor", AppKey: "factor-key"})
+	require.Error(t, client.DeleteDataset(context.Background(), "crypto", "factor_result"))
+	require.NoError(t, client.DeleteDataset(context.Background(), "crypto", "factor_result"))
+	require.Len(t, metadata.deleteRequests, 2, "重试必须再调一次 DeleteDataset 删掉行")
+}
+
 func TestCreateResultDatasetRetryIsIdempotent(t *testing.T) {
 	spec := resultDatasetSpec()
 	existing := datasetFromResultSpec(spec)
