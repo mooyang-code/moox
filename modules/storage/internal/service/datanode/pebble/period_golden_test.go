@@ -299,6 +299,7 @@ func TestGoldenLedgerRejections(t *testing.T) {
 		noSnap    bool   // 不登记快照
 		frequency string // 周期频率，空串取 1m
 		prepare   string // 先把周期推到的状态：""（不建立）、waiting、complete
+		seriesTag string // 快照里两条序列共用的标签，空串表示默认序列
 		mutate    func(exp *DatasetPeriodExpectation, items []TimeSeriesBatchItem) []TimeSeriesBatchItem
 		wantErr   string
 	}
@@ -356,7 +357,8 @@ func TestGoldenLedgerRejections(t *testing.T) {
 			items[1].Row.Key.DatasetId = " " + goldenDataset + " "
 			return items
 		}, wantErr: "invalid"},
-		{name: "标签带空白", prepare: "waiting", mutate: tagged(" binance "), wantErr: "invalid"},
+		// 快照标签是 binance：去掉空白后能对上，不去空白就对不上，必须拒绝。
+		{name: "标签带空白", prepare: "waiting", seriesTag: "binance", mutate: tagged(" binance "), wantErr: "invalid"},
 		{name: "频率带空白", prepare: "waiting", mutate: func(_ *DatasetPeriodExpectation, items []TimeSeriesBatchItem) []TimeSeriesBatchItem {
 			items[1].Row.Key.GetTimeSeries().Freq = " 1m "
 			return items
@@ -371,7 +373,11 @@ func TestGoldenLedgerRejections(t *testing.T) {
 			ctx := context.Background()
 			clock := newGoldenClock(goldenPeriod.Add(61 * time.Second))
 			store := newGoldenStore(t, clock)
-			series := goldenSeries(t, goldenDefaultSeries())
+			input := goldenDefaultSeries()
+			for i := range input {
+				input[i].SeriesTag = tc.seriesTag
+			}
+			series := goldenSeries(t, input)
 			freq := goldenFreq
 			if tc.frequency != "" {
 				freq = tc.frequency
