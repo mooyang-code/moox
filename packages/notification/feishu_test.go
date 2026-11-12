@@ -85,7 +85,7 @@ func TestFeishuSenderReportsSignatureMismatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = sender.Send(context.Background(), Message{Severity: SeverityInfo, Title: "测试"})
-	if err == nil || !strings.Contains(err.Error(), "19021") || strings.Contains(err.Error(), "wrong-secret") {
+	if err == nil || !strings.Contains(err.Error(), "19021") || !strings.Contains(err.Error(), "sign match fail") || strings.Contains(err.Error(), "wrong-secret") {
 		t.Fatalf("Send() error = %v", err)
 	}
 }

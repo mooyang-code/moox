@@ -103,13 +103,15 @@ func (s *FeishuSender) Send(ctx context.Context, message Message) error {
 		return fmt.Errorf("notification: Feishu returned HTTP %d", resp.StatusCode)
 	}
 	var result struct {
-		Code int `json:"code"`
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
 	}
 	if err := json.Unmarshal(body, &result); err != nil || result.Code != 0 {
 		if err != nil {
 			return errors.New("notification: invalid Feishu response")
 		}
-		return fmt.Errorf("notification: Feishu returned code %d", result.Code)
+		// 带上飞书给的原因（例如验签失败、关键词不符），“推送失败”事件里才看得出为什么。
+		return fmt.Errorf("notification: Feishu returned code %d: %s", result.Code, truncateRunes(result.Msg, 200))
 	}
 	return nil
 }
