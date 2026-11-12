@@ -144,7 +144,8 @@ func TestFetchKlinesParsesRecordedWinterDay(t *testing.T) {
 
 // 夏令时的一个交易日：首根标签 21:35、末根次日 04:00，开始时刻从 13:30 UTC 起。
 // testdata/kline_5m_AAPL_20261029_dst.json 的 78 根是 2026-11-12 同一次全量返回（lmt=100000，1412 根）里纽约 10-29 的那一段。
-// 真实请求的返回在前后还会多带别的根（见 date_range_requests.json 里的 27 组），这里只用这一段验证夏令时的键与区间换算。
+// 真实请求的返回在前后还会多带别的根（见 date_range_requests.json 里的 39 组、下面两个用 out11 实测返回的测试），
+// 这里只用这一段验证夏令时的键与区间换算。
 func TestFetchKlinesDaylightSavingDay(t *testing.T) {
 	body := readTestdata(t, "kline_5m_AAPL_20261029_dst.json")
 	now := cst("2026-11-12", "12:00:00")
@@ -164,6 +165,47 @@ func TestFetchKlinesDaylightSavingDay(t *testing.T) {
 	for index, row := range rows {
 		require.Equal(t, rows[0].BarStart.Add(time.Duration(index)*5*time.Minute), row.BarStart)
 	}
+}
+
+// 夏令时周一的首根（标签 21:35）：beg 是周日 10-25。样例是 out11.json（2026-11-12 补测）的
+// “105.AAPL beg=20261025&end=20261027”：78 根，首根 10-26 21:35、末根 10-27 04:00，与规则算出的 beg、end 完全相同。
+// 实时请求时只有这一根已收盘（时钟在 21:36），其余都在 Now 之后，不返回。
+func TestFetchKlinesDaylightSavingMondayFirstBar(t *testing.T) {
+	body := readTestdata(t, "kline_5m_AAPL_20261025_20261027.json")
+	now := cst("2026-10-26", "21:36:00")
+	start, end := cst("2026-10-26", "21:30:00"), cst("2026-10-26", "21:35:00")
+	provider := fixtureProvider(now, func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "20261025", r.URL.Query().Get("beg"), "标签 21:35 减 22:30 是前一天 23:05：周一的 beg 是周日")
+		require.Equal(t, "20261027", r.URL.Query().Get("end"))
+		_, _ = w.Write(body)
+	})
+	rows, err := provider.FetchKlines(context.Background(), aaplRequest(start, end, now, 1))
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.Equal(t, time.Date(2026, 10, 26, 13, 30, 0, 0, time.UTC), rows[0].BarStart, "21:35 标签，纽约 09:30 开盘第一根")
+	require.Equal(t, []float64{343.9, 346.215, 342.11, 344.05, 2565332, 881328360}, []float64{rows[0].Open, rows[0].High, rows[0].Low, rows[0].Close, rows[0].Volume, rows[0].Amount})
+}
+
+// 夏令时一个窗口的前 11 根（10-29 的 21:35～22:25）：beg 取前一天 10-28 才取得到。样例是 out11.json 的
+// “105.AAPL beg=20261028&end=20261031”：223 根，首根 10-28 22:30（10-28 自己的 21:35～22:25 不在里面）、末根 10-31 04:00，
+// 里面有 10-29 整天的 78 根；beg=20261028&end=20261030 实测是 145 根，beg 换成 10-29 则少了那 11 根（out10 的 67 根）。
+// 请求区间是 10-29 整天（首根标签 21:35、末根 10-30 04:00），区间之后多带的 10-30 的根不在区间内。
+func TestFetchKlinesDaylightSavingFrontBarsAreFetched(t *testing.T) {
+	body := readTestdata(t, "kline_5m_AAPL_20261028_20261031.json")
+	now := cst("2026-11-12", "12:00:00")
+	start, end := cst("2026-10-29", "21:30:00"), cst("2026-10-30", "04:00:00")
+	provider := fixtureProvider(now, func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(t, "20261028", r.URL.Query().Get("beg"))
+		require.Equal(t, "20261031", r.URL.Query().Get("end"))
+		_, _ = w.Write(body)
+	})
+	rows, err := provider.FetchKlines(context.Background(), aaplRequest(start, end, now, 100))
+	require.NoError(t, err)
+	kept := inRequest(rows, start, end)
+	require.Equal(t, 78, len(kept))
+	require.Equal(t, time.Date(2026, 10, 29, 13, 30, 0, 0, time.UTC), kept[0].BarStart, "21:35 标签的前 11 根在返回里")
+	require.Equal(t, time.Date(2026, 10, 29, 19, 55, 0, 0, time.UTC), kept[77].BarStart)
+	require.Greater(t, len(rows), len(kept), "返回还多带了区间外的根")
 }
 
 // 实时请求只要目标那一根。样例是 2026-11-12 22:50:04 从南京云函数取到的最后两根

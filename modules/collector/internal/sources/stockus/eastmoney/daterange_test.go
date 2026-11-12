@@ -57,6 +57,16 @@ func TestDateRange(t *testing.T) {
 			wantBeg: "20261112", wantEnd: "20261113",
 		},
 		{
+			name:  "out11 实测：夏令时周一首根 21:35，beg 是周日（beg=20261025&end=20261027 返回 78 根）",
+			start: cst("2026-10-26", "21:30:00"), end: cst("2026-10-26", "21:35:00"),
+			wantBeg: "20261025", wantEnd: "20261027",
+		},
+		{
+			name:  "out11 实测：首根标签 22:30（10-28 22:30 起），beg 是当天（beg=20261028 首根 10-28 22:30）",
+			start: cst("2026-10-28", "22:25:00"), end: cst("2026-10-30", "04:00:00"),
+			wantBeg: "20261028", wantEnd: "20261031",
+		},
+		{
 			name:  "实时请求：夏令时首根 21:35",
 			start: cst("2026-10-29", "21:30:00"), end: cst("2026-10-29", "21:35:00"),
 			wantBeg: "20261028", wantEnd: "20261030",
@@ -155,11 +165,11 @@ func loadRecordedRequests(t *testing.T) (upstream, recordedRequests) {
 	return model, recorded
 }
 
-// 上游模型能解释实测的 27 组请求：返回的根数、首根、末根都与实测一致（两个极端的切点结果相同）。
+// 上游模型能解释实测的 39 组请求：返回的根数、首根、末根都与实测一致（两个极端的切点结果相同）。
 func TestUpstreamModelExplainsRecordedRequests(t *testing.T) {
 	model, recorded := loadRecordedRequests(t)
 	require.Len(t, model.labels, 1412)
-	require.Len(t, recorded.Requests, 27)
+	require.Len(t, recorded.Requests, 39)
 	for _, request := range recorded.Requests {
 		for _, cutoff := range cutoffs {
 			rows := model.fetch(request.Beg, request.End, cutoff.offset, cutoff.inclusive)
