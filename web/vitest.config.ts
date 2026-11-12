@@ -12,7 +12,7 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     globals: true,
-    setupFiles: ['tests/setup-pinia.ts'],
+    setupFiles: ['tests/setup-clock.ts', 'tests/setup-pinia.ts'],
     include: [
       'src/**/*.test.ts',
       'src/views/factor/__tests__/factor-contract.spec.ts',
