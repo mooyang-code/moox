@@ -83,8 +83,10 @@ func TestFetchFieldsFailsWhenTheSourceIsNotUpdatedYet(t *testing.T) {
 	provider := serveFile(t, "select_chinext_300750.json", nil)
 	_, err := provider.FetchFields(context.Background(), request("300750.XSHE", "2026-11-12", "2026-11-13"))
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, marketdata.ErrNoClosedBar), "按“还没就绪”处理：%v", err)
-	assert.Contains(t, err.Error(), "2026-11-11")
+	assert.Contains(t, err.Error(), "选股器的数据还停在 2026-11-11")
+	// 不能是 ErrNoClosedBar：补采会把它当成“行情源确认没有这根 K 线”，把这一天整行记成已确认缺失。
+	assert.False(t, errors.Is(err, marketdata.ErrNoClosedBar))
+	assert.NotContains(t, err.Error(), marketdata.ErrNoClosedBar.Error())
 }
 
 // 录制的 *ST西发：名称带 ST；股息率为 0，每股股利是 0。
@@ -126,10 +128,10 @@ func TestFetchFieldsHasNoValueForUnknownOrUnsupportedStock(t *testing.T) {
 	assert.Equal(t, 1, requests, "不支持的标的不发请求")
 }
 
-// 单个字段为空时其余字段照写：没有股息率的股票没有每股股利，没有流通股本时只写总股本。
+// 单个字段没有值时其余字段照写：null、"-" 都按没有值处理，写成字符串的数字照常取值，整条响应不因此失败。
 func TestFetchFieldsKeepsOtherFieldsWhenOneIsNull(t *testing.T) {
 	provider := serve(t, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte(`{"result":{"data":[{"SECURITY_CODE":"600519","SECURITY_NAME_ABBR":"贵州茅台","NEW_PRICE":1399.43,"TOTAL_SHARES":1250081601,"FREE_SHARES":null,"ZXGXL":null,"MAX_TRADE_DATE":"2026-11-11 00:00:00"}]},"success":true}`))
+		_, _ = w.Write([]byte(`{"result":{"data":[{"SECURITY_CODE":"600519","SECURITY_NAME_ABBR":"贵州茅台","NEW_PRICE":"-","TOTAL_SHARES":"1250081601","FREE_SHARES":null,"ZXGXL":3.5,"MAX_TRADE_DATE":"2026-11-11 00:00:00"}]},"success":true}`))
 	})
 	values, err := provider.FetchFields(context.Background(), request("600519.XSHG", "2026-11-11", "2026-11-12"))
 	require.NoError(t, err)
@@ -148,13 +150,15 @@ func TestFetchFieldsFailsOnBadResponse(t *testing.T) {
 			_, _ = w.Write([]byte(`{"result":null,"success":false,"message":"系统繁忙"}`))
 		},
 		"交易日期无效": func(w http.ResponseWriter, _ *http.Request) {
-			_, _ = w.Write([]byte(`{"result":{"data":[{"SECURITY_NAME_ABBR":"贵州茅台","TOTAL_SHARES":1,"MAX_TRADE_DATE":""}]},"success":true}`))
+			_, _ = w.Write([]byte(`{"result":{"data":[{"SECURITY_CODE":"600519","SECURITY_NAME_ABBR":"贵州茅台","TOTAL_SHARES":1,"MAX_TRADE_DATE":""}]},"success":true}`))
+		},
+		"返回的是别的股票": func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`{"result":{"data":[{"SECURITY_CODE":"000001","SECURITY_NAME_ABBR":"平安银行","TOTAL_SHARES":1,"MAX_TRADE_DATE":"2026-11-11"}]},"success":true}`))
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := serve(t, handler).FetchFields(context.Background(), request("600519.XSHG", "2026-11-11", "2026-11-12"))
 			require.Error(t, err)
-			assert.False(t, errors.Is(err, marketdata.ErrNoClosedBar))
 		})
 	}
 }

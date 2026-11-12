@@ -131,7 +131,7 @@ func TestValuationLibraryFactors(t *testing.T) {
 	}
 	// 第 40 根：亏损（净利润为负）；第 41 根：净利润为 0；第 42 根：财务字段为空。
 	data["fin_net_profit_parent_ttm"][40], data["fin_net_profit_parent_ttm"][41], data["fin_net_profit_parent_ttm"][42] = -1e9, 0, nan
-	// 第 5～29 根的股本全部缺失：到第 25 根为止最近 20 根里还有值，之后为空。
+	// 第 5～29 根的流通股本全部缺失：到第 23 根为止最近 20 根里还有值（第 4 根），之后为空。
 	for i := 5; i < 30; i++ {
 		data["float_shares"][i] = nan
 	}

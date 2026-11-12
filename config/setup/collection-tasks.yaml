@@ -44,7 +44,7 @@ tasks:
 # 任务 ID 在加入换手率与股本字段时换过（已有任务不能新增输出字段）：旧任务 dasftksvjhj2jom4vhhg 不再是内置任务。
 - space_id: stockcn
   task_id: dasftksvjhj2jom4vhj0
-  task_name: A 股日线（复权、行业、财务、股本）
+  task_name: A 股日线（复权、行业、财务、换手率、股本）
   data_type: kline
   tag_ids: [cn_hs300]
   enabled: false

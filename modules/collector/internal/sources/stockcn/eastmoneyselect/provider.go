@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -61,16 +62,31 @@ func (p *Provider) FieldSpecs() []marketdata.FieldSpec {
 }
 
 type record struct {
-	Name        string   `json:"SECURITY_NAME_ABBR"`
-	Price       *float64 `json:"NEW_PRICE"`
-	TotalShares *float64 `json:"TOTAL_SHARES"`
-	FloatShares *float64 `json:"FREE_SHARES"`
-	Yield       *float64 `json:"ZXGXL"`
-	TradeDate   string   `json:"MAX_TRADE_DATE"`
+	Code        string `json:"SECURITY_CODE"`
+	Name        string `json:"SECURITY_NAME_ABBR"`
+	Price       number `json:"NEW_PRICE"`
+	TotalShares number `json:"TOTAL_SHARES"`
+	FloatShares number `json:"FREE_SHARES"`
+	Yield       number `json:"ZXGXL"`
+	TradeDate   string `json:"MAX_TRADE_DATE"`
+}
+
+// number 是接口里的一个数值字段：数字或写成字符串的数字有值；null、"-" 等其他写法按没有值处理，不让整条响应解析失败。
+type number struct {
+	value float64
+	ok    bool
+}
+
+func (n *number) UnmarshalJSON(raw []byte) error {
+	text := strings.Trim(strings.TrimSpace(string(raw)), `"`)
+	value, err := strconv.ParseFloat(strings.TrimSpace(text), 64)
+	*n = number{value: value, ok: err == nil}
+	return nil
 }
 
 // FetchFields 取这只股票当前的一条记录，按接口标注的交易日与请求区间 [Start, End) 的关系处理：
 // 落在区间内，写到那一个交易日上；晚于区间（补历史、隔天补采），没有值；早于区间起点，接口还没更新到这一天，返回错误等下次重试。
+// 返回的记录不是请求的这只股票时按协议错误处理（接口不认筛选条件时会返回别的股票）。
 func (p *Provider) FetchFields(ctx context.Context, req marketdata.FieldRequest) (map[time.Time]map[string]marketdata.FieldValue, error) {
 	symbol, ok := commonsrc.FieldSymbol(req.SubjectID)
 	if !ok || !req.End.After(req.Start) {
@@ -95,25 +111,29 @@ func (p *Provider) FetchFields(ctx context.Context, req marketdata.FieldRequest)
 	if item == nil {
 		return nil, nil
 	}
+	if strings.TrimSpace(item.Code) != symbol[2:] {
+		return nil, fmt.Errorf("%w: 查 %s 返回的是 %q 的记录", marketdata.ErrProtocol, req.SubjectID, item.Code)
+	}
 	day, err := time.Parse("2006-01-02", firstN(strings.TrimSpace(item.TradeDate), 10))
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s 的交易日期 %q 无效", marketdata.ErrProtocol, req.SubjectID, item.TradeDate)
 	}
 	if day.Before(req.Start.UTC().Truncate(24 * time.Hour)) {
-		return nil, fmt.Errorf("%w: 选股器的数据还停在 %s，没有更新到 %s", marketdata.ErrNoClosedBar, day.Format("2006-01-02"), req.Start.UTC().Format("2006-01-02"))
+		// 普通错误，不用 ErrNoClosedBar：补采把那个错误当成“行情源确认没有这根 K 线”，会把这一天整行记成已确认缺失、不再补。
+		return nil, fmt.Errorf("选股器的数据还停在 %s，没有更新到 %s", day.Format("2006-01-02"), req.Start.UTC().Format("2006-01-02"))
 	}
 	if !day.Before(req.End) {
 		return nil, nil
 	}
 	values := map[string]marketdata.FieldValue{}
-	if item.TotalShares != nil && *item.TotalShares > 0 {
-		values[FieldTotalShares] = marketdata.DoubleField(*item.TotalShares)
+	if item.TotalShares.ok && item.TotalShares.value > 0 {
+		values[FieldTotalShares] = marketdata.DoubleField(item.TotalShares.value)
 	}
-	if item.FloatShares != nil && *item.FloatShares > 0 {
-		values[FieldFloatShares] = marketdata.DoubleField(*item.FloatShares)
+	if item.FloatShares.ok && item.FloatShares.value > 0 {
+		values[FieldFloatShares] = marketdata.DoubleField(item.FloatShares.value)
 	}
-	if item.Yield != nil && *item.Yield >= 0 && item.Price != nil && *item.Price > 0 {
-		values[FieldDividendPerShare] = marketdata.DoubleField(*item.Yield / 100 * *item.Price)
+	if item.Yield.ok && item.Yield.value >= 0 && item.Price.ok && item.Price.value > 0 {
+		values[FieldDividendPerShare] = marketdata.DoubleField(item.Yield.value / 100 * item.Price.value)
 	}
 	if name := strings.TrimSpace(item.Name); name != "" {
 		st := int64(0)
