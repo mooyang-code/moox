@@ -232,3 +232,47 @@ func TestBleveSubstringLikeAndMapping(t *testing.T) {
 		t.Fatalf("like rows=%v total=%d err=%v", rows, total, err)
 	}
 }
+
+// 跟随位置写在索引旁的元数据里：随行写入落盘，单独落盘只前进不后退，重新打开后仍在。
+func TestBleveFollowStatePersists(t *testing.T) {
+	ctx := context.Background()
+	root := filepath.Join(t.TempDir(), "bleve")
+	index, err := Open(Options{Path: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema := viewindex.ViewIndexSchema{SpaceID: "s", ViewID: "v", PrimaryDatasetID: "records", ViewVersion: 1, Engine: "bleve", SchemaHash: "hash", Columns: []*pb.ViewColumn{
+		{ColumnName: "title", ValueType: pb.FieldValueType_FIELD_VALUE_TYPE_STRING},
+	}}
+	if err := index.Prepare(ctx, "idx", schema); err != nil {
+		t.Fatal(err)
+	}
+	if err := index.SaveFollowState(ctx, "idx", viewindex.FollowState{Cursor: viewindex.ChangeCursor{StoreID: "store", Sequence: 5}, BuiltSequence: 7}); err != nil {
+		t.Fatal(err)
+	}
+	row := viewindex.RowWrite{Key: viewindex.RowKey{Key: &pb.RowKey{SpaceId: "s", DatasetId: "records", Kind: &pb.RowKey_Record{Record: &pb.RecordRowKey{RecordId: "r1", Version: "1"}}}}, Fields: []*pb.FieldValue{
+		{FieldId: "title", Value: &pb.TypedValue{Value: &pb.TypedValue_StringValue{StringValue: "t"}}},
+	}}
+	if err := index.Write(ctx, "idx", viewindex.ViewIndexWriteBatch{RowWrites: []viewindex.RowWrite{row}, ViewRevision: 1, ViewSchemaHash: "hash", WriteMode: viewindex.LiveWrite, Cursor: &viewindex.ChangeCursor{StoreID: "store", Sequence: 9}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := index.SaveFollowState(ctx, "idx", viewindex.FollowState{Cursor: viewindex.ChangeCursor{StoreID: "store", Sequence: 6}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := index.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := Open(Options{Path: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	stats, err := reopened.StatMetadata(ctx, "idx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := viewindex.FollowState{Cursor: viewindex.ChangeCursor{StoreID: "store", Sequence: 9}, BuiltSequence: 7}
+	if stats.Follow != want {
+		t.Fatalf("跟随进度=%+v，应为 %+v", stats.Follow, want)
+	}
+}

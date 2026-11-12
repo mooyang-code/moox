@@ -43,6 +43,28 @@ type ViewIndexWriteBatch struct {
 	ViewRevision   uint64
 	ViewSchemaHash string
 	WriteMode      WriteMode
+	// Cursor 非空时，与这批行在同一次提交里记下跟随变更日志已扫描到的位置。
+	Cursor *ChangeCursor
+}
+
+// ChangeCursor 是变更日志里的一个位置：序号只在同一个 StoreID 内可比较。
+type ChangeCursor struct {
+	StoreID  string
+	Sequence uint64
+}
+
+// FollowState 是 View 索引跟随变更日志的进度，与索引一起落盘。
+type FollowState struct {
+	// Cursor 是已扫描到的位置；StoreID 为空表示索引没有记录过进度。
+	Cursor ChangeCursor
+	// BuiltSequence 是索引建成那一刻的日志头部序号（H_done）：不大于它的完成标记只推进游标、不发布就绪事件。
+	BuiltSequence uint64
+}
+
+// FollowStateWriter 单独落盘跟随进度：建成时记下 H_start 与 H_done，定时任务落盘只扫描、没有写入的前进。
+// 同一个 StoreID 下序号只增不减，较旧的进度不会盖掉较新的。
+type FollowStateWriter interface {
+	SaveFollowState(ctx context.Context, indexID string, state FollowState) error
 }
 
 func (k RowKey) Validate() error {
@@ -119,6 +141,8 @@ type ViewIndexStats struct {
 	IndexedTo     string
 	// RowsPerSeries 是索引建立时记录的每序列保留行数；0 表示未知（记录型 View 不按根数保留）。
 	RowsPerSeries uint64
+	// Follow 是落盘的跟随进度（StatMetadata 与 Stat 都返回）。
+	Follow FollowState
 }
 
 type Filter struct {

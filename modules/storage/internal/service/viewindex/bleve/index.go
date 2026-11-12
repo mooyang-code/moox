@@ -45,6 +45,10 @@ type indexMeta struct {
 	PrimaryDatasetID string                       `json:"primary_dataset_id"`
 	UpdatedAt        string                       `json:"updated_at"`
 	Columns          map[string]pb.FieldValueType `json:"columns"`
+	// ChangeStoreID、ChangeSequence、BuiltSequence 是跟随变更日志的进度，见 viewindex.FollowState。
+	ChangeStoreID  string `json:"change_store_id,omitempty"`
+	ChangeSequence uint64 `json:"change_seq,omitempty"`
+	BuiltSequence  uint64 `json:"built_change_seq,omitempty"`
 }
 
 func Open(opts Options) (*Index, error) {
@@ -166,7 +170,43 @@ func (i *Index) Write(ctx context.Context, id string, batch viewindex.ViewIndexW
 		return err
 	}
 	h.meta.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	if batch.Cursor != nil {
+		// 跟随位置写在索引旁的元数据里，与这批行一起落盘。
+		h.meta.advanceCursor(*batch.Cursor)
+	}
 	return i.writeMeta(id, h.meta)
+}
+
+// advanceCursor 记下跟随位置：同一个存储下只前进不后退，存储换了直接覆盖。
+func (m *indexMeta) advanceCursor(cursor viewindex.ChangeCursor) {
+	if m.ChangeStoreID == cursor.StoreID && m.ChangeSequence > cursor.Sequence {
+		return
+	}
+	m.ChangeStoreID, m.ChangeSequence = cursor.StoreID, cursor.Sequence
+}
+
+func (m indexMeta) followState() viewindex.FollowState {
+	return viewindex.FollowState{Cursor: viewindex.ChangeCursor{StoreID: m.ChangeStoreID, Sequence: m.ChangeSequence}, BuiltSequence: m.BuiltSequence}
+}
+
+// SaveFollowState 实现 viewindex.FollowStateWriter。
+func (i *Index) SaveFollowState(_ context.Context, id string, state viewindex.FollowState) error {
+	h, err := i.get(id)
+	if err != nil {
+		return err
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	meta := h.meta
+	meta.advanceCursor(state.Cursor)
+	if state.BuiltSequence > 0 {
+		meta.BuiltSequence = state.BuiltSequence
+	}
+	if err := i.writeMeta(id, meta); err != nil {
+		return err
+	}
+	h.meta = meta
+	return nil
 }
 
 func (i *Index) Query(ctx context.Context, id string, spec viewindex.QuerySpec) ([]*pb.RowFieldValues, int64, error) {
@@ -249,7 +289,7 @@ func (i *Index) Stat(ctx context.Context, id string) (viewindex.ViewIndexStats, 
 	if err != nil {
 		return viewindex.ViewIndexStats{}, err
 	}
-	stats := viewindex.ViewIndexStats{Exists: true, ViewVersion: h.meta.ViewVersion, SchemaHash: h.meta.SchemaHash, UpdatedAt: h.meta.UpdatedAt, EntryCount: int64(count)}
+	stats := viewindex.ViewIndexStats{Exists: true, ViewVersion: h.meta.ViewVersion, SchemaHash: h.meta.SchemaHash, UpdatedAt: h.meta.UpdatedAt, EntryCount: int64(count), Follow: h.meta.followState()}
 	return stats, nil
 }
 
@@ -271,7 +311,7 @@ func (i *Index) StatMetadata(ctx context.Context, id string) (viewindex.ViewInde
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	return viewindex.ViewIndexStats{Exists: true, ViewVersion: h.meta.ViewVersion, SchemaHash: h.meta.SchemaHash, UpdatedAt: h.meta.UpdatedAt}, nil
+	return viewindex.ViewIndexStats{Exists: true, ViewVersion: h.meta.ViewVersion, SchemaHash: h.meta.SchemaHash, UpdatedAt: h.meta.UpdatedAt, Follow: h.meta.followState()}, nil
 }
 
 func (i *Index) Exists(_ context.Context, id string) (bool, error) {

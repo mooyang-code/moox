@@ -138,7 +138,7 @@ func (m *IndexManager) Prepare(ctx context.Context, id string, schema viewindex.
 		createColumns = append(createColumns, quote(name)+" "+duckType(valueType))
 	}
 	statement := fmt.Sprintf(`
-		CREATE TABLE view_meta (singleton INTEGER PRIMARY KEY, view_version UBIGINT NOT NULL, schema_hash VARCHAR NOT NULL, primary_dataset_id VARCHAR NOT NULL, space_id VARCHAR NOT NULL, updated_at VARCHAR NOT NULL, indexed_from VARCHAR NOT NULL DEFAULT '', indexed_to VARCHAR NOT NULL DEFAULT '', rows_per_series UBIGINT NOT NULL DEFAULT 0);
+		CREATE TABLE view_meta (singleton INTEGER PRIMARY KEY, view_version UBIGINT NOT NULL, schema_hash VARCHAR NOT NULL, primary_dataset_id VARCHAR NOT NULL, space_id VARCHAR NOT NULL, updated_at VARCHAR NOT NULL, indexed_from VARCHAR NOT NULL DEFAULT '', indexed_to VARCHAR NOT NULL DEFAULT '', rows_per_series UBIGINT NOT NULL DEFAULT 0, change_store_id VARCHAR NOT NULL DEFAULT '', change_seq UBIGINT NOT NULL DEFAULT 0, built_change_seq UBIGINT NOT NULL DEFAULT 0);
 		CREATE TABLE view_columns (column_name VARCHAR PRIMARY KEY, value_type INTEGER NOT NULL);
 		CREATE TABLE view_series_counts (subject_id VARCHAR NOT NULL, freq VARCHAR NOT NULL, series_tag VARCHAR NOT NULL, row_count UBIGINT NOT NULL, PRIMARY KEY (subject_id, freq, series_tag));
 		CREATE TABLE view_rows (%s, PRIMARY KEY (subject_id, freq, data_time, series_tag));
@@ -393,6 +393,12 @@ func (m *IndexManager) Write(ctx context.Context, id string, batch viewindex.Vie
 	if _, err := tx.ExecContext(ctx, `UPDATE view_meta SET updated_at = ? WHERE singleton = 1`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 		return err
 	}
+	if batch.Cursor != nil {
+		// 行与跟随位置同一个事务提交：崩溃后不会出现“行已写入、位置没记”或反过来。
+		if err := advanceChangeCursor(ctx, tx, *batch.Cursor); err != nil {
+			return err
+		}
+	}
 	commitStart := time.Now()
 	if err := tx.Commit(); err != nil {
 		return err
@@ -404,6 +410,39 @@ func (m *IndexManager) Write(ctx context.Context, id string, batch viewindex.Vie
 			upsertTook.Round(time.Millisecond), time.Since(commitStart).Round(time.Millisecond), total.Round(time.Millisecond))
 	}
 	return nil
+}
+
+// advanceChangeCursor 记下跟随位置：同一个存储下只前进不后退，存储换了（重建后）直接覆盖。
+func advanceChangeCursor(ctx context.Context, tx *sql.Tx, cursor viewindex.ChangeCursor) error {
+	_, err := tx.ExecContext(ctx, `UPDATE view_meta SET change_store_id = ?, change_seq = ?
+		WHERE singleton = 1 AND NOT (change_store_id = ? AND change_seq > ?)`, cursor.StoreID, cursor.Sequence, cursor.StoreID, cursor.Sequence)
+	return err
+}
+
+// SaveFollowState 实现 viewindex.FollowStateWriter。调用方持有该索引的写锁（view_meta 只有一行，并发更新会冲突）。
+func (m *IndexManager) SaveFollowState(ctx context.Context, id string, state viewindex.FollowState) error {
+	var err error
+	if ctx, err = duckDBContext(ctx); err != nil {
+		return err
+	}
+	db, _, _, _, err := m.getIndex(ctx, id)
+	if err != nil {
+		return err
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := advanceChangeCursor(ctx, tx, state.Cursor); err != nil {
+		return err
+	}
+	if state.BuiltSequence > 0 {
+		if _, err := tx.ExecContext(ctx, `UPDATE view_meta SET built_change_seq = ? WHERE singleton = 1`, state.BuiltSequence); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func batchCoverage(writes []viewindex.RowWrite) (string, string, bool) {
@@ -896,7 +935,7 @@ func (m *IndexManager) Stat(ctx context.Context, id string) (viewindex.ViewIndex
 		return viewindex.ViewIndexStats{}, err
 	}
 	var stats viewindex.ViewIndexStats
-	if err := db.QueryRowContext(ctx, `SELECT view_version, schema_hash, updated_at, indexed_from, indexed_to, rows_per_series FROM view_meta WHERE singleton = 1`).Scan(&stats.ViewVersion, &stats.SchemaHash, &stats.UpdatedAt, &stats.IndexedFrom, &stats.IndexedTo, &stats.RowsPerSeries); err != nil {
+	if err := db.QueryRowContext(ctx, `SELECT view_version, schema_hash, updated_at, indexed_from, indexed_to, rows_per_series, change_store_id, change_seq, built_change_seq FROM view_meta WHERE singleton = 1`).Scan(&stats.ViewVersion, &stats.SchemaHash, &stats.UpdatedAt, &stats.IndexedFrom, &stats.IndexedTo, &stats.RowsPerSeries, &stats.Follow.Cursor.StoreID, &stats.Follow.Cursor.Sequence, &stats.Follow.BuiltSequence); err != nil {
 		return viewindex.ViewIndexStats{}, err
 	}
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM view_rows`).Scan(&stats.EntryCount); err != nil {
@@ -1008,7 +1047,7 @@ func (m *IndexManager) StatMetadata(ctx context.Context, id string) (viewindex.V
 		return viewindex.ViewIndexStats{}, err
 	}
 	var stats viewindex.ViewIndexStats
-	if err := db.QueryRowContext(ctx, `SELECT view_version, schema_hash, updated_at, indexed_from, indexed_to, rows_per_series FROM view_meta WHERE singleton = 1`).Scan(&stats.ViewVersion, &stats.SchemaHash, &stats.UpdatedAt, &stats.IndexedFrom, &stats.IndexedTo, &stats.RowsPerSeries); err != nil {
+	if err := db.QueryRowContext(ctx, `SELECT view_version, schema_hash, updated_at, indexed_from, indexed_to, rows_per_series, change_store_id, change_seq, built_change_seq FROM view_meta WHERE singleton = 1`).Scan(&stats.ViewVersion, &stats.SchemaHash, &stats.UpdatedAt, &stats.IndexedFrom, &stats.IndexedTo, &stats.RowsPerSeries, &stats.Follow.Cursor.StoreID, &stats.Follow.Cursor.Sequence, &stats.Follow.BuiltSequence); err != nil {
 		return viewindex.ViewIndexStats{}, err
 	}
 	stats.Exists = true
