@@ -701,3 +701,22 @@ func TestCatchUpPullsLaggingSeriesOfUnifiedDatasetAsRealRows(t *testing.T) {
 	require.True(t, ok)
 	require.InDelta(t, (210+211+212)/3.0, value, 1e-9)
 }
+
+// 第一次准备在取同步基线之前就失败（这里是窗口内存超限）：数据源已经登记，但本地没有数据、也没有同步位点。
+// CatchUp 只拉本地已有数据的标的，所以这时什么都不拉，不会在没有基线的情况下把数据写进本地。
+func TestCatchUpPullsNothingWhenFirstPrepareFailedBeforeBaseline(t *testing.T) {
+	fx := newFixture(t, mean3())
+	fx.data.cfg.WindowMax = 100
+	fx.st.put("BTC", 100, 7, 8, 9)
+	require.Error(t, fx.data.Prepare(context.Background(), fx.set, []string{"BTC"}))
+	src := seriesstore.Source{SpaceID: "crypto", DatasetID: "spot", Freq: "1m"}
+	pulled, err := fx.data.CatchUp(context.Background(), fx.set, []string{"BTC"}, at(10))
+	require.NoError(t, err)
+	require.Zero(t, pulled)
+	local, err := fx.data.Store().Subjects(src)
+	require.NoError(t, err)
+	require.Empty(t, local)
+	_, hasCursor, err := fx.data.Syncer().Cursor(src)
+	require.NoError(t, err)
+	require.False(t, hasCursor)
+}
