@@ -3,13 +3,52 @@ package marketwiring
 import (
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
 	"github.com/mooyang-code/moox/modules/collector/internal/marketfetch"
 	"github.com/mooyang-code/moox/modules/collector/internal/markets"
+	"github.com/mooyang-code/moox/modules/collector/internal/sources/catalog"
 	"github.com/mooyang-code/moox/modules/collector/internal/subjectsync"
+	"github.com/mooyang-code/moox/packages/barclock"
 	"github.com/stretchr/testify/require"
 )
+
+// 新增一个市场要登记五处：行情源目录、本包对规则包的显式引用（handler.go）、barclock 市场表、marketcalendar 内嵌日历、
+// config/markets/<市场>/market.yaml。行情源目录里出现的每个市场，其余四处都必须登记齐，漏一处在这里就报出来。
+func TestEveryCatalogMarketIsFullyRegistered(t *testing.T) {
+	routed := map[string]bool{}
+	for _, entry := range catalog.Default().Entries() {
+		marketID := string(entry.MarketID)
+		routed[marketID] = routed[marketID] || entry.RouteSource
+	}
+	require.Contains(t, routed, "crypto")
+	require.Contains(t, routed, "stockcn")
+	require.Contains(t, routed, "stockhk")
+	for marketID, hasRouteSource := range routed {
+		market, err := barclock.MarketFor(marketID)
+		require.NoError(t, err, "%s 没有登记在 barclock 市场表", marketID)
+		_, err = markets.ConfigFor(marketID)
+		require.NoError(t, err, "%s 没有 market.yaml", marketID)
+		_, err = markets.RulesFor(marketID)
+		require.NoError(t, err, "%s 的标的规则没有登记（handler.go 里要显式引用规则包）", marketID)
+		if market.Alignment == barclock.AlignmentSession {
+			// 日历加载不了，或覆盖期剩余不足 14 天（与生成采集计划时的检查一致）都算没登记好。
+			require.NoError(t, markets.CheckCalendarHorizon(marketID, time.Now(), 14), "%s 的交易日历", marketID)
+			_, err = market.Clock(5 * time.Minute)
+			require.NoError(t, err, "%s 的交易时段", marketID)
+		}
+		if hasRouteSource {
+			_, found, err := marketfetch.LoadRoute(marketID)
+			require.NoError(t, err, marketID)
+			require.True(t, found, "%s 有按路由分配来源的登记项，但没有 route.yaml", marketID)
+		}
+	}
+	// 反过来：有 market.yaml 的市场也都在行情源目录里。
+	for _, marketID := range markets.IDs() {
+		require.Contains(t, routed, marketID, "%s 有 market.yaml，但行情源目录里没有它的数据源", marketID)
+	}
+}
 
 // 默认 source_id 查行情源目录：现有任务用到的取值不变。
 func TestDefaultSourceIDComesFromCatalog(t *testing.T) {
