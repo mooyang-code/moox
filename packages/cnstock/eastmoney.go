@@ -48,12 +48,27 @@ type ClistQuery struct {
 	PageSize   int
 	HTTPClient *http.Client
 	UserAgent  string
+	// 下面几项都是可选的节奏与上限控制，零值保持原有行为（不等待、不重试、页数上限 maxClistPages）。
+	//
+	// PageInterval 是相邻两页请求之间的最小间隔（第一页之前不等）。
+	PageInterval time.Duration
+	// PageRetries 是某一页请求失败（超时、连接失败、5xx）后最多再试的次数，负数按 0 处理；429 不重试，直接失败。
+	// 第 k 次重试前等 k×RetryBackoff（RetryBackoff 不大于 0 时按 1 秒）。重试只包住一次 HTTP 请求，
+	// 页内的行只在请求成功后才交给 visit，不会重复访问。
+	PageRetries  int
+	RetryBackoff time.Duration
+	// MaxPages 是翻页的页数上限；不大于 0 或大于 maxClistPages 时取 maxClistPages。
+	MaxPages int
+	// Sleep 替换等待的实现，测试用；为空时按真实时间等待，ctx 结束时立即返回错误。
+	Sleep func(ctx context.Context, d time.Duration) error
 }
 
-// ClistResult 是翻页结束后的统计：Total 是接口自报的总数（没报时为 0），Pages 是读过的页数（含收尾的空页）。
+// ClistResult 是翻页结束后的统计：Total 是接口自报的总数（没报时为 0），Pages 是读过的页数（含收尾的空页），
+// Base 是最后一次读页成功的地址（主备回退之后实际在用的那个），调用方连续读多个列表时可拿它当下一个列表的 BaseURL。
 type ClistResult struct {
 	Total int
 	Pages int
+	Base  string
 }
 
 // FetchClist 按筛选条件翻页读完整的列表，每条交给 visit；visit 返回错误时立即停止并返回这个错误。
@@ -68,9 +83,18 @@ func FetchClist(ctx context.Context, query ClistQuery, visit func(ClistItem) err
 	itemsSeen := 0
 	sawUnverifiedShortPage := false
 	activeBase := ""
+	maxPages := query.MaxPages
+	if maxPages <= 0 || maxPages > maxClistPages {
+		maxPages = maxClistPages
+	}
 	for page := 1; ; page++ {
-		if page > maxClistPages {
-			return ClistResult{}, fmt.Errorf("%w: eastmoney instrument pagination exceeded %d pages", ErrProtocol, maxClistPages)
+		if page > maxPages {
+			return ClistResult{}, fmt.Errorf("%w: eastmoney instrument pagination exceeded %d pages", ErrProtocol, maxPages)
+		}
+		if page > 1 && query.PageInterval > 0 {
+			if err := query.sleep(ctx, query.PageInterval); err != nil {
+				return ClistResult{}, fmt.Errorf("等待 clist 第 %d 页时已取消：%w", page, err)
+			}
 		}
 		values := url.Values{
 			"pn":     {strconv.Itoa(page)},
@@ -79,22 +103,11 @@ func FetchClist(ctx context.Context, query ClistQuery, visit func(ClistItem) err
 			"fid":    {"f12"},
 			"fields": {eastMoneyClistFields},
 		}
-		bases := []string{activeBase}
-		if activeBase == "" {
-			bases = clistBases(query.BaseURL)
+		body, base, err := fetchClistPageWithRetry(ctx, query, activeBase, page, values)
+		if err != nil {
+			return ClistResult{}, err
 		}
-		var body []byte
-		var fetchErr error
-		for i, base := range bases {
-			body, fetchErr = fetchClistPage(ctx, query, base, values)
-			if fetchErr == nil {
-				activeBase = base
-				break
-			}
-			if i == len(bases)-1 || !clistHostRetryable(fetchErr) {
-				return ClistResult{}, fetchErr
-			}
-		}
+		activeBase = base
 		var payload map[string]any
 		if err := json.Unmarshal(body, &payload); err != nil {
 			return ClistResult{}, fmt.Errorf("%w: %v", ErrProtocol, err)
@@ -196,7 +209,64 @@ func FetchClist(ctx context.Context, query ClistQuery, visit func(ClistItem) err
 		// 不满一页本身不能证明是最后一页，除非响应里还有总数、页数或“还有下一页”标记：继续读下一页，要求以空结果收尾。
 	}
 	result.Total = declaredTotal
+	result.Base = activeBase
 	return result, nil
+}
+
+// fetchClistPageWithRetry 取一页：先按主备地址顺序试一遍；失败且可重试（超时、连接失败、5xx）时，
+// 按 PageRetries 再整体重试，每次重试前等待的时间逐次增加。ctx 结束后不再重试。
+// 零重试时只走一遍主备地址，行为与加重试之前一致。返回响应内容和成功的那个地址。
+func fetchClistPageWithRetry(ctx context.Context, query ClistQuery, activeBase string, page int, values url.Values) ([]byte, string, error) {
+	var lastErr error
+	retries := max(query.PageRetries, 0) // 负数按 0 处理，至少请求一次
+	for attempt := 0; attempt <= retries; attempt++ {
+		if attempt > 0 {
+			backoff := query.RetryBackoff
+			if backoff <= 0 {
+				backoff = time.Second
+			}
+			if err := query.sleep(ctx, time.Duration(attempt)*backoff); err != nil {
+				return nil, "", fmt.Errorf("第 %d 页重试前等待时已取消（上次错误：%v）：%w", page, lastErr, err)
+			}
+		}
+		bases := []string{activeBase}
+		if activeBase == "" {
+			bases = clistBases(query.BaseURL)
+		}
+		for i, base := range bases {
+			body, err := fetchClistPage(ctx, query, base, values)
+			if err == nil {
+				return body, base, nil
+			}
+			lastErr = err
+			if i == len(bases)-1 || !clistHostRetryable(err) {
+				break
+			}
+		}
+		// 取消后 client.Do 的错误会被包成 ErrTimeout，必须先看 ctx，否则会把取消当成可重试的超时。
+		if ctxErr := ctx.Err(); ctxErr != nil && retries > 0 {
+			return nil, "", fmt.Errorf("读 clist 第 %d 页时已取消（%v）：%w", page, lastErr, ctxErr)
+		}
+		if retries == 0 || !clistHostRetryable(lastErr) {
+			return nil, "", lastErr
+		}
+	}
+	return nil, "", fmt.Errorf("clist 第 %d 页重试 %d 次后仍失败：%w", page, retries, lastErr)
+}
+
+// sleep 等 d；ctx 先结束时立即返回 ctx 的错误。
+func (q ClistQuery) sleep(ctx context.Context, d time.Duration) error {
+	if q.Sleep != nil {
+		return q.Sleep(ctx, d)
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func clistBases(base string) []string {

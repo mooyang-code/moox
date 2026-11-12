@@ -11,7 +11,7 @@ import (
 
 // 每个云函数代码包目录（configs/scf/<空间>）里的存储访问配置都要能解析出函数写 Storage 的应用身份：
 // 函数每次调用都按包里的 sources/market/binance.yaml 取 spot 这份绑定，密钥来自环境变量。
-// 港股那份只留了这一项（没有币安地址和数据源字段），在这里固定它够用。
+// 港股、美股那份只留了这一项（没有币安地址和数据源字段），在这里固定它够用。
 func TestEverySCFPackageConfigResolvesTheStorageIdentity(t *testing.T) {
 	root := filepath.Join("..", "..", "configs", "scf")
 	entries, err := os.ReadDir(root)
@@ -31,5 +31,5 @@ func TestEverySCFPackageConfigResolvesTheStorageIdentity(t *testing.T) {
 		require.Equal(t, strings.Repeat("a", 64), auth.GetAppKey(), entry.Name())
 		seen[entry.Name()] = true
 	}
-	require.True(t, seen["stockhk"] && seen["stockcn"] && seen["market_data"])
+	require.True(t, seen["stockhk"] && seen["stockus"] && seen["stockcn"] && seen["market_data"])
 }

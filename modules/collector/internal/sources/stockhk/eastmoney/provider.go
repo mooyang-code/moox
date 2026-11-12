@@ -81,8 +81,8 @@ func New(cfg Config) *Provider {
 }
 
 // secID 把标的 ID 换成东方财富的 secid：00700.XHKG → 116.00700。代码与交易所的校验用港股的标的规则。
-func secID(subjectID string) (string, error) {
-	subject, err := stockhk.Rules{}.ParseSubject(marketdata.InstrumentEquity, subjectID)
+func secID(req marketdata.KlineRequest) (string, error) {
+	subject, err := stockhk.Rules{}.ParseSubject(marketdata.InstrumentEquity, req.SubjectID)
 	if err != nil {
 		return "", err
 	}

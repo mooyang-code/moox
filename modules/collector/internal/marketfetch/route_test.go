@@ -167,10 +167,10 @@ func TestKlineRouteIDKeepsTheThreeExistingForms(t *testing.T) {
 		require.Equal(t, tc.want, got, "%+v", tc)
 	}
 	// 没有路由文件的市场一律按数据源命名，不要求市场登记过；没写品种时才要查市场的默认品种。
-	got, err := klineRouteID("stockus", marketdata.InstrumentEquity, "x", "", "5m")
+	got, err := klineRouteID("stockjp", marketdata.InstrumentEquity, "x", "", "5m")
 	require.NoError(t, err)
 	require.Equal(t, "x_equity_kline_5m", got)
-	_, err = klineRouteID("stockus", "", "x", "", "5m")
+	_, err = klineRouteID("stockjp", "", "x", "", "5m")
 	require.Error(t, err, "未登记的市场没有默认品种")
 }
 
@@ -188,7 +188,7 @@ func TestRouteForOnlyCoversItsInstrument(t *testing.T) {
 		{"stockcn", marketdata.InstrumentConvertibleBond, false},
 		{"crypto", marketdata.InstrumentSpot, false},
 		{"crypto", "", false},
-		{"stockus", marketdata.InstrumentEquity, false},
+		{"stockjp", marketdata.InstrumentEquity, false},
 	} {
 		_, found, err := RouteFor(tc.marketID, tc.instrument)
 		require.NoError(t, err)

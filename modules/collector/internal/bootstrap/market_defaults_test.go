@@ -25,6 +25,13 @@ func TestSCFPlanSpaceDefaultsComeFromMarketFiles(t *testing.T) {
 			DefaultExecutor:    "scf",
 			Fetch:              &SCFPlanFetchConfig{RequestTimeoutMS: 3000, StorageTimeoutMS: 2000, NotBeforeMS: 5000},
 		},
+		// 美股：固定每函数 50 只（标普 500 共 11 个函数），不估算函数个数、不做出口 IP 去重，收盘后等 5 秒。
+		"stockus": {
+			SymbolsPerFunction: 50,
+			DefaultIngest:      "pull",
+			DefaultExecutor:    "scf",
+			Fetch:              &SCFPlanFetchConfig{RequestTimeoutMS: 3000, StorageTimeoutMS: 2000, NotBeforeMS: 5000},
+		},
 		"crypto": {
 			DefaultIngest: "stream", DefaultExecutor: "local",
 			Markets: map[string]SCFPlanMarketConfig{
@@ -37,7 +44,7 @@ func TestSCFPlanSpaceDefaultsComeFromMarketFiles(t *testing.T) {
 
 // 允许迟到时间：crypto 15 秒、stockcn 90 秒；未登记的空间报错，不再给 60 秒的默认值。
 func TestDefaultLatenessSecondsComesFromMarketFiles(t *testing.T) {
-	for space, want := range map[string]int{"crypto": 15, "stockcn": 90, "stockhk": 90} {
+	for space, want := range map[string]int{"crypto": 15, "stockcn": 90, "stockhk": 90, "stockus": 90} {
 		got, err := defaultLatenessSeconds(space)
 		require.NoError(t, err)
 		require.Equal(t, want, got, space)
