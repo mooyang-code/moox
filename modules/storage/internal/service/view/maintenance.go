@@ -126,11 +126,12 @@ func (s *Service) normalizeMaintenanceOptions(opts MaintenanceOptions) (Maintena
 		opts.BackfillPageSize = viewBackfillBatchSize
 	}
 	s.SetSeriesBars(opts.Bars)
+	s.mu.Lock()
+	s.maintenance = opts
 	if periodMetadata, ok := opts.Metadata.(PeriodMetadataClient); ok {
-		s.mu.Lock()
 		s.periodMetadata = periodMetadata
-		s.mu.Unlock()
 	}
+	s.mu.Unlock()
 	s.setMetadataClient(opts.Metadata)
 	return opts, nil
 }
@@ -301,6 +302,11 @@ func (s *Service) maintainOnce(ctx context.Context, opts MaintenanceOptions) err
 			// 完整列出了活动 View：删除或停用的 View 不再导出输出水位等指标序列，否则它们会一直带着冻结的水位上报，
 			// Monitor 永远认为它迟到。
 			s.metrics.RetainViews(activeViews)
+			// 已删除或停用的 View 停掉跟随器。
+			s.followManager().Retain(func(spaceID, viewID string) bool {
+				_, ok := activeViews[observability.ViewKey{SpaceID: spaceID, ViewID: viewID}]
+				return ok
+			})
 			return firstErr
 		}
 	}

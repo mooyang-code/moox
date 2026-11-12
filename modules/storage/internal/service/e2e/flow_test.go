@@ -5,12 +5,10 @@ package e2e
 import (
 	"context"
 	"path/filepath"
-	"reflect"
 	"sort"
 	"testing"
 	"time"
 
-	storageoutbox "github.com/mooyang-code/moox/modules/storage/internal/service/datanode/outbox"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/datanode/pebble"
 	primarystore "github.com/mooyang-code/moox/modules/storage/internal/service/primarystore"
 	viewservice "github.com/mooyang-code/moox/modules/storage/internal/service/view"
@@ -45,6 +43,14 @@ func exactDatasetEventSubjects(t *testing.T, registry *events.Registry, spaceID,
 
 func (r primaryFieldReader) ReadRows(ctx context.Context, req *pb.PrimaryReadRowsReq, _ ...client.Option) (*pb.PrimaryReadRowsRsp, error) {
 	return r.service.ReadRows(ctx, req)
+}
+
+func (r primaryFieldReader) ReadTimeSeriesRows(ctx context.Context, req *pb.ReadTimeSeriesRowsReq, _ ...client.Option) (*pb.ReadTimeSeriesRowsRsp, error) {
+	return r.service.ReadTimeSeriesRows(ctx, req)
+}
+
+func (r primaryFieldReader) ReadDatasetChanges(ctx context.Context, req *pb.ReadDatasetChangesReq, _ ...client.Option) (*pb.ReadDatasetChangesRsp, error) {
+	return r.service.ReadDatasetChanges(ctx, req)
 }
 
 func TestSeriesTagPrimaryEventActiveViewAndBackfillFlow(t *testing.T) {
@@ -124,7 +130,7 @@ func TestSeriesTagPrimaryEventActiveViewAndBackfillFlow(t *testing.T) {
 	if rsp, err := view.PrepareViewIndex(ctx, &pb.PrepareViewIndexReq{AuthInfo: viewAuth, IndexId: "prices-view", Schema: &pb.ViewIndexSchema{SpaceId: "quant", ViewId: "prices-view", DatasetId: "prices", ViewVersion: 1, Engine: "duckdb", ViewSchemaHash: "schema-1", Columns: columns}}); err != nil || rsp.GetRetInfo().GetCode() != pb.ErrorCode_SUCCESS {
 		t.Fatalf("view prepare: rsp=%v err=%v", rsp, err)
 	}
-	if err := view.AttachActiveView(context.Background(), &pb.View{SpaceId: "quant", ViewId: "prices-view", DatasetId: "prices", Engine: "duckdb", ActiveIndexId: "prices-view", ViewRevision: 1, ActiveViewSchemaHash: "schema-1", ActiveColumns: columns, Status: "active"}); err != nil {
+	if err := view.AttachActiveView(context.Background(), &pb.View{SpaceId: "quant", ViewId: "prices-view", DatasetId: "prices", Engine: "duckdb", Freq: "1m", ActiveIndexId: "prices-view", ViewRevision: 1, ActiveViewSchemaHash: "schema-1", ActiveColumns: columns, Status: "active"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -171,44 +177,16 @@ func TestSeriesTagPrimaryEventActiveViewAndBackfillFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer eventClient.Close()
-	stopConsumer, err := view.StartEventConsumer(ctx, eventClient, viewservice.EventConsumerOptions{
-		PartitionID: "misc", Consumer: events.StorageViewConsumerName("quant", "prices"), FilterSubjects: exactDatasetEventSubjects(t, registry, "quant", "prices"), FetchBatch: 1, MaxWorkers: 1, MaxAckPending: 1,
-	})
+	publisher, err := events.NewPublisher(eventClient, registry)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer stopConsumer()
-	consumerInfo, err := js.ConsumerInfo("MOOX_STORAGE", events.StorageViewConsumerName("quant", "prices"))
+	// 索引没有跟随进度：跟随器先重建（读存量），之后跟随变更日志应用新的写入。
+	stopFollowing, err := view.StartFollowing(ctx, viewservice.FollowOptions{Changes: primaryFieldReader{service: primary}, Range: primaryFieldReader{service: primary}, Publisher: publisher, Wait: time.Second})
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantFilters := exactDatasetEventSubjects(t, registry, "quant", "prices")
-	sort.Strings(wantFilters)
-	gotFilters := append([]string(nil), consumerInfo.Config.FilterSubjects...)
-	sort.Strings(gotFilters)
-	if consumerInfo.Config.FilterSubject != "" || !reflect.DeepEqual(gotFilters, wantFilters) {
-		t.Fatalf("storage_view filters=%q/%v want=%v", consumerInfo.Config.FilterSubject, gotFilters, wantFilters)
-	}
-	relayErrors := make(chan error, 1)
-	relay, err := storageoutbox.NewRelay(
-		store,
-		storageoutbox.NewJetStreamPublisher(eventClient),
-		storageoutbox.RelayOptions{
-			PollInterval: 10 * time.Millisecond,
-			ErrorReporter: func(err error) {
-				select {
-				case relayErrors <- err:
-				default:
-				}
-			},
-		},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	relay.Start(ctx)
-	defer relay.Close()
-	waitForOutboxEmpty(t, ctx, store, relayErrors)
+	defer stopFollowing()
 	waitForSelectorStates(t, ctx, view, viewAuth, closes)
 
 	patch := &pb.RowFieldUpsert{Key: keys[1], Fields: []*pb.FieldValue{doubleField("close", 111)}}
@@ -216,29 +194,7 @@ func TestSeriesTagPrimaryEventActiveViewAndBackfillFlow(t *testing.T) {
 		t.Fatalf("field patch: rsp=%v err=%v", rsp, err)
 	}
 	closes[1] = 111
-	waitForOutboxEmpty(t, ctx, store, relayErrors)
 	waitForSelectorStates(t, ctx, view, viewAuth, closes)
-}
-
-func waitForOutboxEmpty(t *testing.T, ctx context.Context, store *pebble.Store, relayErrors <-chan error) {
-	t.Helper()
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		select {
-		case err := <-relayErrors:
-			t.Fatalf("outbox relay: %v", err)
-		default:
-		}
-		entries, err := store.ListOutbox(ctx, 0, 10)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(entries) == 0 {
-			return
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	t.Fatal("outbox was not relayed and deleted")
 }
 
 func waitForSelectorStates(t *testing.T, ctx context.Context, view *viewservice.Service, auth *pb.AuthInfo, closes []float64) {
@@ -272,7 +228,7 @@ func waitForSelectorStates(t *testing.T, ctx context.Context, view *viewservice.
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatal("relayed rows did not become queryable through the active view")
+	t.Fatal("写入没有在 View 的活动索引里变得可查")
 }
 
 func seriesTagKey(tag string) *pb.RowKey {

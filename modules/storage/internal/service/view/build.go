@@ -57,15 +57,29 @@ func (l *backfillRequestLimiter) wait(ctx context.Context) error {
 	}
 }
 
-// buildInitialIndex 为还没有索引的 View 建索引：准备空索引、把实时写入接到它上面、从 Primary 回填，最后提交元数据，
-// View 从此可读。建索引期间 View 不可读，读取方等待。半成品不续建：失败或进程退出后，下一轮删掉重建。
+// buildInitialIndex 为还没有索引的 View 建索引：先取变更日志头部 H_start、准备空索引、从 Primary 读存量，建成时再取一次头部
+// H_done 与 H_start 一起记进索引，最后提交元数据，View 从此可读，跟随器从 H_start 接着应用（重放的行是幂等写入），
+// (H_start, H_done] 之间的完成标记只推进游标、不发布。建索引期间 View 不可读，读取方等待。
+// 半成品不续建：失败或进程退出后，下一轮删掉重建。
 func (s *Service) buildInitialIndex(ctx context.Context, opts MaintenanceOptions, auth *pb.AuthInfo, view *pb.View) error {
+	ref := viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}
+	manager := s.followManager()
+	// 元数据说还没有活动索引（新建，或删除后重建）：残留的跟随器先停掉。要在取 buildMu 之前停：
+	// 它可能正等着 buildMu 做断档重建。
+	manager.Stop(ref.spaceID, ref.viewID)
+	s.buildMu.Lock()
+	defer s.buildMu.Unlock()
 	columns, err := desiredViewColumns(ctx, opts.Metadata, auth, view)
 	if err != nil {
 		return err
 	}
 	columns = numberedViewColumns(columns)
-	ref := viewRef{spaceID: view.GetSpaceId(), viewID: view.GetViewId()}
+	var start viewindex.ChangeCursor
+	if manager != nil {
+		if start, err = manager.Head(ctx, view.GetSpaceId(), view.GetDatasetId()); err != nil {
+			return err
+		}
+	}
 	s.mu.Lock()
 	s.catalogViews[ref] = proto.Clone(view).(*pb.View)
 	runtime := s.views[ref]
@@ -109,7 +123,21 @@ func (s *Service) buildInitialIndex(ctx context.Context, opts MaintenanceOptions
 		}
 		return err
 	}
-	return s.completeInitialBuild(ctx, opts, auth, view, schema, indexID)
+	if manager != nil {
+		done, err := manager.Head(ctx, view.GetSpaceId(), view.GetDatasetId())
+		if err == nil {
+			err = s.saveFollowState(ctx, indexID, viewindex.FollowState{Cursor: start, BuiltSequence: done.Sequence})
+		}
+		if err != nil {
+			s.discardInitialBuild(ctx, ref, indexID)
+			return fmt.Errorf("记录索引的跟随进度：%w", err)
+		}
+	}
+	if err := s.completeInitialBuild(ctx, opts, auth, view, schema, indexID); err != nil {
+		return err
+	}
+	s.ensureFollower(ref)
+	return nil
 }
 
 // numberedViewColumns 按当前顺序给列编号（克隆后修改）：追加校验要求已建列的 sort_order 互不相同，
@@ -344,7 +372,13 @@ func (s *Service) AttachActiveView(ctx context.Context, view *pb.View) error {
 	if runtime.active == view.GetActiveIndexId() && attached.ViewVersion > view.GetViewRevision() {
 		return nil
 	}
+	// 断档重建进行中：索引建成前不能挂回去。
+	if runtime.rebuilding {
+		return nil
+	}
 	s.attachActiveViewLocked(view, runtime, schema, engineName)
+	// ensureFollower 不取运行时锁，可以在这里调用。
+	s.ensureFollower(viewKey)
 	return nil
 }
 
@@ -362,6 +396,7 @@ func (s *Service) attachActiveViewLocked(view *pb.View, runtime *viewRuntime, sc
 	}
 	runtime.active = view.GetActiveIndexId()
 	runtime.building = ""
+	runtime.rebuilding = false
 	runtime.hiddenColumns = make(map[string]struct{}, len(view.GetHiddenColumns()))
 	for _, name := range view.GetHiddenColumns() {
 		runtime.hiddenColumns[name] = struct{}{}

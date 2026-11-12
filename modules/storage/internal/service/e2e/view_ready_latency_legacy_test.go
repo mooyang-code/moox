@@ -89,7 +89,7 @@ func legacyBenchViewAuth() *pb.AuthInfo {
 	return &pb.AuthInfo{AppId: "storage-bench", AppKey: serviceauth.Key(legacyBenchSecret, "storage-bench")}
 }
 
-func newReadyBenchEnv(t *testing.T, datasets []readyBenchDataset) readyBenchEnv {
+func newLegacyReadyBenchEnv(t *testing.T, datasets []readyBenchDataset) readyBenchEnv {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)

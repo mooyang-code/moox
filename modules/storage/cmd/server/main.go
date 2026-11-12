@@ -25,6 +25,7 @@ import (
 	"github.com/mooyang-code/moox/modules/storage/internal/serviceauth"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	_ "github.com/mooyang-code/moox/packages/clsreporter/logcls"
+	"github.com/mooyang-code/moox/packages/events"
 	"github.com/mooyang-code/moox/packages/healthz/trpclog"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcotel"
 	_ "github.com/mooyang-code/moox/packages/healthz/trpcrecovery"
@@ -446,32 +447,28 @@ func runViewRole() error {
 		return err
 	}
 	defer eventClient.Close()
-	consumerTemplate, err := storageViewConsumerTemplate()
+	// 就绪事件用专用连接发布：发布超时（确认丢失）后只重连这条连接。
+	readyClient, err := eventClient.Fork(trpc.BackgroundContext(), "storage-view-ready")
+	if err != nil {
+		return fmt.Errorf("为 View 就绪事件发布器建立 EventBus 连接失败：%w", err)
+	}
+	defer readyClient.Close()
+	registry, err := events.DefaultRegistry()
 	if err != nil {
 		return err
 	}
-	// 没有静态消费者：每个数据集的消费者（view_<数据集哈希>）都由下面的清单对账动态创建；
-	// 这里只启动就绪事件发布、写入围栏落盘等运行时。
-	stopConsumer, err := svc.StartEventConsumer(trpc.BackgroundContext(), eventClient)
+	readyPublisher, err := events.NewPublisher(readyClient, registry)
 	if err != nil {
 		return err
 	}
-	defer stopConsumer()
-	dynamicReconciler, err := svc.NewInventoryReconciler(viewservice.InventoryReconcilerOptions{
-		Metadata: metadataProxy, Primary: primaryProxy, EventClient: eventClient, Consumer: consumerTemplate, Interval: 30 * time.Second,
+	// 每个已建好索引的 View 一个协程跟随 PrimaryStore 的变更日志；单次读取的超时由跟随器按等待时长另设。
+	stopFollowing, err := svc.StartFollowing(trpc.BackgroundContext(), viewservice.FollowOptions{
+		Changes: primaryProxy, Range: primaryProxy, Publisher: readyPublisher, Reconnect: readyClient.Reconnect,
 	})
 	if err != nil {
-		return fmt.Errorf("create storage view dynamic inventory reconciler: %w", err)
+		return err
 	}
-	// Bind the current inventory before starting the periodic reconciler.
-	if err := dynamicReconciler.Reconcile(trpc.BackgroundContext()); err != nil {
-		return fmt.Errorf("initial storage view dynamic inventory reconcile: %w", err)
-	}
-	stopDynamicConsumer, err := dynamicReconciler.Start(trpc.BackgroundContext())
-	if err != nil {
-		return fmt.Errorf("start storage view dynamic inventory reconciler: %w", err)
-	}
-	defer stopDynamicConsumer()
+	defer stopFollowing()
 	if storageViewMaintenanceDisabled() {
 		// 运维主动暂停建索引时（Storage 主机过载），实时消费照常工作。
 		tlog.Warnf("storage view historical maintenance disabled by MOOX_STORAGE_VIEW_MAINTENANCE_DISABLED=1")

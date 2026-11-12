@@ -1652,6 +1652,13 @@ components:
               - ReportDatasetPeriodCompleted
             callers:
               - factor-mgr
+          # View 跟随变更日志：按游标读取行写入与完成标记，再回读整行。
+          - methods:
+              - ReadRows
+              - ReadTimeSeriesRows
+              - ReadDatasetChanges
+            callers:
+              - storage-view
     doctor:
       role: storage-primary
       description: Storage 元数据与事实数据主服务
@@ -1693,20 +1700,29 @@ components:
         port: 20103
         console_name: storage
         timeout_ms: 25000
+        # WaitViewApplied 服务端最多等待 30 秒，路由预算要大于它并留出传输余量。
+        method_timeouts_ms:
+          WaitViewApplied: 35000
         max_body_bytes: 33554432
         methods:
           - QueryTimeSeriesRows
           - CountTimeSeriesRows
           - SearchRecordRows
+          - GetViewState
+          - WaitViewApplied
         read_only_methods:
           - QueryTimeSeriesRows
           - CountTimeSeriesRows
           - SearchRecordRows
+          - GetViewState
+          - WaitViewApplied
         acl:
           - methods:
               - QueryTimeSeriesRows
               - CountTimeSeriesRows
               - SearchRecordRows
+              - GetViewState
+              - WaitViewApplied
             callers:
               - console
               - moox-cli

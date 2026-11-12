@@ -14,6 +14,7 @@ import (
 
 	"github.com/mooyang-code/moox/modules/storage/internal/observability"
 	"github.com/mooyang-code/moox/modules/storage/internal/retinfo"
+	"github.com/mooyang-code/moox/modules/storage/internal/service/view/follow"
 	"github.com/mooyang-code/moox/modules/storage/internal/service/viewindex"
 	viewbleve "github.com/mooyang-code/moox/modules/storage/internal/service/viewindex/bleve"
 	viewduckdb "github.com/mooyang-code/moox/modules/storage/internal/service/viewindex/duckdb"
@@ -76,6 +77,13 @@ type Service struct {
 	maxAge        storagepolicy.Retention
 	maxAgeEnabled bool
 	now           func() time.Time
+	// follow 管理每个 View 跟随变更日志的协程；primaryRange 按时间范围回读时序行。
+	follow       *follow.Manager
+	primaryRange TimeSeriesRangeReader
+	// maintenance 是维护参数（回填页大小、请求间隔、保留根数），断档重建沿用。
+	maintenance MaintenanceOptions
+	// buildMu 让首次建索引与断档重建一个接一个进行，不同时压在 Primary 上。
+	buildMu sync.Mutex
 }
 
 type datasetRef struct{ spaceID, datasetID string }
@@ -84,7 +92,9 @@ type viewRuntime struct {
 	mu     sync.Mutex
 	active string
 	// building 是首次建索引期间的写入目标，建成后转为 active。任何时刻只写一个索引。
-	building         string
+	building string
+	// rebuilding 为真表示断档重建进行中：元数据仍说索引是活动的，维护流程不能在建成前把它挂回去。
+	rebuilding       bool
 	statsIndexID     string
 	stats            viewindex.ViewIndexStats
 	statsRefreshedAt time.Time

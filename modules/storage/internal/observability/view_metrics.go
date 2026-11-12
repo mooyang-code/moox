@@ -48,20 +48,22 @@ type ViewMetrics struct {
 	// viewOutputArrival 是 View 输出水位最近一次前进时的墙上时间，Monitor 用它算最新一根 K 线的到达延迟。
 	viewOutputArrival *prometheus.GaugeVec
 	// now 只供测试替换时钟。
-	now                              func() time.Time
-	viewSubjects                     *viewSubjectTracker
-	readyPublishRetry                *prometheus.CounterVec
-	expiredRowsDropped               *prometheus.CounterVec
-	oldestRowsDeleted                *prometheus.CounterVec
-	oldestDeleteLockSeconds          prometheus.Histogram
-	oldestDeleteLastRound            prometheus.Gauge
-	readyQueuePending                prometheus.Gauge
-	readyQueueOldestAge              prometheus.GaugeFunc
-	readyPublishBackoff              prometheus.Gauge
-	restoreDuration                  prometheus.Gauge
-	restoreReady                     prometheus.Gauge
-	restoreFailures                  prometheus.Counter
-	viewFileOverLimit                prometheus.Gauge
+	now                     func() time.Time
+	viewSubjects            *viewSubjectTracker
+	readyPublishRetry       *prometheus.CounterVec
+	expiredRowsDropped      *prometheus.CounterVec
+	oldestRowsDeleted       *prometheus.CounterVec
+	oldestDeleteLockSeconds prometheus.Histogram
+	oldestDeleteLastRound   prometheus.Gauge
+	readyQueuePending       prometheus.Gauge
+	readyQueueOldestAge     prometheus.GaugeFunc
+	readyPublishBackoff     prometheus.Gauge
+	restoreDuration         prometheus.Gauge
+	restoreReady            prometheus.Gauge
+	restoreFailures         prometheus.Counter
+	viewFileOverLimit       prometheus.Gauge
+	// followLag 是各 View 跟随变更日志的落后情况，采集时现算。
+	followLag                        *viewFollowLagCollector
 	consumerLagSnapshot              atomic.Int64
 	consumerBoundSnapshot            atomic.Bool
 	partitionMu                      sync.RWMutex
@@ -293,6 +295,7 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 			Namespace: "moox", Subsystem: "storage_view", Name: "file_over_limit",
 			Help: "Number of active Views whose index file is at or above max_view_file_bytes; alert only, no data is touched.",
 		}),
+		followLag:         newViewFollowLagCollector(),
 		pendingDeliveries: make(map[*jetstream.Delivery]time.Time),
 		partitionStates:   make(map[string]ConsumerPartitionSnapshot),
 		viewWatermarks:    make(map[string]int64),
@@ -374,6 +377,9 @@ func NewViewMetrics(registerer prometheus.Registerer) (*ViewMetrics, error) {
 		return nil, err
 	}
 	if metrics.viewFileOverLimit, err = registerOrReuse(registerer, metrics.viewFileOverLimit); err != nil {
+		return nil, err
+	}
+	if metrics.followLag, err = registerOrReuse(registerer, metrics.followLag); err != nil {
 		return nil, err
 	}
 	if metrics.outboxLastPublishSuccess, err = registerOrReuse(registerer, metrics.outboxLastPublishSuccess); err != nil {
