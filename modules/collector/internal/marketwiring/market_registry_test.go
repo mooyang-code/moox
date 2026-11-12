@@ -85,7 +85,7 @@ func TestResolveSymbolUsesSubjectRules(t *testing.T) {
 
 	_, err = ResolveSymbol("binance", "crypto", "swap", "BTC-USDT-SPOT")
 	require.Error(t, err, "后缀与品种不符")
-	_, err = ResolveSymbol("binance", "stockus", "equity", "AAPL.XNAS")
+	_, err = ResolveSymbol("binance", "stockjp", "equity", "AAPL.XNAS")
 	require.ErrorIs(t, err, markets.ErrUnknownMarket)
 }
 
