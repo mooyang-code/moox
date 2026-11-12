@@ -1407,7 +1407,7 @@ type ReadDatasetChangesReq struct {
 	FromHead bool `protobuf:"varint,5,opt,name=from_head,json=fromHead,proto3" json:"from_head,omitempty"`
 	// limit 是最多扫描的日志条数，默认 500，最大 2000。
 	Limit uint32 `protobuf:"varint,6,opt,name=limit,proto3" json:"limit,omitempty"`
-	// wait_ms 大于 0 时，没有本数据集的新变更就在服务端等到下一次提交再读，最多等这么久（上限 30000）；
+	// wait_ms 大于 0 时，没有本数据集的新变更就在服务端等到下一次提交再读，最多等这么久（上限 30000；请求带截止时间时截到截止前 200 毫秒）；
 	// 到期仍没有时返回空的 changes，next_cursor 照样前进到已扫描的位置。from_head 与 gap 不等待。
 	WaitMs uint32 `protobuf:"varint,7,opt,name=wait_ms,json=waitMs,proto3" json:"wait_ms,omitempty"`
 }

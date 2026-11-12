@@ -182,7 +182,7 @@ message ReadDatasetChangesReq {
   bool from_head = 5;
   // limit 是最多扫描的日志条数，默认 500，最大 2000。
   uint32 limit = 6;
-  // wait_ms 大于 0 时，没有本数据集的新变更就在服务端等到下一次提交再读，最多等这么久（上限 30000）；
+  // wait_ms 大于 0 时，没有本数据集的新变更就在服务端等到下一次提交再读，最多等这么久（上限 30000；请求带截止时间时截到截止前 200 毫秒）；
   // 到期仍没有时返回空的 changes，next_cursor 照样前进到已扫描的位置。from_head 与 gap 不等待。
   uint32 wait_ms = 7;
 }

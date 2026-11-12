@@ -11,6 +11,7 @@ import (
 
 	cpebble "github.com/cockroachdb/pebble"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -27,6 +28,8 @@ const (
 	defaultChangeLimit = 500
 	maxChangeLimit     = 2000
 	maxChangeWait      = 30 * time.Second
+	// changeWaitMargin 是等待离请求截止时间留的余量，留给返回响应。
+	changeWaitMargin   = 200 * time.Millisecond
 	changeCleanupBatch = 512
 
 	// DefaultChangeLogRetention 是变更日志的默认保留期。
@@ -43,8 +46,9 @@ func (s *Store) ChangeLogRetention() time.Duration {
 	return s.changeLogRetention
 }
 
-func (s *Store) readUint64Meta(key string) (uint64, error) {
-	data, closer, err := s.db.Get([]byte(key))
+// readUint64Meta 从 r（数据库或快照）读一个 8 字节计数；不存在时为 0。
+func readUint64Meta(r cpebble.Reader, key string) (uint64, error) {
+	data, closer, err := r.Get([]byte(key))
 	if errors.Is(err, cpebble.ErrNotFound) {
 		return 0, nil
 	}
@@ -66,7 +70,11 @@ func setUint64Meta(batch *cpebble.Batch, key string, value uint64, opts *cpebble
 
 // nextChangeSeq 返回下一个变更序号（从 1 开始）。调用方必须持有 outboxMu，所有写入都在它的保护下提交。
 func (s *Store) nextChangeSeq() (uint64, error) {
-	next, err := s.readUint64Meta(metaNextChangeSeq)
+	return nextChangeSeqIn(s.db)
+}
+
+func nextChangeSeqIn(r cpebble.Reader) (uint64, error) {
+	next, err := readUint64Meta(r, metaNextChangeSeq)
 	if err != nil {
 		return 0, err
 	}
@@ -207,6 +215,7 @@ func (s *Store) ChangeCursor() (*pb.DatasetChangeCursor, error) {
 
 // ReadDatasetChanges 从游标之后按序读取一个数据集的变更。游标早于保留起点、比头部还新、或 store_id 与本存储对不上时返回 gap。
 // wait_ms 大于 0 时，扫描到头仍没有本数据集的变更，就等下一次变更提交后从已扫描的位置接着扫，直到有变更或到期；
+// ctx 带截止时间时，等待截到截止前 changeWaitMargin，到期照常返回已扫描的位置，调用方不必精确对齐超时。
 // 返回的游标始终是已扫描到的位置。
 func (s *Store) ReadDatasetChanges(ctx context.Context, req *pb.ReadDatasetChangesReq) (*pb.ReadDatasetChangesRsp, error) {
 	if s == nil || s.db == nil {
@@ -232,6 +241,9 @@ func (s *Store) ReadDatasetChanges(ctx context.Context, req *pb.ReadDatasetChang
 	}
 	limit = min(limit, maxChangeLimit)
 	wait := min(time.Duration(req.GetWaitMs())*time.Millisecond, maxChangeWait)
+	if deadline, ok := ctx.Deadline(); ok && wait > 0 {
+		wait = min(wait, time.Until(deadline)-changeWaitMargin)
+	}
 	var timer <-chan time.Time
 	if wait > 0 {
 		t := time.NewTimer(wait)
@@ -259,13 +271,17 @@ func (s *Store) ReadDatasetChanges(ctx context.Context, req *pb.ReadDatasetChang
 }
 
 // scanDatasetChanges 从游标之后扫描最多 limit 条日志，返回其中属于这个数据集的条目与已扫描到的位置。
+// 头部、清理位置与日志条目从同一个快照读：并发清理不会让游标越过已删的条目而不报断档。
 func (s *Store) scanDatasetChanges(ctx context.Context, spaceID, datasetID string, cursor *pb.DatasetChangeCursor, limit int) (*pb.ReadDatasetChangesRsp, error) {
-	head, err := s.ChangeCursor()
+	snap := s.db.NewSnapshot()
+	defer snap.Close()
+	next, err := nextChangeSeqIn(snap)
 	if err != nil {
 		return nil, err
 	}
+	head := &pb.DatasetChangeCursor{StoreId: s.sourceStoreID, Sequence: next - 1}
 	rsp := &pb.ReadDatasetChangesRsp{NextCursor: head}
-	trimmed, err := s.readUint64Meta(metaChangeTrimmed)
+	trimmed, err := readUint64Meta(snap, metaChangeTrimmed)
 	if err != nil {
 		return nil, err
 	}
@@ -273,7 +289,7 @@ func (s *Store) scanDatasetChanges(ctx context.Context, spaceID, datasetID strin
 		rsp.Gap = true
 		return rsp, nil
 	}
-	iter, err := s.db.NewIter(&cpebble.IterOptions{LowerBound: changeLogKey(cursor.GetSequence() + 1), UpperBound: []byte(changeLogPrefix + "\xff")})
+	iter, err := snap.NewIter(&cpebble.IterOptions{LowerBound: changeLogKey(cursor.GetSequence() + 1), UpperBound: []byte(changeLogPrefix + "\xff")})
 	if err != nil {
 		return nil, err
 	}
@@ -289,21 +305,83 @@ func (s *Store) scanDatasetChanges(ctx context.Context, spaceID, datasetID strin
 			break
 		}
 		scanned++
-		var change pb.DatasetChange
-		if err := proto.Unmarshal(iter.Value(), &change); err != nil {
+		// 先只读身份字段，属于这个数据集的条目才完整解码。
+		entry, err := peekChange(iter.Value())
+		if err != nil {
 			return nil, fmt.Errorf("decode change log %s: %w", iter.Key(), err)
 		}
-		last = change.GetSequence()
-		if change.GetSpaceId() != spaceID || change.GetDatasetId() != datasetID {
+		if scanned == 1 && entry.sequence != cursor.GetSequence()+1 {
+			// 日志序号连续、只从头清理：游标之后的第一条不是 cursor+1，说明中间的条目已被删除。
+			return &pb.ReadDatasetChangesRsp{NextCursor: head, Gap: true}, nil
+		}
+		last = entry.sequence
+		if entry.spaceID != spaceID || entry.datasetID != datasetID {
 			continue
 		}
-		rsp.Changes = append(rsp.Changes, &change)
+		change := &pb.DatasetChange{}
+		if err := proto.Unmarshal(iter.Value(), change); err != nil {
+			return nil, fmt.Errorf("decode change log %s: %w", iter.Key(), err)
+		}
+		rsp.Changes = append(rsp.Changes, change)
 	}
 	if err := iter.Error(); err != nil {
 		return nil, err
 	}
+	if scanned == 0 && cursor.GetSequence() < head.GetSequence() {
+		// 游标落后于头部却一条都没扫到：游标之后的条目已被删除。
+		return &pb.ReadDatasetChangesRsp{NextCursor: head, Gap: true}, nil
+	}
 	rsp.NextCursor = &pb.DatasetChangeCursor{StoreId: s.sourceStoreID, Sequence: last}
 	return rsp, nil
+}
+
+// changeHeader 是一条变更日志的定位字段，不含行范围、记录键与标记字节。
+type changeHeader struct {
+	sequence  uint64
+	spaceID   string
+	datasetID string
+	createdAt string
+}
+
+// peekChange 用 protowire 只读 DatasetChange 的序号、空间、数据集与创建时间，跳过其余字段。
+func peekChange(raw []byte) (changeHeader, error) {
+	var head changeHeader
+	for len(raw) > 0 {
+		num, typ, n := protowire.ConsumeTag(raw)
+		if n < 0 {
+			return head, protowire.ParseError(n)
+		}
+		raw = raw[n:]
+		switch {
+		case num == 1 && typ == protowire.VarintType:
+			v, m := protowire.ConsumeVarint(raw)
+			if m < 0 {
+				return head, protowire.ParseError(m)
+			}
+			head.sequence, n = v, m
+		case (num == 2 || num == 3 || num == 5) && typ == protowire.BytesType:
+			v, m := protowire.ConsumeBytes(raw)
+			if m < 0 {
+				return head, protowire.ParseError(m)
+			}
+			switch num {
+			case 2:
+				head.spaceID = string(v)
+			case 3:
+				head.datasetID = string(v)
+			default:
+				head.createdAt = string(v)
+			}
+			n = m
+		default:
+			n = protowire.ConsumeFieldValue(num, typ, raw)
+			if n < 0 {
+				return head, protowire.ParseError(n)
+			}
+		}
+		raw = raw[n:]
+	}
+	return head, nil
 }
 
 // CleanupChangeLog 删除创建时间早于 cutoff 的变更日志，并记下被清理到的序号（游标早于它就是断档）。
@@ -338,18 +416,18 @@ func (s *Store) cleanupChangeLogBatch(ctx context.Context, cutoff time.Time) (in
 	count := 0
 	var lastSeq uint64
 	for ok := iter.First(); ok && count < changeCleanupBatch; ok = iter.Next() {
-		var change pb.DatasetChange
-		if err := proto.Unmarshal(iter.Value(), &change); err != nil {
+		head, err := peekChange(iter.Value())
+		if err != nil {
 			return 0, fmt.Errorf("decode change log %s: %w", iter.Key(), err)
 		}
-		created, err := time.Parse(time.RFC3339Nano, change.GetCreatedAt())
+		created, err := time.Parse(time.RFC3339Nano, head.createdAt)
 		if err != nil || !created.Before(cutoff) {
 			break
 		}
 		if err := batch.Delete(append([]byte(nil), iter.Key()...), s.writeOptions); err != nil {
 			return 0, err
 		}
-		lastSeq = change.GetSequence()
+		lastSeq = head.sequence
 		count++
 	}
 	if count == 0 {

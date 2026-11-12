@@ -73,8 +73,8 @@ func (s *Service) CountTimeSeriesRows(ctx context.Context, req *pb.CountTimeSeri
 	return &pb.CountTimeSeriesRowsRsp{RetInfo: retinfo.Success("success"), Counts: counts}, nil
 }
 
-// ReadDatasetChanges 读取持久化的行变更日志：from_head 取基线位点，否则从游标之后按序读。
-// 游标身份对不上或早于日志保留起点时响应里 gap 为真，调用方走对账。
+// ReadDatasetChanges 读取持久化的变更日志（行条目与完成标记条目）：from_head 取基线位点，否则从游标之后按序读，wait_ms 见 pebble.Store.ReadDatasetChanges。
+// 游标的 store_id 对不上、早于日志保留起点或比头部还新时响应里 gap 为真，调用方重建基线。
 func (s *Service) ReadDatasetChanges(ctx context.Context, req *pb.ReadDatasetChangesReq) (*pb.ReadDatasetChangesRsp, error) {
 	if req == nil || req.GetSpaceId() == "" || req.GetDatasetId() == "" {
 		return &pb.ReadDatasetChangesRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id and dataset_id are required"))}, nil

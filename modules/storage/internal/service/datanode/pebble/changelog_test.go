@@ -2,13 +2,18 @@ package pebble
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
+	"sort"
+	"sync"
 	"testing"
 	"time"
 
+	cpebble "github.com/cockroachdb/pebble"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/events/eventpb"
 	storageeventpb "github.com/mooyang-code/moox/packages/storagepb"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/proto"
 )
@@ -372,4 +377,265 @@ func TestCommitWritesAreChangeLoggedOnce(t *testing.T) {
 		require.NoError(t, err)
 	}
 	require.Equal(t, uint64(1), mustHead(t, s).GetSequence())
+}
+
+// peekChange 读出的定位字段与完整解码一致，三种条目都能跳过其余字段。
+func TestPeekChangeMatchesFullDecode(t *testing.T) {
+	for _, change := range []*pb.DatasetChange{
+		{Sequence: 7, SpaceId: "s", DatasetId: "d", CreatedAt: "2026-10-01T00:00:00.5Z", Ranges: []*pb.DatasetChangeRange{{SubjectId: "BTC", Freq: "1m", StartTime: "a", EndTime: "b"}}},
+		{Sequence: 8, SpaceId: "s", DatasetId: "notes", CreatedAt: "x", Records: []*pb.RecordRowKey{{RecordId: "r", Version: "1"}}},
+		{Sequence: 9, SpaceId: "s", DatasetId: "d", CreatedAt: "y", Marker: []byte("marker")},
+	} {
+		raw, err := proto.Marshal(change)
+		require.NoError(t, err)
+		got, err := peekChange(raw)
+		require.NoError(t, err)
+		require.Equal(t, changeHeader{sequence: change.GetSequence(), spaceID: change.GetSpaceId(), datasetID: change.GetDatasetId(), createdAt: change.GetCreatedAt()}, got)
+	}
+	_, err := peekChange([]byte{0x0a, 0x05, 'x'})
+	require.Error(t, err)
+}
+
+// 读取与清理并发：每次读要么报断档，要么返回从 cursor+1 起连续的条目，不会静默越过已清理的条目。
+func TestReadDatasetChangesConcurrentWithCleanup(t *testing.T) {
+	ctx := context.Background()
+	s := openChangeLogStore(t, 0)
+	base := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	storeID := mustHead(t, s).GetStoreId()
+	writerDone := make(chan struct{})
+	go func() {
+		defer close(writerDone)
+		for i := 0; i < 200; i++ {
+			if err := upsertTestRows(s, ctx, []*pb.RowFieldUpsert{tsRow("BTCUSDT", "", base.Add(time.Duration(i)*time.Minute), float64(i))}); err != nil {
+				t.Error(err)
+				return
+			}
+			if i%3 == 0 {
+				// 截止时间放在未来：每次都清空已有的全部条目。
+				if _, err := s.CleanupChangeLog(ctx, time.Now().Add(time.Hour)); err != nil {
+					t.Error(err)
+					return
+				}
+			}
+		}
+	}()
+	reads, delivered := 0, 0
+	cursor := &pb.DatasetChangeCursor{StoreId: storeID}
+	for running := true; running; {
+		select {
+		case <-writerDone:
+			running = false
+		default:
+		}
+		rsp, err := s.ReadDatasetChanges(ctx, &pb.ReadDatasetChangesReq{SpaceId: "s", DatasetId: "d", Cursor: cursor, Limit: 1})
+		require.NoError(t, err)
+		reads++
+		if rsp.GetGap() {
+			cursor = mustHead(t, s)
+			continue
+		}
+		want := cursor.GetSequence() + 1
+		for _, change := range rsp.GetChanges() {
+			require.Equal(t, want, change.GetSequence(), "没有报断档时条目必须从游标之后连续")
+			want++
+			delivered++
+		}
+		cursor = rsp.GetNextCursor()
+	}
+	require.Positive(t, reads)
+	require.Positive(t, delivered)
+}
+
+// 行写入、能触发账本完成的周期提交、写入方标记三者并发：序号恰好 1..N；
+// 每条标记条目与它的 Outbox 条目字节相同；每期账本标记的序号大于该期最后一次行写入的序号。
+func TestChangeLogConcurrentWritersKeepSequenceAndOrder(t *testing.T) {
+	ctx := context.Background()
+	clock := newGoldenClock(goldenPeriod.Add(61 * time.Second))
+	store := newGoldenStore(t, clock)
+	series := goldenSeries(t, goldenDefaultSeries())
+	const periods = 4
+	datasets := []string{"plain"}
+	exps := make([]DatasetPeriodExpectation, periods)
+	for i := range exps {
+		dataset := fmt.Sprintf("bars-%d", i)
+		datasets = append(datasets, dataset)
+		exps[i] = goldenRegister(t, store, clock, goldenSpace, dataset, goldenFreq, series, goldenPeriod, goldenLateness)
+	}
+
+	var wg sync.WaitGroup
+	for i := range exps {
+		wg.Add(1)
+		go func(exp DatasetPeriodExpectation) {
+			defer wg.Done()
+			for index := range series {
+				_, err := store.CommitTimeSeriesBatch(ctx, exp, []TimeSeriesBatchItem{{SeriesIndex: uint32(index), Row: goldenRow(goldenSpace, exp.DatasetID, goldenFreq, series[index], goldenPeriod, 1)}})
+				assert.NoError(t, err)
+			}
+		}(exps[i])
+	}
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 10; i++ {
+			row := goldenRow(goldenSpace, "plain", goldenFreq, series[0], goldenPeriod.Add(-time.Duration(i+1)*time.Minute), float64(i))
+			_, err := store.UpsertFields(ctx, goldenSpace, "plain", "", []*pb.RowFieldUpsert{row})
+			assert.NoError(t, err)
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 5; i++ {
+			marker := goldenProducerMarker(fmt.Sprintf("cause-%d", i), goldenPeriod.Unix(), "complete")
+			marker.DatasetId = "plain"
+			raw, _, err := BuildProducerPeriodCompletedMessage(goldenSpace, marker)
+			if assert.NoError(t, err) {
+				_, err = store.AppendDatasetMarker(ctx, raw)
+				assert.NoError(t, err)
+			}
+		}
+	}()
+	wg.Wait()
+	require.Equal(t, "complete", goldenPeriodStatus(t, store, goldenSpace, "bars-0", goldenFreq, goldenPeriod.Unix()))
+
+	outbox := map[string][]byte{}
+	entries, err := store.ListOutbox(ctx, 0, 10000)
+	require.NoError(t, err)
+	for _, entry := range entries {
+		message := &eventpb.EventMessage{}
+		require.NoError(t, proto.Unmarshal(entry.Data, message))
+		outbox[message.GetEventId()] = entry.Data
+	}
+	var all []*pb.DatasetChange
+	for _, dataset := range datasets {
+		changes := readAllChanges(t, store, goldenSpace, dataset)
+		all = append(all, changes...)
+		lastRow, markers := uint64(0), 0
+		for _, change := range changes {
+			if len(change.GetMarker()) == 0 {
+				lastRow = max(lastRow, change.GetSequence())
+				continue
+			}
+			markers++
+			message, payload := markerPayload(t, change)
+			require.Equal(t, outbox[message.GetEventId()], change.GetMarker(), "标记条目与 Outbox 条目字节相同")
+			if payload.GetSource() == markerSourceLedger {
+				require.Greater(t, change.GetSequence(), lastRow, "账本标记排在该期最后一次行写入之后")
+			}
+		}
+		if dataset == "plain" {
+			require.Equal(t, 5, markers)
+		} else {
+			require.Equal(t, 1, markers)
+		}
+	}
+	// 2 次周期提交 × 4 + 4 条账本标记 + 10 次行写入 + 5 条写入方标记。
+	require.Len(t, all, 2*periods+periods+10+5)
+	sort.Slice(all, func(i, j int) bool { return all[i].GetSequence() < all[j].GetSequence() })
+	for i, change := range all {
+		require.Equal(t, uint64(i+1), change.GetSequence())
+	}
+}
+
+// 等待中的读取：ctx 取消时返回错误；Store 关闭时返回已扫描的位置；一次提交同时唤醒多个等待者；
+// ctx 的截止时间早于 wait_ms 时，到截止前返回已扫描的位置而不是报错。
+func TestReadDatasetChangesWaitEndings(t *testing.T) {
+	base := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	s := openChangeLogStore(t, 0)
+	head := mustHead(t, s)
+	req := func() *pb.ReadDatasetChangesReq {
+		return &pb.ReadDatasetChangesReq{SpaceId: "s", DatasetId: "d", Cursor: head, WaitMs: 10000}
+	}
+
+	t.Run("ctx 取消", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() {
+			_, err := s.ReadDatasetChanges(ctx, req())
+			done <- err
+		}()
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+		select {
+		case err := <-done:
+			require.ErrorIs(t, err, context.Canceled)
+		case <-time.After(2 * time.Second):
+			t.Fatal("ctx 取消后等待没有结束")
+		}
+	})
+
+	t.Run("截止时间早于 wait_ms", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		defer cancel()
+		started := time.Now()
+		rsp, err := s.ReadDatasetChanges(ctx, req())
+		require.NoError(t, err)
+		require.Less(t, time.Since(started), 500*time.Millisecond)
+		require.Empty(t, rsp.GetChanges())
+		require.Equal(t, head.GetSequence(), rsp.GetNextCursor().GetSequence())
+	})
+
+	t.Run("多个等待者同时被唤醒", func(t *testing.T) {
+		const waiters = 5
+		done := make(chan *pb.ReadDatasetChangesRsp, waiters)
+		for i := 0; i < waiters; i++ {
+			go func() {
+				rsp, err := s.ReadDatasetChanges(context.Background(), req())
+				assert.NoError(t, err)
+				done <- rsp
+			}()
+		}
+		time.Sleep(50 * time.Millisecond)
+		require.NoError(t, upsertTestRows(s, context.Background(), []*pb.RowFieldUpsert{tsRow("BTCUSDT", "", base, 1)}))
+		for i := 0; i < waiters; i++ {
+			select {
+			case rsp := <-done:
+				require.Len(t, rsp.GetChanges(), 1)
+			case <-time.After(2 * time.Second):
+				t.Fatal("有等待者没有被唤醒")
+			}
+		}
+	})
+
+	t.Run("Store 关闭", func(t *testing.T) {
+		closing, err := Open(Options{Path: filepath.Join(t.TempDir(), "db"), NodeID: "node-1"})
+		require.NoError(t, err)
+		closingHead := mustHead(t, closing)
+		done := make(chan error, 1)
+		go func() {
+			_, err := closing.ReadDatasetChanges(context.Background(), &pb.ReadDatasetChangesReq{SpaceId: "s", DatasetId: "d", Cursor: closingHead, WaitMs: 10000})
+			done <- err
+		}()
+		time.Sleep(50 * time.Millisecond)
+		require.NoError(t, closing.Close())
+		select {
+		case err := <-done:
+			require.NoError(t, err)
+		case <-time.After(2 * time.Second):
+			t.Fatal("Store 关闭后等待没有结束")
+		}
+	})
+}
+
+// 日志序号连续：游标之后的条目缺了（不论清理位置有没有记下），读取报断档，不会静默越过。
+func TestChangeLogMissingEntriesReportGap(t *testing.T) {
+	ctx := context.Background()
+	s := openChangeLogStore(t, 0)
+	base := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	for i := 0; i < 3; i++ {
+		require.NoError(t, upsertTestRows(s, ctx, []*pb.RowFieldUpsert{tsRow("BTCUSDT", "", base.Add(time.Duration(i)*time.Minute), float64(i))}))
+	}
+	storeID := mustHead(t, s).GetStoreId()
+	read := func(seq uint64) *pb.ReadDatasetChangesRsp {
+		rsp, err := s.ReadDatasetChanges(ctx, &pb.ReadDatasetChangesReq{SpaceId: "s", DatasetId: "d", Cursor: &pb.DatasetChangeCursor{StoreId: storeID, Sequence: seq}})
+		require.NoError(t, err)
+		return rsp
+	}
+	require.NoError(t, s.db.Delete(changeLogKey(2), cpebble.Sync))
+	require.True(t, read(1).GetGap(), "游标 1 之后的第一条是 3")
+	require.False(t, read(2).GetGap())
+	require.NoError(t, s.db.Delete(changeLogKey(3), cpebble.Sync))
+	require.True(t, read(2).GetGap(), "游标落后于头部却没有条目")
+	rsp := read(3)
+	require.False(t, rsp.GetGap())
+	require.Equal(t, uint64(3), rsp.GetNextCursor().GetSequence())
 }

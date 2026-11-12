@@ -29,7 +29,7 @@ type Options struct {
 	NodeID         string
 	BucketDuration time.Duration
 	MaxEventBytes  int
-	// ChangeLogRetention 是行变更日志的保留期；为 0 时取 DefaultChangeLogRetention。
+	// ChangeLogRetention 是变更日志的保留期（由保留期清理循环按它删除）；为 0 时取 DefaultChangeLogRetention。
 	ChangeLogRetention time.Duration
 	DisableSyncWrites  bool
 	PeriodNow          func() time.Time
