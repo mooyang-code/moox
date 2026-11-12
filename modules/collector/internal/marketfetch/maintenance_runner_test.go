@@ -13,7 +13,7 @@ import (
 )
 
 func TestMaintenanceRunnerObservesFailedAndSuccessfulPasses(t *testing.T) {
-	m := NewMetrics(prometheus.NewRegistry())
+	m := NewMetrics(prometheus.NewRegistry(), testFeedLabels)
 	runner := NewMaintenanceRunner(time.Hour, 0, time.Minute, func(context.Context) error { return errors.New("test failure") })
 	runner.Metrics = m
 	runner.runPass(context.Background())

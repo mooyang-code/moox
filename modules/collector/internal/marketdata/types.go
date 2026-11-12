@@ -71,6 +71,12 @@ const (
 	InstrumentSwap            InstrumentType = "swap"
 )
 
+// HasTradeCount 报告这个品种的 K 线是否带报价成交量（quote_volume）和成交笔数（trade_num）：现货、永续带，
+// 其余品种（股票、指数、可转债）只有成交额 amount。写入行、合成、列校验都按它决定字段。
+func (t InstrumentType) HasTradeCount() bool {
+	return t == InstrumentSpot || t == InstrumentSwap
+}
+
 type TimestampMode string
 
 const (

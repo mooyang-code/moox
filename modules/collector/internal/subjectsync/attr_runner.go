@@ -4,10 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
-	"github.com/mooyang-code/moox/modules/collector/internal/marketdata"
+	"github.com/mooyang-code/moox/modules/collector/internal/markets"
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/robfig/cron"
 	"trpc.group/trpc-go/trpc-go/log"
@@ -75,13 +74,14 @@ func (r *AttributeRunner) RunOnceAt(ctx context.Context, now time.Time) error {
 }
 
 func (r *AttributeRunner) runJob(ctx context.Context, job AttributeJob) error {
+	// 标的规则给出没写品种时的默认品种，以及写入的标的属性；快照新建标的与这里更新已有标的用同一套规则，写出的键一致。
+	rules, err := markets.RulesFor(job.SpaceID)
+	if err != nil {
+		return fmt.Errorf("attribute job %s: %w", job.SpaceID, err)
+	}
 	instrumentType := job.InstrumentType
 	if instrumentType == "" {
-		if job.SpaceID == "crypto" {
-			instrumentType = "spot"
-		} else if job.SpaceID == "stockcn" {
-			instrumentType = "equity"
-		}
+		instrumentType = string(rules.DefaultInstrumentType(""))
 	}
 	timeout := r.FetchTimeout
 	if timeout <= 0 {
@@ -89,7 +89,7 @@ func (r *AttributeRunner) runJob(ctx context.Context, job AttributeJob) error {
 	}
 	fetchCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	instruments, err := FetchSnapshot(fetchCtx, r.Listers, job.Sources, instrumentType)
+	instruments, err := FetchSnapshot(fetchCtx, r.Listers, job.SpaceID, job.Sources, instrumentType)
 	if err != nil {
 		log.WarnContextf(ctx, "attribute job %s failed: %v", job.SpaceID, err)
 		if r.Metrics != nil {
@@ -99,7 +99,7 @@ func (r *AttributeRunner) runJob(ctx context.Context, job AttributeJob) error {
 	}
 	items := make([]*pb.SubjectAttributes, 0, len(instruments))
 	for _, instrument := range instruments {
-		items = append(items, &pb.SubjectAttributes{SubjectId: instrument.SubjectID, Name: instrument.Name, Attributes: subjectAttributes(job.SpaceID, instrument)})
+		items = append(items, &pb.SubjectAttributes{SubjectId: instrument.SubjectID, Name: instrument.Name, Attributes: rules.SubjectAttributes(instrument)})
 	}
 	if _, _, err := r.Store.UpdateSubjectAttributes(ctx, job.SpaceID, items); err != nil {
 		log.WarnContextf(ctx, "update subject attributes %s failed: %v", job.SpaceID, err)
@@ -109,36 +109,6 @@ func (r *AttributeRunner) runJob(ctx context.Context, job AttributeJob) error {
 		return fmt.Errorf("update subject attributes %s: %w", job.SpaceID, err)
 	}
 	return nil
-}
-
-// SubjectPairAttribute 是标的属性里记录交易所交易对的键，采集计划据此给 WS 推送带出 pair。
-const SubjectPairAttribute = "pair"
-
-// 标的属性键：Storage 不解释这些业务字段，由 Collector 定义。
-const (
-	subjectTypeAttribute = "subject_type"
-	subjectMarketAttr    = "market"
-	subjectCurrencyAttr  = "currency"
-)
-
-// subjectAttributes 生成标的的属性。快照新建标的与属性维护任务更新已有标的走同一个函数，两条路径写出的键一致。
-func subjectAttributes(spaceID string, item marketdata.Instrument) map[string]string {
-	switch spaceID {
-	case "crypto":
-		values := map[string]string{
-			subjectTypeAttribute: "crypto_pair", subjectMarketAttr: "CRYPTO", subjectCurrencyAttr: strings.ToUpper(item.QuoteAsset),
-			"base": strings.ToUpper(item.BaseAsset), "quote": strings.ToUpper(item.QuoteAsset),
-		}
-		// 永续合约的交易对：WS 连续合约 K 线按它订阅（目前 USDT 永续与 symbol 相同）。
-		if pair := strings.ToUpper(strings.TrimSpace(item.Pair)); pair != "" {
-			values[SubjectPairAttribute] = pair
-		}
-		return values
-	case "stockcn":
-		return map[string]string{subjectTypeAttribute: "stock", subjectMarketAttr: item.Exchange, subjectCurrencyAttr: "CNY", "exchange": item.Exchange}
-	default:
-		return nil
-	}
 }
 
 // SyncAttributes refreshes the matching attribute jobs right now, ignoring

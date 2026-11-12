@@ -1,5 +1,6 @@
 // Package catalog 登记 Collector 内置的全部行情源：标的同步、SCF 与本地取数、collector-stream 接收都从这里按能力取用。
 // 新增一个交易所：实现 marketdata.MarketProvider 与所需能力接口，在 Default 里加一项登记。
+// 新增一个市场：另外实现它的标的规则包（markets/<市场>）并在 marketwiring 里引用，加上 config/markets/<市场>/market.yaml。
 package catalog
 
 import (

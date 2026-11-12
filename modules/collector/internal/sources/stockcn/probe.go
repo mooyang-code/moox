@@ -61,8 +61,8 @@ type ShadowPoint struct {
 	ProviderSymbol string
 	BarStart       time.Time
 	Price          float64
-	VolumeShares   float64
-	AmountCNY      float64
+	Volume         float64
+	Amount         float64
 	FetchedAt      time.Time
 	RequestID      string
 }

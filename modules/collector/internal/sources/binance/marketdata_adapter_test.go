@@ -53,7 +53,7 @@ func TestMarketDataAdapterFetchesClosedKlineThroughTypedProvider(t *testing.T) {
 	assert.Equal(t, "binance", rows[0].ProviderID)
 	assert.Equal(t, start, rows[0].BarStart)
 	assert.Equal(t, start.Add(time.Minute), rows[0].BarEnd)
-	assert.Equal(t, 1234.56, rows[0].AmountCNY)
+	assert.Equal(t, 1234.56, rows[0].Amount)
 }
 
 func TestMarketDataAdapterUsesRuntimeKlineRequestTimeout(t *testing.T) {

@@ -80,7 +80,7 @@ func NewCryptoKlinePipeline(storage marketfetch.Storage, productType marketdata.
 	// the configured market routes. This is important for swap: the handler
 	// uses this factory for both timer and invoke requests, so a swap request
 	// must receive the swap-aware Binance adapter rather than a spot default.
-	pipeline, err := newMarketKlinePipeline(storage, "crypto", instrumentType, "binance", DefaultSourceID("binance", string(instrumentType)), limits)
+	pipeline, err := newMarketKlinePipeline(storage, "crypto", instrumentType, "binance", DefaultSourceID("crypto", "binance", string(instrumentType)), limits)
 	if err != nil {
 		return nil, fmt.Errorf("create Binance crypto kline pipeline: %w", err)
 	}

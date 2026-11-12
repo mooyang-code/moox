@@ -38,7 +38,7 @@ func swapHourBars(count int) []marketdata.NormalizedKline {
 	for index := 0; index < count; index++ {
 		start := fundingBarBase.Add(time.Duration(index) * time.Hour)
 		bars = append(bars, marketdata.NormalizedKline{SubjectID: "BTC-USDT", ProviderID: "binance", SourceID: "swap_http", ProviderSymbol: "BTCUSDT", Frequency: "1h",
-			BarStart: start, BarEnd: start.Add(time.Hour), Open: 100, High: 110, Low: 90, Close: 105, VolumeShares: 12, AmountCNY: 1234,
+			BarStart: start, BarEnd: start.Add(time.Hour), Open: 100, High: 110, Low: 90, Close: 105, Volume: 12, Amount: 1234,
 			ProviderTimestamp: start.Add(time.Hour), FetchedAt: start.Add(2 * time.Hour), RequestID: "funding"})
 	}
 	return bars

@@ -19,9 +19,10 @@ type NormalizedKline struct {
 	High           float64
 	Low            float64
 	Close          float64
-	VolumeShares   float64
-	AmountCNY      float64
-	// AmountEstimated 标记上游不给成交额（腾讯）、AmountCNY 是 收盘价 × 成交量 的估算值：照常写入 amount，
+	// Volume 是成交量（股票是股，crypto 是基础币数量）；Amount 是按标的交易币种计的成交额（crypto 是报价成交量）。
+	Volume float64
+	Amount float64
+	// AmountEstimated 标记上游不给成交额（腾讯）、Amount 是 收盘价 × 成交量 的估算值：照常写入 amount，
 	// 并写 amount_quality=estimated_close_x_volume。
 	AmountEstimated   bool
 	TradeCount        int64
@@ -70,8 +71,8 @@ func ValidateNormalizedKline(kline NormalizedKline) error {
 		{name: "high", value: kline.High, min: math.SmallestNonzeroFloat64},
 		{name: "low", value: kline.Low, min: math.SmallestNonzeroFloat64},
 		{name: "close", value: kline.Close, min: math.SmallestNonzeroFloat64},
-		{name: "volume_shares", value: kline.VolumeShares, min: 0},
-		{name: "amount_cny", value: kline.AmountCNY, min: 0},
+		{name: "volume", value: kline.Volume, min: 0},
+		{name: "amount", value: kline.Amount, min: 0},
 	} {
 		if !isFinite(field.value) {
 			return fmt.Errorf("%s must be finite", field.name)

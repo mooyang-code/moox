@@ -39,8 +39,8 @@ func TestProviderFetchesEastMoneyStyleRowsWithMarketSourceIdentity(t *testing.T)
 	require.Equal(t, "stockhk_http", rows[0].SourceID)
 	require.Equal(t, "00005", rows[0].ProviderSymbol)
 	require.Equal(t, time.Date(2026, 9, 1, 1, 30, 0, 0, time.UTC), rows[0].BarStart)
-	require.Equal(t, float64(12), rows[0].VolumeShares)
-	require.Equal(t, float64(121.2), rows[0].AmountCNY)
+	require.Equal(t, float64(12), rows[0].Volume)
+	require.Equal(t, float64(121.2), rows[0].Amount)
 }
 
 func TestProviderStripsJSONPAndKeepsCalendarDayInUTC(t *testing.T) {

@@ -67,8 +67,8 @@ func TestFetchKlines5mParsesRecordedResponse(t *testing.T) {
 	require.Equal(t, 1480.6, first.High)
 	require.Equal(t, 1458.0, first.Low)
 	require.Equal(t, 1474.0, first.Close)
-	require.Equal(t, 673500.0, first.VolumeShares)
-	require.Equal(t, 991534727.0, first.AmountCNY)
+	require.Equal(t, 673500.0, first.Volume)
+	require.Equal(t, 991534727.0, first.Amount)
 }
 
 // testdata/kline_1m_600519_20261104.json 是同一时刻 klt=1 的原始返回：1m 同样是收盘时刻标签，首根 09:31。
@@ -93,7 +93,7 @@ func TestFetchKlines1mUsesCloseLabels(t *testing.T) {
 	require.Equal(t, cst("2026-11-04", "09:30"), rows[0].BarStart)
 	require.Equal(t, cst("2026-11-04", "11:29"), rows[119].BarStart)
 	// 09:31 那根 3668 手 = 竞价 1215 手（分时 09:26）+ 连续竞价 2453 手（分时 09:31）。
-	require.Equal(t, 366800.0, rows[0].VolumeShares)
+	require.Equal(t, 366800.0, rows[0].Volume)
 }
 
 func TestFetchKlinesRejectsUndeclaredFrequency(t *testing.T) {
@@ -150,8 +150,8 @@ func TestFetchKlines1dParsesRecordedResponse(t *testing.T) {
 	require.Equal(t, 1448.0, first.High)
 	require.Equal(t, 1420.1, first.Low)
 	require.Equal(t, 1435.0, first.Close)
-	require.Equal(t, 3454800.0, first.VolumeShares)
-	require.Equal(t, 4945310830.0, first.AmountCNY)
+	require.Equal(t, 3454800.0, first.Volume)
+	require.Equal(t, 4945310830.0, first.Amount)
 }
 
 // 当天的日线在键加 24 小时之前不算收盘：不返回。

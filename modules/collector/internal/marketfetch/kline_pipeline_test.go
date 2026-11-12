@@ -45,7 +45,7 @@ func TestPeriodCommitDisabledIgnoresResidualBindings(t *testing.T) {
 
 func TestKlinePipelineNonStockCNRowPreservesProviderSourceTag(t *testing.T) {
 	period := time.Date(2026, 9, 30, 3, 0, 0, 0, time.UTC)
-	bar := marketdata.NormalizedKline{SubjectID: "BTC-USDT", ProviderID: "binance", SourceID: "spot_http", ProviderSymbol: "BTCUSDT", Frequency: "1m", BarStart: period, BarEnd: period.Add(time.Minute), Open: 9, High: 9.1, Low: 8.9, Close: 9.05, VolumeShares: 1000, AmountCNY: 9050, ProviderTimestamp: period.Add(time.Minute), FetchedAt: period.Add(2 * time.Minute), RequestID: "non-stock-period-tag"}
+	bar := marketdata.NormalizedKline{SubjectID: "BTC-USDT", ProviderID: "binance", SourceID: "spot_http", ProviderSymbol: "BTCUSDT", Frequency: "1m", BarStart: period, BarEnd: period.Add(time.Minute), Open: 9, High: 9.1, Low: 8.9, Close: 9.05, Volume: 1000, Amount: 9050, ProviderTimestamp: period.Add(time.Minute), FetchedAt: period.Add(2 * time.Minute), RequestID: "non-stock-period-tag"}
 	req := Request{SpaceID: "crypto", DatasetID: "bars", Frequency: "1m", SourceID: bar.SourceID, MarketType: "spot"}
 	pipeline := &KlinePipeline{MarketID: "crypto", InstrumentType: marketdata.InstrumentSpot, SourceID: bar.SourceID}
 	row, err := pipeline.rowFor(bar, req, "binance-spot", 1)
@@ -66,7 +66,7 @@ func TestFetchKlinesFromChainRetriesProviderThreeTimesBeforeFallback(t *testing.
 	bar := marketdata.NormalizedKline{
 		SubjectID: "600000.XSHG", ProviderID: "tdx", ProviderSymbol: "sh600000", Frequency: "1m",
 		BarStart: time.Date(2026, 9, 3, 3, 0, 0, 0, time.UTC), BarEnd: time.Date(2026, 9, 3, 3, 1, 0, 0, time.UTC),
-		Open: 9, High: 9.1, Low: 8.9, Close: 9.05, VolumeShares: 1000, AmountCNY: 9050,
+		Open: 9, High: 9.1, Low: 8.9, Close: 9.05, Volume: 1000, Amount: 9050,
 		ProviderTimestamp: time.Date(2026, 9, 3, 3, 1, 0, 0, time.UTC), FetchedAt: time.Now().UTC(), RequestID: "retry-3",
 	}
 	require.NoError(t, registry.Register(pipelineProvider{id: "tdx", rows: []marketdata.NormalizedKline{bar}, calls: &fallbackCalls}))
@@ -90,7 +90,7 @@ func TestFetchKlinesFromChainUsesConfiguredHTTPMaxAttempts(t *testing.T) {
 	bar := marketdata.NormalizedKline{
 		SubjectID: "BTC-USDT", ProviderID: "binance", ProviderSymbol: "BTCUSDT", Frequency: "1m",
 		BarStart: time.Date(2026, 9, 3, 3, 0, 0, 0, time.UTC), BarEnd: time.Date(2026, 9, 3, 3, 1, 0, 0, time.UTC),
-		Open: 100, High: 101, Low: 99, Close: 100.5, VolumeShares: 10, AmountCNY: 1005,
+		Open: 100, High: 101, Low: 99, Close: 100.5, Volume: 10, Amount: 1005,
 		ProviderTimestamp: time.Date(2026, 9, 3, 3, 1, 0, 0, time.UTC), FetchedAt: time.Now().UTC(), RequestID: "retry-4",
 	}
 	registry := marketdata.NewRegistry()
@@ -123,7 +123,7 @@ func TestFetchKlinesFromChainUsesConfiguredRequestTimeout(t *testing.T) {
 	bar := marketdata.NormalizedKline{
 		SubjectID: "BTC-USDT", ProviderID: "binance", ProviderSymbol: "BTCUSDT", Frequency: "1m",
 		BarStart: time.Date(2026, 9, 3, 3, 0, 0, 0, time.UTC), BarEnd: time.Date(2026, 9, 3, 3, 1, 0, 0, time.UTC),
-		Open: 100, High: 101, Low: 99, Close: 100.5, VolumeShares: 10, AmountCNY: 1005,
+		Open: 100, High: 101, Low: 99, Close: 100.5, Volume: 10, Amount: 1005,
 		ProviderTimestamp: time.Date(2026, 9, 3, 3, 1, 0, 0, time.UTC), FetchedAt: time.Now().UTC(), RequestID: "request-timeout",
 	}
 	registry := marketdata.NewRegistry()
@@ -224,7 +224,7 @@ func (p pipelineProvider) FetchKlines(ctx context.Context, req marketdata.KlineR
 
 func TestKlinePipelineSharesInvocationBreakerAcrossThirtySubjectsAndKeepsFallbackWithinDeadline(t *testing.T) {
 	now := time.Date(2026, 8, 28, 7, 0, 10, 0, time.UTC) // 15:00:10 Asia/Shanghai：14:59 那根刚过结算延迟
-	bar := marketdata.NormalizedKline{SubjectID: "600000.XSHG", ProviderID: "tencent", ProviderSymbol: "sh600000", Frequency: "1m", BarStart: time.Date(2026, 8, 28, 6, 59, 0, 0, time.UTC), BarEnd: time.Date(2026, 8, 28, 7, 0, 0, 0, time.UTC), Open: 9, High: 9.1, Low: 8.9, Close: 9.05, VolumeShares: 1000, AmountCNY: 9050, ProviderTimestamp: time.Date(2026, 8, 28, 7, 0, 0, 0, time.UTC), FetchedAt: now, RequestID: "request-30"}
+	bar := marketdata.NormalizedKline{SubjectID: "600000.XSHG", ProviderID: "tencent", ProviderSymbol: "sh600000", Frequency: "1m", BarStart: time.Date(2026, 8, 28, 6, 59, 0, 0, time.UTC), BarEnd: time.Date(2026, 8, 28, 7, 0, 0, 0, time.UTC), Open: 9, High: 9.1, Low: 8.9, Close: 9.05, Volume: 1000, Amount: 9050, ProviderTimestamp: time.Date(2026, 8, 28, 7, 0, 0, 0, time.UTC), FetchedAt: now, RequestID: "request-30"}
 	rateLimit := &marketdata.RateLimitPolicy{RequestsPerSecond: 1000, Burst: 30, MaxConcurrent: 30, Cooldown: time.Second, RequestTimeout: 5 * time.Second}
 	var firstCalls, fallbackCalls int32
 	registry := marketdata.NewRegistry()
@@ -265,7 +265,7 @@ func TestKlinePipelineRejectsRealtimeBarsInsideSettleWindow(t *testing.T) {
 	bar := marketdata.NormalizedKline{
 		SubjectID: "600000.XSHG", ProviderID: "sina", ProviderSymbol: "sh600000", Frequency: "1m",
 		BarStart: barEnd.Add(-time.Minute), BarEnd: barEnd, Open: 9, High: 9.1, Low: 8.9, Close: 9.05,
-		VolumeShares: 1000, AmountCNY: 9050, ProviderTimestamp: barEnd, FetchedAt: now, RequestID: "settle",
+		Volume: 1000, Amount: 9050, ProviderTimestamp: barEnd, FetchedAt: now, RequestID: "settle",
 	}
 	registry := marketdata.NewRegistry()
 	require.NoError(t, registry.Register(pipelineProvider{id: "sina", rows: []marketdata.NormalizedKline{bar}}))
@@ -285,7 +285,7 @@ func TestKlinePipelineDoesNotFallbackAcrossBoundSources(t *testing.T) {
 	bar := marketdata.NormalizedKline{
 		SubjectID: "600000.XSHG", ProviderID: "tencent", ProviderSymbol: "sh600000", Frequency: "1m",
 		BarStart: now.Add(-6 * time.Minute), BarEnd: now.Add(-5 * time.Minute),
-		Open: 9, High: 9.1, Low: 8.9, Close: 9.05, VolumeShares: 1000, AmountCNY: 9050,
+		Open: 9, High: 9.1, Low: 8.9, Close: 9.05, Volume: 1000, Amount: 9050,
 		ProviderTimestamp: now.Add(-5 * time.Minute), FetchedAt: now, RequestID: "bound-source",
 	}
 	registry := marketdata.NewRegistry()
@@ -319,7 +319,7 @@ func TestKlinePipelinePersistsBoundProviderAndSourceIdentity(t *testing.T) {
 		SubjectID: "600000.XSHG", ProviderID: "sina", SourceID: "stockcn_minute_http",
 		ProviderSymbol: "sh600000", Frequency: "1m",
 		BarStart: now.Add(-6 * time.Minute), BarEnd: now.Add(-5 * time.Minute),
-		Open: 9, High: 9.1, Low: 8.9, Close: 9.05, VolumeShares: 1000, AmountCNY: 9050,
+		Open: 9, High: 9.1, Low: 8.9, Close: 9.05, Volume: 1000, Amount: 9050,
 		ProviderTimestamp: now.Add(-5 * time.Minute), FetchedAt: now, RequestID: "source-row",
 	}
 	registry := marketdata.NewRegistry()
@@ -353,7 +353,7 @@ func TestKlinePipelinePersistsBoundProviderAndSourceIdentity(t *testing.T) {
 
 func TestKlinePipelineRejectsRollingHistoryWithoutProvenCoverage(t *testing.T) {
 	now := time.Date(2026, 8, 29, 12, 0, 0, 0, time.UTC)
-	recent := marketdata.NormalizedKline{SubjectID: "600000.XSHG", ProviderID: "sina", ProviderSymbol: "sh600000", Frequency: "1m", BarStart: now.Add(-time.Minute), BarEnd: now, Open: 1, High: 1, Low: 1, Close: 1, VolumeShares: 1, AmountCNY: 1, ProviderTimestamp: now, FetchedAt: now, RequestID: "history"}
+	recent := marketdata.NormalizedKline{SubjectID: "600000.XSHG", ProviderID: "sina", ProviderSymbol: "sh600000", Frequency: "1m", BarStart: now.Add(-time.Minute), BarEnd: now, Open: 1, High: 1, Low: 1, Close: 1, Volume: 1, Amount: 1, ProviderTimestamp: now, FetchedAt: now, RequestID: "history"}
 	registry := marketdata.NewRegistry()
 	for _, id := range []string{"sina", "tencent"} {
 		require.NoError(t, registry.Register(pipelineProvider{id: id, rows: []marketdata.NormalizedKline{recent}}))
@@ -370,7 +370,7 @@ func TestKlinePipelineRejectsRollingHistoryWithoutProvenCoverage(t *testing.T) {
 func TestKlinePipelineFetchesFrozenHistoricalTargetOutsideCurrentSession(t *testing.T) {
 	now := time.Date(2026, 8, 28, 8, 30, 0, 0, time.UTC) // Friday 16:30 Asia/Shanghai.
 	period := time.Date(2026, 8, 28, 6, 59, 0, 0, time.UTC)
-	bar := marketdata.NormalizedKline{SubjectID: "600000.XSHG", ProviderID: "sina", ProviderSymbol: "sh600000", Frequency: "1m", BarStart: period, BarEnd: period.Add(time.Minute), Open: 1, High: 1, Low: 1, Close: 1, VolumeShares: 1, AmountCNY: 1, ProviderTimestamp: period.Add(time.Minute), FetchedAt: now, RequestID: "historical-target"}
+	bar := marketdata.NormalizedKline{SubjectID: "600000.XSHG", ProviderID: "sina", ProviderSymbol: "sh600000", Frequency: "1m", BarStart: period, BarEnd: period.Add(time.Minute), Open: 1, High: 1, Low: 1, Close: 1, Volume: 1, Amount: 1, ProviderTimestamp: period.Add(time.Minute), FetchedAt: now, RequestID: "historical-target"}
 	var observed marketdata.KlineRequest
 	registry := marketdata.NewRegistry()
 	require.NoError(t, registry.Register(pipelineProvider{id: "sina", rows: []marketdata.NormalizedKline{bar}, request: &observed}))
@@ -508,7 +508,7 @@ func TestDefaultMarketSeriesTagDistinguishesMarketAndSource(t *testing.T) {
 
 func TestKlinePipelineWritesOneCompleteStockDatasetBatch(t *testing.T) {
 	now := time.Date(2026, 8, 29, 2, 0, 0, 0, time.UTC)
-	bar := marketdata.NormalizedKline{SubjectID: "600000.XSHG", ProviderID: "sina", ProviderSymbol: "sh600000", Frequency: "1m", BarStart: time.Date(2026, 8, 28, 6, 59, 0, 0, time.UTC), BarEnd: time.Date(2026, 8, 28, 7, 0, 0, 0, time.UTC), Open: 9, High: 9.1, Low: 8.9, Close: 9.05, VolumeShares: 1000, AmountCNY: 9050, ProviderTimestamp: time.Date(2026, 8, 28, 7, 0, 0, 0, time.UTC), FetchedAt: now, RequestID: "request-1"}
+	bar := marketdata.NormalizedKline{SubjectID: "600000.XSHG", ProviderID: "sina", ProviderSymbol: "sh600000", Frequency: "1m", BarStart: time.Date(2026, 8, 28, 6, 59, 0, 0, time.UTC), BarEnd: time.Date(2026, 8, 28, 7, 0, 0, 0, time.UTC), Open: 9, High: 9.1, Low: 8.9, Close: 9.05, Volume: 1000, Amount: 9050, ProviderTimestamp: time.Date(2026, 8, 28, 7, 0, 0, 0, time.UTC), FetchedAt: now, RequestID: "request-1"}
 	registry := marketdata.NewRegistry()
 	require.NoError(t, registry.Register(pipelineProvider{id: "sina", rows: []marketdata.NormalizedKline{bar}}))
 	require.NoError(t, registry.Register(pipelineProvider{id: "tencent", err: marketdata.ErrNoClosedBar}))
@@ -539,7 +539,7 @@ func TestKlinePipelineWritesOneCompleteStockDatasetBatch(t *testing.T) {
 
 func TestKlinePipelineWritesOnlySelectedOutputFields(t *testing.T) {
 	now := time.Date(2026, 8, 29, 2, 0, 0, 0, time.UTC)
-	bar := marketdata.NormalizedKline{SubjectID: "BTC-USDT", ProviderID: "binance", ProviderSymbol: "BTCUSDT", Frequency: "1m", BarStart: time.Date(2026, 8, 28, 6, 59, 0, 0, time.UTC), BarEnd: time.Date(2026, 8, 28, 7, 0, 0, 0, time.UTC), Open: 9, High: 9.1, Low: 8.9, Close: 9.05, VolumeShares: 1000, AmountCNY: 9050, ProviderTimestamp: time.Date(2026, 8, 28, 7, 0, 0, 0, time.UTC), FetchedAt: now, RequestID: "request-selected"}
+	bar := marketdata.NormalizedKline{SubjectID: "BTC-USDT", ProviderID: "binance", ProviderSymbol: "BTCUSDT", Frequency: "1m", BarStart: time.Date(2026, 8, 28, 6, 59, 0, 0, time.UTC), BarEnd: time.Date(2026, 8, 28, 7, 0, 0, 0, time.UTC), Open: 9, High: 9.1, Low: 8.9, Close: 9.05, Volume: 1000, Amount: 9050, ProviderTimestamp: time.Date(2026, 8, 28, 7, 0, 0, 0, time.UTC), FetchedAt: now, RequestID: "request-selected"}
 	registry := marketdata.NewRegistry()
 	require.NoError(t, registry.Register(pipelineProvider{id: "binance", rows: []marketdata.NormalizedKline{bar}}))
 	router, err := marketdata.NewRouter(registry, 1, pipelineClock{now}, func(time.Duration) {})
@@ -557,7 +557,7 @@ func TestKlinePipelineWritesOnlySelectedOutputFields(t *testing.T) {
 }
 
 func TestKlinePipelineEmptyOutputFieldsKeepsLegacyFullRow(t *testing.T) {
-	bar := marketdata.NormalizedKline{SubjectID: "BTC-USDT", ProviderID: "binance", ProviderSymbol: "BTCUSDT", Frequency: "1m", BarStart: time.Date(2026, 8, 28, 6, 59, 0, 0, time.UTC), BarEnd: time.Date(2026, 8, 28, 7, 0, 0, 0, time.UTC), Open: 9, High: 9.1, Low: 8.9, Close: 9.05, VolumeShares: 1000, AmountCNY: 9050, ProviderTimestamp: time.Date(2026, 8, 28, 7, 0, 0, 0, time.UTC), FetchedAt: time.Now().UTC(), RequestID: "request-legacy"}
+	bar := marketdata.NormalizedKline{SubjectID: "BTC-USDT", ProviderID: "binance", ProviderSymbol: "BTCUSDT", Frequency: "1m", BarStart: time.Date(2026, 8, 28, 6, 59, 0, 0, time.UTC), BarEnd: time.Date(2026, 8, 28, 7, 0, 0, 0, time.UTC), Open: 9, High: 9.1, Low: 8.9, Close: 9.05, Volume: 1000, Amount: 9050, ProviderTimestamp: time.Date(2026, 8, 28, 7, 0, 0, 0, time.UTC), FetchedAt: time.Now().UTC(), RequestID: "request-legacy"}
 	row, err := (&KlinePipeline{MarketID: "crypto"}).rowFor(bar, Request{SpaceID: "crypto", DatasetID: "bars", Frequency: "1m"}, "route", 1)
 	require.NoError(t, err)
 	require.Len(t, row.GetFields(), 10)
@@ -565,7 +565,7 @@ func TestKlinePipelineEmptyOutputFieldsKeepsLegacyFullRow(t *testing.T) {
 
 func TestKlinePipelineUsesInstrumentNameFromStorageMetadata(t *testing.T) {
 	now := time.Date(2026, 8, 29, 2, 0, 0, 0, time.UTC)
-	bar := marketdata.NormalizedKline{SubjectID: "600000.XSHG", ProviderID: "sina", ProviderSymbol: "sh600000", Frequency: "1m", BarStart: time.Date(2026, 8, 28, 6, 59, 0, 0, time.UTC), BarEnd: time.Date(2026, 8, 28, 7, 0, 0, 0, time.UTC), Open: 9, High: 9.1, Low: 8.9, Close: 9.05, VolumeShares: 1000, AmountCNY: 9050, ProviderTimestamp: time.Date(2026, 8, 28, 7, 0, 0, 0, time.UTC), FetchedAt: now, RequestID: "request-name"}
+	bar := marketdata.NormalizedKline{SubjectID: "600000.XSHG", ProviderID: "sina", ProviderSymbol: "sh600000", Frequency: "1m", BarStart: time.Date(2026, 8, 28, 6, 59, 0, 0, time.UTC), BarEnd: time.Date(2026, 8, 28, 7, 0, 0, 0, time.UTC), Open: 9, High: 9.1, Low: 8.9, Close: 9.05, Volume: 1000, Amount: 9050, ProviderTimestamp: time.Date(2026, 8, 28, 7, 0, 0, 0, time.UTC), FetchedAt: now, RequestID: "request-name"}
 	registry := marketdata.NewRegistry()
 	require.NoError(t, registry.Register(pipelineProvider{id: "sina", rows: []marketdata.NormalizedKline{bar}}))
 	router, err := marketdata.NewRouter(registry, 1, pipelineClock{now}, func(time.Duration) {})
@@ -588,7 +588,7 @@ func findField(row *storagepb.RowFieldUpsert, fieldID string) *storagepb.TypedVa
 
 func TestKlinePipelineUsesRetrySourceEventID(t *testing.T) {
 	now := time.Date(2026, 8, 29, 2, 0, 0, 0, time.UTC)
-	bar := marketdata.NormalizedKline{SubjectID: "600000.XSHG", ProviderID: "sina", ProviderSymbol: "sh600000", Frequency: "1m", BarStart: time.Date(2026, 8, 28, 6, 59, 0, 0, time.UTC), BarEnd: time.Date(2026, 8, 28, 7, 0, 0, 0, time.UTC), Open: 9, High: 9.1, Low: 8.9, Close: 9.05, VolumeShares: 1000, AmountCNY: 9050, ProviderTimestamp: time.Date(2026, 8, 28, 7, 0, 0, 0, time.UTC), FetchedAt: now, RequestID: "request-retry"}
+	bar := marketdata.NormalizedKline{SubjectID: "600000.XSHG", ProviderID: "sina", ProviderSymbol: "sh600000", Frequency: "1m", BarStart: time.Date(2026, 8, 28, 6, 59, 0, 0, time.UTC), BarEnd: time.Date(2026, 8, 28, 7, 0, 0, 0, time.UTC), Open: 9, High: 9.1, Low: 8.9, Close: 9.05, Volume: 1000, Amount: 9050, ProviderTimestamp: time.Date(2026, 8, 28, 7, 0, 0, 0, time.UTC), FetchedAt: now, RequestID: "request-retry"}
 	registry := marketdata.NewRegistry()
 	require.NoError(t, registry.Register(pipelineProvider{id: "sina", rows: []marketdata.NormalizedKline{bar}}))
 	require.NoError(t, registry.Register(pipelineProvider{id: "tencent", err: marketdata.ErrNoClosedBar}))
@@ -603,7 +603,7 @@ func TestKlinePipelineUsesRetrySourceEventID(t *testing.T) {
 func TestKlinePipelineAcceptsCryptoHourFrequency(t *testing.T) {
 	now := time.Date(2026, 8, 29, 2, 0, 0, 0, time.UTC)
 	barStart := time.Date(2026, 8, 29, 1, 0, 0, 0, time.UTC)
-	bar := marketdata.NormalizedKline{SubjectID: "BTC-USDT-SPOT", ProviderID: "binance", ProviderSymbol: "BTCUSDT", Frequency: "1h", BarStart: barStart, BarEnd: barStart.Add(time.Hour), Open: 100, High: 110, Low: 90, Close: 105, VolumeShares: 12, AmountCNY: 1234, ProviderTimestamp: barStart.Add(time.Hour), FetchedAt: now, RequestID: "request-hour"}
+	bar := marketdata.NormalizedKline{SubjectID: "BTC-USDT-SPOT", ProviderID: "binance", ProviderSymbol: "BTCUSDT", Frequency: "1h", BarStart: barStart, BarEnd: barStart.Add(time.Hour), Open: 100, High: 110, Low: 90, Close: 105, Volume: 12, Amount: 1234, ProviderTimestamp: barStart.Add(time.Hour), FetchedAt: now, RequestID: "request-hour"}
 	registry := marketdata.NewRegistry()
 	require.NoError(t, registry.Register(pipelineProvider{id: "binance", rows: []marketdata.NormalizedKline{bar}}))
 	router, err := marketdata.NewRouter(registry, 1, pipelineClock{now}, func(time.Duration) {})
@@ -655,7 +655,7 @@ func TestRequestKlineRouteIDUsesCryptoFrequency(t *testing.T) {
 
 func TestKlinePipelineFiltersBarsBeforeConfiguredCoverageStart(t *testing.T) {
 	now := time.Date(2026, 8, 29, 2, 0, 0, 0, time.UTC)
-	before := marketdata.NormalizedKline{SubjectID: "600000.XSHG", ProviderID: "tencent", ProviderSymbol: "sh600000", Frequency: "1m", BarStart: time.Date(2026, 8, 28, 6, 58, 0, 0, time.UTC), BarEnd: time.Date(2026, 8, 28, 6, 59, 0, 0, time.UTC), Open: 9, High: 9.1, Low: 8.9, Close: 9.05, VolumeShares: 1000, AmountCNY: 0, ProviderTimestamp: time.Date(2026, 8, 28, 6, 59, 0, 0, time.UTC), FetchedAt: now, RequestID: "request-2"}
+	before := marketdata.NormalizedKline{SubjectID: "600000.XSHG", ProviderID: "tencent", ProviderSymbol: "sh600000", Frequency: "1m", BarStart: time.Date(2026, 8, 28, 6, 58, 0, 0, time.UTC), BarEnd: time.Date(2026, 8, 28, 6, 59, 0, 0, time.UTC), Open: 9, High: 9.1, Low: 8.9, Close: 9.05, Volume: 1000, Amount: 0, ProviderTimestamp: time.Date(2026, 8, 28, 6, 59, 0, 0, time.UTC), FetchedAt: now, RequestID: "request-2"}
 	after := before
 	after.BarStart = time.Date(2026, 8, 28, 6, 59, 0, 0, time.UTC)
 	after.BarEnd = time.Date(2026, 8, 28, 7, 0, 0, 0, time.UTC)
@@ -689,7 +689,7 @@ func TestNormalizeCandidateChainKeepsConfiguredThreeProviderRoute(t *testing.T) 
 
 func TestKlinePipelineUsesThirdProviderAfterThreeAttempts(t *testing.T) {
 	now := time.Date(2026, 8, 29, 2, 0, 0, 0, time.UTC)
-	bar := marketdata.NormalizedKline{SubjectID: "600000.XSHG", ProviderID: "eastmoney", ProviderSymbol: "sh600000", Frequency: "1m", BarStart: time.Date(2026, 8, 28, 6, 59, 0, 0, time.UTC), BarEnd: time.Date(2026, 8, 28, 7, 0, 0, 0, time.UTC), Open: 9, High: 9.1, Low: 8.9, Close: 9.05, VolumeShares: 1000, AmountCNY: 9050, ProviderTimestamp: time.Date(2026, 8, 28, 7, 0, 0, 0, time.UTC), FetchedAt: now, RequestID: "request-third"}
+	bar := marketdata.NormalizedKline{SubjectID: "600000.XSHG", ProviderID: "eastmoney", ProviderSymbol: "sh600000", Frequency: "1m", BarStart: time.Date(2026, 8, 28, 6, 59, 0, 0, time.UTC), BarEnd: time.Date(2026, 8, 28, 7, 0, 0, 0, time.UTC), Open: 9, High: 9.1, Low: 8.9, Close: 9.05, Volume: 1000, Amount: 9050, ProviderTimestamp: time.Date(2026, 8, 28, 7, 0, 0, 0, time.UTC), FetchedAt: now, RequestID: "request-third"}
 	registry := marketdata.NewRegistry()
 	require.NoError(t, registry.Register(pipelineProvider{id: "sina", err: marketdata.ErrTimeout}))
 	require.NoError(t, registry.Register(pipelineProvider{id: "tencent", err: marketdata.ErrProtocol}))
@@ -731,7 +731,7 @@ func TestFetchKlinesFromChainFallsBackWhenRequestedIntervalIsEmpty(t *testing.T)
 	now := time.Date(2026, 8, 29, 2, 0, 0, 0, time.UTC)
 	start := time.Date(2026, 8, 28, 6, 59, 0, 0, time.UTC)
 	end := start.Add(time.Minute)
-	valid := marketdata.NormalizedKline{SubjectID: "600000.XSHG", ProviderID: "tencent", ProviderSymbol: "sh600000", Frequency: "1m", BarStart: start, BarEnd: end, Open: 9, High: 9.1, Low: 8.9, Close: 9.05, VolumeShares: 1000, AmountCNY: 9050, ProviderTimestamp: end, FetchedAt: now, RequestID: "coverage-fallback"}
+	valid := marketdata.NormalizedKline{SubjectID: "600000.XSHG", ProviderID: "tencent", ProviderSymbol: "sh600000", Frequency: "1m", BarStart: start, BarEnd: end, Open: 9, High: 9.1, Low: 8.9, Close: 9.05, Volume: 1000, Amount: 9050, ProviderTimestamp: end, FetchedAt: now, RequestID: "coverage-fallback"}
 	outOfRange := valid
 	outOfRange.ProviderID = "sina"
 	outOfRange.BarStart = start.Add(-time.Minute)
@@ -762,7 +762,7 @@ func TestKlinePipelineAssignsSourcesPerSubjectAndFallsBack(t *testing.T) {
 		return func(req marketdata.KlineRequest) []marketdata.NormalizedKline {
 			return []marketdata.NormalizedKline{{
 				SubjectID: req.SubjectID, ProviderID: provider, SourceID: sourceID, ProviderSymbol: req.ProviderSymbol, Frequency: "1m",
-				BarStart: barStart, BarEnd: barStart.Add(time.Minute), Open: 9, High: 9.1, Low: 8.9, Close: 9.05, VolumeShares: 1000, AmountCNY: 9050,
+				BarStart: barStart, BarEnd: barStart.Add(time.Minute), Open: 9, High: 9.1, Low: 8.9, Close: 9.05, Volume: 1000, Amount: 9050,
 				ProviderTimestamp: barStart.Add(time.Minute), FetchedAt: now, RequestID: req.RequestID,
 			}}
 		}

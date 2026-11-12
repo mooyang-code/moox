@@ -94,8 +94,8 @@ func TestRunOnceAppliesAndReports(t *testing.T) {
 	}
 	runs := newFakeRunStore()
 	listers := Listers{
-		{Source: "binance", InstrumentType: "spot"}: fakeSubjectLister{items: []marketdata.Instrument{{SubjectID: "BTC-USDT"}}},
-		{Source: "binance", InstrumentType: "swap"}: fakeSubjectLister{err: errors.New("451")},
+		{MarketID: "crypto", Source: "binance", InstrumentType: "spot"}: fakeSubjectLister{items: []marketdata.Instrument{{SubjectID: "BTC-USDT"}}},
+		{MarketID: "crypto", Source: "binance", InstrumentType: "swap"}: fakeSubjectLister{err: errors.New("451")},
 	}
 	runner := &TagRunner{Store: store, Runs: runs, Listers: listers, FetchTimeout: time.Second, Now: func() time.Time { return time.Date(2026, 9, 25, 10, 0, 0, 0, time.UTC) }}
 	runner.RunOnce(context.Background())
@@ -142,8 +142,8 @@ func TestSyncTagsRetriesSnapshotsAndKeepsMembersOnFailure(t *testing.T) {
 	runs := newFakeRunStore()
 	calls := 0
 	runner := &TagRunner{Store: store, Runs: runs, FetchTimeout: time.Second, RetryDelays: []time.Duration{time.Millisecond, time.Millisecond}, Listers: Listers{
-		{Source: "binance", InstrumentType: "swap"}: flakyLister{calls: &calls, failures: 2, items: []marketdata.Instrument{{SubjectID: "BTC-USDT"}}},
-		{Source: "binance", InstrumentType: "spot"}: fakeSubjectLister{err: errors.New("must not be called")},
+		{MarketID: "crypto", Source: "binance", InstrumentType: "swap"}: flakyLister{calls: &calls, failures: 2, items: []marketdata.Instrument{{SubjectID: "BTC-USDT"}}},
+		{MarketID: "crypto", Source: "binance", InstrumentType: "spot"}: fakeSubjectLister{err: errors.New("must not be called")},
 	}}
 	results, err := runner.SyncTags(context.Background(), Filter{SpaceID: "crypto", MarketType: "swap"})
 	if err != nil || len(results) != 1 || results[0].Status != StatusSuccess || calls != 3 || store.applied["binance_swap"] != 1 {
@@ -151,7 +151,7 @@ func TestSyncTagsRetriesSnapshotsAndKeepsMembersOnFailure(t *testing.T) {
 	}
 	calls = 0
 	store.applied = map[string]int{}
-	runner.Listers[ListerKey{Source: "binance", InstrumentType: "swap"}] = flakyLister{calls: &calls, failures: 3}
+	runner.Listers[ListerKey{MarketID: "crypto", Source: "binance", InstrumentType: "swap"}] = flakyLister{calls: &calls, failures: 3}
 	results, _ = runner.SyncTags(context.Background(), Filter{SpaceID: "crypto", MarketType: "swap"})
 	if results[0].Status != StatusFailed || calls != 3 || len(store.applied) != 0 || runs.runs["binance_swap"].LastStatus != "failed" {
 		t.Fatalf("a failed snapshot must keep members: results=%v calls=%d applied=%v", results, calls, store.applied)
@@ -166,8 +166,8 @@ func TestSyncTagsUsesIndexListersForIndexTags(t *testing.T) {
 	calls := 0
 	runner := &TagRunner{
 		Store: store, Runs: runs, FetchTimeout: time.Second, RetryDelays: []time.Duration{time.Millisecond, time.Millisecond},
-		Listers:      Listers{{Source: "eastmoney", InstrumentType: "equity"}: fakeSubjectLister{items: []marketdata.Instrument{{SubjectID: "600000.XSHG"}, {SubjectID: "600519.XSHG"}, {SubjectID: "000001.XSHE"}}}},
-		IndexListers: IndexListers{{Source: "eastmoney", Index: "000300"}: flakyLister{calls: &calls, failures: 1, items: []marketdata.Instrument{{SubjectID: "600519.XSHG"}, {SubjectID: "000001.XSHE"}}}},
+		Listers:      Listers{{MarketID: "stockcn", Source: "eastmoney", InstrumentType: "equity"}: fakeSubjectLister{items: []marketdata.Instrument{{SubjectID: "600000.XSHG"}, {SubjectID: "600519.XSHG"}, {SubjectID: "000001.XSHE"}}}},
+		IndexListers: IndexListers{{MarketID: "stockcn", Source: "eastmoney", Index: "000300"}: flakyLister{calls: &calls, failures: 1, items: []marketdata.Instrument{{SubjectID: "600519.XSHG"}, {SubjectID: "000001.XSHE"}}}},
 	}
 	results, err := runner.SyncTags(context.Background(), Filter{SpaceID: "stockcn"})
 	if err != nil || len(results) != 2 || results[0].Status != StatusSuccess || results[1].Status != StatusSuccess {
@@ -180,7 +180,7 @@ func TestSyncTagsUsesIndexListersForIndexTags(t *testing.T) {
 	// 成分股取数一直失败：不应用快照，保留原成员，记录失败。
 	calls = 0
 	store.applied = map[string]int{}
-	runner.IndexListers[IndexListerKey{Source: "eastmoney", Index: "000300"}] = flakyLister{calls: &calls, failures: 3}
+	runner.IndexListers[IndexListerKey{MarketID: "stockcn", Source: "eastmoney", Index: "000300"}] = flakyLister{calls: &calls, failures: 3}
 	results, _ = runner.SyncTags(context.Background(), Filter{SpaceID: "stockcn", TagID: "cn_hs300"})
 	if len(results) != 1 || results[0].Status != StatusFailed || calls != 3 || len(store.applied) != 0 || runs.runs["cn_hs300"].LastStatus != "failed" {
 		t.Fatalf("a failed constituent snapshot must keep members: results=%v calls=%d applied=%v", results, calls, store.applied)

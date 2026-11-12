@@ -22,9 +22,9 @@ type InvocationMetrics struct {
 // NewInvocationMetrics creates the local market metrics and, when the
 // observability EventBus is configured, a one-shot reporter consumed by
 // Monitor. No implicit localhost EventBus connection is attempted in SCF.
-func NewInvocationMetrics(functionName, spaceID string) (*InvocationMetrics, error) {
+func NewInvocationMetrics(functionName, spaceID string, labels FeedLabels) (*InvocationMetrics, error) {
 	registry := prometheus.NewRegistry()
-	metrics := NewMetrics(registry)
+	metrics := NewMetrics(registry, labels)
 	if !metricsEventBusConfigured() {
 		return &InvocationMetrics{Metrics: metrics}, nil
 	}

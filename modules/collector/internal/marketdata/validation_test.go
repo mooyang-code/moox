@@ -14,7 +14,7 @@ func TestValidateNormalizedKline(t *testing.T) {
 	valid := NormalizedKline{
 		SubjectID: "600000.XSHG", ProviderID: "test", ProviderSymbol: "sh600000",
 		Frequency: "1m", BarStart: start, BarEnd: start.Add(time.Minute),
-		Open: 10, High: 12, Low: 9, Close: 11, VolumeShares: 100, AmountCNY: 1100,
+		Open: 10, High: 12, Low: 9, Close: 11, Volume: 100, Amount: 1100,
 		ProviderTimestamp: start.Add(time.Minute), FetchedAt: start.Add(2 * time.Minute), RequestID: "req-1",
 	}
 
@@ -25,11 +25,11 @@ func TestValidateNormalizedKline(t *testing.T) {
 		mutate func(*NormalizedKline)
 	}{
 		{name: "nan open", mutate: func(k *NormalizedKline) { k.Open = math.NaN() }},
-		{name: "infinite amount", mutate: func(k *NormalizedKline) { k.AmountCNY = math.Inf(1) }},
+		{name: "infinite amount", mutate: func(k *NormalizedKline) { k.Amount = math.Inf(1) }},
 		{name: "non positive close", mutate: func(k *NormalizedKline) { k.Close = 0 }},
 		{name: "high below close", mutate: func(k *NormalizedKline) { k.High = 10.5 }},
 		{name: "low above open", mutate: func(k *NormalizedKline) { k.Low = 10.5 }},
-		{name: "negative volume", mutate: func(k *NormalizedKline) { k.VolumeShares = -1 }},
+		{name: "negative volume", mutate: func(k *NormalizedKline) { k.Volume = -1 }},
 		{name: "misaligned frequency", mutate: func(k *NormalizedKline) { k.Frequency = "5m" }},
 		{name: "wrong bar end", mutate: func(k *NormalizedKline) { k.BarEnd = k.BarStart.Add(59 * time.Second) }},
 		{name: "non UTC start", mutate: func(k *NormalizedKline) {
@@ -62,7 +62,7 @@ func TestValidateNormalizedKlineAcceptsCryptoHourBar(t *testing.T) {
 	kline := NormalizedKline{
 		SubjectID: "BTC-USDT-SPOT", ProviderID: "binance", ProviderSymbol: "BTCUSDT",
 		Frequency: "1h", BarStart: start, BarEnd: start.Add(time.Hour),
-		Open: 100, High: 110, Low: 90, Close: 105, VolumeShares: 12, AmountCNY: 1234,
+		Open: 100, High: 110, Low: 90, Close: 105, Volume: 12, Amount: 1234,
 		ProviderTimestamp: start.Add(time.Hour), FetchedAt: start.Add(2 * time.Hour), RequestID: "req-hour",
 	}
 	require.NoError(t, ValidateNormalizedKline(kline))

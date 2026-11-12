@@ -25,7 +25,7 @@ var (
 // clocks 缓存（市场，频率）的时钟：构造时要加载时区、解析交易时段，完整性检查会逐根调用。
 var clocks sync.Map
 
-// Clock 返回市场某个频率的分桶时钟；未登记的市场按连续交易（epoch_utc）处理。
+// Clock 返回市场某个频率的分桶时钟；未登记的市场报错。
 func Clock(marketID, frequency string) (barclock.Clock, error) {
 	parsed, err := marketdata.ParseFrequency(frequency)
 	if err != nil {
@@ -45,23 +45,20 @@ func Clock(marketID, frequency string) (barclock.Clock, error) {
 
 func newClock(marketID string, parsed marketdata.Frequency) (barclock.Clock, error) {
 	market, err := barclock.MarketFor(marketID)
-	if errors.Is(err, barclock.ErrUnknownMarket) {
-		return barclock.NewEpoch(parsed.Duration())
-	}
 	if err != nil {
 		return nil, err
 	}
 	return market.Clock(parsed.Duration())
 }
 
-// Location 返回市场的时区；连续交易或未登记的市场是 UTC。
+// Location 返回市场的时区；连续交易的市场是 UTC，未登记的市场报错。
 func Location(marketID string) (*time.Location, error) {
 	market, err := barclock.MarketFor(marketID)
-	if errors.Is(err, barclock.ErrUnknownMarket) || err == nil && market.Timezone == "" {
-		return time.UTC, nil
-	}
 	if err != nil {
 		return nil, err
+	}
+	if market.Timezone == "" {
+		return time.UTC, nil
 	}
 	if cached, ok := locations.Load(market.Timezone); ok {
 		return cached.(*time.Location), nil
@@ -77,9 +74,13 @@ func Location(marketID string) (*time.Location, error) {
 var locations sync.Map
 
 // TradingBar 判断 barStart 是否是该市场 frequency 周期某个交易桶的键（日内是开盘时刻）。
-// 连续交易的市场总是返回真；超出交易日历覆盖期返回错误，不能当作非交易时间。
+// 连续交易的市场总是返回真；未登记的市场、超出交易日历覆盖期返回错误，不能当作非交易时间。
 func TradingBar(marketID, frequency string, barStart time.Time) (bool, error) {
-	if continuous(marketID) {
+	market, err := barclock.MarketFor(marketID)
+	if err != nil {
+		return false, err
+	}
+	if market.Alignment == barclock.AlignmentEpochUTC {
 		return true, nil
 	}
 	clock, err := Clock(marketID, frequency)
@@ -94,14 +95,14 @@ func TradingBar(marketID, frequency string, barStart time.Time) (bool, error) {
 }
 
 // CheckCalendarHorizon 检查市场交易日历的覆盖期：已用完返回 ErrCalendarExpired，剩余不足 minDays 天返回
-// ErrCalendarExpiringSoon；没有交易日历的市场（连续交易）总是通过。
+// ErrCalendarExpiringSoon；没有交易日历的市场（连续交易）总是通过，未登记的市场报错。
 func CheckCalendarHorizon(marketID string, now time.Time, minDays int) error {
 	market, err := barclock.MarketFor(marketID)
-	if errors.Is(err, barclock.ErrUnknownMarket) || err == nil && market.Alignment != barclock.AlignmentSession {
-		return nil
-	}
 	if err != nil {
 		return err
+	}
+	if market.Alignment != barclock.AlignmentSession {
+		return nil
 	}
 	calendar, err := marketcalendar.Load(market.CalendarID)
 	if err != nil {
@@ -122,9 +123,4 @@ func CheckCalendarHorizon(marketID string, now time.Time, minDays int) error {
 		return fmt.Errorf("%w：%s 日历覆盖到 %s", ErrCalendarExpiringSoon, market.CalendarID, last)
 	}
 	return nil
-}
-
-func continuous(marketID string) bool {
-	market, err := barclock.MarketFor(marketID)
-	return errors.Is(err, barclock.ErrUnknownMarket) || err == nil && market.Alignment == barclock.AlignmentEpochUTC
 }

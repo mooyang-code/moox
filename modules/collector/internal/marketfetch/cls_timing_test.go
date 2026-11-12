@@ -125,7 +125,7 @@ func TestKlinePipelineReportsStageTimingsAndCommit(t *testing.T) {
 		SubjectID: "600000.XSHG", ProviderID: "sina", SourceID: "stockcn_minute_http",
 		ProviderSymbol: "sh600000", Frequency: "1m",
 		BarStart: now.Add(-6 * time.Minute), BarEnd: now.Add(-5 * time.Minute),
-		Open: 9, High: 9.1, Low: 8.9, Close: 9.05, VolumeShares: 1000, AmountCNY: 9050,
+		Open: 9, High: 9.1, Low: 8.9, Close: 9.05, Volume: 1000, Amount: 9050,
 		ProviderTimestamp: now.Add(-5 * time.Minute), FetchedAt: now, RequestID: "timing",
 	}
 	registry := marketdata.NewRegistry()
@@ -214,7 +214,7 @@ func TestKlinePipelinePassesStandbyDelayToProviderRequests(t *testing.T) {
 		SubjectID: "600000.XSHG", ProviderID: "sina", SourceID: "stockcn_minute_http",
 		ProviderSymbol: "sh600000", Frequency: "1m",
 		BarStart: now.Add(-6 * time.Minute), BarEnd: now.Add(-5 * time.Minute),
-		Open: 9, High: 9.1, Low: 8.9, Close: 9.05, VolumeShares: 1000, AmountCNY: 9050,
+		Open: 9, High: 9.1, Low: 8.9, Close: 9.05, Volume: 1000, Amount: 9050,
 		ProviderTimestamp: now.Add(-5 * time.Minute), FetchedAt: now, RequestID: "standby",
 	}
 	var got []time.Duration

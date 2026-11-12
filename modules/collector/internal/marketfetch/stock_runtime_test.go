@@ -49,7 +49,7 @@ klines:
 func TestLoadStockCNProviderRuntimeUsesPackagedFeedPolicies(t *testing.T) {
 	route, err := loadStockCNRouteFile(filepath.Join("..", "..", "config", "markets", "stockcn", "route.yaml"))
 	require.NoError(t, err)
-	t.Setenv("MOOX_STOCK_CN_SOURCE_CONFIG_DIR", filepath.Join("..", "..", "configs", "scf", "stockcn", "sources", "market"))
+	t.Setenv("MOOX_STOCK_CN_SOURCE_CONFIG_DIR", filepath.Join("..", "..", "config", "markets", "stockcn", "sources"))
 	providers, err := loadStockCNProviderRuntime(route)
 	require.NoError(t, err)
 

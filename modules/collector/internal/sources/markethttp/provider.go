@@ -238,7 +238,7 @@ func (p *Provider) FetchKlines(ctx context.Context, req marketdata.KlineRequest)
 			ProviderSymbol: req.ProviderSymbol, Frequency: string(frequency),
 			BarStart: barStart, BarEnd: barEnd,
 			Open: values[0], Close: values[1], High: values[2], Low: values[3],
-			VolumeShares: values[4] * p.volumeMultiplier, AmountCNY: values[5] * p.amountMultiplier,
+			Volume: values[4] * p.volumeMultiplier, Amount: values[5] * p.amountMultiplier,
 			ProviderTimestamp: providerTime, FetchedAt: fetchedAt, RequestID: req.RequestID,
 		}
 		if err := marketdata.ValidateNormalizedKline(row); err != nil {

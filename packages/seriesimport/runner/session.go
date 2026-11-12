@@ -10,7 +10,7 @@ import (
 
 // sessionAxis 让连续性检查按市场的交易时段判断相邻：有交易时段的市场（A 股）里午休、隔夜、休市日没有 K 线，
 // 不能按固定步长统计缺期。行时间先换成交易序号 × 周期（相邻两根交易 K 线恰好差一个周期），再交给通用的检查器；
-// 报告里的时间再换回真实时间。7×24 市场与未登记的空间返回 nil，按真实时间检查。
+// 报告里的时间再换回真实时间。7×24 市场返回 nil，按真实时间检查；未登记的空间报错，不当成 7×24。
 type sessionAxis struct {
 	clock barclock.Clock
 	step  time.Duration
@@ -18,7 +18,10 @@ type sessionAxis struct {
 
 func newSessionAxis(space string, step time.Duration) (*sessionAxis, error) {
 	market, err := barclock.MarketFor(space)
-	if err != nil || market.Alignment != barclock.AlignmentSession {
+	if err != nil {
+		return nil, err
+	}
+	if market.Alignment != barclock.AlignmentSession {
 		return nil, nil
 	}
 	clock, err := market.Clock(step)

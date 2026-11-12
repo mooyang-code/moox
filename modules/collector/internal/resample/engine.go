@@ -334,7 +334,11 @@ func (e *Engine) readSource(ctx context.Context, task *Task, expected []time.Tim
 	if limit <= 0 {
 		limit = defaultMaxReadKeys
 	}
-	fields := sourceFields(task.Spec.SpaceID)
+	tradeCount, err := hasTradeCount(task.Spec.SpaceID)
+	if err != nil {
+		return nil, nil, err
+	}
+	fields := sourceFields(tradeCount)
 	groups := make(map[string][]SourceBar, len(subjects))
 	decodeErrs := map[string]error{}
 	for start := 0; start < len(keys); start += limit {
@@ -369,9 +373,13 @@ func (e *Engine) readSource(ctx context.Context, task *Task, expected []time.Tim
 // write 把一个桶的结果写入目标数据集：落在已登记快照内且周期还没截止的标的用周期提交（Storage 跟踪到齐并发出完成事件），
 // 其余（首次生效点之前的桶、截止之后的补写、快照之外的标的、周期提交失败）用普通写入，并记为补写通知。
 func (e *Engine) write(ctx context.Context, task *Task, bucket barclock.Bucket, results []Result, jobID string) (int, error) {
+	tradeCount, err := hasTradeCount(task.Spec.SpaceID)
+	if err != nil {
+		return 0, err
+	}
 	rows := make([]*storagepb.RowFieldUpsert, len(results))
 	for i, result := range results {
-		rows[i] = resultRowWithSpec(result, task.Spec)
+		rows[i] = resultRowWithSpec(result, task.Spec, tradeCount)
 	}
 	committed := 0
 	plain := rows

@@ -34,8 +34,8 @@ func TestFetchKlinesParsesFixture(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	require.Equal(t, time.Date(2026, 8, 29, 1, 30, 0, 0, time.UTC), rows[0].BarStart)
-	require.Equal(t, 200.0, rows[0].VolumeShares)
-	require.InDelta(t, 2040.0, rows[0].AmountCNY, 0.000001)
+	require.Equal(t, 200.0, rows[0].Volume)
+	require.InDelta(t, 2040.0, rows[0].Amount, 0.000001)
 	require.True(t, rows[0].AmountEstimated)
 }
 
@@ -117,13 +117,13 @@ func TestFetchKlines5mParsesRecordedResponse(t *testing.T) {
 	for _, row := range rows {
 		require.Equal(t, "5m", row.Frequency)
 		require.True(t, row.AmountEstimated)
-		require.InDelta(t, row.Close*row.VolumeShares, row.AmountCNY, 1e-6, "成交额按 收盘价 × 成交量 估算")
+		require.InDelta(t, row.Close*row.Volume, row.Amount, 1e-6, "成交额按 收盘价 × 成交量 估算")
 		if row.BarStart.Equal(cst("2026-11-04", "09:30")) {
 			first = row
 		}
 	}
 	// 首根含 09:25 集合竞价；成交量单位是手：6735 手 = 673500 股，与东方财富同一根一致。
-	require.Equal(t, 673500.0, first.VolumeShares)
+	require.Equal(t, 673500.0, first.Volume)
 	require.Equal(t, 1470.0, first.Open)
 	require.Equal(t, 1474.0, first.Close)
 }

@@ -1,13 +1,33 @@
+# A 股的市场参数，只有 Collector 读，编进二进制（见 config/markets/embed.go）。
+# 交易时段、时区、交易日历登记在 packages/barclock，不在这里重复。
 market_id: stockcn
-timezone: Asia/Shanghai
-calendar_id: cn_stock
-instrument_types:
-  - equity
-  - index
-  - convertible_bond
-frequencies:
-  - 1m
-  - 5m
-  - 1d
-  - 1w
-  - 1M
+# 成交额的计价币种：K 线行的 amount_unit 写它的小写，标的属性 currency 写原值。
+currency: CNY
+# 结果数据集的允许迟到时间默认值（秒），任务没写时用它。
+allowed_lateness_seconds: 90
+# 固定的序列标签；不写表示按数据源生成。
+series_tag: default
+# 实时批次不限标的数（每函数标的数由采集计划按容量校验）。
+realtime_batch_no_cap: true
+# 云函数出口探测：public_ip 只取出口公网 IP；写数据源名则探测该数据源；不写就不探测。
+egress_probe: public_ip
+# 标的同步（全部标的、指数成分）的请求走哪里：direct 直连，proxy 走出口代理。
+subject_egress: direct
+# 标的属性同步的默认任务；不写表示这个市场没有全市场标的同步。
+subject_sync:
+  sources: [eastmoney]
+  instrument_type: equity
+  cron: "10 8 * * *"
+  timezone: Asia/Shanghai
+# 采集计划的默认参数，moox.toml 的 [scf_plan] 里同名项优先。
+scf_plan:
+  # 每函数标的数按各源的权重与限速、标的数估算（沪深300 约 8 个函数，只用通达信和东方财富，多拆函数让出口 IP 分散、避开单 IP 频控）。
+  auto_size: {target_fetch_ms: 2000, request_ms: 500, min_functions: 8}
+  # 出口 IP 去重只在 15:10～次日 07:50 删除重建函数：避开日内交易时段，也避开 08:00 的日线采集。
+  egress_balance: {max_per_ip: 1, rounds: 5, idle_start: "15:10", idle_end: "07:50", timezone: Asia/Shanghai}
+  default_ingest: pull
+  default_executor: scf
+  # 收盘后固定等 0.8 秒再取数（not_before_ms；2026-11-06 实测三个主源 0.1～0.5 秒就出定稿的那根，与流水线的定稿窗口 0.8 秒一致），各函数同时起跑。
+  # 函数内同时处理的标的数、熔断并发由各源的限速配置推导（sources/*.yaml）；rps、burst 只给币安用，这里不配。
+  # 2026-11-06 实测 15 个函数同时起跑没有命中频控，起跑 1 秒后 10:40 那期 1.7 秒取完、策略产出 3.2 秒。
+  fetch: {request_timeout_ms: 3000, storage_timeout_ms: 2000, not_before_ms: 800}

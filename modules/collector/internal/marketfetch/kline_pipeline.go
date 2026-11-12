@@ -71,6 +71,15 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 		return nil, fmt.Errorf("K 线流水线绑定的是 %s/%s，请求是 %s/%s", spaceID, datasetID, req.SpaceID, req.DatasetID)
 	}
 	marketID := firstNonEmptyString(p.MarketID, req.SpaceID)
+	// 流水线没绑定品种时用市场的默认品种。
+	instrumentType := p.InstrumentType
+	if instrumentType == "" {
+		fallback, err := defaultInstrumentType(marketID, "")
+		if err != nil {
+			return nil, err
+		}
+		instrumentType = fallback
+	}
 	sourceID := firstNonEmptyString(p.SourceID, req.SourceID)
 	if p.SourceID != "" && req.SourceID != "" && !strings.EqualFold(strings.TrimSpace(p.SourceID), strings.TrimSpace(req.SourceID)) {
 		return nil, fmt.Errorf("kline pipeline source binding differs: pipeline=%s request=%s", p.SourceID, req.SourceID)
@@ -152,13 +161,15 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 				return
 			}
 			providerSymbol := strings.TrimSpace(item.Symbol)
+			exchangeID := marketdata.ExchangeID("")
+			// 现在只有 A 股在这里按标的规则重新换算代码并确定交易所；改成所有市场都调 ParseSubject 留给路由通用化（A3）。
 			if p.MarketID == StockCNSpaceID || p.MarketID == "" && req.SpaceID == StockCNSpaceID {
-				converted, symbolErr := stockProviderSymbol(item.SubjectID)
+				subject, symbolErr := parseSubject(marketID, instrumentType, item.SubjectID)
 				if symbolErr != nil {
 					results[index] = failureResult(item, domain.ItemOutcomeInvalid, "symbol", symbolErr)
 					return
 				}
-				providerSymbol = converted
+				providerSymbol, exchangeID = subject.Code, marketdata.ExchangeID(subject.Exchange)
 			}
 			if providerSymbol == "" {
 				results[index] = failureResult(item, domain.ItemOutcomeInvalid, "symbol", fmt.Errorf("provider symbol is required"))
@@ -179,14 +190,6 @@ func (p *KlinePipeline) Execute(ctx context.Context, req Request) (*marketfetchp
 			limit := item.BarLimit
 			if limit <= 0 {
 				limit = MaxRealtimeRows
-			}
-			instrumentType := p.InstrumentType
-			if instrumentType == "" {
-				instrumentType = marketdata.InstrumentEquity
-			}
-			exchangeID := marketdata.ExchangeID("")
-			if p.MarketID == StockCNSpaceID || p.MarketID == "" && req.SpaceID == StockCNSpaceID {
-				exchangeID = stockProviderExchange(item.SubjectID)
 			}
 			coverageStart := parseOptionalTime(item.StartTime)
 			coverageEnd := parseOptionalTime(item.EndTime)
@@ -703,19 +706,6 @@ func adaptiveBatch(kind domain.BatchKind) bool {
 	return false
 }
 
-func stockProviderExchange(subjectID string) marketdata.ExchangeID {
-	parts := strings.SplitN(strings.ToUpper(strings.TrimSpace(subjectID)), ".", 2)
-	if len(parts) != 2 {
-		return ""
-	}
-	switch parts[1] {
-	case "XSHG", "XSHE", "XBSE":
-		return marketdata.ExchangeID(parts[1])
-	default:
-		return ""
-	}
-}
-
 func (p *KlinePipeline) rowFor(bar marketdata.NormalizedKline, req Request, routeID string, routeRank int, instrumentName ...string) (*storagepb.RowFieldUpsert, error) {
 	return p.committer().rowFor(bar, req, routeID, routeRank, instrumentName...)
 }
@@ -769,11 +759,24 @@ func latestClosedIsTradingBar(marketID string, frequency marketdata.Frequency, n
 	return trading, nil
 }
 
-func stockKlineRow(bar marketdata.NormalizedKline, datasetID, routeID string, routeRank int, instrumentName string) (*storagepb.RowFieldUpsert, error) {
-	if strings.TrimSpace(datasetID) == "" {
-		return nil, fmt.Errorf("A 股 K 线行缺少目标数据集")
+// equityRowKey 是股票行的行键与所属市场：成交额单位、交易日期的时区按 MarketID 从市场取。
+type equityRowKey struct {
+	SpaceID   string
+	MarketID  string
+	DatasetID string
+	SeriesTag string
+}
+
+// equityKlineRow 构造股票（equity）的 K 线行，各股票市场共用。
+func equityKlineRow(bar marketdata.NormalizedKline, key equityRowKey, routeID string, routeRank int, instrumentName string) (*storagepb.RowFieldUpsert, error) {
+	if strings.TrimSpace(key.DatasetID) == "" {
+		return nil, fmt.Errorf("股票 K 线行缺少目标数据集")
 	}
 	if err := marketdata.ValidateNormalizedKline(bar); err != nil {
+		return nil, err
+	}
+	market, err := markets.ConfigFor(key.MarketID)
+	if err != nil {
 		return nil, err
 	}
 	qualityStatus := "accepted"
@@ -788,16 +791,16 @@ func stockKlineRow(bar marketdata.NormalizedKline, datasetID, routeID string, ro
 	if instrumentName == "" {
 		instrumentName = bar.SubjectID
 	}
-	tradeDate, err := tradeDateUTC(bar.BarStart)
+	tradeDate, err := tradeDateUTC(key.MarketID, bar.BarStart)
 	if err != nil {
 		return nil, err
 	}
 	fields := []*storagepb.FieldValue{
 		doubleValue("open", bar.Open), doubleValue("high", bar.High), doubleValue("low", bar.Low), doubleValue("close", bar.Close),
-		doubleValue("volume", bar.VolumeShares),
+		doubleValue("volume", bar.Volume),
 		stringValue("instrument_name", instrumentName),
 		timeValue("trade_date", tradeDate), timeValue("close_time", bar.BarEnd),
-		stringValue("volume_unit", "shares"), stringValue("amount_unit", amountUnit(bar)),
+		stringValue("volume_unit", "shares"), stringValue("amount_unit", market.AmountUnit()),
 		stringValue("provider_symbol", bar.ProviderSymbol), timeValue("provider_timestamp", bar.ProviderTimestamp),
 		timeValue("fetched_at", bar.FetchedAt), stringValue("request_id", bar.RequestID),
 		stringValue("route_id", routeID), intValue("route_rank", int64(routeRank)),
@@ -805,16 +808,16 @@ func stockKlineRow(bar marketdata.NormalizedKline, datasetID, routeID string, ro
 		stringValue("quality_status", qualityStatus), stringValue("amount_quality", amountQuality),
 	}
 	// 上游缺成交额（腾讯）时按 收盘价 × 成交量 估算写入 amount，amount_quality=estimated_close_x_volume 标明是估算值。
-	fields = append(fields, doubleValue("amount", bar.AmountCNY))
+	fields = append(fields, doubleValue("amount", bar.Amount))
 	if strings.TrimSpace(bar.SourceID) != "" {
 		fields = append(fields, stringValue("provider_id", bar.ProviderID), stringValue("source_id", bar.SourceID))
 	}
 	fields = append(fields, extraFieldValues(bar.Extra)...)
 	return &storagepb.RowFieldUpsert{
 		Key: &storagepb.RowKey{
-			SpaceId: StockCNSpaceID, DatasetId: strings.TrimSpace(datasetID),
+			SpaceId: key.SpaceID, DatasetId: strings.TrimSpace(key.DatasetID),
 			Kind: &storagepb.RowKey_TimeSeries{TimeSeries: &storagepb.TimeSeriesRowKey{
-				SubjectId: bar.SubjectID, Freq: bar.Frequency, DataTime: bar.BarStart.UTC().Format(time.RFC3339Nano), SeriesTag: "default",
+				SubjectId: bar.SubjectID, Freq: bar.Frequency, DataTime: bar.BarStart.UTC().Format(time.RFC3339Nano), SeriesTag: key.SeriesTag,
 			}},
 		},
 		Fields: fields,
@@ -888,17 +891,13 @@ func parseOptionalTime(raw string) time.Time {
 }
 
 // tradeDateUTC 返回 K 线所属交易日（市场时区的自然日）零点的 UTC 时刻。
-func tradeDateUTC(value time.Time) (time.Time, error) {
-	location, err := markets.Location(StockCNSpaceID)
+func tradeDateUTC(marketID string, value time.Time) (time.Time, error) {
+	location, err := markets.Location(marketID)
 	if err != nil {
 		return time.Time{}, err
 	}
 	local := value.In(location)
 	return time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, location).UTC(), nil
-}
-
-func amountUnit(bar marketdata.NormalizedKline) string {
-	return "cny"
 }
 
 func doubleValue(field string, value float64) *storagepb.FieldValue {

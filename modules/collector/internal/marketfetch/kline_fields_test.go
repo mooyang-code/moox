@@ -199,7 +199,7 @@ func TestKlineRowsCarryExtraFields(t *testing.T) {
 
 	start := time.Date(2026, 11, 10, 1, 30, 0, 0, time.UTC)
 	stock := marketdata.NormalizedKline{SubjectID: "600519.XSHG", ProviderID: "tdx", ProviderSymbol: "sh600519", Frequency: "5m",
-		BarStart: start, BarEnd: start.Add(5 * time.Minute), Open: 10, High: 11, Low: 9, Close: 10.5, VolumeShares: 100, AmountCNY: 1050,
+		BarStart: start, BarEnd: start.Add(5 * time.Minute), Open: 10, High: 11, Low: 9, Close: 10.5, Volume: 100, Amount: 1050,
 		ProviderTimestamp: start.Add(5 * time.Minute), FetchedAt: start.Add(6 * time.Minute), RequestID: "r", Extra: extra}
 	row, err = stockKlineRow(stock, "bars", "route", 1, "贵州茅台")
 	require.NoError(t, err)

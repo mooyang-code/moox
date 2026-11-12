@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mooyang-code/moox/modules/collector/internal/markets"
 	"github.com/robfig/cron"
 )
 
@@ -21,11 +22,22 @@ type AttributeJob struct {
 	Timezone       string   `yaml:"timezone"`
 }
 
+// DefaultConfig 的标的属性同步任务取各市场 market.yaml 的 subject_sync；没写的市场没有默认任务。
+// market.yaml 编在二进制里，解析失败是编码错误，直接 panic。
 func DefaultConfig() Config {
-	return Config{FetchTimeout: 2 * time.Minute, Attributes: []AttributeJob{
-		{SpaceID: "stockcn", Sources: []string{"eastmoney"}, InstrumentType: "equity", Cron: "10 8 * * *", Timezone: "Asia/Shanghai"},
-		{SpaceID: "crypto", Sources: []string{"binance"}, InstrumentType: "spot", Cron: "10 8 * * *", Timezone: "Asia/Shanghai"},
-	}}
+	config := Config{FetchTimeout: 2 * time.Minute}
+	for _, marketID := range markets.IDs() {
+		market, err := markets.ConfigFor(marketID)
+		if err != nil {
+			panic(err)
+		}
+		if job := market.SubjectSync; job != nil {
+			config.Attributes = append(config.Attributes, AttributeJob{
+				SpaceID: marketID, Sources: append([]string(nil), job.Sources...), InstrumentType: job.InstrumentType, Cron: job.Cron, Timezone: job.Timezone,
+			})
+		}
+	}
+	return config
 }
 
 // Validate normalizes the subject_sync section of the Collector configuration.

@@ -133,27 +133,13 @@ func (e CatalogEntry) Build(deps Deps) (MarketProvider, error) {
 	return provider, nil
 }
 
-// InstrumentSource 是能提供标的快照的一个数据源。
-type InstrumentSource struct {
-	Entry   CatalogEntry
-	Fetcher InstrumentFetcher
-}
-
-// Instruments 构造全部实现了 InstrumentFetcher 的数据源；deps 返回 false 的登记项跳过（例如路由里未启用）。
-func (c *Catalog) Instruments(deps func(CatalogEntry) (Deps, bool)) ([]InstrumentSource, error) {
-	var out []InstrumentSource
+// Routed 报告这个市场与品种的 K 线来源是否按路由分配（目录里有 RouteSource 登记项）；否则是任务或标签指定的单一来源。
+func (c *Catalog) Routed(marketID MarketID, instrument InstrumentType) bool {
+	want := normalizeEntry(CatalogEntry{MarketID: marketID, Instrument: instrument})
 	for _, entry := range c.entries {
-		values, ok := deps(entry)
-		if !ok {
-			continue
-		}
-		provider, err := entry.Build(values)
-		if err != nil {
-			return nil, err
-		}
-		if fetcher, ok := provider.(InstrumentFetcher); ok {
-			out = append(out, InstrumentSource{Entry: entry, Fetcher: fetcher})
+		if entry.RouteSource && entry.MarketID == want.MarketID && entry.Instrument == want.Instrument {
+			return true
 		}
 	}
-	return out, nil
+	return false
 }

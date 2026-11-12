@@ -66,8 +66,8 @@ var priceFields = []klineField{
 }
 
 // fieldsFor 返回市场的合成结果字段：加密货币带报价成交量和成交笔数；A 股只有成交额，且可以为空。
-func fieldsFor(spaceID string) []klineField {
-	if hasTradeCount(spaceID) {
+func fieldsFor(tradeCount bool) []klineField {
+	if tradeCount {
 		return append(append([]klineField(nil), priceFields...),
 			klineField{"quote_volume", storagepb.FieldValueType_FIELD_VALUE_TYPE_DOUBLE, "报价成交量", true},
 			klineField{"trade_num", storagepb.FieldValueType_FIELD_VALUE_TYPE_INT, "成交笔数", true})
@@ -87,6 +87,10 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 		return errors.New("resample params are required")
 	}
 	targetFreq, err := ParseFixedFrequency(params.TargetFrequency)
+	if err != nil {
+		return err
+	}
+	tradeCount, err := hasTradeCount(task.SpaceID)
 	if err != nil {
 		return err
 	}
@@ -152,7 +156,7 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 		return compensate(err)
 	}
 	_ = subjects
-	for _, field := range fieldsFor(task.SpaceID) {
+	for _, field := range fieldsFor(tradeCount) {
 		if len(params.OutputFields) > 0 && !containsOutputField(params.OutputFields, field.name) {
 			continue
 		}
@@ -228,7 +232,7 @@ func (c *Catalog) PrepareTarget(ctx context.Context, task domain.CollectionTask,
 		viewResp.View = updatedResp.GetView()
 	}
 	viewColumnIndex := 0
-	for _, field := range fieldsFor(task.SpaceID) {
+	for _, field := range fieldsFor(tradeCount) {
 		if len(params.OutputFields) > 0 && !containsOutputField(params.OutputFields, field.name) {
 			continue
 		}
