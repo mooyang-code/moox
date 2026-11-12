@@ -1,6 +1,6 @@
-# 因子库（表达式写法）：A 股日线因子，用到日线附加字段（后复权因子 adj_factor、fin_ 开头的财务字段、换手率 turnover_rate）。
+# 因子库（表达式写法）：A 股日线因子，用到日线附加字段（后复权因子 adj_factor、fin_ 开头的财务字段、换手率 turnover_rate、股本与每股股利）。
 # 只能用在带这些字段的日线数据集上，字段口径见 docs/模块/采集.md 第 4a、4b 节。
-# 格式同 xbx.yaml。分类：动量类（momentum）、基本面类（fundamental）、筹码类（chip）。
+# 格式同 xbx.yaml。分类：动量类（momentum）、基本面类（fundamental）、筹码类（chip）、估值类（valuation）。
 - factor_id: mom_adj
   name: 复权涨幅
   category_id: momentum
@@ -61,3 +61,52 @@
       upper: chip_cost(open * adj_factor, high * adj_factor, low * adj_factor, close * adj_factor, turnover, window, 0.95)
       lower: chip_cost(open * adj_factor, high * adj_factor, low * adj_factor, close * adj_factor, turnover, window, 0.05)
     output: (upper - lower) / (upper + lower)
+
+# 估值类（valuation）：市值 = 当日不复权收盘价 × 股本，估值再除以财务字段（单位都是元）。需要源数据集带
+# total_shares、float_shares、dividend_per_share（选股器来源，只有开通以后的值）。
+# 股本和每股股利先取最近 20 个交易日里最后一个有值的（ts_last_valid）：某天没采到时沿用前值，连续 20 个交易日没有才为空。
+# 亏损股的市盈率、净资产为负的市净率是负数，排序前按需要先过滤。
+- factor_id: total_mv
+  name: 总市值
+  category_id: valuation
+  category_name: 估值类
+  spec: |
+    output: close * ts_last_valid(total_shares, 20)
+
+- factor_id: float_mv
+  name: 流通市值
+  category_id: valuation
+  category_name: 估值类
+  spec: |
+    output: close * ts_last_valid(float_shares, 20)
+
+- factor_id: pe_ttm
+  name: 市盈率（滚动十二个月）
+  category_id: valuation
+  category_name: 估值类
+  # 分母是归母净利润的滚动十二个月值；为 0 或为空时因子值为空。
+  spec: |
+    output: close * ts_last_valid(total_shares, 20) / fin_net_profit_parent_ttm
+
+- factor_id: pb
+  name: 市净率
+  category_id: valuation
+  category_name: 估值类
+  # 分母是最新一期的归母股东权益。
+  spec: |
+    output: close * ts_last_valid(total_shares, 20) / fin_equity_parent
+
+- factor_id: ps_ttm
+  name: 市销率（滚动十二个月）
+  category_id: valuation
+  category_name: 估值类
+  # 分母是营业收入的滚动十二个月值。
+  spec: |
+    output: close * ts_last_valid(total_shares, 20) / fin_revenue_ttm
+
+- factor_id: dv_ratio
+  name: 股息率（%）
+  category_id: valuation
+  category_name: 估值类
+  spec: |
+    output: ts_last_valid(dividend_per_share, 20) / close * 100

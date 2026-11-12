@@ -41,7 +41,7 @@ func TestFundingRateFieldComesFromTheSourceCatalog(t *testing.T) {
 	require.Equal(t, []string{"funding_rate"}, spotPipeline.ExtraFieldIDs, "现货管线没有来源，选了资金费率按配置错误处理")
 }
 
-// A 股股票的附加字段来自三个只提供字段的来源（复权、行业、财务），全部只适用于日线；它们的运行参数能从数据源配置文件加载。
+// A 股股票的附加字段来自五个只提供字段的来源（复权、行业、财务、换手率、股本），全部只适用于日线；它们的运行参数能从数据源配置文件加载。
 func TestStockFieldSourcesComeFromTheSourceCatalog(t *testing.T) {
 	sources, err := FieldSources("stockcn", marketdata.InstrumentEquity)
 	require.NoError(t, err)
@@ -52,16 +52,24 @@ func TestStockFieldSourcesComeFromTheSourceCatalog(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, found, "%s 要有数据源配置文件", source.Descriptor().ID)
 	}
-	require.Equal(t, []string{"sina_hfq", "swsresearch", "sina_finance"}, providers)
+	require.Equal(t, []string{"sina_hfq", "swsresearch", "sina_finance", "eastmoney_turnover", "eastmoney_select"}, providers)
 
 	offers := FieldOffers()
 	specs := offers.Specs("stockcn")
-	require.Len(t, specs, 22)
+	require.Len(t, specs, 27)
 	for _, spec := range specs {
 		require.Equal(t, []string{"1d"}, spec.Frequencies, spec.ID)
-		require.Equal(t, "prev", spec.Fill, spec.ID)
+		// 换手率在停牌日补出的行上是 0，其余字段沿用前值。
+		want := "prev"
+		if spec.ID == "turnover_rate" {
+			want = "zero"
+		}
+		require.Equal(t, want, spec.Fill, spec.ID)
 	}
-	for id, provider := range map[string]string{"adj_factor": "sina_hfq", "sw_l1": "swsresearch", "sw_l3": "swsresearch", "fin_report_period": "sina_finance", "fin_net_profit_parent_ttm": "sina_finance"} {
+	for id, provider := range map[string]string{
+		"adj_factor": "sina_hfq", "sw_l1": "swsresearch", "sw_l3": "swsresearch", "fin_report_period": "sina_finance", "fin_net_profit_parent_ttm": "sina_finance",
+		"turnover_rate": "eastmoney_turnover", "total_shares": "eastmoney_select", "float_shares": "eastmoney_select", "dividend_per_share": "eastmoney_select", "is_st": "eastmoney_select",
+	} {
 		offer, ok := offers.Find("stockcn", "equity", id)
 		require.True(t, ok, id)
 		require.Equal(t, provider, offer.ProviderID, id)

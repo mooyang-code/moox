@@ -1,0 +1,14 @@
+provider:
+  id: eastmoney_turnover
+  market: stockcn
+  # 只提供日线的附加字段（换手率），不取 K 线、不进路由配置。每只股票一次请求，补一年也是一次。
+  enabled_feeds: []
+  hosts: [push2his.eastmoney.com]
+  rate_limit:
+    scope: egress_ip
+    # 2026-11-12 国内实测：单次 0.10 秒（取一年 0.2 秒）；八个函数共用一个出口、并发 64 时 320 次全部成功，没有限频。
+    requests_per_second: 50
+    burst: 20
+    max_concurrent: 16
+    cooldown: 1s
+    request_timeout: 5s

@@ -22,6 +22,8 @@ func TestRepositoryLibrariesCompile(t *testing.T) {
 			"mom_adj": 251, "roe_ttm": 1,
 			// 筹码类：回看按 window 上限 500 推导。
 			"chip_profit_ratio": 500, "chip_avg_cost": 500, "chip_concentration": 500,
+			// 估值类：股本与每股股利取最近 20 根里最后一个有值的。
+			"total_mv": 20, "float_mv": 20, "pe_ttm": 20, "pb": 20, "ps_ttm": 20, "dv_ratio": 20,
 		},
 		"../../../../examples/factors": {"bias": 120, "cci": 239, "ma_fast": 60, "ma_slow": 240, "channel": 120},
 	}
