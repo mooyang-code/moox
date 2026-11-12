@@ -15,6 +15,7 @@ import (
 	_ "github.com/mooyang-code/moox/modules/collector/internal/markets/crypto"
 	_ "github.com/mooyang-code/moox/modules/collector/internal/markets/stockcn"
 	_ "github.com/mooyang-code/moox/modules/collector/internal/markets/stockhk"
+	_ "github.com/mooyang-code/moox/modules/collector/internal/markets/stockus"
 	"github.com/mooyang-code/moox/modules/collector/internal/sources/catalog"
 )
 
