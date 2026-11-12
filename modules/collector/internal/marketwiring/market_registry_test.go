@@ -75,12 +75,14 @@ func TestSubjectListersAreKeyedByMarket(t *testing.T) {
 		{MarketID: "stockcn", Source: "sina", InstrumentType: "equity"},
 		{MarketID: "stockcn", Source: "eastmoney", InstrumentType: "equity"},
 	}, keys)
-	require.Len(t, indexes, 1)
+	// 港股的腾讯只取指数成分：进指数成分表，不进全部标的表。
+	require.Len(t, indexes, 2)
 	require.Contains(t, indexes, subjectsync.IndexListerKey{MarketID: "stockcn", Source: "eastmoney", Index: "000300"})
+	require.Contains(t, indexes, subjectsync.IndexListerKey{MarketID: "stockhk", Source: "tencent", Index: "HSI"})
 }
 
 // 环境变量指向不存在的目录或文件时（旧发布流程在 collector.env 里写过），回落到编进二进制的内容：
-// lister 仍是 4 个加 1 个指数，候选链、每函数并发推导都与内置配置一致。
+// lister 仍是 4 个加 2 个指数，候选链、每函数并发推导都与内置配置一致。
 func TestMissingOverrideFallsBackToEmbeddedFiles(t *testing.T) {
 	wantPipeline, err := NewStockKlinePipeline(timerHandlerStorage{}, "5m")
 	require.NoError(t, err)
@@ -95,7 +97,7 @@ func TestMissingOverrideFallsBackToEmbeddedFiles(t *testing.T) {
 	listers, indexes, err := NewSubjectListers()
 	require.NoError(t, err)
 	require.Len(t, listers, 4)
-	require.Len(t, indexes, 1)
+	require.Len(t, indexes, 2)
 
 	pipeline, err := NewStockKlinePipeline(timerHandlerStorage{}, "5m")
 	require.NoError(t, err)
