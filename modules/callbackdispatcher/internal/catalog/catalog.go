@@ -138,7 +138,7 @@ var entries = []Entry{
 		DeliverPolicy: nats.DeliverNewPolicy,
 		Sample: map[string]any{
 			"dataset_id": "示例数据集", "frequency": "5m", "subject_ids": []string{"BTCUSDT"}, "start": "2026-08-06T00:00:00Z",
-			"end": "2026-08-06T01:00:00Z", "origin": "auto", "job_id": "示例作业", "sync_request_id": "示例同步点",
+			"end": "2026-08-06T01:00:00Z", "origin": "auto", "job_id": "示例作业",
 			"confirmed_at": "2026-08-06T02:00:00Z",
 		},
 		PayloadFields: []Field{
@@ -151,7 +151,6 @@ var entries = []Entry{
 			{Key: "job_id", Title: "补采或合成作业的 ID"},
 			{Key: "confirmed_at", Title: "读回确认写入的时刻（UTC）"},
 			{Key: "series_tags", Title: "补写的序列（series_tag）；不出现表示数据集的全部序列"},
-			{Key: "sync_request_id", Title: "内部字段，可以忽略"},
 		},
 	},
 	{

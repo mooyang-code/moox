@@ -124,6 +124,8 @@
 | `data rows export` | 导出 Dataset 行为 JSON |
 | `data skill kline get` | 获取 K 线数据 |
 | `data view query` | 按 View 查询时序行（管理台“数据浏览”用的接口；selectors、过滤与排序写在 --data 或对应参数里） |
+| `data view state` | 查看 View 的索引状态：活动索引、代次、已建列、覆盖范围与跟随变更日志的进度 |
+| `data view wait-applied` | 等 View 跟上此刻的变更日志头部（之前的写入都已可查） |
 
 ## doctor：部署与运行诊断：告警、新部署检查、按监控事实诊断模块
 

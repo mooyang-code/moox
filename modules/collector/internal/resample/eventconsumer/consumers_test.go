@@ -89,7 +89,7 @@ func TestStartDeliversPeriodAndBackfilledEventsToTriggersAndRetriesFailures(t *t
 	confirmed := period.Add(time.Hour)
 	_, err = publisher.Publish(context.Background(), events.CollectorKlineBackfilled, &storagepb.CollectorKlineBackfilled{
 		DatasetId: "dataset_src", Frequency: "5m", SubjectIds: []string{"BTC"}, Start: timestamppb.New(period), End: timestamppb.New(period.Add(5 * time.Minute)),
-		Origin: "auto", SyncRequestId: "kbf-1", ConfirmedAt: timestamppb.New(confirmed),
+		Origin: "auto", ConfirmedAt: timestamppb.New(confirmed),
 	}, events.PublishOptions{EventID: "kbf-1", OccurredAt: confirmed, SpaceID: "crypto", SubjectID: "dataset_src"})
 	require.NoError(t, err)
 

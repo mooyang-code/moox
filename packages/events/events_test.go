@@ -271,7 +271,7 @@ func TestCollectorKlineBackfilledRoundTripAndValidation(t *testing.T) {
 	payload := &storagepb.CollectorKlineBackfilled{
 		DatasetId: "dataset_src", Frequency: "5m", SubjectIds: []string{"BTC", "ETH"},
 		Start: timestamppb.New(start), End: timestamppb.New(start.Add(time.Hour)),
-		Origin: "auto", JobId: "job-1", SyncRequestId: "batch-1", ConfirmedAt: timestamppb.New(start.Add(2 * time.Hour)),
+		Origin: "auto", JobId: "job-1", ConfirmedAt: timestamppb.New(start.Add(2 * time.Hour)),
 	}
 	raw, err := registry.MarshalMessage(CollectorKlineBackfilled, payload, PublishOptions{EventID: "batch-1", OccurredAt: start, SpaceID: "crypto", SubjectID: "dataset_src"})
 	require.NoError(t, err)
@@ -287,7 +287,6 @@ func TestCollectorKlineBackfilledRoundTripAndValidation(t *testing.T) {
 		"no subjects":      func(p *storagepb.CollectorKlineBackfilled) { p.SubjectIds = nil },
 		"empty range":      func(p *storagepb.CollectorKlineBackfilled) { p.End = p.Start },
 		"bad origin":       func(p *storagepb.CollectorKlineBackfilled) { p.Origin = "other" },
-		"no sync request":  func(p *storagepb.CollectorKlineBackfilled) { p.SyncRequestId = "" },
 	} {
 		broken := proto.Clone(payload).(*storagepb.CollectorKlineBackfilled)
 		mutate(broken)

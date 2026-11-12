@@ -49,13 +49,56 @@ type PrimaryStorage interface {
 	UpsertFields(context.Context, []*storagepb.RowFieldUpsert) error
 }
 
-// SyncPointStorage is the optional catch-up fence used after a historical
-// resample. Primary rows are written first, then a stable catch-up marker is
-// appended and the target View is waited on before the backfill is reported
-// complete.
-type SyncPointStorage interface {
-	AppendDatasetSyncPoint(context.Context, string, string, string, string) error
-	WaitViewSyncPoint(context.Context, *storagepb.WaitViewSyncPointReq) (*storagepb.WaitViewSyncPointRsp, error)
+// ViewWaiter 是合成用到的 DataView 方法：建目标时等 View 的列建好，历史作业结束时等 View 跟上写入。
+type ViewWaiter interface {
+	GetViewState(context.Context, *storagepb.GetViewStateReq) (*storagepb.GetViewStateRsp, error)
+	WaitViewApplied(context.Context, *storagepb.WaitViewAppliedReq) (*storagepb.WaitViewAppliedRsp, error)
+}
+
+// viewRetryInterval 是 View 还没准备好（还没开始建索引、正在建索引）时再问一次的间隔。
+const viewRetryInterval = 100 * time.Millisecond
+
+// waitViewApplied 在 timeout 内等 View 跟上调用这一刻的变更日志头部：View 在服务端取头部序号，扫描到它时之前的行都已入索引。
+// View 正在建索引（VIEW_NOT_READY）或还没跟上都继续等，超时返回 ErrTargetViewNotReady。
+func waitViewApplied(ctx context.Context, view ViewWaiter, spaceID, viewID string, timeout time.Duration) error {
+	if view == nil {
+		return errors.New("合成需要 DataView 客户端")
+	}
+	deadline := time.Now().Add(timeout)
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return ErrTargetViewNotReady
+		}
+		response, err := view.WaitViewApplied(ctx, &storagepb.WaitViewAppliedReq{SpaceId: spaceID, ViewId: viewID, WaitTimeoutMs: uint32(max(remaining/time.Millisecond, 1))})
+		if err != nil {
+			return fmt.Errorf("等待 View 跟上写入：%w", err)
+		}
+		switch code := response.GetRetInfo().GetCode(); {
+		case response.GetRetInfo() == nil:
+			return errors.New("等待 View 跟上写入：响应缺少 ret_info")
+		case code == storagepb.ErrorCode_SUCCESS && response.GetApplied():
+			return nil
+		case code == storagepb.ErrorCode_SUCCESS:
+			continue
+		case code != storagepb.ErrorCode_VIEW_NOT_READY:
+			return fmt.Errorf("等待 View 跟上写入：%s", response.GetRetInfo().GetMsg())
+		}
+		if err := sleepContext(ctx, viewRetryInterval); err != nil {
+			return err
+		}
+	}
+}
+
+func sleepContext(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 // BucketStorage reads one source bucket and writes its target row only when the

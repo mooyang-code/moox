@@ -34,10 +34,6 @@ type ResampleStorage interface {
 	UpsertFields(context.Context, []*storagepb.RowFieldUpsert) error
 }
 
-type ResampleViewSyncWaiter interface {
-	WaitViewSyncPoint(context.Context, *storagepb.WaitViewSyncPointReq) (*storagepb.WaitViewSyncPointRsp, error)
-}
-
 type ResampleMetadataClient struct {
 	Client storageio.Metadata
 	Auth   *storagepb.AuthInfo
@@ -45,6 +41,7 @@ type ResampleMetadataClient struct {
 
 type storageWriter struct {
 	access   storageio.Primary
+	view     storageio.View
 	period   periodStorageAccess
 	metadata storageio.Metadata
 	authInfo *storagepb.AuthInfo
@@ -59,7 +56,7 @@ func newGatewayWriter(gateway gatewayclient.Invoker, instType string) (*storageW
 		return nil, err
 	}
 	adapter := storageio.NewGatewayClient(gateway)
-	return &storageWriter{access: adapter, period: adapter, metadata: adapter, authInfo: auth}, nil
+	return &storageWriter{access: adapter, view: adapter, period: adapter, metadata: adapter, authInfo: auth}, nil
 }
 
 func NewGatewayBatchStorage(gateway gatewayclient.Invoker, instType string) (BatchStorage, error) {
@@ -219,15 +216,28 @@ func expandResampleFieldIDs(keys []*storagepb.RowKey, fieldIDs []string) []strin
 	return qualified
 }
 
-func (w *storageWriter) WaitViewSyncPoint(ctx context.Context, req *storagepb.WaitViewSyncPointReq) (*storagepb.WaitViewSyncPointRsp, error) {
+// GetViewState 查询 View 的索引状态，没带身份时补上写入身份。
+func (w *storageWriter) GetViewState(ctx context.Context, req *storagepb.GetViewStateReq) (*storagepb.GetViewStateRsp, error) {
 	if req == nil {
-		return nil, fmt.Errorf("wait View sync point: request is required")
+		return nil, fmt.Errorf("查询 View 状态：请求不能为空")
 	}
-	copyReq := proto.Clone(req).(*storagepb.WaitViewSyncPointReq)
+	copyReq := proto.Clone(req).(*storagepb.GetViewStateReq)
 	if copyReq.AuthInfo == nil {
 		copyReq.AuthInfo = w.authInfo
 	}
-	return w.access.WaitViewSyncPoint(ctx, copyReq)
+	return w.view.GetViewState(ctx, copyReq)
+}
+
+// WaitViewApplied 等 View 跟上调用这一刻的变更日志头部，没带身份时补上写入身份。
+func (w *storageWriter) WaitViewApplied(ctx context.Context, req *storagepb.WaitViewAppliedReq) (*storagepb.WaitViewAppliedRsp, error) {
+	if req == nil {
+		return nil, fmt.Errorf("等待 View 跟上写入：请求不能为空")
+	}
+	copyReq := proto.Clone(req).(*storagepb.WaitViewAppliedReq)
+	if copyReq.AuthInfo == nil {
+		copyReq.AuthInfo = w.authInfo
+	}
+	return w.view.WaitViewApplied(ctx, copyReq)
 }
 
 type storageResponseError struct{ message string }

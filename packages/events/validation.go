@@ -294,8 +294,8 @@ func validateCollectorKlineBackfilled(message *eventpb.EventMessage, value proto
 	if !validRequiredToken(payload.GetDatasetId()) || message == nil || payload.GetDatasetId() != message.GetSubjectId() {
 		return fmt.Errorf("collector kline backfilled dataset_id does not match subject_id")
 	}
-	if !validRequiredToken(payload.GetFrequency()) || !validRequiredToken(payload.GetSyncRequestId()) {
-		return fmt.Errorf("collector kline backfilled frequency and sync_request_id are required")
+	if !validRequiredToken(payload.GetFrequency()) {
+		return fmt.Errorf("collector kline backfilled frequency is required")
 	}
 	if len(payload.GetSubjectIds()) == 0 {
 		return fmt.Errorf("collector kline backfilled subject_ids are required")

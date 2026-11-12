@@ -42,11 +42,11 @@ func newResampleRuntime(process *Runtime, dbm *store.Store, cfg *Config, source 
 	if err != nil {
 		return nil, fmt.Errorf("storage client: %w", err)
 	}
-	waiter, ok := localStorage.(marketstorage.ResampleViewSyncWaiter)
+	view, ok := localStorage.(collectorresample.ViewWaiter)
 	if !ok {
-		return nil, errors.New("Storage adapter has no View sync waiter")
+		return nil, errors.New("Storage 适配器没有 DataView 方法")
 	}
-	catalog := &collectorresample.Catalog{Metadata: metadataClient.Client, Auth: metadataClient.Auth, ViewSync: waiter}
+	catalog := &collectorresample.Catalog{Metadata: metadataClient.Client, Auth: metadataClient.Auth, View: view}
 	k := cfg.KlineResample
 	metrics := collectorresample.NewMetrics(prometheus.DefaultRegisterer)
 	engine := &collectorresample.Engine{
@@ -80,16 +80,10 @@ func newResampleRuntime(process *Runtime, dbm *store.Store, cfg *Config, source 
 	if bus != nil {
 		runtime.publisher.Enabled, runtime.publisher.Wake = true, bus.relay.Wake
 	}
-	if sync, ok := localStorage.(collectorresample.DatasetSyncPoints); ok {
-		runtime.publisher.Sync = sync
-	}
 	jobs := &collectorresample.JobRunner{
-		State: dbm.Resample(), Tasks: dbm.Tasks(), Source: source, Engine: engine,
+		State: dbm.Resample(), Tasks: dbm.Tasks(), Source: source, Engine: engine, View: view,
 		Flush:  runtime.publisher.Flush,
 		Config: collectorresample.JobRunnerConfig{BucketsPerRound: k.HistoryBucketsPerRound, MaxJobsPerRound: k.HistoryMaxJobs},
-	}
-	if sync, ok := localStorage.(collectorresample.SyncPointStorage); ok {
-		jobs.Sync = sync
 	}
 	runtime.jobs = jobs
 

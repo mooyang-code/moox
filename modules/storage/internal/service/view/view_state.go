@@ -21,7 +21,7 @@ func (s *Service) GetViewState(ctx context.Context, req *pb.GetViewStateReq) (*p
 	if req == nil || req.GetSpaceId() == "" || req.GetViewId() == "" {
 		return &pb.GetViewStateRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id 与 view_id 不能为空"))}, nil
 	}
-	if err := s.authorize(req.GetAuthInfo()); err != nil {
+	if err := s.authorizeViewOrWriter(req.GetAuthInfo()); err != nil {
 		return &pb.GetViewStateRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
 	ref := viewRef{spaceID: req.GetSpaceId(), viewID: req.GetViewId()}
@@ -68,7 +68,7 @@ func (s *Service) WaitViewApplied(ctx context.Context, req *pb.WaitViewAppliedRe
 	if req == nil || req.GetSpaceId() == "" || req.GetViewId() == "" {
 		return &pb.WaitViewAppliedRsp{RetInfo: retinfo.Error(pb.ErrorCode_INVALID_PARAM, errors.New("space_id 与 view_id 不能为空"))}, nil
 	}
-	if err := s.authorize(req.GetAuthInfo()); err != nil {
+	if err := s.authorizeViewOrWriter(req.GetAuthInfo()); err != nil {
 		return &pb.WaitViewAppliedRsp{RetInfo: retinfo.Error(pb.ErrorCode_NO_PERMISSION, err)}, nil
 	}
 	timeout := defaultWaitViewApplied

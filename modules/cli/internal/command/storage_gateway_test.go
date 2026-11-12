@@ -10,6 +10,7 @@ import (
 	pb "github.com/mooyang-code/moox/modules/storage/proto/storagegen"
 	"github.com/mooyang-code/moox/packages/gatewayclient"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 	"gopkg.in/yaml.v3"
 )
 
@@ -40,6 +41,35 @@ func TestStorageImportDoesNotResendAnUnknownWriteResult(t *testing.T) {
 	request.Rows[0].Key.SpaceId = "other-space"
 	require.ErrorContains(t, writer.UpsertFields(ctx, request), "selected space")
 	require.Equal(t, 1, calls)
+}
+
+// 导入结束后用写入身份等指定 View 跟上：View 正在建索引（VIEW_NOT_READY）、还没跟上都在总时长内再等。
+func TestStorageImportFinishWaitsForViewApplied(t *testing.T) {
+	answers := []*pb.WaitViewAppliedRsp{
+		{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_VIEW_NOT_READY}},
+		{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}},
+		{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_SUCCESS}, Applied: true},
+	}
+	var calls int
+	gateway := storageGatewayCall(func(_ context.Context, service, method string, request, response any) error {
+		require.Equal(t, dataViewSvc, service)
+		require.Equal(t, "WaitViewApplied", method)
+		req := request.(*pb.WaitViewAppliedReq)
+		require.Equal(t, "import-role", req.GetAuthInfo().GetAppId())
+		require.Equal(t, "bars_view", req.GetViewId())
+		proto.Merge(response.(*pb.WaitViewAppliedRsp), answers[calls])
+		calls++
+		return nil
+	})
+	target := &importStorageTarget{writer: gatewayStorageDataWriter{Gateway: gateway, SpaceID: "crypto", Auth: &pb.AuthInfo{AppId: "import-role"}}, space: "crypto", view: "bars_view", written: true}
+	require.NoError(t, target.Finish(t.Context()))
+	require.Equal(t, 3, calls)
+
+	answers = []*pb.WaitViewAppliedRsp{{RetInfo: &pb.RetInfo{Code: pb.ErrorCode_NO_PERMISSION, Msg: "无权限"}}}
+	calls = 0
+	require.ErrorContains(t, target.Finish(t.Context()), "无权限")
+	target.view = ""
+	require.NoError(t, target.Finish(t.Context()), "没指定 View 时不等")
 }
 
 func TestManagementConfigurationsRemoveHTTPAndKeepNativeListeners(t *testing.T) {

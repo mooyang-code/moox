@@ -16,20 +16,21 @@ import (
 	"trpc.group/trpc-go/trpc-go/client"
 )
 
-type fakeViewGetter struct {
-	views []*storagepb.View
-	index int
+type fakeViewState struct {
+	states []*storagepb.GetViewStateRsp
+	index  int
 }
 
-func (f *fakeViewGetter) GetView(_ context.Context, _ *storagepb.GetViewReq, _ ...client.Option) (*storagepb.GetViewRsp, error) {
-	if len(f.views) == 0 {
-		return &storagepb.GetViewRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
-	}
-	view := f.views[f.index]
-	if f.index < len(f.views)-1 {
+func (f *fakeViewState) GetViewState(context.Context, *storagepb.GetViewStateReq) (*storagepb.GetViewStateRsp, error) {
+	state := f.states[f.index]
+	if f.index < len(f.states)-1 {
 		f.index++
 	}
-	return &storagepb.GetViewRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, View: view}, nil
+	return state, nil
+}
+
+func (f *fakeViewState) WaitViewApplied(context.Context, *storagepb.WaitViewAppliedReq) (*storagepb.WaitViewAppliedRsp, error) {
+	return &storagepb.WaitViewAppliedRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Applied: true}, nil
 }
 
 type catalogMetadataFake struct {
@@ -113,10 +114,6 @@ func (f *catalogMetadataFake) CreateView(_ context.Context, req *storagepb.Creat
 	view := req.GetView()
 	// 和 Storage 一样：View 的频率取自它的数据集。
 	view.Freq = f.datasets[view.GetDatasetId()].GetFreq()
-	if f.failAt == "update_view" {
-		view.Attributes = cloneStringMap(view.GetAttributes())
-		delete(view.Attributes, "route_ready_request_id")
-	}
 	f.views[view.GetViewId()] = view
 	return &storagepb.CreateViewRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, View: view}, nil
 }
@@ -141,14 +138,6 @@ func (f *catalogMetadataFake) UpsertDatasetColumn(_ context.Context, _ *storagep
 	return &storagepb.UpsertDatasetColumnRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
 }
 
-func (f *catalogMetadataFake) UpdateView(_ context.Context, req *storagepb.UpdateViewReq, _ ...client.Option) (*storagepb.UpdateViewRsp, error) {
-	if err := f.fail("update_view"); err != nil {
-		return &storagepb.UpdateViewRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_INNER_ERR, Msg: err.Error()}}, nil
-	}
-	f.views[req.GetView().GetViewId()] = req.GetView()
-	return &storagepb.UpdateViewRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, View: req.GetView()}, nil
-}
-
 func (f *catalogMetadataFake) UpsertViewColumn(_ context.Context, req *storagepb.UpsertViewColumnReq, _ ...client.Option) (*storagepb.UpsertViewColumnRsp, error) {
 	if err := f.fail("view_column"); err != nil {
 		return &storagepb.UpsertViewColumnRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_INNER_ERR, Msg: err.Error()}}, nil
@@ -163,20 +152,29 @@ func (f *catalogMetadataFake) UpsertViewColumn(_ context.Context, req *storagepb
 	return &storagepb.UpsertViewColumnRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}}, nil
 }
 
-type catalogViewSyncFake struct {
+// catalogViewStateFake 按元数据假实现里的 View 回答索引状态：View 不存在时是 VIEW_NOT_FOUND，否则活动索引已建好、列取已建列。
+type catalogViewStateFake struct {
 	metadata *catalogMetadataFake
 }
 
-func (f catalogViewSyncFake) WaitViewSyncPoint(_ context.Context, _ *storagepb.WaitViewSyncPointReq) (*storagepb.WaitViewSyncPointRsp, error) {
-	if err := f.metadata.fail("view_sync"); err != nil {
+func (f catalogViewStateFake) GetViewState(_ context.Context, req *storagepb.GetViewStateReq) (*storagepb.GetViewStateRsp, error) {
+	if err := f.metadata.fail("view_state"); err != nil {
 		return nil, err
 	}
-	return &storagepb.WaitViewSyncPointRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Ready: true}, nil
+	view := f.metadata.views[req.GetViewId()]
+	if view == nil {
+		return &storagepb.GetViewStateRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_VIEW_NOT_FOUND}}, nil
+	}
+	return &storagepb.GetViewStateRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, IndexId: view.GetActiveIndexId(), Columns: view.GetActiveColumns()}, nil
+}
+
+func (f catalogViewStateFake) WaitViewApplied(context.Context, *storagepb.WaitViewAppliedReq) (*storagepb.WaitViewAppliedRsp, error) {
+	return &storagepb.WaitViewAppliedRsp{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}, Applied: true}, nil
 }
 
 func newPrepareTargetFixture(failAt string) (*catalogMetadataFake, *Catalog, domain.CollectionTask, *domain.CollectParams, storagesource.DatasetInfo, []domain.Subject) {
 	metadata := newCatalogMetadataFake(failAt)
-	catalog := &Catalog{Metadata: metadata, Auth: &storagepb.AuthInfo{AppId: "collector"}, ViewSync: catalogViewSyncFake{metadata: metadata}}
+	catalog := &Catalog{Metadata: metadata, Auth: &storagepb.AuthInfo{AppId: "collector"}, View: catalogViewStateFake{metadata: metadata}}
 	rule := domain.CollectionTask{SpaceID: "crypto", TaskID: "task-resample", DataType: "kline_resample"}
 	params := &domain.CollectParams{
 		Provider: "moox", MarketType: "spot",
@@ -218,9 +216,8 @@ func TestPrepareTargetCompensatesNewResourcesInReverseOrderAfterLaterFailure(t *
 		failAt      string
 		deleteOrder []string
 	}{
-		{failAt: "update_view", deleteOrder: []string{"view", "dataset"}},
 		{failAt: "view_column", deleteOrder: []string{"view", "dataset"}},
-		{failAt: "view_sync", deleteOrder: []string{"view", "dataset"}},
+		{failAt: "view_state", deleteOrder: []string{"view", "dataset"}},
 	} {
 		t.Run(testCase.failAt, func(t *testing.T) {
 			metadata, catalog, rule, params, source, subjects := newPrepareTargetFixture(testCase.failAt)
@@ -262,39 +259,49 @@ func TestPrepareTargetNeverDeletesExistingResourcesOnFailure(t *testing.T) {
 }
 
 func TestPrepareTargetMergesOriginalAndCompensationErrors(t *testing.T) {
-	metadata, catalog, rule, params, source, subjects := newPrepareTargetFixture("view_sync")
+	metadata, catalog, rule, params, source, subjects := newPrepareTargetFixture("view_state")
 	metadata.failCleanup = true
 
 	err := catalog.PrepareTarget(context.Background(), rule, params, source, subjects)
 	require.Error(t, err)
-	require.ErrorContains(t, err, "wait target View sync point")
+	require.ErrorContains(t, err, "get target View state")
 	require.ErrorContains(t, err, "cleanup view failed")
 	require.ErrorContains(t, err, "cleanup dataset failed")
 	require.Equal(t, []string{"view", "dataset"}, metadata.deleteOrder)
 }
 
-func TestTargetViewRevisionReadyRequiresActiveIndexAndRevision(t *testing.T) {
+func TestTargetViewColumnsReadyRequiresActiveIndexAndColumns(t *testing.T) {
 	declared := []*storagepb.ViewColumn{{ColumnName: "open"}, {ColumnName: "close"}}
 	built := []*storagepb.ViewColumn{{ColumnName: "open"}, {ColumnName: "close"}, {ColumnName: "volume"}}
-	assert.False(t, targetViewColumnsReady(&storagepb.View{Status: "active", ActiveColumns: declared[:1], ActiveIndexId: "idx"}, declared), "还有列没建进索引")
-	assert.False(t, targetViewColumnsReady(&storagepb.View{Status: "active", ActiveColumns: built}, declared), "索引还没建成")
-	assert.False(t, targetViewColumnsReady(&storagepb.View{Status: "building", ActiveColumns: built, ActiveIndexId: "idx"}, declared))
-	assert.True(t, targetViewColumnsReady(&storagepb.View{Status: "active", ActiveColumns: built, ActiveIndexId: "idx"}, declared))
+	assert.False(t, targetViewColumnsReady(&storagepb.GetViewStateRsp{IndexId: "idx", Columns: declared[:1]}, declared), "还有列没建进索引")
+	assert.False(t, targetViewColumnsReady(&storagepb.GetViewStateRsp{Columns: built}, declared), "索引还没建成")
+	assert.True(t, targetViewColumnsReady(&storagepb.GetViewStateRsp{IndexId: "idx", Columns: built}, declared))
 }
 
-func TestWaitTargetViewRevisionPollsUntilDesiredIndexIsActive(t *testing.T) {
-	getter := &fakeViewGetter{views: []*storagepb.View{
-		{Status: "active", ActiveIndexId: "idx"},
-		{Status: "active", ActiveIndexId: "idx", ActiveColumns: []*storagepb.ViewColumn{{ColumnName: "close"}}},
+// View 还没开始建索引（VIEW_NOT_FOUND）、索引还在建（index_id 为空）都继续等，直到列建好。
+func TestWaitTargetViewColumnsRetriesUntilColumnsAreBuilt(t *testing.T) {
+	success := &storagepb.RetInfo{Code: storagepb.ErrorCode_SUCCESS}
+	state := &fakeViewState{states: []*storagepb.GetViewStateRsp{
+		{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_VIEW_NOT_FOUND}},
+		{RetInfo: success},
+		{RetInfo: success, IndexId: "idx"},
+		{RetInfo: success, IndexId: "idx", Columns: []*storagepb.ViewColumn{{ColumnName: "close"}}},
 	}}
-	require.NoError(t, waitTargetViewColumns(context.Background(), getter, nil, "crypto", "view", []*storagepb.ViewColumn{{ColumnName: "close"}}, 500*time.Millisecond))
-	assert.Equal(t, 1, getter.index)
+	require.NoError(t, waitTargetViewColumns(context.Background(), state, nil, "crypto", "view", []*storagepb.ViewColumn{{ColumnName: "close"}}, 2*time.Second))
+	assert.Equal(t, 3, state.index)
 }
 
-func TestWaitTargetViewRevisionReturnsNotReadyWhenTimeoutExpires(t *testing.T) {
-	getter := &fakeViewGetter{views: []*storagepb.View{{Status: "active", ActiveIndexId: "idx"}}}
-	err := waitTargetViewColumns(context.Background(), getter, nil, "crypto", "view", []*storagepb.ViewColumn{{ColumnName: "close"}}, 20*time.Millisecond)
+func TestWaitTargetViewColumnsReturnsNotReadyWhenTimeoutExpires(t *testing.T) {
+	state := &fakeViewState{states: []*storagepb.GetViewStateRsp{{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_VIEW_NOT_FOUND}}}}
+	err := waitTargetViewColumns(context.Background(), state, nil, "crypto", "view", []*storagepb.ViewColumn{{ColumnName: "close"}}, 50*time.Millisecond)
 	assert.ErrorIs(t, err, ErrTargetViewNotReady)
+}
+
+func TestWaitTargetViewColumnsFailsOnOtherErrors(t *testing.T) {
+	state := &fakeViewState{states: []*storagepb.GetViewStateRsp{{RetInfo: &storagepb.RetInfo{Code: storagepb.ErrorCode_NO_PERMISSION, Msg: "无权限"}}}}
+	err := waitTargetViewColumns(context.Background(), state, nil, "crypto", "view", []*storagepb.ViewColumn{{ColumnName: "close"}}, time.Second)
+	require.Error(t, err)
+	assert.NotErrorIs(t, err, ErrTargetViewNotReady)
 }
 
 func TestValidateTargetDatasetChecksImmutableLineage(t *testing.T) {

@@ -41,7 +41,12 @@ type Primary interface {
 	CommitTimeSeriesBatch(context.Context, *storagepb.PrimaryCommitTimeSeriesBatchReq, ...client.Option) (*storagepb.PrimaryCommitTimeSeriesBatchRsp, error)
 	UpsertFields(context.Context, *storagepb.PrimaryUpsertFieldsReq, ...client.Option) (*storagepb.PrimaryUpsertFieldsRsp, error)
 	ReadRows(context.Context, *storagepb.PrimaryReadRowsReq, ...client.Option) (*storagepb.PrimaryReadRowsRsp, error)
-	WaitViewSyncPoint(context.Context, *storagepb.WaitViewSyncPointReq, ...client.Option) (*storagepb.WaitViewSyncPointRsp, error)
+}
+
+// View 是 Collector 用到的 DataView 方法：建合成目标时等 View 的列建好，历史合成作业结束时等 View 跟上写入。
+type View interface {
+	GetViewState(context.Context, *storagepb.GetViewStateReq, ...client.Option) (*storagepb.GetViewStateRsp, error)
+	WaitViewApplied(context.Context, *storagepb.WaitViewAppliedReq, ...client.Option) (*storagepb.WaitViewAppliedRsp, error)
 }
 
 type Client struct{ gateway gatewayclient.Invoker }
@@ -172,9 +177,14 @@ func (c *Client) ReadRows(ctx context.Context, request *storagepb.PrimaryReadRow
 	return invoke[storagepb.PrimaryReadRowsRsp](ctx, c.gateway, "trpc.moox.storage.PrimaryStore", "ReadRows", request, options)
 }
 
-func (c *Client) WaitViewSyncPoint(ctx context.Context, request *storagepb.WaitViewSyncPointReq, options ...client.Option) (*storagepb.WaitViewSyncPointRsp, error) {
-	return invoke[storagepb.WaitViewSyncPointRsp](ctx, c.gateway, "trpc.moox.storage.PrimaryStore", "WaitViewSyncPoint", request, options)
+func (c *Client) GetViewState(ctx context.Context, request *storagepb.GetViewStateReq, options ...client.Option) (*storagepb.GetViewStateRsp, error) {
+	return invoke[storagepb.GetViewStateRsp](ctx, c.gateway, "trpc.moox.storage.DataView", "GetViewState", request, options)
+}
+
+func (c *Client) WaitViewApplied(ctx context.Context, request *storagepb.WaitViewAppliedReq, options ...client.Option) (*storagepb.WaitViewAppliedRsp, error) {
+	return invoke[storagepb.WaitViewAppliedRsp](ctx, c.gateway, "trpc.moox.storage.DataView", "WaitViewApplied", request, options)
 }
 
 var _ Metadata = (*Client)(nil)
 var _ Primary = (*Client)(nil)
+var _ View = (*Client)(nil)

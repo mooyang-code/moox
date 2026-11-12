@@ -371,6 +371,7 @@ func runViewRole() error {
 		client.WithTimeout(5*time.Minute),
 	)
 	svc.SetPrimaryAuth(&pb.AuthInfo{AppId: "storage-view", AppKey: serviceauth.Key(primarySecret, "storage-view")})
+	svc.SetWriterAuthSecret(primarySecret)
 	svc.SetPrimaryReader(primaryProxy)
 	backfillPageSize, backfillRequestInterval, err := storageViewBackfillSettings()
 	if err != nil {

@@ -27,7 +27,6 @@ type storageOperationsWire struct {
 	pb.UnimplementedPrimaryStore
 	creates atomic.Int32
 	writes  atomic.Int32
-	markers atomic.Int32
 }
 
 func (w *storageOperationsWire) CreateSpace(ctx context.Context, req *pb.CreateSpaceReq) (*pb.CreateSpaceRsp, error) {
@@ -77,17 +76,6 @@ func (w *storageOperationsWire) UpsertFields(ctx context.Context, req *pb.Primar
 	}
 	w.writes.Add(1)
 	return &pb.PrimaryUpsertFieldsRsp{RetInfo: &pb.RetInfo{}}, nil
-}
-
-func (w *storageOperationsWire) AppendDatasetSyncPoint(ctx context.Context, req *pb.AppendDatasetSyncPointReq) (*pb.AppendDatasetSyncPointRsp, error) {
-	if err := storageOperationAuth(ctx, req.GetAuthInfo(), "moox-cli-data-import"); err != nil {
-		return nil, err
-	}
-	if req.GetSyncPoint().GetRequestId() == "" || req.GetSyncPoint().GetDatasetId() != "prices" {
-		return nil, fmt.Errorf("missing import fence")
-	}
-	w.markers.Add(1)
-	return &pb.AppendDatasetSyncPointRsp{RetInfo: &pb.RetInfo{}}, nil
 }
 
 func TestStorageOperationsUseSSHNativeGatewayAndIndependentRoleAuth(t *testing.T) {
@@ -148,5 +136,4 @@ func TestStorageOperationsUseSSHNativeGatewayAndIndependentRoleAuth(t *testing.T
 	require.Equal(t, float64(1), written["rows"])
 	require.Equal(t, int32(1), wire.creates.Load())
 	require.Equal(t, int32(1), wire.writes.Load())
-	require.Equal(t, int32(1), wire.markers.Load())
 }

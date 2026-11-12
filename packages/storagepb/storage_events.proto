@@ -86,8 +86,7 @@ message ViewDataReady {
 // Dataset were written after their period had already ended: a backfill chunk
 // was verified (origin auto, manual or force), or a resample wrote rows outside
 // period tracking (origin resample). Consumers re-derive what depends on
-// [start, end) for subject_ids. Consumers that read a View wait for
-// sync_request_id first, because the View indexes rows asynchronously.
+// [start, end) for subject_ids.
 message CollectorKlineBackfilled {
   string dataset_id = 1;
   string frequency = 2;
@@ -97,8 +96,6 @@ message CollectorKlineBackfilled {
   google.protobuf.Timestamp end = 5;
   string origin = 6;
   string job_id = 7;
-  // sync_request_id names the Dataset sync point appended before this event.
-  string sync_request_id = 8;
   google.protobuf.Timestamp confirmed_at = 9;
   // series_tags 是补采写入的序列（series_tag）；统一数据集的消费方只重算这些序列，空表示数据集的全部序列。
   repeated string series_tags = 10;

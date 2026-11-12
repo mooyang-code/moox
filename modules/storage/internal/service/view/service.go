@@ -34,6 +34,8 @@ type Service struct {
 	catalogViews               map[viewRef]*pb.View
 	indexView                  map[string]viewRef
 	authSecret                 string
+	// writerAuthSecret 是 Primary 角色密钥：持写入身份的调用方（Collector、moox-cli 导入）也能查 View 状态、等 View 跟上自己的写入。
+	writerAuthSecret           string
 	primaryAuth                *pb.AuthInfo
 	primary                    FieldReader
 	mu                         sync.RWMutex
@@ -723,6 +725,31 @@ func (s *Service) authorize(auth *pb.AuthInfo) error {
 		return errors.New("invalid view HMAC")
 	}
 	return nil
+}
+
+// SetWriterAuthSecret 设置 Primary 角色密钥，GetViewState 与 WaitViewApplied 接受由它派生的写入身份。
+func (s *Service) SetWriterAuthSecret(secret string) {
+	s.mu.Lock()
+	s.writerAuthSecret = strings.TrimSpace(secret)
+	s.mu.Unlock()
+}
+
+// authorizeViewOrWriter 接受 View 角色身份，或由 Primary 角色密钥派生的写入身份：写入方只用它确认自己的写入已经可查。
+func (s *Service) authorizeViewOrWriter(auth *pb.AuthInfo) error {
+	viewErr := s.authorize(auth)
+	if viewErr == nil {
+		return nil
+	}
+	s.mu.RLock()
+	secret := s.writerAuthSecret
+	s.mu.RUnlock()
+	if secret == "" || auth == nil || strings.TrimSpace(auth.GetAppId()) == "" {
+		return viewErr
+	}
+	if hmac.Equal([]byte(strings.ToLower(auth.GetAppKey())), []byte(serviceauth.Key(secret, auth.GetAppId()))) {
+		return nil
+	}
+	return viewErr
 }
 
 func viewDatasetIDs(view *pb.View) []string {
