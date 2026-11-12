@@ -16,15 +16,10 @@ import (
 // 要重新生成时设 MOOX_UPDATE_GOLDEN=1。
 const pipelineBaselineFile = "testdata/pipeline_baseline.json"
 
-// baselinePipeline 按请求里的（市场，品种，频率，数据源，source_id，限速）装一条流水线，与 Handler 的装配相同。
-func baselinePipeline(marketID string, instrument marketdata.InstrumentType, frequency, provider, sourceID string, limits *marketfetch.FeedLimits) (*marketfetch.KlinePipeline, error) {
-	switch {
-	case marketID == "stockcn" && instrument == marketdata.InstrumentEquity:
-		return NewStockKlinePipeline(timerHandlerStorage{}, frequency)
-	case marketID == "crypto":
-		return NewCryptoKlinePipeline(timerHandlerStorage{}, instrument, limits)
-	}
-	return NewMarketKlinePipeline(timerHandlerStorage{}, marketID, instrument, provider, sourceID)
+// baselinePipeline 按请求里的（市场，品种，频率，数据源，限速）装一条流水线，与 Handler 的装配相同。
+// 记录时三种流水线各有一个构造函数（NewStockKlinePipeline、NewCryptoKlinePipeline、NewMarketKlinePipeline），现在是同一个。
+func baselinePipeline(marketID string, instrument marketdata.InstrumentType, frequency, provider string, limits *marketfetch.FeedLimits) (*marketfetch.KlinePipeline, error) {
+	return NewKlinePipeline(timerHandlerStorage{}, marketID, instrument, frequency, provider, limits)
 }
 
 type baselineSource struct {
@@ -61,24 +56,23 @@ func TestPipelineBaseline(t *testing.T) {
 		instrument marketdata.InstrumentType
 		frequency  string
 		provider   string
-		sourceID   string
 		limits     *marketfetch.FeedLimits
 	}{
-		{"stockcn/equity/1m", "stockcn", marketdata.InstrumentEquity, "1m", "", "", limits},
-		{"stockcn/equity/5m", "stockcn", marketdata.InstrumentEquity, "5m", "", "", limits},
-		{"stockcn/equity/1d", "stockcn", marketdata.InstrumentEquity, "1d", "", "", nil},
-		{"stockcn/equity/15m（没有这个频率的路由）", "stockcn", marketdata.InstrumentEquity, "15m", "", "", nil},
-		{"crypto/spot/带限速", "crypto", marketdata.InstrumentSpot, "1m", "binance", "spot_http", limits},
-		{"crypto/swap/带限速", "crypto", marketdata.InstrumentSwap, "1h", "binance", "swap_http", limits},
-		{"crypto/spot/不带限速", "crypto", marketdata.InstrumentSpot, "1m", "binance", "spot_http", nil},
-		{"crypto/swap/不带限速", "crypto", marketdata.InstrumentSwap, "1m", "binance", "swap_http", nil},
-		{"stockcn/index/eastmoney", "stockcn", marketdata.InstrumentIndex, "5m", "eastmoney", "index_http", nil},
-		{"stockcn/index/cni（source_id 取登记值）", "stockcn", marketdata.InstrumentIndex, "1d", "cni", "", nil},
-		{"stockcn/convertible_bond/sina", "stockcn", marketdata.InstrumentConvertibleBond, "5m", "sina", "convertible_bond_http", nil},
+		{"stockcn/equity/1m", "stockcn", marketdata.InstrumentEquity, "1m", "", limits},
+		{"stockcn/equity/5m", "stockcn", marketdata.InstrumentEquity, "5m", "", limits},
+		{"stockcn/equity/1d", "stockcn", marketdata.InstrumentEquity, "1d", "", nil},
+		{"stockcn/equity/15m（没有这个频率的路由）", "stockcn", marketdata.InstrumentEquity, "15m", "", nil},
+		{"crypto/spot/带限速", "crypto", marketdata.InstrumentSpot, "1m", "binance", limits},
+		{"crypto/swap/带限速", "crypto", marketdata.InstrumentSwap, "1h", "binance", limits},
+		{"crypto/spot/不带限速", "crypto", marketdata.InstrumentSpot, "1m", "binance", nil},
+		{"crypto/swap/不带限速", "crypto", marketdata.InstrumentSwap, "1m", "binance", nil},
+		{"stockcn/index/eastmoney", "stockcn", marketdata.InstrumentIndex, "5m", "eastmoney", nil},
+		{"stockcn/index/cni（source_id 取登记值）", "stockcn", marketdata.InstrumentIndex, "1d", "cni", nil},
+		{"stockcn/convertible_bond/sina", "stockcn", marketdata.InstrumentConvertibleBond, "5m", "sina", nil},
 	}
 	got := map[string]baselinePipelineView{}
 	for _, item := range cases {
-		pipeline, err := baselinePipeline(item.marketID, item.instrument, item.frequency, item.provider, item.sourceID, item.limits)
+		pipeline, err := baselinePipeline(item.marketID, item.instrument, item.frequency, item.provider, item.limits)
 		if err != nil {
 			got[item.name] = baselinePipelineView{Error: err.Error()}
 			continue

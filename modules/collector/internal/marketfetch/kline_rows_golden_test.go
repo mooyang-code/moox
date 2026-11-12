@@ -82,8 +82,9 @@ func goldenSubjects() []string {
 
 func goldenStockPipeline(t *testing.T, frequency string, now time.Time, storage Storage) *KlinePipeline {
 	t.Helper()
-	route, err := loadStockCNRoute()
+	route, found, err := LoadRoute(StockCNSpaceID)
 	require.NoError(t, err)
+	require.True(t, found)
 	kline, err := route.Kline(frequency)
 	require.NoError(t, err)
 	chain := kline.ProviderChain()

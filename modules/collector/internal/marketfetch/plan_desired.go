@@ -40,7 +40,7 @@ type PlanOptions struct {
 	// AutoSize 按市场的限速配置与标的数估算每函数标的数（见 FleetSizing）；返回 0 表示算不出，用 SymbolsPerFunction。
 	// 任务自己指定的每函数标的数优先于它。
 	AutoSize func(sample TaskGroup, subjects int) int
-	// DeriveFetch 按市场的源配置推导计划里的 fetch 参数（A 股的函数内并发等），nil 表示不推导。
+	// DeriveFetch 按市场的源配置推导计划里的 fetch 参数（有路由文件的市场的函数内并发等），nil 表示不推导。
 	DeriveFetch func(sample TaskGroup, fetch PlanFetch) PlanFetch
 }
 
@@ -298,6 +298,9 @@ func BuildDesiredState(opts PlanOptions, groups []TaskGroup, previous map[string
 				}
 				continue
 			}
+			if err := checkSettleDelay(info.sample, opts.planFetch(info.sample)); err != nil {
+				return nil, err
+			}
 			regions := opts.Markets[strings.ToLower(info.sample.MarketType)]
 			if len(regions) == 0 {
 				return nil, fmt.Errorf("no SCF region is configured for market %s in space %s", info.sample.MarketType, spaceID)
@@ -401,6 +404,21 @@ func (o PlanOptions) planFetch(sample TaskGroup) PlanFetch {
 		fetch = o.DeriveFetch(sample, fetch)
 	}
 	return fetch
+}
+
+// checkSettleDelay 校验云函数计划实际生效的 not_before_ms 不小于路由的结算延迟。函数被定时器触发后等到“收盘 + not_before_ms”
+// 才开始取数，而流水线只写“收盘 + 结算延迟”已经过去的 K 线：前者更小的话，目标那根每期都被丢掉。
+// 来源不按路由分配的分组没有结算延迟，不校验。
+func checkSettleDelay(sample TaskGroup, fetch PlanFetch) error {
+	route, routed, err := RouteFor(sample.MarketID, marketdata.InstrumentType(strings.ToLower(strings.TrimSpace(sample.InstrumentType))))
+	if err != nil {
+		return err
+	}
+	if !routed || fetch.NotBeforeMS >= route.SettleDelayMS {
+		return nil
+	}
+	return fmt.Errorf("%s 的 %s 采集计划 not_before_ms 是 %d 毫秒，小于路由文件的结算延迟 %d 毫秒，目标 K 线每期都会被丢掉；请把 [scf_plan] 里这个市场的 fetch.not_before_ms 调到不小于结算延迟",
+		sample.MarketID, sample.InstrumentType, fetch.NotBeforeMS, route.SettleDelayMS)
 }
 
 // fetchFor 返回某市场类型的拉取参数：有按市场的覆盖就用覆盖，否则用空间值。

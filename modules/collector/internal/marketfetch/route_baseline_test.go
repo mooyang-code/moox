@@ -15,30 +15,38 @@ import (
 )
 
 // 比对测试（路由与流水线通用化）：路由 ID、A 股标的分到的主数据源、函数个数估算、并发与熔断推导、采集计划内容与请求，
-// 必须与 testdata 里记录的逐项相同。记录文件是在通用化改造之前的代码上生成的；要重新生成时设 MOOX_UPDATE_GOLDEN=1。
+// 必须与 testdata 里记录的逐项相同。记录文件是在通用化改造之前的代码上生成的（那时的入口是 requestKlineRouteID、
+// stockCNAssignmentRoute、StockCNAutoSize、StockCNFetchLimits）；要重新生成时设 MOOX_UPDATE_GOLDEN=1。
 const routeBaselineFile = "testdata/route_baseline.json"
 
 // baselineRouteID 返回流水线（或推送路径的提交器，fixedRouteID 为空）写进行与指标的路由 ID。
-func baselineRouteID(marketID string, instrument marketdata.InstrumentType, fixedRouteID, frequency string) string {
-	return requestKlineRouteID(&KlinePipeline{MarketID: marketID, SpaceID: marketID, InstrumentType: instrument, RouteID: fixedRouteID}, frequency)
+// 单一来源的数据源：crypto 是币安，A 股的指数、可转债用东方财富。
+func baselineRouteID(t *testing.T, marketID string, instrument marketdata.InstrumentType, fixedRouteID, frequency string) string {
+	provider := map[string]string{"crypto": "binance", "stockcn": "eastmoney"}[marketID]
+	routeID, err := klineRouteID(marketID, instrument, provider, fixedRouteID, frequency)
+	require.NoError(t, err)
+	return routeID
 }
 
 // baselineAssign 返回 A 股某个频率下标的分到的主数据源，以及这只标的的回落顺序。
 func baselineAssign(t *testing.T, frequency, subject string) (string, string, []string) {
-	routeID, sources, err := stockCNAssignmentRoute(frequency)
+	routeID, sources, err := routeAssignment("stockcn", marketdata.InstrumentEquity, frequency)
 	require.NoError(t, err)
-	selected, ok := stockSourceForSubject(sources, routeID, subject)
+	selected, ok := assignedSource(sources, routeID, subject)
 	require.True(t, ok)
-	route, err := loadStockCNRoute()
+	route, found, err := RouteFor("stockcn", marketdata.InstrumentEquity)
 	require.NoError(t, err)
+	require.True(t, found)
 	kline, err := route.Kline(frequency)
 	require.NoError(t, err)
 	return selected.Provider, selected.SourceID, normalizeCandidateChain(kline.ProviderChain(), selected.Provider)
 }
 
-func baselineAutoSize(sizing FleetSizing) func(TaskGroup, int) int { return StockCNAutoSize(sizing) }
+func baselineAutoSize(sizing FleetSizing) func(TaskGroup, int) int {
+	return RouteAutoSize("stockcn", sizing)
+}
 
-func baselineFetchLimits() func(TaskGroup, PlanFetch) PlanFetch { return StockCNFetchLimits() }
+func baselineFetchLimits() func(TaskGroup, PlanFetch) PlanFetch { return RouteFetchLimits("stockcn") }
 
 func baselineSubjects() []string {
 	subjects := []string{"000001.XSHE", "000002.XSHE", "000333.XSHE", "000651.XSHE", "000858.XSHE", "002415.XSHE", "002594.XSHE", "300059.XSHE",
@@ -88,14 +96,14 @@ func TestRouteBaseline(t *testing.T) {
 
 	// 一、路由 ID 的三种取值。
 	for _, frequency := range []string{"1m", "5m", "1d", "5M", " 1D ", "1h", "bogus"} {
-		got.RouteIDs["stockcn/equity/"+frequency] = baselineRouteID("stockcn", marketdata.InstrumentEquity, "", frequency)
-		got.RouteIDs["stockcn/(未写品种)/"+frequency] = baselineRouteID("stockcn", "", "", frequency)
-		got.RouteIDs["crypto/spot/"+frequency] = baselineRouteID("crypto", marketdata.InstrumentSpot, "crypto_spot_kline", frequency)
-		got.RouteIDs["crypto/swap/"+frequency] = baselineRouteID("crypto", marketdata.InstrumentSwap, "crypto_swap_kline", frequency)
-		got.RouteIDs["crypto/swap/推送/"+frequency] = baselineRouteID("crypto", marketdata.InstrumentSwap, "", frequency)
-		got.RouteIDs["stockcn/index/"+frequency] = baselineRouteID("stockcn", marketdata.InstrumentIndex, "stockcn_index_kline", frequency)
-		got.RouteIDs["stockcn/convertible_bond/"+frequency] = baselineRouteID("stockcn", marketdata.InstrumentConvertibleBond, "stockcn_convertible_bond_kline", frequency)
-		got.RouteIDs["stockcn/index/推送/"+frequency] = baselineRouteID("stockcn", marketdata.InstrumentIndex, "", frequency)
+		got.RouteIDs["stockcn/equity/"+frequency] = baselineRouteID(t, "stockcn", marketdata.InstrumentEquity, "", frequency)
+		got.RouteIDs["stockcn/(未写品种)/"+frequency] = baselineRouteID(t, "stockcn", "", "", frequency)
+		got.RouteIDs["crypto/spot/"+frequency] = baselineRouteID(t, "crypto", marketdata.InstrumentSpot, "crypto_spot_kline", frequency)
+		got.RouteIDs["crypto/swap/"+frequency] = baselineRouteID(t, "crypto", marketdata.InstrumentSwap, "crypto_swap_kline", frequency)
+		got.RouteIDs["crypto/swap/推送/"+frequency] = baselineRouteID(t, "crypto", marketdata.InstrumentSwap, "", frequency)
+		got.RouteIDs["stockcn/index/"+frequency] = baselineRouteID(t, "stockcn", marketdata.InstrumentIndex, "stockcn_index_kline", frequency)
+		got.RouteIDs["stockcn/convertible_bond/"+frequency] = baselineRouteID(t, "stockcn", marketdata.InstrumentConvertibleBond, "stockcn_convertible_bond_kline", frequency)
+		got.RouteIDs["stockcn/index/推送/"+frequency] = baselineRouteID(t, "stockcn", marketdata.InstrumentIndex, "", frequency)
 	}
 
 	// 二、A 股标的分到的主数据源与回落顺序。

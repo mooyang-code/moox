@@ -47,11 +47,12 @@ type PlanMarket struct {
 	MarketType     string `json:"market_type"`
 }
 
-// RequestSource 返回计划请求绑定的行情来源。A 股股票的 K 线来源由路由（route.yaml）按标的固定分配到 primary，
-// 失败再按候选链回落，请求里不写来源；其余市场（加密货币）固定用标签的同步来源。计划本身仍按标签的来源分组，
-// 计划内容与哈希不随分配变化。
+// RequestSource 返回计划请求绑定的行情来源。K 线来源按路由分配的（市场，品种）由路由（route.yaml）按标的固定分配到 primary，
+// 失败再按候选链回落，请求里不写来源；其余的固定用标签的同步来源。计划本身仍按标签的来源分组，
+// 计划内容与哈希不随分配变化。路由文件读不出来时按标签的来源返回，装配流水线时会报出同一个错误。
 func (m PlanMarket) RequestSource() (provider, sourceID string) {
-	if strings.EqualFold(strings.TrimSpace(m.MarketID), StockCNSpaceID) && (strings.TrimSpace(m.InstrumentType) == "" || strings.EqualFold(strings.TrimSpace(m.InstrumentType), "equity")) {
+	instrumentType := marketdata.InstrumentType(strings.ToLower(strings.TrimSpace(m.InstrumentType)))
+	if _, routed, err := RouteFor(m.MarketID, instrumentType); err == nil && routed {
 		return "", ""
 	}
 	return m.Provider, m.SourceID

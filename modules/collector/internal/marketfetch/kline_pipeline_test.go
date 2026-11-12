@@ -648,8 +648,9 @@ func TestRequestKlineRouteIDUsesCryptoFrequency(t *testing.T) {
 		{product: marketdata.InstrumentSpot, frequency: "1h", want: "binance_spot_kline_1h"},
 		{product: marketdata.InstrumentSwap, frequency: "1w", want: "binance_swap_kline_1w"},
 	} {
-		pipeline := &KlinePipeline{SpaceID: "crypto", MarketID: "crypto", InstrumentType: test.product}
-		require.Equal(t, test.want, requestKlineRouteID(pipeline, test.frequency))
+		got, err := klineRouteID("crypto", test.product, "binance", "crypto_"+string(test.product)+"_kline", test.frequency)
+		require.NoError(t, err)
+		require.Equal(t, test.want, got)
 	}
 }
 
@@ -774,14 +775,14 @@ func TestKlinePipelineAssignsSourcesPerSubjectAndFallsBack(t *testing.T) {
 	require.NoError(t, registry.Register(pipelineProvider{id: "tencent", sourceID: "stockcn_http", calls: &tencentCalls, rateLimit: rateLimit, rowsFor: rowsFrom("tencent", "stockcn_http")}))
 	router, err := marketdata.NewRouter(registry, 1000, pipelineClock{now}, nil)
 	require.NoError(t, err)
-	_, sources, err := stockCNAssignmentRoute("1m")
+	_, sources, err := routeAssignment(StockCNSpaceID, marketdata.InstrumentEquity, "1m")
 	require.NoError(t, err)
 
 	items := make([]domain.CollectionItem, 0, 20)
 	assignedToSina := 0
 	for index := 0; index < 20; index++ {
 		subjectID := fmt.Sprintf("%06d.XSHG", 600000+index)
-		if source, _ := stockSourceForSubject(sources, StockCNRouteID("1m"), subjectID); source.Provider == "sina" {
+		if source, _ := assignedSource(sources, StockCNRouteID("1m"), subjectID); source.Provider == "sina" {
 			assignedToSina++
 		}
 		items = append(items, domain.CollectionItem{SubjectID: subjectID, Symbol: "sh" + subjectID[:6], MarketType: "equity", DataType: "kline", DatasetID: testStockDatasetID, Frequency: "1m", BarLimit: 1, StartTime: barStart.Format(time.RFC3339), EndTime: barStart.Add(time.Minute).Format(time.RFC3339)})

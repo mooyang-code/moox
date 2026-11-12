@@ -48,22 +48,21 @@ func TestFleetSizingReturnsZeroWhenItCannotEstimate(t *testing.T) {
 	require.Zero(t, FleetSizing{}.SymbolsPerFunction([]SourceCapacity{{Provider: "a", Weight: 1, MaxConcurrent: 8}}, 300))
 }
 
-func TestStockCNAutoSizeUsesTheReleaseRouteAndProviderLimits(t *testing.T) {
-	t.Chdir("..")
-	size := StockCNAutoSize(FleetSizing{TargetFetchMS: 2000, RequestMS: 500, MinFunctions: 8})
+func TestRouteAutoSizeUsesTheReleaseRouteAndProviderLimits(t *testing.T) {
+	size := RouteAutoSize("stockcn", FleetSizing{TargetFetchMS: 2000, RequestMS: 500, MinFunctions: 8})
 	got := size(TaskGroup{Frequency: "5m"}, 300)
 	require.Positive(t, got)
 	require.LessOrEqual(t, got, 38)
 	require.Zero(t, size(TaskGroup{Frequency: "15m"}, 300), "没有这个频率的路由时算不出")
+	require.Zero(t, RouteAutoSize("crypto", FleetSizing{TargetFetchMS: 2000, RequestMS: 500})(TaskGroup{Frequency: "1m"}, 300), "没有路由文件的市场算不出，用配置里的每函数标的数")
 }
 
 // 函数个数随标的数和限速配置自动调整：沪深 300 用 A 股的真实路由与源限速估算，标的翻倍函数个数增加，每个函数的标的数不变。
 func TestBuildDesiredStateSizesTheStockCNFleetFromLimits(t *testing.T) {
-	t.Chdir("..")
 	options := func(autoSize func(TaskGroup, int) int) PlanOptions {
 		return PlanOptions{
 			SpaceID: "stockcn", Markets: map[string][]string{"equity": {"ap-nanjing"}}, SymbolsPerFunction: 50, DefaultLatenessS: 90,
-			Fetch: PlanFetch{Concurrency: 50, RPS: 50, Burst: 50, FeedConcurrency: 50}, AutoSize: autoSize, DeriveFetch: StockCNFetchLimits(),
+			Fetch: PlanFetch{Concurrency: 50, RPS: 50, Burst: 50, FeedConcurrency: 50, NotBeforeMS: 800}, AutoSize: autoSize, DeriveFetch: RouteFetchLimits("stockcn"),
 		}
 	}
 	groups := func(count int) []TaskGroup {
@@ -74,7 +73,7 @@ func TestBuildDesiredStateSizesTheStockCNFleetFromLimits(t *testing.T) {
 		return []TaskGroup{{Provider: "eastmoney", SourceID: "stockcn_http", MarketType: "equity", MarketID: "stockcn", InstrumentType: "equity",
 			DatasetID: "ds_cn_5m", Frequency: "5m", Subjects: subjects}}
 	}
-	auto := StockCNAutoSize(FleetSizing{TargetFetchMS: 2000, RequestMS: 500, MinFunctions: 8})
+	auto := RouteAutoSize("stockcn", FleetSizing{TargetFetchMS: 2000, RequestMS: 500, MinFunctions: 8})
 	sizeOf := func(opts PlanOptions, count int) (int, int) {
 		state, err := BuildDesiredState(opts, groups(count), nil)
 		require.NoError(t, err)
@@ -104,9 +103,8 @@ func TestBuildDesiredStateSizesTheStockCNFleetFromLimits(t *testing.T) {
 }
 
 // 函数内并发取各主源并发之和，熔断并发取最大值，rps、burst 对 A 股没有作用而清零；读不出源配置时保持传入的值。
-func TestStockCNFetchLimitsAreDerivedFromTheSourceLimits(t *testing.T) {
-	t.Chdir("..")
-	derive := StockCNFetchLimits()
+func TestRouteFetchLimitsAreDerivedFromTheSourceLimits(t *testing.T) {
+	derive := RouteFetchLimits("stockcn")
 	got := derive(TaskGroup{Frequency: "5m"}, PlanFetch{Concurrency: 50, RPS: 50, Burst: 50, FeedConcurrency: 50, RequestTimeoutMS: 3000})
 	require.Equal(t, 32, got.Concurrency, "tdx 16 + eastmoney 16")
 	require.Equal(t, 16, got.FeedConcurrency)
@@ -115,6 +113,7 @@ func TestStockCNFetchLimitsAreDerivedFromTheSourceLimits(t *testing.T) {
 	require.Equal(t, 3000, got.RequestTimeoutMS, "其余参数不动")
 	unchanged := PlanFetch{Concurrency: 7, RPS: 9, FeedConcurrency: 3}
 	require.Equal(t, unchanged, derive(TaskGroup{Frequency: "15m"}, unchanged), "没有这个频率的路由时保持原值")
+	require.Equal(t, unchanged, RouteFetchLimits("crypto")(TaskGroup{Frequency: "1m"}, unchanged), "没有路由文件的市场保持原值：币安的 rps、burst 不能被清零")
 }
 
 func TestOnlyLongRunningBatchesUseTheAdaptiveRate(t *testing.T) {

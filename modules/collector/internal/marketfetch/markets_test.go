@@ -21,7 +21,15 @@ var testFeedLabels = FeedLabels{
 	Markets:            []string{"crypto", "stockcn"},
 	Providers:          []string{"binance", "sina", "tencent", "eastmoney", "baidu", "tdx"},
 	Routes:             []string{"stockcn_instrument_v1", "binance_spot_instrument_v1", "binance_swap_instrument_v1"},
-	KlineRoutePrefixes: []string{stockCNKlineRoutePrefix, "binance_spot_kline_", "binance_swap_kline_"},
+	KlineRoutePrefixes: []string{"stockcn_equity_kline_", "binance_spot_kline_", "binance_swap_kline_"},
+}
+
+// StockCNSpaceID 是测试里用的 A 股市场 ID。
+const StockCNSpaceID = "stockcn"
+
+// StockCNRouteID 是测试里 A 股股票某个频率的路由 ID。
+func StockCNRouteID(frequency string) string {
+	return KlineRouteID(StockCNSpaceID, marketdata.InstrumentEquity, frequency)
 }
 
 // stockKlineRow 是测试里构造 A 股股票行的简写。
@@ -35,13 +43,14 @@ func TestMarketFilesAreEmbedded(t *testing.T) {
 	_, err := os.Stat(filepath.Join("config", "markets"))
 	require.True(t, os.IsNotExist(err))
 
-	route, err := loadStockCNRoute()
+	route, found, err := LoadRoute(StockCNSpaceID)
 	require.NoError(t, err)
-	providers, err := loadStockCNProviderRuntime(route)
+	require.True(t, found)
+	providers, err := LoadSourceRuntimes(route)
 	require.NoError(t, err)
 	require.Contains(t, providers, "tdx")
 	for _, source := range []string{"sina_hfq", "swsresearch", "sina_finance", "eastmoney_turnover", "eastmoney_select", "baidu"} {
-		_, found, err := loadStockCNSourceRuntime(source)
+		_, found, err := LoadSourceRuntime(StockCNSpaceID, source)
 		require.NoError(t, err, source)
 		require.True(t, found, source)
 	}
@@ -51,14 +60,16 @@ func TestMarketFilesAreEmbedded(t *testing.T) {
 	}
 }
 
-// 环境变量仍然可以覆盖编进去的内容：指定了路由文件就读它。
-func TestStockCNRoutePathOverridesEmbedded(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "route.yaml")
-	require.NoError(t, os.WriteFile(path, []byte("market_id: stockcn\nklines:\n  - frequency: 5m\n    providers:\n      - {id: eastmoney, source_id: stockcn_http, weight: 1, role: primary}\n"), 0o600))
-	t.Setenv("MOOX_STOCK_CN_ROUTE_PATH", path)
-	route, err := loadStockCNRoute()
+// 环境变量仍然可以覆盖编进去的内容：目录里有这个市场的路由文件就读它；没有路由文件的市场不受影响。
+func TestMarketConfigDirOverridesEmbedded(t *testing.T) {
+	writeMarketFile(t, t.TempDir(), "stockcn/route.yaml", "market_id: stockcn\ninstrument_type: equity\nklines:\n  - frequency: 5m\n    providers:\n      - {id: eastmoney, source_id: stockcn_http, weight: 1, role: primary}\n")
+	route, found, err := LoadRoute(StockCNSpaceID)
 	require.NoError(t, err)
+	require.True(t, found)
 	require.Equal(t, []string{"eastmoney"}, route.ProviderIDs())
+	_, found, err = LoadRoute("crypto")
+	require.NoError(t, err)
+	require.False(t, found, "crypto 没有路由文件")
 }
 
 // 构造指标时必须给出标签的允许取值：漏了在启动期就 panic，不会把所有标签悄悄记成 unknown。
@@ -68,12 +79,12 @@ func TestNewMetricsRequiresFeedLabels(t *testing.T) {
 
 // 环境变量指向的目录里没有这个数据源的文件时，回落到编进二进制的内容；两处都没有才算没配置。
 func TestSourceConfigDirFallsBackPerFile(t *testing.T) {
-	t.Setenv("MOOX_STOCK_CN_SOURCE_CONFIG_DIR", filepath.Join(t.TempDir(), "no_such_dir"))
-	config, found, err := loadStockCNSourceRuntime("sina")
+	t.Setenv(MarketConfigDirEnv, filepath.Join(t.TempDir(), "no_such_dir"))
+	config, found, err := LoadSourceRuntime(StockCNSpaceID, "sina")
 	require.NoError(t, err)
 	require.True(t, found)
 	require.Equal(t, 1023, config.KlineSpec.MaxBarsPerRequest)
-	_, found, err = loadStockCNSourceRuntime("no_such_source")
+	_, found, err = LoadSourceRuntime(StockCNSpaceID, "no_such_source")
 	require.NoError(t, err)
 	require.False(t, found)
 }

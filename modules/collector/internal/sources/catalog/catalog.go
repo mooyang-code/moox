@@ -52,9 +52,10 @@ func entry(market marketdata.MarketID, instrument marketdata.InstrumentType, pro
 	return marketdata.CatalogEntry{Key: marketdata.SourceKey{ProviderID: provider, SourceID: source}, MarketID: market, Instrument: instrument, New: factory}
 }
 
-// stockCNEntry 是 A 股股票数据源：source_id 由路由配置给出，运行参数来自数据源配置文件。
-func stockCNEntry(provider, source string, factory marketdata.Factory) marketdata.CatalogEntry {
-	item := entry(stockcn, marketdata.InstrumentEquity, provider, source, factory)
+// routedEntry 是按路由分配的 K 线数据源：这个（市场，品种）的来源由市场的路由文件（route.yaml）按标的分配，
+// source_id 由路由给出，运行参数来自数据源配置文件。
+func routedEntry(market marketdata.MarketID, instrument marketdata.InstrumentType, provider, source string, factory marketdata.Factory) marketdata.CatalogEntry {
+	item := entry(market, instrument, provider, source, factory)
 	item.RouteSource = true
 	return item
 }
@@ -74,23 +75,23 @@ func build() *marketdata.Catalog {
 		// 加密：币安现货与 U 本位永续（REST K 线、标的快照、WS 推送）。
 		entry(crypto, marketdata.InstrumentSpot, "binance", "spot_http", binanceFactory(marketdata.InstrumentSpot)),
 		entry(crypto, marketdata.InstrumentSwap, "binance", "swap_http", binanceFactory(marketdata.InstrumentSwap)),
-		// A 股股票。
-		stockCNEntry("sina", "stockcn_minute_http", func(deps marketdata.Deps) (marketdata.MarketProvider, error) {
+		// A 股股票：K 线来源按 config/markets/stockcn/route.yaml 分配。
+		routedEntry(stockcn, marketdata.InstrumentEquity, "sina", "stockcn_minute_http", func(deps marketdata.Deps) (marketdata.MarketProvider, error) {
 			s := deps.Settings
 			return sina.New(sina.Config{BaseURL: s.BaseURL, KlineEndpoint: s.KlineEndpoint, SourceID: deps.SourceID, InstrumentRequestTimeout: stockCNInstrumentTimeout, RateLimit: s.RateLimit, MaxBarsPerRequest: s.MaxBarsPerRequest}), nil
 		}),
-		stockCNEntry("tencent", "stockcn_http", func(deps marketdata.Deps) (marketdata.MarketProvider, error) {
+		routedEntry(stockcn, marketdata.InstrumentEquity, "tencent", "stockcn_http", func(deps marketdata.Deps) (marketdata.MarketProvider, error) {
 			s := deps.Settings
 			return tencent.New(tencent.Config{BaseURL: s.BaseURL, KlineEndpoint: s.KlineEndpoint, SourceID: deps.SourceID, RateLimit: s.RateLimit, MaxBarsPerRequest: s.MaxBarsPerRequest}), nil
 		}),
-		stockCNEntry("eastmoney", "stockcn_http", func(deps marketdata.Deps) (marketdata.MarketProvider, error) {
+		routedEntry(stockcn, marketdata.InstrumentEquity, "eastmoney", "stockcn_http", func(deps marketdata.Deps) (marketdata.MarketProvider, error) {
 			s := deps.Settings
 			return eastmoney.New(eastmoney.Config{KlineBaseURL: s.BaseURL, KlineEndpoint: s.KlineEndpoint, SourceID: deps.SourceID, InstrumentRequestTimeout: stockCNInstrumentTimeout, RateLimit: s.RateLimit, MaxBarsPerRequest: s.MaxBarsPerRequest}), nil
 		}),
-		stockCNEntry("baidu", "stockcn_http", func(deps marketdata.Deps) (marketdata.MarketProvider, error) {
+		routedEntry(stockcn, marketdata.InstrumentEquity, "baidu", "stockcn_http", func(deps marketdata.Deps) (marketdata.MarketProvider, error) {
 			return baidu.New(baidu.Config{SourceID: deps.SourceID, RateLimit: deps.Settings.RateLimit}), nil
 		}),
-		stockCNEntry("tdx", "normal_7709", func(deps marketdata.Deps) (marketdata.MarketProvider, error) {
+		routedEntry(stockcn, marketdata.InstrumentEquity, "tdx", "normal_7709", func(deps marketdata.Deps) (marketdata.MarketProvider, error) {
 			s := deps.Settings
 			host := ""
 			if len(s.Hosts) > 0 {

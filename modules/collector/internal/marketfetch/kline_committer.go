@@ -97,6 +97,11 @@ func (c *KlineCommitter) periodRows(batch KlineBatch) (Request, []*storagepb.Row
 	for _, item := range req.Items {
 		itemsBySubject[item.SubjectID] = item
 	}
+	// 推送路径没有流水线，没有自带的路由 ID；数据源取计划里的那一个。
+	routeID, err := klineRouteID(firstNonEmptyString(c.MarketID, c.SpaceID), c.InstrumentType, batch.Market.Provider, "", req.Frequency)
+	if err != nil {
+		return req, nil, result, err
+	}
 	seen := make(map[string]struct{}, len(batch.Bars))
 	var rows []*storagepb.RowFieldUpsert
 	for _, bar := range batch.Bars {
@@ -116,7 +121,7 @@ func (c *KlineCommitter) periodRows(batch KlineBatch) (Request, []*storagepb.Row
 		if strings.TrimSpace(bar.RequestID) == "" {
 			bar.RequestID = batch.BatchID
 		}
-		row, rowErr := c.rowFor(bar, req, requestKlineRouteID(&KlinePipeline{MarketID: c.MarketID, SpaceID: c.SpaceID, InstrumentType: c.InstrumentType}, req.Frequency), 1)
+		row, rowErr := c.rowFor(bar, req, routeID, 1)
 		if rowErr != nil {
 			return req, nil, result, fmt.Errorf("subject %s: %w", subject, rowErr)
 		}
