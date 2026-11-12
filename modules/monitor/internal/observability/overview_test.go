@@ -1211,6 +1211,37 @@ func TestViewFileOverLimitBecomesBusinessCheck(t *testing.T) {
 	}
 }
 
+// View 跟随变更日志落后超过 2 分钟才告警，原因里点名落后的 View；只上报了正常值时是健康。
+func TestViewFollowLagBecomesBusinessCheck(t *testing.T) {
+	find := func(overview Overview) *BusinessStatus {
+		for i := range overview.BusinessChecks {
+			if overview.BusinessChecks[i].Kind == "view_follow" {
+				return &overview.BusinessChecks[i]
+			}
+		}
+		return nil
+	}
+	for _, tc := range []struct {
+		value  float64
+		status string
+	}{{0, "healthy"}, {90, "healthy"}, {600, "down"}} {
+		now := time.Now().UTC().Truncate(time.Second)
+		query := openOverviewMetrics(t, func(db *gorm.DB) {
+			seedOverviewMetricForInstance(t, db, "view-follow-ok", "storage-view", "storage-view@storage", "moox_storage_view_follow_lag_seconds", `{"space_id":"crypto","view_id":"kline_1m"}`, 0, now)
+			seedOverviewMetricForInstance(t, db, "view-follow", "storage-view", "storage-view@storage", "moox_storage_view_follow_lag_seconds", `{"space_id":"crypto","view_id":"factor_5m"}`, tc.value, now)
+		})
+		overview, err := (Builder{Metrics: query, Now: func() time.Time { return now }}).Build(t.Context(), "")
+		require.NoError(t, err)
+		item := find(overview)
+		require.NotNil(t, item)
+		require.Equal(t, tc.status, item.Status, "落后 %.0f 秒", tc.value)
+		if tc.status == "down" {
+			require.Contains(t, item.Reason, "crypto/factor_5m")
+			require.NotContains(t, item.Reason, "kline_1m")
+		}
+	}
+}
+
 // 休市时段（午休、收市后、周末）统计窗口内没有请求：不出数据源健康结果，更不能判成 down；
 // 窗口内有请求且失败率超过阈值、或全部失败的数据源照常判 down。
 func TestBuilderSkipsProviderFeedWithoutObservationInWindow(t *testing.T) {

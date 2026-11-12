@@ -204,6 +204,11 @@ func (b Builder) Build(ctx context.Context, spaceID string) (Overview, error) {
 		return Overview{}, err
 	}
 	out.BusinessChecks = append(out.BusinessChecks, viewFiles...)
+	viewFollow, err := b.buildViewFollowLagHealth(ctx, spaceID, now)
+	if err != nil {
+		return Overview{}, err
+	}
+	out.BusinessChecks = append(out.BusinessChecks, viewFollow...)
 	presence, err := b.buildWorkerPresence(ctx, spaceID, now)
 	if err != nil {
 		return Overview{}, err
@@ -365,6 +370,60 @@ func (b Builder) buildViewFileLimitHealth(ctx context.Context, spaceID string, n
 	}
 	return []BusinessStatus{{
 		SpaceID: events.SystemSpaceID, Kind: "view_file", Module: "storage_view",
+		Status: status, Reason: reason, LastCheckedAt: now,
+	}}, nil
+}
+
+// viewFollowLagLimit 是 View 跟随变更日志允许的落后时长：跟随器空闲时每轮最多等 20 秒，正常应用一期在秒级以内。
+const viewFollowLagLimit = 2 * time.Minute
+
+// buildViewFollowLagHealth 把 Storage View 上报的跟随落后时长（距离上一次追上变更日志头部）转成告警。
+// 只按时长判断：空闲数据集的序号差天然会有一轮等待的量，按序号差会误报。
+func (b Builder) buildViewFollowLagHealth(ctx context.Context, spaceID string, now time.Time) ([]BusinessStatus, error) {
+	if spaceID != "" && spaceID != events.SystemSpaceID {
+		return nil, nil
+	}
+	if b.Metrics == nil || b.Metrics.Catalog() == nil {
+		return nil, nil
+	}
+	series, err := b.Metrics.Catalog().FindSeriesAt(ctx, "", "", "moox_storage_view_follow_lag_seconds", "", 500, now)
+	if err != nil {
+		return nil, err
+	}
+	found := false
+	var lagging []string
+	var worst float64
+	for _, item := range series {
+		if item.IsStale {
+			continue
+		}
+		latest, err := b.Metrics.Latest(ctx, item.SeriesID)
+		if err != nil {
+			return nil, err
+		}
+		found = true
+		if latest.Value <= viewFollowLagLimit.Seconds() {
+			continue
+		}
+		worst = max(worst, latest.Value)
+		labels, err := datasetLabels(item.LabelsJSON)
+		if err != nil {
+			return nil, err
+		}
+		lagging = append(lagging, labels["space_id"]+"/"+labels["view_id"])
+	}
+	if !found {
+		return nil, nil
+	}
+	status, reason := "healthy", "View 跟随数据变更正常"
+	if len(lagging) > 0 {
+		sort.Strings(lagging)
+		status = "down"
+		reason = fmt.Sprintf("%d 个 View 跟随数据变更落后，最久约 %d 分钟没有追上（%s）；查询会读到旧数据，看 storage-view 日志里的跟随失败原因",
+			len(lagging), max(1, int(worst)/60), strings.Join(lagging, "、"))
+	}
+	return []BusinessStatus{{
+		SpaceID: events.SystemSpaceID, Kind: "view_follow", Module: "storage_view",
 		Status: status, Reason: reason, LastCheckedAt: now,
 	}}, nil
 }

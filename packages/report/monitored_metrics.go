@@ -64,6 +64,8 @@ var healthMetricNames = map[string]struct{}{
 	"moox_storage_outbox_publish_errors_total":                                 {},
 	"moox_storage_outbox_pending_entries":                                      {},
 	"moox_storage_view_file_over_limit":                                        {},
+	"moox_storage_view_follow_lag_seconds":                                     {},
+	"moox_storage_view_follow_lag_changes":                                     {},
 	"moox_storage_outbox_oldest_age_seconds":                                   {},
 	"moox_storage_view_period_waiting_datasets":                                {},
 	"moox_storage_view_output_arrival_timestamp_seconds":                       {},
